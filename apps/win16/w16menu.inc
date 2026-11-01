@@ -134,6 +134,7 @@ w16_mheap:
     or ax, ax
     jz .fail
     mov [w16_mhh], ax
+    W16TOSEL dx                     ; (the arm: a selector, 124.31.3)
     mov [w16_mseg], dx
     mov ax, dx
     mov bx, 16
@@ -668,7 +669,7 @@ w16_mparse:
     push es
     mov cx, ax
 .item:
-    mov es, [w16_mtps]
+    W16SEG es, [w16_mtps]
     mov si, [w16_mtp]
     mov dx, [es:si]
     add si, 2
@@ -743,7 +744,7 @@ w16_mparse:
 w16_mtpl:
     push si
     push es
-    mov es, [w16_mtps]
+    W16SEG es, [w16_mtps]
     mov si, [w16_mtp]
     mov ax, [es:si + 2]             ; MENUITEMTEMPLATEHEADER's offset
     add ax, 4
@@ -783,12 +784,12 @@ w16_mload:
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
-    mov ax, es
+    W16VOF ax, es
     inc ax
     mov [w16_mtps], ax
     mov word [w16_mtp], 0
     call w16_mtpl
-    mov es, [w16_rtab]              ; LoadMenu frees the resource
+    W16SEG es, [w16_rtab]              ; LoadMenu frees the resource
     cmp word [es:bx + RN_USAGE], 0
     je .out
     dec word [es:bx + RN_USAGE]
@@ -1328,7 +1329,7 @@ w16_s_sysswitch: db 'S&witch To...', 9, 'Ctrl+Esc', 0
 section .w16dlg
 w16_frows:
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov al, [es:W16F_ROWS]
     xor ah, ah
     pop es
@@ -1637,7 +1638,7 @@ w16_mbstr:
     push dx
     push si
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov word [w16_r0], 0
     mov al, [es:W16F_ROWS]
     xor ah, ah
@@ -1938,7 +1939,7 @@ w16_munder:
     mov bl, [w16_mmn]
     xor bh, bh
     mov al, [w16_mlab + bx]
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     ICALL w16_glyph
     mov al, [es:W16F_ADV + bx]
     xor ah, ah
@@ -3648,9 +3649,9 @@ W16LIB w16u_transaccel
     jc .zero
     cmp byte [w16_gdisc], 0
     jne .zero
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     xor si, si
 .e:
     mov al, [es:si]

@@ -338,7 +338,7 @@ w16c_walk:
     xor al, al
     call w16c_bits
     jc .end
-    mov es, [w16c_cs]
+    W16SEG es, [w16c_cs]
     call w16c_dec                   ; CX = length, SI = the opcode, DH = modrm
     jc .end                         ; bytes that are not an instruction
     xor al, al
@@ -930,7 +930,7 @@ w16c_tables:
     xor al, al
     call w16c_bits
     jc .walk                        ; p is code already
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     mov ax, [es:di]                 ; e
     cmp ax, [w16_clast + bx]
     ja .walk
@@ -952,7 +952,7 @@ w16c_tables:
     jmp short .entry
 .walk:
     call w16c_run
-    jmp short .next
+    jmp .next
 .done:
     pop es
     pop bp
@@ -1003,7 +1003,7 @@ w16c_prologs:
     xor al, al
     call w16c_bits
     jc .step
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     mov si, w16c_pro                ; each pattern: its length, its bytes
 .pat:
     xor cx, cx

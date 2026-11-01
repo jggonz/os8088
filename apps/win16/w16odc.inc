@@ -26,7 +26,7 @@ w16od_slot:
     mov dx, W16OD_SZ
     mul dx
     mov di, ax
-    mov es, [w16_odseg]
+    W16SEG es, [w16_odseg]
     pop dx
     pop ax
     ret

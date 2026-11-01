@@ -301,7 +301,7 @@ W16LIB w16u_drawtext
     pop es
     mov word [w16_dth], 0
     mov word [w16_dtw], 0
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov al, [es:W16F_ROWS]
     xor ah, ah
     mov [w16_dtfh], ax
@@ -946,7 +946,7 @@ W16LIB w16g_getpixel
     mov si, cx
     shr si, 1
     add si, ax
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov al, [es:si]
     test cl, 1
     jnz .lo

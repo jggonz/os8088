@@ -70,7 +70,7 @@ w16_dosup:
     mov di, W16DH_ORG
     call w16_dhcopy
     jc .free
-    mov es, [w16_dhtmp]
+    W16SEG es, [w16_dhtmp]
     mov al, [es:W16DH_WKB]          ; the DOS's own floor (SPEC.md 96.11)
     cmp al, W16DH_WFLOOR
     jbe .floor
@@ -131,7 +131,7 @@ w16_dhcopy:
     shr cx, 1
     pop ax
     push ds
-    mov es, [w16_dhtmp]
+    W16SEG es, [w16_dhtmp]
     mov ds, ax
     xor si, si
     cld
@@ -152,7 +152,7 @@ w16_dosend:
     je .ret
     push dx
     push es
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     mov [es:W16DH_HSS], ss
     mov word [w16_dhent], W16DH_DONE
     call far [w16_dhent]
@@ -181,7 +181,7 @@ w16_dcall:
     push ds
     push es
     push ax
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     mov [es:W16DH_HSS], ss          ; the stack it runs on is this one
     mov ax, [w16_hsp]
     mov [es:W16DH_HSP], ax
@@ -340,14 +340,14 @@ W16LIB w16k_accres
     push si
     ICALL w16_dosup
     jc .no
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     cmp byte [es:W16DH_PATH], 0
     je .no
     ICALL w16_args
     mov si, [es:bx]                 ; hRsrc: its entry in the kept table
     or si, si
     jz .no
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov cl, [es:0]                  ; the alignment shift
     mov ax, [es:si + RN_OFF]
     xor dx, dx
@@ -362,7 +362,7 @@ W16LIB w16k_accres
     push ax
     mov ax, 0x3D00                  ; OF_READ
     mov dx, W16DH_PATH
-    mov es, [w16_dhseg]
+    W16SEG es, [w16_dhseg]
     ICALL w16_dcall
     pop dx                          ; CX:DX = the resource's offset
     pop cx

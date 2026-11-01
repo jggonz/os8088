@@ -2339,10 +2339,11 @@ w16e_paste:
     jz .z
     push es
     ICALL w16_gfind                 ; ES = its header
-    mov ax, es
+    W16VOF ax, es
     pop es
     jc .z
     inc ax
+    W16TOSEL ax                     ; (a far pointer's: a selector)
     mov [w16e_src + 2], ax
     mov word [w16e_src], 0
     push es

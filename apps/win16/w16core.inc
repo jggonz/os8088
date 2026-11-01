@@ -141,7 +141,7 @@ w16_gate:
     push ds
     push si
     push di
-    mov bp, cs
+    W16CSDS bp
     mov ds, bp
     mov [w16_idx], ax
 %ifdef W16_TRACE
@@ -379,8 +379,12 @@ w16_resumecb:
 ; callee's answer, kept through CS because DS is the program's.
 w16_cbret:
     ; STKBALANCE-OK: reached by the callee's retf, and left through the gate
+%ifdef PKG_MEGA
+    call w16_dxax                   ; (no write through CS: 124.31.5)
+%else
     mov [cs:w16_cbax], ax
     mov [cs:w16_cbdx], dx
+%endif
     push cs                         ; a far return for the gate's frame, never
     call w16_cbret2                 ; used: the handler discards the frame
 w16_cbret2:
@@ -393,10 +397,40 @@ w16_cbret2:
 ; and DX are the entry's, kept through CS because DS is the program's.
 w16_thkhit:
     ; STKBALANCE-OK: reached by the thunk's far call, and left through the gate
+%ifdef PKG_MEGA
+    call w16_dxth
+%else
     mov [cs:w16_thax], ax
     mov [cs:w16_thdx], dx
+%endif
     mov ax, W16_SLROW
     jmp w16_gate
+
+%ifdef PKG_MEGA
+; w16_dxax / w16_dxth - the arm's [cs:] store of DX:AX, through our data
+; selector rather than CS (SPEC.md 124.31.5): to w16_cbax/w16_cbdx, or to
+; w16_thax/w16_thdx. Keeps all, the flags too.
+w16_dxax:
+    push bx
+    mov bx, w16_cbax
+    jmp short w16_dxst
+w16_dxth:
+    push bx
+    mov bx, w16_thax
+w16_dxst:
+    pushf
+    push ds
+    push bp
+    W16CSDS bp
+    mov ds, bp
+    mov [bx], ax
+    mov [bx + 2], dx
+    pop bp
+    pop ds
+    popf
+    pop bx
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; w16_cbdone - the W16_CBROW handler: discard the stub's frame, the record

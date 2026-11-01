@@ -442,9 +442,9 @@ W16LIB w16u_setcbdata
     shl cx, 1
     shl cx, 1
     shl cx, 1                       ; CX = its bytes
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     xor si, si
     call w16_clput
     jc .bad

@@ -56,7 +56,7 @@ W16SYS w16g_setbmbits
     mov al, [es:si]
     inc si
     push es
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     stosb
     pop es
     loop .cb
@@ -105,7 +105,7 @@ W16SYS w16g_setbmbits
     shr dx, 1                       ; (CF = the low nibble)
     pushf
     add di, dx
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     popf
     pop ax
     jc .lo
@@ -330,13 +330,15 @@ W16SYS w16g_getdibits
     sub dx, ax                      ; DX = the bitmap's row
     call w16_gdrow
     inc bp
-    mov ax, di                      ; the next row: lpBits may run past a
-    mov cl, 4                       ;   segment (a huge pointer), so ES:DI
-    shr ax, cl                      ;   is made the smallest offset again
-    mov cx, es
+%ifndef PKG_MEGA                    ; (the arm: a selector is not a paragraph;
+    mov ax, di                      ;   a DIB past 64KB is S22 batch 7's)
+    mov cl, 4                       ; the next row: lpBits may run past a
+    shr ax, cl                      ;   segment (a huge pointer), so ES:DI
+    mov cx, es                      ;   is made the smallest offset again
     add cx, ax
     mov es, cx
     and di, 15
+%endif
     jmp short .scan
 .done:
     mov ax, bp
@@ -372,7 +374,7 @@ w16_gdrow:
     shr dx, 1
     pushf
     add si, dx
-    mov ds, [w16b_seg + bx]
+    W16SEG ds, [w16b_seg + bx]
     mov al, [si]
     popf
     pop dx
@@ -432,7 +434,7 @@ w16_gdrow:
     pop bx
 .next:
     inc dx
-    jmp short .px
+    jmp .px
 .pad:
     cmp byte [w16_gdbpp], 1         ; a part-filled byte of bits, shifted up
     jne .p4end
@@ -619,7 +621,7 @@ w16r_can:
     shr ax, 1                       ; CF = a low nibble
     pushf
     add ax, dx
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov bx, ax
     mov al, [es:bx]
     popf

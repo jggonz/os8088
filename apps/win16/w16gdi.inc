@@ -2012,7 +2012,7 @@ w16_textw:
     push si
     push es
     xor ax, ax
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     jcxz .out
 .c:
     push ax
@@ -2074,7 +2074,7 @@ w16g_textext:
     call w16_txtcopy
     mov si, w16_txt
     call w16_textw
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov dl, [es:W16F_ROWS]
     xor dh, dh
     ret
@@ -2093,7 +2093,7 @@ w16g_textmet:
 ; w16_tmfill - ES:DI -> TM_SIZE bytes: the TEXTMETRIC. Clobbers AX, BX, DI.
 w16_tmfill:
     push ds
-    mov ds, [w16_face]
+    W16SEG ds, [w16_face]
     xor ah, ah
     mov al, [W16F_ROWS]
     stosw                           ; tmHeight
@@ -2181,7 +2181,7 @@ w16g_textout:
 ; -----------------------------------------------------------------------------
 w16_txtdraw:
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov si, w16_txt
     mov cx, [w16_tn]
     call w16_textw                  ; AX = the string's width
@@ -2789,7 +2789,7 @@ w16_dibhdr:
     push es                         ;   first entry past its end
     push si
     mov si, [es:si]
-    mov es, [w16_dpalc]
+    W16SEG es, [w16_dpalc]
     cmp si, [es:0]
     jb .pin
     xor si, si

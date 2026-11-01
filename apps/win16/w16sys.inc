@@ -535,7 +535,7 @@ w16l_lmcall:
     mov [w16_lmds], ax
     mov ax, [bx + W16L_HEAP]
     mov [w16_lmcx], ax
-    mov ax, [w16_psp]
+    W16PSP
     mov [w16_lmes], ax
     mov word [w16_lmsi], 0x80       ; the PSP's tail length: a 0, so ""
     push es
@@ -1001,7 +1001,7 @@ W16LIB w16g_getbmbits
     call .room
     jc .cend
     push ds
-    mov ds, [w16b_seg + bx]
+    W16SEG ds, [w16b_seg + bx]
     lodsb
     pop ds
     stosb
@@ -1043,7 +1043,7 @@ W16LIB w16g_getbmbits
     push dx
     shr dx, 1
     add si, dx
-    mov ds, [w16b_seg + bx]
+    W16SEG ds, [w16b_seg + bx]
     mov al, [si]
     pop dx
     pop si
@@ -2099,7 +2099,7 @@ w16g_lfill:
     rep stosw
     pop di
     push es
-    mov es, [w16_face]              ; its height and width
+    W16SEG es, [w16_face]              ; its height and width
     mov al, [es:W16F_ROWS]
     mov cl, [es:W16F_AVG]
     pop es

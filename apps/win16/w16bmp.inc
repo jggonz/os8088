@@ -188,7 +188,7 @@ w16_bmfills:
     mul dx
     pop dx
     mov di, ax
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov si, w16_gbuf
     mov cx, [w16b_n]
     cld
@@ -410,9 +410,9 @@ W16LIB w16u_loadbmp
     jc .rel
     cmp byte [w16_gdisc], 0
     jne .rel
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax                      ; ES:0 = the BITMAPINFO
+    W16SEG es, ax                      ; ES:0 = the BITMAPINFO
     xor si, si
     call w16_dibmake
     jmp short .relx
@@ -420,7 +420,7 @@ W16LIB w16u_loadbmp
     xor ax, ax
 .relx:
     push es                         ; LoadBitmap frees the resource
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:di + RN_USAGE], 0
     je .r0
     dec word [es:di + RN_USAGE]
@@ -848,7 +848,7 @@ w16_bmcopy:
     shr si, 1
     add si, ax
     push es
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov ax, [w16_rl]
     mov bx, [w16_rt]
     mov cx, [w16_rr]
@@ -960,7 +960,7 @@ w16_bmrow:
     call w16_bmclamp_h
     mul word [w16b_str + bx]
     mov si, ax                      ; SI = the source row's first byte
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov ax, [w16b_sx0]
     mov [w16b_sx], ax
     mov ax, [w16b_err0]
@@ -1349,7 +1349,7 @@ w16_bmaddr:
     mov dx, ax
     shr ax, 1
     add di, ax
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     shr dl, 1                       ; CF = the column's low bit
     ret
 
@@ -2244,7 +2244,7 @@ w16_roprow:
     mov si, cx
     shr si, 1
     add si, ax
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov dh, cl
     and dh, 1                       ; DH = 1: the source starts low
     xor dl, dl                      ; DL = 1: the row buffer's low half

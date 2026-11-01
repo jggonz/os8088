@@ -836,7 +836,7 @@ w16k_inittask:
     mov ax, [w16_dgroup]
     mov [w16_rdi], ax
     mov word [w16_rsi], 0
-    mov ax, [w16_psp]
+    W16PSP
     mov [w16_res], ax
     or byte [w16_rflags], W16R_SIDI
     mov dx, [w16_dgsize]            ; the local heap: after the stack, to

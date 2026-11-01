@@ -230033,6 +230033,7 @@ byte of it.
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
 | class byte | low, no `OS88_HIGH` or `OS88_HIGHMEM`, until 124.31.3's last step; `tests/megahigh.txt` keeps its two lines with the reason updated |
+| the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
 #### 124.31.2 What the kernel lends
 
@@ -230060,16 +230061,23 @@ It needs two things it does not have:
    every verb past `SEG_BWIN`, and a real-mode caller's step is `1000h`.
    It is what `__AHINCR` = 8 rests on (124.31.6).
 2. **A software interrupt routed to a package**: on `kern_mega` the IDT is
-   built from the IVT once, and `mega_ivt_sync` rebuilds only the IRQ rows
-   (08h-0Fh, 70h-77h), so a protected-mode program's own `int 21h` - its C
-   runtime's start-up issues it - lands on `mega_unh`, the fault reporter,
-   and the package is closed. The proposal: `mega_ivt_sync` also rebuilds
-   the rows **21h, 2Fh, 31h and 34h-3Dh** from the IVT through
-   `mega_idt_gate`, which already makes a package image's segment its code
-   selector, and WIN16 keeps writing the IVT through segment 0, which
-   `mega_null0` already traps and syncs. About 30 bytes of `.mega`, none on
-   any other kernel. **Not yet the owner's decision** (O2 covered (a) and
-   (b)); until it is, no program runs on this arm past its first `int 21h`.
+   built from the IVT once, and `mega_ivt_sync` rebuilds only the IRQ rows,
+   so a protected-mode program's own `int 21h` - its C runtime's start-up
+   and its exit issue it - never reaches WIN16. **And 21h is IRQ1's gate**:
+   the master 8259 sits at `MEGA_PIC_BASE` = 20h in protected mode (08h-0Fh
+   are CPU exceptions there), so a software `int 21h` runs the keyboard ISR
+   and returns into the program as if the call were done - TINY16's exit,
+   seen 2026-11-01, goes on into the bytes after it. 2Fh, 31h and 34h-3Dh
+   collide with nothing. **Two shapes, the owner's to choose (O2 covered
+   (a) and (b) only)**: (d1) gate 21h asks the master PIC's in-service
+   register - IRQ1 in service is the keyboard, as now; otherwise it is a
+   software interrupt, reflected to IVT 21h's handler by `mega_idt_gate`'s
+   package-segment rule - and `mega_ivt_sync` rebuilds 2Fh, 31h and
+   34h-3Dh from the IVT as it does the IRQ rows; or (d2) the protected-mode
+   master base moves off 20h (DOSX used 50h), a larger change to the
+   reflection path, which keeps the PIC at 20h across a reflection. Either
+   is `.mega` alone, nothing on any other kernel. Until one is taken, no
+   program runs on this arm past its first `int 21h`.
 
 #### 124.31.3 Memory: virtual paragraphs inside, selectors at the edge
 
@@ -230107,7 +230115,22 @@ what the numbers mean**:
     the map, back to the virtual paragraph.
 - A handle WIN16 keeps in its own variables is virtual; one it keeps for the
   program (`w16_dgroup`, the program's SS in `w16_pss`) is a selector, and
-  each variable says which where it is declared.
+  each variable says which where it is declared. **A variable holds one
+  kind, never either**: kern_mega's LDT selectors are numbers in the same
+  range as virtual paragraphs (11CCh, 12A4h on the first run), so a value
+  `W16SEG` is handed must be virtual. A segment WIN16 only ever loads -
+  the USER heap's, a dialog template's - is kept as its selector instead
+  (`W16TOSEL` where it is made), and one it adds to is kept virtual.
+- A plain claim WIN16 does no paragraph arithmetic on - the loader's file
+  tables, which `OSAPI_MEM_REGROW` may move, its cluster cache, the census's
+  walk - is not in the map at all: its selector is the value.
+- The map keeps a claim's 512-byte phase: a virtual base has the low five
+  bits of the claim's linear paragraph, so `w16_kclaim`'s alignment of a
+  disk-visible block is an alignment in memory too.
+- `SEG_SUB` gives a block's selector back only with its claim, so every
+  distinct paragraph `W16SEG` is handed costs an LDT entry until its arena
+  goes. That is bounded for the first targets and is batch 7's to tighten
+  (a freeable selector per block, over `SEG_TILE`).
 - **Above 1 MB** is the map's last step: an arena claimed with
   `OS88_HIGHMEM` is entered in the map like any other, because nothing
   outside `w16_vsel` reads a claim's address. That retires

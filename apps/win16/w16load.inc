@@ -264,6 +264,7 @@ w16_load:
     call w16_mkpsp
     call w16_frame                  ; CF=1 SI = reason
     jc .refuse
+%ifndef PKG_MEGA                   ; (the arm: a 286 or better, no census)
 %ifndef W16_CENSUS_ALWAYS             ; (a test build runs it on any CPU)
     cmp byte [w16_cpu186], 0        ; an 8088: the census decides
     jne .cpuok
@@ -271,6 +272,7 @@ w16_load:
     call w16_census                 ; CF=1: refused, lines written
     jc .refused
 .cpuok:
+%endif
     call w16l_keep                  ; part 5 kept for loading segments later
     jc .refuse                      ;   (124.26.3); CF=1 SI = reason
     mov dx, [w16_fseg]              ; the file is no longer needed
@@ -299,7 +301,7 @@ w16_load:
     mov dx, [w16_pseg]
     or dx, dx
     jz .nop
-    call OSAPI_MEM_FREE
+    W16VFREE
     mov word [w16_pseg], 0
 .nop:
     stc
@@ -440,7 +442,7 @@ w16_lay1:
     mov cl, 5                       ;   bit 16
     shr ax, cl
     push ax
-    call OSAPI_MEM_CLAIM
+    W16VCLAIM
     pop cx                          ; CX = KB
     jnc .got
 .huge:
@@ -460,7 +462,7 @@ w16_lay1:
     mov cx, bp                      ; paragraphs used
     mov bx, dx
 .zero:
-    mov es, bx
+    W16SEG es, bx
     xor di, di
     xor ax, ax
     mov dx, cx
@@ -501,6 +503,14 @@ w16_lay1:
     dec bx
     shl bx, 1
     mov ax, [w16_sbase + bx]
+%ifdef PKG_MEGA
+    push cx                         ; the program's: a selector (124.31.3)
+    mov cx, [w16_dgsize]
+    call w16l_preach
+    xor bl, bl
+    ICALL w16_psel
+    pop cx
+%endif
     mov [w16_dgroup], ax
     pop bp
     clc
@@ -530,7 +540,7 @@ w16_copysegs:
     jc .recs                        ;   is loaded (124.26.3), its records now
     push es
     push di
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     xor di, di
     jcxz .whole
     call w16l_fread
@@ -1013,7 +1023,7 @@ w16_reloc1:
     mov cl, [es:si + 4]
     push es
     mov bx, [w16_rseg]
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     ICALL w16x_osfix
     pop es
     jmp .ok
@@ -1043,7 +1053,7 @@ w16_reloc1:
     cmp ax, W16_D3ROW               ; DOS3Call: int 21h itself, no gate
     jne .nd3                        ;   (SPEC.md 124.15.3)
     mov ax, w16k_dos3call
-    mov dx, ds                      ; the image's segment (this part's CS is not)
+    W16ICS dx                       ; the image's segment (this part's CS is not)
     jmp .apply
 .nd3:
     cmp ax, W16_FPROW               ; __FPMATH: the emulator's, or ours
@@ -1054,11 +1064,11 @@ w16_reloc1:
     jmp .ok
 .fpbind:
     xor ax, ax
-    mov dx, [w16_fpseg]
+    mov dx, [w16_fpseg]             ; (a code selector in the arm: w16x87.inc)
     cmp byte [w16_fpm], W16FP_EMU
     je .apply
     mov ax, w16x_fpmath
-    mov dx, ds                      ; the image's segment (this part's CS is not)
+    W16ICS dx                       ; the image's segment (this part's CS is not)
     jmp .apply
 .nfp:
     cmp ax, W16_WFROW               ; __WINFLAGS: a constant, its value
@@ -1066,10 +1076,17 @@ w16_reloc1:
     ICALL w16k_getwinflags           ; AX (DX = 0)
     jmp .apply
 .ahinc:
+%ifdef PKG_MEGA
+    mov dx, 8                       ; __AHINCR and __AHSHIFT: a selector's
+    cmp ax, W16_AHROW               ;   step (SPEC.md 124.31.6)
+    je .equate
+    mov dx, 3
+%else
     mov dx, 0x1000                  ; __AHINCR and __AHSHIFT: their values
     cmp ax, W16_AHROW               ;   (SPEC.md 124.20.3)
     je .equate
     mov dx, 12
+%endif
     cmp ax, W16_AHROW + 1
     jne .stub
 .equate:
@@ -1084,7 +1101,7 @@ w16_reloc1:
     add ax, dx
     shl ax, 1
     add ax, w16_stubs
-    mov dx, ds                      ; the image's segment (this part's CS is not)
+    W16ICS dx                       ; the image's segment (this part's CS is not)
     jmp .apply
 .nbind:
     pop di
@@ -1168,13 +1185,25 @@ w16_reloc1:
     cmp cl, 5
     jne .ok
 .seedit:
+%ifndef PKG_MEGA
     call w16c_seed                  ; DX = the segment number, AX = offset
+%endif
     jmp short .ok
 .segaddr:
     mov di, dx
     dec di
     shl di, 1
     mov dx, [w16_sbase + di]
+%ifdef PKG_MEGA
+    push ax                         ; the segment's selector (124.31.4)
+    push bx
+    mov bx, di
+    mov ax, dx
+    call w16l_ssel
+    mov dx, ax
+    pop bx
+    pop ax
+%endif
 .apply:                             ; DX:AX = the target
     cmp byte [w16_rpass], 1         ; only pass 1 writes
     jne .ok
@@ -1184,7 +1213,7 @@ w16_reloc1:
     mov ch, [es:si + 1]
     push es
     mov bx, [w16_rseg]
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     ICALL w16_inrange                ; the FIRST site must be in the segment
     jc .applied
     test ch, 4                      ; additive: that one site, added
@@ -1323,6 +1352,46 @@ w16_inrange:
     ret
 
 section .w16ld
+%ifdef PKG_MEGA
+; w16l_ssel - the arm's selector for one of the program's segments (SPEC.md
+; 124.31.4): AX = its paragraph ([w16_sbase + BX]), BX = its index * 2, ES =
+; the tables -> AX = SEG_SUBC's code half for a code segment, a data selector
+; for a data one, each reaching [w16_slen + BX]. Keeps every other register.
+w16l_ssel:
+    push bx
+    push cx
+    push si
+    mov cx, [w16_slen + bx]
+    call w16l_preach                ; CX = paragraphs, 0 = 64KB
+    mov si, [w16_ne]
+    add si, [es:si + NE_SEGTAB]
+    shl bx, 1
+    shl bx, 1
+    test word [es:si + bx + 4], NSF_DATA
+    mov bl, 1
+    jz .code
+    xor bl, bl
+.code:
+    ICALL w16_psel
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; w16l_preach - CX = bytes (0 = 64KB) -> CX = paragraphs that reach them, 0
+; meaning 64KB (w16_psel's). Keeps every other register.
+w16l_preach:
+    add cx, 15
+    jc .all
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    ret
+.all:
+    xor cx, cx
+    ret
+%endif
 ; w16_site - write DX:AX at ES:DI by address type CL; CH bit 2 = additive.
 ; out CF=1 an address type WIN16 does not know
 w16_site:
@@ -1558,7 +1627,7 @@ w16_prolog1:
     je .out
     mov si, [w16_ne]
     mov dx, [es:si + NE_FLAGS]
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     push di
     inc di                          ; three bytes must fit
     ICALL w16_inrange
@@ -1597,7 +1666,7 @@ w16_prolog1:
 ; -----------------------------------------------------------------------------
 w16_mkpsp:
     push es
-    mov es, [w16_psp]
+    W16SEG es, [w16_psp]
     mov word [es:0], 0x20CD         ; int 20h
     mov ax, [w16_ptop]
     mov [es:2], ax                  ; the paragraph past the program
@@ -1626,6 +1695,9 @@ w16_frame:
     dec bx
     shl bx, 1
     mov ax, [w16_sbase + bx]
+%ifdef PKG_MEGA
+    call w16l_ssel                  ; its code selector (124.31.4)
+%endif
     mov [w16_scratch], ax           ; the entry's CS
     mov ax, [es:si + NE_SP]
     or ax, ax
@@ -1660,7 +1732,7 @@ w16_frame:
     pop es
     mov [w16_rbx], cx
     mov [w16_rcx], dx
-    mov ax, [w16_psp]
+    W16PSP                          ; the program's ES
     mov [w16_res], ax
     mov word [w16_nargb], 0
     mov byte [w16_rflags], 0
@@ -1711,7 +1783,12 @@ w16l_lmfirst:
     loop .mv
     mov di, [w16_psp_]
     mov word [es:di + W16F_IP], w16_stubs + 6 * W16_LMROW
+%ifdef PKG_MEGA
+    W16ICS ax
+    mov [es:di + W16F_CS], ax
+%else
     mov [es:di + W16F_CS], ds
+%endif
 .out:
     pop es
     pop di
@@ -1809,7 +1886,7 @@ w16_missbind:
     add ax, dx
     shl ax, 1
     add ax, w16_stubs
-    mov dx, ds                      ; the image's segment (this part's CS is not)
+    W16ICS dx                       ; the image's segment (this part's CS is not)
     clc
     jmp short .out
 .full:
@@ -2219,6 +2296,7 @@ w16l_ldlib:
     call w16_relocs
     jc .refused
     call w16_prologs
+%ifndef PKG_MEGA
 %ifndef W16_CENSUS_ALWAYS
     cmp byte [w16_cpu186], 0
     jne .cpuok
@@ -2226,6 +2304,7 @@ w16l_ldlib:
     call w16_census
     jc .refused
 .cpuok:
+%endif
     call w16l_mrec                  ; AL = its record; CF=1 SI = reason
     jc .refuse
     push ax
@@ -2841,7 +2920,7 @@ w16l_lent:
     add si, dx
     dec si                          ; (DX - 1) * 3 ...
     shl si, 1                       ; ...* 2 = * W16CL_SIZE
-    mov es, [w16_clive]
+    W16SEG es, [w16_clive]
     clc
     ret
 .none:
@@ -3104,7 +3183,7 @@ w16l_lfill:
     mov dl, W16CLF_DISC
 .flags:
     push es
-    mov es, [w16_clive]
+    W16SEG es, [w16_clive]
     mov [es:di + W16CL_BASE], ax
     mov [es:di + W16CL_FL], dl
     pop es
@@ -3159,7 +3238,7 @@ w16l_tinit:
     jnc .next
     mov ax, [es:si + 4]             ; its offset
     push es
-    mov es, [w16_cthk]
+    W16SEG es, [w16_cthk]
     mov byte [es:di], 0x9A          ; call far w16_thkhit
     mov word [es:di + 1], w16_thkhit
     mov [es:di + 3], ds             ; (the image's segment)
@@ -3185,7 +3264,7 @@ w16l_thkset:
     push cx
     push di
     push es
-    mov es, [w16_cthk]
+    W16SEG es, [w16_cthk]
     xor di, di
     mov cx, [w16_cnord]
     jcxz .out
@@ -3304,7 +3383,7 @@ w16l_segfill:
     mov bx, dx
     dec bx
     shl bx, 1                       ; BX = index * 2
-    mov es, [w16_cmb]
+    W16SEG es, [w16_cmb]
     call w16l_segtab                ; ES:DI -> its row
     mov ax, [es:di]
     call w16l_secoff                ; DX:AX = its bytes in the file
@@ -3317,7 +3396,7 @@ w16l_segfill:
     sbb dx, 0
     push di
     push es
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     xor di, di
     call w16l_fread
     mov cx, [w16_slen + bx]
@@ -3327,7 +3406,7 @@ w16l_segfill:
     push es                         ; the rest of it zeroed
     mov di, [es:si + 2]
     sub cx, di
-    mov es, [w16_sbase + bx]
+    W16SEG es, [w16_sbase + bx]
     xor al, al
     cld
     rep stosb
@@ -3569,7 +3648,7 @@ w16l_segin:
     call OSAPI_FILE_GOTO_QM
     mov si, w16_r_disk
     jc .back
-    mov es, [w16_cmb]
+    W16SEG es, [w16_cmb]
     mov bx, bp
     dec bx
     shl bx, 1
@@ -3622,7 +3701,7 @@ w16l_segin:
     mov word [w16_clen], 0
     mov dx, bp
     call w16l_segkeep
-    mov es, [w16_cmb]
+    W16SEG es, [w16_cmb]
     call w16l_segfill
     pop word [w16_csz]              ; (the flags kept)
     mov si, 1                       ; SI = 1: refused, the lines written
@@ -3725,7 +3804,7 @@ w16l_codeold:
     mov cx, [w16_cnseg]             ; at most every one is found in use
     inc cx
 .try:
-    mov es, [w16_clive]
+    W16SEG es, [w16_clive]
     xor si, si
     mov bx, [w16_cnseg]
     mov di, 0xFFFF                  ; DI = the oldest's entry, BP its age

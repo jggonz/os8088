@@ -86,7 +86,7 @@ w16_copyres:
     pop es
     pop ds
     push es                         ; every entry's cache words to zero
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov si, 2
 .type:
     cmp word [es:si], 0
@@ -273,9 +273,9 @@ w16_rnametab:
     jc .none
     cmp byte [w16_gdisc], 0
     jne .none
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     xor di, di
 .ent:
     cmp di, 0x0F00                  ; a table is a few entries: a walk this
@@ -370,7 +370,7 @@ w16_rscan:
     xor ax, ax
     cmp word [w16_rtlen], 0
     je .out
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov di, 2
 .type:
     mov ax, [es:di]
@@ -434,7 +434,7 @@ w16_rload:
     or ax, ax
     jz .out
     mov si, ax
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov ax, [es:si + RN_HANDLE]
     or ax, ax
     jz .read
@@ -446,7 +446,7 @@ w16_rload:
     call w16_rread                  ; AX = the handle
     or ax, ax
     jz .out
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov [es:si + RN_HANDLE], ax
     mov word [es:si + RN_USAGE], 1
     push ax                         ; the block knows its entry, for discard
@@ -472,7 +472,7 @@ w16_rload:
 w16_rspan:
     push bx
     push es
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov cl, [es:0]                  ; the alignment shift
     mov ax, [es:si + RN_LEN]
     xor dx, dx
@@ -602,7 +602,7 @@ w16_rread:
     shr ax, cl
     add ax, [w16_rdat]
     mov cx, [w16_rlen]
-    mov es, [w16_rdat]
+    W16SEG es, [w16_rdat]
     xor di, di
     push ds
     mov ds, ax
@@ -648,10 +648,10 @@ w16_gcut:
     cmp bx, cx
     jae .out
     mov [es:GH_SIZE], bx
-    mov ax, es
+    W16VOF ax, es
     add ax, bx
     push es
-    mov es, ax
+    W16SEG es, ax
     sub cx, bx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], GHF_USED
@@ -670,7 +670,7 @@ w16_rdiscard:
     push si
     push es
     mov si, ax
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
     jne .keep
     mov ax, [es:si + RN_HANDLE]
@@ -750,7 +750,7 @@ w16k_freeres:
     mov ax, [es:bx]
     call w16_rentry
     jc .no
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
     je .z
     dec word [es:si + RN_USAGE]
@@ -770,7 +770,7 @@ w16k_sizeres:
     xor dx, dx
     or si, si
     jz .out
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     mov ax, [es:si + RN_LEN]
     mov cl, [es:0]
     xor ch, ch
@@ -809,9 +809,9 @@ w16u_loadstr:
     jz .none
     call w16_gfind
     jc .none
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax                      ; ES:SI = the block's 16 strings
+    W16SEG es, ax                      ; ES:SI = the block's 16 strings
     xor si, si
     mov cx, [w16_rsid]
     and cx, 15

@@ -269,7 +269,7 @@ w16x_lacks:
     mov di, w16_l1
     call w16_strcpy
     push es
-    mov es, [w16_fpseg]             ; its name, from the part
+    W16SEG es, [w16_fpseg]             ; its name, from the part
     mov si, W16FPH_WHY
 .c:
     mov al, [es:si]

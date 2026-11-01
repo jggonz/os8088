@@ -112,7 +112,7 @@ w16_gnew:
     call w16_gfit
     jc .fail
 .got:
-    mov es, ax                      ; ES = the header
+    W16SEG es, ax                      ; ES = the header
     mov byte [es:GH_LOCK], 0
     mov word [es:GH_OWNER], 0
     inc ax
@@ -129,7 +129,7 @@ w16_gnew:
     or byte [es:GH_FLAGS], GHF_MOVE
     jmp short .hset
 .nohandle:
-    mov ax, es
+    W16VOF ax, es
     call w16_gfreeblk
     jmp short .fail
 .fixed:
@@ -157,12 +157,12 @@ w16_gzero:
     push es
     mov bx, [es:GH_SIZE]
     dec bx                          ; BX = data paragraphs
-    mov ax, es
+    W16VOF ax, es
     inc ax
 .chunk:
     or bx, bx
     jz .done
-    mov es, ax
+    W16SEG es, ax
     mov cx, bx
     cmp cx, 0x0FFF
     jbe .last
@@ -231,7 +231,7 @@ w16_gfit:
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
-    mov es, ax
+    W16SEG es, ax
     mov cx, [es:GH_SIZE]
     test byte [es:GH_FLAGS], GHF_USED
     jnz .skip
@@ -251,13 +251,13 @@ w16_gfit:
     jmp short .skip
 .top:                               ; the last fit: the top of it is the block
     mov ax, dx
-    mov es, ax
+    W16SEG es, ax
     mov cx, [es:GH_SIZE]
     sub cx, bx
     jz .exact
     mov [es:GH_SIZE], cx            ; the bottom stays free
     add ax, cx
-    mov es, ax
+    W16SEG es, ax
     mov [es:GH_SIZE], bx
     jmp short .exact
 .low:
@@ -266,7 +266,7 @@ w16_gfit:
     mov dx, ax                      ; the rest becomes a free block
     add dx, bx
     push es
-    mov es, dx
+    W16SEG es, dx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], 0
     mov word [es:GH_MAGIC], GH_SIG
@@ -344,18 +344,18 @@ w16_garena:
     jae .kb
     mov ax, dx
 .kb:
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    W16VCLAIM                       ; DX = the segment
     mov cx, ax
     pop ax
     jnc .got
     cmp ax, cx
     je .no                          ; it was the request's own size
     mov cx, ax
-    call OSAPI_MEM_CLAIM            ; the floor would not go: the request
+    W16VCLAIM                       ; the floor would not go: the request
     jc .no
 .got:
     mov [w16_arena + si], dx
-    mov es, dx
+    W16SEG es, dx
     mov ax, cx
     mov cl, 6
     shl ax, cl                      ; paragraphs
@@ -387,7 +387,7 @@ w16_gfreeblk:
     push dx
     push si
     push es
-    mov es, ax
+    W16SEG es, ax
     mov byte [es:GH_FLAGS], 0
     mov byte [es:GH_LOCK], 0
     xor si, si                      ; which arena
@@ -411,7 +411,7 @@ w16_gfreeblk:
 .walk:
     cmp ax, [w16_arenae + si]
     jae .walked
-    mov es, ax
+    W16SEG es, ax
     test byte [es:GH_FLAGS], GHF_USED
     jz .free
     mov bx, 1
@@ -423,7 +423,7 @@ w16_gfreeblk:
     cmp cx, [w16_arenae + si]
     jae .walked
     push es
-    mov es, cx
+    W16SEG es, cx
     test byte [es:GH_FLAGS], GHF_USED
     mov cx, [es:GH_SIZE]
     pop es
@@ -437,7 +437,7 @@ w16_gfreeblk:
     or bx, bx
     jnz .out
     mov dx, [w16_arena + si]        ; nothing used: give it back
-    call OSAPI_MEM_FREE
+    W16VFREE
     mov word [w16_arena + si], 0
     mov word [w16_arenae + si], 0
 .out:
@@ -481,7 +481,7 @@ w16_gfind:
     dec ax                          ; the header is the paragraph before
     call w16_ginheap
     jc .bad
-    mov es, ax
+    W16SEG es, ax
     cmp word [es:GH_MAGIC], GH_SIG
     jne .bad
     test byte [es:GH_FLAGS], GHF_USED
@@ -535,7 +535,7 @@ w16_gfreeh:
     jc .out
     cmp byte [w16_gdisc], 0
     jne .entry
-    mov ax, es
+    W16VOF ax, es
     call w16_gfreeblk
 .entry:
     cmp si, 0xFFFF
@@ -572,7 +572,7 @@ w16_gdold:
     or ax, ax
     jz .n                           ; discarded already
     dec ax                          ; the header
-    mov es, ax
+    W16SEG es, ax
     cmp byte [es:GH_LOCK], 0
     jne .n
     mov ax, [w16_ghage + si]
@@ -651,7 +651,7 @@ w16_gdiscard:
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
-    mov es, ax
+    W16SEG es, ax
     test byte [es:GH_FLAGS], GHF_USED
     jz .skip
     test byte [es:GH_FLAGS], GHF_RES
@@ -691,7 +691,7 @@ w16_gfreeall:
     mov dx, [w16_arena + si]
     or dx, dx
     jz .n
-    call OSAPI_MEM_FREE
+    W16VFREE
     mov word [w16_arena + si], 0
     mov word [w16_arenae + si], 0
 .n:
@@ -754,6 +754,7 @@ w16k_galloc:
 .nd:
     pop si
 .out:
+    W16POUT
     ret
 .short:
     LCALL w16k_gnask                ; the procedure, asked: it runs, and the
@@ -763,6 +764,7 @@ w16k_galloc:
 w16k_gfree:
     call w16_args
     mov ax, [es:bx]
+    W16PIN
     call w16_gfreeh
     jc .no
     xor ax, ax
@@ -773,6 +775,7 @@ w16k_gfree:
 w16k_glock:
     call w16_args
     mov ax, [es:bx]
+    W16PIN
     call w16_gfind
     jc .null
     cmp byte [w16_gdisc], 0
@@ -782,8 +785,13 @@ w16k_glock:
     dec byte [es:GH_LOCK]           ; it saturates rather than wraps
 .l:
     call w16_gtouch                 ; (the order w16_gdold discards in)
-    mov dx, es
+    W16VOF dx, es
     inc dx
+%ifdef PKG_MEGA
+    xchg ax, dx
+    call w16_pblk                   ; the program's selector for it
+    xchg ax, dx
+%endif
     xor ax, ax
     ret
 .null:
@@ -795,6 +803,7 @@ w16k_glock:
 w16k_gunlock:
     call w16_args
     mov ax, [es:bx]
+    W16PIN
     call w16_gfind
     jc .zero
     cmp byte [w16_gdisc], 0
@@ -815,6 +824,7 @@ w16k_gunlock:
 w16k_gsize:
     call w16_args
     mov ax, [es:bx]
+    W16PIN
     call w16_gfind
     jc .zero
     cmp byte [w16_gdisc], 0
@@ -841,13 +851,20 @@ w16_p2b:
 w16k_ghandle:
     call w16_args
     mov ax, [es:bx]
+    W16PIN
     call w16_gfind
     jc .zero
     cmp byte [w16_gdisc], 0
     jne .zero
     mov ax, [es:GH_HANDLE]
-    mov dx, es
+    W16VOF dx, es
     inc dx
+%ifdef PKG_MEGA
+    xchg ax, dx
+    call w16_pblk
+    xchg ax, dx
+    W16POUT
+%endif
     ret
 .zero:
     xor ax, ax
@@ -859,6 +876,7 @@ w16k_ghandle:
 w16k_gflags:
     call w16_args
     mov ax, [es:bx]
+    W16PIN
     call w16_gfind
     jc .zero
     mov ax, GMEM_DISCARDED
@@ -906,7 +924,7 @@ w16k_gcompact:
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
-    mov es, ax
+    W16SEG es, ax
     mov dx, [es:GH_SIZE]
     call w16_gcan
     jc .brk
@@ -978,7 +996,7 @@ w16_gcan:
     shl si, 1
     add si, ax
     shl si, 1
-    mov es, [w16_clive]
+    W16SEG es, [w16_clive]
     test byte [es:si + W16CL_FL], W16CLF_KEEP
     pop es
     pop si
@@ -1002,6 +1020,11 @@ w16k_grealloc:
     mov ax, [es:bx + 2]
     mov dx, [es:bx + 4]
     mov di, [es:bx + 6]             ; DI = the handle
+%ifdef PKG_MEGA
+    xchg ax, di
+    call w16_pin
+    xchg ax, di
+%endif
     test cl, GMEM_MODIFY
     jz .size
     mov ax, di                      ; the flags alone: whether it may be
@@ -1066,10 +1089,10 @@ w16k_grealloc:
     je .same
     ; shrink: the rest becomes a free block
     mov [es:GH_SIZE], bx
-    mov ax, es
+    W16VOF ax, es
     add ax, bx
     push es
-    mov es, ax
+    W16SEG es, ax
     sub cx, bx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], GHF_USED
@@ -1081,12 +1104,12 @@ w16k_grealloc:
     jmp .out
 .grow:
     ; in place, when the next block is free and big enough together
-    mov ax, es
+    W16VOF ax, es
     add ax, cx
     call w16_ginheap
     jc .move
     push es
-    mov es, ax
+    W16SEG es, ax
     cmp word [es:GH_MAGIC], GH_SIG
     jne .nonext
     test byte [es:GH_FLAGS], GHF_USED
@@ -1097,13 +1120,13 @@ w16k_grealloc:
     cmp dx, bx
     jb .move
     push es
-    mov es, ax
+    W16SEG es, ax
     mov byte [es:GH_FLAGS], GHF_USED ; take the neighbour whole, then cut
     pop es
     mov [es:GH_SIZE], dx
     push di
     push cx
-    mov ax, es
+    W16VOF ax, es
     add ax, cx
     test byte [w16_gflg], GMEM_ZEROINIT
     jz .nz
@@ -1118,10 +1141,10 @@ w16k_grealloc:
     jmp .out
 .shrinkto:
     mov [es:GH_SIZE], bx            ; the surplus goes back, as a shrink
-    mov ax, es
+    W16VOF ax, es
     add ax, bx
     push es
-    mov es, ax
+    W16SEG es, ax
     sub cx, bx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], GHF_USED
@@ -1144,7 +1167,12 @@ w16k_grealloc:
     test byte [es:GH_FLAGS], GHF_MOVE
     jnz .fail
 .unlocked:
+%ifdef PKG_MEGA
+    W16VOF ax, es
+    mov [w16_gold], ax
+%else
     mov [w16_gold], es
+%endif
     mov ax, [w16_gnp]
     dec ax
     call w16_p2b
@@ -1158,10 +1186,10 @@ w16k_grealloc:
     push si
     push di
     push ds
-    mov es, dx                      ; ...the old data copied in
+    W16SEG es, dx                      ; ...the old data copied in
     mov ax, [w16_gold]
     push es
-    mov es, ax
+    W16SEG es, ax
     mov cx, [es:GH_SIZE]
     pop es
     dec cx                          ; paragraphs to copy: the old data
@@ -1179,28 +1207,28 @@ w16k_grealloc:
     ; the new block takes over the old one's identity
     mov ax, [w16_gold]
     push es
-    mov es, ax
+    W16SEG es, ax
     mov bl, [es:GH_FLAGS]
     mov bh, [es:GH_LOCK]
     mov cx, [es:GH_OWNER]
     pop es
-    mov ax, es
+    W16VOF ax, es
     dec ax
     push es
-    mov es, ax                      ; ES = the new header
+    W16SEG es, ax                      ; ES = the new header
     mov [es:GH_FLAGS], bl
     mov [es:GH_LOCK], bh
     mov [es:GH_OWNER], cx
     pop es
     mov ax, [w16_gold]
     call w16_gfreeblk
-    mov ax, es                      ; the data
+    W16VOF ax, es                      ; the data
     cmp si, 0xFFFF
     je .newfixed
     mov [w16_ghseg + si], ax        ; moveable: the same handle, a new block
     push es
     dec ax
-    mov es, ax
+    W16SEG es, ax
     mov [es:GH_HANDLE], di
     pop es
     mov ax, di
@@ -1209,7 +1237,7 @@ w16k_grealloc:
     push es                         ; fixed: the answer is its new segment
     mov dx, ax
     dec ax
-    mov es, ax
+    W16SEG es, ax
     mov [es:GH_HANDLE], dx
     pop es
     mov ax, dx
@@ -1217,6 +1245,7 @@ w16k_grealloc:
 .fail:
     xor ax, ax
 .out:
+    W16POUT
     xor dx, dx
     pop di
     pop si
@@ -1235,7 +1264,7 @@ w16_gsteal:
     mov word [w16_ghseg + bx], 0
     mov [w16_ghseg + si], ax
     dec ax
-    mov es, ax
+    W16SEG es, ax
     mov ax, si
     add ax, W16_GH0
     mov [es:GH_HANDLE], ax
@@ -1255,7 +1284,7 @@ w16_zparas:
 .c:
     or dx, dx
     jz .d
-    mov es, ax
+    W16SEG es, ax
     mov cx, dx
     cmp cx, 0x0FFF
     jbe .l
@@ -1289,7 +1318,7 @@ w16_pcopyseg:
     push di
 .c:
     jcxz .d
-    mov ds, ax
+    W16SEG ds, ax
     push cx
     cmp cx, 0x0FFF
     jbe .l
@@ -1304,9 +1333,9 @@ w16_pcopyseg:
     cld
     rep movsw
     pop cx
-    mov si, es
+    W16VOF si, es
     add si, cx
-    mov es, si
+    W16SEG es, si
     add ax, cx
     mov si, cx
     pop cx

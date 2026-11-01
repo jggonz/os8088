@@ -3047,3 +3047,49 @@ os8088's CD-ROM driver does not read, and its program is the ToolBook
 runtime. The later composer discs are Mozart's engine on bigger discs.
 *Living Books* draws in 256 colours. Netscape and Acrobat Reader have
 InstallShield 3 installers too, but they are multi-megabyte programs.
+
+## 2026-11-01 — S22: the first Windows program in protected mode
+
+**Story.** *As a user on a 286, a Windows program runs in an os8088 window on
+kern_mega.* The real-mode WIN16 computes in paragraphs everywhere: a heap
+block's header is the paragraph below its data, an arena is walked by adding
+sizes, a program's segments are its claim plus offsets. Under kern_mega none
+of those numbers can go into a segment register.
+
+**The decision: keep the arithmetic, change what the numbers mean.** The arm
+gives every claim WIN16 sub-allocates a *virtual* base, first fit from 1000h,
+and keeps a map of them. A virtual paragraph becomes a selector only where it
+is loaded. `W16SEG es, ax` is `mov es, ax` in real mode, and in the arm it
+asks `OSAPI_SEG`'s `SEG_SUB` for a selector at that paragraph of the claim,
+with an eight-row cache in front. The program is handed selectors and gives
+selectors back, converted at the edge (`w16_psel`, `w16_pvirt`). The real-mode
+build is byte-identical after every change. Rejected:
+- Rewriting WIN16 to keep selectors everywhere. Every heap walk, every
+  comparison of two blocks and every split would have changed.
+- Trapping the segment-register load in the kernel. A virtual paragraph and
+  an LDT selector are numbers in the same range, so the load would succeed
+  silently with the wrong base.
+
+**Discoveries, in the order they were met.**
+- `__?SECT?__` keeps a section's attributes (`[section .w16ld follows=.w16fp
+  vstart=0 align=1]`). The macro that picks a part's own thunks compares the
+  name alone.
+- A variable must hold one kind of value. The first run had a selector,
+  11CCh, inside the range of the virtual paragraphs, so `W16SEG` on a
+  selector would have read the wrong memory without faulting. The USER
+  heap's segment and a dialog template's are kept as selectors, made once.
+- The program's ES at its start, the PSP, was handed over as a virtual
+  paragraph. The first fault said so: error code 2008h, a GDT index nobody
+  has.
+- The census is the 8088's alone. Taking it out of the arm paid for the
+  arm's own code: 1,656 bytes of room against the real-mode build's 1,279.
+
+**Seen.** TINY16 under QEMU's 486 on kern_mega: InitTask, InitApp, and its
+MessageBox drawn in the os8088 window. Clicking OK resumes it into its exit,
+`int 21h` 4Ch, and nothing happens.
+
+**Why.** kern_mega moves the master 8259 to 20h in protected mode, because
+08h-0Fh are CPU exceptions there. So IDT 21h is the keyboard's gate. A
+program's `int 21h` runs the keyboard ISR and returns as if the call were
+done. Routing it is a kernel change, and the owner's to make (SPEC.md
+124.31.2).

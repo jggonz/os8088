@@ -1306,11 +1306,23 @@ its table goes in the diary, so the reach is measured, not claimed.
       `build/megawin16.img` and `megawin16-120.img` by `make mega`;
       kern_mega's `DOS.O88` hands an NE over; the arm accepts `NEF_PMODE`
       and refuses a real-mode kernel.
-    - [ ] *2: virtual paragraphs.* The map, `W16SEG`, the claim wrappers,
-      the global heap and `w16_kclaim` through them (124.31.3).
-    - [ ] *3: the loader.* Selectors per segment, fixups, code selectors
-      for imports and parts, thunks (124.31.4, 124.31.5).
-    - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2.
+    - [x] *2: virtual paragraphs.* `apps/win16/w16pm.inc`: the map,
+      `W16SEG`/`W16VOF`/`W16TOSEL`, the claim wrappers, the edge
+      (`w16_psel`, `w16_pvirt`, `w16_pin`, `w16_pout`); the global heap,
+      `w16_kclaim`/`w16_pkeep`, the face, bitmaps, resources, menus and
+      dialogs' segment loads through them. The census is out of the arm
+      (it decides only for an 8088), which is what pays for it: the arm
+      has 1,656 bytes of room against the real-mode build's 1,279.
+      **Seen 2026-11-01: TINY16 runs on kern_mega in protected mode** -
+      InitTask, InitApp and its MessageBox, drawn - and stops at its exit's
+      `int 21h` (item 4).
+    - [ ] *3: the loader.* Done for a program's own segments: selectors per
+      segment, fixups, DGROUP and the PSP as selectors, the image's code
+      half for imports, part 3/5/9 vectors through code halves. Left:
+      libraries, discardable code (the module block and its thunks), the
+      x87 part's code selector (124.31.4, 124.31.5).
+    - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2,
+      CORRECTED 2026-11-01: 21h is IRQ1's gate in protected mode.
     - [ ] *5: what the program is told.* `GetWinFlags`, `SEG_TILE` and
       `__AHINCR`, the selector functions, `int 31h` (124.31.6).
     - [ ] *6: DOS* (124.31.7), then REGEDIT, SOL and WRITE.

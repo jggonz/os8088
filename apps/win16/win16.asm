@@ -231,6 +231,7 @@ section .w16dlg
 %1 equ os88_image_end + OP_BSS + W16B
 %assign W16B W16B + (%2)
 %endmacro
+%include "win16/w16pm.inc"      ; the kern_mega arm's memory (124.31.3)
     W16BSS w16_win, 2           ; our window
     W16BSS w16_state, 1         ; W16S_*
     W16BSS w16_locked, 2        ; 1 = the callback that resumed holds the lock
@@ -299,8 +300,10 @@ section .w16dlg
     W16BSS w16_cndrop, 2        ;   program runs, counted (row win16write)
     W16BSS w16_thax, 2          ; AX and DX a thunk was entered with (124.26.2)
     W16BSS w16_thdx, 2
+%ifndef PKG_MEGA
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
     W16BSS w16_clast, 2 * W16_MAXSEG    ; ...and its last offset (w16cens.inc)
+%endif
     ; --- the coroutine (w16core.inc) ---
     W16BSS w16_hss, 2           ; the UI task's SS (LOW_SEG) ...
     W16BSS w16_hsp, 2           ; ...and its SP at the resume
@@ -618,7 +621,7 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_rmax, 2
     W16BSS w16_rsid, 2
     ; --- S5: menus and accelerators (w16menu.inc) ---
-    W16BSS w16_mseg, 2          ; the USER heap's segment, and its handle
+    W16BSS w16_mseg, 2          ; the USER heap's segment (the arm: its selector), and its handle
     W16BSS w16_mhh, 2
     W16BSS w16_mstr, 4          ; an item's string, far
     W16BSS w16_mtp, 2           ; a template being parsed
@@ -1321,7 +1324,7 @@ w16_freeprog:
     mov dx, [w16_pseg]
     or dx, dx
     jz .face
-    call OSAPI_MEM_FREE
+    W16VFREE
     mov word [w16_pseg], 0
 .face:
     cmp byte [w16_fpart], 0         ; its block went with the arenas
@@ -1371,7 +1374,7 @@ w16_facein:
     push es
     push bx
     push cx
-    mov es, ax
+    W16SEG es, ax
     mov bl, [es:W16F_COUNT]         ; the dialog face (124.22.17) is at the
     xor bh, bh                      ;   paragraph after the System face's
     shl bx, 1                       ;   last glyph
@@ -1430,7 +1433,7 @@ w16_kclaim:
     add dx, 32                      ; at least a paragraph in, then down to
     and dx, 0xFFE0                  ;   512 bytes
     dec dx
-    mov es, dx
+    W16SEG es, dx
     mov [es:0], ax                  ; the handle, before it
     inc dx
     clc
@@ -1448,7 +1451,7 @@ w16_kfree:
     push ax
     push es
     dec dx
-    mov es, dx
+    W16SEG es, dx
     inc dx
     mov ax, [es:0]
     call w16_gfreeh
@@ -1492,8 +1495,8 @@ w16_pkeep:
     call w16_pfetch                 ; AX = the part
     jc .nopart
     push ds
-    mov es, di
-    mov ds, ax
+    W16SEG es, di
+    mov ds, ax                      ; (a part claim's selector, as it is)
     xor si, si
     push di
     xor di, di
@@ -1596,6 +1599,15 @@ w16_ldcall:
     je .fetch
     push ax
     mov ax, [w16_ldk]
+%ifdef PKG_MEGA
+    push bx                         ; the kept copy's code half (124.31.5)
+    push cx
+    xor cx, cx
+    mov bl, 1
+    call w16_psel
+    pop cx
+    pop bx
+%endif
     mov [w16_lkv + 2], ax
     pop ax
     call far [w16_lkv]
@@ -1605,6 +1617,9 @@ w16_ldcall:
     mov al, W16P_LOAD
     call w16_pfetch
     jc .no
+%ifdef PKG_MEGA
+    sub ax, 8                       ; a part claim's code half (124.31.5)
+%endif
     mov [w16_lkv + 2], ax
     pop ax
     call far [w16_lkv]
@@ -1638,6 +1653,9 @@ w16_dlgin:
     call w16_pfetch
     jc .out
     mov [w16_dseg], ax
+%ifdef PKG_MEGA
+    sub ax, 8                       ; a part claim's code half (124.31.5)
+%endif
     mov [w16_pfv + 2], ax
     mov [w16_lbv + 2], ax           ; LCALL's and the gate's (SPEC.md 124.19.2)
     mov word [w16_lbv], w16_lbgate
@@ -1676,6 +1694,15 @@ w16_sysin:
     call w16_pkeep                  ; in the heap, not a claim (124.25.1)
     jc .out
     mov [w16_sseg], ax
+%ifdef PKG_MEGA
+    push bx                         ; the copy's code half (124.31.5)
+    push cx
+    xor cx, cx
+    mov bl, 1
+    call w16_psel
+    pop cx
+    pop bx
+%endif
     mov [w16_sbv + 2], ax
     mov word [w16_sbv], W16S_GATE
 .out:
@@ -2029,8 +2056,10 @@ w16_cputest:
 %include "win16/w16wnd.inc"
 %include "win16/w16menu.inc"
 %include "win16/w16gdi.inc"
-%include "win16/w16cens.inc"
-%include "win16/w16optab.inc"
+%ifndef PKG_MEGA                   ; the census decides only for an 8088, and
+%include "win16/w16cens.inc"        ;   kern_mega runs on a 286 or better
+%include "win16/w16optab.inc"       ;   (SPEC.md 124.31.1): not in the arm
+%endif
 %include "win16/w16dlg.inc"     ; part 3's code, and its trampolines here
 %include "win16/w16prof.inc"    ; WIN.INI and private profiles
 %include "win16/w16fmt.inc"     ; wsprintf, wvsprintf (the library part's)
@@ -2085,6 +2114,9 @@ w16_exports:
     dw w16x_p_%[k]
 %assign k k + 1
 %endrep
+%ifdef PKG_MEGA
+    W16PM_PART l, none              ; part 5's W16SEG thunks (124.31.3), before
+%endif                              ;   w16l_end: the kept copy runs them
 ; GetProcAddress's names (w16api.inc's W16PROCNAME): each its module and
 ; ordinal, its export row's binding in w16_bind's layout, then the name as a
 ; pascal string; 0FFh ends them. The library part's, read through cs:
@@ -2146,6 +2178,17 @@ w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
 w16l_rowslot:  times W16NX dw 0     ; the bind slot each row has, 0 = none yet
 w16l_missslot: times W16_NMISS dw 0 ; ...and each missing name's
 w16l_end:                           ; part 5's size: the kept copy's (124.26.3)
+%ifdef PKG_MEGA                     ; each section's W16SEG thunks (124.31.3),
+section .w16dlg                     ;   after its last use (part 5's are
+    W16PM_PART d, none              ;   above, inside its kept copy)
+section .w16fp
+    W16PM_PART f, none
+section .w16sys
+    W16PM_PART s, none
+section .text
+    W16PM_IMAGE
+    W16PM_PART t, cs
+%endif
 section .text
 %define OD_TVOL w16_homev       ; SYSTEM\APPDATA on WIN16.O88's own volume
 %include "os88data.inc"

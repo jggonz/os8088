@@ -76,7 +76,7 @@ W16LIB w16u_destroyicon
     push si
     ICALL w16_rentry                 ; SI = its entry
     jc .no
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
     je .no
     dec word [es:si + RN_USAGE]
@@ -109,9 +109,9 @@ w16_icload:
     jz .out
     ICALL w16_gfind                  ; ES = its block's header
     jc .zero
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax                      ; ES:0 = the GRPICONDIR
+    W16SEG es, ax                      ; ES:0 = the GRPICONDIR
     mov cx, [es:4]                  ; its images, 14 bytes each from +6
     jcxz .zero
     mov si, 6
@@ -210,9 +210,9 @@ w16_icdib:
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     xor si, si
 .chk:
     cmp word [es:si], 40            ; biSize

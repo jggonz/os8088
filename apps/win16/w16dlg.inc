@@ -261,7 +261,7 @@ w16_rowsn:
     cmp word [w16_face], 0
     je .sys
     push es
-    mov es, [w16_face]              ; the CURRENT face's: a DS_SETFONT
+    W16SEG es, [w16_face]              ; the CURRENT face's: a DS_SETFONT
     mov al, [es:W16F_ROWS]          ;   dialog's controls are laid out and
     xor ah, ah                      ;   drawn in the dialog face (124.22.17)
     pop es
@@ -372,9 +372,9 @@ w16_dlgres:
     jc .no
     cmp byte [w16_gdisc], 0
     jne .no
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     clc
     jmp short .out
 .no:
@@ -390,7 +390,7 @@ w16_dlgres:
 ; Keeps every register.
 w16_dlgrel:
     push es
-    mov es, [w16_rtab]
+    W16SEG es, [w16_rtab]
     cmp word [es:bx + RN_USAGE], 0
     je .out
     dec word [es:bx + RN_USAGE]
@@ -5930,8 +5930,9 @@ w16d_byhandle:
     mov ax, [es:bx + 6]
     ICALL w16_gfind                 ; ES = its block's header
     jc w16d_failed
-    mov ax, es
+    W16VOF ax, es
     inc ax
+    W16TOSEL ax                     ; (a selector, as the other two are)
     mov [w16d_tseg], ax
     mov word [w16d_tp], 0
     mov word [w16d_rent], 0
