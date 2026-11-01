@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "a5d048e2f",
+  "stamped": "a3899bf8c",
   "strings": "8785ca1a6c089287",
-  "why": "S22 batch 3: the kern_mega arm's loader (discardable code, libraries, W16CSEG); the real-mode build is byte-identical"
+  "why": "S22 batch 6: the arm's hosted DOS core; the real-mode build is byte-identical"
  },
  "WIN16_TXT": {
   "sources": [
