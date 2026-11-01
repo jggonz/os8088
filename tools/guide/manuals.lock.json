@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "596826647",
+  "stamped": "00085ec26",
   "strings": "04c25748050d2819",
-  "why": "S19b batch 3: Paintbrush's wide lines, text tool, Save As and Open"
+  "why": "S19b batch 4: Windows 3.1's Paintbrush and its save size"
  },
  "WIN16_TXT": {
   "sources": [
