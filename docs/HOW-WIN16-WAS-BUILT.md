@@ -3614,3 +3614,26 @@ fake audio tracks):
 **Open:** SELTEST computes "0 wrong", read out of its own memory, but its
 MessageBox draws with no title and no text. The menus outside it still draw.
 At the batch's base it never got that far, because it overran the stack.
+
+**Chasing it.** I compiled truncated copies of SELTEST, each ending in a
+MessageBox at a different point:
+- Every section through the selector functions, the aliases, GlobalDOSAlloc
+  and DPMI `0400h`/`0003h`/`0006h`/`0000h` left the box readable.
+- After DPMI `0000h` then `0007h`, the box had no text, whatever base was
+  given and whether or not the selector was freed afterwards.
+- `AllocSelector(0)` then `SetSelectorBase` to the same base was fine.
+- A DPMI-allocated selector re-aimed by `SetSelectorBase` lost the text
+  too.
+
+A dump of WIN16's bss shows the dialog part's USER heap selector
+(`w16_mseg`) at 0 even though its block handle exists. So the conversion
+that names the block failed, or something cleared the selector afterwards.
+I have not found which.
+
+The chase did find a real hazard on the way. `SEG_WIN`, asked for a new
+window, answers any window the caller already has with the same base and
+reach: two `AllocSelector(0)` calls got one selector back, and the program's
+selector could be one of WIN16's own. Program selectors are now made by
+`SEG_AT`, which never matches, and recorded in a 16-row table. Only a
+recorded selector is re-aimed or freed (SPEC.md 124.31.6). BIG still reads
+its 128 KB huge block back with 0 wrong.

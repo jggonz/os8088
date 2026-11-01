@@ -50,18 +50,91 @@ cpu 8086
     pop ax
     ret
 
-; w16q_win - DX = a paragraph, CX = bytes (0 = 64 KB), AX = a window of
-; WIN16's to re-aim, or 0 -> AX = the window over it (SEG_WIN), 0 when none.
-; Keeps the rest.
+; w16q_win - DX = a paragraph, CX = bytes (0 = 64 KB), AX = a selector the
+; program made to re-aim, or 0 for a new one -> AX = the window over it
+; (SEG_WIN), 0 when none. A new one is made by SEG_AT, which is never matched
+; against another window: SEG_WIN asked for a new window answers one of
+; WIN16's own that has the same base and reach, which may be the program's
+; DS. It is recorded in w16q_wins, and only a recorded one is re-aimed
+; (124.31.6). Keeps the rest.
 w16q_win:
     push bx
     push dx
+    push si
+    or ax, ax
+    jnz .aim
+    call w16q_slot                  ; SI = a free row
+    jc .none
+    push cx
+    push dx
+    mov dx, ds                      ; a fresh window over anything of ours,
+    xor cx, cx                      ;   aimed below
+    mov bl, SEG_AT
+    call OSAPI_SEG                  ; DX = it, 0 none
+    mov ax, dx
+    pop dx
+    pop cx
+    jc .none
+    or ax, ax
+    jz .none
+    mov [si], ax
+    call .win
+    jnc .out
+    call w16q_wfree                 ; not aimed: given back
+    jmp short .none
+.aim:
+    call w16q_slot                  ; a window of the program's?
+    jc .none
+    call .win
+    jnc .out
+.none:
+    xor ax, ax
+.out:
+    pop si
+    pop dx
+    pop bx
+    ret
+.win:                               ; AX re-aimed: CF=0 AX = it
     mov bl, SEG_WIN
     call OSAPI_SEG                  ; DX = the window
     mov ax, dx
-    jnc .out
-    xor ax, ax
+    ret
+
+; w16q_slot - AX = a selector, or 0 for a free row -> CF=0 SI = its row in
+; w16q_wins; CF=1 none. Keeps the rest
+w16q_slot:
+    push cx
+    mov si, w16q_wins
+    mov cx, W16Q_NWIN
+.l:
+    cmp [si], ax
+    je .out                         ; (CF = 0: equal)
+    inc si
+    inc si
+    loop .l
+    stc
 .out:
+    pop cx
+    ret
+
+; w16q_wfree - AX = a selector: given back when the program made it
+; (w16q_wins). An alias or a block's selector is left alone: SEG_SUB and
+; SEG_WIN answer one already made for the same base, which WIN16 or the
+; program may still be using (124.31.6). Keeps all
+w16q_wfree:
+    push bx
+    push dx
+    push si
+    or ax, ax
+    jz .out
+    call w16q_slot
+    jc .out
+    mov word [si], 0
+    mov dx, ax
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+.out:
+    pop si
     pop dx
     pop bx
     ret
@@ -85,13 +158,12 @@ W16SYS w16q_alloc
     xor dx, dx
     ret
 
-; FreeSelector (KERNEL.176) - args: +0 wSelector. A window back; an alias of
-; a claim goes with the claim. Answers 0, as a freed selector does
+; FreeSelector (KERNEL.176) - args: +0 wSelector. A window the program made
+; back; anything else is left (w16q_wfree). Answers 0, as a freed selector does
 W16SYS w16q_free
     ICALL w16_args
-    mov dx, [es:bx]
-    mov bl, SEG_FREE
-    call OSAPI_SEG
+    mov ax, [es:bx]
+    call w16q_wfree
     xor ax, ax
     xor dx, dx
     ret

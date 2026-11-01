@@ -96,14 +96,11 @@ w16_i31b:
     mov ax, 0x8011                  ; descriptor unavailable
     jmp .err
 
-.free:                              ; 0001h: BX
-    push bx
-    push dx
-    mov dx, bx
-    mov bl, SEG_FREE
-    call OSAPI_SEG
-    pop dx
-    pop bx
+.free:                              ; 0001h: BX, when the program made it
+    push ax
+    mov ax, bx
+    call w16q_wfree
+    pop ax
     jmp .ok
 
 .incr:                              ; 0003h: AX = the selector increment
@@ -278,16 +275,12 @@ cpu 8086
     pop ax
     jmp .ok
 
-; w16_i31win - DX = a paragraph, CX = bytes (0 = 64 KB), AX = a window to
-; re-aim or 0 -> CF=0 AX = the window (SEG_WIN); CF=1 none. Keeps the rest.
+; w16_i31win - DX = a paragraph, CX = bytes (0 = 64 KB), AX = a window the
+; program made to re-aim, or 0 -> CF=0 AX = the window; CF=1 none
+; (w16q_win's). Keeps the rest.
 w16_i31win:
-    push bx
-    push dx
-    mov bl, SEG_WIN
-    call OSAPI_SEG                  ; DX = the window
-    mov ax, dx
-    pop dx
-    pop bx
+    call w16q_win
+    cmp ax, 1                       ; CF=1: AX = 0
     ret
 
 w16_i31tab:

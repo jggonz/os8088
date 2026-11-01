@@ -230872,13 +230872,23 @@ LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
   `GlobalDOSFree` (a conventional claim), `GlobalFix` and `GlobalUnfix`
   (nothing moves). They are the system-library part's
   (`apps/win16/w16sel.inc`), export rows the arm alone has:
-  - a selector the program MAKES (`AllocSelector`) is a **window** of
-    WIN16's (`SEG_WIN`), so setting its base or limit re-aims it rather than
-    rewriting a descriptor. Its base must be on a paragraph below 1 MB, its
-    reach is 64 KB at most, and kern_mega frees every one at WIN16's end.
+  - a selector the program MAKES (`AllocSelector`, DPMI `0000h`) is a
+    **window** of WIN16's, so setting its base or limit re-aims it rather
+    than rewriting a descriptor. Its base must be on a paragraph below 1 MB,
+    its reach is 64 KB at most, and kern_mega frees every one at WIN16's end.
     `PrestoChangoSelector` re-aims the destination over the source; the
     code/data flip is kern_mega's to complete, as every far call through a
     data selector is (§20.18);
+  - **such a window is made fresh and recorded** (2026-11-01). `SEG_WIN`
+    asked for a new window answers any window of the caller's that already
+    has the same base and reach. Two `AllocSelector(0)` calls were one
+    selector, and so could be the program's and one of WIN16's own. So a
+    new one is made by `SEG_AT`, which is never matched, then aimed with
+    `SEG_WIN`. It goes into `w16q_wins`, 16 rows; a seventeenth answers 0.
+    Only a recorded selector is re-aimed (`SetSelectorBase`,
+    `SetSelectorLimit`, `PrestoChangoSelector`, DPMI `0007h` and `0008h`)
+    or freed (`FreeSelector`, DPMI `0001h`); for any other selector the
+    re-aim answers 0 and the free does nothing;
   - an **alias** of a selector in a claim is that claim's SUB or pair
     (`SEG_SUB`, `SEG_SUBC`'s code half): the same one each time, and
     `FreeSelector` on it does nothing;

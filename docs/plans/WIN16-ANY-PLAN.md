@@ -1509,7 +1509,16 @@ its table goes in the diary, so the reach is measured, not claimed.
       274 bytes below the stack's top to 66. Arm: 279 bytes of room.
       **Open:** on the same kernel SELTEST computes "0 wrong" (read out of
       its memory) but its MessageBox draws with no text; at the batch's
-      base it overran the stack before reaching the box.
+      base it overran the stack before reaching the box. Bisected
+      2026-11-01 with truncated copies of SELTEST:
+      - fine: everything through DPMI `0000h`; also `AllocSelector(0)`
+        then `SetSelectorBase` to DGROUP or to B8000h;
+      - text lost: a DPMI-allocated selector re-aimed, by `0007h` or by
+        `SetSelectorBase`;
+      - one launch faulted in the menu part (`pop es` = 5588h) instead.
+      Not found yet. The same day, program selectors became fresh windows
+      recorded in a table (124.31.6), because `SEG_WIN`'s match handed two
+      callers one selector.
     - [ ] *Batch 4: `waveIn`, `timeSetEvent`, `midiOut`*; SOUNDREC and
       MPLAYER.
   - **Verification:** `make test-snd`'s capture; 86Box `386-sound` and
