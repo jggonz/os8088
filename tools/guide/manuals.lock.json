@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "95214284b",
+  "stamped": "67f569f00",
   "strings": "79fb304ab66a9eb0",
-  "why": "S20 batch 3: own DCs and two keyboard fixes; below the page's level of detail, unchanged"
+  "why": "S20 batch 4: 31 more imports, AccessResource, GlobalAlloc's fixed-handle fix"
  },
  "WIN16_TXT": {
   "sources": [
