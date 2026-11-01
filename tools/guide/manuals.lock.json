@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "664da0e46",
+  "stamped": "a80f8ef4a",
   "strings": "d5a908ce3c9aa918",
-  "why": "S22 batch 5: GetWinFlags, selector functions, DPMI int 31h on the kern_mega arm"
+  "why": "S22 batch 7: the kern_mega arm's image above 1 MB"
  },
  "WIN16_TXT": {
   "sources": [
