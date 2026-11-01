@@ -383,6 +383,27 @@ W16I_CHSTYLE  equ 0x54CF            ; an MDI child's style, high word: WS_CHILD
                                     ;   WS_SYSMENU WS_THICKFRAME and both boxes
 W16I_FRAME    equ 4                 ; its frame (w16_bord's for WS_THICKFRAME)
 W16I_NLIST    equ 9                 ; children the Window menu lists
+W16I_ICON     equ 32                ; a minimized child: an icon's side,
+W16I_TSIDE    equ 16                ;   the room its title has each side,
+W16I_ISTEP    equ 72                ;   and the step between two icons
+WS_MAXIMIZE_HI equ 0x0100
+WS_MINIMIZEBOX_HI equ 0x0002
+WS_MAXIMIZEBOX_HI equ 0x0001
+W16I_TRACK    equ 2                 ; w16_mdion: a move or a size is followed
+W16I_TMOVE    equ 1                 ; w16i_tm: a move,
+W16I_TL       equ 2                 ;   or the edges a size moves,
+W16I_TT       equ 4
+W16I_TR       equ 8
+W16I_TB       equ 16
+W16I_TICON    equ 0x40              ;   and an icon's: a click restores it
+SC_SIZE       equ 0xF000
+SC_MOVE       equ 0xF010
+SC_MINIMIZE   equ 0xF020
+SC_MAXIMIZE   equ 0xF030
+SC_RESTORE    equ 0xF120
+SIZE_MINIMIZED equ 1
+SIZE_MAXIMIZED equ 2
+
 
 ; an MDICLIENT's own state, in its W16W_CS
 MC_WMENU    equ W16W_CS + 0         ; CLIENTCREATESTRUCT's hWindowMenu
@@ -391,6 +412,14 @@ MC_ACT      equ W16W_CS + 4         ; the active child's HWND, 0 none
 MC_N        equ W16W_CS + 6         ; its children: IDs MC_FIRST and on
 MC_FL       equ W16W_CS + 8         ; MCF_*
 MCF_SEP     equ 1                   ; the Window menu has the list's separator
+MC_MAX      equ W16W_CS + 10        ; the maximized child's HWND, 0 none
+MC_SYSM     equ W16W_CS + 12        ; ...and the system menu merged into the
+                                    ;   frame's bar for it, 0 none
+; a child's own, in its W16W_CS: where it goes back to when restored
+RS_X        equ W16W_CS + 0
+RS_Y        equ W16W_CS + 2
+RS_CX       equ W16W_CS + 4
+RS_CY       equ W16W_CS + 6
 
 ; -----------------------------------------------------------------------------
 ; w16i_mproc - MDICLIENT's window procedure: BX = the client, [w16_sm_*] the
@@ -425,6 +454,10 @@ w16i_mproc:
     je .mdinext
     cmp cx, WM_MDISETMENU
     je .mdisetmenu
+    cmp cx, WM_MDIMAXIMIZE
+    je .mdimax
+    cmp cx, WM_MDIRESTORE
+    je .mdirest
 .zero:
     xor ax, ax
     cwd
@@ -493,6 +526,17 @@ w16i_mproc:
 .mdisetmenu:
     call w16i_setmenu
     jmp .out
+.mdimax:
+    ICALL w16_hwnd2rec
+    jc .z2
+    call w16i_max
+.z2:
+    jmp .zero
+.mdirest:
+    ICALL w16_hwnd2rec
+    jc .z2
+    call w16i_restore
+    jmp .zero
 
 ; w16i_box - AX/BX/CX/DX (screen, inclusive) filled in the COLOR_* SI, as the
 ; controls draw it. Keeps every register
@@ -568,6 +612,8 @@ w16i_press:
     cmp bx, si
     jl .no
 .taken:
+    mov bx, di
+    call w16i_ncpress
     clc
     jmp short .out
 .no:
@@ -599,25 +645,10 @@ w16i_ncpaint:
     push si
     push di
     push es
-    ICALL w16_origin                ; AX/DX = its client's top left
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jnz .gone                       ; maximized: all of it outside the client
+    call w16i_outer
     jc .gone
-    push ax
-    ICALL w16_capt
-    mov [cs:w16i_cap], ax
-    sub dx, ax
-    ICALL w16_bord
-    mov [cs:w16i_bw], ax
-    sub dx, ax
-    pop cx
-    sub cx, ax
-    mov [cs:w16i_x0], cx
-    mov [cs:w16i_y0], dx
-    add cx, [bx + W16W_CX]
-    dec cx
-    mov [cs:w16i_x1], cx
-    add dx, [bx + W16W_CY]
-    dec dx
-    mov [cs:w16i_y1], dx
     mov byte [cs:w16i_act], 0       ; active: its client's MC_ACT
     push bx
     ICALL w16_rec2hwnd
@@ -632,6 +663,11 @@ w16i_ncpaint:
     pop bx
     xor al, al                      ; a DC, its clip the window cut to its
     ICALL w16_dcopen                ;   parent's client
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jz .frame
+    call w16i_icon
+    jmp short .close
+.frame:
     call w16i_ncclip
     jc .close
     push word [w16_bkmode]
@@ -675,6 +711,115 @@ w16i_ncpaint:
     ICALL w16_dcclose
 .gone:
     pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_outer - BX = a child: [cs:w16i_x0]..[cs:w16i_y1] its window on the
+; screen, inclusive, [cs:w16i_bw] its frame and [cs:w16i_cap] its caption.
+; CF=1 it is not shown. Keeps every register
+w16i_outer:
+    push ax
+    push cx
+    push dx
+    push si
+    ICALL w16_origin                ; AX/DX = its client's top left
+    jc .out
+    push ax
+    ICALL w16_capt
+    mov [cs:w16i_cap], ax
+    sub dx, ax
+    ICALL w16_bord
+    mov [cs:w16i_bw], ax
+    sub dx, ax
+    pop cx
+    sub cx, ax
+    mov [cs:w16i_x0], cx
+    mov [cs:w16i_y0], dx
+    add cx, [bx + W16W_CX]
+    dec cx
+    mov [cs:w16i_x1], cx
+    add dx, [bx + W16W_CY]
+    dec dx
+    mov [cs:w16i_y1], dx
+    clc
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16i_icon - BX = a minimized child, w16i_outer's rectangle its icon's, a DC
+; open: its class's icon, and its title under it in the caption's colours,
+; as Windows 3.0 drew an iconic MDI child (SPEC.md 124.27.5). A class with
+; no icon gets a frame. Keeps every register
+w16i_icon:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push word [cs:w16i_x0]
+    push word [cs:w16i_y0]
+    mov ax, [cs:w16i_x0]            ; the clip: the icon and the title's
+    sub ax, W16I_TSIDE              ;   room under it
+    mov [cs:w16i_tl], ax
+    mov [cs:w16i_x0], ax
+    mov ax, [cs:w16i_x1]
+    add ax, W16I_TSIDE
+    mov [cs:w16i_tr], ax
+    mov [cs:w16i_x1], ax
+    mov ax, [cs:w16i_y1]
+    add ax, 2
+    mov [cs:w16i_ct], ax
+    add ax, [w16_capn]
+    sub ax, 3
+    mov [cs:w16i_cb], ax
+    mov [cs:w16i_y1], ax
+    sub ax, [cs:w16i_ct]
+    inc ax
+    mov [cs:w16i_bsz], ax
+    call w16i_ncclip
+    pop dx                          ; CX/DX = the icon's top left
+    pop cx
+    jc .out
+    mov al, [bx + W16W_CLS]         ; its class's icon
+    mov ah, W16C_SIZE
+    mul ah
+    mov si, ax
+    mov ax, [si + w16_cls + W16C_ICON]
+    or ax, ax
+    jz .box
+    push bx                         ; CX/DX = the icon's top left
+    mov bl, W16_NOCOL
+    SLCALL w16_icodraw
+    pop bx
+    jnc .title
+.box:
+    push bx                         ; none: a white square, framed
+    mov ax, cx
+    mov bx, dx
+    add cx, W16I_ICON - 1
+    add dx, W16I_ICON - 1
+    mov si, COLOR_WINDOWFRAME
+    mov di, 1
+    call w16i_ring
+    inc ax
+    inc bx
+    dec cx
+    dec dx
+    mov si, COLOR_WINDOW
+    call w16i_box
+    pop bx
+.title:
+    call w16i_title
+.out:
     pop di
     pop si
     pop dx
@@ -1253,6 +1398,17 @@ w16i_activate:
     mov dx, [bx + MC_ACT]
     cmp ax, dx
     je .same
+    cmp word [bx + MC_MAX], 0       ; one maximized: this one is, instead
+    je .nmax
+    or ax, ax
+    jz .nmax
+    push bx
+    ICALL w16_hwnd2rec
+    jc .nm
+    call w16i_max
+.nm:
+    pop bx
+.nmax:
     mov [bx + MC_ACT], ax
     mov [w16i_aold], dx
     push ax
@@ -1469,6 +1625,14 @@ w16i_mdidestroy:
     jne .na
     mov word [bx + MC_ACT], 0
 .na:
+    cmp [bx + MC_MAX], ax           ; nor the maximized one, and the bar
+    jne .nmx                        ;   is the frame's own again
+    mov word [bx + MC_MAX], 0
+    push si
+    mov si, bx
+    call w16i_unmerge
+    pop si
+.nmx:
     push ax
     mov si, w16i_mds_c
     ICALL w16_rec2hwnd              ; the continuation's word: the client
@@ -1835,6 +1999,911 @@ w16i_mbuf:
     times W16I_MBUF db 0
 
 ; =============================================================================
+; Moving, sizing, maximizing and minimizing a child (SPEC.md 124.27.5)
+; =============================================================================
+
+; w16i_ncpress - BX = an MDI child, the left press [w16_mx]/[w16_my] on its
+; frame or caption (or anywhere on its icon): the maximize and minimize boxes
+; post the child WM_SYSCOMMAND; the caption and an icon start a move, and a
+; thick frame a size, followed by w16i_track until the button comes up.
+; Keeps every register
+w16i_ncpress:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jnz .out
+    call w16i_outer
+    jc .out
+    mov ax, [w16_mx]
+    mov dx, [w16_my]
+    mov cl, W16I_TMOVE | W16I_TICON
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jnz .start
+    mov si, [cs:w16i_bw]            ; on the caption?
+    mov di, [cs:w16i_cap]
+    or di, di
+    jz .frame
+    push dx
+    sub dx, [cs:w16i_y0]
+    sub dx, si
+    jl .notcap
+    cmp dx, di
+    jge .notcap
+    pop dx
+    push ax
+    sub ax, [cs:w16i_x0]
+    sub ax, si
+    jl .ncap
+    mov cx, [cs:w16i_x1]            ; CX = how far in from the right
+    sub cx, si
+    sub cx, [w16_mx]
+    jl .ncap
+    dec di                          ; DI = a box's side
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZEBOX_HI
+    jz .nmax
+    cmp cx, di
+    jge .pmax
+    pop ax
+    mov cx, SC_MAXIMIZE
+    jmp short .sys
+.pmax:
+    sub cx, di
+    dec cx
+.nmax:
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZEBOX_HI
+    jz .move
+    cmp cx, di
+    jge .move
+    pop ax
+    mov cx, SC_MINIMIZE
+.sys:
+    call w16i_psys
+    jmp .out
+.move:
+    pop ax
+    mov cl, W16I_TMOVE
+    jmp short .start
+.ncap:
+    pop ax
+    jmp short .frame
+.notcap:
+    pop dx
+.frame:
+    cmp si, W16I_FRAME              ; a thick frame sizes; a thin one not
+    jne .out
+    mov si, [cs:w16i_cap]           ; SI = how near a corner counts
+    add si, W16I_FRAME
+    xor cl, cl
+    push ax
+    sub ax, [cs:w16i_x0]
+    cmp ax, si
+    pop ax
+    jge .r
+    or cl, W16I_TL
+.r:
+    push ax
+    neg ax
+    add ax, [cs:w16i_x1]
+    cmp ax, si
+    pop ax
+    jge .t
+    or cl, W16I_TR
+.t:
+    push dx
+    sub dx, [cs:w16i_y0]
+    cmp dx, si
+    pop dx
+    jge .b
+    or cl, W16I_TT
+.b:
+    push dx
+    neg dx
+    add dx, [cs:w16i_y1]
+    cmp dx, si
+    pop dx
+    jge .start
+    or cl, W16I_TB
+.start:
+    or cl, cl
+    jz .out
+    mov [cs:w16i_tm], cl
+    mov [cs:w16i_tk], bx
+    mov [cs:w16i_ax], ax
+    mov [cs:w16i_ay], dx
+    push bx                         ; the window as it is, twice: where it
+    mov si, w16i_x0                 ; XSEC-OK: read and written through cs:
+    mov di, w16i_ol                 ; XSEC-OK: was, and the outline
+    mov cx, 4
+.cp:
+    mov ax, [cs:si]
+    mov [cs:di], ax
+    mov [cs:di + 8], ax
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .cp
+    ICALL w16_parent                ; the client's, on the screen, kept:
+    ICALL w16_wclip                 ;   a paint between two moves reuses
+    pop bx                          ;   [w16_kl]
+    jc .out
+    mov si, w16_kl
+    mov di, w16i_kl                 ; XSEC-OK: read and written through cs:
+    mov cx, 4
+.lim:
+    mov ax, [si]
+    mov [cs:di], ax
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .lim
+    or byte [w16_mdion], W16I_TRACK
+    call w16i_xor
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_psys - BX = a child, CX = an SC_* command: WM_SYSCOMMAND posted it,
+; as its system menu would have sent it. Keeps every register
+w16i_psys:
+    push ax
+    ICALL w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_SYSCOMMAND
+    mov [w16_sm_wp], cx
+    xor ax, ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    ICALL w16_post
+    pop ax
+    ret
+
+; w16i_track - from w16_mouse while W16I_TRACK is set: AX = the message,
+; [w16_mx]/[w16_my] where. A move redraws the outline where it now is; the
+; button up takes it away and puts the child there - or, for an icon that
+; was not dragged, restores it. Keeps every register
+w16i_track:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    cmp ax, WM_MOUSEMOVE
+    je .move
+    cmp ax, WM_LBUTTONUP
+    jne .out
+    call w16i_xor                   ; the outline away
+    and byte [w16_mdion], ~W16I_TRACK
+    mov bx, [cs:w16i_tk]
+    mov si, w16i_ol                 ; XSEC-OK: read and written through cs:
+    mov di, w16i_nl                 ; XSEC-OK: read and written through cs:
+    mov cx, 4
+.same:
+    mov ax, [cs:si]
+    cmp ax, [cs:di]
+    jne .moved
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .same
+    test byte [cs:w16i_tm], W16I_TICON
+    jz .out
+    mov cx, SC_RESTORE              ; an icon clicked, not dragged
+    call w16i_psys
+    jmp .out
+.moved:
+    push bx                         ; the outline in its parent's client
+    ICALL w16_parent
+    ICALL w16_origin                ; AX/DX = the client's top left
+    pop bx
+    jc .out
+    mov si, [cs:w16i_nb]
+    sub si, [cs:w16i_nt]
+    inc si
+    mov cx, [cs:w16i_nr]
+    sub cx, [cs:w16i_nl]
+    inc cx
+    neg ax
+    add ax, [cs:w16i_nl]
+    neg dx
+    add dx, [cs:w16i_nt]
+    call w16i_place
+    test byte [cs:w16i_tm], W16I_TICON
+    jz .out
+    call w16i_allin_of              ; an icon's title is outside it
+    jmp .out
+.move:
+    mov ax, [w16_mx]                ; AX/DX = how far it has come
+    sub ax, [cs:w16i_ax]
+    mov dx, [w16_my]
+    sub dx, [cs:w16i_ay]
+    mov si, w16i_ol                 ; XSEC-OK: read and written through cs:
+    mov di, w16i_wl                 ; XSEC-OK: read and written through cs:
+    mov cx, 4
+.cp:
+    mov bx, [cs:si]
+    mov [cs:di], bx
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .cp
+    mov cl, [cs:w16i_tm]
+    test cl, W16I_TMOVE
+    jz .size
+    add [cs:w16i_wl], ax
+    add [cs:w16i_wr], ax
+    add [cs:w16i_wt], dx
+    add [cs:w16i_wb], dx
+    jmp short .new
+.size:
+    mov bx, [cs:w16i_cap]           ; BX = the least it may be: three boxes
+    add bx, W16I_FRAME              ;   and a frame wide, a caption and a
+    test cl, W16I_TL                ;   frame high
+    jz .sr
+    add [cs:w16i_wl], ax
+.sr:
+    test cl, W16I_TR
+    jz .st
+    add [cs:w16i_wr], ax
+.st:
+    test cl, W16I_TT
+    jz .sb
+    add [cs:w16i_wt], dx
+.sb:
+    test cl, W16I_TB
+    jz .min
+    add [cs:w16i_wb], dx
+.min:
+    mov ax, bx                      ; width at least 3 * BX
+    add ax, bx
+    add ax, bx
+    mov dx, [cs:w16i_wr]
+    sub dx, [cs:w16i_wl]
+    inc dx
+    sub dx, ax
+    jge .mh
+    test cl, W16I_TL
+    jz .mr
+    add [cs:w16i_wl], dx
+    jmp short .mh
+.mr:
+    sub [cs:w16i_wr], dx
+.mh:
+    mov dx, [cs:w16i_wb]            ; height at least BX + the frame
+    sub dx, [cs:w16i_wt]
+    inc dx
+    sub dx, bx
+    sub dx, W16I_FRAME
+    jge .new
+    test cl, W16I_TT
+    jz .mb
+    add [cs:w16i_wt], dx
+    jmp short .new
+.mb:
+    sub [cs:w16i_wb], dx
+.new:
+    mov si, w16i_wl                 ; XSEC-OK: read and written through cs:
+    mov di, w16i_nl                 ; XSEC-OK: read and written through cs:
+    mov cx, 4
+.cmp:
+    mov ax, [cs:si]
+    cmp ax, [cs:di]
+    jne .redraw
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .cmp
+    jmp short .out
+.redraw:
+    call w16i_xor                   ; the old outline away, the new one in
+    mov si, w16i_wl                 ; XSEC-OK: read and written through cs:
+    mov di, w16i_nl                 ; XSEC-OK: read and written through cs:
+    mov cx, 4
+.cpn:
+    mov ax, [cs:si]
+    mov [cs:di], ax
+    inc si
+    inc si
+    inc di
+    inc di
+    loop .cpn
+    call w16i_xor
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_xor - the outline [cs:w16i_nl]..[cs:w16i_nb], cut to the client's
+; [cs:w16i_kl]..[cs:w16i_kb] as w16i_ncpress found it, inverted: drawn once it is
+; there, drawn again it is gone. Keeps every register
+w16i_xor:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov ax, [cs:w16i_nl]
+    cmp ax, [cs:w16i_kl]
+    jge .l
+    mov ax, [cs:w16i_kl]
+.l:
+    mov bx, [cs:w16i_nt]
+    cmp bx, [cs:w16i_kt]
+    jge .t
+    mov bx, [cs:w16i_kt]
+.t:
+    mov cx, [cs:w16i_nr]
+    cmp cx, [cs:w16i_kr]
+    jle .r
+    mov cx, [cs:w16i_kr]
+.r:
+    mov dx, [cs:w16i_nb]
+    cmp dx, [cs:w16i_kb]
+    jle .b
+    mov dx, [cs:w16i_kb]
+.b:
+    cmp ax, cx
+    jg .out
+    cmp bx, dx
+    jg .out
+    call OSAPI_GFX_XOR_RECT
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_place - BX = a child, AX/DX its new place in its parent's client and
+; CX/SI its size: where it was and all of it repainted, and WM_SIZE posted
+; with its client's size and SIZE_* by its style. Posted, not sent: a move
+; from the mouse runs in no call of the program's. Keeps every register
+w16i_place:
+    push ax
+    push cx
+    push dx
+    push si
+    ICALL w16_uncover
+    mov [bx + W16W_X], ax
+    mov [bx + W16W_Y], dx
+    mov [bx + W16W_CX], cx
+    mov [bx + W16W_CY], si
+    xor ax, ax
+    xor cx, cx
+    mov dx, 0x7FFF
+    mov si, dx
+    mov byte [w16_erase], 1
+    ICALL w16_invaltree
+    ICALL w16_ncmark
+    ICALL w16_rec2hwnd
+    ICALL w16_sizemsg
+    mov ax, SIZE_MAXIMIZED
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jnz .wp
+    mov ax, SIZE_MINIMIZED
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jnz .wp
+    xor ax, ax
+.wp:
+    mov [w16_sm_wp], ax
+    xor al, al
+    ICALL w16_post
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16i_save - BX = a child: where it is, kept as where it is restored to.
+; Keeps every register
+w16i_save:
+    push ax
+    mov ax, [bx + W16W_X]
+    mov [bx + RS_X], ax
+    mov ax, [bx + W16W_Y]
+    mov [bx + RS_Y], ax
+    mov ax, [bx + W16W_CX]
+    mov [bx + RS_CX], ax
+    mov ax, [bx + W16W_CY]
+    mov [bx + RS_CY], ax
+    pop ax
+    ret
+
+; w16i_back - BX = a child: put where w16i_save kept. Keeps every register
+w16i_back:
+    push ax
+    push cx
+    push dx
+    push si
+    mov ax, [bx + RS_X]
+    mov dx, [bx + RS_Y]
+    mov cx, [bx + RS_CX]
+    mov si, [bx + RS_CY]
+    call w16i_place
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16i_cli - BX = a child -> SI = its MDI client. CF=1 it is not an MDI
+; child. Keeps the rest
+w16i_cli:
+    push bx
+    ICALL w16_parent
+    mov si, bx
+    pop bx
+    jc .out
+    cmp byte [si + W16W_KIND], W16Q_MDI
+    je .out
+    stc
+.out:
+    ret
+
+; w16i_allin - SI = a client: all of it repainted, an icon's title being
+; outside its window. Keeps every register
+w16i_allin:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov bx, si
+    xor ax, ax
+    xor cx, cx
+    mov dx, 0x7FFF
+    mov si, dx
+    mov byte [w16_erase], 1
+    ICALL w16_invaltree
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_max - BX = an MDI child: maximized - its frame and caption outside its
+; client, which is the client's whole; the one maximized before restored;
+; the system menu and a restore box merged into the frame's bar. Keeps every
+; register
+w16i_max:
+    push ax
+    push cx
+    push dx
+    push si
+    call w16i_cli
+    jc .out
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jnz .out
+    mov ax, [si + MC_MAX]           ; another: back where it was
+    or ax, ax
+    jz .none
+    push bx
+    ICALL w16_hwnd2rec
+    jc .nr
+    and word [bx + W16W_STYLE + 2], ~WS_MAXIMIZE_HI
+    call w16i_back
+.nr:
+    pop bx
+.none:
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jnz .wasmin
+    call w16i_save
+    jmp short .set
+.wasmin:
+    and word [bx + W16W_STYLE + 2], ~WS_MINIMIZE_HI
+    call w16i_allin
+.set:
+    or word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    ICALL w16_rec2hwnd
+    mov [si + MC_MAX], ax
+    call w16i_merge
+    push bx
+    mov bx, si
+    ICALL w16_csize                 ; CX/DX = the client's size
+    pop bx
+    ICALL w16_bord                  ; AX = its frame
+    add cx, ax
+    add cx, ax
+    add dx, ax
+    add dx, ax
+    mov si, dx                      ; SI = the height, but the caption
+    neg ax
+    push ax                         ; X = -frame
+    ICALL w16_capt
+    add si, ax
+    pop dx
+    push dx
+    sub dx, ax                      ; Y = -frame - caption
+    pop ax
+    call w16i_place
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16i_restore - BX = an MDI child, maximized or minimized: back where it was,
+; and a maximized one's bar as it was. Keeps every register
+w16i_restore:
+    push si
+    call w16i_cli
+    jc .out
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jz .min
+    and word [bx + W16W_STYLE + 2], ~WS_MAXIMIZE_HI
+    mov word [si + MC_MAX], 0
+    call w16i_unmerge
+    jmp short .back
+.min:
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jz .out
+    and word [bx + W16W_STYLE + 2], ~WS_MINIMIZE_HI
+    call w16i_allin
+.back:
+    call w16i_back
+.out:
+    pop si
+    ret
+
+; w16i_min - BX = an MDI child: minimized, an icon at the bottom of the
+; client, after those there already. Keeps every register
+w16i_min:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    call w16i_cli
+    jc .out
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jnz .out
+    test word [bx + W16W_STYLE + 2], WS_MAXIMIZE_HI
+    jz .save
+    and word [bx + W16W_STYLE + 2], ~WS_MAXIMIZE_HI
+    mov word [si + MC_MAX], 0
+    call w16i_unmerge
+    jmp short .icon
+.save:
+    call w16i_save
+.icon:
+    push bx                         ; DX = the client's HWND
+    mov bx, si
+    ICALL w16_rec2hwnd
+    mov dx, ax
+    pop bx
+    xor di, di                      ; DI = the icons there already
+    push si
+    mov si, w16_wnd
+    mov cx, W16_MAXWND
+.k:
+    test byte [si + W16W_FLAGS], W16WF_USED
+    jz .kn
+    test word [si + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jz .kn
+    call w16i_kidof
+    jc .kn
+    cmp si, bx
+    je .kn
+    inc di
+.kn:
+    add si, W16W_SIZE
+    loop .k
+    pop si
+    or word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    push bx
+    mov bx, si
+    ICALL w16_csize                 ; DX = the client's height
+    pop bx
+    mov ax, W16I_ISTEP
+    push dx
+    mul di
+    pop dx
+    add ax, W16I_TSIDE              ; AX = x
+    sub dx, W16I_ICON + 4
+    sub dx, [w16_capn]              ; DX = y, the title's room under it
+    mov cx, W16I_ICON
+    mov si, cx
+    call w16i_place
+    call w16i_allin_of
+.out:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+; w16i_allin_of - BX = a child: its client repainted whole. Keeps every
+; register
+w16i_allin_of:
+    push si
+    call w16i_cli
+    jc .out
+    call w16i_allin
+.out:
+    pop si
+    ret
+
+; -----------------------------------------------------------------------------
+; The frame's bar while a child is maximized: its system menu at the left, a
+; restore box at the right (SPEC.md 124.27.5). Both are MF_BITMAP items with
+; no text, drawn by w16i_mbglyph; the restore box is a help item, "\b"
+; -----------------------------------------------------------------------------
+
+; w16i_merge - SI = a client: the two items in its frame's bar, once. Keeps
+; every register
+w16i_merge:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp word [si + MC_SYSM], 0
+    jne .out
+    push si
+    SLCALL w16_mnew                 ; AX = the system menu
+    pop si
+    or ax, ax
+    jz .out
+    mov [si + MC_SYSM], ax
+    mov di, w16i_systab             ; XSEC-OK: read and written through cs:
+.it:
+    mov bx, [cs:di]
+    mov dx, [cs:di + 2]
+    mov cx, [cs:di + 4]
+    mov [w16_mstr], cx
+    mov [w16_mstr + 2], cs
+    or cx, cx
+    jnz .s
+    mov word [w16_mstr + 2], 0
+.s:
+    SLCALL w16_mappend
+    add di, 6
+    cmp di, w16i_systab_end
+    jb .it
+    mov bx, si                      ; the frame's bar
+    ICALL w16_parent
+    mov ax, [bx + W16W_MENU]
+    or ax, ax
+    jz .out
+    mov bx, [si + MC_SYSM]
+    push ax
+    SLCALL w16_mget                 ; ES:SI = the bar's record
+    xor cx, cx
+    SLCALL w16_minsert              ; DI = its new first item
+    mov dx, MF_POPUP
+    mov word [w16_mstr], w16i_s_none; XSEC-OK: a far pointer into this part
+    mov [w16_mstr + 2], cs
+    SLCALL w16_mput
+    or word [es:di + MI_FLAGS], MF_BITMAP
+    pop ax
+    xor dx, dx
+    mov bx, SC_RESTORE
+    mov word [w16_mstr], w16i_s_help; XSEC-OK: a far pointer into this part
+    SLCALL w16_mappend
+    SLCALL w16_mget
+    mov cl, [es:si + MH_N]
+    xor ch, ch
+    dec cx
+    SLCALL w16_mitem
+    or word [es:di + MI_FLAGS], MF_BITMAP
+    SLCALL w16_mbardraw
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_unmerge - SI = a client: its two items out of the frame's bar. Keeps
+; every register
+w16i_unmerge:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov dx, [si + MC_SYSM]
+    or dx, dx
+    jz .out
+    mov word [si + MC_SYSM], 0
+    mov bx, si
+    ICALL w16_parent
+    mov ax, [bx + W16W_MENU]
+    or ax, ax
+    jz .out
+    SLCALL w16_mget
+    jc .out
+    xor cx, cx                      ; the system menu, its popup with it
+.f:
+    cmp cl, [es:si + MH_N]
+    jae .r
+    SLCALL w16_mitem
+    test word [es:di + MI_FLAGS], MF_BITMAP
+    jz .fn
+    cmp [es:di + MI_ID], dx
+    jne .fn
+    mov al, 1
+    SLCALL w16_mremove
+    jmp short .r
+.fn:
+    inc cx
+    jmp short .f
+.r:
+    xor cx, cx                      ; the restore box
+.g:
+    cmp cl, [es:si + MH_N]
+    jae .draw
+    SLCALL w16_mitem
+    test word [es:di + MI_FLAGS], MF_BITMAP
+    jz .gn
+    cmp word [es:di + MI_ID], SC_RESTORE
+    jne .gn
+    xor al, al
+    SLCALL w16_mremove
+    jmp short .draw
+.gn:
+    inc cx
+    jmp short .g
+.draw:
+    SLCALL w16_mbardraw
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16i_mbglyph - from w16_mbaritem: ES:DI = an MF_BITMAP item of the bar,
+; laid out, its band open: the system menu's box with its bar (a popup) or
+; the restore box with its two arrows, 16 pixels, black on the bar.
+; Keeps every register
+w16i_mbglyph:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    mov ax, [es:di + MI_W]          ; BX = the glyph's left
+    sub ax, 16
+    sar ax, 1
+    add ax, [es:di + MI_X]
+    add ax, [w16_mcx0]
+    mov bx, ax
+    mov si, [w16_mlh]               ; SI = the band's rows
+    lea ax, [bx + 1]                ; the box: top and bottom rows
+    lea cx, [bx + 14]
+    mov dx, 1
+    SLCALL w16_mbhl
+    mov dx, si
+    sub dx, 2
+    SLCALL w16_mbhl
+    mov dx, 2                       ; its sides
+.side:
+    mov ax, bx
+    inc ax
+    mov cx, ax
+    SLCALL w16_mbhl
+    add ax, 13
+    mov cx, ax
+    SLCALL w16_mbhl
+    inc dx
+    mov ax, si
+    sub ax, 2
+    cmp dx, ax
+    jb .side
+    mov dx, si                      ; DX = the middle row
+    shr dx, 1
+    test word [es:di + MI_FLAGS], MF_POPUP
+    jz .rest
+    lea ax, [bx + 4]                ; the system menu's bar
+    lea cx, [bx + 11]
+    dec dx
+    SLCALL w16_mbhl
+    inc dx
+    SLCALL w16_mbhl
+    jmp short .out
+.rest:
+    xor si, si                      ; the restore box's arrows, 2, 4 and 6
+    sub dx, 4                       ;   wide: up above the middle, down
+.up:                                ;   below it
+    lea ax, [bx + 7]
+    sub ax, si
+    lea cx, [bx + 8]
+    add cx, si
+    SLCALL w16_mbhl
+    inc dx
+    inc si
+    cmp si, 3
+    jb .up
+    add dx, 2
+.dn:
+    dec si
+    lea ax, [bx + 7]
+    sub ax, si
+    lea cx, [bx + 8]
+    add cx, si
+    SLCALL w16_mbhl
+    inc dx
+    or si, si
+    jnz .dn
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16i_systab:                        ; ID, flags, text: Windows 3.0's MDI child
+    dw SC_RESTORE, 0, w16i_s_rest   ;   system menu, maximized
+    dw SC_MOVE, MF_GRAYED, w16i_s_move
+    dw SC_SIZE, MF_GRAYED, w16i_s_size
+    dw SC_MINIMIZE, 0, w16i_s_min
+    dw SC_MAXIMIZE, MF_GRAYED, w16i_s_max
+    dw 0, MF_SEPARATOR, 0
+    dw SC_CLOSE, 0, w16i_s_close
+    dw 0, MF_SEPARATOR, 0
+    dw SC_NEXTWINDOW, 0, w16i_s_next
+w16i_systab_end:
+w16i_s_rest:  db '&Restore', 0
+w16i_s_move:  db '&Move', 0
+w16i_s_size:  db '&Size', 0
+w16i_s_min:   db 'Mi&nimize', 0
+w16i_s_max:   db 'Ma&ximize', 0
+w16i_s_close: db '&Close', 9, 'Ctrl+F4', 0
+w16i_s_next:  db 'Nex&t', 9, 'Ctrl+F6', 0
+w16i_s_help:  db 8
+w16i_s_none:  db 0
+
+w16i_tk:  dw 0                      ; w16i_track's: the child,
+w16i_tm:  db 0                      ;   W16I_T*,
+w16i_ax:  dw 0                      ;   where the press was,
+w16i_ay:  dw 0
+w16i_ol:  dw 0, 0, 0, 0             ;   the window when it began,
+w16i_nl:  dw 0                      ;   the outline drawn,
+w16i_nt:  dw 0
+w16i_nr:  dw 0
+w16i_nb:  dw 0
+w16i_wl:  dw 0                      ;   and the one coming
+w16i_wt:  dw 0
+w16i_wr:  dw 0
+w16i_wb:  dw 0
+w16i_kl:  dw 0                      ;   the client's, on the screen
+w16i_kt:  dw 0
+w16i_kr:  dw 0
+w16i_kb:  dw 0
+
+; =============================================================================
 ; The frame's and a child's default procedures, and the keys (SPEC.md
 ; 124.27.4). Each is DefWindowProc but for what an MDI frame or child does
 ; differently, and hands DefWindowProc the rest with the arguments it reads
@@ -1869,6 +2938,18 @@ W16SYS w16i_defframe
     ICALL w16u_defproc
     ret
 .cmd:
+    mov ax, [es:bx + 4]
+    cmp ax, SC_SIZE                 ; the merged system menu's: the
+    jb .list                        ;   maximized child's own, as Windows
+    mov ax, [si + MC_MAX]           ;   sent them to it
+    or ax, ax
+    jz .def
+    mov cx, [es:bx + 4]
+    ICALL w16_hwnd2rec
+    jc .zero
+    call w16i_psys
+    jmp short .zero
+.list:
     mov ax, [es:bx + 4]             ; an ID in the list's: its child
     sub ax, [si + MC_FIRST]
     jb .def
@@ -1914,6 +2995,7 @@ W16SYS w16i_defchild
     push bx
     ICALL w16_hwnd2rec
     jc .defp
+    mov di, bx                      ; DI = the child
     ICALL w16_parent
     jc .defp
     cmp byte [bx + W16W_KIND], W16Q_MDI
@@ -1937,7 +3019,28 @@ W16SYS w16i_defchild
     inc cx
     cmp dx, SC_PREVWINDOW
     je .next
+    mov bx, di
+    cmp dx, SC_MAXIMIZE
+    je .max
+    cmp dx, SC_MINIMIZE
+    je .min
+    cmp dx, SC_RESTORE
+    je .rest
+    cmp dx, SC_MOVE                 ; from the keyboard: not followed
+    je .zero
+    cmp dx, SC_SIZE
+    je .zero
+    ICALL w16_args
     jmp short .def
+.max:
+    call w16i_max
+    jmp short .zero
+.min:
+    call w16i_min
+    jmp short .zero
+.rest:
+    call w16i_restore
+    jmp short .zero
 .defp:
     pop bx
 .def:

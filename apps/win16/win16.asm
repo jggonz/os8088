@@ -59,7 +59,7 @@ W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   Editor's Advanced 54 beside 23 open)
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
-W16C_SIZE    equ 30             ; a class record
+W16C_SIZE    equ 32             ; a class record
 W16W_SIZE    equ 102            ; a window record
 W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
                                 ;   their own (dialogs, SPEC.md 124.8)

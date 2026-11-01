@@ -230133,3 +230133,58 @@ drawn after it, as a parent that is not `WS_CLIPCHILDREN` does (124.22.6).
 `CreateWindow` and `DestroyWindow` are called back through fixed bind slots
 6 and 7 (`W16_CWROW`, `W16_DWROW`), as the controls' own calls are: the
 program may not have imported them.
+
+#### 124.27.5 Moving, sizing, maximizing and minimizing a child *(S20b batch 3)*
+
+**A press on a child's own parts** (124.27.2) goes by where it lands:
+
+| where | what |
+|---|---|
+| the maximize box | `WM_SYSCOMMAND` `SC_MAXIMIZE` posted to the child |
+| the minimize box | `SC_MINIMIZE`, the same way |
+| the caption | a move |
+| a thick frame | a size: the edges within a caption's height and a frame of the press move, so a corner moves two |
+| a minimized child's icon | a move; a click that does not move it posts `SC_RESTORE` |
+
+A move or a size is followed until the button comes up. Windows 3.0's way
+is the one taken: an outline of where it will go is inverted with
+`OSAPI_GFX_XOR_RECT`, cut to the client, drawn again to take it away, and
+nothing else is redrawn until the button comes up. A size keeps the window
+at least three caption boxes and a frame wide and a caption and a frame
+high. `W16I_TRACK` in `w16_mdion` sends the mouse to part 9 meanwhile, as
+`w16_sbtrk` sends it to a scroll bar.
+
+**Every change of place is posted, not sent.** The child's old rectangle and
+all of its new one are repainted, and `WM_SIZE` is posted with
+`SIZE_MAXIMIZED`, `SIZE_MINIMIZED` or 0 by its style. A move from the mouse
+runs inside no call of the program's, so there is no stack to call it back
+on; Windows sent `WM_SIZE`, and a program that sizes its panes on it does
+so on the posted one.
+
+`DefMDIChildProc` carries out `SC_MAXIMIZE`, `SC_MINIMIZE` and `SC_RESTORE`,
+and so do `WM_MDIMAXIMIZE` and `WM_MDIRESTORE` to the client. `SC_MOVE` and
+`SC_SIZE`, Windows' moves from the keyboard, are not followed and answer 0.
+
+- **Maximized**, a child covers the client, its frame and caption outside it,
+  and `WS_MAXIMIZE` is in its style. Where it was is kept in its record's
+  control bytes, as where it goes back to. One maximized child at a time:
+  maximizing another, or activating another while one is maximized, puts
+  the first back and maximizes the second, as Windows did.
+- **The frame's bar** while one is maximized gets the child's system menu at
+  its left and a restore box at its right, Windows 3.0's merge. Both are
+  `MF_BITMAP` items with no text, 16 pixels wide, drawn into the bar's band
+  by part 9: a framed box with a bar for the system menu, a framed box with
+  an arrow up and an arrow down for restore. The restore box is a help item,
+  so the bar puts it at its right. The system menu is Windows 3.0's for an
+  MDI child: Restore, Move, Size, Minimize, Maximize, Close Ctrl+F4, Next
+  Ctrl+F6, with Move, Size and Maximize grey. A command from it, or the
+  restore box, reaches the frame as `WM_COMMAND`. `DefFrameProc` posts any
+  command of `SC_SIZE` and above to the maximized child as
+  `WM_SYSCOMMAND`. Restoring, minimizing or destroying the child takes both
+  items out again. The frame's title is not merged with the child's.
+- **Minimized**, a child is a 32-by-32 icon at the bottom of the client, to
+  the right of those there already, 72 pixels apart, with its title under it
+  in the caption's colours, cut to fit. The icon is its class's `hIcon`,
+  which `RegisterClass` now keeps (`W16C_ICON`; a class record is 32 bytes);
+  a class with none gets a white square. Its client is empty, so the
+  program does not paint it.

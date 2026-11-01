@@ -23,6 +23,7 @@ W16C_PROC   equ 18              ; far
 W16C_HBR    equ 22
 W16C_WEXTRA equ 24
 W16C_MENU   equ 26              ; far: lpszMenuName (SPEC.md 124.11)
+W16C_ICON   equ 30              ; hIcon: a minimized MDI child's (124.27.5)
 
 ; --- a window ------------------------------------------------------------------
 W16W_FLAGS  equ 0               ; W16WF_*
@@ -412,6 +413,8 @@ w16u_regclass:
     mov [di + W16C_HBR], ax
     mov ax, [es:si + 8]
     mov [di + W16C_WEXTRA], ax
+    mov ax, [es:si + 12]            ; hIcon
+    mov [di + W16C_ICON], ax
     mov ax, [es:si + 18]            ; lpszMenuName
     mov [di + W16C_MENU], ax
     mov ax, [es:si + 20]
@@ -2695,6 +2698,11 @@ w16_mouse:
     mov [w16_my], dx
     mov [w16_sm_msg], ax
     mov [w16_sm_wp], di
+    test byte [w16_mdion], 2        ; an MDI child moved or sized: all of
+    jz .nmt                         ;   it the outline's (SPEC.md 124.27.5)
+    SCALL w16i_track
+    jmp .out
+.nmt:
     cmp word [w16_sbtrk], 0         ; a scroll bar's press: all of it the
     je .nsb                         ;   bar's (SPEC.md 124.22.1)
     LCALL w16_sbmouse
