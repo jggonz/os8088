@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "a2227584f",
-  "strings": "1feb8900f5b36b92",
-  "why": "S23 batch 1: MMSYSTEM's clock, devices and mmio in the kern_mega arm"
+  "stamped": "7a47dce34",
+  "strings": "b983c178120b2992",
+  "why": "S23 batch 2: waveOut and sndPlaySound in the kern_mega arm"
  },
  "WIN16_TXT": {
   "sources": [
