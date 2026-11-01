@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "ef6aeb494",
-  "strings": "17f273ce17c30db0",
-  "why": "S21 batch 1: task table"
+  "stamped": "6f8b56cb7",
+  "strings": "513fc0aa3c69dabf",
+  "why": "merge of plan/win16-any into the phase B/C branch"
  },
  "WIN16_TXT": {
   "sources": [
