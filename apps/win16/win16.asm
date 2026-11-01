@@ -69,6 +69,7 @@ W16K_ST      equ 4              ;   it is the current one), its W16KS_*
 W16K_SIZE    equ 6
 W16KS_FREE   equ 0
 W16KS_RUN    equ 1
+W16KS_NEW    equ 2              ; loaded, its first run owed
 W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
                                 ;   their own (dialogs, SPEC.md 124.8)
 W16_TTLSZ    equ 50
@@ -1098,8 +1099,10 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_fwt, 4           ; the title asked for, far
     W16BSS w16_fwcls, 1         ; 1 = a class was asked for
     ; --- S21: tasks (w16task.inc, SPEC.md 124.28)
+    W16BSS w16_show, 1          ; nCmdShow XOR SW_SHOWNORMAL (a task's)
     W16BSS w16_task, W16_MAXTASK * W16K_SIZE
     W16BSS w16_cur, 1           ; the current task's index
+    W16BSS w16_ntk, 1           ; the tasks the table holds
     W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
     W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
@@ -1246,7 +1249,23 @@ w16_after:
     call OSAPI_WM_CLOSE
     ret
 .trim:                              ; the library part stays until the
-    ret                             ;   program ends (SPEC.md 124.19.2)
+    cmp byte [w16_ntk], 2           ;   program ends (SPEC.md 124.19.2);
+    jb .one                         ;   the other tasks take their turns
+    SCALL w16t_turns                ;   (SPEC.md 124.28.4)
+.one:
+    ret
+
+; w16_cbin - SI = the os8088 window a callback is about: with several tasks,
+; the one it is a window of made current (w16t_cbin), unless a run is under
+; way. Keeps every register
+w16_cbin:
+    cmp byte [w16_ntk], 2
+    jb .r
+    cmp byte [w16_inprog], 0
+    jne .r
+    SCALL w16t_cbin
+.r:
+    ret
 
 ; w16_afterl - w16_after from a callback that holds the gfx lock: marked
 ; held while it runs, so its clean-up does not ask for the lock again
@@ -1742,6 +1761,7 @@ w16_ibgate:
 ; must not ask for the lock again.
 ; -----------------------------------------------------------------------------
 w16_onclose:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     push word [w16_locked]
     mov byte [w16_locked], 1
     call w16_close
@@ -1757,6 +1777,7 @@ W16_H   equ 64
 ; w16_paint - W_PAINT; in: SI = window, lock held; preserves everything.
 ; Once the program has a window, the window is the program's (w16_ppaint).
 w16_paint:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     call w16_cbpeek
     cmp byte [w16_top], 0
     je .lines

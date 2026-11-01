@@ -539,13 +539,15 @@ W16EXPORT W16M_USER,       462,     4,  w16i_calcscroll     ; CalcChildScroll(wo
 W16EXPORT W16M_USER,       463,     10, w16i_scrollkids     ; ScrollChildren(word word word long)
 W16EXPORT W16M_USER,       458,     2,  w16_ans1            ; DestroyCursor(word)
 W16EXPORT W16M_USER,       464,     12, w16_ans0            ; DragObject(word word word word word word)
-; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
-; the loader to their values, as __AHINCR is (w16l_segv, in that order)
-W16_SEGROW equ W16NX
 W16EXPORT W16M_KERNEL,     320,     2,  w16t_istask         ; IsTask(word)
 W16EXPORT W16M_USER,       224,     2,  w16t_wndtask        ; GetWindowTask(word)
 W16EXPORT W16M_USER,       116,     10, w16t_postapp        ; PostAppMessage(word word word long)
-%assign W16_SEGROWP W16NX
+W16EXPORT W16M_KERNEL,     166,     6,  w16t_winexec        ; WinExec(str word)
+W16EXPORT W16M_KERNEL,     45,      8,  w16t_loadmod        ; LoadModule(str ptr)
+; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
+; the loader to their values, as __AHINCR is (w16l_segv, in that order)
+%assign W16_SEGROWP W16NX       ; ONE number for both (a row put between two
+W16_SEGROW equ W16_SEGROWP      ;   assignments of it moved every equate)
 W16EXPORT W16M_KERNEL,     173,     0,  w16x_never          ; __ROMBIOS
 W16EXPORT W16M_KERNEL,     183,     0,  w16x_never          ; __0000H
 W16EXPORT W16M_KERNEL,     193,     0,  w16x_never          ; __0040H
@@ -891,7 +893,8 @@ w16k_inittask:
     mov [es:INST_STACKTOP], ax
     pop es
     mov [w16_rcx], ax
-    mov word [w16_rbx], 0x80        ; an empty command tail
+    mov word [w16_rbx], 0x81        ; the command tail's text, NUL-ended
+                                    ;   (Wine's InitTask16; 124.28.5)
     mov ax, [w16_dgroup]
     mov [w16_rdi], ax
     mov word [w16_rsi], 0
@@ -912,7 +915,8 @@ w16k_inittask:
     call w16_linit
 .noheap:
     mov ax, 1
-    mov dx, 1                       ; SW_SHOWNORMAL
+    mov dx, 1                       ; nCmdShow: SW_SHOWNORMAL, or what
+    xor dl, [w16_show]              ;   WinExec was given (124.28.5)
     ret
 
 ; lstrlen (KERNEL.90) - args: +0 lpString

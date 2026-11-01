@@ -234,7 +234,10 @@ w16_load:
 .modok:
     mov [w16_nmod], ax
 
-    call w16_bindinit               ; nothing bound yet (SPEC.md 124.19.1)
+    cmp byte [w16_ntk], 0           ; nothing bound yet (SPEC.md 124.19.1),
+    jne .bound                      ;   unless a task runs: the table is
+    call w16_bindinit               ;   every task's (124.28.2)
+.bound:
     call w16_modules                ; which of the imported modules are ours,
     call w16l_libs                  ;   and its own libraries, loaded first
     jc .refused                     ;   (SPEC.md 124.23.1): lines written
@@ -285,6 +288,7 @@ w16_load:
     mov ax, [w16_dgroup]
     mov [w16_task + bx + W16K_H], ax
     mov byte [w16_task + bx + W16K_ST], W16KS_RUN
+    inc byte [w16_ntk]
     clc
     jmp short .out
 
@@ -307,7 +311,7 @@ w16_load:
     mov dx, [w16_pseg]
     or dx, dx
     jz .nop
-    call OSAPI_MEM_FREE
+    call w16l_pfree
     mov word [w16_pseg], 0
 .nop:
     stc
@@ -316,6 +320,28 @@ w16_load:
     pop di
     pop si
     pop bp
+    ret
+
+; w16l_pclaim - AX = KB: the program's segments' claim (w16_lay1) -> DX, CF=1
+; none. A later task's is a block of the global heap: the first program's
+; claim is one of WIN16's eight and a second cannot be had (124.28.5)
+w16l_pclaim:
+    cmp byte [w16_ntk], 0
+    jne .blk
+    call OSAPI_MEM_CLAIM
+    ret
+.blk:
+    ICALL w16_kclaim
+    ret
+
+; w16l_pfree - DX = what w16l_pclaim gave: given back
+w16l_pfree:
+    cmp byte [w16_ntk], 0
+    jne .blk
+    call OSAPI_MEM_FREE
+    ret
+.blk:
+    ICALL w16_kfree
     ret
 
 ; -----------------------------------------------------------------------------
@@ -448,7 +474,7 @@ w16_lay1:
     mov cl, 5                       ;   bit 16
     shr ax, cl
     push ax
-    call OSAPI_MEM_CLAIM
+    call w16l_pclaim
     pop cx                          ; CX = KB
     jnc .got
 .huge:
@@ -1629,7 +1655,7 @@ w16_mkpsp:
     mov [es:2], ax                  ; the paragraph past the program
     mov word [es:0x2C], 0           ; no environment
     mov byte [es:0x80], 0           ; an empty command tail
-    mov byte [es:0x81], 0x0D
+    mov byte [es:0x81], 0           ; (lpCmdLine is the text: InitTask)
     pop es
     ret
 
@@ -3837,6 +3863,8 @@ w16l_inuse:
 w16l_keep:
     cmp word [w16_cmb], 0
     je .ok
+    cmp word [w16_ldk], 0           ; one copy serves every task (124.28.2)
+    jne .ok
     push ax
     push cx
     push dx
