@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "872fcc167",
+  "stamped": "3454fa487",
   "strings": "8ebf4b162ad028f2",
-  "why": "S20 batch 1: the what-it-can-run row says code loads when first used and is put away under memory pressure; the code-memory message added"
+  "why": "S20 batch 2: five more calls and Alt+letter from a child window; below the page's level of detail, unchanged"
  },
  "WIN16_TXT": {
   "sources": [
