@@ -1340,17 +1340,33 @@ its table goes in the diary, so the reach is measured, not claimed.
   - [x] **O2(a), first:** `OSAPI_WM_CLOSE` keeps every request, a bit per
     window slot (SPEC.md §75.2.1). +20 bytes of `.text` on both kernels,
     no RAM, no rung crossed.
-  - [ ] Batch 1: the task model with one task — the task table, the
+  - [x] Batch 1: the task model with one task — the task table, the
     context list and its switch, the owner bytes, and the task calls —
-    and nothing a single program can see changes.
-  - [ ] Batch 2: `WinExec` and `LoadModule`, the turns, input to a
+    and nothing a single program can see changes. *Its three export rows
+    went in between `W16_SEGROW` and `W16_SEGROWP`, which moved every
+    segment equate (`__0040H` and the rest) by three. The guard compared
+    the second with the end, so it passed. Batch 2 moved the rows and
+    made one number of the two.*
+  - [x] Batch 2: `WinExec` and `LoadModule`, the turns, input to a
     window's task, a second program's os8088 window.
+    - A callback switches to its window's task first (`w16_cbin`). A post
+      goes to the window's task's queue. `GetMessage` looks only at its
+      own task's windows and timers. `w16_after` runs the parked tasks'
+      turns.
+    - A later program's segments are a global block (`w16_kclaim`). It
+      shares the bind table. The loader keeps one copy for every task.
+    - Seen: TASKS starts TASKB with a tail and `SW_SHOWNOACTIVATE`. TASKB
+      opens its own os8088 window. Posts cross both ways, and
+      `PostAppMessage`, `GetWindowTask`, `IsTask` and `GetNumTasks` all
+      answer: *TASKS OK*. MDI still says *MDI OK* alone. The TASKS
+      fixtures were written now rather than in batch 5, to see this
+      batch.
+    - 121 bytes of the image (632 left), the rest in part 9.
   - [ ] Batch 3: messages between tasks, a task's end while others run,
     the instance window handed over.
   - [ ] Batch 4: `WinHelp` and WINHELP.EXE; Program Manager starting Clock
     and Notepad.
-  - [ ] Batch 5: DDE, the `TASKS`/`TASKB` fixtures and the `win16tasks`
-    row.
+  - [ ] Batch 5: DDE, the `win16tasks` row (its fixtures came in batch 2).
 
 ### Phase B: protected mode, on a 286 and up (O1)
 

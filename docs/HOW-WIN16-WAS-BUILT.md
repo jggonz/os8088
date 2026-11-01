@@ -3070,6 +3070,54 @@ carry them. They were looked at, step by step, under QEMU. `MDI.EXE` is
 ours, and its `win16mdi` row runs once, with the other rows, at the end of
 phase A.
 
+## 2026-11-01 — S21, batches 1 and 2: a second program in the same window
+
+**Windows 3.x ran every program inside one system, and WIN16 ran one.**
+Until now each Windows program was its own WIN16, sharing nothing with any
+other. A Windows program could not start another one, and Program Manager's
+whole job is starting others. S21 lets one WIN16 hold several programs,
+which Windows called tasks.
+
+**WIN16 refers to its program as hundreds of plain variables.** The
+program's name, its memory, its message queue, the import it is waiting in:
+each is a variable at a fixed address, used directly all over WIN16. Giving
+each one a per-task table would cost bytes at every use, and the image had
+898 bytes left. So the current task's state stays where it always was. A
+task that is not running has its state parked in a block of memory. A
+switch swaps the two, word for word, and the block then holds the task that
+left. The list of what is swapped is about a hundred lines. The rule for
+what goes on it is the one that settles everything else: whatever lives
+while the program waits belongs to the task.
+
+**A switch only happens when no program is running.** WIN16 runs only when
+os8088 calls back, and then every program is waiting. Before a callback for
+a window does anything, it switches to that window's task. After it, the
+other tasks that have work take a turn: a message in their queue, a paint
+or a timer of their own. Whether a task has work is read straight out of
+its parked block, so looking costs no switch.
+
+**Starting a program borrows the caller's wait.** `WinExec` runs while the
+calling program waits in the call. It parks the caller, gives the new
+program a fresh, empty state, runs the same loader the first program came
+through, then swaps the caller back. The new program runs for the first
+time at the next turn. Its memory comes from WIN16's shared heap, because a
+package can hold only eight claims of its own.
+
+**The first try failed one check out of eleven.** The new program got the
+command line `" ping"` with its length byte in front. Wine's source showed
+the answer: the program's command line points past that byte and past any
+leading spaces, and ends at a zero. With that fixed, the test pair passed.
+TASKS starts TASKB. TASKB opens its own window on the desktop and posts to
+TASKS. TASKS posts to TASKB's task with no window at all, and TASKB
+answers.
+
+**Batch 1 had broken something no test had looked at yet.** Its three new
+entries in the export table went in between two markers that must be one
+row apart. That moved every one of the ten special segment values
+(`__0040H` and friends) along by three. A guard compared the wrong pair of
+numbers and passed. Batch 2 moved the rows and made the two markers one
+number, so it cannot happen again.
+
 ## 2026-11-01 — O3: a CD-ROM title and two installers to aim at
 
 **The owner asked for a CD-ROM title off archive.org to try**, and for the

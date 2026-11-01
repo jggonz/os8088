@@ -230366,15 +230366,20 @@ since only one handler runs at a time. On the list:
   loop, a file dialog);
 - its message queue, its quit flag and its owed owner-draw and focus
   notifications;
-- its menu loop and modal dialog state, and its DOS state (the handle
-  table and current directory of §124.21);
+- its menu loop and modal dialog state, and its DOS: the block §124.21
+  loads and its entry, so each task has its own handles and current
+  directory;
 - the x87 runtime's handler and its DC open across a wait (§124.25.5).
 
 Shared by the tasks, and so not on the list:
 
 - the window table, the classes, the global heap, the libraries, the bind
   table and the USER heap, each with an owner where one is needed
-  (124.28.3);
+  (124.28.3). The bind table's 384 slots are shared. A later program's
+  imports reuse the slots of rows already bound only when the loader part
+  is kept (§124.26.3), since the row-to-slot map lives in it. A fresh copy
+  of the loader gives each row a slot of its own again, which wastes slots
+  but means the same thing;
 - the focus, the capture, the display and the fonts;
 - the profiles, the clipboard and the parts;
 - the pointer, the keyboard and every handler's scratch.
@@ -230419,22 +230424,51 @@ nothing pre-empts it. It waits:
 and the coroutine (§124.2.1) means no program is running then. So a switch
 is only ever made there, in the host's code, never inside a call.
 
-Every callback ends by running the tasks that have work, in turn:
+**A callback about a window first switches to that window's task**
+(`w16_cbin`, then `w16t_cbin`). A click, a key, a paint or a close is about
+the os8088 window it arrives on, and that window shows one task's top-level
+window. So the code that serves it, unchanged from one program's WIN16,
+finds that task's state in the bss. It does not switch while a run is under
+way (`w16_inprog`): a callback made inside a call stays with the caller.
 
-- the current task first, if it has some;
-- then the others, in the order of the table after it.
+**Then the others take their turns** (`w16t_turns`, from `w16_after`, the
+end of every run's caller). It looks at each parked task in the table's
+order after the current one, and runs those with work:
 
-A task has work when its queue holds a message or its quit flag is set,
-when one of its windows is owed a paint, when one of its timers has fired,
-when it has just started, or when it waits in a loop the callback served.
-The turns stop when no task has work.
+- one just started runs its first instruction;
+- one in `PeekMessage` is answered;
+- any other is kicked, as a callback kicks the current one.
 
-**Input goes to a window's task.** A click, a key or a timer for a window
-is posted to the queue of the task that owns it; a paint marks the window
-as before. If that task is not the current one, its queue is posted to in
-its context block: the queue is the list's first range, so it is at the
-block's start, and only that range is exchanged around the post
-(`w16t_qpost`). Posting never needs a switch.
+A parked task has work when:
+
+- it has just started;
+- it waits in `PeekMessage`;
+- or it waits for a message (in `GetMessage` or a dialog's loop) and has
+  one: its queue holds one, its quit flag is set, one of its windows is
+  owed a paint, or one of its timers has fired.
+
+All of that is read in its context block, at offsets known when WIN16 is
+assembled (`W16BO`), so the look costs no switch.
+
+The pass repeats while it ran anyone, and stops after `W16_MAXTASK` × 4
+runs. A task whose work no run can serve then cannot hold the machine; it
+is looked at again after the next callback. The current task is never
+looked at: it waited with nothing to do, and anything a later run gives
+it, it gets when it is parked again.
+
+**Posting is routed by the window.** `w16_post`, with more than one task,
+puts the message in the queue of the window's task (`w16t_post`). A click,
+a key, a timer or a `PostMessage` to another task's window therefore
+reaches that task. A parked task's queue is posted to in its context block:
+the queue is the list's first range, so it is at the block's start, and
+only that range is exchanged around the post (`w16t_qpost`). Posting never
+needs a switch. A post to a parked task also asks for a wake, because a
+post made inside a run may come from a callback that runs no turns.
+
+**`GetMessage`'s paint and timer scans look only at the current task's
+windows and timers.** A window's task is its `w16_wtask` byte. A timer's is
+its `USED` byte, which is the setting task's index + 1, not 1. A program's
+`WM_TIMER` and `WM_PAINT` never come to another program's loop.
 
 #### 124.28.5 Starting a program: `WinExec` and `LoadModule`
 
@@ -230452,15 +230486,24 @@ library at run time (§124.23.5):
 The new program first runs when the caller next waits.
 
 **The file is looked for as Windows looked**, and the first place that has
-it wins:
+it wins. Only the name's file part is used, as `LoadLibrary` uses only its
+file part (§124.23.5): a folder in the name is not looked in.
 
-1. the path given, if it names a folder;
-2. the caller's own folder;
-3. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
-4. `SYSTEM\` under it;
-5. the folder WIN16 itself was started from.
+1. the caller's own folder;
+2. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
+3. `SYSTEM\` under it;
+4. the folder WIN16 itself was started from.
 
-A name without an extension gets `.EXE`. **The answers below 32 are
+A name without an extension gets `.EXE`. A folder is checked by reading the
+file for no bytes, which looks the name up and reads nothing.
+
+**The command tail** is the rest of `WinExec`'s line, or `LoadModule`'s
+counted string, without its leading spaces. It goes into the new task's PSP
+at 80h as a count and the text, ended by a NUL. `InitTask` answers ES:BX =
+the PSP's 81h, the text, as Wine's `InitTask16` does. A tail longer than 126
+bytes is cut. `nCmdShow` is kept with the task (`w16_show`, held as its XOR
+with `SW_SHOWNORMAL`, so a launch's zeroed bss means `SW_SHOWNORMAL`) and is
+`InitTask`'s DX. **The answers below 32 are
 Windows' own:**
 
 | answer | why |

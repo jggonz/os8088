@@ -243,6 +243,22 @@ w16_hwnd2rec:
     stc
     ret
 
+; w16_mine - CX = a window slot: ZF=1 it is the current task's, or no
+; task's (SPEC.md 124.28.3). Keeps every register
+w16_mine:
+    push ax
+    push bx
+    mov bx, cx
+    mov al, [w16_wtask + bx]
+    or al, al
+    jz .y
+    dec ax
+    cmp al, [w16_cur]
+.y:
+    pop bx
+    pop ax
+    ret
+
 ; w16_slot2rec - CX = a slot -> BX = its record. Keeps all else.
 w16_slot2rec:
     push ax
@@ -1504,8 +1520,15 @@ w16_xlatemsg:
 ; =============================================================================
 
 ; w16_post - queue [w16_sm_*], AL = 0 at the back / 1 at the front, stamped
-; with the time and the last pointer position. CF=1: full, and dropped.
+; with the time and the last pointer position. CF=1: full, and dropped. With
+; several tasks, the queue of the window's task (w16t_post, SPEC.md 124.28.4);
+; w16_postq is the current task's queue whatever the window.
 w16_post:
+    cmp byte [w16_ntk], 2
+    jb w16_postq
+    SCALL w16t_post
+    ret
+w16_postq:
     push bx
     push cx
     push dx
@@ -1628,6 +1651,8 @@ w16_nextmsg:
 .paint:
     xor cx, cx                      ; 3. the scroll bars owed, drawn here
 .nc:                                ;   (SPEC.md 124.22.1), then
+    call w16_mine
+    jne .ncn
     call w16_slot2rec
     mov al, [bx + W16W_FLAGS]
     and al, W16WF_USED | W16WF_DYING
@@ -1644,6 +1669,8 @@ w16_nextmsg:
     jb .nc
     xor cx, cx                      ;   WM_PAINT, a window that is invalid
 .pw:                                ;   and shown, its parent before it
+    call w16_mine
+    jne .pn
     call w16_slot2rec
     mov al, [bx + W16W_FLAGS]
     and al, W16WF_USED | W16WF_INVAL | W16WF_DYING
@@ -1660,8 +1687,10 @@ w16_nextmsg:
     mov si, w16_tmr                 ; 4. WM_TIMER, one that has fired
     mov cx, W16_MAXTMR
 .tm:
-    cmp byte [si + W16T_USED], 0
-    je .tn
+    mov al, [si + W16T_USED]        ; the task's own: USED is its index + 1
+    dec ax
+    cmp al, [w16_cur]
+    jne .tn
     cmp byte [si + W16T_FIRED], 0
     jne .istimer
 .tn:
@@ -2556,7 +2585,9 @@ w16u_settimer:
     call OSAPI_GET_TICKS
     add ax, cx
     mov [si + W16T_DUE], ax
-    mov byte [si + W16T_USED], 1
+    mov al, [w16_cur]               ; USED: the task that set it, + 1
+    inc ax                          ;   (SPEC.md 124.28.3)
+    mov [si + W16T_USED], al
     mov byte [si + W16T_FIRED], 0
     call w16_tarm
     mov ax, [si + W16T_ID]
@@ -2800,6 +2831,7 @@ w16_modfront:
 ; the program's WM_NCLBUTTONDOWN, and that press's drags and release are the
 ; menu's too (SPEC.md 124.11).
 w16_onclick:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
     LCALL w16_mclick
@@ -2821,6 +2853,7 @@ w16_onclick:
     mov di, MK_LBUTTON
     jmp short w16_mouse1
 w16_onup:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
     LCALL w16_mup
@@ -2836,6 +2869,7 @@ w16_onup:
     xor di, di
     jmp short w16_mouse1
 w16_ondrag:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
     LCALL w16_mdrag
@@ -2850,6 +2884,7 @@ w16_ondrag:
 .eat:
     ret
 w16_onrclick:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     jne .eat
     push di
@@ -3049,6 +3084,7 @@ w16_hvwant:
 ; key with Alt held, are WM_SYSKEYDOWN / WM_SYSKEYUP with lParam's context bit,
 ; and an Alt+letter's WM_SYSCHAR is the letter (SPEC.md 124.11).
 w16_onkey:
+    call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp ah, W16_NSCAN               ; the ROM's own codes for a shifted,
     jb .base                        ;   Ctrl or Alt key folded back to the
     cmp ah, W16_SCANX               ;   key's: the modifier is the shift
