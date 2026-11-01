@@ -1300,6 +1300,21 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** Bochs MEGATRAP (docs/BOCHS.md) for the trap census;
     86Box `286-mega` and a 386 to look at; the same rows as phase A on the
     mega disks.
+  - **The contract is SPEC.md 124.31** (pinned 2026-11-01). The batches:
+    - [x] *1: the contract and the build.* SPEC.md 124.31; the arm built
+      in kern_mega's tree (`-DPKG_MEGA -DDOS_MEGA`) and put on
+      `build/megawin16.img` and `megawin16-120.img` by `make mega`;
+      kern_mega's `DOS.O88` hands an NE over; the arm accepts `NEF_PMODE`
+      and refuses a real-mode kernel.
+    - [ ] *2: virtual paragraphs.* The map, `W16SEG`, the claim wrappers,
+      the global heap and `w16_kclaim` through them (124.31.3).
+    - [ ] *3: the loader.* Selectors per segment, fixups, code selectors
+      for imports and parts, thunks (124.31.4, 124.31.5).
+    - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2.
+    - [ ] *5: what the program is told.* `GetWinFlags`, `SEG_TILE` and
+      `__AHINCR`, the selector functions, `int 31h` (124.31.6).
+    - [ ] *6: DOS* (124.31.7), then REGEDIT, SOL and WRITE.
+    - [ ] *7: above 1 MB*, retiring WIN16's `tests/megahigh.txt` lines.
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and

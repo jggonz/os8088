@@ -7406,11 +7406,11 @@ $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 	@echo "kerndosl: $(call FILESIZE,$@) bytes (kern_mega's low kern_dos)"
 
 # A Windows program double-clicked hands itself to WIN16.O88 (SPEC.md
-# 124.18.1, apps/dos/dosw16.inc) on the two kernels whose disks carry WIN16:
-# kern_small has no OSAPI_WM_TIMER and kern_mega refuses it (124.1), so
-# their DOS.O88 stays without the forward. Each builds into a tree of its
+# 124.18.1, apps/dos/dosw16.inc) on the three kernels with a WIN16 disk -
+# kern_big, kern_emu, and kern_mega since its arm (124.31.1): kern_small has
+# no OSAPI_WM_TIMER, so its DOS.O88 stays without the forward. Each builds into a tree of its
 # own, so the arm needs no stamp.
-DOSW16DEF := $(if $(KERN_MEGA)$(KERN_SMALL),,-DDOS_WIN16)
+DOSW16DEF := $(if $(KERN_SMALL),,-DDOS_WIN16)
 
 # ...and the package that carries it. -DDOSKPART is 18 bytes of part table and
 # nothing else: the standard's 800-byte body is NOT emitted, because this part
@@ -14829,7 +14829,8 @@ MEGAAPPDIR := $(MEGADIR)/apps
 MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
-            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88
+            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
+            $(MEGAAPPDIR)/win16.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -14965,6 +14966,7 @@ MEGASRC := $(KERNEL_SRC) $(KERNEL_INC) kerndos/kdos.asm $(KERNDOS_INC) \
 # only for code that has to run in real mode after the switch. It needs
 # kern_big's map as well as kern_mega's, hence the kernel.bin prerequisite
 mega: $(BUILD)/mega.img $(BUILD)/mega120.img $(BUILD)/megaapps.img $(BUILD)/megaapps120.img \
+      $(BUILD)/megawin16.img $(BUILD)/megawin16-120.img \
       $(BUILD)/kernel.bin tests/megaseg.txt tools/os88megaseg.py
 	@python3 tools/os88megaseg.py --big $(BUILD)/kernel.map --mega $(MEGADIR)/kernel.map --check tests/megaseg.txt
 	@echo "mega: $< - kern_mega on 1.44MB, and build/mega120.img on 1.2MB. Pair them with build/megaapps.img / megaapps120.img, the apps disks with kern_mega's package arms (KERN-MEGA-PLAN 14.66)."
@@ -18994,6 +18996,65 @@ $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
 		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
+
+# THE kern_mega ARM (SPEC.md 124.31.1, 20.18): the same sources assembled
+# again with -DPKG_MEGA into $(MEGAAPPDIR), every part of it that is code -
+# the image and its cut parts, the DOS host - and kern_mega's own DOS core
+# (-DDOS_MEGA) as its DOS part; the fonts and the icons are the shipped
+# build's. On kern_mega's WIN16 disks only, never on a shipped one.
+$(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
+                         apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        -DDOS_MEGA -DPKG_MEGA -o $@ apps/win16/win16.asm
+	@echo "win16 (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \
+                           apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \
+                           apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
+                           apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
+                           apps/os88con.inc apps/os88cp437.inc apps/os88parts.inc \
+                           apps/os88partsbody.inc apps/os88rseq.inc \
+                           kerndos/kdlaunch.inc drivers/net/netpkg.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I drivers/net/ \
+	        -I kerndos/ -DDOS_MEGA -o $@ apps/dos/doscore.asm
+$(MEGAAPPDIR)/win16/w16dcore.inc: $(MEGAAPPDIR)/doscore.bin tools/w16dcmap.py
+	@mkdir -p $(@D)
+	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ -DDOS_MEGA
+$(MEGAAPPDIR)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc $(MEGAAPPDIR)/win16/w16dcore.inc \
+                        apps/dos/dosbe.inc apps/dos/dos.asm apps/dos/doscall.inc \
+                        apps/dos/doscents.inc apps/os88api.inc apps/os88rseq.inc \
+                        apps/dos/dosnetabi.inc apps/os88cp437.inc apps/os88partsbody.inc \
+                        drivers/net/netpkg.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
+	        -I $(MEGAAPPDIR)/win16/ -I drivers/net/ -I kerndos/ \
+	        -DDOS_MEGA -DPKG_MEGA -o $@ apps/win16/w16dosh.asm
+$(MEGAAPPDIR)/win16.o88: $(MEGAAPPDIR)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
+                         $(MEGAAPPDIR)/doscore.bin $(MEGAAPPDIR)/win16/w16dosh.bin \
+                         tools/os88pkg.py tools/os88ovl.py $(PKGZSTAMP)
+	@mkdir -p $(MEGAAPPDIR)/win16
+	python3 tools/os88ovl.py $(MEGAAPPDIR)/win16.bin -o $(MEGAAPPDIR)/win16/w16dlg.bin \
+		--trim $(MEGAAPPDIR)/win16/win16.trim.bin \
+		--second $(MEGAAPPDIR)/win16/w16fp.bin --mark W16X87EM \
+		--second $(MEGAAPPDIR)/win16/w16ld.bin --mark W16LOADR \
+		--second $(MEGAAPPDIR)/win16/w16sys.bin --mark W16SYSLB
+	$(OS88PKG) $(MEGAAPPDIR)/win16/win16.trim.bin -o $@ \
+		$(addprefix --part ,$(W16FACES)) --part $(MEGAAPPDIR)/win16/w16dlg.bin \
+		--part $(MEGAAPPDIR)/win16/w16fp.bin --part $(MEGAAPPDIR)/win16/w16ld.bin \
+		--part $(BUILD)/win16/icons.bin --part $(MEGAAPPDIR)/doscore.bin \
+		--part $(MEGAAPPDIR)/win16/w16dosh.bin --part $(MEGAAPPDIR)/win16/w16sys.bin \
+		--part-compress lz4
+
+# ...and kern_mega's WIN16 DISKS: $(WIN16IMG)'s shape - WIN16\,
+# SYSTEM\APPDATA\WIN16 and the rest of the floppy for the user's programs -
+# in kern_mega's two geometries, the arm in place of the shipped build
+MEGAW16ARGS = WIN16:$(MEGAAPPDIR)/win16.o88 WIN16:$(BUILD)/win16/WIN16.TXT \
+              WIN16:$(BUILD)/win16/COPYING.W16 $(APPDATAFOLDER) $(WIN16FOLDER)
+$(BUILD)/megawin16.img: $(MEGAAPPDIR)/win16.o88 $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(MEGAW16ARGS)
+$(BUILD)/megawin16-120.img: $(MEGAAPPDIR)/win16.o88 $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAW16ARGS)
 
 # `make win16test` is S2's gate disk (WIN16-PLAN.md S2): a 1.44MB B: with
 # WIN16.O88, the TINY16 variants, whatever `make win16fixtures` has built,

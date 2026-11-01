@@ -230008,3 +230008,178 @@ answer, its fields showed whatever its stack held: 3146 and 1036.
   the program runs; neither is discarded when memory runs short.
 - `GlobalCompact` and `GetFreeSpace` count discardable code but not
   discardable data or unused resources, which `GlobalAlloc` also discards.
+
+### 124.31 The protected-mode arm: WIN16 on `kern_mega` *(pinned for S22, docs/plans/WIN16-ANY-PLAN.md)*
+
+**Status: pinned, nothing shipped.** WIN16-ANY-PLAN O1 put WIN16 on
+`kern_mega` (docs/plans/KERN-MEGA-PLAN.md) as phase B: Windows 3.x's
+*standard mode*, a 16-bit protected-mode Windows for a 286 or better. What
+it is for is measured (the plan's section 3.1): every target of phase C -
+Visual Basic 3.0's `VBRUN300.DLL`, under Mozart and Sir Hangman, and every
+Setup Toolkit bootstrap - is marked protected mode only, and so are three of
+Windows 3.1's own programs.
+
+**The real-mode arm is unchanged and stays the shipped build** on `kern_big`
+and `kern_emu` (D6, revised). This arm is §20.18's: the same source built
+again with `-DPKG_MEGA`, a build and not a knob, so no 8088's disk carries a
+byte of it.
+
+#### 124.31.1 The build and where it ships
+
+| | |
+|---|---|
+| build | `$(MEGAAPPDIR)/win16.o88`, in `$(MEGAPKGS)`: `apps/win16/win16.asm` assembled with `-DPKG_MEGA -DDOS_MEGA`, its parts cut by `tools/os88ovl.py` as the shipped build's are, and the DOS host part (`w16dosh.asm`) with the same defines. Every part that does segment arithmetic carries its arm; the fonts and icons are the shipped build's |
+| disks | kern_mega's own WIN16 disk, `build/megawin16.img` (1.44 MB) and `build/megawin16-120.img` (1.2 MB), the two geometries kern_mega ships in (KERN-MEGA-PLAN 14.1 answer 19): `WIN16\` with the mega arm, `SYSTEM\APPDATA\WIN16\`, and room for the user's programs, §124.18.1's shape. `make mega` builds them |
+| `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
+| the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
+| class byte | low, no `OS88_HIGH` or `OS88_HIGHMEM`, until 124.31.3's last step; `tests/megahigh.txt` keeps its two lines with the reason updated |
+
+#### 124.31.2 What the kernel lends
+
+`kern_mega` already gives a package what most of this arm needs:
+
+- `OSAPI_SEG` (§50.6.11): `SEG_LIN` (a selector's linear base), `SEG_SUB`
+  (a data selector at a paragraph inside a claim, the same one when asked
+  again), `SEG_SUBC` (a code/data pair there), `SEG_FREE`.
+- Every claim is a selector (§50.6.12), and a claim is pinned unless the
+  package opts in (§66): a claim's linear base does not move under WIN16.
+- A write through CS and a far call through a data selector are completed
+  by a fault (KERN-MEGA-PLAN 14.16): correct, and slow, so a hot path is
+  converted rather than left to the trap.
+
+It needs two things it does not have:
+
+1. **Consecutive selectors over a block (O2(b), answered yes 2026-11-01)**:
+   `OSAPI_SEG`'s verb **`SEG_TILE`** (9): DX = a selector of the caller's
+   based in a claim or a pool block, AX = a paragraph offset into it, CX = a
+   count of 64 KB tiles -> DX = the first of CX data selectors, each 8 above
+   the last and based 64 KB further on, the last cut at the block's end;
+   they move and go with the block. CF = 1, AX = 1 when no run of CX free
+   LDT entries exists. **A real-mode kernel refuses it (CF = 1, every
+   register kept) for nothing**: `osapi_seg`'s `ja .no` already refuses
+   every verb past `SEG_BWIN`, and a real-mode caller's step is `1000h`.
+   It is what `__AHINCR` = 8 rests on (124.31.6).
+2. **A software interrupt routed to a package**: on `kern_mega` the IDT is
+   built from the IVT once, and `mega_ivt_sync` rebuilds only the IRQ rows
+   (08h-0Fh, 70h-77h), so a protected-mode program's own `int 21h` - its C
+   runtime's start-up issues it - lands on `mega_unh`, the fault reporter,
+   and the package is closed. The proposal: `mega_ivt_sync` also rebuilds
+   the rows **21h, 2Fh, 31h and 34h-3Dh** from the IVT through
+   `mega_idt_gate`, which already makes a package image's segment its code
+   selector, and WIN16 keeps writing the IVT through segment 0, which
+   `mega_null0` already traps and syncs. About 30 bytes of `.mega`, none on
+   any other kernel. **Not yet the owner's decision** (O2 covered (a) and
+   (b)); until it is, no program runs on this arm past its first `int 21h`.
+
+#### 124.31.3 Memory: virtual paragraphs inside, selectors at the edge
+
+WIN16's heaps, its loader and its parts compute in paragraphs - a block's
+header is the paragraph below its data, an arena is walked by adding sizes,
+a program's segments are a claim's base plus offsets - in about 300 places
+(the S22 survey, in the diary). On `kern_mega` none of those values can be
+loaded into a segment register. **The arm keeps the arithmetic and changes
+what the numbers mean**:
+
+- **A virtual paragraph** is WIN16's own name for a place in memory it
+  sub-allocates. Every claim WIN16 carves - an arena, a program's claim, a
+  module block, a `w16_kclaim` block, the DOS window - is entered in the
+  **map**, `w16_vmap`: its claim selector, its size in paragraphs and the
+  virtual base WIN16 gave it, first fit in `1000h`-`FFFFh` (below `1000h`
+  are the moveable handles, `W16_GH0`). So 960 KB of WIN16's own memory at
+  most, wherever the claims are. In real mode there is no map: a virtual
+  paragraph IS the segment, and every site below assembles to today's bytes.
+- **Loading one** into a segment register is one macro, `W16SEG reg, src`:
+  in real mode `mov reg, src`; in the arm a call to `w16_vsel`, which finds
+  the claim in the map and answers `SEG_SUB(claim, vpara - vbase, 0)`, a
+  data selector reaching to the claim's end (64 KB at most). The kernel
+  answers the same selector for the same base, so a header asked for twice
+  costs one LDT entry; a freed block's two (its header's and its data's)
+  are given back with `SEG_FREE`.
+- **The program never sees one.** Every value the program is given or
+  hands back is a **selector**, converted at the edge:
+  - out: `GlobalAlloc` (a `GMEM_FIXED` handle is a selector, as standard
+    mode answered), `GlobalLock`, `LockResource`, `GetCodeHandle`, the
+    loader's fixups, DGROUP, the PSP: `w16_psel`, `SEG_SUB` (data) or
+    `SEG_SUBC`'s code half (a code segment), reaching the block's own
+    length so an overrun faults as it did on Windows;
+  - in: `GlobalHandle`, `GlobalFree`, `GlobalSize`, `GlobalFlags` on a
+    fixed handle, `LockSegment`, `FreeSelector`: `w16_pvirt`, `SEG_LIN` and
+    the map, back to the virtual paragraph.
+- A handle WIN16 keeps in its own variables is virtual; one it keeps for the
+  program (`w16_dgroup`, the program's SS in `w16_pss`) is a selector, and
+  each variable says which where it is declared.
+- **Above 1 MB** is the map's last step: an arena claimed with
+  `OS88_HIGHMEM` is entered in the map like any other, because nothing
+  outside `w16_vsel` reads a claim's address. That retires
+  `tests/megahigh.txt`'s two WIN16 lines; it is the batch after a program
+  runs low.
+
+#### 124.31.4 The loader
+
+- A segment's place is laid out in virtual paragraphs, as today
+  (`w16_lay1`); its **selector** is made when its bytes are in: `SEG_SUBC`
+  for a code segment (its code half in `w16_ssel`, a table beside
+  `w16_sbase`), `SEG_SUB` for a data segment, each reaching the segment's
+  allocation.
+- A fixup's segment is the target's selector - the code half for a code
+  segment, the data selector for DGROUP and other data - and an import's is
+  WIN16's own **code** selector (`mov dx, cs`, not `ds`), so a call into
+  WIN16 is never a far call through a data selector. Fixups are written
+  through the segment's data alias.
+- A discardable code segment (§124.26) has its selector made when it is
+  loaded and freed when it is discarded; its thunk's `jmp far` names the
+  code selector. The thunks themselves are code in a module block: their
+  `call far` is through the block's code half.
+- **`NEF_PMODE` is accepted**: a program or library marked protected mode
+  only loads on this arm (`w16_r_pmode` stays the real-mode arm's refusal).
+
+#### 124.31.5 WIN16's own calls between its parts
+
+The vectors into the dialog, library, system-library, loader, x87 and DOS
+parts (`w16_pfv`, `w16_lbv`, `w16_sbv`, `w16_lkv`, `w16_dhent`, the x87
+gates) hold a **code** selector: `op_cseg` (§20.12) for a part claim, and
+`SEG_SUBC`'s code half for a part copied into a heap block. A write through
+CS is left to the trap where it is cold; where it is on every call (the
+gate's `mov bp, cs / mov ds, bp`, the DOS host's `[cs:]` stack words) the
+arm loads its data selector instead.
+
+#### 124.31.6 What the program is told
+
+- **`GetWinFlags`** answers `WF_PMODE | WF_STANDARD` and the CPU's bit
+  (`WF_CPU286`, `WF_CPU386`, `WF_CPU486`), and `WF_80x87` when there is one.
+- **`__AHINCR` = 8, `__AHSHIFT` = 3.** A `GlobalAlloc` over 64 KB is tiled
+  with `SEG_TILE`; under 64 KB it is one selector.
+- **The selector functions**, over `OSAPI_SEG`: `AllocSelector`,
+  `FreeSelector`, `AllocCStoDSAlias`, `AllocDStoCSAlias`,
+  `PrestoChangoSelector`, `GetSelectorBase`, `SetSelectorBase`,
+  `GetSelectorLimit`, `SetSelectorLimit`, `SelectorAccessRights`,
+  `GlobalDOSAlloc` and `GlobalDOSFree` (a conventional claim), `GlobalFix`
+  and `GlobalUnfix` (nothing moves).
+- **A DPMI 0.9 subset on `int 31h`**, what Windows 3.x's standard mode gave
+  a program: `0000h`/`0001h` (allocate and free descriptors), `0003h` (the
+  selector increment, 8), `0006h`/`0007h`/`0008h` (base and limit),
+  `000Ah` (a data alias), `000Bh` (read a descriptor), `0400h` (the
+  version, 0.9), `0500h` (free memory), and `0600h`/`0601h` (lock and
+  unlock: nothing pages). Anything else: CF = 1, AX = `8001h`
+  (unsupported). `0300h` (simulate a real-mode interrupt) is S24's, for
+  MSCDEX.
+
+#### 124.31.7 DOS
+
+The DOS core WIN16 hosts (§124.21.1) is the real-mode core: it keeps its
+state through CS and lays out its handle window by paragraph arithmetic.
+Which of its paths the forwarded file calls reach under protected mode is
+the open question of this section, and the core has one byte of `CORE_MAX`
+to spare, so the answer is not "change the core" unless it is the one the
+owner takes.
+
+#### 124.31.8 Verification
+
+- **Bochs** (docs/BOCHS.md) is the instrument, because QEMU lets code write
+  through CS and checks no limit; `MEGATRAP=1` (KERN-MEGA-PLAN 10.3) counts
+  the faults the kernel completes, so a hot site left to the trap is found.
+- 86Box's `286-mega` and a 386 to look at.
+- Targets, in order: TINY16, the Watcom fixtures, Windows 3.1's REGEDIT
+  (protected mode only), SOL and WRITE, then `VBRUN300.DLL` under
+  Mozart's and Sir Hangman's programs.
+- The rows are named per batch and run once, in S25's final pass.

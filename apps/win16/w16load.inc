@@ -190,9 +190,11 @@ w16_load:
     mov di, w16_r_linkerr
     test ax, NEF_LINKERR
     jnz .flagref
+%ifndef PKG_MEGA                   ; the arm runs one (SPEC.md 124.31.4)
     mov di, w16_r_pmode
     test ax, NEF_PMODE
     jnz .flagref
+%endif
     mov al, [es:si + NE_EXETYP]
     cmp al, 2                       ; Windows, or 0 (unknown - early linkers)
     je .exeok
@@ -2161,9 +2163,11 @@ w16l_ldlib:
     mov di, w16_r_linkerr
     test ax, NEF_LINKERR
     jnz .flagref
+%ifndef PKG_MEGA                   ; the arm runs one (SPEC.md 124.31.4)
     mov di, w16_r_pmode
     test ax, NEF_PMODE
     jnz .flagref
+%endif
     mov al, [es:si + NE_EXETYP]
     cmp al, 2
     je .exeok
@@ -3875,7 +3879,9 @@ w16_r_code:    db 'Not enough memory for its code.', 0
 w16_r_lib:     db 'A Windows library, not a program.', 0
 w16_r_self:    db 'It loads itself: not supported.', 0
 w16_r_linkerr: db 'Its linker reported errors.', 0
+%ifndef PKG_MEGA
 w16_r_pmode:   db 'It needs protected mode.', 0
+%endif
 w16_r_os2:     db 'An OS/2 or later program.', 0
 w16_r_segs:    db 'Too many segments.', 0
 w16_r_nodata:  db 'It has no usable data segment.', 0

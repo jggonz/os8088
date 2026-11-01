@@ -80,6 +80,10 @@ INCLUDE = re.compile(r'^\s*%include\s+"([^"]+)"')
 LABEL = re.compile(r"^[A-Za-z_.$@?][\w.$@?#~]*:\s*")
 MINREASON = 30
 MEGA_IMGS = ("megaapps.img", "megaapps120.img")
+# An arm whose SHIPPED build rides a disk of its own rather than the apps
+# disk is on kern_mega's twin of that disk instead (SPEC.md 124.31.1: WIN16
+# left the apps disks for win16.img, 124.18.1)
+OWN_DISK = {"WIN16.O88": ("megawin16.img", "megawin16-120.img")}
 
 
 def read(path):
@@ -162,6 +166,12 @@ def o88_rules(mk, prefix=r"\$\(BUILD\)"):
         out[cur] += re.findall(r"--part\s+(\$\((?:BUILD|MEGAAPPDIR)\)/"
                                r"[A-Za-z0-9_/-]+)\.bin", ln)
         m = re.search(r"\$\(OS88PKGB?\)\s+(\$\((?:BUILD|MEGAAPPDIR)\)/"
+                      r"[A-Za-z0-9_/-]+)\.bin", ln)
+        if m:
+            out[cur].append("main:" + m.group(1))
+        # ...or the image os88ovl.py cuts its parts from (WIN16's: the
+        # trimmed image is what os88pkg stamps, the assembly is this)
+        m = re.search(r"os88ovl\.py\s+(\$\((?:BUILD|MEGAAPPDIR)\)/"
                       r"[A-Za-z0-9_/-]+)\.bin", ln)
         if m:
             out[cur].append("main:" + m.group(1))
@@ -509,7 +519,11 @@ def disks(megapkgs):
             nm = (p[:8] + ".O88").upper()
             want[nm] = (os.path.getsize(a), os.path.getsize(s),
                         max(os.path.getmtime(a), os.path.getmtime(s)))
-    for img in MEGA_IMGS:
+    groups = [(img, {n: w for n, w in want.items() if n not in OWN_DISK})
+              for img in MEGA_IMGS]
+    groups += [(img, {n: want[n]}) for n, imgs in OWN_DISK.items()
+               if n in want for img in imgs]
+    for img, want in groups:
         path = os.path.join(ROOT, BUILD, img)
         if not os.path.isfile(path) or not want:
             continue

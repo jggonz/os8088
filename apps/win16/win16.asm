@@ -1921,11 +1921,17 @@ w16_ownname:
 ; Its own routine so that w16_entry, which loads the idle lines, is not a
 ; toasting procedure to tests/unit/t_toast.py. Not os88mega.inc's refusal:
 ; its words send the user to a MEGA apps disk, and WIN16 has no arm there.
+; THE ARM (PKG_MEGA, SPEC.md 124.31) refuses the other way: it is built for
+; selectors, and a real-mode kernel's segment is not one.
 w16_pmcheck:
     push ax
     call OSAPI_CPU_INFO             ; AH = CPU_F_*
     test ah, CPU_F_PM
+%ifdef PKG_MEGA
+    jnz .real
+%else
     jz .real
+%endif
     push cx
     push si
     push es
@@ -2150,7 +2156,11 @@ w16_tpl:
     dw w16_title, w16_paint, w16_onkey, w16_onclick
 
 w16_title:      db 'WIN16', 0
+%ifdef PKG_MEGA
+w16_s_pm:       db 'WIN16 needs kern_mega', 0
+%else
 w16_s_pm:       db 'WIN16 needs real mode', 0
+%endif
 w16_s_idle1:    db 'WIN16 runs Windows 3.x programs.', 0
 w16_s_idle2:    db 'Double-click one in a Disk window.', 0
 w16_s_loading:  db 'Loading...', 0

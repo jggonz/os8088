@@ -20,17 +20,13 @@
 ; (SPEC.md 18.4.5). A second read only follows the `40h` test, which a plain
 ; DOS program's header fails.
 ;
-; -DDOS_WIN16 is the DEFAULT on kern_big and kern_emu, whose apps disks carry
-; WIN16.O88 (SPEC.md 124.18.1), and off on kern_small and kern_mega, whose
-; disks do not - the Makefile's DOSW16DEF. A forward on a machine that has no
-; WIN16.O88 ends in the association search's `Needs WIN16.O88` toast with
-; DOS's window already gone; the toast names what to get, which the stub's
-; own sentence does not. Never on kern_mega: WIN16 refuses there (SPEC.md
-; 124.1, D6).
+; -DDOS_WIN16 is the DEFAULT on kern_big, kern_emu and kern_mega, each of
+; which has a WIN16 disk (SPEC.md 124.18.1; kern_mega's is the protected-mode
+; arm's, 124.31.1), and off on kern_small, which has none - the Makefile's
+; DOSW16DEF. A forward on a machine that has no WIN16.O88 ends in the
+; association search's `Needs WIN16.O88` toast with DOS's window already
+; gone; the toast names what to get, which the stub's own sentence does not.
 ; =============================================================================
-%ifdef DOS_MEGA
- %error "DOS_WIN16 on kern_mega: WIN16 refuses there (SPEC.md 124.1)"
-%endif
 
 DOS_W16_NE  equ 0x454E              ; 'NE', read as a word
 
