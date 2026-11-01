@@ -741,8 +741,12 @@ w16k_loadres:
 w16k_lockres:
     jmp w16k_glock
 
-; FreeResource (KERNEL.63) - args: +0 hResData. AX = 0 freed. The block stays
-; cached until memory is short (SPEC.md 124.9)
+; FreeResource (KERNEL.63) - args: +0 hResData. AX = 0 freed. The program's
+; last use frees the block, as Windows' did, so its next LoadResource reads
+; the file again: a program may write into a resource it holds - File
+; Manager 3.0 recolours its bitmaps' blue in place, then loads them again
+; and loops until it finds the blue (SPEC.md 124.27.1). WIN16's own uses
+; leave a block cached until memory is short (124.9)
 w16k_freeres:
     push si
     push es
@@ -754,6 +758,8 @@ w16k_freeres:
     cmp word [es:si + RN_USAGE], 0
     je .z
     dec word [es:si + RN_USAGE]
+    mov ax, si
+    call w16_rdiscard
 .z:
     xor ax, ax
 .no:

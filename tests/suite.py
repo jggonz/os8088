@@ -16498,6 +16498,18 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16mdi", "soak", py("tests/win16mdi.py"), 60.0,
+        "SPEC.md 124.27, WIN16-ANY-PLAN S20b: MDI.EXE (`make win16fixtures`, "
+        "tests/win16/mdi.c) makes an MDICLIENT and three children by "
+        "WM_MDICREATE and checks them: listed in the Window menu, tiled "
+        "apart and covering the client, cascaded with the active one "
+        "lowest, one minimized to an icon at the bottom with a tile above "
+        "it, one maximized into the client with the frame's bar merged and "
+        "WM_MDIGETACTIVE saying so, restored where it was, WM_MDINEXT, and "
+        "destroyed one at a time; its MessageBox must be MDI OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
         "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "

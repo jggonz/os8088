@@ -23,6 +23,7 @@ W16C_PROC   equ 18              ; far
 W16C_HBR    equ 22
 W16C_WEXTRA equ 24
 W16C_MENU   equ 26              ; far: lpszMenuName (SPEC.md 124.11)
+W16C_ICON   equ 30              ; hIcon: a minimized MDI child's (124.27.5)
 
 ; --- a window ------------------------------------------------------------------
 W16W_FLAGS  equ 0               ; W16WF_*
@@ -86,6 +87,7 @@ W16Q_LIST   equ 4
 W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
 W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
 W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
+W16Q_MDI    equ 8               ; MDICLIENT (SPEC.md 124.27.2), part 9's
 
 ; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
 W16_ODQN    equ 8               ; the queue's entries: a window, its items
@@ -206,6 +208,7 @@ WS_CHILD_HI   equ 0x4000        ; the style's high word
 WS_CLIPCH_HI  equ 0x0200        ; WS_CLIPCHILDREN
 WS_THICKFRAME_HI equ 0x0004
 WS_MINIMIZE_HI equ 0x2000
+WS_MAXIMIZE_HI equ 0x0100
 SWP_NOSIZE    equ 0x0001
 SWP_NOMOVE    equ 0x0002
 PM_REMOVE     equ 0x0001
@@ -411,12 +414,20 @@ w16u_regclass:
     mov [di + W16C_HBR], ax
     mov ax, [es:si + 8]
     mov [di + W16C_WEXTRA], ax
+    mov ax, [es:si + 12]            ; hIcon
+    mov [di + W16C_ICON], ax
     mov ax, [es:si + 18]            ; lpszMenuName
     mov [di + W16C_MENU], ax
     mov ax, [es:si + 20]
     mov [di + W16C_MENU + 2], ax
     mov ax, di                      ; an atom-shaped non-zero answer
     sub ax, w16_cls
+    mov bx, ax                      ; ...and the class is its task's
+    mov cl, 5                       ;   (W16C_SIZE, SPEC.md 124.28.3)
+    shr bx, cl
+    mov cl, [w16_cur]
+    inc cx
+    mov [w16_ctask + bx], cl
     or ax, 0xC000
     jmp short .out
 .fail:
@@ -1689,6 +1700,10 @@ w16_nextmsg:
     jmp short .up
 .top:
     mov bx, si
+    cmp byte [w16_mdion], 0         ; the MDI children above it are owed
+    je .nma                         ;   what it paints over (124.27.3)
+    SCALL w16i_above
+.nma:
     call w16_rec2hwnd
     mov bx, w16_msg
     mov [bx + MSG_HWND], ax
@@ -2160,10 +2175,13 @@ w16u_beginpaint:
 ; w16_pkids - BX = a window being painted, [w16_prc] its rcPaint: its
 ; children under it invalid, unless it is WS_CLIPCHILDREN - they are drawn
 ; after it, so it cannot draw over them (SPEC.md 124.22.6). Keeps every
-; register.
+; register. w16_pkidsall does it whatever the style: an MDI client is
+; WS_CLIPCHILDREN, and one rectangle cannot have its children's holes
+; (SPEC.md 124.27.3).
 w16_pkids:
     test word [bx + W16W_STYLE + 2], WS_CLIPCH_HI
-    jnz .ret
+    jnz w16_pkidsall.ret
+w16_pkidsall:
     push ax
     push cx
     push dx
@@ -2691,10 +2709,15 @@ w16_mouse:
     mov [w16_my], dx
     mov [w16_sm_msg], ax
     mov [w16_sm_wp], di
+    test byte [w16_mdion], 2        ; an MDI child moved or sized: all of
+    jz .nmt                         ;   it the outline's (SPEC.md 124.27.5)
+    SCALL w16i_track
+    jmp .out
+.nmt:
     cmp word [w16_sbtrk], 0         ; a scroll bar's press: all of it the
     je .nsb                         ;   bar's (SPEC.md 124.22.1)
     LCALL w16_sbmouse
-    jmp short .out
+    jmp .out
 .nsb:
     mov ax, [w16_capture]           ; the capture's, while there is one
     or ax, ax
@@ -2719,6 +2742,11 @@ w16_mouse:
 .have:
     cmp word [w16_sm_msg], WM_LBUTTONDOWN
     jne .nbar
+    cmp byte [w16_mdion], 0         ; inside an MDI child: it is made the
+    je .nmdi                        ;   active one, and its frame's press
+    SCALL w16i_press                ;   is its own (SPEC.md 124.27.4)
+    jnc .out
+.nmdi:
     cmp byte [bx + W16W_KIND], W16Q_SCROLL
     je .sbar
     test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI

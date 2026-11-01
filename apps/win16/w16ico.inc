@@ -75,7 +75,7 @@ W16LIB w16u_destroyicon
     jae .yes
     push si
     ICALL w16_rentry                 ; SI = its entry
-    jc .no
+    jc .made
     W16SEG es, [w16_rtab]
     cmp word [es:si + RN_USAGE], 0
     je .no
@@ -85,6 +85,15 @@ W16LIB w16u_destroyicon
 .yes:
     mov ax, 1
     ret
+.made:
+    push ax                          ; CreateCursorIconIndirect's: freed
+    ICALL w16_gfind                  ;   (124.27.7)
+    pop ax
+    jc .no
+    test byte [es:GH_FLAGS], GHF_ICON
+    jz .no
+    ICALL w16_gfreeh
+    jmp short .no
 
 ; -----------------------------------------------------------------------------
 ; w16_icload - the program's icon: DX:AX = its name (far), or DX = 0 and AX

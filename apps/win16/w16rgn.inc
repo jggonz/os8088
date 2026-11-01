@@ -1931,6 +1931,13 @@ W16SYS w16u_freesysres
     push si
     ICALL w16_args
     mov si, [es:bx]                 ; SI = which
+    call w16u_fsr
+    pop si
+    ret
+
+; w16u_fsr - SI = GetFreeSystemResources' wFlags -> AX = the percentage, DX
+; = 0 (GetHeapSpaces too, SPEC.md 124.27.1). Keeps SI and DI
+w16u_fsr:
     xor cx, cx                      ; CX = the free objects
     xor bx, bx
 .o:
@@ -1971,7 +1978,6 @@ W16SYS w16u_freesysres
     mov ax, dx
 .out:
     xor dx, dx
-    pop si
     ret
 
 section .text

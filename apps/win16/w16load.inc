@@ -18,6 +18,9 @@
 ; offset used below.
 ; =============================================================================
 
+W16_NSEGV equ 10                    ; w16l_segv's words (w16api.inc checks
+%define W16_NSEGVP 10               ;   the segment equates' rows against it)
+
 NE_FLAGS   equ 0x0C             ; the NE header, as SPEC.md 124.3 lists it
 NE_AUTODATA equ 0x0E
 NE_HEAP    equ 0x10
@@ -279,6 +282,13 @@ w16_load:
     call OSAPI_MEM_FREE
     mov word [w16_fseg], 0
     mov byte [w16_cdo], 0
+    mov al, [w16_cur]               ; the task's record (SPEC.md 124.28.1)
+    mov ah, W16K_SIZE
+    mul ah
+    mov bx, ax
+    mov ax, [w16_dgroup]
+    mov [w16_task + bx + W16K_H], ax
+    mov byte [w16_task + bx + W16K_ST], W16KS_RUN
     clc
     jmp short .out
 
@@ -1080,6 +1090,29 @@ w16_reloc1:
     ICALL w16k_getwinflags           ; AX (DX = 0)
     jmp .apply
 .ahinc:
+    mov dx, ax                      ; the segment equates: their paragraphs
+    sub dx, W16_SEGROW              ;   (SPEC.md 124.27.1)
+    cmp dx, W16_NSEGV
+    jae .ahi
+    push di
+    mov di, dx
+    shl di, 1
+    mov dx, [cs:w16l_segv + di]
+    pop di
+%ifdef PKG_MEGA
+    push ax                         ; the arm: a 64 KB window over it
+    push bx                         ;   (SEG_WIN; SPEC.md 124.31.6), the
+    push cx                         ;   same one at every fixup
+    xor ax, ax
+    xor cx, cx
+    mov bl, SEG_WIN
+    call OSAPI_SEG                  ; DX = the window
+    pop cx
+    pop bx
+    pop ax
+%endif
+    jmp short .equate
+.ahi:
 %ifdef PKG_MEGA
     mov dx, 8                       ; __AHINCR and __AHSHIFT: a selector's
     cmp ax, W16_AHROW               ;   step (SPEC.md 124.31.6)
@@ -1323,6 +1356,13 @@ w16_byname:
     pop cx
     pop bx
     ret
+
+; the segment equates' values, in their rows' order (W16_SEGROW, w16api.inc):
+; __ROMBIOS, __0000H, __0040H, __A000H, __B000H, __B800H, __C000H, __D000H,
+; __E000H, __F000H
+w16l_segv:                          ; (W16_NSEGV words, the file's head)
+    dw 0xF000, 0x0000, 0x0040, 0xA000, 0xB000, 0xB800, 0xC000, 0xD000
+    dw 0xE000, 0xF000
 
 section .text                       ; (w16_inrange is w16x87.inc's too)
 w16_bynm:                           ; module, ordinal, the name (pascal)

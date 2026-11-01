@@ -130861,9 +130861,20 @@ of it anyway.
 
 ### 75.2 `OSAPI_WM_CLOSE` — and it is DEFERRED (API 0x0368)
 
-`wm_close_req` (BX = a window of the caller's) records the window in one word;
-`wm_close_pass`, in the UI task's idle section beside `fdlg_reap`, spends it.
-One compare per pass when nothing is pending, which is nearly always.
+`wm_close_req` (BX = a window of the caller's) sets the window's SLOT's bit in
+one word, `wm_clreq`; `wm_close_pass`, in the UI task's idle section beside
+`fdlg_reap`, spends every bit set, the lowest slot first. One compare per pass
+when nothing is pending, which is nearly always.
+
+**Any number of closes can wait at once** (§75.2.1). The word held one window
+POINTER until WIN16's S21 (§124.28.7), so a second
+request before the UI's next pass replaced the first, and that window stayed
+open: S13 saw it when several
+Windows programs started in one autostart pass left DOS windows behind, and
+one WIN16 instance ending several programs closes windows in exactly such a
+burst. A bit per slot is the queue with no length to choose: `MAX_WIN` is 12
+on kern_big and 6 on kern_small, both under 16, which `wm.inc` asserts, and
+the word it lives in was already there.
 
 **The deferral is the contract, not an implementation detail.** The caller is
 a package's own callback — typically its answer to the alert its negotiator
@@ -130881,10 +130892,10 @@ would be a loop every application would have to break with a latch of its own,
 so "close me, no more questions" lives in one place rather than in every
 package.
 
-Two guards: the request is cleared **before** the close, so nothing it reaches
-can see one that has already been spent, and `wm_destroy` clears a request
-naming the window it is destroying, so a slot that died in between cannot be
-closed through a pointer that now means a different window. The pass tests
+Two guards: each bit is cleared **before** its close, so nothing it reaches
+can see a request that has already been spent, and `wm_destroy` clears the
+bit of the slot it is freeing, so a window that died in between cannot have
+its slot's next tenant closed in its place. The pass tests
 `W_FLAGS` bit 0 and not bit 1 — a minimized window is closable, which is what
 the dock's context menu already does.
 
@@ -130893,7 +130904,25 @@ guard is a write `wm_destroy` makes with the lock held, so a pass that took the
 request and then waited for the lock had already emptied the word the
 cancellation was going to be written into — the one interval that guard cannot
 reach. The lock-free part is the `cmp` alone, which is what keeps this one
-compare per idle pass.
+compare per idle pass. The lock is taken again for each bit, so a burst of
+closes does not hold it across all of them. A request sets its bit with one
+`or` into memory and `wm_destroy` clears one with one `and`, so neither can
+be torn by an interrupt between a read and a write.
+
+#### 75.2.1 Measured
+
+**Resident cost: 20 bytes of `.text` on both kernels and no byte of RAM**
+(`tools/kernsize.py`): the word is the one that held the pointer, and no rung
+is crossed, though kern_small's image rung has 1 byte left after it. The pass
+walks the records and their bits together, so it needs neither a division nor
+`wm_idx2ptr`, and its empty case is the compare `ui.inc` makes before calling
+it. `wm_destroy`'s clear is two bytes shorter than the pointer compare it
+replaced, which keeps `ui_task` and `wm_paint_all` where `t_hotpar` wants
+them.
+
+**Rows:** `dispclose`, `dispclose-small` and `deskclose` close one window at
+a time through it; `win16desk` and S21's `win16tasks` (§124.28.11) close
+several.
 
 ### 75.3 The standard alert — `os88ui_ask`, and it is NOT in the kernel
 
@@ -226555,7 +226584,7 @@ as `?`.
 
 ### 124.8 USER: windows, the queue and the pump *(shipped in S3)*
 
-**Classes.** At most 8 (`W16_MAXCLS`). `RegisterClass` copies:
+**Classes.** At most 12 (`W16_MAXCLS`; 8 until File Manager's nine, 124.27.1). `RegisterClass` copies:
 
 - the name: at most 15 characters, compared without regard to case, as
   Windows does;
@@ -226946,7 +226975,7 @@ a load from inside a paint is legal.
 |---|---|
 | `FindResource` | a type and a name, each an integer (`MAKEINTRESOURCE`, or a string `"#123"`) or a case-blind string; the HRSRC is the entry's offset in the kept table, as real-mode Windows' was |
 | `LoadResource` | the entry's own `handle` and `usage` words (the NE NAMEINFO's, which is what Windows used them for) cache the block: a second load answers the same handle |
-| `LockResource`, `FreeResource`, `SizeofResource` | `GlobalLock`; the usage lowered, and at 0 the block is kept until memory is short (§124.9); the length |
+| `LockResource`, `FreeResource`, `SizeofResource` | `GlobalLock`; the usage lowered, and at 0 the block is freed, so the next `LoadResource` reads the file again - a program may have written into it, and File Manager 3.0 does (§124.27.1). WIN16's own uses of a resource (a dialog, a menu, a bitmap) keep a block at 0 until memory is short (§124.9); the length |
 | `LoadString` | `RT_STRING` block `id / 16 + 1`, the string `id mod 16`; at most `cchMax - 1` bytes and a NUL; the length |
 | `LoadAccelerators`, `TranslateAccelerator` | the table's five-byte entries (flags, key, ID); a `WM_KEYDOWN` or `WM_SYSKEYDOWN` meets the `FVIRTKEY` entries with the Shift, Ctrl and Alt state the BIOS reports, a `WM_CHAR` the others. A match is SENT as `WM_COMMAND` with `lParam` high word 1, unless its ID is a greyed item of the window's menu |
 | `LoadCursor`, `SetCursor`, `ShowCursor` | a handle that is not NULL, and the arrow. `LoadIcon` is §124.18.4's |
@@ -227385,7 +227414,7 @@ with it (§124.25.6).
 | `FindWindow(lpClass, lpTitle)` (USER.50) | the program's own top-level window whose class and title match, case blind; NULL matches anything. Only the program's own: each program runs in a WIN16 of its own (S12), so `hPrevInstance` is always 0 |
 | `GetLastActivePopup(hWnd)` (USER.287) | the window itself. WinMine asks it only of the window `FindWindow` found, to front a previous instance, and there is never one (S12) |
 | `BringWindowToTop(hWnd)` (USER.45) | its os8088 window to the front |
-| `IsIconic(hWnd)` (USER.31) | FALSE: os8088 does not minimize |
+| `IsIconic(hWnd)` (USER.31) | a child's `WS_MINIMIZE`, an MDI child's (124.27.5); FALSE for a top-level window: os8088 does not minimize |
 | `SetClassWord(hWnd, nIndex, wNew)` (USER.130) | `GCW_HBRBACKGROUND` (-10): the old brush, the new one set in the class and in every window of it, so the next erase uses it (WinMine's Color switch). `GCW_STYLE` (-26): the old style, the new one set. Every other index - the icon and cursor among them, which are kept nowhere - answers 0 and changes nothing |
 | `ShellAbout(hWnd, lpApp, lpOther, hIcon)` (SHELL.22) | a WIN16 message box titled *About* and the application (up to a `#` when there is one), its lines the application (after the `#`), the other line, a blank line and *WIN16 on os8088*. Not Windows' own box: there is no Windows here to name |
 | `WinHelp(hWnd, lpFile, wCommand, dwData)` (USER.171) | `HELP_QUIT`: TRUE, silently. Every other command shows *Help is not available. WIN16 has no WinHelp, so FILE.HLP cannot be opened.* in a message box, then answers TRUE so a program does not add a second message of its own (§47: the refusal says why) |
@@ -229968,7 +229997,7 @@ WIN16 did not have. They are answered as follows:
 | `EnumTaskWindows` (USER.225) | `EnumWindows`: every top-level window here is the one task's |
 | `GetTopWindow` (USER.229), `GetNextWindow` (USER.230) | `GetWindow`'s `GW_CHILD`, and `GetWindow` itself |
 | `ChildWindowFromPoint` (USER.191) | of the parent's own children, shown or not, the one whose rectangle holds the point; of two, the first in Z order, which here is the one made first (§124.22.12). The parent when only its client holds it, 0 outside it |
-| `IsZoomed` (USER.272), `OpenIcon` (USER.44) | `FALSE` and `TRUE`: os8088 neither maximizes nor minimizes a window |
+| `IsZoomed` (USER.272), `OpenIcon` (USER.44) | a child's `WS_MAXIMIZE` (124.27.5) and `TRUE`: os8088 neither maximizes nor minimizes a top-level window, so `IsZoomed` answers `FALSE` for one |
 | `GrayString` (USER.185) | with no output function, the string drawn at X, Y in grey, its ink alone. Windows greys the text's cell through the brush instead. With one, the function is called `(hDC, lpData, nCount)` as a call into the program (§124.2.2), it draws in the DC's colours, and its answer is the answer |
 | `CreateRectRgnIndirect` (GDI.65) | `CreateRectRgn` of the `RECT` |
 | `PtInRegion` (GDI.161) | whether the region's rectangle holds the point, its right and bottom edges outside |
@@ -230017,6 +230046,531 @@ answer, its fields showed whatever its stack held: 3146 and 1036.
   the program runs; neither is discarded when memory runs short.
 - `GlobalCompact` and `GetFreeSpace` count discardable code but not
   discardable data or unused resources, which `GlobalAlloc` also discards.
+
+### 124.27 Windows inside a window: File Manager and Program Manager *(S20b, docs/plans/WIN16-ANY-PLAN.md)*
+
+*As a user, File Manager 3.0 opens its drive window, and Program Manager its
+groups.* Both are Multiple Document Interface programs. The frame is a
+top-level window with a menu. Its client holds one `MDICLIENT` window, and
+that holds the documents: File Manager's directory trees, Program Manager's
+groups. Each is an MDI CHILD, a child window with a caption, a frame, a
+system-menu box and minimize and maximize boxes, drawn and moved inside the
+client. WIN16's child windows had none of that.
+
+All of it is part 9's (124.24.1): the image had 1,279 bytes of room when it
+came. A part of its own, as the plan first said, would have spent a gate's
+bytes there. The image keeps what is in its paths already - a child's frame
+in the geometry, the press routing and the paint order - each a few bytes
+that call into the part.
+
+#### 124.27.1 The calls around it *(S20b batch 1)*
+
+Both programs import, besides MDI:
+
+| call | answer |
+|---|---|
+| `GetDriveType` | os8088's volume of that letter, through `OSAPI_VOL_KIND`: `DRIVE_REMOVABLE` (2) for a floppy, `DRIVE_FIXED` (3) for a hard disk, `DRIVE_REMOTE` (4) for a redirected volume (SPEC.md 62.9), 0 when there is none |
+| `InquireSystem` (SYSTEM.1) | 0: the timer's period, 54,925 µs. 1: the drive's type in both words, as Wine's `system.drv16` answers. File Manager lists the drives whose answer is not 0. SYSTEM joins the modules WIN16 knows by name |
+| `GetHeapSpaces` | DX the heap, 65,500, and AX its free part, scaled from `GetFreeSystemResources(0)`. Program Manager's About box shows the ratio |
+| `DirectResAlloc` | a moveable block of the size asked, as `GlobalAlloc` gives |
+| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 9, kept until the program ends |
+| `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
+| `GetNumTasks` | 1, until S21 |
+| `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE |
+| `GlobalFindAtom` | the atom `GlobalAddAtom` made of the name (124.25.10), or 0 |
+| `IsCharAlpha`, `IsCharAlphaNumeric`, `AnsiUpperBuff` | the ANSI letters: A-Z, a-z and C0h-FFh but D7h and F7h |
+| `GetIconID` | of an `RT_GROUP_ICON` block, the image `LoadIcon` would choose (124.18.4) |
+| `LoadIconHandler` | the `RT_ICON` resource itself, which is an icon here |
+| `FileCDR`, `DestroyCursor` | 1 |
+| `SetSysModalWindow`, `DragObject`, `AllocSelector`, `FreeSelector`, `GlobalDOSAlloc`, `GlobalDOSFree` | 0. Nothing is system-modal or dragged between windows. Real mode has no selectors and no DOS memory of its own to give; File Manager asks for both only when `GetWinFlags` says protected mode |
+
+**The segment equates are bound to their paragraphs.** `__ROMBIOS`,
+`__0000H`, `__0040H`, `__A000H`, `__B000H`, `__B800H`, `__C000H`,
+`__D000H`, `__E000H` and `__F000H` are constants a program loads, as
+`__AHINCR` is (124.20.3). In real mode each is its segment: File Manager
+reads `__ROMBIOS:00F8h` to look for a machine's ROM signature. They are rows
+of their own (`W16_SEGROW`), and the loader writes the value from
+`w16l_segv` in part 5.
+
+`W16_MAXCLS` is 12, up from 8: File Manager registers nine classes.
+
+**A program's `FreeResource` frees.** File Manager 3.0 locks each of its
+toolbar bitmaps, finds the colour-table entry that is pure blue (`FF 00 00`)
+and writes the window colour over it, then frees the resource and loads it
+again for the next bitmap. Its search for the blue has no bound, so when a
+cached copy came back already recoloured it looped forever. The program's
+`FreeResource` that takes a block's usage to 0 now frees the block, so the
+next `LoadResource` reads the file again, as Windows' did. WIN16's own uses
+(a dialog, a menu, a bitmap it loads for the program) still leave a block
+cached until memory is short (124.9).
+
+#### 124.27.2 The client and its children *(S20b batch 2)*
+
+`MDICLIENT` is one of WIN16's classes, as `SCROLLBAR` and `COMBOBOX` are
+(kind `W16Q_MDI`). Its state is in the record's 18 control bytes: the
+`CLIENTCREATESTRUCT`'s Window menu and first child ID, the active child, the
+count of children, and whether the Window menu has its separator. Its
+background is `COLOR_APPWORKSPACE`. Its scroll bars start hidden, their range
+empty, as Windows' were until a child reached past the client.
+
+| message | what it does |
+|---|---|
+| `WM_MDICREATE` | `CreateWindow` with the `MDICREATESTRUCT`'s class, title, place, size and style, called back through the program's stack (124.2.2) with its 30 bytes of arguments, so the program's window procedure sees `WM_CREATE` as it would. The style adds `WS_CHILD`, `WS_CLIPSIBLINGS`, a caption, a thick frame, a system menu and both boxes. The ID is the next after the last child's. `CW_USEDEFAULT` is Windows' stagger (`MDI_CalcDefaultChildPos`). The new child is made the active one, and its `HWND` is the answer |
+| `WM_MDIDESTROY` | `DestroyWindow`, called back the same way. The IDs close up, the Window menu is made again, and the top child left becomes the active one |
+| `WM_MDIACTIVATE` | the child is raised, `WM_MDIACTIVATE` goes to the one leaving (wParam FALSE) and to it (TRUE) with lParam the new and the old, and it takes the focus. Both captions are repainted |
+| `WM_MDINEXT` | the top child below the active one, which goes to the bottom, or the top one when none is below, round the Z order as Wine's `MDI_GetWindow` goes; with lParam not 0 the bottom one |
+| `WM_MDIGETACTIVE` | the active child, and in the high word 1 while a child is maximized, as Windows 3.0 answered |
+| `WM_MDISETMENU` | the frame's menu, the Window menu or both replaced, and the list put in the Window menu again; the old frame menu is the answer |
+
+**The Z order is `W16W_SEQ`.** A child raised gets the next sequence number.
+Inside an MDI client the pointer finds the higher one where two overlap. A
+left press on a child that is not active posts `WM_MDIACTIVATE` to its client
+first, as Windows activated a child clicked. A press on its frame or caption
+belongs to the child and is not passed to the program.
+
+**The Window menu** ends in a separator and `&1 title` for each child in ID
+order, at most nine, the active one checked. A command from it activates
+that child (`DefFrameProc`, 124.27.4).
+
+#### 124.27.3 The frame and the caption *(S20b batch 2)*
+
+A program's child with `WS_THICKFRAME` has a frame 4 pixels wide, and one
+with `WS_CAPTION` a caption `SM_CYCAPTION - 1` high, in the geometry
+everything else reads: its client's origin and size, its window rectangle,
+what is invalidated with it. Both are drawn where its scroll bars are, when
+the non-client area is owed (124.22.1). They are measured off Windows 3.0's
+Program Manager on VGA:
+
+- **The frame:** a black line, two lines of `COLOR_ACTIVEBORDER` (or
+  `COLOR_INACTIVEBORDER` for a child that is not active), and a black line.
+- **The caption:** the frame's width in, `COLOR_ACTIVECAPTION` (or
+  `COLOR_INACTIVECAPTION`), with a black line under it. The title is
+  centred in the room the boxes leave, in `COLOR_CAPTIONTEXT` when active
+  and `COLOR_WINDOWTEXT` when not, and is cut to fit.
+- **The boxes** are squares as high as the caption's face, with a black
+  line between each and the title. The system-menu box at the left is
+  `COLOR_BTNFACE` with a black bar 7 by 3, its middle row white, shadowed
+  right and below. The maximize and minimize boxes at the right have a white
+  top and left edge, two lines of `COLOR_BTNSHADOW` right and below, and an
+  arrow 1, 3, 5 and 7 pixels wide, up or down.
+
+**The client paints before its children.** `MDICLIENT` is
+`WS_CLIPCHILDREN`, but WIN16's clip is one rectangle, and it can only cut
+out a child that spans a side (124.20.4). So the client's `WM_PAINT`
+invalidates every child under it, frame and caption included, and they are
+drawn after it, as a parent that is not `WS_CLIPCHILDREN` does (124.22.6).
+
+**Overlapping children paint bottom to top** *(batch 3b)*. MDI children are
+`WS_CLIPSIBLINGS`, and Windows clipped a child's drawing to what its siblings
+above left of it. One rectangle cannot leave a sibling out, so WIN16 paints
+in the painter's order instead. When anything inside an MDI child is about
+to be painted - its frame, its client, or a window inside it - every child
+of the same client above it in the Z order that the painted rectangle
+overlaps is invalidated there, erased, and its frame owed (`w16i_above`).
+It is painted after, and ends on top. A child above paints nothing below
+it, so the chain ends. What it costs is the overlap drawn twice whenever a
+window under another changes.
+
+#### 124.27.4 The default procedures and the keys *(S20b batch 2)*
+
+| call | what it adds to `DefWindowProc` |
+|---|---|
+| `DefFrameProc` | with an MDI client: a `WM_COMMAND` whose ID is in the Window menu's list activates that child; `WM_SIZE` makes the client the frame's whole client; `WM_SETFOCUS` gives the focus to the active child, or to the client when there is none. Everything else is `DefWindowProc`'s, for the frame |
+| `DefMDIChildProc` | `WM_CLOSE` destroys the child as `WM_MDIDESTROY` does; `WM_CHILDACTIVATE`, and `WM_SETFOCUS` on a child that is not active, make it the active one - but only while the child still has the focus: WIN16 posts focus messages (124.22.6), and Program Manager's three groups, each activated as it was made, otherwise passed the focus round in a loop on the stale ones; `SC_NEXTWINDOW` and `SC_PREVWINDOW` are `WM_MDINEXT` |
+| `TranslateMDISysAccel` | a key down with Ctrl held: F4 sends the active child `WM_SYSCOMMAND` `SC_CLOSE`; F6 and Tab send `SC_NEXTWINDOW`, or `SC_PREVWINDOW` with Shift. The answer is TRUE, and the program neither translates nor dispatches the key |
+
+`CreateWindow` and `DestroyWindow` are called back through fixed bind slots
+6 and 7 (`W16_CWROW`, `W16_DWROW`), as the controls' own calls are: the
+program may not have imported them.
+
+#### 124.27.5 Moving, sizing, maximizing and minimizing a child *(S20b batch 3)*
+
+**A press on a child's own parts** (124.27.2) goes by where it lands:
+
+| where | what |
+|---|---|
+| the maximize box | `WM_SYSCOMMAND` `SC_MAXIMIZE` posted to the child |
+| the minimize box | `SC_MINIMIZE`, the same way |
+| the caption | a move |
+| a thick frame | a size: the edges within a caption's height and a frame of the press move, so a corner moves two |
+| a minimized child's icon | a move; a click that does not move it posts `SC_RESTORE` |
+
+A move or a size is followed until the button comes up. Windows 3.0's way
+is the one taken: an outline of where it will go is inverted with
+`OSAPI_GFX_XOR_RECT`, cut to the client, drawn again to take it away, and
+nothing else is redrawn until the button comes up. A size keeps the window
+at least three caption boxes and a frame wide and a caption and a frame
+high. `W16I_TRACK` in `w16_mdion` sends the mouse to part 9 meanwhile, as
+`w16_sbtrk` sends it to a scroll bar.
+
+**Every change of place is posted, not sent.** The child's old rectangle and
+all of its new one are repainted, and `WM_SIZE` is posted with
+`SIZE_MAXIMIZED`, `SIZE_MINIMIZED` or 0 by its style. A move from the mouse
+runs inside no call of the program's, so there is no stack to call it back
+on; Windows sent `WM_SIZE`, and a program that sizes its panes on it does
+so on the posted one.
+
+`DefMDIChildProc` carries out `SC_MAXIMIZE`, `SC_MINIMIZE` and `SC_RESTORE`,
+and so do `WM_MDIMAXIMIZE` and `WM_MDIRESTORE` to the client.
+`WM_MDIMAXIMIZE` activates the child first: Windows' maximized child is the
+active one. `IsIconic` and `IsZoomed` answer a child's `WS_MINIMIZE` and
+`WS_MAXIMIZE`. `SC_MOVE` and `SC_SIZE`, Windows' moves from the keyboard,
+are not followed and answer 0.
+
+- **Maximized**, a child covers the client, its frame and caption outside it,
+  and `WS_MAXIMIZE` is in its style. Where it was is kept in its record's
+  control bytes, as where it goes back to. One maximized child at a time:
+  maximizing another, or activating another while one is maximized, puts
+  the first back and maximizes the second, as Windows did.
+- **The frame's bar** while one is maximized gets the child's system menu at
+  its left and a restore box at its right, Windows 3.0's merge. Both are
+  `MF_BITMAP` items with no text, 16 pixels wide, drawn into the bar's band
+  by part 9: a framed box with a bar for the system menu, a framed box with
+  an arrow up and an arrow down for restore. The restore box is a help item,
+  so the bar puts it at its right. The system menu is Windows 3.0's for an
+  MDI child: Restore, Move, Size, Minimize, Maximize, Close Ctrl+F4, Next
+  Ctrl+F6, with Move, Size and Maximize grey. A command from it, or the
+  restore box, reaches the frame as `WM_COMMAND`. `DefFrameProc` posts any
+  command of `SC_SIZE` and above to the maximized child as
+  `WM_SYSCOMMAND`. Restoring, minimizing or destroying the child takes both
+  items out again. The frame's title is not merged with the child's.
+- **Minimized**, a child is a 32-by-32 icon at the bottom of the client, to
+  the right of those there already, 72 pixels apart, with its title under it
+  in the caption's colours, cut to fit. The icon is its class's `hIcon`,
+  which `RegisterClass` now keeps (`W16C_ICON`; a class record is 32 bytes);
+  an MDI child's class with none gets a white square. Its client is empty,
+  so the program does not paint it.
+- **Any other minimized child** - Program Manager 3.0's items, each an
+  iconic child of its group with a class that has no icon - is its own
+  32-by-32 client: the program paints the icon itself, on `WM_PAINT`, and
+  WIN16 draws only the title under it. A title is centred in 72 pixels (the
+  icon and 20 either side), cut to what fits there in the System font - the
+  one font WIN16 has, wider than the small font Windows titled icons in -
+  and only the text's own box is filled, so neighbouring titles do not
+  erase each other. An MDI child's title is in the active caption's colours
+  while it is the client's active child; any other child's while it has the
+  focus, which is how Program Manager shows the selected item.
+
+#### 124.27.6 Tile, cascade and arrange icons *(S20b batch 3b)*
+
+| message | what it does |
+|---|---|
+| `WM_MDITILE` | the children that are not minimized, side by side in as few columns as hold them squarely (the least C with C × C ≥ N): N / C to a column, the last column taking the rest, the top of the Z order first. `MDITILE_HORIZONTAL` lays rows instead, and `MDITILE_SKIPDISABLED` leaves a disabled child where it is. When any child is minimized, the tiles stop above the icons' row (Wine's `MDITile`) |
+| `WM_MDICASCADE` | the children that are not minimized, from the bottom of the Z order, each at the next place of the stagger a new child takes, so the top one is last and lowest |
+| `WM_MDIICONARRANGE` | the icons in a row along the client's bottom, in Z order, where `SC_MINIMIZE` puts a new one |
+
+Tile and cascade restore a maximized child first, as Windows did. All three
+answer TRUE, and each child placed has `WM_SIZE` posted (124.27.5). The
+stagger is one routine, `w16i_stagger`, shared with `CW_USEDEFAULT`
+(124.27.2). A tile or a cascade places at most 32 children.
+
+#### 124.27.7 The rest of what File Manager and Program Manager import *(S20b batch 3b)*
+
+| call | answer |
+|---|---|
+| `GetInternalWindowPos` | the show state (`SW_SHOWNORMAL`, `SW_SHOWMINIMIZED` or `SW_SHOWMAXIMIZED`), the rectangle the window is restored to in its parent's client, and a minimized child's place (-1, -1 for another). A top-level window answers its own size at 0, 0 |
+| `SetInternalWindowPos` | an MDI child minimized, maximized or made normal by the show command, and the rectangle, when there is one, kept as where it is restored to, or used as where it goes when it is normal. Any other child is placed and shown by it too: `SW_SHOWMINIMIZED`, `SW_MINIMIZE` and `SW_SHOWMINNOACTIVE` make it `WS_MINIMIZE`, 32 by 32 at the point given (Program Manager places its items this way and in no other), any other command takes the rectangle, and `SW_HIDE` hides it. A top-level window is os8088's to place, and the call changes nothing there |
+| `CalcChildScroll`, `ScrollChildren` | nothing. The client's scroll bars are never shown, so a child moved past the client's edge is reached by moving it back, not by scrolling |
+| `CreateCursorIconIndirect` | an icon WIN16 draws, made from Windows' device bits: a moveable global block holding it as an `RT_ICON` image (a 40-byte header, the EGA's sixteen colours, 4 bits a pixel, then the mask, rows bottom up), so `DrawIcon` takes it as it takes a program's own. The bits may be 4 planes of 1 bit, each row's planes one after another as Program Manager's `.GRP` files keep them, 1 plane of 4 bits, or 1 of 1, at most 64 square. The block is marked `GHF_ICON`, and `DestroyIcon` frees it - Program Manager makes and destroys an item's icon in every `WM_PAINT`. It is moveable because a fixed block's handle is its segment, which can be above `W16_HSYSICO`, where WIN16's own icons are numbered. Any other shape answers 3300h, the one cursor `LoadCursor` hands out: the pointer is os8088's own |
+| `DumpIcon` | 0. WIN16's icons are not held in Windows' `CURSORICONINFO` layout, so there are no bits to hand out |
+
+File Manager and Program Manager now import nothing WIN16 lacks but
+`WinExec` (S21).
+
+#### 124.27.8 What checks it *(S20b batch 5)*
+
+The `win16mdi` row runs `MDI.EXE` (`tests/win16/mdi.c`, `make
+win16fixtures`): a frame with a Window menu, an `MDICLIENT` and three
+children made by `WM_MDICREATE`. It checks each message of 124.27.2 and
+124.27.6 by what a program can read back - `GetWindowRect`,
+`GetMenuItemCount`, `IsIconic`, `IsZoomed`, `WM_MDIGETACTIVE` and the
+`WM_SIZE` each child hears - and names what fails in its message box. Its
+first run found five defects the two Microsoft programs had not shown:
+
+- `WM_MDIGETACTIVE` never set the high word;
+- `IsIconic` and `IsZoomed` answered `FALSE` always, as they had before
+  there were child windows to minimize;
+- a tile measured the icons' row with the routine that fills the list the
+  tile was placing, so with an icon in the client it placed the icon;
+- `WM_MDINEXT` lost the child it had found and activated the active one
+  again;
+- `WM_MDIMAXIMIZE` did not activate the child it maximized.
+
+File Manager and Program Manager are Microsoft's and are never in the tree,
+so they have no row. Both were looked at under QEMU on VGA beside Windows
+3.0's own screenshots: File Manager's Directory Tree moved, sized,
+maximized with the bar merged, minimized and restored, tiled and cascaded
+with a directory window, and Program Manager's Main group with its six
+items and the Accessories and Games groups as icons.
+
+### 124.28 One instance, several programs *(S21, docs/plans/WIN16-ANY-PLAN.md)*
+
+*As a user, a Help menu opens Windows Help beside the program, and Program
+Manager starts Notepad.* Until S21 each Windows program was a `WIN16.O88`
+instance of its own (§124.18.2), and nothing was shared between two of them
+but the machine. Windows 3.x ran every program in one system: `WinExec`
+started the next one, a window's messages could come from another program,
+two programs shared a library and talked through DDE, and Program Manager
+is a program whose whole job is starting others. From S21 one instance
+hosts several programs, its **tasks**.
+
+The instance is still one os8088 package instance and one owner of claims.
+Launching a second `.EXE` from the desktop still starts a second instance;
+a program started by a program (`WinExec`, `LoadModule`, `WinHelp`,
+`ShellExecute` of a Windows program) joins the instance that asked.
+
+#### 124.28.1 A task
+
+A task is one loaded Windows program: its segments, its DGROUP and stack,
+and its state between two waits. At most `W16_MAXTASK` = 4 run in one
+instance.
+
+- **Its handle is its DGROUP's paragraph, as before.** That is also its
+  hInstance and its module handle (§124.3), and `GetCurrentTask` answers
+  it. Windows' task handle was a selector of its own; no program here has
+  been seen to depend on the two differing.
+- **`hPrevInstance` is still 0** when a program is started a second time.
+  Each start loads its own copy, with its own classes, rather than sharing
+  the first copy's code and classes as Windows did. A program that would
+  have taken a non-zero `hPrevInstance` to mean "activate the first copy
+  and leave" runs twice instead.
+- **The task table** (`w16_task`, a record per task) holds the handle, the
+  segment of the task's saved context (124.28.2), its state (`W16K_*`:
+  free, running, waiting, ending), and why it waits.
+
+#### 124.28.2 Its context is swapped, not addressed
+
+Every piece of WIN16's state that describes "the program" was one variable
+of the image's bss (§124.19), and code all over WIN16 addresses those
+variables directly. Making each of them a table indexed by task would cost
+bytes at every use, and the image has 898. So the **current** task's state
+stays where it is, and every other task's is parked in its **context
+block**, a block of WIN16's in the global heap. Switching to a parked task
+**exchanges** the bss with its block, word for word: afterwards the bss
+holds the arriving task's state and the block the leaving one's, so the
+block passes to the task that left. The current task has no block, and a
+switch is one pass over the state, not two copies.
+
+The state exchanged is a list of ranges of the bss, `w16_ctxtab` in part 9,
+the way the loader's `w16l_svtab` already saves one module's loader state
+(§124.23.5). The rule for what is on the list is the one that decides
+everything here: **state that lives across a wait** (`w16_tohost`) belongs
+to a task; state that lives only inside one handler is the instance's,
+since only one handler runs at a time. On the list:
+
+- the program's name, folder, state and exit code;
+- its NE tables, segment bases and lengths, and code cache;
+- its claim, DGROUP, PSP, local heap and stack top;
+- the coroutine: the waiting stack, the register bank, the waiting import
+  and why it waits (`GetMessage`, `PeekMessage`, a dialog's loop, a menu's
+  loop, a file dialog);
+- its message queue, its quit flag and its owed owner-draw and focus
+  notifications;
+- its menu loop and modal dialog state, and its DOS state (the handle
+  table and current directory of §124.21);
+- the x87 runtime's handler and its DC open across a wait (§124.25.5).
+
+Shared by the tasks, and so not on the list:
+
+- the window table, the classes, the global heap, the libraries, the bind
+  table and the USER heap, each with an owner where one is needed
+  (124.28.3);
+- the focus, the capture, the display and the fonts;
+- the profiles, the clipboard and the parts;
+- the pointer, the keyboard and every handler's scratch.
+
+A switch copies the list out and in. `tools/os88pkgsize.py` reports the
+list's length with the package. A program that never starts another never
+switches.
+
+#### 124.28.3 Who owns what
+
+The window record is full (102 bytes) and so is the class record, so the
+owner is kept beside them, a byte for each, with the task's index plus 1:
+
+| table | owner | used for |
+|---|---|---|
+| windows | `w16_wtask`, a byte a window | which queue a window's input goes to; `GetWindowTask`; `EnumTaskWindows`; the windows a task's end destroys |
+| classes | `w16_ctask`, a byte a class | a class is its task's: `CreateWindow` finds the caller's class of that name, then a `CS_GLOBALCLASS` one, then WIN16's own; two programs can register one name |
+| global blocks | `GH_TASK`, the byte at +10 of the block's header | the blocks a task's end frees |
+| timers | the window's task, or for a timer with no window the task that set it (`W16T_TASK`) | which task hears `WM_TIMER` |
+| libraries | `LM_USERS`, a bit a task | a library stays while any task uses it; the last task's `FreeLibrary`, or its end, frees it |
+
+A block allocated `GMEM_DDESHARE` belongs to no task (`GH_TASK` = 0) and
+is not freed when the task that made it ends, so a DDE partner can still
+read it. WIN16's own blocks (the context blocks, the profiles, the parts)
+are not a task's either.
+
+`GetMessage`, `PeekMessage`, the paint scan and the timers look only at the
+current task's windows, queue and timers.
+
+#### 124.28.4 Taking turns
+
+The tasks take turns as Windows 3.x's did. A task runs until it waits, and
+nothing pre-empts it. It waits:
+
+- in `GetMessage`, `WaitMessage` or `Yield`;
+- in `PeekMessage` with nothing for it;
+- in a dialog's loop or a menu's;
+- in a file dialog;
+- for the answer to a `SendMessage` to another task.
+
+**WIN16 runs only when every task is waiting:** it is os8088 calling back,
+and the coroutine (§124.2.1) means no program is running then. So a switch
+is only ever made there, in the host's code, never inside a call.
+
+Every callback ends by running the tasks that have work, in turn:
+
+- the current task first, if it has some;
+- then the others, in the order of the table after it.
+
+A task has work when its queue holds a message or its quit flag is set,
+when one of its windows is owed a paint, when one of its timers has fired,
+when it has just started, or when it waits in a loop the callback served.
+The turns stop when no task has work.
+
+**Input goes to a window's task.** A click, a key or a timer for a window
+is posted to the queue of the task that owns it; a paint marks the window
+as before. If that task is not the current one, its queue is posted to in
+its context block: the queue is the list's first range, so it is at the
+block's start, and only that range is exchanged around the post
+(`w16t_qpost`). Posting never needs a switch.
+
+#### 124.28.5 Starting a program: `WinExec` and `LoadModule`
+
+`WinExec(lpCmdLine, nCmdShow)` and `LoadModule(lpName, lpParams)` load the
+program while the caller waits in the call, as `LoadLibrary` loads a
+library at run time (§124.23.5):
+
+1. The caller's context is saved, and a fresh one is set up for the new
+   task.
+2. The loader runs and builds the new program's first frame (§124.3), with
+   its command tail and `nCmdShow`.
+3. The new task's context is saved, and the caller's is put back.
+4. The call answers the new task's hInstance.
+
+The new program first runs when the caller next waits.
+
+**The file is looked for as Windows looked**, and the first place that has
+it wins:
+
+1. the path given, if it names a folder;
+2. the caller's own folder;
+3. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
+4. `SYSTEM\` under it;
+5. the folder WIN16 itself was started from.
+
+A name without an extension gets `.EXE`. **The answers below 32 are
+Windows' own:**
+
+| answer | why |
+|---|---|
+| 0 | out of memory |
+| 2 | the file is not there |
+| 11 | it is not a Windows program WIN16 can run |
+| 16 | `W16_MAXTASK` tasks already run |
+
+**A second program cannot take a claim.** The first program's segments
+are its claim, one of the eight (§124.25.1). Every later program's go in
+one fixed block of the global heap instead, laid out as the claim would
+be. The arenas grow to hold it, within their three.
+
+**Its first top-level window is an os8088 window of its own** (a "second
+window", `W16_MAXTOP`), titled with its text. The instance's own window
+stays the first program's.
+
+#### 124.28.6 Messages between tasks
+
+- **`PostMessage` and `PostAppMessage`** put the message in the queue of
+  the window's task, or of the task named (124.28.4).
+- **`SendMessage` to another task's window** makes the sender wait for
+  the answer. Then:
+  1. the receiver is switched in, and its window procedure is called on
+     its own stack through §124.2.2's callback;
+  2. when it returns, the sender is switched back in with the answer.
+- **A task waiting for an answer can itself be sent to.** Its procedure
+  runs, as Windows ran it, so two programs that send to each other do
+  not deadlock. `InSendMessage` is TRUE inside such a call. `ReplyMessage`
+  answers early: the sender gets the answer, but runs only when the
+  receiver next waits.
+- **`SendMessage` to `HWND_BROADCAST`**, and `PostMessage` to it, reach the
+  top-level windows of every task, which is how a DDE conversation starts
+  (`WM_DDE_INITIATE`).
+
+#### 124.28.7 A task's end
+
+When one task ends (§124.18.2's ways), the rest go on:
+
+- its windows are destroyed, without messages, since the program is gone;
+- its classes, timers and hooks go;
+- its blocks are freed, except `GMEM_DDESHARE` ones;
+- its libraries lose it as a user, and a library no task uses is freed;
+- its context block is freed.
+
+**Every window it had on the glass closes**, usually several at once, which
+is why O2(a)'s queue behind `OSAPI_WM_CLOSE` (§75.2.1) came first.
+
+**If its main window was the instance's own window**, the next task's main
+window takes that window over: the os8088 window gets the next task's
+title and place, and the next task's own os8088 window closes. The instance
+is renamed for that task's program (§124.18.3).
+
+**When the last task ends, the instance ends**, as one program's end
+always ended it.
+
+#### 124.28.8 The instance on the desktop
+
+- **The Task Manager lists the instance** under its first program's name,
+  and End Task asks every task to close (`WM_CLOSE` to each main window,
+  §124.18.2).
+- **A program's own close box** closes that program only.
+- **Memory is the instance's.** Its claims (§124.25.1) hold every task's
+  blocks, and the Task Manager's figure is their sum.
+
+#### 124.28.9 The calls
+
+| call | answer |
+|---|---|
+| `GetCurrentTask` | the current task's handle |
+| `GetNumTasks` | the tasks running |
+| `IsTask` | TRUE for a running task's handle |
+| `GetWindowTask` | the window's task |
+| `EnumTaskWindows` | that task's top-level windows |
+| `Yield`, `WaitMessage` | the caller waits for its turn / for a message (124.28.4) |
+| `PostAppMessage` | posted to that task's queue with no window |
+| `GetModuleUsage` | how many tasks run that module, or a library's users |
+| `GetInstanceData` | copies bytes from another task's DGROUP at the same offset |
+| `WinExec`, `LoadModule` | 124.28.5 |
+| `InSendMessage`, `ReplyMessage` | 124.28.6 |
+| `GlobalGetAtomName`, `GlobalDeleteAtom` | the global atom table, shared by every task, which DDE names its application and topic in |
+| `WinHelp` | 124.28.10 |
+
+#### 124.28.10 Windows Help
+
+`WinHelp(hWnd, lpHelpFile, wCommand, dwData)` finds a top-level window of
+class `MS_WINHELP` in the instance. If there is none, it starts
+`WINHELP.EXE` with `WinExec`, looked for as 124.28.5 says. It then sends
+that window the registered message `WM_WINHELP`, with a `GMEM_DDESHARE`
+block holding Windows' `HLP` record (the command, the file and the data),
+as USER did. `HELP_QUIT` with no Help window answers TRUE and starts
+nothing. With no `WINHELP.EXE` to be found, it shows §124.6's message box,
+as before. WINHELP.EXE is Microsoft's: the user brings it, as every other
+Windows program (`make win16disk WIN3X=<dir>`).
+
+#### 124.28.11 What checks it
+
+The **`win16tasks`** row runs Watcom fixtures in one instance:
+
+- `TASKS.EXE` starts `TASKB.EXE` with `WinExec`;
+- the two talk through `SendMessage` and `PostMessage` both ways, then hold
+  a DDE conversation from `WM_DDE_INITIATE` to `WM_DDE_TERMINATE`;
+- each checks the other's answers and its own task calls;
+- one ends while the other goes on.
+
+The row then counts the instance's claim records, with the two programs
+and a library loaded, against §124.25.1's eight. Program Manager 3.0
+starting Clock and Notepad, and Notepad's Help menu opening Windows Help,
+are Microsoft's programs, and are looked at.
 
 ### 124.31 The protected-mode arm: WIN16 on `kern_mega` *(pinned for S22, docs/plans/WIN16-ANY-PLAN.md)*
 

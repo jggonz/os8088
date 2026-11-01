@@ -583,7 +583,7 @@ w16d_ctlproc0:
     test byte [bx + W16W_STYLE], ES_MULTILINE   ; (SPEC.md 124.22.3)
     jz .shared
     call w16e_proc
-    jmp short .out
+    jmp .out
 .shared:
     mov cx, [w16_sm_msg]
     cmp cx, WM_GETTEXT              ; what all four take alike
@@ -603,6 +603,10 @@ w16d_ctlproc0:
     je .list
     cmp al, W16Q_SCROLL
     je .scroll
+    cmp al, W16Q_MDI
+    jne .out
+    mov word [w16_sfn], w16i_mproc  ; MDICLIENT's, in part 9 (SPEC.md 124.27.2)
+    ICALL w16_scall
     jmp short .out
 .scroll:
     call w16_sbctl

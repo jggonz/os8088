@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "a80f8ef4a",
-  "strings": "d5a908ce3c9aa918",
-  "why": "S22 batch 7: the kern_mega arm's image above 1 MB"
+  "stamped": "ef6aeb494",
+  "strings": "17f273ce17c30db0",
+  "why": "S21 batch 1: task table"
  },
  "WIN16_TXT": {
   "sources": [

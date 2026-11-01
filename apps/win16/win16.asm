@@ -56,14 +56,23 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 8              ; classes (SPEC.md 124.8)
+W16_MAXCLS   equ 12             ; classes (SPEC.md 124.8; File Manager 3.0
+                                ;   registers 9, SPEC.md 124.27)
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
                                 ;   Editor's Advanced 54 beside 23 open)
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
-W16C_SIZE    equ 30             ; a class record
+W16C_SIZE    equ 32             ; a class record
 W16W_SIZE    equ 102            ; a window record
+W16_MAXTASK  equ 4              ; Windows programs in one instance, its
+                                ;   tasks (SPEC.md 124.28.1)
+W16K_H       equ 0              ; a task: its handle (its DGROUP), the
+W16K_CTX     equ 2              ;   context block it is parked in (0 while
+W16K_ST      equ 4              ;   it is the current one), its W16KS_*
+W16K_SIZE    equ 6
+W16KS_FREE   equ 0
+W16KS_RUN    equ 1
 W16_MAXTOP   equ 4              ; top-level windows in os8088 windows of
                                 ;   their own (dialogs, SPEC.md 124.8)
 W16_TTLSZ    equ 50
@@ -101,13 +110,15 @@ W16_NBIND    equ 384            ; bind slots: the distinct imports a program
                                 ;   Paintbrush 3.1's 270 is the most measured
 W16_NCBF     equ 4              ; registered clipboard formats at most
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 6              ; ...slots 0-5 are the image's own:
+W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
 W16_X87ROW   equ 2              ;   the emulator's missing instruction,
 W16_DDPROW   equ 3              ;   DefDlgProc, a dialog class's procedure,
 W16_LMROW    equ 4              ;   the libraries' LibMain (124.23.4),
-W16_SLROW    equ 5              ;   and a discarded segment's thunk (124.26.2)
+W16_SLROW    equ 5              ;   a discarded segment's thunk (124.26.2),
+W16_CWROW    equ 6              ;   and CreateWindow and DestroyWindow, which
+W16_DWROW    equ 7              ;   MDICLIENT calls back through (124.27.2)
 W16_NLIB     equ 8              ; a program's own libraries loaded at once
 W16_LDEPTH   equ 4              ; ...and how deep one may import another
 W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its
@@ -511,7 +522,8 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16m_pap, 1
 %ifndef W16_TRN                    ; the trace ring's entries, a power of two:
 W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
-%endif                             ;   S19b, 1024 at S20 (W16DEFS='-DW16_TRACE -DW16_TRN=256')
+%endif                             ;   S19b, 1024 at S20, 64 at S20b
+                                   ;   (W16DEFS='-DW16_TRACE -DW16_TRN=32')
 %ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
     W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
     W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)
@@ -810,6 +822,9 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_pfosw, 2         ; the os8088 window being painted (w16_ppaint)
     W16BSS w16_inmodal, 1       ; the innermost modal dialog's slot + 1
     W16BSS w16_seq, 2           ; the next window's W16W_SEQ
+    W16BSS w16_mdion, 1         ; 1 = an MDICLIENT was made (SPEC.md 124.27)
+    W16BSS w16i_aold, 2         ; MDI activation's chain: the child leaving,
+    W16BSS w16i_acli, 2         ;   and the client (w16mdi.inc)
     W16BSS w16_inprog, 1        ; 1 = between a resume and its return
     ; --- the dialog part's (w16dlg.inc): it has no bss of its own
     W16BSS w16d_sbuf, W16D_SBUF ; a control's text, as drawn
@@ -1101,6 +1116,11 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     ; --- FindWindow (SPEC.md 124.15.3)
     W16BSS w16_fwt, 4           ; the title asked for, far
     W16BSS w16_fwcls, 1         ; 1 = a class was asked for
+    ; --- S21: tasks (w16task.inc, SPEC.md 124.28)
+    W16BSS w16_task, W16_MAXTASK * W16K_SIZE
+    W16BSS w16_cur, 1           ; the current task's index
+    W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
+    W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -2114,6 +2134,8 @@ w16_cputest:
 %endif
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
+%include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 9 (124.27)
+%include "win16/w16task.inc"    ; several programs in one instance: part 9 (124.28)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's
