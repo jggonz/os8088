@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "00085ec26",
-  "strings": "04c25748050d2819",
-  "why": "S19b batch 4: Windows 3.1's Paintbrush and its save size"
+  "stamped": "872fcc167",
+  "strings": "8ebf4b162ad028f2",
+  "why": "S20 batch 1: the what-it-can-run row says code loads when first used and is put away under memory pressure; the code-memory message added"
  },
  "WIN16_TXT": {
   "sources": [
