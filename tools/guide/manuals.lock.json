@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "0b96f371f",
+  "stamped": "6dafaed9c",
   "strings": "e64cf165a824584a",
-  "why": "S20b batch 3a: MDI move, size, maximize, minimize"
+  "why": "S20b batch 3b: tile, cascade, MDI paint order"
  },
  "WIN16_TXT": {
   "sources": [
