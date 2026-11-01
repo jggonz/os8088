@@ -229905,10 +229905,37 @@ WIN16 did not have. They are answered as follows:
 | `SetSwapAreaSize` (KERNEL.106) | the paragraphs asked for, and `FFFFh` in `DX`: code has no area of its own here, and shares the global heap with data (§124.26.6) |
 | `AccessResource` (KERNEL.64) | a handle opened read-only on the program's own file through WIN16's DOS, standing at the resource, for the program to `_lread` and `_lclose`. The file is named by the path the DOS records once, when it is first fetched and still stands in the program's folder (`W16DH_PATH`, from its own `47h`), because a bare name stops naming the file after the program changes folder. -1 (`HFILE_ERROR`) when the DOS or that path cannot be had. Terminal reads its emulations' tables this way. A library's `hInstance` still reads the program's file, as `SizeofResource` does |
 | `ReadComm` (USER.204), `SetCommBreak` (USER.210), `ClearCommBreak` (USER.211), `EscapeCommFunction` (USER.214) | -1, and `SetCommEventMask` (USER.208) a null pointer: `OpenComm` never opens a port (§124.22.11) |
-| `SetSysColors` (USER.181), `SwapMouseButton` (USER.186), `SetDoubleClickTime` (USER.20), `ControlPanelInfo` (USER.273), `OldSetDeskPattern` (USER.279), `GetSpoolJob` (GDI.245) | 0, and nothing changes. The desktop, the colours and the mouse are os8088's own Control Panel's |
+| `SetSysColors` (USER.181), `SwapMouseButton` (USER.186), `SetDoubleClickTime` (USER.20), `OldSetDeskPattern` (USER.279), `GetSpoolJob` (GDI.245) | 0, and nothing changes. The desktop, the colours and the mouse are os8088's own Control Panel's |
 | `SetDeskWallPaper` (USER.285) | `TRUE`, and no wallpaper is drawn |
+| `ControlPanelInfo` (USER.273) | as `SystemParametersInfo` (§124.26.9, batch 5) |
 
-#### 124.26.9 Not done *(S20 batch 1)*
+#### 124.26.9 The system's parameters *(S20 batch 5)*
+
+`SystemParametersInfo` (USER.483) and Windows 3.0's undocumented
+`ControlPanelInfo` (USER.273) share one answer. `ControlPanelInfo` takes
+the action, a word and a buffer, the first three arguments
+`SystemParametersInfo` takes. **A query writes Windows 3.1's VGA default
+into the buffer** and answers `TRUE`:
+
+| action | written |
+|---|---|
+| `SPI_GETBEEP` (1) | 1 |
+| `SPI_GETMOUSE` (3) | 6, 10, 1: the two thresholds and the acceleration |
+| `SPI_GETBORDER` (5) | 3 |
+| `SPI_GETKEYBOARDSPEED` (10) | 31 |
+| `SPI_ICONHORIZONTALSPACING` (13), `SPI_ICONVERTICALSPACING` (24) | 75 and 72, when the buffer is not `NULL`; with `NULL` the action sets, and is one of the others |
+| `SPI_GETSCREENSAVETIMEOUT` (14) | 120 |
+| `SPI_GETSCREENSAVEACTIVE` (16), `SPI_GETGRIDGRANULARITY` (18), `SPI_GETMENUDROPALIGNMENT` (27) | 0 |
+| `SPI_GETKEYBOARDDELAY` (22), `SPI_GETICONTITLEWRAP` (25), `SPI_GETFASTTASKSWITCH` (32) | 1 |
+
+**Every other action answers `TRUE` and changes nothing**, as §124.26.8's
+settings calls do: the desktop, the keyboard and the mouse belong to
+os8088's own Control Panel. That includes `SPI_GETICONTITLELOGFONT` (31),
+whose buffer is left as the program gave it. Windows 3.0's Control Panel
+reads its Desktop dialog's icon spacing and border width this way. With no
+answer, its fields showed whatever its stack held: 3146 and 1036.
+
+#### 124.26.10 Not done *(S20 batch 1)*
 
 - A program's own libraries keep their code fixed.
 - A discardable segment of 64 KB is laid out fixed.

@@ -1824,6 +1824,92 @@ W16SYS w16o_bool0
     mov word [es:bx], 0
     jmp short w16o_ok
 
+; =============================================================================
+; The system's parameters (SPEC.md 124.26.9)
+; =============================================================================
+
+; SystemParametersInfo (USER.483) - args: +0 fuWinIni, +2 lpvParam,
+; +6 uParam, +8 uAction. ControlPanelInfo (USER.273) - args: +0 lpBuffer,
+; +4 wData, +6 nInfo: Windows 3.0's undocumented name for the same actions.
+; A query in w16u_spitab writes Windows' default into the buffer; every other
+; action answers TRUE and changes nothing, because the settings are os8088's
+; own Control Panel's
+W16SYS w16u_cpinfo
+    push si
+    push di
+    ICALL w16_args
+    mov si, [es:bx + 6]
+    les di, [es:bx]
+    jmp short w16u_spigo
+W16SYS w16u_spi
+    push si
+    push di
+    ICALL w16_args
+    mov si, [es:bx + 8]
+    les di, [es:bx + 2]
+w16u_spigo:
+    mov bx, w16u_spitab             ; XSEC-OK: read through CS below
+.f:
+    xor ax, ax
+    mov al, [cs:bx]                 ; XSEC-OK: this part's own table
+    or al, al
+    jz .yes
+    mov cl, [cs:bx + 1]             ; XSEC-OK: (the same)
+    xor ch, ch
+    inc bx
+    inc bx
+    cmp ax, si
+    je .hit
+    add bx, cx
+    add bx, cx
+    jmp short .f
+.hit:
+    mov ax, es                      ; no buffer: 13 and 24 setting, not asking
+    or ax, di
+    jz .yes
+    cld
+.c:
+    mov ax, [cs:bx]                 ; XSEC-OK: (the same)
+    stosw
+    inc bx
+    inc bx
+    loop .c
+.yes:
+    mov ax, 1
+    pop di
+    pop si
+    ret
+
+; a query: its action, its words, Windows 3.1's defaults on VGA
+w16u_spitab:
+    db 1, 1                         ; SPI_GETBEEP
+    dw 1
+    db 3, 3                         ; SPI_GETMOUSE: the two thresholds and
+    dw 6, 10, 1                     ;   the acceleration
+    db 5, 1                         ; SPI_GETBORDER
+    dw 3
+    db 10, 1                        ; SPI_GETKEYBOARDSPEED
+    dw 31
+    db 13, 1                        ; SPI_ICONHORIZONTALSPACING
+    dw 75
+    db 14, 1                        ; SPI_GETSCREENSAVETIMEOUT
+    dw 120
+    db 16, 1                        ; SPI_GETSCREENSAVEACTIVE
+    dw 0
+    db 18, 1                        ; SPI_GETGRIDGRANULARITY
+    dw 0
+    db 22, 1                        ; SPI_GETKEYBOARDDELAY
+    dw 1
+    db 24, 1                        ; SPI_ICONVERTICALSPACING
+    dw 72
+    db 25, 1                        ; SPI_GETICONTITLEWRAP
+    dw 1
+    db 27, 1                        ; SPI_GETMENUDROPALIGNMENT
+    dw 0
+    db 32, 1                        ; SPI_GETFASTTASKSWITCH
+    dw 1
+    db 0
+
 ; the registration database's words, in the part: they go with the program
 w16r_hit:   db 0
 w16r_idx:   dw 0

@@ -2873,3 +2873,30 @@ table, a jump into WIN16's header. The one thing that settled it was the
 memory compare, which took a minute to write and was done last. The next
 crash that moves with the build should start there.
 
+
+## 2026-11-01 — S20, batch 5: what the Control Panel asks the system
+
+**Control Panel 3.0 ran, and its Desktop applet said the icons were 3,146
+pixels apart.** Border Width read 1,036. Neither number came from anywhere:
+the applet asks `ControlPanelInfo` for each setting into a buffer on its own
+stack, WIN16 answered "nothing" and left the buffer alone, and the applet
+showed whatever its stack held there.
+
+**Windows 3.1 calls the same thing `SystemParametersInfo`**, and both are one
+table here: thirteen questions a program can ask, each with the answer a
+fresh Windows 3.1 install gives on VGA. A border three pixels wide, icons 75
+apart across and 72 down, the mouse's thresholds 6 and 10 at acceleration 1,
+the screen saver off after two minutes. Asking anything else, or asking to
+CHANGE a setting, answers yes and changes nothing, because on this machine
+those settings belong to os8088's own Control Panel.
+
+**Now the applet reads Icon Spacing 75 and Border Width 3.** Its pattern list
+is still empty: the patterns live in `CONTROL.INI`, and no Windows install has
+written one here.
+
+The build caught one thing on the way. The table sits in WIN16's system
+library, a part with its own code segment, and the check that guards those
+parts flagged the line that took the table's address, because a part's data
+read through the package's DS is the bug that check exists for. Every read
+already went through CS, so the line got the marker the other parts' tables
+carry.

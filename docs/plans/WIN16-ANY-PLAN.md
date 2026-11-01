@@ -1064,6 +1064,26 @@ its table goes in the diary, so the reach is measured, not claimed.
     - Sizes: the image 36,407 (+20), bss unchanged, **1,373 bytes of
       room**; the library part 61,402 (+631), part 9 14,578, the DOS host
       514 of its 1,024.
+  - [x] **Batch 5: the system's parameters** (SPEC.md §124.26.9).
+    - `SystemParametersInfo` (USER.483, a new row) and `ControlPanelInfo`
+      (USER.273, which answered 0 before) share one table of thirteen
+      queries. A query in the table gets Windows 3.1's VGA default in the
+      caller's buffer: border 3, icon spacing 75 by 72, the mouse's 6, 10
+      and 1, and so on. Every other action, a setting among them, answers
+      TRUE and changes nothing, as batch 4's settings calls do.
+    - **Found:** Control Panel 3.0's Desktop applet showed Icon Spacing
+      3146 and Border Width 1036. That was its own stack, read back from a
+      buffer `ControlPanelInfo` never filled.
+    - **Seen on QEMU's VGA:** the Desktop applet shows Icon Spacing 75,
+      Border Width 3 and Granularity 0. Its Pattern list is still empty,
+      because the patterns come from `CONTROL.INI` and there is none.
+    - **Rows:** `w16xsec` (fast; the table is part 9's own and read through
+      CS), which flagged the table's address load until it was marked. No
+      emulator row runs a program that makes either call, so the Desktop
+      applet above is the whole of the evidence; S25 decides whether
+      Control Panel earns a row.
+    - Sizes: the image 36,407 and bss unchanged, **1,373 bytes of room**;
+      part 9 14,727 (+149), the loader part 14,745 (one row).
 
 - [ ] **S21: One instance, several programs (R9).**
   - *As a user, a Help menu opens Windows Help beside the program, and
