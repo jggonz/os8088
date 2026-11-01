@@ -498,7 +498,8 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16m_pap, 1
 %ifndef W16_TRN                    ; the trace ring's entries, a power of two:
 W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
-%endif                             ;   S19b, 1024 at S20 (W16DEFS='-DW16_TRACE -DW16_TRN=256')
+%endif                             ;   S19b, 1024 at S20, 64 at S20b
+                                   ;   (W16DEFS='-DW16_TRACE -DW16_TRN=32')
 %ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
     W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
     W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)

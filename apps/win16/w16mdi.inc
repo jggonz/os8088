@@ -384,7 +384,7 @@ W16I_CHSTYLE  equ 0x54CF            ; an MDI child's style, high word: WS_CHILD
 W16I_FRAME    equ 4                 ; its frame (w16_bord's for WS_THICKFRAME)
 W16I_NLIST    equ 9                 ; children the Window menu lists
 W16I_ICON     equ 32                ; a minimized child: an icon's side,
-W16I_TSIDE    equ 16                ;   the room its title has each side,
+W16I_TSIDE    equ 20                ;   the room its title has each side,
 W16I_ISTEP    equ 72                ;   and the step between two icons
 WS_MAXIMIZE_HI equ 0x0100
 WS_MINIMIZEBOX_HI equ 0x0002
@@ -673,10 +673,15 @@ w16i_ncpaint:
     ICALL w16_parent
     jc .np
     cmp byte [bx + W16W_KIND], W16Q_MDI
-    jne .np
+    jne .foc
     cmp ax, [bx + MC_ACT]
     jne .np
+.act:
     mov byte [cs:w16i_act], 1
+    jmp short .np
+.foc:
+    cmp ax, [w16_focus]             ; another child (an icon of Program
+    je .act                         ;   Manager's): while it has the focus
 .np:
     pop bx
     xor al, al                      ; a DC, its clip the window cut to its
@@ -813,7 +818,14 @@ w16i_icon:
     mov si, ax
     mov ax, [si + w16_cls + W16C_ICON]
     or ax, ax
-    jz .box
+    jnz .draw
+    push ax                         ; none: a program's own child paints
+    ICALL w16_bord                  ;   itself, as Program Manager's items
+    or ax, ax                       ;   do; an MDI child, whose client is
+    pop ax                          ;   empty, gets a frame
+    jz .title
+    jmp short .box
+.draw:
     push bx                         ; CX/DX = the icon's top left
     mov bl, W16_NOCOL
     SLCALL w16_icodraw
@@ -836,6 +848,7 @@ w16i_icon:
     call w16i_box
     pop bx
 .title:
+    mov byte [cs:w16i_tfit], 1
     call w16i_title
 .out:
     pop di
@@ -1210,18 +1223,7 @@ w16i_title:
     mov ax, (COLOR_ACTIVECAPTION << 8) | COLOR_CAPTIONTEXT
 .col:
     SLCALL w16d_colors              ; [w16_tcol], [w16_tpap]
-    push si                         ; the face, then the text over it in
-    push bx                         ;   the same paper
-    mov ax, [cs:w16i_tl]
-    mov bx, [cs:w16i_ct]
-    mov cx, [cs:w16i_tr]
-    mov dx, [cs:w16i_cb]
-    cmp ax, cx
-    jg .nofill
-    call w16i_box
-.nofill:
-    pop bx
-    pop si
+    mov [cs:w16i_tpc], si
     ICALL w16_textptr               ; ES:SI, CX = the title
     cmp cx, W16_TXTMAX
     jbe .n
@@ -1241,8 +1243,9 @@ w16i_title:
     mov di, [cs:w16i_tr]            ; DI = the room
     sub di, [cs:w16i_tl]
     inc di
+    xor ax, ax
 .fit:
-    jcxz .out
+    jcxz .fits
     mov si, w16_txt
     ICALL w16_textw                 ; AX = its width
     cmp ax, di
@@ -1255,6 +1258,28 @@ w16i_title:
     sar di, 1
     add di, [cs:w16i_tl]
     mov [w16_tx], di
+    cmp byte [cs:w16i_tfit], 0      ; an icon's: only the text's own box,
+    je .fill                        ;   a pixel more each side
+    jcxz .out
+    dec di
+    mov [cs:w16i_tl], di
+    add di, ax
+    inc di
+    mov [cs:w16i_tr], di
+.fill:
+    push bx                         ; the face, then the text over it in
+    mov si, [cs:w16i_tpc]           ;   the same paper
+    mov ax, [cs:w16i_tl]
+    mov bx, [cs:w16i_ct]
+    mov cx, [cs:w16i_tr]
+    mov dx, [cs:w16i_cb]
+    cmp ax, cx
+    jg .nofill
+    call w16i_box
+.nofill:
+    pop bx
+    cmp word [w16_tn], 0
+    je .out
     mov ax, [w16_capn]              ; the System font's rows are the
     sub ax, 3                       ;   caption's less 3: (box - rows) / 2
     neg ax                          ;   down
@@ -1267,6 +1292,7 @@ w16i_title:
     pop bp
 .out:
     mov byte [w16_thalf], 0
+    mov byte [cs:w16i_tfit], 0
     pop es
     pop di
     pop si
@@ -1275,6 +1301,8 @@ w16i_title:
     pop bx
     pop ax
     ret
+w16i_tpc:  dw 0                     ; w16i_title's paper, a COLOR_*
+w16i_tfit: db 0                     ; 1: an icon's title, the text's box only
 
 w16i_x0:  dw 0                      ; w16i_ncpaint's: the window on the screen,
 w16i_y0:  dw 0                      ;   inclusive,
@@ -3523,8 +3551,13 @@ W16SYS w16i_setiwp
     mov ax, [es:di + 10]
     ICALL w16_hwnd2rec
     jc .out
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jz .out
     call w16i_cli
-    jc .out
+    jnc .mdi
+    call w16i_plain
+    jmp short .out
+.mdi:
     mov ax, [es:di + 8]
     cmp ax, 2
     je .min
@@ -3560,6 +3593,62 @@ W16SYS w16i_setiwp
     xor dx, dx
     pop di
     pop si
+    ret
+
+; w16i_plain - BX = a child that is not an MDI child, ES:DI =
+; SetInternalWindowPos's arguments: put where the rectangle says, when there
+; is one, then shown, or hidden by SW_HIDE, as Program Manager 3.0 places
+; each of its items. Keeps BX, DI, ES
+w16i_plain:
+    mov ax, [es:di + 8]
+    cmp ax, 2                       ; SW_SHOWMINIMIZED, SW_MINIMIZE and
+    je .icon                        ;   SW_SHOWMINNOACTIVE: an icon at the
+    cmp ax, 6                       ;   point, its title drawn under it
+    je .icon
+    cmp ax, 7
+    je .icon
+    call w16i_rect
+    jc .show
+    call w16i_place
+    jmp short .show
+.icon:
+    or word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    push es
+    push di
+    les di, [es:di]                 ; lpptMin
+    mov ax, es
+    or ax, di
+    jz .nopt
+    mov ax, [es:di]
+    mov dx, [es:di + 2]
+    cmp ax, -1
+    je .nopt
+    mov cx, W16I_ICON
+    mov si, cx
+    call w16i_place
+.nopt:
+    pop di
+    pop es
+.show:
+    cmp word [es:di + 8], 0         ; SW_HIDE
+    jne .vis
+    test byte [bx + W16W_FLAGS], W16WF_VIS
+    jz .out
+    ICALL w16_uncover
+    and byte [bx + W16W_FLAGS], ~W16WF_VIS
+    jmp short .out
+.vis:
+    and byte [bx + W16W_F2], ~W16W2_NSIZE ; its WM_SIZE: w16i_place's, or
+    test byte [bx + W16W_FLAGS], W16WF_VIS ;  none needed
+    jnz .out
+    or byte [bx + W16W_FLAGS], W16WF_VIS
+    xor ax, ax
+    xor cx, cx
+    mov dx, 0x7FFF
+    mov si, dx
+    mov byte [w16_erase], 1
+    ICALL w16_invaltree
+.out:
     ret
 
 ; w16i_rect - ES:DI = SetInternalWindowPos's arguments: its lprcWin as AX/DX
@@ -3600,12 +3689,265 @@ W16SYS w16i_dumpicon
     ret
 
 ; CreateCursorIconIndirect (USER.408) - args: +0 lpXORbits, +4 lpANDbits,
-; +8 lpCursorInfo, +12 hInst. The pointer is os8088's own, so the answer is
-; the one cursor handle LoadCursor gives
+; +8 lpCursorInfo, +12 hInst. An icon WIN16 can draw: a global block holding
+; it as an RT_ICON image - a 40-byte header, sixteen colours, 4 bits a pixel
+; and the mask, rows bottom up - made from Windows' device bits, which are
+; 4 planes of 1 bit (VGA's, the planes of each row one after another, as
+; Program Manager's groups keep them), 1 plane of 4 bits, or 1 of 1, at most
+; 64 square. Its block is marked GHF_ICON, and DestroyIcon frees it. Any
+; other shape answers the one cursor LoadCursor hands out (SPEC.md 124.27.7)
 W16SYS w16i_cursorind
+    push si
+    push di
+    push es
+    ICALL w16_args                  ; ES:BX = the arguments
+    push ds
+    lds si, [es:bx + 8]             ; the CURSORICONINFO
+    mov ax, [si + 4]
+    mov [cs:w16i_iw], ax
+    mov ax, [si + 6]
+    mov [cs:w16i_ih], ax
+    mov ax, [si + 8]
+    mov [cs:w16i_iwb], ax
+    mov ax, [si + 10]               ; AL = planes, AH = bits a pixel
+    mov [cs:w16i_ipb], ax
+    pop ds
+    mov ax, [es:bx]
+    mov [cs:w16i_ixo], ax
+    mov ax, [es:bx + 2]
+    mov [cs:w16i_ixs], ax
+    mov ax, [es:bx + 4]
+    mov [cs:w16i_iao], ax
+    mov ax, [es:bx + 6]
+    mov [cs:w16i_ias], ax
+    mov ax, [cs:w16i_iw]
+    dec ax
+    cmp ax, 63
+    ja .fall
+    mov ax, [cs:w16i_ih]
+    dec ax
+    cmp ax, 63
+    ja .fall
+    mov ax, [cs:w16i_ipb]
+    cmp ax, 0x0104
+    je .shape
+    cmp ax, 0x0401
+    je .shape
+    cmp ax, 0x0101
+    jne .fall
+.shape:
+    mov cl, 5
+    mov ax, [cs:w16i_iw]            ; the image's strides, to a dword
+    shl ax, 1
+    shl ax, 1
+    add ax, 31
+    shr ax, cl
+    shl ax, 1
+    shl ax, 1
+    mov [cs:w16i_xs], ax
+    mov ax, [cs:w16i_iw]
+    add ax, 31
+    shr ax, cl
+    shl ax, 1
+    shl ax, 1
+    mov [cs:w16i_as], ax
+    add ax, [cs:w16i_xs]
+    mul word [cs:w16i_ih]
+    add ax, W16I_IHDR
+    adc dx, 0
+    mov cl, GMEM_MOVEABLE           ; a handle under W16_HSYSICO: a fixed
+    ICALL w16_gnew                  ;   one is its segment, and may be above it
+    or ax, ax
+    jz .fall
+    mov [cs:w16i_ihd], ax
+    dec dx                          ; its header: an icon WIN16 made
+    mov es, dx
+    or byte [es:GH_FLAGS], GHF_ICON
+    inc dx
+    mov es, dx
+    cld
+    xor di, di
+    xor ax, ax
+    mov cx, W16I_IHDR / 2
+    rep stosw
+    mov word [es:0], 40
+    mov ax, [cs:w16i_iw]
+    mov [es:4], ax
+    mov ax, [cs:w16i_ih]
+    shl ax, 1
+    mov [es:8], ax
+    mov word [es:12], 1
+    mov word [es:14], 4
+    mov si, w16i_egapal             ; XSEC-OK: read through cs:
+    mov di, 40
+    mov cx, 32
+.pal:
+    mov ax, [cs:si]
+    stosw
+    inc si
+    inc si
+    loop .pal
+    xor bx, bx                      ; BX = the row written, bottom up
+.xrow:
+    cmp bx, [cs:w16i_ih]
+    jae .and
+    mov ax, bx
+    mul word [cs:w16i_xs]
+    add ax, W16I_IHDR
+    mov di, ax                      ; ES:DI = it
+    mov ax, [cs:w16i_ih]
+    dec ax
+    sub ax, bx
+    mul word [cs:w16i_iwb]
+    cmp byte [cs:w16i_ipb], 4
+    jne .np
+    shl ax, 1
+    shl ax, 1
+.np:
+    add ax, [cs:w16i_ixo]
+    mov si, ax                      ; DS:SI = the row it comes from
+    push ds
+    mov ds, [cs:w16i_ixs]
+    xor cx, cx                      ; CX = the column
+.xcol:
+    cmp cx, [cs:w16i_iw]
+    jae .xend
+    call w16i_ipx
+    mov ah, al
+    inc cx
+    xor al, al
+    cmp cx, [cs:w16i_iw]
+    jae .two
+    call w16i_ipx
+.two:
+    inc cx
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    or al, ah
+    stosb
+    jmp short .xcol
+.xend:
+    pop ds
+    inc bx
+    jmp short .xrow
+.and:
+    mov ax, [cs:w16i_iw]            ; the mask's rows come to a word each
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    shl ax, 1
+    mov [cs:w16i_iwb], ax
+    xor bx, bx
+.arow:
+    cmp bx, [cs:w16i_ih]
+    jae .done
+    mov ax, [cs:w16i_xs]
+    mul word [cs:w16i_ih]
+    add ax, W16I_IHDR
+    push ax
+    mov ax, bx
+    mul word [cs:w16i_as]
+    pop di
+    add di, ax                      ; ES:DI = the row written, bottom up
+    mov ax, [cs:w16i_ih]
+    dec ax
+    sub ax, bx
+    mul word [cs:w16i_iwb]
+    add ax, [cs:w16i_iao]
+    mov si, ax
+    mov cx, [cs:w16i_as]
+    cmp cx, [cs:w16i_iwb]
+    jbe .ac
+    mov cx, [cs:w16i_iwb]
+.ac:
+    push ds
+    mov ds, [cs:w16i_ias]
+    rep movsb
+    pop ds
+    inc bx
+    jmp short .arow
+.done:
+    mov ax, [cs:w16i_ihd]
+    jmp short .out
+.fall:
     mov ax, 0x3300
+.out:
     xor dx, dx
+    pop es
+    pop di
+    pop si
     ret
+
+; w16i_ipx - DS:SI = a row of w16i_cursorind's device bits, CX = a column
+; -> AL = its colour, 0-15 in the EGA's order. Keeps the rest
+w16i_ipx:
+    push bx
+    push cx
+    push dx
+    mov bx, cx
+    cmp word [cs:w16i_ipb], 0x0401
+    jne .bits
+    shr bx, 1                       ; 4 bits a pixel, the left one high
+    mov al, [si + bx]
+    test cl, 1
+    jnz .lo
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+.lo:
+    and al, 0x0F
+    jmp short .out
+.bits:
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    and cl, 7
+    mov ch, 0x80
+    shr ch, cl
+    xor al, al
+    cmp byte [cs:w16i_ipb], 4
+    je .planes
+    test [si + bx], ch              ; 1 bit: white or black
+    jz .out
+    mov al, 15
+    jmp short .out
+.planes:
+    mov dx, 0x0401                  ; 4 planes: plane N is bit N (DH counts,
+.p:                                 ; CH is the column's bit)
+    test [si + bx], ch
+    jz .z
+    or al, dl
+.z:
+    shl dl, 1
+    add bx, [cs:w16i_iwb]
+    dec dh
+    jnz .p
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+W16I_IHDR equ 40 + 16 * 4           ; an icon's header and its colours
+w16i_egapal:                        ; the EGA's sixteen, as RGBQUADs
+    db 0x00,0x00,0x00,0, 0x80,0x00,0x00,0, 0x00,0x80,0x00,0, 0x80,0x80,0x00,0
+    db 0x00,0x00,0x80,0, 0x80,0x00,0x80,0, 0x00,0x80,0x80,0, 0xC0,0xC0,0xC0,0
+    db 0x80,0x80,0x80,0, 0xFF,0x00,0x00,0, 0x00,0xFF,0x00,0, 0xFF,0xFF,0x00,0
+    db 0x00,0x00,0xFF,0, 0xFF,0x00,0xFF,0, 0x00,0xFF,0xFF,0, 0xFF,0xFF,0xFF,0
+w16i_iw:  dw 0                      ; w16i_cursorind's: the width, the
+w16i_ih:  dw 0                      ;   height, the device bits' bytes a
+w16i_iwb: dw 0                      ;   row and plane (then the mask's),
+w16i_ipb: dw 0                      ;   planes and bits a pixel,
+w16i_ixo: dw 0                      ;   where the colours are,
+w16i_ixs: dw 0
+w16i_iao: dw 0                      ;   and the mask,
+w16i_ias: dw 0
+w16i_xs:  dw 0                      ;   the image's two strides,
+w16i_as:  dw 0
+w16i_ihd: dw 0                      ;   and its handle
 
 ; =============================================================================
 ; The frame's and a child's default procedures, and the keys (SPEC.md
@@ -3712,7 +4054,11 @@ W16SYS w16i_defchild
     cmp cx, WM_CHILDACTIVATE
     je .act
     cmp cx, WM_SETFOCUS
-    je .act
+    jne .nsf
+    cmp ax, [w16_focus]             ; posted, so it may be stale: a child
+    jne .zero                       ;   no longer the focus is not activated
+    jmp short .act                  ;   (SPEC.md 124.27.4)
+.nsf:
     cmp cx, WM_SYSCOMMAND
     jne .def
     mov dx, [es:bx + 4]

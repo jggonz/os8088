@@ -151,7 +151,7 @@ w16_sbcut:
 ; w16_ncmark - BX = a record: its scroll bars owed, if it has any. Keeps
 ; every register.
 w16_ncmark:
-    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI | WS_CAPTION_HI | WS_THICKFRAME_HI
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI | WS_CAPTION_HI | WS_THICKFRAME_HI | WS_MINIMIZE_HI
     jz .out
     or byte [bx + W16W_F2], W16W2_NCDIRTY
 .out:

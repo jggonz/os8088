@@ -51,6 +51,8 @@ GHF_MOVE  equ 2
 GHF_RES   equ 4                 ; a loaded resource: discardable when unused
 GHF_CODE  equ 8                 ; a discardable code segment, GH_OWNER its
                                 ;   number (SPEC.md 124.26.3)
+GHF_ICON  equ 16                ; an icon CreateCursorIconIndirect made, which
+                                ;   DestroyIcon frees (124.27.7)
 W16G_HIGH equ 0x01              ; w16_gnew's CL: from the TOP of an arena, the
                                 ;   last free run that holds it (124.26.3)
 

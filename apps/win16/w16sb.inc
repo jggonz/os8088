@@ -569,6 +569,11 @@ w16_ncpaint:
     mov word [w16_sfn], w16i_above
     ICALL w16_scall
 .nab:
+    test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
+    jz .nmin                        ; a minimized child: its icon's title
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI ; (124.27.5)
+    jnz .mdi
+.nmin:
     ICALL w16_bord                  ; a thick frame or a caption: an MDI
     cmp ax, 4                       ;   child's, drawn first by part 9
     je .mdi                         ;   (SPEC.md 124.27.3) - which is not

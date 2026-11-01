@@ -230138,7 +230138,7 @@ window under another changes.
 | call | what it adds to `DefWindowProc` |
 |---|---|
 | `DefFrameProc` | with an MDI client: a `WM_COMMAND` whose ID is in the Window menu's list activates that child; `WM_SIZE` makes the client the frame's whole client; `WM_SETFOCUS` gives the focus to the active child, or to the client when there is none. Everything else is `DefWindowProc`'s, for the frame |
-| `DefMDIChildProc` | `WM_CLOSE` destroys the child as `WM_MDIDESTROY` does; `WM_CHILDACTIVATE`, and `WM_SETFOCUS` on a child that is not active, make it the active one; `SC_NEXTWINDOW` and `SC_PREVWINDOW` are `WM_MDINEXT` |
+| `DefMDIChildProc` | `WM_CLOSE` destroys the child as `WM_MDIDESTROY` does; `WM_CHILDACTIVATE`, and `WM_SETFOCUS` on a child that is not active, make it the active one - but only while the child still has the focus: WIN16 posts focus messages (124.22.6), and Program Manager's three groups, each activated as it was made, otherwise passed the focus round in a loop on the stale ones; `SC_NEXTWINDOW` and `SC_PREVWINDOW` are `WM_MDINEXT` |
 | `TranslateMDISysAccel` | a key down with Ctrl held: F4 sends the active child `WM_SYSCOMMAND` `SC_CLOSE`; F6 and Tab send `SC_NEXTWINDOW`, or `SC_PREVWINDOW` with Shift. The answer is TRUE, and the program neither translates nor dispatches the key |
 
 `CreateWindow` and `DestroyWindow` are called back through fixed bind slots
@@ -230197,8 +230197,18 @@ and so do `WM_MDIMAXIMIZE` and `WM_MDIRESTORE` to the client. `SC_MOVE` and
   the right of those there already, 72 pixels apart, with its title under it
   in the caption's colours, cut to fit. The icon is its class's `hIcon`,
   which `RegisterClass` now keeps (`W16C_ICON`; a class record is 32 bytes);
-  a class with none gets a white square. Its client is empty, so the
-  program does not paint it.
+  an MDI child's class with none gets a white square. Its client is empty,
+  so the program does not paint it.
+- **Any other minimized child** - Program Manager 3.0's items, each an
+  iconic child of its group with a class that has no icon - is its own
+  32-by-32 client: the program paints the icon itself, on `WM_PAINT`, and
+  WIN16 draws only the title under it. A title is centred in 72 pixels (the
+  icon and 20 either side), cut to what fits there in the System font - the
+  one font WIN16 has, wider than the small font Windows titled icons in -
+  and only the text's own box is filled, so neighbouring titles do not
+  erase each other. An MDI child's title is in the active caption's colours
+  while it is the client's active child; any other child's while it has the
+  focus, which is how Program Manager shows the selected item.
 
 #### 124.27.6 Tile, cascade and arrange icons *(S20b batch 3b)*
 
@@ -230218,9 +230228,9 @@ stagger is one routine, `w16i_stagger`, shared with `CW_USEDEFAULT`
 | call | answer |
 |---|---|
 | `GetInternalWindowPos` | the show state (`SW_SHOWNORMAL`, `SW_SHOWMINIMIZED` or `SW_SHOWMAXIMIZED`), the rectangle the window is restored to in its parent's client, and a minimized child's place (-1, -1 for another). A top-level window answers its own size at 0, 0 |
-| `SetInternalWindowPos` | an MDI child minimized, maximized or made normal by the show command, and the rectangle, when there is one, kept as where it is restored to, or used as where it goes when it is normal. A top-level window is os8088's to place, and the call changes nothing there |
+| `SetInternalWindowPos` | an MDI child minimized, maximized or made normal by the show command, and the rectangle, when there is one, kept as where it is restored to, or used as where it goes when it is normal. Any other child is placed and shown by it too: `SW_SHOWMINIMIZED`, `SW_MINIMIZE` and `SW_SHOWMINNOACTIVE` make it `WS_MINIMIZE`, 32 by 32 at the point given (Program Manager places its items this way and in no other), any other command takes the rectangle, and `SW_HIDE` hides it. A top-level window is os8088's to place, and the call changes nothing there |
 | `CalcChildScroll`, `ScrollChildren` | nothing. The client's scroll bars are never shown, so a child moved past the client's edge is reached by moving it back, not by scrolling |
-| `CreateCursorIconIndirect` | 3300h, the one cursor `LoadCursor` hands out: the pointer is os8088's own |
+| `CreateCursorIconIndirect` | an icon WIN16 draws, made from Windows' device bits: a moveable global block holding it as an `RT_ICON` image (a 40-byte header, the EGA's sixteen colours, 4 bits a pixel, then the mask, rows bottom up), so `DrawIcon` takes it as it takes a program's own. The bits may be 4 planes of 1 bit, each row's planes one after another as Program Manager's `.GRP` files keep them, 1 plane of 4 bits, or 1 of 1, at most 64 square. The block is marked `GHF_ICON`, and `DestroyIcon` frees it - Program Manager makes and destroys an item's icon in every `WM_PAINT`. It is moveable because a fixed block's handle is its segment, which can be above `W16_HSYSICO`, where WIN16's own icons are numbered. Any other shape answers 3300h, the one cursor `LoadCursor` hands out: the pointer is os8088's own |
 | `DumpIcon` | 0. WIN16's icons are not held in Windows' `CURSORICONINFO` layout, so there are no bits to hand out |
 
 File Manager and Program Manager now import nothing WIN16 lacks but
