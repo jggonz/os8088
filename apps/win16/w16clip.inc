@@ -261,6 +261,17 @@ W16LIB w16u_cbchain
     xor dx, dx
     ret
 
+; AddAtom (KERNEL.70), GlobalAddAtom (USER.268) - args: +0 lpszName. A
+; MAKEINTATOM (no segment) is its own atom; a name is RegisterClipboardFormat's
+; place for it, as Windows' formats are global atoms (SPEC.md 124.25.10)
+W16LIB w16k_addatom
+    ICALL w16_args
+    cmp word [es:bx + 2], 0
+    jne w16u_regcbfmt
+    mov ax, [es:bx]
+    xor dx, dx
+    ret
+
 ; RegisterClipboardFormat (USER.145) - args: +0 lpszFormat: C000h + its
 ; place in WIN16's table, the same for the same name (case aside); 0 when
 ; the W16_NCBF places are taken. Nothing is ever put on os8088's clipboard

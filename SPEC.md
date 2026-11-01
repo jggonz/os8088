@@ -226879,10 +226879,21 @@ the allocation waits for the answer:
 | nonzero | the block is freed and its handle kept, discarded, as §124.9's discard leaves it, unless the procedure locked it in the meantime. A procedure that discarded it itself (`GlobalDiscard`) is fine too |
 | 0 | the block is kept, and its mark is cleared, so it is never offered again |
 
-Then `GlobalAlloc` runs again with its own arguments. When it is still short
+Then the call that ran short runs again with its own arguments: the
+continuation re-dispatches the import being served (`[w16_idx]`, which
+§124.2.2's callback return restores with its frame). When it is still short
 it asks about the next block, and it answers 0 only when no procedure is
 kept or no block is left to offer. Each answer either frees a block or
 clears a mark, so the loop ends.
+
+**A bitmap is asked for the same way** *(S19b batch 4)*. A GDI bitmap is a
+fixed block of the same global heap (`w16_bmnew`), as Windows' GDI took its
+bitmaps from the global heap, so `CreateBitmap`, `CreateBitmapIndirect`,
+`CreateCompatibleBitmap`, `CreateDiscardableBitmap`, `CreateDIBitmap` and
+`LoadBitmap` ask the procedure too when the heap cannot hold the bits, and
+are run again. Paintbrush's text tool makes a canvas-sized bitmap after its
+bands have filled the heap; without this it got NULL, freed what it had
+made and showed no caret.
 
 **Paintbrush is why the procedure has to be called.** Its PBRUSH.DLL keeps
 the picture as bands, each one a notify block. Its `DISCARDBAND` (the DLL's
@@ -228943,12 +228954,22 @@ it waits in `GetMessage` (§124.2.1), until the dialog answers:
 | `OPENFILENAME` field | |
 |---|---|
 | `lpstrFile`, going in | its name part, when it is a plain 8.3 name, is the dialog's default name; a pattern (`*.TXT`) or nothing gives none |
-| `lpstrFilter`, `nFilterIndex`, `lpstrCustomFilter`, `lpstrInitialDir`, `lpstrTitle` | not used: the dialog lists every file, starts where it last stood for WIN16 (§38.10), and has os8088's own caption |
+| `lpstrFilter`, `nFilterIndex`, `lpstrCustomFilter`, `lpstrInitialDir`, `lpstrTitle` | not used: the dialog lists every file, starts in the program's current folder, and has os8088's own caption |
 | `Flags` | `OFN_ENABLEHOOK` and `OFN_ENABLETEMPLATE` are not honoured: the hook is not called and the template not shown. The rest change nothing |
 | `lpstrFile`, coming out | the chosen file's **full path**, `X:\FOLDER\NAME.EXT`, from the volume and folder the dialog committed in (`OSAPI_FILE_PATH`) |
 | `nFileOffset`, `nFileExtension` | where the name starts in it, and where its extension does (the NUL's offset when it has none) |
 | `lpstrFileTitle` | the name alone, when the program gave a buffer |
 | `lpstrDefExt` | a Save whose name has no extension gets this one |
+
+**It starts in the program's current folder** *(S19b batch 4)*. The dialog
+opens where the machine stands (§38.10), and since §96.52 a read or a write
+on a handle stands the machine in that file's folder without walking back:
+DOS keeps the program's own current folder apart and stands there again only
+for a call that reads it. So after Windows 3.1's Paintbrush had paged its
+picture to its swap file in `SYSTEM\APPDATA\WIN16`, its File > Open opened
+there. WIN16 now asks its DOS for `AH=47h` (`w16_dcall`) first, which
+stands the machine in the program's drive and folder, where Windows' dialog
+opened.
 
 The answer is TRUE for a file chosen, FALSE for Cancel, with
 `CommDlgExtendedError` 0, as Windows answered. A path longer than
@@ -229548,3 +229569,31 @@ written here so that the next numbering does not undo it.
 (File > Open) with 0 of the 100,864 visible canvas pixels differing from the
 file, saves it again (File > Save As) to a file whose pixels match, and saves
 a picture drawn from new. Its text tool draws. The DOS half is §96.11.6.4.
+
+#### 124.25.10 Windows 3.1's Paintbrush *(S19b batch 4)*
+
+Windows 3.1's PBRUSH.EXE (183,376 bytes, 80186 instructions, so a V20 or
+better) comes with its own PBRUSH.DLL and opens its files through COMMDLG,
+so os8088's file dialog (§124.24.2). It imported eight calls WIN16 lacked:
+
+| call | |
+|---|---|
+| `AddAtom` (KERNEL.70), `GlobalAddAtom` (USER.268) | a name is given `RegisterClipboardFormat`'s place for it, `C000h` and up, the same for the same name, case aside, as Windows' clipboard formats are global atoms; a `MAKEINTATOM` (no segment) is its own atom. One table serves both, `W16_NCBF` (4) names |
+| `DeleteAtom` (KERNEL.71), `GlobalDeleteAtom` (USER.269) | 0, success; the name is kept |
+| `GetMessageExtraInfo` (USER.288) | 0 |
+| `CreateMetaFile`, `CloseMetaFile` (GDI.125, 126) | NULL: no metafile is made. Windows answered NULL too when it could not make one, so a program has to handle it |
+| `GetCharABCWidths` (GDI.307) | FALSE, as Windows 3.1 answered for a font that is not TrueType, and neither of WIN16's faces is |
+| `StretchDIBits` (GDI.439) | 0: nothing drawn. Paintbrush was not seen calling it |
+
+**Seen on QEMU's VGA:** it opens with its toolbox and its 3.1 menus, draws a
+box, fills inside and around it, and types text after the fills (which
+needed §124.9.1's bitmap retry). With the picture set to 320 x 200 pixels
+(Options > Image Attributes), File > Save As writes a 32,118-byte BMP whose
+box is where it was drawn, and File > Open reads it back after File > New.
+
+**Not yet: saving a full-screen picture.** Paintbrush 3.1 saves through one
+moveable block the size of the whole picture, 141,440 bytes for its default
+640 x 442, and answers *Not enough memory for this operation* when it cannot
+have it. On a 640 KB machine the largest free run left beside its 150 KB of
+code is about 98 KB. Windows 3.1 never ran in real mode, so it always had
+more. S20's discardable code segments are what free that memory.

@@ -109,6 +109,16 @@ w16c_ofn:
     mov si, w16_namebuf
 .open:
     pop ax                          ; AL = the form
+    push ax                         ; the dialog opens where the MACHINE
+    push si                         ;   stands, and a handle's read or write
+    mov ah, 0x47                    ;   leaves it in that file's folder
+    xor dl, dl                      ;   (SPEC.md 96.52) - Paintbrush's swap
+    mov si, w16_gbuf                ;   file's. AH=47h stands it in the
+    push ds                         ;   program's current folder first, which
+    pop es                          ;   is where Windows' dialog opens
+    ICALL w16_dcall                 ;   (SPEC.md 124.24.2)
+    pop si
+    pop ax
     ICALL w16_lock                  ; (FILE_DLG wants the lock held)
     mov bx, [w16_win]
     mov di, w16_ofnback             ; the completion: the image's

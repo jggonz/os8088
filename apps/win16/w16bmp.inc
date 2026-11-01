@@ -112,7 +112,12 @@ w16_bmnew:
     ICALL w16_gnew                  ;   alone are four (SPEC.md 124.20.2).
     pop cx                          ;   The handle IS the segment
     or ax, ax
-    jz .no
+    jnz .got
+    push si                         ; the heap is short: a GlobalNotify
+    call w16k_gnask                 ;   procedure is asked to give a block
+    pop si                          ;   up, and the call runs again after
+    jmp short .no                   ;   (SPEC.md 124.9.1)
+.got:
     mov [w16b_seg + bx], dx
     mov es, dx                      ; black: CBLACK in both halves
     xor di, di

@@ -95,7 +95,8 @@ def main():
         print("\nthe imports most programs call that WIN16 lacks (%d distinct):"
               % len(missing))
         for (m, o, n), c in missing.most_common(a.missing):
-            print("  %3d  %s.%d %s" % (c, m, o, n or ""))
+            # an import by name (a program's own library's) has no ordinal
+            print("  %3d  %s.%s %s" % (c, m, "?" if o is None else o, n or ""))
 
 
 if __name__ == "__main__":

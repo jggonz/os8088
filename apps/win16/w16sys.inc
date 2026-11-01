@@ -2495,7 +2495,8 @@ W16LIB w16k_gnask
 
 ; the procedure's answer in AX, the entry in CX: nonzero, and the block is
 ; discarded if nobody locked it meanwhile; 0, and it is never offered again.
-; Then GlobalAlloc once more, its arguments the frame's again
+; Then the call that ran short once more - GlobalAlloc, or a GDI call making
+; a bitmap - its slot and frame w16_cbdone's again (SPEC.md 124.9.1)
 LCONT w16k_gnback
     mov si, cx
     or ax, ax
@@ -2513,7 +2514,12 @@ LCONT w16k_gnback
 .kept:
     and byte [w16_ghf + si], ~W16_GHNOTE
 .again:
-    ICALL w16k_galloc
+    mov bx, [w16_idx]
+    shl bx, 1
+    shl bx, 1                       ; * W16B_SIZE
+    add bx, w16_bind
+    mov ax, [w16_nargb]
+    ICALL w16_dispatch
     ret
 
 ; GlobalLRUNewest (KERNEL.164), GlobalLRUOldest (KERNEL.163) - args: +0 the

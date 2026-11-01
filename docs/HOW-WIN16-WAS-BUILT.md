@@ -2639,3 +2639,39 @@ leaves 1,831 bytes of room, and S20's segment cache will need some.
 B: image on the host. It runs in S25's final pass with `win16memdc`,
 `dosgap` and the rows that wait for a MessageBox. 3.1's Paintbrush is not
 tried yet.
+
+## 2026-10-31 — S19b, batch 4: Windows 3.1's Paintbrush, and two things it showed about 3.0's
+
+**3.1's Paintbrush needed eight calls, and none of them was hard.** Atoms
+went into the table `RegisterClipboardFormat` already kept, because on
+Windows a clipboard format is a global atom. The metafile calls answer
+NULL, `GetCharABCWidths` answers FALSE as Windows 3.1 did for any font that
+is not TrueType, and `StretchDIBits` draws nothing, since nothing was seen
+calling it. With those it opened, drew, filled and typed.
+
+**The text tool failed after a fill, and that was a gap in batch 3's fix.**
+Batch 3 taught `GlobalAlloc` to ask Paintbrush's notify procedure for a band
+when the heap was full. But a GDI bitmap comes out of the same heap, and
+the text tool asks for a canvas-sized one. After a fill the bands had taken
+the room, the bitmap failed, and Paintbrush gave up without a caret. Now
+bitmap creation asks too. The continuation no longer assumes the caller was
+`GlobalAlloc`: it re-dispatches whichever call was being served, which the
+callback machinery had been restoring all along.
+
+**File > Open opened in the wrong folder.** It started in WIN16's temp
+folder, next to Paintbrush's swap file. The os8088 dialog opens where the
+machine is standing, and a write to the swap file had left it standing
+there: DOS keeps the program's own current folder separately, and only
+walks back for a call that asks where it is. So WIN16 now asks, with
+`AH=47h`, just before it opens the dialog.
+
+**A full-screen save is a memory problem this story cannot fix.** 3.1's
+Paintbrush saves through one block the size of the whole picture: 141,440
+bytes. Its 150 KB of code is all resident, and the largest free run left on
+a 640 KB machine is about 98 KB. Windows 3.1 had dropped real mode, so it
+never had to fit. At 320 x 200 the same save works and the file reads back.
+The full-screen case moves to S20, whose discardable code segments are what
+would free the room.
+
+**S19b is done.** Paintbrush 3.0 opens, draws, fills, types, saves and
+opens; 3.1's does the same at a picture size this machine can hold.

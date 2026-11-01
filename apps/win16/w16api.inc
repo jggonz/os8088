@@ -443,6 +443,17 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 %define w16mdc_w16u_framerect
 %define w16mdc_w16u_invrect
 %define w16mdc_w16u_drawfocus
+; Windows 3.1's Paintbrush (SPEC.md 124.25.10): atoms in the clipboard
+; format table, and the answers a raster display and no metafile give
+W16EXPORT W16M_KERNEL,     70,      4,  w16k_addatom        ; AddAtom(str)
+W16EXPORT W16M_KERNEL,     71,      2,  w16_ans0            ; DeleteAtom(word)
+W16EXPORT W16M_USER,       268,     4,  w16k_addatom        ; GlobalAddAtom(str)
+W16EXPORT W16M_USER,       269,     2,  w16_ans0            ; GlobalDeleteAtom(word)
+W16EXPORT W16M_USER,       288,     0,  w16_ans0            ; GetMessageExtraInfo()
+W16EXPORT W16M_GDI,        125,     4,  w16_ans0            ; CreateMetaFile(str)
+W16EXPORT W16M_GDI,        126,     2,  w16_ans0            ; CloseMetaFile(word)
+W16EXPORT W16M_GDI,        307,     10, w16_ans0            ; GetCharABCWidths(word word word ptr)
+W16EXPORT W16M_GDI,        439,     32, w16_ans0            ; StretchDIBits(word s_word*8 ptr ptr word long)
 ; FROM HERE ON A ROW IS NAMED BY ITS POSITION (W16_D3ROW, W16_WFROW, W16_AHROW
 ; and W16_FPROW are W16NX at the line before them, and the rows after each are
 ; counted from it): a new row goes ABOVE this comment. GetWindowsDirectory put

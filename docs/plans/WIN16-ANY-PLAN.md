@@ -707,7 +707,7 @@ its table goes in the diary, so the reach is measured, not claimed.
     - **S19 is complete.** Its rows, `win16cdlg`, `win16reg`, `win16lz` and
       `win16shx`, run in S25's final pass.
 
-- [ ] **S19b: GDI, the drawing half (R7).**
+- [x] **S19b: GDI, the drawing half (R7).**
   - *As a user, Paintbrush opens, and I draw with its tools.* (Moved from
     S18: Paintbrush's library works; its drawing does not.)
   - Drawing **into a memory DC**: lines, rectangles, ellipses, polygons,
@@ -854,6 +854,37 @@ its table goes in the diary, so the reach is measured, not claimed.
       part 12,308 (+0), part 9 13,671 (+946). The room is the next
       constraint: S20's segment cache needs bss of its own, so S20 should
       start by moving tables out of the image's bss.
+  - [x] **Batch 4: Windows 3.1's Paintbrush** (SPEC.md §124.25.10,
+    §124.9.1, §124.24.2).
+    - Eight imports: `AddAtom`/`GlobalAddAtom` in the clipboard-format
+      table (Windows' formats are global atoms), `DeleteAtom`/
+      `GlobalDeleteAtom`, `GetMessageExtraInfo`, `CreateMetaFile`/
+      `CloseMetaFile` (NULL), `GetCharABCWidths` (FALSE, not TrueType),
+      `StretchDIBits` (0, not seen called).
+    - **Found:** after a fill, the text tool's canvas-sized
+      `CreateCompatibleBitmap` failed, because the bands filled the heap and
+      only `GlobalAlloc` asked the notify procedure. Bitmap creation now
+      asks too, and the continuation re-dispatches whichever call ran short.
+      3.0's Paintbrush has the same path.
+    - **Found:** File > Open opened in WIN16's temp folder, where the swap
+      file is: a handle's write leaves the machine in that file's folder
+      (§96.52). The dialog now asks DOS for `AH=47h` first, which stands
+      the machine in the program's own folder.
+    - **Seen on QEMU's VGA:** it opens, draws a box, fills inside and
+      around it, types text after the fills, and at 320 x 200 pixels saves
+      a BMP whose pixels are right and opens it again after File > New.
+    - **Not yet, moved to S20:** a full-screen picture's save needs one
+      141,440-byte block, and on 640 KB the largest free run beside its
+      150 KB of code is about 98 KB. S20's discardable code is what frees
+      it. Not registered as a row: 3.1's Paintbrush is only looked at.
+    - `tools/w16reach.py --missing` no longer crashes on an import by name
+      (a program's own library's).
+    - **Rows, for S25's pass:** `win16memdc`, `win16pbrush` (the retry
+      path), `win16cdlg` and every row that opens the file dialog.
+    - What it costs, against batch 3: the image unchanged (35,986 bytes,
+      1,831 of room); the library part 59,866 (+45), the loader part 12,389
+      (+81, 9 export rows), part 9 13,694 (+23).
+    - **S19b is complete.** Its rows run in S25's final pass.
 
 - [ ] **S20: Big programs in small memory (R6).**
   - *As a user, Write opens a document on a 640 KB machine.*
@@ -867,7 +898,8 @@ its table goes in the diary, so the reach is measured, not claimed.
       compiler emits;
     - a code-cache budget taken from free memory at launch.
   - **Targets:** WRITE 3.0 (163 KB of code), WINHELP (200 KB), TERMINAL,
-    WINFILE 3.0, CONTROL 3.0.
+    WINFILE 3.0, CONTROL 3.0, and Windows 3.1's Paintbrush saving a
+    full-screen picture, which needs one 141,440-byte block (S19b batch 4).
   - **Verification:** a `win16write` row opens a document under a cache
     deliberately smaller than the program, checks that segments were
     discarded and reloaded, and checks that the document is intact; the XT's
