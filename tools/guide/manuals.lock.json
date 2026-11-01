@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "17ca494a2",
+  "stamped": "10c35938b",
   "strings": "79fb304ab66a9eb0",
-  "why": "S20 batch 5: SystemParametersInfo/ControlPanelInfo defaults"
+  "why": "S20 batch 6: WM_SETTEXT, mono mask, name table, AH=59h"
  },
  "WIN16_TXT": {
   "sources": [
