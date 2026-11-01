@@ -3003,3 +3003,47 @@ things. The row only asks that both numbers moved.
 **S20 is done, as far as this machine can show.** What is left is what the
 final pass runs: the row itself, and how long one reload takes on a real
 4.77 MHz XT, which MartyPC measures.
+
+## 2026-11-01 — O3: a CD-ROM title and two installers to aim at
+
+**The owner asked for a CD-ROM title off archive.org to try**, and for the
+two installers the plan had promised: one built with Microsoft's Setup
+Toolkit and one with InstallShield. Phase B and C are now aimed at three
+real things rather than at a description of them (the plan's section 3.1).
+
+**The title is *Microsoft Multimedia Mozart* (1993).** It is a mixed-mode
+disc: a data track with the program, its pictures and its spoken clips, and
+six audio tracks of the quartet itself, which the program plays as CD audio.
+Its program runs from the disc; its setup copies only shared libraries and
+makes a group. It carries its pictures twice, once in 16 colours and once
+in 256, and the setup picks by the display, so os8088's 16-colour desktop is
+a display it was made for.
+
+**The installers are *Microsoft Arcade* 1.0 (1993) and *Sir Hangman* 1.0
+(1995).** Arcade is the Setup Toolkit in its textbook form on one floppy.
+Sir Hangman is InstallShield 3.0, and it is ASP shareware whose README
+grants redistribution, which made it the one of the three with a plainly
+clean licence. All three are pinned by SHA-256 and fetched by
+`win16ref.py titles`; none of them enters the tree.
+
+**Reading them took two decoders.** The Setup Toolkit compresses with the
+same `COMPRESS` as Windows' own disks, which WIN16's tools already read.
+InstallShield 3 uses PKWARE's "implode", in a single-file wrapper for its
+engine and an archive of its own for the program. A port of Mark Adler's
+`blast.c` reads both, and the census could then see inside.
+
+**The census found that the three rest on one thing.** Mozart's program is
+one import long: `VBRUN300.100`. It is a **Visual Basic 3.0** program, and
+so is Sir Hangman. The same `VBRUN300.DLL`, byte for byte, rides with both.
+That runtime is 398 KB in 101 segments and runs only in protected mode, and
+so does every Setup Toolkit bootstrap. Arcade's five games are 386 code
+playing their sounds through `WAVEMIX` over MMSYSTEM. InstallShield's engine
+is the exception: it runs in real mode, and needs `DDEML` for its
+conversation with Program Manager.
+
+**What was turned down.** *Multimedia Beethoven* (1992) was the first
+candidate, but its disc is High Sierra, the format before ISO 9660, which
+os8088's CD-ROM driver does not read, and its program is the ToolBook
+runtime. The later composer discs are Mozart's engine on bigger discs.
+*Living Books* draws in 256 colours. Netscape and Acrobat Reader have
+InstallShield 3 installers too, but they are multi-megabyte programs.

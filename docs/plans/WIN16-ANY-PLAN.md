@@ -116,10 +116,67 @@ These are facts about the tree on 2026-10-30, not choices.
 |---|---|---|---|
 | O1 | Build the protected-mode arm (R3) on `kern_mega`? | **Yes, as phase B**, after phase A's real-mode stories | Three Windows 3.1 programs are marked protected-mode only, and so are four of its own libraries (COMMDLG, SHELL, MMSYSTEM, TOOLHELP), which suggests that 3.1-era installers' libraries will be too; O3's installers are where that is measured. It is also how a 200 KB program gets memory above 1 MB. It runs on a 286 or better only |
 | O2 | Spend kernel bytes? (a) a queue behind `OSAPI_WM_CLOSE`; (b) on `kern_mega` only, a verb handing out **consecutive** LDT selectors, which Windows' `__AHINCR = 8` huge pointers need; (c) `MEM_OWNER_MAX` | (a) **yes**, a few resident bytes, and it is a kernel defect regardless of WIN16; (b) **yes**, when S22 reaches it; (c) **no**: WIN16 sub-allocates. **The owner answered yes to (a) and (b) on 2026-11-01** | WIN16 has spent no kernel byte so far, and each of these is the owner's to allow |
-| O3 | Which CD-ROM titles and installers are the acceptance targets? | **Two installers**, one built with the Microsoft Setup Toolkit (`_MSSETUP.EXE`) and one with 16-bit InstallShield, each pinned by SHA-256 off archive.org the way `win16ref.py` pins Windows; plus **one CD-ROM title** whose program runs from the disc | They are the two toolkits seen most often in installers of the period. A title the owner cares about makes a better target than one chosen here |
+| O3 | Which CD-ROM titles and installers are the acceptance targets? | **Two installers**, one built with the Microsoft Setup Toolkit (`_MSSETUP.EXE`) and one with 16-bit InstallShield, each pinned by SHA-256 off archive.org the way `win16ref.py` pins Windows; plus **one CD-ROM title** whose program runs from the disc. **Chosen 2026-11-01 at the owner's request ("look for a suitable ISO title from archive.org to try"): Microsoft Multimedia Mozart (1993) as the title, Microsoft Arcade 1.0 (1993) for the Setup Toolkit, and Sir Hangman 1.0 (1995) for InstallShield 3; section 3.1 below** | They are the two toolkits seen most often in installers of the period. A title the owner cares about makes a better target than one chosen here |
 | O4 | Split the layer into one far-called part per Windows module (D11)? | **Yes**, as S14, before anything grows | Constraint 1 |
 | O5 | Where is "the Windows directory" when a program is installed? | **Unchanged: `SYSTEM\APPDATA\WIN16`** on the disk WIN16 started from, with `SYSTEM\` under it as `GetSystemDirectory`. `LoadLibrary` searches the program's folder, then the system directory, then the Windows directory, Windows' own order | S7's profiles already live there, and a second root would split one program's state across two |
 | O6 | OLE, printing, networks | **Answer "not available"**, never a refusal at load: `OleRegisterClientDoc` fails, `PrintDlg` returns `FALSE`, `Escape` reports no printer | WRITE, CARDFILE and PACKAGER import OLECLI and run fine without it on a Windows with no OLE servers |
+
+### 3.1 O3's targets, chosen (2026-11-01)
+
+Each is fetched by `win16ref.py titles` into the git-ignored `win16ref/`,
+SHA-256-pinned, and never enters the tree. `w16unpack.py` (beside it) opens
+what the toolkits compress, so `tools/w16reach.py` can read every program.
+
+| role | title | archive.org item, file | SHA-256 | what it is |
+|---|---|---|---|---|
+| **the CD-ROM title** | *Microsoft Multimedia Mozart: The Dissonant Quartet* 1.0, Microsoft Home, 1993 | `Microsoft_Multimedia_Mozart_Win3.1_Eng`, `MSMOZART.bin` + `.cue` (the whole mixed-mode disc, 699 MB); `MSMOZART`, `MSMOZART.iso` (its data track alone, 147 MB) | `222209d6...` (bin), `8ef7ad55...` (cue), `c17aedd7...` (iso) | an ISO 9660 data track and **six Red Book audio tracks**. `\MOZART\MOZART.EXE` runs **from the disc**; the setup installs only shared libraries and a group |
+| **the Setup Toolkit installer** | *Microsoft Arcade* 1.0, Microsoft, 1993 | `microsoft-arcade-v-1.0-microsoft-1993`, `Microsoft Arcade v1.0 (Microsoft) (1993).img` (one 1.44 MB disk) | `b7bfabca...` | `SETUP.EXE`, `SETUP.LST`, `_MSSETUP.EX_`, `_MSTEST.EX_` and the `MS*STF.DLL` set, SZDD-compressed: the toolkit in its textbook form. Five games (Asteroids, Battlezone, Centipede, Missile Command, Tempest) |
+| **the InstallShield installer** | *Sir Hangman* 1.0, Ssorg Software, 1995 | `Night_Owl_The_Best_of_Shareware_NOPV-20_Night_Owl_Publisher_1996`, `...(1996).ISO/001A/SIR_HM10.ZIP` (archive.org's own copy-out of one file of the disc) | `f9c9896f...` | **InstallShield 3.0** (Stirling Technologies' copyright in `_INST16.EX_`): `SETUP.EXE`, `_INST16.EX_`, `_SETUP.LIB`, `SETUP.INS`, `SETUP.PKG`, `PROGRAM.LIB`, `SYSTEM.LIB`. Makes the group "Ssorg Games" |
+
+Full hashes are in `win16ref.py`'s `TITLES`, which refuses a mismatch.
+
+**What the census says** (`tools/w16reach.py`, 2026-11-01, against WIN16's
+560 exports):
+
+| program | CPU | in the way | what it needs |
+|---|---|---|---|
+| `MOZART.EXE` (248 KB) | 8086 | R2, R4 | one import, `VBRUN300.100`: it is **Visual Basic 3.0** p-code |
+| `VBRUN300.DLL` (398 KB, 101 segments) | 186 + x87 | R2, **R3** | 300 imports, 48 missing; protected mode only. The same file, byte for byte, rides with Sir Hangman |
+| Mozart's `SETUP.EXE`, `_MSTEST.EXE` | 186, 386 | **R3** | the Setup Toolkit's bootstrap and its MS Test interpreter; `SETUP.MST` calls `CreateProgManGroup` and `CreateProgManItem` (S24's DDE server) |
+| Mozart's `ENCCDPRF.DLL`, `MMUTIL.DLL` | 186 | R3, R4 | MMSYSTEM: the setup's performance check (`MMPERF.DAT`, `MMPERF.INC`) |
+| Arcade's `SETUP.EXE`, `_MSTEST.EXE` | 186, 386 | **R3** | as Mozart's |
+| Arcade's five games (165-408 KB) | **386 + x87** | R2, R3, R4 | `WAVEMIX.DLL` over MMSYSTEM's `waveOut*` (S23), and three libraries of their own |
+| `HANGMAN.EXE` (623 KB) | 8086 | R2, R4 | `VBRUN300.100`, with MCI, GRID and CMDIALOG VBXs |
+| InstallShield's `SETUP.EXE`, `_INST16.EXE` (543 KB, 68 segments) | 186 (+ x87) | R2, R4 | **real-mode capable**; `DDEML` for the Program Manager conversation |
+
+So the three are one layer apart, and it is the same layer: **Visual Basic
+3.0's runtime** carries the title and one installer's program, and every
+Setup Toolkit bootstrap is protected mode only. That is S22's. CD audio
+(`MCI.VBX` over `mciSendCommand`'s `cdaudio`) and WAV are S23's. The
+Program Manager DDE, `WinExec` and the CD's `int 2Fh` are S24's.
+
+**Licences, honestly.** Sir Hangman is ASP shareware whose `README.TXT`
+grants redistribution of the unregistered version; it is the one of the
+three that is plainly redistributable. Mozart and Arcade are Microsoft's
+commercial titles, long out of print, hosted by archive.org without a
+stated licence. None of the three is redistributed by this tree: the user
+fetches them.
+
+**Rejected, and why:**
+
+- *Microsoft Multimedia Beethoven* (1992): its data track is **High Sierra**,
+  not ISO 9660, which `CDROM.DRV` does not read (§119.3.1 asks for `CD001`),
+  and its program is the ToolBook runtime (`TBOOK.EX_`). A second runtime
+  and a driver change before the first title runs.
+- *Microsoft Multimedia Stravinsky*, *Strauss*, *Schubert*: Mozart's engine
+  on larger discs; Mozart's data track is the smallest (147 MB).
+- *Living Books* (Broderbund, 1992-): a 256-colour engine on a 16-colour
+  desktop.
+- *Netscape Navigator 2* and *Acrobat Reader 3*, 16-bit: InstallShield 3, but
+  multi-megabyte programs over Winsock, with an evaluation licence
+  (Netscape); a target for after this plan.
+- archive.org's Windows 3.x Software Library (`softwarelibrary_win3`): its
+  items are **installed** trees, run in the browser, not installers.
 
 ---
 
@@ -1274,17 +1331,41 @@ its table goes in the diary, so the reach is measured, not claimed.
     `\AUTOSTRT` holds (§26.10), in a desktop folder named for the group.
   - `ExitWindows` with `EW_RESTARTWINDOWS` ends the setup and says that a
     restart is not needed.
-  - **Targets:** the two installers of O3, through both toolkits'
-    bootstraps: `SETUP.EXE`, which copies the toolkit to a temporary folder
-    and `WinExec`s it (S21).
+  - **Targets:** the two installers of O3 (section 3.1), through both
+    toolkits' bootstraps: `SETUP.EXE`, which copies the toolkit to a
+    temporary folder and `WinExec`s it (S21).
+    - *Microsoft Arcade* 1.0 off its floppy: the Setup Toolkit's
+      `SETUP.EXE` copies `_MSTEST.EXE`, the `MS*STF.DLL` set and
+      `ARCADE.MST` to `~MSSTFQF.T` and runs `_mstest arcade.mst`; the
+      script makes the group with `CreateProgManGroup` (DDE).
+    - *Sir Hangman* 1.0 off its folder: InstallShield 3's `SETUP.EXE`
+      expands `_INST16.EX_` and runs it against `SETUP.INS`; it unpacks
+      `PROGRAM.LIB` into the folder the user chose and `SYSTEM.LIB`'s
+      `VBRUN300.DLL`, `MMSYSTEM.DLL`, `COMMDLG.DLL` and three VBXs into the
+      system directory, then makes "Ssorg Games" through `DDEML`. Its
+      bootstrap is real-mode capable, so it is also the real-mode leg.
+      Its `MMSYSTEM.DLL` and `COMMDLG.DLL` are Windows for Workgroups'
+      (4.00): WIN16's own modules must keep answering for those names when
+      a copy of the real one lands in the system directory, as winevdm's
+      built-ins do.
+    - *Microsoft Multimedia Mozart*'s own setup, off its CD: the Setup
+      Toolkit again, from `\SETUP.LST`, with a performance check over
+      MMSYSTEM (`ENCCDPRF.DLL`, `MMPERF.INC`) and a 16- or 256-colour art
+      set chosen from the display.
   - **Verification:** a `win16setup` row runs an installer fixture to its
     end and reads the installed files and the links off the image.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running
     on os8088, and what still does not run.*
-  - The O3 title installed from its CD and run from its desktop link on
-    86Box's `286-mega-cdrom` and `386-mega-cdrom`.
+  - The O3 title, *Microsoft Multimedia Mozart* (section 3.1), installed
+    from its CD and run from its desktop link on 86Box's `286-mega-cdrom`
+    and `386-mega-cdrom`, playing its Red Book tracks (S23's `cdaudio`) and
+    its WAVs. It rests on **Visual Basic 3.0's runtime**, which is
+    protected mode only, so it is S22's first real program after REGEDIT.
+  - *Microsoft Arcade* and *Sir Hangman* installed and their programs
+    started from their links: Arcade's games are 386 code over `WAVEMIX`
+    (S23), and Sir Hangman is VB 3.0 again.
   - What of it runs in real mode, on the XT, where its CPU tier allows.
   - `tools/w16reach.py` over Windows 3.0's and 3.1's programs, and the
     titles' own, with how many now run, compared with this plan's §1.

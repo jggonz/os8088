@@ -17,6 +17,10 @@ committed: the downloads are Microsoft's and Duff Software's.
     win16ref.py quit                  stop the running machine
     win16ref.py copy w30|w31 FILE...  copy host files into C:\\FIX on a STOPPED machine's
                                       disk (the WIN16 fixtures: `make win16fixtures`)
+    win16ref.py titles                download + verify WIN16-ANY-PLAN O3's targets (the
+                                      Mozart CD, Microsoft Arcade's disk, Sir Hangman)
+                                      into <root>/titles/, and unpack their programs
+                                      into titles/<name>/x/ for tools/w16reach.py
     win16ref.py samples               copy the programs WIN16's rows play into
                                       <repo>/build/win16/ (git-ignored): CALC, CLOCK,
                                       Paintbrush (PBRUSH.EXE and .DLL) and REVERSI
@@ -59,6 +63,28 @@ FETCH = [
     ("WinMine-2.9.zip", MSW + "84/WinMine-2.9.zip",
      "781ec49ef081bc0f7538b2aa94fcfda88e7020e45b715dfb88fd7e65c2f731c1"),
 ]
+# WIN16-ANY-PLAN O3's targets (its section 3.1 says why each): (dest under
+# titles/, url, sha256). Mozart's .bin is the whole mixed-mode disc, data track
+# and six Red Book tracks, for 86Box's CD-ROM; its .iso, another item's copy of
+# the data track alone, is what QEMU's -cdrom takes. Sir Hangman's zip is one
+# file of a shareware CD that archive.org copies out of the .ISO on request.
+TITLES = [
+    ("MSMOZART.bin", IA + "Microsoft_Multimedia_Mozart_Win3.1_Eng/MSMOZART.bin",
+     "222209d656e39243ddf157bf94936515675eacc7bb9253f5d76e2a6702a09cc4"),
+    ("MSMOZART.cue", IA + "Microsoft_Multimedia_Mozart_Win3.1_Eng/MSMOZART.cue",
+     "8ef7ad5560b71ad1e7b15f4f247be27914a851f5752bbb572d29731da96fd280"),
+    ("MSMOZART.iso", IA + "MSMOZART/MSMOZART.iso",
+     "c17aedd715d10327cc288a602cd61dbf80fa13a22a95359c327a6c1020cb07a3"),
+    ("arcade10.img", IA + "microsoft-arcade-v-1.0-microsoft-1993/"
+     "Microsoft%20Arcade%20v1.0%20(Microsoft)%20(1993).img",
+     "b7bfabcae4e9862f10331151dc8188cbd7c8119728a67483a9a3f35bfe9713da"),
+    ("sir_hm10.zip", IA + "Night_Owl_The_Best_of_Shareware_NOPV-20_Night_Owl_Publisher_1996/"
+     "Night%20Owl%20-%20The%20Best%20of%20Shareware%20%28NOPV-20%29%28Night%20Owl%20Publisher%29%281996%29.ISO/"
+     "001A%2FSIR_HM10.ZIP",
+     "f9c9896f27e14da1dc3a757ce2e705143df2d17306fd714bc75b9f7974ec9d43"),
+]
+TT = os.path.join(ROOT, "titles")
+
 # minesweepergame.com answers 403 without these, and its links are relative
 # to /database/ (the bare /download/... path is the 403 too).
 HDRS = ["-A", "Mozilla/5.0", "-e", "https://minesweepergame.com/database/games.php?id=1"]
@@ -100,6 +126,59 @@ def fetch():
         sh("unzip", "-q", "-o", os.path.join(DL, f"WinMine-{v}.zip"), "-d", os.path.join(s, f"winmine-{v}"))
     sh("unzip", "-q", "-o", os.path.join(DL, "W3.zip"), "-d", os.path.join(s, "w3-archive"))
     print("fetch: all inputs verified;", ROOT)
+
+
+def _get(dest, url, want, hdrs=()):
+    if not (os.path.exists(dest) and sha(dest) == want):
+        print("fetch", os.path.basename(dest))
+        sh("curl", "-sSL", "--fail", "--retry", "5", "-C", "-", *hdrs, "-o", dest, url)
+    got = sha(dest)
+    if got != want:
+        sys.exit(f"{dest}: sha256 {got} != pinned {want}")
+
+
+def titles():
+    """O3's targets, verified, then each program unpacked into <name>/x/:
+    the toolkits compress (SZDD on the Setup Toolkit's disk, PKWARE DCL in
+    InstallShield 3's files), and w16reach reads only what is expanded."""
+    up = [sys.executable, "-I", os.path.join(os.path.dirname(os.path.abspath(__file__)), "w16unpack.py")]
+    os.makedirs(TT, exist_ok=True)
+    for dest, url, want in TITLES:
+        _get(os.path.join(TT, dest), url, want)
+    # Mozart: the data track's programs, out of the .iso
+    x = os.path.join(TT, "mozart", "x")
+    subprocess.run(up + ["iso", os.path.join(TT, "MSMOZART.iso"), x,
+                         ".EXE", ".DLL", ".VBX", ".DRV", ".ACM", ".LST", ".INF", ".MST", ".INC"],
+                   check=True, stdout=subprocess.DEVNULL)
+    # Arcade: the disk's files, then the SZDD ones expanded by their names'
+    # first two letters of extension (COMPRESS -r was not used: byte 9 is 0)
+    raw = os.path.join(TT, "arcade", "disk")
+    x = os.path.join(TT, "arcade", "x")
+    os.makedirs(raw, exist_ok=True)
+    os.makedirs(x, exist_ok=True)
+    sh("mcopy", "-n", "-o", "-i", os.path.join(TT, "arcade10.img"), "::/*", raw + "/")
+    full = {"EX_": "EXE", "DL_": "DLL", "FO_": "FON"}
+    for n in sorted(os.listdir(raw)):
+        stem, _, ext = n.rpartition(".")
+        if ext in full:
+            subprocess.run(up + ["szdd", os.path.join(raw, n), os.path.join(x, stem + "." + full[ext])], check=True)
+        elif ext == "EXE":
+            shutil.copyfile(os.path.join(raw, n), os.path.join(x, n))
+    # Sir Hangman: the zip, the engine, and the two archives
+    h = os.path.join(TT, "hangman")
+    os.makedirs(h, exist_ok=True)       # unzip -d makes ONE level, not its parent
+    sh("unzip", "-q", "-o", os.path.join(TT, "sir_hm10.zip"), "-d", os.path.join(h, "disk"))
+    x = os.path.join(h, "x")
+    os.makedirs(x, exist_ok=True)
+    subprocess.run(up + ["blast", os.path.join(h, "disk", "_INST16.EX_"), os.path.join(x, "_INST16.EXE")], check=True)
+    for lib in ("PROGRAM.LIB", "SYSTEM.LIB"):
+        subprocess.run(up + ["is3", os.path.join(h, "disk", lib), x], check=True, stdout=subprocess.DEVNULL)
+    for n in ("SETUP.EXE", "_SETUP.DLL", "_ISDEL.EXE"):
+        shutil.copyfile(os.path.join(h, "disk", n), os.path.join(x, n))
+    print("titles: all inputs verified;", TT)
+    print("census: python3 tools/w16reach.py", " ".join(
+        os.path.relpath(os.path.join(TT, d), REPO) for d in
+        ("mozart/x", "mozart/x/MOZART/MSSTP", "mozart/x/MOZART/MSSTP/SHARED", "arcade/x", "hangman/x")))
 
 
 # --- QEMU -------------------------------------------------------------------
@@ -373,6 +452,7 @@ def main(a):
     elif c == "quit": quit_qemu()
     elif c == "copy": copy(a[1], a[2:])
     elif c == "samples": samples()
+    elif c == "titles": titles()
     else: sys.exit(__doc__)
 
 
