@@ -31,6 +31,9 @@ overlapping windows, serial mouse, a bottom dock, and loadable software
 packages that run as closable, multi-instance apps. One binary drives VGA,
 Hercules or CGA, picked at boot.
 
+os8088's DOS (`apps/dos/`, `kerndos/`) is a reimplementation, not an
+emulator: call it "DOS", never "the DOS box" - DOSBox is unrelated.
+
 This file is a map. Each document below is the authority on its subject and
 nothing here duplicates it — a second copy is a copy that goes stale.
 
@@ -1054,6 +1057,9 @@ user gives a different workflow. The worked example is
   run (a cell moved or re-contracted, a header grew), then
   `python3 tools/abilock.py --update "why"`; if it still runs (a cell added at
   the end, a contract clarified), the same command without the bump.
+- **A heap claim is paragraphs, rounded to 512 bytes** (§50.2.1), not whole
+  KB. `OSAPI_MEM_P` (§50.3.7) takes a byte-sized request; the KB doors still
+  work. Ask for what you need, not the next KB.
 - **A heap claim can MOVE, and the default is that it may not** (§66). A record
   is born `MC_RLOC` = 0, PINNED; `OSAPI_MEM_MOVABLE` opts one in and takes a
   relocation **proc**, not the address of the word naming the block — a holder
@@ -1077,6 +1083,9 @@ user gives a different workflow. The worked example is
   heap claim is read out of the package's own image instead — which reads as
   memory corruption rather than as a wrong segment register, because the bytes
   really are ours (§77.10).
+- **A file operation of several transfers is ONE progress bar** (§12.8.8-
+  §12.8.10): open it with `OSAPI_FS_OP` and the total bytes, close it with 0.
+  Without it every transfer rescales the bar from zero.
 - **A worker may not touch a file** (§20.6 rule 7), so a package that is
   socket-to-file by definition is shaped around `OSAPI_WM_ONWAKE`: the worker
   stages, the UI task commits, and a single byte written last by the producer
