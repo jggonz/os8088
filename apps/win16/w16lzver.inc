@@ -796,7 +796,8 @@ w16z_copy:
     mov [cs:w16z_tot], ax
     mov [cs:w16z_tot + 2], ax
 .lp:
-    mov es, [cs:w16z_cbuf]
+    W16SEG es, [cs:w16z_cbuf]       ; a block of ours: a virtual paragraph on
+                                    ;   the arm, which ES may not be loaded with
     xor di, di
     mov cx, W16Z_CBUF
     mov ax, si

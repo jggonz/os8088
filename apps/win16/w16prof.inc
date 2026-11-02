@@ -292,6 +292,7 @@ w16pf_write:
 ; [w16pf_val], [w16pf_nokey] and [w16pf_noval] as w16pf_write leaves them.
 ; AX = TRUE or FALSE. The merge plays a log back through here
 w16pf_wcore:
+    mov byte [w16pf_path], 0        ; [w16pf_val] is the value: no seed
     call w16pf_open
     jc .no
     call w16pf_sect
@@ -440,7 +441,8 @@ w16pf_priv:
     ret
 
 ; w16pf_name - DX:AX = a file name: its last component, upper case, into
-; [w16pf_nm]. CF=1: NULL, or not a legal 8.3 name
+; [w16pf_nm], the whole name left in [w16pf_val] and [w16pf_path] = 1 when
+; it had a drive or a folder. CF=1: NULL, or not a legal 8.3 name
 w16pf_name:
     mov di, w16pf_val               ; (a scratch string here)
     call w16pf_cpy
@@ -461,6 +463,12 @@ w16pf_name:
     mov bx, si
     jmp short .last
 .got:
+    xor ax, ax                      ; [w16pf_path] = 1: a drive or a folder
+    cmp bx, w16pf_val               ;   was cut off (w16pf_dseed)
+    je .np
+    inc ax
+.np:
+    mov [w16pf_path], al
     mov di, w16pf_nm                ; zeroed whole: rows compare all 13 bytes
     mov cx, 13
 .z:
@@ -735,13 +743,14 @@ w16pf_open:
     jnc .rdone
 .rfail:
     cmp ax, FERR_NOENT              ; none yet: a new, empty file
-%ifdef PKG_MEGA
     jne .keep
+%ifdef PKG_MEGA
     call w16pf_seed                 ; (SYSTEM.INI's [mci])
-    jmp short .back
-%else
-    je .back
 %endif
+    call w16pf_out                  ; ...or the one the program named, read
+    call w16pf_dseed                ;   from where it is (SPEC.md 124.14)
+    jnc .have
+    ret                             ; (the row went with its claim)
 .keep:
     or byte [bx + WPF_FL], WPFF_KEEP    ; unreadable or too large: as empty,
     jmp short .back                 ;   and never written over
@@ -812,6 +821,76 @@ w16pf_s_mci:    db '[mci]', 13, 10, 'WaveAudio=mciwave.drv 4', 13, 10
                 db 'CDAudio=mcicda.drv', 13, 10
 W16PF_MCIL      equ $ - w16pf_s_mci
 %endif
+
+; w16pf_dseed - BX = a row whose file the Windows directory does not hold,
+; and nothing moved. When the program's name for it had a drive or a folder
+; ([w16pf_path], the name in [w16pf_val]), that file is read into the row
+; through WIN16's DOS, whole when it is at most W16PF_MAX: a setup's
+; SETUP.LST on its own floppy (SPEC.md 124.14). It is never written there.
+; CF=1: a larger claim was refused and the row is free. Keeps BX
+w16pf_dseed:
+    cmp byte [w16pf_path], 0
+    je .ok
+    mov di, bx                      ; DI = the row, across the DOS's calls
+    mov ax, 0x3D00                  ; open, for reading
+    mov dx, w16pf_val
+    push ds
+    pop es
+    ICALL w16_dcall
+    jc .ok0
+    xchg ax, bx                     ; BX = the handle
+    mov ax, 0x4202                  ; its size: to the end...
+    xor cx, cx
+    xor dx, dx
+    ICALL w16_dcall
+    jc .close
+    or dx, dx
+    jnz .close
+    cmp ax, W16PF_MAX
+    ja .close
+    push ax
+    mov ax, 0x4200                  ; ...and back to the start
+    xor cx, cx
+    xor dx, dx
+    ICALL w16_dcall
+    pop si                          ; SI = the size
+    jc .close
+    cmp si, [di + WPF_CAP]
+    jb .fits
+    push bx                         ; a larger claim, as FERR_BIG's
+    xchg bx, di
+    mov dx, [bx + WPF_SEG]
+    ICALL w16_kfree
+    mov ax, si
+    mov cl, 10
+    shr ax, cl
+    inc ax
+    call w16pf_claim                ; CF=1: refused, the row free
+    xchg bx, di
+    pop bx
+    jc .gone
+.fits:
+    mov ah, 0x3F                    ; read it, into the row's claim
+    mov cx, si
+    xor dx, dx
+    W16SEG es, [di + WPF_SEG]
+    ICALL w16_dcall
+    jc .close
+    mov [di + WPF_LEN], ax
+.close:
+    mov ah, 0x3E
+    ICALL w16_dcall
+.ok0:
+    mov bx, di
+.ok:
+    clc
+    ret
+.gone:
+    mov ah, 0x3E
+    ICALL w16_dcall
+    mov bx, di
+    stc
+    ret
 
 ; w16pf_claim - BX = a row, AX = KB: its claim. CF=1 refused (the row free)
 w16pf_claim:

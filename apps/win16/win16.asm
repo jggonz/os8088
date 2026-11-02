@@ -1004,6 +1004,7 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16pf_row, 2         ; the row being worked on
     W16BSS w16pf_end, 2         ;   and its length
     W16BSS w16pf_nm, 13         ; the file's 8.3 name, zero-filled
+    W16BSS w16pf_path, 1        ;   1 = it was named with a drive or folder
     W16BSS w16pf_app, 256       ; the section, the key and the value, as the
     W16BSS w16pf_key, 256       ;   program passed them (W16PF_STR)
     W16BSS w16pf_val, 256
