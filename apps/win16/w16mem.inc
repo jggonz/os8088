@@ -365,11 +365,15 @@ w16_garena:
     W16VCLAIM                       ; DX = the segment
     mov cx, ax
     jnc .got1
-    pop cx                          ; the floor would not go: half of it,
-    push cx                         ;   and half again, down to the request
-    cmp ax, cx                      ;   (the arm's map is 960 KB, so a
-    je .no1                         ;   fourth arena is what it has left)
-    shr ax, 1
+    pop cx                          ; the floor would not go: three
+    push cx                         ;   quarters of it, and again, down to
+    cmp ax, cx                      ;   the request (the arm's map is 960
+    je .no1                         ;   KB, so a fourth arena is what it
+    mov dx, ax                      ;   has left: halving left a third of
+    shr dx, 1                       ;   that unused)
+    shr dx, 1
+    inc dx
+    sub ax, dx
     cmp ax, cx
     jae .kb
     mov ax, cx
