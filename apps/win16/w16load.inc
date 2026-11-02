@@ -1193,9 +1193,8 @@ w16_reloc1:
 .stub:
     call w16_bindrow                ; the row's slot (SPEC.md 124.19.1)
     jc .nbind
-    mov dx, ax                      ; the stub: our CS : w16_stubs + slot * 6
+    mov dx, ax                      ; the stub: our CS : w16_stubs + slot * 4
     shl ax, 1
-    add ax, dx
     shl ax, 1
     add ax, w16_stubs
     W16ICS dx                       ; the image's segment (this part's CS is not)
@@ -1907,7 +1906,7 @@ w16l_lmfirst:
     inc di
     loop .mv
     mov di, [w16_psp_]
-    mov word [es:di + W16F_IP], w16_stubs + 6 * W16_LMROW
+    mov word [es:di + W16F_IP], w16_stubs + W16_STUBSZ * W16_LMROW
 %ifdef PKG_MEGA
     W16ICS ax
     mov [es:di + W16F_CS], ax
@@ -2006,9 +2005,8 @@ w16_missbind:
     mov byte [w16_bind + di + W16B_PART], W16B_MISS
     mov [w16_bind + di + W16B_PROC], bx
 .bound:
-    mov dx, ax                      ; the stub: our CS : w16_stubs + slot * 6
+    mov dx, ax                      ; the stub: our CS : w16_stubs + slot * 4
     shl ax, 1
-    add ax, dx
     shl ax, 1
     add ax, w16_stubs
     W16ICS dx                       ; the image's segment (this part's CS is not)

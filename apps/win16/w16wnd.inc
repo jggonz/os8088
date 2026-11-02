@@ -1206,13 +1206,13 @@ w16_bisb:                       ; in W16Q_SCROLL.. order, ten bytes each
 ; of an export row no program can import (w16_ctlrow), so the program can
 ; read it, keep it and CallWindowProc it like any other. Keeps the rest.
 w16_ctlstub:
-    mov ax, w16_stubs + 6 * W16_CTLROW
+    mov ax, w16_stubs + W16_STUBSZ * W16_CTLROW
     mov dx, cs
     ret
 
 ; w16_ddpstub - DX:AX = DefDlgProc's own stub, a dialog window's procedure
 w16_ddpstub:
-    mov ax, w16_stubs + 6 * W16_DDPROW
+    mov ax, w16_stubs + W16_STUBSZ * W16_DDPROW
     mov dx, cs
     ret
 

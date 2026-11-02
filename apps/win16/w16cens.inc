@@ -808,7 +808,7 @@ w16c_far:
     sub ax, w16_stubs               ; the stub's bind slot (SPEC.md 124.19.1)
     jb .ret
     xor dx, dx
-    mov cx, 6
+    mov cx, W16_STUBSZ
     div cx
     cmp ax, W16_NBIND
     jae .ret

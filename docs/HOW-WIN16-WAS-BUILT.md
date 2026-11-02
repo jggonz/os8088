@@ -4409,3 +4409,26 @@ word in the header, at the same offset in both, so the shared fetch writes
 it with one instruction instead of choosing between two. Second, the
 code-half request was written out four times, and it is now one routine,
 `w16_pcode`.
+
+## 2026-11-02: the room cut before Mozart
+
+The lead asked for at least 300 bytes of room on the arm before Mozart's
+work, since the fixes it needs would spend the 34 that were left. Two
+changes gave 1,072 bytes (1,106 of room on the arm, 1,698 in real mode):
+
+- **The import stubs are four bytes, not six.** There are 384 of them, one
+  per bind slot. Each was `mov ax, k / jmp near w16_gate`. Each is now
+  `call w16_gstub` and a pad byte, and `w16_gstub` pops the return address
+  and works out the slot from it: `(ret - w16_stubs - 3) / 4`, two shifts.
+  That is 768 bytes on both arms, for one pop and three ALU instructions a
+  call. Every place that turned a slot into a stub address (the loader's
+  two, GetProcAddress's, the fixed rows the image names, the x87 end stub
+  and the census's division) reads `W16_STUBSZ` now, and so does the
+  census gate on the host.
+- **SetDIBitsToDevice moved to part 9**, beside SetDIBits. It costs nothing
+  in fetches: its first instruction after the arguments was already an
+  `SCALL` into part 9 (`w16_dibuse`), so every program that called it had
+  the part. That was 312 bytes.
+
+**Seen:** Arcade 1.0's setup to *Congratulations!* on kern_mega, and the
+TASKS fixture's *TASKS OK* on kern_big (QEMU, looks).

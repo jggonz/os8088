@@ -1319,9 +1319,8 @@ W16LIB w16k_getproc
     mov cx, [cs:si + 5]
     mov [w16_bind + di + W16B_PROC], cx
 .stub:
-    mov dx, ax                      ; our CS : w16_stubs + slot * 6, as the
+    mov dx, ax                      ; our CS : w16_stubs + slot * 4, as the
     shl ax, 1                       ;   loader's fixup answers it
-    add ax, dx
     shl ax, 1
     add ax, w16_stubs
     W16ICS dx

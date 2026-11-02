@@ -991,21 +991,21 @@ W16FIXED 2,  w16u_destroywnd    ; W16_DWROW: DestroyWindow, for WM_MDIDESTROY
   %error "W16FIXED: one row a fixed slot"
 %endif
 
-; The stubs: slot k is `mov ax, k / jmp near w16_gate`, six bytes, so a stub's
-; address is w16_stubs + 6k. `near` is not decoration - a short jmp would make
-; one stub five bytes and every address after it wrong. There are W16_NBIND of
-; them whatever WIN16 exports: what a program imports is what it binds.
+; The stubs: slot k is `call w16_gstub` and a pad byte, W16_STUBSZ = 4, so a
+; stub's address is w16_stubs + 4k, and w16_gstub has the slot from the
+; return address the call pushed and pops it (SPEC.md 124.19.1). The stub is
+; never returned to. There are W16_NBIND of them whatever WIN16 exports: what
+; a program imports is what it binds. Four bytes rather than `mov ax, k /
+; jmp near w16_gate`'s six: 768 image bytes on both arms
 w16_stubs:
-    ; STKBALANCE-OK: each stub is `mov ax, k / jmp near w16_gate`, entered by
-    ; the program's far call - the gate's frame, not a routine of its own
-%assign k 0
+    ; STKBALANCE-OK: each stub is a call that never returns, entered by the
+    ; program's far call - the gate's frame, not a routine of its own
 %rep W16_NBIND
-    mov ax, k
-    jmp near w16_gate
-%assign k k + 1
+    call w16_gstub
+    nop                             ; (never run: w16_gstub pops the return)
 %endrep
-%if ($ - w16_stubs) != W16_NBIND * 6
-  %error "w16_stubs: every stub must be six bytes"
+%if ($ - w16_stubs) != W16_NBIND * W16_STUBSZ
+  %error "w16_stubs: every stub must be W16_STUBSZ bytes"
 %endif
 
 ; w16_missed - an import WIN16 does not provide, called (SPEC.md 124.12): its

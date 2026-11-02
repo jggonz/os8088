@@ -1543,7 +1543,7 @@ w16i_mdicreate:
     add ax, [bx + MC_N]
     mov [es:di + 6], ax             ; hMenu: its ID
     call w16i_defpos
-    mov ax, w16_stubs + 6 * W16_CWROW
+    mov ax, w16_stubs + W16_STUBSZ * W16_CWROW
     mov dx, ds
     ICALL w16_cbcall
     xor ax, ax
@@ -1882,7 +1882,7 @@ w16i_mdidestroy:
     ICALL w16_cbopen
     pop ax
     ICALL w16_ppush                 ; DestroyWindow's one argument
-    mov ax, w16_stubs + 6 * W16_DWROW
+    mov ax, w16_stubs + W16_STUBSZ * W16_DWROW
     mov dx, ds
     ICALL w16_cbcall
 .none:

@@ -228354,7 +228354,7 @@ the window. Everything is cut to the exact pixel.
 | `SetPixel` | one pixel, not under the ROP; answers the colour drawn |
 | `SetTextColor` | the text colour, as the nearest of the sixteen; answers the old `COLORREF` |
 | `TextOut`, `GetTextExtent`, `GetTextMetrics` | §124.7. `GetTextExtent` is the advances summed, by the face's rows. `GetTextMetrics` is the face's: height, ascent, descent, the leadings, average 7 and maximum 14, weight 700, characters 32-255 with 128 the default and 32 the break, `FF_SWISS` and variable pitch, ANSI, digitized aspect 96 by `LOGPIXELSY` |
-| `SetDIBitsToDevice` | 1 and 4 bits a pixel, `BITMAPINFOHEADER` or the older `BITMAPCOREHEADER`, `DIB_RGB_COLORS`. A DIB's rows run bottom up, `ySrc` counts from its bottom, and `lpBits` holds `cScanLines` rows from `uStartScan`. The visible part (the clip, and the rows `lpBits` has) is converted to os8088's colours (each palette entry the nearest of the sixteen) in a 1,536-byte block, and drawn with one `OSAPI_GFX_BLIT4` per block: one for any of WinMine's cells. `DIB_PAL_COLORS` and 8 bits a pixel draw nothing and answer 0 |
+| `SetDIBitsToDevice` | 1 and 4 bits a pixel, `BITMAPINFOHEADER` or the older `BITMAPCOREHEADER`, `DIB_RGB_COLORS`. A DIB's rows run bottom up, `ySrc` counts from its bottom, and `lpBits` holds `cScanLines` rows from `uStartScan`. The visible part (the clip, and the rows `lpBits` has) is converted to os8088's colours (each palette entry the nearest of the sixteen) in a 1,536-byte block, and drawn with one `OSAPI_GFX_BLIT4` per block: one for any of WinMine's cells. 8 bits a pixel draws nothing and answers 0. It is part 9's, beside `SetDIBits` *(the S24 room cut)*: every call already fetched the part, for `w16_dibuse` |
 | `GetDeviceCaps` | §124.8.2 |
 
 **On a 1bpp display a colour is reduced the way Windows' mono drivers
@@ -229370,8 +229370,14 @@ At load, the loader gives each distinct import of the program the next
 | +1 | the part: 0 the image, 3 the library part, `W16B_MISS` (7Fh) an import WIN16 lacks; bit 7 set = the import never returns (FatalExit, FatalAppExit), which the census reads |
 | +2 | the handler's offset in that part, or for a missing import its name's slot in `w16_mtxt` (§124.12) |
 
-Stub *k* in the image is `mov ax, k / jmp near w16_gate`, as before, and
-serves slot *k*. There are `W16_NBIND` = 384 stubs. The largest import list
+Stub *k* in the image is `call w16_gstub` and a pad byte, four bytes
+(`W16_STUBSZ`) at `w16_stubs + 4k`, and serves slot *k*. `w16_gstub` pops
+the return address the call pushed and has the slot from it, `(ret -
+w16_stubs - 3) / 4`, then falls into `w16_gate` with the program's far
+call on top, as before. The stub is never returned to. Until the S24 room
+cut it was `mov ax, k / jmp near w16_gate`, six bytes: the four-byte stub
+gave both arms 768 image bytes, for one pop and three ALU instructions a
+call. There are `W16_NBIND` = 384 stubs. The largest import list
 in Windows 3.0's and 3.1's own programs is Paintbrush 3.1's, 270. Slots 0–3
 are fixed, because the image names their stubs: the control procedure
 (`W16_CTLROW`), the callee's return (`W16_CBROW`), the emulator's missing

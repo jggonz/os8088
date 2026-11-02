@@ -137,10 +137,21 @@ cpu 8086                            ;   standard mode's KERNEL gave it
     retf
 
 ; -----------------------------------------------------------------------------
+; w16_gstub - a stub's near call (w16_stubs): AX = its slot, off the return
+; address, which is popped - then the gate, with the program's far call on top
 ; w16_gate - every import arrives here (SPEC.md 124.2.1)
 ; in:  a far call from the program, AX = the export row (the stub's), the
 ;      program's SS:SP and DS; BX, CX, ES may be a register function's inputs
 ; -----------------------------------------------------------------------------
+w16_gstub:
+    ; STKBALANCE-OK: the stub's near call is popped here and never returned to
+    pop ax
+    sub ax, w16_stubs + 3
+    shr ax, 1
+    shr ax, 1
+%if W16_STUBSZ != 4
+  %error "w16_gstub: a stub is not four bytes"
+%endif
 w16_gate:
     ; STKBALANCE-OK: the other half of w16_resume's switch. It arrives on the
     ; program's stack by a far call and leaves on the HOST's, through

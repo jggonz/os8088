@@ -47,6 +47,8 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.abspath(os.path.join(HERE, "..", ".."))
+STUBSZ = int(re.search(r"^W16_STUBSZ\s+equ\s+(\d+)", open(os.path.join(
+    ROOT, "apps", "win16", "win16.asm")).read(), re.M).group(1))  # a stub's bytes
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 from harness import check, eq, done                       # noqa: E402
@@ -214,7 +216,7 @@ def segimage(ne, s, base):
             _, mod, o = tgt
             seg, off = IMG, 0           # a stub that returns: below w16_stubs
             if mod.upper() == "KERNEL" and o in NORET:
-                off = stub0 + 6 * NORET[o]
+                off = stub0 + STUBSZ * NORET[o]
         else:
             continue
         words = {os88ne.RA_FARPTR: ((0, off), (2, seg)),

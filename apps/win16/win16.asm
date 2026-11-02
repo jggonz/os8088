@@ -128,6 +128,7 @@ W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
 %endif                          ;   Paintbrush 3.1's 270 is the most measured;
                                 ;   a trace build takes fewer (124.17.4)
+W16_STUBSZ   equ 4              ; a stub's bytes: w16_stubs + 4 * slot
 W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
                                 ;   (w16mdi.inc, SPEC.md 124.25.10)
 W16_NPNMAX   equ 16             ; GetProcAddress's names at most (w16api.inc)

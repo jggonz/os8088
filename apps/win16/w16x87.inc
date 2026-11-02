@@ -122,7 +122,7 @@ w16x_fpin:
 %else
     mov es, ax                      ; its end stub: the x87 row's gate stub
 %endif
-    mov ax, W16_X87ROW * 6
+    mov ax, W16_X87ROW * W16_STUBSZ
     add ax, w16_stubs
     mov [es:W16FPH_ENDP], ax
     mov [es:W16FPH_ENDP + 2], cs
