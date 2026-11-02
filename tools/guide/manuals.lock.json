@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "00fbc4819",
-  "strings": "793f7336919645af",
-  "why": "S23 batch 4: timeSetEvent and CALLBACK_FUNCTION (SPEC.md 124.32.6)"
+  "stamped": "bde23c885",
+  "strings": "add72eb5eed79b2d",
+  "why": "midiOut over SOUND.DRV's MPU-401 (SPEC.md 124.32.7); error-text answers MMSYSERR_BADERRNUM"
  },
  "WIN16_TXT": {
   "sources": [
