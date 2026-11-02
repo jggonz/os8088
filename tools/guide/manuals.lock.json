@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "0b0e9c6c1",
+  "stamped": "1aa00da06",
   "strings": "add72eb5eed79b2d",
-  "why": "the arm's library-part thunk calls are indirect (QEMU wrap)"
+  "why": "kern_mega arm: the clock stores through the data half, the load runs from the ring's wake"
  },
  "WIN16_TXT": {
   "sources": [
