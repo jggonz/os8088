@@ -8,7 +8,8 @@ On a 5150 with XT mode pre-armed (tier 0, SPEC.md 45.9), playing BEVERLY.MOD
 at 5.5 kHz:
 
   THE BUTTON (45.23.1) - the forced XT meter no longer greys it:
-    1. live at 5.5 kHz, and clicks go VU Meter -> Spectrum -> Off -> VU
+    1. live at 5.5 kHz, OPENS on Spectrum (45.24.2), and clicks go
+       Spectrum -> Off -> VU Meter -> Spectrum
     2. R to 11 kHz forces none and GREYS it, and a click there does nothing
     3. R back makes it live again
 
@@ -16,8 +17,8 @@ at 5.5 kHz:
   clock and held at the top, and it KEEPS UP: 17 frames a second or better
   (it reads 17.8-17.9) with the ring never under half full (TRK_DEEP, where
   the worker turns to mixing first - at the 2-tick hold it touches 4,096 and
-  stops there, in every run). The 286's 16-band spectrum with markers, forced
-  onto the XT, reads 15.0 and a ring down to 2,048, so either threshold alone
+  stops there, in every run). The 286's spectrum with markers, forced
+  onto the XT (16 bands when this was measured), reads 15.0 and a ring down to 2,048, so either threshold alone
   catches that regression.
 
   THE ABOUT CARD, HELD (45.21.9) - 13 guest seconds with every frame dropped,
@@ -67,9 +68,9 @@ DISK = "build/trkship360.img"          # the SHIPPED player
 MACHINE = "os8088_5150_herc_sb_gla"
 HZ = 4772728.0
 VIZ = 8 + 4                            # TW_NTB + the TWO_VIZ option slot
-XTNB = int(re.search(r"^TW_XTNB\s+equ\s+(\d+)",          # read, not restated
-                     open(os.path.join(ROOT, "apps/tracker/trkwin.inc")).read(),
-                     re.M).group(1))
+_TW = open(os.path.join(ROOT, "apps/tracker/trkwin.inc")).read()
+XTNB = int(re.search(r"^TW_XTNB\s+equ\s+(\d+)", _TW, re.M).group(1))  # read,
+NBAND = int(re.search(r"^TW_NBAND\s+equ\s+(\d+)", _TW, re.M).group(1))  # not restated
 fails = []
 
 
@@ -177,10 +178,9 @@ def main():
         check("5.5 kHz (trk_xhi)", b("trk_xhi"), 0)
         m.key("Enter")
         guest(8.0)
-        check("drawn: the thin XT meter (tw_vizm)", b("tw_vizm"), 4)
         check("the button is live", flags() & 1, 0)
-        click()
-        check("click: Spectrum picked and drawn", (b("tw_viz"), b("tw_vizm")), (1, 1))
+        check("the default: Spectrum picked and drawn",
+              (b("tw_viz"), b("tw_vizm")), (1, 1))
         check("...bars only (tw_mk), TW_XTNB of them",
               (b("tw_mk"), b("tw_nb")), (0, XTNB))
         ups = rate(P["tw_update"])
@@ -207,7 +207,7 @@ def main():
         check("click: Off picked and drawn", (b("tw_viz"), b("tw_vizm")), (3, 3))
         check("...and the button still live", flags() & 1, 0)
         click()
-        check("click: VU Meter again", (b("tw_viz"), b("tw_vizm")), (0, 4))
+        check("click: the thin XT meter", (b("tw_viz"), b("tw_vizm")), (0, 4))
         m.key("KeyR")
         guest(2.0)
         check("R: 11 kHz, and nothing drawn", (b("trk_xhi"), b("tw_vizm")), (1, 3))
@@ -300,7 +300,7 @@ def main():
 
         # THE 286 FACE'S MARKERS (45.24.1), on the 8088: [trk_cpu0] = 0 and XT
         # mode off is the face a 286 gets. A bar HELD low under a high marker
-        # - a neighbour band kicked at half level every row - must let the
+        # - as a note struck every row holds it - must let the
         # marker fall to the bar. The hold used to skip the band's whole step,
         # marker included, so it stood frozen at the old peak for as long as
         # the neighbour kept playing. Staged with playback stopped, so no kick
@@ -314,10 +314,10 @@ def main():
             if b("tw_vizm") == 1:
                 break
             click()
-        check("the 286 spectrum: 16 bands with markers",
-              (b("tw_vizm"), b("tw_nb"), b("tw_mk")), (1, 16, 1))
+        check("the 286 spectrum: %d bands with markers" % NBAND,
+              (b("tw_vizm"), b("tw_nb"), b("tw_mk")), (1, NBAND, 1))
         band = imm["tw_band"]          # tw_peak, tw_phold, tw_bhold follow it
-        BAND, PEAK, PHOLD, BHOLD = (band + 16 * i + 5 for i in range(4))
+        BAND, PEAK, PHOLD, BHOLD = (band + NBAND * i + 5 for i in range(4))
         m.pause()
         for off, v in ((BAND, 16), (BHOLD, 250), (PEAK, 60), (PHOLD, 0)):
             m.write(base + off, bytes([v]))

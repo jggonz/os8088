@@ -20090,7 +20090,8 @@ SOAK = [
         needs=("marty",), serial=True,
         wants=("build/trkship360.img",)),
     Row("trklcd", "soak", py("tests/trklcd.py"), 50.0,
-        "Tracker on an XT: the visualiser button is VU Meter / Spectrum / Off"
+        "Tracker on an XT: the visualiser opens on Spectrum (45.24.2), the"
+        " button is VU Meter / Spectrum / Off"
         " and greys only at 11 kHz (SPEC.md 45.23.1); the XT spectrum is 12"
         " bars at 17+ fps with the ring half full, and a 286 marker falls to"
         " its held bar (45.24.1); a face frozen under the About card keeps"

@@ -327,10 +327,11 @@ trk_entry:
     mov al, 1                       ; nothing is loaded yet - and the machine
     mov [mp_xt], al                 ; itself is remembered. The visualiser:
     mov [trk_cpu0], al              ; the spectrum where there are cycles for
-    mov word [trk_mi_file + TRK_MI_XT], trk_s_xton  ; it, the needles (bss's
-    dec ax                          ; 0) where there are not (tw_vizfx forces
-.cpu:
-    mov [tw_viz], al                ; those); nothing reads it before a paint
+    mov word [trk_mi_file + TRK_MI_XT], trk_s_xton  ; it - which is every
+.cpu:                               ; machine now: the XT's own bars-only one
+    mov [tw_viz], al                ; (SPEC.md 45.24.1) keeps up, so it is the
+                                    ; XT's default too (AL = 1 = TWV_SPEC
+                                    ; above); nothing reads it before a paint
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = first dock row
     sub ax, TRK_WINW                ; centre the frame on the screen...
     jns .xok

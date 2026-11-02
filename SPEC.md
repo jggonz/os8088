@@ -92883,9 +92883,9 @@ and 4 reads **8.96, 26.88 and 35.84 s**, to the hundredth.
 
 | mode | what | cost a frame |
 |---|---|---|
-| **XT** — forced in XT mode and on a tier-0 machine, where the button cycles **VU Meter → Spectrum → Off** (§45.23.1) | four horizontal needles: the FT2 screen's own note-driven `tui_vu` (§45.12.1), a **third of their slot tall** (`TWV_THIN`) | the difference: nothing when steady, one fill per needle that moved |
+| **XT** — forced in XT mode and on a tier-0 machine, where the button cycles **VU Meter → Spectrum → Off** (§45.23.1) and Spectrum is the default pick (§45.24.2) | four horizontal needles: the FT2 screen's own note-driven `tui_vu` (§45.12.1), a **third of their slot tall** (`TWV_THIN`) | the difference: nothing when steady, one fill per needle that moved |
 | **none** — XT mode at 11 kHz | the pane says *No meters at 11 kHz*, drawn once | nothing |
-| **Spectrum** (286+) | sixteen bands, kicked as a note is **heard**, each with a peak marker (§45.24) | one fill per band that moved, two for a marker's step |
+| **Spectrum** (286+) | eighteen bands, two semitones each, kicked as a note is **heard**, each with a peak marker (§45.24, §45.24.2) | one fill per band that moved, two for a marker's step |
 | **Spectrum** (XT) | `TW_XTNB` = twelve bars, **no markers**, one band a note (§45.24.1) | one fill per bar that moved |
 | **Scope** (286+) | the mixer's last output | **one** `OSAPI_GFX_BLIT1` |
 
@@ -93275,8 +93275,9 @@ to the 286+ face too.
    It makes `tw_scol` cut and sort the column, and it costs two fills a step.
    Without markers every column takes the fast path: one fill, of one colour,
    over the rows that moved.
-2. **One band a note.** The 286's spectrum kicks a note's two neighbours at
-   half level, which moves three columns for one note. The XT lights one.
+2. **One band a note.** The 286's spectrum used to kick a note's two
+   neighbours at half level, which moved three columns for one note. The XT
+   lit one, and since §45.24.2 the 286 does too.
 3. **Twelve bands** (`TW_XTNB`). Twelve divides the 36-note range exactly,
    three semitones a band and four an octave, where 8 and 16 would split
    notes between bands. The bands keep the 286's span and proportions
@@ -93349,6 +93350,40 @@ then checks the 286 face's markers against a held bar (point 4). That
 15.0 is itself news, since the same spectrum drew 7.7 before this section and
 45.21.8: the LCD, the hold and the clock took half its cost away too. `TW_XTNB` and `TW_BHOLD` are `%ifndef`-overridable, so the table's
 arms can be rebuilt.
+
+#### 45.24.2 Whole steps: eighteen bands on the 286+, one band a note, and Spectrum is the XT's default
+
+**The 286+ spectrum was drawn in half steps, and it looked it.** Sixteen
+bands over the 36-note range is 2.25 semitones a band, so where a note landed
+depended on its neighbours' rounding, and every note kicked the bands either
+side at half its level (`tw_skick`). One note moved three columns, two notes
+a tone apart lit four or five, and the face read as a smear beside the XT's
+twelve clean bars (§45.24.1), which is the lesser of the two machines.
+
+What changed, all of it in `trkwin.inc`:
+
+1. **Eighteen bands** (`TW_NBAND`), two semitones each - 36 divides
+   exactly, as the XT's twelve does. An assembly-time check refuses any band
+   count that does not divide 36, on either face. Sixteen was the one choice
+   between 12 and 18 that could not. At `TW_BPITCH2` = 12 and `TW_BANDW` = 10
+   the bands span 216 of the 224 they used to fill (`TW_SPAN`), centred, and
+   `TW_XTPIT`/`TW_XTBW` are cut from `TW_SPAN` so the XT's shape is unchanged
+   (18-pixel pitch, 15-pixel bars).
+2. **One band a note, on both faces.** The half-level neighbour kick is
+   gone. A note lights exactly the band it falls in, and the peak markers stay.
+   They were never what made the face messy.
+3. **Spectrum is the XT's default pick.** The XT's bars-only spectrum
+   (§45.24.1) keeps up at 17.8 to 17.9 frames a second, so a tier-0 machine
+   now opens on it just as a 286 does. `trk_entry` stores the `TWV_SPEC` it
+   already holds instead of dropping to VU Meter. The cycle is unchanged
+   (VU Meter -> Spectrum -> Off), so from the default a click goes to Off.
+
+**Cost.** bss grows by 12 bytes (six per-band arrays of `TW_NBAND` bytes).
+The kick has fewer instructions. Two more columns are drawn per frame on the
+286+ face. Dropping the neighbour kick means a note moves one column where it
+moved three, so the fills a frame should FALL. That is predicted, not
+measured; §45.24's table was taken under QEMU `-icount shift=9` and has not
+been re-taken for this shape.
 
 ### 45.25 No card: the PC speaker
 
