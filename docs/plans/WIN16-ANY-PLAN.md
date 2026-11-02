@@ -1752,10 +1752,31 @@ its table goes in the diary, so the reach is measured, not claimed.
     - GetModuleHandle answers another task's module name.
 
     Arcade's setup now copies its second stage to `C:\~MSSTFQF.T` and
-    starts `_MSTEST`. **Open:**
-    - `_MSTEST` then faults on the arm: `GP 03E0`, on a far pointer it
-      read from a global block.
-    - Real mode prints *STACK OVERFLOW TASK 00* during a cross-volume copy.
+    starts `_MSTEST`.
+  - [x] Batch 5: both setups further (SPEC.md 124.19.1, 124.25.1,
+    124.26.2.1, 124.28.5, 124.31.8):
+    - Batch 4's `GP 03E0` was WIN16's thunk read as `_MSTEST`'s data. A
+      segment or offset relocation to a moveable entry now takes the
+      segment's own address, as does every relocation of an NEF_PMODE
+      program.
+    - Real mode's first instruction comes from the tick, which ends the
+      *STACK OVERFLOW TASK 00*.
+    - Sir Hangman's launcher: GetFreeSpace on kern_mega counts the heap's
+      free memory outside the arenas; WinExec of a name with a folder reads
+      a byte so the machine stands on the file; a bind slot is shared by
+      handler.
+
+    **Open, and each needs a decision:**
+    - Arcade's `_MSTEST` stops at *Parser out of memory*: GlobalReAlloc of a
+      LOCKED moveable block, which Windows' protected modes move under the
+      same selector.
+    - Sir Hangman's engine (`_INST16`, 68 segments) makes 607 selector
+      fixups into its 64 discardable code segments, so all 404 KB are kept.
+      Beside the launcher, three arenas cannot hold them, though the heap
+      has 505 KB free outside them.
+    - **Sir Hangman has no real-mode leg after all.** Its launcher refuses
+      when GetFreeSpace is below 700,000 bytes, which a 640 KB machine
+      never reaches; Windows 3.0's real mode refused it too.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running

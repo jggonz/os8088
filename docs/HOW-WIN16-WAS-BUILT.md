@@ -4221,5 +4221,44 @@ booted off a 32 MB FAT16 IDE disk, with an `\AUTOSTRT` link to
 
 After step 7, all eighteen files are copied and expanded, and `_MSTEST`
 runs. It then faults inside its own string helper, on a far pointer
-`03E1:0000` read out of a table in one of its global blocks. That is where
-this entry stops; the cause is not known yet.
+`03E1:0000` read out of a table in one of its global blocks.
+
+8. **The table was WIN16's own memory.** `_MSTEST` keeps its keyword table
+   in a discardable code segment, and reaches it with segment relocations.
+   WIN16 had sent every relocation to such a segment through a thunk in its
+   module block, so the program read the module block as its table. A
+   `pmemsave` dump showed it. Segment and offset relocations now take the
+   segment itself, and the segment stays loaded.
+
+The next stop is *Parser out of memory*: `_MSTEST` grows a block that it
+holds locked. Real-mode Windows refused that too; the protected modes moved
+the block and kept its selector. That is a design question for the arm.
+
+### Sir Hangman: an error box with nothing in it
+
+Sir Hangman's setup is InstallShield 3's. It showed *Setup Initialization
+Error* over an empty box. The launcher's string table holds the text for
+only one of its eight errors, so the box said nothing whichever one it was.
+To find out which, a scratch copy of `SETUP.EXE` was patched (never
+committed): every error number was given a string naming itself, and the
+WinExec error was made to show WinExec's answer. Each run then named its
+own failure:
+
+1. *7068*, too little memory. The launcher wants 700,000 bytes from
+   `GetFreeSpace`, which answered the largest free run in an arena, 388 KB.
+   On kern_mega it now adds the heap's free memory outside the arenas.
+   A 640 KB machine never has 700,000 bytes, so this installer has no
+   real-mode leg.
+2. *7067* with answer 11, "not a Windows program". The launcher expands its
+   engine to `C:\SYSTEM\APPDATA\WIN16\_INS0433._MP` and starts it by that
+   full name. WIN16's DOS opened it, and then walked back to the program's
+   folder, `A:\`, where WIN16 looked for the file. A one-byte read now
+   stands the machine on the file first.
+3. The same answer, for a new reason: *Imports more than WIN16 can bind*.
+   The launcher's 135 imports and the engine's 247 needed 386 of the 384
+   slots, because the engine's loader did not know which handlers already
+   had one. It looks for a slot bound to the same handler now.
+4. *Not enough memory to load it.* The engine refers to all 64 of its code
+   segments by number, 607 times, so WIN16 must keep all 404 KB of them
+   loaded. Beside the launcher, they do not fit in three arenas. That is
+   where this entry stops.
