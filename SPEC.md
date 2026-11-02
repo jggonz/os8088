@@ -230773,11 +230773,16 @@ brings it, as every other Windows program (`make win16disk WIN3X=<dir>`).
 
 **Not yet, pinned:**
 
-- **Windows Help does not find the file.** Given `CALC.HLP` beside it, it
-  answers *Cannot find Help file; run Setup again to install Help file*,
-  and its own *File > Open* lists no `*.hlp` files in the folder that
-  holds them. Its file search is a compatibility question of WIN16's DOS
-  or of `OpenFile`, not yet traced.
+- **Windows Help does not find the file.** With `CALC.HLP` beside both
+  programs, it answers *Cannot find Help file; run Setup again to install
+  Help file*. Its own *File > Open*, run alone, lists no `*.hlp` files in
+  `b:\`, though its Directories list is right and the file is there. It
+  imports `DlgDirList` and `OpenFile` and nothing of DOS directly, so the
+  question is one of those two with its arguments, which no trace has
+  caught yet: the trace ring fills with the next item.
+- **Windows Help's button bar repaints without end** while its File Open
+  dialog is up: 3,004 calls in the ring, the bar's `BitBlt`s and
+  `ExtTextOut`s over and over.
 - **Notepad 3.0 and Windows Help do not fit together in 640 KB**: Notepad's
   data is about 138 KB, and Windows Help is refused for memory. That
   refusal's reason is not shown: the message box of a later program's

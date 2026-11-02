@@ -3199,9 +3199,11 @@ for Help's code. Four arenas it is, with the arithmetic in SPEC.md.
 - `ShellExecute` on a Windows program now starts it in the same instance,
   and the TASKS fixture uses it for its last TASKB.
 
-Help itself then says it cannot find `CALC.HLP`, even with the file next to
-it, and its own File > Open lists no help files. That is the next thing to
-trace. Notepad and Help together need more than 640 KB.
+Help itself then says it cannot find `CALC.HLP`. The first look at that
+was wrong: the test disk had never been given the file. With the file
+really there, Help still cannot find it, and its own File > Open lists no
+help files, so it is a real gap, in `DlgDirList` or `OpenFile`, and the
+next thing to trace. Notepad and Help together need more than 640 KB.
 
 ## 2026-11-02 — S21, batch 5: two programs hold a conversation
 

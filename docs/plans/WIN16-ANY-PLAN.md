@@ -1351,7 +1351,9 @@ its table goes in the diary, so the reach is measured, not claimed.
       its hands move; with no WINHELP.EXE, the message box. TASKS OK, MDI
       OK.
     - Not done, now SPEC (§124.28.10): Windows Help cannot find
-      `CALC.HLP` beside it, and its own File > Open lists no `*.hlp`;
+      `CALC.HLP` beside it, and its own File > Open lists no `*.hlp`
+      (batch 5 found the first look's disk had no `CALC.HLP` at all; with
+      it there, both still hold); its button bar repaints without end;
       Notepad and Windows Help do not fit in 640 KB together; a later
       program's refusal is not shown. Program Manager starting Notepad is
       that memory limit too.
