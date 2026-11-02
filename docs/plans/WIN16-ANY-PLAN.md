@@ -1485,6 +1485,15 @@ its table goes in the diary, so the reach is measured, not claimed.
       (KERNEL.310) through `GetProcAddress`, which it calls without a
       check, then `GetAtomName` (KERNEL.72), `SetErrorMode` (KERNEL.107)
       and `ScrollDC` (USER.221).
+      **Seen 2026-11-01 on a copy of `vm/286` (86Box's AMI 286, 12.5 MHz,
+      1 MB):** SOL 3.1 deals, REGEDIT 3.1 opens, SELTEST says 0 wrong with
+      flags 0013 (`WF_PMODE | WF_CPU286 | WF_STANDARD`); BIG's 128 KB
+      `GlobalAlloc` is refused there, honestly, on 1 MB. **Open, a kernel
+      question:** WRITE 3.0 faults on 86Box's 386 at the DOS host's first
+      store through CS, because the trap that completes it reads
+      `mega_ldtl` through SS, the program's stack (124.31.7). A kern_mega
+      that reads it through `LOW_SEG` runs WRITE 3.0 there; that change
+      waits on the owner.
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and

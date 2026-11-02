@@ -231008,6 +231008,18 @@ What the arm does is all on WIN16's side of the door:
 The memory calls that would walk an arena are not forwarded (§124.21.2), so
 `dos_arena` is never loaded into a segment register.
 
+**Found on 86Box (2026-11-01), open: the trap that completes those stores
+reads `.lowbss` through SS.** The core's gate and the host's two stack words
+run on the PROGRAM's stack, and a #GP at CPL 0 does not switch stacks, so in
+`mega_gpw` SS is the program's. `mega_ldt2ds` checks its selector against
+`[ss:mega_ldtl]` - the program's segment at that offset, not `LOW_SEG` - and
+refuses, and the store is reported (`FAULT 0D err 0000` at the host's
+`mov [cs:dos_sv_ss], ax`, WRITE 3.0 on 86Box's 386). QEMU never traps the
+store, so it never ran this path. A kern_mega whose `mega_ldt2ds` reads
+`mega_ldtl` through ES = `LOW_SEG` runs WRITE 3.0 there. It is a kernel
+change and waits on the owner, beside `MEGA_CSELTOP`'s `[ss:mega_pm]`, which
+is the same assumption in an IRQ.
+
 #### 124.31.8 The UI task's stack
 
 Every handler, every forwarded DOS call and every int 31h function runs on
