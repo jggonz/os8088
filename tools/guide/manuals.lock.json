@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "a593459aa",
+  "stamped": "826d436a4",
   "strings": "172e5a682e5edddb",
-  "why": "S24: GetFreeSpace on kern_mega, WinExec byte read, bind slots shared by handler"
+  "why": "MessageBox no narrower than its caption"
  },
  "WIN16_TXT": {
   "sources": [
