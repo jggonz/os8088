@@ -145,13 +145,32 @@ W16SYS w16i_lpadd
 ; there, and with it the program: here the program ends, as a
 ; PostQuitMessage(0) ends it, and the call answers FALSE - "an application
 ; refused" - so that a program that goes on to its message loop meets the
-; WM_QUIT there
+; WM_QUIT there. A setup's EW_RESTARTWINDOWS or EW_REBOOTSYSTEM is told,
+; in a toast, that os8088 needs neither (SPEC.md 124.33.3)
+EW_RESTARTWINDOWS equ 0x42
+EW_REBOOTSYSTEM   equ 0x43
 W16SYS w16i_exitwin
+    ICALL w16_args
+    mov ax, [es:bx + 2]             ; dwReturnCode's low word
+    cmp ax, EW_RESTARTWINDOWS
+    je .say
+    cmp ax, EW_REBOOTSYSTEM
+    jne .quit
+.say:
+    push si
+    W16CSEG es
+    mov si, w16i_s_norst            ; XSEC-OK: ES = CS
+    xor cx, cx
+    call OSAPI_TOAST
+    pop si
+.quit:
     mov word [w16_quitcode], 0
     mov byte [w16_quit], 1
     xor ax, ax
     xor dx, dx
     ret
+
+w16i_s_norst: db 'No restart is needed', 0       ; (short: a toast's box is)
 
 ; THE ATOMS (SPEC.md 124.25.10): one table of W16_NATOM names in this part,
 ; read and written through a data segment for it - Windows' clipboard

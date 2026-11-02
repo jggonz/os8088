@@ -4119,3 +4119,21 @@ Opening the shortcut shows `PMTEST.LNK` alone, because `DeleteItem` took
 the other link. Opening that link starts `PMDDE.EXE` again, through
 `DOS.O88` and WIN16. The second run finds the folder already there and
 adds no second shortcut.
+
+## 2026-11-01: the rest of the installer's list, and one item left out
+
+Three more items from S24's list:
+- **A setup that asks Windows to restart** (`ExitWindows` with
+  `EW_RESTARTWINDOWS`) now ends with a toast, *No restart is needed*.
+  The first wording ran past the toast's room on VGA and was cut off at
+  the menu bar's right end, so it was shortened.
+- **`GetDriveType` of a CD** needed no code. A CD volume is one of the
+  kernel's file-serving volumes, which reports a redirected transport,
+  and WIN16 already answers that as `DRIVE_REMOTE`. Windows 3.1 under
+  MSCDEX answered the same.
+- **MSCDEX's `int 2Fh` is left out**, on purpose and written down.
+  Hooking it would be a third interrupt vector, swapped at every way into
+  and out of a program, plus an entry that changes stacks. That is about
+  100 bytes of the image, and the kern_mega arm has 98. No installer
+  among the targets has been seen to ask, so the real installs in S25
+  will decide.

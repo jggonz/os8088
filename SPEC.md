@@ -230203,7 +230203,7 @@ Both programs import, besides MDI:
 | `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 9, kept until the program ends |
 | `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
 | `GetNumTasks` | 1, until S21 |
-| `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE |
+| `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE. A setup's `EW_RESTARTWINDOWS` (42h) or `EW_REBOOTSYSTEM` (43h) also puts up a toast, *No restart is needed* (§124.33.3) |
 | `GlobalFindAtom` | the atom `GlobalAddAtom` made of the name (124.25.10), or 0 |
 | `IsCharAlpha`, `IsCharAlphaNumeric`, `AnsiUpperBuff` | the ANSI letters: A-Z, a-z and C0h-FFh but D7h and F7h |
 | `GetIconID` | of an `RT_GROUP_ICON` block, the image `LoadIcon` would choose (124.18.4) |
@@ -232037,3 +232037,30 @@ off.
 **Not yet:** a group's items keep the icons os8088 gives their files, not
 the ones named in `AddItem`. A desktop already holding 15 shortcuts
 (§26.8.1's `SC_MAX`) refuses the group's, and the folder is still made.
+
+#### 124.33.3 The rest of the installer's environment *(S24 batch 3)*
+
+- **`ExitWindows(EW_RESTARTWINDOWS)`** and `EW_REBOOTSYSTEM` end the setup as
+  any `ExitWindows` ends a program. A toast says *No restart is needed*. A
+  longer first wording was cut off at the menu bar's right end on VGA.
+  What a restart would load, `SYSTEM.INI` and any new drivers, is read by
+  the next program anyway, and nothing a setup copies needs the machine
+  restarted.
+- **`GetDriveType` of a CD** answers `DRIVE_REMOTE` (4), as Windows 3.1
+  under MSCDEX did, with no new code. The kernel gives every file class
+  past `DRVC_FILE2`, `DRVC_CD` among them (§119.1), the `DVK_FILE` kind
+  (`kernel/disk.inc`). `OSAPI_VOL_KIND` answers that as `VT_FILE`, and
+  `w16i_dtype` answers `VT_FILE` with 4.
+- **A write to the CD** goes through WIN16's DOS, the core `DOS.O88`
+  ships, to `CDROM.DRV`'s `FERR_WPROT` (§119.3.4). WIN16 adds nothing on
+  that path. Which DOS error the core answers was not checked here
+  (Windows answered 5, access denied). S25's installs off a CD are the
+  check.
+- **Not yet: MSCDEX's `int 2Fh` `15xxh`.** WIN16 hooks no `int 2Fh`.
+  Hooking it would be a third vector in `w16_i21_on`/`_off` and an entry
+  that changes stacks, in the image, at every way into and out of a
+  program. That is about 100 bytes, and the kern_mega arm has 98. No
+  target installer has yet been seen to ask: Arcade comes off a floppy,
+  and `GetDriveType` already answers the question for a CD. S25's
+  installs will show whether one does. If one does, the hook goes in
+  with the bytes found for it.

@@ -11,7 +11,8 @@
  *   3. [DeleteItem(Read Me)]                             - positive;
  *   4. [CreateGroup(PMDDE Gone)][DeleteGroup(PMDDE Gone)] - positive.
  * Then a WM_DDE_REQUEST, which is acknowledged negatively, and
- * WM_DDE_TERMINATE both ways.
+ * WM_DDE_TERMINATE both ways. After its MessageBox it calls
+ * ExitWindows(EW_RESTARTWINDOWS), as a setup does, which ends it.
  *
  * What it leaves on WIN16's volume, B: (the row win16pmdde reads it back):
  * SYSTEM\APPDATA\WIN16\GROUPS\PMDDETES\PMTEST.LNK naming B:\PMDDE.EXE, no
@@ -64,6 +65,9 @@ static void done(void)
 {
     KillTimer(me, 1);
     MessageBox(me, fails ? res : "PMDDE OK", "PMDDE", MB_OK);
+    /* a setup's last word: WIN16 ends it, with a toast that no restart is
+     * needed (SPEC.md 124.33.3) */
+    ExitWindows(MAKELONG(EW_RESTARTWINDOWS, 0), 0);
     DestroyWindow(me);
 }
 

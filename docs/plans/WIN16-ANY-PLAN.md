@@ -1730,6 +1730,13 @@ its table goes in the diary, so the reach is measured, not claimed.
     `PMDDE.EXE` says *PMDDE OK*, the shortcut is on the desktop, its
     folder holds the link, and the link starts the program. Row
     `win16pmdde`, for the final pass.
+  - [x] Batch 3: the rest of the list that needs no installer
+    (SPEC.md 124.33.3). `ExitWindows(EW_RESTARTWINDOWS)` ends the setup
+    with a toast that no restart is needed; `GetDriveType` already
+    answered a CD `DRIVE_REMOTE`, as under MSCDEX. **MSCDEX's `int 2Fh` is
+    not done**: a third swapped vector is about 100 image bytes and the
+    kern_mega arm has 98, and no target installer has been seen to ask.
+    S25's installs decide it.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running
