@@ -1363,8 +1363,10 @@ its table goes in the diary, so the reach is measured, not claimed.
       task's top-level windows, each with its own HWND. A send to the
       caller's own window is a call into the program, and the rest of the
       broadcast is its continuation, with the message in the call's extra
-      bytes. Both rows went to part 9, so the image grew only by the
-      continuation's 10-byte trampoline (484 left).
+      bytes. The broadcast itself is part 9's; the image's two handlers
+      test for it (40 bytes, 454 left). Putting the whole rows in part 9
+      instead made every program fetch part 9 at its first send, which
+      the final pass caught.
     - DDE needed nothing else: posts and sends already cross tasks,
       `GMEM_DDESHARE` blocks are nobody's, and atoms are the clipboard
       formats' table. `GlobalGetAtomName` (USER.271) is bound.

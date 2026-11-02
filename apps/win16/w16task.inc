@@ -1311,31 +1311,6 @@ w16t_hfind:
     pop bx
     ret
 
-; SendMessage (USER.111) and PostMessage (USER.110) - args: +0 lParam, +4
-; wParam, +6 msg, +8 hWnd. HWND_BROADCAST is every task's top-level windows
-; (SPEC.md 124.28.6); any other window is the image's w16u_sendmsg's and
-; w16u_postmsg's. Here and not there for the image's room, which the
-; kern_mega arm has none of
-W16SYS w16t_sendmsg
-    ICALL w16_args
-    cmp word [es:bx + 8], HWND_BROADCAST
-    je .bc
-    ICALL w16u_sendmsg
-    ret
-.bc:
-    ICALL w16_smargs
-    jmp short w16t_bsend
-
-W16SYS w16t_postmsg
-    ICALL w16_args
-    cmp word [es:bx + 8], HWND_BROADCAST
-    je .bc
-    ICALL w16u_postmsg
-    ret
-.bc:
-    ICALL w16_smargs
-    jmp w16t_bpost
-
 ; w16t_bsend - SendMessage to HWND_BROADCAST (USER.111, SPEC.md 124.28.6):
 ; [w16_sm_msg/wp/lp] sent to every top-level window of every task, in slot
 ; order, each with its own HWND, as Windows' USER did. Another task's window

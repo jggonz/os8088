@@ -1413,10 +1413,13 @@ w16_smargs:
     mov [w16_sm_hwnd], ax
     ret
 
-; SendMessage (USER.111) - args: as w16_smargs
+; SendMessage (USER.111) - args: as w16_smargs. HWND_BROADCAST is every
+; task's top-level windows, part 9's (w16t_bsend, SPEC.md 124.28.6)
 w16u_sendmsg:
     call w16_args
     call w16_smargs
+    cmp ax, HWND_BROADCAST
+    je .bc
     call w16_hwnd2rec
     jc .no
     push si
@@ -1424,15 +1427,23 @@ w16u_sendmsg:
     call w16_sendwnd
     pop si
     ret
+.bc:
+    SCALL w16t_bsend
+    ret
 .no:
     xor ax, ax
     xor dx, dx
     ret
 
-; PostMessage (USER.110) - args: as w16_smargs
+; PostMessage (USER.110) - args: as w16_smargs. HWND_BROADCAST: w16t_bpost
 w16u_postmsg:
     call w16_args
     call w16_smargs
+    cmp ax, HWND_BROADCAST
+    jne .one
+    SCALL w16t_bpost
+    ret
+.one:
     xor al, al
     call w16_post
     mov ax, 0

@@ -124,7 +124,10 @@ def serves(read, base, S, row):
     BASE is the WIN16 instance's linear address."""
     slot = u16(read(base + S["w16_idx"], 2))
     proc = u16(read(base + S["w16_bind"] + 4 * slot + 2, 2))
-    return proc == S[row_handler(row)]
+    h = S[row_handler(row)]
+    if h >= S["w16s_base"]:             # a part 9 handler (SPEC.md 124.24.1):
+        h -= S["w16s_base"]             #   the slot holds its offset there
+    return proc == h
 
 
 def progs():

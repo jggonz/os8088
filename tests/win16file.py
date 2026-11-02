@@ -128,7 +128,7 @@ def notepad_leg(d, ui, S, dw, bad):
     # the main window's bar: its down arrow, above the corner box
     main = next(r for r in recs() if r[W16W_FLAGS] & W16WF_USED and r[W16W_KIND] == 0)
     p.w = next(x for x in ui.windows() if x.i == p.w.i)
-    _, _, r_, b_ = p.w.content()
+    _, _, r_, b_ = p.w.content
     top0, thumb0 = w(e, ME_TOP), w(main, W16W_SBV)
     d.click(r_ - 8, b_ - 17 - 9)
     d.idle(3.0)

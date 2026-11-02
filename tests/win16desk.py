@@ -119,9 +119,22 @@ def owned(d, ui, sym, p):
     return out
 
 
+def kept(m):
+    """the claims a WIN16 run may not change: (paragraphs, owner) of every
+    claim but the kernel's PURGEABLE ones (owners 0xFB00-0xFEFF, SPEC.md
+    50.3: the FAT window and the like, which the kernel drops and the
+    compactor moves on its own), and without the segment, which compaction
+    may move (SPEC.md 66)"""
+    out = {}
+    for seg, para, own in m:
+        if not 0xFB00 <= own < 0xFF00:
+            out[(para, own)] = out.get((para, own), 0) + 1
+    return out
+
+
 def heap_is(d, sym, m0, what, bad):
     m1 = claims(d, sym)
-    if m1 != m0:
+    if kept(m1) != kept(m0):
         bad.append("%s: mem_tab is not the pre-launch one - gained %s, lost %s"
                    % (what, sorted("%04x:%dp own %04x" % c for c in m1 - m0),
                       sorted("%04x:%dp own %04x" % c for c in m0 - m1)))

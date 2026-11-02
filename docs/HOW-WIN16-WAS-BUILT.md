@@ -3229,12 +3229,17 @@ along in the call's own stack space, because the window procedure may
 send messages of its own before it returns, and WIN16's scratch copy of
 "the message" would not survive that.
 
-**The image had no room to spare, so the work went elsewhere.** The
-protected-mode build of WIN16, being written alongside, shares the main
-image and has one byte left. So `SendMessage` and `PostMessage` are now
-answered in part 9, a part loaded on demand, which passes anything that
-is not a broadcast on to the old handlers. The image grew by ten bytes,
-the trampoline the continuation needs.
+**The image had no room to spare, and the first answer to that was
+wrong.** The protected-mode build of WIN16, being written alongside,
+shares the main image and had one byte left. So `SendMessage` and
+`PostMessage` were first answered in part 9, a part loaded on demand,
+which passed anything that was not a broadcast on to the old handlers.
+The final pass showed what that cost: every program sends messages, so
+every program now loaded part 9's 27 KB into its own heap at its first
+send. Paintbrush ran out of room for its code, BIG's 128 KB allocation
+failed, and a second Windows program could not start. The image's own
+handlers now test for a broadcast, 30 bytes, and only a broadcast loads
+part 9.
 
 **The test.** TASKS asks TASKB for an item called *Answer* and gets "42"
 back. That needs the broadcast post to have reached TASKB first, and the

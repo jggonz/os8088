@@ -228107,9 +228107,13 @@ popup, which is kept inside the window (§124.11), shows the first eight.
 **`win16sol`** (soak, QEMU, needs the `win16samples` capability): Solitaire
 3.0 and 3.1 load, deal and move a card, and each draws its cards on VGA,
 EGA, CGA and Hercules. **`win16big`** (soak, QEMU) runs an Open Watcom
-fixture with more than 100 KB of code in many segments and a 128 KB huge
-array walked by `__AHINCR`, checking every byte. The 8088's load time for
-Solitaire is taken on MartyPC in the final pass (S25).
+fixture with more than 100 KB of code in many segments and a 96 KB huge
+array walked by `__AHINCR` across 64 KB, checking every byte. The array was
+128 KB until S21's final pass. By then the fixture's own claim was 216 KB
+and WIN16's library part 61 KB, and the largest free run QEMU's 640 KB
+left was 109 KB, so the 129 KB claim was refused on every build since the
+library part grew past it. The 8088's load time for Solitaire is taken on
+MartyPC in the final pass (S25).
 
 ### 124.21 Files *(pinned for S16, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -230631,9 +230635,13 @@ stays the first program's.
     procedure may send, or broadcast, before it returns;
   - a post goes into each window's task's queue.
 
-  Both answer 1. The two rows are part 9's (`w16t_sendmsg`,
-  `w16t_postmsg`), which pass any other window to the image's handlers:
-  the image's room is the kern_mega arm's too, and it has none.
+  Both answer 1. The image's handlers test for `HWND_BROADCAST` and pass
+  it to part 9 (`w16t_bsend`, `w16t_bpost`), so a program that never
+  broadcasts never fetches part 9. Batch 5 first made the two rows part
+  9's to spare the image 30 bytes; the final pass found that every
+  program then fetched part 9's 27 KB into its heap at its first
+  `SendMessage`, which Paintbrush, BIG and a second instance had no room
+  for.
 
 **DDE needs nothing more.** Its messages are posted and sent as any
 others, between windows of one instance. Its atoms are global atoms, and
