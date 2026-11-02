@@ -98033,6 +98033,7 @@ verb:
 | `SEG_AIM` 7 | DX = a bound window, CX:AX = a BYTE offset into its block | DX = the same window re-aimed there, AX = 0; legal in an `FSXF_RATE` hook |
 | `SEG_AT` 8 | DX = a segment or selector, AX = a paragraph offset, CX = a window of the caller's to re-aim, or 0 | DX = that window aimed at DX's base + AX paragraphs, 64KB; DX = 0 (CF = 0) when no LDT entry is free |
 | `SEG_TILE` 9 | DX = a selector of the caller's based in a claim or a pool block, AX = a paragraph offset, CX = a count of 64KB tiles | DX = the first of CX data selectors, each 8 above the last and based 64KB further on, the last cut at the block's end (§124.31.2) |
+| `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -98044,6 +98045,9 @@ package arms, whose real-mode path already does the sum, and `SEG_AT`'s
 caller does the sum ON the refusal - so neither's arithmetic is carried on
 every machine. `SEG_TILE` is refused there too, by the same `ja`: a
 real-mode caller's next 64KB is its segment + `1000h`, its own sum.
+`SEG_WINL` is refused there as well: a real-mode kernel has nothing above
+1MB to window, and below it the caller's paragraph is its own answer.
+`.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
 
@@ -230851,20 +230855,34 @@ what the numbers mean**:
   - WIN16's own plain claims (the cluster cache, the loader's file tables,
     the region's mask) may also go above 1 MB. Nothing does a sum on them,
     and the kernel's file layer and drawing take them wherever they are.
-  - **The map's claims stay conventional.** `w16_vclaim` claims through
-    the DMA door with no head (`OSAPI_MEM_CLAIM_DMA`, CX = 0). That covers
-    the program's image, its PSP and resources, and the arenas: everything
-    the program is handed a selector into.
-  - Two things need them low:
-    - a window `AllocSelector` and `SetSelectorBase` make is a `SEG_WIN`,
-      whose base is a physical paragraph;
-    - `GlobalDOSAlloc`'s block must have a real-mode paragraph.
-  - Moving the program's memory up as well would take a window verb with a
-    32-bit base and a choice of block for `GlobalDOSAlloc`. That is a kernel
-    question for later, not this arm's.
-  - What batch 7 buys is the image's room. Its code and its bss no longer
-    come out of the conventional memory the program is loaded into. The
-    parts are still fetched through the DMA door, as the parts standard
+  - **The map's claims are above 1 MB too** (owner decision (e1),
+    2026-11-01). `w16_vclaim` is a plain claim - `OSAPI_MEM_CLAIM` up to
+    64 KB, `OSAPI_MEM_HUGE` past it, whose first selector names the block
+    and which the map `SEG_SUB`s into past 64 KB as it does below. That
+    covers the program's image, its PSP and resources, and the arenas:
+    everything the program is handed a selector into. Where the pool cannot
+    hold one, the kernel puts it in conventional memory as before.
+  - The two things that needed them low:
+    - a window `AllocSelector`, `SetSelectorBase`, `SetSelectorLimit`,
+      `PrestoChangoSelector` and DPMI 0000h/0007h/0008h make is a
+      `SEG_WINL` (§50.6.11), at any 32-bit linear base;
+    - `GlobalDOSAlloc`'s block is a claim of its own through the DMA door
+      (CX = 0: conventional), at most 64 KB and four at once (`w16q_dosb`),
+      and `GlobalDOSFree` gives it back; any other selector it is handed is
+      `GlobalFree`'s.
+  - **A row's linear base is a cache.** A claim above 1 MB is a pool block,
+    and the pool is compacted when any claim finds no run - another
+    package's included - which moves the block under the same selectors. So
+    `w16_pvirt` checks a hit against its claim's base now (`w16_vlin`), and
+    a miss or a stale hit reads every row again (`w16_vfresh`) and looks
+    once more. The selectors themselves follow the block: they are based in
+    it (§50.6.11).
+  - **Seen 2026-11-01:** Write 3.0's typed text is at linear `F89D9A`
+    under QEMU, inside the map's first claim (`F89800`, 65 KB); all four of
+    the map's claims are above 1 MB; BIG's 128 KB huge block reads back 0
+    wrong; SELTEST says 0 wrong. Write 3.0 opens on 86Box's 386 (2 MB) and
+    on its 1 MB AMI 286.
+  - The parts are still fetched through the DMA door, as the parts standard
     fetches every part.
 
 **The library part's thunk calls are indirect (2026-11-01).** `W16SEG`,

@@ -1392,7 +1392,8 @@ its table goes in the diary, so the reach is measured, not claimed.
 
 - [ ] **S22: The `kern_mega` arm (R3).**
   - *As a user on a 286, Registry Editor runs, and Write keeps its document
-    in memory above 1 MB.*
+    in memory above 1 MB.* **Both are seen (batches 8 and 9). Left: the
+    Bochs trap census, and S25's rows on the mega disks.**
   - WIN16 gains a `PKG_MEGA` arm (§20.18), as the shipped packages with a
     kern_mega arm have. On it:
     - a program's segments get **LDT selectors** through `OSAPI_SEG`
@@ -1496,6 +1497,19 @@ its table goes in the diary, so the reach is measured, not claimed.
       and kern_small byte-identical). **Seen 2026-11-01:** WRITE 3.0 opens on
       86Box's 386, and TMTEST with an SB16 says 0 wrong under QEMU, where
       the sound tick's `retf` used to fault.
+    - [x] *9: the program's memory above 1 MB* (owner decision (e1),
+      2026-11-01; SPEC.md 50.6.11, 124.31.3). kern_mega gains `OSAPI_SEG`
+      verb 10, `SEG_WINL`: `SEG_WIN` at a 32-bit linear base (`.mega` +18;
+      kern_big and kern_small byte-identical; ABI lock refreshed, no bump).
+      The map's claims are plain (`OSAPI_MEM_HUGE` past 64 KB), so the
+      program's image, resources and arenas go above 1 MB; the selector
+      functions' windows are `SEG_WINL`s; `GlobalDOSAlloc` takes a
+      conventional claim of its own; and the map's cached linear bases are
+      checked against the claim, because the pool moves blocks. **Seen
+      2026-11-01: Write 3.0 keeps its document above 1 MB** - the text typed
+      into it is at linear `F89D9A`, inside the map's first claim, and all
+      four of the map's claims are above 1 MB (QEMU). Write 3.0 opens on
+      86Box's 386 and 1 MB 286; BIG's 128 KB block and SELTEST read 0 wrong.
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and

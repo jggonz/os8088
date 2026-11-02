@@ -499,15 +499,24 @@ w16v%1_myds: dw 0                   ; WIN16's data selector (w16_pmds)
 
 ; w16_vclaim - AX = KB: a claim entered in the map. out: CF=0 DX = its
 ; virtual base; CF=1 none (no memory, or no room in the map). Keeps every
-; other register. It is the DMA door's, CX = 0: CONVENTIONAL whatever
-; OS88_HIGHMEM says, so every block the program sees is below 1 MB, where a
-; window (SEG_WIN, the selector functions') can be aimed at it and
-; GlobalDOSAlloc's block has a real-mode paragraph (SPEC.md 124.31.3)
+; other register. A plain claim (OSAPI_MEM_HUGE's past 64 KB), so with
+; OS88_HIGHMEM it may be above 1 MB,
+; and so may everything the program is handed: the selector functions' window
+; is SEG_WINL's, at a linear base, and GlobalDOSAlloc claims its own block
+; through the DMA door (SPEC.md 124.31.3)
 w16_vclaim:
-    push cx
-    xor cx, cx
-    call OSAPI_MEM_CLAIM_DMA
+    cmp ax, 64
+    ja .huge
+    call OSAPI_MEM_CLAIM            ; 64 KB or less: one selector over it
+    jmp short .got
+.huge:
+    push bx                         ; more: one block under a run of them,
+    push cx                         ;   the first of which names it (the map
+    xor bx, bx                      ;   SEG_SUBs into it, past 64 KB too)
+    call OSAPI_MEM_HUGE
     pop cx
+    pop bx
+.got:
     jc .out
     push cx
     mov cx, ax
@@ -732,12 +741,19 @@ w16_psel:
 ; virtual paragraph it is based at, CF=0; CF=1 not in a claim of ours (or not
 ; on a paragraph), AX kept. A code half is its data half's paragraph too.
 ; Keeps every other register.
+;
+; A row's linear base is a CACHE: a claim above 1 MB is a pool block, and the
+; pool is compacted when a claim finds no run, which moves the block under
+; the same selectors (OSAPI_MEM_CLAIM, OS88_HIGHMEM). So a hit is checked
+; against its claim's base now, and a miss or a stale hit refreshes every row
+; (w16_vfresh) and looks once more (SPEC.md 124.31.3).
 ; -----------------------------------------------------------------------------
 w16_pvirt:
     push bx
     push cx
     push dx
     push si
+    push di
     push ax
     mov dx, ax
     mov bl, SEG_LIN
@@ -745,6 +761,8 @@ w16_pvirt:
     jc .no
     test al, 0x0F
     jnz .no
+    xor di, di                      ; DI = 0: the first look
+.look:
     mov si, w16_vmap
     mov cx, W16V_N
 .r:
@@ -765,6 +783,11 @@ w16_pvirt:
     jnz .n2
     cmp ax, [si + W16V_PARA]
     jae .n2
+    or di, di
+    jnz .hit                        ; (just refreshed: current)
+    call w16_vlin                   ; CF=1 its claim has moved
+    jc .again2
+.hit:
     add ax, [si + W16V_VB]          ; the virtual paragraph
     pop dx
     pop dx
@@ -777,14 +800,66 @@ w16_pvirt:
 .n:
     add si, W16V_SZ
     loop .r
+    or di, di
+    jnz .no
+.again:
+    call w16_vfresh
+    inc di
+    jmp short .look
+.again2:
+    pop dx
+    pop ax
+    jmp short .again
 .no:
     pop ax
     stc
 .out:
+    pop di
     pop si
     pop dx
     pop cx
     pop bx
+    ret
+
+; w16_vlin - SI = a map row: its linear base read again from its claim.
+; CF=1 it had moved (the pool compacted it). Keeps all
+w16_vlin:
+    push ax
+    push bx
+    push dx
+    mov dx, [si + W16V_SEL]
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = the claim's base now
+    jc .out                         ; (a freed row's: left)
+    xchg ax, [si + W16V_LIN]
+    xchg dx, [si + W16V_LIN + 2]
+    cmp ax, [si + W16V_LIN]
+    jne .moved
+    cmp dx, [si + W16V_LIN + 2]
+    je .out                         ; (CF = 0: equal)
+.moved:
+    stc
+.out:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16_vfresh - every row's linear base read again. Keeps all
+w16_vfresh:
+    push cx
+    push si
+    mov si, w16_vmap
+    mov cx, W16V_N
+.r:
+    cmp word [si + W16V_PARA], 0
+    je .n
+    call w16_vlin
+.n:
+    add si, W16V_SZ
+    loop .r
+    pop si
+    pop cx
     ret
 
 ; w16_pspsel - AX = the PSP's selector (16 paragraphs). Keeps the rest.

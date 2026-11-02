@@ -85,10 +85,13 @@ w16_i31b:
     jne .none
     push cx
     push dx
+    push di
     xor dx, dx
+    xor di, di
     mov cx, 16
     xor ax, ax
     call w16_i31win
+    pop di
     pop dx
     pop cx
     jnc .ok
@@ -126,32 +129,19 @@ w16_i31b:
     push ax
     push cx
     push dx
-    mov ax, dx
-    test al, 0x0F
-    jnz .setbno
-    cmp cx, 0x000F
-    ja .setbno
-    mov dx, cx
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or dx, ax                       ; DX = the paragraph
+    push di
+    mov di, cx                      ; DI:DX = it, any linear base
 cpu 286
     lsl cx, bx                      ; its reach kept
 cpu 8086
     inc cx
     mov ax, bx
     call w16_i31win
-    jc .setbno
+    pop di
     pop dx
     pop cx
     pop ax
-    jmp .ok
-.setbno:
-    pop dx
-    pop cx
-    pop ax
+    jnc .ok
     mov ax, 0x8025                  ; invalid linear address
     jmp .err
 
@@ -171,15 +161,12 @@ cpu 8086
     call OSAPI_SEG                  ; DX:AX = its base, aimed at again
     pop bx
     jc .setlno
-    push cx
-    mov cl, 4
-    shr ax, cl
-    mov cl, 12
-    shl dx, cl
-    or dx, ax
-    pop cx
+    push di
+    mov di, dx
+    mov dx, ax                      ; DI:DX = it
     mov ax, bx
     call w16_i31win
+    pop di
     jc .setlno
     pop dx
     pop cx
@@ -275,7 +262,7 @@ cpu 8086
     pop ax
     jmp .ok
 
-; w16_i31win - DX = a paragraph, CX = bytes (0 = 64 KB), AX = a window the
+; w16_i31win - DI:DX = a linear base, CX = bytes (0 = 64 KB), AX = a window the
 ; program made to re-aim, or 0 -> CF=0 AX = the window; CF=1 none
 ; (w16q_win's). Keeps the rest.
 w16_i31win:

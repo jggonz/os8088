@@ -64,6 +64,7 @@ W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
 W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16Q_NWIN    equ 16             ; selectors a program may make (124.31.6)
+W16Q_NDOS    equ 4              ; GlobalDOSAlloc's blocks at once (124.31.3)
 W16C_SIZE    equ 32             ; a class record
 W16W_SIZE    equ 102            ; a window record
 W16_MAXTASK  equ 4              ; Windows programs in one instance, its
@@ -346,6 +347,7 @@ section .w16dlg
     W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
     W16BSS w16_ldq, 1           ; 1 = the load's wake was deferred (124.31.8)
     W16BSS w16q_wins, 2 * W16Q_NWIN ; the selectors the program made (124.31.6)
+    W16BSS w16q_dosb, 2 * W16Q_NDOS ; GlobalDOSAlloc's claims (124.31.3)
     W16BSS w16_i31ss, 2         ; ...the program's stack while it runs on
     W16BSS w16_i31sp, 2         ;   the UI task's
     W16BSS w16mm_bsel, 2         ; MMSYSTEM's mmio, one call at a time
