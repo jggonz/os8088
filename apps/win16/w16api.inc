@@ -1014,16 +1014,19 @@ w16_lstr:
     ret
 
 ; WinHelp (USER.171) - +0 dwData, +4 wCommand, +6 lpHelpFile, +10 hWnd.
-; There is no Help here (SPEC.md 124.15.3): HELP_QUIT, which a program sends
-; as it ends whether or not it showed help, answers TRUE silently. Any other
-; command says why in a message box - its arguments are rewritten in place as
-; MessageBox's, which are as many bytes - and answers TRUE, so the program
-; does not add a message of its own
+; Windows' WINHELP.EXE, started as a task of this instance and sent the
+; request (SPEC.md 124.28.10, w16t_help) - the arguments become SendMessage's.
+; When it cannot be started, a message box says so - the arguments are
+; rewritten in place as MessageBox's, which are as many bytes - and TRUE is
+; the answer, so the program does not add a message of its own
 w16u_winhelp:
     call w16_args
-    mov ax, 1
-    cmp word [es:bx + 4], 2         ; HELP_QUIT
-    jne .say
+    SCALL w16t_help
+    jc .say
+    cmp ax, 0xFFFF
+    jne .ret
+    jmp w16u_sendmsg
+.ret:
     ret
 .say:
     push si
@@ -1068,7 +1071,7 @@ w16_asmsgbox:
     mov [es:bx + 8], ds
     jmp w16u_msgbox
 
-w16_s_nohelp1:  db 'Help is not available.', 13, 10, 'WIN16 has no WinHelp, so ', 0
+w16_s_nohelp1:  db 'Help is not available.', 13, 10, 'WINHELP.EXE could not be started, so ', 0
 w16_s_itshelp:  db 'its help', 0
 w16_s_nohelp2:  db ' cannot be opened.', 0
 

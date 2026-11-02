@@ -152,7 +152,7 @@ W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
                                 ;   DC's font (SPEC.md 124.24.4)
 W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
                                 ;   memory DC's (SPEC.md 124.25.3)
-W16_NARENA   equ 3              ; global heap arenas at once (w16mem.inc,
+W16_NARENA   equ 4              ; global heap arenas at once (w16mem.inc,
                                 ;   SPEC.md 124.25.1)
 W16_NGH      equ 256            ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)

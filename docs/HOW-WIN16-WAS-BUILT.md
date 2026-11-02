@@ -3152,3 +3152,53 @@ only task left was one that had never run, and the turns only ever looked
 at the others. So the end of a task now runs the turns itself, and a task
 that has never run is the one current task they will start. That second
 TASKB takes over WIN16's own window: the title bar now says *Task B*.
+
+## 2026-11-01 — S21, batch 4: Windows Help, and a launch that ate itself
+
+**Windows Help is a separate program, and WIN16 now starts it.** When a
+Windows 3.x program asked for help, USER looked for a window of class
+`MS_WINHELP`. If there was none, it started `WINHELP.EXE -x`, then sent the
+window a registered message with a small block naming the file and the
+topic. WIN16 does the same now. The awkward part is timing. A program
+started by `WinExec` first runs when its starter next waits, but the
+window `WinHelp` has to send to is created by Help's own start-up. So
+`WinHelp` runs the new task at once, inside the caller's call, until Help
+waits for its first message: a directed yield, built the way batch 3's
+cross-program send already parks one program and runs another.
+
+**The first try crashed, and the cause was in the loader, not in Help.**
+Help died at its first instruction, a different way each run: once with
+CS = 0005, once looping forever on a heap block of size zero. A debugger
+on the launch found the cause. A program's code may be discarded when
+memory runs short, but only if no return address on its stack points
+into it. A brand-new task's context is zeroed, so during its launch it
+had no stack top, the scan found nothing in use, and the launch discarded
+segments it had loaded a moment earlier. The next segment was then read
+into one of those freed blocks, which broke the heap, and the program's
+entry pointed into the wrong segment. Now a program with no stack yet
+discards none of its code. A program started by another also leaves its
+PRELOAD segments until they are first called, since it cannot make room
+by discarding the first program's code.
+
+**Then there was not enough memory, and the fix had to respect the
+eight-claim limit.** One os8088 program holds at most eight claims, and
+WIN16's heap is made of them. Calculator plus Help needed a fourth arena.
+Six arenas worked as well, but once all six were held there was no claim
+left for fetching a part. A large program would then fail opening a file,
+which is the failure the limit's section was written about. Moving the
+loader's temporary buffers into the heap, to save claims, was tried and
+undone: the small buffer created the arena first and sized it too small
+for Help's code. Four arenas it is, with the arithmetic in SPEC.md.
+
+**What works, and what doesn't yet:**
+
+- Calculator 3.0's *Help > Index* starts Windows Help in the same window
+  group, and Help answers.
+- Program Manager's *File > Run* `clock` starts Clock, and its second hand
+  moves.
+- `ShellExecute` on a Windows program now starts it in the same instance,
+  and the TASKS fixture uses it for its last TASKB.
+
+Help itself then says it cannot find `CALC.HLP`, even with the file next to
+it, and its own File > Open lists no help files. That is the next thing to
+trace. Notepad and Help together need more than 640 KB.

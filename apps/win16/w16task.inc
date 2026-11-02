@@ -436,6 +436,8 @@ W16SYS w16t_turns
 w16t_work:
     cmp byte [si + W16K_ST], W16KS_NEW
     je .yes
+    cmp byte [es:W16BO(w16_state, w16_state)], W16S_ENDED
+    je .yes                         ; (it ended in a directed run, w16t_drun)
     cmp byte [es:W16BO(w16_inpeek, w16_cbax)], 0
     jne .yes
     cmp byte [es:W16BO(w16_inget, w16_cbax)], 0
@@ -507,6 +509,8 @@ w16t_serve:
     push di
     call w16t_to
     call w16t_rec
+    cmp byte [w16_state], W16S_ENDED
+    je .after                       ; w16_after ends it (w16t_end)
     cmp byte [si + W16K_ST], W16KS_NEW
     jne .old
     mov byte [si + W16K_ST], W16KS_RUN
@@ -969,6 +973,379 @@ W16SYS w16t_loadmod
     pop si
     ret
 
+; w16t_shexe - ShellExecute's (SPEC.md 124.24.10), its file found: an .EXE
+; that WIN16 runs is started as a task of this instance (124.28.5), as
+; WinExec starts one, with lpParameters as its tail and nShowCmd. out: CF=0
+; AX = its hInstance, or SE_ERR_OOM; CF=1 not an .EXE, or not one WIN16
+; runs, or not where a task's file is looked for - the caller posts it
+w16t_shexe:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    ICALL w16_args
+    les di, [es:bx + 10]            ; lpFile: ".EXE" at its end?
+    mov [cs:w16t_np], di
+    mov [cs:w16t_np + 2], es
+    xor cx, cx
+.end:
+    cmp byte [es:di], 0
+    je .ended
+    inc di
+    inc cx
+    jmp short .end
+.ended:
+    cmp cx, 4
+    jb .no
+    mov ax, [es:di - 4]
+    and ah, 0xDF
+    cmp ax, 'E' * 256 + '.'
+    jne .no
+    mov ax, [es:di - 2]
+    and ax, 0xDFDF
+    cmp ax, 'E' * 256 + 'X'
+    jne .no
+    ICALL w16_args
+    mov ax, [es:bx]
+    mov [cs:w16t_sh], ax
+    les di, [es:bx + 6]             ; lpParameters, leading spaces gone
+    xor cx, cx
+    mov ax, es
+    or ax, di
+    jz .tail
+.sp:
+    cmp byte [es:di], ' '
+    jne .tail
+    inc di
+    jmp short .sp
+.tail:
+    mov [cs:w16t_tp], di
+    mov [cs:w16t_tp + 2], es
+    mov ax, es
+    or ax, di
+    jz .go
+.len:
+    cmp byte [es:di], 0
+    je .go
+    inc cx
+    inc di
+    cmp cx, 126
+    jb .len
+.go:
+    mov [cs:w16t_tn], cx
+    call w16t_exec
+    cmp ax, 32
+    jae .yes
+    cmp ax, 2                       ; not found where a task's file is looked
+    je .no                          ;   for, or not one WIN16 runs: posted
+    cmp ax, 11
+    je .no
+    mov ax, SE_ERR_OOM
+.yes:
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; -----------------------------------------------------------------------------
+; w16t_help - WinHelp's (USER.171), from the image's handler: ES:BX = its
+; arguments, +0 dwData, +4 wCommand, +6 lpHelpFile, +10 hWnd. Windows 3.x's
+; own way (SPEC.md 124.28.10): the window of class MS_WINHELP is sent the
+; registered message WM_WINHELP with a block saying what to show - and when
+; there is no such window, WINHELP.EXE -x is started as a task of this
+; instance and run until it waits, which makes one. out: CF=1 WINHELP.EXE
+; could not be started (the handler's message box says so); CF=0 AX = FFFFh
+; the arguments at ES:BX are SendMessage's now, else AX = the answer
+; -----------------------------------------------------------------------------
+HELP_QUIT       equ 2
+HELP_KEY        equ 0x0101
+HELP_COMMAND    equ 0x0102
+HELP_PARTIALKEY equ 0x0105
+HELP_MULTIKEY   equ 0x0201
+HELP_SETWINPOS  equ 0x0203
+
+%assign w16t_wmh 0              ; RegisterWindowMessage("WM_WINHELP"), by
+%strlen w16t_n 'WM_WINHELP'     ;   w16u_regmsg's own hash (124.20.4)
+%assign w16t_i 1
+%rep w16t_n
+  %substr w16t_c 'WM_WINHELP' w16t_i
+  %assign w16t_wmh (((w16t_wmh << 5) | (w16t_wmh >> 11)) & 0xFFFF) ^ w16t_c
+  %assign w16t_i w16t_i + 1
+%endrep
+WM_WINHELP equ (w16t_wmh & 0x3FFF) | 0xC000
+
+w16t_help:
+    push cx
+    push dx
+    push si
+    push di
+    call w16t_hfind                 ; AX = the help window
+    jnc .have
+    mov ax, 1                       ; HELP_QUIT with no Help running: done
+    cmp word [es:bx + 4], HELP_QUIT
+    je .out
+    push es
+    push bx
+    mov word [cs:w16t_np], w16t_s_help  ; XSEC-OK: a part 9 string, cs:
+    mov [cs:w16t_np + 2], cs
+    mov word [cs:w16t_tp], w16t_s_x     ; XSEC-OK: ...and its tail
+    mov [cs:w16t_tp + 2], cs
+    mov word [cs:w16t_tn], 2
+    mov word [cs:w16t_sh], 1        ; SW_SHOWNORMAL
+    call w16t_exec
+    cmp ax, 32
+    jb .none
+    mov al, [cs:w16t_new]           ; its first run, now: it makes the window
+    call w16t_drun
+    pop bx
+    pop es
+    call w16t_hfind
+    jnc .have
+    xor ax, ax                      ; it made none: FALSE
+    jmp .out
+.none:
+    pop bx
+    pop es
+    stc
+    jmp .ret
+.have:
+    push ax                         ; the help window
+    xor cx, cx                      ; CX = the file's bytes with its NUL
+    push es
+    les di, [es:bx + 6]
+    call w16t_slen
+    pop es
+    mov si, cx
+    xor cx, cx                      ; ...SI, and CX = the data's
+    mov ax, [es:bx + 4]
+    push es
+    les di, [es:bx]
+    cmp ax, HELP_KEY
+    je .str
+    cmp ax, HELP_COMMAND
+    je .str
+    cmp ax, HELP_PARTIALKEY
+    je .str
+    cmp ax, HELP_MULTIKEY           ; MULTIKEYHELP and HELPWININFO: their
+    je .sized                       ;   first word is their size
+    cmp ax, HELP_SETWINPOS
+    jne .sz
+.sized:
+    mov ax, es
+    or ax, di
+    jz .sz
+    mov cx, [es:di]
+    jmp short .sz
+.str:
+    call w16t_slen
+.sz:
+    pop es
+    mov ax, [cs:w16t_hblk]          ; the last request's block: Help has
+    or ax, ax                       ;   read it by now
+    jz .new
+    push cx
+    push si
+    ICALL w16_gfreeh
+    pop si
+    pop cx
+.new:
+    mov ax, 16                      ; the WINHELP header, the file, the data
+    add ax, si
+    add ax, cx
+    push ax
+    push cx
+    xor dx, dx
+    xor cl, cl
+    ICALL w16_gnew                  ; (fixed: the handle is the segment)
+    pop cx
+    pop dx                          ; DX = the size
+    mov [cs:w16t_hblk], ax
+    or ax, ax
+    jnz .fill
+    pop ax
+    xor ax, ax                      ; FALSE
+    jmp short .out
+.fill:
+    push ds
+    push es
+    push bx
+    mov di, ax                      ; ES = the block, DS:BX = the arguments
+    push es
+    pop ds
+    mov es, di
+    xor di, di
+    cld
+    mov ax, dx                      ; +0 size
+    stosw
+    mov ax, [bx + 4]                ; +2 wCommand
+    stosw
+    mov ax, [bx]                    ; +4 dwData
+    stosw
+    mov ax, [bx + 2]
+    stosw
+    xor ax, ax                      ; +8 reserved
+    stosw
+    stosw
+    mov ax, si                      ; +12 the file's offset, 0 none
+    or ax, ax
+    jz .nof
+    mov ax, 16
+.nof:
+    stosw
+    mov ax, cx                      ; +14 the data's, 0 none
+    or ax, ax
+    jz .nod
+    mov ax, 16
+    add ax, si
+.nod:
+    stosw
+    push cx                         ; (a count of 0 loads no pointer: the
+    mov cx, si                      ;   data of HELP_CONTEXT is a number)
+    jcxz .nofile
+    push ds
+    lds si, [bx + 6]
+    rep movsb
+    pop ds
+.nofile:
+    pop cx
+    jcxz .nodata
+    lds si, [bx]
+    rep movsb
+.nodata:
+    pop bx
+    pop es
+    pop ds
+    mov ax, [cs:w16t_hblk]          ; SendMessage(help, WM_WINHELP, hWnd,
+    mov [es:bx], ax                 ;   MAKELONG(the block, 0))
+    mov word [es:bx + 2], 0
+    mov ax, [es:bx + 10]
+    mov [es:bx + 4], ax
+    mov word [es:bx + 6], WM_WINHELP
+    pop word [es:bx + 8]
+    mov ax, 0xFFFF
+.out:
+    clc
+.ret:
+    pop di
+    pop si
+    pop dx
+    pop cx
+    ret
+
+; w16t_slen - ES:DI = a string or NULL -> CX = its bytes with the NUL, 0 for
+; NULL. Keeps the rest
+w16t_slen:
+    xor cx, cx
+    push ax
+    mov ax, es
+    or ax, di
+    jz .out
+    push di
+.c:
+    inc cx
+    cmp byte [es:di], 0
+    je .end
+    inc di
+    jmp short .c
+.end:
+    pop di
+.out:
+    pop ax
+    ret
+
+; w16t_hfind - CF=0 AX = the top-level window of class MS_WINHELP, of any
+; task; CF=1 none. Keeps the rest
+w16t_hfind:
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    push cs
+    pop es
+    xor cx, cx
+.w:
+    ICALL w16_slot2rec              ; BX = slot CX's record
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .n
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz .n
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .n
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .n
+    mov al, [bx + W16W_CLS]
+    mov ah, W16C_SIZE
+    mul ah
+    add ax, w16_cls
+    mov si, ax                      ; a class's name: upper case, NUL-padded
+    mov di, w16t_s_wh               ; XSEC-OK: part 9's, compared through cs:
+    push cx
+    mov cx, 16
+    cld
+    repe cmpsb
+    pop cx
+    je .y
+.n:
+    inc cx
+    cmp cx, W16_MAXWND
+    jb .w
+    stc
+    jmp short .out
+.y:
+    ICALL w16_rec2hwnd
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; w16t_drun - AL = a task that has never run, from inside the current task's
+; call: its first run, now, nested in that call - a directed yield - until
+; it waits or ends (124.28.10). The caller is current again after. A task
+; that ended in it is ended by the turns (w16t_work). Keeps BX, CX, DX
+w16t_drun:
+    push ax
+    push si
+    mov ah, [w16_cur]
+    push ax
+    push word [w16_hss]             ; the caller's run's (w16t_xsend's)
+    push word [w16_hsp]
+    push word [w16_hflags]
+    call w16t_to
+    call w16t_rec
+    mov byte [si + W16K_ST], W16KS_RUN
+    push bx
+    push cx
+    push dx
+    xor ax, ax                      ; the first run, as w16t_serve's
+    xor dx, dx
+    ICALL w16_resume
+    pop dx
+    pop cx
+    pop bx
+    pop word [w16_hflags]
+    pop word [w16_hsp]
+    pop word [w16_hss]
+    pop ax
+    mov al, ah
+    call w16t_to
+    mov byte [w16_inprog], 1        ; the caller's call is still being served
+    pop si
+    pop ax
+    ret
+
 ; -----------------------------------------------------------------------------
 ; w16t_exec - [cs:w16t_np] the program's name (to a space or a NUL),
 ; [cs:w16t_tp]/[cs:w16t_tn] its command tail, [cs:w16t_sh] its nCmdShow:
@@ -1243,6 +1620,10 @@ w16t_vol:   db 0
 w16t_new:   db 0                    ;   ...the new task's index
 w16t_old:   db 0                    ;   ...and the caller's
 w16t_blk:   dw 0                    ;   ...its context block
+w16t_hblk:  dw 0                    ; WinHelp's last WM_WINHELP block
+w16t_s_help: db 'WINHELP.EXE', 0     ; ...the program it starts
+w16t_s_x:   db '-x', 0
+w16t_s_wh:  db 'MS_WINHELP', 0, 0, 0, 0, 0, 0   ; ...its window's class
 w16t_busy:  db 0                    ; w16t_turns is running
 w16t_dead:  db 0                    ; w16t_end: the dead task's owner byte
 

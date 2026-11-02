@@ -5,14 +5,16 @@
  * posts to TASKB's task with no window (PostAppMessage), and TASKB answers.
  * Then it sends to TASKB's window, and TASKB's procedure sends back to this
  * one before it answers; then TASKB is closed, and this program goes on
- * with one task. Last, it starts TASKB again with the tail "last" and
- * ends, so TASKB is left with WIN16's own window: that TASKB puts up the
- * MessageBox, "TASKS OK" when its own checks pass too (taskb.c).
+ * with one task. Last, it starts TASKB again, by ShellExecute this time,
+ * with the parameters "last", and ends, so TASKB is left with WIN16's own
+ * window: that TASKB puts up the MessageBox, "TASKS OK" when its own
+ * checks pass too (taskb.c).
  *
  * Its MessageBox is "TASKS OK" or names each check that failed; the row
  * win16tasks reads it off the program's stack.
  */
 #include <windows.h>
+#include <shellapi.h>
 #include <string.h>
 
 #define WM_BHELLO   (WM_USER + 1)       /* TASKB -> here: it has started */
@@ -38,7 +40,10 @@ static void check(int ok, const char *tag)
 
 static void done(void)
 {
-    if (fails == 0 && WinExec("TASKB.EXE last", SW_SHOWNORMAL) >= 32) {
+    /* the last one by ShellExecute, which starts a Windows program in this
+     * instance as WinExec does (SPEC.md 124.24.10) */
+    if (fails == 0 && (UINT)ShellExecute(me, NULL, "TASKB.EXE", "last", NULL,
+                                         SW_SHOWNORMAL) >= 32) {
         DestroyWindow(me);              /* TASKB says it, after this ends */
         return;
     }
