@@ -15473,8 +15473,8 @@ Five things hold it up.
   machine whose software never asks still never reads port 60h for this — the
   scoping that keeps `kbm_isr`'s unproven 8042 claim off machines that do not
   want the feature. An app that wants Alt+Enter therefore asks for the map
-  once, which is one `OSAPI_KEY_DOWN` call in its entry proc; §96.33.5.1 is
-  the worked example. Arming this way rather than at boot is what makes the
+  once, which is one `OSAPI_KEY_DOWN` call, typically in its entry proc;
+  §96.33.5.1 is the worked example, and says why DOS asks later than that. Arming this way rather than at boot is what makes the
   feature cost **zero** on every machine that does not use it.
 - **A BIOS that DOES deliver it must not deliver it twice, and THE LATCH IS
   THE TEST.** A typed key arriving with the latch still full is that same
@@ -176548,11 +176548,21 @@ a good deal longer than one frame, and a level read cannot tell that hold from
 the next press. On a machine entered from the **menu** the seed costs nothing:
 the first poll finds the keys up and clears it.
 
-**DOS ARMS the map, in its entry proc.** §9.7's map does not exist until
-something calls `kbd_down`, so DOS asks once — `OSAPI_KEY_DOWN` on
-`KSC_ALT`, whose answer is discarded — and both halves work from then on. It
-is one far call at launch and it is what keeps the feature's cost at zero on
-every machine that never opens DOS.
+**DOS ARMS the map when it keeps its window** (`dos_keyarm`). §9.7's map
+does not exist until something calls `kbd_down`, so DOS asks once —
+`OSAPI_KEY_DOWN` on `KSC_ALT`, whose answer is discarded — and both halves
+work from then on. It is one far call, and it is what keeps the feature's
+cost at zero on every machine that never opens DOS.
+
+It asks when it opens **empty**, as a console, and in the wake just before
+it **runs** a program. It does not ask in the entry proc any more.
+Every desktop launch of a Windows program passes through DOS, which only
+hands the NE to WIN16 and closes (§124.3). That is not opening DOS, and an
+armed map is `kbm_isr`'s port-60h peek on every key for the rest of the
+session. On an 8042 that loads its next byte the moment the port is read
+(QEMU's), the ROM then reads the following byte, so a byte is lost. One was
+the Ctrl release of `win16file`'s Ctrl+End, which left Ctrl down for its next
+four keys.
 
 **Nothing was spent on a hint.** The full-screen row already says ` Esc to
 leave` and that sentence is still true; a second key on it would be eight
@@ -227457,6 +227467,11 @@ accepted from `SetClipboardData`, freed, and not available afterwards.
 Line ends are translated each way. Windows' text ends a line with CR LF and
 os8088's with CR (§27), so a put drops the LF after each CR and a get puts
 one back. The text a program gets is NUL-terminated, as `CF_TEXT` is.
+**Every byte after the NUL is zero too**, to the block's `GlobalSize`: the
+block is allocated `GMEM_ZEROINIT`. Calculator 3.1's Paste keys in every
+byte of the block's size, not only the bytes before the NUL. With the arena's
+leftovers in the rounded-up tail, `12+3=` pasted from Note Pad ticked Hyp
+and ended on π (`win16calc`).
 
 | call | |
 |---|---|
@@ -230376,9 +230391,11 @@ is a program whose whole job is starting others. From S21 one instance
 hosts several programs, its **tasks**.
 
 The instance is still one os8088 package instance and one owner of claims.
-Launching a second `.EXE` from the desktop still starts a second instance;
-a program started by a program (`WinExec`, `LoadModule`, `WinHelp`,
-`ShellExecute` of a Windows program) joins the instance that asked.
+A program started by a program (`WinExec`, `LoadModule`, `WinHelp`,
+`ShellExecute` of a Windows program) joins the instance that asked, and
+**so does a second `.EXE` launched from the desktop** while a WIN16
+instance runs a program (124.28.12): one instance is about 290 KB, and two
+of them do not fit in 640 KB.
 
 #### 124.28.1 A task
 
@@ -230801,6 +230818,64 @@ brings it, as every other Windows program (`make win16disk WIN3X=<dir>`).
   the caller is answered a number below 32.
 - A window a stray `-x` start leaves draws a few pixels of its title at
   the desktop's top left.
+
+#### 124.28.12 A desktop launch joins the running instance
+
+*As a user, a second Windows program I double-click opens beside the first,
+as it did on Windows.* Every desktop launch of a Windows program passes
+through `DOS.O88`: `.EXE` is DOS's extension, and `dos_w16_try` hands an NE
+on (§124.3). Before it starts a WIN16 instance, it looks for one that is
+running a program and gives the program to it instead.
+
+**The join box** is 24 bytes of WIN16's image at a pinned offset,
+`W16J_AT` = 96, directly after the header and the icon. Its layout is
+`apps/win16/w16join.inc`, which both packages include as source:
+
+| offset | size | what |
+|---|---|---|
+| +0 | word | `W16J_SIG`, `'WJ'` |
+| +2 | byte | `W16J_V1` = 1, the layout's version |
+| +3 | byte | 1 while a program runs and a join is taken, written by WIN16 |
+| +4 | word | WIN16's os8088 window, written by WIN16 at its entry |
+| +6 | byte | 1 while a locator waits: set last by DOS, cleared by WIN16 |
+| +7 | byte | 0 |
+| +8 | 16 bytes | the program's locator, `OSAPI_ARG_FILE`'s shape (§21.5.3) |
+
+**DOS looks** with `OSAPI_SYS_SNAPSHOT`, into the cluster claim it already
+holds to read the header. A live package instance whose region is at least
+`W16J_AT` + 24 bytes, whose box has the signature and version, says a
+program runs, and holds no locator, takes it. DOS writes the locator, sets
+the request byte, and wakes WIN16's window with `OSAPI_WM_WAKE`. If the
+wake is refused, the request byte is cleared again and DOS starts an
+instance as before. When it is taken, DOS's window closes, as it does when
+WIN16 starts.
+
+**This is the one place a package wakes another's window.** `wm_wake`
+takes any window record and dispatches the wake to its owner. DOS and WIN16
+are one source tree, which is what the signature and version stand for. A
+WIN16 of another layout fails the test, and DOS starts it as a second
+instance. Everything runs on the UI task, so WIN16 cannot run between DOS's
+test and its write.
+
+**WIN16 takes it** first in its wake handler, before anything else, as it
+takes a ShellExecute's launch (§124.24.10). `w16t_join` clears the request,
+then starts the program as `WinExec` starts one (124.28.5). The program
+starts in the folder the locator names, with no command tail and
+`SW_SHOWNORMAL`. If the request can't be met, the reason is a toast with
+the program's name:
+
+| `WinExec`'s answer | toast |
+|---|---|
+| 0 | `No memory: NAME.EXE` |
+| 2, or the instance's program ended before the wake | `Not found: NAME.EXE` |
+| 11 | `Can't run: NAME.EXE` |
+| 16 | `Too many: NAME.EXE` |
+
+**Only a desktop launch joins.** WIN16.O88 opened on its own still starts
+an instance that is not running anything yet. An instance that is loading,
+has refused, or has ended has a 0 at +3 and is never joined. One locator
+waits at a time. A second desktop launch before WIN16's wake finds the
+request byte set, and starts an instance of its own.
 
 #### 124.28.11 What checks it
 

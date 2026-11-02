@@ -1384,6 +1384,19 @@ its table goes in the diary, so the reach is measured, not claimed.
 
 ### Phase B: protected mode, on a 286 and up (O1)
 
+  - [x] Batch 6, from the final pass: **a desktop launch joins the
+    running instance** (SPEC.md §124.28.12, the owner's decision). Two
+    instances, about 290 KB each, no longer fit in 640 KB, and the second
+    one failed for memory. DOS.O88 hands every Windows program on, so it
+    now finds a WIN16 running a program through the instance snapshot,
+    writes the program's locator into a 24-byte join box pinned at offset
+    96 of WIN16's image (`apps/win16/w16join.inc`), and wakes WIN16's
+    window. WIN16 starts the program as `WinExec` would. 54 image bytes.
+    - Found on the way: End Task on the first program ended whichever
+      task ran last; Calculator 3.1's Paste reads every byte of the
+      clipboard block's size (now zero after the NUL); and DOS armed the
+      kernel's key map in its entry, so every Windows launch left QEMU's
+      8042 peek losing bytes. DOS now arms it when it keeps its window.
 - [ ] **S22: The `kern_mega` arm (R3).**
   - *As a user on a 286, Registry Editor runs, and Write keeps its document
     in memory above 1 MB.*

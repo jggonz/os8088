@@ -25,6 +25,7 @@
 %include "os88api.inc"
 %include "doscall.inc"              ; where the DOS core goes (SPEC.md 124.21.1)
 %include "win16/w16dos.inc"         ; ...and WIN16's host above it
+%include "win16/w16join.inc"        ; the join box's layout (SPEC.md 124.28.12)
 
     OS88_HEADER 'WIN16', w16_entry, OS88_F_ICON | OS88_F_PARTS
 
@@ -38,6 +39,20 @@
     dw 0xFFFF, 0xFFFF, 0x8001, 0x8001, 0x9EF1, 0x9EF1, 0x9EF1, 0x8001
     dw 0x9EF1, 0x9EF1, 0x9EF1, 0x8001, 0x8001, 0xFFFF, 0x0000, 0x0000
     OS88_ICON16_END
+
+; --- the join box (SPEC.md 124.28.12, w16join.inc): pinned after the icon,
+; where DOS.O88 finds it in a running instance and leaves a desktop launch
+w16_jbox:
+    dw W16J_SIG
+    db W16J_V1
+w16_jok:  db 0                      ; 1 while a program runs: a join is taken
+w16_jwin: dw 0                      ; our window, for DOS's OSAPI_WM_WAKE
+w16_jreq: db 0                      ; 1: a locator waits in w16_jdoc
+    db 0
+w16_jdoc: times 16 db 0
+%if w16_jbox - $$ != W16J_AT || $ - w16_jbox != W16J_SIZE
+ %error "the join box is not where w16join.inc pins it"
+%endif
 
 ; --- the states -------------------------------------------------------------
 W16S_IDLE    equ 0              ; launched empty
@@ -1138,6 +1153,7 @@ w16_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr
     jc .out
     mov [w16_win], bx
+    mov [w16_jwin], bx
     mov ax, w16_wake
     call OSAPI_WM_ONWAKE
     mov ax, w16_onclose
@@ -1197,6 +1213,10 @@ w16_entry:
 ; work: a second wake finds W16S_RUN or W16S_REFUSED and does nothing.
 ; =============================================================================
 w16_wake:
+    cmp byte [w16_jreq], 0          ; a desktop launch DOS left us, first
+    je .nojn                        ;   (SPEC.md 124.28.12)
+    SCALL w16t_join
+.nojn:
     cmp byte [w16_shq], 0           ; a ShellExecute's launch, first: this is
     je .nosh                        ;   where the lock is free (124.24.10)
     SCALL w16c_shrun
@@ -1220,6 +1240,7 @@ w16_wake:
     call w16_repaint
     ret
 .run:
+    mov byte [w16_jok], 1           ; a desktop launch may join us now
     mov si, w16_s_running
     mov di, w16_l2
     call w16_strcpy
@@ -1324,6 +1345,7 @@ w16_endshow:
 ; w16_freeprog - give back the program's claim, its global heap, the face
 ; and the dialog part, once
 w16_freeprog:
+    mov byte [w16_jok], 0           ; nothing runs to join (124.28.12)
     cmp word [w16_dseg], 0          ; the library part's own (SPEC.md
     je .nolib                       ;   124.19.3): a program that never fetched
     LCALL w16pf_endprog             ;   it opened no profile, played no note,

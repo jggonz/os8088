@@ -1495,6 +1495,67 @@ w16t_drun:
     ret
 
 ; -----------------------------------------------------------------------------
+; w16t_join - from the wake handler: the desktop launch DOS.O88 left in the
+; join box (SPEC.md 124.28.12) started as a task, as WinExec starts one,
+; from the folder it was opened in, with no tail and SW_SHOWNORMAL. A launch
+; that cannot be met says why in a toast with the program's name
+; -----------------------------------------------------------------------------
+w16t_join:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov byte [w16_jreq], 0          ; taken: a refusal is said once
+    mov ax, 2
+    cmp byte [w16_jok], 0           ; the program ended before the wake
+    je .say
+    mov word [cs:w16t_np], w16_jdoc
+    mov [cs:w16t_np + 2], ds
+    xor ax, ax
+    mov [cs:w16t_tp], ax
+    mov [cs:w16t_tp + 2], ax
+    mov [cs:w16t_tn], ax
+    mov word [cs:w16t_sh], SW_SHOWNORMAL
+    mov ax, [w16_jdoc + 13]
+    mov [cs:w16t_dir], ax
+    mov al, [w16_jdoc + 15]
+    mov [cs:w16t_vol], al
+    mov byte [cs:w16t_at], 1
+    call w16t_exec
+    mov byte [cs:w16t_at], 0
+    cmp ax, 32
+    jae .out
+.say:
+    mov si, w16t_s_nomem            ; XSEC-OK: read through cs:
+    or ax, ax
+    jz .tell
+    mov si, w16t_s_cant             ; XSEC-OK
+    cmp ax, 11
+    je .tell
+    mov si, w16t_s_many             ; XSEC-OK
+    cmp ax, 16
+    je .tell
+    mov si, w16t_s_nofile           ; XSEC-OK
+.tell:
+    mov bx, w16_jdoc
+    call w16c_say
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16t_s_nomem:   db 'No memory: ', 0
+w16t_s_nofile:  db 'Not found: ', 0
+w16t_s_cant:    db "Can't run: ", 0
+w16t_s_many:    db 'Too many: ', 0
+
+; -----------------------------------------------------------------------------
 ; w16t_exec - [cs:w16t_np] the program's name (to a space or a NUL),
 ; [cs:w16t_tp]/[cs:w16t_tn] its command tail, [cs:w16t_sh] its nCmdShow:
 ; loaded as a new task while the caller waits in the call (124.28.5).
@@ -1522,7 +1583,15 @@ w16t_exec:
     mov [cs:w16t_new], al
     call w16t_name                  ; [w16_mbtext]; CF=1 none
     jc .nofile
+    cmp byte [cs:w16t_at], 0        ; a desktop launch: where it was opened
+    je .look                        ;   (124.28.12), and nowhere else
+    mov dx, [cs:w16t_dir]
+    mov bl, [cs:w16t_vol]
+    call w16t_in
+    jmp short .looked
+.look:
     call w16t_where                 ; DX = its folder, BL = its volume
+.looked:
     jc .nofile
     mov [cs:w16t_dir], dx
     mov [cs:w16t_vol], bl
@@ -1766,6 +1835,7 @@ w16t_sh:    dw 0                    ;   ...nCmdShow
 w16t_dir:   dw 0                    ;   ...where the file is
 w16t_vol:   db 0
 w16t_new:   db 0                    ;   ...the new task's index
+w16t_at:    db 0                    ;   1: in w16t_dir/w16t_vol only (join)
 w16t_old:   db 0                    ;   ...and the caller's
 w16t_blk:   dw 0                    ;   ...its context block
 w16t_hblk:  dw 0                    ; WinHelp's last WM_WINHELP block

@@ -3252,3 +3252,56 @@ and everything is handed back when the instance closes.
 table, and it holds four names. That is enough for this conversation and
 too few for Program Manager's DDE server, so moving it out of the image is
 on the list.
+
+## 2026-11-02 — S21, batch 6: the second program joins the first
+
+**The final pass found the memory wall.** One WIN16 instance now costs
+about 290 KB: the program's DGROUP, the 61 KB library part, two arenas and
+the 64 KB image. Double-clicking a second Windows program started a second
+instance, and on a 640 KB machine the second one ran out of memory before
+its program was loaded. The owner chose the Windows answer: a second
+program launched from the desktop joins the instance that is already
+running, as a task, the way a program started by `WinExec` already does.
+
+**Every desktop launch already passes through one door.** `.EXE` belongs
+to DOS.O88, which reads the header and hands a Windows program on to
+WIN16. So DOS is where the join happens. It asks the kernel for its
+instance snapshot and looks in each running package for a small signed
+record, the "join box", 24 bytes pinned right after WIN16's icon. A box
+that says a program is running and has no request waiting gets the new
+program's name and folder. DOS then wakes WIN16's window and closes its
+own. WIN16 takes the request first thing in its wake handler and starts
+the program as a task. Both packages include the box's layout from one
+file, so they cannot disagree about it, and a WIN16 built with another
+layout is simply not joined.
+
+**Why not let the second WIN16 hand over and quit?** It could, but a
+package that refuses at its entry costs a full-screen repaint on the way
+out, which on an XT is the most expensive thing the desktop does. DOS
+closing its own window costs only what was under it.
+
+**Three old defects surfaced while checking it:**
+
+- *End Task ended the wrong program.* The "It has not closed. End it?"
+  alert is asked about WIN16's own window, which belongs to the first
+  program, but the answer ended whichever task had run last. The answer
+  now switches to the first program before ending it. The program left
+  then takes WIN16's window over, as the S21 design says it should.
+- *Calculator 3.1 pasted π.* Its Paste keys in every byte of the
+  clipboard block, the full rounded-up size and not just the text before
+  the NUL, and the leftover arena bytes after the NUL included an `h` and
+  a `p`. The block is now zero-filled.
+- *Notepad lost the first keys after Ctrl+End.* Two things were wrong. DOS
+  armed the kernel's key-state map as soon as it opened, even when it
+  only forwarded a Windows program, and an armed map makes the keyboard
+  interrupt read the 8042's port before the ROM does, which on QEMU loses
+  a byte. DOS now arms the map only when it keeps its window. The test
+  also sent Ctrl+End with a hold time, which bypasses the harness's
+  confirmed-keystroke path, so Ctrl's release could overtake the press.
+
+**What was checked:** `win16desk` now runs WRITERB and Minesweeper as
+second tasks of a running instance, ends MENU with End Task while
+Minesweeper goes on in WIN16's window, and finds the heap as it was.
+`win16calc` runs both Calculators, `win16file` saves Notepad's typed line,
+and the fast tier passes.
+

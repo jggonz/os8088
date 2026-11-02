@@ -149,7 +149,9 @@ def notepad_leg(d, ui, S, dw, bad):
         bad.append("Notepad: Page Down moved the first line %d -> %d"
                    % (top1, w(e, ME_TOP)))
 
-    d.hmp("sendkey ctrl-end 300")
+    d.hmp("sendkey ctrl-end")              # CONFIRMED: a hold time sends it
+                                           # through HMP raw, whose release
+                                           # can beat the press (tools/qmp.py)
     d.idle(3.0)
     if w(edit(), EC_CARET) != len(want):
         bad.append("Notepad: Ctrl+End left the caret at %d, not %d"

@@ -1357,6 +1357,21 @@ w16c_shrun:
     cmp al, W16C_LDBAD
     jne .out
     mov si, w16c_s_noprog           ; XSEC-OK: read through cs:
+    mov bx, w16_shdoc
+    call w16c_say
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16c_say - a toast: CS:SI = its words, then DS:BX = a NUL name after them
+; (at most TOAST_MAX together). Clobbers AX, CX, SI, DI, ES
+w16c_say:
     mov di, w16c_toast              ; XSEC-OK: the part's buffer
 .p:
     mov al, [cs:si]
@@ -1367,27 +1382,17 @@ w16c_shrun:
     inc di
     jmp short .p
 .n:
-    mov si, w16_shdoc
-.c:
-    mov al, [si]
+    mov al, [bx]
     mov [cs:di], al
-    inc si
+    inc bx
     inc di
     or al, al
-    jnz .c
+    jnz .n
     push cs
     pop es
     mov si, w16c_toast              ; XSEC-OK: ES = CS
     xor cx, cx
     call OSAPI_TOAST
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; FindExecutable (SHELL.21) - args: +0 lpResult, +4 lpDirectory, +8 lpFile.

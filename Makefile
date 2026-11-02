@@ -7281,7 +7281,7 @@ $(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP) $(PKG
 # strings have to name.
 # --- DOS (SPEC.md 96) --------------------------------------------------------
 $(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
-                  apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                  apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                   apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                   apps/os88line.inc apps/os88sock.inc \
@@ -7375,7 +7375,7 @@ $(shell mkdir -p $(BUILD); \
 
 $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
                       apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                       apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                       apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7393,7 +7393,7 @@ $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 # and the Memory page's `Load DOS in the HMA` picks; nothing else builds it.
 $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
                        apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
-                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                        apps/os88api.inc apps/dos/doscall.inc \
                        apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                        apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7417,7 +7417,7 @@ DOSW16DEF := $(if $(KERN_MEGA)$(KERN_SMALL),,-DDOS_WIN16)
 # is never read by op_load - the handoff walks its bytes into extents and the
 # stub reads them with int 13h (docs/plans/KERN-DOS-PLAN.md §4.1.1).
 $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
-                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                    apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                    apps/os88line.inc apps/os88sock.inc \
@@ -7437,7 +7437,7 @@ $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/
 # build - the two hosts each carry the other half and would never notice.
 # `all` builds it, because a check nobody runs is a check that rots.
 $(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \
+                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnet.inc \
                       apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
@@ -18968,7 +18968,7 @@ $(BUILD)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc \
                             $(BUILD)/win16/w16dcore.inc apps/dos/dosbe.inc \
                             apps/dos/dos.asm apps/dos/doscall.inc \
                             apps/dos/doscents.inc apps/os88api.inc \
-                            apps/os88rseq.inc apps/dos/dosnetabi.inc \
+                            apps/os88rseq.inc apps/dos/dosnetabi.inc apps/win16/w16join.inc \
                             apps/os88cp437.inc apps/os88partsbody.inc \
                             drivers/net/netpkg.inc
 	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \

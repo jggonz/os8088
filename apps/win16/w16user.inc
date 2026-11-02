@@ -3564,7 +3564,13 @@ w16_closemsg:
 ; w16_etdone - the End Task alert's answer, the gfx lock held. Proceed (1):
 ; the program ends where it is - its windows, its memory, WIN16's window.
 ; Cancel, or the alert dismissed: the program is asked again, WM_CLOSE.
+; It is asked about WIN16's window, whose program is the first task: that
+; one made current, not whichever ran last (SPEC.md 124.28.8)
 w16_etdone:
+    push si
+    mov si, [w16_win]
+    call w16_cbin
+    pop si
     cmp byte [w16_state], W16S_RUN
     jne .no
     cmp al, 1

@@ -151,6 +151,10 @@ def bdisk(out, size, names, extra=()):
                    check=True, capture_output=True)
 
 
+W16_MAXTASK, W16K_SIZE, W16K_ST = 4, 6, 4       # win16.asm's task record
+W16KS_RUN, W16KS_NEW = 1, 2
+
+
 class Prog(object):
     def __init__(self, d, ui, sym, S, name):
         self.d, self.ui, self.sym, self.S, self.name = d, ui, sym, S, name
@@ -166,7 +170,10 @@ class Prog(object):
         raw = self.d.read((self.seg << 4) + self.S[n], 48)
         return raw.split(b"\0")[0].decode("latin-1")
 
-    def launch(self, dw):
+    def launch(self, dw, join=None):
+        """double-click it in dw. join = the Prog of a WIN16 instance that
+        runs a program: this one joins it as a task (SPEC.md 124.28.12),
+        and its window is the new one WIN16's segment owns"""
         ui, d = self.ui, self.d
         i, _ = ui.entry(self.name, dw)
         before = set(w.i for w in ui.windows())
@@ -179,13 +186,26 @@ class Prog(object):
             for w in ui.windows():
                 if w.i not in before and w.visible:
                     seg = u16(d.read(geom.winptr(d, w, self.sym) + geom.W_SEG, 2))
-                    if seg and d.read((seg << 4) + self.S["w16_name"], 13) \
+                    if not seg:
+                        continue
+                    if join is not None:
+                        if seg == join.seg:
+                            box["p"] = (w, seg)
+                            return True
+                    elif d.read((seg << 4) + self.S["w16_name"], 13) \
                             .split(b"\0")[0].decode("latin-1") == self.name:
                         box["p"] = (w, seg)
                         return True
             return False
         d.wait(opened, 120, "a window for %s" % self.name)
         self.w, self.seg = box["p"]
+
+    def tasks(self):
+        """the instance's task records' W16KS_* states (124.28.1), in use"""
+        n = W16_MAXTASK
+        raw = self.d.read((self.seg << 4) + self.S["w16_task"], n * W16K_SIZE)
+        return [raw[i * W16K_SIZE + W16K_ST] for i in range(n)
+                if raw[i * W16K_SIZE + W16K_ST]]
 
     def waiting_msgbox(self, row):
         st = self.pb("w16_state")

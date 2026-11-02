@@ -37,7 +37,7 @@ sys.path[:0] = [os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")]
 os.chdir(ROOT)
 import os88geom as geom                                       # noqa: E402
 from win16mines import QDrive, b, u16                         # noqa: E402
-from win16fpu import Prog, open_b, pkg_syms                   # noqa: E402
+from win16fpu import Prog, open_b, pkg_syms, gone             # noqa: E402
 
 W16S_REFUSED = 2
 W16S_ENDED = 4
@@ -225,6 +225,15 @@ def run_calc(d, ui, sym, S, dw, name, bad, keep, shot):
     c.check("statistics", c.display("statistics"), want["ave"])
     if shot:
         shot("%s-sci" % name.split(".")[0].lower())
+    # closed by its close box before the next: a second Calculator started
+    # while this one runs would join its instance as a task (124.28.12)
+    c.raise_(p.w)
+    for w in ui.windows():
+        if w.i == p.w.i:
+            p.w = w
+    d.click(*geom.close_xy(p.w.x, p.w.y, p.w.w, m=d, sym=sym))
+    d.wait(lambda: gone(ui, p), 60, "%s to close by its close box" % name)
+    d.idle(3.0)
     return np
 
 

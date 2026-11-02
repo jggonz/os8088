@@ -23,16 +23,18 @@ finds WIN16.O88 in its folder through B:'s ASSOC.DAT.
      diamond). Its close box gives back every heap claim it took: mem_tab
      is the pre-launch one.
   2. WRITERA and WRITERB (writer.c under two names) each write WIN.INI's
-     [W16Merge] <own stem>=written and wait in a MessageBox, both holding a
-     copy; ended B first and A second, WIN.INI on B: has BOTH keys - the
-     second to end merged with what the first wrote (124.18.2).
-  3. MENU.EXE and a second program run at once, two WIN16 instances, and
-     Paint beside them: Windows 3.0's Minesweeper (WINMINE.EXE, where the
-     win16-reference skill put it) or, without it, ICONS again. Paint closes.
+     [W16Merge] <own stem>=written and wait in a MessageBox. WRITERB is
+     double-clicked while WRITERA runs, so it joins WRITERA's instance as a
+     second task (124.28.12) rather than starting one of its own. Ended B
+     first and A second, WIN.INI on B: has BOTH keys.
+  3. MENU.EXE and a second program run at once, the second a task of MENU's
+     instance, and Paint beside them: Windows 3.0's Minesweeper
+     (WINMINE.EXE, where the win16-reference skill put it) or, without it,
+     ICONS again. Paint closes.
   4. End Task (124.12): MENU's F5 makes it refuse WM_CLOSE; the first click
      on its close box is refused, the second raises "It has not closed. End
-     it?", and Proceed ends it. The other program closes by its close box,
-     and mem_tab is the pre-launch one again.
+     it?", and Proceed ends it while the other program goes on. That one
+     closes by its close box, and mem_tab is the pre-launch one again.
 
 The fixtures are `make win16fixtures`'s; without them the row is a SKIP.
 """
@@ -49,6 +51,7 @@ os.chdir(ROOT)
 import os88geom as geom                                       # noqa: E402
 from win16mines import QDrive, b, u16                         # noqa: E402
 from win16fpu import Prog, open_b, pkg_syms, msgrow, gone     # noqa: E402
+from win16fpu import W16KS_RUN                                # noqa: E402
 from win16cpu import raise_, at_loop                          # noqa: E402
 from kdhand import alert_button                               # noqa: E402
 
@@ -307,18 +310,26 @@ def main():
         row = msgrow()
         wa = start(d, ui, sym, S, dw, "WRITERA.EXE", bad)
         d.wait(lambda: wa.waiting_msgbox(row), 120, "WRITERA's MessageBox")
-        wb = start(d, ui, sym, S, dw, "WRITERB.EXE", bad)
-        d.wait(lambda: wb.waiting_msgbox(row), 120, "WRITERB's MessageBox")
         d.idle(3.0)
-        print("2. WRITERA (%04x) and WRITERB (%04x) both wait in a MessageBox"
-              % (wa.seg, wb.seg))
-        for w in (wb, wa):                       # B ends first, A merges last
-            box = owned(d, ui, sym, w)
-            raise_(d, ui, box[-1] if box else w.w)
-            d.key("Enter")
-            d.wait(lambda: w.pb("w16_state") == W16S_ENDED or gone(ui, w), 60,
-                   "%s to end" % w.name)
-            d.idle(3.0)
+        raise_(d, ui, dw)
+        wb = Prog(d, ui, sym, S, "WRITERB.EXE")
+        wb.launch(dw, join=wa)                  # its MessageBox, in A's WIN16
+        d.wait(lambda: wa.tasks() == [W16KS_RUN, W16KS_RUN], 120,
+               "WRITERB to run as a task of WRITERA's instance")
+        d.idle(3.0)
+        print("2. WRITERA and WRITERB both wait in a MessageBox, two tasks of "
+              "one instance at %04x" % wa.seg)
+        raise_(d, ui, wb.w)                      # B ends first, A last
+        d.key("Enter")
+        d.wait(lambda: gone(ui, wb) and len(wa.tasks()) == 1, 60,
+               "WRITERB to end")
+        d.idle(3.0)
+        box = owned(d, ui, sym, wa)
+        raise_(d, ui, box[-1] if box else wa.w)
+        d.key("Enter")
+        d.wait(lambda: wa.pb("w16_state") == W16S_ENDED or gone(ui, wa), 60,
+               "WRITERA to end")
+        d.idle(3.0)
         text = ini(d.p.b) or ""      # the copy QEMU writes, not src.img
         print("   WIN.INI: " + text.strip().replace("\r\n", " | ").replace("\n", " | "))
         for k in ("WRITERA=written", "WRITERB=written"):
@@ -329,8 +340,15 @@ def main():
         # 3. two Windows programs at once, and Paint beside them
         pm = start(d, ui, sym, S, dw, "MENU.EXE", bad)
         ok3 = running(d, pm, "3", bad)
-        p2 = start(d, ui, sym, S, dw, second, bad)
-        ok3 = running(d, p2, "3", bad) and ok3
+        raise_(d, ui, dw)
+        p2 = Prog(d, ui, sym, S, second)
+        p2.launch(dw, join=pm)
+        d.wait(lambda: pm.tasks() == [W16KS_RUN, W16KS_RUN] and at_loop(pm),
+               300, "%s to run as a task of MENU's instance" % second)
+        d.idle(3.0)
+        mine = [w for w in owned(d, ui, sym, pm) if w.i != pm.w.i]
+        if mine:                                # its own window, now: the
+            p2.w = mine[-1]                     # first new one at the join
         raise_(d, ui, dw)
         before = set(w.i for w in ui.windows())
         i, _ = ui.entry("PAINT.O88", dw)
@@ -345,24 +363,25 @@ def main():
             return False
         d.wait(painted, 60, "Paint's window")
         d.idle(3.0)
-        n1, n2 = inst_name(d, sym, pm.seg), inst_name(d, sym, p2.seg)
-        print("3. %s (%04x) and %s (%04x) at once, Paint beside them: %s"
-              % (n1, pm.seg, n2, p2.seg, ", ".join(w.title for w in ui.windows()
-                                                     if w.visible)))
-        if ok3 and (pm.seg == p2.seg or pm.pb("w16_state") != W16S_RUNNING
-                    or p2.pb("w16_state") != W16S_RUNNING):
-            bad.append("3: the two programs are not two running instances")
-        if n1 != "MENU" or n2 != second.split(".")[0]:
-            bad.append("3: the instances are named %r and %r" % (n1, n2))
+        n1 = inst_name(d, sym, pm.seg)
+        print("3. %s and %s at once, tasks %s of the instance at %04x; Paint "
+              "beside them: %s" % ("MENU", second, pm.tasks(), pm.seg,
+                                   ", ".join(w.title for w in ui.windows()
+                                             if w.visible)))
+        if ok3 and (pm.seg != p2.seg or pm.tasks() != [W16KS_RUN, W16KS_RUN]):
+            bad.append("3: %s did not join MENU's instance as a second task "
+                       "(124.28.12)" % second)
+        if n1 != "MENU":
+            bad.append("3: the instance is named %r, not MENU" % n1)
         pw = box["w"]
         raise_(d, ui, pw)
         d.click(*geom.close_xy(pw.x, pw.y, pw.w, m=d, sym=sym))
         d.wait(lambda: all(w.i != pw.i or not w.visible for w in ui.windows()),
                60, "Paint to close")
         d.idle(3.0)
-        for w in (pm, p2):
-            if w.pb("w16_state") != W16S_RUNNING:
-                bad.append("3: %s stopped when Paint closed" % w.name)
+        if pm.tasks() != [W16KS_RUN, W16KS_RUN]:
+            bad.append("3: a program stopped when Paint closed: tasks %s"
+                       % pm.tasks())
 
         # 4. End Task, then the close box, then the heap
         raise_(d, ui, fresh(ui, pm))
@@ -380,8 +399,16 @@ def main():
             d.idle(2.0)
             print("4. MENU refused WM_CLOSE; the second click asks to end it")
             d.click(*alert_button(d, base, S, 1))         # Proceed
-            d.wait(lambda: gone(ui, pm), 60, "MENU to be ended")
+            d.wait(lambda: len(pm.tasks()) == 1, 60, "MENU to be ended")
             d.idle(3.0)
+            # the task left takes WIN16's window over and its own closes
+            # (SPEC.md 124.28.7, w16t_hand)
+            if gone(ui, pm) or pm.tasks() != [W16KS_RUN]:
+                bad.append("4: %s ended with MENU" % second)
+            else:
+                p2.w = fresh(ui, pm)
+                print("   %s goes on in WIN16's window, titled %r"
+                      % (second, p2.w.title))
         close(d, ui, sym, p2)
         d.wait(lambda: gone(ui, p2), 60, "%s to close" % second)
         d.idle(3.0)
@@ -396,8 +423,9 @@ def main():
     for f in bad:
         print("FAIL: " + f)
     if not bad:
-        print("win16desk: two programs at once beside Paint, named, closed and "
-              "ended, WIN.INI merged, and the heap as it was")
+        print("win16desk: two programs at once beside Paint, one instance's "
+              "tasks, named, closed and ended, WIN.INI merged, and the heap "
+              "as it was")
     return 1 if bad else 0
 
 
