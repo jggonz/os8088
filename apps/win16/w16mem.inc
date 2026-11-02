@@ -131,6 +131,7 @@ w16_gnew:
     mov word [es:GH_OWNER], 0
 %ifdef PKG_MEGA
     mov word [es:GH_TSEL], 0
+    mov byte [es:GH_TN], 0
 %endif
     inc ax
     mov dx, ax                      ; DX = the data
@@ -405,6 +406,19 @@ w16_gfreeblk:
     push si
     push es
     W16SEG es, ax
+%ifdef PKG_MEGA
+    test byte [es:GH_FLAGS], GHF_MOVE ; a moveable block's bound window goes
+    jz .nowin                       ;   with it (w16_plock). A huge block's
+    cmp byte [es:GH_TN], 0          ;   tiles are the arena's
+    jne .nowin
+    xor dx, dx
+    xchg dx, [es:GH_TSEL]
+    or dx, dx
+    jz .nowin
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+.nowin:
+%endif
     mov byte [es:GH_FLAGS], 0
     mov byte [es:GH_LOCK], 0
     xor si, si                      ; which arena
@@ -827,7 +841,7 @@ w16k_glock:
     inc dx
 %ifdef PKG_MEGA
     xchg ax, dx
-    call w16_pblk                   ; the program's selector for it
+    call w16_plock                  ; the program's selector for it
     xchg ax, dx
 %endif
     xor ax, ax
@@ -1243,7 +1257,15 @@ w16k_grealloc:
     cmp byte [es:GH_LOCK], 0        ; a locked moveable block stays put, as on
     je .unlocked                    ;   Windows, unless it is a fixed one moving
     test byte [es:GH_FLAGS], GHF_MOVE
+%ifndef PKG_MEGA
     jnz .fail
+%else
+    jz .unlocked
+    cmp byte [es:GH_TN], 0          ; ...or a protected-mode program's, whose
+    jne .fail                       ;   bound window goes with it (w16_plock,
+    cmp word [es:GH_TSEL], 0        ;   w16s_gwin; SPEC.md 124.31.3)
+    je .fail
+%endif
 .unlocked:
 %ifdef PKG_MEGA
     W16VOF ax, es
@@ -1298,6 +1320,9 @@ w16k_grealloc:
     mov [es:GH_LOCK], bh
     mov [es:GH_OWNER], cx
     pop es
+%ifdef PKG_MEGA
+    SCALL w16s_gwin                 ; ...and its bound window, if it has one
+%endif
     mov ax, [w16_gold]
     call w16_gfreeblk
     W16VOF ax, es                      ; the data

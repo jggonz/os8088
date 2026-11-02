@@ -207,6 +207,11 @@ w16_load:
     mov di, w16_r_pmode
     test ax, NEF_PMODE
     jnz .flagref
+%else
+    push ax                         ; ...and its locked blocks may move
+    and al, NEF_PMODE               ;   (SPEC.md 124.31.3)
+    mov [w16_pmonly], al
+    pop ax
 %endif
     mov al, [es:si + NE_EXETYP]
     cmp al, 2                       ; Windows, or 0 (unknown - early linkers)

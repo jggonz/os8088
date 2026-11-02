@@ -942,6 +942,42 @@ w16_pout:
 .out:
     ret
 
+; w16_plock - GlobalLock's: AX = a global block's data paragraph, ES = its
+; header -> AX = the program's selector, w16_pblk's - but a moveable block
+; under 64 KB of a protected-mode-only program (NEF_PMODE) is answered with a
+; BOUND window made at its first lock from that selector, which aims it at
+; the block, and kept in the header (GH_TSEL with GH_TN = 0): GlobalReAlloc
+; can then move the block locked and the selector the program holds follows
+; (w16s_gmovew). No window to be had: the SUB. Keeps every other register.
+; (SPEC.md 124.31.3)
+w16_plock:
+    call w16_pblk
+    cmp byte [w16_pmonly], 0
+    je .out
+    test byte [es:GH_FLAGS], GHF_MOVE
+    jz .out
+    cmp byte [es:GH_TN], 0          ; (a huge block's tiles)
+    jne .out
+    cmp word [es:GH_SIZE], 0x1001
+    ja .out
+    cmp word [es:GH_TSEL], 0
+    jne .have
+    push bx
+    push dx
+    mov dx, ax
+    mov bl, SEG_BWIN
+    call OSAPI_SEG                  ; DX = a bound window, aimed at the block
+    jc .none
+    mov [es:GH_TSEL], dx
+.none:
+    pop dx
+    pop bx
+    jc .out
+.have:
+    mov ax, [es:GH_TSEL]
+.out:
+    ret
+
 ; w16_pblk - AX = a global block's data paragraph -> AX = a data selector
 ; reaching the block's own length (its header's GH_SIZE), as standard mode's
 ; GlobalLock answered. Keeps every other register.

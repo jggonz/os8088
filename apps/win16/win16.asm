@@ -296,6 +296,10 @@ section .w16dlg
     W16BSS w16_ptop, 2          ; the paragraph past the claim
     W16BSS w16_nmod, 2          ; the program's module-reference count
     W16BSS w16_modid, 2 * 16    ; ...each one's W16M_* (0xFF = not ours)
+%ifdef PKG_MEGA
+    W16BSS w16_pmonly, 1        ; NEF_PMODE: a protected-mode-only program,
+                                ;   whose locked blocks may move (124.31.3)
+%endif
     W16BSS w16_cpu186, 1        ; 1 = this CPU runs 186 code (SPEC.md 124.3)
     W16BSS w16_libs, W16_NLIB * W16L_SIZE ; the program's own libraries (124.23)
     W16BSS w16_lsave, W16_LDEPTH * W16_LSVSZ ; ...a module's loader state while

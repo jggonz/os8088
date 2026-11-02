@@ -227007,7 +227007,7 @@ neighbours merged. Arenas are freed with the program.
 | `GMEM_FIXED` | **the handle IS the segment** (`DX:0` is the block), as real-mode Windows answered. Programs that skip `GlobalLock` on a fixed block work |
 | `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`02FEh`, `W16_NGH` 256 entries since S19b batch 3, 64 before: Paintbrush's band cache keeps a handle for every band it has discarded, and 64 ran out on the first picture opened). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
 | `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
-| `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. `GMEM_MODIFY` changes the flags alone |
+| `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put, except on the protected-mode arm for a protected-mode-only program, whose locked block moves with the selector it holds (§124.31.3). `GMEM_MODIFY` changes the flags alone |
 | `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD`; since S20 a run of an arena counts the code segments it may discard as free (§124.26.5) |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
@@ -231189,6 +231189,39 @@ what the numbers mean**:
     on its 1 MB AMI 286.
   - The parts are still fetched through the DMA door, as the parts standard
     fetches every part.
+
+**A locked moveable block of a protected-mode-only program moves
+(2026-11-02).** Windows' standard mode moved a locked moveable block on
+`GlobalReAlloc` and kept its selector, because a selector is only a
+descriptor. Microsoft's setup engine (`_MSTEST.EXE`, `NEF_PMODE`, shipped
+with Arcade and Mozart) depends on it: it grows a locked 33-paragraph
+parser block to 65 and refuses with *Parser out of memory* when the move
+is refused. The arm moves it as follows:
+
+- The loader sets `w16_pmonly` (per task) from the program's `NEF_PMODE`.
+- At such a program's first `GlobalLock` of a moveable block under 64 KB,
+  `w16_plock` makes a **bound window** (`SEG_BWIN`) from the block's own
+  `SEG_SUB`. That aims it at the block. The header keeps it in `GH_TSEL`
+  with `GH_TN` = 0, and later locks answer it. Other programs and other
+  blocks are answered as before, by `w16_pblk`.
+- `GlobalReAlloc` takes such a block down the ordinary move path: any
+  arena, a new arena, discarding. Between the copy and the old block's
+  free, `w16s_gwin` (part 9) moves the window to the new header. It then
+  re-aims the window with `SEG_AT` on the caller's own window, which keeps
+  it bound and puts its base in the new block's claim; that is
+  how it crosses arenas. Then `SEG_AIM` gives the window the block's
+  reach. The kernel finds a bound window's block from where it points, and
+  compaction rebases every descriptor based in a moving block (§50.6.11),
+  so the window follows its new arena from then on.
+- `w16_gfreeblk` frees a moveable block's window with the block.
+- A block grown in place past 64 KB is tiled (`w16_ptile`). Its window is
+  then the arena's until the arena goes: it is one `mega_wtab` row, and
+  only a locked block grown that way costs one.
+- Real mode is unchanged: a locked moveable block stays put there, as in
+  real-mode Windows. Measured on Arcade's setup: the realloc is handle
+  0110h, 33 to 65 paragraphs, in a 32 KB arena whose blocks are all in use
+  (six fixed, three locked). It moves to the third arena, and setup reads
+  its script.
 
 **The library part's thunk calls are indirect (2026-11-01).** `W16SEG`,
 `W16VOF`, `W16TOSEL` and `W16TOVIRT` call a thunk that `W16PM_PART` emits
