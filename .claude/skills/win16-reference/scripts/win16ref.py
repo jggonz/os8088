@@ -18,10 +18,12 @@ committed: the downloads are Microsoft's and Duff Software's.
     win16ref.py copy w30|w31 FILE...  copy host files into C:\\FIX on a STOPPED machine's
                                       disk (the WIN16 fixtures: `make win16fixtures`)
     win16ref.py samples               copy the programs WIN16's rows play into
-                                      <repo>/build/win16/ (git-ignored): CALC, CLOCK
-                                      and REVERSI from Windows 3.0, Windows 3.1's
-                                      CALC and WINMINE as W31CALC and W31MINE, and
-                                      WinMine 2.9 as WINMINE
+                                      <repo>/build/win16/ (git-ignored): CALC, CLOCK,
+                                      Paintbrush (PBRUSH.EXE and .DLL) and REVERSI
+                                      from Windows 3.0, Windows 3.1's
+                                      CALC, WINMINE and NOTEPAD as W31CALC,
+                                      W31MINE and W31NOTE, and WinMine 2.9 as
+                                      WINMINE
 
 Each install step screenshots into <root>/log/<install>/NN-<step>.png. LOOK at
 them: the key sequence is the one that worked on 2026-10-28, with fixed waits,
@@ -309,7 +311,8 @@ def install31():
     env = mtools_env(img)
     out = os.path.join(ROOT, "samples/w31")
     os.makedirs(out, exist_ok=True)
-    sh("mcopy", "-o", "c:/WINDOWS/WINMINE.EXE", "c:/WINDOWS/CALC.EXE", out, env=env)
+    sh("mcopy", "-o", "c:/WINDOWS/WINMINE.EXE", "c:/WINDOWS/CALC.EXE",
+       "c:/WINDOWS/NOTEPAD.EXE", out, env=env)
 
 
 def copy(which, files):
@@ -327,9 +330,13 @@ def copy(which, files):
 # play them (tests/win16*.py) SKIP where a name is missing.
 SAMPLES = [("CALC.EXE", "w3-archive/WINDOWS/CALC.EXE"),
            ("CLOCK.EXE", "w3-archive/WINDOWS/CLOCK.EXE"),
+           ("PBRUSH.EXE", "w3-archive/WINDOWS/PBRUSH.EXE"),
+           ("PBRUSH.DLL", "w3-archive/WINDOWS/PBRUSH.DLL"),
            ("REVERSI.EXE", "w3-archive/WINDOWS/REVERSI.EXE"),
+           ("WRITE.EXE", "w3-archive/WINDOWS/WRITE.EXE"),
            ("W31CALC.EXE", "w31/CALC.EXE"),
            ("W31MINE.EXE", "w31/WINMINE.EXE"),
+           ("W31NOTE.EXE", "w31/NOTEPAD.EXE"),
            ("WINMINE.EXE", "winmine-2.9/WINMINE.EXE")]
 
 

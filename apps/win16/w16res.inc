@@ -224,17 +224,20 @@ w16_rmatch:
 ; -----------------------------------------------------------------------------
 ; w16_rfind - [w16_rtk]/[w16_rnk] (keys, w16_rkey's, with the strings in
 ; w16_rtypb/w16_rnamb) -> AX = the entry's offset in the table, 0 = none.
-; A string name the table does not carry is looked up in the program's
-; RT_NAMETABLE (SPEC.md 124.10): a Windows 3.0 linker gave every resource a
-; number and wrote the names there, CALC 3.00's "SC" for DIALOG 1. Keeps the
-; rest.
+; A string type or name the table does not carry is looked up in the
+; program's RT_NAMETABLE (SPEC.md 124.10): a Windows 3.0 linker gave every
+; resource a number and wrote the names there, CALC 3.00's "SC" for DIALOG 1
+; and Terminal's type "CCTL" for F008h. Keeps the rest.
 ; -----------------------------------------------------------------------------
 w16_rfind:
     call w16_rscan
     or ax, ax
     jnz .ret
     cmp word [w16_rnk], 0
-    jne .ret                        ; an integer name: no table to ask
+    je .tab
+    cmp word [w16_rtk], 0
+    jne .ret                        ; both integers: no table to ask
+.tab:
     call w16_rnametab
 .ret:
     ret
@@ -243,9 +246,11 @@ w16_rfind:
 ; the entry, 0 = none. An entry is its length, its type and id as numbers,
 ; then the type's name (empty for a numbered type) and the resource's: CALC
 ; 3.00 names a dialog of type 5 "SC", CLOCK 3.00 a resource of type "DATA"
-; "CLOCK" (stored as type F006h). [w16_rtk]/[w16_rnk] are put back. Keeps
-; the rest.
+; "CLOCK" (stored as type F006h), Terminal type "CCTL" its numbers 1000,
+; 1002 and 1003 (F008h, with no name). [w16_rtk]/[w16_rnk] are put back.
+; Keeps the rest.
 w16_rnametab:
+    push bp
     push bx
     push cx
     push dx
@@ -253,11 +258,12 @@ w16_rnametab:
     push di
     push es
     mov dx, [w16_rtk]               ; DX = the type asked for, 0 = by name
+    mov bp, [w16_rnk]               ; BP = the name asked for, 0 = by name
     mov word [w16_rtk], 0x8000 | RT_NAMETABLE
     mov word [w16_rnk], 0x8001
     call w16_rscan
     mov [w16_rtk], dx
-    mov word [w16_rnk], 0
+    mov [w16_rnk], bp
     or ax, ax
     jz .out
     call w16_rload                  ; AX = its handle
@@ -293,9 +299,20 @@ w16_rnametab:
     call w16_rnmcmp
     jne .next
 .name:
+    or bp, bp
+    jz .byname
+    cmp byte [es:bx], 0             ; a numbered name: its number, and no name
+    jne .next
+    mov ax, [es:di + 4]
+    or ah, 0x80
+    cmp ax, bp
+    jne .next
+    jmp short .hit
+.byname:
     mov si, w16_rnamb
     call w16_rnmcmp
     jne .next
+.hit:
     mov ax, [es:di + 2]             ; the type and the number it is filed as
     or ah, 0x80
     mov [w16_rtk], ax
@@ -304,7 +321,7 @@ w16_rnametab:
     mov [w16_rnk], ax
     call w16_rscan
     mov [w16_rtk], dx
-    mov word [w16_rnk], 0
+    mov [w16_rnk], bp
     jmp short .out
 .next:
     add di, cx
@@ -318,6 +335,7 @@ w16_rnametab:
     pop dx
     pop cx
     pop bx
+    pop bp
     ret
 
 ; w16_rnmcmp - the name at ES:BX against the upper-case one at DS:SI, case
@@ -723,8 +741,12 @@ w16k_loadres:
 w16k_lockres:
     jmp w16k_glock
 
-; FreeResource (KERNEL.63) - args: +0 hResData. AX = 0 freed. The block stays
-; cached until memory is short (SPEC.md 124.9)
+; FreeResource (KERNEL.63) - args: +0 hResData. AX = 0 freed. The program's
+; last use frees the block, as Windows' did, so its next LoadResource reads
+; the file again: a program may write into a resource it holds - File
+; Manager 3.0 recolours its bitmaps' blue in place, then loads them again
+; and loops until it finds the blue (SPEC.md 124.27.1). WIN16's own uses
+; leave a block cached until memory is short (124.9)
 w16k_freeres:
     push si
     push es
@@ -736,6 +758,8 @@ w16k_freeres:
     cmp word [es:si + RN_USAGE], 0
     je .z
     dec word [es:si + RN_USAGE]
+    mov ax, si
+    call w16_rdiscard
 .z:
     xor ax, ax
 .no:

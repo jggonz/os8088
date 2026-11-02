@@ -23,6 +23,10 @@ b88d7f8736d77baa5710eb0c35f81b489540c1a0:
     toolhelp/toolhelp.dll16.spec  TOOLHELP
     commdlg/commdlg.dll16.spec    COMMDLG
     mmsystem/mmsystem.dll16.spec  MMSYSTEM
+    olecli/olecli.dll16.spec      OLECLI   (S19 batch 3, SPEC.md 124.24.7)
+    olesvr/olesvr.dll16.spec      OLESVR
+    lzexpand/lzexpand.dll16.spec  LZEXPAND (S19 batch 4, SPEC.md 124.24.8)
+    ver/ver.dll16.spec            VER      (SPEC.md 124.24.9)
 
 winevdm's tables are Wine's (winehq.org, LGPL-2.1-or-later), extended.
 winevdm as a whole is distributed under the GNU General Public License,
@@ -31,5 +35,5 @@ the GPL-2, which is the footing apps/win16/ takes when it lands
 (GPL-2.0-or-later, WIN16-PLAN.md D7). Nothing else in tools/ is affected:
 the tables are data the tools read, not code they include.
 
-To move the pin, copy the same eleven files from a newer winevdm checkout,
+To move the pin, copy the same fifteen files from a newer winevdm checkout,
 change the commit above, and run `python3 tests/unit/t_win16ne.py`.

@@ -10,8 +10,9 @@
 ; 42 free clusters on it.
 ;
 ; The refusal was one guard doing two jobs: an append-only handle may not write
-; BEHIND the end (96.11.2, and that one is real - this layer cannot overwrite
-; the middle of a file it is still accumulating), and the test for it was
+; BEHIND the end (96.11.2 - which 96.11.6.4 has since lifted too: the
+; accumulator is flushed and the handle overwrites in place, step H), and the
+; test for it was
 ; `jne`, which refuses PAST the end in exactly the same breath.  Behind and
 ; past are opposite cases: past is a GAP, and the in-place loop already lays
 ; one.
@@ -26,6 +27,9 @@
 ;   E  read it back                            - both spans are what was written
 ;   F  a gap NOBODY fills is still counted     - 100 + 10 = 110 bytes
 ;   G  delete a name that is not there         - error 2, not 5 (96.11.9)
+;   H  create, write 200 bytes in order, seek  - 10, and CF=0; reopened, the
+;      back to 0 and rewrite 10 of them           file is 200 bytes, the first
+;                                                 10 the rewrite (96.11.6.4)
 ;
 ; THE GAP'S OWN CONTENT IS DELIBERATELY NOT ASSERTED.  DOS leaves it
 ; undefined, so a probe that checked it would fail against the reference for
@@ -249,6 +253,82 @@ start:
     jne .gfail                      ; ...and 5 is what this DOS used to say
     call ok
 
+    cld
+    mov si, s_h                     ; H: BEHIND the end of what it wrote -
+    call puts                       ;   Paintbrush's header, laid last
+    mov dx, n_tm2
+    mov ah, 0x41
+    int 0x21
+    mov dx, n_tm2
+    mov cx, 0
+    mov ah, 0x3C
+    int 0x21
+    jc .hfail
+    mov [h2], ax
+    mov di, buf
+    mov cx, 200
+    mov al, 0x41
+    rep stosb
+    mov bx, [h2]
+    mov cx, 200
+    mov dx, buf
+    mov ah, 0x40
+    int 0x21
+    jc .hfail
+    cmp ax, 200
+    jne .hfail
+    mov bx, [h2]
+    xor cx, cx
+    xor dx, dx
+    mov ax, 0x4200
+    int 0x21
+    jc .hfail
+    mov di, buf
+    mov cx, 10
+    mov al, 0x42
+    rep stosb
+    mov bx, [h2]
+    mov cx, 10
+    mov dx, buf
+    mov ah, 0x40
+    int 0x21
+    jc .hfail                       ; 5 is what this DOS used to say
+    cmp ax, 10
+    jne .hfail
+    mov bx, [h2]
+    mov ah, 0x3E
+    int 0x21
+    jc .hfail
+    mov dx, n_tm2
+    mov ax, 0x3D00
+    int 0x21
+    jc .hfail
+    mov [h2], ax
+    mov bx, ax
+    mov cx, 300                     ; more than is there: the count is the size
+    mov dx, buf
+    mov ah, 0x3F
+    int 0x21
+    jc .hfail
+    cmp ax, 200
+    jne .hfail
+    mov si, buf
+    mov cx, 200
+.hck:
+    lodsb
+    mov ah, 0x42
+    cmp cx, 190
+    ja .hcmp
+    mov ah, 0x41
+.hcmp:
+    cmp al, ah
+    jne .hfail
+    loop .hck
+    mov bx, [h2]
+    mov ah, 0x3E
+    int 0x21
+    call ok
+
     mov si, s_pass
     call puts
     jmp short done
@@ -278,6 +358,9 @@ start:
     jmp short bad
 .gfail:
     mov si, s_f_g
+    jmp short bad
+.hfail:
+    mov si, s_f_h
 bad:
     call puts
     mov si, s_fail
@@ -378,6 +461,7 @@ s_e:    db 'E header on disk    ', 0
 s_e2:   db 'E2 body on disk     ', 0
 s_f:    db 'F unfilled gap      ', 0
 s_g:    db 'G delete nothing =2 ', 0
+s_h:    db 'H rewrite behind    ', 0
 s_ok:   db 'ok', 13, 10, 0
 s_f_a:  db 'FAILED', 13, 10, 0
 s_f_b:  db 'FAILED', 13, 10, 0
@@ -388,6 +472,7 @@ s_f_e:  db 'FAILED', 13, 10, 0
 s_f_e2: db 'FAILED', 13, 10, 0
 s_f_f:  db 'FAILED', 13, 10, 0
 s_f_g:  db 'FAILED', 13, 10, 0
+s_f_h:  db 'FAILED', 13, 10, 0
 s_pass: db 'WRGAP PASS', 13, 10, 0
 s_fail: db 'WRGAP FAIL', 13, 10, 0
 h1:     dw 0

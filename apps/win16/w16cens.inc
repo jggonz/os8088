@@ -426,7 +426,8 @@ w16c_walk:
     jmp .ins
 
 section .text
-w16c_jt:
+w16c_jt:    ; XSEC-OK: the census in part 5 reads it through DS and jumps
+            ; to each entry in its own CS - the entries are part 5's labels
     dw w16c_walk.fall               ; NEXT
     dw w16c_walk.t186               ; T186
     dw w16c_walk.t286               ; T286
@@ -804,23 +805,18 @@ w16c_far:
     clc
     jmp short .out
 .import:
-    sub ax, w16_stubs               ; the stub's row
+    sub ax, w16_stubs               ; the stub's bind slot (SPEC.md 124.19.1)
     jb .ret
     xor dx, dx
     mov cx, 6
     div cx
-    cmp ax, W16NX
+    cmp ax, W16_NBIND
     jae .ret
-    mov cx, W16X_SIZE
-    mul cx
     mov bx, ax
-    cmp byte [w16_exports + bx + W16X_MOD], W16M_KERNEL
-    jne .ret
-    mov ax, [w16_exports + bx + W16X_ORD]
-    cmp ax, 1
-    je .noret
-    cmp ax, 137
-    je .noret
+    shl bx, 1
+    shl bx, 1
+    test byte [w16_bind + bx + W16B_PART], W16B_NORET
+    jnz .noret                      ; FatalExit, FatalAppExit
 .ret:
     clc
     jmp short .out

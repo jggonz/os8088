@@ -1,0 +1,25 @@
+/* lzt.rc - LZT.EXE's version resource (SPEC.md 124.24.9): what
+ * tests/win16lz.py has VER read back, out of the packed LZT.EX_ */
+1 VERSIONINFO
+FILEVERSION 1, 2, 3, 4
+PRODUCTVERSION 1, 2, 0, 0
+FILEFLAGSMASK 0x3FL
+FILEFLAGS 0
+FILEOS 0x10001L
+FILETYPE 1
+FILESUBTYPE 0
+BEGIN
+    BLOCK "StringFileInfo"
+    BEGIN
+        BLOCK "040904E4"
+        BEGIN
+            VALUE "CompanyName", "os8088"
+            VALUE "ProductName", "W16 LZ Test"
+            VALUE "FileVersion", "1.2.3.4"
+        END
+    END
+    BLOCK "VarFileInfo"
+    BEGIN
+        VALUE "Translation", 0x0409, 0x04E4
+    END
+END

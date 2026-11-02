@@ -116,7 +116,10 @@ DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                "emu360.img", "util360.img",
                # ...and the 720KB geometry's second apps disk (SPEC.md 24.7),
                # a DATA image for the same reason
-               "more720.img"]
+               "more720.img",
+               # ...and WIN16's own disk in four geometries (SPEC.md
+               # 124.18.1), DATA images too
+               "win16.img", "win16-120.img", "win16-720.img", "win16-360.img"]
 
 
 class Vol:

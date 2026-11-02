@@ -82,18 +82,78 @@ w16_osw2rec:
     clc
     ret
 
-; w16_bord - BX = a record -> AX = its border: 1 for a program's child with
-; WS_BORDER, else 0 (a top-level window's frame is os8088's, and WIN16's
-; controls draw their own inside their rectangle). Keeps the rest.
+; w16_bord - BX = a record -> AX = its border: for a program's child, 4 with
+; WS_THICKFRAME (an MDI child's, SPEC.md 124.27.3) and 1 with WS_BORDER, else
+; 0 (a top-level window's frame is os8088's, and WIN16's controls draw their
+; own inside their rectangle). Keeps the rest.
 w16_bord:
     xor ax, ax
     cmp byte [bx + W16W_KIND], W16Q_PROG    ; WIN16's controls draw their own
     jne .out
     test word [bx + W16W_STYLE + 2], WS_CHILD_HI
     jz .out
+    test word [bx + W16W_STYLE + 2], WS_THICKFRAME_HI
+    jz .thin
+    mov al, 4
+    ret
+.thin:
     test word [bx + W16W_STYLE + 2], WS_BORDER_HI
     jz .out
     inc ax
+.out:
+    ret
+
+; w16_capt - BX = a record -> AX = the caption above its client: SM_CYCAPTION
+; less a border ([w16_capn]) for a program's child with WS_CAPTION, an MDI
+; child's (SPEC.md 124.27.3), else 0. Keeps the rest.
+w16_capt:
+    call w16_bord                   ; (0 for all but a program's child)
+    or ax, ax
+    jz .out
+    mov ax, [bx + W16W_STYLE + 2]
+    and ax, WS_CAPTION_HI
+    cmp ax, WS_CAPTION_HI
+    mov ax, 0
+    jne .out
+    mov ax, [w16_capn]
+.out:
+    ret
+
+; w16_sbcut - BX = a record, CX/SI = its client's width and height inside
+; its border: each less the scroll bar it has (SPEC.md 124.22.1) - W16D_SBW,
+; less the border the bar lies over - never below 0. A list box's bar is
+; inside its own client (SPEC.md 124.13). Keeps the rest.
+w16_sbcut:
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI
+    jz .out
+    cmp byte [bx + W16W_KIND], W16Q_LIST
+    je .out
+    push ax
+    call w16_bord
+    neg ax
+    add ax, W16D_SBW
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI
+    jz .h
+    sub cx, ax
+    jge .h
+    xor cx, cx
+.h:
+    test word [bx + W16W_STYLE + 2], WS_HSCROLL_HI
+    jz .o
+    sub si, ax
+    jge .o
+    xor si, si
+.o:
+    pop ax
+.out:
+    ret
+
+; w16_ncmark - BX = a record: its scroll bars owed, if it has any. Keeps
+; every register.
+w16_ncmark:
+    test word [bx + W16W_STYLE + 2], WS_VSCROLL_HI | WS_HSCROLL_HI | WS_CAPTION_HI | WS_THICKFRAME_HI | WS_MINIMIZE_HI
+    jz .out
+    or byte [bx + W16W_F2], W16W2_NCDIRTY
 .out:
     ret
 
@@ -107,6 +167,8 @@ w16_origin:
     jnz .child
     push bx
     mov bx, [bx + W16W_OSW]
+    or bx, bx                       ; a helper with none (124.23.8)
+    jz .hid
     call OSAPI_WM_GEOM              ; CX/DX = the content's size
     jc .hid
     mov si, dx
@@ -118,13 +180,14 @@ w16_origin:
     mov ax, [bx + W16W_OSW]
     cmp ax, [w16_win]
     jne .nobar
-    call w16_mbarh                  ; the client is under the menu bar
+    LCALL w16_mbarh                  ; the client is under the menu bar
     add dx, ax
     sub si, ax
     jge .nobar
     xor si, si
 .nobar:
     pop ax
+    call w16_sbcut
     clc
     ret
 .hid:
@@ -154,9 +217,13 @@ w16_origin:
     mov si, [bx + W16W_CY]
     sub si, ax
     sub si, ax
+    call w16_capt                   ; ...and under its caption
+    add dx, ax
+    sub si, ax
     jge .h
     xor si, si
 .h:
+    call w16_sbcut
     mov ax, di
     pop di
     clc
@@ -286,6 +353,13 @@ w16_hittest:
     jge .n
     or di, di
     jz .take
+    cmp byte [bx + W16W_KIND], W16Q_MDI ; an MDI client's: the one on top
+    jne .size                       ;   (SPEC.md 124.27.4)
+    mov ax, [si + W16W_SEQ]
+    cmp ax, [di + W16W_SEQ]
+    jb .n
+    jmp short .take
+.size:
     mov ax, [si + W16W_CX]
     add ax, [si + W16W_CY]
     mov dx, [di + W16W_CX]
@@ -381,13 +455,31 @@ w16_invaltree:
     cmp [di + W16W_PARENT], ax
     jne .n
     push ax
-    mov bx, di                      ; the rectangle in the child's client
-    call w16_bord
+    mov bx, di                      ; its frame, if the region reaches its
+    mov ax, [bx + W16W_X]           ;   window rectangle
+    cmp ax, [bp + 6]
+    jge .nonc
+    add ax, [bx + W16W_CX]
+    cmp ax, [bp + 12]
+    jle .nonc
+    mov ax, [bx + W16W_Y]
+    cmp ax, [bp + 4]
+    jge .nonc
+    add ax, [bx + W16W_CY]
+    cmp ax, [bp + 8]
+    jle .nonc
+    call w16_ncmark
+.nonc:
+    call w16_bord                   ; the rectangle in the child's client
     mov [w16_ivb], ax
     mov ax, [bx + W16W_X]
     add ax, [w16_ivb]
     mov cx, [bx + W16W_Y]
     add cx, [w16_ivb]
+    push ax
+    call w16_capt
+    add cx, ax
+    pop ax
     mov dx, [bp + 6]
     sub dx, ax
     mov si, [bp + 4]
@@ -457,7 +549,7 @@ w16_settext:
     push es
     push ds
     push dx
-    call w16_mheap                  ; ES = the USER heap
+    LCALL w16_mheap                  ; ES = the USER heap
     pop dx
     jc .fail
     mov ax, [bx + W16W_TEXT]
@@ -925,6 +1017,10 @@ w16_mkwnd:
     pop es
     pop cx
     mov byte [si + W16W_FLAGS], W16WF_USED | W16WF_INVAL | W16WF_ERASE
+    mov bx, cx                      ; its task's (SPEC.md 124.28.3)
+    mov al, [w16_cur]
+    inc ax
+    mov [w16_wtask + bx], al
     mov word [si + W16W_UR], 0x7FFF ; the whole client, erased
     mov word [si + W16W_UB], 0x7FFF
     mov al, [w16_cwkind]
@@ -953,6 +1049,11 @@ w16_mkwnd:
     mov [si + W16W_CX], ax
     mov ax, [w16_cwcy]
     mov [si + W16W_CY], ax
+    mov ax, 100                     ; its scroll bars' range, Windows' default
+    mov [si + W16W_SBH + 4], ax
+    mov [si + W16W_SBV + 4], ax
+    mov bx, si
+    call w16_ncmark
     inc word [w16_seq]
     mov ax, [w16_seq]
     mov [si + W16W_SEQ], ax
@@ -1061,6 +1162,29 @@ w16_builtin:
     inc al
     cmp al, W16Q_LIST
     jbe .c
+    mov si, w16_bisb                ; SCROLLBAR, COMBOBOX and MDICLIENT,
+    mov al, W16Q_SCROLL             ;   longer: ten bytes each
+.long:
+    push si
+    mov di, w16_namebuf
+    mov cx, 10
+.sb:
+    mov ah, [si]
+    cmp ah, [di]
+    jne .nl
+    inc si
+    inc di
+    loop .sb
+    pop si
+    clc
+    jmp short .out
+.nl:
+    pop si
+    add si, 10
+    inc al
+    cmp al, W16Q_MDI
+    jbe .long
+.no:
     stc
 .out:
     pop di
@@ -1073,6 +1197,10 @@ w16_bitab:                      ; in W16Q_BUTTON.. order, NUL-padded to 8
     db 'EDIT', 0, 0, 0, 0
     db 'STATIC', 0, 0
     db 'LISTBOX', 0
+w16_bisb:                       ; in W16Q_SCROLL.. order, ten bytes each
+    db 'SCROLLBAR', 0
+    db 'COMBOBOX', 0, 0
+    db 'MDICLIENT', 0               ; SPEC.md 124.27.2
 
 ; w16_ctlstub - DX:AX = the window procedure of WIN16's controls: the stub
 ; of an export row no program can import (w16_ctlrow), so the program can
@@ -1120,7 +1248,7 @@ w16_csize:
     xor dx, dx
 .bar:
     call w16_nobar
-    jmp short .out
+    jmp short .pos
 .rec:
     mov cx, [bx + W16W_CX]
     mov dx, [bx + W16W_CY]
@@ -1132,7 +1260,12 @@ w16_csize:
     sub cx, ax
     mov dx, [bx + W16W_CY]
     sub dx, ax
+    call w16_capt
+    sub dx, ax
 .pos:
+    xchg dx, si
+    call w16_sbcut
+    xchg dx, si
     or cx, cx
     jge .p1
     xor cx, cx
@@ -1492,12 +1625,58 @@ w16u_getfocus:
 w16u_setfocus:
     call w16_args
     mov ax, [es:bx]
-    ; fall into w16_setfocus
+    xor cx, cx
+    mov [w16_nfn], cx               ; and w16_nfi
+    mov byte [w16_nfdefer], 1
+    push si
+    call w16_setfocus
+    mov byte [w16_nfdefer], 0
+    mov cx, ax
+    call w16_nfsend
+    pop si
+    ret
+
+; w16_nfsend - CX = SetFocus's answer: the notifications its controls raised
+; (EN_KILLFOCUS, EN_SETFOCUS) SENT to their parents one after the other, as
+; Windows sent them inside the call - Calendar stores the line it is leaving
+; on EN_KILLFOCUS and has moved its edit by the time a posted one arrives -
+; and then CX answered. It is its own continuation.
+w16_nfsend:
+    mov bl, [w16_nfi]
+    cmp bl, [w16_nfn]
+    jae .done
+    inc byte [w16_nfi]
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    add bx, w16_nfq
+    mov ax, [bx]
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_COMMAND
+    mov dx, [bx + 2]
+    mov [w16_sm_wp], dx
+    mov dx, [bx + 4]
+    mov [w16_sm_lp], dx
+    mov dx, [bx + 6]
+    mov [w16_sm_lp + 2], dx
+    push cx
+    call w16_hwnd2rec
+    pop ax                          ; the answer, the continuation's word
+    mov cx, ax
+    jc w16_nfsend                   ; its parent is gone
+    mov si, w16_nfsend
+    jmp w16_sendwnd
+.done:
+    mov ax, cx
+    xor dx, dx
+    ret
+
 
 ; -----------------------------------------------------------------------------
 ; w16_setfocus - AX = an HWND (0 = none) -> AX = the one that had the focus.
-; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8), at
-; once; a program's window is not told yet. A dialog keeps the control that
+; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8) at
+; once, and are posted to a program's own window (124.22.6). A dialog keeps the control that
 ; had its focus. Clobbers BX, CX, DX.
 ; -----------------------------------------------------------------------------
 w16_setfocus:
@@ -1587,11 +1766,12 @@ w16_focfront:
 .ret:
     ret
 
-; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it, if it
-; is one of WIN16's controls. Keeps every register.
+; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it - one
+; of WIN16's controls at once, a program's own window posted (SPEC.md
+; 124.22.6), a dialog not at all. Keeps every register.
 w16_tellfocus:
     cmp byte [bx + W16W_KIND], W16Q_PROG
-    je .out
+    je .prog
     cmp byte [bx + W16W_KIND], W16Q_DIALOG
     je .out
     push ax
@@ -1605,6 +1785,16 @@ w16_tellfocus:
     pop cx
     pop ax
 .out:
+    ret
+.prog:                              ; a program's own window: posted (S17)
+    push ax
+    call w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    xor ax, ax
+    mov [w16_sm_lp], ax
+    mov [w16_sm_lp + 2], ax
+    call w16_post
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1658,18 +1848,34 @@ w16u_getwtlen:
     pop si
     ret
 
-; SetWindowText (USER.37) - args: +0 lpString, +4 hWnd. A top-level window's
-; is its os8088 title too (WIN16's own window's through w16_wtitle); one of
-; WIN16's controls is SENT WM_SETTEXT, as Windows does it, and redraws.
-w16u_setwtext:
+section .w16dlg
+
+; SetWindowText (USER.37) - args: +0 lpString, +4 hWnd. The window is SENT
+; WM_SETTEXT, as Windows does it, and DefWindowProc keeps the text (w16_dptext):
+; a program's own control learns its name there - Windows Help's buttons load
+; their bitmaps by it. One of WIN16's controls answers in its own procedure,
+; and a dialog WIN16 runs keeps the text at once.
+W16LIB w16u_setwtext
     push si
-    call w16_args
+    ICALL w16_args
     mov si, [es:bx]
     mov dx, [es:bx + 2]
     mov ax, [es:bx + 4]
-    call w16_hwnd2rec
+    ICALL w16_hwnd2rec
     jc .no
-    call w16_wsettext
+    cmp byte [bx + W16W_KIND], W16Q_DIALOG
+    je .store
+    mov [w16_sm_hwnd], ax
+    mov word [w16_sm_msg], WM_SETTEXT
+    mov word [w16_sm_wp], 0
+    mov [w16_sm_lp], si
+    mov [w16_sm_lp + 2], dx
+    mov si, w16_cont_one
+    ICALL w16_sendwnd
+    pop si
+    ret
+.store:
+    ICALL w16_wsettext
     mov ax, 1
     pop si
     ret
@@ -1677,6 +1883,44 @@ w16u_setwtext:
     xor ax, ax
     pop si
     ret
+
+; w16_dptext - DefWindowProc's WM_SETTEXT, WM_GETTEXT and WM_GETTEXTLENGTH:
+; CX = the message, AX = the HWND, [w16_sm_*] its arguments. The window's own
+; text kept, copied or measured (SPEC.md 124.8). Answers as a handler.
+w16_dptext:
+    ICALL w16_hwnd2rec
+    jc .zero
+    push si
+    push di
+    mov si, [w16_sm_lp]
+    mov dx, [w16_sm_lp + 2]
+    cmp cx, WM_GETTEXT
+    je .get
+    ja .len
+    ICALL w16_wsettext
+    mov ax, 1
+    jmp short .out
+.get:
+    mov di, si
+    mov cx, [w16_sm_wp]
+    ICALL w16_gettext
+    jmp short .out
+.len:
+    push es
+    ICALL w16_textptr
+    pop es
+    mov ax, cx
+.out:
+    pop di
+    pop si
+    xor dx, dx
+    ret
+.zero:
+    xor ax, ax
+    xor dx, dx
+    ret
+
+section .text
 
 ; -----------------------------------------------------------------------------
 ; w16_wsettext - BX = a window, DX:SI = its new text (DX = 0 none): store it
@@ -1766,6 +2010,8 @@ w16u_getwrect:
     push ax
     call w16_bord
     mov cx, ax
+    call w16_capt                   ; ...and its caption
+    sub dx, ax
     pop ax
     sub ax, cx
     sub dx, cx

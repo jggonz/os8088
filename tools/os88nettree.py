@@ -1,22 +1,24 @@
 #!/usr/bin/env python3
 """os88nettree - the tree INSTALL installs from over the network (SPEC.md 117.10.2).
 
-    python3 tools/os88nettree.py SYSTEM.img APPS.img OS88VER.TXT OUT
+    python3 tools/os88nettree.py SYSTEM.img APPS.img [MORE.img ...] OS88VER.TXT OUT
 
-One tree out of two disks: the system disk's files and the apps disk's files,
-the apps disk's folders merged into the system disk's, with OS88VER.TXT in
+One tree out of the disks: the system disk's files and each other disk's,
+their folders merged into the system disk's in the order given, with
+OS88VER.TXT in
 SYSTEM/ - where an install copies it, so an installed machine keeps the record
 of its release - and the OS88.IDX tools/os88httpdrv.py writes for any
 published tree. EDIT NOTHING IN OUT BY HAND: OS88.IDX carries every file's
 size and the drive believes it, so a file edited in place is served cut to its
 old length. Rebuild instead, or run `os88httpdrv.py export OUT OUT`.
-A file both disks carry is the SYSTEM disk's, and said; ASSOC.DAT is left out,
+A file two disks carry is the FIRST one's, and said; ASSOC.DAT is left out,
 because an install builds the destination volume's own (SPEC.md 52.10.14) and
 neither disk's cache describes the merged tree.
 
 One tree per kernel: `make nettree` writes build/nettree/big/ (os8088.img +
-apps.img), build/nettree/mega/ (mega.img + megaapps.img) and
-build/nettree/emu/ (emu.img + apps.img), and the release publishes
+apps.img + win16.img), build/nettree/mega/ (mega.img + megaapps.img: WIN16
+refuses under kern_mega, SPEC.md 124.1) and build/nettree/emu/ (emu.img +
+apps.img + win16.img), and the release publishes
 build/nettree/ under http://os8088.com/net/ (SPEC.md 117.10.2's store) - so
 each lands at net/big/, net/mega/ or net/emu/, the IN_URL of that kernel's
 own INSTALL.
@@ -61,17 +63,21 @@ def check_version(text):
     return lines[0].strip().decode()
 
 
-def build(sysimg, appsimg, verfile, out):
-    sattr, aattr = {}, {}
+def build(sysimg, others, verfile, out):
+    sattr = {}
     tree = H.tree_from_img(sysimg, sattr)
     tree.pop("ASSOC.DAT", None)
-    apps = H.tree_from_img(appsimg, aattr)
-    dupes = []
-    merge(tree, apps, "", dupes)
-    for d in dupes:
-        print("os88nettree: %s is on both disks with different bytes - the "
-              "system disk's is published" % d)
-    attrs = dict(aattr)
+    attrs = {}
+    for img in others:
+        aattr = {}
+        more = H.tree_from_img(img, aattr)
+        dupes = []
+        merge(tree, more, "", dupes)
+        for d in dupes:
+            print("os88nettree: %s is on %s too with different bytes - the "
+                  "first disk's is published" % (d, os.path.basename(img)))
+        for k, v in aattr.items():
+            attrs.setdefault(k, v)
     attrs.update(sattr)
     ver = open(verfile, "rb").read()
     rel = check_version(ver)
@@ -90,9 +96,9 @@ def build(sysimg, appsimg, verfile, out):
 
 
 if __name__ == "__main__":
-    if len(sys.argv) != 5:
+    if len(sys.argv) < 5:
         sys.exit(__doc__.strip().split("\n\n")[1])
     try:
-        build(*sys.argv[1:])
+        build(sys.argv[1], sys.argv[2:-2], sys.argv[-2], sys.argv[-1])
     except ValueError as e:
         sys.exit("os88nettree: %s" % e)

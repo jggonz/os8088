@@ -41,13 +41,16 @@ from harness import check, done                           # noqa: E402
 
 # The images `all` builds - $(SHIPIMGS) in the Makefile: system and apps in
 # four geometries, the six 360KB-only disks (SPEC.md 24.4, 24.6) and the
-# second 720KB apps disk (24.7), and the 128KB machine's two (24.5.7).
+# second 720KB apps disk (24.7), the 128KB machine's two (24.5.7), and
+# WIN16's own disk in four geometries (124.18.1).
 SHIPPED = ["build/os8088.img", "build/os8088-120.img", "build/os8088-720.img",
            "build/os8088-360.img", "build/apps.img", "build/apps120.img",
            "build/apps720.img", "build/apps360.img", "build/media360.img",
            "build/office360.img", "build/network360.img",
            "build/games360.img", "build/emu360.img", "build/util360.img",
-           "build/more720.img", "build/small360.img", "build/small720.img"]
+           "build/more720.img", "build/small360.img", "build/small720.img",
+           "build/win16.img", "build/win16-120.img", "build/win16-720.img",
+           "build/win16-360.img"]
 
 # Built disks that may carry an .OVL beside a package ON PURPOSE.
 EXEMPT = {
