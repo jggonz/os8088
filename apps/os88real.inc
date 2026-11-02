@@ -36,6 +36,12 @@
 ;                  bracket changed to ANOTHER segment is the package's to
 ;                  rename. Every register kept
 ;
+; Every listed claim must be PINNED (OSAPI_MEM_MOVABLE AX = 0) from before
+; os88real_prep until OSAPI_FSX_RUN returns, as the Video Player's vp_smov
+; pins its own: the door's conventional claims can compact the heap, and a
+; move on kern_mega rebases the selector and nothing else - the banked
+; paragraph would name memory the claim has left (53.2.3).
+;
 ; A hook (FSXF_RATE) that reads a listed word must be a no-op until the
 ; first swap and again from before the second - the "ready" byte 53.2.2
 ; already asks for, set after the first and cleared before the second.

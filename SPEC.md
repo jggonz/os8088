@@ -104403,13 +104403,22 @@ inside - returns from its entry proc and calls again without it.
 CF = 1 naming the word that has none, and `os88real_swap`, called first and
 last inside the entry proc, exchanges the list with the bank when - and only
 when - the bracket is a real-mode one. The kernel renames nothing of the
-package's (MEGA-VIDEO-REALMODE-PLAN 7.4).
+package's (MEGA-VIDEO-REALMODE-PLAN 7.4). **Every listed claim is PINNED
+(`OSAPI_MEM_MOVABLE` AX = 0) from before `os88real_prep` until
+`OSAPI_FSX_RUN` returns**, as the Video Player's `vp_smov` does: the door's
+own conventional claims (the region's copy, the service area, the drivers'
+low copies) can compact the heap, and on kern_mega a move rebases only the
+selector - the paragraph already banked then names memory the claim has
+left, and the swap installs it inside.
 
 **What the kernel does, on kern_mega**:
-1. at the door, after every other test: the reasons above, in that order -
-   the first that holds is the answer and the bracket goes on in protected
-   mode with nothing taken - and a conventional claim of the region's size
-   when the region is above 1MB;
+1. at the door, after every other test: the reasons above, tested NOT in
+   the table's order but `FSXR_KEEP`; the list's `FSXR_VOL`, `FSXR_FRAG`
+   or `FSXR_DRV`; `FSXR_ROOM` (the region's copy, then the service area);
+   the drivers' `FSXR_DROOM`, or `FSXR_DRV` for a SOUND.DRV word above 1MB;
+   EXTD.DRV's `FSXR_DROOM` - the first that holds is the answer and the
+   bracket goes on in protected mode with nothing taken - and a
+   conventional claim of the region's size when the region is above 1MB;
 2. at the freeze's arm (IF = 1, nothing else of the package can run): the
    whole region - image and bss, `I_SIZE` - copied DOWN into that claim;
 3. at the entry, with IF = 0: the video and font layer's segment words,
@@ -104512,7 +104521,7 @@ for the exit (a tone is not the bracket's: the speaker is the door's).
     within §53.7's rules.
   * **the SERVICE AREA's twins (W3)**, real-mode code that lives in `.mega`
     and is COPIED, with the list's runs behind it, into a conventional claim
-    of the instance's for the bracket (2,000 bytes of code and data, 128 of
+    of the instance's for the bracket (2,384 bytes of code and data, 128 of
     rows, 6 a run: 3 KB for a contiguous file), its cells far jumps to it:
     - `OSAPI_FILE_READ_SEQ`: READ_SEQ's contract out of the runs - the
       cursor's `FSEQ_OFF` in whole sectors and a capacity of whole sectors

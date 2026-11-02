@@ -43,7 +43,10 @@ FSXF_REAL       equ 8           ; ...bit 3 (SPEC.md 53.2.3): the bracket in REAL
                                 ; the bit and strips it at the door
 ; ...and its ANSWER, in SI on the way out (SPEC.md 53.2.3; mirrored in
 ; apps/os88api.inc): real mode, or why the bracket ran in protected mode.
-; One test each at the door, in this order, so each lifts by itself
+; One test each at the door, so each lifts by itself - tested NOT in the
+; table's order but KEEP; the list's VOL, FRAG or DRV; ROOM (the copy, then
+; the service area); the drivers' DROOM, or DRV for a SOUND.DRV word above
+; 1MB; EXTD.DRV's DROOM (fsx_rprepf)
 FSXR_REAL       equ 0
 FSXR_KEEP       equ 1               ; FSXF_KEEPWORKER
 FSXR_SVC        equ 2               ; (RETIRED by W7 - never answered: a
@@ -2632,6 +2635,10 @@ fsx_rupf:
     out 0xA1, al
     mov word [k_seg0], MEGA_SEL_LOW0
     or byte [cpu_feat], CPU_F_PM
+    mov word [spk_rdsv], 0      ; a speaker the twin left open (rms_spk):
+                                ; fsx_restore's spk_off closes it AFTER the
+                                ; rate went off at the return, so channel 0
+                                ; goes back to 65536, not to the rate (34.11.1)
     call fsx_rserup             ; a lease's ring, words and slots back (W7)
     mov ax, [ss:fsx_rexfp]      ; EXTD.DRV's slots back: mod_gone's, or the
     mov dx, [ss:fsx_rexfp+2]    ; image's code selector (W7)
@@ -2923,7 +2930,7 @@ cpu 286
 ; base less rms_lo, so every label below is the twin's own offset there. Their
 ; data is in the same copy, read through CS: and written with DS = CS; the
 ; kernel's through KERNEL_SEG (a real segment in the bracket) and mx_tab
-; through SS (LOW_SEG). WHY NOT RESIDENT `.text`: these are ~1.6 KB that a
+; through SS (LOW_SEG). WHY NOT RESIDENT `.text`: these are ~2.4 KB that a
 ; machine needs only inside a real-mode bracket, and `.text` is conventional
 ; memory on every kern_mega machine for ever; a module would be a system-disk
 ; read at every Play (W1's decision 1). Copied out of `.mega` they cost the
