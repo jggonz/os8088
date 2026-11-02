@@ -232084,7 +232084,7 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
 - **Not yet: MSCDEX's `int 2Fh` `15xxh`.** WIN16 hooks no `int 2Fh`.
   Hooking it would be a third vector in `w16_i21_on`/`_off` and an entry
   that changes stacks, in the image, at every way into and out of a
-  program. That is about 100 bytes, and the kern_mega arm has 98. No
+  program. That is about 100 bytes, and the kern_mega arm has 92. No
   target installer has yet been seen to ask: Arcade comes off a floppy,
   and `GetDriveType` already answers the question for a CD. S25's
   installs will show whether one does. If one does, the hook goes in
