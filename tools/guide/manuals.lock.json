@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "7ec824f3e",
+  "stamped": "fbe0a189b",
   "strings": "562e87c75fe90f35",
-  "why": "S16-S19: the DOS core shared with WIN16 (dosbe.inc), no text a user sees changed"
+  "why": "AH=1Ah and 2Fh give AX back"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "b1b0c9de5",
+  "stamped": "fbe0a189b",
   "strings": "172e5a682e5edddb",
-  "why": "OemToAnsi and VerFindFile argument reads"
+  "why": "5701h, LZClose's free"
  },
  "WIN16_TXT": {
   "sources": [
