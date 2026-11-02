@@ -3866,7 +3866,13 @@ mega_gpfix:
 .stale:                             ; A FREED SELECTOR POPPED BACK: a claim's
     test al, 4                      ; (an LDT one only - a GDT index read as
     jz mega_report                  ; an LDT one ran off its alias and faulted
-    cmp ax, [ss:mega_ldte]          ; in here, KERN-MEGA-PLAN 14.14)
+    push es                         ; in here, KERN-MEGA-PLAN 14.14).
+    push bx                         ; LOW_SEG by name, not SS: this #GP may
+    mov bx, LOW_SEG                 ;   be on a program's own stack
+    mov es, bx                      ;   (SPEC.md 20.18.2)
+    cmp ax, [es:mega_ldte]
+    pop bx
+    pop es
     jae mega_report
     and ax, 0xFFF8                  ; (OS88_HIGHMEM) or a window's, given back
     cmp ax, MEGA_LDT_FREE0 * 8      ; while DS or ES still held it - which
@@ -8168,7 +8174,13 @@ mega_ldt2ds:
     and bx, 0xFFF8
     test byte [es:bx+5], 0x08       ; the access byte's EXECUTABLE bit
     jz .no
-    cmp bx, [ss:mega_ldtl]    ; the last entry has no twin
+    push es                         ; the last entry has no twin. LOW_SEG
+    push ax                         ;   by name, not SS: a trap taken on a
+    mov ax, LOW_SEG                 ;   program's own stack has SS = that
+    mov es, ax                      ;   stack (SPEC.md 20.18.2)
+    cmp bx, [es:mega_ldtl]
+    pop ax
+    pop es
     jae .no
     push ax
     mov al, [es:bx+8+5]

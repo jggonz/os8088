@@ -530,7 +530,10 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %ifidni __?SECT?__, [section .text]
     cmp word [cs:k_dsel], KERNEL_SEG    ; REAL MODE - the boot, before
  %elifidni __?SECT?__, [section .cold]
-    cmp byte [ss:mega_pm], 0    ; (.cold names no CS data: KDATAR_C's flag)
+    push ax                     ; (.cold names no CS data, and SS may be a
+    db 0x0F, 0x01, 0xE0         ;   program's own stack in an IRQ: `smsw ax`,
+    test al, 1                  ;   its PE bit, is the fact - SPEC.md 20.18.2)
+    pop ax
  %else
   %error "MEGA_CSELTOP outside .text and .cold"
  %endif

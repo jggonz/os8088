@@ -49094,6 +49094,38 @@ bytes there (one 512-byte rung: `KERN_SIZE` +512 while booting, nothing below
 1 MB after the switch), `.text` and `.bss` unchanged, and kern_big and
 kern_small assemble byte-identical with and without it.
 
+#### 20.18.2 Kernel state is never read through SS where a program's stack may be (2026-11-01)
+
+**kern_mega code that can run on a program's own stack - a trap fixup, an
+IRQ, a reflection - never reads kernel state through SS.** The kernel's
+convention is that SS is `LOW_SEG` wherever it runs (§2.1), and `.lowbss` is
+reached through it. A protected-mode program that keeps its own stack breaks
+that: a #GP or an IRQ at CPL 0 does not switch stacks, so in its handler SS
+is whatever the program chose, and an `[ss:x]` there reads the program's
+segment at x's offset. WIN16's arm is such a program's host (§124.31): its
+programs, the DOS core it hosts and its own gate run on the program's stack.
+
+**An IRQ0 driver tick on kern_mega runs on the interrupted task's stack,
+under the SS that task chose** - which, while a Windows program runs, is the
+program's. Three reads met it, and each now names its segment:
+
+| where | was | is |
+|---|---|---|
+| `MEGA_CSELTOP`'s `.cold` arm (a driver's tick returning through `drv_svc_call`) | `cmp byte [ss:mega_pm], 0` | `smsw ax` and its PE bit (the CPU's own fact; kern_mega needs a 286) |
+| `mega_ldt2ds` (`mega_gpw`'s check that a code selector has a data twin) | `cmp bx, [ss:mega_ldtl]` | ES = `LOW_SEG` by name |
+| `mega_gpfix`'s `.stale` arm | `cmp ax, [ss:mega_ldte]` | ES = `LOW_SEG` by name |
+
+The first faulted a sound tick's `retf` while a Windows program played
+(`FAULT 0D err 118C`, QEMU with an SB16). The second refused every store
+through CS that `mega_gpw` exists to complete, when it was taken on a
+program's stack, which is where WIN16's DOS host makes its first
+(`FAULT 0D err 0000`, Write 3.0 on 86Box's 386; QEMU never traps the store).
+The cost is `.mega` +18 bytes and `.cold` +4, no rung crossed; kern_big and
+kern_small assemble byte-identical, and `tests/megaseg.txt`'s 4,381 holds.
+The `[ss:mega_*]` reads that remain are in the allocator and the
+far helpers `.cold` calls from kernel paths on the UI task, where SS is
+`LOW_SEG` by the §2.1 convention.
+
 ## 21. loader.inc
 
 State (.bss, **zero at boot** — §2.5, and there is no `loader_init`: all
@@ -231008,17 +231040,17 @@ What the arm does is all on WIN16's side of the door:
 The memory calls that would walk an arena are not forwarded (§124.21.2), so
 `dos_arena` is never loaded into a segment register.
 
-**Found on 86Box (2026-11-01), open: the trap that completes those stores
-reads `.lowbss` through SS.** The core's gate and the host's two stack words
+**Found on 86Box (2026-11-01), fixed in §20.18.2: the trap that completes
+those stores read `.lowbss` through SS.** The core's gate and the host's two stack words
 run on the PROGRAM's stack, and a #GP at CPL 0 does not switch stacks, so in
 `mega_gpw` SS is the program's. `mega_ldt2ds` checks its selector against
 `[ss:mega_ldtl]` - the program's segment at that offset, not `LOW_SEG` - and
 refuses, and the store is reported (`FAULT 0D err 0000` at the host's
 `mov [cs:dos_sv_ss], ax`, WRITE 3.0 on 86Box's 386). QEMU never traps the
 store, so it never ran this path. A kern_mega whose `mega_ldt2ds` reads
-`mega_ldtl` through ES = `LOW_SEG` runs WRITE 3.0 there. It is a kernel
-change and waits on the owner, beside `MEGA_CSELTOP`'s `[ss:mega_pm]`, which
-is the same assumption in an IRQ.
+`mega_ldtl` through ES = `LOW_SEG` runs WRITE 3.0 there, and that is what
+ships now, with `MEGA_CSELTOP`'s `[ss:mega_pm]`, the same assumption in an
+IRQ.
 
 #### 124.31.8 The UI task's stack
 

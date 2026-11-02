@@ -1488,12 +1488,14 @@ its table goes in the diary, so the reach is measured, not claimed.
       **Seen 2026-11-01 on a copy of `vm/286` (86Box's AMI 286, 12.5 MHz,
       1 MB):** SOL 3.1 deals, REGEDIT 3.1 opens, SELTEST says 0 wrong with
       flags 0013 (`WF_PMODE | WF_CPU286 | WF_STANDARD`); BIG's 128 KB
-      `GlobalAlloc` is refused there, honestly, on 1 MB. **Open, a kernel
-      question:** WRITE 3.0 faults on 86Box's 386 at the DOS host's first
-      store through CS, because the trap that completes it reads
-      `mega_ldtl` through SS, the program's stack (124.31.7). A kern_mega
-      that reads it through `LOW_SEG` runs WRITE 3.0 there; that change
-      waits on the owner.
+      `GlobalAlloc` is refused there, honestly, on 1 MB. WRITE 3.0 faulted
+      on 86Box's 386 at the DOS host's first store through CS: the trap
+      that completes it read `mega_ldtl` through SS, the program's stack.
+      **Fixed in SPEC.md 20.18.2**, with `MEGA_CSELTOP`'s `[ss:mega_pm]`
+      and `mega_gpfix`'s `[ss:mega_ldte]` (`.mega` +18, `.cold` +4; kern_big
+      and kern_small byte-identical). **Seen 2026-11-01:** WRITE 3.0 opens on
+      86Box's 386, and TMTEST with an SB16 says 0 wrong under QEMU, where
+      the sound tick's `retf` used to fault.
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and
