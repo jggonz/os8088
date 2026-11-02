@@ -452,8 +452,8 @@ w16z_close:
     shl bx, 1
     mov word [cs:w16z_seg + bx], 0
     mov bx, [es:LZS_FD]
-    mov ax, es
-    ICALL w16_gfreeh
+    W16VOF ax, es                   ; the block's handle, which on the arm
+    ICALL w16_gfreeh                ;   is not the selector ES holds
     jmp short .close
 .plain:
     mov bx, ax
@@ -831,8 +831,10 @@ w16z_copy:
 .free:
     pushf
     push ax
-    mov ax, [cs:w16z_cbuf]
+    push dx                         ; (the count's high word: the free may
+    mov ax, [cs:w16z_cbuf]          ;   take DX)
     ICALL w16_gfreeh
+    pop dx
     pop ax
     popf
 .ret:

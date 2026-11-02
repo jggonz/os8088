@@ -174216,6 +174216,16 @@ a defect and the probe judges nothing — **the finding is the diff between the
 two columns**, and the column for a real IBM DOS 3.30 is what says which of the
 forty-five answer in `AX` and which are supposed to hand it back.
 
+##### 96.7.1.3.3 `1Ah` and `2Fh` gave `AX` back last (2026-11-02)
+
+`.setdta` and `.getdta` moved the DTA's segment through `AX`, so `AH=1Ah`
+answered with `AX` = the program's `DS` and `AH=2Fh` with `AX` = the DTA's
+segment. Neither answers in `AX`. They go through the stack now, as
+`.setvec` does, for one byte each. It was found through WIN16 (§124.21.2),
+which hosts this core: the Setup Toolkit's MSCOMSTF finds a file with
+`mov al, 4Eh`, `AH=2Fh`, `AH=1Ah`, then `mov ah, al`. It issued `AH=E4h`, the
+low byte of its DTA's segment, and copied no file after the first.
+
 #### 96.7.2 The gate runs on DOS'S stack, and building its frame on the program's corrupted the arena
 
 `dos_int21` was entered on the program's stack and built its whole frame
@@ -228374,8 +228384,15 @@ Windows Help 3.0's runtime asks for it after `_lopen` fails on
 said *Cannot create bookmark file*.
 
 `57h` (a file's date) and `5Ah` (a unique temporary file) are not in the core
-(§96.7.3) and are not in this story: no target program issues them, and the
-installer story is where they land, in the core where DOS.O88 gains them too.
+(§96.7.3). **`5701h`, setting a file's date, is WIN16's own and answers
+success while changing nothing** (S24, 2026-11-02): the Setup Toolkit's
+copy (MSINSSTF) sets each file's date from its INF line after `LZCopy` and
+reports *Could not write to the file* when the call fails, and a date is
+not something a kernel file record holds (`OSAPI_FILE_FIND`'s record has
+none, §96.7.1.2's finding 3), so there is nothing to set and no ABI to move
+for it. The file keeps the date os8088 wrote. `5700h`, reading one, still
+answers invalid function: a date WIN16 does not have would be a guess.
+`5Ah` no target issues.
 
 #### 124.21.3 KERNEL's file calls
 
@@ -229507,7 +229524,7 @@ starts full of spaces, and is first written at FF0h.
 | `LZOpenFile` (LZEXPAND.2) | `OpenFile` (§124.21.3); if that fails, `OpenFile` again with the name's last letter replaced by `_` (`._` added to a name with no extension, `_` to a shorter one). Opened for reading, the handle goes through `LZInit`, and an answer that is not a handle gives back the plain one. Any other mode answers `OpenFile`'s handle |
 | `LZRead` (LZEXPAND.5) | the expanded bytes from the handle's position, and the count. A plain handle is `_lread` |
 | `LZSeek` (LZEXPAND.4) | the position in the EXPANDED file: from the start, from the position or from the end. Outside 0 to the length answers `LZERROR_BADVALUE`. A plain handle is `_llseek` |
-| `LZClose` (LZEXPAND.6) | the file closed and the slot freed. A plain handle is `_lclose` |
+| `LZClose` (LZEXPAND.6) | the file closed and the slot freed. A plain handle is `_lclose`. **On the kern_mega arm the state's block was never freed until 2026-11-02**: it was handed to the free as the selector the slot keeps rather than its handle, the free answered "not ours", and each LZ file left 5,152 bytes behind. Arcade's setup expands one per file; by its fifteenth, `LZOpenFile` could not have a state, answered the plain handle, and `CPFONTS.FON` was copied packed |
 | `LZCopy` (LZEXPAND.1), `CopyLZFile` (LZEXPAND.8) | the source from its position to its end, expanded, written to the destination. The bytes written as a dword, or `LZERROR_READ` / `LZERROR_WRITE`. A plain source goes through `LZInit` first, and the LZ handle made for it is closed after, which closes the source |
 | `GetExpandedName` (LZEXPAND.10) | the name an SZDD file expands to: the last letter put back from its header, in the case of the rest of the name. A plain file's name as it is. 1, or `LZERROR_BADINHANDLE` |
 | `LZStart` (LZEXPAND.7), `LZDone` (LZEXPAND.9) | 1, and nothing |

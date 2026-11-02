@@ -3738,14 +3738,15 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
 
 .setdta:
     mov [dos_dta], dx               ; AH=1Ah: DS:DX, and DS is the program's -
-    mov ax, [bp]                    ; which for every real program is the PSP
-    mov [dos_dtaseg], ax            ; it already runs on
-    jmp .ok
+    push word [bp]                  ; which for every real program is the PSP
+    pop word [dos_dtaseg]           ; it already runs on. AX is given back
+    jmp .ok                         ; (SPEC.md 96.7.1.3)
 .getdta:
     mov bx, [dos_dta]               ; AH=2Fh: out ES:BX - and ES is written into
-    mov ax, [dos_dtaseg]            ; the gate's banked slot, which .leave
-    mov [bp-6], ax                  ; restores from (SPEC.md 96.7.1)
-    jmp .ok
+    push word [dos_dtaseg]          ; the gate's banked slot, which .leave
+    pop word [bp-6]                 ; restores from (SPEC.md 96.7.1). AX is
+    jmp .ok                         ; given back: MSCOMSTF's find-first keeps
+                                    ; its function in AL across 2Fh and 1Ah
 
 ; --- find first / find next (SPEC.md 96.12.1) --------------------------------
 .ff:

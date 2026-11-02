@@ -75,6 +75,8 @@ w16_i21:
     je .ioctl
     cmp ah, 0x59
     je .xerr
+    cmp ax, 0x5701                  ; set a file's date: done, and nothing
+    je .done                        ;   changes (SPEC.md 124.21.2)
     cmp ah, 0x2A
     jb .file
     cmp ah, 0x2C
