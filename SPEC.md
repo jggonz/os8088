@@ -228263,7 +228263,7 @@ common half (S17), and end it with the usual toast when it reaches them.
 | `_lclose` | `HFILE_ERROR`: nothing is open |
 | `LoadLibrary`, `FreeLibrary` | 2, file not found, until a program's own DLLs load (S18); nothing to free |
 | `WNetGetCaps` and the other WNet calls (USER.512-520) | there is no network: `WNetGetCaps` answers 0 and the rest `WN_NOT_SUPPORTED` (1), what Windows answered without a network driver |
-| `OemToAnsi` | the string copied as it is: WIN16 does not translate between the OEM and ANSI sets, and what programs pass it is file names |
+| `OemToAnsi` | the string copied as it is: WIN16 does not translate between the OEM and ANSI sets, and what programs pass it is file names. **Until 2026-11-02 the source pointer was read through the destination's segment** (`les` of the destination took the ES the arguments are read through): Arcade's setup, copying its first file, loaded a segment register with what was there, `FAULT 0D` on kern_mega and a copy from nowhere in real mode. `AnsiToOem` is the same handler |
 | `EqualRect`, `GetAsyncKeyState` | as Windows; `GetAsyncKeyState` is `GetKeyState`'s answer |
 | `AdjustWindowRectEx` | `AdjustWindowRect`'s, and `WS_EX_DLGMODALFRAME` gives a frame the dialog frame |
 | `CreateFont` | the System font, as `CreateFontIndirect` (§124.17.1) |
@@ -229537,7 +229537,7 @@ opens it, so a packed `.DL_` answers its version as its expansion would.
 | `GetFileVersionInfoSize` (VER.6), `GetFileVersionInfo` (VER.7) | the same calls for type 16 (`VS_FILE_INFO`), id 1 (`VS_VERSION_INFO`). `GetFileVersionInfo` always looks for the resource. It does not trust the handle |
 | `VerQueryValue` (VER.11) | a path through the version block, `\` first and a key a step, case ignored: a far pointer to the value and its length. `\` alone is the root's value, the `VS_FIXEDFILEINFO`. FALSE when a step is not there |
 | `VerLanguageName` (VER.10) | the name of a language id, from the table below, cut to `nSize` with its NUL, and the characters copied |
-| `VerFindFile` (VER.8) | where a file goes: a shared one (`VFFF_ISSHAREDFILE`) to the system directory, anything else to `szAppDir`. Where it is now: the destination if it is there, otherwise the other one of those two with `VFF_CURNEDEST`. A buffer too small is filled as far as it holds, with `VFF_BUFFTOOSMALL`, and each length is set to what was needed |
+| `VerFindFile` (VER.8) | where a file goes: a shared one (`VFFF_ISSHAREDFILE`) to the system directory, anything else to `szAppDir`. Where it is now: the destination if it is there, otherwise the other one of those two with `VFF_CURNEDEST`. A buffer too small is filled as far as it holds, with `VFF_BUFFTOOSMALL`, and each length is set to what was needed. Each length's pointer is read before its buffer's `les` (2026-11-02; the same defect as `OemToAnsi`'s, read through the buffer's segment) |
 | `VerInstallFile` (VER.9) | `szSrcDir\szSrcFileName`, expanded if it is SZDD, written to `szDestDir\szDestFileName`. Then, unless `VIFF_DONTDELETEOLD`, the copy in `szCurDir` is deleted when that is another directory. 0, or `VIF_CANNOTREADSRC`, `VIF_CANNOTCREATE`, `VIF_OUTOFSPACE` (a short write: the partial file is deleted) or `VIF_CANNOTDELETECUR` |
 
 WIN16's Windows directory and system directory are one directory (O5,

@@ -759,8 +759,8 @@ W16LIB w16kb_oem2ansi
     push di
     push ds
     ICALL w16_args
-    les di, [es:bx]
-    lds si, [es:bx + 4]
+    lds si, [es:bx + 4]             ; (the source first: LES would take the
+    les di, [es:bx]                 ;   ES the arguments are read through)
     cld
 .c:
     lodsb

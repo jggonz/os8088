@@ -1364,17 +1364,16 @@ w16v_give:
     mov ax, bx
     ICALL w16_args
     add bx, ax
-    les di, [es:bx + 4]
-    mov ax, es
-    or ax, di
-    jz .out
-    push es
-    push di
-    les di, [es:bx]
-    mov ax, es
-    or ax, di
-    pop dx
+    push word [es:bx + 4]           ; the buffer, read before LES takes the
+    push word [es:bx + 6]           ;   ES the arguments are read through
+    les di, [es:bx]                 ; ES:DI = the length's word
     pop ax
+    pop dx                          ; AX:DX = the buffer
+    mov bx, ax
+    or bx, dx
+    jz .out
+    mov bx, es
+    or bx, di
     jz .out
     mov cx, [es:di]                 ; CX = the room
     push es
