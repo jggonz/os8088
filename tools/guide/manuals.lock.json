@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "b198201ca",
-  "strings": "a570971002c6c665",
-  "why": "S21 batch 5: HWND_BROADCAST and DDE between tasks"
+  "stamped": "61dda6c34",
+  "strings": "13080677c06c30eb",
+  "why": "Merge of S21 batches 4-5; atoms in part 9 (SPEC.md 124.28.6)"
  },
  "WIN16_TXT": {
   "sources": [
