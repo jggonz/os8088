@@ -25,7 +25,8 @@ else. They were DRAFTED once, by this tool:
 below and in SPEC.md 124.7.1). `fon` prints a Windows .FON's metrics and widths
 - the user's own files, read for measurement and never copied into the tree.
 
-    python3 tools/w16font.py build apps/win16/fonts/sys16.txt build/win16/sys16.bin
+    python3 tools/w16font.py build apps/win16/fonts/sys16.txt build/win16/sys16.bin [DIALOG.txt]
+    python3 tools/w16font.py dlgdraft MS_SANS_SERIF.SFD apps/win16/fonts/
     python3 tools/w16font.py fon EGASYS.FON [--show]     (SZDD-packed or not)
     python3 tools/w16font.py check                       (the fast row's half)
 
@@ -56,6 +57,25 @@ COUNT = LAST - FIRST + 1
 # rows, ascent, internal leading, external leading. Average 7, maximum 14 on all
 # three, which the art's advances give by construction and `check` asserts.
 FACES = {16: (16, 13, 3, 0), 12: (12, 10, 2, 0), 8: (8, 7, 1, 0)}
+
+# THE DIALOG FACE (SPEC.md 124.22.17): what a 3.x dialog template's
+# `DS_SETFONT` "MS Sans Serif" 8 (or 3.0's "Helv" 8) is drawn in. Windows 3.1
+# drew a template's font BOLD, and its dialog units come off the bold face:
+# ((the alphabet's width / 26) + 1) / 2 = 7 on VGA, the System font's 8 by
+# the same formula. Wine's MS Sans Serif 13 px strike has Microsoft's own
+# advances (SSERIFE.FON measures the same 323 over the alphabet), emboldened
+# here as Windows synthesised it - each row OR-ed with itself a pixel to the
+# right, the advance one wider. VGA is that strike, 13 rows, measured as
+# SSERIFE.FON's (ascent 11, internal leading 2); EGA and Hercules 10 and CGA 8
+# are drafted from it as the System font's shorter faces were, and are
+# derived, not measured (no Windows 3.1 EGA or CGA face is installed here).
+# rows, ascent, internal leading, external leading, and tmAveCharWidth: the
+# bold face's, SSERIFE's 5 + 1
+DFACES = {13: (13, 11, 2, 0), 10: (10, 8, 1, 0), 8: (8, 6, 0, 0)}
+DAVG = 6
+ZONES13 = ((0, 2), (2, 5), (5, 11), (11, 13))
+DXHEIGHT = {13: 6, 10: 5, 8: 5}
+DPART = {16: 13, 12: 10, 8: 8}          # the System face -> its dialog face
 
 
 # --------------------------------------------------------------------------
@@ -274,10 +294,11 @@ ZONES16 = ((0, 3), (3, 6), (6, 13), (13, 16))
 XHEIGHT = {16: 7, 12: 6, 8: 5}
 
 
-def zones(n):
+def zones(n, faces=None, xh=None):
     """The same four zones on an n-row face, from its D4 metrics."""
-    rows, asc, il, _ = FACES[n]
-    return ((0, il), (il, asc - XHEIGHT[n]), (asc - XHEIGHT[n], asc), (asc, rows))
+    rows, asc, il, _ = (faces or FACES)[n][:4]
+    x = (xh or XHEIGHT)[n]
+    return ((0, il), (il, asc - x), (asc - x, asc), (asc, rows))
 
 
 def _loss(cells, keep, z0, z1):
@@ -298,7 +319,7 @@ def _loss(cells, keep, z0, z1):
     return lost
 
 
-def rowplan(g16, n):
+def rowplan(g16, n, src=ZONES16, faces=None, xh=None):
     """Which source rows each zone of an n-row face keeps: ONE choice for every
     glyph, so a stroke lands on the same row in all of them (the x-height, the
     bar of an e, the baseline), and the choice is the one losing least ink
@@ -306,7 +327,7 @@ def rowplan(g16, n):
     from itertools import combinations
     cells = [cell for _, cell in g16.values()]
     plan = []
-    for (s0, s1), (d0, d1) in zip(ZONES16, zones(n)):
+    for (s0, s1), (d0, d1) in zip(src, zones(n, faces, xh)):
         want = d1 - d0
         best = None
         for keep in combinations(range(s0, s1), want):
@@ -386,18 +407,62 @@ def draft(sfd, outdir):
         write_art(os.path.join(outdir, "sys%02d.txt" % n), nrows, nasc, g, hdr)
 
 
+def embolden(cell):
+    """Windows' synthesised bold: each row OR-ed with itself a pixel right,
+    in a cell one pixel wider."""
+    out = []
+    for r in cell:
+        w = r + "."
+        out.append("".join("#" if w[x] == "#" or (x and w[x - 1] == "#") else "."
+                           for x in range(len(w))))
+    return out
+
+
+def dlgdraft(sfd, outdir):
+    rows, asc, g13 = sfd_strike(sfd, 13)
+    assert (rows, asc) == DFACES[13][:2], (rows, asc)
+    for n in (13, 10, 8):
+        nrows, nasc = DFACES[n][:2]
+        if n == 13:
+            plan = None
+            g = g13
+        else:
+            plan = rowplan(g13, n, ZONES13, DFACES, DXHEIGHT)
+            g = {c: (a, resample(cell, plan, ZONES13)) for c, (a, cell) in g13.items()}
+        g = {c: (a + 1, embolden(cell)) for c, (a, cell) in g.items()}
+        hdr = ["dlg%02d.txt - WIN16's dialog face for %s (SPEC.md 124.22.17)"
+               % (n, {13: "VGA", 10: "EGA and Hercules", 8: "CGA"}[n]), "",
+               "Wine's MS Sans Serif, fonts/ms_sans_serif.sfd's 13 px strike, at",
+               "wine-mirror/wine 0738d528db522f52d9d75f2aec712688dd31d1d2.",
+               "Copyright (C) 2004 Huw D M Davies, Dmitry Timoshkov;",
+               "LGPL-2.1-or-later. " + ("Its rows as they are." if n == 13 else
+               "Its rows resampled to %d with %d above the baseline (derived; "
+               "source rows kept, by zone: %s)." % (nrows, nasc, plan)),
+               "Then emboldened as Windows 3.1 drew a dialog template's font: each",
+               "row OR-ed with itself a pixel right, the advance one wider. Drafted",
+               "by `tools/w16font.py dlgdraft`; THE ART IS THE SOURCE from then on.",
+               "No Microsoft glyph is in this file."]
+        write_art(os.path.join(outdir, "dlg%02d.txt" % n), nrows, nasc, g, hdr)
+
+
 # --------------------------------------------------------------------------
 # The part
 # --------------------------------------------------------------------------
 
-def part(path):
+def part(path, dialog=None):
+    """One face's bytes; with `dialog`, the dialog face's art appended at the
+    next paragraph (SPEC.md 124.22.17), where WIN16 finds it from the System
+    face's own last glyph."""
     rows, asc, g = read_art(path)
     face = FACES.get(rows)
+    avg = 7                                                 # Windows' figure, D4
     if face is None or face[1] != asc:
-        raise SystemExit("%s: a %d-row face with ascent %d is not one of WIN16's"
-                         % (path, rows, asc))
+        face = DFACES.get(rows)
+        avg = DAVG
+        if face is None or face[1] != asc:
+            raise SystemExit("%s: a %d-row face with ascent %d is not one of WIN16's"
+                             % (path, rows, asc))
     advs = [g[c][0] for c in range(FIRST, LAST + 1)]
-    avg = round(sum(advs) / len(advs)) if False else 7     # Windows' figure, D4
     hdr = bytes([rows, asc, avg, max(advs), face[2], face[3], FIRST, COUNT])
     body = bytearray(hdr + bytes(advs))
     if len(body) & 1:
@@ -414,6 +479,9 @@ def part(path):
                 if ch == "#":
                     v |= 1 << (bpr * 8 - 1 - x)
             body += v.to_bytes(bpr, "big")
+    if dialog:
+        body += b"\0" * (-len(body) % 16)
+        body += part(dialog)
     return bytes(body)
 
 
@@ -436,6 +504,24 @@ def check(fontdir):
         if len(set(a.values())) != 1:
             print("w16font: char %d's advance differs between faces: %r" % (c, a))
             bad += 1
+    dfaces = {}
+    for n in (13, 10, 8):
+        p = os.path.join(fontdir, "dlg%02d.txt" % n)
+        rows, asc, g = read_art(p)
+        dfaces[n] = g
+        if (rows, asc) != DFACES[n][:2]:
+            print("w16font: %s is %d rows ascent %d, not %r" % (p, rows, asc, DFACES[n][:2]))
+            bad += 1
+        al = sum(g[ord(ch)][0] for ch in
+                 "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz")
+        if (al // 26 + 1) // 2 != 7:
+            print("w16font: %s's dialog unit is not Windows 3.1's 7" % p)
+            bad += 1
+    for c in range(FIRST, LAST + 1):
+        a = {n: dfaces[n][c][0] for n in dfaces}
+        if len(set(a.values())) != 1:
+            print("w16font: char %d's dialog advance differs between faces: %r" % (c, a))
+            bad += 1
     return bad
 
 
@@ -446,8 +532,11 @@ def main(a):
     if a[0] == "draft" and len(a) == 3:
         draft(a[1], a[2])
         return 0
-    if a[0] == "build" and len(a) == 3:
-        open(a[2], "wb").write(part(a[1]))
+    if a[0] == "dlgdraft" and len(a) == 3:
+        dlgdraft(a[1], a[2])
+        return 0
+    if a[0] == "build" and len(a) in (3, 4):
+        open(a[2], "wb").write(part(a[1], a[3] if len(a) == 4 else None))
         return 0
     if a[0] == "check":
         d = a[1] if len(a) > 1 else os.path.join(HERE, "..", "apps", "win16", "fonts")

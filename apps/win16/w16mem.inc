@@ -19,13 +19,23 @@
 ; word is the data, so `*(char **)h` reads what LocalLock answers.
 ; =============================================================================
 
-W16_ARENAKB equ 16              ; an arena's KB unless a request is more
+W16_ARENAKB equ 32              ; the first arena's KB unless a request is
+                                ;   more; the second is twice it
+W16_LHROOM  equ 4096            ; a library's local heap, past its ne_heap
+                                ;   (SPEC.md 124.25.2)
+W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
+                                ;   largest free run (SPEC.md 124.25.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
+W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
+W16_GHNOTE  equ 4               ;   ...and GMEM_NOTIFY: discarded only when
+                                ;   GlobalNotify's procedure says so
 
 GMEM_MOVEABLE equ 0x0002
 GMEM_ZEROINIT equ 0x0040
 GMEM_MODIFY   equ 0x0080
 GMEM_DISCARDED equ 0x4000       ; GlobalFlags' answer
+GMEM_DISCARDABLE_HI equ 0x01    ; GMEM_DISCARDABLE (0x0100), the high byte's
+GMEM_NOTIFY_HI      equ 0x40    ; GMEM_NOTIFY (0x4000), the same
 
 ; --- a global block's header, the paragraph before its data -----------------
 GH_SIZE   equ 0                 ; paragraphs, the header included
@@ -35,10 +45,22 @@ GH_HANDLE equ 4                 ; what GlobalAlloc answered for it
 GH_OWNER  equ 6                 ; a resource's entry offset (w16res.inc), or 0
 GH_MAGIC  equ 8
 GH_SIG    equ 0x4857            ; 'WH'
+GH_TASK   equ 10                ; the task whose end frees it, + 1; 0 = none's
+                                ;   (WIN16's own, or GMEM_DDESHARE: 124.28.3)
+GMEM_DDESHARE_HI equ 0x20       ; GMEM_DDESHARE (0x2000), the high byte's
 
 GHF_USED  equ 1
 GHF_MOVE  equ 2
 GHF_RES   equ 4                 ; a loaded resource: discardable when unused
+GHF_CODE  equ 8                 ; a discardable code segment, GH_OWNER its
+                                ;   number (SPEC.md 124.26.3)
+GHF_ICON  equ 16                ; an icon CreateCursorIconIndirect made, which
+                                ;   DestroyIcon frees (124.27.7)
+W16G_HIGH equ 0x01              ; w16_gnew's CL: from the TOP of an arena, the
+                                ;   last free run that holds it (124.26.3)
+W16G_NOCODE equ 0x04            ; ...and: the program's code is not discarded
+                                ;   for it (GlobalAlloc with a GlobalNotify
+                                ;   procedure, SPEC.md 124.9.1)
 
 ; =============================================================================
 ; The global heap, inside
@@ -84,13 +106,23 @@ w16_gnew:
     call w16_garena                 ; a new arena for it
     jnc .fit2
     call w16_gdiscard               ; unused resources, then once more
-    jc .fail
+    jc .old
+    call w16_gfit
+    jnc .got
+.old:
+    call w16_gdold                  ; then a discardable block at a time,
+    jc .fail                        ;   the least recently used first
+    call w16_gfit
+    jnc .got
+    call w16_garena                 ; (an arena it emptied went back)
+    jc .old
 .fit2:
     call w16_gfit
     jc .fail
 .got:
     mov es, ax                      ; ES = the header
     mov byte [es:GH_LOCK], 0
+    mov byte [es:GH_TASK], 0        ; nobody's until w16_gmine
     mov word [es:GH_OWNER], 0
     inc ax
     mov dx, ax                      ; DX = the data
@@ -189,13 +221,15 @@ w16_ghnew:
 
 ; -----------------------------------------------------------------------------
 ; w16_gfit - BX = paragraphs: the first free block that holds them, split to
-; size and marked used. out: AX = its header; CF=1 none. Keeps the rest.
+; size and marked used - or, with W16G_HIGH in [w16_gflg], the LAST, cut from
+; its top (SPEC.md 124.26.3). out: AX = its header; CF=1 none. Keeps the rest.
 ; -----------------------------------------------------------------------------
 w16_gfit:
     push cx
     push dx
     push si
     push es
+    xor dx, dx                      ; DX = the last that fits (W16G_HIGH)
     xor si, si
 .arena:
     cmp si, 2 * W16_NARENA
@@ -209,7 +243,13 @@ w16_gfit:
     mov es, ax
     mov cx, [es:GH_SIZE]
     test byte [es:GH_FLAGS], GHF_USED
-    jnz .skip
+    jz .free
+    test byte [es:GH_FLAGS], GHF_CODE ; W16G_NOCODE's data stays below the
+    jz .skip                        ;   code, so a hole a segment left is a
+    test byte [w16_gflg], W16G_NOCODE ; segment's again (SPEC.md 124.9.1)
+    jnz .nexta
+    jmp short .skip
+.free:
     cmp cx, bx
     jae .fits
 .skip:
@@ -220,6 +260,22 @@ w16_gfit:
     inc si
     jmp short .arena
 .fits:
+    test byte [w16_gflg], W16G_HIGH
+    jz .low
+    mov dx, ax
+    jmp short .skip
+.top:                               ; the last fit: the top of it is the block
+    mov ax, dx
+    mov es, ax
+    mov cx, [es:GH_SIZE]
+    sub cx, bx
+    jz .exact
+    mov [es:GH_SIZE], cx            ; the bottom stays free
+    add ax, cx
+    mov es, ax
+    mov [es:GH_SIZE], bx
+    jmp short .exact
+.low:
     sub cx, bx                      ; CX = what is left over
     jz .exact
     mov dx, ax                      ; the rest becomes a free block
@@ -237,6 +293,8 @@ w16_gfit:
     clc
     jmp short .out
 .none:
+    or dx, dx
+    jnz .top
     stc
 .out:
     pop es
@@ -265,18 +323,52 @@ w16_garena:
     inc si
     jmp short .slot
 .free:
+    push si                         ; the floor, by the arenas already in use
+    push bx                         ;   (SPEC.md 124.25.1): 32 KB, then 64,
+    xor cx, cx                      ;   then what is free but W16_ARKEEP
+    xor si, si
+.cnt:
+    cmp word [w16_arena + si], 0
+    je .nc
+    inc cx
+.nc:
+    inc si
+    inc si
+    cmp si, 2 * W16_NARENA
+    jb .cnt
+    mov dx, W16_ARENAKB
+    jcxz .fl
+    mov dx, 2 * W16_ARENAKB
+    cmp cx, 1
+    je .fl
+    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
+    sub ax, W16_ARKEEP
+    jb .fl
+    cmp ax, dx
+    jbe .fl
+    mov dx, ax
+.fl:
+    pop bx
+    pop si
     mov ax, bx                      ; KB = ceil(paragraphs / 64)
     add ax, 63
     mov cl, 6
     shr ax, cl
-    cmp ax, W16_ARENAKB
+    push ax                         ; (the request's own KB, to fall back to)
+    cmp ax, dx
     jae .kb
-    mov ax, W16_ARENAKB
+    mov ax, dx
 .kb:
-    push ax
     call OSAPI_MEM_CLAIM            ; DX = the segment
-    pop cx
+    mov cx, ax
+    pop ax
+    jnc .got
+    cmp ax, cx
+    je .no                          ; it was the request's own size
+    mov cx, ax
+    call OSAPI_MEM_CLAIM            ; the floor would not go: the request
     jc .no
+.got:
     mov [w16_arena + si], dx
     mov es, dx
     mov ax, cx
@@ -474,6 +566,104 @@ w16_gfreeh:
     ret
 
 ; -----------------------------------------------------------------------------
+; w16_gdold - discard the least recently used GMEM_DISCARDABLE block nobody
+; has locked (SPEC.md 124.9): the handle stays, with no block, as Windows left
+; it - GlobalLock answers NULL, GlobalFlags GMEM_DISCARDED, and GlobalReAlloc
+; gives it a block again. A code segment older than it and not in use goes
+; instead (SPEC.md 124.26.5). CF=1: there was none. Keeps all.
+; -----------------------------------------------------------------------------
+w16_gdold:
+    push ax
+    push dx
+    push si
+    push di
+    push es
+    mov di, 0xFFFF                  ; DI = the oldest so far, DX its use
+    xor si, si
+.h:
+    test byte [w16_ghf + si], W16_GHDISC
+    jz .n
+    mov ax, [w16_ghseg + si]
+    or ax, ax
+    jz .n                           ; discarded already
+    dec ax                          ; the header
+    mov es, ax
+    cmp byte [es:GH_LOCK], 0
+    jne .n
+    mov ax, [w16_ghage + si]
+    cmp di, 0xFFFF
+    je .take
+    cmp ax, dx
+    jae .n
+.take:
+    mov di, si
+    mov dx, ax
+.n:
+    inc si
+    inc si
+    cmp si, 2 * W16_NGH
+    jb .h
+    cmp word [w16_ldk], 0           ; the program's code (part 5 kept),
+    je .data                        ;   unless the request is data whose
+    test byte [w16_gflg], W16G_NOCODE ; owner gives blocks up (124.9.1)
+    jnz .data
+    cmp di, 0xFFFF
+    jne .lim
+    mov dx, 0xFFFF                  ; no data block: any age
+.lim:
+    push bx
+    mov bx, w16l_codeold            ; XSEC-OK: part 5's, w16_ldcall calls it there
+    call w16_ldcall                 ; CF=0: a segment went
+    pop bx
+    jnc .out
+.data:
+    cmp di, 0xFFFF
+    je .none
+    mov ax, [w16_ghseg + di]
+    dec ax
+    call w16_gfreeblk
+    mov word [w16_ghseg + di], 0
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop ax
+    ret
+
+; w16_gtouch - SI = a moveable handle's entry (0xFFFF: a fixed block's, and
+; nothing is kept): it is the most recently used now. Keeps all.
+w16_gtouch:
+    cmp si, 0xFFFF
+    je .ret
+    push ax
+    inc word [w16_gclock]
+    mov ax, [w16_gclock]
+    mov [w16_ghage + si], ax
+    pop ax
+.ret:
+    ret
+
+; w16_gmine - DX = a block's data: the current task's, freed when it ends
+; (SPEC.md 124.28.3). Keeps every register
+w16_gmine:
+    push ax
+    push es
+    dec dx
+    mov es, dx
+    mov al, [w16_cur]
+    inc ax
+    mov [es:GH_TASK], al
+    inc dx
+    pop es
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; w16_gdiscard - free every loaded resource block nobody is using (SPEC.md
 ; 124.9's "out of memory" rule). CF=1 there was none. Keeps all.
 ; -----------------------------------------------------------------------------
@@ -541,7 +731,8 @@ w16_gfreeall:
     inc si
     jmp short .a
 .h:
-    xor si, si
+    mov [w16_odseg], si             ; the own DCs' block went with them
+    mov byte [w16_odcur], 0
 .e:
     mov byte [w16_ghf + si], 0
     mov word [w16_ghseg + si], 0
@@ -557,13 +748,58 @@ w16_gfreeall:
 ; The global heap, as Windows exports it
 ; =============================================================================
 
-; GlobalAlloc (KERNEL.15) - args: +0 dwBytes (long), +4 wFlags
+; GlobalAlloc (KERNEL.15) - args: +0 dwBytes (long), +4 wFlags. A moveable
+; block asked for GMEM_DISCARDABLE is marked so on its handle: w16_gdold may
+; take it when the heap is short, and the handle stays, discarded (SPEC.md
+; 124.9). With GMEM_NOTIFY as well it is the program's to give up: when
+; the heap cannot hold a request, the GlobalNotify procedure is asked about
+; the least recently used of them, as Windows asked it, and the block goes
+; only if it answers nonzero - Paintbrush's DISCARDBAND writes a band of
+; the picture to its swap file first, and locks a band it has not been
+; asked about without looking for NULL (SPEC.md 124.9.1). Then the request
+; is tried again.
 w16k_galloc:
     call w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
     mov cl, [es:bx + 4]
-    jmp w16_gnew
+    mov ch, [es:bx + 5]
+    cmp word [w16_gnproc + 2], 0    ; a GlobalNotify procedure: it is asked
+    je .new                         ;   to give a block up before the code
+    or cl, W16G_NOCODE              ;   goes (SPEC.md 124.9.1)
+.new:
+    call w16_gnew
+    or ax, ax
+    jz .short
+    test ch, GMEM_DDESHARE_HI       ; the program's, freed when it ends -
+    jnz .own                        ;   unless it is to be shared (124.28.3)
+    or dx, dx
+    jz .own
+    call w16_gmine
+.own:
+    cmp ax, W16_GH0                 ; a moveable handle's entry: used now,
+    jb .out                         ;   and marked if it may be discarded.
+    cmp ax, W16_GH0 + 2 * W16_NGH   ;   A fixed one IS its segment, above
+    jae .out                        ;   every entry (SPEC.md 124.9)
+    push si
+    mov si, ax
+    sub si, W16_GH0
+    call w16_gtouch
+    test ch, GMEM_DISCARDABLE_HI
+    jz .nd
+    mov cl, W16_GHDISC
+    test ch, GMEM_NOTIFY_HI
+    jz .mark
+    mov cl, W16_GHNOTE
+.mark:
+    or [w16_ghf + si], cl
+.nd:
+    pop si
+.out:
+    ret
+.short:
+    LCALL w16k_gnask                ; the procedure, asked: it runs, and the
+    ret                             ;   request is tried again after
 
 ; GlobalFree (KERNEL.17) - args: +0 hMem. AX = 0 freed, else the handle
 w16k_gfree:
@@ -587,6 +823,7 @@ w16k_glock:
     jnz .l
     dec byte [es:GH_LOCK]           ; it saturates rather than wraps
 .l:
+    call w16_gtouch                 ; (the order w16_gdold discards in)
     mov dx, es
     inc dx
     xor ax, ax
@@ -693,11 +930,13 @@ w16k_lockseg:
     ret
 
 ; GlobalCompact (KERNEL.25) - args: +0 dwMinFree. DX:AX = the largest block
-; GlobalAlloc could give now: a free one in an arena, or a new claim's
+; GlobalAlloc could give now: a run in an arena of free blocks and code it
+; may discard (w16_gcan), or a new claim's
 w16k_gcompact:
+    push bx
     push si
     push es
-    xor cx, cx                      ; CX = the largest free run, paragraphs
+    xor cx, cx                      ; CX = the largest run, paragraphs
     xor si, si
 .arena:
     cmp si, 2 * W16_NARENA
@@ -705,16 +944,21 @@ w16k_gcompact:
     mov ax, [w16_arena + si]
     or ax, ax
     jz .nexta
+    xor bx, bx                      ; BX = this run so far
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
     mov es, ax
     mov dx, [es:GH_SIZE]
-    test byte [es:GH_FLAGS], GHF_USED
-    jnz .skip
-    cmp dx, cx
+    call w16_gcan
+    jc .brk
+    add bx, dx
+    cmp bx, cx
     jbe .skip
-    mov cx, dx
+    mov cx, bx
+    jmp short .skip
+.brk:
+    xor bx, bx
 .skip:
     add ax, dx
     jmp short .blk
@@ -723,6 +967,17 @@ w16k_gcompact:
     inc si
     jmp short .arena
 .claims:
+    xor si, si                      ; a new arena only while a slot is free
+.free:                              ;   (SPEC.md 124.25.1)
+    cmp word [w16_arena + si], 0
+    je .room
+    inc si
+    inc si
+    cmp si, 2 * W16_NARENA
+    jb .free
+    xor ax, ax
+    jmp short .kb
+.room:
     call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
     cmp ax, 1023
     jbe .kb
@@ -744,6 +999,38 @@ w16k_gcompact:
     call w16_p2b
     pop es
     pop si
+    pop bx
+    ret
+
+; w16_gcan - ES = a block's header. CF=0 when GlobalAlloc can have its room:
+; it is free, or a code segment that is not kept (SPEC.md 124.26.5). One in
+; use is counted too, as Windows counted all discardable memory: the stack
+; is scanned only when a segment is about to go. Keeps all.
+w16_gcan:
+    test byte [es:GH_FLAGS], GHF_USED
+    jz .yes
+    test byte [es:GH_FLAGS], GHF_CODE
+    jz .no
+    push ax
+    push si
+    push es
+    mov si, [es:GH_OWNER]           ; its live entry, 6 bytes a segment
+    dec si
+    mov ax, si
+    shl si, 1
+    add si, ax
+    shl si, 1
+    mov es, [w16_clive]
+    test byte [es:si + W16CL_FL], W16CLF_KEEP
+    pop es
+    pop si
+    pop ax
+    jnz .no
+.yes:
+    clc
+    ret
+.no:
+    stc
     ret
 
 ; GlobalReAlloc (KERNEL.16) - args: +0 wFlags, +2 dwBytes (long), +6 hMem.
@@ -759,7 +1046,22 @@ w16k_grealloc:
     mov di, [es:bx + 6]             ; DI = the handle
     test cl, GMEM_MODIFY
     jz .size
-    mov ax, di                      ; the flags alone: nothing to change here
+    mov ax, di                      ; the flags alone: whether it may be
+    cmp ax, W16_GH0                 ;   discarded is all that changes here
+    jb .out
+    cmp ax, W16_GH0 + 2 * W16_NGH
+    jae .out
+    mov si, ax
+    sub si, W16_GH0
+    and byte [w16_ghf + si], ~(W16_GHDISC | W16_GHNOTE)
+    test byte [es:bx + 1], GMEM_DISCARDABLE_HI
+    jz .out
+    mov cl, W16_GHDISC              ; GlobalAlloc's marks
+    test byte [es:bx + 1], GMEM_NOTIFY_HI
+    jz .mk
+    mov cl, W16_GHNOTE
+.mk:
+    or [w16_ghf + si], cl
     jmp .out
 .size:
     add ax, 15
@@ -1298,6 +1600,11 @@ w16k_linit:
     dec bx
     mov cl, 4
     shl bx, cl
+    pop ax                          ; a library's DGROUP: its heap takes the
+    push ax                         ;   room the load gave it too, as a heap
+    call w16_islibdg                ;   Windows grew would have (124.25.2)
+    jc .sized
+    add dx, W16_LHROOM
     jmp short .sized
 .dg:
     mov bx, [w16_dgsize]
@@ -1320,6 +1627,28 @@ w16k_linit:
     jc .out
     inc ax
 .out:
+    ret
+
+; w16_islibdg - AX = a segment: CF=0 it is a loaded library's DGROUP
+; (SPEC.md 124.23.2). Keeps all.
+w16_islibdg:
+    push bx
+    mov bx, w16_libs
+.r:
+    cmp byte [bx + W16L_COUNT], 0
+    je .n
+    cmp ax, [bx + W16L_HINST]
+    je .yes
+.n:
+    add bx, W16L_SIZE
+    cmp bx, w16_libs + W16_NLIB * W16L_SIZE
+    jb .r
+    pop bx
+    stc
+    ret
+.yes:
+    pop bx
+    clc
     ret
 
 ; LocalAlloc (KERNEL.5) - args: +0 wBytes, +2 wFlags

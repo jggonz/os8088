@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "e7ca16f80",
-  "strings": "efe62396ae4edb45",
-  "why": "S12: the shipped DOS.O88 forwards a Windows NE to WIN16 (SPEC 124.18.1); one sentence added"
+  "stamped": "7ec824f3e",
+  "strings": "562e87c75fe90f35",
+  "why": "S16-S19: the DOS core shared with WIN16 (dosbe.inc), no text a user sees changed"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -584,9 +584,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "e88b5c64",
+  "stamped": "1b59b4c1c",
   "strings": "2b391919e4c9218d",
-  "why": "only OS88VER.TXT changed (20261026 -> 20261030 release notes); the page names no release or its notes, so unchanged"
+  "why": "only OS88VER.TXT changed (release 20261030's four what's-new lines); the page describes those lines generically, no words owed"
  },
  "INTRO_MID": {
   "sources": [],
@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "e7ca16f80",
-  "strings": "ceca4b5d20354bb8",
-  "why": "new page, from SPEC 124 and apps/win16's strings"
+  "stamped": "88eab0a48",
+  "strings": "89291148e238b0d9",
+  "why": "S21 batch 7: part 10 split, notify GlobalAlloc keeps code, XT emulator fetch; no user-visible manual change"
  },
  "WIN16_TXT": {
   "sources": [

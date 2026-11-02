@@ -15,9 +15,11 @@ body is written has no other shape to be.
 
 `.fwrite`'s append-only guard was two `jne`s, which is not an ordering test at
 all: it refused a write PAST the end in exactly the same breath as one BEHIND
-it, and those are opposite cases.  Behind is 96.11.2's real refusal - this
-layer cannot overwrite the middle of a file it is still accumulating.  Past is
-a GAP, and `dos_fh_wiloop`'s `.ihole` already lays one.
+it, and those are opposite cases.  Behind was 96.11.2's real refusal - this
+layer cannot overwrite the middle of a file it is still accumulating - until
+96.11.6.4 flushed first and overwrote the file in place (WRGAP's step H,
+Paintbrush's File > Save: the body, then the header at 0).  Past is a GAP, and
+`dos_fh_wiloop`'s `.ihole` already lays one.
 
 WRGAP.COM runs under this DOS AND under a real DOS unchanged
 (docs/DOS-DEBUGGING.md), so the answers it checks are the reference's.
@@ -28,7 +30,9 @@ place or the accumulator being left in the in-place mode (C); the gap not
 counted in the file's length (D, F); the bytes not surviving a close and
 reopen, which is what `FHF_MADE` asserted at the wrong moment would do - a
 flush appending to a file that does not exist yet (E); and a delete of a
-missing name answering `access denied` where DOS says `file not found` (G).
+missing name answering `access denied` where DOS says `file not found` (G);
+and a created file's write BEHIND its end refusing, or its bytes not landing
+over the ones it wrote first (H).
 
 THE GAP'S OWN CONTENT IS NOT ASSERTED and must not be: DOS leaves it
 undefined, so a probe that checked it would fail against the reference for

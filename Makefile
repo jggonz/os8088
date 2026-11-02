@@ -111,8 +111,16 @@ MOREIMG720    := $(BUILD)/more720.img
 # stays on demand - the release carries the 128KB machine at 360KB and 720KB
 SMALLIMG360   := $(BUILD)/small360.img
 SMALLIMG720   := $(BUILD)/small720.img
+# ...and WIN16's own disk in all four geometries (SPEC.md 124.18.1), since
+# S17 batch 4 (2026-10-31, the owner's decision): WIN16.O88 grew past what the
+# 1.44MB apps disk and more720.img had left, and it grows with every story to
+# S25, so it left the apps disks rather than evict something each time
+WIN16IMG      := $(BUILD)/win16.img
+WIN16IMG120   := $(BUILD)/win16-120.img
+WIN16IMG720   := $(BUILD)/win16-720.img
+WIN16IMG360   := $(BUILD)/win16-360.img
 
-# ...and all thirteen in one list, because it appeared in FOUR places (`all`
+# ...and all twenty-one in one list, because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
 # tiers is one no gate ever reads, which is the failure this prevents rather
@@ -121,7 +129,8 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(APPSIMG) $(APPSIMG120) $(APPSIMG720) $(APPSIMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
             $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
-            $(SMALLIMG360) $(SMALLIMG720)
+            $(SMALLIMG360) $(SMALLIMG720) \
+            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360)
 
 # ...and each of them SIGNS IN A SLOT OF ITS OWN (SPEC.md 18.8.2.2): os88disk.py
 # reads this list (tools/os88ship.py) and steers every member's boot-sector
@@ -6866,9 +6875,11 @@ $(BUILD)/install-gate.o88: $(BUILD)/install-gate.bin tools/os88pkg.py $(PKGZSTAM
 
 # THE PUBLISHED TREES (SPEC.md 117.10.2): per kernel, the 1.44MB system and
 # apps disks as one tree, OS88VER.TXT and its OS88.IDX - build/nettree/big/
-# from os8088.img + apps.img, build/nettree/mega/ from mega.img +
-# megaapps.img, build/nettree/emu/ from emu.img + the SHIPPED apps.img (there
-# is no emu apps disk, `make emu`). On demand; the release publishes
+# from os8088.img + apps.img + win16.img, build/nettree/mega/ from mega.img +
+# megaapps.img (no WIN16: it refuses there, SPEC.md 124.1), build/nettree/emu/
+# from emu.img + the SHIPPED apps.img (there is no emu apps disk, `make emu`)
+# + win16.img. WIN16 left the apps disk for its own (SPEC.md 124.18.1), and
+# an installed machine still gets it. On demand; the release publishes
 # build/nettree/ whole under $(INURLBASE) (117.10.2's store), so each lands
 # where its own INSTALL looks.
 .PHONY: nettree nettree-big nettree-mega nettree-emu
@@ -6876,18 +6887,18 @@ nettree: nettree-big nettree-mega nettree-emu
 nettree-big: $(BUILD)/nettree/big/OS88.IDX
 nettree-mega: $(BUILD)/nettree/mega/OS88.IDX
 nettree-emu: $(BUILD)/nettree/emu/OS88.IDX
-$(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
+$(BUILD)/nettree/big/OS88.IDX: $(IMG) $(APPSIMG) $(WIN16IMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
-	python3 tools/os88nettree.py $(IMG) $(APPSIMG) apps/install/OS88VER.TXT \
-		$(BUILD)/nettree/big
+	python3 tools/os88nettree.py $(IMG) $(APPSIMG) $(WIN16IMG) \
+		apps/install/OS88VER.TXT $(BUILD)/nettree/big
 $(BUILD)/nettree/mega/OS88.IDX: $(BUILD)/mega.img $(BUILD)/megaapps.img \
                                 apps/install/OS88VER.TXT \
                                 tools/os88nettree.py tools/os88httpdrv.py
 	python3 tools/os88nettree.py $(BUILD)/mega.img $(BUILD)/megaapps.img \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/mega
-$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) apps/install/OS88VER.TXT \
+$(BUILD)/nettree/emu/OS88.IDX: $(BUILD)/emu.img $(APPSIMG) $(WIN16IMG) apps/install/OS88VER.TXT \
                                tools/os88nettree.py tools/os88httpdrv.py
-	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) \
+	python3 tools/os88nettree.py $(BUILD)/emu.img $(APPSIMG) $(WIN16IMG) \
 		apps/install/OS88VER.TXT $(BUILD)/nettree/emu
 
 $(BUILD)/install.o88: $(BUILD)/install.bin tools/os88pkg.py $(PKGZSTAMP)
@@ -7340,8 +7351,8 @@ $(BUILD)/wirechat.o88: $(BUILD)/wirechat.bin tools/os88pkg.py $(PKGZSTAMP) $(PKG
 # alone - the granule RDPV_MOUNT rounds a size up to, which the refusal
 # strings have to name.
 # --- DOS (SPEC.md 96) --------------------------------------------------------
-$(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                  apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+$(BUILD)/dos.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                  apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                   apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                   apps/os88line.inc apps/os88sock.inc \
@@ -7434,8 +7445,8 @@ $(shell mkdir -p $(BUILD); \
                                touch $(KDSTAMP); })
 
 $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
-                      apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                      apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                       apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                       apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7452,8 +7463,8 @@ $(BUILD)/kerndos.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
 # program that wants the 1MB wrap. kern_mega's DOS.O88 carries it as part 3
 # and the Memory page's `Load DOS in the HMA` picks; nothing else builds it.
 $(BUILD)/kerndosl.bin: kerndos/kdos.asm $(KERNDOS_INC) $(KERNEL_INC) \
-                       apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+                       apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                       apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                        apps/os88api.inc apps/dos/doscall.inc \
                        apps/dos/doscents.inc apps/os88ui.inc apps/os88line.inc \
                        apps/os88sock.inc apps/os88con.inc apps/os88cp437.inc \
@@ -7476,8 +7487,8 @@ DOSW16DEF := $(if $(KERN_MEGA)$(KERN_SMALL),,-DDOS_WIN16)
 # nothing else: the standard's 800-byte body is NOT emitted, because this part
 # is never read by op_load - the handoff walks its bytes into extents and the
 # stub reads them with int 13h (docs/plans/KERN-DOS-PLAN.md §4.1.1).
-$(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
-                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnetabi.inc \
+$(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosnet.inc apps/dos/dosh.inc \
+                   apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnetabi.inc \
                    apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc apps/os88ui.inc \
                    apps/os88line.inc apps/os88sock.inc \
@@ -7496,8 +7507,8 @@ $(BUILD)/dosp.bin: apps/dos/dos.asm apps/dos/dosnet.inc apps/dos/dosh.inc \
 # or a core routine that still names a host symbol, fails here and in no other
 # build - the two hosts each carry the other half and would never notice.
 # `all` builds it, because a check nobody runs is a check that rots.
-$(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosh.inc \
-                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/dos/dosnet.inc \
+$(BUILD)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \
+                      apps/dos/dosc.inc apps/dos/dosw16.inc apps/win16/w16join.inc apps/dos/dosnet.inc \
                       apps/dos/dosnetabi.inc apps/os88api.inc apps/dos/doscall.inc \
                       apps/dos/doscents.inc \
                       apps/os88ui.inc apps/os88line.inc apps/os88sock.inc \
@@ -16586,10 +16597,12 @@ MEDIAARGS360 := $(BUILD)/midirack.o88 $(BUILD)/xtmp3.o88 \
 # WIN16 (SPEC.md 124.18.1): a WIN16\ folder - the package, its GPL-2 COPYING
 # and its README.TXT, apps/apple2's footing - and SYSTEM\APPDATA\WIN16, the
 # Windows directory a program's WIN.INI and .INI files are kept in (124.14),
-# BUILT because WIN16 never makes it. On the 1.44MB and 1.2MB apps disks,
-# more720 (the 720KB machine's second), emu360 (programs of another system,
-# at its root, 24.6's rule), the everything set and the live media. NOT in $(APPSARGS) itself: that list
-# feeds kern_mega's apps disks, where WIN16 refuses (124.1).
+# BUILT because WIN16 never makes it. On WIN16's own disk in all four
+# geometries ($(WIN16IMG) and its three, below), emu360 (programs of another
+# system, at its root, 24.6's rule), the everything set and the live media.
+# Until S17 batch 4 it rode the 1.44MB and 1.2MB apps disks and more720; it
+# outgrew them. NOT in $(APPSARGS): that list feeds kern_mega's apps disks,
+# where WIN16 refuses (124.1).
 # The two documents ride as WIN16.TXT and COPYING.W16, the names The Wire
 # gives APPLE2's (APPLE2.TXT, COPYING.A2): emu360 is a category disk with its
 # programs at the ROOT (24.6), where a README.TXT is the system's and a
@@ -16609,8 +16622,7 @@ $(BUILD)/win16/COPYING.W16: apps/win16/COPYING
 # ahead of $(APPDATAFOLDER), $(APPSARGS720)'s way: argparse stops collecting
 # positionals at an option that takes a value, so the folder stays last.
 APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
-               $(addprefix MEDIA:,$(XTMP3MP3)) $(WIN16ARGS) \
-               $(APPDATAFOLDER) $(WIN16FOLDER)
+               $(addprefix MEDIA:,$(XTMP3MP3)) $(APPDATAFOLDER)
 # ...AND THE 1.2MB DISK LEAVES XTMP3 AND ITS SONGS OFF (SPEC.md 24.6.1's rule,
 # dated 2026-10-23, the 720KB disk's decision of 2026-10-22 one geometry along):
 # Browser 1.6c grew 67 clusters and apps120.img needed 2399 of 2371. The player
@@ -16618,13 +16630,26 @@ APPSARGS144 := $(filter-out $(APPDATAFOLDER),$(APPSARGS)) \
 # prerequisites ($(APPS120)) and the recipe ($(APPSARGS120)) are filtered
 # together, as the 720KB disk's are.
 APPS120 := $(filter-out $(BUILD)/xtmp3.o88,$(APPS))
-APPSARGS120 := $(filter-out $(APPDATAFOLDER) APPS:$(BUILD)/xtmp3.o88,$(APPSARGS)) \
-               $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
-$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) $(WIN16SHIP) tools/os88disk.py
+APPSARGS120 := $(filter-out APPS:$(BUILD)/xtmp3.o88,$(APPSARGS))
+$(APPSIMG): $(APPS) $(XTMP3MP3) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(APPSARGS144)
 
-$(APPSIMG120): $(APPS120) $(LOGOVID) $(WIN16SHIP) tools/os88disk.py
+$(APPSIMG120): $(APPS120) $(LOGOVID) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1200 $(APPSARGS120)
+
+# WIN16's own disk (SPEC.md 124.18.1): WIN16\ and SYSTEM\APPDATA\WIN16, the
+# same in every geometry, and the rest of the floppy for the Windows programs
+# a user copies onto it. `make win16disk WIN3X=<dir>` is this disk with them
+# already on it.
+WIN16DISKARGS := $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
+$(WIN16IMG): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(WIN16DISKARGS)
+$(WIN16IMG120): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(WIN16DISKARGS)
+$(WIN16IMG720): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 720 $(WIN16DISKARGS)
+$(WIN16IMG360): $(WIN16SHIP) tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(WIN16DISKARGS)
 
 # kern_mega's APPS DISKS (KERN-MEGA-PLAN 14.66): $(APPSARGS) with the
 # kern_mega arm of every package that has one ($(MEGAPKGS), MEGASUB) - in the
@@ -16678,8 +16703,8 @@ MOREARGS720 := APPS:$(BUILD)/pixel.o88 APPS:$(BUILD)/midirack.o88 \
                $(addprefix GAMES:,$(RDG_SHIP) $(DM_SHIP)) \
                MEDIA:$(RDG_DEMO) $(LOGOVIDARG) \
                $(addprefix MEDIA/MIDI:,$(MORE720_SONGS)) \
-               $(PX_GALLERY_360) $(WIN16ARGS) $(APPDATAFOLDER) $(WIN16FOLDER)
-$(MOREIMG720): $(MORE720) $(WIN16SHIP) tools/os88disk.py
+               $(PX_GALLERY_360) $(APPDATAFOLDER)
+$(MOREIMG720): $(MORE720) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 720 $(MOREARGS720)
 
 $(APPSIMG360): $(APPS360) tools/os88disk.py
@@ -18971,8 +18996,14 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # fixture with a tests/win16/<name>.wlk is linked by wlink with those options
 # (FPX's 16KB local heap: signal() brings stdio in, and Windows 3.0 refused
 # it with the default 1KB - "Not enough memory to allocate file structures").
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER
-WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk) \
+# A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
+# model, so its sixteen code_seg functions are far (SPEC.md 124.20).
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB
+# ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
+# their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
+# by the import lines in its own .wlk, so it links without them.
+WIN16DLLFIX := W16DLL W16DLL2
+WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
 win16census:
@@ -18992,41 +19023,65 @@ $(BUILD)/win16/.watcom: $(WIN16SRC) tools/setup-watcom.sh
 	@cd $(@D) && eval "$$($(CURDIR)/tools/setup-watcom.sh --build-dir $(abspath $(BUILD)) --env)" && \
 	for p in $(WIN16FIX); do \
 	  l=$$(echo $$p | tr A-Z a-z); \
+	  o=$$(cat $(CURDIR)/tests/win16/$$l.wcl 2>/dev/null); \
 	  if [ -f $(CURDIR)/tests/win16/$$l.wlk ]; then \
-	    wcl -q -c -0 -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	    wcl -q -c -0 $$o -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
 	        $(CURDIR)/tests/win16/$$l.c >/dev/null && \
 	    wlink op q system windows $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
 	        file $$l.obj name $$p.EXE >/dev/null || exit 1; \
 	  else \
-	    wcl -q -0 -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	    wcl -q -0 $$o -bt=windows -l=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
 	        -fe=$$p.EXE $(CURDIR)/tests/win16/$$l.c >/dev/null || exit 1; \
 	  fi; \
 	  if [ -f $(CURDIR)/tests/win16/$$l.rc ]; then \
 	    wrc -q -bt=windows -30 -r -i=$(CURDIR)/tests/win16 -i=. -fo=$$l.res \
 	        $(CURDIR)/tests/win16/$$l.rc && wrc -q -bt=windows -30 $$l.res $$p.EXE || exit 1; \
 	  fi; \
+	done; \
+	for p in $(WIN16DLLFIX); do \
+	  l=$$(echo $$p | tr A-Z a-z); \
+	  wcl -q -c -0 -bd -bt=windows -i=$(CURDIR)/tests/win16 -fo=$$l.obj \
+	      $(CURDIR)/tests/win16/$$l.c >/dev/null && \
+	  wlink op q system windows_dll $$(cat $(CURDIR)/tests/win16/$$l.wlk) \
+	      file $$l.obj name $$p.DLL >/dev/null || exit 1; \
 	done
 	@touch $@
-	@echo "win16fixtures: TINY16 $(WIN16FIX) built into $(BUILD)/win16/"
+	@echo "win16fixtures: TINY16 $(WIN16FIX) $(WIN16DLLFIX) built into $(BUILD)/win16/"
 
 # `make win16` builds the layer itself, apps/win16/ (SPEC.md 124.2): a
 # `local` package in apps/RETIRED.txt until S12 decides its payload, so no
 # shipped image carries it yet and `all` does not build it.
 WIN16ASM := $(wildcard apps/win16/*.asm apps/win16/*.inc)
 
+# W16DEFS="-DW16_CODEKB=40" builds WIN16 with a TEST define: SPEC.md
+# 124.26.6's code budget, W16_TRACE (124.17.4), W16_X87_EMU (124.5) - what a
+# row that needs one builds into a tree of its own (BUILD=). Stamped, so a
+# change rebuilds WIN16 and nothing else; a plain `make` is the shipped one.
+W16STAMP := $(BUILD)/.win16-$(or $(shell printf '%s' '$(W16DEFS)' | tr -c 'A-Za-z0-9' '_'),plain)
+$(shell mkdir -p $(BUILD); \
+        [ -f $(W16STAMP) ] || { rm -f $(BUILD)/.win16-* $(BUILD)/win16.bin \
+                                      $(BUILD)/win16.o88; touch $(W16STAMP); })
+
 $(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
-                    apps/os88ui.inc | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -o $@ apps/win16/win16.asm
+                    apps/os88ui.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) $(W16DEFS) -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
 
 # The System font, one part a display (SPEC.md 124.7.1): tools/w16font.py
 # builds each face from its committed art in apps/win16/fonts/, and they ride
 # in WIN16.O88 as lazy compressed parts in W16P_* order.
+# Each also carries the DIALOG FACE of its display after it (SPEC.md
+# 124.22.17, Wine's MS Sans Serif emboldened): dlg13 with VGA's, dlg10 with
+# EGA and Hercules', dlg08 with CGA's - one part and one claim for both.
 W16FACES := $(BUILD)/win16/sys16.bin $(BUILD)/win16/sys12.bin $(BUILD)/win16/sys08.bin
 
+$(BUILD)/win16/sys16.bin: apps/win16/fonts/dlg13.txt
+$(BUILD)/win16/sys12.bin: apps/win16/fonts/dlg10.txt
+$(BUILD)/win16/sys08.bin: apps/win16/fonts/dlg08.txt
 $(BUILD)/win16/sys%.bin: apps/win16/fonts/sys%.txt tools/w16font.py
 	@mkdir -p $(@D)
-	python3 tools/w16font.py build $< $@
+	python3 tools/w16font.py build $< $@ $(filter apps/win16/fonts/dlg%,$^)
 
 # ...and part 3 is the dialog manager and the controls (SPEC.md 124.13):
 # win16.asm assembles them after the image in `section .w16dlg vstart=0`, and
@@ -19042,18 +19097,47 @@ $(BUILD)/win16/icons.bin: $(wildcard apps/win16/icons/*.txt) tools/w16icon.py
 	@mkdir -p $(@D)
 	python3 tools/w16icon.py build $@
 
+# Parts 7 and 8 are WIN16's DOS (SPEC.md 124.21.1): the DOS core DOS.O88
+# ships, the same build/doscore.bin, and the host part that sits above it in
+# one claim - DOS.O88's own back end (apps/dos/dosbe.inc) and an init. The
+# core's int 21h gate is not on its jump table, so tools/w16dcmap.py reads
+# its address off a map of the same assembly and refuses a different one.
+$(BUILD)/win16/w16dcore.inc: $(BUILD)/doscore.bin tools/w16dcmap.py
+	@mkdir -p $(@D)
+	python3 tools/w16dcmap.py --nasm "$(NASM)" --core $< -o $@ \
+	        -I apps/ -I apps/dos/ -I drivers/net/ -I kerndos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA)
+
+$(BUILD)/win16/w16dosh.bin: apps/win16/w16dosh.asm apps/win16/w16dos.inc \
+                            $(BUILD)/win16/w16dcore.inc apps/dos/dosbe.inc \
+                            apps/dos/dos.asm apps/dos/doscall.inc \
+                            apps/dos/doscents.inc apps/os88api.inc \
+                            apps/os88rseq.inc apps/dos/dosnetabi.inc apps/win16/w16join.inc \
+                            apps/os88cp437.inc apps/os88partsbody.inc \
+                            drivers/net/netpkg.inc
+	$(NASM) -f bin -w+error -I apps/ -I apps/dos/ -I apps/win16/ \
+	        -I $(BUILD)/win16/ -I drivers/net/ -I kerndos/ \
+	        $(if $(KERN_MEGA),-DDOS_MEGA) -o $@ apps/win16/w16dosh.asm
+	@echo "w16dosh: $(call FILESIZE,$@) bytes of DOS host"
+
 $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
+                    $(BUILD)/doscore.bin $(BUILD)/win16/w16dosh.bin \
                     tools/os88pkg.py tools/os88ovl.py \
                     $(PKGZSTAMP)
 	@mkdir -p $(BUILD)/win16
 	python3 tools/os88ovl.py $(BUILD)/win16.bin -o $(BUILD)/win16/w16dlg.bin \
 		--trim $(BUILD)/win16/win16.trim.bin \
 		--second $(BUILD)/win16/w16fp.bin --mark W16X87EM \
-		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR
+		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR \
+		--second $(BUILD)/win16/w16sys.bin --mark W16SYSLB \
+		--second $(BUILD)/win16/w16tsk.bin --mark W16TSKPT
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part $(BUILD)/win16/w16fp.bin --part $(BUILD)/win16/w16ld.bin \
-		--part $(BUILD)/win16/icons.bin --part-compress lz4
+		--part $(BUILD)/win16/icons.bin --part $(BUILD)/doscore.bin \
+		--part $(BUILD)/win16/w16dosh.bin --part $(BUILD)/win16/w16sys.bin \
+		--part $(BUILD)/win16/w16tsk.bin \
+		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
 

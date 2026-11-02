@@ -911,18 +911,6 @@ dos_entry:
     pop dx                          ; late. dos_click is OUR own click work
     mov bx, [dos_win]               ; and the library chains to it
 
-%ifndef KD_BACKEND                  ; 96.43: the console is the window's
-    mov al, KSC_ALT                 ; **ASK ONCE, TO ARM THE KEY-STATE MAP**
-    call OSAPI_KEY_DOWN             ; (SPEC.md 9.7): kbm_isr does not track a
-                                    ; scancode until something has asked, so
-                                    ; without this call neither half of
-                                    ; 96.33.5.1 can see Alt+Enter - not the
-                                    ; kernel's latch and not our own poll. The
-                                    ; ANSWER is discarded; the asking is the
-                                    ; whole point, and it is what keeps the
-                                    ; feature costing a machine that never
-                                    ; opens DOS exactly nothing
-%endif
 
 %ifdef DOS_MEGA                     ; (kern_mega: the proc keeps dos_dsel,
     OS88_REGION_MOVABLE dos_reloc   ; dos_hk_tty's DS, KERN-MEGA-PLAN 14.54)
@@ -1083,6 +1071,9 @@ dos_entry:
 
 .idle:
     mov byte [dos_state], DST_IDLE
+%ifndef KD_BACKEND
+    call dos_keyarm                 ; the console: Alt+Enter from its prompt
+%endif
 .ok:
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     ; **THE PROMPT, HERE AND NOT IN `dos_con_start`** (SPEC.md 96.33.2.1).
@@ -1299,10 +1290,34 @@ dos_wake:
     jc .out                     ; back to asks FIRST, and the answer comes back
 %endif                          ; through this same door
 .go:
+%ifndef KD_BACKEND
+    call dos_keyarm                 ; a program runs here: not a forward
+%endif
     mov byte [dos_state], DST_RAN
     call dos_run
 .out:
     ret
+
+%ifndef KD_BACKEND                  ; 96.43: the console is the window's
+; dos_keyarm - **ASK ONCE, TO ARM THE KEY-STATE MAP** (SPEC.md 9.7): kbm_isr
+; does not track a scancode until something has asked, so without this call
+; neither half of 96.33.5.1 can see Alt+Enter - not the kernel's latch and
+; not our own poll. The ANSWER is discarded; the asking is the whole point,
+; and it is what keeps the feature costing a machine that never opens DOS
+; exactly nothing. Asked when DOS opens EMPTY, a console, and when it RUNS
+; a program, and not in the entry: a DOS that hands a Windows program to
+; WIN16 (dos_w16_try, SPEC.md 124.3) never keeps the window, and an armed
+; map is the port-60h peek kbm_isr makes on every key from then on, which
+; on an 8042 that promotes its next byte at once (QEMU's) loses a byte to
+; the ROM - Ctrl+End's Ctrl release, in win16file (SPEC.md 96.33.5.1).
+; Preserves every register but the flags
+dos_keyarm:
+    push ax
+    mov al, KSC_ALT
+    call OSAPI_KEY_DOWN
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dos_run - navigate, claim, load, and take the machine
@@ -3520,23 +3535,34 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; --- BEFORE the end, AT it, or PAST it - three answers (96.11.6.3) ------
     ; It was `jne .fhacc` twice, which is not an ordering test at all: it
     ; refused a write PAST the end exactly as it refused one BEHIND it, and
-    ; those are opposite cases. Behind is §96.11.2's real refusal - a write
+    ; those are opposite cases. Behind WAS §96.11.2's real refusal - a write
     ; into the middle of a file this handle created, which the append path
-    ; cannot make. PAST is a GAP, which 96.11.6.1 already lays, and Microsoft
+    ; cannot make - and is an overwrite after a flush now (.fwback,
+    ; 96.11.6.4). PAST is a GAP, which 96.11.6.1 already lays, and Microsoft
     ; Works reported it as `Cannot write file`: create, seek to 0x180 on the
     ; empty file, write there, which is that section's own first bullet -
     ; pre-allocating a header to patch later.
     mov ax, [si+FH_POS+2]           ; the HIGH words first, so this is an
     cmp ax, [si+FH_SIZE+2]          ; UNSIGNED 32-BIT compare and not two
     ja .fwgap                       ; equality tests wearing one
-    jb .fhacc1
+    jb .fwback
     mov ax, [si+FH_POS]
     cmp ax, [si+FH_SIZE]
     ja .fwgap
-    jb .fhacc1
+    jb .fwback
     call dos_fh_wrloop
     jc .fherr1
     jmp .fhok
+.fwback:
+    ; **BEHIND THE END IS AN OVERWRITE NOW** (SPEC.md 96.11.6.4), and it is
+    ; 96.52's partial flush made on purpose: the accumulator goes out as the
+    ; append it is - the first flush CREATES the file - and the handle becomes
+    ; a VIEW, so dos_fh_wiloop overwrites in place and hands the rest of a
+    ; write that runs past the end back to the accumulator at .iappend.
+    ; Paintbrush writes a bitmap's body and then seeks to 0 for its header.
+    call dos_fh_flush
+    jc .fherr1
+    or byte [si+FH_FLAGS], FHF_INPLC
 .fwgap:
     ; ...and the gap arm is dos_fh_wiloop's `.ihole`, which is chosen on the
     ; same compare and needs no flag: it lays [SIZE, POS), rewinds, and hands
@@ -5548,157 +5574,7 @@ dos_be_go:
 ; --- the os8088 implementation ------------------------------------------------
 %ifndef KD_BACKEND                  ; kerndos/kdback.inc is the OTHER one
                                     ; (docs/plans/KERN-DOS-PLAN.md §3)
-dos_k_goto:
-    call OSAPI_FILE_GOTO_QM         ; QM AND NOT Q, and the difference is the
-    ret                             ; whole of whether this works when the
-                                    ; handler is on a different volume from the
-                                    ; document. GOTO_Q moves the MACHINE and not
-                                    ; the INSTANCE, and the SDK says what that
-                                    ; costs in as many words: "GOTO_Q alone is
-                                    ; undone by that next cell, which first
-                                    ; re-stands the machine in your instance's
-                                    ; folder". Our instance stands where
-                                    ; assoc_locate found DOS.O88 - A:\APPS on a
-                                    ; cross-volume launch - so the read looked
-                                    ; for the program THERE. It worked at all
-                                    ; only while the handler happened to sit
-                                    ; beside the document, which is the one
-                                    ; arrangement a gate disk naturally has
-
-dos_k_read:
-    call OSAPI_FILE_READ
-    ret
-
-dos_k_find:
-    call OSAPI_FILE_FIND
-    ret
-
-dos_k_rdat:
-    call OSAPI_FILE_READ_AT
-    ret
-
-dos_k_write:
-    call OSAPI_FILE_WRITE
-    ret
-
-dos_k_append:
-    call OSAPI_FILE_APPEND
-    ret
-
-dos_k_delete:
-    call OSAPI_FILE_DELETE
-    ret
-
-dos_k_dfree:
-    call OSAPI_FILE_DFREE
-    ret
-
-dos_k_mkdir:
-    call OSAPI_FILE_MKDIR
-    ret
-
-dos_k_rmdir:
-    call OSAPI_FILE_RMDIR
-    ret
-
-dos_k_xcaps:
-    call OSAPI_XMEM_CAPS
-    ret
-
-dos_k_xalloc:
-    call OSAPI_XMEM_ALLOC
-    ret
-
-dos_k_xfree:
-    call OSAPI_XMEM_FREE
-    ret
-
-dos_k_rename:
-    call OSAPI_FILE_RENAME
-    ret
-
-dos_k_copy:
-    mov al, OSAPI_FCP_COPY          ; the file manager's own engine, published
-    jmp short dos_k_fcp             ; as ONE cell with a verb (SPEC.md 22.24)
-dos_k_move:
-    mov al, OSAPI_FCP_MOVE          ; ...whose move is the engine's Cut: the
-dos_k_fcp:                          ; re-link first, copy-then-delete where it
-    call OSAPI_FILE_COPY            ; declines. The shell's MOVE streams with
-    ret                             ; its own buffer only on FERR_FULL, which
-                                    ; is the engine unable to claim ITS buffer
-                                    ; inside a bracket (96.30.6)
-
-dos_k_xcopy:
-    call OSAPI_XMEM_COPY
-    ret
-
-dos_k_path:
-    call OSAPI_FILE_PATH
-    ret
-
-dos_k_here:
-    call OSAPI_FILE_HERE
-    ret
-
-dos_k_vkind:
-    call OSAPI_VOL_KIND
-    ret
-
-dos_k_vstat:
-    call OSAPI_VOL_STAT
-    ret
-
-dos_k_wrat:
-    call OSAPI_FILE_WRITE_AT
-    ret
-
-dos_k_rseq:                         ; SPEC.md 18.4.8.1: READ_AT's registers
-    jmp os88_rseq                   ; plus DS:DI, and READ_AT itself on the
-                                    ; small kernel
-dos_k_wseq:                         ; SPEC.md 18.4.9 ...
-    call OSAPI_FILE_WRITE_SEQ
-    jnc .ok
-    cmp ax, FERR_NAME               ; ...and on the small kernel, which has
-    jne .no                         ; none, APPEND - whose refusals are the
-    jcxz .none                      ; same - and a close that is nothing
-    call OSAPI_FILE_APPEND
-    ret
-.none:
-    xor ax, ax                      ; CF=0
-.ok:
-    ret
-.no:
-    stc
-    ret
-
-%include "os88rseq.inc"
-
-; -----------------------------------------------------------------------------
-; dos_be_bind - the twenty-two doors, as addresses (SPEC.md 96.44.1)
-; in:  nothing; out: nothing, every register preserved
-;
-; CALLED ONCE, BEFORE THE FIRST DOOR. The core stores a `DBE_*` ORDINAL and
-; `dos_be_go` turns it into an address through this table, so the core can be
-; assembled ONCE and joined to either back end. The table is DS-relative data
-; and the copy is a `rep movsw` of twenty-two words.
-; -----------------------------------------------------------------------------
-dos_be_bind:
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    mov si, dos_betab
-    mov di, dos_bevec
-    mov cx, DBE_NENT
-    cld
-    rep movsw
-    pop es
-    pop di
-    pop si
-    pop cx
-    ret
+%include "dosbe.inc"               ; the doors and dos_be_bind (SPEC.md 124.21.1)
 
 
 ; -----------------------------------------------------------------------------
@@ -5875,12 +5751,7 @@ dos_hk_mouse:
     pop ax
     ret
 
-dos_betab:
-    dw dos_k_goto, dos_k_read, dos_k_find, dos_k_rdat, dos_k_write
-    dw dos_k_append, dos_k_delete, dos_k_dfree, dos_k_mkdir, dos_k_rmdir
-    dw dos_k_xcaps, dos_k_xalloc, dos_k_xfree, dos_k_xcopy, dos_k_rename
-    dw dos_k_copy, dos_k_move, dos_k_path, dos_k_vstat, dos_k_wrat
-    dw dos_k_here, dos_k_vkind, dos_k_rseq, dos_k_wseq
+    DOS_BETAB                       ; dos_betab: (apps/dos/dosbe.inc)
 
 %endif                              ; KD_BACKEND
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
@@ -13156,8 +13027,9 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
 ; OSAPI_FILE_APPEND refuses a file whose size is not a whole number of
 ; clusters, so the only append that can ever work is one onto a file this
 ; layer itself wrote in whole windows. A create-then-write-then-close is
-; therefore exact, and a write anywhere else REFUSES (SPEC.md 96.11.2) rather
-; than reporting a success it did not have.
+; therefore exact. A write anywhere else REFUSED (SPEC.md 96.11.2) rather
+; than reporting a success it did not have, until 96.11.6's in-place writes
+; and 96.11.6.4's flush-then-overwrite gave each case a write that is real.
 DOS_FH0     equ 5                   ; 0..4 are the five devices DOS opens for
 DOS_NFH     equ 8                   ; every process; files start after them
 FH_NAME     equ 0                   ; char[13], NUL-terminated

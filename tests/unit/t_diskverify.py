@@ -36,7 +36,9 @@ IMAGES = ["os8088.img", "os8088-120.img", "os8088-720.img", "os8088-360.img",
           # ...and the 720KB geometry's second apps disk (SPEC.md 24.7)
           "more720.img",
           # ...and the 128KB machine's system disks (SPEC.md 24.5.7)
-          "small360.img", "small720.img"]
+          "small360.img", "small720.img",
+          # ...and WIN16's own disk in four geometries (SPEC.md 124.18.1)
+          "win16.img", "win16-120.img", "win16-720.img", "win16-360.img"]
 
 
 def main():

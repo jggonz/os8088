@@ -87,7 +87,7 @@ def pkg_syms():
         open(cp, "w").write('%%include "win16/win16.asm"\n'
                             "[map symbols %s]\n" % mp)
         subprocess.run(["nasm", "-f", "bin", "-w+error", "-I", "apps/",
-                        "-I", "apps/win16/", "-o", os.path.join(d, "w.bin"),
+                        "-I", "apps/win16/", "-I", "apps/dos/", "-o", os.path.join(d, "w.bin"),
                         cp], check=True)
         out = {}
         for line in open(mp):

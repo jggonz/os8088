@@ -29,7 +29,12 @@ w16_i21:
     push bx
     push ax
     mov bx, [cs:w16_trn]
-    and bx, 127
+%ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
+    cmp bx, W16_TRN - 1             ;   taking every call after them
+    jb short $+5
+    mov bx, W16_TRN - 1
+%endif
+    and bx, W16_TRN - 1
     shl bx, 1
     mov al, ah
     mov ah, 0x80
@@ -51,11 +56,34 @@ w16_i21:
     je .close
     cmp ah, 0x44
     je .ioctl
+    cmp ah, 0x59
+    je .xerr
     cmp ah, 0x2A
-    jb .bad
+    jb .file
     cmp ah, 0x2C
-    ja .bad
+    ja .file
     jmp w16_i21clk                  ; 2Ah, 2Ch (and 2Bh, refused there)
+.xerr:                              ; the extended error: the last DOS call
+    mov ax, [cs:w16_xerr]           ;   that failed, its own or a KERNEL file
+    mov bx, 0x0D03                  ;   call's (SPEC.md 124.21.2). Class
+    cmp ax, 2                       ;   unknown, or "not found" for 2 and 3;
+    jb .xe                          ;   ask the user; a block device
+    cmp ax, 3
+    ja .xe
+    mov bh, 8
+.xe:
+    mov ch, 2
+    jmp short .done
+.file:                              ; the file calls are the DOS's (SPEC.md
+    push si                         ;   124.21.2)
+    mov si, w16_i21fwd
+.scan:
+    cmp ah, [cs:si]
+    je .fwd
+    inc si
+    cmp si, w16_i21fwd + W16_NI21FWD
+    jb .scan
+    pop si
 .bad:
     mov ax, 1                       ; invalid function
 .err:
@@ -86,9 +114,12 @@ w16_i21:
     jne .bad
     mov dx, 0x80D3
     jmp short .done
-.badh:
-    mov ax, 6                       ; invalid handle
-    jmp short .err
+.badh:                              ; a handle above the devices: a file,
+    push si                         ;   which is the DOS's
+.fwd:
+    pop si
+    pop bp
+    jmp w16_i21dos
 
 ; AH=25h/35h keep the program's vectors in a table of our own and never touch
 ; the machine's: the program sets int 0 (divide error) and the x87 vectors

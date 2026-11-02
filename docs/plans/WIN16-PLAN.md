@@ -1007,7 +1007,10 @@ they stand on.
 The owner's end goal is any Win16 program, CD-ROM programs and their
 installers included. This section is the road from the S13 layer to it. It
 is NOT authorised and NOT estimated; each row becomes stories when the owner
-says so. What S0–S13 must do meanwhile is not block it, and four properties
+says so. **`docs/plans/WIN16-ANY-PLAN.md` does that** (2026-10-30):
+stories S14–S25, ordered by a census of Windows 3.0's and 3.1's own programs
+against WIN16's exports (`tools/w16reach.py`), with the owner's open
+decisions O1–O6. It is a plan, not authorised. What S0–S13 must do meanwhile is not block it, and four properties
 are kept for that:
 
 - **The loader reads a file it can seek.** `OSAPI_FILE_READ_AT` serves S5's

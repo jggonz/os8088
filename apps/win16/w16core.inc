@@ -44,6 +44,7 @@ w16_resume:
     ; STKBALANCE-OK: a COROUTINE SWITCH (SPEC.md 124.2.1). It banks the host
     ; stack and leaves on the PROGRAM's through w16_epi's retf; the host frame
     ; it pushed is popped by w16_tohost when the program next waits or ends
+    call w16_dcunpark               ; a DC open across the wait (124.25.5)
     push bp
     push si
     push di
@@ -145,11 +146,21 @@ w16_gate:
     mov [w16_idx], ax
 %ifdef W16_TRACE
     push bx
+    push ax
+    mov bx, ax                      ; the slot's row, which the tool names
+    shl bx, 1
+    mov ax, [w16_trow + bx]
     mov bx, [w16_trn]
-    and bx, 127
+%ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
+    cmp bx, W16_TRN - 1             ;   taking every call after them
+    jb short $+5
+    mov bx, W16_TRN - 1
+%endif
+    and bx, W16_TRN - 1
     shl bx, 1
     mov [w16_trc + bx], ax
     inc word [w16_trn]
+    pop ax
     pop bx
 %endif
     mov [w16_rbx], bx
@@ -172,21 +183,20 @@ w16_gate:
     mov [w16_pend], al
     mov [w16_rflags], al
     mov [w16_rdx], ax
-    mov bx, [w16_idx]               ; the row: module, ordinal, args, handler
-    mov ax, W16X_SIZE
-    mul bx
-    mov bx, ax
-    add bx, w16_exports
-    mov al, [bx + W16X_ARGB]
+    mov bx, [w16_idx]               ; the slot: args, part, handler
+    shl bx, 1                       ;   (SPEC.md 124.19.1)
+    shl bx, 1
+    add bx, w16_bind
+    mov al, [bx + W16B_ARGB]
     cbw
     mov [w16_nargb], ax
-    call [bx + W16X_PROC]           ; AX(:DX) = the result, or [w16_pend]
+    call w16_dispatch               ; AX(:DX) = the result, or [w16_pend]
     mov [w16_rax], ax
     mov [w16_rdx], dx
     cmp byte [w16_state], W16S_ENDED
     je w16_tohost
     cmp byte [w16_pend], 0
-    jne w16_tohost
+    jne .wait
     cmp byte [w16_cbgo], 0          ; a call INTO the program (SPEC.md 124.2.2)
     jne w16_cbenter
     pushf                           ; back to the program, finished
@@ -198,6 +208,125 @@ w16_gate:
     push bx
     popf
     jmp w16_epi
+.wait:                              ; it waits: an open DC gives the lock back
+    call w16_dcpark                 ;   (SPEC.md 124.25.5)
+    jmp w16_tohost
+
+; -----------------------------------------------------------------------------
+; w16_dispatch - run slot BX's handler (SPEC.md 124.19.2), with AX = the
+; argument bytes as the gate always gave it. Part 0 is the image's own,
+; W16B_MISS an import WIN16 lacks, and the library part's are reached through
+; its gate, the part fetched first if it is not here. Returns what the
+; handler returns.
+; -----------------------------------------------------------------------------
+w16_dispatch:
+    mov al, [bx + W16B_PART]
+    and al, ~W16B_NORET & 0xFF
+    cmp al, W16B_MISS               ; (before W16B_MDC: 7Fh has its bit)
+    je .miss
+    test al, W16B_MDC
+    jz .plain
+    call w16_odarg                  ; an own DC's the open DC (124.25.11)
+    call w16_mdcin                  ; CF=1: a memory DC's, its state the open
+    jnc .plain                      ;   DC's for the call (SPEC.md 124.25.3)
+    call .plain
+    jmp w16_mdcout
+.plain:
+    mov al, [bx + W16B_PART]
+    and al, ~(W16B_NORET | W16B_MDC) & 0xFF
+    test al, W16B_DCF
+    jnz .dcf
+.go:
+    and al, ~W16B_DCF & 0xFF
+    jz .image
+    cmp al, W16P_SYS
+    je .sys
+    cmp al, W16P_TSK
+    je .tsk
+    mov ax, [bx + W16B_PROC]
+    mov [w16_lfn], ax
+    call w16_dlgin
+    jc .nolib
+    mov ax, [w16_nargb]
+    call far [w16_lbv]
+    ret
+.sys:                               ; the system-library part (124.24.1)
+    mov ax, [bx + W16B_PROC]
+    mov [w16_sfn], ax
+    call w16_sysin
+    jc .nolib
+    mov ax, [w16_nargb]
+    call far [w16_sbv]
+    ret
+.tsk:                               ; the task part (124.28.13)
+    mov ax, [bx + W16B_PROC]
+    mov [w16_tfn], ax
+    call w16_tskin
+    jc .nolib
+    mov ax, [w16_nargb]
+    call far [w16_tbv]
+    ret
+.image:
+    mov ax, [w16_nargb]
+    jmp [bx + W16B_PROC]
+.miss:
+    mov ax, [bx + W16B_PROC]
+    mov [w16_missi], ax
+    jmp w16_missed
+.dcf:                               ; a text call (SPEC.md 124.24.4): in the
+    push ax                         ;   dialog face while the DC holds its
+    mov ax, [w16_dface]             ;   font and came with the System font's
+    cmp word [w16_font], W16_HFDLG
+    jne .nof
+    or ax, ax
+    jz .nof
+    xchg ax, [w16_face]
+    cmp ax, [w16_sface]
+    jne .back
+    pop ax
+    call .go
+    push ax
+    mov ax, [w16_sface]
+    mov [w16_face], ax
+    pop ax
+    ret
+.back:
+    mov [w16_face], ax
+.nof:
+    pop ax
+    jmp .go
+.nolib:                             ; it could not be read: ended, as a missing
+    push si                         ;   import ends it, saying why
+    push di
+    mov si, w16_s_nolib
+    mov di, w16_l1
+    call w16_strcpy
+    mov si, w16_s_nolib2
+    mov di, w16_l2
+    call w16_strcpy
+    mov byte [w16_endmsg], 1
+    mov byte [w16_state], W16S_ENDED
+    pop di
+    pop si
+    xor ax, ax
+    cwd
+    ret
+
+w16_s_nolib:  db 'WIN16', 39, 's library part', 0
+w16_s_nolib2: db 'could not be read.', 0
+
+; -----------------------------------------------------------------------------
+; w16_lcall - LCALL's far half (SPEC.md 124.19.2): [w16_lfn] near-called in
+; the library part, fetched first if it is not here. Registers and flags pass
+; both ways, as ICALL's. CF=1 with nothing called if the part could not be
+; read - and op_fetch has said why.
+; -----------------------------------------------------------------------------
+w16_lcall:
+    call w16_dlgin
+    jc .out
+    call far [w16_lbv]
+.out:
+    ret
 
 ; -----------------------------------------------------------------------------
 ; w16_cbenter - enter the program's callee instead of finishing the import
@@ -232,6 +361,7 @@ w16_cbenter:
 w16_resumecb:
     ; STKBALANCE-OK: w16_resume's switch, ending in w16_cbenter's retf into
     ; the callee instead of w16_epi's; w16_tohost pops the host frame
+    call w16_dcunpark
     push bp
     push si
     push di
@@ -268,6 +398,16 @@ w16_cbret2:
     mov ax, W16_CBROW
     jmp w16_gate
 
+; w16_thkhit - where a discarded segment's thunk far-calls (SPEC.md 124.26.2):
+; an import of its own (W16_SLROW), whose frame returns to the thunk + 5. AX
+; and DX are the entry's, kept through CS because DS is the program's.
+w16_thkhit:
+    ; STKBALANCE-OK: reached by the thunk's far call, and left through the gate
+    mov [cs:w16_thax], ax
+    mov [cs:w16_thdx], dx
+    mov ax, W16_SLROW
+    jmp w16_gate
+
 ; -----------------------------------------------------------------------------
 ; w16_cbdone - the W16_CBROW handler: discard the stub's frame, the record
 ; and the extra bytes, make the served import current again, and run its
@@ -286,10 +426,8 @@ w16_cbdone:
     mov [w16_idx], ax
     mov bx, ax
     shl bx, 1
-    mov dx, bx
-    shl bx, 1
-    add bx, dx                      ; * W16X_SIZE
-    mov al, [w16_exports + bx + W16X_ARGB]
+    shl bx, 1                       ; * W16B_SIZE
+    mov al, [w16_bind + bx + W16B_ARGB]
     cbw
     mov [w16_nargb], ax
     mov ax, KERNEL_SEG

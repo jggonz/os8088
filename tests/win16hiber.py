@@ -33,7 +33,7 @@ os.chdir(ROOT)
 sys.path[:0] = [os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")]
 import hibernate as H                                         # noqa: E402
 from hibernate import M, check, done                          # noqa: E402
-from win16fpu import pkg_syms, msgrow                         # noqa: E402
+from win16fpu import pkg_syms, msgrow, serves                 # noqa: E402
 
 W16S_RUNNING, W16S_ENDED = 3, 4
 PROG = "MENU.EXE"
@@ -138,13 +138,13 @@ def main():
             mo.click(x + ww // 2, y + 8)     # its title bar: to the front
             H.quiet(m)
             m.key("F3")                      # IDM_ASK: a MessageBox
-            M.until(m, lambda mm: pw(mm, seg, S, "w16_idx") == row
+            M.until(m, lambda mm: serves(mm.read, seg * 16, S, row)
                     and pb(mm, seg, S, "w16_inprog") == 0,
                     "MENU's MessageBox after the resume", poll=0.1, limit=120)
             H.quiet(m)
             print("3. played on: F3 opened MENU's MessageBox")
             m.key("Enter")
-            M.until(m, lambda mm: pw(mm, seg, S, "w16_idx") != row,
+            M.until(m, lambda mm: not serves(mm.read, seg * 16, S, row),
                     "the MessageBox to be answered", poll=0.1, limit=60)
             H.quiet(m)
             import os88geom as geom
