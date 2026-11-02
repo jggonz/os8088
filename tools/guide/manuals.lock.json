@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "b97c46380",
+  "stamped": "84c4405b5",
   "strings": "172e5a682e5edddb",
-  "why": "S24 batch 3: ExitWindows restart toast (SPEC.md 124.33.3)"
+  "why": "Checker-brush ROP into a memory DC (SPEC.md 124.25.7)"
  },
  "WIN16_TXT": {
   "sources": [
