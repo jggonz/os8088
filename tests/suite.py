@@ -16552,6 +16552,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16xvol", "soak", py("tests/win16xvol.py"), 90.0,
+        "SPEC.md 96.11.11, 96.27.1, 124.28.5, WIN16-ANY-PLAN S24: XVOL.EXE "
+        "(`make win16fixtures`, tests/win16/xvol.c) on A:, a copy of the "
+        "system disk, with WIN16 and its DOS on B:, so the Windows directory "
+        "is on another volume than the program, as for a setup run from its "
+        "floppy - AH=36h answers for the Windows directory's drive, the "
+        "program copies itself a kilobyte at a time into WINDIR\\XVOLDIR "
+        "and WINDIR\\~XVOL.T and compares each copy, and its MessageBox "
+        "must be XVOL OK; then both COPY.BIN files on B: must be XVOL.EXE "
+        "byte for byte",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
         "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "
