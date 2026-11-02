@@ -231340,9 +231340,17 @@ for int 21h, int 31h and int 34h-3Dh.
 
 The census's other sites are smaller, and are left to S25's pass: a
 store into a code segment 183 times (`11F4:0FBE`), and segment 0 once
-more at `139C:03EA`, 88 times. Neither is WIN16's image. Two rare sites in
-the image still load 0: TranslateMessage's read of the shift state (one
-per keystroke) and `OpenFile`'s seed for a temporary name.
+more at `139C:03EA`, 88 times. Neither is WIN16's image.
+
+*(S24)* The image's last sites of either kind are gone too. The two rare
+loads of 0 are `W16SEG0` now: TranslateMessage's read of the shift
+state, one per keystroke, and `GetTempFileName`'s seed from the tick.
+`w16_dcall` stored the ES the DOS answered through CS, a trap on the arm
+at every `_lread`, `_lwrite` and `OpenFile` a handler made. It now puts
+the program's DS back from its own stack first and stores through it
+(six bytes more on both arms). Write 3.0 calls int 21h itself and does
+not take this path, which is why the census did not list it. S25's pass
+counts again.
 
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 

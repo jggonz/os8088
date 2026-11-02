@@ -3194,8 +3194,7 @@ w16_onkey:
     jae .out
     mov [w16_kascii + bx], al       ; TranslateMessage's WM_CHAR, by scan
     push es
-    xor cx, cx
-    mov es, cx
+    W16SEG0 cx, es                  ; (segment 0: a window on the arm)
     mov cl, [es:0x417]              ; the BIOS's shift state, as pressed
     pop es
     and cl, 0x0F

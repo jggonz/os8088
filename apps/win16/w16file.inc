@@ -217,9 +217,14 @@ w16_dcall:
     pop ds                          ; DS = the call's
     pushf                           ; ...and an int's frame
     call far [cs:w16_dhent]
-    mov [cs:w16_dces], es           ; the ES it answers (2Fh's), banked
+    push es                         ; the ES it answers (2Fh's), banked
+    push bp                         ;   through OUR DS, not CS: a store
+    mov bp, sp                      ;   through CS traps on kern_mega, and
+    mov ds, [bp + 6]                ;   every _lread takes this path
+    pop bp                          ;   (SPEC.md 124.31.10). Flags kept
+    pop word [w16_dces]
     jnc .ok
-    mov [cs:w16_xerr], ax           ; AH=59h's answer (SPEC.md 124.21.2)
+    mov [w16_xerr], ax              ; AH=59h's answer (SPEC.md 124.21.2)
 .ok:
     pop es
     pop ds
@@ -784,8 +789,7 @@ W16LIB w16k_tempname
     or ax, ax
     jnz .given
     push es
-    xor ax, ax                      ; a number from the clock: the BIOS's tick
-    mov es, ax
+    W16SEG0 ax, es                  ; a number from the clock: the BIOS's tick
     mov ax, [es:0x046C]
     pop es
     or ax, ax
