@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "1aa00da06",
+  "stamped": "bc45c9ae7",
   "strings": "add72eb5eed79b2d",
-  "why": "kern_mega arm: the clock stores through the data half, the load runs from the ring's wake"
+  "why": "kern_mega arm: program memory above 1 MB, SEG_WINL windows, GlobalDOSAlloc's own claims"
  },
  "WIN16_TXT": {
   "sources": [
