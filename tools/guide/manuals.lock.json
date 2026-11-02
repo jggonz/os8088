@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "dda92ced8",
-  "strings": "a570971002c6c665",
-  "why": "S21: broadcast tested in the image's SendMessage/PostMessage"
+  "stamped": "2d310289b",
+  "strings": "eaf95202b23c9064",
+  "why": "S21 batch 6: desktop launches join the running instance"
  },
  "WIN16_TXT": {
   "sources": [
