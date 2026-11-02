@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "c2002f526",
+  "stamped": "e978c0278",
   "strings": "172e5a682e5edddb",
-  "why": "relocations to moveable entries: segment, offset and PM-only take the segment (SPEC.md 124.26.2.1)"
+  "why": "real mode defers the first run to the tick (SPEC.md 124.31.8)"
  },
  "WIN16_TXT": {
   "sources": [
