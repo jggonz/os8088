@@ -1548,8 +1548,9 @@ w16u_isenabled:
     ret
 
 ; EnableWindow (USER.34) - args: +0 bEnable, +2 hWnd. Answers whether it was
-; disabled before. A control repaints (its WM_ENABLE); a window that loses
-; the focus it had loses it.
+; disabled before. A control repaints (its WM_ENABLE), and so does a
+; program's own child window (w16n_enrep); a window that loses the focus it
+; had loses it.
 w16u_enable:
     call w16_args
     mov dx, [es:bx]
@@ -1593,7 +1594,12 @@ w16_enable:
     pop cx
 .tell:
     cmp byte [bx + W16W_KIND], W16Q_PROG
-    je .out
+    jne .ctl
+    test byte [bx + W16W_STYLE + 3], WS_CHILD_HI >> 8
+    jz .out                         ; a program's own child repaints, in
+    SCALL w16n_enrep                ;   part 9 (SPEC.md 124.33.1); its
+    jmp short .out                  ;   top-level windows need nothing
+.ctl:
     cmp byte [bx + W16W_KIND], W16Q_DIALOG
     je .out
     mov word [w16_sm_msg], WM_ENABLE  ; a control redraws itself greyed or not

@@ -227550,7 +227550,7 @@ with it (§124.25.6).
 | `BringWindowToTop(hWnd)` (USER.45) | its os8088 window to the front |
 | `IsIconic(hWnd)` (USER.31) | a child's `WS_MINIMIZE`, an MDI child's (124.27.5); FALSE for a top-level window: os8088 does not minimize |
 | `SetClassWord(hWnd, nIndex, wNew)` (USER.130) | `GCW_HBRBACKGROUND` (-10): the old brush, the new one set in the class and in every window of it, so the next erase uses it (WinMine's Color switch). `GCW_STYLE` (-26): the old style, the new one set. Every other index - the icon and cursor among them, which are kept nowhere - answers 0 and changes nothing |
-| `ShellAbout(hWnd, lpApp, lpOther, hIcon)` (SHELL.22) | a WIN16 message box titled *About* and the application (up to a `#` when there is one), its lines the application (after the `#`), the other line, a blank line and *WIN16 on os8088*. Not Windows' own box: there is no Windows here to name |
+| `ShellAbout(hWnd, lpApp, lpOther, hIcon)` (SHELL.22) | a WIN16 message box titled *About* and the application (up to a `#` when there is one), its lines the application (after the `#`), the other line, a blank line and *WIN16 on os8088*. Not Windows' own box: there is no Windows here to name. Its code is the library part's since S24 batch 6, as is `WinHelp`'s refusal box: the box itself needs that part, and the image needed the 201 bytes |
 | `WinHelp(hWnd, lpFile, wCommand, dwData)` (USER.171) | since S21, Windows Help itself: §124.28.10. With no `WINHELP.EXE` to start, `HELP_QUIT` answers TRUE silently, and every other command shows *Help is not available. WINHELP.EXE could not be started, so FILE.HLP cannot be opened.* in a message box, then answers TRUE so a program does not add a second message of its own (§47: the refusal says why) |
 | `DOS3Call` (KERNEL.102) | `int 21h` with the program's registers, through §124.3's handler: the import is bound to `int 21h / retf` in WIN16's code, not to a gate stub |
 | `__WINFLAGS` (KERNEL.178) | a constant import: `GetWinFlags`' answer, written where the program's fixup points when it is loaded |
@@ -232072,9 +232072,15 @@ building the face in a memory DC and putting the glyph on with
 - **`EnableWindow` sent a program's own window nothing.** In Windows its
   `WM_ENABLE` makes such a button invalidate itself. Media Player enables
   Play and Eject when a device opens, and they kept their disabled faces.
-  `EnableWindow`'s row is part 9's now (`w16n_enable`). A program's child
-  window whose state changed is made invalid whole and erased. The message
-  itself is still not sent.
+  A program's child window whose state changed is made invalid whole and
+  erased. The message itself is still not sent. **Only that case reaches
+  part 9** *(S24 batch 6)*: `EnableWindow`'s row is the image's
+  `w16u_enable` again, and `w16_enable` calls part 9's `w16n_enrep` for a
+  `W16Q_PROG` window with `WS_CHILD` alone. For a time the whole row was
+  part 9's, and then every program that disabled a dialog button fetched
+  the part, 27 KB in real mode and 53 KB on the arm, the exposure the
+  `SendMessage` rows were moved back for. A single-program instance must
+  not need part 9 for a hot import.
 - **`StretchBlt` into a memory DC answered FALSE** (124.25.3). It draws
   now, each pixel taken from the source pixel it falls on, as `StretchBlt`
   onto the screen does (`w16_bm2bms`, over `w16_bmscale`'s row). The one

@@ -738,7 +738,7 @@ W16EXPORT W16M_USER,       286,     0,  w16u_desktop        ; GetDesktopWindow()
 W16EXPORT W16M_USER,       287,     2,  w16u_lastpopup      ; GetLastActivePopup(word)
 W16EXPORT W16M_USER,       32,      6,  w16u_getwrect       ; GetWindowRect(word ptr)
 W16EXPORT W16M_USER,       33,      6,  w16u_clientrect     ; GetClientRect(word ptr)
-W16EXPORT W16M_USER,       34,      4,  w16n_enable         ; EnableWindow(word word)
+W16EXPORT W16M_USER,       34,      4,  w16u_enable         ; EnableWindow(word word)
 W16EXPORT W16M_USER,       35,      2,  w16u_isenabled      ; IsWindowEnabled(word)
 W16EXPORT W16M_USER,       36,      8,  w16u_getwtext       ; GetWindowText(word segptr word)
 W16EXPORT W16M_USER,       37,      6,  w16u_setwtext       ; SetWindowText(word segstr)
@@ -1167,36 +1167,8 @@ w16u_winhelp:
 .ret:
     ret
 .say:
-    push si
-    push di
-    mov di, w16pf_ins + 128
-    mov si, w16_s_nohelp1
-    call w16_strcpy
-    push es
-    les si, [es:bx + 6]             ; the file's last component
-    mov ax, es
-    or ax, si
-    jz .noname
-    call w16_lastpart               ; ES:SI -> it
-    call w16_fcopy40
-    jmp short .named
-.noname:
-    pop es
-    push es
-    push ds
-    pop es
-    mov si, w16_s_itshelp
-    call w16_strcpy
-.named:
-    pop es
-    mov si, w16_s_nohelp2
-    call w16_strcpy
-    mov word [w16pf_ins], 'He'      ; the caption: "Help"
-    mov word [w16pf_ins + 2], 'lp'
-    mov byte [w16pf_ins + 4], 0
-    pop di
-    pop si
-    ; fall into w16_asmsgbox
+    LCALL w16n_nohelp               ; the library part's: a refusal is rare
+    ret
 
 ; w16_asmsgbox - ES:BX = twelve bytes of arguments whose +10 is an hWnd:
 ; rewritten as MessageBox(hWnd, w16pf_ins + 128, w16pf_ins, MB_OK |
@@ -1213,17 +1185,20 @@ w16_s_nohelp1:  db 'Help is not available.', 13, 10, 'WINHELP.EXE could not be s
 w16_s_itshelp:  db 'its help', 0
 w16_s_nohelp2:  db ' cannot be opened.', 0
 
+section .w16dlg                     ; ShellAbout and WinHelp's refusal: the
+                                    ;   library part's, being rare
+
 ; ShellAbout (SHELL.22) - +0 hIcon, +2 lpszOtherStuff, +6 lpszApp, +10 hWnd.
 ; A WIN16 message box (SPEC.md 124.15.3): "About" and the application, then
 ; the application (after a '#' when there is one), the other line, and what
 ; it is running on
-w16sh_about:
+W16LIB w16sh_about
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov di, w16pf_ins               ; the caption: "About " + the title part
     mov si, w16_s_about
-    call w16_strcpy
+    ICALL w16_strcpy
     push es
     les si, [es:bx + 6]
     mov ax, es
@@ -1231,7 +1206,7 @@ w16sh_about:
     jz .noapp
     mov cx, 40
     mov dl, '#'
-    call w16_fcopyn                 ; up to a '#'
+    ICALL w16_fcopyn                 ; up to a '#'
     mov byte [di], 0
     mov di, w16pf_ins + 128         ; the text: after the '#', else the same
     cmp byte [es:si], '#'
@@ -1245,7 +1220,7 @@ w16sh_about:
 .line1:
     mov cx, 60
     xor dl, dl
-    call w16_fcopyn
+    ICALL w16_fcopyn
     jmp short .other
 .noapp:
     mov byte [di], 0
@@ -1261,16 +1236,76 @@ w16sh_about:
     jz .us
     mov cx, 120
     xor dl, dl
-    call w16_fcopyn
+    ICALL w16_fcopyn
     mov word [di], 0x0A0D
     add di, 2
 .us:
     pop es
     mov si, w16_s_on8088
-    call w16_strcpy
+    ICALL w16_strcpy
     pop di
     pop si
-    jmp w16_asmsgbox
+    ICALL w16_asmsgbox
+    ret
+
+; w16n_nohelp - WinHelp's refusal (w16u_winhelp), ES:BX = its arguments:
+; "Help is not available", rewritten as MessageBox's and run as that import
+w16n_nohelp:
+    push si
+    push di
+    mov di, w16pf_ins + 128
+    mov si, w16_s_nohelp1
+    ICALL w16_strcpy
+    push es
+    les si, [es:bx + 6]             ; the file's last component
+    mov ax, es
+    or ax, si
+    jz .noname
+    call w16_lastpart               ; ES:SI -> it
+    ICALL w16_fcopy40
+    jmp short .named
+.noname:
+    pop es
+    push es
+    push ds
+    pop es
+    mov si, w16_s_itshelp
+    ICALL w16_strcpy
+.named:
+    pop es
+    mov si, w16_s_nohelp2
+    ICALL w16_strcpy
+    mov word [w16pf_ins], 'He'      ; the caption: "Help"
+    mov word [w16pf_ins + 2], 'lp'
+    mov byte [w16pf_ins + 4], 0
+    pop di
+    pop si
+    ICALL w16_asmsgbox
+    ret
+
+; w16_lastpart - ES:SI a far path -> ES:SI past its last '\', '/' or ':'
+w16_lastpart:
+    push di
+    mov di, si
+.c:
+    mov al, [es:di]
+    or al, al
+    jz .out
+    inc di
+    cmp al, '\'
+    je .cut
+    cmp al, '/'
+    je .cut
+    cmp al, ':'
+    jne .c
+.cut:
+    mov si, di
+    jmp short .c
+.out:
+    pop di
+    ret
+
+section .text
 
 w16_s_about:    db 'About ', 0
 w16_s_on8088:   db 13, 10, 'WIN16 on os8088', 0
@@ -1306,28 +1341,6 @@ w16_fcopy40:
     mov byte [di], 0
     pop dx
     pop cx
-    ret
-
-; w16_lastpart - ES:SI a far path -> ES:SI past its last '\', '/' or ':'
-w16_lastpart:
-    push di
-    mov di, si
-.c:
-    mov al, [es:di]
-    or al, al
-    jz .out
-    inc di
-    cmp al, '\'
-    je .cut
-    cmp al, '/'
-    je .cut
-    cmp al, ':'
-    jne .c
-.cut:
-    mov si, di
-    jmp short .c
-.out:
-    pop di
     ret
 
 ; --- the program ends itself (SPEC.md 124.15.3) -----------------------------

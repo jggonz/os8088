@@ -531,49 +531,34 @@ W16SYS w16n_redraw
     xor dx, dx
     ret
 
-; EnableWindow (USER.34) - args: +0 bEnable, +2 hWnd. w16u_enable's, and a
-; program's own child window whose state it changed is made invalid whole,
-; erased: what its WM_ENABLE does in Windows, where the bitmap buttons of
-; Media Player and Sound Recorder repaint themselves greyed or not. The
-; message itself is not sent (SPEC.md 124.33.1)
-W16SYS w16n_enable
+; w16n_enrep - BX = a program's own child window that EnableWindow
+; (w16_enable) has just set, CX = 1 it was disabled before: when that
+; changed, the window is made invalid whole, erased - what its WM_ENABLE does
+; in Windows, where the bitmap buttons of Media Player and Sound Recorder
+; repaint themselves greyed or not. The message itself is not sent (SPEC.md
+; 124.33.1). Only such a window brings part 9 in. Keeps all but AX and DX
+W16SYS w16n_enrep
+    push cx
     push si
-    ICALL w16_args
-    mov ax, [es:bx + 2]
-    ICALL w16_hwnd2rec
-    mov si, 0                       ; SI = the record to repaint, or 0
-    jc .call
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .call
-    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
-    jz .call
-    mov si, bx
-.call:
-    push si
-    ICALL w16u_enable               ; AX = it was disabled
-    pop si
-    or si, si
-    jz .out
-    mov bl, [si + W16W_FLAGS]       ; disabled now (W16WF_DIS) against
-    and bl, W16WF_DIS               ;   disabled before (AX)
-    cmp bl, 1
+    mov al, [bx + W16W_FLAGS]       ; disabled now (W16WF_DIS) against
+    and al, W16WF_DIS               ;   disabled before (CL)
+    cmp al, 1
     cmc                             ; CF = disabled now
-    sbb bl, bl
-    and bl, 1                       ; BL = 1 disabled now
-    cmp bl, al
+    sbb al, al
+    and al, 1
+    cmp al, cl
     je .out                         ; unchanged: nothing to repaint
-    push ax
-    mov bx, si
+    push bx
     mov byte [w16_erase], 1
     xor ax, ax
     xor cx, cx
     mov dx, 0x7FFF
     mov si, dx
     ICALL w16_invaltree
-    pop ax
+    pop bx
 .out:
-    xor dx, dx
     pop si
+    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
