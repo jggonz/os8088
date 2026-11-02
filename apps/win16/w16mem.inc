@@ -713,7 +713,13 @@ w16_gdiscard:
     push ax
     push si
     mov ax, [es:GH_OWNER]
+    or ax, ax
+    jns .prog
+    LCALL w16n_rdisc                ; a library's resource (SPEC.md 124.23.6)
+    jmp short .disc
+.prog:
     call w16_rdiscard               ; AX = the entry: CF=0 it was unused, and
+.disc:
     pop si                          ;   its block is gone; start the arena again
     pop ax
     jc .skip

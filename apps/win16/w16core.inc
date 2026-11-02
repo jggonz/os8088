@@ -232,6 +232,20 @@ w16_dispatch:
     and al, ~W16B_NORET & 0xFF
     cmp al, W16B_MISS               ; (before W16B_MDC: 7Fh has its bit)
     je .miss
+    test al, W16B_RES               ; a resource call: a library's hInstance
+    jz .nores                       ;   reads the library's resources, and
+    push word [w16_rtab]            ;   the program's are current again after
+    push word [w16_rtlen]           ;   (SPEC.md 124.23.6)
+    push word [w16_rfp]
+    push word [w16_rown]
+    call w16_rin
+    call .nores
+    pop word [w16_rown]
+    pop word [w16_rfp]
+    pop word [w16_rtlen]
+    pop word [w16_rtab]
+    ret
+.nores:
     test al, W16B_MDC
     jz .plain
     call w16_odarg                  ; an own DC's the open DC (124.25.11)
@@ -241,7 +255,7 @@ w16_dispatch:
     jmp w16_mdcout
 .plain:
     mov al, [bx + W16B_PART]
-    and al, ~(W16B_NORET | W16B_MDC) & 0xFF
+    and al, ~(W16B_NORET | W16B_MDC | W16B_RES) & 0xFF
     test al, W16B_DCF
     jnz .dcf
 .go:

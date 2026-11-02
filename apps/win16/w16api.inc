@@ -418,6 +418,24 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 ; and draws into its bitmap (SPEC.md 124.25.3). SelectObject, BitBlt, PatBlt
 ; and StretchBlt find the memory DC themselves; SaveDC and RestoreDC answer
 ; one as they answer any DC but the window's
+; A resource call: its first argument (the highest) is an hInstance, or the
+; resource's own handle, and a library's makes the call read the library's
+; resources (w16_rin, SPEC.md 124.23.6)
+%define w16res_w16k_findres
+%define w16res_w16k_loadres
+%define w16res_w16k_freeres
+%define w16res_w16k_sizeres
+%define w16res_w16u_loadbmp
+%define w16res_w16u_loadcursor
+%define w16res_w16u_loadicon
+%define w16res_w16u_loadstr
+%define w16res_w16u_loadmenu
+%define w16res_w16u_loadaccel
+%define w16res_w16u_destroyicon
+%define w16res_w16u_dlgbox
+%define w16res_w16u_credlg
+%define w16res_w16u_dlgboxp
+%define w16res_w16u_credlgp
 %define w16mdc_w16g_setrop2
 %define w16mdc_w16g_getrop2
 %define w16mdc_w16g_settextcol

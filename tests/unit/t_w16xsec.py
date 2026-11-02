@@ -27,7 +27,8 @@ This row does, off WIN16's own listing and symbol map:
   5. an export row whose part byte or handler offset is not where the map
      puts its handler: a W16LIB forgotten, or one too many - or whose
      W16B_DCF bit disagrees with w16api.inc's w16dcf_ list (SPEC.md 124.24.4),
-     or whose W16B_MDC bit with its w16mdc_ list (SPEC.md 124.25.3);
+     whose W16B_MDC bit with its w16mdc_ list (SPEC.md 124.25.3), or whose
+     W16B_RES bit with its w16res_ list (SPEC.md 124.23.6);
   6. inside a part that runs with DS = WIN16's image, `push cs` then
      `pop ds`: CS is the part's own segment there, so DS "restored" from it
      is not WIN16's. GetMenuString shipped that way for four stories after
@@ -250,6 +251,7 @@ def rows(binfile, syms, where):
     names = []
     dcf = set()                 # the text calls' handlers (SPEC.md 124.24.4)
     mdc = set()                 # ...and a memory DC's (SPEC.md 124.25.3)
+    res = set()                 # ...and the resource calls' (124.23.6)
     arm = False                 # the kern_mega arm's rows (SPEC.md 124.31.6):
     for line in open(os.path.join(ROOT, "apps", "win16", "w16api.inc")):
         if line.startswith("%ifdef PKG_MEGA"):
@@ -265,6 +267,8 @@ def rows(binfile, syms, where):
             dcf.add(line.split()[1][len("w16dcf_"):])
         elif line.startswith("%define w16mdc_"):
             mdc.add(line.split()[1][len("w16mdc_"):])
+        elif line.startswith("%define w16res_"):
+            res.add(line.split()[1][len("w16res_"):])
     data = open(binfile, "rb").read()
     at = where["w16_exports"][0]
     out = []
@@ -274,9 +278,9 @@ def rows(binfile, syms, where):
         want = {".text": 0, ".w16dlg": 3, ".w16sys": 9}.get(sec)
         if want is None:
             out.append("row %d (%s): its handler is in %s, which no row can name" % (k, h, sec))
-        elif part & 0x1F != want or proc != where[h][1]:
+        elif part & 0x0F != want or proc != where[h][1]:
             out.append("row %d (%s): the row says part %d at %04X, the map %s at %04X"
-                       % (k, h, part & 0x1F, proc, sec, where[h][1]))
+                       % (k, h, part & 0x0F, proc, sec, where[h][1]))
         elif bool(part & 0x40) != (h in dcf):
             out.append("row %d (%s): W16B_DCF is %s, and w16api.inc's w16dcf_ list says %s"
                        % (k, h, "set" if part & 0x40 else "clear",
@@ -285,6 +289,10 @@ def rows(binfile, syms, where):
             out.append("row %d (%s): W16B_MDC is %s, and w16api.inc's w16mdc_ list says %s"
                        % (k, h, "set" if part & 0x20 else "clear",
                           "set" if h in mdc else "clear"))
+        elif bool(part & 0x10) != (h in res):
+            out.append("row %d (%s): W16B_RES is %s, and w16api.inc's w16res_ list says %s"
+                       % (k, h, "set" if part & 0x10 else "clear",
+                          "set" if h in res else "clear"))
     return out, len(names)
 
 

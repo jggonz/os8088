@@ -1902,13 +1902,17 @@ w16_peekmsg:
     ret
 
 ; w16_peekwake - the wake that a waiting PeekMessage asked for: answer it,
-; with a message if there is one now, and run on. No lock is held.
+; with a message if there is one now, and run on. [w16_locked] is the
+; caller's: 0 from the wake (w16_wake), and 1 when w16t_serve serves a
+; parked task from inside a callback that holds the gfx lock (w16_ontimer's
+; w16_after). It was zeroed here, and a second task's ShowWindow then asked
+; the kernel for the lock its own callback held, and waited for ever
+; (Microsoft's setup engine, 2026-11-02)
 w16_peekwake:
     mov byte [w16_inpeek], 0
     cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
     je .msg                         ;   PeekMessage asked again after it
     call w16_reidx
-    mov byte [w16_locked], 0
     mov al, W16OD_PEEK
     LCALL w16_odgo
     jc .msg
@@ -1917,8 +1921,7 @@ w16_peekwake:
 .msg:
 %ifdef PKG_MEGA
     mov al, 1                       ; MMSYSTEM's calls owed, likewise
-    mov byte [w16_locked], 0        ;   (SPEC.md 124.32.6)
-    call w16_mmre
+    call w16_mmre                   ;   (SPEC.md 124.32.6)
     jc .mm
     call w16_resumecb
     jmp w16_after
@@ -1926,7 +1929,6 @@ w16_peekwake:
 %endif
     call w16_peekmsg
     xor dx, dx
-    mov byte [w16_locked], 0
     call w16_resume
     jmp w16_after
 

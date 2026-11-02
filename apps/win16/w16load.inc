@@ -2810,6 +2810,11 @@ w16l_mrec:
     inc di                          ; its 0, kept
     sub di, [w16l_resp]
     mov [w16l_resn], di
+    ICALL w16_rlayout               ; its resource table's bytes (124.23.6):
+    cmp word [w16_rtlen], 0x1000    ;   a block's GH_OWNER names an entry in
+    jbe .rtok                       ;   12 bits, so a larger one is not kept
+    mov word [w16_rtlen], 0
+.rtok:
     mov ax, [w16_nseg]              ; header, segments, entries, names
     shl ax, 1
     add ax, W16LM_SEGS
@@ -2819,14 +2824,30 @@ w16l_mrec:
     jc .mem
     add ax, [w16l_nresn]
     jc .mem
+    add ax, 15                      ; ...then the resource table, on a
+    jc .mem                         ;   paragraph of its own
+    and al, 0xF0
+    push ax
+    add ax, [w16_rtlen]
+    pop cx
+    jc .mem
     xor dx, dx
+    push cx
     mov cl, GMEM_ZEROINIT
     ICALL w16_gnew
+    pop cx
     or ax, ax
     jz .mem
     mov si, [w16l_rp]
     mov [si + W16L_MREC], dx
     W16SEG es, dx                      ; ES = the block from here
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    shr cx, 1
+    mov [es:W16LM_RTAB], cx
+    mov ax, [w16_rtlen]
+    mov [es:W16LM_RTLEN], ax
     mov ax, [w16_nseg]
     mov [es:W16LM_NSEG], ax
     mov ax, [w16l_ip]
@@ -2896,6 +2917,19 @@ w16l_mrec:
     jnc .rdone
     mov word [es:W16LM_NRESN], 0    ; unreadable: by ordinal still works
 .rdone:
+    cmp word [es:W16LM_RTLEN], 0    ; the resource table, its cache words
+    je .nort                        ;   cleared (w16_copyres): [w16_rtab] is
+    mov si, [w16l_rp]               ;   the program's, saved by w16l_push
+    mov ax, [es:W16LM_RTAB]
+    add ax, [si + W16L_MREC]
+    mov [w16_rtab], ax
+    push es
+    mov es, [w16_fseg]
+    ICALL w16_copyres
+    pop es
+    jnc .nort
+    mov word [es:W16LM_RTLEN], 0    ; past the file: no resources
+.nort:
     mov si, [w16l_rp]               ; the record
     mov es, [w16_fseg]              ; its name: the resident names' first
     mov bx, [w16l_resp]

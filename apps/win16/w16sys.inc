@@ -593,6 +593,78 @@ w16l_lmcall:
     ICALL w16_cbcall
     ret
 
+; w16n_rset - SI -> a library's record, BX = its index: its resources are
+; the current ones - the table its loader kept in its module block, its file,
+; and the GH_OWNER bits its blocks are marked with (8000h, the index in bits
+; 12-14, the entry's offset below). SPEC.md 124.23.6. Keeps all.
+w16n_rset:
+    push ax
+    push cx
+    push es
+    W16SEG es, [si + W16L_MREC]
+    mov ax, [es:W16LM_RTAB]
+    add ax, [si + W16L_MREC]
+    mov [w16_rtab], ax
+    mov ax, [es:W16LM_RTLEN]
+    mov [w16_rtlen], ax
+    lea ax, [si + W16L_FILE]
+    mov [w16_rfp], ax
+    mov ah, bl
+    mov cl, 4
+    shl ah, cl
+    or ah, 0x80
+    xor al, al
+    mov [w16_rown], ax
+    pop es
+    pop cx
+    pop ax
+    ret
+
+; w16n_rown - SI = a library's resource block's GH_OWNER: its library's
+; resources current (w16n_rset), SI = the entry. Keeps the rest.
+w16n_rown:
+    push ax
+    push bx
+    push cx
+    mov bx, si
+    mov cl, 12
+    shr bx, cl
+    and bx, 7
+    and si, 0x0FFF
+    push si
+    mov ax, bx
+    call w16l_recp
+    mov si, bx
+    mov bx, ax
+    call w16n_rset
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16n_rdisc - the discard sweep met a library's resource: AX = its GH_OWNER.
+; w16_rdiscard on its library's table, the current one put back. CF as
+; w16_rdiscard's. Keeps all.
+w16n_rdisc:
+    push si
+    push word [w16_rtab]
+    push word [w16_rtlen]
+    push word [w16_rfp]
+    push word [w16_rown]
+    mov si, ax
+    call w16n_rown
+    push ax
+    mov ax, si
+    ICALL w16_rdiscard
+    pop ax
+    pop word [w16_rown]
+    pop word [w16_rfp]
+    pop word [w16_rtlen]
+    pop word [w16_rtab]
+    pop si
+    ret
+
 ; w16l_recp - AX = a record's index -> BX -> it. Keeps the rest.
 w16l_recp:
     push cx

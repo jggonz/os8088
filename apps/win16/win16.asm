@@ -145,7 +145,9 @@ W16LM_NRESN  equ 10             ;   then each segment's paragraph
 W16LM_IP     equ 12
 W16LM_CS     equ 14
 W16LM_LIBS   equ 16
-W16LM_SEGS   equ 32
+W16LM_RTAB   equ 32             ; its resource table: paragraphs into the
+W16LM_RTLEN  equ 34             ;   block, and bytes (0 = none, 124.23.6)
+W16LM_SEGS   equ 36
 W16M_LIB     equ 0x80           ; [w16_modid]: ORed with a library's record
 W16_LSVSZ    equ 96             ; ...one module's loader state, saved (w16load.inc)
 W16B_SIZE    equ 4              ; a slot: the argument bytes, the part, the
@@ -157,6 +159,8 @@ W16B_MISS    equ 0x7F           ; W16B_PART: an import WIN16 lacks, PROC its
 W16B_NORET   equ 0x80           ; ...ORed in: it never returns (the census)
 W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
                                 ;   DC's font (SPEC.md 124.24.4)
+W16B_RES     equ 0x10           ; ...ORed in: a resource call, whose first
+                                ;   argument names the module (SPEC.md 124.23.6)
 W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
                                 ;   memory DC's (SPEC.md 124.25.3)
 HWND_BROADCAST equ 0xFFFF        ; SendMessage's and PostMessage's: every
@@ -302,6 +306,9 @@ section .w16dlg
     W16BSS w16_ldep, 1          ;   a library it imports loads, and how deep
     W16BSS w16_lmsv, 6          ; LibMain's chain: the start BX, CX and ES
     W16BSS w16_lmi, 2           ; ...the record it is at
+    W16BSS w16_rfp, 2           ; the resources' file: 0 the program's, else
+    W16BSS w16_rown, 2          ;   a library's, and its blocks' GH_OWNER bits
+                                ;   (w16n_rset, SPEC.md 124.23.6)
     W16BSS w16_lltgt, 1         ; LoadLibrary's library, while its imports'
                                 ;   LibMains run (w16k_llrun)
     W16BSS w16_lmdi, 2          ; the registers w16_lmtramp enters a library
@@ -1246,6 +1253,7 @@ w16_entry:
 ; work: a second wake finds W16S_RUN or W16S_REFUSED and does nothing.
 ; =============================================================================
 w16_wake:
+    mov byte [w16_locked], 0        ; (no lock: w16_peekwake runs on this)
     cmp byte [w16_shq], 0           ; a ShellExecute's launch, first: this is
     je .nosh                        ;   where the lock is free (124.24.10)
     SCALL w16c_shrun
@@ -2243,6 +2251,9 @@ w16_exports:
   %ifdef w16dcf_%[w16x_p_%[k]]
     %assign w16pt w16pt | W16B_DCF
   %endif
+  %ifdef w16res_%[w16x_p_%[k]]
+    %assign w16pt w16pt | W16B_RES
+  %endif
   %ifdef w16mdc_%[w16x_p_%[k]]
     %assign w16pt w16pt | W16B_MDC
   %endif
@@ -2286,6 +2297,9 @@ w16_pnames:
   %endif
   %ifdef w16dcf_%[w16x_p_%[w16f]]
     %assign w16pt w16pt | W16B_DCF
+  %endif
+  %ifdef w16res_%[w16x_p_%[w16f]]
+    %assign w16pt w16pt | W16B_RES
   %endif
   %ifdef w16mdc_%[w16x_p_%[w16f]]
     %assign w16pt w16pt | W16B_MDC

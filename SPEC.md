@@ -226831,6 +226831,15 @@ yielded to the other tasks; the Task Manager shows such a program near
 100% and the desktop stays live. S3 honours only the NULL filter (`hwnd`
 0, range 0–0); any other filter is treated as that one.
 
+The answer to a waiting `PeekMessage` (`w16_peekwake`) keeps the caller's
+`[w16_locked]`. It is 0 when the wake runs it, because `w16_wake` zeroes
+it on entry. It is 1 when `w16t_serve` serves a parked task from inside a
+callback that holds the gfx lock: `w16_ontimer` ends in `w16_after`.
+Until 2026-11-02 it zeroed the byte itself. A second task resumed that way
+then called `ShowWindow` on a new top-level window, asked the kernel for
+the lock its own callback held, and waited forever. Microsoft's setup
+engine did it every time.
+
 **Input.** The os8088 callbacks become messages:
 
 | os8088 callback | Windows message |
@@ -229003,10 +229012,16 @@ module handle is the same value: every call that takes an `HMODULE` or an
 | +30 | 1 = its `LibMain` is still owed a call |
 | +31 | spare |
 
-The module record block begins with eight words - the segment count, the
+The module record block begins with eight words: the segment count, the
 entry table's offset and length, the resident names' offset, the
-non-resident names' offset and length, and `ne_csip` - then each segment's
-paragraph, then the three tables as the file has them.
+non-resident names' offset and length, and `ne_csip`. Then come:
+
+- 16 bytes, the records of the libraries it imports;
+- two words for its resource table: the paragraphs into the block, and its
+  bytes (`W16LM_RTAB`, `W16LM_RTLEN`);
+- each segment's paragraph;
+- the three tables as the file has them;
+- the resource table, on a paragraph of its own (§124.23.6).
 
 ##### 124.23.2.1 Cycles *(2026-11-02)*
 
@@ -229088,10 +229103,38 @@ line 2 the library's file.
 
 #### 124.23.6 Not done, pinned
 
-- **A library's resources** are not read: `FindResource`, `LoadString`,
-  `LoadBitmap` and their kind given a library's handle look in the
-  program's. A resource-only library (`MORICONS.DLL`) is the Program
-  Manager's, S23's.
+- **A library's resources are read** *(2026-11-02; until then they were
+  not, and a library's handle looked in the program's)*. Microsoft's setup
+  DLLs keep their strings and dialogs in their own resources, and MSCOMSTF
+  retried `LoadString` on its own forever. How it works:
+  - **The table.** The loader keeps the library's resource table in its
+    module block (`w16l_mrec`, through `w16_rlayout` and `w16_copyres`).
+    A table over 4 KB is not kept.
+  - **Which module.** The resource calls are marked in their bind slots
+    (`W16B_RES`, 10h of the part byte): `FindResource`, `LoadResource`,
+    `FreeResource`, `SizeofResource`, `LoadBitmap`, `LoadCursor`,
+    `LoadIcon`, `LoadString`, `LoadMenu`, `LoadAccelerators`,
+    `DestroyIcon`, `DialogBox(Param)` and `CreateDialog(Param)`. Each
+    takes its module first, or its own handle alone. `w16_dispatch`
+    saves `[w16_rtab]`, `[w16_rtlen]`, `[w16_rfp]` and `[w16_rown]`
+    around such a call. When its first argument is a library's hInstance,
+    `w16_rin` makes that library current (`w16n_rset`, the library
+    part's): its table, and its file to read the resources from (in the
+    program's folder, where the library is).
+  - **Its blocks.** A library's resource block carries its record in its
+    `GH_OWNER`: 8000h, the record in bits 12-14, and the entry's offset
+    below. So `FreeResource` and `DestroyIcon` (`w16_rentry`) and the
+    discard sweep (`w16n_rdisc`) find the library's table rather than the
+    program's.
+  - **What a program pays.** A resource call with the program's own handle
+    costs the save, a walk of `W16_NLIB` records and the restore. It
+    fetches nothing.
+  - **Room for it.** The Windows 3.0 name-table fallback
+    (`w16_rnametab`, a miss's path) moved to the library part to pay for
+    it: the arm's image fell from 38,329 to 38,207 bytes with the feature
+    in.
+
+  A resource-only library (`MORICONS.DLL`) is the Program Manager's, S23's.
 - **`WEP` at the program's end** is not called: the libraries go with the
   program's memory when it ends, as they went when Windows 3.0 exited.
 - **Hooks** other than `WH_MSGFILTER` are kept and not called (§124.22.16),
