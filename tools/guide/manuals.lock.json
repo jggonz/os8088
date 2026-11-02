@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "9d8582913",
+  "stamped": "7f045e923",
   "strings": "172e5a682e5edddb",
-  "why": "S24 batch 6: EnableWindow in the image, ShellAbout in the library part"
+  "why": "locked moveable GlobalReAlloc on the arm"
  },
  "WIN16_TXT": {
   "sources": [
