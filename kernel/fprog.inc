@@ -736,11 +736,8 @@ fpg_arm:
                                 ; that drew its window through one in this hold
                                 ; would otherwise clip all of what follows away
 .yes:
-    clc
-    ret
-.no:
-    stc
-    ret
+    CLC_OR_STC .no              ; (kernel size pass 15: both callers read CF
+    ret                         ; alone)
 
 ; -----------------------------------------------------------------------------
 ; fpg_paint - the widget's own pixels, from its own state (internal)

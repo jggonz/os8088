@@ -35,7 +35,8 @@ ready` on E9, sends one key, and asserts
      scan code - fails it too; it gives up after
      30 s and says `nokey` with port 64h's status, which reads 31h - OBF,
      AUX - when this is the defect);
-  2. `kern_mega: unparked` - the session came back;
+  2. the session came back ([mega_dwoke], Box.wait_trip - a MEGA_E9
+     kernel's `kern_mega: unparked`);
   3. the pointer MOVES after the return (mouse_x/mouse_y before and after a
      walk differ);
 
@@ -110,7 +111,8 @@ class Trip(object):
 # `KBTRIP` batched whole is 24 and lost its I in a soak-loaded run (`Bad
 # command or file name: KBTRP`), where `kbtrip` is 12. DOS does not care.
 # It still lost `kb` once (`TRIP`) behind the BackSpaces at a load average of
-# 30, so a trip that never HANDED OVER (no new `parked`) types it once more
+# 30, so a trip that never HANDED OVER (the kernel still home and the armed
+# trip not back) types it once more
 TYPED = "kbtrip"
 
 
@@ -139,16 +141,15 @@ def main():
     tr = Trip(box)
     fails, keys, retyped = [], 0, []
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()                        # the desktop, off kernel state
         box.capture()
         box.dbl(591, 105, "B:'s Disk window")
         for i in range(1, TRIPS + 1):
-            before = tr.counts("KBTRIP ready", "KBTRIP key", "KBTRIP nokey",
-                               "unparked")
-            parked = tr.counts("kern_mega: parked")[0]
+            before = tr.counts("KBTRIP ready", "KBTRIP key", "KBTRIP nokey")
+            box.arm_trip()              # [mega_dwoke] 0: Box.trip_back
             stop = [False]
             th = threading.Thread(target=wiggle, args=(stop,))
             if i == 1:
@@ -159,10 +160,10 @@ def main():
                 ob.xd("key", "--delay", 30, *(["BackSpace"] * 4))
                 ob.xd("type", "--delay", 120, TYPED)
                 th.start()
-                time.sleep(0.4)
+                box.guest_sleep(0.4)
                 ob.xd("key", "Return")
             ready = tr.wait(["KBTRIP ready"], before[:1], 90 if i == 1 else 45)
-            if not ready and tr.counts("kern_mega: parked")[0] == parked:
+            if not ready and box.home() and not box.trip_back():
                 # never handed over: the command line was not what was typed
                 # (TYPED's note - Bochs dropped part of a burst), or on trip
                 # 1 the double-click missed the row (the walk lands off it at
@@ -175,7 +176,7 @@ def main():
                 else:
                     ob.xd("key", "--delay", 60, *(["BackSpace"] * 8))
                     ob.xd("type", "--delay", 120, TYPED)
-                    time.sleep(0.4)
+                    box.guest_sleep(0.4)
                     ob.xd("key", "Return")
                 ready = tr.wait(["KBTRIP ready"], before[:1], 90)
             stop[0] = True
@@ -185,7 +186,7 @@ def main():
                              "keyboard did not reach the DOS window" % i)
                 ob.shot(os.path.join(OUT, "dead%02d.png" % i))
                 break
-            time.sleep(1.5)
+            box.guest_sleep(1.5)        # GUEST seconds (Box.guest_sleep)
             ob.xd("key", "k")
             got = tr.wait(["KBTRIP key", "KBTRIP nokey"], before[1:3], 45)
             lines = [l for l in tr.text().splitlines()
@@ -198,7 +199,7 @@ def main():
             else:
                 fails.append("trip %d: `k` was not the key the DOS program "
                              "read (%s)" % (i, " / ".join(lines)))
-            if not tr.wait(["unparked"], before[3:], 90):
+            if not box.wait_trip(90):
                 fails.append("trip %d: the session never came back" % i)
                 break
             # the desktop back (was 6 s slept), then the pointer CLOSED-LOOP:

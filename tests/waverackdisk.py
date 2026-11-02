@@ -96,6 +96,30 @@ def card_rate(rate):
     return 1000000.0 / (1000000 // rate)
 
 
+# WAVE 4 AS SPEC.md 123.6 RECORDED IT, on this row's machines - the baseline
+# when --before is not in this clone's history. WaveRack reached main as ONE
+# squash (#311), so Wave 4's commit exists only in the history it was
+# developed in; a tree cut from main cannot build it, and the row died in
+# `git ls-tree` before measuring anything. The figures are that table's,
+# taken by this row against that commit: what a rebuild would re-measure.
+# An underrun count the table does not give is None.
+WAVE4 = {
+    "hdd": {"scan_s": 93.8, "scan_i13": {"fat": 18, "dir": 2, "data": 168},
+            "big": {"under": None, "silence": 17.67},
+            "comp": {"under": 5, "silence": 26.91},
+            "sts": {"under": 2, "silence": 2.62},
+            "stl": {"under": None, "silence": 11.76}},
+    "floppy": {"long": {"under": None, "silence": 18.71}},
+    "bigclu": {"status": "Cluster too large", "frames": 0},
+}
+
+
+def reachable(commit):
+    """True when COMMIT is in this clone (a squash leaves it out)"""
+    return subprocess.run(["git", "cat-file", "-e", commit + "^{commit}"],
+                          capture_output=True).returncode == 0
+
+
 def build_before(commit, tmp):
     """the package at COMMIT, out of git into TMP: (o88 path, syms, image)"""
     src = os.path.join(tmp, "src")
@@ -473,7 +497,14 @@ def main():
                  "make")
     tmp = tempfile.mkdtemp(dir=os88build.at("build"), prefix="wrdisk")
     try:
-        bo88, bsyms, _ = build_before(a.before, tmp)
+        rec = not reachable(a.before)
+        if rec:
+            say("waverackdisk: %s is not in this clone's history (WaveRack "
+                "came as one squash, #311): BEFORE is Wave 4 as SPEC.md 123.6 "
+                "recorded it" % a.before)
+            bo88 = bsyms = None
+        else:
+            bo88, bsyms, _ = build_before(a.before, tmp)
         fx = os.path.join(tmp, "fx")
         os.makedirs(fx)
         for n in wrsim.DISK_FX:
@@ -481,7 +512,7 @@ def main():
         after = os88build.at("build/waverack.o88")
         legs = a.leg or ["hdd", "floppy", "bigclu"]
         if "hdd" in legs:
-            hb = leg_hdd("before", bo88, bsyms, tmp, fx)
+            hb = WAVE4["hdd"] if rec else leg_hdd("before", bo88, bsyms, tmp, fx)
             ha = leg_hdd("after", after, syms, tmp, fx)
             say("waverackdisk: hdd, before -> after")
             check("BIG22 scan: guest seconds %.1f -> %.1f, no slower"
@@ -494,7 +525,7 @@ def main():
             check("BIG22 after: streamed (held %s), the external ring (%s)"
                   % (big.get("wt_held"), big.get("wt_ext")),
                   big.get("wt_held") == 0 and big.get("wt_ext") == 1)
-            check("BIG22 after: no underrun in %.0f s (before: %d, %.2f s "
+            check("BIG22 after: no underrun in %.0f s (before: %s, %.2f s "
                   "silent)" % (big["dt"], hb["big"]["under"],
                                hb["big"]["silence"]),
                   big["under"] == 0 and big["silence"] < 0.25,
@@ -505,7 +536,7 @@ def main():
                   sts.get("held0") == 1 and
                   any(s.startswith("Loading") for s in sts["said"]),
                   repr(sorted(sts["said"])))
-            check("ST22S after: no underrun (before: %d, %.2f s silent)"
+            check("ST22S after: no underrun (before: %s, %.2f s silent)"
                   % (hb["sts"]["under"], hb["sts"]["silence"]),
                   sts["under"] == 0 and sts["silence"] < 0.25,
                   "%d underruns, %.2f s silent" % (sts["under"],
@@ -517,23 +548,23 @@ def main():
                   "%.2f s silent)" % (why, stl["under"], stl["silence"]),
                   why is not None and why in stl["said"],
                   repr(sorted(stl["said"])))
-            say("     another window reading: before %d underruns / %.2f s "
+            say("     another window reading: before %s underruns / %.2f s "
                 "silent, after %d / %.2f s (its scan still running at the "
                 "end: %s)" % (hb["comp"]["under"], hb["comp"]["silence"],
                               ha["comp"]["under"], ha["comp"]["silence"],
                               ha["comp_scanning"]))
         if "floppy" in legs:
-            fb = leg_floppy("before", bo88, bsyms, tmp)
+            fb = WAVE4["floppy"] if rec else leg_floppy("before", bo88, bsyms, tmp)
             fa = leg_floppy("after", after, syms, tmp)
             lg = fa["long"]
             check("LONG after: no underrun in %.0f s off the floppy (before: "
-                  "%d, %.2f s silent)" % (lg["dt"], fb["long"]["under"],
+                  "%s, %.2f s silent)" % (lg["dt"], fb["long"]["under"],
                                           fb["long"]["silence"]),
                   lg["under"] == 0 and lg["silence"] < 0.25,
                   "%d underruns, %.2f s silent" % (lg["under"],
                                                     lg["silence"]))
         if "bigclu" in legs:
-            cb = leg_bigclu("before", bo88, bsyms, tmp, fx)
+            cb = WAVE4["bigclu"] if rec else leg_bigclu("before", bo88, bsyms, tmp, fx)
             ca = leg_bigclu("after", after, syms, tmp, fx)
             check("32 KB clusters before: refused (%r)" % cb["status"],
                   cb["status"] == "Cluster too large" and cb["frames"] == 0)

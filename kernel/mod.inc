@@ -617,9 +617,8 @@ mod_cfix:
 ; number changes on every commit (SPEC.md 14.2), so agreement here is by
 ; construction and disagreement is refused rather than executed.
 ; -----------------------------------------------------------------------------
-mod_check:
-    push bx
-    mov es, [bx+MODR_SEG]
+mod_check:                      ; (BX is never written here - no bank,
+    mov es, [bx+MODR_SEG]       ; kernel size pass 15, -3)
     mov ax, di                  ; the id mod_need was CALLED with - nine
 %ifdef OS88_SHORTCUTS
     cmp al, MOD_SETS            ; ...whose image is CTRL.DRV's, cut short
@@ -696,13 +695,12 @@ mod_check:
                                 ; in between
     add di, 4
     loop .arm
-    pop bx
     clc
     ret
 .badarm:
     call mod_disarm             ; a half-armed block is the one state nothing
 .bad:                           ; downstream could survive - and it falls
-    pop bx                      ; into the refusal every other check takes
+                                ; into the refusal every other check takes
     stc
     ret
 
@@ -790,10 +788,12 @@ mod_hi:
 .free:
     pop dx                      ; the conventional claim's selector
     mov [bx+MODR_SEG], ax       ; MODR_SEG = the selector
+%ifdef MEGA_E9
     push si
     mov si, [bx+MODR_FILE]      ; ...and where it went, to the debug port
     call MEGA_SEL_CODE:mega_modsayf
     pop si
+%endif
     push bx
     mov bx, MEM_K_MOD
     call mem_free_x

@@ -2183,9 +2183,8 @@ os88ui_sbthumb:
     jle .out
     mov ax, cx
 .out:
-    clc
-    jmp short .done
-.none:
+    db 0xA8                     ; test al, imm8 over the stc: CF = 0, which is
+.none:                          ; every caller's `jc` (kernel size pass 15)
     stc
 .done:
     pop si
@@ -2385,8 +2384,8 @@ os88ui_sbhit:
     mov al, OS88UI_SBTHUMB
     jl .out
     mov al, OS88UI_SBPGDN
-    jmp short .out
-.none:
+    db 0xA9                     ; test ax, imm16 over the mov: AL kept, the
+.none:                          ; answer is AL alone (kernel size pass 15)
     mov al, OS88UI_SBNONE
 .out:
     pop di
@@ -2658,7 +2657,7 @@ os88ui_sbgrab:
     mov [os88ui_sbd_rate], al
     mov cx, dx                  ; CX = the press's y; sbthumb answers in DX
     call os88ui_sbthumb         ; AX = the thumb's top, DX = its height
-    jc .none                    ; everything fits, or the track is too short
+    jc .out                     ; everything fits, or the track is too short
     sub cx, ax
     mov [os88ui_sbd_off], cx    ; THE ANCHOR
     mov ax, [bx+12]
@@ -2670,10 +2669,8 @@ os88ui_sbgrab:
     mov byte [os88ui_sbd_on], 1
     UI_TICKS                    ; AX = the tick the rate is measured from
     mov [os88ui_sbd_last], ax
-    clc
-    jmp short .out
-.none:
-    stc
+    clc                         ; (the refusal takes its `jc` straight to .out
+                                ; with CF = 1 - kernel size pass 15)
 .out:
     pop dx
     pop cx
@@ -2720,9 +2717,9 @@ os88ui_sbtrack:
     jb .nothing                 ; too soon: the thumb moved, the view waits
     mov [os88ui_sbd_last], si   ; the deadline is banked at the COMMIT, so a
     mov ax, di                  ; hand that pauses and moves again is served
-    clc                         ; at once rather than waiting out a window it
-    jmp short .out              ; already sat through
-.nothing:
+                                ; at once rather than waiting out a window it
+    db 0xA8                     ; already sat through. test al, imm8 over the
+.nothing:                       ; stc: CF = 0, the answer (kernel size pass 15)
     stc
 .out:
     pop di
@@ -2730,8 +2727,7 @@ os88ui_sbtrack:
     pop dx
     pop cx
     ret
-.no:
-    stc
+.no:                            ; ...and `jc` brings CF = 1 here already
     ret
 
 ; -----------------------------------------------------------------------------
@@ -6582,29 +6578,11 @@ OS88UI_KBTN_BODY os88ui_kbtn, os88ui_btn
 ;
 ; Packages never see either: both are inside %ifdef OS88UI_KERNEL.
 ; -----------------------------------------------------------------------------
-os88ui_btn_f:
-    call os88ui_kbtn            ; **os88ui_kbtn AND NOT os88ui_btn.** This
-    retf                        ; entry's published contract is BX = a RECT,
-                                ; SI = the label, DI = the flags - the
-                                ; loose-register one - and the far callers are
-                                ; ctrl.inc and hiber.inc, which are on-demand
-                                ; modules with a CS of their own and cannot be
-                                ; converted by editing apps/ or kernel/ alone.
-                                ; os88ui_kbtn is exactly that contract staged
-                                ; into the one control, so the far side is
-                                ; unchanged and there is still only one
-                                ; painter underneath.
-                                ;
-                                ; It pointed straight at os88ui_btn for one
-                                ; build and that was a REGRESSION: os88ui_btn
-                                ; takes a RECORD now, so a rect arrived where
-                                ; a record was expected, the live count and
-                                ; the rect pointer were read out of the rect's
-                                ; own coordinates, and the Control Panel's
-                                ; Date/Time page filled the whole screen white
-                                ; while Theme lost its buttons. A FAR call is
-                                ; invisible to a grep for `call os88ui_btn`,
-                                ; which is how the sweep missed both.
+; (os88ui_btn_f, the far `call os88ui_kbtn / retf` entry, went in kernel
+; size pass 15: its callers are fdlg.inc, .cold beside os88ui_kbtn and so a
+; NEAR call, and CTRL.DRV and HIBER.DRV, which reach it through their own far
+; hops - CPXC and hbg_cgo - into os88ui_kbtn itself. It pointed at os88ui_btn
+; for one build once, and that was a REGRESSION: os88ui_btn takes a RECORD.)
 %endif                          ; OS88UI_KBTNIMG (os88ui_kbtn, os88ui_btn_f)
 %ifdef OS88UI_ARM
 ; ...and the arm's three, for ctrl.inc - which is an ON-DEMAND MODULE

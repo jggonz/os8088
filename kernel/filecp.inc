@@ -626,7 +626,7 @@ fcp_run2:
     ret                         ; the paste, which reads AL alone, is done
 .nodisk:
     mov al, FERR_NODISK         ; AL is the courier: it is dead here, and .err
-    jmp short .seterr           ; reloads it with FCPS_ERR one line down
+    SKIPF2                      ; reloads it with FCPS_ERR one line down (test ax, imm16 over the mov: pass 15)
 .loop_err:
     mov al, FERR_NAME
 .seterr:

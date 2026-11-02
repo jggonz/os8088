@@ -2801,7 +2801,7 @@ cp_bemit:
 %ifdef KERN_SMALL
     call os88ui_kbtn            ; this image's own (fdlg.inc, OS88UI_KBTNIMG)
 %else
-    call COLD_SEG:os88ui_btn_f
+    CPXC os88ui_kbtn            ; (os88ui_btn_f went: kernel size pass 15)
 %endif
 %ifdef KERN_BIG
 .out:
@@ -3063,12 +3063,12 @@ cp_thmv_open:
     mov ch, [thm_kind]
     mov bp, [bx+DRVR_ENT]
     mov al, THMV_OPEN
-    call COLD_SEG:drvf_drv_call
+    CPXC drv_call
     jnc .out
     mov bx, thmv_row            ; it loaded and then refused: give it back -
     mov bp, [bx+DRVR_ENT]       ; the panel close's own two steps (the tail
     mov al, THMV_CLOSE          ; of drv_cp_closed_x), through the two far
-    call COLD_SEG:drvf_drv_call ; entries. The row and the entry are loaded
+    CPXC drv_call               ; entries. The row and the entry are loaded
     CPXC drv_release  ; again: a refusing driver may answer in
 .no:                            ; BX, and drv_call spends BP
     stc
@@ -4171,7 +4171,7 @@ cp_vid_vxcall:
     cmp word [bx+DRVR_SEG], 0
     je .no
     mov bp, [bx+DRVR_ENT]
-    call COLD_SEG:drvf_drv_call
+    CPXC drv_call
     pop bp
     pop bx
     ret
@@ -4551,7 +4551,7 @@ cp_vid_click:
     call cxf_sync               ; Extend: EXTD.DRV FIRST (SPEC.md 39.19.6)
     jc .mref                    ; refused, and [vid_dmode] is Single again
     call vid_disp_init           ; (vid_disp_relayout's three, written out:
-    call COLD_SEG:desk_rowcalc_x ; it was a resident far body this image
+    call wm_rowcalc              ; it was a resident far body this image
     call wm_refit                ; alone called - kernel size pass 13; the
                                  ; first and last are this image's own now)
     call cxf_sync               ; Single: the image goes AFTER the collapse

@@ -608,10 +608,21 @@ def main():
                      r'|(?:mov|add|sub|or|and|xor|inc|dec|adc|sbb|not|neg'
                      r'|xchg|shl|shr|rol|ror)\s+(?:(?:byte|word|dword)\s+)?'
                      r'\[\s*cs\s*:)', re.I)
+    #
+    # ...EXCEPT CODE `.mega` CARRIES FOR REAL MODE (SPEC.md 53.2.3, the
+    # real-mode bracket's twins): assembled there and never run there - it is
+    # COPIED below 1MB and run in real mode at a paragraph of its own, where
+    # `push cs` is just its own segment. Bracketed by `; ovlchk: real mode` and
+    # `; ovlchk: end real mode` comments, and nothing else is exempt
     m_bad = []
     for f in kfiles:
-        for sect, n, line in sections(f):
-            if sect == '.mega' and MCS.search(line):
+        rm = False
+        for sect, n, line, raw in sections_raw(f):
+            if 'ovlchk: end real mode' in raw:
+                rm = False
+            elif 'ovlchk: real mode' in raw:
+                rm = True
+            if sect == '.mega' and not rm and MCS.search(line):
                 m_bad.append((f, n, line.strip()[:60]))
     for f, n, src in m_bad:
         print("%s:%d: .mega names CS as more than a read: %s" % (f, n, src),
@@ -1013,11 +1024,26 @@ def main():
     # at the right offset in the wrong segment. Every reference to a `.mega`
     # data label must be in `.mega` and either inside `[cs:...]` or an offset
     # loaded into a register for a CS-reading routine (`mov si, msg`).
+    # ...and the REAL-MODE region's (`; ovlchk: real mode`, above) is neither:
+    # its data is the COPY's, written and read with DS = CS below 1MB, and the
+    # protected-mode code that fills that copy names those labels as OFFSETS
+    # into a claim's selector, never as `.mega`'s own bytes
+    rmlines = {}
+    for f in kfiles:
+        rm, s = False, set()
+        for sect, n, line, raw in sections_raw(f):
+            if 'ovlchk: end real mode' in raw:
+                rm = False
+            elif 'ovlchk: real mode' in raw:
+                rm = True
+            if rm:
+                s.add(n)
+        rmlines[f] = s
     mdata = {}
     for f in kfiles:
         pend = None
         for sect, n, line in sections(f):
-            if sect != '.mega':
+            if sect != '.mega' or n in rmlines[f]:
                 pend = None
                 continue
             m = re.match(r'^([A-Za-z_]\w*)(:?)\s*(.*)$', line)
@@ -1057,7 +1083,7 @@ def main():
     # whatever `.mega` holds at that offset once the routine moves.
     for f in kfiles:
         for sect, n, line in sections(f):
-            if sect != '.mega':
+            if sect != '.mega' or n in rmlines[f]:
                 continue
             for mm in re.finditer(r'\[\s*cs\s*:\s*([A-Za-z_]\w*)', line, re.I):
                 lab = mm.group(1)

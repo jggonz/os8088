@@ -26,10 +26,9 @@
 ;   Q      the ring refilled with 00h and CONS read, then 10 ticks later
 ;          CONS and the ring again: unchanged, or the close left the DMA or
 ;          the IRQ running
-;   L      the LEGACY record stream, unchanged by SPEC.md 34.6.4: a 6,000
-;          byte grant, verb 4 at 8,000 Hz with that capacity, 20 ticks,
-;          verb 3 (paused, 6,000 - the capacity filled), verb 5's first two
-;          bytes, verb 2
+;   L      the OLD record stream, which SPEC.md 34.6.4 retired: a 6,000
+;          byte grant and verb 4 at 8,000 Hz into it, which must answer 7
+;          and open nothing (the run below is what it did when it opened)
 ;   S      the host makes the driver a SINGLE-CYCLE DSP ([sbl_auto] = 0) and
 ;          sets the go byte; verb 4 EXT on the ring must then answer 7. Not
 ;          run (EEEEh) if no go arrives within 15 s
@@ -282,7 +281,7 @@ sc_idle:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_leg - the legacy verb 4: a grant, the drain task, capacity-full pause
+; sc_leg - verb 4 into a grant, the retired record stream: 7 (SPEC.md 34.6.4)
 ; -----------------------------------------------------------------------------
 sc_leg:
     mov cx, SC_LCAP

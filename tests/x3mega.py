@@ -113,8 +113,7 @@ def want(cond, what):
 
 
 def bad_lines(box):
-    return [l for l in box.lines() if l.startswith("kern_mega FAULT") or
-            l.startswith("kern_mega CLOSED")]
+    return box.faults()
 
 
 class X3(object):
@@ -309,14 +308,14 @@ def leg_conv(out):
             box.until(lambda: x.st()["md"] == MD_IDLE, "the stop", 60, 0.5)
         for _ in range(Q_XTSTD):
             box.key("q")
-            time.sleep(0.4)
+            box.guest_sleep(0.4)
         want(x.rd(("x3_st", 3))[0][2] == Q_XTSTD,
              "%s: the override is XT STANDARD" % leg)
         box.key("d")
         box.until(lambda: x.st()["md"] == MD_CHOOSE, "the drive dialog",
                   120, 0.5)
         box.key("Return")                       # C:, the only hard drive
-        time.sleep(3)
+        box.guest_sleep(3)                      # GUEST seconds
         box.key("Return")                       # the Save dialog, on C:
         box.until(lambda: bad_lines(box) or x.st()["md"] == MD_CONV,
                   "the conversion", 120, 0.3)

@@ -282,6 +282,14 @@ INCLUDES = [
      "`BANANA~1.MOD`, a legal name left alone, always `~1`). ONE copy, so "
      "FTPD's uploads and Telnet's Zmodem downloads land on the same name by "
      "construction; `tools/os88bbs.py`'s `mangle83` is its reference."),
+    ("os88real.inc", "53.2.3",
+     "A package's half of `FSXF_REAL`, the fsx bracket in real mode on "
+     "kern_mega: `os88real_prep` asks `SEG_REAL` for every claim word of an "
+     "`OS88REAL_LIST` at the door (CF = 1: one has no real segment - do not "
+     "ask for the bit), and `os88real_swap`, first and last in the entry "
+     "proc, exchanges them with the answers only when the bracket IS real - "
+     "so a bracket the kernel ran in protected mode instead keeps its "
+     "selectors. The kernel renames nothing of yours."),
     ("os88rseq.inc", "18.4.8.1",
      "`os88_rseq`: `OSAPI_FILE_READ_AT`'s registers plus a 16-byte cursor at "
      "`DS:DI`, served by `OSAPI_FILE_READ_SEQ` - one FAT link a chunk where "

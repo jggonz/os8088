@@ -15,26 +15,39 @@ mix_icon:
     cmp byte [volume_iconpaper], CBLACK
     jne .draw
     ; A 1bpp BLIT1 is already in screen polarity; its pen cannot invert it.
-    ; Reuse the modal slider's scratch for the small Dark-theme bitmap.
-    mov di, volume_band
-    mov cx, 24
-    cld
-.invert:
-    lodsw
-    not ax
-    stosw
-    loop .invert
-    mov si, volume_band
+    ; So the bitmap is inverted IN PLACE, drawn, and inverted back: the slider
+    ; scratch this borrowed is in the popup's own claim now (kernel size pass
+    ; 15), and nothing else reads mix_speaker - the UI task is the only
+    ; caller, and it is inside this routine until both passes are done.
+    call mix_icon_inv
+    call .blit
+    call mix_icon_inv           ; ...and back
+    jmp short .out
 .draw:
-    mov ax, cx
+    call .blit
+.out:
+    pop es
+    clc
+    ret
+.blit:                          ; ES:SI = the bitmap
     mov bx, 2
     mov cx, 24
     mov dx, 16
     mov bp, 3
     mov ax, [volume_iconx]      ; set by the entry below, before AX was ink
     call OSAPI_GFX_BLIT1
-    pop es
-    clc
+    ret
+; mix_icon_inv - mix_speaker's 48 bytes inverted in place; keeps SI
+mix_icon_inv:
+    push si
+    mov si, mix_speaker
+    mov cx, 24
+.i:
+    not word [si]
+    inc si
+    inc si
+    loop .i
+    pop si
     ret
 mix_icon_entry:
     mov ax, (CBLACK << 8) | CWHITE  ; legacy verb keeps its original palette
@@ -107,15 +120,18 @@ volume_popup:
     mov [volume_x], bx
     mov ax, MVP_Y+71
     mov [volume_bottom], ax
-    ; X and width are byte-aligned: 26 columns * actual rows * planes.
-    ; 2KB mono, 8KB VGA/EGA, 15/30KB VESA at 8/16bpp.
+    ; X and width are byte-aligned: 26 columns * actual rows * planes, and
+    ; the slider's band in front of them (kernel size pass 15: it was 968
+    ; resident bytes of every mixer machine, for a panel that is up for
+    ; seconds). 3KB mono, 9KB VGA/EGA, 16/31KB VESA at 8/16bpp - each one
+    ; KB above what the saved pixels alone took.
     sub ax, MVP_Y-1
     mov bx, MVP_W/8
     mul bx
     xor bx, bx
     mov bl, [volume_planes]
     mul bx
-    add ax, 1023
+    add ax, VOLUME_BANDSZ + 1023
     mov cl, 10
     shr ax, cl
     call OSAPI_MEM_CLAIM
@@ -124,7 +140,7 @@ volume_popup:
     call OSAPI_GFX_LOCK
     call volume_rect
     mov es, [volume_save]
-    xor di, di
+    mov di, VOLUME_BANDSZ       ; the pixels go after the band
     call OSAPI_GFX_SAVE
     jc .nosave
     mov al, CWHITE
@@ -243,7 +259,7 @@ volume_popup:
     call far [volume_bridge]
     call volume_rect
     mov es, [volume_save]
-    xor si, si
+    mov si, VOLUME_BANDSZ
     call OSAPI_GFX_REST
     ; Consume the entire dismissing gesture, including a held outside press.
 .drain:
@@ -326,7 +342,16 @@ volume_set:
 volume_label:  db 'Volume',0
 volume_memerr: db 'Volume needs memory',0
 
-%define MIXUI_BUFFER volume_band
+%define MIXUI_BUFFER 0           ; THE BAND IS AT THE FOOT OF THE POPUP'S
+%define MIXUI_BAND_SEG volume_save  ; CLAIM, not in this image: mixui_draw
+                                ; runs only while the popup holds it
+%define MIXUI_H 44              ; volume_popup FILLS the panel white before
+                                ; the first band, and nothing but the band
+                                ; draws inside it, so the four blank rows
+                                ; under the scale marks need not be written
+                                ; at all: 88 bytes of the band, the same
+                                ; pixels on the glass
+VOLUME_BANDSZ equ 176 * MIXUI_H / 8 ; the band's bytes at the claim's foot
 %include "os88mixui.inc"
 
 %macro VOLUME_STATE 0
@@ -343,5 +368,4 @@ volume_planes: db 0
 volume_drag: db 0
 volume_prev: db 0
 volume_btn: db 0
-volume_band: times 176*48/8 db 0
 %endmacro

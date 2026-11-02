@@ -405,9 +405,8 @@ menu_activate:
     call menu_relayout
     stc
     ret
-.same:
-    clc
-    ret
+.same:                          ; `je` off an equal `cmp`: CF = 0 already
+    ret                         ; (kernel size pass 15: the clc went)
 
 ; -----------------------------------------------------------------------------
 ; OSAPI_MENU_OWNER - who is the ACTIVE APPLICATION? (SPEC.md 12/12.6)
@@ -634,8 +633,8 @@ menu_relayout:
 %if AMENU_TITLE != MB_TITLE || AMENU_ITEMS != MB_ITEMS || AMENU_NITEM != MB_NITEM || MB_TITLE != 0 || MB_ITEMS != 2 || MB_NITEM != 4 || AMENU_ENTSZ != 6
   %error "menu_relayout copies an AMENU entry's first three words into the MB record with three movsw, and steps SI by the copy alone"
 %endif
-    jmp short .done
-
+    db 0xA8                     ; test al, imm8 over the `pop cx`: flags are
+                                ; dead at .done (kernel size pass 15)
 .full:
     pop cx                      ; the bar is full: everything from here on
                                 ; is dropped, so the cells that DID fit keep
@@ -681,12 +680,8 @@ menu_relayout:
 ; Close Window is already an item of its own File menu (SPEC.md 12.3).
 ; -----------------------------------------------------------------------------
 menu_ab_cell:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
+    call kent_di                ; (kernel size pass 15: kent_di and ES, popped
+    push es                     ; ahead of kret_di)
     xor ax, ax                  ; AX is wm_about_get's to fill below
     mov [menu_abcell], ax
     mov bx, [menu_win]
@@ -704,9 +699,10 @@ menu_ab_cell:
     call menu_ab_cat
     mov byte [di], 0
     pop di
-
-    mov bx, [menu_win]          ; --- the items: About if it is offered, then
-    call wm_about_get           ; Close, which every application gets (12.7)
+                                ; --- the items: About if it is offered, then
+    call wm_about_get           ; Close, which every application gets (12.7):
+                                ; BX is still [menu_win] - neither copy, menu_es
+                                ; nor KES touches it (kernel size pass 15)
     xor bx, bx                  ; BX = Close's index
     or ax, ax
     jz .noab
@@ -742,9 +738,7 @@ menu_ab_cell:
     inc word [menu_nbar]
 .out:
     pop es
-    pop di
-    pop si
-    jmp kret_cx
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_ab_cat - append a NUL string to a buffer (internal to menu_ab_cell)
@@ -1158,7 +1152,9 @@ menu_bt_raw:
     mov di, [toast_scell]
     mov si, toast_buf
     mov al, ' '                 ; the gap cell FIRST, into the loop past its
-    jmp short .sput             ; load: [toast_scn] counts it, and menu_bemit
+    db 0xA8                     ; load: [toast_scn] counts it, and menu_bemit
+                                ; (test al, imm8 over the lodsb: AL kept, and
+                                ; the `or` rewrites every flag - pass 15)
 .sch:                           ; white-fills its left 4px after the run
     lodsb                       ; (SPEC.md 59.8.1). Pass 14: 4 bytes
 .sput:                          ; **BIT 7 SET ON EVERY CELL** (SPEC.md 59.2):
@@ -2118,11 +2114,9 @@ menu_kbnav:
     or al, al
     jz .noj                     ; Left/Right keep their pixel step, which is
                                 ; how the pointer leaves a menu sideways
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; AX too, so the exit is kretfc_di's run - AX
+                                ; was "clobbered" and comes back unchanged now,
+                                ; which no caller minds (kernel size pass 15)
     cbw
     mov si, ax                  ; SI = the direction, and the sign the scan
                                 ; below walks in
@@ -2194,16 +2188,14 @@ menu_kbnav:
     mov [mouse_y], bx           ; rather than by a rectangle known here
     mov byte [cur_shchk], 1     ; ...and the pointer MOVED (SPEC.md 7.2.1.1)
     inc byte [ui_post]          ; ...and SAY SO once (SPEC.md 13.13)
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
     clc
-    retf                        ; FAR: kbm_move reaches this across the segment
+    jmp kretfc_di               ; FAR: kbm_move reaches this across the segment
 .no:                            ; boundary now, and no thunk stands in between
     stc                         ; (SPEC.md 2.6.1)
     retf
+    nop                         ; PARITY, never executed or read (kernel size
+                                ; pass 15): `.cold` between here and dsk_xfer
+                                ; came out an odd number of bytes shorter
 section .text
 
 ; -----------------------------------------------------------------------------
@@ -2289,10 +2281,7 @@ menu_item_dis:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 menu_item_xor:
-    push ax
-    push bx
-    push cx
-    push dx
+    call kent_di                ; (kernel size pass 15)
     mov cl, 4
     shl ax, cl                  ; index * 16
     add ax, [menu_y1]
@@ -2305,7 +2294,7 @@ menu_item_xor:
     mov cx, [menu_x2]
     dec cx
     call vga_xor_fill_vram      ; VRAM-direct transient overlay (SPEC.md 32)
-    jmp kret_dx
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_title_xor - toggle the highlight on the tracked menu's title cell
@@ -2314,18 +2303,14 @@ menu_item_xor:
 ; clobbers: nothing (flags only)
 ; -----------------------------------------------------------------------------
 menu_title_xor:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
+    call kent_di                ; (kernel size pass 15)
     mov si, [menu_ent]
     mov ax, [ss:si + MB_XL]
     xor bx, bx
     mov cx, [ss:si + MB_XR]
     mov dx, MBAR_H - 2          ; the black rule stays black
     call gfx_xor_fill
-    jmp kret_si
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; menu_trunc - stage an item string, truncated to MENU_MAXCH glyphs
@@ -2682,8 +2667,7 @@ menu_bend:  resw 1              ; ...and the first cell past the last menu's
                                 ; menu_bar_text, read by toast_place only
 menu_bfirst: resw 1             ; the span that differs, 0FFFFh = none
 menu_blast: resw 1
-menu_sseg:  resw 1              ; the save-under claim's segment, 0 = none
-                                ; (menu_drop then repaints instead)
+                                ; (menu_sseg is memory.inc's mem_rr_lone)
 menu_tbuf   equ clk_str         ; menu_trunc's staging buffer. It was carved
                                 ; out of the clock's field buffer, which went
                                 ; when the clock moved into menu_bcell - and

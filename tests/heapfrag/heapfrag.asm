@@ -818,12 +818,24 @@ hf_run:
     cmp word [hf_bigseg], 0     ; the hole this pass needs is the big claim's,
     je .dmano                   ; and without one there is nothing to open
     call OSAPI_MEM_AVAIL        ; AX = largest run KB
+    mov dx, ax                  ; (DX = the run, the block's other ceiling)
     mov cl, 2
-    shr ax, cl                  ; a quarter of it, capped at HF_DMAKB: the
-    cmp ax, HF_DMAKB            ; head has to fit inside ONE 64KB page, so the
-    jbe .dmasz                  ; block does too
+    shr ax, cl                  ; a quarter of it...
+    mov cx, [hf_s]
+    inc cx                      ; ...and MORE than one comb block: the gaps
+    cmp ax, cx                  ; the comb left are hf_s KB each, and a block
+    jae .dmabig                 ; that fits one lands there first-fit - below
+    mov ax, cx                  ; HF_PIN when the layout puts a gap there, where
+.dmabig:                        ; moving it can merge nothing with the hole
+                                ; freed above the pin (kern_mega's merged
+                                ; layout: claimed at 4000 under a pin at 4860,
+                                ; and the ask was unfundable, rightly refused)
+    cmp ax, HF_DMAKB            ; ...capped at HF_DMAKB: the head has to fit
+    jbe .dmasz                  ; inside ONE 64KB page, so the block does too
     mov ax, HF_DMAKB
 .dmasz:
+    cmp ax, dx
+    ja .dmano                   ; no run holds it: nothing to say
     cmp ax, 4
     jb .dmano                   ; too small to say anything
     mov [hf_hik], ax

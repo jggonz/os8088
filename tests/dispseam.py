@@ -227,8 +227,16 @@ def leg(image, apps, machine, tree, say):
                 sys.exit("dispseam: it will not shrink to display 1's %d rows "
                          "(still %d), so the drag below would resize as well "
                          "as move" % (d1y + d1h - y, wh))
-        if phase(x, ww) == 0:
-            x, y, ww, wh = grow(8)      # +8 of width moves the pen by 4
+        # +8 of width moves the pen by 4. CLOSED-LOOP, because the drag is
+        # not exact everywhere: 86Box's pointer moves in two-pixel host
+        # steps, and the mono leg of mega-dispseam grew 322 -> 338, sixteen,
+        # which is the grid again and a run with nothing to test. So aim at
+        # the width + 8 and correct by what is left, a few times at most.
+        want = ww + 8
+        for _ in range(4):
+            if phase(x, ww) != 0:
+                break
+            x, y, ww, wh = grow(want - ww if want != ww else 8)
             say("...grown to %dx%d, pen phase now %d" % (ww, wh, phase(x, ww)))
         if phase(x, ww) == 0:
             sys.exit("dispseam: the caption is ON the 8px grid, so the seam "

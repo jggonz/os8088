@@ -428,6 +428,14 @@ def restart(m):
             if attempt == 2:
                 print("   the restart key needed sending TWICE (the first "
                       "landed between hbm_kbdrain and int 16h)")
+            # ...AND ITS WINDOW. hb_mode says the fresh boot will ask; the
+            # KIND_HIBER instance that asks comes after the boot's own disk
+            # work, which on the driver arm (HDD.DRV wanted by SYSTEM.CFG)
+            # outlasted the 8 guest seconds every caller's quiet() allows -
+            # a progress bar on the menu bar and no window to click yet
+            M.until(m, lambda mm: any(k == KIND_HIBER
+                                      for k, _ in instances(mm)),
+                    "the question's window", poll=0.05, guest=120)
             return
         except M.MartyError:
             v = m.video()

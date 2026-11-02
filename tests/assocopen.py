@@ -48,23 +48,29 @@ def say(s):
 
 
 def bp_open(m, mo, wx, wy, name):
-    """Double-click `name` with a breakpoint armed across the SECOND press.
+    """Double-click `name` inside a breakpoint on `fm_repaint`.
 
-    Returns (repainted, span_in_ticks). The pointer is placed and both edges
-    of the first press are PROVEN against the guest's own published
-    `mouse_btn` (SPEC.md 9.4.3) - a packet clocked into a 1200-baud UART
-    while the previous one is in flight is simply dropped, and the only
-    difference a caller can see is that the guest did nothing.
+    Returns (repainted, span_in_ticks). The WHOLE gesture is
+    os88mouse.dblclick's, on both emulators, inside the trace: its presses
+    are stepped (MartyPC) or queued (Bochs) on a STOPPED guest with the
+    trace's pump held, and a stop it meets is recorded for the trace - so the
+    span between the presses is the UART's and the ISR's, not the host's.
+    The first press is inside the trace, which is harmless for its target: a
+    press on a row moves the selection band (fm_lsel_bar / fm_sel_bar) and
+    never reaches fm_repaint.
 
-    The arm goes between the two presses rather than around both, because
-    the FIRST press legitimately draws (it moves the selection band, SPEC.md
-    22.2) and the second is the whole question. The final RELEASE is sent
-    unproven: by then the guest may be standing at the breakpoint, where it
-    decodes nothing and `_edge` could only ever time out.
-
-    ON BOCHS (kern_mega) none of that applies: the whole gesture is
-    os88mouse.dblclick's, queued on a stopped guest inside the trace, and
-    the span is None - see the comment at the call.
+    It was HAND-MADE on MartyPC - a proven press, a proven release, the arm,
+    a proven second press, each edge a poll loop of host round trips - and
+    that span was a quantity of the BOX: MartyPC runs several times faster
+    than a 5150, so the ~80 host ms those three proofs take on this box were
+    7-8 guest ticks against a window of 9, the release's proof alone 1-2 or
+    4-5 ticks depending on whether it was seen on the first poll or after a
+    20 ms nap. And the ticks it read back were each taken AFTER a proof, so
+    the presses' true birth ticks could be further apart than the 7 it
+    reported: the folder did not open, half the runs, "7 ticks apart".
+    On Bochs a host-spaced gesture is worse still: `sync=slowdown` pays a
+    stopped guest's time back as a catch-up sprint, so 0.08 host seconds
+    read 9-10 ticks (docs/BOCHS.md, *The clock*).
     """
     entry = dispcp.row_of(m, S, name)
     row = dispcp.scroll_to(m, mo, S, UD, wx, wy, entry)
@@ -73,43 +79,11 @@ def bp_open(m, mo, wx, wy, name):
     os88marty.ui_done(m)
 
     bochs = getattr(m, "bochs", False)
-    t1 = 0
-    if not bochs:
-        if mo.where()[2] & 1:       # a button left down by something else
-            mo._edge(False)         # would make the first press no edge
-        mo._edge(True, hold=False)  # (no hold: it is a double-click's first)
-        t1 = mo.ticks()
-        mo._edge(False)
-
-    # The second press is inside the trace, and it has to be: `_edge` proves
-    # the press by polling the published `mouse_btn`, and a guest stopped at
-    # `fm_repaint` never publishes another one. It worked before only because
-    # the repaint cannot be reached until the click has been decoded - an
-    # ordering, not a guarantee - and the `finally` below was the other half
-    # of the same problem, clearing the set by hand so the NEXT fm_repaint
-    # would not stop the machine under the caller and time out every later
-    # step. A trace clears its own set on the way out, on both paths.
     with os88marty.bp_trace(m, "fm_repaint") as tr:
-        if bochs:
-            # KERN_MEGA UNDER BOCHS: the WHOLE gesture through
-            # os88mouse.dblclick, which queues all four edges on a STOPPED
-            # guest so they reach it in one pass of Bochs's GUI, a few guest
-            # ms apart (os88megabochs.queued_input) - its trace held, and
-            # any stop it meets recorded for it. Any spacing a host decides
-            # is wrong here: `sync=slowdown` pays a stopped guest's time back
-            # as a catch-up sprint, and the first press, the arm and an X
-            # chain with the second press in it measured 0.08 HOST seconds
-            # and 9-10 guest TICKS apart - two first clicks, the window being
-            # 9 (docs/BOCHS.md, *The clock*). The first press is inside the
-            # trace on this path, which is harmless for its targets: a
-            # press on a row moves the selection band (fm_lsel_bar /
-            # fm_sel_bar) and never reaches fm_repaint
-            mo.dblclick(x, y, settle=0)
-            t2 = t1
-        else:
-            mo._edge(True, hold=False)  # ...the double-click
-            t2 = mo.ticks()
-            m.mouse(0, 0, l=False)
+        # The gesture holds the pump and records its own stops (dblclick),
+        # and a trace clears its set on the way out on both paths - so no
+        # later fm_repaint stops the machine under the caller
+        span = mo.dblclick(x, y, settle=0)
         # A hit, or the UI task asleep with nothing pending across a whole
         # tick: the open's pass is over, so a repaint it owed would have
         # stopped the machine already. (It was `tr.wait(1, limit=30)`, whose
@@ -131,12 +105,7 @@ def bp_open(m, mo, wx, wy, name):
                  required=False)
     state = tr.n > 0
     os88marty.ui_done(m)
-    span = (t2 - t1) & 0xFFFFFFFF
-    if span >= os88mouse.DBL_TICKS:
-        sys.exit("assocopen: the two presses were %d ticks apart and the "
-                 "window is %d - the guest saw two FIRST clicks, so nothing "
-                 "below is about a double-click at all"
-                 % (span, os88mouse.DBL_TICKS))
+    # (dblclick raises on a span of DBL_TICKS or more itself)
     return state, (None if bochs else span)
 
 

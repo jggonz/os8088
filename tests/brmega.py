@@ -290,13 +290,11 @@ def main():
             fetch("net", WIDE)
             fetch("small", TALL)
 
-        bad = [ln for ln in box.lines() if "kern_mega FAULT" in ln or
-               "kern_mega CLOSED" in ln]
+        bad = box.faults()
         want(not bad, "no kern_mega FAULT or CLOSED line%s"
              % "".join(" | " + ln for ln in bad[:3]))
     except Exception as e:      # noqa: BLE001 - the machine stopped
-        bad = [ln for ln in box.lines() if "kern_mega FAULT" in ln or
-               "kern_mega CLOSED" in ln]
+        bad = box.faults()
         want(False, "%s%s" % (e, "".join(" | " + ln for ln in bad[:3])))
     finally:
         try:

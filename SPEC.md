@@ -20495,7 +20495,7 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
 | HDD Control Panel page | `HDP_LX` 2 | **left** — a panel page draws on open and on a click. `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned; §11.94.4 |
 | HDD tool window | `HTW_LX` 4 | |
-| Recorder | 4 | **left** — two strings in `rc_draw_status`, whose one caller is `rc_draw_all`. Repaint-only; §11.94.4 |
+| Recorder | 4 | **left** — two strings in `rc_draw_status`, called by `rc_draw_all` and, during a take, by the record pump's timer every `RC_PUMP` ticks (§35); §11.94.4 |
 | ~~Minesweeper~~ | ~~4~~ | **protected, not a defect** — its densest text, the number on every revealed cell, is `+4` = an 8px glyph centred in a 16px cell; the mode text is `MN_BOARD_W/2`. Only a 2-glyph counter is genuinely off-grid. §11.94.4 |
 | ~~Piano, Arkanoid~~ | ~~2~~ | **left, and mostly not movable** — Piano's `PN_MSG_X` is already 112, and its key letter is `key_x + 5` off §11.98.1's run-time scaled keyboard; 4 of Arkanoid's 6 text sites are `OSAPI_FONT_WIDTH`-centred. What is left is one label and one score. §11.94.4 |
 | ~~Task Manager~~ | ~~five literal `+6` sites~~ | **done, and it was four** — §28.5: three of the five are `add ax, 6` on FRAME RECTS (the CPU graph, the bar, the RAM map), not pens. The four real ones are the memory page's XMS line and the heap page's three summaries, now at `TM_PEN`; §28.5 |
@@ -20550,8 +20550,8 @@ that row.
 centred; a fifth is a letter centred in a power-up body. The sixth is the score
 at `cx, 2`.
 
-**Recorder** is two strings in `rc_draw_status`, whose only caller is
-`rc_draw_all` — repaint-only. **The HDD pages** draw on open and on a click.
+**Recorder** is two strings in `rc_draw_status`, drawn by `rc_draw_all`
+and, during a take, by the record pump's timer (§35). **The HDD pages** draw on open and on a click.
 **Missile Command** computes every pen, and §48.17 already reduced its status
 strip to the span between the first and last differing cell.
 
@@ -57252,15 +57252,15 @@ Distinct package icons demandable at once, measured over the shipped images:
 most `ASSOC_NAPP` composed bodies. (This paragraph said 26 and 29 when the
 tree shipped fewer programs; the figure grows with every program written, which
 is why the store is sized by what one whole `ASSOC.DAT` can declare rather
-than by today's count.) `ICO_NROW` is **60** on `kern_big` - 60 x 82 = 4,920
-bytes plus §54.7.6.2's capture, 5,107 of a 5KB claim, so a full `ASSOC.DAT`
-(`ASC_NAPP` = 55) is absorbed whole with rows to spare - and 24 on
-`kern_small`, which SPEC.md 51.0 leaves no driver-backed volume and fewer
+than by today's count.) **That premise did not hold and §25.9.6 retires it**:
+the store is a 5KB first claim that GROWS to 20KB, so it holds what the
+machine has met rather than what one file can declare. `kern_small` keeps a
+fixed 24 rows, SPEC.md 51.0 leaving it no driver-backed volume and fewer
 packages.
 
-`ASC_NAPP` is 55: that is a VOLUME's question, and it is the most rows that
-fit 5KB with 64 extension rows beside them (§54.7.1). It was 32 and the 720KB
-apps disk held exactly 32 packages, so the cap was already binding there.
+`ASC_NAPP` is 90: that is a VOLUME's question, and it is the most rows that
+fit 8KB with 64 extension rows beside them (§54.7.7). It was 55 at 5KB, and
+32 before that, when the 720KB apps disk held exactly 32 packages.
 
 #### 25.9.3 What it replaced, and what `kern_small` pays instead
 
@@ -57335,6 +57335,63 @@ than a redraw — the absorbed rows go with it — so `ico_need` clears
 one three-sector re-read at the next mount rather than a sector per package.
 The rank stays `MEM_PG_TRIV` regardless: what is lost is still recoverable
 without asking the user for anything.
+
+#### 25.9.6 The store GROWS, a kilobyte at a time
+
+A fixed 60 rows was outgrown by the shipped disks themselves. A standard
+install of the two 1.44MB disks puts **50 distinct packages** on a hard disk,
+and the store holds a row per package PLUS a row per composed document body
+(§25.9: one per association slot, and one more whenever a slot's glyph
+changes) - so it filled, and `ico_add`'s *full* answer is §25's generic icon.
+The document types were the ones that lost, because they are composed last:
+only when a folder holding documents is browsed. An install of everything not
+retired needs ~64 package rows and ~22 document rows.
+
+**What a full store looked like in the field.** *"Icons go missing on the
+hard disk - `.IMG` first, and INSTALL.O88 - and come back after a restart."*
+A `*.IMG` takes its diskette picture (§18.101.6) in the DOCUMENT pass, which
+every listing harvests last, so it is the first body to find the store full;
+INSTALL.O88 sits at the root, a folder browsed late. The restart is the store
+starting empty. And the count is easy to reach: the size is half the key, so
+a floppy carrying a DIFFERENT BUILD of programs already on the hard disk
+takes a second row for each. `tests/icohd.py` is that machine - an install,
+a reboot from C:, ten re-sized packages and a `.IMG` on B: - and the tree
+before this section stops at 60 rows with three packages and the `.IMG` on
+the generic icon.
+
+So `ico_add`, finding the store full, **grows it** (once `ico_grow`, written
+at its one call site since kernel size pass 15), which takes the
+claim up one kilobyte with `mem_regrow` (§50.3) and works out the rows the new
+claim holds into `[ico_max]`. The first claim is still `ICO_KB` = 5 and still
+60 rows (the capture moved, below, into bytes the rounding already had), and the ceiling `ICO_KBMAX` = 20 is 247 rows:
+a row number is a byte and 0xFE/0xFF are `ICO_R_FOLDER` and `ICO_R_NONE`.
+A machine with a few programs pays for a few, and nothing that names a row
+changes - a row's OFFSET never moves inside the claim, only the claim's base
+can, and `[ico_seg]` is the one word every reader takes it from.
+
+**Why the grow cannot disturb its callers.** `ico_add` is reached from the
+harvest and from `asc_seed`'s walk of an `ASSOC.DAT` claim, both of which hold
+OTHER claims' segments across it. `mem_regrow` compacts nothing and sheds only
+blocks ranked strictly below the claimant, and the store is `MEM_PG_TRIV`, the
+cheapest rank there is - so a grow sheds nothing, moves nothing but the store,
+and on a heap with no room simply refuses, which is today's generic icon.
+
+**The capture (§54.7.6.2) moved to the HEAD of the claim** to make that true:
+it lived in the KB rounding past the last row, which is exactly where a grow
+adds rows. `ICO_CAP` is 0, `ICO_RBASE` = 188 is row 0, and `ico_rowoff`,
+`ico_scan` and the flush's own row walk (`ascw.inc`) add it. The first claim
+loses no row to it: (5,120 - 188) / 82 is still 60.
+
+**A shed resets it.** `ico_demote` zeroes `[ico_seg]` and the count word as
+before; the next `ico_need` claims `ICO_KB` again and writes `[ico_max]` and
+`[ico_kb]` as one word, so a store that comes back is a first claim and not
+the size the last one had reached.
+
+`kern_small` keeps a FIXED 24-row store and none of this: it has no
+associations (§54.0) and a diet on which no byte goes to growing it - it
+builds BYTE-IDENTICAL. Cost on `kern_big`, measured against the tree before:
+**79 bytes**, `.text` +2 (`[ico_max]`, `[ico_kb]`) and `.cold` +77 -
+resident, no rung crossed.
 
 ### 26.8 Desktop shortcuts
 
@@ -69674,8 +69731,8 @@ tone path enters `spk_gate_on` below the PWM half.
 ### 34.5 Sound Blaster — back, as a driver
 
 Retired once, and no longer: `drivers/sound/sb.inc` is the DSP scan, the
-stream verbs, the auto-init/single-cycle strategy gate and the deferred IRQ
-discovery, all of it inside `SOUND.DRV` rather than the kernel (§51.4). What
+stream verbs, the auto-init/single-cycle strategy gate and the IRQ
+discovery (at the attach, once a load: §34.5.7), all of it inside `SOUND.DRV` rather than the kernel (§51.4). What
 changed in the move is where its memory comes from — a **heap claim**
 (`OSAPI_MEM_CLAIM_DMA_HI`), not a pinned segment, which is why the 64KB
 DMA-page rule had to become something the allocator answers (§50.3) rather
@@ -70201,21 +70258,27 @@ reads the end of the stream as the end of the song.
   or into a driver in RAM. An unused line's vector is the BIOS's own dummy
   handler in its ROM, and nothing in os8088 hooks IRQ 5, so a hooked vector
   is a claim. It is read at discovery, when the candidates' vectors have
-  been put back.
+  been put back - at the driver's attach since §34.5.7.
 
-**Refused** means `sbl_f_irqdisc` answers "no usable card" for that winner
-on every path - the firing probe, the SB16 mixer's read-back and a PicoMEM's
-configured line - so the stream open fails with error 4. A package then
-takes its no-card path (the Audio Player and XTMP3 the speaker or the
-Covox, §86.21), the FM chip stays usable (it needs no IRQ), and the first
-refusal of a session raises the toast `IRQ 5 is the hard disk's` (24
-characters, §59.10). The cure is the card's jumper: IRQ 7 is the first
-candidate. A card on any other line is untouched, and so is every AT.
+**Refused** means `sbl_f_irqdisc` answers "no usable line" (`[sbl_irq]` =
+0FFh) for that winner on every path - the firing probe, the SB16 mixer's
+read-back and a PicoMEM's configured line - and **`sbl_attach` then refuses
+the DSP tier** as `DRVE_HW` (§34.5.7): no stream verb is published and
+`SND_RT_SB` is not set, so a package takes its no-card path (the Audio
+Player and XTMP3 the speaker or the Covox, §86.21), the OPL2 attaches alone
+(it needs no IRQ), and a Control Panel that turns the Sound Blaster tier on
+reports the refusal as it reports any other. **It says nothing**: the
+machine boots working, on FM, and the owner's rule is that a boot which
+changes something but works does not toast - there are boot toasts enough
+(it raised `IRQ 5 is the hard disk's` at the first open it refused until
+§34.5.7). The cure is the card's jumper: IRQ 7 is the first candidate. A
+card on any other line is untouched, and so is every AT.
 
-It cost `SOUND.DRV` 84 bytes of image (11,823 to 11,907), inside its 12 KB claim. `tests/sbirq5.py` (the
-`sbirq5` row) holds it: refused on an 8088 with a hooked IRQ 5, accepted on
-an unhooked one, on a 286 and a 386, and on IRQ 7; with the refusal broken,
-2 checks fail.
+It cost `SOUND.DRV` 84 bytes of image (11,823 to 11,907), inside its 12 KB
+claim, and since §34.5.7 none of it is resident. `tests/sbirq5.py` (the
+`sbirq5` row) holds it: refused (and silent) on an 8088 with a hooked IRQ 5,
+accepted on an unhooked one, on a 286 and a 386, and on IRQ 7; with the
+refusal broken, 2 checks fail.
 
 #### 34.5.6.1 ...and the disk that never hooks it: an ST11 on IRQ 5 (2026-10-26)
 
@@ -70244,15 +70307,85 @@ refusal would take the sound from. Whether a real ST11 drives the line
 while disabled is not known here. **The cure is the card's line**, as in
 34.5.6: `vm/pc5150`, `vm/viddemo-cga` and `vm/viddemo-herc`, the three
 profiles here with an ST11 and an SB 2.0, put the card on IRQ 7.
+
+#### 34.5.7 Found once a load: the scan and the discovery are attach-only (2026-10-30)
+
+**The Sound Blaster's reset scan, its IRQ discovery and the SB16's 16-bit
+channel test run ONCE, at `DRVV_ATTACH`** (`sbl_find`), and are laid out
+past `snd_keepmix` with the other attach-only code (§34.15.1, `SBL_ONCE` in
+`sb.inc`), so none of them is resident once the attach has answered. Until
+then the discovery waited for the first stream open (it was "deferred to
+first use") and the scan re-ran at every `DRVV_TIER` "on", which kept
+`sbl_f_irqdisc`, §34.5.6's IRQ 5 test, the four candidate stubs, their
+tables, `sbl_f_probe`, `sbl_dsp_rd` and `sbl_hdma_find` in RAM for the whole
+session on every machine - 820 bytes, for questions whose answers
+cannot change until the driver is reloaded.
+
+- **What is settled**: `[sbl_base]`, the DSP version and `[sbl_auto]`,
+  `[sbl_irq]` (0FFh = no usable line) and `[sbl_hdma]`. They sit OUTSIDE
+  `sbl_state_init`'s cleared run, so a tier change keeps them.
+- **`sbl_attach`** - the attach's second half and all of `DRVV_TIER`'s "on" -
+  refuses `DRVE_HW` with no base or no usable line, resets the DSP at the
+  settled base (a card that stopped answering is refused as the scan would
+  have refused it), and **hooks `sbl_isr` on the settled line** (`sbl_hook`).
+  `sbl_detach`'s `sbl_unhook` takes it off again. So the vector is held while
+  the DSP tier is up, from the attach, where it used to be from the first
+  open; nothing else hooks the candidates (§34.5.6), and the ISR's spurious
+  leg already answers an IRQ 7 that arrives with no stream.
+- **A discovery that confirms nothing** now refuses the DSP tier for the
+  load, where it used to refuse each open with error 4 and ask again at the
+  next. The OPL2 still attaches. It is retried once inside the discovery, as
+  before.
+- **The attach runs with interrupts on** - the F2h wait needs the tick, and
+  `pm_wait`'s header has the measurement that `drv_boot` calls the attach
+  with IF = 1; a mid-session load is a task's call like any other.
+- **`DRVV_HWINFO` now knows the line** whenever a card attached, so the
+  `BLASTER=` a DOS program is given carries `I` (§96.17.1).
+- **`snd_entry`'s attach body (`snd_attach`) moved below `snd_keepmix` with
+  them**: it runs once, before the shrink. `DRVV_READY` answers from a
+  five-byte `snd_ready` above it.
+
+| build | no mixer (`snd_keep`) | a mixer (`snd_keepmix`) | image |
+|---|---|---|---|
+| shipped (PicoMEM) | 7,501 → **6,681** (-820) | 11,046 → **10,226** (-820) | 12,085 → 12,026 |
+| `NOPICOMEM=1` | 7,295 → **6,501** (-794) | 10,840 → **10,046** (-794) | 11,575 → 11,516 |
+
+Those figures are the commit's. The tree they landed on also carries §34.6.4's
+external rings (WaveRack, which reached `main` while this was on the
+integration branch), whose ISR arm and verb 4 path are resident: measured on
+the merge, the shipped build keeps **6,863** with no mixer and **10,408** with
+one (`tests/unit/t_sndonce.py`) - +182 over the table, all of it §34.6.4's,
+and the mixer case's 182 crossed the KB back to 11. §34.6.5 is what took it
+back: 6,392 and **9,937**, 7KB and 10KB. Kernel size pass 15 took them to
+**5,797 and 8,622** - **6KB** and **9KB** - and split the no-mixer case by
+the hardware found (§34.15.1).
+
+`tests/sbirq5.py` and `tests/picomem.py` cut the discovery and `sbl_hook` out
+of `sb.inc` as they ship; `tests/unit/t_sndonce.py` holds the layout.
+
+**On kern_mega the line is hooked in REAL MODE**, at the boot's attach and
+before `mega_enter`, so the vector holds the image's PARAGRAPH - and when
+`drv_hiboot_f` then moves an `OS88_DRV_HIGHOK` image above 1MB,
+`mem_region_reloc` is asked about the image's SELECTOR and never matched it:
+the IRQ stayed on the freed claim and the first block IRQ of a protected-mode
+stream ran whatever had been claimed there (a `kern_mega FAULT`,
+`vidrmbsnd`'s first leg). `drv_hi_move` now re-points every hardware vector
+(08h-0Fh, 70h-77h) naming the image's paragraph at the pair's CODE half
+before the reloc rebuilds the gates (`drv_hi_ivt`, KERN-MEGA-PLAN 14.130;
+kern_mega `.cold` +70, kern_big and kern_small byte-identical). And
+`SNDV_RMODE`'s door (AL = 2, §53.2.3) no longer runs the discovery it used
+to run for a real-mode bracket: that is `SBL_ONCE`'s now and not resident.
 ### 34.6 Recording and staging — back, as a driver
 
 Went with §34.5 and came back with it. Verb 7 grants out of the driver's
 staging pool, verb 6 stages into a grant and verb 5 reads back out of one,
-and verb 4 opens an input stream that the drain task fills.
+and verb 4 opens an input stream - since §34.6.5, ONLY into the caller's own
+ring (§34.6.4). The input stream that recorded into a grant through a drain
+task is gone; what is below about grants is the staging half.
 
 **The pool is the driver's, so its size is not a constant an app may assume.**
 The Sound Blaster's is 20,480 bytes.
-An app that needs a big grant asks in TIERS and records into what it got;
+An app that needs a big grant asks in TIERS and keeps a take in what it got;
 `apps/recorder` is the reference for that, and the reason it works on a machine
 whose driver claimed less than it hoped for.
 
@@ -70412,8 +70545,9 @@ other way, and it is opened the same way.
   section reads verb 4's CX as the capture capacity and refuses 0 with 7, so
   the caller finds out by refusal rather than by recording into a grant it
   does not hold.
-- The rate range, half-duplex, the busy and clip refusals, IRQ discovery and
-  the error codes are verb 4's, unchanged.
+- The rate range, half-duplex, the busy and clip refusals and the error
+  codes are verb 4's. (IRQ discovery was too when this was written; §34.5.7
+  moved it to the attach.)
 - **Refusals of its own, both 7**: a single-cycle DSP (`[sbl_auto]` = 0 - the
   ISR re-arms a single-cycle capture per half, which an in-place ring does
   not carry), and a ring whose physical span crosses a 64KB page
@@ -70453,6 +70587,59 @@ and in `sbl_hw_start_in`, and one test in the ISR's input leg. `apps/os88api.inc
 `SND_OPENF_EXT`; the change is comment-only to the ABI fingerprint, so
 `tools/abilock.py` records nothing and neither `DRV_VER` nor `PKG_FMT` moves.
 `tests/sndcap.py` (`soak -k sndcap`, MartyPC's DSP 2.01) is the gate.
+
+#### 34.6.5 One record path: the external ring, and the drain stream retired
+
+§34.6.4 added the external ring BESIDE the stream that recorded into a grant,
+and the pair cost the driver a KB of every mixer machine's heap: §34.5.7 had
+just taken `snd_keepmix` to 10,226 bytes - a 10KB claim with 14 to spare -
+and §34.6.4's 182 took it to 10,408, which rounds to 11KB (§51.1.3 rounds the
+keep up). So the record half is ONE path now, and it is the external ring.
+
+**Why that one.** It is the only one that can take a recording longer than
+the pool (a grant is 20KB at most, 1.9 s at 11,025 Hz) and the only one that
+survives the UI task being away - the drain was a kernel task a disk transfer
+stops for ~400 ms against a 372 ms ring. What it gives up is the DSP 1.x
+(an SB 1.0/1.5): the external ring is auto-init capture (`2Ch`), and the
+1.x's single-cycle `24h` re-arm from the ISR goes with the drain. **SB 2.0
+(DSP 2.01) records**, and every card after it. **A PicoMEM 1.x records on
+neither path and never did**: its firmware (ISA-PicoMEM `sbdsp.cpp`, at the
+`tools/picomem/UPSTREAM` pin) answers DSP 2.01, raises an IRQ for `24h`
+without a DMA transfer, and logs `2Ch` as an unknown command - so the stream
+opens and the watchdog ends it, exactly as before this section.
+
+**The contract.** Verb 4 without `SND_OPENF_EXT` answers **7** and opens
+nothing, and so does a DSP 1.x. `SND_CAP_PCM_IN` is published only where the
+DSP is auto-init (`[sbl_auto]`), so a package greys its Record rather than
+taking the 7. Everything else about verb 4 is §34.6.4's. An `.o88` built
+before this that records into a grant is refused with 7 - it runs and says
+so - which is why neither `PKG_FMT` nor `DRV_VER` moved.
+
+**What went.** The drain task (`sbl_drain_task`, `sbl_drain`,
+`sbl_drain_half`), the single-cycle record arm (`sbl_arm_rec` - `sbl_arm_half`
+keeps the body, its mode and command as immediates now), the ISR's
+half-swap input leg (the input leg IS the external count), the grant branch
+of verb 4, `[sbl_drain_h]` and `SBL_RING`'s carve of the 8KB DMA buffer - a
+record stream claims no DMA buffer at all. `sbl_worker`'s `call si` went
+with the second worker: `sbl_refill_task` IS the loop. And what verb 0 and
+verb 4 each had a copy of is one copy now - the size code's length
+(`sbl_xrl`), the control words' pointer (`sbl_xctl`), the watchdog's divide
+(`sbl_wdset`), and `sbl_ring_phys` storing `[sbl_xoff]`/`[sbl_xpage]` itself:
+29 bytes of the 471, the PCM_IN gate costing 10 of them back.
+
+| measured, shipped build (PicoMEM in) | before | after |
+|---|---|---|
+| `snd_keep` (no mixer) | 6,863 → 7KB | **6,392 → 7KB** |
+| `snd_keepmix` (a mixer) | 10,408 → **11KB** | **9,937 → 10KB** |
+| `sbl_v_open_in` | 293 | 215 |
+| `sbl_isr` | 420 | 366 |
+| `sbl_hw_start_in` | 95 | 58 |
+
+**RECORDER moved onto it** (§35): a 16KB ring of its own, pumped into its
+grant by its window's timer (§13.9), so Play, the waveform and Demo read the
+grant exactly as they did. `tests/sndcap.py` asserts the grant form's 7 and
+the cap; `tests/recorder.py` that the take grows with nothing clicked and
+the ring is freed at Stop.
 
 ### 34.7 State, boot gate, teardown
 
@@ -70674,6 +70861,21 @@ every port. Whatever base is taken is one `sbl_f_probe` finds by its own scan,
 so nothing downstream learns the port from here, and `[sbl_base]` is where a
 dump reads it (a `[pm_sbport]` that recorded it a second time, and that
 nothing read, went in kernel size pass 11).
+
+**The walk starts with the DSP OFF** (`78h 0`, before the AdLib and IRQ
+commands). The firmware's PORTUSED test is on the INSTALL path only:
+`dev_sbdsp_install` MOVES a DSP that is already active to any port it is
+asked for, writing `DEV_SBDSP` over whatever held those blocks. Switching it
+off later clears them, and the card's CMS stops decoding until a reset. The
+DSP is off after every reset, so a first attach never meets this. A SECOND
+`pm_init` in one session does: SOUND.DRV's detach leaves the DSP on, so
+re-ticking the driver or a hibernate's detach and reload, and VIDSND's
+reconfigure, would take 220h from CMS. Found by the card's own firmware
+under `tools/picomem` (docs/plans/completed/PICOMEM-EMU-PLAN.md 6.1). The model in
+`tests/picomem.py` had answered PORTUSED there, and the fix needed no
+assumption about which firmware is on the card: off-then-walk is right on
+every version. It costs 7 bytes, and on a first attach it is a no-op
+command.
 
 #### 34.10.3 Why it is the default: two port reads and no heap
 
@@ -70926,7 +71128,13 @@ that loads ES with the package's own data selector on entry
 (`[cs:os88spk_dsel]`, banked by `os88spk_go`) and writes every word of state
 through ES. Reads stay through CS, which a code alias allows. `os88spk_go`
 patches both copies' immediates, asks `OSAPI_CPU_INFO`, and in protected
-mode opens with AL = 2 and the protected-mode copy. **436 bytes of every
+mode opens with AL = 2 and the protected-mode copy. **kern_mega's REAL-MODE bracket** (§53.2.3) is the
+third case: `OSAPI_CPU_INFO` answers real mode there, so the library takes
+the real-mode copy and asks AL = 0 - which that bracket refuses with AX = 1,
+IRQ0 being IVT 20h and not 08h there - and the ARM's library then asks AL =
+2 with the real-mode copy's ISR, the door writing IVT 20h (98.3.24). The
+shipped library, which no kern_mega real-mode bracket ever runs, is
+unchanged. **436 bytes of every
 package that plays through it** (Audio, Tracker, MIDIRack and the Video
 Player), and not a cycle on kern_big: the real-mode copy is unchanged.
 
@@ -71925,17 +72133,23 @@ default clock and every toast lost the gap to it. The icon uses the menu
 bar's live background and ink, including Dark and Color themes: the kernel
 passes `thm_rpair`'s pair to verb 12 (`SNDV_MIXICON_THEME`), and a theme
 repaint invalidates its cache. On a 1bpp display the driver stages the
-bitmap in screen polarity, inverting it for Dark with the popup's existing
-scratch. Verb 10 stays in the driver for an older kernel; this kernel calls
+bitmap in screen polarity, inverting it for Dark IN PLACE and back again
+around the blit (it borrowed the popup's slider band until kernel size pass
+15 moved that band into the popup's claim). Verb 10 stays in the driver for an older kernel; this kernel calls
 12 alone, so a sound driver built before the themed verb shows no speaker
 rather than costing every kernel the fallback. SOUND.DRV rounds to 11KB of
 image plus state on the heap; `DRVM_IMG_SND` is 11. **That is the IMAGE**: loaded,
-the driver holds 10KB with a mixer and 7KB without, the attach-only code -
+the driver holds 9KB with a mixer and 6KB without, the attach-only code -
 and with no mixer the mixer verbs and this popup too - having been handed
-back after the attach (§34.15.1). The popup claims only
-its adapter-sized save-under while open: up to 8KB on VGA/EGA and 2KB on
-the mono adapters. VESA uses the same depth-based formula: 15KB at 8bpp or
-30KB at 16bpp (§120.4).
+back after the attach (§34.15.1). The popup claims only while open: its
+adapter-sized save-under AND, at the claim's foot, the slider's 968-byte
+1bpp band (176 x 44) - which until kernel size pass 15 was resident in the
+image on every mixer machine. Up to 9KB on VGA/EGA and 3KB on the mono
+adapters; VESA uses the same depth-based formula, 16KB at 8bpp or 31KB at
+16bpp (§120.4) - the band is one KB more than the save-under alone on each.
+`apps/os88gfx.inc`'s `GFXE_BAND_SEG` is what lets the band live there: an
+opt-in that writes every band byte through ES and copies each glyph's rows
+out of the font first (§5.12), ~+4,000 cycles a slider redraw.
 Its hit range is tested before
 the Date/Time cell, without changing application menu indices. The icon is
 cached independently, invalidated when the bar is overwritten or capabilities
@@ -71991,56 +72205,97 @@ https://www.phatcode.net/res/243/files/sbhwpg.pdf .
 
 ### 34.15.1 What a machine cannot run leaves the claim
 
-SOUND.DRV is 11,151 bytes and two runs of it are dead weight once its attach
-has answered:
+SOUND.DRV is 10,460 bytes (11,151 when this was written) and four runs of
+it are dead weight once its attach has answered - one on every machine, and
+three on every machine without the hardware each one drives:
 
 - **the attach-only code** - `opl_probe` and `opl_kind_probe`, `opl_init`'s
   one-time chip init, `mpu_probe` and its three helpers with `os88_pin`,
   `cvx_probe` and the `snd_upnm` it falls into, the PicoMEM's bring-up and
   undo (`pm_init`, `pm_cmd`, `pm_wait`, `pm_undo`) and `mix_probe`. They run
-  inside `DRVV_ATTACH` and never again, on EVERY machine. **The Sound Blaster
-  probe is not among them**: `DRVV_TIER` re-runs `sbl_attach` all session, so
-  `sb.inc` stays whole.
+  inside `DRVV_ATTACH` and never again, on EVERY machine. **So, since
+  §34.5.7, are the Sound Blaster's scan, IRQ discovery and 16-bit channel
+  test** (`sb.inc`'s `SBL_ONCE`, through `sbl_find`) **and the attach body
+  itself** (`snd_attach`): `DRVV_TIER` re-runs `sbl_attach`, but that only
+  resets the DSP at the base the scan settled and hooks the line the
+  discovery settled - it asks the hardware nothing new.
 - **the mixer verbs (7–9), the speaker icon (10, 12) and the volume popup
   (11)**, dead on every machine whose attach found no readable mixer: the PC
   speaker, an AdLib alone, a Covox, an MPU-401, a Sound Blaster older than the
   CT1335. The kernel never shows the speaker there (`SND_CAP_MIXER` is clear)
   and Mixer is told `SNDE_NOMIX`.
+- **the MPU-401's output** (`mpu_put`, `mpu_hush` and verbs 2–5's bodies),
+  dead wherever `mpu_probe` found no interface - nearly every machine.
+- **the PicoMEM's keep-alive and race check** (`pm_runaway`, `pm_tick`),
+  dead wherever `pm_init` found no card.
 
-So the image is laid out to give them back, with two ends:
+So the image is laid out to give them back. **The rule (kernel size pass
+15): the middle runs are ordered, and a machine keeps the image up to the
+end of the LAST one it has a user for** - each run is reached only behind
+its own test in the runs above it, and a run kept for a later one's sake is
+code that machine kept before:
 
 ```
-[header][the tiers][their state][mix_kind] snd_keep: [mixer][popup][their state] snd_keepmix: [attach-only]
+[header][the tiers][their state][mix_kind]
+  snd_keep:    [PicoMEM: pm_runaway, pm_tick]          kept with [pm_base]
+  snd_keeppm:  [MPU-401: mpu_put, mpu_hush, verbs]     kept with [mpu_base]
+  snd_keepmpu: [mixer][popup][SBL_PRO][their state]    kept with [mix_kind]
+  snd_keepmix: [attach-only]                           never kept
 ```
 
-The attach - the one place `mix_probe` runs, so a tier change cannot bring a
-mixer into existence - writes `snd_keepmix` into the header's `DRV_H_KEEP`,
-or `snd_keep` when `[mix_kind]` is 0, and the kernel shrinks the image's
-claim to it before the tier and `DRVV_READY` calls (§51.1.3):
+The attach - the one place `mix_probe`, `mpu_probe` and `pm_init` run, so a
+tier change cannot bring any of them into existence - writes the offset into
+the header's `DRV_H_KEEP`, and the kernel shrinks the image's claim to it
+before the tier and `DRVV_READY` calls (§51.1.3):
 
-| build | no mixer (`snd_keep`) | a mixer (`snd_keepmix`) |
-|---|---|---|
-| shipped (PicoMEM in) | 6,579 bytes: **11KB → 7KB**, 589 under the rung | 10,124: **11KB → 10KB**, 116 under |
-| `NOPICOMEM=1` | 6,373: 11KB → 7KB | 9,918: 11KB → 10KB |
+| build | the tiers alone (`snd_keep`) | + a PicoMEM (`snd_keeppm`) | + an MPU-401 (`snd_keepmpu`) | a mixer (`snd_keepmix`) | image |
+|---|---|---|---|---|---|
+| shipped (PicoMEM in) | 5,797: **11KB → 6KB** | 5,913: 6KB | 6,098: 6KB | 8,622: **11KB → 9KB** | 10,460: 11KB |
+| `NOPICOMEM=1` | 5,756: 10KB → 6KB | (no run) | 5,941: 6KB | 8,465: 9KB | 9,945: 10KB |
+
+(Measured at kernel size pass 15, 2026-10-30, against two runs of 6,392 /
+9,937 in an 11,737-byte image, and `NOPICOMEM=1`'s 6,209 / 9,754 / 11,224 -
+docs/plans/completed/ksp15/snd.md. The table first carried 6,579 and
+10,124 against an 11,151-byte image; §34.5.7 measured 6,681 and 10,226.
+The mixer's run lost the popup's 968-byte slider band to the popup's own
+claim, §34.15.) No machine keeps more than it did with two runs: a mixer
+machine keeps everything below `snd_keepmix` as before, and one with an
+MPU-401 and no mixer keeps the PicoMEM's 116 bytes it would have kept anyway.
 
 The attach-only bodies are defined as macros (`MPU_ONCE`, `CVX_ONCE`,
-`PM_ONCE`, `MIX_ONCE`) and expanded where their files put them unless
+`PM_ONCE`, `MIX_ONCE`, and `sb.inc`'s `SBL_ONCE`, which SOUND.DRV alone
+includes and so expands unconditionally) and expanded where their files put them unless
 `SND_SPLIT` is defined - which SOUND.DRV does, expanding them past
 `snd_keepmix` - so `picomem.inc`'s other includers (`tests/picomem/`,
-`tests/vidbench/vidsnd.asm`) assemble exactly as before.
+`tests/vidbench/vidsnd.asm`) assemble exactly as before. The two device
+runs are the same shape: `PM_RES` and `MPU_RES`, expanded in place without
+`SND_SPLIT` (and then `pm_runaway` asks `[pm_up]` itself and each MPU verb
+`[mpu_base]`, as they always did) and in their runs with it.
 
-**Nothing kept is ever reached into what was handed back.** `snd_pkg`
-refuses verbs 7–12 with `SNDE_NOMIX` when `[mix_kind]` is 0 (verb 11's CF = 1
+**Nothing kept is ever reached into what was handed back.** The device runs
+first: `sbl_tick` asks `[pm_up]` before `pm_runaway` (a compare it used to
+make a call later, so a machine without the card pays fewer cycles in IRQ0
+than before), `pm_tickpub` publishes `pm_tick` only with `[pm_base]`, `snd_pkg`
+refuses verbs 2–5 with `SNDE_NOMIDI` - their own answer - without
+`[mpu_base]`, and `mpu_detach` (resident) reaches `mpu_hush` only with
+`[mpu_own]`, which only a successful `SNDV_MIDOPEN` sets. Then the mixer:
+`snd_pkg` refuses verbs 7–12 with `SNDE_NOMIX` when `[mix_kind]` is 0 (verb 11's CF = 1
 is then "not on the speaker", which is true), and `snd_detach` tests it
 before `mix_detach` - which is why `mix_kind` is the core's byte and not
 `MIX_STATE`'s, and why the verbs themselves no longer test it. The THIRD door
 is an SB Pro's stereo stream (§34.5.5): `sbl_pro_st` reads and writes mixer
 0Eh, and it is reached only by a stream verb 11 accepted as stereo - which
 it does only against `SND_CAP_STEREO`, and `snd_sb_pub` publishes that to a
-DSP 3.xx only when `[mix_kind]` is 2. `sbl_stop_stream`'s write puts 0Eh back
-behind `[sbl_pst]`, which nothing but `sbl_pro_st` sets. So the guard is the
-caps word, read once at attach, and not a test at the call. Below
-`snd_keepmix` only `snd_entry` names a label past it. Both rules are layout
+DSP 3.xx only when `[mix_kind]` is 2. `sbl_stop_stream`'s `sbl_pro_end` puts
+0Eh back behind `[sbl_pst]`, which nothing but `sbl_pro_st` sets. So the
+guard is the caps word, read once at attach, and not a test at the call -
+**and since kernel size pass 15 both routines live in the MIXER's run**
+(`sb.inc`'s `SBL_PRO`, expanded after `mixer.inc`): the only code in `sb.inc`
+that touches the CT1345 is handed back with the rest of the mixer on a
+machine without one, and `sbl_hw_start` and `sbl_stop_stream` are the doors
+`t_sndonce` names. Below
+`snd_keepmix` only `snd_entry` names a label past it, and no run names a
+label in a LATER run outside the doors above. Both rules are layout
 rules that assemble cleanly when broken, so `tests/unit/t_sndonce.py` reads
 them off the assembler's listing; its first run found `snd_detach` calling
 `opl_tmrst`, a ten-byte helper that had sat between the probes and moved with
@@ -72078,6 +72333,21 @@ Three things about it are worth knowing:
   click runs `rc_poll`, which reads verb 3 and retires finished or
   watchdog-stopped streams. On QEMU no input IRQ ever arrives, so a recording
   always lands on the watchdog path and says so honestly.
+- **It records into a ring of its own** (§34.6.5, the only record stream
+  there is): a 17KB `OSAPI_MEM_CLAIM_DMA_HI` claim - a 16KB ring, 2 s at
+  8 kHz, and its two words - opened as verb 4's external ring with 512-byte
+  blocks. Its window's timer (§13.9) fires every 2 ticks and `rc_pump` copies
+  what the card has captured into the grant through `rc_pbuf` and verb 6,
+  so the take ends up where Play, the strip and Demo always read it; the
+  count it draws goes through `OSAPI_WM_CLIP_SET`, so a covered or minimized
+  Recorder records on and paints nothing. The card lapping the ring - the
+  reader within a block of a ring behind, the block being filled being the
+  ring's oldest, or more than `RC_FMAX` = 110 ticks between pumps, which the
+  16-bit count could have lapped unseen (WaveRack's `wc_fmax`) - stops the
+  take as `REC STOPPED (OVERRUN)`; the grant filling, as `REC STOPPED (FULL)`; the
+  ring is freed at every close. It needs a DSP 2.00 or later, and REC greys
+  on anything less because the driver no longer publishes `SND_CAP_PCM_IN`
+  there.
 - **It was written to stay useful with no card** - DEMO stages a built-in
   400→800→400 Hz sweep and PLAY falls back to PCM_EXCL speaker chunks through
   `os88pcm_play` (§34.4) - **and §35.2 is why that no longer holds**: the
@@ -72086,7 +72356,8 @@ Three things about it are worth knowing:
   §34.6's `AX = 4` exists to make.
 
 Teardown needs nothing from the app: `snd_release_inst` (§34.3) force-closes
-any live stream and frees the grant.
+any live stream - before the instance's claims, the ring among them, are
+freed - and frees the grant.
 
 ### 35.1 IT NO LONGER SHIPS — built by `all`, carried by no floppy
 
@@ -74965,6 +75236,17 @@ overlay code (§2.5) and is dead FAT by the time the Control Panel can change
 the adapter under it, so the arithmetic is resident - `desk_rowcalc_x`, in
 `.cold` and ending in a `retf` - and the overlay far-calls that body by name
 (the `ovw_desk_rowcalc` shim it bounced through went in kernel size pass 9).
+**Since kernel size pass 15 it is not resident at all** (ksp15/blob.md):
+nothing resident ever called it, so it is desk.inc's `DESK_ROWCALC` macro,
+expanded where its callers are - `wm_rowcalc` in `CTRL.DRV` (Set Primary,
+the Dock page, the arrangement row) and `bvw_rowcalc` for the boot (kmain_o,
+after `desk_init` returns and again after `drv_boot`, the blob's `bvs_switch`
+and `bdk_reflow`). On kern_big and kern_emu the boot's GEOMETRY half is
+`cfx_grid` in `.cfx`, past `cfx_tab` (the blob had nine bytes), and
+`bvw_rowcalc` is a far call to it followed by the reflow; kern_mega's blob
+takes the whole copy. On kern_small `desk_reflow` and `desk_live` had no
+other caller and are written into the macro, so all three left resident:
+kern_big, kern_emu and kern_mega `.cold` -100, kern_small `.cold` -123.
 
 **On kern_small `vid_switch` is `CTRL.DRV`'s** (kernel size pass 13). Its one
 caller there is the Display page - that build has no `drv_boot` to apply
@@ -74974,7 +75256,8 @@ only it reaches (`vid_equip`, `vid_blank`, `vid_avail_test`, `wm_su_drop_all`,
 `.modu` there and `.text` on kern_big) and reach the kernel through the
 panel's `CPXK` hop: 187 resident bytes on the 128 KB machine's kernel, for
 the order above unchanged. `desk_rowcalc`'s resident thunk goes with it - the
-image makes the far call to `desk_rowcalc_x` itself.
+image makes the far call to `desk_rowcalc_x` itself (and since kernel size
+pass 15 carries its own copy, `wm_rowcalc`).
 
 **On kern_big (and kern_emu) it is `CTRL.DRV`'s too** (kernel size pass 13,
 docs/plans/completed/ksp13/dispsw.md). Setting a new PRIMARY is the Display
@@ -75179,7 +75462,7 @@ changes** — drawing is spatially coherent, so the steady state is
 |---|---|
 | `[vid_ndisp]` | displays the kernel has **brought up** — 2 after §39.13, 1 for ever on a one-card machine. Not the same question as how far the *desktop* spans, which is `[vid_w]`/`[vid_h]` and is still one display's until docs/plans/completed/DUAL-DISPLAY-PLAN.md step 6 |
 | `[vid_cur]` | which display's geometry is in the live block |
-| `vid_ctx_capture` | AL = display; bank the live geometry into that record |
+| `vid_ctx_capture` | AL = display; bank the live geometry into that record. Not resident since kernel size pass 15: vidsel.inc's `VID_CTXCAP` macro, expanded in each of its callers' images - `vid_ctxcap` (CTRL.DRV), `ext_ctxcap` (EXTD.DRV), `cfx_ctxcap` (`.cfx`, the blob's on kern_big and kern_emu), `bvs_ctxcap` (kern_mega's blob) - and written into the boot overlay's `vid_ctx_init` |
 | `vid_ctx_act` | AL = display; make it current, **returning immediately if it already is** |
 | `vid_ctx_init` | one display, at the virtual origin, holding what is on screen now |
 
@@ -77941,7 +78224,7 @@ collapse, which is the invariant kept by construction rather than by care.
 
 - **The Control Panel** (§31.10.2's arrangement row, inside `CTRL.DRV`, +50
   image bytes and no resident ones) calls `exf_sync`, then
-  `vid_disp_init`, `desk_rowcalc_x` and `wm_refit` - what `vid_disp_relayout`
+  `vid_disp_init`, `wm_rowcalc` and `wm_refit` - what `vid_disp_relayout`
   was, written out in the image since kernel size pass 13 - then `exf_sync` again: the first loads before anything
   moves and the second drops after the collapse. A refusal skips the relayout
   and toasts the panel's own `Needs Sys Disk A:` (§2.8.4) — the panel is
@@ -96593,6 +96876,18 @@ its first. Eight is Paint's measured peak (scratch, canvas, undo, clipboard,
 LZW, and the transient sixth it holds while trading a bigger clipboard for a
 smaller) plus its region and one spare.
 
+**On kern_mega the cap is TWELVE** (`kernel/memory.inc`, kern_big and
+kern_small byte-identical; KERN-MEGA-PLAN 14.129). The Video Player's
+kern_mega arm holds EIGHT before a play's ring - the block decoder part,
+the cold part (98.3.24.1), the speaker shaper's part, the palette events,
+the poster, the keeper, a record buffer and the text's second save - so
+the ring was the ninth and was refused whatever the heap held: on the
+owner's Victory 286 no streamed play started at all ("Not enough memory to
+play it" with 474K free in one run). A play then wants the bracket's held
+room (98.3.24.2), its door's scratch and an Unmute's ring on top: twelve.
+The table is unchanged (`MEM_MAX`), and the cap still falls on whoever
+causes it. `tests/vidmegaclaims.py` is the gate.
+
 The kernel's own claims, and what each replaced:
 
 | tag / owner | KB | taken by | replaces |
@@ -98102,7 +98397,15 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   a window that went with its block cannot be freed a second time at its
   owner's end, after the entry is somebody else's.
 - The same base and reach asked again answer the SAME selector, a window or
-  a SUB alike, so a caller that asks once per access holds one entry.
+  a SUB alike, so a caller that asks once per access holds one entry - **but
+  a SUB never answers a WINDOW** (`mega_dfind` passes every `mega_wtab` row
+  by, bound or not). A window is the caller's to re-aim, and its owner may
+  have left it over exactly the base a new claim's SUB asks for: the Video
+  Player's `SEG_AT` window, last aimed into a key's read, sat where a new
+  key shadow's second plane began, `SEG_SUB` answered it as that plane, and
+  the next record's re-aim moved the plane onto the read - a 72-pixel tail
+  on lin320 in one arrangement, and in another the player CLOSED by a #GP
+  in `vd_n_p3` (MEGA-VIDEO-REALMODE-PLAN W5, KERN-MEGA-PLAN 14.128).
 - Refusals: CF = 1, AX = 1 when no LDT entry or no `mega_wtab` row is free,
   2 for the null selector, 3 not in a block (`SEG_SUBC`, `SEG_BWIN`), 4 not a
   bound window of the caller's and 5 past its block's end (`SEG_AIM`).
@@ -103799,7 +104102,8 @@ gfx lock held, the `wm_fullscreen` contract — and **does not return until
 the app is done being fullscreen**. In: AX = a near entry inside the
 caller's own image, BX = the caller's own window ptr, CX = flags (bit 0 =
 `FSXF_KEEPWORKER`, §53.2; bit 1 = `FSXF_FASTTICK`, §53.2.1; bit 2 =
-`FSXF_RATE`, §53.2.2, which also takes DX and DI; all other bits of CL
+`FSXF_RATE`, §53.2.2, which also takes DX and DI; bit 3 = `FSXF_REAL`,
+§53.2.3, which every kernel accepts and only kern_mega acts on; all other bits of CL
 must be 0) and CH = the DISPLAY (§53.1.2: 0 the window's own, n display
 n-1, `kern_big` only). The kernel arms the
 freeze, silences what the freeze strands (§53.3), and calls the entry
@@ -104093,6 +104397,406 @@ The nested-chain switch guard is 7 more, in both kernels. **Measured** at
 - the BIOS's own 40:6C moved with `[ticks]`;
 - a hook that `sti`s and runs two periods long every 16th call was skipped
   and handed up to 3 periods at once, with none lost.
+
+### 53.2.3 `FSXF_REAL` — the bracket in REAL MODE (kern_mega; every kernel accepts it)
+
+A bracket already owns the machine (§53.1): the kernel is parked underneath
+it and what the app may call is a closed list (§53.7). Under kern_mega that
+app still runs in protected mode, so every BIOS service it reaches - a disk
+read above all - is a REFLECTION: one trip out of protected mode and back
+per call, a CPU reset on a 286, with the rate hook shut out of the call
+(§53.2.2's last paragraph) where a real-mode kernel's hook interrupts the
+same `int 13h` and works through it. `FSXF_REAL` asks for the other answer:
+**leave protected mode ONCE, at the bracket's entry, and come back ONCE, at
+its exit**, so the whole bracket runs as it would on kern_big.
+docs/plans/MEGA-VIDEO-REALMODE-PLAN.md is the design and its W1 entry the
+decisions; this section is the contract.
+
+**In** (with CX bit 3, `FSXF_REAL` = 8): SI = `FSXR_REAL` (0), so that one
+answer reads the same on every kernel (below). It combines with any other
+flag. **kern_big and kern_small accept it and ignore it** - they are in real
+mode already, and the bit is stripped at the door, so a package asks for it
+unconditionally. So does kern_mega on a machine where it never entered
+protected mode. **On kern_mega in protected mode it never refuses: where real
+mode cannot be had, the SAME bracket runs in protected mode** - today's
+bracket, exactly as if the bit had not been asked (MEGA-VIDEO-REALMODE-PLAN
+5.3: the bracket is DUAL, real mode by default) - and the kernel says which
+it took and why.
+
+**Out** (CF = 0, the bracket ran): **SI = `FSXR_*`, the bracket's answer** -
+`FSXR_REAL` (0) it ran in real mode, otherwise the reason it ran in
+protected mode instead. A kernel in real mode already leaves SI as it came,
+which is why SI goes in as `FSXR_REAL`; without `FSXF_REAL`, and on CF = 1,
+SI is kept on every kernel. Inside the entry proc the same answer is
+`OSAPI_CPU_INFO`'s: AH carries `CPU_F_PM` in a protected-mode bracket and
+does not in a real-mode one. The reasons (`apps/os88api.inc`), each ONE test
+at the door, so that each can be lifted by itself:
+
+| `FSXR_*` | value | why real mode cannot be had | a state the user is in? |
+|---|---|---|---|
+| `FSXR_REAL` | 0 | (it was had) | |
+| `FSXR_KEEP` | 1 | `FSXF_KEEPWORKER`: one task runs in real mode, so there is nothing to keep | no - the package's own combination |
+| `FSXR_SVC` | 2 | RETIRED by W7, never answered: a `TF_SERVICE` task (a driver's worker) alive is PARKED for the bracket (below) | - |
+| `FSXR_EXTD` | 3 | RETIRED by W7, never answered: a loaded EXTD.DRV (the extended desktop) runs from a LOW COPY (below), so a bracket on either display is real | - |
+| `FSXR_SERIAL` | 4 | RETIRED by W7, never answered: a SERIAL.DRV lease open is serviced in the bracket (below) | - |
+| `FSXR_ROOM` | 5 | the region is above 1MB (`OS88_HIGH`) and the heap has no conventional claim for its copy - or, since W3, none for the bracket's SERVICE AREA (below) | sometimes - owed in part (MEGA-VIDEO-REALMODE-PLAN 5.3.3: the HMA) |
+| `FSXR_VOL` | 6 | a stream the LIST names is on a volume real mode cannot read: a redirected or file-driver volume (NET.DRV's share, CDROM.DRV, HTTPFS.DRV, RAMDISK.DRV), a mounted image, or a sector past CHS's reach | no - a PERMANENT protected-mode case (MEGA-VIDEO-REALMODE-PLAN 5.3 item 2), said on the info card |
+| `FSXR_FRAG` | 7 | the LIST's files need more than `FSXL_RUNS` (224) contiguous runs between them, or there are more than `FSXL_NMAX` (4) of them | rarely - a badly fragmented disk; a copy plays |
+| `FSXR_DRV` | 8 | the LIST names a driver class the bracket does not carry low (it carries `DRVC_DISK`, `DRVC_EMS` and, since W4, `DRVC_SOUND`) - or SOUND.DRV holds a segment word with no real-mode segment (above 1MB) | no - every class a play reaches is carried |
+| `FSXR_DROOM` | 9 | no conventional claim for a driver's low copy | sometimes - owed with `FSXR_ROOM` |
+
+**THE LIST (W3).** With `FSXF_REAL`, **BP = 0 or the offset in the
+caller's DS of a list** naming what the bracket will read, so the kernel can
+make it readable before it leaves protected mode - every kernel in real mode
+ignores BP and keeps it, as every cell does. Entries, until any other byte
+(`FSXL_END` = 0): `db FSXL_FILE` (1) then a NUL 8.3 name - a file the
+bracket's `OSAPI_FILE_READ_SEQ` will read, BY THAT NAME, resolved in the
+caller's own folder at the door; `db FSXL_DRV` (2) then a `DRVC_*` class - a
+driver the bracket's `OSAPI_DRV_CALL` will reach (a file on a `DRVC_DISK`
+volume asks for that driver itself). At the door, in protected mode, each
+file is stat'ed and its cluster chain WALKED into runs of absolute sectors -
+a `DVK_BIOS` unit's (the partition's base added, CHS's reach checked) or a
+`DVK_DRV` `DRVC_DISK` volume's own - and each driver the list reaches whose
+image is above 1MB is given a conventional claim its image and bss are
+copied DOWN into at the freeze's arm and back UP at the exit, as the region
+is (a driver already conventional runs where it is). The walk happens in the
+park's scratch, so a bracket that falls back takes nothing. A stat or chain
+that fails is not a fallback: the twin answers that `FERR_*` for that name. **A refusal (CF = 1) is for a state
+the user will not normally be in** - the owner's rule - so none of these
+refuses: each is a fallback, and the plan lists which wave owes each one
+that a user will be in.
+
+**What the PACKAGE refuses is its own to fall back from.** A claim the
+package holds that has no real-mode segment (above 1MB: `SEG_REAL` answers
+CF = 1), or a service it needs that the real-mode table does not offer, is
+the package's reason: it calls without `FSXF_REAL`, or - having found out
+inside - returns from its entry proc and calls again without it.
+`apps/os88real.inc` is the first half written once: `os88real_prep` asks
+`SEG_REAL` for every word of a list at the door and banks the answers,
+CF = 1 naming the word that has none, and `os88real_swap`, called first and
+last inside the entry proc, exchanges the list with the bank when - and only
+when - the bracket is a real-mode one. The kernel renames nothing of the
+package's (MEGA-VIDEO-REALMODE-PLAN 7.4). **Every listed claim is PINNED
+(`OSAPI_MEM_MOVABLE` AX = 0) from before `os88real_prep` until
+`OSAPI_FSX_RUN` returns**, as the Video Player's `vp_smov` does: the door's
+own conventional claims (the region's copy, the service area, the drivers'
+low copies) can compact the heap, and on kern_mega a move rebases only the
+selector - the paragraph already banked then names memory the claim has
+left, and the swap installs it inside.
+
+**What the kernel does, on kern_mega**:
+1. at the door, after every other test: the reasons above, tested NOT in
+   the table's order but `FSXR_KEEP`; the list's `FSXR_VOL`, `FSXR_FRAG`
+   or `FSXR_DRV`; `FSXR_ROOM` (the region's copy, then the service area);
+   the drivers' `FSXR_DROOM`, or `FSXR_DRV` for a SOUND.DRV word above 1MB;
+   EXTD.DRV's `FSXR_DROOM` - the first that holds is the answer and the
+   bracket goes on in protected mode with nothing taken - and a
+   conventional claim of the region's size when the region is above 1MB;
+2. at the freeze's arm (IF = 1, nothing else of the package can run): the
+   whole region - image and bss, `I_SIZE` - copied DOWN into that claim;
+3. at the entry, with IF = 0: the video and font layer's segment words,
+   `[k_seg0]` and `CPU_F_PM` turned back into their real-mode values
+   (KERN-MEGA-MEMORY-PLAN MC7.4 made them selectors) - and when the glyph
+   table is the `MEM_K_FONT` COPY (§6.0.1), which kern_mega moves above 1MB
+   at the switch (KERN-MEGA-PLAN 14.120) where no real segment reaches it,
+   its 760 bytes copied into the service area at the door and
+   `[font_seg]:[font_base]` named there for the bracket, so
+   `OSAPI_FONT_GLYPHS` answers a table real mode can read (both put back at
+   the return; KERN-MEGA-PLAN 14.131 - on a machine whose option ROM is
+   slow, the owner's Paradise, a player's full-screen text was noise without
+   it); the 8259's masks a
+   service reflection's (the BIOS's own lines and the pointer's, §9.10); IVT
+   20h - IRQ0 there, the PIC staying at its protected-mode base - the
+   kernel's REAL-MODE TICK; `[vx_ep]`, the VESA desktop's hook, pointed at
+   `vx_null` (an `.text` answer that draws nothing, where the hook is a
+   protected-mode selector of `VESA.DRV`); the API TABLE SWAPPED (below);
+   and out of protected mode, by CR0 on a 386 and
+   by the CMOS shutdown-0Ah reset through `mega_r286` on a 286, the
+   reflection's two ways down;
+4. the entry proc called in real mode, as `wm_pkgcall` calls it: **DS = CS
+   = a real paragraph** (the copy, or the region's own paragraph when it is
+   conventional), ES = KERNEL_SEG, SI = the window, IF = 1;
+5. when it returns, with IF = 0: the A20 line proved open, protected mode
+   again (`lmsw` on both CPUs), the IVT's IRQ vectors re-synced into the
+   IDT (a FORCED `mega_ivt_sync`, which also puts IVT 20h-27h back as the
+   copy of 08h-0Fh), the table, the masks and every word of step 3 back, the rate
+   disarmed, the whole region copied back UP and the claim freed - and then
+   §53.6's restore, as for any bracket.
+
+**The real-mode tick** is `sch_isr`'s three arms with no scheduler in them:
+every IRQ0 counts `[sch_subs]` (§53.5.1's frame clock); under `FSXF_RATE`
+the accumulator decides a tick exactly as §53.2.2's does and every entry
+calls the hook, under the same three skip rules - the previous call has not
+returned, or SS is not `LOW_SEG` (a ROM service on a stack of its own) - and,
+as `sch_rhook` does, with IF = 1 while the speaker's sample ISR owns IRQ0
+(§34.11: the next IRQ0 is a sample, and one held at IF = 0 is lost); under
+`FSXF_FASTTICK` every Nth entry is a tick; with neither, every entry is. A
+tick chains the ROM's own IRQ0 handler, which keeps 40:6C and sends the EOI,
+and bumps `[ticks]`, so the two agree across the bracket to the tick; a
+period that is no tick sends its own EOI. There is no task switch, because
+there is one task. **So the hook runs INSIDE whatever the entry proc is
+doing, a BIOS call included** - kern_big's behaviour, which a protected-mode
+bracket can only approximate after the call. A tick also runs SOUND.DRV's
+`DSV_TICK` - the stream's watchdog - through its LOW copy when the list
+carried the driver (W4, below), with DS = the copy and ES = `KERNEL_SEG` as
+`snd_tick` calls it; the tone tier's expiry, `snd_tick`'s other half, waits
+for the exit (a tone is not the bracket's: the speaker is the door's).
+
+**What the package must do** (binding):
+- **Every segment it uses inside is a REAL one.** Its own are: CS and DS.
+  But the copy of the region it runs in is NOT the one its window names, so
+  a word in which it banked its own segment BEFORE the call holds the
+  window's copy's value - a selector - and is wrong inside. Take the
+  segment from CS inside the entry proc. The kernel calls no relocation
+  proc for this: a region above 1MB has none recorded (§66.6.1 refuses the
+  declaration there), and the copy is not a move, since the window's copy
+  is the one that stands again at the exit.
+- **Everything the entry proc and the hook write in their copy is copied
+  back**, the whole region, before anything else of the package runs. The
+  window's copy is not to be written meanwhile, and nothing can: no other
+  task runs and no protected-mode code calls the package.
+- **The hook may run in protected mode BEFORE the entry proc**, between the
+  rate's arm and the drop, on the window's copy - which the copy-back then
+  overwrites. §53.2.2's rule already covers it: a hook is a no-op until the
+  entry proc says it is ready, and that byte is only ever set in the copy the
+  entry proc runs in.
+- **Never write IVT 08h-0Fh, nor 20h-27h.** The 8259 stays at kern_mega's
+  base, 20h, as it does through every reflection - re-basing it would cost
+  the edges an ICW1 loses (KERN-MEGA-PLAN 14.62) - so IRQ n is vector 20h + n
+  there and the kernel's tick holds 20h. A package that takes an IRQ goes
+  through the kernel's door for it: the speaker's sample ISR through
+  `OSAPI_FSX_SPK` AL = 2 (the twin below writes IVT 20h), a sound card's
+  line through SOUND.DRV, whose vector the kernel redirects (W4, below).
+- **The calls - the real-mode TABLE.** The kernel's `.text` is conventional
+  memory and runs in real mode; `.cold`, `.mega`, every driver image and
+  every module are above 1MB and do not. So for the bracket the API table
+  (`KERNEL_SEG:0x0010`, 1,241 bytes) is SWAPPED at the drop and put back at
+  the return, and **a cell outside the list below answers CF = 1, every
+  register and flag but CF as it came** - refused, never undefined, and
+  wherever in the cell it is entered. What the list offers:
+  * **as it is**, once step 3 has made its words real: the inline cells
+    (`OSAPI_GET_TICKS`, `OSAPI_SET_COLOR`; `OSAPI_CPU_INFO`, which answers
+    without `CPU_F_PM` inside), `OSAPI_FSX_MODE`, `OSAPI_FSX_SURF`,
+    `OSAPI_FSX_PAGE`, `OSAPI_VIDEO`, `OSAPI_FONT_GLYPHS`, `OSAPI_KEY_DOWN`,
+    `OSAPI_SND_CAPS`, `OSAPI_WM_CONTENT` and `OSAPI_WM_WAKE`
+    (MEGA-VIDEO-REALMODE-PLAN 7.2);
+  * **as it is, with a real-mode arm** of a few bytes: `OSAPI_FSX_WAIT`,
+    whose `FSXW_FRAME` waits on `hlt` (there is no scheduler to yield to),
+    and `OSAPI_MOUSE`, which answers the pointer's words and does not run
+    the keyboard pointer (its menu path is `.cold`): on a machine with no
+    mouse the arrow keys do not move it inside, and a button the keyboard
+    latched stays latched to the exit, as it would under kern_big;
+  * **a TWIN**: `OSAPI_SEG`, whose body is `.cold`, answers real mode's
+    sums - `SEG_LIN` DX x 16, `SEG_SUB`/`SEG_SUBC` DX + AX, `SEG_REAL`,
+    `SEG_WIN`, `SEG_BWIN` and `SEG_FREE` the value itself, `SEG_AIM` and
+    `SEG_AT` refused - kern_big's answers, from the one body both share;
+  * and the BIOS itself by `int`: `int 16h` for the keyboard, `int 10h`
+    within §53.7's rules.
+  * **the SERVICE AREA's twins (W3)**, real-mode code that lives in `.mega`
+    and is COPIED, with the list's runs behind it, into a conventional claim
+    of the instance's for the bracket (2,384 bytes of code and data, 128 of
+    rows, 6 a run: 3 KB for a contiguous file), its cells far jumps to it:
+    - `OSAPI_FILE_READ_SEQ`: READ_SEQ's contract out of the runs - the
+      cursor's `FSEQ_OFF` in whole sectors and a capacity of whole sectors
+      (READ_AT's `FERR_NAME` otherwise); a `DVK_BIOS` file by `int 13h` with
+      `dsk_xfer`'s bounds (the track, or the cylinder where the kernel's own
+      reads run to it, the 64KB DMA page with a sector bounced through
+      `dsk_secbuf`, the floppy's EOT, three tries, then a sector at a time);
+      a `DRVC_DISK` file through the LOW copy's `DSV_BLK`, so HDD.DRV's
+      rung 1 keeps its native PIO - and gains `HDV_ARM`'s read straight into
+      XMS, which it refuses under `CPU_F_PM`. The cursor comes back with
+      `FSEQ_OFF` advanced and every other byte ZERO - a seek - so the next
+      protected-mode call re-seeds from the name. A name the list did not
+      carry answers `FERR_NAME`;
+    - `OSAPI_XMEM_COPY`: the TOKEN translated through `mx_tab` to where the
+      block is now (nothing moves a block while no protected-mode code
+      runs), the bytes moved by LOADALL on a 286 (`apps/os88la.inc`, 16 KB
+      a borrow) and by a loaded base on a 386 (`apps/os88ub.inc`, 2 KB a
+      chunk), interrupts open between pieces and A20 proved first - kern_big
+      XMEM.DRV's two transports;
+    - `OSAPI_XMEM_CAPS`: the pool's answer off `mx_tab`;
+    - `OSAPI_DRV_CALL` and `OSAPI_DRV_CALL_AT`: a class the door carried low
+      is called at its real paragraph through its `DSV_PKGCALL` (`DRVC_EMS`
+      handed the caller's slot in BH, as in protected mode); any other class
+      answers CF = 1 AX = 0, as for no driver;
+    - `OSAPI_SND_STREAM` (W4): `osapi_snd_stream`'s contract to the low
+      SOUND.DRV's `DSV_STREAM` - BX the caller's segment for verbs 5 and 6
+      and the rate for 0 and 4, DH the bracket's instance, DX the answer on
+      verbs 3 and 9 and kept on every other, DS = the copy, ES =
+      `KERNEL_SEG`. No streaming sink carried: AX = 4, CF = 1, as with no
+      driver. A real segment is the only kind there is, so kern_mega's
+      above-1MB test of an external ring has nothing to ask;
+    - `OSAPI_FSX_SPK` (W4): AL = 2 is the door that writes the vector, as in
+      protected mode (§34.11.1.1), and the vector it writes is IVT 20h - BX:SI
+      the ISR, CX:DX on the way out the chain, `KERNEL_SEG:fsx_rtick`; the
+      channel 2 arbitration, the divisor's trim, `[spk_n]` and the close are
+      `osapi_fsx_spk`'s and `spk_off`'s. AL = 1 closes (IVT 20h the tick
+      again). AL = 0, the real-mode contract in which the CALLER writes IVT
+      08h, is REFUSED with AX = 1 as protected mode refuses it - IRQ0 is
+      vector 20h here, so the caller's write would never be taken - and a
+      tone sounding refuses AX = 3 (silencing one may reach the card, through
+      `.cold`). **The owner's rule stands**: a speaker play that is faster in
+      protected mode (182 ticks against 375 on `vm/286`) chooses that
+      bracket, MEGA-VIDEO-REALMODE-PLAN 5.3 ruling 1; this twin is for the
+      play that chose real mode.
+  `OSAPI_FILE_READ_AT`, `OSAPI_XMEM_ALLOC` and `OSAPI_XMEM_FREE` stay
+  REFUSED: an allocator in real mode would be a second one to keep in step
+  with `mx_alloc`'s tokens for one call site, so the Video Player's split
+  claims move to its door (W5).
+
+  **THE SOUND DRIVER (W4).** `FSXL_DRV DRVC_SOUND` carries SOUND.DRV low as
+  W3 carries HDD.DRV - a conventional claim of image + bss, checked to be on
+  a 512-byte boundary so that `SBL_DSCS` derives DS = CS there (otherwise
+  `FSXR_DROOM`) - with three differences, because the card is LIVE across
+  both switches: a stream may be playing when the bracket opens (Live's F)
+  and still be playing when it closes. **(1) The copy is made at the DROP
+  and undone at the RETURN, with IF = 0**, not at the freeze's arm with
+  IF = 1: a block IRQ between a copy and the switch would count a block
+  into the image that is about to stop running. **(2) The driver's own
+  segment words are renamed** by the kernel, both ways, off a list the
+  driver hands it: `SNDV_RMODE` (13, `drivers/sound/sndpkg.inc` - what the
+  plan calls `DSV_RMODE`; a `DSV_PKGCALL` verb rather than a service slot,
+  so `DSV_SIZE` and every kernel's copied tables stay where they are), AL =
+  2 at the door, 1 at the drop and 0 at the return, the kernel's alone (ES
+  at or below 60h, `SNDV_MIXPOP`'s test), answers SI = the offset in the driver's segment of
+  a list of word offsets and CX = its count - SOUND.DRV's are the ring's
+  segment, an external ring's control-word segment, the staging pool and
+  the double buffer. At the drop each word is banked and made the real
+  segment with its base; at the return a word still holding what the drop
+  wrote gets its selector back, and a word the bracket WROTE - a stream
+  OPENED inside, which stores real segments - gets the selector of the claim
+  based at that paragraph (`mega_p2d`), so **a stream opened in either mode
+  plays on in the other** and no real-mode segment survives the bracket
+  (none at all being a word naming no claim: 0). The same verb flips the
+  8237 rule (§34.5.2.2: the block ISR reads the DMA count only where its
+  line is masked across BIOS calls, which is protected mode's reflections
+  and not the bracket's native `int 13h`), and at the DOOR (AL = 2)
+  answers the list alone. It once did first what real mode cannot - the IRQ
+  discovery a Sound Blaster deferred to its first stream, whose probe stubs
+  are IVT 08h-0Fh, where the bracket's 8259 does not deliver, and whose hook
+  would name the low copy and outlive it (the first build had a stream
+  opened inside a real-mode bracket discover its line THERE, and every
+  stream after it was silent) - and since §34.5.7 that discovery is the
+  ATTACH's, laid out in `SBL_ONCE` and not resident after it, so the door
+  may not reach it and has nothing left to do first. **(3) The card's line is
+  redirected**: every IVT cell 08h-0Fh naming the driver's image is banked
+  and pointed at the low copy, and so is its twin at 20h + n, where the
+  8259 delivers it - so the line reaches the ISR whether it arrives as the
+  hardware IRQ or as a PicoMEM's software `int` - and the line is left open
+  in the masks; the return puts the cells back before the forced sync. The
+  tick runs `DSV_TICK` (above). **Between brackets `DSV_TICK` reads no
+  segment of a stream** - `sbl_tick` is the watchdog's counter and the
+  PicoMEM's port test - so the words above are the whole of what a
+  real-mode segment could reach, and the return renames every one of them.
+
+  **How the swap is made** (MEGA-VIDEO-REALMODE-PLAN W2's decision): neither
+  a module nor a second resident image. At the drop, in protected mode, the
+  table is BANKED in the DOS park's scratch (`MEGA_SEL_PSCR`, the tail of
+  `.mega`'s rung above 1MB, which no bracket and no trip can use at once),
+  every byte of it is written `F9h` (`stc`), a `CBh` (`retf`) is put before
+  every cell the list keeps and at the table's end, the kept cells' bytes
+  are copied back, and the twin's first five are a far jump. A refused cell
+  is a slide of `stc` into the next `retf`. The return copies the bank back
+  whole. It costs no conventional byte and no disk read, and the list is
+  labels in the table itself, so it cannot drift from the cells' lengths.
+- **A fault inside is a real-mode fault**: no `kern_mega FAULT` line, and the
+  machine stops as kern_big's would (the owner's ruling,
+  MEGA-VIDEO-REALMODE-PLAN 5.1.3).
+
+**What it costs, measured** (`tools/kernsize.py`, the plan's W1 entry has
+the spans): **kern_big and kern_small +3 bytes of `.text` each**, the
+`and cl, ~FSXF_REAL` at the door, and nothing else. **kern_mega**: `.text`
++422 (everything real mode runs - the landing, the tick, the door - and
+`mega_a20`, MOVED from `.cold`, which is -112), `.lowbss` +74 (the
+protected-mode state), `.mega` +518 (the protected-mode halves and
+`mega_vwalk`), `.bss` +0; the kernel-segment ratchet `tests/megaseg.txt`
++419. Nothing is an on-demand module: a module read at every bracket would be
+a system-disk read at every Play (the W1 entry says why). `tests/megarmb.py`
+(Bochs, the 386's way) and `tests/megarmb286.py` (86Box's 286-victory, the
+reset) are the gates. **W2 - the fallback, the table, the twin and the two
+real-mode arms - measured against W1**: kern_big and kern_small
+**byte-identical**; kern_mega `.text` **+69** (`osapi_segr` 40, moved from
+`.cold`, which keeps a 5-byte far jump: `.cold` **-35**; the arms of
+`OSAPI_FSX_WAIT` and `OSAPI_MOUSE` 7 each; the foot's answer 15 and its byte,
+less the door's `jc`), `.mega` **+252** (the reasons, the swap and its list),
+`.lowbss` +4 (the VESA hook's bank), `.bss` +0, and **no conventional byte
+for the table** - the bank is the park's scratch above 1MB.
+`tests/megarmbref.py` (Bochs) is W2's gate. **W3 - the list, the walk,
+the service area and the low drivers - measured against W2** (the kern_mega
+map; `cmp` of both shipped kernels' `kernel.bin` and `kernel.sys` at one
+commit): kern_big and kern_small **byte-identical**; kern_mega `.text` **+0**
+and `.bss` +0 (the door's list fetch is `.mega`'s, reaching
+`inst_vol_enter` through `mega_tcall`), `.cold` **+444** (`fsx_rwalkf`, which
+calls the file layer near), `.mega` **+2,723** - the twins 2,016 of it,
+assembled there and copied into the service area per real-mode bracket, the
+protected-mode door, drop and return 707 - and `.lowbss` +4. **No
+conventional byte at rest**: a real-mode bracket claims its service area
+(3 KB for a contiguous file, 4 KB at `FSXL_RUNS`) and each low driver's
+copy (HDD.DRV 4 KB) for its own length. `tests/vidrmb.py` is W3's gate
+(rows `vidrmbfrag`, `vidrmbhdd`, `vidrmb286`). **W4 - SOUND.DRV low, the
+stream and the speaker door - measured against W3**: kern_big and kern_small
+**byte-identical**; kern_mega `.text` **+18** (`fsx_rtick`'s far call to
+`DSV_TICK` and the hook's IF rule; the kernel-segment ratchet to 4,887),
+`.bss` +0, `.cold` +0, `.lowbss` +2, `.mega` **+848** of which the service
+area's twins are +352 (2,016 -> 2,368); SOUND.DRV +56 bytes (`SNDV_RMODE`).
+`tests/vidrmbsnd.py` is W4's gate (rows `vidrmbsnd` on Bochs's SB16,
+`vidrmbsnd286` on a 286 with an SB 2.0, `vidrmbsndpm` on a PicoMEM 1.x
+running its own firmware).
+
+**EXTD.DRV's slots are the one kernel word the plan's census missed.**
+`OSAPI_FSX_MODE`, `OSAPI_WM_CONTENT` and `OSAPI_FSX_CAPS` far-call EXTD.DRV's
+entry block whether or not the module is loaded (`EXTCALL`; unloaded, every
+slot is `mod_gone`'s, CF = 1 being the one-display answer) - and unloaded,
+that slot names `.cold` through a protected-mode SELECTOR, a wild segment in
+real mode: the first build of this hung inside `OSAPI_FSX_MODE`. So the drop
+points the block at a `.text` twin of `mod_gone` and the return puts it back.
+
+**W7 - the three states a user is in, real since** (MEGA-VIDEO-REALMODE-PLAN
+W7; the owner: *"we need to not refuse states the user is going to be in"*).
+Each was one test at the door and each test is gone:
+
+- **The extended desktop** (`FSXR_EXTD` retired). A loaded EXTD.DRV gets a
+  row of the service area's low drivers (`RMD_EXT`): its claim, image and
+  tail, copied DOWN into a conventional claim at the freeze's arm and back UP
+  at the exit as a driver's is (it runs where it is when the claim is
+  conventional already), and at the drop every `EXFP` slot's SEGMENT becomes
+  that copy's paragraph, the offsets kept; the return puts the code selector
+  back. What a bracket reaches of the module is `OSAPI_FSX_MODE`'s two verbs,
+  `EXTF_KIND` and `EXTF_ENTER` (the collapse onto the bracket's display) -
+  `OSAPI_FSX_CAPS` is not a kept cell, and `OSAPI_WM_CONTENT`'s
+  second-display arm is resident - and that path is real-mode code as it
+  stands: `DS` the kernel's, every kernel routine reached through
+  `KERNEL_SEG` (`EXK`, whose frame names `KERNEL_SEG`, and `.text`'s
+  `vid_blank_kind`, `vid_depth_set`), no `.cold`, no selector and no write
+  through its own CS; the two video records' segments are words the drop's
+  walk already makes real (`mega_vwalk`'s `vid_ctx` rows). So a play runs in
+  real mode on EITHER display: `OSAPI_FSX_RUN` CH = 0 the window's, n
+  display n-1. No room for the copy is `FSXR_DROOM`, as a driver's.
+- **A driver's worker** (`FSXR_SVC` retired). The bracket runs ONE task, so
+  every `TF_SERVICE` worker is PARKED for it and resumes at the return,
+  where a protected-mode bracket would have kept scheduling it. What that
+  costs is the driver's own, and both drivers that spawn one are safe by
+  their own contracts: a Sound Blaster's refill or drain worker serves a
+  stream that is a FOREIGN one (the door released it, 53.3) or the bracket
+  package's own, which a real-mode bracket feeds itself (`OSAPI_SND_STREAM`'s
+  twin) - and a stream left unfed pauses under §34.5's underrun contract,
+  silence and never stale audio, and the worker resumes it; USBMOUSE.DRV's
+  poll stops, so a USB pointer does not move inside the bracket, where
+  nothing draws it, and moves again after.
+- **A SERIAL.DRV lease** (`FSXR_SERIAL` retired, §115). The pointer's ISR
+  far-calls the module for the leased UART, which in real mode needs three
+  things the drop provides and the return takes back, at IF = 0: the three
+  `SERFP` slots' segment made the module's paragraph (its claim is
+  conventional on kern_mega - SERIAL.DRV is not one of `MOD_HIOK`'s, and an
+  `%error` keeps it so); the lease's 517-byte ring - in the OWNER's region,
+  which may be above 1MB - copied into the service area and the module's
+  `srl_seg`/`srl_buf` pointed at the copy, then copied back over the owner's
+  and the two words restored; and the leased line LEFT OPEN where the drop
+  shuts the serial lines, when its real-mode vector is the kernel's
+  (`mega_rmaskf`'s own test for the mouse's), so the UART is drained in the
+  bracket and its line keeps making edges. The owner cannot call the lease
+  inside the bracket (`OSAPI_SERIAL` is not a kept cell), so nothing but the
+  ISR touches the copy.
 
 ### 53.3 Entry silences what it strands (binding)
 
@@ -105896,7 +106600,7 @@ choices in it are the load-bearing ones:
 
 - **`assoc_app_of`, not `asc_slot_of` — find, never create.** A slot only
   matters if some extension points at it, and the kernel's table is
-  `ASSOC_NAPP` = **16** rows against a disk that may cache 55. Creating a
+  `ASSOC_NAPP` = **16** rows against a disk that may cache 90. Creating a
   slot per package would evict the associations this exists to serve.
 - **After `asc_merge_ext`**, so a package that *declares* its extensions
   (§54.6) has already been given its slot and is found here like anything
@@ -106266,16 +106970,18 @@ floppy every package's first sector is on a track of its own, so a
 re-read of twenty headers would miss §18.95's cache for all but the last
 few, at ~400 ms a call.
 
-So the harvest keeps them, **in the store's own claim**: 60 rows of 82 bytes
-are 4,920 bytes of a 5,120-byte claim, and the capture is the tail:
+So the harvest keeps them, **in the store's own claim**, at its HEAD - it was
+the tail, in the KB rounding past row 59, until §25.9.6 made the store grow
+off its end:
 
 | offset | |
 |---|---|
-| `ICO_CAP` = `ICO_NROW * ICO_ROW` | `ICO_CAP_MAX` = 11 records of `ICO_CAP_RSZ` = 17 bytes: the store row the record is for, then the header's association block verbatim (count, then 5 x 3 extension bytes) |
+| `ICO_CAP` = 0 | `ICO_CAP_MAX` = 11 records of `ICO_CAP_RSZ` = 17 bytes: the store row the record is for, then the header's association block verbatim (count, then 5 x 3 extension bytes) |
 
 (It was an 11-byte row array and eleven 16-byte records after it until kernel
 size pass 13: one stride makes a record one `mul` and its row one `stosb`,
-and 187 bytes fit the same 200 the array and its pad took.)
+and 187 bytes fit the same 200 the array and its pad took. Row 0 is
+`ICO_RBASE` = 188, the record area rounded even.)
 
 How many records are held is **`[ico_capn]`**, a resident byte right behind
 `[ico_n]`. The store that empties the store is a word store that empties the
@@ -106433,6 +107139,41 @@ system disk still 347 of 354 clusters.
   step 7 writes nothing.
 - **The file lands where the FAT allocator puts it** (§54.7.5's last
   paragraph).
+
+### 54.7.7 The reader's claim is the FILE'S size, and the cap is the largest file
+
+`asc_use` used to claim `ASC_KB` whatever the volume held, so a floppy with
+three programs read a 1KB file into a 5KB claim, and the cap that claim set -
+`ASC_NAPP` 55 - was what a busy volume ran into. An install of everything not
+retired puts about **64 packages on one hard-disk volume** (counted off the
+live-media payload, §80.6), which is nine past it, and every package past the
+cap is harvested the slow way at every mount: a sector read apiece, ~400 ms
+of `int 13h` each on the target machine.
+
+So the two questions are separated. **The claim is the file's own size**,
+rounded to a kilobyte: the root walk runs FIRST, finds the file's sector
+count, and only then claims `(sectors + 1) / 2` KB. A file is written with
+exactly its used rows (§54.7.6.4), so a sparse disk's cache costs a sparse
+disk's claim. **`ASC_KB` is now the LARGEST file a build writes and reads** -
+8KB, which holds `ASC_NAPP` = **90** app rows and `ASC_NEXT` = 64 extension
+rows (90 x 88 + 16 + 64 x 4 = 8,192). A file past it is refused rather than
+read, exactly as before, and every other test on the bytes is unchanged: the
+counts must fit the bytes actually read, which now are the claim.
+
+**The one claim still sized from the cap is the flush's** (`FORMAT.DRV`,
+§54.7.6.4): an old-file buffer and a new-file buffer of `ASC_KB` each, now
+~18KB of transient work claim where it was ~12KB. It is held only for the
+flush and freed before it returns; sizing it from the counts is the follow-on
+if a busy heap starts refusing flushes.
+
+It cost **13 bytes of `.cold`**, resident: the claim moved below the root
+walk and takes its size from the sector count. `kern_small` has no
+`ASSOC.DAT` and is byte-identical.
+
+**An older kernel refuses a file past its own `ASC_KB`**, so a 90-row cache
+on a disk taken back to one is no cache at all there - slow and correct, the
+same answer as a missing file - and a file of 55 rows or fewer reads the same
+on both.
 
 ### 54.8 Accepting the document: five apps, and the three traps between them
 
@@ -179348,13 +180089,16 @@ of zero, so no `BLASTER=` is written at all. A variable naming a card that is
 not there sends a program to reset a DSP that will never answer — a hang,
 where its absence is a fallback. That is §96.15.1's argument one device along.
 
-#### 96.17.1 The IRQ is usually not known, and that is the driver's design
+#### 96.17.1 The IRQ is known since the attach, and omitted when it is not
 
-`sbl_irq` starts at `0FFh` and the Sound Blaster driver **defers IRQ discovery
-to first use** (§34.5): the line is learned by provoking an interrupt during
-the first stream, not by probing at attach. So a machine that has booted and
-not yet played a sound genuinely does not know which line its card is on —
-which is the *common* case at the moment a DOS program is launched.
+**Since §34.5.7 the Sound Blaster driver discovers its line at the attach**,
+so `[sbl_irq]` names it whenever the DSP tier is up and a DOS program's
+`BLASTER=` carries `I`. Until then the discovery was deferred to the first
+stream, and a machine that had booted and not yet played a sound genuinely did
+not know which line its card was on - the *common* case at the moment a DOS
+program is launched, and the reason the rule below was written. It still
+binds: `DRVV_HWINFO` answers the base of a card whose tier was refused (no
+usable line, §34.5.6), and `[sbl_irq]` is `0FFh` there.
 
 `BLASTER=` therefore carries the `I` field **only when there is one to carry**,
 and omits it otherwise. A variable naming the wrong line sends a program to
@@ -179364,7 +180108,9 @@ own the guess. That is §96.15.1's argument for the third time in this section,
 and it keeps arriving at the same answer: **a confident wrong number is worse
 than a missing one.**
 
-**The alternative was considered and not taken.** `DRVV_HWINFO` could call the
+**The alternative was considered and not taken** (and §34.5.7 has since made
+it moot, the discovery being an attach-only routine that is not resident when
+the question is asked). `DRVV_HWINFO` could call the
 driver's own `sbl_f_irqdisc` and force the discovery, since it is asked exactly
 once and the driver is about to be unloaded anyway. It is refused because that
 routine is reached from inside a stream open with the ring already sized, hooks
@@ -193426,6 +194172,44 @@ PCM8 with a seam, ADPCM4 - and requires the same sound for every frame,
 a seek from every key that plays the stream's own (ADPCM4 decoded from the
 key's reference), and four damaged files refused.
 
+#### 98.1.8.2 A lead is staged where it is read, and key 0 plays frame 0 (2026-10-30)
+
+**Two defects of the player's, both heard on the owner's Victory and both
+on kern_big as on kern_mega.**
+
+- **The lead was staged a session too late.** `vp_spos` reads a lead into
+  the stream's ring - a key's apart (98.1.8.1) at `[vp_kbkb]` KB past the
+  key's read, the start's at the ring's head - and `vp_lstage` copied it
+  into the sound ring's tail only once the session had started, after the
+  key's later parts (98.1.3.8) and the first fill had read into the same
+  ring. Where the lead lay on what they took, its tail was theirs: on
+  kern_big at 1 MB the last 142 bytes of a 5,514-byte lead, and on the
+  Victory's Catch My Heart 420 bytes of the reader's tier table played as
+  sound (2,073 distinct samples of 00/01 opening every play). On kern_mega
+  it was all of it (KERN-MEGA-PLAN 14.133): read on the desktop by a slot's
+  SELECTOR - the bank in place, above 1MB - and staged in the real-mode
+  bracket by a paragraph. `vp_lnow` stages it the moment `vp_spos` has
+  read it, in the mode that read it, and `vp_lstage` keeps a staged lead
+  when nothing new was read.
+- **A play from a key began a frame late.** A key's lead is frames
+  *k* + 1 .. *k* + *A*, so a play from key 0 at FRAME 0 - every colour or
+  page-ahead file's play from the start - never played frame 0's sound, and
+  the card's clock started under frame 1: the first frame's picture was
+  replaced at once and its sound was never heard. For a key at frame 0 of a
+  PCM8 file, frame 0's sound is the START's lead's first frame, so
+  `vp_lnow` reads it too and stages it before the key's lead
+  (`[vp_lpre]` 1), and `vp_acur` anchors the clock on the key's own frame:
+  the card plays frame 0's sound under frame 0's picture and frame 1 is
+  drawn a frame later. A key past frame 0 (a seek) still starts at *k* + 1,
+  as 98.1.8 says, its own frame's sound being in a record the play does not
+  read; and a pre-roll (98.2.9) puts key 0 past frame 0 with its first
+  frames silent, so nothing changes there. ADPCM4 is left as it was: its
+  reference is frame *k* + 1's sample (98.1.1.1).
+
+`tests/vidrmbtwice.py` holds both on both kernels: the card's capture is
+the file's sound from byte 0 and whole, and frame 1 is drawn at least
+0.6 of a frame after the card opens (~17 ms before, 57-60 after).
+
 #### 98.1.9 THE LAYER: one file, a better play on a better machine
 
 **A file made for a slow disk carries a second stream, encoded on top of
@@ -196735,6 +197519,74 @@ ever. `tests/videnc.py` 5c.2 is the gate: a flat level is one level
 (the 256-colour ditherer over the same 64-grey ramp makes it several),
 a ramp reaches every level with solid ends, and a Mode X file made with
 grey4 uses indices 0 to 3 and carries the ramp.
+
+##### 98.2.3.8 `--kernel mega`: kern_mega's disk (2026-10-29) - RETIRED 2026-10-30
+
+**RETIRED (options version 51, MEGA-VIDEO-REALMODE-PLAN W6).** What it
+priced was the PROTECTED-MODE bracket, every `int 13h` a reflection and on a
+286 a CPU reset. kern_mega now plays these files in a REAL-MODE bracket
+(98.3.24) that reads natively, and W6 measured it on the Victory against
+kern_big on the same machine (docs/reports/VIDPROF-W6-2026-10-30.md): Catch
+My Heart 5 stalls and 70 late against kern_big's 24 and 222, Sonic 2 8
+pauses and 79 late against 6 and 296 - Sonic's pauses being the stream dry
+near frames 690-720 on both kernels - the reads at 503 and 499 KB/s against
+490 and 494, and 4-6 BIOS reflections in a whole play. So the option, its
+help, and the `286-picomem1` profile's `mega_disk` are gone; one budget
+serves both kernels. A record of version 50 that says `kernel` drops it with
+a note and reads as kern_big's, which it now is. `xrd` (98.2.3.9) stays: it
+is the in-place reader's own cost on either kernel. What follows is the
+record of the option as it was.
+
+**A file made for `286-picomem1` ran its bank dry on kern_mega and not, as
+a rule, on kern_big.** Replaying a play's own reads through the profile's
+curve settles which of the model's inputs is wrong: each frame's MEASURED
+share of its period (the play's VPPROF, 98.3.22) fed to `disk_at`, the
+records' bytes spent, the bank as the file was made for (2,944 KB, full at
+the first frame). For kern_big the replay runs dry within 2% of where the
+machine did - Catch My Heart at frame 1371 against 1312, Sonic 2 at 737
+against 733 - so the curve holds there. For kern_mega the same replay only
+runs dry where the play did with the disk at 475,000 (Catch) and 455,000
+(Sonic): 0.915 and 0.877 of the curve. Every read is a reflected `int 13h`,
+a CPU reset on a 286 (KERN-MEGA-PLAN 14.73), and so is every card block
+interrupt (98.3.22.5).
+
+So the profile carries `mega_disk` = 0.88, the worse of the two, and
+`--kernel mega` scales its disk by it before an explicit `--disk` is
+applied, which names the rate on whichever kernel it says. `--kernel big`
+is the default and changes nothing. A profile without `mega_disk` is
+unmeasured under kern_mega, and `--kernel mega` leaves it as it is. The
+encoder's bank model spends where the bucket allows, so the cut lands where
+the bank would have run dry and nowhere else, and a file made for kern_mega
+plays on kern_big too. Options version 50 (`kernel`, `big` for every older
+record).
+
+Why a lower `--disk` alone changed nothing: Catch at 488,000 came out byte
+for byte the 519,000 file but for its options block, because the model's
+bank never emptied at either - its share ran ~4% under the diagnostic player's, and
+the margin in the bucket was 1.8 MB at 519,000 and 0.5 MB at 488,000.
+
+`mega_disk` was measured on players WITHOUT the two tiers (98.3.18.18),
+which skip the copy up in exactly the stretches it was measured in, so it is
+an upper bound on what kern_mega costs a file and is to be re-taken from
+plays of a tiered player.
+
+##### 98.2.3.9 `xrd`: the in-place reader's own cost (2026-10-29)
+
+**Catch My Heart at 519,000 and at 488,000 came out the same file** because
+the encoder's bucket never ran low: re-encoded from its source with the
+encoder of the day, byte for byte the owner's but for the options block, its
+lowest level anywhere was **2,551 KB of 3,040** - where the machine's bank
+ran empty at frame 1312. The model's per-frame share ran ~2 points under the
+plays' measured ones, which is not that gap; the reader's rate is. In place
+it charged the copy up alone, `xup` 0.186 ms a KB (placed at the gap,
+98.3.18.12), and the plays' timed reads replayed through the curve run dry
+where the machine did only with 0.345 charged on every chunk. The rest,
+0.159 ms a KB, is the reader's own work on a chunk past the copy - the
+bounce, the mirror, its loop - and the profile carries it as `xrd`, charged
+on every chunk in place; the copy is still skipped by the two tiers
+(98.3.18.18). Replayed: kern_big's Catch keeps a 624 KB margin at 519,000
+(it cuts nothing, as before), and `--kernel mega` runs 1,238 KB short, which
+the bank model now cuts for in the stretch it drains in.
 
 #### 98.2.4 Detail: less picture, the same screen
 
@@ -200426,6 +201278,28 @@ clip's writes to the file's own bytes.
 rounding 0 (it reads another byte of the same image); no kernel byte, no
 change to `os88spk.inc`.
 
+#### 98.3.15.2 The kern_mega arm's shaper, a part (2026-10-29)
+
+The kern_mega arm (`PKG_MEGA`) outgrew `APP_MAX_SIZE` when the two tiers
+(98.3.18.18) went in: 478 bytes of headroom against ~800 of code. The
+speaker shaper (`apps/os88spkfx.inc`, 34.11.9), 2,394 bytes of the arm, is
+its one subsystem with a three-call interface and no state the player
+reads, so the arm carries it as PART 2 of `VIDEO.O88` (`apps/video/vfx.asm`,
+OP_SEG | OP_COMP | OP_LAZY, 1,428 bytes packed) and far-calls it through
+`video/vfx.inc`'s vectors; the shipped build includes the shaper as it
+always did. What the include reads of the speaker library - the ring, its
+count table, whether it drives a Covox - is handed over at `VFXV_INIT`, and
+`os88spk_sil`, the one thing it writes there, comes back in CL. It is
+fetched the first time a clip made for a card plays on the speaker
+(`vp_fxget`, the UI task's), movable as the block decoder is, and refused it
+plays that clip silent. The arm is 60,679 bytes, 1.7 KB under the limit
+with its bss.
+
+**Its diag build** (`VPDIAG=time`, kern_mega) also drops the info card's
+diag lines - Heap, Ring, Lead, Dry - which its VPPROF carries word for word
+and `os88vfit.py` prints from the trailer (98.3.22.3): 42 bytes to spare.
+The `-DVP_NOSPKFX` the Makefile gave that build is gone with the need for it.
+
 #### 98.3.16 TEXT: full screen, on any adapter
 
 **TEXT plays full screen only** (the owner's call), as CGA's colours do
@@ -201664,6 +202538,249 @@ CS. Pointed at part 0 it fails, naming 40-odd stores. `tests/megavidv2.py`
 each layout's clip played, stepped round the box and played again in place,
 with no trap line and the two tails the same picture.
 
+#### 98.3.24 kern_mega's bracket in REAL MODE (MEGA-VIDEO-REALMODE-PLAN W5, 2026-10-30)
+
+**The kern_mega arm asks `FSXF_REAL` (§53.2.3) for every play that real
+mode serves as well as protected mode does, and the protected-mode bracket
+of 98.3.18.16-98.3.22.7 for the rest.** The shipped build is unchanged: it
+is a real-mode player on every kernel it can run on, and kern_mega's bracket
+is the arm's. A play the real-mode bracket takes runs exactly as on
+kern_big - `int 13h` native, the rate hook inside the read, no reflection -
+and the dual bracket (MEGA-VIDEO-REALMODE-PLAN 5.3) is what decides.
+
+**The door** (`vp_rdoor`, at `vp_srun`'s `OSAPI_FSX_RUN`, in protected
+mode). The PLAYER's reasons are tested first, one test each, and any that
+holds keeps the play in protected mode:
+
+| reason | why real mode is not asked |
+|---|---|
+| LIVE | a Live session's bracket (98.3.10): its ring, its hold and its resident files are read in place through selector runs on the desktop, and the coordinator's ruling keeps Live in protected mode |
+| SPEAKER, IN PLACE | the PC speaker or the Covox (98.3.15) with XMS read IN PLACE - the bank's (98.3.18.13) or the file held whole (98.3.18.11), as the session decided it under protected mode's rules - the owner's ruling (MEGA-VIDEO-REALMODE-PLAN 5.3 ruling 1): real mode refuses that read under the speaker's clock and copies each chunk down, 375 ticks against 182 on `vm/286` |
+| VERSION 2, IN PLACE | a version 2 file (98.3.23) read in place: the block decoder has no yield site, so real mode copies it down too (5.3 ruling 1) |
+| RESIDENT | a resident play (98.1.7): its cursors are paragraph OFFSETS into the block under protected mode and segments in real mode, and a cursor carried between them would mean something else |
+| SPLIT | a file's first session while its layer's pool split is still owed (98.1.9.2): the split frees and claims XMS on verdicts taken INSIDE the bracket, and `OSAPI_XMEM_ALLOC` / `_FREE` are refused there (§53.2.3). The next session takes real mode |
+| MOVED | the XMS bank's block is not where its token names (the pool compacted it): real mode reads a bank at its token's address, on kern_mega as on kern_big, so the block must be there |
+| HIGH CLAIM | a claim of the session's has no real-mode segment (`SEG_REAL` refused: above 1MB) - `os88real_prep`'s CF = 1. Every claim the arm makes is conventional (`vp_mclaim`, the parts' door), so this is a refusal nobody has seen |
+| SHADOW, IN PLACE | the shadow (98.3.19.3) read in place: its decoders have no yield site either. The owner: the shadow may take whichever bracket is simpler (5.3 ruling 1) |
+
+**Every session's ring is conventional** (98.3.18.17 is deleted), so no
+ring is a reason - and a file held whole and read in place with a card is
+read by the real-mode borrow, LOADALL on a 286 and a loaded base on a 386
+(98.3.18.11, 98.3.18.14), the yield sites live for the bracket.
+
+Otherwise the door asks `FSXF_REAL` with **the LIST**: `FSXL_FILE` and the
+open file's name (a layer is in the same file, 98.1.9) - written to ITS NUL
+and no further, as §53.2.3 reads it: the list's next byte is the one after
+the NUL, so a name copied whole as `vp_name`'s 13 bytes put that name's
+padding where the next entry goes, a 0 is `FSXL_END`, and every entry after
+it was never read. A name of 12 characters filled the field and played; any
+shorter one dropped `DRVC_SOUND`, so the stream had no sink in the bracket
+and the play was SILENT (`07-Miku.V88`, 11 characters, beside a
+`09-Catch.V88` that sounded - KERN-MEGA-PLAN 14.132, the fix verified on the
+owner's Victory),
+`FSXL_DRV DRVC_DISK` (HDD.DRV's low copy, and with it `HDV_ARM`'s read
+straight into XMS), `FSXL_DRV DRVC_SOUND` when the session plays through a
+card, and `FSXL_DRV DRVC_EMS` for an EMS bank. It also takes **two claims
+the bracket cannot**: a seek's key-entry scratch (`[vp_kekb]` KB, when the
+file has keys - which the key SEARCH, `vp_keyat`, reads its entries through
+as well as the seek's own read: it claimed one of its own, which a
+real-mode bracket refuses, and every seek in the full screen came to
+nothing, `mega-vidfskeysvga4`), and the card's ring when the session has audio, a card and
+none held yet (Unmute inside the full screen, 98.3.17) - on the speaker,
+its ring and, for a clip made for a card, the shaper's part (98.3.15.2) -
+both given back after the bracket. Then `os88real_prep` over the player's
+segment words (`vp_rlst`): the ring's claim, the keeper, the posters', the
+shadow's and the planes' claims, the block decoder's part and the shaper's,
+the ring and the layer's segment, the sound's ring, the EMS frame and the
+seek's scratch. The KERNEL's answer comes back in
+SI (`FSXR_*`): it may still run the bracket in protected mode, for a reason
+of its own (§53.2.3's table) - a stream on a file-driver volume
+(`FSXR_VOL`) is the common one. The door's sound ring is then the one an
+Unmute inside uses too (`vp_rhave` answers any ring held, whichever mode
+the bracket runs in): a second claim over it lost the first's segment and
+leaked it on every such play.
+
+**The sound-ahead lead is staged where it is read** (98.1.8.2,
+KERN-MEGA-PLAN 14.133). `vp_spos` reads a start key's lead on the desktop
+into the ring's slot by its SELECTOR - with the bank in place, XMS above
+1MB - which no real segment names; staged in the bracket it was the
+conventional ring's bytes instead, the file's head played as the first
+frames' sound. `vp_lnow` stages it in the mode that read it.
+
+**Inside** (`vp_main`, when `OSAPI_CPU_INFO` answers real mode under the
+arm): the words swapped for their real segments (`os88real_swap`),
+`[vp_self]` = CS (the bracket runs a COPY of the region, §53.2.3),
+`[vp_pm]` = 0 - so every runtime-dual arm takes the shipped arithmetic -
+`vp_addr`'s protected-mode head unpatched (`vp_rhpat`), the block
+decoder's far pointers made again (`vp_bset`) on its real segment, the yield
+sites live when the session reads XMS in place (`vd_ypatch`) - and on a 286
+the machine state LOADALL loads captured there (`la_capture`), because the
+session decided its read in place under protected mode, where `vp_xok`
+never captures it: a borrow that LOADALLs an IDT of limit 0 resets the
+machine, as `mega-vidwin` did on `vm/at286-port` - and **the
+speaker's two remembered segments re-bound**: the library's ring
+(`os88spk_rseg`, which its ISR and its accounting read) to the ring's real
+segment, and the shaper part's vectors to the part's real CS with its own
+data segment and ring given again through `VFXV_BIND` (vfx.inc) - its
+state kept. Set up on the desktop, both named SELECTORS, and the shaper
+far-called through a protected-mode code alias as a real segment, which
+hung the first build of this (`tests/vidrmbplay.py`'s failing case). On
+the way out, before the entry returns, all of it back - and the block
+decoder's pointers and the shaper's vectors made again in protected mode
+after `OSAPI_FSX_RUN` returns (`OSAPI_MEM_CODESEL` is not a real-mode
+cell).
+
+**The calls real mode cannot serve leave the bracket**:
+- a seek's claim for its key entry is the door's scratch (`vp_skdue`);
+- Mute closes the card's stream and keeps its ring (`vp_sndoff`), and
+  Unmute uses the ring it kept or the door's (`vp_sndprep`) - the ring is
+  given back after the bracket when the play went out muted;
+- the frame in the box (`vp_sesspic`: `OSAPI_MEM_CLAIM_HI`, the poster's
+  drawing) is made after `OSAPI_FSX_RUN` returns, where the desktop's
+  repaint needs it;
+- an XMS failure's `vp_xfree` inside (a copy refused, the board refusing a
+  map) drops the bank as ever, but its `OSAPI_XMEM_FREE` - the hold's or
+  bank's block and the layer's - is OWED (`vp_rxfree`) and made after
+  `OSAPI_FSX_RUN` returns (`vp_rxgive`).
+
+**The speaker in a real-mode bracket** (34.11.1.1): the speaker library's
+`os88spk_go` (and `os88spk_stop`'s owed tick) asks `OSAPI_FSX_SPK` AL = 0;
+kern_mega's real-mode twin refuses that with AX = 1, and the ARM's library
+asks again with AL = 2 and its REAL-MODE ISR, the door writing IVT 20h and
+answering the chain. The shipped library never meets that refusal.
+
+**The info card's ninth line** (the arm's alone, below line 7) says which
+bracket the last play took and why: `Real mode`, or `Protected: ` and the
+reason - the player's (`Live`, `speaker, in place`, `v2, in place`,
+`resident`, `layer split`, `bank moved`, `claim above 1MB`, `shadow, in
+place`; `[vp_rwhy]` 11h-18h in that order) or the kernel's (`FSXR_*`: `a
+worker kept`, `a driver's worker`, `extended desktop`, `a serial lease`,
+`no low memory`, `its volume`, `fragmented`, `a driver`). `[vp_rwhy]` is
+FFh until a play has asked, 0 for real mode. A card whose buttons are
+inside it shows its first eight lines, as before; the arm's DIAG card is
+nine lines, its four field lines being the VPPROF trailer's (98.3.22.3).
+
+**The gate** is `tests/vidrmbplay.py`: which bracket a play took, read off
+the kernel's `[fsx_rmode]` during it and `[vp_rwhy]` after - a speaker
+play at 1MB REAL (its chain the real-mode door's), a hold under the
+speaker PROTECTED with SPEAKER, IN PLACE, the same hold through a card
+REAL, a Live clip taken full screen PROTECTED with LIVE.
+
+**A row reading the player mid-play** reads the COPY: `tools/os88megacommon.py`
+sends a read, a write or an exec breakpoint inside the bracket window's
+region to `[fsx_rseg]` while `[fsx_rmode]` is 1, the megaport `vid*` rows
+having taken the region's base before the play.
+
+**What it cost** (image + bss against `APP_MAX_SIZE`, 65,024): the arm
+63,308 -> 64,430 (image 60,687 -> 61,773, bss +36), the shipped player
+62,547 and byte-identical, kern_big and kern_small byte-identical. That put
+the arm's `VPDIAG=1` build at 65,726 and `VPDIAG=time`'s at 65,913 - over,
+so neither assembled - and 98.3.24.1 is the answer.
+
+##### 98.3.24.1 The arm's COLD PART (2026-10-30)
+
+**Part 3 of the arm's VIDEO.O88 is code moved OUT of the image**, because
+a part is not counted against `APP_MAX_SIZE` (§20.12) and the arm's diag
+builds had outgrown it: the door (`vp_rdoor` with `vp_xmoved`,
+`vp_rclaims`, `vp_rgive`, `vp_rmklist`), its afterword (`vp_rpost`,
+`vp_rxgive`), the info card's ninth line and its names (`vp_rline`), and
+with `VP_DIAG` the profile's two ends (`vp_prbeg`, `vp_prend`, `vp_prlin`)
+and the reflection counts (`vp_rqget`). All of it is COLD - once a play at
+most, on the desktop or at a bracket's edge - so a far call costs nothing a
+play can see. `apps/video/vcold.asm` is the part and `apps/video/vcold.inc`
+its header: a signature, the player image size it was linked against, and
+six vectors.
+
+- **It is a LINKED part, PiXEL's shape (§106.20)**: DS is the player's
+  throughout, and the part reads and writes the player's variables by the
+  names `tools/os88plink.py` takes out of the MAP the player's own assembly
+  wrote (`$(MEGAAPPDIR)/vclink.inc`). The part lists what it takes in its
+  own source (`;@data`, `;@call`, a `:DEFINE` for the diag build's), a name
+  the map has not got fails the build, and a ROUTINE comes out as `PC_name`
+  so that a plain `call` of one stays an assembly error. The player refuses
+  a part linked against another build of itself (`VK_IMG`).
+- **Calls go both ways.** The player's entries are STUBS (`vp_cpcall`):
+  every register and flag as the caller left them, a far call through the
+  vector, and the part's `retf`. The part reaches the player's routines
+  back through `vp_ptramp` - `[vp_ptgt]` the routine, near-called in the
+  player's own code segment, `retf` - which is `VPC` in the part, and the
+  player's CS where a routine records it (the profile's trailer) is
+  `[vp_ptfp + 2]`. The part writes nothing through its own CS, which is a
+  read-only code alias under protected mode; its names' table is read
+  through it.
+- **Fetched at LAUNCH and kept, MOVABLE** (`vp_cpget`, called by the
+  entry proc beside `vp_bget`'s block decoder): one claim for the
+  instance's life, registered with `vp_smove` in `vp_smtab` as the speaker
+  shaper's part is (98.3.15.2) and pinned by `vp_smov` around a bracket the
+  same way, on its code alias in protected mode (`OSAPI_MEM_CODESEL`,
+  asked at every call) and on its real paragraph inside a real-mode
+  bracket, where the card's ninth line is drawn too - `[vp_cpseg]` is in
+  `vp_rlst`. A part that will not come is a door not asked (protected mode)
+  and a line not drawn. Fetched at the FIRST DOOR instead, with a session's
+  claims standing, `megavidv2`'s version 2 Repeat play on lin320 drew 72
+  wrong pixels - the defect below, in another arrangement of the LDT. It
+  stays at launch, where it is one claim taken before a session's and never
+  a disk read at a door.
+- **Movable is what found a KERNEL defect, and it is fixed there**
+  (§50.6.11, KERN-MEGA-PLAN 14.128). Registered movable, `megavidv2`'s
+  modex leg had the player CLOSED by a #GP at its next stop - `vp_sstop` ->
+  `vp_after` -> `vp_kpic` -> `vp_decram` -> `vd_n_p3`'s `movsw` with DS =
+  ES - 3 runs of 3, and pinned 1 KB and 2 KB dummy claims broke nothing,
+  because the claim was never the cause: it changed the ORDER the LDT was
+  handed out in. `OSAPI_SEG`'s `SEG_SUB` answered the key shadow's second
+  plane (`vp_spl`) with the selector that was the player's own `SEG_AT`
+  window `[vp_wk]`, aimed at that base at that moment, so the next
+  re-aim of the window for the record's read moved the plane under the
+  decoder and the plane copy's source and destination became one. A
+  `SEG_SUB` never answers a window now; the movable part runs 3 of 3 on
+  all three layouts, and with the kernel check taken out the modex leg
+  goes red again at `back to the card`. The shipped player has no such
+  defect: a real-mode kernel refuses `SEG_SUB` and `SEG_AT` both and the
+  player's segments are sums.
+- **The profile's two ends are written once for both builds**
+  (`apps/video/vprof.inc`): the shipped player expands them where they
+  always were, so every shipped build - plain, `VPDIAG=1`, `VPDIAG=time`,
+  the read log, `NOLIVESND` - is byte-identical; the arm's part expands them
+  with `VPR_CALL` and `VPR_CS` aimed at the trampoline.
+
+**What it bought** (image + bss against 65,024): the arm **63,772** (1,252
+to spare, from 594), `VPDIAG=1` **64,560** (464 to spare) and `VPDIAG=time`
+**64,739** (285 to spare) - 16 bytes each above the pinned part's, which
+registering it movable cost; the part itself, which is no image's, is 1,009,
+1,565 and 1,573 bytes. Every shipped build is byte-identical.
+
+##### 98.3.24.2 The bracket's room, held across the ring's sizing (2026-10-30)
+
+**A streamed play's real-mode bracket needs ONE conventional run the size of
+the player's region** - the door's copy of it (§53.2.3), 63 KB for the arm
+- plus the service area and the low drivers' copies, and the ring is sized
+from conventional memory too: "as many slots as the machine has". On
+kern_mega the ring is also put on the 64 KB page grid (`vp_rclaim`,
+KERN-MEGA-PLAN 14.73), so what lies under its first page is left over as a
+run of its own. Measured on 86Box's 4 MB AMI 286 (`vm/286-victory` and its
+two-card twin) with the speaker: a 480 KB ring left 16.5 KB, and a ring
+merely sized 80 KB smaller still left the room in two runs, 46.5 KB under
+the ring and 29 KB over it - and the door answered `FSXR_ROOM` on EVERY
+streamed play, so none of them was real. MEGA-VIDEO-REALMODE-PLAN's W5
+entry had owed this ("the player's ring goes conventional, so its own
+sizing leaves the room") and it had not been built.
+
+**`vp_rbhold` claims the room itself, TOP-DOWN, before the ring sizes
+itself, and `vp_rbfree` gives it back once the ring is claimed** - at the
+arena's top, one run, where the door's bottom-up first fit finds it.
+`VP_RBRKB` = 80 KB: a region is at most `APP_MAX_SIZE`, and 16 for the
+service area, EXTD.DRV's copy and a driver's (SOUND.DRV's 8, HDD.DRV's 4).
+It is the conventional door with no head (`OSAPI_MEM_CLAIM_DMA_HI`, CX = 0),
+since an `OS88_HIGHMEM` package's plain claims go above 1MB. Only under
+`CPU_F_PM` and only in the arm; a refused hold is the play it was. A
+ring that sizes short of its least anyway gives the hold back at the
+refusal (`.memf`), as the claim's own refusal does - it was kept, and the
+next play's hold took another of the package's claims. The
+ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
+`VPDIAG=time` 64,799, 225 to spare), the shipped player byte-identical.
+`tests/megarmbext.py`'s player legs are the gate: both plays real on an
+extended desktop, and `FSXR_ROOM` on both without it.
+
 ### 98.4 The window: the Preview (wave 6)
 
 **The window IS the Preview** (VIDEO-PLAN 3.3): the file's poster in a
@@ -202223,6 +203340,18 @@ with every frame still the decode's; VIDDISK X prints `xg_gap answers G`
 under its grid, so a field run checks the measurement against the copies it
 was taken from.
 
+**On kern_mega with the ring above 1MB the BOUNCE is placed** (2026-10-28).
+There a fill reads into a conventional 32 KB bounce (`[vp_dbnc]`, KERN-MEGA-PLAN
+14.41) and a bank's chunk is copied up from it, so it is the buffer the rule
+is about - and `vp_rhtry` claimed it bare. It takes `vp_xgpad`'s slack now,
+and `[vp_dbnc]` is the `vp_xgal` SUB of its claim (`[vp_dbclm]`, which is
+freed). The diag trailer had hidden it twice over: on kern_mega it wrote the
+ring and its claim as SELECTORS, which `tools/os88vfit.py` reads as
+paragraphs - a ring "128 bytes into its claim" was the next LDT entry - and
+with the ring above 1MB it now names the bounce and its claim, as linear
+paragraphs (`vp_prlin`). +36 bytes of the arm; the shipped `video.bin` is
+byte-identical, and every hot routine of the arm is identical at an even shift.
+
 ##### 98.3.18.13 The XMS bank, decoded in place by LOADALL (2026-10-15)
 
 **On a 286, a file longer than the pool plays out of its BANK with no copy
@@ -202503,6 +203632,16 @@ are +20 more (57,860).
 
 ##### 98.3.18.17 Protected mode: the ring above 1MB (2026-10-21)
 
+**DELETED by MEGA-VIDEO-REALMODE-PLAN W5 (98.3.24), 2026-10-30**: every
+session's ring is conventional again, as on kern_big, because any session
+may enter a bracket and a real-mode bracket cannot address a pool claim -
+a ring above 1MB would have sent every streamed play on an XMS machine to
+protected mode. The owner accepted the conventional memory it costs
+(MEGA-VIDEO-REALMODE-PLAN 5.2 item 4, 5.3 ruling 3). `vp_rhiq`, `vp_rhkb`,
+`vp_rhtry`, `vp_rhfit`, `vp_bnc`, `vp_rhcp` and the bounce `[vp_dbnc]` went
+with it, 456 bytes of the arm; `vp_rhpat` stays, for the conventional
+ring's selectors (`vp_rsmk`). What follows is the record.
+
 **On kern_mega in protected mode a stream's RING is a pool claim**, so a
 play no longer sizes itself from what is left below 640K, and no longer
 holds it: docs/plans/KERN-MEGA-PLAN.md 14.41 is the record. The package says
@@ -202566,6 +203705,78 @@ has, gives up one slot for a page-safe claim (`vp_rclk1`: LASTX 21.4 calls a
 second, then 11.3). Either claim falls back to the plain one when no
 page-safe run is free. The PKG_MEGA arm alone; the shipped `video.bin` is
 byte-identical.
+
+##### 98.3.18.18 Two tiers: the conventional ring beside the bank in place (2026-10-29)
+
+**In place, every chunk of the bank goes disk -> the bounce -> copied UP**
+(98.3.18.13), ~6 ms of every 32 KB on the Victory - and the reader runs
+DRY exactly where the bank has drained and it is close behind the picture,
+so that copy is spent where the play can least afford it. The conventional
+ring the bank in place had shrunk to the least a key's read needs (two
+slots and a mirror) now keeps the slots it would have had, as a second
+TIER beside the bank (docs/plans/LOADALL-PLAN.md L6):
+
+- **Where a chunk goes**: to the conventional tier while every live chunk
+  would fit it - read straight off the disk into a slot the hook decodes
+  with no borrow - and to the bank once it is full. The bank still banks in
+  the calm stretches, when its copy is cheap; a stretch that drains it is
+  read with no copy at all. A fixed rotation over both (chunk c in slot c
+  mod K) was costed first and buys an eighth of the copies whenever they
+  fall, which is ~1%.
+- **The table**: a word a chunk, `chunk & 0FFh` (the live window is under
+  256: `vp_treset` caps the bank, `[vp_kr]` with it, so both tiers hold
+  `VP_TMAX` = 254 slots at most - a pool past ~8 MB of XMS had more, and
+  chunk c + 256 took live chunk c's word), in the LAST 512 BYTES of the conventional tier's mirror slot
+  (`vp_ttab`, VP_TOFF): the slot, bit 15 the conventional tier, bit 14 a
+  seam. A super-packet is 64 sectors at most where there are tiers, so what
+  runs past a slot's end into its mirror is 63 at most and those 512 bytes
+  are never the mirror's (`vp_tcap` holds every copy into a mirror to it).
+  It was a 1 KB claim of its own first, and on the owner's Victory the
+  first field play said "0 chunks read straight in": a play with sound, a
+  palette a scene, a page flip, the block decoder's part and a profile had
+  spent the package's eight claims (MEM_OWNER_MAX), the claim was refused,
+  and the tier went off - which no gate here saw, each playing a silent clip
+  with no profile. `vp_slot` answers it; `vp_xbaddr` turns a conventional slot into a
+  pointer the decode reads as a copying ring's - a SEGMENT below VP_XSEL, so
+  `VP_DSDX` borrows for none of it and the decode is untouched.
+- **Each tier a FIFO** with its own next slot and live count, popped as
+  `vp_lfloor` passes, and its own MIRROR past its last slot. The
+  conventional tier's slots are the ring's 1 .. K-1: slot 0 is still the
+  bank's bounce, at the gap (98.3.18.12), and the tier's slots are 32 KB
+  multiples on from it, so a seam's copy is placed too.
+- **A super-packet that runs from one tier into the other** is the one new
+  case, handled the way the ring handles its wrap: at a SWITCH, what of the
+  new chunk the super-packet before it runs on into (`vp_mneed`) is copied
+  into the OLD tier's next slot - right after the chunk it continues, or
+  its mirror when that slot is 0 - and the slot is held until the new chunk
+  is popped. So a tier is left only while it has that slot free. Into the
+  bank it is a copy up from the chunk's slot; into the conventional tier a
+  copy DOWN from the bank's slot, because on a rung-1 disk (98.3.18.15) the
+  bounce does not hold what went straight up.
+- **`vp_mneed` reads its headers through `VP_DSDX`** now. In place its
+  `vp_addr` answers a HANDLE, and a plain `mov ds` on one read the high
+  memory under FFF0h instead of the header; the walk then mostly fell to its
+  "the whole chunk" bound, so the mirror was right and too long.
+
+Not taken - one tier, as before - for BIGSP (its mirror is two slots), Live,
+a bank under four slots or a ring under four, and wherever the bank is not
+in place. +~770 bytes of `video.o88`, no claim and no kernel byte.
+`tests/vidxip.py --arm banktier` is the gate: a `VP_TTEST` build that
+switches every three chunks wherever both tiers can take it, so a seam is
+copied and read every few chunks against the reference decode (20 seams and
+27 of the clip's 41 chunks straight in, 39 holds, 0 wrong); with the seam's
+copy taken out the play wedges. The diag build counts both (`tcn`, `tsw`) in
+the trailer, which `tools/os88vfit.py` prints.
+
+**The encoder prices it** (`os88venc.py`'s `TIERS`, `_drate`): in place the
+bank's copy up is charged on the disk only while the bucket is past the
+ring's reserve, as the copying FIFO's always was - where before the tiers it
+was charged on every chunk. Replayed through the model at each frame's
+measured share (98.2.3.8), Catch My Heart at kern_mega's 456,720 bytes a
+second falls 105 KB short at the worst against 1,019 KB without them, so a
+file made with `--kernel mega` gives up far less to cover the stretch the
+bank drains in. The borrows stay charged on every frame, which over-prices a
+record in a conventional slot a little.
 
 #### 98.3.22 The play's profile: every frame timed on the machine (2026-10-15)
 
@@ -202652,6 +203863,99 @@ refusal for *no such file* - but a file that IS there refuses a read into
 no room with `FERR_BIG` (20.14.6.3), so every play wrote `VPPROF1.DAT` over
 the last. Only `FERR_NOENT` is free now; any other answer moves on to the
 next n, so a disk error never overwrites a profile either.
+
+##### 98.3.22.4 Version 4: the reads TIMED (2026-10-29)
+
+`make VPDIAG=time` (`-DVP_RDTIME`, a field build like `VPDIAG=1` and never
+shipped) keeps version 2's read log in version 2's room with a different
+record: the frame drawn when the read began, how many frames the picture was
+then behind the card's due (`[vp_due] - [vp_done]`, signed), the read's
+length in units of 16 PIT counts (13.4 us, saturating at 878 ms) and its
+bytes. The length is the BRACKET'S clock (`vp_dstamp`, the hook's periods and
+channel 0's count), not channel 2's, which wraps at 55 ms - one 32 KB read on
+a BIOS-served disk under kern_mega is about 76 ms. On kern_mega the periods a
+reflection swallowed are delivered as it returns, so the length holds there
+too. A read outside `OSAPI_FSX_RUN`, where that clock does not run - the
+fill before the bracket, a play in the window - is recorded FFFEh, untimed,
+and one of 878 ms or more FFFDh. The header says version 4, and
+`tools/os88vfit.py FILE.V88 VPPROFn.DAT --reads` prints the reads' rate while reading, their lengths, the slowest
+twelve with their frames, and how far behind the picture was across the play.
+
+It is for the two questions the Victory's version 3 profiles could not
+answer: what makes some kern_big boots pause where others do not (a slow
+read shows up at its frame), and how much of kern_mega's lag is reads holding
+the hook off.
+
+##### 98.3.22.5 kern_mega's reflections across a play (2026-10-29)
+
+A `MEGADIAG` kernel (`make megadiag`) keeps running totals of what it hands to
+real mode - an option ROM's IRQ (`mega_irqrom`) and a BIOS service
+(`int 13h`, `int 10h`...) - counted and timed in `mega_svc_back` as each one
+returns: the periods the ROM counted at 40:6C times channel 0's divisor, plus
+the count's own progress, so a 50 ms reflected read is measured where
+`mega_rfsec`'s 16-bit sample of an IRQ's wraps. The four are published at
+`0040:00F0` - IRQs, their time in units of 2,048 PIT counts (1.7 ms),
+services, theirs - after every reflection; `kd_leave`'s handoff record writes
+the same four words only on its way out, and the font picker's `FP` at F8 is
+left alone. A transfer bounced above 1MB (`mega_hibnc`) returns by another
+path and is not counted. It is IN LINE and uses NO STACK: an IRQ's
+reflection runs on whatever it interrupted, an `FSXF_RATE` hook's 48 bytes
+among them (53.2.2). The first build called a routine with four pushes and
+two nested calls, and the Victory faulted mid-play on it (a #GP, error 0) -
+the stack the likelier cause than anything the routine computed.
+
+The kern_mega arm's diag player (`VP_RQ`, which `VP_DIAG` with `PKG_MEGA`
+defines) reads the four through an `OSAPI_SEG` window before and after
+`OSAPI_FSX_RUN` and appends the differences to the trailer, after CS and SS;
+`tools/os88vfit.py` prints them as a share of the play. On a kernel that is
+not `MEGADIAG` they read 0. Under Bochs (no PicoMEM) a full-screen play of
+`OS8088.V88` counts the bracket's two mode sets, 9.4 ms each, and no IRQ.
+The shipped kern_mega kernel is byte-identical.
+
+The first field reading added up the IRQs' time wrong: an IRQ's reflection
+keeps the mask, so a channel-0 reload inside it is never counted at 40:6C
+and the length came out NEGATIVE - both plays' totals read 112.5 s, a small
+negative in the published word. A negative length now takes one period back
+(65,536 counts at the ROM's rate, the bracket's divisor under it). Read
+again on the Victory with the PicoMEM: **2,161 IRQs in a 77.3 s play, 1.0 ms
+each, 2.8% of it**, and the services **38.7%, 27.1 ms each**.
+
+##### 98.3.22.6 Two frames a call when behind, under kern_mega (2026-10-29)
+
+**The picture lagged the sound by a second on kern_mega with the ring 90
+frames ahead of it**, so the reader was not short. Every 32 KB read is one
+reflected `int 13h` of ~27 ms - the same as kern_big's own call, 28.7 against
+30.5 ms timed off a play's buffering reads - but under kern_big the hook runs
+INSIDE that call and under kern_mega it is shut out, and the periods that
+fell in the call come back as ONE hook call (`mega_rfclk`). A flipped file
+draws a frame a call (`vp_fcap` = 1), so a read cost the picture a call it
+never got back: same draws, same reads, frames behind median 14-35 against
+kern_big's 0. The kern_mega arm, flipping (`vp_flip` = 1) and with more
+frames due than the call would draw, draws a SECOND, after `vp_vwait` has
+seen the first one's page latch - so no frame goes into a page still on the
+glass, and the wait (under one refresh) is spent only while behind. The
+shipped player is unchanged: under kern_big the hook is not coalesced, and
+the second frame's decode would come out of a ring whose lead there is one.
+
+##### 98.3.22.7 The card's block under kern_mega: TRIED AND REVERTED (2026-10-29)
+
+With 98.3.22.6 the picture kept up, and what was left was the reader
+running dry at the frame (Catch's 1312) a pausing kern_big play had too. The
+one cost kern_mega adds is the card's block interrupt: each is a reflection
+(`mega_irqrom`), ~1.0 ms on the Victory, ~27 a second counted, 2.7-3.3% of a
+play. The kern_mega arm was built halving the block only while it was longer
+than 100 ms of sound (`VP_BLKDIV` 10), 2,048 bytes at 22 kHz PCM8 - and on
+the Victory **the card stopped for good a few seconds in** (Catch's clock
+froze at frame 99, one card pause, then no interrupt for the rest of the
+play; the picture ran on its periods with no clock to be behind). The
+frames' clock was never the issue - `vp_adue` interpolates on the hook's
+periods between blocks - and the likelier cause, not yet shown, is that the
+SOUND'S LEAD is cut for the 25 ms block:
+the encoder writes a file's sound ahead (`AHEAD_FRAMES`, `audio_lead`) and
+its in-step budget against `VP_BLKDIV` 40, so a 93 ms block asks the stream
+to queue more ahead of the card than the file carries. Reverted: a longer
+block is an ENCODER change first (the lead and the block agreed in
+os88venc.py and the player together), and 3% does not buy it.
 
 ##### 98.3.22.1 What the first profiles changed in the encoder (2026-10-15)
 
@@ -210747,6 +212051,35 @@ Broken on purpose: with `xm_release_rec`'s `EMSV_GONE` call removed the third
 instance finds 125 pages and no quarter free; with `drv_pkg_call_x`'s slot
 swap removed the second instance is GIVEN the first's quarter and its handle.
 
+### 107.8 Inside kern_mega's real-mode bracket
+
+A package that lists `FSXL_DRV, DRVC_EMS` (§53.2.3) has the driver carried
+below 1MB for its bracket: image and state copied into a conventional claim
+at the freeze, `OSAPI_DRV_CALL` served by the twin at that copy's paragraph
+with the caller's slot in BH, and both copied back up at the exit. So a
+handle or a quarter taken on one side is the caller's on the other, and the
+board itself - its pages and its four registers - is the same hardware
+throughout. One answer differs, and a package has to know it: **the frame
+`EMSV_FRAME` and `EMSV_CAPS` hand back is the segment of the side it was
+asked on** - a selector (`OSAPI_SEG`'s `SEG_WIN`) in protected mode, the
+PARAGRAPH inside the bracket, where the real-mode `OSAPI_SEG` answers the
+paragraph itself. A selector held from before the bracket names nothing in
+real mode, so ask `EMSV_FRAME` again inside (quarters you hold already are
+answered CF = 0), and again after. Not listed, the class answers no driver
+(CF = 1, AX = 0).
+
+`tests/vidrmbems.py` (soak row `vidrmbems`) is the gate, on
+`vm/286-mega-ems` - `vm/286-mega`'s mr286 with 86Box's Lo-tech EMS board at
+260h / E000h, 2 MB, the only machine in the tree that gives kern_mega one:
+EMS.DRV loaded `DRVE_OK` in protected mode; MEGARMBE (`tests/megarmb/`)
+allocating and mapping before a bracket, reading that state and that page
+through the twin inside it, allocating, mapping and writing in real mode,
+and seeing every one of those after it in protected mode - then mapping,
+freeing and unframing back to 128 pages and four quarters. Broken on
+purpose: with `fsx_rcopyf`'s copy back UP removed, the handle made inside
+is forgotten (CAPS 124 free, `EMSV_BASE` `EMSE_BAD`) and the quarters are
+never given back.
+
 ## 108. isoTron — a light-wall duel in a raised 3D arena (`apps/isotron/isotron.asm`)
 
 ISOTRON.O88 is a light-wall duel: the player against the computer on a raised
@@ -213670,7 +215003,7 @@ stik_boot:       [ui_rebootq] != 0  -> nothing (a resume or DOS question is up)
   icons and one toast (single slot, last wins, §59.3).
 - **`desk_reflow` with no lock is safe**: it rewrites `[desk_zslot]` and posts
   `[desk_cdirty]` and nothing else, never draws, and runs lock-free already
-  from `desk_rowcalc_x` in kmain and from `OSAPI_DESK_ITEM`'s driver half at
+  from `bvw_rowcalc` in kmain and from `OSAPI_DESK_ITEM`'s driver half at
   attach. Nothing else can touch the table at this point: `ui_task` does not
   exist yet and no package is running.
 - **A pending hibernate or DOS question stands everything down**: `hb_probe`

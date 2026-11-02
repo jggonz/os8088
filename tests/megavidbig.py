@@ -72,7 +72,7 @@ def vbyte(box, label):
 
 
 def fault(box):
-    return [l for l in box.lines() if l.startswith("kern_mega FAULT")]
+    return [l for l in box.faults() if "kern_mega FAULT" in l]
 
 
 def leg(name, megs, disk, out, held, display=None):
@@ -81,7 +81,7 @@ def leg(name, megs, disk, out, held, display=None):
     box = os88bochs.Box(d, [], bimg=disk, btype="1_44", megs=megs,
                         display=display)
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             return "%s: kern_mega never reached protected mode" % name
         # on the guest's own state rather than the 25 + 10 + 3 s, HOLD s
         # and PLAY s that were slept: the desktop up, each double-click

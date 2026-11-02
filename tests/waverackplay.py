@@ -77,10 +77,15 @@ WT_IDLE, WT_PLAY, WT_PPAUSE = 0, 1, 2
 DB = os88wrart.db_table()
 
 # QEMU 11's mixer widens an unsigned 8-bit sample u to (u - 127) x 257,
-# clipped - tests/xtmp3live.py measured it - so a capture reads back into
-# the card's bytes exactly
+# clipped, and QEMU 8 to (u - 127) x 256 - tests/xtmp3live.py measured both -
+# so a capture reads back into the card's bytes exactly from either engine.
+# The tables share one value, 0, and it is 127 in both. Only the x 257 one
+# was here, and on QEMU 8.2 no 8-bit sample decoded at all: every 'found in
+# the capture' failed, on main as on every commit after it
 U8WIDE = np.clip((np.arange(256) - 127) * 257, -32768, 32767)
-U8BACK = {int(U8WIDE[u]): u for u in range(256)}
+U8WIDE8 = np.clip((np.arange(256) - 127) * 256, -32768, 32767)
+U8BACK = {int(U8WIDE8[u]): u for u in range(256)}
+U8BACK.update({int(U8WIDE[u]): u for u in range(256)})
 
 
 def tc_rate(rate):
@@ -222,6 +227,40 @@ def dominant(x, rate):
     return k * rate / len(seg), len(seg) / rate
 
 
+def tone_span(x, rate, hz, win=0.02):
+    """the length in seconds of the FIRST run of int16 samples X carrying the
+    tone HZ, a one-window gap allowed - so neither another sound nor silence
+    in X counts. A WIN-second window carries it when the DFT bin at HZ holds
+    over a third of the window's energy: a pure tone at HZ holds all of it, a
+    20 Hz-off resample wobble ~57% and the next play's 440 Hz against
+    TONE8K's 500 ~2%. Zero crossings were tried first and cannot tell 500 Hz
+    from STEREO16's 440-450 in a 20 ms window.
+
+    It exists for QEMU 8, whose wav backend holds what the mixer has when a
+    stream ends and writes it when the NEXT stream starts (QEMU 11 drops it,
+    held()'s TAIL note). So a slice cut at the end of a play loses the play's
+    last ~40-60 ms and opens with the previous play's - TONE8's began with
+    ~70 ms of the loop leg's 440 Hz. Measured from the play's start mark to
+    the end of a capture a later stream has flushed, the run is whole."""
+    w = int(rate * win)
+    ph = np.exp(-2j * np.pi * hz * np.arange(w) / rate)
+    first = last = None
+    for i in range(0, len(x) - w, w):
+        seg = x[i:i + w].astype(float)
+        e = float(np.dot(seg, seg))
+        ok = (np.abs(seg).max() >= 2000 and
+              abs(np.dot(seg, ph)) ** 2 > e * w / 2 / 3)
+        if ok:
+            if first is None:
+                first = i
+            last = i
+        elif first is not None and i - last > w:
+            break
+    if first is None:
+        return 0.0
+    return (last + w - first) / rate
+
+
 FX = {}
 
 
@@ -281,6 +320,7 @@ def leg_rates(syms, img, tmp):
         held("STEREO16 at 75%", cap, wrsim.convert(m, 1, 75))
         leg_loop(pr, m, idle)
         # --- TONE8 and TONE8K: their frequency and length ------------------------
+        spans = []
         for name, rate, hz, secs in (("TONE8.WAV", 11025, 1000, 1.0),
                                      ("TONE8K.WAV", 8000, 500, 1.0)):
             if not check("%s opens" % name, pr.open("MEDIA/GOOD/" + name)):
@@ -297,10 +337,16 @@ def leg_rates(syms, img, tmp):
                 pr.w("wt_out") == rate and pr.b("wt_d") == 1)
             check("%s: the capture's tone %.1f Hz, want %.1f (+-2%%)" % (
                 name, f or 0, want_f), f and abs(f - want_f) < want_f * 0.02)
-            check("%s: %.3f s long, want %.3f (+-0.06)" % (
-                name, ln, secs * rate / tc), abs(ln - secs * rate / tc) < 0.06)
+            spans.append((name, f0, want_f, secs * rate / tc))
         # --- closed mid-play: nothing left, and the card free --------------------
         leg_close(pr)
+        # ...whose stream has flushed the tones' tails (tone_span): now their
+        # lengths, each the run of its tone from its own play's start
+        for name, f0, want_f, want in spans:
+            _, raw = pr.capture(f0)
+            ln = tone_span(raw, 22222, want_f)
+            check("%s: %.3f s long, want %.3f (+-0.06)" % (name, ln, want),
+                  abs(ln - want) < 0.06)
     finally:
         pr.q.close()
 

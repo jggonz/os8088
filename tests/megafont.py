@@ -167,7 +167,7 @@ def floppy(t, out, aimg, fails):
     os.makedirs(fo, exist_ok=True)
     box = ob.Box(fo, [], build=t.dir, csys=True, megs=4, aimg=aimg)
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             fails.append("the floppy boot never reached protected mode")
             return
         box.up()
@@ -181,7 +181,7 @@ def floppy(t, out, aimg, fails):
                 if b < 0x100000:
                     fails.append("floppy: volume %d's FAT window is below "
                                  "1MB (%04X)" % (k, w))
-        lines = box.lines()
+        lines = box.said()
     finally:
         box.stop()
     for ln in lines:
@@ -204,7 +204,7 @@ def main():
                  build=t.dir, bootc=True, noa=True, csys=True, megs=4,
                  aimg=aimg)
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()
@@ -213,7 +213,10 @@ def main():
         box.dbl(591, 160, "C:'s Disk window")
         box.dbl(150, 123, "RUN's listing")
         box.dbl(160, 155, "DESKCLOK")
-        if not box.wait_for("above 1MB: DESK.DRV", 60):
+        try:
+            box.until(lambda: (box.mod_base("DESK.DRV") or 0) >= 0x100000,
+                      "DESK.DRV above 1MB", 60, poll=0.5)
+        except RuntimeError:
             fails.append("DESK.DRV was never loaded above 1MB")
         box.ui_done("the clock widget")
         r = check(box, "widget", fails)
@@ -230,7 +233,7 @@ def main():
                 box.xd("mousemove_relative", "--", 0, 30)
                 time.sleep(0.04)
             box.xd("mousemove_relative", "--", 0, 16)
-            time.sleep(0.5)
+            box.guest_sleep(0.5)    # the hold, in GUEST time
             box.xd("mouseup", 1)
             box.ui_done("the Hibernate dialog")
             box.goto(225, 225)          # Hibernate
@@ -244,7 +247,7 @@ def main():
                           400, poll=1.0)
             except RuntimeError as e:
                 fails.append(str(e))
-        lines = box.lines()
+        lines = box.said()
     finally:
         box.stop()
     for ln in lines:
@@ -254,19 +257,19 @@ def main():
         box = ob.Box(out, [], build=t.dir, cmode="keep", bootc=True,
                      noa=True, megs=4)
         try:
-            if not box.wait_for("kern_mega: protected mode", 300):
+            if not box.wait_pm(300):
                 fails.append("the second boot never reached protected mode")
             else:
                 box.up()                # the desktop and its Resume card
                 box.capture()
                 box.goto(225, 225)      # Resume
                 box.xd("click", 1)
-                if not box.wait_for("kern_mega: resumed", 120):
+                if not box.wait_resumed(120):
                     fails.append("no `kern_mega: resumed`")
                 box.ui_done("the resumed desktop")
                 box.shot(os.path.join(out, "resumed.png"))
                 check(box, "resumed", fails, glyphs)
-            lines = box.lines()
+            lines = box.said()
         finally:
             box.stop()
         for ln in lines:

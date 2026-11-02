@@ -89,7 +89,109 @@ class MegaMixin(object):
         fast-forwarded and overrides this with its own."""
         return time.time()
 
+    # INSIDE A REAL-MODE BRACKET (SPEC.md 53.2.3) the bracket's package runs
+    # as a COPY of its region at the real paragraph [fsx_rseg] (a region
+    # above 1MB cannot run in real mode), and the region holds what it held
+    # at the door until the copy comes back at the exit. A row that took the
+    # region's base before the play - every vid* row does - reads and writes
+    # the bytes that are NOT running. So while [fsx_rmode] is 1 an access
+    # inside the bracket window's region goes to the copy instead
+    # (MEGA-VIDEO-REALMODE-PLAN W5). Only an address at or above 1MB can be
+    # such a region (one below runs where it is), so nothing else pays a
+    # round trip for the question.
+    def read(self, addr, length):
+        return super().read(self._rmap(addr), length)
+
+    def write(self, addr, data):
+        return super().write(self._rmap(addr), data)
+
+    def _rmap(self, addr):
+        if addr < 0x100000:
+            return addr
+        r = self._rcopy()
+        if r and r[0] <= addr < r[1]:
+            return addr + r[2]
+        return addr
+
+    def _rcopy(self):
+        """(lo, hi, delta): the bracket window's region [lo, hi) and how far
+        its running copy is from it - or None, no real-mode bracket up.
+        ONE read a call: fsx_rseg, fsx_rwin, fsx_rent and fsx_rmode are
+        adjacent (kernel/fsx.inc), and the region's range is cached for the
+        (copy, window) pair, which no bracket changes while it runs."""
+        import os88geom
+        import os88sym
+        try:
+            at = os88sym.linear("fsx_rseg")
+            if os88sym.linear("fsx_rmode") != at + 6:
+                raise KeyError("fsx_rmode")
+        except KeyError:
+            return None             # (a kernel with no real-mode bracket)
+        b = self._read(at, 7)
+        if b[6] != 1:
+            return None
+        rseg, win = b[0] | b[1] << 8, b[2] | b[3] << 8
+        if not win:
+            return None
+        c = getattr(self, "_rcopyc", None)
+        if c and c[0] == (rseg, win):
+            return c[1]
+        kseg = os88sym.equates(()).get("KERNEL_SEG", 0x60)
+        w = self._read(kseg * 16 + win + os88geom.W_SEG, 2)
+        d = self._desc(w[0] | w[1] << 8)
+        if not d:
+            return None
+        r = (d[0], d[0] + d[1] + 1, (rseg << 4) - d[0])
+        self._rcopyc = ((rseg, win), r)
+        return r
+
     def selector(self, sel):
+        return self._desc(sel)
+
+    # ...and an EXEC BREAKPOINT a row arms in such a region (vidpreview's on
+    # vp_frame.dec) is armed on the copy too, wherever the bracket put it:
+    # beside what the row asked, a breakpoint on the kernel's own landing in
+    # real mode (fsx_rland, the copy made and [fsx_rmode] 1) re-arms the set
+    # for that copy and goes on, so the row never sees that stop. Nothing
+    # changes for a set with no address at or above 1MB.
+    def breakpoints(self, bps):
+        self._rbpw = list(bps)
+        return super().breakpoints(self._rbparm())
+
+    def _rbparm(self):
+        want = getattr(self, "_rbpw", None) or []
+        hi = [int(b["addr"]) for b in want
+              if b.get("type") == "exec" and int(b["addr"]) >= 0x100000]
+        land = self._rland()
+        if not hi or land is None:
+            return want
+        out = list(want)
+        r = self._rcopy()
+        if r:
+            out += [{"type": "exec", "addr": a + r[2]} for a in hi
+                    if r[0] <= a < r[1]]
+        out.append({"type": "exec", "addr": land})
+        return out
+
+    def _rland(self):
+        import os88sym
+        try:
+            return os88sym.linear("fsx_rland")
+        except KeyError:
+            return None
+
+    def wait_stop(self, *a, **k):
+        while True:
+            got = super().wait_stop(*a, **k)
+            land = self._rland()
+            if not got or land is None or not getattr(self, "_rbpw", None):
+                return got
+            if self.status().get("flat_ip") != land:
+                return got
+            super().breakpoints(self._rbparm())
+            self.run()
+
+    def _desc(self, sel):
         """(base, limit) of selector SEL, or None when SEL is not a present
         data/code descriptor - a real segment.
 

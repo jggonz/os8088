@@ -211,6 +211,39 @@
 
 %endif ; GFXE_DYN_
 
+; GFXE_BAND_SEG - THE BAND IN ANOTHER SEGMENT (kernel size pass 15). OPT-IN:
+; `%define GFXE_BAND_SEG my_word` names a WORD holding the band's segment, and
+; GFXE_BAND_BUF is then an offset in THAT segment rather than in DS. Every
+; band byte is written through ES (a 1-byte `es:` prefix a write), and a
+; glyph's eight rows are first copied out of the kernel's font into
+; gfxe_gly, so ES is free to be the band while they are merged. For a band
+; that need not be resident: SOUND.DRV's volume popup composes into the heap
+; claim it holds while it is up (SPEC.md 34.15.1). It covers what GFXE_TEXT
+; draws - gfxe_bclear, gfxe_text/gfxe_glyph, gfxe_bfill - and nothing else,
+; so it refuses the rest. Not defined, every byte below is as it was.
+%ifdef GFXE_BAND_SEG
+  %ifdef GFXE_LINE
+    %error "os88gfx.inc: GFXE_BAND_SEG covers GFXE_TEXT's routines only"
+  %endif
+  %ifdef GFXE_BITS
+    %error "os88gfx.inc: GFXE_BAND_SEG covers GFXE_TEXT's routines only"
+  %endif
+  %ifdef GFXE_SCALE
+    %error "os88gfx.inc: GFXE_BAND_SEG covers GFXE_TEXT's routines only"
+  %endif
+  %ifdef GFXE_DYN_
+    %error "os88gfx.inc: GFXE_BAND_SEG and the Sticky App library are two answers to one question"
+  %endif
+  %ifndef GFXE_NOBUTIL
+    %error "os88gfx.inc: GFXE_BAND_SEG covers GFXE_TEXT's routines only (no band utilities)"
+  %endif
+  %define GFXE_BS_ es:            ; a band byte: through ES
+  %define GFXE_FS_                ; a font byte: the DS copy in gfxe_gly
+%else
+  %define GFXE_BS_
+  %define GFXE_FS_ es:
+%endif
+
 ; AX = y -> AX = the row's byte offset; clobbers CL (and DX, BX on the mul arm)
 %macro GFXE_ROWOFF 0
   %ifdef GFXE_DYN_
@@ -371,6 +404,9 @@ gfxe_bclear:
     ret
 %else
     mov di, GFXE_BAND_BUF
+%ifdef GFXE_BAND_SEG
+    mov es, [GFXE_BAND_SEG]         ; (DS's ES above, for nothing: it is
+%endif                              ; the band's that is written)
     mov ax, [gfxe_bh]
 %if (GFXE_BAND_ST & 1) != 0
     mov bx, GFXE_BAND_ST            ; an ODD stride is counted in BYTES: ST/2
@@ -669,7 +705,7 @@ gfxe_merge:
 .k:
     mov bl, dh                  ; black ink: clear the bits
     not bl
-    and [GFXE_MB_], bl
+    and [GFXE_BS_ GFXE_MB_], bl
     inc di
     dec cx
     jz gfxe_rmr                 ; the stride's end
@@ -682,7 +718,7 @@ gfxe_merge:
     jnz .k                      ; ...until nothing is left
     ret
 .w:
-    or [GFXE_MB_], dh           ; white ink: set them
+    or [GFXE_BS_ GFXE_MB_], dh  ; white ink: set them
     inc di
     dec cx
     jz gfxe_rmr
@@ -720,7 +756,7 @@ gfxe_rmr:
 ; at DI, CL the pixel phase
 %macro GFXE_G1 2
 %%r:
-    mov al, [es:si]
+    mov al, [GFXE_FS_ si]
     inc si
     mov ah, al
     xor al, al                  ; AX = the row, left-aligned in 16
@@ -742,12 +778,12 @@ gfxe_rmr:
     add di, bp
 %else
   %if %1
-    or [GFXE_BAND_BUF + di], ah ; white ink: set the bits
-    or [GFXE_BAND_BUF + di + 1], al
+    or [GFXE_BS_ GFXE_BAND_BUF + di], ah  ; white ink: set the bits
+    or [GFXE_BS_ GFXE_BAND_BUF + di + 1], al
   %else
     not ax                      ; black ink: clear them
-    and [GFXE_BAND_BUF + di], ah
-    and [GFXE_BAND_BUF + di + 1], al
+    and [GFXE_BS_ GFXE_BAND_BUF + di], ah
+    and [GFXE_BS_ GFXE_BAND_BUF + di + 1], al
   %endif
     add di, GFXE_BAND_ST
 %endif
@@ -797,7 +833,21 @@ gfxe_glyph:
     shl ax, 1                   ; 8 bytes a glyph
     add ax, [gfxe_foff]
     mov si, ax
+%ifdef GFXE_BAND_SEG
+    push ds                     ; the glyph's eight rows into gfxe_gly, so
+    pop es                      ; ES can be the band's for the merge (AX, CX
+    mov di, gfxe_gly            ; and DI are set afresh below; BX and DX,
+    mov cx, 4                   ; the clip's, are kept)
+    push ds
+    mov ds, [gfxe_fseg]
+    cld
+    rep movsw
+    pop ds
+    mov si, gfxe_gly
+    mov es, [GFXE_BAND_SEG]
+%else
     mov es, [gfxe_fseg]
+%endif
 %ifdef GFXE_SCALE
     cmp byte [gfxe_ts], 1
     jne .gen
@@ -864,7 +914,7 @@ gfxe_glyph:
 %ifndef GFXE_SCALE
     mov bp, 8                   ; --- x1's GENERAL PATH, the stride's last
 .row:                           ; byte: a row at a time through gfxe_rowput,
-    mov dh, [es:si]             ; which stops at the stride (it spends AX..DX
+    mov dh, [GFXE_FS_ si]       ; which stops at the stride (it spends AX..DX
     inc si                      ; and DI, never SI or BP)
     mov bx, [gfxe_ty]
     inc word [gfxe_ty]
@@ -1094,6 +1144,10 @@ gfxe_text:
 ; out: clobbers AX, BX, CX, DX, SI, DI, BP, flags
 ; -----------------------------------------------------------------------------
 gfxe_bfill:
+%ifdef GFXE_BAND_SEG
+    push es                     ; gfxe_fbyte writes through ES (and ES is
+    mov es, [GFXE_BAND_SEG]     ; given back below)
+%endif
     or ax, ax
     jns .x0
     add cx, ax
@@ -1169,6 +1223,9 @@ gfxe_bfill:
     dec bp
     jnz .row
 .out:
+%ifdef GFXE_BAND_SEG
+    pop es
+%endif
     ret
 
 ; gfxe_fbyte - AL = a mask: those bits of the band byte at DI set (GFXE_INV)
@@ -1182,10 +1239,10 @@ gfxe_fbyte:
     test byte [gfxe_tsty], GFXE_INV
     jnz .o
     not al
-    and [GFXE_FB_], al
+    and [GFXE_BS_ GFXE_FB_], al
     ret
 .o:
-    or [GFXE_FB_], al
+    or [GFXE_BS_ GFXE_FB_], al
     ret
 %endif ; GFXE_TEXT
 
@@ -1531,6 +1588,9 @@ gfxe_foff:  dw 0
 gfxe_f0:    db 0                    ; ...the first code it covers
 gfxe_f1:    db 0                    ; ...and the last
 gfxe_fmask: dw 0                    ; gfxe_bfill's two edge masks
+%ifdef GFXE_BAND_SEG
+gfxe_gly:   times 8 db 0            ; the glyph being merged (GFXE_BAND_SEG)
+%endif
 %endif
 %ifdef GFXE_POINTS
 gfxe_pn:    dw 0                    ; how many points are in the list...

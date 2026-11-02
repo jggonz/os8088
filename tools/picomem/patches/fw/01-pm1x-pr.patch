@@ -1,0 +1,663 @@
+From 5e507be2cd88e7dd1e4349e5e00d828b2837694c Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 12 Oct 2026 08:33:51 +0000
+Subject: [PATCH] PicoMEM 1.x : Fixes, the Sound Blaster during disk access,
+ multi sector disk read
+
+PicoMEM 1.x
+- Restore CYW43_PIO_CLOCK_DIV_INT=4 in the "< 1.5" block and the RP2040's
+  1.20V. Without them a 1.x build never lights the LED and the PC hangs
+  after the BIOS banner.
+- The fake address of a DMA (AEN) cycle has A10 set (0x0FFFFF0F4). With it
+  clear, a DMA cycle whose low address byte was in xx00-xx0F or xx80-xx8F
+  was decoded as a write to the 8237 registers. Noted in pm_isa_rp2350.h
+  but not applied there (not tested).
+
+Sound Blaster with the emulated DMA (USE_HWDMA=0)
+- The SB worker runs with the mixer during disk access: in the disk loop,
+  in the PC command waits of an Int 13h (pm_pccmd_wait_hook, core 0 only),
+  and in the SD driver's token and ready waits.
+- 512 Bytes DMA copy (was 128) and a 2048 samples FIFO. The SB starts
+  playing at 1024 samples, the other FIFOs keep 512 (start_thr).
+- A sound shorter than the start level is played when its DMA ends.
+- The block IRQ is sent when the block's bytes are read from the PC, not
+  when its time is up. Several pending blocks send one IRQ each.
+- The rest of the last copy is dropped when the PC programs the DMA again,
+  so it is not counted as part of the next transfer.
+
+Disk read to the PC RAM
+- The sectors of an Int 13h read are read in runs (one f_read, so one SD
+  multi block command) into a Pico buffer, then copied by the PC from the
+  BIOS RAM transfer buffer with one command. The next run is read while the
+  PC copies the previous one.
+- The runs are 1, 2 then 4 sectors: the first read is the only one the PC
+  waits for, and a run of n is read during the copy of n/2.
+- A destination that is not all PC RAM (emulated RAM, PSRAM or EMS) still
+  uses the sector loop.
+- On a 16MHz 286 (PicoMEM 1.x, Pico W) a sector is ~650us of PC copy against
+  ~270us of SD read. The disk read rate goes from 685 to 755 KB/s, and from
+  345 to 380 KB/s with half the CPU busy: 96% of what the 8 bit ISA copy
+  allows. Not tested on a PicoMEM 2.
+
+The PC's copy during a disk access
+- The disk code waits for the PC to end a copy with no time limit, as
+  PC_End does, and stops only on a PC reset. The PC copies with its
+  interrupts enabled, so an interrupt handler can hold it for more than the
+  120 ms (20 + 100) the wait allowed - a program drawing from the timer
+  interrupt does - and the sector loops do not test PC_MemCopyW_512b's
+  result: the sector was left out of the read or the write, with no error.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01LHvUXgSzoPz1D5SLjfPSAp
+Claude-Session: https://claude.ai/code/session_0174Wo9UH9n7xupVfqFkBJ47
+---
+ src/CMakeLists.txt                            |   1 +
+ src/audio_devices/audio_fifo.c                |   5 +-
+ src/audio_devices/audio_fifo.h                |   5 +-
+ src/audio_devices/sbdsp/sbdsp.cpp             |  31 +++++-
+ src/audio_devices/sbdsp/sbdsp.h               |   3 +
+ src/dosbox/bios_disk.cpp                      | 102 +++++++++++++++++-
+ src/dosbox/bios_disk.h                        |   1 +
+ src/lib/FatFs_SPI/sd_driver/SPI/sd_card_spi.c |   2 +
+ src/picomem.cpp                               |   4 +
+ src/pm_cmd.cpp                                |   4 +
+ src/pm_isa_rp2040.h                           |   4 +-
+ src/pm_isa_rp2350.h                           |   2 +
+ src/pm_libs/isa_dma.cpp                       |   2 +-
+ src/pm_libs/isa_dma.h                         |   2 +-
+ src/pm_libs/pm_pccmd.cpp                      |  44 +++++++-
+ src/pm_libs/pm_pccmd.h                        |  21 ++--
+ 16 files changed, 203 insertions(+), 30 deletions(-)
+
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index d6b1b03..743cee9 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -317,6 +317,7 @@ else()  # PicoMEM Boards < 1.5
+ 
+ # 270 Min for the 5150
+         PM_SYS_CLK=280    # Possible values : 130,133,160,170,...,240,260,270,280
++        CYW43_PIO_CLOCK_DIV_INT=4  # For the Wifi Chip PIO clock : 2 for 133MHz
+ 
+         MAX_PMRAM=8             # Maximum Nb of 16Kb RAM for the Pico emulated RAM (Reduce to allow all, for test) (8 for 128Kb maximum)
+ 
+diff --git a/src/audio_devices/audio_fifo.c b/src/audio_devices/audio_fifo.c
+index 88160bc..fe5da8b 100644
+--- a/src/audio_devices/audio_fifo.c
++++ b/src/audio_devices/audio_fifo.c
+@@ -46,6 +46,7 @@ void afifo_init8(audio_fifo_8_t *fifo) {
+ //    fifo->samples_in_fifo = 0;
+     fifo->samples_received = 0;
+     fifo->samples_sent = 0;
++    fifo->start_thr = AUDIO_FIFO_START_THRESHOLD;
+ #if AUDIO_SINE
+     PM_INFO ("Generate Sine Wave: ");
+     for (int i = 0; i < SINE_WAVE_TABLE_LEN; i++) {
+@@ -89,7 +90,7 @@ bool afifo_add_sample8(audio_fifo_8_t *fifo, int8_t sample) {
+     fifo->write_idx = (fifo->write_idx + 1) & (AUDIO_FIFO_BITS);
+     fifo->samples_received++;  
+ 
+-    if ((fifo->samples_received-fifo->samples_sent) == AUDIO_FIFO_START_THRESHOLD) {
++    if ((fifo->samples_received-fifo->samples_sent) >= fifo->start_thr) {
+         if (fifo->state == FIFO_STATE_STOPPED) PM_INFO("Start FIFO\n");
+         fifo->state = FIFO_STATE_RUNNING;
+     }
+@@ -133,7 +134,7 @@ bool afifo_add_samples8(audio_fifo_8_t *fifo, const int8_t *samples_buffer, uint
+     fifo->write_idx = (fifo->write_idx + num_samples_to_add) & (AUDIO_FIFO_BITS);
+     fifo->samples_received += num_samples_to_add;
+ 
+-    if ((fifo->samples_received-fifo->samples_sent) >= AUDIO_FIFO_START_THRESHOLD) {        
++    if ((fifo->samples_received-fifo->samples_sent) >= fifo->start_thr) {        
+         if (fifo->state == FIFO_STATE_STOPPED) PM_INFO("Start FIFO\n");
+         fifo->state = FIFO_STATE_RUNNING;
+     }
+diff --git a/src/audio_devices/audio_fifo.h b/src/audio_devices/audio_fifo.h
+index fe1b238..f1eb1e0 100644
+--- a/src/audio_devices/audio_fifo.h
++++ b/src/audio_devices/audio_fifo.h
+@@ -12,9 +12,9 @@
+ // #include "pico/sem.h"
+ 
+ // Configuration
+-#define AUDIO_FIFO_SIZE 1024  // Must be power of 2
++#define AUDIO_FIFO_SIZE 2048  // Must be power of 2
+ #define AUDIO_FIFO_BITS (AUDIO_FIFO_SIZE - 1)
+-#define AUDIO_FIFO_START_THRESHOLD (AUDIO_FIFO_SIZE >> 1)  // Start playback when half full
++#define AUDIO_FIFO_START_THRESHOLD 512  // Default level to start the playback (start_thr)
+ //#define AUDIO_FIFO_START_THRESHOLD 5
+ 
+ #ifdef __cplusplus
+@@ -41,6 +41,7 @@ typedef struct {
+     volatile uint32_t samples_in_fifo;
+     volatile uint32_t samples_received;
+     volatile uint32_t samples_sent;    
++    uint32_t start_thr;              // Start playback when this level is reached
+ } audio_fifo_8_t;
+ 
+ // 8Bit Stereo FIFO structure
+diff --git a/src/audio_devices/sbdsp/sbdsp.cpp b/src/audio_devices/sbdsp/sbdsp.cpp
+index 8a6ba00..9f6dfbf 100644
+--- a/src/audio_devices/sbdsp/sbdsp.cpp
++++ b/src/audio_devices/sbdsp/sbdsp.cpp
+@@ -213,6 +213,15 @@ static __force_inline void sbdsp_dac_disable() {
+ }
+ */
+ 
++#if !USE_HWDMA
++// End of a DMA block : The IRQ is sent by the main loop when the block is read from the PC
++// (Not before, the PC can then write in the block as soon as it has the IRQ)
++static __force_inline void sbdsp_vdma_block_end() {
++    sbdsp.vdma_irq_at[sbdsp.vdma_irq_wr & 7]=sbdsp.vdma_to_send;
++    sbdsp.vdma_irq_wr++;
++}
++#endif
++
+ static uint32_t __not_in_flash_func(DSP_DMA_EventHandler)(Bitu val) {
+     uint32_t current_interval;
+     uint32_t total_ticks;
+@@ -254,7 +263,7 @@ static uint32_t __not_in_flash_func(DSP_DMA_EventHandler)(Bitu val) {
+ #if USE_HWDMA
+             bus_irq_raise(IRQ_R_AUDIO,sbdsp.irq,true);
+ #else
+-            sbdsp.mainloop_action=DSP_MLC_SENDIRQ;
++            sbdsp_vdma_block_end();
+ #endif
+             sbdsp.dma_sample_count_rx=0;
+             sbdsp.adpcm_code_index=0;
+@@ -266,7 +275,7 @@ static uint32_t __not_in_flash_func(DSP_DMA_EventHandler)(Bitu val) {
+ #if USE_HWDMA
+             bus_irq_raise(IRQ_R_AUDIO,sbdsp.irq,true);
+ #else
+-            sbdsp.mainloop_action=DSP_MLC_SENDIRQ;
++            sbdsp_vdma_block_end();
+ #endif
+          return 0;
+         }
+@@ -343,6 +352,9 @@ void sbdsp_init()
+ 
+ 
+     afifo_init8(&sbdsp_fifo); // initialize the audio FIFO
++#if !USE_HWDMA
++    sbdsp_fifo.start_thr=1024; // Emulated DMA : Bigger FIFO level to absorb the SD and PC access delays
++#endif
+ 
+ #ifdef BOARD_PICOMEM
+     PM_INFO("sbdsp_init\n");
+@@ -1064,6 +1076,7 @@ void sbdsp_dma_worker()
+       PM_INFO(">MLCRST ");
+       sbdsp.vdma_to_send=0;   // Reset the Virtual DMA sample count
+       sbdsp.vdma_sent=0;
++      sbdsp.vdma_irq_rd=sbdsp.vdma_irq_wr;  // No more IRQ to send
+       isa_dma_buffer_free();  // Free the DMA buffer
+       sbdsp.mainloop_action=DSP_MLC_NONE;
+       return;
+@@ -1074,6 +1087,11 @@ void sbdsp_dma_worker()
+    }
+ */
+ 
++  // A copy is a whole block, so when a transfer stops, the end of the last
++  // one is left in the buffer. Drop it once the PC has programmed the DMA
++  // again: it is not part of the new transfer.
++  if (isa_dma.buffer_level && dmachregs[sbdsp.dma8].changed) isa_dma_buffer_free();
++
+   if (sbdsp.vdma_to_send!=sbdsp.vdma_sent) {  // Execute only if there is data to transfer
+   DBG_ON_SB_UPD();
+   dev_sbdsp_enable_mix(); // Enable mixing
+@@ -1084,11 +1102,16 @@ void sbdsp_dma_worker()
+   DBG_OFF_SB_UPD();
+  }
+ 
+-if (sbdsp.mainloop_action==DSP_MLC_SENDIRQ) {  // Perform the reset here, to not change the variable in the middle of the worker execution
++  // DMA ended and all the samples sent : Start the playback even if the FIFO start level is not reached
++  if (!sbdsp.dma_enabled && (sbdsp.vdma_to_send==sbdsp.vdma_sent) && (sbdsp_fifo.state==FIFO_STATE_STOPPED)
++      && (sbdsp_fifo.samples_received!=sbdsp_fifo.samples_sent)) sbdsp_fifo.state=FIFO_STATE_RUNNING;
++
++  // Send the block IRQ when all the block bytes are read
++  if ((sbdsp.vdma_irq_rd!=sbdsp.vdma_irq_wr) && ((int32_t)(sbdsp.vdma_sent-sbdsp.vdma_irq_at[sbdsp.vdma_irq_rd & 7])>=0)) {
+  //     PM_INFO(">I ");
+       DBG_ON_IRQ_SB();
+       bus_irq_raise(IRQ_R_AUDIO,sbdsp.irq,true);
+-      sbdsp.mainloop_action=DSP_MLC_NONE;
++      sbdsp.vdma_irq_rd++;
+       return;
+      }
+ 
+diff --git a/src/audio_devices/sbdsp/sbdsp.h b/src/audio_devices/sbdsp/sbdsp.h
+index 516bac1..52f97d1 100644
+--- a/src/audio_devices/sbdsp/sbdsp.h
++++ b/src/audio_devices/sbdsp/sbdsp.h
+@@ -50,6 +50,9 @@ typedef struct sbdsp_t {
+   //  volatile bool vdma_flushdata;    // Force the Samples copy from DMA to the FIFO
+     uint32_t vdma_to_send;           // Count of bytes to transfer for the Virtual DMA
+     uint32_t vdma_sent;              // Different variable, one for the main loop, one for the IRQ to avoid conflict
++    volatile uint32_t vdma_irq_at[8];  // vdma_sent value at the end of each block waiting for its IRQ
++    volatile uint8_t vdma_irq_wr;      // Written by the DMA timer
++    volatile uint8_t vdma_irq_rd;      // Read by the main loop
+ 
+     uint16_t dac_interval;           // Interval (in uS) between 2 samples is sent to the DAC
+     int32_t timer_delta;             // Timer delta for the DAC timer event
+diff --git a/src/dosbox/bios_disk.cpp b/src/dosbox/bios_disk.cpp
+index b9c1605..bb3e662 100644
+--- a/src/dosbox/bios_disk.cpp
++++ b/src/dosbox/bios_disk.cpp
+@@ -43,6 +43,18 @@ extern pio_spi_inst_t psram_spi;
+ #include "dev_memory.h"   // Need access to the emulated RAM infos
+ #include "pm_pccmd.h"
+ #include "dev_audiomix.h"     // For Audio Pause / Resume
++#if USE_SBDSP
++#include "dev_sbdsp.h"
++#endif
++
++// Mix the audio and run the Sound Blaster DMA, called while waiting during a disk access
++void pm_disk_audio_pump()
++{
++#if USE_SBDSP
++  dev_sbdsp_update();
++#endif
++  pm_audio_domix();
++}
+ 
+ //PM File functions:
+ #include "ff.h"
+@@ -232,6 +244,20 @@ Bit8u imageDisk::Read_Sector(Bit32u head,Bit32u cylinder,Bit32u sector,void * da
+ 	return Read_AbsoluteSector(sectnum, data);
+ }
+ 
++// Read count sectors in one f_read : FatFs then reads the clusters with SD multi block commands
++Bit8u imageDisk::Read_AbsoluteSectors(Bit32u sectnum, Bit32u count, void * data) {
++	uint byteread;
++	FRESULT fr;
++	f_lseek(diskimg,sectnum * sector_size);
++	fr = f_read(diskimg,data,count * sector_size,&byteread);
++	if ((FR_OK != fr) || (byteread != count * sector_size))
++	{
++	  PM_ERROR("Fail: %d \n",fr);
++	  return 0x04;  //04h : sector not found/read error (BIOS error code)
++	}
++	return 0x00;
++}
++
+ Bit8u imageDisk::Read_AbsoluteSector(Bit32u sectnum, void * data) {
+ 	Bit32u 	bytenum = sectnum * sector_size;
+     uint byteread;
+@@ -417,6 +443,62 @@ static bool driveInactive(Bitu driveNum) {
+ }
+ 
+ 
++// ** Multi sector disk read, to the PC RAM
++// The sectors are read DISK_RUN at a time in a Pico buffer, while the PC copies
++// the previous ones from the BIOS RAM transfer buffer (2Kb at 4Kb).
++// A run is one SD command instead of one per sector, and one PC copy command.
++// The first runs are 1 then 2 sectors : the first read is the only one the PC
++// waits for, and a run of n is read during the copy of n/2 (The copy is the
++// longest : ~650us a sector on a 16MHz 286, against ~270us to read one).
++#define DISK_RUN 4
++static uint8_t disk_run_buf[DISK_RUN*512];
++
++// True if the whole buffer is in the PC RAM (Not emulated by the PicoMEM)
++static bool disk_in_pc_ram(uint32_t start, uint32_t len)
++{
++  for (uint32_t a=start;a<start+len;a=(a|0xFFF)+1)
++    if (GetMEMType(a)!=MEM_NULL) return false;
++  return (GetMEMType(start+len-1)==MEM_NULL);
++}
++
++// Return 0 if Ok, the BIOS error code, or 0xFFFF if the PC did not answer (Nothing to return)
++static uint16_t disk_read_runs(Bitu drivenum, uint32_t lba, uint32_t count, uint32_t dest)
++{
++  uint32_t run=1;
++  uint32_t n=1;
++  uint8_t st=imageDiskList[drivenum]->Read_AbsoluteSectors(lba,n,disk_run_buf);
++  if ((st!=0) || killRead) { killRead=false; return st ? st : 0x04; }
++
++  for (;;)
++   {
++    // The transfer buffer is free when the previous copy is completed
++    if (!PC_Wait_CMD_End_Disk()) return 0xFFFF;
++    memcpy((void *)PM_PTR_DISKBUFFER,disk_run_buf,n*512);
++    __compiler_memory_barrier();
++    if (!PC_MemCopyW_Disk(PC_DB_Start,dest,n*256)) return 0xFFFF;
++    if (PCCR_PCSTATE==PCC_PCS_RESET) return 0xFFFF;		// Quit if Reset asked
++
++    pm_disk_audio_pump();   // Insert Audio Mix during the wait time
++
++    lba+=n; dest+=n*512; count-=n;
++    if (count==0) break;
++
++    // Read the next run while the PC copies this one
++    if (run<DISK_RUN) run<<=1;
++    n=(count<run) ? count : run;
++    st=imageDiskList[drivenum]->Read_AbsoluteSectors(lba,n,disk_run_buf);
++    if ((st!=0) || killRead)
++      {
++       killRead=false;
++       if (!PC_Wait_CMD_End_Disk()) return 0xFFFF;
++       return st ? st : 0x04;
++      }
++   }
++
++  if (!PC_Wait_CMD_End_Disk()) return 0xFFFF; // Wait until the PC finish the last copy
++  return 0;
++}
++
+ Bitu INT13_DiskHandler(void) {
+     Bit32u sect_lba;
+ 	Bit16u segat, bufptr;
+@@ -509,6 +591,22 @@ Only Last Status 0,1 and 7 are used */
+ 
+ #endif
+ 
++        if (disk_in_pc_ram(PCBuffer_Start,reg_al*512))
++         {
++          uint16_t st=disk_read_runs(drivenum,sect_lba,reg_al,PCBuffer_Start);
++          if (st==0xFFFF) return CBRET_NONE;
++          if (st!=0)
++            {
++             PM_ERROR("HDD Read Error");
++             reg_ah = st;
++             reg_SetCF();
++             return CBRET_NONE;
++            }
++          reg_ah = 0x00;
++          reg_ClearCF();
++          break;
++         }
++
+         BOffset=0;
+   	    PCBuffer_End=PCBuffer_Start+512-1; //Current 512b PC Buffer End (-1 as we need the end, not the @ just after the end)
+ 
+@@ -568,7 +666,7 @@ if (mt_beg==MEM_EMS) mt_beg=0xFF;    // EMS > Slow Copy via CPU
+                 PC_MemCopyW_512b(PC_DB_Start+BOffset,PCBuffer_Start);
+           		if (PCCR_PCSTATE==PCC_PCS_RESET) return CBRET_NONE;		// Quit if Reset asked
+ 
+-				pm_audio_domix();   // Insert Audio Mix during the wait time
++				pm_disk_audio_pump();   // Insert Audio Mix during the wait time
+ 
+ 			   break;
+ 		    case MEM_RAM:  // ** Disk Read to the PC RAM emulated in the Pico SRAM
+@@ -649,7 +747,7 @@ if (mt_beg==MEM_EMS) mt_beg=0xFF;    // EMS > Slow Copy via CPU
+ 				PM_PICO_EnablePSRAM();
+ 				PC_MemCopyW_512b(PC_DB_Start+BOffset,PCBuffer_Start);
+ 
+-				pm_audio_domix();   // Insert Audio Mix during the wait time
++				pm_disk_audio_pump();   // Insert Audio Mix during the wait time
+ 
+ 		        if (!PC_Wait_CMD_End_Disk()) return CBRET_NONE; // Wait until the PC finish a sector copy
+ 				PM_EnableSD();
+diff --git a/src/dosbox/bios_disk.h b/src/dosbox/bios_disk.h
+index bd222cc..94f3c74 100644
+--- a/src/dosbox/bios_disk.h
++++ b/src/dosbox/bios_disk.h
+@@ -109,6 +109,7 @@ public:
+ 	Bit8u Read_Sector(Bit32u head,Bit32u cylinder,Bit32u sector,void * data);
+ 	Bit8u Write_Sector(Bit32u head,Bit32u cylinder,Bit32u sector,void * data);
+ 	Bit8u Read_AbsoluteSector(Bit32u sectnum, void * data);
++	Bit8u Read_AbsoluteSectors(Bit32u sectnum, Bit32u count, void * data);
+ 	Bit8u Write_AbsoluteSector(Bit32u sectnum, void * data);
+ 
+ 	void Set_Geometry(Bit32u setHeads, Bit32u setCyl, Bit32u setSect, Bit32u setSectSize);
+diff --git a/src/lib/FatFs_SPI/sd_driver/SPI/sd_card_spi.c b/src/lib/FatFs_SPI/sd_driver/SPI/sd_card_spi.c
+index 249c062..3eec718 100644
+--- a/src/lib/FatFs_SPI/sd_driver/SPI/sd_card_spi.c
++++ b/src/lib/FatFs_SPI/sd_driver/SPI/sd_card_spi.c
+@@ -370,6 +370,7 @@ static bool sd_wait_ready(sd_card_t *sd_card_p, uint32_t timeout) {
+     uint32_t start = millis();
+     do {
+         resp = sd_spi_write_read(sd_card_p, 0xFF);
++        if (resp != 0xFF) pm_audio_domix();  // PICOMEM: Mix during the wait
+     } while (resp != 0xFF && millis() - start < timeout);
+     /* Checking for 0xFF provides a little extra margin to 
+     make sure that DO has gone high and stayed there.
+@@ -754,6 +755,7 @@ static bool sd_wait_token(sd_card_t *sd_card_p, uint8_t token) {
+         if (token == sd_spi_read(sd_card_p)) {
+             return true;
+         }
++        pm_audio_domix();  // PICOMEM: Mix during the wait
+     } while (millis() - start < sd_timeouts.sd_command);
+ 
+     DBG_PRINTF("sd_wait_token: timeout\n");
+diff --git a/src/picomem.cpp b/src/picomem.cpp
+index 8285b30..195a292 100644
+--- a/src/picomem.cpp
++++ b/src/picomem.cpp
+@@ -405,7 +405,11 @@ vreg_set_voltage(CPU_VOLTAGE);
+ busy_wait_ms(10);
+ set_sys_clock_khz(PM_SYS_CLK*1000, true);
+ #else
++#if PICO_RP2040
++vreg_set_voltage(VREG_VOLTAGE_1_20);    // RP2040 at 280MHz
++#else
+ vreg_set_voltage(VREG_VOLTAGE_1_15);
++#endif
+ set_sys_clock_khz(PM_SYS_CLK*1000, true);
+ #endif
+ 
+diff --git a/src/pm_cmd.cpp b/src/pm_cmd.cpp
+index b32556d..e63b8b9 100644
+--- a/src/pm_cmd.cpp
++++ b/src/pm_cmd.cpp
+@@ -513,6 +513,8 @@ bool PM_RTC_OnOff(uint8_t state)
+ // *************************************************************
+ // *****      PicoMEM Commands Run from the 2nd core       *****
+ // *************************************************************
++extern void pm_disk_audio_pump();
++
+ void PM_ExecCMD()
+ {
+ 
+@@ -1319,6 +1321,7 @@ void PM_ExecCMD()
+      if (PM_EnableSD()) 
+       {
+         if (PM_Int13h_LEDCount++==3) pm_led(1);  // Don't blink the LED all the time
++        pm_pccmd_wait_hook=pm_disk_audio_pump;  // Keep the audio running while waiting for the PC
+         INT13_DiskHandler();        
+       }
+        else
+@@ -1330,6 +1333,7 @@ void PM_ExecCMD()
+ 
+      PM_PICO_EnablePSRAM();   // Re enable the PSRAM for the Memory emulation
+ 	   PC_End();                // Tell the PC Command loop to end
++     pm_pccmd_wait_hook=NULL;
+   
+      if (PM_Int13h_LEDCount==6) {
+         pm_led(0);
+diff --git a/src/pm_isa_rp2040.h b/src/pm_isa_rp2040.h
+index f5b5a1f..f6b7e35 100644
+--- a/src/pm_isa_rp2040.h
++++ b/src/pm_isa_rp2040.h
+@@ -41,7 +41,9 @@ uint32_t  ISA_Addr;
+ uint8_t   ISA_Data;
+ 
+ // Send the value to use to return the fake Address (Address where the is a ROM or no IO)
+- pio_sm_put(isa_pio, isa_bus_sm, 0x0FFFFF0F0);  // If 0x0FFFFF0FF, Floppy access (DMA) Crash
++ // A10 must be set (0x0F4): the IO decode uses A3-A10, and with A10 clear a DMA cycle
++ // at xx00-xx0F or xx80-xx8F was decoded as a write to the 8237 registers
++ pio_sm_put(isa_pio, isa_bus_sm, 0x0FFFFF0F4);  // If 0x0FFFFF0FF, Floppy access (DMA) Crash
+ 
+ for (;;) {
+ 
+diff --git a/src/pm_isa_rp2350.h b/src/pm_isa_rp2350.h
+index b50aff4..18dd43c 100644
+--- a/src/pm_isa_rp2350.h
++++ b/src/pm_isa_rp2350.h
+@@ -22,6 +22,8 @@ uint8_t   ISA_Data;
+ 
+ // Send the value to use to return the fake Address (Address where the is a ROM or no IO)
+  pio_sm_put(isa_pio, isa_bus_sm, 0x0FFFFF0F0);  // If 0x0FFFFF0FF, Floppy access (DMA) Crash
++// Same A10 fix as pm_isa_rp2040.h (DMA cycles decoded as 8237 writes), not tested on this board :
++// pio_sm_put(isa_pio, isa_bus_sm, 0x0FFFFF0F4);
+ 
+ //for (;;) {}
+ 
+diff --git a/src/pm_libs/isa_dma.cpp b/src/pm_libs/isa_dma.cpp
+index 7f914c5..3c0118c 100644
+--- a/src/pm_libs/isa_dma.cpp
++++ b/src/pm_libs/isa_dma.cpp
+@@ -148,7 +148,7 @@ if (DMA_IRQ_Sent!=DMA_IRQ_Acked) { // If the previous DMA Copy command was not a
+ }
+ 
+ // Perform a DMA Transfer (Emulated DMA Code)
+-// Transfer a 128 byte block from the PC to the PicoMEM RAM using a Single buffer (No FIFO)
++// Transfer a DMA_BLOC_SIZE block from the PC to the PicoMEM RAM using a Single buffer (No FIFO)
+ void isa_dma_transfer(uint8_t channel)
+ {
+  // PM_INFO("!BL%d ",isa_dma.buffer_level);
+diff --git a/src/pm_libs/isa_dma.h b/src/pm_libs/isa_dma.h
+index 85caa2f..625e3e4 100644
+--- a/src/pm_libs/isa_dma.h
++++ b/src/pm_libs/isa_dma.h
+@@ -10,7 +10,7 @@
+ // Virtual DMA definitions
+ #define PM_DMAB_Offset 6*1024
+ #define PM_DMAB_Size   1024  // 2*1024 max
+-#define DMA_BLOC_SIZE 128    // Size of the DMA transfer block (128 bytes)
++#define DMA_BLOC_SIZE 512    // Size of the DMA transfer block (Max transfer is 1.5x, must fit PM_DMAB_Size)
+ 
+ // Real DMA definitions
+ #define DMA_PIO pio0
+diff --git a/src/pm_libs/pm_pccmd.cpp b/src/pm_libs/pm_pccmd.cpp
+index e8c85da..93ee9ac 100644
+--- a/src/pm_libs/pm_pccmd.cpp
++++ b/src/pm_libs/pm_pccmd.cpp
+@@ -39,6 +39,14 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ uint32_t PCC_API_STATUS;      // What the API is waiting for ? (To track crash)
+ uint32_t PCC_CMD_IP;          // Command In Progress
+ 
++// Called while waiting for the PC (Set during Int13h to keep the audio running), Core 0 only
++void (*volatile pm_pccmd_wait_hook)(void);
++
++static inline void pccmd_wait()
++{
++  if (pm_pccmd_wait_hook && (get_core_num()==0)) pm_pccmd_wait_hook();
++}
++
+ // Send a command to the PC, need to check that the PC is ready to receive a command first
+ void Send_PC_CMD(uint8_t CommandNB)    // Send a Command, don't touch parameters and wait for its start
+ {  
+@@ -47,12 +55,12 @@ void Send_PC_CMD(uint8_t CommandNB)    // Send a Command, don't touch parameters
+         {
+           PCCR_PMSTATE=PCC_PMS_CMDACK;
+           PCC_API_STATUS=PCC_API_WAITENDACK;
+-          do {} while (PCCR_PCSTATE!=PCC_PCS_WAITCMD&&(PCCR_PCSTATE!=PCC_PCS_RESET)); // Wait for the PC to see the Acknowledge
++          do { pccmd_wait(); } while (PCCR_PCSTATE!=PCC_PCS_WAITCMD&&(PCCR_PCSTATE!=PCC_PCS_RESET)); // Wait for the PC to see the Acknowledge
+         }
+    if (PCCR_PCSTATE!=PCC_PCS_WAITCMD) {
+        // PM_INFO("Send_PC_CMD: PC not waiting for a command, current state %d\n",PCCR_PCSTATE);
+         PCC_API_STATUS=PCC_API_WAITWAITCMD;
+-        do {} while (PCCR_PCSTATE!=PCC_PCS_WAITCMD&&(PCCR_PCSTATE!=PCC_PCS_RESET)); // Wait for the PC to see the Acknowledge
++        do { pccmd_wait(); } while (PCCR_PCSTATE!=PCC_PCS_WAITCMD&&(PCCR_PCSTATE!=PCC_PCS_RESET)); // Wait for the PC to see the Acknowledge
+         }
+    if (PCCR_PCSTATE==PCC_PCS_RESET) return; // Can't send a command if the PC is in Reset State
+ 
+@@ -60,7 +68,7 @@ void Send_PC_CMD(uint8_t CommandNB)    // Send a Command, don't touch parameters
+    PCCR_PMSTATE=PCC_PMS_CMDSENT;   // Inform the PC that a command is sent
+    // Wait the Start of the command (PC no more in Wait CMD State)
+    PCC_API_STATUS=PCC_API_WAITCMDSTART;
+-   do {} while ((PCCR_PCSTATE==PCC_PCS_WAITCMD)&&(PCCR_PCSTATE!=PCC_PCS_RESET)); 
++   do { pccmd_wait(); } while ((PCCR_PCSTATE==PCC_PCS_WAITCMD)&&(PCCR_PCSTATE!=PCC_PCS_RESET)); 
+ }
+ 
+ // Wait for the PC BIOS to be ready to receive a command
+@@ -70,7 +78,7 @@ bool PC_Wait_CMD_End()
+   //PM_INFO("PC_Wait_CMD_End: Waiting for the end of the command, current state %d\n",PCCR_PCSTATE);
+   if (PCCR_PCSTATE!=PCC_PCS_WAITCMD) 
+    {
+-    do {} while ((PCCR_PCSTATE!=PCC_PCS_CMDEND)&&(PCCR_PCSTATE!=PCC_PCS_WAITCMD)&&PCC_PCS_WAITCMD&&(PCCR_PCSTATE!=PCC_PCS_RESET));
++    do { pccmd_wait(); } while ((PCCR_PCSTATE!=PCC_PCS_CMDEND)&&(PCCR_PCSTATE!=PCC_PCS_WAITCMD)&&PCC_PCS_WAITCMD&&(PCCR_PCSTATE!=PCC_PCS_RESET));
+     if (PCCR_PCSTATE==PCC_PCS_RESET)  { PCC_API_STATUS=PCC_API_END; return false; } // Reset Status, no more command can be sent
+    }
+   return true;
+@@ -88,6 +96,7 @@ bool PC_Wait_CMD_End_Timeout(uint32_t delay)
+   PCC_API_STATUS=PCC_API_WAITCMDEND;
+   initial_time=time_us_64();
+   do {
++      pccmd_wait();
+       if ((time_us_64()-initial_time)>delay) { PCC_API_STATUS=PCC_API_END; return false; }
+      } while ((PCCR_PCSTATE!=PCC_PCS_CMDEND)&&(PCCR_PCSTATE!=PCC_PCS_WAITCMD)&&(PCCR_PCSTATE!=PCC_PCS_RESET));
+ 
+@@ -111,6 +120,7 @@ bool PC_Wait_End_Timeout(uint32_t delay)
+          PCC_API_STATUS=PCC_API_WAITCMDEND;
+          initial_time=time_us_64();
+          do {
++             pccmd_wait();
+              if ((time_us_64()-initial_time)>delay) return false;
+             } while (PCCR_PCSTATE==PCC_PCS_INPROGRESS); // Wait for the end of the "End" Command
+          if (PCCR_PCSTATE==PCC_PCS_NOTREADY) return true;
+@@ -392,6 +402,32 @@ bool PC_MemCopyW_512b(uint32_t Src, uint32_t Dest)
+   return true;
+ }
+ 
++// Copy Len Words from Src to Dest Address  (PC RAM @), for the disk code
++// Same timeout as PC_MemCopyW_512b, don't wait for completion
++bool PC_MemCopyW_Disk(uint32_t Src, uint32_t Dest, uint16_t Len)
++{
++  if (!PC_Wait_CMD_End_Disk()) return false;
++
++  // Source Offset
++  PM_DP_RAM[OFFS_PCCMDPARAM]=(uint8_t)Src&0xF;
++  PM_DP_RAM[OFFS_PCCMDPARAM+1]=0;
++  // Source Segment
++  PM_DP_RAM[OFFS_PCCMDPARAM+2]=(uint8_t)(Src>>4);
++  PM_DP_RAM[OFFS_PCCMDPARAM+3]=(uint8_t)(Src>>12);
++  // Destination Offset
++  PM_DP_RAM[OFFS_PCCMDPARAM+4]=(uint8_t)Dest&0xF;
++  PM_DP_RAM[OFFS_PCCMDPARAM+5]=0;
++  // Destination Segment
++  PM_DP_RAM[OFFS_PCCMDPARAM+6]=(uint8_t)(Dest>>4);
++  PM_DP_RAM[OFFS_PCCMDPARAM+7]=(uint8_t)(Dest>>12);
++  // Length
++  PM_DP_RAM[OFFS_PCCMDPARAM+8]=(uint8_t)Len;
++  PM_DP_RAM[OFFS_PCCMDPARAM+9]=(uint8_t)(Len>>8);
++  Send_PC_CMD(PCC_MemCopyW);
++  PCC_API_STATUS=PCC_API_END;
++  return true;
++}
++
+ uint8_t PC_IN8(uint16_t port)
+ {
+   PC_Wait_CMD_End();  
+diff --git a/src/pm_libs/pm_pccmd.h b/src/pm_libs/pm_pccmd.h
+index 26c5194..832544d 100644
+--- a/src/pm_libs/pm_pccmd.h
++++ b/src/pm_libs/pm_pccmd.h
+@@ -67,6 +67,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+ 
+ extern void Send_PC_CMD(uint8_t CommandNB);  // Send a Command, don't touch parameters and wait for its start
+ extern bool PC_Wait_CMD_End_Timeout(uint32_t delay);
++extern void (*volatile pm_pccmd_wait_hook)(void);
+ extern bool PC_Wait_End_Timeout(uint32_t delay);
+ extern bool PC_Wait_CMD_End();
+ extern void PC_End();
+@@ -91,22 +92,16 @@ extern void PC_OUT16(uint16_t port, uint16_t data);
+ 
+ extern void PC_MemCopy(uint32_t Src, uint32_t Dest, uint16_t Size); // Copy xx Bytes from Src to Dest Address  (PC RAM @)
+ extern bool PC_MemCopyW_512b(uint32_t Src, uint32_t Dest);          // Copy 512 Bytes from Src to Dest Address  (PC RAM @)
++extern bool PC_MemCopyW_Disk(uint32_t Src, uint32_t Dest, uint16_t Len); // Same, Len words
+ 
++// Wait for the PC to end its disk copy command.
++// The PC copies with its interrupts enabled (PM_Int13h's STI), so an interrupt
++// handler can hold it for as long as it likes: a slow PC, not a dead one, and
++// the disk code cannot go on without the copy. Wait as PC_End does: the only
++// way out is a PC reset.
+ __force_inline bool PC_Wait_CMD_End_Disk()
+ {
+-  if (!PC_Wait_CMD_End_Timeout(20000))
+-    {
+-     //PM_ERROR("PC_MemCopyW_512b: Timeout 20ms (%x)\n",PCCR_PCSTATE);      
+-     PM_ERROR("PC_MemCopyW_512b: Timeout 20ms\n"); 
+-     if (!PC_Wait_CMD_End_Timeout(100000)) { 
+-       //PM_ERROR("PC_MemCopyW_512b: Timeout 100ms (%x)\n",PCCR_PCSTATE);
+-       PM_ERROR("PC_MemCopyW_512b: Timeout 100ms\n");       
+-       return false;
+-      }
+-    }
+-
+-  // if (!PC_Wait_CMD_End()) return false;    
+-  return true;
++  return PC_Wait_CMD_End();
+ }
+ 
+ 
+-- 
+2.43.0
+

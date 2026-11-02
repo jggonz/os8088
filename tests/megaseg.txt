@@ -60,4 +60,75 @@
 #             own int 09h calls in REAL mode, so the key-state map sees a key
 #             a reflection took. It runs at KERNEL_SEG:offset with no switch,
 #             so it has to be low; the IVT installs are `.mega`
-4381
+# 2026-10-30: +419, to 4,800, MEGA-VIDEO-REALMODE-PLAN W1 (SPEC.md 53.2.3) -
+#             the real-mode bracket's REAL-MODE half, which has to be low:
+#             fsx_rland (67, mega_down's landing, the entry's far call and the
+#             way back), fsx_rtick (127, IRQ0 while the bracket runs - IVT 20h
+#             holds it), fsx_rcall's protected-mode head (31) and its nine
+#             bytes of state, fsx_run's door (~50), fsx_rgone (2, mod_gone's
+#             answer for EXTD.DRV's slots in real mode); mega_rland (11, the drop's
+#             landing switch) and mega_up's call and ret (4, the reflection's
+#             way back made a routine both share); and mega_a20 with its
+#             three helpers (118 with the far entry), MOVED here from `.cold`
+#             (-112 there): the A20 line must be proved open before `lgdt`
+#             reads a GDT above 1MB, i.e. in real mode, where `.cold` is not.
+#             The protected-mode halves (fsx_rprepf, fsx_rcopyf, fsx_rdownf,
+#             fsx_rupf, mega_vwalk) are `.mega` and their state `.lowbss`
+# 2026-10-30: +69, to 4,869, MEGA-VIDEO-REALMODE-PLAN W2 (SPEC.md 53.2.3) -
+#             what the real-mode TABLE offers has to run in real mode, so
+#             low: osapi_segr (40), OSAPI_SEG's real-mode arm MOVED out of
+#             `.cold` (where it is now a 5-byte far jump to it) to be the
+#             table's TWIN; the real-mode arms of OSAPI_FSX_WAIT (7: hlt, no
+#             scheduler) and OSAPI_MOUSE (7: no keyboard pointer, whose menu
+#             path is `.cold`); fsx_run's foot putting FSXF_REAL's answer in
+#             the caller's SI (15) and its byte (1), less the door's `jc`
+#             (-2). The table's swap itself, its list and its bank are `.mega`
+#             and the park's scratch - nothing of them is in this segment
+# 2026-10-30: +18, to 4,887, MEGA-VIDEO-REALMODE-PLAN W4 (SPEC.md 53.2.3) -
+#             fsx_rtick, IRQ0 in the real-mode bracket, so low: its tick's
+#             far call to SOUND.DRV's DSV_TICK through the service area (10:
+#             `call far [es:fsx_rstko]`, the dword beside [fsx_rmsseg] in
+#             `.lowbss`) and sch_rhook's rule that the hook runs at IF = 1
+#             under the speaker's sample ISR (8). The twins, the low copy and
+#             the renaming are `.mega`, and the twins' copy is the service
+#             area's claim
+# 2026-10-30: +22, to 4,403, KERN-MEGA-PLAN 14.125 - a SERVICE reflection
+#             catches the option ROMs' software IRQs too (mega_capsw and its
+#             tests in mega_svc_lo, mega_capon and mega_capoff): the empty-
+#             drive freeze was the PicoMEM's ROM raising its Sound Blaster's
+#             int 0Dh inside the BIOS's floppy call, into SOUND.DRV's
+#             protected-mode handler run as real-mode segment 1254h. It all
+#             runs in the reflection's REAL-MODE window, so it has to be low
+# 2026-10-30: +14, to 4,417, KERN-MEGA-PLAN 14.125 - the same catch takes
+#             the HARDWARE cells 22h-27h that hold an LDT selector: the
+#             freeze's ninth reading found IVT 27h = 1294:0981, SOUND.DRV's
+#             IRQ7 ISR left as a selector by mega_ivt_sync, reached by a
+#             SPURIOUS IRQ7 inside the empty drive's BIOS call. mega_capon's
+#             filter, real mode, so low
+# 2026-10-30: +18, to 4,435, kernel size pass 15 (recent) - NOT kern_mega
+#             growing: its segment is 52,983 either side. kern_big's shrank by
+#             18 (the lone relocated words as one mem_rr_tab row, clip_reloc
+#             and sc_reloc gone), and every piece of that is a ROW kern_mega
+#             does not walk - its words can hold selectors - so it keeps the
+#             procs and the difference widens by exactly kern_big's saving
+# 2026-10-30: +8, to 4,443, kernel size pass 15 (gui close-out) - the
+#             same shape again: fdlg_rqsp and drv_blkseg joined kern_big's
+#             mem_rr_lone run, and kern_mega keeps their two MEM_RR_ONE rows
+#             (8 bytes) because it does not walk that run. kern_mega's
+#             segment did not grow (.text 47,392 -> 47,386)
+# 2026-10-30: -90, to 4,327, kern_mega size pass 1 (shared): the speaker
+#             door's IRQ0 gate writes and the stream's ring test into
+#             `.mega`, osapi_xmem_sel/_walk and osapi_mem_codesel's bodies
+#             into `.cold` behind 6-byte doors, and kmain's four far calls
+#             after mega_enter into one (kmain_hic)
+# 2026-10-30: -72, to 3,095, kern_mega size pass 1 (e9gate): the shipped
+#             kern_mega writes nothing to the debug port (kernel.asm's
+#             MEGA_E9) - mega_putsf's door, the `.text` E9 writer, the
+#             refusal's E9 line and the debug strings that lived in `.text`
+# 2026-10-30: to 3,121, the merge of elendilon (kernel size pass 15) into
+#             mega-size-1: both passes' kern_mega savings together, against
+#             kern_big after pass 15
+# 2026-10-31: +506, to 3,627, mega-realmode-bracket squashed onto the recut
+#             elendilon: the real-mode fsx bracket's W1 (+419), W2 (+69) and
+#             W4 (+18) entries above, carried onto kern_mega size pass 1's 3,121
+3627

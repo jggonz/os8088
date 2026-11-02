@@ -15,8 +15,9 @@ a program holds - and opens the Control Panel. CTRL.DRV is loaded low and
 moved above 1MB by mod_hi (mega_hiclaim2, the top rank), which with the pool
 full can only succeed by SHEDDING caches, cheapest first:
 
-  1. `kern_mega: above 1MB: CTRL.DRV` is on the debug port - the module went
-     up, so a claim the full pool could not hold was satisfied;
+  1. CTRL.DRV's mod_tab row names a base above 1MB with the panel open
+     (Box.mod_base) - the module went up, so a claim the full pool could not
+     hold was satisfied;
   2. at least one TRIV cache (level FBh) that stood before is gone;
   3. every cache of level FDh and up (the FAT window, the read-ahead store)
      that stood before still stands - the shed took the cheapest it could,
@@ -73,7 +74,7 @@ def menu(box, dy):
         time.sleep(0.04)
         left -= 30
     box.xd("mousemove_relative", "--", 0, left)
-    time.sleep(0.5)
+    box.guest_sleep(0.5)                # the hold, in GUEST time
     box.xd("mouseup", 1)
 
 
@@ -122,14 +123,13 @@ def main():
         box.dbg(cmds)
         print("megashed: covered %d free run(s), %d KB" %
               (len(gaps), sum(g[1] for g in gaps)))
-        n0 = len(box.lines())
         menu(box, 35)                   # Control Panel
         box.ui_done("the Control Panel", secs=120)
         box.shot(os.path.join(out, "cp.png"))
-        lines = box.lines()[n0:]
+        ctrl = box.mod_base("CTRL.DRV")     # (the panel holds it open)
         rows2, _ = table(box)
         after = caches(rows2)
-        if not any("above 1MB: CTRL.DRV" in l for l in lines):
+        if ctrl is None or ctrl < 0x100000:
             fails.append("CTRL.DRV did not go above 1MB with the pool full "
                          "of caches - nothing was shed for it")
         gone = before - after
@@ -141,7 +141,7 @@ def main():
             if a >> 8 >= LVL_MED and (o, a) not in after:
                 fails.append("a level %02Xh cache (%04X) was shed while "
                              "cheaper ones were enough" % (a >> 8, a))
-        for l in box.lines():
+        for l in box.said():
             if l.startswith("kern_mega FAULT"):
                 fails.append(l)
     finally:

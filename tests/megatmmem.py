@@ -103,7 +103,7 @@ def menu(box, dy):
         time.sleep(0.04)
         left -= 30
     box.xd("mousemove_relative", "--", 0, left)
-    time.sleep(0.5)
+    box.guest_sleep(0.5)                # the hold, in GUEST time
     box.xd("mouseup", 1)
     box.ui_done("the system menu", secs=120)
 
@@ -161,7 +161,7 @@ def quiet(tm, tries=12):
                 tm.raw[e["tm_usedk"] - tm.lo:e["tm_usedk"] - tm.lo + 2])
     last = key()
     for _ in range(tries):
-        time.sleep(1.0)
+        tm.box.guest_sleep(1.0)         # still for a GUEST second
         now = key()
         if now == last:
             return now
@@ -261,7 +261,7 @@ def main():
                   cy + eq["TMM_HDR_Y"] - xoff + 4, "+ALL", lock=False)
         box.until(lambda: tm.read() and u16(tm.raw, eq["tm_exp"] - tm.lo),
                   "+ALL", 30)
-        time.sleep(4.5)                     # two of the page's paints
+        box.guest_sleep(4.5)                # two of the page's paints
         quiet(tm)
         png = os.path.join(tmp, "page.png")
         box.shot(png)
@@ -391,7 +391,7 @@ def main():
                   cy + eq["TMM_HDR_Y"] - xoff + 4, "SYSTEM", lock=False)
         box.until(lambda: tm.read() and tm.b("tm_detail") == 1,
                   "the SYSTEM view", 30)
-        time.sleep(4.5)
+        box.guest_sleep(4.5)
         quiet(tm)
         box.shot(png)
         lines = ocr(png, table, cx, cx + 232, cy, cy + 300)
@@ -407,7 +407,7 @@ def main():
                       (u16(tm.raw, eq["tm_exp"] - tm.lo) |
                        u16(tm.raw, eq["tm_exp"] - tm.lo + 2) << 16) & bit,
                       "Purgeable open", 30)
-            time.sleep(4.5)
+            box.guest_sleep(4.5)
             quiet(tm)
             box.shot(png)
             if shots:
@@ -433,8 +433,7 @@ def main():
                  "never the bare Cache: %s"
                  % (", ".join(wrong) or
                     ", ".join("%05X %s" % (p, seen.get(p)) for p in para)))
-        bad = [l for l in box.lines() if "kern_mega FAULT" in l or
-               "kern_mega CLOSED" in l]
+        bad = box.faults()
         want(not bad, "5. no kern_mega fault%s" %
              "".join(" | " + l for l in bad[:3]))
     except Exception as e:      # noqa: BLE001 - the machine stopped

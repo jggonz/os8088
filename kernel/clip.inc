@@ -157,9 +157,9 @@ clip_put:
     jmp short .out              ; CF = 0: `xor di, di` cleared it and REP
 .empty:                         ; MOVSB writes no flag
     call clip_drop              ; ...and CF = 0 out of clip_drop too (its
-    jmp short .out              ; header says so); `.toobig` enters at its
-.toobig:                        ; own `stc` below
-    stc
+    db 0xA8                     ; header says so), which test al, imm8 over the
+.toobig:                        ; stc keeps (kernel size pass 15); `.toobig`
+    stc                         ; enters at its own `stc`
 .out:
     pop es                      ; POP touches no flags, so the answer above
     pop ds                      ; rides out through all nine of them
@@ -285,6 +285,13 @@ section .text
 ; clip_reloc - the compactor moved the clipboard (SPEC.md 66.2). One word:
 ; clip_put and clip_get each load it immediately before their rep movsb, and
 ; nothing derives anything from it.
+;
+; ...ON kern_mega. Everywhere else [clip_seg] is a word of mem_rr_tab's
+; mem_rr_lone row (memory.inc, kernel size pass 15) and this name is the
+; walk's shared `ret`: the row is exact because clip_drop zeroes the word
+; with nothing that can compact between its mem_free and the store, and it is
+; set only from the clipboard's own claim.
+%ifdef KERN_MEGA
 clip_reloc:
     mov [clip_seg], dx          ; NO `cmp bx, [clip_seg]` GUARD, and it is not
     ret                         ; a defence that was dropped - it could never
@@ -301,6 +308,13 @@ clip_reloc:
                                 ; the one walk that runs for blocks it does
                                 ; not own and it scans by VALUE; this is not
                                 ; that
+%else
+clip_reloc  equ mem_rr_none
+    db 0                        ; PARITY PAD, never executed or read (kernel
+                                ; size pass 15): the five bytes that went
+                                ; leave ui_task, the one hot `.text` routine
+                                ; after this, at an odd shift otherwise
+%endif
 %endif                          ; OS88_COMPACT
 
 section .bss
@@ -309,7 +323,8 @@ section .bss
 ; read lands it (kernel.asm, the boot overlay). Nothing here needs an
 ; init entry point, and clip_size answers correctly on a machine that has
 ; not copied anything yet.
-clip_seg    resw 1              ; the claim's base segment, 0 = none held
+                                ; (clip_seg, the claim's base segment, is
+                                ; memory.inc's mem_rr_lone: kernel size pass 15)
 clip_kb     resb 1              ; ...and its size in KB, so a put at the same
                                 ; size allocates nothing. A BYTE: CLIP_MAXKB
                                 ; is 32, so it holds 0..32 and every reader

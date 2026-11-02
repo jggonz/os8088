@@ -143,10 +143,8 @@ rw_xplan:
     mov dx, ax
     pop cx
     pop ax
-    sub cx, 16                      ; banks 1 on, a 32KB window each: KB x 2
-    shl cx, 1
-    cmp dx, cx
-    jb .no
+    cmp dx, cx                      ; the cartridge ONCE, bank 0 the 16KB
+    jb .no                          ;   under bank 1's window (rw_xclaim)
     and word [rw_romkb], 0FFF0h
     mov word [rw_nslot], 1
     mov byte [rw_bcache], 2
@@ -180,20 +178,23 @@ rw_bload:
     mov byte [rw_slotlent], 0       ; (none lent, no buffer in one:
     mov byte [rw_loans], 0          ;   rw_mclaim)
     mov word [rw_lused], 0
+%ifdef PKG_MEGA
+    cmp byte [rw_bcache], 2         ; in place: one claim of 16KB windows
+    jne .xa                         ;   (10.3.1)
+    call rw_xclaim
+    jc .noxms
+    jmp short .xok
+.xa:
+%endif
     mov ax, [rw_romkb]
     sub ax, 16
-%ifdef PKG_MEGA
-    cmp byte [rw_bcache], 2         ; in place: a 32KB window a bank, the
-    jne .sz                         ;   bank its upper half (10.3.1)
-    shl ax, 1
-.sz:
-%endif
     mov cx, 1024
     mul cx
     call OSAPI_XMEM_ALLOC           ; DX:AX = the store's base
     jc .noxms
     mov [rw_xbase], ax
     mov [rw_xbase + 2], dx
+.xok:
 %ifdef RDG_AOT
     mov word [rw_aebank], 0         ; (the ROM in the package: from bank 0)
 %endif
@@ -248,21 +249,19 @@ rw_bload:
     call rw_bread
     pop dx
     jc .bad
+%ifdef PKG_MEGA
+    cmp byte [rw_bcache], 2         ; in place: into its window
+    jne .up
+    call rw_xput
+    jmp short .nx
+.up:
+%endif
     push es                         ; up to the store, at (n - 1) x 16KB
     mov es, dx
     mov ax, [rw_bnum]
     dec ax
     mov cx, 16384
     mul cx
-%ifdef PKG_MEGA
-    cmp byte [rw_bcache], 2         ; in place: (n - 1) x 32KB + 16KB, so
-    jne .at                         ;   that window n - 1 of the run, at
-    shl ax, 1                       ;   (n - 1) x 32KB, has the bank at its
-    rcl dx, 1                       ;   4000h - the core's ROMX, whose 4000h
-    add ax, 16384                   ;   is the bank's first byte
-    adc dx, 0
-.at:
-%endif
     add ax, [rw_xbase]
     adc dx, [rw_xbase + 2]
     xor si, si
@@ -270,6 +269,7 @@ rw_bload:
     call OSAPI_XMEM_COPY
     pop es
     jc .xbad
+.nx:
     inc word [rw_bnum]
     mov ax, [rw_romkb]
     mov cl, 4
@@ -287,11 +287,6 @@ rw_bload:
 %ifdef PKG_MEGA
     cmp byte [rw_bcache], 2
     jne .done
-    mov ax, [rw_xbase]              ; the run: a data selector every 32KB,
-    mov dx, [rw_xbase + 2]          ;   each a 64KB window (KERN-MEGA-PLAN
-    call OSAPI_XMEM_RUN             ;   14.16) - DX the first, CX 8
-    jc .xrun
-    mov [rw_xsel], dx
     xor dx, dx                      ; the slot was the read's alone
     xchg dx, [rw_slotseg]
     call OSAPI_MEM_FREE
@@ -302,19 +297,12 @@ rw_bload:
 %endif
     clc
     ret
-%ifdef PKG_MEGA
-.xrun:                              ; (no run of LDT entries that long)
-    mov si, rw_s_room
-    jmp short .why
-%endif
 .xbad:
 .bad:
     mov si, rw_s_notrom
 .why:
     push si
-    mov ax, [rw_xbase]
-    mov dx, [rw_xbase + 2]
-    call OSAPI_XMEM_FREE
+    call rw_xfree
     pop si
     jmp short .free
 .noxms:
@@ -329,6 +317,83 @@ rw_bload:
     mov si, rw_s_room
     stc
     ret
+
+; rw_xfree - the store above 1MB let go: the bank cache's XMS block, or the
+; in-place arm's one claim. Every register but AX, DX and flags kept
+rw_xfree:
+%ifdef PKG_MEGA
+    cmp byte [rw_bcache], 2
+    jne .x
+    xor dx, dx
+    xchg dx, [rw_xsel]
+    or dx, dx
+    jz .r
+    call OSAPI_MEM_FREE             ; (its run of selectors with it)
+    ret
+.x:
+%endif
+    mov ax, [rw_xbase]
+    mov dx, [rw_xbase + 2]
+    call OSAPI_XMEM_FREE
+.r:
+    ret
+%ifdef PKG_MEGA
+
+; rw_xclaim - the in-place arm's store (10.3.1): ONE claim of the whole
+; cartridge, OSAPI_MEM_HUGE with a window every 16KB, each 64KB long, so
+; window k is [rw_xsel] + 8k based at k x 16KB and bank n, at n x 16KB, is
+; window n - 1's 4000h - the core's ROMX, whose 4000h is the bank's first
+; byte. Bank 0's 16KB under bank 1's window is the view's and stays empty.
+; It was OSAPI_XMEM_RUN's 32KB windows over a block TWICE the cartridge,
+; each bank in a window's upper half: 4MB of pool for a 2MB cartridge.
+; CF = 1: refused, nothing held. Clobbers AX, BX, CX, DX
+rw_xclaim:
+    mov ax, [rw_romkb]
+    mov bx, 4000h
+    call OSAPI_MEM_HUGE             ; DX = the first window, CX = 8
+    jc .r
+    cmp cx, 8                       ; BX = 0: the windows asked for (else 64KB
+    jne .no                         ;   apart)
+    or bx, bx
+    jnz .no
+    push dx
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = its linear base
+    jc .nl
+    cmp dx, 0010h                   ; below 1MB: MEM_HUGE's conventional
+.nl:                                ;   fallback, heap and not pool - refused
+    pop dx
+    jb .no
+    mov [rw_xsel], dx
+    clc
+.r:
+    ret
+.no:
+    call OSAPI_MEM_FREE
+    stc
+    ret
+
+; rw_xput - rw_bload in place: the 16KB at DX:0000 (the read's slot) into
+; bank [rw_bnum]'s window, at its 4000h. Clobbers AX, CX, SI, DI
+rw_xput:
+    push ds
+    push es
+    mov ax, [rw_bnum]
+    dec ax
+    mov cl, 3
+    shl ax, cl
+    add ax, [rw_xsel]
+    mov es, ax
+    mov ds, dx
+    xor si, si
+    mov di, 4000h
+    mov cx, 2000h
+    cld
+    rep movsw
+    pop es
+    pop ds
+    ret
+%endif
 
 ; rw_bread - the file's next 16KB into DX:0000. CF = 1 unless it all came
 rw_bread:
@@ -400,7 +465,7 @@ rw_xfill:
     mov di, RDG_BTAB + 2
 .f:
     mov [di], ax
-    add ax, 8                       ; (OSAPI_XMEM_RUN's step)
+    add ax, 8                       ; (OSAPI_MEM_HUGE's step)
     inc di
     inc di
     loop .f

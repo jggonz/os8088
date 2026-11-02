@@ -16441,10 +16441,10 @@ dos_blaster_set:
     mov al, ' '
     stosb
     mov al, [bx+DQ_B]               ; THE IRQ, IF THERE IS ONE TO HAVE. The
-    cmp al, 0xFF                    ; driver defers discovery to first use
-    je .noirq                       ; (SPEC.md 34.5), so a machine that has
-    push ax                         ; not played a sound yet genuinely does
-    mov al, 'I'                     ; not know - and a BLASTER= naming the
+    cmp al, 0xFF                    ; driver finds it at attach (SPEC.md
+    je .noirq                       ; 34.5.7) but a card refused its line
+    push ax                         ; (34.5.6) answers none - and a BLASTER=
+    mov al, 'I'                     ; naming the
     stosb                           ; WRONG line sends a program to wait on an
     pop ax                          ; interrupt that never comes, where its
     call dos_dec2                   ; absence sends it to its own default and

@@ -57,7 +57,7 @@ import instdeep as ID                                      # noqa: E402
 # cannot drift apart; os88geom's Python sweep covers the host writer.
 ASC_MAGIC = b"OS88AC"
 ASC_HDR, ASC_ROW, ASC_ROWCLUS, ASC_ROWICO = 16, 88, 10, 16   # a VERSION 2 row
-ASC_NAPP, ASC_NEXT = 55, 64
+ASC_NAPP, ASC_NEXT = 90, 64
 
 # The extensions the shipped disks' packages declare (SPEC.md 54.6), and the
 # program each must reach. Named rather than counted: "5 associations" passes

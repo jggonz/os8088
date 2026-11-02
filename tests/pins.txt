@@ -206,6 +206,10 @@ C apps/realdmg/rwaot.inc rw_abseg        # a precompiled package's cluster bounc
                                          # a claim of its own only when a cluster
                                          # passes 16KB: claimed and freed inside
                                          # rw_acopy's call, the file read's target
+D apps/recorder/recorder.asm rc_rseg    # the take's external RECORD ring, page-
+                                         # safe: the card DMAs INTO it for the
+                                         # take, freed at the stream's close
+                                         # (SPEC.md 34.6.5, 35)
 C apps/recorder/recorder.asm @rc_do_play # the speaker play buffer, held for one
                                          # PCM_EXCL play and freed on every way out
                                          # of the call
@@ -288,16 +292,23 @@ C apps/video/video.asm vp_ldseg          # vp_ldblk's scratch word: a RESIDENT
                                          # handed back in AX as [vp_rblk] or
                                          # [vp_rablk] and declared movable
                                          # there (vp_rmov, SPEC.md 98.1.7.4)
+D apps/video/vcold.asm vp_aseg          # the sound's ring a real-mode bracket's
+                                         # door claims when none is held (an
+                                         # Unmute in the full screen): a Sound
+                                         # Blaster's DMA ring, armed for the play
+C apps/video/video.asm vp_rbh            # the real-mode bracket's held room
+                                         # (SPEC.md 98.3.24.2): claimed and freed
+                                         # inside one vp_sstart, across the
+                                         # ring's sizing and claim
+C kernel/fsx.inc @fsx_rlowclaim          # the real-mode bracket's conventional
+                                         # copies - the region's, the service
+                                         # area, the low drivers' and EXTD.DRV's
+                                         # (SPEC.md 53.2.3): pinned across one
+                                         # fsx bracket, freed at its return
 C apps/video/video.asm vp_simseg         # the 64KB shadow of one simulated borrow
                                          # probe, inside vp_xok's call
 C apps/video/video.asm vp_xsclm          # one chunk's staging into the XMS hold,
                                          # inside vp_xstep's call
-C apps/video/video.asm vp_dbnc           # the bounce of a ring above 1MB, held for
-                                         # the length of one play (the reader
-                                         # copies through it), freed with the ring
-C apps/video/video.asm @vp_rhtry         # a play's ring ABOVE 1MB (OSAPI_MEM_HUGE):
-                                         # no conventional heap at all while the
-                                         # play's session holds it
 D apps/video/video.asm vp_aseg           # the card's ring, page-safe: the Sound
                                          # Blaster DMAs out of it for one play,
                                          # claimed at vp_sndprep, freed at its end
@@ -367,6 +378,13 @@ X apps/video/video.asm @vp_rclaim        # a CLAIM WRAPPER this scan cannot see
                                          # past the second to the shared ret):
                                          # kern_mega's ring, every caller storing
                                          # DX in vp_rclm, which vp_smtab declares
+X apps/realdmg/rwbank.inc rw_xsel        # kern_mega's arm: the cartridge IN PLACE,
+                                         # one OSAPI_MEM_HUGE claim in the POOL
+                                         # (REALDMG-SPEC 10.3.1). It is not a wall:
+                                         # the pool packs a huge block like any
+                                         # unpinned one, rebasing its windows, and
+                                         # OSAPI_MEM_MOVABLE refuses a selector
+                                         # above 1MB, so there is nothing to declare
 X apps/realdmg/rwaot.inc rw_aseg+bx      # a precompiled cartridge's CODE IMAGES,
                                          # each a CS the worker runs in: its frame
                                          # holds one at every pre-emption, which

@@ -261,7 +261,40 @@ NO_GATES = ["NOOVLCHK=1", "NOKERNSIZE=1"]
 #
 # NOTHING ELSE MAY BE SHARED. docs/plans/completed/HANDOFF-KERNEL-SIZE-P3.md 3 says why in one
 # line: a shared writable DISK is what contaminated pass 2's first bisect.
-SHARED = ("cc", "martypc")
+#
+# `watcom` is the third instrument of that kind: tools/setup-watcom.sh
+# fetches Open Watcom at a pinned SHA-256 into $(BUILD)/watcom, and `make
+# win16fixtures` runs it with --build-dir $(BUILD). Unshared, a frozen soak
+# tree had no compiler, so the WIN16 fixture rows SKIPPED on a box whose
+# `check` had just reported them runnable off the shared build/.
+SHARED = ("cc", "martypc", "watcom")
+
+
+# THE INPUTS NO RULE MAKES, carried into a tree by COPY (never a link: a
+# tree's build/ is written to). Microsoft's Windows programs are put in
+# build/win16/ by the win16-reference skill and never by `make` (SPEC.md
+# 124.15), so a tree built from scratch has none and every row that plays one
+# SKIPPED under a frozen soak - the same box-declining-to-answer the capability
+# probe is there to prevent. Only what the tree LACKS after its make is copied,
+# so a fixture the tree built itself is never shadowed by the shared one.
+CARRY = ("win16",)
+
+
+def _carry_inputs(d):
+    """Copy into tree `d` the shared build/'s files no make rule produced."""
+    for sub in CARRY:
+        src = os.path.join(ROOT, "build", sub)
+        if not os.path.isdir(src) or os.path.realpath(src) == \
+                os.path.realpath(os.path.join(d, sub)):
+            continue
+        for n in os.listdir(src):
+            if not n.upper().endswith(".EXE"):
+                continue
+            s = os.path.join(src, n)
+            t = os.path.join(d, sub, n)
+            if os.path.isfile(s) and not os.path.exists(t):
+                os.makedirs(os.path.dirname(t), exist_ok=True)
+                shutil.copy2(s, t)
 
 
 def _sweep_truncated(d):
@@ -653,6 +686,16 @@ def have_unicorn():
     return True
 
 
+def have_pmhost():
+    """Is libpmhost built - the PicoMEM's own firmware, compiled for the host
+    by tools/picomem/build.sh (docs/plans/completed/PICOMEM-EMU-PLAN.md)? A file test:
+    the library is the artefact, and a row without it SKIPS. Both boards:
+    build.sh builds the 1.x and the 2.x together."""
+    return all(os.path.exists(os.path.join(ROOT, "build", "picomem", b,
+                                           "libpmhost-%s.so" % b))
+               for b in ("v1", "v2"))
+
+
 def have_numpy():
     """Can THIS interpreter import numpy - its C extension, not just the name?
 
@@ -1022,6 +1065,7 @@ def tree(*args, **kw):
                 % (" ".join(cmd), _why(r.stdout, r.stderr)))
         if not quiet:
             sys.stderr.write(r.stdout)
+        _carry_inputs(d)
         defines = defines_for(args, build=d)
     return Tree(d, args, defines, targets)
 

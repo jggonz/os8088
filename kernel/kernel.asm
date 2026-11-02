@@ -250,6 +250,19 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %error "MEGA_DIAG (MEGADIAG=1) is kern_mega's alone - build it with KERN_MEGA=1"
  %endif
 %endif
+; MEGA_E9 - kern_mega's lines on the DEBUG PORT (E9h: Bochs's port_e9_hack).
+; A SHIPPED kern_mega writes nothing there: the switch, a fault's dump, a
+; package closed, a park, an image moved above 1MB, the native floppy's
+; verdicts are each a developer's reading, and the harness reads the same
+; facts out of guest STATE instead (mega_on; mega_infault and mega_fbuf;
+; mega_fkn and mega_fkmsg - tools/os88bochs.py). MEGADIAG=1 puts them back,
+; and so does MEGATRAP=1, whose census is read in their context.
+%ifdef MEGA_DIAG
+ %define MEGA_E9
+%endif
+%ifdef MEGA_TRAPLOG
+ %define MEGA_E9
+%endif
 
 ; KDS / KES - "DS (ES) = the kernel's data", from code running in .text.
 ; In real mode that is `push cs / pop ds`, and on every build but kern_mega it
@@ -371,8 +384,22 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; and a plain `mov` everywhere else. KPARA - AX = the real paragraph of the
 ; segment in AX (a K scratch's base on kern_mega, AX itself elsewhere), for
 ; arithmetic on a register KSEG loaded (KERN-MEGA-MEMORY-PLAN MC7.6)
+; IN DISKOPS.DRV (`.modl`, fifty of the tree's fifty-four sites) the slot and
+; the segment-register load are a NEAR helper's, ksg_<sreg>_<slot> at the
+; image's end (below, before modl_end): the site is `push ax / mov ax, src /
+; call / pop ax`, eight bytes or so against seventeen, and the helper keeps DI
+; and FLAGS as the inline form does (kern_mega size pass 1). A combination no
+; helper exists for is an undefined label at assembly - add its row there
 %macro KSEG 3
 %ifdef KERN_MEGA
+ %ifidni __?SECT?__, [section .modl]
+    push ax
+  %ifnidni %2, ax
+    mov ax, %2
+  %endif
+    call ksg_ %+ %1 %+ _ %+ %3
+    pop ax
+ %else
     push ax
     push di
     mov ax, %2
@@ -381,6 +408,7 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
     mov %1, ax
     pop di
     pop ax
+ %endif
 %else
     mov %1, %2
 %endif
@@ -1129,10 +1157,27 @@ DRV_HMA_SEG equ 0xF000
 ; where it ends, so there is nothing to choose but the KB. How the previous
 ; figures (129,536 and 107,520) moved, thirty-five times, is
 ; docs/history/KERN-BUDGET-LEDGER.md.
+;
+;   4. kern_mega fully RESIDES in KERN_MEGA_RESIDENT_KB (68KB) of CONVENTIONAL
+;      memory once it has switched - KERN_SIZE less the `.cold` and `.mega`
+;      rungs, which go above 1MB at the switch and are given to the heap
+;      (MEGA_RESIDENT below, kernsize's `resident` figure). It is a SHIPPED-
+;      SHAPE build with a budget of its own and not a KERN_KNOB build any more
+;      (kern_mega size pass 1, docs/plans/completed/msp1/megabudget.md): the
+;      owner made it "a normal build with its own budget", a step towards a
+;      release that is not one yet. KERN_SIZE at boot is NOT what it is held
+;      to - that transient is guard 5's mega arm, the conventional memory of
+;      the 1MB floor machine. Sized at the 64,512 bytes it measured with
+;      kern_big's own headroom, 3,584 (seven steps).
 KERN_RESIDENT_KB       equ 100  ; rule 1
 KERN_SMALL_RESIDENT_KB equ 64   ; rule 2
+KERN_MEGA_RESIDENT_KB  equ 68   ; rule 4
 KERN_GRACE             equ 2048 ; branch and integration headroom over either
-%ifdef KERN_BIG
+%ifdef KERN_MEGA
+KERN_BUDGET equ KERN_MEGA_RESIDENT_KB*1024 - KERNEL_SEG*16
+                                ; = 68,096, against MEGA_RESIDENT and not
+                                ; KERN_SIZE (guard 1)
+%elifdef KERN_BIG
 KERN_BUDGET equ KERN_RESIDENT_KB*1024 - KERNEL_SEG*16
                                 ; = 100,864
 %else
@@ -1185,6 +1230,10 @@ BOOT_STACK  equ 2048            ; ...and its stack, growing down from there
 ; tests/small128.py and tests/kernresident.py boot each kernel on the 128KB
 ; machine, which is the half an assembler cannot answer.
 MIN_RAM_KB  equ 128
+%ifdef KERN_MEGA                ; ...and kern_mega's, which is not 128KB
+MEGA_MIN_RAM_KB equ 1024        ; (guard 5's mega arm): the machine,
+MEGA_BOOT_KB    equ 640         ; conventional and extended, and the
+%endif                          ; conventional half stage 1 reads into
 
 %ifdef KERN_SMALL
 DSK_FAT_SECS equ 2              ; TWO on kern_small: 1,024 bytes of FAT_SEG
@@ -1569,6 +1618,14 @@ KERN_END    equ ((VGABUF_RAM + VGABUF_PARA + 31) / 32) * 32 ; ...and there the
 KERN_END    equ VGABUF_RAM + VGABUF_PARA   ; ...and there the kernel stops
 %endif
 KERN_SIZE   equ (KERN_END - KERNEL_SEG) * 16   ; what KERN_BUDGET measures
+%ifdef KERN_MEGA
+MEGA_RESIDENT equ KERN_SIZE - (COLD_PARA + MEGA_PARA) * 16 ; ...and on
+                                ; kern_mega what it measures INSTEAD: the
+                                ; conventional memory the kernel holds once
+                                ; `.cold` and `.mega` are above 1MB and their
+                                ; two rungs are heap (rule 4, guard 1). The
+                                ; VGABUF rung stays, above the hole they leave
+%endif
 
 HEAP_SEG    equ KERN_END        ; the claim heap (SPEC.md 50) starts where
                                 ; the kernel ACTUALLY ends, not where a
@@ -1741,9 +1798,17 @@ XM_MAX_BLKS equ 8               ; the pool's fixed block table, entries: a
 ; vid_apply and wm_refit's callees moved into the blob, and kern_big's
 ; thirteen hold them with 61 bytes to spare - vmm_boot_x is ~100). The Makefile
 ; adds it in the knob's block, as before.
+; ...and kern_mega takes it on kern_emu's terms (kern_mega size pass 1,
+; docs/plans/completed/msp1/megabudget.md): it was a KERN_KNOB build and took
+; the knob's sector that way, and since it stopped being one it keeps the
+; sector by name - it boots only on a 286 or better, so stage 1 reading one
+; sector more costs no period 8088 anything, and its blob is the knob length
+; it always was (byte-identical kernel, the Makefile's KERN_MEGA block).
 %ifdef KERN_KNOB
   %define BOOT2_KNOBSEC 1
 %elifdef KERN_EMU
+  %define BOOT2_KNOBSEC 1
+%elifdef KERN_MEGA
   %define BOOT2_KNOBSEC 1
 %else
   %define BOOT2_KNOBSEC 0
@@ -2281,6 +2346,27 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %1: stc
 %endmacro
 
+; THE SKIP BYTES (kernel size pass 15): an opcode whose immediate IS the next
+; instruction, in place of a two-byte `jmp short` over it - CLC_OR_STC's trick
+; for any short instruction. CODE, not data: they are macros so that
+; os88ovlchk's rule 1 (no `db` in .cold) keeps meaning what it says. Each
+; names what it writes, which the site must have proved dead:
+%macro SKIPF1 0                 ; test al, imm8 over ONE byte: writes the
+    db 0xA8                     ; flags (CF = 0), nothing else
+%endmacro
+%macro SKIPF2 0                 ; test ax, imm16 over TWO bytes: the same
+    db 0xA9
+%endmacro
+%macro SKIPAL1 0                ; mov al, imm8 over one byte: AL, NO flag
+    db 0xB0
+%endmacro
+%macro SKIPDL1 0                ; mov dl, imm8 over one byte: DL, no flag
+    db 0xB2
+%endmacro
+%macro SKIPCX2 0                ; mov cx, imm16 over two bytes: CX, no flag
+    db 0xB9
+%endmacro
+
 osapi_table:
 apic_gfx_lock:
     OSAPI_SLOT gfx_lock           ; 0x0010
@@ -2312,11 +2398,14 @@ apic_wm_front:                    ; DOCK.DRV's door (SPEC.md 30.4)
     OSAPI_RSLOT wm_front           ; 0x0088
 
 apic_wm_content:                  ; cw_wm_content's door (kernel size pass 13)
+rmk_1:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT wm_content         ; 0x008E
+rmk_1e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT wm_obscured        ; 0x0096
 apic_task_yield:
     OSAPI_SLOT task_yield         ; 0x009E
     OSAPI_SLOT task_sleep         ; 0x00A6
+rmk_2:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_ICELL 5                 ; 0x00AE
     mov ax, [cs:ticks]
     OSAPI_IEND
@@ -2325,18 +2414,22 @@ apic_osapi_set_color:
     MEGA_ICW gfx_color, al
     OSAPI_IEND
     OSAPI_SLOT osapi_mouse        ; 0x00B8
+rmk_2e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_ICELL 5                 ; 0x00C0
     MEGA_ICW osapi_seed, ax
     OSAPI_IEND
     OSAPI_SLOT osapi_rand         ; 0x00C5
+rmk_3:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RSLOT osapi_snd_caps     ; 0x00CD - sound (SPEC.md 34): what the PC
 apic_osapi_snd_tone:
+rmk_3e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT osapi_snd_tone     ; 0x00D3   speaker can do, a tone, and a
     OSAPI_SLOT osapi_snd_play     ; 0x00DB   clip out of the caller's buffer
     OSAPI_XCELL osapi_snd_fm_x        ; 0x00E3 - FM verbs (SPEC.md 34.2). X: a
                                   ;          patch-load's 11 bytes are the
                                   ;          caller's, and only live while a
                                   ;          sound DRIVER is loaded (51.4)
+rmk_sstr:          ; (a real-mode bracket's twin: fsx_rkeepm)
     OSAPI_XCELL osapi_snd_stream    ; 0x00EA - PCM_BG streams (SPEC.md 34.5),
                                   ;          likewise the driver's. Both
                                   ;          answer CF=1 with no driver, which
@@ -2369,7 +2462,9 @@ apic_wm_grow_paint:
     OSAPI_JCELL api_fdlg_open     ; 0x0124 - the Standard File dialog
                                   ;          (SPEC.md 38.6): N, for the
                                   ;          default name
+rmk_4:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT osapi_video        ; 0x0127 - runtime screen geometry (39.2)
+rmk_4e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RXCELL inst_pkg_spawn     ; 0x012F - worker tasks (SPEC.md 20.6): X,
                                   ;          the ownership fence needs to
                                   ;          know which segment is calling
@@ -2379,10 +2474,12 @@ apic_wm_clip_clear:
     OSAPI_SLOT wm_clip_clear      ; 0x0145
 apic_wm_clip_test:
     OSAPI_SLOT wm_clip_test       ; 0x014D
+rmk_5:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_ICELL 5                 ; 0x0155 - CPU tiers and memory above 1MB
     mov ax, [cs:cpu_tier]
     OSAPI_IEND
 apic_xm_caps:
+rmk_5e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RSLOT xm_caps            ; 0x015A   (SPEC.md 41): each body already
 apic_xm_alloc:
     OSAPI_RSLOT xm_alloc           ; 0x0160   answers its SPEC.md 20.3 contract
@@ -2471,12 +2568,14 @@ apic_wm_onmouseup:
     OSAPI_RCXCELL mmf_osapi_mem_free ; 0x01AA   X, same fence as the spawn
 apic_osapi_mem_avail:
     OSAPI_RCSLOT mmf_osapi_mem_avail ; 0x01B0
+rmk_6:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RSLOT osapi_font_glyphs  ; 0x01B6 - the kernel's 8x8 glyph table
                                   ;          (SPEC.md 6): out DX:SI = the
                                   ;          table (it lives in LOW_SEG now -
                                   ;          the one-time amendment at the
                                   ;          body below), AL = first code,
                                   ;          AH = last, CX = bytes per glyph
+rmk_6e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_ICELL 5                 ; 0x01BC - install the resize negotiator
                                   ;          (SPEC.md 11.1): BX = win, AX =
                                   ;          near proc. The other half of
@@ -2661,6 +2760,7 @@ apic_wm_snap:
                                   ;          inst_pkg_spawn's identity test on
                                   ;          the caller's DS. Does NOT return
                                   ;          until the app's proc does
+rmk_7:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RSLOT fsx_mode           ; 0x023B - a foreign mode + its FSI info
                                   ;          block (SPEC.md 53.4): AL = FSXM
                                   ;          id, ES:DI = the caller's buffer
@@ -2672,6 +2772,7 @@ apic_wm_snap:
                                   ;          the body answers CF = 1. The line
                                   ;          is apps/os88gfx.inc's GFXE_LINE
                                   ;          now, committed through gfx_blit1
+rmk_7e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RCSLOT osapi_arg_file_x  ; 0x0249 - the document this instance was
                                   ;          launched to open (SPEC.md 54.5):
                                   ;          out CF=1 none; CF=0 with SI = its
@@ -2993,6 +3094,7 @@ apic_fpg_stepb:
                                   ;          Answers about BIOS-transport rows
                                   ;          alone: a driver's own rows are
                                   ;          the driver's to recognise
+rmk_8:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT kbd_down           ; 0x02FC - AL = a make scancode. out CF = 1
                                   ;          that key is DOWN right now, CF = 0
                                   ;          it is up; every register kept.
@@ -3025,6 +3127,7 @@ apic_fpg_stepb:
                                   ;          hard-code - and the second
                                   ;          display's own origin when the
                                   ;          bracket is over there
+rmk_8e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RCXCELL osapi_mem_movable_x ; 0x030C - X: DX = a claim of yours, AX = a
                                   ;          near proc in YOUR segment (0 pins
                                   ;          it again). out CF = 1 = no such
@@ -3208,6 +3311,7 @@ apic_drv_pkg_call:
                                   ;          merge and look for a duplicate)
 apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ; 66.4.3): the cell IS the shim, so no cw_
+rmk_9:            ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT wm_wake            ; 0x034F - BX = a window of yours: post an
                                   ;          EVT_WAKE for it (SPEC.md 74.1).
                                   ;          Any context - ISR- and worker-
@@ -3218,6 +3322,7 @@ apic_wm_wake:                     ; mem_cpq_run_x's door to the wake (SPEC.md
                                   ;          posted. The UI task pops it and
                                   ;          calls the handler below WITHOUT
                                   ;          the gfx lock
+rmk_9e:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_ICELL 5                 ; 0x0357 - BX = window, AX = a near proc in
                                   ;          YOUR segment (0 clears it): the
                                   ;          WAKE handler. Called SI = your
@@ -3460,6 +3565,7 @@ api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
                                   ;          - the collision CLAUDE.md asks to
                                   ;          be checked by hand, caught by the
                                   ;          merge and then by t_api_abi
+rmk_10:           ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_SLOT fsx_page           ; 0x03C5 - AL = a page index; shows it, and
                                   ;          waits for the retrace that latches
                                   ;          it. Bracket-only, exclusive task
@@ -3472,6 +3578,7 @@ api_gfx_blitp:                    ; (named: SPEC.md 5.4.3.6's walk far-calls it)
                                   ;          3B8h that does nothing until 3BFh
                                   ;          allows it, and neither is
                                   ;          derivable from the info block
+rmk_10e:          ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RSLOT wm_noanim          ; 0x03CD - BX = a window of yours, between
                                   ;          OSAPI_WM_CREATE and
                                   ;          OSAPI_WM_SHOW: it does NOT zoom
@@ -3798,6 +3905,7 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          (SPEC.md 20.5.1.3.3)
     MEGA_ICWB W_ONCLICK
     OSAPI_IEND
+rmk_rseq:         ; (a real-mode bracket's twin: fsx_rkeepm)
     OSAPI_RNCELL dwf_dskw_read_seq ; 0x0455  N: A STREAMING READ (SPEC.md
                                   ;          18.4.8): SI = name, DX:BX = the
                                   ;          buffer, CX = capacity (clusters),
@@ -3810,6 +3918,7 @@ apic_inst_minimize:               ; DOCK.DRV's door (SPEC.md 30.4)
                                   ;          re-seeded from the name when
                                   ;          anything remounted or wrote.
                                   ;          kern_big; the small door refuses
+rmk_spk:           ; (a real-mode bracket's twin: fsx_rkeepm)
     OSAPI_RSLOT osapi_fsx_spk     ; 0x045B - THE SPEAKER AT A SAMPLE RATE
                                   ;          (SPEC.md 34.11), inside your own
                                   ;          FSXF_RATE bracket: AL = 0 open
@@ -4020,6 +4129,7 @@ apic_thm_desk:                    ; (cw_thm_desk's door, size pass 13)
                                   ;          CF=1 none; CF=0 with DX:SI the NUL
                                   ;          text, valid in the entry proc.
                                   ;          kern_small refuses
+rmk_seg:          ; (a real-mode bracket keeps it: fsx_rkeep)
     OSAPI_RCXCELL osapi_seg       ; 0x04E3 - BL = a SEG_* verb: a segment's or
                                   ;          selector's linear base, its real
                                   ;          segment, a window over physical
@@ -4366,10 +4476,8 @@ api_fdlg_open:
     jz .nodef                   ; "no default": the ZERO is the argument, so it
     call api_cpname             ; must reach fdlg_open unstaged and unchanged
     mov si, api_name            ; a kernel offset, so it survives the DS switch
-    jmp short .go
-.nodef:
-    xor si, si
-.go:
+.nodef:                         ; (SI is 0 already on the `jz` that brings it
+.go:                            ; here - kernel size pass 15, -4)
     pop es                      ; the caller's ES back: it is the buffer
     pop di                      ; and its DI, which fdlg_open needs as an
                                 ; input (the completion proc's offset)
@@ -5450,6 +5558,9 @@ kmain_o:
                                 ; FDD_MOTORW + FDD_SEEKW - 32 ticks, 1.76 s,
                                 ; the longest single wait in the whole boot
     OVLCALL  desk_init  ; volume zones for the desktop (SPEC.md 26.1)
+    call bvw_rowcalc            ; ...and the grid's shape and its first
+                                ; reflow, desk_init's last step until kernel
+                                ; size pass 15 (desk.inc's DESK_ROWCALC)
     MARKW 21
     OVLCALL  dock_init          ; dock strip scratch (SPEC.md 30)
     MARKW 22
@@ -5512,7 +5623,7 @@ kmain_o:
 %ifndef KERN_SMALL
     mov byte [desk_ready], 1    ; from here on the desktop places things...
 %endif
-    call COLD_SEG:desk_rowcalc_x    ; every volume the boot added and every
+    call bvw_rowcalc            ; every volume the boot added and every
                                 ; shortcut and placed drive SYSTEM.CFG put
                                 ; back, into their cells in one pass - and
                                 ; rowcalc, not the bare reflow, because the
@@ -5753,20 +5864,31 @@ kmain:
                                 ; here on (KERN-MEGA-MEMORY-PLAN MC7.4)...
     pop ax
     mov [snd_live], al          ; ...after which the tick may run again
-    call COLD_SEG:drv_hiboot_f  ; ...and the boot's drivers above 1MB, now
-                                ; that there is a pool (item 82)...
-    call COLD_SEG:mem_hicaches_f ; ...and its caches (item 84)
-%ifdef OS88_SHORTCUTS
-    call COLD_SEG:stik_bootf    ; ...the Sticky Apps, bound in the mode they
-                                ; run in (KERN-MEGA-PLAN 14.78; drv_notice_x
-                                ; does it before the switch elsewhere)...
-    call COLD_SEG:as_bootc      ; ...and AUTOSTART last, so a package it opens
-                                ; is placed as one opened by hand would be -
-                                ; above 1MB when it says OS88_HIGH
-                                ; (KERN-MEGA-MEMORY-PLAN MC8)
-%endif
+    call COLD_SEG:kmain_hic     ; ...and the rest, one far call to .cold
 %endif
     jmp ui_task                 ; task 0 becomes the UI task; never returns
+
+%ifdef KERN_MEGA
+; kmain_hic - kern_mega's boot tail after mega_enter, FAR: four far calls that
+; were kmain's in .text (kern_mega size pass 1)
+section .cold
+kmain_hic:
+    call COLD_SEG:drv_hiboot_f  ; ...the boot's drivers above 1MB, now that
+                                ; there is a pool (item 82)...
+    call COLD_SEG:mem_hicaches_f ; ...and its caches (item 84)
+%ifdef OS88_SHORTCUTS
+    call stik_boot              ; ...the Sticky Apps, bound in the mode they
+                                ; run in (KERN-MEGA-PLAN 14.78; drv_notice_x
+                                ; does it before the switch elsewhere)...
+    jmp as_bootc                ; ...and AUTOSTART last (its retf is ours), so
+                                ; a package it opens is placed as one opened
+                                ; by hand would be - above 1MB when it says
+                                ; OS88_HIGH (KERN-MEGA-MEMORY-PLAN MC8)
+%else
+    retf
+%endif
+section .text
+%endif
 
 ; =============================================================================
 ; osapi helpers (SPEC.md 20.4) - tiny accessors for loaded programs, reached
@@ -5796,19 +5918,24 @@ kmain:
 ; EVERY KERNEL BUT kern_mega answers it IN THE CELL (OSAPI_XREFUSE, kernel
 ; size pass 14), so the body below is kern_mega's alone.
 %ifdef KERN_MEGA
-osapi_xmem_sel:
-    cmp byte [mega_on], 0
-    je .no
-    push bx
-    call xm_ownbl               ; BL = who is asking
-    call MEGA_SEL_CODE:mega_xmself
+osapi_xmem_sel:                 ; (xmem_run's shape: the [mega_on] test and
+    push bx                     ; the refusal are .cold's, osapi_xmem_selc -
+    call xm_ownbl               ; kern_mega size pass 1. xm_ownbl is a pure
+    call COLD_SEG:osapi_xmem_selc ; query, so it may run in real mode too)
     pop bx
     ret
+section .cold
+osapi_xmem_selc:
+    cmp byte [mega_on], 0
+    je .no
+    call MEGA_SEL_CODE:mega_xmself ; BL = who is asking
+    retf
 .no:
-    mov ax, 1
-    cmp al, 2                   ; CF = 1 - and SIX bytes where `stc` is five,
-    ret                         ; which keeps every hot routine after this on
-                                ; the byte parity t_hotpar measured it at
+    mov ax, 1                   ; CF = 1, AX = 1: not available here -
+    cmp al, 2                   ; `cmp` and not `stc`, a byte longer, which
+    retf                        ; keeps the hot .cold routines after this on
+                                ; the parity they were measured at
+section .text
 %endif
 
 ; ---- osapi_xmem_run - API slot 0x04CB (KERN-MEGA-PLAN 14.16) ----------------
@@ -5919,6 +6046,14 @@ osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
     call MEGA_SEL_CODE:mega_segf ; (`.mega`: KERN-MEGA-SEGMENTS-PLAN)
     retf
 .rm:
+    jmp KERNEL_SEG:osapi_segr   ; real mode's answers are `.text`'s on
+section .text                   ; kern_mega: they are the TWIN a real-mode
+                                ; bracket's table jumps to (SPEC.md 53.2.3),
+                                ; and `.cold` is above 1MB there. Registers
+                                ; alone - no DS is read - so the far frame
+                                ; either caller built is the one its retf
+                                ; returns through
+osapi_segr:
 %endif
     cmp bl, SEG_SUB
     je .sub
@@ -5936,6 +6071,14 @@ osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
     mov cl, 12
     shr dx, cl                  ; DX:AX = DX x 16
     pop cx
+%ifdef KERN_BIG                 ; (kern_small: the old shape, for the parity
+    SKIPF2                      ; of gfx_blit1_x right after this routine)
+.sub:                           ; test ax, imm16 over .sub's add: flags only,
+    add dx, ax                  ; and the clc below is the answer (kernel size
+.ok:                            ; pass 15: one `clc / retf` for both)
+    clc
+    retf
+%else
 .ok:
     clc
     retf
@@ -5943,6 +6086,7 @@ osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
     add dx, ax
     clc
     retf
+%endif
 .no:
     stc
     retf                        ; (an EVEN body: dsk_xfer, dsk_runcap,
@@ -6020,7 +6164,9 @@ osapi_img_name:                 ; (api_rsc's far body: DS = KDATA)
 %endif
 .mod:                           ; SI is the row's segment word either way, and
     mov al, 1                   ; the name's pointer is the word after it in a
-    jmp short .name             ; drv_tab row and a mod_tab row alike (asserted
+    SKIPF2                      ; drv_tab row and a mod_tab row alike (asserted
+                                ; - and test ax, imm16 over the mov below keeps
+                                ; AL; the `or` in .c writes CF - pass 15)
 .drv:                           ; below), so one load serves both
     mov al, 0
 .name:
@@ -6067,11 +6213,16 @@ osapi_img_name equ mod_gone     ; `stc / retf`: CF = 1, every register kept
 ; THE TASK MANAGER'S "RAM IS RAM" (KERN-MEGA-PLAN 13.6): what is above 1MB, and
 ; whose, so a package's memory is one figure wherever it was placed.
 %ifdef KERN_MEGA
-osapi_xmem_walk:
-    cmp byte [mega_on], 0
-    je osapi_xmem_sel.no
-    call MEGA_SEL_CODE:mega_xmwalkf ; (`.mega`: KERN-MEGA-SEGMENTS-PLAN)
+osapi_xmem_walk:                ; (the body is .cold's: kern_mega size pass 1)
+    call COLD_SEG:osapi_xmem_walkc
     ret
+section .cold
+osapi_xmem_walkc:
+    cmp byte [mega_on], 0
+    je osapi_xmem_selc.no
+    call MEGA_SEL_CODE:mega_xmwalkf ; (`.mega`: KERN-MEGA-SEGMENTS-PLAN)
+    retf
+section .text
 %elifndef KERN_BIG
 osapi_xmem_walk equ xm_copy     ; kern_small: no extended memory, and its
                                 ; xm_copy is AX = 1, CF = 1 with every other
@@ -6090,15 +6241,20 @@ osapi_xmem_walk equ xm_copy     ; kern_small: no extended memory, and its
 ; Every kernel but kern_mega answers it IN THE CELL - `mov ax, dx / cmp ax, 1`
 ; (kernel size pass 14) - so the body is kern_mega's alone.
 %ifdef KERN_MEGA
-osapi_mem_codesel:
+osapi_mem_codesel:              ; (the body is .cold's: kern_mega size
+    call COLD_SEG:osapi_mem_codeselc ; pass 1)
+    ret
+section .cold
+osapi_mem_codeselc:
     cmp byte [mega_on], 0
     je .rm
     call MEGA_SEL_CODE:mega_codeself ; (`.mega`: KERN-MEGA-SEGMENTS-PLAN)
-    ret
+    retf
 .rm:
     mov ax, dx
     cmp ax, 1                   ; CF = 1 iff DX = 0
-    ret
+    retf
+section .text
 %endif
 
 ; ---- osapi_rand - seed = seed*25173 + 13849; out: AX = new seed --------------
@@ -6516,6 +6672,10 @@ osapi_seed:  dw 0                ; PRNG state (inline data: .bss takes no init)
 ; CTRL.DRV (ctrl.inc) and `bvs` in the boot blob (driver.inc). The CS it
 ; stores is the far return's, on the stack, spent before the hop returns - not
 ; a published segment, which is what os88ovlchk's CS rule is about.
+%macro HBGC 1                   ; HIBER.DRV's CPXC (hiber.inc): its own far hop
+    call hbg_cgo                ; into the near .cold routine %1 (kernel size
+    dw %1                       ; pass 15)
+%endmacro
 %macro KGO_PAIR 1
 %1 %+ _cgo:                     ; ovlchk: builds its own far frame
     push ax                     ; STKBALANCE-OK: a far frame built by hand, its
@@ -8322,6 +8482,37 @@ cfx_grp:
     ret
 cfx_tab:    times CFX_MAX db 0
 cfx_tab_end:
+; -----------------------------------------------------------------------------
+; cfx_grid - desk_rowcalc's geometry for the BOOT (desk.inc's DESK_GRID): the
+;            blob's bvw_rowcalc far-calls it and then reflows (kernel size pass
+;            15). All registers preserved but flags.
+;
+; HERE because the blob had nine bytes and `.cfx` is the RAM nothing claims
+; until mem_unblob - which is after kmain_o's last call - and PAST cfx_tab
+; because the first KVGABUF_SIZE bytes of this section are `.vgabuf`'s RAM
+; too (VGABUF_RAM is COLD_RAM + COLD_PARA): the slide is done with them
+; before the planar decoder's first use, and this is called long after. It
+; names no segment, so os88cfx has nothing to stamp in it.
+; -----------------------------------------------------------------------------
+cfx_grid:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    DESK_GRID
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    retf
+; cfx_ctxcap - vid_ctx_capture for the blob's bvs_disp_init (vidsel.inc's
+; VID_CTXCAP), here for cfx_grid's reason
+VID_CTXCAP cfx_ctxcap, retf
+%if cfx_grid - $$ < KVGABUF_SIZE
+  %error "cfx_grid lies in the RAM `.vgabuf` shares with `.cfx`"
+%endif
 cfx_end:
 CFX_SIZE    equ cfx_end - $$
 %if (CFX_RAM * 16 + CFX_SIZE) > BLOB_SEG_AT * 16
@@ -8394,6 +8585,9 @@ OVL_SIZE equ ovl_end - $$     ; `$$` is 0 here: `.ovl` has a vstart of its
 %endif
 %endif
 %if ((OVL_SIZE + 511) / 512) * 512 > FAT_PARA * 16 + DSK_WIN_BYTES
+%ifdef KERN_MEGA
+%error "kern_mega: the boot overlay's window half has outgrown the FAT window plus dsk_secbuf - a diagnostic knob that grows `.ovl` wants its define in kernel/dskwin.inc's kern_mega DSK_OVLPAD test; otherwise see SPEC.md 2.1.2 and 2.5.3"
+%endif
 %error "the boot overlay's window half has outgrown the FAT window plus dsk_secbuf - see SPEC.md 2.1.2 and 2.5.3. Move a body to the blob (`.ovl`, SPEC.md 2.5.3.2) or out of the boot path"
 %endif
 
@@ -8516,6 +8710,41 @@ modf_end:
 MODF_SIZE equ modf_end - $$
 
 section .modl
+%ifdef KERN_MEGA
+; KSEG's near helpers for this image (the macro above): ES or DS = a selector
+; over the REAL paragraph in AX through scratch slot <slot>, mega_kaimf's
+; answer. Each row sets DI to its slot and joins its register's tail; DI and
+; FLAGS kept (mega_kaimf keeps FLAGS), AX clobbered - the site saves it
+%macro KSG_ROW 2
+ksg_%1_%2:
+    push di
+    mov di, %2
+    jmp short ksg_%1_MEGA_SEL_K5.go
+%endmacro
+    KSG_ROW es, MEGA_SEL_K0
+    KSG_ROW es, MEGA_SEL_K1
+    KSG_ROW es, MEGA_SEL_K3
+    KSG_ROW es, MEGA_SEL_K4
+ksg_es_MEGA_SEL_K5:
+    push di
+    mov di, MEGA_SEL_K5
+.go:
+    call COLD_SEG:mega_kaimf
+    mov es, ax
+    pop di
+    ret
+    KSG_ROW ds, MEGA_SEL_K0
+    KSG_ROW ds, MEGA_SEL_K1
+    KSG_ROW ds, MEGA_SEL_K4
+ksg_ds_MEGA_SEL_K5:
+    push di
+    mov di, MEGA_SEL_K5
+.go:
+    call COLD_SEG:mega_kaimf
+    mov ds, ax
+    pop di
+    ret
+%endif
 modl_end:
 MODL_SIZE equ modl_end - $$
 
@@ -8857,8 +9086,12 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
   %assign KS_LOWS   LOW_SEG      ; than re-deriving one order of it in
   %assign KS_VGAS   VGABUF_RAM   ; Python (ROM_COLD reorders it)
   %assign KS_BLOB   BLOB_SEG_AT  ; where the boot sectors put the blob
+ %ifdef KERN_MEGA                ; (kern_mega's guard 5 is its own arm)
+  %assign KS_MINRAM MEGA_BOOT_KB
+ %else
   %assign KS_MINRAM MIN_RAM_KB   ; ...and guard 5's ceiling, because a report
-  %assign KS_BOOTMX MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BOOT2_PAD
+ %endif
+  %assign KS_BOOTMX KS_MINRAM*1024 - BOOT_SECT - BOOT_STACK - KERNEL_SEG*16 - BOOT2_PAD
                                  ; that names one guard teaches everybody to
                                  ; steer by it, and for a while the one it
                                  ; named was the looser of the two
@@ -8868,14 +9101,16 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
     %assign KS_MSCR  MEGA_SCR_OFF + MPS_SIZE - MEGA_SIZE ; variant): `.mega`,
     %assign KS_MEGAP MEGA_PARA  ; the park's scratch on its tail, the rung
     %assign KS_MEGAS MEGA_RAM   ; and its base (KERN-MEGA-PLAN 14.45)
-    %warning ksm: mega=KS_MEGA mscr=KS_MSCR megapara=KS_MEGAP megas=KS_MEGAS
+    %assign KS_MRES  MEGA_RESIDENT ; ...and what guard 1 holds it to
+    %warning ksm: mega=KS_MEGA mscr=KS_MSCR megapara=KS_MEGAP megas=KS_MEGAS mres=KS_MRES
   %endif
 %endif
 
 ; 1. KERN_BUDGET - the FOOTPRINT. The whole kernel - image, scratch, FAT
 ;    snapshot, disk buffers and every task stack - is one span starting at
 ;    KERNEL_SEG, and it fits KERN_BUDGET (100,864 on kern_big, 64,000 on
-;    kern_small) just above the BIOS data area, with KERN_GRACE over it
+;    kern_small, and 68,096 on kern_mega against what it keeps in conventional
+;    memory after the switch) just above the BIOS data area, with KERN_GRACE over it
 ;    allowed in branch and integration work. The exact figure is checked by
 ;    `make budget-check` at an upstream merge or a release; raising a budget
 ;    is a decision with the owner, not a build fix (docs/KERNEL-MEMORY.md).
@@ -8885,8 +9120,9 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    knob on it exists to answer a question about a machine, it is not what
 ;    anybody boots, and the RAM it takes is a fact about that session rather
 ;    than about the product. `-DKERN_KNOB` is how it knows - the Makefile
-;    passes it whenever $(KNOBS) holds anything but KERN_SMALL, which is a
-;    SHIPPED configuration with a budget of its own and stays bound by it.
+;    passes it whenever $(KNOBS) holds anything but KERN_SMALL, KERN_EMU or
+;    KERN_MEGA (and the package-only knobs), each a configuration with a
+;    budget of its own that stays bound by it.
 ;    docs/history/KERN-BUDGET-LEDGER.md has the five knobs that taught this.
 ;
 ;    What bounds a knob kernel is guard 2 (one 64KB segment, which nobody can raise) and
@@ -8894,8 +9130,19 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    and, for a FIELD kernel specifically, tools/fieldsize.py, which reports
 ;    whether it shares a KIMG_PARA rung with the shipped one so that "bigger"
 ;    stays known about rather than silent.
+;
+;    **kern_mega IS BOUND, on what it keeps in conventional memory**
+;    (rule 4): MEGA_RESIDENT, KERN_SIZE less the `.cold` and `.mega` rungs
+;    that leave for above 1MB at the switch. It was a KERN_KNOB build until
+;    kern_mega size pass 1 and skipped this guard entirely; its knob arms
+;    (MEGATRAP, MEGADIAG, MEGAFDMASK, PICLOSE and every other knob built
+;    with KERN_MEGA=1) still carry KERN_KNOB and still skip it.
 %ifndef KERN_KNOB
-%if KERN_SIZE > KERN_BUDGET + KERN_GRACE
+%ifdef KERN_MEGA
+%if MEGA_RESIDENT > KERN_BUDGET + KERN_GRACE
+%error "kern_mega too big: what it keeps in conventional memory after the switch is past KERN_BUDGET's branch grace - see docs/KERNEL-MEMORY.md"
+%endif
+%elif KERN_SIZE > KERN_BUDGET + KERN_GRACE
 %error "kernel too big: past KERN_BUDGET's branch grace - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
@@ -9096,20 +9343,28 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 ;    not make a RAM-constrained test impossible - it makes the test state its
 ;    own constraint instead of borrowing the shipped kernel's.
 %ifndef KERN_KNOB
+%ifndef KERN_MEGA
 %if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MIN_RAM_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "the kernel cannot BOOT on MIN_RAM_KB - see docs/KERNEL-MEMORY.md"
 %endif
 %endif
-;    **kern_mega's floor is a 1MB machine, and it is guard 5 there.** It is a
-;    knob build, so the 128KB line above never bound it, and nothing said what
-;    did. A 286 with less than 1MB has no pool above it to be worth entering
-;    protected mode for - kern_big is the kernel for it - and kern_mega is
-;    MEANT to grow, its limits being 64KB a segment and `.mega` for new code
-;    (KERN-MEGA-MEMORY-PLAN, the owner's word). Stage 1 still loads the whole
-;    image into CONVENTIONAL memory, so the question is 640KB's, not 1MB's
+%endif
+;    **kern_mega's floor is a 1MB machine, and it is guard 5 there.** It is
+;    not held to the 128KB line above, and it never was: a 286 with less than
+;    1MB has no pool above it to be worth entering protected mode for - kern_big
+;    is the kernel for it - and kern_mega is MEANT to grow, its limits being
+;    64KB a segment and `.mega` for new code (KERN-MEGA-MEMORY-PLAN, the
+;    owner's word). Stage 1 still loads the whole image into CONVENTIONAL
+;    memory, so the question is the 1MB machine's 640KB of it, not 1MB's -
+;    MEGA_BOOT_KB, which kernsize's `boot` line reads as the ceiling. It binds
+;    the knob arms as well (unlike the 128KB line, which is a policy a knob is
+;    excused from, this is the only memory the machine HAS below 1MB). What
+;    kern_mega really boots in is far less - KERNEL_SEG*16 + KERN_SIZE +
+;    BOOT2_PAD + BOOT_SECT + BOOT_STACK, ~139KB at kern_mega size pass 1 -
+;    and whether to hold it to a smaller machine (a 256KB IBM 5170) is the
+;    owner's (docs/plans/completed/msp1/megabudget.md)
 %ifdef KERN_MEGA
-MEGA_MIN_RAM_KB equ 1024
-%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > 640*1024 - BOOT_SECT - BOOT_STACK
+%if KERNEL_SEG*16 + KERN_SIZE + BOOT2_PAD > MEGA_BOOT_KB*1024 - BOOT_SECT - BOOT_STACK
 %error "kern_mega cannot BOOT on its 1MB floor machine's 640KB - see docs/KERNEL-MEMORY.md"
 %endif
 %endif

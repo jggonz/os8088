@@ -164,7 +164,7 @@ def main():
             # assertions 4 and 5 are the substantive ones either way.
             print("  (the click raised %s: %s)" % (type(e).__name__,
                                                    str(e).split(".")[0]))
-        time.sleep(2)
+        os88marty.guest_sleep(m, 2)     # GUEST seconds, not the host's
 
         # --- 2. it LANDED -------------------------------------------------
         stage = pkg(off_stage)[0]

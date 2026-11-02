@@ -479,7 +479,9 @@ refuses with a toast naming why:
   over 0134h-014Ch) wrong - "not a GB ROM", the file not a cartridge;
 - **0143h = C0h**, a game for the Game Boy Color alone - "needs GB Color".
   A game for both (80h) runs as a Game Boy, and `.GBC` is a RealDMG
-  document beside `.GB`, the extension such games mostly carry;
+  document beside `.GB`, the extension such games mostly carry. How the
+  Color is to be added without slowing the Game Boy is
+  docs/plans/REALDMG-GBC-PLAN.md, a plan with nothing built;
 - **a type rdgsys does not have** - "MBC xxh unknown". The ones it runs are
   00-03, 05-06, 08-09, 0F-13 and 19-1E (`rw_mbcok`, a bit each); MMM01,
   HuC1, HuC3, MBC6, MBC7, TAMA5 and the Pocket Camera used to fall through
@@ -599,7 +601,10 @@ cache could not be claimed and the game ran interpreted (its log has no J).
   window as in full screen, with the recompiler on or off, so it read as
   the interpreter running whatever the status line said. Otherwise one
   claim without that room, as before, and then
-  over 256K is refused (`over 256K wants XMS`). The probe answers a KB over
+  over 256K is refused (`needs more XMS` - 24 characters is a toast's
+  room, and the first wording, `over 256K wants XMS`, lost its last word to
+  it; it also fires when there IS extended memory, only too little of it,
+  which that wording denied). The probe answers a KB over
   an exact size (SPEC.md 20.14.6.3), so the plan takes whole banks; bank 0's
   header must then say the same size, which a compressed file - read raw
   here - does not. The log's head gives the heap the plan saw.
@@ -661,34 +666,41 @@ before it: STILL OPEN after 20 s; green: closed in 0.2-0.8 emulated s).
 the package (`make mega`'s `build/megak/apps/realdmg.o88`, assembled with
 `PKG_MEGA`, SPEC.md 20.18; the shipped build REFUSES there since
 KERN-MEGA-MEMORY-PLAN MC7, 10.3.4) plans, under `CPU_F_PM`, before
-anything else: when the pool has room (`OSAPI_XMEM_CAPS`), banks 1 on go into
-one `OSAPI_XMEM_ALLOC` block and **each is addressed in place through a
-selector of its own**, so a switch is a pointer change as it is for a
+anything else: when the pool has room (`OSAPI_XMEM_CAPS`), the cartridge goes
+into ONE `OSAPI_MEM_HUGE` claim above 1MB and **each bank is addressed in
+place through a selector of its own**, so a switch is a pointer change as it is for a
 cartridge in one claim, and no bank is ever fetched (`rw_xplan`,
 `[rw_bcache]` 2).
 
-- **The selectors are `OSAPI_XMEM_RUN`'s**: a data selector every 32KB of the
-  block, each a 64KB window. The core's ROMX is a segment whose 4000h is the
-  bank's first byte (section 3), so bank n goes at (n - 1) x 32KB + 16KB and
-  window n - 1, at (n - 1) x 32KB, has it at 4000h. The bank table names
-  window n - 1 for bank n (`rw_xfill`, rdgsys's `rdg_bfill`); bank 0 is the
-  view's own, as in the bank cache.
-- **What it costs is pool, not heap**: two KB of extended memory a KB of
-  cartridge, half of each window being the 16KB below its bank, and one LDT
-  entry a bank. The heap holds no bank and no slot - the load reads through
-  ONE 16KB slot (the bank cache's own load, `rw_bload`, at the wider stride)
-  and gives it back - so the recompiler always gets **both 64KB cache
+- **The selectors are the claim's own** (`rw_xclaim`): `OSAPI_MEM_HUGE` with
+  BX = 4000h, a data selector every 16KB of the claim, each a 64KB window
+  (SPEC.md 50.3.5, KERN-MEGA-MEMORY-PLAN MC7.4). The core's ROMX is a segment
+  whose 4000h is the bank's first byte (section 3), so the cartridge lies in
+  the claim as it lies in the file, bank n at n x 16KB, and window n - 1, at
+  (n - 1) x 16KB, has it at 4000h. The bank table names window n - 1 for bank
+  n (`rw_xfill`, rdgsys's `rdg_bfill`); bank 0 is the view's own, as in the
+  bank cache, and its 16KB at the claim's start stays empty.
+- **What it costs is pool, not heap**: one KB of extended memory a KB of
+  cartridge, and one LDT entry a bank. The heap holds no bank and no slot -
+  the load reads through ONE 16KB slot (the bank cache's own load,
+  `rw_bload`), copies each bank up into its window (`rw_xput`, a `rep
+  movsw` between two selectors) and gives the slot back - so the recompiler always gets **both 64KB cache
   segments** (16.2.1) and the 64KB block table (16.3): `rw_jit2more` and
   `rw_jit2claim` ask for the second segment under `CPU_F_PM` whatever the
   profile says - and, past those two, the EXTRA tiers out of what the heap
   has left once the game's own claims are in (16.2.5).
 - **When it does not**: real mode (the arm runs on every kernel and plans as
-  the shipped build does), a pool shorter than twice the cartridge, more
-  than `RW_XROMMAX_KB`, or no run of free LDT entries that long (the load
-  then refuses with the room message rather than fall back). Each of those
+  the shipped build does), a pool shorter than the cartridge, more
+  than `RW_XROMMAX_KB`, or a claim refused - no run of free LDT entries that
+  long, windows other than the 16KB ones asked for, or a claim whose base
+  (`OSAPI_SEG`'s `SEG_LIN`) is below 1MB - `OSAPI_MEM_HUGE`'s conventional
+  fallback, which would spend the heap this arm exists to leave alone (the
+  load then refuses with the room message rather than fall back). Each of those
   goes to the bank cache or one claim as before.
-- **A move**: nothing to put right - a pool block never moves its selectors,
-  and under `CPU_F_PM` a move of any claim is a REBASE that calls no
+- **A move**: nothing to put right - the pool moves a huge claim a 64KB
+  piece at a time, REBASING its windows (the selectors are the same ones
+  after), with the package's rate hook held off; and under `CPU_F_PM` a move
+  of any claim is a REBASE that calls no
   relocation proc at all (MC7, 10.3.4); in real mode the carve's walk
   (`rw_partsmv`) leaves a word with bit 2 set alone (a heap segment is a
   multiple of 32; an LDT selector never is).
@@ -697,10 +709,16 @@ cartridge in one claim, and no bank is ever fetched (`rw_xplan`,
   (1MB, 64 banks) in place, `[rw_nmiss]` 0, the second cache segment and
   the 64KB table claimed, and no trap after the launch beyond the package's
   own once-a-session writes (16.2.4).
-- **A cost the kernel could take away**: the 32KB stride is
-  `OSAPI_XMEM_RUN`'s. A run at 16KB - one more argument to that cell, in
-  `.mega` - would hold the cartridge once instead of twice; not taken, so
-  that this needs no kernel change.
+- **It held the cartridge TWICE until 2026-10-30**: it was one
+  `OSAPI_XMEM_ALLOC` block under `OSAPI_XMEM_RUN`'s windows, which are 32KB
+  apart, so each bank sat in a window's upper half and the block was twice
+  the cartridge - a 2MB cartridge wanted 4MB of pool, and a 3MB machine
+  refused it. The 16KB step was built in the kernel for this (MC7.4) and
+  this package had not taken it; the measurement above is the 32KB layout's.
+  `tests/rdgmega.py`'s ARM leg asserts the 16KB step now, and that bank 1
+  is the claim's first window (`[rw_xsel]`, 0 on the one-claim leg, which
+  the step no longer tells apart): green on 2026-10-30, cpu_instrs passing
+  under the recompiler with its banks in the one claim.
 
 ### 10.3.2 A bank switched to lazily
 
@@ -820,6 +838,12 @@ es, bp` with BP the recompiler's claim + 1000h.
   is the arm's alone (on every kernel the shipped build runs on a segment
   IS its code selector), and `tests/megapkg.txt` has no RealDMG line. The
   precompiled build (20.14) refused already.
+- **The arm's title bar reads `(Un)RealDMG` under `CPU_F_PM`**: a
+  protected-mode machine is not "real" any more, and the window says it
+  knows. `rw_entry` reads `OSAPI_CPU_INFO` before `OSAPI_WM_CREATE` and
+  points the template's `WT_TITLE` at `rw_unttl`, `(Un)` laid immediately
+  before `rw_ttl`'s `RealDMG` so the two share one string; the app menu
+  keeps `RealDMG`. +12 bytes of the arm, the shipped build byte-identical.
 - **The arm asks `OSAPI_SEG` instead** (`rw_sub` = `SEG_SUB`, `rw_subc` =
   `SEG_SUBC` for code), which a real-mode kernel answers with the very sum,
   so the arm on one is the old arithmetic and `rw_mreloc`'s procs still put
@@ -839,8 +863,8 @@ es, bp` with BP the recompiler's claim + 1000h.
 - **The bank cache is refused under `CPU_F_PM`**: its slot 0's word is 400h
   BELOW the slots' claim (`rw_bfill`), a base no selector over the claim can
   name. `rw_plan` goes to one claim when the banks cannot go in place
-  (10.3.1: a machine with no extended memory, or a pool shorter than twice
-  the cartridge), so on kern_mega a cartridge over `RW_ROMMAX_KB` needs the
+  (10.3.1: a machine with no extended memory, or a pool shorter than the
+  cartridge), so on kern_mega a cartridge over `RW_ROMMAX_KB` needs the
   pool.
 - **What it costs is LDT entries**: one a bank (in place, already; one claim,
   now), a pair a tier and for the part, one each for the frames, the table
@@ -4261,7 +4285,7 @@ is the one that runs on kern_mega. It declares `OS88_HIGHMEM`.
 **Memory, under `CPU_F_PM`** - the owner's case for it: a protected-mode
 machine has the RAM for every code image and every bank at once:
 - **The ROM first**, in place above 1MB (10.3.1), or in one claim when the
-  pool cannot hold twice the cartridge (10.3.4: there is no bank cache to
+  pool cannot hold the cartridge (10.3.4: there is no bank cache to
   trade images against here). `rw_load`'s images-first order is the
   conventional heap's, and is kept for every real-mode kernel.
 - **Then every code image in ONE pool block** (`rw_axclaim`, at the load's

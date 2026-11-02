@@ -306,8 +306,7 @@ mega_dosclaimf:
     mov [mega_dxbase+2], ax
     mov [mega_dxkb], ax
     mov ax, [mem_top]
-    mov cl, 6
-    shr ax, cl                      ; paragraphs -> KB
+    shr ax, 6                       ; paragraphs -> KB
     cmp ax, [mega_parkcap]
     jbe .want
     mov ax, [mega_parkcap]
@@ -375,13 +374,7 @@ mega_dosclaimf:
     retf
 .alloc:                             ; CX KB -> DX:AX the block, CF = refused
     mov ax, cx
-    mov dx, cx
-    push cx
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
-    pop cx
+    call mega_kblin
     mov bx, MX_KOWN                 ; the kernel's own, outranking every
     call mx_alloc                   ; cache - and PINNED: the park and the
     jc .ao                          ; arena are named by their LINEAR base
@@ -405,8 +398,8 @@ mega_dosclaimf:
 mega_dosfreef:
     pusha
     mov bl, MX_KOWN
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
+    xor ax, ax
+    call mega_dpb
     mov cx, ax
     or cx, dx
     jz .px
@@ -561,8 +554,7 @@ mega_dmapb:
     jz .cln
     mov dx, ax
     add dx, [ss:si+MC_PARA]
-    mov cl, 6
-    shr ax, cl
+    shr ax, 6
     call .mark
 .cln:
     add si, MC_SIZE
@@ -602,8 +594,7 @@ mega_dmapb:
     push word MEGA_SEL_PSCR
     pop es
     add dx, 63
-    mov cl, 6
-    shr dx, cl
+    shr dx, 6
     mov bx, ax
 .mk:
     cmp bx, dx
@@ -634,9 +625,7 @@ mega_dmapb:
     mov ch, 1
     shl ch, cl
     mov si, bx
-    shr si, 1
-    shr si, 1
-    shr si, 1
+    shr si, 3
     ret
 
 ; mega_dacc - THE ACCESSED BIT on every present code or data descriptor in the
@@ -671,24 +660,20 @@ mega_dacc:
 
 ; mega_dtopkb - AX = conventional memory's KB, as far as MPS_MAP reaches
 mega_dtopkb:
-    push cx
     mov ax, [mem_top]
-    mov cl, 6
-    shr ax, cl
-    pop cx
+    shr ax, 6
     cmp ax, MEGA_DMAPKB
     jbe .r
     mov ax, MEGA_DMAPKB
 .r:
     ret
 
-; mega_kblin - AX KB -> DX:AX bytes. Clobbers CL
+; mega_kblin - AX KB -> DX:AX bytes. Clobbers nothing else (kernel size
+; pass 15: the shifts take their count as an immediate, `.mega` being a 286's)
 mega_kblin:
     mov dx, ax
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
+    shl ax, 10
+    shr dx, 6
     ret
 
 ; -----------------------------------------------------------------------------
@@ -757,15 +742,11 @@ mega_dosparkf:
     ; --- the regions the sum covers -------------------------------------------
     mov word [mega_dnreg], 0
     mov word [mega_dncpy], 0        ; (a hibernate's resume sets it)
-    mov bx, [mega_dikb]             ; the park's IMAGE, in 64-byte lines
-    mov ax, 16                      ; (KB x 16)
-    mul bx
-    mov bx, ax
-    mov cx, dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, MPK_HDR
-    adc dx, 0
+    mov ax, [mega_dikb]             ; the park's IMAGE, in 64-byte lines
+    call mega_dlines
+                                    ; (KB x 16)
+    mov ax, MPK_HDR
+    call mega_dpb
     call mega_dreg_add
     cmp word [mega_dhkb], 0         ; ...the HMA's save past the image's
     je .nohsv                       ; claim, its 64KB in lines (MC4)
@@ -777,22 +758,12 @@ mega_dosparkf:
     cmp byte [mega_drmode], 0       ; (a runs park leaves nothing in place:
     jne .noplace                    ; what it did not take is free)
     mov ax, [mem_top]               ; ...what was left IN PLACE, P .. the top
-    mov cl, 6
-    shr ax, cl
+    shr ax, 6
     sub ax, [mega_dpkb]
     jbe .noplace
-    mov bx, 16
-    mul bx
-    mov bx, ax
-    mov cx, dx
+    call mega_dlines
     mov ax, [mega_dpkb]
-    mov dx, ax
-    push cx
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
-    pop cx
+    call mega_kblin
     call mega_dreg_add
 .noplace:
     xor cx, cx                      ; the GDT less entries 0-7 (WIN and ODD
@@ -836,18 +807,9 @@ mega_dosparkf:
     jbe .mxn
     mov di, MEGA_HMA_KB
 .mxa:
-    mov bx, 16
-    mul bx
-    mov bx, ax
-    mov cx, dx
+    call mega_dlines
     mov ax, di
-    mov dx, ax
-    push cx
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
-    shr dx, cl
-    pop cx
+    call mega_kblin
     add dx, MEGA_XPOOL >> 16
     cmp ax, [mega_dpbase]
     jne .mx1
@@ -866,10 +828,10 @@ mega_dosparkf:
     jb .mx
 
     ; --- the table bytes the lines miss, banked, and a copy each back -------
-    mov ax, [mega_dpbase]           ; the header's list and the bank, so a
-    mov dx, [mega_dpbase+2]         ; damaged list or count cannot come back
-    add ax, MPK_MAGIC               ; summing less than was parked
-    adc dx, 0
+    mov ax, MPK_MAGIC               ; the header's list and the bank, so a
+    call mega_dpb
+                                    ; damaged list or count cannot come back
+                                    ; summing less than was parked
     mov bx, (MPK_SAVE + MPK_SAVEL * 64 - MPK_MAGIC) / 64
     xor cx, cx
     call mega_dreg_add
@@ -885,16 +847,11 @@ mega_dosparkf:
     mov dx, [si+2]
     add ax, [mega_tbllin]
     adc dx, [mega_tbllin+2]
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
+    call mega_xsrcset
     mov [es:di+4], ax
     mov [es:di+6], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, [si+6]
-    adc dx, 0
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    mov ax, [si+6]
+    call mega_dpdst
     mov [es:di], ax
     mov [es:di+2], dx
     mov cx, [si+4]
@@ -917,18 +874,10 @@ mega_dosparkf:
     mov ax, [mega_dpbase+2]
     mov [mega_dpchk+4], ax
     push di
-    xor dx, dx
-    mov ax, KERNEL_SEG << 4
-    add ax, mega_dpchk
-    adc dx, 0
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, MPK_SAVE
-    adc dx, 0
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    mov ax, (KERNEL_SEG << 4) + mega_dpchk
+    call mega_xsrc0
+    mov ax, MPK_SAVE
+    call mega_dpdst
     mov cx, 6
     call KERNEL_SEG:mega_lincopyf
     pop di
@@ -968,11 +917,7 @@ mega_dosparkf:
     mov [es:di+8], ax
     mov [es:di+10], dx
     mov ax, bp
-    call mega_kblin
-    add ax, MPK_HDR
-    adc dx, 0
-    add ax, [mega_dpbase]
-    adc dx, [mega_dpbase+2]
+    call mega_dkblin
     mov [es:di], ax
     mov [es:di+2], dx
     pop ax
@@ -1014,7 +959,7 @@ mega_dosparkf:
 .copy:
     mov ax, bp                      ; ...done when SI:BP reaches P
     mov dx, si
-    call .tokb
+    call mx_kb                      ; DX:AX bytes -> AX KB (mega.inc)
     mov cx, [mega_dpkb]
     sub cx, ax
     jbe .runs
@@ -1022,19 +967,14 @@ mega_dosparkf:
     jb .last
     mov cx, 32
 .last:
-    xchg ch, cl                     ; KB -> bytes (x 1024: a byte and 2 bits)
-    shl cx, 1
-    shl cx, 1
+    shl cx, 10                      ; KB -> bytes (x 1024: a byte and 2 bits)
     mov [mega_xsrc], bp
     mov [mega_xsrc+2], si
     mov ax, bp
     mov dx, si
     add ax, MPK_HDR
     adc dx, 0
-    add ax, [mega_dpbase]
-    adc dx, [mega_dpbase+2]
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    call mega_dpdstx
     push si
     push bp
     push cx
@@ -1055,9 +995,7 @@ mega_dosparkf:
     push word MEGA_SEL_PSCR
     pop es
     mov si, [mega_dnreg]
-    shl si, 1
-    shl si, 1
-    shl si, 1
+    shl si, 3
     add si, MPS_REG + MPK_PCPY * MPK_CPYSZ
     mov bp, [mega_dncpy]
     sub bp, MPK_PCPY
@@ -1126,6 +1064,7 @@ mega_dosparkf:
     mov ax, 0xFFFF
 .tout:
     mov [mega_dout], ax
+%ifdef MEGA_E9
     mov si, mega_m_park             ; "kern_mega: parked kkkK at pppppp sum
     call mm_puts                  ;  ssss:ssss" on port E9 (KERN-MEGA-DOS-
     mov ax, [mega_dikb]             ; PLAN 10's W1 line), so a break-on-purpose
@@ -1146,6 +1085,7 @@ mega_dosparkf:
     call mm_hex4
     mov al, 10
     call mm_putc
+%endif
 .ret:
     pop es
     pop ds
@@ -1153,13 +1093,6 @@ mega_dosparkf:
     mov al, [mega_dwoke]
     popf
     retf
-.tokb:                              ; DX:AX bytes -> AX KB. Clobbers CX
-    mov cl, 10
-    shr ax, cl
-    mov cl, 6
-    shl dx, cl
-    or ax, dx
-    ret
 .tbl:                               ; AX = an offset into the tables' block,
     xor dx, dx                      ; under 64KB: that place onto the list
     add ax, [mega_tbllin]           ; (BX lines, CX = 0)           ; where mega_layoutf put the block
@@ -1169,14 +1102,52 @@ mega_dosparkf:
 ; mega_dhsave - DX:AX = the HMA's save in the park: past the header and the
 ; image's claim, [mega_dclkb] KB (MC4). Clobbers nothing else
 mega_dhsave:
-    push cx
     mov ax, [mega_dclkb]
+; mega_dkblin - AX = KB into the park's image -> DX:AX = its linear address,
+; past the header (the copy's, the runs' and the HMA save's one sum: kernel
+; size pass 15). Clobbers nothing else
+mega_dkblin:
     call mega_kblin
     add ax, MPK_HDR
     adc dx, 0
+    jmp short mega_dpbx
+
+; mega_dpdst - AX = an offset into the park -> DX:AX = its linear address,
+; and [mega_xdst] = it too, for mega_lincopyf; mega_dpdstx the same from an
+; offset in DX:AX. mega_dpb / mega_dpbx the same without the store. Every
+; copy and region the park builds was these four or six instructions written
+; out (kernel size pass 15). Clobbers nothing else (the flags)
+mega_dpdst:
+    xor dx, dx
+mega_dpdstx:
+    call mega_dpbx
+    mov [mega_xdst], ax
+    mov [mega_xdst+2], dx
+    ret
+mega_dpb:
+    xor dx, dx
+mega_dpbx:
     add ax, [mega_dpbase]
     adc dx, [mega_dpbase+2]
-    pop cx
+    ret
+
+; mega_xsrc0 - AX = a linear address under 64KB -> [mega_xsrc]; mega_xsrcset
+; the same from DX:AX - mega_lincopyf's source, which a dozen sites stored by
+; hand (kernel size pass 15). Clobbers DX on the first, nothing on the second
+mega_xsrc0:
+    xor dx, dx
+mega_xsrcset:
+    mov [mega_xsrc], ax
+    mov [mega_xsrc+2], dx
+    ret
+
+; mega_dlines - AX = KB -> CX:BX = its 64-byte LINES (x 16), mega_dreg_add's
+; count. Clobbers DX (kernel size pass 15: three sites wrote it out)
+mega_dlines:
+    mov bx, 16
+    mul bx
+    mov bx, ax
+    mov cx, dx
     ret
 
 ; mega_dsumall - the sum over the scratch's list, through MEGA_SEL_XA. out DX:AX =
@@ -1285,8 +1256,7 @@ mega_dosgo:
     cmp [es:di+KDL_CAP], ax         ; a PARTIAL park: the program's arena
     jbe .capok                      ; ends below the first byte left in place
     mov [es:di+KDL_CAP], ax         ; (12.1 item 5)
-    mov cl, 6
-    shl ax, cl
+    shl ax, 6
     mov [es:di+KDL_PLOW], ax
 .capok:
     mov si, clk_sec                 ; the clock and the BIOS tick it was read
@@ -1339,18 +1309,10 @@ mega_dosgo:
     inc bx
     loop .nmpad
 .nmd:
-    xor dx, dx                      ; ...and into the header
-    mov ax, KERNEL_SEG << 4
-    add ax, mega_dname
-    adc dx, 0
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, mpk_s_name - mpk_stub
-    adc dx, 0
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    mov ax, (KERNEL_SEG << 4) + mega_dname ; ...and into the header
+    call mega_xsrc0
+    mov ax, mpk_s_name - mpk_stub
+    call mega_dpdst
     mov cx, 12
     push es
     call KERNEL_SEG:mega_lincopyf
@@ -1371,8 +1333,8 @@ mega_dosgo:
     or ax, [mega_dpbase+2]
     jz .noanchor
     push es
-    mov ax, MEGA_SEL_WIN
-    mov es, ax
+    push word MEGA_SEL_WIN
+    pop es
     mov word [es:0], MPK_ANCHOR1
     mov word [es:2], MPK_ANCHOR2
     mov ax, [mega_dpbase]
@@ -1415,6 +1377,14 @@ mega_dosgo:
     jmp KERNEL_SEG:mega_dosgo_lo    ; ...and down, from below 1MB
 section .text                   ; the drop itself (KERN-MEGA-SEGMENTS-PLAN 3.6)
 mega_dosgo_lo:
+    mov byte [mega_drop], 1         ; the DOS park's landing, mega_dropr
+; mega_down - OUT OF PROTECTED MODE FOR GOOD (until the caller's own way
+; back), on either CPU, landing at mega_rland in real mode with IF = 0 and
+; the stack as it was: [mega_drop] names the landing - 1 the DOS park's
+; mega_dropr, 2 the real-mode bracket's fsx_rland (SPEC.md 53.2.3). PM, DS =
+; KDATA, a writable ES, IF = 0, NMI off for a 386 (the 286's reset sets it).
+; Jumped to, never called
+mega_down:
     cmp byte [cpu_tier], CPU_386
     jb .r286
 cpu 386
@@ -1423,11 +1393,10 @@ cpu 386
     mov cr0, eax
 cpu 286
     db 0xEA
-    dw mega_dropr, KERNEL_SEG
+    dw mega_rland, KERNEL_SEG
 .r286:                              ; ...and the 286's (W2): the reset
-    mov byte [mega_drop], 1         ; mega_svc.r286 takes, landing in
-    mov [mega_rss], ss              ; mega_r286, whose foot sends a drop here
-    mov [mega_rsp], sp
+    mov [mega_rss], ss              ; mega_svc.r286 takes, landing in
+    mov [mega_rsp], sp              ; mega_r286, whose foot sends a drop here
     push word MEGA_BDA
     pop es
     mov word [es:0x67], mega_r286
@@ -1465,26 +1434,18 @@ mega_dstubup:
     call MEGA_SEL_CODE:mega_selbasef               ; DX:AX = the image's base
     add ax, mpk_stub
     adc dx, 0
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    call mega_xsrcset
+    xor ax, ax
+    call mega_dpdst
     mov cx, (mpk_stub_end - mpk_stub + 1) & 0xFFFE
     call KERNEL_SEG:mega_lincopyf
-    xor dx, dx                      ; ...its GDTR and IDTR, THIS boot's: the
-    mov ax, KERNEL_SEG << 4         ; tables move with the machine since
-    add ax, mega_gdtr               ; KERN-MEGA-MEMORY-PLAN MC2, so the stub
-    adc dx, 0                       ; checks the cells against what staged it
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, mpk_tabs - mpk_stub
-    adc dx, 0
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    mov ax, (KERNEL_SEG << 4) + mega_gdtr ; ...its GDTR and IDTR, THIS boot's: the
+    call mega_xsrc0
+                                    ; tables move with the machine since
+                                    ; KERN-MEGA-MEMORY-PLAN MC2, so the stub
+                                    ; checks the cells against what staged it
+    mov ax, mpk_tabs - mpk_stub
+    call mega_dpdst
 %if mega_idtr - mega_gdtr != 6
  %error "mega_dstubup copies GDTR and IDTR as one 12-byte run"
 %endif
@@ -1502,14 +1463,9 @@ mega_dstubup:
     pop es
     mov ax, MEGA_SEL_PSCR
     call mega_selbase               ; DX:AX = the scratch's base
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, MPK_MAGIC
-    adc dx, 0
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    call mega_xsrcset
+    mov ax, MPK_MAGIC
+    call mega_dpdst
     mov cx, 8 + MPK_LIST
     call KERNEL_SEG:mega_lincopyf   ; (low: `.mega` reaches it far)
     ret
@@ -1530,8 +1486,8 @@ mega_dhcfill:
     mov [es:MPS_HC + MPK_C_WAKE - MPK_GDT], ax
     mov word [es:MPS_HC + MPK_C_WAKE - MPK_GDT + 2], MEGA_SEL_CODE ; `.mega`'s
     push bx
-    mov ax, [mega_dpbase]           ; 08 code and 10 data, at the block
-    mov dx, [mega_dpbase+2]
+    xor ax, ax                      ; 08 code and 10 data, at the block
+    call mega_dpb
     mov [es:MPS_HC + MPK_C_PBASE - MPK_GDT], ax
     mov [es:MPS_HC + MPK_C_PBASE - MPK_GDT + 2], dx
     mov bx, MPS_HC + 0x08
@@ -1541,9 +1497,7 @@ mega_dhcfill:
     mov cl, 0x92
     call mega_hdesc
     pop ax                          ; 28 the text page: the stage's own
-    mov dx, ax                      ; segment, which is B000 or B800
-    shl ax, 4
-    shr dx, 12
+    call mega_p2lin                 ; segment, which is B000 or B800
     mov bx, MPS_HC + 0x28
     call mega_hdesc
     mov ax, [mega_dsum]
@@ -1562,14 +1516,9 @@ mega_dhcfill:
     call mega_selbase
     add ax, MPS_HC
     adc dx, 0
-    mov [mega_xsrc], ax
-    mov [mega_xsrc+2], dx
-    mov ax, [mega_dpbase]
-    mov dx, [mega_dpbase+2]
-    add ax, MPK_GDT
-    adc dx, 0
-    mov [mega_xdst], ax
-    mov [mega_xdst+2], dx
+    call mega_xsrcset
+    mov ax, MPK_GDT
+    call mega_dpdst
     mov cx, MPK_C_END - MPK_GDT
     call KERNEL_SEG:mega_lincopyf
     pop es
@@ -1583,6 +1532,12 @@ mega_dhcfill:
 ; kernel staged - hbm_handover's last instruction, with no kernel left to run.
 ; -----------------------------------------------------------------------------
 section .text                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
+; mega_rland - where mega_down lands, REAL MODE on either CPU: [mega_drop]
+; picks the landing. Through CS, which is KERNEL_SEG here on both ways down
+mega_rland:
+    cmp byte [cs:mega_drop], 2
+    jne mega_dropr
+    jmp fsx_rland
 mega_dropr:
     cli
     mov ax, KERNEL_SEG
@@ -1691,8 +1646,10 @@ mega_dwake:
 %ifdef MEGA_DIAG
     or byte [mega_tellq], 0x20      ; the trip, on the menu bar
 %endif
+%ifdef MEGA_E9
     mov si, mega_m_unpark
     call mm_puts
+%endif
     mov byte [mega_dwoke], 1
     jmp mega_dosparkf.ret
 
@@ -1828,8 +1785,10 @@ mega_hbwake:
     mov [mega_fdx], al
     mov [mega_irqpend], al
     call mega_dkbup
+%ifdef MEGA_E9
     mov si, mega_m_hbwake
     call mm_puts
+%endif
     jmp far [mega_hbwk]
 
 ; -----------------------------------------------------------------------------
@@ -2051,11 +2010,13 @@ mega_dec4:                          ; AX -> four decimal digits at ES:DI
 ; .cold: the loader's check. THE PARK STUB IS kernel/megapark.inc, in
 ; HIBER.DRV's image: it is data as well as code, which .cold may not carry
 ; =============================================================================
+%ifdef MEGA_E9
 mega_m_park db "kern_mega: parked ", 0     ; the debug port's lines, read through
 mega_m_at   db "K at ", 0                 ; `.mega`'s CS by mm_puts
 mega_m_sum  db " sum ", 0
 mega_m_unpark db "kern_mega: unparked", 10, 0
 mega_m_hbwake db "kern_mega: resumed", 10, 0
+%endif
 section .cold
 
 ; =============================================================================
@@ -2140,6 +2101,7 @@ mega_wrprobe:
     xor bx, bx
     call .mv
     jc .out
+%ifdef MEGA_E9
     push si                         ; on port E9, as the kernel's other lines
     mov si, .said
 .say:
@@ -2152,6 +2114,7 @@ mega_wrprobe:
     db "kern_mega: a park survived the reset", 10, 0
 .said0:
     pop si
+%endif
     ; --- A20, which the warm boot may have shut --------------------------------
     in al, 0x92
     or al, 2

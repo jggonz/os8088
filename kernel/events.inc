@@ -264,12 +264,11 @@ evq_pop:
     mov [evq_head], al
     dec byte [evq_count]
 
-    popf                        ; restore caller's IF first, then report
-    clc
-    jmp .done
-
-.empty:
-    popf
+    popf                        ; restore caller's IF first, then report:
+    db 0xA9                     ; test ax, imm16 - the imm16 is .empty's popf
+                                ; and stc, and TEST clears CF, the answer
+.empty:                         ; (kernel size pass 15: -2 against clc and a
+    popf                        ; jump; both callers read CF alone)
     stc
 
 .done:                          ; ...and evq_push's exit too - see there

@@ -26,7 +26,11 @@ confirmed off the package's own variables, read through its window's W_SEG:
      ends PLAY DONE (SPEAKER); and the heap holds no claim of the package's
      but its region afterwards (the play buffer is a claim for the length of
      one play, SPEC.md 35.2).
-  5. REC / STOP: Record opens the input stream (RECORDING...), Stop closes it.
+  5. REC / STOP: Record opens the input stream (RECORDING...) into a ring of
+     the package's own (SPEC.md 34.6.4), and with NOTHING clicked the
+     window timer's pump moves [rc_len] - the take grows by itself; Stop
+     closes it, and the ring's claim is gone (rc_rseg 0, the package's claims
+     what they were).
 
 Broken on purpose - `--break-sweep` flips one sample of the model, and step
 2 FAILS; the base package (b13cfe60) FAILS step 1, its release handler
@@ -252,12 +256,42 @@ def main():
         if p.rb("rc_st") != RC_REC or msg() != "RECORDING...":
             fail("5: Record did not open the input (st %d, %r)"
                  % (p.rb("rc_st"), msg()))
-        M.guest_sleep(m, .5)
+        if not p.rw("rc_rseg"):
+            fail("5: recording with no ring claimed")
+        # EXACTLY 0.5 guest seconds, run by the server and read paused: 4,000
+        # bytes, under the smallest grant tier (RC_D_LEN), so not FULL. It
+        # was guest_sleep, which polls the guest's clock every 20 ms of HOST
+        # time and reads after it - so a host that preempted this process
+        # overshot by whatever the guest ran meanwhile, and on a loaded box
+        # that was a whole extra second (8,192 bytes, 'the pump is not
+        # running', and a pass when the same row ran alone)
+        m.pause()
+        m.advance(cycles=int(0.5 * M.GUEST_HZ))
+        grown = p.rw("rc_len")
+        m.run()
+        if not 1500 <= grown <= 6000 or p.rb("rc_st") != RC_REC:
+            fail("5: 0.5 s of recording with nothing clicked took %d bytes, "
+                 "state %d %r - the timer's pump is not running (cap %d)"
+                 % (grown, p.rb("rc_st"), msg(), p.rw("rc_cap")))
         ui.menu_pick("Sound", "Stop")
+        # ...ON THE GUEST'S CLOCK: the Stop lands a moment after the menu
+        # closes (the pick returns when the menu is gone, not when the
+        # handler has run), and an immediate read was the host's race
+        try:
+            M.until(m, lambda _: p.rb("rc_st") == RC_IDLE, "the Stop",
+                    guest=5)
+        except M.MartyError:
+            pass                        # ...the check below says what it saw
         if p.rb("rc_st") != RC_IDLE:
             fail("5: Stop left state %d (%r)" % (p.rb("rc_st"), msg()))
-        print("PASS 5: Record opened the input, Stop closed it (%r, %d "
-              "bytes)" % (msg(), p.rw("rc_len")), flush=True)
+        after = sorted((c.seg, c.para) for c in every(heapmap.Map(m, heap))
+                       if c.own == seg)
+        if p.rw("rc_rseg") or after != mine:
+            fail("5: the ring was not freed (rc_rseg %04x, claims %s against "
+                 "%s)" % (p.rw("rc_rseg"), after, mine))
+        print("PASS 5: Record opened the ring, the pump took %d bytes in .5 s "
+              "unclicked, Stop closed it and freed the ring (%r, %d bytes)"
+              % (grown, msg(), p.rw("rc_len")), flush=True)
     print("recorder: ok", flush=True)
 
 

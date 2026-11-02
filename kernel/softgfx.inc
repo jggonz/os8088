@@ -636,12 +636,7 @@ sw_pbit:
 ; loop then costs nothing per pixel for the dither at all.
 ; -----------------------------------------------------------------------------
 sw_pairbuild:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kent_di                ; (kernel size pass 15: once a boot)
     xor bx, bx                  ; BH stays 0: the loop runs BL round once
 .byte:
     mov si, bx                  ; SI = the byte's high nibble (the LEFT

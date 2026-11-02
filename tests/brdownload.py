@@ -98,7 +98,7 @@ class Server(threading.Thread):
                     delay = 2.0 if cancel_test else 0.15
                     for offset in range(0, len(body), chunk):
                         conn.sendall(body[offset:offset + chunk])
-                        time.sleep(delay)
+                        time.sleep(delay)  # host: the SERVER's dribble
                 else:
                     conn.sendall(body)
             except OSError:

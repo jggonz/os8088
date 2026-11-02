@@ -18,9 +18,11 @@ about, and the one an earlier revision of SPEC.md 96.16 got wrong by claiming
 the driver only ever arrives by request.
 
 The visible half is BLASTER=, printed by the program out of its own PSP:002C.
-The IRQ field is absent on purpose (SPEC.md 96.17.1): discovery is deferred
-to first use, so a machine that has not played a sound does not know its
-line, and a BLASTER= naming the wrong one is worse than one naming none.
+The IRQ field names the card's line (SPEC.md 96.17.1, 34.5.7): the driver
+discovers it at its attach, so a machine that has not played a sound knows
+it - this machine's card is on IRQ 7 (os8088_machines.toml). It used to be
+ABSENT on purpose, discovery waiting for the first stream, and a BLASTER=
+naming the wrong line is still worse than one naming none.
 """
 import os
 import struct
@@ -34,6 +36,11 @@ import os88marty                                               # noqa: E402
 SYS = "build/os8088-360.img"
 SND = "build/dossnd360.img"
 MACHINE = "os8088_5150_herc_sb_gla"      # ...the only kind with a card in it
+# THE CARD'S LINE IS THE MACHINE'S: MartyPC's Sound Blaster is on IRQ 7
+# (os8088_machines.toml), and Bochs's SB16 - the card mega-dossnd runs this row
+# against - on its default 5 (tools/os88bochs.py's `sb16:` line names none).
+# The discovery found 5 there, which is right; a literal 7 failed it.
+CARD_IRQ = {"marty": 7, "bochs": 5}.get(os88marty.emulator(), 7)
 
 
 def fail(msg):
@@ -101,11 +108,11 @@ def main():
         if not blast.startswith("BLASTER=A220 "):
             fail("BLASTER= reads %r, which does not name the card at 220h"
                  % blast)
-        if " I" in blast:
-            fail("BLASTER= carries an IRQ field (%r), and the driver defers "
-                 "discovery to first use - so on a machine that has not "
-                 "played a sound the line is 0FFh and naming it is naming the "
-                 "wrong one (SPEC.md 96.17.1)" % blast)
+        if " I%d " % CARD_IRQ not in blast + " ":
+            fail("BLASTER= reads %r, which does not name the card's IRQ %d - "
+                 "the driver discovers it at its attach (SPEC.md 34.5.7), so "
+                 "it is known before any sound has played (96.17.1)"
+                 % (blast, CARD_IRQ))
         print("dossnd: the program's environment says %r" % blast)
 
         os88marty.text_taken(m, "x")      # taken, and the bracket left

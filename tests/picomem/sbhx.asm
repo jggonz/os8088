@@ -1,6 +1,7 @@
 ; tests/picomem/sbhx.asm - SOUND.DRV's PicoMEM attach and SB IRQ choice,
 ; alone, for tests/picomem.py (SPEC.md 34.10, 34.10.1). picomem.inc is
-; %included AS IT SHIPS; sbl_f_irqdisc and its candidate tables are CUT OUT
+; %included AS IT SHIPS; sbl_f_irqdisc, sbl_hook/sbl_cell and the candidate
+; tables are CUT OUT
 ; of sb.inc by the row (sbslice.inc) rather than copied here, so the code
 ; under test is the code that ships. Everything else is the minimum they
 ; read - and every DSP or tick primitive is a stub that RECORDS being
@@ -35,8 +36,12 @@ entry_disc:
     mov byte [sbl_verhi], 2     ; the DSP 2.01 the firmware reports
     mov byte [res_ticks], 0     ; pm_wait's deadline reads it too: count
                                 ; discovery's alone
-    call sbl_f_irqdisc
+    call sbl_f_irqdisc          ; the attach's answer...
     mov [res_al], al
+    or al, al
+    jz .no
+    call sbl_hook               ; ...and sbl_attach's hook on it
+.no:
     hlt
 entry_disc16:                   ; tests/sbirq5.py: an SB16-class DSP, whose
     mov byte [sbl_verhi], 4     ; mixer register 80h names the line, so the
@@ -56,8 +61,8 @@ OSAPI_GET_TICKS:
     inc byte [res_ticks]
     xor ax, ax
     ret
-OSAPI_TOAST:                    ; the IRQ 5 refusal's line (34.5.6),
-    inc byte [res_toast]        ; counted
+OSAPI_TOAST:                    ; counted: the IRQ 5 refusal says nothing
+    inc byte [res_toast]        ; (34.5.6), and the row holds it to that
     ret
 OSAPI_CPU_INFO:                 ; the machine's tier, planted by the row
     mov al, [res_cpu]
@@ -85,7 +90,6 @@ sbl_verhi:   db 0
 sbl_base:    dw 0x220
 sbl_irq:     db 0xFF
 sbl_hooked:  db 0
-sbl_irq5x:   db 0
 res_toast:   db 0
 res_cpu:     db 0
 sbl_drqmask: db 0

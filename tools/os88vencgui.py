@@ -401,8 +401,8 @@ GROUPS = [
     ("Sound", "PC speaker: the sound shaped",
      ("spk_style", "spk_highpass", "spk_ratio", "spk_range", "spk_lows",
       "spk_drive", "spk_idle"), _shaping),
-    ("Budget", "The machine's budget", ("disk", "avg", "peak", "owe",
-                                        "reserve", "memory"), ALWAYS),
+    ("Budget", "The machine's budget", ("disk", "avg", "peak",
+                                        "owe", "reserve", "memory"), ALWAYS),
     ("Budget", "XMS bank (a 286 or better)", ("bank", "prefill", "pool"),
      _bank),
     # (a layer IS made beside a bank: 98.1.9's banked-and-layered file, and

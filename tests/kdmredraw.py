@@ -82,7 +82,10 @@ def verdict(m, limit=240.0):
 
     def reported(_m):
         rows[:] = [r.rstrip() for r in (m.screen() or []) if r.strip()]
-        return any("MREDRAW" in r for r in rows)
+        # the VERDICT line, which STARTS with the name: DOS's own
+        # `Starting B:\MREDRAW.COM` contains it too, and matching that ended
+        # the wait before the program had said anything
+        return any(r.strip().startswith("MREDRAW ") for r in rows)
     try:                                # `limit` is GUEST time
         os88marty.until(m, reported, "MREDRAW's report", poll=0.05, limit=limit)
     except os88marty.MartyError:

@@ -23,8 +23,9 @@ SPEC.md 20.6 rule 7 already forbids a PACKAGE's worker from touching a file or
 claiming. A driver has no such rule and needs none if nothing does it, so this
 row is that fact made checkable: today `SOUND.DRV` is the only driver in the
 tree that calls `OSAPI_DRV_TASK` at all (kernel/sched.inc says so in as many
-words), its two tasks are `sbl_refill_task` and `sbl_drain_task`, and neither
-cone reaches a claim - every claim in that driver is in `sbl_attach` (mount)
+words), its one task is `sbl_refill_task` (`sbl_drain_task` went with the
+grant-and-drain record path, SPEC.md 34.6.4), and its
+cone reaches no claim - every claim in that driver is in `sbl_attach` (mount)
 or `sbl_grant_alloc` under `sbl_v_grant` (a stream verb, on the CALLER's
 task). The second driver to spawn a task is where this stops being obvious.
 

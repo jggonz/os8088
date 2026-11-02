@@ -736,18 +736,35 @@ def claims(m):
 
 
 def heapmap(m):
+    """The claims, each with its OWNER - the record's MC_OWN word as
+    tools/heapmap.py names it - since a pinned claim in the way is the usual
+    reason a move gate proves nothing, and its size alone does not say whose"""
+    import heapmap as _hm
+    raw = m.read(S("mem_tab"), os88geom.MEM_MAX * os88geom.MC_SIZE)
+    z = os88geom.MC_SIZE
+    own = {u16(raw, i * z): u16(raw, i * z + _hm.MC_OWN)
+           for i in range(os88geom.MEM_MAX) if u16(raw, i * z)}
     for base, (para, rloc) in sorted(claims(m).items()):
-        say("     %04X %4dKB %s" % (base, para // 64,
-                                     "MOVABLE" if rloc else ""))
+        say("     %04X %4dKB %-8s %s" % (base, para // 64,
+                                         "MOVABLE" if rloc else "",
+                                         _hm.owner(own.get(base, 0))))
 
 
 def post(m, win):
-    """Post a compaction at the TRIVIAL rank and wait until ui_task has spent
-    it. [mem_cpq_lvl] first and [mem_cpq] LAST: the second is what ui_task
+    """Post a compaction at MEM_PG_HIGH and wait until ui_task has spent it.
+    [mem_cpq_lvl] first and [mem_cpq] LAST: the second is what ui_task
     tests, so it must not see a post with a stale rank. QEMU's monitor writes
-    no memory, so both go through its GDB stub (os88qemu.poke)."""
+    no memory, so both go through its GDB stub (os88qemu.poke).
+
+    HIGH, because a PURGEABLE claim is shed and never moved (SPEC.md 18.8.4)
+    and a posted pass sheds only what is CHEAPER than the poster's rank
+    (66.4.3.3), so one beneath The Wire's claims walls them in at any rank
+    that keeps it - DOS posts at HIGH for the same FAT window. It was 0xFC (MEM_PG_LOW) until 9bbf5612 moved asc_use's claim after
+    the root walk, and B:'s FAT window - a MED cache - landed directly under
+    the catalog: nothing could move and assertions 17 and 18 proved nothing.
+    What they prove is the relocation procs, which this rank still drives."""
     wp = os88geom.winptr(m, win, S)
-    os88qemu.poke(m.hmp, S("mem_cpq_lvl"), bytes([0xFC]))
+    os88qemu.poke(m.hmp, S("mem_cpq_lvl"), bytes([0xFE]))
     os88qemu.poke(m.hmp, S("mem_cpq"), bytes([wp & 0xFF, (wp >> 8) & 0xFF]))
     return os88qemu.acted(m, lambda: u16(m.read(S("mem_cpq"), 2)) == 0,
                           secs=10, what="the posted compaction", poll=0.1)

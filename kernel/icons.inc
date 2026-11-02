@@ -382,7 +382,7 @@ icon_draw_ix:
     ja .bor
     not ax
     and [di], ax
-    jmp short .bo
+    db 0xA9                     ; test ax, imm16 over the or: CF = 0 as the `and` left it, the incs write the rest (pass 15)
 .bor:
     or [di], ax
 .bo:

@@ -507,7 +507,7 @@ asw_one:
     push ds
     mov ah, ICO_ROW
     mul ah
-    add ax, ICO_R_BODY
+    add ax, ICO_RBASE + ICO_R_BODY      ; row 0 follows the capture
     mov si, ax
     mov di, ASW_STG
     mov ds, [ico_seg]

@@ -130,15 +130,38 @@ def _apt(pkg):
     return "make deps               (tools/setup-linux.sh - installs %s)" % pkg
 
 
-def requirements():
+def requirements(rows=None):
     """What the soak needs, whether it is here, and the command that gets it.
 
     ORDERED BY WHAT BLOCKS WHAT.  nasm before the images, the images before
     the on-demand disks, and the emulators last - so a bare box reads the list
     top to bottom and does not install a debugger it cannot yet use.
+
+    **SCOPED TO `rows` WHEN GIVEN**, and that is the difference between a
+    preflight and a nag. Every entry but the three a box cannot work without
+    is about a CAPABILITY some rows `need` or an ARTEFACT some rows `want`,
+    so a run of `-k 'disp*'` was refused for want of Bochs, rgbds and a
+    Weave disk none of its rows go near - on every fresh box, which is every
+    first run in a container. With `rows`, an entry no selected row can be
+    affected by is not listed AND NOT PROBED (the probes are lambdas), so a
+    scoped preflight also costs what the scope costs: the declared-artefact
+    walk over 1,400-odd rows' recipes was most of this function's ~1.9 s.
+    `rows=None` is the whole-box report `check` prints with no `-k`.
     """
     B = lambda *p: os.path.join(ROOT, "build", *p)
     req = []
+    needs = wants = None
+    if rows is not None:
+        needs = {c for r in rows for c in r.needs}
+        wants = {f for r in rows for f in getattr(r, "wants", ())}
+
+    def add(scope, entry):
+        if needs is not None and scope is not None:
+            kind, key = scope.split(":", 1)
+            if key not in (needs if kind == "cap" else wants):
+                return
+        name, probe, why, fix = entry
+        req.append((name, bool(probe()), why, fix))
 
     # **/dev/null ITSELF**, because a container can get this wrong and the
     # failures do not name it. It was a REGULAR FILE on this box for half of
@@ -149,7 +172,7 @@ def requirements():
     # `test -s` against it answer wrongly, and at mode 0644 a non-root writer
     # gets EACCES. A two-hour run is a long way to carry a question that
     # costs one stat, so it is asked with the assembler rather than found.
-    req.append(("/dev/null", os.path.exists("/dev/null")
+    add(None, ("/dev/null", lambda: os.path.exists("/dev/null")
                 and stat.S_ISCHR(os.stat("/dev/null").st_mode),
                 "EVERYTHING - it is not a soak dependency so much as a "
                 "working box. A regular file here breaks ./configure, grows "
@@ -159,7 +182,7 @@ def requirements():
                 "                     && mv -f /dev/null.new /dev/null"
                 "        (as root)"))
 
-    req.append(("nasm", bool(shutil.which("nasm")),
+    add(None, ("nasm", lambda: bool(shutil.which("nasm")),
                 "every build. Without it nothing under build/ can be made.",
                 _apt("nasm")))
 
@@ -170,7 +193,7 @@ def requirements():
     # has the incident). No distribution here packages one yet, so the fix is
     # a build or a path - which is exactly why it is a capability and the row
     # skips rather than failing.
-    req.append(("nasm3", bool(os88build.nasm3()),
+    add('cap:nasm3', ("nasm3", lambda: bool(os88build.nasm3()),
                 "the `nasm3` row - the only thing that assembles this tree "
                 "with an nasm 3, which is what Homebrew installs and what "
                 "half the people building it have.",
@@ -189,17 +212,17 @@ def requirements():
     # The shipped artefacts. `all` builds these and the fast tier reads them;
     # a soak against a half-built tree fails rows for the tree's reason.
     imgs = ["os8088-360.img", "apps360.img", "os8088.img", "apps.img"]
-    req.append(("shipped images", all(os.path.exists(B(i)) for i in imgs),
+    add(None, ("shipped images", lambda: all(os.path.exists(B(i)) for i in imgs),
                 "every emulator row boots one of these.",
                 "make"))
 
-    req.append(("qemu", bool(shutil.which("qemu-system-i386")
+    add('cap:qemu', ("qemu", lambda: bool(shutil.which("qemu-system-i386")
                              or shutil.which("qemu-system-x86_64")),
                 "the seven cases MartyPC cannot host (docs/TESTING.md) - the "
                 "286/386 rows, the PS/2 mouse, the RTC write half.",
                 _apt("qemu-system-x86")))
 
-    req.append(("qemu9", bool(os88build.qemu9()),
+    add('cap:qemu9', ("qemu9", lambda: bool(os88build.qemu9()),
                 "hmahiber, the one QEMU row that RESUMES a hibernate: the "
                 "resume stub's stack is in VGA memory by design (SPEC.md "
                 "87.5), and QEMU 8 aborts on the first interrupt taken there.",
@@ -209,7 +232,7 @@ def requirements():
                 "                   refused by the proxy, git is not - and "
                 "prints the PATH line)"))
 
-    req.append(("qemuvt", bool(os88build.qemuvt()),
+    add('cap:qemuvt', ("qemuvt", lambda: bool(os88build.qemuvt()),
                 "xtmp3rate: under -icount stock QEMU moves the Sound Blaster's "
                 "DMA in HOST time, so a loaded box stops the card "
                 "(os88build.qemuvt()); tools/qemu9/'s patch puts it on the "
@@ -221,7 +244,7 @@ def requirements():
                 "about ten minutes)"))
 
     marty = B("martypc", "run", "martypc_headless")
-    req.append(("martypc", os.path.exists(marty),
+    add('cap:marty', ("martypc", lambda: os.path.exists(marty),
                 "the default instrument. Without it EVERY emulator row skips, "
                 "which is most of the tier.",
                 "make deps && make marty      (deps installs libudev-dev "
@@ -229,22 +252,28 @@ def requirements():
                 "                     cargo needs and fails MINUTES IN "
                 "without; cargo itself is rustup's)"))
 
-    req.append(("cc", os.access(B("cc", "SmallerC", "smlrcc"), os.X_OK),
+    add('cap:cc', ("cc", lambda: os.access(B("cc", "SmallerC", "smlrcc"), os.X_OK),
                 "the C packages - Weave, RunCPM, the C64, cword. Eleven rows.",
                 "tools/setup-cc.sh"))
 
-    req.append(("pil", os88build.have_pil(),
+    add('cap:pil', ("pil", lambda: os88build.have_pil(),
                 "pxsshots, which writes PIXELSTEIN 3D's photographs through "
                 "Pillow and used to FAIL on the ImportError.",
                 "make deps      (installs python3-pil)"))
 
-    req.append(("unicorn", os88build.have_unicorn(),
+    add('cap:unicorn', ("unicorn", lambda: os88build.have_unicorn(),
                 "picomem, pxextraemu, pxanimemu, pxsavehost and pxedithost, "
                 "which run driver or PiXEL part code under it against a model "
                 "(SPEC.md 34.10.1, 72.2, 106.24, 106.25).",
                 "python3 -m pip install unicorn"))
 
-    req.append(("bochs", os88build.have_bochs(),
+    add('cap:pmhost', ("pmhost", lambda: os88build.have_pmhost(),
+                "pmlib, which runs SOUND.DRV's and VIDSND's PicoMEM code against "
+                "the card's OWN firmware compiled for the host, in place of "
+                "picomem's model (docs/plans/completed/PICOMEM-EMU-PLAN.md).",
+                "tools/picomem/build.sh      (seconds; fetches the firmware)"))
+
+    add('cap:bochs', ("bochs", lambda: os88build.have_bochs(),
                 "the kern_mega rows (megatrap0's #GP census and the other mega*): "
                 "Bochs is the one emulator here that checks a 286's segment "
                 "rules (docs/BOCHS.md) - and it runs under a clock preload "
@@ -252,62 +281,57 @@ def requirements():
                 "apt-get install -y bochs bochsbios vgabios bochs-x xvfb "
                 "xdotool x11-apps imagemagick gcc"))
 
-    req.append(("86box", os88build.have_86box(),
+    add('cap:86box', ("86box", lambda: os88build.have_86box(),
                 "gbreplay, gbbank, gbhifreq and megacdrom, which need the "
                 "automation-enabled 86Box (docs/86BOX.md).",
                 "python3 tools/os88box.py build      (three minutes)"))
 
-    req.append(("rgbds", os88build.have_rgbds(),
+    add('cap:rgbds', ("rgbds", lambda: os88build.have_rgbds(),
                 "gbsound, whose Game Boy ROM is ours and is assembled with "
                 "rgbds at a pinned commit.",
                 "python3 tools/gbclock.py --rgbds      (clones and builds it)"))
 
-    req.append(("ffmpeg", bool(shutil.which("ffmpeg"))
+    add('cap:ffmpeg', ("ffmpeg", lambda: bool(shutil.which("ffmpeg"))
                 and bool(shutil.which("ffprobe"))
                 and os88build.have_numpy(),
                 "videnc and vencgui, the video encoder's gates (SPEC.md 98.2.1).",
                 "apt-get install -y ffmpeg python3-numpy   (and where python3 "
                 "is not the system one: python3 -m pip install numpy)"))
 
-    req.append(("mtools", bool(shutil.which("mcopy"))
+    add('cap:mtools', ("mtools", lambda: bool(shutil.which("mcopy"))
                 and bool(shutil.which("mattrib")),
                 "instkeep, which plants a user's files on the fixture "
                 "partition before a kept install (SPEC.md 52.10.15).",
                 "apt-get install -y mtools"))
 
-    req.append(("unshare", sys.platform.startswith("linux")
+    add('cap:unshare', ("unshare", lambda: sys.platform.startswith("linux")
                 and bool(shutil.which("unshare")) and os.geteuid() == 0,
                 "httpmountname, which binds its own /etc/resolv.conf in a "
                 "private mount namespace (SPEC.md 72.5.1).",
                 "run the soak as root on Linux (the container is)"))
 
-    req.append(("dosbox", bool(shutil.which("dosbox")),
+    add('cap:dosbox', ("dosbox", lambda: bool(shutil.which("dosbox")),
                 "czdos, which runs OS88CZ.COM under a real DOS (SPEC.md "
                 "20.17.4).",
                 "apt-get install -y dosbox"))
 
-    # THE FOUR DISKS `all` DELIBERATELY DOES NOT BUILD.  This is the item the
-    # pass-3 soak found by hand after fifteen runs had skipped on it, and the
-    # reason each is absent is a different deliberate decision (SPEC.md 78.9
-    # for wire; on-demand application disks for the rest).
-    req.append(("wiredisk", os.path.exists(B("wire360.img")),
+    # THE DISKS `all` DELIBERATELY DOES NOT BUILD.  This is the item the
+    # pass-3 soak found by hand after fifteen runs had skipped on it (SPEC.md
+    # 78.9 for wire). There were four: `weave.img`, `loom.img` and
+    # `c64360.img` went when NO ROW READ THEM any more - the Weave and C64
+    # rows declare `weave360.img`, `loom360.img` and `c64.img` through
+    # `wants=` - and a gap no row can hit refused every fresh box's first run.
+    add('cap:wiredisk', ("wiredisk", lambda: os.path.exists(B("wire360.img")),
                 "wireflick and uilat. ONE OF THOSE IS A RATE ROW, so without "
                 "it a soak skips part of its rate lane silently.",
                 "make wiredisk"))
-    req.append(("weave disks", os.path.exists(B("weave.img")),
-                "the Weave family's rows.",
-                "make weavedisk loomdisk      (NOT under -j: the recipe races "
-                "on build/WEAVE.OVL)"))
-    req.append(("c64 disk", os.path.exists(B("c64360.img")),
-                "c64part and the C64 rows.",
-                "make c64disk"))
-    # A FIFTH, and the one that proves the list is worth keeping by hand:
+    # ...and the one that proves the list is worth keeping by hand:
     # skiesdiag's is a private -DCSDIAG TREE rather than a disk `all` chose
     # not to build, so nothing above would ever have named it. It went
     # unbuilt and unnoticed because the row reported its own absence as a
     # pass (tools/os88test.py's probe carries that account).
-    req.append(("skiesdiag tree",
-                os.path.exists(B("skiesdiag", "apps360.img")),
+    add('art:build/skiesdiag/apps360.img', ("skiesdiag tree",
+                lambda: os.path.exists(B("skiesdiag", "apps360.img")),
                 "skiesdiag - the ONLY test of Clear Skies' freeze watchdog "
                 "(SPEC.md 88.14), an instrument for a machine that has hard "
                 "frozen.",
@@ -346,7 +370,8 @@ def requirements():
     try:
         sys.path.insert(0, os.path.join(ROOT, "tests"))
         import suite as _suite
-        arts = sorted({f for r in _suite.rows() for f in getattr(r, "wants", ())})
+        arts = sorted(wants if wants is not None else
+                      {f for r in _suite.rows() for f in getattr(r, "wants", ())})
     except Exception:                                           # noqa: BLE001
         arts = []
     if arts:
@@ -374,7 +399,7 @@ def requirements():
                         and not shutil.which(cmd)):
                     if f not in tools.setdefault(cmd, []):
                         tools[cmd].append(f)
-        req.append(("declared artefacts", not tools,
+        add(None, ("declared artefacts", lambda: not tools,
                     "%d row-declared artefact(s), %d absent; the run builds "
                     "them up front. %s"
                     % (len(arts), len(absent),
@@ -549,14 +574,15 @@ def _stale_emulators():
     return out
 
 
-def preflight(verbose=True):
+def preflight(verbose=True, rows=None):
     """Everything that would make this run answer less than it claims to.
 
     Returns (blocking, advisory).  BLOCKING is what stops rows running at all;
-    ADVISORY is what makes them skip, which is quieter and worse.
+    ADVISORY is what makes them skip, which is quieter and worse. With `rows`,
+    only what can reach one of them (requirements()).
     """
     blocking, advisory = [], []
-    req = requirements()
+    req = requirements(rows)
     for name, ok, why, fix in req:
         if ok:
             continue
@@ -583,21 +609,18 @@ def preflight(verbose=True):
     return blocking, advisory
 
 
-def would_skip():
+def would_skip(rows=None):
     """Which registered soak rows this box cannot answer, and for what.
 
     The point of printing it BEFORE the run is that a skip is invisible
     afterwards unless somebody counts: 196 ok out of 200 reads like a good run
-    whether the other rows skipped or never existed.
+    whether the other rows skipped or never existed. With `rows`, only those.
     """
     import suite
     import os88test
     caps = os88test.capabilities()
-    order = {"fast": 0, "full": 1, "soak": 2}
     out = {}
-    for r in suite.rows():
-        if order[r.tier] > 2:
-            continue
+    for r in (suite.rows() if rows is None else rows):
         missing = set(r.needs) - caps
         if missing:
             out.setdefault(",".join(sorted(missing)), []).append(r.name)
@@ -622,11 +645,15 @@ def would_skip():
 #
 # Building them here also makes every fixture row's own `need()` a NO-OP, so
 # the `make` it runs finds an up-to-date tree and writes nothing.
+#
+# **ONLY FOR THE ROWS ASKED FOR** when `start` names them (prewarm()'s `a`):
+# every artefact here is also some row's `wants=`, so a `-k 'disp*'` run has
+# no business building the wire disk, and on a box without the C toolchain
+# the three on-demand disks this list used to carry (`weave.img`, `loom.img`,
+# `c64360.img` - which no row reads any more) were failed builds in front of
+# a run that never needed them.
 PREWARM = [
     ("build/wire360.img", "wiredisk"),
-    ("build/weave.img", "weavedisk"),
-    ("build/loom.img", "loomdisk"),
-    ("build/c64360.img", "c64disk"),
     ("build/skiesdiag/apps360.img", "skiesdiag"),      # ...a PRIVATE tree, and
                                                        # the case the old guard
                                                        # got wrong every time
@@ -699,8 +726,13 @@ def prewarm(verbose=True, a=None):
         print("os88soak: build/ is current")
 
     todo = list(PREWARM)
-    if a is not None:
-        todo += [(art, art) for art in _declared(a)]     # the path IS the
+    if a is not None:                   # every PREWARM artefact is some row's
+        todo = [(art, art) for art in _declared(a)]     # `wants=` too, so the
+                                                        # selection's union is
+                                                        # the whole list: the
+                                                        # path IS the target,
+                                                        # every one a build/
+                                                        # artefact with a rule     # the path IS the
                                                         # target: every one is
                                                         # a build/ artefact
                                                         # with a rule
@@ -817,6 +849,13 @@ def _declared(a):
         return []
 
 
+def _selected_rows(a):
+    """The Row objects `_selected` names - what the preflight is scoped to."""
+    import suite
+    names = set(_selected(a))
+    return [r for r in suite.rows() if r.name in names]
+
+
 def _selected(a):
     """The row names this invocation asks for, before any --resume exclusion.
 
@@ -888,8 +927,10 @@ def _frozen_targets(a):
         names = set(_selected(a))
         arts = sorted({f for r in suite.rows() if r.name in names
                        for f in getattr(r, "wants", ())})
+        fix = any("win16fixtures" in r.needs for r in suite.rows()
+                  if r.name in names)
     except Exception:                                       # noqa: BLE001
-        arts = []
+        arts, fix = [], False
     # THE SHIPPED SET IS NAMED rather than asked for as `all`, because `all`
     # ends in `checkdocs` and `test-fast` - gates, not artefacts, and ones
     # that would run against the tree for no reason and fail it for somebody
@@ -918,6 +959,16 @@ def _frozen_targets(a):
                 "win16.img", "win16-120.img", "win16-720.img",
                 "win16-360.img")
     shipped = imgs + ("wire.o88",)
+    # THE WIN16 FIXTURES, where this box has opted in. `win16fixtures` is a
+    # CAPABILITY and not a `wants=`, because building it fetches a compiler
+    # (tools/setup-watcom.sh) and a box that never asked must SKIP rather than
+    # reach the network. So the tree builds them exactly when the shared
+    # build/ already has - the stamp `make win16fixtures` leaves - and Watcom
+    # itself is shared into the tree (os88build.SHARED), so this is a
+    # compile and never a fetch. Without it `check` granted the capability
+    # off build/ and the rows SKIPPED off the tree.
+    if fix and os.path.exists(os.path.join(ROOT, "build", "win16", ".watcom")):
+        shipped += ("win16fixtures",)
     return shipped + tuple(a[len("build/"):] for a in arts
                            if a.startswith("build/"))
 
@@ -984,15 +1035,30 @@ def start(a):
     cores = _cores()
     mj, hj = widths(cores, a.marty_jobs, a.j)
 
-    blocking, advisory = preflight()
     bpc = _bpc(a)
     print("os88soak: %d core(s); emulator lane %d (Bochs rows %d a core), "
           "host lane %d" % (cores, mj, bpc, hj))
+
+    # **PREWARM BEFORE THE PREFLIGHT, AND THE PREFLIGHT ONLY ABOUT THE ROWS
+    # ASKED FOR.** Both orders used to be the other way, and between them a
+    # fresh box's first scoped run was refused every time for reasons that
+    # did not apply to it: the gap list was the WHOLE suite's (Bochs, rgbds,
+    # 86Box, a Weave disk - for a `-k 'disp*'`), and the artefact gaps were
+    # read BEFORE prewarm built the artefacts, so a disk prewarm had just made
+    # still demanded --anyway. Prewarm's plain `make` is also what cures the
+    # two make-shaped blockers, `shipped images` and `kernel map`, so asking
+    # first refused a run over the thing the run was about to fix. Prewarm
+    # needs only nasm; without it the preflight below says so as it always
+    # did.
+    rows = _selected_rows(a)
+    if not a.no_prewarm and shutil.which("nasm"):
+        prewarm(a=a)
+    blocking, advisory = preflight(rows=rows)
     if advisory:
-        skips = would_skip()
+        skips = would_skip(rows)
         print()
-        print("%sos88soak: %d capability gap(s) - rows WILL SKIP, and a skip is "
-              "not a pass:%s" % (YELLOW, len(advisory), OFF))
+        print("%sos88soak: %d capability gap(s) - selected rows WILL SKIP, "
+              "and a skip is not a pass:%s" % (YELLOW, len(advisory), OFF))
         for name, why, fix in advisory:
             print("  %-14s %s" % (name, why))
             print("  %-14s %sfix:%s %s" % ("", DIM, OFF, fix))
@@ -1012,8 +1078,6 @@ def start(a):
         return 1
     for w in _stale_emulators():
         print("%sos88soak: %s%s" % (YELLOW, w, OFF))
-    if not a.no_prewarm:
-        prewarm(a=a)
     if advisory and not a.anyway:
         print()
         print("Re-run with --anyway to soak with those gaps, or fix them "
@@ -1378,13 +1442,20 @@ def stop(a):
 
 
 def check(a):
-    blocking, advisory = preflight()
+    # WITH -k, ABOUT THOSE ROWS; without, about the whole box. One
+    # requirements() pass either way - this used to take two (preflight's
+    # and the listing's), and the kernel map twice.
+    rows = _selected_rows(a) if (a.k or a.exclude) else None
+    req = requirements(rows)
     cores = _cores()
     mj, hj = widths(cores, a.marty_jobs, a.j)
     print("os88soak: %d core(s) -> emulator lane %d (Bochs rows %d a core), "
           "host lane %d" % (cores, mj, _bpc(a), hj))
     print()
-    for name, ok, why, fix in requirements():
+    if rows is not None:
+        print("os88soak: scoped to %d selected row(s) - entries no selected "
+              "row needs or wants are not probed" % len(rows))
+    for name, ok, why, fix in req:
         print("%s %-14s %s" % ("%s ok %s" % (GREEN, OFF) if ok
                                else "%sMISS%s" % (RED, OFF), name,
                                why if not ok else ""))
@@ -1394,14 +1465,20 @@ def check(a):
     print("%s %-14s %s" % ("%s ok %s" % (GREEN, OFF) if ok
                            else "%sMISS%s" % (RED, OFF), "kernel map",
                            "" if ok else msg))
+    blocking = not ok or any(not k for n, k, _w, _f in req
+                             if n in ("nasm", "shipped images"))
     for w in _stale_emulators():
         print("%sWARN%s %s" % (YELLOW, OFF, w))
-    miss = [t for art, t in PREWARM
-            if not os.path.exists(os.path.join(ROOT, art))]
+    if rows is None:
+        miss = [t for art, t in PREWARM
+                if not os.path.exists(os.path.join(ROOT, art))]
+    else:
+        miss = [art for art in _declared(a)
+                if not os.path.exists(os.path.join(ROOT, art))]
     if miss:
         print("%sWARN%s %d on-demand artefact(s) absent; `start` builds them: "
               "make %s" % (YELLOW, OFF, len(miss), " ".join(miss)))
-    skips = would_skip()
+    skips = would_skip(rows)
     if skips:
         print()
         n = sum(len(v) for v in skips.values())
@@ -1411,7 +1488,8 @@ def check(a):
             print("  %-12s %d: %s" % (miss, len(names), " ".join(names)))
     else:
         print()
-        print("%sNo row would skip on this box.%s" % (GREEN, OFF))
+        print("%sNo %srow would skip on this box.%s"
+              % (GREEN, "selected " if rows is not None else "", OFF))
     return 0 if not blocking else 1
 
 

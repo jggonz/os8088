@@ -224,7 +224,8 @@ vx_boot_x:
                                 ; 120.2.3), 0 = Auto, which a fresh file
                                 ; carries
     mov ax, (VX_ABI_VER << 8) | DRVV_ATTACH ; AH: the ABI the image checks
-    call COLD_SEG:drvf_drv_call ; SI = the VXS_* table in the driver's segment
+    call bvs_cgo                ; SI = the VXS_* table in the driver's segment
+    dw drv_call
     jc .refuse
     mov bx, vesa_row            ; RE-ESTABLISHED, vmm_boot_x's reason: the
                                 ; callee is asked to keep BX and this does
@@ -244,14 +245,16 @@ vx_boot_x:
     mov si, vx_blk
     mov dx, cs                  ; ...the block is HERE, in the blob
     mov al, VXV_INIT
-    call COLD_SEG:drvf_drv_call ; the driver banks the block and fills row 4
+    call bvs_cgo                ; the driver banks the block and fills row 4
+    dw drv_call
     jc .refuse
 %ifdef KERN_MEGA
     mov bx, vesa_row            ; kern_mega switches into protected mode at
     mov bp, [bx+DRVR_ENT]       ; the end of kmain, and mega_vxpm hands the
     xor dx, dx                  ; image its selectors there (KERN-MEGA-PLAN
     mov al, VXV_PM              ; 14.115): an image that cannot take them
-    call COLD_SEG:drvf_drv_call ; refuses this QUESTION, here, while the
+    call bvs_cgo                ; refuses this QUESTION, here, while the
+    dw drv_call
     jc .refuse                  ; desktop is still the VGA's
 %endif
     or byte [vid_avail], VID_A_VESA

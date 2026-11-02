@@ -1,0 +1,673 @@
+os8088 patch 07: the PicoMEM, as its own firmware.
+
+A new ISA memory-card device, `isamem0_type = picomem`, that is a thin
+adapter around libpmhost - the PicoMEM's firmware compiled for the host by
+os8088's tools/picomem/build.sh and loaded at run time with dlopen, so this
+patch builds with no dependency on it. Every I/O and memory cycle the card
+decodes goes to the firmware; its decode is mirrored into 86Box per 8-port
+block and per 8 KB block, so nothing else on the bus changes; card time is
+the machine's, in 100 us ticks, and its DAC is mixed in at 48 kHz.
+Config: [PicoMEM #1] irq, sd_image, lib, usb_mouse (86Box's pointer as the
+card's USB mouse, polled every 8 ms; the machine's own mouse must be
+none), and for a 2.x library irq3/irq5/irq6/irq7 (its jumpers: each pin
+reaches its line only when set) and dma (its DRQ channel, 1 or 3): the
+2.x's real DMA is a DRQ the card raises per byte, answered from 86Box's
+8237 with dma_channel_read after each card slice. The card's NE2000 (a Pico W's Wi-Fi
+bridge) reaches 86Box's network through a companion NIC, net_01_card =
+picomem_ne2k, which network.c starts like any card.
+tools/os88box.py resolves lib and copies sd_image like a disk.
+
+docs/plans/completed/PICOMEM-EMU-PLAN.md section 5.1.
+
+diff --git a/src/device/CMakeLists.txt b/src/device/CMakeLists.txt
+index 4526b6c..b67d080 100644
+--- a/src/device/CMakeLists.txt
++++ b/src/device/CMakeLists.txt
+@@ -38,6 +38,7 @@ add_library(dev OBJECT
+     ibm_xma.c
+     mcamem.c
+     isamem.c
++    isa_picomem.c
+     isarom.c
+     isartc.c
+     isapnp.c
+diff --git a/src/device/isa_picomem.c b/src/device/isa_picomem.c
+new file mode 100644
+index 0000000..cb2775d
+--- /dev/null
++++ b/src/device/isa_picomem.c
+@@ -0,0 +1,592 @@
++/*
++ * 86Box    A hypervisor and IBM PC system emulator that specializes in
++ *          running old operating systems and software designed for IBM
++ *          PC systems and compatibles from 1981 through fairly recent
++ *          system designs based on the PCI bus.
++ *
++ *          This file is part of the 86Box distribution.
++ *
++ *          The PicoMEM, an 8-bit ISA card built on a Raspberry Pi Pico,
++ *          run as ITS OWN FIRMWARE: this device is a thin adapter around
++ *          libpmhost (os8088's tools/picomem), which is the card's firmware
++ *          compiled for the host. Every bus cycle the card decodes goes to
++ *          that firmware, and card time is this machine's time.
++ *
++ *          The library is loaded at run time (dlopen), so this file builds
++ *          with no dependency on it; a machine configured with the card and
++ *          no library refuses to start the device and says why.
++ *
++ *          os8088 patch 07 (tools/86box/patches/07-picomem.patch);
++ *          docs/plans/completed/PICOMEM-EMU-PLAN.md section 5.1.
++ *
++ * Authors: os8088 contributors
++ *
++ *          Copyright 2026 os8088 contributors.
++ */
++#include <stdarg.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <dlfcn.h>
++#define HAVE_STDARG_H
++#include <86box/86box.h>
++#include <86box/device.h>
++#include <86box/io.h>
++#include <86box/mem.h>
++#include <86box/pic.h>
++#include <86box/timer.h>
++#include <86box/path.h>
++#include <86box/plat.h>
++#include <86box/isamem.h>
++#include <86box/sound.h>
++#include <86box/thread.h>
++#include <86box/network.h>
++#include <86box/mouse.h>
++#include <86box/dma.h>
++
++/* pmhost.h, restated: this file must build without the library's tree. */
++typedef struct pm_host {
++    void *ctx;
++    void (*irq)(void *ctx, int line, int level);
++    void (*log)(void *ctx, const char *text);
++    void (*net_tx)(void *ctx, const uint8_t *frame, int len);
++    void (*dma_req)(void *ctx, int channel);
++} pm_host_t;
++
++typedef struct pm_cfg {
++    int         irq;
++    const char *sd_image;
++    int         irq_lines;
++    int         dma;
++} pm_cfg_t;
++
++/* Card time per timer tick. The firmware's own waits are in microseconds
++ * and its commands finish within one slice, so 100 us is fine-grained
++ * enough for the BIOS's polling and cheap enough for the host. */
++#define PICOMEM_TICK_US 100.0
++
++/* A USB mouse reports at most once a frame: 8 ms is a full-speed HID mouse's
++ * usual interval, so the pointer is polled every this many ticks. */
++#define PICOMEM_MOUSE_TICKS 80
++
++typedef struct picomem_t {
++    void *lib;
++    int (*create)(const pm_cfg_t *, const pm_host_t *);
++    void (*advance)(uint64_t);
++    int (*io_read)(uint16_t, uint8_t *);
++    int (*io_write)(uint16_t, uint8_t);
++    int (*mem_read)(uint32_t, uint8_t *);
++    int (*mem_write)(uint32_t, uint8_t);
++    void (*io_map)(uint8_t *);
++    void (*mem_map)(uint8_t *);
++    int (*audio)(int16_t *, int);   /* optional: a library with no DAC is silent */
++    int (*audio_rate)(void);
++    void (*net_rx)(const uint8_t *, int); /* optional: a library with no NE2000 */
++    void (*mouse)(int, int, int);   /* optional: the card's USB mouse */
++    int (*dma_byte)(uint8_t, int);  /* a 2.x's real DMA (pm_dma_byte) */
++
++    int           irq;
++    int           level;
++    pc_timer_t    timer;
++    uint8_t       io_dev[128];   /* what the card decodes, as last mirrored */
++    uint8_t       mem_idx[128];
++    mem_mapping_t map[128];      /* one per 8 KB block, enabled while decoded */
++    char          sd_path[1024];
++    double        apos;          /* resampler: position between src[0] and src[1] */
++    double        astep;         /* card frames per output frame */
++    int16_t       asrc[2][2];    /* the two card frames being interpolated */
++    pm_host_t     host;
++    int           mouse_on;      /* config usb_mouse: 86Box's pointer is the card's */
++    int           mouse_tick;
++    int           mouse_b;
++    int           dma_ch;        /* the 2.x's DRQ channel */
++    int           dma_want;      /* DRQs the card raised, not yet answered */
++} picomem_t;
++
++static picomem_t *the_card;      /* libpmhost is one card per library */
++static void picomem_dma(picomem_t *dev);
++
++/* The card's NE2000 is a Pico W's Wi-Fi bridge; here its "air" is 86Box's
++ * network, reached through a companion network card (picomem_ne2k_device,
++ * below) that 86Box's network layer starts like any NIC - network_attach
++ * only works from inside that. The two meet through this pointer, in
++ * whichever order 86Box starts them. */
++static netcard_t *pm_netcard;
++
++/* The station address libpmhost's NE2000 answers with (pmhost_wifi.cpp). */
++static uint8_t pm_mac[6] = { 0x28, 0xCD, 0xC1, 0x08, 0x80, 0x88 };
++
++static void picomem_sync(picomem_t *dev);
++
++static void
++picomem_log_cb(void *ctx, const char *text)
++{
++    (void) ctx;
++    pclog("PicoMEM: %s\n", text);
++}
++
++static void
++picomem_irq_cb(void *ctx, int line, int level)
++{
++    picomem_t *dev = (picomem_t *) ctx;
++
++    if (line < 0 || line > 15 || level == dev->level)
++        return;
++    dev->level = level;
++    if (level)
++        picint(1 << line);
++    else
++        picintc(1 << line);
++}
++
++static void
++picomem_net_tx_cb(void *ctx, const uint8_t *frame, int len)
++{
++    (void) ctx;
++    if (pm_netcard)
++        network_tx(pm_netcard, (uint8_t *) frame, len);
++}
++
++static int
++picomem_ne2k_rx(void *priv, uint8_t *buf, int len)
++{
++    (void) priv;
++    if (the_card && the_card->net_rx)
++        the_card->net_rx(buf, len);
++    return 1;
++}
++
++static void *
++picomem_ne2k_init(const device_t *info)
++{
++    (void) info;
++    pm_netcard = network_attach(&pm_netcard, pm_mac, picomem_ne2k_rx, NULL);
++    return &pm_netcard;
++}
++
++static void
++picomem_ne2k_close(void *priv)
++{
++    (void) priv;
++    if (pm_netcard)
++        netcard_close(pm_netcard);
++    pm_netcard = NULL;
++}
++
++const device_t picomem_ne2k_device = {
++    .name          = "PicoMEM NE2000 (the card's Wi-Fi)",
++    .internal_name = "picomem_ne2k",
++    .flags         = DEVICE_ISA,
++    .local         = 0,
++    .init          = picomem_ne2k_init,
++    .close         = picomem_ne2k_close,
++    .reset         = NULL,
++    .available     = NULL,
++    .speed_changed = NULL,
++    .force_redraw  = NULL,
++    .config        = NULL
++};
++
++static uint8_t
++picomem_inb(uint16_t port, void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++    uint8_t    v   = 0xff;
++
++    if (!dev->io_read(port, &v))
++        v = 0xff;               /* not driven: inb() ANDs, so FFh is no answer */
++    return v;
++}
++
++static void
++picomem_outb(uint16_t port, uint8_t val, void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++
++    if (dev->io_write(port, val)) {
++        /* A command or an EMS page may have moved the card's map: let core 0
++         * take the command now rather than at the next tick, then mirror. */
++        dev->advance(0);
++        picomem_dma(dev);
++        picomem_sync(dev);
++    }
++}
++
++static uint8_t
++picomem_readb(uint32_t addr, void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++    uint8_t    v   = 0xff;
++
++    dev->mem_read(addr, &v);
++    return v;
++}
++
++static void
++picomem_writeb(uint32_t addr, uint8_t val, void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++
++    dev->mem_write(addr, val);
++}
++
++/* Mirror the card's decode into 86Box: a port block's handlers and an 8 KB
++ * mapping exist exactly while the firmware's tables say the card answers. */
++static void
++picomem_sync(picomem_t *dev)
++{
++    uint8_t io[128];
++    uint8_t mem[128];
++
++    dev->io_map(io);
++    dev->mem_map(mem);
++    for (int b = 0; b < 128; b++) {
++        if ((io[b] != 0) != (dev->io_dev[b] != 0))
++            io_handler(io[b] != 0, b << 3, 8,
++                       picomem_inb, NULL, NULL, picomem_outb, NULL, NULL, dev);
++        dev->io_dev[b] = io[b];
++        if ((mem[b] != 0) != (dev->mem_idx[b] != 0)) {
++            if (mem[b])
++                mem_mapping_enable(&dev->map[b]);
++            else
++                mem_mapping_disable(&dev->map[b]);
++        }
++        dev->mem_idx[b] = mem[b];
++    }
++}
++
++/* THE 2.x's DMA. Its firmware raises DRQ for one byte at a time (the PIO
++ * program isa_dma_w_tc); 86Box's 8237 is pulled rather than pushed, so the
++ * DRQ is counted from the card thread and answered here, after the card's
++ * slice: dma_channel_read is the cycle, and the byte goes back with TC. A
++ * channel not yet programmed or masked answers DMA_NODATA, and the DRQ stays
++ * up for the next tick, as the line would. */
++static void
++picomem_dma_req_cb(void *ctx, int channel)
++{
++    picomem_t *dev = (picomem_t *) ctx;
++
++    (void) channel;
++    dev->dma_want++;
++}
++
++static void
++picomem_dma(picomem_t *dev)
++{
++    for (int n = 0; dev->dma_want > 0 && n < 64; n++) {
++        int v = dma_channel_read(dev->dma_ch);
++        if (v == DMA_NODATA)
++            break;
++        dev->dma_want--;
++        if (dev->dma_byte)
++            dev->dma_byte((uint8_t) v, (v & DMA_OVER) != 0);
++    }
++}
++
++static void
++picomem_tick(void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++
++    /* The card's USB mouse: 86Box's own pointer, with no 86Box mouse device
++     * to take it first (the profile says mouse_type = none). Positive dy is
++     * down, as a HID report has it. */
++    if (dev->mouse && dev->mouse_on && ++dev->mouse_tick >= PICOMEM_MOUSE_TICKS) {
++        int dx = 0, dy = 0, b = mouse_get_buttons_ex() & 7;
++        dev->mouse_tick = 0;
++        if (mouse_moved())
++            mouse_subtract_coords(&dx, &dy, NULL, NULL, -128, 127, 0, 0);
++        if (dx || dy || b != dev->mouse_b) {
++            dev->mouse_b = b;
++            dev->mouse(dx, dy, b);
++        }
++    }
++
++    dev->advance((uint64_t) (PICOMEM_TICK_US * 1000.0));
++    picomem_dma(dev);
++    picomem_sync(dev);
++    timer_advance_u64(&dev->timer, (uint64_t) (PICOMEM_TICK_US * TIMER_USEC));
++}
++
++/* The card's DAC, mixed in: the firmware's 49,716 Hz stereo, resampled
++ * linearly to the sound thread's rate. pm_audio_read() hands over what the DAC
++ * played in card time; a short read (the card behind, or silent) holds the
++ * last frame rather than clicking to zero. */
++static void
++picomem_get_buffer(int32_t *buffer, uint16_t len, void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++
++    if (!dev->audio)
++        return;
++    for (int c = 0; c < len; c++) {
++        while (dev->apos >= 1.0) {
++            int16_t f[2];
++            dev->asrc[0][0] = dev->asrc[1][0];
++            dev->asrc[0][1] = dev->asrc[1][1];
++            if (dev->audio(f, 1) == 1) {
++                dev->asrc[1][0] = f[0];
++                dev->asrc[1][1] = f[1];
++            }
++            dev->apos -= 1.0;
++        }
++        for (int ch = 0; ch < 2; ch++)
++            buffer[c * 2 + ch] += (int32_t) (dev->asrc[0][ch] +
++                                  (dev->asrc[1][ch] - dev->asrc[0][ch]) * dev->apos);
++        dev->apos += dev->astep;
++    }
++}
++
++#define PM_SYM(f, n)                                                  \
++    do {                                                              \
++        *(void **) &dev->f = dlsym(dev->lib, n);                      \
++        if (!dev->f) {                                                \
++            pclog("PicoMEM: %s has no %s\n", lib_path, n);            \
++            goto fail;                                                \
++        }                                                             \
++    } while (0)
++
++static void
++picomem_resolve(const char *p, char *out, size_t n)
++{
++    if (!p || !*p) {
++        out[0] = '\0';
++        return;
++    }
++    if (path_abs((char *) p))
++        snprintf(out, n, "%s", p);
++    else
++        path_append_filename(out, usr_path, p);
++}
++
++static void *
++picomem_init(const device_t *info)
++{
++    (void) info;
++    picomem_t *dev;
++    char       lib_path[1024];
++    pm_cfg_t   cfg;
++
++    if (the_card) {
++        pclog("PicoMEM: only one card per machine\n");
++        return NULL;
++    }
++    dev = (picomem_t *) calloc(1, sizeof(picomem_t));
++
++    picomem_resolve(device_get_config_string("lib"), lib_path, sizeof lib_path);
++    if (!lib_path[0] && getenv("OS88_PMHOST"))
++        snprintf(lib_path, sizeof lib_path, "%s", getenv("OS88_PMHOST"));
++    dev->lib = lib_path[0] ? dlopen(lib_path, RTLD_NOW | RTLD_LOCAL) : NULL;
++    if (!dev->lib) {
++        pclog("PicoMEM: cannot load libpmhost '%s': %s "
++              "(os8088: tools/picomem/build.sh)\n", lib_path, dlerror());
++        free(dev);
++        return NULL;
++    }
++    PM_SYM(create, "pm_create");
++    PM_SYM(advance, "pm_advance");
++    PM_SYM(io_read, "pm_io_read");
++    PM_SYM(io_write, "pm_io_write");
++    PM_SYM(mem_read, "pm_mem_read");
++    PM_SYM(mem_write, "pm_mem_write");
++    PM_SYM(io_map, "pm_io_map");
++    PM_SYM(mem_map, "pm_mem_map");
++
++    *(void **) &dev->audio      = dlsym(dev->lib, "pm_audio_read");
++    *(void **) &dev->audio_rate = dlsym(dev->lib, "pm_audio_rate");
++    *(void **) &dev->net_rx     = dlsym(dev->lib, "pm_net_rx");
++    *(void **) &dev->mouse      = dlsym(dev->lib, "pm_mouse_move");
++    *(void **) &dev->dma_byte   = dlsym(dev->lib, "pm_dma_byte");
++    dev->dma_ch                 = device_get_config_int("dma");
++    dev->mouse_on               = device_get_config_int("usb_mouse");
++
++    dev->irq = device_get_config_int("irq");
++    picomem_resolve(device_get_config_string("sd_image"), dev->sd_path, sizeof dev->sd_path);
++
++    /* Every 8 KB block gets a mapping now, disabled; sync enables the ones
++     * the card decodes, so a block appears and vanishes as its firmware's
++     * table entry does. */
++    for (int b = 0; b < 128; b++) {
++        mem_mapping_add(&dev->map[b], b << 13, 0x2000,
++                        picomem_readb, NULL, NULL, picomem_writeb, NULL, NULL,
++                        NULL, MEM_MAPPING_EXTERNAL, dev);
++        mem_mapping_disable(&dev->map[b]);
++    }
++
++    dev->host.ctx = dev;
++    dev->host.irq = picomem_irq_cb;
++    dev->host.log = picomem_log_cb;
++    dev->host.net_tx = picomem_net_tx_cb;
++    dev->host.dma_req = picomem_dma_req_cb;
++    cfg.irq       = dev->irq;
++    cfg.irq_lines = (device_get_config_int("irq3") << 3) | (device_get_config_int("irq5") << 5)
++                  | (device_get_config_int("irq6") << 6) | (device_get_config_int("irq7") << 7);
++    cfg.dma       = dev->dma_ch;
++    cfg.sd_image  = dev->sd_path[0] ? dev->sd_path : NULL;
++    if (dev->create(&cfg, &dev->host) != 0) {
++        pclog("PicoMEM: pm_create refused (one card per library)\n");
++        goto fail;
++    }
++    the_card = dev;
++    picomem_sync(dev);
++
++    if (dev->audio && dev->audio_rate) {
++        dev->astep = (double) dev->audio_rate() / (double) SOUND_FREQ;
++        sound_add_handler(picomem_get_buffer, dev);
++    }
++
++    timer_add(&dev->timer, picomem_tick, dev, 0);
++    timer_set_delay_u64(&dev->timer, (uint64_t) (PICOMEM_TICK_US * TIMER_USEC));
++    pclog("PicoMEM: %s, IRQ %d, SD %s\n", lib_path, dev->irq,
++          dev->sd_path[0] ? dev->sd_path : "(none)");
++    return dev;
++
++fail:
++    if (dev->lib)
++        dlclose(dev->lib);
++    free(dev);
++    return NULL;
++}
++
++static void
++picomem_close(void *priv)
++{
++    picomem_t *dev = (picomem_t *) priv;
++
++    /* The card's thread is parked inside the library and cannot be joined,
++     * so the library stays loaded; the machine is going away anyway. */
++    timer_disable(&dev->timer);
++    if (the_card == dev)
++        the_card = NULL;
++    free(dev);
++}
++
++// clang-format off
++static const device_config_t picomem_config[] = {
++    {
++        .name           = "irq",
++        .description    = "IRQ jumper",
++        .type           = CONFIG_SELECTION,
++        .default_string = NULL,
++        .default_int    = 5,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = {
++            { .description = "IRQ 2", .value = 2 },
++            { .description = "IRQ 3", .value = 3 },
++            { .description = "IRQ 5", .value = 5 },
++            { .description = "IRQ 7", .value = 7 },
++            { .description = ""                  }
++        },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "dma",
++        .description    = "DRQ (PicoMEM 2.x)",
++        .type           = CONFIG_SELECTION,
++        .default_string = NULL,
++        .default_int    = 1,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = {
++            { .description = "DMA 1", .value = 1 },
++            { .description = "DMA 3", .value = 3 },
++            { .description = ""                  }
++        },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "irq3",
++        .description    = "IRQ 3 jumper (PicoMEM 2.x)",
++        .type           = CONFIG_BINARY,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "irq5",
++        .description    = "IRQ 5 jumper (PicoMEM 2.x)",
++        .type           = CONFIG_BINARY,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "irq6",
++        .description    = "IRQ 6 jumper (PicoMEM 2.x)",
++        .type           = CONFIG_BINARY,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "irq7",
++        .description    = "IRQ 7 jumper (PicoMEM 2.x)",
++        .type           = CONFIG_BINARY,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "sd_image",
++        .description    = "microSD card image",
++        .type           = CONFIG_FNAME,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = "Disk images (*.img)|*.img",
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "lib",
++        .description    = "libpmhost (the card's firmware)",
++        .type           = CONFIG_FNAME,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = "Shared libraries (*.so)|*.so",
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    {
++        .name           = "usb_mouse",
++        .description    = "USB mouse (the host's pointer; set the machine's mouse to none)",
++        .type           = CONFIG_BINARY,
++        .default_string = NULL,
++        .default_int    = 0,
++        .file_filter    = NULL,
++        .spinner        = { 0 },
++        .selection      = { { 0 } },
++        .bios           = { { 0 } }
++    },
++    { .name = "", .description = "", .type = CONFIG_END }
++};
++// clang-format on
++
++const device_t picomem_device = {
++    .name          = "PicoMEM",
++    .internal_name = "picomem",
++    .flags         = DEVICE_ISA,
++    .local         = 0,
++    .init          = picomem_init,
++    .close         = picomem_close,
++    .reset         = NULL,
++    .available     = NULL,
++    .speed_changed = NULL,
++    .force_redraw  = NULL,
++    .config        = picomem_config
++};
+diff --git a/src/device/isamem.c b/src/device/isamem.c
+index c87421e..f6744cc 100644
+--- a/src/device/isamem.c
++++ b/src/device/isamem.c
+@@ -2284,6 +2284,8 @@ static const device_t mplus2_device = {
+     .config        = mplus2_config
+ };
+ 
++extern const device_t picomem_device;   /* isa_picomem.c (os8088 patch 07) */
++
+ static const struct {
+     const device_t *dev;
+ } boards[] = {
+@@ -2322,6 +2324,7 @@ static const struct {
+ #endif /* USE_ISAMEM_IAB */
+     { &lotech_ems_device   },
+     { &mplus2_device       },
++    { &picomem_device      },
+     { NULL                 }
+     // clang-format on
+ };
+diff --git a/src/network/network.c b/src/network/network.c
+index cb77d76..d7556b9 100644
+--- a/src/network/network.c
++++ b/src/network/network.c
+@@ -84,6 +84,8 @@ typedef struct net_card_migrate_t {
+     const char     *old_internal_name;
+ } net_card_migrate_t;
+ 
++extern const device_t picomem_ne2k_device;   /* device/isa_picomem.c */
++
+ static const NETWORK_CARD net_cards[] = {
+     // clang-format off
+     { &device_none                },
+@@ -100,6 +102,7 @@ static const NETWORK_CARD net_cards[] = {
+     { &wd8003e_device             },
+     { &wd8003eb_device            },
+     { &wd8013ebt_device           },
++    { &picomem_ne2k_device        },   /* os8088 patch 07: the PicoMEM's */
+     /* COM */
+     { &modem_device               },
+     /* LPT */

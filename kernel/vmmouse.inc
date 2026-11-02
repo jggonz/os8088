@@ -326,7 +326,8 @@ vmm_boot_x:
                                 ; and the row already carries the DRVE_*
     mov bp, [bx+DRVR_ENT]
     mov ax, (VMM_ABI_VER << 8) | DRVV_ATTACH    ; AH: the ABI the image
-    call COLD_SEG:drvf_drv_call                 ; checks against its own
+    call bvs_cgo                ; checks against its own
+    dw drv_call
     jc  .refuse
 
     ; --- won: settle the contest, as mou_claim / mou_p2_byte do --------------

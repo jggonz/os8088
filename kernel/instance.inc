@@ -1234,10 +1234,7 @@ inst_fhome_idx:
 ; know it.
 ; -----------------------------------------------------------------------------
 inst_set_name_x:
-    push ax
-    push cx
-    push si
-    push di
+    call kent_di                ; (kernel size pass 15)
     add di, I_NAME
     mov byte [di+15], 0         ; the terminator FIRST, so a 16-byte source
     mov cx, 15                  ; with no room for a NUL still terminates
@@ -1250,11 +1247,7 @@ inst_set_name_x:
     mov [di], al
     inc di
     loop .copy
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp kret_di
 
 ; -----------------------------------------------------------------------------
 ; inst_bind_win - attach a window to a record and claim wm_owner
@@ -1572,14 +1565,12 @@ app_launch:
     cmp byte [inst_lkhd], 0     ; the Standard File chooser is launched by a
     jne .held                   ; caller that HOLDS the lock (SPEC.md 38.6),
     call ui_lcall               ; and the lock is not recursive - so lock,
-    jmp short .ok               ; show and unlock in ui_lcall's six bytes
-.held:                          ; (kernel size pass 13, -4)
-    call bp
-.ok:
-    clc
-    jmp .out
-
-.fail:
+    db 0xB9                     ; show and unlock in ui_lcall's six bytes
+.held:                          ; (kernel size pass 13, -4). mov cx, imm16:
+    call bp                     ; the imm16 is `call bp`, and CX comes back off
+.ok:                            ; the stack at kret_es (kernel size pass 15)
+    db 0xA8                     ; test al, imm8 over .fail's stc: CF = 0, the
+.fail:                          ; answer every caller reads
     stc
 .out:
     jmp kret_es

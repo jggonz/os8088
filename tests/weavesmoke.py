@@ -662,7 +662,7 @@ def _drive(machine, card, want_w, want_h, S, t0, png_dir, m):
 
     # 6 - and the machine is still alive.
     c0 = m.status().get("cycles", 0)
-    time.sleep(0.4)
+    time.sleep(0.4)  # host: any guest progress at all will do
     c1 = m.status().get("cycles", 0)
     check(c1 > c0, "%s: the guest is still executing" % machine,
           "a task frozen holding the gfx lock draws a perfect window and "

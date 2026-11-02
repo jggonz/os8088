@@ -91,6 +91,11 @@ LZ_BIG      equ 0x80            ; OR'd into AL at the published door: AH:CX is
 ; re-assembles this kernel for a symbol map (tools/os88sym.py) passes no
 ; defines, so whatever the source does with NONE has to be what `make` builds,
 ; or every symbol lookup in the tree refuses a kernel that is perfectly fine.
+%ifnmacro SKIPAL1 0             ; kernel.asm's skip byte, for an includer that
+%macro SKIPAL1 0                ; is not the kernel (dostools/os88cz.asm):
+    db 0xB0                     ; mov al, imm8 over the next byte, AL only
+%endmacro
+%endif
 %ifndef LZ_HAVE_LZ4
   %ifndef LZ_HAVE_LZB
     %define LZ_HAVE_LZ4         ; neither asked for: BOTH, and the dispatch
@@ -277,8 +282,8 @@ lz_decomp_big:
     add sp, 14                  ; answered carried round the `add` in AH -
                                 ; (a literal: tools/stkbalance.py reads it)
     sahf                        ; two bytes shorter than seven pops
-    jmp short .ret
-.early:                         ; refused before the frame was built
+    SKIPAL1                     ; mov al, imm8 over the stc: no flag written,
+.early:                         ; and AX is this routine's to clobber (pass 15)                         ; refused before the frame was built
     stc
 .ret:
     pop bp

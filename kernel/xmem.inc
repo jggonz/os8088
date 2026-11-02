@@ -287,7 +287,8 @@ xm_boot_x:
     mov bp, [bx+DRVR_ENT]
     mov al, DRVV_ATTACH
     mov ah, XM_ABI_VER          ; ...which the image checks against its own
-    call COLD_SEG:drvf_drv_call               ; out: SI = the XMV table, AX = KB, DL = the
+    call bvs_cgo                ; out: SI = the XMV table, AX = KB, DL = the
+    dw drv_call
     jc .refuse                  ; CPU_F_* that actually verified
     push ax
     push dx

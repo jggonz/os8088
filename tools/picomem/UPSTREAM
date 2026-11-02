@@ -1,0 +1,13 @@
+# The PicoMEM firmware libpmhost is built from (docs/plans/completed/PICOMEM-EMU-PLAN.md
+# section 4.1). Edit and re-run build.sh to move it; re-cut patches/fw/
+# against the new pin first (tools/martypc/README.md's rule: a patch is cut
+# against the pin PLUS every earlier patch).
+#
+# be7b2e6 is upstream's HEAD as of 2026-10-29 and the newest firmware SOURCE
+# that is public: the October 4 2026 release (a7cd888) published a .uf2 and
+# no source. patches/fw/01-pm1x-pr.patch is Elendilon/ISA-PicoMEM's pm1x-pr
+# (5e507be2), the firmware os8088 ships in firmware/picomem1/.
+repo=https://github.com/FreddyVRetro/ISA-PicoMEM.git
+commit=be7b2e6031ae93bb75733c363489aa9171a7205c
+# GPL-2.0, like the firmware. Nothing of it is vendored here: build.sh fetches
+# it into build/picomem/src, which is gitignored like the rest of build/.

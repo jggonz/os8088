@@ -29,6 +29,10 @@ LEG pico (`os8088_5150_herc_hdd_sb_ems288_gla`): leg board's checks with the
   at D000h. The owner's 286 answered `No hardware found` with its PicoMEM
   there while the probe knew only 260h-26Ch; with 288h off the list this leg
   reproduces it (DRVE_HW).
+LEG card (86Box, vm/xt-picomem1): leg board's checks against a REAL PicoMEM
+  1.x's EMS - its own firmware (tools/picomem) - at 288h and E000h, 256
+  pages. A first boot primes the card's config (its BIOS turns EMS off on a
+  config whose memory map is not the machine's: MEASURED, DRVE_HW).
 LEG none (`os8088_5150_herc_hdd_sb_gla`, the same machine with no board):
   the row is not loaded, its error DRVE_HW, and EMSTEST says nobody answered.
 
@@ -52,6 +56,7 @@ IMG = "build/emstest.img"
 BOARD = "os8088_5150_herc_hdd_sb_ems_gla"
 NONE = "os8088_5150_herc_hdd_sb_gla"
 PICO = "os8088_5150_herc_hdd_sb_ems288_gla"  # the board at a PicoMEM's 288h
+CARD_PAGES = 256                # leg card: 4 MB, an 8-bit page register
 ROW_EMS = 6                     # drv_tab's row on kern_big (SPEC.md 107.1)
 DRVR_SIZE, DRVR_SEG, DRVR_ERR = 16, 2, 14
 DRVE_OK, DRVE_HW = 0, 5
@@ -94,7 +99,7 @@ def row(ui, m):
     return u16(r, DRVR_SEG), r[DRVR_ERR]
 
 
-def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260):
+def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260, pages=128):
     bad = []
     print("\n== leg board: %s" % machine)
     with os88ui.boot(IMG, machine=machine, quick=True) as ui:
@@ -107,7 +112,7 @@ def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260):
         want(bad, "first instance", ph, 1)
         want(bad, "IDENT", (r["ICF"], r["IAX"]), (0, 0x4D45))
         want(bad, "CAPS: pages free / on the board", (r["FREE0"], r["TOTAL"]),
-             (128, 128))
+             (pages, pages))
         want(bad, "CAPS: frame / quarters free", (r["FRAME"], r["QFREE0"]),
              (frame, 0x0F))
         want(bad, "ALLOC 3: CF / handle", (r["HCF"], r["HND"]), (0, 1))
@@ -120,7 +125,7 @@ def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260):
         want(bad, "BASE: first page / length", (r["BASE"], r["BLEN"]), (0, 3))
         want(bad, "the recipe: page 1 by the package's OUT", r["RECIPE"], 1)
         want(bad, "CAPS after: free / quarters free",
-             (r["FREE1"], r["QFREE1"]), (125, 0))
+             (r["FREE1"], r["QFREE1"]), (pages - 3, 0))
         q0 = u16(m.read(frame << 4, 2))
         q3 = u16(m.read((frame << 4) + 0xC000, 2))
         want(bad, "%04X:0000 read off the machine (page 0)" % frame, q0,
@@ -139,7 +144,7 @@ def leg_board(syms, machine=BOARD, frame=0xE000, port=0x260):
         w3, ph, r = instance(ui, m, syms, set(w.i for w in ui.windows()))
         want(bad, "third instance, after both closed", ph, 1)
         want(bad, "...every page and quarter was free",
-             (r["FREE0"], r["QFREE0"]), (128, 0x0F))
+             (r["FREE0"], r["QFREE0"]), (pages, 0x0F))
         want(bad, "...and it got handle 1 again", r["HND"], 1)
     return bad
 
@@ -158,9 +163,53 @@ def leg_none(syms):
     return bad
 
 
+def leg_card(syms, vm="xt-picomem1"):
+    """leg board's checks against a REAL PicoMEM 1.x's EMS: the card's own
+    firmware under 86Box (tools/picomem, vm/xt-picomem1), its microSD set
+    for EMS at 288h and E000h - E000h because this firmware's BIOS sits at
+    D000h. What answers is the card's LTEMS port decode and its frame in
+    PSRAM (dev_memory.cpp), so this is the field card's EMS as the driver
+    meets it, not a model of a Lo-tech."""
+    import subprocess
+    import tempfile
+    tmp = tempfile.mkdtemp(prefix="emscard-")
+    box = [sys.executable, "tools/os88box.py"]
+    # THE FIRST BOOT, as on a new card: its BIOS finds no config, maps the
+    # machine (RAM, the VGA's ROM, its own at D000h) and saves PICOMEM.CFG
+    # (08h). EMS set on a config whose map is not the machine's is turned
+    # off again by the BIOS's "Memory change" check, so it is set on THAT.
+    blank = os.path.join(tmp, "blank.img")
+    subprocess.check_call([sys.executable, "tools/picomem/mksd.py", blank],
+                          stdout=subprocess.DEVNULL)
+    env = dict(os.environ, OS88_PMSD=blank, OS88_PMHOST_LOG="1")
+    name = "emscard%d" % os.getpid()
+    subprocess.check_call(box + ["launch", vm, "--name", name,
+                                 "--fresh", "--temp", "--turbo"],
+                          env=env, stdout=subprocess.DEVNULL)
+    run = os.path.join(ROOT, "build/86box/run", name)
+    try:
+        for _ in range(30):
+            subprocess.check_call(box + [name, "step", "2000"],
+                                  stdout=subprocess.DEVNULL)
+            if "cmd 08h done" in open(os.path.join(run, "86box.log")).read():
+                break
+        else:
+            raise Fail("the card's first boot never saved its config (08h)")
+    finally:
+        subprocess.call(box + [name, "quit"], stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL)
+    sd = os.path.join(tmp, "sd.img")
+    subprocess.check_call([sys.executable, "tools/picomem/mksd.py", sd,
+                           "--cfg-from", os.path.join(run, "picomem-sd.img"),
+                           "--cfg", "EMS_Port=2", "--cfg", "EMS_Addr=1"],
+                          stdout=subprocess.DEVNULL)
+    os.environ.update(OS88_EMU="86box", OS88_86BOX_VM=vm, OS88_PMSD=sd)
+    return leg_board(syms, "os8088_xt_vga", 0xE000, 0x288, CARD_PAGES)
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--leg", choices=("board", "none", "pico", "both"),
+    ap.add_argument("--leg", choices=("board", "none", "pico", "card", "card2", "both"),
                     default="both")
     a = ap.parse_args()
     os.chdir(ROOT)
@@ -177,6 +226,10 @@ def main():
             bad += leg_none(syms)
         if a.leg == "pico":
             bad += leg_board(syms, PICO, 0xD000, 0x288)
+        if a.leg == "card":
+            bad += leg_card(syms)
+        if a.leg == "card2":
+            bad += leg_card(syms, "xt-picomem2")
     except Fail as e:
         bad.append(str(e))
     if bad:

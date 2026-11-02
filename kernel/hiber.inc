@@ -612,8 +612,11 @@ hb_ok_x:
 ; which is `call bp / retf` - cw_mem_disp's shape one segment along, and the
 ; entry wm_pkgcall dispatches a kernel window's cold callbacks through
 ; (SPEC.md 2.6.3). This file had its own copy until then.
-hbk_drv_blk_call:   call drv_blk_call_x ; ...and the tenth, which cannot use
-                    retf                ; it: BP IS drv_blk_call's verb cell
+; (The tenth, drv_blk_call_x, whose BP is its verb cell, goes through this
+; image's own hbg_cgo, which keeps every register - so its four-byte
+; resident shim hbk_drv_blk_call went: kernel size pass 15.) HBGC x is that
+; hop into the near .cold routine x, ctrl.inc's CPXC one image along - and
+; defined in kernel.asm beside KGO_PAIR, outside every `.cold` span.
 
 ; hbf_need - make the image resident (cpf_need's shape, ctrl.inc): the id in
 ; AL and the caller's AX put back, so a thunk below is three bytes and not
@@ -1150,7 +1153,8 @@ hbm_btn:
     call hbm_stage              ; ...staged where the button drawer reads it
     pop di
     mov si, cp_sbuf
-    call COLD_SEG:os88ui_btn_f
+    HBGC os88ui_kbtn            ; this image's own hop (os88ui_btn_f went:
+                                ; kernel size pass 15)
     jmp hbm_ret6
 
 ; -----------------------------------------------------------------------------
@@ -1674,7 +1678,7 @@ hbm_geom:
     jc .no
     mov bp, [di+DSV_GEOM]       ; == DSV_BLK, and AL = 2 is the sub-function
     mov al, 2
-    call COLD_SEG:hbk_drv_blk_call  ; DL = unit, CX:BX = base, SI = spt,
+    HBGC drv_blk_call_x         ; DL = unit, CX:BX = base, SI = spt,
     jc .no                      ; DI = heads; CF = 1 not int 13h
     xor dh, dh
     mov [hb_unit], dx
@@ -2232,7 +2236,8 @@ hbm_sweep:
     push dx                     ; to undo - the record is not counted and DI
     push di                     ; does not move - and the row, the skip and the
     mov al, DRVV_HWINFO         ; buffer are banked because the answer is the
-    call COLD_SEG:drvf_drv_call ; DRIVER's code: AX/BX/CX = its three words
+    call hbg_cgo                ; DRIVER's code: AX/BX/CX = its three words
+    dw drv_call
     pop di
     pop dx
     jc .noinfo

@@ -18,7 +18,8 @@ output buffer full, both devices silent for good. 14.62's drains run at fixed
 moments; a hand on the mouse keeps bytes coming after them.
 
 No emulator here loses an edge by itself, so the row builds two private trees
-with the PICLOSE knob (Makefile): both 8259s initialised, masks put back, on
+with the PICLOSE knob (Makefile), each with MEGADIAG=1 so that the kernel's
+E9 lines - the green leg's evidence - are written at all: both 8259s initialised, masks put back, on
 the way down of EVERY reflection, on both CPU paths - which Bochs, a 386,
 takes too. Each leg boots build/<tree>/mega.img under Bochs with an
 IntelliMouse and B: holding KBTRIP.COM (tests/dostrap/kbtrip.asm), and TRIPS
@@ -111,8 +112,11 @@ def wiggle(box, stop):
 
 
 def tree(name):
-    return os88build.tree(KNOB[name], targets=("mega.img", "megarun.o88",
-                                               "mbr.bin"))
+    # MEGADIAG=1 on both legs: the green leg's evidence is mega_kwd's E9
+    # line, which a shipped kern_mega no longer writes (kernel.asm MEGA_E9)
+    # and which has no state to read instead - the watchdog keeps no count
+    return os88build.tree(KNOB[name], "MEGADIAG=1",
+                          targets=("mega.img", "megarun.o88", "mbr.bin"))
 
 
 def leg(name, keep, t, display=None):
@@ -133,7 +137,7 @@ def leg(name, keep, t, display=None):
     dead = None
     done = 0
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             return None, 0, 0, "kern_mega never reached protected mode"
         box.up()                        # the desktop, off kernel state
         box.capture()
@@ -151,13 +155,13 @@ def leg(name, keep, t, display=None):
                         "keyboard did not reach the DOS window" % i)
                 box.shot(os.path.join(out, "dead%02d.png" % i))
                 break
-            time.sleep(1.5)
+            box.guest_sleep(1.5)        # GUEST seconds (Box.guest_sleep)
             stop = [False]
             th = threading.Thread(target=wiggle, args=(box, stop))
             box.xd("key", "k")
             th.start()                  # ...the pointer moving from the key
             back = lg.wait(["unparked"], before[2:], 90)
-            time.sleep(4)               # ...through the whole return
+            box.guest_sleep(4)          # ...through the whole return
             stop[0] = True
             th.join()
             if not back:
@@ -199,7 +203,7 @@ def leg(name, keep, t, display=None):
                         "not reach the DOS window")
             else:
                 box.xd("key", "k")
-                time.sleep(3)
+                box.guest_sleep(3)
     finally:
         box.stop()
     hits = lg.text().count(LOST)

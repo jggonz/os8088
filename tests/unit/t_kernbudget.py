@@ -46,13 +46,20 @@ KERNEL = os.path.join(ROOT, "kernel", "kernel.asm")
 BEGIN, END = "<!-- kernsize:begin -->", "<!-- kernsize:end -->"
 
 
-def budgets():
-    """{"big": n, "small": n} from kernel/kernel.asm's two arms.
+VARIANTS = ("mega", "big", "small")     # kernel.asm's arm order
 
-    They are `%ifdef KERN_BIG` / `%else`, in that order and nowhere else, so
-    the first `KERN_BUDGET equ` is big's and the second is small's.  The order
-    is ASSERTED rather than assumed: a file that grew a third arm, or lost the
-    `%ifdef`, would otherwise be read confidently and wrongly.
+
+def budgets():
+    """{"mega": n, "big": n, "small": n} from kernel/kernel.asm's three arms.
+
+    They are `%ifdef KERN_MEGA` / `%elifdef KERN_BIG` / `%else`, in that order
+    and nowhere else, so the first `KERN_BUDGET equ` is mega's, the second
+    big's and the third small's. kern_mega is FIRST because a kern_mega build
+    defines KERN_BIG too (it is kern_big plus mega.inc), and it took an arm of
+    its own at kern_mega size pass 1, when it stopped being a KERN_KNOB build
+    (docs/plans/completed/msp1/megabudget.md). The order is ASSERTED rather
+    than assumed: a file that grew a fourth arm, or lost an `%ifdef`, would
+    otherwise be read confidently and wrongly.
 
     BOTH ARE DERIVED AND NOT LITERALS.  Each kernel fully resides in its KB
     figure once it is at the desktop (KERN_RESIDENT_KB for big,
@@ -65,16 +72,19 @@ def budgets():
     src = open(KERNEL, errors="replace").read()
     hits = [(m.start(), m.group(1).strip())
             for m in re.finditer(r"^KERN_BUDGET\s+equ\s+([^;\n]+)", src, re.M)]
-    big = src.find("%ifdef KERN_BIG")
-    if len(hits) != 2 or big < 0 or not (big < hits[0][0] < hits[1][0]):
+    mega = src.find("%ifdef KERN_MEGA\nKERN_BUDGET")
+    big = src.find("%elifdef KERN_BIG\nKERN_BUDGET")
+    if (len(hits) != 3 or mega < 0 or big < 0
+            or not (mega < hits[0][0] < big < hits[1][0] < hits[2][0])):
         return None
     out = {}
-    for key, (_, expr) in zip(("big", "small"), hits):
+    for key, (_, expr) in zip(VARIANTS, hits):
         if re.fullmatch(r"\d+", expr):
             out[key] = int(expr)
             continue
         kb = {"big": "KERN_RESIDENT_KB",
-              "small": "KERN_SMALL_RESIDENT_KB"}[key]
+              "small": "KERN_SMALL_RESIDENT_KB",
+              "mega": "KERN_MEGA_RESIDENT_KB"}[key]
         if expr != kb + "*1024 - KERNEL_SEG*16":
             return None
         c = {}
@@ -104,13 +114,15 @@ def baseline():
 def main():
     have, base = budgets(), baseline()
     check(have is not None,
-          "kernel/kernel.asm's two KERN_BUDGET arms are where this expects",
-          "the parse is positional - %ifdef KERN_BIG, then %else - so a third "
-          "arm or a moved %ifdef has to fail rather than answer",
+          "kernel/kernel.asm's three KERN_BUDGET arms are where this expects",
+          "the parse is positional - %ifdef KERN_MEGA, %elifdef KERN_BIG, "
+          "then %else - so a fourth arm or a moved %ifdef has to fail rather "
+          "than answer",
           got="%d KERN_BUDGET equ line(s)" % (len(re.findall(
               r"^KERN_BUDGET\s+equ", open(KERNEL, errors="replace").read(),
               re.M))),
-          want="exactly 2 after `%ifdef KERN_BIG`, each a literal or "
+          want="exactly 3, after `%ifdef KERN_MEGA`, `%elifdef KERN_BIG` "
+               "and `%else`, each a literal or "
                "`<RESIDENT_KB>*1024 - KERNEL_SEG*16`")
     check(base is not None,
           "docs/KERNEL-MEMORY.md carries a readable kernsize baseline",
@@ -122,12 +134,13 @@ def main():
         done("t_kernbudget")
         return
 
-    for variant in ("big", "small"):
+    for variant in VARIANTS:
         v = base.get(variant)
         if not isinstance(v, dict) or "budget" not in v:
             check(False, "the baseline carries kern_%s" % variant,
-                  "both are SHIPPED kernels (docs/history/KERN-SPLIT-PLAN.md), so both "
-                  "are blessable and both should be blessed",
+                  "each is a BUDGETED kernel (docs/history/KERN-SPLIT-PLAN.md; "
+                  "kern_mega since kern_mega size pass 1), so each is "
+                  "blessable and each should be blessed",
                   got="no `budget` for %r" % variant,
                   want="run tools/kernsize.py --bless for it")
             continue
@@ -140,8 +153,8 @@ def main():
               got="docs/KERNEL-MEMORY.md says %d" % v["budget"],
               want="kernel/kernel.asm's %d" % have[variant])
 
-    print("t_kernbudget: KERN_BUDGET big %d, small %d - blessed baseline agrees"
-          % (have["big"], have["small"]))
+    print("t_kernbudget: KERN_BUDGET big %d, small %d, mega %d - blessed "
+          "baseline agrees" % (have["big"], have["small"], have["mega"]))
     done("t_kernbudget")
 
 

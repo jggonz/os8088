@@ -576,7 +576,8 @@ dskw_mkdir_x:
 ;      dskw_gate: SI -> the name, AX = the FSV_* verb a redirected volume is
 ;      handed (kern_big; ignored where OS88_REDIR is not built)
 ;      dskw_gate83: SI -> the name
-; out: ALL THREE RETURN ONLY TO CONTINUE. dskw_mounted: there is a volume.
+; out: ALL THREE RETURN ONLY TO CONTINUE. dskw_mounted: there is a volume,
+;      and where OS88_REDIR is built ZF = it is a redirected one (DVK_FILE).
 ;      dskw_gate and dskw_gate83: that, and it is not a redirected one, and
 ;      dskw_n83 holds the 11-byte raw name (DI = its address). Otherwise they
 ;      do not come back to the body at all: they drop the body's return
@@ -616,7 +617,13 @@ dskw_mounted:
     call dws_gate
 %endif
     cmp byte [dsk_mntok], 1
+%ifdef OS88_REDIR
+    jne .no                     ; ...and ZF = a REDIRECTED volume, the test
+    cmp byte [dsk_vkind], DVK_FILE  ; all five callers made next (kernel
+    ret                         ; size pass 15: five bytes a caller)
+%else
     je .ret
+%endif
 .no:
     mov ax, FERR_NODISK
 .fail:
@@ -1050,7 +1057,6 @@ dskw_rmtree:
 dskw_rtbody:
     call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
-    cmp byte [dsk_vkind], DVK_FILE
     jne .fat                    ; A REDIRECTED VOLUME HAS NO DIRECTORY SECTORS
                                 ; (SPEC.md 62.9) and everything below this line
                                 ; reads them - dskw_find, dskw_rt_scan,
@@ -1314,10 +1320,8 @@ dskw_rt_scan:
 ; into dskw_raw and dskw_n83, which the remove body reads.
 ; -----------------------------------------------------------------------------
 dskw_rt_byclus:
-    push cx
-    push dx
-    push si
-    push di
+    call kentc_di               ; KENT: push ax..di (AX is restored too: no
+                                ; caller reads it - kernel size pass 15)
     mov ax, [dsk_cwd]
     mov dx, [dskw_rt_clus]
     call dsk_byclus_x           ; SS:SI -> the entry; dsk_ent is a by-product
@@ -1328,11 +1332,7 @@ dskw_rt_byclus:
     call dskw_rawn83
     clc
 .out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; dskw_rt_zap - mark the entry dskw_n83 names deleted, and free no chain
@@ -1517,7 +1517,6 @@ dskw_fsstat:
 dskw_wbody:
     call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: the write's
-    cmp byte [dsk_vkind], DVK_FILE
     jne .fatw
     call dskw_norm              ; the source becomes seg:0..15 + a run, so the
                                 ; driver is handed a normalised (seg, offset)
@@ -1911,7 +1910,6 @@ dskw_last_p:
 dskw_rbody:
     call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
-    cmp byte [dsk_vkind], DVK_FILE
     jne .fatname
     jmp .fsread                 ; a REDIRECTED volume (SPEC.md 62.9): there is
                                 ; no chain to walk and no entry to walk it from
@@ -2800,7 +2798,6 @@ dskw_dbody_n83:                 ; dskw_n83 already filled (dskw_rmtree)
 dskw_nbody:
     call dskw_mounted           ; returns only when there is a volume
 %ifdef OS88_REDIR               ; SPEC.md 62.9.2.3: rename's
-    cmp byte [dsk_vkind], DVK_FILE
     jne .fatn
     mov bp, FSV_RENAME          ; SI = the old name, DI = the new one, which
     jmp dskw_fsop               ; is this cell's own argument order already
@@ -3727,12 +3724,7 @@ dskw_wat:                       ; 16-bit number by contract
 ; it and the rest at the half-way mark, every refusal in it is two bytes.
 dskw_wabody:
     call dskw_mounted
-    jnc .gated
-.out:                           ; ...and a `ret` any error can share, AX
-    ret                         ; and CF being already the answer
-%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3
-.gated:
-    cmp byte [dsk_vkind], DVK_FILE
+%ifdef OS88_REDIR               ; SPEC.md 62.9.2.3; ZF = redirected
     jne .fat
     mov ax, [dwr_off+2]         ; a REDIRECTED volume (SPEC.md 62.9) has
     inc ax                      ; FSV_APPEND and no write-at verb to pair
@@ -3746,12 +3738,13 @@ dskw_wabody:
     mov dx, es                  ; DX:BX = the bytes, CX = how many - the same
     mov bp, FSV_APPEND          ; three registers this cell was handed
     jmp dskw_fsop
+%else
+    jnc .fat
 %endif
+.out:                           ; ...and a `ret` any error can share, AX
+    ret                         ; and CF being already the answer
 .prot:
     jmp dskw_wbody.prot
-%ifndef OS88_REDIR
-.gated:
-%endif
 .fat:
     call dskw_gate83
 %ifdef DSKW_WSEQ
@@ -5194,10 +5187,8 @@ dskw_name83:
     jmp short .stem             ; back: it is not an output)
 .ext_end:
     jcxz .bad                   ; a trailing dot with no extension (or, from
-    clc                         ; .stem, no name at all)
-    jmp short .out
-.bad:
-    stc
+                                ; .stem, no name at all)
+    CLC_OR_STC .bad             ; (kernel size pass 15: every caller reads CF)
 .out:
     jmp kretc_di
 

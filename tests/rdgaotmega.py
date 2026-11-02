@@ -22,8 +22,9 @@ E9), opens the PACKAGE with no document, and reads the view:
     precompiled machine: S_JITON and S_JITFIX set, nothing translated;
   * every code image in ONE pool block (rw_axclaim): named to the core as a
     pair in S_JITXT, each based at or above 1MB and 64KB apart;
-  * the cartridge's banks above 1MB in place (bank 1's window, the run's
-    32KB step to bank 2), or - the `oneclaim` leg, the package built
+  * the cartridge's banks above 1MB in place (bank 1's window,
+    OSAPI_MEM_HUGE's 16KB step to bank 2 - the cartridge once, 68df1605;
+    it was OSAPI_XMEM_RUN's 32KB over a block twice its size), or - the `oneclaim` leg, the package built
     RW_NOXPLAN - in one claim, read a bank at a time through a window each
     (rw_aromrd), banks 16KB apart;
   * no trap whose CS is the core's or an image's code selector, and no
@@ -98,7 +99,7 @@ def leg(t, out, name, pkg, lst, rom_beside, where, game=False):
     rbase = None
     bstep = 0
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             return ["%s: kern_mega never reached protected mode" % name]
         box.up()
         box.capture()
@@ -107,7 +108,7 @@ def leg(t, out, name, pkg, lst, rom_beside, where, game=False):
         mark = os.path.getsize(box.e9)
         box.dbl(160, 139, "the package to start", lock=False)
         if where == "refuse":
-            time.sleep(20)
+            box.guest_sleep(20, poll=0.5)   # 20 GUEST seconds to start in
             if box.pkg_base("RealDMG") is not None:
                 fails.append("the plain precompiled package STARTED under kern_mega")
             if any(l.startswith("kern_mega FAULT") for l in box.lines()):
@@ -115,9 +116,11 @@ def leg(t, out, name, pkg, lst, rom_beside, where, game=False):
             box.shot(os.path.join(out, "end.png"))
             print("rdgaotmega: %s: %s" % (name, "refused" if not fails else "; ".join(fails)))
             return ["%s: %s" % (name, f) for f in fails]
-        end = time.time() + (GAME_SECS if game else LIMIT)
+        end = time.time() + (GAME_SECS * 10 + 30 if game else LIMIT)
+        g0 = box.ptime() if game else 0     # --rom: GAME_SECS of GUEST time
         view = None
-        while time.time() < end:
+        while time.time() < end and not (
+                game and box.ptime() - g0 >= GAME_SECS * box.ips):
             time.sleep(3)
             if any(l.startswith("kern_mega FAULT") for l in box.lines()):
                 break
@@ -222,9 +225,9 @@ def leg(t, out, name, pkg, lst, rom_beside, where, game=False):
     if any(b - a != 0x10000 for a, b in zip(xlin, xlin[1:])):
         fails.append("the code images are not 64KB apart in one pool block: %s"
                      % " ".join("%06X" % x for x in xlin))
-    if where == "high" and (b1lin < 0x100000 or bstep != 0x8000):
+    if where == "high" and (b1lin < 0x100000 or bstep != 0x4000):
         fails.append("bank 1 at linear %06X, bank 2 %X past it: the banks were not "
-                     "put in place (above 1MB, the run's 32KB step)" % (b1lin, bstep))
+                     "put in place (above 1MB, the windows' 16KB step)" % (b1lin, bstep))
     if where == "one" and bstep != 0x4000:     # (one claim: a window a bank,
         fails.append("banks 1 and 2 are %X apart, not 16KB: not one claim"   # 16KB
                      % bstep)                  #   apart; the claim may be high)

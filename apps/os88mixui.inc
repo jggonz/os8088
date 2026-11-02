@@ -5,9 +5,18 @@
 ; Clobbers AX/BX/CX/DX/SI/DI/BP, preserves ES. Caller supplies MIXUI_BUFFER.
 %define GFXE_TEXT
 %define GFXE_NOBOLD
+%ifndef MIXUI_H                 ; the band's rows: 48, or as few as 44 - the
+  %define MIXUI_H 48            ; last thing drawn ends at row 43 (the long
+%endif                          ; scale marks), so rows 44..47 are always the
+%if MIXUI_H < 44                ; cleared ground. An includer whose ground
+  %error "os88mixui.inc: the scale marks end at row 43"  ; under them is
+%endif                          ; already that white may stop at 44 (SOUND.DRV)
 %define GFXE_BAND_W 176
-%define GFXE_BAND_H 48
+%define GFXE_BAND_H MIXUI_H
 %define GFXE_BAND_BUF MIXUI_BUFFER
+%ifdef MIXUI_BAND_SEG           ; ...an offset in the segment this word holds
+  %define GFXE_BAND_SEG MIXUI_BAND_SEG  ; rather than in DS (os88gfx.inc's
+%endif                          ; GFXE_BAND_SEG; SOUND.DRV's popup claim)
 %include "os88gfx.inc"
 %define DEC_U16
 %include "os88dec.inc"
@@ -29,7 +38,7 @@ mixui_draw:
     xor ch, ch
     mov [mixui_value], cx
     push si
-    mov word [gfxe_bh], 48
+    mov word [gfxe_bh], MIXUI_H
     mov ax, 0FFFFh
     call gfxe_bclear
     mov byte [gfxe_tsty], 0
@@ -48,16 +57,28 @@ mixui_draw:
     call gfxe_text
     ; Recessed double rail. The white center leaves a clean, crisp slot on
     ; monochrome cards. Small scale marks sit below, clear of the thumb.
-    MX_RECT 12, 24, 152, 4, 0
-    MX_RECT 13, 26, 150, 1, GFXE_INV
-    MX_RECT 12, 40, 1, 4, 0
-    MX_RECT 49, 40, 1, 2, 0
-    MX_RECT 87, 40, 1, 4, 0
-    MX_RECT 124, 40, 1, 2, 0
-    MX_RECT 162, 40, 1, 4, 0
-    MX_RECT 0, 25, 6, 1, 0
-    MX_RECT 169, 25, 7, 1, 0
-    MX_RECT 172, 22, 1, 7, 0
+    ; The ten fixed ones are a TABLE (mixui_rects): five bytes a rectangle
+    ; where MX_RECT's five stores and a call were twenty.
+    mov si, mixui_rects
+.rect:
+    lodsb
+    mov [gfxe_tsty], al         ; the style...
+    xor ax, ax
+    mov bx, ax
+    mov cx, ax
+    mov dx, ax
+    lodsb
+    mov dl, al                  ; ...h, w, y, then x into AX
+    lodsb
+    mov cl, al
+    lodsb
+    mov bl, al
+    lodsb
+    push si
+    call gfxe_bfill             ; (which spends SI)
+    pop si
+    cmp si, mixui_rects_end
+    jb .rect
     ; 12 + percent*150/100 is the thumb CENTER, not its left edge.
     mov ax, [mixui_value]
     mov bx, 150
@@ -80,15 +101,35 @@ mixui_draw:
     mov al, CWHITE
     mov ah, CBLACK
     call OSAPI_GFX_BLIT1_PEN
+%ifdef MIXUI_BAND_SEG
+    mov es, [MIXUI_BAND_SEG]    ; the band's segment for the blit
+%endif
     mov si, MIXUI_BUFFER
     mov bp, 22
     mov ax, [mixui_x]
     mov bx, [mixui_y]
     mov cx, 176
-    mov dx, 48
+    mov dx, MIXUI_H
     call OSAPI_GFX_BLIT1
     pop es
     ret
+
+; mixui_draw's fixed rectangles, drawn in this order: style, h, w, y, x
+%macro MX_ROW 5                 ; x, y, w, h, style - MX_RECT's order
+    db %5, %4, %3, %2, %1
+%endmacro
+mixui_rects:
+    MX_ROW 12, 24, 152, 4, 0
+    MX_ROW 13, 26, 150, 1, GFXE_INV
+    MX_ROW 12, 40, 1, 4, 0
+    MX_ROW 49, 40, 1, 2, 0
+    MX_ROW 87, 40, 1, 4, 0
+    MX_ROW 124, 40, 1, 2, 0
+    MX_ROW 162, 40, 1, 4, 0
+    MX_ROW 0, 25, 6, 1, 0
+    MX_ROW 169, 25, 7, 1, 0
+    MX_ROW 172, 22, 1, 7, 0
+mixui_rects_end:
 
 ; Pointer to percentage. CX=screen x, AX=band's left. Values clamp outside
 ; the track; the center mapping is exactly the painter's inverse.

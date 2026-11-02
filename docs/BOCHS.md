@@ -41,7 +41,7 @@ starts if that display is not up:
 | B: | `build/apps120.img` by default, or `--b IMG`; `--btype 1_2` or `1_44` is the DRIVE, the media size is read off the image |
 | C: | a 20MB ATA disk (615/4/17) - see `--c` below |
 | mouse | PS/2, captured with ctrl + middle button (`toggle=ctrl+mbutton`) |
-| E9 | `port_e9_hack`: every byte the kernel writes to port E9h lands in `OUT/e9.out` |
+| E9 | `port_e9_hack`: every byte written to port E9h lands in `OUT/e9.out` - a test package's lines, the debugger's transcript, and the KERNEL's only on a `MEGADIAG=1` or `MEGATRAP=1` build: a shipped kern_mega writes nothing there (`kernel.asm`'s `MEGA_E9`), so a script reads the same facts out of its state (*Waiting on the guest*) |
 | sound | `--sb`: an SB16 at 220h, IRQ 5, DMA 1, its output written to `OUT/sb.wav` |
 | network | `--ne2k`: an NE2000 at 300h, IRQ 10, on Bochs's own slirp (the host is 10.0.2.2). `$OS88_BOCHS_SLIRP` names a slirp config for it - a first line `# slirp config`, then up to five `hostfwd = tcp::2121-:21` lines - which is how a HOST client reaches a server in the guest: FTPD's control port and four of its passive ports, with `curl --ftp-skip-pasv-ip` (KERN-MEGA-PLAN 14.46) |
 | clock | `slowdown` at `cpu: ips=4000000` - see *The clock* below |
@@ -162,7 +162,11 @@ each read a stop that costs the guest nothing - and `megavidv2` spaces its
 keys with it: its "Space again a second in, while the blocks are coming"
 was a host second, which with four Bochs to a core paused the play before
 its first frame, so both of its tails were wrong (old row 2 of 2 red beside
-four Bochs rows, new 3 of 3 green). What
+four Bochs rows, new 3 of 3 green). Every Bochs row's holds, gaps and tails
+are guest time now - thirty-odd standalone sites and the shim rows'
+`fmrefuse` and `heapmap` - and `tests/unit/t_bochssleep.py` (fast tier)
+fails a `time.sleep` in a Bochs row's script that is not a poll's interval,
+a sub-0.1 s event spacing or marked `# host: <why>`. What
 `slowdown` still does NOT give is a smooth map from host time to guest time
 (it holds the guest up to a second ahead of the clock), so a burst of guest
 time can follow a host stall. **That is why input whose SPACING matters is not host-timed**:
@@ -214,14 +218,13 @@ python3 tools/os88bochs.py stop                  # end every Bochs on the box
 | `--a IMG` | A:'s image in place of the tree's `mega.img` - a kern_mega system disk with something changed, such as `make megacdtest`'s |
 | `--cd ISO` | an ATAPI CD-ROM, the secondary master at 170h, holding an ISO 9660 image (CDROM.DRV, SPEC.md 119). **Data only**: Bochs 2.7 answers PLAY AUDIO and a SubQ READ SUB-CHANNEL "not implemented", so `build/megacdsim.img`'s `-DCDSIM_AUDIO` driver is what gives CDRack a TOC here, and 86Box's `vm/286-mega-cdrom` is where a disc plays (KERN-MEGA-PLAN 14.68). `--cfg 0x101` wants SOUND.DRV and CDROM.DRV |
 
-`boot` returns once Bochs is up and leaves it running; the machine outlives the
+`boot` returns once the kernel has switched to protected mode (`Box.wait_pm`,
+which reads `[mega_on]`) and leaves it running; the machine outlives the
 command. The desktop is up about **6 seconds** after reset (it was quoted at
 80 here). Wait for it by condition, not by a fixed sleep - from a script,
-`Box.up()` (below); by hand:
-
-```
-until grep -aq "kern_mega: protected mode" build/bochs/e9.out; do sleep 1; done
-```
+`Box.up()` (below). A shipped kern_mega says nothing on E9, so `grep`ping
+`e9.out` for `kern_mega: protected mode` only works on a `MEGADIAG=1` tree
+(`--build build/megadiag`).
 
 ## Driving it: tools/os88bochsui.py
 
@@ -298,7 +301,12 @@ double-click passes `hold=False` (tests/assocopen.py), or the hold lands
 between its two presses.
 
 | `box.in_fsx()` | an exclusive fullscreen bracket is running (`[fsx_task]` not FFh) - ui_task is FROZEN inside one, so `ui_done` cannot end there; wait on this into and out of it |
-| `box.fault()` | the first `kern_mega FAULT` line, or None; every `until` raises on one at once rather than waiting out its budget |
+| `box.wait_pm(secs)` | True once `[mega_on]` says the switch is made - where a row waited for `kern_mega: protected mode` on E9, which a shipped kern_mega no longer writes |
+| `box.fault()` | a FATAL fault's line, `kern_mega FAULT vv err eeee at cccc:iiii sp ssss`, read off the glass line `mega_report` composes (`mega_fbuf`) once `[mega_infault]` is set - or None. Every `until` asks it (at most once a second) and raises on one at once rather than waiting out its budget |
+| `box.faults()` | `fault()`'s line, and `kern_mega CLOSED NAME vv at cccc:iiii` when a package has been closed for a fault (`[mega_fkn]`, the toast in `mega_fkmsg`) - the LAST incident only, so a row counting several polls it (`tests/megaflt.py`). `box.said()` is `lines()` plus these, for a row that scans for both kinds |
+| `box.arm_trip()`, `box.wait_trip(secs)` | a DOS trip's return: `[mega_dwoke]` written 0 before the trip and read 1 once it is home, with the kernel resident again (`box.home()`) - where a row waited for `kern_mega: unparked`. `box.park()` is the KB and base the park held |
+| `box.wait_resumed(secs)` | a hibernated session woken: `[hb_resumes]` past 0 with the kernel home and switched - where a row waited for `kern_mega: resumed` |
+| `box.mod_base(name)` | an on-demand module's linear base off its `mod_tab` row (above 1MB once `mod_hi` moved it) - where a row read `kern_mega: above 1MB: NAME` |
 | `box.shot(path)` | a screenshot after `GLASS` (0.45 s): the X window lags the guest by up to one of Bochs's 5 Hz VGA updates |
 | `m.fbuf()` (os88megabochs) | the same window, after `GLASS` only while the guest RUNS: a stopped Bochs paints nothing, and before the clock preload (*The clock*) every host second spent stopped was run back as a guest sprint on the resume, so a sleep there only handed the guest time (`mega-vidfskeysvga4` looked at its toast 4 times instead of 11) |
 | `box.xd(...)`, `box.key(...)`, `box.type(...)` | xdotool on THIS machine's display - one call at a time (a thread wiggling the mouse beside a click is safe) |
@@ -544,12 +552,16 @@ beside it (`irqgrab OS88_BOCHS_MOUSE=serial`).
 
 ## Reading it
 
-* **`OUT/e9.out`** - the kernel's own trace. A `kern_mega FAULT vector VV
-  stack: ...` line is a fault with sixteen stack words and the registers;
-  MEGARUN names every package before it starts one. The menu-bar diagnostics
-  (`NMI`, `RST`, `FDC RESET`, `RFL`, `Q`, `DOSP`) are echoed here too - on a
-  `MEGADIAG=1` build (`make megadiag`), the only one that draws them since
-  KERN-MEGA-PLAN 14.65.
+* **`OUT/e9.out`** - MEGARUN names every package before it starts one, and
+  the debugger's transcript lands here. The KERNEL's own trace is here only
+  on a `MEGADIAG=1` build (`make megadiag`) or a `MEGATRAP=1` one: a
+  `kern_mega FAULT vector VV stack: ...` line is a fault with sixteen stack
+  words and the registers, and the switch, a package closed, a park, a
+  module above 1MB and the native floppy's verdicts each have a line; the
+  menu-bar diagnostics (`NMI`, `RST`, `FDC RESET`, `RFL`, `Q`, `DOSP`) are
+  echoed too. A shipped kern_mega writes nothing to E9 (`kernel.asm`'s
+  `MEGA_E9`) - its fatal fault is the line under the menu bar and
+  `box.fault()` reads it.
 * **`OUT/bochs.log`** - Bochs's own errors. A triple fault reads
   `exception(): 3rd (13) exception with no resolution, shutdown status is
   0ah, resetting`; one of those per reflection is NORMAL on the 286 path, which
@@ -579,8 +591,8 @@ beside it (`irqgrab OS88_BOCHS_MOUSE=serial`).
 
 **Boot to the desktop and look.**
 ```
-python3 tools/os88bochs.py boot
-until grep -aq "protected mode" build/bochs/e9.out; do sleep 3; done; sleep 15
+python3 tools/os88bochs.py boot      # (returns once it has switched)
+sleep 15
 python3 tools/os88bochsui.py shot desk.png
 ```
 
@@ -612,7 +624,10 @@ python3 tools/os88bochs.py boot --c keep --bootc --noa --out build/bochshd
 ```
 
 **Restart.** System menu -> Restart. kern_mega warm-resets through the 8042,
-and the second `kern_mega: protected mode` in e9.out is the proof.
+and the boot toast (`Entered protected mode`) coming up again is the proof -
+or, on a `MEGADIAG=1` build, the second `kern_mega: protected mode` in
+e9.out. (`[mega_on]` is not: a warm reset keeps RAM, so it reads 1 until the
+new kernel's image is loaded over it.)
 
 **Count the #GP fixups: the trap census** (KERN-MEGA-PLAN 10.3, items
 55-62). Every fixup is correct and costs a fault, so a loop that leans on one
@@ -690,8 +705,8 @@ kern_mega puts no field reading on the glass (KERN-MEGA-PLAN 14.65).
    first read (LBA 0, at the 9-sector fallback geometry) makes `mega_fd13`
    guess 250 kbps, which a real 765 refuses for a 1.44MB disk and the BIOS
    then reads through a reflection. Bochs reads it natively, so no run here
-   prints `FD BIOS` (a `MEGADIAG=1` toast; E9's `kern_mega: floppy fell back`
-   line on every build) and that fallback is the field machine's to exercise
+   prints `FD BIOS` (a `MEGADIAG=1` toast, and E9's `kern_mega: floppy fell
+   back` line, which a shipped kern_mega no longer writes) and that fallback is the field machine's to exercise
    (KERN-MEGA-PLAN 10.3 item 29).
 
 The field machine is the owner's Packard Bell Victory 286 (docs/FIELD-MACHINES.md).

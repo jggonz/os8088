@@ -496,6 +496,14 @@ rw_entry:
 %else
 .nodoc:
 %endif
+%ifdef PKG_MEGA
+    call OSAPI_CPU_INFO             ; kern_mega's arm: under CPU_F_PM the
+    and ah, CPU_F_PM                ;   cartridge's banks are addressed in
+    mov [rw_pm], ah                 ;   place above 1MB (rwbank.inc,
+    jz .real                        ;   REALDMG-SPEC 10.3.1) - and it is
+    mov word [rw_tpl+WT_TITLE], rw_unttl  ;   not real mode any more, so the
+.real:                              ;   title bar owns up: (Un)RealDMG
+%endif
     mov si, rw_tpl
     call OSAPI_WM_CREATE            ; BX = the window
     jc .refused
@@ -508,11 +516,6 @@ rw_entry:
     OS88_REGION_MOVABLE rw_reloc
     mov [rw_dsel], ds               ; (our data, for code entered with DS
                                     ;   not ours: rw_dscanhk)
-%ifdef PKG_MEGA
-    call OSAPI_CPU_INFO             ; kern_mega's arm: under CPU_F_PM the
-    and ah, CPU_F_PM                ;   cartridge's banks are addressed in
-    mov [rw_pm], ah                 ;   place above 1MB (rwbank.inc,
-%endif                              ;   REALDMG-SPEC 10.3.1)
     mov si, rw_menus
     call OSAPI_MENU_SET
     mov si, rw_about
@@ -673,7 +676,7 @@ rw_dsel         dw 0                ; our DATA segment, for code entered
                                     ;   with DS somebody else's (rw_reloc)
 %ifdef PKG_MEGA
 rw_pm           db 0                ; CPU_F_PM at entry: kern_mega's arm
-rw_xsel         dw 0                ; the bank run's first selector
+rw_xsel         dw 0                ; the banks in place: the first window
 rw_jtsel        dw 0                ; the block table's selector, or 0 (rw_jtx)
 rw_jtsub        dw 0                ; ...or in the claim under CPU_F_PM
                                     ;   (OSAPI_XMEM_RUN, REALDMG-SPEC 10.3.1)
@@ -2607,9 +2610,7 @@ rw_unload:
     mov byte [rw_ntc], 0
     cmp byte [rw_bcache], 0         ; the ROM: the bank cache's store and
     je .one                         ;   slots, or its one claim
-    mov ax, [rw_xbase]
-    mov dx, [rw_xbase + 2]
-    call OSAPI_XMEM_FREE            ; (its run of selectors with it)
+    call rw_xfree                   ; (or the banks in place, 10.3.1)
     xor dx, dx
     xchg dx, [rw_slotseg]
     or dx, dx                       ; (none: the banks in place, 10.3.1)
@@ -4819,6 +4820,9 @@ RW_MW           equ MENU_MAXCH      ; glyphs an item, its mark and key with it
     db 0
 %endmacro
 
+%ifdef PKG_MEGA
+rw_unttl:       db '(Un)'           ; the title under CPU_F_PM runs on into
+%endif                              ;   rw_ttl's: '(Un)RealDMG'
 rw_ttl:         db 'RealDMG', 0
 rw_m_mach:      db 'Machine', 0
 rw_i_mach:      dw rw_it_load + 1, rw_it_reset + 1, rw_it_pause + 1, rw_it_fs
@@ -4924,7 +4928,7 @@ rw_it_sep:      db MENU_DIS, '----------------------', 0
     RW_MI rw_it_plys, 'Stop Replay', 'F7'
 rw_s_prfst:     db 'Static reads the profile', 0
 rw_s_jroom:     db 'No room: Interpreter', 0
-rw_s_bignx:     db 'Cache: from the next game', 0
+rw_s_bignx:     db 'Cache: for the next game', 0
 rw_s_cfg:       db 'REALDMG.CFG', 0
 rw_spdit:       dw rw_it_spd0, rw_it_spd1, rw_it_spd2, rw_it_spd3
 rw_sndit:       dw rw_it_snd0, rw_it_snd1, rw_it_snd2
@@ -4948,7 +4952,7 @@ rw_s_slow1:     db 'Windowed is slow:', 0
 rw_s_slow2:     db 'Alt+Enter for', 0
 rw_s_slow3:     db 'Full Screen', 0
 rw_s_stop2:     db 'an invalid opcode', 0
-rw_s_big:       db 'REALDMG: over 256K wants XMS', 0
+rw_s_big:       db 'REALDMG: needs more XMS', 0
 rw_s_notrom:    db 'REALDMG: not a GB ROM', 0
 rw_s_cgb:       db 'REALDMG: needs GB Color', 0
 rw_s_mbc:       db 'REALDMG: MBC '

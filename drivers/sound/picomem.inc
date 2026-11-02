@@ -374,6 +374,9 @@ pm_init:
     popf
 
 .snd:                           ; --- 3: the AdLib, then the SB's IRQ -------
+    mov al, PMC_SBONOFF         ; the DSP OFF first (SPEC.md 34.10.2): the
+    xor bx, bx                  ; firmware MOVES an active one to any port
+    call pm_cmd                 ; asked, over CMS's 220h, with no PORTUSED
     mov al, PMC_ADLIB
     mov bx, 1
     call pm_cmd
@@ -461,6 +464,18 @@ pm_undo:
 .out:
     ret
 
+; --- attach-only state and tables: only pm_init and sb.inc's discovery (both
+; inside DRVV_ATTACH) read or write these, so they leave the claim with them
+pm_irqs:    db 7, 5, 3, 0       ; sb.inc's own candidate order, less IRQ 2:
+                                ; PMINIT will not offer it and an XT's line 2
+                                ; is the one a card is least likely to own.
+                                ; sbl_f_irqdisc maps n to candidate (7-n)/2,
+                                ; which holds for these three and not for 2
+pm_pmirq:   db 0                ; the card's OWN (multiplexer) IRQ, 0 = unknown
+pm_sbports: dw PM_SB_PORT, 0x240, 0x230, 0x250, 0x260, 0
+                                ; PM_SB_PORT first, then sbl_bases' order less
+                                ; 210h, which PMINIT does not offer either
+pm_irq:     db 0                ; the line the firmware accepted, 0 = none
 %endmacro
 %ifndef SND_SPLIT
     PM_ONCE
@@ -491,9 +506,19 @@ PM_RACE      equ 32             ; bytes in ~100 bus cycles: a racing channel
 PM_RACEN     equ 100            ; ...and the bus cycles between the two reads
 PM_RCHK      equ 18             ; ...asked on this many ticks a stream: a second
 
+; --- PM_RES: RESIDENT ONLY ON A MACHINE WITH THE CARD (SPEC.md 34.15.1) -------
+; pm_runaway and pm_tick. Expanded HERE unless SND_SPLIT is set; SOUND.DRV
+; expands PM_RES in its own run, between snd_keep and snd_keeppm, which the
+; attach keeps only when pm_init found a card ([pm_base]). pm_tick is reached
+; only through DSV_TICK, which pm_tickpub publishes on that same test, and
+; pm_runaway only from sbl_tick, which asks [pm_up] first in SOUND.DRV (a
+; package that includes this file asks it inside, as it always did).
+%macro PM_RES 0
 pm_runaway:
+%ifndef SND_SPLIT
     cmp byte [pm_up], 0
     je .ret
+%endif
     cmp byte [sbl_drqmask], 0
     jne .ret
     cmp byte [pm_rchk], 0
@@ -592,6 +617,13 @@ pm_tick:
     jmp sbl_tick                ; the Sound Blaster's own duties, which ask
                                 ; [sbl_str_act] first and so cost a compare
                                 ; on a machine whose DSP tier is off
+%endif                          ; PM_CORE
+%endmacro
+%ifndef SND_SPLIT
+    PM_RES
+%endif
+
+%ifndef PM_CORE
 
 ; -----------------------------------------------------------------------------
 ; pm_tickpub - DSV_TICK is pm_tick on a card pm_init found; SI = the table
@@ -606,17 +638,7 @@ pm_tickpub:
 %endif                          ; PM_CORE
 
 ; --- state and tables (a driver has no .bss - drivers/os88drv.inc) -----------
-pm_irqs:    db 7, 5, 3, 0       ; sb.inc's own candidate order, less IRQ 2:
-                                ; PMINIT will not offer it and an XT's line 2
-                                ; is the one a card is least likely to own.
-                                ; sbl_f_irqdisc maps n to candidate (7-n)/2,
-                                ; which holds for these three and not for 2
 pm_base:    dw 0                ; the card's command port, 0 = no card found
-pm_pmirq:   db 0                ; the card's OWN (multiplexer) IRQ, 0 = unknown
-pm_sbports: dw PM_SB_PORT, 0x240, 0x230, 0x250, 0x260, 0
-                                ; PM_SB_PORT first, then sbl_bases' order less
-                                ; 210h, which PMINIT does not offer either
-pm_irq:     db 0                ; the line the firmware accepted, 0 = none
 pm_up:      db 0                ; 1 = we turned the DSP on and owe an undo
 pm_keepc:   db 0                ; pm_tick's count toward PM_KEEPT
 pm_rchk:    db 0                ; pm_runaway's ticks left this stream
