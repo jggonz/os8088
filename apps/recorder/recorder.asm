@@ -676,6 +676,8 @@ rc_ontimer:
     call rc_poll
     call OSAPI_WM_CLIP_SET          ; nothing armed a region for a timer
     jc .hid                         ; (SPEC.md 13.9): covered or minimized
+    cmp byte [rc_abon], 0           ; ...or under the About card, which is
+    jne .hid                        ; opaque about the face (20.5.1)
     cmp byte [rc_st], RC_REC
     jne .end
     call rc_draw_status             ; the live count (clobbers BX)

@@ -20495,7 +20495,7 @@ rows**, which are at `fm_cx + 24`. Those rows are the ~40 strings that dominate
 | ArtfulType | ≡ 3 (measured), and a literal 14 | its own menu bar and status; 8 and 16 elsewhere are fine |
 | HDD Control Panel page | `HDP_LX` 2 | **left** — a panel page draws on open and on a click. `HDP_F1X-10` 56 and `HDP_F2X-10` 104 are already aligned; §11.94.4 |
 | HDD tool window | `HTW_LX` 4 | |
-| Recorder | 4 | **left** — two strings in `rc_draw_status`, whose one caller is `rc_draw_all`. Repaint-only; §11.94.4 |
+| Recorder | 4 | **left** — two strings in `rc_draw_status`, called by `rc_draw_all` and, during a take, by the record pump's timer every `RC_PUMP` ticks (§35); §11.94.4 |
 | ~~Minesweeper~~ | ~~4~~ | **protected, not a defect** — its densest text, the number on every revealed cell, is `+4` = an 8px glyph centred in a 16px cell; the mode text is `MN_BOARD_W/2`. Only a 2-glyph counter is genuinely off-grid. §11.94.4 |
 | ~~Piano, Arkanoid~~ | ~~2~~ | **left, and mostly not movable** — Piano's `PN_MSG_X` is already 112, and its key letter is `key_x + 5` off §11.98.1's run-time scaled keyboard; 4 of Arkanoid's 6 text sites are `OSAPI_FONT_WIDTH`-centred. What is left is one label and one score. §11.94.4 |
 | ~~Task Manager~~ | ~~five literal `+6` sites~~ | **done, and it was four** — §28.5: three of the five are `add ax, 6` on FRAME RECTS (the CPU graph, the bar, the RAM map), not pens. The four real ones are the memory page's XMS line and the heap page's three summaries, now at `TM_PEN`; §28.5 |
@@ -20550,8 +20550,8 @@ that row.
 centred; a fifth is a letter centred in a power-up body. The sixth is the score
 at `cx, 2`.
 
-**Recorder** is two strings in `rc_draw_status`, whose only caller is
-`rc_draw_all` — repaint-only. **The HDD pages** draw on open and on a click.
+**Recorder** is two strings in `rc_draw_status`, drawn by `rc_draw_all`
+and, during a take, by the record pump's timer (§35). **The HDD pages** draw on open and on a click.
 **Missile Command** computes every pen, and §48.17 already reduced its status
 strip to the span between the first and last differing cell.
 
