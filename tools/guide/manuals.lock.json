@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "e978c0278",
+  "stamped": "a593459aa",
   "strings": "172e5a682e5edddb",
-  "why": "real mode defers the first run to the tick (SPEC.md 124.31.8)"
+  "why": "S24: GetFreeSpace on kern_mega, WinExec byte read, bind slots shared by handler"
  },
  "WIN16_TXT": {
   "sources": [
