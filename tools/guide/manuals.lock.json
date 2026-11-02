@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "bde23c885",
+  "stamped": "0b0e9c6c1",
   "strings": "add72eb5eed79b2d",
-  "why": "midiOut over SOUND.DRV's MPU-401 (SPEC.md 124.32.7); error-text answers MMSYSERR_BADERRNUM"
+  "why": "the arm's library-part thunk calls are indirect (QEMU wrap)"
  },
  "WIN16_TXT": {
   "sources": [
