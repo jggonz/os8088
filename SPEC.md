@@ -226834,6 +226834,12 @@ parent's client, and nothing in os8088 knows it exists:
   of losing it. A dialog WIN16 runs keeps its text at once, as before.
   `GetWindowText` still reads the text without sending `WM_GETTEXT`.
 - `DestroyWindow` takes its children with it, each told `WM_DESTROY`.
+  **A window already going answers at once** (2026-11-02): a
+  `DestroyWindow` on one whose `WM_DESTROY` is being sent, or on a child of
+  one, answers TRUE and sends nothing. MSCUISTF's billboard window kills its
+  timer and destroys itself again from its own `WM_DESTROY`; each call sent
+  `WM_DESTROY` once more, and Arcade's setup spun there ten million calls
+  after its last file was copied.
 
 **Coordinates.** Client coordinates are relative to the os8088 content
 origin (`OSAPI_WM_CONTENT`).

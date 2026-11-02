@@ -1210,7 +1210,9 @@ w16_destroyx:
     call w16_hwnd2rec
     pop dx
     jc .no
-    call w16_uncover                ; a visible child: its parent repaints
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz w16_dwnext.done             ; going already: its WM_DESTROY is being
+    call w16_uncover                ;   sent, and is not sent twice                ; a visible child: its parent repaints
     or byte [bx + W16W_FLAGS], W16WF_DYING
 .mark:                              ; every window inside it, or owned by
     xor ah, ah                      ;   one that goes, goes too
@@ -1267,6 +1269,7 @@ w16_dwnext:
     add bx, W16W_SIZE
     cmp bx, w16_wnd + W16_MAXWND * W16W_SIZE
     jb .f
+.done:
     mov ax, dx                      ; none left: the final answer
     xor dx, dx
     jmp si
