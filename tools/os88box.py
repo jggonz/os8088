@@ -711,6 +711,28 @@ def launch(vm, name=None, a=None, b=None, c=None, d=None, mem=None, sets=(),
             cfg_set(order, secs, "Floppy and CD-ROM drives", key, None)
             continue
         cfg_set(order, secs, "Floppy and CD-ROM drives", key, os.path.abspath(path))
+    # The PicoMEM (tools/picomem, docs/plans/completed/PICOMEM-EMU-PLAN.md): its
+    # library resolves against the PROFILE like a disk does, and its microSD
+    # image is COPIED into the run like one, so a SaveCfg or a write to an
+    # image mounted from the card never reaches build/. OS88_PMHOST names
+    # another library (a v2 build, a firmware being worked on).
+    if "PicoMEM #1" in secs:
+        lib = os.environ.get("OS88_PMHOST") or cfg_get(secs, "PicoMEM #1", "lib")
+        if lib:
+            cfg_set(order, secs, "PicoMEM #1", "lib",
+                    os.path.abspath(os.path.join(srcdir, lib)))
+        # OS88_PMSD names another card - a row's own (tools/picomem/mksd.py)
+        sd = os.environ.get("OS88_PMSD") or cfg_get(secs, "PicoMEM #1", "sd_image")
+        if sd:
+            sd = os.path.normpath(os.path.join(srcdir, sd))
+            if not os.path.isfile(sd):
+                raise SystemExit("os88box: the PicoMEM's SD image %s does not exist - "
+                                 "tools/picomem/mksd.py makes one" % sd)
+            if not inplace:
+                dst = os.path.join(run, "picomem-sd.img")
+                shutil.copyfile(sd, dst)
+                sd = dst
+            cfg_set(order, secs, "PicoMEM #1", "sd_image", os.path.abspath(sd))
     for k in ("confirm_exit", "confirm_reset", "confirm_save"):
         cfg_set(order, secs, "General", k, "0")
     # No GL in a container, and an offscreen platform has no GL context.

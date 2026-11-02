@@ -55,6 +55,7 @@ import os88marty   # noqa: E402
 import os88mouse   # noqa: E402
 import os88ui      # noqa: E402
 import dispapps    # noqa: E402
+import os88build   # noqa: E402
 import os88rom     # noqa: E402
 import os88sym     # noqa: E402
 import dispcp      # noqa: E402
@@ -176,9 +177,9 @@ def main():
     with tempfile.TemporaryDirectory(prefix="rombig-") as tmp:
         subprocess.run([sys.executable, os.path.join(ROOT, "tools",
                         "os88rom.py"), "kernel", "--build",
-                        os.path.join(ROOT, "build"), "--out", tmp], check=True)
+                        os.path.join(ROOT, os88build.at("build")), "--out", tmp], check=True)
         good = os.path.join(tmp, "osrom-big.bin")
-        _img, t = os88rom.build_kernel(os.path.join(ROOT, "build"), "KERN_BIG")
+        _img, t = os88rom.build_kernel(os.path.join(ROOT, os88build.at("build")), "KERN_BIG")
         sites = t["lists"]["mods"].get(EQ["MOD_CTRL"], [])
         vg = t["lists"]["vgab"]
         want(len(vg) == 1, "the ROM carries the decoder's one segment word "

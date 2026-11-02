@@ -243,8 +243,7 @@ def main():
         box.ui_done(what, secs=secs)
 
     def e9bad():
-        return [l for l in box.lines() if l.startswith("kern_mega CLOSED")
-                or l.startswith("kern_mega FAULT")]
+        return box.faults()
 
     def canvas(name):
         from PIL import Image
@@ -273,7 +272,7 @@ def main():
 
     exp = picture()
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()
@@ -359,7 +358,7 @@ def main():
         box.ui_done("the card")
         box.key("Return")
         box.ui_done("the card's OK", secs=120)
-        time.sleep(2)
+        box.guest_sleep(2)              # GUEST seconds (Box.guest_sleep)
         box.ui_done("the dialog", secs=120)
         box.key(*(["BackSpace"] * 12))
         box.type("OUT.BMP")
@@ -412,7 +411,7 @@ def main():
     rows = bmp_rows(got) if got else None
     want(rows == exp, "OUT.BMP on B: is the master to the byte (%s)" %
          ("missing" if got is None else "%d bytes" % len(got)))
-    want(not e9bad(), "no CLOSED and no FAULT on E9")
+    want(not e9bad(), "no CLOSED and no FAULT (the kernel's state)")
     print("megapixel: %.0fs under Bochs" % (time.time() - t0))
     for f in FAILS:
         print("FAIL: " + f)

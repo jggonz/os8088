@@ -4424,11 +4424,8 @@ gfx_sub_arm:
     sub ax, cx
     mul di
     mov [gfx_sub_ps], ax
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
+    CLC_OR_STC .no              ; (kernel size pass 15: its one caller reads
+.out:                           ; CF alone)
     jmp kret_bp
 
 ; -----------------------------------------------------------------------------
@@ -4770,13 +4767,11 @@ gfx_pen_dis:
 thm_pen_live    equ gfx_pen_live
 thm_pen_dis     equ gfx_pen_dis
 %else
-thm_pen_live:                   ; [gfx_color] and [gfx_dis] are adjacent (the
-    push ax                     ; %error under gfx_disink), so the pen and the
-    mov al, [thm_inkc]          ; flag are ONE word store - and MOV writes no
-    mov ah, 0                   ; flag, so neither routine touches the
-    mov [gfx_color], ax         ; caller's
-    pop ax
-    ret
+thm_pen_live:                   ; the flag down, then thm_ink's own door for
+    mov byte [gfx_dis], 0       ; the pen (kernel size pass 15: -4 against the
+    jmp short thm_ink           ; one word store into the adjacent pair). MOV
+                                ; and JMP write no flag, so neither routine
+                                ; touches the caller's
 thm_pen_dis:
     push ax
     mov al, [thm_inkc]          ; CDGRAY on white is a legible grey and on
@@ -5091,12 +5086,7 @@ gfx_unlock:
 gfx_scroll:
     GFXAUDIT_HOOK
     call cur_unlazy              ; off the clip list (SPEC.md 11.3): 7.1.4
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    call kent_di                ; the same six words (kernel size pass 15)
     GFXDENTERR                  ; a blit cannot take a sub-rect (SPEC.md 11.3),
                                 ; so it goes onto the display holding its top
                                 ; left - and the two edge tests below then

@@ -19,8 +19,9 @@ name, and asserts:
   4. the card wrote the ring: every byte 80h where it was filled with 00h;
   5. verb 2 answers 0 and STOPS it: 10 ticks after the close the count has
      not moved and a ring zeroed again is still all 00h;
-  6. the legacy verb 4 - a grant, the drain task - is untouched: capacity
-     full, paused, 6,000 bytes, and verb 5 reads back captured 80h;
+  6. the grant-and-drain record stream is GONE (verb 4 without
+     SND_OPENF_EXT): it answers 7 and opens nothing - the external ring is
+     the one record path;
   7. made a single-cycle DSP ([sbl_auto] = 0, poked by this script, which is
      the only way MartyPC's DSP 2.01 can be one), verb 4 EXT answers 7.
 """
@@ -114,6 +115,8 @@ def report(r, was_auto):
           % (r["count"], ticks, r["count"] * TICK / max(ticks, 1), RATE))
     check(was_auto == 1, "the driver had an auto-init DSP to begin with "
           "(sbl_auto = %d)" % was_auto)
+    check(r["caps"] & 0x10, "an auto-init DSP advertises SND_CAP_PCM_IN "
+          "(caps %04x)" % r["caps"])
     check(r["r1"] == 7, "a ring across a 64KB page answers 7 (%04x)" % r["r1"])
     check(r["xopen"] & 0xFF == 0, "verb 4 EXT opened the external ring "
           "(%04x)" % r["xopen"])
@@ -137,13 +140,8 @@ def report(r, was_auto):
           "has not moved (%d, %d)" % (r["cons1"], r["cons2"]))
     check(r["q00"] == RL, "...and a ring zeroed after the close is still "
           "all 00h (%d)" % r["q00"])
-    check(r["lopen"] & 0xFF == 0, "the legacy verb 4 opened (%04x)"
-          % r["lopen"])
-    check(r["lst"] == 1 and r["ldx"] == 6000, "...filled its 6,000-byte "
-          "capacity and paused (state %d, %d)" % (r["lst"], r["ldx"]))
-    check(r["lrd"] == 0 and r["lw"] == 0x8080, "...and verb 5 reads back "
-          "what it captured (%04x, %04x)" % (r["lrd"], r["lw"]))
-    check(r["lclose"] == 0, "...and closed (%04x)" % r["lclose"])
+    check(r["lopen"] == 7, "verb 4 into a grant - the old record stream - "
+          "answers 7 and opens nothing (%04x)" % r["lopen"])
     check(r["go"] == 1 and r["r1x"] == 7, "a single-cycle DSP answers verb 4 "
           "EXT with 7 (%04x)" % r["r1x"])
 

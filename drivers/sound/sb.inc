@@ -8,16 +8,16 @@
 ;
 ; Detection (far, behind the SDRV_PROBE FARSHIM): reset scan over the base
 ; list with a bounded poll budget per base, DSP version via E1h, auto-init
-; strategy gate at DSP >= 2.00. IRQ discovery is DEFERRED TO FIRST USE
-; (SPEC.md 34.5), two tiers: a DSP >= 4.00 reads the line straight from
+; strategy gate at DSP >= 2.00. All of it, and the IRQ discovery, runs ONCE
+; at the driver's attach and is not resident after it (SBL_ONCE, SPEC.md
+; 34.5.7). The discovery has two tiers: a DSP >= 4.00 reads the line straight from
 ; CT1745 mixer register 80h (deterministic, nothing fired); older DSPs hook
 ; candidates {7,5,3,2} onto the .text stubs below, F2h triggers an 8-bit
 ; IRQ, and the candidate that fires is accepted (retried once; 2xEh bit 7
 ; is NOT a confirm - it means "response byte waiting" and F2h queues none
-; outside QEMU); the losers are unhooked, and the winner is hooked
-; mouse_init-style (save old
-; vector, install while masked, unmask) onto sbl_isr, staying hooked until
-; snd_unhook.
+; outside QEMU); every candidate is unhooked again, and sbl_attach hooks the
+; winner mouse_init-style (save old vector, install while masked, unmask)
+; onto sbl_isr, staying hooked until sbl_unhook.
 ;
 ; sbl_isr (mou_isr discipline: IF=0 throughout, DS=KERNEL_SEG, no BIOS,
 ; never sti, own EOI): the spurious-IRQ-7 guard first - the interrupt is
@@ -112,28 +112,19 @@
 
 ; --- geometry and states -----------------------------------------------------
 SBL_HALF     equ 2048           ; double-buffer half size (SPEC.md 2.2)
-SBL_RING     equ 0x1000         ; record ring base offset (SPEC.md 2.2)
-SBL_RHALF    equ 2048           ; record ring half size (2 x 2KB = 4KB). It
-                                ; was 4KB halves, and what pays for the cut is
-                                ; the drain task's own pacing bound: one tick
-                                ; of sleep against a half that is 2.49 ticks
-                                ; even at the 15kHz input ceiling (it was
-                                ; 4.97). Still over 2x the pacer, where the
-                                ; PLAYBACK half has no such room - halving
-                                ; SBL_HALF puts a block UNDER one tick above
-                                ; ~18.6kHz and silently underruns the 22 and
-                                ; 44kHz rates (SPEC.md 34.5)
-SBL_DMASZ    equ 0x2000         ; the DMA-visible claim: double buffer +
-                                ; record ring, 8KB - was 12KB. THE ONLY PART
+SBL_RHALF    equ 2048           ; a record ring's default BLOCK: the
+                                ; external ring's block is this >> AH bits
+                                ; 6-7 (SPEC.md 34.6.4), and the capture
+                                ; watchdog is sized for it
+SBL_DMASZ    equ 0x2000         ; the DMA-visible claim: the playback double
+                                ; buffer, 8KB - was 12KB. THE ONLY PART
                                 ; THE 8237 ADDRESSES, and so the only part
                                 ; that has to obey its 64KB page rule, which
                                 ; a smaller claim is strictly easier to place
                                 ; against. The wide-rate double buffer is
-                                ; 2 x 4KB and so fills this exactly; it
-                                ; overlaps the record ring, which is legal
-                                ; because a stream is half-duplex by
-                                ; construction (SPEC.md 34.6) and the guards
-                                ; below hold the arithmetic
+                                ; 2 x 4KB and so fills this exactly. A
+                                ; record stream claims none of it: it is
+                                ; the caller's ring (SPEC.md 34.6.4)
 SBL_POOLKB   equ 20             ; the staging pool's CEILING, in KB: a
                                 ; SEPARATE claim taken on the first grant and
                                 ; released with the last (SPEC.md 51.4). Grant
@@ -189,16 +180,8 @@ SBL_WD_WIDE  equ (2 * (2*SBL_HALF) * 182) / 10    ; wide-rate playback
 SBL_WD_IN    equ (2 * SBL_RHALF * 182) / 10       ; capture
 
 ; --- and the layout rules the comments used to state and nothing enforced ----
-; Each of these held by accident at the old geometry: the record ring began
-; exactly where the double buffer ended, and SBL_RING happened to equal
-; SBL_RHALF. Both are coincidences a resize breaks silently, so they are
-; assembly-time failures now rather than prose.
-%if SBL_RING < 2 * SBL_HALF
-  %error "SBL_RING overlaps the legacy double buffer"
-%endif
-%if SBL_RING + 2 * SBL_RHALF > SBL_DMASZ
-  %error "the record ring does not fit SBL_DMASZ"
-%endif
+; A resize that breaks one of these would break it silently, so they are
+; assembly-time failures rather than prose.
 %if 2 * (2 * SBL_HALF) > SBL_DMASZ
   %error "a wide-rate double buffer does not fit SBL_DMASZ"
 %endif
@@ -223,20 +206,8 @@ SBL_POLLS    equ 4096           ; DSP handshake poll budget (bounded even
                                 ; from ISR context: ~4-8ms of ISA reads)
 
 ; --- detection tables (.text data - far code reads them through DS) ----------
-sbl_bases:                      ; the pinned scan order (SPEC.md 34.2)
-    dw 0x220, 0x240, 0x210, 0x230, 0x250, 0x260, 0
 
 sbl_hpage:    db 0x8B, 0x89, 0x8A   ; DMA 5/6/7's page registers (34.5.5)
-sbl_dsc_irqn: db 7, 5, 3, 2     ; IRQ candidates, pinned order (SPEC.md 34.5)
-sbl_dsc_mbit: db 0x80, 0x20, 0x08, 0x04     ; 8259 mask bits
-sbl_dsc_t:                      ; per candidate, in the same order: the IVT
-    dw 0x3C, sbl_stub7, 0       ; byte offset (int 0Fh/0Dh/0Bh/0Ah), then a
-    dw 0x34, sbl_stub5, 0       ; FAR POINTER that sbl_f_irqdisc's .swap
-    dw 0x2C, sbl_stub3, 0       ; exchanges with the vector: the stub goes
-    dw 0x28, sbl_stub2, 0       ; in and the old vector lands here, and the
-SBL_DSC_N    equ 4              ; second swap puts both back. The segment
-                                ; words are stamped with our CS first
-
 ; =============================================================================
 ; DSP handshake primitives (.text - ISR-adjacent, SPEC.md 34.7). Every poll
 ; carries a timeout (SPEC.md 34.5, binding).
@@ -263,42 +234,13 @@ sbl_dsp_wr:
     loop .poll
     stc
     jmp .out
-.ok:
+.ok:                            ; (CF = 0: the TEST cleared it)
     mov al, ah
     out dx, al                  ; 2xCh is also the write port
-    clc
 .out:
     pop dx
     pop cx
     pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sbl_dsp_rd - read one byte from the DSP
-; in:       [sbl_base] set
-; out:      CF = 0, AL = byte; CF = 1 nothing arrived (timeout, AL trash)
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-sbl_dsp_rd:
-    push cx
-    push dx
-    mov dx, [sbl_base]
-    add dx, 0x0E                ; 2xEh: read-buffer status
-    mov cx, SBL_POLLS
-.poll:
-    in al, dx
-    test al, 0x80               ; bit 7 set = data available
-    jnz .ok
-    loop .poll
-    stc
-    jmp .out
-.ok:
-    sub dx, 4                   ; 2xAh: read data
-    in al, dx
-    clc
-.out:
-    pop dx
-    pop cx
     ret
 
 ; =============================================================================
@@ -319,50 +261,12 @@ sbl_dsp_rd:
 ; -----------------------------------------------------------------------------
 sbl_arm_half:
     push ax
-    push cx
     push dx
     xor dx, dx                  ; DX = half * SBL_HALF: the offset INSIDE
     or al, al                   ; our buffer. A half is 0 or 1, so the
     jz .base                    ; stride is a test and an add rather than a
     mov dx, SBL_HALF            ; hand-counted shift - DERIVED, so a change
 .base:                          ; to the geometry cannot leave it behind
-    mov ax, 0x4914              ; AH = DMA single mode, read (memory -> card),
-    jmp short sbl_arm_rec.c     ; ch 1; AL = DSP 14h, 8-bit single-cycle out
-
-; -----------------------------------------------------------------------------
-; sbl_arm_rec - program a single-cycle capture of one ring half (DSP < 2.00)
-;
-; in:       AL = half (0/1); rate already set via 40h
-; out:      nothing
-; clobbers: nothing (flags)
-;
-; The input mirror of sbl_arm_half: DMA mode 45h (single, write - card to
-; memory), the half's ring offset (SBL_RING + half * SBL_RHALF), then DSP
-; 24h (8-bit single-cycle ADC) + length. Called from verb-4 start and from
-; sbl_isr's input re-arm branch (SPEC.md 34.6).
-;
-; ONE BODY, sbl_arm_rec.c, serves both: the two differed in the offset, the mode
-; byte and the command byte and in nothing else. What it costs the ISR's
-; re-arm (single-cycle DSPs only, once per block) is the two immediate loads
-; and arm_half's short jump - ~23 cycles in a block of >= 93 ms.
-; -----------------------------------------------------------------------------
-sbl_arm_rec:
-    push ax
-    push cx
-    push dx
-    mov dx, SBL_RING            ; ring offset = SBL_RING + half * SBL_RHALF.
-    or al, al                   ; It used to be (half+1) << 12, which is the
-    jz .base                    ; same number ONLY while SBL_RING happens to
-    add dx, SBL_RHALF           ; equal SBL_RHALF - a coincidence of the old
-.base:                          ; geometry, never a layout rule (SPEC.md 2.2)
-    mov ax, 0x4524              ; AH = DMA single mode, write (card ->
-                                ; memory), ch 1; AL = DSP 24h, 8-bit
-                                ; single-cycle in. FALLS THROUGH
-%if SBL_HALF != SBL_RHALF
-  %error "sbl_arm_rec.c programs one length for both directions"
-%endif
-.c:                             ; DX = offset in our buffer, AH = mode, AL =
-    mov cl, al                  ; the DSP command; the caller pushed AX/CX/DX
     add dx, [sbl_dmaoff]        ; ...and this is where that buffer sits in
                                 ; its 8237 page, computed at its claim
                                 ; (sbl_dma_get). Nothing is doubled - address
@@ -382,22 +286,21 @@ sbl_arm_rec:
     out 0x03, al                ; count lo (len - 1)
     mov al, (SBL_HALF-1) >> 8
     out 0x03, al                ; count hi
-    mov al, ah
-    out 0x0B, al                ; the mode
+    mov al, 0x49                ; single mode, read (memory -> card), ch 1
+    out 0x0B, al
     mov al, [sbl_page]          ; the 8237 page our claim landed in
     out 0x83, al
     mov al, 0x01
     or al, [sbl_drqmask]        ; (05h, still masked, where DRQ1 runs free)
     out 0x0A, al                ; unmask channel 1
     popf
-    mov al, cl                  ; the DSP command, then the length
-    call sbl_dsp_wr
+    mov al, 0x14                ; DSP 14h, 8-bit single-cycle out, then the
+    call sbl_dsp_wr             ; length
     mov al, (SBL_HALF-1) & 0xFF
     call sbl_dsp_wr
     mov al, (SBL_HALF-1) >> 8
     call sbl_dsp_wr
     pop dx
-    pop cx
     pop ax
     ret
 
@@ -502,17 +405,16 @@ sbl_hw_start:
 ; -----------------------------------------------------------------------------
 ; sbl_hw_start_in - program the card and start the opened stream's capture
 ;
-; in:       [sbl_tc], [sbl_auto]; task context
+; in:       [sbl_tc], [sbl_xoff]/[sbl_xpage]/[sbl_rmask]/[sbl_half]; task
+;           context
 ; out:      nothing
 ; clobbers: nothing (flags)
 ;
 ; The input mirror of sbl_hw_start: speaker (DAC) OFF first - a live DAC
 ; feeds the output back into the capture path on real hardware - then the
-; time constant, then the mode split: auto-init programs DMA once for the
-; whole 4KB ring (55h at SBL_RING) plus the DSP block size (48h, one 2KB
-; half) and 2Ch; single-cycle arms half 0 via sbl_arm_rec (SPEC.md 34.6).
-; An EXTERNAL record ring (SPEC.md 34.6.4, auto-init only) is the cycle
-; instead - [sbl_xoff]/[sbl_xpage], RL - 1 - and its block is [sbl_half].
+; time constant, then one auto-init write cycle (55h) over the caller's
+; whole ring, the DSP block size (48h) and 2Ch. There is no other capture:
+; a record stream is the external ring and auto-init (SPEC.md 34.6.4).
 ; -----------------------------------------------------------------------------
 sbl_hw_start_in:
     push ax
@@ -525,21 +427,11 @@ sbl_hw_start_in:
     call sbl_dsp_wr
     mov al, [sbl_tc]
     call sbl_dsp_wr
-    cmp byte [sbl_auto], 0
-    je .single
-    mov ax, [sbl_dmaoff]        ; address = the ring, in its 8237 page
-    add ax, SBL_RING
-    mov bx, 2*SBL_RHALF-1       ; count = the whole ring - 1
-    mov ch, [sbl_page]
-    mov dx, SBL_RHALF-1         ; DSP block size = one ring half
-    cmp byte [sbl_ext], 0       ; ...or the CALLER'S ring (SPEC.md 34.6.4),
-    je .dma                     ; where verb 4 found it, and its block
-    mov ax, [sbl_xoff]
-    mov bx, [sbl_rmask]
+    mov ax, [sbl_xoff]          ; the caller's ring, where verb 4 found it
+    mov bx, [sbl_rmask]         ; (SPEC.md 34.6.4): count RL - 1...
     mov ch, [sbl_xpage]
-    mov dx, [sbl_half]
+    mov dx, [sbl_half]          ; ...and its block
     dec dx
-.dma:
     mov cl, 0x55                ; auto-init, write (card -> memory), ch 1
     call sbl_dma_auto
     mov bx, dx
@@ -547,11 +439,6 @@ sbl_hw_start_in:
     call sbl_dsp_wr3
     mov al, 0x2C                ; auto-init 8-bit DMA input
     call sbl_dsp_wr
-    jmp short .out
-.single:
-    mov al, 0
-    call sbl_arm_rec            ; half 0; the ISR re-arms from there
-.out:
     pop dx
     pop cx
     pop bx
@@ -662,6 +549,15 @@ sbl_hdma_auto:
     pop ax
     ret
 
+; --- SBL_PRO: MIXER-ONLY (SPEC.md 34.15.1) ------------------------------
+; An SB Pro stereo stream's open and close: the only code in this file that
+; touches the CT1345, and reached only through a stream verb 11 accepted as
+; stereo - which it does only against SND_CAP_STEREO, which snd_sb_pub gives
+; a DSP 3.xx only with [mix_kind] = 2. So it lives in the MIXER's run (sound.asm
+; expands it after mixer.inc, between snd_keep and snd_keepmix) and a machine
+; with no mixer hands it back with the rest. sbl_hw_start and sbl_stop_stream
+; are its two doors, and t_sndonce names them.
+%macro SBL_PRO 0
 ; -----------------------------------------------------------------------------
 ; sbl_pro_st - an SB Pro STEREO stream's two preliminaries (SPEC.md 34.5.5)
 ; in:  the TC already sent; [sbl_xoff]/[sbl_xpage] = the cycle; IF = 1, and
@@ -718,6 +614,20 @@ sbl_pro_st:
     pop bx
     pop ax
     ret
+
+; sbl_pro_end - mixer 0Eh back to the byte sbl_pro_st found, at an SB Pro
+; stereo stream's close (sbl_stop_stream, behind [sbl_pst]). Clobbers AX
+sbl_pro_end:
+    mov byte [sbl_pst], 0
+    mov ah, 0x0E
+    mov al, [sbl_m0e]
+    pushf                       ; (an index/data pair: the volume popup's
+    cli                         ; writes must not land between the two)
+    call mix_wr
+    popf
+    ret
+sbl_m0e:      db 0              ; mixer 0Eh as sbl_pro_st found it
+%endmacro
 
 ; sbl_dsp_wr3 - AL, then BL, then BH, to the DSP: a command and its 16-bit
 ; operand low byte first. Every register preserved (flags not)
@@ -805,14 +715,9 @@ sbl_go_on:
 .c8:
     call sbl_dsp_wr
     jmp .out
-.single:
-    mov al, [sbl_play]
-    cmp byte [sbl_str_dir], 0
-    jne .rec
+.single:                        ; (playback only: a record stream is
+    mov al, [sbl_play]          ; auto-init, SPEC.md 34.6)
     call sbl_arm_half
-    jmp .out
-.rec:
-    call sbl_arm_rec
 .out:
     pop ax
     ret
@@ -936,24 +841,14 @@ sbl_isr:
                                 ; takes a jump it did not take before. `je
                                 ; .spur` stays a relaxed pair: moving .spur up
                                 ; as well pushes .direct out of short range
-.input:                         ; the mirror half-swap (SPEC.md 34.6): the
-    cmp byte [sbl_ext], 0       ; (an EXTERNAL record ring has no halves to
-    jne .xin                    ; swap - SPEC.md 34.6.4)
-    mov bl, [sbl_play]          ; half that just finished capturing...
-    xor bh, bh
-    mov byte [sbl_valid+bx], 1  ; ...holds data awaiting the drain task
-    xor bl, 1
-    mov [sbl_play], bl          ; the DSP captures into the other half now
-    cmp [sbl_valid+bx], bh      ; is the new capture half drained yet?
-    jne .under                  ; no - the drain starved: pause input rather
-                                ; than overwrite un-drained data (bounded loss
-                                ; + a visible status, the underrun contract's
-                                ; input mirror - the SAME halt and the same
-                                ; four stores as playback's, so the same code)
-    cmp byte [sbl_auto], 0      ; auto-init needs nothing; single-cycle
-    jne .eoi                    ; re-arms the half now capturing
-    mov al, bl
-    call sbl_arm_rec            ; ...and falls into .eoi
+.input:                         ; THE RECORD RING (SPEC.md 34.6.4): one
+    mov ax, [sbl_half]          ; block captured, and the DMA has gone on
+    add ax, [sbl_consumed]      ; into the next by itself. Count it and
+    mov [sbl_consumed], ax      ; publish the count in the caller's word -
+    les bx, [sbl_extctl]        ; and NOTHING ELSE: no flag, no pause. The
+    mov [es:bx+SND_EXT_CONS], ax    ; reader owns the ring and judges its
+                                ; own lag; the card never waits for it.
+                                ; Falls into .eoi
 
 .eoi:                           ; own EOI - nothing chains behind us. ONE
     mov al, 0x20                ; copy, the stray's below included: every
@@ -1052,70 +947,7 @@ sbl_isr:
     mov dx, [sbl_ackp]          ; nobody, ACK it SB-side (an 8-bit transfer,
     in al, dx                   ; so 2xEh) and tell verb 0, which is waiting
     mov byte [sbl_prime], 0     ; on this byte
-.eoij:                          ; (.xin's way back: .eoi is out of its reach)
     jmp .eoi
-
-.xin:                           ; AN EXTERNAL RECORD RING (SPEC.md 34.6.4):
-    mov ax, [sbl_half]          ; one block captured, and the DMA has gone on
-    add ax, [sbl_consumed]      ; into the next by itself. Count it and
-    mov [sbl_consumed], ax      ; publish the count in the caller's word -
-    les bx, [sbl_extctl]        ; and NOTHING ELSE: no flag, no pause. The
-    mov [es:bx+SND_EXT_CONS], ax    ; reader owns the ring and judges its
-    jmp short .eoij             ; own lag; the card never waits for it
-
-; =============================================================================
-; The IRQ-discovery candidate stubs (.text - interrupt handlers, so SPEC.md
-; 33 bars them from far even though discovery itself is cold). Each records
-; its candidate index in sbl_dsc_fired ONLY after the 2xEh bit-7 read
-; confirms the DSP asserted the line. A confirm-failed interrupt is still
-; a real one when the 8259 holds its in-service bit - the candidates are
-; force-unmasked for the window, so an unrelated device on 2/3/5 can fire
-; - and gets an EOI; only line 7 can be truly spurious, decided by the
-; OCW3 0Bh in-service read exactly as in sbl_isr (SPEC.md 34.5).
-; =============================================================================
-sbl_stub7:
-    push ax
-    mov al, 0
-    jmp short sbl_stub_c
-sbl_stub5:
-    push ax
-    mov al, 1
-    jmp short sbl_stub_c
-sbl_stub3:
-    push ax
-    mov al, 2
-    jmp short sbl_stub_c
-sbl_stub2:
-    push ax
-    mov al, 3
-sbl_stub_c:
-    push dx
-    push ds
-    mov ah, al                  ; AH = candidate index (AL becomes scratch)
-    SBL_DSCS dx, dl             ; DS = ours, like sbl_isr's
-    or ah, ah                   ; candidate 0 (IRQ 7) first proves it is not
-    jnz .accept                 ; the 8259's spurious-IRQ-7 artifact:
-    mov al, 0x0B                ; OCW3 - the next 0x20 read returns the
-    out 0x20, al                ; in-service register
-    in al, 0x20
-    test al, 0x80               ; ISR bit 7 clear = spurious: no ack, no
-    jz .out                     ; EOI, no record (sbl_isr's split, 34.5)
-.accept:
-    mov dx, [sbl_base]          ; accept-on-fire: 2xEh is read as the SB-
-    add dx, 0x0E                ; side ACK and nothing else - its bit 7
-    in al, dx                   ; means "response byte waiting" and F2h
-                                ; queues none on real DSPs or 86Box
-                                ; (SPEC.md 34.5 - the QEMU-only 0xAA is
-                                ; why a bit-7 "confirm" once shipped)
-    mov [sbl_dsc_fired], ah     ; the discovery loop reads this
-    mov al, 0x20                ; a stray from an unrelated device on
-    out 0x20, al                ; 2/3/5 still needs its EOI either way,
-                                ; or its whole priority level wedges
-.out:
-    pop ds
-    pop dx
-    pop ax
-    iret
 
 ; =============================================================================
 ; The staging-grant allocator (SPEC.md 34.6): first-fit over the SND_SEG
@@ -1191,10 +1023,9 @@ sbl_grant_alloc:
 .claim:
     mov [sbl_gr_off+bx], si
     mov [sbl_gr_size+bx], cx
-    mov al, dh
-    mov ah, 0
-    mov [sbl_gr_inst+bx], ax    ; word store keeps the record scannable whole
-    mov word [sbl_gr_act+bx], 1
+    mov al, dh                  ; in use, and whose: the owner in the low
+    mov ah, 1                   ; byte, 1 in the high so the word is never 0
+    mov [sbl_gr_act+bx], ax     ; (the kernel's own 0xFF included)
     popf
     pop ax                      ; discard the saved SI: the grant offset is
     clc                         ; the output (AX is dead on CF = 0)
@@ -1243,7 +1074,7 @@ sbl_grant_find:
     je .next
     cmp [sbl_gr_off+bx], si
     jne .next
-    cmp [sbl_gr_inst+bx], dh
+    cmp [sbl_gr_act+bx], dh
     jne .next
     clc
     ret
@@ -1278,7 +1109,7 @@ sbl_grant_chk:
 .g:
     cmp word [sbl_gr_act+bx], 0
     je .next
-    cmp [sbl_gr_inst+bx], dh
+    cmp [sbl_gr_act+bx], dh
     jne .next
     mov di, [sbl_gr_off+bx]
     cmp si, di
@@ -1392,12 +1223,9 @@ sbl_v_fmt:
 ; -----------------------------------------------------------------------------
 sbl_v_busy:
     mov [sbl_clip], dl          ; what the kernel is about to do...
-    xor ax, ax
-    cmp byte [sbl_str_act], 0   ; ...and what we already are
-    je .out
-    inc ax
-.out:
-    clc
+    mov al, [sbl_str_act]       ; ...and what we already are: the byte is
+    cbw                         ; 0 or 1 (every store to it is one of the
+    clc                         ; two), so it IS the answer
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1406,7 +1234,7 @@ sbl_v_busy:
 ; out: ZF = 1 yes: open, and that generation; ZF = 0 closed or superseded
 ;
 ; The task-side checks only. The per-chunk ones inside sbl_fill_guard and
-; sbl_drain_half stay inline: they run once per 512 bytes copied, and a call
+; sbl_refill's stay inline: they run once per 512 bytes copied, and a call
 ; there would be a cost on the path that moves every sample.
 ; -----------------------------------------------------------------------------
 sbl_live:
@@ -1426,11 +1254,10 @@ sbl_hcheck:
     cmp byte [sbl_str_act], 1
     jne .st
     cmp ah, [sbl_gen]
-    jne .st
-    clc
-    ret
+    je .r                       ; (an EQUAL compare leaves CF = 0)
 .st:
     stc
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1447,12 +1274,13 @@ sbl_hcheck:
 ;           here: a ring only, the SB16's 4KB half or the SB Pro's doubled
 ;           byte rate, a 16-bit ring's base even
 ; out:      AL = 0 ok with AH = handle, else AX = 1 busy / 2 rate / 4 no
-;           sink or no IRQ found / 6 no task slot / 7 bad grant or ring;
+;           sink (the dispatcher's: no card attached) / 6 no task slot / 7
+;           bad grant or ring;
 ;           CF mirrors the error
 ; clobbers: nothing else (flags)
 ;
-; First use runs IRQ discovery (sbl_irq_disc, far) and hooks sbl_isr onto
-; the winner. The record publishes act=1 before the refill task spawns,
+; sbl_isr is already on the line: sbl_attach hooked it (SPEC.md 34.5.7). The
+; record publishes act=1 before the refill task spawns,
 ; so neither the tick nor the ISR can see a half-built stream (the
 ; publish-last idiom) - but sbl_expect arms BEFORE sbl_hw_start, the
 ; same order sbl_refill's resume uses: the first block IRQ can beat the
@@ -1521,8 +1349,8 @@ sbl_v_open:
     jb .e2n                      ; SB16) nor high-speed (90h, SB Pro): err 2,
     mov bp, 2*SBL_HALF          ; never a clamp. WHICH of the two is not
                                 ; decided here - both use the 4KB half, and
-                                ; .irqok reads the version back. BP IS THE
-                                ; HALF WIDTH UNTIL .irqok COMMITS IT: a TEMP,
+                                ; .irqchk reads the version back. BP IS THE
+                                ; HALF WIDTH UNTIL .irqchk COMMITS IT: a TEMP,
                                 ; because the busy refusal above must not
                                 ; disturb a live stream's [sbl_half], and a
                                 ; register because the kernel banks BP round
@@ -1535,22 +1363,15 @@ sbl_v_open:
     jz .e7x                     ; an EXTERNAL ring (SPEC.md 34.5.3) is a ring:
     push cx                     ; DI:SI, RL = 4096 << the size code, and no
     mov al, [sbl_oflags]        ; grant - the package claimed it itself
-    mov cl, SND_OPENF_RLSH
-    shr al, cl
-    and al, 3
-    mov cl, al
-    mov ax, 4096
-    shl ax, cl
+    call sbl_xrl
     pop cx
     jmp short .grantok
 .e7x:                           ; the refusals' trampolines, within short
-    jmp .e7                     ; reach of every test above and of the IRQ
-.e1n:                           ; discovery's below: the real exits are at
+    jmp .e7                     ; reach of every test above and of the
+.e1n:                           ; ones below: the real exits are at
     jmp .e1                     ; the far end, where sbl_v_open_in shares
 .e2n:                           ; them
     jmp .e2
-.e4n:
-    jmp .e4
 .pool:
     call sbl_grant_chk          ; the range must sit in the caller's grant;
     jc .e7x                     ; out AX = bytes to the grant's end (BX is
@@ -1573,12 +1394,6 @@ sbl_v_open:
     jb .e7x                     ; the WIDE half when the rate widened it)
     mov [sbl_rmask], dx         ; RL-1: the ring mask
 .irqchk:
-    cmp byte [sbl_irq], 0xFF    ; IRQ discovery, deferred to first use
-    jne .irqok                  ; (SPEC.md 34.5)
-    call sbl_f_irqdisc           ; far orchestration; hooks the winner
-    or al, al
-    jz .e4n                      ; no candidate confirmed: no usable card
-.irqok:
     mov ax, bp                  ; commit the half width, then DERIVE the
     mov [sbl_half], ax          ; regime from it and [sbl_verhi] - the two
     mov word [sbl_wide], 0      ; facts the rate gate already checked. Past
@@ -1634,10 +1449,7 @@ sbl_v_open:
 .wdsh0:
     pop cx
 .wddiv:
-    div bx
-    add ax, 3
-    mov [sbl_wd_rst], ax
-    mov [sbl_wd], ax
+    call sbl_wdset
     xor ax, ax
     mov [sbl_direct], ax        ; ...and sbl_ext, the byte after it
     mov [sbl_adpcm], al
@@ -1688,28 +1500,24 @@ sbl_v_open:
     dec ax                      ; AX = 2 halves - 1, against RL - 1
     cmp ax, [sbl_rmask]
     ja .dbuf
-    call sbl_ring_phys          ; SI = the ring: AX/DL = where the chip sees it
+    call sbl_ring_phys          ; SI = the ring: [sbl_xoff]/[sbl_xpage]
     jc .dbuf                    ; straddles a page: the copy path
     test byte [sbl_ofmt], SND_FMT_16
     jz .even                    ; a 16-bit ring is played as WORDS, so its
     test al, 1                  ; physical base must be even (SPEC.md 34.5.5)
     jnz .e7x2
 .even:
-    mov [sbl_xoff], ax
-    mov [sbl_xpage], dl
     mov ax, [sbl_rmask]         ; the DMA cycle IS the ring
     mov [sbl_xcnt], ax
     mov byte [sbl_direct], 1
     test byte [sbl_oflags], SND_OPENF_EXT
     jz .pin
     mov byte [sbl_ext], 1       ; EXTERNAL (SPEC.md 34.5.3): the control words
-    mov ax, si                  ; sit after the ring, in the package's claim,
-    add ax, [sbl_rmask]         ; which THE PACKAGE keeps still until close
-    inc ax                      ; (SND_OPENF_EXT, os88api.inc; the kernel no
+    call sbl_xctl               ; sit after the ring, in the package's claim,
+                                ; which THE PACKAGE keeps still until close
+                                ; (SND_OPENF_EXT, os88api.inc; the kernel no
                                 ; longer pins MC_DMA, SPEC.md 66.6.4) - and
                                 ; there is no pool of ours to pin
-    mov [sbl_extctl], ax
-    mov [sbl_extctl+2], di
     jmp short .dset
 .e7x2:
     jmp .e7
@@ -1736,32 +1544,22 @@ sbl_v_open:
     dec ax
     mov [sbl_xcnt], ax          ; 2 halves - 1
 .dset:
-    mov [sbl_str_off], si       ; the stream record (not yet published)
-    mov [sbl_total], cx
+    mov [sbl_total], cx         ; the stream record (not yet published)
     call OSAPI_CPU_INFO         ; AH = the flags: under CPU_F_PM the line is
     and ah, CPU_F_PM            ; masked across every BIOS call, so the
     mov [sbl_dpm], ah           ; block IRQ may read the 8237 (34.5.2.2)
     xor ax, ax
     mov [sbl_dpos], ax          ; the chip starts at the ring's offset 0
-    mov [sbl_fed], ax
-    mov [sbl_consumed], ax
     mov [sbl_play], al
     mov [sbl_valid], ax         ; both halves
-    mov [sbl_paused], al
-    mov [sbl_str_dir], al       ; an OUTPUT stream (SPEC.md 34.6)
-    mov [sbl_str_state], al     ; SBL_ST_PLAY
-%ifdef PICOMEM
-    mov byte [pm_rchk], PM_RCHK ; pm_runaway asks again (SPEC.md 34.10.5)
-%endif
-    mov al, [sbl_oflags]        ; commit the ring flag into the record
-    and al, SND_OPENF_RING      ; (SPEC.md 34.5; sbl_rmask was set above)
-    mov [sbl_ring_on], al
-    inc byte [sbl_gen]
-    mov byte [sbl_str_act], 1   ; PUBLISH, on both paths, before anything
-                                ; acts: nothing can act on a published record
-                                ; yet - the ISR and the tick both wait on
-                                ; sbl_expect, armed only at .start, and no
-                                ; caller holds the new handle
+    mov ah, [sbl_oflags]        ; commit the ring flag into the record
+    and ah, SND_OPENF_RING      ; (SPEC.md 34.5; sbl_rmask was set above)
+    call sbl_rec                ; AL = 0: an OUTPUT stream (SPEC.md 34.6) -
+                                ; and PUBLISHED, on both paths, before
+                                ; anything acts: nothing can act on a
+                                ; published record yet - the ISR and the tick
+                                ; both wait on sbl_expect, armed only at
+                                ; .start, and no caller holds the new handle
     cmp byte [sbl_direct], 0    ; DIRECT: nothing to prime and nobody to
     jne .start                  ; pace - verb 0's CX >= one half is already
                                 ; the first block, and verb 1 is the rest
@@ -1816,9 +1614,6 @@ sbl_v_open:
 .e2:
     mov al, 2
     jmp short .err
-.e4:
-    mov al, 4
-    jmp short .err
 .e8:
     mov al, 8                   ; no page-safe 8KB for the double buffer
     jmp short .err              ; (SPEC.md 34.5.2) - verb 7's "no space"
@@ -1842,8 +1637,8 @@ sbl_v_open:
 ;           SI = grant offset, CX = capture capacity in bytes (> 0, inside
 ;           the caller's grant)
 ; out:      AL = 0 ok with AH = handle, else AX = 1 busy (half-duplex: any
-;           open stream, or an exclusive clip) / 2 rate / 4 no sink or no
-;           IRQ found / 6 no task slot / 7 bad grant / 8 no page-safe 8KB
+;           open stream, or an exclusive clip) / 2 rate / 4 no sink (the
+;           dispatcher's) / 6 no task slot / 7 bad grant / 8 no page-safe 8KB
 ;           for the record ring; CF mirrors the error
 ; clobbers: nothing else (flags)
 ;
@@ -1855,8 +1650,9 @@ sbl_v_open:
 ; captured to [DI:SI+RL+SND_EXT_CONS]. A single-cycle DSP, or a ring whose
 ; span crosses a 64KB page, answers 7.
 ;
-; The mirror of sbl_v_open: same record, direction = in, the same deferred
-; IRQ discovery, the same publish-then-pace order (act = 1 before the
+; The mirror of sbl_v_open: same record, direction = in, sbl_isr already on
+; the line (sbl_attach hooked it, SPEC.md 34.5.7), the same publish-then-pace
+; order (act = 1 before the
 ; drain task spawns, sbl_expect armed BEFORE sbl_hw_start_in for the
 ; same first-IRQ race). sbl_total holds the capture CAPACITY; the drain
 ; task advances sbl_consumed as ring halves land in the grant, so verb 3
@@ -1871,7 +1667,6 @@ sbl_v_open_in:
     push cx
     push dx
     push si
-    mov [sbl_oflags], ah        ; a TEMP, as verb 0's: EXT and its codes
     cmp byte [sbl_str_act], 0   ; ([sbl_up]: sbl_stream_op tested it)
     jne sbl_v_open.e1           ; half-duplex: one stream record, either
                                 ; direction (SPEC.md 34.3/34.6)
@@ -1879,116 +1674,77 @@ sbl_v_open_in:
     jne sbl_v_open.e1           ; an exclusive clip holds the machine
     cmp bx, 4000                ; the rate is in BX here too (see sbl_v_open)
     jb sbl_v_open.e2
-    mov ax, 13000               ; ...and the INPUT ceiling is honoured:
-    cmp byte [sbl_auto], 0      ; 13k on 1.x, 15k on >= 2.00 normal mode
-    je .ceil                    ; (SPEC.md 34.5) - err 2, never a clamp
-    mov ax, 15000
-.ceil:
-    cmp bx, ax
-    ja sbl_v_open.e2
+    cmp bx, 15000               ; ...and the INPUT ceiling is honoured: 15k
+    ja sbl_v_open.e2            ; in auto-init's normal mode (SPEC.md 34.5)
+                                ; - err 2, never a clamp
+    test ah, SND_OPENF_EXT      ; THE CALLER'S RING (SPEC.md 34.6.4) is the
+    jz .e7                      ; only capture there is...
+    cmp byte [sbl_auto], 0      ; ...captured in place by auto-init DMA:
+    je .e7                      ; a DSP 1.x has no 2Ch
     mov [sbl_str_inst], dh      ; (DH dies in sbl_ring_phys below)
-    test byte [sbl_oflags], SND_OPENF_EXT
-    jnz .ext
-    jcxz .e7                    ; zero capacity captures nothing
-    call sbl_grant_chk          ; the capture range must sit in the caller's
-    jc .e7                      ; grant; out AX = bytes to the grant's end.
-                                ; BX is still the rate (see above)
-    mov [sbl_str_max], ax
-    jmp short .disc
-.e7:
-    jmp sbl_v_open.e7
-.ext:                           ; AN EXTERNAL RECORD RING (SPEC.md 34.6.4):
-    cmp byte [sbl_auto], 0      ; captured in place by auto-init DMA or not
-    je .e7                      ; at all - a single-cycle DSP re-arms from
-    mov al, [sbl_oflags]        ; the ISR, which this path does not carry
-    mov cl, SND_OPENF_RLSH
-    shr al, cl
-    mov ah, al                  ; AH = the block code above the size code
-    and al, 3
-    mov cl, al
-    mov dx, 4096
-    shl dx, cl
-    dec dx
-    mov [sbl_rmask], dx         ; RL - 1, the DMA cycle's count
-    mov cl, 2                   ; (SND_OPENF_BLKSH - SND_OPENF_RLSH)
-    shr ah, cl
-    mov cl, ah
+    mov ch, ah                  ; CH = the flags (CX is not read here)
+    mov al, ah
+    call sbl_xrl                ; AX = RL
+    dec ax
+    mov [sbl_rmask], ax         ; RL - 1, the DMA cycle's count
+    mov cl, SND_OPENF_BLKSH
+    shr ch, cl
+    mov cl, ch
     mov ax, SBL_RHALF
     shr ax, cl
     mov [sbl_half], ax          ; the block, as verb 0's external ring takes
-    lea ax, [si+1]              ; it; the control words after the ring
-    add ax, dx
-    mov [sbl_extctl], ax
-    mov [sbl_extctl+2], di
+    call sbl_xctl               ; it; the control words after the ring
     mov [sbl_rseg], di
-    call sbl_ring_phys          ; SI = the ring: AX/DL = where the chip sees it
+    call sbl_ring_phys          ; SI = the ring: [sbl_xoff]/[sbl_xpage]...
     jc .e7                      ; ...unless it straddles a 64KB page
-    mov [sbl_xoff], ax
-    mov [sbl_xpage], dl
-%if SND_OPENF_BLKSH - SND_OPENF_RLSH != 2
-  %error "verb 4 reads the block code two bits above the size code"
-%endif
-.disc:
-    cmp byte [sbl_irq], 0xFF    ; IRQ discovery, deferred to first use
-    jne .irqok                  ; (SPEC.md 34.5)
-    call sbl_f_irqdisc           ; far orchestration; hooks the winner
-    or al, al
-    jz sbl_v_open.e4            ; no candidate confirmed: no usable card
-.irqok:
     mov ax, 0x4240              ; TC = 256 - 1,000,000/rate (SPEC.md 34.5)
     mov dx, 0x000F
     div bx                      ; AX = 1e6/rate (66..250 by the range check)
     neg al                      ; AL = 256 - AX (mod 256)
     mov [sbl_tc], al
-    mov ax, SBL_WD_IN & 0xFFFF  ; watchdog: 2 ring-half periods in ticks + 3
+    mov ax, SBL_WD_IN & 0xFFFF  ; watchdog: 2 block periods in ticks + 3
     mov dx, SBL_WD_IN >> 16     ; = (2*SBL_RHALF*18.2)/rate + 3, derived
-    div bx
-    add ax, 3
-    mov [sbl_wd_rst], ax        ; (sized for SBL_RHALF: a smaller external
-    mov [sbl_wd], ax            ; block only makes it more patient)
-    test byte [sbl_oflags], SND_OPENF_EXT
-    jnz .xrec
-    call sbl_dma_get            ; the record ring lives in the DMA buffer,
-    jc sbl_v_open.e8            ; claimed for this stream (SPEC.md 34.5.2)
-    xor ax, ax                  ; neither direct nor external
-    jmp short .rec
-.xrec:
+    call sbl_wdset              ; (sized for SBL_RHALF: a smaller block
+                                ; only makes it more patient)
     push es                     ; the caller's count starts at 0 with ours
     les bx, [sbl_extctl]        ; (BX: the rate is spent)
     mov word [es:bx+SND_EXT_CONS], 0
     pop es
-    mov ax, 0x0101              ; DIRECT and EXTERNAL: sbl_unpin then frees
-.rec:                           ; nothing, sbl_v_pause still answers 7 (a
-    mov [sbl_direct], ax        ; record stream), and the ISR's input leg
-                                ; takes .xin
-    mov [sbl_str_off], si       ; the stream record (not yet published)
-    mov [sbl_total], cx         ; = the capture capacity (SPEC.md 34.6)
+    mov word [sbl_direct], 0x0101   ; DIRECT and EXTERNAL: sbl_unpin frees
+                                ; nothing, sbl_v_pause answers 7 (a record
+                                ; stream), and the ISR's input leg counts
+    mov ax, 1                   ; an INPUT stream (SPEC.md 34.6), and input
+    call sbl_rec                ; has no ring mode (SPEC.md 34.5); consumed
+                                ; = bytes captured, free-running. PUBLISHED;
+                                ; there is no pace to keep - the reader owns
+                                ; the ring (SPEC.md 34.6.4)
+    mov byte [sbl_expect], 1    ; arm BEFORE the hardware starts - the
+    call sbl_hw_start_in        ; sbl_v_open first-IRQ order, same race
+    jmp sbl_v_open.opened       ; out: AH = handle, AL = 0
+.e7:
+    jmp sbl_v_open.e7
+
+; -----------------------------------------------------------------------------
+; sbl_rec - the stream record both opens share, then PUBLISHED (act = 1, a
+;           new generation) - the store every open makes last
+; in:  AL = sbl_str_dir (0 output, 1 input), AH = sbl_ring_on, SI = the
+;      stream's offset; out: nothing; clobbers AX (flags)
+; -----------------------------------------------------------------------------
+sbl_rec:
+    mov [sbl_str_off], si
+    mov [sbl_str_dir], al
+    mov [sbl_ring_on], ah
     xor ax, ax
     mov [sbl_fed], ax
-    mov [sbl_consumed], ax      ; = bytes drained into the grant
-    mov [sbl_play], al          ; the half the DSP captures into
-    mov [sbl_valid], ax         ; input sense: 1 = captured, awaiting drain
-    mov [sbl_drain_h], al       ; the next half the drain task empties
+    mov [sbl_consumed], ax
     mov [sbl_paused], al
-    mov [sbl_ring_on], al       ; input has no ring mode (SPEC.md 34.5)
     mov [sbl_str_state], al     ; SBL_ST_PLAY
 %ifdef PICOMEM
     mov byte [pm_rchk], PM_RCHK ; pm_runaway asks again (SPEC.md 34.10.5)
 %endif
-    inc ax
-    mov [sbl_str_dir], al       ; an INPUT stream (SPEC.md 34.6)
     inc byte [sbl_gen]
-    mov [sbl_str_act], al       ; publish, then pace: the DRIVER owns pacing
-    cmp [sbl_ext], al           ; (an external ring has no pace to keep: the
-    je .go                      ; reader owns it, SPEC.md 34.6.4)
-    mov dh, [sbl_gen]           ; (SPEC.md 51.7), as for playback above
-    mov ax, sbl_drain_task
-    call OSAPI_DRV_TASK
-    jc sbl_v_open.nospawn
-.go:
-    mov byte [sbl_expect], 1    ; arm BEFORE the hardware starts - the
-    call sbl_hw_start_in        ; sbl_v_open first-IRQ order, same race
-    jmp sbl_v_open.opened       ; out: AH = handle, AL = 0
+    mov byte [sbl_str_act], 1   ; PUBLISH
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sbl_v_feed - verb 1: extend a progressively staged stream (SPEC.md 20.3)
@@ -2054,8 +1810,7 @@ sbl_v_feed:
     call sbl_resume             ; D4h (SPEC.md 34.5)
 .ok:
     popf
-    xor ax, ax
-    clc
+    xor ax, ax                  ; (CF = 0)
     ret
 .e7:
     popf
@@ -2064,6 +1819,7 @@ sbl_v_feed:
     ret
 .stale:
     popf
+.stale0:                        ; (sbl_v_close's, which holds no window)
     mov ax, 0xFFFF
     stc
     ret
@@ -2115,14 +1871,9 @@ sbl_v_pause:
 ; -----------------------------------------------------------------------------
 sbl_v_close:
     call sbl_hcheck
-    jc .stale
+    jc sbl_v_feed.stale0
     call sbl_stop_stream
-    xor ax, ax
-    clc
-    ret
-.stale:
-    mov ax, 0xFFFF
-    stc
+    xor ax, ax                  ; (CF = 0)
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2182,14 +1933,8 @@ sbl_stop_stream:
     mov [sbl_str_act], al       ; handles are stale from here
     popf
     cmp byte [sbl_pst], 0       ; an SB Pro stereo stream: mixer 0Eh back to
-    je .nopst                   ; the byte it held (SPEC.md 34.5.5)
-    mov [sbl_pst], al
-    mov ah, 0x0E
-    mov al, [sbl_m0e]
-    pushf                       ; (an index/data pair: the volume popup's
-    cli                         ; writes must not land between the two)
-    call mix_wr
-    popf
+    je .nopst                   ; the byte it held (SPEC.md 34.5.5) - in the
+    call sbl_pro_end            ; mixer's run, which [sbl_pst] proves is here
 .nopst:
     call sbl_unpin              ; the pool movable again, or the buffer freed
     cmp byte [sbl_hisp], 0
@@ -2404,58 +2149,7 @@ sbl_dleft:
 ; a parked .bss word could be overwritten by the next caller's wrapper
 ; while this caller sat preempted right here, and the rep movsb below
 ; would then WRITE into the wrong package's segment.
-; -----------------------------------------------------------------------------
-sbl_v_read:
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    jcxz .ok                    ; nothing to copy is trivially fine
-    call sbl_grant_chk          ; range-check the SOURCE
-    jc .e7
-    mov es, bx                  ; ES:DI = the caller's destination, in the
-                                ; segment the slot wrapper threaded in BX -
-                                ; the staging copy IS the v3 boundary
-                                ; (SPEC.md 20.3/34.6; a package's DI is an
-                                ; offset in its OWN segment, never the
-                                ; kernel's)
-    cld
-.copy:                          ; IN CHUNKS, THE POOL SEGMENT RE-DERIVED PER
-    jcxz .ok                    ; CHUNK UNDER IF=0 (SPEC.md 66.5.5): the pool
-    mov ax, SBL_DCHUNK          ; is movable and this runs on the CALLER's
-    cmp cx, ax                  ; task, which the compactor's park handshake
-    jae .csz                    ; never asks - a worker preempted mid-copy
-    mov ax, cx                  ; would resume through a stale segment. A
-.csz:                           ; chunk cannot be preempted; between chunks
-    sub cx, ax                  ; the word is read again, and a compaction is
-    pushf                       ; atomic against this task (sch_lock)
-    cli
-    push cx
-    mov cx, ax
-    push ds
-    mov ds, [sbl_poolseg]       ; DS:SI = the grant source, in the POOL claim
-    SBL_MOVS                    ; pool:SI -> caller DI
-    pop ds
-    pop cx
-    popf
-    jmp .copy
-.ok:
-    xor ax, ax
-    clc
-    jmp .out
-.e7:
-    mov ax, 7
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
+;
 ; sbl_v_stage - verb 6: copy caller data into a grant (SPEC.md 34.6)
 ;
 ; in:       SI = source offset in the CALLER's segment (BX, threaded
@@ -2475,40 +2169,68 @@ sbl_v_read:
 ; mid-stage into.
 ; -----------------------------------------------------------------------------
 sbl_v_stage:
+    mov bp, 1                   ; BP = 1: the pool is the DESTINATION. BP is
+    jmp short sbl_v_rw          ; ours: the kernel banks it round every
+                                ; driver call, and sbl_stream_op spent it
+sbl_v_read:
+    xor bp, bp                  ; BP = 0: the pool is the SOURCE
+; sbl_v_rw - verbs 5 and 6 are one body: the range check is on the pool's
+; side (SI for a read, DI for a stage) and the copy runs the other way.
+; DX is not touched, so it is not saved
+sbl_v_rw:
     push cx
-    push dx
     push si
     push di
     push es
-    jcxz sbl_v_read.ok          ; nothing to copy is trivially fine
+    jcxz .ok                    ; nothing to copy is trivially fine
     push si
-    mov si, di                  ; range-check the DESTINATION
+    or bp, bp
+    jz .chk                     ; a read range-checks the SOURCE...
+    mov si, di                  ; ...a stage the DESTINATION
+.chk:
     call sbl_grant_chk
     pop si
-    jc sbl_v_read.e7
+    jc .e7
     cld
-.copy:                          ; chunked exactly as sbl_v_read: the pool is
-    jcxz sbl_v_read.ok          ; movable and this is the caller's task
-    mov ax, SBL_DCHUNK          ; (SPEC.md 66.5.5)
-    cmp cx, ax
-    jae .csz
-    mov ax, cx
-.csz:
-    sub cx, ax
-    pushf
+.copy:                          ; IN CHUNKS, THE POOL SEGMENT RE-DERIVED PER
+    jcxz .ok                    ; CHUNK UNDER IF=0 (SPEC.md 66.5.5): the pool
+    mov ax, SBL_DCHUNK          ; is movable and this runs on the CALLER's
+    cmp cx, ax                  ; task, which the compactor's park handshake
+    jae .csz                    ; never asks - a worker preempted mid-copy
+    mov ax, cx                  ; would resume through a stale segment. A
+.csz:                           ; chunk cannot be preempted; between chunks
+    sub cx, ax                  ; the word is read again, and a compaction is
+    pushf                       ; atomic against this task (sch_lock)
     cli
-    mov es, [sbl_poolseg]       ; ES:DI = the grant, in the POOL claim -
-                                ; re-derived per chunk, with DS still ours
     push cx
     mov cx, ax
-    push ds
-    mov ds, bx                  ; the caller's segment (slot wrapper, BX):
-    SBL_MOVS                    ; the source pointer lives THERE since v3
-    pop ds                      ; callerseg:SI -> pool:DI
+    mov es, [sbl_poolseg]       ; a stage: ES:DI = the grant, in the POOL
+    push ds                     ; claim, and DS:SI the caller's (the segment
+    mov ds, bx                  ; the slot wrapper threaded in BX - the
+    or bp, bp                   ; staging copy IS the v3 boundary, SPEC.md
+    jnz .go                     ; 20.3/34.6) - a read, the two exchanged:
+    push ds                     ; DS:SI the pool, ES:DI the caller's own
+    push es                     ; segment (a package's DI is an offset in
+    pop ds                      ; its OWN segment, never the kernel's)
+    pop es
+.go:
+    SBL_MOVS
+    pop ds
     pop cx
     popf
-    jmp .copy                   ; (the exits are sbl_v_read's: the same five
-                                ; saves, the same two answers)
+    jmp .copy
+.ok:
+    xor ax, ax                  ; (CF = 0)
+    jmp short .out
+.e7:
+    mov ax, 7
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    ret
 
 ; -----------------------------------------------------------------------------
 ; sbl_v_grant - verb 7: staging-pool grants (SPEC.md 20.3/34.6)
@@ -2553,7 +2275,7 @@ sbl_v_grant:
     popf
     call sbl_pool_put           ; ...and the pool itself if that was the last
     xor ax, ax                  ; grant. OUTSIDE the window: this frees
-    clc                         ; through the kernel, which takes its own
+                                ; through the kernel, which takes its own
     jmp .out
 .e7f:
     popf
@@ -2561,8 +2283,7 @@ sbl_v_grant:
 .alloc:
     call sbl_grant_alloc        ; with (force-freed at teardown, 34.3)
     jc .err                     ; AX already 7/8
-    xor ax, ax
-    clc
+    xor ax, ax                  ; (CF = 0)
     jmp .out
 .e7:
     mov ax, 7
@@ -2589,7 +2310,7 @@ sbl_v_grant:
 ;           never padded - SPEC.md 34.5 rule 1)
 ; clobbers: nothing (flags)
 ;
-; The plain fill with sbl_drain_half's teardown rule bolted on - and since
+; The plain fill with a per-chunk act+gen teardown rule - and since
 ; verb 0's priming publishes the record before it fills, the ONLY fill: the
 ; un-guarded sbl_fill_half it once primed with is gone. The refill
 ; task runs with IF=1 and can be preempted anywhere across a close+reopen
@@ -2774,7 +2495,7 @@ sbl_refill:
 .half:                          ; fill half BX if invalid and data exists:
     cmp byte [sbl_valid+bx], 0  ; availability, the counter ops, the copy
     jne .hout                   ; and the valid publish all run act+gen-
-    call sbl_fill_guard         ; guarded (the sbl_drain_half rule) - a
+    call sbl_fill_guard         ; guarded (sbl_fill_guard's rule) - a
 .hout:                          ; task parked here across a close+reopen
     ret                         ; must never act on the successor stream
 
@@ -2789,9 +2510,7 @@ sbl_refill:
 ; sound task exists (rejected, SPEC.md 34.5): this slot and its stack come
 ; from the ordinary dynamic pool and return to it with the stream.
 ; -----------------------------------------------------------------------------
-sbl_refill_task:
-    mov si, sbl_refill_pass     ; ONE LOOP FOR BOTH WORKERS (sbl_worker,
-    jmp sbl_worker              ; below): only the pass differs
+; The loop is sbl_refill_task, below; this is one pass of it.
 sbl_refill_pass:
     call OSAPI_TASK_PARK        ; ...and the heap compactor waits on THIS
                                 ; (SPEC.md 66.5.5). Here, at the head of the
@@ -2805,201 +2524,19 @@ sbl_refill_pass:
                                 ; could ever be compacted
     jmp sbl_refill
 
-; =============================================================================
-; The drain machinery (SPEC.md 34.6): the transient kernel task and the
-; record-ring -> grant copies - sbl_refill's input mirror.
-; =============================================================================
-
 ; -----------------------------------------------------------------------------
-; sbl_drain_half - copy one captured ring half into the caller's grant
-;
-; in:       BX = half (0/1), DH = the stream generation this task serves;
-;           [sbl_str_off]/[sbl_consumed]/[sbl_total] current
-; out:      nothing; [sbl_consumed] advanced by the bytes actually landed
-;           (min(SBL_RHALF, capacity remaining); a half past capacity
-;           copies nothing)
-; clobbers: nothing (flags)
-;
-; Both source and destination live in SND_SEG (sbl_fill_guard's trick in
-; reverse): DS = ES = SND_SEG for the movs. Unlike the output mirror, this
-; copy WRITES grant bytes, and force-teardown (snd_release_inst on the UI
-; task, or a verb-2 close + verb-7 free) frees - and a relaunch can
-; re-grant - those bytes the moment the stream stops: a whole-half rep
-; movsb (~21ms on an 8088) preempted mid-copy must never resume into
-; freed pool memory. So the copy runs in SBL_DCHUNK pieces, each one
-; pushf/cli window that re-verifies act + generation BEFORE writing (the
-; sbl_refill resume rule): every act-clear and grant-free runs in task
-; context, and IF=0 excludes the switch, so a chunk that starts writing
-; holds the grant for its whole write - a torn-down stream stops at the
-; chunk edge with nothing written after the free. [sbl_consumed] advances
-; inside the window AFTER the chunk lands: verb 3 reports it as "bytes
-; captured into the grant" (SPEC.md 20.3), so the poll-then-read pattern
-; (verb 3, then verb 5) must never see it run ahead of the copy.
-; (The output mirror got the same treatment: sbl_fill_guard guards the
-; refill path's counters, copy and publish identically, because a reopen
-; makes even the read-only output copy mutate the successor's [sbl_fed] -
-; and verb 0 primes through it too, publishing act before it fills.)
-; The caller clears the half's valid flag afterwards.
+; sbl_refill_task - the refill loop, the driver's one worker (SPEC.md 34.5).
+; A record stream has none: the card writes the caller's ring and the caller
+; reads it (SPEC.md 34.6.4), so this paces playback and nothing else.
 ; -----------------------------------------------------------------------------
-sbl_drain_half:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
-    mov es, [sbl_poolseg]       ; ES:DI = the grant, in the POOL claim; the
-                                ; ring it comes FROM is in the DMA claim, so
-                                ; this copy crosses the two now
-    mov si, SBL_RING            ; SI = SBL_RING + half * SBL_RHALF: the
-    or bx, bx                   ; source (the sbl_arm_rec derivation)
-    jz .src
-    add si, SBL_RHALF
-.src:
-    add si, [sbl_sbase]         ; ...from the buffer's first offset
-    mov di, [sbl_str_off]       ; DI = grant + progress: the destination
-    add di, [sbl_consumed]
-    mov cx, [sbl_total]
-    sub cx, [sbl_consumed]      ; CX = capacity remaining
-    cmp cx, SBL_RHALF
-    jbe .n
-    mov cx, SBL_RHALF
-.n:
-    cld
-.chunk:
-    jcxz .done
-    mov bx, SBL_DCHUNK          ; BX = this chunk's size
-    cmp cx, bx
-    jae .sz
-    mov bx, cx
-.sz:
-    sub cx, bx                  ; CX = remaining after this chunk
-    pushf
-    cli
-    cmp byte [sbl_str_act], 1   ; still the stream's grant? closed / torn
-    jne .dead                   ; down: its pool bytes may be freed
-    cmp dh, [sbl_gen]           ; superseded by a newer open?
-    jne .dead
-    push cx
-    mov cx, bx
-    push ds
-    mov ds, [sbl_seg]           ; DS = the DMA claim, where the ring is
-    SBL_MOVS                    ; one chunk, atomic vs. teardown (IF=0)
-    pop ds
-    pop cx
-    add [sbl_consumed], bx      ; landed bytes only (verb 3's contract)
-    popf
-    jmp .chunk
-.dead:
-    popf                        ; stop writing: the grant is not ours
-.done:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; sbl_drain - one drain pass (task context)
-;
-; in:       DH = the stream generation this task serves
-; out:      nothing
-; clobbers: nothing (flags)
-;
-; Empties captured halves oldest-first (sbl_drain_h tracks the order the
-; ISR fills them). Then two mirror duties, each under ONE pushf/cli window
-; that RE-CHECKS act and generation first (the sbl_refill rule - a close
-; or teardown between the checks and the window must not see the DSP
-; restarted or a released record scribbled):
-;   - capacity full while still capturing: stop the DSP (halt + exit
-;     auto-init) and mark paused(1) - the input mirror of data exhaustion,
-;     with sbl_consumed = capacity visible via verb 3 (SPEC.md 34.6);
-;   - overrun-paused with the capture half now drained: resume (D4h /
-;     re-arm), rewind the watchdog, expect IRQs again.
-; -----------------------------------------------------------------------------
-sbl_drain:
-    push ax
-    push bx
-    call .one                   ; up to both halves, oldest first
-    call .one
-    mov ax, [sbl_total]
-    cmp ax, [sbl_consumed]
-    jne .notfull
-    cmp byte [sbl_str_state], SBL_ST_PLAY
-    jne .done                   ; already stopped / paused / ended
-    pushf                       ; capacity reached while capturing: stop
-    cli
-    call sbl_live               ; re-verify under IF=0 (the sbl_refill
-    jne .fskip                  ; rule): closed, or superseded, since?
-    call sbl_halt               ; D0h, bounded
-    cmp byte [sbl_auto], 0
-    je .fnoda
-    mov al, 0xDA                ; exit auto-init at the block edge
-    call sbl_dsp_wr
-.fnoda:
-    mov byte [sbl_expect], 0
-    mov byte [sbl_str_state], SBL_ST_UNDER  ; paused(1): capacity full -
-.fskip:                                     ; the owner's cue to close
-    popf
-    jmp .done
-.notfull:
-    cmp byte [sbl_paused], 0    ; overrun-paused: can capture continue?
-    je .done
-    mov bl, [sbl_play]
-    xor bh, bh
-    cmp byte [sbl_valid+bx], 0
-    jne .done                   ; the capture half is still un-drained
-    pushf
-    cli
-    call sbl_live               ; the same re-verification under IF=0
-    jne .rskip
-    call sbl_resume             ; D4h / re-arm (input-aware)
-.rskip:
-    popf
-.done:
-    pop bx
-    pop ax
-    ret
-.one:                           ; empty half [sbl_drain_h] if captured
-    mov bl, [sbl_drain_h]
-    xor bh, bh
-    cmp byte [sbl_valid+bx], 0
-    je .oout
-    call sbl_drain_half         ; copy (capacity-capped), then retire the
-    mov byte [sbl_valid+bx], 0  ; half and advance oldest-first order
-    xor bl, 1
-    mov [sbl_drain_h], bl
-.oout:
-    ret
-
-; -----------------------------------------------------------------------------
-; sbl_drain_task - the transient record-pacing task (SPEC.md 34.6)
-;
-; Spawned by verb 4 (task_spawn arg: DL = owning instance -> T_INST,
-; DH = the stream generation it serves). Moves ring halves into the
-; owner's grant as the ISR flags them captured, stops the DSP when the
-; grant capacity fills, resumes an overrun-paused capture, and exits - via
-; task_exit, never ret - when the stream is closed, torn down, superseded
-; by a newer open, or stopped by the watchdog. Same pacing bound as
-; sbl_refill_task: a ring half is >= 4.9 ticks even at the 15kHz input
-; ceiling, so one-tick pacing always keeps up.
-; -----------------------------------------------------------------------------
-sbl_drain_task:
-    mov si, sbl_drain           ; the drain pass, in the shared loop. The
-    jmp short sbl_worker        ; jump is not dead weight: tests/unit/
-                                ; t_drvclaim.py walks a task's cone by named
-                                ; jumps and by the pass named into SI, and a
-                                ; fallthrough is neither
-sbl_worker:                     ; --- both workers: SI = the pass -----------
+sbl_refill_task:
     mov byte [sbl_wtask], 1     ; detach waits on this (SPEC.md 51.7): our
 .loop:
     call sbl_live               ; closed / torn down, or superseded by a
     jne .die                    ; newer stream?
     cmp byte [sbl_str_state], SBL_ST_END
     je .die                     ; watchdog-stopped: nothing left to pace
-    call si                     ; sbl_refill_pass / sbl_drain: both keep SI
+    call sbl_refill_pass
     mov ax, 1                   ; a block is >= 1.7 ticks at the 22kHz
     call OSAPI_TASK_SLEEP       ; ceiling: one-tick pacing always keeps up
     jmp .loop
@@ -3032,7 +2569,10 @@ sbl_tick:
     cmp byte [sbl_str_state], SBL_ST_PLAY
     jne .out
 %ifdef PICOMEM
-    call pm_runaway             ; a channel 1 racing at bus speed: mask it
+    cmp byte [pm_up], 0         ; only a card pm_init configured: pm_runaway
+    je .nopm                    ; is in the PicoMEM's run, which a machine
+    call pm_runaway             ; without one hands back (SPEC.md 34.15.1).
+.nopm:                          ; A channel 1 racing at bus speed: mask it
 %endif                          ; (SPEC.md 34.10.5)
     dec word [sbl_wd]
     jnz .out
@@ -3070,7 +2610,7 @@ sbl_release_inst:
 .g:
     cmp word [sbl_gr_act+bx], 0
     je .next
-    cmp [sbl_gr_inst+bx], al
+    cmp [sbl_gr_act+bx], al
     jne .next
     mov word [sbl_gr_act+bx], 0
 .next:
@@ -3090,8 +2630,8 @@ sbl_release_inst:
 SBL_WANT   equ SBL_DMASZ / 1024
 
 ; -----------------------------------------------------------------------------
-; sbl_attach - find a card
-; in:  nothing
+; sbl_attach - bring the card sbl_find found up as the DSP tier
+; in:  nothing (DRVV_ATTACH after sbl_find, or DRVV_TIER's "on")
 ; out: CF = 0 attached; CF = 1 and AL = DRVE_HW (no card) or DRVE_TWICE -
 ;      and in either case NOTHING is hooked and NOTHING is held (SPEC.md 51.2)
 ; clobbers: AX (flags)
@@ -3102,6 +2642,16 @@ SBL_WANT   equ SBL_DMASZ / 1024
 ; it. A double-buffered stream claims it at open and frees it at close, so an
 ; idle card costs the heap its image and not a byte more, and DRVE_MEM moved to
 ; where memory is actually wanted: verb 0 and verb 4 answer 8.
+;
+; IT SCANS NOTHING EITHER: the six-base scan and the IRQ discovery ran once,
+; in sbl_find, at the driver's attach (SBL_ONCE). What a tier change re-does
+; is the DSP reset at the base that scan settled, then the hook on the line
+; the discovery settled. A card that has stopped answering is refused as
+; DRVE_HW, as the scan would have refused it - and so is a card with NO usable
+; line (none confirmed, or IRQ 5 refused on an XT, 34.5.6): the DSP tier is
+; then not published, the OPL2 still is, and a Control Panel that turns the
+; tier on reports the refusal as it reports any other. No toast: the machine
+; boots working, on FM.
 ; -----------------------------------------------------------------------------
 sbl_attach:
     cmp byte [sbl_up], 0
@@ -3112,99 +2662,30 @@ sbl_attach:
                                 ; reset and before the first port write, so a
                                 ; live stream, the hooked vector and the running
                                 ; DSP are all exactly as they were
-    call sbl_state_init         ; before any port write: a reload starts clean
-    call sbl_f_probe            ; the reset scan + E1h version gate
-    or al, al
-    jz .nohw
+    cmp word [sbl_base], 0
+    je .nohw                    ; sbl_find found no card at the attach...
+    cmp byte [sbl_irq], 0xFF
+    je .nohw                    ; ...or no line it can use (SPEC.md 34.5.6)
+    call sbl_state_init         ; before any port write: a re-attach starts clean
+    push cx
+    xor cx, cx                  ; 65536 polls: the scan's slow-DSP allowance
+    call sbl_f_reset
+    pop cx
+    jc .nohw
     mov ax, [sbl_base]          ; the block IRQ's ACK port: 2xEh, and 2xFh
     add ax, 0x0E                ; only while a 16-bit stream plays (SPEC.md
     mov [sbl_ackp], ax          ; 34.5.5). EVEN, so that is bit 0
+    call sbl_hook               ; sbl_isr on the line sbl_find settled
     mov byte [sbl_up], 1        ; publish LAST (SPEC.md 29.2): the stream
     clc                         ; verbs test this and nothing else
-    jmp short .out
+    ret
 .nohw:
     mov al, DRVE_HW
     stc
-    jmp short .out
+    ret
 .twice:
     mov al, DRVE_TWICE
     stc
-.out:                           ; (no saves: sbl_state_init and sbl_f_probe
-    ret                         ; keep every register but AX)
-
-; -----------------------------------------------------------------------------
-; sbl_hdma_find - an SB16's 16-bit DMA channel, IF ONE CAN BE PROGRAMMED
-;                 (SPEC.md 34.5.5)
-; in:  a DSP 4.xx attached ([sbl_base])
-; out: CF = 0 and [sbl_hdma] = 5, 6 or 7; CF = 1 and [sbl_hdma] = 0
-; clobbers: nothing (flags)
-;
-; Two facts, both asked of the hardware. CT1745 mixer register 81h names the
-; card's DMA channels (bits 5-7 = 5-7), and an SB16 jumpered with none of
-; them high has no 16-bit path here. Then the second 8237 itself: the
-; channel is masked and its address register written and read back, because
-; an SB16 in an XT's 8-bit slot reports DMA 5 and there is no controller at
-; C0h-DFh to answer - the bus floats FFh. The register is the channel's own,
-; masked and reprogrammed at every start, so the pattern left in it is
-; harmless.
-; -----------------------------------------------------------------------------
-sbl_hdma_find:
-    push ax
-    push cx
-    push dx
-    mov byte [sbl_hdma], 0
-    mov dx, [sbl_base]
-    add dx, 4
-    mov al, 0x81
-    pushf
-    cli
-    out dx, al
-    inc dx
-    in al, dx                   ; bits 5-7: DMA 5, 6, 7
-    popf
-    mov cl, 5
-    shr al, cl
-    jz .no                      ; no high channel at all
-    mov ah, 4
-.bit:                           ; the lowest one named
-    inc ah
-    shr al, 1
-    jnc .bit
-    mov al, ah
-    and al, 3
-    mov cl, al                  ; CL = its index on the second 8237
-    or al, 4
-    mov dl, cl
-    mov dh, 0
-    shl dx, 1
-    shl dx, 1
-    add dx, 0xC0                ; C4h/C8h/CCh: its address register
-    pushf
-    cli
-    out 0xD4, al                ; masked
-    out 0xD8, al                ; flip-flop clear
-    mov al, 0x5A
-    out dx, al
-    mov al, 0xA5
-    out dx, al
-    out 0xD8, al
-    in al, dx
-    mov ch, al                  ; CH = the low byte read back...
-    in al, dx                   ; ...AL = the high
-    popf
-    cmp ch, 0x5A
-    jne .no
-    cmp al, 0xA5
-    jne .no
-    mov [sbl_hdma], ah
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop dx
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3260,9 +2741,7 @@ sbl_dma_get:
     pop dx
     pop cx
     pop ax
-    ret
-.ok:
-    clc
+.ok:                            ; (CF = 0: `jne` after a compare with 0)
     ret
 
 ; sbl_dma_put - free the double buffer if it is held. Clobbers nothing.
@@ -3285,11 +2764,45 @@ sbl_dma_put:
     ret
 
 ; -----------------------------------------------------------------------------
+; sbl_xrl - an external ring's length from its size code (SPEC.md 34.5.3)
+; in:  AL = the open flags; out: AX = RL = 4096 << AL bits 4-5; clobbers CL
+; sbl_xctl - its control words' far pointer: [sbl_extctl] = DI:SI + RL
+; in:  DI:SI = the ring, [sbl_rmask] = RL - 1; out: nothing; clobbers AX
+; sbl_wdset - the watchdog's period: [sbl_wd_rst] = [sbl_wd] = DX:AX / BX + 3
+; in:  DX:AX = the dividend, BX = the rate; out: AX = the period; clobbers DX
+; Verb 0 and verb 4 each had a copy of all three.
+; -----------------------------------------------------------------------------
+sbl_xrl:
+    mov cl, SND_OPENF_RLSH
+    shr al, cl
+    and al, 3
+    mov cl, al
+    mov ax, 4096
+    shl ax, cl
+    ret
+
+sbl_xctl:
+    lea ax, [si+1]
+    add ax, [sbl_rmask]
+    mov [sbl_extctl], ax
+    mov [sbl_extctl+2], di
+    ret
+
+sbl_wdset:
+    div bx
+    add ax, 3
+    mov [sbl_wd_rst], ax
+    mov [sbl_wd], ax
+    ret
+
+; -----------------------------------------------------------------------------
 ; sbl_ring_phys - where the 8237 would see a ring in the pool (SPEC.md 34.5.2)
 ; in:  SI = the ring's offset in [sbl_rseg] - the pool, or an external ring's
 ;      own claim (SPEC.md 34.5.3) - and [sbl_rmask] = RL - 1
 ; out: CF = 0 the whole ring is inside one 64KB physical page, AX = its offset
-;      in that page and DL = the page; CF = 1 it straddles one
+;      in that page and DL = the page; CF = 1 it straddles one. Either way
+;      [sbl_xoff]/[sbl_xpage] = AX/DL - both callers wanted them there, and
+;      a refused open has published nothing that reads them
 ; clobbers: DH (flags)
 ; -----------------------------------------------------------------------------
 sbl_ring_phys:
@@ -3303,8 +2816,10 @@ sbl_ring_phys:
     adc dl, 0                   ; into the page
     push ax
     add ax, [sbl_rmask]         ; the ring's last byte: a carry out of the
-    pop ax                      ; low 16 bits is a page crossed (pop and pop
-    pop cx                      ; leave the flags alone)
+    pop ax                      ; low 16 bits is a page crossed (pop, pop
+    pop cx                      ; and mov leave the flags alone)
+    mov [sbl_xoff], ax
+    mov [sbl_xpage], dl
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3550,28 +3065,14 @@ sbl_unhook:
     push ax
     push bx
     push cx
-    push dx
     push es
     cmp byte [sbl_hooked], 0
     je .out
-    mov cl, [sbl_irq]           ; mask the line first: no IRQ mid-teardown
-    mov ah, 1
-    shl ah, cl
-    in al, 0x21
-    or al, ah
-    out 0x21, al
+    call sbl_cell               ; mask the line first: no IRQ mid-teardown
     mov cx, 2000                ; DSP reset - the probe's own routine, the
     call sbl_f_reset            ; scan's per-base budget (~10ms of ISA reads)
-    mov al, [sbl_irq]           ; restore the saved vector
-    add al, 8                   ; IRQ n -> int 8+n
-    mov ah, 0
-    shl ax, 1
-    shl ax, 1
-    mov bx, ax
-    xor ax, ax
-    mov es, ax
-    pushf
-    cli
+    pushf                       ; restore the saved vector (ES:BX still
+    cli                         ; sbl_cell's: sbl_f_reset keeps both)
     mov ax, [sbl_oldvec]
     mov [es:bx], ax
     mov ax, [sbl_oldvec+2]
@@ -3580,7 +3081,6 @@ sbl_unhook:
     mov byte [sbl_hooked], 0
 .out:
     pop es
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -3589,10 +3089,10 @@ sbl_unhook:
 ; -----------------------------------------------------------------------------
 ; sbl_state_init - store the module's .bss before the services publish
 ;
-; in:       nothing (called from sbl_attach; the probe that fills sbl_base and
-;           the version runs AFTER this)
-; out:      sbl_zb..sbl_ze zeroed, then [sbl_irq] / [sbl_dsc_fired] /
-;           [sbl_str_inst] = 0xFF and [sbl_half] = SBL_HALF
+; in:       nothing (called from sbl_attach)
+; out:      sbl_zb..sbl_ze zeroed, then [sbl_str_inst] = 0xFF and
+;           [sbl_half] = SBL_HALF. NOT the card's facts - [sbl_base], the
+;           version, [sbl_irq] - which sbl_find settles once a load
 ; clobbers: nothing (flags)
 ;
 ; ONE FILL over the run SBL_STATE lays out for it, rather than a store per
@@ -3608,8 +3108,6 @@ sbl_state_init:
     xor ax, ax
     call snd_fill
     dec ax                      ; AL = 0xFF
-    mov [sbl_irq], al           ; discovery deferred to first use (34.5)
-    mov [sbl_dsc_fired], al
     mov [sbl_str_inst], al
     mov word [sbl_half], SBL_HALF
     pop di
@@ -3618,11 +3116,309 @@ sbl_state_init:
     ret
 
 ; =============================================================================
-; Detection and IRQ discovery. Kernel-resident ancestry: these were far
-; code behind FARSHIMs with KCALL'd DSP handshakes; in the driver they are
-; ordinary near calls in the image's own segment, DS = the driver, and the
-; tables above and all sbl_ state are plain [addr] reads.
+; The DSP reset (the scan's, sbl_unhook's and a tier change's)
 ; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sbl_f_reset - reset the DSP at [sbl_base] and wait for 0AAh (far-local)
+;
+; in:       [sbl_base], CX = poll budget (0 = 65536)
+; out:      CF = 0 a DSP answered; CF = 1 nothing there
+; clobbers: AL, CX (flags)
+; -----------------------------------------------------------------------------
+sbl_f_reset:
+    push dx
+    mov dx, [sbl_base]
+    add dx, 6                   ; 2x6h: reset
+    mov al, 1
+    out dx, al
+    push cx
+    add dx, 8                   ; hold >= 3us: 8 ISA reads of 2xEh
+    mov cx, 8
+.dly:
+    in al, dx
+    loop .dly
+    sub dx, 8
+    pop cx
+    xor al, al
+    out dx, al
+    add dx, 8                   ; 2xEh: data-available status
+.poll:
+    in al, dx
+    test al, 0x80
+    jz .next
+    sub dx, 4                   ; 2xAh: read the identity byte
+    in al, dx
+    add dx, 4
+    cmp al, 0xAA
+    je .ret                     ; (an EQUAL compare: CF = 0)
+.next:
+    loop .poll
+    stc
+.ret:
+    pop dx
+    ret                         ; near: called from sbl_f_probe (same CS)
+
+
+; =============================================================================
+; The line's hook (SPEC.md 34.5). Discovery ran at the attach (sbl_f_irqdisc,
+; SBL_ONCE); this puts sbl_isr on the line it found, at every sbl_attach.
+; =============================================================================
+
+; -----------------------------------------------------------------------------
+; sbl_hook - put sbl_isr on [sbl_irq] (mouse_init order: mask, save the old
+;            vector and install, unmask). It stays until sbl_unhook.
+; in:       [sbl_irq] a line, [sbl_hooked] = 0
+; clobbers: nothing
+; -----------------------------------------------------------------------------
+sbl_hook:
+    push ax
+    push bx
+    push cx
+    push es
+    call sbl_cell               ; mask...
+    pushf                       ; ...save the old vector + install sbl_isr
+    cli
+    mov ax, sbl_isr
+    xchg ax, [es:bx]
+    mov [sbl_oldvec], ax
+    mov ax, cs                  ; sbl_isr lives in this driver's segment
+    xchg ax, [es:bx+2]
+    mov [sbl_oldvec+2], ax
+    popf
+    mov byte [sbl_hooked], 1
+    not ch                      ; ...and unmask
+    in al, 0x21
+    and al, ch
+    out 0x21, al
+    pop es
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_cell - ES = 0, BX = [sbl_irq]'s IVT cell, CH = its 8259 mask bit, and
+; the line MASKED at the 8259 - the first thing both its callers do with it
+; clobbers: AL, CL (flags) - sbl_hook's and sbl_unhook's one computation
+; -----------------------------------------------------------------------------
+sbl_cell:
+    xor bx, bx
+    mov es, bx
+    mov cl, [sbl_irq]
+    mov ch, 1
+    shl ch, cl
+    mov bl, cl
+    add bl, 8                   ; IRQ n -> int 8+n
+    shl bx, 1
+    shl bx, 1
+    in al, 0x21
+    or al, ch
+    out 0x21, al
+    ret
+
+
+; =============================================================================
+; SBL_ONCE - THE SOUND BLASTER'S ATTACH-ONLY HALF (SPEC.md 34.5, 34.15.1):
+; the reset scan, the IRQ discovery with its IRQ 5 test, the candidate stubs
+; and their tables. sound.asm expands it past snd_keepmix through sbl_find,
+; once a load, so none of it is resident after the attach. A tier change
+; re-uses what it settled ([sbl_base], the version, [sbl_irq]) - whether a
+; card is in the machine, and on which line, cannot change until a reload.
+; =============================================================================
+%macro SBL_ONCE 0
+
+sbl_bases:                      ; the pinned scan order (SPEC.md 34.2)
+    dw 0x220, 0x240, 0x210, 0x230, 0x250, 0x260, 0
+
+sbl_dsc_irqn: db 7, 5, 3, 2     ; IRQ candidates, pinned order (SPEC.md 34.5)
+sbl_dsc_t:                      ; per candidate, in the same order: the IVT
+    dw 0x3C, sbl_stub7, 0       ; byte offset (int 0Fh/0Dh/0Bh/0Ah), then a
+    dw 0x34, sbl_stub5, 0       ; FAR POINTER that sbl_f_irqdisc's .swap
+    dw 0x2C, sbl_stub3, 0       ; exchanges with the vector: the stub goes
+    dw 0x28, sbl_stub2, 0       ; in and the old vector lands here, and the
+SBL_DSC_N    equ 4              ; second swap puts both back. The segment
+                                ; words are stamped with our CS first
+
+
+; =============================================================================
+; The IRQ-discovery candidate stubs (.text - interrupt handlers, so SPEC.md
+; 33 bars them from far even though discovery itself is cold). Each records
+; its candidate index in sbl_dsc_fired ONLY after the 2xEh bit-7 read
+; confirms the DSP asserted the line. A confirm-failed interrupt is still
+; a real one when the 8259 holds its in-service bit - the candidates are
+; force-unmasked for the window, so an unrelated device on 2/3/5 can fire
+; - and gets an EOI; only line 7 can be truly spurious, decided by the
+; OCW3 0Bh in-service read exactly as in sbl_isr (SPEC.md 34.5).
+; =============================================================================
+sbl_stub7:
+    push ax
+    mov al, 0
+    jmp short sbl_stub_c
+sbl_stub5:
+    push ax
+    mov al, 1
+    jmp short sbl_stub_c
+sbl_stub3:
+    push ax
+    mov al, 2
+    jmp short sbl_stub_c
+sbl_stub2:
+    push ax
+    mov al, 3
+sbl_stub_c:
+    push dx
+    push ds
+    mov ah, al                  ; AH = candidate index (AL becomes scratch)
+    SBL_DSCS dx, dl             ; DS = ours, like sbl_isr's
+    or ah, ah                   ; candidate 0 (IRQ 7) first proves it is not
+    jnz .accept                 ; the 8259's spurious-IRQ-7 artifact:
+    mov al, 0x0B                ; OCW3 - the next 0x20 read returns the
+    out 0x20, al                ; in-service register
+    in al, 0x20
+    test al, 0x80               ; ISR bit 7 clear = spurious: no ack, no
+    jz .out                     ; EOI, no record (sbl_isr's split, 34.5)
+.accept:
+    mov dx, [sbl_base]          ; accept-on-fire: 2xEh is read as the SB-
+    add dx, 0x0E                ; side ACK and nothing else - its bit 7
+    in al, dx                   ; means "response byte waiting" and F2h
+                                ; queues none on real DSPs or 86Box
+                                ; (SPEC.md 34.5 - the QEMU-only 0xAA is
+                                ; why a bit-7 "confirm" once shipped)
+    mov [sbl_dsc_fired], ah     ; the discovery loop reads this
+    mov al, 0x20                ; a stray from an unrelated device on
+    out 0x20, al                ; 2/3/5 still needs its EOI either way,
+                                ; or its whole priority level wedges
+.out:
+    pop ds
+    pop dx
+    pop ax
+    iret
+
+
+; -----------------------------------------------------------------------------
+; sbl_find - the reset scan, then the IRQ discovery (DRVV_ATTACH only)
+; out: [sbl_base] (0 = none), the version, [sbl_auto], [sbl_irq] (0FFh = no
+;      usable line), [sbl_hdma]; clobbers: AX (flags)
+; -----------------------------------------------------------------------------
+sbl_find:
+    call sbl_f_probe
+    or al, al
+    jz .ret
+    call sbl_f_irqdisc
+    cmp byte [sbl_verhi], 4     ; a DSP 4.xx: its 16-bit channel too
+    jb .ret                     ; (SPEC.md 34.5.5)
+    call sbl_hdma_find
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; sbl_hdma_find - an SB16's 16-bit DMA channel, IF ONE CAN BE PROGRAMMED
+;                 (SPEC.md 34.5.5)
+; in:  a DSP 4.xx found ([sbl_base]) - sbl_find asks, once a load, and
+;      snd_sb_pub reads [sbl_hdma] at every tier-on
+; out: CF = 0 and [sbl_hdma] = 5, 6 or 7; CF = 1 and [sbl_hdma] = 0
+; clobbers: nothing (flags)
+;
+; Two facts, both asked of the hardware. CT1745 mixer register 81h names the
+; card's DMA channels (bits 5-7 = 5-7), and an SB16 jumpered with none of
+; them high has no 16-bit path here. Then the second 8237 itself: the
+; channel is masked and its address register written and read back, because
+; an SB16 in an XT's 8-bit slot reports DMA 5 and there is no controller at
+; C0h-DFh to answer - the bus floats FFh. The register is the channel's own,
+; masked and reprogrammed at every start, so the pattern left in it is
+; harmless.
+; -----------------------------------------------------------------------------
+sbl_hdma_find:
+    push ax
+    push cx
+    push dx
+    mov byte [sbl_hdma], 0
+    mov dx, [sbl_base]
+    add dx, 4
+    mov al, 0x81
+    pushf
+    cli
+    out dx, al
+    inc dx
+    in al, dx                   ; bits 5-7: DMA 5, 6, 7
+    popf
+    mov cl, 5
+    shr al, cl
+    jz .no                      ; no high channel at all
+    mov ah, 4
+.bit:                           ; the lowest one named
+    inc ah
+    shr al, 1
+    jnc .bit
+    mov al, ah
+    and al, 3
+    mov cl, al                  ; CL = its index on the second 8237
+    or al, 4
+    mov dl, cl
+    mov dh, 0
+    shl dx, 1
+    shl dx, 1
+    add dx, 0xC0                ; C4h/C8h/CCh: its address register
+    pushf
+    cli
+    out 0xD4, al                ; masked
+    out 0xD8, al                ; flip-flop clear
+    mov al, 0x5A
+    out dx, al
+    mov al, 0xA5
+    out dx, al
+    out 0xD8, al
+    in al, dx
+    mov ch, al                  ; CH = the low byte read back...
+    in al, dx                   ; ...AL = the high
+    popf
+    cmp ch, 0x5A
+    jne .no
+    cmp al, 0xA5
+    jne .no
+    mov [sbl_hdma], ah
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+sbl_dsc_fired: db 0             ; discovery: confirmed candidate index
+sbl_dsc_mask: db 0              ; discovery: saved 8259 mask
+
+; -----------------------------------------------------------------------------
+; sbl_dsp_rd - read one byte from the DSP (the scan's E1h answer is the only
+;              byte this driver reads, so it is attach-only too)
+; in:       [sbl_base] set
+; out:      CF = 0, AL = byte; CF = 1 nothing arrived (timeout, AL trash)
+; clobbers: nothing else (flags)
+; -----------------------------------------------------------------------------
+sbl_dsp_rd:
+    push cx
+    push dx
+    mov dx, [sbl_base]
+    add dx, 0x0E                ; 2xEh: read-buffer status
+    mov cx, SBL_POLLS
+.poll:
+    in al, dx
+    test al, 0x80               ; bit 7 set = data available
+    jnz .ok
+    loop .poll
+    stc
+    jmp .out
+.ok:
+    sub dx, 4                   ; 2xAh: read data
+    in al, dx
+    clc
+.out:
+    pop dx
+    pop cx
+    ret
 
 
 ; -----------------------------------------------------------------------------
@@ -3702,57 +3498,20 @@ sbl_f_probe:
     ret                         ; near: .fartext is retired here
 
 ; -----------------------------------------------------------------------------
-; sbl_f_reset - reset the DSP at [sbl_base] and wait for 0AAh (far-local)
-;
-; in:       [sbl_base], CX = poll budget (0 = 65536)
-; out:      CF = 0 a DSP answered; CF = 1 nothing there
-; clobbers: AL, CX (flags)
-; -----------------------------------------------------------------------------
-sbl_f_reset:
-    push dx
-    mov dx, [sbl_base]
-    add dx, 6                   ; 2x6h: reset
-    mov al, 1
-    out dx, al
-    push cx
-    add dx, 8                   ; hold >= 3us: 8 ISA reads of 2xEh
-    mov cx, 8
-.dly:
-    in al, dx
-    loop .dly
-    sub dx, 8
-    pop cx
-    xor al, al
-    out dx, al
-    add dx, 8                   ; 2xEh: data-available status
-.poll:
-    in al, dx
-    test al, 0x80
-    jz .next
-    sub dx, 4                   ; 2xAh: read the identity byte
-    in al, dx
-    add dx, 4
-    cmp al, 0xAA
-    je .yes
-.next:
-    loop .poll
-    stc
-    jmp .ret
-.yes:
-    clc
-.ret:
-    pop dx
-    ret                         ; near: called from sbl_f_probe (same CS)
-
-; -----------------------------------------------------------------------------
 ; sbl_f_irqdisc - IRQ discovery orchestration (far body; SPEC.md 34.5)
 ;
-; in:       nothing (task context, IF = 1 - the wait needs live ticks)
-; out:      AL = 1 - [sbl_irq] set, sbl_isr hooked on the winner
-;           (mouse_init order: saved old vector, installed while masked,
-;           unmasked) and staying hooked until snd_unhook; AL = 0 no
-;           candidate confirmed (retried once)
+; in:       nothing (DRVV_ATTACH, by way of sbl_find: IF = 1 and the tick
+;           live - the wait needs it, and pm_wait's header has the
+;           measurement that it is)
+; out:      AL = 1 - [sbl_irq] = the line; AL = 0 - [sbl_irq] = 0FFh, no
+;           candidate confirmed (retried once) or IRQ 5 refused (34.5.6).
+;           NOTHING is left hooked: sbl_attach hooks the line
 ; clobbers: nothing else (flags)
+;
+; ATTACH-ONLY (SBL_ONCE, past snd_keepmix): it ran at the first stream open
+; until 2026-10-30, which kept it - and the IRQ 5 test, the stubs and the
+; candidate tables - resident on every machine for the life of the session.
+; Run once a load, its answer is a fact a tier change re-uses.
 ;
 ; Hook all four candidates onto the .text stubs, open their mask bits,
 ; issue F2h (trigger-8-bit-IRQ, supported by every DSP), and wait ~3 ticks
@@ -3839,43 +3598,12 @@ sbl_f_irqdisc:
     call sbl_irq5_taken         ; REFUSED (SPEC.md 34.5.6): the card would
     jc .taken                   ; play one block and fall silent
 .free:
-    mov [sbl_irq], al
-    add al, 8                   ; SI = (IRQ + 8) * 4: its IVT cell
-    cbw
-    shl ax, 1
-    shl ax, 1
-    mov si, ax
-    mov ah, [sbl_dsc_mbit+bx]   ; mouse_init order: mask...
-    in al, 0x21
-    or al, ah
-    out 0x21, al
-    pushf                       ; ...save the old vector + install sbl_isr
-    cli
-    mov ax, [es:si]
-    mov [sbl_oldvec], ax
-    mov ax, [es:si+2]
-    mov [sbl_oldvec+2], ax
-    mov word [es:si], sbl_isr
-    mov word [es:si+2], cs      ; sbl_isr lives in this driver's segment
-    popf
-    mov byte [sbl_hooked], 1
-    mov ah, [sbl_dsc_mbit+bx]   ; ...and unmask
-    not ah
-    in al, 0x21
-    and al, ah
-    out 0x21, al
-    mov al, 1
-    jmp .out
-.taken:
-    cmp byte [sbl_irq5x], 0     ; said once a session, not at every open
-    jne .none
-    mov byte [sbl_irq5x], 1
-    push ds
-    pop es
-    mov si, sbl_irq5msg
-    xor cx, cx
-    call OSAPI_TOAST
-.none:
+    mov [sbl_irq], al           ; the line: sbl_attach hooks it, and a tier
+    mov al, 1                   ; change re-uses it
+    jmp short .out
+.taken:                         ; (no toast: sbl_attach refuses the DSP
+.none:                          ; tier and the OPL2 attaches - 34.5.6)
+    mov byte [sbl_irq], 0xFF    ; no usable line, for the session
     xor al, al
 .out:
     pop es
@@ -3934,7 +3662,9 @@ sbl_irq5_taken:
     pop ax
     ret
 
-sbl_irq5msg: db 'IRQ 5 is the hard disk', 0x27, 's', 0   ; 24 characters
+; =============================================================================
+%endmacro
+
 
 ; =============================================================================
 ; state (SPEC.md 34.7) - stored by sbl_state_init at attach, before the
@@ -3955,20 +3685,21 @@ sbl_irq5msg: db 'IRQ 5 is the hard disk', 0x27, 's', 0   ; 24 characters
 ; [sbl_clip] (the kernel's half of the clip exclusion) among them.
 ; =============================================================================
 %macro SBL_STATE 0
-sbl_zb:                         ; --- cleared at every attach ----------------
+                                ; --- settled ONCE a load by sbl_find ---------
 sbl_base:     dw 0              ; DSP base port (220h..260h), 0 = none
 sbl_verhi:    db 0              ; DSP version from E1h: major
 sbl_verlo:    db 0              ;   minor
 sbl_auto:     db 0              ; 1 = auto-init strategy (DSP >= 2.00, 34.5)
-sbl_irq:      db 0              ; discovered IRQ line, 0xFF = not yet
+sbl_irq:      db 0              ; discovered IRQ line, 0xFF = none usable
+sbl_hdma:     db 0              ; the SB16's 16-bit DMA channel (5..7), 0 =
+                                ; none or no second 8237 (sbl_hdma_find)
+sbl_zb:                         ; --- cleared at every attach ----------------
 sbl_drqmask:  db 0              ; 4 = keep DMA channel 1 MASKED at every
                                 ; start: it races at bus speed while the DSP
                                 ; plays (a PicoMEM 1.x on a 286, whose card
                                 ; copies without it - picomem.inc's
                                 ; pm_runaway sets it). OR'd into the unmask
 sbl_hooked:   db 0              ; sbl_isr installed on [sbl_irq]'s vector
-sbl_irq5x:    db 0              ; the IRQ 5 refusal has been said (34.5.6)
-sbl_dsc_fired: db 0             ; discovery: confirmed candidate index
 sbl_expect:   db 0              ; a block IRQ is legitimate (SPEC.md 34.5)
 sbl_under:    dw 0              ; underrun-pause count (debug, cumulative)
 
@@ -3994,7 +3725,6 @@ sbl_play:     db 0              ;   the half the DSP sounds (input:
                                 ;   captures into) next
 sbl_valid:    db 0, 0           ;   per-half: refilled since last consumed
                                 ;   (input: captured, awaiting drain)
-sbl_drain_h:  db 0              ;   input: next half the drain task empties
 sbl_paused:   db 0              ;   D0h issued; sbl_go_on owed
 sbl_tc:       db 0              ;   DSP time constant for the open rate
 sbl_ring_on:  db 0              ;   1 = ring mode (SPEC.md 34.5): the three
@@ -4029,20 +3759,20 @@ sbl_fmt:      db 0              ;   the open stream's SND_FMT_* bits: 0 for
                                 ;   every stream verb 11 did not shape
 sbl_nfmt:     db 0              ; verb 11's held format, for...
 sbl_nfinst:   db 0              ; ...this instance's next verb 0
-sbl_hdma:     db 0              ; the SB16's 16-bit DMA channel (5..7), 0 =
-                                ; none or no second 8237 (sbl_hdma_find)
 sbl_prime:    db 0              ; 1 = the SB Pro stereo primer's IRQ is owed
-sbl_pst:      db 0              ; 1 = mixer 0Eh holds our stereo bits...
-sbl_m0e:      db 0              ; ...and this is the byte to put back
+sbl_pst:      db 0              ; 1 = mixer 0Eh holds our stereo bits
+                                ; (and sbl_m0e, in SBL_PRO, the byte to put back)
 sbl_ackp:     dw 0              ; the block IRQ's ACK port (sbl_attach)
-sbl_gr_act:   times SBL_GMAX dw 0   ; grants in use (occupancy IS these)
+sbl_gr_act:   times SBL_GMAX dw 0   ; grants in use (occupancy IS these): 0
+                                ; free, else 100h + the owning instance - a
+                                ; byte compare against the low half is the
+                                ; owner test, behind the word's own
 sbl_ze:                         ; --- end of the attach-time clear -----------
 %if sbl_ext - sbl_direct != 1 || sbl_hisp - sbl_wide != 1
   %error "sbl_v_open clears sbl_direct/sbl_ext and sbl_wide/sbl_hisp as words"
 %endif
 
 sbl_oldvec:   dw 0, 0           ; the winner's saved vector (off, seg)
-sbl_dsc_mask: db 0              ; discovery: saved 8259 mask
 sbl_rseg:     dw 0              ;   the ring's segment for sbl_ring_phys
 sbl_extctl:   dw 0, 0           ;   external: the control words (off, seg)
 sbl_xpage:    db 0              ;   the auto-init DMA cycle hw_start
@@ -4079,6 +3809,6 @@ sbl_clip:     db 0              ; 1 = the kernel says a PCM_EXCL clip owns
                                 ; that can see both tiers
 
 sbl_gr_off:   times SBL_GMAX dw 0     ; staging grants (SPEC.md 34.6): offset,
-sbl_gr_size:  times SBL_GMAX dw 0     ;   size in bytes,
-sbl_gr_inst:  times SBL_GMAX dw 0     ;   owning instance (low byte)
+sbl_gr_size:  times SBL_GMAX dw 0     ;   size in bytes (the owner is in
+                                      ;   sbl_gr_act's low byte)
 %endmacro

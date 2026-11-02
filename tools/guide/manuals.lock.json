@@ -888,9 +888,9 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "5734441e",
-  "strings": "6477c968484e9734",
-  "why": "Shift+F2 Steady pacing added to Making a game faster and the Screen table; the copy and fill marking, renderer and draw-pacing changes are below the page's detail"
+  "stamped": "ce861766",
+  "strings": "c112221783311c2f",
+  "why": "91816de9 only changes the kern_mega arm's window title to (Un)RealDMG under protected mode; the page describes no window title and its kern_mega lines (memory above 1MB, PRE refused) are unchanged"
  },
  "REDLINE_O88": {
   "sources": [
@@ -1028,9 +1028,9 @@
   "sources": [
    "drivers/sound"
   ],
-  "stamped": "e60ae715",
-  "strings": "84884b633231227c",
-  "why": "main's IRQ 5 refusal on an XT (SPEC.md 34.5.6) and stereo/16-bit streams (34.5.5) at the merge of main: the refusal's toast and its cure added to Good to know; the streams change no page text"
+  "stamped": "44f73b32",
+  "strings": "d5ccec072faf56ae",
+  "why": "kernel size pass 15: the page's memory figures follow the new keeps, 6K and 9K (SPEC.md 34.15.1)"
  },
  "SPACEJAM_MID": {
   "sources": [],
@@ -1232,9 +1232,9 @@
   "sources": [
    "apps/video"
   ],
-  "stamped": "7feb6f7f",
-  "strings": "e12854274eb7881d",
-  "why": "merge of protected-mode into elendilon: both sides' strings (version 2's Needs the block decoder, the XMS-in-place-under-protected-mode card lines) checked against the page; the block decoder's second assembly for protected mode adds no string and is below the page's level; unchanged"
+  "stamped": "e88b5c64",
+  "strings": "38f69d0a3ba07d6b",
+  "why": "string diff from 6b05fb4e (the old stamp 7feb6f7f was squashed away; 6b05fb4e matches its fingerprint): only vcold.asm's info-card ninth line, built into the kern_mega arm alone (MEGAAPPDIR), which no released disk carries; the page describes the shipped player, so unchanged"
  },
  "VMMOUSE_DRV": {
   "sources": [

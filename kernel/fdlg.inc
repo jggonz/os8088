@@ -950,7 +950,7 @@ fdlg_h_key:
 
 fdlg_post_cancel:
     mov al, FDA_CANCEL
-    jmp short fdlg_post
+    SKIPF2                      ; (test ax, imm16 over the mov: AL kept; fdlg_post ends in stc - pass 15)
 fdlg_post_commit:
     mov al, FDA_COMMIT
 ; fdlg_post - record the answer and wake ui_task; fdlg_reap acts on it
@@ -1105,7 +1105,9 @@ fdlg_drawbtn:
 %ifdef FDLG_MOD
     call fdb_kbtn               ; this image's own (kern_small, below)
 %else
-    call COLD_SEG:os88ui_btn_f  ; os88ui_kbtn's own far entry (SPEC.md 2.6)
+    call os88ui_kbtn            ; NEAR: fdlg.inc is .cold on kern_big, beside
+                                ; it (kernel size pass 15; it was the far
+                                ; entry os88ui_btn_f, which went)
 %endif
     pop di
     pop si
@@ -1222,8 +1224,10 @@ fdlg_gdis:  resw 1              ; the Open button's flags as last drawn
 fdlg_rqwin: resw 1              ; the requester's window...
 fdlg_rqcb:  resw 1              ; ...its near completion proc...
 fdlg_rqrec: resw 1              ; ...its instance record...
+%ifdef FDLG_MOD
 fdlg_rqsp:  resw 1              ; ...and that record's I_SPTR: the staleness
-                                ; triple of SPEC.md 38.6
+%endif                          ; triple of SPEC.md 38.6 (kern_big's is in
+                                ; memory.inc's mem_rr_lone - pass 15)
 fdlg_sdrv:  resb 1              ; where the chooser OPENED - and, from
 fdlg_scwd:  resw 1              ; fdlg_reap's close on, where it STOOD
 %ifdef KERN_SMALL

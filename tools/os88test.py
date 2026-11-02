@@ -334,6 +334,11 @@ def capabilities():
     # card no emulator here carries - the PicoMEM (tests/picomem.py).
     if os88build.have_unicorn():
         caps.add("unicorn")
+    # ...and the PicoMEM's OWN FIRMWARE built for the host (tools/picomem,
+    # docs/plans/completed/PICOMEM-EMU-PLAN.md), which the same row's fw legs run the
+    # driver against in place of the model
+    if os88build.have_pmhost():
+        caps.add("pmhost")
     # Bochs and its X tools, for the one row that boots kern_mega there
     # (tests/megatrap0.py): QEMU checks no segment on a data access, so a
     # #GP census under it counts nothing (docs/BOCHS.md)

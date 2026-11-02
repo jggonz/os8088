@@ -192,11 +192,8 @@ ld_slot:
 ; lay past the terminator was never read on any of the three paths.
 ; -----------------------------------------------------------------------------
 ld_lname_cp:
-    push ax
-    push cx
-    push si
-    push di
-    push ds
+    call kentc_di               ; KENT: push ax..di (kernel size pass 15: the
+    push ds                     ; ladder is three bytes under four pairs)
     pop es                      ; ES = KERNEL for the destination
     mov di, ld_lname
     mov cx, LD_NAMELEN
@@ -209,11 +206,7 @@ ld_lname_cp:
     loop .cp
     mov byte [di], 0            ; twelve characters and no terminator: end it.
 .done:                          ; ES == DS, so no override is needed
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; ld_unreserve - give back a region, and anything the entry proc claimed

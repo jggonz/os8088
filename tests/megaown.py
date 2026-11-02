@@ -59,22 +59,22 @@ def main():
     fails = []
     lines = []
     try:
-        if box.wait_for("kern_mega:", 240):
+        if box.wait_pm(240):
             box.up()                    # the desktop, off kernel state
             box.megarun()               # C:, RUN, 0RUN.O88
             end = time.time() + 200
             while time.time() < end:
-                lines = box.lines()
+                lines = box.said()
                 if any(l.startswith("kern_mega FAULT") or
                        l.startswith("MEGAOWN: after") or
                        l.startswith("MEGAOWN: no") for l in lines):
                     break
                 time.sleep(0.2)
-            time.sleep(2)
+            box.guest_sleep(2)          # GUEST seconds (Box.guest_sleep)
             os88bochs.shot(os.path.join(out, "after.png"))
-            lines = box.lines()
+            lines = box.said()
         else:
-            fails.append("no kern_mega line in 240s")
+            fails.append("kern_mega never switched to protected mode in 240s")
     finally:
         box.stop()
     for l in lines:

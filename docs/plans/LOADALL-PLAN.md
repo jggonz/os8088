@@ -734,8 +734,8 @@ runs it; its numbers are not the machine's (VIDBENCH's mr286 rows are 1.2-
   copy is ~0.28 ms + 0.173 ms a KB by either transport, the 16 KB piece
   stands, and the bank's fill models at ~763 KB/s.
 - **L6 - the conventional memory L4 gives back, as more buffer** (the
-  owner's, 2026-10-15; DEFERRED until the profiles and the encoder match
-  real playback). In place the ring is the bank's slots and the
+  owner's, 2026-10-15; BUILT 2026-10-29 as TWO TIERS, SPEC.md 98.3.18.18 -
+  the design is below the original sketch, and the encoder prices it). In place the ring is the bank's slots and the
   conventional ring shrinks from up to 15 slots to two and a mirror; that
   memory is not needed to PLAY THROUGH any more, but it is still depth. The
   shape to cost first: a ring whose slots are a TABLE - the bank's in XMS
@@ -748,6 +748,38 @@ runs it; its numbers are not the machine's (VIDBENCH's mr286 rows are 1.2-
   are in two memories (a super-packet crossing from an XMS slot into a
   conventional one is not contiguous in either - it wants a mirror per
   memory boundary, or the table ordered so the crossing never happens).
+
+  - **L6's DESIGN, as built (2026-10-29).** What made it
+    worth building is a measurement: on the Victory's PicoMEM, Catch My
+    Heart and Sonic 2 drain the bank and the reader then runs DRY, and a
+    play's timed reads (SPEC.md 98.3.22.4) put the reader in `READ_SEQ` only
+    75-90% of the time - the copy up is ~6 ms of every 32 KB chunk on top
+    of the read. Two findings shape it:
+    1. **A fixed table buys nothing.** With chunk c in slot c mod K and K
+       the bank's 101 slots plus the ring's 8, an eighth of the chunks skip
+       the copy whenever they are read. The gain is in WHEN: a chunk read
+       while the reader is close behind the picture - the dry stretch,
+       exactly - is the one whose copy costs the play. So chunks go to the
+       CONVENTIONAL tier while every live chunk fits there, and to the bank
+       once it is full: the bank still banks in the calm stretches, when its
+       copy is cheap, and a stretch that drains it reads straight off the
+       disk into memory the hook decodes with no borrow.
+    2. **The decoder needs nothing.** `vp_addr` answers DX:SI, and
+       `VP_DSDX` already decides per POINTER whether DX is a handle (a
+       borrow) or a segment - so a super-packet in a conventional slot of an
+       in-place session decodes as a copying session's does.
+    The mechanism: a table of a word a chunk (`chunk & 0FFh`, the live
+    window under 256), bit 15 the tier and the rest the slot, read by
+    `vp_slot`'s callers in place of chunk mod K; each tier a FIFO with its
+    own write slot and live count, popped as `vp_lfloor` passes, its own
+    MIRROR at its end. A super-packet that runs from one tier into the other
+    is the one new case, and it is handled where the conventional ring
+    handles its wrap: at a SWITCH the chunk's head (`vp_mneed`) is copied
+    into the old tier's next slot, right after the chunk it continues, and
+    that slot is held until the new chunk is popped. A tier is left only
+    while it has that slot free. Off when nothing is in place, on BIGSP and
+    on Repeat (as in place is); a rung-1 disk already skips the copy and
+    gains nothing.
 
 - **L7 - BIGSP in the bank in place** (9.2.1's third item; NOT STARTED,
   the smallest of these): `[vp_kr]` = the bank's slots less `[vp_msl]`, and
@@ -775,6 +807,22 @@ runs it; its numbers are not the machine's (VIDBENCH's mr286 rows are 1.2-
   the decode goes in place). Then the in-place paths and 98.3.18.5 stop
   refusing `VP_SPK`. Gate: `vidspk`-shaped, on QEMU's speaker under LA_SIM -
   the samples counted against the clip's, none lost.
+
+- **L10 - version 2 in place: yield sites in the block decoder** (the
+  owner's, 2026-10-30; SECONDARY - after the kern_mega real-mode bracket,
+  docs/plans/MEGA-VIDEO-REALMODE-PLAN.md 5.3). A bank in place reads each
+  record through a borrow - LOADALL on a 286, a loaded base on a 386 - with
+  interrupts off, and the decode lets them back in only at its YIELD sites
+  (vdec.inc's VD_YCK, `vd_ypatch`, L4). The block decoder part
+  (`apps/video/vblk.asm`, SPEC.md 98.3.23) has none, so `vp_xbipq` refuses a
+  version 2 file in place (`or al, [vp_v2]`) and such a play copies each
+  chunk DOWN out of the bank - a missing capability, not a limit: the same
+  yield sites in `vb_walk`'s loop (a check every VP_XYB bytes of the list,
+  the borrow reopened at the same SI) would let it read in place on kern_big
+  as the other decoders do, and take the real-mode bracket under kern_mega
+  too. Not urgent: block files are mostly made to fit a floppy, not to
+  stream a heavy video. Gate when built: `vidxipbank`'s shape on a version 2
+  clip, every tenth frame held against the reference decode.
 
 All three are "not blocked, just more work" (the owner, 2026-10-15), and
 none is scheduled ahead of the profiling and the encoder matching playback.

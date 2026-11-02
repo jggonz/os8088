@@ -428,14 +428,11 @@ desk_init:
     cmp cl, DVOL_MAX
     jb .kloop
 
-    call COLD_SEG:desk_rowcalc_x    ; FAR: overlay -> resident. The row
-                                ; count is geometry, and geometry can change
-                                ; after boot now (SPEC.md 39.11.2), so the
-                                ; arithmetic is resident where vid_switch can
-                                ; reach it too - and it ends in a `retf`
-                                ; already, so the overlay names the body and
-                                ; the ovw_ shim that bounced through .text is
-                                ; gone (kernel size pass 9, -4 resident)
+                                ; (the grid's shape and the first reflow
+                                ; are kmain_o's next call, bvw_rowcalc - it
+                                ; was this routine's last far call into a
+                                ; resident body nothing resident ever called:
+                                ; kernel size pass 15)
 
     xor ax, ax                  ; AX is popped two lines down, so it is free
     mov [desk_clkt], ax
@@ -468,12 +465,29 @@ section .cold                   ; cold code (SPEC.md 2.6): resident, but in a
 ; 7 on VGA, 5 on Hercules, 4 on CGA - and at least one, always: a screen with
 ; no room for a single drive icon is not one this OS boots. It was inline in
 ; desk_init, which is boot-overlay code and therefore dead by the time the
-; Control Panel can change the adapter under it (SPEC.md 39.11.2), so it is
-; resident now and desk_init far-calls it like any other overlay->text step.
+; Control Panel can change the adapter under it (SPEC.md 39.11.2).
+;
+; WRITTEN ONCE AND EXPANDED WHERE ITS CALLERS ARE (kernel size pass 15): it
+; was `desk_rowcalc_x`, a resident `.cold` far body, and nothing resident ever
+; called it. Its callers are the BOOT - kmain_o (which runs it right after
+; desk_init returns, where desk_init used to far-call it as its last step from
+; the overlay, and again after drv_boot), the blob's bvs_switch and
+; bdk_reflow - and CTRL.DRV: Set Primary's vid_switch, the Dock page's
+; dock_reflow and the arrangement row. So it is `bvw_rowcalc` in the blob
+; (driver.inc on kern_big, below on kern_small) and `wm_rowcalc` in CTRL.DRV
+; (below), named for the WM_REFIT prefix VSW_SWITCH and DOCK_APPLY already
+; carry. %2 is the image's hop into a near `.cold` routine (BSWC, KSWC). On
+; kern_small desk_reflow and desk_live are written in as well: there the
+; reflow had no other caller (no driver, no shortcut, no service item adds a
+; volume after the boot), so all three leave resident together.
+;
+; THE BLOB HAD NINE BYTES on kern_big and kern_emu, so there the boot's copy
+; of the GEOMETRY (DESK_GRID) is `cfx_grid`, in `.cfx` past cfx_tab (kernel.asm
+; - transient, like the slide beside it, and past the RAM `.vgabuf` shares
+; with it), and the blob's bvw_rowcalc is a far call to it and the reflow.
+; kern_mega has no `.cfx` and a blob with room, so it takes the whole copy.
 ; -----------------------------------------------------------------------------
-desk_rowcalc_x:
-    call kentc_di               ; KENT: push ax..di
-
+%macro DESK_GRID 0             ; the geometry: AX, BX, CX, DX, SI, flags
     ; --- which ICON, and therefore how tall a zone is (SPEC.md 26.4) --------
     ; The CGA's pixels are 2.4:1 tall, so the 32-row diskette renders as a
     ; stretched column there and costs 60 rows of pitch for it. The 14-row
@@ -504,14 +518,14 @@ desk_rowcalc_x:
     mov cx, 32 - 16             ; a link's 16-row picture, bottom-aligned on
 %endif                          ; the drives' 32-row box...
     cmp byte [vid_kind], VID_CGA
-    jne .set
+    jne %%set
     mov ax, DESK_IH_S + DESK_ZGAP_S + DESK_LBLH - 1
     mov bx, DESK_ZSTEP_S
     mov si, desk_ico14
 %ifdef OS88_SHORTCUTS
     xor cx, cx                  ; ...and at the TOP of the CGA's DESK_IH_S =
 %endif                          ; 16, which is the link's own height
-.set:
+%%set:
     mov [desk_zh1], ax
     mov [desk_zstep], bx
     mov [desk_pico], si
@@ -548,13 +562,75 @@ desk_rowcalc_x:
     inc ax                      ; AX = columns
     mul cx
     cmp ax, DSL_SLOT            ; DSL_SLOT itself is "no cell" (desk_reflow)
-    jbe .nc
+    jbe %%nc
     mov al, DSL_SLOT
-.nc:
+%%nc:
     mov [desk_ncell], al
 %endif
-    call desk_reflow
-    jmp kretfc_di
+%endmacro
+%macro DESK_ROWCALC 2
+%1 %+ _rowcalc:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+%ifdef KERN_SMALL
+    push di
+%endif
+    DESK_GRID
+%ifdef KERN_SMALL
+    ; --- desk_reflow, kern_small's: every live volume, in index order, gets
+    ; the next cell - SPEC.md 26.1's ordinal flow with the answer written
+    ; down - and desk_live written in: a volume is live while its row carries
+    ; the desktop flag
+    xor di, di
+    xor cx, cx                  ; CL = the next cell
+%%c:
+    mov dl, [di+desk_zslot]
+    mov bx, di
+    %2 dsk_vol_slot_x
+    test byte [bx+DV_FLAGS], 1
+    mov al, 0xFF
+    jz %%cset
+    mov al, cl
+    inc cx
+%%cset:
+    mov [di+desk_zslot], al
+    and al, DSL_SLOT            ; "nothing" is DSL_SLOT's cell, which no
+    and dl, DSL_SLOT            ; screen has
+    cmp al, dl
+    je %%n
+    %2 desk_cmark
+    mov al, dl
+    %2 desk_cmark
+%%n:
+    inc di
+    cmp di, DESK_NZ
+    jb %%c
+    pop di
+%else
+    %2 desk_reflow
+%endif
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endmacro
+section .modu                   ; CTRL.DRV's copy (KSW_SECT, kernel.asm)
+DESK_ROWCALC wm, KSWC
+%ifdef KERN_SMALL
+section .boot2                  ; ...and kern_small's boot copy, through a hop
+%macro BDRC 1                   ; of the blob's own (kern_big's is driver.inc's
+    call bvw_cgo                ; BSWC, beside its other boot expansions, and
+    dw %1                       ; kern_small has no drv_boot to carry them)
+%endmacro
+DESK_ROWCALC bvw, BDRC
+KGO_PAIR bvw
+%endif
+section .cold
 
 ; =============================================================================
 ; THE SLOT GRID (SPEC.md 26.9) - one grid, one table, one placement rule
@@ -611,18 +687,16 @@ desk_zs:
 ; (26.8.1) and does not carry the Sticky App mark (110.2). RESIDENT, because it is on
 ; the reflow's and the paint's path, and neither may touch a disk.
 ; -----------------------------------------------------------------------------
-desk_live:
-%ifndef KERN_SMALL
+%ifndef KERN_SMALL              ; (kern_small's is written into its one
+desk_live:                      ; caller, DESK_ROWCALC: kernel size pass 15)
     cmp bl, DESK_SVZ
     je .svc
   %ifdef OS88_SHORTCUTS
     ja .link
   %endif
-%endif
     call dsk_vol_slot_x
     test byte [bx+DV_FLAGS], 1
     ret
-%ifndef KERN_SMALL
 .svc:
     cmp word [desk_svc_seg], 0  ; ZF = 1: no driver has one
     ret
@@ -773,39 +847,10 @@ desk_cbit:
 ; arrived yet. kmain sets the byte once everything is in and runs the first
 ; pass itself.
 ; -----------------------------------------------------------------------------
-%ifdef KERN_SMALL
-; kern_small has nothing PLACED - no shortcut, no service item, no drag - so
-; the two passes are one: every live volume, in index order, gets the next
-; cell. That is SPEC.md 26.1's ordinal flow with the answer WRITTEN DOWN, and
-; it needs neither desk_owner nor desk_free (nor [desk_ready]: there is no
-; SYSTEM.CFG to wait for).
-desk_reflow:
-    call kentc_di
-    xor di, di
-    xor cx, cx                  ; CL = the next cell
-.c:
-    mov dl, [di+desk_zslot]
-    mov bx, di
-    call desk_live
-    mov al, 0xFF
-    jz .set
-    mov al, cl
-    inc cx
-.set:
-    mov [di+desk_zslot], al
-    and al, DSL_SLOT            ; "nothing" is DSL_SLOT's cell, which no
-    and dl, DSL_SLOT            ; screen has (desk_reflow below)
-    cmp al, dl
-    je .n
-    call desk_cmark
-    mov al, dl
-    call desk_cmark
-.n:
-    inc di
-    cmp di, DESK_NZ
-    jb .c
-    jmp kretc_di
-%else
+%ifndef KERN_SMALL              ; (kern_small's - one pass, every live volume
+                                ; in index order to the next cell - is written
+                                ; into its one caller, DESK_ROWCALC: kernel
+                                ; size pass 15)
 desk_reflow:
     cmp byte [desk_ready], 0
     je desk_free.ret            ; a `ret` in short reach (desk_free's own) -
@@ -835,7 +880,7 @@ desk_reflow:
     call desk_cmark             ; item REMEMBERS it, to have back (pass 2)
 .rel:
     mov al, DSL_GONE
-    jmp short .orit
+    SKIPF2                      ; (test ax, imm16 over the mov: AL kept, the `or` sets the flags - pass 15)
 .forget:
     mov al, 0xFF                ; (OR with all ones is the store)
 .orit:
@@ -2254,11 +2299,8 @@ osapi_desk_item_x:
     or al, al                   ; boot. AL = 0 removed; the zone back is a
     jnz .no                     ; refusal, or no disk to read the module from
 .ok:
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
+    CLC_OR_STC .no              ; (kernel size pass 15: OSAPI_DESK_ITEM's
+.out:                           ; answer is CF)
     pop es
     pop di
     pop si

@@ -113,9 +113,23 @@ def gwait(m, secs):
 
 
 def runs(tr):
-    """The runs the GRAPH BODY issued: every tm_grun that was not tm_col's."""
-    return sum(1 for h in tr.hits if h["addr"] == tr_grun[0]) - \
-           sum(1 for h in tr.hits if h["addr"] == tr_grun[1])
+    """The runs the GRAPH BODY issued: every tm_grun that was not tm_col's.
+
+    PAIRED IN ORDER, not counted and subtracted. tm_col (the interval's new
+    column) calls tm_grun itself, so its own run is the tm_grun hit that
+    FOLLOWS a tm_col hit. Subtracting the counts went to -1 whenever the
+    trace closed between the two - where the Task Manager's interval lands
+    against the trace window is the host's - and BAR read that as a failure."""
+    n, col = 0, False
+    for h in tr.hits:
+        if h["addr"] == tr_grun[1]:
+            col = True
+        elif h["addr"] == tr_grun[0]:
+            if col:
+                col = False                 # tm_col's own run
+            else:
+                n += 1
+    return n
 
 
 def zord(m):

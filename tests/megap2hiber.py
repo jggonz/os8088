@@ -15,8 +15,8 @@ mouse an INTELLIMOUSE (`type=imps2`), so the boot's wheel knock succeeds and
 hbm_wake's re-knock runs on the resume - the path the field machine took.
 It reads the 8259 masks and mou_p2wz, hibernates through the System menu,
 powers off, boots C: again, sets a debugger breakpoint at hbm_wake's .nowz
-(in the hibernated session's HIBER.DRV, at the linear base its E9 line
-printed), resumes, and checks:
+(in the hibernated session's HIBER.DRV, at the linear base its mod_tab row
+named - Box.mod_base), resumes, and checks:
 
   1. at .nowz - after the knock, before the device's F4 - the SLAVE's IMR
      has IRQ12 MASKED. The knock's ACKs are read by polling 60h, and with
@@ -122,7 +122,7 @@ def menu_hibernate(box):
         box.xd("mousemove_relative", "--", 0, 30)
         time.sleep(0.04)
     box.xd("mousemove_relative", "--", 0, 16)
-    time.sleep(0.5)
+    box.guest_sleep(0.5)    # the hold, in GUEST time
     box.xd("mouseup", 1)
     box.ui_done("the Hibernate dialog")     # (was 10 s slept)
     box.goto(225, 225)              # Hibernate
@@ -149,7 +149,7 @@ def main():
     box = ob.Box(OUT, [os.path.join(BUILD, "mines.o88")], bootc=True,
                  noa=True, csys=True, build=TREE)
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()                        # the desktop, off kernel state
@@ -168,21 +168,19 @@ def main():
                       poll=1.0)
         except RuntimeError as e:
             fails.append(str(e))
-        lines = box.lines()
+        base = box.mod_base("HIBER.DRV")    # (the off screen is its own)
     finally:
         box.stop()
     shutil.copy(box.e9, os.path.join(OUT, "e9-hibernate.out"))
-    hib = [l for l in lines if "above 1MB: HIBER.DRV" in l]
-    if not hib:
-        fails.append("the hibernate never loaded HIBER.DRV above 1MB")
+    if base is None or base < 0x100000:
+        fails.append("the hibernate never loaded HIBER.DRV above 1MB (%s)"
+                     % (base is not None and "%X" % base))
         return report(fails, keep, t0)
-    base = int(re.search(r"HIBER\.DRV ([0-9A-Fa-f]{8})", hib[-1]).group(1),
-               16)
     bp = base + mapsym("hbm_wake.nowz")
     # --- 2. the resume, stopped at .nowz ------------------------------------
     box = ob.Box(OUT, [], cmode="keep", bootc=True, noa=True, build=TREE)
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             fails.append("the second boot never reached protected mode")
             return report(fails, keep, t0)
         box.up()                        # the desktop and its Resume card
@@ -203,7 +201,7 @@ def main():
                              "(slave IMR %s at .nowz): mou_p2_isr races the "
                              "poll for every ACK" % (
                                  s is not None and "%02X" % s))
-        if not box.wait_for("kern_mega: resumed", 120):
+        if not box.wait_resumed(120):
             fails.append("no `kern_mega: resumed`")
         box.ui_done("the resumed desktop")     # (was 20 s slept)
         try:                            # CLOSED-LOOP: one that cannot move
@@ -230,7 +228,7 @@ def main():
         if a is None or b is None or a == b:
             fails.append("the PS/2 pointer did not move after the resume "
                          "(%s then %s)" % (a, b))
-        for l in box.lines():
+        for l in box.said():
             if l.startswith("kern_mega FAULT"):
                 fails.append("resume: " + l)
     finally:

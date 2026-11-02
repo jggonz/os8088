@@ -41,6 +41,7 @@ for i, a in enumerate(sys.argv):
         MACHINE = sys.argv[i + 1]
 
 INST_MAX, MEM_MAX, CLS_RECSZ = 12, 32, 6    # apps/os88api.inc
+MEM_P_WSAVE, MEM_P_WSAVE_N = 0xFB10, 16     # apps/os88api.inc
 XMW_SIZE = 6                                # ...and OSAPI_XMEM_WALK's record
 XMW_LSIZE = 8                               # ...LONG, as the kern_mega arm asks
                                             # (BX = XMW_LONG, KERN-MEGA-PLAN 14.92)
@@ -138,8 +139,17 @@ with os88ui.boot("build/os8088-360.img", apps="build/apps360.img",
                         return True
                 return False
             for r in range(MEM_MAX):
-                if key(snap[r * CLS_RECSZ] | (snap[r * CLS_RECSZ + 1] << 8)) \
-                        == key(cache):
+                rec = snap[r * CLS_RECSZ:(r + 1) * CLS_RECSZ]
+                own = rec[4] | (rec[5] << 8)            # CLS_OWN
+                # ...AND IT IS A RAISE CACHE'S RECORD: a snapshot taken
+                # before the claim can hold another tenant of the same
+                # paragraph - one of the Calculator's own claims, freed when
+                # it moved - and that is group 3, read as this row's
+                # failure on the one run in many where the page had not yet
+                # repainted. The owner names a raise cache or the page has
+                # not seen the claim yet, and the wait goes on.
+                if key(rec[0] | (rec[1] << 8)) == key(cache) and \
+                        MEM_P_WSAVE <= own < MEM_P_WSAVE + MEM_P_WSAVE_N:
                     box["gid"] = gid[r]
                     return True
             return False

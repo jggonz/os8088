@@ -54,7 +54,11 @@ MEM_MAX  equ 32                 ; claim records; more than this and a claim
                                 ; records; a region is a claim now (SPEC.md
                                 ; 20.1), so twelve instances can hold twelve
                                 ; of these before anything asks for data
-MEM_OWNER_MAX equ 8             ; ...and no one owner may hold more than this
+%ifdef KERN_MEGA
+MEM_OWNER_MAX equ 12            ; (kern_mega: SPEC.md 50's twelve - the Video
+%else                           ; Player's kern_mega arm holds eight before a
+MEM_OWNER_MAX equ 8             ; play's ring, KERN-MEGA-PLAN 14.129)
+%endif                          ; ...and no one owner may hold more than this
                                 ; many. It does NOT shrink the table - the
                                 ; table is sized by what the machine can hold,
                                 ; not by the cap - and that is not what it is
@@ -3165,7 +3169,9 @@ mem_rr_tab:
     MEM_RR_ROW menu_seg, 2, 2   ; the bar's owner, and the DROPPED menu, which
                                 ; is live in exactly the context SPEC.md 66.3
                                 ; rule 3 names
+%ifdef KERN_MEGA                ; (in mem_rr_lone off kern_mega, pass 15)
     MEM_RR_ONE fdlg_rqsp        ; the file dialog's staleness cookie
+%endif
 %ifdef KERN_BIG
     MEM_RR_ROW hb_dosseg, 2, 2  ; the DOS handoff's posted region (SPEC.md
                                 ; 96.40.8) and the driver file dialog's
@@ -3182,7 +3188,9 @@ mem_rr_tab:
 %ifndef KERN_MEGA
     MEM_RR_ONE xm_row + DRVR_SEG    ; XMEM.DRV (kernel/xmem.inc)
 %endif
+%ifdef KERN_MEGA                    ; (in mem_rr_lone off kern_mega, pass 15)
     MEM_RR_ONE drv_blkseg           ; the block-verb far pointer's segment half
+%endif
 %endif
 %ifdef KERN_BIG
     MEM_RR_ONE thmv_row + DRVR_SEG  ; THMPAL.DRV (kernel/vga12.inc, SPEC.md
@@ -3217,12 +3225,18 @@ mem_rr_tab:
     ; and mem_shed_one zeroes the caches' through mem_pg_own,
     ; so it never holds a base that is not its own live claim. Not on
     ; kern_mega, where [ico_seg] and [dsk_rah_seg] can hold a SELECTOR
-    MEM_RR_ONE menu_sseg
-    MEM_RR_ONE ico_seg
-    MEM_RR_ONE dsk_rah_seg
-%ifdef OS88_ASSOC
-    MEM_RR_ONE asc_seg              ; ASSOC.DAT's one-call file buffer
-%endif
+    ;
+    ; ...and AS TWO ROWS, not six (kernel size pass 15): a row names a run of
+    ; adjacent words for its four bytes, so the lone words were gathered -
+    ; [ico_seg] and [dsk_rah_seg] side by side in disk.inc (kerndos assembles
+    ; that file too, so they stay there), and the rest in mem_rr_lone below,
+    ; which also took [clip_seg] and [sc_seg]: their procs were a bare
+    ; `mov [w], dx / ret`, and each word is zeroed before its claim is freed
+    ; (clip_drop's, ovl_sc_free's and sc_m_kb's stores; nothing between the
+    ; free and the store can compact) and set only from the claim's own base,
+    ; so a row is as exact for them as for the four above
+    MEM_RR_ROW ico_seg, 2, 2        ; ...and dsk_rah_seg
+    MEM_RR_ROW mem_rr_lone, (mem_rr_lone_end - mem_rr_lone) / 2, 2
 %endif
     dw 0
     ; --- ES = LOW_SEG (SPEC.md 2.6) --------------------------------------
@@ -3990,6 +4004,37 @@ mem_compact:
                                 ; in force at the top and at the bottom - so a
                                 ; build without the span never leaves .cold
 
+section .text
+; --- THE LONE RELOCATED WORDS, ONE BLOCK (kernel size pass 15) --------------
+; Each is one kernel claim's base segment, 0 = none, and on kern_big (not
+; kern_mega, where each can hold a SELECTOR) mem_rr_tab names them all with
+; ONE row - four bytes for the lot where each was a row or a proc of its own.
+; Declared here, outside every OS88_COMPACT span, because every kernel has
+; them and only kern_big walks them. In .text with real initialisers, so all
+; of them read 0 before anything sets them on any boot path.
+%ifdef OS88_DRIVERS
+drv_blkfp:  dw PKG_DISP         ; driver.inc's staged block-verb far pointer:
+%endif                          ; the offset half, BEFORE the row, so that
+mem_rr_lone:                    ; `call far [drv_blkfp]` reads its segment
+%ifdef OS88_DRIVERS             ; from the row's first word (kernel size
+drv_blkseg: dw 0                ; pass 15, -4: it was a row of its own)
+%endif
+%ifndef FDLG_MOD
+fdlg_rqsp:  dw 0                ; the file dialog's staleness cookie
+%endif                          ; (fdlg.inc; kern_small's is FDLG.DRV's own)
+menu_sseg:  dw 0                ; the menu save-under claim's segment, 0 =
+                                ; none (menu_drop then repaints instead)
+%ifdef OS88_ASSOC
+asc_seg:    dw 0                ; ASSOC.DAT's one-call file buffer (assoc.inc)
+%endif
+clip_seg:   dw 0                ; the clipboard's claim (clip.inc), 0 = none
+                                ; held - which IS an empty clipboard
+%ifdef OS88_SHORTCUTS
+sc_seg:     dw 0                ; the desktop shortcuts' table (desksc.inc),
+%endif                          ; 0 = no shortcuts
+mem_rr_lone_end:
+section .cold
+
 %ifndef OS88_COMPACT
 ; -----------------------------------------------------------------------------
 ; mem_runat / mem_bigrun - the largest free run, where nothing moves
@@ -4192,10 +4237,9 @@ mem_free_x:
     mov word [ss:si+MC_SEG], 0     ; the record IS the allocator (SPEC.md 50.3)
 .ok:                            ; ...and mem_movable_x's two exits, below, are
     popf                        ; these: the same fence under the same IF = 0
-    clc                         ; window, writing a different word
-    jmp short .out
-.busy:
-    popf
+    SKIPF2                      ; window, writing a different word. test ax,
+.busy:                          ; imm16 over .busy's popf/stc: CF = 0 (kernel
+    popf                        ; size pass 15)
     stc
 .out:
     pop si
@@ -4357,9 +4401,8 @@ mem_regrow:
 .setr:
 %endif
     popf
-    clc
-    jmp short .out
-.fail:
+    SKIPF2                      ; test ax, imm16 over .fail's popf/stc: CF = 0
+.fail:                          ; (kernel size pass 15)
     popf
     stc
 .out:

@@ -441,12 +441,8 @@ toast_arm:
 ; and goes underneath its operation, where it used to be shunted along.
 ; -----------------------------------------------------------------------------
 toast_place:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si                     ; ax,bx,cx,dx,si is the shared ladder's run,
-                                ; so `.out` is a rung rather than five pops
+    call kent_di                ; the shared ladder's frame, so `.out` is a
+                                ; rung (kernel size pass 15: DI banked too)
     xor ax, ax
     mov [toast_scn], ax
     mov [toast_scov], al        ; menu_ckend below asks it: the speaker SHOWS
@@ -474,7 +470,7 @@ toast_place:
     mov [toast_scell], ax
     mov [toast_scn], cx
 .out:
-    jmp kret_si                 ; pops si, dx, cx, bx, ax - the push run above
+    jmp kret_di                 ; pops di, si, dx, cx, bx, ax - kent_di above
 
 ; -----------------------------------------------------------------------------
 ; toast_up - is a strip up and within its time? (SPEC.md 12.8.7, 59.9)

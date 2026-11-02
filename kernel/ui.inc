@@ -1589,11 +1589,12 @@ ui_track:
     mov di, ui_origx
     movsw                       ; ui_origx
     movsw                       ; ui_origy
-    lea si, [bx + W_X]          ; ...and the outline starts on the window
-    mov cx, 4                   ; rect: ui_curx, ui_cury, ui_dragw, ui_dragh
-    rep movsw                   ; from W_X, W_Y, W_W, W_H. Six words in 20
-    pop si                      ; bytes where six load/store pairs were 35
-                                ; (kernel size pass 9). CX, DI and ES are
+    call wm_bank4               ; ...and the outline starts on the window
+    pop si                      ; rect: ui_curx, ui_cury, ui_dragw, ui_dragh
+                                ; from W_X, W_Y, W_W, W_H - DI is ui_curx now,
+                                ; and wm.inc's banker copies the four (kernel
+                                ; size pass 15; pass 9 had made six load/store
+                                ; pairs two movsw and a rep). DI and ES are
                                 ; spent: both callers reload what they use
 
     call gfx_lock
@@ -1929,10 +1930,7 @@ ui_drag:
 ; -----------------------------------------------------------------------------
 %ifndef NODRAGCACHE
 ui_drag_phase:
-    push ax
-    push bx
-    push cx
-    push si
+    call kent_di                ; (kernel size pass 15)
     mov si, bx
     mov cx, [si + W_X]          ; the drop as the clamps left it, banked - x
                                 ; ALONE, because x alone is what moves below
@@ -1975,8 +1973,7 @@ ui_drag_phase:
                                 ; CX, which is why the bank survives the call
 %endif
 .out:
-    pop si
-    jmp kret_cx
+    jmp kret_di
 
 %endif
 
@@ -2094,15 +2091,16 @@ ui_grow:
                                 ; kernel is about to take 7px off is not a
                                 ; negotiation. wm_snap_win below stays the
                                 ; backstop for one that answers with its own
-    push cx                     ; SPEC.md 11.90.3: the rect BEFORE it changes,
-    lea si, [bx + W_X]          ; because the repaint at the bottom has to tell
-    mov di, ui_rzx              ; a pure SHRINK from anything else - and the
-    mov cx, 4                   ; record is rewritten between here and there by
-    push ds                     ; wm_dock_snap, wm_land_fit and wm_snap_win,
-    pop es                      ; any of which can move the origin. W_X..W_H
-    cld                         ; into ui_rzx..ui_rzh, four words (the %if
-    rep movsw                   ; under the .bss); SI and DI are dead here
-    pop cx
+    mov di, ui_rzx              ; SPEC.md 11.90.3: the rect BEFORE it changes,
+    call wm_bank4               ; because the repaint at the bottom has to tell
+                                ; a pure SHRINK from anything else - and the
+                                ; record is rewritten between here and there by
+                                ; wm_dock_snap, wm_land_fit and wm_snap_win,
+                                ; any of which can move the origin. W_X..W_H
+                                ; into ui_rzx..ui_rzh, four words (the %if
+                                ; under the .bss), through wm.inc's banker,
+                                ; which keeps CX and SI (kernel size pass 15:
+                                ; -10, for the call and its pushes)
     call wm_ask_size            ; the window gets a say BEFORE the record
     mov [bx + W_W], cx          ; changes (SPEC.md 11.1): it answers with the
     mov [bx + W_H], dx          ; size it will take, per axis, and by then
@@ -2213,19 +2211,19 @@ ui_grow:
     ; 11.95.2). Taking the new rect alone leaves the seven columns the window
     ; VACATED standing on the desktop. With the origin unmoved this is the
     ; larger of the two widths off the one x, exactly as before.
-    mov cx, [ui_curx]           ; old x2 = old x + old w
-    add cx, [ui_origx]
-    mov ax, [bx + W_X]          ; ...against new x2 = x + w, the drop shadow's
-    add ax, [bx + W_W]          ; own column
-    cmp ax, cx
-    jbe .uw
-    mov cx, ax
-.uw:
-    mov ax, [bx + W_X]          ; x1 = the leftmost of the two
-    cmp ax, [ui_curx]
+    mov ax, [bx + W_X]          ; new x2 = x + w, the drop shadow's own
+    mov cx, ax                  ; column...
+    add cx, [bx + W_W]
+    mov di, [ui_curx]           ; (DI is dead here: ui_grow's callers own none)
+    cmp ax, di                  ; x1 = the leftmost of the two
     jbe .ux
-    mov ax, [ui_curx]
+    mov ax, di
 .ux:
+    add di, [ui_origx]          ; ...against old x2 = old x + old w, the larger
+    cmp cx, di                  ; kept (kernel size pass 15: each origin loaded
+    jae .uw                     ; once, -4)
+    mov cx, di
+.uw:
     mov bx, [bx + W_Y]          ; (the read completes before BX changes)
     call wm_paint_dmg           ; caller-held lock, per the wm contract
     mov word [wm_dmg_rzwin], 0  ; a one-shot, and its life is that one call
@@ -2853,8 +2851,8 @@ ui_sys_find:
     inc di
     or al, al
     jnz .cmp
-    pop di
-    jmp short .out
+    pop di                      ; CF = 0 from the `or`: found
+    ret                         ; (kernel size pass 15: was a jump to the ret)
 .nomatch:
     pop di
 .next:

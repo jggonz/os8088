@@ -590,7 +590,7 @@ class Server(threading.Thread):
                 elif self.chunk_size > 0 and self.chunk_delay > 0:
                     for pos in range(0, len(response), self.chunk_size):
                         c.sendall(response[pos:pos + self.chunk_size])
-                        time.sleep(self.chunk_delay)    # (the server's: above)
+                        time.sleep(self.chunk_delay)    # host: the server's pacing
                 else:
                     c.sendall(response)
             except OSError:

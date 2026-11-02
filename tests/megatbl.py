@@ -72,7 +72,7 @@ def menu(box, dy):
         time.sleep(0.04)
         left -= 30
     box.xd("mousemove_relative", "--", 0, left)
-    time.sleep(0.5)
+    box.guest_sleep(0.5)                # the hold, in GUEST time
     box.xd("mouseup", 1)
 
 
@@ -117,8 +117,7 @@ def machine(megs, keep):
         box.dbl(591, 105, "B:'s Disk window")
         menu(box, 51)
         box.ui_done("the Task Manager", secs=120)
-        bad = [l for l in box.lines() if "kern_mega FAULT" in l or
-               "kern_mega CLOSED" in l]
+        bad = box.faults()
         want(not bad, "4. %dMB: B:'s Disk window and the Task Manager, no "
              "fault%s" % (megs, "".join(" | " + l for l in bad[:3])))
     except Exception as e:      # noqa: BLE001 - the machine stopped

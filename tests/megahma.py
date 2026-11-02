@@ -20,7 +20,8 @@ FEh with MX_FPIN, megashed's shape - and a pattern into it, one dword every
 256 bytes. Then it starts KBTRIP, gives it its key, waits for the session to
 come back, and asserts:
 
-  1. `kern_mega: unparked` - the trip went and came back;
+  1. the trip went and came back ([mega_dwoke], Box.wait_trip - what a
+     MEGA_E9 kernel says as `kern_mega: unparked`);
   2. every dword of the pattern reads back as written;
   3. the record still stands where it was written.
 
@@ -79,7 +80,7 @@ def main():
     box = ob.Box(OUT, [], bimg=disk, btype="1_44")
     fails = []
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()
@@ -99,15 +100,16 @@ def main():
                  for i in range(KB * 1024 // STEP)]
         cmds.append("setpmem 0x%x 2 %d" % (e + 2, KB))  # MX_KB: the claim
         box.dbg(cmds, timeout=60)
+        box.arm_trip()
         box.dbl(591, 105, "B:'s Disk window")
         box.goto(165, 123)
         box.dblclick()
         if not box.wait_for("KBTRIP ready", 120):
             fails.append("KBTRIP never started")
         else:
-            time.sleep(1.5)
+            box.guest_sleep(1.5)        # GUEST seconds (Box.guest_sleep)
             ob.xd("key", "k")
-            if not box.wait_for("kern_mega: unparked", 120):
+            if not box.wait_trip(120):
                 fails.append("the session never came back")
         if not fails:
             box.ui_done("the desktop after the return")
@@ -122,8 +124,8 @@ def main():
             if (o, kb) != (0, KB):
                 fails.append("the HMA's record moved or went: off %d kb %d"
                              % (o, kb))
-        parks = [l for l in box.lines() if "kern_mega: parked" in l]
-        print("megahma: %s" % (parks[-1] if parks else "no park line"))
+        if not fails:
+            print("megahma: parked %dK at %06X" % box.park())
     finally:
         box.stop()
     print("megahma: %.0fs under Bochs" % (time.time() - t0))

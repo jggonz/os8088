@@ -86,8 +86,7 @@ def main():
     bad = []
 
     def faulted():
-        f = [l for l in box.lines()
-             if l.startswith(("kern_mega FAULT", "kern_mega CLOSED"))]
+        f = box.faults()
         if f:
             raise Fail(f[0])
 
@@ -106,7 +105,7 @@ def main():
         faulted()
 
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             raise Fail("kern_mega never reached protected mode")
         box.up()
         box.capture()

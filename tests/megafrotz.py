@@ -163,7 +163,7 @@ def main():
                         os.path.join(tmp, "ZBIG.Z8")],
                        check=True, stdout=subprocess.DEVNULL)
         box = os88bochs.Box(out, [], bimg=disk, btype="1_44")
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             err = "kern_mega never reached protected mode"
         else:
             box.up()
@@ -174,7 +174,7 @@ def main():
         f = box.fault()
         if f:
             err = f
-        closed = [l for l in box.lines() if "kern_mega CLOSED" in l]
+        closed = [l for l in box.faults() if "kern_mega CLOSED" in l]
         if closed and not err:
             err = closed[0]
     finally:

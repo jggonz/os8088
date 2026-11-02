@@ -89,6 +89,21 @@ SNDV_DACINFO equ 6              ; THE COVOX (SPEC.md 34.14). out CF=0, AX = the
                                 ; no -I drivers/sound/); tests/unit/t_mirror
                                 ; holds the two equal
 
+SNDV_RMODE   equ 13             ; THE KERNEL'S ALONE (kern_mega's real-mode
+                                ; bracket, SPEC.md 53.2.3 - the plan's
+                                ; DSV_RMODE): AL = 2 at its door: the list
+                                ; alone (the IRQ discovery is the attach's
+                                ; since SPEC.md 34.5.7),
+                                ; AL = 1 the bracket is about to leave
+                                ; protected mode with this image copied
+                                ; low, AL = 0 it is back. out CF=0, SI = the
+                                ; offset here of a list of CX word offsets,
+                                ; each a SEGMENT word the kernel renames both
+                                ; ways (selector <-> paragraph), and the 8237
+                                ; rule (sbl_dpm, 34.5.2.2) set for the mode
+                                ; entered. Refused (CF=1 AX=0) unless ES is
+                                ; the kernel's, SNDV_MIXPOP's test
+
 SNDE_NOFM    equ 1
 SNDE_NOCLAIM equ 2
 SNDE_NOMIDI  equ 3

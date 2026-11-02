@@ -190,7 +190,7 @@ def leg(t, out, lay, video, display=None):
     fails, counts, tails = [], collections.OrderedDict(), []
     pos = [0]
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             return ["%s: kern_mega never reached protected mode" % lay], []
 
         def step(what, act, settle=False, tail=None, out_of_fsx=False):

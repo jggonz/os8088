@@ -8,12 +8,16 @@ Unicorn on tests/picomem/sbhx.asm, an SB16-class DSP whose mixer register
 80h names the card's line, under a planted OSAPI_CPU_INFO tier and IRQ 5
 vector (int 0Dh):
 
-  8088 (an XT), int 0Dh in a disk ROM (C800h), card on 5  REFUSED, one toast
-  ...asked again                                           refused, no 2nd toast
+  8088 (an XT), int 0Dh in a disk ROM (C800h), card on 5  REFUSED, no toast
+  ...asked again                                           refused again
   8088, int 0Dh the BIOS's own dummy (F000h), card on 5    accepted on 5
   286 (an AT), int 0Dh in a ROM, card on 5                 accepted on 5
   386, int 0Dh in a ROM, card on 5                         accepted on 5
   8088, disk ROM on IRQ 5, card on IRQ 7                   accepted on 7
+
+A refusal answers "no usable line" ([sbl_irq] = 0FFh), so sbl_attach
+refuses the DSP tier and the OPL2 attaches alone - the machine boots
+working, on FM, and says nothing (no boot-time toast; the owner's call).
 
 The accepted cases are the negative controls: a refusal that fired on every
 IRQ 5 (or every XT) would fail them. Host only: python3 + unicorn.
@@ -78,10 +82,10 @@ def main():
                              "sbhx")
     rom = (0x1234, 0xC800)              # the ST-506 card's handler
     print("sbirq5: SOUND.DRV and a taken IRQ 5 (SPEC.md 34.5.6)")
-    case(image, syms, 0, rom, 5, 0, 0xFF, 1,
-         "an 8088, IRQ 5 hooked by a disk ROM, card on 5: REFUSED, said once")
-    case(image, syms, 0, rom, 5, 0, 0xFF, 1,
-         "...asked again: refused, and not said twice", again=True)
+    case(image, syms, 0, rom, 5, 0, 0xFF, 0,
+         "an 8088, IRQ 5 hooked by a disk ROM, card on 5: REFUSED, silently")
+    case(image, syms, 0, rom, 5, 0, 0xFF, 0,
+         "...asked again: refused again", again=True)
     case(image, syms, 0, P.DEFVEC, 5, 1, 5, 0,
          "an 8088, IRQ 5 the BIOS's own dummy: accepted on 5")
     case(image, syms, 1, rom, 5, 1, 5, 0,

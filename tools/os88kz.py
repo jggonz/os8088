@@ -66,7 +66,7 @@ def build(image: bytes, blob: int, head: int, margin: int):
         fail("the blob and the head are both read in whole SECTORS")
     tail = image[blob + head:]
 
-    body, worst, blocks = bytearray(), 0, []
+    body, worst, blocks, sizes = bytearray(), 0, [], []
     for at in range(0, len(tail), BLK):
         raw = tail[at:at + BLK]
         # THE CLASSIC BLOCK, with no raw tail (SPEC.md 20.13.7): kz_expand is
@@ -79,12 +79,21 @@ def build(image: bytes, blob: int, head: int, margin: int):
                  "reference boot/boot2.asm copies, so this is a bug there")
         m = os88lz.in_place_margin(raw, os88lz.LZ4, tail=False)
         worst = max(worst, m)
-        if len(z) + 4 >= len(raw):
+        # A BLOCK BUT THE LAST MUST SHRINK: kz_all lands block i at head +
+        # i * KZ_BLK, so every one before the last is exactly BLK and always
+        # does. The LAST is whatever is left, and a remainder of a few dozen
+        # bytes can come out LONGER than it went in - MEGATRAP=1's kern_mega
+        # did, 56 bytes to 58, after the merge of two size passes. That is
+        # legitimate: what in-place expansion needs is the GAP, and R is ours
+        # to set, so the deficit is added to it below (kern_mega size pass 1)
+        if len(z) + 4 >= len(raw) and at + BLK < len(tail):
             fail(f"block at {at} does not get smaller ({len(z)} vs {len(raw)})")
+        start = len(body)
         body += len(z).to_bytes(2, "little") + len(raw).to_bytes(2, "little")
         body += z
         body += b"\xE5" * (-len(body) % 16)     # ...to a paragraph, so the
         blocks.append((len(z), len(raw)))        # next block's SEGMENT is exact
+        sizes.append((len(raw), len(body) - start))
     # THE MARGIN IS PER BLOCK PLUS THE HEADER. The telescoping below leaves
     # gap(i) >= sum over the blocks from i on of (unpacked - packed - 4), plus
     # the margin - so the smallest gap is at the LAST block and is the margin
@@ -93,13 +102,21 @@ def build(image: bytes, blob: int, head: int, margin: int):
     if worst + 4 > margin:
         fail(f"a block needs {worst} bytes of in-place margin and stage 2 "
              f"reserves {margin} less the 4-byte header")
+    # ...and that telescoping assumed every suffix of blocks saves bytes. Where
+    # one does not (a last block that grew), gap(i) falls short of the margin
+    # by that suffix's deficit, so R carries it: EXTRA is 0 - and the file
+    # byte-identical - for every kernel whose blocks all shrink
+    extra, suffix = 0, 0
+    for u, p in reversed(sizes):
+        suffix += u - p
+        extra = max(extra, -suffix)
     # ROUNDED TO A SECTOR AND NOT A PARAGRAPH. read_run's third bound divides
     # the destination's physical address by 512 to find the DMA page's end,
     # and its own comment rests on every destination being 512-ALIGNED - so an
     # R that is merely paragraph-aligned makes that shift truncate, and a run
     # of ZERO sectors is an infinite loop rather than a wrong picture. It cost
     # a boot to find. The extra bytes are at most 496, once.
-    r = (len(tail) - len(body) + margin + 511) & ~511
+    r = (len(tail) - len(body) + margin + extra + 511) & ~511
     out = image[:blob + head] + bytes(body)
     return out, {
         "image": len(image),

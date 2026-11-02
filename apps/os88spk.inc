@@ -299,7 +299,28 @@ os88spk_go:
     pushf                           ; IF = 0 FROM THE DOOR until IRQ0 is the
     cli                             ; ISR's and channel 0 counts N (34.11.1)
     call OSAPI_FSX_SPK              ; AX = K; BX and DX spent
+%ifdef PKG_MEGA
+    jnc .r0                         ; KERN_MEGA'S REAL-MODE BRACKET (SPEC.md
+    cmp ax, 1                       ; 53.2.3, 98.3.24) refuses AL = 0 with AX
+    jne .no                         ; = 1: IRQ0 is IVT 20h there, and the
+    mov al, 2                       ; door writes it - AL = 2 with this, the
+    mov bx, cs                      ; real-mode copy's ISR (SI). A kernel that
+    mov dx, [cs:os88spk_n]          ; meant "not in a rate bracket" says so
+    push cx                         ; again (34.11.1.1)
+    call OSAPI_FSX_SPK              ; AX = K, CX:DX = the chain
+    jc .rno
+    mov [cs:os88spk_kn], ax
+    mov [cs:os88spk_chain], dx
+    mov [cs:os88spk_chain+2], cx
+    pop cx
+    jmp short .pit
+.rno:
+    pop cx
+    jmp short .no
+.r0:
+%else
     jc .no
+%endif
     mov [cs:os88spk_kn], ax
     push ds
     xor ax, ax

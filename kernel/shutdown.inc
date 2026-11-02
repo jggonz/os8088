@@ -246,7 +246,7 @@ sd_button:
 %ifdef KERN_SMALL
     call os88ui_kbtn            ; CTRL.DRV's own (fdlg.inc, OS88UI_KBTNIMG)
 %else
-    call COLD_SEG:os88ui_btn_f
+    CPXC os88ui_kbtn            ; (os88ui_btn_f went: kernel size pass 15)
 %endif
     ret
 

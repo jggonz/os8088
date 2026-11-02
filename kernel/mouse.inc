@@ -1459,11 +1459,8 @@ mou_hotplug:
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
 mouse_unhook:
-    push ax
-    push bx
-    push cx
-    push si
-    push es
+    call kent_di                ; (kernel size pass 15: kent_di and ES, popped
+    push es                     ; ahead of kret_di)
 
     mov al, 0xff
     call ser_release_inst      ; close UART lease before restoring IRQ vectors
@@ -1553,8 +1550,7 @@ mouse_unhook:
 %endif
 
     pop es
-    pop si
-    jmp kret_cx
+    jmp kret_di
                                 ; (no PARITY pad: serial's five bytes above
                                 ; are evened by mou_claim's -1, kernel size
                                 ; pass 14)
@@ -1668,6 +1664,10 @@ osapi_mouse:
     pop ax
     jmp short .live
 .poll:
+%ifdef KERN_MEGA
+    cmp byte [fsx_rmode], 0         ; a REAL-MODE bracket (SPEC.md 53.2.3):
+    jne .live                       ; the keyboard pointer's menu path is
+%endif                              ; `.cold`, above 1MB - the words alone
 %else
     jne .live
 %endif

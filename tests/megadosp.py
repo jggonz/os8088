@@ -80,7 +80,7 @@ def main():
     box = os88bochs.Box(out, [], bimg=disk, btype="1_44", build=t.dir)
     fails, counts = [], collections.OrderedDict()
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()                         # the desktop, off kernel state
@@ -98,7 +98,7 @@ def main():
                 box.ui_done("DOS to finish " + name, secs=LIMIT)
             except RuntimeError as e:   # a FAULT: reported below, from E9
                 print("megadosp: %s" % e)
-            time.sleep(tail)
+            box.guest_sleep(tail)       # GUEST seconds (Box.guest_sleep)
             with open(box.e9, "rb") as f:
                 f.seek(pos[0])
                 t = f.read()

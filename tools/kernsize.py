@@ -112,21 +112,23 @@ END = "<!-- kernsize:end -->"
 # baseline, and show the absolute pointer as a +384 regression in the shipped
 # kernel. variant_of therefore checks the NARROWEST name first, which is
 # what the sorted-by-specificity tuple below is for.
-# ...and kern_mega is a FOURTH that is reported and never blessed: the 286+
-# protected-mode kernel (docs/plans/KERN-MEGA-PLAN.md), built by `make mega`
-# with -DKERN_BIG -DKERN_MEGA -DKERN_KNOB into build/megak/. Its line carries
-# KERN_BIG too (it is kern_big's tree plus mega.inc), so -DKERN_MEGA is checked
-# FIRST for -DKERN_EMU's reason, and its -DKERN_KNOB is part of the variant
-# rather than a knob. It has no baseline and no KERN_BUDGET of its own - the
-# guards do not bind a KERN_KNOB build - so the report names the two numbers
-# that do mean something there: the 64KB segment, and what stays resident in
-# conventional memory once `.cold` and `.mega` are above 1MB
+# ...and kern_mega is a FOURTH: the 286+ protected-mode kernel
+# (docs/plans/KERN-MEGA-PLAN.md), built by `make mega` with -DKERN_BIG
+# -DKERN_MEGA into build/megak/. Its line carries KERN_BIG too (it is
+# kern_big's tree plus mega.inc), so -DKERN_MEGA is checked FIRST for
+# -DKERN_EMU's reason. It was a KERN_KNOB build until kern_mega size pass 1
+# and is a budgeted, blessable variant now (docs/plans/completed/msp1/
+# megabudget.md) - but its budget is on a different quantity: not KERN_SIZE,
+# which is a boot-time transient there, but `mres`, what stays resident in
+# CONVENTIONAL memory once `.cold` and `.mega` are above 1MB (kernel.asm rule
+# 4, MEGA_RESIDENT). So its report keeps a shape of its own: the 64KB
+# segment, the resident figure against KERN_BUDGET, and the boot ceiling
 # (KERN-MEGA-HANDOFF Track 6, KERN-MEGA-PLAN 14.45: this tool used to print
 # kern_big's sizes for `--build build/megak`, labelled as kern_big's)
 VARIANTS = ("big", "small", "emu", "mega")
 VARIANT_DEFS = {"-DKERN_BIG": "big", "-DKERN_SMALL": "small",
                 "-DKERN_EMU": "emu", "-DKERN_MEGA": "mega"}
-MEGA_DEFS = ["-DKERN_BIG", "-DKERN_MEGA", "-DKERN_KNOB"]   # the Makefile's
+MEGA_DEFS = ["-DKERN_BIG", "-DKERN_MEGA"]   # the Makefile's
 # most specific first: -DKERN_EMU implies -DKERN_BIG and must win over it
 VARIANT_ORDER = ("-DKERN_MEGA", "-DKERN_EMU", "-DKERN_SMALL", "-DKERN_BIG")
 
@@ -141,9 +143,7 @@ def variant_of(nasm_args):
 
 def knob_args(nasm_args):
     """The args that make this a KNOB build rather than a shipped variant."""
-    mega = "-DKERN_MEGA" in nasm_args
-    return [x for x in nasm_args if x not in VARIANT_DEFS
-            and not (mega and x == "-DKERN_KNOB")]
+    return [x for x in nasm_args if x not in VARIANT_DEFS]
 
 
 def is_mega_tree(build):
@@ -572,7 +572,7 @@ def report(cur, base, variant="big", out=sys.stdout):
     p = lambda s: print(s, file=out)
     tag = "kernsize[%s]:" % variant
     if variant == "mega":
-        return report_mega(cur, p, tag)
+        return report_mega(cur, base, p, tag)
 
     # `.get` on BOTH sides, for `rung_bytes`'s reason one level up: a section
     # a build does not declare is 0 bytes of it, which is the honest reading
@@ -774,12 +774,30 @@ def report(cur, base, variant="big", out=sys.stdout):
     return crossed
 
 
-def report_mega(cur, p, tag):
-    """kern_mega's report: no baseline, no budget, no ROM - and two rungs that
-    leave conventional memory at the switch (KERN-MEGA-SEGMENTS-PLAN 3.3)."""
+def mega_resident(cur):
+    """kern_mega's binding figure: KERN_SIZE less the `.cold` and `.mega`
+    rungs, which go above 1MB at the switch. kernel.asm emits it as `mres`
+    (MEGA_RESIDENT, guard 1); a measurement from before it did is derived
+    the same way, so both sides of the commit that added it agree."""
+    if "mres" in cur:
+        return cur["mres"]
+    return cur["ksize"] - rung_bytes(cur, "coldpara") - rung_bytes(cur, "megapara")
+
+
+def report_mega(cur, base, p, tag):
+    """kern_mega's report: no ROM, two rungs that leave conventional memory at
+    the switch (KERN-MEGA-SEGMENTS-PLAN 3.3) - and since kern_mega size pass 1
+    a baseline and a KERN_BUDGET, held against what it keeps resident in
+    conventional memory once they have (kernel.asm rule 4) and not against
+    KERN_SIZE, which is the boot-time transient guard 5 bounds."""
+    def d(key):
+        if base is None:
+            return ""
+        return " " + delta(cur.get(key, 0) - base.get(key, cur.get(key, 0)))
     p(tag + " sections   " + "  ".join(
-        f"{s} {kb(cur.get(s, 0))}" for s in SECTIONS)
-      + f"  mega {kb(cur.get('mega', 0))} + its scratch {kb(cur.get('mscr', 0))}")
+        f"{s} {kb(cur.get(s, 0))}{d(s)}" for s in SECTIONS)
+      + f"  mega {kb(cur.get('mega', 0))}{d('mega')} + its scratch"
+        f" {kb(cur.get('mscr', 0))}{d('mscr')}")
     cells = []
     for name, members, para in RUNGS + (("mega", ("mega", "mscr"), "megapara"),):
         size = rung_bytes(cur, para)
@@ -789,11 +807,35 @@ def report_mega(cur, p, tag):
     p(f"{tag} segment    .text+.bss {kb(seg)} of KERN_CODE_MAX"
       f" {kb(cur['codemax'])} -> {kb(cur['codemax'] - seg)} left"
       f"   (tools/os88megaseg.py: what kern_mega carries beyond kern_big)")
-    hi = rung_bytes(cur, "coldpara") + rung_bytes(cur, "megapara")
-    p(f"{tag} footprint  KERN_SIZE {kb(cur['ksize'])} at boot; resident"
-      f" {kb(cur['ksize'] - hi)} once `.cold` and `.mega` are above 1MB"
-      f" (their rungs, {kb(hi)}, go to the heap at the switch). No"
-      f" KERN_BUDGET binds kern_mega: it is a KERN_KNOB build")
+    res = mega_resident(cur)
+    hi = cur["ksize"] - res
+    spare = cur["budget"] - res
+    if spare >= 0:
+        line = (f"{tag} footprint  resident {kb(res)} once `.cold` and `.mega`"
+                f" are above 1MB, of KERN_BUDGET {kb(cur['budget'])} -> "
+                f"{kb(spare)} spare ({spare // 512} step"
+                f"{'' if spare // 512 == 1 else 's'})")
+    else:
+        line = (f"{tag} footprint  resident {kb(res)} once `.cold` and `.mega`"
+                f" are above 1MB, of KERN_BUDGET {kb(cur['budget'])} -> ***"
+                f" {kb(-spare)} OVER, inside the {kb(cur.get('grace', 0))}"
+                f" branch grace - size-pass it back under before an upstream"
+                f" merge or a release ***")
+    if base is not None and "budget" in base:
+        line += (f", was {kb(base['budget'] - mega_resident(base))}"
+                 f"  [{delta(res - mega_resident(base))}]")
+    p(line)
+    p(f"{tag} boot       KERN_SIZE {kb(cur['ksize'])} at boot (the `.cold` and"
+      f" `.mega` rungs, {kb(hi)}, go to the heap at the switch)"
+      + (f" of {kb(cur['bootmax'])} -> {kb(cur['bootmax'] - cur['ksize'])}"
+         f" before it cannot BOOT in {cur['minramkb']}KB of conventional"
+         f" memory (guard 5)" if cur.get("bootmax") else ""))
+    if base is not None and base.get("budget") not in (None, cur["budget"]):
+        steps = (cur["budget"] - base["budget"]) // 512
+        p(f"{tag} *** KERN_BUDGET MOVED: {kb(base['budget'])} ->"
+          f" {kb(cur['budget'])}, {delta(steps)} rung"
+          f"{'' if abs(steps) == 1 else 's'} of 512 - and this baseline is"
+          f" stale until `--bless` ***")
     ks = cur["kseg"]
     rungs = sorted((cur[k], n) for k, n in (("colds", "COLD"), ("fats", "FAT"),
                    ("lows", "LOW"), ("vgas", "VGABUF"), ("megas", "MEGA"))
@@ -802,6 +844,9 @@ def report_mega(cur, p, tag):
       + "  ".join(f"{n} {v:#06x}" for v, n in rungs)
       + f"  HEAP {cur['kend']:#06x} at boot, {cur.get('colds', 0):#06x}"
       f" after the switch (+ the VGABUF rung on VGA)")
+    if base is None:
+        p(tag + " no baseline for this variant in docs/KERNEL-MEMORY.md"
+                " - run `--bless` on it")
     return []
 
 
@@ -1027,24 +1072,27 @@ def main():
         return 0
 
     if a.release:
-        over = cur["ksize"] - cur["budget"]
+        # kern_mega is held to what it keeps in CONVENTIONAL memory after the
+        # switch, not to KERN_SIZE (kernel.asm rule 4, guard 1)
+        size = mega_resident(cur) if variant == "mega" else cur["ksize"]
+        what = ("resident" if variant == "mega" else "KERN_SIZE")
+        over = size - cur["budget"]
         name = "kern_" + variant
+        if knobs:
+            print(f"budget-check: refusing to judge a knob build"
+                  f" ({' '.join(knobs)}) - a knob kernel has no budget",
+                  file=sys.stderr)
+            return 1
         if over > 0:
-            print(f"budget-check: {name} KERN_SIZE {kb(cur['ksize'])} is"
+            print(f"budget-check: {name} {what} {kb(size)} is"
                   f" {kb(over)} OVER KERN_BUDGET {kb(cur['budget'])}. The"
                   f" branch grace ends at an upstream merge or a release:"
                   f" size-pass it back, or take the overrun to the owner"
                   f" (docs/KERNEL-MEMORY.md)", file=sys.stderr)
             return 1
-        print(f"budget-check: {name} KERN_SIZE {kb(cur['ksize'])} of"
+        print(f"budget-check: {name} {what} {kb(size)} of"
               f" KERN_BUDGET {kb(cur['budget'])} - {kb(-over)} spare")
         return 0
-
-    if a.bless and variant == "mega":
-        print("kernsize: kern_mega has no baseline to bless - it is"
-              " reported, and tools/os88megaseg.py's ratchet is its gate",
-              file=sys.stderr)
-        return 1
 
     if a.modules or a.bless:
         per, err = measure_modules(nasm_args)

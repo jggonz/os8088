@@ -314,6 +314,36 @@ def main():
         def arena():
             return u16(m.read(rd_seg() * 16 + R["rd_arena"], 2))
 
+        # --- ...and PACKED onto A's survivors before B opens ----------------
+        # The driver's load leaves two PURGEABLE caches between A's survivors
+        # and the store (the directory read-ahead, MEM_P_DIRW, 32KB HIGH, and
+        # a FAT window, 5KB MED). They are shed at B's first claims, and the
+        # store slides down - but only as far as heapfrag B's comb, sized L/8
+        # of the heap that day, leaves it: since 9bbf5612 took ~1KB of
+        # available heap its blocks are 21KB and not 22, the PINNED one lands
+        # in the gap the caches left, and it is a wall under the store for
+        # the rest of the row ('arena moved NO'). So the caches go and the
+        # store packs down NOW, by posted passes at the top rank, repeated
+        # while the store still moves: one pass drops both caches but refills
+        # only the FAT window's gap (measured: 5200 -> 50C0, the read-ahead's
+        # 32KB left a hole), the second packs it to A's top. On the A/B arm
+        # (HEAPCOMPACT=0) nothing moves, and the first pass ends the loop.
+        def post_top():
+            wp = os88geom.winptr(m, hfa.i, S)
+            m.pause()
+            m.write(S("mem_cpq_lvl"), bytes([0xFF]))    # MEM_LVL_TOP: rank
+            m.write(S("mem_cpq"), bytes([wp & 0xFF, wp >> 8]))  # LAST
+            m.run()
+            os88marty.until(m, lambda _: u16(m.read(S("mem_cpq"), 2)) == 0,
+                            "the posted pass", poll=0.05, limit=10.0)
+            os88marty.settle(m)
+        for _ in range(4):
+            was = u16(m.read(rd_seg() * 16 + R["rd_arena"], 2))
+            post_top()
+            if u16(m.read(rd_seg() * 16 + R["rd_arena"], 2)) == was:
+                break
+        hmap("the store packed onto A")
+
         # --- heapfrag B, WHILE A IS STILL OPEN --------------------------------
         # Everything under the store is A's or a cache, so every claim B makes
         # - comb, pinned block, region, its own big claim - is above the

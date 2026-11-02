@@ -66,7 +66,11 @@ def read_prof(path):
                                 (nb,) + struct.unpack_from("<5H", d, 38)))
         w = struct.unpack_from("<%dH" % (2 * n), d, 48)
         at = 48 + 4 * na
-        h["reads"] = [struct.unpack_from("<IHH", d, at + 8 * i)
+        # (VERSION 4, VP_RDTIME's: each read TIMED - the frame drawn at
+        # it, frames behind the card then, its length in 16 PIT counts
+        # and its bytes - in place of version 2's offset and sum)
+        h["reads"] = [struct.unpack_from("<HhHH" if h["ver"] >= 4 else
+                                         "<IHH", d, at + 8 * i)
                       for i in range(nl)]
         h["card"] = read_card(d, at + 8 * nl) if h["ver"] >= 3 else None
     else:
@@ -83,7 +87,13 @@ DI_NAMES = ("mrun0", "mfre0", "k", "rneed", "mrun", "mkeep", "msnd", "lmin",
             "lydkb", "lydln", "lytm", "lytl", "rate", "blk", "tier",
             "rshort", "kr", "xbn", "ring", "rclm", "xbase_lo", "xbase_hi",
             "xgap", "xgok", "xg_t0", "xg_bt", "xg_best", "xg0", "xg512",
-            "xg1k", "xg2k", "xg4k", "xg8k", "cs", "ss")
+            "xg1k", "xg2k", "xg4k", "xg8k",
+            # (the two tiers beside the bank, SPEC.md 98.3.18.18: a trailer
+            # from before them has none - read_card counts the words)
+            "tcn", "tsw", "tkc", "cs", "ss",
+            # (the kern_mega arm's: MEGADIAG's reflections across the
+            # bracket - IRQs, their time / 2,048 PIT counts, services, theirs)
+            "rqin", "rqit", "rqsn", "rqst")
 DI_BYTES = ("rneed", "mkeep", "msnd", "tier", "rshort", "xgok")
 XG_GAPS = (0, 512, 1024, 2048, 4096, 8192)
 
@@ -94,7 +104,11 @@ def read_card(d, at):
         return None
     ln, n = struct.unpack_from("<HH", d, at + 4)
     w = struct.unpack_from("<%dH" % n, d, at + 8)
-    c = dict(zip(DI_NAMES, w))
+    names = DI_NAMES
+    i = DI_NAMES.index("tcn")
+    if n in (i + 2, i + 6):         # (a trailer before the tiers)
+        names = DI_NAMES[:i] + DI_NAMES[i + 3:]
+    c = dict(zip(names, w))
     for k in DI_BYTES:
         if k in c:
             c[k] &= 0xFF
@@ -130,6 +144,28 @@ def print_card(c, fps):
     print("     sound %d Hz, block %d; CPU tier %d; bank slots %d, ring "
           "slots in use %d" % (c["rate"], c["blk"], c["tier"], c["xbn"],
                                c["kr"]))
+    if c.get("tkc"):
+        print("     TWO TIERS (98.3.18.18): %d conventional slots beside the "
+              "bank; %d chunks read straight into them, %d seams copied"
+              % (c["tkc"], c["tcn"], c["tsw"]))
+    elif "tkc" in c:
+        print("     two tiers: none this play (no bank in place, or no room)")
+    if "rqin" in c:
+        u = 2048 * PIT_US / 1e6
+        secs = c["dt"] / 18.2065
+        if c["rqin"] or c["rqsn"]:
+            print("   kern_mega's REFLECTIONS across the play (a MEGADIAG "
+                  "kernel):")
+            for what, n, t in (("IRQs to an option ROM", c["rqin"], c["rqit"]),
+                               ("BIOS services (int 13h...)", c["rqsn"],
+                                c["rqst"])):
+                print("     %-27s %6d, %.1f s = %.1f%% of the play's %.1f s"
+                      "%s" % (what, n, t * u, 100 * t * u / max(secs, 1e-9),
+                             secs, ", %.2f ms each" % (1000 * t * u / n)
+                             if n else ""))
+        else:
+            print("   kern_mega's reflections: none counted (not a MEGADIAG "
+                  "kernel?)")
     print("   WHERE THIS BOOT PUT IT:")
     print("     the package at %d (CS %04X), its stack SS %04X"
           % (c["cs"] * 16, c["cs"], c["ss"]))
@@ -182,6 +218,90 @@ def reads_check(path, h):
     return bad
 
 
+def read_times(prof, h):
+    """VERSION 4's TIMED READS (VP_RDTIME): how long each read held the
+    player, against how far the picture was behind the card when it began -
+    the reads that make a play late, by frame"""
+    allr = h["reads"]
+    rs = [r for r in allr if r[2] != 0xFFFE]    # (FFFEh: outside the bracket)
+    if len(rs) != len(allr):
+        print("%s: %d reads outside the bracket, untimed (the fill before "
+              "it, or a play in the window)" % (os.path.basename(prof),
+                                                len(allr) - len(rs)))
+    if not rs:
+        raise SystemExit("%s: no reads timed" % prof)
+    ms = [r[2] * 16 * PIT_US / 1000 for r in rs]    # (FFFDh: 878 ms or more)
+    kb = sum(r[3] for r in rs) / 1024
+    print("%s: %d reads timed, %.0f KB in %.2f s of reading - %.0f KB/s "
+          "while reading" % (os.path.basename(prof), len(rs), kb,
+                             sum(ms) / 1000, kb / max(sum(ms) / 1000, 1e-9)))
+    print("   a read: median %.1f ms, 90%% %.1f, 99%% %.1f, most %.1f"
+          % (q(ms, 0.5), q(ms, 0.9), q(ms, 0.99), max(ms)))
+    beh = [r[1] for r in rs]
+    print("   frames behind the card at a read: median %d, 90%% %d, most %d"
+          % (q(beh, 0.5), q(beh, 0.9), max(beh)))
+    print("   the slowest twelve (frame, behind, ms, bytes):")
+    for i in sorted(range(len(rs)), key=lambda i: -ms[i])[:12]:
+        print("      read %4d: frame %5d, %3d behind, %6.1f ms, %d"
+              % (i, rs[i][0], rs[i][1], ms[i], rs[i][3]))
+    # how far behind, across the play, in tenths
+    n = len(rs)
+    print("   behind across the play (each tenth of the reads: frames, "
+          "most / median; read ms median):")
+    for t in range(10):
+        part = rs[t * n // 10:(t + 1) * n // 10]
+        pm = ms[t * n // 10:(t + 1) * n // 10]
+        if part:
+            print("      frames %5d-%5d: behind %3d / %3d; read %.1f ms"
+                  % (part[0][0], part[-1][0], max(r[1] for r in part),
+                     q([r[1] for r in part], 0.5), q(pm, 0.5)))
+    return 0
+
+
+def disk_windows(h, out, r, prof, period_us, n=100):
+    """THE READER AGAINST THE PROFILE'S DISK (SPEC.md 98.3.22.7): per n
+    frames, the bytes the file asks a second (records + sound), the draw's
+    share of the period, the rate the encoder's curve gives the reader at
+    that share, and the rate the timed reads delivered while reading - the
+    one figure the encoder's disk bucket is refilled by"""
+    rs = [x for x in h["reads"] if x[2] not in (0xFFFE, 0xFFFD)]
+    if h["ver"] < 4 or not rs or not prof.get("disk_at"):
+        print("   --disk: wants a version-4 profile (VPDIAG=time) and a "
+              "profile with a disk curve")
+        return
+    cv = prof["disk_at"]
+
+    def at(sh):
+        for (x0, y0), (x1, y1) in zip(cv, cv[1:]):
+            if sh <= x1:
+                return y0 + (y1 - y0) * (sh - x0) / (x1 - x0)
+        return cv[-1][1]
+    byf = {o[0]: o for o in out}
+    per = period_us / 1e6
+    print("   THE READER against %s's disk, %d frames at a time (KB/s):"
+          % (prof.get("name", "the profile"), n))
+    print("      frames        asks  share  curve  read  read/curve  behind")
+    ratios = []
+    for w0 in range(0, h["frames"], n):
+        fs = [byf[i] for i in range(w0, w0 + n) if i in byf]
+        rr = [x for x in rs if w0 <= x[0] < w0 + n]
+        if not fs or not rr:
+            continue
+        ask = (sum(o[5] for o in fs) + r.abytes * len(fs)) / \
+            (len(fs) * per) / 1024
+        sh = sum(o[2] for o in fs) / len(fs) / period_us
+        cur = prof["disk"] * at(sh) / 1024
+        t = sum(x[2] * 16 * PIT_US for x in rr) / 1e6
+        got = sum(x[3] for x in rr) / 1024 / t
+        ratios.append(got / cur if cur else 0.0)
+        print("      %5d-%5d  %5.0f  %4.0f%%  %5.0f %5.0f     %5.2f    %4d"
+              % (w0, w0 + len(fs) - 1, ask, 100 * sh, cur, got,
+                 ratios[-1], max(x[1] for x in rr)))
+    if ratios:
+        print("   read/curve: median %.2f, 10%% %.2f, 90%% %.2f"
+              % (q(ratios, .5), q(ratios, .1), q(ratios, .9)))
+
+
 def lstsq(rows, ys):
     """Least squares by the normal equations - no numpy needed for 2-3
     unknowns"""
@@ -215,8 +335,13 @@ def main():
     ap.add_argument("--profile")
     ap.add_argument("--csv")
     ap.add_argument("--reads", action="store_true")
+    ap.add_argument("--disk", action="store_true",
+                    help="(version 4) the reader against the profile's disk "
+                         "curve, a hundred frames at a time")
     a = ap.parse_args()
     h, tot, drw = read_prof(a.prof)
+    if a.reads and h["ver"] >= 4:
+        return read_times(a.prof, h)
     if a.reads:
         if h["ver"] < 2 or not h["reads"]:
             raise SystemExit("%s: no read log (VIDEOR.O88's, version 2)"
@@ -326,6 +451,8 @@ def main():
     if wrapped:
         print("   %d frames ran 54 ms or more (channel 2 wrapped): left out"
               % wrapped)
+    if a.disk:
+        disk_windows(h, out, r, prof, period_us)
     if a.csv:
         with open(a.csv, "w") as f:
             f.write("frame,total_us,draw_us,model_us,prev_model_us,bytes\n")

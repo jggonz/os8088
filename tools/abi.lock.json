@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "314fbbea973b777acbec4b427aa9d984a9de23ac420a0d6948320c7fe0c280ee",
+  "fingerprint": "9734b5671841222e9e5d59dd62dfa395729e99ff0cf2b820e498091aaa023e41",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "e5b83e4b3530f1221818d57fde8e92e3e77ed8bcc8afb116123f27ffe62bf057",
+  "fingerprint": "a0397190f55d645219e231a7744875ba7ac369d25fc066c0ce33b0745bf17474",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1253,6 +1253,76 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "os88drv.inc: FSCAP_SEL = 4, a DRVC_FILE driver's DSV_CAPS bit saying its transfer verbs take a selector as it is (SPEC.md 62.9.2.4); a constant added, nothing built before changes meaning",
+   "to": 11
+  },
+  {
+   "fingerprint": "d8d7f92426d5e5ac18261ea4708b4d6add1600f653f00c212e37774f1c9d5941",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "FSXF_REAL (CX bit 3 of OSAPI_FSX_RUN, SPEC.md 53.2.3): a new flag bit on an existing cell. Every package built before never sets it, and every kernel built before refuses it as an undefined bit, which is the normal refusal path - so everything built before still runs: no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "765f7cfe0f322d2bd33c95842f0f14a6f537c9904f2f896126d4488e0f2bae99",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "FSXF_REAL (CX bit 3 of OSAPI_FSX_RUN, SPEC.md 53.2.3): a new flag bit on an existing cell. Every package built before never sets it, and every kernel built before refuses it as an undefined bit, which is the normal refusal path - so everything built before still runs: no bump",
+   "to": 11
+  },
+  {
+   "fingerprint": "f7c8c4f8f59c75e35c285a65bc2191f35e4c38ffc488c5284bbf0556330cb1ac",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "FSXF_REAL falls back instead of refusing and answers in SI (FSXR_*): a new output of a bit no shipped package asks, so everything built before still runs (MEGA-VIDEO-REALMODE-PLAN W2, SPEC.md 53.2.3)",
+   "to": 10
+  },
+  {
+   "fingerprint": "98eae9ea1768fe29139e506d6d1301c1ad02dba58ae782228177d3317ec70a9f",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "FSXF_REAL falls back instead of refusing and answers in SI (FSXR_*): a new output of a bit no shipped package asks, so everything built before still runs (MEGA-VIDEO-REALMODE-PLAN W2, SPEC.md 53.2.3)",
+   "to": 11
+  },
+  {
+   "fingerprint": "ae0d989b8c447a2266816aa57f7b2de22cda4d0b850df1340cc267215c4a8656",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "FSXF_REAL's LIST (BP, FSXL_*) and FSXR_VOL/FRAG/DRV/DROOM: a clarified contract, no cell moved (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W3)",
+   "to": 10
+  },
+  {
+   "fingerprint": "6630f2da697313d3a6b1ce9fd90a02066deac79de564639aed2cb3076dfab1a5",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "FSXF_REAL's LIST (BP, FSXL_*) and FSXR_VOL/FRAG/DRV/DROOM: a clarified contract, no cell moved (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W3)",
+   "to": 11
+  },
+  {
+   "fingerprint": "bad7ca53637b5d0ac98d9a96709226f609e0466fcd1d24fe0be09e58884259f8",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 53.2.3 W4: OSAPI_FSX_SPK AL = 2 in kern_mega's real-mode bracket, FSXR_DRV and FSXL_DRV carry DRVC_SOUND - comments, no cell moved",
+   "to": 10
+  },
+  {
+   "fingerprint": "d2af41bcf7c469dda9ff98524beaaa98fe6210fa0fc07304e2b757879ca7f8d8",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 53.2.3 W4: OSAPI_FSX_SPK AL = 2 in kern_mega's real-mode bracket, FSXR_DRV and FSXL_DRV carry DRVC_SOUND - comments, no cell moved",
+   "to": 11
+  },
+  {
+   "fingerprint": "a0397190f55d645219e231a7744875ba7ac369d25fc066c0ce33b0745bf17474",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 10
+  },
+  {
+   "fingerprint": "9734b5671841222e9e5d59dd62dfa395729e99ff0cf2b820e498091aaa023e41",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
    "to": 11
   }
  ]

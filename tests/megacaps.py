@@ -61,23 +61,23 @@ def main():
     box = os88bochs.Box(out, [os.path.join(ROOT, p) for p in PKGS])
     fails, lines, caches, xkb = [], [], {}, None
     try:
-        if box.wait_for("kern_mega:", 240):
+        if box.wait_pm(240):
             box.up()
             xkb = int.from_bytes(box.read("xm_kb", 2), "little")
             caches = cache_state(box)
             box.megarun()
             end = time.time() + 180
             while time.time() < end:
-                lines = box.lines()
+                lines = box.said()
                 if any(l.startswith("kern_mega FAULT") or
                        l.startswith(("MEGACAPS: done", "MEGACAPS: no"))
                        for l in lines):
                     break
                 time.sleep(0.2)
-            time.sleep(1)
-            lines = box.lines()
+            box.guest_sleep(1)          # the lines after the verdict
+            lines = box.said()
         else:
-            fails.append("no kern_mega line in 240s")
+            fails.append("kern_mega never switched to protected mode in 240s")
     finally:
         box.stop()
     for l in lines:

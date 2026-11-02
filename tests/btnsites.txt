@@ -34,7 +34,7 @@
 # are THE SAME PIXELS in every still.
 
 # --- the library's own ------------------------------------------------------
-6 apps/os88ui.inc                  # os88ui_btn's own dispatch, the About
+5 apps/os88ui.inc                  # os88ui_btn's own dispatch, the About
                                    # card's row and the alert's (os88ui_kbtn's
                                    # call is `call %2` in OS88UI_KBTN_BODY since
                                    # kernel size pass 14)
@@ -137,7 +137,8 @@
 
 # --- and the FAR entry, for the on-demand modules (SPEC.md 2.6) -------------
 # ctrl.inc and hiber.inc run from a heap claim with a CS of their own and
-# reach the control by `call COLD_SEG:os88ui_btn_f`, which os88ui_kbtn serves.
+# reach the control by their own far hops into os88ui_kbtn - CPXC and HBGC
+# (kernel size pass 15; it was `call COLD_SEG:os88ui_btn_f`, a resident shim).
 # A far call is invisible to a grep for `call os88ui_btn` and that is how the
 # WHOLE Control Panel was missed: the far entry went on pointing at an
 # os88ui_btn that had started taking a record, so every panel button read its

@@ -33,7 +33,7 @@ while it is saved.
 
 Most machines of the period had no sound card, so the driver is a file on
 the system disk and not part of the system itself. It costs memory only on a
-machine that loads it: about 7K for the driver, or 10K with a sound card whose
+machine that loads it: about 6K for the driver, or 9K with a sound card whose
 mixer it can set, with additional memory while a program plays or records
 digital sound. On a 286 or newer with memory above 1MB, the driver and its
 sound buffer load into the high memory area instead, so most of that comes

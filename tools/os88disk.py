@@ -420,7 +420,7 @@ ASC_ROWCLUS = 10             # the folder the program lives in (0 = root),
                              # patched in after cluster assignment (SPEC.md
                              # 54.7.1) - it costs the file nothing, the row
                              # having reserved six bytes since it was written
-ASC_NAPP  = 55               # kernel/assoc.inc: what fits ASC_KB = 5
+ASC_NAPP  = 90               # kernel/assoc.inc: what fits ASC_KB = 8
 ASC_NEXT  = 64
 
 # The kernel's own built-in association stems (kernel/assoc.inc assoc_stem).

@@ -127,9 +127,9 @@ def main():
             def ww(n, v):
                 m.write(base + syms[n], struct.pack("<H", v))
 
-            def wait(cond, what, guest=90.0):
+            def wait(cond, what, guest=90.0, poll=0.3):
                 try:
-                    os88marty.until(m, cond, what, poll=0.3, limit=600.0,
+                    os88marty.until(m, cond, what, poll=poll, limit=600.0,
                                     guest=guest)
                 except os88marty.MartyError as e:
                     raise Stop("%s never happened (%s)"
@@ -368,8 +368,14 @@ def main():
                 wait(lambda mm: rb("vp_ready") == 1 and rw("vp_done") >= 30,
                      "the play to frame 30")
                 m.type_text("f")
+                # (A SHORT POLL: the hold below is armed when this is seen,
+                # and a 0.3 s host poll is 1.8 guest seconds - 54 frames -
+                # on kern_mega's 86Box at 6x, whose real-mode bracket
+                # (MEGA-VIDEO-REALMODE-PLAN W5) reaches the full screen
+                # fast enough that the play ran past 100 between two)
                 wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 0
-                     and rw("vp_done") >= 45, "F to go on in the full screen")
+                     and rw("vp_done") >= 45, "F to go on in the full screen",
+                     poll=0.02)
                 playing_fs = rb("vp_upause") == 0
                 # step 5's hold is ARMED HERE, not after the window's frame
                 # 60 is seen: a hold fires at exactly its frame, and a host

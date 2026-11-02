@@ -49,8 +49,9 @@ SWEEP builds a hard disk whose one folder, RUN/, holds tests/megarun's
 MEGARUN (as 0RUN.O88, so it is the first file in the listing) and a batch of
 packages; boots build/mega.img in A: with that disk as C:; opens C:, RUN and
 0RUN.O88 with the mouse; and follows MEGARUN's lines on port E9, which name
-each package before it is started. A `kern_mega FAULT` line ends the boot and
-is charged to the package last named; so is a minute with no new line (a
+each package before it is started. A fatal kern_mega fault - read out of the
+kernel's state ([mega_infault], Box.fault), or the `kern_mega FAULT` line a
+MEGATRAP=1 or MEGADIAG=1 tree also writes to E9 - ends the boot and is charged to the package last named; so is a minute with no new line (a
 package that took the screen, or a hang). The next boot carries on with the
 packages after it. Every started package gets a screenshot in --out.
 
@@ -956,9 +957,19 @@ class Box(object):
         return dst
 
     def lines(self):
+        """E9's lines: a test package's own, Bochs's debugger transcript, and
+        on a MEGADIAG=1 or MEGATRAP=1 kernel the kernel's (MEGA_E9) - a
+        SHIPPED kern_mega writes none, so read `faults()` and `wait_pm()`
+        for what it used to say there."""
         with open(self.e9, "rb") as f:
             t = f.read().decode("latin-1")
         return [l for l in t.splitlines() if l.strip()]
+
+    def said(self):
+        """`lines()` and then `faults()`: everything a row that scans for
+        `kern_mega FAULT` / `kern_mega CLOSED` lines needs, whichever kernel
+        it booted. One stop of the guest; call it before `stop()`."""
+        return self.lines() + self.faults()
 
     def wait_for(self, text, secs):
         end = time.time() + secs
@@ -1074,10 +1085,25 @@ class Box(object):
 
     def until(self, cond, what, secs=60.0, poll=0.1):
         """Poll COND() (which reads the guest) until true; RuntimeError
-        naming WHAT after SECS host seconds - a BACKSTOP: the guest runs at
-        real time at most (`clock: sync=slowdown`), so a loaded box makes it
-        tighter, never looser."""
-        end = time.time() + secs
+        naming WHAT once SECS GUEST seconds have run without it.
+
+        IT WAS SECS HOST SECONDS, and that is the failure the soak keeps
+        reporting as contention: the guest runs at real time AT MOST
+        (`clock: sync=slowdown`), so with four Bochs to a core a 60-second
+        wait handed the machine a fraction of 60 guest seconds and a row
+        that passes alone timed out under load (megamod's `wide` leg). The
+        guest clock is read (`ptime`, one stop, free to the guest) only once
+        the host deadline has passed, so a wait that succeeds in time costs
+        nothing extra; past it, the wait goes on while the guest is still
+        short of SECS of its own. guest_sleep's backstop - 10x real time plus
+        30 s - names a machine that stopped running."""
+        t0 = time.time()
+        end = t0 + secs
+        back = t0 + 30 + 10 * secs
+        try:
+            g0 = self.ptime()
+        except (RuntimeError, OSError):
+            g0 = None               # (no clock to read: host seconds alone)
         while True:
             v = cond()
             if v:
@@ -1086,27 +1112,175 @@ class Box(object):
             if f:                   # a FATAL fault ends every wait: the
                 raise RuntimeError(  # machine is stopped on its screen
                     "os88bochs: %s while waiting for %s" % (f, what))
-            if time.time() > end:
-                raise RuntimeError("os88bochs: no %s in %.0fs" % (what, secs))
+            now = time.time()
+            if now > end:
+                ran = None
+                if g0 is not None:
+                    try:
+                        ran = (self.ptime() - g0) / float(self.ips)
+                    except (RuntimeError, OSError):
+                        pass
+                if ran is None or ran >= secs or now > back:
+                    raise RuntimeError(
+                        "os88bochs: no %s in %.0fs%s" % (
+                            what, secs, "" if ran is None else
+                            " (%.1f guest seconds in %.0f host)"
+                            % (ran, now - t0)))
+                end = now + min(poll * 20, 2.0)     # look again shortly
             time.sleep(poll)
 
+    # ---- WHAT kern_mega USED TO SAY ON E9, read out of its STATE instead.
+    # A shipped kern_mega writes nothing to the debug port (kernel.asm's
+    # MEGA_E9: only MEGADIAG=1 and MEGATRAP=1 do, and `lines()` is still what
+    # they wrote). The switch is [mega_on]; a FATAL fault is [mega_infault],
+    # set by mega_report before it draws mega_fbuf - the glass's own line,
+    # " kern_mega FAULT vv err eeee at cccc:iiii sp ssss" - and halts; a
+    # package CLOSED for a fault is [mega_fkn] (faults in the incident, 0 =
+    # none ever) with mega_fkmsg its toast, "NAME vv at cccc:iiii". Each is
+    # true only while the KERNEL is in conventional memory: in a DOS trip
+    # that RAM is kern_dos's, so every read checks a constant of the image
+    # first (`home`).
+    _HOME = ("mega_tmem", b"real mode: no room for kern_mega's tables")
+    # ...a toast's text in .text (mega.inc), never written: at its address
+    # while the kernel is resident, kern_dos's bytes while it is parked
+
+    def _home_span(self):
+        return (self._HOME[0], len(self._HOME[1]))
+
+    def _state(self):
+        """(home, on, infault, fkn) in one stop of the guest"""
+        h, on, inf, fkn = self.reads([self._home_span(), ("mega_on", 1),
+                                      ("mega_infault", 1), ("mega_fkn", 1)])
+        home = h == self._HOME[1]
+        return (home, home and on[0] != 0, home and inf[0] != 0,
+                fkn[0] if home else 0)
+
+    def home(self):
+        """Is the kernel in conventional memory - not parked for a DOS trip,
+        not between a reset and its reload?"""
+        return self._state()[0]
+
+    def pm(self):
+        """Has kern_mega switched to protected mode (and is it home)?"""
+        return self._state()[1]
+
+    def wait_pm(self, secs):
+        """`wait_for("kern_mega: protected mode", SECS)`'s replacement, off
+        [mega_on]: True once the switch is made, False after SECS host
+        seconds (or on a fault first)."""
+        end = time.time() + min(secs, 60)
+        while not re.search(r"<bochs:1> c", _tail(self.e9, 0)):
+            if time.time() > end or self.p.poll() is not None:
+                return False        # (Bochs never took its first `c`: a
+            time.sleep(0.05)        # stop before it is lost)
+        try:
+            self.until(self.pm, "the switch to protected mode", secs,
+                       poll=0.5)
+            return True
+        except RuntimeError:
+            if getattr(self, "_flt", None):
+                raise               # a FATAL fault: say it, not a timeout
+            return False
+
+    def _fbuf_line(self):
+        b = self.read("mega_fbuf", 59).decode("latin-1")
+        return b.split(" - ")[0].strip()
+
     def fault(self):
-        """The first `kern_mega FAULT` line E9 has carried, or None - read
-        incrementally, so a census log of thousands of lines costs nothing
-        a poll."""
+        """The FATAL fault's line, "kern_mega FAULT vv err eeee at cccc:iiii
+        sp ssss" off mega_fbuf, or None. Sticky: the machine is halted once
+        one is had. Unreadable state (Bochs gone) answers None - the caller's
+        own read fails louder. At most one stop a second (`until` asks every
+        poll, and a poll can be 50 ms)."""
         if getattr(self, "_flt", None) is None:
-            self._flt, self._fpos = None, 0
-        if self._flt is None:
-            with open(self.e9, "rb") as f:
-                f.seek(self._fpos)
-                t = f.read()
-            cut = t.rfind(b"\n") + 1
-            self._fpos += cut
-            for l in t[:cut].decode("latin-1").splitlines():
-                if l.startswith("kern_mega FAULT"):
-                    self._flt = l
-                    break
-        return self._flt
+            if time.time() - getattr(self, "_flt_at", 0) < 1.0:
+                return None
+            self._flt_at = time.time()
+            try:
+                if self._state()[2]:
+                    self._flt = self._fbuf_line()
+            except (RuntimeError, OSError):
+                return None
+        return getattr(self, "_flt", None)
+
+    def faults(self):
+        """[line] for a FATAL fault and for a package CLOSED by one -
+        "kern_mega FAULT ..." and "kern_mega CLOSED NAME vv at cccc:iiii" -
+        which is what the shipped kernel put on E9 before MEGA_E9. CLOSED
+        carries the LAST incident (mega_fkmsg holds one), so a row counting
+        incidents polls (tests/megaflt.py). Once a Box has been asked, its
+        `stop()` reads it one last time, and after the stop this answers
+        that reading; a read that fails is a line too, so it cannot pass for
+        a clean run."""
+        if getattr(self, "_stopped_faults", None) is not None:
+            return list(self._stopped_faults)
+        self._asked = True
+        try:
+            home, _, inf, fkn = self._state()
+            out = []
+            if inf:
+                out.append(self._fbuf_line())
+            if fkn:
+                msg = self.read("mega_fkmsg", 25).split(b"\0")[0]
+                out.append("kern_mega CLOSED " + msg.decode("latin-1"))
+            return out
+        except (RuntimeError, OSError) as e:
+            return ["kern_mega state unreadable: %s" % e]
+
+    # A DOS TRIP: kern_mega parks the session above 1MB and kern_dos takes
+    # conventional memory (KERN-MEGA-DOS-PLAN), so while it runs NOTHING of
+    # the kernel can be read - `home()` is False. [mega_dwoke] is 1 once a
+    # trip is back (mega_dwake sets it AFTER the restore, so it survives the
+    # copy) and 0 in the snapshot, so a session past its first trip reads 1
+    # between trips: `arm_trip` writes it 0 first. The kernel writes 0 there
+    # itself at the next trip's start and reads it only at that trip's two
+    # returns (mega_dosparkf), so the write changes nothing the machine does.
+    def arm_trip(self):
+        """Ready `trip_back` for the NEXT trip: call it before starting it"""
+        self.dbg(["setpmem 0x%x 1 0" % self.sym("mega_dwoke")])
+
+    def trip_back(self):
+        """Has the trip since `arm_trip` come home (kernel resident, in
+        protected mode, [mega_dwoke] 1)?"""
+        h, on, wk = self.reads([self._home_span(), ("mega_on", 1),
+                                ("mega_dwoke", 1)])
+        return h == self._HOME[1] and on[0] != 0 and wk[0] == 1
+
+    def wait_trip(self, secs):
+        """`wait_for("kern_mega: unparked", SECS)`'s replacement: True once
+        the armed trip is home, False after SECS host seconds."""
+        try:
+            self.until(self.trip_back, "the DOS trip's return", secs,
+                       poll=0.25)
+            return True
+        except RuntimeError:
+            if getattr(self, "_flt", None):
+                raise               # a FATAL fault: say it, not a timeout
+            return False
+
+    def park(self):
+        """(KB parked, its linear base) as the session holds them - what
+        `kern_mega: parked kkkkK at pppppp` said, read once it is back"""
+        kb, b = self.reads([("mega_dikb", 2), ("mega_dpbase", 4)])
+        return (struct.unpack("<H", kb)[0], struct.unpack("<I", b)[0])
+
+    def wait_resumed(self, secs, since=0):
+        """`wait_for("kern_mega: resumed", SECS)`'s replacement: True once
+        [hb_resumes] (hbm_wake's count) passes SINCE with the kernel home and
+        in protected mode. A boot zeroes it, so a fresh Box's SINCE is 0."""
+        def woke():
+            h, on, n = self.reads([self._home_span(), ("mega_on", 1),
+                                   ("hb_resumes", 2)])
+            return (h == self._HOME[1] and on[0] != 0 and
+                    struct.unpack("<H", n)[0] > since)
+        try:
+            self.until(woke, "the hibernated session's resume", secs,
+                       poll=0.5)
+            return True
+        except RuntimeError:
+            if getattr(self, "_flt", None):
+                raise               # a FATAL fault: say it, not a timeout
+            return False
 
     def _ui_spans(self):
         import os88marty as om
@@ -1151,8 +1325,9 @@ class Box(object):
         kernel_up, where the rows used to wait for the first E9 line and then
         sleep 15 s. A desktop is ~6 s after reset here."""
         end = time.time() + secs
-        if not self.wait_for("kern_mega:", secs):
-            raise RuntimeError("os88bochs: no kern_mega line in %.0fs" % secs)
+        if not self.wait_pm(secs):
+            raise RuntimeError("os88bochs: kern_mega did not switch to "
+                               "protected mode in %.0fs" % secs)
         seen = [None]
 
         def ready():
@@ -1216,6 +1391,35 @@ class Box(object):
         - `info ldt` prints all 2,048 and costs ten times that)."""
         d = self.read(self.ldt_base() + (sel & ~7), 8)
         return d[2] | d[3] << 8 | d[4] << 16 | d[7] << 24
+
+    def mod_base(self, name):
+        """The LINEAR base on-demand module NAME ("CTRL.DRV") is loaded at,
+        or None while it is not: its mod_tab row's MODR_SEG - a selector
+        once it went above 1MB (mod_hi), where a MEGA_E9 kernel also says
+        `kern_mega: above 1MB: NAME base` on E9 - or a paragraph."""
+        a, e = self.sym("mod_tab"), self.sym("mod_tab_end")
+        rows = self.read(a, e - a)
+        base = a - self._text_off("mod_tab")    # KERNEL_SEG * 16
+        ents = [struct.unpack_from("<HH", rows, i)  # MODR_SEG, MODR_FILE
+                for i in range(0, len(rows) - 3, 4)]  # (MODR_SIZE 4)
+        names = self.reads([(base + fn, 13) for _, fn in ents])
+        for (seg, _), f in zip(ents, names):
+            if f.split(b"\0")[0].decode("latin-1").upper() == name.upper():
+                if not seg:
+                    return None
+                return self.sel_base(seg) if seg & 4 else seg * 16
+        return None
+
+    def _text_off(self, label):
+        """LABEL's offset in its KERNEL_SEG segment (.text and .bss)."""
+        if getattr(self, "_kseg", None) is None:
+            sys.path.insert(0, os.path.join(ROOT, "tools"))
+            import os88sym
+            off, _, equ = os88sym._parse_map(os.path.join(
+                self.build or os.path.join(ROOT, "build"), "megak",
+                "kernel.map"))
+            self._kseg, self._koff = equ["KERNEL_SEG"], off
+        return self._koff[label]
 
     def pkg_base(self, name):
         """The LINEAR address of package NAME's image (its DS:0), NAME being
@@ -1344,6 +1548,9 @@ class Box(object):
         self.dbl(160, 139 + 16 * row, "MEGARUN's start")
 
     def stop(self):
+        if getattr(self, "_asked", False) and self.p.poll() is None and \
+                getattr(self, "_stopped_faults", None) is None:
+            self._stopped_faults = self.faults()    # (see faults())
         self.hold.kill()
         self.p.terminate()
         try:
@@ -1373,7 +1580,7 @@ def _sweep_boot(d, todo, quiet_secs, sb, cfg, build, cap_secs, linger, put,
                 if q.split(":", 1)[0].startswith("RUN/")}
         box.megarun(len(subs))
         seen, last, quiet = 0, None, time.time()
-        began = quiet
+        began, closed = quiet, []
         while True:
             ls = box.lines()
             new = ls[seen:]
@@ -1386,7 +1593,7 @@ def _sweep_boot(d, todo, quiet_secs, sb, cfg, build, cap_secs, linger, put,
                     last = l[9:]
                     started.append(last)
                 elif l == "MEGARUN: ok" and last:
-                    time.sleep(4)
+                    box.guest_sleep(4)  # GUEST seconds to draw, then look
                     shot(os.path.join(d, last.replace(".", "_") + ".png"))
                     report.append((last, "ok"))
                 elif l.startswith("MEGARUN: no "):
@@ -1396,13 +1603,26 @@ def _sweep_boot(d, todo, quiet_secs, sb, cfg, build, cap_secs, linger, put,
                         ls[ls.index(l) + 1:ls.index(l) + 2])
                 elif l == "MEGARUN: done":
                     fault = "done"
+            # ...and what a SHIPPED kern_mega says nowhere but in its state
+            # (Box.faults): a fatal fault, or a package CLOSED - the LAST
+            # incident's toast, so it is polled here, MEGARUN starting one
+            # package every few seconds, and charged to the one last named
+            for f in (box.faults() if not fault else ()):
+                if f.startswith("kern_mega FAULT"):
+                    fault = f
+                elif not f.startswith("kern_mega CLOSED") or f in closed:
+                    continue
+                closed.append(f)    # (kept beside e9.out: tests/megasweep)
+                with open(os.path.join(d, "faults.out"), "a") as fh:
+                    fh.write("%s\t%s\n" % (last or "(before MEGARUN)", f))
             if new:
                 quiet = time.time()
             if fault == "done":
                 if linger:
                     # MEGATRAP=1: let what was started run on, so its
-                    # loops land in the census, then a picture of it
-                    time.sleep(linger)
+                    # loops land in the census, then a picture of it -
+                    # LINGER GUEST seconds, however long the host takes
+                    box.guest_sleep(linger, poll=0.5)
                     shot(os.path.join(d, "LINGER.png"))
                 break
             if fault:
@@ -1533,7 +1753,7 @@ def main():
                   os.path.abspath(a.bimg) if a.bimg else None, a.ne2k,
                   a.btype, a.cmode, a.bootc, a.noa, a.build, a.csys, a.put,
                   a.cd, os.path.abspath(a.aimg) if a.aimg else None)
-        box.wait_for("kern_mega:", 240)
+        box.wait_pm(240)
         print("running: DISPLAY=%s, E9 in %s" % (DISPLAY, box.e9))
 
 

@@ -169,13 +169,7 @@ mix_get:
     mov al, bh
     mov cl, [si+2]
     shr al, cl
-    cmp byte [si+1], 0FFh
-    jne .right
-    and al, [si+3]              ; packed right is already in low nibble
-    jmp short .norm
-.right:
-    and al, [si+3]
-.norm:
+    and al, [si+3]              ; (packed right is already in the low nibble)
     call mix_to_pct
     mov ch, al
     mov cl, bl
@@ -199,16 +193,14 @@ mix_get:
 
 ; Native register images -> percentages, nearest step. AX/DX scratch.
 mix_to_pct:
-    xor ah, ah
-    mov dx, 100
-    mul dx
-    xor dx, dx
-    mov dl, [si+3]
-    shr dx, 1
-    add ax, dx
-    xor dx, dx
-    mov dl, [si+3]
-    div dl
+    mov dl, 100
+    mul dl                      ; AX = AL * 100
+    mov dl, [si+3]              ; DL = the native max...
+    mov dh, dl
+    shr dh, 1                   ; ...and half of it, to round
+    add al, dh
+    adc ah, 0
+    div dl                      ; <= 100: it fits AL
     xor ah, ah
     ret
 

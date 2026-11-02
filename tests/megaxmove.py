@@ -75,22 +75,22 @@ def main():
     fails = []
     lines = []
     try:
-        if box.wait_for("kern_mega:", 240):
+        if box.wait_pm(240):
             box.up()
             box.megarun()
             end = time.time() + 240
             while time.time() < end:
-                lines = box.lines()
+                lines = box.said()
                 if any(l.startswith("kern_mega FAULT") or
                        l.startswith("MEGAXM: ok") or
                        l.startswith("MEGAXM: no") or
                        l.startswith("MEGAXM: bad") for l in lines):
                     break
                 time.sleep(0.2)
-            time.sleep(1)
-            lines = box.lines()
+            box.guest_sleep(1)          # the lines after the verdict
+            lines = box.said()
         else:
-            fails.append("no kern_mega line in 240s")
+            fails.append("kern_mega never switched to protected mode in 240s")
     finally:
         box.stop()
     for l in lines:

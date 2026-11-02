@@ -27,8 +27,6 @@ MPU_ACK     equ 0xFE
 MPU_DRR     equ 0x40                ; status bit 6: 1 = cannot take a byte
 MPU_DSR     equ 0x80                ; status bit 7: 1 = nothing to read
 
-mpu_bases:  dw 0x330, 0x300
-mpu_one:    dw 0                    ; ...or the ONE the Ports view pinned
 
 ; --- MPU_ONCE: ATTACH-ONLY (SPEC.md 34.15.1) ------------------------------
 ; mpu_probe, mpu_alone, mpu_waitw and mpu_ack run inside the attach and never after.
@@ -36,6 +34,8 @@ mpu_one:    dw 0                    ; ...or the ONE the Ports view pinned
 ; sets it and expands MPU_ONCE past snd_keepmix, the end of what the driver
 ; keeps once its attach has answered, so these bytes leave the claim.
 %macro MPU_ONCE 0
+mpu_bases:  dw 0x330, 0x300           ; (attach-only, with the probe)
+mpu_one:    dw 0                    ; ...or the ONE the Ports view pinned
 ; -----------------------------------------------------------------------------
 ; mpu_probe - is an MPU-401 at 330h or 300h? If so it is put in UART mode and
 ; [mpu_base] says where. out: CF=0 found; CF=1 none, and no port was written
@@ -187,6 +187,16 @@ mpu_ack:
 %ifndef SND_SPLIT
     MPU_ONCE
 %endif
+
+; --- MPU_RES: RESIDENT ONLY ON A MACHINE WITH AN MPU-401 (SPEC.md 34.15.1) ---
+; mpu_put, mpu_hush and the four verbs. Expanded HERE unless SND_SPLIT is set;
+; SOUND.DRV expands MPU_RES in its own run, between snd_keeppm and
+; snd_keepmpu, which the attach keeps only when mpu_probe found an interface
+; ([mpu_base]). snd_pkg refuses verbs 2..5 with SNDE_NOMIDI when there is
+; none, so under SND_SPLIT the verbs do not ask again; mpu_detach stays
+; resident and reaches mpu_hush only with [mpu_own] set, which only a
+; successful SNDV_MIDOPEN - an interface - sets.
+%macro MPU_RES 0
 ; -----------------------------------------------------------------------------
 ; mpu_put - AL to the MIDI out. CF=1 the interface never became ready (and
 ; the byte is lost). Every register preserved but the flags.
@@ -218,11 +228,10 @@ mpu_put:
     loop .w
     stc
     jmp short .out
-.go:
+.go:                                ; (CF = 0: the TEST cleared it)
     dec dx
     mov al, ah
     out dx, al
-    clc
 .out:
     pop dx
     pop cx
@@ -263,18 +272,24 @@ mpu_hush:
 ; -----------------------------------------------------------------------------
 mpu_v_info:                         ; SNDV_MIDINFO: AX = the base
     mov ax, [mpu_base]
+%ifndef SND_SPLIT
     or ax, ax
     jz mpu_nomidi
+%endif
     clc
     ret
+%ifndef SND_SPLIT
 mpu_nomidi:
     mov ax, SNDE_NOMIDI
     stc
     ret
+%endif
 
 mpu_v_open:                         ; SNDV_MIDOPEN: the interface is ES's
+%ifndef SND_SPLIT
     cmp word [mpu_base], 0
     je mpu_nomidi
+%endif
     push bx
     mov bx, es
     pushf
@@ -293,13 +308,14 @@ mpu_v_open:                         ; SNDV_MIDOPEN: the interface is ES's
     mov [mpu_own], bx
     popf
     pop bx
-    xor ax, ax
-    clc
+    xor ax, ax                  ; (CF = 0)
     ret
 
 mpu_v_write:                        ; SNDV_MIDW: ES:SI, CX bytes
+%ifndef SND_SPLIT
     cmp word [mpu_base], 0
     je mpu_nomidi
+%endif
     mov ax, es                      ; (AX is the answer either way)
     cmp ax, [mpu_own]
     je .ok
@@ -335,17 +351,23 @@ mpu_v_write:                        ; SNDV_MIDW: ES:SI, CX bytes
     ret
 
 mpu_v_close:                        ; SNDV_MIDCLOSE: silenced and given back
+%ifndef SND_SPLIT
     cmp word [mpu_base], 0
     je mpu_nomidi
+%endif
     mov ax, es                      ; (AX is the answer either way)
     cmp ax, [mpu_own]
     jne .not
     call mpu_hush
     mov word [mpu_own], 0
 .not:
-    xor ax, ax
-    clc
+    xor ax, ax                  ; (CF = 0)
     ret
+
+%endmacro
+%ifndef SND_SPLIT
+    MPU_RES
+%endif
 
 ; mpu_detach - the driver going: a module that was playing is silenced
 mpu_detach:

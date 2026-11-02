@@ -1,0 +1,553 @@
+diff --git a/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs b/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
+index d74d6ff2..d1296517 100644
+--- a/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
++++ b/crates/lib/frontend/marty_frontend_common/src/machine_manager/mod.rs
+@@ -84,6 +84,7 @@ pub struct MachineConfigFileEntry {
+     cpu: Option<CpuConfig>,
+     memory: MemoryConfig,
+     ems: Option<EmsMemoryConfig>,
++    picomem: Option<marty_core::machine_config::PicoMemConfig>,
+     #[serde(default)]
+     speaker: bool,
+     ppi_turbo: Option<bool>, // This bool is an option so that it is tri-state - missing means no turbo feature, true means ppi high = turbo, false means ppi low = turbo.
+@@ -471,6 +472,7 @@ impl MachineConfigFileEntry {
+             cpu: self.cpu.clone(),
+             memory: self.memory.clone(),
+             ems: self.ems.clone(),
++            picomem: self.picomem.clone(),
+             fdc: self.fdc.clone(),
+             hdc: self.hdc.clone(),
+             serial: self.serial.clone().unwrap_or_default(),
+diff --git a/crates/marty_core/src/bus/io.rs b/crates/marty_core/src/bus/io.rs
+index 7b81180a..fec80450 100644
+--- a/crates/marty_core/src/bus/io.rs
++++ b/crates/marty_core/src/bus/io.rs
+@@ -168,6 +168,13 @@ impl BusInterface {
+             }
+         }
+ 
++        // os8088: a PicoMEM answers a port nobody else does
++        if byte.is_none() {
++            if let Some(pm) = &mut self.picomem {
++                byte = pm.io_read(port);
++            }
++        }
++
+         let byte_val = byte.unwrap_or(NO_IO_BYTE);
+ 
+         self.io_stats
+@@ -419,6 +426,14 @@ impl BusInterface {
+             }
+         }
+ 
++        // os8088: ...and hears every write - a 1.x learns a Sound Blaster
++        // transfer by snooping the PC's own writes to the 8237
++        if let Some(pm) = &mut self.picomem {
++            if pm.io_write(port, data) {
++                resolved = true;
++            }
++        }
++
+         self.io_stats
+             .entry(port)
+             .and_modify(|e| {
+diff --git a/crates/marty_core/src/bus/memory.rs b/crates/marty_core/src/bus/memory.rs
+index d8ee0825..23966555 100644
+--- a/crates/marty_core/src/bus/memory.rs
++++ b/crates/marty_core/src/bus/memory.rs
+@@ -186,6 +186,12 @@ impl BusInterface {
+                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                         }
+                     }
++                    MmioDeviceType::PicoMem => {
++                        if let Some(pm) = &mut self.picomem {
++                            let syswait = pm.get_read_wait(address, system_ticks);
++                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
++                        }
++                    }
+                     _ => {}
+                 }
+                 // We didn't match any mmio devices, return raw memory
+@@ -222,6 +228,12 @@ impl BusInterface {
+                             return Ok(self.system_ticks_to_cpu_cycles(syswait));
+                         }
+                     }
++                    MmioDeviceType::PicoMem => {
++                        if let Some(pm) = &mut self.picomem {
++                            let syswait = pm.get_write_wait(address, system_ticks);
++                            return Ok(self.system_ticks_to_cpu_cycles(syswait));
++                        }
++                    }
+                     _ => {}
+                 }
+                 // We didn't match any mmio devices, return raw memory
+@@ -277,6 +289,12 @@ impl BusInterface {
+                             return Ok((data, 0));
+                         }
+                     }
++                    MmioDeviceType::PicoMem => {
++                        if let Some(pm) = &mut self.picomem {
++                            let (data, _waits) = MemoryMappedDevice::mmio_read_u8(pm, address, system_ticks, None);
++                            return Ok((data, 0));
++                        }
++                    }
+                     MmioDeviceType::MemoryExpansion(mem_id) => {
+                         return Ok(self.memory_expansions[mem_id].mmio_read_u8(address, system_ticks, None));
+                     }
+@@ -338,6 +356,11 @@ impl BusInterface {
+                             return Ok(data);
+                         }
+                     }
++                    MmioDeviceType::PicoMem => {
++                        if let Some(pm) = &self.picomem {
++                            return Ok(MemoryMappedDevice::mmio_peek_u8(pm, address, None));
++                        }
++                    }
+                     MmioDeviceType::MemoryExpansion(mem_id) => {
+                         let data = self.memory_expansions[mem_id].mmio_peek_u8(address, None);
+                         return Ok(data);
+@@ -424,6 +447,11 @@ impl BusInterface {
+                             MemoryMappedDevice::mmio_write_u8(&mut **jride, address, data, 0, None);
+                         }
+                     }
++                    MmioDeviceType::PicoMem => {
++                        if let Some(pm) = &mut self.picomem {
++                            MemoryMappedDevice::mmio_write_u8(pm, address, data, 0, None);
++                        }
++                    }
+                     MmioDeviceType::MemoryExpansion(mem_id) => {
+                         return Ok(self.memory_expansions[mem_id].mmio_write_u8(address, data, 0, None));
+                     }
+diff --git a/crates/marty_core/src/bus/mod.rs b/crates/marty_core/src/bus/mod.rs
+index 2f5d286e..3e9135e9 100644
+--- a/crates/marty_core/src/bus/mod.rs
++++ b/crates/marty_core/src/bus/mod.rs
+@@ -88,6 +88,7 @@ use marty_common::{
+ use crate::devices::adlib::AdLibCard;
+ use crate::devices::sblaster::SoundBlasterCard;
+ use crate::devices::mpu401::Mpu401;
++use crate::devices::picomem::PicoMem;
+ #[cfg(feature = "ega")]
+ use crate::devices::ega::EGACard;
+ #[cfg(feature = "vga")]
+@@ -437,6 +438,7 @@ pub enum MmioDeviceType {
+     MemoryExpansion(usize),
+     Cart,
+     JrIde,
++    PicoMem,
+ }
+ 
+ // Main bus struct.
+@@ -495,6 +497,7 @@ pub struct BusInterface {
+     adlib: Option<AdLibCard>,
+     sblaster: Option<SoundBlasterCard>,
+     mpu401: Option<Mpu401>,
++    picomem: Option<PicoMem>,
+     sound_source: Option<DSoundSource>,
+     covox: Option<Covox>,
+     sn76489: Option<Sn76489>,
+@@ -588,6 +591,7 @@ impl Default for BusInterface {
+             adlib: None,
+             sblaster: None,
+             mpu401: None,
++            picomem: None,
+             sound_source: None,
+             covox: None,
+             sn76489: None,
+@@ -1254,6 +1258,19 @@ impl BusInterface {
+             }
+         }
+ 
++        // os8088: a PicoMEM running its own firmware (devices/picomem.rs)
++        if let Some(pm_config) = &machine_config.picomem {
++            if let Some(pm) = PicoMem::new(
++                pm_config.irq,
++                pm_config.irq_lines.unwrap_or(0),
++                pm_config.dma.unwrap_or(1),
++                pm_config.window.map(|w| (w as usize) << 4),
++            ) {
++                add_mmio_device!(self, pm, MmioDeviceType::PicoMem);
++                self.picomem = Some(pm);
++            }
++        }
++
+         // Create an EMS board if specified
+         if let Some(ems_config) = &machine_config.ems {
+             #[allow(irrefutable_let_patterns)]
+@@ -1661,6 +1678,12 @@ impl BusInterface {
+         if let Some(mpu) = &mut self.mpu401 {
+             mpu.run(us);
+         }
++        // The PicoMEM: card time, a 2.x's DRQs (so it needs the 8237 the
++        // FDC and the SB get) and its IRQ levels
++        if let Some(mut pm) = self.picomem.take() {
++            pm.run(&mut dma1, self, us);
++            self.picomem = Some(pm);
++        }
+ 
+         // Run the HDC, passing it DMA controller while DMA is still unattached.
+         if let Some(mut hdc) = self.hdc.take() {
+diff --git a/crates/marty_core/src/devices/mod.rs b/crates/marty_core/src/devices/mod.rs
+index bf300bb1..95903815 100644
+--- a/crates/marty_core/src/devices/mod.rs
++++ b/crates/marty_core/src/devices/mod.rs
+@@ -61,6 +61,7 @@ pub mod pit;
+ pub mod ppi;
+ pub mod sblaster;
+ pub mod mpu401;
++pub mod picomem;
+ pub mod serial;
+ pub mod sn76489;
+ pub mod sound_source;
+diff --git a/crates/marty_core/src/devices/picomem.rs b/crates/marty_core/src/devices/picomem.rs
+new file mode 100644
+index 0000000..1111111
+--- /dev/null
++++ b/crates/marty_core/src/devices/picomem.rs
+@@ -0,0 +1,312 @@
++/*
++    devices::picomem.rs - os8088: a PicoMEM running ITS OWN FIRMWARE
++
++    A thin adapter around libpmhost (os8088's tools/picomem): the card's
++    firmware, Elendilon/ISA-PicoMEM pm1x-pr, compiled for the host and loaded
++    at run time, so this file builds with no dependency on it. The same
++    library is 86Box's (tools/86box/patches/07-picomem.patch); what MartyPC
++    adds is TIMING - the card's memory is charged the wait states its
++    firmware's cost table gives, and its card time is the 8088's.
++
++    - I/O: the card answers a port no other device claims, and hears EVERY
++      write, which is how a 1.x learns a Sound Blaster transfer: it snoops
++      the PC's writes to the 8237 (docs/plans/completed/PICOMEM-EMU-PLAN.md 2).
++    - Memory: one window, D0000-EFFFF by default, where its BIOS ROM, its
++      shared RAM and its EMS frame live; a block the card does not decode
++      reads FFh.
++    - IRQs: the levels the card drives, mirrored into the PIC each slice.
++    - A 2.x's real DMA: a DRQ the card raises per byte, answered from the
++      8237 in the slice, the byte and TC handed back.
++
++    The library and the microSD image come from $OS88_PMHOST and $OS88_PMSD
++    (tools/os88marty.py sets both for a machine with a [machine.picomem]).
++    One card per process: the library holds one card.
++*/
++use std::{
++    ffi::{c_char, c_int, c_void, CStr, CString},
++    sync::atomic::{AtomicI32, AtomicU32, Ordering},
++};
++
++use crate::{
++    bus::{BusInterface, MemRangeDescriptor, MemoryMappedDevice},
++    devices::dma,
++};
++
++extern "C" {
++    fn dlopen(filename: *const c_char, flag: c_int) -> *mut c_void;
++    fn dlsym(handle: *mut c_void, symbol: *const c_char) -> *mut c_void;
++    fn dlerror() -> *const c_char;
++}
++const RTLD_NOW: c_int = 2;
++const RTLD_LOCAL: c_int = if cfg!(target_os = "macos") { 4 } else { 0 };  // Darwin's, glibc's
++
++pub const PICOMEM_DEFAULT_WINDOW: usize = 0xD0000;
++pub const PICOMEM_DEFAULT_WINDOW_SIZE: usize = 0x20000;
++const PICOMEM_SLICE_NS: f64 = 100_000.0;
++
++type IrqFn = extern "C" fn(*mut c_void, c_int, c_int);
++type LogFn = extern "C" fn(*mut c_void, *const c_char);
++type NetFn = extern "C" fn(*mut c_void, *const u8, c_int);
++type DmaFn = extern "C" fn(*mut c_void, c_int);
++
++// pmhost.h's two structs, restated
++#[repr(C)]
++struct PmHost {
++    ctx: *mut c_void,
++    irq: Option<IrqFn>,
++    log: Option<LogFn>,
++    net_tx: Option<NetFn>,
++    dma_req: Option<DmaFn>,
++}
++
++#[repr(C)]
++struct PmCfg {
++    irq: c_int,
++    sd_image: *const c_char,
++    irq_lines: c_int,
++    dma: c_int,
++}
++
++// The card thread calls these while the emulator thread waits in pm_advance,
++// or on the emulator thread inside a bus call: atomics either way.
++static LINES: AtomicU32 = AtomicU32::new(0); // bit n = IRQ n, as the card drives it
++static DRQS: AtomicI32 = AtomicI32::new(0); // a 2.x's DRQs not yet answered
++
++extern "C" fn pm_on_irq(_ctx: *mut c_void, line: c_int, level: c_int) {
++    if (0..16).contains(&line) {
++        if level != 0 {
++            LINES.fetch_or(1 << line, Ordering::SeqCst);
++        }
++        else {
++            LINES.fetch_and(!(1 << line), Ordering::SeqCst);
++        }
++    }
++}
++
++extern "C" fn pm_on_log(_ctx: *mut c_void, text: *const c_char) {
++    if !text.is_null() {
++        let s = unsafe { CStr::from_ptr(text) }.to_string_lossy();
++        log::info!("PicoMEM: {}", s);
++        eprintln!("PicoMEM: {}", s);
++    }
++}
++
++extern "C" fn pm_on_dma(_ctx: *mut c_void, _channel: c_int) {
++    DRQS.fetch_add(1, Ordering::SeqCst);
++}
++
++pub struct PicoMem {
++    create: unsafe extern "C" fn(*const PmCfg, *const PmHost) -> c_int,
++    advance: unsafe extern "C" fn(u64),
++    io_read: unsafe extern "C" fn(u16, *mut u8) -> c_int,
++    io_write: unsafe extern "C" fn(u16, u8) -> c_int,
++    mem_read: unsafe extern "C" fn(u32, *mut u8) -> c_int,
++    mem_write: unsafe extern "C" fn(u32, u8) -> c_int,
++    mem_waits: unsafe extern "C" fn(u32) -> c_int,
++    dma_byte: Option<unsafe extern "C" fn(u8, c_int) -> c_int>,
++    dma_ch: usize,
++    window: usize,
++    window_size: usize,
++    lines_seen: u32,
++    ns_frac: f64,
++    _sd: Option<CString>,
++}
++
++unsafe fn sym<T: Copy>(lib: *mut c_void, name: &str) -> Option<T> {
++    let c = CString::new(name).unwrap();
++    let p = dlsym(lib, c.as_ptr());
++    if p.is_null() {
++        None
++    }
++    else {
++        Some(std::mem::transmute_copy::<*mut c_void, T>(&p))
++    }
++}
++
++impl PicoMem {
++    /// The card on IRQ `irq` (a 1.x's jumper), `irq_lines` a 2.x's jumper
++    /// mask (0: the one line `irq` names) and `dma` its DRQ channel. None
++    /// if the library cannot be loaded: the machine runs without the card.
++    pub fn new(irq: u8, irq_lines: u8, dma: u8, window: Option<usize>) -> Option<Self> {
++        let path = std::env::var("OS88_PMHOST").ok()?;
++        let cpath = CString::new(path.clone()).ok()?;
++        unsafe {
++            let lib = dlopen(cpath.as_ptr(), RTLD_NOW | RTLD_LOCAL);
++            if lib.is_null() {
++                let e = dlerror();
++                let why = if e.is_null() {
++                    String::new()
++                }
++                else {
++                    CStr::from_ptr(e).to_string_lossy().into_owned()
++                };
++                eprintln!("PicoMEM: cannot load libpmhost '{}': {}", path, why);
++                return None;
++            }
++            let mut card = PicoMem {
++                create: sym(lib, "pm_create")?,
++                advance: sym(lib, "pm_advance")?,
++                io_read: sym(lib, "pm_io_read")?,
++                io_write: sym(lib, "pm_io_write")?,
++                mem_read: sym(lib, "pm_mem_read")?,
++                mem_write: sym(lib, "pm_mem_write")?,
++                mem_waits: sym(lib, "pm_mem_waits")?,
++                dma_byte: sym(lib, "pm_dma_byte"),
++                dma_ch: dma.max(1) as usize,
++                window: window.unwrap_or(PICOMEM_DEFAULT_WINDOW),
++                window_size: PICOMEM_DEFAULT_WINDOW_SIZE,
++                lines_seen: 0,
++                ns_frac: 0.0,
++                _sd: std::env::var("OS88_PMSD").ok().and_then(|s| CString::new(s).ok()),
++            };
++            let host = PmHost {
++                ctx: std::ptr::null_mut(),
++                irq: Some(pm_on_irq),
++                log: Some(pm_on_log),
++                net_tx: None,
++                dma_req: Some(pm_on_dma),
++            };
++            let cfg = PmCfg {
++                irq: irq as c_int,
++                sd_image: card._sd.as_ref().map_or(std::ptr::null(), |s| s.as_ptr()),
++                irq_lines: irq_lines as c_int,
++                dma: card.dma_ch as c_int,
++            };
++            // pm_create copies both structs
++            if (card.create)(&cfg, &host) != 0 {
++                eprintln!("PicoMEM: pm_create refused (one card per library)");
++                return None;
++            }
++            eprintln!(
++                "PicoMEM: {}, IRQ {}, SD {}",
++                path,
++                irq,
++                std::env::var("OS88_PMSD").unwrap_or_else(|_| "(none)".into())
++            );
++            card.ns_frac = 0.0;
++            Some(card)
++        }
++    }
++
++    /// A port read the card answers, or None (then nothing drives the bus).
++    pub fn io_read(&mut self, port: u16) -> Option<u8> {
++        let mut v = 0xFFu8;
++        if unsafe { (self.io_read)(port, &mut v) } != 0 {
++            Some(v)
++        }
++        else {
++            None
++        }
++    }
++
++    /// Every write on the bus, the card's or not. True if the card decoded it.
++    pub fn io_write(&mut self, port: u16, data: u8) -> bool {
++        if unsafe { (self.io_write)(port, data) } != 0 {
++            // a command or an EMS page may have moved the card: let core 0
++            // take it now rather than at the next slice
++            unsafe { (self.advance)(0) };
++            true
++        }
++        else {
++            false
++        }
++    }
++
++    /// Card time, the 2.x's DRQs and the IRQ levels, for `us` of the 8088's.
++    pub fn run(&mut self, dma: &mut dma::DMAController, bus: &mut BusInterface, us: f64) {
++        // Card time in 100 us slices, as 86Box's adapter ticks it: run() is
++        // called far more often than that, and every advance hands the card
++        // thread the baton - per call, the guest ran at a tenth of real time.
++        // A write the card decodes still advances it at once (io_write).
++        self.ns_frac += us * 1000.0;
++        if self.ns_frac >= PICOMEM_SLICE_NS {
++            let ns = self.ns_frac as u64;
++            self.ns_frac -= ns as f64;
++            unsafe { (self.advance)(ns) };
++        }
++
++        if let Some(dma_byte) = self.dma_byte {
++            let mut n = 0;
++            while DRQS.load(Ordering::SeqCst) > 0 && n < 64 && dma.check_dma_ready(self.dma_ch) {
++                let byte = dma.do_dma_read_u8(bus, self.dma_ch);
++                let tc = dma.check_terminal_count(self.dma_ch);
++                DRQS.fetch_sub(1, Ordering::SeqCst);
++                unsafe { dma_byte(byte, tc as c_int) };
++                n += 1;
++            }
++        }
++
++        let now = LINES.load(Ordering::SeqCst);
++        let changed = now ^ self.lines_seen;
++        if changed != 0 {
++            if let Some(pic) = bus.pic_mut().as_mut() {
++                for line in 0..8u8 {
++                    if changed & (1 << line) != 0 {
++                        if now & (1 << line) != 0 {
++                            pic.request_interrupt(line);
++                        }
++                        else {
++                            pic.clear_interrupt(line);
++                        }
++                    }
++                }
++            }
++            self.lines_seen = now;
++        }
++    }
++}
++
++impl MemoryMappedDevice for PicoMem {
++    // The card's wait states (its firmware cost table: 8 for PSRAM on a 1.x)
++    // are ISA bus cycles; the bus takes SYSTEM ticks, three to an 8088 clock
++    fn get_read_wait(&mut self, address: usize, _cycles: u32) -> u32 {
++        unsafe { (self.mem_waits)(address as u32) as u32 * 3 }
++    }
++
++    fn mmio_read_u8(&mut self, address: usize, _cycles: u32, _cpumem: Option<&[u8]>) -> (u8, u32) {
++        let mut v = 0xFFu8;
++        unsafe { (self.mem_read)(address as u32, &mut v) };
++        (v, 0)
++    }
++
++    fn mmio_read_u16(&mut self, address: usize, cycles: u32, cpumem: Option<&[u8]>) -> (u16, u32) {
++        let (lo, _) = MemoryMappedDevice::mmio_read_u8(self, address, cycles, cpumem);
++        let (hi, _) = MemoryMappedDevice::mmio_read_u8(self, address + 1, cycles, cpumem);
++        ((hi as u16) << 8 | lo as u16, 0)
++    }
++
++    fn mmio_peek_u8(&self, address: usize, _cpumem: Option<&[u8]>) -> u8 {
++        let mut v = 0xFFu8;
++        unsafe { (self.mem_read)(address as u32, &mut v) };
++        v
++    }
++
++    fn mmio_peek_u16(&self, address: usize, cpumem: Option<&[u8]>) -> u16 {
++        (self.mmio_peek_u8(address + 1, cpumem) as u16) << 8 | self.mmio_peek_u8(address, cpumem) as u16
++    }
++
++    fn get_write_wait(&mut self, address: usize, _cycles: u32) -> u32 {
++        unsafe { (self.mem_waits)(address as u32) as u32 * 3 }
++    }
++
++    fn mmio_write_u8(&mut self, address: usize, byte: u8, _cycles: u32, _cpumem: Option<&mut [u8]>) -> u32 {
++        unsafe { (self.mem_write)(address as u32, byte) };
++        0
++    }
++
++    fn mmio_write_u16(&mut self, address: usize, data: u16, cycles: u32, _cpumem: Option<&mut [u8]>) -> u32 {
++        self.mmio_write_u8(address, data as u8, cycles, None);
++        self.mmio_write_u8(address + 1, (data >> 8) as u8, cycles, None);
++        0
++    }
++
++    fn get_mapping(&self) -> Vec<MemRangeDescriptor> {
++        vec![MemRangeDescriptor {
++            address: self.window,
++            size: self.window_size,
++            cycle_cost: 0,
++            read_only: false,
++            priority: 0,
++        }]
++    }
++}
+diff --git a/crates/marty_core/src/machine_config.rs b/crates/marty_core/src/machine_config.rs
+index 299a97e1..225feab4 100644
+--- a/crates/marty_core/src/machine_config.rs
++++ b/crates/marty_core/src/machine_config.rs
+@@ -136,6 +136,21 @@ pub struct MemoryConfig {
+     pub conventional: ConventionalMemoryConfig,
+ }
+ 
++/// os8088: a PicoMEM (devices/picomem.rs). The firmware library and the
++/// microSD image are $OS88_PMHOST and $OS88_PMSD, which tools/os88marty.py
++/// sets per instance.
++#[derive(Clone, Debug, Deserialize)]
++pub struct PicoMemConfig {
++    /// a 1.x's IRQ jumper (a 2.x's multiplexer line)
++    pub irq: u8,
++    /// a 2.x's jumpers, bit n = IRQ n; none = the one line `irq` names
++    pub irq_lines: Option<u8>,
++    /// a 2.x's DRQ channel (1)
++    pub dma: Option<u8>,
++    /// the memory window's segment (D000h, 128 KB)
++    pub window: Option<u32>,
++}
++
+ #[derive(Clone, Debug, Deserialize)]
+ pub struct EmsMemoryConfig {
+     pub ems_type: EmsType,
+@@ -337,6 +352,7 @@ pub struct MachineConfiguration {
+     pub cpu: Option<CpuConfig>,
+     pub memory: MemoryConfig,
+     pub ems: Option<EmsMemoryConfig>,
++    pub picomem: Option<PicoMemConfig>,
+     pub keyboard: Option<KeyboardConfig>,
+     pub serial_mouse: Option<SerialMouseConfig>,
+     pub video: Vec<VideoCardConfig>,

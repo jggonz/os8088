@@ -55,6 +55,9 @@ NBTN = 7                        # VP_NBTN: the four, Repeat, Mute (SPEC.md
                                 # 98.3.17) and the info card's
 VP_BOXX, VP_BOXY, VP_BARH = 8, 6, 10
 VP_TXTY, VP_LPITCH, VP_LINES, VP_CARDW = 6, 11, 8, 280
+if MEGA:
+    VP_LINES = 9                # (the kern_mega arm's ninth: which bracket
+                                # the last play took, SPEC.md 98.3.24)
 VP_LINESB = 8                   # ...with the buttons in the card (VPDIAG=1
                                 # makes VP_LINES 12: SPEC.md 98.3)
 VP_CARDH = VP_TXTY + VP_LINES * VP_LPITCH + 4

@@ -330,7 +330,7 @@ dkb_band:
     retf
 %1 %+ _reflow:                  ; the far half it had in `.text` until kernel
     %2 dock_geom                ; size pass 13 (docs/plans/completed/ksp13/
-    call COLD_SEG:desk_rowcalc_x ; dispsw.md): one entry, not five shims
+    call %4 %+ _rowcalc         ; dispsw.md): one entry, not five shims
     call %4 %+ _refit
     %2 wm_su_drop_all
     %2 dock_force
@@ -432,17 +432,23 @@ db_force:
     push cx                     ; AX = 0 and CX = the last column, so this
     xor ax, ax                  ; enters that routine BELOW its own prologue
     mov cx, [vid_pwm1]          ; and lets its `.out` pop the pair we pushed.
-    jmp db_force_x.body       ; A REAL COUPLING: an instruction added between
-                                ; `db_force_x:` and `.body` is one this path
-                                ; silently skips. Written `jmp` and never
-                                ; `jmp short`, so a prologue that outgrows 128
-                                ; bytes gets a longer encoding instead of an
-                                ; assembly error.
+%ifdef KERN_BIG                 ; (kern_small: the jump, for its .text parity)
+    db 0xA9                     ; test ax, imm16: its immediate IS db_force_x's
+%else
+    jmp db_force_x.body
+%endif
+                                ; two pushes, so this falls into `.body` (no
+                                ; flag is read there before a cmp writes one).
+                                ; A REAL COUPLING, asserted below rather than
+                                ; trusted: it was a `jmp` (kernel size pass 15)
 
 db_force_x:
     push ax
     push cx
-.body:                          ; db_force enters HERE - see there
+.body:
+%if db_force_x.body - db_force_x != 2
+  %error "db_force steps over db_force_x's two pushes with test ax, imm16: they must be the two bytes before .body (kernel size pass 15)"
+%endif                          ; db_force enters HERE - see there
 %ifdef REDRAWFULL
     xor ax, ax                  ; REFERENCE BUILD: every damage is the whole
     mov cx, [vid_pwm1]           ; strip, the behaviour this replaced

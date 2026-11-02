@@ -32,6 +32,29 @@
 %macro CURBAR_OFF 0
 %endmacro
 
+; kernel.asm's skip bytes and CLC_OR_STC (kernel size pass 15): disk.inc and
+; diskw.inc are this root's too, and four of their refusal tails are an opcode
+; whose immediate is the next instruction. The same bytes as the kernel's.
+%macro CLC_OR_STC 1
+    db 0xA8                     ; test al, imm8 - the imm8 is the stc below
+%1: stc
+%endmacro
+%macro SKIPF1 0
+    db 0xA8
+%endmacro
+%macro SKIPF2 0
+    db 0xA9
+%endmacro
+%macro SKIPAL1 0
+    db 0xB0
+%endmacro
+%macro SKIPDL1 0
+    db 0xB2
+%endmacro
+%macro SKIPCX2 0
+    db 0xB9
+%endmacro
+
 ; The loading screen is stage 2's and there is none here: kern_dos is JUMPED
 ; INTO by SPEC.md 87.5's stub, not booted (KERN-DOS-PLAN 4.2), so every
 ; progress call the mount makes compiles away.

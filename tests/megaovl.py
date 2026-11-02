@@ -70,7 +70,7 @@ def main():
     fails = []
     lines = []
     try:
-        if box.wait_for("kern_mega:", 240):
+        if box.wait_pm(240):
             box.up()                    # the desktop, off kernel state
             box.megarun()               # C:, RUN, 0RUN.O88
             if not box.wait_for("MEGALOWB: done", 200):
@@ -90,8 +90,8 @@ def main():
             box.ui_done("the save", hold=1.0)
             os88bochs.shot(os.path.join(out, "after.png"))
         else:
-            fails.append("no kern_mega line in 240s")
-        lines = box.lines()
+            fails.append("kern_mega never switched to protected mode in 240s")
+        lines = box.said()
     finally:
         box.stop()
     for l in lines:

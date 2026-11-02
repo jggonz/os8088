@@ -103,6 +103,11 @@ srl_div: db 12
 srl_pic: db 0
 srl_mask: db 0
 srl_seen: db 0                 ; [mou_seen] when the lease was taken
+SRL_O_SEG   equ srl_seg         ; three OFFSETS in the image, for code that
+SRL_O_BUF   equ srl_buf         ; holds the image's own DATA selector -
+SRL_O_MASK  equ srl_mask        ; fsx.inc's real-mode bracket (SPEC.md 53.2.3,
+                                ; W7) - and reads them through it, never
+                                ; through KERNEL_SEG
 
 ; Module API. DH=the stamped instance slot (< INST_MAX), ES=caller.
 srl_api:

@@ -505,6 +505,7 @@ emulator have the hardware": a ✅ means reach for it first.
 | PC speaker | ✅ | ✅ | `make test-snd`, or `MARTYPC_WAV=` | dominant 880.0 Hz (891.0 on MartyPC, inside tolerance) |
 | AdLib / OPL2 | ✅ | ✅ | `make test-snd ADLIB=1`, or `os8088_5150_sb_gla` | dominant 880.0 Hz from a keyed 440 |
 | Sound Blaster (DMA streams) | ✅ | ✅ | `make test-snd SB16=1 TESTAPPS=build/sbtest.img`, or `os8088_5150_sb_gla` | 2.00 s at 1000.0 Hz on both. MartyPC's is a DSP **2.01** (`0x48`+`0x1C` auto-init); QEMU's an SB16; `dsp_version` picks |
+| **A PicoMEM**, 1.x and 2.x, as **its own firmware** | ✅ | ❌ | `tools/picomem/build.sh`, then `tests/pmmarty.py` (MartyPC, `os8088_5150_herc_pm1_gla` / `_pm2_gla`) or `tests/pmbox.py [--board 2]` (86Box, `vm/xt-picomem1` / `2`) | see *The PicoMEM* below. Sound, its virtual and real DMA, B: and a boot disk off its microSD, its NE2000, its USB mouse, its EMS and kern_mega's reflections of its IRQs, against the firmware os8088's field cards run |
 | Boot sound probe (SPEC.md §51.3.1) | ✅ | ⚠️ | `os8088_5150_sb_gla` / `_sbonly` / `_cga_gla`, fresh image | MartyPC's OPL2 answers the timer-flag dance; QEMU's `-device sb16` has an OPL *stub* that does not, so an SB16-only box reads as cardless there. `_sb` → row 0 `WANT` 1 and the Sound page on **Sound Blaster**; `_cga` → `WANT` 0; `_sbonly` → 0 by default, 1 under `SNDSNIFF=sb` |
 | Scripted mouse / keys | ✅ | ✅ | `tools/os88mouse.py click X Y` (absolute), `tools/os88mouserel.py` (relative), `os88marty.py key`; `tools/mouse.py` on QEMU | MartyPC drives the REAL devices: a Microsoft packet through the UART, a keystroke through int 09h |
 | **Screenshots** | ✅ | ✅ | `os88marty.py shot [--rendered]`, or `tools/shot.py` / `hercshot.py` | `shot` decodes VRAM on the 1bpp cards; `--rendered` asks the card what it rasterised and is automatic on VGA. On a CGA desktop the two routes differ by 0 pixels of 128,000 |
@@ -918,6 +919,42 @@ open. `make test ADLIB=1` is the same card with no capture. With no card the
 probe correctly finds nothing; a driver that failed to attach opens the
 Control Panel on its Drivers page. On MartyPC, `MARTYPC_WAV=<prefix>` writes
 one wav per source in the format `sndcheck.py` reads.
+
+### The PicoMEM, as its own firmware
+
+A PicoMEM is an ISA card built round a Raspberry Pi Pico (SPEC.md 34.10), and
+no emulator has one. `tools/picomem/` compiles **the card's own firmware** -
+Elendilon/ISA-PicoMEM `pm1x-pr`, the code os8088's field cards run, pinned
+in `tools/picomem/UPSTREAM` - for the host as `libpmhost`, a library with a
+one-bus-cycle API, in both board builds: `v1` (a 1.x) and `v2` (`PICOMEM_20`,
+GUS and MPU-401 off). The emulators load it at run time; nothing in `make`
+needs it, and a row without it SKIPS.
+
+```sh
+tools/picomem/build.sh                 # both boards, and build/picomem/sd.img
+python3 tools/picomem/pmhost.py        # the library's self-check
+```
+
+| row | emulator | what it answers |
+|---|---|---|
+| `pmlib` | host (unicorn) | SOUND.DRV's and VIDSND's PicoMEM code against the firmware's own port answers; the 2.x's real DMA a byte at a time |
+| `pmbox` | 86Box | the card's BIOS, sound by virtual DMA, B: and the boot disk off its microSD, Restart, its NE2000, its USB mouse as the only pointer, and kern_mega with the card |
+| `pmbox2` | 86Box | the same on a 2.x: real IRQ lines and real DMA |
+| `emscard`, `emscard2` | 86Box | EMS.DRV against the card's EMS, 288h/E000h, 256 pages |
+| `pmmarty` | MartyPC | both boards on a 4.77 MHz 5150: the card's wait states and time are the 8088's, and `pm_runaway` meets the card's own DMA pacing |
+
+What it cannot show is below the seam the library draws: the Pico's PIO bus
+decode, IOCHRDY, the 1.x's shared SPI bus, Wi-Fi and USB themselves, and any
+board-level wiring (the 1.x's floating DRQ1). The plan's section 7 is the
+list. **The iron stays the authority**; this is the first round of a question
+moved off it.
+
+Two things about the card that every leg had to learn, and a test of your own
+will too: a card with **no microSD** clears the PC's floppies from the
+equipment word (so every profile mounts one, even empty), and EMS set on a
+config whose memory map is not the machine's is **turned off by the card's
+BIOS** at the next boot (so `tests/ems.py --leg card` primes the card with
+one boot first, `mksd.py --cfg-from`).
 
 ---
 

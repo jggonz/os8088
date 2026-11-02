@@ -1,0 +1,116 @@
+libpmhost host patch: what the HOST build changes in the firmware, and nothing
+the iron runs (every hunk is behind PMHOST, which only tools/picomem/shim sets).
+
+  picomem.cpp        the PIO bus loop becomes shim/include/pmhost_isa.h, and
+                     main() is pmh_fw_main, run on the card thread
+  dev_audiomix.cpp   pico_pic.h on the host too (the PIC is compiled here)
+  pm_pccmd.cpp       pccmd_wait() yields: the PC is the emulator
+  dev_picomem_io.cpp the port-4 transfer loop yields likewise
+  pm_cmd.cpp         the mouse report the USB host path sends, sent off
+                     pm_mouse() instead (no tinyusb on the host)
+
+Cut against the pin plus patches/fw/ (tools/martypc/README.md's rule).
+GPL-2.0-or-later, like the firmware.
+
+diff --git a/src/audio_devices/dev_audiomix.cpp b/src/audio_devices/dev_audiomix.cpp
+index 1bcc349..fba2f98 100644
+--- a/src/audio_devices/dev_audiomix.cpp
++++ b/src/audio_devices/dev_audiomix.cpp
+@@ -4,7 +4,7 @@
+ #include <math.h>
+ #include <string.h>  // For memset
+ 
+-#if PICO_ON_DEVICE
++#if PICO_ON_DEVICE || PMHOST   // HOST: the PIC (pico_pic.c) is compiled for the host too
+ #include "hardware/clocks.h"
+ #include "hardware/structs/clocks.h"
+ #include "pico_pic.h"
+diff --git a/src/isa_devices/dev_picomem_io.cpp b/src/isa_devices/dev_picomem_io.cpp
+index f855569..443085c 100644
+--- a/src/isa_devices/dev_picomem_io.cpp
++++ b/src/isa_devices/dev_picomem_io.cpp
+@@ -92,6 +92,9 @@ if (do16bit)
+    }
+ 
+  do {
++#if PMHOST
++     pmh_yield_point();   // HOST: the PC moves these counters (tools/picomem)
++#endif
+      if (PM_CmdReset) continue;
+     } while ((PM_TR_CNT_L!=0)||(PM_TR_CNT_H!=0));
+ 
+diff --git a/src/picomem.cpp b/src/picomem.cpp
+index 195a292..056ae6d 100644
+--- a/src/picomem.cpp
++++ b/src/picomem.cpp
+@@ -339,7 +339,9 @@ PM_DP_RAM[0] = 0x12; //ID of The PicoMEM BIOS RAM  (Magic ID)
+ 
+ // Various version of the ISA I/O and Memory code
+ 
+-#if ISA_DBG_IO
++#if PMHOST
++#include "pmhost_isa.h"   // HOST: the bus is an API, not a PIO loop (tools/picomem)
++#elif ISA_DBG_IO
+ #include "pm_isa_test.h"
+ #else
+ #if defined(RASPBERRYPI_PICO2) || defined(PIMORONI_PICO_PLUS2_RP2350)
+@@ -507,7 +509,11 @@ gpio_put(LED_PIN, 1);
+ //*         CORE 0 Main : PicoMEM Code Start                                                    *//
+ //***********************************************************************************************//
+ 
++#if PMHOST
++int pmh_fw_main(void)     // HOST: run on the card thread by pm_create (tools/picomem)
++#else
+ int main(void) 
++#endif
+ {
+ 
+ #ifdef BOARD_WM10
+diff --git a/src/pm_cmd.cpp b/src/pm_cmd.cpp
+index e63b8b9..9a00cf7 100644
+--- a/src/pm_cmd.cpp
++++ b/src/pm_cmd.cpp
+@@ -110,6 +110,9 @@ If not, see <https://www.gnu.org/licenses/>.
+ #include "dev_irq.h"
+ #include "dev_joystick.h"
+ #include "ethdfs.h"
++#if PMHOST
++#include "dev_mouse.h"   // HOST: pm_mouse, which the USB driver's hid_dev.h carries on the iron
++#endif
+ 
+ #if USE_USBHOST
+ #include "dev_joystick.h"
+@@ -2200,6 +2203,19 @@ if (USB_Host_Enabled)
+  }
+ #endif
+ 
++#if PMHOST
++  // HOST: the mouse arrives through pm_mouse() (tools/picomem), not a USB HID
++  // report, and is sent exactly as the USE_USBHOST block above sends it
++  if (pm_mouse.event&&MOUSE_Enabled)
++   {
++    pm_mouse.event=false;
++    SVAR_IRQ->mouse_x=pm_mouse.x;
++    SVAR_IRQ->mouse_y=pm_mouse.y;
++    SVAR_IRQ->mouse_b=pm_mouse.buttons;
++    bus_pm_irq_raise(IRQ_R_MOUSE,1,false);
++   }
++#endif
++
+ #if USE_MPU
+   dev_mpu_update();
+ #endif
+diff --git a/src/pm_libs/pm_pccmd.cpp b/src/pm_libs/pm_pccmd.cpp
+index 93ee9ac..9402b9a 100644
+--- a/src/pm_libs/pm_pccmd.cpp
++++ b/src/pm_libs/pm_pccmd.cpp
+@@ -44,6 +44,9 @@ void (*volatile pm_pccmd_wait_hook)(void);
+ 
+ static inline void pccmd_wait()
+ {
++#if PMHOST
++  pmh_yield_point();   // HOST: waiting on the PC is a wait on the emulator (tools/picomem)
++#endif
+   if (pm_pccmd_wait_hook && (get_core_num()==0)) pm_pccmd_wait_hook();
+ }
+ 

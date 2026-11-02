@@ -287,8 +287,7 @@ def main():
         except Exception:       # noqa: BLE001
             pass
     finally:
-        bad = [l for l in box.lines() if "kern_mega FAULT" in l or
-               "kern_mega CLOSED" in l]
+        bad = box.faults()
         want(not bad, "3. no kern_mega FAULT or CLOSED%s"
              % "".join(" | " + l for l in bad[:3]))
         box.stop()

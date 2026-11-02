@@ -21,6 +21,13 @@ start. Fails on:
     a `kern_mega FAULT` (the kernel's own);
   - a package MEGARUN could not start (`MEGARUN: no NN`) or never reached.
 
+THE ONE PACKAGE THAT MUST REFUSE is WIN16 (REFUSES below): the owner's D6
+(SPEC.md 124.1, docs/plans/WIN16-PLAN.md) has it decline protected mode at
+entry with *WIN16 needs real mode*, so it rides the shipped disks this sweeps
+and is never on kern_mega's own. Its refusal is REQUIRED rather than allowed -
+LD_EABORT (04), its entry's CF=1 - so the row stays red if the check is lost
+and WIN16 starts here, or if it refuses some other way.
+
 It asserts that a package OPENS and survives LINGER seconds of its own loop,
 not that it works: a package whose arithmetic is wrong only when it loads a
 document, a module or a song is a row about that package.
@@ -48,6 +55,12 @@ from os88fixture import need  # noqa: E402
 
 BUILD = os.path.join(ROOT, "build")
 BATCH = 9
+
+# package stem -> the MEGARUN refusal code it must give, and why. A decision
+# of the owner's and nothing else: a refusal that is a DEFECT is a failure.
+REFUSES = {
+    "win16": ("04", "SPEC.md 124.1 D6: WIN16 needs real mode"),
+}
 LINGER = 10
 # The shipped disks whose packages are swept: the 1.44MB apps disk and the
 # five 360KB category disks, which between them carry every package `all`
@@ -100,22 +113,42 @@ def main():
                     parallel=True)
     fails = []
     started = set()
+    refused = set()
     for log in sorted(glob.glob(os.path.join(out, "boot*", "e9.out"))):
         last = None
         for line in open(log, errors="replace").read().splitlines():
             if line.startswith("MEGARUN: ") and line not in (
                     "MEGARUN: ok", "MEGARUN: done"):
                 if line.startswith("MEGARUN: no "):
-                    fails.append("%s refused (%s)" % (last, line[12:]))
+                    stem = (last or "").split(".")[0].lower()
+                    want = REFUSES.get(stem)
+                    if want and line[12:] == want[0]:
+                        refused.add(stem)
+                        print("megasweep: %s refused (%s), as it must: %s"
+                              % (last, line[12:], want[1]))
+                    else:
+                        fails.append("%s refused (%s)" % (last, line[12:]))
                 else:
                     last = line[9:]
                     started.add(last.split(".")[0].lower())
             elif line.startswith("kern_mega CLOSED") or \
                     line.startswith("kern_mega FAULT"):
                 fails.append("%s: %s" % (last, line))
+        # a SHIPPED kern_mega writes neither line to E9: the sweep reads its
+        # state and keeps what it saw beside the log (os88bochs._sweep_boot)
+        cl = os.path.join(os.path.dirname(log), "faults.out")
+        if os.path.exists(cl):
+            for row in open(cl, errors="replace").read().splitlines():
+                who, line = row.split("\t", 1)
+                if not any(f.startswith("%s: %s" % (who, line))
+                           for f in fails):
+                    fails.append("%s: %s" % (who, line))
     for n in pk:
         if n not in started:
             fails.append("%s: MEGARUN never started it" % n)
+        elif n in REFUSES and n not in refused:
+            fails.append("%s: STARTED under protected mode, where it must "
+                         "refuse (%s)" % (n, REFUSES[n][1]))
     print("megasweep: %.0fs under Bochs" % (time.time() - t0))
     for f in fails:
         print("FAIL megasweep: " + f)

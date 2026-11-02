@@ -162,6 +162,7 @@ HD = False                              # --hd: the clip on an IDE disk
 NOHARM = False                          # --noharm: never armed (VP_NOHARM)
 XSPEED = False                          # --xspeed: the in-place play
                                         # VP_XSPTEST
+TTEST = False                           # --arm banktier*: the VP_TTEST build
 
 
 def build(tmp, sim, defs=()):
@@ -191,6 +192,8 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
         defs = defs + ("VP_NOHARM",)
     if XSPEED and sim:
         defs = defs + ("VP_XSPTEST",)
+    if TTEST and sim:
+        defs = defs + ("VP_TTEST=3",)
     syms, _ = pkg_syms("apps/video/video.asm", ("apps/",),
                        (("LA_SIM",) if sim and LASIM else ()) + defs)
     pkg = build(tmp, sim, defs)
@@ -331,7 +334,13 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
                       (base + syms["vp_held"], b"\0")])
         yields = 0
         lim = syms["vd_ylim"]
-        while True:
+        tier, tcur, tsw, tdbg = 0, None, 0, set()   # THE TWO TIERS (98.3.18.18): on,
+        while True:                     # and how often the reader switched
+            if "vp_ttwo" in syms and rb("vp_ttwo"):
+                tier = 1
+            if "vp_tsw" in syms:            # (a VP_TTEST build's counters,
+                tsw = max(tsw, rw("vp_tsw"))    # kept past the session)
+                tdbg.add(rw("vp_tcn"))
             xip = max(xip, rb("vp_xip"), rb("vp_einp") == 2)
             krm = max(krm, rw("vp_kr"))     # (the session's: its end resets it)
             if u16(q.read(base + lim, 2)) != 0xFFFF:
@@ -350,7 +359,7 @@ def one(tmp, sim, snd, v88, bank=False, ekr=0, dry=0):
                    ywin=rw("vp_simyc"), lbk=rb("vp_lbk"),
                    hsk=rd("vp_hsk"), hnone=rb("vp_hnone"),
                    ahead=rb("vp_ahead"), xbn=rw("vp_xbn"),
-                   kr=krm,
+                   kr=krm, tier=tier, tsw=tsw, tdbg=max(tdbg) if tdbg else 0,
                    sites=u16(q.read(base + syms["..@vd_y1"], 2))
                    if "..@vd_y1" in syms else None)
         os88qemu.ui_done(q, S, cap=1.0)
@@ -396,7 +405,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", choices=("silent", "snd", "ahead", "bank",
                                       "bankwrap", "banksnd", "bankdry",
-                                      "bankdrysnd", "bankbig"),
+                                      "bankdrysnd", "bankbig", "banktier",
+                                      "banktiersnd"),
                     default="silent")
     ap.add_argument("--sim", action="store_true",
                     help="the in-place play on the LA_SIM test build")
@@ -411,7 +421,15 @@ def main():
     os.chdir(ROOT)
     global NF, LASIM, HD, NOHARM, XSPEED, BIG, H
     LASIM, HD, NOHARM, XSPEED = a.sim, a.hd, a.noharm, a.xspeed
-    snd = a.arm not in ("silent", "bank", "bankwrap", "bankdry", "bankbig")
+    snd = a.arm not in ("silent", "bank", "bankwrap", "bankdry", "bankbig",
+                        "banktier")
+    # BANKTIER: the two tiers beside the bank in place (98.3.18.18) on a
+    # VP_TTEST build, which SWITCHES every three chunks wherever both tiers
+    # can take it - so a seam is copied and read every few chunks, and every
+    # hold against the decode crosses tiers - with the bank capped small, so
+    # its mirror is read too
+    global TTEST
+    TTEST = a.arm.startswith("banktier")
     bank = a.arm.startswith("bank")
     # BANKDRY: the bank in place RUN DRY (the owner's Victory at 14 wait
     # states, 2026-10-16: garbage, then a freeze, at a frame that moved with
@@ -419,7 +437,8 @@ def main():
     # the stream, and no holds to let it catch up
     dry = 12 if a.arm.startswith("bankdry") else 0
     ekr = 3 if a.arm in ("bankwrap", "banksnd", "bankdry",
-                         "bankdrysnd", "bankbig") else 0    # (THE MIRROR,
+                         "bankdrysnd", "bankbig") else \
+        6 if TTEST else 0                                   # (THE MIRROR,
                                                         # read every lap)
     # BANKBIG: the wrap arm's, BIGSP (98.1.4.1) - super-packets past 32 KB,
     # the owner's Last Exile's shape at --frame-cap 48, whose bank had to
@@ -476,8 +495,14 @@ def main():
             bad.append("the card's bank line: %d copying, %d in place, not "
                        "%d and %d" % ((ship["lbk"], sim["lbk"]) + want))
         if bank:
-            print("   the bank: %d slots, %d of them the ring's in place"
-                  % (sim["xbn"], sim["kr"]))
+            if TTEST and (not sim["tier"] or sim["tsw"] < 4):
+                bad.append("the two tiers: %s, %d seams - the arm "
+                           "tests nothing" % ("on" if sim["tier"] else "OFF",
+                                              sim["tsw"]))
+            print("   the bank: %d slots, %d of them the ring's in place; "
+                  "two tiers %s, %d seams, %s chunks straight in"
+                  % (sim["xbn"], sim["kr"], "ON" if sim["tier"] else "off",
+                     sim["tsw"], sim["tdbg"] if TTEST else ""))
             for tag, r in (("copying", ship), ("in-place", sim)):
                 wrong = [(n, d) for n, d in r["diffs"] if d]
                 print("   %s play: %d holds against the decode, %d wrong%s"

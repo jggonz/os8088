@@ -1029,11 +1029,9 @@ vid_depth_set:
     pop ax
     ret
 %endmacro
-    nop                         ; PARITY, never executed, on every kernel
-                                ; (PERFORMANCE.md Part 7, tests/unit/t_hotpar.py):
-                                ; kern_big's vid_apply copy left `.text` in an
-                                ; ODD total (kernel size pass 14); kern_small's
-                                ; pass-13 pad here went with its resident copy
+%ifdef KERN_SMALL
+    nop                         ; PARITY, never executed, kern_small only (kernel
+%endif                          ; size pass 15 paired kern_big's with vidsel's)
                                 ; and came back when pass 14's api work freed an
                                 ; odd byte ahead of it - ahead of gfx_rowbase,
                                 ; gfx_nextrow and gfx_blit4 either way

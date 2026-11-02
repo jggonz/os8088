@@ -140,7 +140,7 @@ class Server(object):
             body, hold = ANSWERS[self.mode]
             c.sendall(body)
             if hold:
-                time.sleep(15)
+                time.sleep(15)  # host: a keep-alive server holding the socket
         except OSError:
             pass
         finally:

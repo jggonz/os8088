@@ -81,6 +81,29 @@ rows on 86Box*, below), and each is inert until something asks for it:
   `fdc` answers `{"reads":N,"writes":N}`.
 - **`06-fdc-counters.patch`** - those two counters are the READ DATA and
   WRITE DATA commands the controller completed. They are MartyPC's `disk()`.
+- **`07-picomem.patch`** - the PicoMEM, as **its own firmware**: an ISA
+  memory-card device (`isamem0_type = picomem`, section `[PicoMEM #1]` with
+  `irq`, `sd_image`, `lib`) that is a thin adapter around `libpmhost`, the
+  card's firmware compiled for the host by `tools/picomem/build.sh`. The
+  library is loaded with `dlopen`, so this patch builds without it; a machine
+  that asks for the card without the library logs why and runs without it.
+  The firmware's decode is mirrored per 8-port block and per 8 KB block, so
+  nothing else on the bus changes. `OS88_PMHOST_LOG=1` puts every command the
+  PC sends, with its answer, in `86box.log`, and `OS88_PMHOST=LIB` swaps the
+  library, and `OS88_PMSD=IMG` another microSD. The card's NE2000 is on the
+  network through a companion NIC, `net_01_card = picomem_ne2k`. The card's
+  DAC is mixed in, and `OS88_PMWAV=FILE` captures it at
+  its own 49,716 Hz in card time. `usb_mouse = 1` makes 86Box's pointer the
+  card's USB mouse (a HID report every 8 ms), for a machine whose own
+  `mouse_type` is `none` - `tools/os88box86api.py` sets that itself when a
+  profile asks for the card's mouse. `vm/xt-picomem1` is the machine, and
+  `vm/xt-picomem1-usbm` the same one with the card's mouse as its only
+  pointer. **A 2.x library** (`libpmhost-v2`) takes the card's jumpers as
+  `irq3`/`irq5`/`irq6`/`irq7` and its DRQ as `dma`: each IRQ pin reaches
+  its line only when jumpered, and the 2.x's real DMA is a DRQ a byte,
+  answered from 86Box's 8237 after each card slice. `vm/xt-picomem2` (with
+  `-1fd` and `-usbm` twins) is that card as the field 2.x is jumpered, IRQ 7
+  and DRQ 1 (docs/plans/completed/PICOMEM-EMU-PLAN.md).
 
 A binary built before these three is refused by the backend, which names
 the rebuild (`python3 tools/os88box.py build`).
@@ -130,6 +153,11 @@ profile and NOT copied - a `.cue` names its `.bin` relative to itself - and
 and dropped the drive without a word (KERN-MEGA-PLAN 14.68).
 `vm/286-mega-cdrom` and `vm/386-mega-cdrom` are kern_mega with a CD-ROM and
 `tests/megacdrom.py` is the row that drives the first.
+`vm/286-mega-ems` is `vm/286-mega` with 86Box's Lo-tech EMS board
+(`isamem0_type = lotechems`: registers 260h, frame E000h, 2 MB) added and
+nothing else changed - the one machine here that gives kern_mega expanded
+memory - and `tests/vidrmbems.py` (SPEC.md 107.8) is its row. Like
+`vm/286-hma` it has no make target: its row builds its own disks.
 
 ### `to` and `pointer`: why the pointer is closed-loop
 

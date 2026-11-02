@@ -107,7 +107,7 @@ def main():
     px = Pixel(box, t.dir)
     fails = []
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         # the desktop, B:'s window and every step below end on the GUEST's
@@ -141,7 +141,7 @@ def main():
                 box.ui_done("PiXEL to paint " + name, secs=LIMIT)
             except RuntimeError as e:   # a FAULT: reported below, from E9
                 print("pxmega: %s" % e)
-            time.sleep(tail)
+            box.guest_sleep(tail)       # GUEST seconds (Box.guest_sleep)
             with open(box.e9, "rb") as f:
                 f.seek(pos[0])
                 t = f.read()

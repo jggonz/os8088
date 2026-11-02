@@ -154,13 +154,14 @@ def main():
     fails = []
     box = os88bochs.Box(out, pkgs)
     try:
-        if not box.wait_for("kern_mega:", 240):
-            raise SystemExit("megarehome: no kern_mega line in 240s")
+        if not box.wait_pm(240):
+            raise SystemExit("megarehome: kern_mega never switched to "
+                             "protected mode in 240s")
         box.up()                        # the desktop, off kernel state
         box.megarun()                   # 0RUN.O88: MEGARUN starts the rest
         end = time.time() + 180
         while time.time() < end:
-            ls = box.lines()
+            ls = box.said()
             if "MEGARUN: done" in ls or any(
                     l.startswith("kern_mega FAULT") for l in ls):
                 break
@@ -169,7 +170,7 @@ def main():
         # has finished with its launch (a game's worker may hold the gfx
         # lock for good, so the lock is not asked) - was a 10 s sleep
         box.ui_done("the last program's window", lock=False)
-        lines = box.lines()
+        lines = box.said()
         for l in lines:
             if l.startswith("kern_mega FAULT") or l.startswith("MEGARUN: no "):
                 fails.append(l)

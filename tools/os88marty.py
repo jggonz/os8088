@@ -5002,6 +5002,20 @@ def launch(image, apps=None, machine="os8088_5150_cga", addr=None,
            "--machine-config-name", machine] + mounts + list(extra)
     env = dict(os.environ, MARTYPC_DEBUG_ADDR=want,
                MARTYPC_DEBUG_PORTFILE=portfile)
+    # A PICOMEM (`_pm1`/`_pm2`, tools/martypc/patches/17-picomem.patch): its
+    # firmware is libpmhost for that board, and its microSD a copy in this
+    # instance's directory, because the card writes its config back to it.
+    # $OS88_PMHOST and $OS88_PMSD, when the caller set them, win.
+    pm = re.search(r"_pm([12])(?:_|$)", machine or "")
+    if pm:
+        ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        b = "v" + pm.group(1)
+        env.setdefault("OS88_PMHOST", os.path.join(
+            ROOT, "build", "picomem", b, "libpmhost-%s.so" % b))
+        sd = os.environ.get("OS88_PMSD") or os.path.join(
+            ROOT, "build", "picomem", "sd.img")
+        env["OS88_PMSD"] = os.path.join(run_dir, "picomem-sd.img")
+        shutil.copyfile(sd, env["OS88_PMSD"])
     log = open(logpath, "wb")
     proc = subprocess.Popen(cmd, cwd=run_dir, env=env, stdout=log, stderr=log)
 

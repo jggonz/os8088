@@ -208,8 +208,11 @@ def sample_mega(limit=60.0):
     machine is Bochs's own: its SB16, an NE2000 on slirp and an ATA disk, and
     A: is mega.img with this row's SYSTEM.CFG (the launch's `cfg`). There is
     no XMEM.DRV to want - kern_mega's pool IS the memory above 1MB - so what
-    this maps is every driver kern_mega loads. `limit` is HOST seconds, a
-    backstop: Bochs's guest runs at real time at most (docs/BOCHS.md)."""
+    this maps is every driver kern_mega loads. `limit` and the 25 s the
+    caches get to rejoin are GUEST seconds, off the shim's clock: Bochs's
+    guest runs at real time at most and at a fraction of it on a loaded box
+    (docs/BOCHS.md, *The clock*), so a host window held less of the boot
+    there. Ten times `limit` of host time is the backstop."""
     import os88megabochs
     os.environ["OS88_BOCHS_NE2K"] = "1"     # ...and the NE2000 (no MartyPC
     m = os88megabochs.launch("build/os8088.img", apps="build/apps.img",
@@ -219,12 +222,12 @@ def sample_mega(limit=60.0):
                                  "mem_tab")}
     fseg = os88sym.linear("spl_fseg")
     m.run()
-    t0 = time.time()
+    t0, c0 = time.time(), m.status()["cycles"]
     seen, keys = [], set()
     whole = False
     while True:
-        t = time.time() - t0
-        if t >= limit:
+        t = (m.status()["cycles"] - c0) / os88megabochs.GUEST_HZ
+        if t >= limit or time.time() - t0 >= 10 * limit:
             break
         if not whole:
             whole = m.read(fseg, 2) != b"\0\0"

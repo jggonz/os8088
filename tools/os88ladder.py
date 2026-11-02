@@ -837,12 +837,13 @@ STAGES = [
     dict(id="desk", short="drives + dock", title="Drives, the dock and the driver table",
          moved="desktop state, in the operating system's own storage",
          focus=["ktext"],
-         take=dict(phases=["ovl_spl_msg_fdd", "desk_init", "dock_init",
+         take=dict(phases=["ovl_spl_msg_fdd", "desk_init", "bvw_rowcalc",
+                           "dock_init",
                            "files_init_x", "drv_init_x",
                            "drv_sniff", "snd_init", "splf_step"])),
     dict(id="drvboot", short="mount + drivers", title="The floppy is mounted - over the start-up code",
          moved="the disk's index, written across {ovlkb} of code that was running",
-         take=dict(phases=["drv_boot_x", "vmm_boot_x", "desk_rowcalc_x",
+         take=dict(phases=["drv_boot_x", "vmm_boot_x", "bvw_rowcalc",
                            "hb_probe_x", "thm_set"])),
     dict(id="autostart", short="autostart", title="The loading screen ends, and Autostart runs",
          moved="nothing on this disk - a program's memory for each shortcut in AUTOSTRT",
@@ -2014,7 +2015,7 @@ NOTES = {
     'vmm_boot_x':
         'Attach the absolute pointer of a virtual machine, if the '
         'settings file asked for it.',
-    'desk_rowcalc_x':
+    'bvw_rowcalc':
         'Put every drive, and every shortcut the settings file brought '
         "back, into its cell on the desktop's grid in one pass - "
         'dropping any cell this screen does not have, because the file '
@@ -2127,7 +2128,7 @@ TITLES = {
     "snd_init": "Start the sound layer",
     "drv_boot_x": "Mount the floppy, and load what it asks for",
     "vmm_boot_x": "Attach a virtual machine's pointer",
-    "desk_rowcalc_x": "Place the drives and shortcuts",
+    "bvw_rowcalc": "Place the drives and shortcuts",
     "hb_probe_x": "Is there a hibernation to resume?",
     "thm_set": "Resolve the colour scheme",
     "spl_finish": "Finish the loading screen",

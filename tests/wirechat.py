@@ -733,7 +733,7 @@ def main():
     finally:
         if not a.keep:
             m.quit()
-            time.sleep(1.0)
+            time.sleep(1.0)  # host: the emulator exiting
         srv.shutdown()
 
     if not a.keep:

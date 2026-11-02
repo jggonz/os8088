@@ -53,19 +53,22 @@ QUIET = 8                       # seconds of no E9 line: settled
 LIMIT = 240
 
 
-def held(key, secs):
+# Holds and gaps in GUEST seconds (Box.guest_sleep): a host second hands a
+# Bochs short of CPU a fraction of one, and the census's windows would hold
+# less of the game on a loaded box (docs/BOCHS.md, *The clock*)
+def held(box, key, secs):
     os88bochs.xd("keydown", key)
-    time.sleep(secs)
+    box.guest_sleep(secs)
     os88bochs.xd("keyup", key)
-    time.sleep(0.3)
+    box.guest_sleep(0.3)
 
 
-def tap(key, n=1, gap=0.6):
+def tap(box, key, n=1, gap=0.6):
     for _ in range(n):
         os88bochs.xd("keydown", key)
-        time.sleep(0.15)
+        box.guest_sleep(0.15)
         os88bochs.xd("keyup", key)
-        time.sleep(gap)
+        box.guest_sleep(gap)
 
 
 def main():
@@ -88,7 +91,7 @@ def main():
     box = os88bochs.Box(out, [], bimg=disk, btype="1_44", build=t.dir)
     fails, counts = [], collections.OrderedDict()
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             print("FAIL: kern_mega never reached protected mode")
             return 1
         box.up()                         # the desktop, off kernel state
@@ -114,7 +117,7 @@ def main():
                                 lock=False)
             except RuntimeError as e:       # a FAULT: reported from E9
                 print("pxsmega: %s" % e)
-            time.sleep(run)
+            box.guest_sleep(run)        # the window, in GUEST seconds
             with open(box.e9, "rb") as f:
                 f.seek(pos[0])
                 t = f.read()
@@ -139,20 +142,20 @@ def main():
                              % (name, len(traps), traps[0], box.e9))
 
         step("launch (double-click)", lambda: box.dbl(165, 123, lock=False))
-        step("timedemo (T, fullscreen)", lambda: tap("t"), run=QUIET,
+        step("timedemo (T, fullscreen)", lambda: tap(box, "t"), run=QUIET,
              fsx=True)
-        step("leave the bracket (Esc)", lambda: tap("Escape"), fsx=False)
-        step("new game (Space, window)", lambda: tap("space"))
-        step("walk (Up 4s)", lambda: held("Up", 4.0), settle=False)
+        step("leave the bracket (Esc)", lambda: tap(box, "Escape"), fsx=False)
+        step("new game (Space, window)", lambda: tap(box, "space"))
+        step("walk (Up 4s)", lambda: held(box, "Up", 4.0), settle=False)
         step("turn (Left 3s, Right 2s)",
-             lambda: (held("Left", 3.0), held("Right", 2.0)), settle=False)
-        step("shoot (Ctrl x3)", lambda: tap("Control_L", 3), settle=False)
-        step("fullscreen (F)", lambda: tap("f"), fsx=True, run=1.0)
-        step("walk fullscreen (Up 3s)", lambda: held("Up", 3.0), settle=False)
-        step("turn fullscreen (Left 3s)", lambda: held("Left", 3.0), settle=False)
-        step("shoot fullscreen (Ctrl x3)", lambda: tap("Control_L", 3),
+             lambda: (held(box, "Left", 3.0), held(box, "Right", 2.0)), settle=False)
+        step("shoot (Ctrl x3)", lambda: tap(box, "Control_L", 3), settle=False)
+        step("fullscreen (F)", lambda: tap(box, "f"), fsx=True, run=1.0)
+        step("walk fullscreen (Up 3s)", lambda: held(box, "Up", 3.0), settle=False)
+        step("turn fullscreen (Left 3s)", lambda: held(box, "Left", 3.0), settle=False)
+        step("shoot fullscreen (Ctrl x3)", lambda: tap(box, "Control_L", 3),
              settle=False)
-        step("back to the window (Esc)", lambda: tap("Escape"), run=2.0,
+        step("back to the window (Esc)", lambda: tap(box, "Escape"), run=2.0,
              fsx=False)
     finally:
         box.stop()

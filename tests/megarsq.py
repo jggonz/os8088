@@ -176,7 +176,7 @@ def main():
         box = os88bochs.Box(out, pkgs, put=("RUN:" + sq,), **kw)
     fails, lines, st, c0 = [], [], {}, {}
     try:
-        if box.wait_for("kern_mega:", 240):
+        if box.wait_pm(240):
             box.up()
             if a.floppy:
                 box.capture()
@@ -187,13 +187,13 @@ def main():
                 box.megarun()
             end = time.time() + 600
             while time.time() < end:
-                lines = box.lines()
+                lines = box.said()
                 if any(l.startswith(("kern_mega FAULT", "MEGARSQ: done",
                                      "MEGARSQ: bad", "MEGARSQ: io",
                                      "MEGARSQ: no")) for l in lines):
                     break
                 time.sleep(0.5)
-            lines = box.lines()
+            lines = box.said()
             c1 = counters(box)
             if c0 and c1:
                 d = {k: c1[k] - c0[k] for k in c1}
@@ -209,7 +209,7 @@ def main():
                     st[k] += "@%X" % box.sel_base(v)
             print("megarsq: kernel state after: %s" % st)
         else:
-            fails.append("no kern_mega line in 240s")
+            fails.append("kern_mega never switched to protected mode in 240s")
     finally:
         box.stop()
     passes = []

@@ -107,8 +107,7 @@ def main():
     bad = []
 
     def faulted():
-        return [l for l in box.lines()
-                if l.startswith(("kern_mega FAULT", "kern_mega CLOSED"))]
+        return box.faults()
 
     def byte(label):
         return box.pkg_read("INSTALL", label, 1, pkgmap=MAP)[0]
@@ -142,11 +141,20 @@ def main():
     def enter():
         box.key("Return")
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             raise Fail("kern_mega never reached protected mode")
         box.up()
         box.megarun()
         at(P["P_WELCOME"], "on launch", 120.0)
+        # MEGARUN's folder walk FINISHED before anything changes C:: it
+        # starts a package every five seconds off a FILE_FIND ordinal, and
+        # once the install has erased C: and written the system, its stale
+        # folder lists SYSTEM\'s and it starts the Task Manager and the
+        # rest, which take the focus the wizard's Enter is for (a layout
+        # race: the kernel's size decides which cluster the folder was)
+        wait(lambda: any(ln.startswith("MEGARUN: done")
+                         for ln in box.lines()), "MEGARUN's folder to end",
+             60.0)
         enter()
         at(P["P_DRIVE"], "after Welcome: the driver and the drives")
         enter()                         # THE CROSSING THAT FAULTED: the

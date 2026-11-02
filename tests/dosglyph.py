@@ -190,6 +190,7 @@ def break_store_row(m):
     n = m.read(S("ico_n"), 1)[0]
     eq = os88sym.equates()
     stride, r_size = eq["ICO_ROW"], eq["ICO_R_SIZE"]
+    rbase = eq.get("ICO_RBASE", 0)  # row 0 follows the capture (SPEC.md 25.9.6)
     say("store at %04X, %d rows of %d bytes" % (seg, n, stride))
     if not seg or not n:
         sys.exit("dosglyph: the store is empty, so a miss cannot be staged")
@@ -200,7 +201,7 @@ def break_store_row(m):
     # is a question about ICO_R_SIZE and is asked here rather than assumed.
     want = b"DOS     " if r_size == 8 else b"DOS.O88\0"
     for i in range(n):
-        row = lin(m, seg) + i * stride
+        row = lin(m, seg) + rbase + i * stride
         if bytes(m.read(row, 8)) == want:
             m.write(row + r_size, b"\xFF\xFF")
             say("row %d is %r: its size word is now 0xFFFF" % (i, want))
@@ -261,7 +262,8 @@ with os88marty.launch(SYS_IMG, apps=DOC_IMG, machine=MACHINE) as m:
     n = m.read(S("ico_n"), 1)[0]
     docs = []
     for r in range(n):
-        k = bytes(m.read(lin(m, seg) + r * eqs["ICO_ROW"], eqs["ICO_KEY"]))
+        k = bytes(m.read(lin(m, seg) + eqs.get("ICO_RBASE", 0)
+                         + r * eqs["ICO_ROW"], eqs["ICO_KEY"]))
         if k[0] == 0xFF:                       # a composed DOCUMENT row
             docs.append((r, k[1], k[2:10]))
     live = [d for d in docs if any(d[2])]

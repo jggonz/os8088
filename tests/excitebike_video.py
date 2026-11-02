@@ -75,6 +75,7 @@ def symbols():
         names += re.findall(r"^(x[a-z]_\w+)(?::| equ \$)", open(os.path.join(d, f)).read(), re.M)
     tab = open(at("build/excitebike-art/exbtables.inc")).read()
     names += re.findall(r"^(exb_skip_\w+|exb_full_\w+):", tab, re.M)
+    names += ["xb_race.paused"]         # (Game.hold's stop: a frame's end)
     names = sorted(set(names))
     with tempfile.TemporaryDirectory() as td:
         p = os.path.join(td, "probe.asm")
@@ -176,19 +177,69 @@ class Game:
             # drawn for the frames before the switch, and its box sits on other rows)
             self.set_bikes([{"pose": 0, "x": 88, "y": 100}])
 
-    def go(self, frames, limit=60):
-        """Run exactly `frames` rendered frames, then hold (tpause), let the card
-        rasterise a few whole frames of the final state, pause the machine."""
+    # 0.12 guest seconds for the card after a hold: MartyPC's picture is the
+    # last frame the card FINISHED rasterising, so the hold's own frame is not
+    # on it yet. Run by the SERVER and ending stopped (`advance`): exact
+    RASTER = .12
+
+    def hold(self, what, guest, cond=None):
+        """Run until the game HOLDS (xb_tpause = 1), stop it ON THE GUEST'S OWN
+        INSTRUCTION - `xb_race.paused`, the end of the frame that set it, by an
+        exec breakpoint - and let the card rasterise that frame.
+
+        It was M.until polling the byte and a pause after it. Two host timings
+        lived in that pause: how many idle frames the game spun before it (the
+        steps a frame are the PIT's, so the next resume's frame partition moved
+        with it), and - in the race, which compared at once - whether the card
+        had finished the frame being compared. A third of the runs failed, as a
+        race step a whole scroll behind the model (7,765 pixels) or as a hold
+        that never came. Every stop here is a guest cycle, the same each run."""
         m = self.m
+        cond = cond or (lambda: True)
+        m.pause()                       # (bps and writes against a stopped guest)
+        m.bp_exec(self.base + self.sym["xb_race.paused"])
+        try:
+            c0 = int(m.status().get("cycles", 0))
+            m.run()
+            while True:
+                if m.wait_stop(guest=guest) is None:
+                    raise AssertionError("%s did not happen in %d guest seconds"
+                                         % (what, guest))
+                if self.b("xb_tpause") == 1 and cond():
+                    break
+                if (int(m.status().get("cycles", 0)) - c0) / M.GUEST_HZ > guest:
+                    raise AssertionError("%s did not happen in %d guest seconds"
+                                         % (what, guest))
+                m.run()
+        finally:
+            m.bp_exec()
+        # FROM A BREAKPOINT `advance` RUNS NOTHING (measured: 0 cycles, with or
+        # without a pause first) - so one instruction stepped makes it a plain
+        # stop, and the card's time is then really run
+        m.step(1)
+        c1 = int(m.status().get("cycles", 0))
+        m.advance(cycles=int(self.RASTER * M.GUEST_HZ))
+        ran = int(m.status().get("cycles", 0)) - c1
+        assert ran >= int(self.RASTER * M.GUEST_HZ) * 9 // 10, (
+            "the card's %.2f s after %s did not run (%d cycles)" % (self.RASTER, what, ran))
+
+    def park(self):
+        """From the FREE-RUNNING race loop enter() leaves to a held one: bikes,
+        a jump or a speed written into a running loop land in whichever frame -
+        or half-frame - the host's write reached."""
+        self.m.pause()
+        self.put("xb_tframes", 1, 2)
+        self.put("xb_tpause", 0)
+        self.hold("a held frame", 30)
+
+    def go(self, frames, limit=60):
+        """Run exactly `frames` rendered frames, then hold (tpause) with the
+        card's picture of the final state (`hold`)."""
+        m = self.m
+        m.pause()
         self.put("xb_tframes", frames, 2)
         self.put("xb_tpause", 0)
-        m.run()
-        M.until(m, lambda _: self.b("xb_tpause") == 1, "%d frames rendered" % frames,
-                guest=limit)
-        # 0.12 guest seconds for the card, run by the SERVER and ending paused (`advance`):
-        # exact, where a polled guest_sleep and a pause after it overran by the poll
-        m.pause()
-        m.advance(cycles=int(.12 * M.GUEST_HZ))
+        self.hold("%d frames rendered" % frames, limit)
 
     def jump(self, col):
         self.put("xb_tcol", col, 2)
@@ -415,6 +466,7 @@ def run(tag, quick, small=False):
             m.run()
             print(tag, "the sprite loader's 28KB claim refused: the 17KB fallback loaded 28 poses, none compiled", flush=True)
         check_blobs(g, ref, tag)
+        g.park()                            # (the scene's writes need a held loop)
         rnd = random.Random(0x88)
         smax = g.w("xb_Smax")
         if tag == "herc":
@@ -648,10 +700,7 @@ def race_script(g, ref, tag, quick, name, script, want):
     g.put("xb_tsi", 0, 2)
     g.put("xb_treset", 1)
     g.put("xb_tpause", 0)
-    g.m.run()
-    M.until(g.m, lambda _: g.b("xb_tpause") == 1 and g.b("xb_treset") == 0, "a fresh rider",
-            guest=30)
-    g.m.pause()
+    g.hold("a fresh rider", 30, lambda: g.b("xb_treset") == 0)
     done = 0
     checked = 0
     os.makedirs(OUT, exist_ok=True)
@@ -662,9 +711,7 @@ def race_script(g, ref, tag, quick, name, script, want):
             g.put("xb_tsn", len(chunk), 2)
             g.put("xb_tsi", 0, 2)
             g.put("xb_tpause", 0)
-            g.m.run()
-            M.until(g.m, lambda _: g.b("xb_tpause") == 1, "%d steps" % len(chunk), guest=120)
-            g.m.pause()
+            g.hold("%d steps" % len(chunk), 120)
             for inp in chunk:
                 sim.step(inp)
             done += len(chunk)

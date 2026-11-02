@@ -333,8 +333,9 @@ def main():
                         bad.append("no verdict: %d layer records drawn, the "
                                    "card's line 4 %r, not 'Layer off: not "
                                    "timed'" % (rw("vp_lygot"), line4()))
-                # (after the open's vp_xopen, which clears it: vp_loaded
-                # goes to 1 just before it, so wait a moment past that)
+                # (after the open's vp_xopen, which clears it: vp_open
+                # stores vp_loaded = 1 after vp_xopen, so seeing it is
+                # seeing the open finished)
                 until(lambda: rb("vp_loaded") == 1, "the clip's header")
                 os88marty.pace(m, 0.5)
                 m.write(base + syms["vp_lycv"], b"\1")    # (key 0: passed)

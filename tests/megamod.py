@@ -260,8 +260,7 @@ def check_audio(leg, d):
 
 # --- a boot ------------------------------------------------------------------
 def bad_lines(box):
-    return [l for l in box.lines() if l.startswith("kern_mega FAULT") or
-            l.startswith("kern_mega CLOSED")]
+    return box.faults()
 
 
 def pkg_map(src, incs, defines=()):
@@ -363,16 +362,16 @@ def windows(leg, box, t, base, mod, pre):
 
 def listen(box, cond, what, secs):
     """PLAY seconds of the guest's own music, failing at once on a FAULT or
-    a CLOSED line; COND() read once a second must hold throughout"""
-    end = time.time() + secs
-    while time.time() < end:
+    a CLOSED line; COND() read once a GUEST second must hold throughout
+    (Box.guest_sleep: a host second is a fraction of one on a loaded box)"""
+    for _ in range(int(secs)):
         b = bad_lines(box)
         if b:
             return b[0]
         r = cond()
         if r is not True:
             return "%s: %s" % (what, r)
-        time.sleep(1.0)
+        box.guest_sleep(1.0)
     return None
 
 
@@ -560,7 +559,7 @@ def leg_midirack(leg, out, pkg, mapsyms, bank, mro=None):
         cons = lambda: int.from_bytes(box.read(rbase + MRB_RL + 2, 2),
                                       "little")
         c0 = cons()
-        time.sleep(1.0)
+        box.guest_sleep(1.0)            # a GUEST second of the card's
         c1 = cons()
         want(c1 != c0, "%s: the card consuming the ring - the block IRQ's "
              "count at +%X moved %d -> %d" % (leg, MRB_RL + 2, c0, c1))

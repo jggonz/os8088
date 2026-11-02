@@ -381,21 +381,26 @@ def leg_ne(tmp):
 # leg sb - the attach and the IRQ
 # =============================================================================
 def sbslice(tmp):
-    """sb.inc's candidate tables and sbl_f_irqdisc, cut out as they ship."""
+    """sb.inc's candidate tables, sbl_f_irqdisc (with sbl_irq5_taken) and
+    sbl_attach's sbl_hook (with sbl_cell), cut out as they ship: the tables
+    to SBL_DSC_N, each routine to the next ; ==== banner."""
     src = open(os.path.join(ROOT, "drivers", "sound", "sb.inc")).read().splitlines()
-    out, take = [], False
+    out, take = [], None
     for line in src:
-        if line.startswith("sbl_dsc_irqn:") or line.startswith("sbl_f_irqdisc:"):
-            take = True
-        if take:
-            out.append(line)
-            if line.startswith("SBL_DSC_N"):
-                take = False
-            elif out and out[0] != line and line.startswith("; ====") and \
-                    any(l.startswith("sbl_f_irqdisc:") for l in out):
-                out.pop()
-                take = False
-    assert any(l.startswith("sbl_f_irqdisc:") for l in out), "slice lost"
+        if take is None and (line.startswith("sbl_dsc_irqn:") or
+                             line.startswith("sbl_f_irqdisc:") or
+                             line.startswith("sbl_hook:")):
+            take = line
+        if take is None:
+            continue
+        if line.startswith("; ====") and line != take:
+            take = None
+            continue
+        out.append(line)
+        if line.startswith("SBL_DSC_N"):
+            take = None
+    for need in ("sbl_f_irqdisc:", "sbl_hook:", "sbl_cell:", "SBL_DSC_N"):
+        assert any(l.startswith(need) for l in out), "slice lost " + need
     with open(os.path.join(tmp, "sbslice.inc"), "w") as f:
         f.write("\n".join(out) + "\n")
 
@@ -405,7 +410,44 @@ PMVEC = 0x2C16                  # the multiplexer's offset in the shipped ROM
 DEFVEC = (0xFF53, 0xF000)       # what the ROM leaves on a line nobody hooked
 
 
-def leg_sb(tmp):
+def fw_card(pmirq, cms=False, dsp_on=None):
+    """A PicoMEM running ITS OWN FIRMWARE (tools/picomem, libpmhost) in place
+    of this file's model: built from Elendilon/ISA-PicoMEM's pm1x-pr, the
+    firmware os8088 ships. Brought up the way the card's BIOS leaves it at
+    POST - booted to READY and its IRQ line detected (CMD 30h, BV_IRQ) -
+    then CMS switched on when the case wants 220h taken, and the DSP left
+    on when the case says SOUND.DRV's detach left it so. The PC's 8237,
+    8259 and port B stay this file's model: they are the motherboard's."""
+    sys.path.insert(0, os.path.join(ROOT, "tools", "picomem"))
+    import pmhost
+    card = pmhost.Card(irq_jumper=pmirq)
+    card.boot()
+    line = card.detect_irq()
+    assert line == pmirq, "the card raised IRQ %s, jumpered %d" % (line, pmirq)
+    if cms:
+        s, ans = card.cmd(0x75, 1)          # CMS on at its default, 220h
+        assert ans == 0, "CMS refused (%04Xh)" % ans
+    if dsp_on:
+        other = 5 if pmirq == 7 else 7
+        for c, a in ((0x77, other | 1 << 8), (0x78, dsp_on)):
+            s, ans = card.cmd(c, a)
+            assert ans == 0, "DSP setup %02Xh refused (%04Xh)" % (c, ans)
+    return card
+
+
+def fw_in(card, p):
+    """A read the card may answer: one bus cycle's worth of card time
+    first, so a driver polling the status port lets core 0 run."""
+    card.advance(2)
+    return card.inb(p)
+
+
+def fw_out(card, p, v):
+    card.advance(2)
+    card.outb(p, v)
+
+
+def leg_sb(tmp, fw=False):
     sbslice(tmp)
     image, syms = assemble(tmp, os.path.join(HERE, "picomem", "sbhx.asm"),
                            [os.path.join(ROOT, "drivers", "sound"), tmp],
@@ -418,14 +460,19 @@ def leg_sb(tmp):
     # bytes in its window, and only the race may mask the channel
     for pmirq, cms, rate in ((7, False, 0), (7, True, 1 / 20),
                              (5, False, 1.0), (None, False, 1.0)):
-        print("sb: %s" % (("PicoMEM on IRQ %d%s, channel 1 %s" % (
+        print("sb%s: %s" % ("fw" if fw else "", ("PicoMEM on IRQ %d%s, channel 1 %s" % (
             pmirq, ", CMS on 220h" if cms else "",
             {0: "still", 1.0: "RACING"}.get(rate, "at a DSP's pace")))
                           if pmirq else "no PicoMEM in the machine"))
         st = {"pic": 0xFF, "ramp": 0x37, "args": [0, 0], "cmds": [],
               "pmw": 0, "dma": [], "cnt": 0x3FFF * 1.0, "ff": 0}
+        card = fw_card(pmirq, cms) if fw and pmirq else None
 
         def inb(p):
+            if card is not None:
+                v = fw_in(card, p)
+                if v is not None:
+                    return v
             if p == 0x21:
                 return st["pic"]
             if p == 0x08:           # the 8237's status: its read clears the
@@ -448,6 +495,8 @@ def leg_sb(tmp):
             return 0xFF
 
         def outb(p, v):
+            if card is not None:
+                fw_out(card, p, v)
             if p == 0x388:
                 st["opl"] = st.get("opl", 0) + 1
             if p == 0x21:
@@ -534,6 +583,8 @@ def leg_sb(tmp):
 
         sb_irq = 5 if pmirq == 7 else 7
         offered = [a & 0xFF for c, a in st["cmds"] if c == 0x77]
+        if card is not None:            # where the FIRMWARE's DSP answers
+            st["sbport"] = card.dsp_at((0x240 if cms else 0x220,)) or card.dsp_at()
         check(box.b("pm_up") == 1, "the DSP was enabled")
         check(box.b("pm_pmirq") == pmirq, "the card's own line learned from "
               "PM BIOS function 0 (%d)" % box.b("pm_pmirq"))
@@ -604,7 +655,7 @@ def vsslice(tmp):
         f.write("\n".join(out) + "\n")
 
 
-def leg_vs(tmp):
+def leg_vs(tmp, fw=False):
     vsslice(tmp)
     image, syms = assemble(tmp, os.path.join(HERE, "picomem", "vshx.asm"),
                            [os.path.join(ROOT, "drivers", "sound"), tmp],
@@ -615,7 +666,7 @@ def leg_vs(tmp):
     # the firmware: VIDSND must switch it off before it can configure it
     for pmirq, cms, race in ((7, False, True), (5, False, False),
                              (7, True, True), (None, False, False)):
-        print("vs: %s" % (("PicoMEM on IRQ %d%s, channel 1 %s, the DSP left "
+        print("vs%s: %s" % ("fw" if fw else "", ("PicoMEM on IRQ %d%s, channel 1 %s, the DSP left "
                            "on by the driver" % (pmirq, ", CMS on 220h" if cms
                                                  else "", "RACING" if race
                                                  else "paced"))
@@ -623,8 +674,17 @@ def leg_vs(tmp):
         st = {"pic": 0xFF, "ramp": 0x37, "args": [0, 0], "cmds": [],
               "pmw": 0, "dma": [], "cnt": 0x3FFF * 1.0, "ff": 0,
               "on": 0x220 if pmirq else None, "rst": {}, "dspw": []}
+        # where SOUND.DRV's detach left the DSP: 220h, or 240h when CMS holds
+        # 220h - the model starts it at 220h either way, which the firmware
+        # itself refuses (PORTUSED) with CMS on
+        card = fw_card(pmirq, cms, dsp_on=0x240 if cms else 0x220) \
+            if fw and pmirq else None
 
         def inb(p):
+            if card is not None:
+                v = fw_in(card, p)
+                if v is not None:
+                    return v
             if p == 0x21:
                 return st["pic"]
             if p == 0x08:           # the 8237's status: pm_runaway never
@@ -644,7 +704,7 @@ def leg_vs(tmp):
                 return 0
             if pmirq and p in (0x2A1, 0x2A2):
                 return st["args"][p - 0x2A1]
-            on = st["on"]
+            on = st["on"] if card is None else None   # the firmware's DSP answers itself
             if on and p == on + 0x0E:
                 return 0x80             # the DSP has a byte: AAh after reset
             if on and p == on + 0x0A:
@@ -652,6 +712,8 @@ def leg_vs(tmp):
             return 0xFF
 
         def outb(p, v):
+            if card is not None:
+                fw_out(card, p, v)
             if p == 0x21:
                 st["pic"] = v
             elif p == 0x0C:
@@ -712,6 +774,8 @@ def leg_vs(tmp):
             continue
         sb_irq = 5 if pmirq == 7 else 7
         want = 0x240 if cms else 0x220
+        if card is not None:            # where the FIRMWARE's DSP answers
+            st["on"] = card.dsp_at((want,)) or card.dsp_at()
         onoff = [a for c, a in st["cmds"] if c == 0x78]
         offered = [a & 0xFF for c, a in st["cmds"] if c == 0x77]
         check(box.b("res_al") == 1, "vs_pmup: configured (AL %d)"
@@ -752,7 +816,17 @@ def leg_vs(tmp):
         unm = [v for p, v in st["dma"] if p == 0x0A][-1:]
         check(unm == ([5] if race else [1]), "the next start's unmask %s "
               "(%s)" % ("KEEPS it masked" if race else "opens it", unm))
+        if card is not None and cms:
+            # The firmware's dev_sbdsp_install MOVES an active DSP to any port
+            # it is asked for, with no PORTUSED test, and switching it off
+            # then clears those blocks: CMS's ports go with them. pm_init asks
+            # 220h first, so a configure while the DSP is on lands there.
+            cmsr = fw_in(card, 0x224)
+            check(cmsr == 0x7F, "the card's CMS still answers at 220h (224h "
+                  "reads %s; 7Fh is CMS)" % cmsr)
         box.go("entry_off")
+        if card is not None:
+            st["on"] = card.dsp_at()
         check(st["cmds"][-1] == (0x78, 0) and st["on"] is None,
               "the exit switches the DSP off for SOUND.DRV's resume")
 
@@ -1811,6 +1885,57 @@ def leg_pmdma(tmp):
                   % (hw[-1] if hw else "none"))
 
 
+def leg_sb2fw(tmp):
+    """THE 2.x's OWN FIRMWARE (libpmhost-v2: pm1x-pr built PICOMEM_20) with
+    IRQ 3, 5 and 7 jumpered. Its BIOS detection (30h) sees all three lines;
+    SOUND.DRV's sequence (73h 1, 77h IRQ 5 DMA 1, 78h 220h) is accepted; and
+    a 64-byte single-cycle DSP transfer goes by REAL DMA - one DRQ per byte,
+    each answered as the 8237 would, TC on the last - and ends on IRQ 5's
+    OWN line, the jumpered one, rather than through the multiplexer."""
+    sys.path.insert(0, os.path.join(ROOT, "tools", "picomem"))
+    import pmhost
+    from pmhost import BASE, ROM
+    print("picomem: the 2.x's own firmware, real DMA")
+    try:
+        card = pmhost.Card(board="v2", irq_lines=(1 << 3) | (1 << 5) | (1 << 7))
+    except pmhost.CardError as e:
+        check(False, "libpmhost-v2: %s" % e)
+        return
+    card.boot()
+    card.detect_irq()
+    hw = card.peek(ROM + 0x4000 + 12)
+    check(card.board == 2 and hw == 0xA8,
+          "30h raised lines 3, 5 and 7 (BV_HWIRQ %02Xh, as the BIOS records it)" % hw)
+    answers = [card.cmd(c, a)[1] for c, a in ((0x73, 1), (0x77, 0x0105), (0x78, 0x220))]
+    check(answers == [0, 0, 0] and card.dsp_at() == 0x220,
+          "73h 1, 77h IRQ 5 DMA 1, 78h 220h accepted %s; the DSP answers at 220h"
+          % answers)
+
+    def dsp(v):
+        for _ in range(200):
+            if not card.inb(0x22C) & 0x80:
+                break
+            card.advance(5)
+        card.outb(0x22C, v)
+    card.irq_log.clear()
+    n = 64
+    for v in (0xD1, 0x40, 256 - 125, 0x14, n - 1, 0):
+        dsp(v)
+    fed = 0
+    for _ in range(4000):
+        card.advance(50)
+        while card.drq and fed < n:
+            card.drq.pop(0)
+            card.dma_byte(fed, tc=fed == n - 1)
+            fed += 1
+        if fed >= n and any(l == 5 and lv for _, l, lv in card.irq_log):
+            break
+    lines = sorted(set(l for _, l, lv in card.irq_log if lv))
+    check(fed == n and card.lib.pm_dma_pending() == 0,
+          "%d of %d bytes moved by DRQ, none left asking" % (fed, n))
+    check(lines == [5], "the block's end raised IRQ 5's own line (lines %s)" % lines)
+
+
 def main():
     legs = sys.argv[1:] or ["ne", "sb", "vs", "kern", "mouse", "pmdma",
                            "pmsnd"]
@@ -1821,6 +1946,12 @@ def main():
             leg_sb(tmp)
         if "vs" in legs:
             leg_vs(tmp)
+        if "sbfw" in legs:
+            leg_sb(tmp, fw=True)
+        if "vsfw" in legs:
+            leg_vs(tmp, fw=True)
+        if "sb2fw" in legs:
+            leg_sb2fw(tmp)
         if "kern" in legs:
             leg_kern(tmp)
         if "mouse" in legs:

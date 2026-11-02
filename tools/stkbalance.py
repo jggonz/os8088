@@ -157,7 +157,11 @@ FARLIT = re.compile(r"^(?:0x[0-9a-f]+|[0-9][0-9a-f]*h?)\s*:\s*(?:0x[0-9a-f]+|[0-
 # to fall out of the bottom of it into whatever followed, reporting that
 # routine's `retf`.  Control flow never runs THROUGH a table, so a data
 # directive ends the walk.
-DATA = re.compile(r"^(d[bwdq]|res[bwdq]|incbin)\b", re.I)
+# ...and kernel.asm's SKIP bytes (kernel size pass 15), which ARE a `db`: an
+# opcode whose immediate is the next instruction. Read as data the walk stops
+# there, as it does at CLC_OR_STC's own `db 0xA8` - the path past the skipped
+# instruction is the label after it, which its other entries reach.
+DATA = re.compile(r"^(d[bwdq]|res[bwdq]|incbin|SKIP(?:F1|F2|AL1|DL1|CX2))\b", re.I)
 # `%define a b` (and its x/i spellings): an alias, not an address (see _scan)
 PPDEF = re.compile(r"^%x?i?define\b", re.I)
 # A `section` directive is a HARD BARRIER: the next byte is in a different

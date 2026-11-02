@@ -1481,10 +1481,16 @@ endif
 # KERN_MEGA=1 selects kern_mega (docs/plans/KERN-MEGA-PLAN.md): kern_big
 # switched into 286 PROTECTED MODE once it is up. ADDED to KERN_BIG the way
 # KERN_EMU is, for KERN_EMU's reason - every `%ifdef KERN_BIG` still applies.
-# It is a KNOB for now rather than a product: it is in $(KNOBS) and is NOT
-# exempted from -DKERN_KNOB below, so guard 1 does not bind it while it is
-# brought up and guard 2 (the 64KB segment) still does. `make mega` builds it
-# into build/megak/ and nothing under build/ that `all` ships is touched.
+# It is a NORMAL BUILD WITH A BUDGET OF ITS OWN since kern_mega size pass 1
+# (the owner's decision; docs/plans/completed/msp1/megabudget.md): it is in
+# $(KNOBS) for the stamp and the matrix, and it is EXEMPTED from -DKERN_KNOB
+# below with KERN_SMALL and KERN_EMU, so guard 1 binds it - on what it keeps
+# in CONVENTIONAL memory after the switch, KERN_MEGA_RESIDENT_KB (kernel.asm
+# rule 4) - and `make budget-check` measures it. Its own knobs (MEGATRAP,
+# MEGADIAG, MEGAFDMASK, PICLOSE) are NOT exempted and stay KERN_KNOB builds.
+# Built is not RELEASED: no release zip and no release skill carries its
+# disks yet. `make mega` builds it into build/megak/ and nothing under build/
+# that `all` ships is touched.
 ifneq ($(KERN_MEGA),)
 VIDDEF += -DKERN_MEGA
 endif
@@ -1526,6 +1532,17 @@ endif
 ifneq ($(MEGADIAG),)
 ifneq ($(KERN_MEGA),)
 VIDDEF += -DMEGA_DIAG
+endif
+endif
+
+# MEGAFDMASK=1 is kern_mega's A/B for the EMPTY-DRIVE FREEZE (KERN-MEGA-PLAN
+# 14.125): the native floppy path masks every IRQ line whose gate reflects to
+# an option ROM (a PicoMEM's multiplexer) for the length of its call, so no
+# reflection - on a 286 a CPU reset - lands in the middle of driving the 765.
+# `make megafdmask` builds its disks into build/megafdmask/. kern_mega only
+ifneq ($(MEGAFDMASK),)
+ifneq ($(KERN_MEGA),)
+VIDDEF += -DMEGA_FDMASK
 endif
 endif
 
@@ -1783,12 +1800,11 @@ SBSTAMP := $(BUILD)/.sbpkg$(if $(SBDRAGOFF),-off$(SBDRAGOFF))$(if $(SBRATE),-r$(
 # **LZ4 IS THE DEFAULT AND SHIPS** (SPEC.md 20.13.5). It was a knob for one
 # cycle, tested in the field on the 360KB set, and it is now what every
 # shipped floppy carries - so `make` alone builds the compressed disks and
-# `make PKGZ=` builds the uncompressed ones. LZB is NOT shipped: it is ten
-# points better on ratio and four times slower to expand, and until somebody
-# has that trade measured on a 5150 the machine takes the fast one. Its knob
-# stays, on both sides (`make PKGZ=lzb COMPRESS=lzb`, or `zset ZFMT=lzb`),
-# because the whole point of a second format is that it can be added on top
-# later without the disk layout moving.
+# `make PKGZ=` builds the uncompressed ones. LZ4 is the DEFAULT format; LZB
+# (ten points better on ratio, four times slower to expand) ships too, for the
+# twenty package builds `LZBPKGS` names (SPEC.md 20.13.5), so the kernel keeps
+# both decoders. `make PKGZ=lzb COMPRESS=lzb` (or `zset ZFMT=lzb`) packs
+# everything with it.
 #
 # THE KERNEL HAS TO CARRY THE FORMAT, so pair it: `make PKGZ=lzb COMPRESS=lzb`.
 # PKGZ alone with the default kernel gives an apps disk of packages that will
@@ -2098,7 +2114,7 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
                              FONT INSTCHUNK NOPICOMEM PM_BASE PM_SB_PORT ANIMOFF DISINK0 \
                              BOOTPROF STKDIAG BOOTMARK BOOTHALT BOOTSTOP NOPS2 MOUIDSLOW MOUDIAG MOUROUND KBDDIAG DOSRMARK FDDSLOW TRACKRUN NOHDCYL HDCYLPROBE SBDRAGOFF SBRATE SBRATE286 SBIDLE \
                              ETHPROF FTPDSLOW FTPDBG \
-                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG HFDIAG HFTRACE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
+                             KERN_SMALL KERN_EMU KERN_MEGA MEGATRAP PICLOSE MEGADIAG MEGAFDMASK FSNOSTAMP THEMEDARK TITLESNAP FONTSLOW SPLSTARS NOSIZESNAP NOFLUSHR NOUNAL NOVIDEXT LDDIAG DRVDIAG BAND NOPLANE NOCOLFAST NOBLITCUT NOUIBLOCK NOMOUPRIV NOCHAINPRIV NOHEDGE NOLIVESND VPDIAG HFDIAG HFTRACE NOATBLIT1 NOATFAST NOATWALK NOATSBAR NOATROW NOATBLANK NOATPLAIN NOATCX NOATRESPAN NOATFETCH NOATCELL NOATTAIL NOATONE NOATSU NOCURDISK NOFDDPARK MSELOFF NOKDKBD VGADIRTY DLJUNK DPTROM COMPRESS NOKZIP,\
                              $(if $($(k)),$(k)=$($(k)))))
 # **A KNOB KERNEL IS NOT THE SHIPPED KERNEL, so KERN_BUDGET does not bind it**
 # (kernel.asm guard 1). It is built to answer a question about a machine and
@@ -2124,7 +2140,11 @@ KNOBS := $(strip $(foreach k,VIDEO HERCSEG RTC DISKCNT DISKAL BOOTDIAG FLOPPY1 \
 # kern_emu carrying -DKERN_KNOB would SKIP guard 1 (the KERN_BUDGET footprint
 # check), so the one build that adds a feature would be the one build nothing
 # measured.
-ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
+# ...and KERN_MEGA joins them (kern_mega size pass 1): it was a knob while it
+# was brought up, and is a build with a budget of its own now (kernel.asm
+# rule 4). A kern_mega WITH a knob - MEGATRAP=1, MEGADIAG=1 and the rest -
+# still has that knob in this list, so it is still -DKERN_KNOB.
+ifneq ($(filter-out KERN_SMALL=% KERN_EMU=% KERN_MEGA=% NOHEDGE=% NOPICOMEM=% NOLIVESND=% VPDIAG=% HFDIAG=% HFTRACE=% NOATBLIT1=% NOATFAST=% NOATWALK=% NOATSBAR=% NOATROW=% NOATBLANK=% NOATPLAIN=% NOATCX=% NOATRESPAN=% NOATFETCH=% NOATCELL=% NOATTAIL=% NOATONE=% NOATSU=%,$(KNOBS)),)
 VIDDEF += -DKERN_KNOB
 BOOT2_XSEC := 1
 endif
@@ -2140,7 +2160,13 @@ endif
 # into the blob (ksp14/reach.md): kern_big's thirteen hold them with 61 bytes
 # to spare, and vmm_boot_x is the ~100 more that kern_emu carries. Only an
 # emulator boots it.
+# ...and kern_mega keeps the knob's sector it took while it WAS one (kern_mega
+# size pass 1): only a 286 or better boots it, so the sector costs no 8088
+# anything, and the kernel stays byte-identical to the knob build it was.
 ifneq ($(KERN_EMU),)
+BOOT2_XSEC := 1
+endif
+ifneq ($(KERN_MEGA),)
 BOOT2_XSEC := 1
 endif
 ifneq ($(BOOT2_XSEC),)
@@ -2192,7 +2218,7 @@ endif
 # `make` believes is current, and every image shipped from it wrong. The
 # knob roster above still carries NOKZIP, because that is what somebody asks
 # for and what a knob build has to announce.
-VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
+VIDSTAMP := $(BUILD)/.video-$(if $(VIDEO),$(VIDEO),auto)$(if $(HERCSEG),-$(HERCSEG))$(if $(RTC),-rtc$(RTC))$(if $(DISKCNT),-dc$(DISKCNT))$(if $(FLOPPY1),-f1$(FLOPPY1))$(if $(DISKAL),-al$(DISKAL))$(if $(RAMKB),-ram$(RAMKB))$(if $(DIRW1),-d1$(DIRW1))$(if $(INSTRO),-ro$(INSTRO))$(if $(KEEPH),-kh$(KEEPH))$(if $(STRAD),-st$(STRAD))$(if $(HEAPCOMPACT),-hc$(HEAPCOMPACT))$(if $(HEAPPARK),-hp$(HEAPPARK))$(if $(HEAPPARKLK),-hl$(HEAPPARKLK))$(if $(FDDPROBE),-fp$(FDDPROBE))$(if $(FDDABSENT),-fa$(FDDABSENT))$(if $(SNDSNIFF),-ss$(SNDSNIFF))$(if $(REDRAWFULL),-rf$(REDRAWFULL))$(if $(DRAGCACHE),-dg$(DRAGCACHE))$(if $(NOSPLIT),-ns$(NOSPLIT))$(if $(NOSEAMCUT),-nsc$(NOSEAMCUT))$(if $(NOFDMEDIA),-nfm$(NOFDMEDIA))$(if $(NOSUOCCL),-no$(NOSUOCCL))$(if $(CURFIX),-cf$(CURFIX))$(if $(FONT),-font$(FONT))$(if $(KERN_SMALL),-small$(KERN_SMALL))$(if $(KERN_EMU),-emu$(KERN_EMU))$(if $(KERN_MEGA),-mega$(KERN_MEGA))$(if $(MEGATRAP),-mtl$(MEGATRAP))$(if $(PICLOSE),-plc$(PICLOSE))$(if $(MEGADIAG),-mdx$(MEGADIAG))$(if $(MEGAFDMASK),-mfm$(MEGAFDMASK))$(if $(KFZ),-kfz$(KFZ))$(if $(INSTCHUNK),-ic$(INSTCHUNK))$(if $(SNAPAUDIT),-sa$(SNAPAUDIT))$(if $(GFXAUDIT),-ga$(GFXAUDIT))$(if $(SCROLLROW),-sr$(SCROLLROW))$(if $(QUANTUM),-q$(QUANTUM))$(if $(DIRTYRAM),-dr$(DIRTYRAM))$(if $(FSNOSTAMP),-fn$(FSNOSTAMP))$(if $(ANIMOFF),-ao$(ANIMOFF))$(if $(THEMEDARK),-td$(THEMEDARK))$(if $(DISINK0),-di$(DISINK0))$(if $(BOOTPROF),-bp$(BOOTPROF))$(if $(STKDIAG),-sd$(STKDIAG))$(if $(NOMOUPRIV),-nmp$(NOMOUPRIV))$(if $(NOCHAINPRIV),-ncp$(NOCHAINPRIV))$(if $(BOOTMARK),-bm$(BOOTMARK))$(if $(BOOTHALT),-bh$(BOOTHALT))$(if $(BOOTSTOP),-bs$(BOOTSTOP))$(if $(NOPS2),-np$(NOPS2))$(if $(MOUIDSLOW),-mis$(MOUIDSLOW))$(if $(MOUDIAG),-mdg$(MOUDIAG))$(if $(MOUROUND),-mrd$(MOUROUND))$(if $(KBDDIAG),-kbd$(KBDDIAG))$(if $(DOSRMARK),-drm$(DOSRMARK))$(if $(FDDSLOW),-fsl$(FDDSLOW))$(if $(TRACKRUN),-tr$(TRACKRUN))$(if $(NOHDCYL),-nhc$(NOHDCYL))$(if $(HDCYLPROBE),-hcp$(HDCYLPROBE))$(if $(SBDRAGOFF),-sbo$(SBDRAGOFF))$(if $(SBRATE),-sbr$(SBRATE))$(if $(SBRATE286),-sbr2$(SBRATE286))$(if $(SBIDLE),-sbi$(SBIDLE))$(if $(TITLESNAP),-ts$(TITLESNAP))$(if $(FONTSLOW),-fsw$(FONTSLOW))$(if $(SPLSTARS),-sst$(SPLSTARS))$(if $(NOSIZESNAP),-nzs$(NOSIZESNAP))$(if $(NOFLUSHR),-nfr$(NOFLUSHR))$(if $(NOUNAL),-nu$(NOUNAL))$(if $(NOVIDEXT),-nvx$(NOVIDEXT))$(if $(LDDIAG),-ldd$(LDDIAG))$(if $(DRVDIAG),-drd$(DRVDIAG))$(if $(BAND),-bnd$(BAND))$(if $(NOPLANE),-npl$(NOPLANE))$(if $(NOCOLFAST),-ncf$(NOCOLFAST))$(if $(NOBLITCUT),-nbc$(NOBLITCUT))$(if $(NOUIBLOCK),-nub$(NOUIBLOCK))$(if $(NOCURDISK),-ncd$(NOCURDISK))$(if $(NOFDDPARK),-nfp$(NOFDDPARK))$(if $(MSELOFF),-mso$(MSELOFF))$(if $(VGADIRTY),-vd$(VGADIRTY))$(if $(BOOTDIAG),-bd$(BOOTDIAG))$(if $(PM_BASE),-pmb$(PM_BASE))$(if $(PM_SB_PORT),-pms$(PM_SB_PORT))$(if $(ETHPROF),-ep$(ETHPROF))$(if $(FTPDSLOW),-fs$(FTPDSLOW))$(if $(FTPDBG),-fd$(FTPDBG))$(if $(DLJUNK),-dlj$(DLJUNK))$(if $(DPTROM),-dpr$(DPTROM))$(if $(FATWNONE),-fwn$(FATWNONE))$(if $(FATWGATE),-fwg$(FATWGATE))-cmp$(LZFMTS)$(if $(KZIP),-kz)
 $(shell mkdir -p $(BUILD); \
         [ -f $(VIDSTAMP) ] || { rm -f $(BUILD)/.video-* $(BUILD)/kernel.bin \
                                       $(BUILD)/kernel-full.bin \
@@ -2287,7 +2313,7 @@ KERNEL_SRC := kernel/kernel.asm
 # perfectly, never reached the disk, and the only symptom was os88sym refusing
 # a map that described "a DIFFERENT kernel".
 KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
-              drivers/thmpal/thmrows.inc
+              drivers/thmpal/thmrows.inc apps/os88la.inc apps/os88ub.inc
 
 .PHONY: stkdiag kbddiag small emu mega kernsplit all run run-640 run-720 run-120 debug test test-snd xt xt-640 pc5150 xt-mfm xt-cga \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
@@ -2827,8 +2853,11 @@ endif
 # KERN_SMALL ALONE raises no alarm: it is the SHIPPED small-machine kernel
 # (SPEC.md 24.5.7), which `all` builds in its own sub-make, so the banner's
 # "rebuild with a plain make before cutting a release" would be wrong on every
-# plain `make`. Any other knob beside it still names both.
-ifneq ($(filter-out KERN_SMALL=%,$(KNOBS)),)
+# plain `make`. Any other knob beside it still names both. KERN_MEGA ALONE
+# is the same since it stopped being a knob build (KERN-MEGA-PLAN 14.126):
+# `make mega` is a normal build with a budget of its own, and the banner
+# fired on every one.
+ifneq ($(filter-out KERN_SMALL=% KERN_MEGA=%,$(KNOBS)),)
 	@echo "  *** BUILT WITH A KNOB: $(KNOBS)"
 	@echo "  *** It boots that way on every machine. Rebuild with a plain   ***"
 	@echo "  *** \`make\` before testing detection or cutting a release.      ***"
@@ -5585,6 +5614,32 @@ $(BUILD)/pmsys360.img: $(BUILD)/boot360.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(
 		$(DRIVERS360) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS360) $(SYSDOC) $(SYSLOGOARG) $(FACESARG360) \
 		$(BUILD)/pmcfg/system.cfg $(BUILD)/pmdma.o88 $(APPDATAFOLDER)
 
+# PMBOXTEST - the B: disk for the PicoMEM UNDER 86Box (tools/picomem,
+# vm/xt-picomem1, docs/plans/completed/PICOMEM-EMU-PLAN.md), beside pmsys360.img in A:
+# (SOUND/ETHER/USBMOUSE wanted at boot): PMDMA, and SBTEST - 2 s of a 1 kHz
+# square at 8,000 Hz, mono 8-bit, the one thing a DSP 2.x plays, for a row to
+# hear through the card's own DAC (OS88_PMWAV). tests/pmbox.py is the row.
+$(BUILD)/pmboxb360.img: $(BUILD)/pmdma.o88 $(BUILD)/sbtest.o88 tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 360 $(BUILD)/pmdma.o88 $(BUILD)/sbtest.o88
+
+# ...and the hard disk the card serves as 80h off its microSD: os8088 booted
+# from a PicoMEM-hosted image, the field machine's own setup (SPEC.md
+# 52.10.16), with A: empty - the card's BIOS int 13h and the kernel's hard-disk
+# loader, every sector through the card's PC-command channel.
+$(BUILD)/pmhd.img: $(BUILD)/mbr.bin $(BUILD)/boothd.bin $(KERNFILE) $(DRIVERS) \
+                   $(BUILD)/pmcfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --hdd \
+	    --mbr $(BUILD)/mbr.bin --boot $(BUILD)/boothd.bin \
+	    --kernel $(KERNFILE) \
+	    $(DRIVERS) $(BUILD)/pmcfg/system.cfg --folder SYSTEM/APPDATA
+	@python3 tools/os88disk.py --verify-hdd $@
+
+.PHONY: pmboxtest
+pmboxtest: $(BUILD)/pmsys360.img $(BUILD)/pmboxb360.img $(BUILD)/pmhd.img
+ifneq ($(NOPICOMEM),)
+	$(error pmboxtest is meaningless with NOPICOMEM=1: SOUND.DRV would not ask the card for anything)
+endif
+
 .PHONY: picomemtest
 picomemtest: $(BUILD)/pmsys720.img $(BUILD)/pmsys360.img
 ifneq ($(NOPICOMEM),)
@@ -6890,12 +6945,23 @@ endif
 ifneq ($(VPDIAG),)
 VPDEF += -DVP_DIAG
 endif
-VPSTAMP := $(BUILD)/.vplayer-$(if $(NOLIVESND),nolivesnd,livesnd)$(if $(VPDIAG),-diag)
+# VPDIAG=time adds the TIMED READ LOG (VP_RDTIME, SPEC.md 98.3.22.4): every
+# read's length and how far the picture was behind the card when it began,
+# which `tools/os88vfit.py FILE.V88 VPPROFn.DAT --reads` prints
+ifeq ($(VPDIAG),time)
+VPDEF += -DVP_RDTIME
+endif
+# ...and the kern_mega ARM's diag build leaves out the speaker SHAPER
+# (VP_NOSPKFX, 2,367 bytes): the arm plus the card is over APP_MAX_SIZE by
+# ~1.2 KB, and a card-made clip on the speaker is the one play it drops
+# (silent). A file made for the speaker plays as ever; the shipped builds
+# never define it
+VPSTAMP := $(BUILD)/.vplayer-$(if $(NOLIVESND),nolivesnd,livesnd)$(if $(VPDIAG),-diag$(filter time,$(VPDIAG)))
 $(shell mkdir -p $(BUILD); \
         [ -f $(VPSTAMP) ] || { rm -f $(BUILD)/.vplayer-* \
                                       $(BUILD)/video.bin $(BUILD)/video.o88; \
                                 touch $(VPSTAMP); })
-$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
+$(BUILD)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
                     apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
                     apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -o $@ apps/video/video.asm
@@ -6915,6 +6981,11 @@ $(BUILD)/vblk.bin: apps/video/vblk.asm apps/video/vblk.inc | $(BUILD)
 $(BUILD)/vblkpm.bin: apps/video/vblk.asm apps/video/vblk.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVB_PM -o $@ apps/video/vblk.asm
 VBLKPARTS = --part $(BUILD)/vblk.bin
+# ...and the kern_mega arm's part 2, the SPEAKER SHAPER (SPEC.md 98.3.15.2):
+# apps/os88spkfx.inc assembled alone, because the arm outgrew APP_MAX_SIZE
+# and the shaper is its one subsystem with a three-call interface. The
+# shipped VIDEO.O88 includes os88spkfx.inc as it always did. Assembled
+# -DPKG_MEGA into $(MEGAAPPDIR), the arm's own (KERN-MEGA-PLAN 14.66)
 
 $(BUILD)/video.o88: $(BUILD)/video.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/video.bin -o $@ $(VBLKPARTS)
@@ -13379,7 +13450,7 @@ videnchd: $(VIDENC_BASE) $(BUILD)/vidbench.o88 $(BUILD)/viddisk.o88 \
 # `make 486-video` boots it in 86Box.
 VID486_CYLS ?= 250
 VID486CLIPS ?=
-$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
+$(BUILD)/videodiag.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -o $@ apps/video/video.asm
 $(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/videodiag.bin -o $@ $(VBLKPARTS)
@@ -13388,7 +13459,7 @@ $(BUILD)/videodiag.o88: $(BUILD)/videodiag.bin $(BUILD)/vblk.bin tools/os88pkg.p
 # super-packet was found, saved in the profile for tools/os88vfit.py --reads
 # to hold against the file. Its room is the layer's and the speaker's info
 # lines, which a card's play of a file with no layer does not draw
-$(BUILD)/videordlog.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
+$(BUILD)/videordlog.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DVP_DIAG -DVP_RDLOG -o $@ apps/video/video.asm
 $(BUILD)/videordlog.o88: $(BUILD)/videordlog.bin $(BUILD)/vblk.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/videordlog.bin -o $@ $(VBLKPARTS)
@@ -14054,17 +14125,21 @@ small: $(BUILD)/small360.img $(BUILD)/small720.img $(BUILD)/small.img
 	@python3 tools/kernsplit.py $(SMALLDIR)/kernel.bin $(BUILD)/kernel.bin
 
 # THE BUDGETS AT AN UPSTREAM MERGE OR A RELEASE (kernel/kernel.asm, at
-# KERN_BUDGET). The build itself lets either kernel run KERN_GRACE over its
+# KERN_BUDGET). The build itself lets any kernel run KERN_GRACE over its
 # budget, because branch and integration work lands a feature whole and
-# size-passes it after; this is where that grace ends. It measures both
-# SHIPPED kernels (kern_emu is kern_big's budget) - a knob kernel has no
-# budget - and fails naming the one that is over, which is then a size pass or a conversation with the owner,
-# never a raise. .claude/skills/release-os8088 and docs/UPSTREAM.md run it.
+# size-passes it after; this is where that grace ends. It measures every
+# BUDGETED kernel (kern_emu is kern_big's budget; kern_mega's is its own, on
+# what it keeps in conventional memory after the switch, kernel.asm rule 4) -
+# a knob kernel has no budget - and fails naming the one that is over, which
+# is then a size pass or a conversation with the owner, never a raise.
+# .claude/skills/release-os8088 and docs/UPSTREAM.md run it. kern_mega being
+# measured here does not make it RELEASED: no release artefact carries it.
 .PHONY: budget-check
-budget-check: $(BUILD)/kernel.bin small emu
+budget-check: $(BUILD)/kernel.bin small emu mega
 	@python3 tools/kernsize.py --release --build $(BUILD) --ico $(ICODIR)
 	@python3 tools/kernsize.py --release --build $(SMALLDIR) --ico $(SMALLDIR) -DKERN_SMALL
 	@python3 tools/kernsize.py --release --build $(EMUDIR) --ico $(EMUDIR) -DKERN_BIG -DKERN_EMU
+	@python3 tools/kernsize.py --release --build $(MEGADIR) --ico $(MEGADIR) -DKERN_BIG -DKERN_MEGA
 
 # its kernel is $(SMALLDIR)'s, so its modules are too
 # --- WHAT THE SMALL DISKS DO NOT CARRY (SPEC.md 24.5) -------------------------
@@ -14660,6 +14735,54 @@ $(BUILD)/megaxm.bin: tests/megaxm/megaxm.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megaxm/megaxm.asm
 $(BUILD)/megaxm.o88: $(BUILD)/megaxm.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megaxm.bin -o $@
+# MEGARMB (tests/megarmb): kern_mega's REAL-MODE BRACKET from a package
+# (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W1) - OS88_HIGH, so its region is
+# above 1MB and the bracket runs a copy; MEGARMBL is the same source with a
+# conventional region. tests/megarmb.py (Bochs) and megarmb286.py (86Box)
+$(BUILD)/megarmb.bin: tests/megarmb/megarmb.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmb.asm
+$(BUILD)/megarmb.o88: $(BUILD)/megarmb.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmb.bin -o $@
+$(BUILD)/megarmbl.bin: tests/megarmb/megarmb.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DMB_LOW -o $@ tests/megarmb/megarmb.asm
+$(BUILD)/megarmbl.o88: $(BUILD)/megarmbl.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbl.bin -o $@
+# MEGARMBF (tests/megarmb/megarmbf.asm): the real-mode bracket's FALLBACK and
+# its TABLE (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W2) - tests/megarmbref.py
+$(BUILD)/megarmbf.bin: tests/megarmb/megarmbf.asm apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbf.asm
+$(BUILD)/megarmbf.o88: $(BUILD)/megarmbf.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbf.bin -o $@
+# MEGARMBD (tests/megarmb/megarmbd.asm): a real-mode bracket on an EXTENDED
+# DESKTOP, a mode set on either display (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-
+# PLAN W7) - tests/megarmbext.py, on 86Box's two-card vm/286-mega-multimon
+$(BUILD)/megarmbd.bin: tests/megarmb/megarmbd.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbd.asm
+$(BUILD)/megarmbd.o88: $(BUILD)/megarmbd.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbd.bin -o $@
+# MEGARMBX (tests/megarmb/megarmbx.asm): what a real-mode bracket READS - the
+# extent list's OSAPI_FILE_READ_SEQ, the XMEM_COPY twin, OSAPI_DRV_CALL into a
+# low HDD.DRV (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W3) - tests/vidrmb.py
+$(BUILD)/megarmbx.bin: tests/megarmb/megarmbx.asm apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbx.asm
+$(BUILD)/megarmbx.o88: $(BUILD)/megarmbx.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbx.bin -o $@
+# MEGARMBS (tests/megarmb/megarmbs.asm): the SOUND side of a real-mode
+# bracket - SOUND.DRV low, a stream through the OSAPI_SND_STREAM twin carried
+# across the bracket both ways, the watchdog DSV_TICK fires, the speaker
+# door's twin (SPEC.md 53.2.3, MEGA-VIDEO-REALMODE-PLAN W4) - tests/vidrmbsnd.py
+$(BUILD)/megarmbs.bin: tests/megarmb/megarmbs.asm apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbs.asm
+$(BUILD)/megarmbs.o88: $(BUILD)/megarmbs.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbs.bin -o $@
+# MEGARMBE (tests/megarmb/megarmbe.asm): EMS.DRV through a real-mode bracket -
+# allocated and mapped on both sides of it, the frame written and read in real
+# mode, the driver's state across the copy down and back up (SPEC.md 53.2.3,
+# 107; MEGA-VIDEO-REALMODE-PLAN W3) - tests/vidrmbems.py on vm/286-mega-ems
+$(BUILD)/megarmbe.bin: tests/megarmb/megarmbe.asm apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -o $@ tests/megarmb/megarmbe.asm
+$(BUILD)/megarmbe.o88: $(BUILD)/megarmbe.bin tools/os88pkg.py
+	python3 tools/os88pkg.py $(BUILD)/megarmbe.bin -o $@
 # MEGAHUGE (tests/megahuge): ONE CLAIM FOR ALL OF IT (KERN-MEGA-MEMORY-PLAN
 # MC5) - OSAPI_MEM_HUGE's query, a claim of its answer bridged across the
 # pool and the heap, a pattern through every window, the free, the query again
@@ -14780,7 +14903,10 @@ $(BUILD)/megalowb.bin: tests/megaown/megaown.asm apps/os88api.inc | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -DMO_LOWBIG -o $@ tests/megaown/megaown.asm
 $(BUILD)/megalowb.o88: $(BUILD)/megalowb.bin tools/os88pkg.py
 	python3 tools/os88pkg.py $(BUILD)/megalowb.bin -o $@
-megarun: $(BUILD)/megarun.o88 $(BUILD)/megaxm.o88 $(BUILD)/megahib.o88 $(BUILD)/mega.img
+megarun: $(BUILD)/megarun.o88 $(BUILD)/megaxm.o88 $(BUILD)/megahib.o88 $(BUILD)/megarmb.o88 \
+        $(BUILD)/megarmbl.o88 $(BUILD)/megarmbf.o88 $(BUILD)/megarmbx.o88 $(BUILD)/megarmbs.o88 \
+        $(BUILD)/megarmbe.o88 $(BUILD)/megarmbd.o88 \
+        $(BUILD)/mega.img
 .PHONY: megarun
 
 # `make megatrap` - kern_mega with MEGATRAP=1, as a whole tree of its own in
@@ -14802,6 +14928,13 @@ megadiag:
 	@$(MAKE) BUILD=$(BUILD)/megadiag MEGADIAG=1 $(BUILD)/megadiag/mega.img $(BUILD)/megadiag/mega120.img \
 		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin
 .PHONY: megadiag
+
+# `make megafdmask` - kern_mega with MEGAFDMASK=1 (KERN-MEGA-PLAN 14.125), the
+# empty-drive freeze's A/B, as a tree of its own in build/megafdmask/
+megafdmask:
+	@$(MAKE) BUILD=$(BUILD)/megafdmask MEGAFDMASK=1 $(BUILD)/megafdmask/mega.img $(BUILD)/megafdmask/mega120.img \
+		$(BUILD)/megafdmask/megarun.o88 $(BUILD)/megafdmask/mbr.bin
+.PHONY: megafdmask
 
 MEGADIR := $(BUILD)/megak
 
@@ -14853,14 +14986,25 @@ MEGASYSOPTARGS = $(addprefix SYSTEM:,$(call MEGASUB,$(SYSOPTIONAL)))
 MEGACOREARGS = $(addprefix APPS:,$(call MEGASUB,$(CORE_TOOLS))) \
                $(addprefix GAMES:,$(call MEGASUB,$(CORE_GAMES)))
 
-$(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
+$(MEGAAPPDIR)/video.bin: apps/video/video.asm apps/video/vdec.inc apps/video/vosd.inc apps/video/vfx.inc apps/video/vprof.inc apps/video/vcold.inc apps/os88spk.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc apps/os88alt.inc \
                          apps/os88ui.inc apps/os88rseq.inc apps/os88la.inc apps/os88xgap.inc \
                          apps/os88parts.inc apps/os88partsbody.inc apps/video/vblk.inc apps/os88mega.inc $(VPSTAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error $(STKLST) -I apps/ $(VPDEF) -DPKG_MEGA -o $@ apps/video/video.asm
 	@echo "video (PKG_MEGA): $(call FILESIZE,$@) bytes"
-$(MEGAAPPDIR)/video.o88: $(MEGAAPPDIR)/video.bin $(BUILD)/vblk.bin $(BUILD)/vblkpm.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(MEGAAPPDIR)/video.bin -o $@ --part $(BUILD)/vblk.bin --part $(BUILD)/vblkpm.bin
+$(MEGAAPPDIR)/vfx.bin: apps/video/vfx.asm apps/video/vfx.inc apps/os88spkfx.inc apps/os88spkfx_t.inc apps/os88api.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error -I apps/ -DPKG_MEGA -o $@ apps/video/vfx.asm
+# THE COLD PART (SPEC.md 98.3.24.1): part 3, LINKED to the player it ships in -
+# tools/os88plink.py reads the names it takes out of the map the player's own
+# assembly wrote ($(STKLST)), so it is rebuilt with the player and with its
+# defines ($(VPDEF): a diag player's part carries the profile)
+$(MEGAAPPDIR)/vclink.inc: $(MEGAAPPDIR)/video.bin apps/video/vcold.asm tools/os88plink.py
+	python3 tools/os88plink.py $(MEGAAPPDIR)/video.bin $(MEGAAPPDIR)/video.map apps/video/vcold.asm $(VPDEF) -o $@
+$(MEGAAPPDIR)/vcold.bin: apps/video/vcold.asm apps/video/vcold.inc apps/video/vprof.inc $(MEGAAPPDIR)/vclink.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I $(MEGAAPPDIR)/ $(VPDEF) -DPKG_MEGA -o $@ apps/video/vcold.asm
+$(MEGAAPPDIR)/video.o88: $(MEGAAPPDIR)/video.bin $(BUILD)/vblk.bin $(BUILD)/vblkpm.bin $(MEGAAPPDIR)/vfx.bin $(MEGAAPPDIR)/vcold.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/video.bin -o $@ --part $(BUILD)/vblk.bin --part $(BUILD)/vblkpm.bin --part $(MEGAAPPDIR)/vfx.bin --part $(MEGAAPPDIR)/vcold.bin
 
 $(MEGAAPPDIR)/audio.bin: apps/audio/audio.asm $(AUDIO_SRC) apps/os88mega.inc | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)

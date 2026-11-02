@@ -2589,3 +2589,64 @@ overlays = ["pcxt_2_360k_floppies", "pcxt_2_serial_ports",
     bus_type = "ISA"
     type = "VGA"
     clock_mode = "Default"
+
+# os8088_5150_herc_pm1_gla / _pm2_gla - `herc_gla` plus a PICOMEM running its
+# OWN FIRMWARE (patches/17-picomem.patch, docs/plans/completed/PICOMEM-EMU-PLAN.md wave
+# 8): the 1.x on IRQ 5, the owner's 286 card's jumper, and the 2.x jumpered as
+# 5150 #2's is - IRQ 7 alone, DRQ 1 (docs/FIELD-MACHINES.md). The firmware is
+# libpmhost (tools/picomem/build.sh) and the microSD an image: os88marty sets
+# $OS88_PMHOST and $OS88_PMSD per instance from the name. No Sound Blaster and
+# no AdLib of the machine's own: those are the card's. What MartyPC adds over
+# 86Box is the 8088's TIME - the card's memory charged its firmware's wait
+# states, its card time the CPU's.
+[[machine]]
+name = "os8088_5150_herc_pm1_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.picomem]
+    irq = 5
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"
+
+[[machine]]
+name = "os8088_5150_herc_pm2_gla"
+type = "Ibm5150v256K"
+rom_set = "glabios_pc"
+speaker = true
+overlays = [
+    "pcxt_2_360k_floppies",
+    "pcxt_2_serial_ports",
+    "us_modelf_keyboard",
+    "microsoft_serial_mouse_com1",
+]
+
+    [machine.memory]
+    conventional.size = 0xA0000
+    conventional.wait_states = 0
+
+    [machine.picomem]
+    irq = 7
+    irq_lines = 0x80
+    dma = 1
+
+    [[machine.video]]
+    bus_type = "ISA"
+    type = "MDA"
+    subtype = "Hercules"
+    clock_mode = "Dynamic"

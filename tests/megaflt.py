@@ -20,7 +20,9 @@ five seconds by MEGARUN as tools/os88bochs.py's sweep does:
     FLTZ  the control, which never faults
 
 Each faulting build must be named by a `kern_mega CLOSED` line with its
-vector; no `kern_mega FAULT` (today's fatal screen) may appear; every build's
+vector - read out of the kernel's state, the toast it stages (mega_fkmsg,
+Box.faults), since a shipped kern_mega writes nothing to E9; no `kern_mega
+FAULT` (today's fatal screen, [mega_infault]) may appear; every build's
 entry must see the SAME free memory as the one of its kind before it (each
 closed one gave back its region, its claims and its pool block - the high
 builds read a KB more conventional and a KB less pool, so they are compared
@@ -62,15 +64,24 @@ def main():
     box = os88bochs.Box(out, [os.path.join(ROOT, p) for p in PKGS])
     fails = []
     lines = []
+    said = []       # every CLOSED line read out of the kernel's STATE: it
+                    # holds the LAST incident's toast (mega_fkmsg), and the
+                    # builds are five seconds apart, so a poll sees each
+    def look():
+        got = box.said()
+        for l in got:
+            if l.startswith("kern_mega CLOSED") and l not in said:
+                said.append(l)
+        return got + [l for l in said if l not in got]
     try:
-        if not box.wait_for("kern_mega:", 240):
-            fails.append("no kern_mega line in 240s")
+        if not box.wait_pm(240):
+            fails.append("kern_mega never switched to protected mode in 240s")
             raise StopIteration
         box.up()                        # the desktop, off kernel state
         box.megarun()                   # C:, RUN, 0RUN.O88
         end = time.time() + 300
         while time.time() < end:
-            lines = box.lines()
+            lines = look()
             if any(l.startswith("kern_mega FAULT") for l in lines):
                 break
             if "MEGARUN: done" in lines and "FLTZ: alive" in lines:
@@ -87,7 +98,7 @@ def main():
             os88bochs.xd("click", 1)
             box.wait_for("FLTZ: click", 10)
             os88bochs.shot(os.path.join(out, "input.png"))
-        lines = box.lines()
+        lines = look()
     except StopIteration:
         pass
     finally:
@@ -99,11 +110,10 @@ def main():
             fails.append("FATAL: %s | %s" % (l, " ".join(lines[i + 1:i + 3])))
     closed = {}
     for l in lines:
-        m = re.match(r"kern_mega CLOSED FLT(\w) (\w\w) at (\S+) err (\w+)", l)
+        m = re.match(r"kern_mega CLOSED FLT(\w) (\w\w) at (\S+)", l)
         if m:
             closed.setdefault(m.group(1), m.group(2))
-            print("megaflt: closed FLT%s, vector %s at %s err %s"
-                  % m.groups())
+            print("megaflt: closed FLT%s, vector %s at %s" % m.groups())
     for c, v in WANT.items():
         if c not in closed:
             fails.append("FLT%s was not closed" % c)

@@ -805,18 +805,9 @@ osapi_snd_stream:
     jz .ringok                  ; always was. The DMA claim cells stay
     cmp byte [mega_on], 0       ; conventional, so only a plain claim can
     je .ringok                  ; arrive there (SND_OPENF_EXT = 2). ASKED
-    push ax                     ; OF THE DESCRIPTOR'S BASE, not of DI's TI
-    push dx                     ; bit: since KERN-MEGA-MEMORY-PLAN MC7.4
-    mov ax, di                  ; EVERY claim is an LDT selector, so the bit
-    xor dx, dx                  ; test refused the conventional DMA ring
-    call MEGA_SEL_CODE:mega_selbasef ; MIDIRack hands over, with 2 (DX:AX =
-    cmp dx, 0x0F                ; the base; no descriptor leaves DX = 0 and
-    pop dx                      ; the driver judges the ring). In real mode
-    pop ax                      ; DI is a paragraph and nothing is asked
-    jbe .ringok
-    mov ax, 2
-    stc
-    ret
+    call MEGA_SEL_CODE:snd_ringhif ; OF THE DESCRIPTOR'S BASE (snd_ringhif,
+    jnc .ringok                 ; below). In real mode DI is a paragraph and
+    ret                         ; nothing is asked. CF = 1, AX = 2: refused
 .ringok:
 %endif
     push bx
@@ -1046,13 +1037,8 @@ spk_off:
 %ifdef KERN_MEGA
     cmp byte [ss:mega_pm], 0    ; protected mode: IRQ0 is IDT gate 20h, and
     je .rmv                     ; the IVT's cell is the BIOS's, for a
-    push es                     ; reflection - so the GATE goes back to
-    mov ax, MEGA_SEL_IDT        ; sch_isr (the door wrote it, 34.11.1.1)
-    mov es, ax
-    mov word [es:MEGA_PIC_BASE*8], sch_isr
-    mov word [es:MEGA_PIC_BASE*8+2], KERNEL_SEG
-    pop es
-    jmp short .vdone
+    call MEGA_SEL_CODE:spk_gate0kf ; reflection - so the GATE goes back to
+    jmp short .vdone            ; sch_isr (the door wrote it, 34.11.1.1)
 .rmv:
     MEGA_SEG0 ds                  ; segment 0 is the NULL selector
 %else
@@ -1103,14 +1089,9 @@ osapi_fsx_spk:
     jne spk_off.err             ; there is the real-mode contract, refused
     call .open                  ; as before so an older library falls back
     jc .pmo
-    push ax
-    push es
-    mov ax, MEGA_SEL_IDT        ; IRQ0's gate: the caller's ISR, its CODE
-    mov es, ax                  ; selector BX banked in [spk_seg] by .open
-    mov [es:MEGA_PIC_BASE*8], si
-    mov ax, [spk_seg]
-    mov [es:MEGA_PIC_BASE*8+2], ax
-    pop es
+    push ax                     ; IRQ0's gate: the caller's ISR, its CODE
+    mov ax, [spk_seg]           ; selector BX banked in [spk_seg] by .open
+    call MEGA_SEL_CODE:spk_gate0f
     pop ax
     mov cx, KERNEL_SEG          ; ...and the chain: the kernel's IRQ0, the
     mov dx, sch_isr             ; gate's own target before (KERNEL_SEG is a
@@ -1186,6 +1167,61 @@ snd_str_busy:
 
 
 section .text
+
+%ifdef KERN_MEGA
+section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
+; -----------------------------------------------------------------------------
+; spk_gate0f / spk_gate0kf - FAR, protected mode: IRQ0's IDT gate (20h) to
+; AX:SI (the speaker door's open, osapi_fsx_spk) / back to the kernel's own
+; sch_isr (spk_off). Every register kept (kern_mega size pass 1: the two
+; writes were inline in .text)
+; -----------------------------------------------------------------------------
+spk_gate0kf:
+    push ax
+    push si
+    mov ax, KERNEL_SEG
+    mov si, sch_isr
+    call spk_gate0
+    pop si
+    pop ax
+    retf
+spk_gate0f:
+    call spk_gate0
+    retf
+spk_gate0:
+    push es
+    push ax
+    mov ax, MEGA_SEL_IDT
+    mov es, ax
+    pop ax
+    mov [es:MEGA_PIC_BASE*8], si
+    mov [es:MEGA_PIC_BASE*8+2], ax
+    pop es
+    ret
+; -----------------------------------------------------------------------------
+; snd_ringhif - FAR, protected mode: is the external ring DI ABOVE 1MB? CF = 1
+; and AX = 2 (refused) when its descriptor's base is, else CF = 0 and every
+; register kept. ASKED OF THE BASE, not of DI's TI bit: since KERN-MEGA-
+; MEMORY-PLAN MC7.4 EVERY claim is an LDT selector, so the bit test refused
+; the conventional DMA ring MIDIRack hands over. No descriptor leaves DX = 0
+; and the driver judges the ring (osapi_snd_stream, SND_OPENF_EXT = 2)
+; -----------------------------------------------------------------------------
+snd_ringhif:
+    push dx
+    push ax
+    mov ax, di
+    xor dx, dx
+    call MEGA_SEL_CODE:mega_selbasef ; DX:AX = the base
+    cmp dx, 0x10                ; CF = 1 below 1MB...
+    cmc                         ; ...and CF = 1 at or above it
+    pop ax
+    pop dx
+    jnc .r
+    mov ax, 2
+.r:
+    retf
+section .text
+%endif
 
 ; =============================================================================
 ; state (SPEC.md 34.7) - all stored by snd_init, unreadable until snd_live

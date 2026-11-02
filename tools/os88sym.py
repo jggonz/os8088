@@ -264,8 +264,12 @@ def _modcut(blob):
 # here for KERN_SMALL's exact reason - it is kern_big plus the absolute
 # pointer, measured against kern_big's budget, so adding KERN_KNOB for it
 # would assemble a map of a kernel `make emu` never built and the
-# byte-identity check below would refuse it.
-_SHIPPED_DEFS = ("KERN_BIG", "KERN_SMALL", "KERN_EMU", "KERNSIZE", "KERN_KNOB")
+# byte-identity check below would refuse it. KERN_MEGA joined them at kern_mega
+# size pass 1, when it stopped being a knob build and took a budget of its own
+# (docs/plans/completed/msp1/megabudget.md); its knob arms - MEGA_TRAPLOG,
+# MEGA_DIAG, MEGA_FDMASK, PIC_LOSE - are not here and still pull KERN_KNOB in.
+_SHIPPED_DEFS = ("KERN_BIG", "KERN_SMALL", "KERN_EMU", "KERN_MEGA", "KERNSIZE",
+                 "KERN_KNOB")
 
 
 # The About box's first line (SPEC.md 14.2), and the only place the build

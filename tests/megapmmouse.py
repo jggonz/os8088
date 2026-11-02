@@ -106,19 +106,19 @@ def leg(name, keep):
     fails = []
     lines = []
     try:
-        if not box.wait_for("kern_mega: protected mode", 300):
+        if not box.wait_pm(300):
             raise RuntimeError("kern_mega never reached protected mode")
         box.up()
         box.megarun()
         end = time.time() + 120
         while time.time() < end:
-            lines = box.lines()
+            lines = box.said()
             if any(l.startswith(("PMT: now", "kern_mega FAULT"))
                    for l in lines):
                 break
             time.sleep(0.2)
-        time.sleep(1)
-        lines = box.lines()
+        box.guest_sleep(1)              # the lines after the verdict
+        lines = box.said()
     except RuntimeError as e:
         fails.append(str(e))
     finally:

@@ -259,6 +259,17 @@ def main():
             m.key("Space")
             started = wait(m, on, 1)
             os88marty.guest_sleep(m, 1.0)
+            # ...AND THE PASS THAT BLANKS HAS TO HAVE FINISHED. blk_set writes
+            # [blk_on] FIRST and gates the cards only after ss_open has tried
+            # the saver - which on "no SAVER.DRV" is a disk search for a file
+            # that is not there, as long as the drive makes it. Under Bochs,
+            # with the floppy motor in whatever state the steps before left
+            # it, that outlasted the second above two runs in three, and the
+            # glass was read lit before the blank existed (dark half a guest
+            # second later, measured). The UI task is busy until it returns.
+            os88marty.ui_done(m, "the blanker's pass")
+            if PLANAR:
+                os88marty.guest_sleep(m, 0.05)      # fbuf: the glass lags
             total = memlit(m)
             ok = (started and m.read(sv, 1)[0] == 0
                   and abs(total - deskmem) < 200)
