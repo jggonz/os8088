@@ -208,6 +208,21 @@
 %endif
 %endmacro
 
+; W16SEG0 reg, sreg - sreg = segment 0, the IVT's and the BDA's: reg zeroed
+; into it in real mode; in the arm the window over it (w16_seg0, w16_load's),
+; reg untouched. Selector 0 is the NULL one, so an access through it is a #GP
+; that kern_mega completes by stepping the instruction, and w16_i21_on and
+; _off made twelve of them at every way in and out (SPEC.md 124.31.10). The
+; same four bytes either way; DS = ours
+%macro W16SEG0 2
+%ifdef PKG_MEGA
+    mov %2, [w16_seg0]
+%else
+    xor %1, %1
+    mov %2, %1
+%endif
+%endmacro
+
 ; W16IMG fn - the arm's image routine fn, from any section: a near call in
 ; the image, ICALL in a part (whose DS is ours)
 %macro W16IMG 1
@@ -252,6 +267,7 @@ W16V_NC   equ 8                 ; cache rows, a power of two: a virtual
                                 ;   paragraph and its selector each
 
     W16BSS w16_vmap, W16V_N * W16V_SZ
+    W16BSS w16_seg0, 2          ; W16SEG0's window over segment 0 (124.31.10)
     W16BSS w16_vc, W16V_NC * 4
 
 ; W16PM_SEL sfx, dsload - a section's core: AX = a virtual paragraph -> AX =

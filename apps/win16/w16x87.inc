@@ -202,8 +202,7 @@ w16x_on:
     push si
     push di
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov si, 0x34 * 4                ; the machine's, kept
     xor di, di
 .save:
@@ -254,8 +253,7 @@ w16x_off:
     push si
     push di
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov si, 0x34 * 4
     xor di, di
 .back:

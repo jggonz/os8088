@@ -713,6 +713,9 @@ w16pf_open:
     call w16pf_in                   ; SYSTEM\APPDATA\WIN16
     jnc .read
     or byte [bx + WPF_FL], WPFF_MEM ; no folder: memory only
+%ifdef PKG_MEGA
+    call w16pf_seed
+%endif
     jmp short .have
 .read:
     call w16pf_rd
@@ -732,7 +735,13 @@ w16pf_open:
     jnc .rdone
 .rfail:
     cmp ax, FERR_NOENT              ; none yet: a new, empty file
+%ifdef PKG_MEGA
+    jne .keep
+    call w16pf_seed                 ; (SYSTEM.INI's [mci])
+    jmp short .back
+%else
     je .back
+%endif
 .keep:
     or byte [bx + WPF_FL], WPFF_KEEP    ; unreadable or too large: as empty,
     jmp short .back                 ;   and never written over
@@ -759,6 +768,50 @@ w16pf_open:
     mov byte [bx + WPF_NAME], 0
     stc
     ret
+
+%ifdef PKG_MEGA
+; w16pf_seed - BX = a row whose file is not there yet. SYSTEM.INI starts
+; with the [mci] section Windows 3.1's Setup writes, naming the two MCI
+; devices the arm has (SPEC.md 124.32.4): Media Player lists its Device menu
+; from it, and with none says no MCI driver is installed. The file is not
+; changed by this, so it is written only if the program writes it. Keeps BX
+w16pf_seed:
+    push si
+    push di
+    push cx
+    mov si, w16pf_nm
+    mov di, w16pf_s_sys             ; XSEC-OK: the part's string, read via cs:
+    mov cx, 11
+.c:
+    mov al, [si]
+    cmp al, [cs:di]
+    jne .out
+    inc si
+    inc di
+    loop .c
+    push es
+    W16SEG es, [bx + WPF_SEG]
+    mov si, w16pf_s_mci             ; XSEC-OK: the part's text, read via cs:
+    xor di, di
+    mov cx, W16PF_MCIL
+    cld
+.cp:
+    mov al, [cs:si]
+    stosb
+    inc si
+    loop .cp
+    pop es
+    mov word [bx + WPF_LEN], W16PF_MCIL
+.out:
+    pop cx
+    pop di
+    pop si
+    ret
+w16pf_s_sys:    db 'SYSTEM.INI', 0
+w16pf_s_mci:    db '[mci]', 13, 10, 'WaveAudio=mciwave.drv 4', 13, 10
+                db 'CDAudio=mcicda.drv', 13, 10
+W16PF_MCIL      equ $ - w16pf_s_mci
+%endif
 
 ; w16pf_claim - BX = a row, AX = KB: its claim. CF=1 refused (the row free)
 w16pf_claim:

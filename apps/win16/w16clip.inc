@@ -350,7 +350,8 @@ w16_up2:
 
 ; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszFormatName,
 ; +6 wFormat: a registered format's name, cut to the buffer; the answer is
-; its length, 0 for any other format
+; its length, 0 for any other format. GetAtomName (KERNEL.72) is the same
+; call, AddAtom's atoms being these (SPEC.md 124.33.1)
 W16LIB w16u_cbfmtname
     push si
     push di

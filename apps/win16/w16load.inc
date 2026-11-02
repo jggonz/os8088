@@ -93,6 +93,16 @@ w16_load:
     push si
     push di
     push es
+%ifdef PKG_MEGA
+    xor ax, ax                      ; W16SEG0's window: segment 0 as a data
+    xor cx, cx                      ;   selector, 64 KB (SEG_WIN, the same
+    cwd                             ;   window at every load; SPEC.md
+    mov bl, SEG_WIN                 ;   124.31.10). Refused, it stays 0 and
+    call OSAPI_SEG                  ;   every access traps, as before
+    jc .noseg0
+    mov [w16_seg0], dx
+.noseg0:
+%endif
     mov dx, [w16_dir]
     mov bl, [w16_vol]
     call OSAPI_FILE_GOTO_QM

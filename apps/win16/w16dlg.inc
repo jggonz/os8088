@@ -5411,11 +5411,18 @@ w16d_dfoff:
     ret
 
 ; w16d_dux / w16d_duy - AX = dialog units across / down -> AX = pixels
-; (SPEC.md 124.13: 8 / 4 across, the face's rows / 8 down). Keep the rest.
+; (SPEC.md 124.13: 8 / 4 across, the face's rows / 8 down). 8000h is
+; CW_USEDEFAULT, and stays it: a dialog that is a program's main window
+; (Sound Recorder's, Media Player's) is placed by Windows, as Wine's
+; DIALOG_CreateIndirect16 leaves it - and scaled it was an idiv that
+; overflowed (SPEC.md 124.33.1). Keep the rest.
 w16d_dux:
+    cmp ax, CW_USEDEFAULT
+    je .ret
     cmp byte [w16d_dfon], 0
     jne .dface
     sal ax, 1
+.ret:
     ret
 .dface:
     push cx                         ; the dialog face's unit: 7 a quarter
@@ -5428,6 +5435,8 @@ w16d_dux:
     pop cx
     ret
 w16d_duy:
+    cmp ax, CW_USEDEFAULT
+    je w16d_dux.ret
     push cx
     push dx
     push ax
@@ -5762,6 +5771,12 @@ w16d_mkdlg:
     xor cx, cx
     xor dx, dx
 .org:
+    cmp word [w16_cwx], CW_USEDEFAULT   ; Windows' to place (w16d_dux):
+    jne .add                        ;   where 0, 0 would be
+    mov [w16_cwx], cx
+    mov [w16_cwy], dx
+    jmp short .mk
+.add:
     add [w16_cwx], cx
     add [w16_cwy], dx
 .mk:

@@ -555,8 +555,7 @@ w16_args:
 w16_i21_on:
     push ax
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov ax, [es:0x21 * 4]
     mov [w16_old21], ax
     mov ax, [es:0x21 * 4 + 2]
@@ -578,8 +577,7 @@ w16_i21_on:
 w16_i21_off:
     push ax
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov ax, [w16_old21]
     mov [es:0x21 * 4], ax
     mov ax, [w16_old21 + 2]

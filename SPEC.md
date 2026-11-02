@@ -231137,6 +231137,39 @@ question.
   Mozart's and Sir Hangman's programs.
 - The rows are named per batch and run once, in S25's final pass.
 
+#### 124.31.10 Segment 0
+
+**The first trap census, 2026-11-01.** Write 3.0 under Bochs with
+`MEGATRAP=1`: 114,952 `#GP` lines from 45 distinct sites. 112,656 of them
+were twelve sites in WIN16's own image, 9,388 apiece: `w16_i21_on` and
+`w16_i21_off`, which swap the IVT's int 21h and int 31h at every way into
+and out of the program's code. Their next two were `GetTickCount`'s two
+reads of the BIOS tick, 913 each. All 14 loaded segment 0 into ES. In
+protected mode 0 is the NULL selector, so each access was a `#GP` that
+kern_mega completed by stepping the instruction with ES = its own LOW0
+(`mega_null0`). That is correct, but each access costs a fault, a step and
+a second trap.
+
+So the arm reads segment 0 through **a window over it**. `w16_load` asks
+`SEG_WIN` for paragraph 0 with a 64 KB reach. That is the window the
+segment equates' `__0000H` is bound to, and it is the same window at every
+load. It keeps the window in `w16_seg0`, and `W16SEG0` loads it where real
+mode zeroes a register into the segment: `w16_i21_on` and `_off`,
+`w16_ticksms`, int 21h `2Ch`'s tick, and the x87 emulator's vector swap.
+The same four bytes either way. Real mode is unchanged. If `SEG_WIN`
+refuses, the word stays 0, and every access traps and is completed, as
+before. The window is not one the program made, so `FreeSelector` and
+`SetSelectorBase` leave it alone (124.31.6). Writing an IVT entry through
+it changes the same bytes as before. kern_mega reads a software
+interrupt's vector when the interrupt is taken, so nothing else changes
+for int 21h, int 31h and int 34h-3Dh.
+
+The census's other sites are smaller, and are left to S25's pass: a
+store into a code segment 183 times (`11F4:0FBE`), and segment 0 once
+more at `139C:03EA`, 88 times. Neither is WIN16's image. Two rare sites in
+the image still load 0: TranslateMessage's read of the shift state (one
+per keystroke) and `OpenFile`'s seed for a temporary name.
+
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 
 Windows 3.1's multimedia library: the calls a program uses to time things,
@@ -231626,3 +231659,78 @@ One output device, device 0 (`MIDI_MAPPER` is the same one), over
 - QEMU has no MPU-401. There, `midiOutGetNumDevs` answers 0 and an open
   `MMSYSERR_BADDEVICEID`. The device path is 86Box's `386-midirack` and
   hardware's to hear.
+
+### 124.33 The installer's environment *(S24, docs/plans/WIN16-ANY-PLAN.md)*
+
+S24's story is a Windows program's `SETUP.EXE` run to its end. This section
+pins its parts as they land. The calls below are both arms'. The Program
+Manager DDE server is to come.
+
+#### 124.33.1 What Windows 3.1's programs call besides *(S24 batch 1)*
+
+Write 3.1, Sound Recorder and Media Player import calls that Windows 3.0's
+programs did not, and so do a setup program's bootstrap and its toolkit.
+All of them are part 9's (`apps/win16/w16w31.inc`, prefix `w16n_`),
+except where an existing handler is named. Their rows stand above the
+segment equates (124.27.1).
+
+Several are another call with a head of arguments of its own. The
+arguments of `ScrollDC` from +6 on are `ScrollWindow`'s, once hDC is the
+window's. Those of `GetTextExtentPoint` from +4 on are `GetTextExtent`'s,
+those of `MoveToEx` from +4 on are `MoveTo`'s, those of
+`GetWindowPlacement` from +4 on are `IsIconic`'s. `RedrawWindow`'s are
+`InvalidateRect`'s from +2 on and `ValidateRect`'s from +4 on.
+`w16n_tail` runs the image's handler on them where they stand: it moves
+`[w16_psp_]`, the program's stack at the call, by that much while the
+handler runs, and puts it back. So it serves only handlers that answer
+without calling the program. `RedrawWindow`'s WM_PAINT is sent by its
+own code.
+
+| call | the answer |
+|---|---|
+| `LocalHandleDelta` (KERNEL.310) | the delta asked for, or 32. Handles are not grown in blocks here. Write 3.1 asks for it by name, so it is a `GetProcAddress` name too (124.22.12) |
+| `GetAtomName` (KERNEL.72) | `GetClipboardFormatName`'s handler: `AddAtom`'s atoms are that table's (124.25.10). An integer atom answers 0, not `#nnnnn` |
+| `SetErrorMode` (KERNEL.107) | 0. There is no critical-error box to suppress |
+| `_hread` (KERNEL.349) | `_lread`'s DOS read, one segment's piece at a time, 32 KB at most a read. The buffer is a huge pointer, moved on by `__AHINCR` (1000h, or 8 on the arm) as it passes 64 KB. DX:AX = what was read, short at the file's end, -1 on an error |
+| `hmemcpy` (KERNEL.348) | a forward copy between huge pointers, a segment's piece at a time |
+| `lstrcpyn` (KERNEL.353) | at most n-1 characters and a NUL. The destination answered |
+| `ScrollDC` (USER.221) | the DC's window's `ScrollWindow` over lprcScroll cut by lprcClip. What it uncovers is made invalid there, so `lprcUpdate` answers empty and `hrgnUpdate` is left as it was. FALSE for a DC that is no window's. A DC whose origins are not 0 scrolls in client coordinates |
+| `GetWindowPlacement` (USER.370) | `length` 22, `flags` 0, `showCmd` from `IsIconic` and `IsZoomed` (an MDI child's, 124.27.5; a top-level window is normal), both points -1, -1, and `rcNormalPosition` = `GetWindowRect` |
+| `SetMessageQueue` (USER.266) | TRUE. The queue's size is fixed |
+| `GetClassInfo` (USER.404) | a class the program registered, found by name or by the atom `RegisterClass` answered, as its `WNDCLASS`. `cbClsExtra` and `hCursor` are 0, `hInstance` is DGROUP's, `lpszClassName` is as asked. FALSE for any other class: WIN16's own controls have no window procedure a program could call |
+| `SubtractRect` (USER.373) | Src1 less the part Src2 covers, when what is left is one rectangle; Src1 when it is not. FALSE when the answer is empty |
+| `RedrawWindow` (USER.290) | `RDW_INVALIDATE` is `InvalidateRect` with bErase = `RDW_ERASE`. `RDW_VALIDATE` is `ValidateRect`. `RDW_UPDATENOW` or `RDW_ERASENOW` sends `UpdateWindow`'s WM_PAINT. A region alone is the whole window, and the window's children go with it (124.8) |
+| `AnsiLowerBuff` (USER.438) | `AnsiUpperBuff`'s loop, lower-casing: A-Z and C0h-DEh except D7h |
+| `GetTextExtentPoint` (GDI.471) | `GetTextExtent`, into a SIZE. TRUE |
+| `MoveToEx` (GDI.483) | `MoveTo`, the old point into lpPoint when there is one. TRUE |
+| `GetViewportExt`, `GetViewportOrg`, `GetWindowExt` (GDI.94-96) | what `SetViewportExt`, `SetViewportOrg` and `SetWindowExt` keep (124.22.13) |
+| `DeleteMetaFile` (GDI.127) | TRUE |
+| `GetMetaFile` (GDI.124), `GetSystemPaletteEntries` (GDI.375), `GetAspectRatioFilter` (GDI.353) | 0. There are no metafiles here (124.25.10), no palette device, and no aspect filter is set |
+
+`GetTextExtentPoint` is a text call in the face of the DC's font and
+carries `W16B_DCF` (124.24.4). It, `MoveToEx` and the three getters carry
+`W16B_MDC`, so on a memory DC they answer that DC's state (124.25.3).
+
+**What the programs found once they loaded.** Sound Recorder and Media
+Player each have a dialog for a main window, and its template places it
+at `CW_USEDEFAULT`. That is 8000h in dialog units, and scaling it was an
+`idiv` that overflowed: a divide fault, and kern_mega restarts the
+machine. A dialog unit of 8000h now stays `CW_USEDEFAULT`, as Wine's
+`DIALOG_CreateIndirect16` leaves it. A top-level dialog placed there goes
+where one at 0, 0 would go, at its owner's client's corner (124.13). On the arm, `CreateBitmap` with bits then loaded the bitmap's
+virtual paragraph into ES as it stood. It takes the selector now
+(`W16TOSEL`, 124.31.3).
+
+Media Player lists its Device menu from the keys of `SYSTEM.INI`'s `[mci]`
+section. With none, it says no MCI driver is installed. When the arm
+opens a `SYSTEM.INI` that is not in `SYSTEM\APPDATA\WIN16` (124.14), it
+starts with the section Windows 3.1's Setup writes, for the two devices it
+has (124.32.4): `WaveAudio=mciwave.drv 4` and `CDAudio=mcicda.drv`. That
+does not change the file, so it is written only if the program writes it.
+Real mode has no MCI and starts it empty.
+
+**Seen 2026-11-01** under QEMU on kern_mega with an SB16 and a CD:
+Write 3.1 opens; Sound Recorder shows its window; Media Player's Device menu
+lists Waveform Audio and CD Audio, and CD Audio opens with its track scale.
+**Open:** the two programs' bitmap buttons (Sound Recorder's `sbutton`
+class, Media Player's) draw as blank grey faces.

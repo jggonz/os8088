@@ -2214,6 +2214,7 @@ w16_cputest:
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
 %include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 9 (124.27)
 %include "win16/w16task.inc"    ; several programs in one instance: part 9 (124.28)
+%include "win16/w16w31.inc"     ; Windows 3.1's programs' calls: part 9 (124.33)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's

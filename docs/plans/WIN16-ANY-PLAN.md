@@ -1653,6 +1653,21 @@ its table goes in the diary, so the reach is measured, not claimed.
       set chosen from the display.
   - **Verification:** a `win16setup` row runs an installer fixture to its
     end and reads the installed files and the links off the image.
+  - [x] **Batch 1: the calls around it** (SPEC.md 124.33.1, 2026-11-01).
+    Twenty-two export rows, both arms: Write 3.1's `LocalHandleDelta`
+    (by name as well), `GetAtomName`, `SetErrorMode` and `ScrollDC`;
+    Sound Recorder's and Media Player's `GetWindowPlacement`,
+    `SetMessageQueue` and `DeleteMetaFile`; and the setup bootstrap's
+    `_hread`, `hmemcpy`, `lstrcpyn`, `GetClassInfo`, `SubtractRect`,
+    `RedrawWindow`, `AnsiLowerBuff`, `GetSystemPaletteEntries`,
+    `GetTextExtentPoint`, `MoveToEx`, `GetMetaFile`, the three
+    extent and origin getters and `GetAspectRatioFilter`. Part 9's
+    (`w16w31.inc`); no image byte on either arm. With it, the arm reads
+    segment 0 through a window (SPEC.md 124.31.10). That is aimed at the
+    fourteen image sites that made 114,482 of the 114,952 traps in Write
+    3.0's Bochs census; S25's pass counts again.
+  - [ ] Batch 2: the Program Manager DDE server, over S21 batch 5's
+    routing.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running

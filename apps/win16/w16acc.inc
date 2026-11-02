@@ -660,6 +660,7 @@ W16LIB w16g_crebmp
     mov ax, [ds:w16b_h + bp]
     mov [w16_scratch + 6], ax       ; rows to go
     mov dx, [ds:w16b_seg + bp]
+    W16TOSEL dx                     ; the arm: its selector (SPEC.md 124.31.3)
     xor di, di
 .row:
     xor bx, bx                      ; BX = the column

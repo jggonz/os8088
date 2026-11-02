@@ -84,6 +84,7 @@ W16X_SIZE equ 7
 %assign W16NPN W16NPN + 1
 %endmacro
 W16PROCNAME W16M_KEYBOARD, 131, 'MapVirtualKey'      ; PIF Editor's hot keys
+W16PROCNAME W16M_KERNEL, 310, 'LocalHandleDelta'    ; Write's, on 3.10
 
 ;           module         ordinal  args  handler               the .spec line
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
@@ -650,6 +651,36 @@ W16EXPORT W16M_USER,       224,     2,  w16t_wndtask        ; GetWindowTask(word
 W16EXPORT W16M_USER,       116,     10, w16t_postapp        ; PostAppMessage(word word word long)
 W16EXPORT W16M_KERNEL,     166,     6,  w16t_winexec        ; WinExec(str word)
 W16EXPORT W16M_KERNEL,     45,      8,  w16t_loadmod        ; LoadModule(str ptr)
+; Windows 3.1's Write, Sound Recorder and Media Player, and a setup
+; program's bootstrap (SPEC.md 124.33.1): part 9's, w16w31.inc's
+W16EXPORT W16M_KERNEL,     310,     2,  w16n_lhdelta        ; LocalHandleDelta(word)
+W16EXPORT W16M_KERNEL,     72,      8,  w16u_cbfmtname      ; GetAtomName(word ptr word)
+W16EXPORT W16M_KERNEL,     107,     2,  w16_ans0            ; SetErrorMode(word)
+W16EXPORT W16M_USER,       221,     20, w16n_scrolldc       ; ScrollDC(word s_word s_word ptr ptr word ptr)
+W16EXPORT W16M_USER,       370,     6,  w16n_getwpl         ; GetWindowPlacement(word ptr)
+W16EXPORT W16M_USER,       266,     2,  w16_ans1            ; SetMessageQueue(word)
+W16EXPORT W16M_GDI,        127,     2,  w16_ans1            ; DeleteMetaFile(word)
+W16EXPORT W16M_KERNEL,     349,     10, w16n_hread          ; _hread(word segptr long)
+W16EXPORT W16M_KERNEL,     348,     12, w16n_hmemcpy        ; hmemcpy(ptr ptr long)
+W16EXPORT W16M_KERNEL,     353,     10, w16n_strcpyn        ; lstrcpyn(segptr str word)
+W16EXPORT W16M_USER,       404,     10, w16n_clsinfo        ; GetClassInfo(word segstr ptr)
+W16EXPORT W16M_USER,       373,     12, w16n_subrect        ; SubtractRect(ptr ptr ptr)
+W16EXPORT W16M_USER,       290,     10, w16n_redraw         ; RedrawWindow(word ptr word word)
+W16EXPORT W16M_USER,       438,     6,  w16i_lowbuff        ; AnsiLowerBuff(str word)
+W16EXPORT W16M_GDI,        375,     10, w16_ans0            ; GetSystemPaletteEntries(word word word ptr)
+W16EXPORT W16M_GDI,        471,     12, w16n_textpt         ; GetTextExtentPoint(word ptr s_word ptr)
+W16EXPORT W16M_GDI,        483,     10, w16n_movetoex       ; MoveToEx(word s_word s_word ptr)
+W16EXPORT W16M_GDI,        124,     4,  w16_ans0            ; GetMetaFile(str)
+W16EXPORT W16M_GDI,        94,      2,  w16n_getvext        ; GetViewportExt(word)
+W16EXPORT W16M_GDI,        95,      2,  w16n_getvorg        ; GetViewportOrg(word)
+W16EXPORT W16M_GDI,        96,      2,  w16n_getwext        ; GetWindowExt(word)
+W16EXPORT W16M_GDI,        353,     2,  w16_ans0            ; GetAspectRatioFilter(word)
+%define w16dcf_w16n_textpt
+%define w16mdc_w16n_textpt
+%define w16mdc_w16n_movetoex
+%define w16mdc_w16n_getvext
+%define w16mdc_w16n_getvorg
+%define w16mdc_w16n_getwext
 ; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
 ; the loader to their values, as __AHINCR is (w16l_segv, in that order)
 %assign W16_SEGROWP W16NX       ; ONE number for both (a row put between two

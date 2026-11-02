@@ -275,23 +275,55 @@ w16i_bool:                          ; CF=0 TRUE, CF=1 FALSE
     xor dx, dx
     ret
 
-; AnsiUpperBuff (USER.437) - args: +0 cbLength (0 is 65,536), +2 lpsz.
-; Every byte upper-cased, NULs included. AX = the length
+; AnsiUpperBuff (USER.437), AnsiLowerBuff (USER.438) - args: +0 cbLength
+; (0 is 65,536), +2 lpsz. Every byte upper- or lower-cased, NULs included.
+; AX = the length
 W16SYS w16i_upbuff
+    mov ah, 0
+    jmp short w16i_cvbuff
+W16SYS w16i_lowbuff
+    mov ah, 1
+w16i_cvbuff:
     push si
+    push ax
     ICALL w16_args
+    pop dx                          ; DH = which
     mov cx, [es:bx]
     les si, [es:bx + 2]
-    mov dx, cx
+    push cx
 .c:
     mov al, [es:si]
+    or dh, dh
+    jnz .low
     call w16i_up
+    jmp short .put
+.low:
+    call w16i_low
+.put:
     mov [es:si], al
     inc si
     loop .c
-    mov ax, dx
+    pop ax
     xor dx, dx
     pop si
+    ret
+
+; w16i_low - AL lower-cased, as AnsiLower does: A-Z, and C0h-DEh but D7h.
+; Keeps the rest
+w16i_low:
+    cmp al, 'A'
+    jb .out
+    cmp al, 'Z'
+    jbe .cv
+    cmp al, 0xC0
+    jb .out
+    cmp al, 0xD7
+    je .out
+    cmp al, 0xDF
+    jae .out
+.cv:
+    add al, 0x20
+.out:
     ret
 
 ; GetIconID (USER.455) - args: +0 dwResType, +4 hResource: of an

@@ -3311,8 +3311,7 @@ w16_ticksms:
     push bx
     push cx
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     pushf
     cli
     mov ax, [es:0x46C]

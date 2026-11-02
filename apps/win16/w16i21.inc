@@ -249,8 +249,7 @@ w16_i21clk:
     call OSAPI_CLK_GET              ;   store is #GP on a real 286 or 386)
                                     ; BX = hour:minute, AH = the second
     push es
-    xor si, si
-    mov es, si
+    W16SEG0 si, es
     mov si, [es:0x46C]              ; SI = the BIOS's tick, which IRQ 0 moves
     pop es
     cmp bx, [w16_ckhm]              ; the kernel's fields are the UI task's,
