@@ -563,7 +563,7 @@ w16_args:
 
 ; -----------------------------------------------------------------------------
 ; w16_i21_on / w16_i21_off - int 21h is the program's only while its code
-; runs (SPEC.md 124.2.1), and so are int 34h-3Dh and int 2 (124.5). IF = 0
+; runs (SPEC.md 124.2.1), and so are int 2Fh, 34h-3Dh and int 2 (124.5). IF = 0
 ; on entry to both; DS = ours.
 ; -----------------------------------------------------------------------------
 w16_i21_on:
@@ -576,6 +576,12 @@ w16_i21_on:
     mov [w16_old21 + 2], ax
     mov word [es:0x21 * 4], w16_i21
     mov [es:0x21 * 4 + 2], cs
+    mov ax, [es:0x2F * 4]           ; ...the multiplex (SPEC.md 124.2.1)
+    mov [w16_old2f], ax
+    mov ax, [es:0x2F * 4 + 2]
+    mov [w16_old2f + 2], ax
+    mov word [es:0x2F * 4], w16_i2f
+    mov [es:0x2F * 4 + 2], cs
 %ifdef PKG_MEGA
     mov ax, [es:0x31 * 4]           ; ...and DPMI's (SPEC.md 124.31.6)
     mov [w16_old31], ax
@@ -596,6 +602,10 @@ w16_i21_off:
     mov [es:0x21 * 4], ax
     mov ax, [w16_old21 + 2]
     mov [es:0x21 * 4 + 2], ax
+    mov ax, [w16_old2f]
+    mov [es:0x2F * 4], ax
+    mov ax, [w16_old2f + 2]
+    mov [es:0x2F * 4 + 2], ax
 %ifdef PKG_MEGA
     mov ax, [w16_old31]
     mov [es:0x31 * 4], ax

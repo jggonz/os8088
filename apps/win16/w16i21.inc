@@ -18,6 +18,23 @@
 
 W16_IRET_FL equ 6               ; FLAGS in the iret frame, above the pushed BP
 
+; -----------------------------------------------------------------------------
+; w16_i2f - THE MULTIPLEX INTERRUPT while the program runs (SPEC.md 124.2.1).
+; Nothing here is a TSR, so every function answers as DOS's int 2Fh does when
+; nobody claims it: every register as it came, so an installation check
+; (AL = 0) reads "not installed" - APPEND (B700h), MSCDEX (1500h), XMS
+; (4300h), Windows' own (1600h). On the arm, 1686h answers AX = 0: the
+; program runs in protected mode with int 31h's DPMI (124.31.6).
+; -----------------------------------------------------------------------------
+w16_i2f:
+%ifdef PKG_MEGA
+    cmp ax, 0x1686
+    jne .no
+    xor ax, ax
+.no:
+%endif
+    iret
+
 w16_i21:
     ; STKBALANCE-OK: an interrupt handler on the PROGRAM's stack; every arm
     ; but AH=4Ch leaves by iret, and that one by w16_i21_exit's switch home

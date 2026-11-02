@@ -360,6 +360,7 @@ section .w16dlg
     W16BSS w16_nargb, 2         ; bytes the finishing call pops (-2: InitTask)
     W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
+    W16BSS w16_old2f, 4         ; ...and int 2Fh, the multiplex (124.2.1)
     W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
     W16BSS w16_ldq, 1           ; 1 = the load's wake was deferred (124.31.8)
 %ifdef PKG_MEGA

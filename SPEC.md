@@ -226138,6 +226138,16 @@ instead of up.
 installs it and the gate's return to `LOW_SEG` restores it, both inside
 `cli`, so nothing else on the machine ever meets it.
 
+**So is `int 2Fh`, the multiplex** (2026-11-02), and nothing answers it:
+WIN16 is not a TSR and there is no DOS under it, so `w16_i2f` returns every
+register as it came, which is what DOS's own int 2Fh answers for a function
+nobody claims - an installation check (AL = 0) reads "not installed". It is
+there because the vector it replaces is nobody's: on kern_mega a program's
+`int 2Fh` with no package behind IVT 2Fh is `mega_unh`, `FAULT FF`
+(§20.18.1), and an XT ROM may leave the vector 0000:0000. Arcade's and
+Mozart's SETUP ask for APPEND (`AX = B700h`) before their first dialog. On
+the arm `AX = 1686h` answers `AX = 0`, protected mode (124.31.6).
+
 #### 124.2.2 Calling the program back *(shipped in S3)*
 
 **A call into the program is a continuation on the program's stack, never a
@@ -231438,7 +231448,9 @@ LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
   version, 0.9), `0500h` (free memory), and `0600h`/`0601h` (lock and
   unlock: nothing pages). Anything else: CF = 1, AX = `8001h`
   (unsupported). `0300h` (simulate a real-mode interrupt) is S24's, for
-  MSCDEX. `apps/win16/w16i31.inc`, hooked with int 21h. The handler is
+  MSCDEX. `int 2Fh AX = 1686h` answers `AX = 0`, as standard mode's DOSX
+  does: protected mode, DPMI present (124.2.1). `apps/win16/w16i31.inc`,
+  hooked with int 21h. The handler is
   entered on the program's stack and **makes its kernel calls on the UI
   task's** (`w16_hss`:`w16_hsp`, as the DOS forward does): kern_mega's own
   code reads its tables through SS, and an `OSAPI_SEG` made on a program's
