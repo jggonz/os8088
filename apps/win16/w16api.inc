@@ -1704,12 +1704,14 @@ w16k_isdbcs:
 
 ; GetModuleFileName (KERNEL.49): "A:\DIR\NAME.EXE", the program's folder
 ; from the root (OSAPI_FILE_PATH), truncated to the buffer. A setup takes its
-; own files from that folder: _MSTEST's from a temporary one.
+; own files from that folder: _MSTEST's from a temporary one. The library
+; part's (SPEC.md 124.19): a program asks once or twice, at its start.
 ; args: +0 nSize, +2 lpBuffer (off, seg), +6 hModule
-w16k_getmodfn:
+section .w16dlg
+W16LIB w16k_getmodfn
     push si
     push di
-    call w16_args
+    ICALL w16_args
     mov cx, [es:bx]                 ; nSize
     les di, [es:bx + 2]
     mov [w16_scratch + 2], di       ; where the name starts, for the length
@@ -1745,10 +1747,10 @@ w16k_getmodfn:
 .sep:
     push bx
     push es
-    call w16_args
+    ICALL w16_args
     mov ax, [es:bx + 6]             ; hModule: a library's (SPEC.md 124.23.5)
     pop es
-    call w16_libof                  ; SI -> its record
+    ICALL w16_libof                 ; SI -> its record
     lea si, [si + W16L_FILE]
     jnc .lib
     mov si, w16_name
@@ -1775,6 +1777,7 @@ w16k_getmodfn:
     dec cx
 .full:
     ret
+section .text
 
 ; =============================================================================
 ; A program's own libraries, as the image reaches them (SPEC.md 124.23): both

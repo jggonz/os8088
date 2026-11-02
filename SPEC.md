@@ -229139,7 +229139,7 @@ line 2 the library's file.
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
-| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's name in that form. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS |
+| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's name in that form. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS. It is the library part's (§124.19): a program asks once or twice, at its start, and the 133 bytes it took from the image paid for `RegisterClass`'s local-over-global rule (§124.28.3) |
 | `GetModuleUsage` (KERNEL.48) | a library's count; 1 for anything else, as before |
 
 #### 124.23.6 Not done, pinned
@@ -230791,6 +230791,15 @@ instance ends.
 task's class of that name, a `CS_GLOBALCLASS` class, or a class no task
 registered. So a second copy of a program registers its classes again, as
 its zero `hPrevInstance` tells it to, rather than being refused.
+
+A task's own class comes before a global one of the same name, as Windows
+looks: `w16_findcls` reads the table from its LAST record, and
+`RegisterClass` takes a local class whose name a `CS_GLOBALCLASS` one
+already has (Wine's `CLASS_RegisterClass`: "only if it is local and the
+class with the same name is global"). A free record is the first one, so
+the local class lies after the global one. Mozart's setup needs it: MMUTIL.DLL
+registers `SText` global, then MSINSSTF.DLL registers `stext` for its own
+progress dialog, and `FInitializeInstall` fails when that is refused.
 
 `GetMessage`, `PeekMessage`, the paint scan and the timers look only at the
 current task's windows, queue and timers.

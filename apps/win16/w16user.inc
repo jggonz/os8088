@@ -352,15 +352,15 @@ w16_findcls:
     push cx
     push si
     push di
-    mov bx, w16_cls
-    mov cx, W16_MAXCLS
-.cls:
-    cmp byte [bx + W16C_NAME], 0
+    mov bx, w16_cls + (W16_MAXCLS - 1) * W16C_SIZE
+    mov cx, W16_MAXCLS              ; from the last: a task's own class,
+.cls:                               ;   registered over a global one of the
+    cmp byte [bx + W16C_NAME], 0    ;   name, lies after it (SPEC.md 124.28.3)
     je .next
     test byte [bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
     jnz .any                        ; a task's class is its own, unless it
-    mov si, W16_MAXCLS              ;   is global (SPEC.md 124.28.3)
-    sub si, cx
+    mov si, cx                      ;   is global (SPEC.md 124.28.3)
+    dec si
     mov al, [w16_ctask + si]
     or al, al
     jz .any
@@ -384,7 +384,7 @@ w16_findcls:
 .ne:
     pop cx
 .next:
-    add bx, W16C_SIZE
+    sub bx, W16C_SIZE
     loop .cls
     stc
     jmp short .out
@@ -410,8 +410,13 @@ w16u_regclass:
     mov dx, [es:si + 24]
     call w16_farname
     jc .fail
-    call w16_findcls
-    jnc .fail                       ; Windows refuses a second registration
+    call w16_findcls                ; Windows refuses a second registration,
+    jc .new                         ;   but a local class over a global one
+    test byte [bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI ; of its name is
+    jz .fail                        ;   legal (MMUTIL's STEXT under
+    test byte [es:si + 1], CS_GLOBALCLASS_HI ; MSINSSTF's: SPEC.md 124.28.3)
+    jnz .fail
+.new:
     mov di, w16_cls
     mov cx, W16_MAXCLS
 .free:
