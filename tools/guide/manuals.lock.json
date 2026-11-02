@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "ba81d7a8e",
+  "stamped": "8f9df63f9",
   "strings": "172e5a682e5edddb",
-  "why": "library resources, peekwake lock state"
+  "why": "int 2Fh answered while the program runs"
  },
  "WIN16_TXT": {
   "sources": [
