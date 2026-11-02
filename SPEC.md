@@ -227441,7 +227441,7 @@ it, never on the 360KB system disk. Not the apps disks, `kern_small`'s or `kern_
 | `t_sysman` | fast | the manifest against every built system disk: each entry present with its size and sum; `SYSCHECK.O88` itself absent from it |
 | `fsckhd` | soak | §118.14.5 on MartyPC's XT-IDE: a FAT16 install with `KERNEL.SYS` moved high (the VBR told), its system files in pieces, defragmented from an `AUTOSTRT` link; the reader finds nothing wrong and nothing in pieces, `KERNEL.SYS` lower and the VBR naming its new run, and the disk boots again with every free cluster zeroed |
 | `fsckmega` | soak | §118.14.8 under Bochs: kern_mega repairs fsckdisk's seven faults and defragments a disk in pieces from `AUTOSTRT` links, with no kern_mega fault |
-| `fsckdisk` | soak | §118.14 on MartyPC: a copy of `util360.img` in B: with seven FAT faults planted, checked (each named, nothing written), repaired (an independent FAT reader then finds only the cross-link, and three `FILEnnnn.CHK`); a fragmented copy with a folder in pieces defragmented with the Task Manager open (files move, folders stay, `NOFOLD`) and then with it closed (the folder moves, every `.`/`..` right, a Disk window standing in it follows it); and a write mid-run ends the run (§118.14.6) |
+| `fsckdisk` | soak | §118.14 on MartyPC: a copy of `util360.img` in B: with seven FAT faults planted, checked (each named, nothing written), repaired (an independent FAT reader then finds only the cross-link, and three `FILEnnnn.CHK`); a fragmented copy with a folder in pieces defragmented with the Task Manager open (files move, folders stay, `NOFOLD`) and then with it closed (the folder moves, every `.`/`..` right, a Disk window standing in it follows it); a write mid-run ends the run (§118.14.6); a `LONG` chain whose tail a later file shares is left whole beside an unshared one that is cut, and a live file in a folder nested `FSK_MAXDEP` deep is neither saved nor freed and Defragment refuses (`PARTIAL`, §118.14.4) |
 | `syscheckmono` | soak | §118.1 on CGA and Hercules: `syscheck`'s planted hard disk as an XT-IDE VHD on MartyPC's 5150, scanned and reported from an `AUTOSTRT` link |
 | `syscheck` | soak | a hard-disk image built from the system disks with a planted package of another format, a retired package, `KPAD.TMP`, a duplicated program, a stale `ASSOC.DAT` row and an orphaned hibernation image, booted from C:; one Scan press checks the drive the chooser offers (C:), the report names each finding, and Clean Up removes exactly §118.8's |
 
@@ -227613,7 +227613,7 @@ the package reads; the rest is the engine's.
 | `FSW_MOVED` 32, `FSW_STUCK` 34 | dw | files the defragmenter moved, and files it left in pieces |
 | `FSW_FATDF` 36 | dw | FAT sectors whose two copies differ |
 | `FSW_CBYTES` 38 | dw | bytes per cluster |
-| `FSW_MOVEDF` 40, `FSW_OTHERS` 42 | dw | folders moved; other programs open at the defragmenter's start |
+| `FSW_MOVEDF` 40, `FSW_OTHERS` 42 | dw | folders moved; other programs open, asked at the defragmenter's start and again before each folder move (§118.14.5) |
 | `FSW_FROW` 48 | db | a finding's row (the table above, 0-8) |
 | `FSW_FSEV` 49 | db | its severity, §118.1's `SV_*` |
 | `FSW_FCODE` 50 | db | its `FSKF_*` (§118.14.3) |
@@ -227650,6 +227650,7 @@ kernel carries no English for it and the report says what the window says.
 | 20 `NOTDEF` | 7 | Note | - (the task did not ask) |
 | 21 `NOFOLD` | 7 | Note | other programs open, so no folder moved |
 | 22 `FOLDERS` | 7 | Note | folders moved |
+| 23 `PARTIAL` | 4, 7 | Note on row 4, Warning on row 7 | - (a folder was not gone into, so lost chains stay and the defragmenter does not run, §118.14.4) |
 
 A cross-linked file is named as the SECOND chain to claim the cluster: the
 walk keeps one bit per cluster, and naming the first owner would take a word
@@ -227667,15 +227668,41 @@ naming a cluster that is free.
 |---|---|
 | `DOT` | the entry is rewritten to name the right folder |
 | `OFFDISK`, `INFREE`, `INBAD` | the chain ends at its last good cluster (an end mark there), and the size is cut to what that chain holds; a file whose FIRST cluster is bad keeps its entry with no chain and size 0 |
-| `LONG` | the chain is cut to what the size needs and the rest freed - the size is believed over the chain |
+| `LONG` | the chain is cut to what the size needs and the rest freed - the size is believed over the chain - by a second walk, once the first has seen every chain (below); a chain another chain runs into is left as it is |
 | `SHORT` | the size is cut to what the chain holds - the chain is believed over the size |
-| `LOST` | each chain is ended properly and saved as `\FILEnnnn.CHK` in the root, numbered past any already there, sized to its clusters; with no free root entry the chain is freed instead; lost clusters that form a loop with no head are freed |
+| `LOST` | each chain is ended properly and saved as `\FILEnnnn.CHK` in the root, numbered past any already there, sized to its clusters; with no free root entry the chain is freed instead; lost clusters that form a loop with no head are freed - none of it after a walk that left a folder unread (below), when the Lost clusters row says `PARTIAL` |
 | `FATDIFF` | the first copy is written over the second, after every other repair (the kernel reads the first, §18.8) |
 
 Not repaired: a cross-link (which file owns the cluster is the user's call -
 copy both files off and delete them), `BADENT`, `DIRBAD` and `DEEP`. A
 folder is never truncated: a repair that would cut a folder's chain is
 reported and left.
+
+**A repair that frees a cluster waits until every owner has been seen.**
+The walk keeps one bit a cluster, so while it runs it cannot know whether an
+entry it has not reached yet names a cluster it has: a `LONG` tail freed as
+the walk passed would free the data of a later file that shares it, and that
+file would then look like a chain into free space. So *Check and repair*
+only marks a `LONG` chain on its first walk (`BM2`, by first cluster), and a
+**second walk**, taken when the first is over and only when it marked one,
+names and cuts each - into the folders the first went into and no others.
+A chain any other chain ran into is not cut: the first walk marks the
+cluster where a cross-link was found (`XMAP`, in the copy buffer, which the
+walk does not otherwise use), and a tail with such a cluster on its chain
+stays whole. The repairs that only end a chain or cut a size free nothing
+another file could own, and are made as the first walk goes.
+
+**A folder not gone into leaves the walk incomplete**: one past
+`FSK_MAXDEP` (`DEEP`), and one whose own chain is broken or cross-linked.
+Its entries may name any allocated cluster, so after such a walk nothing is
+freed on the grounds that nothing names it: no `LONG` chain is cut, lost
+chains are neither saved nor freed (`LOST` is reported unrepaired, with
+`PARTIAL` on the Lost clusters row saying why), and the defragmenter does
+not run (§118.14.5).
+
+A FAT entry that cannot be stored - the kernel's FAT window would not load -
+ends the run (`FSKE_IO`) before the next write, so no entry and no freed
+chain is ever published on a chain that was not wholly written.
 
 Writes that shorten a chain write the ENTRY first and the FAT second, so a
 stop between them leaves clusters lost rather than named; writes that save a
@@ -227685,6 +227712,9 @@ lost chain write the FAT first and the entry second, for the same reason.
 
 **It runs only after a check that found nothing Broken**; otherwise its row
 says `SKIPDEF` with the count, and the user runs *Check and repair* first.
+**Nor after a check that left a folder unread** (§118.14.4): a file it would
+move may share a cluster with an entry in that folder, so its row says
+`PARTIAL`.
 It moves files and FOLDERS. **The installed system's own files move
 too** - the drivers, the modules, `BOOTHD.SYS`, `COLDHMA.SYS`, every
 package - hidden and system ones included, because the system reads every
@@ -227720,7 +227750,12 @@ its own memory, where nothing can put it right. So folders move only when
 no package instance but the caller is open; otherwise the run moves files
 alone and its Defragment row says `NOFOLD` with the count (*folders not
 moved: close other programs (1)*). Disk windows are the kernel's and are patched, so
-they do not count. System Check's own banked folders - where it was, where
+they do not count. **It is asked again before each folder move and before
+that move's first FAT write**, because the desktop is live between steps
+and a program can open in between: once one has, no folder moves for the
+rest of the run, a folder copied but not yet linked is left as free space
+(the copy is never linked) and walked into where it is, and the row says
+`NOFOLD` with the count then. System Check's own banked folders - where it was, where
 it was launched from - become the root of the volume when folders moved on
 it.
 
@@ -227806,7 +227841,10 @@ being the image's. The retired form is **+229 bytes of image** (5,679 ->
 `sc_fload`) and **+251** and 4 of bss for the second question (18,175;
 23,944 -> 23,948). §118.8.3's two more kinds of file are **+116 bytes of
 image** (6,176; 5,085 packed) and System Check **+93** (18,268), the kernel
-still byte-identical.
+still byte-identical. §118.14.4's second walk, `XMAP`, `PARTIAL` and the
+folder rule asked again are **+377 bytes of image** (5,919 -> 6,296 on the
+tree they landed on) and System Check **+49** (18,338 -> 18,387), the
+kernel byte-identical again and the workspace unchanged.
 
 **What a run costs, measured on MartyPC's 4.77MHz 5150 with a 360KB floppy**
 (`tests/fsckdisk.py`): *Check the disk* is 5 seconds; *Check and repair*
@@ -227817,7 +227855,8 @@ of 15,943 clusters (`tests/fsckhd.py`), defragmenting an install with
 
 **Limits**: FAT12 and FAT16 only, as the kernel; the root folder never
 moves (it is not a chain); a folder deeper than
-`FSK_MAXDEP` = 16 is reported and not entered; a path longer than 79
+`FSK_MAXDEP` = 16 is reported and not entered, and leaves the run
+`PARTIAL` (§118.14.4); a path longer than 79
 characters is cut at the front in a finding; `.` and `..` are checked
 only in a folder's first two entries.
 

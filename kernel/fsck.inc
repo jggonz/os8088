@@ -80,6 +80,7 @@ FSKF_SKIPDEF equ 19
 FSKF_NOTDEF equ 20
 FSKF_NOFOLD equ 21
 FSKF_FOLDERS equ 22
+FSKF_PARTIAL equ 23
 
 FSV_NOTE    equ 1               ; System Check's SV_* (SPEC.md 118.1)
 FSV_WARN    equ 2
@@ -183,10 +184,16 @@ FSK_CBSECS  equ 16              ; ...in sectors
 FSK_BM1     equ FSK_CBUF + FSK_CBSECS * 512
                                 ; BM1: reached (the check) / in use (defrag)
                                 ; BM2 = BM1 + [P_NB]: pointed at by a lost one
+                                ; (the scan) / the second walk's (the check)
+FSK_XMAP    equ FSK_CBUF        ; the check's walk: a cluster a later chain
+                                ; ran into. [P_NB] <= 8KB: it fits the buffer
 PF_SYNC     equ 1               ; the FAT copies differ
 PF_TREEDEF  equ 2               ; the walk is the defragmenter's
 PF_MOVING   equ 4               ; a move is under way (M_*)
 PF_WROTE    equ 8               ; something was written
+PF_SKIP     equ 16              ; a folder was not gone into (118.14.4)
+PF_LONG     equ 32              ; a Fix found LONG chains: a second walk
+PF_TRIM     equ 64              ; the walk is that second walk
 
 ; =============================================================================
 ; RESIDENT: the cell's body and the trampoline
@@ -1104,7 +1111,10 @@ fsk_fatdx:
 fsk_set:
     or byte [es:P_FLAGS], PF_WROTE
     KC dskw_setfat
-    ret
+    jc .io                      ; the window would not load: the entry is
+    ret                         ; not stored, so nothing after it may be
+.io:
+    jmp fsk_ioerr
 
 ; fsk_flush - write the FAT's dirty range to both copies, or die
 fsk_flush:
@@ -1354,6 +1364,9 @@ fsk_ph_fatcmp:
     xor ax, ax
     mov [es:FSW_DONE], ax
     mov [es:P_IDX], ax
+    mov di, FSK_XMAP            ; the copies are compared: the buffer is the
+    mov cx, [es:P_NB]           ; walk's XMAP now, and starts clear
+    rep stosb
     ret
 
 ; =============================================================================
@@ -1452,8 +1465,12 @@ fsk_entry1:
     mov [es:P_E], si
     mov [es:P_L], bx
     test byte [es:P_FLAGS], PF_TREEDEF
-    jz .chk
+    jz .notdef
     jmp fsk_defent
+.notdef:
+    test byte [es:P_FLAGS], PF_TRIM
+    jz .chk
+    jmp fsk_trment
 .chk:
     ; --- '.' and '..', in a folder's first two entries -------------------
     cmp word [es:bx+LV_DIR], 0
@@ -1588,8 +1605,10 @@ fsk_dirent:
     add [es:FSW_USED], cx
     or al, al
     jz .ok
+    call fsk_xmark
     mov [es:P_A], si           ; a folder's chain is reported, never cut,
     mov [es:P_B], di           ; and not gone into
+    or byte [es:P_FLAGS], PF_SKIP ; (what is in it is not known: 118.14.4)
     mov bh, 0
     call fsk_chainq
     jmp fsk_eback
@@ -1600,15 +1619,22 @@ fsk_dirent:
     mov al, [es:P_DEPTH]
     inc ax
     cmp al, FSK_MAXDEP
-    jb .deep_ok
+    jb .goin
     xor ah, ah                  ; too deep: said, and not gone into
     xchg ax, cx
     call fsk_qp_ent
     mov bx, FSKF_DEEP
     mov ax, FSV_NOTE << 8 | 1
     call fsk_q0
+    or byte [es:P_FLAGS], PF_SKIP ; (what is in it is not known: 118.14.4)
 .none:
     jmp fsk_eback
+.goin:
+    mov ax, [es:si+26]          ; BM2: a Fix's second walk goes in here too
+    push si                     ; (fsk_trment), and nowhere else
+    call fsk_bm2
+    call fsk_bs
+    pop si
 .deep_ok:
     ; --- go in: the next step reads its first sector. SI = the entry, BX =
     ; the level, CX = its clusters (fsk_defent joins here too)
@@ -1662,6 +1688,7 @@ fsk_filent:
     or al, al
     jz .ended
     ; --- the chain stopped early ----------------------------------------
+    call fsk_xmark
     mov [es:P_N], cx
     mov [es:P_LAST], bx
     mov [es:P_A], si
@@ -1706,10 +1733,20 @@ fsk_filent:
     je .done
     jb .short
     ; --- LONG: more chain than size --------------------------------------
+    call fsk_fix
+    jz .long                    ; a Check names it here
+    test byte [es:P_FLAGS], PF_TRIM
+    jnz .long
+    mov ax, [es:si+26]          ; A FIX CUTS IT ONLY AFTER THE WALK (118.14.4):
+    call fsk_bm2                ; an entry not reached yet may share its tail,
+    call fsk_bs                 ; and the cut would free that file's clusters.
+    or byte [es:P_FLAGS], PF_LONG ; BM2 names it to fsk_trment
+    jmp .done
+.long:                          ; (fsk_trment joins here: SI, P_N, P_NEED)
     call fsk_qp_ent
     mov cx, [es:P_N]
     mov di, [es:P_NEED]
-    call fsk_fix
+    call fsk_longok
     mov bl, FSKF_LONG
     mov ax, FSV_WARN << 8 | 2
     call fsk_q0ds
@@ -1814,14 +1851,118 @@ fsk_cutsize:
     pop ax
     ret
 
+; fsk_xmark - the walk stopped (AL) at cluster SI: a cross-link's cluster
+; goes in XMAP, so the second walk cuts no chain it lies on. Keeps every
+; register
+fsk_xmark:
+    cmp al, FSKF_XLINK
+    jne .r
+    push ax
+    push si
+    mov ax, si
+    mov si, FSK_XMAP
+    call fsk_bs
+    pop si
+    pop ax
+.r:
+    ret
+
+; fsk_longok - BH = 1 when the LONG chain of the entry at [P_E], [P_N]
+; clusters, may be cut now (SPEC.md 118.14.4): in a Fix's second walk, after
+; a first that went into every folder, and with no other chain run into any
+; cluster of this one - so its tail is this file's alone. Keeps every
+; register but BH
+fsk_longok:
+    mov bh, 0
+    test byte [es:P_FLAGS], PF_TRIM
+    jz .r                       ; a Check
+    test byte [es:P_FLAGS], PF_SKIP
+    jnz .r                      ; a folder not gone into may own the tail
+    push ax
+    push cx
+    push si
+    mov si, [es:P_E]
+    mov ax, [es:si+26]
+    mov cx, [es:P_N]
+    mov si, FSK_XMAP
+.x:
+    call fsk_bt
+    jnz .shared                 ; cross-linked: left for the user
+    call fsk_fat
+    loop .x
+    inc bh
+.shared:
+    pop si
+    pop cx
+    pop ax
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; fsk_trment - one entry, for a Fix's second walk (SPEC.md 118.14.4): the
+; LONG chains the first found, cut now that every owner of every cluster has
+; been seen. BM2 names by first cluster each folder the first walk went into
+; and each file it found LONG - and is cleared as it is taken, so an entry
+; naming the same cluster again is passed over, as the first walk passed it
+; in:  ES:SI = the entry, BX = the level; out CF=1 = the step is over
+; -----------------------------------------------------------------------------
+fsk_trment:
+    mov al, [es:si]
+    cmp al, '.'                 ; the check's own filter (fsk_entry1)
+    je .skip
+    cmp al, 20h
+    jae .named
+    cmp al, 05h
+    jne .skip
+.named:
+    mov ax, [es:si+26]
+    cmp ax, 2
+    jb .skip
+    cmp ax, [es:P_MAXC]
+    ja .skip
+    call fsk_bm2
+    call fsk_bt
+    jz .skip
+    call fsk_bc
+    mov cl, 0
+    call fsk_walk               ; AL, CX = its clusters
+    or al, al
+    jnz .skip
+    mov si, [es:P_E]
+    mov bx, [es:P_L]
+    test byte [es:si+11], 10h
+    jz .file
+    jmp fsk_dirent.deep_ok      ; in, where the first walk went
+.file:
+    mov [es:P_N], cx
+    call fsk_needcl             ; DX = the clusters the size needs
+    mov [es:P_NEED], dx
+    cmp [es:P_N], dx
+    jbe .skip
+    jmp fsk_filent.long
+.skip:
+    jmp fsk_eback
+
 ; -----------------------------------------------------------------------------
 ; fsk_treedone - the walk is over: what comes next
 ; -----------------------------------------------------------------------------
 fsk_treedone:
     test byte [es:P_FLAGS], PF_TREEDEF
-    jz .scan
+    jz .chk
     jmp fsk_defpass
+.chk:
+    mov al, [es:P_FLAGS]
+    and al, PF_LONG | PF_TRIM
+    cmp al, PF_LONG
+    jne .scan
+    or byte [es:P_FLAGS], PF_TRIM ; a Fix found LONG chains: the second walk
+    jmp fsk_walkreset           ; cuts them, every owner seen (118.14.4)
 .scan:
+    call fsk_bm2                ; BM2 named the second walk's folders and
+    mov di, si                  ; files: the scan's sweeps begin on it clear
+    mov cx, [es:P_NB]
+    xor al, al
+    rep stosb
     mov byte [es:FSW_PHASE], FSKP_SCAN
     mov byte [es:P_SWEEP], 0
     mov word [es:P_IDX], 2
@@ -1897,6 +2038,10 @@ fsk_ph_scan:
     jcxz .space
     mov di, [es:FSW_LOSTC]
     call fsk_fix
+    test byte [es:P_FLAGS], PF_SKIP
+    jz .lq
+    mov bh, 0                   ; a folder not gone into may name them
+.lq:
     mov bl, FSKF_LOST
     mov ax, FSV_WARN << 8 | 4
     call fsk_q0ds
@@ -1930,6 +2075,14 @@ fsk_ph_scan:
     jz .nofix
     cmp word [es:FSW_LOST], 0
     je .nolost
+    test byte [es:P_FLAGS], PF_SKIP
+    jz .lost
+    xor cx, cx                  ; NEITHER SAVED NOR FREED (118.14.4): an
+    mov bx, FSKF_PARTIAL        ; entry in a folder not gone into may name
+    mov ax, FSV_NOTE << 8 | 4   ; them, so they stay as they are
+    call fsk_q0
+    jmp short .nolost
+.lost:
     mov byte [es:FSW_PHASE], FSKP_LOST
     mov byte [es:P_SWEEP], 0
     mov word [es:P_IDX], 2
@@ -2274,18 +2427,33 @@ fsk_ph_sync:
 ; fsk_defstart - only after a check with nothing Broken
 fsk_defstart:
     mov cx, [es:FSW_ERRS]
-    jcxz .go
-    call fsk_qp_vol
+    jcxz .whole
     mov bx, FSKF_SKIPDEF
+.not:
+    call fsk_qp_vol
     mov ax, FSV_WARN << 8 | 7
     call fsk_q0
     mov byte [es:FSW_PHASE], FSKP_DONE
     ret
-.go:
-    ; FOLDERS MOVE ONLY WITH NOTHING ELSE OPEN (SPEC.md 118.14.5): a program
-    ; may have banked a folder's cluster (OSAPI_FILE_HERE) where the kernel
-    ; cannot see it to put right. Every package instance but the caller's
-    ; counts; the kernel's own words (fsk_krefs) are patched
+.whole:
+    mov bx, FSKF_PARTIAL        ; ...nor after a check that left a folder
+    test byte [es:P_FLAGS], PF_SKIP ; unread: a file it would move may share
+    jnz .not                    ; a cluster with an entry in it (118.14.5)
+    call fsk_foldok
+    mov byte [es:FSW_PHASE], FSKP_DEFRAG
+    mov byte [es:P_SWEEP], 0
+    mov word [es:P_IDX], 0
+    ret
+
+; fsk_foldok - may folders move? [FSW_OTHERS] = the package instances open
+; but the caller's, [P_FOLDOK] = 1 when there are none, ZF = 1 when there
+; are some. FOLDERS MOVE ONLY WITH NOTHING ELSE OPEN (SPEC.md 118.14.5): a
+; program may have banked a folder's cluster (OSAPI_FILE_HERE) where the
+; kernel cannot see it to put right. Every package instance but the caller's
+; counts; the kernel's own words (fsk_krefs) are patched. Asked at the
+; defragmenter's start and again before each folder move and its link: the
+; desktop is live between steps, and a program can open in between
+fsk_foldok:
     mov bp, inst_caller         ; DH = the caller's slot (BP is nobody's
     call KERNEL_SEG:spw_near    ; here: KC's scratch - kernel size pass 17)
     xor ax, ax                  ; AX = the others
@@ -2307,11 +2475,8 @@ fsk_defstart:
     mov [es:FSW_OTHERS], ax
     cmp ax, 1
     sbb al, al                  ; FF none open / 00 some
-    and al, 1
+    and al, 1                   ; (ZF = 1: some)
     mov [es:P_FOLDOK], al
-    mov byte [es:FSW_PHASE], FSKP_DEFRAG
-    mov byte [es:P_SWEEP], 0
-    mov word [es:P_IDX], 0
     ret
 
 fsk_ph_defrag:
@@ -2442,6 +2607,16 @@ fsk_defent:
     call fsk_findrun
     jc .descend
 .fmove:
+    push ax
+    push bx
+    push cx
+    push si
+    call fsk_foldok             ; ASKED AGAIN before each folder move: a
+    pop si                      ; program opened since the last step may
+    pop cx                      ; have banked it (118.14.5)
+    pop bx
+    pop ax
+    jz .descend
     mov byte [es:M_DIR], 1      ; ...and it is entered when the move is
     mov byte [es:M_KERN], 0     ; done: .movego steps LV_ENT back to it
     jmp .movego
@@ -2929,6 +3104,13 @@ fsk_krefs:
 
 ; fsk_link - the copy is whole: new chain, then the entry, then free the old
 fsk_link:
+    cmp byte [es:M_DIR], 0
+    je .link
+    call fsk_foldok             ; A FOLDER IS ASKED AGAIN before the first
+    jnz .link                   ; write (118.14.5): with a program opened
+    and byte [es:P_FLAGS], ~PF_MOVING ; since, the copy is never linked - it
+    ret                         ; stays free space - and the walk takes the
+.link:                          ; folder again (LV_ENT), to go into it
     mov ax, [es:M_DST]
     mov cx, [es:M_N]
 .l:

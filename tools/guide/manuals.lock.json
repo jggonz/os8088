@@ -476,9 +476,9 @@
    "kernel/fsck.inc",
    "apps/syscheck/disk.inc"
   ],
-  "stamped": "7649165b",
-  "strings": "623cb2b108de6dbf",
-  "why": "checked against fsck.inc and disk.inc: the messages the page quotes are unchanged and it already names COLDHMA.SYS; the rewording touched none of its lines"
+  "stamped": "28649b125",
+  "strings": "33bb31190f3c1c11",
+  "why": "checked against fsck.inc and disk.inc: the page names no finding or repair rule - the new PARTIAL message is described on System Check's page, which owns the disk tasks"
  },
  "FTPD_O88": {
   "sources": [
@@ -1073,9 +1073,9 @@
   "sources": [
    "apps/syscheck"
   ],
-  "stamped": "e6d71c79",
-  "strings": "e8b1d6e9ff7d1df3",
-  "why": "the second question's word (unusable) and the defragmenter's folders line as the program now prints them"
+  "stamped": "28649b125",
+  "strings": "f2bffe9123cba57f",
+  "why": "the PARTIAL message (a folder too deep or damaged leaves lost space and the defragmenter alone), a shared LONG tail left uncut, and folders asked again before each move"
  },
  "SYSTEM": {
   "sources": [],

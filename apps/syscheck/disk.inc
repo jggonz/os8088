@@ -328,7 +328,7 @@ sc_dfound:
     mov bl, [es:FSW_FCODE]
     xor bh, bh
     dec bx
-    cmp bx, 22
+    cmp bx, 23
     jb .code
     xor bx, bx
 .code:
@@ -476,7 +476,7 @@ sc_dpbase:  dw 0, 0, 100, 500, 700, 800, 800, 1000
 sc_dftab:   dw sc_df1, sc_df2, sc_df3, sc_df4, sc_df5, sc_df6, sc_df7, sc_df8
             dw sc_df9, sc_df10, sc_df11, sc_df12, sc_df13, sc_df14, sc_df15
             dw sc_df16, sc_df17, sc_df18, sc_df19, sc_df20, sc_df21
-            dw sc_df22
+            dw sc_df22, sc_df23
 sc_df1:     db 'FAT copies differ in ', 1, ' of ', 2, ' sectors', 0
 sc_df2:     db 'dot entry names cluster ', 1, ', not ', 2, 0
 sc_df3:     db 'entry ', 1, ' is not a valid entry', 0
@@ -499,6 +499,7 @@ sc_df19:    db 'not run: ', 1, ' errors - run Check and repair', 0
 sc_df20:    db 'not asked', 0
 sc_df21:    db 'folders not moved: close other programs (', 1, ')', 0
 sc_df22:    db 1, ' folders moved', 0
+sc_df23:    db "not done: a folder's contents were not checked", 0
 sc_df_fixed: db ' (fixed)', 0
 sc_dr_none:  db 'not asked', 0
 sc_dr_nofix: db 'nothing needed repairing', 0

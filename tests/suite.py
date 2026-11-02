@@ -16894,8 +16894,13 @@ SOAK = [
         "'.'/'..' names it right and the window's FS_CWD follows it. Last, a "
         "write mid-run (B:'s write generation bumped while a check runs) "
         "must end the run with 'the disk changed', and saving the report "
-        "must move that generation.",
-        needs=("marty",), serial=True, timeout=600,
+        "must move that generation. And 118.14.4's complete-walk rule: a "
+        "LONG chain whose tail a LATER entry shares (one of size 0) is not "
+        "cut and the later file keeps every byte, while an unshared LONG "
+        "chain is; and a live file in a folder nested FSK_MAXDEP deep is "
+        "neither saved nor freed as lost, and Defragment refuses, both "
+        "saying PARTIAL.",
+        needs=("marty",), serial=True, timeout=900,
         wants=("build/os8088-360.img", "build/util360.img",
                "build/syscheck.o88", "build/fscheck.drv")),
     Row("fsckhd", "soak", py("tests/fsckhd.py"), 120.0,

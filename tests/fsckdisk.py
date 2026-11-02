@@ -30,9 +30,24 @@ LEG 2 - Defragment a clean disk with two files in pieces: afterwards no
 movable file is in pieces, every file's bytes are what they were, both FAT
 copies agree and the reader finds nothing wrong.
 
-    python3 tests/fsckdisk.py            both legs
+LEG 4 - A LONG chain whose tail a LATER file shares (SPEC.md 118.14.4):
+  SHA.TXT      2 clusters, size says 1; SHB.TXT starts at SHA's second
+  SZA.TXT      2 clusters, size says 0; SZB.TXT starts at SZA's second
+  LONGOK.TXT   3 clusters, size says 1, shared with nothing
+Check and repair must cut LONGOK.TXT and leave both pairs whole: SHA/SZA
+still LONG, SHB/SZB still cross-linked, every byte of SHB and SZB intact -
+the repair once freed the shared tail before it reached the second entry,
+and then cut that entry to nothing as a chain into free space.
+
+LEG 5 - A live file in a folder nested FSK_MAXDEP deep, and a lost chain
+(SPEC.md 118.14.4): the folder is not gone into, so its file's chain looks
+lost. Check and repair must save and free nothing (the file is still there,
+byte for byte, and no FILEnnnn.CHK appears), and Defragment must refuse,
+both saying a folder's contents were not checked.
+
+    python3 tests/fsckdisk.py            every leg
     python3 tests/fsckdisk.py --leg 1    one of them
-    python3 tests/fsckdisk.py --build D  write the two fixtures into D and stop
+    python3 tests/fsckdisk.py --build D  write the fixtures into D and stop
 """
 import argparse
 import hashlib
@@ -369,6 +384,44 @@ def folder_in_pieces(v):
     return fold
 
 
+def shared_tail_fixture(base=None):
+    """LEG 4: two LONG chains whose tails a LATER entry shares, one of them
+    of size 0, and a LONG chain shared with nothing (SPEC.md 118.14.4)."""
+    v = Vol(open(base or b("util360.img"), "rb").read())
+    cb = v.cb
+    for a, bn, size, seed in (("SHA.TXT", "SHB.TXT", cb, 21),
+                              ("SZA.TXT", "SZB.TXT", 0, 23)):
+        o, use = v.add(a, blob(2 * cb, seed))
+        struct.pack_into("<I", v.img, o + 28, size)
+        o = v._slot(0)                  # the later entry: the tail is its
+        v.img[o:o + 32] = v.entry(bn, 0x20, use[1], cb)
+    o, _ = v.add("LONGOK.TXT", blob(3 * cb, 25))
+    struct.pack_into("<I", v.img, o + 28, 100)
+    r = check(v)
+    assert sorted(r["long"]) == ["\\LONGOK.TXT", "\\SHA.TXT", "\\SZA.TXT"], r
+    assert sorted(r["xlink"]) == ["\\SHB.TXT", "\\SZB.TXT"], r
+    return bytes(v.img)
+
+
+DEEPN = 16                              # FSK_MAXDEP: the 16th is not gone into
+
+
+def deep_fixture(base=None):
+    """LEG 5: folders D1..D16 nested, a live file in the last, and a lost
+    chain of two clusters. Returns (image, the deep file's path)."""
+    v = Vol(open(base or b("util360.img"), "rb").read())
+    parent, path = 0, ""
+    for k in range(1, DEEPN + 1):
+        name = "D%d" % k
+        parent = v.mkdir(name, parent=parent)
+        path += "\\" + name
+    v.add("LIVE.TXT", blob(2 * v.cb + 40, 31), parent=parent)
+    lost = v.free()[:2]
+    v.put(lost[0], lost[1])
+    v.put(lost[1], v.eoc | 0xF)
+    return bytes(v.img), path + "\\LIVE.TXT"
+
+
 def frag_fixture(base=None):
     v = Vol(open(base or b("util360.img"), "rb").read())
     cb = v.cb
@@ -598,6 +651,94 @@ def leg3(work, fails):
                          "generation - disk_write_x does not bump it")
 
 
+def leg4(work, fails):
+    """A LONG chain's tail shared by a later entry is not cut (118.14.4)."""
+    import os88flush
+    import os88ui
+    img = os.path.join(work, "shared.img")
+    open(img, "wb").write(shared_tail_fixture())
+    v0 = Vol(open(img, "rb").read())
+    keep = {p: v0.read(p) for p in ("\\SHB.TXT", "\\SZB.TXT")}
+    with os88ui.boot(b("os8088-360.img"), apps=img) as ui:
+        flush = os88flush.Flush(marty=ui.m)
+        ui.path("B:/SYSCHECK.O88")
+        text = run_task(ui, flush, 2, True, fails)
+        print(text)
+        need(fails, text, [
+            "B:\\LONGOK.TXT  3 clusters, its size needs 1 (fixed)",
+            "B:\\SHA.TXT  2 clusters, its size needs 1",
+            "B:\\SZA.TXT  2 clusters, its size needs 0",
+            "B:\\SHB.TXT  shares cluster",
+            "B:\\SZB.TXT  shares cluster",
+        ], "repair with shared tails")
+        for p in ("SHA", "SZA"):
+            if "B:\\%s.TXT  2 clusters, its size needs %d (fixed)" \
+                    % (p, 1 if p == "SHA" else 0) in text:
+                fails.append("%s.TXT's shared tail was cut" % p)
+        v = Vol(flush.snapshot(1))
+    r = check(v)
+    if sorted(r["long"]) != ["\\SHA.TXT", "\\SZA.TXT"]:
+        fails.append("after repair LONG should be SHA and SZA alone: %r"
+                     % r["long"])
+    if sorted(r["xlink"]) != ["\\SHB.TXT", "\\SZB.TXT"]:
+        fails.append("the cross-links should be left for the user: %r"
+                     % r["xlink"])
+    for k in ("lost", "short", "broken"):
+        if r[k]:
+            fails.append("after repair the reader finds %s: %r" % (k, r[k]))
+    for p, data in keep.items():
+        o, e = v.find(p)
+        if e is None:
+            fails.append("%s is gone" % p)
+        elif v.read(p) != data:
+            fails.append("%s lost its bytes: size %d, was %d"
+                         % (p, struct.unpack_from("<I", e, 28)[0], len(data)))
+    if len(v.chain(struct.unpack_from("<H", v.find("\\LONGOK.TXT")[1],
+                                      26)[0])) != 1:
+        fails.append("LONGOK.TXT's chain should be cut to one cluster")
+
+
+def leg5(work, fails):
+    """A folder not gone into: lost chains stay, no defragment (118.14.4)."""
+    import os88flush
+    import os88ui
+    img = os.path.join(work, "deep.img")
+    raw, live = deep_fixture()
+    open(img, "wb").write(raw)
+    v0 = Vol(raw)
+    data = v0.read(live)
+    clus = v0.chain(struct.unpack_from("<H", v0.find(live)[1], 26)[0])
+    lost0 = check(v0)["lost"]
+    with os88ui.boot(b("os8088-360.img"), apps=img) as ui:
+        flush = os88flush.Flush(marty=ui.m)
+        ui.path("B:/SYSCHECK.O88")
+        text = run_task(ui, flush, 2, True, fails)
+        print(text)
+        need(fails, text, ["nested %d deep - its contents not checked" % DEEPN,
+                           "not done: a folder's contents were not checked"],
+             "repair with a folder too deep")
+        if "lost clusters freed" in text or " clusters saved" in text:
+            fails.append("lost clusters were saved or freed after a folder "
+                         "was left unread")
+        v = Vol(flush.snapshot(1))
+        if v.read(live) != data or \
+                v.chain(struct.unpack_from("<H", v.find(live)[1], 26)[0]) != clus:
+            fails.append("%s lost its chain or its bytes" % live)
+        if any(v.get(c) == 0 for c in clus + lost0):
+            fails.append("a cluster the unread folder may name was freed")
+        chk = [p for p, _, e, _ in v.walk() if p.endswith(".CHK")]
+        if chk:
+            fails.append("lost chains were saved as %r" % chk)
+        text = run_task(ui, flush, 3, False, fails,
+                        also="not done: a folder's")
+        print(text)
+        need(fails, text, ["not done: a folder's contents were not checked"],
+             "defragment with a folder too deep")
+        v = Vol(flush.snapshot(1))
+    if v.read(live) != data:
+        fails.append("%s's bytes changed in a refused defragment" % live)
+
+
 def run_task_wait(ui, flush, task, fails, also=None, limit=300.0):
     """run_task's waiting half, for a run already started."""
     import os88marty
@@ -621,13 +762,16 @@ def run_task_wait(ui, flush, task, fails, also=None, limit=300.0):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--leg", type=int, choices=(1, 2, 3))
+    ap.add_argument("--leg", type=int, choices=(1, 2, 3, 4, 5))
     ap.add_argument("--build", metavar="DIR")
     a = ap.parse_args()
     if a.build:
         os.makedirs(a.build, exist_ok=True)
         open(os.path.join(a.build, "broken.img"), "wb").write(broken_fixture())
         open(os.path.join(a.build, "frag.img"), "wb").write(frag_fixture())
+        open(os.path.join(a.build, "shared.img"), "wb").write(
+            shared_tail_fixture())
+        open(os.path.join(a.build, "deep.img"), "wb").write(deep_fixture()[0])
         print("fsckdisk: fixtures in %s" % a.build)
         return 0
     work = tempfile.mkdtemp(prefix="fsck-")
@@ -639,6 +783,10 @@ def main():
             leg2(work, fails)
         if a.leg in (None, 3):
             leg3(work, fails)
+        if a.leg in (None, 4):
+            leg4(work, fails)
+        if a.leg in (None, 5):
+            leg5(work, fails)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     if fails:

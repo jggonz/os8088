@@ -91,7 +91,14 @@ the two agree, rewrites a wrong `.` or `..`, copies the first FAT over the
 second, and saves lost space as `FILE0000.CHK`, `FILE0001.CHK` and so on
 in the root folder, so you can look at what was in it. A repaired finding
 ends in *(fixed)*. For a cross-link, copy both files somewhere else,
-delete them from this disk, and check it again.
+delete them from this disk, and check it again; a file whose chain is too
+long is left uncut too when another file shares its clusters.
+
+A folder nested too deep, or one whose own chain is damaged, is not looked
+into, so nothing can say what the files in it use. Then lost space is left
+where it is and the disk is not defragmented, and the report says *not
+done: a folder's contents were not checked*. Move the folder higher up, or
+repair what is wrong with it, and check again.
 
 **Defragment the disk** only runs on a disk with nothing broken, so run
 *Check and repair* first if it says so. It moves os8088's own files as
@@ -99,7 +106,8 @@ well as yours - the drivers and programs of an install that has grown in
 pieces - and on a hard disk it moves `KERNEL.SYS` too, telling the disk's
 boot sector where it went. It moves folders as well, but only when no other
 program is open, because a program may remember where a folder was: close
-your other programs first, or the report will say *folders not moved: close other programs*. It
+your other programs first, or the report will say *folders not moved: close other programs*.
+A program opened while it runs stops folders moving from then on. It
 never moves disk images (`*.IMG`, except a hibernation image), or the
 kernel on a floppy. If you save anything onto the disk while a disk task is running,
 it stops and asks you to scan again rather than work from an out-of-date
