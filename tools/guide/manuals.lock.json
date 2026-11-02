@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "7921eee05",
+  "stamped": "00fbc4819",
   "strings": "793f7336919645af",
-  "why": "S23 batch 4: waveIn (SPEC.md 124.32.5)"
+  "why": "S23 batch 4: timeSetEvent and CALLBACK_FUNCTION (SPEC.md 124.32.6)"
  },
  "WIN16_TXT": {
   "sources": [
