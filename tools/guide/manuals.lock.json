@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "23c2e5d40",
-  "strings": "17f273ce17c30db0",
-  "why": "S21 batch 3: tasks talk and end"
+  "stamped": "8301e44e2",
+  "strings": "a570971002c6c665",
+  "why": "S21 batch 4: WinHelp starts WINHELP.EXE, ShellExecute joins the instance"
  },
  "WIN16_TXT": {
   "sources": [
