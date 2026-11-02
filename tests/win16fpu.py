@@ -155,6 +155,33 @@ W16_MAXTASK, W16K_SIZE, W16K_ST = 4, 6, 4       # win16.asm's task record
 W16KS_RUN, W16KS_NEW = 1, 2
 
 
+FM_STATUS_H = 18                # a Disk window's status line, below its rows
+
+
+def reveal(d, ui, dw, i):
+    """entry i of Disk window dw on screen: its visible row. os88ui's
+    scroll_to is MartyPC's (its keys and cycle counter); this is QEMU's.
+    A row below the view: the last visible one is selected and Down steps
+    the selection on until the view follows it (SPEC.md 22.26)"""
+    cy1 = dw.content[3]
+    vis = 0
+    while ui.row_xy(dw, vis)[1] + geom.FM_ROW_H // 2 <= cy1 - FM_STATUS_H:
+        vis += 1
+    row = i - ui.scroll(dw)
+    if 0 <= row < vis:
+        return row
+    if not hasattr(d, "hmp"):                   # MartyPC: os88ui's own walk
+        return ui.scroll_to(i, win=dw)
+    d.click(*ui.row_xy(dw, max(vis - 1, 0)))
+    d.idle(1.0)
+    for _ in range(64):
+        if 0 <= i - ui.scroll(dw) < vis:
+            break
+        d.hmp("sendkey %s" % ("down" if i - ui.scroll(dw) >= vis else "up"))
+        d.idle(0.5)
+    return i - ui.scroll(dw)
+
+
 class Prog(object):
     def __init__(self, d, ui, sym, S, name):
         self.d, self.ui, self.sym, self.S, self.name = d, ui, sym, S, name
@@ -177,7 +204,7 @@ class Prog(object):
         ui, d = self.ui, self.d
         i, _ = ui.entry(self.name, dw)
         before = set(w.i for w in ui.windows())
-        d.dblclick(*ui.row_xy(dw, i - ui.scroll(dw)))
+        d.dblclick(*ui.row_xy(dw, reveal(d, ui, dw, i)))
         box = {}
 
         def opened():

@@ -2062,8 +2062,8 @@ w16_mbaritem:
     call w16_munder
     test word [es:di + MI_FLAGS], MF_BITMAP
     jz .nbm                         ; a maximized MDI child's two (SPEC.md
-    mov word [w16_sfn], w16i_mbglyph ;  124.27.5)
-    ICALL w16_scall
+    mov word [w16_tfn], w16i_mbglyph ;  124.27.5)
+    ICALL w16_tcall
 .nbm:
     mov ax, [w16_mcx0]
     add ax, [es:di + MI_X]

@@ -3,13 +3,26 @@
 ;
 ; FILE MANAGER AND PROGRAM MANAGER (SPEC.md 124.27, docs/plans/WIN16-ANY-PLAN.md
 ; S20b): windows inside a window - the Multiple Document Interface - and the
-; calls around it the two programs import. All of it is PART 9's, the
-; system-library part (124.24.1): the image had 1,279 bytes left when it
-; came, and a part of its own would have cost a gate of its own there. A
-; handler here is W16SYS, near, ending in ret; the image is ICALL from here.
+; calls around it the two programs import. All of it is PART 10's, the task
+; part (SPEC.md 124.28.13), with w16task.inc: it came in part 9, the
+; system-library part, and a program that drew with part 9's GDI paid for
+; MDI and tasks it never used. A handler here is W16TSK, near, ending in ret;
+; the image is ICALL from here, and part 9 ICALL w16_scall.
 ; =============================================================================
 
-section .w16sys
+section .w16tsk follows=.w16sys vstart=0 align=1
+w16k_base:
+    jmp short w16k_gate             ; +0  tools/os88ovl.py: a short jump ...
+    db 'W16TSKPT'                   ; +2  ...before the cut mark
+; w16k_gate - the part's one way in (SPEC.md 124.28.13): the dispatch and
+; TCALL far-call it with [w16_tfn] naming a near routine here. CS = this
+; part, DS = WIN16's image; every register and the flags pass both ways
+w16k_gate:
+    call [w16_tfn]
+    retf
+%if w16k_gate - w16k_base != W16S_GATE
+  %error "w16k_gate is not at W16S_GATE"
+%endif
 
 ; -----------------------------------------------------------------------------
 ; The calls around it (SPEC.md 124.27.1)
@@ -18,7 +31,7 @@ section .w16sys
 ; GetDriveType (KERNEL.136) - args: +0 nDrive (0 = A:). Windows' answer for
 ; os8088's volume of that letter: DRIVE_REMOVABLE 2, DRIVE_FIXED 3, and
 ; DRIVE_REMOTE 4 for a redirected one (SPEC.md 62.9); 0 when there is none
-W16SYS w16i_drvtype
+W16TSK w16i_drvtype
     ICALL w16_args
     mov al, [es:bx]
     call w16i_dtype
@@ -62,7 +75,7 @@ w16i_dtype:
 ; in microseconds; 1: the drive wArg's type, in both words, as Wine's
 ; system.drv16 answers; anything else 0. File Manager lists the drives
 ; whose type is not 0
-W16SYS w16i_inqsys
+W16TSK w16i_inqsys
     ICALL w16_args
     mov cx, [es:bx + 2]
     mov al, [es:bx]
@@ -84,10 +97,11 @@ W16SYS w16i_inqsys
 ; free of it, as GetFreeSystemResources counts it: USER's window records or
 ; GDI's objects, whichever is shorter, scaled to 65,500. Program Manager's
 ; About box shows the ratio as its "System Resources"
-W16SYS w16i_heapsp
+W16TSK w16i_heapsp
     push si
     xor si, si
-    call w16u_fsr                   ; AX = the percent free
+    mov word [w16_sfn], w16u_fsr    ; AX = the percent free (part 9's)
+    ICALL w16_scall
     mov cx, 655
     mul cx
     mov dx, 65500
@@ -97,7 +111,7 @@ W16SYS w16i_heapsp
 ; DirectResAlloc (KERNEL.168) - args: +0 wSize, +2 wType, +4 hInstance. A
 ; moveable block of wSize bytes, as GlobalAlloc gives one: a resource made
 ; in memory, which Program Manager fills with an icon
-W16SYS w16i_dresalloc
+W16TSK w16i_dresalloc
     ICALL w16_args
     mov ax, [es:bx]
     xor dx, dx
@@ -110,7 +124,7 @@ W16SYS w16i_dresalloc
 ; environment (its PSP's word 2Ch is 0), so the answer is an empty one: a
 ; NUL that ends the list at once, in this part, which is kept until the
 ; program ends
-W16SYS w16i_dosenv
+W16TSK w16i_dosenv
     mov ax, w16i_noenv              ; XSEC-OK: a far pointer into this part
     mov dx, cs
     ret
@@ -120,7 +134,7 @@ w16i_noenv:
 ; LongPtrAdd (KERNEL.180) - args: +0 dwAdd, +4 lpPtr. Real mode's answer:
 ; the pointer moved on by dwAdd bytes, its offset the low four bits. File
 ; Manager walks its copy buffer with it
-W16SYS w16i_lpadd
+W16TSK w16i_lpadd
     ICALL w16_args
     mov ax, [es:bx + 4]             ; DX:AX = the offset + dwAdd
     xor dx, dx
@@ -146,7 +160,7 @@ W16SYS w16i_lpadd
 ; PostQuitMessage(0) ends it, and the call answers FALSE - "an application
 ; refused" - so that a program that goes on to its message loop meets the
 ; WM_QUIT there
-W16SYS w16i_exitwin
+W16TSK w16i_exitwin
     mov word [w16_quitcode], 0
     mov byte [w16_quit], 1
     xor ax, ax
@@ -155,7 +169,7 @@ W16SYS w16i_exitwin
 
 ; GlobalFindAtom (USER.270) - args: +0 lpszName. A MAKEINTATOM is its own;
 ; a name is the atom GlobalAddAtom gave it (w16u_regcbfmt's table), or 0
-W16SYS w16i_findatom
+W16TSK w16i_findatom
     push si
     push di
     ICALL w16_args
@@ -251,12 +265,12 @@ w16i_alpha:
     ret
 
 ; IsCharAlpha (USER.433), IsCharAlphaNumeric (USER.434) - args: +0 ch
-W16SYS w16i_isalpha
+W16TSK w16i_isalpha
     ICALL w16_args
     mov al, [es:bx]
     call w16i_alpha
     jmp short w16i_bool
-W16SYS w16i_isalnum
+W16TSK w16i_isalnum
     ICALL w16_args
     mov al, [es:bx]
     cmp al, '0'
@@ -277,7 +291,7 @@ w16i_bool:                          ; CF=0 TRUE, CF=1 FALSE
 
 ; AnsiUpperBuff (USER.437) - args: +0 cbLength (0 is 65,536), +2 lpsz.
 ; Every byte upper-cased, NULs included. AX = the length
-W16SYS w16i_upbuff
+W16TSK w16i_upbuff
     push si
     ICALL w16_args
     mov cx, [es:bx]
@@ -297,7 +311,7 @@ W16SYS w16i_upbuff
 ; GetIconID (USER.455) - args: +0 dwResType, +4 hResource: of an
 ; RT_GROUP_ICON block, the image LoadIcon would choose (w16_icload's rule:
 ; 32 x 32, this display's colours) - its ordinal, 0 none
-W16SYS w16i_iconid
+W16TSK w16i_iconid
     push si
     push di
     ICALL w16_args
@@ -347,7 +361,7 @@ W16SYS w16i_iconid
 
 ; LoadIconHandler (USER.456) - args: +0 fNew, +2 hResource: an RT_ICON
 ; resource IS an icon here (SPEC.md 124.18.4), so the handle is the icon
-W16SYS w16i_ichandler
+W16TSK w16i_ichandler
     ICALL w16_args
     mov ax, [es:bx + 2]
     xor dx, dx
@@ -1446,7 +1460,7 @@ w16i_stagger:
     ret
 
 ; ...CreateWindow answered: AX = the child (0 refused), CX = the client
-SCONT w16i_mcr
+TCONT w16i_mcr
     or ax, ax
     jz .none
     push ax
@@ -1529,7 +1543,7 @@ w16i_amsg:
     ICALL w16_sendwnd
     ret
 
-SCONT w16i_act1                     ; ...then the one arriving
+TCONT w16i_act1                     ; ...then the one arriving
     mov ax, [w16i_acli]
     ICALL w16_hwnd2rec
     jc w16i_act2
@@ -1542,7 +1556,7 @@ SCONT w16i_act1                     ; ...then the one arriving
     mov si, w16i_act2_c
     jmp short w16i_amsg
 
-SCONT w16i_act2                     ; ...and it has the focus
+TCONT w16i_act2                     ; ...and it has the focus
     mov ax, [w16i_acli]
     ICALL w16_hwnd2rec
     mov ax, 0
@@ -1724,7 +1738,7 @@ w16i_mdidestroy:
     cwd
     ret
 
-SCONT w16i_mds                      ; ...DestroyWindow answered; CX = the client
+TCONT w16i_mds                      ; ...DestroyWindow answered; CX = the client
     mov ax, cx
     ICALL w16_hwnd2rec
     jc .out
@@ -3478,7 +3492,7 @@ w16i_tk2: dw 0                      ;   and a child's length
 ; The show state - SW_SHOWMINIMIZED, SW_SHOWMAXIMIZED or SW_SHOWNORMAL - the
 ; rectangle it is restored to, in its parent's client, and a minimized one's
 ; place (-1, -1 for another)
-W16SYS w16i_getiwp
+W16TSK w16i_getiwp
     push si
     push di
     ICALL w16_args
@@ -3566,7 +3580,7 @@ W16SYS w16i_getiwp
 ; SW_MINIMIZE, SW_SHOWMINNOACTIVE), maximized (SW_SHOWMAXIMIZED) or normal,
 ; and the rectangle, when there is one, where it is restored to - or where
 ; it is, when it is normal. A top-level window is os8088's to place
-W16SYS w16i_setiwp
+W16TSK w16i_setiwp
     push si
     push di
     ICALL w16_args
@@ -3704,9 +3718,9 @@ w16i_py:  dw 0
 ; scroll bars are never shown (SPEC.md 124.27.7): nothing to work out or
 ; scroll. DumpIcon (USER.459) - args: +0 lplpAND, +4 lplpXOR, +8 lpcb,
 ; +12 lpIcon: 0, no icon in Windows' own layout to hand out
-W16SYS w16i_calcscroll
-W16SYS w16i_scrollkids
-W16SYS w16i_dumpicon
+W16TSK w16i_calcscroll
+W16TSK w16i_scrollkids
+W16TSK w16i_dumpicon
     xor ax, ax
     cwd
     ret
@@ -3719,7 +3733,7 @@ W16SYS w16i_dumpicon
 ; Program Manager's groups keep them), 1 plane of 4 bits, or 1 of 1, at most
 ; 64 square. Its block is marked GHF_ICON, and DestroyIcon frees it. Any
 ; other shape answers the one cursor LoadCursor hands out (SPEC.md 124.27.7)
-W16SYS w16i_cursorind
+W16TSK w16i_cursorind
     push si
     push di
     push es
@@ -3982,7 +3996,7 @@ w16i_ihd: dw 0                      ;   and its handle
 ; +8 hWndMDIClient, +10 hWnd. A Window-menu command activates its child;
 ; WM_SIZE fills the frame's client with the MDI client; WM_SETFOCUS goes to
 ; the active child
-W16SYS w16i_defframe
+W16TSK w16i_defframe
     ICALL w16_args
     mov ax, [es:bx + 8]
     or ax, ax
@@ -4058,7 +4072,7 @@ W16SYS w16i_defframe
 ; DefWindowProc's own. WM_CLOSE destroys it as WM_MDIDESTROY does; its
 ; activation and the focus make it the client's active child; Ctrl+F6's
 ; system commands go to the next one
-W16SYS w16i_defchild
+W16TSK w16i_defchild
     ICALL w16_args
     mov ax, [es:bx + 8]
     push bx
@@ -4142,7 +4156,7 @@ W16SYS w16i_defchild
 ; down with Ctrl held: F4 sends the active child SC_CLOSE, F6 and Tab
 ; SC_NEXTWINDOW - SC_PREVWINDOW with Shift - as WM_SYSCOMMAND, and the
 ; answer is TRUE: the program does not translate or dispatch it
-W16SYS w16i_mdiaccel
+W16TSK w16i_mdiaccel
     ICALL w16_args
     mov ax, [es:bx + 4]
     les di, [es:bx]

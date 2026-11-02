@@ -23,7 +23,8 @@ This row does, off WIN16's own listing and symbol map:
 
   4. a macro naming the wrong side: ICALL's routine must be in the image,
      LCALL's, SLCALL's and DCALL's in the library part (DCONT defines its
-     own), SCALL's in the system-library part (SPEC.md 124.24.1);
+     own), SCALL's in the system-library part (SPEC.md 124.24.1), TCALL's
+     in the task part (SPEC.md 124.28.13);
   5. an export row whose part byte or handler offset is not where the map
      puts its handler: a W16LIB forgotten, or one too many - or whose
      W16B_DCF bit disagrees with w16api.inc's w16dcf_ list (SPEC.md 124.24.4),
@@ -52,14 +53,14 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PARTS = (".w16dlg", ".w16fp", ".w16ld", ".w16sys")
+PARTS = (".w16dlg", ".w16fp", ".w16ld", ".w16sys", ".w16tsk")
 DSELF = (".w16fp",)     # parts that run with DS = their OWN segment: the 8087
                         # emulator (w16fp.inc), so rule 3 does not apply
-MACROS = ("dcall", "lcall", "icall", "scall", "slcall")   # the sanctioned crossings (DCONT
+MACROS = ("dcall", "lcall", "icall", "scall", "slcall", "tcall")   # the sanctioned crossings (DCONT
 DEFINES = ("dcont", "w16export", "w16fixed")   # define a label or record a
                                         #   row - checked by rule 5 instead
 NEAR = re.compile(r"^(call|jmp|j[a-z]{1,4}|loop[a-z]{0,2})$")
-VSTORE = re.compile(r"^\s*mov\s+word\s+\[\s*(w16_pfv|w16_lfn|w16_lbv|w16_sfn)\s*\]\s*,")
+VSTORE = re.compile(r"^\s*mov\s+word\s+\[\s*(w16_pfv|w16_lfn|w16_lbv|w16_sfn|w16_tfn)\s*\]\s*,")
 DATA = re.compile(r"^\s*(db|dw|dd|times|resb|resw|incbin)\b", re.I)
 IDENT = re.compile(r"(?<![\w.$])(\.?[A-Za-z_][\w.]*)")
 LST = re.compile(r"^\s*(\d+)\s(?:\s*([0-9A-F]{8})\s+([0-9A-F\[\]()]+)-?)?\s*(?:<(\d+)>)?\s?(.*)$")
@@ -220,7 +221,8 @@ def walk(lstfile, syms):
             far = "far" in ops.split()
             why = None
             if mnem in MACROS and mm.start() == len(ops) - len(ops.lstrip()):
-                want = {"icall": ".text", "scall": ".w16sys"}.get(mnem, ".w16dlg")
+                want = {"icall": ".text", "scall": ".w16sys",
+                        "tcall": ".w16tsk"}.get(mnem, ".w16dlg")
                 if tsec != want:
                     why = "%s names %s, which is in %s, not %s" % (
                         mnem.upper(), full, tsec, want)
@@ -264,7 +266,7 @@ def rows(binfile, syms, where):
     for k, h in enumerate(names):
         part, proc = struct.unpack_from("<BH", data, at + 7 * k + 4)
         sec = syms.get(h)
-        want = {".text": 0, ".w16dlg": 3, ".w16sys": 9}.get(sec)
+        want = {".text": 0, ".w16dlg": 3, ".w16sys": 9, ".w16tsk": 10}.get(sec)
         if want is None:
             out.append("row %d (%s): its handler is in %s, which no row can name" % (k, h, sec))
         elif part & 0x1F != want or proc != where[h][1]:

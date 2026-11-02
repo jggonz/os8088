@@ -133,7 +133,7 @@ def main():
         if load < 1 or drop < 1:
             bad.append("no segment was discarded and loaded again (%d loaded, "
                        "%d discarded): the budget did not bite" % (load, drop))
-        data = disk_file(bimg, "ROW.WRI")
+        data = disk_file(d.p.b, "ROW.WRI")    # QEMU's copy, not src.img
         if data is None:
             bad.append("no ROW.WRI on B:")
         else:

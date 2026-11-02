@@ -505,7 +505,7 @@ W16EXPORT W16M_USER,       279,     0,  w16_ans0            ; OldSetDeskPattern(
 W16EXPORT W16M_USER,       284,     2,  w16u_freesysres     ; GetFreeSystemResources(word)
 W16EXPORT W16M_USER,       285,     4,  w16_ans1            ; SetDeskWallPaper(str)
 ; File Manager 3.0 and Program Manager 3.0 (SPEC.md 124.27.1): the calls
-; around MDI, in part 9. One program is one task until S21, nothing is ever
+; around MDI, in part 10. One program is one task until S21, nothing is ever
 ; dragged or system-modal, and real mode has no selectors and no DOS memory
 ; of its own to hand out
 W16EXPORT W16M_KERNEL,     136,     2,  w16i_drvtype        ; GetDriveType(word)
@@ -1022,7 +1022,7 @@ w16_lstr:
 ; the answer, so the program does not add a message of its own
 w16u_winhelp:
     call w16_args
-    SCALL w16t_help
+    TCALL w16t_help
     jc .say
     cmp ax, 0xFFFF
     jne .ret

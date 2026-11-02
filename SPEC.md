@@ -226963,6 +226963,28 @@ heap is full, the block it is asked about is the oldest, it answers TRUE and
 the allocation that wanted the room succeeds, and 200 moveable handles can
 be held at once.
 
+**A program with a procedure keeps its code** *(S21's final pass)*.
+Nothing in WIN16's heap moves (§124.9), so a block freed among the code
+segments is only a hole, and data that takes it splits the room code needs.
+Paintbrush's bands did exactly that. A band allocation that ran short
+discarded the least recently used CODE before the procedure was ever asked,
+since its bands are notify blocks and §124.9's plain discardable pass never
+takes those. Band by band, its code went from 69 KB to 27 KB in holes no
+10 KB segment fitted, and the next segment it called failed with *"Not
+enough memory for its code"*. So **a `GlobalAlloc` from a program that has
+called `GlobalNotify` is marked `W16G_NOCODE`**, and that mark does two
+things:
+
+- `w16_gdold` discards no code segment for it. The shortage goes to the
+  procedure instead, which is the program's own way of giving room up;
+- `w16_gfit` places it only below the first code segment of each arena. Code
+  is placed from an arena's top (§124.26.3), so the data stays under the
+  code, and a hole a segment leaves is a segment's again.
+
+A program with no procedure is unchanged: its data may still discard code,
+as Windows' did. `win16pbrush` is the row. Its code holds near 69 KB
+through the fills and the save, and the bands take what is left.
+
 ### 124.10 Resources, read from the file when loaded *(shipped in S5)*
 
 **The resource table is kept; the resources are not.** The loader copies the
@@ -227771,9 +227793,11 @@ the loader's code back for the stories after S12.
 
 #### 124.18.8 The gate
 
-`win16desk` (QEMU): two Windows programs at once beside Paint, each named
-in the Task Manager and the dock, one closed by its close box and one
-ended by End Task, with the heap back to its pre-launch claims after each;
+`win16desk` (QEMU): two Windows programs at once beside Paint - since
+S21's batch 6 the second launched from the desktop joins the first's
+instance as a task (§124.28.12) - each named in the Task Manager and the
+dock, one closed by its close box and one ended by End Task, with the heap
+back to its pre-launch claims after each;
 a fixture's icons drawn by `DrawIcon`, an `SS_ICON` and a `MessageBox`
 with each icon, each found on the glass pixel for pixel from its art; two
 programs writing `WIN.INI` and both writes kept. Its B: is laid out as
@@ -229051,6 +229075,10 @@ library part's shape:
   A program that calls none of the system libraries never fetches it and
   never holds its claim.
 
+MDI and tasks were part 9's too until S21's final pass and are **part 10**
+now (§124.28.13), so part 9 is COMMDLG, SHELL, LZEXPAND, VER and
+Paintbrush's GDI (§124.25.6).
+
 `tests/unit/t_w16xsec.py` knows the part: its rules hold for `.w16sys` as
 for `.w16dlg`, `SCALL`'s target must be in `.w16sys`, and a row naming a
 `W16SYS` handler must say part 9.
@@ -230133,9 +230161,10 @@ groups. Each is an MDI CHILD, a child window with a caption, a frame, a
 system-menu box and minimize and maximize boxes, drawn and moved inside the
 client. WIN16's child windows had none of that.
 
-All of it is part 9's (124.24.1): the image had 1,279 bytes of room when it
-came. A part of its own, as the plan first said, would have spent a gate's
-bytes there. The image keeps what is in its paths already - a child's frame
+All of it is part 10's, the task part (§124.28.13). It came in part 9
+(124.24.1), because the image had 1,279 bytes of room and a part of its own
+would have spent a gate's bytes there; S21's final pass moved it out, with
+the tasks, when Paintbrush could no longer pay for part 9. The image keeps what is in its paths already - a child's frame
 in the geometry, the press routing and the paint order - each a few bytes
 that call into the part.
 
@@ -230149,7 +230178,7 @@ Both programs import, besides MDI:
 | `InquireSystem` (SYSTEM.1) | 0: the timer's period, 54,925 µs. 1: the drive's type in both words, as Wine's `system.drv16` answers. File Manager lists the drives whose answer is not 0. SYSTEM joins the modules WIN16 knows by name |
 | `GetHeapSpaces` | DX the heap, 65,500, and AX its free part, scaled from `GetFreeSystemResources(0)`. Program Manager's About box shows the ratio |
 | `DirectResAlloc` | a moveable block of the size asked, as `GlobalAlloc` gives |
-| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 9, kept until the program ends |
+| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 10, kept until the program ends |
 | `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
 | `GetNumTasks` | 1, until S21 |
 | `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE |
@@ -230276,7 +230305,7 @@ is the one taken: an outline of where it will go is inverted with
 `OSAPI_GFX_XOR_RECT`, cut to the client, drawn again to take it away, and
 nothing else is redrawn until the button comes up. A size keeps the window
 at least three caption boxes and a frame wide and a caption and a frame
-high. `W16I_TRACK` in `w16_mdion` sends the mouse to part 9 meanwhile, as
+high. `W16I_TRACK` in `w16_mdion` sends the mouse to part 10 meanwhile, as
 `w16_sbtrk` sends it to a scroll bar.
 
 **Every change of place is posted, not sent.** The child's old rectangle and
@@ -230301,7 +230330,7 @@ are not followed and answer 0.
 - **The frame's bar** while one is maximized gets the child's system menu at
   its left and a restore box at its right, Windows 3.0's merge. Both are
   `MF_BITMAP` items with no text, 16 pixels wide, drawn into the bar's band
-  by part 9: a framed box with a bar for the system menu, a framed box with
+  by part 10: a framed box with a bar for the system menu, a framed box with
   an arrow up and an arrow down for restore. The restore box is a help item,
   so the bar puts it at its right. The system menu is Windows 3.0's for an
   MDI child: Restore, Move, Size, Minimize, Maximize, Close Ctrl+F4, Next
@@ -230429,7 +230458,7 @@ holds the arriving task's state and the block the leaving one's, so the
 block passes to the task that left. The current task has no block, and a
 switch is one pass over the state, not two copies.
 
-The state exchanged is a list of ranges of the bss, `w16_ctxtab` in part 9,
+The state exchanged is a list of ranges of the bss, `w16_ctxtab` in part 10,
 the way the loader's `w16l_svtab` already saves one module's loader state
 (§124.23.5). The rule for what is on the list is the one that decides
 everything here: **state that lives across a wait** (`w16_tohost`) belongs
@@ -230653,8 +230682,8 @@ stays the first program's.
   - a post goes into each window's task's queue.
 
   Both answer 1. The image's handlers test for `HWND_BROADCAST` and pass
-  it to part 9 (`w16t_bsend`, `w16t_bpost`), so a program that never
-  broadcasts never fetches part 9. Batch 5 first made the two rows part
+  it to part 10 (`w16t_bsend`, `w16t_bpost`, §124.28.13), so a program
+  that never broadcasts never fetches it. Batch 5 first made the two rows part
   9's to spare the image 30 bytes; the final pass found that every
   program then fetched part 9's 27 KB into its heap at its first
   `SendMessage`, which Paintbrush, BIG and a second instance had no room
@@ -230679,7 +230708,7 @@ it, and names compare without case.
   bytes of the image's bss, which the kern_mega arm has no room for. A
   DDE client that names an application, a topic and an item uses three.
   Program Manager's DDE server (WIN16-ANY-PLAN S24) and a program that
-  registers formats as well need more. The table is to move into part 9
+  registers formats as well need more. The table is to move into part 10
   with its three routines.
 - `GlobalDeleteAtom` answers 0 and deletes nothing, so the four are
   spent once.
@@ -230876,6 +230905,48 @@ an instance that is not running anything yet. An instance that is loading,
 has refused, or has ended has a 0 at +3 and is never joined. One locator
 waits at a time. A second desktop launch before WIN16's wake finds the
 request byte set, and starts an instance of its own.
+
+#### 124.28.13 The task part
+
+MDI (§124.27) and tasks (this section) are **part 10**, `W16P_TSK`,
+`section .w16tsk`: the task part. They came in part 9, and part 9 grew to
+28,291 bytes. Every program that called one of part 9's handlers then held
+all of it in its arenas, and Paintbrush, which calls only §124.25.6's GDI
+there, ran out of room for its own code: *"Not enough memory for its
+code"*, with all four arenas full. Split, part 9 is 14,621 bytes and part
+10 13,693, and a program pays for the one it calls.
+
+It is part 9's shape in every respect (§124.24.1):
+
+- an export row's part byte is **10**; the dispatch fetches the part on its
+  first call and far-calls its gate, `w16k_gate`, at the same +10 as
+  `w16s_gate` (a short jump and the cut mark `W16TSKPT` before it), with the
+  handler's offset in `[w16_tfn]`;
+- a handler is declared `W16TSK`; the image reaches one with `TCALL`, and a
+  continuation in the part is `TCONT`;
+- the two parts' bss is one layout - the segment, the vector, the routine -
+  so one fetch body (`w16_pin`) and one drop (`w16_pout`) serve both, and
+  the second part cost the image 35 bytes;
+- from the part, the image is `ICALL`. The other system part is reached
+  through the image: `[w16_sfn]` set, then `ICALL w16_scall` (part 10 to
+  part 9, GetHeapSpaces' `w16u_fsr`), or `[w16_tfn]` and `ICALL w16_tcall`
+  (part 9 to part 10, ShellExecute's `w16t_shexe`);
+- it stays until the instance's last program ends, then is dropped with the
+  others.
+
+**A one-program instance never fetches it** unless the program calls a
+handler there. Every path in the image that reaches part 10 first tests
+what makes it necessary: two or more tasks (`w16_ntk`), an MDI client
+(`w16_mdion`), a pending join (`w16_jreq`) or a ShellExecute's launch
+(`w16_shq`), a broadcast, or a child with a caption or a thick frame.
+
+ShellExecute's launch (`w16t_shrun`) and its toast (`w16t_say`) moved into
+the task part with the join, the toast's one other caller: the toast reads
+its words through `CS`, so it must be in the same part as every caller.
+
+`tests/unit/t_w16xsec.py` knows the part: `TCALL`'s target must be in
+`.w16tsk`, a row naming a `W16TSK` handler must say part 10, and no near
+call crosses between parts 9 and 10.
 
 #### 124.28.11 What checks it
 

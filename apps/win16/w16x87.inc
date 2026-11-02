@@ -108,20 +108,9 @@ w16x_fpin:
     push si
     push di
     push es
-    call OSAPI_FILE_HERE            ; where the user is, to be put back
-    push dx
-    push bx
-    mov dx, [w16_home]
-    mov bl, [w16_homev]
-    call OSAPI_FILE_GOTO_QM
-    mov al, W16P_FPU
-    call w16_pkeep                  ; in the heap, not a claim (124.25.1)
-    pop bx
-    pop dx
-    pushf
-    call OSAPI_FILE_GOTO_QM
-    popf
-    jc .out
+    mov al, W16P_FPU                ; (w16_pfetch reads it from WIN16's own
+    call w16_pkeep                  ;   folder) in the heap, not a claim
+    jc .out                         ;   (124.25.1); AX = it
     mov [w16_fpseg], ax
     mov es, ax                      ; its end stub: the x87 row's gate stub
     mov ax, W16_X87ROW * 6

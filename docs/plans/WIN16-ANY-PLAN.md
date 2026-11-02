@@ -1397,6 +1397,21 @@ its table goes in the diary, so the reach is measured, not claimed.
       clipboard block's size (now zero after the NUL); and DOS armed the
       kernel's key map in its entry, so every Windows launch left QEMU's
       8042 peek losing bytes. DOS now arms it when it keeps its window.
+  - [x] Batch 7, from the final pass: **Paintbrush and the XT run again.**
+    - MDI and tasks leave part 9 for a part of their own, part 10
+      (SPEC.md §124.28.13). Part 9 had grown to 28 KB, and Paintbrush, which
+      calls only its GDI there, paid for all of it. Part 9 is 14.6 KB now,
+      and the image paid 35 bytes for the second part.
+    - A `GlobalAlloc` from a program with a `GlobalNotify` procedure no
+      longer discards code, and stays below the code in each arena (SPEC.md
+      §124.9.1). Paintbrush's bands had pushed its code from 69 KB down to
+      27 KB, in holes no segment fitted.
+    - `win16fpuxt` and `win16cpuxt` froze at "Loading..." on the 5150 since
+      S19b batch 1 (bisected to c33dd0bdc). `w16x_fpin` took the emulator
+      part's segment in AX across an `OSAPI_FILE_GOTO_QM`, which clobbers
+      AX, so the part's vectors were read from the interrupt table and its
+      end stub was written into it. `w16_pfetch` already changes folder,
+      so the outer change is gone: 29 bytes back.
 - [ ] **S22: The `kern_mega` arm (R3).**
   - *As a user on a 286, Registry Editor runs, and Write keeps its document
     in memory above 1 MB.*

@@ -3305,3 +3305,51 @@ Minesweeper goes on in WIN16's window, and finds the heap as it was.
 `win16calc` runs both Calculators, `win16file` saves Notepad's typed line,
 and the fast tier passes.
 
+## 2026-11-02 — S21, batch 7: Paintbrush gets its code back, and the XT boots its 8087 emulator
+
+**Paintbrush stopped working, and the first cause was part 9.** The
+on-demand part for the system libraries had collected MDI and tasks
+(S20b, S21) and grown to 28 KB. A program pays for the whole part the
+first time it calls anything in it, and Paintbrush calls region and DIB
+functions there. Those 28 KB came out of the room its code segments load
+into. MDI and tasks now live in a part of their own, part 10, built the
+same way, and every path in the image that reaches them first checks
+that it needs them: a second task, an MDI client, a pending join. Part 9
+is 14.6 KB again. The image paid 35 bytes, because both parts share one
+fetch routine and their bookkeeping has the same layout.
+
+**That was not enough. The second cause was Paintbrush's own picture.**
+A dump of WIN16's arenas during the test shows it. Paintbrush keeps the
+picture as dozens of 2.6 KB bands, each one a block it lets the heap
+take back through its GlobalNotify procedure, after writing the band to
+its swap file. But a band allocation that ran short discarded the least
+recently used CODE first, because the procedure was only asked once
+nothing else could go. Nothing in WIN16's heap moves, so each discarded
+segment left a hole, and the next band filled it. Paintbrush's code
+went from 69 KB to 27 KB in pieces no 10 KB segment fitted, and the fill
+died with "Not enough memory for its code". Now, when a program has a
+GlobalNotify procedure, its allocations never discard code and are
+placed only below the code in each arena. A shortage asks the procedure
+instead. Its code then held at about 69 KB through the fills and the
+save. 34 image bytes, and nothing changes for a program without a
+procedure.
+
+**The XT had been frozen at "Loading..." since S19b, and only the final
+pass ran it.** The two 5150 rows run once, at the end, so nothing ran them
+between batches. The rows are slow, so `git bisect run` drove a short
+MartyPC probe from S19 to S20 and named c33dd0bdc, the commit that moved
+WIN16's parts into its own heap.
+MartyPC breakpoints on the fetch path narrowed it to one line. The 8087
+emulator part is fetched only on a machine without a coprocessor, which
+QEMU never is. Its fetch now returned the part's segment in AX, but the
+caller restored the user's folder before saving AX, and that call
+clobbers AX. The emulator's vector table was then read from the interrupt
+table, and its end stub was written into it. The fetch routine already
+changes folder itself, so the caller's own change was removed, and that
+gave back 29 bytes.
+
+**What was checked:** `win16pbrush` draws, fills and saves NEW.BMP with
+the right colours. FPU.EXE reaches its MessageBox on MartyPC's 5150. The
+cross-section gate (`t_w16xsec`) now knows part 10 and passes, and so
+does the fast tier.
+
