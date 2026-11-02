@@ -10817,6 +10817,8 @@ mega_imghifree:
 ;             below 1MB - it is a window (above), a 64KB reach at most, which
 ;             is what the segment + AX it replaces reached
 ;   SEG_FREE  a window back early; a block's selector goes with its block
+;   SEG_WINL  SEG_WIN at a 32-bit linear base (DX:AX), SI the window to
+;             re-aim: a window over memory above 1MB (SPEC.md 124.31.3)
 ; A window or a SUB asked again with the same base and reach answers the same
 ; selector, so a caller that asks per access holds one entry, not many
 ; -----------------------------------------------------------------------------
@@ -10842,8 +10844,20 @@ mega_segf:
     je .at
     cmp bl, SEG_TILE
     je .tilej
+    cmp bl, SEG_WINL
+    je .winl
     stc
     retf
+.winl:                              ; SEG_WINL: SEG_WIN at a 32-bit LINEAR
+    push ax                         ; base, DX:AX, so a window may be over
+    push bx                         ; memory above 1MB (SPEC.md 50.6.11,
+    push cx                         ; 124.31.3); SI = the window to re-aim
+    push si
+    push di
+    dec cx                          ; the limit (0 - 1 = 64KB)
+    call mega_segown
+    call mega_wfind
+    jmp .wput
 .tilej:
     jmp mega_segtile
 .aimj:

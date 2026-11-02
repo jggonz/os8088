@@ -5892,6 +5892,10 @@ osapi_arg_text_x equ mod_gone   ; no links on kern_small, so no parameter
 ;            LDT entry is free. CF = 1 on a real-mode kernel, every register
 ;            kept: DX + AX is the answer there (the parts standard's op_at,
 ;            KERN-MEGA-MEMORY-PLAN MC7)
+;   SEG_WINL DX:AX = a LINEAR base, CX = bytes (0 = 64KB), SI = a window of
+;            yours to re-aim or 0 -> DX = a data selector over it, as
+;            SEG_WIN; above 1MB too. CF = 1 on a real-mode kernel, which has
+;            nothing above 1MB to window (SPEC.md 124.31.3)
 ; THE REAL-MODE ANSWER IS THE CALLER'S OWN ARITHMETIC - DX x 16, DX, DX + AX
 ; - so a package converted to these verbs runs unchanged on every kernel
 ; and needs no CPU_F_PM test; only kern_mega in protected mode, where a
@@ -5906,6 +5910,7 @@ SEG_BWIN    equ 6
 SEG_AIM     equ 7
 SEG_AT      equ 8               ; (refused below: protected mode's alone)
 SEG_TILE    equ 9               ; (refused below too: SPEC.md 124.31.2)
+SEG_WINL    equ 10              ; (and refused below: SPEC.md 124.31.3)
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA

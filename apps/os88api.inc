@@ -2227,6 +2227,14 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          sum DX + AX is the answer there.
                                  ;          For a walk over a PINNED claim
                                  ;          (os88partsbody.inc's op_at)
+                                 ; SEG_WINL DX:AX = a 32-bit LINEAR base,
+                                 ;          CX = bytes (0 = 64KB), SI = a
+                                 ;          window of yours to re-aim or 0
+                                 ;          -> DX = a data selector over it,
+                                 ;          SEG_WIN's in all but the base:
+                                 ;          a window over memory above 1MB
+                                 ;          (SPEC.md 124.31.3). CF=1 on a
+                                 ;          real-mode kernel
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
@@ -2245,6 +2253,7 @@ SEG_BWIN    equ 6
 SEG_AIM     equ 7
 SEG_AT      equ 8
 SEG_TILE    equ 9
+SEG_WINL    equ 10
 
 ; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).
 ; A class names a driver only when it has one, and a module's header names

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9ae6ee9a1429a9d7cf3e4bb817396a0abbbca5c31c04353047c531b48dd8d60c",
+  "fingerprint": "9eeae4ce134a4d80853273893f7275b2d439f36881fe8e8acd4fa8f50f362fb4",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "812bea7390d26981b067155963ed6cee7f15f736fd8135f9740516ee2d0ba558",
+  "fingerprint": "b9bcbbfb756e8d9fdfaff717bdfabff5bac94f564b68afde7d6db819613b56dd",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1267,6 +1267,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "OSAPI_SEG gains SEG_TILE (9), kern_mega's consecutive selectors (SPEC.md 124.31.2, O2(b)); a verb added, nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "b9bcbbfb756e8d9fdfaff717bdfabff5bac94f564b68afde7d6db819613b56dd",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG verb 10, SEG_WINL: SEG_WIN at a 32-bit linear base (SPEC.md 50.6.11, 124.31.3); an added verb, nothing built before is affected",
+   "to": 10
+  },
+  {
+   "fingerprint": "9eeae4ce134a4d80853273893f7275b2d439f36881fe8e8acd4fa8f50f362fb4",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG verb 10, SEG_WINL: SEG_WIN at a 32-bit linear base (SPEC.md 50.6.11, 124.31.3); an added verb, nothing built before is affected",
    "to": 11
   }
  ]
