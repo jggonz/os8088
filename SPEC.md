@@ -231377,7 +231377,7 @@ wake loads the program and sets `w16_go1`; `w16_tarm` arms the tick for
 the next period; and `w16_ontimer` makes the first resume, with the lock
 marked held as every resume from the tick has it. A later wake still
 resumes a program waiting in `PeekMessage` (`w16_peekwake`); that depth
-has not been measured. Real mode is unchanged.
+has not been measured.
 
 **And the load is the ring's wake, not the handover's (2026-11-01).** On
 86Box's 386 (the Micronics board, a period BIOS), Windows 3.1's SOL under
@@ -231394,9 +231394,17 @@ wake in `W16S_LOAD` sets `w16_ldq`, kicks with `OSAPI_WM_WAKE` (which reports
 the queued one) and returns; the next wake, popped by the UI task from the
 ring, loads. If the kick is refused (a full ring) the first wake loads, as
 before. The high water for the same SOL launch is **336 bytes**: 174 under
-the canary, where it was -2. Real mode is unchanged; its launch is the same
-shape, and whether it wants the same deferral is the real-mode build's
-question.
+the canary, where it was -2.
+
+**Real mode takes both, since WIN16 S24.** Its launch has the same shape,
+and it overflowed the same way. On kern_big, `XVOL.EXE` run from A: by an
+`\AUTOSTRT` link, with WIN16 on C:, put up `STACK OVERFLOW TASK 00` while
+it copied between the two volumes. A cross-volume `_lwrite` goes through
+WIN16's DOS and the kernel's volume switch, on top of the wake's frames.
+With the load deferred to the ring's wake and the first instruction run
+from the tick, the same run shows no panel and ends *XVOL OK* (looked at).
+It costs real mode 68 bytes of image and 2 of bss; the arm's bytes are
+unchanged.
 
 #### 124.31.9 Verification
 

@@ -351,10 +351,10 @@ section .w16dlg
     W16BSS w16_nargb, 2         ; bytes the finishing call pops (-2: InitTask)
     W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
-%ifdef PKG_MEGA
-    W16BSS w16_old31, 4         ; ...and int 31h, DPMI's (124.31.6)
     W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
     W16BSS w16_ldq, 1           ; 1 = the load's wake was deferred (124.31.8)
+%ifdef PKG_MEGA
+    W16BSS w16_old31, 4         ; ...and int 31h, DPMI's (124.31.6)
     W16BSS w16q_wins, 2 * W16Q_NWIN ; the selectors the program made (124.31.6)
     W16BSS w16q_dosb, 2 * W16Q_NDOS ; GlobalDOSAlloc's claims (124.31.3)
     W16BSS w16_i31ss, 2         ; ...the program's stack while it runs on
@@ -1256,7 +1256,6 @@ w16_wake:
     je .kick
     cmp byte [w16_state], W16S_LOAD
     jne .out
-%ifdef PKG_MEGA
     cmp byte [w16_ldq], 0           ; the first wake defers to the ring's:
     jne .load                       ;   a document's handover calls this
     inc byte [w16_ldq]              ;   from inside the launch (an \AUTOSTRT
@@ -1264,7 +1263,6 @@ w16_wake:
     call OSAPI_WM_WAKE              ;   task 0's stack for the load's read
     jnc .out                        ;   (SPEC.md 124.31.8)
 .load:
-%endif
     mov byte [w16_state], W16S_RUN
     call w16_ldin                   ; CF=1: refused, [w16_l1]/[w16_l2] say why
     jc .refused
@@ -1280,17 +1278,8 @@ w16_wake:
     mov di, w16_l2
     call w16_strcpy
     call w16_repaint
-%ifdef PKG_MEGA
     mov byte [w16_go1], 1           ; the first instruction from the tick,
     jmp w16_tarm                    ;   not here (SPEC.md 124.31.8)
-%else
-    call w16_tarm                   ; the tick, for the pointer (w16_hover)
-    mov byte [w16_locked], 0        ; a wake holds no lock
-    xor ax, ax
-    xor dx, dx
-    call w16_resume                 ; the program's first instruction
-    call w16_after
-%endif
 .out:
     ret
 .kick:
