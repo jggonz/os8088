@@ -1368,6 +1368,13 @@ assoc_run_x:
     ; ASSOC.DAT. Bit 7 of [assoc_dead] is the once: volumes are 0..5 there
     test byte [assoc_dead], 0x80
     jnz .needs
+    mov si, assoc_doc           ; ONLY FOR THE EXTENSION'S OWN PROGRAM: one
+    call assoc_slot_of          ; OSAPI_PKG_START NAMED (21.5.3) is not the
+    jc .needs                   ; extension's to replace - DOS names WIN16
+    pop dx                      ; for an .EXE, the sweep answered DOS, and
+    push dx                     ; DOS forwarded again, a DOS a round on the
+    cmp al, dl                  ; UI stack until it overflowed (54.4.2.4).
+    jne .needs                  ; 14 bytes, even (t_hotpar, below)
     or byte [assoc_dead], 0x80
     pop ax                      ; the slot the extension named...
     push ax

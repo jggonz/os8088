@@ -105595,6 +105595,20 @@ into the toast. A flush that fails (a write-protected floppy, a module that
 will not load) still falls through to the sweep, which re-reads whichever
 file is there.
 
+**Only for the program the EXTENSION named.** `OSAPI_PKG_START`'s document
+arm names its program (§21.5.3), and that program need not be the one the
+document's extension names: `DOS.O88` hands a Windows program to
+`WIN16.O88`, and `.EXE` is DOS's. A sweep by extension then answers DOS,
+which forwards the document to WIN16 again, inside the call, with
+`[assoc_dead]` cleared by the new run. Each round nests another DOS on the
+UI task's stack, and the machine stopped on `STACK OVERFLOW TASK 00`
+instead of toasting `Needs WIN16.O88` (§124.18.1), on any machine with no
+WIN16.O88 it could find. So `.nofile` asks the extension first: when the
+document's extension names no slot, or another slot than the one that
+missed, the program was named, and the miss is the verdict at once. A
+double-click's slot is the extension's own, so it still gets its flush.
+**+14 bytes of `.cold`**, even for `t_hotpar`'s reason, no rung crossed.
+
 It costs nothing until a program is missing, and then it costs one full
 flush: a header read per package on that volume. That is milliseconds on a
 hard disk and seconds on a floppy, on a path that used to end in a refusal.
