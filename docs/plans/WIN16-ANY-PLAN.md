@@ -1720,7 +1720,9 @@ its table goes in the diary, so the reach is measured, not claimed.
     `WM_CREATE`, `EnableWindow` repaints a program's own child window,
     `StretchBlt` draws into a memory DC, and a monochrome source is inked
     there with the DC's colours. Media Player's Play and Eject and Sound
-    Recorder's Record show their glyphs; a disabled glyph is still blank.
+    Recorder's Record show their glyphs. A disabled glyph greys with a
+    checker since batch 3's look: a memory DC takes `DPSoa` under a
+    checkered brush now.
   - [x] Batch 2: the Program Manager DDE server, over S21 batch 5's
     routing (SPEC.md 124.33.2). `w16progm.inc`, all of it part 9's: a
     group is a folder in the Windows directory's `GROUPS` with a desktop

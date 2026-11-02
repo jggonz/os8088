@@ -229729,7 +229729,7 @@ batch 3 below covers both.
 | | |
 |---|---|
 | a wide pen | `CreatePen` keeps the width, 1 to `W16_PENMAX` (64), and `PS_INSIDEFRAME`. A line under a pen wider than one pixel paints that many pixels across its major axis, centred on it, at every step, so no pixel is painted twice (`w16_lplotw`). A closed figure (`Rectangle`, `Ellipse`, `RoundRect`) puts its frame outside the box by half the width each way, as Windows centred a pen on the edge, unless the pen is `PS_INSIDEFRAME`. The frame is as wide as the pen and the brush fills inside it, no pixel twice. A round rectangle's frame is the band between its outer and inner outlines (`w16_rrwide`, a corner at most `W16_RRMAX` (127) pixels) |
-| a source ROP under a solid brush | `BitBlt` and `StretchBlt` from a memory DC take any ROP whose index byte has differing halves (the pattern plays a part) when the selected brush is one solid colour. For each plane the brush's bit picks a half of the index byte, and each source pixel and the pixel under it are combined through a table built once for the call (`w16_roptab`, then `w16_nibrop` a row at a time). Paintbrush's text tool and its colour eraser draw this way. A checkered or hatched brush still answers FALSE |
+| a source ROP under a solid brush | `BitBlt` and `StretchBlt` from a memory DC take any ROP whose index byte has differing halves (the pattern plays a part) when the selected brush is one solid colour. For each plane the brush's bit picks a half of the index byte, and each source pixel and the pixel under it are combined through a table built once for the call (`w16_roptab`, then `w16_nibrop` a row at a time). Paintbrush's text tool and its colour eraser draw this way. **Into a memory DC, a checkered brush is drawn too** *(S24)*: each pixel is combined with the brush's own black or white there, alternating with the destination's x + y (`w16_ckrop`, through no table). That is how Media Player and Sound Recorder grey a disabled button's glyph (`DPSoa`). Onto the screen, a checkered or hatched brush still answers FALSE |
 | a uniform pattern brush | `CreatePatternBrush` on a bitmap whose top left 8 x 8 pixels are all one colour gives that colour's solid brush, so the solid-brush ROP above can draw with it. Paintbrush makes its text and fill brushes this way. Otherwise §124.17.1's rule applies |
 | memory DCs | `W16_NMDC` 8 at once, 4 before: the text tool holds five |
 | `WM_SIZE` | a `WM_SIZE` still in the queue for the window is made `WM_NULL` when a new one is sent or posted, so an older size never arrives after a newer one. Paintbrush's canvas posts itself 0 x 0 while it is being made, and that size arrived after the real one and emptied the canvas |
@@ -231941,8 +231941,12 @@ building the face in a memory DC and putting the glyph on with
   `WM_CTLCOLOR` leaves. This has not been compared with Windows 3.1.
 
 **Open:**
-- A disabled button's glyph is blank. It is drawn with `DPSoa` under a
-  checkered brush, which has no answer here (124.25.7).
+- ~~A disabled button's glyph is blank.~~ Done in S24: a memory DC takes
+  `DPSoa` under a checkered brush now (124.25.7), and the glyphs grey
+  with the checker, as Windows drew them. The look also found
+  `w16_nibrop` loading its source's virtual paragraph into DS without
+  converting it, a kern_mega fault (`FAULT 0D`) that no pattern ROP had
+  reached on the arm until then.
 - Media Player's Play on the CD answers *The specified parameter is out of
   range for the specified command* (124.32.4).
 

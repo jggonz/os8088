@@ -4137,3 +4137,25 @@ Three more items from S24's list:
   100 bytes of the image, and the kern_mega arm has 98. No installer
   among the targets has been seen to ask, so the real installs in S25
   will decide.
+
+## 2026-11-01: the disabled buttons, and a fault the arm had been hiding
+
+Media Player starts with every button disabled, and those buttons were
+blank. A disabled glyph is drawn with the ROP `DPSoa` under a checkered
+brush: the brush's black pixels cut half the glyph's ink away, which
+leaves a grey glyph. WIN16 built one table per call, for a solid brush,
+and refused a checker. A memory DC now takes it pixel by pixel. Each
+pixel uses the brush's black or white at that spot, which alternates
+with x + y.
+
+**The first look faulted.** Media Player stopped with *kern_mega FAULT 0D*
+at an offset that the map put in `w16_nibrop`, the routine every
+pattern ROP into a memory DC goes through. It loaded its source bitmap's
+segment straight into DS. In real mode that is a paragraph, but on the
+kern_mega arm it is a virtual paragraph and has to be converted. No
+pattern ROP had reached that routine on the arm before the checker let
+one through. One `W16SEG` fixed it.
+
+**Seen on the arm:** Media Player's four buttons and Sound Recorder's four
+disabled ones show checkered grey glyphs. Sound Recorder's Record, which
+is enabled, stays black.

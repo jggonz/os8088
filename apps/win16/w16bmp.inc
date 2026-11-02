@@ -1236,8 +1236,8 @@ w16_bltm:
     je .srok
     mov ax, [w16b_mbr]
     ICALL w16_brcol
-    cmp al, W16_GRAY
-    jae .no
+    cmp al, W16_GRAY                ; a checker is drawn pixel by pixel, its
+    ja .no                          ;   black and white alternating (w16_ckrop)
     mov [w16b_ropp], al
 .srok:
     mov ax, [w16b_cx]
@@ -1874,6 +1874,9 @@ w16_bm2bm:
     inc dx
     jmp short .row
 .rop:
+    pop dx                          ; DL's bit 0: the checker's phase at the
+    push dx                         ;   row's first pixel (w16_ckrop)
+    add dx, [w16_rl]
     call w16_nibrop
     jmp short .next
 .out:
@@ -1881,7 +1884,9 @@ w16_bm2bm:
 
 ; w16_nibrop - w16_nibrow's row, AX the source's segment, through w16_ropt:
 ; the source into w16_gbuf first, then each pixel there and the one under it
-; combined (SPEC.md 124.25.7). Takes AX, CX, SI, DI, BX.
+; combined (SPEC.md 124.25.7) - or, under a checkered brush ([w16b_ropp] =
+; W16_GRAY), through w16_ckrop, DL's bit 0 the first pixel's phase. Takes
+; AX, CX, SI, DI, BX, DX.
 w16_nibrop:
     push di
     push es
@@ -1892,7 +1897,7 @@ w16_nibrop:
     mov di, w16_gbuf
     xor bl, bl
     push ds
-    mov ds, ax
+    W16SEG ds, ax                   ; (a virtual paragraph on kern_mega)
     call w16_nibrow
     pop ds
     pop cx
@@ -1924,6 +1929,8 @@ w16_nibrop:
     shr ah, 1
 .dlo:
     and ah, 0x0F
+    cmp byte [w16b_ropp], W16_GRAY
+    je .ck
     push bx
     shl al, 1
     shl al, 1
@@ -1934,8 +1941,54 @@ w16_nibrop:
     xor bh, bh
     mov al, [w16_ropt + bx]
     pop bx
+.st:
     call w16_nibst
     loop .p
+    ret
+.ck:
+    call w16_ckrop
+    xor dl, 1
+    jmp short .st
+
+; w16_ckrop - AL = a source pixel, AH = the one under it, DL's bit 0 = the
+; checker's there (1 white, 0 black): AL = ROP [w16b_ropb] of the three, plane
+; by plane, as w16_roptab's table would have it for a solid brush of that
+; colour (SPEC.md 124.25.7). Keeps the rest
+w16_ckrop:
+    push bx
+    push cx
+    push dx
+    mov dh, [w16b_ropb]
+    test dl, 1
+    jz .p0
+    mov cl, 4                       ; the half where the pattern is 1
+    shr dh, cl
+.p0:
+    xor bl, bl                      ; BL = the answer, BH = the plane's bit
+    mov bh, 1
+.b:
+    xor cl, cl                      ; the index: S * 2 + D
+    test al, bh
+    jz .s0
+    mov cl, 2
+.s0:
+    test ah, bh
+    jz .d0
+    inc cl
+.d0:
+    mov ch, dh
+    shr ch, cl
+    test ch, 1
+    jz .z
+    or bl, bh
+.z:
+    shl bh, 1
+    cmp bh, 16
+    jb .b
+    mov al, bl
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; w16_nibrow - CX pixels (1 or more) from DS:SI to ES:DI, BH = 1 when the
