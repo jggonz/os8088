@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "9bea70673",
+  "stamped": "b1b0c9de5",
   "strings": "172e5a682e5edddb",
-  "why": "arena floor steps by quarters"
+  "why": "OemToAnsi and VerFindFile argument reads"
  },
  "WIN16_TXT": {
   "sources": [
