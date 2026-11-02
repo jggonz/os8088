@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "2d310289b",
-  "strings": "eaf95202b23c9064",
-  "why": "S21 batch 6: desktop launches join the running instance"
+  "stamped": "88eab0a48",
+  "strings": "89291148e238b0d9",
+  "why": "S21 batch 7: part 10 split, notify GlobalAlloc keeps code, XT emulator fetch; no user-visible manual change"
  },
  "WIN16_TXT": {
   "sources": [
