@@ -230431,7 +230431,7 @@ not claims: the program already holds most of the eight claims an owner may
 | block | holds |
 |---|---|
 | its DGROUP | `minalloc` + `ne_heap` (+ `ne_stack`, 0 in a library): its own block, so `LocalInit(DS, 0, cbHeap)` from its `LibEntry` finds the block and puts the heap at its end (§124.9) |
-| its code | every other segment, each at a paragraph of its own, as the program's are laid out (§124.3) |
+| its code | every other segment that is not discardable (§124.26.11), each at a paragraph of its own, as the program's are laid out (§124.3) |
 | its module record | what calls after the load read: each segment's paragraph, the entry table, and the resident and non-resident names tables, copied out of the file |
 
 A library has **one** DGROUP, as on real-mode Windows: every module that
@@ -230462,7 +230462,10 @@ non-resident names' offset and length, and `ne_csip`. Then come:
 - 16 bytes, the records of the libraries it imports;
 - two words for its resource table: the paragraphs into the block, and its
   bytes (`W16LM_RTAB`, `W16LM_RTLEN`);
-- each segment's paragraph;
+- 18 bytes for its discardable code (§124.26.11): its module block's six
+  words, the folder and volume it was read from, and its thunks' code
+  segment;
+- each segment's paragraph, 0 for a discardable one;
 - the three tables as the file has them;
 - the resource table, on a paragraph of its own (§124.23.6).
 
@@ -231514,8 +231517,8 @@ A segment is **discardable** here when it is a code segment (`NSF_DATA`
 clear) marked `NSF_DISCARD` (1000h), with bytes in the file, and with a
 length and a `minalloc` both under 64 KB. Every other segment is laid out
 in the claim as before: data segments, DGROUP among them, moveable code
-that is not discardable, and fixed code. A program's own libraries keep
-their code fixed (§124.23.2).
+that is not discardable, and fixed code. A program's own libraries follow
+the same rule since S24 (§124.26.11).
 
 **A discardable segment is reached only through its entries.** Microsoft's
 linker routes every far reference into a moveable segment through the
@@ -231813,13 +231816,153 @@ answer, its fields showed whatever its stack held: 3146 and 1036.
 
 #### 124.26.10 Not done *(S20 batch 1)*
 
-- A program's own libraries keep their code fixed.
+- A program's own libraries kept their code fixed until S24
+  (§124.26.11).
+- A segment named by its number from another segment is kept, so a
+  protected-mode-only library that loads its own selectors keeps all of
+  its code: VBRUN300, 329 KB in 98 segments. Windows' standard mode
+  discarded such code by marking the selector not present and loading the
+  segment again at the fault. On kern_mega that would need the kernel to
+  hand a package its not-present faults, which it does not.
 - A discardable segment of 64 KB is laid out fixed.
 - The flags are not carried through a thunk that loads a segment.
 - The kept loader part, 14.4 KB, and the module block stay for as long as
   the program runs; neither is discarded when memory runs short.
 - `GlobalCompact` and `GetFreeSpace` count discardable code but not
   discardable data or unused resources, which `GlobalAlloc` also discards.
+
+#### 124.26.11 A library's code is discardable too *(WIN16 S24, the lead's M1)*
+
+Until S24 a program's own libraries kept every code segment fixed
+(§124.23.2). Microsoft's Setup Toolkit ships nine of them beside its
+interpreter, and their code, about 160 KB, sat in the global heap for the
+whole of Mozart's setup. Its last dialog then could not have its 42 KB bitmap:
+four arenas and 810 KB, 68 KB free, the largest run 20 KB. Real-mode
+Windows discarded a library's code as it discarded a program's, and WIN16
+now does the same, by the same means: the thunks, the module block and the
+stack scan of §124.26.2-124.26.5. What follows is what a library adds to
+them.
+
+**Which segments.** §124.26.1's rule, applied to each library, on a CPU
+the census does not decide for. On an 8088 the census sweeps all of a
+module's code at once, so every discardable segment would be loaded at
+launch anyway (§124.26.3), and a library's code stays fixed there as
+before: no module block, no thunks.
+
+Two kinds of a library's discardable segments never go:
+
+- **its entry point's** (`ne_csip`) is laid out fixed in its code block,
+  since `LibEntry` runs from it once and the module record names it by its
+  paragraph (§124.23.4);
+- **one its own relocations name by number**, or by segment or offset
+  alone, is kept, as §124.26.1 and §124.26.2.1 keep a program's: loaded at
+  the library's launch and never discarded. A protected-mode-only library
+  (`NEF_PMODE`) thereby keeps all of them.
+
+Measured on the targets' trees with `os88ne.py`. The Setup Toolkit's
+libraries (MSCOMSTF, MSINSSTF, MSDETSTF, MSCUISTF, MSSHLSTF, MSUILSTF and
+MSCPYDIS) reach their code only through their entry tables: 1,000+ far
+calls between their segments, and every import of one by another a far
+call. Their few references by segment alone are MSINSSTF's and MSSHLSTF's,
+inside each library, and those few segments are kept. VBRUN300 is the
+other case. 98 of its 101 code segments (329 KB) are named by number from
+other segments, 2,679 times, because it is protected-mode-only code that
+loads selectors. None of it is discarded, and §124.26.10 says why not.
+
+**Where its code goes.** Its fixed segments in its code block, as before.
+Each discardable one, when it is loaded, gets a block of its own from the
+top of an arena (§124.26.3), marked `GHF_CODE`. The block's `GH_OWNER` is
+the segment's number in its low byte and the library's record index + 1
+in its high byte; a program's code has 0 there. `GH_TASK` is 0, since a
+library is no task's (§124.28.3).
+
+**Its module block.** A library with a discardable segment has a module
+block of its own, of §124.26.4's shape, made after its segments are read
+and before its record is written (§124.23.2.1, step 2). The six words that
+name the program's (`w16_cmb` to `w16_cnord`: the block, its relocation
+room, its live table, its thunks, its segments and its ordinals) are kept
+for the library in its module record block. With them go the folder and
+volume its file was read from, and its thunks' code segment (their code
+selector on kern_mega). The header grows from 36 bytes to 54:
+
+| | |
+|---|---|
+| +36 | the six words, `W16LM_CD` |
+| +48 | its folder and volume, `W16LM_DIR` and `W16LM_VOL` |
+| +52 | its thunks' code segment, `W16LM_TCS`; 0 when it has no module block |
+| +54 | each segment's paragraph, `W16LM_SEGS`: 0 for a discardable one |
+
+A library's load saves the importer's six words with the rest of its
+loader state (`w16l_svtab`, §124.23.2.1), together with `w16_cdo`, which
+is 1 during every module's load now, not only the program's.
+
+**Binding to a library's code.**
+
+- **A far pointer** (source type 3) to a library's moveable entry in a
+  discardable segment is bound to that library's thunk for the ordinal,
+  and so is `GetProcAddress`'s answer. Thunks are what change when a
+  segment is loaded or discarded. Every far call into the library, from
+  the program, from another library or from WIN16, therefore needs no
+  other patching, and none of the bound pointers ever names a block that
+  has gone.
+- **A segment or offset alone** (types 2 and 5) to such an entry refuses
+  the importer: *It imports a library's code by its segment.* A segment
+  number would be stale once the segment went, and keeping the segment
+  would mean loading it while the importer's relocations are applied, one
+  load inside another. None of the 26 folders of programs under
+  `win16ref/` has such an import.
+
+**A library's exported callbacks.** A window procedure a library
+registers, a dialog procedure, a hook, a timer or an enumeration callback
+is a far pointer the library built from one of its own relocations to its
+own entry. That relocation was given the thunk, so WIN16 calls the thunk,
+and a discarded segment is loaded on that call, on whichever task makes
+it. `MakeProcInstance` answers the pointer it was given (§124.23.3: a
+library's exports are shared-data entries), which is the thunk. The
+prologs `mov ax, DGROUP` are patched again at every load, with the
+library's own DGROUP.
+
+**A thunk is hit.** `w16_segld` gives the loader the thunk's code segment
+as well. `w16l_segin` finds whose thunks are there: the current program's,
+or a library's `W16LM_TCS`. A library's segment is loaded like a library:
+
+1. the program's loader state is set aside (`w16l_push`);
+2. the library's six words, file name, DGROUP and module references are
+   put in its place;
+3. the segment is read from the library's own folder, not the current
+   task's, since two tasks may run from two folders;
+4. the program's loader state is put back (`w16l_pop`).
+
+**Discarding.** §124.26.5's rule, over every loaded discardable segment:
+the current program's and every library's. The ages share one clock. A
+program's segment is in use while its own stack names it, as before. A
+library's is in use while ANY task's live stack names it, because a
+library runs on the stack of whichever task called it. The current
+task's stack is scanned in the bss, and each parked task's from its
+context block (§124.28.2), at the offsets the context list gives
+(`W16BO`). A parked task with no
+stack yet holds every library segment in use, as §124.26.5 has its own
+launch hold every one of its own.
+
+**`W16G_NOCODE`** (§124.9.1) covers library code as well. A library's
+code is code: it is placed from an arena's top and marked `GHF_CODE`. So
+an allocation from a program with a `GlobalNotify` procedure is placed
+below the first code segment of each arena, library code included, and
+discards no code segment of any module. Its shortage goes to its
+procedure. Without that mark, a program's allocations may discard library
+code, as Windows' did.
+
+**What a program is told is free.** `w16_gcan` (§124.26.5) counts a
+library's loaded segment that is not kept. It finds the segment's live
+entry through the high byte of the block's owner.
+
+**The loader part stays** (§124.26.3) while any library has a module
+block, as it does for a program with one. `LoadLibrary` of a library
+with discardable code keeps the part as well.
+
+**A library's end** (its count reaching 0, §124.23.5). Its loaded
+discardable segments and its module block are given back with its other
+blocks.
 
 ### 124.27 Windows inside a window: File Manager and Program Manager *(S20b, docs/plans/WIN16-ANY-PLAN.md)*
 
