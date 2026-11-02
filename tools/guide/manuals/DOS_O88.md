@@ -27,6 +27,14 @@ ways to use it:
 - **Double-click DOS.O88** itself. The window opens at the prompt, and you
   type the name of a program or a command.
 
+To open a program or a shortcut **without running it**, hold **Alt** while
+you double-click it, or select it and hold **Shift** while you press
+`Enter`. The command box, the arguments and the settings are all filled in,
+the prompt stands in the program's own folder, and the console says nothing
+was started. Click **Run** to start it, type a command such as `SETUP` at the
+prompt, or change the settings and use **Save Shortcut** to update a `.LNK`
+without running it.
+
 DOS needs a machine with the full system (it is not on the disks for the
 smallest, 128KB machines). A Sound Blaster, a hard disk and a network card
 are all optional; a program that wants one can use it when it is there.

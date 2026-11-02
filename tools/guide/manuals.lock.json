@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "cc9b679b",
-  "strings": "ab1cd0b5332c441d",
-  "why": "merge of main's WIN16 phase A: the DOS core shared with WIN16 (dosbe.inc) and the join box; no text a user sees changed"
+  "stamped": "b4a36e9e",
+  "strings": "78cda70b8ce3db92",
+  "why": "Shift/Alt held at a launch opens without running (SPEC.md 96.21.9): one paragraph under Starting DOS; the rest of the page describes the program as it is"
  },
  "DOTDEL_O88": {
   "sources": [
