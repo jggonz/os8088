@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "9eac8cb59",
+  "stamped": "9bea70673",
   "strings": "172e5a682e5edddb",
-  "why": "GetModuleFileName's folder and SWP_SHOWWINDOW"
+  "why": "arena floor steps by quarters"
  },
  "WIN16_TXT": {
   "sources": [
