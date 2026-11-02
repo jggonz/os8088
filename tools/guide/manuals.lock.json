@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "89b0c1391",
+  "stamped": "ba81d7a8e",
   "strings": "172e5a682e5edddb",
-  "why": "cyclic imports, LibMain chain, arm arenas, setup names"
+  "why": "library resources, peekwake lock state"
  },
  "WIN16_TXT": {
   "sources": [
