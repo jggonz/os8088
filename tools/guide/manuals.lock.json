@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "fbe0a189b",
+  "stamped": "de4dfd4ca",
   "strings": "172e5a682e5edddb",
-  "why": "5701h, LZClose's free"
+  "why": "DestroyWindow on a dying window"
  },
  "WIN16_TXT": {
   "sources": [
