@@ -16552,6 +16552,16 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16nowin", "soak", py("tests/win16nowin.py"), 60.0,
+        "SPEC.md 54.4.2.4, 124.18.1, WIN16-ANY-PLAN S24: TINY16.EXE alone on "
+        "B:, the shipped system disk in A: with APPS\\DOS.O88 and no "
+        "WIN16.O88 anywhere - a double-click on it opens DOS, which hands "
+        "the NE to a WIN16 that is not there, and the toast must say it "
+        "needs WIN16.O88 with the machine still running; before 54.4.2.4 "
+        "the miss re-ran the sweep by extension into DOS again, nesting a "
+        "DOS a round, and stopped on STACK OVERFLOW TASK 00 with no toast",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img",)),
     Row("win16xvol", "soak", py("tests/win16xvol.py"), 90.0,
         "SPEC.md 96.11.11, 96.27.1, 124.28.5, WIN16-ANY-PLAN S24: XVOL.EXE "
         "(`make win16fixtures`, tests/win16/xvol.c) on A:, a copy of the "
