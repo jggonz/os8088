@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "579251264",
+  "stamped": "9eac8cb59",
   "strings": "172e5a682e5edddb",
-  "why": "CallWindowProc enters the program's procedure at its segment"
+  "why": "GetModuleFileName's folder and SWP_SHOWWINDOW"
  },
  "WIN16_TXT": {
   "sources": [
