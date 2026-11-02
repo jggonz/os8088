@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "0cab0efac",
+  "stamped": "084991764",
   "strings": "debee5372c95da3c",
-  "why": "GlobalReAlloc slack; arm block selector stopgap"
+  "why": "the arm lends kern_mega a 1 KB stack for BIOS calls (SEG_LEND): internal, no user-visible change"
  },
  "WIN16_TXT": {
   "sources": [
