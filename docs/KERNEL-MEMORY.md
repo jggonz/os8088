@@ -327,7 +327,7 @@ had added.
     "minramkb": 128,
     "ovl": 5119,
     "stk0": 512,
-    "text": 40951,
+    "text": 40971,
     "toppara": 2880,
     "vga": 2032,
     "vgabuf": 336,
@@ -425,7 +425,7 @@ had added.
     "minramkb": 128,
     "ovl": 1477,
     "stk0": 512,
-    "text": 30675,
+    "text": 30695,
     "toppara": 1568,
     "vga": 0,
     "vgabuf": 0,
@@ -803,21 +803,21 @@ there and nowhere else.
 | theme | bytes | share |
 |---|---:|---:|
 | the file system, end to end | 29,351 | 37.4% |
-| the window system and its furniture | 22,235 | 28.4% |
+| the window system and its furniture | 22,255 | 28.4% |
 | drawing: adapters, primitives, glyphs, icons | 10,802 | 13.8% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 7,986 | 10.2% |
 | the kernel proper: API table, heap, scheduler, events | 7,400 | 9.4% |
 | the Control Panel | 316 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 300 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **78,390** | |
+| **total** | **78,410** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
 | module | `.text` | `.cold` | code | `.bss` | `.lowbss` | `.boot2` |
 |---|---:|---:|---:|---:|---:|---:|
+| `wm.inc` — the window manager (§11) | 8,979 | 158 | **9,137** | 1,156 | — | 34 |
 | `files.inc` — the Disk window (§22) | 1,164 | 7,967 | **9,131** | 574 | — | — |
-| `wm.inc` — the window manager (§11) | 8,959 | 158 | **9,117** | 1,156 | — | 34 |
 | `disk.inc` — volumes, mount, the FAT read path (§18–19) | 397 | 6,608 | **7,005** | 416 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,984 | **5,008** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,554 | 1,410 | **4,964** | 38 | 526 | — |
@@ -876,7 +876,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,167 | 279 | **2,446** | — | — | 666 |
-| **total** | **40,951** | **37,439** | **78,390** | **5,390** | **5,358** | **6,455** |
+| **total** | **40,971** | **37,439** | **78,410** | **5,390** | **5,358** | **6,455** |
 <!-- END generated table -->
 
 ### Reading it
