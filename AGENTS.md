@@ -1012,11 +1012,16 @@ user gives a different workflow. The worked example is
 - **Every disk-visible base is 512-byte aligned.** int 13h answers a transfer
   straddling a 64KB physical boundary with error 09h, and only starting
   512-aligned prevents it. The symptom is "Disk error" on a large save.
-- **Memory is two guards, not one** (docs/KERNEL-MEMORY.md): `KERN_BUDGET` is
-  the kernel's whole RAM footprint, `KERN_CODE_MAX` is `.text` + `.bss` inside
-  one 64KB window because offsets are 16 bits. They are relieved by different
-  mechanisms. **Raising either is a decision to take with whoever asked for the
-  feature, not a build fix.**
+- **Memory is two guards: `kern_big` resides in 100KB, `kern_small` in 64KB,
+  `kern_mega` in 68KB of conventional memory** (`KERN_BUDGET`,
+  docs/KERNEL-MEMORY.md; kern_mega's is `KERN_MEGA_RESIDENT_KB`, held against
+  `MEGA_RESIDENT` - its size less the `.cold` and `.mega` rungs it moves above
+  1MB). `kern_big` and `kern_small` boot on 128KB and `kern_mega` on a 1MB
+  machine's 640KB (`MEGA_BOOT_KB`), and `.text` + `.bss` stay inside one 64KB
+  window (`KERN_CODE_MAX`). Development may run 2KB over a budget
+  (`KERN_GRACE`); `make budget-check` holds all three exactly before a PR or
+  release. **Raising any of them is a decision to take with whoever asked for
+  the feature, not a build fix.**
 - **Before spending a resident byte, ask whether the feature is an ON-DEMAND
   MODULE** (§2.8, `kernel/mod.inc`, docs/plans/completed/ONDEMAND-PLAN.md §1's
   test): kernel code that ships as a file (`CTRL.DRV`, `FORMAT.DRV`,

@@ -270,9 +270,11 @@ extern bus_ctrl_hw_t pmh_bus_ctrl;
 static inline uint32_t save_and_disable_interrupts(void) { return 0; }
 static inline void restore_interrupts(uint32_t s) { (void)s; }
 static inline void __dmb(void) {}
-static inline void __sev(void) {}
-static inline void __wfe(void) {}
-static inline void __wfi(void) {}
+/* macros, not functions: an arm64 host's clang (Apple's) has these three as
+ * builtins and refuses a definition of them */
+#define __sev() ((void)0)
+#define __wfe() ((void)0)
+#define __wfi() ((void)0)
 static inline void __nop(void) {}
 
 #ifdef __cplusplus

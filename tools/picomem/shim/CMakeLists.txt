@@ -91,7 +91,10 @@ set(SHIM_SOURCES
   ${BIOS_C})
 
 add_library(pmhost SHARED ${FW_SOURCES} ${SHIM_SOURCES})
-set_target_properties(pmhost PROPERTIES OUTPUT_NAME pmhost-${BOARD})
+# .so on every host, Darwin's included: os88build.have_pmhost, pmhost.py,
+# os88marty, MartyPC's patch and the vm/ profiles all name libpmhost-<b>.so
+set_target_properties(pmhost PROPERTIES OUTPUT_NAME pmhost-${BOARD}
+  SUFFIX ".so")
 target_include_directories(pmhost PRIVATE ${SHIM}/include ${FW_INCLUDES})
 target_compile_options(pmhost PRIVATE
   -include ${SHIM}/include/pmhost_pico.h -fms-extensions -w
@@ -147,4 +150,8 @@ endif()
 target_compile_definitions(pmhost PRIVATE ${COMMON_DEFS} ${BOARD_DEFS})
 find_package(Threads REQUIRED)
 target_link_libraries(pmhost PRIVATE Threads::Threads)
-target_link_options(pmhost PRIVATE -Wl,--no-undefined)
+if(APPLE)
+  target_link_options(pmhost PRIVATE -Wl,-undefined,error)   # Apple ld's
+else()
+  target_link_options(pmhost PRIVATE -Wl,--no-undefined)
+endif()

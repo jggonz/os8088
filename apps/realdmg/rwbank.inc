@@ -353,9 +353,17 @@ rw_xclaim:
     call OSAPI_MEM_HUGE             ; DX = the first window, CX = 8
     jc .r
     cmp cx, 8                       ; BX = 0: the windows asked for (else 64KB
-    jne .no                         ;   apart, or a conventional claim)
+    jne .no                         ;   apart)
     or bx, bx
     jnz .no
+    push dx
+    mov bl, SEG_LIN
+    call OSAPI_SEG                  ; DX:AX = its linear base
+    jc .nl
+    cmp dx, 0010h                   ; below 1MB: MEM_HUGE's conventional
+.nl:                                ;   fallback, heap and not pool - refused
+    pop dx
+    jb .no
     mov [rw_xsel], dx
     clc
 .r:

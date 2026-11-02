@@ -245,7 +245,7 @@ index 0000000..1111111
 +    fn dlerror() -> *const c_char;
 +}
 +const RTLD_NOW: c_int = 2;
-+const RTLD_LOCAL: c_int = 0;
++const RTLD_LOCAL: c_int = if cfg!(target_os = "macos") { 4 } else { 0 };  // Darwin's, glibc's
 +
 +pub const PICOMEM_DEFAULT_WINDOW: usize = 0xD0000;
 +pub const PICOMEM_DEFAULT_WINDOW_SIZE: usize = 0x20000;

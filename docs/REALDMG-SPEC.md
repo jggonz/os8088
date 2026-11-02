@@ -692,8 +692,10 @@ cartridge in one claim, and no bank is ever fetched (`rw_xplan`,
 - **When it does not**: real mode (the arm runs on every kernel and plans as
   the shipped build does), a pool shorter than the cartridge, more
   than `RW_XROMMAX_KB`, or a claim refused - no run of free LDT entries that
-  long, or windows other than the 16KB ones asked for (the load then refuses
-  with the room message rather than fall back). Each of those
+  long, windows other than the 16KB ones asked for, or a claim whose base
+  (`OSAPI_SEG`'s `SEG_LIN`) is below 1MB - `OSAPI_MEM_HUGE`'s conventional
+  fallback, which would spend the heap this arm exists to leave alone (the
+  load then refuses with the room message rather than fall back). Each of those
   goes to the bank cache or one claim as before.
 - **A move**: nothing to put right - the pool moves a huge claim a 64KB
   piece at a time, REBASING its windows (the selectors are the same ones
