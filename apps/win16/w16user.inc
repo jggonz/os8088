@@ -213,6 +213,7 @@ WS_MINIMIZE_HI equ 0x2000
 WS_MAXIMIZE_HI equ 0x0100
 SWP_NOSIZE    equ 0x0001
 SWP_NOMOVE    equ 0x0002
+SWP_SHOWWINDOW equ 0x0040
 PM_REMOVE     equ 0x0001
 
 ; =============================================================================
@@ -890,14 +891,29 @@ w16u_movewnd:
     jmp short w16_moveto
 
 ; SetWindowPos (USER.232) - args: +0 flags, +2 cy, +4 cx, +6 y, +8 x,
-; +10 hWndInsertAfter, +12 hWnd. The Z order is os8088's.
+; +10 hWndInsertAfter, +12 hWnd. The Z order is os8088's. SWP_SHOWWINDOW
+; makes a child visible and repaints it there: MSCUISTF's dialogs (Arcade's
+; and Mozart's SETUP) are WS_CHILD with no WS_VISIBLE, shown so.
 w16u_setwndpos:
     call w16_args
+    xor cx, cx                      ; CX = 1: shown, so repainted even
+    test byte [es:bx], SWP_SHOWWINDOW ;   where it stays
+    jz .nshow
+    mov ax, [es:bx + 12]
+    call w16_hwnd2rec
+    jc .nshow0
+    or byte [bx + W16W_FLAGS], W16WF_VIS
+    inc cx
+.nshow0:
+    call w16_args
+.nshow:
     mov al, [es:bx]
     and al, SWP_NOSIZE | SWP_NOMOVE
     mov [w16_mvfl], al
     cmp al, SWP_NOSIZE | SWP_NOMOVE
-    je .one
+    jne .move
+    jcxz .one
+.move:
     mov ax, [es:bx + 8]
     mov [w16_mvx], ax
     mov ax, [es:bx + 6]
