@@ -227949,6 +227949,15 @@ table holds is refused at load: *Imports more than WIN16 can bind (384).*
 A missing import binds a slot like any other, so S5's 64 separate missing
 stubs go. The 64 names stay.
 
+**A slot is shared by handler** *(WIN16 S24)*. A row the loader has not
+bound yet first looks for a slot already bound to the same handler, part
+and argument bytes, by any earlier load, and takes it: such a slot does
+exactly what a new one would. Before, a later program whose loader part was
+a fresh copy (§124.28.2) took a new slot for every import, and
+InstallShield 3's engine (247 imports) after its launcher (135) needed 386
+of the 384: *Imports more than WIN16 can bind (384).* The search is in the
+loader part and costs the image nothing.
+
 #### 124.19.2 The gate
 
 The gate reads slot *k*:
@@ -229100,7 +229109,7 @@ state went in with S18, in the library part:
 |---|---|
 | `GlobalNotify` (KERNEL.154) | kept by nothing: a block allocated `GMEM_NOTIFY` is never discarded (§124.9, S19b), so there is no discard to be told of |
 | `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle; the block becomes the last, or the first, a shortage discards (§124.9, S19b) |
-| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less |
+| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less. On kern_mega the largest run plus all of the heap's free memory outside the arenas (§124.25.1) |
 | `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
 | `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
 | `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
@@ -229678,6 +229687,16 @@ they count the code segments `GlobalAlloc` may discard as well (§124.26.5).
 (§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
 it, so its bands are smaller here than on Windows, and it keeps more of
 them.
+
+**On kern_mega, nearer the sum** *(WIN16 S24)*: `GetFreeSpace` answers the
+largest run in an arena **plus all of the heap's free memory** outside the
+arenas, whether or not a slot is free (`OSAPI_MEM_AVAIL`'s BX), at most a
+megabyte. InstallShield 3's launcher (`SETUP.EXE`, *ISSET_SE*) refuses below
+700,000 bytes with an error whose text its own string table lacks, so it
+showed an empty box; on QEMU's 16 MB kern_mega the largest run was 388 KB
+and the heap held 510 KB more. Real mode keeps the largest run: 640 KB never
+reaches 700,000, and on Windows 3.0's real mode that launcher refused too.
+`GlobalCompact` is unchanged on both: it is what one `GlobalAlloc` gets.
 
 #### 124.25.2 A library's local heap has room *(S19b batch 1)*
 
@@ -230597,10 +230616,9 @@ Shared by the tasks, and so not on the list:
 - the window table, the classes, the global heap, the libraries, the bind
   table and the USER heap, each with an owner where one is needed
   (124.28.3). The bind table's 384 slots are shared. A later program's
-  imports reuse the slots of rows already bound only when the loader part
-  is kept (§124.26.3), since the row-to-slot map lives in it. A fresh copy
-  of the loader gives each row a slot of its own again, which wastes slots
-  but means the same thing;
+  imports reuse the slots of rows already bound: through the row-to-slot
+  map when the loader part is kept (§124.26.3), and otherwise by finding a
+  slot bound to the same handler (§124.19.1);
 - the focus, the capture, the display and the fonts;
 - the profiles, the clipboard and the parts;
 - the pointer, the keyboard and every handler's scratch.
@@ -230734,7 +230752,13 @@ it wins:
    Microsoft's Setup Toolkit selects `C:`, changes into `C:\~MSSTFQF.T`,
    copies its second stage there and starts `_mstest arcade.mst`. Before
    this step, WIN16 looked only in the places below, answered 2, and the
-   setup said *Insufficient memory or disk space*;
+   setup said *Insufficient memory or disk space*. The DOS's open of a name
+   with a folder walks back to the program's folder when it is done
+   (§96.48), so WIN16 reads one byte through the handle, which stands the
+   machine on the file, before it asks where that is. Without the read,
+   InstallShield 3's launcher, run from `A:`, started
+   `C:\SYSTEM\APPDATA\WIN16\_INS0433._MP` and WIN16 looked for it in
+   `A:\`: *This is not a Windows program*, and `WinExec` answered 11;
 2. the caller's own folder;
 3. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
 4. `SYSTEM\` under it;

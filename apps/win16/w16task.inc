@@ -1765,8 +1765,10 @@ w16t_where:
 ; its file part w16t_name's, opened through WIN16's DOS: a name with no
 ; folder is the CURRENT directory's, the first place Windows looks. Microsoft's
 ; Setup Toolkit selects C:, changes into C:\~MSSTFQF.T and starts
-; "_mstest arcade.mst" there (124.28.5). out: CF=0 DX = the folder holding
-; it, BL = its volume. Clobbers AX, CX, SI, DI, ES
+; "_mstest arcade.mst" there (124.28.5). The open leaves the machine in the
+; program's folder, so a byte read stands it on the file before WIN16 asks
+; where: InstallShield starts C:\...\_INS0433._MP from A:. out: CF=0 DX = the
+; folder holding it, BL = its volume. Clobbers AX, CX, SI, DI, ES
 w16t_cwd:
     push ds
     pop es
@@ -1801,8 +1803,13 @@ w16t_cwd:
     mov dx, w16_dtbuf               ;   against its current drive and folder
     ICALL w16_dcall
     jc .ret
-    push ax
-    call OSAPI_FILE_HERE            ; DX, BL: where the open stood
+    xchg ax, bx                     ; BX = the handle
+    push bx
+    mov ah, 0x3F                    ; a byte read, which stands the machine
+    mov cx, 1                       ;   where the file is: an open of a name
+    mov dx, w16_dtbuf               ;   with a folder walks back to the
+    ICALL w16_dcall                 ;   program's (SPEC.md 96.48, 124.28.5)
+    call OSAPI_FILE_HERE            ; DX, BL: where the file is
     pop ax
     push bx
     push dx

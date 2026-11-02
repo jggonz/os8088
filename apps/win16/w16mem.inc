@@ -943,10 +943,28 @@ w16k_lockseg:
 .out:
     ret
 
+%ifdef PKG_MEGA
+; GetFreeSpace (KERNEL.169) - args: +0 wFlags. DX:AX = the largest run in an
+; arena, as GlobalCompact's, PLUS all of the heap's free memory outside
+; them: Windows answered a sum, not what one GlobalAlloc gets (SPEC.md
+; 124.25.1). InstallShield's launcher wants 700,000 bytes
+w16k_gspace:
+    push di
+    mov di, 1
+    jmp short w16k_gcomp1
+%else
+w16k_gspace equ w16k_gcompact       ; real mode: the largest run (124.25.1)
+%endif
+
 ; GlobalCompact (KERNEL.25) - args: +0 dwMinFree. DX:AX = the largest block
 ; GlobalAlloc could give now: a run in an arena of free blocks and code it
 ; may discard (w16_gcan), or a new claim's
 w16k_gcompact:
+%ifdef PKG_MEGA
+    push di
+    xor di, di                      ; DI = 1: GetFreeSpace's
+w16k_gcomp1:
+%endif
     push bx
     push si
     push es
@@ -981,6 +999,10 @@ w16k_gcompact:
     inc si
     jmp short .arena
 .claims:
+%ifdef PKG_MEGA
+    or di, di                       ; GetFreeSpace: the heap's free memory,
+    jnz .room                       ;   whether or not a slot is free
+%endif
     xor si, si                      ; a new arena only while a slot is free
 .free:                              ;   (SPEC.md 124.25.1)
     cmp word [w16_arena + si], 0
@@ -993,6 +1015,12 @@ w16k_gcompact:
     jmp short .kb
 .room:
     call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
+%ifdef PKG_MEGA
+    or di, di
+    jz .cap
+    xchg ax, bx                     ; ...or BX, all of it, for GetFreeSpace
+.cap:
+%endif
     cmp ax, 1023
     jbe .kb
     mov ax, 1023
@@ -1001,6 +1029,15 @@ w16k_gcompact:
     mov cl, 6
     shl ax, cl
     pop cx
+%ifdef PKG_MEGA
+    or di, di
+    jz .most
+    add cx, ax                      ; ...added to the largest run, at most
+    jnc .have                       ;   a megabyte
+    mov cx, 0xFFFF
+    jmp short .have
+.most:
+%endif
     cmp ax, cx
     jbe .have
     mov cx, ax
@@ -1014,6 +1051,9 @@ w16k_gcompact:
     pop es
     pop si
     pop bx
+%ifdef PKG_MEGA
+    pop di
+%endif
     ret
 
 ; w16_gcan - ES = a block's header. CF=0 when GlobalAlloc can have its room:

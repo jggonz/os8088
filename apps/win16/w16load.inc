@@ -2129,7 +2129,8 @@ w16_bindinit:
 
 ; -----------------------------------------------------------------------------
 ; w16_bindrow - AX = an export row -> AX = its bind slot, given out and
-; written on the row's first import. CF=1 every slot is taken. Keeps the rest.
+; written on the row's first import, or one already bound to the same handler
+; by an earlier load. CF=1 every slot is taken. Keeps the rest.
 ; -----------------------------------------------------------------------------
 w16_bindrow:
     push bx
@@ -2141,6 +2142,37 @@ w16_bindrow:
     mov dx, [cs:w16l_rowslot + bx]  ; (0 is the image's own slot, never a row's)
     or dx, dx
     jnz .have
+    push ax                         ; SI = the row
+    mov cx, W16X_SIZE
+    mul cx
+    mov si, ax
+    add si, w16_exports             ; XSEC-OK: read through cs:
+    pop ax
+    push bx                         ; a slot another task's load bound to
+    mov bx, 4 * W16_NFIXED          ;   the same handler serves this row as
+    mov dx, W16_NFIXED              ;   well: a fresh copy of the loader
+.same:                              ;   knows no rows (SPEC.md 124.19.1)
+    cmp dx, [w16_nbind]
+    jae .new
+    mov cl, [cs:si + W16X_ARGB]
+    cmp [w16_bind + bx + W16B_ARGB], cl
+    jne .next
+    mov cl, [cs:si + W16X_PART]
+    cmp [w16_bind + bx + W16B_PART], cl
+    jne .next
+    mov cx, [cs:si + W16X_PROC]
+    cmp [w16_bind + bx + W16B_PROC], cx
+    je .found
+.next:
+    add bx, W16B_SIZE
+    inc dx
+    jmp short .same
+.found:
+    pop bx
+    mov [cs:w16l_rowslot + bx], dx
+    jmp short .have
+.new:
+    pop bx
     mov dx, [w16_nbind]
     cmp dx, W16_NBIND
     jae .full
@@ -2153,10 +2185,6 @@ w16_bindrow:
     mov [w16_trow + bx], ax
     pop bx
 %endif
-    mov cx, W16X_SIZE               ; the row: AX * 7
-    mul cx
-    mov si, ax
-    add si, w16_exports             ; XSEC-OK: read through cs:
     mov bx, [cs:w16l_rowslot + bx]
     shl bx, 1
     shl bx, 1
