@@ -226482,7 +226482,8 @@ not yet authorised); each story pins its subsection here before its code:
   S16 (§124.21);
 - no segment moving or discarding (R6) - a `GMEM_DISCARDABLE` global block
   is discarded since S19b (§124.9), but no code or data segment is;
-- no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
+- no OLE, printing or MMSYSTEM (R4, R7, R8), and no DDE before S21:
+  since S21 programs in one instance talk DDE (§124.28.6);
 - the clipboard carries text only, because §55's does (§124.16.1);
 - no WinHelp of WIN16's own: since S21 `WinHelp` starts the user's
   `WINHELP.EXE` in the instance (§124.28.10), and says so in a message box
@@ -230620,7 +230621,43 @@ stays the first program's.
   `InSendMessage` still answers 0, and `ReplyMessage` is not bound.
 - **`SendMessage` to `HWND_BROADCAST`**, and `PostMessage` to it, reach the
   top-level windows of every task, which is how a DDE conversation starts
-  (`WM_DDE_INITIATE`).
+  (`WM_DDE_INITIATE`) *(S21 batch 5)*. Each window gets the message with
+  its own HWND, in the window table's order, as USER sent it:
+  - another task's window, or a WIN16 control, is answered at once, as a
+    single send to it is;
+  - the caller's own window is a call into the program, and the rest of
+    the broadcast is that call's continuation (`w16t_bnext`). The message
+    rides in the call's extra bytes, not in WIN16's state, because the
+    procedure may send, or broadcast, before it returns;
+  - a post goes into each window's task's queue.
+
+  Both answer 1. The two rows are part 9's (`w16t_sendmsg`,
+  `w16t_postmsg`), which pass any other window to the image's handlers:
+  the image's room is the kern_mega arm's too, and it has none.
+
+**DDE needs nothing more.** Its messages are posted and sent as any
+others, between windows of one instance. Its atoms are global atoms, and
+its data is a `GMEM_DDESHARE` block, which no task owns (124.28.3) and
+which the other task reads through the same handle, the global heap
+being the instance's. TASKS and TASKB hold a conversation from
+`WM_DDE_INITIATE` to `WM_DDE_TERMINATE` (124.28.11).
+
+**Global atoms are the registered clipboard formats' table**
+(§124.25.10), as Windows' formats were global atoms. `GlobalAddAtom`,
+`GlobalFindAtom` and `GlobalGetAtomName` (USER.271, *S21 batch 5*) use
+it, and names compare without case.
+
+**Not yet, pinned:**
+
+- **The table holds four names** (`W16_NCBF`), clipboard formats and
+  atoms together, so a fifth `GlobalAddAtom` answers 0. Each name is 32
+  bytes of the image's bss, which the kern_mega arm has no room for. A
+  DDE client that names an application, a topic and an item uses three.
+  Program Manager's DDE server (WIN16-ANY-PLAN S24) and a program that
+  registers formats as well need more. The table is to move into part 9
+  with its three routines.
+- `GlobalDeleteAtom` answers 0 and deletes nothing, so the four are
+  spent once.
 
 #### 124.28.7 A task's end
 
@@ -230681,7 +230718,7 @@ always ended it.
 | `GetInstanceData` | copies bytes from another task's DGROUP at the same offset |
 | `WinExec`, `LoadModule` | 124.28.5 |
 | `InSendMessage`, `ReplyMessage` | 124.28.6 |
-| `GlobalGetAtomName`, `GlobalDeleteAtom` | the global atom table, shared by every task, which DDE names its application and topic in |
+| `GlobalGetAtomName`, `GlobalDeleteAtom` | the global atom table, shared by every task, which DDE names its application and topic in (124.28.6) |
 | `WinHelp` | 124.28.10 |
 
 #### 124.28.10 Windows Help *(S21 batch 4)*
@@ -230758,12 +230795,18 @@ The **`win16tasks`** row runs Watcom fixtures in one instance:
 
 - `TASKS.EXE` starts `TASKB.EXE` with `WinExec`, and the last time with
   `ShellExecute` (§124.24.10);
-- the two talk through `SendMessage` and `PostMessage` both ways, then hold
-  a DDE conversation from `WM_DDE_INITIATE` to `WM_DDE_TERMINATE`;
+- the two talk through `SendMessage` and `PostMessage` both ways, and
+  `PostAppMessage`;
+- TASKS posts and sends to `HWND_BROADCAST`, and both programs' windows
+  must get each, its own window by the continuation and TASKB's at once;
+- they hold a DDE conversation from `WM_DDE_INITIATE` to
+  `WM_DDE_TERMINATE` over three global atoms, and the `GMEM_DDESHARE`
+  block of `WM_DDE_DATA` must still read "42" after TASKB has ended;
 - each checks the other's answers and its own task calls;
 - one ends while the other goes on.
 
-The row then counts the instance's claim records, with the two programs
-and a library loaded, against §124.25.1's eight. Program Manager 3.0
-starting Clock and Notepad, and Notepad's Help menu opening Windows Help,
-are Microsoft's programs, and are looked at.
+The row also reads the kernel's claim records while the programs run:
+the instance's stay within §124.25.1's eight. When the MessageBox is
+closed and the instance ends, the heap must be the one before the launch.
+Program Manager 3.0 starting Clock, and Calculator's Help menu opening
+Windows Help, are Microsoft's programs, and are looked at (124.28.10).

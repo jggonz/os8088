@@ -3202,3 +3202,46 @@ for Help's code. Four arenas it is, with the arithmetic in SPEC.md.
 Help itself then says it cannot find `CALC.HLP`, even with the file next to
 it, and its own File > Open lists no help files. That is the next thing to
 trace. Notepad and Help together need more than 640 KB.
+
+## 2026-11-02 — S21, batch 5: two programs hold a conversation
+
+**DDE is mostly messages that already worked.** Windows' Dynamic Data
+Exchange is a protocol built on ordinary window messages. A client
+broadcasts `WM_DDE_INITIATE` naming an application and a topic, and any
+program that serves them answers `WM_DDE_ACK`. After that the two post
+`WM_DDE_REQUEST`, `WM_DDE_DATA` and the rest straight to each other's
+windows. The names are global atoms, and the data travels in a shared
+global memory block. Batches 2 and 3 had already made posts and sends
+cross between programs, and the shared heap meant a block made by one
+program can be read by the other. What was missing was the broadcast.
+
+**A broadcast to your own window cannot be answered on the spot.** Sending
+to another program's window runs that program and comes back with its
+answer, all inside the call. Sending to the caller's own window is
+different: WIN16 cannot call the program's code from inside the program's
+own call. It sets up the call and lets the program run it, and a
+"continuation" picks up afterwards. So a broadcast becomes a chain: send
+to each window in turn, and when one of them is the caller's own, the rest
+of the broadcast waits in that call's continuation. The message rides
+along in the call's own stack space, because the window procedure may
+send messages of its own before it returns, and WIN16's scratch copy of
+"the message" would not survive that.
+
+**The image had no room to spare, so the work went elsewhere.** The
+protected-mode build of WIN16, being written alongside, shares the main
+image and has one byte left. So `SendMessage` and `PostMessage` are now
+answered in part 9, a part loaded on demand, which passes anything that
+is not a broadcast on to the old handlers. The image grew by ten bytes,
+the trampoline the continuation needs.
+
+**The test.** TASKS asks TASKB for an item called *Answer* and gets "42"
+back. That needs the broadcast post to have reached TASKB first, and the
+shared block must still read "42" after TASKB has ended. The new
+`win16tasks` row reads the verdict and also watches the memory claims:
+both programs together stay within the eight one os8088 program may hold,
+and everything is handed back when the instance closes.
+
+**A limit found on the way:** WIN16's atom table is the clipboard format
+table, and it holds four names. That is enough for this conversation and
+too few for Program Manager's DDE server, so moving it out of the image is
+on the list.

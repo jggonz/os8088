@@ -544,6 +544,7 @@ W16EXPORT W16M_USER,       224,     2,  w16t_wndtask        ; GetWindowTask(word
 W16EXPORT W16M_USER,       116,     10, w16t_postapp        ; PostAppMessage(word word word long)
 W16EXPORT W16M_KERNEL,     166,     6,  w16t_winexec        ; WinExec(str word)
 W16EXPORT W16M_KERNEL,     45,      8,  w16t_loadmod        ; LoadModule(str ptr)
+W16EXPORT W16M_USER,       271,     8,  w16u_cbfmtname      ; GlobalGetAtomName(word ptr word)
 ; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
 ; the loader to their values, as __AHINCR is (w16l_segv, in that order)
 %assign W16_SEGROWP W16NX       ; ONE number for both (a row put between two
@@ -656,8 +657,8 @@ W16_XDDP equ W16NX                ; DefDlgProc's row: bound to slot W16_DDPROW
 W16EXPORT W16M_USER,       308,     10, w16u_defdlgproc     ; DefDlgProc(word word word long)
 W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
 W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
-W16EXPORT W16M_USER,       110,     10, w16u_postmsg        ; PostMessage(word word word long)
-W16EXPORT W16M_USER,       111,     10, w16u_sendmsg        ; SendMessage(word word word long)
+W16EXPORT W16M_USER,       110,     10, w16t_postmsg        ; PostMessage(word word word long)
+W16EXPORT W16M_USER,       111,     10, w16t_sendmsg        ; SendMessage(word word word long)
 W16EXPORT W16M_USER,       113,     4,  w16u_translate      ; TranslateMessage(ptr)
 W16EXPORT W16M_USER,       114,     4,  w16u_dispatch       ; DispatchMessage(ptr)
 W16EXPORT W16M_USER,       124,     2,  w16u_updatewnd      ; UpdateWindow(word)

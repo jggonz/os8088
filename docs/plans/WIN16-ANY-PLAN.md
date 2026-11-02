@@ -1356,7 +1356,27 @@ its table goes in the diary, so the reach is measured, not claimed.
       program's refusal is not shown. Program Manager starting Notepad is
       that memory limit too.
     - 25 bytes of the image (494 left).
-  - [ ] Batch 5: DDE, the `win16tasks` row (its fixtures came in batch 2).
+  - [x] Batch 5: DDE, the `win16tasks` row (its fixtures came in batch 2).
+    - `SendMessage` and `PostMessage` to `HWND_BROADCAST` reach every
+      task's top-level windows, each with its own HWND. A send to the
+      caller's own window is a call into the program, and the rest of the
+      broadcast is its continuation, with the message in the call's extra
+      bytes. Both rows went to part 9, so the image grew only by the
+      continuation's 10-byte trampoline (484 left).
+    - DDE needed nothing else: posts and sends already cross tasks,
+      `GMEM_DDESHARE` blocks are nobody's, and atoms are the clipboard
+      formats' table. `GlobalGetAtomName` (USER.271) is bound.
+    - TASKS and TASKB hold a conversation, TaskB|Test, item Answer: a
+      broadcast post both windows get, `WM_DDE_INITIATE` broadcast and
+      acknowledged inside the send, `WM_DDE_REQUEST`, `WM_DDE_DATA` in a
+      `GMEM_DDESHARE` block that still reads "42" after TASKB has ended,
+      and `WM_DDE_TERMINATE` both ways. *TASKS OK*; MDI OK.
+    - The `win16tasks` row reads that MessageBox, watches the instance's
+      claims stay within eight, and checks the heap is back to before
+      the launch when the instance ends.
+    - Not done, now SPEC (§124.28.6): the atom table holds four names,
+      formats and atoms together, and `GlobalDeleteAtom` frees none. It
+      is to move into part 9.
 
 ### Phase B: protected mode, on a 286 and up (O1)
 

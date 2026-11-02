@@ -152,6 +152,8 @@ W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
                                 ;   DC's font (SPEC.md 124.24.4)
 W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
                                 ;   memory DC's (SPEC.md 124.25.3)
+HWND_BROADCAST equ 0xFFFF        ; SendMessage's and PostMessage's: every
+                                ;   top-level window (SPEC.md 124.28.6)
 W16_NARENA   equ 4              ; global heap arenas at once (w16mem.inc,
                                 ;   SPEC.md 124.25.1)
 W16_NGH      equ 256            ; moveable global handles

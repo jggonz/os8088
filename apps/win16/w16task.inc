@@ -1311,6 +1311,179 @@ w16t_hfind:
     pop bx
     ret
 
+; SendMessage (USER.111) and PostMessage (USER.110) - args: +0 lParam, +4
+; wParam, +6 msg, +8 hWnd. HWND_BROADCAST is every task's top-level windows
+; (SPEC.md 124.28.6); any other window is the image's w16u_sendmsg's and
+; w16u_postmsg's. Here and not there for the image's room, which the
+; kern_mega arm has none of
+W16SYS w16t_sendmsg
+    ICALL w16_args
+    cmp word [es:bx + 8], HWND_BROADCAST
+    je .bc
+    ICALL w16u_sendmsg
+    ret
+.bc:
+    ICALL w16_smargs
+    jmp short w16t_bsend
+
+W16SYS w16t_postmsg
+    ICALL w16_args
+    cmp word [es:bx + 8], HWND_BROADCAST
+    je .bc
+    ICALL w16u_postmsg
+    ret
+.bc:
+    ICALL w16_smargs
+    jmp w16t_bpost
+
+; w16t_bsend - SendMessage to HWND_BROADCAST (USER.111, SPEC.md 124.28.6):
+; [w16_sm_msg/wp/lp] sent to every top-level window of every task, in slot
+; order, each with its own HWND, as Windows' USER did. Another task's window
+; and a WIN16 control are answered at once (w16_sendwnd: w16t_xsend, the
+; control's procedure); the caller's own window is a call into the program,
+; and the rest of the broadcast is its continuation (w16t_bnext). The
+; message rides in that call's extra bytes, not in WIN16's state, since the
+; procedure may send or broadcast itself before it returns. The answer is 1
+w16t_bsend:
+    xor cx, cx
+w16t_bfrom:                         ; CX = the first slot
+    push bp
+    push word [w16_sm_lp + 2]
+    push word [w16_sm_lp]
+    push word [w16_sm_wp]
+    push word [w16_sm_msg]
+    mov bp, sp                      ; (the host's stack: SS)
+.w:
+    cmp cx, W16_MAXWND
+    jae .done
+    ICALL w16_slot2rec              ; BX = slot CX's record
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .n
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz .n
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .n
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .n
+    mov ax, [bp]                    ; the message again: a send before this
+    mov [w16_sm_msg], ax            ;   one may have changed every word
+    mov ax, [bp + 2]
+    mov [w16_sm_wp], ax
+    mov ax, [bp + 4]
+    mov [w16_sm_lp], ax
+    mov ax, [bp + 6]
+    mov [w16_sm_lp + 2], ax
+    ICALL w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    call w16t_bown
+    jc .own
+    push cx
+    push bp
+    mov si, w16_cont_ret            ; XSEC-OK: an image continuation
+    xor ax, ax
+    ICALL w16_sendwnd               ; answered before it returns
+    pop bp
+    pop cx
+.n:
+    inc cx
+    jmp short .w
+.own:
+    mov ax, cx                      ; the continuation's word: this slot
+    mov cx, 8
+    mov si, w16t_bnext_c            ; XSEC-OK: its image trampoline
+    ICALL w16_cbopen                ; ES:DI = the extra bytes
+    cld
+    mov si, bp
+    mov cx, 4
+.cp:
+    mov ax, [ss:si]
+    stosw
+    inc si
+    inc si
+    loop .cp
+    ICALL w16_sendgo                ; BX = the window
+    add sp, 8
+    pop bp
+    ret
+.done:
+    add sp, 8
+    pop bp
+    mov ax, 1
+    xor dx, dx
+    ret
+
+; w16t_bown - BX = a window, AX = its HWND: CF=1 it is the caller's own and
+; not a WIN16 control, so a send to it is a call into the program
+w16t_bown:
+    ICALL w16_isctl
+    jnc .no
+    cmp byte [w16_ntk], 2
+    jb .yes
+    call w16t_hwtask                ; AL = its task + 1
+    dec al
+    js .yes
+    cmp al, [w16_cur]
+    je .yes
+.no:
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+; w16t_bpost - PostMessage to HWND_BROADCAST (USER.110): [w16_sm_*] posted
+; to every top-level window of every task, each to its own task's queue
+; (w16_post) and with its own HWND. The answer is 1, as Windows'
+w16t_bpost:
+    push word [w16_sm_hwnd]
+    xor cx, cx
+.w:
+    ICALL w16_slot2rec
+    test byte [bx + W16W_FLAGS], W16WF_USED
+    jz .n
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz .n
+    test word [bx + W16W_STYLE + 2], WS_CHILD_HI
+    jnz .n
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .n
+    ICALL w16_rec2hwnd
+    mov [w16_sm_hwnd], ax
+    push cx
+    xor al, al                      ; (a full queue: that window misses it)
+    cmp byte [w16_ntk], 2
+    jb .q
+    call w16t_post                  ; its task's queue
+    jmp short .p
+.q:
+    ICALL w16_postq
+.p:
+    pop cx
+.n:
+    inc cx
+    cmp cx, W16_MAXWND
+    jb .w
+    pop word [w16_sm_hwnd]
+    mov ax, 1
+    xor dx, dx
+    ret
+
+SCONT w16t_bnext                    ; ...a window of the caller's answered:
+    push es                         ;   CX = its slot. The message, out of the
+    mov es, [w16_pss]               ;   call's extra bytes, which end where
+    mov bx, [w16_psp_]              ;   the served import's frame begins
+    mov ax, [es:bx - 8]
+    mov [w16_sm_msg], ax
+    mov ax, [es:bx - 6]
+    mov [w16_sm_wp], ax
+    mov ax, [es:bx - 4]
+    mov [w16_sm_lp], ax
+    mov ax, [es:bx - 2]
+    mov [w16_sm_lp + 2], ax
+    pop es
+    inc cx
+    jmp w16t_bfrom
+
 ; w16t_drun - AL = a task that has never run, from inside the current task's
 ; call: its first run, now, nested in that call - a directed yield - until
 ; it waits or ends (124.28.10). The caller is current again after. A task
