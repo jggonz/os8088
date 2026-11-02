@@ -2246,6 +2246,18 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          a window over memory above 1MB
                                  ;          (SPEC.md 124.31.3). CF=1 on a
                                  ;          real-mode kernel
+                                 ; SEG_LEND DX = the real paragraph of a
+                                 ;          claim of yours below 1MB
+                                 ;          (SEG_REAL's answer for its
+                                 ;          base), CX = the top of a
+                                 ;          stack in it: a BIOS int 10h-1Fh
+                                 ;          made on a stack that is not the
+                                 ;          kernel's runs on this one
+                                 ;          (SPEC.md 50.6.11, 124.31.2).
+                                 ;          The last lender's is used; DX =
+                                 ;          0 takes yours back, and your end
+                                 ;          does. CF=1 on a real-mode kernel
+                                 ;          or DX no claim's base
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
@@ -2265,6 +2277,7 @@ SEG_AIM     equ 7
 SEG_AT      equ 8
 SEG_TILE    equ 9
 SEG_WINL    equ 10
+SEG_LEND    equ 11
 
 ; OSAPI_IMG_NAME - WHICH driver or module an image is (KERN-MEGA-PLAN 14.70.3).
 ; A class names a driver only when it has one, and a module's header names

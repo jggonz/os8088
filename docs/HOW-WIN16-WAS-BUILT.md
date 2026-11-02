@@ -4450,3 +4450,38 @@ the LDT's 2,016 in eight seconds. The lead approved two changes:
   did, plus a walk window for WIN16's own header touches.
 
 With both, the LDT levels off at 1,646 entries.
+
+## 2026-11-02: a stack for the BIOS
+
+The next thing that stopped Mozart's setup was a reboot. Its user-interface
+library calls `int 10h` straight from its own code. On kern_mega a software
+int goes down to real mode for the BIOS, on the stack it was made on, and a
+WIN16 program's stack is a claim above 1MB. Real mode took the stack's
+selector for a segment, and the BIOS pushed its frame somewhere under 1MB
+that belonged to someone else.
+
+The lead decided against a stack in the kernel's own low memory, which
+would have cost every kern_mega machine a rung for one package. WIN16
+lends one instead: a 1 KB claim below 1MB, handed over with a new
+`OSAPI_SEG` subfunction, `SEG_LEND` (SPEC.md 50.6.11). When a BIOS int
+arrives on a stack that is not the kernel's, `mega_svc` moves the caller's
+frame onto the lent stack, and a return stub puts the caller's stack back
+afterwards. A software int made with no stack lent is the caller's stack
+fault.
+
+The first try faulted at once, `GP 0D err 1180` inside `mega_svc`. The
+plan had assumed a claim's paragraph below 1MB is also a usable selector.
+It is not: kern_mega's GDT is an identity map only up to `.cold`, and every
+claim has an LDT selector. A lent stack has two names, then: its selector
+in protected mode and its paragraph in real mode. `SEG_LEND` takes the
+paragraph and finds the claim's selector. `mega_svc` writes both before the
+drop to real mode, and each side of the switch loads its own. kern_big is
+byte-identical. kern_mega's `.text` and `.bss` are two bytes smaller together, `.mega` grew
+272 bytes (one rung, paid at boot), and `.lowbss` grew 7 bytes with no
+paragraph crossed.
+
+**Seen (QEMU, kern_mega, a look):** Mozart's setup from the Welcome screen
+through the copy. `MOZART\` holds its 11 files and `ILLUS256\HD\`, and
+VBRUN300.DLL went into WIN16's folder. Its group MICROSOF was made with two
+links. The final dialog still does not show, because the heap is short of
+room for its bitmap; that is the next piece of work.

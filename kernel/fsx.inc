@@ -2076,6 +2076,7 @@ fsx_rcp1:                       ; ES:SI the high linear, ES:DI the low, CX
 fsx_rdownf:
     pusha
     push es
+    mov [mega_pss], ss          ; the stack mega_up puts back (fsx_rland)
     in al, 0x21                 ; the masks the return puts back, and what
     mov [mega_imr1], al         ; mega_r286 compares a 286's reset against
     in al, 0xA1

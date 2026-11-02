@@ -98329,6 +98329,7 @@ verb:
 | `SEG_AT` 8 | DX = a segment or selector, AX = a paragraph offset, CX = a window of the caller's to re-aim, or 0 | DX = that window aimed at DX's base + AX paragraphs, 64KB; DX = 0 (CF = 0) when no LDT entry is free |
 | `SEG_TILE` 9 | DX = a selector of the caller's based in a claim or a pool block, AX = a paragraph offset, CX = a count of 64KB tiles | DX = the first of CX data selectors, each 8 above the last and based 64KB further on, the last cut at the block's end (§124.31.2) |
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
+| `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -98341,7 +98342,8 @@ caller does the sum ON the refusal - so neither's arithmetic is carried on
 every machine. `SEG_TILE` is refused there too, by the same `ja`: a
 real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 `SEG_WINL` is refused there as well: a real-mode kernel has nothing above
-1MB to window, and below it the caller's paragraph is its own answer.
+1MB to window, and below it the caller's paragraph is its own answer. So is
+`SEG_LEND`: real mode has no stack the BIOS cannot use.
 `.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
@@ -232746,6 +232748,50 @@ It needs two things it does not have:
    (`tools/kernsize.py`, 2026-11-01). (d2), the protected-mode master base
    moved off 20h (DOSX used 50h), was the larger change to the reflection
    path and is not taken.
+3. **A stack for a BIOS call made on the program's own (the lead's D2,
+   2026-11-02)**: Mozart's `MSCUISTF.DLL` does `int 10h` AX = 1A00h. A
+   program's stack is in an arena above 1 MB, and `mega_svc` reflects
+   `int 10h`-`1Fh` to real mode on the stack it was entered on, so the BIOS
+   pushed into the paragraph the selector's NUMBER named: *FAULT 0D ...
+   reboot*. The answer takes no kernel byte below 1 MB:
+   - **WIN16 lends the stack** (`w16_lend`): 1 KB it claims below 1 MB
+     with `OSAPI_MEM_CLAIM_DMA`, once an instance, and lends it by its real
+     paragraph with `OSAPI_SEG`'s **`SEG_LEND`** (11, §50.6.11) at every
+     wake: the last lender's is the one used, and another WIN16 may have
+     lent since.
+   - **Two names for one stack.** The GDT is the identity map only up to
+     `.cold`, so a claim's paragraph is no selector: the first build took
+     it for one and faulted `GP 0D err 1180` at its own `mov ss`.
+     `SEG_LEND` keeps the paragraph and the claim's selector (`mega_p2d`),
+     `mega_svc` writes the stack's real-mode segment (`mega_rss`) and its
+     selector (`mega_pss`) before the drop, and each side of the switch
+     loads its own: `mega_svc_lo` the segment, `mega_up` the selector
+     (`fsx_rdownf` writes `mega_pss` for the real-mode bracket's way back).
+     `.r286` no longer writes `mega_rss` itself.
+   - **`mega_svc`** looks at SS first. `LOW_SEG`'s, or the lent stack's
+     own (a nested reflection), is reflected where it is. Any other SS
+     with a stack lent moves the caller's registers and a frame onto the
+     lent stack and reflects there, and `mega_svc_fb` comes back: the
+     answer's registers, its arithmetic flags merged into the caller's
+     FLAGS, the caller's SS:SP. With no stack lent a software int is the
+     caller's stack fault (vector 0Ch), and the package closes with its
+     toast; an IRQ the ROM owns goes on as before.
+   - **Never re-entered**: an IRQ in protected mode before the switch to
+     real mode or after it arrives with SS = the lent stack's and is
+     reflected on it, deeper; in real mode the BIOS's own interrupts nest
+     on it as on any stack, and no kernel code runs there.
+   - **The loan goes with its lender**: `mx_relinst`, the teardown of
+     every instance however it ends (a fault close too, where WIN16's own
+     `w16_freeprog` never runs), clears it when the instance is the
+     lender. The claim lives as long as the instance, so the loan never
+     names freed memory.
+   - **Cost**: `.mega` +272 bytes, which crosses one 512-byte `.mega`
+     rung (`KERN_SIZE` +512 while the machine boots; nothing below 1 MB
+     after the switch, as (d1)); `.lowbss` +7 (the selector, the paragraph,
+     the top and the lender), which crosses no `LOW` rung (`LOW_PARA`
+     unchanged); `.text` and `.bss` together -2, so `os88megaseg`'s overhead is
+     3,625. kern_big and kern_small are byte-identical. The arm's image
+     +57 bytes and bss +2.
 
 #### 124.31.3 Memory: virtual paragraphs inside, selectors at the edge
 

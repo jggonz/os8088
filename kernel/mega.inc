@@ -237,7 +237,8 @@ mega_rmidtr dw 0x03FF               ; real mode's: the IVT
 mega_nullidt dw 0                   ; the 286's reset: an IDT that holds nothing
             dw 0, 0
 mega_rss    dw 0                    ; the reflection's stack, across a 286 reset
-mega_rsp    dw 0
+mega_rsp    dw 0                    ;   (its SEGMENT), and mega_up's selector
+mega_pss    dw 0                    ;   for it (mega_svc, fsx_rdownf)
 mega_old08  dd 0                    ; the BIOS's own int 08h and int 09h, put
 mega_old09  dd 0                    ; back in the IVT for every reflection
 mega_ses    dw 0                    ; mega_svc's: ES and DS as the caller held
@@ -2944,9 +2945,57 @@ mega_tlog:
 ; its own selector back, and one it changed - int 13h AH=08h's ES:DI, int 10h
 ; AX=1130h's ES:BP - is taken as the identity selector it now is.
 ; -----------------------------------------------------------------------------
+;
+; A CALLER ON A STACK THAT IS NOT LOW_SEG'S (SPEC.md 50.6.11's SEG_LEND,
+; 124.31.2): a WIN16 program's own, in a claim above 1MB. Real mode would
+; take its SELECTOR as the stack's segment and the BIOS would push wherever
+; that paragraph is. The call runs on the stack a package LENT for it
+; instead ([mega_rsseg], an identity selector below 1MB), entered with the
+; caller's registers under a frame whose iret comes back to mega_svc_fb,
+; which puts the caller's stack back. No stack lent: a software int is the
+; caller's stack fault (0Ch), and an IRQ the ROM owns goes on as before.
+; Never re-entered: on the lent stack already (an IRQ in the window before
+; the switch to real mode, or after it) is SS = [mega_rsseg], reflected
+; where it is like LOW_SEG's; in real mode the BIOS's own ints and IRQs
+; nest on it as on any stack, and no kernel code runs there
+; -----------------------------------------------------------------------------
 section .text                   ; (KERN-MEGA-SEGMENTS-PLAN: back from .mega)
 section .mega                   ; the PROTECTED-MODE halves (KERN-MEGA-SEGMENTS-PLAN W3)
 mega_svc:
+    push ax
+    mov ax, ss
+    cmp ax, LOW_SEG
+    pop ax
+    je .low
+    push es
+    push ds
+    push ax
+    push bx                         ; BX AX DS ES vector IP CS FLAGS
+    mov bx, LOW_SEG
+    mov es, bx
+    mov bx, ss
+    cmp bx, [es:mega_rsseg]
+    je .nest                        ; on the lent stack already
+    cmp word [es:mega_rsseg], 0
+    jne mega_svc_lend
+.none:
+    mov bx, sp
+    cmp byte [ss:bx + 9], 0         ; an IRQ the ROM owns (mega_irqrom)
+    jne .nest
+    pop bx
+    pop ax
+    pop ds
+    pop es
+    add sp, 2                       ; the vector: a software int with no
+    push byte 0                     ;   stack lent is the caller's stack
+    push byte 0x0C                  ;   fault, and closes it
+    jmp mega_fault
+.nest:
+    pop bx
+    pop ax
+    pop ds
+    pop es
+.low:
     pusha
     push ds
     push es
@@ -3087,7 +3136,73 @@ mega_svc:
     call KERNEL_SEG:mega_fdmkf
 .nofdmk:
 %endif
+    mov ax, ss                      ; THE STACK BOTH WAYS: the selector for
+    mov [mega_pss], ax              ; mega_up and the segment for real mode -
+    push es                         ; one value on LOW_SEG, two on a lent
+    push word LOW_SEG               ; stack, whose selector is not on the
+    pop es                          ; identity map
+    cmp ax, [es:mega_rsseg]
+    jne .rssok
+    mov ax, [es:mega_rspar]
+.rssok:
+    pop es
+    mov [mega_rss], ax
     jmp KERNEL_SEG:mega_svc_lo      ; ...and down into the window real mode
+
+; mega_svc_lend - mega_svc's caller is on a stack that is not LOW_SEG's and a
+; stack is lent (SEG_LEND): its frame moved onto the lent stack under one
+; that returns to mega_svc_fb, and the reflection goes on there
+mega_svc_lend:
+    ; STKBALANCE-OK: a STACK SWITCH - the caller's frame is copied onto the stack SEG_LEND lent and mega_svc.low goes on there; mega_svc_fb switches back
+    cli
+    mov ax, [es:mega_rsseg]
+    mov bx, [es:mega_rstop]
+    push ss
+    pop es                          ; ES:BX = the caller's frame, once
+    xchg bx, sp                     ;   SS:SP is the lent stack's top
+    mov ss, ax
+    push es                         ; under everything: the caller's SS:SP,
+    push bx                         ;   for mega_svc_fb
+    push word [es:bx + 14]          ; the caller's FLAGS (its IF)
+    push MEGA_SEL_CODE
+    push mega_svc_fb
+    push word [es:bx + 8]           ; the vector
+    mov ax, [es:bx + 2]
+    mov ds, [es:bx + 4]
+    push word [es:bx + 6]
+    mov bx, [es:bx]
+    pop es
+    jmp mega_svc.low
+
+; mega_svc_fb - a lent stack's way back (mega_svc): every register the
+; BIOS's answer, SP four bytes under the lent stack's top, where the caller's
+; SS:SP are. The answer's AX and BP ride in the caller's frame (its BX and AX
+; slots, spent), its arithmetic FLAGS go into the caller's, and the caller's
+; stack is its own again
+mega_svc_fb:
+    ; STKBALANCE-OK: a STACK SWITCH - entered by mega_svc's iret on the lent stack, it puts the caller's SS:SP back and irets on the caller's frame
+    cli
+    push es
+    push di
+    mov di, sp
+    les di, [ss:di + 4]             ; ES:DI = the caller's BX AX DS ES ...
+    mov [es:di + 2], ax
+    mov [es:di], bp
+    pushf
+    pop ax
+    and ax, 0x08D5
+    and word [es:di + 14], ~0x08D5
+    or [es:di + 14], ax
+    mov bp, di
+    mov ax, es
+    pop di
+    pop es
+    mov ss, ax
+    mov sp, bp
+    pop bp
+    pop ax
+    add sp, 6                       ; DS ES vector: IP CS FLAGS
+    iret
 section .text                       ; can reach, which is all that stays low
 ; mega_svc_lo - mega_svc's REAL-MODE WINDOW: out of protected mode, the call,
 ; and back in, entered far from `.mega` with the frame on the stack
@@ -3112,8 +3227,8 @@ cpu 286
     db 0xEA                         ; jmp far KERNEL_SEG:.rm - reloads CS as a
     dw .rm, KERNEL_SEG              ; real-mode segment, the same base
 .r286:                              ; REAL MODE, THE 286's WAY: reset the CPU.
-    mov [mega_rss], ss              ; lmsw cannot clear PE, so the BIOS is told
-    mov [mega_rsp], sp              ; where to come back to - 40:67, with CMOS
+    mov [mega_rsp], sp              ; lmsw cannot clear PE, so the BIOS is told
+                                    ; where to come back to - 40:67, with CMOS
     push es                         ; shutdown code 0Ah, "jump there, no POST,
     mov ax, MEGA_BDA                ; no EOI" - and the CPU is triple-faulted.
     mov es, ax                      ; RAM, the A20 gate and every device keep
@@ -3138,8 +3253,8 @@ cpu 286
     mov al, 0x0D                    ; ...and on again under the real IVT (the
     out 0x70, al                    ; 286's way has mega_r286's already: twice)
 .rmc:
-    mov ax, ss                      ; LOW_SEG: the selector IS the segment
-    mov ss, ax
+    mov ax, [mega_rss]              ; the stack's SEGMENT (mega_svc): LOW_SEG's
+    mov ss, ax                      ; selector is it, a lent stack's is not
     mov ax, KERNEL_SEG
     mov ds, ax
 %ifdef MEGA_DIAG
@@ -3273,8 +3388,7 @@ mega_up:
                                     ; comes back from the frame at .out
     mov [k_dsel], ax                ; ...and the selector again, IF = 0 since
                                     ; the BIOS returned
-    mov ax, ss
-    mov ss, ax
+    mov ss, [mega_pss]              ; the stack's SELECTOR, as it went down
     mov al, 0x0D                    ; ...and NMI on: every register a gate
     out 0x70, al                    ; needs is a selector again
     ret
@@ -8796,6 +8910,14 @@ mx_kill:
 ; the region's own teardown gives back once nothing of it runs. Clobbers
 ; nothing
 mx_relinst:
+    push es
+    push word LOW_SEG
+    pop es
+    cmp al, [es:mega_rsown]         ; the stack it lent mega_svc, if it did
+    jne .nolend                     ;   (SEG_LEND): its claim goes with it
+    mov word [es:mega_rsseg], 0
+.nolend:
+    pop es
     call mx_relall
     push ax
     or al, 0xA0
@@ -12112,7 +12234,36 @@ mega_segf:
     je .tilej
     cmp bl, SEG_WINL
     je .winl
+    cmp bl, SEG_LEND
+    je .lend
     stc
+    retf
+.lend:                              ; SEG_LEND: DX = the segment of a claim
+    push bx                         ; below 1MB, CX = the top of the stack in
+    push dx                         ; it, or DX = 0 to take it back (SPEC.md
+    push es                         ; 50.6.11, 124.31.2)
+    call mega_segown
+    push word LOW_SEG
+    pop es
+    or dx, dx
+    jnz .lset
+    cmp bl, [es:mega_rsown]         ; withdrawn by its lender only
+    jne .lok
+    mov [es:mega_rsseg], dx
+    jmp short .lok
+.lset:
+    mov [es:mega_rspar], dx         ; the segment for real mode, and its
+    call mega_p2d                   ;   claim's selector for protected mode
+    jc .lno
+    mov [es:mega_rsseg], dx
+    mov [es:mega_rstop], cx
+    mov [es:mega_rsown], bl
+.lok:
+    clc
+.lno:
+    pop es
+    pop dx
+    pop bx
     retf
 .winl:                              ; SEG_WINL: SEG_WIN at a 32-bit LINEAR
     push ax                         ; base, DX:AX, so a window may be over
@@ -13853,6 +14004,11 @@ mega_fdrst  resb 2                  ; 765 resets found: at mega_r286, and
 mega_tellq  resb 1                  ; lines ui_task owes the menu bar
                                     ; (mega_tell)
 section .lowbss
+mega_rsseg  resw 1                  ; SEG_LEND: the stack lent for a foreign
+mega_rspar  resw 1                  ;   caller's BIOS call (mega_svc) - its
+mega_rstop  resw 1                  ;   selector (0 none), its segment, top
+mega_rsown  resb 1                  ;   and lender: .lowbss, off the kernel
+                                    ;   segment
 mega_pcj    resw MAX_TASKS          ; each task's innermost CATCH, 0 = none
                                     ; (mega_pcin_*, KERN-MEGA-PLAN 14.42)
 mega_fkq    resw MEGA_FKINST        ; per slot: a faulted instance's region,

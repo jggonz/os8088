@@ -1212,6 +1212,9 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_show, 1          ; nCmdShow XOR SW_SHOWNORMAL (a task's)
     W16BSS w16_task, W16_MAXTASK * W16K_SIZE
     W16BSS w16_cur, 1           ; the current task's index
+%ifdef PKG_MEGA
+    W16BSS w16_lseg, 2          ; the stack lent kern_mega (w16_lend), 0 none
+%endif
     W16BSS w16_ntk, 1           ; the tasks the table holds
     W16BSS w16_ddeup, 1         ; 1: Program Manager's DDE server has a window,
                                 ;   so w16_post's word compare sends every post
@@ -1300,6 +1303,44 @@ w16_entry:
     pop si
     ret
 
+%ifdef PKG_MEGA
+; -----------------------------------------------------------------------------
+; w16_lend - the stack a program's BIOS call runs on (SPEC.md 124.31.2): its
+; own is above 1MB, where real mode cannot reach, so kern_mega is lent 1 KB
+; below it (SEG_LEND), claimed once and kept until the instance ends, whose
+; teardown takes the loan back. Asked again at every wake, because the last
+; lender's is the one used and another WIN16 may have lent since. Keeps
+; every register
+; -----------------------------------------------------------------------------
+w16_lend:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov dx, [w16_lseg]
+    or dx, dx
+    jnz .have
+    mov ax, 1
+    xor cx, cx
+    call OSAPI_MEM_CLAIM_DMA        ; DX = its selector, below 1MB
+    jc .out
+    mov ax, dx
+    mov bl, SEG_REAL
+    call OSAPI_SEG                  ; DX = its paragraph
+    jc .out
+    mov [w16_lseg], dx
+.have:
+    mov cx, 1024                    ; the top: the whole KB
+    mov bl, SEG_LEND
+    call OSAPI_SEG
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+%endif
+
 ; =============================================================================
 ; w16_wake - the OSAPI_WM_ONWAKE handler (SPEC.md 74.1)
 ; in:  SI = our window, UI task, gfx lock NOT held
@@ -1309,6 +1350,9 @@ w16_entry:
 ; =============================================================================
 w16_wake:
     mov byte [w16_locked], 0        ; (no lock: w16_peekwake runs on this)
+%ifdef PKG_MEGA
+    call w16_lend                   ; a BIOS call's stack (SPEC.md 124.31.2)
+%endif
     cmp byte [w16_jreq], 0          ; a desktop launch DOS left us, first
     je .nojn                        ;   (SPEC.md 124.28.12)
     TCALL w16t_join

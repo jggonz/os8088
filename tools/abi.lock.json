@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "a03ee4ef7389a154d69fa422445efd96cf0ad3b594a9fc7d3a8373e49e5a59f7",
+  "fingerprint": "3c6f392370f38193a2ea6b5f08e47eebf7e851382427e9f368c4daa643210a83",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "f787019b8fb65bb00f62fb3c2b9562af40f8698cbbb2929273095f483d3d8e69",
+  "fingerprint": "5cca6914516318e7e7c6852771672de8eabf29c87141074c3953fe187cf24841",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1365,6 +1365,34 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "merge of main into Phase B/C: OSAPI_SEG's SEG_TILE (9) and SEG_WINL (10) beside main's FSXF_REAL - added verbs and bits on both sides, no cell moved; nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "7910b4516843e48e8c9b1b469cca8958c56325f743f209df07aa95f7a7db1ac0",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG gains SEG_LEND (11), kern_mega's lent stack for a foreign caller's BIOS int (SPEC.md 50.6.11, 124.31.2); a verb added, nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "bc820e18dfe10ea59b4c30c23057f1107da0ef302d644b0927a68f0169f9b976",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG gains SEG_LEND (11), kern_mega's lent stack for a foreign caller's BIOS int (SPEC.md 50.6.11, 124.31.2); a verb added, nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "5cca6914516318e7e7c6852771672de8eabf29c87141074c3953fe187cf24841",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SEG_LEND (11): the lent stack's DX is a claim's real paragraph, converted to its selector by the kernel - no identity grid",
+   "to": 10
+  },
+  {
+   "fingerprint": "3c6f392370f38193a2ea6b5f08e47eebf7e851382427e9f368c4daa643210a83",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SEG_LEND (11): the lent stack's DX is a claim's real paragraph, converted to its selector by the kernel - no identity grid",
    "to": 11
   }
  ]
