@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "8346eeb11",
+  "stamped": "c2002f526",
   "strings": "172e5a682e5edddb",
-  "why": "WinExec current folder, GetModuleHandle of tasks (SPEC.md 124.28.5)"
+  "why": "relocations to moveable entries: segment, offset and PM-only take the segment (SPEC.md 124.26.2.1)"
  },
  "WIN16_TXT": {
   "sources": [
