@@ -230835,6 +230835,26 @@ what the numbers mean**:
     parts are still fetched through the DMA door, as the parts standard
     fetches every part.
 
+**The library part's thunk calls are indirect (2026-11-01).** `W16SEG`,
+`W16VOF`, `W16TOSEL` and `W16TOVIRT` call a thunk that `W16PM_PART` emits
+at the END of its section, after the last use. A near call adds a 16-bit
+displacement to IP modulo 64 KB, so in `.w16dlg` - longer than 60 KB in both
+builds - a call from the part's first bytes to its last wraps IP. Every CPU
+runs that, but QEMU (11.0) does not on one path: when the jump stays on the
+4 KB page it starts on, it chains the two blocks without the wrap, and that
+page is shared when the part's base is not 4 KB aligned and the two ends are
+within 4 KB of the seam. `w16_mheap` (offset B7h) called `w16vd_sdx`
+(F36Fh), and with the part's claim at 3FE00h the CPU went to 3F16Fh, ran
+zeros, and pushed ES until the UI task's stack had gone round `LOW_SEG`. The
+canary reported it as `STACK OVERFLOW` (124.31.8). It depended on where the
+claim landed, which is why a 1 KB task stack, by moving the heap, hid it. So
+in `.w16dlg` (`w16v_sx` = d) `W16V_CALL` is `call word [cs:thunk_p]`, a
+word `W16PM_PART` writes beside each thunk: 2 bytes a site, 79 sites, 164
+bytes of the arm's library part. The real-mode build is unchanged, byte for
+byte. **`tests/unit/t_w16wrap.py`** (fast) holds both builds, image and every
+part, to the rule: no E8/E9 whose IP wraps with a displacement under 4 KB.
+It reads the maps the Makefile writes beside each `win16.bin`.
+
 #### 124.31.4 The loader
 
 - A segment's place is laid out in virtual paragraphs, as today
@@ -230993,7 +231013,16 @@ under QEMU with an SB16, 2026-11-01:
 
 A file read made from the first of these, while a sound played, overran
 the stack's canary (`STACK OVERFLOW TASK 00`). So **the arm runs a
-program's first instruction from WIN16's tick, not from the wake**. The
+program's first instruction from WIN16's tick, not from the wake**.
+**Measured again 2026-11-01, without a sound:** on a kern_mega with a 1 KB
+task 0 filled with CCh, BIG, SELTEST, TMTEST and MOTEST all reach a high
+water of **498 bytes** under `\AUTOSTRT`, at the same place: the load-time
+face fetch. Of that, the kernel is 246 bytes deep at the wake callback
+(including `lnk_open`'s 50-byte record). WIN16 adds 38 to `w16_pfetch` and
+46 more to `FILE_READ_SEQ`, and the kernel's read path is the other 168.
+The `STACK OVERFLOW` the stock 512-byte stack showed for SELTEST, TMTEST,
+MOTEST and WITEST was not depth. It was the library part's wrapped thunk
+call (124.31.3), and all of them run on the stock stack now. The
 wake loads the program and sets `w16_go1`; `w16_tarm` arms the tick for
 the next period; and `w16_ontimer` makes the first resume, with the lock
 marked held as every resume from the tick has it. A later wake still

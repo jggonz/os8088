@@ -3782,3 +3782,58 @@ with `lodsb` reading the table's terminator into AL, so
 `waveOutGetErrorText` answered 255 for a number it did not know rather than
 `MMSYSERR_BADERRNUM`.
 
+
+### The stack overflow that was a QEMU jump (2026-11-01)
+
+On kern_mega's stock 512-byte task-0 stack, four of the arm's fixtures
+(SELTEST, TMTEST, MOTEST, WITEST) died on `STACK OVERFLOW TASK 00`. BIG
+did not. The dev kernel with a 1 KB stack passed them all, so the first
+reading was that the arm's frames were too deep, and the owner asked for
+them to be cut rather than for the kernel to grow.
+
+**Measured, they were not too deep.** With a 1 KB stack filled with CCh,
+all four peak at 498 bytes, at the same place: the face fetch when
+`\AUTOSTRT` launches the program. That fits in 512.
+
+Two more instrumented kernels found the real failure:
+- one whose overflow panel halts instead of drawing (the panel draws
+  through the wrong segment in protected mode and paints over the
+  evidence);
+- one that halts when IRQ0 finds `SS = LOW_SEG` with SP above the stack's
+  top.
+
+Together they show task 0 running at `SS = LOW_SEG` with SP near 8D80h. It
+had pushed the program's ES some 37,000 times, wrapping all 64 KB of
+`LOW_SEG`. It was executing in the library part at 131C:FFE9, past the
+part's limit.
+
+**The decisive A/B moved one thing.** A 512-byte stack with the heap moved
+up 512 bytes, and nothing else changed, passed all four. The 1 KB kernel
+had only hidden the fault by moving the heap. The library part's claim was
+3FE00h-4F200h in the failing layout and started at 40000h in the passing
+one.
+
+It disappeared under `-d exec`, under a gdb stub, with TB chaining off and
+with one instruction a TB. It reproduced every time under `-icount
+shift=4,sleep=off`. `-d in_asm` in that mode showed the step:
+`w16_mheap`, at offset B7h of the library part, did `call w16vd_sdx`, the
+arm's thunk at F36Fh.
+
+That is displacement F292h, so IP goes from DDh to F36Fh. QEMU took it to
+the part's base **minus** 0C91h:
+- its `gen_jmp_rel` skips the 16-bit mask when the jump stays on the
+  current 4 KB page and the block can be chained;
+- with a base of 3FE00h, the unwrapped target 3F16Fh is on that page.
+
+Below the part were zeros. The zeros fell through into the part's first
+bytes, and the loop pushed ES from there.
+
+**The fix is the arm's own.** In `.w16dlg`, the only section over 60 KB,
+`W16V_CALL` calls a thunk through a word beside it. That is 79 sites and
+164 bytes of the arm's library part. Real mode is byte-identical. A new
+fast row, `w16wrap`, disassembles both builds and refuses any near call or
+jmp whose IP wraps within 4 KB of its target. Today the real-mode build has
+119 wraps in the library part, all more than 4 KB from their targets.
+
+On the stock stack, SELTEST says 0 wrong, MOTEST 0 wrong, TMTEST, WITEST
+and BIG run, and Calculator computes 9 x 9 and its reciprocal.

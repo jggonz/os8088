@@ -18923,6 +18923,7 @@ $(shell mkdir -p $(BUILD); \
 $(BUILD)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88data.inc \
                     apps/os88ui.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        --before "[map all $(@:.bin=.map)]" \
 	        $(if $(KERN_MEGA),-DDOS_MEGA) $(W16DEFS) -o $@ apps/win16/win16.asm
 	@echo "win16:  $(call FILESIZE,$@) bytes"
 
@@ -19006,6 +19007,7 @@ $(MEGAAPPDIR)/win16.bin: $(WIN16ASM) apps/os88api.inc apps/os88parts.inc apps/os
                          apps/os88ui.inc apps/os88mega.inc apps/dos/doscall.inc $(W16STAMP) | $(BUILD)
 	@mkdir -p $(MEGAAPPDIR)
 	$(NASM) -f bin -w+error -I apps/ -I apps/win16/ -I apps/dos/ \
+	        --before "[map all $(@:.bin=.map)]" \
 	        -DDOS_MEGA -DPKG_MEGA $(W16DEFS) -o $@ apps/win16/win16.asm
 	@echo "win16 (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/doscore.bin: apps/dos/doscore.asm apps/dos/dos.asm apps/dos/dosbe.inc apps/dos/dosh.inc \

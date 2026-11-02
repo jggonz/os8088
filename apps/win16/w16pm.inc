@@ -63,6 +63,22 @@
   %endif
 %endmacro
 
+; W16V_CALL thunk - the near call to a section's thunk, which W16PM_PART
+; emits at the section's END. In the library part, which is longer than
+; 60 KB, that call is INDIRECT, through a word beside the thunk: a direct one
+; from the part's first bytes is a 16-bit displacement past 32 KB whose IP
+; wraps, and QEMU (11.0) takes it, when the jump stays on one 4 KB page of a
+; base that is not 4 KB aligned, without the 16-bit wrap - the CPU went to
+; the base MINUS 0C91h, ran zeros and pushed ES till the UI task's stack was
+; gone (SPEC.md 124.31.3, t_w16wrap). An indirect call's IP is the word.
+%macro W16V_CALL 1
+  %ifidn w16v_sx, d
+    call word [cs:%{1}_p]           ; XSEC-OK: the part's own word
+  %else
+    call %1
+  %endif
+%endmacro
+
 %macro W16SEG 2
 %ifndef PKG_MEGA
     mov %1, %2
@@ -87,11 +103,11 @@
   %define w16vany_%[w16v_sx] 1
   %if w16v_r
     %define w16vu_%[w16v_sx]_%1%2 1
-    call w16v%[w16v_sx]_%1%2
+    W16V_CALL w16v%[w16v_sx]_%1%2
   %else
     %define w16vu_%[w16v_sx]_%1m 1
     push word %2
-    call w16v%[w16v_sx]_%1m
+    W16V_CALL w16v%[w16v_sx]_%1m
   %endif
 %endif
 %endmacro
@@ -105,7 +121,7 @@
   W16V_SECT
   %define w16vany_%[w16v_sx] 1
   %define w16vo_%[w16v_sx]_%1 1
-    call w16v%[w16v_sx]_o%1
+    W16V_CALL w16v%[w16v_sx]_o%1
 %endif
 %endmacro
 
@@ -151,7 +167,7 @@
   W16V_SECT
   %define w16vany_%[w16v_sx] 1
   %define w16vs_%[w16v_sx]_%1 1
-    call w16v%[w16v_sx]_s%1
+    W16V_CALL w16v%[w16v_sx]_s%1
 %endif
 %endmacro
 
@@ -163,7 +179,7 @@
   W16V_SECT
   %define w16vany_%[w16v_sx] 1
   %define w16vo_%[w16v_sx]_%1 1
-    call w16v%[w16v_sx]_o%1
+    W16V_CALL w16v%[w16v_sx]_o%1
 %endif
 %endmacro
 
@@ -350,6 +366,9 @@ w16v%1_vof:
 %endmacro
 %macro W16PM_STHK 2             ; sfx, reg: W16TOSEL's
   %ifdef w16vs_%1_%2
+  %ifidn %1, d
+w16v%1_s%2_p: dw w16v%1_s%2
+  %endif
 w16v%1_s%2:
     pushf
     %ifnidni %2, ax
@@ -368,6 +387,9 @@ w16v%1_s%2:
 %macro W16PM_VTHK 2             ; sfx, reg
   W16PM_STHK %1, %2
   %ifdef w16vo_%1_%2
+  %ifidn %1, d
+w16v%1_o%2_p: dw w16v%1_o%2
+  %endif
 w16v%1_o%2:
     pushf
     %ifnidni %2, ax
@@ -388,6 +410,9 @@ w16v%1_o%2:
 ; w16vu_<sfx>_<dst><src>), emitted after every use, as the export rows are
 %macro W16PM_THK 3              ; sfx, dst, src
   %ifdef w16vu_%1_%2%3
+  %ifidn %1, d
+w16v%1_%2%3_p: dw w16v%1_%2%3
+  %endif
 w16v%1_%2%3:
     pushf
     push ax
@@ -403,6 +428,9 @@ w16v%1_%2%3:
 %endmacro
 %macro W16PM_THKM 2             ; sfx, dst: the word above the return address
   %ifdef w16vu_%1_%2m
+  %ifidn %1, d
+w16v%1_%2m_p: dw w16v%1_%2m
+  %endif
 w16v%1_%2m:
     pushf
     push ax

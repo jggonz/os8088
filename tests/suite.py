@@ -2201,6 +2201,18 @@ FAST = [
         "not read its own data without cs:. S14 moves handlers into the "
         "library part, and this is what keeps that move honest",
         needs=("nasm",)),
+    Row("w16wrap", "fast", py("tests/unit/t_w16wrap.py"), 3.0,
+        "A near call or jmp adds a 16-bit displacement to IP modulo 64 KB, "
+        "and QEMU (11.0) skips that wrap when the jump stays on one 4 KB "
+        "page of a segment whose base is not page-aligned - which a call "
+        "from a >60 KB part's first bytes to its last makes, and on kern_mega "
+        "the library part's first function called its arm thunk at the end: "
+        "the CPU ran zeros below the part and pushed ES round LOW_SEG, read "
+        "as a STACK OVERFLOW. SPEC.md 124.31.3: in both builds, image and "
+        "parts, no E8/E9 whose IP wraps with a displacement under 4 KB. Reads "
+        "the maps the Makefile writes beside win16.bin; assembles (cached) "
+        "when they are stale",
+        needs=("nasm",)),
 ]
 
 # --------------------------------------------------------------------------
