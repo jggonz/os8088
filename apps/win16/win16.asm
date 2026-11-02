@@ -264,6 +264,8 @@ section .w16dlg
     W16BSS w16_locked, 2        ; 1 = the callback that resumed holds the lock
                                 ;   (a word: saved and put back whole)
     W16BSS w16_name, 14         ; the program's 8.3 name, NUL-terminated
+    W16BSS w16_mname, 10        ; ...and its module name, the resident
+                                ;   names' first (GetModuleHandle)
     W16BSS w16_dir, 2           ; ...the folder it is in
     W16BSS w16_vol, 1           ; ...and the volume
     W16BSS w16_l1, 48           ; the two lines the window shows

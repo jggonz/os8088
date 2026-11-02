@@ -291,6 +291,25 @@ w16_load:
 %endif
     call w16l_keep                  ; part 5 kept for loading segments later
     jc .refuse                      ;   (124.26.3); CF=1 SI = reason
+    mov es, [w16_fseg]              ; its module name, kept for
+    mov si, [w16_ne]                ;   GetModuleHandle: the resident
+    add si, [es:si + NE_RESTAB]     ;   names' first, 8 at most
+    mov cl, [es:si]
+    xor ch, ch
+    cmp cx, 8
+    jbe .mn
+    mov cx, 8
+.mn:
+    mov di, w16_mname
+    jcxz .mz
+.mc:
+    inc si
+    mov al, [es:si]
+    mov [di], al
+    inc di
+    loop .mc
+.mz:
+    mov byte [di], 0
     mov dx, [w16_fseg]              ; the file is no longer needed
     call OSAPI_MEM_FREE
     mov word [w16_fseg], 0

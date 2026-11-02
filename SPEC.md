@@ -228689,7 +228689,7 @@ start without it: `GetModuleHandle("KEYBOARD")`, then
 
 | call | answer |
 |---|---|
-| `GetModuleHandle(name)` | one of WIN16's modules, by its name to the first dot and case aside: `W16_HMOD` (20h) + its id, KERNEL 20h to SHELL 26h - paragraphs in the interrupt table, which no program's memory can be. The program's own name answers its instance, which every call here takes as its module too, and so does a NULL segment (a handle given). Anything else is 0: no other module is loaded |
+| `GetModuleHandle(name)` | one of WIN16's modules, by its name to the first dot and case aside: `W16_HMOD` (20h) + its id, KERNEL 20h to SHELL 26h - paragraphs in the interrupt table, which no program's memory can be. The program's own name - its file's stem or its module name - answers its instance, which every call here takes as its module too, and so does a NULL segment (a handle given). Another task's **module name** answers that task's instance while it runs (§124.28.5): the loader keeps each program's module name, the resident names' first, in `w16_mname`, because its NE tables are freed before it runs. Microsoft's Setup Toolkit starts `_MSTEST.EXE`, whose module name is `DSHELL`, and waits while `GetModuleHandle("DSHELL")` answers; a 0 there sent it straight to deleting its own second stage. Anything else is 0 |
 | `GetProcAddress(hModule, name)` | on one of WIN16's modules, a function in `w16api.inc`'s `W16PROCNAME` list, by name (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the bind slot given out on the first ask, as an import's first fixup gives one. The export rows are the loader part's and it is dropped once the program runs (§124.18.7), so the list carries each name's binding into the library part; at most `W16_NPNMAX` (8) names, and today one, `KEYBOARD.MapVirtualKey`. Anything else is NULL, as it was (§124.20.4); a program's own DLLs are S18's |
 | `MapVirtualKey(code, type)` | 0: a virtual key's scan code, the first with that key; 1: a scan code's virtual key; 2: a virtual key's character unshifted - a digit or letter its own, Backspace, Tab, Enter, Esc and space theirs, and the punctuation keys' US characters. All of the US layout WIN16 reads keys in (§124.6) |
 | `GetCurPID` | 0, as Wine answers it |
@@ -230699,13 +230699,22 @@ library at run time (§124.23.5):
 The new program first runs when the caller next waits.
 
 **The file is looked for as Windows looked**, and the first place that has
-it wins. Only the name's file part is used, as `LoadLibrary` uses only its
-file part (§124.23.5): a folder in the name is not looked in.
+it wins:
 
-1. the caller's own folder;
-2. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
-3. `SYSTEM\` under it;
-4. the folder WIN16 itself was started from.
+1. the name as it is written, opened through WIN16's DOS (§124.21). A name
+   with a drive or a folder is that file. A bare name is the DOS's
+   **current** drive and folder's, which is where Windows looks first.
+   Microsoft's Setup Toolkit selects `C:`, changes into `C:\~MSSTFQF.T`,
+   copies its second stage there and starts `_mstest arcade.mst`. Before
+   this step, WIN16 looked only in the places below, answered 2, and the
+   setup said *Insufficient memory or disk space*;
+2. the caller's own folder;
+3. the Windows directory (§124.14, `SYSTEM\APPDATA\WIN16`);
+4. `SYSTEM\` under it;
+5. the folder WIN16 itself was started from.
+
+Steps 2 to 5 use only the name's file part, as `LoadLibrary` does
+(§124.23.5).
 
 A name without an extension gets `.EXE`. A folder is checked by reading the
 file for no bytes, which looks the name up and reads nothing.

@@ -1032,10 +1032,10 @@ W16LIB w16g_getpixel
 W16_HMOD equ 0x0020
 
 ; GetModuleHandle (KERNEL.47) - args: +0 lpModuleName. A name, to its first
-; dot, is one of WIN16's modules (its W16_HMOD handle) or the program's own
-; (its instance, which every call here takes as its module too); a NULL
-; segment is a handle given, and is the program's. Anything else is 0: no
-; other module is loaded
+; dot, is one of WIN16's modules (its W16_HMOD handle), a library's, the
+; program's own (its instance, which every call here takes as its module
+; too) or another task's module name (its instance, while it runs); a
+; NULL segment is a handle given, and is the program's. Anything else is 0
 W16LIB w16k_getmodh
     push si
     push di
@@ -1060,7 +1060,7 @@ W16LIB w16k_getmodh
 .ours:
     mov ax, W16_HMOD
     add al, dl
-    jmp short .out
+    jmp .out
 .prog:
     mov si, w16_libs                ; a library's module name, or its file's
     mov bx, W16_NLIB                ;   stem (SPEC.md 124.23.5)
@@ -1107,22 +1107,37 @@ W16LIB w16k_getmodh
     mov ax, [si + W16L_HINST]
     jmp short .out
 .pname:
-    mov si, w16_name                ; the program's, to its dot
-    xor cx, cx
-.len:
-    mov al, [si]
-    or al, al
-    jz .cmp
-    cmp al, '.'
-    je .cmp
-    inc si
-    inc cx
-    jmp short .len
-.cmp:
-    sub si, cx
+    mov si, w16_name                ; the program's file stem...
+    call .ncmp
+    jnc .own
+    mov si, w16_mname               ; ...or its module name
+    call .ncmp
+    jnc .own
+    mov si, w16_task                ; ...or another task's, out of the context
+    mov bx, W16_MAXTASK             ;   it is parked in (124.28.5): the Setup
+.task:                              ;   Toolkit waits on its driver, DSHELL,
+    cmp byte [si + W16K_ST], W16KS_FREE ; which is _MSTEST.EXE
+    je .tnext
+    mov ax, [si + W16K_CTX]
+    or ax, ax
+    jz .tnext                       ; (the current one's is w16_mname)
+    push si
+    push ds
+    mov ds, ax
+    mov si, w16_name_bo + w16_mname - w16_name
+    call .ncmp
+    pop ds
+    pop si
+    jnc .thit
+.tnext:
+    add si, W16K_SIZE
+    dec bx
+    jnz .task
     xor ax, ax
-    call w16_nmeq
-    jc .out
+    jmp short .out
+.thit:
+    mov ax, [si + W16K_H]
+    jmp short .out
 .own:
     mov ax, [w16_dgroup]
 .out:
@@ -1130,6 +1145,22 @@ W16LIB w16k_getmodh
     pop di
     pop si
     ret
+; .ncmp - DS:SI = a name, to its NUL or its dot: CF=0 it is ES:DI's
+.ncmp:
+    push si
+    xor cx, cx
+.nl:
+    mov al, [si]
+    or al, al
+    jz .nc
+    cmp al, '.'
+    je .nc
+    inc si
+    inc cx
+    jmp short .nl
+.nc:
+    pop si
+    jmp w16_nmeq
 
 ; w16_nmeq - ES:DI = a name ending in a NUL or a dot, DS:SI = CX upper-case
 ; characters: CF=0 they are the name, case aside. Keeps every register
