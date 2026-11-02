@@ -1471,6 +1471,20 @@ its table goes in the diary, so the reach is measured, not claimed.
       the dev kern_mega with (d1):** SELTEST reports WIN16's image at
       linear `00F9D000` with 0 wrong. BIG, Minesweeper 3.1 and Paintbrush
       run as they did below 1 MB.
+    - [x] *8: a period BIOS and Windows 3.1's own* (124.31.3, 124.31.8).
+      On a copy of `vm/386dx` (86Box, the Micronics 386 with its saved
+      CMOS; `vm/286-mega` stops at a CMOS prompt nobody here can answer)
+      SOL 3.1 found two defects QEMU runs through: the int 21h clock wrote
+      through a DS loaded from CS (`FAULT 0D err 0000`; `W16CSDS` now), and
+      the load, called from the document handover inside `\AUTOSTRT`'s
+      `lnk_open`, reached 514 bytes of task 0's 510 (the arm now loads from
+      the ring's wake: 336). **Seen 2026-11-01: REGEDIT 3.1 opens its
+      Registration Info Editor and SOL 3.1 deals under QEMU, and SOL 3.1
+      deals on 86Box's 386, on the stock kern_mega.** WRITE 3.1 (not 3.0,
+      which runs) wants four calls from the lead's files: `LocalHandleDelta`
+      (KERNEL.310) through `GetProcAddress`, which it calls without a
+      check, then `GetAtomName` (KERNEL.72), `SetErrorMode` (KERNEL.107)
+      and `ScrollDC` (USER.221).
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and

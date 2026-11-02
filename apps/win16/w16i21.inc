@@ -244,9 +244,10 @@ w16_i21clk:
     push bx                         ;   DL hundredths
     push si
     push ds
-    mov si, cs
-    mov ds, si
-    call OSAPI_CLK_GET              ; BX = hour:minute, AH = the second
+    W16CSDS si                      ; the data half in the arm: .anchor
+    mov ds, si                      ;   WRITES through DS (a code selector's
+    call OSAPI_CLK_GET              ;   store is #GP on a real 286 or 386)
+                                    ; BX = hour:minute, AH = the second
     push es
     xor si, si
     mov es, si

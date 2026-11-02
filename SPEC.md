@@ -230855,6 +230855,17 @@ byte. **`tests/unit/t_w16wrap.py`** (fast) holds both builds, image and every
 part, to the rule: no E8/E9 whose IP wraps with a displacement under 4 KB.
 It reads the maps the Makefile writes beside each `win16.bin`.
 
+**A store goes through the data half, whatever names CS.** A code
+selector is execute/read, so a write through one is #GP(0) on a 286 or a
+386, and QEMU, which does not check a segment's type on a store, runs it. So
+`push cs` / `pop sreg` is `W16CSEG`, and `mov reg, cs` / `mov sreg, reg` is
+`W16CSDS reg` / `mov sreg, reg`: the pair's data half (CS + 8) in the arm,
+CS in real mode. **Found on 86Box (2026-11-01):** the int 21h clock
+(`w16_i21clk`, AH = 2Ch, SPEC.md 124.17.3) loaded DS from CS and wrote its
+anchor through it, so SOL faulted at its first time-of-day call
+(`FAULT 0D err 0000`) on 86Box's 386 and ran under QEMU. A read through CS
+(a far pointer to a part's own string) is legal and stays as it is.
+
 #### 124.31.4 The loader
 
 - A segment's place is laid out in virtual paragraphs, as today
@@ -231029,12 +231040,36 @@ marked held as every resume from the tick has it. A later wake still
 resumes a program waiting in `PeekMessage` (`w16_peekwake`); that depth
 has not been measured. Real mode is unchanged.
 
+**And the load is the ring's wake, not the handover's (2026-11-01).** On
+86Box's 386 (the Micronics board, a period BIOS), Windows 3.1's SOL under
+`\AUTOSTRT` stopped at `STACK OVERFLOW TASK 00` on the stock 512-byte stack
+and ran on a 1 KB one. A 1 KB task 0 filled with CCh read a high water of
+**514 bytes** for it, on 86Box and on QEMU alike: SOL's load is 16 bytes
+deeper than BIG's, so the deepest frame lands one word below the canary,
+and whether it does depends on whether a tick arrives in that frame. The
+depth is where the load is called from. A document's launch calls the
+`W_ONWAKE` handler itself, from inside the launch (SPEC.md 54.10) - under
+`\AUTOSTRT`, inside `lnk_open` with its record on the stack - and the entry
+proc's own `OSAPI_WM_WAKE` is still queued behind it. So the arm's first
+wake in `W16S_LOAD` sets `w16_ldq`, kicks with `OSAPI_WM_WAKE` (which reports
+the queued one) and returns; the next wake, popped by the UI task from the
+ring, loads. If the kick is refused (a full ring) the first wake loads, as
+before. The high water for the same SOL launch is **336 bytes**: 174 under
+the canary, where it was -2. Real mode is unchanged; its launch is the same
+shape, and whether it wants the same deferral is the real-mode build's
+question.
+
 #### 124.31.9 Verification
 
 - **Bochs** (docs/BOCHS.md) is the instrument, because QEMU lets code write
   through CS and checks no limit; `MEGATRAP=1` (KERN-MEGA-PLAN 10.3) counts
   the faults the kernel completes, so a hot site left to the trap is found.
-- 86Box's `286-mega` and a 386 to look at.
+- 86Box's `286-mega` and a 386 to look at. 86Box cannot be keyed from
+  this host, and `vm/286-mega` keeps no CMOS, so its BIOS stops at a
+  configuration prompt. The looks so far are on a copy of `vm/386dx` with
+  that machine's saved CMOS (the Micronics 386, 25 MHz, 2 MB), the disks
+  swapped and the program opened by an `\AUTOSTRT` link. **Seen
+  2026-11-01:** Windows 3.1's SOL deals there on the stock kern_mega.
 - Targets, in order: TINY16, the Watcom fixtures, Windows 3.1's REGEDIT
   (protected mode only), SOL and WRITE, then `VBRUN300.DLL` under
   Mozart's and Sir Hangman's programs.

@@ -3837,3 +3837,54 @@ jmp whose IP wraps within 4 KB of its target. Today the real-mode build has
 
 On the stock stack, SELTEST says 0 wrong, MOTEST 0 wrong, TMTEST, WITEST
 and BIG run, and Calculator computes 9 x 9 and its reciprocal.
+
+### What a period BIOS said that QEMU did not (2026-11-01)
+
+Phase B's targets are Windows 3.1's own protected-mode programs, and the
+plan asks for them to be looked at on 86Box as well as QEMU, because QEMU
+runs code a real 286 or 386 faults on. Under QEMU, REGEDIT 3.1 opened its
+Registration Info Editor and SOL 3.1 dealt on the stock kern_mega.
+
+86Box cannot be keyed from this host, and `vm/286-mega` has never had its
+CMOS saved, so its BIOS stops at *Fixed Disk Configuration Change, Press
+Any Key*. A copy of `vm/386dx` with that machine's saved CMOS boots
+untouched, and an `\AUTOSTRT` link opens the program. There, SOL 3.1
+stopped twice.
+
+**First, a store through a code selector.** With a 1 KB task stack SOL got
+further and died on `FAULT 0D err 0000`. The faulting offset was
+`w16_i21clk.anchor`: int 21h's time of day loaded DS with `mov si, cs /
+mov ds, si` and wrote its anchor through it. In protected mode CS is the
+pair's execute/read half, so the store is #GP. QEMU does not check a
+segment's type on a store, so it had run every time. The 27 `push cs /
+pop ds` sites had been converted in batch 3 (`W16CSEG`); this one had the
+other spelling. It is `W16CSDS si` now, the data half, and SOL dealt on
+86Box's 386 with the 1 KB stack.
+
+**Second, one word too deep.** On the stock 512-byte stack SOL still hit
+`STACK OVERFLOW TASK 00`, so this time it was depth. A 1 KB-stack kern_mega
+that fills task 0 with CCh at its first switch and, 160 seconds in, shows
+the lowest word touched as the panel's SP read **514 bytes**, on 86Box and
+on QEMU alike. That is 16 bytes deeper than BIG's 498, and it puts the
+deepest frame one word below the canary. Whether a tick lands in that frame
+decides whether the canary dies, which is why QEMU happened to run it.
+
+The owner had already answered how: cut the arm's stack, no kernel change.
+The arm's own frames down to the read are 84 bytes, and cutting a few of
+them would have bought a few bytes. The 246 bytes the kernel holds at the
+call are a better target, and they are not the kernel's to keep: a
+document's launch calls the package's `W_ONWAKE` handler *itself*, from
+inside the launch (SPEC.md 54.10). Under `\AUTOSTRT` that is inside
+`lnk_open`, with its record on the stack. The entry proc's own wake is
+still queued in the ring behind that call. So the arm's first wake in the
+loading state now kicks once more and returns, and the load runs from the
+ring's wake, which the UI task pops at the top of its loop. The same
+measurement reads **336 bytes**, 174 under the canary. SOL deals on 86Box's
+386 on the stock kern_mega.
+
+WRITE 3.1 is the one target left. It is not WRITE 3.0, which runs. On
+GetVersion 3.10 it asks `GetProcAddress` for KERNEL.310 by ordinal and
+calls the answer without checking it, so a NULL is a far call to 0000:0000.
+A trial row for `LocalHandleDelta` got it past that, to *Needs KERNEL.107*,
+and a census of its imports names three more. All four are in the lead's
+files, so they went to the lead rather than into this branch.

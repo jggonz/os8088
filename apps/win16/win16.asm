@@ -344,6 +344,7 @@ section .w16dlg
 %ifdef PKG_MEGA
     W16BSS w16_old31, 4         ; ...and int 31h, DPMI's (124.31.6)
     W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
+    W16BSS w16_ldq, 1           ; 1 = the load's wake was deferred (124.31.8)
     W16BSS w16q_wins, 2 * W16Q_NWIN ; the selectors the program made (124.31.6)
     W16BSS w16_i31ss, 2         ; ...the program's stack while it runs on
     W16BSS w16_i31sp, 2         ;   the UI task's
@@ -1244,6 +1245,15 @@ w16_wake:
     je .kick
     cmp byte [w16_state], W16S_LOAD
     jne .out
+%ifdef PKG_MEGA
+    cmp byte [w16_ldq], 0           ; the first wake defers to the ring's:
+    jne .load                       ;   a document's handover calls this
+    inc byte [w16_ldq]              ;   from inside the launch (an \AUTOSTRT
+    mov bx, [w16_win]               ;   link's record and all), too deep on
+    call OSAPI_WM_WAKE              ;   task 0's stack for the load's read
+    jnc .out                        ;   (SPEC.md 124.31.8)
+.load:
+%endif
     mov byte [w16_state], W16S_RUN
     call w16_ldin                   ; CF=1: refused, [w16_l1]/[w16_l2] say why
     jc .refused
