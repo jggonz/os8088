@@ -16442,7 +16442,7 @@ SOAK = [
         "MessageBox must say both answered TRUE, Helv mapped to MS Sans Serif "
         "8 point, red's COLORREF, and the font made from it selected into a "
         "window's DC answering GetTextFace MS Sans Serif and tmHeight 13. "
-        "Where the win16-reference skill put them: Notepad 3.1's File Open "
+        "Where the win16-reference skill put them: Notepad 3.1's (W31NOTE.EXE) File Open "
         "opens os8088's chooser and Esc is seen as a Cancel (124.24.2), and "
         "Marquee 3.1's Format Text opens Font and carries on after OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=900,

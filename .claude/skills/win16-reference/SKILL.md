@@ -91,8 +91,8 @@ The WIN16 rows that run Microsoft's programs (`win16mines`, `win16calc`,
 `win16cpu`, `win16pbrush` and their XT legs) read them from `build/win16/`,
 never from this tree. `samples` puts them there, renamed where two versions
 share a name: CALC, CLOCK, Paintbrush (`PBRUSH.EXE` with its `PBRUSH.DLL`),
-REVERSI and WRITE from Windows 3.0, `W31CALC.EXE` and `W31MINE.EXE`
-from 3.1, and WinMine 2.9 as `WINMINE.EXE`. `make clean` removes them, so
+REVERSI and WRITE from Windows 3.0, `W31CALC.EXE`, `W31MINE.EXE` and
+`W31NOTE.EXE` (Notepad 3.1, on COMMDLG, for `win16cdlg`) from 3.1, and WinMine 2.9 as `WINMINE.EXE`. `make clean` removes them, so
 run it again after one:
 
 ```sh
