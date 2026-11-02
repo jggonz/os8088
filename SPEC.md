@@ -202444,7 +202444,10 @@ the ring and the layer's segment, the sound's ring, the EMS frame and the
 seek's scratch. The KERNEL's answer comes back in
 SI (`FSXR_*`): it may still run the bracket in protected mode, for a reason
 of its own (§53.2.3's table) - a stream on a file-driver volume
-(`FSXR_VOL`) is the common one.
+(`FSXR_VOL`) is the common one. The door's sound ring is then the one an
+Unmute inside uses too (`vp_rhave` answers any ring held, whichever mode
+the bracket runs in): a second claim over it lost the first's segment and
+leaked it on every such play.
 
 **The sound-ahead lead is staged where it is read** (98.1.8.2,
 KERN-MEGA-PLAN 14.133). `vp_spos` reads a start key's lead on the desktop
@@ -202618,7 +202621,10 @@ arena's top, one run, where the door's bottom-up first fit finds it.
 service area, EXTD.DRV's copy and a driver's (SOUND.DRV's 8, HDD.DRV's 4).
 It is the conventional door with no head (`OSAPI_MEM_CLAIM_DMA_HI`, CX = 0),
 since an `OS88_HIGHMEM` package's plain claims go above 1MB. Only under
-`CPU_F_PM` and only in the arm; a refused hold is the play it was. The
+`CPU_F_PM` and only in the arm; a refused hold is the play it was. A
+ring that sizes short of its least anyway gives the hold back at the
+refusal (`.memf`), as the claim's own refusal does - it was kept, and the
+next play's hold took another of the package's claims. The
 ring is up to 80 KB smaller for it. +60 bytes of the arm's image (63,832;
 `VPDIAG=time` 64,799, 225 to spare), the shipped player byte-identical.
 `tests/megarmbext.py`'s player legs are the gate: both plays real on an
@@ -203567,7 +203573,9 @@ TIER beside the bank (docs/plans/LOADALL-PLAN.md L6):
   mod K) was costed first and buys an eighth of the copies whenever they
   fall, which is ~1%.
 - **The table**: a word a chunk, `chunk & 0FFh` (the live window is under
-  256), in the LAST 512 BYTES of the conventional tier's mirror slot
+  256: `vp_treset` caps the bank, `[vp_kr]` with it, so both tiers hold
+  `VP_TMAX` = 254 slots at most - a pool past ~8 MB of XMS had more, and
+  chunk c + 256 took live chunk c's word), in the LAST 512 BYTES of the conventional tier's mirror slot
   (`vp_ttab`, VP_TOFF): the slot, bit 15 the conventional tier, bit 14 a
   seam. A super-packet is 64 sectors at most where there are tiers, so what
   runs past a slot's end into its mirror is 63 at most and those 512 bytes
