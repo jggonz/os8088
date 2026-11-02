@@ -1838,6 +1838,14 @@ w16mm_cdplay:
     cmp ah, al
     jb .range
 .play:
+    call w16mm_cdaud                ; past a data track: a drive plays audio
+    jc .range
+    mov bl, al
+    cmp ah, 0
+    je .play2
+    cmp ah, al
+    jb .range
+.play2:
     push bx
     mov bl, CDV_PLAY
     call w16mm_cd
@@ -1861,6 +1869,52 @@ w16mm_cdplay:
     ret
 .err:
     call w16mm_cderr
+    ret
+
+; w16mm_cdaud - AL = the track a play starts in, CX the seconds into it: a
+; data track, which a drive refuses to play, gives way to the next audio
+; track's start (SPEC.md 124.32.4) - Media Player's Play on a disc whose
+; track 1 is data. CF=1 there is no audio track from there to the disc's
+; last. Keeps the rest, AH included
+w16mm_cdaud:
+    push bx
+    push dx
+    push si
+    push ax                         ; (AH: the play's last, kept)
+    mov bl, al
+    push cx
+    call w16mm_cddisc               ; AH = the disc's last
+    pop cx
+    jc .fail
+    mov bh, ah
+.t:
+    mov al, bl
+    push cx
+    push bx
+    mov bl, CDV_TRACK
+    call w16mm_cdx                  ; SI = its control nibble
+    pop bx
+    pop cx
+    jc .fail
+    test si, 4                      ; bit 2: data
+    jz .aud
+    xor cx, cx                      ; the next one, from its start
+    cmp bl, bh
+    jae .fail
+    inc bl
+    jmp short .t
+.aud:
+    pop ax
+    mov al, bl
+    clc
+    jmp short .out
+.fail:
+    pop ax
+    stc
+.out:
+    pop si
+    pop dx
+    pop bx
     ret
 
 ; w16mm_cdtick - ES:SI = a playing cdaudio, its poll due: a play that has

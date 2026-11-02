@@ -231602,6 +231602,14 @@ with no driver of its own:
     `W16MM_CDPOLL` = 9 ticks, half a second, on WIN16's tick, and the play
     is stopped (`CDV_STOP`) once it is reached. The same poll sees a play
     end, for its notice and for `MCI_WAIT`.
+  - **A play that starts on a data track starts at the next audio
+    track's beginning** *(S24)*, because the drive refuses `PLAY AUDIO`
+    on data (`w16mm_cdaud`, reading each track's control nibble with
+    `CDV_TRACK`). A mixed disc's first track is its data, and Media
+    Player plays from where an opened disc stands, which is track 1.
+    Before this change that play answered `MCIERR_OUTOFRANGE` through
+    `CDE_ARG`. A play with no audio track from its start to the disc's
+    last answers it still.
   - `MCI_PAUSE` is `CDV_PAUSE`. `MCI_RESUME`, or a play with no `from`
     while paused, is `CDV_RESUME`. `MCI_SEEK` moves where the next play
     starts and plays nothing, because the door has no seek. A drive that
@@ -231947,8 +231955,13 @@ building the face in a memory DC and putting the glyph on with
   `w16_nibrop` loading its source's virtual paragraph into DS without
   converting it, a kern_mega fault (`FAULT 0D`) that no pattern ROP had
   reached on the arm until then.
-- Media Player's Play on the CD answers *The specified parameter is out of
-  range for the specified command* (124.32.4).
+- ~~Media Player's Play on the CD answers *The specified parameter is out
+  of range for the specified command*.~~ Found in S24: it played from
+  track 1, which on the test disc is data, and the drive refused it. A
+  play now starts at the first audio track from there (124.32.4). QEMU's
+  drive refuses `PLAY AUDIO` on the simulated tracks, so under QEMU the
+  play now does nothing and shows no error. It is heard on 86Box's
+  `386-mega-cdrom`, whose disc is audio, in S25.
 
 #### 124.33.2 Program Manager's DDE server *(S24 batch 2)*
 

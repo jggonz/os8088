@@ -4159,3 +4159,23 @@ one through. One `W16SEG` fixed it.
 **Seen on the arm:** Media Player's four buttons and Sound Recorder's four
 disabled ones show checkered grey glyphs. Sound Recorder's Record, which
 is enabled, stays black.
+
+## 2026-11-02: why Media Player's Play was "out of range"
+
+A temporary build that wrote MCI's play arguments to port E9 showed the
+cause on the first press of Play:
+- Media Player sends a play with no `from` and no `to`.
+- WIN16 played from where the opened disc stood, track 1.
+- On the test disc, track 1 is the data track; the three audio tracks
+  come after it. The drive refuses `PLAY AUDIO` on data, and that
+  refusal surfaced as `MCIERR_OUTOFRANGE`.
+
+A play that starts on a data track now starts at the next audio track.
+The first version of the fix still picked track 1. The CD helper it
+called restores SI, and SI is where the drive's door answers a track's
+control nibble, so the data bit read as clear. The fix now calls the
+door's raw entry, which leaves SI as the drive set it.
+
+QEMU's drive refuses `PLAY AUDIO` on any track, so under QEMU the play
+now does nothing and shows no error. Hearing it needs 86Box's
+`386-mega-cdrom`, whose disc is audio. That is S25's.
