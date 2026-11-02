@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "32a760e15",
+  "stamped": "d30d3f323",
   "strings": "debee5372c95da3c",
-  "why": "merge of S21 batches 6-7: part 10 on the arm, DDE server in part 10, tail-call part macros"
+  "why": "arm: header data-selector word, w16_pcode"
  },
  "WIN16_TXT": {
   "sources": [
