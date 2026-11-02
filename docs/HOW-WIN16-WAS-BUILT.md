@@ -3888,3 +3888,60 @@ calls the answer without checking it, so a NULL is a far call to 0000:0000.
 A trial row for `LocalHandleDelta` got it past that, to *Needs KERNEL.107*,
 and a census of its imports names three more. All four are in the lead's
 files, so they went to the lead rather than into this branch.
+
+### What the trap census counted (2026-11-01)
+
+kern_mega completes some of what a real-mode program does that protected
+mode refuses: a store through a code segment, an access through segment 0.
+It does that by trapping each one, and a site left to the trap is correct
+and slow. So the plan names Bochs with `MEGATRAP=1` as the instrument. That
+kernel writes a line to port E9 for every `#GP` it completes, and
+`tools/megatraps.py` ranks the lines by site.
+
+Write 3.0 ran under it for eight minutes, an idle window and a few
+keystrokes. The census read **114,952** traps from 45 sites, and twelve of
+those sites had **9,388 each**. All twelve were in WIN16's own image, in
+`w16_i21_on` and `w16_i21_off`. Every time WIN16 hands the CPU to the
+program, they swap the IVT's int 21h and int 31h, and they put them back
+when the program calls out. They reached the IVT with `xor ax, ax / mov es,
+ax`. In real mode that is the IVT. In protected mode 0 is the NULL
+selector, and each of the six accesses per swap was a fault, a single step
+and a second trap. The next two sites were `GetTickCount` reading the BIOS
+tick the same way.
+
+The kernel already had the answer in the API: `SEG_WIN` makes a data
+selector over any paragraph below 1 MB, and the segment equates' `__0000H`
+was bound to one already. The arm now asks for that window once per load
+and keeps it in `w16_seg0`. A macro, `W16SEG0`, loads it where real mode
+zeroes a register into the segment. `mov es, [w16_seg0]` is four bytes, the
+same as the two instructions it replaces, and that matters: the arm had 3
+bytes of room. Real mode assembles exactly what it did.
+
+### Windows 3.1's own programs, and what they found (2026-11-01)
+
+Write 3.1, Sound Recorder and Media Player each import a few calls Windows
+3.0's programs did not. With the setup bootstrap's list beside them, that
+is twenty-two export rows, all in part 9, so the image pays nothing. Five of
+them are another call's arguments with a head of their own. `ScrollDC`'s
+last five arguments are `ScrollWindow`'s in the same order, so it runs
+`ScrollWindow` on them where they stand. It moves the saved program stack
+pointer by six bytes for the length of the call.
+
+Once they loaded, the two multimedia programs found three things:
+
+- **A dialog at `CW_USEDEFAULT`.** Both have a dialog for a main window,
+  placed at 8000h. Scaling 8000h dialog units by 7/4 is an `idiv` whose
+  answer does not fit in 16 bits, which is a divide fault, and kern_mega
+  restarts the machine on one. Wine's dialog code leaves 8000h alone, and
+  so does WIN16 now.
+- **`CreateBitmap` with bits** wrote through a virtual paragraph on the
+  arm. It is one of the few places that loaded one into ES by hand.
+- **Media Player reads `SYSTEM.INI`'s `[mci]` section** to list its
+  devices, and said none were installed. The arm now starts a `SYSTEM.INI`
+  that is not there with the two lines Windows 3.1's Setup would have
+  written. After that, its Device menu lists Waveform Audio and CD Audio,
+  and CD Audio opens with its tracks along the scale.
+
+Their buttons still draw as blank grey faces. Media Player builds each
+button in a memory DC and puts its glyph on with `StretchBlt`. That is the
+next thing to look at.
