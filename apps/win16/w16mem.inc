@@ -364,13 +364,21 @@ w16_garena:
 .kb:
     W16VCLAIM                       ; DX = the segment
     mov cx, ax
-    pop ax
-    jnc .got
+    jnc .got1
+    pop cx                          ; the floor would not go: half of it,
+    push cx                         ;   and half again, down to the request
+    cmp ax, cx                      ;   (the arm's map is 960 KB, so a
+    je .no1                         ;   fourth arena is what it has left)
+    shr ax, 1
     cmp ax, cx
-    je .no                          ; it was the request's own size
-    mov cx, ax
-    W16VCLAIM                       ; the floor would not go: the request
-    jc .no
+    jae .kb
+    mov ax, cx
+    jmp short .kb
+.no1:
+    pop ax
+    jmp short .no
+.got1:
+    pop ax
 .got:
     mov [w16_arena + si], dx
     W16SEG es, dx

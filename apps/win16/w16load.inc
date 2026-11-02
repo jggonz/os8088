@@ -2428,25 +2428,33 @@ w16l_ldlib:
 .modok:
     mov [w16_nmod], ax
     call w16_modules
-    call w16l_libs                  ; ITS libraries, first
-    jc .refused
     mov es, [w16_fseg]
     call w16l_laylib                ; CF=1 SI = reason
     jc .refuse
     call w16_copysegs
     jc .refuse
+    call w16l_mrec                  ; registered BEFORE its libraries load, so
+    jc .refuse                      ;   one that imports it back finds it, as
+    mov [w16l_lrec], al             ;   Windows' module table did (124.23.2)
+    call w16l_stash                 ; its segment tables, aside meanwhile
+    jc .refmem
+    call w16l_libs                  ; ITS libraries
+    jc .refusedr
+    call w16l_unstash
+    call w16l_relibs                ; ...named in its module block now
+    mov es, [w16_fseg]
     mov word [w16_nfix], 0
     xor al, al
     call w16_relocs
-    jc .refused
+    jc .refusedr
     cmp word [w16_nfix], 0          ; floating point: decided once, by the
     je .nofp                        ;   first module that has any (124.5)
     ICALL w16x_mode
-    jc .refuse
+    jc .refuser
 .nofp:
     mov al, 1
     call w16_relocs
-    jc .refused
+    jc .refusedr
     call w16_prologs
 %ifndef PKG_MEGA
 %ifndef W16_CENSUS_ALWAYS
@@ -2454,11 +2462,10 @@ w16l_ldlib:
     jne .cpuok
 %endif
     call w16_census
-    jc .refused
+    jc .refusedr
 .cpuok:
 %endif
-    call w16l_mrec                  ; AL = its record; CF=1 SI = reason
-    jc .refuse
+    mov al, [w16l_lrec]
     push ax
     mov dx, [w16_fseg]
     call OSAPI_MEM_FREE
@@ -2474,12 +2481,19 @@ w16l_ldlib:
     ICALL w16_strcpy
     stc
     jmp short .ret
+.refmem:
+    mov si, w16_r_mem
+.refuser:
+    call w16l_unreg                 ; registered: its record and block go too
 .refuse:
     mov di, w16_l1
     ICALL w16_strcpy
     mov si, w16_name
     mov di, w16_l2
     ICALL w16_strcpy
+    jmp short .refused
+.refusedr:
+    call w16l_unreg
 .refused:
     call w16l_undo                  ; its blocks and its tables back
     call w16l_pop
@@ -2819,23 +2833,7 @@ w16l_mrec:
     mov [es:W16LM_IP], ax
     mov ax, [w16l_cs]
     mov [es:W16LM_CS], ax
-    xor bx, bx                      ; the libraries it imports
-.lib:
-    mov al, 0xFF
-    cmp bx, [w16_nmod]
-    jae .lput
-    mov al, [w16_modid + bx]
-    test al, W16M_LIB
-    jz .lnone
-    and al, ~W16M_LIB & 0xFF
-    jmp short .lput
-.lnone:
-    mov al, 0xFF
-.lput:
-    mov [es:W16LM_LIBS + bx], al
-    inc bx
-    cmp bx, 16
-    jb .lib
+    call w16l_mlibs                 ; (none yet: w16l_relibs, after them)
     mov di, W16LM_SEGS              ; each segment's paragraph
     mov si, w16_sbase
     mov cx, [w16_nseg]
@@ -2959,6 +2957,150 @@ w16l_mrec:
     stc
     ret
 
+; w16l_mlibs - the libraries a library imports, by record, into its module
+; block at ES (0FFh: none, or not a library). Keeps all.
+w16l_mlibs:
+    push ax
+    push bx
+    xor bx, bx
+.lib:
+    mov al, 0xFF
+    cmp bx, [w16_nmod]
+    jae .lput
+    mov al, [w16_modid + bx]
+    test al, W16M_LIB
+    jz .lnone
+    and al, ~W16M_LIB & 0xFF
+    jmp short .lput
+.lnone:
+    mov al, 0xFF
+.lput:
+    mov [es:W16LM_LIBS + bx], al
+    inc bx
+    cmp bx, 16
+    jb .lib
+    pop bx
+    pop ax
+    ret
+
+; w16l_lrecp - SI = the record of the library being loaded ([w16l_lrec]).
+; Keeps the rest.
+w16l_lrecp:
+    push ax
+    mov al, [w16l_lrec]
+    mov ah, W16L_SIZE
+    mul ah
+    add ax, w16_libs
+    mov si, ax
+    pop ax
+    ret
+
+; w16l_relibs - its libraries loaded: their records into its module block.
+; Keeps all.
+w16l_relibs:
+    push si
+    push es
+    call w16l_lrecp
+    W16SEG es, [si + W16L_MREC]
+    call w16l_mlibs
+    pop es
+    pop si
+    ret
+
+; w16l_unreg - a library refused after w16l_mrec registered it: its record
+; free again and its module block given back. One that imported it back
+; while it loaded keeps a count on nothing; the load that asked fails.
+; Keeps all.
+w16l_unreg:
+    push ax
+    push si
+    call w16l_lrecp
+    mov byte [si + W16L_COUNT], 0
+    xor ax, ax
+    xchg ax, [si + W16L_MREC]
+    or ax, ax
+    jz .out
+    ICALL w16_gfreeh
+.out:
+    pop si
+    pop ax
+    ret
+
+; w16l_stash / w16l_unstash - its segment tables ([w16_sbase], [w16_slen],
+; [w16_rtoff], [w16_nseg] of each) aside at the end of its own tables while
+; its libraries load - each library's load lays its own out in them - and
+; back. w16l_stash: CF=1 no memory; ES = the tables. Keep the rest.
+w16l_stash:
+    push ax
+    push cx
+    push si
+    push di
+    mov cx, [w16_nseg]
+    shl cx, 1
+    mov ax, [w16_hpos]
+    mov [w16l_stoff], ax
+    add ax, cx
+    jc .out
+    add ax, cx
+    jc .out
+    add ax, cx
+    jc .out
+    call w16l_hgrow
+    jc .out
+    mov [w16_hpos], ax
+    mov di, [w16l_stoff]
+    cld
+    mov si, w16_sbase
+    push cx
+    rep movsb
+    pop cx
+    mov si, w16_slen
+    push cx
+    rep movsb
+    pop cx
+    mov si, w16_rtoff
+    rep movsb
+    clc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+w16l_unstash:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    mov cx, [w16_nseg]
+    shl cx, 1
+    mov si, [w16l_stoff]
+    mov ax, [w16_fseg]
+    push ds
+    pop es
+    mov ds, ax
+    cld
+    mov di, w16_sbase
+    push cx
+    rep movsb
+    pop cx
+    mov di, w16_slen
+    push cx
+    rep movsb
+    pop cx
+    mov di, w16_rtoff
+    rep movsb
+    pop ds
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
 ; w16l_tcopy - CX bytes from the tables at SI to ES:DI, DI past them.
 ; Keeps the rest but SI.
 w16l_tcopy:
@@ -3052,9 +3194,9 @@ w16l_svtab:                         ; what one module's load holds, address
     dw w16_dgroup, 2,  w16_dgsize, 2,  w16_lbase, 2,  w16_pseg, 2
     dw w16_psp, 2,  w16_ptop, 2,  w16_dgfull, 1,  w16_rtab, 2
     dw w16_rtlen, 2,  w16_heap, 2,  w16_nfix, 2,  w16_soff, 4
-    dw w16l_code, 2
+    dw w16l_code, 2,  w16l_lrec, 1,  w16l_stoff, 2
     dw 0
-%assign w16l_svn 2+2+2+2+2 + 2+32+2+14 + 2+2+2+2 + 2+2+1+2 + 2+2+2+4 + 2
+%assign w16l_svn 2+2+2+2+2 + 2+32+2+14 + 2+2+2+2 + 2+2+1+2 + 2+2+2+4 + 2+1+2
 %if w16l_svn > W16_LSVSZ
   %error "w16l_svtab holds more than W16_LSVSZ"
 %endif
@@ -4183,6 +4325,8 @@ w16_fend:   dw 0                    ; the file's last valid offset + 1
 w16l_code:  dw 0                    ; a library's code block (w16l_laylib)
 w16l_dgb:   dd 0                    ; ...its DGROUP's bytes
 w16l_rp:    dw 0                    ; ...its record, being written
+w16l_lrec:  db 0                    ; ...its record, once registered
+w16l_stoff: dw 0                    ; ...its segment tables, aside (stash)
 w16l_entp:  dw 0                    ; ...its entry table and names, measured
 w16l_entn:  dw 0
 w16l_resp:  dw 0

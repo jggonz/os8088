@@ -132,13 +132,8 @@ W16LIB w16k_loadlib
     jc .refused
     cmp al, 0xFF
     je .nofile
-    xor ah, ah
-    call w16l_recp                  ; BX -> it
-    cmp byte [bx + W16L_OWED], 0
-    je .found
-    mov byte [bx + W16L_OWED], 0
-    mov si, w16k_llback_c           ; its LibMain, then w16k_llback answers
-    call w16l_lmcall
+    mov [w16_lltgt], al             ; its LibMain, and those of every library
+    call w16k_llrun                 ;   it brought in (w16k_llrun)
     jmp short .out
 .found:
     xor ah, ah
@@ -161,6 +156,50 @@ W16LIB w16k_loadlib
     pop di
     pop si
     ret
+
+; w16k_llrun - LoadLibrary's LibMains: every library the load brought in
+; that owes one, the last loaded first - the libraries [w16_lltgt] imports,
+; which Windows initialised before it - and then [w16_lltgt]'s own, whose
+; continuation answers; or its hInstance when it owes none. Before, only
+; the library asked for was called, and Microsoft's setup engine looped on
+; LoadString(NULL): MSCOMSTF's LibMain, which keeps its hInstance, never ran
+; (SPEC.md 124.23.5)
+w16k_llrun:
+    push bx
+    mov ax, W16_NLIB
+.f:
+    dec ax
+    js .tgt
+    cmp al, [w16_lltgt]
+    je .f
+    call w16l_recp
+    cmp byte [bx + W16L_COUNT], 0
+    je .f
+    cmp byte [bx + W16L_OWED], 0
+    je .f
+    mov si, w16k_llnext_c
+    jmp short .call
+.tgt:
+    mov al, [w16_lltgt]
+    xor ah, ah
+    call w16l_recp
+    cmp byte [bx + W16L_OWED], 0
+    je .done
+    mov si, w16k_llback_c           ; ...then w16k_llback answers
+.call:
+    mov byte [bx + W16L_OWED], 0
+    call w16l_lmcall
+    pop bx
+    ret
+.done:
+    mov ax, [bx + W16L_HINST]
+    xor dx, dx
+    pop bx
+    ret
+
+; ...an imported library's LibMain has answered: the next
+LCONT w16k_llnext
+    jmp w16k_llrun
 
 ; LoadLibrary's continuation: AX = LibMain's answer, CX = the record
 LCONT w16k_llback

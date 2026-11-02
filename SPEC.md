@@ -228703,7 +228703,15 @@ start without it: `GetModuleHandle("KEYBOARD")`, then
 | call | answer |
 |---|---|
 | `GetModuleHandle(name)` | one of WIN16's modules, by its name to the first dot and case aside: `W16_HMOD` (20h) + its id, KERNEL 20h to SHELL 26h - paragraphs in the interrupt table, which no program's memory can be. The program's own name - its file's stem or its module name - answers its instance, which every call here takes as its module too, and so does a NULL segment (a handle given). Another task's **module name** answers that task's instance while it runs (§124.28.5): the loader keeps each program's module name, the resident names' first, in `w16_mname`, because its NE tables are freed before it runs. Microsoft's Setup Toolkit starts `_MSTEST.EXE`, whose module name is `DSHELL`, and waits while `GetModuleHandle("DSHELL")` answers; a 0 there sent it straight to deleting its own second stage. Anything else is 0 |
-| `GetProcAddress(hModule, name)` | on one of WIN16's modules, a function in `w16api.inc`'s `W16PROCNAME` list, by name (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the bind slot given out on the first ask, as an import's first fixup gives one. The export rows are the loader part's and it is dropped once the program runs (§124.18.7), so the list carries each name's binding into the library part; at most `W16_NPNMAX` (8) names, and today one, `KEYBOARD.MapVirtualKey`. Anything else is NULL, as it was (§124.20.4); a program's own DLLs are S18's |
+| `GetProcAddress(hModule, name)` | on one of WIN16's modules, a function in `w16api.inc`'s `W16PROCNAME` list, by name (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the bind slot given out on the first ask, as an import's first fixup gives one. The export rows are the loader part's and it is dropped once the program runs (§124.18.7), so the list carries each name's binding into the library part; at most `W16_NPNMAX` (16) names. Today there are fifteen:
+`KEYBOARD.MapVirtualKey`, `KERNEL.LocalHandleDelta` (Write 3.1), and the
+thirteen that the scripts of Microsoft's setup engine (`_MSTEST.EXE`,
+Arcade's and Mozart's) `DECLARE` and bind by name: `KERNEL.GetVersion`,
+`GetProfileString`, `GetWinFlags`, `GetWindowsDirectory` and
+`GetSystemDirectory`; `USER.SetWindowText`, `ShowWindow`, `GetDC`,
+`ReleaseDC`, `SendMessage` and `GetSystemMetrics`; `GDI.GetDeviceCaps` and
+`AddFontResource`. A name costs its bytes in the library part and two bytes
+of bss (`w16_pnslot`). Anything else is NULL, as it was (§124.20.4); a program's own DLLs are S18's |
 | `MapVirtualKey(code, type)` | 0: a virtual key's scan code, the first with that key; 1: a scan code's virtual key; 2: a virtual key's character unshifted - a digit or letter its own, Backspace, Tab, Enter, Esc and space theirs, and the punctuation keys' US characters. All of the US layout WIN16 reads keys in (§124.6) |
 | `GetCurPID` | 0, as Wine answers it |
 | a dialog control of a class the program registered | made from the class as `CreateWindow` makes one, and sent `WM_CREATE` - with a `CREATESTRUCT` of its instance, ID, parent, place, size and style; its name and class NULL - before the dialog's `WM_INITDIALOG`, in the controls' order. The PIF Editor's `PifHKy` (the shortcut key) is one. An answer of -1 does not refuse it: nothing is left to unwind by then |
@@ -228960,7 +228968,7 @@ code.
 | its file | `<NAME>.DLL` - the module's name, up to 8 characters - in the **program's own folder**. Windows also searched the current directory, the Windows and system directories and the PATH; os8088 has none of those, and a library beside its program is how every target ships. Paintbrush names its library `PBRUSH` while the library calls itself `SCOOLVM`: the import's name finds the file, and the file's own module name is kept as well, both answering `GetModuleHandle` |
 | not there | its imports bind to missing-import stubs, named, as a module WIN16 lacks did (§124.12). Windows refused such a program at load; WIN16 runs it until it calls into the absent library and then says which function |
 | refused | a library the loader refuses for its own reason (§124.3: self-loading, protected mode only, an iterated segment, tables too large, a CPU the census rules out) refuses the PROGRAM, line 1 the reason and line 2 the library's file name |
-| a library of a library | loaded the same way, before the library that imports it. At most `W16_NLIB` = 8 libraries are loaded at once and `W16_LDEPTH` = 4 deep |
+| a library of a library | loaded the same way, while the library that imports it is loading. At most `W16_NLIB` = 8 libraries are loaded at once and `W16_LDEPTH` = 4 deep. **Libraries may import each other in a cycle** (§124.23.2.1) |
 
 #### 124.23.2 Where it lives
 
@@ -228999,6 +229007,38 @@ The module record block begins with eight words - the segment count, the
 entry table's offset and length, the resident names' offset, the
 non-resident names' offset and length, and `ne_csip` - then each segment's
 paragraph, then the three tables as the file has them.
+
+##### 124.23.2.1 Cycles *(2026-11-02)*
+
+Microsoft's setup engine ships six DLLs that import each other in cycles.
+MSSHLSTF imports MSCOMSTF, MSUILSTF and MSINSSTF, and each of those imports
+MSSHLSTF back. Windows loaded them because a module is in its module table
+before its own imports are resolved. Until now WIN16's library loader
+loaded a library's imports first and wrote its record last, so a cycle
+recursed until `W16_LDEPTH` refused it with *Its libraries import too
+deeply*.
+
+The loader (`w16l_ldlib`) now works in this order:
+
+1. Lay out the library's blocks (`w16l_laylib`) and read its segments.
+2. Write its record and module block (`w16l_mrec`). A library that imports
+   it back now finds it in progress and binds to its entry table and
+   segments, which are already in place.
+3. Load its imports (`w16l_libs`).
+4. Record their records in its module block (`w16l_relibs`).
+5. Apply its relocations.
+
+The per-segment scratch (`w16_sbase`, `w16_slen` and `w16_rtoff`, one entry
+per segment) is shared by every load. While the imports load, it is parked
+at the end of the library's own table claim (`w16l_stash`), the claim its
+relocation records already grow. A refusal after step 2 frees the record
+and the module block again (`w16l_unreg`). A library that bound to it
+while it loaded keeps a count on nothing, and the load that asked for it
+fails.
+
+With in-progress libraries found, the deepest of the six is four, so
+`W16_LDEPTH` = 4 holds. _MSTEST loads MSINSSTF first: MSINSSTF, then
+MSCOMSTF, MSSHLSTF and MSUILSTF.
 
 #### 124.23.3 Binding
 
@@ -229039,7 +229079,7 @@ line 2 the library's file.
 
 | call | |
 |---|---|
-| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for in the program's folder, by its 8.3 name. A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3) and its `LibMain` called as a call into the program; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
+| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for in the program's folder, by its 8.3 name. A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
@@ -229635,7 +229675,7 @@ So WIN16 keeps three kinds of claim and no more:
 |---|---|
 | the program (§124.20.2) | one |
 | the library part (§124.19) | one, from its first call |
-| the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21, and 3 on the kern_mega arm, §124.31.1): 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again; each one the size of a larger request instead, and the request's own size when the larger one cannot be had |
+| the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21; on the kern_mega arm 3 until 2026-11-02, §124.31.1). They are 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again. Each is the size of a larger request instead. When a size cannot be had, the claim is tried at half that, and half again, down to the request's own size |
 
 Everything else WIN16 keeps is a **block of its own in the global heap**
 (`w16_kclaim`), in the arenas beside the program's blocks: each profile
@@ -231045,7 +231085,7 @@ byte of it.
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
-| the arenas | at most `W16_NARENA` = **3**, not real mode's 4 (§124.25.1, S21): each arena is four bytes of bss, and the arm is at `APP_MAX_SIZE` to within a few bytes. With three made, a request none of them holds is refused, as one past four is in real mode |
+| the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 960 KB of virtual paragraphs, and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the halving floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Halving finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
 | the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 

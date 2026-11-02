@@ -115,7 +115,7 @@ W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
                                 ;   a trace build takes fewer (124.17.4)
 W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
                                 ;   (w16mdi.inc, SPEC.md 124.25.10)
-W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
+W16_NPNMAX   equ 16             ; GetProcAddress's names at most (w16api.inc)
 W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
@@ -161,12 +161,8 @@ W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
                                 ;   memory DC's (SPEC.md 124.25.3)
 HWND_BROADCAST equ 0xFFFF        ; SendMessage's and PostMessage's: every
                                 ;   top-level window (SPEC.md 124.28.6)
-%ifndef PKG_MEGA
 W16_NARENA   equ 4              ; global heap arenas at once (w16mem.inc,
-                                ;   SPEC.md 124.25.1)
-%else
-W16_NARENA   equ 3              ; ...on kern_mega three: the arm has no
-%endif                          ;   room for a fourth's bss (124.31.1)
+                                ;   SPEC.md 124.25.1, 124.31.1)
 W16_NGH      equ 256            ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
 W16_MLAB     equ 64             ; ...a menu label's characters, and an
@@ -306,6 +302,8 @@ section .w16dlg
     W16BSS w16_ldep, 1          ;   a library it imports loads, and how deep
     W16BSS w16_lmsv, 6          ; LibMain's chain: the start BX, CX and ES
     W16BSS w16_lmi, 2           ; ...the record it is at
+    W16BSS w16_lltgt, 1         ; LoadLibrary's library, while its imports'
+                                ;   LibMains run (w16k_llrun)
     W16BSS w16_lmdi, 2          ; the registers w16_lmtramp enters a library
     W16BSS w16_lmcx, 2          ;   with (SPEC.md 124.23.4)
     W16BSS w16_lmsi, 2

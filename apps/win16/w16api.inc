@@ -85,6 +85,21 @@ W16X_SIZE equ 7
 %endmacro
 W16PROCNAME W16M_KEYBOARD, 131, 'MapVirtualKey'      ; PIF Editor's hot keys
 W16PROCNAME W16M_KERNEL, 310, 'LocalHandleDelta'    ; Write's, on 3.10
+; Microsoft's setup engine (_MSTEST.EXE) binds every DECLARE of its script
+; by name: Arcade's and Mozart's scripts name these (SPEC.md 124.22.12)
+W16PROCNAME W16M_KERNEL, 3, 'GetVersion'
+W16PROCNAME W16M_KERNEL, 58, 'GetProfileString'
+W16PROCNAME W16M_KERNEL, 132, 'GetWinFlags'
+W16PROCNAME W16M_KERNEL, 134, 'GetWindowsDirectory'
+W16PROCNAME W16M_KERNEL, 135, 'GetSystemDirectory'
+W16PROCNAME W16M_USER, 37, 'SetWindowText'
+W16PROCNAME W16M_USER, 42, 'ShowWindow'
+W16PROCNAME W16M_USER, 66, 'GetDC'
+W16PROCNAME W16M_USER, 68, 'ReleaseDC'
+W16PROCNAME W16M_USER, 111, 'SendMessage'
+W16PROCNAME W16M_USER, 179, 'GetSystemMetrics'
+W16PROCNAME W16M_GDI, 80, 'GetDeviceCaps'
+W16PROCNAME W16M_GDI, 119, 'AddFontResource'
 
 ;           module         ordinal  args  handler               the .spec line
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
