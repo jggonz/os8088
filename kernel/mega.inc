@@ -688,6 +688,165 @@ mega_irqrom:
 ; the reflecting stubs: the REAL-MODE vector, marked (high byte 1) as an IRQ
 ; for mega_svc - IVT 0Ah-0Fh for IRQ2-7, 70h-77h for IRQ8-15
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
+; mega_swv - the software vectors a package may take - 2Fh, 31h, 34h-3Dh -
+; read the IVT AT THE INT (SPEC.md 124.31.2, (d1)): a package's own code
+; selector there (WIN16's DPMI, its x87 emulator) is entered; anything else
+; goes where mega_ivt_sync's gate for it would (mega_idt_gate, asked at the
+; int: the path a package's vector never takes). A package's write to the
+; IVT does not pass mega_ivt_sync, so a gate rebuilt there would never see
+; it. A stub is a near call and its vector: the return address names it, and
+; its two bytes are half the far address mega_swc leaves
+MEGA_SWVN   equ 12
+mega_swv:
+%assign mega_q 0
+%rep MEGA_SWVN
+  %if mega_q == 0
+    %assign mega_v 0x2F
+  %elif mega_q == 1
+    %assign mega_v 0x31
+  %else
+    %assign mega_v 0x32 + mega_q
+  %endif
+    call mega_swc                   ; STKBALANCE-OK: mega_swc takes the
+    db mega_v                       ;   return as its argument and retf's
+  %assign mega_q mega_q + 1
+%endrep
+%if $ - mega_swv != MEGA_SWVN * 4
+  %error "mega_swv: a stub is not a 3-byte call and its vector"
+%endif
+mega_swc:                           ; ovlchk: builds its own far frame
+    ; STKBALANCE-OK: a DISPATCH - the handler's far address goes under the
+    ; CPU's own frame, over the stub's return, and a retf enters it
+    sub sp, 2
+    push bp
+    mov bp, sp                      ; [bp+2] and [bp+4]: the far address,
+    push ds                         ;   [bp+4] the stub's return till then
+    push bx
+    push si
+    push ax
+    mov bx, [ss:bp + 4]
+    sub bx, mega_swv
+    mov al, [cs:mega_swv + bx]      ; AL = the vector
+    mov bx, MEGA_SEL_LOW0
+    mov ds, bx
+    xor bh, bh
+    mov bl, al
+    shl bx, 2
+    mov si, [bx + 2]                ; SI:BX = the IVT's
+    mov bx, [bx]
+    call mega_swok
+    jc .sh
+    mov [ss:bp + 2], bx
+    mov [ss:bp + 4], si
+    jmp short .go
+.sh:
+    push cx                         ; the gate mega_ivt_sync would build,
+    push dx                         ;   into 8 bytes of this stack
+    push es
+    push di
+    sub sp, 8
+    mov di, sp
+    push ss
+    pop es
+    mov bx, MEGA_SEL_KDATA
+    mov ds, bx
+    mov bl, al
+    xor bh, bh
+    call KERNEL_SEG:mega_idt_gatef  ; (clobbers AX, CX, DX, SI)
+    mov si, sp
+    mov bx, [ss:si + 2]             ; BX:SI = its selector and offset
+    mov si, [ss:si]
+    add sp, 8
+    pop di
+    pop es
+    pop dx
+    pop cx
+    mov [ss:bp + 2], si
+    mov [ss:bp + 4], bx
+.go:
+    pop ax
+    pop si
+    pop bx
+    pop ds
+    pop bp
+    retf
+
+; mega_i21 - IDT 21h (SPEC.md 124.31.2, (d1)): IRQ1 when the master PIC has
+; it in service or the kernel raised it (mega_kwd); else a package's own
+; int 21h, sent to the handler IVT 21h names (a code selector it wrote)
+mega_i21:
+    ; STKBALANCE-OK: a DISPATCH - the software arm builds the handler's far
+    ; address under the CPU's own frame and retf's into it, which irets
+    push ax
+    mov al, 0x0B                    ; OCW3: the ISR...
+    out 0x20, al
+    in al, 0x20
+    mov ah, al
+    mov al, 0x0A                    ; ...and the IRR again
+    out 0x20, al
+    test ah, 2
+    pop ax
+    jnz .kbd
+    push bp
+    mov bp, sp
+    test byte [ss:bp+4], 4          ; the interrupted CS: an LDT selector is
+    pop bp                          ;   a package's
+    jz .kbd
+    sub sp, 4
+    push bp
+    mov bp, sp
+    push ds
+    push si
+    push ax
+    mov ax, MEGA_SEL_LOW0
+    mov ds, ax
+    mov ax, [0x21 * 4]
+    mov si, [0x21 * 4 + 2]
+    call mega_swok                  ; no package's handler there: the
+    jc .none                        ;   keyboard's, as before (d1)
+    mov [ss:bp + 2], ax
+    mov [ss:bp + 4], si
+    pop ax
+    pop si
+    pop ds
+    pop bp
+    retf
+.none:
+    pop ax
+    pop si
+    pop ds
+    pop bp
+    add sp, 4
+.kbd:
+    jmp KERNEL_SEG:kbm_isr
+
+; mega_swok - SI = a selector an IVT cell holds: CF = 0 it is a package's
+; code (an LDT selector below A000h, present, executable), CF = 1 not.
+; Keeps every register
+mega_swok:
+    test si, 4
+    jz .no
+    cmp si, 0xA000
+    jae .no
+    push ds
+    push ax
+    push si
+    and si, 0xFFF8
+    mov ax, MEGA_SEL_LDTD
+    mov ds, ax
+    mov ax, [si + 4]
+    and ah, 0x98                    ; present, a segment, executable
+    cmp ah, 0x98
+    pop si
+    pop ax
+    pop ds
+    je .yes
+.no:
+    stc
+    ret
+.yes:
+    clc
+    ret
 mega_irv:
 %assign mega_q 0x0A
 %rep 6
@@ -4212,6 +4371,21 @@ mega_ivt_sync:
     cmp bx, 0x78
     jb .g2
 .out:
+    mov ax, MEGA_SEL_IDT            ; gate 21h is mega_i21, IRQ1's or a
+    mov es, ax                      ;   package's (SPEC.md 124.31.2, (d1))
+    mov word [es:0x21 * 8], mega_i21
+    mov word [es:0x21 * 8 + 2], MEGA_SEL_CODE
+    xor si, si                      ; ...and 2Fh, 31h, 34h-3Dh: mega_swv
+.g4:
+    mov bl, [cs:mega_swv + si + 3]
+    xor bh, bh
+    shl bx, 3
+    lea ax, [mega_swv + si]
+    mov [es:bx], ax
+    mov word [es:bx + 2], MEGA_SEL_CODE
+    add si, 4
+    cmp si, MEGA_SWVN * 4
+    jb .g4
     pop es
     popa
     popf

@@ -120,6 +120,7 @@ These are facts about the tree on 2026-10-30, not choices.
 | O4 | Split the layer into one far-called part per Windows module (D11)? | **Yes**, as S14, before anything grows | Constraint 1 |
 | O5 | Where is "the Windows directory" when a program is installed? | **Unchanged: `SYSTEM\APPDATA\WIN16`** on the disk WIN16 started from, with `SYSTEM\` under it as `GetSystemDirectory`. `LoadLibrary` searches the program's folder, then the system directory, then the Windows directory, Windows' own order | S7's profiles already live there, and a second root would split one program's state across two |
 | O6 | OLE, printing, networks | **Answer "not available"**, never a refusal at load: `OleRegisterClientDoc` fails, `PrintDlg` returns `FALSE`, `Escape` reports no printer | WRITE, CARDFILE and PACKAGER import OLECLI and run fine without it on a Windows with no OLE servers |
+| O7 | Route a protected-mode program's own software interrupts (21h, 2Fh, 31h, 34h-3Dh) to the package that hooked them, on `kern_mega`? (d1) gate 21h asks the master PIC's in-service register; (d2) move the protected-mode PIC base off 20h | **(d1), answered yes 2026-11-01**: gate 21h is IRQ1 when the master 8259 has it in service and a package's own `int 21h` otherwise, and 2Fh, 31h and 34h-3Dh read the IVT at the int (`mega_swv`). `.mega` alone: +332 bytes, one 512-byte `.mega` rung (+512 of `KERN_SIZE` while booting, nothing below 1 MB once the switch has moved `.mega` up); kern_big and kern_small byte-identical (SPEC.md 20.18.1, 124.31.2) | 21h is IRQ1's gate in protected mode, so without it no program runs past its first `int 21h`; and a package's IVT write never reaches `mega_ivt_sync`, so DPMI and the x87 vectors have to be read at the int |
 
 ### 3.1 O3's targets, chosen (2026-11-01)
 
@@ -1442,10 +1443,10 @@ its table goes in the diary, so the reach is measured, not claimed.
       plays, CLOCK, SOL, NOTEPAD and DLLUSE (two libraries) run in
       protected mode.** CALC and FPU stop at the x87 vectors (item 4);
       PBRUSH at the DOS host's far call (item 6, since done).
-    - [ ] *4: the vectors.* Needs the owner's answer on 124.31.2 item 2,
-      CORRECTED 2026-11-01: 21h is IRQ1's gate in protected mode, and a
-      package's IVT write never reaches `mega_ivt_sync`, so 2Fh, 31h and
-      34h-3Dh must be read at the int too (the prototype's `mega_swv`).
+    - [x] *4: the vectors.* O7, (d1), answered yes 2026-11-01: gate 21h
+      asks the master PIC's in-service register, and 2Fh, 31h and 34h-3Dh
+      read the IVT at the int (`mega_swv`, SPEC.md 20.18.1). `.mega` +332
+      bytes; kern_big and kern_small byte-identical.
     - [x] *5: what the program is told* (124.31.6). `GetWinFlags` answers
       standard mode; `SEG_TILE` (kern_mega, O2(b)) tiles a block over
       64 KB; the selector functions (`w16sel.inc`) and a DPMI 0.9 subset on

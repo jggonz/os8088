@@ -49070,6 +49070,30 @@ through a run of selectors and its block decoder's protected-mode part
    entry must be what kern_mega's apps disk carries. The registry turns one
    way: an allowance above what the source uses FAILS.
 
+#### 20.18.1 A package's own software interrupts, on kern_mega (O7, 2026-11-01)
+
+**A package that hooks a software interrupt by writing the IVT is entered
+through it in protected mode too**, for the vectors a protected-mode program
+issues itself: 21h, 2Fh, 31h and 34h-3Dh (docs/plans/WIN16-ANY-PLAN.md O7,
+answered yes 2026-11-01; WIN16's arm is the user, §124.31.2). In protected
+mode the IDT is the vector table, built from the IVT by `mega_idt_build`,
+and a package's IVT write - through segment 0, so a #GP that `mega_null0`
+completes - does not pass `mega_ivt_sync`, which rebuilds the IRQ rows only.
+So these gates read the IVT **at the int** rather than when it is written:
+
+| gate | what it does |
+|---|---|
+| 21h, `mega_i21` | 21h is ALSO IRQ1's gate (`MEGA_PIC_BASE` = 20h). OCW3 reads the master 8259's in-service register: IRQ1 in service, or an interrupted CS in the GDT (`mega_kwd`'s re-delivery), is the keyboard, `kbm_isr`, as before. Otherwise the int came from an LDT code selector, and IVT 21h is entered when it names a package's code selector (`mega_swok`: an LDT selector below A000h, present, executable); anything else there is the keyboard too, which is what every int 21h met before |
+| 2Fh, 31h, 34h-3Dh, `mega_swv` | a stub each, `call mega_swc` and its vector byte. `mega_swc` enters IVT's cell when `mega_swok` says it is a package's code, and otherwise the gate `mega_idt_gate` builds for that cell - the one `mega_idt_build` would have made |
+
+`mega_ivt_sync` writes these thirteen gates each time it runs, so a gate the
+IVT-to-IDT rebuild would have changed stays the reader. The handler is
+entered by a `retf` with the CPU's own frame under it, so it returns with
+`iret` exactly as a real-mode handler does. **It is `.mega` alone**: +332
+bytes there (one 512-byte rung: `KERN_SIZE` +512 while booting, nothing below
+1 MB after the switch), `.text` and `.bss` unchanged, and kern_big and
+kern_small assemble byte-identical with and without it.
+
 ## 21. loader.inc
 
 State (.bss, **zero at boot** — §2.5, and there is no `loader_init`: all
@@ -230709,31 +230733,32 @@ It needs two things it does not have:
    register kept) for nothing**: `osapi_seg`'s `ja .no` already refuses
    every verb past `SEG_BWIN`, and a real-mode caller's step is `1000h`.
    It is what `__AHINCR` = 8 rests on (124.31.6).
-2. **A software interrupt routed to a package**: on `kern_mega` the IDT is
-   built from the IVT once, and `mega_ivt_sync` rebuilds only the IRQ rows,
-   so a protected-mode program's own `int 21h` - its C runtime's start-up
-   and its exit issue it - never reaches WIN16. **And 21h is IRQ1's gate**:
-   the master 8259 sits at `MEGA_PIC_BASE` = 20h in protected mode (08h-0Fh
-   are CPU exceptions there), so a software `int 21h` runs the keyboard ISR
-   and returns into the program as if the call were done - TINY16's exit,
-   seen 2026-11-01, goes on into the bytes after it. 2Fh, 31h and 34h-3Dh
-   collide with nothing. **Two shapes, the owner's to choose (O2 covered
-   (a) and (b) only)**: (d1) gate 21h asks the master PIC's in-service
-   register - IRQ1 in service is the keyboard, as now; otherwise it is a
-   software interrupt, reflected to IVT 21h's handler by `mega_idt_gate`'s
-   package-segment rule - and `mega_ivt_sync` rebuilds 2Fh, 31h and
-   34h-3Dh from the IVT as it does the IRQ rows; or (d2) the protected-mode
-   master base moves off 20h (DOSX used 50h), a larger change to the
-   reflection path, which keeps the PIC at 20h across a reflection. Either
-   is `.mega` alone, nothing on any other kernel. Until one is taken, no
-   program runs on this arm past its first `int 21h`.
-   **Found while prototyping (d1), 2026-11-01**: a package's write to the
-   IVT is completed without passing `mega_ivt_sync`, so a gate REBUILT from
-   the IVT never sees WIN16's 31h or its x87 emulator's 34h-3Dh. Those
-   gates have to read the IVT at the int instead, as (d1)'s 21h does: the
-   prototype gives 2Fh, 31h and 34h-3Dh a stub each (`mega_swv`) that
-   enters a package's code selector found there, and otherwise the gate
-   `mega_ivt_sync` built (`mega_swsh`). Either shape needs that half.
+2. **A software interrupt routed to a package (O7, (d1), answered yes
+   2026-11-01; §20.18.1)**: on `kern_mega` the IDT was built from the IVT
+   once, and `mega_ivt_sync` rebuilt only the IRQ rows, so a protected-mode
+   program's own `int 21h` - its C runtime's start-up and its exit issue
+   it - never reached WIN16. **And 21h is IRQ1's gate**: the master 8259
+   sits at `MEGA_PIC_BASE` = 20h in protected mode (08h-0Fh are CPU
+   exceptions there), so a software `int 21h` ran the keyboard ISR and
+   returned into the program as if the call were done - TINY16's exit, seen
+   2026-11-01, went on into the bytes after it. Of the two shapes, (d1) is
+   taken: gate 21h (`mega_i21`) asks the master PIC's in-service register,
+   IRQ1 in service is the keyboard as before, and otherwise an `int 21h`
+   from an LDT code selector goes to the handler IVT 21h names when that is
+   a package's code selector, and to the keyboard when it is not. 2Fh, 31h
+   and 34h-3Dh collide with nothing, but a package's write to the IVT is
+   completed without passing `mega_ivt_sync`, so a gate REBUILT from the IVT
+   would never see WIN16's 31h or its x87 emulator's 34h-3Dh: their gates
+   are a stub each (`mega_swv`) that reads the IVT AT THE INT and enters a
+   package's code selector found there, else the gate `mega_idt_gate` would
+   build for that cell. **It is `.mega` alone**: +332 bytes there, which
+   crosses one 512-byte `.mega` rung (`KERN_SIZE` +512 while the machine
+   boots; nothing below 1 MB once the switch has moved `.mega` up), `.text`
+   and `.bss` +0 and `tools/os88megaseg.py`'s overhead unchanged at 4,381;
+   kern_big and kern_small assemble byte-identical with and without it
+   (`tools/kernsize.py`, 2026-11-01). (d2), the protected-mode master base
+   moved off 20h (DOSX used 50h), was the larger change to the reflection
+   path and is not taken.
 
 #### 124.31.3 Memory: virtual paragraphs inside, selectors at the edge
 
