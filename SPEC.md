@@ -230005,6 +230005,33 @@ flag into a far call.
 A segment that cannot be loaded then ends the program, as a missing
 import does (§124.12): *Not enough memory for its code.* with its name.
 
+#### 124.26.2.1 When a relocation does not take the thunk *(WIN16 S24)*
+
+A thunk is a place to **call**. Only a far-pointer relocation (source type
+3) to a moveable entry is given the thunk. In two cases the relocation is
+given the segment itself, which the check pass then marks kept
+(§124.26.1), as it marks a discardable segment named by its number:
+
+- **A segment or an offset alone** (source types 2 and 5) to a moveable
+  entry is the entry's own segment or offset. A program that builds a
+  pointer from a segment relocation and reads through it reads that
+  segment's bytes, not the thunks'.
+- **Every relocation of a protected-mode-only program** (`ne_flags` bit 3,
+  `NEF_PMODE`). In Windows' standard and enhanced modes a far pointer into
+  a discardable segment stays valid: the selector is kept, and a discarded
+  segment is reloaded when it is touched. Such programs keep far pointers to
+  data in their code segments. A program that also ran in real-mode
+  Windows could not, so WIN16 keeps thunking those.
+
+Found by Microsoft Arcade's setup. `_MSTEST.EXE` keeps its interpreter's
+keyword table and messages in segment 17: 322 moveable entries, reached
+through a segment relocation in DGROUP and through far pointers between
+the segment's own entries. Through the thunks it read the module block,
+faulted with GP 03E1, and then showed *Parsetime error* with a line of
+question marks. Sound Recorder and Media Player, the other
+protected-mode-only programs that run here, start as before (looked at on
+the arm).
+
 #### 124.26.3 Loading a segment *(S20 batch 1)*
 
 A segment is loaded into a **fixed block of the global heap** (§124.9),
