@@ -17,7 +17,9 @@ One boot on VGA, three legs:
      mapped, 124.24.4), red's COLORREF, and that the font made from it,
      selected, is MS Sans Serif 13 rows high - the DC's font picking the
      face of GetTextFace and GetTextMetrics;
-  2. Notepad 3.1, where the win16-reference skill put it: Alt+F O opens a
+  2. Notepad 3.1, W31NOTE.EXE where the win16-reference skill's `samples`
+     put it (NOTEPAD.EXE is 3.0's, with a File Open of its own, for
+     win16file's leg): Alt+F O opens a
      window that is not Notepad's - the chooser (124.24.2) - and Esc closes
      it; Notepad is left running, no longer waiting in GetOpenFileName,
      and CommDlgExtendedError's word is 0 (Cancel is seen, not told);
@@ -109,7 +111,7 @@ def leg_cdlg(d, ui, S, dw, bad):
 def leg_notepad(d, ui, S, dw, bad):
     from win16cpu import raise_
     raise_(d, ui, dw)
-    p = F.Prog(d, ui, d.x.sym, S, "NOTEPAD.EXE")
+    p = F.Prog(d, ui, d.x.sym, S, "W31NOTE.EXE")
     p.launch(dw)
     d.wait(lambda: p.pb("w16_state") in (W16S_REFUSED, W16S_ENDED)
            or p.text("w16_l2") == "Running", 300, "Notepad to run")
@@ -194,7 +196,7 @@ def main():
         print("win16cdlg: SKIP - no build/win16/CDLG.EXE (`make win16fixtures`)")
         return 77
     names = ["CDLG.EXE"]
-    for n in ("NOTEPAD.EXE", "SSMARQUE.EXE"):
+    for n in ("W31NOTE.EXE", "SSMARQUE.EXE"):
         if os.path.exists(b(os.path.join("win16", n))):
             names.append(n)
         else:
@@ -212,7 +214,7 @@ def main():
         S = F.pkg_syms()
         dw = F.open_b(d, ui, xmcheck.sym)
         leg_cdlg(d, ui, S, dw, bad)
-        if "NOTEPAD.EXE" in names:
+        if "W31NOTE.EXE" in names:
             leg_notepad(d, ui, S, dw, bad)
         if "SSMARQUE.EXE" in names:
             leg_marquee(d, ui, S, dw, bad)

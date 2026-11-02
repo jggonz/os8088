@@ -566,8 +566,8 @@ w16_ncpaint:
     push cx
     cmp byte [w16_mdion], 0         ; the MDI children above it are owed
     je .nab                         ;   what it draws over (124.27.3)
-    mov word [w16_sfn], w16i_above
-    ICALL w16_scall
+    mov word [w16_tfn], w16i_above
+    ICALL w16_tcall
 .nab:
     test word [bx + W16W_STYLE + 2], WS_MINIMIZE_HI
     jz .nmin                        ; a minimized child: its icon's title
@@ -575,14 +575,14 @@ w16_ncpaint:
     jnz .mdi
 .nmin:
     ICALL w16_bord                  ; a thick frame or a caption: an MDI
-    cmp ax, 4                       ;   child's, drawn first by part 9
+    cmp ax, 4                       ;   child's, drawn first by part 10
     je .mdi                         ;   (SPEC.md 124.27.3) - which is not
     ICALL w16_capt                  ;   fetched for a window without one
     or ax, ax
     jz .nomdi
 .mdi:
-    mov word [w16_sfn], w16i_ncpaint
-    ICALL w16_scall
+    mov word [w16_tfn], w16i_ncpaint
+    ICALL w16_tcall
 .nomdi:
     xor cl, cl
     mov al, SB_VERT

@@ -102,7 +102,7 @@ w16_clgetb:
     inc ax                          ; ...and a NUL
     jz .zero
     xor dx, dx
-    mov cl, GMEM_MOVEABLE
+    mov cl, GMEM_MOVEABLE | GMEM_ZEROINIT
     ICALL w16_gnew                   ; AX = the handle, DX = its data
     or ax, ax
     jz .zero
@@ -137,7 +137,7 @@ w16_clgetb:
     ja .free1
     push dx
     xor dx, dx
-    mov cl, GMEM_MOVEABLE
+    mov cl, GMEM_MOVEABLE | GMEM_ZEROINIT
     ICALL w16_gnew                   ; AX = the second, DX = its data
     pop cx                          ; (the CRs: not needed again)
     or ax, ax

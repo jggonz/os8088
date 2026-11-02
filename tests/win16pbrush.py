@@ -219,7 +219,7 @@ def main():
         saved, t0 = None, time.time()
         while time.time() - t0 < 240:   # the header is written last
             time.sleep(5.0)
-            data = disk_file(bimg, "NEW.BMP")
+            data = disk_file(d.p.b, "NEW.BMP")   # QEMU's copy, not src.img
             if data and bmp_pixel(data, 0, 0) is not None:
                 saved = data
                 break

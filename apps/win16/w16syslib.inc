@@ -1324,8 +1324,9 @@ W16SYS w16c_shexec
     mov bx, 2
     call w16c_path                  ; CF=1 AX = SE_ERR_FNF or SE_ERR_PNF
     jc .out
-    call w16t_shexe                 ; CF=0 a Windows program, started in
-    jnc .out                        ;   this instance: AX (124.28.5)
+    mov word [w16_tfn], w16t_shexe  ; CF=0 a Windows program, started in
+    ICALL w16_tcall                 ;   this instance: AX (124.28.5), in
+    jnc .out                        ;   the task part (124.28.13)
     call w16c_locate
     jc .out
     mov byte [w16_shq], 1
@@ -1336,60 +1337,6 @@ W16SYS w16c_shexec
     xor dx, dx
     pop di
     pop si
-    ret
-
-; w16c_shrun - from w16_wake, the gfx lock free: the posted ShellExecute
-; started. A document nothing on the machine opens says so in a toast
-w16c_shrun:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov byte [w16_shq], 0
-    mov si, w16s_dir + w16s_dirlen - 1  ; "": the document names its program
-    xor cx, cx
-    xor dx, dx
-    push ds
-    pop es
-    mov di, w16_shdoc
-    call OSAPI_PKG_START
-    jnc .out                        ; (any other refusal, the user was told)
-    cmp al, W16C_LDBAD
-    jne .out
-    mov si, w16c_s_noprog           ; XSEC-OK: read through cs:
-    mov di, w16c_toast              ; XSEC-OK: the part's buffer
-.p:
-    mov al, [cs:si]
-    or al, al
-    jz .n
-    mov [cs:di], al
-    inc si
-    inc di
-    jmp short .p
-.n:
-    mov si, w16_shdoc
-.c:
-    mov al, [si]
-    mov [cs:di], al
-    inc si
-    inc di
-    or al, al
-    jnz .c
-    W16CSEG es
-    mov si, w16c_toast              ; XSEC-OK: ES = CS
-    xor cx, cx
-    call OSAPI_TOAST
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; FindExecutable (SHELL.21) - args: +0 lpResult, +4 lpDirectory, +8 lpFile.
@@ -1745,12 +1692,10 @@ w16c_cseq:
     ret
 
 w16c_s_open:    db 'open', 0
-w16c_s_noprog:  db 'No program: ', 0
 w16c_exts:      db 'EXECOMBATPIF', 0
 w16c_cdrv:      db 0                ; the DOS's drive, and the document's
 w16c_tdrv:      db 0
 w16c_ocwd:      times 68 db 0       ; the other drive's folder, "X:\..."
-w16c_toast:     times 26 db 0
 
 ; =============================================================================
 ; OLECLI and OLESVR (SPEC.md 124.24.7): Windows 3.1 with no OLE server

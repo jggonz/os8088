@@ -911,18 +911,6 @@ dos_entry:
     pop dx                          ; late. dos_click is OUR own click work
     mov bx, [dos_win]               ; and the library chains to it
 
-%ifndef KD_BACKEND                  ; 96.43: the console is the window's
-    mov al, KSC_ALT                 ; **ASK ONCE, TO ARM THE KEY-STATE MAP**
-    call OSAPI_KEY_DOWN             ; (SPEC.md 9.7): kbm_isr does not track a
-                                    ; scancode until something has asked, so
-                                    ; without this call neither half of
-                                    ; 96.33.5.1 can see Alt+Enter - not the
-                                    ; kernel's latch and not our own poll. The
-                                    ; ANSWER is discarded; the asking is the
-                                    ; whole point, and it is what keeps the
-                                    ; feature costing a machine that never
-                                    ; opens DOS exactly nothing
-%endif
 
 %ifdef DOS_MEGA                     ; (kern_mega: the proc keeps dos_dsel,
     OS88_REGION_MOVABLE dos_reloc   ; dos_hk_tty's DS, KERN-MEGA-PLAN 14.54)
@@ -1083,6 +1071,9 @@ dos_entry:
 
 .idle:
     mov byte [dos_state], DST_IDLE
+%ifndef KD_BACKEND
+    call dos_keyarm                 ; the console: Alt+Enter from its prompt
+%endif
 .ok:
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     ; **THE PROMPT, HERE AND NOT IN `dos_con_start`** (SPEC.md 96.33.2.1).
@@ -1299,10 +1290,34 @@ dos_wake:
     jc .out                     ; back to asks FIRST, and the answer comes back
 %endif                          ; through this same door
 .go:
+%ifndef KD_BACKEND
+    call dos_keyarm                 ; a program runs here: not a forward
+%endif
     mov byte [dos_state], DST_RAN
     call dos_run
 .out:
     ret
+
+%ifndef KD_BACKEND                  ; 96.43: the console is the window's
+; dos_keyarm - **ASK ONCE, TO ARM THE KEY-STATE MAP** (SPEC.md 9.7): kbm_isr
+; does not track a scancode until something has asked, so without this call
+; neither half of 96.33.5.1 can see Alt+Enter - not the kernel's latch and
+; not our own poll. The ANSWER is discarded; the asking is the whole point,
+; and it is what keeps the feature costing a machine that never opens DOS
+; exactly nothing. Asked when DOS opens EMPTY, a console, and when it RUNS
+; a program, and not in the entry: a DOS that hands a Windows program to
+; WIN16 (dos_w16_try, SPEC.md 124.3) never keeps the window, and an armed
+; map is the port-60h peek kbm_isr makes on every key from then on, which
+; on an 8042 that promotes its next byte at once (QEMU's) loses a byte to
+; the ROM - Ctrl+End's Ctrl release, in win16file (SPEC.md 96.33.5.1).
+; Preserves every register but the flags
+dos_keyarm:
+    push ax
+    mov al, KSC_ALT
+    call OSAPI_KEY_DOWN
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dos_run - navigate, claim, load, and take the machine

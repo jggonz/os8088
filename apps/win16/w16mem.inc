@@ -66,6 +66,9 @@ GHF_ICON  equ 16                ; an icon CreateCursorIconIndirect made, which
                                 ;   DestroyIcon frees (124.27.7)
 W16G_HIGH equ 0x01              ; w16_gnew's CL: from the TOP of an arena, the
                                 ;   last free run that holds it (124.26.3)
+W16G_NOCODE equ 0x04            ; ...and: the program's code is not discarded
+                                ;   for it (GlobalAlloc with a GlobalNotify
+                                ;   procedure, SPEC.md 124.9.1)
 
 ; =============================================================================
 ; The global heap, inside
@@ -252,7 +255,13 @@ w16_gfit:
     W16SEG es, ax
     mov cx, [es:GH_SIZE]
     test byte [es:GH_FLAGS], GHF_USED
-    jnz .skip
+    jz .free
+    test byte [es:GH_FLAGS], GHF_CODE ; W16G_NOCODE's data stays below the
+    jz .skip                        ;   code, so a hole a segment left is a
+    test byte [w16_gflg], W16G_NOCODE ; segment's again (SPEC.md 124.9.1)
+    jnz .nexta
+    jmp short .skip
+.free:
     cmp cx, bx
     jae .fits
 .skip:
@@ -631,8 +640,10 @@ w16_gdold:
     inc si
     cmp si, 2 * W16_NGH
     jb .h
-    cmp word [w16_ldk], 0           ; the program's code (part 5 kept)
-    je .data
+    cmp word [w16_ldk], 0           ; the program's code (part 5 kept),
+    je .data                        ;   unless the request is data whose
+    test byte [w16_gflg], W16G_NOCODE ; owner gives blocks up (124.9.1)
+    jnz .data
     cmp di, 0xFFFF
     jne .lim
     mov dx, 0xFFFF                  ; no data block: any age
@@ -796,6 +807,10 @@ w16k_galloc:
     mov dx, [es:bx + 2]
     mov cl, [es:bx + 4]
     mov ch, [es:bx + 5]
+    cmp word [w16_gnproc + 2], 0    ; a GlobalNotify procedure: it is asked
+    je .new                         ;   to give a block up before the code
+    or cl, W16G_NOCODE              ;   goes (SPEC.md 124.9.1)
+.new:
     call w16_gnew
     or ax, ax
     jz .short
@@ -827,8 +842,8 @@ w16k_galloc:
     W16POUT
     ret
 .short:
-    LCALL w16k_gnask                ; the procedure, asked: it runs, and the
-    ret                             ;   request is tried again after
+    LJMP w16k_gnask                 ; the procedure, asked: it runs, and the
+                                    ;   request is tried again after
 
 ; GlobalFree (KERNEL.17) - args: +0 hMem. AX = 0 freed, else the handle
 w16k_gfree:

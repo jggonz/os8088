@@ -3,8 +3,10 @@
  * FAR: sixteen functions, each in a code segment of its own (code_seg) and
  * each about 7 KB of straight-line arithmetic, are more than 100 KB of code
  * the loader places a segment at a time and the far calls between them reach.
- * Then a 128 KB block from GlobalAlloc is written and read back through a
- * __huge pointer, whose arithmetic crosses each 64 KB with __AHINCR.
+ * Then a 96 KB block from GlobalAlloc is written and read back through a
+ * __huge pointer, whose arithmetic crosses 64 KB with __AHINCR. It was 128
+ * KB until S21: beside this program's own 216 KB claim and WIN16's grown
+ * parts, a 129 KB claim no longer fits in 640 KB (SPEC.md 124.20).
  *
  * The answer goes into a MessageBox, which tests/win16big.py reads off the
  * program's stack and compares with the same sums computed in Python.
@@ -59,7 +61,7 @@ static unsigned (__far *fns[16])(unsigned) = {
     f0, f1, f2, f3, f4, f5, f6, f7, f8, f9, f10, f11, f12, f13, f14, f15
 };
 
-#define HUGE_N 131072L
+#define HUGE_N 98304L
 
 /* KERNEL.114, imported by big.wlk: its OFFSET is the value, 1000h in real
  * mode, which a program adds to a segment to step 64 KB (MS C's own idiom) */
@@ -84,7 +86,7 @@ int PASCAL WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show)
 
     g = GlobalAlloc(GMEM_FIXED, HUGE_N);
     if (g == 0) {
-        sprintf(buf, "big: code %04X; GlobalAlloc(128K) failed", h);
+        sprintf(buf, "big: code %04X; GlobalAlloc(96K) failed", h);
     } else {
         p = (unsigned char __huge *)GlobalLock(g);
         for (i = 0; i < HUGE_N; i++)    /* the compiler's huge arithmetic */

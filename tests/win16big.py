@@ -8,12 +8,12 @@
 BIG.EXE (tests/win16/big.c, `make win16fixtures`) is medium model: sixteen
 functions of straight-line arithmetic, each in a code segment of its own, are
 17 code segments and about 155 KB of code. It calls each far, forward and
-back, writes a 128 KB GlobalAlloc block through a __huge pointer and reads it
+back, writes a 96 KB GlobalAlloc block through a __huge pointer and reads it
 back 64 KB at a time by adding __AHINCR (KERNEL.114, which the loader binds
 to its value, 1000h) to the segment. Its MessageBox carries the result, read
 off the program's stack as win16fpu reads FPU.EXE's, and must equal the same
 sums computed here. A loader that placed a segment wrongly, a far call that
-landed in the wrong one, a block that was not 128 KB, or an __AHINCR that was
+landed in the wrong one, a block that was not 96 KB, or an __AHINCR that was
 not 1000h each changes a number. The fixture not built is a SKIP.
 """
 import argparse
@@ -29,7 +29,7 @@ from win16mines import QDrive, b                              # noqa: E402
 import win16fpu as F                                          # noqa: E402
 
 NAME = "BIG.EXE"
-HUGE_N = 131072
+HUGE_N = 98304                  # 128 KB until S21 (big.c says why)
 
 
 def want():
@@ -80,7 +80,7 @@ def main():
     for f in bad:
         print("FAIL: " + f)
     if not bad:
-        print("win16big: 17 code segments and a 128 KB huge block, as computed")
+        print("win16big: 17 code segments and a 96 KB huge block, as computed")
     return 1 if bad else 0
 
 

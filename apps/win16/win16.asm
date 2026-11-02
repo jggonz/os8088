@@ -25,6 +25,7 @@
 %include "os88api.inc"
 %include "doscall.inc"              ; where the DOS core goes (SPEC.md 124.21.1)
 %include "win16/w16dos.inc"         ; ...and WIN16's host above it
+%include "win16/w16join.inc"        ; the join box's layout (SPEC.md 124.28.12)
 
 %ifdef PKG_MEGA                     ; the arm's image and its own plain claims
     OS88_HEADER 'WIN16', w16_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
@@ -42,6 +43,20 @@
     dw 0xFFFF, 0xFFFF, 0x8001, 0x8001, 0x9EF1, 0x9EF1, 0x9EF1, 0x8001
     dw 0x9EF1, 0x9EF1, 0x9EF1, 0x8001, 0x8001, 0xFFFF, 0x0000, 0x0000
     OS88_ICON16_END
+
+; --- the join box (SPEC.md 124.28.12, w16join.inc): pinned after the icon,
+; where DOS.O88 finds it in a running instance and leaves a desktop launch
+w16_jbox:
+    dw W16J_SIG
+    db W16J_V1
+w16_jok:  db 0                      ; 1 while a program runs: a join is taken
+w16_jwin: dw 0                      ; our window, for DOS's OSAPI_WM_WAKE
+w16_jreq: db 0                      ; 1: a locator waits in w16_jdoc
+    db 0
+w16_jdoc: times 16 db 0
+%if w16_jbox - $$ != W16J_AT || $ - w16_jbox != W16J_SIZE
+ %error "the join box is not where w16join.inc pins it"
+%endif
 
 ; --- the states -------------------------------------------------------------
 W16S_IDLE    equ 0              ; launched empty
@@ -193,6 +208,9 @@ W16P_DHOST   equ 8              ;   core DOS.O88 ships, and the host part above
 W16P_SYS     equ 9              ; THE SYSTEM-LIBRARY PART (SPEC.md 124.24.1):
                                 ;   COMMDLG, SHELL, LZEXPAND, VER - fetched at
                                 ;   their first call, kept until the program ends
+W16P_TSK     equ 10             ; THE TASK PART (SPEC.md 124.28.13): MDI and
+                                ;   tasks, the system-library part's shape,
+                                ;   fetched only by a program that has them
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -209,11 +227,15 @@ W16P_SYS     equ 9              ; THE SYSTEM-LIBRARY PART (SPEC.md 124.24.1):
     mov word [w16_lfn], %1      ;   %1 is a NEAR routine there, ending in
     call w16_lcall              ;   ret, near-called by w16_lbgate. The part
 %endmacro                       ;   is fetched first if it is not here
+%macro LJMP 1                   ; LCALL then ret, as a tail call: the far
+    mov word [w16_lfn], %1      ;   half's own ret is the caller's (SJMP and
+    jmp w16_lcall               ;   TJMP the same for parts 9 and 10)
+%endmacro
 %macro LCONT 1                  ; in the library part: %1 is a CONTINUATION
 section .text                   ;   (SPEC.md 124.2.2) that is a NEAR routine,
 %1_c:                           ;   handed out as %1_c - its trampoline in the
-    LCALL %1                    ;   image, which w16_cbdone's `jmp si` can
-    ret                         ;   reach (SPEC.md 124.19.3)
+    LJMP %1                     ;   image, which w16_cbdone's `jmp si` can
+                                ;   reach (SPEC.md 124.19.3)
 section .w16dlg
 %1:
 %endmacro
@@ -226,6 +248,10 @@ section .w16dlg
     mov word [w16_sfn], %1      ;   routine there, ending in ret, near-called
     call w16_scall              ;   by w16s_gate; fetched first if not here
 %endmacro
+%macro SJMP 1
+    mov word [w16_sfn], %1
+    jmp w16_scall
+%endmacro
 %macro SLCALL 1                 ; system-library part -> library part: the
     mov word [w16_lfn], %1      ;   image's LCALL half, through ICALL
     ICALL w16_lcall
@@ -233,13 +259,32 @@ section .w16dlg
 %macro SCONT 1                  ; in the system-library part: %1 is a
 section .text                   ;   CONTINUATION, handed out as %1_c, its
 %1_c:                           ;   trampoline in the image (LCONT's shape)
-    SCALL %1
-    ret
+    SJMP %1
 section .w16sys
 %1:
 %endmacro
 %macro W16SYS 1                 ; in the system-library part: %1 is a HANDLER
 %define w16sys_%1 1             ;   a row names, near, ending in ret
+%1:
+%endmacro
+; --- the task part's (SPEC.md 124.28.13), the same three in its section
+%macro TCALL 1                  ; image -> task part: %1 is a NEAR routine
+    mov word [w16_tfn], %1      ;   there, ending in ret, near-called by
+    call w16_tcall              ;   w16k_gate; fetched first if not here
+%endmacro
+%macro TJMP 1
+    mov word [w16_tfn], %1
+    jmp w16_tcall
+%endmacro
+%macro TCONT 1                  ; in the task part: %1 is a CONTINUATION,
+section .text                   ;   handed out as %1_c (SCONT's shape)
+%1_c:
+    TJMP %1
+section .w16tsk
+%1:
+%endmacro
+%macro W16TSK 1                 ; in the task part: %1 is a HANDLER a row
+%define w16tsk_%1 1             ;   names, near, ending in ret
 %1:
 %endmacro
 %macro DCONT 1                  ; in the part: %1 is a CONTINUATION
@@ -789,6 +834,9 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_sseg, 2          ; the system-library part's segment, 0 = not
     W16BSS w16_sbv, 4           ;   fetched; SCALL's vector (w16s_gate) and
     W16BSS w16_sfn, 2           ;   the routine it calls (SPEC.md 124.24.1)
+    W16BSS w16_tseg, 2          ; the task part's, in the same layout - the
+    W16BSS w16_tbv, 4           ;   segment, TCALL's vector (w16k_gate) and
+    W16BSS w16_tfn, 2           ;   the routine (SPEC.md 124.28.13)
     W16BSS w16_cderr, 2         ; CommDlgExtendedError's answer (124.24.3)
     W16BSS w16_ofnwin, 2        ; the file dialog a GetOpenFileName waits on,
                                 ;   0 = none (SPEC.md 124.24.2)
@@ -1164,6 +1212,10 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_task, W16_MAXTASK * W16K_SIZE
     W16BSS w16_cur, 1           ; the current task's index
     W16BSS w16_ntk, 1           ; the tasks the table holds
+    W16BSS w16_ddeup, 1         ; 1: Program Manager's DDE server has a window,
+                                ;   so w16_post's word compare sends every post
+                                ;   to w16t_post, which runs one to it there
+                                ;   (SPEC.md 124.33.2). Next to w16_ntk on purpose
     W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
     W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
@@ -1195,6 +1247,7 @@ w16_entry:
     call OSAPI_WM_CREATE            ; BX = window ptr
     jc .out
     mov [w16_win], bx
+    mov [w16_jwin], bx
     mov ax, w16_wake
     call OSAPI_WM_ONWAKE
     mov ax, w16_onclose
@@ -1255,9 +1308,13 @@ w16_entry:
 ; =============================================================================
 w16_wake:
     mov byte [w16_locked], 0        ; (no lock: w16_peekwake runs on this)
+    cmp byte [w16_jreq], 0          ; a desktop launch DOS left us, first
+    je .nojn                        ;   (SPEC.md 124.28.12)
+    TCALL w16t_join
+.nojn:
     cmp byte [w16_shq], 0           ; a ShellExecute's launch, first: this is
     je .nosh                        ;   where the lock is free (124.24.10)
-    SCALL w16c_shrun
+    TCALL w16t_shrun
 .nosh:
     cmp byte [w16_state], W16S_ENDED
     je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
@@ -1285,6 +1342,7 @@ w16_wake:
     call w16_repaint
     ret
 .run:
+    mov byte [w16_jok], 1           ; a desktop launch may join us now
     mov si, w16_s_running
     mov di, w16_l2
     call w16_strcpy
@@ -1309,7 +1367,7 @@ w16_after:
     jne .trim
     cmp byte [w16_ntk], 2           ; one of several: it alone ends, and
     jb .last                        ;   the rest go on (SPEC.md 124.28.7)
-    SCALL w16t_end
+    TCALL w16t_end
     jmp short .trim
 .last:
     cmp byte [w16_endmsg], 0
@@ -1321,7 +1379,7 @@ w16_after:
 .trim:                              ; the library part stays until the
     cmp byte [w16_ntk], 2           ;   program ends (SPEC.md 124.19.2);
     jb .one                         ;   the other tasks take their turns
-    SCALL w16t_turns                ;   (SPEC.md 124.28.4)
+    TCALL w16t_turns                ;   (SPEC.md 124.28.4)
 .one:
     ret
 
@@ -1333,7 +1391,7 @@ w16_cbin:
     jb .r
     cmp byte [w16_inprog], 0
     jne .r
-    SCALL w16t_cbin
+    TCALL w16t_cbin
 .r:
     ret
 
@@ -1385,6 +1443,7 @@ w16_endshow:
 ; w16_freeprog - give back the program's claim, its global heap, the face
 ; and the dialog part, once
 w16_freeprog:
+    mov byte [w16_jok], 0           ; nothing runs to join (124.28.12)
     cmp word [w16_dseg], 0          ; the library part's own (SPEC.md
     je .nolib                       ;   124.19.3): a program that never fetched
     LCALL w16pf_endprog             ;   it opened no profile, played no note,
@@ -1430,6 +1489,7 @@ w16_freeprog:
 .nowo:
 %endif
     call w16_sysout                 ; ...and the system-library part (124.24.1)
+    call w16_tskout                 ; ...and the task part (124.28.13)
     call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_dosend                 ; its files closed, the DOS freed (124.21)
     call w16_gfreeall
@@ -1808,25 +1868,41 @@ w16_dlgout:
     ret
 
 ; -----------------------------------------------------------------------------
-; w16_sysin - the system-library part (SPEC.md 124.24.1), fetched from
-; WIN16's own folder if it is not here. CF=1: it could not be, and op_fetch
-; has said why. Keeps every register. w16_sysout drops it.
+; w16_sysin - the system-library part (SPEC.md 124.24.1), w16_tskin the task
+; part (124.28.13), fetched from WIN16's own folder if it is not here. CF=1:
+; it could not be, and op_fetch has said why. Keeps every register.
+; w16_sysout and w16_tskout drop them. Both parts' bss is one layout - the
+; segment, the vector, the routine - so one body serves both.
 ; -----------------------------------------------------------------------------
+w16_tskin:
+    push ax
+    mov al, W16P_TSK
+    push si
+    mov si, w16_tseg
+    jmp short w16_ptin
 w16_sysin:
-    cmp word [w16_sseg], 0
-    je .fetch
-    clc
-    ret
-.fetch:
     push ax
     mov al, W16P_SYS
+    push si
+    mov si, w16_sseg
+w16_ptin:                            ; AL = the part, SI = its segment word
+    ; STKBALANCE-OK: the shared tail of w16_tskin and w16_sysin, entered
+    ; with their AX and SI pushed, which it pops
+    cmp word [si], 0                ;   (CF=0 when it is here)
+    jne .out
     call w16_pkeep                  ; in the heap, not a claim (124.25.1)
     jc .out
-    mov [w16_sseg], ax
+    mov [si], ax
 %ifdef PKG_MEGA
     push es
     W16SEG es, ax
+    cmp si, w16_sseg                ; the part told WIN16's data selector
+    jne .k
     W16PMDS s, es
+    jmp short .ds
+.k:
+    W16PMDS q, es
+.ds:
     pop es
     push bx                         ; the copy's code half (124.31.5)
     push cx
@@ -1836,30 +1912,49 @@ w16_sysin:
     pop cx
     pop bx
 %endif
-    mov [w16_sbv + 2], ax
-    mov word [w16_sbv], W16S_GATE
+    mov [si + 4], ax                ; the vector's segment...
+    mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in both
 .out:
+    pop si
     pop ax
     ret
+%if w16_sbv - w16_sseg != 2 || w16_tbv - w16_tseg != 2
+  %error "w16_ptin: a part's vector is not after its segment"
+%endif
 
+w16_tskout:
+    push si
+    mov si, w16_tseg
+    jmp short w16_ptout
 w16_sysout:
-    cmp word [w16_sseg], 0
-    je .out
+    push si
+    mov si, w16_sseg
+w16_ptout:
     push dx
     xor dx, dx
-    xchg dx, [w16_sseg]
+    xchg dx, [si]
+    or dx, dx
+    jz .out
     call w16_kfree
-    pop dx
 .out:
+    pop dx
+    pop si
     ret
 
 ; w16_scall - SCALL's far half: [w16_sfn] near-called in the system-library
-; part, fetched first. Registers and flags pass both ways; CF=1 with nothing
-; called if the part could not be read.
+; part, fetched first; w16_tcall TCALL's, [w16_tfn] in the task part.
+; Registers and flags pass both ways; CF=1 with nothing called if the part
+; could not be read.
 w16_scall:
     call w16_sysin
     jc .out
     call far [w16_sbv]
+.out:
+    ret
+w16_tcall:
+    call w16_tskin
+    jc .out
+    call far [w16_tbv]
 .out:
     ret
 
@@ -2221,10 +2316,10 @@ w16_cputest:
 %endif
 %include "win16/w16lzver.inc"   ; LZEXPAND and VER, part 9 too (124.24.8-9)
 %include "win16/w16rgn.inc"     ; Paintbrush's GDI, part 9 too (124.25.6)
-%include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 9 (124.27)
-%include "win16/w16task.inc"    ; several programs in one instance: part 9 (124.28)
 %include "win16/w16w31.inc"     ; Windows 3.1's programs' calls: part 9 (124.33)
-%include "win16/w16progm.inc"   ; Program Manager's DDE server: part 9 (124.33.2)
+%include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 10 (124.27)
+%include "win16/w16task.inc"    ; several programs in one instance: part 10 (124.28)
+%include "win16/w16progm.inc"   ; Program Manager's DDE server: part 10 (124.33.2)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's
@@ -2241,6 +2336,8 @@ w16_exports:
     %assign w16pt W16P_LIB
   %elifdef w16sys_%[w16x_p_%[k]]
     %assign w16pt W16P_SYS
+  %elifdef w16tsk_%[w16x_p_%[k]]
+    %assign w16pt W16P_TSK
   %else
     %assign w16pt 0
   %endif
@@ -2293,6 +2390,8 @@ w16_pnames:
     %assign w16pt W16P_LIB
   %elifdef w16sys_%[w16x_p_%[w16f]]
     %assign w16pt W16P_SYS
+  %elifdef w16tsk_%[w16x_p_%[w16f]]
+    %assign w16pt W16P_TSK
   %else
     %assign w16pt 0
   %endif
@@ -2336,6 +2435,8 @@ section .w16fp
     W16PM_PART f, none
 section .w16sys
     W16PM_PART s, none
+section .w16tsk
+    W16PM_PART q, none
 section .text
     W16PM_IMAGE
     W16PM_PART t, cs
@@ -2372,7 +2473,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 10
+    OS88_PARTS_BEGIN 11
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
@@ -2383,6 +2484,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DCORE: build/doscore.bin
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DHOST: w16dosh.asm
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_SYS: section .w16sys
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_TSK: section .w16tsk
     OS88_PARTS_END
 
     OS88_IMAGE_END

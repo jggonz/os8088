@@ -15473,8 +15473,8 @@ Five things hold it up.
   machine whose software never asks still never reads port 60h for this — the
   scoping that keeps `kbm_isr`'s unproven 8042 claim off machines that do not
   want the feature. An app that wants Alt+Enter therefore asks for the map
-  once, which is one `OSAPI_KEY_DOWN` call in its entry proc; §96.33.5.1 is
-  the worked example. Arming this way rather than at boot is what makes the
+  once, which is one `OSAPI_KEY_DOWN` call, typically in its entry proc;
+  §96.33.5.1 is the worked example, and says why DOS asks later than that. Arming this way rather than at boot is what makes the
   feature cost **zero** on every machine that does not use it.
 - **A BIOS that DOES deliver it must not deliver it twice, and THE LATCH IS
   THE TEST.** A typed key arriving with the latch still full is that same
@@ -176641,11 +176641,21 @@ a good deal longer than one frame, and a level read cannot tell that hold from
 the next press. On a machine entered from the **menu** the seed costs nothing:
 the first poll finds the keys up and clears it.
 
-**DOS ARMS the map, in its entry proc.** §9.7's map does not exist until
-something calls `kbd_down`, so DOS asks once — `OSAPI_KEY_DOWN` on
-`KSC_ALT`, whose answer is discarded — and both halves work from then on. It
-is one far call at launch and it is what keeps the feature's cost at zero on
-every machine that never opens DOS.
+**DOS ARMS the map when it keeps its window** (`dos_keyarm`). §9.7's map
+does not exist until something calls `kbd_down`, so DOS asks once —
+`OSAPI_KEY_DOWN` on `KSC_ALT`, whose answer is discarded — and both halves
+work from then on. It is one far call, and it is what keeps the feature's
+cost at zero on every machine that never opens DOS.
+
+It asks when it opens **empty**, as a console, and in the wake just before
+it **runs** a program. It does not ask in the entry proc any more.
+Every desktop launch of a Windows program passes through DOS, which only
+hands the NE to WIN16 and closes (§124.3). That is not opening DOS, and an
+armed map is `kbm_isr`'s port-60h peek on every key for the rest of the
+session. On an 8042 that loads its next byte the moment the port is read
+(QEMU's), the ROM then reads the following byte, so a byte is lost. One was
+the Ctrl release of `win16file`'s Ctrl+End, which left Ctrl down for its next
+four keys.
 
 **Nothing was spent on a hint.** The full-screen row already says ` Esc to
 leave` and that sentence is still true; a second key on it would be eight
@@ -227132,6 +227142,28 @@ heap is full, the block it is asked about is the oldest, it answers TRUE and
 the allocation that wanted the room succeeds, and 200 moveable handles can
 be held at once.
 
+**A program with a procedure keeps its code** *(S21's final pass)*.
+Nothing in WIN16's heap moves (§124.9), so a block freed among the code
+segments is only a hole, and data that takes it splits the room code needs.
+Paintbrush's bands did exactly that. A band allocation that ran short
+discarded the least recently used CODE before the procedure was ever asked,
+since its bands are notify blocks and §124.9's plain discardable pass never
+takes those. Band by band, its code went from 69 KB to 27 KB in holes no
+10 KB segment fitted, and the next segment it called failed with *"Not
+enough memory for its code"*. So **a `GlobalAlloc` from a program that has
+called `GlobalNotify` is marked `W16G_NOCODE`**, and that mark does two
+things:
+
+- `w16_gdold` discards no code segment for it. The shortage goes to the
+  procedure instead, which is the program's own way of giving room up;
+- `w16_gfit` places it only below the first code segment of each arena. Code
+  is placed from an arena's top (§124.26.3), so the data stays under the
+  code, and a hole a segment leaves is a segment's again.
+
+A program with no procedure is unchanged: its data may still discard code,
+as Windows' did. `win16pbrush` is the row. Its code holds near 69 KB
+through the fills and the save, and the bands take what is left.
+
 ### 124.10 Resources, read from the file when loaded *(shipped in S5)*
 
 **The resource table is kept; the resources are not.** The loader copies the
@@ -227654,6 +227686,11 @@ accepted from `SetClipboardData`, freed, and not available afterwards.
 Line ends are translated each way. Windows' text ends a line with CR LF and
 os8088's with CR (§27), so a put drops the LF after each CR and a get puts
 one back. The text a program gets is NUL-terminated, as `CF_TEXT` is.
+**Every byte after the NUL is zero too**, to the block's `GlobalSize`: the
+block is allocated `GMEM_ZEROINIT`. Calculator 3.1's Paste keys in every
+byte of the block's size, not only the bytes before the NUL. With the arena's
+leftovers in the rounded-up tail, `12+3=` pasted from Note Pad ticked Hyp
+and ended on π (`win16calc`).
 
 | call | |
 |---|---|
@@ -227953,9 +227990,11 @@ the loader's code back for the stories after S12.
 
 #### 124.18.8 The gate
 
-`win16desk` (QEMU): two Windows programs at once beside Paint, each named
-in the Task Manager and the dock, one closed by its close box and one
-ended by End Task, with the heap back to its pre-launch claims after each;
+`win16desk` (QEMU): two Windows programs at once beside Paint - since
+S21's batch 6 the second launched from the desktop joins the first's
+instance as a task (§124.28.12) - each named in the Task Manager and the
+dock, one closed by its close box and one ended by End Task, with the heap
+back to its pre-launch claims after each;
 a fixture's icons drawn by `DrawIcon`, an `SS_ICON` and a `MessageBox`
 with each icon, each found on the glass pixel for pixel from its art; two
 programs writing `WIN.INI` and both writes kept. Its B: is laid out as
@@ -228058,13 +228097,17 @@ boundary. What S14 moved, and the segment's room after each step:
 At the end of S14 the image is 30,583 bytes with 15,585 of bss, and the
 library part is 29,903 bytes unpacked (the dialog part was 15,145). A menu
 routine that resumes in the image after a message loop (a popup's tracking,
-`WM_INITMENU`) is an `LCONT`: a three-instruction trampoline in the image
-that `LCALL`s the continuation in the part, so the image can hand its
-address to code that calls it near.
+`WM_INITMENU`) is an `LCONT`: a two-instruction trampoline in the image
+that tail-calls the continuation in the part (`LJMP`), so the image can
+hand its address to code that calls it near.
 
 - **In the moved file**, a call into the image is `ICALL`, and a table the
   file reads itself is in `section .text` or read through `cs:`.
-- **In the image**, a call into the moved file is `LCALL`.
+- **In the image**, a call into the moved file is `LCALL`. One followed by
+  `ret` is `LJMP`, which stores the routine and jumps to `w16_lcall`,
+  whose own `ret` is the caller's: one or two image bytes a site.
+  `SJMP` and `TJMP` are the same for parts 9 and 10 (§124.24.1,
+  §124.28.13), and `t_w16xsec` holds all three to their macros' rule.
 
 Nothing in nasm's `-f bin` output refuses a near call from one section to a
 label in another. Each section's addresses start at 0, so such a call
@@ -228313,9 +228356,13 @@ popup, which is kept inside the window (§124.11), shows the first eight.
 **`win16sol`** (soak, QEMU, needs the `win16samples` capability): Solitaire
 3.0 and 3.1 load, deal and move a card, and each draws its cards on VGA,
 EGA, CGA and Hercules. **`win16big`** (soak, QEMU) runs an Open Watcom
-fixture with more than 100 KB of code in many segments and a 128 KB huge
-array walked by `__AHINCR`, checking every byte. The 8088's load time for
-Solitaire is taken on MartyPC in the final pass (S25).
+fixture with more than 100 KB of code in many segments and a 96 KB huge
+array walked by `__AHINCR` across 64 KB, checking every byte. The array was
+128 KB until S21's final pass. By then the fixture's own claim was 216 KB
+and WIN16's library part 61 KB, and the largest free run QEMU's 640 KB
+left was 109 KB, so the 129 KB claim was refused on every build since the
+library part grew past it. The 8088's load time for Solitaire is taken on
+MartyPC in the final pass (S25).
 
 ### 124.21 Files *(pinned for S16, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -229319,6 +229366,10 @@ library part's shape:
 - it stays until the program ends, then is dropped with the library part.
   A program that calls none of the system libraries never fetches it and
   never holds its claim.
+
+MDI and tasks were part 9's too until S21's final pass and are **part 10**
+now (§124.28.13), so part 9 is COMMDLG, SHELL, LZEXPAND, VER and
+Paintbrush's GDI (§124.25.6).
 
 `tests/unit/t_w16xsec.py` knows the part: its rules hold for `.w16sys` as
 for `.w16dlg`, `SCALL`'s target must be in `.w16sys`, and a row naming a
@@ -230439,9 +230490,10 @@ groups. Each is an MDI CHILD, a child window with a caption, a frame, a
 system-menu box and minimize and maximize boxes, drawn and moved inside the
 client. WIN16's child windows had none of that.
 
-All of it is part 9's (124.24.1): the image had 1,279 bytes of room when it
-came. A part of its own, as the plan first said, would have spent a gate's
-bytes there. The image keeps what is in its paths already - a child's frame
+All of it is part 10's, the task part (§124.28.13). It came in part 9
+(124.24.1), because the image had 1,279 bytes of room and a part of its own
+would have spent a gate's bytes there; S21's final pass moved it out, with
+the tasks, when Paintbrush could no longer pay for part 9. The image keeps what is in its paths already - a child's frame
 in the geometry, the press routing and the paint order - each a few bytes
 that call into the part.
 
@@ -230455,7 +230507,7 @@ Both programs import, besides MDI:
 | `InquireSystem` (SYSTEM.1) | 0: the timer's period, 54,925 µs. 1: the drive's type in both words, as Wine's `system.drv16` answers. File Manager lists the drives whose answer is not 0. SYSTEM joins the modules WIN16 knows by name |
 | `GetHeapSpaces` | DX the heap, 65,500, and AX its free part, scaled from `GetFreeSystemResources(0)`. Program Manager's About box shows the ratio |
 | `DirectResAlloc` | a moveable block of the size asked, as `GlobalAlloc` gives |
-| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 9, kept until the program ends |
+| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 10, kept until the program ends |
 | `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
 | `GetNumTasks` | 1, until S21 |
 | `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE. A setup's `EW_RESTARTWINDOWS` (42h) or `EW_REBOOTSYSTEM` (43h) also puts up a toast, *No restart is needed* (§124.33.3) |
@@ -230582,7 +230634,7 @@ is the one taken: an outline of where it will go is inverted with
 `OSAPI_GFX_XOR_RECT`, cut to the client, drawn again to take it away, and
 nothing else is redrawn until the button comes up. A size keeps the window
 at least three caption boxes and a frame wide and a caption and a frame
-high. `W16I_TRACK` in `w16_mdion` sends the mouse to part 9 meanwhile, as
+high. `W16I_TRACK` in `w16_mdion` sends the mouse to part 10 meanwhile, as
 `w16_sbtrk` sends it to a scroll bar.
 
 **Every change of place is posted, not sent.** The child's old rectangle and
@@ -230607,7 +230659,7 @@ are not followed and answer 0.
 - **The frame's bar** while one is maximized gets the child's system menu at
   its left and a restore box at its right, Windows 3.0's merge. Both are
   `MF_BITMAP` items with no text, 16 pixels wide, drawn into the bar's band
-  by part 9: a framed box with a bar for the system menu, a framed box with
+  by part 10: a framed box with a bar for the system menu, a framed box with
   an arrow up and an arrow down for restore. The restore box is a help item,
   so the bar puts it at its right. The system menu is Windows 3.0's for an
   MDI child: Restore, Move, Size, Minimize, Maximize, Close Ctrl+F4, Next
@@ -230697,9 +230749,11 @@ is a program whose whole job is starting others. From S21 one instance
 hosts several programs, its **tasks**.
 
 The instance is still one os8088 package instance and one owner of claims.
-Launching a second `.EXE` from the desktop still starts a second instance;
-a program started by a program (`WinExec`, `LoadModule`, `WinHelp`,
-`ShellExecute` of a Windows program) joins the instance that asked.
+A program started by a program (`WinExec`, `LoadModule`, `WinHelp`,
+`ShellExecute` of a Windows program) joins the instance that asked, and
+**so does a second `.EXE` launched from the desktop** while a WIN16
+instance runs a program (124.28.12): one instance is about 290 KB, and two
+of them do not fit in 640 KB.
 
 #### 124.28.1 A task
 
@@ -230733,7 +230787,7 @@ holds the arriving task's state and the block the leaving one's, so the
 block passes to the task that left. The current task has no block, and a
 switch is one pass over the state, not two copies.
 
-The state exchanged is a list of ranges of the bss, `w16_ctxtab` in part 9,
+The state exchanged is a list of ranges of the bss, `w16_ctxtab` in part 10,
 the way the loader's `w16l_svtab` already saves one module's loader state
 (§124.23.5). The rule for what is on the list is the one that decides
 everything here: **state that lives across a wait** (`w16_tohost`) belongs
@@ -230979,9 +231033,13 @@ stays the first program's.
     procedure may send, or broadcast, before it returns;
   - a post goes into each window's task's queue.
 
-  Both answer 1. The two rows are part 9's (`w16t_sendmsg`,
-  `w16t_postmsg`), which pass any other window to the image's handlers:
-  the image's room is the kern_mega arm's too, and it has none.
+  Both answer 1. The image's handlers test for `HWND_BROADCAST` and pass
+  it to part 10 (`w16t_bsend`, `w16t_bpost`, §124.28.13), so a program
+  that never broadcasts never fetches it. Batch 5 first made the two rows part
+  9's to spare the image 30 bytes; the final pass found that every
+  program then fetched part 9's 27 KB into its heap at its first
+  `SendMessage`, which Paintbrush, BIG and a second instance had no room
+  for.
 
 **DDE needs nothing more.** Its messages are posted and sent as any
 others, between windows of one instance. Its atoms are global atoms, and
@@ -230995,11 +231053,13 @@ being the instance's. TASKS and TASKB hold a conversation from
 `GlobalFindAtom` and `GlobalGetAtomName` (USER.271, *S21 batch 5*) use
 it, and names compare without case, as `AnsiUpper` folds them.
 
-**The table is the system-library part's** *(S24 batch 2)*: `W16_NATOM`
-= 16 names of 31 characters, 512 bytes of part 9, read and written
-through a data segment for the part (`w16i_atoms`, `W16SEG` of
-`[w16_sseg]`). The part is fetched once and kept until the instance
-ends (§124.24.1), so every task of the instance shares one table. It
+**The table is the task part's** *(S24 batch 2; part 10 since S21 batch
+6)*: `W16_NATOM` = 16 names of 31 characters, 512 bytes of part 10, read
+and written through a data segment for the part (`w16i_atoms`, `W16SEG`
+of `[w16_tseg]`). It came in part 9 and moved with `w16mdi.inc` when
+the task part was cut (§124.28.13). The part is fetched once and kept
+until the instance ends, so every task of the instance shares one
+table. It
 was four names in the image's bss (`W16_NCBF`) until then. Moving it
 gave the image's bss 128 bytes, which the kern_mega arm needed for
 batch 5's own code, and it gave Program Manager's DDE server
@@ -231145,6 +231205,106 @@ brings it, as every other Windows program (`make win16disk WIN3X=<dir>`).
   the caller is answered a number below 32.
 - A window a stray `-x` start leaves draws a few pixels of its title at
   the desktop's top left.
+
+#### 124.28.12 A desktop launch joins the running instance
+
+*As a user, a second Windows program I double-click opens beside the first,
+as it did on Windows.* Every desktop launch of a Windows program passes
+through `DOS.O88`: `.EXE` is DOS's extension, and `dos_w16_try` hands an NE
+on (§124.3). Before it starts a WIN16 instance, it looks for one that is
+running a program and gives the program to it instead.
+
+**The join box** is 24 bytes of WIN16's image at a pinned offset,
+`W16J_AT` = 96, directly after the header and the icon. Its layout is
+`apps/win16/w16join.inc`, which both packages include as source:
+
+| offset | size | what |
+|---|---|---|
+| +0 | word | `W16J_SIG`, `'WJ'` |
+| +2 | byte | `W16J_V1` = 1, the layout's version |
+| +3 | byte | 1 while a program runs and a join is taken, written by WIN16 |
+| +4 | word | WIN16's os8088 window, written by WIN16 at its entry |
+| +6 | byte | 1 while a locator waits: set last by DOS, cleared by WIN16 |
+| +7 | byte | 0 |
+| +8 | 16 bytes | the program's locator, `OSAPI_ARG_FILE`'s shape (§21.5.3) |
+
+**DOS looks** with `OSAPI_SYS_SNAPSHOT`, into the cluster claim it already
+holds to read the header. A live package instance whose region is at least
+`W16J_AT` + 24 bytes, whose box has the signature and version, says a
+program runs, and holds no locator, takes it. DOS writes the locator, sets
+the request byte, and wakes WIN16's window with `OSAPI_WM_WAKE`. If the
+wake is refused, the request byte is cleared again and DOS starts an
+instance as before. When it is taken, DOS's window closes, as it does when
+WIN16 starts.
+
+**This is the one place a package wakes another's window.** `wm_wake`
+takes any window record and dispatches the wake to its owner. DOS and WIN16
+are one source tree, which is what the signature and version stand for. A
+WIN16 of another layout fails the test, and DOS starts it as a second
+instance. Everything runs on the UI task, so WIN16 cannot run between DOS's
+test and its write.
+
+**WIN16 takes it** first in its wake handler, before anything else, as it
+takes a ShellExecute's launch (§124.24.10). `w16t_join` clears the request,
+then starts the program as `WinExec` starts one (124.28.5). The program
+starts in the folder the locator names, with no command tail and
+`SW_SHOWNORMAL`. If the request can't be met, the reason is a toast with
+the program's name:
+
+| `WinExec`'s answer | toast |
+|---|---|
+| 0 | `No memory: NAME.EXE` |
+| 2, or the instance's program ended before the wake | `Not found: NAME.EXE` |
+| 11 | `Can't run: NAME.EXE` |
+| 16 | `Too many: NAME.EXE` |
+
+**Only a desktop launch joins.** WIN16.O88 opened on its own still starts
+an instance that is not running anything yet. An instance that is loading,
+has refused, or has ended has a 0 at +3 and is never joined. One locator
+waits at a time. A second desktop launch before WIN16's wake finds the
+request byte set, and starts an instance of its own.
+
+#### 124.28.13 The task part
+
+MDI (§124.27) and tasks (this section) are **part 10**, `W16P_TSK`,
+`section .w16tsk`: the task part. They came in part 9, and part 9 grew to
+28,291 bytes. Every program that called one of part 9's handlers then held
+all of it in its arenas, and Paintbrush, which calls only §124.25.6's GDI
+there, ran out of room for its own code: *"Not enough memory for its
+code"*, with all four arenas full. Split, part 9 is 14,621 bytes and part
+10 13,693, and a program pays for the one it calls.
+
+It is part 9's shape in every respect (§124.24.1):
+
+- an export row's part byte is **10**; the dispatch fetches the part on its
+  first call and far-calls its gate, `w16k_gate`, at the same +10 as
+  `w16s_gate` (a short jump and the cut mark `W16TSKPT` before it), with the
+  handler's offset in `[w16_tfn]`;
+- a handler is declared `W16TSK`; the image reaches one with `TCALL`, and a
+  continuation in the part is `TCONT`;
+- the two parts' bss is one layout - the segment, the vector, the routine -
+  so one fetch body (`w16_pin`) and one drop (`w16_pout`) serve both, and
+  the second part cost the image 35 bytes;
+- from the part, the image is `ICALL`. The other system part is reached
+  through the image: `[w16_sfn]` set, then `ICALL w16_scall` (part 10 to
+  part 9, GetHeapSpaces' `w16u_fsr`), or `[w16_tfn]` and `ICALL w16_tcall`
+  (part 9 to part 10, ShellExecute's `w16t_shexe`);
+- it stays until the instance's last program ends, then is dropped with the
+  others.
+
+**A one-program instance never fetches it** unless the program calls a
+handler there. Every path in the image that reaches part 10 first tests
+what makes it necessary: two or more tasks (`w16_ntk`), an MDI client
+(`w16_mdion`), a pending join (`w16_jreq`) or a ShellExecute's launch
+(`w16_shq`), a broadcast, or a child with a caption or a thick frame.
+
+ShellExecute's launch (`w16t_shrun`) and its toast (`w16t_say`) moved into
+the task part with the join, the toast's one other caller: the toast reads
+its words through `CS`, so it must be in the same part as every caller.
+
+`tests/unit/t_w16xsec.py` knows the part: `TCALL`'s target must be in
+`.w16tsk`, a row naming a `W16TSK` handler must say part 10, and no near
+call crosses between parts 9 and 10.
 
 #### 124.28.11 What checks it
 
@@ -232306,7 +232466,8 @@ make a group and put the program's items in it. Visual Basic 3.0's
 `LinkExecute`, and the Setup Toolkit's `CreateProgManGroup` and
 `CreateProgManItem` do the same over raw messages. WIN16 answers for
 Program Manager inside the instance (`w16progm.inc`, prefix `w16pg_`, all
-of it part 9's). The answer is os8088's: **each group is a folder, each
+of it part 10's, beside the broadcast that reaches it and the atom table
+it answers through). The answer is os8088's: **each group is a folder, each
 item is a link in it (§26.10.1), and the folder gets a desktop shortcut**
 (§26.9.6).
 
@@ -232324,9 +232485,13 @@ item is a link in it (§26.10.1), and the folder gets a desktop shortcut**
   (§124.13), which answers 0 to anything sent to it. It is made once
   for each client window and goes when that window goes. `IsWindow` is
   true of it and `GetClassName` answers `Progman`.
-- **A post to the server is not queued.** `w16t_postmsg` sees the
-  window's kind and runs the server in the call, so the server needs no
-  message loop of its own. The client's loop that waits for the
+- **A post to the server is not queued.** Making the server window sets
+  `w16_ddeup`, the byte after `w16_ntk`, and `w16_post` compares the two
+  as one word, so from then on every post goes to `w16t_post` even with
+  one task. `w16t_post` sees the window's kind and runs the server in
+  the call, so the server needs no message loop of its own. The image
+  pays one bss byte and no code, and a program that never starts a
+  conversation never fetches part 10 for a post. The client's loop that waits for the
   `WM_DDE_ACK` finds it already in its queue.
 - WIN16 answers even when a real Program Manager runs in the instance. A
   client that gets two acknowledgements terminates the second

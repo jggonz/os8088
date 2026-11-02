@@ -88,7 +88,7 @@ W16Q_LIST   equ 4
 W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
 W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
 W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
-W16Q_MDI    equ 8               ; MDICLIENT (SPEC.md 124.27.2), part 9's
+W16Q_MDI    equ 8               ; MDICLIENT (SPEC.md 124.27.2), part 10's
 W16Q_DDE    equ 9               ; Program Manager's DDE server (124.33.2)
 
 ; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
@@ -1352,7 +1352,7 @@ w16_sendwnd:
     jnc .ctl
     cmp byte [w16_ntk], 2
     jb .own
-    SCALL w16t_xsend                ; CF=0 another task's, and answered
+    TCALL w16t_xsend                ; CF=0 another task's, and answered
     jnc .ret                        ;   (SPEC.md 124.28.6)
 .own:
     push di
@@ -1438,10 +1438,13 @@ w16_smargs:
     mov [w16_sm_hwnd], ax
     ret
 
-; SendMessage (USER.111) - args: as w16_smargs
+; SendMessage (USER.111) - args: as w16_smargs. HWND_BROADCAST is every
+; task's top-level windows, part 10's (w16t_bsend, SPEC.md 124.28.6)
 w16u_sendmsg:
     call w16_args
     call w16_smargs
+    cmp ax, HWND_BROADCAST
+    je .bc
     call w16_hwnd2rec
     jc .no
     push si
@@ -1449,15 +1452,21 @@ w16u_sendmsg:
     call w16_sendwnd
     pop si
     ret
+.bc:
+    TJMP w16t_bsend
 .no:
     xor ax, ax
     xor dx, dx
     ret
 
-; PostMessage (USER.110) - args: as w16_smargs
+; PostMessage (USER.110) - args: as w16_smargs. HWND_BROADCAST: w16t_bpost
 w16u_postmsg:
     call w16_args
     call w16_smargs
+    cmp ax, HWND_BROADCAST
+    jne .one
+    TJMP w16t_bpost
+.one:
     xor al, al
     call w16_post
     mov ax, 0
@@ -1577,10 +1586,12 @@ w16_xlatemsg:
 ; several tasks, the queue of the window's task (w16t_post, SPEC.md 124.28.4);
 ; w16_postq is the current task's queue whatever the window.
 w16_post:
-    cmp byte [w16_ntk], 2
-    jb w16_postq
-    SCALL w16t_post
-    ret
+    cmp word [w16_ntk], 2           ; (and w16_ddeup: the DDE server's posts
+    jb w16_postq                    ;   are w16t_post's too, SPEC.md 124.33.2)
+%if w16_ddeup != w16_ntk + 1
+  %error "w16_post: w16_ddeup is not the byte after w16_ntk"
+%endif
+    TJMP w16t_post
 w16_postq:
     push bx
     push cx
@@ -1784,7 +1795,7 @@ w16_nextmsg:
     mov bx, si
     cmp byte [w16_mdion], 0         ; the MDI children above it are owed
     je .nma                         ;   what it paints over (124.27.3)
-    SCALL w16i_above
+    TCALL w16i_above
 .nma:
     call w16_rec2hwnd
     mov bx, w16_msg
@@ -2455,8 +2466,7 @@ w16u_defproc:
     jb .nottext
     cmp cx, WM_GETTEXTLENGTH
     ja .nottext
-    LCALL w16_dptext
-    ret
+    LJMP w16_dptext
 .nottext:
     cmp cx, WM_CLOSE
     jne .notclose
@@ -2473,8 +2483,7 @@ w16u_defproc:
     call w16_hwnd2rec
     jc .zero
     xor dl, dl
-    LCALL w16_mtbegin
-    ret
+    LJMP w16_mtbegin
 .notnc:
     cmp cx, WM_SYSKEYDOWN
     jb .notsc
@@ -2553,8 +2562,7 @@ w16u_defproc:
     call w16_rec2hwnd               ;   and its messages that window's too
     mov dl, 1
     mov dh, [w16_sm_lp]
-    LCALL w16_mtbegin
-    ret
+    LJMP w16_mtbegin
 .notkm:
     cmp cx, SC_CLOSE
     jne .zero
@@ -2850,7 +2858,7 @@ w16_mouse:
     mov [w16_sm_wp], di
     test byte [w16_mdion], 2        ; an MDI child moved or sized: all of
     jz .nmt                         ;   it the outline's (SPEC.md 124.27.5)
-    SCALL w16i_track
+    TCALL w16i_track
     jmp .out
 .nmt:
     cmp word [w16_sbtrk], 0         ; a scroll bar's press: all of it the
@@ -2883,7 +2891,7 @@ w16_mouse:
     jne .nbar
     cmp byte [w16_mdion], 0         ; inside an MDI child: it is made the
     je .nmdi                        ;   active one, and its frame's press
-    SCALL w16i_press                ;   is its own (SPEC.md 124.27.4)
+    TCALL w16i_press                ;   is its own (SPEC.md 124.27.4)
     jnc .out
 .nmdi:
     cmp byte [bx + W16W_KIND], W16Q_SCROLL
@@ -2942,8 +2950,7 @@ w16_onclick:
     call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mclick
-    ret
+    LJMP w16_mclick
 .nt:
     call w16_onbar
     jc w16_barpress
@@ -2964,8 +2971,7 @@ w16_onup:
     call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mup
-    ret
+    LJMP w16_mup
 .nt:
     cmp byte [w16_meat], 0
     je .mine
@@ -2980,8 +2986,7 @@ w16_ondrag:
     call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mdrag
-    ret
+    LJMP w16_mdrag
 .nt:
     cmp byte [w16_meat], 0
     jne .eat
@@ -3205,8 +3210,7 @@ w16_onkey:
 .base:
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mkey
-    ret
+    LJMP w16_mkey
 .nt:
     push di
     push ax
@@ -3631,7 +3635,13 @@ w16_closemsg:
 ; w16_etdone - the End Task alert's answer, the gfx lock held. Proceed (1):
 ; the program ends where it is - its windows, its memory, WIN16's window.
 ; Cancel, or the alert dismissed: the program is asked again, WM_CLOSE.
+; It is asked about WIN16's window, whose program is the first task: that
+; one made current, not whichever ran last (SPEC.md 124.28.8)
 w16_etdone:
+    push si
+    mov si, [w16_win]
+    call w16_cbin
+    pop si
     cmp byte [w16_state], W16S_RUN
     jne .no
     cmp al, 1

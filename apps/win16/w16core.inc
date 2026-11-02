@@ -263,6 +263,8 @@ w16_dispatch:
     jz .image
     cmp al, W16P_SYS
     je .sys
+    cmp al, W16P_TSK
+    je .tsk
     mov ax, [bx + W16B_PROC]
     mov [w16_lfn], ax
     call w16_dlgin
@@ -277,6 +279,14 @@ w16_dispatch:
     jc .nolib
     mov ax, [w16_nargb]
     call far [w16_sbv]
+    ret
+.tsk:                               ; the task part (124.28.13)
+    mov ax, [bx + W16B_PROC]
+    mov [w16_tfn], ax
+    call w16_tskin
+    jc .nolib
+    mov ax, [w16_nargb]
+    call far [w16_tbv]
     ret
 .image:
     mov ax, [w16_nargb]
@@ -306,7 +316,7 @@ w16_dispatch:
     mov [w16_face], ax
 .nof:
     pop ax
-    jmp short .go
+    jmp .go
 .nolib:                             ; it could not be read: ended, as a missing
     push si                         ;   import ends it, saying why
     push di

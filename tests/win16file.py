@@ -128,7 +128,7 @@ def notepad_leg(d, ui, S, dw, bad):
     # the main window's bar: its down arrow, above the corner box
     main = next(r for r in recs() if r[W16W_FLAGS] & W16WF_USED and r[W16W_KIND] == 0)
     p.w = next(x for x in ui.windows() if x.i == p.w.i)
-    _, _, r_, b_ = p.w.content()
+    _, _, r_, b_ = p.w.content
     top0, thumb0 = w(e, ME_TOP), w(main, W16W_SBV)
     d.click(r_ - 8, b_ - 17 - 9)
     d.idle(3.0)
@@ -149,7 +149,9 @@ def notepad_leg(d, ui, S, dw, bad):
         bad.append("Notepad: Page Down moved the first line %d -> %d"
                    % (top1, w(e, ME_TOP)))
 
-    d.hmp("sendkey ctrl-end 300")
+    d.hmp("sendkey ctrl-end")              # CONFIRMED: a hold time sends it
+                                           # through HMP raw, whose release
+                                           # can beat the press (tools/qmp.py)
     d.idle(3.0)
     if w(edit(), EC_CARET) != len(want):
         bad.append("Notepad: Ctrl+End left the caret at %d, not %d"

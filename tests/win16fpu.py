@@ -124,7 +124,10 @@ def serves(read, base, S, row):
     BASE is the WIN16 instance's linear address."""
     slot = u16(read(base + S["w16_idx"], 2))
     proc = u16(read(base + S["w16_bind"] + 4 * slot + 2, 2))
-    return proc == S[row_handler(row)]
+    h = S[row_handler(row)]
+    if h >= S["w16s_base"]:             # a part 9 handler (SPEC.md 124.24.1):
+        h -= S["w16s_base"]             #   the slot holds its offset there
+    return proc == h
 
 
 def progs():
@@ -148,6 +151,37 @@ def bdisk(out, size, names, extra=()):
                    check=True, capture_output=True)
 
 
+W16_MAXTASK, W16K_SIZE, W16K_ST = 4, 6, 4       # win16.asm's task record
+W16KS_RUN, W16KS_NEW = 1, 2
+
+
+FM_STATUS_H = 18                # a Disk window's status line, below its rows
+
+
+def reveal(d, ui, dw, i):
+    """entry i of Disk window dw on screen: its visible row. os88ui's
+    scroll_to is MartyPC's (its keys and cycle counter); this is QEMU's.
+    A row below the view: the last visible one is selected and Down steps
+    the selection on until the view follows it (SPEC.md 22.26)"""
+    cy1 = dw.content[3]
+    vis = 0
+    while ui.row_xy(dw, vis)[1] + geom.FM_ROW_H // 2 <= cy1 - FM_STATUS_H:
+        vis += 1
+    row = i - ui.scroll(dw)
+    if 0 <= row < vis:
+        return row
+    if not hasattr(d, "hmp"):                   # MartyPC: os88ui's own walk
+        return ui.scroll_to(i, win=dw)
+    d.click(*ui.row_xy(dw, max(vis - 1, 0)))
+    d.idle(1.0)
+    for _ in range(64):
+        if 0 <= i - ui.scroll(dw) < vis:
+            break
+        d.hmp("sendkey %s" % ("down" if i - ui.scroll(dw) >= vis else "up"))
+        d.idle(0.5)
+    return i - ui.scroll(dw)
+
+
 class Prog(object):
     def __init__(self, d, ui, sym, S, name):
         self.d, self.ui, self.sym, self.S, self.name = d, ui, sym, S, name
@@ -163,11 +197,14 @@ class Prog(object):
         raw = self.d.read((self.seg << 4) + self.S[n], 48)
         return raw.split(b"\0")[0].decode("latin-1")
 
-    def launch(self, dw):
+    def launch(self, dw, join=None):
+        """double-click it in dw. join = the Prog of a WIN16 instance that
+        runs a program: this one joins it as a task (SPEC.md 124.28.12),
+        and its window is the new one WIN16's segment owns"""
         ui, d = self.ui, self.d
         i, _ = ui.entry(self.name, dw)
         before = set(w.i for w in ui.windows())
-        d.dblclick(*ui.row_xy(dw, i - ui.scroll(dw)))
+        d.dblclick(*ui.row_xy(dw, reveal(d, ui, dw, i)))
         box = {}
 
         def opened():
@@ -176,13 +213,26 @@ class Prog(object):
             for w in ui.windows():
                 if w.i not in before and w.visible:
                     seg = u16(d.read(geom.winptr(d, w, self.sym) + geom.W_SEG, 2))
-                    if seg and d.read((seg << 4) + self.S["w16_name"], 13) \
+                    if not seg:
+                        continue
+                    if join is not None:
+                        if seg == join.seg:
+                            box["p"] = (w, seg)
+                            return True
+                    elif d.read((seg << 4) + self.S["w16_name"], 13) \
                             .split(b"\0")[0].decode("latin-1") == self.name:
                         box["p"] = (w, seg)
                         return True
             return False
         d.wait(opened, 120, "a window for %s" % self.name)
         self.w, self.seg = box["p"]
+
+    def tasks(self):
+        """the instance's task records' W16KS_* states (124.28.1), in use"""
+        n = W16_MAXTASK
+        raw = self.d.read((self.seg << 4) + self.S["w16_task"], n * W16K_SIZE)
+        return [raw[i * W16K_SIZE + W16K_ST] for i in range(n)
+                if raw[i * W16K_SIZE + W16K_ST]]
 
     def waiting_msgbox(self, row):
         st = self.pb("w16_state")

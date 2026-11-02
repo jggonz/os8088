@@ -606,8 +606,8 @@ w16d_ctlproc0:
     je .scroll
     cmp al, W16Q_MDI
     jne .out
-    mov word [w16_sfn], w16i_mproc  ; MDICLIENT's, in part 9 (SPEC.md 124.27.2)
-    ICALL w16_scall
+    mov word [w16_tfn], w16i_mproc  ; MDICLIENT's, in part 10 (SPEC.md 124.27.2)
+    ICALL w16_tcall
     jmp short .out
 .scroll:
     call w16_sbctl

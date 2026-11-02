@@ -9,11 +9,13 @@
 ;
 ; The conversation reaches here through S21 batch 5's routing: the broadcast
 ; of WM_DDE_INITIATE ends in w16pg_init (w16t_bsend), and a post to the
-; server's window is run here in the call, not queued (w16t_postmsg). All of
-; it is PART 9's: no image byte on either arm.
+; server's window is run here in the call, not queued (w16t_post, which
+; w16_post reaches once w16_ddeup is set). All of it is PART 10's, the task
+; part, with the broadcast and the atom table it answers through: no image
+; byte on either arm beyond w16_ddeup.
 ; =============================================================================
 
-section .w16sys
+section .w16tsk
 
 WM_DDE_INITIATE  equ 0x03E0
 WM_DDE_TERMINATE equ 0x03E1
@@ -139,6 +141,8 @@ w16pg_server:
     mov [w16_cwtext], ax
     mov [w16_cwtext + 2], ax
     ICALL w16_mkwnd                 ; AX = its HWND; CF=1 refused
+    jc .out
+    mov byte [w16_ddeup], 1         ; posts to it go by w16t_post now
 .out:
     pop dx
     pop cx
@@ -210,12 +214,7 @@ w16pg_tell:
     mov [w16_sm_lp], bx
     mov [w16_sm_lp + 2], cx
     xor al, al                      ; (a full queue: the client times out)
-    cmp byte [w16_ntk], 2
-    jb .q
     jmp w16t_post
-.q:
-    ICALL w16_postq
-    ret
 
 ; -----------------------------------------------------------------------------
 ; w16pg_run - AX = hCommands, as the program gave it: each [Name(args)] of

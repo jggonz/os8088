@@ -46,6 +46,10 @@
     %define w16v_sx s
   %elifidn w16v_n7, '.w16sys]'
     %define w16v_sx s
+  %elifidn w16v_n7, '.w16tsk '
+    %define w16v_sx q
+  %elifidn w16v_n7, '.w16tsk]'
+    %define w16v_sx q
   %elifidn w16v_n6, '.w16fp '
     %define w16v_sx f
   %elifidn w16v_n6, '.w16fp]'

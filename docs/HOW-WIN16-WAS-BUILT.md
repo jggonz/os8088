@@ -4035,12 +4035,17 @@ along in the call's own stack space, because the window procedure may
 send messages of its own before it returns, and WIN16's scratch copy of
 "the message" would not survive that.
 
-**The image had no room to spare, so the work went elsewhere.** The
-protected-mode build of WIN16, being written alongside, shares the main
-image and has one byte left. So `SendMessage` and `PostMessage` are now
-answered in part 9, a part loaded on demand, which passes anything that
-is not a broadcast on to the old handlers. The image grew by ten bytes,
-the trampoline the continuation needs.
+**The image had no room to spare, and the first answer to that was
+wrong.** The protected-mode build of WIN16, being written alongside,
+shares the main image and had one byte left. So `SendMessage` and
+`PostMessage` were first answered in part 9, a part loaded on demand,
+which passed anything that was not a broadcast on to the old handlers.
+The final pass showed what that cost: every program sends messages, so
+every program now loaded part 9's 27 KB into its own heap at its first
+send. Paintbrush ran out of room for its code, BIG's 128 KB allocation
+failed, and a second Windows program could not start. The image's own
+handlers now test for a broadcast, 30 bytes, and only a broadcast loads
+part 9.
 
 **The test.** TASKS asks TASKB for an item called *Answer* and gets "42"
 back. That needs the broadcast post to have reached TASKB first, and the
@@ -4262,3 +4267,138 @@ own failure:
    segments by number, 607 times, so WIN16 must keep all 404 KB of them
    loaded. Beside the launcher, they do not fit in three arenas. That is
    where this entry stops.
+
+## 2026-11-02 — S21, batch 6: the second program joins the first
+
+**The final pass found the memory wall.** One WIN16 instance now costs
+about 290 KB: the program's DGROUP, the 61 KB library part, two arenas and
+the 64 KB image. Double-clicking a second Windows program started a second
+instance, and on a 640 KB machine the second one ran out of memory before
+its program was loaded. The owner chose the Windows answer: a second
+program launched from the desktop joins the instance that is already
+running, as a task, the way a program started by `WinExec` already does.
+
+**Every desktop launch already passes through one door.** `.EXE` belongs
+to DOS.O88, which reads the header and hands a Windows program on to
+WIN16. So DOS is where the join happens. It asks the kernel for its
+instance snapshot and looks in each running package for a small signed
+record, the "join box", 24 bytes pinned right after WIN16's icon. A box
+that says a program is running and has no request waiting gets the new
+program's name and folder. DOS then wakes WIN16's window and closes its
+own. WIN16 takes the request first thing in its wake handler and starts
+the program as a task. Both packages include the box's layout from one
+file, so they cannot disagree about it, and a WIN16 built with another
+layout is simply not joined.
+
+**Why not let the second WIN16 hand over and quit?** It could, but a
+package that refuses at its entry costs a full-screen repaint on the way
+out, which on an XT is the most expensive thing the desktop does. DOS
+closing its own window costs only what was under it.
+
+**Three old defects surfaced while checking it:**
+
+- *End Task ended the wrong program.* The "It has not closed. End it?"
+  alert is asked about WIN16's own window, which belongs to the first
+  program, but the answer ended whichever task had run last. The answer
+  now switches to the first program before ending it. The program left
+  then takes WIN16's window over, as the S21 design says it should.
+- *Calculator 3.1 pasted π.* Its Paste keys in every byte of the
+  clipboard block, the full rounded-up size and not just the text before
+  the NUL, and the leftover arena bytes after the NUL included an `h` and
+  a `p`. The block is now zero-filled.
+- *Notepad lost the first keys after Ctrl+End.* Two things were wrong. DOS
+  armed the kernel's key-state map as soon as it opened, even when it
+  only forwarded a Windows program, and an armed map makes the keyboard
+  interrupt read the 8042's port before the ROM does, which on QEMU loses
+  a byte. DOS now arms the map only when it keeps its window. The test
+  also sent Ctrl+End with a hold time, which bypasses the harness's
+  confirmed-keystroke path, so Ctrl's release could overtake the press.
+
+**What was checked:** `win16desk` now runs WRITERB and Minesweeper as
+second tasks of a running instance, ends MENU with End Task while
+Minesweeper goes on in WIN16's window, and finds the heap as it was.
+`win16calc` runs both Calculators, `win16file` saves Notepad's typed line,
+and the fast tier passes.
+
+## 2026-11-02 — S21, batch 7: Paintbrush gets its code back, and the XT boots its 8087 emulator
+
+**Paintbrush stopped working, and the first cause was part 9.** The
+on-demand part for the system libraries had collected MDI and tasks
+(S20b, S21) and grown to 28 KB. A program pays for the whole part the
+first time it calls anything in it, and Paintbrush calls region and DIB
+functions there. Those 28 KB came out of the room its code segments load
+into. MDI and tasks now live in a part of their own, part 10, built the
+same way, and every path in the image that reaches them first checks
+that it needs them: a second task, an MDI client, a pending join. Part 9
+is 14.6 KB again. The image paid 35 bytes, because both parts share one
+fetch routine and their bookkeeping has the same layout.
+
+**That was not enough. The second cause was Paintbrush's own picture.**
+A dump of WIN16's arenas during the test shows it. Paintbrush keeps the
+picture as dozens of 2.6 KB bands, each one a block it lets the heap
+take back through its GlobalNotify procedure, after writing the band to
+its swap file. But a band allocation that ran short discarded the least
+recently used CODE first, because the procedure was only asked once
+nothing else could go. Nothing in WIN16's heap moves, so each discarded
+segment left a hole, and the next band filled it. Paintbrush's code
+went from 69 KB to 27 KB in pieces no 10 KB segment fitted, and the fill
+died with "Not enough memory for its code". Now, when a program has a
+GlobalNotify procedure, its allocations never discard code and are
+placed only below the code in each arena. A shortage asks the procedure
+instead. Its code then held at about 69 KB through the fills and the
+save. 34 image bytes, and nothing changes for a program without a
+procedure.
+
+**The XT had been frozen at "Loading..." since S19b, and only the final
+pass ran it.** The two 5150 rows run once, at the end, so nothing ran them
+between batches. The rows are slow, so `git bisect run` drove a short
+MartyPC probe from S19 to S20 and named c33dd0bdc, the commit that moved
+WIN16's parts into its own heap.
+MartyPC breakpoints on the fetch path narrowed it to one line. The 8087
+emulator part is fetched only on a machine without a coprocessor, which
+QEMU never is. Its fetch now returned the part's segment in AX, but the
+caller restored the user's folder before saving AX, and that call
+clobbers AX. The emulator's vector table was then read from the interrupt
+table, and its end stub was written into it. The fetch routine already
+changes folder itself, so the caller's own change was removed, and that
+gave back 29 bytes.
+
+**What was checked:** `win16pbrush` draws, fills and saves NEW.BMP with
+the right colours. FPU.EXE reaches its MessageBox on MartyPC's 5150. The
+cross-section gate (`t_w16xsec`) now knows part 10 and passes, and so
+does the fast tier.
+
+
+## 2026-11-02: batches 6 and 7 into the protected-mode arm
+
+Batches 6 and 7 (a desktop launch joining a running instance, part 10, the
+8087 emulator's fetch) came into Phase B/C as a merge. Three things had to
+be made to fit.
+
+**Part 10 needed the arm's pieces.** A part has a thunk suffix, a word that
+holds WIN16's data selector, and a code half for its vector. The first
+suffix tried was `k`, which turned out to be a loop counter that an
+`%assign` had left at 8, so the word was named `w16v8_myds`. It is `q` now.
+The two part-fetch tails that the lead's `w16_sysin` and `w16_tskin` share
+had to be renamed as well. Their names collided with the arm's own
+`w16_pin` and `w16_pout`.
+
+**Program Manager's DDE server moved to part 10.** It answers through the
+atom table and is reached from the broadcast, and both of those had gone
+to part 10 with `w16mdi.inc` and `w16task.inc`. Left in part 9, its calls
+into them would have been near calls between two parts, which
+`t_w16xsec` refused. The atom table also still addressed its part through
+part 9's segment, and that was corrected. The lead had put SendMessage and
+PostMessage back in the image, so a post to the server's window needed a
+new route. It costs one bss byte and no code. Making the server window
+sets `w16_ddeup`, the byte after `w16_ntk`, and `w16_post` compares the
+two as one word. From then on every post goes to part 10's `w16t_post`,
+which runs a post to the server in the call.
+
+**The arm was 33 bytes over.** The join box, part 10's fetch and the
+dispatch's third part cost the image about 180 bytes on both arms. The
+fix is a tail call. Wherever the image did `LCALL`, `SCALL` or `TCALL` and
+then `ret`, it now stores the routine and jumps (`LJMP`, `SJMP`, `TJMP`).
+That covers 14 sites and the 21 continuation trampolines, and it saved 35
+bytes on each arm. The arm now has **one byte** of room. The real-mode
+arm has 626.

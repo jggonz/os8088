@@ -5,11 +5,13 @@
 ; instance, several Windows programs. The current task's state is the bss's
 ; own variables, as it always was; every other task's is parked in a block
 ; of its own, and a switch EXCHANGES the two (124.28.2). The list of what is
-; exchanged is w16_ctxtab, below. All of it is part 9's (124.24.1): the image
-; had 898 bytes when it came. A handler here is W16SYS, near, ending in ret.
+; exchanged is w16_ctxtab, below. All of it is part 10's, the task part
+; (124.28.13), with w16mdi.inc: the image had 898 bytes when it came, and it
+; came in part 9 until a program that drew with part 9's GDI could not pay
+; for it. A handler here is W16TSK, near, ending in ret.
 ; =============================================================================
 
-section .w16sys
+section .w16tsk
 
 %if W16C_SIZE != 32
   %error "w16u_regclass's class index is a shift by 5"
@@ -198,7 +200,7 @@ w16t_hwtask:
     ret
 
 ; GetNumTasks (KERNEL.152): the tasks running
-W16SYS w16t_ntasks
+W16TSK w16t_ntasks
     push cx
     push si
     xor ax, ax
@@ -216,7 +218,7 @@ W16SYS w16t_ntasks
     ret
 
 ; IsTask (KERNEL.320) - args: +0 hTask. TRUE for a running task's handle
-W16SYS w16t_istask
+W16TSK w16t_istask
     push si
     ICALL w16_args
     mov ax, [es:bx]
@@ -229,7 +231,7 @@ W16SYS w16t_istask
     ret
 
 ; GetWindowTask (USER.224) - args: +0 hWnd. Its task's handle, 0 none
-W16SYS w16t_wndtask
+W16TSK w16t_wndtask
     ICALL w16_args
     mov ax, [es:bx]
     call w16t_hwtask
@@ -237,7 +239,7 @@ W16SYS w16t_wndtask
 
 ; PostAppMessage (USER.116) - args: +0 lParam, +4 wParam, +6 wMsg, +8 hTask:
 ; posted to that task's queue with no window (SPEC.md 124.28.6). TRUE
-W16SYS w16t_postapp
+W16TSK w16t_postapp
     push si
     ICALL w16_args
     ICALL w16_smargs                ; [w16_sm_*]; the handle where hWnd goes
@@ -281,7 +283,26 @@ w16t_qpost:
 ; them, posted to the queue of the window's task (124.28.4). A parked task's
 ; turn is asked for with a wake, since the post may be made inside a run
 ; whose callback runs no turns. CF=1 the queue is full
-W16SYS w16t_post
+W16TSK w16t_post
+    push bx
+    push ax
+    mov ax, [w16_sm_hwnd]           ; Program Manager's DDE server's window
+    ICALL w16_hwnd2rec              ;   (SPEC.md 124.33.2): the post is run
+    jc .notdde                      ;   now, and not queued
+    cmp byte [bx + W16W_KIND], W16Q_DDE
+    jne .notdde
+    pop ax
+    push cx
+    push dx
+    call w16pg_post
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.notdde:
+    pop ax
+    pop bx
     push si
     push ax
     mov ax, [w16_sm_hwnd]
@@ -335,7 +356,7 @@ w16t_to:
 ; shows made current, for the callback about to run (124.28.4). The image's
 ; w16_cbin calls it only when several tasks run and none is under way.
 ; Keeps every register
-W16SYS w16t_cbin
+W16TSK w16t_cbin
     push ax
     push bx
     push cx
@@ -372,7 +393,7 @@ W16SYS w16t_cbin
 ; of runs, so a task that has work no run can serve cannot hold the machine.
 ; A run's own w16_after finds the turns busy and leaves them to this one.
 ; -----------------------------------------------------------------------------
-W16SYS w16t_turns
+W16TSK w16t_turns
     cmp byte [cs:w16t_busy], 0
     jne .ret
     cmp byte [w16_inprog], 0
@@ -545,7 +566,7 @@ w16t_serve:
 ; continuation run with it. CF=0 that was done, AX:DX as the continuation
 ; answers. CF=1 the current task's window, or no run: every register kept
 ; -----------------------------------------------------------------------------
-W16SYS w16t_xsend
+W16TSK w16t_xsend
     cmp byte [w16_inprog], 0
     je .mine
     push ax
@@ -608,7 +629,7 @@ W16SYS w16t_xsend
 ; and the block freed. The instance's own window, if it was the dead task's,
 ; is handed to a window of the rest (w16t_hand). Host code, no run under way
 ; -----------------------------------------------------------------------------
-W16SYS w16t_end
+W16TSK w16t_end
     push ax
     push bx
     push cx
@@ -870,7 +891,7 @@ w16t_hand:
 ; the rest of the line its command tail. hInstance, or Windows' answer
 ; below 32
 ; -----------------------------------------------------------------------------
-W16SYS w16t_winexec
+W16TSK w16t_winexec
     push si
     push di
     ICALL w16_args
@@ -919,7 +940,7 @@ W16SYS w16t_winexec
 ; LoadModule (KERNEL.45) - args: +0 lpParameterBlock, +4 lpModuleName. A
 ; program started as WinExec starts one: the block's command tail (a count,
 ; then the text) and its nCmdShow (the second word lpCmdShow points at)
-W16SYS w16t_loadmod
+W16TSK w16t_loadmod
     push si
     push di
     ICALL w16_args
@@ -1094,7 +1115,7 @@ w16t_help:
     je .out
     push es
     push bx
-    mov word [cs:w16t_np], w16t_s_help  ; XSEC-OK: a part 9 string, cs:
+    mov word [cs:w16t_np], w16t_s_help  ; XSEC-OK: a part 10 string, cs:
     mov [cs:w16t_np + 2], cs
     mov word [cs:w16t_tp], w16t_s_x     ; XSEC-OK: ...and its tail
     mov [cs:w16t_tp + 2], cs
@@ -1287,7 +1308,7 @@ w16t_hfind:
     mul ah
     add ax, w16_cls
     mov si, ax                      ; a class's name: upper case, NUL-padded
-    mov di, w16t_s_wh               ; XSEC-OK: part 9's, compared through cs:
+    mov di, w16t_s_wh               ; XSEC-OK: part 10's, compared through cs:
     push cx
     mov cx, 16
     cld
@@ -1310,42 +1331,6 @@ w16t_hfind:
     pop cx
     pop bx
     ret
-
-; SendMessage (USER.111) and PostMessage (USER.110) - args: +0 lParam, +4
-; wParam, +6 msg, +8 hWnd. HWND_BROADCAST is every task's top-level windows
-; (SPEC.md 124.28.6); any other window is the image's w16u_sendmsg's and
-; w16u_postmsg's. Here and not there for the image's room, which the
-; kern_mega arm has none of
-W16SYS w16t_sendmsg
-    ICALL w16_args
-    cmp word [es:bx + 8], HWND_BROADCAST
-    je .bc
-    ICALL w16u_sendmsg
-    ret
-.bc:
-    ICALL w16_smargs
-    jmp short w16t_bsend
-
-W16SYS w16t_postmsg
-    ICALL w16_args
-    cmp word [es:bx + 8], HWND_BROADCAST
-    je .bc
-    push bx                         ; Program Manager's DDE server's window:
-    mov ax, [es:bx + 8]             ;   run in the call, not queued (SPEC.md
-    ICALL w16_hwnd2rec              ;   124.33.2)
-    jc .img
-    cmp byte [bx + W16W_KIND], W16Q_DDE
-    jne .img
-    pop bx
-    ICALL w16_smargs
-    jmp w16pg_post
-.img:
-    pop bx
-    ICALL w16u_postmsg
-    ret
-.bc:
-    ICALL w16_smargs
-    jmp w16t_bpost
 
 ; w16t_bsend - SendMessage to HWND_BROADCAST (USER.111, SPEC.md 124.28.6):
 ; [w16_sm_msg/wp/lp] sent to every top-level window of every task, in slot
@@ -1424,7 +1409,7 @@ w16t_bfrom:                         ; CX = the first slot
     add sp, 8
     pop bp
     cmp ax, WM_DDE_INITIATE         ; ...and Program Manager last, which is
-    jne .one                        ;   WIN16's (SPEC.md 124.33.2)
+    jne .one                        ;   WIN16's (SPEC.md 124.33.2), in part 9
     jmp w16pg_init
 .one:
     mov ax, 1
@@ -1487,7 +1472,7 @@ w16t_bpost:
     xor dx, dx
     ret
 
-SCONT w16t_bnext                    ; ...a window of the caller's answered:
+TCONT w16t_bnext                    ; ...a window of the caller's answered:
     push es                         ;   CX = its slot. The message, out of the
     mov es, [w16_pss]               ;   call's extra bytes, which end where
     mov bx, [w16_psp_]              ;   the served import's frame begins
@@ -1539,6 +1524,67 @@ w16t_drun:
     ret
 
 ; -----------------------------------------------------------------------------
+; w16t_join - from the wake handler: the desktop launch DOS.O88 left in the
+; join box (SPEC.md 124.28.12) started as a task, as WinExec starts one,
+; from the folder it was opened in, with no tail and SW_SHOWNORMAL. A launch
+; that cannot be met says why in a toast with the program's name
+; -----------------------------------------------------------------------------
+w16t_join:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    push es
+    mov byte [w16_jreq], 0          ; taken: a refusal is said once
+    mov ax, 2
+    cmp byte [w16_jok], 0           ; the program ended before the wake
+    je .say
+    mov word [cs:w16t_np], w16_jdoc
+    mov [cs:w16t_np + 2], ds
+    xor ax, ax
+    mov [cs:w16t_tp], ax
+    mov [cs:w16t_tp + 2], ax
+    mov [cs:w16t_tn], ax
+    mov word [cs:w16t_sh], SW_SHOWNORMAL
+    mov ax, [w16_jdoc + 13]
+    mov [cs:w16t_dir], ax
+    mov al, [w16_jdoc + 15]
+    mov [cs:w16t_vol], al
+    mov byte [cs:w16t_at], 1
+    call w16t_exec
+    mov byte [cs:w16t_at], 0
+    cmp ax, 32
+    jae .out
+.say:
+    mov si, w16t_s_nomem            ; XSEC-OK: read through cs:
+    or ax, ax
+    jz .tell
+    mov si, w16t_s_cant             ; XSEC-OK
+    cmp ax, 11
+    je .tell
+    mov si, w16t_s_many             ; XSEC-OK
+    cmp ax, 16
+    je .tell
+    mov si, w16t_s_nofile           ; XSEC-OK
+.tell:
+    mov bx, w16_jdoc
+    call w16t_say
+.out:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+w16t_s_nomem:   db 'No memory: ', 0
+w16t_s_nofile:  db 'Not found: ', 0
+w16t_s_cant:    db "Can't run: ", 0
+w16t_s_many:    db 'Too many: ', 0
+
+; -----------------------------------------------------------------------------
 ; w16t_exec - [cs:w16t_np] the program's name (to a space or a NUL),
 ; [cs:w16t_tp]/[cs:w16t_tn] its command tail, [cs:w16t_sh] its nCmdShow:
 ; loaded as a new task while the caller waits in the call (124.28.5).
@@ -1566,7 +1612,15 @@ w16t_exec:
     mov [cs:w16t_new], al
     call w16t_name                  ; [w16_mbtext]; CF=1 none
     jc .nofile
+    cmp byte [cs:w16t_at], 0        ; a desktop launch: where it was opened
+    je .look                        ;   (124.28.12), and nowhere else
+    mov dx, [cs:w16t_dir]
+    mov bl, [cs:w16t_vol]
+    call w16t_in
+    jmp short .looked
+.look:
     call w16t_where                 ; DX = its folder, BL = its volume
+.looked:
     jc .nofile
     mov [cs:w16t_dir], dx
     mov [cs:w16t_vol], bl
@@ -1870,7 +1924,67 @@ w16t_has:
 w16t_ret:
     ret
 
-; --- part 9's own, written through cs: --------------------------------------
+; w16t_shrun - from w16_wake, the gfx lock free: the posted ShellExecute
+; started. A document nothing on the machine opens says so in a toast
+w16t_shrun:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov byte [w16_shq], 0
+    mov si, w16s_dir + w16s_dirlen - 1  ; "": the document names its program
+    xor cx, cx
+    xor dx, dx
+    push ds
+    pop es
+    mov di, w16_shdoc
+    call OSAPI_PKG_START
+    jnc .out                        ; (any other refusal, the user was told)
+    cmp al, W16C_LDBAD
+    jne .out
+    mov si, w16t_s_noprog           ; XSEC-OK: read through cs:
+    mov bx, w16_shdoc
+    call w16t_say
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16t_say - a toast: CS:SI = its words, then DS:BX = a NUL name after them
+; (at most TOAST_MAX together). Clobbers AX, CX, SI, DI, ES
+w16t_say:
+    mov di, w16t_toast              ; XSEC-OK: the part's buffer
+.p:
+    mov al, [cs:si]
+    or al, al
+    jz .n
+    mov [cs:di], al
+    inc si
+    inc di
+    jmp short .p
+.n:
+    mov al, [bx]
+    mov [cs:di], al
+    inc bx
+    inc di
+    or al, al
+    jnz .n
+    push cs
+    pop es
+    mov si, w16t_toast              ; XSEC-OK: ES = CS
+    xor cx, cx
+    call OSAPI_TOAST
+    ret
+
+; --- part 10's own, written through cs: --------------------------------------
 w16t_np:    dd 0                    ; WinExec/LoadModule: the name
 w16t_tp:    dd 0                    ;   ...the command tail
 w16t_tn:    dw 0                    ;   ...its length
@@ -1878,6 +1992,7 @@ w16t_sh:    dw 0                    ;   ...nCmdShow
 w16t_dir:   dw 0                    ;   ...where the file is
 w16t_vol:   db 0
 w16t_new:   db 0                    ;   ...the new task's index
+w16t_at:    db 0                    ;   1: in w16t_dir/w16t_vol only (join)
 w16t_old:   db 0                    ;   ...and the caller's
 w16t_blk:   dw 0                    ;   ...its context block
 w16t_hblk:  dw 0                    ; WinHelp's last WM_WINHELP block
@@ -1886,5 +2001,7 @@ w16t_s_x:   db '-x', 0
 w16t_s_wh:  db 'MS_WINHELP', 0, 0, 0, 0, 0, 0   ; ...its window's class
 w16t_busy:  db 0                    ; w16t_turns is running
 w16t_dead:  db 0                    ; w16t_end: the dead task's owner byte
+w16t_s_noprog: db 'No program: ', 0  ; w16t_shrun's
+w16t_toast: times 26 db 0           ; w16t_say's
 
 section .text

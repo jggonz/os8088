@@ -641,7 +641,7 @@ W16EXPORT W16M_MMSYSTEM,   1224,    8,  w16mm_asc            ; mmioAscend(word p
 W16EXPORT W16M_MMSYSTEM,   1225,    8,  w16mm_create         ; mmioCreateChunk(word ptr word)
 %endif
 ; File Manager 3.0 and Program Manager 3.0 (SPEC.md 124.27.1): the calls
-; around MDI, in part 9. One program is one task until S21, nothing is ever
+; around MDI, in part 10. One program is one task until S21, nothing is ever
 ; dragged or system-modal, and real mode has no selectors and no DOS memory
 ; of its own to hand out
 W16EXPORT W16M_KERNEL,     136,     2,  w16i_drvtype        ; GetDriveType(word)
@@ -827,8 +827,8 @@ W16_XDDP equ W16NX                ; DefDlgProc's row: bound to slot W16_DDPROW
 W16EXPORT W16M_USER,       308,     10, w16u_defdlgproc     ; DefDlgProc(word word word long)
 W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
 W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
-W16EXPORT W16M_USER,       110,     10, w16t_postmsg        ; PostMessage(word word word long)
-W16EXPORT W16M_USER,       111,     10, w16t_sendmsg        ; SendMessage(word word word long)
+W16EXPORT W16M_USER,       110,     10, w16u_postmsg        ; PostMessage(word word word long)
+W16EXPORT W16M_USER,       111,     10, w16u_sendmsg        ; SendMessage(word word word long)
 W16EXPORT W16M_USER,       113,     4,  w16u_translate      ; TranslateMessage(ptr)
 W16EXPORT W16M_USER,       114,     4,  w16u_dispatch       ; DispatchMessage(ptr)
 W16EXPORT W16M_USER,       124,     2,  w16u_updatewnd      ; UpdateWindow(word)
@@ -1192,7 +1192,7 @@ w16_lstr:
 ; the answer, so the program does not add a message of its own
 w16u_winhelp:
     call w16_args
-    SCALL w16t_help
+    TCALL w16t_help
     jc .say
     cmp ax, 0xFFFF
     jne .ret
@@ -1200,8 +1200,7 @@ w16u_winhelp:
 .ret:
     ret
 .say:
-    LCALL w16n_nohelp               ; the library part's: a refusal is rare
-    ret
+    LJMP w16n_nohelp                ; the library part's: a refusal is rare
 
 ; w16_asmsgbox - ES:BX = twelve bytes of arguments whose +10 is an hWnd:
 ; rewritten as MessageBox(hWnd, w16pf_ins + 128, w16pf_ins, MB_OK |

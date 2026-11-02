@@ -1262,8 +1262,7 @@ w16g_select:
     LCALL w16_mdcslot                ; BX = its slot
     pop ax
     jc .no
-    LCALL w16_bmselect
-    ret
+    LJMP w16_bmselect
 .win:
     cmp ax, W16_BMSTK               ; a bitmap into the window's DC: no
     je .no
@@ -2063,8 +2062,7 @@ w16_txtcopy:
 w16g_settextcol:
     mov si, w16_trgb
     mov di, w16_tcol
-    LCALL w16_cref                    ; SetBkColor's body too (w16acc.inc)
-    ret
+    LJMP w16_cref                     ; SetBkColor's body too (w16acc.inc)
 
 ; GetTextExtent (GDI.91) - args: +0 nCount, +2 lpString, +6 hDC. DX:AX =
 ; height:width.

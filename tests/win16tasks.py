@@ -35,7 +35,8 @@ import tempfile
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")]
 os.chdir(ROOT)
-from win16mines import QDrive, b                              # noqa: E402
+import os88geom as geom                                       # noqa: E402
+from win16mines import QDrive, b, u16                         # noqa: E402
 import win16fpu as F                                          # noqa: E402
 from win16desk import claims, heap_is                         # noqa: E402
 
@@ -70,14 +71,20 @@ def main():
         print("0. B: open, %d heap claims before TASKS" % len(m0))
         p = F.Prog(d, ui, sym, S, NAMES[0])
         p.launch(dw)
-        own = [c[2] for c in claims(d, sym) if c[0] == p.seg]
-        if not own:
-            bad.append("no claim record at WIN16's segment %04x" % p.seg)
-            own = [None]
+        own = [None]                # the instance's slot: its image's owner
+        raw = d.read(sym("inst_tab"), geom.INST_MAX * 32)
+        for i in range(geom.INST_MAX):
+            r = raw[i * 32:(i + 1) * 32]
+            if r[0] == 1 and u16(r[6:8]) == p.seg:
+                own = [i]
+        if own[0] is None:
+            bad.append("no live instance at WIN16's segment %04x" % p.seg)
         seen = {"max": 0, "tasks": 0}
 
         def ready():
-            n = sum(1 for c in claims(d, sym) if c[2] == own[0])
+            # the image's claim is the slot's; every claim WIN16 makes is
+            # stamped with the segment it runs in (SPEC.md 50.3, mem_own)
+            n = sum(1 for c in claims(d, sym) if c[2] in (own[0], p.seg))
             seen["max"] = max(seen["max"], n)
             seen["tasks"] = max(seen["tasks"], p.pb("w16_ntk"))
             return p.waiting_msgbox(F.msgrow())

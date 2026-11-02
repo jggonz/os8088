@@ -14,7 +14,7 @@ by the win16-reference skill under that name. Microsoft's files are never in
 this tree, so without them the row is a SKIP.
 
 One boot per adapter: VGA is the shipped kernel, EGA and CGA private
-`VIDEO=` kernels, and Hercules `VIDEO=herc HERCSEG=0x7000`, read back out of
+`VIDEO=` kernels, and Hercules `VIDEO=herc HERCSEG=0xB800`, read back out of
 RAM because QEMU has no Hercules card (docs/HERCULES-TESTING.md). On each,
 each Solitaire in turn, the other closed first (two at once are short of
 memory, and 3.1 says so and drags outlines - correctly):
@@ -25,7 +25,10 @@ memory, and 3.1 says so and drags outlines - correctly):
      at least a tenth of the client is something else - seven piles and the
      deck are about a third;
   3. a card MOVES: a click on the deck turns cards onto the waste pile beside
-     it, and that region changes by at least 1,500 pixels;
+     it, and that region changes by at least 1,500 pixels (500 on a 1bpp
+     display, where a white card on lit felt changes only its edge and
+     pips; on CGA's 200 lines the click and the region are cut to its
+     shorter cards);
   4. its close box ends it.
 """
 import argparse
@@ -46,7 +49,13 @@ import win16fpu as F                                          # noqa: E402
 W16S_REFUSED, W16S_RUNNING, W16S_ENDED = 2, 3, 4
 PROGS = ("SOL.EXE", "W31SOL.EXE")
 VIDEOS = ("vga", "ega", "cga", "herc")
-HERCSEG = 0x7000
+HERCSEG = 0xB800                # OUTSIDE the heap: the VGA card's text-mode
+                                # window, 32KB that reads back what was
+                                # written. 0x7000, the usual spare RAM, is
+                                # inside a 640KB heap, and WIN16 (~290KB an
+                                # instance since S14) reaches it: the
+                                # renderer drew over the program, which then
+                                # never ended by its close box
 
 
 def progs():
@@ -157,18 +166,26 @@ def run_one(d, ui, S, dw, name, video, work, bad):
     if other < 0.10:
         bad.append("%s: %.0f%% of the client is not the felt - nothing dealt"
                    % (tag, 100 * other))
-    # the deck is the top-left card: client (11-16, 7) to (82-90, 103)
-    before = region(rows, cx0 + 90, cy0 + menu, cx0 + 280, cy0 + menu + 110)
-    d.click(cx0 + 40, cy0 + menu + 50)
+    # the deck is the top-left card: client (11-16, 7) to (82-90, 103) on
+    # VGA. CGA's 200 lines make every card shorter and its bar 10 rows: the
+    # click at row 50 found the tableau, and nothing turned
+    if vh <= 200:
+        menu, down, tall = 10, 20, 46
+    else:
+        down, tall = 50, 110
+    before = region(rows, cx0 + 90, cy0 + menu, cx0 + 280, cy0 + menu + tall)
+    d.click(cx0 + 40, cy0 + menu + down)
     d.idle(4.0)
     d.q.mouse_to(d, d.x.sym, d.hmp, cx1 - 4, cy0 + 2)
     d.idle(1.0)
     _, _, rows2 = glass(d, video, work)
-    after = region(rows2, cx0 + 90, cy0 + menu, cx0 + 280, cy0 + menu + 110)
+    after = region(rows2, cx0 + 90, cy0 + menu, cx0 + 280, cy0 + menu + tall)
     changed = sum(1 for ra, rb in zip(before, after)
                   for va, vb in zip(ra, rb) if va != vb)
     print("   the deck clicked: %d pixels of the waste changed" % changed)
-    if changed < 1500:
+    need = 1500 if video in ("vga", "ega") else 500     # 1bpp: a white card
+    if changed < need:                                  # on lit felt changes
+                                                        # its edge and pips
         bad.append("%s: a click on the deck changed %d pixels beside it - no "
                    "card turned" % (tag, changed))
     d.click(*geom.close_xy(w.x, w.y, w.w, m=d, sym=d.x.sym))
