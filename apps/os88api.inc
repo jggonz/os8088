@@ -592,6 +592,8 @@ KSC_ALT     equ 0x38             ; ...and Alt, which is a MODIFIER and so is
                                  ; point DS at it for that one call (the X
                                  ; stub passes your DS through) - STAGED for
                                  ; you, like verb 2 of OSAPI_SND_FM.
+                                 ; Verb 4 (open-in): AH must carry
+                                 ; SND_OPENF_EXT (SPEC.md 34.6.5), else 7.
 
 ; capability bits returned by OSAPI_SND_CAPS (SPEC.md 34.2). TONE and
 ; PCM_EXCL are the resident PC speaker's - TONE always, PCM_EXCL on kern_big
@@ -681,7 +683,7 @@ SND_OPENF_RING   equ 1           ; ring mode (SPEC.md 34.5): SI = ring base,
                                  ; PLACE (SPEC.md 34.5.2) - so keep the lead,
                                  ; total - consumed, within RL, which verb 1
                                  ; enforces, and never stage behind consumed.
-                                 ; Verbs 0 and 4 answer 8 when a stream the
+                                 ; Verb 0 answers 8 when a stream the
                                  ; driver must double-buffer cannot have its
                                  ; 8KB, which it claims per stream now.
 SND_OPENF_EXT    equ 2           ; ...an EXTERNAL ring (SPEC.md 34.5.3), with

@@ -72282,9 +72282,13 @@ Three things about it are worth knowing:
   8 kHz, and its two words - opened as verb 4's external ring with 512-byte
   blocks. Its window's timer (§13.9) fires every 2 ticks and `rc_pump` copies
   what the card has captured into the grant through `rc_pbuf` and verb 6,
-  so the take ends up where Play, the strip and Demo always read it. The card
-  lapping the ring - the UI task away over 2 s - stops the take as
-  `REC STOPPED (OVERRUN)`; the grant filling, as `REC STOPPED (FULL)`; the
+  so the take ends up where Play, the strip and Demo always read it; the
+  count it draws goes through `OSAPI_WM_CLIP_SET`, so a covered or minimized
+  Recorder records on and paints nothing. The card lapping the ring - the
+  reader within a block of a ring behind, the block being filled being the
+  ring's oldest, or more than `RC_FMAX` = 110 ticks between pumps, which the
+  16-bit count could have lapped unseen (WaveRack's `wc_fmax`) - stops the
+  take as `REC STOPPED (OVERRUN)`; the grant filling, as `REC STOPPED (FULL)`; the
   ring is freed at every close. It needs a DSP 2.00 or later, and REC greys
   on anything less because the driver no longer publishes `SND_CAP_PCM_IN`
   there.

@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "d2af41bcf7c469dda9ff98524beaaa98fe6210fa0fc07304e2b757879ca7f8d8",
+  "fingerprint": "9734b5671841222e9e5d59dd62dfa395729e99ff0cf2b820e498091aaa023e41",
   "version": 11
  },
  "PKG_FMT": {
-  "fingerprint": "bad7ca53637b5d0ac98d9a96709226f609e0466fcd1d24fe0be09e58884259f8",
+  "fingerprint": "a0397190f55d645219e231a7744875ba7ac369d25fc066c0ce33b0745bf17474",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1309,6 +1309,20 @@
    "from": 11,
    "guard": "DRV_VER",
    "reason": "SPEC.md 53.2.3 W4: OSAPI_FSX_SPK AL = 2 in kern_mega's real-mode bracket, FSXR_DRV and FSXL_DRV carry DRVC_SOUND - comments, no cell moved",
+   "to": 11
+  },
+  {
+   "fingerprint": "a0397190f55d645219e231a7744875ba7ac369d25fc066c0ce33b0745bf17474",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 10
+  },
+  {
+   "fingerprint": "9734b5671841222e9e5d59dd62dfa395729e99ff0cf2b820e498091aaa023e41",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
    "to": 11
   }
  ]
