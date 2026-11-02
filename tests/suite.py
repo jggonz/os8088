@@ -9632,6 +9632,16 @@ SOAK = [
         "program at all.",
         needs=("marty",), serial=True,
         wants=("build/doslnk360.img", "build/dosargs360.img")),
+    Row("dosheld", "soak", py("tests/dosheld.py"), 40.0,
+        "A HELD LAUNCH (SPEC.md 96.21.9): a program or a shortcut opened "
+        "with Shift or Alt held is NAMED and NOT RUN, so a .LNK's settings "
+        "and the prompt beside a SETUP.EXE can be reached without starting "
+        "it. Alt is held across the double-click (a Shift+click is a range "
+        "select in a Disk window, SPEC.md 22.27): DOS must reach DST_HELD "
+        "with the path box filled, DOSARGS.COM's READY must NOT appear, and "
+        "one Enter with the key let go must start it. Red with the entry "
+        "proc's `jnz .held` taken out.",
+        wants=("build/dosargs360.img",)),
     Row("memp", "soak", py("tests/memp.py"), 30.0,
         "the heap's granule and OSAPI_MEM_P on the machine (SPEC.md 50.2.1, "
         "50.3.7): tests/memp's eleven verdicts out of its bss - every verb, "

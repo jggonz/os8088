@@ -1428,6 +1428,8 @@ dos_con_draw:
 
 dos_c_hint:  db 13, 10, 'Type a command, the name of a program, or help.'
              db 13, 10, 0
+dos_c_held:  db 13, 10, 'Not started: Shift or Alt was held. Run, or Enter', 13, 10
+             db 'on an empty line, starts it.', 13, 10, 0   ; (SPEC.md 96.21.9)
 dos_c_start: db 'Starting ', 0   ; ...and the line that opens one (96.33.20.1)
 dos_c_exit:  db ' ended, exit code ', 0
 dos_c_colon: db ': ', 0

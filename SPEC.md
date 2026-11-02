@@ -182299,6 +182299,40 @@ size — so implementing this honestly means either a new slot or an answer that
 says less than DOS's. That is the decision, and it is why the call is named
 here rather than built.
 
+#### 96.21.9 Shift or Alt held: name the program and do not run it
+
+A shortcut is configured by opening it, and opening one RUNS it. So a launch
+that arrives with a document (an association, a `.EXE`/`.COM`, a `.LNK`) and
+finds **Shift or Alt held** stages everything it would have staged - the path
+box, a link's arguments and settings, the window's caption - and stops there,
+in `DST_HELD`. The prompt stands in the **program's folder** (`[dos_curdir]` =
+`[dos_dir]`), so `SETUP` or `INSTALL` typed at it is the one beside the
+program, and a line on the console says nothing was started. **Run**, or Enter
+on an empty prompt or on the setup page (§96.19.4 accepts `DST_HELD` beside
+`DST_RAN` and `DST_ERR`), starts it as the launch would have. Edit the setup
+page and **Save Shortcut** (§96.21.2) is how a `.LNK` is changed without
+running it - on every kernel, kern_mega included, where a run is the whole
+machine and could not otherwise be avoided.
+
+Shift is the "bypass it while starting" key a DOS user already knows. **Alt is
+the mouse's key**, because Shift and Ctrl are not free in a Disk window: with
+multi-select (§22.27) a Shift+click is a range and a Ctrl+click a toggle, so
+neither half of a Shift+double-click reaches `fm_open_sel` and nothing is
+launched at all. Alt is read there only on a drop (§26.10.4), so an
+Alt+double-click opens as a plain one does. Shift+Enter on a selected entry
+opens it too - `int 16h` hands Enter over as 13 whatever is held, and the Enter
+arm asks no modifier.
+
+**There is no race.** The shift state is a LEVEL the ROM's `int 09h` keeps in
+the BIOS data area (`kbm_isr` chains every key to it; kern_mega keeps the same
+byte itself), and it is read in the entry proc, after the whole package load -
+so the only requirement is that the key is still held then. It is read with
+`int 16h AH=02h` and not at `0040:0017`, because segment 0 is the NULL
+selector on kern_mega. `OSAPI_KEY_DOWN` is the wrong instrument: its first call
+always answers "up" (§9.7). Headless DOS (§96.44.20) never holds - the check
+is inside a `WIN_ONLY` bracket.
+
+
 ### 96.22 The calls a C runtime makes that a *program* never writes
 
 A shim built by reading a program's source would stop at open, read, seek and

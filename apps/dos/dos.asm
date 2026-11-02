@@ -1012,13 +1012,19 @@ DST_IDLE    equ 0                   ; launched with no document (wave 7's prompt
 DST_READY   equ 1                   ; a program is named and not yet run
 DST_RAN     equ 2                   ; it ran; [dos_exit] is its code
 DST_ERR     equ 3                   ; it did not; [dos_err] says why
-DST_CPWAIT  equ 4                   ; ...and it is waiting for the heap to be
+DST_CPWAIT  equ 5                   ; ...and it is waiting for the heap to be
                                     ; packed (SPEC.md 96.35). A posted
                                     ; OSAPI_MEM_COMPACT's post runs at ui_task's
                                     ; step 0, and the EVT_WAKE it sends lands
                                     ; here - so this is one more state and not
                                     ; a lifecycle, which is why a stale wake
                                     ; still finds the state advanced
+DST_HELD    equ 4                   ; ...and launched with Shift or Alt held:
+                                    ; named and staged, and it waits for Run
+                                    ; or Enter (SPEC.md 96.21.9). RAN, ERR and
+                                    ; HELD are CONTIGUOUS on purpose: they are
+                                    ; the states Enter may (re)start, and the
+                                    ; key handler tests them as one range
 
 ; --- INT 33h's VIRTUAL SCREEN (SPEC.md 96.10), which is not the machine's ----
 ; A mouse driver's coordinates are a 640x200 grid whatever the adapter is
@@ -1345,6 +1351,12 @@ dos_entry:
                                     ; A refusal leaves the bare name there,
                                     ; which is still true and still runs
     WIN_END
+    WIN_ONLY                        ; **SHIFT OR ALT HELD: NAME IT, RUN NOTHING**
+    mov ah, 2                       ; (SPEC.md 96.21.9). The BIOS's shift state
+    int 0x16                        ; is a LEVEL the ROM's int 09h keeps, so it
+    test al, 0x0B                   ; is current whenever it is asked: bits 0-1
+    jnz .held                       ; Shift, bit 3 Alt. int 16h and not 0040:0017
+    WIN_END                         ; because segment 0 is NULL on kern_mega
     mov byte [dos_state], DST_READY
     mov bx, [dos_win]
     call OSAPI_WM_WAKE              ; ...and run it from the wake handler, which
@@ -1359,8 +1371,18 @@ dos_entry:
                                     ; mounts on the way, and the symptom is a
                                     ; window that sits on "Starting..." for ever
 
+.held:                              ; everything a launch stages is staged -
+    mov byte [dos_state], DST_HELD  ; the path box, a .LNK's arguments and its
+    mov ax, [dos_dir]               ; settings - and the prompt stands in the
+    mov [dos_curdir], ax            ; PROGRAM's folder, so SETUP or INSTALL
+    WIN_ONLY                        ; typed there is the one beside it
+    mov si, dos_c_held
+    call con_say
+    WIN_END
+    jmp short .arm
 .idle:
     mov byte [dos_state], DST_IDLE
+.arm:
 %ifndef KD_BACKEND
     call dos_keyarm                 ; the console: Alt+Enter from its prompt
 %endif
@@ -8924,18 +8946,18 @@ dos_key:
                                      ; the dosargs row drives; Enter on a line
                                      ; the user has typed may not silently
                                      ; re-launch the last program instead
-    cmp byte [dos_state], DST_RAN
-    je .again
-    cmp byte [dos_state], DST_ERR
-    je .again
+    cmp byte [dos_state], DST_RAN    ; RAN, ERR or HELD (96.21.9): a held
+    jb .console                      ; launch's Enter on an empty line is the
+    cmp byte [dos_state], DST_HELD   ; start it was spared
+    jbe .again
     jmp short .console               ; ...and with nothing to re-run it is the
                                      ; prompt's again, which is a fresh line
                                      ; and what DOS does with a bare Enter
 .rerun:
     cmp byte [dos_state], DST_RAN    ; only from a program that has FINISHED -
-    je .again                        ; DST_READY is one already queued and a
-    cmp byte [dos_state], DST_ERR    ; second wake would run it twice
-    jne .no
+    jb .no                           ; DST_READY is one already queued and a
+    cmp byte [dos_state], DST_HELD   ; second wake would run it twice - or
+    ja .no                           ; one held at its launch (96.21.9)
 .again:
     mov byte [dos_state], DST_READY
     mov bx, [dos_win]
