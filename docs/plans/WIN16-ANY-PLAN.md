@@ -1739,6 +1739,23 @@ its table goes in the diary, so the reach is measured, not claimed.
     not done**: a third swapped vector is about 100 image bytes and the
     kern_mega arm has 98, and no target installer has been seen to ask.
     S25's installs decide it.
+  - [x] Batch 4: a setup started from a floppy with WIN16 on the hard
+    disk, which is how Microsoft Arcade's setup is run (SPEC.md 54.4.2.4,
+    96.11.11, 96.27.1, 124.14, 124.28.5):
+    - The DOS→WIN16 hand-back no longer loops when WIN16.O88 is not found.
+    - AH=36h answers for the drive it names.
+    - A profile named with a path is read through the DOS.
+    - LZCopy's ES load is `W16SEG` on the arm.
+    - The DOS core's window takes each file's own volume's cluster. New
+      fixture `XVOL.EXE`.
+    - WinExec opens the name as written in the current folder first.
+    - GetModuleHandle answers another task's module name.
+
+    Arcade's setup now copies its second stage to `C:\~MSSTFQF.T` and
+    starts `_MSTEST`. **Open:**
+    - `_MSTEST` then faults on the arm: `GP 03E0`, on a far pointer it
+      read from a global block.
+    - Real mode prints *STACK OVERFLOW TASK 00* during a cross-volume copy.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running

@@ -4179,3 +4179,47 @@ door's raw entry, which leaves SI as the drive set it.
 QEMU's drive refuses `PLAY AUDIO` on any track, so under QEMU the play
 now does nothing and shows no error. Hearing it needs 86Box's
 `386-mega-cdrom`, whose disc is audio. That is S25's.
+
+## 2026-11-02: a setup from a floppy, one failure at a time
+
+Microsoft Arcade's `SETUP.EXE` was run the way its box says: from the floppy
+in A:, with WIN16 installed on the hard disk. The test machine was kern_mega
+booted off a 32 MB FAT16 IDE disk, with an `\AUTOSTRT` link to
+`A:\SETUP.EXE`. Each failure was traced, fixed, and the setup run again.
+
+1. **Nothing started, and the stack overflowed.** DOS.O88 hands an NE to
+   WIN16. The association lookup could not find WIN16.O88 from A:, so it
+   retried by the document's extension, which handed the program back to
+   DOS.O88, which handed it to WIN16 again. The retry now stops when the
+   extension's slot is the one that just failed. This defect is on main too.
+2. *"Initialization list file has been corrupted."* The setup reads its own
+   `A:\SETUP.LST` with `GetPrivateProfileString`. WIN16's profile cache knew
+   only the Windows directory, so that file read as empty. A profile named
+   with a drive or a folder is now read through WIN16's DOS.
+3. *"Insufficient memory or disk space."* The setup asked AH=36h about C:
+   while it stood on A:, and was told about A:. Since 96.48 the drive select
+   no longer mounts, so the call now stands the machine on the drive it
+   names.
+4. **A fault in LZCopy on the arm.** A raw load of a virtual paragraph into
+   ES; it is now `W16SEG`.
+5. **"Access denied" on every file larger than a kilobyte.** The DOS core's
+   file window works in clusters, and it used the floppy's 512-byte cluster
+   for the hard disk's files too. An in-place write then landed at offsets
+   that were not on C:'s 2 KB clusters, and the kernel's `WRITE_AT` refused
+   them. The window now asks each file's own volume once. `XVOL.EXE` is the
+   reduction: a program on A: copying itself to C: a kilobyte at a time.
+6. *"Insufficient memory or disk space"* again, this time from WinExec. The
+   setup changes into `C:\~MSSTFQF.T` and starts `_mstest arcade.mst` by
+   bare name. Windows looks in the current folder first; WIN16 did not, and
+   answered 2 ("file not found"). It now opens the name through its DOS
+   first.
+7. **The setup deleted its own second stage.** After WinExec, the bootstrap
+   waits while `GetModuleHandle("DSHELL")` answers. DSHELL is `_MSTEST.EXE`'s
+   module name, which is not its file name, and WIN16 knew only the current
+   program's file name. The loader now keeps each program's module name, and
+   GetModuleHandle searches the other tasks too.
+
+After step 7, all eighteen files are copied and expanded, and `_MSTEST`
+runs. It then faults inside its own string helper, on a far pointer
+`03E1:0000` read out of a table in one of its global blocks. That is where
+this entry stops; the cause is not known yet.
