@@ -290,7 +290,8 @@ w16u_callwndproc:
     jmp w16_intproc
 .cb:
     push si
-    mov si, w16_cont_ret
+    push di                         ; (w16_cbopen answers ES:DI: the
+    mov si, w16_cont_ret            ;   procedure's segment is kept here)
     xor ax, ax
     xor cx, cx
     call w16_cbopen
@@ -304,8 +305,8 @@ w16u_callwndproc:
     call w16_ppush
     mov ax, [w16_sm_lp]
     call w16_ppush
+    pop dx
     pop ax
-    mov dx, di
     jmp w16_cbcall
 
 ; -----------------------------------------------------------------------------
