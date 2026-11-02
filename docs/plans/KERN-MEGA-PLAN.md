@@ -13381,3 +13381,24 @@ capture is the file's sound from byte 0 and whole and that frame 1 is drawn
 at least 0.6 of a frame after the card opens (57-60 ms; 15-18 before).
 Red, both legs: `vp_lnow`'s staging out (the contiguity, 5,332 of 10,945),
 its frame-0 piece out (the start, sample 914, and the 17 ms).
+
+### 14.135 WIN16 Phase B/C's kern_mega work crossed two `.mega` rungs (2026-11-02) - RECORDED, ACCEPTED
+
+A rung crossing is never silent, so here are both. Measured with
+`tools/kernsize.py --build build/megak` against `origin/main` (6dfafef44),
+before D2 (084991764~1) and after it:
+
+| | `.mega` | its rung (with its 1,490-byte scratch) | left |
+|---|---:|---:|---:|
+| main | 21,440 | 23,040 | 110 |
+| before D2: SEG_TILE, O7's software interrupts, 20.18.2, SEG_WINL | 22,016 (+576) | 23,552 | 46 |
+| after D2: SEG_LEND, `mega_svc_lend`/`mega_svc_fb` (SPEC.md 50.6.11, 124.31.2) | 22,288 (+272) | 24,064 | 286 |
+
+Both crossings cost only at boot. The `.mega` rung is part of `KERN_SIZE`
+until the switch, when it is given to the heap, and after that the code
+runs above 1MB. The resident footprint (`MEGA_RESIDENT`) is unchanged at
+65,024 of `KERN_BUDGET` 68,096. LOW is not crossed: `.lowbss` 6,758 (+7,
+D2), 410 left in its 7,680 rung. kern_big and kern_small are
+byte-identical. The lead accepted the crossing. Winning D2's 272 bytes
+back would mean moving the frame shuffle into WIN16, whose image is the
+tighter of the two.
