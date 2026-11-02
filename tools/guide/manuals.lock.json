@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "5875de5b0",
+  "stamped": "97621ec6c",
   "strings": "172e5a682e5edddb",
-  "why": "CD play past a data track (SPEC.md 124.32.4)"
+  "why": "Segment-0 and CS-store traps on the arm (SPEC.md 124.31.10)"
  },
  "WIN16_TXT": {
   "sources": [
