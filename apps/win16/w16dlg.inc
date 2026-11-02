@@ -6918,6 +6918,8 @@ W16D_MBTX   equ 68              ;   beside an icon starts here
 W16D_MBGV   equ 22              ; the content to the buttons, and the buttons
 W16D_MBBOT  equ 10              ;   to the bottom (SPEC.md 124.18.4: Windows
                                 ;   3.0's VGA boxes, measured)
+W16D_MBCAP  equ 56              ; a title's 6-pixel gaps and both boxes'
+                                ;   21 pixels (SPEC.md 11's title bar)
 
 w16u_msgbox_d:
     ICALL w16_args
@@ -7019,6 +7021,31 @@ w16u_msgbox_d:
     mov cx, ax
 .w:
     add cx, 2 * W16D_MBM
+    push cx                         ; ...and never narrower than its caption
+    ICALL w16_args                  ;   in os8088's title bar: 8 pixels a
+    les di, [es:bx + 2]             ;   letter, the gap round it and both
+    mov ax, es                      ;   boxes (SPEC.md 124.13)
+    or ax, di
+    mov cx, 5                       ; "Error", when there is none
+    jz .capw
+    xor cx, cx
+.capn:
+    cmp byte [es:di], 0
+    je .capw
+    inc di
+    inc cx
+    cmp cx, 76
+    jb .capn
+.capw:
+    mov ax, cx
+    mov cl, 3
+    shl ax, cl
+    add ax, W16D_MBCAP
+    pop cx
+    cmp cx, ax
+    jae .wcap
+    mov cx, ax
+.wcap:
     mov [w16_cwcx], cx
     mov [w16d_mcw], cx
     ICALL w16_rowsn

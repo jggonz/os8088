@@ -227341,7 +227341,11 @@ measured these against Windows 3.0's own boxes, §124.18.4: S6 had 16 all
 round and the buttons 10 pixels too high), the buttons 22 pixels below the
 text and 10 above the bottom, those of `MB_OK` to `MB_RETRYCANCEL` 58
 pixels wide and the System font's rows plus 12 high, 12 apart and centred,
-with `MB_DEFBUTTON1`–`3`, and the box centred on the screen. It answers
+with `MB_DEFBUTTON1`–`3`, and the box centred on the screen. The box is
+never narrower than its caption in os8088's title bar: 8 pixels a letter
+plus 56 for the gaps and both boxes, as Windows widened a box for its
+caption *(WIN16 S24)*. Before, InstallShield 3's *Setup Initialization
+Error* ran past both edges of its box. It answers
 `IDOK` to `IDNO`. Esc and the close box answer `IDCANCEL` when the box
 has a Cancel button, `IDOK` when OK is all it has, and nothing otherwise
 (a Yes/No box must be answered), as on Windows. It is modal like `DialogBox`, so a program can have
