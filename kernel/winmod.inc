@@ -225,10 +225,11 @@ wnr_tab:
 ; --- the image's own state ---------------------------------------------------
 ; Its BSS (MODULE-SELFCONTAIN-PLAN 3): the tail of the module's heap claim,
 ; reached through CS like the image, and none of it has to outlive a
-; mod_drop - it is scratch for one title bar or one menu. NOT zeroed, and it
-; need not be: every cell is written before it is read (wn_title's pens and
-; caption, wn_blit's band, wn_stick's .stick before the first wn_track). It
-; was 125 bytes of zeros in the image (kernel size pass 12).
+; mod_drop - it is scratch for one title bar or one menu. Every cell is
+; written before it is read (wn_title's pens and caption, wn_blit's band,
+; wn_stick's .stick before the first wn_track). It is zeros at the end of the
+; file again (kernel.asm's MODB_TAIL, 3.5): kernel size pass 12 took them out
+; to fit a KB rounding that the 512-byte granule then halved.
 section .modwb
 wn_pair:    resw 1              ; AL = this bar's ground, AH = its ink
 wn_tmp:     resb 3 * WNB_H      ; one band, shifted to its screen phase
@@ -299,17 +300,19 @@ wn_title:
     mov cx, 80
 .cut:
     push di
+    CSDO_ON
     mov di, wn_cap              ; copy at most CX characters into our own
 .cp:                            ; buffer: the owner's string is not ours to
     mov al, [es:si]             ; terminate early
     or al, al
     jz .cpend
-    CSDO mov [CSEG di], al
+    mov [CSEG di], al
     inc si
     inc di
     loop .cp
 .cpend:
-    CSDO mov byte [CSEG di], 0
+    mov byte [CSEG di], 0
+    CSDO_OFF
     pop di
     PUSH_CSDATA
     pop es
@@ -475,10 +478,12 @@ wn_blit:
     loop .sh
 .put:
     pop cx
-    CSDO mov [CSEG di], ah
-    CSDO mov [CSEG di+1], al
+    CSDO_ON
+    mov [CSEG di], ah
+    mov [CSEG di+1], al
     mov ax, bp
-    CSDO mov [CSEG di+2], ah     ; (RCR filled BP from bit 15 down)
+    mov [CSEG di+2], ah         ; (RCR filled BP from bit 15 down)
+    CSDO_OFF
     inc si
     inc si
     add di, 3
@@ -697,8 +702,10 @@ wn_stick:
 .stick:
     WNK cur_unlazy              ; the arrow: any deferred hide spent, then
     WNK cursor_show             ; drawn at the pointer, which the ISR will not
-    CSDO mov [CSEG wn_lastx], cx ; move while we hold the lock
-    CSDO mov [CSEG wn_lasty], dx
+    CSDO_ON
+    mov [CSEG wn_lastx], cx     ; move while we hold the lock
+    mov [CSEG wn_lasty], dx
+    CSDO_OFF
 
     ; --- UP: wait for the next click ------------------------------------------
 .wait:
@@ -817,8 +824,10 @@ wn_track:
     cmp dx, [cs:wn_lasty]
     je .out
 .moved:
-    CSDO mov [CSEG wn_lastx], cx
-    CSDO mov [CSEG wn_lasty], dx
+    CSDO_ON
+    mov [CSEG wn_lastx], cx
+    mov [CSEG wn_lasty], dx
+    CSDO_OFF
     WNK cursor_hide
     WNK menu_hover              ; AX = the item under it, 0xFFFF none
     call wn_sel

@@ -87,6 +87,7 @@ w16_census:
     shr dx, cl
     inc dx
     add ax, dx
+    jc .big                         ; bitmaps past 64KB: refused, not wrapped
 .nextsz:
     add di, 8
     inc bx
@@ -96,14 +97,18 @@ w16_census:
     cmp dx, [w16_nseg]
     jb .size
     add ax, 15
+    jc .big
     and ax, 0xFFF0
     mov [w16c_obase], ax
-    add ax, W16C_END + 1023
-    rcr ax, 1                       ; (the carry is bit 16: a census of 64KB
-    mov cl, 9                       ; of code still sizes right)
-    shr ax, cl                      ; AX = KB
-    call OSAPI_MEM_CLAIM            ; DX = the block
+    add ax, W16C_END + 15           ; the lists too must be inside one 64KB
+    jc .big                         ;   segment, the offsets being 16 bits
+    mov cl, 4
+    shr ax, cl                      ; AX = PARAGRAPHS (SPEC.md 50.3.7)
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; DX = the block
     jnc .claimed
+.big:
     mov si, w16_r_mem
     jmp .refuse
 .claimed:

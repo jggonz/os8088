@@ -1024,8 +1024,8 @@ window open, and Play after it plays again (`sb.wav` -> 3,457,024): SOUND.DRV
 was swept, reloaded and its IRQ gate rebuilt.
 
 **W1, the 1MB AT** (12.1 item 5), by capping the park: `setpmem` of
-`mega_parkcap` (linear `0x600 +` its `.text` offset, `0x704D` in this build)
-to 192: E9 `parked 00C0K`, the program reports **130 KB**, and the desktop
+`mega_parkcap` (linear `0x600 +` its `.text` offset, `0x704D` in this build;
+a `MEGADIAG=1` kernel's only since kern_mega size pass 2) to 192: E9 `parked 00C0K`, the program reports **130 KB**, and the desktop
 comes back with the 447 KB left in place untouched (it is in the sum).
 
 **W3** in Bochs: `XMSPROBE.COM` through the park comes home with **exit code

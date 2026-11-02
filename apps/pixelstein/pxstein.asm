@@ -208,6 +208,21 @@ pxl_lev:
 ; out: BX = 0, CF clear - and the kernel re-homes instead of publishing us
 ; -----------------------------------------------------------------------------
 pxl_entry:
+    ; ONE OPERATION FOR THE WHOLE LAUNCH (SPEC.md 12.8.10): the carve, the
+    ; level stream and the art masters are three reads in 32KB takes, and the
+    ; file widget filled once a take. The total is the three rows' PACKED
+    ; lengths, which is what is read; on a machine that is refused the masters
+    ; it is an OVER-estimate and the bar ends short. op_load's and op_fetch's
+    ; own begins are refused as nesting and leave this one alone. The begin's
+    ; flags ride the stack to .out, the one exit, which ends only what it began
+    mov cx, [op_table + OP_T_ROWS + PX_PART_BODY * OP_ROW + OP_R_ZKB]
+    xor dx, dx
+    add cx, [op_table + OP_T_ROWS + PX_PART_LEV * OP_ROW + OP_R_ZKB]
+    adc dx, dx
+    add cx, [op_table + OP_T_ROWS + PX_PART_ART * OP_ROW + OP_R_ZKB]
+    adc dx, 0
+    call OSAPI_FS_OP                ; CF = 0: ours to end; SI and ES kept
+    pushf
     ; THE RESERVE (97.9; review, wave 6): op_load's optional parts are ALL OR
     ; NONE against the largest free run AS IT STANDS, and it knows nothing of
     ; the two claims a launch still has to make after it - the level stream
@@ -251,12 +266,13 @@ pxl_entry:
     jz .noart                       ; nothing
     mov al, PX_PART_ART             ; ...AND ONLY WHEN THE MASTERS' FETCH AND
     call op_row                     ; THE PROGRAM'S SHADOW AFTER IT both fit
-    call op_lazykb                  ; the largest run (review, wave 6): the
+    call op_lazyp                   ; the largest run (review, wave 6): the
     jc .noart                       ; masters kept and the shadow refused
-    add ax, PXL_SHKB                ; would be a game that cannot open, for
-    mov dx, ax                      ; the sake of textures. op_lazykb is the
-    call OSAPI_MEM_AVAIL            ; claim op_fetch will make, R and all;
-    cmp ax, dx                      ; DX, since the answer is AX and BX
+    add ax, PXL_SHKB * 64           ; would be a game that cannot open, for
+    mov dx, ax                      ; the sake of textures. op_lazyp is the
+    mov bl, MEMP_AVAIL              ; claim op_fetch will make, R and all, in
+    call OSAPI_MEM_P                ; PARAGRAPHS as MEMP_AVAIL answers (SPEC.md
+    cmp ax, dx                      ; 50.3.7); DX, since the answer is AX and BX
     jb .noart
     call pxl_art                    ; AX = the expanded masters, or 0
     mov [pxl_aseg], ax
@@ -314,10 +330,21 @@ pxl_entry:
     jc .no
     xor bx, bx                      ; NO WINDOW: ours is the region that is
     clc                             ; about to be freed (SPEC.md 20.12.10.6)
-    ret
+    jmp short .out
 .no:
     stc                             ; ...and the kernel tears down what exists.
-    ret                             ; op_load has already said why in a toast
+                                    ; op_load has already said why in a toast
+.out:
+    pop ax                          ; the begin's flags; ours stand
+    pushf
+    shr al, 1                       ; CF = the begin was refused
+    jc .kept
+    xor cx, cx
+    mov dx, cx
+    call OSAPI_FS_OP                ; the end
+.kept:
+    popf
+    ret
 
 ; --- the table, and the standard's own code after it (SPEC.md 20.12.3) ------
     OS88_PARTS_BEGIN PX_NPARTS

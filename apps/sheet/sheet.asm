@@ -2609,9 +2609,19 @@ sh_entry:
     call OSAPI_SEG                     ; kern_mega's protected mode a selector
     mov [sh_noteseg], dx               ; the kernel moves with the claim (MC7)
     pop dx
+    jc .fail                           ; (no LDT entry: DX kept, the BORDER
+                                       ; table's - refused, never written as
+                                       ; the note table over it)
+    push dx
+    mov dx, [sh_noteseg]               ; ...and sh_rc_sides's row-height
+    mov ax, SH_ROWH_OFF / 16           ; window, asked here where a refusal
+    call OSAPI_SEG                     ; has somewhere to go: there it is the
+    pop dx                             ; same window asked again, which the
+    jc .fail                           ; kernel answers without a new entry
     mov ax, (SH_CLAIM_BORD_KB + SH_CLAIM_NOTE_KB) * 64
     call OSAPI_SEG                     ; ...and the table list past all five
     mov [sh_tblseg], dx                ; of the note claim's KB (81.114.7)
+    jc .fail
     mov word [sh_ntbl], 0
     mov word [sh_nbord], 0
     call sh_colw_clear                 ; every column the standard width (81.56)
@@ -3432,10 +3442,12 @@ sh_rc_sides:
     xor cx, cx                        ; selector in the claim under kern_mega,
     call OSAPI_SEG                    ; where a sum on one names nothing - MC7)
     pop ax
-    mov cx, [es:SH_ROWH_N]
+    jc .rh                            ; (made at sh_entry, so never refused -
+    mov cx, [es:SH_ROWH_N]            ; and refused, DX is the NOTE table's)
     mov bx, SH_ROWH_REC
     call sh_rc_table
     mov [es:SH_ROWH_N], cx
+.rh:
     pop es
 .out:
     pop dx

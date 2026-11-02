@@ -35,16 +35,17 @@ about what the module DECIDED, not about pixels:
   H  a Disk window's bar carries no 'Sticky Apps' cell - that menu is the
      desktop's (SPEC.md 22.28.1).
   G  a second boot with six more Sticky Apps - one-sector stubs, a header
-     and a card - lists nine, PAGED (a page smaller than nine and a pager
-     row); a release on the pager turns to page 2 and the panel STAYS UP;
-     a click off it then closes it with nothing posted.
+     and a card - nine on the disk, lists STM_MAX (eight), PAGED (a page
+     smaller than that and a pager row); a release on the pager turns to
+     page 2 and the panel STAYS UP; a click off it then closes it with
+     nothing posted.
 
 **BREAK IT ON PURPOSE** (docs/WRITING-TESTS.md 1): clear DESKCAL's
 OS88_F_STIK and A fails (no card, nothing listed); make stm_track_x drop the
 image whatever the track answered and B fails (the posted act finds
 mod_gone); call wm_close_req instead of app_close_win in stm_a_close and F's
-row check fails (the negotiator is cleared before the close); take stm_thaw
-out of stm_loadpics and C reads [fpg_on] 1 and the clock as the shape (both
+row check fails (the negotiator is cleared before the close); take the call
+to stm_thaw out of smn_track and C reads [fpg_on] 1 and the clock as the shape (both
 measured on the kernel before it); put menu_s_stik back in fm_menus and H
 fails.
 """
@@ -266,7 +267,7 @@ def paging(tmp):
         subprocess.run(["mcopy", "-o", "-i", img, f,
                         "::/STIKAPPS/PAGE%d.O88" % k], check=True, env=env,
                        stdout=subprocess.DEVNULL)
-    print("G: nine Sticky Apps page")
+    print("G: nine Sticky Apps on the disk: STM_MAX listed, paged")
     with os88marty.launch(img, machine=os88marty.machine(
             "os8088_xt_vga", None), boot=True) as m:
         ui = os88ui.UI(m)
@@ -275,7 +276,8 @@ def paging(tmp):
         menu = Menu(m, ui)
         slabs = menu.drop()
         n, shown = menu.b("stm_n"), menu.b("stm_shown")
-        check(n == 9, "nine listed (%d)" % n)
+        check(n == EQ["STM_MAX"], "STM_MAX (%d) listed of nine (%d)"
+              % (EQ["STM_MAX"], n))
         check(menu.b("stm_paged") == 1 and shown < n,
               "paged: %d a page of %d" % (shown, n))
         pg = [i for i, s in enumerate(slabs) if s["kind"] == SK_PAGE]

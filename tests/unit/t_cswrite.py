@@ -68,7 +68,102 @@ XCHG = re.compile(r"^\s*" + LABEL +
 # which is `cs:` on every build but kern_mega: on any line that is not a CSDO
 # it is a write through CS again, and counts as one
 CSEGW = re.compile(r"\[\s*CSEG\b", re.I)
-CSDOL = re.compile(r"^\s*" + LABEL + r"CSDO\b", re.I)
+CSDOL = re.compile(r"^\s*" + LABEL + r"CSDOF?\b", re.I)
+# CSDO_ON ... CSDO_OFF is CSDO for a RUN (kernel/kernel.asm): every line
+# inside it runs with DS = the image on kern_mega, so a `[CSEG x]` there is
+# converted as a CSDO line is - and the run is held to the macro's own rules
+# here, because breaking one assembles cleanly on every build and is wrong
+# only on kern_mega. A run is ENTERED ONLY AT ITS CSDO_ON AND LEFT ONLY AT ITS
+# CSDO_OFF: a label inside it is named by nothing outside it, and a jump
+# inside it goes to a label inside it (a loop is fine; `.x` labels are taken
+# as local to the last plain label, which is how nasm scopes them); no call,
+# return, int, string instruction, macro or nested CSDO; no push or pop that
+# does not balance inside the run (its `pop ds` would take the wrong word);
+# DS itself neither read nor written; and every memory operand names its
+# segment or a BP base - [CSEG x], [cs:x], [es:x], [ss:x], [bp...] - because
+# a plain `[x]` inside a run would read the IMAGE, not the kernel
+RUNON = re.compile(r"^\s*CSDO_ON\s*$", re.I)
+RUNOFF = re.compile(r"^\s*CSDO_OFF\s*$", re.I)
+RUNLABEL = re.compile(r"^\s*([A-Za-z_.$@?][\w.$@?#~]*):", re.I)
+RUNJUMP = re.compile(r"^\s*(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?"
+                     r"(j\w+|loop\w*)\s+(?:short\s+|near\s+)?([\w.$@?]+)\s*$",
+                     re.I)
+RUNFLOW = re.compile(
+    r"^\s*(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?"
+    r"(?:j\w+|call|ret\w*|iret|int\w*|loop\w*|lds|les|"
+    r"(?:rep\w*\s+)?(?:movs|lods|stos|cmps|scas|ins|outs)[bw]?|xlatb?|"
+    r"CSDOF?|CSDO_SP|CSDO_ON|PUSH_CSDATA|[A-Z_][A-Z0-9_]+)\b")
+RUNPUSH = re.compile(r"^\s*(?:[A-Za-z_.$@?][\w.$@?#~]*:\s*)?(push|pop)\w*\b",
+                     re.I)
+RUNDS = re.compile(r"\bds\b", re.I)
+RUNMEM = re.compile(r"\[([^\]]*)\]")
+RUNSEG = re.compile(r"^\s*(?:(?:byte|word|dword)\s+)?(?:CSEG\b|[ces]s\s*:)"
+                    r"|^\s*(?:(?:byte|word|dword)\s+)?bp\b", re.I)
+REFNAME = re.compile(r"(?<![\w.$@?])(\.?[A-Za-z_$@?][\w.$@?#~]*)")
+
+
+def runcheck(code_lines):
+    """[(line, what)] for every breach of a CSDO_ON run's rules."""
+    out, start, depth = [], None, 0
+    scope = ""
+    inside = {}                         # qualified label -> its run's start
+    refs = []                           # (line, qualified name, run start)
+    for i, l, _where in code_lines:
+        if not l.strip() or l.lstrip().startswith("%"):
+            continue                    # preprocessor lines are not code
+        m = RUNLABEL.match(l)
+        if m and not m.group(1).startswith("."):
+            scope = m.group(1)
+        qual = lambda n: scope + n if n.startswith(".") else n
+        if RUNON.match(l):
+            if start is not None:
+                out.append((i + 1, "CSDO_ON inside a run"))
+            start, depth = i + 1, 0
+            continue
+        if RUNOFF.match(l):
+            if start is None:
+                out.append((i + 1, "CSDO_OFF with no CSDO_ON"))
+            elif depth:
+                out.append((i + 1, "the run's pushes and pops do not balance"))
+            start = None
+            continue
+        body = RUNLABEL.sub("", l, count=1) if m else l
+        for n in REFNAME.findall(body.split("[")[0] if "[" not in body
+                                 else body):
+            refs.append((i + 1, qual(n), start))
+        if start is None:
+            continue
+        if m:
+            inside[qual(m.group(1))] = start
+        j = RUNJUMP.match(l)
+        if j:
+            refs.append((i + 1, "JUMP " + qual(j.group(2)), start))
+        elif RUNFLOW.match(l):
+            out.append((i + 1, "a call, return, int, string instruction or "
+                               "macro inside a run"))
+        p = RUNPUSH.match(l)
+        if p:
+            depth += 1 if p.group(1).lower() == "push" else -1
+            if depth < 0:
+                out.append((i + 1, "a pop inside a run of what it never "
+                                   "pushed"))
+        if RUNDS.search(RUNMEM.sub("", body)):
+            out.append((i + 1, "DS named inside a run"))
+        for mm in RUNMEM.finditer(body):
+            if not RUNSEG.match(mm.group(1)):
+                out.append((i + 1, "`[%s]` inside a run names no segment"
+                            % mm.group(1).strip()))
+    if start is not None:
+        out.append((start, "a run with no CSDO_OFF"))
+    for line, name, run in refs:
+        if name.startswith("JUMP "):
+            if inside.get(name[5:]) != run:
+                out.append((line, "a jump inside a run to %s, outside it"
+                            % name[5:]))
+        elif name in inside and inside[name] != run:
+            out.append((line, "%s is inside a run and named outside it"
+                        % name))
+    return out
 PUSHCS = re.compile(r"^\s*" + LABEL + r"push\s+cs\s*$", re.I)
 POPSEG = re.compile(r"^\s*pop\s+(?:ds|es)\s*$", re.I)
 # ...and the two other spellings of "DS (ES) = the code segment": through a
@@ -150,9 +245,14 @@ def scan(path):
     arms kern_mega assembles (walk)."""
     lines, code_lines = walk(path)
     out = []
+    inrun = False
     for i, l, where in code_lines:
+        if RUNON.match(l):
+            inrun = True
+        elif RUNOFF.match(l):
+            inrun = False
         if WRITE.match(l) or XCHG.match(l) or \
-                (CSEGW.search(l) and not CSDOL.match(l)):
+                (CSEGW.search(l) and not CSDOL.match(l) and not inrun):
             out.append((i + 1, "write", where))
         elif PUSHCS.match(l):
             j = i + 1
@@ -217,6 +317,14 @@ def main():
                 print("%s:%d  %-5s  %s" % (p, line, kind, where))
         return
 
+    runs = 0
+    for p in sources():
+        _lines, code_lines = walk(os.path.join(ROOT, p))
+        for line, what in runcheck(code_lines):
+            check(False, "%s:%d: %s - CSDO_ON's rules (kernel/kernel.asm), "
+                         "which only kern_mega would show" % (p, line, what))
+        runs += sum(1 for _i, l, _w in code_lines if RUNON.match(l))
+
     reg = registry()
     for p, sites in sorted(found.items()):
         w = sum(1 for s in sites if s[1] == "write")
@@ -245,7 +353,8 @@ def main():
     total_w = sum(r[0] for r in reg.values())
     total_q = sum(r[1] for r in reg.values())
     done("cswrite: %d writes through CS and %d push cs/pop pairs in %d files, "
-         "none new" % (total_w, total_q, len(reg)))
+         "none new; %d CSDO_ON runs within their rules"
+         % (total_w, total_q, len(reg), runs))
 
 
 if __name__ == "__main__":

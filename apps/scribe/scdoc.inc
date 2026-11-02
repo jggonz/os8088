@@ -1436,13 +1436,13 @@ sc_docparse:
     mov [sc_dccp], ax
     mov byte [sc_dtrunc], 1
 .fits:
-    mov ax, [sc_dccp]
-    add ax, 1023
+    mov ax, [sc_dccp]               ; <= SC_MAXKB * 1024: no carry
+    add ax, 15
     push cx
-    mov cl, 10
-    shr ax, cl
+    mov cl, 4
+    shr ax, cl                      ; the text's paragraphs...
     pop cx
-    inc ax
+    add ax, 64                      ; ...and a kilobyte to type into
     call sc_resize
     jc .no
     mov word [sc_papn], 1           ; a fresh dictionary: entry 0 is Normal
@@ -2668,17 +2668,20 @@ sc_dpic1:
     or dx, dx
     jnz .no
     mov cx, ax
-    add ax, 1023
-    jc .no
+    add ax, 15                      ; ...its own claim, in PARAGRAPHS (SPEC.md
+    jc .no                          ; 50.3.7): a picture is a byte count
+    push bx
     push cx
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    pop cx
-    or ax, ax
     jnz .kb
-    mov ax, 1
+    inc ax                          ; (never 0: a claim of nothing refuses)
 .kb:
-    call OSAPI_MEM_CLAIM            ; out DX = the base segment
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; out DX = the base segment
+    pop cx
+    pop bx
     jc .no
     mov [sc_dpicsg], dx
     call sc_dpicexp                 ; 1bpp -> 4bpp, into that claim

@@ -1316,22 +1316,26 @@ dkx_map:
     push si
     push di
     xor bx, bx
+    CSDO_ON
 .fill:                          ; identity, which is the whole answer when
-    CSDO mov [CSEG dock_pos+bx], bl ; every slot has a tile
+    mov [CSEG dock_pos+bx], bl  ; every slot has a tile
     inc bx
     cmp bx, INST_MAX
     jb .fill
+    CSDO_OFF
     mov dl, [cs:dock_cap]
     cmp dl, INST_MAX
     jae .out
 
     mov al, 0FFh                ; --- packed: nothing yet
     xor bx, bx
+    CSDO_ON
 .none:
-    CSDO mov [CSEG dock_pos+bx], al
+    mov [CSEG dock_pos+bx], al
     inc bx
     cmp bx, INST_MAX
     jb .none
+    CSDO_OFF
 
     xor cx, cx                  ; CL = live, CH = live and minimized
     mov si, inst_tab
@@ -1480,8 +1484,10 @@ dkx_pass:
     mov ax, [ticks]
     cmp byte [cs:dock_timer_on], 0
     jne .elapsed
-    CSDO mov [CSEG dock_timer_tick], ax
-    CSDO inc byte [CSEG dock_timer_on]
+    CSDO_ON
+    mov [CSEG dock_timer_tick], ax
+    inc byte [CSEG dock_timer_on]
+    CSDO_OFF
     jmp short .out
 .elapsed:
     sub ax, [cs:dock_timer_tick]

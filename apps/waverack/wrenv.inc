@@ -237,8 +237,9 @@ we_clamp:
 
 ; -----------------------------------------------------------------------------
 ; we_envsize - the envelope for [wo_frames] (SPEC.md 123.5)
-; out: CL = the block shift, BX = the blocks, AX = the claim in KB (0: an
-;      empty sound, no claim). clobbers CH, DX
+; out: CL = the block shift, BX = the blocks, AX = the claim in PARAGRAPHS
+;      (OSAPI_MEM_P's, SPEC.md 50.3.7; 0: an empty sound, no claim).
+;      clobbers CH, DX
 ; -----------------------------------------------------------------------------
 we_envsize:
     mov cl, 4
@@ -276,11 +277,11 @@ we_envsize:
     jne .kb
     shl ax, 1
 .kb:
-    add ax, 1023
-    mov al, ah                      ; >> 10
-    shr al, 1
-    shr al, 1
-    xor ah, ah
+    add ax, 15                      ; <= 8 KB of bytes: >> 4 to paragraphs,
+    shr ax, 1                       ; no carry
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
     ret
 .more:
     pop dx
@@ -321,6 +322,18 @@ we_rescan:
     mov ax, [wo_frames]
     or ax, [wo_frames+2]
     jz we_scandone
+    mov cx, [si+WS_FRM]             ; ONE BAR for the scan (SPEC.md 12.8.10),
+    mov dx, [si+WS_FRM+2]           ; parked between the gulps: every frame
+    mov al, [si+WS_SH]              ; read once, frames << shift - exact.
+.ob:                                ; Ended by we_scandone, or by wo_empty
+    dec al                          ; when the scan is abandoned (Stop, an
+    js .obg                         ; Open, a read error)
+    shl cx, 1
+    rcl dx, 1
+    jmp short .ob
+.obg:
+    mov al, WRO_SCAN
+    call wr_opbeg
     mov byte [we_busy], 1
     call we_scansay
     jmp wr_arm
@@ -414,6 +427,8 @@ we_scanstep:
 ; we_scandone - the last part block stored, the cache built, and the status
 ; bar's note (or Ready). clobbers AX, CX, DX, SI, DI
 we_scandone:
+    mov al, WRO_SCAN                ; the scan's bar: over
+    call wr_opend
     mov ax, [we_acc]
     cmp ax, WE_EMPTY
     je .none

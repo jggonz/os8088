@@ -2412,15 +2412,16 @@ void *os88_main(void)
      * a2_chr holds everything any composer reads of it from here on - the P5
      * ROM no slot maps yet (section 14) and the pad, so a shrink in place
      * (SPEC.md 50.3.1 path 1, which cannot move the base) hands 2,560 bytes
-     * and the KB rounding over them back to the heap: a 15KB carve becomes
-     * 12KB, or 13 where the run starts half a cluster up. The claim's BASE
-     * is the carve's and not the part's (a run starts on a cluster boundary,
-     * SPEC.md 20.12.2), so the size kept is the head slack plus the main ROM.
-     * A refusal leaves the claim as it was, which is only the old cost. */
-    os88_mem_regrow(a2_opbase,
-                    (int)(((os88_seg_para(a2_m.romseg)
-                            - os88_seg_para(a2_opbase)) * 16u + A2_ROM_KEEP
-                           + 1023u) >> 10));
+     * and the rounding over them back to the heap - to the GRANULE, the
+     * regrow being in paragraphs (SPEC.md 50.3.7). The claim's BASE is the
+     * carve's and not the part's (a run starts on a cluster boundary, SPEC.md
+     * 20.12.2), so the size kept is the head slack plus the main ROM. A
+     * refusal leaves the claim as it was, which is only the old cost. A
+     * kern_mega pool block is resized too (OSAPI_MEM_P's MEMP_REGROW arm
+     * takes one, to the KB). */
+    os88_mem_regrow_p(a2_opbase,
+                      os88_seg_para(a2_m.romseg) - os88_seg_para(a2_opbase)
+                      + ((A2_ROM_KEEP + 15u) >> 4));
     /* ...built FROM ITSELF (apps size pass 1): i's low bit is the reversal's
      * bit 6, and the reversal of the other six is the reversal of i >> 1
      * shifted down one - whose bit 0 is i >> 1's bit 6, which is 0. One

@@ -205,9 +205,8 @@ clip_get:
     pop cx                      ; CF = 0 from the `xor si, si` above: neither
     jmp short .out              ; `rep movsb` nor a pop writes a flag
 .empty:
-    xor cx, cx
-    stc
-.out:
+    mov cx, ax                  ; 0 - clip_size's AX - and CF is still its 1:
+.out:                           ; `mov` writes no flag (kernel size pass 17, -1)
     pop ds
     pop di
     pop si

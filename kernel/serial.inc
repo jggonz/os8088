@@ -267,10 +267,12 @@ srl_open:
     cmp bl, [mou_port]
     je .mouse
 .take:
-    CSDO mov [CSEG srl_base], ax
-    CSDO mov [CSEG srl_seg], es
-    CSDO mov [CSEG srl_buf], si
-    CSDO mov [CSEG srl_owner], dh
+    CSDO_ON
+    mov [CSEG srl_base], ax
+    mov [CSEG srl_seg], es
+    mov [CSEG srl_buf], si
+    mov [CSEG srl_owner], dh
+    CSDO_OFF
     mov dl, [mou_seen]          ; settled or not, as the lease begins: what
     CSDO mov [CSEG srl_seen], dl ; srl_close asks of the contest
     mov [ser_row], bx

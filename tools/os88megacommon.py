@@ -243,6 +243,16 @@ class MegaMixin(object):
         # protected mode) `.cold` is where the map puts it, COLD_SEG * 16
         return os88sym.linear(name, defines)
 
+    def tail(self, name, defines=()):
+        """The linear address of a table in kern_mega's TABLES' TAIL
+        (os88sym.TAIL: mx_tab, mem_sel, mega_wtab, mega_ustab): above 1MB,
+        where this machine's tables are, since kern_mega size pass 2 - so it
+        is read off the guest (os88sym.tail), and `sym` refuses the name."""
+        import os88sym
+        return os88sym.tail(name, self.read,
+                            lambda n: self.sym(n, defines),
+                            os88sym.equates(defines))
+
     def lin(self, seg, off=0):
         """The linear address of SEG:OFF, SEG a real segment or a selector."""
         s = self.selector(seg)

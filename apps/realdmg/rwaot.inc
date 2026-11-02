@@ -210,10 +210,10 @@ rw_aname:
     mov cl, 3
     shl bx, cl
     mov ax, [op_table + OP_T_ROWS + bx + OP_R_OFF]
-    mov dx, ax
-    mov cl, 9
-    shl ax, cl
-    mov cl, 7
+    mov dx, ax                      ; `off` is PARAGRAPHS (SPEC.md 20.12.2):
+    mov cl, OP_GSH                  ;   rw_acopy reads from the cluster at
+    shl ax, cl                      ;   or below and skips to it
+    mov cl, 16 - OP_GSH
     shr dx, cl
     mov [rw_arombase], ax
     mov [rw_arombase + 2], dx
@@ -685,11 +685,11 @@ rw_apart:
     mov [rw_awant], cx
     mov [rw_adst], di
     mov si, [rw_arow]
-    mov ax, [si + OP_R_OFF]         ; DX:AX = the part's byte offset
-    mov dx, ax
-    mov cl, 9
+    mov ax, [si + OP_R_OFF]         ; DX:AX = the part's byte offset, from
+    mov dx, ax                      ;   PARAGRAPHS (SPEC.md 20.12.2)
+    mov cl, OP_GSH
     shl ax, cl
-    mov cl, 7
+    mov cl, 16 - OP_GSH
     shr dx, cl
     call rw_acopy
     jc .no
@@ -1325,8 +1325,9 @@ rw_hyload:
 .pe:
     pop dx
 .free:
-    mov ax, [rw_hybase]
-    call OSAPI_XMEM_FREE
+    mov ax, [rw_hybase]             ; DX:AX = the base: on .pe and after
+    mov dx, [rw_hybase + 2]         ;   rw_apart DX holds a selector, and a
+    call OSAPI_XMEM_FREE            ;   refused free orphaned the block
     xor ax, ax
     mov [rw_hybase], ax
     mov [rw_hybase + 2], ax

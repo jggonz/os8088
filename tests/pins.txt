@@ -101,14 +101,6 @@ N kernel/mega.inc MEM_K_MTBL             # kern_mega's descriptor tables (82KB o
                                          # opens a hole over it (NO-PINNING-PLAN
                                          # 5 #6). K3, deferred as niche (a 286
                                          # with under 192KB of extended memory)
-N kernel/stikmenu.inc MEM_K_MOD          # the Sticky Apps panel's SECOND save-
-                                         # under ([stm_sseg2]), held while the
-                                         # panel is open - a user wait. The first
-                                         # one is menu_drop's and moves
-                                         # (menu_reloc); this one has no proc, and
-                                         # it is tagged MEM_K_MOD though it is no
-                                         # module, so the runtime half would read
-                                         # it as one
 
 # --- drivers -------------------------------------------------------------------
 
@@ -161,6 +153,18 @@ C apps/os88xgap.inc @xg_gap              # an 8KB scratch at the DMA door for on
 
 # --- packages: bucket C - one callback, command, call or bracket ---------------
 
+D apps/syscheck/disk.inc sc_wseg         # FSCHECK.DRV's workspace (SPEC.md 118.14.2):
+                                         # int 13h moves sectors straight into it
+                                         # on every step of a disk task, a claim at
+                                         # the DMA door, freed when the task ends
+X apps/syscheck/disk.inc sc_fseg         # FSCHECK.DRV, KERNEL CODE the kernel far-
+                                         # calls on every step (118.14.1): a claim
+                                         # made inside a step - the read-ahead
+                                         # cache's - could compact it out from
+                                         # under CS, exactly why a MEM_K_MOD image
+                                         # is pinned. Kept for the window's life
+                                         # because the folder it was read from may
+                                         # itself be moved by the defragmenter
 C apps/notepad/notepad.asm np_stgseg     # the save's CR/LF staging, held only
                                          # across the OSAPI_FILE_WRITE it is the
                                          # ES:BX of
@@ -217,6 +221,9 @@ C apps/stiknote/stiknote.asm @sn_flip    # the note read whole for a checkbox fl
                                          # and written back, inside one callback
 C apps/syscheck/out.inc sc_rseg          # Save Report's text, composed and written
                                          # inside one command
+C apps/syscheck/out.inc @sc_rmone       # a refused driver read whole for
+                                         # FSCHECK.DRV to judge (SPEC.md
+                                         # 118.8.2), freed inside the call
 C apps/syscheck/scan.inc @sc_man_expand  # a packed driver read whole for its
                                          # header, freed inside the call
 C apps/skies/csraster.inc cs_shseg       # the flight shadow, claimed on the way
@@ -254,6 +261,25 @@ C apps/dos/dos.asm dos_arena             # a DOS program's arena: the program is
                                          # dos_run's call
 C apps/dos/dosload.asm op:DOS_PART_CORE  # the core, fetched, copied into place
                                          # and op_drop'ed inside one call
+C apps/dos/dosload.asm @dsl_w16         # one cluster to read a document's MZ/NE
+                                         # header (SPEC.md 124.3.1), claimed and
+                                         # freed inside dsl_w16, before op_load
+X apps/os88pself.inc @op_self           # op_self hands its claim to the CALLER
+                                         # pinned, because the part is still
+                                         # being read into it: HELP prints and
+                                         # frees it inside the one HELP command
+                                         # (dosc.inc), and DOS's network claim
+                                         # is declared movable by dos_pkt_rloc
+                                         # once PN_D_INIT returns (SPEC.md
+                                         # 96.23.11). DOS's SETUP part keeps it
+                                         # pinned from Setup's open to its
+                                         # Return or the next dos_run (SPEC.md
+                                         # 96.32.2.3): it is CODE, far-called,
+                                         # with its own return addresses on the
+                                         # stack across os88ui's save-under
+                                         # claim, so a move would return into
+                                         # the old block - a wall only while
+                                         # the page is up
 C apps/wirefleet/wfsound.inc op:WF_P_SFX # the samples part, fetched and dropped
                                          # inside wf_pcm_open's one call
 C apps/c64/c64kbd.c ovl_clip_service:seg # Copy's staging, claimed and freed
@@ -368,6 +394,17 @@ C apps/xtmp3/x3pars.inc x3p_pseg         # the front end's probe scratch,
 D apps/xtmp3/x3eng.inc x3_xseg           # the external ring a DSP 3.00+ plays
                                          # by auto-init DMA (OSAPI_MEM_CLAIM_DMA_HI,
                                          # SPEC.md 121.6), freed at the play's stop
+X drivers/ramdisk/rdstore.inc @rd_claimp # rd_claim's OSAPI_MEM_P twin (SPEC.md
+                                         # 50.3.7): it JUMPS into rd_claim's tail,
+                                         # which stores DX at [bx] and declares it
+                                         # with rd_reloc at once - a jmp into
+                                         # another routine's label this scan does
+                                         # not follow
+X apps/browser/browser.asm @br_claimp    # br_claim's twin on OSAPI_MEM_P (SPEC.md
+                                         # 50.3.7) and for br_claim's reason below:
+                                         # it unpins the page claims after the call,
+                                         # and every caller stores DX in a word
+                                         # br_reloc names and declares it at once
 X apps/browser/browser.asm @br_claim     # a CLAIM WRAPPER this scan cannot see
                                          # through (it unpins the page claims after
                                          # the call, SPEC.md 71.14.1): every caller
@@ -460,9 +497,9 @@ N apps/waverack/wrsave.inc ws_oseg     # a save's output claim (16-32KB), held
 
 # --- WIN16 (SPEC.md 124) and DOS.O88's hand-off to it ------------------------
 
-C apps/dos/dosw16.inc @dos_w16_try       # the first two clusters of an .EXE,
+C apps/dos/dosw16.inc @dos_w16_go       # the first two clusters of an .EXE,
                                          # read to find an NE header and freed
-                                         # inside the one dos_w16_try call
+                                         # inside the one dos_w16_go call
 C apps/win16/w16load.inc w16_fseg        # the program's whole file, claimed and
                                          # freed inside one w16_load call
 C apps/win16/w16cens.inc w16c_cseg       # the CPU census's work block, claimed

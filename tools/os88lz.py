@@ -37,6 +37,7 @@ NO THIRD-PARTY IMPORTS, deliberately - `make` needs nasm and python3 and the
 plan is not going to be the thing that adds a pip install to the build.
 """
 import sys
+from collections import deque
 
 # --- format ids, as stored in a header's format field ------------------------
 LZ4, LZB = 0, 1
@@ -80,16 +81,24 @@ class Chains:
             self.head[k] = self.at
             self.at += 1
 
-    def find(self, pos, maxoff, maxlen, depth):
-        """longest match at pos: (length, offset), or (0, 0)."""
+    def find(self, pos, maxoff, maxlen, depth, seed=0, seed_off=0):
+        """longest match at pos: (length, offset), or (0, 0).
+
+        `seed` is a match already known to be there - the optimal parse hands
+        in the previous position's match one byte shorter, at the same offset
+        - so a candidate has to BEAT it, and the cheap reject below throws out
+        nearly every one with a single compare."""
         src = self.src
         limit = min(maxlen, len(src) - pos)
         if limit < self.minlen:
             return 0, 0
         self.insert_to(pos)
+        best_l, best_o = min(seed, limit), seed_off
+        if best_l >= limit:
+            return best_l, best_o
         lo = pos - maxoff
         c = self.prev[pos] - 1
-        best_l, best_o, k = 0, 0, 0
+        k = 0
         while c >= 0 and c > lo and k < depth:
             k += 1
             if src[c + best_l] == src[pos + best_l]:      # cheap reject
@@ -193,18 +202,150 @@ def _lz4_emit(out, lits, mlen, off):
             out.append(n)
 
 
-def lz4_compress(src, depth=128, tail=True):
-    """Hash chains with a two-step lazy parse.
+LZ4_SKIP = 256                  # a match this long is followed, not searched
+                                # inside: the next position's longest match is
+                                # taken to be this one a byte shorter
 
-    Lazy rather than a shortest-path DP because LZ4's literal run is carried in
-    the same token as the match, so the two are not separable and an exact
-    parse costs far more than the fraction of a percent it buys - measured
-    against the reference `lz4hc` at level 12 while this was written.
+
+def lz4_compress(src, depth=512, tail=True, parse="opt"):
+    """An OPTIMAL parse over hash chains - the cheapest LZ4 stream for the
+    matches the chains find, priced in the format's real bytes.
+
+    LZ4 carries a literal run and the match after it in ONE token, and a run
+    of 15 or more costs extension bytes (one more every 255), so the price of
+    a literal depends on how long its run already is and a forward
+    shortest-path over positions is not exact. A BACKWARD one over SEQUENCE
+    STARTS is: F[i], the cheapest encoding of src[i:] when a sequence begins
+    at i, is the cheaper of "all literals to the end" and
+
+        1 + k + litext(k) + G[i + k]          over every run length k >= 0
+
+    where G[j] is a match at j plus F after it. litext(k) is 0 below 15 and
+    1 + (k - 15) // 255 above, so k < 15 is fifteen lookups and the rest is
+    one quantity per position computed off the one 255 places on - a sliding
+    window minimum and a recurrence, which makes it exact for every run
+    length at O(1) a position. Every match length from 4 to the longest at
+    that offset is legal and costs the same two offset bytes, so G[j] tries
+    lengths 4..32 exactly and, past that, the longest and the last length of
+    each 255-step extension tier.
+
+    The two places it is not exact are the MATCH FINDER's, and both are for
+    time: each position's search is seeded with the previous position's match
+    a byte shorter (so a candidate must beat it, and the cheap reject throws
+    nearly all of them out), and inside a match longer than LZ4_SKIP the
+    search is not made at all - which took GBDEMO.GB, 32KB of mostly one
+    pattern, from 3.0 s to 0.2 s for 0 bytes and BEVERLY.MOD's 1.8 s to 1.3.
+
+    It replaced a two-step lazy parse whose docstring said an exact parse
+    "costs far more than the fraction of a percent it buys": it buys 0.3-0.8%
+    on code and ~1.3% on BEVERLY.MOD (docs/reports/DOS-PACKED-COST-2026-11-01.md
+    section 4 row 3) - 9,794 bytes over a clean `make`'s 220 streams - for
+    ~11 s more encoder CPU spread over make's jobs. SAME FORMAT, same
+    raw tail (SPEC.md 20.13.7, `_cut`), same MFLIMIT and LASTLITS rules, so
+    every decoder in the tree reads it unchanged. Deterministic: no hashing
+    of anything but the input, ties broken by position.
 
     `tail=False` is the CLASSIC block - no T word, the last sequence literals
     only - and exists for one caller: the boot blob's own decoder
-    (tools/os88kz.py, boot/boot2.asm kz_expand).
+    (tools/os88kz.py, boot/boot2.asm kz_expand). `parse="lazy"` is the old
+    encoder, for an A/B.
     """
+    if parse == "lazy":
+        return _lz4_lazy(src, depth, tail)
+    src = bytes(src)
+    n = len(src)
+    if n <= MFLIMIT:
+        return _lz4_lazy(src, depth, tail)       # one literal sequence either way
+    ch = Chains(src, MINMATCH)
+    lim = n - MFLIMIT
+    mend = n - LASTLITS
+    INF = 1 << 60
+    # the longest match at every legal start, each seeded by the one before
+    ml = [0] * n
+    mo = [0] * n
+    pl = po = 0
+    for i in range(lim):
+        mx = min(mend - i, LZ_MAXLEN)
+        if pl > LZ4_SKIP:
+            pl, po = min(pl - 1, mx), po
+        else:
+            pl, po = ch.find(i, 65535, mx, depth,
+                             pl - 1 if pl > MINMATCH else 0, po)
+        ml[i] = pl
+        mo[i] = po
+    F = [0] * (n + 1)           # cheapest from a sequence starting at i
+    D = [-1] * (n + 1)          # ...whose match starts at D[i]; -1 = literals
+    G = [INF] * (n + 1)         # a match at j, and everything after it
+    GL = [0] * (n + 1)          # ...of this length
+    H = [INF] * (n + 256)       # G[j] + j
+    Q = [INF] * (n + 256)       # min over j >= x of H[j] + (j - x) // 255
+    QA = [-1] * (n + 256)       # ...at this j
+    win = deque()               # sliding minimum of H over [x, x + 254]
+    F[n] = 1                    # the empty last-literals token
+    for i in range(n - 1, -1, -1):
+        L = ml[i] if i < lim else 0
+        if L:
+            top = L if L < 33 else 32
+            best, bl = INF, 0
+            for k in range(MINMATCH, top + 1):
+                c = F[i + k] if k < 19 else F[i + k] + 1
+                if c <= best:
+                    best, bl = c, k
+            if top < L:
+                t, e = 273, 1
+                while t < L:
+                    c = F[i + t] + e
+                    if c <= best:
+                        best, bl = c, t
+                    t += 255
+                    e += 1
+                c = F[i + L] + 1 + (L - 19) // 255
+                if c <= best:
+                    best, bl = c, L
+            G[i] = best + 2
+            GL[i] = bl
+            H[i] = best + 2 + i
+        x = i + 15
+        if x <= n:
+            hx = H[x]
+            while win and H[win[0]] >= hx:
+                win.popleft()
+            win.appendleft(x)
+            while win[-1] > x + 254:
+                win.pop()
+            wj = win[-1]
+            if Q[x + 255] + 1 < H[wj]:
+                Q[x], QA[x] = Q[x + 255] + 1, QA[x + 255]
+            else:
+                Q[x], QA[x] = H[wj], wj
+        rem = n - i
+        best = 1 + rem + (0 if rem < 15 else 1 + (rem - 15) // 255)
+        bd = -1
+        for j in range(i, min(i + 15, lim)):
+            c = 1 + (j - i) + G[j]
+            if c < best:
+                best, bd = c, j
+        if x <= n and QA[x] >= 0 and 2 - i + Q[x] < best:
+            best, bd = 2 - i + Q[x], QA[x]
+        F[i] = best
+        D[i] = bd
+    out = bytearray(2)
+    bounds = [(0, 2)]
+    i = 0
+    while D[i] >= 0:
+        j = D[i]
+        _lz4_emit(out, src[i:j], GL[j], mo[j])
+        i = j + GL[j]
+        bounds.append((i, len(out)))
+    _lz4_emit(out, src[i:n], 0, 0)
+    bounds.append((n, len(out)))
+    return _cut(src, out, bounds) if tail else bytes(out[2:])
+
+
+def _lz4_lazy(src, depth=128, tail=True):
+    """Hash chains with a two-step lazy parse - what the build shipped until
+    the optimal parse below replaced it, kept as `parse="lazy"` for the A/B
+    and for a caller that wants speed over the last 0.4%."""
     src = bytes(src)
     n = len(src)
     out = bytearray(2)
@@ -586,13 +727,88 @@ def lzb_decompress(buf, outlen):
 
 
 # =============================================================================
+# the near-call filter (SPEC.md 20.13.9) - a property of the STREAM, not of
+# either format, so it is kept out of both encoders and wraps them instead
+# =============================================================================
+LZ_ESC = 0xFFFF                 # a T word that says "filtered; the real T
+                                # follows". kernel/lz.inc's LZ_ESC, and an
+                                # older kernel REFUSES it: a tail of 0xFFFF
+                                # is longer than any stream under 64KB
+LZ_E8 = 0xE8                    # `call rel16`, the one opcode rewritten
+FILT_MAX = 0xFFFF               # the filter is defined over a stream offset
+                                # mod 64KB, and the decoder runs it over
+                                # ES:0..DI, so an output past a segment is
+                                # never filtered
+
+
+def bcj_encode(src):
+    """The filter: every E8 at a position p with two bytes after it has its
+    word operand made ABSOLUTE, `rel + p + 3` mod 64KB, and the operand is
+    stepped over. Two calls to one routine are then the same three bytes,
+    which is a match LZ4 can take and a `call` at its own site never was.
+    A data byte that happens to be E8 is rewritten too, and back: the walk
+    visits the same positions both ways because it never looks at a byte it
+    rewrote, so this is a bijection on any input (docs/reports/
+    DOS-PACKED-COST-2026-11-01.md section 5)."""
+    s = bytearray(src)
+    i, n = 0, len(s)
+    while i + 3 <= n:
+        if s[i] == LZ_E8:
+            v = (s[i + 1] | s[i + 2] << 8) + i + 3
+            s[i + 1] = v & 0xFF
+            s[i + 2] = (v >> 8) & 0xFF
+            i += 3
+        else:
+            i += 1
+    return bytes(s)
+
+
+def bcj_decode(src):
+    """bcj_encode's inverse - kernel/lz.inc's `repne scasb` loop, byte for
+    byte: `p + 3` comes back off every operand it put one on."""
+    s = bytearray(src)
+    i, n = 0, len(s)
+    while i + 3 <= n:
+        if s[i] == LZ_E8:
+            v = (s[i + 1] | s[i + 2] << 8) - (i + 3)
+            s[i + 1] = v & 0xFF
+            s[i + 2] = (v >> 8) & 0xFF
+            i += 3
+        else:
+            i += 1
+    return bytes(s)
+
+
+def is_filtered(stream):
+    """True when a stream (with its T word, SPEC.md 20.13.7) carries the
+    filter's escape."""
+    return len(stream) >= 2 and int.from_bytes(stream[:2], "little") == LZ_ESC
+
+
+# =============================================================================
 # the two entry points everything else uses
 # =============================================================================
-def compress(data, fmt=LZ4, tail=True):
-    return lz4_compress(data, tail=tail) if fmt == LZ4 else lzb_compress(data)
+def compress(data, fmt=LZ4, tail=True, filt=False):
+    """`filt`: also try the near-call filter and keep whichever stream is
+    SHORTER - per file, so data never takes it (SPEC.md 20.13.9). Only a
+    stream with a tail can carry the escape, and only an output the decoder
+    can address from one segment can be filtered."""
+    z = lz4_compress(data, tail=tail) if fmt == LZ4 else lzb_compress(data)
+    if filt and tail and 3 <= len(data) <= FILT_MAX:
+        f = bcj_encode(data)
+        if f != bytes(data):
+            zf = compress(f, fmt)
+            if len(zf) + 2 < len(z):
+                return LZ_ESC.to_bytes(2, "little") + zf
+    return z
 
 
 def decompress(data, fmt, outlen, tail=True):
+    if tail and is_filtered(data):
+        if outlen > FILT_MAX:
+            raise ValueError(f"a filtered stream of {outlen} bytes - the "
+                             "filter stops at 64KB (SPEC.md 20.13.9)")
+        return bcj_decode(decompress(data[2:], fmt, outlen))
     if fmt == LZ4:
         return lz4_decompress(data, outlen, tail=tail)
     return lzb_decompress(data, outlen)
@@ -615,8 +831,11 @@ def in_place_margin(data, fmt=LZ4, packed=None, tail=True):
     rather than about what this module would have written."""
     z = compress(data, fmt, tail=tail) if packed is None else packed
     n, zl = len(data), len(z)
+    esc = 2 if tail and is_filtered(z) else 0   # the escape is consumed
+                                    # before anything is produced, like T
     if fmt == LZ4:
-        p, end = (_tail_bounds(z) if tail else (0, zl))
+        p, end = (_tail_bounds(z[esc:]) if tail else (0, zl))
+        p, end = p + esc, end + esc
         prod = 0
         worst = prod - p        # the T word is consumed before anything is
                                 # produced, so the first boundary's lead is
@@ -645,7 +864,8 @@ def in_place_margin(data, fmt=LZ4, packed=None, tail=True):
             worst = max(worst, prod - p)
     else:
         r = _BitIn(z)
-        r.p, end = _tail_bounds(z)
+        r.p, end = _tail_bounds(z[esc:])
+        r.p, end = r.p + esc, end + esc
         prod = 0
         worst = prod - r.p
         while r.p < end:
@@ -679,7 +899,7 @@ CZ_HDR = 8                      # ...and NO ceiling on the packed form in
                                 # (20.14.5.2) alike
 
 
-def cz_wrap(data, fmt=LZ4, packed=None):
+def cz_wrap(data, fmt=LZ4, packed=None, filt=False):
     """compress `data` into a 'CZ' file, or return it unchanged if that would
     not be smaller - a file that grew is a file the reader pays to expand for
     nothing.
@@ -695,9 +915,13 @@ def cz_wrap(data, fmt=LZ4, packed=None):
     parse (`lzb_compress_machine`), which tools/os88cz.py hands in because
     this module's own LZB parse is exact and takes minutes on anything big
     and repetitive. None: compress here, as the build does.
+
+    `filt`: CODE - a driver, a module - may take the near-call filter
+    (SPEC.md 20.13.9) when it makes the file shorter. A data file is wrapped
+    without even asking.
     """
     try:
-        z = compress(data, fmt) if packed is None else packed
+        z = compress(data, fmt, filt=filt) if packed is None else packed
     except ValueError:          # a tail T cannot count, or an LZ4 literal
         return data, False      # run the decoder cannot (20.14.5.3)
     if CZ_HDR + len(z) >= len(data):
@@ -753,9 +977,12 @@ def _selfcheck(paths):
         elif f.endswith(".drv"):
             d = cz_unwrap(d)
         raw += len(d)
+        if bcj_decode(bcj_encode(d)) != d:
+            print(f"os88lz: THE FILTER DOES NOT INVERT on {f}")
+            bad += 1
         zs = {}
         for fmt in (LZ4, LZB):
-            z = zs[fmt] = compress(d, fmt)  # second compress of the same bytes
+            z = zs[fmt] = compress(d, fmt, filt=True)   # what the build packs
             tot[fmt] += len(z)
             try:
                 if decompress(z, fmt, len(d)) != d:
@@ -786,6 +1013,10 @@ def main():
                          "- what the file manager's Compress verb will do on "
                          "the machine, and what builds a fixture for it now")
     ap.add_argument("--fmt", default="lz4", choices=("lz4", "lzb"))
+    ap.add_argument("--filter", action="store_true",
+                    help="the file is CODE: with --wrap, take the near-call "
+                         "filter when it makes the file shorter (SPEC.md "
+                         "20.13.9). A data file is wrapped without it")
     ap.add_argument("--selfcheck", action="store_true",
                     help="round-trip both formats over the tree's binaries")
     ap.add_argument("files", nargs="*", help="files to check (default: build/)")
@@ -794,10 +1025,12 @@ def main():
         if len(a.files) != 1:
             sys.exit("os88lz: --wrap takes exactly one input file")
         src = open(a.files[0], "rb").read()
-        out, did = cz_wrap(src, LZ4 if a.fmt == "lz4" else LZB)
+        out, did = cz_wrap(src, LZ4 if a.fmt == "lz4" else LZB,
+                           filt=a.filter)
         open(a.wrap, "wb").write(out)
         print(f"os88lz: {a.files[0]} {len(src)} -> {len(out)} bytes "
-              + (f"({len(out)/len(src):.1%}, {NAMES[out[2]]})" if did
+              + (f"({len(out)/len(src):.1%}, {NAMES[out[2]]}"
+                 f"{'+E8' if is_filtered(out[CZ_HDR:]) else ''})" if did
                  else "(UNCHANGED - compressing it made it bigger)"))
         return 0
     if a.selfcheck or not a.files:

@@ -701,9 +701,15 @@ cartridge in one claim, and no bank is ever fetched (`rw_xplan`,
   piece at a time, REBASING its windows (the selectors are the same ones
   after), with the package's rate hook held off; and under `CPU_F_PM` a move
   of any claim is a REBASE that calls no
-  relocation proc at all (MC7, 10.3.4); in real mode the carve's walk
-  (`rw_partsmv`) leaves a word with bit 2 set alone (a heap segment is a
-  multiple of 32; an LDT selector never is).
+  relocation proc at all (MC7, 10.3.4). The carve's walk (`rw_partsmv`)
+  leaves a word with bit 2 set alone ONLY under `CPU_F_PM` (`[rw_pm]`), in
+  kern_mega's arm: it read *a heap segment is a multiple of 32* everywhere
+  until the core's segment stopped being one - a part starts on a PARAGRAPH
+  since SPEC.md 20.12.2.1, so `rdg_coreseg` (part 0, 7336 on the 720KB
+  disk) has bit 2 set, the walk took it for a selector, and after a
+  compaction the core's far vectors still named the old place and the
+  cartridge stopped (`rdgmove`'s carve leg, `rdgclose`'s MOVE). The shipped
+  build has no selectors and no test.
 - **MEASURED** (Bochs 2.7, 16MB, kern_mega with `MEGATRAP=1`, the attract
   of each, 40 s): Kirby's Dream Land (256KB, 16 banks) and Looney Tunes
   (1MB, 64 banks) in place, `[rw_nmiss]` 0, the second cache segment and
@@ -909,6 +915,12 @@ it**, and the file is written from there and read back there
   and the RAM part is a multiple of 8KB, so each `OSAPI_FILE_APPEND` starts
   on a cluster - its rule - on any volume whose clusters are 8KB or less,
   and the record, last, may be any length. 34, 42 or 66KB.
+- **One bar** (SPEC.md 12.8.10). `rw_stop` begins the save's three
+  transfers, or the load's, as one `OSAPI_FS_OP` of 8000h + the RAM part +
+  the record. The load's size probe moves nothing, so one total serves both.
+  `rw_strun`, which every save and load ends in, replay's included, ends it.
+  In the window the bar fills once where it filled three times; in full
+  screen nothing changes, because the widget does not show there.
 
 **The state block comes back by a WHITELIST** (`rdg_sttab`): the registers,
 the interrupt and HALT state, the MBC's banks and modes, the frame count,
@@ -1572,7 +1584,10 @@ Either says its new state (`rw_lossyt`) and the next draw is whole.
   size probe (a read with no room answers the KB it needs, unpacked, with a
   compressed file's slack), claims that, reads, and then checks the bytes
   that came in: **whole 16KB banks, 32KB to 256KB**, refused in a toast
-  otherwise. One game a window: another opens in another.
+  otherwise. One game a window: another opens in another. The reads are
+  ONE file operation (SPEC.md 12.8.10), begun at the probe with the ROM's
+  bytes and ended at `rw_load`'s one exit, so a bank-cache load's 64 bank
+  reads are one bar.
 - **The worker** owns the machine. It counts BIOS ticks into frames owed, 840
   of 256 a tick (59.7275 Hz against 18.2065), at most eight behind, and
   reads the clock again after every frame - so it sleeps only when nothing
@@ -4081,7 +4096,7 @@ so images 2 to 4 are worth less than any slot.
 
 The images are read from the package's folder **in whole clusters**:
 `OSAPI_FILE_READ_AT` refuses an offset or a length that is not a cluster
-multiple, and a part starts on a 512-byte boundary, so `rw_acopy` reads a
+multiple, and a part starts on a 16-byte paragraph (SPEC.md 20.12.2), so `rw_acopy` reads a
 chunk of whole clusters at a time into a bounce (the frame buffers' claim,
 idle while a game loads) and copies out the part's own bytes. The first
 package read in place: a floppy's cluster is 512 bytes, so every emulator run

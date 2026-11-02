@@ -130,6 +130,7 @@ int  os88_clip_get_seg(unsigned seg, unsigned off, unsigned cap);
 int  os88_clip_size(void);
 
 unsigned os88_mem_claim(int kb);
+unsigned os88_mem_claim_p(unsigned paras);
 int      os88_mem_free(unsigned seg);
 int      os88_mem_movable(unsigned seg, int on);
 void     os88_onmove(unsigned was, unsigned now);

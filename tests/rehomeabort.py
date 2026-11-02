@@ -58,7 +58,7 @@ def pool(m, S):
     mem_tab record, so on kern_mega 'the heap comes back' asks both."""
     if not getattr(m, "bochs", False):
         return None
-    mx = m.read(S("mx_tab"), 96 * 10)
+    mx = m.read(m.tail("mx_tab"), 96 * 10)
     return sorted((mx[k] | mx[k + 1] << 8, mx[k + 2] | mx[k + 3] << 8,
                    mx[k + 4]) for k in range(0, len(mx), 10)
                   if mx[k + 2] | mx[k + 3] << 8)

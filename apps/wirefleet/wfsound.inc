@@ -377,12 +377,13 @@ wf_pcm_open:
     jc .out
     mov al, WF_P_SFX
     call op_row
-    call op_lazykb
-    jc .out
-    add ax, 13
-    xchg ax, bx
-    call OSAPI_MEM_AVAIL
-    cmp ax, bx
+    call op_lazyp               ; paragraphs, and the ring's 13KB beside it
+    jc .out                     ; in the same unit (SPEC.md 50.3.7)
+    add ax, 13 * 64
+    xchg ax, dx                 ; (not BX: MEMP_AVAIL answers there)
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    cmp ax, dx
     jb .out
     mov ax, 13
     mov cx, 13

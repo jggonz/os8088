@@ -239,9 +239,11 @@ cmz_pack:
     mov bx, ax                  ; source is K0 and the output K1 (KSEG,
     pop ax                      ; KERN-MEGA-MEMORY-PLAN MC7.6)
 %endif
-    CSDO mov [CSEG cmz_tseg], bx
-    CSDO mov [CSEG cmz_oseg], dx
-    CSDO mov [CSEG cmz_sseg], ax
+    CSDO_ON
+    mov [CSEG cmz_tseg], bx
+    mov [CSEG cmz_oseg], dx
+    mov [CSEG cmz_sseg], ax
+    CSDO_OFF
 
     or si, si
     jnz .long
@@ -311,15 +313,19 @@ cmz_pack:
 
     KSEG ds, bp, MEGA_SEL_K0    ; the source...
     KSEG es, dx, MEGA_SEL_K1    ; ...and the output
-    CSDO mov byte [CSEG cmz_tbit], 0 ; no tag byte open yet
-    CSDO mov word [CSEG cmz_nextp], CMZ_PSTEP
+    CSDO_ON
+    mov byte [CSEG cmz_tbit], 0 ; no tag byte open yet
+    mov word [CSEG cmz_nextp], CMZ_PSTEP
+    CSDO_OFF
 %ifdef CMZ_STREAM
     cmp byte [cs:cmz_mode], 0
     je .armed
     xor ax, ax                  ; STREAMED: the window's first CMZ_SBUF bytes
-    CSDO mov [CSEG cmz_sfill], ax ; off the disk, from offset 0
-    CSDO mov [CSEG cmz_sfill+2], ax
-    CSDO mov [CSEG cmz_scur+RSQ_GEN], ax ; ...and a new file: its cursor unseeded
+    CSDO_ON
+    mov [CSEG cmz_sfill], ax    ; off the disk, from offset 0
+    mov [CSEG cmz_sfill+2], ax
+    mov [CSEG cmz_scur+RSQ_GEN], ax ; ...and a new file: its cursor unseeded
+    CSDO_OFF
     xor bx, bx
     mov cx, CMZ_SBUF
     call cmz_sfetch
@@ -358,20 +364,22 @@ cmz_pack:
     cmp ax, [cs:cmz_mx]
     jbe .nomx
 .newmx:
-    CSDO mov [CSEG cmz_mx], ax
-    CSDO mov [CSEG cmz_mx+2], dx
+    CSDO_ON
+    mov [CSEG cmz_mx], ax
+    mov [CSEG cmz_mx+2], dx
     mov ax, si                  ; the cut, as POSITIONS IN THE FILE: either
     xor dx, dx                  ; side may slide past it before the end, and
     add ax, [cs:cmz_sbase]      ; a streamed window no longer holds it at all
     adc dx, [cs:cmz_sbase+2]
-    CSDO mov [CSEG cmz_ksa], ax
-    CSDO mov [CSEG cmz_ksa+2], dx
+    mov [CSEG cmz_ksa], ax
+    mov [CSEG cmz_ksa+2], dx
     mov ax, di
     xor dx, dx
     add ax, [cs:cmz_obase]
     adc dx, [cs:cmz_obase+2]
-    CSDO mov [CSEG cmz_koa], ax
-    CSDO mov [CSEG cmz_koa+2], dx
+    mov [CSEG cmz_koa], ax
+    mov [CSEG cmz_koa+2], dx
+    CSDO_OFF
 .nomx:
     cmp si, [cs:cmz_nextp]      ; ...and the bar, on the same boundary
     jb .noprog
@@ -548,8 +556,10 @@ cmz_pack:
     mov ax, [cs:cmz_ksa]        ; the SOURCE back to the cut too: the window
     and ax, 0xC000              ; refilled from the 16KB boundary below it
     mov dx, [cs:cmz_ksa+2]
-    CSDO mov [CSEG cmz_sfill], ax
-    CSDO mov [CSEG cmz_sfill+2], dx
+    CSDO_ON
+    mov [CSEG cmz_sfill], ax
+    mov [CSEG cmz_sfill+2], dx
+    CSDO_OFF
     mov si, [cs:cmz_ksa]
     sub si, ax
     xor bx, bx
@@ -820,7 +830,7 @@ cmz_sslide:
     shr dx, cl
     mov ax, ds
 %ifdef KERN_MEGA
-    call KERNEL_SEG:mega_slidef ; kern_mega: K0 slides onto itself
+    call COLD_SEG:mega_slidec ; kern_mega: K0 slides onto itself
 %else
     add ax, dx
 %endif
@@ -898,7 +908,7 @@ cmz_oslide:
 %ifdef KERN_MEGA
     push dx                     ; kern_mega: K1 slides onto itself
     mov dx, 0x0400
-    call KERNEL_SEG:mega_slidef
+    call COLD_SEG:mega_slidec
     pop dx
 %else
     add ax, 0x0400
@@ -921,15 +931,19 @@ cmz_oslide:
 cmz_sub2:
     call cmz_sub1
 cmz_sub1:
-    CSDO sub [CSEG bx], ax
-    CSDO sbb word [CSEG bx+2], 0
+    CSDO_ON
+    sub [CSEG bx], ax
+    sbb word [CSEG bx+2], 0
+    CSDO_OFF
     add bx, 4
     ret
 cmz_add2:
     call cmz_add1
 cmz_add1:
-    CSDO add [CSEG bx], ax
-    CSDO adc word [CSEG bx+2], 0
+    CSDO_ON
+    add [CSEG bx], ax
+    adc word [CSEG bx+2], 0
+    CSDO_OFF
     add bx, 4
     ret
 
@@ -969,8 +983,10 @@ cmz_sfetch:
     pop ds
     pop si
     CMZ_TRACK 1
-    CSDO add [CSEG cmz_sfill], cx
-    CSDO adc word [CSEG cmz_sfill+2], 0
+    CSDO_ON
+    add [CSEG cmz_sfill], cx
+    adc word [CSEG cmz_sfill+2], 0
+    CSDO_OFF
 .skip:
     ret
 
@@ -1061,6 +1077,14 @@ cmz_rearm:
     push ax
     push cx
     push dx
+%ifdef FPG_OPS
+    test byte [fpg_on], FPG_OP  ; ...UNLESS AN OPERATION IS LIVE (SPEC.md
+    jnz .out                    ; 12.8.8): every read and write already resumed
+                                ; its one scale and counted itself into it, so
+                                ; re-stepping [cmz_done] here would count the
+                                ; writes twice. A rejoin's own (cmz_jloop) is
+                                ; that case, and so is a package's
+%endif
     mov cx, [cs:cmz_utot]
     mov dx, [cs:cmz_utot+2]
     call KERNEL_SEG:fpg_begin
@@ -1099,8 +1123,10 @@ cmz_rearm:
 ; and pays a far call per 512 bytes of a parse that costs ~1,600 cycles a byte.
 ; -----------------------------------------------------------------------------
 cmz_prog:
-    CSDO add word [CSEG cmz_done], CMZ_PSTEP ; ...counted, for cmz_rearm
-    CSDO adc word [CSEG cmz_done+2], 0
+    CSDO_ON
+    add word [CSEG cmz_done], CMZ_PSTEP ; ...counted, for cmz_rearm
+    adc word [CSEG cmz_done+2], 0
+    CSDO_OFF
     CMZ_TRACK 0                 ; the step PAINTS the trough
     push ax
     mov ax, CMZ_PSTEP
@@ -1130,7 +1156,7 @@ cmz_probe:
     push si
     push bp
     push es
-    CSDO mov [CSEG cmz_pos], si
+    CSDOF mov [CSEG cmz_pos], si ; (per POSITION: the far call inline)
     mov ax, [cs:cmz_n]
     sub ax, si
     cmp ax, CMZ_MIN
@@ -1139,15 +1165,17 @@ cmz_probe:
     jbe .most
     mov ax, CMZ_MAXM            ; ...and never past SI + 32KB (SPEC.md
 .most:                          ; 20.15.4), which the slide relies on
-    CSDO mov [CSEG cmz_most], ax ; ...and the most a match here could be
+    CSDOF mov [CSEG cmz_most], ax ; ...and the most a match here could be
 
     mov ax, si                  ; lo = SI - mask: the oldest position still in
     sub ax, [cs:cmz_mask]       ; the window. It borrows for the whole of the
     jnc .havelo                 ; first window, where every position qualifies
     xor ax, ax
 .havelo:
-    CSDO mov [CSEG cmz_lo], ax
-    CSDO mov word [CSEG cmz_best], 0
+    CSDO_ON
+    mov [CSEG cmz_lo], ax
+    mov word [CSEG cmz_best], 0
+    CSDO_OFF
 
     call cmz_hash               ; BX = &head[h], a word into the block
     mov es, [cs:cmz_tseg]
@@ -1175,10 +1203,12 @@ cmz_probe:
 .stop:
     cmp ax, [cs:cmz_best]
     jbe .nextc
-    CSDO mov [CSEG cmz_best], ax
+    CSDO_ON
+    mov [CSEG cmz_best], ax
     mov dx, [cs:cmz_pos]        ; DX, free once the walk is done: AX is
     sub dx, cx                  ; still the length, for the test below
-    CSDO mov [CSEG cmz_boff], dx
+    mov [CSEG cmz_boff], dx
+    CSDO_OFF
     cmp ax, [cs:cmz_most]
     jae .fin                    ; it reached the end of the input: nothing
 .nextc:                         ; behind it in the chain can beat that
@@ -1297,7 +1327,7 @@ cmz_bit:
     push cx
     jnc .zero
     call cmz_room
-    CSDO dec byte [CSEG cmz_tbit]
+    CSDOF dec byte [CSEG cmz_tbit] ; (per BIT: the far call inline)
     mov cl, [cs:cmz_tbit]
     mov al, 1
     shl al, cl
@@ -1308,7 +1338,7 @@ cmz_bit:
     jmp short .out              ; so a stream that ends mid-tag is still whole
 .zero:                          ; and a 0 writes nothing at all. (It was a CS
     call cmz_room               ; copy, OR'd and then stored back on EVERY
-    CSDO dec byte [CSEG cmz_tbit] ; bit, 0s included.) Both slides carry the
+    CSDOF dec byte [CSEG cmz_tbit] ; bit, 0s included.) Both slides carry the
 .out:                           ; open byte with them - cmz_oslide's banner
     pop cx
     pop ax
@@ -1318,8 +1348,10 @@ cmz_bit:
 cmz_room:
     cmp byte [cs:cmz_tbit], 0
     jne .have
-    CSDO mov [CSEG cmz_tofs], di
-    CSDO mov byte [CSEG cmz_tbit], 8
+    CSDO_ON
+    mov [CSEG cmz_tofs], di
+    mov byte [CSEG cmz_tbit], 8
+    CSDO_OFF
     push ax
     xor al, al
     stosb                       ; ...reserved in the output, filled in above
@@ -1482,8 +1514,10 @@ cmz_sizes:
     mov si, fm_onam
     call COLD_SEG:dwf_dskw_stat ; AL = attribute, BX = cluster, DX:CX = size
     jc .out
-    CSDO mov [CSEG cmz_p], cx    ; ANY size: both sides of the codec cross 64KB
-    CSDO mov [CSEG cmz_p+2], dx  ; now (SPEC.md 20.14.5.1, 20.15.4)
+    CSDO_ON
+    mov [CSEG cmz_p], cx        ; ANY size: both sides of the codec cross 64KB
+    mov [CSEG cmz_p+2], dx      ; now (SPEC.md 20.14.5.1, 20.15.4)
+    CSDO_OFF
     mov ax, cx
     mov cl, [dskw_raw+DSK_R_CZM]    ; the mark LESS its format (SPEC.md
     sub cl, DSK_CZ_MARK             ; 20.14.1): 0x5A and 0x5B pass
@@ -1513,9 +1547,11 @@ cmz_sizes:
 cmz_compress:
     call cmz_sizes              ; DX:AX = U, CL = the format
     jc .ferr
-    CSDO mov [CSEG cmz_u], ax
-    CSDO mov [CSEG cmz_u+2], dx
-    CSDO mov word [CSEG cmz_x], 0 ; no clear prefix - a package sets its own
+    CSDO_ON
+    mov [CSEG cmz_u], ax
+    mov [CSEG cmz_u+2], dx
+    mov word [CSEG cmz_x], 0    ; no clear prefix - a package sets its own
+    CSDO_OFF
     cmp dx, 0x100
     jae .big                    ; U past 16MB: the directory hint that says
                                 ; what a file expands to is 24 bits (SPEC.md
@@ -1634,8 +1670,10 @@ cmz_compress:
                                 ; comparing against U rather than against what
                                 ; is on the disk
 .smaller:
-    CSDO mov [CSEG cmz_z], ax
-    CSDO mov [CSEG cmz_z+2], dx
+    CSDO_ON
+    mov [CSEG cmz_z], ax
+    mov [CSEG cmz_z+2], dx
+    CSDO_OFF
     push ax                     ; ...and the length kept, for the write
     push dx
     mov dx, [cs:cmz_o]
@@ -1774,12 +1812,14 @@ cmz_stream:
     jnc .ferr                   ; 22.22.5 step 4) - or the file compressed
     mov ax, [cs:cmz_u]          ; the bar: one pass over U
     mov dx, [cs:cmz_u+2]
-    CSDO mov [CSEG cmz_utot], ax
-    CSDO mov [CSEG cmz_utot+2], dx
+    CSDO_ON
+    mov [CSEG cmz_utot], ax
+    mov [CSEG cmz_utot+2], dx
     xor ax, ax
-    CSDO mov [CSEG cmz_done], ax
-    CSDO mov [CSEG cmz_done+2], ax
-    CSDO mov [CSEG cmz_wrote], al
+    mov [CSEG cmz_done], ax
+    mov [CSEG cmz_done+2], ax
+    mov [CSEG cmz_wrote], al
+    CSDO_OFF
     call cmz_rearm
     mov ax, [cs:cmz_b]          ; the 'CZ' header, in the paragraph in front
     add ax, CMZ_SBUF / 16       ; of the output window: the first 16KB out
@@ -1802,8 +1842,10 @@ cmz_stream:
     mov si, [cs:cmz_u+2]
     call cmz_pack               ; DX:AX = the file, header included
     jc .pfail
-    CSDO mov [CSEG cmz_z], ax
-    CSDO mov [CSEG cmz_z+2], dx
+    CSDO_ON
+    mov [CSEG cmz_z], ax
+    mov [CSEG cmz_z+2], dx
+    CSDO_OFF
     mov si, fm_onam             ; --- and the new file takes the name -----
     call COLD_SEG:dwf_dskw_delete
     jc .rmtmp                   ; (a read-only original, say: nothing lost)
@@ -1890,12 +1932,16 @@ cmz_czhdr:
 ; -----------------------------------------------------------------------------
 cmz_uncomp:
     xor ax, ax
-    CSDO mov [CSEG cmz_b], ax    ; neither claim is held yet, which is what
-    CSDO mov [CSEG cmz_o], ax    ; lets cmz_ufree be the ONE exit path
+    CSDO_ON
+    mov [CSEG cmz_b], ax        ; neither claim is held yet, which is what
+    mov [CSEG cmz_o], ax        ; lets cmz_ufree be the ONE exit path
+    CSDO_OFF
     call cmz_sizes              ; DX:AX = U, CL = the format
     jc .ferr
-    CSDO mov [CSEG cmz_u], ax
-    CSDO mov [CSEG cmz_u+2], dx  ; ANY size (SPEC.md 22.23.4): the read
+    CSDO_ON
+    mov [CSEG cmz_u], ax
+    mov [CSEG cmz_u+2], dx      ; ANY size (SPEC.md 22.23.4): the read
+    CSDO_OFF
     cmp cl, 0xFF                ; expands past 64KB and the write takes DX:CX
     je .pkg                     ; no 'CZ' mark: a package, or nothing at all
 
@@ -2110,7 +2156,7 @@ cmz_upkg:
     rep movsb                   ; the prefix, verbatim - and this leaves SI on
     pop ax                      ; the compressed body, which is where the
 %ifdef KERN_MEGA                ; decoder wants it - off the identity grid on
-    call KERNEL_SEG:mega_oddsegf ; kern_mega, so a selector for exactly that
+    call COLD_SEG:mega_oddsegc ; kern_mega, so a selector for exactly that
 %endif                          ; paragraph, as the loader's (ld_run_body)
     mov es, ax
     xor di, di                  ; lz_decomp_x REQUIRES this zero, and says why
@@ -2395,19 +2441,23 @@ cmz_jloop:
     cmp ax, 999 - 1
     ja cmz_jnotcs               ; 1..999 parts
     inc ax
-    CSDO mov [CSEG cmz_jn], ax
+    CSDO_ON
+    mov [CSEG cmz_jn], ax
     mov ax, [es:di+8]
     mov dx, [es:di+10]
-    CSDO mov [CSEG cmz_jtot], ax
-    CSDO mov [CSEG cmz_jtot+2], dx
-    CSDO mov [CSEG cmz_utot], ax ; ...and the bar is the original's size
-    CSDO mov [CSEG cmz_utot+2], dx
+    mov [CSEG cmz_jtot], ax
+    mov [CSEG cmz_jtot+2], dx
+    mov [CSEG cmz_utot], ax     ; ...and the bar is the original's size
+    mov [CSEG cmz_utot+2], dx
+    CSDO_OFF
     or ax, dx
     jz cmz_jnotcs
     mov ax, [es:di+16]
-    CSDO mov [CSEG cmz_jid], ax
+    CSDO_ON
+    mov [CSEG cmz_jid], ax
     mov ax, [es:di+18]
-    CSDO mov [CSEG cmz_jid+2], ax
+    mov [CSEG cmz_jid+2], ax
+    CSDO_OFF
     cmp byte [cs:cmz_jto], 0    ; Uncompress To... was TOLD the name, and has
     jne .named                  ; checked it and the temporary's already
     mov ax, cs                  ; the name it rejoins as, NUL-ended
@@ -2415,6 +2465,16 @@ cmz_jloop:
     call cmz_jhname
     call cmz_jname              ; that name is free, and so is the temporary
 .named:
+%ifdef FPG_PARK
+    mov cx, [cs:cmz_jtot]       ; THE REJOIN IS ONE OPERATION (SPEC.md
+    mov dx, [cs:cmz_jtot+2]     ; 12.8.10): one bar from part 1 to the verdict,
+    shl cx, 1                   ; PARKED across every 'Put SET.002 in A:'
+    rcl dx, 1                   ; instead of rescaling per part. Twice the
+    call KERNEL_SEG:apic_fs_op  ; original: it is written once and the parts
+    jc .noop                    ; read once, and a part is no bigger than what
+    CSDO mov byte [CSEG cmz_jop], 1 ; it rebuilds, so an OVER-estimate that
+.noop:                          ; ends a little short. Owned as 0FFh, so only
+%endif                          ; cmz_jexit's end ends it: [cmz_jop] says ours
     call cmz_rearm
     call cmz_jat
 .same:                          ; --- the same set, and it starts where the
@@ -2427,8 +2487,10 @@ cmz_jloop:
     repe cmpsw                  ; REP alone, no segment override (SPEC.md 1's
     pop ds                      ; 8088 hazard)
     jne cmz_jwrong
-    CSDO add word [CSEG cmz_jpos], CMZ_JHDR
-    CSDO sub word [CSEG cmz_javl], CMZ_JHDR
+    CSDO_ON
+    add word [CSEG cmz_jpos], CMZ_JHDR
+    sub word [CSEG cmz_javl], CMZ_JHDR
+    CSDO_OFF
 
 .rec:                           ; --- one block ---------------------------
     mov ax, CMZ_JREC
@@ -2463,9 +2525,11 @@ cmz_jloop:
     cmp bx, [cs:cmz_jtot]
     ja .bad                     ; never past the total
 .fits:
-    CSDO mov [CSEG cmz_jm], al
-    CSDO mov [CSEG cmz_js], cx
-    CSDO mov [CSEG cmz_jnn], dx
+    CSDO_ON
+    mov [CSEG cmz_jm], al
+    mov [CSEG cmz_js], cx
+    mov [CSEG cmz_jnn], dx
+    CSDO_OFF
     mov ax, cx
     add ax, CMZ_JREC
     call cmz_jneed              ; the whole payload in the window
@@ -2551,8 +2615,10 @@ cmz_jloop:
     call cmz_rearm
     mov ax, [cs:cmz_js]
     add ax, CMZ_JREC
-    CSDO add [CSEG cmz_jpos], ax
-    CSDO sub [CSEG cmz_javl], ax
+    CSDO_ON
+    add [CSEG cmz_jpos], ax
+    sub [CSEG cmz_javl], ax
+    CSDO_OFF
     mov ax, 1                   ; ...and is there more of this part?
     call cmz_jneed
     jc .pnext
@@ -2587,6 +2653,16 @@ cmz_jerr:
 cmz_jexit:
     pushf
     push ax
+%ifdef FPG_PARK
+    cmp byte [cs:cmz_jop], 0    ; the rejoin's operation, if it opened one
+    je .noop                    ; (cmz_jloop) - every way out of a join comes
+    push dx                     ; here: the verdict, a refusal, Esc and an
+    xor cx, cx                  ; abandoned prompt (cmz_jdisp's .abort)
+    xor dx, dx
+    call KERNEL_SEG:apic_fs_op
+    pop dx
+.noop:
+%endif
 %ifdef KERN_BIG
     cmp byte [cs:cmz_jto], 1
     jne .keep
@@ -2769,8 +2845,13 @@ cmz_jclaim:
     CSDO mov [CSEG cmz_b], dx
     call cmz_jslice
     xor ax, ax
-    CSDO mov [CSEG cmz_jwrote], al
-    CSDO mov [CSEG cmz_jretry], ax
+    CSDO_ON
+    mov [CSEG cmz_jwrote], al
+%ifdef FPG_PARK
+    mov [CSEG cmz_jop], al      ; no operation yet (cmz_jloop)
+%endif
+    mov [CSEG cmz_jretry], ax
+    CSDO_OFF
     PUSH_CSDATA                     ; ES = CS for two runs of stosw (DF = 0: the
     pop es                      ; join's entry cleared it)
     mov di, cmz_jk              ; cmz_jk = 0, cmz_jn = 1 - one part until it
@@ -2798,9 +2879,11 @@ cmz_jslice:
     mov dx, [cs:cmz_b]
     add dx, CMZ_JHP + 31        ; behind the header, and up to 512 bytes
     and dx, 0xFFE0              ; physically (32 paragraphs)
-    CSDO mov [CSEG cmz_jwin], dx
+    CSDO_ON
+    mov [CSEG cmz_jwin], dx
     add dx, CMZ_JWIN * 64
-    CSDO mov [CSEG cmz_o], dx
+    mov [CSEG cmz_o], dx
+    CSDO_OFF
     ret
 
 ; cmz_jat - ES:DI = the input window at its read position ([cmz_jwin]:
@@ -3195,10 +3278,12 @@ cmz_jdisp:
     jmp cmz_jexit
 .resume:                        ; --- Enter: the disk is in ---------------
     call cmz_jslice
-    CSDO mov word [CSEG cmz_jsrcc], 0 ; the ROOT of the disk now in the drive: a
+    CSDO_ON
+    mov word [CSEG cmz_jsrcc], 0 ; the ROOT of the disk now in the drive: a
                                 ; folder is a cluster on the OLD disk
     mov ax, [cs:cmz_jk]         ; the part Enter says is in now - a miss of
-    CSDO mov [CSEG cmz_jretry], ax ; THAT one is news, and of a later one is not
+    mov [CSEG cmz_jretry], ax   ; THAT one is news, and of a later one is not
+    CSDO_OFF
     call cmz_jsel2on            ; fm_onam = the part's name again...
     call cmz_jisname            ; ...and [cmz_jext] = its digits
     call cmz_jtmpn              ; the temporary's name, which the prompt's
@@ -3385,8 +3470,10 @@ cmz_pct:
     CSDO mov [CSEG di], ah
     inc di
 .ones:
-    CSDO mov [CSEG di], al
-    CSDO mov word [CSEG di+1], '%' ; ...and the NUL, the word's high byte
+    CSDO_ON
+    mov [CSEG di], al
+    mov word [CSEG di+1], '%'   ; ...and the NUL, the word's high byte
+    CSDO_OFF
     mov ax, cmz_s_done
     call cmz_say
     pop di
@@ -3594,8 +3681,10 @@ cmz_hdr:
     add ax, [cs:cmz_x]          ; packed = the clear prefix + the stream
     cmp ax, [cs:cmz_u]
     jae .no                     ; not smaller than the image it replaces
-    CSDO mov [CSEG cmz_z], ax    ; ...and for a package the FILE is what the
-    CSDO mov word [CSEG cmz_z+2], 0 ; percentage is about, prefix included
+    CSDO_ON
+    mov [CSEG cmz_z], ax        ; ...and for a package the FILE is what the
+    mov word [CSEG cmz_z+2], 0  ; percentage is about, prefix included
+    CSDO_OFF
     mov bx, [cs:cmz_u]
     sub bx, ax
     add bx, 511
@@ -3736,6 +3825,10 @@ cmz_jid:    dd 0                ; ...and the set's ID. A part's header bytes
                                 ; with one `repe cmpsw` (asserted below)
 cmz_jsel:   times 13 db 0       ; the selection's name - a part's
 cmz_jnam:   times 13 db 0       ; the result's
+%ifdef FPG_PARK
+cmz_jop:    db 0, 0             ; (a pad byte for parity) 1 = cmz_jloop's OSAPI_FS_OP is ours to end:
+                                ; in the state block, so a paused join keeps it
+%endif
 CMZ_JSTL    equ $ - cmz_jst
 cmz_jretry: dw 0                ; the part Enter said is in: a miss of it is news
 cmz_jext:   dw 0                ; where fm_onam's three digits are

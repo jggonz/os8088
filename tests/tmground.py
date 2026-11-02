@@ -123,9 +123,12 @@ def current(m, seg):
 
 
 def usedk(m, seg):
+    """RAM's used half below 1MB in KB - [tm_usedp] is PARAGRAPHS since the
+    page carries the heap's granule (SPEC.md 28.4.7), so this is exact to the
+    half-KB and two readings compare as the paragraphs do"""
     base = (seg << 4) + dispapps.img_size("taskmgr")
-    b = m.read(base + dispapps.bss_off("taskmgr", "tm_usedk"), 2)
-    return b[0] | (b[1] << 8)
+    b = m.read(base + dispapps.bss_off("taskmgr", "tm_usedp"), 2)
+    return (b[0] | (b[1] << 8)) / 64.0
 
 
 def flags(m, slot):
@@ -323,11 +326,11 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         diff = sum(1 for a, b in zip(uncovered[r0:r9], honest[r0:r9])
                    if a != b)
         print("PIXELS  : zoom covered it wholly=%s, cache %s - %d subpixels "
-              "differ between the uncover and a forced repaint (RAM %dK, %dK)"
+              "differ between the uncover and a forced repaint (RAM %gK, %gK)"
               % (whole, "spoiled, word %s" % ("read" if miss else "0"),
                  diff, used0, used1))
         if used0 != used1:
-            fails.append("PIXELS: the RAM figure moved %dK -> %dK between the "
+            fails.append("PIXELS: the RAM figure moved %gK -> %gK between the "
                          "two captures, so they compare two machines rather "
                          "than two paints of one" % (used0, used1))
         if not whole:

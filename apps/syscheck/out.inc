@@ -7,7 +7,8 @@
 ; slots. The report is composed a line at a time in sc_txt with the same
 ; helpers the window uses, then appended to a transient claim and written in
 ; one OSAPI_FILE_WRITE. Clean Up removes only findings carrying FL_RM -
-; visible debris (118.8) - and rebuilds ASSOC.DAT when a finding asked for it.
+; debris (118.8), a hidden + system one (FL_SYS) through FSCHECK.DRV
+; (118.8.1) - and rebuilds ASSOC.DAT when a finding asked for it.
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
@@ -98,6 +99,15 @@ sc_act_report:
     mov al, bl
     call sc_two
     call sc_otxt
+    mov di, sc_txt                  ; "Task: Check the disk" (SPEC.md 118.14)
+    mov si, sc_o_task
+    call sc_scpy
+    mov bl, [sc_task]
+    xor bh, bh
+    shl bx, 1
+    mov si, [sc_tnames+bx]
+    call sc_scpy
+    call sc_otxt
     call sc_cnttext
     call sc_otxt
     mov di, sc_txt                  ; "Result: 3 broken, 7 warnings"
@@ -136,7 +146,7 @@ sc_act_report:
     push ax
     mov bx, ax
     shl bx, 1
-    mov si, [sc_rnames+bx]
+    call sc_rname
     mov di, sc_txt
     call sc_scpy
     call sc_padto28
@@ -302,11 +312,26 @@ sc_gohome:
 ; -----------------------------------------------------------------------------
 ; sc_act_clean - Clean Up...: ask first (SPEC.md 118.8)
 ; in:  SI = window; gfx lock held; keeps SI
+;
+; TWO QUESTIONS, and the second is its own click (118.8.2): the leftovers -
+; debris, retired programs and drivers, a stale ASSOC.DAT - and then, when
+; the scan found any, the drivers and modules THIS KERNEL REFUSES. Those are
+; not debris: each is a file a release once needed, and an install may bring
+; it back up to date - but not every install can (the 360KB system disk no
+; longer carries XMEM.DRV, SPEC.md 24.3.1.6), and a refused driver does
+; nothing but take room. With no leftovers the first question is skipped.
 ; -----------------------------------------------------------------------------
 sc_act_clean:
+    mov word [sc_rmd], 0
+    mov ax, [sc_nrm]
+    or ax, ax
+    jnz .q1
+    cmp byte [sc_ascbad], 0
+    jne .q1
+    jmp sc_clean2                   ; only refused drivers: the second alone
+.q1:
     push si
     mov di, sc_q                    ; "Remove 4 leftover files?"
-    mov ax, [sc_nrm]
     or ax, ax
     jz .assoc
     mov si, sc_q_rm
@@ -324,38 +349,133 @@ sc_act_clean:
     call sc_scpy
 .ask:
     pop si
+    mov di, sc_cleandone
+    jmp sc_askq
+
+; sc_askq - Cancel / Proceed on sc_q, answered to DI; SI = window, kept
+sc_askq:
     push si
     mov bx, si
     mov al, OS88UI_ADANGER          ; Cancel / Proceed, Cancel the default
     mov si, sc_q
-    mov di, sc_cleandone
     call os88ui_ask
     pop si
     ret
 
-; sc_cleandone - the alert's answer: AL = 1 is Proceed
+; sc_cleandone - the first alert's answer: AL = 1 is Proceed
 ; in:  SI = window; gfx lock held
 sc_cleandone:
     cmp al, 1
     je .go
-    ret
+    ret                             ; Cancel: nothing, and no second question
 .go:
-    push si
-    push bp
     push es
     push ds
     pop es
-    xor bp, bp                      ; BP = files removed
+    mov bl, FL_RM
+    call sc_rmall
+    cmp byte [sc_ascbad], 0
+    je .done
+    xor dx, dx
+    call sc_goto
+    mov dl, [sc_vol]
+    mov al, ASSOC_FL_FULL           ; read every package afresh (SPEC.md 54)
+    call OSAPI_ASSOC_FLUSH
+.done:
+    pop es
+    ; fall through: the second question, if there is one
+
+; sc_clean2 - ask about the drivers this kernel refuses (118.8.2), or finish
+sc_clean2:
+    mov ax, [sc_nstale]
+    or ax, ax
+    jz sc_cleanfin
+    mov di, sc_q                    ; "Also remove 2 unusable files?"
+    push si
+    mov si, sc_q_st
+    cmp word [sc_rmd], 0
+    jne .also
+    cmp byte [sc_ascbad], 0
+    jne .also
+    mov si, sc_q_st0                ; asked first: no "Also"
+.also:
+    call sc_scpy
+    call dec_u16
+    mov si, sc_q_st2
+    call sc_scpy
+    pop si
+    mov di, sc_staledone
+    call sc_askq
+    jc sc_cleanfin                  ; refused (one is up): finish here
+    ret
+
+; sc_staledone - the second alert's answer: AL = 1 is Proceed
+sc_staledone:
+    cmp al, 1
+    jne sc_cleanfin
+    push es
+    push ds
+    pop es
+    mov ax, [sc_rmd]
+    push ax
+    mov bl, FL_STALE
+    call sc_rmall
+    pop ax
+    cmp ax, [sc_rmd]                ; something went, and a program may have:
+    je .same                        ; the associations follow (SPEC.md 54)
+    xor dx, dx
+    call sc_goto
+    mov dl, [sc_vol]
+    xor al, al                      ; incremental: rows whose package is gone
+    call OSAPI_ASSOC_FLUSH
+.same:
+    pop es
+    ; fall through
+
+; sc_cleanfin - the toast, home, and look again
+sc_cleanfin:
+    cmp word [sc_rmd], 0            ; nothing done (both answers Cancel
+    jne .toast                      ; past the first): no toast, no rescan
+    cmp byte [sc_ascbad], 0
+    je .out
+.toast:
+    push si
+    call sc_gohome
+    mov di, sc_txt                  ; "Removed 4 files"
+    mov si, sc_t_removed
+    call sc_scpy
+    mov ax, [sc_rmd]
+    call dec_u16
+    mov si, sc_t_files
+    call sc_scpy
+    mov si, sc_txt
+    xor cx, cx
+    call OSAPI_TOAST
+    pop si
+    call sc_scan_begin              ; and look again
+    call sc_repaint
+    jmp sc_kick
+.out:
+    ret
+
+; -----------------------------------------------------------------------------
+; sc_rmall - remove every kept finding carrying BL's flag; [sc_rmd] counts
+; in:  BL = FL_RM or FL_STALE; ES = DS; out: nothing; keeps SI, BP
+; -----------------------------------------------------------------------------
+sc_rmall:
+    push si
+    push bp
     xor cx, cx
 .f:
     cmp cx, [sc_nf]
-    jae .assoc
+    jae .out
     push cx
+    push bx
     mov ax, FR_SIZE
     mul cx
     mov di, ax
     add di, sc_ftab
-    test byte [di+FR_FLG], FL_RM
+    test [di+FR_FLG], bl
     jz .next
     mov dx, [di+FR_CLUS]
     call sc_goto
@@ -372,39 +492,83 @@ sc_cleandone:
     jmp short .ls
 .name:
     mov si, bx
-    call OSAPI_FILE_DELETE
+    call sc_rmone
     jc .next
-    inc bp
+    inc word [sc_rmd]
 .next:
+    pop bx
     pop cx
     inc cx
     jmp short .f
-.assoc:
-    cmp byte [sc_ascbad], 0
-    je .home
-    xor dx, dx
-    call sc_goto
-    mov dl, [sc_vol]
-    mov al, ASSOC_FL_FULL           ; read every package afresh (SPEC.md 54)
-    call OSAPI_ASSOC_FLUSH
-.home:
-    call sc_gohome
-    mov di, sc_txt                  ; "Removed 4 files"
-    mov si, sc_t_removed
-    call sc_scpy
-    mov ax, bp
-    call dec_u16
-    mov si, sc_t_files
-    call sc_scpy
-    mov si, sc_txt
-    xor cx, cx
-    call OSAPI_TOAST
-    pop es
+.out:
     pop bp
     pop si
-    call sc_scan_begin              ; and look again
-    call sc_repaint
-    jmp sc_kick
+    ret
+
+; sc_rmone - delete the file SI names, in the folder we stand in, the way
+; the finding at DI says: an ordinary delete, or FSCHECK.DRV's (118.8.1,
+; 118.8.2). out: CF = 1 not removed; keeps DI, SI
+sc_rmone:
+    test byte [di+FR_FLG], FL_SYS
+    jnz .sys
+    call OSAPI_FILE_DELETE          ; (a far cell: call it, never jmp)
+    ret
+.sys:
+    push si
+    push bx
+    push cx
+    push dx
+    push di
+    push es
+    mov bx, si                      ; the name, across sc_fload
+    call sc_fload                   ; the engine, read beside us once; it
+    jc .out                         ; stood us there, so back to the finding
+    mov dx, [di+FR_CLUS]
+    call sc_goto
+    jc .out
+    mov si, bx
+    mov ah, FSKD_RETIRED
+    test byte [di+FR_FLG], FL_STALE
+    jnz .refused
+    call .call
+    jmp short .out
+.refused:
+    call sc_probe                   ; DX = the KB it expands to
+    cmp al, 1
+    jne .no
+    or dx, dx
+    jz .no
+    mov cx, dx
+    mov ax, dx
+    call OSAPI_MEM_CLAIM            ; DX = a buffer the engine reads it into
+    jc .out
+    mov di, dx
+    mov ah, FSKD_REFUSED
+    call .call
+    pushf
+    push dx
+    mov dx, di
+    call OSAPI_MEM_FREE
+    pop dx
+    popf
+    jmp short .out
+.no:
+    stc
+    jmp short .out
+.call:
+    mov dx, ds                      ; DX:SI = the name
+    mov es, [sc_fsel]
+    mov al, OSAPI_FSK_DELSYS
+    call OSAPI_VOL_CHECK
+    ret
+.out:
+    pop es
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop si
+    ret
 
 ; --- the report's words -----------------------------------------------------------
 sc_n_report:   db 'SYSCHECK.TXT', 0
@@ -417,6 +581,7 @@ sc_o_hd:       db ' hard disk', 0
 sc_o_fl:       db ' floppy', 0
 sc_o_checked:  db ', checked ', 0
 sc_o_result:   db 'Result: ', 0
+sc_o_task:     db 'Task: ', 0
 sc_o_findings: db 'Findings', 0
 sc_o_nofind:   db 'No findings', 0
 sc_o_brk:      db 'BROKEN   ', 0
@@ -435,3 +600,6 @@ sc_q_rm:       db 'Remove ', 0
 sc_q_rm2:      db ' leftover files?', 0
 sc_q_rm3:      db ' files, fix associations?', 0
 sc_q_asc:      db 'Rebuild the file associations?', 0
+sc_q_st:       db 'Also remove ', 0
+sc_q_st0:      db 'Remove ', 0
+sc_q_st2:      db ' unusable files?', 0

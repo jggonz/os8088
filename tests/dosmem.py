@@ -108,7 +108,7 @@ def marn(m, pseg, dm):
     """the arena line's digits, as an int."""
     raw = m.read((pseg << 4) + dm["dos_marn"], 8).split(b"\0")[0].decode("latin-1")
     try:
-        return int(raw.rstrip("KB").strip())
+        return int(raw.strip().rstrip("+KB"))
     except ValueError:
         fail("dos_marn reads %r and should be digits and a KB - the page has "
              "never been painted (SPEC.md 96.36.3)" % raw)

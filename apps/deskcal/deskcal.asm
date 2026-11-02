@@ -1869,7 +1869,7 @@ dc_s_tlong: db 'A task: at most 23', 0
 dc_s_qdel:  db 'Delete again to confirm', 0
 dc_s_dmg:   db 'Calendar file damaged', 0
 
-dc_s_about: db 'Desk Calendar for os8088', 0
+dc_s_about: db 'Desk Calendar by jggonz', 0
 
 %include "dcdate.inc"
 %include "dcdata.inc"

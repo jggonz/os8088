@@ -52,6 +52,7 @@ import os88parts
 import os88pkg
 import heapmap
 from os88pkg import PKG_FMT
+from os88geom import MEM_GRAN
 import dispcp
 
 KIND_PKG = 0x80         # kernel/instance.inc - a package instance
@@ -75,10 +76,10 @@ def say(msg):
 # than against themselves.
 pkg = open(os88build.at("build/rehome.o88"), "rb").read()
 LD_IMG = struct.unpack_from("<H", pkg, 8)[0]
-# PART 0's SECTOR IS THE TABLE'S, not roundup512(image): since SPEC.md 20.13.8
+# PART 0's PLACE IS THE TABLE'S, not roundup16(image): since SPEC.md 20.13.8
 # a parted package's image may itself be packed, and then the parts start
-# where the PACKED image ends
-P0_OFF = os88parts.image_rows(pkg)[0]["off"] * 512
+# where the PACKED image ends - and the table says in which unit (20.12.2)
+P0_OFF = os88parts.byte_off(os88parts.image_rows(pkg)[0])
 P0_IMG, P0_BSS = struct.unpack_from("<HH", pkg, P0_OFF + 8)
 say("build: loader image %d, part 0 at file+%d, its image %d + bss %d = %d"
     % (LD_IMG, P0_OFF, P0_IMG, P0_BSS, P0_IMG + P0_BSS))
@@ -88,24 +89,29 @@ if pkg[P0_OFF:P0_OFF + 2] != b"O8" or pkg[P0_OFF + 2] != PKG_FMT:
 
 # --- ...and where the carve's LAST part ends, which is the keep (assertion 7)
 # The part table is in the loader's image, found by its magic as os88pkg.py
-# finds it; off is in sectors and len in bytes, and nothing here is
-# compressed, so part i sits (off_i - off_0) sectors up from part 0 - the
-# disk's layout, which op_seg's fast path reads too (20.12.7).
+# finds it; off is in the table's granule (paragraphs, SPEC.md 20.12.2) and
+# len in bytes, and nothing here is compressed, so part i sits
+# (off_i - off_0) granules up from part 0 - the disk's layout, which op_seg's
+# fast path reads too (20.12.7).
 _img = os88pkg.image_unwrap(pkg)     # the table is in the IMAGE (20.13.8)
-_t = _img.index(b"O88PARTS")
+_t, GRAN = os88pkg.part_table(_img)
+if _t is None:
+    sys.exit("rehome: build/rehome.o88 carries no part table - nothing below "
+             "can run (SPEC.md 20.12.3)")
 ROWS = [struct.unpack_from("<BBHHH", _img, _t + 10 + 8 * i)
         for i in range(_img[_t + 8])]
 _eager = [r for r in ROWS if r[2] and not (r[1] & 8)]      # filed, not LAZY
-KEEP = (_eager[-1][2] - _eager[0][2]) * 32 + (_eager[-1][3] + 15) // 16
+KEEP = (_eager[-1][2] - _eager[0][2]) * GRAN // 16 + (_eager[-1][3] + 15) // 16
 # ...and where the carve ENDED before the kernel cut it: op_claim reads from
 # the cluster at or below part 0, rounds slack + run up to a cluster, and
-# claims that in whole KB (20.12.2) - so on the 360KB disk's 1KB clusters
-# the claim carries a margin past the asset that this figure names.
+# claims that through OSAPI_MEM_P, to the granule (20.12.2, 50.3.7) - so on
+# the 360KB disk's 1KB clusters the claim carries a margin past the asset
+# that this figure names.
 CLB = 1024 if GEOM == "360" else 512
-_slack = (_eager[0][2] * 512) % CLB
-_bend = (_eager[-1][2] - _eager[0][2]) * 512 + _eager[-1][3]
+_slack = (_eager[0][2] * GRAN) % CLB
+_bend = (_eager[-1][2] - _eager[0][2]) * GRAN + _eager[-1][3]
 _cap = (_slack + _bend + CLB - 1) // CLB * CLB
-CARVE_PARA = (_cap + 1023) // 1024 * 64
+CARVE_PARA = (_cap // 16 + MEM_GRAN - 1) // MEM_GRAN * MEM_GRAN
 say("build: the carve's last part ends %d paragraphs past the program "
     "(the keep); the claim was %d paragraphs from a %d-byte head slack"
     % (KEEP, CARVE_PARA, _slack))

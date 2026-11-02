@@ -124,7 +124,7 @@ def pool(m):
     flags)} for every live block. A driver image loaded in mid-session there
     is a pool block above 1MB and NO mem_tab record, and so would a claim it
     made - so on kern_mega check 2 reads both tables."""
-    raw = m.read(m.sym("mx_tab"), MX_BLKSZ * MX_NBLK)
+    raw = m.read(m.tail("mx_tab"), MX_BLKSZ * MX_NBLK)
     out = {}
     for k in range(MX_NBLK):
         e = raw[k * MX_BLKSZ:(k + 1) * MX_BLKSZ]

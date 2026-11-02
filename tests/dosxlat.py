@@ -190,6 +190,9 @@ def main():
         wins = dispcp.win_list(m, eth.S)
         wx, wy = dispcp.win_rect(m, eth.S, wins[-1])[:2]
         dispcp.open_named(m, mouse, eth.S, eth.settle, wx, wy, "DOSPKT.COM")
+        # ...WITH NO PACKET DRIVER, since Network starts cleared (SPEC.md
+        # 96.36.7.4): tick it and Run again, as a user would
+        dosmap.network_rerun(m, mouse, eth.settle, dm, "dosxlat")
 
         pseg = None
         if os88qemu.acted(m, lambda: dispapps.pkg_seg(m, 0) is not None,

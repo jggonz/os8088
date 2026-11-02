@@ -1052,7 +1052,7 @@ mpp_sizeof:
 ;
 ; Stop playback, free the previous module claim, size a new one from the
 ; file's real size - the dialog's, or mpp_sizeof's for a playlist advance, and
-; only a name in no directory falls back to OSAPI_MEM_AVAIL capped at 128KB
+; only a name in no directory falls back to the largest run capped at 128KB
 ; (SPEC.md 56.14) - read the WHOLE file in one
 ; OSAPI_FILE_READ - the destination advances by SEGMENT (SPEC.md 18.4.1),
 ; which is the only reason a 116KB module fits in one call - then trim the
@@ -1116,52 +1116,57 @@ mpp_load_name:
     ; mount snapshot already in RAM - and it also lets the claim be EXACTLY
     ; what the file needs instead of the largest run in the heap, which is
     ; what mpp_trim below was invented to undo.
-    cmp dx, 1023                    ; the ONLY ceiling here is the domain of
-    jae .toobig                     ; the conversion below (SPEC.md 56.14): it
-                                    ; composes DX<<6 into a word, so ~64MB is
-                                    ; where the arithmetic stops being true.
-                                    ; Everything under it is the HEAP's
-                                    ; question, asked eight lines down
-    add cx, 1023                    ; KB = ceil(bytes / 1024) across 32 bits:
-    adc dx, 0                       ; the +1023 can carry out of CX, and DX is
-    mov ax, cx                      ; at most 1023 after it, so the DX<<6
-    mov cl, 10                      ; below still lands inside one word
-    shr ax, cl                      ; (CX is dead the moment AX has it)
-    mov cl, 6
+    cmp dx, 1023                    ; the ONLY ceiling on the FILE is 'too
+    jae .toobig                     ; big' past ~64MB (SPEC.md 56.14), kept
+                                    ; where it was. Everything under it is the
+                                    ; HEAP's question, asked eight lines down -
+    cmp dx, 15                      ; and 960KB or more is answered without
+    jae .nofit                      ; asking: no heap on any kernel has a run
+                                    ; that long, and it is where the paragraph
+                                    ; count below stops fitting a word
+    add cx, 15                      ; PARAGRAPHS = ceil(bytes / 16) across 32
+    adc dx, 0                       ; bits (SPEC.md 50.3.7), DX <= 15 after
+    mov ax, cx                      ; it, so DX<<12 lands inside one word (CX
+    mov cl, 4                       ; is dead the moment AX has it)
+    shr ax, cl
+    mov cl, 12
     shl dx, cl
-    or ax, dx                       ; ...and it cannot come out 0: the smallest
+    or dx, ax                       ; ...and it cannot come out 0: the smallest
                                     ; size that reaches here is 1 byte, and a
-                                    ; size of 0 means UNKNOWN and went .blind
-    mov cx, ax
-    call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous run, in KB
-    cmp cx, ax
+                                    ; size of 0 means UNKNOWN and went .blind.
+                                    ; In DX, which MEMP_AVAIL keeps
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the LARGEST claim, in paragraphs
+    cmp dx, ax
     ja .nofit                       ; it will not fit this heap: say so NOW,
-    mov ax, cx                      ; with the drive still stopped
+    xchg ax, dx                     ; with the drive still stopped
     jmp short .sized
 
 .blind:
-    call OSAPI_MEM_AVAIL            ; AX = the LARGEST contiguous run, in KB
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the LARGEST claim, in paragraphs
     or ax, ax
     jz .nomem
-    cmp ax, 128                     ; cap the SPECULATIVE claim at 128KB. This
+    cmp ax, 128 * 64                ; cap the SPECULATIVE claim at 128KB. This
     jbe .sized                      ; is the original cap and the only one with
-    mov ax, 128                     ; a reason left (SPEC.md 56.14): the size
+    mov ax, 128 * 64                ; a reason left (SPEC.md 56.14): the size
                                     ; is unknown here, so the claim is a guess
                                     ; and mpp_trim gives the surplus back. It
                                     ; is a POLITENESS bound on an over-claim,
                                     ; never a verdict on a file - the refusal
                                     ; above no longer borrows it
 .sized:
-    mov [mpp_capk], ax
-    call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF on refusal
-    jc .nomem
+    xor cx, cx                      ; AX = paragraphs, no DMA head (SPEC.md
+    mov bl, MEMP_CLAIM              ; 50.3.7): the module pays the heap's
+    call OSAPI_MEM_P                ; granule rather than a whole KB, and
+    jc .nomem                       ; what comes back is what was GRANTED
     mov [mpp_modseg], dx
+    mov [mpp_capp], ax
 
-    mov ax, [mpp_capk]              ; DX:CX = capacity in BYTES = KB * 1024
-    mov dx, ax
-    mov cl, 10
-    shl ax, cl
-    mov cl, 6
+    mov dx, ax                      ; DX:CX = capacity in BYTES = paragraphs
+    mov cl, 4                       ; x 16, the granule's slack included - it
+    shl ax, cl                      ; is ours
+    mov cl, 12
     shr dx, cl
     mov cx, ax
     mov es, [mpp_modseg]
@@ -1268,7 +1273,7 @@ mpp_load_name:
 ; conditional because the two paths must not disagree about who owns the tail
 ; of a claim.
 ;
-; OSAPI_MEM_REGROW shrinks IN PLACE (SPEC.md 50.3.1): the record's length
+; A regrow shrinks IN PLACE (SPEC.md 50.3.1): the record's length
 ; changes and nothing moves. Called before mpm_load, so no sample pointer
 ; exists yet to be invalidated even on the impossible path where a shrink
 ; relocated.
@@ -1280,24 +1285,25 @@ mpp_trim:
     push dx
     mov ax, [mpm_bloblen_lo]
     mov dx, [mpm_bloblen_hi]
-    add ax, 1023                    ; round UP: the heap's granularity is KB,
-    adc dx, 0                       ; and a truncating divide would hand back
-    mov cl, 10                      ; the tail of the file with the tail of
-    shr ax, cl                      ; the claim
-    mov bx, dx
-    mov cl, 6
+    add ax, 15                      ; round UP to paragraphs: a truncating
+    adc dx, 0                       ; divide would hand back the tail of the
+    mov cl, 4                       ; file with the tail of the claim. What
+    shr ax, cl                      ; was read is at most the capacity, which
+    mov bx, dx                      ; is under 960KB, so DX<<12 fits a word
+    mov cl, 12
     shl bx, cl
     or ax, bx
     jnz .go
-    inc ax                          ; 0 KB is a refusal, not a claim
+    inc ax                          ; 0 is a refusal, not a claim
 .go:
-    cmp ax, [mpp_capk]
+    cmp ax, [mpp_capp]
     jae .out                        ; the file filled it: nothing to give back
     mov dx, [mpp_modseg]
-    call OSAPI_MEM_REGROW
+    mov bl, MEMP_REGROW             ; in PARAGRAPHS (SPEC.md 50.3.7)
+    call OSAPI_MEM_P                ; AX = what it holds now
     jc .out                         ; refused: keep the oversized claim, which
     mov [mpp_modseg], dx            ; costs heap and breaks nothing
-    mov [mpp_capk], ax
+    mov [mpp_capp], ax
 .out:
     pop dx
     pop cx
@@ -2334,7 +2340,7 @@ mpp_ab9: db 'Ported by Jorge Gonzalez', 0
 
 ; --- the module blob (a heap claim, SPEC.md 50) -------------------------------
     MPPW mpp_modseg                 ; claim base segment, 0 = none
-    MPPW mpp_capk                   ; ...its size in KB
+    MPPW mpp_capp                   ; ...its size in paragraphs, as granted
     MPPBUF mpp_fname, 13            ; the chosen 8.3 name, copied out of the
                                     ; kernel's buffer during the completion call
     MPPBUF mpp_find, OSAPI_FIND_SZ  ; mpp_sizeof's directory record, for the

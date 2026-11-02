@@ -188,8 +188,9 @@ def main():
                  "for" % (os.path.basename(path), layout, out[0][0], out[0][3]))
         data = img
         if args.wrap and i not in args.plain:
-            data, _ = os88lz.cz_wrap(
-                img, os88lz.LZ4 if args.wrap == "lz4" else os88lz.LZB)
+            data, _ = os88lz.cz_wrap(     # code: the near-call filter
+                img, os88lz.LZ4 if args.wrap == "lz4" else os88lz.LZB,
+                filt=True)                # when it pays (SPEC.md 20.13.9)
         with open(path, "wb") as fh:
             fh.write(data)
         out.append((os.path.basename(path), size, nent, layout))

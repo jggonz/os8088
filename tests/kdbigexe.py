@@ -82,7 +82,8 @@ MACH = "os8088_5150_cga_gla_mix"
 RD_N, RD_SEL, RD_PITCH, RD_DIS = 10, 12, 14, 16
 WHOLE, NARM = 1, 2
 DST_ERR = 3
-DOS_PSPP = 10
+# DOS_PSPP is READ OFF THE MAP (WANT, below): a copy here said 10 after
+# SPEC.md 96.20 moved the PSP to 34, and overstated every capacity by 384 bytes
 DSK_RAH_RUNS = 7                # kernel/disk.inc's ceiling, which is the width
                                 # a kern_dos mount always arms - it solves the
                                 # width from the whole arena
@@ -94,7 +95,7 @@ RUNG_KB = {7: 32, 4: 18, 2: 9, 0: 0}    # DSK_RAH_RUNS, KD_RAH_L1, KD_RAH_L2
 A_BW, A_BG, A_BH, A_BTNY, TITLE_H = 72, 12, 13, 46, 18
 
 WANT = ("kd_top", "kd_floor", "dos_arena", "dos_apara", "dos_wbytes",
-        "dsk_rah_runs", "kd_entry.loadtry")
+        "dsk_rah_runs", "kd_entry.loadtry", "DOS_PSPP")
 
 
 def fail(msg):
@@ -185,7 +186,7 @@ def alert_button(m, base, dm, i, n=2):
     return left + A_BW // 2, wy + TITLE_H + A_BTNY + A_BH // 2
 
 
-def capacity(top, arena, wpara, kb, kept_kb):
+def capacity(top, arena, wpara, kb, kept_kb, pspp):
     """dos_load's capacity in FILE BYTES with `kb` of cache still held.
 
     `dos_load` reads the whole file into [dos_ldpsp]+16 with a capacity of
@@ -203,7 +204,7 @@ def capacity(top, arena, wpara, kb, kept_kb):
     the machine for the model's error.
     """
     t = top - (((kb - kept_kb) * 1024) >> 4)
-    return ((t - arena - wpara) - DOS_PSPP - 16) * 16
+    return ((t - arena - wpara) - pspp - 16) * 16
 
 
 # kern_mega (OS88_MEGA, tests/megaport.txt): kern_dos runs in the HMA there,
@@ -368,7 +369,8 @@ def main():
         wpara = (w("dos_wbytes") + 15) >> 4
         keep = dosmap.kd_const("KD_RAH_KEEP")
         ladder = tuple(k for k in (7, 4, 2, 0) if k >= keep)
-        caps = [(k, capacity(top, arena, wpara, RUNG_KB[k], RUNG_KB[keep]))
+        caps = [(k, capacity(top, arena, wpara, RUNG_KB[k], RUNG_KB[keep],
+                             syms["DOS_PSPP"]))
                 for k in ladder]
         print("kdbigexe: dos_load capacity per rung: "
               + ", ".join("%d runs %d" % (k, c) for k, c in caps)

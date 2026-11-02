@@ -668,9 +668,12 @@ tm_lim:     db 24, 60, 60
 ; the standard About card's lines (SPEC.md 20.5.1). The card is 2*7 + lines*12
 ; tall and the content is 41, so TWO lines is this window's ceiling.
 tm_ablines:
-    dw tm_ab1, tm_ab2, 0
+    dw tm_ab1, tm_ab2, tm_abz, tm_abc, tm_abn, 0
 tm_ab1:     db 'Timer for os8088', 0
 tm_ab2:     db 'a stopwatch', 0
+tm_abz:     db 0
+tm_abc:     db 'Contributed by', 0
+tm_abn:     db 'Jorge Gonzalez', 0
 
 ; --- the shared controls (SPEC.md 20.5.1) ---------------------------------------
 %define OS88UI_ABOUT            ; the standard About card...

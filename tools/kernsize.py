@@ -251,10 +251,12 @@ THEMES = (
     # ascw.inc (SPEC.md 54.7.6.4) is compress.inc's shape beside assoc.inc:
     # the ASSOC.DAT flush is FORMAT.DRV's fifth entry, all of it image, and
     # its resident half is the one `dw` on diskw.inc's row.
+    # fsck.inc (SPEC.md 118.14) is System Check: FSCHECK.DRV's image is cut
+    # out, and what stays is `osapi_vol_check`'s door and its `.bss`.
     ("the file system, end to end",
      ("disk.inc", "dskwin.inc", "diskw.inc", "files.inc", "filecp.inc",
       "fdlg.inc", "loader.inc", "assoc.inc", "ascw.inc", "diskops.inc",
-      "lz.inc", "compress.inc")),
+      "lz.inc", "compress.inc", "fsck.inc")),
     # deskmod.inc (SPEC.md 11.103.10) is the same shape: DESK.DRV's image is
     # cut out, and what stays is the 16-byte QUERY thunk in `.cold`.
     # extmod.inc (SPEC.md 39.19.6) goes beside dockmod.inc for dockmod's

@@ -102,7 +102,7 @@ def main():
         def arena():
             raw = rd(dm["dos_marn"], 8).split(b"\0")[0]
             try:
-                return int(raw.decode("latin-1").rstrip("KB").strip())
+                return int(raw.decode("latin-1").strip().rstrip("+KB"))
             except ValueError:
                 fail("the arena row reads %r and should be digits and a KB - "
                      "the page has never been painted (SPEC.md 96.36.3)" % raw)
@@ -167,7 +167,12 @@ def main():
                 continue
             if own == snd or (own == os88geom.MEM_K_DRV and base == snd):
                 para += sz
-        held = para >> 6
+        held = (para + 63) >> 6         # ROUNDED UP: osapi_drv_classk adds 63
+                                        # to the image before its one shift of
+                                        # image + claims (SPEC.md 51.12.2) - so
+                                        # a class under a KB is never 0K, which
+                                        # is 'not loaded' - and that is this
+                                        # total's ceiling exactly
         if not held:
             fail("SOUND.DRV is at %04X and the claim table has nothing owned "
                  "by it or based there - either the driver is gone or this "

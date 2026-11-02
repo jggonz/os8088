@@ -9,7 +9,7 @@ file too big to hold twice, head[] and prev[] behind them - and on kern_mega
 in protected mode a paragraph is not a segment register's value. Since
 KERN-MEGA-MEMORY-PLAN MC7.6 the image keeps its arithmetic and loads every
 segment register through a scratch selector of its own stream (KSEG, the
-MEGA_SEL_K slots), and a slide re-aims that stream's scratch (mega_slidef).
+MEGA_SEL_K slots), and a slide re-aims that stream's scratch (mega_slidec).
 tests/lzbig.py is the same subjects on kern_big under MartyPC; this is the
 protected-mode half, on 86Box's 286 (vm/286-mega, the owner's mr286), which
 takes the reset path every reflection takes on a real AT.

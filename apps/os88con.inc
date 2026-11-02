@@ -64,7 +64,8 @@
 ;                                            drops the last)
 ;   con_mark / con_markall / con_markcur     the dirty-ROW bitmap
 ;   con_rows_owed                            draw what is owed, and clear it
-;   con_row / con_compose / con_emit         one row: buffer -> band -> glass
+;   con_rowspan / con_compose / con_emit     one row's span: buffer ->
+;                                            band -> glass
 ;   con_font                                 the 256 CP437 glyphs, once
 ;
 ; ...and two opt-ins: `%define CON_TTY` adds the teletype half (con_write,
@@ -153,24 +154,15 @@ con_bit:
     ret
 
 ; --- con_mark - BX = a row that must be redrawn ------------------------------
+; A whole row is columns 0..79, and widening any span to 0..79 IS 0..79, so
+; this is con_marks over the whole width: THE SPAN MOVES WITH THE BIT
+; (96.33.12) inside its one `cli`, and con_takerow reads the two together.
+; The row may be one past the end (the cursor may sit there): con_marks
+; refuses it.
 con_mark:
-    push ax
-    push bx
     push cx
-    cmp bx, CON_ROWS
-    jae .out                        ; the cursor may sit one past the end
-    pushf
-    cli                             ; THE SPAN MOVES WITH THE BIT (96.33.12),
-    mov byte [con_dc0 + bx], 0      ; and con_takerow reads the two together.
-    mov byte [con_dc1 + bx], CON_COLS - 1   ; a whole row is columns 0..79
-    call con_bit
-    or [con_drb + bx], al
-    popf
-.out:
-    pop cx
-    pop bx
-    pop ax
-    ret
+    mov cx, (CON_COLS - 1) << 8     ; CL = 0, CH = 79
+    jmp short con_mk1
 
 ; --- con_markc - BX = a row, CL = ONE column of it (SPEC.md 96.33.12) --------
 ; The bitmap names a ROW because a band repaint is priced per CALL (~756 us of
@@ -185,40 +177,52 @@ con_mark:
 ; the new span stale WITH the bit set - so the next pass would draw the narrow
 ; span and never the lost ones.
 con_markc:
-    push ax
-    push bx
     push cx
-    push dx
-    mov dl, cl                      ; THE COLUMN, banked: con_bit spends CL and
-    cmp bx, CON_ROWS                ; rewrites BX into the bitmap's byte index
-    jae .out
+    mov ch, cl                      ; one column is a span of one
+con_mk1:
+    call con_marks
+    pop cx
+    ret
+
+; --- con_marks - BX = a row, CL = its first changed column, CH = its last ----
+; con_markc's body for a RUN of cells (SPEC.md 96.33.12): con_markcells' first
+; and last rows, so int 10h AH=09h writing one digit in place - a clock -
+; marks that digit and not the row it sits on. Widening-only, as con_markc.
+con_marks:
+    cmp bx, CON_ROWS                ; (the row one past the end is refused)
+    jae .ret
+    push ax
+    push si
+    push cx
+    mov si, bx                      ; **con_bit's SHAPE, IN LINE** (SPEC.md
+    mov cl, bl                      ; 96.54.14): this runs once for every
+    and cl, 7                       ; character a program prints, and the call,
+    mov al, 1                       ; the row banked round it and two more
+    shl al, cl                      ; registers saved were a third of it.
+    mov cl, 3                       ; AL = the row's bit, SI = its byte; BX
+    shr si, cl                      ; stays the row, which the spans index by
+    pop cx                          ; CL..CH, the span, again
     pushf
     cli
-    push bx                         ; ...so the ROW is banked too
-    call con_bit
-    mov ah, [con_drb + bx]
-    or [con_drb + bx], al           ; set it...
-    test ah, al                     ; ...but was it ALREADY set? `pop` touches
-    pop bx                          ; no flag, so this survives it
+    test [con_drb + si], al         ; ALREADY set?
     jnz .widen
-    mov [con_dc0 + bx], dl          ; a clean row: the span IS this column
-    mov [con_dc1 + bx], dl
+    or [con_drb + si], al           ; a clean row: the span IS these columns
+    mov [con_dc0 + bx], cl
+    mov [con_dc1 + bx], ch
     jmp short .done
 .widen:
-    cmp dl, [con_dc0 + bx]
+    cmp cl, [con_dc0 + bx]
     jae .hi
-    mov [con_dc0 + bx], dl
+    mov [con_dc0 + bx], cl
 .hi:
-    cmp dl, [con_dc1 + bx]
+    cmp ch, [con_dc1 + bx]
     jbe .done
-    mov [con_dc1 + bx], dl
+    mov [con_dc1 + bx], ch
 .done:
     popf
-.out:
-    pop dx
-    pop cx
-    pop bx
+    pop si
     pop ax
+.ret:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -253,6 +257,16 @@ con_takerow:
     jae .no
     pushf                           ; **THE FLAGS FIRST AND THE ROW SECOND**, so
     cli                             ; the `pop bx` below takes the row and not
+    cmp word [con_scrl], 0          ; **AND NOT WHILE A SCROLL IS OWED**
+    jne .owed                       ; (SPEC.md 96.54.14): the pass that spent
+                                    ; the debt has been overtaken by a scroll
+                                    ; since, so the glass is about to be moved
+                                    ; again - a row drawn now from the buffer
+                                    ; is drawn where the next blit moves it
+                                    ; off. The mark SURVIVES (its own shift
+                                    ; carries it with the buffer), and the
+                                    ; next pass blits first. Every renderer
+                                    ; spends the debt before it takes a row
     push bx                         ; the saved flags - which it did, and the
     call con_bit                     ; span then indexed off a flags word: the
                                     ; renderer wrote 109 cells of an 80-cell
@@ -275,6 +289,8 @@ con_takerow:
     pop ax
     stc
     ret
+.owed:
+    popf
 .no:
     pop cx
     pop bx
@@ -377,13 +393,18 @@ con_markup:
                                     ; 23 rows of pre-scroll text on the glass
 
 ; -----------------------------------------------------------------------------
-; con_rows_owed - draw the rows in the dirty range, and clear it
+; con_rows_owed - draw what the dirty rows owe, and clear them
 ; in:  gfx lock held; out: nothing, all registers preserved
 ;
 ; **THIS IS WHAT STOPPED TYPING REDRAWING THE WHOLE TERMINAL.** A character
 ; echoed back by the host reaches con_putc, which used to leave te_show to
 ; repaint all eighteen rows - 1,152 glyph cells at PERFORMANCE.md's ~900us
 ; each on the machine this is for - to change one of them.
+;
+; **AND A ROW OWES ITS SPAN, NOT ITS WIDTH** (SPEC.md 96.33.12): con_rowspan
+; composes and blits only the columns con_takerow banked with the bit, so a
+; clock's digit is one cell of compose and an eight-pixel blit where it was
+; eighty cells and a 640-pixel one - 81,013 guest cycles to 11,305 on Hercules.
 ; -----------------------------------------------------------------------------
 con_rows_owed:
     push ax
@@ -392,15 +413,63 @@ con_rows_owed:
     push dx
     push si
     push di
-    xor bx, bx
+    pushf                           ; **THE CARET'S MARKS AND "NO SCROLL OWED"
+    cli                             ; ARE ONE READING** (SPEC.md 96.54.14): a
+    cmp word [con_scrl], 0          ; mark is a BUFFER row and the glass is
+    jne .owed                       ; that row only with no debt standing - so
+    call con_curmove                ; with one, nothing here can be taken
+    popf                            ; anyway (con_takerow) and the pass is
+    xor bx, bx                      ; the next one's
 .row:
+    test bl, 7                      ; **THE BITMAP IS READ BEFORE IT IS TAKEN**:
+    jnz .bit                        ; con_takerow is a `cli` and a shift ladder
+    mov si, bx                      ; a row, ~600 cycles, and twenty-five of
+    mov cl, 3                       ; them were 15,600 of a one-cell pass. So a
+    shr si, cl                      ; byte's eight bits are snapshotted into DL
+    mov dl, [con_drb + si]          ; and only a SET one is taken - without the
+    or dl, dl                       ; `cli`, which is safe: a mark set after
+    jz .skip8                       ; this read is not taken, so it SURVIVES
+.bit:                               ; into the next pass. A clean byte is eight
+    shr dl, 1                       ; rows skipped at once
+    jnc .next
     call con_takerow                 ; ...which CLEARS the bit it answers for,
     jnc .next                       ; so a mark the worker sets for a row this
-    call con_row                     ; loop has passed survives into the next
-.next:                              ; pass instead of being dropped
+    call con_rowspan                 ; loop has passed survives into the next
+    cmp word [con_scrl], 0          ; pass instead of being dropped
+    jne .late
+.next:
     inc bx
+    jmp short .test
+.skip8:
+    add bx, 8
+.test:
     cmp bx, CON_ROWS
     jb .row
+    jmp short .done
+.owed:
+    popf
+    jmp short .done
+.late:
+    ; **A SCROLL ARRIVED DURING THE PASS** (SPEC.md 96.54.14). The worker
+    ; runs between this task's slices, so the buffer can move under a pass
+    ; that has already spent the debt: the row just put down was composed
+    ; from cells the buffer has (in part, or wholly) moved since, and the
+    ; NEXT pass blits the glass up by the new debt first - carrying this
+    ; row with it. So it is owed again where the blit will put it, under
+    ; the `cli` that makes the debt and the mark one reading (a later
+    ; scroll's con_markup carries the mark on up with it), and the pass
+    ; ends: every row after it would be drawn post-scroll and then moved
+    ; again. Measured as torn and doubled lines on the glass after a
+    ; windowed teletype run (tests/doswtty.py), 3,318 pixels from what a
+    ; full repaint draws
+    pushf
+    cli
+    sub bx, [con_scrl]
+    jb .gone                        ; ...carried off the top: owed nowhere
+    call con_mark
+.gone:
+    popf
+.done:
     pop di
     pop si
     pop dx
@@ -408,6 +477,50 @@ con_rows_owed:
     pop bx
     pop ax
     ret
+
+; --- con_curmove - a caret that moved owes BOTH its cells ---------------------
+; The underline is composed into the band (SPEC.md 70.8.2), so with a span
+; renderer the cell a caret LEFT must be in some span or its underline stays
+; on the glass - and so must the cell it ARRIVED at. con_markcur on both sides
+; of a move was the rule, and a whole-row renderer forgave a mover that
+; marked only one side, because any mark on the row redrew the row. A span
+; does not, so the renderer keeps [con_lcur], where the caret was the last
+; time a pass began, and marks both cells itself when it differs: every
+; mover is right whether or not it marked - and since SPEC.md 96.54.14 no
+; mover marks at all. FFFF = no caret drawn. A move DURING a pass is
+; con_compose's (con_lcset), because the underline is drawn where the caret
+; is when its row is composed. IF = 0 (con_rows_owed): these marks and "no
+; scroll owed" are one reading.
+con_curmove:
+    push ax
+    push bx
+    push cx
+    mov ax, 0xFFFF
+    cmp byte [con_cvis], 0
+    je .have
+    mov al, [con_cx]
+    cmp al, CON_COLS - 1
+    jbe .col
+    mov al, CON_COLS - 1             ; the pen may sit one past the last column
+.col:
+    mov ah, [con_cy]
+.have:
+    xchg ax, [con_lcur]
+    cmp ax, [con_lcur]
+    je .out
+    call .mk                        ; the cell it LEFT...
+    mov ax, [con_lcur]
+    call .mk                        ; ...and the one it is on
+.out:
+    pop cx
+    pop bx
+    pop ax
+    ret
+.mk:                                ; FFFF needs no test: it is row 255,
+    mov cl, al                      ; which con_marks refuses as off the end
+    mov bl, ah
+    xor bh, bh
+    jmp con_markc
 
 ; -----------------------------------------------------------------------------
 ; con_scrollpaint - spend [con_scrl] as a BLIT rather than as eighteen runs
@@ -451,6 +564,15 @@ con_scrollpaint:
     call OSAPI_GFX_SCROLL
     pop ax
     jc .all
+    mov bx, [con_lcur]              ; **THE CARET'S PIXELS MOVED WITH THE
+    cmp bx, 0xFFFF                  ; REST** (SPEC.md 96.54.14): the underline
+    je .lcok                        ; con_curmove last drew is N rows up now,
+    sub bh, al                      ; so that is where it is owed from - and a
+    jnc .lcset                      ; caret blitted off the top is owed nowhere.
+    mov bx, 0xFFFF                  ; con_putc no longer marks the cell a caret
+.lcset:                             ; leaves, so this is the only record of it
+    mov [con_lcur], bx
+.lcok:
     mov bx, CON_ROWS                 ; the rows it vacated are OURS to repaint
     sub bx, ax
 .mk:
@@ -499,14 +621,37 @@ con_scrollpaint:
 ; font_run fallback produced could not offer.
 ; =============================================================================
 
-; --- con_row - BX = a buffer row: compose it, then put it down ---------------
-con_row:
+; --- con_rowspan - BX = a row con_takerow just took: compose and put down
+; ONLY ITS SPAN - [con_tkc0]..[con_tkc1], cut to the visible box. A span that
+; is not one (the last column before the first) is a marker that set a bit
+; without a span, and the honest answer to that is the whole row (SPEC.md
+; 96.33.12). The box it hands con_compose/con_emit is never EMPTY: the first
+; column is inside [con_vcols] and the last at or after it, so con_compose's
+; `dec cl` cannot wrap.
+con_rowspan:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
+    mov ax, [con_tkc0]              ; AL = the first column, AH = the last
+    mov cl, ah
+    mov ch, 0
+    mov ah, ch
+    cmp cx, ax
+    jae .span
+    xor ax, ax                      ; not a span: the WHOLE row, 0..255 cut
+    mov cl, 0xFF                    ; to the box below
+.span:
+    cmp ax, [con_vcols]
+    jae .done                       ; wholly right of a narrow window
+    inc cx                          ; CX = one past the last column...
+    cmp cx, [con_vcols]
+    jbe .cut
+    mov cx, [con_vcols]              ; ...cut to what is on view
+.cut:
+    sub cx, ax                      ; CX = how many columns, AX the first
     cmp bx, [con_vtop]
     jb .done                        ; above the visible window on a short one
     call con_compose
@@ -559,15 +704,21 @@ con_compose:
     push si
     push di
     mov [con_rr], bx                 ; the row, for the cursor test at the foot:
-    mov ax, CON_COLS * 2             ; every register is spent by then
+    mov di, ax                      ; every register is spent by then
+    push cx                         ; ...and the SPAN, AX = first, CX = count
+    mov ax, CON_COLS * 2
     mul bx                          ; **MUL WRITES DX** (SPEC.md 1)
     mov si, con_scr
     add si, ax                      ; SI = the row's first cell
     mov [con_rowp], si               ; ...kept, because the cursor block at the
                                     ; foot needs the CURSOR's cell and SI has
-                                    ; walked to the end of the row by then
-    mov di, con_band
-    mov cl, [con_vcols]              ; <= CON_COLS, clamped in the carrier's layout
+                                    ; walked to the end of the span by then
+    add si, di
+    add si, di                      ; SI = the span's first cell...
+    add di, con_band                 ; ...DI its first band column: the band
+    pop cx                          ; stays COLUMN-INDEXED, so a span lands
+    push di                         ; where the blit's source will look for it
+                                    ; CL = the count, <= [con_vcols]
     mov dl, 0x70                    ; which bits are a BACKGROUND: bit 7 joins
     cmp byte [con_mono], 0           ; them under iCE, where it is the fourth
     jne .cell                       ; background bit and not blink (70.8.9)
@@ -622,6 +773,7 @@ con_compose:
     ; Two lit scanlines in the cell's bottom two band rows. It is not a second
     ; paint and it never flashes: the cell goes from its old pixels to its
     ; final pixels in the band, and the band reaches the glass once.
+    pop bx                          ; BX = the span's first band column
     cmp byte [con_cvis], 0
     je .out
     mov ax, [con_cy]
@@ -630,7 +782,14 @@ con_compose:
     mov ax, [con_cx]
     cmp ax, [con_vcols]
     jae .out                        ; the cursor is off the right of a narrow
-    mov di, con_band + CON_COLS*6     ; window: there is no cell to underline
+    add ax, con_band                 ; window: there is no cell to underline
+    cmp ax, bx
+    jb .out                         ; ...and OUTSIDE THE SPAN it is not this
+    cmp ax, di                      ; pass's: DI walked to one past the span,
+    jae .out                        ; and con_curmove marks the cells it moves
+    sub ax, con_band                 ; between
+    call con_lcset                  ; ...and the glass has it HERE now
+    mov di, con_band + CON_COLS*6
     add di, ax
     ; **IT IS THE CURSOR CELL'S OWN POLARITY AND NOT ALWAYS `or`.** On a 1bpp
     ; screen a cell the loop drew INVERSE has those two scanlines at 0xFF
@@ -647,15 +806,54 @@ con_compose:
     not al                          ; AL = FF on a normal cell, 00 on inverse
     or [di], al
     or [di + CON_COLS], al
-    mov al, ch
     and [di], al                    ; ...and an inverse cell has those two rows
     and [di + CON_COLS], al          ; CLEARED instead: a dark underline on lit
                                     ; paper, the same two scanlines the other
-                                    ; way up
+                                    ; way up. **WITH THE SAME AL**: this
+                                    ; reloaded AL from CH first, so a normal
+                                    ; cell was lit and then cleared and an
+                                    ; inverse one never touched - the caret
+                                    ; was drawn on NO cell at all, and every
+                                    ; row passed because nothing compared the
+                                    ; glass with a repaint (tests/doswcell.py)
 .out:
     pop di
     pop si
     pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; --- con_lcset - AX = the column the caret's underline is being composed in,
+; [con_rr] its row: [con_lcur] says so, and if that is not where the pass's
+; con_curmove found it - the caret moved DURING the pass, which with no mark
+; from the mover nothing else sees - the cell it was in owes its underline
+; away (SPEC.md 96.54.14). That mover set the console's dirty byte after the
+; pass took it, so a cell already passed is drawn by the pass it posted. The old cell is a GLASS cell and a mark
+; is a BUFFER row, the two a debt apart, so the row is the debt less and the
+; two are read under one `cli` - a scroll may have overtaken this very row
+; (con_rows_owed's .late). AX is kept.
+con_lcset:
+    push ax
+    push bx
+    push cx
+    mov ah, [con_rr]                ; AH = the row, AL = the column: [con_lcur]
+    pushf                           ; is con_curmove's shape
+    cli
+    xchg ax, [con_lcur]
+    cmp ax, [con_lcur]
+    je .same
+    cmp ax, 0xFFFF
+    je .same                        ; none was on the glass
+    mov cl, al
+    mov bl, ah
+    xor bh, bh
+    sub bx, [con_scrl]
+    jb .same                        ; ...carried off the top by the debt
+    call con_markc
+.same:
+    popf
     pop cx
     pop bx
     pop ax
@@ -687,6 +885,9 @@ con_emit:
     push ds
     pop es                          ; ES:SI = OUR band: the blit takes the
                                     ; caller's own segment (SPEC.md 5.4.2)
+    mov di, ax                      ; DI = the span's first column...
+    mov bp, ax
+    add bp, cx                      ; ...BP one past its last (96.33.12)
     mov ax, bx
     sub ax, [con_vtop]
     shl ax, 1
@@ -713,14 +914,12 @@ con_emit:
 .live:
     cmp byte [con_mono], 0
     je .runs
-    xor ax, ax                      ; ONE band, ONE blit, no runs (70.8.4)
-    mov cx, [con_vcols]
-    call con_blitrun
+    mov ax, di                      ; ONE band, ONE blit, no runs (70.8.4):
+    call con_blitrun                ; CX is still the span's count
     jmp short .out
-.runs:
-    xor di, di                      ; DI = the run's first column
+.runs:                              ; DI = the run's first column
 .run:
-    cmp di, [con_vcols]
+    cmp di, bp
     jae .out
     mov si, [con_rcp]
     mov ax, di
@@ -732,8 +931,8 @@ con_emit:
     inc cx
     mov bx, di
     add bx, cx
-    cmp bx, [con_vcols]
-    jae .emit                       ; the row ends the run
+    cmp bx, bp
+    jae .emit                       ; the span ends the run
     add si, 2
     cmp ah, [si+1]
     je .grow
@@ -987,16 +1186,6 @@ con_font:
     loop .far
     ret
 
-; --- con_celloff - AX = the cursor's byte offset within con_scr ----------------
-con_celloff:
-    push dx
-    mov ax, CON_COLS * 2
-    mul word [con_cy]                ; **MUL WRITES DX** (SPEC.md 1), and the
-    add ax, [con_cx]                 ; product is under 4,000 either way
-    add ax, [con_cx]
-    pop dx
-    ret
-
 ; --- con_putc - AL, a GLYPH, onto the screen at the cursor --------------------
 ; **IT IS ONLY A GLYPH NOW.** The controls and the escape sequences are the
 ; parser's (SPEC.md 70.9, teansi.inc), which is what replaced the "recognised
@@ -1016,26 +1205,38 @@ con_putc:
     push ax
     push bx
     push cx
-    push dx
     push di
-    call con_markcur                 ; the row the cursor is LEAVING owes a
-                                    ; redraw: the underline is in its band
     cmp byte [con_pwrap], 0
-    je .noww
+    je .put
     mov byte [con_pwrap], 0          ; ...the wrap the LAST glyph promised
     mov word [con_cx], 0
     call con_nextrow
-    call con_markcur
-.noww:
-    push ax
-    call con_celloff
-    mov di, ax
-    pop ax
-    mov [con_scr + di], al
-    mov bl, [con_attr]
-    mov [con_scr + di + 1], bl
-    call con_markcur                 ; ...BEFORE the cursor moves: this row is
-    mov ax, [con_cx]                 ; the one whose pixels changed
+.put:
+    ; **ONE MARK A GLYPH, AND IT IS THE CELL'S** (SPEC.md 96.54.14). This
+    ; called con_markcur three times - the cell the caret left, after a wrap
+    ; the cell it arrived on, and the cell written - and the windowed probe's
+    ; profile had a third of the machine in the marks. The caret's two cells
+    ; are con_curmove's: the band's renderer marks where the underline WAS
+    ; and where it IS at the head of every pass, and a scroll the band
+    ; followed moves [con_lcur] with the pixels (con_scrollpaint). A text-mode
+    ; renderer has a hardware cursor and no underline to owe. The cell's
+    ; offset is shifts and not con_celloff's `mul`: row * 160 is row * 32 * 5
+    mov bx, [con_cy]
+    mov di, bx
+    mov cl, 5
+    shl di, cl
+    mov cx, di
+    shl di, 1
+    shl di, 1
+    add di, cx                      ; DI = row * 160
+    mov cx, [con_cx]
+    add di, cx
+    add di, cx
+    mov ah, [con_attr]
+    mov [con_scr + di], ax
+    mov ch, cl                      ; BX = the row, CL = CH = the column
+    call con_marks
+    mov ax, [con_cx]
     inc ax
     cmp ax, CON_COLS
     jb .cxok
@@ -1044,7 +1245,6 @@ con_putc:
 .cxok:
     mov [con_cx], ax
     pop di
-    pop dx
     pop cx
     pop bx
     pop ax
@@ -1139,26 +1339,41 @@ con_fillcells:
     pop ax
     ret
 
-; --- con_markcells - AX = the first cell, BX = the last: mark their rows -----
+; --- con_markcells - AX = the first cell, BX = the last: mark THOSE CELLS ----
+; The first and last rows by their span, every row between them whole
+; (SPEC.md 96.33.12): int 10h AH=09h's digit in place is one cell and an
+; erase to the end of a line is its tail. **A CALLER THAT MOVED CELLS IT DID
+; NOT FILL MARKS THEM ITSELF** - te_inschar/te_delchar shift the rest of the
+; row, and con_cmove marks nothing.
 con_markcells:
     push ax
     push bx
     push cx
     push dx
-    push bx
-    xor dx, dx
-    mov cx, CON_COLS
-    div cx                          ; AX = the first row
-    mov bx, ax
-    pop ax
-    xor dx, dx
-    div cx                          ; AX = the last row
-    mov cx, ax
-.mk:
-    call con_mark
+    mov dl, CON_COLS                ; **A BYTE DIVIDE**: both cells are below
+    div dl                          ; CON_CELLS (con_fillcells cut them), so
+    xchg ax, bx                     ; the row fits AL. BL = the first row, BH
+    div dl                          ; its column; AL = the last row, AH its
+    mov cl, bh                      ; CL = the first row's first column
+    mov ch, ah                      ; CH = the last row's last column
+    mov dl, al                      ; DL = the last row
+    xor bh, bh                      ; BX = the first row
+    cmp bl, dl
+    je .one
+    push cx
+    mov ch, CON_COLS - 1
+    call con_marks                  ; the first row, from its column on
+    pop cx
+.mid:
     inc bx
-    cmp bx, cx
-    jbe .mk
+    cmp bl, dl
+    jae .last
+    call con_mark                   ; every row between, whole
+    jmp short .mid
+.last:
+    xor cl, cl                      ; the last row, up to its column
+.one:
+    call con_marks
     pop dx
     pop cx
     pop bx
@@ -1370,7 +1585,8 @@ con_scrolldown:
 ; --- con_write - AL = a byte, as the ROM teletype would take it ---------------
 con_write:
     push ax
-    cmp al, 13
+    cmp al, 13                      ; ABOVE CR IS A GLYPH, which is nearly
+    ja .glyph                       ; every byte: one compare, not five
     je .cr
     cmp al, 10
     je .lf
@@ -1383,28 +1599,25 @@ con_write:
                                     ; machine that beeps per byte of a DOS
                                     ; program's output is worse than one that
                                     ; does not
+.glyph:
     call con_putc
 .out:
     pop ax
     ret
-.cr:
-    mov word [con_cx], 0
+.cr:                                ; (the caret's cells are con_curmove's:
+    mov word [con_cx], 0            ; no mark here - SPEC.md 96.54.14)
     mov byte [con_pwrap], 0         ; ...and the wrap the last glyph promised is
-    call con_markcur                ; OFF: `...79th char, CR, LF` must not eat
-    jmp short .out                  ; the first character of the next line
+    jmp short .out                  ; OFF: `...79th char, CR, LF` must not eat
+                                    ; the first character of the next line
 .lf:
-    call con_markcur                ; the row being LEFT owes its underline
     call con_nextrow
-    call con_markcur
     mov byte [con_pwrap], 0
     jmp short .out
 .bs:
     cmp word [con_cx], 0
     je .out                         ; column 0: DOS does not wrap back up, and
-    call con_markcur                ; a console that did would scroll the other
-    dec word [con_cx]               ; way on the first keystroke of a new line
-    mov byte [con_pwrap], 0
-    call con_markcur
+    dec word [con_cx]               ; a console that did would scroll the other
+    mov byte [con_pwrap], 0         ; way on the first keystroke of a new line
     jmp short .out
 .tab:
     push cx                         ; the next multiple of eight, and the stops
@@ -1859,7 +2072,9 @@ con_cvis    equ con_pwrap + 1           ; byte: the cursor is drawn
 con_ice     equ con_cvis + 1            ; byte: bit 7 is a BRIGHT BACKGROUND
 con_nob     equ con_ice + 1             ; byte: OSAPI_GFX_BLIT1 refused once
 con_scrbusy equ con_nob + 1             ; byte: a scroll is half done
-con_tseg    equ con_scrbusy + 1        ; --- the FULL-SCREEN half's (70.8.13) ---
+con_lcur    equ con_scrbusy + 1        ; word: where the caret was at the last
+                                        ; pass, FFFF none (con_curmove)
+con_tseg    equ con_lcur + 2           ; --- the FULL-SCREEN half's (70.8.13) ---
 con_tkind   equ con_tseg + 2           ; word: the mode's framebuffer segment,
 con_tcur    equ con_tkind + 1          ; byte: that display's VID_* kind, byte:
 con_thint   equ con_tcur + 1           ; the cursor shape the CRTC was last told

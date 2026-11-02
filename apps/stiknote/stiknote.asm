@@ -855,7 +855,7 @@ sn_s_nos:   db 'Note not saved', 0
 sn_s_big:   db 'Note is over 16 KB', 0
 sn_s_qdel:  db 'Delete again to confirm', 0
 
-sn_s_about: db 'Sticky Note for os8088', 0
+sn_s_about: db 'Sticky Note by jggonz', 0
 sn_empty:   db 0                    ; OSAPI_PKG_START's empty program name
 
 %include "sntext.inc"

@@ -45,7 +45,10 @@ HDR = 32
 # has read the header, so raising it costs every driver load on every machine.
 BSS_MAX_PARA = 255
 MAGIC = 0x384F                  # 'O','8'
-DRV_VER = 11  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19 (SPEC.md 20.2.0)
+DRV_VER = 12  # 4 until the API table moved, 7 until 34.11, 9 until 62.9.19, 11 until 50.2.1 (SPEC.md 20.2.0)
+DRV_RUNG = 512                  # the strip rung: kernel/memory.inc's
+                                # mem_bytes_gp_x claims an image to 512 bytes
+                                # on every granule (SPEC.md 50.2.1)
 MAX_SIZE = 40 * 1024            # DRV_MAX_KB in kernel/driver.inc
 # 0x40 is NOT a kernel driver class: it is a driver's own loadable half
 # (OS88_OVERLAY, SPEC.md 52.11), stamped by this tool because the header, the
@@ -163,9 +166,16 @@ def main() -> int:
     # zeros is what LZ4 is best at. That is the half which was not true when
     # the stripping was written: it was measured against an UNCOMPRESSED disk,
     # where 6,722 bytes of trailing zeros were 6,722 bytes of floppy.
-    rung = -(-len(data) // 1024) * 1024         # the driver's real footprint,
-    if keep <= rung - 1024:                     # rounded up to whole KB
-        keep = rung - 1023                      # the least that reaches it
+    #
+    # THE RUNG IS 512 BYTES (SPEC.md 50.2.1), not a KB: the kernel claims the
+    # directory's size rounded up to 512 (mem_bytes_gp_x), so a strip below
+    # that rung is a claim short of its bss and drv_bss refuses it (.nofit).
+    # A KB rung against a 512-byte claim is exactly that, which is why the
+    # move was a DRV_VER bump.
+    gran = DRV_RUNG
+    rung = -(-len(data) // gran) * gran         # the driver's real footprint,
+    if keep <= rung - gran:                     # rounded up to the granule
+        keep = rung - gran + 1                  # the least that reaches it
     # ROUND DOWN. The bss is measured in paragraphs, and rounding the count UP
     # takes bytes that are not zero with it - sound.drv has nine trailing zeros
     # and the first version stripped sixteen, seven of them real code.
@@ -206,7 +216,8 @@ def main() -> int:
         sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
         import os88lz
         fid = os88lz.LZ4 if zfmt == "lz4" else os88lz.LZB
-        out, did = os88lz.cz_wrap(data, fid)
+        out, did = os88lz.cz_wrap(data, fid, filt=True)  # code: the
+                                    # near-call filter when it pays (SPEC.md 20.13.9)
         if not did:
             msg = (f"{zfmt} does not make this driver smaller. Ship it "
                    "uncompressed")

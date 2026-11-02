@@ -472,11 +472,13 @@ np_entry:
                                     ; a stride of ONE - not wrong, but 64
                                     ; entries covering 64 rows and halving four
                                     ; times to catch up on the first count
-    mov ax, NP_KB0                  ; the document, before anything else: an
-    call OSAPI_MEM_CLAIM            ; editor with nowhere to put the text is
-    jc .nomem                       ; not a window worth opening, and the
-    mov [np_dseg], dx               ; loader's LD_EABORT says so for us
-    mov word [np_capkb], NP_KB0
+    mov ax, NP_KB0 * 64             ; the document, before anything else: an
+    xor cx, cx                      ; editor with nowhere to put the text is
+    mov bl, MEMP_CLAIM              ; not a window worth opening, and the
+    call OSAPI_MEM_P                ; loader's LD_EABORT says so for us. In
+    jc .nomem                       ; PARAGRAPHS (SPEC.md 50.3.7), as
+    mov [np_dseg], dx               ; np_resize regrows it
+    mov word [np_cappara], NP_KB0 * 64
     mov word [np_cap], NP_KB0 * 1024
     mov ax, np_reloc                ; ...and it MOVES (SPEC.md 66.5.7), from
     call OSAPI_MEM_MOVABLE          ; here rather than later: an empty note
@@ -4404,44 +4406,47 @@ np_hirechk:
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; np_resize - make the document claim AX kilobytes
-; in:  AX = the wanted size in KB (clamped to NP_KB0..NP_MAXKB)
-; out: CF=0 with [np_dseg]/[np_capkb]/[np_cap] updated, or CF=1 and all three
-;      unchanged; preserves every register
+; np_resize - make the document claim AX paragraphs
+; in:  AX = the wanted size in paragraphs (clamped to NP_KB0..NP_MAXKB)
+; out: CF=0 with [np_dseg]/[np_cappara]/[np_cap] updated, or CF=1 and all
+;      three unchanged; preserves every register
 ;
-; ALWAYS through OSAPI_MEM_REGROW, never claim-copy-free: a regrow extends in
-; place when the paragraphs above it are free, so it needs the DIFFERENCE
-; rather than old + new at once, and when it does have to move it brings the
-; bytes with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which
-; is what makes File > New's give-back free.
+; ALWAYS through a regrow, never claim-copy-free: a regrow extends in place
+; when the paragraphs above it are free, so it needs the DIFFERENCE rather
+; than old + new at once, and when it does have to move it brings the bytes
+; with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which is what
+; makes File > New's give-back free. In PARAGRAPHS (SPEC.md 50.3.7), so the
+; note pays the heap's granule and not a whole KB - and [np_cap] is what was
+; GRANTED, so the granule's slack is typing room rather than a hole.
 ; -----------------------------------------------------------------------------
 np_resize:
     push ax
+    push bx
     push dx
-    cmp ax, NP_KB0
+    cmp ax, NP_KB0 * 64
     jae .lo
-    mov ax, NP_KB0
+    mov ax, NP_KB0 * 64
 .lo:
-    cmp ax, NP_MAXKB
+    cmp ax, NP_MAXKB * 64
     jbe .hi
-    mov ax, NP_MAXKB
+    mov ax, NP_MAXKB * 64
 .hi:
-    cmp ax, [np_capkb]
+    cmp ax, [np_cappara]
     je .same                        ; already that size: nothing to ask for
-    push ax
     mov dx, [np_dseg]
-    call OSAPI_MEM_REGROW           ; out CF=0 and DX = the base NOW
-    pop ax
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P                ; out CF=0, DX = the base NOW, AX = granted
     jc .out                         ; refused: the old claim stands untouched
     mov [np_dseg], dx               ; ...and a grow that MOVED reports a new
-    mov [np_capkb], ax              ; base, which is the whole reason DX is
-    mov cl, 10                      ; the answer (SPEC.md 50.3.1)
-    shl ax, cl
+    mov [np_cappara], ax            ; base, which is the whole reason DX is
+    mov bx, 16                      ; the answer (SPEC.md 50.3.1)
+    mul bx
     mov [np_cap], ax                ; NP_MAXKB * 1024 fits a word by design
 .same:
     clc
 .out:
     pop dx
+    pop bx
     pop ax
     ret
 
@@ -4507,10 +4512,10 @@ np_fitclaim:
     push ax
     push cx
     mov ax, [np_len]
-    add ax, 1023                ; the note's own whole kilobytes...
-    mov cl, 10
+    add ax, 15                  ; the note's own paragraphs (<= NP_MAXKB * 1024,
+    mov cl, 4                   ; so no carry)...
     shr ax, cl
-    add ax, NP_GROWKB           ; ...plus one to type into
+    add ax, NP_GROWKB * 64      ; ...plus a kilobyte to type into
     call np_resize              ; a shrink always succeeds in place
     pop cx
     pop ax
@@ -4532,8 +4537,8 @@ np_room:
     mov ax, [np_len]
     cmp ax, [np_cap]
     jb .yes
-    mov ax, [np_capkb]
-    add ax, NP_GROWKB
+    mov ax, [np_cappara]
+    add ax, NP_GROWKB * 64
     call np_resize
     jc .no
     mov ax, [np_len]
@@ -4580,16 +4585,20 @@ np_stghold:
     jmp short .cr
 .counted:
     xchg ax, dx                     ; <= 2 x len, which cannot carry: [np_len]
-    add ax, 1023                    ; is bounded by NP_MAXKB * 1024, and
+    add ax, 15                      ; is bounded by NP_MAXKB * 1024, and
                                     ; NP_MAXKB is 16 for exactly this sum's
                                     ; sake
-    mov cl, 10
-    shr ax, cl                      ; ...as whole kilobytes, rounded up
-    cmp ax, NP_STGMIN
+    mov cl, 4
+    shr ax, cl                      ; ...as paragraphs (SPEC.md 50.3.7)
+    cmp ax, NP_STGMIN * 64
     jae .kb
-    mov ax, NP_STGMIN               ; an empty note still needs somewhere to
+    mov ax, NP_STGMIN * 64          ; an empty note still needs somewhere to
 .kb:                                ; put its zero bytes
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base segment
+    xor cx, cx                      ; (np_save sets CX after)
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; out CF=0 and DX = the base segment
+    pop bx
     jc .no
     mov [np_stgseg], dx             ; [np_stgseg] is 0 whenever nothing is
     mov es, dx                      ; held (np_stgdrop zeroes it), so the
@@ -4774,11 +4783,13 @@ np_load:
     cmp dx, NP_MAXKB            ; heap for a note of one line, and a load
     ja .say                     ; refused "No memory" where 2KB was free.
     xchg ax, dx                 ; Past the ceiling it is "Too big" (AX is
-.sized:                         ; still FERR_BIG) with nothing claimed
-    cmp ax, [np_capkb]          ; ONLY EVER A GROW: the note is still in this
+    mov cl, 6                   ; still FERR_BIG) with nothing claimed. The
+    shl ax, cl                  ; probe's KB, as np_resize's paragraphs
+.sized:
+    cmp ax, [np_cappara]        ; ONLY EVER A GROW: the note is still in this
     jbe .fits                   ; claim and a read that fails leaves it there,
     call np_resize              ; so a shrink here would cut it off under its
-.fits:                          ; own [np_len]. AX KB, clamped to NP_MAXKB;
+.fits:                          ; own [np_len]. Clamped to NP_MAXKB;
                                 ; np_fitclaim sizes it afterwards. The file
                                 ; lands in the document buffer itself and the
                                 ; fold below only ever SHRINKS what arrived,
@@ -4834,7 +4845,7 @@ np_load:
 .err:
     cmp ax, FERR_BIG            ; A REFUSED CLAIM IS NOT A FILE THAT IS TOO
     jne .say                    ; BIG (SPEC.md 27.6.1). The resize above is
-    cmp word [np_capkb], NP_MAXKB   ; the one np_resize in this package whose
+    cmp word [np_cappara], NP_MAXKB * 64 ; the one np_resize here whose
     jae .say                    ; CF nobody reads - deliberately, because the
                                 ; claim may already be big enough for this
                                 ; file and refusing the load outright would
@@ -6406,7 +6417,7 @@ np_new:
                ; a no-op on the caret, which is already 0 -
                                 ; it is here for the invalidation np_clamp
                                 ; carries (SPEC.md 27.4/27.5)
-    mov ax, NP_KB0              ; ...and give the heap back what the old note
+    mov ax, NP_KB0 * 64         ; ...and give the heap back what the old note
     call np_resize              ; had grown into. A shrink always succeeds in
                                 ; place, so this cannot fail (SPEC.md 50.3.1)
     mov byte [np_named], 0      ; ...and it is not a FILE until something
@@ -7386,10 +7397,10 @@ np_capfor:
     cmp bx, [np_cap]
     jbe .yes
     mov ax, bx
-    add ax, 1023
+    add ax, 15
     jc .no                      ; past 64KB, which NP_MAXKB refuses anyway
-    mov cl, 10
-    shr ax, cl
+    mov cl, 4
+    shr ax, cl                  ; paragraphs
     call np_resize              ; clamps to NP_MAXKB and may be refused
     jc .no
     cmp bx, [np_cap]
@@ -7720,7 +7731,7 @@ np_uclear:
     jz .out
     call OSAPI_MEM_FREE         ; the owner is our segment, which the slot's
     mov word [np_useg], 0       ; X stub supplies (SPEC.md 50.3)
-    mov word [np_ukb], 0
+    mov word [np_upara], 0
 .out:
     pop dx
     pop bx
@@ -7757,21 +7768,27 @@ np_utop_rec:
     ret
 
 ; -----------------------------------------------------------------------------
-; np_ugrow - make the arena AX kilobytes
-; in:  AX = KB; out: CF = 1 refused; preserves all registers
+; np_ugrow - make the arena AX paragraphs
+; in:  AX = paragraphs; out: CF = 1 refused; preserves all registers
+;
+; OSAPI_MEM_P's (SPEC.md 50.3.7): the arena is a byte count, so it pays the
+; granule rather than a whole KB, and [np_upara] is what was GRANTED.
 ; -----------------------------------------------------------------------------
 np_ugrow:
     push ax
     push bx
+    push cx
     push dx
-    cmp ax, [np_ukb]
+    cmp ax, [np_upara]
     jbe .yes
     cmp word [np_useg], 0
     jne .re
-    call OSAPI_MEM_CLAIM        ; out CF = 0, DX = the base
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no
     mov [np_useg], dx
-    mov [np_ukb], ax
+    mov [np_upara], ax
     push ax                     ; the arena moves too (SPEC.md 66.5.7): the
     mov ax, np_reloc            ; undo records index it by OFFSET, so np_reloc
     call OSAPI_MEM_MOVABLE      ; has one word to fix here as well
@@ -7779,10 +7796,11 @@ np_ugrow:
     jmp short .yes
 .re:
     mov dx, [np_useg]
-    call OSAPI_MEM_REGROW       ; out CF = 0, DX = the base NOW - a grow that
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; out CF = 0, DX = the base NOW - a grow that
     jc .no                      ; had to move reports a new one (50.3.1)
     mov [np_useg], dx
-    mov [np_ukb], ax
+    mov [np_upara], ax
 .yes:
     clc
     jmp short .out
@@ -7790,6 +7808,7 @@ np_ugrow:
     stc
 .out:
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -7878,19 +7897,20 @@ np_uroom:
     mov ax, [np_utop]
     add ax, cx
     jc .evict
-    mov bx, [np_ukb]
+    mov bx, [np_upara]
     push cx
-    mov cl, 10
-    shl bx, cl
+    mov cl, 4
+    shl bx, cl                  ; <= NP_UMAXKB * 1024, so it fits
     pop cx
     cmp ax, bx
     jbe .yes
     push cx
-    add ax, 1023
-    mov cl, 10
+    add ax, 15                  ; paragraphs, the carry coming back in as
+    rcr ax, 1                   ; bit 15
+    mov cl, 3
     shr ax, cl
     pop cx
-    cmp ax, NP_UMAXKB
+    cmp ax, NP_UMAXKB * 64
     ja .evict
     call np_ugrow
     jnc .yes
@@ -11237,7 +11257,7 @@ np_e_cbig:    db 'Too big to copy', 0   ; over CLIP_MAXKB, or the heap could
     NPVAR np_useg, 2        ; word: the arena claim, 0 = none held. Claimed on
                             ; the first edit worth remembering and given back
                             ; by File > New, a load and np_uclear
-    NPVAR np_ukb,  2        ; word: its size in KB
+    NPVAR np_upara, 2       ; word: its size in paragraphs, as granted
     NPVAR np_utop, 2        ; word: bytes of it in use - also the top record's
                             ; blob end, which is what makes an append free
     NPVAR np_un,   1        ; byte: records live, 0..NP_UNDO
@@ -11609,7 +11629,7 @@ np_dseg     equ os88_image_end + 433    ; word: the document claim's segment.
                                        ; than open a window with nowhere to
                                        ; put the text, so nothing below has
                                        ; to test it
-np_capkb    equ os88_image_end + 435    ; word: its size in KB...
+np_cappara  equ os88_image_end + 435    ; word: its size in paragraphs...
 np_cap      equ os88_image_end + 437    ; word: ...and in bytes, kept in step
                                        ; by np_resize. NP_MAXKB * 1024 fits a
                                        ; word, which is what bounds the note

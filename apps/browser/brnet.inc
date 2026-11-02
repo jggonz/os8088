@@ -1121,8 +1121,11 @@ br_take:
     mov bx, br_rwin
     call br_bwaim
     pop bx
-    mov ax, es                      ; (refused: the claim itself, never a
-    jmp short .convset              ; fault - br_bwaim's CF=1)
+    mov ax, es
+    jnc .convset
+    pop cx                          ; REFUSED (no LDT entry): ES is the claim
+    jmp .badmap                     ; itself, so the chunk is drained as the
+                                    ; EMS arm's is, never stored at its start
 .convnone:
     xor ax, ax                      ; freed: the zero the sum would have made
     jmp short .convset

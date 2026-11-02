@@ -138,9 +138,9 @@ def main():
         box.up()
         box.capture()
         lo = box.sym("mem_tab")
-        mxa = box.sym("mx_tab")
+        mxa = box.tail("mx_tab")
         M, X, K, B, T = box.reads([("mem_tab", MC_SIZE * MEM_MAX),
-                                   ("mx_tab", MX_BLKSZ * MX_NBLK),
+                                   (mxa, MX_BLKSZ * MX_NBLK),
                                    ("xm_kb", 2), ("mem_base", 2),
                                    ("mem_top", 2)])
         xkb = w16(K, 0)

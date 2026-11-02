@@ -320,9 +320,17 @@ dos_con_run:
                                     ; way, dsh_redir being about to write a NUL
                                     ; into the buffer
     mov byte [dsh_exec], 1          ; ...hold .unknown's message back
+    call dsh_bank                   ; where we stand, for the refused `X:`
     mov si, dsh_line
     call dsh_run
     mov byte [dsh_exec], 0
+    cmp byte [dsh_why], DSHW_NODRV  ; **A REFUSED `X:` DOES NOT MOVE THE
+    jne .moved                      ; PROMPT** (SPEC.md 96.33.6.1): B: with no
+    call dsh_home                   ; floppy passes dos_drv_sel's table test
+.moved:                             ; and fails only at the stand, with
+                                    ; [dos_vol] already moved - put back here,
+                                    ; on the window side, the core being full.
+                                    ; dsh_home keeps AL, the exit code
     cmp byte [dsh_more], 0          ; **A SUSPENDED `DIR /P` OWES NO PROMPT**
     je .ranout                      ; (SPEC.md 96.33.9): the listing stopped
     jmp  dos_con_draw               ; mid-page and printed `Strike a key`, and
@@ -701,8 +709,38 @@ dos_con_open:
 ; of its own and two more hooks in `dos_con_key` that this does not spend.
 ; -----------------------------------------------------------------------------
 dos_con_help:
+%ifdef DOSKPART
+    ; **THE TEXT IS A PART AND IS READ NOW** (docs/plans/DOS-PARTS-PLAN.md
+    ; 1.1): an OP_ASSET row of DOS.O88 the loader copied into our bss before
+    ; it went, read off our own file by op_self into a claim of its own,
+    ; printed, freed. Our file is in OUR folder and the prompt stands in its
+    ; own, so the instance goes there and back (dos_pkgwhere banked it).
+    mov si, dos_hlprow
+    call dos_pself0                 ; no floor: DX = the claim, CX = the bytes
+    jc .none
+    mov bp, dx
+    mov es, dx
+    xor si, si
+.c:
+    mov al, [es:si]                 ; bounded by the row's length, not a NUL:
+    call con_write                  ; the bytes came off a disk
+    inc si
+    loop .c
+    mov dx, bp
+    call OSAPI_MEM_FREE
+    jmp short .said
+.none:
+    mov si, dos_s_nopkg             ; `Cannot open HELP`, out of two strings
+    call con_say                    ; this file already has
+    mov si, dos_c_help
+    call con_say
+    mov si, dos_c_crlf
+    call con_say
+.said:
+%else
     mov si, dos_h_text
     call con_say
+%endif
     call dos_prompt                 ; **IT OWES ONE** (96.33.17.1's rule, one
                                     ; verb along): dos_con_prog answers CF=0
                                     ; here and dos_con_run reads that as `it is
@@ -1405,34 +1443,10 @@ dos_c_help:  db 'HELP', 0          ; SPEC.md 96.33.23. DOS 3.3 has no HELP
                                    ; either - it arrived with DOS 5 - so the
                                    ; verb is free on OPEN's own ground
 
-; --- DHL - one help line, COUNTED (SPEC.md 96.33.23.1) ----------------------
-; The count emits nothing and is what makes the sixteen-line limit a BUILD
-; failure rather than a line that scrolls off a CGA in silence.
-%assign DH_LINES 0
-%macro DHL 1
-    db %1, 13, 10
-    %assign DH_LINES DH_LINES + 1
-%endmacro
-dos_h_text:
-    DHL 'CD [path]     Change directory. CD .. goes up, CD \A\B goes down.'
-    DHL 'COPY a b      Copy a file. Wildcards allowed.'
-    DHL 'DEL name      Delete a file. ERASE is the same.'
-    DHL 'DIR [/P][/W]  List this folder. /P pages it, /W is columns.'
-    DHL 'ECHO text     Print the text.'
-    DHL 'MD / RD name  Make or remove a directory. MKDIR/RMDIR the same.'
-    DHL 'MOVE a b      Move or rename a file.'
-    DHL 'OPEN file     Open a document with the program that claims it.'
-    DHL 'REM text      A note. Does nothing.'
-    DHL 'REN old new   Rename a file. RENAME is the same.'
-    DHL 'TYPE file     Print a text file.'
-    DHL 'VER           Say what this is.'
-    DHL 'XCOPY a b     Copy a folder and all under it.'
-    DHL 'A:            A drive letter on its own changes drive.'
-    DHL 'NAME [arg]    Run a program, or open a document with it.'
-    DHL "cmd > NUL     Hide what a command prints. No other target."
-    db 0
-%if DH_LINES > 16
-  %error "HELP is over SIXTEEN lines: CGA's band is 17 rows ([con_vrows], measured), and the prompt that follows takes one - so a seventeenth line scrolls the first off a machine nobody tests on. Cut a line, or give HELP a pager and the part 96.33.23.2 costs."
+%ifndef DOSKPART                    ; ...and the text itself: a PART of
+dos_h_text:                         ; DOS.O88 where a loader hands us its
+%include "doshelp.asm"              ; row (DOS-PARTS-PLAN 1.1), inline in
+    db 0                            ; the one build that has none
 %endif
 
 %ifdef DOS_MEGA
@@ -1496,7 +1510,11 @@ dos_fsx:
                                     ; first keystroke, so this makes a leak cost
                                     ; a full screen not coming back instead
     mov byte [dos_fsxup], 1         ; ...BEFORE the bracket, so nothing between
+%ifdef DOS_WTAIL
+    mov ax, dos_fsx_cone            ; (the resident proc: the fence, 96.44.19)
+%else
     mov ax, dos_fsx_con             ; here and the mode set can reach a drawing
+%endif
     mov bx, si                      ; slot either
     xor cx, cx                      ; NO FSXF_KEEPWORKER: this DOS has no worker
     call OSAPI_FSX_RUN
@@ -1555,14 +1573,7 @@ dos_fsx_con:
 .done:
     mov byte [dos_fsxup], 0         ; ...INSIDE the bracket, so fsx_restore's
     call con_markall                ; repaint finds DOS windowed and the
-    pop es                          ; whole band owed, and dos_con_draw is
-    pop di                          ; whole band owed
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 ; --- dos_fsx_ae - Alt+Enter, off the key-state map (SPEC.md 96.33.5.1) -------
 ; in:  nothing; out: CF=1 = a FRESH press, CF=0 = the same hold, or nothing
@@ -1675,14 +1686,7 @@ dos_fsx_owed:
     cmp bx, CON_ROWS
     jb .row
     call con_tx_cursor
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 ; =============================================================================
 ; THE PROGRAM'S LAST SCREEN (SPEC.md 96.34)

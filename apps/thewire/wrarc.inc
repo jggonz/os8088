@@ -517,18 +517,19 @@ wr_arcstart:
 ; -----------------------------------------------------------------------------
 wr_arcbase:
     call wr_sv                          ; AX..DI and ES, given back by the ret
-    mov ax, [wr_ahdr + WA_MAXENT]   ; --- ONE claim for every entry in turn
-    add ax, 1023
-    and ax, 0xFC00                  ; the capacity in BYTES, rounded up to the
-    mov [wr_dmax], ax               ; KB OSAPI_MEM_CLAIM deals in - and
-                                    ; wr_aentck refuses an entry against it.
-                                    ; WA_MAXENT is 1..WIRE_FILEMAX by the check
-                                    ; above, so the KB below cannot come out
-                                    ; zero and there is no floor to apply
-    mov cl, 10
-    shr ax, cl
-    call OSAPI_MEM_CLAIM
+    mov ax, [wr_ahdr + WA_MAXENT]   ; --- ONE claim for every entry in turn,
+    add ax, 15                      ; in PARAGRAPHS (SPEC.md 50.3.7). WA_MAXENT
+    mov cl, 4                       ; is 1..WIRE_FILEMAX by the check above,
+    shr ax, cl                      ; so this cannot carry or come out zero
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; AX = the paragraphs GRANTED...
     jc .nomem
+    mov cl, 4
+    shl ax, cl                      ; ...and that is the capacity in BYTES,
+    mov [wr_dmax], ax               ; which wr_aentck refuses an entry against:
+                                    ; <= 64,512, WIRE_FILEMAX being a multiple
+                                    ; of every granule
     mov [wr_fseg], dx               ; ...and wr_freefile gives it back, so the
     mov [wr_dseg], dx               ; archive leaks nothing an ordinary chain
                                     ; does not
@@ -555,6 +556,15 @@ wr_arcbase:
     call OSAPI_FILE_HERE            ; DX = the folder, BL = the drive
     mov [wr_bclus], dx
     mov [wr_bdrv], bl
+    mov cx, [wr_ahdr + WA_TOTAL]    ; --- ONE BAR FOR THE TREE (SPEC.md
+    mov dx, [wr_ahdr + WA_TOTAL + 2] ; 12.8.10): an entry is written a wake,
+    call OSAPI_FS_OP                ; so the widget blinked once per entry.
+                                    ; WA_TOTAL is every entry unpacked, which
+                                    ; is exactly what the writes move. Not
+                                    ; kept: wr_arcend and wr_abandon end it
+                                    ; whatever it answered (an end the Wire
+                                    ; does not own is refused), and a close
+                                    ; ends it in the kernel
     mov byte [wr_state], WS_BODY    ; ...and the worker may carry on
     clc
     ret
@@ -767,6 +777,7 @@ wr_apathn:
 ; -----------------------------------------------------------------------------
 wr_arcend:
     call wr_sv                          ; AX..DI and ES, given back by the ret
+    call wr_opend                       ; the tree has landed: its bar is done
     inc byte [wr_gen]
     call wr_hclose
     mov byte [wr_state], WS_DONE

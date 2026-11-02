@@ -144,14 +144,16 @@ hd_tinit:
 ; this file owns, 91 bytes, which put hd_mbrok at 511 mod 512 and the pad at
 ; zero. It is a tuning, not a rule: any change above moves it, and the cure is
 ; to move a routine across the buffers in one direction or the other, never to
-; pad. The claim is whole KB (HDTOOL_KB), so the tuning is worth a KB exactly
-; when it carries the image under a KB boundary. It did until INSTALL's log
+; pad. The claim was whole KB (HDTOOL_KB), so the tuning was worth a KB exactly
+; when it carried the image under a KB boundary. It did until INSTALL's log
 ; (SPEC.md 117.4.1, its call sites in inst.inc) took the image to 17,810
 ; bytes and an 18KB claim. The Install window's removal (SPEC.md 52.10.4)
 ; took it to 17,038 and a 17KB claim with a pad of 199, which is LEFT:
 ; closing it is 199 bytes off a load and no KB (16,839 is still over
 ; 16,384), and on the disk a run of zeros costs the compressed file nearly
-; nothing.
+; nothing. The claim is PARAGRAPHS now (HDTOOL_PARA, SPEC.md 50.3.7), so the
+; heap rounds it to its 512-byte granule and the tuning is worth 512 bytes,
+; not a KB, whenever it carries the image under a 512 boundary.
 ; =============================================================================
 ; -----------------------------------------------------------------------------
 ; hd_tshut - HDT_SHUT: nothing of ours left on screen, nothing of ours held

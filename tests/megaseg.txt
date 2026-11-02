@@ -131,4 +131,26 @@
 # 2026-10-31: +506, to 3,627, mega-realmode-bracket squashed onto the recut
 #             elendilon: the real-mode fsx bracket's W1 (+419), W2 (+69) and
 #             W4 (+18) entries above, carried onto kern_mega size pass 1's 3,121
-3627
+# 2026-11-01: to 3,359, kern_mega size pass 2's merged tree (-268): the
+#             doors gone, the pool's tables above 1MB, megados's mega_down
+#             entering mega_svc_lo's 286 reset body (-39) - less the 8
+#             bytes that give the drop its own int 3 (`.rdown`), so a
+#             reset log tells a bracket's drop from a reflection
+#             (tests/megarmb286.py). Both run across the drop, in .text
+# 2026-11-01: to 3,357, mega_parkcap (a debugger's cap) MEGADIAG=1 only
+# 2026-11-01: to 3,231, bootonce2: the four refusal strings into `.mega`,
+#             read at a refusal through `.mega`'s low copy (-124 `.text`)
+# 2026-11-01: +19, to 3,250, kernel size pass 16 (ops) - 1dea2435 put +78
+#             in `.text` and no line here (the gate read 3,309): fsx_rtick's
+#             ROM chain on sch_chstack (SPEC.md 8.5) is IRQ0 in the REAL-MODE
+#             bracket, so it has to be low, and is +19 once its two arms share
+#             one call and the task's SP rides in BX (-9). The rest of the 78
+#             was protected-mode code and went to `.mega`: the speaker ring's
+#             close (fsx_rland -> fsx_rupf's head), fsx_rcall's banking of SI
+#             and BP and its NMI-off/[mega_drop] stores (-> fsx_rdownf), and
+#             fsx_run's FSXF_REAL test (-> fsx_rprepf's head); fsx_rcall
+#             tail-jumps wm_pkgcall for a protected-mode bracket (-2)
+# 2026-11-01: elendilon's review fixes read 3,289 with the close in its own
+#             far routine (fsx_rspkf); at the merge of kernel size pass 16 the
+#             close is ops's inline one at fsx_rupf's head and fsx_rspkf goes
+3250

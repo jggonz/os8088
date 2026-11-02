@@ -543,9 +543,10 @@ px_rnext:
     pop bx
     pop ax
     ret
-    nop                             ; PARITY PAD, never executed (MC7's
-                                    ; odd count above: the routines below
-                                    ; keep their measured even shift)
+                                    ; (no PARITY PAD here since PXSUB lost its
+                                    ; refusal arm: four bytes, and the `jz
+                                    ; .end` above went short with them - seven
+                                    ; in all, which the pad's one evens out)
 
 ; =============================================================================
 ; THE SERVICES a decoder PART far-calls on the worker (SPEC.md 106.18). Each
@@ -1199,6 +1200,7 @@ px_open:
     mov al, [px_bpp]                ; the worker builds them for THIS depth
     mov [px_tdepth], al
     call px_pumpinit
+    call px_opbegin                 ; ONE bar for the pump's reads (12.8.10)
     mov al, [px_keepv]              ; (a re-decode reads ahead from the
     shl al, 1                       ; start: px_pumpfill)
     mov [PXS_DEFER], al
@@ -1234,6 +1236,7 @@ px_open:
     call px_refusal                 ; "BMP: depth not read"
     call px_compose
     call px_shown
+    call px_opend                   ; (a spawn refused after px_opbegin)
     call px_artback                 ; the face's pictures, if the claims took
     inc word [px_ndone]             ; them (SPEC.md 106.16), BEFORE the open
 .out:                               ; is said to have ended
@@ -1437,10 +1440,44 @@ px_finish:
     mov al, PX_R_CANVAS | PX_R_PANELS
     call px_regdraw
 .out:
+    call px_opend                   ; the open's one bar comes down (12.8.10)
     call px_artback                 ; the face's pictures, if the open took
     inc word [px_ndone]             ; them (SPEC.md 106.16), and only THEN has
     pop dx                          ; it ended: their read is a disk read on
     pop ax                          ; the UI task, part of this open
+    ret
+
+; px_opbegin / px_opend - THE OPEN IS ONE OPERATION (SPEC.md 12.8.10, 106.9).
+; The pump reads the file a slot a lock-free wake, so without it the widget
+; came up and went down once per slot; with it there is one bar, parked on
+; the menu bar between wakes. DX:CX = the file less the cluster the stream
+; starts in (px_pumpinit's [px_rbase]): exact, the head's read before it not
+; counted. A file in memory ([px_rflat], packed) was read whole already and
+; asks nothing. ADVISORY, so the answer is not kept: an end PiXEL does not
+; own is refused, and PiXEL has one operation at a time ([px_busy]), so
+; px_finish and px_open's refusal end it unconditionally - every way a
+; decode stops (done, Stop, a read error, a refusal) goes through one of the
+; two, and a close ends it in the kernel. Preserve all
+px_opbegin:
+    cmp byte [px_rflat], 0
+    jne px_opret
+    push cx
+    push dx
+    mov cx, [px_fsize]
+    mov dx, [px_fsize + 2]
+    sub cx, [px_rbase]
+    sbb dx, [px_rbase + 2]
+    jmp short px_opcall
+px_opend:
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+px_opcall:
+    call OSAPI_FS_OP
+    pop dx
+    pop cx
+px_opret:
     ret
 
 ; px_cancel - Esc, or Stop: the worker stops at its next row or refill and

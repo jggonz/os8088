@@ -66,7 +66,16 @@ from os88fixture import need  # noqa: E402
 PKG = "build/megarmbf.o88"
 NAME = "MEGARMBF"
 KSEG = 0x0060
-TBL, TLEN = 0x0010, 0x04D9
+def _api_tlen():
+    """the API table's length off kern_mega's map - a constant here went
+    stale the day OSAPI_MEM_P joined the table (kern_mega size pass 2)"""
+    import os88sym
+    off, _, _ = os88sym._parse_map(os.path.join(ROOT, "build", "megak",
+                                                "kernel.map"))
+    return off["osapi_table_end"] - off["osapi_table"]
+
+
+TBL, TLEN = 0x0010, _api_tlen()
 FAILS = []
 RUNS = ["rmk_1", "rmk_2", "rmk_3", "rmk_4", "rmk_5", "rmk_6", "rmk_7",
         "rmk_8", "rmk_9", "rmk_10"]

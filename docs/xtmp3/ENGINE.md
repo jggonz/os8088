@@ -624,7 +624,7 @@ STANDARD 57,732 and XT 58,634 (lazy, one resident at a time); and the stub
 | conversion stage | 2 x max(8 KB, cluster), or 2 x max(4 KB, cluster) under XT - or ONE of them where the XT ceiling has no room for two (`x3_plan`) - inside the ring's claim | converting |
 
 **`X3S_PEAK` is measured** (`x3_memck`). It adds the region (image + bss,
-`X3_REGIONKB` = 54), the eager carve (`op_kb` = 37), and the fall in the
+`X3_REGIONKB` = 54), the eager carve (`op_np`, 37 KB of it), and the fall in the
 heap's free total (`OSAPI_MEM_AVAIL`) since launch, sampled after every
 claim and kept at its highest. A conversion zeroes it at its start, so it is
 that job's peak. Because it is the heap's own total, it also counts what

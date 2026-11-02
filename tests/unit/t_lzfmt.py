@@ -157,6 +157,81 @@ def lengths():
     return fails
 
 
+def calls(n=12000, seed=3):
+    """n bytes shaped like 8086 code: short runs of unique bytes, each ending
+    in a `call rel16` to one of a dozen routines. At its own site every call
+    is different bytes; once the filter has made the targets absolute they
+    are a dozen three-byte strings - which is the whole of SPEC.md 20.13.9."""
+    x, out = seed, bytearray()
+    def rnd():
+        nonlocal x
+        x = (x * 1103515245 + 12345) & 0x7FFFFFFF
+        return x >> 16
+    targets = [rnd() % n for _ in range(12)]
+    while len(out) < n - 3:
+        for _ in range(rnd() % 7):
+            out.append(rnd() & 0x7F)            # never E8 by accident
+        t = targets[rnd() % len(targets)]
+        rel = (t - (len(out) + 3)) & 0xFFFF
+        out += bytes((0xE8, rel & 0xFF, rel >> 8))
+    return bytes(out[:n])
+
+
+def filtered():
+    """The near-call filter (SPEC.md 20.13.9): a bijection on ANY input, taken
+    only when it makes the stream shorter, invisible to every reader that goes
+    through os88lz.decompress, at zero in-place margin like every stream - and
+    REFUSED by a decoder that predates it, which is what makes it safe to ship
+    with no format code. That last one is asserted against this module's own
+    plain decoders, which read the escape as a tail longer than the stream
+    exactly as an older kernel's lz_decomp_x does."""
+    fails = []
+    edge = [b"", b"\xE8", b"\xE8\xE8", b"\xE8\xE8\xE8", b"\xE8\xE8\xE8\xE8",
+            b"ab\xE8", b"a\xE8\x01", b"\xE8\xFF\xFF" * 50, b"\xE8" * 999,
+            bytes(range(256)) * 9]
+    for d in edge + [calls()] + [d for _, d in corpus()]:
+        if os88lz.bcj_decode(os88lz.bcj_encode(d)) != d:
+            fails.append("the filter does not invert on %d bytes" % len(d))
+    code = calls()
+    for fmt in (os88lz.LZ4, os88lz.LZB):
+        tag = "filtered/%s" % os88lz.NAMES[fmt]
+        z = os88lz.compress(code, fmt, filt=True)
+        plain = os88lz.compress(code, fmt)
+        if not os88lz.is_filtered(z):
+            fails.append("%s: a call-dense image (%d -> %d plain) did not take "
+                         "the filter" % (tag, len(code), len(plain)))
+            continue
+        if len(z) >= len(plain):
+            fails.append("%s: took the filter at %d against %d plain"
+                         % (tag, len(z), len(plain)))
+        if os88lz.decompress(z, fmt, len(code)) != code:
+            fails.append("%s: does not round-trip" % tag)
+        m = os88lz.in_place_margin(code, fmt, packed=z)
+        if m:
+            fails.append("%s: in-place margin %d - the escape is consumed "
+                         "before anything is produced, so it must be 0" % (tag, m))
+        try:
+            (os88lz.lz4_decompress(z, len(code)) if fmt == os88lz.LZ4
+             else os88lz.lzb_decompress(z, len(code)))
+            fails.append("%s: a decoder that predates the filter ACCEPTED a "
+                         "filtered stream - an older kernel would run "
+                         "scrambled code" % tag)
+        except ValueError:
+            pass
+        noise = os88lz.compress(bytes(edge[-1]), fmt, filt=True)
+        if os88lz.is_filtered(noise) and len(noise) >= len(
+                os88lz.compress(bytes(edge[-1]), fmt)):
+            fails.append("%s: took the filter where it did not pay" % tag)
+    big = code * 6
+    if os88lz.is_filtered(os88lz.compress(big, os88lz.LZ4, filt=True)):
+        fails.append("an output past 64KB was filtered - the decoder runs the "
+                     "inverse over ES:0..DI and cannot reach it")
+    print("t_lzfmt: the filter - %d bytes of calls, LZ4 %d plain / %d filtered"
+          % (len(code), len(os88lz.compress(code, os88lz.LZ4)),
+             len(os88lz.compress(code, os88lz.LZ4, filt=True))))
+    return fails
+
+
 def corpus():
     """the awkward cases, then whatever of the real tree happens to be built"""
     yield "empty", b""
@@ -200,6 +275,8 @@ MIRROR = [
     ("kernel/disk.inc", "DSK_R_CZH", "tools/os88disk.py", "CZ_H_HI"),
     ("kernel/disk.inc", "DSK_R_CZL", "tools/os88disk.py", "CZ_H_LO"),
     ("apps/os88parts.inc", "OP_SECMAX", "tools/os88pkg.py", "OP_SECMAX"),
+    ("kernel/lzfilt.inc", "LZ_ESC", "tools/os88lz.py", "LZ_ESC"),
+    ("kernel/lzfilt.inc", "LZ_E8", "tools/os88lz.py", "LZ_E8"),
 ]
 TUPLE = re.compile(r"^([A-Z_0-9]+(?:\s*,\s*[A-Z_0-9]+)+)\s*=\s*"
                    r"([0-9A-Fa-fxX]+(?:\s*,\s*[0-9A-Fa-fxX]+)+)\s*(?:#|$)",
@@ -308,6 +385,7 @@ def main():
         fails.append("a refused cz_wrap did not return the input unchanged")
 
     fails += big_lzb()
+    fails += filtered()
     fails += lengths()
     fails += mirrors()
 

@@ -1511,6 +1511,10 @@ pj_fsizes:
     pop bx
     pop ax
     ret
+    nop                             ; PARITY PAD, never executed: PXSUB's two
+                                    ; refusal arms gone took `je .out` short,
+                                    ; eleven bytes in all, and the decoder
+                                    ; below keeps its measured even shift
 
 ; pj_stzero - the store, every paragraph of it, zeroed: through the
 ; scratch's 64KB windows (JV_SWIN), 32KB a pass and never across a window's

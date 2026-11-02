@@ -476,10 +476,11 @@ dm_musicnames: dw dm_fever,dm_chill,dm_off
 dm_fever: db 'FEVER'
 dm_chill: db 'CHILL'
 dm_off: db 'OFF  '
-dm_credits: dw dm_title,dm_credit1,dm_credit2,dm_credit3,0
+dm_credits: dw dm_title,dm_credit1,dm_credit2,dm_credit3,dm_credit4,0
 dm_credit1: db 'Gameplay reference: Nintendo (1990)',0
 dm_credit2: db 'Native 8086 single-player adaptation',0
 dm_credit3: db 'Original DrMarco surround; NES cell tiles',0
+dm_credit4: db 'Contributed by Jorge Gonzalez',0
 dm_speednames: dw dm_low,dm_med,dm_hi
 dm_low: db 'LOW',0
 dm_med: db 'MED',0

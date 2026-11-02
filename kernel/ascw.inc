@@ -95,11 +95,13 @@ ascw_flush_x:
     push bp
     push es
     mov bp, asw_v               ; the scratch block's base, held throughout
-    CSDO mov [CSEG bp+asw_vol-asw_v], dl
+    CSDO_ON
+    mov [CSEG bp+asw_vol-asw_v], dl
     and al, ASCF_FULL           ; the hold bits are asc_flush's, not ours
-    CSDO mov [CSEG bp+asw_mode-asw_v], al
-    CSDO mov word [CSEG bp+asw_seg-asw_v], 0
-    CSDO mov word [CSEG bp+asw_err-asw_v], FERR_NODISK
+    mov [CSEG bp+asw_mode-asw_v], al
+    mov word [CSEG bp+asw_seg-asw_v], 0
+    mov word [CSEG bp+asw_err-asw_v], FERR_NODISK
+    CSDO_OFF
 
     ; --- 1. a volume that can hold a cache: a FAT one this kernel writes ---
     mov bl, dl
@@ -232,14 +234,16 @@ asw_begin:
     xor ax, ax
     cld
     rep stosw
-    CSDO mov [CSEG bp+asw_nf-asw_v], ax  ; the FRONT index: declaring packages, up
-    CSDO mov word [CSEG bp+asw_nb-asw_v], ASC_NAPP ; ...the BACK one, the rest, down
-    CSDO mov [CSEG bp+asw_ne-asw_v], ax
-    CSDO mov [CSEG bp+asw_nfold-asw_v], ax
-    CSDO mov [CSEG bp+asw_onapp-asw_v], ax ; no old file until asw_old finds one
-    CSDO mov [CSEG bp+asw_onext-asw_v], ax
-    CSDO mov [CSEG bp+asw_osz-asw_v], ax
-    CSDO mov [CSEG bp+asw_dclus-asw_v], ax
+    CSDO_ON
+    mov [CSEG bp+asw_nf-asw_v], ax ; the FRONT index: declaring packages, up
+    mov word [CSEG bp+asw_nb-asw_v], ASC_NAPP ; ...the BACK one, the rest, down
+    mov [CSEG bp+asw_ne-asw_v], ax
+    mov [CSEG bp+asw_nfold-asw_v], ax
+    mov [CSEG bp+asw_onapp-asw_v], ax ; no old file until asw_old finds one
+    mov [CSEG bp+asw_onext-asw_v], ax
+    mov [CSEG bp+asw_osz-asw_v], ax
+    mov [CSEG bp+asw_dclus-asw_v], ax
+    CSDO_OFF
     ret
 
 ; -----------------------------------------------------------------------------
@@ -254,8 +258,10 @@ asw_begin:
 ; 54.7, 25.9.4) - never what a compressed file expands to.
 ; -----------------------------------------------------------------------------
 asw_dir:
-    CSDO mov [CSEG bp+asw_pcl-asw_v], ax
-    CSDO mov word [CSEG bp+asw_npkg-asw_v], 0
+    CSDO_ON
+    mov [CSEG bp+asw_pcl-asw_v], ax
+    mov word [CSEG bp+asw_npkg-asw_v], 0
+    CSDO_OFF
     ASWX dsk_dirw_start_x
 .sec:
     ASWX dsk_dirw_get_x         ; dsk_secbuf (LOW_SEG = SS) holds a sector
@@ -299,11 +305,13 @@ asw_dir:
     pop si
     jnz .pkg
     mov ax, [ss:si+26]
-    CSDO mov [CSEG bp+asw_dclus-asw_v], ax
+    CSDO_ON
+    mov [CSEG bp+asw_dclus-asw_v], ax
     mov ax, [ss:si+28]
-    CSDO mov [CSEG bp+asw_dsz-asw_v], ax
+    mov [CSEG bp+asw_dsz-asw_v], ax
     mov ax, [ss:si+30]
-    CSDO mov [CSEG bp+asw_dszh-asw_v], ax
+    mov [CSEG bp+asw_dszh-asw_v], ax
+    CSDO_OFF
     jmp .next
 .pkg:
     cmp word [ss:si+8], 'O8'
@@ -414,18 +422,22 @@ asw_old:
     add ax, ASC_HDR             ; what the header says the file holds
     cmp ax, [cs:bp+asw_ofs-asw_v]
     ja .no                      ; ...and more than was read: no cache
-    CSDO mov [CSEG bp+asw_osz-asw_v], ax
+    CSDO_ON
+    mov [CSEG bp+asw_osz-asw_v], ax
     shr bx, 1
     shr bx, 1
-    CSDO mov [CSEG bp+asw_onext-asw_v], bx
+    mov [CSEG bp+asw_onext-asw_v], bx
+    CSDO_OFF
     ret
 .ioerr:                         ; a file that did not READ is not no file:
     CSDO mov word [CSEG bp+asw_err-asw_v], FERR_IO ; the flush must not replace it
 .no:
     xor ax, ax
-    CSDO mov [CSEG bp+asw_onapp-asw_v], ax
-    CSDO mov [CSEG bp+asw_onext-asw_v], ax
-    CSDO mov [CSEG bp+asw_osz-asw_v], ax
+    CSDO_ON
+    mov [CSEG bp+asw_onapp-asw_v], ax
+    mov [CSEG bp+asw_onext-asw_v], ax
+    mov [CSEG bp+asw_osz-asw_v], ax
+    CSDO_OFF
     ret
 
 ; -----------------------------------------------------------------------------
@@ -491,8 +503,10 @@ asw_one:
     jmp short .old
 
 .notold:
-    CSDO mov byte [CSEG bp+asw_hblk-asw_v], 0 ; no association block yet
-    CSDO mov byte [CSEG bp+asw_hdr-asw_v], 0 ; ...and no header wanted yet
+    CSDO_ON
+    mov byte [CSEG bp+asw_hblk-asw_v], 0 ; no association block yet
+    mov byte [CSEG bp+asw_hdr-asw_v], 0 ; ...and no header wanted yet
+    CSDO_OFF
     cmp word [ico_seg], 0       ; a shed store is NOT re-claimed for this
     je .nostore
     mov si, [cs:bp+asw_ent-asw_v]
@@ -1029,12 +1043,11 @@ asw_move:
 
 asw_s_name: db 'ASSOC.DAT', 0   ; the write's name (read through CS, staged)
 
-; THE SCRATCH IS IN THE IMAGE, as zeros, and not in a nobits `.modfb`: the
-; claim is the image's size rounded up to a KB (mod_need), and a nobits tail
-; is a CLIFF - the image growing past a KB boundary takes the room away all at
-; once (MODULE-SELFCONTAIN-PLAN 3.2). Forty-odd zero bytes cost the compressed
-; file a few bytes and remove the cliff. Written before it is read: the entry
-; and asw_begin set every cell.
+; THE SCRATCH IS IN THE IMAGE, as zeros. Since MODULE-SELFCONTAIN-PLAN 3.5
+; that is what a nobits `.modfb` would emit too (kernel.asm's MODB_TAIL puts a
+; module's bss at its file's end), so the choice is only where the labels sit.
+; Forty-odd zero bytes cost the compressed file a few bytes. Written before it
+; is read: the entry and asw_begin set every cell.
 asw_v:                            ; ASV's base: every cell below is a d8
 asw_vol:    db 0
 asw_mode:   db 0

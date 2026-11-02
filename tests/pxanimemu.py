@@ -222,17 +222,18 @@ def run(name, data, win, v):
     seen = []
     fences = []
 
-    def fenced(kb):
-        """A claim of KB as av_start / AV_WAKE make it, with 4 KB of 0xA5
-        laid straight after it: a backup that runs past its claim (review-
-        w8 A1: a 320 x 200 frame's sum carried and read as 0 KB) breaks it"""
-        seg = a.p.claim(kb * 1024)
+    def fenced(para):
+        """A claim of PARAGRAPHS as av_start / AV_WAKE make it (SPEC.md
+        50.3.7), exactly that size, with 4 KB of 0xA5 laid straight after
+        it: a backup that runs past its claim (review-w8 A1: a 320 x 200
+        frame's sum carried and read as 0 KB) breaks it"""
+        seg = a.p.claim(para * 16)
         fs = a.p.claim(4096)
         a.p.seg_write(fs, b"\xA5" * 4096)
         fences.append(fs)
         return seg
-    a.p.w16("px_anseg", fenced(1))     # av_start's first: 1 KB
-    a.p.w16("px_ankb", 1)
+    a.p.w16("px_anseg", fenced(64))    # av_start's first: 1 KB
+    a.p.w16("px_anpara", 64)
 
     def ready():
         k = a.p.r16("px_anfr") - 1
@@ -268,7 +269,7 @@ def run(name, data, win, v):
             seg = fenced(need)
             a.p.seg_write(seg, a.p.seg_read(old, 768))
             a.p.w16("px_anseg", seg)
-            a.p.w16("px_ankb", need)
+            a.p.w16("px_anpara", need)
             continue
         if cf:
             msgs.append("the job answered %d" % ax)

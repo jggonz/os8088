@@ -359,16 +359,16 @@ vid_planes_w dw 4               ; the same, where a word is wanted. A planar
 vid_6845    db 0x35, 0x2D, 0x2E, 0x07, 0x5B, 0x02
             db 0x57, 0x57, 0x02, 0x03, 0x00, 0x00
 
-; ...and R0..R11 for MDA 80x25 TEXT, which vid_mono_text needs for the same
+; ...and R0..R11 for MDA 80x25 TEXT, which vid_text's .mono needs for the same
 ; reason: on a machine whose int 10h belongs to a VGA there is no BIOS call
 ; that will program THIS card (SPEC.md 39.20). IBM's own mode 7 values, with
 ; one deliberate difference - R10 = 0x20 is bit 5, CURSOR OFF, because
 ; neither caller wants one. The fsx bracket hides it with int 10h and on this
 ; class of machine that int 10h talks to the other card; the reboot path is
 ; only ever taken when a VGA is present, so nothing will print here.
-%ifdef GFX_VGA                  ; vid_mono_text's alone, and on a kernel with no
-                                ; VGA that routine is `clc / ret` (kernel size
-                                ; pass 13, -12 on kern_small)
+%ifdef GFX_VGA                  ; vid_text's .mono alone, and a kernel with no
+                                ; VGA assembles no .mono at all (kernel size
+                                ; passes 13 and 16)
 vid_6845t   db 0x61, 0x50, 0x52, 0x0F, 0x19, 0x06
             db 0x19, 0x19, 0x02, 0x0D, 0x20, 0x00
 %endif
@@ -649,25 +649,28 @@ vid_depth_set:
                                 ; (vidext.inc)
 .notext:
 %endif
-%ifdef GFX_VGA                  ; **ZF IS THE ANSWER AND IT SURVIVES TO THE
-    cmp al, VID_VGA             ; `jne` BELOW**. WITHOUT A VGA RENDERER THERE
-    je .colour                  ; IS NO QUESTION AT ALL: kern_small's kind is a
-    cmp al, VID_EGA             ; CGA or a Hercules on every machine (SPEC.md
-                                ; 39.27.1), and its first compare could only
-                                ; ever answer "1bpp" - so the whole test and
-                                ; its `jne` are a planar kernel's, and AL is
-                                ; not read there (kernel size pass 13). EGA is
-                                ; the same four-plane
-.colour:                        ; 16-colour depth as VGA - mode 10h, just
-                                ; shorter (SPEC.md 39.24) - so `colour` is
-                                ; `al == VID_VGA || al == VID_EGA`, and the
-                                ; two `mov`s between here and the test set no
-                                ; flags. Do not put a flag-setting instruction
+%ifdef GFX_VGA                  ; **CF IS THE ANSWER AND IT SURVIVES TO THE
+    dec al                      ; `jb` BELOW**. WITHOUT A VGA RENDERER THERE
+    cmp al, 2                   ; IS NO QUESTION AT ALL: kern_small's kind is a
+                                ; CGA or a Hercules on every machine (SPEC.md
+                                ; 39.27.1), and its compare could only ever
+                                ; answer "1bpp" - so the whole test and its
+                                ; jump are a planar kernel's, and AL is not
+                                ; read there (kernel size pass 13). EGA is the
+                                ; same four-plane 16-colour depth as VGA -
+                                ; mode 10h, just shorter (SPEC.md 39.24) - so
+                                ; `colour` is VGA or EGA, which vid_bk's `dec`
+                                ; map answers in ONE unsigned compare: VGA ->
+                                ; FF, HERC -> 0, CGA -> 1, EGA -> 2 (kernel
+                                ; size pass 17, -2: it was two compares and a
+                                ; jump; VESA, kind 4, is answered above). The
+                                ; `mov` between here and the jump sets no
+                                ; flag. Do not put a flag-setting instruction
                                 ; in this gap.
 %endif
     mov ax, 0x0101              ; 1bpp: AL -> [vid_mono], AH -> [vid_planes].
 %ifdef GFX_VGA
-    jne .st                     ; The software renderer IS the direct path
+    jb .st                      ; The software renderer IS the direct path
     mov ax, 0x0400              ; there (SPEC.md 39.5); a VGA is 0 and 4.
 .st:
 %endif
@@ -1045,7 +1048,7 @@ vid_depth_set:
 ;           callers are mode sets that reload everything they use immediately
 ;           afterwards, and this is an out-loop on a 4.77MHz machine.
 ;
-; Factored out of vid_setmode when vid_mono_text needed the identical loop with
+; Factored out of vid_setmode when vid_text's mono arm needed the identical loop with
 ; a different table (SPEC.md 39.20). Two tables and one loop rather than two of
 ; each, for gfxbench's reason: the second copy is the one that does not get the
 ; fix. It leaves DX = 0x3B4 - AND BOTH CALLERS RELY on DH = 3 there since size
@@ -1300,10 +1303,10 @@ vid_setmode:
     mov dl, VGA_GC & 0xFF       ; 3CEh after 3C4h: DH is 3 already
     mov ax, 0x0001              ; GC1  Enable Set/Reset: none, so the CPU byte
     out dx, ax                  ;      is the data
-    mov ax, 0x0003              ; GC3  Data Rotate/Function: replace, no rotate
-    out dx, ax
-    mov ax, 0x0005              ; GC5  Mode: write mode 0
-    out dx, ax
+    mov al, 0x03                ; GC3  Data Rotate/Function: replace, no rotate
+    out dx, ax                  ;      (AH is still GC1's 0: `out` moves no AX,
+    mov al, 0x05                ;      so AL alone - two bytes each, not three,
+    out dx, ax                  ;      kernel size pass 16) GC5  Mode: write mode 0
     mov ax, 0xFF08              ; GC8  Bit Mask: every bit ours
     out dx, ax
     VSEG ax, VGA_SEG             ; ...and CX is the count .wipego settled
@@ -1340,29 +1343,19 @@ vid_setmode:
 .done:
     dec byte [spl_busy]         ; ...and the card describes itself again
 
-; vid_pop8 - the eight-register epilogue TWO routines in this file share.
-; vid_text jumps here rather than carrying its own copy, so **its prologue is
-; now part of THIS routine's contract**: both push `ax bx cx dx si di bp es` in
-; that order, and a `push` added to one of them without the other returns the
-; machine to a wrong address at boot. (vid_detect was a third until SPEC.md
-; 2.5.3.3 moved it into the blob, where `.text`'s epilogue is out of reach; it
-; carries its own pop run and `retf` now; vid_apply, which entered one label
-; in with a seven-push frame, has had no resident copy since kernel size pass
-; 14 and pops its own.) Nothing in the tree checks this; these comments and the ones at the three
-; jump sites are the whole of the guard.  The label is BELOW
-; `dec byte [spl_busy]`, so the splash counter is decremented once.
+; vid_setmode's eight-register epilogue: its OWN pop run. It was vid_pop8,
+; shared with vid_text, until kernel size pass 17 moved vid_text past
+; spw_resident_end and onto the ladder (kent_bp / kret_es) - and with nothing
+; left to jump here the label went (tools/stkbalance.py walks a label nothing
+; reaches as an ENTRY). vid_detect and vid_apply pop their own (SPEC.md
+; 2.5.3.3, kernel size pass 14).
 ;
 ; IT KEEPS ITS OWN POP RUN, and SPEC.md 15.1.2's ladder may never have it.
-; `jmp kret_es` here BOOTS NOTHING: vid_setmode and vid_text both
-; run from the splash, whose first tick is gated on SPL_RESIDENT sectors
-; (splash.inc, 9 = 4,608 bytes), and the ladder is at the far end of `.text` -
-; ~50,700 bytes in, eleven times past the window the boot sector has read.
-; The jump lands in RAM the disk has not filled yet, the machine executes it,
-; and every adapter comes up dead with no message.  It is the same rule
-; vid_wipe's header states two routines down - "a helper further down the
-; image is not resident yet" - and the ladder is exactly such a helper.
-; tests/unit/t_asmrules.py's resident-window check is the mechanical guard.
-vid_pop8:
+; `jmp kret_es` here BOOTS NOTHING: vid_setmode runs from the splash, whose
+; first tick is gated on SPL_RESIDENT sectors (splash.inc), and the ladder is
+; at the far end of `.text`, past the window the boot sector has read. The
+; jump lands in RAM the disk has not filled yet, and every adapter comes up
+; dead with no message. tests/unit/t_resident.py is the mechanical guard.
     pop es
     pop bp
     pop di                      ; (vid_pop7, one label in, was vid_apply's
@@ -1504,77 +1497,6 @@ vid_init:                       ; the spw_near door the splash already needs
 VID_APPLY bvs, BSPW             ; bvs_apply: the splash, vid_init, and the
                                 ; blob's vid_switch/vid_disp_init (driver.inc)
 section .text
-
-; -----------------------------------------------------------------------------
-; vid_text - back to a text mode (CMD_REBOOT and fsx's FSXM_TEXT80)
-; in:       -
-; out:      -
-; clobbers: flags
-;
-; IT NAMES THE CARD NOW, AND int 10h CANNOT (SPEC.md 39.20). Mode 7 is "mono
-; text" and on a machine with one mono card that is the same statement as
-; "program the MDA" - which is every machine this had until a VGA could sit
-; beside a Hercules. A VGA's option ROM takes int 10h over at POST and its
-; mode 7 is the VGA's OWN mono text: aperture at B0000, CRTC at 3B4, both
-; directly on top of the real Hercules. Two cards driving one address space is
-; exactly what vid_setmode leaves 3BFh bit 1 clear to avoid, arrived at from
-; the other end.
-;
-; vid_equip is the fix for the same shape one machine class down and it does
-; not reach this one, which is worth reading its header for: on Hercules+CGA
-; the flag at 40:10 names the card because an XT ROM's mode set is
-; equipment-driven. A VGA BIOS keeps its own state and is not talked out of
-; itself by a flag - so the only way to program the mono card on such a
-; machine is to program the mono card.
-;
-; vid_mono_text is that, and it answers CF = 1 for "done, do not call int 10h
-; at all". The blank and the graphics lock-out below stay in front of both
-; paths: they are this card's registers either way, and the ROM's mode 7
-; reprograms the 6845 with video live otherwise.
-; -----------------------------------------------------------------------------
-vid_text:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
-    push es
-    cmp byte [vid_kind], VID_HERC
-    jne .colour
-    xor al, al                  ; blank before anything else moves, for the
-    mov dx, 0x3B8               ; same reason vid_setmode does: the BIOS mode
-    out dx, al                  ; 7 set below reprograms the 6845 with video
-    mov dl, 0xBF                ; live otherwise. Then lock graphics back out
-    out dx, al                  ; (AL is still 0) and let mode 7 re-enable.
-    call vid_mono_text          ; ...unless int 10h would land on a VGA, in
-    jc .out                     ; which case that call has just done it here
-    mov ax, 0x0007
-    jmp short .go
-.colour:
-    call vid_cga_equip          ; 39.19.4 ONE ROUTINE ALONG: the ROM's mode set
-                                ; is EQUIPMENT-driven, so asking for mode 3
-                                ; with 40:10 saying mono forces mode 7 and the
-                                ; 3B4h CRTC - which retimes the HERCULES for
-                                ; 80x25 text over its own graphics framebuffer
-                                ; and never touches the colour card at all.
-                                ; vid_setmode moved this call above its own
-                                ; VID_CGA test for exactly that; this arm is
-                                ; reached with a colour [vid_kind] on a MONO
-                                ; primary by an fsx bracket on the second
-                                ; display (SPEC.md 39.19.4.1), and the flag is
-                                ; put back by vid_fsx_leave and not here,
-                                ; because SPEC.md 96.33's teletype reads it for
-                                ; the length of the bracket. A no-op unless the
-                                ; flag says mono, so no colour-primary machine
-                                ; can see this
-    mov ax, 0x0003
-.go:
-    int 0x10
-.out:
-    jmp vid_pop8                ; the shared epilogue - and so this routine's
-                                ; push list is vid_setmode's. See vid_pop8.
 
 ; -----------------------------------------------------------------------------
 ; gfx_rowbase - byte offset of the first byte of a scan line (SPEC.md 39.3)
@@ -1802,3 +1724,109 @@ spl_busy    db 0
 ; PERFORMANCE.md's input overrun and is invisible in an emulator.
 spl_quiet   db 0
 
+; (vid_text is HERE, past spw_resident_end, since kernel size pass 17: it is
+; not a splash routine - fsx_mode and vid_reboot are its only callers - and
+; out here it may bank through kent_bp and leave through the ladder, which
+; tests/unit/t_resident.py rightly refuses anywhere inside the window)
+; -----------------------------------------------------------------------------
+; vid_text - back to a text mode (CMD_REBOOT and fsx's FSXM_TEXT80)
+; in:       -
+; out:      -
+; clobbers: flags
+;
+; IT NAMES THE CARD NOW, AND int 10h CANNOT (SPEC.md 39.20). Mode 7 is "mono
+; text" and on a machine with one mono card that is the same statement as
+; "program the MDA" - which is every machine this had until a VGA could sit
+; beside a Hercules. A VGA's option ROM takes int 10h over at POST and its
+; mode 7 is the VGA's OWN mono text: aperture at B0000, CRTC at 3B4, both
+; directly on top of the real Hercules. Two cards driving one address space is
+; exactly what vid_setmode leaves 3BFh bit 1 clear to avoid, arrived at from
+; the other end.
+;
+; vid_equip is the fix for the same shape one machine class down and it does
+; not reach this one, which is worth reading its header for: on Hercules+CGA
+; the flag at 40:10 names the card because an XT ROM's mode set is
+; equipment-driven. A VGA BIOS keeps its own state and is not talked out of
+; itself by a flag - so the only way to program the mono card on such a
+; machine is to program the mono card.
+;
+; .mono below is that, and it does not call int 10h at all. The blank and the graphics lock-out below stay in front of both
+; paths: they are this card's registers either way, and the ROM's mode 7
+; reprograms the 6845 with video live otherwise.
+; -----------------------------------------------------------------------------
+vid_text:
+    call kent_bp                ; AX..BP, and ES below: vid_setmode's eight
+    push es                     ; (kernel size pass 17, -4: this is not a
+                                ; splash routine - fsx_mode and vid_reboot are
+                                ; its callers - so the ladder is aboard)
+    mov ax, 0x0003              ; the colour arm's mode 3, loaded for BOTH
+                                ; arms: the mono one then needs only AL
+                                ; (kernel size pass 17, -1), and
+                                ; vid_cga_equip keeps AX
+    cmp byte [vid_kind], VID_HERC
+    jne .colour
+    xor al, al                  ; blank before anything else moves, for the
+    mov dx, 0x3B8               ; same reason vid_setmode does: the BIOS mode
+    out dx, al                  ; 7 set below reprograms the 6845 with video
+    mov dl, 0xBF                ; live otherwise. Then lock graphics back out
+    out dx, al                  ; (AL is still 0) and let mode 7 re-enable.
+    mov al, 0x07                ; the ROM's mode 7 (AH is still 0)...
+%ifdef GFX_VGA
+    test byte [vid_avail], VID_A_VGA ; ...unless int 10h would land on a VGA
+    jz .go                      ; (`mov` sets no flag, so the test may follow
+                                ; it): then the card is programmed by hand,
+                                ; HERE, in line (kernel size pass 17: the
+                                ; `jnz .mono / jmp short .go` pair was one
+                                ; jump too many)
+; THE MONO ARM - put the REAL mono card into 80x25 text, when int 10h cannot (SPEC.md
+; 39.20). It was vid_mono_text, a routine of its own in vidsel.inc with this
+; one caller, until kernel size pass 16 wrote it in here: the eight pushes
+; above already bank everything it spends, so its own six pushes, six pops,
+; its CF answer and the caller's test of it went (-20 on kern_big). The one
+; case is A VGA IN THE MACHINE: a lone MDA, a lone Hercules or Hercules+CGA has
+; an int 10h owned by the motherboard ROM, whose mode 7 IS this card, and takes
+; the ROM's path above having had nothing touched. It does NOT update
+; 40:49/40:63 - those describe the card int 10h drives, which here is the VGA;
+; vid_reboot (vidsel.inc) is where the other card is given something the BIOS
+; can honestly print on. The blank and the graphics lock-out above stay in
+; front of both paths: they are this card's registers either way.
+    mov si, vid_6845t           ; MDA 80x25, cursor off (above)
+    call vid_6845_prog
+    VSEG ax, VID_HERC_SEG        ; and clear the page, which the ROM's mode set
+    mov es, ax                  ; would have done: what is in there is a
+    xor di, di                  ; 720x348 graphics desktop, and read as
+    mov ax, 0x0720              ; characters it is noise. Space on attribute 7
+    mov cx, 2000                ; (DF = 0, SPEC.md 1: no `cld`, kernel size
+    rep stosw                   ; pass 17)
+    mov dl, 0xB8                ; high-res text, video ON, blink on - IBM's own
+                                ; (3B8h: vid_6845_prog leaves DX at 3B4h, and
+                                ; rep stosw moves no DX)
+    mov al, 0x29                ; mode 7 value, and the last write for the same
+    out dx, al                  ; reason vid_setmode's is (39.6): onto a page
+    jmp short .out              ; that is already blank - and NO int 10h at
+                                ; all
+%else
+    jmp short .go
+%endif
+.colour:
+    call vid_cga_equip          ; 39.19.4 ONE ROUTINE ALONG: the ROM's mode set
+                                ; is EQUIPMENT-driven, so asking for mode 3
+                                ; with 40:10 saying mono forces mode 7 and the
+                                ; 3B4h CRTC - which retimes the HERCULES for
+                                ; 80x25 text over its own graphics framebuffer
+                                ; and never touches the colour card at all.
+                                ; vid_setmode moved this call above its own
+                                ; VID_CGA test for exactly that; this arm is
+                                ; reached with a colour [vid_kind] on a MONO
+                                ; primary by an fsx bracket on the second
+                                ; display (SPEC.md 39.19.4.1), and the flag is
+                                ; put back by vid_fsx_leave and not here,
+                                ; because SPEC.md 96.33's teletype reads it for
+                                ; the length of the bracket. A no-op unless the
+                                ; flag says mono, so no colour-primary machine
+                                ; can see this
+.go:
+    int 0x10
+.out:
+    jmp kret_es                 ; the ladder's ES rung: the same eight pops
+                                ; vid_setmode makes for itself

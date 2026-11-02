@@ -173,7 +173,7 @@ def main():
         def digits(name):
             raw = at(name, 8).split(b"\0")[0].decode("latin-1")
             try:
-                return int(raw.rstrip("KB").strip())
+                return int(raw.strip().rstrip("+KB"))
             except ValueError:
                 fail("%s reads %r and should be digits and a KB - the page has "
                      "never been painted, or dos_mem_num did not run "

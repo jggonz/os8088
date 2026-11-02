@@ -2159,10 +2159,13 @@ cr_b_perr:   db 'Drive error', 0
 %endif
 
 cr_ablines:
-    dw cr_ab1, cr_ab2, cr_ab3, 0
+    dw cr_ab1, cr_ab2, cr_ab3, cr_abz, cr_abc, cr_abn, 0
 cr_ab1:     db 'CDRack for os8088', 0
 cr_ab2:     db 'plays audio CDs in the', 0
 cr_ab3:     db 'CD-ROM drive (CDROM.DRV)', 0
+cr_abz:     db 0
+cr_abc:     db 'Contributed by', 0
+cr_abn:     db 'Jorge Gonzalez', 0
 
 %include "cdart.inc"
 

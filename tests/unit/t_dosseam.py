@@ -66,8 +66,12 @@ ROOTS = ("dos_int21", "dos_int2f", "dos_int33", "dos_int20", "dos_int22",
 # a root as surely as an interrupt entry, and reading them keeps this row's
 # picture of the port's surface honest.  Without it `OSAPI_MOUSE` read as
 # registered with zero call sites the day INT 33h's read became a hook.
-HOOKBIND = re.compile(r"mov\s+word\s+\[dos_hkv\s*\+\s*DHK_\w+\]\s*,"
-                      r"\s*([A-Za-z_]\w*)")
+# The windowed part names its entries through doswabi.inc's HENT(x)
+# (SPEC.md 96.54.9), so a binding may be `..., HENT(dwm_mouse)` as well as
+# a bare label - missing that form read the window's DHK_MOUSE as unbound
+# and its three WM slots as unreached.
+HOOKBIND = re.compile(r"mov\s+word\s+\[(?:PS\s+)?dos_hkv\s*\+\s*DHK_\w+\]\s*,"
+                      r"\s*(?:HENT\(\s*)?([A-Za-z_]\w*)")
 
 LABEL = re.compile(r"^([A-Za-z_][A-Za-z0-9_]*):")
 # `jc`/`jnc`/`jz`/... are in here beside call and jmp because a tail branch to

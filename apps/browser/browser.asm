@@ -5331,6 +5331,7 @@ br_srcems_ensure:
     mov dx, [br_srcseg]
     mov bx, br_awin
     call br_at                      ; DX = the sum, or kern_mega's window
+    jc .discard                     ; (no LDT entry: refused, not segment 0)
     mov ax, [br_emsseg]
     mov es, ax
     xor si, si
@@ -5524,6 +5525,13 @@ br_claim:
     call br_pagepin
     pop ax
     call OSAPI_MEM_CLAIM
+    jmp short br_pageunpin
+br_claimp:                          ; ...and OSAPI_MEM_P's claim verbs, BL
+    push ax                         ; and CX the caller's (SPEC.md 50.3.7)
+    xor ax, ax
+    call br_pagepin
+    pop ax
+    call OSAPI_MEM_P
     jmp short br_pageunpin
 br_regrow:
     push ax
@@ -5798,6 +5806,7 @@ br_docems_ensure:
     mov dx, [br_docseg]
     mov bx, br_awin
     call br_at                      ; DX = the sum, or kern_mega's window
+    jc .discardnew                  ; (no LDT entry: refused, not segment 0)
     mov cx, [br_emscopycnt]
     xor si, si
     xor di, di
@@ -6106,13 +6115,16 @@ br_bwaim:
 
 ; br_at - DX = segment DX + AX paragraphs, through the window at [BX]
 ; in:  DX = a claim or the EMS frame, AX = paragraphs, BX -> a window word;
-;      out: DX. Every other register kept, flags clobbered.
+;      out: CF=0, DX; CF=1, DX = 0 - no LDT entry free (kern_mega only, and
+;      only for a NEW window: a re-aim cannot fail). Every other register kept.
 ; os88partsbody.inc's op_at, gated: an 8088 adds and makes no call. Under
 ; kern_mega OSAPI_SEG's SEG_AT re-aims the window at [BX] - 64KB of reach,
 ; good until the same window is aimed again, and NOT rebased with a claim, so
-; it is for a walk across which nothing claims. No LDT entry free is the null
-; selector, which the first access refuses with a fault rather than writing
-; anywhere at all.
+; it is for a walk across which nothing claims. No LDT entry free is CF=0 and
+; DX = 0 from the kernel, the NULL selector, and it is REFUSED here: an access
+; through it does not fault, kern_mega's mega_null0 completes it as segment 0,
+; so a copy through it would write the interrupt vector table. The real-mode
+; sum is never 0 and never carries.
 br_at:
     cmp byte [br_mega], 0
     jne .pm
@@ -6130,6 +6142,7 @@ br_at:
     add dx, ax                      ; refused: a real-mode answer after all
 .made:
     mov [bx], dx
+    cmp dx, 1                       ; CF = 1 exactly when DX = 0
     pop cx
     pop bx
     ret
@@ -6182,7 +6195,11 @@ br_pfree:
 ; br_srcat - ES:SI = the source claim's byte DX:AX, normalized (SI < 16)
 ; clobbers AX, CX, DX. The sum on an 8088; on kern_mega the parser's bound
 ; window, aimed at the byte's paragraph - one kernel call a REMAP, which the
-; parser makes once per 32 KiB of source.
+; parser makes once per 32 KiB of source. CF=1 (kern_mega only) that window
+; could not be made, ES the claim: only the FIRST remap can be refused, a
+; re-aim of a window that exists never is, so br_srcmap takes it as the end
+; and br_srcptr, which follows a map, cannot meet it. CF=0 on an 8088: the
+; sum never carries
 br_srcat:
     mov si, ax
     and si, 0x000F
@@ -6744,6 +6761,12 @@ br_savesourceems:
     push si
     push di
     push es
+    mov cx, [br_srclen]             ; ONE BAR FOR THE SAVE (SPEC.md 12.8.10):
+    mov dx, [br_srclen_hi]          ; a chunk a call, so the bar filled once
+    call OSAPI_FS_OP                ; per 32 KB. Its answer is KEPT (on the
+    sbb ax, ax                      ; stack, 0 = ours): a download may own
+    push ax                         ; the Browser's one operation, and this
+                                    ; must not end that one
     call OSAPI_FILE_DFREE
     jc .fail
     cmp bx, 64
@@ -6848,6 +6871,14 @@ br_savesourceems:
 .fail:
     stc
 .out:
+    pop dx                          ; the begin's answer
+    pushf
+    or dx, dx
+    jnz .notours
+    xor cx, cx                      ; DX:CX = 0: the end of ours
+    call OSAPI_FS_OP
+.notours:
+    popf
     pop es
     pop di
     pop si
@@ -7647,6 +7678,9 @@ br_srcmap:
     mov ax, [br_srcpos]
     mov dx, [br_srcpos+2]
     call br_srcat                   ; ES:SI, segment-normalized (SI < 16)
+    jc .end                         ; (kern_mega, no LDT entry for the parser's
+                                    ; window: the page ends here, never parsed
+                                    ; out of the claim's start - br_bwaim's ES)
     mov [br_srcstart], si
     mov byte [br_winseam], 0
     mov word [br_srcwinlen], 0xC000
@@ -7774,7 +7808,8 @@ br_srcems_map:
     mov dx, [br_emsseg]
     mov bx, br_ewin
     call br_at                      ; the frame + spoint/16 - a window on
-    mov es, dx                      ; kern_mega, whose frame is a selector
+    jc .bad                         ; kern_mega, whose frame is a selector
+    mov es, dx
     mov si, [br_spoint]
     and si, 0x000F
     jmp short .out

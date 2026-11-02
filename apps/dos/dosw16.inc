@@ -15,6 +15,12 @@
 ; plain MZ, an LE or PE, a compressed file whose raw bytes are its wrapper -
 ; is DOS's, and the run goes on as it always did.
 ;
+; A DOUBLE-CLICK NO LONGER REACHES THIS (SPEC.md 124.3.1): the LOADER,
+; apps/dos/dosload.asm's dsl_w16, makes the same test before any of DOS is
+; read and posts an NE to WIN16, and the launch's first wake skips this when
+; the loader says it read the file and found no NE (`dos_w16k`). What is left
+; here is an NE TYPED at the prompt, named in Run, or reached through a .LNK.
+;
 ; WHAT IT COSTS A DOS PROGRAM is one READ_AT of the first cluster, which the
 ; load that follows reads again, and the FAT count OSAPI_FILE_DFREE makes
 ; (SPEC.md 18.4.5). A second read only follows the `40h` test, which a plain
@@ -35,9 +41,6 @@
 DOS_W16_NE  equ 0x454E              ; 'NE', read as a word
 
 %include "win16/w16join.inc"        ; WIN16's join box (SPEC.md 124.28.12)
-%if SYS_SNAPSHOT_SIZE > 1024
- %error "the snapshot no longer fits the 1KB cluster claim dos_w16_join uses"
-%endif
 
 ; -----------------------------------------------------------------------------
 ; dos_w16_try - hand a Windows program to WIN16.O88
@@ -45,16 +48,26 @@ DOS_W16_NE  equ 0x454E              ; 'NE', read as a word
 ; out: CF=1 it was one and WIN16 has it: [dos_state] is DST_IDLE, and a launch
 ;      that did not come from the prompt closes this window. CF=0 = run it
 ;      here. Preserves every register but the flags.
+;
+; dos_w16_isne - ...ONLY the question: CF = 1 an NE, nothing else changed.
+; The Setup page asks it, to grey `Close when done` (SPEC.md 96.44.20). ONE
+; body: the entry's carry is the mode, banked under it with pushf
 ; -----------------------------------------------------------------------------
+dos_w16_isne:
+    stc                             ; CF = 1: ask only
+    jmp short dos_w16_go
 dos_w16_try:
+    clc                             ; CF = 0: and post an NE to WIN16
+dos_w16_go:
     push ax
     push bx
     push cx
     push dx
     push si
     push di
-    push bp
     push es
+    push bp                         ; (dos_hpop's order, BP last)
+    pushf                           ; [sp] = the mode, until the answer
     mov dx, [dos_dir]
     mov bl, [dos_vol]
     call dos_be_goto                ; stand where the file is
@@ -118,16 +131,9 @@ dos_w16_try:
     cmp word [es:si], DOS_W16_NE
     jne .free
     pop cx
+    popf                            ; IT IS ONE - and only asked: say so
+    jc .askd
     push di                         ; the claim, kept: the snapshot's room
-    jmp short .isne
-.free:
-    pop cx
-    mov dx, di
-    call OSAPI_MEM_FREE
-.no:
-    clc
-    jmp .out
-
 .isne:                              ; --- IT IS ONE: WIN16's document --------
     mov si, dos_name                ; the 16-byte locator (SPEC.md 21.5.3),
     mov di, dos_pgdoc               ; folded, because the association tables
@@ -145,7 +151,8 @@ dos_w16_try:
     mov al, [dos_vol]
     mov [dos_pgdoc + 15], al
     pop es                          ; the claim
-    call dos_w16_join               ; CF=1: a running WIN16 took it
+    mov si, dos_pgdoc
+    call w16j_give                  ; CF=1: a running WIN16 took it
     pushf
     mov dx, es
     call OSAPI_MEM_FREE
@@ -158,7 +165,7 @@ dos_w16_try:
     pop es
     mov di, dos_pgdoc
     call OSAPI_PKG_START
-    jc .no                          ; nothing opens it: DOS runs the stub
+    jc .nop                         ; nothing opens it: DOS runs the stub
 .taken:
     mov byte [dos_state], DST_IDLE
     cmp byte [dos_fromcon], 0
@@ -178,83 +185,23 @@ dos_w16_try:
     call OSAPI_GFX_UNLOCK
 .said:
     stc
-.out:
-    pop es
-    pop bp
-    pop di
-    pop si
-    pop dx
+    jmp short .out
+.askd:
+    mov dx, di                      ; (only asked: the claim goes now)
+    call OSAPI_MEM_FREE
+    jmp short .said
+.free:
     pop cx
-    pop bx
-    pop ax
-    ret
+    mov dx, di
+    call OSAPI_MEM_FREE
+.no:
+    popf                            ; (the mode: spent)
+.nop:
+    clc
+.out:
+    pop bp
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 dos_w16_pkg: db 'WIN16.O88', 0
 
-; -----------------------------------------------------------------------------
-; dos_w16_join - give the program in [dos_pgdoc] to a WIN16 instance that is
-; already running one, as a task of it (SPEC.md 124.28.12): a live package
-; instance whose image carries the join box, signed and of this version,
-; that says a program runs and holds no locator, has the locator written
-; into it, its request byte set last and its window woken
-; in:  ES = a claim of at least 1KB, for OSAPI_SYS_SNAPSHOT
-; out: CF=1 taken; CF=0 start WIN16 as before. Preserves every register but
-;      the flags
-; -----------------------------------------------------------------------------
-dos_w16_join:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    xor di, di
-    call OSAPI_SYS_SNAPSHOT         ; BX = INST_MAX
-    mov cx, bx
-    mov bx, SS_INST
-.r:
-    cmp byte [es:bx + SSI_STATE], 1
-    jne .n
-    test byte [es:bx + SSI_KIND], KIND_PKG
-    jz .n
-    cmp word [es:bx + SSI_SIZE], W16J_AT + W16J_SIZE
-    jb .n                           ; a built-in (0), or too small to hold it
-    push es
-    mov es, [es:bx + SSI_SEG]
-    cmp word [es:W16J_AT + W16J_MAGIC], W16J_SIG
-    jne .p
-    cmp word [es:W16J_AT + W16J_VER], W16J_V1 + 256 ; ...and OK = 1
-    jne .p
-    cmp byte [es:W16J_AT + W16J_REQ], 0
-    jne .p                          ; one locator waits at a time
-    push cx
-    mov si, dos_pgdoc
-    mov di, W16J_AT + W16J_DOC
-    mov cx, 8
-    cld
-    rep movsw
-    pop cx
-    mov byte [es:W16J_AT + W16J_REQ], 1
-    push bx
-    mov bx, [es:W16J_AT + W16J_WIN]
-    call OSAPI_WM_WAKE
-    pop bx
-    jnc .took
-    mov byte [es:W16J_AT + W16J_REQ], 0 ; the ring is full: an instance
-.p:
-    pop es
-.n:
-    add bx, SSI_RECSZ
-    loop .r
-    clc
-    jmp short .out
-.took:
-    pop es
-    stc
-.out:
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
+%include "win16/w16jgive.inc"       ; w16j_give: the loader's too (124.28.12)
