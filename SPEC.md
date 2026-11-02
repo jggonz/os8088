@@ -178791,6 +178791,20 @@ succeeds, and the two halves then compose: `dos_fh_enter` walks to the folder
 part of `\A\B` and `dos_cd_go` takes the last step, which together is a
 chdir of arbitrary depth for no extra code.
 
+**The last step is relative to where the walk ended** *(2026-11-02)*. An
+absolute name leaves `[dos_fabs]` set, and `dos_cd_go` reads that as "from
+the volume's root": so `\A\B` walked to `\A` and then looked for `B` at the
+root, and every chdir two or more levels deep failed. `dos_cd_go` now goes to
+the root only for a name with a leading separator and NO folder part: it
+reads `[dos_fabs]` and `[dos_fhpath]`, the byte after it, as one word and
+compares it with 1, which costs no byte over the test it replaces (the DOS
+core is at `CORE_MAX`). The shell's `dsh_cdto` clears the flag itself after
+its walk and is answered the same way.
+Mozart's setup found it: the Setup Toolkit checks a folder exists by
+changing into it, so `\MOZART\ILLUS256` looked missing, its `mkdir` then
+failed on a folder that was there, and the copy stopped at *Could not create
+directory*.
+
 #### 96.12.4 `AH=43h` is asked about DIRECTORIES, and a root parses to no name at all
 
 `AH=43h AL=00h` is how a program asks *"is this there?"* without opening it —

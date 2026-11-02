@@ -13493,8 +13493,11 @@ dos_cd_go:
     push ds
     pop es
 
-    cmp byte [dos_fabs], 0          ; "\" or "\NAME": from the VOLUME's root.
-    je .rel                         ; There is no jail any more - a program
+    cmp word [dos_fabs], 1          ; "\" or "\NAME": from the VOLUME's root -
+    jne .rel                        ; and "\A\B" from where dos_fh_enter's walk
+                                    ; of "\A" ended: [dos_fhpath], the byte
+                                    ; after, is set (SPEC.md 96.12.3). There
+                                    ; is no jail any more - a program
     xor dx, dx                      ; launched from a subdirectory may leave it
     mov bl, [dos_vol]               ; and may change drives, as it would under
     call dos_be_goto                ; DOS (SPEC.md 96.6.1)
@@ -18519,6 +18522,8 @@ dos_fh_fill:
     DBSS DOS_B_TMP3,  2
     DBSS DOS_B_ACC,   2
     DBSS DOS_B_FABS,  1        ; did the name carry a leading separator?
+    DBSS DOS_B_FHPATH,  1      ; ...and a folder part: THE BYTE AFTER, which
+                               ; dos_cd_go reads with it as one word
     DBSS DOS_B_PFBUF, DOS_PFIN + 1  ; AH=29h's copy of the program's name...
     DBSS DOS_B_PFCB,  12            ; ...and the twelve bytes it hands back
     DBSS DOS_B_FNAME2, 16      ; AH=56h's SECOND name (SPEC.md 96.31)
@@ -18684,8 +18689,7 @@ dos_fh_fill:
     DBSS DOS_B_SHSSEG,  2           ; DIR's sort claim, 0 = none (SPEC.md
     DBSS DOS_B_SHSN,    2           ; 96.33.9.2) ...and how many records in it
     DBSS DOS_B_SHSI,    2           ; ...and which one the listing is emitting
-    DBSS DOS_B_FHPATH,  1           ; the name carried a folder part...
-    DBSS DOS_B_FPBUF,   DOS_PBUF    ; ...which is this
+    DBSS DOS_B_FPBUF,   DOS_PBUF    ; the name's folder part ([dos_fhpath])
     DBSS DOS_B_FHCWD,   2           ; where we were before walking it
     DBSS DOS_B_FHMOVED, 1           ; ...and whether we did
     DBSS DOS_B_FHKEEP,  1           ; AH=3Bh: do NOT walk back
@@ -19307,6 +19311,9 @@ dos_tmp2    equ DOS_CBASE + DOS_B_TMP2
 dos_tmp3    equ DOS_CBASE + DOS_B_TMP3
 dos_acc     equ DOS_CBASE + DOS_B_ACC
 dos_fabs    equ DOS_CBASE + DOS_B_FABS
+%if DOS_B_FHPATH != DOS_B_FABS + 1
+  %error "dos_cd_go reads [dos_fabs] and [dos_fhpath] as one word"
+%endif
 dos_pfbuf   equ DOS_CBASE + DOS_B_PFBUF   ; AH=29h's name scratch...
 dos_pfcb    equ DOS_CBASE + DOS_B_PFCB    ; ...and its FCB prefix
 dos_fname2  equ DOS_CBASE + DOS_B_FNAME2  ; AH=56h's second name
