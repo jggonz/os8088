@@ -226771,6 +226771,13 @@ VGA's: frame 4 for `WS_THICKFRAME`, 1 otherwise. The 19 is `SM_CYCAPTION`'s
   issue #181).
 - `MoveWindow`, and `SetWindowPos` without `SWP_NOSIZE`, resize the
   top-level window the same way, invalidate it whole and send `WM_SIZE`.
+- **`SetWindowPos` with `SWP_SHOWWINDOW` makes the window visible** and
+  repaints it where it is (2026-11-02), as `ShowWindow` would; a second
+  top-level window is not shown by it. MSCUISTF's dialogs, the setup
+  toolkit's that Arcade's and Mozart's SETUP use, are `WS_CHILD` of the
+  setup's frame without `WS_VISIBLE` and are shown this way only: before,
+  the welcome dialog stayed unseen and the setup waited in `GetMessage`
+  for a click on it.
 - **A second top-level window is a second os8088 window** *(S6)*: one more
   `OSAPI_WM_CREATE` with WIN16's own callbacks, which tell the windows apart
   by the os8088 window they are handed. It is never bound to the instance,
@@ -229109,7 +229116,7 @@ line 2 the library's file.
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
-| `GetModuleFileName` (KERNEL.49) | on a library's handle, `A:\NAME.DLL` - the program's drive and the library's name, the form the program's own name takes |
+| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's name in that form. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS |
 | `GetModuleUsage` (KERNEL.48) | a library's count; 1 for anything else, as before |
 
 #### 124.23.6 Not done, pinned

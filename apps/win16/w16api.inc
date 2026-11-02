@@ -1702,9 +1702,9 @@ w16k_isdbcs:
     xor ax, ax
     ret
 
-; GetModuleFileName (KERNEL.49): "A:\NAME.EXE", truncated to the buffer.
-; WIN16 knows the program's drive and name, not its folder's path, and the
-; folder is all a runtime does with this (argv[0]).
+; GetModuleFileName (KERNEL.49): "A:\DIR\NAME.EXE", the program's folder
+; from the root (OSAPI_FILE_PATH), truncated to the buffer. A setup takes its
+; own files from that folder: _MSTEST's from a temporary one.
 ; args: +0 nSize, +2 lpBuffer (off, seg), +6 hModule
 w16k_getmodfn:
     push si
@@ -1721,8 +1721,28 @@ w16k_getmodfn:
     call .put
     mov al, ':'
     call .put
+    push cx                         ; the folder (SPEC.md 124.23.5): from
+    mov dx, [w16_dir]               ;   the root, "\" at the root itself
+    mov bl, [w16_vol]
+    call OSAPI_FILE_GOTO_QM
+    inc cx                          ; (its NUL takes the room kept for ours)
+    push ds                         ; an X cell: the buffer is the caller's
+    push es                         ;   DS's, so the program's segment is ours
+    pop ds                          ;   for the call
+    call OSAPI_FILE_PATH            ; CX = its length; refused, too long:
+    pop ds
+    pop ax                          ;   none
+    jnc .path
+    xor cx, cx
+.path:
+    add di, cx
+    sub ax, cx
+    xchg ax, cx                     ; the room left
+    cmp byte [es:di - 1], '\'
+    je .sep
     mov al, '\'
     call .put
+.sep:
     push bx
     push es
     call w16_args
