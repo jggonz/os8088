@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "d30d3f323",
+  "stamped": "1ef2867b7",
   "strings": "debee5372c95da3c",
-  "why": "arm: header data-selector word, w16_pcode"
+  "why": "room cut: four-byte stubs, SetDIBitsToDevice in part 9"
  },
  "WIN16_TXT": {
   "sources": [
