@@ -3942,6 +3942,19 @@ Once they loaded, the two multimedia programs found three things:
   written. After that, its Device menu lists Waveform Audio and CD Audio,
   and CD Audio opens with its tracks along the scale.
 
-Their buttons still draw as blank grey faces. Media Player builds each
-button in a memory DC and puts its glyph on with `StretchBlt`. That is the
-next thing to look at.
+Their buttons were blank grey faces. A trace build (`-DW16_TRACE`, its
+ring found by scanning the arm's memory, which is above 1 MB) showed Media
+Player's button painting its TEXT, not its bitmap. The bitmap is loaded
+when the button's `WM_SETTEXT` sees `#Play`, and the button sends itself
+that from `WM_CREATE`, out of the CREATESTRUCT's name. For a control in a
+dialog, WIN16 had passed that name as NULL. With the name in place, three
+more things came into view one after another:
+
+- `EnableWindow` sent a program's own window nothing, so a button enabled
+  when a CD opened kept its disabled face;
+- `StretchBlt` into a memory DC answered FALSE;
+- a monochrome glyph copied into a colour memory DC ignored the DC's text
+  and background colours.
+
+After all four fixes, Media Player's Play and Eject show their glyphs once
+CD Audio is open, and Sound Recorder's Record button shows its microphone.

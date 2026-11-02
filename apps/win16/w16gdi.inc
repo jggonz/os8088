@@ -434,6 +434,7 @@ W16DC_BCL   equ w16_bcl - w16_dchide
 W16DC_OX    equ w16_ox - w16_dchide
 W16DC_OY    equ w16_oy - w16_dchide
 W16DC_TPAP  equ w16_tpap - w16_dchide
+W16DC_TCOL  equ w16_tcol - w16_dchide
 
 ; w16_odarg - the call's hDC, its last argument, resolved when it names an
 ; own DC or the shared one with an own DC open (SPEC.md 124.25.11). Keeps

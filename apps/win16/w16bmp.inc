@@ -1074,6 +1074,10 @@ w16_bltm:
     ICALL w16_mdrec
     mov ax, [bx + W16DC_BRUSH]      ; its own brush, for the pattern ROPs
     mov [w16b_mbr], ax
+    mov al, [bx + W16DC_TCOL]       ; its text and background colours, for
+    mov [w16b_ropb], al             ;   a monochrome source (w16_bmink;
+    mov al, [bx + W16DC_TPAP]       ;   .srcrop sets its own)
+    mov [w16b_ropp], al
     mov ax, [bx + W16DC_OX]         ; its origin moves the destination, and
     add [w16b_x], ax                ;   its clip cuts it (SPEC.md 124.25.6)
     mov ax, [bx + W16DC_OY]
@@ -1171,15 +1175,11 @@ w16_bltm:
     call w16_bmfillr
     jmp short .yes
 .copy:
-    mov ax, [w16b_cx]               ; the same size, or nothing (a stretch
-    cmp ax, [w16b_cxs]              ;   into a bitmap is not provided)
-    jne .no
-    mov ax, [w16b_cy]
-    cmp ax, [w16b_cys]
-    jne .no
     mov ax, [w16b_src]
     cmp ax, W16_HDC
     jne .frommem
+    call w16_bltsz                  ; the screen: the same size, or nothing
+    jc .no
     call w16_scr2bm
     jmp short .yes
 .frommem:
@@ -1193,18 +1193,32 @@ w16_bltm:
     call w16_bmslot
     jc .no
     mov [w16b_bm], bx
+    call w16_bltsz
+    jnc .same
+    cmp word [w16b_cxs], 0          ; a stretch (SPEC.md 124.33.1): a
+    jle .no                         ;   pixel from the one it falls on, as
+    cmp word [w16b_cys], 0          ;   onto the screen - but not colour
+    jle .no                         ;   into monochrome, whose mask is
+    call w16_bminkq                 ;   built for a copy
+    jc .no
+    call w16_bm2bms
+    jmp short .done
+.same:
     cmp byte [w16b_mono + bx], 0    ; colour into monochrome: by the
-    jne .plain                      ;   source's background colour
+    jne .mono                       ;   source's background colour
     mov bx, [w16b_dbm]
     cmp byte [w16b_mono + bx], 0
     je .plain
     call w16_bmmask
     mov byte [w16b_brop], 1
     call w16_bm2bm
-    mov byte [w16b_brop], 0
-    jmp short .yes
-.plain:
+    jmp short .done
+.mono:
+    call w16_bminkq                 ; monochrome into colour: by the DC's
+.plain:                             ;   text and background colours
     call w16_bm2bm
+.done:
+    mov byte [w16b_brop], 0
 .yes:
     mov ax, 1
     ret
@@ -1249,6 +1263,63 @@ w16_bltm:
     call w16_bm2bm
     mov byte [w16b_brop], 0
     jmp short .yes
+
+; w16_bminkq - [w16b_bm] into [w16b_dbm]: CF=1 colour into monochrome, which
+; w16_bmmask's copy answers and a stretch does not. A monochrome source into
+; colour is INKED, as Windows draws one: its black in the destination DC's
+; text colour, its white in its background colour ([w16b_ropb], [w16b_ropp],
+; w16_bltm's), through w16_ropt and [w16b_brop] = 1 (SPEC.md 124.33.1). Black
+; on white is a plain copy. Keeps BX
+w16_bminkq:
+    push bx
+    mov bx, [w16b_bm]
+    cmp byte [w16b_mono + bx], 0
+    jne .mono
+    mov bx, [w16b_dbm]
+    cmp byte [w16b_mono + bx], 0
+    pop bx
+    je .ok
+    stc
+    ret
+.mono:
+    pop bx
+    cmp byte [w16b_ropb], CBLACK
+    jne .ink
+    cmp byte [w16b_ropp], CWHITE
+    je .ok
+.ink:
+    push ax
+    push cx
+    push di
+    push es
+    push ds
+    pop es
+    mov di, w16_ropt
+    xor ah, ah                      ; AH = the source colour
+    cld
+.s:
+    mov al, ah
+    cmp ah, CBLACK
+    jne .w
+    mov al, [w16b_ropb]
+.w:
+    cmp ah, CWHITE
+    jne .f
+    mov al, [w16b_ropp]
+.f:
+    mov cx, 16                      ; whatever is under it
+    rep stosb
+    inc ah
+    cmp ah, 16
+    jb .s
+    mov byte [w16b_brop], 1
+    pop es
+    pop di
+    pop cx
+    pop ax
+.ok:
+    clc
+    ret
 
 ;w16_bmmask - CX = a colour source DC's slot: w16_ropt makes a SRCCOPY into
 ; a monochrome bitmap, as Windows makes it - white where the source is its DC's
@@ -1665,6 +1736,93 @@ w16_mblit4:
     pop cx
     pop bx
     pop ax
+    ret
+
+; w16_bltsz - CF=1: the destination's [w16b_cx] x [w16b_cy] is not the
+; source's [w16b_cxs] x [w16b_cys] - a stretch. Takes AX
+w16_bltsz:
+    mov ax, [w16b_cx]
+    cmp ax, [w16b_cxs]
+    jne .st
+    mov ax, [w16b_cy]
+    cmp ax, [w16b_cys]
+    je .out                         ; (CF = 0: equal)
+.st:
+    stc
+.out:
+    ret
+
+; w16_bm2bms - w16_bm2bm's stretch: [w16_rl]..[w16_rb] (cut) of bitmap
+; [w16b_dbm] as the [w16b_cx] x [w16b_cy] block at [w16b_dx0], [w16b_dy0],
+; each pixel the source pixel it falls on in the [w16b_cxs] x [w16b_cys]
+; block at [w16b_xs], [w16b_ys] of bitmap [w16b_bm] - w16_bmscale's rule and
+; its row (w16_bmrow), a row at a time through w16_gbuf. A row wider than
+; the buffer is not drawn
+w16_bm2bms:
+    mov ax, [w16_rr]
+    sub ax, [w16_rl]
+    inc ax
+    mov [w16b_n], ax                ; pixels a row
+    cmp ax, 2 * W16_GBUF
+    ja .out
+    mov ax, [w16_rl]                ; the first column's source, and the
+    sub ax, [w16b_dx0]              ;   error the DDA carries from it
+    mul word [w16b_cxs]
+    div word [w16b_cx]
+    add ax, [w16b_xs]
+    mov [w16b_sx0], ax
+    mov [w16b_err0], dx
+    mov dx, [w16_rt]                ; DX = the destination's row
+.row:
+    cmp dx, [w16_rb]
+    jg .out
+    mov di, w16_gbuf
+    call w16_bmrow
+    cmp byte [w16b_brop], 0
+    je .put
+    call w16_inkrow                 ; inked (w16_bminkq)
+.put:
+    push dx
+    mov bx, [w16b_dbm]
+    mov ax, [w16_rl]
+    call w16_bmaddr                 ; ES:DI, CF = the destination starts low
+    sbb bl, bl
+    and bl, 1
+    xor bh, bh                      ; the row's first is a high nibble
+    mov si, w16_gbuf
+    mov cx, [w16b_n]
+    call w16_nibrow
+    pop dx
+    inc dx
+    jmp short .row
+.out:
+    ret
+
+; w16_inkrow - w16_gbuf's [w16b_n] pixels each through w16_ropt (its source
+; colour's row: what is under it plays no part). Takes AX, BX, CL, SI
+w16_inkrow:
+    push dx
+    mov si, w16_gbuf
+    mov dx, [w16b_n]
+    inc dx
+    shr dx, 1                       ; DX = the row's bytes
+    mov cl, 4
+.b:
+    mov al, [si]
+    mov bl, al
+    and bx, 0x00F0                  ; the high pixel's row: its colour * 16
+    mov ah, [w16_ropt + bx]
+    mov bl, al
+    and bl, 0x0F
+    shl bl, cl                      ; ...and the low pixel's
+    mov al, [w16_ropt + bx]
+    shl ah, cl
+    or al, ah
+    mov [si], al
+    inc si
+    dec dx
+    jnz .b
+    pop dx
     ret
 
 ; w16_bm2bm - a same-size SRCCOPY from bitmap [w16b_bm] into [w16b_dbm], the

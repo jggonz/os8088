@@ -1666,8 +1666,13 @@ its table goes in the diary, so the reach is measured, not claimed.
     segment 0 through a window (SPEC.md 124.31.10). That is aimed at the
     fourteen image sites that made 114,482 of the 114,952 traps in Write
     3.0's Bochs census; S25's pass counts again.
+    Then their bitmap buttons: a dialog's control now gets its name in
+    `WM_CREATE`, `EnableWindow` repaints a program's own child window,
+    `StretchBlt` draws into a memory DC, and a monochrome source is inked
+    there with the DC's colours. Media Player's Play and Eject and Sound
+    Recorder's Record show their glyphs; a disabled glyph is still blank.
   - [ ] Batch 2: the Program Manager DDE server, over S21 batch 5's
-    routing.
+    routing (SPEC.md 124.33.2).
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running

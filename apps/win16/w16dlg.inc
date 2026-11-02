@@ -6074,8 +6074,10 @@ w16d_initsend:
 
 ; w16d_owecr - BX = a dialog just made: the first of its controls whose
 ; WM_CREATE is owed (w16d_mkprog) sent it, with a CREATESTRUCT as
-; CreateWindow's (its creation parameters, name and class NULL), and
-; w16d_cc continues. CF=1 none is owed. Keeps BX.
+; CreateWindow's (its creation parameters and class NULL; its name the
+; control's text, copied in after it, as the template gave it - Media
+; Player's and Sound Recorder's buttons load their bitmaps by it, SPEC.md
+; 124.33.1), and w16d_cc continues. CF=1 none is owed. Keeps BX.
 w16d_owecr:
     push bx
     ICALL w16_rec2hwnd
@@ -6100,13 +6102,32 @@ w16d_owecr:
     push si
     push di
     push es
+    ICALL w16_textptr               ; ES:SI = its text, CX = its length
+    push es
+    push si
+    push cx
+    add cx, W16_CSSIZE + 2          ; the struct, the text and its NUL, even
+    and cl, 0xFE
     mov ax, dx                      ; the continuation's word: the dialog's
     sub ax, W16_HWND0               ;   slot
     shr ax, 1
     shr ax, 1
     mov si, w16d_cc_c
-    mov cx, W16_CSSIZE
     ICALL w16_cbopen                ; ES:DI = the CREATESTRUCT, zeroed
+    pop cx
+    pop si
+    pop ax
+    push di
+    push ds
+    mov ds, ax
+    add di, W16_CSSIZE
+    cld
+    rep movsb                       ; the text (its NUL is the zeroing's)
+    pop ds
+    pop di
+    lea ax, [di + W16_CSSIZE]
+    mov [es:di + 22], ax            ; lpszName
+    mov [es:di + 24], es
     mov ax, [w16_dgroup]
     mov [es:di + 4], ax             ; hInstance
     mov ax, [bx + W16W_MENU]

@@ -227455,10 +227455,11 @@ card.
 edge is on a byte (an even column), and through WIN16's band otherwise.
 WinMine draws every cell that way, 16 x 16 from column 0.
 
-**Not provided** (R7, *USER and GDI breadth*): a stretch into a memory DC;
-every other raster operation (FALSE, nothing drawn);
-`SetBkColor`/`SetTextColor` applied to a monochrome source
-(`CreateCompatibleBitmap` arrived in S15, §124.20.4). Every other drawing
+**Not provided** (R7, *USER and GDI breadth*): every other raster operation
+(FALSE, nothing drawn); `SetBkColor`/`SetTextColor` applied to a monochrome
+source drawn onto the SCREEN (`CreateCompatibleBitmap` arrived in S15,
+§124.20.4). A stretch into a memory DC, and those colours applied to a
+monochrome source drawn into one, arrived in S24 (§124.33.1). Every other drawing
 call draws into a memory DC since S19b (§124.25.3), and `GetDIBits` arrived
 with it (§124.25.6).
 
@@ -228108,8 +228109,8 @@ and `PatBlt` draw into a memory DC's bitmap:
 
 The destination is cut to its bitmap and the source to its own extent, so a
 negative offset - Solitaire's overlap, `(-60, -59)` into a 71 x 276 bitmap -
-copies the part that lands. A `StretchBlt` into a memory DC and every other
-ROP into one answer FALSE.
+copies the part that lands. Every other ROP into one answers FALSE. A
+`StretchBlt` into one has drawn since S24 (§124.33.1).
 
 **The other source ROPs onto the screen.** Solitaire puts an empty pile's
 outline down with `SRCAND` (a monochrome bitmap: its white is the screen
@@ -231729,8 +231730,45 @@ has (124.32.4): `WaveAudio=mciwave.drv 4` and `CDAudio=mcicda.drv`. That
 does not change the file, so it is written only if the program writes it.
 Real mode has no MCI and starts it empty.
 
+**Their bitmap buttons.** Both programs' buttons are a class of their own
+(`Sbutton`) in a dialog, each with a text such as `#Play`. On `WM_CREATE`
+the button calls `SetWindowText` with the CREATESTRUCT's `lpszName`. Its
+`WM_SETTEXT` then loads the bitmap the text after `#` names. It paints by
+building the face in a memory DC and putting the glyph on with
+`StretchBlt` from a second one. Four things stood in the way:
+
+- **A dialog's control was created with no name.** `WM_CREATE`'s
+  CREATESTRUCT for a program's control in a dialog had `lpszName` NULL, so
+  the button never learnt `#Play`. It names the control's text now, copied
+  in after the struct (`w16d_owecr`). Both arms.
+- **`EnableWindow` sent a program's own window nothing.** In Windows its
+  `WM_ENABLE` makes such a button invalidate itself. Media Player enables
+  Play and Eject when a device opens, and they kept their disabled faces.
+  `EnableWindow`'s row is part 9's now (`w16n_enable`). A program's child
+  window whose state changed is made invalid whole and erased. The message
+  itself is still not sent.
+- **`StretchBlt` into a memory DC answered FALSE** (124.25.3). It draws
+  now, each pixel taken from the source pixel it falls on, as `StretchBlt`
+  onto the screen does (`w16_bm2bms`, over `w16_bmscale`'s row). The one
+  case left out is a colour source into a monochrome bitmap.
+- **A monochrome source into a colour memory DC** is drawn with that DC's
+  colours, as Windows draws it: its black in the text colour, its white in
+  the background colour (`w16_bminkq`, through `w16_ropt`). Black on white
+  is the plain copy it always was. Onto the screen it is not provided yet
+  (124.15.2).
+
 **Seen 2026-11-01** under QEMU on kern_mega with an SB16 and a CD:
-Write 3.1 opens; Sound Recorder shows its window; Media Player's Device menu
-lists Waveform Audio and CD Audio, and CD Audio opens with its track scale.
-**Open:** the two programs' bitmap buttons (Sound Recorder's `sbutton`
-class, Media Player's) draw as blank grey faces.
+- Write 3.1 opens.
+- Sound Recorder draws its window, and its Record button shows its
+  microphone.
+- Media Player's Device menu lists Waveform Audio and CD Audio. Opening CD
+  Audio shows its tracks on the scale and puts the Play and Eject glyphs
+  on.
+- The glyphs stand on white, which is the background colour the dialog's
+  `WM_CTLCOLOR` leaves. This has not been compared with Windows 3.1.
+
+**Open:**
+- A disabled button's glyph is blank. It is drawn with `DPSoa` under a
+  checkered brush, which has no answer here (124.25.7).
+- Media Player's Play on the CD answers *The specified parameter is out of
+  range for the specified command* (124.32.4).
