@@ -584,9 +584,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "dccaad5b6",
-  "strings": "5dfa863f9bc6c17e",
-  "why": "checked against #313's network install, the startup check and the slot list's Empty, No Room; the page covers them"
+  "stamped": "1b59b4c1c",
+  "strings": "2b391919e4c9218d",
+  "why": "only OS88VER.TXT changed (release 20261030's four what's-new lines); the page describes those lines generically, no words owed"
  },
  "INTRO_MID": {
   "sources": [],

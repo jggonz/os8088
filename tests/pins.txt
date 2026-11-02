@@ -456,31 +456,24 @@ X apps/win16/w16load.inc @w16_load       # the Windows program's own segments
                                          # the program keeps CS, DS and SS in its
                                          # own frames across every message, as
                                          # real-mode Windows' FIXED segments do
+X apps/win16/w16load.inc @w16_layout     # the program's DGROUP, laid out by
+                                         # w16_layout: SS = DS = it, its
+                                         # paragraph is in the program's fixups
+                                         # and frames for the program's life, as
+                                         # @w16_load's segments are
+C apps/win16/w16load.inc w16_cseg        # the cluster cache, claimed and freed
+                                         # inside one w16_load or one w16l_rtlib
+                                         # call (w16l_cfree)
+C apps/win16/w16rgn.inc w16_fmseg        # ExtFloodFill's mask of the screen,
+                                         # claimed by w16r_snap and freed by
+                                         # w16r_unsnap inside the one call
 X apps/win16/w16mem.inc w16_arena+si     # the program's global heap: GlobalLock
                                          # and GlobalAlloc(GMEM_FIXED) hand it a
                                          # block's SEGMENT, which it keeps in its
                                          # own data as a far pointer for as long
-                                         # as it likes (SPEC.md 124.6)
-X apps/win16/w16x87.inc op:W16P_FPU      # the 8087 emulator: its segment is in
-                                         # int 34h-3Dh's vectors (w16x_new) for
-                                         # the whole of the program, which jumps
-                                         # through them from inside its own code;
-                                         # dropped at the program's end
-N apps/win16/w16bmp.inc w16b_seg+bx      # a GDI bitmap's bits, held for the
-                                         # bitmap's life. The program holds only
-                                         # the HBITMAP, so a proc rewriting
-                                         # w16b_seg would retire this line
-N apps/win16/w16prof.inc bx+WPF_SEG      # an open profile's text (WIN.INI, the
-                                         # program's .INI), held until the
-                                         # program ends and it is written; reached
-                                         # only through WPF_SEG, so a proc would
-                                         # retire it
-N apps/win16/w16prof.inc bx+WPF_LOG      # the same profile's change log, held
-                                         # with it; the same proc would retire it
-N apps/win16/win16.asm @w16_facein       # the System font part, held while the
-                                         # program draws: w16_face names it, so
-                                         # op_movable with a proc re-stamping
-                                         # w16_face would retire this line
+                                         # as it likes (SPEC.md 124.6). WIN16's
+                                         # own blocks live there too (124.25.1):
+                                         # the parts, the profiles, the bitmaps
 N apps/win16/win16.asm @w16_pfetch       # the loader part (dropped inside the
                                          # load), the icons (held to the end)
                                          # and the dialog part, far-called through
