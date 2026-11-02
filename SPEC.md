@@ -180627,6 +180627,20 @@ free count into `BX`, so an `AH=36h` about a drive the program was not standing
 on came home to whichever drive the free count's high byte named; it is banked
 in `DI` now, which nothing on the path touches.
 
+**§96.48 withdrew that mount, and this call went on believing in it.**
+Since §96.48 `dos_drv_sel` mounts nothing: the mount happens at the next
+NAME, through `dos_fh_stand`. But `OSAPI_VOL_STAT` answers for the volume
+the MACHINE is on, so `AH=36h` about any drive answered for whichever volume
+the last name had left the machine on. It was found by Microsoft's Setup
+Toolkit bootstrap under WIN16 (§124.33.3), which asks `DL=03` (C) while it
+stands on its floppy in A: and was told C: had 40 free clusters of a 1.44MB
+disk's 2,847, so *Insufficient memory or disk space*. A DOS program that
+selects C: and asks `DL=0` was told the same. So `AH=36h` stands the machine
+on the drive it names now, with `dos_fh_stand` as a name does (its own
+folder, and a drive that cannot be reached is `AX = FFFFh`), and does not
+come back: no name comes back either (§96.48). It is shorter than the
+select-ask-select-back it replaces.
+
 ### 51.11 Drivers, out of the way (`OSAPI_DRV_SUSPEND`)
 
 An exclusive fullscreen app that is about to program the hardware **itself** —
@@ -227343,6 +227357,19 @@ paths (R5). A name that is not 8.3 reads as an empty file and is never
 written. The folder is BUILT onto every disk that carries WIN16 (§19.9); a
 disk without it keeps the profiles in memory for the session and says
 nothing, and the folder is never created.
+
+**A file named with a drive or a folder is read from there when the
+Windows directory has none** *(S24)*. A setup's bootstrap reads its own
+`A:\SETUP.LST` with `GetPrivateProfileString`, and an empty answer there
+was *Initialization list file has been corrupted*. So when the Windows
+directory holds no file of that name and the program's name for it had a
+`\` or a `:`, the file it named is read into the held copy through WIN16's
+DOS (§124.21), whole, up to the 32,000 bytes a held file may be. It is
+never written back there: the held copy is the Windows directory's file
+as before, which is written only if the program writes to it, and then
+holds what was read with the write made. A copy already in the Windows
+directory is what is read, as before; the named file is only the start of
+one. In the library part (`w16pf_dseed`), and one byte of bss.
 
 **The cache.** A profile file is read whole into a block of WIN16's own in
 the global heap the first time it is asked for, and kept (a claim of its own
