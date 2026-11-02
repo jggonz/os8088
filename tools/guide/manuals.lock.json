@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "61dda6c34",
-  "strings": "13080677c06c30eb",
-  "why": "Merge of S21 batches 4-5; atoms in part 9 (SPEC.md 124.28.6)"
+  "stamped": "1b9356a85",
+  "strings": "5046a2e6097e4e16",
+  "why": "S24 batch 2: Program Manager's DDE server (SPEC.md 124.33.2)"
  },
  "WIN16_TXT": {
   "sources": [
