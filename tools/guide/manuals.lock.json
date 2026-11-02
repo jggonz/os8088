@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "7f045e923",
+  "stamped": "89b0c1391",
   "strings": "172e5a682e5edddb",
-  "why": "locked moveable GlobalReAlloc on the arm"
+  "why": "cyclic imports, LibMain chain, arm arenas, setup names"
  },
  "WIN16_TXT": {
   "sources": [
