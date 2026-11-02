@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "fbe0a189b",
+  "stamped": "390e95e2b",
   "strings": "562e87c75fe90f35",
-  "why": "AH=1Ah and 2Fh give AX back"
+  "why": "AH=3Bh: a chdir two levels deep from the root"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "fa52ac5f1",
+  "stamped": "390e95e2b",
   "strings": "172e5a682e5edddb",
-  "why": "RegisterClass takes a local class over a global one; GetModuleFileName moves to the library part"
+  "why": "the DOS core inside WIN16: AH=3Bh two levels deep"
  },
  "WIN16_TXT": {
   "sources": [
