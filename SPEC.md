@@ -178511,6 +178511,32 @@ code that uses it — a `test`/`or`/`and`/`xor` against a memory field enrols
 its constant in that field — and fails on two names with one value. 43
 families across the tree, and a flag added tomorrow is covered tomorrow.
 
+#### 96.11.11 The cluster is the FILE's volume's, not the launch volume's *(WIN16 S24)*
+
+The window's arithmetic is in clusters: a refill starts on one, a partial
+flush leaves the file a view because it ends off one, and an in-place write
+fills the rest of one. Each needs the cluster of the volume the file is on.
+The core asked once at launch, for the launch volume, and used that one
+number for every file. A program on a floppy (512-byte clusters) writing to
+the hard disk (2,048 bytes on a 32 MB FAT16 volume) then wrote in place at
+offsets that were not on the disk's clusters. `OSAPI_FILE_WRITE_AT` refused
+them with `FERR_NAME`, and the flush answered *access denied*. Microsoft's
+Setup Toolkit copies a kilobyte a read and a kilobyte a write from its floppy
+into `C:\~MSSTFQF.T`, and every file larger than one read failed that way
+under WIN16 (`XVOL.EXE`, `tests/win16/xvol.c`, is the reduction).
+
+**`dos_fh_cb` answers the cluster of the volume the handle's record is on**,
+from a byte a volume (`dos_vcb`, sectors per cluster, 0 = not yet asked). It
+asks the first time a launch needs a volume's: it stands the machine on the
+file (`dos_fh_at`) and calls `OSAPI_FILE_DFREE`, the call the launch already
+makes once. The five sites that read `[dos_cbytes]` read it now, and that
+word is gone: the launch volume's cluster only sizes the window, which
+`dos_fh_setup` does in a register (8 KB, a multiple of every cluster up to
+8 KB). `dos_vcb` is cleared with the handle table it follows, so the bss grew
+by six bytes, not eight, which kern_dos's 33 KB rung still holds. A volume
+whose clusters are larger than the window is still not handled (a FAT16
+volume of 1 GB or more, from a program launched off a floppy).
+
 ### 96.12 Vectors, drives, the DTA and the directory
 
 The calls that are not I/O and not memory, and that a program makes without

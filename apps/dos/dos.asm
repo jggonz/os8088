@@ -3707,19 +3707,14 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; here at all, so an installer read "one sector per cluster" and three
     ; stale registers. Prince of Persia's INSTALL selects C:, is told it is
     ; standing on C:, asks this, and prints "Invalid drive letter" (96.27.1).
-    push bx
-    push si
-    push di
-    push es
+    push bx                         ; (BX is an answer: dropped, not popped)
     mov al, dl
     dec al                          ; 1-based -> a volume index...
     jns .dfv
     mov al, [dos_vol]               ; ...and 0, the drive the program is on
 .dfv:
-    cmp al, DVOL_MAX
-    jae .dfbad                      ; past the array: no such drive
-    mov dl, al
-    call dos_fh_stand               ; **THE MACHINE STANDS THERE**, as for a
+    mov dl, al                      ; (one past the drives is refused by the
+    call dos_fh_stand               ; goto) **THE MACHINE STANDS THERE**, as for a
     jc .dfbad                       ; name (SPEC.md 96.27.1): OSAPI_VOL_STAT
     call dos_be_vstat               ; answers for the volume the MACHINE is
                                     ; on, and since 96.48 dos_drv_sel mounts
@@ -3731,19 +3726,14 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
                                     ; BECAUSE this is its caller (SPEC.md
                                     ; 18.4.6). No way back, as no name has one
     jc .dfbad
-    pop es
-    pop di
-    pop si
     add sp, 2                       ; BX is an ANSWER: drop the banked one
     mov [bp-8], dx                  ; ...and so is DX (SPEC.md 96.7.1)
     jmp .ok
 .dfbad:
     mov ax, 0xFFFF                  ; DOS's own "invalid drive", and a value a
-    pop es                          ; program can test even when it ignores the
-    pop di                          ; flag - which for this call every program
-    pop si                          ; does, DOS never setting CF here
-    add sp, 2
-    jmp .ok
+    add sp, 2                       ; program can test even when it ignores the
+    jmp .ok                         ; flag - which for this call every program
+                                    ; does, DOS never setting CF here
 
 
 .setdta:
@@ -13129,7 +13119,8 @@ dos_fh_setup:
     push ds
     pop es
     mov di, dos_fhtab               ; a launch starts with nothing open, and
-    mov cx, FH_SIZEOF * DOS_NFH     ; saying so costs six bytes against a
+    mov cx, FH_SIZEOF * DOS_NFH + DVOL_CAP  ; (and no cluster asked: dos_vcb)
+                                    ; saying so costs six bytes against a
     xor al, al                      ; stale handle surviving into a second run
     cld
     rep stosb
@@ -13149,9 +13140,9 @@ dos_fh_setup:
     mov bx, 2                       ; a volume that will not say: 1KB, which is
 .got:                               ; the 360KB floppy's own and is a multiple
     mov cl, 9                       ; of every smaller one
-    shl bx, cl                      ; sectors -> bytes
-    mov [dos_cbytes], bx
-
+    shl bx, cl                      ; sectors -> bytes: it sizes the window,
+                                    ; and each file's own volume answers for
+                                    ; its arithmetic (dos_fh_cb, 96.11.11)
     mov ax, DOS_WKB * 1024
     cmp bx, ax                      ; a cluster larger than the floor IS the
     jbe .round                      ; window: READ_AT cannot be asked for a
@@ -16862,7 +16853,7 @@ dos_fh_shrink:
     ; leaves the old file whole
     cmp word [si+FH_POS+2], 0
     jne .bcut
-    mov ax, [dos_cbytes]
+    call dos_fh_cb
     dec ax
     test ax, [si+FH_POS]            ; a cluster multiple: the cut is all of it
     jz .bcut
@@ -16870,10 +16861,10 @@ dos_fh_shrink:
     cmp ax, [dos_wbytes]
     jbe .b1
 .bcut:
-    mov ax, [dos_cbytes]
+    call dos_fh_cb
     neg ax
     and ax, [si+FH_POS]             ; C: the new end, rounded down to a
-    mov dx, [si+FH_POS+2]           ; cluster (dos_cbytes is a power of two)
+    mov dx, [si+FH_POS+2]           ; cluster (a power of two)
     push ax
     push dx
     call .brd                       ; the cluster C starts, into the window
@@ -17162,7 +17153,7 @@ dos_fh_wiloop:
     jz .iappend                     ; exactly on a cluster boundary: the file
                                     ; owns nothing past its end, and its size
                                     ; is already the multiple APPEND wants
-    mov ax, [dos_cbytes]            ; ...otherwise the rest of this cluster,
+    call dos_fh_cb                  ; ...otherwise the rest of this cluster,
     sub ax, [dos_wlen]              ; less what the window already holds
     jbe .iappend
     mov cx, ax                      ; CX = the room, which .iroom clamps to
@@ -18009,6 +18000,41 @@ dos_fh_at:
     pop ax
     ret
 
+; dos_fh_cb - AX = the cluster, in bytes, of the volume the record at SI is on
+; (SPEC.md 96.11.11). Asked of that volume the first time a launch needs it -
+; standing the machine on the file, so OSAPI_FILE_DFREE answers for it - and
+; kept in dos_vcb. A volume that will not say is taken as 1KB, as
+; dos_fh_setup takes one. Keeps everything else but the flags
+dos_fh_cb:
+    push bx
+    push dx
+    push di
+    mov di, dos_vcb
+    mov al, [si+FH_VOL]
+    cbw
+    add di, ax                      ; DI -> its byte
+    mov al, [di]
+    or al, al
+    jnz .have
+    call dos_fh_at
+    jc .guess
+    call dos_be_dfree               ; BX = sectors per cluster
+    jc .guess
+    mov al, bl
+    mov [di], al                    ; kept (a 0 is asked again next time)
+    or al, al
+    jnz .have
+.guess:
+    mov al, 2                       ; ...and not kept
+.have:
+    mov ah, al                      ; sectors * 512: * 256, then * 2
+    xor al, al
+    shl ax, 1
+    pop di
+    pop dx
+    pop bx
+    ret
+
 ; dos_fh_here - the record at SI resolves where the machine stands now: the
 ; open's and the create's, after dos_fh_enter has walked the name's folder
 ; clobbers: AX
@@ -18173,7 +18199,7 @@ dos_fh_flush:
     mov [si+FH_TOK], di             ; which is when DOS writes them too
     jc .errv
 .acc:
-    mov ax, [dos_cbytes]            ; **A PARTIAL FLUSH MAKES THE FILE A VIEW**
+    call dos_fh_cb                  ; **A PARTIAL FLUSH MAKES THE FILE A VIEW**
     dec ax                          ; (SPEC.md 96.52): another handle took the
     test ax, [dos_wlen]             ; window mid-cluster, so the file now ends
     jz .home                        ; off a cluster boundary and the next
@@ -18305,11 +18331,10 @@ dos_fh_fill:
     jnz .whole                      ; the window IS the file on that arm, and
                                     ; it is re-read rather than kept because
                                     ; another handle may have taken it
-    mov ax, [si+FH_POS]             ; the cluster-aligned base under the
-    mov dx, [si+FH_POS+2]           ; position. The cluster is a power of two,
-    mov bx, [dos_cbytes]            ; so the mask is its own negation
-    neg bx
-    and ax, bx
+    call dos_fh_cb                  ; the cluster-aligned base under the
+    neg ax                          ; position. The cluster is a power of two,
+    and ax, [si+FH_POS]             ; so the mask is its own negation - and it
+    mov dx, [si+FH_POS+2]           ; is the FILE's volume's (SPEC.md 96.11.11)
     mov [dos_wbase], ax
     mov [dos_wbase+2], dx
 
@@ -18416,7 +18441,7 @@ dos_fh_fill:
     HBSS DOS_B_FSI,   FSI_SIZE
     DBSS DOS_B_WSEG,  2        ; the file window (SPEC.md 96.11): the
     DBSS DOS_B_WBYTES,2        ; paragraph it starts at and its size, which
-    DBSS DOS_B_CBYTES,2        ; is a multiple of the volume's cluster
+                               ; is a multiple of the launch volume's cluster
     DBSS DOS_B_WOWN,  1        ; the handle index holding it, 0xFF = nobody
     DBSS DOS_B_WFILL, 1        ; ...and whether it holds anything of that
     DBSS DOS_B_WDIRTY,1        ; file, which "0 bytes at offset 0" cannot say
@@ -18442,6 +18467,9 @@ dos_fh_fill:
     DBSS DOS_B_FHIX,  1        ; the window owner's index, set by every
     DBSS DOS_B_FHPAD, 1        ; slot resolution rather than threaded
     DBSS DOS_B_FHTAB, FH_SIZEOF * DOS_NFH
+    DBSS DOS_B_VCB,   DVOL_CAP ; per volume: sectors a cluster, 0 = not yet
+                               ;   asked (dos_fh_cb). AFTER the table, so
+                               ;   dos_fh_setup's one rep stosb clears both
     DBSS DOS_B_DTA,   2        ; the Disk Transfer Area a find fills,
     DBSS DOS_B_DTASEG,2        ; PSP:0080 until AH=1Ah moves it
     DBSS DOS_B_DTASV, 2        ; ...banked while the kernel's own record is
@@ -19139,7 +19167,6 @@ dos_mou_rx  equ DOS_CBASE + DOS_B_MRX
 dos_mou_ry  equ DOS_CBASE + DOS_B_MRY
 dos_wseg    equ DOS_CBASE + DOS_B_WSEG
 dos_wbytes  equ DOS_CBASE + DOS_B_WBYTES
-dos_cbytes  equ DOS_CBASE + DOS_B_CBYTES
 dos_wown    equ DOS_CBASE + DOS_B_WOWN
 dos_wfill   equ DOS_CBASE + DOS_B_WFILL
 dos_wdirty  equ DOS_CBASE + DOS_B_WDIRTY
@@ -19161,6 +19188,7 @@ dos_beflg   equ DOS_CBASE + DOS_B_BEFLG
 dos_onprog  equ DOS_CBASE + DOS_B_ONPRG
 dos_fhix    equ DOS_CBASE + DOS_B_FHIX
 dos_fhtab   equ DOS_CBASE + DOS_B_FHTAB
+dos_vcb     equ DOS_CBASE + DOS_B_VCB
 dos_dta     equ DOS_CBASE + DOS_B_DTA
 dos_dtaseg  equ DOS_CBASE + DOS_B_DTASEG
 dos_dtasv   equ DOS_CBASE + DOS_B_DTASV
