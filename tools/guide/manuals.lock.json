@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "97621ec6c",
+  "stamped": "3d23ecee3",
   "strings": "172e5a682e5edddb",
-  "why": "Segment-0 and CS-store traps on the arm (SPEC.md 124.31.10)"
+  "why": "S24: profile path seed, LZCopy buffer on the arm"
  },
  "WIN16_TXT": {
   "sources": [
