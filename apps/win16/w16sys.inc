@@ -367,7 +367,7 @@ W16LIB w16u_getclsname
     pop di
     sub ax, di
     ret
-w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co
+w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co, .md, .pg   ; W16Q_BUTTON.. order
 .b:  db 'Button', 0
 .e:  db 'Edit', 0
 .s:  db 'Static', 0
@@ -375,6 +375,8 @@ w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co
 .d:  db '#32770', 0
 .sc: db 'ScrollBar', 0
 .co: db 'ComboBox', 0
+.md: db 'MDIClient', 0
+.pg: db 'Progman', 0                 ; the DDE server's (SPEC.md 124.33.2)
 
 ; EnumWindows (USER.54) - args: +0 lParam (long), +4 lpEnumFunc. The
 ; callback for each of the program's top-level windows, (hwnd, lParam), as a

@@ -89,6 +89,7 @@ W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
 W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
 W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
 W16Q_MDI    equ 8               ; MDICLIENT (SPEC.md 124.27.2), part 9's
+W16Q_DDE    equ 9               ; Program Manager's DDE server (124.33.2)
 
 ; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
 W16_ODQN    equ 8               ; the queue's entries: a window, its items

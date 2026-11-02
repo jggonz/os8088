@@ -16537,6 +16537,21 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16pmdde", "soak", py("tests/win16pmdde.py"), 60.0,
+        "SPEC.md 124.33.2, WIN16-ANY-PLAN S24: PMDDE.EXE (`make "
+        "win16fixtures`, tests/win16/pmdde.c) talks to Program Manager over "
+        "DDE as a setup program does - WM_DDE_INITIATE to HWND_BROADCAST "
+        "answered inside the send by a window of class Progman, blocks of "
+        "CreateGroup, ShowGroup, AddItem, DeleteItem and DeleteGroup "
+        "acknowledged, an unknown command and a WM_DDE_REQUEST refused, "
+        "WM_DDE_TERMINATE both ways - and its MessageBox must be PMDDE OK; "
+        "then B: must hold the group's folder in the Windows directory's "
+        "GROUPS with a link to B:\\PMDDE.EXE and not the deleted item or "
+        "group, and A:'s SYSTEM.CFG the group's desktop shortcut and not "
+        "the deleted group's",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
         "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "

@@ -170,19 +170,30 @@ W16SYS w16i_findatom
 W16SYS w16i_addatom
     mov al, 1
 w16i_atom:
-    push si
     push di
-    push ds
     push ax                         ; AL = 1: add a name not there
     ICALL w16_args
     les di, [es:bx]
     pop ax
-    mov si, es
-    or si, si
-    jnz .name
-    mov ax, di
-    jmp short .out
-.name:
+    mov dx, es
+    or dx, dx
+    jz .int
+    call w16i_atomat
+    pop di
+    ret
+.int:
+    mov ax, di                      ; (DX = 0, the segment)
+    pop di
+    ret
+
+; w16i_atomat - ES:DI = a name, AL = 1 to add it when it is not there:
+; AX = its atom, 0 when it is not there or the table is full; DX = 0.
+; Keeps the rest
+w16i_atomat:
+    push bx
+    push cx
+    push si
+    push ds
     W16SEG ds, [w16_sseg]           ; the table's segment: this part's
     xor bx, bx                      ; BX = the place
     mov si, w16i_atoms
@@ -220,16 +231,19 @@ w16i_atom:
 .new:
     or al, al
     jz .zero
+    push di
     mov cx, 31                      ; the name, cut to 31
 .cp:
     mov al, [es:di]
     mov [si], al
     or al, al
-    jz .have
+    jz .cpd
     inc si
     inc di
     loop .cp
     mov byte [si], 0
+.cpd:
+    pop di
 .have:
     mov ax, 0xC000
     add ax, bx
@@ -239,8 +253,9 @@ w16i_atom:
 .out:
     xor dx, dx
     pop ds
-    pop di
     pop si
+    pop cx
+    pop bx
     ret
 
 ; GetAtomName (KERNEL.72), GlobalGetAtomName (USER.271),

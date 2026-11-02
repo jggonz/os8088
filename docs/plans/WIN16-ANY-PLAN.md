@@ -1721,8 +1721,15 @@ its table goes in the diary, so the reach is measured, not claimed.
     `StretchBlt` draws into a memory DC, and a monochrome source is inked
     there with the DC's colours. Media Player's Play and Eject and Sound
     Recorder's Record show their glyphs; a disabled glyph is still blank.
-  - [ ] Batch 2: the Program Manager DDE server, over S21 batch 5's
-    routing (SPEC.md 124.33.2).
+  - [x] Batch 2: the Program Manager DDE server, over S21 batch 5's
+    routing (SPEC.md 124.33.2). `w16progm.inc`, all of it part 9's: a
+    group is a folder in the Windows directory's `GROUPS` with a desktop
+    shortcut, an item a link in it. The atom table moved into part 9
+    first (16 names, SPEC.md 124.28.6), which also gave the kern_mega
+    arm back the room S21 batch 5's merge took. Looked at, both arms:
+    `PMDDE.EXE` says *PMDDE OK*, the shortcut is on the desktop, its
+    folder holds the link, and the link starts the program. Row
+    `win16pmdde`, for the final pass.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running

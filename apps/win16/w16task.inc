@@ -1330,6 +1330,17 @@ W16SYS w16t_postmsg
     ICALL w16_args
     cmp word [es:bx + 8], HWND_BROADCAST
     je .bc
+    push bx                         ; Program Manager's DDE server's window:
+    mov ax, [es:bx + 8]             ;   run in the call, not queued (SPEC.md
+    ICALL w16_hwnd2rec              ;   124.33.2)
+    jc .img
+    cmp byte [bx + W16W_KIND], W16Q_DDE
+    jne .img
+    pop bx
+    ICALL w16_smargs
+    jmp w16pg_post
+.img:
+    pop bx
     ICALL w16u_postmsg
     ret
 .bc:
@@ -1406,8 +1417,16 @@ w16t_bfrom:                         ; CX = the first slot
     pop bp
     ret
 .done:
+    mov ax, [bp]                    ; the message as the caller sent it
+    mov dx, [bp + 2]
+    mov cx, [bp + 4]
+    mov bx, [bp + 6]
     add sp, 8
     pop bp
+    cmp ax, WM_DDE_INITIATE         ; ...and Program Manager last, which is
+    jne .one                        ;   WIN16's (SPEC.md 124.33.2)
+    jmp w16pg_init
+.one:
     mov ax, 1
     xor dx, dx
     ret

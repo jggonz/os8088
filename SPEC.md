@@ -229003,7 +229003,7 @@ go in the library part (§124.19):
 | `GetDoubleClickTime` (USER.21) | 500, Windows' default |
 | `GetKeyboardState` (USER.222) | 256 bytes, each key as `GetKeyState` sees it: `VK_SHIFT`, `VK_CONTROL` and `VK_MENU` down (80h) from the BIOS's shift flags, and `VK_CAPITAL`, `VK_NUMLOCK` and `VK_SCROLL` toggled (bit 0) from its lock flags; every other key up |
 | `SetKeyboardState` (USER.223) | kept by nothing: the keyboard's state is the BIOS's |
-| `GetClassName` (USER.58) | a class the program registered answers its name as WIN16 keeps it, upper case (§124.8); WIN16's own controls their Windows names - `Button`, `Edit`, `Static`, `ListBox`, `ScrollBar`, `ComboBox` - and a dialog `#32770`. The length |
+| `GetClassName` (USER.58) | a class the program registered answers its name as WIN16 keeps it, upper case (§124.8); WIN16's own controls their Windows names - `Button`, `Edit`, `Static`, `ListBox`, `ScrollBar`, `ComboBox`, `MDIClient` - a dialog `#32770`, and Program Manager's DDE server `Progman` (§124.33.2). The length. Until S24 an MDI client answered whatever its kind read past the table's end |
 | `EnumWindows` (USER.54) | the callback for each of the program's top-level windows, `(hwnd, lParam)`, as a call into the program (§124.2.2), until one answers FALSE; 1 |
 | `GlobalWire`, `GlobalUnWire` (KERNEL.111, 112) | `GlobalLock`'s and `GlobalUnlock`'s answers: nothing moves here, so wiring a block low is already true |
 
@@ -231946,11 +231946,94 @@ building the face in a memory DC and putting the glyph on with
 - Media Player's Play on the CD answers *The specified parameter is out of
   range for the specified command* (124.32.4).
 
-#### 124.33.2 Program Manager's DDE server *(S24 batch 2, planned)*
+#### 124.33.2 Program Manager's DDE server *(S24 batch 2)*
 
 A Windows setup program finishes by asking Program Manager, over DDE, to
-make a group and put the program's items in it: `[CreateGroup(...)]`,
-`[AddItem(...)]`, `[ShowGroup(...)]`, `[DeleteGroup(...)]`. WIN16 is to
-answer for Program Manager inside the instance, and make each item an
-os8088 link (§26.10), the kind `\AUTOSTRT` holds, in a desktop folder
-named for the group. The design is pinned here before the code lands.
+make a group and put the program's items in it. Visual Basic 3.0's
+`SETUP1` does it with a `LinkTopic` of `ProgMan|Progman` and
+`LinkExecute`, and the Setup Toolkit's `CreateProgManGroup` and
+`CreateProgManItem` do the same over raw messages. WIN16 answers for
+Program Manager inside the instance (`w16progm.inc`, prefix `w16pg_`, all
+of it part 9's). The answer is os8088's: **each group is a folder, each
+item is a link in it (§26.10.1), and the folder gets a desktop shortcut**
+(§26.9.6).
+
+**The conversation** (§124.28.6's routing):
+
+| the client | WIN16 |
+|---|---|
+| sends `WM_DDE_INITIATE` to `HWND_BROADCAST`, application and topic each `PROGMAN` (any case) or 0 | after every top-level window has had it, makes the SERVER window and sends `WM_DDE_ACK` to the client's: `wParam` the server, `lParam` the atom `PROGMAN` twice |
+| posts `WM_DDE_EXECUTE` to the server, `hCommands` in `lParam`'s high word | runs the commands at once, inside the client's `PostMessage`, and posts `WM_DDE_ACK` back: status `8000h` (`fAck`) when every command ran, 0 when one did not, and `hCommands`, which the client frees |
+| posts `WM_DDE_REQUEST`, `WM_DDE_ADVISE`, `WM_DDE_UNADVISE` or `WM_DDE_POKE` | posts a negative `WM_DDE_ACK` with the item's atom. Program Manager's `Groups` item is not served |
+| posts `WM_DDE_TERMINATE` | posts `WM_DDE_TERMINATE` back |
+
+- **The server window** is a hidden child of the client's window, of
+  WIN16's own kind `W16Q_DDE` (9). Its procedure is the controls' stub
+  (§124.13), which answers 0 to anything sent to it. It is made once
+  for each client window and goes when that window goes. `IsWindow` is
+  true of it and `GetClassName` answers `Progman`.
+- **A post to the server is not queued.** `w16t_postmsg` sees the
+  window's kind and runs the server in the call, so the server needs no
+  message loop of its own. The client's loop that waits for the
+  `WM_DDE_ACK` finds it already in its queue.
+- WIN16 answers even when a real Program Manager runs in the instance. A
+  client that gets two acknowledgements terminates the second
+  conversation, as DDE's rules ask.
+
+**The commands**, each `[Name(arg,arg,...)]`, several to a block. Names
+match without case. An argument may be quoted, which lets it hold a
+comma; spaces around an unquoted one are dropped. The first command that
+fails ends the block, and the acknowledgement is negative:
+
+| command | what it does |
+|---|---|
+| `CreateGroup(name[,path])` | makes the group's folder and adds its desktop shortcut, then makes it the current group. A folder that is already there is the group, and gets no second shortcut. The path is not used |
+| `ShowGroup(name,cmd)` | makes the group current. Nothing is shown |
+| `AddItem(cmdline[,name[,...]])` | writes a link to the program in the current group's folder, named for the item. The other arguments (icon, place, folder, hot key) are not used |
+| `ReplaceItem(name)`, `DeleteItem(name)` | delete that item's link from the current group's folder. `AddItem` replaces a link of the same name anyway |
+| `DeleteGroup(name)` | removes the group's folder and every link in it (`OSAPI_FILE_RMDIR`, `AL` = 1), then its desktop shortcut |
+| `Reload(...)`, `ExitProgman(...)` | succeed, and do nothing |
+| anything else | fails |
+
+**Where a group is.** `SYSTEM\APPDATA\WIN16\GROUPS\<NAME>` on WIN16's
+own volume, the Windows directory's `GROUPS` folder, made when the first
+group is. `<NAME>` is the group's name, upper case, with its letters and
+digits only and cut to 8: `Microsoft Arcade` is `MICROSOF`. A name with
+none is `GROUP`. The shortcut's caption is the name itself, cut to 12
+characters, and its picture is the Disk window's folder (§25).
+
+**An item's link.** The command line's first word is the program, quoted
+or not. When the rest of the line names a file (it holds a `\` or a
+`:`), the link goes to that file instead: `NOTEPAD.EXE C:\APP\README.TXT`
+becomes a link to the text, which os8088 opens by its association, since
+Windows' Notepad is not on the machine. Otherwise the link goes to the
+program, which os8088 opens through `DOS.O88` and WIN16, and the rest of
+the line is dropped: a link to a document carries no parameter
+(§26.10.7). The link's volume is the path's drive letter, which names an
+os8088 volume (§124.21); a path without one is on WIN16's own volume.
+Its kind is 0, a document. The link is named for the item, made as a
+group's folder is, with `.LNK`; an item with no name is named for the
+program's file. A path longer than a link holds (44 characters below
+the root) fails the command.
+
+**Removing a group's shortcut** asks `OSAPI_DESK_ITEM` to remove each
+shortcut zone in turn, naming the group's record (§26.9.6). Every zone
+that is not that link refuses. WIN16 does not keep the zone, because the
+boot renumbers the zones. Each try is a `CTRL.DRV` call, so
+`DeleteGroup` is slow on a floppy machine. Setups rarely send it.
+
+**Cost.** No image byte on either arm. Part 9 carries the server:
+1,808 bytes in real mode and 1,822 on the kern_mega arm, which leaves
+that part at 53,000 bytes there. `W16_GBUF` holds the parsed arguments,
+the paths and the two records, since a post is its own call. The current
+group's name is 9 bytes of part 9, written through CS, which costs the
+arm a trap per byte when a group is made current.
+
+**Checked by** the soak row `win16pmdde` (`tests/win16/pmdde.c`): the
+conversation, four command blocks, then the group's folder and link on
+B: and the shortcut in A:'s `SYSTEM.CFG`, read back with the machine
+off.
+
+**Not yet:** a group's items keep the icons os8088 gives their files, not
+the ones named in `AddItem`. A desktop already holding 15 shortcuts
+(§26.8.1's `SC_MAX`) refuses the group's, and the folder is still made.

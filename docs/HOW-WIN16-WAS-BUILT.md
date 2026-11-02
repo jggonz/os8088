@@ -4077,3 +4077,45 @@ mode now has four (SPEC.md 124.31.1): a fourth is four more bytes of bss.
 
 **Seen**, by looking: TASKS and TASKB say *TASKS OK* on the kern_mega arm
 and in real mode, a DDE conversation over the moved atoms included.
+
+## 2026-11-01: Program Manager, answered from inside WIN16
+
+A Windows setup program's last step is a conversation with Program
+Manager. It broadcasts `WM_DDE_INITIATE` for `PROGMAN`, then posts
+`[CreateGroup(...)][AddItem(...)]` and waits for the acknowledgement.
+Without an answer, Visual Basic's `SETUP1` waits out its link timeout
+and reports an error, and an installer that copied every file still
+looks as if it failed.
+
+**Where the answer lives.** S21's routing already sent a broadcast to
+every top-level window. The server joins at the end of that broadcast,
+which is part 9's (`w16t_bsend`), so it costs the image nothing. The
+reply has to be *sent*, inside the client's `SendMessage`, because the
+client checks for a server the moment the call returns. The routing
+already had the shape for that: a send to the caller's own window is a
+call into the program with a continuation.
+
+**A window that needs no message loop.** DDE wants the server to be a
+window: the client posts to it, and may ask `IsWindow`. WIN16's server
+window is a hidden child of the client's, of a kind of its own
+(`W16Q_DDE`). A post to it never reaches a queue. `w16t_postmsg` sees
+the kind and runs the commands right there, inside the client's
+`PostMessage`, then posts the acknowledgement back. By the time the
+client's loop looks, the answer is waiting in its queue.
+
+**What a group becomes.** os8088 already had both halves. A link
+(§26.10) is a 50-byte file that opens what it names, and
+`OSAPI_DESK_ITEM` puts a shortcut on the desktop. So a group is a folder
+in the Windows directory's `GROUPS`, and an item is a link in it. A new
+group's folder gets a desktop shortcut with the Disk window's folder for
+its picture. `AddItem(NOTEPAD.EXE C:\APP\README.TXT)` becomes a link to
+the text file, which os8088 opens itself: Windows' Notepad is not on the
+machine.
+
+**Seen**, by looking, in real mode and on the kern_mega arm: `PMDDE.EXE`
+runs all four command blocks and says *PMDDE OK*. A *PMDDE Test*
+shortcut appears on the desktop, and the deleted group's does not.
+Opening the shortcut shows `PMTEST.LNK` alone, because `DeleteItem` took
+the other link. Opening that link starts `PMDDE.EXE` again, through
+`DOS.O88` and WIN16. The second run finds the folder already there and
+adds no second shortcut.
