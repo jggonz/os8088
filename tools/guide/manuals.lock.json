@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "7ec824f3e",
+  "stamped": "32a760e15",
   "strings": "562e87c75fe90f35",
-  "why": "S16-S19: the DOS core shared with WIN16 (dosbe.inc), no text a user sees changed"
+  "why": "merge of S21 batches 6-7: the join box (w16join.inc) in DOS's launch path"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "88eab0a48",
-  "strings": "89291148e238b0d9",
-  "why": "S21 batch 7: part 10 split, notify GlobalAlloc keeps code, XT emulator fetch; no user-visible manual change"
+  "stamped": "32a760e15",
+  "strings": "debee5372c95da3c",
+  "why": "merge of S21 batches 6-7: part 10 on the arm, DDE server in part 10, tail-call part macros"
  },
  "WIN16_TXT": {
   "sources": [
