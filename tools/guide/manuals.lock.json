@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "1ef2867b7",
+  "stamped": "0cab0efac",
   "strings": "debee5372c95da3c",
-  "why": "room cut: four-byte stubs, SetDIBitsToDevice in part 9"
+  "why": "GlobalReAlloc slack; arm block selector stopgap"
  },
  "WIN16_TXT": {
   "sources": [
