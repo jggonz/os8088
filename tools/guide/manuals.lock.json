@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "de4dfd4ca",
+  "stamped": "fa52ac5f1",
   "strings": "172e5a682e5edddb",
-  "why": "DestroyWindow on a dying window"
+  "why": "RegisterClass takes a local class over a global one; GetModuleFileName moves to the library part"
  },
  "WIN16_TXT": {
   "sources": [
