@@ -998,8 +998,10 @@ w16_plock:
     ret
 
 ; w16_pblk - AX = a global block's data paragraph -> AX = a data selector
-; reaching the block's own length (its header's GH_SIZE), as standard mode's
-; GlobalLock answered. Keeps every other register.
+; reaching to its claim's end, so a block that grows keeps its selector - a
+; STOPGAP (SPEC.md 124.31.3) for per-handle descriptors that GlobalReAlloc
+; retargets in place; under 64 KB, the length is only read to choose the
+; tile. Keeps every other register.
 w16_pblk:
     push bx
     push cx
@@ -1012,7 +1014,8 @@ w16_pblk:
     cmp cx, 0x1000
     ja .huge
     xor bl, bl
-    call w16_psel
+    xor cx, cx                      ; STOPGAP (SPEC.md 124.31.3): to the
+    call w16_psel                   ;   claim's end, one selector per place
 .out:
     pop es
     pop cx

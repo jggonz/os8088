@@ -1260,8 +1260,14 @@ w16k_grealloc:
     pop cx
     pop di
     mov cx, dx
+    mov ax, bx                      ; a grow keeps a quarter more than asked
+    shr ax, 1                       ;   when the neighbour has it (SPEC.md
+    shr ax, 1                       ;   124.9.1's GlobalReAlloc rule): the
+    add bx, ax                      ;   next grow by a step is in place, on
+    jc .keepall                     ;   no new paragraph
     cmp bx, cx
     jb .shrinkto
+.keepall:
     mov ax, di
     jmp .out
 .shrinkto:

@@ -228406,7 +228406,7 @@ neighbours merged. Arenas are freed with the program.
 | `GMEM_FIXED` | **the handle IS the segment** (`DX:0` is the block), as real-mode Windows answered. Programs that skip `GlobalLock` on a fixed block work |
 | `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`02FEh`, `W16_NGH` 256 entries since S19b batch 3, 64 before: Paintbrush's band cache keeps a handle for every band it has discarded, and 64 ran out on the first picture opened). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
 | `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
-| `GlobalReAlloc` | in place when the next block is free; otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put, except on the protected-mode arm for a protected-mode-only program, whose locked block moves with the selector it holds (§124.31.3). `GMEM_MODIFY` changes the flags alone |
+| `GlobalReAlloc` | in place when the next block is free. **A grow in place keeps a quarter more than was asked** when the free neighbour has it (`w16k_grealloc`, *S24*), and the rest goes back free. Windows promises at least the size asked for, and a program that grows a block by a paragraph at a time (the Setup Toolkit's `_MSTEST` does) then grows in place again with no new block boundary. `GlobalSize` answers the block as kept. Otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put, except on the protected-mode arm for a protected-mode-only program, whose locked block moves with the selector it holds (§124.31.3). `GMEM_MODIFY` changes the flags alone |
 | `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD`; since S20 a run of an arena counts the code segments it may discard as free (§124.26.5) |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
@@ -232799,6 +232799,22 @@ what the numbers mean**:
   distinct paragraph `W16SEG` is handed costs an LDT entry until its arena
   goes. That is bounded for the first targets and is batch 7's to tighten
   (a freeable selector per block, over `SEG_TILE`).
+- **STOPGAP, to be replaced before #327 merges** *(S24, the lead's D1)*.
+  The selector a program is given for a global block under 64 KB
+  (`w16_pblk`) reaches to its claim's END, not the block's length. A block
+  then keeps one selector wherever its length goes, and the kernel's
+  base-and-limit dedupe answers the same entry. Before this, the Setup
+  Toolkit's grow-by-a-paragraph loop handed out 395 distinct selectors over
+  25 block positions, and Mozart's setup ran the LDT's 2,016 entries out
+  (`FAULT 0D` in `w16vt_esax`). With this and the GlobalReAlloc rule
+  above, the LDT levels at 1,646. **What it gives up:** an overrun of the
+  block lands in its neighbour instead of faulting, as it did on Windows.
+  **What replaces it:** one descriptor per handle, which `GlobalReAlloc`
+  retargets IN PLACE (a new base and a new limit on the same selector, as
+  Windows' standard mode did), so an overrun faults again and a grow costs
+  no entry. Beside it, a bound walk window (`SEG_BWIN`/`SEG_AIM`) for
+  WIN16's own `W16SEG` touches of headers and zeroing, which the trace
+  build counted at 880 distinct paragraphs.
 - **Above 1 MB** (batch 7). The arm says `OS88_HIGH | OS88_HIGHMEM`:
   - kern_mega loads WIN16's image above 1 MB. It is a code/data pair
     there as below, and nothing in the arm does a sum on its own CS or DS

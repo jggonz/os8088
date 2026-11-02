@@ -4432,3 +4432,21 @@ changes gave 1,072 bytes (1,106 of room on the arm, 1,698 in real mode):
 
 **Seen:** Arcade 1.0's setup to *Congratulations!* on kern_mega, and the
 TASKS fixture's *TASKS OK* on kern_big (QEMU, looks).
+
+## 2026-11-02: Mozart's selectors, a rule and a stopgap
+
+Mozart's setup ran kern_mega's LDT out. Its interpreter grows blocks a
+paragraph at a time. Every new length was a new selector for the program,
+and every new place a new one for WIN16. The selectors went from 615 to
+the LDT's 2,016 in eight seconds. The lead approved two changes:
+
+- **GlobalReAlloc's grow in place keeps a quarter more than asked**, when
+  the free neighbour has it. This is a rule rather than a bend, because
+  Windows promises at least the size asked for.
+- **A program's block selector reaches its claim's end, not the block's.**
+  This is a stopgap, marked so in SPEC.md 124.31.3. It gives up an overrun
+  faulting. It is to be replaced before the merge by one descriptor per
+  handle that GlobalReAlloc retargets in place, as Windows' standard mode
+  did, plus a walk window for WIN16's own header touches.
+
+With both, the LDT levels off at 1,646 entries.
