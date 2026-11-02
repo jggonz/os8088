@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "b198201ca",
+  "stamped": "dda92ced8",
   "strings": "a570971002c6c665",
-  "why": "S21 batch 5: HWND_BROADCAST and DDE between tasks"
+  "why": "S21: broadcast tested in the image's SendMessage/PostMessage"
  },
  "WIN16_TXT": {
   "sources": [
