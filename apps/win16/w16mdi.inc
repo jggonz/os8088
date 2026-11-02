@@ -14,14 +14,15 @@ section .w16tsk follows=.w16sys vstart=0 align=1
 w16k_base:
     jmp short w16k_gate             ; +0  tools/os88ovl.py: a short jump ...
     db 'W16TSKPT'                   ; +2  ...before the cut mark
+w16vq_myds: dw 0                    ; +10 the arm's WIN16 data selector
 ; w16k_gate - the part's one way in (SPEC.md 124.28.13): the dispatch and
 ; TCALL far-call it with [w16_tfn] naming a near routine here. CS = this
 ; part, DS = WIN16's image; every register and the flags pass both ways
 w16k_gate:
     call [w16_tfn]
     retf
-%if w16k_gate - w16k_base != W16S_GATE
-  %error "w16k_gate is not at W16S_GATE"
+%if w16k_gate - w16k_base != W16S_GATE || w16vq_myds - w16k_base != W16S_MYDS
+  %error "w16k_gate or w16vq_myds is not where W16S_GATE and W16S_MYDS say"
 %endif
 
 ; -----------------------------------------------------------------------------

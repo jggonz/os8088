@@ -495,7 +495,9 @@ w16v%1_%2m:
 ; emitted in that section after its last use (win16.asm's tail)
 %macro W16PM_PART 2
   %ifnidni %2, cs
-w16v%1_myds: dw 0                   ; WIN16's data selector (w16_pmds)
+   %ifnidni %2, hdr                 ; (hdr: a part whose header holds it,
+w16v%1_myds: dw 0                   ;   parts 9 and 10's, at W16S_MYDS)
+   %endif                           ; WIN16's data selector (w16_pmds)
   %endif
   %ifdef w16vany_%1
     W16PM_SEL %1, %2
@@ -719,6 +721,19 @@ w16_vfind:
 .y:
     clc
     pop cx
+    ret
+
+; w16_pcode - AX = a paragraph: AX = its code half, w16_psel's BL = 1 over 64
+; KB (SPEC.md 124.31.5) - a part's or a block's that the program runs in.
+; Keeps every other register
+w16_pcode:
+    push bx
+    push cx
+    xor cx, cx
+    mov bl, 1
+    call w16_psel
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------

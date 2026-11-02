@@ -1781,13 +1781,7 @@ w16_ldcall:
     push ax
     mov ax, [w16_ldk]
 %ifdef PKG_MEGA
-    push bx                         ; the kept copy's code half (124.31.5)
-    push cx
-    xor cx, cx
-    mov bl, 1
-    call w16_psel
-    pop cx
-    pop bx
+    call w16_pcode                  ; the kept copy's code half (124.31.5)
 %endif
     mov [w16_lkv + 2], ax
     pop ax
@@ -1896,21 +1890,9 @@ w16_ptin:                            ; AL = the part, SI = its segment word
 %ifdef PKG_MEGA
     push es
     W16SEG es, ax
-    cmp si, w16_sseg                ; the part told WIN16's data selector
-    jne .k
-    W16PMDS s, es
-    jmp short .ds
-.k:
-    W16PMDS q, es
-.ds:
-    pop es
-    push bx                         ; the copy's code half (124.31.5)
-    push cx
-    xor cx, cx
-    mov bl, 1
-    call w16_psel
-    pop cx
-    pop bx
+    W16PMDS s, es                   ; the part told WIN16's data selector,
+    pop es                          ;   at W16S_MYDS in both parts' headers
+    call w16_pcode                  ; the copy's code half (124.31.5)
 %endif
     mov [si + 4], ax                ; the vector's segment...
     mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in both
@@ -2434,9 +2416,9 @@ section .w16dlg                     ;   after its last use (part 5's are
 section .w16fp
     W16PM_PART f, none
 section .w16sys
-    W16PM_PART s, none
+    W16PM_PART s, hdr
 section .w16tsk
-    W16PM_PART q, none
+    W16PM_PART q, hdr
 section .text
     W16PM_IMAGE
     W16PM_PART t, cs

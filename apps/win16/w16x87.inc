@@ -114,14 +114,8 @@ w16x_fpin:
     mov [w16_fpseg], ax
 %ifdef PKG_MEGA
     push ax                         ; the copy's code half, for its vectors
-    push bx                         ;   and __FPMATH (SPEC.md 124.31.5)
-    push cx
-    xor cx, cx
-    mov bl, 1
-    call w16_psel
+    call w16_pcode                  ;   and __FPMATH (SPEC.md 124.31.5)
     mov [w16x_fcs], ax
-    pop cx
-    pop bx
     pop ax
     W16SEG es, ax
     W16PMDS f, es

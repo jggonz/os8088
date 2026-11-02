@@ -87,13 +87,7 @@ w16_dosup:
     mov ax, [w16_dhtmp]
     mov word [w16_dhent], W16DH_INIT
 %ifdef PKG_MEGA
-    push bx                         ; the block's code half (SPEC.md 124.31.5)
-    push cx
-    xor cx, cx
-    mov bl, 1
-    call w16_psel
-    pop cx
-    pop bx
+    call w16_pcode                  ; the block's code half (SPEC.md 124.31.5)
 %endif
     mov [w16_dhent + 2], ax
     W16PSP                          ; AX = the PSP, BL = the volume, DX = the

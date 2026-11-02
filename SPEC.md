@@ -231606,6 +231606,15 @@ in the arm, the same two instructions in real mode. A far address WIN16
 hands out for its own code - an import stub's (`w16_stubs`, `w16_proc`),
 LibMain's trampoline - is the image's code half (`W16ICS`), never `ds`.
 
+The system-library and task parts (9 and 10) keep the word that holds
+WIN16's data selector, which their thunks load DS from, in their headers.
+It sits at the same offset in both, `W16S_MYDS` = 10, after the cut mark
+and before the gate at `W16S_GATE` = 12. The fetch the two parts share
+(`w16_ptin`) writes it with one instruction for either part. One routine,
+`w16_pcode`, asks for a code half over 64 KB for the four places that
+need one: the loader's kept copy, parts 9 and 10, the x87 part and the
+DOS host's block.
+
 #### 124.31.6 What the program is told
 
 - **`GetWinFlags`** answers `WF_PMODE | WF_STANDARD` and the CPU's bit

@@ -4402,3 +4402,10 @@ then `ret`, it now stores the routine and jumps (`LJMP`, `SJMP`, `TJMP`).
 That covers 14 sites and the 21 continuation trampolines, and it saved 35
 bytes on each arm. The arm now has **one byte** of room. The real-mode
 arm has 626.
+
+Two arm-only changes then bought back 33 more bytes, which left **34 bytes
+of room** on the arm. First, parts 9 and 10 now keep their data-selector
+word in the header, at the same offset in both, so the shared fetch writes
+it with one instruction instead of choosing between two. Second, the
+code-half request was written out four times, and it is now one routine,
+`w16_pcode`.
