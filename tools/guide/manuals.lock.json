@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "826d436a4",
+  "stamped": "9d8582913",
   "strings": "172e5a682e5edddb",
-  "why": "MessageBox no narrower than its caption"
+  "why": "S24 batch 6: EnableWindow in the image, ShellAbout in the library part"
  },
  "WIN16_TXT": {
   "sources": [
