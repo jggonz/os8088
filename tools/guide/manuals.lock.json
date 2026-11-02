@@ -1302,9 +1302,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "8301e44e2",
+  "stamped": "b198201ca",
   "strings": "a570971002c6c665",
-  "why": "S21 batch 4: WinHelp starts WINHELP.EXE, ShellExecute joins the instance"
+  "why": "S21 batch 5: HWND_BROADCAST and DDE between tasks"
  },
  "WIN16_TXT": {
   "sources": [
