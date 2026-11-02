@@ -226551,10 +226551,12 @@ not yet authorised); each story pins its subsection here before its code:
   S16 (§124.21);
 - no segment moving or discarding (R6) - a `GMEM_DISCARDABLE` global block
   is discarded since S19b (§124.9), but no code or data segment is;
-- no DDE, OLE, printing or MMSYSTEM (R4, R7, R8);
+- no OLE, printing or MMSYSTEM (R4, R7, R8), and no DDE before S21:
+  since S21 programs in one instance talk DDE (§124.28.6);
 - the clipboard carries text only, because §55's does (§124.16.1);
-- no WinHelp: `WinHelp` says so in a message box (§124.15.3), and answers
-  `TRUE` to `HELP_QUIT`, which a program sends as it ends, silently.
+- no WinHelp of WIN16's own: since S21 `WinHelp` starts the user's
+  `WINHELP.EXE` in the instance (§124.28.10), and says so in a message box
+  only when it cannot (§124.15.3).
 
 Never: a 32-bit program. That is not Win16.
 
@@ -227478,7 +227480,7 @@ with it (§124.25.6).
 | `IsIconic(hWnd)` (USER.31) | a child's `WS_MINIMIZE`, an MDI child's (124.27.5); FALSE for a top-level window: os8088 does not minimize |
 | `SetClassWord(hWnd, nIndex, wNew)` (USER.130) | `GCW_HBRBACKGROUND` (-10): the old brush, the new one set in the class and in every window of it, so the next erase uses it (WinMine's Color switch). `GCW_STYLE` (-26): the old style, the new one set. Every other index - the icon and cursor among them, which are kept nowhere - answers 0 and changes nothing |
 | `ShellAbout(hWnd, lpApp, lpOther, hIcon)` (SHELL.22) | a WIN16 message box titled *About* and the application (up to a `#` when there is one), its lines the application (after the `#`), the other line, a blank line and *WIN16 on os8088*. Not Windows' own box: there is no Windows here to name |
-| `WinHelp(hWnd, lpFile, wCommand, dwData)` (USER.171) | `HELP_QUIT`: TRUE, silently. Every other command shows *Help is not available. WIN16 has no WinHelp, so FILE.HLP cannot be opened.* in a message box, then answers TRUE so a program does not add a second message of its own (§47: the refusal says why) |
+| `WinHelp(hWnd, lpFile, wCommand, dwData)` (USER.171) | since S21, Windows Help itself: §124.28.10. With no `WINHELP.EXE` to start, `HELP_QUIT` answers TRUE silently, and every other command shows *Help is not available. WINHELP.EXE could not be started, so FILE.HLP cannot be opened.* in a message box, then answers TRUE so a program does not add a second message of its own (§47: the refusal says why) |
 | `DOS3Call` (KERNEL.102) | `int 21h` with the program's registers, through §124.3's handler: the import is bound to `int 21h / retf` in WIN16's code, not to a gate stub |
 | `__WINFLAGS` (KERNEL.178) | a constant import: `GetWinFlags`' answer, written where the program's fixup points when it is loaded |
 | `OutputDebugString` (KERNEL.115) | nothing |
@@ -228657,7 +228659,7 @@ and palettes answers as a display with none of them would.
 |---|---|
 | `SetClipboardViewer(hWnd)` | the viewer, told `WM_DRAWCLIPBOARD` at once as Windows told it; the old one is the answer. `ChangeClipboardChain(hWnd, hWndNext)` takes `hWnd` out, `hWndNext` in its place when it was the viewer |
 | `WM_DRAWCLIPBOARD` | posted to the viewer by `CloseClipboard` when this program emptied or set the clipboard, and **when os8088's clipboard is not what it was at the last look** - its length and its first 16 bytes, read on the viewer's window's paint (`w16_cbpeek`). os8088's clipboard tells no one when another program changes it (§55 has no notification), and a window brought to the front is painted, which is when a viewer is being looked at. A change that keeps the length and the first 16 bytes is missed until the next one |
-| `RegisterClipboardFormat(name)` | `C000h` + its place in a table of `W16_NCBF` (4) names, the same for the same name, case aside; 0 when it is full. `GetClipboardFormatName` answers the name back, cut to the buffer. Nothing is ever on the clipboard in one |
+| `RegisterClipboardFormat(name)` | `C000h` + its place in the atom table, `W16_NATOM` (16) names (§124.28.6), the same for the same name, case aside; 0 when it is full. `GetClipboardFormatName` answers the name back, cut to the buffer. Nothing is ever on the clipboard in one |
 | `SetMapMode`, `SetWindowExt`, `SetViewportExt` | kept in the DC's state, answered back by the next call, reset by `GetDC`/`BeginPaint` and kept by `SaveDC`. **Drawing is `MM_TEXT`**: a scaling mode is taken and not applied. The Clipboard viewer sets one only to play a metafile |
 | `SetViewportOrg(hDC, x, y)` | logical 0, 0 is at that client point, the old one is the answer. In `MM_TEXT` that is all a viewport does, and it moves the DC's client origin, which every drawing call already adds, so it costs nothing anywhere else. The Clipboard viewer scrolls with it |
 | `RectVisibleOld(hDC, lpRect)` | TRUE when any of the rectangle (logical, right and bottom outside it) is inside the DC's clip; TRUE on any other DC |
@@ -229418,8 +229420,9 @@ program to a WIN16 of its own (§124.3).
 - 33 is not an instance handle. Windows answers the new program's
   `hInstance`, and it would be a WIN16 handle only when the program is a
   Windows one in the same WIN16, which it never is.
-- `lpParameters` and `nShowCmd` are not used: a package has no command
-  line (§21.5), and its window opens as it opens.
+- `lpParameters` and `nShowCmd` are not used for a package: it has no
+  command line (§21.5), and its window opens as it opens. A Windows
+  program is not posted at all since S21; see below.
 - Neither call reads the registration database (§124.24.6) or WIN.INI's
   `[extensions]`. `FindExecutable` cannot name an os8088 package, which
   is not a file a Windows program could run.
@@ -229432,7 +229435,20 @@ program to a WIN16 of its own (§124.3).
   that the first DOS.O88's close and the second's handoff fall in one pass
   of the UI loop, and the kernel's deferred close is one word (§75.2).
   S24's installer, which launches what it installed, is where this has to
-  be settled.
+  be settled. Since S21 it no longer arises for a Windows program, which
+  is not posted (below).
+
+**A Windows program joins the instance** *(S21 batch 4)*. When the file is
+there and its name ends in `.EXE`, `ShellExecute` first tries to start it
+as `WinExec` does (§124.28.5, `w16t_shexe`): looked for in the same four
+places by its file part, with `lpParameters` (leading spaces gone, at most
+126 bytes) as its command tail and `nShowCmd` as its `nCmdShow`. The
+answer is then the new task's `hInstance`, which is what Windows answered,
+or 8 (`SE_ERR_OOM`) when it was found but could not be loaded. Only when
+the file is not a program WIN16 runs (answer 11), or is not in any of the
+four places (answer 2), is the launch posted as above, so a DOS program
+still goes to DOS.O88. TASKS uses this to start its last TASKB
+(§124.28.11).
 
 #### 124.24.5 The gate
 
@@ -229539,7 +229555,7 @@ So WIN16 keeps three kinds of claim and no more:
 |---|---|
 | the program (§124.20.2) | one |
 | the library part (§124.19) | one, from its first call |
-| the global heap's arenas (§124.9) | at most `W16_NARENA` = 3: 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm, §124.31.1); each one the size of a larger request instead, and the request's own size when the larger one cannot be had |
+| the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21, and 3 on the kern_mega arm, §124.31.1): 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again; each one the size of a larger request instead, and the request's own size when the larger one cannot be had |
 
 Everything else WIN16 keeps is a **block of its own in the global heap**
 (`w16_kclaim`), in the arenas beside the program's blocks: each profile
@@ -229554,10 +229570,38 @@ straight into its block, and every disk-visible base is aligned, since an
 `int 13h` across a 64 KB boundary fails. It is cut from a fixed block 512
 bytes larger, whose handle is the word in the paragraph before it.
 
-That leaves the eight as the program, the library part, three arenas, and
+That left the eight as the program, the library part, three arenas, and
 three for what is claimed for a moment: a part being fetched, and a
 `LoadLibrary` while the program runs (the loader part, its read cache and
 its table, §124.23.5).
+
+**S21 made it four arenas** *(S21 batch 4)*. A second program's segments
+are one block of the heap (§124.28.5), and Windows Help beside Calculator
+3.0 needs more than three arenas hold on QEMU's 640 KB: Calculator's three
+came to 32, 64 and 97 KB, and WINHELP, given them, stopped at its own *Out
+of Memory*. With a fourth (69 KB, of which 36 KB stayed free) it runs. The
+fourth is taken from the 32 KB the third leaves, so it is most often a
+request's own size.
+
+The count was chosen against the eight, not against the memory:
+
+- **Running**, WIN16 holds at most six: the program, the library part and
+  four arenas. That leaves two for what is claimed for a moment while a
+  program runs: a part being fetched (`w16_pkeep`, above), and
+  `FloodFill`'s copy of the screen (§124.25.6), which is a claim on
+  purpose, so that a heap allocation cannot discard a block of the
+  program's while it holds it.
+- **Starting a program or a library** holds up to three more: the read
+  cache, the NE tables and, when it is not kept, the loader part. With
+  four arenas already held, that is nine, and the eighth claim's refusal
+  ends the start cleanly: `WinExec` answers 0 and `LoadLibrary` fails, as
+  for any shortage of memory. Six arenas would have made the same refusal
+  reach a part fetch in a running program, which is the failure this
+  section was written to end.
+- Putting the cache and the tables in the heap instead was tried and
+  undone: the small table then created the third arena, sized it from the
+  free run, and left the later program's segment block too large for
+  what remained. Before, the block made the arena at its own size.
 
 **`GlobalCompact` and `GetFreeSpace`** count a new arena only while one of
 the three is free, so they say what `GlobalAlloc` can actually get. Since S20
@@ -229739,7 +229783,7 @@ so os8088's file dialog (§124.24.2). It imported eight calls WIN16 lacked:
 
 | call | |
 |---|---|
-| `AddAtom` (KERNEL.70), `GlobalAddAtom` (USER.268) | a name is given `RegisterClipboardFormat`'s place for it, `C000h` and up, the same for the same name, case aside, as Windows' clipboard formats are global atoms; a `MAKEINTATOM` (no segment) is its own atom. One table serves both, `W16_NCBF` (4) names |
+| `AddAtom` (KERNEL.70), `GlobalAddAtom` (USER.268) | a name is given `RegisterClipboardFormat`'s place for it, `C000h` and up, the same for the same name, case aside, as Windows' clipboard formats are global atoms; a `MAKEINTATOM` (no segment) is its own atom. One table serves both, `W16_NATOM` (16) names in the system-library part (§124.28.6) |
 | `DeleteAtom` (KERNEL.71), `GlobalDeleteAtom` (USER.269) | 0, success; the name is kept |
 | `GetMessageExtraInfo` (USER.288) | 0 |
 | `CreateMetaFile`, `CloseMetaFile` (GDI.125, 126) | NULL: no metafile is made. Windows answered NULL too when it could not make one, so a program has to handle it |
@@ -229926,6 +229970,15 @@ does not fit then is refused, *Not enough memory to load it.* Every other
 segment is loaded when one of its thunks is first hit, which is how
 Windows 3.0 loaded them.
 
+**A later task loads less at launch** *(S21 batch 4)*. A program started
+by another (§124.28.5) loads its entry point's segment and its kept ones,
+and leaves its PRELOAD segments to their first call. A discard can free
+only the current task's code (§124.26.5), and during the launch that is
+the new task's, so the first program's code cannot make room for a
+second's preloads. Windows Help's PRELOAD segments are most of its code,
+and loading them all beside Calculator 3.0 filled the heap before its
+first instruction.
+
 **The loader part stays.** Loading a segment is the loader's work, part 5
 (§124.18.7). A program with a discardable segment keeps part 5 after its
 launch, copied into a block of the global heap with the bind table it built
@@ -229984,6 +230037,16 @@ addresses a walk cannot:
 
 A word that only looks like a segment's paragraph keeps a segment in
 memory that could have gone. That costs memory, never correctness.
+
+**A program being launched has no stack yet, and nothing of its code
+goes** *(S21 batch 4)*. Its stack top is 0 until its first frame is built,
+and while it is, every segment it has is in use: the launch loads them to
+run them. A task's context starts zeroed (§124.28.2), so a later program's
+launch reached the scan with no stack to scan, found nothing in use, and
+discarded the segments the same launch had just loaded. The next segment
+was then read into a freed block, which broke the heap, and the program's
+entry pointed into another segment. Windows Help started by Calculator
+3.0 crashed at its first instruction that way.
 
 **Where else a code address is held:**
 
@@ -230599,7 +230662,8 @@ Windows' own:**
 **A second program cannot take a claim.** The first program's segments
 are its claim, one of the eight (§124.25.1). Every later program's go in
 one fixed block of the global heap instead, laid out as the claim would
-be. The arenas grow to hold it, within their three.
+be. The arenas grow to hold it, within their four (§124.25.1), and it loads
+less at launch than a first program does (§124.26.3).
 
 **Its first top-level window is an os8088 window of its own** (a "second
 window", `W16_MAXTOP`), titled with its text. The instance's own window
@@ -230627,7 +230691,47 @@ stays the first program's.
   `InSendMessage` still answers 0, and `ReplyMessage` is not bound.
 - **`SendMessage` to `HWND_BROADCAST`**, and `PostMessage` to it, reach the
   top-level windows of every task, which is how a DDE conversation starts
-  (`WM_DDE_INITIATE`).
+  (`WM_DDE_INITIATE`) *(S21 batch 5)*. Each window gets the message with
+  its own HWND, in the window table's order, as USER sent it:
+  - another task's window, or a WIN16 control, is answered at once, as a
+    single send to it is;
+  - the caller's own window is a call into the program, and the rest of
+    the broadcast is that call's continuation (`w16t_bnext`). The message
+    rides in the call's extra bytes, not in WIN16's state, because the
+    procedure may send, or broadcast, before it returns;
+  - a post goes into each window's task's queue.
+
+  Both answer 1. The two rows are part 9's (`w16t_sendmsg`,
+  `w16t_postmsg`), which pass any other window to the image's handlers:
+  the image's room is the kern_mega arm's too, and it has none.
+
+**DDE needs nothing more.** Its messages are posted and sent as any
+others, between windows of one instance. Its atoms are global atoms, and
+its data is a `GMEM_DDESHARE` block, which no task owns (124.28.3) and
+which the other task reads through the same handle, the global heap
+being the instance's. TASKS and TASKB hold a conversation from
+`WM_DDE_INITIATE` to `WM_DDE_TERMINATE` (124.28.11).
+
+**Global atoms are the registered clipboard formats' table**
+(§124.25.10), as Windows' formats were global atoms. `GlobalAddAtom`,
+`GlobalFindAtom` and `GlobalGetAtomName` (USER.271, *S21 batch 5*) use
+it, and names compare without case, as `AnsiUpper` folds them.
+
+**The table is the system-library part's** *(S24 batch 2)*: `W16_NATOM`
+= 16 names of 31 characters, 512 bytes of part 9, read and written
+through a data segment for the part (`w16i_atoms`, `W16SEG` of
+`[w16_sseg]`). The part is fetched once and kept until the instance
+ends (§124.24.1), so every task of the instance shares one table. It
+was four names in the image's bss (`W16_NCBF`) until then. Moving it
+gave the image's bss 128 bytes, which the kern_mega arm needed for
+batch 5's own code, and it gave Program Manager's DDE server
+(§124.33.2) room for its two names beside a client's own. One routine
+answers all four calls that name an atom, `w16i_atom`: `AddAtom`,
+`GlobalAddAtom` and `RegisterClipboardFormat` add the name when it is
+not there, and `GlobalFindAtom` does not.
+
+**Not yet, pinned:** `GlobalDeleteAtom` answers 0 and deletes nothing, so
+the sixteen are spent once.
 
 #### 124.28.7 A task's end
 
@@ -230688,35 +230792,103 @@ always ended it.
 | `GetInstanceData` | copies bytes from another task's DGROUP at the same offset |
 | `WinExec`, `LoadModule` | 124.28.5 |
 | `InSendMessage`, `ReplyMessage` | 124.28.6 |
-| `GlobalGetAtomName`, `GlobalDeleteAtom` | the global atom table, shared by every task, which DDE names its application and topic in |
+| `GlobalGetAtomName`, `GlobalDeleteAtom` | the global atom table, shared by every task, which DDE names its application and topic in (124.28.6) |
 | `WinHelp` | 124.28.10 |
 
-#### 124.28.10 Windows Help
+#### 124.28.10 Windows Help *(S21 batch 4)*
 
-`WinHelp(hWnd, lpHelpFile, wCommand, dwData)` finds a top-level window of
-class `MS_WINHELP` in the instance. If there is none, it starts
-`WINHELP.EXE` with `WinExec`, looked for as 124.28.5 says. It then sends
-that window the registered message `WM_WINHELP`, with a `GMEM_DDESHARE`
-block holding Windows' `HLP` record (the command, the file and the data),
-as USER did. `HELP_QUIT` with no Help window answers TRUE and starts
-nothing. With no `WINHELP.EXE` to be found, it shows §124.6's message box,
-as before. WINHELP.EXE is Microsoft's: the user brings it, as every other
-Windows program (`make win16disk WIN3X=<dir>`).
+`WinHelp(hWnd, lpHelpFile, wCommand, dwData)` does what USER 3.x's did,
+after Wine's `WinHelp16`:
+
+1. It looks for a top-level window of class `MS_WINHELP` in the instance
+   (`w16t_hfind`).
+2. With none, `HELP_QUIT` answers TRUE and starts nothing. Any other
+   command starts `WINHELP.EXE -x` as a task of the instance, as `WinExec`
+   would (§124.28.5): looked for in the same four places, shown
+   `SW_SHOWNORMAL`. `-x` is how USER started it, and WINHELP takes it to
+   mean that its window waits, hidden, for the request.
+3. **The new task runs at once** (`w16t_drun`), nested inside the caller's
+   `WinHelp`, until it first waits. A program started by `WinExec` first
+   runs when its starter next waits (§124.28.5), and that would be too late
+   here: the window to send to is made by the new task's own start-up. So
+   this is a directed yield: the caller's run is set aside as
+   `w16t_xsend` sets it aside, the new task is made current and resumed
+   from its first frame, and the caller is made current again when the
+   new task waits. A task that ends in that run is ended by the next turns
+   (`w16t_work` treats an ended task as one with work).
+4. It looks for the window again; with none, the answer is 0.
+5. It builds the request in a fixed block of the global heap, nobody's
+   (§124.28.3), so it outlives the caller's task: Windows' `WINHELP`
+   record, `WORD size, command; LONG data, reserved; WORD ofsFilename,
+   ofsData`, then the file's name with its NUL and, for `HELP_KEY`,
+   `HELP_COMMAND` and `HELP_PARTIALKEY`, the string `dwData` points at
+   (for `HELP_MULTIKEY` and `HELP_SETWINPOS`, its first word's count of
+   bytes). The previous request's block is freed first, so there is one.
+6. It sends the window the registered message `WM_WINHELP`, `wParam` the
+   caller's `hWnd` and `lParam` the block, through `SendMessage` and so
+   through `w16t_xsend` (§124.28.6), and answers what WINHELP answers.
+   `WM_WINHELP`'s number is `RegisterWindowMessage`'s own hash of the
+   name, worked out when WIN16 is assembled, so a program that registers
+   the name gets the same number.
+
+With no `WINHELP.EXE` to be found, or when it cannot be loaded, it shows
+§124.6's message box, as before. WINHELP.EXE is Microsoft's: the user
+brings it, as every other Windows program (`make win16disk WIN3X=<dir>`).
+
+**Seen on QEMU's VGA, 640 KB:**
+
+- Calculator 3.0's *Help > Index* starts Windows Help 3.0 in the same
+  instance. Its menu bar becomes the desktop's (*Microsoft Help*), it is
+  sent the request, and it answers in its own words.
+- Program Manager 3.0's *File > Run* `clock` starts Clock 3.0 as a task,
+  and its hands move: its timer is its own (§124.28.4).
+- With no WINHELP.EXE on the disk, Calculator's *Help > Index* shows the
+  message box, naming `calc.hlp`.
+
+**Not yet, pinned:**
+
+- **Windows Help does not find the file.** With `CALC.HLP` beside both
+  programs, it answers *Cannot find Help file; run Setup again to install
+  Help file*. Its own *File > Open*, run alone, lists no `*.hlp` files in
+  `b:\`, though its Directories list is right and the file is there. It
+  imports `DlgDirList` and `OpenFile` and nothing of DOS directly, so the
+  question is one of those two with its arguments, which no trace has
+  caught yet: the trace ring fills with the next item.
+- **Windows Help's button bar repaints without end** while its File Open
+  dialog is up: 3,004 calls in the ring, the bar's `BitBlt`s and
+  `ExtTextOut`s over and over.
+- **Notepad 3.0 and Windows Help do not fit together in 640 KB**: Notepad's
+  data is about 138 KB, and Windows Help is refused for memory. That
+  refusal's reason is not shown: the message box of a later program's
+  start is the next item.
+- **A later program's refusal is silent.** When the first program is
+  refused, WIN16's window says why (§124.18.2). A later one's lines go to
+  the instance's two lines, which nobody reads once a program runs, and
+  the caller is answered a number below 32.
+- A window a stray `-x` start leaves draws a few pixels of its title at
+  the desktop's top left.
 
 #### 124.28.11 What checks it
 
 The **`win16tasks`** row runs Watcom fixtures in one instance:
 
-- `TASKS.EXE` starts `TASKB.EXE` with `WinExec`;
-- the two talk through `SendMessage` and `PostMessage` both ways, then hold
-  a DDE conversation from `WM_DDE_INITIATE` to `WM_DDE_TERMINATE`;
+- `TASKS.EXE` starts `TASKB.EXE` with `WinExec`, and the last time with
+  `ShellExecute` (§124.24.10);
+- the two talk through `SendMessage` and `PostMessage` both ways, and
+  `PostAppMessage`;
+- TASKS posts and sends to `HWND_BROADCAST`, and both programs' windows
+  must get each, its own window by the continuation and TASKB's at once;
+- they hold a DDE conversation from `WM_DDE_INITIATE` to
+  `WM_DDE_TERMINATE` over three global atoms, and the `GMEM_DDESHARE`
+  block of `WM_DDE_DATA` must still read "42" after TASKB has ended;
 - each checks the other's answers and its own task calls;
 - one ends while the other goes on.
 
-The row then counts the instance's claim records, with the two programs
-and a library loaded, against §124.25.1's eight. Program Manager 3.0
-starting Clock and Notepad, and Notepad's Help menu opening Windows Help,
-are Microsoft's programs, and are looked at.
+The row also reads the kernel's claim records while the programs run:
+the instance's stay within §124.25.1's eight. When the MessageBox is
+closed and the instance ends, the heap must be the one before the launch.
+Program Manager 3.0 starting Clock, and Calculator's Help menu opening
+Windows Help, are Microsoft's programs, and are looked at (124.28.10).
 
 ### 124.31 The protected-mode arm: WIN16 on `kern_mega` *(pinned for S22, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -230742,6 +230914,7 @@ byte of it.
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
+| the arenas | at most `W16_NARENA` = **3**, not real mode's 4 (§124.25.1, S21): each arena is four bytes of bss, and the arm is at `APP_MAX_SIZE` to within a few bytes. With three made, a request none of them holds is refused, as one past four is in real mode |
 | the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
@@ -231772,3 +231945,12 @@ building the face in a memory DC and putting the glyph on with
   checkered brush, which has no answer here (124.25.7).
 - Media Player's Play on the CD answers *The specified parameter is out of
   range for the specified command* (124.32.4).
+
+#### 124.33.2 Program Manager's DDE server *(S24 batch 2, planned)*
+
+A Windows setup program finishes by asking Program Manager, over DDE, to
+make a group and put the program's items in it: `[CreateGroup(...)]`,
+`[AddItem(...)]`, `[ShowGroup(...)]`, `[DeleteGroup(...)]`. WIN16 is to
+answer for Program Manager inside the instance, and make each item an
+os8088 link (§26.10), the kind `\AUTOSTRT` holds, in a desktop folder
+named for the group. The design is pinned here before the code lands.

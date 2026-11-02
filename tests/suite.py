@@ -16522,6 +16522,21 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16tasks", "soak", py("tests/win16tasks.py"), 90.0,
+        "SPEC.md 124.28, WIN16-ANY-PLAN S21: TASKS.EXE starts TASKB.EXE in "
+        "its own WIN16 (`make win16fixtures`, tests/win16/tasks.c and "
+        "taskb.c) and the two check each other: WinExec's tail and "
+        "nCmdShow, posts both ways, PostAppMessage, a cross-task "
+        "SendMessage with a send back inside it, PostMessage and "
+        "SendMessage to HWND_BROADCAST, global atoms and a DDE "
+        "conversation whose GMEM_DDESHARE data outlives its task, one task "
+        "ending while the other goes on, and ShellExecute starting TASKB "
+        "again; the instance's claims stay within eight, its MessageBox "
+        "must be TASKS OK, and the heap after the instance ends is the one "
+        "before it",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
         "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "

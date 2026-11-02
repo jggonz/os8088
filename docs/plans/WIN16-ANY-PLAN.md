@@ -1384,9 +1384,59 @@ its table goes in the diary, so the reach is measured, not claimed.
       instance keeps its first program's name, because nothing renames
       an instance. The trace knob needs `-DW16_NBIND=256` to fit.
     - 113 bytes of the image (519 left).
-  - [ ] Batch 4: `WinHelp` and WINHELP.EXE; Program Manager starting Clock
-    and Notepad.
-  - [ ] Batch 5: DDE, the `win16tasks` row (its fixtures came in batch 2).
+  - [x] Batch 4: `WinHelp` and WINHELP.EXE; Program Manager starting Clock;
+    `ShellExecute` of a Windows program.
+    - `WinHelp` finds the `MS_WINHELP` window or starts `WINHELP.EXE -x`
+      in the instance, runs it at once inside the call (a directed yield,
+      `w16t_drun`), and sends it `WM_WINHELP` with Windows' `WINHELP`
+      block. §124.6's message box is now only for a machine with no
+      WINHELP.EXE. `ShellExecute` of an `.EXE` WIN16 runs starts it in the
+      instance, as `WinExec` does, and answers its hInstance; TASKS's last
+      TASKB comes that way.
+    - Found on the way: a later program's launch discarded the code the
+      same launch had loaded. Its context starts zeroed, so it had no
+      stack top, and the in-use scan found nothing in use. The next
+      segment went into a freed block, the heap broke and the entry
+      pointed at the wrong segment. A launch now discards none of its own
+      code (SPEC.md §124.26.5). A later program also leaves its PRELOAD
+      segments to their first call (§124.26.3).
+    - `W16_NARENA` is 4, not 3: Windows Help beside Calculator needed a
+      fourth arena. Six worked too, but left no claim for a part fetch
+      once all six were held. Putting the loader's cache and tables in
+      the heap instead was tried and undone (SPEC.md §124.25.1).
+    - Seen: Calculator 3.0's Help > Index starts Windows Help 3.0 and it
+      answers; Program Manager 3.0's File > Run `clock` starts Clock and
+      its hands move; with no WINHELP.EXE, the message box. TASKS OK, MDI
+      OK.
+    - Not done, now SPEC (§124.28.10): Windows Help cannot find
+      `CALC.HLP` beside it, and its own File > Open lists no `*.hlp`
+      (batch 5 found the first look's disk had no `CALC.HLP` at all; with
+      it there, both still hold); its button bar repaints without end;
+      Notepad and Windows Help do not fit in 640 KB together; a later
+      program's refusal is not shown. Program Manager starting Notepad is
+      that memory limit too.
+    - 25 bytes of the image (494 left).
+  - [x] Batch 5: DDE, the `win16tasks` row (its fixtures came in batch 2).
+    - `SendMessage` and `PostMessage` to `HWND_BROADCAST` reach every
+      task's top-level windows, each with its own HWND. A send to the
+      caller's own window is a call into the program, and the rest of the
+      broadcast is its continuation, with the message in the call's extra
+      bytes. Both rows went to part 9, so the image grew only by the
+      continuation's 10-byte trampoline (484 left).
+    - DDE needed nothing else: posts and sends already cross tasks,
+      `GMEM_DDESHARE` blocks are nobody's, and atoms are the clipboard
+      formats' table. `GlobalGetAtomName` (USER.271) is bound.
+    - TASKS and TASKB hold a conversation, TaskB|Test, item Answer: a
+      broadcast post both windows get, `WM_DDE_INITIATE` broadcast and
+      acknowledged inside the send, `WM_DDE_REQUEST`, `WM_DDE_DATA` in a
+      `GMEM_DDESHARE` block that still reads "42" after TASKB has ended,
+      and `WM_DDE_TERMINATE` both ways. *TASKS OK*; MDI OK.
+    - The `win16tasks` row reads that MessageBox, watches the instance's
+      claims stay within eight, and checks the heap is back to before
+      the launch when the instance ends.
+    - Not done, now SPEC (§124.28.6): the atom table holds four names,
+      formats and atoms together, and `GlobalDeleteAtom` frees none. It
+      is to move into part 9.
 
 ### Phase B: protected mode, on a 286 and up (O1)
 

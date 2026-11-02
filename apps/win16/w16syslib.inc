@@ -1302,7 +1302,8 @@ W16C_LDBAD      equ 2               ; LD_EBAD: nothing on the machine opens it
 
 ; ShellExecute (SHELL.20) - args: +0 nShowCmd, +2 lpDirectory,
 ; +6 lpParameters, +10 lpFile, +14 lpOperation, +18 hwnd. "open" (or NULL)
-; only; lpParameters and nShowCmd are not used
+; only. A Windows program joins this instance as WinExec starts it, with
+; lpParameters and nShowCmd (w16t_shexe); anything else is posted
 W16SYS w16c_shexec
     push si
     push di
@@ -1323,6 +1324,8 @@ W16SYS w16c_shexec
     mov bx, 2
     call w16c_path                  ; CF=1 AX = SE_ERR_FNF or SE_ERR_PNF
     jc .out
+    call w16t_shexe                 ; CF=0 a Windows program, started in
+    jnc .out                        ;   this instance: AX (124.28.5)
     call w16c_locate
     jc .out
     mov byte [w16_shq], 1

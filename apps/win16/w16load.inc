@@ -3718,6 +3718,8 @@ w16l_segsup:
     mov si, [w16_ne]
     cmp dx, [es:si + NE_CS]         ; the entry point's
     je .must
+    cmp byte [w16_ntk], 0           ; a later task: PRELOAD waits too, for
+    jne .anext                      ;   its code can free only its own (124.28.5)
     call w16l_segtab
     test word [es:di + 4], NSF_PRELOAD
     jz .anext
@@ -4041,11 +4043,15 @@ w16l_codeold:
     ret
 
 ; w16l_inuse - AX = a paragraph: ZF=1 a word of the program's live stack is
-; it, from the waiting call's frame to the top (SPEC.md 124.26.5). Keeps all.
+; it, from the waiting call's frame to the top (SPEC.md 124.26.5) - or the
+; program has no stack yet: its own launch, which uses every segment it
+; loads, so none of them goes for the next (124.26.3). Keeps all.
 w16l_inuse:
     push cx
     push di
     push es
+    cmp word [w16_stop], 0
+    je .out
     mov es, [w16_pss]
     mov di, [w16_psp_]
     mov cx, [w16_stop]

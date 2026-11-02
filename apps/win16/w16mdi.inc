@@ -153,24 +153,43 @@ W16SYS w16i_exitwin
     xor dx, dx
     ret
 
-; GlobalFindAtom (USER.270) - args: +0 lpszName. A MAKEINTATOM is its own;
-; a name is the atom GlobalAddAtom gave it (w16u_regcbfmt's table), or 0
+; THE ATOMS (SPEC.md 124.25.10): one table of W16_NATOM names in this part,
+; read and written through a data segment for it - Windows' clipboard
+; formats are global atoms, so RegisterClipboardFormat is GlobalAddAtom.
+; Atom C000h + i is place i, the same for the same name, case aside. Every
+; task of the instance shares it (DDE's atoms are named by one task and read
+; by another); nothing is ever deleted.
+;
+; GlobalFindAtom (USER.270) - args: +0 lpszName: its atom, or 0. AddAtom
+; (KERNEL.70), GlobalAddAtom (USER.268), RegisterClipboardFormat (USER.145)
+; - the same, given a place when it has none: 0 when the table is full. A
+; MAKEINTATOM (no segment) is its own atom for all four
 W16SYS w16i_findatom
+    xor ax, ax
+    jmp short w16i_atom
+W16SYS w16i_addatom
+    mov al, 1
+w16i_atom:
     push si
     push di
+    push ds
+    push ax                         ; AL = 1: add a name not there
     ICALL w16_args
     les di, [es:bx]
-    mov ax, es
-    or ax, ax
+    pop ax
+    mov si, es
+    or si, si
     jnz .name
     mov ax, di
     jmp short .out
 .name:
+    W16SEG ds, [w16_sseg]           ; the table's segment: this part's
     xor bx, bx                      ; BX = the place
-    mov si, w16_cbfn
+    mov si, w16i_atoms
 .f:
     cmp byte [si], 0
-    je .none
+    je .new
+    push ax
     push si
     push di
 .c:
@@ -181,31 +200,97 @@ W16SYS w16i_findatom
     call w16i_up
     cmp al, ah
     jne .ne
-    or al, al
-    jz .eq
     inc si
     inc di
-    jmp short .c
-.eq:
+    or al, al
+    jnz .c
     pop di
     pop si
-    mov ax, 0xC000
-    add ax, bx
-    jmp short .out
+    pop ax
+    jmp short .have
 .ne:
     pop di
     pop si
+    pop ax
     add si, 32
     inc bx
-    cmp bx, W16_NCBF
+    cmp bx, W16_NATOM
     jb .f
-.none:
+    jmp short .zero
+.new:
+    or al, al
+    jz .zero
+    mov cx, 31                      ; the name, cut to 31
+.cp:
+    mov al, [es:di]
+    mov [si], al
+    or al, al
+    jz .have
+    inc si
+    inc di
+    loop .cp
+    mov byte [si], 0
+.have:
+    mov ax, 0xC000
+    add ax, bx
+    jmp short .out
+.zero:
     xor ax, ax
 .out:
     xor dx, dx
+    pop ds
     pop di
     pop si
     ret
+
+; GetAtomName (KERNEL.72), GlobalGetAtomName (USER.271),
+; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszBuffer,
+; +6 the atom: its name, cut to the buffer; the answer is its length, 0 for
+; any other atom
+W16SYS w16i_atomname
+    push si
+    push di
+    push ds
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov si, [es:bx + 6]
+    les di, [es:bx + 2]
+    xor ax, ax                      ; AX = the length
+    sub si, 0xC000
+    jb .out
+    cmp si, W16_NATOM
+    jae .out
+    jcxz .out
+    push cx
+    mov cl, 5
+    shl si, cl
+    pop cx
+    add si, w16i_atoms
+    W16SEG ds, [w16_sseg]
+    cmp byte [si], 0
+    je .out
+    dec cx                          ; room for the NUL
+.cp:
+    jcxz .end
+    mov dl, [si]
+    or dl, dl
+    jz .end
+    mov [es:di], dl
+    inc si
+    inc di
+    inc ax
+    dec cx
+    jmp short .cp
+.end:
+    mov byte [es:di], 0
+.out:
+    xor dx, dx
+    pop ds
+    pop di
+    pop si
+    ret
+
+w16i_atoms: times W16_NATOM * 32 db 0
 
 ; w16i_up - AL upper-cased, as AnsiUpper does: a-z, and the accented letters
 ; E0h-FEh but F7h. Keeps the rest

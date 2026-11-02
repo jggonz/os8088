@@ -210,8 +210,8 @@ W16EXPORT W16M_GDI,        160,     2,  w16_ans0            ; SetMetaFileBits(wo
 W16EXPORT W16M_GDI,        360,     4,  w16g_crepal         ; CreatePalette(ptr)
 W16EXPORT W16M_GDI,        363,     10, w16g_getpalent      ; GetPaletteEntries(word word word ptr)
 W16EXPORT W16M_GDI,        366,     2,  w16_ans0            ; UpdateColors(word)
-W16EXPORT W16M_USER,       145,     4,  w16u_regcbfmt       ; RegisterClipboardFormat(str)
-W16EXPORT W16M_USER,       146,     8,  w16u_cbfmtname      ; GetClipboardFormatName(word ptr s_word)
+W16EXPORT W16M_USER,       145,     4,  w16i_addatom        ; RegisterClipboardFormat(str)
+W16EXPORT W16M_USER,       146,     8,  w16i_atomname       ; GetClipboardFormatName(word ptr s_word)
 W16EXPORT W16M_USER,       147,     2,  w16u_setcbview      ; SetClipboardViewer(word)
 W16EXPORT W16M_USER,       149,     4,  w16u_cbchain        ; ChangeClipboardChain(word word)
 W16EXPORT W16M_USER,       282,     6,  w16g_selpal         ; SelectPalette(word word word)
@@ -458,9 +458,9 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 %define w16mdc_w16u_graystr
 ; Windows 3.1's Paintbrush (SPEC.md 124.25.10): atoms in the clipboard
 ; format table, and the answers a raster display and no metafile give
-W16EXPORT W16M_KERNEL,     70,      4,  w16k_addatom        ; AddAtom(str)
+W16EXPORT W16M_KERNEL,     70,      4,  w16i_addatom        ; AddAtom(str)
 W16EXPORT W16M_KERNEL,     71,      2,  w16_ans0            ; DeleteAtom(word)
-W16EXPORT W16M_USER,       268,     4,  w16k_addatom        ; GlobalAddAtom(str)
+W16EXPORT W16M_USER,       268,     4,  w16i_addatom        ; GlobalAddAtom(str)
 W16EXPORT W16M_USER,       269,     2,  w16_ans0            ; GlobalDeleteAtom(word)
 W16EXPORT W16M_USER,       288,     0,  w16_ans0            ; GetMessageExtraInfo()
 W16EXPORT W16M_GDI,        125,     4,  w16_ans0            ; CreateMetaFile(str)
@@ -654,7 +654,7 @@ W16EXPORT W16M_KERNEL,     45,      8,  w16t_loadmod        ; LoadModule(str ptr
 ; Windows 3.1's Write, Sound Recorder and Media Player, and a setup
 ; program's bootstrap (SPEC.md 124.33.1): part 9's, w16w31.inc's
 W16EXPORT W16M_KERNEL,     310,     2,  w16n_lhdelta        ; LocalHandleDelta(word)
-W16EXPORT W16M_KERNEL,     72,      8,  w16u_cbfmtname      ; GetAtomName(word ptr word)
+W16EXPORT W16M_KERNEL,     72,      8,  w16i_atomname       ; GetAtomName(word ptr word)
 W16EXPORT W16M_KERNEL,     107,     2,  w16_ans0            ; SetErrorMode(word)
 W16EXPORT W16M_USER,       221,     20, w16n_scrolldc       ; ScrollDC(word s_word s_word ptr ptr word ptr)
 W16EXPORT W16M_USER,       370,     6,  w16n_getwpl         ; GetWindowPlacement(word ptr)
@@ -681,6 +681,7 @@ W16EXPORT W16M_GDI,        353,     2,  w16_ans0            ; GetAspectRatioFilt
 %define w16mdc_w16n_getvext
 %define w16mdc_w16n_getvorg
 %define w16mdc_w16n_getwext
+W16EXPORT W16M_USER,       271,     8,  w16i_atomname       ; GlobalGetAtomName(word ptr word)
 ; the segment equates, real mode's paragraphs (SPEC.md 124.27.1): bound by
 ; the loader to their values, as __AHINCR is (w16l_segv, in that order)
 %assign W16_SEGROWP W16NX       ; ONE number for both (a row put between two
@@ -793,8 +794,8 @@ W16_XDDP equ W16NX                ; DefDlgProc's row: bound to slot W16_DDPROW
 W16EXPORT W16M_USER,       308,     10, w16u_defdlgproc     ; DefDlgProc(word word word long)
 W16EXPORT W16M_USER,       108,     10, w16u_getmsg         ; GetMessage(ptr word word word)
 W16EXPORT W16M_USER,       109,     12, w16u_peekmsg        ; PeekMessage(ptr word word word word)
-W16EXPORT W16M_USER,       110,     10, w16u_postmsg        ; PostMessage(word word word long)
-W16EXPORT W16M_USER,       111,     10, w16u_sendmsg        ; SendMessage(word word word long)
+W16EXPORT W16M_USER,       110,     10, w16t_postmsg        ; PostMessage(word word word long)
+W16EXPORT W16M_USER,       111,     10, w16t_sendmsg        ; SendMessage(word word word long)
 W16EXPORT W16M_USER,       113,     4,  w16u_translate      ; TranslateMessage(ptr)
 W16EXPORT W16M_USER,       114,     4,  w16u_dispatch       ; DispatchMessage(ptr)
 W16EXPORT W16M_USER,       124,     2,  w16u_updatewnd      ; UpdateWindow(word)
@@ -1151,16 +1152,19 @@ w16_lstr:
     ret
 
 ; WinHelp (USER.171) - +0 dwData, +4 wCommand, +6 lpHelpFile, +10 hWnd.
-; There is no Help here (SPEC.md 124.15.3): HELP_QUIT, which a program sends
-; as it ends whether or not it showed help, answers TRUE silently. Any other
-; command says why in a message box - its arguments are rewritten in place as
-; MessageBox's, which are as many bytes - and answers TRUE, so the program
-; does not add a message of its own
+; Windows' WINHELP.EXE, started as a task of this instance and sent the
+; request (SPEC.md 124.28.10, w16t_help) - the arguments become SendMessage's.
+; When it cannot be started, a message box says so - the arguments are
+; rewritten in place as MessageBox's, which are as many bytes - and TRUE is
+; the answer, so the program does not add a message of its own
 w16u_winhelp:
     call w16_args
-    mov ax, 1
-    cmp word [es:bx + 4], 2         ; HELP_QUIT
-    jne .say
+    SCALL w16t_help
+    jc .say
+    cmp ax, 0xFFFF
+    jne .ret
+    jmp w16u_sendmsg
+.ret:
     ret
 .say:
     push si
@@ -1205,7 +1209,7 @@ w16_asmsgbox:
     mov [es:bx + 8], ds
     jmp w16u_msgbox
 
-w16_s_nohelp1:  db 'Help is not available.', 13, 10, 'WIN16 has no WinHelp, so ', 0
+w16_s_nohelp1:  db 'Help is not available.', 13, 10, 'WINHELP.EXE could not be started, so ', 0
 w16_s_itshelp:  db 'its help', 0
 w16_s_nohelp2:  db ' cannot be opened.', 0
 

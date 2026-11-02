@@ -113,7 +113,8 @@ W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
 %endif                          ;   Paintbrush 3.1's 270 is the most measured;
                                 ;   a trace build takes fewer (124.17.4)
-W16_NCBF     equ 4              ; registered clipboard formats at most
+W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
+                                ;   (w16mdi.inc, SPEC.md 124.25.10)
 W16_NPNMAX   equ 8              ; GetProcAddress's names at most (w16api.inc)
 W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
@@ -158,8 +159,14 @@ W16B_DCF     equ 0x40           ; ...ORed in: a text call, in the face of the
                                 ;   DC's font (SPEC.md 124.24.4)
 W16B_MDC     equ 0x20           ; ...ORed in: a call on a DC, which may be a
                                 ;   memory DC's (SPEC.md 124.25.3)
-W16_NARENA   equ 3              ; global heap arenas at once (w16mem.inc,
+HWND_BROADCAST equ 0xFFFF        ; SendMessage's and PostMessage's: every
+                                ;   top-level window (SPEC.md 124.28.6)
+%ifndef PKG_MEGA
+W16_NARENA   equ 4              ; global heap arenas at once (w16mem.inc,
                                 ;   SPEC.md 124.25.1)
+%else
+W16_NARENA   equ 3              ; ...on kern_mega three: the arm has no
+%endif                          ;   room for a fourth's bss (124.31.1)
 W16_NGH      equ 256            ; moveable global handles
 W16_MDEPTH   equ 4              ; popups open at once (w16menu.inc)
 W16_MLAB     equ 64             ; ...a menu label's characters, and an
@@ -785,7 +792,6 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_cbseen, 18       ; ...as the viewer was last told it
     W16BSS w16_bmi, 12          ; CreateBitmapIndirect's BITMAP, as CreateBitmap's args
     W16BSS w16_cbchg, 1         ; ...the clipboard changed since it was opened
-    W16BSS w16_cbfn, W16_NCBF * 32 ; RegisterClipboardFormat's names
     W16BSS w16_pnslot, 2 * W16_NPNMAX ; ...GetProcAddress's names', 0 none yet
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---

@@ -3958,3 +3958,122 @@ more things came into view one after another:
 
 After all four fixes, Media Player's Play and Eject show their glyphs once
 CD Audio is open, and Sound Recorder's Record button shows its microphone.
+
+## 2026-11-01 — S21, batch 4: Windows Help, and a launch that ate itself
+
+**Windows Help is a separate program, and WIN16 now starts it.** When a
+Windows 3.x program asked for help, USER looked for a window of class
+`MS_WINHELP`. If there was none, it started `WINHELP.EXE -x`, then sent the
+window a registered message with a small block naming the file and the
+topic. WIN16 does the same now. The awkward part is timing. A program
+started by `WinExec` first runs when its starter next waits, but the
+window `WinHelp` has to send to is created by Help's own start-up. So
+`WinHelp` runs the new task at once, inside the caller's call, until Help
+waits for its first message: a directed yield, built the way batch 3's
+cross-program send already parks one program and runs another.
+
+**The first try crashed, and the cause was in the loader, not in Help.**
+Help died at its first instruction, a different way each run: once with
+CS = 0005, once looping forever on a heap block of size zero. A debugger
+on the launch found the cause. A program's code may be discarded when
+memory runs short, but only if no return address on its stack points
+into it. A brand-new task's context is zeroed, so during its launch it
+had no stack top, the scan found nothing in use, and the launch discarded
+segments it had loaded a moment earlier. The next segment was then read
+into one of those freed blocks, which broke the heap, and the program's
+entry pointed into the wrong segment. Now a program with no stack yet
+discards none of its code. A program started by another also leaves its
+PRELOAD segments until they are first called, since it cannot make room
+by discarding the first program's code.
+
+**Then there was not enough memory, and the fix had to respect the
+eight-claim limit.** One os8088 program holds at most eight claims, and
+WIN16's heap is made of them. Calculator plus Help needed a fourth arena.
+Six arenas worked as well, but once all six were held there was no claim
+left for fetching a part. A large program would then fail opening a file,
+which is the failure the limit's section was written about. Moving the
+loader's temporary buffers into the heap, to save claims, was tried and
+undone: the small buffer created the arena first and sized it too small
+for Help's code. Four arenas it is, with the arithmetic in SPEC.md.
+
+**What works, and what doesn't yet:**
+
+- Calculator 3.0's *Help > Index* starts Windows Help in the same window
+  group, and Help answers.
+- Program Manager's *File > Run* `clock` starts Clock, and its second hand
+  moves.
+- `ShellExecute` on a Windows program now starts it in the same instance,
+  and the TASKS fixture uses it for its last TASKB.
+
+Help itself then says it cannot find `CALC.HLP`. The first look at that
+was wrong: the test disk had never been given the file. With the file
+really there, Help still cannot find it, and its own File > Open lists no
+help files, so it is a real gap, in `DlgDirList` or `OpenFile`, and the
+next thing to trace. Notepad and Help together need more than 640 KB.
+
+## 2026-11-02 — S21, batch 5: two programs hold a conversation
+
+**DDE is mostly messages that already worked.** Windows' Dynamic Data
+Exchange is a protocol built on ordinary window messages. A client
+broadcasts `WM_DDE_INITIATE` naming an application and a topic, and any
+program that serves them answers `WM_DDE_ACK`. After that the two post
+`WM_DDE_REQUEST`, `WM_DDE_DATA` and the rest straight to each other's
+windows. The names are global atoms, and the data travels in a shared
+global memory block. Batches 2 and 3 had already made posts and sends
+cross between programs, and the shared heap meant a block made by one
+program can be read by the other. What was missing was the broadcast.
+
+**A broadcast to your own window cannot be answered on the spot.** Sending
+to another program's window runs that program and comes back with its
+answer, all inside the call. Sending to the caller's own window is
+different: WIN16 cannot call the program's code from inside the program's
+own call. It sets up the call and lets the program run it, and a
+"continuation" picks up afterwards. So a broadcast becomes a chain: send
+to each window in turn, and when one of them is the caller's own, the rest
+of the broadcast waits in that call's continuation. The message rides
+along in the call's own stack space, because the window procedure may
+send messages of its own before it returns, and WIN16's scratch copy of
+"the message" would not survive that.
+
+**The image had no room to spare, so the work went elsewhere.** The
+protected-mode build of WIN16, being written alongside, shares the main
+image and has one byte left. So `SendMessage` and `PostMessage` are now
+answered in part 9, a part loaded on demand, which passes anything that
+is not a broadcast on to the old handlers. The image grew by ten bytes,
+the trampoline the continuation needs.
+
+**The test.** TASKS asks TASKB for an item called *Answer* and gets "42"
+back. That needs the broadcast post to have reached TASKB first, and the
+shared block must still read "42" after TASKB has ended. The new
+`win16tasks` row reads the verdict and also watches the memory claims:
+both programs together stay within the eight one os8088 program may hold,
+and everything is handed back when the instance closes.
+
+**A limit found on the way:** WIN16's atom table is the clipboard format
+table, and it holds four names. That is enough for this conversation and
+too few for Program Manager's DDE server, so moving it out of the image is
+on the list.
+
+## 2026-11-01: merging S21 batches 4 and 5 into the protected-mode arm
+
+Batches 4 and 5 (Windows Help, `ShellExecute`, `HWND_BROADCAST` and DDE
+between tasks) came into Phase B/C as a merge. The arm came out of it 30
+bytes over `APP_MAX_SIZE`: the image grew 31 bytes, and the arm had one
+byte left before.
+
+The bytes came from the atom table, which the merge had just made
+important. It was four names of 32 bytes in the image's bss. It is
+sixteen names in the system-library part now (SPEC.md 124.28.6), which
+the instance fetches once and keeps, so every task shares it. Part 9's
+code reaches it through a data segment for the part (`W16SEG` of
+`[w16_sseg]`), not through CS, which the kern_mega arm cannot write
+through without a trap. The four routines that named an atom became
+two: `w16i_atom` adds or finds, and `w16i_atomname` reads a name back.
+They moved out of the library part as well, which is the one closest
+to its 64 KB.
+
+The arm has 98 bytes of room again. It keeps three arenas, where real
+mode now has four (SPEC.md 124.31.1): a fourth is four more bytes of bss.
+
+**Seen**, by looking: TASKS and TASKB say *TASKS OK* on the kern_mega arm
+and in real mode, a DDE conversation over the moved atoms included.
