@@ -3748,3 +3748,37 @@ waited 198 ms, wave 1/1/1, in 1/2/1":
 The first look counted the GetMessage leg too strictly. A call that is
 already due when the third one returns is made before the posted message, by
 design, so the fixture now allows one or two more.
+
+## 2026-11-01: S23 batch 4, midiOut
+
+MIDIRack already drives the MPU-401 through `SOUND.DRV` (§105.8.5), so
+`midiOut` is a thin layer over the same five verbs. Two things shaped it.
+
+**The bytes have to be WIN16's.** `SNDV_MIDW` sends from the *caller's*
+segment, which `OSAPI_DRV_CALL` stamps into ES from DS, and in part 9 DS is
+WIN16's image. A message the program hands over is in the program's memory.
+So a short message is unpacked into WIN16's 16-byte scratch, and a long one
+goes through it 16 bytes a call. A long message is sent before
+`midiOutLongMsg` returns, so a header is never queued: prepare and unprepare
+are waveOut's own routines, since a `MIDIHDR`'s flags sit where a
+`WAVEHDR`'s do.
+
+**The notices needed no new code.** The `HMIDIOUT` block keeps its handle,
+callback kind, callback and `dwInstance` at the offsets an `HWAVEOUT` uses,
+so the existing notice routine posts `MM_MOM_*` to a window or a task, or
+queues it for a procedure.
+
+**Seen** on the dev kern_mega:
+- under QEMU, which has no MPU-401: "motest: 0 wrong, midiOut 0", with
+  caps and open refused as `MMSYSERR_BADDEVICEID`;
+- on 86Box's 386 with an SB16 and its MPU-401: "motest: 0 wrong, midiOut 1,
+  1/1/1". The run covered caps, an open with a procedure, a refused second
+  open, a note under running status, a long General MIDI reset (refused
+  unprepared, then sent), reset and close, and one each of the open, done
+  and close notices.
+
+The fixture also caught an older defect. The error-text table scan ended
+with `lodsb` reading the table's terminator into AL, so
+`waveOutGetErrorText` answered 255 for a number it did not know rather than
+`MMSYSERR_BADERRNUM`.
+

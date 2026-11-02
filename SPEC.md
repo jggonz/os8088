@@ -231027,8 +231027,8 @@ stream.
   `timeEndPeriod` answer 0 and change nothing; the PIT is the kernel's.
 - `waveOutGetNumDevs` answers 1 when `OSAPI_SND_CAPS` has
   `SND_CAP_PCM_BG`, `waveInGetNumDevs` 1 with `SND_CAP_PCM_IN`, and 0
-  otherwise. `midiOutGetNumDevs`, `midiInGetNumDevs` and `auxGetNumDevs`
-  answer 0.
+  otherwise. `midiOutGetNumDevs` is §124.32.7's; `midiInGetNumDevs` and
+  `auxGetNumDevs` answer 0.
 - `waveOutGetDevCaps` and `waveInGetDevCaps` describe device 0:
   - name: `os8088 Sound`;
   - `dwFormats`: 8-bit mono at 11, 22 and (with `SND_CAP_PCM_HI`) 44 kHz;
@@ -231431,7 +231431,47 @@ callback could call almost nothing but `PostMessage`.
   its own gets no nested call.
 - At the program's end the block goes with its heap.
 
-#### 124.32.7 Planned *(S23 batch 4)*
+#### 124.32.7 `midiOut` *(S23 batch 4)*
 
-`midiOut` where `SOUND.DRV` has an MPU-401 (§34.13). SOUNDREC and MPLAYER
-are its look.
+One output device, device 0 (`MIDI_MAPPER` is the same one), over
+`SOUND.DRV`'s MPU-401 verbs (§34.13). MIDIRack uses the same verbs
+(§105.8.5).
+
+- **`midiOutGetNumDevs`** answers 1 when `SNDV_MIDINFO` finds an
+  interface, and 0 otherwise, including on a machine without `SOUND.DRV`.
+  `midiOutGetDevCaps` describes device 0:
+  - name `os8088 MPU-401`;
+  - `MOD_MIDIPORT`, no voices or notes;
+  - all sixteen channels;
+  - no `dwSupport` bits.
+- **An `HMIDIOUT` is a fixed global block of the program's heap**, as an
+  `HWAVEOUT` is. One is open at a time; a second `midiOutOpen` answers
+  `MMSYSERR_ALLOCATED`. `midiOutOpen` takes the interface with
+  `SNDV_MIDOPEN`, and answers `MMSYSERR_ALLOCATED` when another package
+  holds it. Its notices are `MM_MOM_OPEN` (3C7h), `MM_MOM_CLOSE` (3C8h)
+  and `MM_MOM_DONE` (3C9h), to a window, a task or a procedure as
+  §124.32.3 and §124.32.6 say.
+- **The bytes go out from WIN16's own segment.** `SNDV_MIDW` reads the
+  caller's segment, so a message is copied into WIN16's 16-byte scratch
+  first, and a long one goes through it 16 bytes at a time.
+- **`midiOutShortMsg`** sends the message's status and the data bytes that
+  status carries:
+  - two for notes, aftertouch, controllers and the pitch wheel;
+  - one for a program change or channel pressure;
+  - MIDI's own count for system messages.
+  A first byte below 80h is running status, sent with the data bytes the
+  last status carried.
+- **`midiOutLongMsg`** sends a prepared block's `dwBufferLength` bytes before
+  it returns. The block is then `MHDR_DONE` and its `MM_MOM_DONE` goes out.
+  An unprepared one answers `MIDIERR_UNPREPARED` (64).
+- **`midiOutReset`** gives the interface back and takes it again: all notes
+  off and controllers reset on every channel (§34.13's close).
+  `midiOutClose` gives it back.
+- An interface that stops taking bytes answers `MIDIERR_NOTREADY` (67).
+  Volume answers `MMSYSERR_NOTSUPPORTED`, as do the patch caches and
+  `midiOutMessage`. `midiOutGetID` answers 0. `midiOutGetErrorText` copies
+  Windows' sentences for the MIDI codes too.
+- At the program's end the interface is given back.
+- QEMU has no MPU-401. There, `midiOutGetNumDevs` answers 0 and an open
+  `MMSYSERR_BADDEVICEID`. The device path is 86Box's `386-midirack` and
+  hardware's to hear.

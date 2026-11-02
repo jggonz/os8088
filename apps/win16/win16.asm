@@ -361,6 +361,7 @@ section .w16dlg
     W16BSS w16mm_mci, 2         ; MCI's block, 0 none yet (124.32.4)
     W16BSS w16mm_wi, 2          ; the HWAVEIN open, 0 none (124.32.5)
     W16BSS w16mm_tev, 2         ; the calls' block, 0 none yet (124.32.6)
+    W16BSS w16mm_mo, 2          ; the HMIDIOUT open, 0 none (124.32.7)
 %endif
     W16BSS w16_vecs, 5 * 8      ; int 21h AH=25h's vectors: number, far ptr
     ; --- S16: the DOS (SPEC.md 124.21) ---
@@ -1399,6 +1400,8 @@ w16_freeprog:
     jne .wo
     cmp word [w16mm_tev], 0         ;   the calls' block forgotten (124.32.6)
     jne .wo
+    cmp word [w16mm_mo], 0          ;   midiOut's interface given back
+    jne .wo                         ;   (124.32.7)
     cmp word [w16mm_mci], 0
     je .nowo
 .wo:

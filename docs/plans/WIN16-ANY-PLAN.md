@@ -1540,6 +1540,21 @@ its table goes in the diary, so the reach is measured, not claimed.
         wrong, periodic 15, waited 198 ms, wave 1/1/1, in 1/2/1"; without a
         card the timer half alone, 0 wrong. MMTEST, MCITEST and WITEST are
         still 0 wrong. Arm: 147 bytes of room.
+      - [x] `midiOut` (124.32.7): device 0 over SOUND.DRV's MPU-401 verbs,
+        one `HMIDIOUT` at a time, laid out where the notices read an
+        `HWAVEOUT`; a short message with running status, a long one sent
+        16 bytes at a time through WIN16's own scratch before it returns,
+        `midiOutReset` as a close and a reopen. New fixture `MOTEST.EXE`.
+        **Seen 2026-11-01 on a dev kern_mega:** under QEMU (no MPU-401)
+        "motest: 0 wrong, midiOut 0"; on 86Box's 386 with an SB16's
+        MPU-401 (`386-midirack`'s machine, booted from the look disks)
+        "motest: 0 wrong, midiOut 1, 1/1/1" - caps, open, a second open
+        refused, a note under running status, an unprepared and a prepared
+        long message, reset and close, each notice once to a procedure.
+        On the way, `waveOutGetErrorText` and `waveInGetErrorText` answered
+        255 for an undefined number instead of `MMSYSERR_BADERRNUM`: the
+        table scan's `lodsb` overwrote the answer. Fixed. Arm: 138 bytes
+        of room.
       - **Found on the way, and not waveIn's:** on kern_mega with
         `SOUND.DRV` loaded, any WIN16 program whose first MessageBox comes
         two seconds after the last disk read dies. A probe that waits and

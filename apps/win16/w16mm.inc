@@ -1838,14 +1838,13 @@ W16SYS w16mm_woerr
     mov dx, [es:bx + 6]
     mov cx, [es:bx]
     les di, [es:bx + 2]
-    mov ax, MMSYSERR_BADERRNUM
     or dh, dh
-    jnz .out
+    jnz .bad
     mov si, w16mm_werrs              ; XSEC-OK: the part's table, at cs:
 .f:
     cs lodsb
-    cmp al, 0xFF
-    je .out
+    cmp al, 0xFF                    ; (the table's end: AL is not the answer)
+    je .bad
     cmp al, dl
     je .hit
 .skip:
@@ -1867,6 +1866,9 @@ W16SYS w16mm_woerr
     mov byte [es:di], 0
 .ok:
     xor ax, ax
+    jmp short .out
+.bad:
+    mov ax, MMSYSERR_BADERRNUM
 .out:
     xor dx, dx
     pop di
@@ -1885,6 +1887,9 @@ w16mm_werrs:
     db 32, 'The wave format is not supported by this device.', 0
     db 33, 'The sound is still playing.', 0
     db 34, 'The wave header was not prepared.', 0
+    db 64, 'The MIDI header was not prepared.', 0
+    db 65, 'Media data is still playing.', 0
+    db 67, 'The port is transmitting data to the device.', 0
     db 0xFF
 
 ; =============================================================================
@@ -2663,7 +2668,7 @@ w16mm_wtick:
     ret
 
 ; w16mm_wend - the program's end (w16_freeprog): its devices closed, with no
-; notice, and MCI's forgotten. Keeps all
+; notice, midiOut's interface given back, and MCI's forgotten. Keeps all
 w16mm_wend:
     push ax
     push es
@@ -2677,9 +2682,15 @@ w16mm_wend:
     jc .out
     call w16mm_wikill               ; the card stopped, then the ring freed
 .out:
+    mov ax, [w16mm_mo]              ; midiOut's interface given back
+    call w16mm_most
+    jc .mo
+    call w16mm_mokill
+.mo:
     xor ax, ax
     mov [w16mm_wo], ax
     mov [w16mm_wi], ax
+    mov [w16mm_mo], ax
     mov [w16mm_tev], ax             ; the calls' block goes with the heap
     mov [w16mm_wq], ax
     mov [w16mm_mci], ax             ; MCI's block goes with the arenas
@@ -3733,6 +3744,527 @@ w16mm_sfind:
     and al, 0xFE
     mov si, ax
     jmp short .lp
+.no:
+    stc
+    ret
+
+; =============================================================================
+; midiOut (124.32.7): device 0 over SOUND.DRV's MPU-401 verbs (§34.13), as
+; MIDIRack drives them (§105.8.5). The HMIDIOUT is a fixed block of the
+; program's heap, laid out where w16mm_wnote and the calls read an HWAVEOUT:
+; its handle at 2, the callback's kind at 7, its address at 20, dwInstance at
+; 90. SNDV_MIDW reads the CALLER'S segment, so every byte goes out of
+; w16_scratch, in WIN16's own.
+; =============================================================================
+
+%include "drivers/sound/sndpkg.inc" ; SOUND.DRV's door, one ABI (SPEC.md 20.11)
+
+MO_SIG      equ 0                   ; W16MM_OSIG
+MO_SELF     equ 2                   ; the HMIDIOUT (WO_SELF's place)
+MO_RUN      equ 4                   ; the running status, 0 none
+MO_CBT      equ 7                   ; the callback's kind (WO_CBT's place)
+MO_CB       equ 20                  ; dwCallback (WO_CB's place)
+MO_LEN      equ W16MM_INST + 4      ; ...and dwInstance where waveOut's is
+W16MM_OSIG  equ 0x4F4D
+MH_DATA     equ 0                   ; MIDIHDR: lpData
+MH_LEN      equ 4                   ;   dwBufferLength
+MH_FLAGS    equ 16                  ;   dwFlags, a WAVEHDR's place: w16mm_prep
+MHDR_DONE   equ 0x01
+MHDR_PREPARED equ 0x02
+MM_MOM_OPEN     equ 0x3C7
+MM_MOM_CLOSE    equ 0x3C8
+MM_MOM_DONE     equ 0x3C9
+MIDIERR_UNPREPARED equ 64
+MIDIERR_NOTREADY   equ 67
+
+; midiOutGetNumDevs (MMSYSTEM.201): 1 with an MPU-401 to send to
+W16SYS w16mm_monum
+    call w16mm_mhas
+    mov ax, 0
+    jc .out
+    inc ax
+.out:
+    xor dx, dx
+    ret
+
+; midiOutGetDevCaps (MMSYSTEM.202) - args: +0 wSize, +2 lpCaps, +6 wDeviceID:
+; a MIDIOUTCAPS, 50 bytes. 0, or MMSYSERR_BADDEVICEID
+W16SYS w16mm_mocaps
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 6]
+    call w16mm_mdev                 ; AX = why not
+    jc .out
+    mov cx, [es:bx]                 ; CX = what the program has room for
+    cmp cx, 50
+    jbe .sz
+    mov cx, 50
+.sz:
+    les di, [es:bx + 2]
+    push cx
+    push di
+    xor al, al                      ; the struct zero, then filled
+    cld
+    rep stosb
+    pop di
+    pop cx
+    cmp cx, 38                      ; wMid, wPid, vDriverVersion, szPname
+    jb .ok
+    mov word [es:di], 1             ; MM_MICROSOFT, MM_MPU401_MIDIOUT
+    mov word [es:di + 2], 10
+    mov word [es:di + 4], 0x0100
+    push di
+    add di, 6
+    mov si, w16mm_s_mpu             ; XSEC-OK: the part's string, read at cs:
+.nm:
+    cs lodsb
+    stosb
+    or al, al
+    jnz .nm
+    pop di
+    cmp cx, 46                      ; wTechnology, wVoices, wNotes,
+    jb .ok                          ;   wChannelMask
+    mov byte [es:di + 38], 1        ; MOD_MIDIPORT
+    mov word [es:di + 44], 0xFFFF   ; all sixteen
+.ok:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+w16mm_s_mpu: db 'os8088 MPU-401', 0
+
+; midiOutOpen (MMSYSTEM.204) - args: +0 dwFlags, +4 dwInstance, +8
+; dwCallback, +12 wDeviceID, +14 lphMidiOut: the interface taken (SNDV_MIDOPEN)
+; and MM_MOM_OPEN. 0 and the HMIDIOUT, or why not
+W16SYS w16mm_moopen
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 12]
+    call w16mm_mdev
+    jc .out
+    mov ax, MMSYSERR_ALLOCATED
+    cmp word [w16mm_mo], 0
+    jne .out
+    mov si, [es:bx + 8]             ; DI:SI = dwCallback
+    mov di, [es:bx + 10]
+    mov cl, [es:bx + 2]
+    and cl, 7
+    call w16mm_cbfn                 ; CALLBACK_FUNCTION's block
+    jc .out
+    push word [es:bx + 6]           ; dwInstance
+    push word [es:bx + 4]
+    call w16mm_momake               ; ES = the state, AX = the handle
+    pop si
+    pop di
+    jc .out
+    mov [es:W16MM_INST], si
+    mov [es:W16MM_INST + 2], di
+    push es
+    push ax
+    ICALL w16_args
+    les di, [es:bx + 14]
+    mov cx, es
+    or cx, di
+    pop ax
+    jz .nop
+    mov [es:di], ax
+.nop:
+    pop es
+    mov ax, MM_MOM_OPEN
+    call w16mm_monote0
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; midiOutClose (MMSYSTEM.205) - args: +0 hMidiOut: MM_MOM_CLOSE, and the
+; interface given back, every note off. 0
+W16SYS w16mm_moclose
+    call w16mm_marg1
+    jc .out
+    mov ax, MM_MOM_CLOSE
+    call w16mm_monote0
+    call w16mm_mokill
+    xor ax, ax
+.out:
+    xor dx, dx
+    ret
+
+; midiOutPrepareHeader, midiOutUnprepareHeader (MMSYSTEM.206, 207) - args +0
+; wSize, +2 lpMidiOutHdr, +6 hMidiOut: waveOut's (w16mm_prep, w16mm_unprep).
+; A long message is sent before it returns, so a block is never queued
+W16SYS w16mm_moprep
+    call w16mm_margh
+    jmp w16mm_prep
+W16SYS w16mm_mounprep
+    call w16mm_margh
+    jmp w16mm_unprep
+
+; midiOutShortMsg (MMSYSTEM.208) - args: +0 dwMsg, +4 hMidiOut: the status and
+; the data bytes it carries, or under the running status the data bytes
+; alone. 0, or MIDIERR_NOTREADY
+W16SYS w16mm_moshort
+    push si
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    mov cx, [es:bx]                 ; CL = the status, CH and DL its data
+    mov dx, [es:bx + 2]
+    call w16mm_margs
+    jc .out
+    mov si, w16_scratch
+    mov [si], cx
+    mov [si + 2], dl
+    mov al, cl
+    or al, al
+    js .st
+    mov al, [es:MO_RUN]             ; running status: CL is the first datum
+    or al, al
+    jz .ok                          ;   (none: nothing to send)
+    call w16mm_mlen
+    jmp short .n
+.st:
+    call w16mm_mlen                 ; AH = the data bytes
+    inc ah                          ;   and the status
+    cmp al, 0xF0
+    jae .sys
+    mov [es:MO_RUN], al             ; a channel's: running status from here
+    jmp short .n
+.sys:
+    cmp al, 0xF8                    ; system common ends it; real time leaves
+    jae .n                          ;   it be
+    mov byte [es:MO_RUN], 0
+.n:
+    mov cl, ah
+    xor ch, ch
+    call w16mm_msend                ; AX = 0, or why not
+    jmp short .out
+.ok:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop si
+    ret
+
+; midiOutLongMsg (MMSYSTEM.209) - args: +0 wSize, +2 lpMidiOutHdr, +6
+; hMidiOut: dwBufferLength bytes sent, 16 at a time through w16_scratch, then
+; MHDR_DONE and MM_MOM_DONE. 0, MIDIERR_UNPREPARED or MIDIERR_NOTREADY
+W16SYS w16mm_molong
+    push si
+    push di
+    push bp
+    call w16mm_margh                ; DX:CX = the header
+    jc .ret
+    push ds
+    mov ds, dx
+    mov si, cx
+    mov ax, MIDIERR_UNPREPARED
+    test byte [si + MH_FLAGS], MHDR_PREPARED
+    jz .nprep
+    and byte [si + MH_FLAGS], ~MHDR_DONE & 0xFF
+    mov bp, [si + MH_LEN]           ; BP = how many
+    cmp word [si + MH_LEN + 2], 0
+    je .len
+    mov bp, 0xFFFF                  ; (one selector's worth at most)
+.len:
+    mov di, [si + MH_DATA]          ; BX:DI = the bytes
+    mov bx, [si + MH_DATA + 2]
+    pop ds
+    push dx                         ; [the header]
+    push cx
+    mov dx, di                      ; BX:DX = the bytes
+.lp:
+    mov cx, 16
+    cmp bp, cx
+    jae .c
+    mov cx, bp
+.c:
+    jcxz .done
+    sub bp, cx
+    push es                         ; [the state]
+    push cx
+    push ds
+    pop es                          ; ES:DI = w16_scratch, in WIN16's segment
+    mov di, w16_scratch
+    mov si, dx
+    push ds
+    mov ds, bx
+    cld
+    rep movsb
+    pop ds
+    mov dx, si                      ; past them
+    pop cx
+    mov si, w16_scratch
+    call w16mm_msend                ; AX = 0, or why not
+    pop es
+    or ax, ax
+    jz .lp
+    add sp, 4                       ; (the header: not done)
+    jmp short .ret
+.done:
+    pop cx                          ; DX:CX = the header
+    pop dx
+    push ds
+    mov ds, dx
+    mov si, cx
+    or byte [si + MH_FLAGS], MHDR_DONE
+    pop ds
+    mov ax, MM_MOM_DONE
+    call w16mm_monote
+    xor ax, ax
+    jmp short .ret
+.nprep:
+    pop ds
+.ret:
+    xor dx, dx
+    pop bp
+    pop di
+    pop si
+    ret
+
+; midiOutReset (MMSYSTEM.210) - args: +0 hMidiOut: the interface given back
+; and taken again, which turns every note off and resets every controller. 0
+W16SYS w16mm_moreset
+    call w16mm_marg1
+    jc .out
+    push bx
+    mov bl, SNDV_MIDCLOSE
+    call w16mm_mpu
+    mov bl, SNDV_MIDOPEN
+    call w16mm_mpu
+    pop bx
+    xor ax, ax
+    mov [es:MO_RUN], al
+.out:
+    xor dx, dx
+    ret
+
+; midiOutGetID (MMSYSTEM.215) - args: +0 lpuDeviceID, +4 hMidiOut: 0, the one
+; device
+W16SYS w16mm_moid
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    push es
+    call w16mm_most
+    pop es
+    mov ax, MMSYSERR_INVALHANDLE
+    jc .out
+    les di, [es:bx]
+    mov word [es:di], 0
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    ret
+
+; w16mm_momake - CL = the callback's kind, DI:SI = dwCallback: the interface
+; taken and an HMIDIOUT made. CF=0 ES = its state, AX = its handle, and it is
+; [w16mm_mo]; CF=1 AX = MMSYSERR_ALLOCATED (another package's) or
+; MMSYSERR_NOMEM. Keeps BX, CX, DX
+w16mm_momake:
+    push bx
+    push cx
+    push dx
+    mov bl, SNDV_MIDOPEN
+    call w16mm_mpu
+    mov bx, MMSYSERR_ALLOCATED
+    jc .no
+    push cx
+    mov ax, MO_LEN
+    xor dx, dx
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle, DX = the block
+    pop cx
+    or ax, ax
+    jnz .made
+    mov bl, SNDV_MIDCLOSE
+    call w16mm_mpu
+    mov bx, MMSYSERR_NOMEM
+.no:
+    mov ax, bx
+    stc
+    jmp short .out
+.made:
+    W16SEG es, dx
+    mov word [es:MO_SIG], W16MM_OSIG
+    mov [es:MO_SELF], ax
+    mov [es:MO_CBT], cl
+    mov [es:MO_CB], si
+    mov [es:MO_CB + 2], di
+    mov [w16mm_mo], ax
+    clc
+.out:
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16mm_mokill - ES = the state: the interface given back, the state freed.
+; No notice. Keeps all but ES
+w16mm_mokill:
+    push ax
+    push bx
+    mov bl, SNDV_MIDCLOSE
+    call w16mm_mpu
+    mov word [es:MO_SIG], 0         ; never an HMIDIOUT again
+    mov ax, [es:MO_SELF]
+    ICALL w16_gfreeh
+    mov word [w16mm_mo], 0
+    pop bx
+    pop ax
+    ret
+
+; w16mm_monote0 - AX = MM_MOM_*, ES = the state: w16mm_monote with lParam 0.
+; w16mm_monote - DX:CX its lParam: w16mm_wnote's, and the tick asked for, so a
+; procedure's call is made where the program waits. Keeps all
+w16mm_monote0:
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+    call w16mm_monote
+    pop dx
+    pop cx
+    ret
+w16mm_monote:
+    call w16mm_wnote
+    ICALL w16_tarm
+    ret
+
+; w16mm_mlen - AL = a status byte -> AH = the data bytes it carries. Keeps
+; the rest
+w16mm_mlen:
+    mov ah, 2                       ; notes, aftertouch, controllers, the wheel
+    cmp al, 0xC0
+    jb .r
+    cmp al, 0xE0
+    jae .e
+    dec ah                          ; a program, channel pressure: 1
+    ret
+.e:
+    cmp al, 0xF0
+    jb .r
+    cmp al, 0xF2                    ; the song position: 2
+    je .r
+    dec ah
+    cmp al, 0xF1                    ; the time code, the song: 1
+    je .r
+    cmp al, 0xF3
+    je .r
+    dec ah                          ; the rest: none
+.r:
+    ret
+
+; w16mm_msend - DS:SI -> CX bytes in WIN16's own segment: sent (SNDV_MIDW).
+; AX = 0, or MIDIERR_NOTREADY when the interface stopped taking them. Keeps
+; the rest
+w16mm_msend:
+    push bx
+    mov bl, SNDV_MIDW
+    call w16mm_mpu
+    mov ax, 0
+    jnc .r
+    mov al, MIDIERR_NOTREADY
+.r:
+    pop bx
+    ret
+
+; w16mm_mdev - AX = a device ID: CF=0 it is device 0 or MIDI_MAPPER and an
+; MPU-401 answers; CF=1 AX = MMSYSERR_BADDEVICEID. Keeps the rest
+w16mm_mdev:
+    inc ax
+    cmp ax, 2                       ; 0, or MIDI_MAPPER (-1)
+    jae .no
+    call w16mm_mhas
+    jnc .r
+.no:
+    mov ax, MMSYSERR_BADDEVICEID
+    stc
+.r:
+    ret
+
+; w16mm_mhas - CF=0 SOUND.DRV is loaded and an MPU-401 answered it. Keeps
+; all but AX
+w16mm_mhas:
+    push bx
+    mov bl, SNDV_IDENT
+    call w16mm_mpu
+    jc .r
+    cmp ax, SND_SIG
+    stc
+    jne .r
+    mov bl, SNDV_MIDINFO
+    call w16mm_mpu
+.r:
+    pop bx
+    ret
+
+; w16mm_mpu - BL = an SNDV_* verb, CX and SI as it takes them:
+; OSAPI_DRV_CALL to SOUND.DRV. Answers in AX and CF (CF=1 AX = 0: none
+; loaded). Keeps the rest
+w16mm_mpu:
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov bh, DRVC_SOUND
+    call OSAPI_DRV_CALL
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16mm_marg1 - the argument hMidiOut, at +0: CF=0 ES = its state; CF=1 AX =
+; MMSYSERR_INVALHANDLE. w16mm_margh: +0 wSize, +2 a far pointer, +6
+; hMidiOut, and DX:CX = the pointer. w16mm_margs: AX = the handle. Keeps the
+; rest
+w16mm_marg1:
+    push bx
+    ICALL w16_args
+    mov ax, [es:bx]
+    pop bx
+    jmp short w16mm_margs
+w16mm_margh:
+    push bx
+    ICALL w16_args
+    mov cx, [es:bx + 2]
+    mov dx, [es:bx + 4]
+    mov ax, [es:bx + 6]
+    pop bx
+    or dx, dx
+    jnz w16mm_margs
+    mov ax, MMSYSERR_INVALPARAM
+    stc
+    ret
+w16mm_margs:
+    call w16mm_most
+    jnc .ret
+    mov ax, MMSYSERR_INVALHANDLE
+.ret:
+    ret
+
+; w16mm_most - AX = an HMIDIOUT -> ES = its state, CF=0; CF=1 it is not the
+; one open. Keeps all but ES
+w16mm_most:
+    or ax, ax
+    jz .no
+    cmp ax, [w16mm_mo]
+    jne .no
+    W16SEG es, ax                   ; a fixed block: its handle is its place
+    cmp word [es:MO_SIG], W16MM_OSIG
+    jne .no
+    clc
+    ret
 .no:
     stc
     ret
