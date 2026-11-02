@@ -3707,3 +3707,44 @@ One mistake of my own also turned up. The half-duplex test went into
 `w16mm_wmake` ahead of the line that saves its format. That clobbered AL and
 AH and failed twelve of MMTEST's checks. Looking at the neighbouring
 fixtures, not only the new one, is what caught it.
+
+## 2026-11-01: S23 batch 4, timeSetEvent and CALLBACK_FUNCTION
+
+Windows 3.x calls a `timeSetEvent` procedure, and a wave device's
+`CALLBACK_FUNCTION`, at interrupt time, whatever the program is doing. WIN16
+enters a program only where it waits in an import (§124.2.2). An
+interrupt-time callback could do almost nothing but `PostMessage`, so the
+place a Windows 3.x program can rely on is where it waits for messages. That
+is where WIN16 makes these calls.
+
+**The shape.** One block in the program's heap holds:
+- eight event rows;
+- a queue of eight owed calls;
+- a flag that says a call is running.
+
+A row and a queued call are the same sixteen bytes: the procedure and its
+first four arguments. The fifth argument is always 0. Each waits for one of
+three moments:
+- `GetMessage` before it looks for a message;
+- the tick while `GetMessage` waits;
+- `PeekMessage`'s answer, which is already a wait for one UI pass.
+
+Each moment makes one call through the continuation machinery. The owner-drawn
+items already use that path from the same three places (`w16_odgo`). When the
+procedure returns, the import asks again, so every owed call comes before the
+next message. Three short hooks in USER's message code reach part 9, and
+nothing else in the image changed.
+
+**Seen** on the dev kern_mega with an SB16: "tmtest: 0 wrong, periodic 15,
+waited 198 ms, wave 1/1/1, in 1/2/1":
+- a 50 ms periodic event and a 150 ms one-shot, met in a PeekMessage loop;
+- the periodic one again while `GetMessage` waits, its third call posting
+  the message that ends the wait;
+- a killed event that calls no more;
+- waveOut's open, done and close notices, and waveIn's open, two data and
+  close notices, each delivered to a procedure with the open's
+  `dwInstance`.
+
+The first look counted the GetMessage leg too strictly. A call that is
+already due when the third one returns is made before the posted message, by
+design, so the fixture now allows one or two more.

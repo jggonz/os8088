@@ -1541,7 +1541,8 @@ WO_COFF     equ 48                  ;   how far into it
 WO_LOOPS    equ 52                  ;   passes of it still to copy
 WO_SNDH     equ 56                  ; sndPlaySound's block, 0 none
 WO_HDR      equ 58                  ; sndPlaySound's WAVEHDR, 32 bytes
-WO_SIL      equ 90                  ; W16MM_SILN bytes of silence
+W16MM_INST  equ 90                  ; dwInstance, waveIn's too (124.32.6)
+WO_SIL      equ 94                  ; W16MM_SILN bytes of silence
 WO_LEN      equ WO_SIL + W16MM_SILN
 WOF_PAUSE   equ 1
 WOF_DEAD    equ 2                   ; the stream would not open: nothing plays
@@ -1596,8 +1597,16 @@ W16SYS w16mm_woopen
     mov di, [es:bx + 10]
     mov cl, [es:bx + 2]             ; CL = its kind
     and cl, 7
-    call w16mm_wmake                ; ES = the state, AX = the handle
+    call w16mm_cbfn                 ; CALLBACK_FUNCTION's block
     jc .out
+    push word [es:bx + 6]           ; dwInstance
+    push word [es:bx + 4]
+    call w16mm_wmake                ; ES = the state, AX = the handle
+    pop si
+    pop di
+    jc .out
+    mov [es:W16MM_INST], si
+    mov [es:W16MM_INST + 2], di
     push es
     push ax
     ICALL w16_args
@@ -1902,7 +1911,7 @@ WI_HEAD     equ 16                  ; the queue: its first block
 WI_CB       equ 20                  ; dwCallback (WO_CB's place)
 WI_POS      equ 24                  ; bytes captured since the open or a reset
 WI_TAIL     equ 28                  ; the queue's last block
-WI_LEN      equ 32
+WI_LEN      equ W16MM_INST + 4      ; ...and dwInstance where waveOut's is
 WIF_START   equ 1
 W16MM_ISIG  equ 0x4957
 W16MM_IRL   equ 16384               ; the ring, RL's code 2
@@ -1944,8 +1953,16 @@ W16SYS w16mm_wiopen
     mov di, [es:bx + 10]
     mov cl, [es:bx + 2]
     and cl, 7
-    call w16mm_wimake               ; ES = the state, AX = the handle
+    call w16mm_cbfn                 ; CALLBACK_FUNCTION's block
     jc .out
+    push word [es:bx + 6]           ; dwInstance
+    push word [es:bx + 4]
+    call w16mm_wimake               ; ES = the state, AX = the handle
+    pop si
+    pop di
+    jc .out
+    mov [es:W16MM_INST], si
+    mov [es:W16MM_INST + 2], di
     push es
     push ax
     ICALL w16_args
@@ -2629,6 +2646,10 @@ w16mm_wtick:
 .mci:
     call w16mm_mtick                ; AL = 1 while a device plays
     or [w16mm_wq], al
+    call w16mm_tlive                ; an event armed or a call owed: the
+    jc .in                          ;   tick goes on (124.32.6)
+    mov byte [w16mm_wq], 1
+.in:
     mov ax, [w16mm_wi]              ; waveIn's copy while it is started
     call w16mm_wist
     jc .out
@@ -2659,6 +2680,7 @@ w16mm_wend:
     xor ax, ax
     mov [w16mm_wo], ax
     mov [w16mm_wi], ax
+    mov [w16mm_tev], ax             ; the calls' block goes with the heap
     mov [w16mm_wq], ax
     mov [w16mm_mci], ax             ; MCI's block goes with the arenas
     pop es
@@ -2916,7 +2938,7 @@ w16mm_wnote:
     cmp bl, 1                       ; CALLBACK_WINDOW
     jb .out
     cmp bl, 2                       ; CALLBACK_TASK
-    ja .out
+    ja .fn
     mov [w16_sm_msg], ax
     mov ax, [es:WO_SELF]
     mov [w16_sm_wp], ax
@@ -2942,6 +2964,11 @@ w16mm_wnote:
     jc .out
     mov al, dl
     call w16t_qpost
+    jmp short .out
+.fn:
+    cmp bl, 3                       ; CALLBACK_FUNCTION: owed (124.32.6)
+    jne .out
+    call w16mm_tq
 .out:
     pop es
     pop si
@@ -3708,6 +3735,404 @@ w16mm_sfind:
     jmp short .lp
 .no:
     stc
+    ret
+
+; =============================================================================
+; timeSetEvent and CALLBACK_FUNCTION (124.32.6): calls owed to the program,
+; made where it waits for a message. One fixed block of the program's heap,
+; [w16mm_tev]: eight event rows, a queue of eight calls, and a flag while
+; one runs. A row and a call are the same sixteen bytes - the procedure and
+; its first four arguments; the fifth is always 0.
+; =============================================================================
+
+TV_BUSY     equ 0                   ; 1 while a call runs
+TV_QN       equ 1                   ; calls queued
+TV_QH       equ 2                   ; ...the first of them
+TV_NEXTID   equ 4                   ; the last event ID handed out
+TV_Q        equ 6                   ; the queue, TV_NQ calls
+TV_NQ       equ 8
+TV_T        equ TV_Q + TV_NQ * 16   ; the events, TV_NT rows
+TV_NT       equ 8
+TV_LEN      equ TV_T + TV_NT * TT_SIZE
+TC_PROC     equ 0                   ; a call: the procedure,
+TC_W1       equ 4                   ;   its UINTs,
+TC_W2       equ 6
+TC_USER     equ 8                   ;   dwUser (dwInstance),
+TC_DW1      equ 12                  ;   and dw1
+TT_DUE      equ 16                  ; an event: a call, and when it is due,
+TT_PER      equ 20                  ;   its delay,
+TT_FL       equ 22                  ;   TTF_*
+TT_SIZE     equ 24
+TTF_USED    equ 1
+TTF_PER     equ 2                   ; TIME_PERIODIC
+TIMERR_NOCANDO  equ 97
+
+section .text
+; w16_mmre / w16_mmowed - AL = 0 for GetMessage, 1 for PeekMessage: a call
+; owed by MMSYSTEM made (124.32.6), the import asked again after it. w16_mmre
+; first makes the import that waits current again (w16_reidx), for a call
+; from a callback. CF=0 made, and the gate enters it; CF=1 none
+w16_mmre:
+    cmp word [w16mm_tev], 0
+    stc
+    je w16_mmowed.ret
+    push ax
+    call w16_reidx
+    pop ax
+w16_mmowed:
+    cmp word [w16mm_tev], 0
+    stc
+    je .ret
+    SCALL w16mm_tsend
+.ret:
+    ret
+
+; w16mm_tback - a call made by w16mm_tsend has returned, CX = the import's
+; kind: the next may start, and the import asks again
+SCONT w16mm_tback
+    push es
+    call w16mm_tes
+    jc .k
+    mov byte [es:TV_BUSY], 0
+.k:
+    pop es
+    cmp cl, 1
+    je .peek
+    ICALL w16u_getmsg
+    ret
+.peek:
+    ICALL w16u_peekmsg
+    ret
+
+; timeSetEvent (MMSYSTEM.602) - args: +0 uFlags, +2 dwUser, +6 lpFunction,
+; +10 uResolution, +12 uDelay: the event's ID, or 0
+W16SYS w16mm_tset
+    push si
+    push di
+    ICALL w16_args
+    xor ax, ax
+    mov cx, [es:bx + 12]            ; CX = the delay
+    mov si, [es:bx + 6]             ; DI:SI = the procedure
+    mov di, [es:bx + 8]
+    mov dx, si
+    or dx, di
+    jz .no
+    jcxz .no
+    call w16mm_tget
+    jnc .go
+.no:
+    jmp .out
+.go:
+    push word [es:bx + 4]           ; dwUser
+    push word [es:bx + 2]
+    mov dl, [es:bx]                 ; DL = the flags
+    call w16mm_tes
+    mov bx, TV_T
+    mov ax, TV_NT
+.f:
+    test byte [es:bx + TT_FL], TTF_USED
+    jz .free
+    add bx, TT_SIZE
+    dec ax
+    jnz .f
+    add sp, 4                       ; a ninth: 0
+    jmp short .out
+.free:
+    pop word [es:bx + TC_USER]
+    pop word [es:bx + TC_USER + 2]
+    mov [es:bx + TC_PROC], si
+    mov [es:bx + TC_PROC + 2], di
+    mov [es:bx + TT_PER], cx
+    and dl, 1                       ; TIME_PERIODIC
+    shl dl, 1
+    or dl, TTF_USED
+    mov [es:bx + TT_FL], dl
+    xor ax, ax
+    mov [es:bx + TC_W2], ax
+    mov [es:bx + TC_DW1], ax
+    mov [es:bx + TC_DW1 + 2], ax
+.id:
+    inc word [es:TV_NEXTID]         ; never 0
+    jz .id
+    call w16mm_now                  ; DX:AX: due a delay from now
+    add ax, cx
+    adc dx, 0
+    mov [es:bx + TT_DUE], ax
+    mov [es:bx + TT_DUE + 2], dx
+    mov ax, [es:TV_NEXTID]
+    mov [es:bx + TC_W1], ax
+    mov byte [w16mm_wq], 1          ; the tick looks
+    ICALL w16_tarm
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; timeKillEvent (MMSYSTEM.603) - args: +0 wID: 0, or TIMERR_NOCANDO
+W16SYS w16mm_tkill
+    ICALL w16_args
+    mov dx, [es:bx]
+    mov ax, TIMERR_NOCANDO
+    call w16mm_tes
+    jc .out
+    mov bx, TV_T
+    mov cx, TV_NT
+.f:
+    test byte [es:bx + TT_FL], TTF_USED
+    jz .n
+    cmp [es:bx + TC_W1], dx
+    jne .n
+    mov byte [es:bx + TT_FL], 0
+    xor ax, ax
+    jmp short .out
+.n:
+    add bx, TT_SIZE
+    loop .f
+.out:
+    xor dx, dx
+    ret
+
+; w16mm_tsend - AL = the import's kind (0 GetMessage, 1 PeekMessage), the
+; import current: the first call owed - a device's queued, else a due event's
+; - begun (w16_cbopen, its arguments, w16_cbcall), w16mm_tback continuing.
+; CF=0 begun; CF=1 none, or one runs already. Keeps BX, CX, DX, SI, DI, ES
+w16mm_tsend:
+    ; STKBALANCE-LOOP: the call's eight words are pushed once and the loop
+    ; below pops six of them into the program's stack, the last two after it
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov bl, al
+    call w16mm_tes
+    jc .none
+    test byte [es:TV_BUSY], 1
+    jnz .none
+    cmp byte [es:TV_QN], 0
+    jne .q
+    call w16mm_tdue                 ; DI = a due event, CF=1 none
+    jc .none
+    jmp short .go
+.q:
+    mov al, [es:TV_QH]
+    call w16mm_tqat                 ; DI = the call
+    inc al
+    and al, TV_NQ - 1
+    mov [es:TV_QH], al
+    dec byte [es:TV_QN]
+.go:
+    mov byte [es:TV_BUSY], 1
+    push word [es:di + TC_PROC + 2] ; its words, in the order they are
+    push word [es:di + TC_PROC]     ;   pushed for it below
+    push word [es:di + TC_DW1]
+    push word [es:di + TC_DW1 + 2]
+    push word [es:di + TC_USER]
+    push word [es:di + TC_USER + 2]
+    push word [es:di + TC_W2]
+    push word [es:di + TC_W1]
+    mov al, bl
+    xor ah, ah
+    mov si, w16mm_tback_c
+    xor cx, cx
+    ICALL w16_cbopen
+    mov cx, 6                       ; pascal, the first first: two UINTs,
+.a:                                 ;   dwUser, dw1...
+    pop ax
+    ICALL w16_ppush
+    loop .a
+    xor ax, ax                      ; ...and dw2, 0
+    ICALL w16_ppush
+    ICALL w16_ppush
+    pop ax
+    pop dx
+    ICALL w16_cbcall                ; DS its own, as DriverCallback's
+    clc
+    jmp short .out
+.none:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16mm_tdue - ES = the block: DI = the first event due now, rescheduled (a
+; periodic one) or freed (a one-shot one, whose words stay until it is
+; called); CF=1 none. Clobbers AX, CX, DX
+w16mm_tdue:
+    call w16mm_now                  ; DX:AX = now
+    mov di, TV_T
+    mov cx, TV_NT
+.f:
+    test byte [es:di + TT_FL], TTF_USED
+    jz .n
+    push ax
+    push dx
+    sub ax, [es:di + TT_DUE]
+    sbb dx, [es:di + TT_DUE + 2]
+    pop dx
+    pop ax
+    jns .due
+.n:
+    add di, TT_SIZE
+    loop .f
+    stc
+    ret
+.due:
+    test byte [es:di + TT_FL], TTF_PER
+    jnz .per
+    mov byte [es:di + TT_FL], 0
+    clc
+    ret
+.per:
+    push ax
+    push dx
+    mov cx, [es:di + TT_PER]
+    add [es:di + TT_DUE], cx
+    adc word [es:di + TT_DUE + 2], 0
+    sub ax, [es:di + TT_DUE]
+    sbb dx, [es:di + TT_DUE + 2]
+    pop dx
+    pop ax
+    js .ok                          ; due again later
+    add ax, cx                      ; a period behind: from now
+    adc dx, 0
+    mov [es:di + TT_DUE], ax
+    mov [es:di + TT_DUE + 2], dx
+.ok:
+    clc
+    ret
+
+; w16mm_tq - ES = a device's state opened with CALLBACK_FUNCTION, AX = the
+; notice, DX:CX = its lParam: the call queued (124.32.6) and the tick asked
+; for; a ninth is lost. Keeps all
+w16mm_tq:
+    push ax
+    push di
+    push es
+    push dx                         ; dw1
+    push cx
+    push word [es:W16MM_INST + 2]   ; dwInstance
+    push word [es:W16MM_INST]
+    push ax                         ; the notice
+    push word [es:WO_SELF]          ; the handle
+    push word [es:WO_CB + 2]        ; the procedure
+    push word [es:WO_CB]
+    call w16mm_tes
+    jc .drop
+    mov al, [es:TV_QN]
+    cmp al, TV_NQ
+    jae .drop
+    add al, [es:TV_QH]
+    and al, TV_NQ - 1
+    call w16mm_tqat
+    pop word [es:di + TC_PROC]
+    pop word [es:di + TC_PROC + 2]
+    pop word [es:di + TC_W1]
+    pop word [es:di + TC_W2]
+    pop word [es:di + TC_USER]
+    pop word [es:di + TC_USER + 2]
+    pop word [es:di + TC_DW1]
+    pop word [es:di + TC_DW1 + 2]
+    inc byte [es:TV_QN]
+    mov byte [w16mm_wq], 1
+    jmp short .out
+.drop:
+    add sp, 16
+.out:
+    pop es
+    pop di
+    pop ax
+    ret
+
+; w16mm_tqat - AL = a queue slot: DI = its call. Keeps the rest
+w16mm_tqat:
+    push ax
+    push cx
+    xor ah, ah
+    mov di, ax
+    mov cl, 4
+    shl di, cl
+    add di, TV_Q
+    pop cx
+    pop ax
+    ret
+
+; w16mm_tlive - CF=0 an event is armed or a call is queued: the tick keeps
+; looking. Keeps all
+w16mm_tlive:
+    push es
+    push di
+    push cx
+    call w16mm_tes
+    jc .out
+    cmp byte [es:TV_QN], 0
+    jne .yes
+    mov di, TV_T + TT_FL
+    mov cx, TV_NT
+.f:
+    test byte [es:di], TTF_USED
+    jnz .yes
+    add di, TT_SIZE
+    loop .f
+    stc
+    jmp short .out
+.yes:
+    clc
+.out:
+    pop cx
+    pop di
+    pop es
+    ret
+
+; w16mm_tget - the block made if it is not yet. CF=1 no memory. Keeps all
+w16mm_tget:
+    cmp word [w16mm_tev], 0
+    jne .ok
+    push ax
+    push cx
+    push dx
+    mov ax, TV_LEN
+    xor dx, dx
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle
+    mov [w16mm_tev], ax
+    pop dx
+    pop cx
+    cmp ax, 1                       ; CF=1: 0, none
+    pop ax
+    ret
+.ok:
+    clc
+    ret
+
+; w16mm_cbfn - CL = an open's callback kind: CALLBACK_FUNCTION's block made
+; first (124.32.6). CF=1 AX = MMSYSERR_NOMEM. Keeps the rest
+w16mm_cbfn:
+    cmp cl, 3
+    clc
+    jne .ret
+    call w16mm_tget
+    jnc .ret
+    mov ax, MMSYSERR_NOMEM
+.ret:
+    ret
+
+; w16mm_tes - ES = the block; CF=1 there is none. Keeps the rest
+w16mm_tes:
+    push ax
+    mov ax, [w16mm_tev]
+    cmp ax, 1
+    jc .out
+    W16SEG es, ax                   ; a fixed block: its handle is its place
+.out:
+    pop ax
     ret
 
 section .text

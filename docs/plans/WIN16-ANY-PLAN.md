@@ -1531,6 +1531,15 @@ its table goes in the diary, so the reach is measured, not claimed.
         as 124.32.5 says. Recording real sound is a 86Box `386-sound` (or
         hardware) look. MMTEST and MCITEST still 0 wrong. Arm: 238 bytes
         of room.
+      - [x] `timeSetEvent` and `CALLBACK_FUNCTION` (124.32.6): eight
+        events and a queue of eight owed calls in one block of the program's
+        heap, called where the program waits for a message (GetMessage, its
+        wait, PeekMessage's answer); waveOut and waveIn notices go to a
+        procedure with the open's `dwInstance`. New fixture `TMTEST.EXE`.
+        **Seen 2026-11-01 on a dev kern_mega with an SB16:** "tmtest: 0
+        wrong, periodic 15, waited 198 ms, wave 1/1/1, in 1/2/1"; without a
+        card the timer half alone, 0 wrong. MMTEST, MCITEST and WITEST are
+        still 0 wrong. Arm: 147 bytes of room.
       - **Found on the way, and not waveIn's:** on kern_mega with
         `SOUND.DRV` loaded, any WIN16 program whose first MessageBox comes
         two seconds after the last disk read dies. A probe that waits and

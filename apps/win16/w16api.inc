@@ -525,6 +525,8 @@ W16EXPORT W16M_KERNEL,     198,     2,  w16k_lockseg        ; GlobalUnfix(word)
 ; MMSYSTEM (124.32), the arm's alone: the clock, the devices and mmio
 W16EXPORT W16M_MMSYSTEM,   5,       0,  w16mm_ver            ; mmsystemGetVersion()
 W16EXPORT W16M_MMSYSTEM,   601,     6,  w16mm_systime        ; timeGetSystemTime(ptr word)
+W16EXPORT W16M_MMSYSTEM,   602,     14, w16mm_tset           ; timeSetEvent(word word segptr long word)
+W16EXPORT W16M_MMSYSTEM,   603,     2,  w16mm_tkill          ; timeKillEvent(word)
 W16EXPORT W16M_MMSYSTEM,   604,     6,  w16mm_tcaps          ; timeGetDevCaps(ptr word)
 W16EXPORT W16M_MMSYSTEM,   605,     2,  w16mm_period         ; timeBeginPeriod(word)
 W16EXPORT W16M_MMSYSTEM,   606,     2,  w16mm_period         ; timeEndPeriod(word)

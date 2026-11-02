@@ -1843,6 +1843,11 @@ w16u_getmsg:
     LCALL w16_odgo
     jnc .ret
 .msg:
+%ifdef PKG_MEGA
+    xor al, al                      ; MMSYSTEM's calls owed: made, and this
+    call w16_mmowed                 ;   comes back (SPEC.md 124.32.6)
+    jnc .ret
+%endif
     mov al, 1
     call w16_nextmsg
     jc .wait
@@ -1909,6 +1914,15 @@ w16_peekwake:
     call w16_resumecb
     jmp w16_after
 .msg:
+%ifdef PKG_MEGA
+    mov al, 1                       ; MMSYSTEM's calls owed, likewise
+    mov byte [w16_locked], 0        ;   (SPEC.md 124.32.6)
+    call w16_mmre
+    jc .mm
+    call w16_resumecb
+    jmp w16_after
+.mm:
+%endif
     call w16_peekmsg
     xor dx, dx
     mov byte [w16_locked], 0
@@ -1932,6 +1946,15 @@ w16_kick:
     call w16_resumecb
     ret
 .msg:
+%ifdef PKG_MEGA
+    xor al, al                      ; MMSYSTEM's calls owed, likewise
+    call w16_mmre                   ;   (SPEC.md 124.32.6)
+    jc .mm
+    mov byte [w16_inget], 0
+    call w16_resumecb
+    ret
+.mm:
+%endif
     mov al, 1
     call w16_nextmsg
     jc .out

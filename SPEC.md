@@ -231032,7 +231032,8 @@ stream.
 - `waveOutGetDevCaps` and `waveInGetDevCaps` describe device 0:
   - name: `os8088 Sound`;
   - `dwFormats`: 8-bit mono at 11, 22 and (with `SND_CAP_PCM_HI`) 44 kHz;
-    stereo with `SND_CAP_STEREO`; 16-bit with `SND_CAP_PCM16`;
+    stereo with `SND_CAP_STEREO`; 16-bit with `SND_CAP_PCM16`. For input,
+    8-bit mono at 11 kHz alone (§124.32.5);
   - one channel, or two with `SND_CAP_STEREO`;
   - no `dwSupport` bits.
   A bad device answers `MMSYSERR_BADDEVICEID` (2).
@@ -231127,8 +231128,8 @@ One output device, device 0 (`WAVE_MAPPER` is the same one), over
     `MM_WOM_CLOSE` (3BCh) likewise;
   - `CALLBACK_TASK`: the same messages posted to the task's queue with no
     window;
-  - `CALLBACK_FUNCTION`: accepted, and nothing called until batch 4. The
-    block's flags still say when it is done.
+  - `CALLBACK_FUNCTION`: the procedure is called where the program waits
+    for a message (§124.32.6).
 - **One block's loop**: a block with both `WHDR_BEGINLOOP` and
   `WHDR_ENDLOOP` is copied `dwLoops` times; `waveOutBreakLoop` makes the
   pass being copied its last. A loop over several blocks plays once.
@@ -231381,7 +231382,56 @@ under two seconds, and Sound Recorder records up to a minute.
   freed, so the card never writes into memory that is no longer the ring.
 - `waveaudio` still records nothing: its `record` is not a command here.
 
-#### 124.32.6 Planned *(S23 batch 4)*
+#### 124.32.6 `timeSetEvent` and `CALLBACK_FUNCTION` *(S23 batch 4)*
 
-`timeSetEvent`, `CALLBACK_FUNCTION`'s call, and `midiOut` where `SOUND.DRV`
-has an MPU-401 (§34.13). SOUNDREC and MPLAYER are its look.
+Windows 3.x calls both at interrupt time, whatever the program is doing.
+WIN16 cannot. A program is entered only where it waits in an import
+(§124.2.2), so these calls are made where it waits for messages. That is
+also the place a Windows 3.x program could rely on, because an interrupt-time
+callback could call almost nothing but `PostMessage`.
+
+- **One block holds them.** It is a fixed global block of the program's
+  heap, made by the first `timeSetEvent` or the first open with
+  `CALLBACK_FUNCTION`:
+  - eight event rows;
+  - a queue of eight calls owed;
+  - a flag that says a call is running.
+  Each row and each call is the procedure and its five arguments.
+- **`timeSetEvent`** (MMSYSTEM.602) takes:
+  - a delay of 1 to 65,535 ms, as `timeGetDevCaps` says;
+  - `TIME_ONESHOT` (0) or `TIME_PERIODIC` (1);
+  - the procedure and `dwUser`.
+
+  It answers the event's ID, from 1 up, never 0 while the program runs. A
+  delay of 0, a NULL procedure, or a ninth event answers 0. The resolution is
+  not read. **`timeKillEvent`** (603) frees the row and answers 0, or
+  `TIMERR_NOCANDO` (97) for an ID that is not an event; a one-shot event's
+  ID stops being one once it has fired.
+- **An event is due** when `timeGetTime` has reached it. WIN16's tick looks
+  each tick while an event exists, so an event is late by up to a tick
+  (55 ms) and by however long the program goes without waiting for a
+  message. A periodic event that falls more than a period behind is
+  rescheduled from now, not made up.
+- **A device opened with `CALLBACK_FUNCTION`** (`waveOutOpen`,
+  `waveInOpen`) queues each notice that `CALLBACK_WINDOW` would post: the
+  device's handle, `MM_WOM_*` or `MM_WIM_*`, the open's `dwInstance`, the
+  `WAVEHDR` (or 0), and 0. A ninth notice owed while eight wait is lost.
+- **Where they are called.** The calls are made, one at a time, when the
+  program waits for a message:
+  - in `GetMessage`, before it looks for a message;
+  - while it waits there, on WIN16's tick;
+  - in `PeekMessage`'s answer.
+
+  Calls queued from devices come first, then events in row order. The
+  procedure is entered as `void FAR PASCAL f(UINT, UINT, DWORD, DWORD,
+  DWORD)` with DS its own, as Windows' `DriverCallback` entered it. When it
+  returns, the import asks again, so a program waiting in `GetMessage` meets
+  every call owed before its next message.
+- **No call starts while one runs.** A procedure that runs a message loop of
+  its own gets no nested call.
+- At the program's end the block goes with its heap.
+
+#### 124.32.7 Planned *(S23 batch 4)*
+
+`midiOut` where `SOUND.DRV` has an MPU-401 (§34.13). SOUNDREC and MPLAYER
+are its look.
