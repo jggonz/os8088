@@ -111,6 +111,9 @@ KD_IMG_KB   equ 34              ; 34 until SPEC.md 96.11.7's character devices
 ; CORE_MAX +368, MEASURED 34,794 of 34,816 shipped (22 left) and 35,336 of
 ; 35,840 on the knob. The next core byte past 22 is a kilobyte off the DOS
 ; program on the third arm.
+; **AND STILL FOR SPEC.md 96.56.1's two FCB repairs**: CORE_MAX +16, MEASURED
+; 34,785 of 34,816 shipped (31 left - the tree had drifted down) and 35,327
+; on the knob.
 ; **kern_mega's kern_dos IS A KILOBYTE BIGGER, and only kern_mega's**
 ; (SPEC.md 96.15.4, docs/plans/completed/KERN-MEGA-DOS-PLAN.md 6, 12.1 item 4): the XMS
 ; door over the arena is 842 bytes of code and 98 of bss (kerndos/kdxms.inc),

@@ -21,6 +21,12 @@
 ; the loader says it read the file and found no NE (`dos_w16k`). What is left
 ; here is an NE TYPED at the prompt, named in Run, or reached through a .LNK.
 ;
+; IT IS THE RESIDENT HOST'S, not the window's tail (DOS-HEADLESS-PLAN 4.4):
+; a .LNK saved `Close when done` runs headless (SPEC.md 96.44.20), and its
+; target can be an NE as well as any - a link Windows wrote minimised, or a
+; path box changed after the Setup page greyed its box. Only the prompt's
+; arm below is bracketed; the rest names nothing of the window.
+;
 ; WHAT IT COSTS A DOS PROGRAM is one READ_AT of the first cluster, which the
 ; load that follows reads again, and the FAT count OSAPI_FILE_DFREE makes
 ; (SPEC.md 18.4.5). A second read only follows the `40h` test, which a plain
@@ -176,13 +182,15 @@ dos_w16_go:
     jmp short .out
 .con:
     mov byte [dos_fromcon], 0       ; ...typed at the prompt: the console
-    call dos_prompt                 ; stays, and owes its prompt
+    WIN_ONLY                        ; stays, and owes its prompt (a window's:
+    call dos_prompt                 ; a headless host has none to type at)
     mov bx, [dos_win]
     call OSAPI_WM_OBSCURED
     jc .said
     call OSAPI_GFX_LOCK
     call dos_con_draw
     call OSAPI_GFX_UNLOCK
+    WIN_END
 .said:
     stc
     jmp short .out

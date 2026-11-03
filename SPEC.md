@@ -182314,7 +182314,12 @@ in `DST_HELD`. The prompt stands in the **program's folder** (`[dos_curdir]` =
 `[dos_dir]`), so `SETUP` or `INSTALL` typed at it is the one beside the
 program, and a line on the console says nothing was started. **Run**, or Enter
 on an empty prompt or on the setup page (§96.19.4 accepts `DST_HELD` beside
-`DST_RAN` and `DST_ERR`), starts it as the launch would have. Edit the setup
+`DST_RAN` and `DST_ERR`), starts it as the launch would have. **The held
+launch drops the loader's *read, and no NE* byte** (`[dos_w16k]`, §124.3.1):
+the next wake may run `SETUP` typed at the prompt or a path edited in the
+box, neither of them the file the loader read, and a Windows program among
+them is WIN16's (§124.3) - so that wake asks again, at one header read more
+when it is the same program after all. Edit the setup
 page and **Save Shortcut** (§96.21.2) is how a `.LNK` is changed without
 running it - on every kernel, kern_mega included, where a run is the whole
 machine and could not otherwise be avoided.
@@ -188338,6 +188343,13 @@ start the target minimised.
   height);
 - the settings' defaults without their field blocks, then the `.LNK` read as
   ever (`dos_lnk_open`; its field reloads are bracketed out);
+- **a Windows target handed to WIN16** as a windowed DOS hands it
+  (`dos_w16_try`, §124.3), before anything is claimed: the link's own read
+  cleared `[dos_w16k]`, so the wake asks, and WIN16's window replaces the
+  one-line one. `apps/dos/dosw16.inc` is the RESIDENT host's for that
+  reason, only its prompt arm bracketed - a headless host that skipped the
+  question ran the NE's MZ stub on the ROM's teletype, which exits 0, so the
+  link silently did nothing;
 - the run as ever - the bracket, or the whole machine with arm 3, whose
   confirmation (§96.42) is the shortcut itself, the user having ticked both
   boxes and saved;
@@ -188359,10 +188371,17 @@ its own screen and nothing it leaves is wanted.
 **The box.** It and `Run in a window` are exclusive - a run in a window is a
 window - so ticking one greys the other. It greys too for a Windows program
 (`[dos_hne]`, asked of the program DOS last named as the page opens through
-`dos_w16_isne`, the NE test `dos_w16_try` makes, now separable): a headless
-DOS would run only its MZ stub, the program being WIN16's. `dos_lnk_parse`
-reads the field back into the box, so a shortcut opened in a windowed DOS
-shows it ticked, and Save Shortcut keeps it.
+`dos_w16_isne`, the NE test `dos_w16_try` makes, now separable): the program
+is WIN16's and opens in WIN16's window, so a DOS with no window says nothing
+about it. The greying is a courtesy and not the guard - a link Windows wrote
+minimised, or a path box changed after the page opened, reaches the headless
+host anyway and is handed on by it (above). **The answer is kept** against
+the locator it was asked of (`[dos_hnek]`: name, folder, volume - the tail's
+bss, 16 bytes), so flipping between the pages reads the program's header
+once rather than at every open: the question is an `OSAPI_FILE_DFREE` and a
+cluster read or two, each priced in `int 13h` calls on the target.
+`dos_lnk_parse` reads the field back into the box, so a shortcut opened in a
+windowed DOS shows it ticked, and Save Shortcut keeps it.
 
 **What it buys, MEASURED** (`tests/doshead.py`, `soak -k doshead`: the 5150
 CGA, the shipped 360KB LZB system disk, `DOSHELLO.COM` behind two links that
@@ -188398,6 +188417,14 @@ clusters); what a headless launch reads of part 0 is 4,847 -> 4,288 packed
 bytes (lz4) and 4,348 -> 3,869 (LZB). kern_mega's host and loader, both
 `kern_dos` images and the plain `build/dos.bin` are byte-identical across it
 (`cmp`ed).
+
+**The WIN16 door made resident** costs the resident host **510 bytes**
+(`dosw16.inc` and `w16jgive.inc`, out of the tail), so a headless region is
+that much larger; a windowed one is not, the tail shrinking by the same
+code. Across that round of repairs (§96.21.9, the kept answer above,
+§96.54.6, §96.54.12, §96.56.1), `dosp.bin` 26,128 -> 26,654 (16 of it the
+core's hole) and `doswin.bin` 19,030 -> 18,611; the 360KB disk's LZB
+`DOS.O88` 49,568 -> 49,758, still 49 clusters.
 
 ### 96.45 The mouse under `kern_dos`, and it was switched OFF rather than missing
 
@@ -190046,9 +190073,11 @@ its own instance, so several run at once, each with its own worker.
 `sch_switch` — and on one invariant the package keeps: **the instance's world
 is in the IVT exactly while its own task holds the CPU.**
 
-- **The world** is IVT 00h, 08h–09h and 10h–3Fh, and the BDA's memory-size
-  word, its video block (`0040:0049`–`0066`) and `0040:0084`–`0089`.
-  `dvw_walk` EXCHANGES those runs with a 242-byte block in the instance's
+- **The world** is IVT 00h, 08h–0Fh and 10h–3Fh, and the BDA's memory-size
+  word, its video block (`0040:0049`–`0066`) and `0040:0084`–`0089` - 133
+  words. (08h–09h alone until §96.54.12's two-window case put the rest of
+  the master PIC's vectors in: 121 words and a 242-byte block before it.)
+  `dvw_walk` EXCHANGES those runs with a 266-byte block in the instance's
   bss; an exchange is its own inverse, so in and out cannot drift. The block
   is primed from the desktop's table, then the DOS block (§96.5.2's table),
   a virtual video BIOS (10h), a virtual keyboard BIOS (16h), a refusing
@@ -190534,7 +190563,12 @@ the handle calls rather than a second file system:
   drive byte of 0 is rewritten as the drive it means, as DOS does. `AL=0`,
   or `FFh`. An open FCB costs one of the program's twenty handles, as under
   DOS 3. An extended FCB (`FFh` and six bytes) is read past.
-- **`10h`** is `AH=3Eh` on that handle.
+- **`10h`** is `AH=3Eh` on that handle, and then SPOILS it: `FCB+19h` =
+  `FFh`, so the word is no handle at all. DOS reuses the lowest free handle,
+  so the number a closed FCB kept was the next `AH=3Dh`'s - and a second
+  `10h` on the old FCB closed that file under its owner, a stale `27h`/`28h`
+  read or wrote it. Spoiled, both answer through the handle layer's error 6:
+  `10h` `AL=FFh`, a read or write `AL=1` with nothing moved.
 - **`27h`/`28h`** seek to random record x record size (four bytes of record
   below a 64-byte record, three at or above) and move `CX` records through
   the DTA with `AH=3Fh`/`40h`. `AL` = 0 all of them; 1 end of file (read) or
@@ -190542,6 +190576,17 @@ the handle calls rather than a second file system:
   the record. `CX` = records moved, and the random record moves on by that
   many. A write of 0 records sets the file's length at the random record -
   which is `AH=40h CX=0` (96.11.6.2) and so needed nothing of its own.
+  **The DTA's segment bounds the count**: the records that fit between the
+  DTA's offset and the segment's end (FFFFh bytes at offset 0, one
+  `AH=3Fh`'s most) are reckoned first, and a call asking for more answers
+  **`AL=2`, segment wrap, `CX=0`, and moves nothing** - the call's
+  documented `02h`, taken whole rather than as a part transfer, so a wrong
+  guess about the part costs no memory. Before it, the byte count kept only the
+  low word of records x size, so a 64 KB transfer asked for nothing and was
+  told end of file (or disk full), and a count that crossed the segment's end
+  was read round to its start - over a program's PSP or code - padding
+  included. A one-record call (`14h`/`15h`/`21h`/`22h`) answers the same at a
+  DTA one record short of the end.
 - **`11h`** is `AH=4Eh` on the spelled pattern, its find record then
   rewritten in place into what DOS leaves: the drive byte and a directory
   entry (name 11, attribute, time, date, cluster 0, size). **`12h` was not
@@ -190722,6 +190767,13 @@ images fit as they are (39,465 of 39,936 HMA, 37,510 of 37,888 low).
 54,961. The verify flag takes 96.31's pad byte, so the core's bss does not
 grow.
 
+**And 96.56.1's two repairs** (`10h` spoiling its handle, `27h`/`28h`
+bounded by the DTA's segment): **28 bytes of the core** (16,499 -> 16,527),
+`CORE_MAX` 16,512 -> **16,528** and on kern_mega 17,152 -> **17,184** (17,177
+used). `kern_dos`'s rung holds it: **34,785 of 34,816**, 31 left (the tree
+had drifted under 96.56.3's 34,794), and 35,327 of 35,840 on the `DOSR_MARK`
+knob.
+
 #### 96.54.5 TopView's buffer — a program that ASKS where to write
 
 TopView published the escape hatch DESQview, Windows' DOS box and OS/2 all
@@ -190859,9 +190911,26 @@ desktop intact around it (that took 96.54.7's guard as well).
 6 together with 96.54.7 cost **+940 bytes of image and +57 of bss**, no core
 and no kernel byte.
 
-**What it does not reach**: a desktop extended onto the second card, and a
-program whose own idea of the screen is cached across Alt+Enter — it goes on
-writing the capture card on the full screen. A lone Hercules is 96.54.6.1.
+**The card can become the desktop's under a live run**: the Control Panel
+extends onto it, or makes it the primary, and nothing tells a running DOS.
+So `dvw_ccheck` makes `dvw_cdetect`'s deciding test again - display 1
+desktop or not (`OSAPI_FSX_CAPS`, `BX` = 2), and the primary's kind
+(`OSAPI_VIDEO`'s `DL`) against the launch's `[dvw_dkind]` - at every capture
+pass and before the run's end gives the card back. Either one moved: the
+capture is DROPPED where it stands - `[dvw_cseg]` zeroed with **no holder's
+mark written and no `dvw_cblank`**, the card being the desktop's now, which
+the end used to blank - and the run goes on as a plain window, 96.54.13's
+second window's shape: `int 10h` the virtual one again and DOS's teletype
+the console's. Two far calls a pass, every fourth tick, and only while a
+card is held.
+
+**What it does not reach**: a desktop extended onto the second card at the
+launch (the capture is never taken), a program that goes on writing the card
+ITSELF after the drop (96.54.1: an 8086 cannot stop it, and on an extended
+desktop that is the second monitor's pixels until something repaints them),
+and a program whose own idea of the screen is cached across Alt+Enter — it
+goes on writing the capture card on the full screen. A lone Hercules is
+96.54.6.1.
 
 ##### 96.54.6.1 A lone Hercules: its own second page, WATCHED
 
@@ -191377,10 +191446,10 @@ outlived it is MACHINE state that §96.54's exchange never covered:
   wait and the ROM's motor count all run on that clock.
 - **The 8259's mask.** Trek's own exit masks IRQ3 and IRQ4 (`in al, 21h /
   or al, 18h`) whatever it found - IRQ4 is the serial mouse on COM1.
-- **Vectors outside the exchanged runs** (01h-07h, 0Ah-0Fh, 40h-FFh) that the
-  program pointed into its own memory: Trek's INT 04h and F0h. An IRQ vector
-  among them is code a hardware interrupt runs, in a block the next claim
-  overwrites.
+- **Vectors outside the exchanged runs** (01h-07h and 40h-FFh; 0Ah-0Fh
+  were among them until the two-window case below) that the program pointed
+  into its own memory: Trek's INT 04h and F0h. An IRQ vector among them is
+  code a hardware interrupt runs, in a block the next claim overwrites.
 
 The bracket puts all of this back in `dos_restore_machine` (96.5), and the
 window cannot borrow that: it rewinds the WHOLE table and the BDA, which on a
@@ -191400,12 +191469,38 @@ the world out and IF = 0:
 3. **The mask is the banked one's unmasked levels, and a level whose vector
    went back takes its banked bit**: `IMR = (now AND then) OR (then AND put
    back)`. A level the desktop had live is live again; one the program
-   unmasked for a handler that is now gone is masked again.
+   unmasked for a handler that is now gone is masked again. "Went back"
+   counts the exchange too: an IRQ vector the program's world (`dvw_xblk`)
+   still holds in the arena is one the world going out put back, so its
+   level takes its banked bit as well.
+
+**Two windows, and the IRQ vectors are exchanged.** The bank is the live
+table at the launch, so a vector left GLOBAL could hold another live run's
+handler: run A takes IRQ3's 0Bh into its arena and unmasks it, run B launches
+and banks A's vector, A ends first (0Bh is B's by then, so A leaves it, and
+frees its arena), and B's end puts A's freed handler back - with IRQ3 live
+from B's bank. A well-behaved B that restores the 0Bh it found at its own
+exit dangles the same way, which no test at the end can catch: the vector is
+then in A's arena and not B's. So 0Ah-0Fh are in the world beside 08h and
+09h (§96.54, one run `08h..0Fh`): B launches with A's world out, banks the
+DESKTOP's 0Bh, and whatever a run leaves on an IRQ vector its own exchange
+takes away - 08h's precedent. Two things follow and are conceded, as 08h's
+and 09h's already were: a program's IRQ handler runs only in its own slices
+(an interrupt in another task's goes to the desktop's vector - a program that
+hooks IRQ3 or IRQ4 no longer takes a serial mouse from the desktop between
+its slices, either), and a desktop hook made on 0Ah-0Fh after the launch (a
+driver resumed by another run's end) is not in the program's world: during
+its slices that IRQ reaches the vector the launch found. **The master mask
+stays global**: A's end can re-mask an IRQ3 that
+B has unmasked for itself, the same sharing as channel 0 below. Cost: 24
+bytes of each of the two blocks (`dvw_xblk`, `dvw_xdsk`), 12 more words an
+exchange each way, and the mend's eight-vector walk.
 
 Two DOS windows playing at once still share one channel 0, and the first to
 end puts it back under the other's note - that program's note lasts 32 times
 too long, which is the same sharing §96.54's exchange already concedes for the
-whole timer while a program runs. While a note plays the DESKTOP runs at the
+whole timer while a program runs. They share the 8259's mask the same way
+(above). While a note plays the DESKTOP runs at the
 program's rate too; that is the in-window path's, not this section's.
 
 `tests/doswleave.py` is the gate, on `tests/dostrap/dwleave.asm`: a program
@@ -232248,10 +232343,14 @@ proc asks first, before `op_load` claims or reads anything:
    `OSAPI_ARG_FILE` and the launch's first wake skips `dos_w16_try`'s read:
    **an ordinary `.EXE` pays one header read, as before, in the loader
    instead of the host.** A `.LNK` clears the byte - the loader read the link,
-   not what it names.
+   not what it names - and so does a HELD launch (§96.21.9): it runs nothing,
+   so its first wake may be `SETUP` typed at the prompt, which is not the
+   file the loader read.
 
 `dos_w16_try` stays in the host for the three routes the loader never sees:
-an NE typed at the prompt, named in Run, or reached through a `.LNK`.
+an NE typed at the prompt, named in Run, or reached through a `.LNK`. It is
+the RESIDENT host's and not the window's tail (§96.44.20), so a `.LNK` saved
+`Close when done` whose target is an NE hands it on too.
 
 ### 124.4 The CPU census *(shipped: host side, and on the machine for S2)*
 

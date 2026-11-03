@@ -1375,7 +1375,10 @@ dos_entry:
     mov byte [dos_state], DST_HELD  ; the path box, a .LNK's arguments and its
     mov ax, [dos_dir]               ; settings - and the prompt stands in the
     mov [dos_curdir], ax            ; PROGRAM's folder, so SETUP or INSTALL
-    WIN_ONLY                        ; typed there is the one beside it
+%ifdef DOS_WIN16                    ; typed there is the one beside it - and
+    mov byte [dos_w16k], 0          ; THAT one is not the file the loader
+%endif                              ; read, so the next wake asks (124.3.1)
+    WIN_ONLY
     mov si, dos_c_held
     call con_say
     WIN_END
@@ -1609,11 +1612,11 @@ dos_wake:
 %ifdef DOS_WIN16
     shr byte [dos_w16k], 1      ; THE LOADER READ THIS FILE and it is no NE
     jc .w16no                   ; (SPEC.md 124.3.1): once, the launch's own
-    WIN_ONLY
     call dos_w16_try            ; wake. SPEC.md 124.3: a WINDOWS program is
-    WIN_END
     jc .out                     ; WIN16's, asked before anything is claimed or
-.w16no:                         ; taken out - and before arm 3's question, too
+.w16no:                         ; taken out - and before arm 3's question, too.
+                                ; Headless as well: a link's target, run with
+                                ; no window, is still WIN16's (96.44.20)
 %endif
 %ifdef DOSKPART
     call dos_wholeask           ; SPEC.md 96.42: arm 3 with nothing to come
@@ -5425,6 +5428,10 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     mov ah, 0x3E
     int 0x21
     sbb al, al
+    mov byte [si+0x19], 0xFF        ; the handle is no longer the FCB's: a
+                                    ; second close or a stale read answers
+                                    ; error 6 rather than reach the file the
+                                    ; number names next (96.56.1)
 .fcbret:                            ; AL = the answer, and the AH that was asked
     pop bx
     mov ah, bh
@@ -5490,9 +5497,19 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     mov bx, [si+0x18]
     mov ax, 0x4200
     int 0x21
-    pop ax
-    push ax
-    mul di
+    mov ax, [cs:dos_dta]            ; **THE DTA'S SEGMENT BOUNDS IT** (96.56.3):
+    neg ax                          ; AX = the bytes left in it, FFFFh at
+    jnz .frw0                       ; offset 0 - one call's most
+    dec ax
+.frw0:
+    xor dx, dx
+    div di                          ; AX = the records that fit
+    pop cx                          ; the records asked
+    cmp ax, cx
+    jb .frw1                        ; more than fit: AL = 2, and nothing moves
+    push cx
+    xchg ax, cx
+    mul di                          ; < 64KB now
     xchg cx, ax                     ; CX = the bytes asked for
     mov ah, 0x40                    ; 3Fh to read, 40h to write
     sub ah, [si+0x1B]
@@ -5523,6 +5540,10 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     rep stosb
     pop ax
     mov dl, 3
+    jmp short .fr5
+.frw1:
+    xor ax, ax                      ; no record moved, and AL = 2: a wrap in
+    mov dl, 2                       ; the DTA reads and writes nothing
     jmp short .fr5
 .frfull:
     xor dx, dx                      ; ...full, which is AL = 1
@@ -12496,21 +12517,62 @@ dos_sp_get:
 %ifdef DOS_WTAIL
 ; -----------------------------------------------------------------------------
 ; dos_hne_ask - is the program the Setup page is about a WINDOWS one? (SPEC.md
-; 96.44.20). `Close when done` greys for an NE: a headless DOS would only run
-; its MZ stub, the program being WIN16's (SPEC.md 124.3.1). Asked as the page
+; 96.44.20). `Close when done` greys for an NE: the program is WIN16's and
+; opens in WIN16's window (SPEC.md 124.3.1), so a DOS with no window says
+; nothing about it - a headless host hands it on as well. Asked as the page
 ; opens, of the program DOS last named - the one a shortcut or a run set -
-; and a box the link left ticked is cleared with it. Preserves every register
+; and a box the link left ticked is cleared with it. The answer is KEPT
+; against the locator it was asked of (`[dos_hnek]`, dos_pgdoc's shape), so
+; flipping between the pages reads the header once and not every time: the
+; question is a DFREE and a cluster or two on the disk. Preserves every
+; register
 ; -----------------------------------------------------------------------------
 dos_hne_ask:
     pushf
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, dos_name                ; the same program, folder and volume as
+    mov di, dos_hnek                ; last time: the same answer
+    mov cx, 13
+    repe cmpsb
+    jne .ask
+    mov ax, [dos_dir]
+    cmp ax, [dos_hnek + 13]
+    jne .ask
+    mov al, [dos_vol]
+    cmp al, [dos_hnek + 15]
+    je .known
+.ask:
+    mov si, dos_name                ; ...else ask, and keep what was asked
+    mov di, dos_hnek
+    mov cx, 13
+    rep movsb
+    mov ax, [dos_dir]
+    stosw
+    mov al, [dos_vol]
+    stosb
     mov byte [dos_hne], 0
     cmp byte [dos_name], 0
-    je .r
+    je .known
     call dos_w16_isne
-    jnc .r
+    jnc .known
     mov byte [dos_hne], 1
+.known:
+    cmp byte [dos_hne], 0
+    je .r
     mov byte [dos_mhead + OS88UI_CK_ON], 0
 .r:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
     popf
     ret
 %endif
@@ -12787,8 +12849,9 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
 %ifdef DOS_WTAIL
     WBSS DOS_B_MHEAD, DOS_MCKSZ  ; ...and Close when done, beside it (SPEC.md
     WBSS DOS_B_HNE,   1          ; 96.44.20) - the TAIL's: only the Setup page
-%endif                           ; shows it and the .LNK reader's store is a
-                                 ; window's; 1 = the target is an NE
+    WBSS DOS_B_HNEK,  16         ; shows it and the .LNK reader's store is a
+%endif                           ; window's; 1 = the target is an NE, asked of
+                                 ; the locator in HNEK (name, folder, volume)
 %ifdef DOS_SETPART
     HBSS DOS_B_SPDOOR, 4         ; the Setup part's door, 0:claim - its
                                  ; segment word 0 = not held (96.32.2.3)
@@ -18012,10 +18075,9 @@ WIN_CODE_END                        ; (DOS-HEADLESS-PLAN 4.4: the window's)
                                     ; (SPEC.md 96.33): an input, an output and
                                     ; a prompt, and not one verb of its own
 %ifdef DOS_WIN16
-WIN_CODE
 %include "dosw16.inc"               ; ...and the door a Windows program leaves
-WIN_CODE_END                        ; (DOS-HEADLESS-PLAN 4.4: the window's)
-%endif                              ; by, to WIN16 (SPEC.md 124.3)
+%endif                              ; by, to WIN16 (SPEC.md 124.3) - RESIDENT,
+                                    ; a headless host's door too (96.44.20)
 %endif
 
 ; os88ui.inc first (os88line.inc needs its UI_* macros), and both LAST -
@@ -18350,6 +18412,7 @@ dos_mwin equ dos_hbss + DOS_B_MWIN   ; ...and Run in a window (96.32.2.4)
 %ifdef DOS_WTAIL
 dos_mhead equ DOS_WB + DOS_B_MHEAD  ; ...and Close when done (96.44.20)
 dos_hne equ DOS_WB + DOS_B_HNE      ; ...and the target is an NE: it greys
+dos_hnek equ DOS_WB + DOS_B_HNEK    ; ...and what that was asked of (16)
 %endif
 %endif
 %ifdef DOS_SETPART

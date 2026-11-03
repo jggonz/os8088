@@ -63,7 +63,7 @@ CORE_ORG    equ 0x0080
 ; CORE alone spends, both hosts read, and whose slack is one number in one
 ; place. Measured at the wave, with the assertion in `apps/dos/doscore.asm`.
 %ifndef DOS_MEGA
-CORE_MAX    equ 16512            ; +512 for SPEC.md 96.7.2's stack swap and
+CORE_MAX    equ 16528            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; 96.12.5's name truncation, which are 214
                                 ; bytes between them against 89 of slack. The
                                 ; two are the Playroom's whole report: a gate
@@ -167,8 +167,13 @@ CORE_MAX    equ 16512            ; +512 for SPEC.md 96.7.2's stack swap and
                                 ; whose write-back in place (.fwback, SPEC.md
                                 ; 96.11.6.4) met this arm's 16,490: 3 bytes
                                 ; over, 16,499 used
+                                ; +16 for SPEC.md 96.56.1/96.56.3's two FCB
+                                ; repairs - a closed FCB's handle spoiled,
+                                ; and 27h/28h bounded by the DTA's segment
+                                ; (AL = 2): 28 bytes against 13 of slack,
+                                ; 16,527 used
 %else                           ; **kern_mega's core is 67 bytes longer**:
-CORE_MAX    equ 17152            ; SPEC.md 96.15.4's extended-to-extended
+CORE_MAX    equ 17184            ; SPEC.md 96.15.4's extended-to-extended
 %endif                          ; move (dos_xms_move's `.bothx`), 15,409 used.
                                 ; +80, kept a multiple of 16, and paid ONLY by
                                 ; kern_mega's DOS.O88 - both of its hosts
@@ -201,6 +206,9 @@ CORE_MAX    equ 17152            ; SPEC.md 96.15.4's extended-to-extended
                                 ; 24h, as on kern_big's arm
                                 ; +368 for SPEC.md 96.56.3, as on kern_big's
                                 ; arm: 17,140 used
+                                ; +32 for the two FCB repairs, as on
+                                ; kern_big's arm (28 bytes against 3 of
+                                ; slack): 17,177 used
 ; ...and the core's bss sits directly above its code, at the same offset in
 ; every host, which is what SPEC.md 96.44.2 requires of every `DBSS` cell.
 ; --- THE CORE'S BLOCK IS A BUDGET, NOT A SUM (SPEC.md 96.44.2) --------------

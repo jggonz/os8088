@@ -72,9 +72,10 @@ DVW_GAP     equ 96              ; the IRQ0 stub's frames go this far below the
                                 ; handler, wave 5) can have both live at once
 
 ; --- the exchange block's layout (`dvw_walk` writes it in this order) -------
-DVW_XB_V10  equ 12              ; vector 10h's slot: 00h (4), 08h (4), 09h (4)
+DVW_XB_IRQ  equ 4               ; vector 08h's slot: 00h (4), then 08h-0Fh
+DVW_XB_V10  equ DVW_XB_IRQ + 8 * 4  ; vector 10h's slot, after them
 DVW_XB_V16  equ DVW_XB_V10 + (0x16 - 0x10) * 4
-DVW_XB_BDA  equ (2 + 4 + 0x30 * 2) * 2  ; 204: 0040:0013's word, then...
+DVW_XB_BDA  equ (2 + 16 + 0x30 * 2) * 2 ; 228: 0040:0013's word, then...
 DVW_XB_VID  equ DVW_XB_BDA + 2  ; ...0040:0049..0066 (30), 0040:0084..0089 (6)
 DVW_XB_SIZE equ DVW_XB_VID + 36
 
@@ -86,17 +87,19 @@ DVW_XB_SIZE equ DVW_XB_VID + 36
 ; out: nothing; every register preserved
 ;
 ; Six runs, and the list is the contract: IVT 00h (divide - a C runtime hooks
-; it), 08h-09h (the two IRQs a program may chain), 10h-3Fh (the BIOS services
-; it is given virtual ones of, and the whole DOS block); then the BDA's memory
-; size word, its video block and its EGA rows (0040:008Ah on is the AT's
-; floppy state, which is the kernel's).
+; it), 08h-0Fh (the master PIC's eight IRQs: 08h and 09h a program chains,
+; and 0Ah-0Fh are ITS while it runs, so a run that hooks one leaves it in its
+; own world and never in another run's bank - SPEC.md 96.54.12), 10h-3Fh
+; (the BIOS services it is given virtual ones of, and the whole DOS block);
+; then the BDA's memory size word, its video block and its EGA rows
+; (0040:008Ah on is the AT's floppy state, which is the kernel's).
 ;
 ; **TWO BLOCKS AND COPIES, NOT ONE BLOCK AND AN EXCHANGE** (SPEC.md 96.54.3).
 ; It was one routine walking a word at a time - read, `xchg`, store, and a
 ; test of a mode byte on every word - which an exchange needs, being its own
 ; inverse. MEASURED: 15.3% of every sample of a windowed CPU-bound program
 ; landed in that loop, and the program ran at 81.1% of its bracketed speed.
-; Two `rep movsw` per run is the same 121 words each way at a fraction of
+; Two `rep movsw` per run is the same 133 words each way at a fraction of
 ; the clocks, for one more block of bss; IN takes the desktop's copy first
 ; and OUT puts it back, so nothing the desktop holds can drift in between -
 ; no desktop code runs while the world is in. Each run is GOT and then PUT
@@ -106,7 +109,7 @@ DVW_XB_SIZE equ DVW_XB_VID + 36
 ; -----------------------------------------------------------------------------
 dvw_runs:
     dw 0x0000, 0x00 * 4, 2          ; 00h
-    dw 0x0000, 0x08 * 4, 4          ; 08h, 09h
+    dw 0x0000, 0x08 * 4, 8 * 2      ; 08h..0Fh
     dw 0x0000, 0x10 * 4, 0x30 * 2   ; 10h..3Fh
     dw 0x0040, 0x0013, 1            ; INT 12h's source (dos_hook_vectors')
     dw 0x0040, 0x0049, 15           ; mode .. palette
@@ -979,8 +982,10 @@ dvw_fin:                            ; DHK_SNAP, from dos_prog_done
 ; gives the PIT back. So: channel 0 the kernel's; every vector whose segment
 ; lies in the arena - code that is about to be freed - its banked value; and
 ; the mask the banked one's live levels, plus its bit for a level whose vector
-; went back. A vector the program did not leave in its own memory is not
-; touched, so a driver mounted meanwhile keeps its hook.
+; went back - or whose vector the program's world still holds in the arena,
+; 08h-0Fh being exchanged and so never live here with the world out. A vector
+; the program did not leave in its own memory is not touched, so a driver
+; mounted meanwhile keeps its hook.
 ; -----------------------------------------------------------------------------
 dvw_mend:
     push ax
@@ -1021,6 +1026,18 @@ dvw_mend:
     add di, 4
     cmp di, 0x400
     jb .v
+    mov si, DVW_XB_IRQ              ; ...and an IRQ's vector the exchange took
+    mov ah, 1                       ; out with the program's world: its level
+.q:                                 ; is put back as the bank had it too
+    mov cx, [PS dvw_xblk + si + 2]
+    sub cx, [dos_arena]
+    cmp cx, [dos_apara]
+    jae .qn
+    or bl, ah
+.qn:
+    add si, 4
+    shl ah, 1
+    jnz .q
     mov ah, [dos_pic1]
     and bl, ah                      ; put back and masked then: masked again
     in al, 0x21
@@ -1723,6 +1740,8 @@ dvw_wake:
     je .r
     mov byte [dvw_done], 0
     mov byte [dvw_run], 0
+    call dvw_ccheck                 ; (a card the desktop took is not ours to
+                                    ; mark or blank: 96.54.6)
     cmp word [PS dvw_cseg], 0          ; THE CARD GIVEN BACK (96.54.13): the
     je .nomark                      ; holder's mark cleared, a Hercules's
     mov al, 3                       ; page decoded for the write (with it off
@@ -2096,6 +2115,45 @@ dvw_cdetect:
     ret
 
 ; -----------------------------------------------------------------------------
+; dvw_ccheck - is the capture card STILL nobody's? (UI task, DS = the host)
+; out: nothing; every register kept
+;
+; dvw_cdetect asks once, at the launch, and the Control Panel can change the
+; answer under a live run: Extend onto the card, or make it the primary. So
+; the test that decides it is made again - display 1 desktop or not, and the
+; primary's kind against the launch's [dvw_dkind] - at every capture pass and
+; before the run's end gives the card back. Either one moved: the capture is
+; DROPPED where it stands, [dvw_cseg] zeroed with no holder's mark written and
+; no blank (the card is the desktop's now), and the run goes on as a plain
+; window, as 96.54.13's second window does. A program that writes the card
+; itself cannot be stopped (96.54.1); its int 10h and DOS's teletype can.
+; -----------------------------------------------------------------------------
+dvw_ccheck:
+    cmp word [PS dvw_cseg], 0
+    je .r
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bx, 2
+    call OSAPI_FSX_CAPS             ; CF = 0: a second display IS desktop
+    jnc .lost
+    call OSAPI_VIDEO                ; DL = the primary's kind
+    cmp dl, [PS dvw_dkind]
+    je .x
+.lost:
+    mov word [PS dvw_cseg], 0
+    mov byte [PS dvw_cmode], 0      ; int 10h the virtual one again, and...
+    mov byte [dos_inbr], 0          ; ...DOS's teletype the console's
+.x:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
 ; dvw_cprog / dvw_cblank - the capture card's 6845, up for text and back dark
 ;
 ; **A CARD NOBODY PROGRAMMED HAS NO RETRACE** - MEASURED with Microsoft Works:
@@ -2243,6 +2301,9 @@ dvw_capt:
     cmp word [PS dvw_fs], 0            ; the full screen owns the glass, and a
     jne .r                          ; FROZEN program's console is its capture
                                     ; ([dvw_frz], the byte after)
+    call dvw_ccheck                 ; ...and the card still nobody's (96.54.6)
+    cmp byte [PS dvw_cmode], 0
+    je .r
     push ax
     push bx
     push cx

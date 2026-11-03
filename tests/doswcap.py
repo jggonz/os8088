@@ -52,7 +52,7 @@ import os88ui                                                  # noqa: E402
 ROOT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 SYS = os.path.join(ROOT, "build", "os8088-360.img")
 DVWC_TV, DVWC_SEG, DVWC_HP = 1, 2, 3
-XB_VID = (2 + 4 + 0x30 * 2) * 2 + 2     # dosw.inc's DVW_XB_VID
+XB_VID = (2 + 16 + 0x30 * 2) * 2 + 2    # dosw.inc's DVW_XB_VID
 
 
 def fail(msg):
