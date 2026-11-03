@@ -135,6 +135,8 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
     - **(A)** stream a large DIB row by row into the bitmap block, so only one block is ever needed (about 150–250 B, in a part);
     - **(C)** a compactor that moves code. It needs N1's per-handle descriptors first, and it is the general answer to fragmentation by segments that cannot move.
 
+- [ ] **Q7: `SEG_BWIN` checks no owner** (SPEC.md 50.6.11). Found while fixing 14.137 on #327. `mega_wset`'s re-bind now asks `mega_bown` (a claim's `MC_OWN`, a pool block's `MX_OWN`), but `SEG_BWIN` itself binds a window into any block it is given. That is 14.135 item 2's class of hole, one verb along. The fix is the same test at `SEG_BWIN`'s entry. Every shipped caller binds its own block, so the fix should refuse none of them. It is a kernel `.mega` change, so it goes in its own PR, with megaown's row.
+
 ## 5. Sources
 
 As WIN16-ANY-PLAN's, plus #327's record:
