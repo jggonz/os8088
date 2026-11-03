@@ -1351,12 +1351,11 @@ w16_reloc1:
     mov ax, [es:si + 6]             ; a movable entry: its ordinal
     call w16_entrypt                ; -> DX = segment number, AX = offset
     jc .bad
-    mov cl, [es:si]                 ; a far pointer is a call: through the
-    and cl, 0x7F                    ;   thunk when the segment is discardable
-    cmp cl, 3                       ;   (124.26.2). A segment or an offset
-    jne .ownseg                     ;   alone is the segment's own, kept, and
-    test byte [es:NE_FLAGS], NEF_PMODE ; so is every one a protected-mode-
-    jnz .ownseg                     ;   only program names (124.26.2.1)
+    test byte [es:NE_FLAGS], NEF_PMODE ; a call: through the thunk when the
+    jnz .ownseg                     ;   segment is discardable (124.26.2);
+                                    ;   a protected-mode-only program's,
+                                    ;   any type, the segment's own, kept
+                                    ;   (124.26.2.1)
     call w16l_tothk
     jc .apply
     jmp short .seg

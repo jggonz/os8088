@@ -236579,23 +236579,36 @@ import does (§124.12): *Not enough memory for its code.* with its name.
 
 #### 124.26.2.1 When a relocation does not take the thunk *(WIN16 S24)*
 
-A thunk is a place to **call**. Only a far-pointer relocation (source type
-3) to a moveable entry is given the thunk. In two cases the relocation is
-given the segment itself, which the check pass then marks kept
-(§124.26.1), as it marks a discardable segment named by its number:
+A thunk is a place to **call**, and a program that ran in real-mode
+Windows reaches a discardable segment through nothing else: every
+relocation to a moveable entry in one is given the thunk, whatever its
+source type, as real-mode Windows gave it the entry table's. Only **every
+relocation of a protected-mode-only program** (`ne_flags` bit 3,
+`NEF_PMODE`) is given the segment itself, which the check pass then marks
+kept (§124.26.1), as it marks a discardable segment named by its number.
+In Windows' standard and enhanced modes a far pointer into a discardable
+segment stays valid: the selector is kept, and a discarded segment is
+reloaded when it is touched. Such programs keep far pointers to data in
+their code segments, read through a segment relocation as often as through
+a far pointer.
 
-- **A segment or an offset alone** (source types 2 and 5) to a moveable
-  entry is the entry's own segment or offset. A program that builds a
-  pointer from a segment relocation and reads through it reads that
-  segment's bytes, not the thunks'.
-- **Every relocation of a protected-mode-only program** (`ne_flags` bit 3,
-  `NEF_PMODE`). In Windows' standard and enhanced modes a far pointer into
-  a discardable segment stays valid: the selector is kept, and a discarded
-  segment is reloaded when it is touched. Such programs keep far pointers to
-  data in their code segments. A program that also ran in real-mode
-  Windows could not, so WIN16 keeps thunking those.
+**A segment or an offset alone is a call too, in a program that also ran
+in real mode.** Until 2026-11-03 source types 2 and 5 took the segment
+itself in every program. Write 3.1 builds its window, dialog and
+enumeration procedures' addresses from a segment relocation and an offset
+relocation to the same entry (`MMWWNDPROC` in segment 18, `DIALOGPRINT` in
+30, `FONTFACEENUM` in 8: 33 such pairs) and hands them to `RegisterClass`,
+`DialogBox` and `EnumFonts`. Given the segments, it pinned four segments of
+window procedures in a 40 KB code budget, so its code churned half as hard
+again (381 loads for the win16write row's session against 265), and a
+segment that names itself is not kept (§124.26.1), so nothing holds a
+procedure address in one when the segment is discarded. Its title stayed
+*Write - (Untitled)* after Save As and Open, with a 96 KB budget as well as
+40 KB, until types 2 and 5 took the thunk again (win16write, bisected to
+this rule).
 
-Found by Microsoft Arcade's setup. `_MSTEST.EXE` keeps its interpreter's
+Found by Microsoft Arcade's setup. `_MSTEST.EXE` (`ne_flags` 030Ah,
+protected-mode-only, as Mozart's is) keeps its interpreter's
 keyword table and messages in segment 17: 322 moveable entries, reached
 through a segment relocation in DGROUP and through far pointers between
 the segment's own entries. Through the thunks it read the module block,
