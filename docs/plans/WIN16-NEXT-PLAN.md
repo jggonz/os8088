@@ -123,6 +123,17 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
 
   So N0–N3's evidence is retaken on the merged tree, not carried over from before it.
 
+  Re-verifying turned up two of #328's own defects, both fixed on #327 as commits of their own:
+  - **ASSOC_PWBANK.** A posted `OSAPI_PKG_START` document launch (SPEC.md 21.5.4) re-banked the document's locator from `[dsk_cwd]`. Through a link to another volume, `sc_walk` had already moved the machine back to the link's own drive, so WIN16 was handed `C:\SETUP.EXE` and answered "This is not a Windows program".
+  - **KERN-MEGA-PLAN 14.137.** 14.135's low stopped `mega_wset` from re-aiming a BOUND window. GlobalReAlloc's move of a locked block into another arena then left the program's selector on the freed block, so Mozart's script engine wrote over a new block's header. The fix re-binds the caller's own bound window when the new base lies in a block the caller owns. A base anywhere else still gets a fresh window.
+
+- [ ] **Q6: two 42 KB blocks at once.** Mozart's final dialog does `LoadBitmap` of a 435x194 4bpp DIB, which needs the resource and the bitmap's bits at the same time.
+  - Arena 3's 65 KB free is split by MSCOMSTF segments that are really on the stack, and by 32 KB of KEEP library code.
+  - N0 takes route **(D)**: when the global heap refuses a bitmap's bits, they get a claim of their own (one vmap row). This is a fallback for bitmaps only, never for GlobalAlloc, so it is not a fifth arena.
+  - Two routes stay open:
+    - **(A)** stream a large DIB row by row into the bitmap block, so only one block is ever needed (about 150–250 B, in a part);
+    - **(C)** a compactor that moves code. It needs N1's per-handle descriptors first, and it is the general answer to fragmentation by segments that cannot move.
+
 ## 5. Sources
 
 As WIN16-ANY-PLAN's, plus #327's record:
