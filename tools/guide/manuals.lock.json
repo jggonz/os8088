@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "e1a8c21f5",
+  "stamped": "7111ba35e",
   "strings": "4fe195f6a33d805e",
-  "why": "merge of main (#328) into Phase B/C: WIN16's claims in paragraphs on both arms and the DOS core's cluster routine shortened; below the page's level of detail"
+  "why": "WIN16 S24 M1: discardable library code (SPEC.md 124.26.11)"
  },
  "WIN16_TXT": {
   "sources": [
