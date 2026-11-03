@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "db5f8851",
-  "strings": "24601ea4726e08aa",
-  "why": "post-merge fixes: paragraph claims, the load's one file operation and the join from a double-click; below the page's level of detail"
+  "stamped": "e1a8c21f5",
+  "strings": "4fe195f6a33d805e",
+  "why": "merge of main (#328) into Phase B/C: WIN16's claims in paragraphs on both arms and the DOS core's cluster routine shortened; below the page's level of detail"
  },
  "WIN16_TXT": {
   "sources": [
