@@ -504,7 +504,7 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
 - [ ] The Sound Blaster clips (`tools/arcsfx.py`).
 - [x] `OSAPI_ABOUT_SET`, `OS88_REGION_MOVABLE`, Esc restoring the desktop.
 - [x] `arcadedisk` in the four geometries; a `local` line in RETIRED.txt.
-- [ ] A game list, once there is a second board.
+- [x] A game list, once there is a second board: Game > Space Invaders, Pac-Man.
 - [ ] A picture in the window, not only full screen.
 
 ### Wave 4: speed - done as part of waves 1-3, because the 8088 asked
@@ -519,21 +519,35 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
       MartyPC have reached.
 
 ### Wave 5: the Z80 core
-- [ ] The generator's Z80 table: prefixes, IX/IY in the state block, the
-      alternate registers, IM 2, and P/V and N in the flag handlers that
-      read them (the dead-flag analysis, REALDMG-SPEC 16.1.2).
-- [ ] ZEXDOC passes. `arcsim.py` grows a Z80 model.
+- [x] The Z80 translator, `apps/arcade/arcz80t.py` (decoder `z80dec.py`):
+      prefixes, IX/IY and the alternate set in view cells, IM 2, P/V from
+      the 8086's OF where a reader needs it, N not kept (DAA picks add or
+      subtract from the instruction that reaches it), block moves and
+      CPIR/CPDR as helpers that never touch the guest stack.
+- [x] `tools/arcz80.py`, a Z80 model, and `tests/arclock.py --board
+      pacman`: 4.2 million Z80 instructions over 600 frames agree
+      (row `arclockpm`).
+- [ ] ZEXDOC passes. The lockstep proves what Pac-Man executes, not the
+      whole instruction set.
 
 ### Wave 6: Pac-Man
-- [ ] The Namco board: the memory map, the inputs at 5000/5040, DIPs,
-      the IM 2 vector, the watchdog, and the boot-time ROM and RAM tests
-      passing.
-- [ ] The tile and sprite composer by damage: tile writes mark cells, and
-      sprites are erased and redrawn as old and new rectangles. The
-      palette goes through the DAC on VGA. 224x288 portrait at 1:1 in
-      `FSXM_VGA12`. Hercules and CGA compromises to be stated.
-- [ ] WSG on the SB, and the speaker fallback.
-- [ ] Proven first on `pengo2u`, then on the owner's Pac-Man ROM.
+- [x] The Namco board (`apps/arcade/arcpm.inc`, `tools/arcpac.py`): the
+      memory map, inputs at 5000/5040, the IM 2 vector, the latches; the
+      boot-time ROM and RAM tests pass.
+- [x] The composer by damage, VGA mode 12h only: 448x432 (each pixel
+      doubled across, every other line doubled down), the palette through
+      the DAC, tile writes compose their own cell, sprites old-and-new
+      boxes of at most 4x4 tiles, a per-tile plane cache and a screen
+      shadow so only changed bytes reach VRAM. Hercules and CGA refuse,
+      with the reason.
+- [x] **Full speed on 86Box's 16 MHz 286 VGA, no frames dropped in play**
+      (the owner's report confirmed Invaders the same way). Not cycle
+      accurate; the 5150 is not a Pac-Man target.
+- [x] WSG on the speaker: the loudest voice as a tone. NOT yet listened to.
+- [ ] WSG on the SB.
+- [ ] `pengo2u` was not needed: the owner supplied the Pac-Man ROM, and
+      `make arcaderom-pacman GETPACFROM=<zip>` checks it against MAME's
+      hashes.
 
 ### Wave 7: more boards (each conditional)
 - [ ] The Midway 8080 family as tables: Lunar Rescue, Space Invaders

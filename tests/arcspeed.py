@@ -40,12 +40,12 @@ def find_view(m):
         i = mem.find(b'ARCV', i + 1)
         if i < 0:
             raise SystemExit('arcspeed: FAIL - no ARCADE view in guest memory')
-        if (i - 0x4040) % 16 == 0:
-            return i - 0x4040
+        if (i - 0x6040) % 16 == 0:
+            return i - 0x6040
 
 
 def counters(m, v):
-    frames, drops, runs, budget, cells = struct.unpack('<5H', bytes(m.read(v + 0x4044, 10)))
+    frames, drops, runs, budget, cells = struct.unpack('<5H', bytes(m.read(v + 0x6044, 10)))
     return {'frames': frames, 'drops': drops, 'runs': runs, 'cells': cells}
 
 

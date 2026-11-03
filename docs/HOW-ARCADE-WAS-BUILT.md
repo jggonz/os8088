@@ -89,3 +89,61 @@ of code for 2,189 instructions.
 **The 286 has room to spare.** On 86Box's 16 MHz 286 with VGA the main
 loop runs about twelve times as often as on the real board, before any 286
 tuning at all.
+
+## Pac-Man: the second board, and the Z80
+
+**The owner played Invaders on 86Box at full speed** and asked for the
+next wave. Pac-Man's ROM came from the owner, not from an archive: a MAME
+`pacman.zip` uploaded to the session, checked against MAME's hashes by
+`tools/getarcrom.py pacman --from`, and never committed.
+
+**The Z80 is the 8080 plus five problems**, each of which found us in
+turn:
+- **The code no longer fits a segment.** 16K PCs of jump table plus 57KB
+  of translation is over 64KB, so the table moved to the AUX segment and
+  every dispatch became `jmp word [es:si]`.
+- **The 8086 has no parity-or-overflow flag.** P/V is the 8086's PF after
+  logic and its OF after arithmetic; where a reader of P/V follows an
+  arithmetic op, the translation copies OF into PF. N is not kept at all:
+  every DAA in Pac-Man is reached only from additions, which the
+  translator proves rather than assumes.
+- **Helpers may not use the guest's stack.** Pac-Man reads the word below
+  its own SP (`DEC SP` tricks), so a CALL into a block-move helper
+  clobbered live data. Helpers now return through a cell (`ST_RET`) by a
+  jump; nothing pushes below the guest's SP.
+- **RST is a call with data after it.** Pac-Man's RST 28h is followed by
+  three bytes of arguments, and the return lands past them. The model
+  (`tools/arcpac.py seeds`) learns each RST's return distance by watching
+  it come back; a first guess of +5 for RST 20h, seen once, was wrong, so
+  a distance now needs RET or JP (HL) at the same SP in 90% of the runs.
+- **(IX+d) can wrap past 32K.** Pac-Man's IX tables sit where IX+d sets
+  bit 15, which on the board is a mirror. The translation masks A15 only
+  where the decoder cannot prove it clear.
+
+**The lockstep paid for itself again.** Unicorn runs the translation
+beside a Python Z80 with the Namco board, comparing every instruction:
+4.2 million Z80 instructions over 600 frames, through the boot tests, a
+coin, a start and play. The harness itself had a bug worth recording: a
+PC divergence was once skipped silently; it fails now.
+
+**The picture was the work.** Pac-Man is 224x288 portrait; on VGA mode 12h
+it is drawn 448x432, centred. The first composer decided a pixel at a
+time and ran at a few frames a second on the 286. In order:
+- **Planes, not pixels.** A host-side table (`arcpmgfx.py`) gives each
+  tile row a mask per colour value; with a palette's four selectors, a
+  plane byte is four ANDs and three ORs.
+- **Sprites are boxes**, old and new, at most 4x4 tiles, composed with the
+  tiles under them, so nothing is erased and redrawn.
+- **A shadow of the screen**: a byte goes to VRAM only if it differs.
+- **A per-tile plane cache**, invalidated by the board's tile writes, so
+  a sprite box recomposes mostly from cache.
+
+Three bugs there looked like the emulation and were the renderer: a
+helper that clobbered BX (the row) overran the stack, a selector copy that
+moved DI, and an 8-bit MUL for the shadow row that wrapped past row 255
+and smeared the lower maze.
+
+**Result**: full speed on 86Box's 16 MHz 286 with VGA, no frames dropped
+in play (86Box is not cycle accurate; the proportion is the claim). The
+5150 is not a Pac-Man target. Invaders kept its 59.4 frames a second on
+MartyPC's 5150 through the multi-board refactor.

@@ -1,26 +1,31 @@
 #!/usr/bin/env python3
 # =============================================================================
 # os8088 - tests/arclock.py - ARCADE's translated code, in LOCKSTEP with the
-# reference model (docs/ARCADE-SPEC.md section 6.1)
+# reference model (docs/ARCADE-SPEC.md sections 6.1 and 7.6)
 #
-#     python3 tests/arclock.py CODE.bin ROM [--frames N]
+#     python3 tests/arclock.py CODE.bin AUX.bin ROM [--board invaders|pacman]
+#                              [--frames N]
 #
-# CODE.bin is the code part apps/arcade/arcaot.py's output assembles to; ROM
-# is the board image it was translated from. The code part runs under
-# Unicorn's 8086 with the view, aux and stack laid out as the package lays
-# them out, and tools/arcsim.py runs beside it. At every 8080 instruction
-# boundary - every entry of the PC table the code reaches - the two must
-# agree on the PC, A, BC, DE, HL and SP; on the flags wherever the 8080 is
-# about to READ them (a conditional, ADC/SBB, RAL/RAR, DAA, PUSH PSW, CMC);
-# and once a frame on every byte of RAM and VRAM. Interrupts go in on the
-# same instruction in both, at arcsim's T-states: the translated code does
-# not count cycles (the package's clock is the PC's, ARCADE-SPEC 5), so the
-# harness takes arcsim's word for WHEN, which is what makes the two
-# comparable at all.
+# CODE.bin is a code part, AUX.bin the PC table the translator wrote beside
+# it, ROM the board image both came from. The code part runs under Unicorn's
+# 8086 with the view, aux and stack laid out as the package lays them out,
+# and the board's model (tools/arcsim.py for the 8080 board, tools/arcpac.py
+# for Pac-Man's) runs beside it. At every guest instruction boundary - every
+# entry of the PC table the code reaches - the two must agree on the PC, A,
+# BC, DE, HL, SP (and IX, IY on the Z80); on the flags wherever the guest is
+# about to READ them; and once a frame on every byte of RAM and video.
+# Interrupts go in on the same instruction in both, at the model's T-states:
+# the translated code does not count cycles (the package's clock is the PC's,
+# ARCADE-SPEC 5), so the harness takes the model's word for WHEN.
 #
-# THE ONE KNOWN DIFFERENCE IS NOT COMPARED: AC, the 8080's half-carry, after
-# a logical op or a subtract (ARCADE-SPEC 3.5). Only DAA reads it, and DAA
-# here follows an ADD.
+# What is not compared, and why:
+#   * AC/H after a logical op or a subtract on the 8080, N on the Z80, and X
+#     and Y: only DAA reads them, and ARCADE-SPEC 3.5 and 7.3 say what DAA
+#     sees. The flags are compared where an instruction reads them, and in a
+#     pushed F only S Z P C.
+#   * flags DEAD at an interrupted instruction: the translation may leave
+#     garbage there, legally; the model takes the 8086's.
+#   * the dead space under the stack, where the translation's own CALLs push.
 #
 # Needs `pip install unicorn`. Exit 0 = every boundary agreed.
 # =============================================================================
@@ -32,190 +37,427 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 sys.path.insert(0, os.path.join(ROOT, 'apps', 'arcade'))
-import arcsim                       # noqa: E402
-import arcaot                       # noqa: E402
 
 from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_CODE   # noqa: E402
 from unicorn import x86_const as X  # noqa: E402
 
 CSEG, VSEG, ASEG = 0x1000, 0x2000, 0x3000
-V_IN1, V_IN2, ST_INTE = 0x4019, 0x401A, 0x4011
+
+
+def defs():
+    """Constants straight out of arcdefs.inc, so the two cannot drift."""
+    out = {}
+    for ln in open(os.path.join(ROOT, 'apps', 'arcade', 'arcdefs.inc')):
+        f = ln.split(';')[0].split()
+        if len(f) == 3 and f[1] == 'equ':
+            try:
+                out[f[0]] = int(f[2], 0)
+            except ValueError:
+                pass
+    return out
+
+
+D = defs()
+
+
+def seeds_of(name):
+    out = []
+    for x in open(os.path.join(ROOT, 'apps', 'arcade', name + '.seeds')):
+        x = x.split('#')[0].strip()
+        if x.startswith('RST '):
+            import arcz80t
+            vec, k = x[4:].split()
+            arcz80t.RST_RET[int(vec, 16)] = int(k)
+        elif x:
+            out.append(int(x, 16))
+    return out
+
+
+class Invaders:
+    ramlo, ramhi = 0x2000, 0x4000
+    sp0 = 0x2400
+
+    def __init__(self, rom):
+        import arcsim
+        import arcaot
+        self.arcsim = arcsim
+        self.m = arcsim.M(rom)
+        self.m.sp = self.sp0
+        self.rom = rom
+        self.half = 1
+        self.end = arcsim.HALF
+        self.frame = 0
+        flow = arcaot.walk(rom, seeds_of('invaders'))
+        arcaot.speculate(rom, flow)
+        arcaot.liveness(flow)
+        arcaot.mark_polls(flow)
+        self.idioms = {pc: v[1] for pc, v in arcaot.find_idioms(rom, flow).items()}
+        self.live = {pc: (i.lin, i.use) for pc, i in flow.items()}
+        self.C, self.Z, self.ALL = arcaot.C, arcaot.Z, arcaot.ALL
+
+    def view(self):
+        return self.rom
+
+    def setup(self, u):
+        u.mem_write(VSEG * 16 + D['V_IN1'], bytes([0x08]))
+
+    def regs(self):
+        m = self.m
+        return (m.pc, m.a, (m.b << 8) | m.c, (m.d << 8) | m.e, (m.h << 8) | m.l, m.sp)
+
+    def f(self):
+        return self.m.f()
+
+    def setf(self, v):
+        self.m.setf(v)
+
+    def reads(self, pc):
+        use = self.live.get(pc, (0, 0))[1]
+        mask = (0x01 if use & self.C else 0) | (0xC4 if use & self.Z else 0)
+        if self.rom[pc] == 0x27:
+            mask |= 0x10
+        return mask
+
+    def lin(self, pc):
+        lin = self.live.get(pc, (self.ALL, 0))[0]
+        return (0x01 if lin & self.C else 0) | (0xD4 if lin & self.Z else 0)
+
+    def deadstack(self):
+        return 0x2300
+
+    def step(self, pc, u):
+        """Step the model across one translated boundary; return the
+        interrupt it took after it as (return PC, vector PC), or None."""
+        m = self.m
+        m.step()
+        if pc in self.idioms:
+            while pc <= m.pc < pc + self.idioms[pc]:
+                m.step()
+        if m.cyc < self.end:
+            return None
+        n = self.half
+        took = (m.pc, n * 8) if m.ie else None
+        m.interrupt(n)
+        self.half = 3 - n
+        self.end += self.arcsim.HALF
+        if n == 2:
+            self.frame += 1
+            m.in1 = self.arcsim.script(self.frame)
+            u.mem_write(VSEG * 16 + D['V_IN1'], bytes([m.in1]))
+            self.newframe = True
+        return took
+
+    def ram(self):
+        return bytearray(self.m.m[self.ramlo:self.ramhi])
+
+
+class PacMan:
+    ramlo, ramhi = 0x4000, 0x5000
+    sp0 = 0xFFFF
+
+    def __init__(self, img):
+        import arcpac
+        import arcz80t
+        import z80dec
+        self.arcpac = arcpac
+        self.z = z80dec
+        self.b = arcpac.Board(img)
+        self.rom = img[:0x4000]
+        self.frame = 0
+        self.end = arcpac.FRAME_T
+        flow = arcz80t.walk(self.rom, seeds_of('pacman'))
+        arcz80t.speculate(self.rom, flow)
+        arcz80t.liveness(flow)
+        self.flow = flow
+
+    def view(self):
+        v = bytearray(0x6400)
+        v[0:0x4000] = self.rom
+        v[0x4800:0x4C00] = b'\xBF' * 0x400
+        v[0x5000] = self.b.in0
+        v[0x5040] = self.b.in1
+        v[0x5080] = self.arcpac.DSW1
+        v[0x50C0] = 0xFF
+        c = self.b.cpu
+        v[D['ST_IX']:D['ST_IX'] + 4] = bytes([c.ix & 255, c.ix >> 8, c.iy & 255, c.iy >> 8])
+        return bytes(v)
+
+    def setup(self, u):
+        pass
+
+    def regs(self):
+        c = self.b.cpu
+        return (c.pc, c.a, c.bc, c.de, c.hl, c.sp)
+
+    def xy(self):
+        return (self.b.cpu.ix, self.b.cpu.iy)
+
+    def f(self):
+        return self.b.cpu.f
+
+    def setf(self, v):
+        self.b.cpu.f = v
+
+    def reads(self, pc):
+        o = self.flow.get(pc)
+        if o is None:
+            return 0
+        z = self.z
+        mask = (0x01 if o.use & z.C else 0) | (0xC0 if o.use & z.Z else 0) | \
+            (0x04 if o.use & z.P else 0)
+        if o.op == 0x27 and not o.pfx:
+            mask |= 0x10
+        return mask
+
+    def lin(self, pc):
+        o = self.flow.get(pc)
+        lin = o.lin if o else self.z.ALL
+        z = self.z
+        return (0x01 if lin & z.C else 0) | (0xC0 if lin & z.Z else 0) | \
+            (0x04 if lin & z.P else 0) | (0x10 if lin & z.H else 0)
+
+    def deadstack(self):
+        return max(self.ramlo, self.b.cpu.sp - 32)
+
+    def step(self, pc, u):
+        c = self.b.cpu
+        rep = self.rom[pc] == 0xED and self.rom[pc + 1] in (0xB0, 0xB1, 0xB8, 0xB9)
+        c.cyc += c.step()
+        while rep and c.pc == pc:           # LDIR and kin: one boundary on the
+            c.cyc += c.step()               #   8086 side, so one here, and an
+        return self._after(u)               #   interrupt waits for the end
+
+    def _after(self, u):
+        b = self.b
+        c = b.cpu
+        if c.cyc >= self.end:
+            self.end += self.arcpac.FRAME_T
+            if b.irq_en:
+                b.pending = True
+            self.frame += 1
+            b.in0, b.in1 = self.arcpac.script(self.frame)
+            u.mem_write(VSEG * 16 + 0x5000, bytes([b.in0]))
+            u.mem_write(VSEG * 16 + 0x5040, bytes([b.in1]))
+            self.newframe = True
+        if b.pending and c.iff1 and not c.ei_delay:
+            ret = (c.pc + 1) & 0xFFFF if c.halted else c.pc
+            t = c.irq(b.vec)
+            if t:
+                b.pending = False
+                c.cyc += t
+                return (ret, c.pc)
+        return None
+
+    def wait_halt(self, u):
+        """The 8086 side reached arc_halt: run the model's HALT until it
+        takes the interrupt."""
+        c = self.b.cpu
+        while True:
+            c.cyc += c.step()
+            took = self._after(u)
+            if took:
+                return took
+
+    def ram(self):
+        r = bytearray(self.b.m[self.ramlo:self.ramhi])
+        r[0x800:0xC00] = b'\xBF' * 0x400       # 4800-4BFF: what reads give
+        return r
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('code')
+    ap.add_argument('aux')
     ap.add_argument('rom')
+    ap.add_argument('--board', default='invaders', choices=('invaders', 'pacman'))
     ap.add_argument('--frames', type=int, default=600)
-    ap.add_argument('--seeds', default=os.path.join(ROOT, 'apps', 'arcade', 'invaders.seeds'))
     a = ap.parse_args()
     code = open(a.code, 'rb').read()
-    rom = open(a.rom, 'rb').read()
-    table = [code[2 * p] | (code[2 * p + 1] << 8) for p in range(0x4000)]
+    aux = open(a.aux, 'rb').read()
+    img = open(a.rom, 'rb').read()
+    bd = Invaders(img) if a.board == 'invaders' else PacMan(img)
+    bd.newframe = False
+    table = [aux[2 * p] | (aux[2 * p + 1] << 8) for p in range(0x4000)]
     miss = table[0x3FFF]
     at = {}
-    for pc, off in enumerate(table):     # several PCs share an offset when
-        if off != miss:                  #   the first ones translate to
-            at.setdefault(off, []).append(pc)   # nothing (NOP)
-    reads = {}
-    for pcs in at.values():
-        for pc in pcs:
-            reads[pc] = arcaot.Ins(rom, pc).use
-
-    seeds = [int(x.split('#')[0], 16) for x in open(a.seeds)
-             if x.split('#')[0].strip()]
-    flow = arcaot.walk(rom, seeds)
-    arcaot.liveness(flow)
-    arcaot.mark_polls(flow)
-    idioms = arcaot.find_idioms(rom, flow)   # one 8086 loop each: the model
-                                             #   runs the whole 8080 loop at
-                                             #   once and interrupts at its exit
+    for pc, off in enumerate(table):
+        if off != miss:
+            at.setdefault(off, []).append(pc)
+    # arc_halt, by its bytes: LAHF / MOV BYTE [ST_WHY], ARCX_HALT
+    sig = bytes([0x9F, 0xC6, 0x06, D['ST_WHY'] & 255, D['ST_WHY'] >> 8, D['ARCX_HALT']])
+    halt_entry = code.find(sig)
+    # arc_miss: LAHF / SHR SI,1 / MOV BYTE [ST_WHY], ARCX_MISS
+    msig = bytes([0x9F, 0xD1, 0xEE, 0xC6, 0x06, D['ST_WHY'] & 255, D['ST_WHY'] >> 8,
+                  D['ARCX_MISS']])
+    miss_entry = code.find(msig)
 
     u = Uc(UC_ARCH_X86, UC_MODE_16)
     u.mem_map(0, 0x100000)
     u.mem_write(CSEG * 16, code)
-    u.mem_write(VSEG * 16, rom)
-    u.mem_write(ASEG * 16, b'\x02\x00')
+    u.mem_write(VSEG * 16, bd.view())
+    u.mem_write(ASEG * 16, aux)
     u.reg_write(X.UC_X86_REG_CS, CSEG)
     for r in (X.UC_X86_REG_DS, X.UC_X86_REG_SS):
         u.reg_write(r, VSEG)
     u.reg_write(X.UC_X86_REG_ES, ASEG)
-    u.reg_write(X.UC_X86_REG_SP, 0x2400)
+    u.reg_write(X.UC_X86_REG_SP, bd.sp0)
     u.reg_write(X.UC_X86_REG_BP, 0x7FFF)
-    u.reg_write(X.UC_X86_REG_DI, 2)         # the write list's next free word
+    u.reg_write(X.UC_X86_REG_DI, D['AUX_LIST'])
     u.reg_write(X.UC_X86_REG_EFLAGS, 0x0002)
-    u.mem_write(VSEG * 16 + V_IN1, bytes([0x08]))
+    bd.setup(u)
+    st = {'n': 0, 'fail': None, 'redirect': None, 'halt': False, 'done': False}
 
-    m = arcsim.M(rom)
-    m.sp = 0x2400
-    st = {'n': 0, 'fail': None, 'frame': 0, 'half': 1, 'end': arcsim.HALF,
-          'redirect': None, 'check': False, 'done': False}
-
-    def regs():
+    def regs8086():
         g = u.reg_read
-        ax, bx, cx, dx = (g(X.UC_X86_REG_AX), g(X.UC_X86_REG_BX),
-                          g(X.UC_X86_REG_CX), g(X.UC_X86_REG_DX))
-        return ax & 255, (ax >> 8) & 255, cx, dx, bx, g(X.UC_X86_REG_SP), \
-            g(X.UC_X86_REG_EFLAGS) & 0xD5
+        ax = g(X.UC_X86_REG_AX)
+        return ((ax & 255, g(X.UC_X86_REG_CX), g(X.UC_X86_REG_DX),
+                 g(X.UC_X86_REG_BX), g(X.UC_X86_REG_SP)),
+                g(X.UC_X86_REG_EFLAGS) & 0xD5)
 
     def fail(msg):
         st['fail'] = msg
         u.emu_stop()
         return True
 
+    def compare_ram():
+        ram = bytearray(u.mem_read(VSEG * 16 + bd.ramlo, bd.ramhi - bd.ramlo))
+        ref = bd.ram()
+        sp = bd.regs()[5]
+        for k in range(bd.deadstack(), sp):         # under the SP: dead, and
+            if bd.ramlo <= k < bd.ramhi:            #   our own CALLs push there
+                ram[k - bd.ramlo] = ref[k - bd.ramlo] = 0
+        for k in range(sp, min(sp + 64, bd.ramhi)):  # a pushed F: only S Z P C
+            if k >= bd.ramlo and (ram[k - bd.ramlo] ^ ref[k - bd.ramlo]) & 0xC5 == 0:
+                ram[k - bd.ramlo] = ref[k - bd.ramlo]
+        if ram != ref:
+            k = next(i for i in range(len(ram)) if ram[i] != ref[i])
+            return 'frame %d: memory differs first at %04X: %02X, the model %02X' % (
+                bd.frame, bd.ramlo + k, ram[k], ref[k])
+        return None
+
+    def one(uc, pc):
+        if st['redirect']:
+            if pc != st['redirect'][0]:
+                return fail('interrupted at %04X, the model at %04X' % (pc, st['redirect'][0]))
+            uc.emu_stop()
+            return True
+        if bd.newframe:
+            bd.newframe = False
+            msg = compare_ram()
+            if msg:
+                return fail(msg)
+            if bd.frame >= a.frames:
+                st['done'] = True
+                uc.emu_stop()
+                return True
+        uc.reg_write(X.UC_X86_REG_BP, 0x7FFF)       # no poll ever exits
+        uc.reg_write(X.UC_X86_REG_DI, D['AUX_LIST'])    # nothing draws here
+        got, fl = regs8086()
+        want = bd.regs()
+        if pc != want[0]:
+            return fail('PC %04X, the model is at %04X' % (pc, want[0]))
+        if got != want[1:]:
+            return fail('at %04X: A BC DE HL SP %s, the model %s' % (
+                pc, ' '.join('%X' % v for v in got), ' '.join('%X' % v for v in want[1:])))
+        if isinstance(bd, PacMan):
+            xy = bytes(uc.mem_read(VSEG * 16 + D['ST_IX'], 4))
+            gx = (xy[0] | (xy[1] << 8), xy[2] | (xy[3] << 8))
+            if gx != bd.xy():
+                return fail('at %04X: IX IY %04X %04X, the model %04X %04X'
+                            % ((pc,) + gx + bd.xy()))
+        mask = bd.reads(pc)
+        if (fl & mask) != (bd.f() & mask):
+            return fail('at %04X: flags %02X, the model %02X (mask %02X)'
+                        % (pc, fl, bd.f(), mask))
+        st['n'] += 1
+        st['last'] = pc
+        if os.environ.get('ARCPCS'):
+            lo, hi = (int(x, 16) for x in os.environ['ARCPCS'].split('-'))
+            if lo <= pc <= hi:
+                print('arclock: %04X frame %d A=%02X F=%02X IX=%04X' % (
+                    pc, bd.frame, want[1], bd.f(), bd.xy()[0] if hasattr(bd, 'xy') else 0))
+        took = bd.step(pc, uc)
+        if took:
+            st['redirect'] = took
+        return False
+
+    trail = []
+
     def hook(uc, addr, size, _):
         off = addr - CSEG * 16
+        if os.environ.get('ARCTRAIL'):
+            trail.append(off)
+            del trail[:-int(os.environ['ARCTRAIL'])]
+        if off == miss_entry:
+            fail('a jump to %04X, which has no translation (the guest last at %04X)'
+                 % (uc.reg_read(X.UC_X86_REG_SI) >> 1, st.get('last', 0)))
+            return
+        if off == halt_entry:
+            st['halt'] = True
+            uc.emu_stop()
+            return
         pcs = at.get(off)
         if pcs is None:
             return
+        want = bd.regs()[0]
+        if not st['redirect'] and want not in pcs:
+            fail('the 8086 side is at %s, the model at %04X'
+                 % ('/'.join('%04X' % p for p in pcs), want))
+            return
         for pc in pcs:
-            if pc == m.pc or st['redirect']:
+            if pc == bd.regs()[0] or st['redirect']:
                 if one(uc, pc):
                     return
 
-    def one(uc, pc):
-        if st['redirect']:                  # the instruction before has run
-            if pc != st['redirect'][0]:     #   on the 8086 too: deliver now
-                return fail('interrupted at %04X, the model at %04X'
-                            % (pc, st['redirect'][0]))
-            uc.emu_stop()
-            return True
-        if st['check']:                     # both sides at one boundary
-            st['check'] = False
-            ram = bytearray(uc.mem_read(VSEG * 16 + 0x2000, 0x2000))
-            ref = bytearray(m.m[0x2000:0x4000])
-            for k in range(0x2300, m.sp):       # under the SP is dead, and
-                if 0x2000 <= k < 0x4000:        #   our own CALLs push there
-                                                #   (no data lives in 2300-
-                                                #   23DF: tools/arcsim.py)
-                    ram[k - 0x2000] = ref[k - 0x2000] = 0
-            for k in range(m.sp, 0x2400):       # a PUSH PSW's F: AC is the
-                if ram[k - 0x2000] ^ ref[k - 0x2000] == 0x10:   # one known
-                    ram[k - 0x2000] = ref[k - 0x2000]           # difference
-            if ram != ref:
-                k = next(i for i in range(0x2000) if ram[i] != ref[i])
-                return fail('frame %d: RAM/VRAM differ first at %04X: %02X, the model %02X'
-                            % (st['frame'], 0x2000 + k, ram[k], ref[k]))
-        uc.reg_write(X.UC_X86_REG_BP, 0x7FFF)       # no poll ever exits
-        A, F, BC, DE, HL, SP, FL = regs()
-        if pc != m.pc:
-            return fail('PC %04X, the model is at %04X' % (pc, m.pc))
-        want = (m.a, (m.b << 8) | m.c, (m.d << 8) | m.e, (m.h << 8) | m.l, m.sp)
-        got = (A, BC, DE, HL, SP)
-        if want != got:
-            return fail('at %04X: A BC DE HL SP %s, the model %s' % (
-                pc, ' '.join('%X' % v for v in got), ' '.join('%X' % v for v in want)))
-        use = reads.get(pc, 0)
-        if use:
-            mask = (0x01 if use & arcaot.C else 0) | (0xC4 if use & arcaot.Z else 0)
-            if m.op_at(pc) == 0x27:
-                mask |= 0x10
-            if (FL & mask) != (m.f() & mask):
-                return fail('at %04X (op %02X): flags %02X, the model %02X (mask %02X)'
-                            % (pc, rom[pc], FL, m.f(), mask))
-        st['n'] += 1
-        # the model's step, and its interrupt on the same boundary
-        m.step()
-        if pc in idioms:
-            lo, hi = pc, pc + idioms[pc][1]
-            while lo <= m.pc < hi:
-                m.step()
-                st['n'] += 1
-        uc.reg_write(X.UC_X86_REG_DI, 2)    # the list: the harness never draws
-        if m.cyc >= st['end']:
-            n = st['half']
-            if m.ie:
-                ret = m.pc
-                m.interrupt(n)
-                st['redirect'] = (ret, n * 8)
-            else:
-                m.interrupt(n)
-            st['half'] = 3 - n
-            if n == 2:
-                st['frame'] += 1
-                m.in1 = arcsim.script(st['frame'])
-                uc.mem_write(VSEG * 16 + V_IN1, bytes([m.in1]))
-                st['check'] = True
-                if st['frame'] >= a.frames:
-                    st['done'] = True
-                    uc.emu_stop()
-                    return True
-            st['end'] += arcsim.HALF
-
-    arcsim.M.op_at = lambda self, pc: self.m[pc]
     u.hook_add(UC_HOOK_CODE, hook, begin=CSEG * 16, end=CSEG * 16 + len(code))
+    if os.environ.get('ARCWATCH'):            # a guest address's writes, logged
+        from unicorn import UC_HOOK_MEM_WRITE
+        wa = VSEG * 16 + int(os.environ['ARCWATCH'], 16)
+
+        def watch(uc, access, addr, size, value, _):
+            if addr <= wa < addr + size:
+                print('arclock: write %02X at %04X by %04X (the guest at %04X, frame %d)'
+                      % ((value >> (8 * (wa - addr))) & 255, wa - VSEG * 16,
+                         uc.reg_read(X.UC_X86_REG_IP), st.get('last', 0), bd.frame))
+        u.hook_add(UC_HOOK_MEM_WRITE, watch, begin=wa - 1, end=wa)
     ip = table[0]
     while True:
-        u.emu_start(CSEG * 16 + ip, 0x100000, count=0)
+        try:
+            u.emu_start(CSEG * 16 + ip, 0x100000, count=0)
+        except Exception as e:                  # a crash on the 8086 side
+            st['fail'] = '%s at %04X:%04X, the guest last at %04X' % (
+                e, u.reg_read(X.UC_X86_REG_CS), u.reg_read(X.UC_X86_REG_IP),
+                st.get('last', 0))
+        if st['fail'] and trail:
+            print('arclock: the last 8086 offsets: ' + ' '.join('%04X' % t for t in trail[-60:]))
+            if os.environ.get('ARCTRAILFILE'):
+                open(os.environ['ARCTRAILFILE'], 'w').write('\n'.join('%04X' % t for t in trail))
         if st['fail']:
             print('arclock: FAIL after %d instructions, frame %d: %s'
-                  % (st['n'], st['frame'], st['fail']))
+                  % (st['n'], bd.frame, st['fail']))
             return 1
         if st['done']:
             break
+        if st['halt']:
+            st['halt'] = False
+            st['redirect'] = bd.wait_halt(u)
         if st['redirect']:
             ret, vec = st['redirect']
             st['redirect'] = None
-            # flags DEAD at the interrupted PC are garbage the translation
-            # may leave (a poll's DEC, a VRAM test): legal, since nothing
-            # reads them before they are set again - the handler's PUSH PSW
-            # and POP PSW carry the garbage through. The model takes ours.
-            live = flow[ret].lin if ret in flow else arcaot.ALL
+            live = bd.lin(ret)
             fl = u.reg_read(X.UC_X86_REG_EFLAGS) & 0xD5
-            mf = m.f()
-            keep = (0x01 if live & arcaot.C else 0) | (0xD4 if live & arcaot.Z else 0)
-            m.setf((mf & keep) | (fl & ~keep & 0xD5) | 2)
+            bd.setf((bd.f() & live) | (fl & ~live & 0xD5) | (bd.f() & 0x2A & 0))
             sp = (u.reg_read(X.UC_X86_REG_SP) - 2) & 0xFFFF
             u.reg_write(X.UC_X86_REG_SP, sp)
             u.mem_write(VSEG * 16 + sp, bytes([ret & 255, ret >> 8]))
-            u.mem_write(VSEG * 16 + ST_INTE, b'\x00')
+            u.mem_write(VSEG * 16 + D['ST_INTE'], b'\x00')
             ip = table[vec]
             continue
         print('arclock: the 8086 side stopped at %04X:%04X with nothing to say'
               % (u.reg_read(X.UC_X86_REG_CS), u.reg_read(X.UC_X86_REG_IP)))
         return 1
-    print('arclock: %d 8080 instructions in lockstep over %d frames, all agree'
-          % (st['n'], st['frame']))
+    print('arclock: %d guest instructions in lockstep over %d frames, all agree'
+          % (st['n'], bd.frame))
     return 0
 
 

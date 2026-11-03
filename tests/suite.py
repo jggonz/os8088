@@ -4600,6 +4600,7 @@ SOAK = [
         "guard nobody knows is alive",
         needs=("nasm",)),
     Row("arclock", "soak", py("tests/arclock.py", "build/arcade/invcode.bin",
+                              "build/arcade/invaux.bin",
                               "build/arcade-rom/INVADERS.ROM", "--frames", "600"), 40.0,
         "ARCADE's translated Space Invaders (docs/ARCADE-SPEC.md 6.1) under Unicorn in "
         "LOCKSTEP with tools/arcsim.py: PC, A, BC, DE, HL and SP at every 8080 "
@@ -4607,7 +4608,20 @@ SOAK = [
         "frame, interrupts on the same instruction, through a coin, a start and "
         "play. The ROM is fetched (make arcaderom), never committed",
         needs=("nasm", "unicorn"),
-        wants=("build/arcade/invcode.bin", "build/arcade-rom/INVADERS.ROM")),
+        wants=("build/arcade/invcode.bin", "build/arcade/invaux.bin",
+               "build/arcade-rom/INVADERS.ROM")),
+    Row("arclockpm", "soak", py("tests/arclock.py", "build/arcade/paccode.bin",
+                                "build/arcade/pacaux.bin", "build/arcade-rom/PACMAN.ROM",
+                                "--board", "pacman", "--frames", "600"), 111.0,
+        "ARCADE's translated Pac-Man (docs/ARCADE-SPEC.md 7) under Unicorn in "
+        "LOCKSTEP with tools/arcpac.py's Z80 and Namco board: PC and the main "
+        "registers at every Z80 instruction, IX/IY and the alternate set, RAM "
+        "every frame, IM 2 interrupts on the same instruction, through a coin, "
+        "a start and play. The ROM is the OWNER'S (make arcaderom-pacman "
+        "GETPACFROM=<zip>), never fetched or committed, so the row SKIPs without it",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/paccode.bin", "build/arcade/pacaux.bin",
+               "build/arcade-rom/PACMAN.ROM")),
     Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
         "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "
         "played full screen for 10 guest seconds - a coin, a start, fire and "

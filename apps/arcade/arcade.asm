@@ -39,10 +39,23 @@
 
 %include "os88parts.inc"
 
-    OS88_PARTS_BEGIN 3
-      OS88_PART OP_ASSET, OP_COMP                   ; 0 the translated code
-      OS88_PART OP_ASSET, OP_ZERO, ARC_VIEW_KB      ; 1 the view
-      OS88_PART OP_ASSET, OP_ZERO, ARC_AUX_KB       ; 2 aux: the write list
+%ifdef ARC_PACMAN
+    OS88_PARTS_BEGIN 8
+%else
+    OS88_PARTS_BEGIN 4
+%endif
+      OS88_PART OP_ASSET, OP_ZERO, ARC_VIEW_KB      ; 0 the view, shared
+      OS88_PART OP_ASSET, OP_COMP                   ; 1 Space Invaders: code
+      OS88_PART OP_ASSET, OP_COMP                   ; 2   aux: the PC table
+      OS88_PART OP_ASSET, OP_COMP                   ; 3   the ROM
+%ifdef ARC_PACMAN
+      OS88_PART OP_ASSET, OP_COMP                   ; 4 Pac-Man: code
+      OS88_PART OP_ASSET, OP_COMP                   ; 5   aux
+      OS88_PART OP_ASSET, OP_COMP                   ; 6   the ROM, and its
+                                                    ;     tiles turned (arcpmgfx.py)
+      OS88_PART OP_ASSET, OP_ZERO, 64               ; 7   the shadow of the glass,
+                                                    ;     and the tiles' planes
+%endif
     OS88_PARTS_END
 
 AR_CONT_W   equ 300
@@ -57,6 +70,24 @@ AR_RUNHI    equ 7200                ;   over 6 ms halves it (ARCADE-SPEC 5.2):
 AR_BUDMAX   equ 0x4000            ; (weights: roughly 8080 instructions)
 AR_CELLS    equ 896                 ; 28 x 32 cells of 8 rows x 1 byte
 
+; A BOARD (ARCADE-SPEC 5.3): what the host loop asks of each. The loop is the
+; same for every board; these are the differences.
+BD_TITLE    equ 0                   ; dw its name
+BD_CODE     equ 2                   ; db its code part, aux part, ROM part
+BD_AUX      equ 3
+BD_ROM      equ 4
+BD_FLAGS    equ 5                   ; db BDF_*
+BD_ROMLEN   equ 6                   ; dw the program bytes the view starts with
+BD_RESET    equ 8                   ; dw near: the view's own cells, once copied
+BD_SETUP    equ 10                  ; dw near: in the bracket - the mode, the
+                                    ;   tables, the first picture. CF=1 refused
+BD_IRQ      equ 12                  ; dw near: an interrupt is due - deliver it
+                                    ;   (CF=0) or say it is masked (CF=1)
+BD_FRAME    equ 14                  ; dw near: a frame's picture, sound, keys
+BD_PERIOD   equ 16                  ; dw PIT counts between interrupts
+BD_PERFRAME equ 18                  ; db interrupts a frame
+BD_SIZE     equ 20
+
 ; =============================================================================
 ; ar_entry - in: DS = ours, ES = KERNEL_SEG. out: BX = window, CF = 0
 ; =============================================================================
@@ -68,21 +99,29 @@ ar_entry:
     jc .out
     mov al, 0
     call op_seg
-    mov [ar_core+2], ax
-    mov al, 1
-    call op_seg
     mov [ar_vseg], ax
-    mov al, 2
+    mov si, ar_boards               ; every board's code part, checked once
+.check:
+    lodsw
+    or ax, ax
+    jz .checked
+    mov bx, ax
+    mov al, [bx+BD_CODE]
     call op_seg
-    mov [ar_aseg], ax
     push es
-    mov es, [ar_core+2]
+    mov es, ax
     cmp word [es:ARC_HDR+AH_MAGIC], ARC_MAGIC
-    mov ax, [es:ARC_HDR+AH_ENTER]
     pop es
     jne .bad
-    mov [ar_core], ax
-    call ar_reset
+    jmp .check
+.checked:
+%ifdef ARC_PACMAN
+    mov al, 7
+    call op_seg
+    mov [pm_shseg], ax
+%endif
+    mov bx, [ar_boards]             ; Space Invaders until Game says
+    call ar_select
     mov si, ar_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -117,45 +156,84 @@ ar_toast:
     ret
 
 ; =============================================================================
-; ar_reset - power the board on: the ROM into the view, RAM and VRAM and the
-; cells cleared, the 8080 at 0000 with interrupts off. Every register kept.
+; ar_select - make BX the board: its segments into ar_core, ar_aseg,
+; ar_rseg, and the board powered on. Every register but BX kept.
+; =============================================================================
+ar_select:
+    push ax
+    mov [ar_bd], bx
+    mov al, [bx+BD_CODE]
+    call op_seg
+    mov [ar_core+2], ax
+    push es
+    mov es, ax
+    mov ax, [es:ARC_HDR+AH_ENTER]
+    pop es
+    mov [ar_core], ax
+    mov al, [bx+BD_AUX]
+    call op_seg
+    mov [ar_aseg], ax
+    mov al, [bx+BD_ROM]
+    call op_seg
+    mov [ar_rseg], ax
+    pop ax
+    ; fall through: a new board is a board just powered on
+
+; =============================================================================
+; ar_reset - power the board on: the view cleared, the program copied in from
+; the ROM part, the guest at 0000 with interrupts off, the write list empty,
+; and then the board's own cells (BD_RESET). Every register kept.
 ; =============================================================================
 ar_reset:
     push ax
+    push bx
     push cx
     push si
     push di
     push ds
     push es
+    mov bx, [ar_bd]
+    mov cx, [bx+BD_ROMLEN]
     mov es, [ar_vseg]
     xor di, di
+    push cx
     mov cx, (ARC_VIEW_KB * 1024) / 2
     xor ax, ax
     cld
     rep stosw
-    mov ds, [ar_core+2]
-    mov si, [ARC_HDR+AH_ROM]
-    mov cx, [ARC_HDR+AH_ROMLEN]
+    pop cx
+    mov ds, [ar_rseg]
+    xor si, si
     xor di, di
     rep movsb
-    mov word [es:ST_AF], 0x0200     ; F: bit 1 is always 1 on an 8080
-    mov word [es:ST_SP], 0x2400     ; (the ROM sets its own at once; this
-                                    ;   keeps a poll's CALL inside the view)
-    mov byte [es:V_IN1], 0x08       ; IN 1 bit 3 reads 1 on the board
-    mov word [es:V_SIG], 'AR'
-    mov word [es:V_SIG+2], 'CV'
-    mov byte [es:V_IN2], 0x00       ; the DIPs: 3 bases, extra at 1500,
-    pop es                          ;   coin info shown
+    pop es
     pop ds
     push es
+    mov es, [ar_vseg]
+    mov word [es:ST_AF], 0x0200     ; F: bit 1 is always 1 on an 8080 (and
+                                    ;   on a Z80 it is N, which is not kept)
+    mov word [es:V_SIG], 'AR'
+    mov word [es:V_SIG+2], 'CV'
     mov es, [ar_aseg]
     mov word [es:AUX_LPTR], AUX_LIST
     pop es
     mov byte [ar_halted], 0
+    call [bx+BD_RESET]
     pop di
     pop si
     pop cx
+    pop bx
     pop ax
+    ret
+
+; inv_reset - Space Invaders' cells: ES = the view
+inv_reset:
+    push es
+    mov es, [ar_vseg]
+    mov word [es:ST_SP], 0x2400     ; (the ROM sets its own at once)
+    mov byte [es:V_IN1], 0x08       ; IN 1 bit 3 reads 1 on the board
+    mov byte [es:V_IN2], 0x00       ; the DIPs: 3 bases, extra at 1500,
+    pop es                          ;   coin info shown
     ret
 
 ; =============================================================================
@@ -182,6 +260,16 @@ ar_paint:
     add cx, 8
     mov ax, (CWHITE << 8) | CBLACK
     call OSAPI_FONT_RUN
+    cmp si, ar_l1                   ; the first line names the board
+    jne .next
+    push bx
+    mov bx, [ar_bd]
+    mov si, [bx+BD_TITLE]
+    pop bx
+    add cx, 6 * 8
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+.next:
     pop si
     add dx, 11
     jmp .line
@@ -215,14 +303,24 @@ ar_onclick:
 .out:
     ret
 
-ar_oncmd:                           ; Game: Play (0), Reset (1)
-    push ax
+ar_oncmd:                           ; Game: Play (0), Reset (1), and
+    push ax                         ;   a board each after them
     call ar_abdismiss
     pop ax
     cmp al, 1
-    jne ar_play
+    jb ar_play
+    jne .board
     call ar_reset
     ret
+.board:
+    sub al, 2
+    cbw
+    shl ax, 1
+    mov bx, ax
+    mov bx, [ar_boards+bx]
+    call ar_select
+    call ar_repaint
+    jmp ar_play
 
 ar_about:
     mov byte [ar_abon], 1
@@ -278,6 +376,15 @@ ar_play:
 
 ; ar_fsx - the bracket's proc: SI = our window, DS = ours, ES = KERNEL_SEG
 ar_fsx:
+    mov bx, [ar_bd]
+    call [bx+BD_SETUP]
+    jc .out
+    call ar_loop
+.out:
+    ret
+
+; inv_setup - Space Invaders' picture: VGA, Hercules or CGA. SI = the window
+inv_setup:
     mov bx, si
     call OSAPI_FSX_CAPS
     mov dl, FSXM_VGA12
@@ -290,6 +397,7 @@ ar_fsx:
     test ax, 1 << FSXM_CGA640
     jnz .mode
     mov word [ar_err], ar_s_nomode
+    stc
     ret
 .mode:
     mov al, dl
@@ -306,7 +414,7 @@ ar_fsx:
     call ar_vinit
     call ar_dirtyall
     call ar_render
-    call ar_loop
+    clc
     ret
 
 ; =============================================================================
@@ -314,12 +422,18 @@ ar_fsx:
 ; =============================================================================
 ar_loop:
     mov byte [ar_quit], 0
+    mov bx, [ar_bd]
+    mov ax, [bx+BD_PERIOD]
+    mov [ar_period], ax
+    shl ax, 1
+    mov [ar_late], ax               ; two periods behind: drop, never race
     call pit_now
-    add ax, AR_HALF
+    add ax, [ar_period]
     adc dx, 0
     mov [ar_due], ax
     mov [ar_due+2], dx
     mov byte [ar_which], 1
+    mov byte [ar_irqn], 0
     mov word [ar_budget], 128
     call pit_now                    ; a run is timed from the end of the one
     mov [ar_t0], ax                 ;   before it: one PIT read a run
@@ -386,9 +500,9 @@ ar_loop:
     sub ax, [ar_due]
     sbb dx, [ar_due+2]
     js .run
-    or dx, dx                       ; two frames behind: catch up by
-    jnz .resync                     ;   dropping, never by racing
-    cmp ax, AR_HALF * 4
+    or dx, dx                       ; behind: catch up by dropping, never
+    jnz .resync                     ;   by racing
+    cmp ax, [ar_late]
     jb .deliver
 .resync:
     mov es, [ar_vseg]
@@ -397,13 +511,42 @@ ar_loop:
     mov [ar_due], ax
     mov [ar_due+2], dx
 .deliver:
+    mov bx, [ar_bd]                 ; the board's interrupt: in, or masked
+    call [bx+BD_IRQ]                ;   and waiting (the EI that unmasks it
+    jc .run                         ;   ends the next run, ST_PEND)
+    mov byte [ar_halted], 0
+    mov ax, [ar_period]
+    add [ar_due], ax
+    adc word [ar_due+2], 0
+    inc byte [ar_irqn]
+    mov bx, [ar_bd]
+    mov al, [ar_irqn]
+    cmp al, [bx+BD_PERFRAME]        ; the frame's last: picture, sound, keys
+    jb .run
+    mov byte [ar_irqn], 0
+    mov es, [ar_vseg]
+    inc word [es:V_NFRAME]
+    call ar_typed
+    call [bx+BD_FRAME]
+    cmp byte [ar_quit], 0
+    je .run
+    jmp ar_quiet
+.miss:
+    mov ax, [es:ST_PC]
+    mov di, ar_s_miss + 19
+    call ar_hex4
+    mov word [ar_err], ar_s_miss
+    jmp ar_quiet
+
+; inv_irq - Space Invaders' two interrupts, RST 1 and RST 2 in turn: CF=1
+; while the 8080 has them masked
+inv_irq:
     mov es, [ar_vseg]
     mov byte [es:ST_PEND], 1
-    cmp byte [es:ST_INTE], 0        ; masked: it stays pending, and the EI
-    je .run                         ;   that unmasks it ends the next run
+    cmp byte [es:ST_INTE], 0
+    je .masked
     mov byte [es:ST_INTE], 0
     mov byte [es:ST_PEND], 0
-    mov byte [ar_halted], 0
     mov bx, [es:ST_SP]              ; RST n: the PC onto the 8080's stack
     sub bx, 2
     mov [es:ST_SP], bx
@@ -415,24 +558,18 @@ ar_loop:
     shl ax, 1
     shl ax, 1
     mov [es:ST_PC], ax
-    add word [ar_due], AR_HALF
-    adc word [ar_due+2], 0
     xor byte [ar_which], 3
-    cmp byte [ar_which], 1          ; RST 2 went in: a frame is done
-    jne .run
-    inc word [es:V_NFRAME]
+    clc
+    ret
+.masked:
+    stc
+    ret
+
+; inv_frame - after RST 2: the picture, the sound, the controls
+inv_frame:
     call ar_render
     call ar_sound
-    call ar_keys
-    cmp byte [ar_quit], 0
-    je .run
-    jmp ar_quiet
-.miss:
-    mov ax, [es:ST_PC]
-    mov di, ar_s_miss + 19
-    call ar_hex4
-    mov word [ar_err], ar_s_miss
-    jmp ar_quiet
+    jmp ar_keys
 
 ; ar_hex4 - AX as four hex digits at DS:DI
 ar_hex4:
@@ -456,21 +593,34 @@ ar_hex4:
     ret
 
 ; =============================================================================
-; ar_keys - the controls into IN 1 and IN 2, once a frame
+; ar_typed - once a frame, every board: what was TYPED. Esc leaves; a coin
+; or a start typed between two frames is still seen - it holds its logical
+; bit (AR_COIN, AR_START1, AR_START2) in ar_pbits for AR_PULSE frames - and
+; nothing typed here reaches the desktop afterwards.
 ; =============================================================================
-ar_keys:
-.drain:                             ; nothing typed in here reaches the
-    mov ah, 1                       ;   desktop afterwards - and a coin or a
-    int 0x16                        ;   start TYPED between two samples of
-    jz .levels                      ;   the levels below is still seen: it
-    xor ah, ah                      ;   holds its bit for AR_PULSE frames
+AR_COIN     equ 1
+AR_START1   equ 2
+AR_START2   equ 4
+AR_PULSE    equ 5                   ; frames a typed coin or start is held
+
+ar_typed:
+    cmp byte [ar_pleft], 0
+    je .drain
+    dec byte [ar_pleft]
+    jnz .drain
+    mov byte [ar_pbits], 0
+.drain:
+    mov ah, 1
     int 0x16
-    cmp al, 27                      ; Esc, typed: back to the window
+    jz .out
+    xor ah, ah
+    int 0x16
+    cmp al, 27
     jne .notesc
     mov byte [ar_quit], 1
 .notesc:
     or al, 0x20                     ; (letters to lower case)
-    mov si, ar_typed
+    mov si, ar_typemap
 .t:
     mov cx, [si]
     or cx, cx
@@ -481,15 +631,34 @@ ar_keys:
     or [ar_pbits], ch
     mov byte [ar_pleft], AR_PULSE
     jmp .drain
-.levels:
+.out:
+    ret
+
+ar_typemap:                         ; a character typed, its logical bit
+    db '5', AR_COIN
+    db 'c', AR_COIN
+    db '1', AR_START1
+    db '2', AR_START2
+    dw 0
+
+; =============================================================================
+; ar_keys - Space Invaders' controls into IN 1 and IN 2, once a frame
+; =============================================================================
+ar_keys:
     mov bl, 0x08
-    cmp byte [ar_pleft], 0
-    je .held
-    or bl, [ar_pbits]
-    dec byte [ar_pleft]
-    jnz .held
-    mov byte [ar_pbits], 0
-.held:
+    mov al, [ar_pbits]
+    test al, AR_COIN
+    jz .nocoin
+    or bl, 0x01
+.nocoin:
+    test al, AR_START1
+    jz .no1
+    or bl, 0x04
+.no1:
+    test al, AR_START2
+    jz .no2
+    or bl, 0x02
+.no2:
     mov si, ar_keymap
 .k:
     lodsw
@@ -509,14 +678,6 @@ ar_keys:
     or al, ah
     mov [es:V_IN2], al
     ret
-
-AR_PULSE    equ 5                   ; frames a typed coin or start is held
-ar_typed:                           ; a character typed, its IN 1 bit
-    db '5', 0x01
-    db 'c', 0x01
-    db '1', 0x04
-    db '2', 0x02
-    dw 0
 
 ar_keymap:                          ; scancode, IN 1 bit: the HELD keys,
     db KSC_SPACE, 0x10              ;   asked by level once a frame. Each is
@@ -539,21 +700,7 @@ ar_keymap:                          ; scancode, IN 1 bit: the HELD keys,
 ar_vinit:
     push ds
     pop es
-    xor bx, bx                      ; the doubling table: a byte's 8 pixels
-.dbl:                               ;   as 16, left byte first
-    mov al, bl
-    call ar_dbl4hi
-    mov dl, ah
-    mov al, bl
-    mov cl, 4
-    shl al, cl
-    call ar_dbl4hi
-    mov dh, ah
-    mov si, bx
-    shl si, 1
-    mov [ar_dbl+si], dx
-    inc bl
-    jnz .dbl
+    call ar_dblinit
     mov ax, [ar_fsi+FSI_SEG]
     mov [ar_vidseg], ax
     xor bx, bx                      ; BX = Y
@@ -650,6 +797,25 @@ ar_vinit:
     mov word [ar_put], ar_put_vga
     call ar_overlay
 .out:
+    ret
+
+; ar_dblinit - the doubling table: a byte's 8 pixels as 16, left byte first
+ar_dblinit:
+    xor bx, bx
+.dbl:
+    mov al, bl
+    call ar_dbl4hi
+    mov dl, ah
+    mov al, bl
+    mov cl, 4
+    shl al, cl
+    call ar_dbl4hi
+    mov dh, ah
+    mov si, bx
+    shl si, 1
+    mov [ar_dbl+si], dx
+    inc bl
+    jnz .dbl
     ret
 
 ; ar_dbl4hi - AH = AL's top four pixels, each doubled
@@ -752,7 +918,7 @@ ar_dirtyall:
 .col:
     stosw
     mov bx, ax
-    mov byte [es:bx], 1
+    mov byte [es:bx+AUX_FLAGS], 1
     inc ax
     loop .col
     add ax, 0x100 - 32
@@ -777,7 +943,7 @@ ar_render:
     cmp si, [es:AUX_LPTR]
     jae .drawn
     mov bx, [es:si]
-    mov byte [es:bx], 0
+    mov byte [es:bx+AUX_FLAGS], 0
     push si
     mov es, [ar_vseg]
     inc word [es:V_NCELL]
@@ -1110,31 +1276,67 @@ ar_n_f4:     dw 82
              dw 0
 
 %include "os88pit.inc"
+%ifdef ARC_PACMAN
+%include "arcpm.inc"
+%endif
 
 ; =============================================================================
 ; data
 ; =============================================================================
+; --- the boards (ARCADE-SPEC 5.3) ---------------------------------------------
+ar_boards:
+    dw ar_bd_inv
+%ifdef ARC_PACMAN
+    dw ar_bd_pm
+%endif
+    dw 0
+ar_bd_inv:
+    dw ar_s_inv
+    db 1, 2, 3, 0
+    dw 0x2000, inv_reset, inv_setup, inv_irq, inv_frame
+    dw 10020                        ; half of the board's 59.54 Hz (MAME
+    db 2, 0                         ;   mw8080bw: 4.992 MHz, 320 x 262)
+%ifdef ARC_PACMAN
+ar_bd_pm:
+    dw ar_s_pm
+    db 4, 5, 6, 0
+    dw 0x4000, pm_reset, pm_setup, pm_irq, pm_frame
+    dw 19688                        ; the board's 60.61 Hz (MAME pacman.cpp:
+    db 1, 0                         ;   6.144 MHz, 384 x 264), one interrupt
+%endif
+
 ar_tpl:
     dw 60, 40, AR_CONT_W+2, AR_CONT_H+TITLE_H+1
     dw ar_title, ar_paint, ar_onkey, ar_onclick
     OS88_MENUSET ar_menus, ar_title, ar_oncmd
+%ifdef ARC_PACMAN
+        OS88_MENU ar_m_game, ar_i_game, 4
+%else
         OS88_MENU ar_m_game, ar_i_game, 2
+%endif
     OS88_MENUSET_END ar_menus
+%ifdef ARC_PACMAN
+ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pm
+%else
 ar_i_game:  dw ar_s_play, ar_s_reset
+%endif
+ar_s_inv:   db 'Space Invaders', 0
+ar_s_pm:    db 'Pac-Man', 0
 ar_m_game:  db 'Game', 0
 ar_s_play:  db 'Play', 0
 ar_s_reset: db 'Reset', 0
 ar_title:   db 'Arcade', 0
 
 ar_lines:   dw ar_l1, ar_l2, ar_l3, ar_l4, ar_l5, ar_l6, ar_l7, ar_l8, 0
-ar_l1:      db 'Space Invaders (Taito/Midway 1978)', 0
+ar_l1:      db 'Game: ', 0                  ; + the board's name, painted after
 ar_l2:      db 0
 ar_l3:      db 'Enter or click: play full screen', 0
 ar_l4:      db '5 or C: coin    1, 2: players', 0
-ar_l5:      db 'Left, Right: move  Space: fire', 0
+ar_l5:      db 'Arrows: move    Space: fire', 0
 ar_l6:      db 'Esc: back here, the game held', 0
 ar_l7:      db 0
 ar_l8:      db 'Game > Reset: power the board off', 0
+ar_s_vgaonly: db 'Arcade: Pac-Man needs a VGA', 0
 
 ar_ablines: dw ar_ab1, ar_ab2, ar_ab3, ar_ab4, 0
 ar_ab1:     db 'Arcade for os8088', 0
@@ -1161,6 +1363,11 @@ ar_s_miss:  db 'Arcade: no code at ????', 0
 %assign AR_BSS AR_BSS + %2
 %endmacro
 AR_VAR ar_core, 4                   ; dw arc_enter, dw the code part
+AR_VAR ar_bd, 2                     ; the board (ar_boards)
+AR_VAR ar_rseg, 2                   ; its ROM part
+AR_VAR ar_period, 2                 ; its PIT counts between interrupts
+AR_VAR ar_late, 2                   ; ...and how far behind is dropped
+AR_VAR ar_irqn, 1                   ; interrupts so far this frame
 AR_VAR ar_vseg, 2
 AR_VAR ar_aseg, 2
 AR_VAR ar_vidseg, 2
@@ -1189,5 +1396,46 @@ AR_VAR ar_pleft, 1                  ;   ...and for how many more frames
 AR_VAR ar_fsi, FSI_SIZE
 AR_VAR ar_dbl, 512
 AR_VAR ar_ytab, 1024
+%ifdef ARC_PACMAN
+AR_VAR pm_yoff, 288 * 2             ; Pac-Man: a portrait row's screen offset
+AR_VAR pm_pl, 4 * 128               ;   the composing box: 4 planes of 32
+                                    ;   rows of 4 bytes
+AR_VAR pm_sel, 16                   ;   a palette's plane selectors
+AR_VAR pm_selw, 32                  ;   a sprite's selectors as words
+AR_VAR pm_opqw, 8                   ;   ...and its opacity
+AR_VAR pm_sm, 16                    ;   its row's masks, shifted into place
+AR_VAR pm_m, 8                      ;   a sprite row's four value masks
+AR_VAR pm_o, 4                      ;   ...NOT its opaque mask, placed
+AR_VAR pm_sh, 2                     ;   ...and where: pixels into the box
+AR_VAR pm_ox, 2                     ;   a sprite's old box, for the union
+AR_VAR pm_oy, 2
+AR_VAR pm_ox1, 2
+AR_VAR pm_oy1, 2
+AR_VAR pm_cur, 8 * PMS_SIZE         ;   the sprites now, and as last drawn
+AR_VAR pm_old, 8 * PMS_SIZE
+AR_VAR pm_ctx, 2                    ;   the box, in tiles
+AR_VAR pm_cty, 2
+AR_VAR pm_ctw, 2
+AR_VAR pm_cth, 2
+AR_VAR pm_bx0, 2                    ;   ...and in pixels
+AR_VAR pm_bx1, 2
+AR_VAR pm_by0, 2
+AR_VAR pm_by1, 2
+AR_VAR pm_iy0, 2
+AR_VAR pm_iy1, 2
+AR_VAR pm_s, 2
+AR_VAR pm_sy, 2
+AR_VAR pm_sbase, 2
+AR_VAR pm_flip, 1
+AR_VAR pm_rows, 2
+AR_VAR pm_pp, 2
+AR_VAR pm_shseg, 2                  ;   the shadow of the glass (part 7)
+AR_VAR pm_shp, 2                    ;   ...its plane, and its row, in pm_put
+AR_VAR pm_shr, 2
+AR_VAR pm_tvalid, 28 * 36           ;   a tile's cached planes are good
+AR_VAR pm_t, 2
+AR_VAR pm_tx, 2
+AR_VAR pm_ty, 2
+%endif
     OS88_BSS OP_BSS + AR_BSS
     OS88_IMAGE_END

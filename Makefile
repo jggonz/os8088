@@ -2395,7 +2395,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         apple2 apple2disk realdmgdisk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
         xt-apple2 286-apple2 \
-        arcade arcadedisk arcaderom arclock \
+        arcade arcadedisk arcaderom arcaderom-pacman arclock \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -11473,29 +11473,57 @@ $(ARCROM): tools/getarcrom.py | $(BUILD)
 #> [Applications] arcaderom :: fetch the Space Invaders ROM at pinned hashes (never committed)
 arcaderom: $(ARCROM)
 
-$(BUILD)/arcade/invcode.asm: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
+$(BUILD)/arcade/invcode.bin: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCROM)
 	@mkdir -p $(BUILD)/arcade
-	python3 apps/arcade/arcaot.py $(ARCROM) apps/arcade/invaders.seeds $@
+	python3 apps/arcade/arcaot.py $(ARCROM) apps/arcade/invaders.seeds \
+		$(BUILD)/arcade/invcode.asm $@ $(BUILD)/arcade/invaux.bin --aux-kb 48
+$(BUILD)/arcade/invaux.bin: $(BUILD)/arcade/invcode.bin
 
-$(BUILD)/arcade/invcode.bin: $(BUILD)/arcade/invcode.asm
-	$(NASM) -f bin -w+error -I apps/arcade/ -o $@ $<
+# PAC-MAN IS THE OWNER'S ROM, NEVER FETCHED (ARCADE-SPEC 7): no public
+# archive.org item carries it. `make arcaderom-pacman GETPACFROM=<zip>` checks
+# the set by hash and writes build/arcade-rom/PACMAN.ROM; while that file
+# exists, ARCADE is built with the Pac-Man board too (-DARC_PACMAN), and
+# without it, with Space Invaders alone.
+ARCPMROM := $(BUILD)/arcade-rom/PACMAN.ROM
+#> [Applications] arcaderom-pacman :: take your Pac-Man set: GETPACFROM=<dir-or-zip> (checked by hash)
+.PHONY: arcaderom-pacman
+arcaderom-pacman:
+	python3 tools/getarcrom.py pacman -o $(ARCPMROM) --from $(GETPACFROM)
 
-ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/os88api.inc \
-              apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
+ARC_PM := $(wildcard $(ARCPMROM))
+$(BUILD)/arcade/paccode.bin: apps/arcade/arcz80t.py apps/arcade/z80dec.py apps/arcade/arcaot.py \
+                             apps/arcade/pacman.seeds apps/arcade/arcrt.inc apps/arcade/arcz80rt.inc \
+                             apps/arcade/arcdefs.inc $(ARCPMROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcz80t.py $(ARCPMROM) apps/arcade/pacman.seeds \
+		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 37
+$(BUILD)/arcade/pacaux.bin: $(BUILD)/arcade/paccode.bin
+$(BUILD)/arcade/PACMAN.PRT: apps/arcade/arcpmgfx.py $(ARCPMROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcpmgfx.py $(ARCPMROM) $@
+
+ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc \
+              apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
-$(BUILD)/arcade.bin: $(ARCADE_SRC) | $(BUILD)
-	$(NASM) -f bin -w+error -I apps/ -I apps/arcade/ -l $(BUILD)/arcade.lst -o $@ $<
+ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM)
+ARCADE_DEF :=
+ifneq ($(ARC_PM),)
+ARCADE_PARTS += $(BUILD)/arcade/paccode.bin $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/PACMAN.PRT
+ARCADE_DEF := -DARC_PACMAN
+endif
+$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) | $(BUILD)
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -l $(BUILD)/arcade.lst -o $@ $<
 
-$(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(BUILD)/arcade/invcode.bin tools/os88pkg.py $(PKGZSTAMP)
-	$(OS88PKG) $(BUILD)/arcade.bin -o $@ --part $(BUILD)/arcade/invcode.bin --part-compress lz4
+$(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
 
 #> [Applications] arcade :: ARCADE, Space Invaders' 8080 translated to 8086 (docs/ARCADE-SPEC.md)
 arcade: $(BUILD)/arcade.o88
 
 #> [Applications] arclock :: ARCADE's translated code in lockstep with tools/arcsim.py (needs unicorn)
 arclock: $(BUILD)/arcade/invcode.bin
-	python3 tests/arclock.py $(BUILD)/arcade/invcode.bin $(ARCROM) --frames 600
+	python3 tests/arclock.py $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) --frames 600
 
 ARCADEDISK := $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
 ARCADEIMG = python3 tools/os88disk.py -o $(1) --size $(2) \

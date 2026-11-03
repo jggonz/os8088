@@ -9,6 +9,8 @@
 #     python3 tools/getarcrom.py invaders -o build/arcade-rom/INVADERS.ROM
 #     python3 tools/getarcrom.py invaders --from <dir-or-zip>  (no network)
 #     python3 tools/getarcrom.py invaders --check               (cache only)
+#     python3 tools/getarcrom.py pacman --from <dir-or-zip>     (the owner's;
+#                                                                never fetched)
 #
 # NOTHING THIS SCRIPT DOWNLOADS IS COMMITTED (CONTRIBUTING.md 6), exactly as
 # tools/getapple2rom.py's Apple II ROMs are not. The zip is fetched from ONE
@@ -53,6 +55,34 @@ SETS = {
              '0a97ed62e2063c13e373a9a61ea3d8fbb701e414af05953e16f823fd879d5f49'),
         ],
         'size': 0x2000,
+    },
+    # MAME's `pacman` (Midway). NOT fetched: no public archive.org item
+    # carries it (arcade_pacman, arcade_puckman and arcade_mspacman are
+    # dark), so the owner supplies it with --from and the hashes check it.
+    # The image is the board's ROMs in the layout ARCADE-SPEC 7.1 pins.
+    'pacman': {
+        'url': None,
+        'members': [
+            ('pacman.6e', 0x0000,                                   # c1e6ab10
+             'fe1c3234df345855d30728637f361f79472cabfe2a892a7567c63eaf31a4217b'),
+            ('pacman.6f', 0x1000,                                   # 1a6fb2d4
+             '09a723c9f84790e9019633e37761cfa4e9d7ab6db14f6fdb12738f51fec11065'),
+            ('pacman.6h', 0x2000,                                   # bcdd1beb
+             '69347409739b64ed9d9b19713de0bc66627bd137687de649796b9d2ef88ed8e6'),
+            ('pacman.6j', 0x3000,                                   # 817d94e3
+             '03ee523c210e87fb8dd1d925b092ad269fdd753b5b7a20b3757b0ceee5f18679'),
+            ('pacman.5e', 0x4000,                                   # tiles 0c944964
+             '8d9a86c97fe94b1fd010b139672c330e3b257ba59b0d8df7a821592e30a77b4b'),
+            ('pacman.5f', 0x5000,                                   # sprites 958fedf9
+             '49c8f656cb8ea1ae02fb64a2c09df98e7f06a034b43c6c8240032df417c6d36f'),
+            ('82s123.7f', 0x6000,                                   # colours 2fc650bd
+             '48fe0b01d68e3d702019ca715f7266c8e3261c769509b281720f53ca0a1cc8fb'),
+            ('82s126.4a', 0x6020,                                   # palettes 3eb3a8e4
+             'ef8f7a3b0c10f787d9cc1cbc5cc266fcc1afadb24c3b4d610fe252b9c3df1d76'),
+            ('82s126.1m', 0x6120,                                   # waveforms a9cc86bf
+             '8e723ad91e46ef1a186b2ed3c99a8bf1c571786bc7ceae2b367cbfc80857a394'),
+        ],
+        'size': 0x6220,
     },
 }
 
@@ -120,6 +150,9 @@ def main():
     s = SETS[a.set]
     if a.src:
         got = members_from(a.src, s)
+    elif s['url'] is None:
+        die('%s is not fetched: give the set you have with --from <dir-or-zip>'
+            % a.set)
     else:
         data = fetch_zip(a.set, s, a.check)
         got = members_in_zip(data, [m[0] for m in s['members']], a.set + '.zip')

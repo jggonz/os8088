@@ -2,8 +2,9 @@
 ; os8088 - apps/arcade/arcrt.inc - the runtime inside a translated code part
 ; (ARCADE-SPEC 3.3 and 3.4)
 ;
-; Assembled into every code part arcaot.py writes, straight after the PC
-; table, so its header lands at ARC_HDR. The host far-calls arc_enter; the
+; Assembled first into every code part the translators write, so its header
+; is at offset 0 (ARC_HDR). The PC table is aux's (ES), so every jump through
+; it is `jmp word [es:si]`. The host far-calls arc_enter; the
 ; translated code comes back through arc_poll/arc_miss/arc_halt, which
 ; restore the host's stack and RETF.
 ;
@@ -15,11 +16,8 @@
 ; 8080's SP, which is dead space by the 8080's own definition.
 ; =============================================================================
 
-    times ARC_HDR - ($ - $$) db 0
     dw ARC_MAGIC
     dw arc_enter
-    dw arc_rom
-    dw arc_rom_end - arc_rom
     dw arc_code_end
 
 ; -----------------------------------------------------------------------------
@@ -44,7 +42,7 @@ arc_enter:
     shl si, 1
     mov ax, [ST_AF]
     sahf                            ; the 8080's flags, last: nothing after
-    jmp word [cs:si]                ;   this touches FLAGS
+    jmp word [es:si]                ;   this touches FLAGS
 
 ; -----------------------------------------------------------------------------
 ; arc_poll / arc_poll_ah - a poll point's budget ran out. Called with the
@@ -58,6 +56,13 @@ arc_poll_ah:
     ; 8080 PC after it; SP comes back from ST_HSP and the RETF is the host's
     pop si
     mov si, [cs:si]
+    mov byte [ST_WHY], ARCX_POLL
+; arc_pollsi / arc_pollsi_ah - the same, with the guest PC in SI: the Z80
+; translation's poll points JMP here, writing nothing below the guest's SP
+; (ARCADE-SPEC 7.5)
+arc_pollsi:
+    lahf
+arc_pollsi_ah:
     mov byte [ST_WHY], ARCX_POLL
 arc_save:
     mov [ST_PC], si

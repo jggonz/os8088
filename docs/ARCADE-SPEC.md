@@ -8,11 +8,13 @@ here *before* it goes in the code. The design record is
 docs/plans/ARCADE-EMU-PLAN.md. It is cited from outside as "ARCADE-SPEC
 section N".
 
-**What is built, stated once:** one board, Midway's 8080 B&W board running
-Space Invaders (Taito, 1978), full screen on VGA, Hercules and CGA, with
-speaker sound. There is no windowed picture, no Sound Blaster, no second
-board, no save state, and no interpreter for an 8080 PC the translation does
-not hold (section 3.2 says what happens then).
+**What is built, stated once:** two boards. Midway's 8080 B&W board running
+Space Invaders (Taito, 1978), full screen on VGA, Hercules and CGA; and
+Namco's Pac-Man board (Midway, 1980), its Z80 translated by section 7's
+translator, full screen on VGA only, built in only when the owner has
+supplied the ROM. Both have speaker sound. There is no windowed picture, no
+Sound Blaster, no save state, and no interpreter for a guest PC the
+translation does not hold (section 3.2 says what happens then).
 
 ---
 
@@ -34,7 +36,12 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 
 | file | what it is |
 |---|---|
-| `apps/arcade/arcaot.py` | the translator: ROM + seeds -> one NASM file, assembled by itself until its short branches settle (section 3) |
+| `apps/arcade/arcaot.py` | the 8080 translator: ROM + seeds -> the code part and aux's PC table, assembled by itself until its short branches settle (section 3) |
+| `apps/arcade/arcz80t.py`, `z80dec.py` | the Z80 translator and its decoder (section 7) |
+| `apps/arcade/arcz80rt.inc` | the Pac-Man board's helpers inside its code part: the I/O, LDIR and kin (section 7.4) |
+| `apps/arcade/arcpm.inc` | the Pac-Man board's host half: its interrupt, keys, sound and picture (section 7.7) |
+| `apps/arcade/arcpmgfx.py` | Pac-Man's ROM part: the ROM and what is derived from it (section 7.7) |
+| `tools/arcz80.py`, `tools/arcpac.py` | the Z80 and the Pac-Man board in Python: the reference (section 7.6) |
 | `apps/arcade/arcrt.inc` | the runtime the translation carries: the code part's header, `arc_enter` and the ways back to the host (section 3.4) |
 | `apps/arcade/arcdefs.inc` | the layout both sides share: the view's cells, the aux segment, the header (section 2) |
 | `apps/arcade/arcade.asm` | the package: the window, the full-screen bracket, the clock, the keys, the picture and the sound (sections 4, 5) |
@@ -45,13 +52,17 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 
 ### 1.2 The package
 
-`ARCADE.O88` is the package image plus three parts (SPEC.md 20.12):
+`ARCADE.O88` is the package image plus its parts (SPEC.md 20.12): a VIEW all
+boards share, and three for each board, LZ4-packed on the disk.
 
 | part | what | size |
 |---|---|---|
-| 0 | the CODE PART: the PC table, the header, the runtime, the ROM image and the translation (section 3.3), LZ4-packed on the disk | 53KB, 20KB packed |
-| 1 | the VIEW: the board's 8080 address space and the cells (section 2.1), zero-filled | 17KB |
-| 2 | AUX: the write list and the cell flags (section 2.2), zero-filled | 18KB |
+| 0 | the VIEW: the board's address space and the cells (section 2.1), zero-filled | 25KB |
+| 1, 2, 3 | Space Invaders: the CODE PART (header, runtime, translation), AUX (the PC table, then room for the write list and the flags), the ROM | 13KB, 48KB, 8KB |
+| 4, 5, 6 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 56KB, 37KB, 48KB |
+| 7 | Pac-Man: the shadow of the glass and the tiles' cached planes, zero-filled | 64KB |
+
+With both boards it is 89KB on the disk.
 
 The shipped build refuses to start under kern_mega's protected mode
 (`OS88_MEGA_REFUSE`): the host far-jumps into part 0, which is a data
@@ -76,18 +87,19 @@ image, no live media.
 
 ### 2.1 The view
 
-One segment holding the board's 8080 address space IN PLACE: ROM at
-0000-1FFF (copied from part 0 at power-on), RAM 2000-23FF, VRAM 2400-3FFF.
-DS = SS = the view while translated code runs, so an 8080 address is an 8086
-offset and an 8080 PUSH is an 8086 PUSH.
+One segment holding the board's address space IN PLACE: for Space Invaders
+ROM 0000-1FFF (copied from its ROM part at power-on), RAM 2000-23FF, VRAM
+2400-3FFF; for Pac-Man section 7.4's map. DS = SS = the view while
+translated code runs, so a guest address is an 8086 offset and a guest PUSH
+is an 8086 PUSH.
 
-Above it, at 4000h - which the game never reaches (MEASURED: no access above
-3FFF in 6,000 frames of tools/arcsim.py's script) - are the cells the core
-and the host share:
+Above both, at 6000h - which neither game reaches (MEASURED: Space Invaders
+touches nothing above 3FFF, Pac-Man nothing above 50FF but its A15 mirrors,
+section 7.4) - are the cells the core and the host share:
 
 | cell | what |
 |---|---|
-| `ST_AF` .. `ST_PC` (4000-400B) | the guest's registers between runs: AL = A, AH = F in LAHF's layout, then BC, DE, HL, SP, PC |
+| `ST_AF` .. `ST_PC` (6000-600B) | the guest's registers between runs: AL = A, AH = F in LAHF's layout, then BC, DE, HL, SP, PC |
 | `ST_BUD`, `ST_LEFT` | the run's poll budget in, what was left out (section 5.2) |
 | `ST_WHY` | why the run ended: `ARCX_POLL`, `ARCX_MISS`, `ARCX_HALT` |
 | `ST_INTE` | the 8080's interrupt enable: EI and DI write it |
@@ -96,7 +108,8 @@ and the host share:
 | `V_IN0`..`V_IN2` | the board's input ports |
 | `V_SHLO`, `V_SHHI`, `V_SHOFF` | the shift register and its offset |
 | `V_SND3`, `V_SND5` | the two sound latches |
-| `V_SIG` 4040h | 'ARCV': where an instrument finds the view in guest memory |
+| `ST_IX` .. `ST_SAVE` (6024-603D) | the Z80's own: IX, IY, the alternate set, I, IM, the vector, the interrupt enable latch, IFF2, and the helpers' ways back (section 7.5) |
+| `V_SIG` 6040h | 'ARCV': where an instrument finds the view in guest memory |
 | `V_NFRAME` .. `V_NCELL` | the host's counters: frames delivered, half frames dropped, runs, the budget, cells drawn |
 | `V_PROBE` | `arcaot.py --probe`'s counts, in an instrument build only |
 
@@ -104,15 +117,20 @@ and the host share:
 
 | offset | what |
 |---|---|
-| `AUX_LPTR` 0 | the write list's next free offset. ES:DI holds it while translated code runs |
-| 2400-3F1F | the CELL FLAGS: one byte per 8x8 cell, at the cell's own key (section 4.1), the low 32 bytes of each 256 |
-| `AUX_LIST` 4000h | the write list: cell keys, a word each, each at most once until drawn (at most 896) |
+| `AUX_TABLE` 0 | the PC TABLE: 16,384 words, the translation of every guest PC 0000-3FFF (section 3.2). RET and JP (HL) are `jmp [es:si]` |
+| `AUX_LPTR` 8000h | the write list's next free offset. ES:DI holds it while translated code runs |
+| `AUX_LIST` 8002h | the write list: cell (or tile) keys, a word each, each at most once until drawn |
+| `AUX_FLAGS` + key, A400-BF1F | Space Invaders' CELL FLAGS: one byte per 8x8 cell, at 8000h + the cell's key (section 4.1) |
+| `PM_TFLAG` + tile, 9000-93FF | Pac-Man's TILE FLAGS: a byte for each video RAM index (section 7.7) |
+
+The table moved here from the code part when Pac-Man's translation, 56KB on
+its own, left no room for it beside.
 
 ### 2.3 The code part's header
 
-At `ARC_HDR` (8000h), straight after the PC table: `dw ARC_MAGIC` ('AC'),
-`dw arc_enter`, `dw` the ROM image's offset and length, `dw` the end of the
-translation. The package checks the magic and refuses a damaged part.
+At `ARC_HDR`, its offset 0: `dw ARC_MAGIC` ('A3': the table in aux, the ROM
+a part of its own), `dw arc_enter`, `dw` the end of the translation. The
+package checks every board's magic at its start and refuses a damaged part.
 
 ---
 
@@ -155,10 +173,10 @@ site after every call. **Seeds** are what no walk finds:
 `--no-speculate` turns the second off. The result for Space Invaders: 4,469
 instructions, 2,189 of them speculative.
 
-**The PC table** is the first 32KB of the code part: 16,384 words, the
-translation of every 8080 PC 0000-3FFF, or `arc_miss`. RET, RETcc and PCHL
-go through it (`pop si / lahf / shl si,1 / sahf / jmp [cs:si]`), and so does
-every entry from the host. **A miss stops the game** with "Arcade: no code
+**The PC table** is the first 32KB of aux: 16,384 words, the translation of
+every 8080 PC 0000-3FFF, or `arc_miss`, written by the translator from
+NASM's symbol map. RET, RETcc and PCHL go through it (`pop si / lahf /
+shl si,1 / sahf / jmp [es:si]`), and so does every entry from the host. **A miss stops the game** with "Arcade: no code
 at XXXX" and returns to the window; nothing is interpreted (the plan's wave
 4 is the fallback).
 
@@ -307,6 +325,17 @@ resumes at n x 8. If `ST_INTE` is clear, `ST_PEND` says so, and the EI that
 sets it ends the run at its next poll point (`mov bp,1`, with `ST_EIX` set).
 More than two frames behind, the schedule is dropped to now, never raced.
 
+### 5.3 The boards
+
+The loop is one loop for every board; a BOARD is the table of what differs
+(`ar_boards`, `BD_*`): its parts, its program's length, a reset proc for its
+own cells, a setup proc for the bracket (the mode, the tables, the first
+picture), its interrupt proc - deliver, or say it is masked - and its frame
+proc (picture, sound, keys), its PIT period and its interrupts a frame.
+Game > Space Invaders and Game > Pac-Man select one, which powers it on.
+A coin, a start and Esc are TYPED for every board (`ar_typed`); the held
+controls are each board's own.
+
 ### 5.2 A run's length
 
 A **poll point** is the target of every backward branch, plus every PCHL.
@@ -324,6 +353,140 @@ plausible number). It doubles the budget below 2 ms and halves it above 6
 ms. A run EI ended early teaches it nothing.
 
 ---
+
+## 7. The Z80 and the Pac-Man board
+
+### 7.1 The translation
+
+`apps/arcade/arcz80t.py` is section 3's method for a Z80, sharing its
+runtime (`arcrt.inc`) and its assembling (`arcaot.settle`, `finish`). The
+register map is the 8080's - A=AL, BC=CX, DE=DX, HL=BX, SP=SP, the flags in
+FLAGS - and what the 8086 has no register for lives in view cells: IX, IY,
+the alternate set (EX AF,AF' and EXX are XCHGs with them), I, IM, the
+vector, IFF2. An `(IX+d)` operand is `mov si,[ST_IX] / lea si,[si+d] / and
+si,7FFFh` (section 7.4 says why the AND).
+
+### 7.2 What is translated
+
+The walk follows section 3.2's rules, with one exception the Z80 boards
+need: **an RST's return site is NOT assumed.** Pac-Man's RST 28h and 30h are
+calls followed by inline data (2 and 3 bytes), and RST 20h is a jump table.
+`tools/arcpac.py seeds` LEARNS where each RST comes back - the PC a RET (or
+a dispatcher's POP / JP (HL)) reaches at the stack depth the RST left, when
+at least 90% of that RST's runs do so, always the same distance on - and
+writes it as `RST 28 +3` lines in the seeds file; the walk and the
+speculative walks follow them. Pac-Man: RST 08h, 10h, 18h +1, 28h +3, 30h
++4, and 20h none. 5,615 instructions, 578 of them speculative.
+
+An instruction the translation does not take (IXH/IXL, IN, OUT other than
+OUT (00),A, RRD/RLD, CPI/CPD, INI and kin) is a build failure in real code
+and drops a speculative walk.
+
+### 7.3 The flags
+
+Liveness runs over five groups: C, Z (S and Z), P (P/V), H, N. S Z H C are
+the 8086's own after the ALU ops - the Z80's H on a subtract is a half
+borrow, as AF is, unlike the 8080's (section 3.5). P/V is parity after a
+logical op, as PF is, and OVERFLOW after arithmetic, so where P is live after
+one, OF is copied into PF (`jo` and a LAHF/SAHF pair). The CB rotates set S Z
+P, which the 8086's leave alone, so where those are live a `lahf / test /
+rcr ah,1` makes them and puts CY back. BIT n is `test` (its Z, S and P are the
+Z80's), with CY kept the same way. N is read only by DAA, so it is not kept:
+each DAA is DAA or DAS by the last N-setter on every path into it (Pac-Man's
+six all follow an add). CPIR and CPDR are LOOPNE, which is the instruction
+exactly; LDIR, LDDR, LDI, LDD are helpers that store each byte through the
+board's map.
+
+### 7.4 Pac-Man's memory map, in the code
+
+As MAME's `pacman.cpp`: ROM 0000-3FFF, video RAM 4000-43FF, colour RAM
+4400-47FF, nothing at 4800-4BFF (reads give BFh: the view holds BFh there),
+RAM 4C00-4FEF, sprite attributes 4FF0-4FFF, and at 5000-50FF the inputs
+(read: IN0 5000, IN1 5040, DSW1 5080, DSW2 50C0, which the view holds where
+the board puts them) and the writes: the latches 5000-5007 (bit 0 of 5000
+enables the VBlank interrupt), the WSG's voices 5040-505F, the sprites'
+positions 5060-506F, the watchdog 50C0. A15 is not decoded.
+
+A STORE is classified by its address's high byte: RAM (4C-4F) is one MOV, the
+branch taken; video (40-47) compares first and lists its tile, as section
+4.1; I/O (50 and up) goes to `arc_iow`, which files what the game wrote at
+`PM_LATCH` 5100h, `PM_SOUND` 5140h and `PM_SPRXY` 5060h; ROM and 4800-4BFF
+take nothing. A fixed address is classified by the translator. **A15:**
+Pac-Man's text routine (2C65) points IX at C3D4 for 43D4, so an (IX+d)
+address is masked to 7FFFh. HL, BC and DE are not; the lockstep would see it.
+
+### 7.5 Nothing below the guest's SP
+
+**The Z80 translation CALLs nothing and PUSHes nothing of its own.**
+Pac-Man's RAM test pushes words, steps SP down with DEC SP and POPs them back
+- it READS below its own SP - and the 8080 translation's CALLs (a poll's,
+a helper's) write exactly there. So a poll point is `mov si,PC / jmp
+arc_pollsi`; a helper is `mov word [ST_RET],.back / jmp helper`, returning
+with `jmp [ST_RET]` (`ST_RETIO` for `arc_iow`, which the block helpers call
+in turn); what a helper saves goes to `ST_SAVE`; EX (SP),IX swaps through
+the IX cell with XCHGs. The host's interrupt is the only thing that pushes,
+as the board's own does.
+
+### 7.6 The reference and the lockstep
+
+`tools/arcz80.py` is a Z80 in Python, every documented instruction and flag
+and the undocumented SLL; `tools/arcpac.py` the board around it, with a
+`stats`, `seeds` and `digest` like `arcsim.py`'s. `tests/arclock.py --board
+pacman` runs the code part in lockstep with it as section 6.1 says, with the
+Z80's own rules: IX and IY compared too; a repeating block instruction
+(LDIR and kin) one boundary on both sides, its interrupt at its end; a HALT
+waiting for the model's interrupt; flags compared where read, P/V included.
+**7,418,709 instructions over 1,200 frames - boot, the attract mode, a coin,
+a start and play - all agree.**
+
+### 7.7 The picture
+
+VGA only (640x480x16; the board has exactly 16 colours, which go into the
+DAC once, at the indices the attribute controller's default palette sends
+them to). The 224 x 288 portrait screen is drawn twice as wide and 1.5 times
+as tall - 448 x 432, centred: each even row twice.
+
+**By damage, in boxes of tiles.** A tile the Z80 wrote (video or colour RAM:
+the key is the index, the flag at `PM_TFLAG`) is composed alone; a sprite that
+moved or changed is composed with the tiles its old and new places cover,
+one box when they fit 4 x 4 tiles. More than 96 tiles at once (a clear) and
+the whole screen is composed in 4 x 4 blocks.
+
+**Composed in planes.** `apps/arcade/arcpmgfx.py` derives from the ROM, at
+build time, the tiles and sprites TURNED to portrait as value MASKS (a row's
+pixels of value 1, 2, 3), each palette's plane SELECTORS (FFh where value
+v's colour has plane p's bit) and OPACITY, the DAC triples, and the two tile
+maps. A tile row's byte for plane p is (m0 AND S0p) OR ... OR (m3 AND S3p); a
+sprite row is the same in words, shifted into the box (two shifts by CL),
+cut into each plane through its opaque mask. Sprites 7 to 0, so 0 is on top;
+clipped to the playfield's rows 16-271 (MAME's spriteclip); flips are the
+table's rows (x) and its second copy (y).
+
+**Cached, and written only where the glass changes.** Each screen tile's 32
+plane bytes are kept as composed (part 7) and copied into the next box that
+covers it, until the Z80 writes the tile. The box goes to the screen a plane
+at a time, each byte compared with the SHADOW of the glass (part 7) and
+written - doubled across, and down on an even row - only when it differs.
+MEASURED on 86Box's 286, CS:IP sampled in play: VGA writes and the tiles'
+planes were 24% and 18% of the machine before these two; with them, the
+board's frame rate holds with no frame dropped in play.
+
+### 7.8 Sound and keys
+
+The Namco WSG's three voices become one speaker tone: the loudest voice with
+a frequency, at f x 96,000 / 2^20 Hz, through `OSAPI_SND_TONE`; silent when
+5001 bit 0 turns the sound off. The arrows are the joystick (IN0 bits 0-3,
+held, `OSAPI_KEY_DOWN`); a coin (IN0 bit 5) and the starts (IN1 bits 5, 6)
+are typed. All active low.
+
+### 7.9 The ROM
+
+**Never fetched**: no public archive.org item carries Pac-Man
+(`arcade_pacman`, `arcade_puckman` and `arcade_mspacman` are dark).
+`make arcaderom-pacman GETPACFROM=<dir-or-zip>` checks the owner's set chip by
+chip against SHA-256 pins (CRCs as MAME's `pacman`) and writes
+`build/arcade-rom/PACMAN.ROM`; while it exists, `make arcade` builds the
+Pac-Man board in (`-DARC_PACMAN`), and without it, Space Invaders alone.
 
 ## 6. Verification
 
