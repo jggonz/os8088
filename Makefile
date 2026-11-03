@@ -2395,6 +2395,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         c64 c64disk c64rom c64bandbench c64cputest c64memtest 386-c64 xt-c64 286-c64 \
         apple2 apple2disk realdmgdisk apple2rom a2bandbench a2memtest a2cputest 386-apple2 \
         xt-apple2 286-apple2 \
+        arcade arcadedisk arcaderom arclock \
         weave weavedisk weavevm weavecanvas weavegame weavebandbench \
         xt-weave 386-weave xt-weave-256 \
         loom loomdisk \
@@ -11444,6 +11445,79 @@ $(BUILD)/apple2120.img: $(APPLE2DISK)
 
 $(BUILD)/apple2360.img: $(APPLE2DISK)
 	$(call APPLE2IMG,$@,360)
+	@python3 tools/os88disk.py --verify $@
+
+# =============================================================================
+# ARCADE - arcade boards, their ROMs translated to 8086 AHEAD OF TIME
+# (docs/ARCADE-SPEC.md; the plan is docs/plans/ARCADE-EMU-PLAN.md)
+#
+# THE ROM IS FETCHED AT A PIN AND NEVER COMMITTED (ARCADE-SPEC 1.3):
+# tools/getarcrom.py takes MAME's `invaders` set from ONE archive.org item,
+# checks the zip by SHA-1 and each of its four chips by SHA-256, and writes
+# the 8KB board image. Like `make apple2rom`, a build with no network and no
+# build/arcade-rom/ cache cannot build this package; nothing in `all`
+# reaches it, and `make clean` spares the cache. GETARCFROM=<dir-or-zip>
+# takes a set the owner already has instead of the network.
+#
+# THE CODE PART IS GENERATED from that ROM: apps/arcade/arcaot.py walks it
+# from the reset and interrupt vectors plus apps/arcade/invaders.seeds (the
+# PCHL and RET targets tools/arcsim.py saw - addresses, no ROM byte), and
+# writes one NASM file it has already assembled itself, as many times as
+# its short branches needed. It is derived from the ROM, so it lives in
+# build/ and on the floppy, never in git.
+# =============================================================================
+ARCROM := $(BUILD)/arcade-rom/INVADERS.ROM
+$(ARCROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py invaders -o $@ $(if $(GETARCFROM),--from $(GETARCFROM))
+
+#> [Applications] arcaderom :: fetch the Space Invaders ROM at pinned hashes (never committed)
+arcaderom: $(ARCROM)
+
+$(BUILD)/arcade/invcode.asm: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
+                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCROM) apps/arcade/invaders.seeds $@
+
+$(BUILD)/arcade/invcode.bin: $(BUILD)/arcade/invcode.asm
+	$(NASM) -f bin -w+error -I apps/arcade/ -o $@ $<
+
+ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/os88api.inc \
+              apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
+              apps/os88ui.inc apps/os88mega.inc
+$(BUILD)/arcade.bin: $(ARCADE_SRC) | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -I apps/arcade/ -l $(BUILD)/arcade.lst -o $@ $<
+
+$(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(BUILD)/arcade/invcode.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(BUILD)/arcade.bin -o $@ --part $(BUILD)/arcade/invcode.bin --part-compress lz4
+
+#> [Applications] arcade :: ARCADE, Space Invaders' 8080 translated to 8086 (docs/ARCADE-SPEC.md)
+arcade: $(BUILD)/arcade.o88
+
+#> [Applications] arclock :: ARCADE's translated code in lockstep with tools/arcsim.py (needs unicorn)
+arclock: $(BUILD)/arcade/invcode.bin
+	python3 tests/arclock.py $(BUILD)/arcade/invcode.bin $(ARCROM) --frames 600
+
+ARCADEDISK := $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+ARCADEIMG = python3 tools/os88disk.py -o $(1) --size $(2) \
+	    $(BUILD)/arcade.o88 apps/arcade/README.TXT
+#> [Applications] arcadedisk :: the ARCADE floppies in four geometries (fetches the ROM)
+arcadedisk: $(BUILD)/arcade.img $(BUILD)/arcade720.img \
+            $(BUILD)/arcade120.img $(BUILD)/arcade360.img
+
+$(BUILD)/arcade.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcade720.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcade120.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcade360.img: $(ARCADEDISK)
+	$(call ARCADEIMG,$@,360)
 	@python3 tools/os88disk.py --verify $@
 
 # ...and the Apple II beside HEAPFRAG and NOTEPAD, for tests/emumove.py

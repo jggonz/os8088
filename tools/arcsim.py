@@ -2,20 +2,25 @@
 # =============================================================================
 # os8088 - tools/arcsim.py  (wave 0 form: a measuring model, not yet the oracle)
 #
-# An Intel 8080 plus the Midway 8080 B&W board (Space Invaders), in Python.
-# It runs the real ROM with a scripted coin, start and play, and prints the
-# per-frame load: instructions, VRAM writes, dirty 8x8 cells, the share of
-# time in the interrupt handlers, and the hottest PCs. The final frame's
-# screen is written as a portrait PBM.
+# An Intel 8080 plus the Midway 8080 B&W board (Space Invaders), in Python:
+# ARCADE's reference model (docs/ARCADE-SPEC.md section 6). It runs the ROM
+# image tools/getarcrom.py writes, two interrupts a frame at fixed T-states,
+# with a scripted coin, start and play (SCRIPT below).
 #
-#     python3 -I tools/arcsim.py <invaders.zip> [frames=1200] [out.pbm]
+#     python3 -I tools/arcsim.py stats  ROM [--frames N] [--pbm OUT]
+#         the per-frame load: instructions, VRAM writes, dirty 8x8 cells,
+#         the share of time in the interrupt handlers, the hottest PCs
+#         (docs/plans/ARCADE-EMU-PLAN.md section 2 is its output)
+#     python3 -I tools/arcsim.py seeds  ROM [--frames N] [-o FILE]
+#         every target a PCHL or a RET reached that is not the instruction
+#         after a CALL or an interrupt's return address: the entry points a static walk of the ROM cannot
+#         see, which apps/arcade/arcaot.py is handed as seeds
+#     python3 -I tools/arcsim.py digest ROM --at F[,F...] [--pbm-prefix P]
+#         the SHA-1 of VRAM (2400-3FFF) after frame F, and its screen
 #
-# The zip is MAME's `invaders` set (docs/plans/ARCADE-EMU-PLAN.md section 9
-# pins it). No ROM is committed. These figures are section 2 of that plan.
-# Wave 1 grows this into the reference model: traces, frame digests and
-# input replay.
+# No ROM is committed; this reads build/arcade-rom/INVADERS.ROM.
 # =============================================================================
-import sys, zipfile, collections
+import argparse, collections, hashlib, sys
 
 PAR = [0] * 256
 for i in range(256):
@@ -39,7 +44,7 @@ class M:
         s.ie=0; s.cyc=0; s.halted=0
         s.shift=0; s.shoff=0; s.in1=0x08; s.in2=0x00
         s.vw=0; s.vwchg=0; s.vdirty=set(); s.ios=collections.Counter()
-        s.romw=0; s.sound=[]; s.inisr=0; s.isrsp=0
+        s.romw=0; s.sound=[]; s.inisr=0; s.isrsp=0; s.pchl=set(); s.intpc=set()
     def rd(s,a): return s.m[a & 0x3fff]
     def wr(s,a,v):
         a &= 0x3fff
@@ -105,7 +110,7 @@ class M:
         elif p in (3,5): s.sound.append((p,v))
     def interrupt(s,n):
         if not s.ie: return False
-        s.ie=0; s.halted=0; s.isrsp=s.sp; s.push(s.pc); s.pc=n*8; s.cyc+=11; s.inisr=1; return True
+        s.ie=0; s.halted=0; s.isrsp=s.sp; s.intpc.add(s.pc); s.push(s.pc); s.pc=n*8; s.cyc+=11; s.inisr=1; return True
     def step(s):
         op=s.imm8(); s.cyc+=CYC[op]
         if 0x40<=op<0x80:
@@ -146,7 +151,7 @@ class M:
         if x==0x37: s.fc=1; return op
         if x==0x3f: s.fc^=1; return op
         if x&0xc7==0xc0:
-            if s.cond((x>>3)&7): s.pc=s.pop(); s.cyc+=6
+            if s.cond((x>>3)&7): s.pc=s.pop(); s.cyc+=6; s.pchl.add(s.pc)
             return op
         if x&0xcf==0xc1:
             v=s.pop(); p=(x>>4)&3
@@ -168,71 +173,64 @@ class M:
         if x in (0xcd,0xdd,0xed,0xfd): a=s.imm16(); s.push(s.pc); s.pc=a; return op
         if x&0xc7==0xc6: s.alu((x>>3)&7, s.imm8()); return op
         if x&0xc7==0xc7: s.push(s.pc); s.pc=x&0x38; return op
-        if x==0xc9 or x==0xd9: s.pc=s.pop(); return op
+        if x==0xc9 or x==0xd9: s.pc=s.pop(); s.pchl.add(s.pc); return op
         if x==0xd3: s.io_out(s.imm8(), s.a); return op
         if x==0xdb: s.a=s.io_in(s.imm8()); return op
         if x==0xe3:
             v=s.rd(s.sp)|(s.rd(s.sp+1)<<8); s.wr(s.sp,s.l); s.wr(s.sp+1,s.h); s.h,s.l=v>>8,v&255; return op
-        if x==0xe9: s.pc=s.rp(2); return op
+        if x==0xe9: s.pc=s.rp(2); s.pchl.add(s.pc); return op
         if x==0xeb: s.d,s.e,s.h,s.l=s.h,s.l,s.d,s.e; return op
         if x==0xf3: s.ie=0; return op
         if x==0xfb: s.ie=1; return op
         if x==0xf9: s.sp=s.rp(2); return op
         raise Exception('op %02x' % op)
 
-def main():
-    z = zipfile.ZipFile(sys.argv[1])
-    rom = b''.join(z.read('invaders.' + c) for c in 'hgfe')
-    m = M(rom)
-    frames = int(sys.argv[2]) if len(sys.argv) > 2 else 1200
-    HALF = 2000000 // 120
-    isr=[0,0]; mainhot=collections.Counter(); hot = collections.Counter(); ops = collections.Counter()
-    per = []
+HALF = 2000000 // 120          # T-states between the two interrupts
+
+
+def script(fr):
+    """IN 1 for frame fr: coin at 300, 1P start at 360, then fire and move.
+    A second coin at 3000 and a 2P start at 3060 reach the two-player code."""
+    v = 0x08
+    if 300 <= fr < 305 or 3000 <= fr < 3005 or 3010 <= fr < 3015:
+        v |= 0x01
+    if 360 <= fr < 365:
+        v |= 0x04
+    if 3060 <= fr < 3065:
+        v |= 0x02
+    if fr >= 420:
+        if (fr // 20) % 2:
+            v |= 0x10
+        v |= 0x20 if (fr // 90) % 2 else 0x40
+    return v
+
+
+def run(m, frames, each=None):
+    """Run `frames` frames; each(fr, m, n) after each frame, n instructions."""
     for fr in range(frames):
-        # script: coin at frame 300, start at 360, then play: hold fire, wiggle
-        m.in1 = 0x08
-        if 300 <= fr < 305: m.in1 |= 0x01
-        if 360 <= fr < 365: m.in1 |= 0x04
-        if fr >= 420:
-            if (fr // 20) % 2: m.in1 |= 0x10
-            m.in1 |= 0x20 if (fr // 90) % 2 else 0x40
-        n0 = 0; c0 = m.cyc; vw0 = m.vw; vc0 = m.vwchg; m.vdirty = set()
-        hot0 = collections.Counter()
+        m.in1 = script(fr)
+        n = 0
+        c0 = m.cyc
         for half in (1, 2):
             end = c0 + HALF * half
             while m.cyc < end:
-                if m.halted: m.cyc = end; break
-                pc = m.pc; op = m.step(); n0 += 1
-                if m.inisr and m.sp == m.isrsp: m.inisr = 0
-                if fr >= 420:
-                    ops[op] += 1
-                    if m.inisr: isr[0]+=1
-                    else: mainhot[pc]+=1; isr[1]+=1
-                    hot[pc] += 1
+                if m.halted:
+                    m.cyc = end
+                    break
+                pc = m.pc
+                op = m.step()
+                n += 1
+                if m.inisr and m.sp == m.isrsp:
+                    m.inisr = 0
+                if each and each[1]:
+                    each[1](m, pc, op, fr)
             m.interrupt(half)
-        per.append((fr, n0, m.vw - vw0, m.vwchg - vc0, len(m.vdirty)))
-    play = [p for p in per if p[0] >= 420]
-    attract = [p for p in per if 60 <= p[0] < 300]
-    for name, rows in (('attract', attract), ('play', play)):
-        if not rows: continue
-        ins = sorted(r[1] for r in rows); vw = sorted(r[2] for r in rows)
-        vc = sorted(r[3] for r in rows); dc = sorted(r[4] for r in rows)
-        def st(v): return 'avg %.0f p50 %d p90 %d max %d' % (sum(v)/len(v), v[len(v)//2], v[len(v)*9//10], v[-1])
-        print(name, len(rows), 'frames')
-        print('  instructions/frame', st(ins))
-        print('  vram writes/frame ', st(vw))
-        print('  vram changed/frame', st(vc))
-        print('  dirty 8x8 cells   ', st(dc))
-    tot = sum(hot.values())
-    print('play: top PCs (share of instructions)')
-    for pc, n in hot.most_common(25):
-        print('  %04x %5.1f%%  op %02x' % (pc, 100 * n / tot, m.m[pc]))
-    print('isr share %.1f%%' % (100*isr[0]/sum(isr)))
-    for pc,n in mainhot.most_common(12): print('  main %04x %5.1f%%' % (pc,100*n/sum(isr)))
-    print('rom writes', m.romw, 'io', dict(m.ios))
-    print('avg cycles/instr in play %.2f' % (sum(CYC[o]*n for o, n in ops.items()) / sum(ops.values())))
-    # dump screen of last frame for a sanity check
-    with open(sys.argv[3] if len(sys.argv) > 3 else 'screen.pbm', 'w') as f:
+        if each and each[0]:
+            each[0](fr, m, n)
+
+
+def pbm(m, path):
+    with open(path, 'w') as f:
         f.write('P1\n224 256\n')
         for y in range(256):
             row = []
@@ -241,4 +239,105 @@ def main():
                 row.append('1' if (b >> ((255 - y) & 7)) & 1 else '0')
             f.write(' '.join(row) + '\n')
 
-main()
+
+def vram_sha1(m):
+    return hashlib.sha1(bytes(m.m[0x2400:0x4000])).hexdigest()
+
+
+def cmd_stats(rom, a):
+    m = M(rom)
+    per = []
+    isr = [0, 0]
+    hot = collections.Counter()
+    ops = collections.Counter()
+    st = {'vw': 0, 'vc': 0}
+
+    def frame(fr, m, n):
+        per.append((fr, n, m.vw - st['vw'], m.vwchg - st['vc'], len(m.vdirty)))
+        st['vw'] = m.vw
+        st['vc'] = m.vwchg
+        m.vdirty = set()
+
+    def instr(m, pc, op, fr):
+        if fr >= 420:
+            ops[op] += 1
+            isr[0 if m.inisr else 1] += 1
+            hot[pc] += 1
+    run(m, a.frames, (frame, instr))
+    play = [p for p in per if p[0] >= 420]
+    attract = [p for p in per if 60 <= p[0] < 300]
+    for name, rows in (('attract', attract), ('play', play)):
+        if not rows:
+            continue
+        print(name, len(rows), 'frames')
+        for i, what in ((1, 'instructions/frame'), (2, 'vram writes/frame '),
+                        (3, 'vram changed/frame'), (4, 'dirty 8x8 cells   ')):
+            v = sorted(r[i] for r in rows)
+            print('  %s avg %.0f p50 %d p90 %d max %d' % (
+                what, sum(v) / len(v), v[len(v) // 2], v[len(v) * 9 // 10], v[-1]))
+    tot = sum(hot.values())
+    if tot:
+        print('play: interrupt handlers %.1f%% of instructions' % (100 * isr[0] / tot))
+        for pc, n in hot.most_common(12):
+            print('  %04x %5.1f%%  op %02x' % (pc, 100 * n / tot, m.m[pc]))
+        print('avg T-states/instr in play %.2f' % (
+            sum(CYC[o] * n for o, n in ops.items()) / sum(ops.values())))
+    print('rom writes', m.romw, 'io', dict(m.ios))
+    if a.pbm:
+        pbm(m, a.pbm)
+
+
+def cmd_seeds(rom, a):
+    m = M(rom)
+    after = set()                   # the return sites the walk already has
+
+    def instr(m, pc, op, fr):
+        if op in (0xcd, 0xdd, 0xed, 0xfd) or (op & 0xc7) in (0xc4, 0xc7):
+            after.add(pc + (1 if (op & 0xc7) == 0xc7 else 3))
+    run(m, a.frames, (None, instr))
+    lines = ['# PCHL and RET targets tools/arcsim.py reached in %d frames of its script.' % a.frames,
+             '# Addresses only: no ROM byte. apps/arcade/arcaot.py walks from each.']
+    lines += ['%04X' % p for p in sorted(m.pchl - after - m.intpc) if p < 0x2000]
+    out = '\n'.join(lines) + '\n'
+    if a.output:
+        open(a.output, 'w').write(out)
+    else:
+        sys.stdout.write(out)
+
+
+def cmd_digest(rom, a):
+    at = sorted(int(x) for x in a.at.split(','))
+    m = M(rom)
+
+    def frame(fr, m, n):
+        if fr + 1 in at:
+            print('%d %s' % (fr + 1, vram_sha1(m)))
+            if a.pbm_prefix:
+                pbm(m, '%s%d.pbm' % (a.pbm_prefix, fr + 1))
+    run(m, at[-1], (frame, None))
+
+
+def main():
+    ap = argparse.ArgumentParser(description='ARCADE reference model (8080 + Midway board)')
+    sub = ap.add_subparsers(dest='cmd', required=True)
+    p = sub.add_parser('stats')
+    p.add_argument('rom')
+    p.add_argument('--frames', type=int, default=1500)
+    p.add_argument('--pbm')
+    p = sub.add_parser('seeds')
+    p.add_argument('rom')
+    p.add_argument('--frames', type=int, default=6000)
+    p.add_argument('-o', '--output')
+    p = sub.add_parser('digest')
+    p.add_argument('rom')
+    p.add_argument('--at', required=True)
+    p.add_argument('--pbm-prefix')
+    a = ap.parse_args()
+    rom = open(a.rom, 'rb').read()
+    if len(rom) != 0x2000:
+        sys.exit('arcsim: %s is %d bytes, not an 8KB board image' % (a.rom, len(rom)))
+    {'stats': cmd_stats, 'seeds': cmd_seeds, 'digest': cmd_digest}[a.cmd](rom, a)
+
+
+if __name__ == '__main__':
+    main()

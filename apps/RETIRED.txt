@@ -67,6 +67,14 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # and committed, so it needs no user-supplied asset, but it is not
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
+local      arcade      # docs/ARCADE-SPEC.md. Its game is Taito's Space Invaders
+                       # ROM, commercially owned, FETCHED at a pin by
+                       # tools/getarcrom.py and never committed, and the code part
+                       # is translated FROM that ROM at build time - so `make
+                       # arcade` / `make arcadedisk` build it standalone and no
+                       # standard image, allapps floppy or live payload carries
+                       # it until the owner decides whether it rides them the way
+                       # the fetched Apple II ROM does.
 local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # (2026-10-21, PR #168 merged): its data is the original DOS
                        # Lemmings' 26 files, DMA Design's and still commercially

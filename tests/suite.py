@@ -4599,6 +4599,15 @@ SOAK = [
         "effect) that must be REFUSED - a guard nobody has seen fire is a "
         "guard nobody knows is alive",
         needs=("nasm",)),
+    Row("arclock", "soak", py("tests/arclock.py", "build/arcade/invcode.bin",
+                              "build/arcade-rom/INVADERS.ROM", "--frames", "600"), 40.0,
+        "ARCADE's translated Space Invaders (docs/ARCADE-SPEC.md 6.1) under Unicorn in "
+        "LOCKSTEP with tools/arcsim.py: PC, A, BC, DE, HL and SP at every 8080 "
+        "instruction, the flags wherever the 8080 reads them, RAM and VRAM every "
+        "frame, interrupts on the same instruction, through a coin, a start and "
+        "play. The ROM is fetched (make arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/invcode.bin", "build/arcade-rom/INVADERS.ROM")),
     Row("redlinehost", "soak", py("tests/redline.py", "--host"), 1.0,
         "REDLINE four FAT12 geometries and actual recorded reference (SPEC.md 103)",
         needs=("nasm",), wants=("build/redline.img", "build/redline720.img",
