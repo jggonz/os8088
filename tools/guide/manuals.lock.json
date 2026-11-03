@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "ad390599c",
+  "stamped": "f948f4347",
   "strings": "4fe195f6a33d805e",
-  "why": "N1: handle descriptors and walk descriptors on kern_mega (SPEC.md 124.31.3)"
+  "why": "Mozart's setup completes: a big bitmap's own claim on kern_mega (SPEC.md 124.15.2)"
  },
  "WIN16_TXT": {
   "sources": [
