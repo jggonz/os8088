@@ -17287,8 +17287,11 @@ SOAK = [
         "MZ still opens DOS, and an NE TYPED at its prompt still reaches "
         "WIN16 through the host's own arm. TINY16.EXE is assembled here, so "
         "it needs neither Microsoft's samples nor Watcom. Red on c714ec45 "
-        "(DOS's window at frame 261, a 55,328-byte carve)",
-        needs=("marty", "nasm"), timeout=600,
+        "(DOS's window at frame 261, a 55,328-byte carve). Leg D, a second "
+        "boot: an \\AUTOSTRT link on A: to B:\\TINY16.EXE must hand WIN16 "
+        "B:'s file (w16_vol 1), the posted launch keeping the document's "
+        "locator (ASSOC_PWBANK, SPEC.md 21.5.4)",
+        needs=("marty", "nasm", "mtools"), timeout=900,
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/win16/TINY16.EXE",
                "build/DOSHELLO.EXE", "build/dosp.bin")),

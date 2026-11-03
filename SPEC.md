@@ -50225,6 +50225,17 @@ answers `CF = 0, AX = 0`, *posted*. `ui_task`'s `.chk_assoc` spends it on its
 next pass (at most one tick later), exactly as it spends a double-click
 (§54.4): nothing new services it.
 
+**The posted document keeps its own folder and volume.** The post is spent
+a pass later, and by then the machine may stand elsewhere. A link's walk
+(`sc_walk`) to a document on another volume puts the machine back on the
+link's own drive when the launch refuses, so a locator taken from where the
+machine stands would name the wrong volume. The slot therefore marks the
+locator BANKED (`[assoc_pwin]` = `ASSOC_PWBANK`, §54.9.1), and
+`assoc_run_x` takes the folder and volume from the bank. Mozart's setup
+started from an `\AUTOSTRT` link to its CD showed the defect: WIN16 was
+handed `C:\SETUP.EXE` and answered *This is not a Windows program*.
+`win16nedos`'s leg D is the row.
+
 ```
   from an entry proc, DX:CX = 0, ES:DI = a document:
   out  CF = 0, AX = 0: POSTED. The program opens it once this launch unwinds
@@ -233882,16 +233893,34 @@ directory here.
 **How a bitmap is kept.** Its pixels are converted once, when it is made,
 into os8088's sixteen colours, 4 bits a pixel, top row first, in a fixed
 block of the program's global heap (§124.20.2; until S15 a heap claim of its
-own, and an owner's claims are eight). **On the `kern_mega` arm, when the
-heap refuses the block, the bits get a claim of their own** (one map row,
-§124.31.3; `w16_bmnew`), given back by `DeleteObject` or the program's end
-(`w16_bmown` knows one by its map row starting at the bits, which an arena's
-block never does, its header being first). It is a fallback for bitmaps
-only, never for `GlobalAlloc`, so it is not a fifth arena. `LoadBitmap`
-needs the resource and the bits at once, two blocks of the same size for a
-large DIB: Mozart's setup's last dialog loads a 435x194 4bpp bitmap, 42 KB
-twice, where the arenas' largest run was 33.8 KB (WIN16-NEXT-PLAN Q6,
-route D, seen 2026-11-03). Each palette entry becomes the nearest
+own, and an owner's claims are eight). **When the heap refuses the block,
+the bits get a claim of their own** (`w16_bmnew`, the lead's D4, route D of
+WIN16-NEXT-PLAN Q6):
+- **When:** only after the global heap has refused them, so a bitmap that
+  fits is kept as before.
+- **What it is:** on the `kern_mega` arm, one row of the map (§124.31.3).
+  In real mode, a plain heap claim (`OSAPI_MEM_P`).
+- **Bitmaps only,** never `GlobalAlloc`, so it is not a fifth arena.
+- **How it goes back:**
+  - `DeleteObject` gives the claim back;
+  - so does the program's end (`w16_freeprog`'s `w16_bmend`);
+  - a fault close takes it with every other claim of the instance.
+  - The slot's `w16b_mono` high byte marks it (`w16_bmown`).
+- **Limit:** as many at once as there are free map rows (ten; a program's
+  claim and its arenas hold four to six, and Mozart's setup five) and as
+  the owner's claim limit allows (§50: eight claims, twelve on
+  `kern_mega`). Each is at most `W16_BMMAX`, 64,000 bytes. Past that,
+  `LoadBitmap` and `CreateBitmap` answer NULL as before.
+- **Why:** `LoadBitmap` needs the resource and the bits at once, two blocks
+  of the same size for a large DIB. Mozart's setup's last dialog loads a
+  435x194 4bpp bitmap, 42 KB twice, where the arenas' largest run was
+  33.8 KB.
+- **Seen and rows:** seen 2026-11-03 as a look at Mozart's last dialog.
+  WIN16's map held five rows before it, six while it showed (the sixth
+  the bitmap's 42 KB), and five again at *Setup is complete*. No fixture
+  row makes a bitmap over 32 KB.
+
+Each palette entry becomes the nearest
 of the sixteen, and on a 1bpp display it then goes through §124.8.1's mono
 map, as `SetDIBitsToDevice`'s pixels do. **A 1-bit DIB keeps its palette's
 two colours**, as Windows 3.x's `LoadBitmap` made a bitmap compatible with
@@ -236909,6 +236938,12 @@ selector on kern_mega). The header grows from 36 bytes to 54:
 | +48 | its folder and volume, `W16LM_DIR` and `W16LM_VOL` |
 | +52 | its thunks' code segment, `W16LM_TCS`; 0 when it has no module block |
 | +54 | each segment's paragraph, `W16LM_SEGS`: 0 for a discardable one |
+
+On `kern_mega`, `W16LM_TCS` and its data half are the SUB pair `SEG_SUBC`
+answers for the module block's base. A SUB is shared by base and limit and
+given back only with its claim (§50.6.11), so the pair is not freed when
+the module block is. It goes when its arena's claim goes, as every SUB
+`W16SEG` makes does.
 
 A library's load saves the importer's six words with the rest of its
 loader state (`w16l_svtab`, §124.23.2.1), together with `w16_cdo`, which

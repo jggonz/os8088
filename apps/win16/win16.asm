@@ -1140,7 +1140,8 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16b_h, 2 * W16_NBMP
     W16BSS w16b_str, 2 * W16_NBMP       ; ...its 4bpp bytes a row
     W16BSS w16b_sel, 2 * W16_NBMP       ; ...1 = a memory DC holds it
-    W16BSS w16b_mono, 2 * W16_NBMP      ; ...1 = made 1 plane, 1 bit a pixel
+    W16BSS w16b_mono, 2 * W16_NBMP      ; ...1 = made 1 plane, 1 bit a pixel;
+                                        ;   its high byte 1 = its bits a claim of their own
     W16BSS w16m_bmp, 2 * W16_NMDC       ; each memory DC's bitmap
     W16BSS w16m_on, W16_NMDC            ; ...1 = it exists
     W16BSS w16b_rec, 14         ; GetObject's BITMAP
