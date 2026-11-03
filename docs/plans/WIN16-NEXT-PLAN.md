@@ -60,7 +60,12 @@ The owner's decisions taken on the way:
   - The diary's Phase B/C chapters, with what each milestone measured.
   - #327's body: what works, what was decided, the rung record, the rows to run, and this plan's L1/L2 and Q1–Q5 as what remains.
 
-- [ ] **N3: the final pass, once, at the end** (CLAUDE.md, *Testing*).
+- [x] **N3: the final pass, once, at the end** (CLAUDE.md, *Testing*). DONE on #327 at 129fb67af:
+  - **The soak union:** five failures. Three were the rows' own (xvol, tasks, nedos). One was a Write regression from c2002f526, fixed in 072167d52. The fifth was w16censall, which is Q8 and also fails on main. All five have been re-run and are green except w16censall.
+  - **The Bochs set:** win16ovr and 14.135's megaxmove, megaown, megarehome and megatbl all pass.
+  - **test-full:** 85 ok and 2 failed. pins was registered in dc4aa4f05 and is now ok alone. w16censall stays red (Q8).
+  - **budget-check:** passes.
+  - **Not run here:** megarmb286, which needs 86Box (a Linux build), and mega-c64move and mega-c64part, which need Bochs and qemu-system-i386 on one box.
   1. Refresh `build/win16/DOS.O88` first, with `make build/win16/DOS.O88` or `make win16test`. A plain `make` leaves it stale, and every win16* row puts it on its B:, so a stale copy tests the wrong DOS core.
   2. Run the deduplicated soak union of every row S14–S25 named, in one `os88test.py soak -k … -k …` call.
   3. Then run `make test-full` alone, with no concurrent `make`, because the buildmatrix row clobbers.
@@ -148,6 +153,11 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - The cause is a divergence on overlapping decodes. `tools/os88ne.py` reads MPLAYER's switch table at 0x87C one word past its end, which seeds 0x16A, inside `sub ax,7` at 0x169. The guest stops before that word, and from there the two walks reach different functions.
   - It reproduces identically on main's d323a9a65, so it is not Phase B/C's doing.
   - The fix is to bound the host's table read the way the guest does, or to decide which walk is right and make the other match. Then re-run the row.
+
+- [ ] **Q9: WIN16's pinned claims on the arm** (`tests/pins.txt`, bucket N). `@w16_vclaim` holds a program's segments, arenas and big bitmaps as map claims, and `w16_lseg` is D2's lent BIOS stack. Neither can move, because the program holds selectors and the kernel's hook word holds the stack.
+  - **To let `@w16_vclaim` move:** a relocation proc that re-bases every descriptor and the map row.
+  - **To let `w16_lseg` move:** a proc that re-registers the hook word.
+  - Both are walls in the arena until then (NO-PINNING-PLAN 0).
 
 ## 5. Sources
 
