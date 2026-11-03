@@ -425,8 +425,11 @@ ar_loop:
     mov bx, [ar_bd]
     mov ax, [bx+BD_PERIOD]
     mov [ar_period], ax
-    shl ax, 1
-    mov [ar_late], ax               ; two periods behind: drop, never race
+    mov cl, [bx+BD_PERFRAME]        ; two FRAMES behind: drop, never race
+    shl cl, 1                       ;   (Invaders' period is half a frame)
+    mov ch, 0
+    mul cx
+    mov [ar_late], ax
     call pit_now
     add ax, [ar_period]
     adc dx, 0
