@@ -799,6 +799,7 @@ ar_cell:
     shl ax, 1
     mov bp, ax                      ; two screen bytes per cell across
     mov al, bl                      ; the top screen row: Y = 248 - 8c
+    mov [ar_ccol], al
     mov ah, 0
     mov cl, 3
     shl ax, cl
@@ -877,27 +878,62 @@ ar_put_herc:
 %endrep
     ret
 
-ar_put_cga:                         ; 8 rows into 6 or 7: a row the next
-    ; STKBALANCE-OK: jumped to from ar_cell, which pushed the eight rows this
-    ; loop pops, one a turn, the count in CX
-    xor dx, dx                      ;   merges into is ORed, not written
-    mov cx, 8
-.o:
+; CGA: each cell's 8 rows into 6 - or 7 in a column that is a multiple of
+; four - merged by OR; ar_cgamap is the same two patterns, and they are
+; unrolled here because the per-row tests were the 5150's largest host cost
+; in play (MEASURED, MartyPC)
+%macro AR_CROW 0                    ; the next row, doubled, into AX
     pop bx
     xor bh, bh
     shl bx, 1
-    or dx, [ar_dbl+bx]
-    mov di, [si]
-    cmp cx, 1
-    je .w
-    cmp di, [si+4]
-    je .n
-.w:
-    mov [es:di+bp], dx
-    xor dx, dx
-.n:
-    add si, 4
-    loop .o
+    mov ax, [ar_dbl+bx]
+%endmacro
+%macro AR_CPUT 1                    ; AX onto row %1 of the cell
+    mov di, [si+(%1)*4]
+    mov [es:di+bp], ax
+%endmacro
+ar_put_cga:
+    ; STKBALANCE-OK: jumped to from ar_cell, which pushed the eight rows it pops
+    test byte [ar_ccol], 3
+    jz .seven
+    AR_CROW                         ; 0 1+2 3 4 5+6 7
+    AR_CPUT 0
+    AR_CROW
+    mov dx, ax
+    AR_CROW
+    or ax, dx
+    AR_CPUT 1
+    AR_CROW
+    AR_CPUT 3
+    AR_CROW
+    AR_CPUT 4
+    AR_CROW
+    mov dx, ax
+    AR_CROW
+    or ax, dx
+    AR_CPUT 5
+    AR_CROW
+    AR_CPUT 7
+    ret
+.seven:
+    ; STKBALANCE-OK: the same eight rows, the seven-row pattern
+    AR_CROW                         ; 0 1 2 3+4 5 6 7
+    AR_CPUT 0
+    AR_CROW
+    AR_CPUT 1
+    AR_CROW
+    AR_CPUT 2
+    AR_CROW
+    mov dx, ax
+    AR_CROW
+    or ax, dx
+    AR_CPUT 3
+    AR_CROW
+    AR_CPUT 5
+    AR_CROW
+    AR_CPUT 6
+    AR_CROW
+    AR_CPUT 7
     ret
 
 ; =============================================================================
@@ -1137,6 +1173,7 @@ AR_VAR ar_err, 2
 AR_VAR ar_due, 4
 AR_VAR ar_t0, 4
 AR_VAR ar_band, 2
+AR_VAR ar_ccol, 1                   ; the cell's column, for ar_put_cga
 AR_VAR ar_put, 2                    ; ar_put_vga, _herc or _cga
 AR_VAR ar_budget, 2
 AR_VAR ar_col, 2
