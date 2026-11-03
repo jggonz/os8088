@@ -81,6 +81,11 @@ w16s_gwin:
     mov dx, [si + W16V_SEL]
     mov bl, SEG_AT
     call OSAPI_SEG                  ; CX's window, into the new block's claim
+    cmp dx, cx                      ;   (KERN-MEGA-PLAN 14.137) - or, were
+    je .aim                         ;   that refused, a window of its own,
+    mov bl, SEG_FREE                ;   which is not wanted
+    call OSAPI_SEG
+.aim:
     pop ax
     call w16s_paim                  ; ...with that block's reach
 .out:

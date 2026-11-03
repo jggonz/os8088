@@ -1111,13 +1111,30 @@ w16_gcan:
     push ax
     push si
     push es
-    mov si, [es:GH_OWNER]           ; its live entry, 6 bytes a segment
+    mov ax, [w16_clive]             ; the program's live table, or a
+    mov si, [es:GH_OWNER]           ;   library's: its record + 1 in the
+    cmp byte [es:GH_OWNER + 1], 0   ;   owner's high byte (124.26.11)
+    je .prog
+    push si
+    mov ax, si
+    mov al, ah
+    dec ax
+    mov ah, W16L_SIZE
+    mul ah
+    mov si, ax
+    W16SEG es, [si + w16_libs + W16L_MREC]
+    pop si
+    mov ax, [es:W16LM_CD + 4]       ; its w16_clive
+.prog:
+    and si, 0xFF                    ; its live entry, 6 bytes a segment
     dec si
+    push ax
     mov ax, si
     shl si, 1
     add si, ax
     shl si, 1
-    W16SEG es, [w16_clive]
+    pop ax
+    W16SEG es, ax
     test byte [es:si + W16CL_FL], W16CLF_KEEP
     pop es
     pop si

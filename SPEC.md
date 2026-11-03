@@ -236615,10 +236615,13 @@ loaded code segments goes first. A code segment's age is the heap's use
 count when it was loaded, renewed whenever a discard finds it in use. A
 kept segment is never discarded.
 
-**A segment is in use while any word of the program's live stack is its
-paragraph.** Before a code segment is discarded, the program's stack is
-scanned from the waiting call's frame (`[w16_psp_]`) to the top of the
-stack, the SP the program started with. A segment found there is in use:
+**A segment is in use while the program's live stack holds a far return
+address into it.** That is a word equal to its paragraph (its code
+selector on `kern_mega`) with an offset inside the segment below it: from
+1 up to its allocation, the NE segment table's (`w16l_scanw`). Before a
+code segment is discarded, the program's stack is scanned from the waiting
+call's frame (`[w16_psp_]`) to the top of the stack, the SP the program
+started with. A segment found there is in use:
 it is aged as new and passed over, and the next oldest is tried. One not
 found has its thunks pointed back at `w16_thkhit` and its block freed.
 
@@ -236636,8 +236639,17 @@ addresses a walk cannot:
 - the far return a thunk was called with, which sits just above the gate's
   frame while its segment loads.
 
-A word that only looks like a segment's paragraph keeps a segment in
-memory that could have gone. That costs memory, never correctness.
+A pair that only looks like a return address keeps a segment in memory
+that could have gone. That costs memory, never correctness. Until S24, any
+word equal to the paragraph was enough, and the memory that cost was not
+small. At Mozart's last dialog, a saved `BP` of 2CFCh and a stack offset
+of 35FCh each equalled the selector of one of MSCOMSTF's segments, 192 and
+64 bytes. Those two, and two more that really were on the stack, split
+the arena's 107 KB of free memory into four runs of at most 30 KB. The
+42 KB resource of the dialog's bitmap then could not be had. With the
+offset test the resource loads (§124.26.11 says what is still short).
+Every return address the three cases above name is a pair, so the test
+loses none of them.
 
 **A program being launched has no stack yet, and nothing of its code
 goes** *(S21 batch 4)*. Its stack top is 0 until its first frame is built,
@@ -236794,6 +236806,16 @@ now does the same, by the same means: the thunks, the module block and the
 stack scan of §124.26.2-124.26.5. What follows is what a library adds to
 them.
 
+**What it bought, measured (QEMU, `kern_mega`, 2026-11-03).** At Mozart's
+last dialog, 50 of MSCOMSTF's segments had gone. Arena 3 held 65 KB free
+plus the bitmap's 42.8 KB resource, which now loads. The library code
+left beside them is 32 KB that this section keeps, and two MSCOMSTF
+segments the stack names. `LoadBitmap("MAILMAN")`, 435x194 at 4bpp,
+also needs a second 42 KB block for the bitmap's bits (§124.15.2), and
+the largest free run is 33.8 KB. The dialog runs, invisible without its
+bitmap, and nothing faults. Where the second block comes from is an open
+decision (WIN16-NEXT-PLAN N0).
+
 **Which segments.** §124.26.1's rule, applied to each library, on a CPU
 the census does not decide for. On an 8088 the census sweeps all of a
 module's code at once, so every discardable segment would be loaded at
@@ -236808,7 +236830,16 @@ Two kinds of a library's discardable segments never go:
 - **one its own relocations name by number**, or by segment or offset
   alone, is kept, as §124.26.1 and §124.26.2.1 keep a program's: loaded at
   the library's launch and never discarded. A protected-mode-only library
-  (`NEF_PMODE`) thereby keeps all of them.
+  (`NEF_PMODE`) thereby keeps all of them. Unlike a program's, a library's
+  segment that names **itself** by number is kept too. A program's
+  self-reference is applied again at each load. A library's can escape
+  as a value, a procedure's address handed to `CreateDialog` or a hook,
+  and outlive the segment. MSCUISTF's segment 4 names itself at offset
+  2287, and its exported ordinal 12 begins that segment. Without the keep,
+  Mozart's setup faulted after *Install Location* with a far return into
+  selector C000h. With it, the setup runs on. Three of the Setup Toolkit's
+  modules have such a reference: MSCUISTF, ENCCDPRF and MMUTIL, with five
+  small segments between them.
 
 Measured on the targets' trees with `os88ne.py`. The Setup Toolkit's
 libraries (MSCOMSTF, MSINSSTF, MSDETSTF, MSCUISTF, MSSHLSTF, MSUILSTF and
@@ -236845,19 +236876,32 @@ selector on kern_mega). The header grows from 36 bytes to 54:
 
 A library's load saves the importer's six words with the rest of its
 loader state (`w16l_svtab`, §124.23.2.1), together with `w16_cdo`, which
-is 1 during every module's load now, not only the program's.
+is 1 during every module's load now, not only the program's. A module's
+saved state is 104 bytes, not 96.
+
+**A block is not discarded before it is filled.** A launch takes a block
+for each segment it loads, and only then fills them (§124.26.3). A later
+block can make room by discarding an earlier one that is still empty. A
+program's own launch was safe from this, because a task with no stack yet
+holds everything in use. A `LoadLibrary` at run time is not safe that way,
+since its task has a stack. So a new block's live entry is marked
+`W16CLF_NEW` until its segment is filled, and the discard passes it over.
 
 **Binding to a library's code.**
 
-- **A far pointer** (source type 3) to a library's moveable entry in a
-  discardable segment is bound to that library's thunk for the ordinal,
-  and so is `GetProcAddress`'s answer. Thunks are what change when a
+- **A far pointer** (source type 3) to a library's entry in a discardable
+  segment is bound to that library's thunk for the ordinal, and so is
+  `GetProcAddress`'s answer. That holds for a moveable entry and for a
+  FIXED bundle's entry, whose indicator is the segment's number: both
+  get a thunk. MSCUISTF exports all 22 of its entries from fixed bundles
+  in discardable segments. Until the thunks covered them, its thunks were
+  zeros and a call into one faulted. Thunks are what change when a
   segment is loaded or discarded. Every far call into the library, from
   the program, from another library or from WIN16, therefore needs no
   other patching, and none of the bound pointers ever names a block that
   has gone.
 - **A segment or offset alone** (types 2 and 5) to such an entry refuses
-  the importer: *It imports a library's code by its segment.* A segment
+  the importer: *A relocation WIN16 cannot apply.* A segment
   number would be stale once the segment went, and keeping the segment
   would mean loading it while the importer's relocations are applied, one
   load inside another. None of the 26 folders of programs under
@@ -236879,7 +236923,10 @@ or a library's `W16LM_TCS`. A library's segment is loaded like a library:
 
 1. the program's loader state is set aside (`w16l_push`);
 2. the library's six words, file name, DGROUP and module references are
-   put in its place;
+   put in its place. A reference to another library is the record its
+   own load bound it to, in its module record's `W16LM_LIBS`; without it,
+   every import of one library by another in that segment would bind as
+   missing;
 3. the segment is read from the library's own folder, not the current
    task's, since two tasks may run from two folders;
 4. the program's loader state is put back (`w16l_pop`).
@@ -236906,6 +236953,10 @@ code, as Windows' did.
 **What a program is told is free.** `w16_gcan` (§124.26.5) counts a
 library's loaded segment that is not kept. It finds the segment's live
 entry through the high byte of the block's owner.
+
+**The code budget** (`W16_CODEKB`, §124.26.6) counts the program's own
+code only. A library's segments may be loaded under one task and
+discarded under another, and the budget is a task's.
 
 **The loader part stays** (§124.26.3) while any library has a module
 block, as it does for a program with one. `LoadLibrary` of a library
@@ -238019,8 +238070,10 @@ is refused. The arm moves it as follows:
   arena, a new arena, discarding. Between the copy and the old block's
   free, `w16s_gwin` (part 9) moves the window to the new header. It then
   re-aims the window with `SEG_AT` on the caller's own window, which keeps
-  it bound and puts its base in the new block's claim; that is
-  how it crosses arenas. Then `SEG_AIM` gives the window the block's
+  it bound and puts its base in the new block's claim (§50.6.11's re-bind);
+  that is how it crosses arenas. Were it refused, the kernel's answer is a
+  window of its own, which `w16s_gwin` frees, and the program keeps the
+  stale one. Then `SEG_AIM` gives the window the block's
   reach. The kernel finds a bound window's block from where it points, and
   compaction rebases every descriptor based in a moving block (§50.6.11),
   so the window follows its new arena from then on.

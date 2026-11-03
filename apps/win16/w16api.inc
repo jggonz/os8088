@@ -1885,8 +1885,8 @@ w16_libof:
 
 ; w16_libproc - an export of library BL (SPEC.md 124.23.3): by name (ES:DI,
 ; CL characters, case aside: the resident names, then the non-resident) or
-; by ordinal (CL = 0, AX). out: DX:AX = its address; CF=1 it has none.
-; Keeps the rest.
+; by ordinal (CL = 0, AX). out: DX:AX = its address, its thunk's when it is
+; in a discardable segment (124.26.11); CF=1 it has none. Keeps the rest.
 w16_libproc:
     push bx
     push cx
@@ -1965,10 +1965,20 @@ w16_libproc:
     jz .none
     cmp dx, [W16LM_NSEG]
     ja .none
+    mov bp, bx                      ; BP = the ordinal
     mov bx, dx
     dec bx
     shl bx, 1
     mov dx, [W16LM_SEGS + bx]
+    or dx, dx                       ; 0: discardable, reached through its
+    jnz .seg                        ;   thunk (SPEC.md 124.26.11)
+    mov dx, [W16LM_TCS]
+    or dx, dx
+    jz .none
+    lea ax, [bp - 1]
+    mov cl, 3                       ; * W16TK_SIZE
+    shl ax, cl
+.seg:
     clc
     jmp short .out
 .none:

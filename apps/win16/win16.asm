@@ -163,9 +163,13 @@ W16LM_CS     equ 14
 W16LM_LIBS   equ 16
 W16LM_RTAB   equ 32             ; its resource table: paragraphs into the
 W16LM_RTLEN  equ 34             ;   block, and bytes (0 = none, 124.23.6)
-W16LM_SEGS   equ 36
+W16LM_CD     equ 36             ; its discardable code (124.26.11): the six
+W16LM_DIR    equ 48             ;   words w16_cmb..w16_cnord, the folder and
+W16LM_VOL    equ 50             ;   volume its file is in, and its thunks'
+W16LM_TCS    equ 52             ;   code segment (0 = no module block)
+W16LM_SEGS   equ 54             ; each segment's paragraph (0 discardable)
 W16M_LIB     equ 0x80           ; [w16_modid]: ORed with a library's record
-W16_LSVSZ    equ 96             ; ...one module's loader state, saved (w16load.inc)
+W16_LSVSZ    equ 104            ; ...one module's loader state, saved (w16load.inc)
 W16B_SIZE    equ 4              ; a slot: the argument bytes, the part, the
 W16B_ARGB    equ 0              ;   handler's offset in it
 W16B_PART    equ 1

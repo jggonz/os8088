@@ -704,6 +704,14 @@ w16l_drop:
     inc si
     cmp si, 16
     jb .dep
+    cmp word [es:W16LM_CD], 0       ; its discardable code, and its module
+    je .ncd                         ;   block (SPEC.md 124.26.11)
+    push bx
+    mov si, bx
+    mov bx, w16l_libfree            ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall
+    pop bx
+.ncd:
     mov ax, [bx + W16L_CODE]
     or ax, ax
     jz .nc
@@ -1221,6 +1229,7 @@ W16LIB w16_segld
     mov al, [es:di]                 ; its segment
     xor ah, ah
     mov si, [es:di + 1]             ; its entry's offset
+    mov dx, es                      ; ...and whose thunks (124.26.11)
     mov bx, w16l_segin              ; XSEC-OK: part 5's, w16_ldcall calls it there
     ICALL w16_ldcall                ; DX = the segment; CF=1 lines written
     pop bx
