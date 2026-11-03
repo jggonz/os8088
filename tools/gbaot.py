@@ -1344,7 +1344,22 @@ def package(build, img, rom, out, romname, image=None, log=print, embed=False, m
                              nrows, AOT_ROWS, ", or the ROM beside it" if embed else ""))
     import os88lz
     b = bytearray(open(image or aot_image(build, mega), "rb").read())
-    at = b.find(b"O88PARTS")
+    # THE TABLE BY ITS MAGIC, AND REFUSED LOUDLY WHEN IT IS NOT THERE: this
+    # writes rows at `at + 10`, and an `at` of -1 is a write into the image's
+    # last bytes and its header that os88pkg.py would then pack without a
+    # word. The magic is the standard's ('O88PARTP', SPEC.md 20.12.2) and an
+    # 'O88PARTS' image is one assembled against the 512 layout, which the
+    # packer refuses - so say so here, where the image was named
+    sys.path.insert(0, HERE)
+    import os88pkg
+    at, gran = os88pkg.part_table(b)
+    if at is None or gran != os88pkg.PART_ALIGN:
+        raise SystemExit(
+            "gbaot: %s carries %s - the package image must hold exactly one "
+            "'O88PARTP' part table (SPEC.md 20.12.2, 20.12.3)" % (
+                image or aot_image(build, mega),
+                "no part table, or two" if at is None else
+                "an 'O88PARTS' (512-byte) table from an older os88parts.inc"))
     rows = at + 10
     b[at + 8] = nrows
     for r in range(relrow, coderow):       # eager, into the carve: the load

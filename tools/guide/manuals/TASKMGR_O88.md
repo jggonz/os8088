@@ -143,6 +143,15 @@ line, and **-ALL** closes them all.
   map. Opened, a program shows its own room and every extra block it asked
   for.
 
+To find out who holds a part of the map, rest the pointer on it: the line
+in the list that holds that memory turns white on black, and goes back when
+the pointer moves off. A program's room or one of its blocks lights the
+program's line, os8088's grey part lights **System**, and free memory lights
+nothing. While **System** is closed, the memory of a driver or a system
+window lights **System**, the line that holds it then. This works while
+Task Manager is the front window; a line scrolled out of view, or the caches
+without **+DETAIL**, is not lit.
+
 With every line closed, the sizes add up to the memory **RAM** says is in
 use, and that plus **AVAIL** is all of it.
 
@@ -193,7 +202,7 @@ for os8088, Contributed by Elendilon*.
 
 ## Good to know
 
-- Task Manager needs about 12K of free memory to open.
+- Task Manager needs about 15K of free memory to open.
 - The CPU figure is measured, not estimated: it is the time the machine spent
   doing nothing, taken away from the total.
 - A program that hires a background worker shows **run**, **rdy** or **slp**.

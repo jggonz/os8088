@@ -475,44 +475,43 @@ mrl_load:
     cmp ax, MR_FILEMAX * 1024
     ja .big
     mov [mr_fsize], ax
-    add ax, 1023                    ; the claim, in KB
-    mov cl, 10
-    shr ax, cl
+    add ax, 15                      ; the claim, in PARAGRAPHS (SPEC.md
+    mov cl, 4                       ; 50.3.7): the song is a byte count, held
+    shr ax, cl                      ; for as long as it is loaded
     or ax, ax
     jnz .kb
     inc ax
 .kb:
-    cmp ax, [mr_fkb]
+    cmp ax, [mr_fpara]
     jbe .claimed                    ; the last song's claim is big enough
-    push ax
     mov dx, [mr_fseg]
     or dx, dx
     jz .free
     call OSAPI_MEM_FREE
     mov word [mr_fseg], 0
-    mov word [mr_fkb], 0
+    mov word [mr_fpara], 0
 .free:
-    pop ax
-    push ax
-    call OSAPI_MEM_CLAIM            ; DX = the segment
-    pop ax
+    push bx
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; DX = the segment, AX = granted
+    pop bx
     jc .nomem
     mov [mr_fseg], dx
-    mov [mr_fkb], ax
+    mov [mr_fpara], ax
 .claimed:
     mov dx, [mr_fseg]               ; A KEPT claim is MOVABLE: pinned for the
     xor ax, ax                      ; read (66.5.7.1), whose ES:BX it is; a
     call OSAPI_MEM_MOVABLE          ; fresh one is born pinned (105.10.1)
     mov es, [mr_fseg]               ; ES:BX = the claim, DX:CX = its room
     xor bx, bx
-    mov cx, [mr_fkb]
+    mov cx, [mr_fpara]
     xor dx, dx
-    push cx
-    mov cl, 10
-    pop ax
     push ax
-    shl ax, cl                      ; KB x 1024 (63 KB at most: a word)
-    mov cx, ax
+    mov ax, cx
+    mov cl, 4
+    shl ax, cl                      ; paragraphs x 16 (63 KB at most: a
+    mov cx, ax                      ; word, MR_FILEMAX being whole granules)
     pop ax
     call OSAPI_FILE_READ            ; SI = the name
     jc .rd

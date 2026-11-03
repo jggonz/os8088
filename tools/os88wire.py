@@ -115,22 +115,27 @@ WIRE_SCMAX = 32
 # and version 1 archives, 2 = version 2 archives too (92.13.1), 3 = a package
 # that far-calls a cell at or past 0x046D too (92.2's cell fence), 4 = one at
 # or past 0x04A5 too, 5 = one at or past 0x04D7 too, 6 = one at or past
-# 0x04E3 (OSAPI_SEG) too.
-WIRE_LEVEL = 6
+# 0x04E3 (OSAPI_SEG) too, 7 = one at or past 0x04E9 (OSAPI_MEM_P, SPEC.md
+# 50.3.7) or 0x04EF (OSAPI_FS_OP, SPEC.md 12.8.10) too.
+WIRE_LEVEL = 7
 # THE CELL FENCE (SPEC.md 92.2): (first cell, level) rows. A record whose
 # package far-calls a cell at or past a row's cell needs that row's level.
 # Each row's cell is the table end of the OLDEST kernel the level fences -
 # v1.0.20261014's 0x046D for level 3, the older of the two kernels at PKG_FMT
 # 10 - and not last release's. Level 4's 0x04A5 is v1.0.20261020's table end,
 # the one level-3 Wire there is, level 5's 0x04D7 is v1.0.20261025's, the
-# one level-4 Wire, and level 6's 0x04E3 is v1.0.20261026's, the one level-5
-# Wire.
-WIRE_CELL_LEVELS = ((0x046D, 3), (0x04A5, 4), (0x04D7, 5), (0x04E3, 6))
+# one level-4 Wire, level 6's 0x04E3 is v1.0.20261026's, the one level-5
+# Wire, and level 7's 0x04E9 is the level-6 Wire's: every package carrying the
+# parts library claims through OSAPI_MEM_P (0x04E9) since SPEC.md 20.12.14,
+# and every package that reports one operation as one bar calls OSAPI_FS_OP
+# (0x04EF), the parts library among them.
+WIRE_CELL_LEVELS = ((0x046D, 3), (0x04A5, 4), (0x04D7, 5), (0x04E3, 6),
+                    (0x04E9, 7))
 # The end of the API table the TOP level's kernel has (kernel.asm's
 # osapi_table_end). A call at or past it is newer than any Wire in the field
 # can be told about, so --verify refuses it: the release that first publishes
 # one adds a row, moves this, and raises WIRE_LEVEL here and in wcat.inc.
-WIRE_TABLE_END = 0x04E9
+WIRE_TABLE_END = 0x04F5
 # 0x100000, one megabyte: the reader's sanity bound on an ARCHIVE record's
 # WC_SIZE. WIRE_FILEMAX is the wrong bound there and refusing on it is what
 # the machine did to the site's real RUNCPM record at 231,463 bytes - an
@@ -267,8 +272,8 @@ def api_calls(blob):
     img = os88pkg.image_unwrap(blob)
     pieces = [img]
     if blob[3] & O88_F_PARTS:
-        at = img.find(os88pkg.PARTS_MAGIC)
-        if at != -1:
+        at, gran = os88pkg.part_table(img)   # either magic (SPEC.md 20.12.2)
+        if at is not None:
             n = img[at + os88pkg.PARTS_HDR - 2]
             fid = os88lz.LZ4 if img[at + os88pkg.PART_FMT_AT] == 0 else os88lz.LZB
             for i in range(n):
@@ -276,7 +281,7 @@ def api_calls(blob):
                     "<BBHHH", img, at + os88pkg.PARTS_HDR + os88pkg.PART_ROW * i)
                 if kind != os88pkg.PK_SEG or pfl & os88pkg.OPF_ZERO or not off:
                     continue
-                start = off * os88pkg.PART_ALIGN
+                start = off * gran
                 if pfl & os88pkg.OPF_COMP:
                     pieces.append(os88lz.decompress(blob[start:start + zkb],
                                                     fid, ulen))

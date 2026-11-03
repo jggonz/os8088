@@ -133,7 +133,7 @@ xm_row:
                                 ; kernel's other DRVC_OVL record - already
                                 ; does exactly this
     dw xm_fname, xm_fname       ; DRVR_FILE, DRVR_TITLE
-    dw 0, 0                     ; DRVR_KB, DRVR_ENT
+    dw 0, 0                     ; DRVR_PARA, DRVR_ENT
     db DRVC_OVL                 ; DRVR_CLASS - not a class the kernel knows
     db 0                        ; DRVR_WANT - xm_sniff is the only writer, and
                                 ; no settings file can reach it
@@ -606,12 +606,9 @@ xm_free:
 ; to disagree.
 ; -----------------------------------------------------------------------------
 xm_copy:
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bp
+    call kent_bp                ; KENT: push ax..bp - and the answer is written
+                                ; over the banked AX at .out (kernel size pass
+                                ; 17, -2: six pushes and six pops)
     call xm_have                ; ...and NO `push es`: nothing between here and
                                 ; the return writes ES. The one ES reference in
                                 ; the body is the `mov ax, es` READ below;
@@ -672,13 +669,9 @@ xm_copy:
     mov ax, 1
     stc
 .out:
-    pop bp
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    mov bp, sp                  ; KENT's frame is [bp][di][si][dx][cx][bx][ax]:
+    mov [bp+12], ax             ; the answer over the banked AX, and the ladder
+    jmp kret_bp                 ; pops it back with CF untouched
 
 ; -----------------------------------------------------------------------------
 ; xm_release_rec - force-free every block an instance holds, BY RECORD

@@ -169,7 +169,8 @@ sk_txoff:   dw SK_RXCAP0 + SK_NLEAN * SK_LEANRX  ; where the TX rings start: it 
                                 ; with the RX size, so it is computed once at
                                 ; the claim and not derived at each call
 sk_want:    dw 0                ; the RX size the user ASKED for, 0 = auto
-sk_lrun:    dw 0                ; the largest free run in KB at the claim:
+sk_lrun:    dw 0                ; the largest free run at the claim, in
+                                ; PARAGRAPHS (OSAPI_MEM_P's MEMP_AVAIL):
                                 ; no rung bigger than it is tried (sk_try)
 
 %ifndef ETH_NOEMIT

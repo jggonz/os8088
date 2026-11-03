@@ -7,7 +7,10 @@ kind of breakage SPEC.md 118.1 names PLANTED in it, and an AUTOSTRT link that
 opens SYSTEM\\SYSCHECK.O88 at boot. Then it boots the image under QEMU, lets
 the scan run, saves the report, and holds SYSCHECK.TXT (read back off the
 image on the host) to every planted finding; then Clean Up, and the volume
-must have lost exactly SPEC.md 118.8's files and nothing else.
+must have lost exactly SPEC.md 118.8's files and nothing else - the retired
+DEBUG.DRV among them, which only FSCHECK.DRV beside SYSCHECK.O88 can delete;
+then the second question, and the drivers and module this kernel refuses go
+too (SPEC.md 118.8.2) while every driver and module it loads stays.
 
     python3 tests/syscheck.py              the whole gate
     python3 tests/syscheck.py --build OUT  build the fixture image only
@@ -15,13 +18,19 @@ must have lost exactly SPEC.md 118.8's files and nothing else.
 
 THE PLANTED BREAKAGES, and the finding each must produce:
 
-  APPS\\OLDTIMER.O88   a package whose format byte is 8   Packages, broken
-  APPS\\JUNK.O88       not a package at all               Packages, broken
+  APPS\\OLDTIMER.O88   a package whose format byte is 8   Packages, broken, refused
+  APPS\\JUNK.O88       not a package at all               Packages, broken, refused
   APPS\\MODPLUG.O88    a retired program                  Retired, warning, removable
   APPS\\GAMES\\MINES.O88 the same program in two folders  Leftovers, warning
   KPAD.TMP            an install's pad                    Leftovers, warning, removable
-  RAMDISK.DRV         driver version 9                    Drivers, broken
-  DEBUG.DRV           a retired driver                    Retired, warning
+  RAMDISK.DRV         driver version 9                    Drivers, broken, refused
+  XMEM.DRV            the last driver version, packed     Drivers, broken, refused
+  WIN95.DRV           a module from another build, packed Drivers, broken, refused
+  COLDHMA.SYS         an HMA image of another release     Kernel, warning, refused
+                      (refused: Clean Up's SECOND question, SPEC.md 118.8.2,
+                      118.8.3)
+  DEBUG.DRV           a retired driver                    Retired, warning, removable
+                      (hidden + system: through FSCHECK.DRV, SPEC.md 118.8.1)
   EMS.DRV             deleted                             Release files, broken
   SYSTEM.CFG          wants EMS.DRV                       Settings, broken
   APPS\\NOTEPAD.O88    deleted after ASSOC.DAT named it   Associations, warning
@@ -65,11 +74,24 @@ def b(name):
 
 
 def mtools_img(img):
-    return "%s@@%d" % (img, PART_LBA * 512)
+    """mtools' view of the partition: its LBA read off the MBR's active
+    entry (PART_LBA at the default geometry; a track's sectors at another -
+    tests/syscheckmono.py builds at XT-IDE's)."""
+    lba = PART_LBA
+    with open(img, "rb") as f:
+        mbr = f.read(512)
+    for i in range(4):
+        e = mbr[446 + 16 * i:446 + 16 * (i + 1)]
+        if e[0] == 0x80:
+            lba = struct.unpack_from("<I", e, 8)[0]
+            break
+    return "%s@@%d" % (img, lba * 512)
 
 
-def build_fixture(out):
-    """The planted hard disk. Returns the scratch dir (the caller removes it)."""
+def build_fixture(out, arg=None, geometry=None):
+    """The planted hard disk. Returns the scratch dir (the caller removes it).
+    `arg` is the AUTOSTRT link's parameter (SPEC.md 118.14.9) and `geometry`
+    os88disk's C/H/S - tests/syscheckmono.py's, for MartyPC's XT-IDE disk."""
     tmp = tempfile.mkdtemp(prefix="syscheck-")
 
     def put(name, data):
@@ -94,10 +116,35 @@ def build_fixture(out):
             img = bytearray(os88lz.cz_unwrap(open(d, "rb").read()))
             img[2] = 9
             args.append(put("drv/RAMDISK.DRV", bytes(img)))
+        elif name == "XMEM.DRV":
+            # THE CASE SPEC.md 118.8.2 IS FOR: an XMEM.DRV of the last driver
+            # version, left by an earlier install - no 360KB install brings it
+            # up to date, the disk no longer carrying it. PACKED, so the
+            # engine judges it through the kernel's expanding read
+            img = bytearray(os88lz.cz_unwrap(open(d, "rb").read()))
+            img[2] -= 1
+            args.append(put("drv/XMEM.DRV", os88lz.cz_wrap(bytes(img), filt=True)[0]))
+        elif name == "COLDHMA.SYS":
+            # ...and an HMA image that is not this release's (SPEC.md
+            # 118.8.3): rom_id intact, one byte of the tail changed - what an
+            # install from a disk that stopped carrying it leaves behind
+            img = bytearray(open(d, "rb").read())
+            assert img[:8] == b"OS88ROM\0" and img[8] == 3
+            img[-1] ^= 0xFF
+            args.append(put("drv/COLDHMA.SYS", bytes(img)))
+        elif name == "WIN95.DRV":
+            # ...and a MODULE from another build (mod_check refuses it, SPEC.md
+            # 2.8.2), packed as well. Not FORMAT.DRV: that one carries the
+            # ASSOC.DAT writer, so a refused copy is a Clean Up that cannot
+            # rebuild the associations (and says so) - true, and not this test
+            img = bytearray(os88lz.cz_unwrap(open(d, "rb").read()))
+            img[4:6] = struct.pack("<H", struct.unpack("<H", img[4:6])[0] - 1)
+            args.append(put("drv/WIN95.DRV", os88lz.cz_wrap(bytes(img), filt=True)[0]))
         else:
             args.append(d)
     args.append(put("drv/DEBUG.DRV", open(b("net.drv"), "rb").read()))
     args.append("SYSTEM:" + b("syscheck.o88"))
+    args.append("SYSTEM:" + b("fscheck.drv"))   # beside it (SPEC.md 118.14.1)
     for p in ("calc.o88", "notepad.o88", "mines.o88", "timer.o88"):
         args.append("APPS:" + b(p))
     args.append("APPS/GAMES:" + b("mines.o88"))
@@ -119,11 +166,13 @@ def build_fixture(out):
     lnk = os.path.join(tmp, "auto", "SYSCHECK.LNK")
     os.makedirs(os.path.dirname(lnk), exist_ok=True)
     with open(lnk, "wb") as f:
-        f.write(bytes(os88lnk.make("SYSTEM/SYSCHECK.O88")))
+        f.write(bytes(os88lnk.make("SYSTEM/SYSCHECK.O88", arg=arg)))
     args.append("AUTOSTRT:" + lnk)
     cmd = ["python3", os.path.join(ROOT, "tools", "os88disk.py"), "-o", out,
            "--hdd", "--mbr", b("mbr.bin"), "--boot", b("boothd.bin"),
            "--kernel", b("kernel.sys"), "--folder", "SYSTEM/APPDATA"]
+    if geometry:
+        cmd += ["--geometry", geometry]
     for r in raw:                       # the plain path skips validation;
         cmd += ["--raw", r.split(":", 1)[1]]  # the positional places it
     cmd += args + raw
@@ -154,20 +203,31 @@ ALERT_PROCEED = (358, 265)  # the alert's Proceed (Cancel is the default)
 
 EXPECT = [                  # (severity, path, a word of the reason)
     ("BROKEN", r"C:\RAMDISK.DRV", "driver version 9"),
+    ("BROKEN", r"C:\XMEM.DRV", "driver version 11, needs 12 - will not load"),
+    ("BROKEN", r"C:\WIN95.DRV", "will not load"),
+    ("WARNING", r"C:\COLDHMA.SYS", "HMA image"),
     ("BROKEN", r"C:\EMS.DRV", "missing"),
     ("WARNING", r"C:\KPAD.TMP", "install"),
-    ("WARNING", r"C:\DEBUG.DRV", "retired"),
+    ("WARNING", r"C:\DEBUG.DRV", "dropped from os8088"),
     ("WARNING", r"C:\APPS\MINES.O88", r"C:\APPS\GAMES"),
-    ("BROKEN", r"C:\APPS\OLDTIMER.O88", "format 8, kernel takes 10"),
-    ("BROKEN", r"C:\APPS\JUNK.O88", "not a package"),
-    ("WARNING", r"C:\APPS\MODPLUG.O88", "retired"),
+    ("BROKEN", r"C:\APPS\OLDTIMER.O88", "package format 8, needs 10 - will not load"),
+    ("BROKEN", r"C:\APPS\JUNK.O88", "not a program"),
+    ("WARNING", r"C:\APPS\MODPLUG.O88", "dropped from os8088"),
     ("BROKEN", r"C:\SYSTEM.CFG", "EMS.DRV"),
     ("WARNING", r"C:\APPS\NOTEPAD.O88", "not there"),
-    ("WARNING", r"C:\HIBERNAT.IMG", "no pointer"),
+    ("WARNING", r"C:\HIBERNAT.IMG", "nothing will resume it"),
 ]
-REMOVED = ["::/KPAD.TMP", "::/APPS/MODPLUG.O88", "::/HIBERNAT.IMG"]
-KEPT = ["::/DEBUG.DRV", "::/APPS/GAMES/MINES.O88", "::/APPS/MINES.O88",
-        "::/APPS/OLDTIMER.O88", "::/APPS/JUNK.O88", "::/RAMDISK.DRV"]
+REMOVED = ["::/KPAD.TMP", "::/APPS/MODPLUG.O88", "::/HIBERNAT.IMG",
+           "::/DEBUG.DRV",          # hidden + system: FSK_DELSYS (118.8.1)
+           "::/RAMDISK.DRV", "::/XMEM.DRV", "::/WIN95.DRV",   # (118.8.2)
+           "::/APPS/OLDTIMER.O88", "::/APPS/JUNK.O88",
+           "::/COLDHMA.SYS"]                                  # (118.8.3)
+KEPT = ["::/APPS/GAMES/MINES.O88", "::/APPS/MINES.O88",
+        "::/BOOTHD.SYS", "::/SYSTEM.CFG", "::/KERNEL.SYS",
+        # what the kernel LOADS stays, whatever the second answer was
+        "::/CTRL.DRV", "::/DISKOPS.DRV", "::/FORMAT.DRV", "::/SOUND.DRV",
+        "::/HDD.DRV",
+        "::/SYSTEM/FSCHECK.DRV"]
 
 
 def click(x, y):
@@ -290,9 +350,9 @@ def drive(img, keep, work):
     done(1.5)
     click(*BTN_SCAN)                    # the chooser (SPEC.md 118.13) offers
     done(1.0)                           # C:, the boot hard disk: check it
-    text = save_until(img, "Result: 5 broken, 6 warnings")
+    text = save_until(img, "Result: 7 broken, 7 warnings")
     if text is None:
-        fails.append("the first report never said 5 broken, 6 warnings:\n%s"
+        fails.append("the first report never said 7 broken, 7 warnings:\n%s"
                      % report(img))
         text = report(img) or ""
     lines = text.splitlines()
@@ -314,12 +374,21 @@ def drive(img, keep, work):
     done(2.0)
     click(*ALERT_PROCEED)
     done(6.0)
-    after = save_until(img, "Result: 5 broken, 2 warnings")
+    click(*ALERT_PROCEED)               # the second question (118.8.2)
+    done(6.0)
+    # RAMDISK.DRV and WIN95.DRV are release files, so they read as MISSING
+    # now - an install brings them back; XMEM.DRV and COLDHMA.SYS are
+    # optional (118.2.3) and their absence is no finding at all; and the two
+    # packages the loader refused are simply gone
+    after = save_until(img, "Result: 4 broken, 1 warning")
     if after is None:
-        fails.append("after Clean Up the report never said 5 broken, "
-                     "2 warnings:\n%s" % report(img))
-    elif "NOTEPAD.O88" in after:
-        fails.append("ASSOC.DAT still names NOTEPAD.O88 after Clean Up")
+        fails.append("after Clean Up the report never said 4 broken, "
+                     "1 warning:\n%s" % report(img))
+    else:
+        for gone in ("XMEM.DRV", "COLDHMA.SYS", "OLDTIMER.O88", "JUNK.O88",
+                     "NOTEPAD.O88"):    # (NOTEPAD: ASSOC.DAT's stale row)
+            if gone in after:
+                fails.append("after Clean Up the report still names " + gone)
     if not keep:
         close()
     for p in REMOVED:

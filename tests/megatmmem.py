@@ -111,8 +111,9 @@ def menu(box, dy):
 class TM(object):
     """The Task Manager's bss, read in ONE stop of the guest."""
 
-    LABELS = ("tm_view", "tm_exp", "tm_cx", "tm_cy", "tm_xoff", "tm_usedk",
-              "tm_totkb", "tm_kb", "tm_gkb", "tm_ist", "tm_iknd", "tm_lowkb",
+    LABELS = ("tm_view", "tm_exp", "tm_cx", "tm_cy", "tm_xoff", "tm_usedp",
+              "tm_totkb", "tm_kb", "tm_gkb", "tm_gp", "tm_ist", "tm_iknd",
+              "tm_lowp", "tm_sysp",
               "tm_pm", "tm_hion", "tm_hiused", "tm_hitot", "tm_hisys",
               "tm_xwn", "tm_xw", "tm_hifix", "tm_hibase",
               "tm_mconw", "tm_xgid", "tm_detail")
@@ -155,10 +156,10 @@ def quiet(tm, tries=12):
         return (tm.raw[e["tm_pm"] - tm.lo:e["tm_xw"] - tm.lo +
                        64 * e.get("TM_XWR", 6)] +
                 tm.raw[e["tm_hifix"] - tm.lo:e["tm_hifix"] - tm.lo + 8] +
-                tm.raw[e["tm_gkb"] - tm.lo:e["tm_gkb"] - tm.lo + 64] +
+                tm.raw[e["tm_gkb"] - tm.lo:e["tm_gp"] - tm.lo + 64] +
                 tm.raw[e["tm_xgid"] - tm.lo:e["tm_xgid"] - tm.lo + 64] +
                 bytes([tm.b("tm_view")]) +
-                tm.raw[e["tm_usedk"] - tm.lo:e["tm_usedk"] - tm.lo + 2])
+                tm.raw[e["tm_usedp"] - tm.lo:e["tm_usedp"] - tm.lo + 2])
     last = key()
     for _ in range(tries):
         tm.box.guest_sleep(1.0)         # still for a GUEST second
@@ -169,15 +170,27 @@ def quiet(tm, tries=12):
     raise RuntimeError("the Task Manager's memory state never held still")
 
 
+# The Task Manager's own FRACTION cells (SPEC.md 28.4.7, apps/taskmgr's
+# tm_fcell), as the ink lands on the glass - the package stores their
+# complement, a set bit in its band being the lit GROUND
+FRACS = {bytes([0x42, 0xC4, 0x48, 0x50, 0x2A, 0x4E, 0x02, 0x02]): "\u00bc",
+         bytes([0x1F, 0x18, 0x1E, 0x03, 0x03, 0xDB, 0xCE, 0x00]): "\u00bd",
+         # (the HALF is '.5' in one cell since the owner's look - the token
+         # stays \u00bd, which is what QUARTERS and AVAIL_RE read)
+         bytes([0xE2, 0x64, 0x28, 0xD0, 0x2A, 0x4E, 0x02, 0x02]): "\u00be"}
+QUARTERS = {"K": 0, "\u00bc": 1, "\u00bd": 2, "\u00be": 3}
+AVAIL_RE = "AVAIL (\\d+)([K\u00bc\u00bd\u00be])"
+
+
 def glyphs(box):
     """{8 row bytes: char} off the kernel's own table ([font_seg]:
     [font_base] is glyph 32), so the glass is read with the face it was
-    drawn in."""
+    drawn in - and the page's three fraction cells beside it."""
     b = box.reads([("font_seg", 4)])[0]
     seg, off = u16(b, 0), u16(b, 2)
     lin = (box.sel_base(seg) if seg & 4 else seg * 16) + off
     raw = box.read(lin, 95 * 8)
-    out = {}
+    out = dict(FRACS)
     for c in range(95):
         out.setdefault(bytes(raw[c * 8:c * 8 + 8]), chr(32 + c))
     return out
@@ -287,23 +300,26 @@ def main():
         want(tm.w("tm_hifix") == tm.w("tm_hisys"),
              "1. System>1MB's figure %dK is everything the system holds "
              "above 1MB (%dK)" % (tm.w("tm_hifix"), tm.w("tm_hisys")))
-        # the collapsed rows, as tm_rows_mem and tm_systot compute them
+        # the collapsed rows, as tm_rows_mem and tm_systot compute them -
+        # IN PARAGRAPHS (SPEC.md 28.4.7): a group's figure is its paragraphs
+        # below 1MB ([tm_gp]) and its KB above ([tm_gkb]), and the page
+        # prints the sum exact to the quarter, so the identity is exact too
         ninst, kind_pkg = eq["INST_MAX"], eq["KIND_PKG"]
-        gkb = [tm.w("tm_gkb", 2 * g) for g in range(eq["TMG_N"])]
-        sysk = tm.w("tm_totkb") - tm.w("tm_kb", eq["SK_HEAP"]) - \
-            tm.w("tm_lowkb")
+        gfig = [tm.w("tm_gp", 2 * g) + 64 * tm.w("tm_gkb", 2 * g)
+                for g in range(eq["TMG_N"])]
         live = [s for s in range(ninst) if tm.b("tm_ist", s)]
         pkgs = [s for s in live if tm.b("tm_iknd", s) & kind_pkg]
-        system = sysk + gkb[eq["TMG_KERN"]] + \
-            sum(gkb[eq["TMG_DRV"]:eq["TMG_N"]]) + \
-            sum(gkb[s] for s in live if s not in pkgs)
-        progs = sum(gkb[s] for s in pkgs)
-        rows = tm.w("tm_lowkb") + system + tm.w("tm_hifix") + progs
-        used = tm.w("tm_usedk") + tm.w("tm_hiused")
+        system = tm.w("tm_sysp") + gfig[eq["TMG_KERN"]] + \
+            sum(gfig[eq["TMG_DRV"]:eq["TMG_N"]]) + \
+            sum(gfig[s] for s in live if s not in pkgs)
+        progs = sum(gfig[s] for s in pkgs)
+        rows = tm.w("tm_lowp") + system + 64 * tm.w("tm_hifix") + progs
+        used = tm.w("tm_usedp") + 64 * tm.w("tm_hiused")
         want(caches and rows == used,
-             "2. IVT+BIOS %d + System %d + System>1MB %d + Programs %d = %dK,"
-             " RAM's used %dK, with %d cache(s) above 1MB (%dK) in neither"
-             % (tm.w("tm_lowkb"), system, tm.w("tm_hifix"), progs, rows, used,
+             "2. IVT+BIOS %g + System %g + System>1MB %d + Programs %g = %gK,"
+             " RAM's used %gK, with %d cache(s) above 1MB (%dK) in neither"
+             % (tm.w("tm_lowp") / 64, system / 64, tm.w("tm_hifix"),
+                progs / 64, rows / 64, used / 64,
                 len(caches), sum(r[1] for r in caches)))
         span = sum(r[1] for r in recs if 0xF0 <= r[2] <= 0xF7) + \
             sum(r[1] for r in recs if hmaf <= r[4] < hmaf + eq["TMG_N"])
@@ -350,12 +366,16 @@ def main():
         # the caches included once, by OSAPI_XMEM_CAPS - so it and RAM's
         # used half are the machine to the KB. The arm's old add-back of
         # the pool caches over the new cell reads every cache twice here
-        av = next((re.search(r"AVAIL (\d+)K", t) for t in text
-                   if re.search(r"AVAIL (\d+)K", t)), None)
+        # ...and to the QUARTER (SPEC.md 28.4.7): a figure with a fraction
+        # carries the fraction cell where its K was
+        av = next((re.search(AVAIL_RE, t) for t in text
+                   if re.search(AVAIL_RE, t)), None)
+        avp = av and int(av.group(1)) * 64 + 16 * QUARTERS[av.group(2)]
         tot = tm.w("tm_totkb") + tm.w("tm_hitot")
-        want(av and int(av.group(1)) + rows == tot,
-             "2. AVAIL %sK + the rows' %dK is the machine's %dK: no cache "
-             "counted twice" % (av and av.group(1), rows, tot))
+        want(av and avp + rows == tot * 64,
+             "2. AVAIL %s%s + the rows' %gK is the machine's %dK: no cache "
+             "counted twice" % (av and av.group(1), av and av.group(2),
+                                rows / 64, tot))
         ram = next(((y, x) for y, x, t in lines
                     if t.lstrip().startswith("Ram ")), None)
         if ram is None:

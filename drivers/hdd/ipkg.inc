@@ -454,7 +454,8 @@ hd_il_out:
     jmp os88_r_bp
 
 ; hd_ilog_file - hd_icopy_one's file, about to be copied: its line, and the
-; totals. [hd_iname] and [hd_isize] are hd_istat's
+; totals. [hd_iname] and [hd_isize] are hd_istat's, and the size is the one
+; the copy MOVES - packed, for a compressed file (SPEC.md 117.4.1)
 hd_ilog_file:
     cmp word [hd_ilogp], 0
     je .out

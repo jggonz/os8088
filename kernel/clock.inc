@@ -1803,43 +1803,36 @@ clk_inc_sec:
 ; only century year in the range is 2000, and it is a leap year.
 ; -----------------------------------------------------------------------------
 clk_mlen:
-    push bx
-    push cx
-    mov cl, al
-    mov bx, 0x15AA              ; BIT m SET = MONTH m HAS 31 DAYS, m = 1..12.
-    shr bx, cl                  ; 0x15AA = 0001 0101 1010 1010b: bits 1, 3, 5,
-    mov al, bl                  ; 7, 8, 10 and 12 - Jan, Mar, May, Jul, Aug,
-    and al, 1                   ; Oct, Dec. Bit 0 is unused (there is no month
-    add al, 30                  ; 0), bit 2 is February and is CLEAR because
-                                ; February is the branch below, and every
-                                ; other clear bit means 30. Twelve `db`s and a
-                                ; table lookup became one immediate; the
-                                ; twelve numbers are asserted back out of
-                                ; build/kernel.bin by tests/unit/t_mlen.py,
-                                ; which is what makes a hex constant
-                                ; reviewable
-                                ;
-                                ; BX AND CX, NOT AX, AND THAT IS THE WHOLE
-                                ; REASON THIS IS NOT 3 BYTES SHORTER. The
-                                ; obvious `mov ax,0x15AA / shr ax,cl` clobbers
-                                ; AH - and AH is LIVE across both calls from
-                                ; ctrl.inc's clk_fld_adj, where it carries the
-                                ; +1/-1 step that clk_step adds. Writing it
-                                ; here breaks the Date/Time day button
-                                ; silently, on a path no test in this tree
-                                ; reaches. `shr bx,cl` shifts by the full CL
-                                ; on an 8086 and CL is 1..12, so there is no
-                                ; 286-and-later masking question either
-    cmp cl, 2
-    jne .out
-    mov al, 28
-    test byte [clk_year], 3     ; low byte carries bits 0..1
+    cmp al, 2                   ; February is the BRANCH, and it is first now
+    jne .mask                   ; so the arithmetic below may spend AL
+    test byte [clk_year], 3     ; low byte carries bits 0..1 - and `mov`
+    mov al, 28                  ; writes no flag, so the test still decides
     jnz .out
     inc al
 .out:
-    pop cx
-    pop bx
     ret
+.mask:                          ; THE ELEVEN OTHERS AS A PARITY, NOT A MASK
+    cmp al, 8                   ; (kernel size pass 17, -10). A month has 31
+    adc al, 0                   ; days when it is ODD below August and EVEN
+    and al, 1                   ; from August on (Jan Mar May Jul | Aug Oct
+    xor al, 31                  ; Dec), so add the borrow of `cmp al, 8` - 1
+    ret                         ; below August - and the low bit is 0 exactly
+                                ; for a 31-day month: 31 XOR it is 31 or 30.
+                                ; Twelve `db`s became an immediate mask (pass
+                                ; 3) and the mask became this, and
+                                ; tests/unit/t_mlen.py still reads the twelve
+                                ; numbers back out of build/kernel.bin.
+                                ;
+                                ; AL ALONE, AND THAT IS LOAD-BEARING: AH is
+                                ; LIVE across both calls from ctrl.inc's
+                                ; clk_fld_adj, where it carries the +1/-1
+                                ; step that clk_step adds, and BX is
+                                ; clk_inc_sec's row pointer. The mask needed
+                                ; a 16-bit register to shift, which is why it
+                                ; banked BX and CX; this needs none. A month
+                                ; outside 1..12 never arrives (every rung and
+                                ; the carry keep it in range); 0 and 13 give
+                                ; 30 as the mask did
 
 ; -----------------------------------------------------------------------------
 ; clk_snapshot - take a consistent copy of the clock for the formatters
@@ -2022,29 +2015,25 @@ clk_ampm:
 ; clk_put_mon - write a 3-char month name at DS:BX, advancing BX
 ; in:  AL = month 1..12, BX = destination
 ; out: BX advanced by 3
-; clobbers: nothing else
+; clobbers: AX (kernel size pass 17: neither caller reads it after -
+;           clk_fmt loads AL afresh and clk_fld_str pops its own)
 ; -----------------------------------------------------------------------------
 clk_put_mon:
-    push ax
-    push cx
     push si
-    cbw                         ; month is 1..12, so the sign bit is clear
-    mov si, ax
-    add si, ax
-    add si, ax                  ; SI = month * 3 - one cell PAST the one we
-    mov cx, 3                   ; want, which the -3 below pays for
-.c:
+    mov ah, 3                   ; ONE CONSTANT, TWICE: the multiply's and the
+    mul ah                      ; loop count's. AX = month * 3 (AH = 0, the
+    xchg si, ax                 ; month being 1..12) - one cell PAST the one
+    mov ah, 3                   ; we want, which the -3 below pays for; and AH
+.c:                             ; counts where CX did (kernel size pass 17, -5)
     mov al, [clk_mnames-3+si]   ; THE TABLE BASE FOLDS INTO THE LOAD'S OWN
     mov [bx], al                ; DISPLACEMENT: a `dec al` and an
     inc si                      ; `add si, clk_mnames` outside the loop were 6
     inc bx                      ; bytes for what one 4-byte load does. NASM
-    loop .c                     ; folds `clk_mnames-3` at assembly time; the
-                                ; address is only ever formed with SI >= 3,
+    dec ah                      ; folds `clk_mnames-3` at assembly time; the
+    jnz .c                      ; address is only ever formed with SI >= 3,
                                 ; and a month of 0 reads the same three bytes
                                 ; before the table that the old `dec al` did
     pop si
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2082,17 +2071,17 @@ clk_put2:
 ; clk_put4 - write a 4-digit zero-padded number at DS:BX, advancing BX
 ; in:  AX = value 0..9999, BX = destination
 ; out: BX advanced by 4
-; clobbers: nothing else
+; clobbers: CX (kernel size pass 17, -2: clk_fmt's CX is an OUTPUT it sets
+;           after this, and ctrl.inc's clk_fld_str, the other caller, banks it
+;           round the call in the module, where a byte is not resident)
 ; -----------------------------------------------------------------------------
 clk_put4:
     push ax
-    push cx
     mov cl, 100
     div cl                      ; AL = hundreds, AH = remainder
     call clk_put2               ; the century pair - and no bank around it:
     mov al, ah                  ; clk_put2 pushes AX itself ("clobbers:
     call clk_put2               ; nothing else"), so AH is still the remainder
-    pop cx
     pop ax
     ret
 section .ovl                  ; boot overlay (SPEC.md 2.5)

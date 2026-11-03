@@ -505,9 +505,8 @@ inst_park_mk:
     cmp byte [bx+inst_parksafe], 0
     je .no                      ; never declared: park it at ALIVE and nowhere
                                 ; else (SPEC.md 66.5.4)
-    mov bl, [sch_cur]           ; ...and the MARK is the running task's
-    xor bh, bh
-    mov [bx+sch_parked], al
+    mov bl, [sch_cur]           ; ...and the MARK is the running task's (BH
+    mov [bx+sch_parked], al     ; is still the 0 above: kernel size pass 17)
 .no:
     pop bx
     pop ax
@@ -525,12 +524,9 @@ inst_parksafe_set:
     push ax
     push bx
     push di
-    mov bx, es
-    call inst_of_seg            ; the scan, said once (the shuffle that used
-    jc .no                      ; to get ES past AL went with it)
-    call inst_fhome_idx         ; BX = the slot - the ONE place the side
-    mov [bx+inst_parksafe], al  ; table's indexing lives
-    clc                         ; inst_fhome_idx clobbers the flags
+    call inst_es_slot           ; BX = the caller's slot, CF = 0 - or CF = 1
+    jc .no                      ; (the scan and the index, said once)
+    mov [bx+inst_parksafe], al  ; ...and CF is still inst_es_slot's 0
 .no:                            ; ...and the CF=1 arm arrives carrying its own
     pop di
     pop bx
@@ -559,14 +555,11 @@ inst_restart_set:
     push ax
     push bx
     push di
-    mov bx, es
-    call inst_of_seg
+    call inst_es_slot
     jc .no
-    call inst_fhome_idx         ; BX = the slot, the one place the side
-    shl bx, 1                   ; tables' indexing lives - doubled here alone,
-    mov [bx+inst_restart], ax   ; this being the only WORD table among them
-    clc                         ; inst_fhome_idx clobbers the flags
-.no:
+    shl bx, 1                   ; doubled here alone, this being the only WORD
+    mov [bx+inst_restart], ax   ; table among them - and CF = 0 is the shl's:
+.no:                            ; BX < INST_MAX has a clear top bit
     jmp short inst_parksafe_set.no  ; the same three pops, one routine up
 
 ; -----------------------------------------------------------------------------
@@ -891,8 +884,8 @@ inst_of_win:
     push ax
     push si
     call wm_ptr2idx             ; AL = window index, AH = 0
-    mov si, ax
-    mov al, [wm_owner+si]       ; owning instance index, 0xFF = none
+    xchg si, ax                 ; (AX is banked and reloaded next; inst_ptr
+    mov al, [wm_owner+si]       ; reads AL alone) owning instance, 0xFF = none
     cmp al, 0xFF
     je .none
     call inst_ptr               ; DI = record (and CF = 0 off its `add`)
@@ -1181,19 +1174,31 @@ inst_fhome_here:
 ; -----------------------------------------------------------------------------
 ; inst_fhome_idx - a record pointer to its per-instance file-home index
 ; in:  DI = a record inside inst_tab
-; out: BX = the slot index (0..INST_MAX-1)
+; out: BX = the slot index (0..INST_MAX-1), CF = 0 (DI being a record)
 ; clobbers: BX (the output), flags. AX is banked, so this is inst_idx with a
 ;           different output register and nothing else.
 ;
 ; The one place the side table's indexing lives, so instance.inc and fdlg.inc
 ; cannot come to disagree about which row belongs to which record.
 ; -----------------------------------------------------------------------------
+%ifdef OS88_COMPACT
+; inst_es_slot - inst_parksafe_set's and inst_restart_set's common head: the
+; live package instance at ES (the X stub's caller), as its slot
+; out: CF = 0 with BX = the slot and DI = the record; CF = 1 not a live package
+; clobbers: BX, DI, flags (kernel size pass 17: their two copies, and the
+;           `clc` each spelt after inst_fhome_idx, which answers CF = 0)
+inst_es_slot:
+    mov bx, es
+    call inst_of_seg
+    jc inst_fhome_idx.ret
+%endif
 inst_fhome_idx:
     push ax
     call inst_idx               ; the same (DI - inst_tab) >> 5, said once
     mov bx, ax                  ; (inst_idx banks CX itself - SPEC.md 29.4)
-    pop ax
-    ret
+    pop ax                      ; ...and CF = 0: the shr's last bit out is
+.ret:                           ; bit 4 of a record's offset, and records are
+    ret                         ; 32 bytes apart (inst_es_slot reads it)
 
 ; -----------------------------------------------------------------------------
 ; inst_fhome_clr - seed a slot's own current directory (SPEC.md 19.2.1) - INLINE
@@ -1263,7 +1268,7 @@ inst_bind_win:
                                 ; PRESERVED and callers rely on it"
     mov [di+I_WIN], bx
     call wm_ptr2idx             ; AL = window index, AH = 0 - FIRST, so its
-    mov si, ax                  ; answer is in SI before inst_idx spends AX
+    xchg si, ax                 ; answer is in SI before inst_idx spends AX
     call inst_idx               ; AX = this record's instance index (it was
     mov [wm_owner+si], al       ; the other order and a bank, size pass 10)
     pop si
@@ -1368,7 +1373,7 @@ inst_win_owner:
 ; drives the repaint or the event - nearly always the UI task, which owns no
 ; instance. Without this, every task-less app - About, Disk, and every
 ; loaded package that owns no worker (SPEC.md 20.6) - would read 0%
-; forever while its cost showed up as kernel time. task_debit moves the
+; forever while its cost showed up as kernel time. The debit below moves the
 ; cycles instead of copying them, so instance rows and task rows still add
 ; up to one total (SPEC.md 8.1/28).
 ;
@@ -1377,12 +1382,52 @@ inst_win_owner:
 ; under that same lock before its record is freed (SPEC.md 29.2), so the
 ; record named by wm_owner stays live for the whole charged stretch.
 ; -----------------------------------------------------------------------------
+; THE DEBIT is task_debit's body, written here at its one call (kernel size
+; pass 16, -4): close the stamp, return the cycles elapsed since it and REMOVE
+; them from the running task's counter. Move, not copy (SPEC.md 8.1): they are
+; added to the instance's I_CYC, so the two together still partition one
+; total. Nesting works for free - an inner debit lowers the outer pair's end
+; reading by exactly the inner amount, so the outer stretch is credited only
+; with what it did itself.
+;
+; A negative difference is forced to 0 and nothing is subtracted: sch_account
+; can hand back a slightly backwards timestamp when its pending-IRQ
+; disambiguation guesses the wrong side of a counter reload, and an unclamped
+; borrow would wrap the caller's 32-bit counter to just under 2^32 (seen in
+; practice as a package's tally jumping backwards by ~0.6 tick).
+; -----------------------------------------------------------------------------
 inst_charge:
     push ax
     push dx
-    call task_debit             ; DX:AX = elapsed, taken off the task
-    add [di+I_CYC], ax
+    push bx
+    push cx
+    push si
+    push di
+    push bp
+    mov bp, ax                  ; BP:DI = the start stamp - sch_account
+    mov di, dx                  ; clobbers AX/BX/CX/DX/SI, but not BP/DI
+    pushf
+    cli
+    call sch_account            ; ...which hands back SI = the slot's offset
+    mov ax, [si+sch_cycles]
+    mov dx, [si+sch_cycles+2]
+    sub ax, bp                  ; DX:AX = now - start
+    sbb dx, di
+    test dx, dx                 ; counter regressed: report nothing and leave
+    jns .take                   ; the task's tally alone - by taking ZERO off
+    xor ax, ax                  ; it, which is the same store with none of the
+    cwd                         ; branches (AX = 0, so DX = 0)
+.take:
+    sub [si+sch_cycles], ax     ; ...and off the task's tally it comes
+    sbb [si+sch_cycles+2], dx
+    popf
+    pop bp
+    pop di                      ; DI = the instance record again
+    add [di+I_CYC], ax          ; ...and onto the instance's
     adc [di+I_CYC+2], dx
+    pop si
+    pop cx
+    pop bx
     pop dx
     pop ax
     ret
@@ -1468,10 +1513,12 @@ app_launch:
 
     ; --- state-pool slot pick (SPEC.md 29.4) ---------------------------------
     xor dx, dx                  ; DX = the slot, which is also the cascade step
+    mov bl, al                  ; BL = the kind for the scan: AL still is it
+                                ; here, inst_alloc preserving AX (kernel size
+                                ; pass 17: it was reloaded from inst_knd)
     mov ax, [si+KD_POOL]        ; AX = the candidate state ptr, stepped by the
     or ax, ax                   ; stride rather than multiplied out per slot
     jz .tpl                     ; stateless: I_SPTR stays 0
-    mov bl, [inst_knd]
 .pslot:
     mov di, inst_tab - I_RECSZ  ; held by any same-kind record in use?
 .pscan:
@@ -1502,19 +1549,23 @@ app_launch:
     ; --- window from the template, cascaded per pool slot --------------------
     push si
     mov si, [si+KD_TPL]
-    mov di, inst_tplbuf
-    push ds
-    pop es
-    mov cx, 8
-    rep movsw                   ; 16-byte template copy
+    push ds                     ; ES = ours: the template is kernel data, and
+    pop es                      ; wm_create takes a kernel window from ES = CS
     xchg ax, dx                 ; cascade: (+16,+16) per pool slot so
     mov cl, 4                   ; instances don't stack exactly
     shl ax, cl
-    add [inst_tplbuf], ax       ; x
-    add [inst_tplbuf+2], ax     ; y
-    mov si, inst_tplbuf
-    call wm_create              ; BX = window (hidden), CF = table full
-    pop si
+    add [si], ax                ; x - cascaded IN THE TEMPLATE for this one
+    add [si+2], ax              ; call, and put back the moment it returns:
+    call wm_create              ; wm_create copies the record's first sixteen
+    pushf                       ; bytes out before it reads anything else, so
+    sub [si], ax                ; nothing ever sees the template moved but it.
+    sub [si+2], ax              ; It was copied to a 16-byte inst_tplbuf and
+    popf                        ; offset there until kernel size pass 17 (-7
+                                ; and -16 of .bss). Every kind's template is
+                                ; .text, written by nothing else, and read
+                                ; by nothing but this, on the UI task only;
+                                ; wm_create preserves AX and SI (its banks)
+    pop si                      ; BX = window (hidden), CF = table full
     jc .failj                   ; record was never published: still free
     mov al, [si+KD_WFLAG]       ; the kind's feature bits (WF_SIZABLE) join
     or [bx+W_FLAGS], al         ; W_FLAGS right after create (SPEC.md 29.3) -
@@ -1533,9 +1584,11 @@ app_launch:
     mov [ds:bp+I_ICON], ax
     push si
     mov si, [si+KD_NAME]
-    mov di, bp
-    push ds                     ; the kernel's own strings: this was
-    pop es                      ; inst_set_name, ES = DS around the ES-taking
+    mov di, bp                  ; ES = DS already: .tpl set it for the
+                                ; template copy and wm_create preserves it
+                                ; (kernel size pass 16, -2). The kernel's own
+                                ; strings: this was inst_set_name, ES = DS
+                                ; around the ES-taking
     call inst_set_name_x        ; body, and app_launch was its one caller.
     pop si                      ; ES is app_launch's to restore (kret_es), and
                                 ; the body preserves DI, so it is still BP
@@ -1605,9 +1658,14 @@ app_close_win:
     jc .hide
     cmp byte [di+I_STATE], 1
     jne .hide                   ; already dying: re-hide, idempotent
+    inc byte [di+I_STATE]       ; 1 -> 2, dying: lock-held readers skip it
+                                ; from here (an inc of the 1 just tested, -1:
+                                ; kernel size pass 17) -
+                                ; and for a TASKED instance it is the die flag
+                                ; (SPEC.md 14/29), set ahead of the test so
+                                ; both arms share it (kernel size pass 16, -4)
     cmp byte [di+I_TASK], 0xFF
-    jne .tasked
-    mov byte [di+I_STATE], 2    ; dying: lock-held readers skip it from here
+    jne .hide
     call toast_owner_gone       ; ITS OLD MESSAGE GOES FIRST, before anything
                                 ; below can raise a NEW one (SPEC.md 59.6).
                                 ; cp_flush_close writes SYSTEM.CFG and says
@@ -1666,8 +1724,6 @@ app_close_win:
 %endif                          ; widget (SPEC.md 11.103.10)
     mov byte [di+I_STATE], 0    ; record (and any package region) free
     jmp .out
-.tasked:
-    mov byte [di+I_STATE], 2    ; the die flag (SPEC.md 14/29)
 .hide:
     call wm_hide                ; instant visual feedback + repaint
 .refused:
@@ -1787,13 +1843,15 @@ inst_unmin:
     push bx
     push cx
     push dx
-    call inst_tile_rect         ; the tile in AX/BX/CX/DX, which is what
-    call wm_an_arm              ; wm_an_arm takes. It used to go through
-                                ; wm_an_d and come straight back out, and that
-                                ; store was dead anyway: the wm_show this
-                                ; caller makes next reaches wm_an_open, which
-                                ; writes wm_an_d itself (wm_an_setw) before
-                                ; wm_anim ever reads it
+    call inst_tile_rect         ; the tile in AX/BX/CX/DX, ARMED as the next
+    call rect_put               ; wm_show's source (wm_an_arm, written here:
+    dw wm_an_s                  ; this was its one call - kernel size pass
+    mov byte [wm_an_armed], 1   ; 17, -4). It used to go through wm_an_d and
+                                ; come straight back out, and that store was
+                                ; dead anyway: the wm_show this caller makes
+                                ; next reaches wm_an_open, which writes
+                                ; wm_an_d itself (wm_an_setw) before wm_anim
+                                ; ever reads it
     jmp kret_dx
 .out:
     ret
@@ -1845,7 +1903,7 @@ inst_unwin:
     or bx, bx
     jz inst_sweep_seg
     call wm_destroy             ; frees the wm slot + wm_owner, repaints
-    mov word [di+I_WIN], 0
+    and word [di+I_WIN], 0      ; (the cmp below writes the flags anyway)
 inst_sweep_seg:
     cmp word [di+I_SIZE], 0
     je .out
@@ -1921,10 +1979,9 @@ inst_wchk:
     push ax
     push cx
     mov ax, bx
-    sub ax, wm_wins
-    jc .bad                     ; below the window table
-    cmp ax, MAX_WIN * WIN_SIZE
-    jae .bad                    ; past its end
+    sub ax, wm_wins             ; BELOW the table wraps high, so the one
+    cmp ax, MAX_WIN * WIN_SIZE  ; unsigned compare is both ends - wm_isrec's
+    jae .bad                    ; test (kernel size pass 17: a `jc` went)
     mov cl, WIN_SIZE            ; AX <= 239 here, so the 8-bit div is safe
     div cl                      ; AH = offset mod WIN_SIZE
     test ah, ah
@@ -2422,10 +2479,12 @@ inst_launch: resb 1             ; deferred launch: 0 = none, else kind + 1
 inst_knd:    resb 1             ; app_launch scratch: kind being launched
                                 ; (the state-pool slot was a word here, and is
                                 ; DX across the pick since size pass 9)
-inst_tplbuf: resb 16            ; app_launch scratch: cascaded template copy
-                                ; (inst_icon_ptr's staging slot was 64 bytes
-                                ; HERE and is now dsk_ico itself - the
-                                ; dsk_get_icon idiom taken the whole way,
+                                ; (inst_tplbuf, the cascaded template copy,
+                                ; was 16 bytes here until kernel size pass 17:
+                                ; app_launch cascades the template in place.
+                                ; inst_icon_ptr's staging slot was 64 bytes
+                                ; HERE before that and is now dsk_ico itself -
+                                ; the dsk_get_icon idiom taken the whole way,
                                 ; SPEC.md 25/30. The tenancy is stated at
                                 ; assoc_docicon_x)
 

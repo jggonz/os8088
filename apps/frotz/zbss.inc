@@ -43,14 +43,14 @@
 %define zf_showabout  (os88_image_end + 23)   ; byte: the About card is up
 
 ; --- 2. The story image and its header (zmem.inc) ----------------------------
-; Every one of these except zf_sseg/zf_skb/zf_slen is a word read straight out
+; Every one of these except zf_sseg/zf_spara/zf_slen is a word read straight out
 ; of the story header (SS 59.2) and cached because it is read constantly.
 ; zf_himem..zf_static are in the HEADER's order ($04..$0E) and must stay so:
 ; zmem.inc's zm_setup reads the six of them in one loop.
 ; Byte addresses below 64KB fit a word by construction: the header's tables
 ; all live in dynamic or static memory, which the Standard caps at 64KB.
 %define zf_sseg       (os88_image_end + 24)   ; word: story claim base segment
-%define zf_skb        (os88_image_end + 26)   ; word: its size in KB
+%define zf_spara      (os88_image_end + 26)   ; word: its size in PARAGRAPHS
 %define zf_slen_l     (os88_image_end + 28)   ; word: story length, low
 %define zf_slen_h     (os88_image_end + 30)   ; word: story length, high
 %define zf_ver        (os88_image_end + 32)   ; byte: 1..8
@@ -156,7 +156,7 @@ ZI_RING_N   equ 32
 %define zi_lmax       (os88_image_end + 918)  ; word: what the story will take
 %define zi_want       (os88_image_end + 920)  ; byte: ZIW_* the worker is after
 %define zi_savseg     (os88_image_end + 922)  ; word: save staging claim
-%define zi_savkb      (os88_image_end + 924)  ; word: its size in KB
+%define zi_savpara    (os88_image_end + 924)  ; word: its size in paragraphs
 %define zi_savlen_l   (os88_image_end + 926)  ; word: bytes staged, low
 %define zi_savlen_h   (os88_image_end + 928)  ; word: bytes staged, high
 %define zi_undoseg    (os88_image_end + 930)  ; word: @save_undo snapshot claim
@@ -167,7 +167,7 @@ ZI_RING_N   equ 32
 
 ; --- 7. Pictures (zpic.inc) --------------------------------------------------
 %define zp_seg        (os88_image_end + 960)  ; word: .PIX claim, 0 = none
-%define zp_kb         (os88_image_end + 962)  ; word: its size in KB
+%define zp_para       (os88_image_end + 962)  ; word: its size in paragraphs
 %define zp_count      (os88_image_end + 964)  ; word: pictures in the archive
 %define zp_dirlen     (os88_image_end + 966)  ; word: bytes of directory
 

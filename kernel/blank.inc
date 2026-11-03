@@ -212,7 +212,7 @@ ss_row:
     dw PKG_DISP, 0              ; DRVR_DISP, DRVR_SEG: together the far
                                 ; pointer drv_call reaches the image through
     dw ss_fname, ss_fname       ; DRVR_FILE, DRVR_TITLE
-    dw 0, 0                     ; DRVR_KB, DRVR_ENT
+    dw 0, 0                     ; DRVR_PARA, DRVR_ENT
     db DRVC_OVL                 ; DRVR_CLASS - not a class the kernel knows
     db 0                        ; DRVR_WANT - no settings file can reach it
     db DRVE_OK                  ; DRVR_ERR - and NO DRVR_PAD byte after it, for
@@ -331,7 +331,13 @@ blk_pass:
     ret
 
 .act:
-    mov byte [blk_act], 0       ; consumed BEFORE it is acted on: a packet
+%ifdef KERN_BIG
+    dec byte [blk_act]          ; 1 -> 0: mouse.inc's two writers store 1 and
+                                ; nothing else, and the dec is one instruction
+                                ; as the store was (kernel size pass 16, -1;
+%else                           ; kern_small keeps the store, for its hot
+    mov byte [blk_act], 0       ; parity). Consumed BEFORE it is acted on: a packet
+%endif
     call blk_wake               ; landing inside this window simply sets it
     jnc .out                    ; again, and the worst a lost edge can cost is
                                 ; one more pass. The press that woke the screen
@@ -345,7 +351,9 @@ blk_pass:
                                 ; ftpd's, mid-transfer, first among them -
                                 ; was deaf for the rest of its life
 %ifdef KERN_BIG
-    mov word [mou_whl], 0       ; ...and a WHEEL notch is dropped with it: one
+    and word [mou_whl], 0       ; ...and a WHEEL notch is dropped with it: one
+                                ; (`and`: a byte under `mov`, the flags dead -
+                                ; evq_drain writes them below)
 %endif                          ; a poll or a later byte added beside the wake
                                 ; would scroll the window a pass later, unseen
                                 ; (SPEC.md 64.2; ui_task's arm drops the rest)
@@ -442,17 +450,22 @@ blk_set:
     mov [blk_on], al
     push ax
 %ifdef KERN_BIG                 ; CX is the loop's and the loop is KERN_BIG's:
-    push cx                     ; the %else arm below names no CX, and blk_one
-                                ; tail-jumps into vid_bk, which banks ax/es/dx
-                                ; and never writes it
-    xor ch, ch                  ; NO `push di`: this routine's body never names
+    push cx                     ; the %else arm below names no CX, and
+                                ; vid_bk, which banks ax/es/dx, never writes it
+    push si                     ; SI = the routine the walk calls, chosen once
+                                ; below (kernel size pass 17: it was blk_one,
+                                ; which asked [blk_on] again per display)
+                                ; NO `push di`: this routine's body never names
                                 ; DI either, and the bank was a leftover from
                                 ; before 25448be converted this site off
                                 ; vid_ctx_ptr (whose DI IS an output).
     call COLD_SEG:ssf_set       ; the ANIMATION first (SPEC.md 79.1). CF = 1
-    jc .walk                    ; is every refusal, and gates every card from
-                                ; display 0 exactly as this file always did.
-    inc ch                      ; CF = 0 IS NOT "NOTHING TO GATE" (SPEC.md
+    sbb ch, ch                  ; is every refusal, and gates every card from
+                                ; display 0 exactly as this file always did:
+                                ; CH = 0FFh there and 0 on CF = 0, and the
+    inc ch                      ; inc makes it 0 and 1 (kernel size pass 16,
+                                ; -2 against `xor` and a branch).
+                                ; CF = 0 IS NOT "NOTHING TO GATE" (SPEC.md
                                 ; 79.1.1). The overlay has the PRIMARY and is
                                 ; drawing on it, so display 0's signal must
                                 ; stay on - but the saver sizes itself from
@@ -470,10 +483,15 @@ blk_set:
                                 ; the primary is at the virtual origin and is
                                 ; banked as display 0 by construction
                                 ; (vid_disp_init, 39.19.2)
+    mov si, vid_unblank_kind    ; AL is still the direction: ssf_set keeps it
+    or al, al
+    jz .walk
+    mov si, vid_blank_kind
 .walk:
     mov cl, [vid_ndisp]
-    cmp ch, cl                  ; A WHILE, WHERE THIS WAS A DO-WHILE. The
-    jae .pop                    ; old form rested on [vid_ndisp] never being
+    jmp short .test             ; A WHILE, WHERE THIS WAS A DO-WHILE - entered
+                                ; at its test (kernel size pass 16, -2). The
+                                ; old form rested on [vid_ndisp] never being
                                 ; 0; the animation arm above starts at 1, so
                                 ; a ONE-display machine running the saver
                                 ; must do nothing at all rather than hand
@@ -481,30 +499,32 @@ blk_set:
 .d:
     mov al, ch
     call vid_kind_of            ; vid_kind_of banks its own (`push di / call
-    call blk_one                ; vid_ctx_ptr / ... / pop di`), and blk_one
-    inc ch                      ; reaches only vid_bk and vid_ac_pal,
-    cmp ch, cl                  ; neither of which writes DI
+    call si                     ; vid_ctx_ptr / ... / pop di`), and SI's two
+    inc ch                      ; reach only vid_bk, which never writes DI or SI
+.test:
+    cmp ch, cl
     jb .d                       ; ...and it counts UP and not down: a
                                 ; `dec cl` from 0 would run 255 more passes
                                 ; handing vid_kind_of an out-of-range display
 .pop:
+    pop si
     pop cx
 %else
+    or al, al                   ; the direction (`mov` writes no flag)...
     mov al, [vid_kind]          ; kern_small is single-display by construction
-    call blk_one                ; - vidsel.inc's whole multi-display half is
+    jz .lit                     ; - vidsel.inc's whole multi-display half is
+    call vid_blank_kind
+    jmp short .one
+.lit:
+    call vid_unblank_kind
+.one:
 %endif                          ; inside one %ifdef KERN_BIG
     pop ax
     ret
 
-; in: AL = VID_* kind. [blk_on] has already been written, and says which way.
-; Two near jmps and not a conditional one: an 8086 conditional branch is short
-; only, and both bodies are a module away in vidsel.inc.
-blk_one:
-    cmp byte [blk_on], 0
-    jne .dark
-    jmp vid_unblank_kind
-.dark:
-    jmp vid_blank_kind
+; (blk_one, which turned [blk_on] into one of these two jumps per display, is
+; gone: blk_set chooses once - kernel size pass 17, -2 on kern_big, -4 on
+; kern_small)
 
 ; -----------------------------------------------------------------------------
 ; blk_relit - the chrome and the world, after something owned the WHOLE screen
@@ -644,7 +664,7 @@ ss_open:
     ret
 
 ; -----------------------------------------------------------------------------
-; ss_start_x - the idle period ran out (SPEC.md 79.1)
+; ss_start_x - the idle period ran out (SPEC.md 79.1): ssf_set's .start arm
 ; in:  nothing; NO GFX LOCK HELD - this takes it
 ; out: CF = 0 the overlay has the screen; CF = 1 blank the signal instead
 ; clobbers: AX, flags
@@ -664,40 +684,7 @@ ss_open:
 ; is exactly what this feature exists to prevent, so it is worth naming the
 ; cause: not the saver's drawing, but a disk read taken without the lock.
 ; -----------------------------------------------------------------------------
-ss_start_x:
-    cmp byte [ss_modes], 0
-    stc                         ; the refusal, set BEFORE the branch so that
-    je .out                     ; the two ways out share one `ret`. `stc`
-                                ; writes no ZF, so the compare still reads
-    ; ...AND A WINDOW THAT ASKED FOR QUIET IS A REFUSAL TOO (SPEC.md 79.10):
-    ; blank instead. WF_QUIET, set through OSAPI_WM_QUIET by a program working
-    ; in the background - FTPD while it serves. A session draws on the UI task
-    ; a frame a pass, and that is the task such a program's disk half runs on;
-    ; a gated signal costs nothing. A free record is all zeros (wm_destroy),
-    ; so the walk needs no used-bit test, and it runs once a SESSION, not once
-    ; a frame. Written here and not as ss_quiet, its one caller, and walked by
-    ; the POINTER against its end rather than by a count, so the `jb` that
-    ; keeps going is also the CF = 0 that falls out (kernel size pass 12)
-    push bx
-    mov bx, wm_wins + W_FLAGS + 1
-.q:
-    test byte [bx], WF_QUIET >> 8
-    stc                         ; `stc` writes no ZF: the test still reads
-    jnz .qx
-    add bx, WIN_SIZE
-    cmp bx, wm_wins + W_FLAGS + 1 + MAX_WIN * WIN_SIZE
-    jb .q                       ; ...and falling out of it is CF = 0
-.qx:
-    pop bx
-    jc .out
-    call ct_cw_gfx_lock
-    mov al, SSV_START
-    call ss_open
-    pushf                       ; the verdict, banked across the unlock, whose
-    call ct_cw_gfx_unlock           ; contract is "clobbers: flags"
-    popf
-.out:
-    ret
+; (ssf_set's .start below - written into its one caller, kernel size pass 16)
 
 ; -----------------------------------------------------------------------------
 ; ss_cfg_x - open the settings window (SPEC.md 79.7)
@@ -856,39 +843,11 @@ ss_post_x:                      ; NO `push ax`: nothing in this routine writes
 ; pass's worth of drawing and nothing inside it may still believe the overlay
 ; owns the screen.
 ; -----------------------------------------------------------------------------
-ss_set_x:
-    or al, al
-    jz .lit
-    call ss_start_x
-    jc .no                      ; nothing loaded, so nothing to hide
-    call KERNEL_SEG:cw_cursor_hide
-    mov al, 1                   ; ...and a byte store through AL is three
-    mov [blk_sv], al            ; bytes where an immediate one is six
-    clc
-    ret
-.lit:
-    cmp byte [blk_sv], 0
-    je .blank                   ; the signal was gated: blk_set un-gates it
-    mov [blk_sv], al            ; AL is still the 0 that brought us here
-    call ss_stop_x
-    call KERNEL_SEG:cw_cursor_show
-    clc
-    ret
-.blank:
-    call ss_mins2idle           ; the BLANKER's wake still re-derives the
-                                ; period: Test with zero modes ticked parked
-                                ; 1 in [ss_idle], ss_start_x refused so the
-                                ; session never began, and nothing ever put
-                                ; the derived period back - the screen
-                                ; re-blanked every tick until Ok or Cancel
-                                ; landed on a machine going dark under the
-                                ; pointer. Idempotent on every ordinary
-                                ; blanker wake, and it ends a blanker-Test
-                                ; exactly the way sv_do_stop ends a saver's
-.no:
-    stc
-    ret
-
+; ss_set_x WAS ITS OWN ROUTINE, ssf_set's one callee, and ss_start_x was
+; ss_set_x's: kernel size pass 16 wrote both into the far entry below (-8 of
+; .cold - two calls, three rets and the CF answer each made for the next one to
+; test). The arms are the same; what changed is that every refusal now lands
+; on ONE `stc` and every success on ONE `clc`, beside the entry's own pop.
 ; --- the far entries (SPEC.md 2.6) -------------------------------------------
 ; `retf` pops CS:IP and touches no flag, so the CF each body answers in comes
 ; back through it unchanged - mod.inc's modf_* pair for the same reason.
@@ -896,10 +855,69 @@ ss_set_x:
 ; ssf_frame HAS NO BODY OF ITS OWN. SSV_FRAME/STOP/BUSY preserve every
 ; register (SPEC.md 79.3), which is the overlay's obligation and costs the
 ; kernel nothing, so the verb IS the routine.
-ssf_set:        push ax
-                call ss_set_x
-                pop ax          ; `pop` touches no flag: the CF survives it
-                retf
+ssf_set:
+    push ax
+    or al, al
+    jnz .start
+    cmp byte [blk_sv], 0
+    jne .stop                   ; the signal was gated: blk_set un-gates it
+    call ss_mins2idle           ; the BLANKER's wake still re-derives the
+                                ; period: Test with zero modes ticked parked
+                                ; 1 in [ss_idle], .start refused so the
+                                ; session never began, and nothing ever put
+                                ; the derived period back - the screen
+                                ; re-blanked every tick until Ok or Cancel
+                                ; landed on a machine going dark under the
+                                ; pointer. Idempotent on every ordinary
+                                ; blanker wake, and it ends a blanker-Test
+                                ; exactly the way sv_do_stop ends a saver's
+    jmp short .no
+.stop:
+    mov [blk_sv], al            ; AL is still the 0 that brought us here
+    call ss_stop_x
+    call KERNEL_SEG:cw_cursor_show
+    jmp short .ok
+.start:                         ; --- ss_start_x, above -----------------------
+    cmp byte [ss_modes], 0      ; no mode ticked: blank the signal instead
+    je .no
+    ; ...AND A WINDOW THAT ASKED FOR QUIET IS A REFUSAL TOO (SPEC.md 79.10):
+    ; blank instead. WF_QUIET, set through OSAPI_WM_QUIET by a program working
+    ; in the background - FTPD while it serves. A session draws on the UI task
+    ; a frame a pass, and that is the task such a program's disk half runs on;
+    ; a gated signal costs nothing. A free record is all zeros (wm_destroy),
+    ; so the walk needs no used-bit test, and it runs once a SESSION, not once
+    ; a frame. Written here and not as ss_quiet, its one caller, and walked by
+    ; the POINTER against its end rather than by a count, so the `jb` that
+    ; keeps going is also the CF = 0 that falls out (kernel size pass 12)
+    push bx
+    mov bx, wm_wins + W_FLAGS + 1
+.q:
+    test byte [bx], WF_QUIET >> 8
+    stc                         ; `stc` writes no ZF: the test still reads
+    jnz .qx
+    add bx, WIN_SIZE
+    cmp bx, wm_wins + W_FLAGS + 1 + MAX_WIN * WIN_SIZE
+    jb .q                       ; ...and falling out of it is CF = 0
+.qx:
+    pop bx
+    jc .no
+    call ct_cw_gfx_lock
+    mov al, SSV_START
+    call ss_open
+    pushf                       ; the verdict, banked across the unlock, whose
+    call ct_cw_gfx_unlock       ; contract is "clobbers: flags"
+    popf
+    jc .no                      ; nothing loaded, so nothing to hide
+    call KERNEL_SEG:cw_cursor_hide
+    mov al, 1                   ; ...and a byte store through AL is three
+    mov [blk_sv], al            ; bytes where an immediate one is six
+.ok:
+    clc
+    SKIPAL1                     ; mov al, imm8 over .no's stc: CF stays 0, and
+.no:                            ; AL is the pushed AX's to put back
+    stc
+    pop ax                      ; `pop` touches no flag: the CF survives it
+    retf
 ssf_frame:      cmp byte [blk_sv], 0    ; blk_pass's gate, on this side of the
                 je .none                ; boundary (see .up there)
                 push ax

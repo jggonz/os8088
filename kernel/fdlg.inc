@@ -156,6 +156,10 @@ FDE_TOP     equ 4
   %macro FDRET 0
     retf
   %endmacro
+  %macro FDXJ 1                 ; FDX as a TAIL call: the hop and a return here
+    FDX %1
+    ret
+  %endmacro
 %else
   %define FDV(x) [x]            ; ...and resident `.bss` on kern_big
   %macro FDBODY 1
@@ -172,6 +176,9 @@ FDE_TOP     equ 4
   %endmacro
   %macro FDRET 0
     ret
+  %endmacro
+  %macro FDXJ 1                 ; ...and a plain jump where FDX is near
+    jmp %1                      ; (kernel size pass 16)
   %endmacro
 %endif
 ; ...and FDENT, always written `FDENT kentc_di`, whose epilogue is
@@ -343,35 +350,8 @@ FDBODY fdlg_open_x
     loop .endp                  ; (a Clone's claim, a paste's buffer) and stand.
                                 ; Mode 0 is stored as the 0 it already was
 
-    call fdlg_seed              ; AL = volume, DX = folder, SI = its name|0
-    mov FDV(fdlg_sdrv), al         ; where it OPENED, so a cancel that never
-    mov FDV(fdlg_scwd), dx         ; moved records nothing (SPEC.md 38.10)
-    FDX fm_seed                 ; parked for fm_kinit, as a drive icon does
-
-    or word [fdlg_win], -1      ; fm_kinit adopts the window being built:
-                                ; 0FFFFh, out of the 0 the fence above saw
-    inc byte [inst_lkhd]        ; ...and app_launch shows it under OUR hold
-    mov al, KIND_FILES          ; (0 -> 1 -> 0: no other path sets it)
-    call KERNEL_SEG:cw_app_launch
-    dec byte [inst_lkhd]        ; (CF is the launch's: `dec` keeps it)
-    jc .fail
-    mov bx, [fdlg_win]          ; still the mark: launched, but not by
-    inc bx                      ; fm_kinit - impossible, and refused rather
-    jz .fail                    ; than trusted. `inc` keeps the launch's CF=0
-%ifdef KERN_SMALL
-    mov word [bx+W_ONMOUSEUP-1], fdlg_onup ; the column's release (SPEC.md
-                                ; 38.3): this build's Disk window has none of
-                                ; its own, so the chooser's is ours - and
-                                ; wm_onmouseup IS this store, which kern_small
-                                ; publishes no shim for. BX is the window + 1
-%endif
-    jmp fdk_di                  ; CF=0, still app_launch's
-.fail:
-    and word [fdlg_win], 0
-    jmp fdlg_ref
-
-; -----------------------------------------------------------------------------
-; fdlg_seed - where the chooser opens (SPEC.md 38.10)
+; .seed - where the chooser opens (SPEC.md 38.10) - fdlg_seed until kernel
+; size pass 17, which wrote it here, at its one call (-3)
 ; out: AL = volume, DX = first cluster (0 = root), SI = the folder's name for
 ;      the title's path, or 0
 ; clobbers: AX, BX, CX, DX, SI (fdlg_open banked them all)
@@ -382,8 +362,7 @@ FDBODY fdlg_open_x
 ; requester is a live record by fdlg_open's own fence, so it always has a row.
 ; The MEDIA arm mounts the root to look, which moves the globals - nothing
 ; reads them on this path, and fm_kinit's own listing is the second mount.
-; -----------------------------------------------------------------------------
-fdlg_seed:
+.seed:
     call fdlg_hidx              ; BX = the requester's row
     mov al, [inst_fdrv+bx]
 %ifndef NOFDMEDIA
@@ -393,8 +372,8 @@ fdlg_seed:
     shl bx, 1
     mov dx, [inst_fcwd+bx]
     xor si, si
-    ret
 %ifndef NOFDMEDIA
+    jmp short .seeded
 .media:
     push ax
     mov dl, al
@@ -420,8 +399,34 @@ fdlg_seed:
 .got:
     mov dx, bx
     pop ax
-    ret
+.seeded:
 %endif
+
+    mov FDV(fdlg_sdrv), al         ; where it OPENED, so a cancel that never
+    mov FDV(fdlg_scwd), dx         ; moved records nothing (SPEC.md 38.10)
+    FDX fm_seed                 ; parked for fm_kinit, as a drive icon does
+
+    or word [fdlg_win], -1      ; fm_kinit adopts the window being built:
+                                ; 0FFFFh, out of the 0 the fence above saw
+    inc byte [inst_lkhd]        ; ...and app_launch shows it under OUR hold
+    mov al, KIND_FILES          ; (0 -> 1 -> 0: no other path sets it)
+    call KERNEL_SEG:cw_app_launch
+    dec byte [inst_lkhd]        ; (CF is the launch's: `dec` keeps it)
+    jc .fail
+    mov bx, [fdlg_win]          ; still the mark: launched, but not by
+    inc bx                      ; fm_kinit - impossible, and refused rather
+    jz .fail                    ; than trusted. `inc` keeps the launch's CF=0
+%ifdef KERN_SMALL
+    mov word [bx+W_ONMOUSEUP-1], fdlg_onup ; the column's release (SPEC.md
+                                ; 38.3): this build's Disk window has none of
+                                ; its own, so the chooser's is ours - and
+                                ; wm_onmouseup IS this store, which kern_small
+                                ; publishes no shim for. BX is the window + 1
+%endif
+    jmp fdk_di                  ; CF=0, still app_launch's
+.fail:
+    and word [fdlg_win], 0
+    jmp fdlg_ref
 
 ; -----------------------------------------------------------------------------
 ; fdlg_hidx - the requester's row in instance.inc's side table
@@ -861,8 +866,7 @@ fdlg_bank:
 ; FD_NAMEMAX). AX clobbered; CX = FD_NAMEMAX less what was copied
 fdlg_cpy:
     mov cx, FD_NAMEMAX
-    FDX fm_ncpy
-    ret
+    FDXJ fm_ncpy
 
 ; fdlg_tsel - stage the chooser's selection's name as the answer
 ; in:  BX = the chooser's block
@@ -1205,7 +1209,7 @@ fdlg_name:  resb FD_NAMEMAX+1   ; the answer, and the Save box between edits
 
 ; ...and the rest is ONE DIALOG'S STATE, which only the dialog's own code reads
 ; - so on kern_small, where that code is FDLG.DRV, it is the IMAGE's bss
-; (`.moddb`, in the claim's KB rounding: MODULE-SELFCONTAIN-PLAN 3.2) and every
+; (`.moddb`, zeros at the file's end: MODULE-SELFCONTAIN-PLAN 3.5) and every
 ; access is FDV()'s `[cs:x]` (kernel size pass 13, -16 resident there). It is
 ; scratch, not PENDING state (3.4): fdlg_open writes every byte of it before
 ; anything reads it - fdlg_gdis aside, whose first read is answered by the

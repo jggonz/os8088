@@ -2398,6 +2398,10 @@ x3x_opentail:
     call OSAPI_SEG                  ; DX = XTGEN's segment
     pop cx
     pop bx
+    jnc .gok                        ; (no LDT entry: DX kept, the part's own
+    mov ax, X3E_MEM                 ; base - refused, never read as XTGEN)
+    jmp .bad
+.gok:
     xchg ax, dx
     mov [cs:x3x_gseg], ax
     mov es, ax

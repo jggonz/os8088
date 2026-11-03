@@ -54,8 +54,10 @@ REG = os.path.join(ROOT, "tests", "toastlong.txt")
 SRC_GLOBS = ("kernel/*.inc", "kernel/*.asm", "apps/**/*.asm", "apps/*.inc",
              "drivers/**/*.asm", "drivers/**/*.inc")
 
-DB = re.compile(r"^(\w+):\s*db\s+(.*)$")
-DW = re.compile(r"^(\w+):\s*dw\s+(.*)$")
+# `label db` as well as `label: db` - the colon is optional in nasm and the
+# colon-only form missed every kern_mega refusal (kern_mega size pass 2)
+DB = re.compile(r"^(\w+):?\s+db\s+(.*)$")
+DW = re.compile(r"^(\w+):?\s+dw\s+(.*)$")
 TOP = re.compile(r"^([A-Za-z_]\w*):")
 # `cw_toast_show` is the kernel's own far thunk and `OSAPI_TOAST` the SDK's
 # cell; `toast_say` takes a TABLE in BX rather than a string in SI.

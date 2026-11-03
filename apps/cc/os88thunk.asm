@@ -2228,6 +2228,56 @@ _os88_mem_regrow:
     ret
 %endif
 
+; unsigned os88_mem_claim_p(unsigned paras) / os88_mem_regrow_p(seg, paras) /
+; os88_mem_largest_p(void) / os88_mem_gran(void) - OSAPI_MEM_P (SPEC.md
+; 50.3.7): the same claims counted in PARAGRAPHS, for a size that is a byte
+; count - OS88_BYTES_PARA(n) is the paragraphs to ask for. The heap rounds
+; every claim to its granule (os88_mem_gran(), 32 paragraphs today), so the
+; KB calls above can never ask for less than a KB and these can
+CC_GATE _os88_mem_claim_p
+%ifdef CC_U__os88_mem_claim_p
+_os88_mem_claim_p:
+    mov bx, sp                      ; no frame: one argument
+    mov ax, [ss:bx+2]
+    xor cx, cx                      ; no DMA head
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    sbb ax, ax                      ; CF -> -1 / 0...
+    not ax
+    and ax, dx                      ; ...-> 0 = refused, or the segment
+    ret
+%endif
+CC_GATE _os88_mem_regrow_p
+%ifdef CC_U__os88_mem_regrow_p
+_os88_mem_regrow_p:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    mov ax, [bp+6]
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
+    sbb ax, ax                      ; CF -> -1 / 0...
+    not ax
+    and ax, dx                      ; ...-> 0 refused, or the base NOW
+    pop bp
+    ret
+%endif
+CC_GATE _os88_mem_largest_p
+%ifdef CC_U__os88_mem_largest_p
+_os88_mem_largest_p:
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest, in paragraphs
+    ret
+%endif
+CC_GATE _os88_mem_gran
+%ifdef CC_U__os88_mem_gran
+_os88_mem_gran:
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    xchg ax, cx                     ; AX = the granule, in paragraphs
+    ret
+%endif
+
 CC_T_AX   _os88_mem_largest_kb, OSAPI_MEM_AVAIL         ; AX = largest run
 CC_T_REG  _os88_mem_total_kb,   OSAPI_MEM_AVAIL, bx     ; BX = total free
                                                         ; Size yourself from
@@ -2373,6 +2423,21 @@ _os88_toast:
     push ds
     pop es                          ; ES:SI - ours
     call OSAPI_TOAST
+    sbb ax, ax                      ; CF -> 0 / -1
+    pop bp
+    ret
+%endif
+
+; int os88_fs_op(unsigned hi, unsigned lo) - DX:CX = the bytes one operation
+; will move, 0:0 its end (OSAPI_FS_OP, SPEC.md 12.8.10). 0 / -1 refused
+CC_GATE _os88_fs_op
+%ifdef CC_U__os88_fs_op
+_os88_fs_op:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    mov cx, [bp+6]
+    call OSAPI_FS_OP
     sbb ax, ax                      ; CF -> 0 / -1
     pop bp
     ret

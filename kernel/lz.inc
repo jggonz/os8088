@@ -83,6 +83,11 @@ LZ_BIG      equ 0x80            ; OR'd into AL at the published door: AH:CX is
 %if LZ_BIG != 0x80
   %error "LZ_BIG is tested with `js`: it has to be AL's sign bit"
 %endif
+%include "lzfilt.inc"           ; LZ_ESC, LZ_E8 and the filter's inverse,
+                                ; shared with the two stub decoders
+LZ_FILT     equ 2               ; a filtered stream, recorded in the frame's
+                                ; format byte - a bit no caller can set, AL
+                                ; above LZ_LZB being refused at the door
 
 ; Which decoders this kernel carries (SPEC.md 20.13.6). **BOTH IS THE DEFAULT
 ; AND SHIPS**, and it needs no -D at all: `make COMPRESS=lz4` and
@@ -172,8 +177,9 @@ LZ_F_BUMP   equ 2               ; ...nonzero once the destination has crossed
                                 ; can reach - so the offset bound stops being a
                                 ; compare at all (SPEC.md 20.14.5)...
 LZ_F_R      equ 4               ; ...R, the tail's offset once it is in reach...
-LZ_F_K      equ 7               ; ...K, a BYTE (the word's low byte is the
-                                ; format, dead weight): 32KB slides to go...
+LZ_F_FMT    equ 6               ; ...the format, with LZ_FILT if the stream
+LZ_F_K      equ 7               ; was filtered, and K, a BYTE: 32KB slides
+                                ; to go...
 LZ_F_T      equ 8               ; ...the tail's length...
 LZ_F_REM    equ 10              ; ...and the output bytes still to produce, 32
 LZ_F_REMH   equ 12              ; bits
@@ -189,8 +195,8 @@ LZ_CHK      equ 0x8000          ; the checkpoint while the tail is further:
 lz_decomp_x:
     test al, al                 ; the published door: AL bit 7 says AH is the
     js .big                     ; input's high byte (an older kernel refuses
-    mov ah, 0                   ; the bit as an unknown format); without it,
-.big:                           ; under 64KB as it was
+    cbw                         ; the bit as an unknown format); without it,
+.big:                           ; under 64KB as it was (AL < 80h: cbw is mov ah, 0)
     and al, ~LZ_BIG & 0xFF
 lz_decomp_big:
     push ds                     ; both segments are the caller's and both come
@@ -225,7 +231,16 @@ lz_decomp_big:
     adc ah, 0                   ; ...and now the stream's END, from DS:0
     xchg ax, cx                 ; (AL the format and AH the end's high byte,
     lodsw                       ; out of lodsw's way) T: how much of the
-    xchg ax, cx                 ; output is stored raw, in CX
+    cmp ax, LZ_ESC              ; output is stored raw - unless it is the
+    jne .noesc                  ; FILTER'S ESCAPE (SPEC.md 20.13.9, and
+    test bx, bx                 ; only under 64KB of output, as every
+    jnz .noesc                  ; filtered stream is - 20.13.9.4): then
+    inc cx                      ; the format byte remembers it - CL is 0 or
+    inc cx                      ; 1, so +2 is | LZ_FILT and a byte under the
+    lodsw                       ; `or` - and the real T is the next word,
+.noesc:                         ; everything below the plain stream's, SI
+                                ; two bytes on
+    xchg ax, cx                 ; ...T in CX
     sub bp, cx
     sbb ah, 0                   ; AH:BP = where the tail BEGINS
     jc .early                   ; a tail longer than the stream
@@ -251,19 +266,19 @@ lz_decomp_big:
     ; is present in one build and absent in another is an ABI that depends on a
     ; knob - so a build that does not carry a format must REFUSE it rather than
     ; run the one it does have on it. The first version fell through.
-    cmp al, LZ_LZB
+    test al, LZ_LZB             ; (a BIT, because LZ_FILT may sit beside it)
 %ifdef LZ_HAVE_LZB
   %ifdef LZ_HAVE_LZ4
-    je .lzb
+    jnz .lzb
     call lz_lz4
     jmp short .out
 .lzb:
   %else
-    jne .refuse                 ; ...the one this build does not carry
+    jz .refuse                  ; ...the one this build does not carry
   %endif
     call lz_lzb
 %else
-    je .refuse                  ; ...the one this build does not carry
+    jnz .refuse                 ; ...the one this build does not carry
     call lz_lz4
 %endif
 %ifndef LZ_HAVE_LZ4
@@ -278,6 +293,24 @@ lz_decomp_big:
     stc
 %endif
 .out:
+    ; THE FILTER'S INVERSE (SPEC.md 20.13.9), over the whole output once the
+    ; stream is out - which is what makes it safe in place: nothing reads the
+    ; packed bytes any more. Every `E8` at a position p with two bytes after
+    ; it is a near call whose operand the encoder made ABSOLUTE, `rel + p +
+    ; 3`; this takes `p + 3` back off, which with SCASW's DI one past the
+    ; operand is `sub [es:di-2], di`, and steps over the operand as the
+    ; encoder did. `repne scasb` is the scan, which is why it is E8 alone:
+    ; one byte value is the one an 8088 can look for at 15 cycles a byte.
+    ; The output is under 64KB by the encoder's rule, so ES:0 is its start;
+    ; a hostile stream that crossed a segment and set the escape has its
+    ; LAST segment rewritten, which is wrong bytes inside its own output and
+    ; nothing outside it.
+    jc .fin                     ; refused: nothing to undo
+    test byte [bp+LZ_F_FMT], LZ_FILT
+    jz .fin
+    LZ_UNE8                     ; (lzfilt.inc)
+    clc                         ; ...whose last compare leaves CF anything
+.fin:
     lahf                        ; drop the seven locals with the CF the arm
     add sp, 14                  ; answered carried round the `add` in AH -
                                 ; (a literal: tools/stkbalance.py reads it)
@@ -314,7 +347,7 @@ lz_at:
 %ifdef KERN_MEGA
     push dx                     ; kern_mega: in protected mode EVERY selector
     mov dx, 0x0800              ; slides by its descriptor, not by arithmetic
-    call KERNEL_SEG:mega_slidef ; (mega_slidef: the sum in real mode)
+    call COLD_SEG:mega_slidec   ; (the sum in real mode)
     pop dx
 %else
     add ax, 0x0800              ; 32KB is 2,048 paragraphs
@@ -385,8 +418,8 @@ lz_cross:
     mov ax, ds                  ; ...and so did the source: 64KB on is 4,096
 %ifdef KERN_MEGA
     push dx                     ; paragraphs (a descriptor's, in protected
-    mov dx, 0x1000              ; mode: mega_slidef)
-    call KERNEL_SEG:mega_slidef
+    mov dx, 0x1000              ; mode: mega_slidec)
+    call COLD_SEG:mega_slidec
     pop dx
 %else
     add ax, 0x1000              ; paragraphs
@@ -403,11 +436,11 @@ lz_cross:
 lz_dbump:
     mov ax, es
 %ifdef KERN_MEGA
-    call KERNEL_SEG:mega_s2segf ; kern_mega: ES is a selector - the segment it
+    call COLD_SEG:mega_s2segc   ; kern_mega: ES is a selector - the segment it
     cmp ax, 0xFFFF              ; stands for, 64KB on, and a selector for THAT,
     je .stay                    ; which may be the scratch one (mega.inc). A
     add ax, 0x1000              ; base above 1MB has no segment and keeps ES:
-    call KERNEL_SEG:mega_oddsegf ; the entry let exactly 64KB in, and its last
+    call COLD_SEG:mega_oddsegc  ; the entry let exactly 64KB in, and its last
     mov es, ax                  ; byte is what wraps DI here
 .stay:
     inc byte [bp+LZ_F_BUMP]

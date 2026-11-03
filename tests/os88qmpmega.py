@@ -202,7 +202,7 @@ def claims():
     import heapmap
     m = live().m
     raw = m.read(m.sym("mem_tab"), heapmap.MEM_MAX * heapmap.MC_SIZE)
-    sel = m.read(m.sym("mem_sel"), heapmap.MEM_MAX * 2)
+    sel = m.read(m.tail("mem_sel"), heapmap.MEM_MAX * 2)
     out = []
     for i in range(heapmap.MEM_MAX):
         c = heapmap.Claim(raw[i * heapmap.MC_SIZE:(i + 1) * heapmap.MC_SIZE])

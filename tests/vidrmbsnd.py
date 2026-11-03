@@ -72,7 +72,16 @@ NAME = "MEGARMBS"
 PKG = os.path.join(ROOT, "build", "megarmbs.o88")
 BIN = os.path.join(ROOT, "build", "megarmbs.bin")
 KSEG = 0x0060
-TBL, TLEN = 0x0010, 0x04D9
+def _api_tlen():
+    """the API table's length off kern_mega's map - a constant here went
+    stale the day OSAPI_MEM_P joined the table (kern_mega size pass 2)"""
+    import os88sym
+    off, _, _ = os88sym._parse_map(os.path.join(ROOT, "build", "megak",
+                                                "kernel.map"))
+    return off["osapi_table_end"] - off["osapi_table"]
+
+
+TBL, TLEN = 0x0010, _api_tlen()
 LEGS = "PQLMKOIJWSZ"
 LEG_SZ = 32
 RATE = 8000

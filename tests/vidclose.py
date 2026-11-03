@@ -74,7 +74,8 @@ def main_mega():
                 mx_tab: MX_OWN a slot, 80h|slot its region, A0h|slot its
                 claim; C0h and up are the kernel's own - the disk layer's
                 caches come and go there and are not this row's)"""
-                raw = m.read(m.sym("mx_tab"), heapmap.MX_NBLK * heapmap.MX_BLKSZ)
+                raw = m.read(m.tail("mx_tab"),
+                             heapmap.MX_NBLK * heapmap.MX_BLKSZ)
                 out = []
                 for k in range(heapmap.MX_NBLK):
                     r = raw[k * heapmap.MX_BLKSZ:(k + 1) * heapmap.MX_BLKSZ]

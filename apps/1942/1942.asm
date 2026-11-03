@@ -302,10 +302,11 @@ n_title: db '1942',0
 n_errmsg: db 'Fullscreen requires a VGA or CGA display.',0
 n_asseterr: db 'The 1942 graphics could not be loaded.',0
 n_memerr: db 'Not enough memory for the 1942 graphics.',0
-n_ablines: dw n_title,n_credit,n_credit2,n_credit3,0
+n_ablines: dw n_title,n_credit,n_credit2,n_credit3,n_credit4,0
 n_credit: db 'Native remake for os8088',0
 n_credit2: db '1942 original game: Capcom (1985)',0
 n_credit3: db 'Original art / native VGA and CGA sprites',0
+n_credit4: db 'Ported by Jorge Gonzalez',0
 n_hud: db '000000  L3 R3  STAGE 01',0
 n_msgselect: db '1 OR 2 PLAYERS    1',0
 n_msgtitle: db '1 9 4 2',0

@@ -3707,13 +3707,14 @@ mru_draw_card:
     ret
 
 mr_ablines:
-    dw mr_ab1, mr_ab2, mr_ab0, mr_ab3, mr_ab4, mr_ab0, mr_ab5, 0
+    dw mr_ab1, mr_ab2, mr_ab6, mr_ab0, mr_ab3, mr_ab4, mr_ab0, mr_ab5, 0
 mr_ab0:     db 0
 mr_ab1:     db 'MIDIRack for os8088', 0
 mr_ab2:     db 'Version 1.0', 0
 mr_ab3:     db 'Standard MIDI Files on an OPL2 / OPL3,', 0
 mr_ab4:     db 'a Sound Blaster, a Covox or the speaker', 0
 mr_ab5:     db 'FM bank and song arrangements: CC0', 0
+mr_ab6:     db 'Contributed by Jorge Gonzalez', 0
 
 ; --- MIDI Info: its lines, built when it is drawn -----------------------------
 mr_inlines:

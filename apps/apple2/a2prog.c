@@ -301,13 +301,12 @@ static int ovl_a2_load(const char *name, unsigned size_lo)
             a2_say("Not an Applesoft program.");
             return 1;
         }
-        /* THE CEILING IN 16 BITS, and it is not `(size + 1023) >> 10`:
-         * `unsigned` is sixteen bits here, so that addition wraps for a file
-         * over 64,512 bytes. The shift-then-round form cannot overflow
-         * (c64load.c's finding). */
-        kb = (size_lo >> 10) + ((size_lo & 1023) != 0);
+        /* THE CEILING IN 16 BITS, and it is not OS88_BYTES_PARA(size):
+         * `unsigned` is sixteen bits here, so that addition wraps near 64KB.
+         * The shift-then-round form cannot overflow (c64load.c's finding).
+         * PARAGRAPHS and not KB (SPEC.md 50.3.7): the file is a byte count */
         cap = size_lo;
-        seg = os88_mem_claim((int)kb);
+        seg = os88_mem_claim_p((size_lo >> 4) + ((size_lo & 15) != 0));
     } else {
         kb = os88_mem_largest_kb();
         if (kb > (unsigned)A2_PRGKB)
@@ -425,7 +424,7 @@ static int ovl_a2_load(const char *name, unsigned size_lo)
  * bytes. */
 static int ovl_a2_save(const char *name)
 {
-    unsigned seg, kb, vartab, len;
+    unsigned seg, vartab, len;
 
     vartab = (unsigned)a2_rd16(A2_VARTAB);
     if (vartab > (unsigned)A2_PROGTOP)
@@ -442,8 +441,7 @@ static int ovl_a2_save(const char *name)
         a2_say("No program to save.");
         return 1;
     }
-    kb = (len >> 10) + ((len & 1023) != 0);
-    seg = os88_mem_claim((int)kb);
+    seg = os88_mem_claim_p((len >> 4) + ((len & 15) != 0));   /* 50.3.7 */
     if (seg == 0) {
         a2_say("No heap for the program.");
         return 1;

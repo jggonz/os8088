@@ -214,7 +214,7 @@ MR_FILEMAX  equ 63                  ; KB: the largest file taken whole
     MRB mr_arg_vol
     MRW mr_msg                      ; status line 3
     MRW mr_fseg                     ; the song's claim
-    MRW mr_fkb                      ; ...its size in KB
+    MRW mr_fpara                    ; ...its size in paragraphs (granted)
     MRW mr_fsize                    ; the song's bytes
     MRB mr_loaded                   ; a song is in the claim...
     MRB mr_lidx                     ; ...this playlist entry
@@ -574,18 +574,25 @@ mra_load:
     mov bx, [si+OP_R_LEN]           ; BX = what they expand to: the derive's
     cmp bx, MRA_FSIZE               ; input, or a package packed wrong
     jne .out
-    sub bx, cx                      ; BX = R = roundup512(len - packed): where
-    jbe .out                        ; the stream is read, a sector boundary
-    add bx, 511                     ; up the claim (a disk-visible base is
-    and bx, ~511                    ; 512-aligned)
-    mov ax, [si+OP_R_OFF]           ; DX:AX = the part's byte offset
-    mov dx, ax
+    sub bx, cx                      ; BX = len - packed: the stream must
+    jbe .out                        ; start at least that far up the claim
+    mov ax, [si+OP_R_OFF]           ; DX:AX = the part's byte offset, from
+    mov dx, ax                      ; PARAGRAPHS (SPEC.md 20.12.2)
     push cx
-    mov cl, 9
+    mov cl, OP_GSH
     shl ax, cl
-    mov cl, 7
+    mov cl, 16 - OP_GSH
     shr dx, cl
     pop cx
+    mov di, ax
+    and di, 511                     ; DI = its place in its SECTOR, where
+    sub ax, di                      ; READ_AT starts (SPEC.md 18.4.4.2)
+    sub bx, di                      ; BX = R = roundup512(len - packed -
+    jae .rpos                       ; slack): where the read lands, a sector
+    xor bx, bx                      ; boundary up the claim (a disk-visible
+.rpos:                              ; base is 512-aligned), the stream DI
+    add bx, 511                     ; past it - and R + the read is no more
+    and bx, ~511                    ; than for a part on a sector
     push ax
     push dx
     mov ax, MRA_CLAIM / 1024
@@ -596,19 +603,22 @@ mra_load:
     jc .out
     mov es, bp
     push cx                         ; (the packed bytes, for the decoder)
+    add cx, di                      ; the slack and the stream must arrive
+    push cx
     add cx, 511
     and cx, ~511                    ; CX = the capacity: whole sectors, the
     mov si, op_name                 ; file ending inside the last one
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
     pop cx
-    jc .free
+    jc .freep
     cmp ax, cx
+    pop cx
     jb .free
     push ds
     mov al, [op_table + OP_T_FMT]   ; (ours: DS is the stream's a line on)
     xor ah, ah
     mov dx, MRA_FSIZE
-    mov si, bx
+    lea si, [bx+di]                 ; DS:SI = the stream, R + the slack up
     mov ds, bp                      ; DS:SI = the stream, ES:0 its output
     xor di, di
     xor bx, bx
@@ -621,6 +631,9 @@ mra_load:
     mov ax, mra_reloc               ; nothing points into it but mra_seg
     call OSAPI_MEM_MOVABLE
     jmp short .out
+.freep:
+    pop cx
+    jmp short .free
 .zbad:
     pop ds
 .free:

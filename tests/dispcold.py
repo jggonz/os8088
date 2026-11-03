@@ -9,8 +9,9 @@ the built image at the desktop, and one click on a Disk window with a
 straddling window over it leaves 34 differing runs in it - at 0x4611, 0x4613,
 0x4661, 0x4663, 0x46B1, 0x46B3, 0x4701, 0x4703 ... **stride 0x50**, which is
 80 bytes, which is a 640-pixel 1bpp scan line. Something is drawing through a
-segment that is COLD_SEG, and what it lands on is `fm_choose`, `fm_find_view`,
-`fm_front_win`, `fm_bar_gate_x` and `fm_layout` - the file manager's own code.
+segment that is COLD_SEG, and what it lands on is `fm_choose` (with the two
+walks `fm_find_view` and `fm_front_win` that are written into it now),
+`fm_bar_gate_x` and `fm_layout` - the file manager's own code.
 Everything downstream (a `call far` turned into `cbw`, DS going to 0, garbage
 written over ui_rebootq, the reboot, the freeze) is that code being executed.
 (Those offsets are where they were WHEN IT WAS CAUGHT, and every one of them
@@ -110,8 +111,9 @@ COLD_LIN = (COLD_SEG << 4) + COLD_VST                # ...so this is its first b
 # The witnesses are the routines the original catch landed on - naming them
 # keeps the breakpoints pointed at the CODE this is about, so the span moves
 # when the code does instead of going quietly off-target.
-FM_WITNESS = ("fm_choose", "fm_find_view", "fm_front_win", "fm_bar_gate_x",
-              "fm_layout")
+FM_WITNESS = ("fm_choose", "fm_bar_gate_x", "fm_layout")   # fm_find_view
+                                # and fm_front_win were written into
+                                # fm_choose (kernel size pass 17)
 _pad = 0x400                                    # ...enough to cover the last
                                                 # witness's body, not just its
                                                 # entry

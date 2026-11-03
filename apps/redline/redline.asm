@@ -2,7 +2,7 @@
 %include "os88api.inc"
 RL_ROWS equ 25
 RL_RUNS equ 3
-    OS88_HEADER 'REDLINE', rl_entry, OS88_F_ICON, OS88_HIGH | OS88_HIGHMEM
+    OS88_HEADER 'REDLINE', rl_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 
 ; --- embedded 16x16 icon (SPEC.md 20.2, flags bit 0) ---------------------------
 ; A tachometer: the dial's rim, three ticks, the RED LINE as a filled band on
@@ -65,6 +65,8 @@ RL_RUNS equ 3
 %define BL_NUMNAME                  ; CHIPSET.TXT numbers itself (103.6)
 
 rl_entry:
+    call op_load                    ; FIRST (os88parts.inc rule 1): the name
+                                    ; of the file the Inspect module is in
     mov si, rl_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -91,6 +93,8 @@ rl_entry:
     mov ax, ru_wheel                ; SPEC.md 13.18: the mouse wheel scrolls
     call OSAPI_WM_ONWHEEL           ; the pane under the pointer
     mov si, rl_intro
+    call bl_sline
+    mov si, rl_credit
     call bl_sline
     mov si, rl_hint
     call bl_sline
@@ -130,7 +134,11 @@ rl_key:
     je .benchtab
     cmp dl, 'H'
     je .tunetab
-    cmp byte [cs_tab], 0            ; the Tune tab's keys are its own
+    cmp dl, 'I'
+    je .insptab
+    cmp byte [cs_tab], RU_TINSP     ; the Inspect tab's keys are its own...
+    je ri_tabkey
+    cmp byte [cs_tab], 0            ; ...and the Tune tab's
     jne cs_tabkey
     cmp dl, 'R'
     je .run
@@ -165,7 +173,11 @@ rl_key:
     call cs_settab
     jmp .out
 .tunetab:
-    mov al, 1
+    mov al, RU_TTUNE
+    call cs_settab
+    jmp .out
+.insptab:
+    mov al, RU_TINSP
     call cs_settab
     jmp .out
 .run:
@@ -190,8 +202,10 @@ rl_cmd:                             ; AL = the Bench item: its key
     mov bx, rl_cmdkeys
     xlatb
     pop bx
-    cmp al, 'h'                     ; every item but Tune is the Benchmark
-    je .key                         ; tab's, so it goes there first
+    cmp al, 'h'                     ; every item but Tune and Inspect is the
+    je .key                         ; Benchmark tab's, so it goes there first
+    cmp al, 'i'
+    je .key
     push ax
     mov al, 0
     call cs_settab
@@ -435,6 +449,8 @@ rl_repaint:
 ; Inventory values are labelled by their sources, rather than "installed" guesses.
 rl_facts:
     mov si, rl_intro
+    call bl_sline
+    mov si, rl_credit
     call bl_sline
     mov si, rl_l_canvas
     mov ax, [rl_canvas_h]
@@ -1034,6 +1050,10 @@ rl_blit4:
 %include "benchlib.inc"
 %include "redline/ui.inc"
 %define OS88UI_NOGLYPH
+%define OP_BSS_AT ri_opbss          ; the parts standard (SPEC.md 20.12): the
+%define OP_WANT_CSEG                ; Inspect module is far-called,
+%define OP_ONMOVE ri_mreloc         ; ...and moves between calls
+%include "os88parts.inc"
 %define OS88UI_SCROLL               ; the results and fact panes' bars
 %define OS88UI_DROP                 ; the Tune tab's chipset pick (103.6)
 %define OS88UI_ALERT                ; ...and its two questions
@@ -1041,26 +1061,34 @@ rl_blit4:
 %define OD_BOOTVOL                  ; REDLINE.CFG is RLAPPLY's (103.6.4)
 %include "os88data.inc"
 %include "os88link.inc"           ; Apply on boot's autostart link (26.10)
+%include "os88wseq.inc"           ; Inspect's report: an append of any size
 %include "redline/csrows.inc"
 %include "redline/csfe.inc"
 %include "redline/csknob.inc"
 %include "redline/csapply.inc"
 %include "redline/csweep.inc"
 %include "redline/chipset.inc"
+%include "redline/inspect.inc"
+OS88_PARTS_BEGIN 1
+    OS88_PART OP_SEG, OP_LAZY | OP_COMP ; 0  the Inspect module (inspmod.inc)
+OS88_PARTS_END
+RI_MPART equ 0
 
 rl_tpl: dw 7, 22, 632, 448, rl_title, rl_paint, rl_key, rl_click
 rl_title: db 'REDLINE', 0
 rl_menu: db 'Bench', 0
 rl_menuitems: dw rl_runitem, rl_saveitem, ru_summary, ru_detailed, ru_compare
-             dw rl_csitem
+             dw ri_menuitem, rl_csitem
 rl_csitem: db 'Tune', 0
+ri_menuitem: db 'Inspect', 0
 rl_runitem: db 'Run', 0
 rl_saveitem: db 'Save Report', 0
 OS88_MENUSET rl_menus, rl_title, rl_cmd
-    OS88_MENU rl_menu, rl_menuitems, 6
+    OS88_MENU rl_menu, rl_menuitems, 7
 OS88_MENUSET_END rl_menus
 rl_intro: db 'REDLINE 1.0  //  CPU + GRAPHICS PERFORMANCE LAB', 0
-rl_hint: db 'U Summary  D Detailed  C Compare  R Run  S Save  H Chipset  Q Quit', 0
+rl_credit: db 'Contributed by Jorge Gonzalez and Elendilon', 0
+rl_hint: db 'U Summary D Detailed C Compare R Run S Save I Inspect H Tune Q Quit', 0
 rl_hint2: db '3 runs averaged; 3 graphics tiers. F1: report help.', 0
 rl_running: db 'REDLINE: probing hardware and measuring fixed workloads...', 0
 rl_method: db 'PIT 1.193182 MHz; net counts, IRQs between bodies; fixed work.', 0
@@ -1270,13 +1298,14 @@ rl_facts_end:
     OS88_ABUF rl_biosdate, 9          ; 8 ROM date bytes and their NUL
     OS88_ABUF ru_pad, 11
     OS88_ABUF ru_gscores, 3*4
-    OS88_ABUF ru_buttonflags, 8*2
+    OS88_ABUF ru_buttonflags, RU_NBTN*2
     OS88_ABUF ru_value, 16
-    OS88_ABUF ru_rects, 32*2
+    OS88_ABUF ru_rects, RU_NBTN*8
     OS88_ABUF ru_scores, RL_ROWS*4
     OS88_ABUF cs_lines, CS_LINES*CS_LW  ; the Chipset report (chipset.inc)
     OS88_ABUF cs_sw_ref, 1024           ; Tune's references (csweep.inc)
     OS88_ABUF cs_bt, 2*CS_BTW           ; the BIOS's text (chipset.inc)
+    OS88_ABUF ri_opbss, OP_BSS          ; the parts standard's own (20.12)
 ; ...then benchlib's, whose first buffer is the 512-aligned one int 13h moves
 ; (bl_out, the CR LF image bl_save writes). The workloads' three buffers
 ; OVERLAP it: they are live only inside rl_run, which refills rl_src and
@@ -1292,3 +1321,5 @@ rl_pixels equ rl_dst + 2048
 %endif
     BL_BSS rl_sect
     OS88_ADJACENT bl_full, bl_saved, 1  ; rl_run clears the pair as one word
+
+%include "redline/inspmod.inc"

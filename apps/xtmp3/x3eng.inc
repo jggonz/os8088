@@ -1387,15 +1387,20 @@ x3_la_claim:
     cmp word [ap_la_seg], 0
     jne .ok
     push ax
+    push bx
+    push cx
     push dx
-    mov ax, [x3_lasz]               ; the ring, the PCM (X3_PCMRES) and a
-    mov dl, 10                      ; conversion's stage (x3_laxkb, x3conv
-    xchg cx, dx                     ; .inc), ONE claim: 8 per owner is the
-    shr ax, cl                      ; heap's limit (SPEC.md 50), and the XT
-    xchg cx, dx                     ; backend's work alone is 5
-    add ax, (X3_PCMRES + 1023) / 1024
-    add ax, [x3_laxkb]
-    call OSAPI_MEM_CLAIM            ; 512-aligned by construction (guard 6b)
+    mov ax, [x3_laxkb]              ; the ring, the PCM (X3_PCMRES) and a
+    mov cl, 6                       ; conversion's stage (x3_laxkb, x3conv
+    shl ax, cl                      ; .inc), ONE claim: 8 per owner is the
+    mov dx, [x3_lasz]               ; heap's limit (SPEC.md 50), and the XT
+    mov cl, 4                       ; backend's work alone is 5. In
+    shr dx, cl                      ; PARAGRAPHS (SPEC.md 50.3.7), so the
+    add ax, dx                      ; PCM's 2,560 bytes are five granules and
+    add ax, X3_PCMRES / 16          ; not three KB - half a KB less, held for
+    xor cx, cx                      ; the whole of every track. A disk read
+    mov bl, MEMP_CLAIM              ; lands in it, and MEMP_CPU is not asked
+    call OSAPI_MEM_P                ; for: 512-aligned (SPEC.md 50.2.1.1)
     jc .no
     mov [ap_la_seg], dx
     mov dx, [x3_lamask]
@@ -1403,12 +1408,16 @@ x3_la_claim:
     call x3_ldecl                   ; MOVABLE from birth (x3_rmove): pinned
     call x3_memck                   ; only across a file call into it
     pop dx
+    pop cx
+    pop bx
     pop ax
 .ok:
     clc
     ret
 .no:
     pop dx
+    pop cx
+    pop bx
     pop ax
     stc
     ret
@@ -4326,6 +4335,7 @@ x3_bvcall:
 ; x3_wsclaim - CAPS' work segments, each its own claim, into the open record
 x3_wsclaim:
     push ax
+    push bx
     push cx
     push dx
     push si
@@ -4335,13 +4345,12 @@ x3_wsclaim:
     mov si, 0
 .c:
     jcxz .ok
-    mov ax, [x3_caps1+X3C_PARA+si]  ; paragraphs -> KB, rounded up
-    add ax, 63
-    push cx
-    mov cl, 6
-    shr ax, cl
-    pop cx
-    call OSAPI_MEM_CLAIM
+    mov ax, [x3_caps1+X3C_PARA+si]  ; PARAGRAPHS, as CAPS says them: the
+    push cx                         ; door that takes them (SPEC.md 50.3.7)
+    xor cx, cx                      ; rounds to the granule rather than a
+    mov bl, MEMP_CLAIM              ; whole KB, up to half a KB less a
+    call OSAPI_MEM_P                ; segment. CX is the count, so it is
+    pop cx                          ; banked across the head (pop keeps CF)
     jc .no
     mov [x3_open+X3O_SEG+si], dx
     mov [x3_ws+si], dx
@@ -4359,6 +4368,7 @@ x3_wsclaim:
     pop si
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -4499,10 +4509,28 @@ x3_curkb:
 .p:
     add ax, X3_REGIONKB
 %ifdef X3_PARTS
-    add ax, [op_kb]                 ; the eager carve: FRONT and ART
+    call x3_addcarve                ; the eager carve: FRONT and ART
 %endif
     pop bx
     ret
+
+%ifdef X3_PARTS
+; x3_addcarve - AX += the eager carve in KB, rounded up: the parts standard
+; totals it in PARAGRAPHS ([op_np], SPEC.md 50.3.7) and every figure here is
+; KB, as OSAPI_MEM_AVAIL answers. keeps the rest
+x3_addcarve:
+    push cx
+    push dx
+    mov dx, [op_np]
+    add dx, 63                      ; ...the carry back in as a 17th bit
+    rcr dx, 1
+    mov cl, 5
+    shr dx, cl
+    add ax, dx
+    pop dx
+    pop cx
+    ret
+%endif
 
 ; =============================================================================
 ; CALIBRATION AND THE LADDER (SPEC.md 121.5)
@@ -5379,7 +5407,7 @@ x3_haskb:
     mov ax, [x3_free0]
     add ax, X3_REGIONKB
 %ifdef X3_PARTS
-    add ax, [op_kb]
+    call x3_addcarve
 %endif
 .o:
     ret
@@ -5789,11 +5817,12 @@ X3_FPSZ     equ 12                  ; a fingerprint: size, two CRC-32s
     X3B x3_lamask, 2                ; refill mark (x3_lasize)...
     X3B x3_lalw, 2
     X3B x3_rdmax, 2                 ; aplook's gulp cap (AP_RD_CHUNK)
+    X3B x3_fsop, 2                  ; OSAPI_FS_OP's owner, X3OP_* (0 none) - a WORD, so nothing after it moves by an odd amount
     X3B x3h_kind, 1                 ; THE HOLD (x3hold.inc): none, XMS, conv
     X3B x3h_on, 1                   ; ...whole
     X3B x3h_base, 4                 ; ...its XMS base, or its segment
     X3B x3h_win, 2                  ; x3h_at's window, 0 = not made yet
-    X3B x3h_ckb, 2                  ; ...a conventional one's KB
+    X3B x3h_cpara, 2                ; ...a conventional one's paragraphs
     X3B x3h_size, 4                 ; ...the file's bytes
     X3B x3h_have, 4                 ; ...and how many are in
     X3B x3h_dir, 2                  ; ...its key: folder, volume, name

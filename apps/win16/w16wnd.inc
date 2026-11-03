@@ -2095,9 +2095,10 @@ GWW_HWNDPARENT  equ -8
 GWW_ID          equ -12
 w16u_getwword:
     call w16_args
-    mov cx, [es:bx]
+    push word [es:bx]               ; nIndex (w16_hwnd2rec answers CX)
     mov ax, [es:bx + 2]
     call w16_hwnd2rec
+    pop cx
     jc .zero
     call w16_wwaddr
     jc .zero
@@ -2115,8 +2116,15 @@ w16u_setwword:
     cmp cx, GWW_HINSTANCE           ; read-only here: it is WIN16's own word
     je .zero
     mov ax, [es:bx + 4]
+    push cx                         ; (w16_hwnd2rec answers CX)
     call w16_hwnd2rec
+    pop cx
     jc .zero
+    cmp cx, GWW_HWNDPARENT
+    jne .set
+    call w16_nocycle
+    jc .zero
+.set:
     call w16_wwaddr
     jc .zero
     mov ax, [bx]
@@ -2132,9 +2140,10 @@ GWL_WNDPROC equ -4
 GWL_STYLE   equ -16
 w16u_getwlong:
     call w16_args
-    mov cx, [es:bx]
+    push word [es:bx]               ; nIndex (w16_hwnd2rec answers CX)
     mov ax, [es:bx + 2]
     call w16_hwnd2rec
+    pop cx
     jc .zero
     call w16_wladdr
     jc .zero
@@ -2155,7 +2164,9 @@ w16u_setwlong:
     mov cx, [es:bx + 4]
     mov si, [es:bx]
     mov di, [es:bx + 2]
+    push cx                         ; (w16_hwnd2rec answers CX)
     call w16_hwnd2rec
+    pop cx
     jc .zero
     call w16_wladdr
     jc .zero
@@ -2170,6 +2181,39 @@ w16u_setwlong:
 .out:
     pop di
     pop si
+    ret
+
+; w16_nocycle - BX = a record, DX = the HWND to be its parent: CF=1 when
+; that is the window itself or one of its descendants, a cycle every parent
+; walk would go round for ever. At most W16_MAXWND steps. Keeps all.
+w16_nocycle:
+    push ax
+    push bx
+    push cx
+    push si
+    push di
+    mov si, bx
+    mov ax, dx
+    mov di, W16_MAXWND
+.up:
+    call w16_hwnd2rec               ; not a window: the walk ends there
+    jc .ok
+    cmp bx, si
+    je .cyc
+    mov ax, [bx + W16W_PARENT]
+    dec di
+    jnz .up
+.ok:
+    clc
+    jmp short .out
+.cyc:
+    stc
+.out:
+    pop di
+    pop si
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; w16_wwaddr - BX = a record, CX = a window-word index -> BX = the word's

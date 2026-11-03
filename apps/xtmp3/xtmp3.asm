@@ -1765,10 +1765,13 @@ x3_t_error:   db 'Error: ', 0
 x3_t_load:    db 'Loading ', 0
 
 x3_ablines:
-    dw x3_ab1, x3_ab2, x3_ab3, 0
+    dw x3_ab1, x3_ab2, x3_ab3, x3_abz, x3_abc, x3_abn, 0
 x3_ab1:     db 'XTMP3 for os8088', 0
 x3_ab2:     db 'MP3 at the best quality', 0
 x3_ab3:     db 'this machine can sustain', 0
+x3_abz:     db 0
+x3_abc:     db 'Contributed by', 0
+x3_abn:     db 'Jorge Gonzalez', 0
 
 %include "x3art.inc"                ; the art part's offsets (os88x3art.py)
 

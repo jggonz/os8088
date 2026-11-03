@@ -327,10 +327,11 @@ trk_entry:
     mov al, 1                       ; nothing is loaded yet - and the machine
     mov [mp_xt], al                 ; itself is remembered. The visualiser:
     mov [trk_cpu0], al              ; the spectrum where there are cycles for
-    mov word [trk_mi_file + TRK_MI_XT], trk_s_xton  ; it, the needles (bss's
-    dec ax                          ; 0) where there are not (tw_vizfx forces
-.cpu:
-    mov [tw_viz], al                ; those); nothing reads it before a paint
+    mov word [trk_mi_file + TRK_MI_XT], trk_s_xton  ; it - which is every
+.cpu:                               ; machine now: the XT's own bars-only one
+    mov [tw_viz], al                ; (SPEC.md 45.24.1) keeps up, so it is the
+                                    ; XT's default too (AL = 1 = TWV_SPEC
+                                    ; above); nothing reads it before a paint
     call OSAPI_VIDEO                ; AX = w, BX = h, CX = first dock row
     sub ax, TRK_WINW                ; centre the frame on the screen...
     jns .xok
@@ -762,7 +763,7 @@ trk_do_open:
 ; trk_trim - give back the part of the blob claim the file did not need
 ;
 ; in:  [trk_modseg] = the claim, [mp_bloblen_hi]:[mp_bloblen_lo] = bytes read
-; out: [trk_modseg] / [trk_capk] updated; clobbers AX, CX, DX (its one
+; out: [trk_modseg] / [trk_capp] updated; clobbers AX, BX, CX, DX (its one
 ;      caller, trk_fdone, keeps nothing across it)
 ;
 ; This exists for the path where the claim is sized BEFORE the file's size is
@@ -772,7 +773,7 @@ trk_do_open:
 ; heap until the next load or teardown. One call gives the difference back.
 ; On the sized path it finds nothing to give and costs a compare.
 ;
-; This is a call and not a redesign because OSAPI_MEM_REGROW SHRINKS IN PLACE
+; This is a call and not a redesign because a regrow SHRINKS IN PLACE
 ; (SPEC.md 50.3.1): the record's length changes and nothing moves. Claim-copy-
 ; free could not do it - it needs both blocks at once, and may hand back a
 ; different base - which is why the tree this came from documented the
@@ -786,36 +787,36 @@ trk_do_open:
 trk_trim:
     mov ax, [mp_bloblen_lo]
     mov dx, [mp_bloblen_hi]
-    call trk_tokb                   ; round UP: the heap's granularity is KB,
-                                    ; and a truncating divide would hand back
-                                    ; the tail of the file with the tail of
-                                    ; the claim. What was READ cannot exceed
-                                    ; the capacity the claim was made at, and
-                                    ; trk_fdone's ~64MB domain guard bounds
-                                    ; that, so DX<<6 fits a word in there for
+    call trk_topara                 ; round UP: a truncating divide would
+                                    ; hand back the tail of the file with the
+                                    ; tail of the claim. What was READ cannot
+                                    ; exceed the capacity the claim was made
+                                    ; at, and trk_fdone's 960KB guard bounds
+                                    ; that, so DX<<12 fits a word in there for
                                     ; the same reason it does at the claim
     jnz .go
-    inc ax                          ; 0 KB is a refusal, not a claim
+    inc ax                          ; 0 is a refusal, not a claim
 .go:
-    cmp ax, [trk_capk]
+    cmp ax, [trk_capp]
     jae .out                        ; the file filled it: nothing to give back
     mov dx, [trk_modseg]
-    call OSAPI_MEM_REGROW
+    mov bl, MEMP_REGROW             ; in PARAGRAPHS (SPEC.md 50.3.7)
+    call OSAPI_MEM_P                ; AX = what it holds now
     jc .out                         ; refused: keep the oversized claim, which
     mov [trk_modseg], dx            ; costs heap and breaks nothing
-    mov [trk_capk], ax
+    mov [trk_capp], ax
 .out:
     ret
 
-; trk_tokb - DX:AX bytes -> AX = KB, rounded UP; ZF from the answer. DX:AX
-; must be under ~64MB (DX <= 1022), which both callers guarantee. Clobbers CL
-; and DX. DX:AX >> 10 = (DX << 6) + (AX >> 10)
-trk_tokb:
-    add ax, 1023
+; trk_topara - DX:AX bytes -> AX = PARAGRAPHS, rounded UP; ZF from the
+; answer. DX:AX must be under 960KB (DX <= 14), which both callers guarantee.
+; Clobbers CL and DX. DX:AX >> 4 = (DX << 12) + (AX >> 4)
+trk_topara:
+    add ax, 15
     adc dx, 0
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
     or ax, dx
     ret
@@ -1010,7 +1011,7 @@ trk_fdone:
     call tpl_add                    ; folder, which is what the entry banks
     jmp .out
 .load:
-    mov word [trk_needk], 0         ; "unknown" has to be written, not assumed:
+    mov word [trk_needp], 0         ; "unknown" has to be written, not assumed:
                                     ; this word survives the LAST load, so a
                                     ; file whose size nothing can answer would
                                     ; otherwise claim the previous module's
@@ -1025,19 +1026,21 @@ trk_fdone:
     or bx, dx                       ; the directory. Still nothing -> leave it
     jz .sizeok                      ; unknown and let the file API answer as
 .havesz:                            ; it always did
-    cmp dx, 1023                    ; the ONLY ceiling here is the domain of
-    jae .toobig2                    ; the conversion below (SPEC.md 45.3.1):
-                                    ; it composes DX<<6 into a word, so ~64MB
-                                    ; is where the arithmetic stops being
-                                    ; true. Everything under it is the HEAP's
-                                    ; question, asked three lines down
-    call trk_tokb                   ; AX = KB needed (DX <= 1022 above, so
-                                    ; <= 1023 in there and DX<<6 still fits)
-    mov [trk_needk], ax
-    push ax
-    call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB
-    pop bx
-    cmp ax, bx
+    cmp dx, 1023                    ; the ONLY ceiling on the FILE is 'too
+    jae .toobig2                    ; big' past ~64MB (SPEC.md 45.3.1), kept
+                                    ; where it was. Everything under it is the
+                                    ; HEAP's question, asked a few lines down -
+    cmp dx, 15                      ; and 960KB or more is answered without
+    jae .nomem2                     ; asking: no heap, and no compaction, on
+                                    ; any kernel has a run that long, and it
+                                    ; is where the paragraphs stop fitting a
+                                    ; word
+    call trk_topara                 ; AX = PARAGRAPHS needed (SPEC.md 50.3.7):
+    mov [trk_needp], ax             ; the module pays the heap's granule, not
+    xchg ax, dx                     ; a whole KB. In DX, which MEMP_AVAIL keeps
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the LARGEST claim, in paragraphs
+    cmp ax, dx
     jae .sizeok
     call trk_cpq_try                ; ...and if it does not fit AS THE HEAP
     jc .nomem2                      ; STANDS, could a compaction that moved US
@@ -1077,18 +1080,19 @@ trk_fdone:
     mov byte [mp_loaded], 0         ; the old blob is about to be freed: no
                                     ; reader may trust it past this line
     call trk_modfree
-    mov ax, [trk_needk]             ; the size the DIALOG reported, rounded to
-    or ax, ax                       ; KB: claim what the file needs and not
-    jnz .sized                      ; the whole largest run (SPEC.md 38.6).
-                                    ; 0 = no size was available (a typed
-                                    ; name), so fall back to the old
+    mov ax, [trk_needp]             ; the size the DIALOG reported, rounded to
+    or ax, ax                       ; paragraphs: claim what the file needs
+    jnz .sized                      ; and not the whole largest run (SPEC.md
+                                    ; 38.6). 0 = no size was available (a
+                                    ; typed name), so fall back to the old
                                     ; largest-run-capped-at-128KB shape
-    call OSAPI_MEM_AVAIL            ; AX = LARGEST contiguous run in KB, and
-    or ax, ax                       ; BX = the total (KB, not
-    jz .nomem                       ; paragraphs - SPEC.md 50.3)
-    cmp ax, 128                     ; cap the SPECULATIVE grant at 128KB. This
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the LARGEST claim, in paragraphs
+    or ax, ax
+    jz .nomem
+    cmp ax, 128 * 64                ; cap the SPECULATIVE grant at 128KB. This
     jbe .sized                      ; is the original cap and it is the only
-    mov ax, 128                     ; one with a reason left (SPEC.md 45.3.1):
+    mov ax, 128 * 64                ; one with a reason left (SPEC.md 45.3.1):
                                     ; the size is unknown here, so the claim
                                     ; is a guess, and trk_ring_probe has to
                                     ; fund a ring out of whatever this leaves.
@@ -1096,10 +1100,12 @@ trk_fdone:
                                     ; claim, never a verdict on a file - the
                                     ; refusals above no longer borrow it
 .sized:
-    mov [trk_capk], ax
-    call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF=1
-    jc .nomem                       ; refused (the answer moves register too)
+    xor cx, cx                      ; AX = paragraphs, no DMA head (SPEC.md
+    mov bl, MEMP_CLAIM              ; 50.3.7) -> DX = base segment, AX = what
+    call OSAPI_MEM_P                ; was GRANTED, CF=1 refused (the answer
+    jc .nomem                       ; moves register too)
     mov [trk_modseg], dx
+    mov [trk_capp], ax
 
     call trk_ring_probe             ; RESERVE the ring before the floppy turns
     jc .noring                      ; (SPEC.md 45.18): the module is claimed,
@@ -1110,8 +1116,12 @@ trk_fdone:
                                     ; PURGEABLE claim and a subtraction from
                                     ; it refuses modules that play perfectly
 
-    mov ax, [trk_capk]              ; DX:CX = capacity in bytes = KB * 1024
-    call trk_tobytes
+    mov ax, [trk_capp]              ; DX:CX = capacity in bytes = paragraphs
+    mov dx, ax                      ; x 16, the granule's slack included - it
+    mov cl, 4                       ; is ours
+    shl ax, cl
+    mov cl, 12
+    shr dx, cl
     mov cx, ax
     mov es, [trk_modseg]
     xor bx, bx                      ; ES:BX = the grant, at its first byte
@@ -1199,8 +1209,11 @@ trk_fdone:
     jmp .failfree
 .big:
     mov si, trk_s_toobig
-    cmp dx, [trk_capk]              ; THE READ SAYS HOW MANY KB IT NEEDS
-    jbe .failfree                   ; (SPEC.md 20.14.6.3), and more than we
+    mov ax, [trk_capp]              ; THE READ SAYS HOW MANY KB IT NEEDS
+    mov cl, 6                       ; (SPEC.md 20.14.6.3) - against the whole
+    shr ax, cl                      ; KB the claim holds - and more than we
+    cmp dx, ax
+    jbe .failfree
                                     ; claimed means our SIZE was wrong, not
                                     ; the file: a compressed module whose
                                     ; directory hint a foreign OS dropped, so
@@ -1242,8 +1255,8 @@ trk_fdone:
 
 ; -----------------------------------------------------------------------------
 ; trk_cpq_try - the one question a refusal owes the user (SPEC.md 66.4.3)
-; in:  [trk_needk] = the KB this load needs, and plain OSAPI_MEM_AVAIL has
-;      already said no
+; in:  [trk_needp] = the paragraphs this load needs, and plain MEMP_AVAIL
+;      has already said no
 ; out: CF = 0 a compaction is POSTED and the caller must RETURN with nothing
 ;      stopped and nothing freed; CF = 1 refuse for real.
 ;      Preserves every register but the flags
@@ -1263,13 +1276,16 @@ trk_fdone:
 trk_cpq_try:
     push ax
     push bx
+    push cx
     push si
     cmp byte [trk_cpq], 0
     jne .no                         ; asked once already for this load
     mov ax, MEM_LVL_TOP             ; AH = MEMC_WHATIF, AL = the level
     call OSAPI_MEM_COMPACT          ; AX = the largest run there would be if
-    cmp ax, [trk_needk]             ; our own region moved too - a MEASUREMENT
-    jb .no                          ; of now, never a promise about later
+    mov cl, 6                       ; our own region moved too - a MEASUREMENT
+    shl ax, cl                      ; of now, never a promise about later. In
+    cmp ax, [trk_needp]             ; KB, so as paragraphs it is a whole KB's
+    jb .no                          ; worth: under 1MB, so it fits a word
     mov bx, [trk_win]
     mov ax, (MEMC_POST << 8) | MEM_LVL_TOP  ; an ordinary claim's rank: every
     call OSAPI_MEM_COMPACT          ; cache counts as free, because our claim
@@ -1282,6 +1298,7 @@ trk_cpq_try:
                                     ; glass before the freeze rather than after
     TRK_CLC_OR_STC .no
     pop si
+    pop cx
     pop bx
     pop ax
     ret
@@ -1371,8 +1388,10 @@ trk_fs_enter:
 .run:
     call trk_txon                   ; THE TEXT SCREEN'S SHADOW IS CLAIMED HERE
     je .noshadow                    ; (SPEC.md 45.13.8), before the bracket
-    mov ax, (TTX_SHBYTES + 1023) / 1024   ; and not in it: a refusal must
-    call OSAPI_MEM_CLAIM            ; still leave a screen to fall back to,
+    mov ax, OS88_BYTES_PARA(TTX_SHBYTES)  ; and not in it: a refusal must
+    xor cx, cx                      ; still leave a screen to fall back to,
+    mov bl, MEMP_CLAIM              ; in PARAGRAPHS (9,676 bytes: 9.5KB at
+    call OSAPI_MEM_P                ; the granule, 10 at a KB - SPEC.md 50.3.7)
     jc .noshadow                    ; and ttx_begin refusing on a zero
     mov [ttx_shseg], dx             ; [ttx_shseg] is that fall-back - the
     mov byte [ttx_shok], 0          ; graphics bracket. A NEW claim holds
@@ -3713,8 +3732,8 @@ trk_reloc:
     TRKW trk_modseg                 ; grant base segment, 0 = none
     TRKW trk_fsize                  ; the chosen file's size, from the dialog
     TRKW trk_fsize_hi               ; (SPEC.md 38.6); 0 = it had none
-    TRKW trk_needk                  ; ...as KB, rounded up; 0 = unknown
-    TRKW trk_capk                   ; its size in KB
+    TRKW trk_needp                  ; ...as paragraphs, rounded up; 0 = unknown
+    TRKW trk_capp                   ; its size in paragraphs, as granted
     TRKB trk_cpq                    ; 1 = we posted OSAPI_MEM_COMPACT for
                                     ; the load in trk_fname and the wake owes
                                     ; us the retry (SPEC.md 66.4.3). It is one

@@ -27,6 +27,10 @@
 ; table makes that a second back end; direct calls would make it a rewrite
 ; of every file function.
 ; =============================================================================
+%ifdef DOSP_MAP                     ; THE FIRST PASS OF THE WINDOWED PART'S
+[map all DOSP_MAP]                  ; BUILD (SPEC.md 96.54.9): the host's map is
+%endif                              ; what the part names the host by, and what
+                                    ; tools/os88dvwexp.py checks it against
 
 %include "os88api.inc"
 %include "doscall.inc"              ; **EARLY, AND IT HAS TO BE** (SPEC.md
@@ -103,9 +107,233 @@
                                         ; the document glyph after THAT
                                         ; (SPEC.md 54.3.2)
 
+%ifndef KD_BACKEND                  ; **A DOS PROGRAM IN ITS WINDOW, LIVE**
+ %ifndef DOS_MEGA                   ; (dosw.inc, SPEC.md 96.54): the windowed
+  %define DVW                       ; host on kern_big; kern_mega has none
+ %endif                             ; (KERN-MEGA-DOS-PLAN 2.1) and kern_dos
+%endif                              ; is the bracket itself
+; --- WHERE THE PACKET DRIVER LIVES (SPEC.md 96.23.11) -----------------------
+; THREE SHAPES and one source (apps/dos/dospkt.inc, apps/dos/dosnet.inc):
+;   DOS_NETPART   kern_big's and kern_emu's DOS.O88 - the family is PART 4,
+;                 read by op_self into the network claim when a run wants it
+;   DOS_NONET     kern_mega's - every launch is the whole machine there
+;                 (dos_mem_fix), so dos_pkt_start is unreachable and the
+;                 family would be code that could only claim and free
+;   DOS_NETINLINE a build with no part table (build/dos.o88, DOSTRACE) - the
+;                 family in the host, as it always was
+; and kern_dos (KD_BACKEND) has none of it (SPEC.md 96.43).
+%ifndef KD_BACKEND
+ %ifdef DOSKPART
+  %ifdef DOS_MEGA
+   %define DOS_NONET
+  %else
+   %define DOS_NETPART
+   %define DOS_NETANY
+  %endif
+ %else
+  %define DOS_NETINLINE
+  %define DOS_NETANY
+ %endif
+%endif
+; --- ...AND WHERE THE SETUP PAGE LIVES (SPEC.md 96.32.2.3) -------------------
+; TWO SHAPES and one source (apps/dos/dosset.inc): DOS_SETPART on kern_big's
+; and kern_emu's DOS.O88 - the page's code is PART 5, read by op_self when
+; Setup opens - and inline everywhere else: kern_mega's (its host is above
+; 1MB, so the bytes cost no conventional memory) and a build with no part
+; table. DOS_SETEMIT is the Makefile's second assembly, which appends it.
+%ifndef KD_BACKEND
+ %ifdef DOSKPART
+  %ifndef DOS_MEGA
+   %define DOS_SETPART
+  %endif
+ %endif
+%endif
+%ifdef DOS_SETEMIT
+ %ifndef DOS_SETPART
+  %error "DOS_SETEMIT appends the Setup PART: it needs -DDOSKPART and not -DDOS_MEGA"
+ %endif
+%endif
+SPD_PAINT   equ 0                   ; the Setup part's doors (dosset.inc's
+SPD_PLACE   equ 1                   ; sp_door, AL): its body and furniture,
+SPD_CLICK   equ 2                   ; dos_place's Setup half, a press, the
+SPD_ROW     equ 3                   ; arena row alone, and Save Shortcut
+SPD_SAVE    equ 4
+SPH_HOST    equ 4                   ; ...and where in its head the host's
+                                    ; bouncer goes, a far pointer
+DOS_MWINW   equ 15                  ; `Run in a window`, in cells (96.32.2.4)
+; THE DOORS' BODIES, written once: the part's sp_door runs them, and where
+; the page is inline the host's call sites ARE them - so a build with no part
+; pays no dispatcher (dosset.inc)
+%macro SPB_PAINT 0
+    push bx                         ; the body, then the furniture every
+    call dos_paint_set              ; setup page shares (SPEC.md 96.32.2)
+    pop bx
+    call dos_paint_furn
+%endmacro
+%macro SPB_PLACE 0
+    call dos_furn_rects             ; Save Shortcut, Return and the box...
+    call dos_cmd_place              ; ...the command box on the title row...
+    call dos_fld_place              ; ...the arguments box...
+    call dos_senv_place             ; ...every environment row under it...
+    call dos_mfld_place             ; ...and the memory block's two
+    call dos_mrad_place
+%endmacro
+%macro SPB_CLICK 1                  ; %1 = where to go once a control took it
+%ifdef DVW
+    call sp_wck                     ; `Run in a window` (96.32.2.4)...
+    jnc %1
+%endif
+%ifdef DOS_WTAIL
+    call sp_hck                     ; ...`Close when done` (96.44.20)...
+    jnc %1
+%endif
+    call dos_click_mem              ; ...the memory block's field and radio
+    jnc %1                          ; CF=1 = none of those, so it is the
+    call dos_fld_hit                ; arguments box or an environment row
+%endmacro
+; --- AND WHERE THE WINDOWED LAYER LIVES (SPEC.md 96.54.9) -------------------
+; The same three shapes: DVW_SPLIT is the parted host, whose layer is PART 5
+; of DOS.O88 (apps/dos/doswp.asm) and of which only doswr.inc's stubs and the
+; resident pieces of dosw.inc stay here; everything else - build/dos.bin,
+; DOSTRACE, kern_small's plain dos.o88, and -DDVW_NOSPLIT for an A/B - keeps
+; it INLINE, which is the identity shape of apps/dos/doswabi.inc's macros.
+%ifdef DVW
+ %ifdef DOSKPART
+  %ifndef DVW_NOSPLIT
+   %define DVW_SPLIT
+   %ifndef DOS_NOWTAIL              ; ...and THAT host's window is the tail of
+    %define DOS_WTAIL               ; its region (DOS-HEADLESS-PLAN 4.4, SPEC.md
+   %endif                           ; 96.44.19); -DDOS_NOWTAIL is the A/B
+  %endif
+ %endif
+%endif
+%ifdef DVW
+%include "doswabi.inc"              ; ...and its macros, EARLY: HENT() names
+%endif                              ; the layer's entries from here on
+%ifdef DVW
+ %define DOS_ACAP dvw_cap           ; dos_run's arena cap (SPEC.md 96.54.2)
+DVW_DEFKB   equ 128                 ; ...a window's, when the user set none
+DVW_STEPKB  equ 16                  ; ...and the step an AUTOMATIC limit grows
+                                    ; in, to fit its program (96.54.2.1)
+%if DVW_STEPKB & (DVW_STEPKB - 1) || DVW_STEPKB > 128 || DVW_DEFKB % DVW_STEPKB
+ %error "dvw_regrow rounds with `and al, -DVW_STEPKB`: a power of two, a divisor of DVW_DEFKB"
+%endif
+%else
+ %define DOS_ACAP dos_memkb
+%endif
 %include "dosicon.inc"          ; the icon, the association block and the
                                 ; document glyph, shared with dosload.asm
 %endif                              ; KD_BACKEND
+
+; --- THE WINDOW'S TAIL (docs/plans/DOS-HEADLESS-PLAN.md 4.3, 4.4) -----------
+; Everything that only SHOWS the window - the console, the prompt, the
+; controls, the line editor, the paint, the menus and the windowed layer's
+; resident stubs - is assembled into `.wtext`, a section placed after every
+; byte of the host's own image and bss, with the window's own bss after IT.
+; So the region reads `[header][core slot][the resident host][the window]`,
+; and a host that never shows a window need never hold the last part.
+;
+; `DOS_WTAIL` is that layout. It is the parted host's on kern_big and kern_emu
+; (DVW_SPLIT) and nobody else's: kern_mega's and kern_small's builds, the
+; plain `build/dos.bin` and `kern_dos` assemble every macro below to nothing,
+; byte for byte what they were (the plan's section 7).
+;
+; THE BOUNDARY IS A GATE, NOT A CONVENTION: nasm resolves a near reference
+; across a section silently, and in a region with no tail the tail's address
+; is somebody else's claim. So every reference from the resident host into
+; the tail is spelled inside `WIN_ONLY` ... `WIN_END`, whose opening IS the
+; test (`call dos_hq` / `jne`: dos_hq is the one `cmp byte [dos_head], 0`,
+; which spelled at every bracket was two bytes a bracket more for a call
+; and a ret on paths that run once a launch), and `tools/doswtail.py` assembles
+; the host twice - the second time with the tail moved up by DOS_WSHIFT bytes
+; - and FAILS THE BUILD on any byte of the resident host that moved with it
+; outside such a bracket. A branch, a memory operand, an immediate and a
+; table entry are all caught alike, because each is a byte that depends on
+; where the tail is.
+;   WIN_CODE / WIN_CODE_END   what is between them goes into the tail. A
+;                             routine either side of one must END in an
+;                             unconditional transfer: nothing falls across
+;   WIN_ONLY / WIN_ONLYF      open a bracket (short / near skip), and
+;   WIN_ELSE / WIN_END        ...its headless arm, and its close
+;   WBSS name, n              a bss row of the TAIL's (HBSS's shape)
+%ifdef DOS_WTAIL
+ %ifndef DVW_SPLIT
+  %error "DOS_WTAIL is the parted kern_big host's layout (DVW_SPLIT)"
+ %endif
+section .wtext follows=.text align=16
+dos_wtail_beg:                      ; part 1's first byte (DOS_WTAILKB)
+ %ifdef DOS_WSHIFT
+    times DOS_WSHIFT db 0           ; tools/doswtail.py's second assembly
+ %endif
+section .text
+ %macro WIN_CODE 0
+section .wtext
+ %endmacro
+ %macro WIN_CODE_END 0
+section .text
+ %endmacro
+ %assign DOS_WBN 0               ; brackets so far: -DDOS_WBREAK=n leaves the
+ %macro WIN_ONLY 0                ; n-th one's test out, which is how the gate
+  %push dwonly                    ; is shown to go red (tests/unit/t_doswtail.py)
+  %assign DOS_WBN DOS_WBN + 1
+  %ifndef DOS_WBREAK
+    call dos_hq                     ; THE TEST IS THE BRACKET: the checker
+    jne short %$end                 ; reads its range off this jump
+  %elif DOS_WBN != DOS_WBREAK
+    call dos_hq
+    jne short %$end
+  %endif
+ %endmacro
+ %macro WIN_ONLYF 0
+  %push dwonly
+  %assign DOS_WBN DOS_WBN + 1
+  %ifndef DOS_WBREAK
+    call dos_hq
+    je short %%in
+    jmp near %$end
+  %elif DOS_WBN != DOS_WBREAK
+    call dos_hq
+    je short %%in
+    jmp near %$end
+  %endif
+%%in:
+ %endmacro
+ %macro WIN_ELSE 0
+  %ifnctx dwonly
+   %error "WIN_ELSE outside a WIN_ONLY bracket"
+  %endif
+  %repl dwelse
+    jmp %$fin
+%$end:
+ %endmacro
+ %macro WIN_END 0
+  %ifctx dwelse
+%$fin:
+  %elifctx dwonly
+%$end:
+  %else
+   %error "WIN_END outside a WIN_ONLY bracket"
+  %endif
+  %pop
+ %endmacro
+%else
+ %macro WIN_CODE 0
+ %endmacro
+ %macro WIN_CODE_END 0
+ %endmacro
+ %macro WIN_ONLY 0
+  %push dwonly
+ %endmacro
+ %macro WIN_ONLYF 0
+  %push dwonly
+ %endmacro
+ %macro WIN_ELSE 0             ; no tail: the window is always there, and a
+  %error "a headless arm is DOS_WTAIL's: put %ifdef DOS_WTAIL round WIN_ELSE and the arm"
+ %endmacro
+ %macro WIN_END 0
+  %pop
+ %endmacro
+%endif
 
 ; --- AND THE HOLE THE CORE GOES IN (SPEC.md 96.44.5) ------------------------
 ; A host does not contain the core; it RESERVES it. `CORE_ORG` is where the
@@ -209,6 +437,9 @@ DOS_ENVP    equ 32                  ; 512 bytes of environment block. IT WAS
                                     ; number anybody may pick
 DOS_ENVMCB  equ 0                   ; para 0     : the environment's MCB
 DOS_ENVSEG  equ 1                   ; para 1     : the environment itself
+%if DOS_ENVSEG != 1
+ %error "an `inc ax` stands for `add ax, DOS_ENVSEG` (size pass, SPEC.md 96.54.8)"
+%endif
 DOS_PRGMCB  equ DOS_ENVSEG+DOS_ENVP ; para 9     : the program's MCB ('Z')
 DOS_PSPP    equ DOS_PRGMCB+1        ; para 10    : the PSP
 DOS_IMGP    equ DOS_PSPP+16         ; para 26    : the image, at PSP:0100
@@ -351,8 +582,9 @@ DOS_PBUF    equ 80                  ; the program's own path for the environment
 ; both 640 pixels WIDE. The only way a window has 640 of content is with no
 ; side borders, and SPEC.md 11.95.3 removes them in exactly one case: a frame
 ; that starts at its display's first column and reaches its last. So this
-; window SPANS the screen on every adapter, because on two of the three there
-; is no other way to hold the thing it is for.
+; window SPANS the screen on VGA and CGA, because there is no other way to
+; hold the thing it is for - and on a Hercules, 720 wide, it is SNUG instead:
+; two borders round 640 of content (DOS_HERCW, SPEC.md 96.32.5).
 ;
 ; It is worth having twice over: a spanning frame's content origin is W_X
 ; itself rather than W_X+1 (11.95.2), so the console's rows start on column 0
@@ -366,6 +598,15 @@ DOS_CONROWS equ 25                  ; ...and the rows it WANTS. What it GETS is
                                     ; give 25 and a drag across a display seam
                                     ; re-asks the question
 DOS_CONW    equ DOS_CONCOLS * 8     ; 640
+DOS_HERCW   equ DOS_CONW + 2        ; 642: the Hercules frame (SPEC.md
+                                    ; 96.32.5) - 80 cells and the two side
+                                    ; borders a frame that does NOT span keeps
+DOS_HERCX   equ (720 - DOS_HERCW) / 2   ; 39, so it is centred on 720 AND its
+                                    ; content origin, x+1 = 40, is on the
+                                    ; 8-pixel grid (11.94) with no snap needed
+%if (DOS_HERCX + 1) % 8
+%error "DOS_HERCX + 1 must be a multiple of 8 (SPEC.md 11.94, 96.32.5)"
+%endif
 DOS_BARH    equ 20                  ; the top bar: one 14px row of controls
                                     ; with 3 above and 3 below (96.32.1)
 DOS_BARY    equ 3                   ; ...the controls' own top, from content
@@ -411,6 +652,10 @@ DOS_ENVBUF  equ DOS_ENVW + 1
 ; cannot run a DOS program anyway, so the value of the format here is that it
 ; is RECOGNISED, not that it round-trips. A foreign link is refused by name.
 LNK_HDR     equ 76                  ; the fixed header, 0x4C
+LNK_SHOW    equ 0x3C                ; ShowCommand, a dword in that header...
+LNK_SW_HEAD equ 7                   ; ...and SW_SHOWMINNOACTIVE: no window - DOS
+                                    ; runs the program headless (SPEC.md 96.44.20)
+DOS_HTXT    equ 25                  ; the headless host's line: a toast's 24 + NUL
 LNK_F_WDIR  equ 0x10                ; LinkFlags: HasWorkingDir...
 LNK_F_RELP  equ 0x08                ; ...HasRelativePath...
 LNK_F_ARGS  equ 0x20                ; ...HasArguments. Deliberately NOT
@@ -451,6 +696,9 @@ LNK_BX_NOHMA equ 0x08               ; ...and kern_mega's `Load DOS in the HMA`
 LNK_BX_SAVE equ 0x10                ; ...and its `Save the session to disk`
                                     ; (96.40.9.3), UNticked by default, so set
                                     ; = TICKED
+LNK_BX_WIN  equ 0x20                ; ...and `Run in a window` (96.32.2.4),
+                                    ; UNticked by default, so set = TICKED and
+                                    ; an older link reads the default
 LNK_MAX     equ 512                 ; what one may be, read or written
 
 ; --- THE PAGES (SPEC.md 96.32.2) ---------------------------------------------
@@ -764,13 +1012,19 @@ DST_IDLE    equ 0                   ; launched with no document (wave 7's prompt
 DST_READY   equ 1                   ; a program is named and not yet run
 DST_RAN     equ 2                   ; it ran; [dos_exit] is its code
 DST_ERR     equ 3                   ; it did not; [dos_err] says why
-DST_CPWAIT  equ 4                   ; ...and it is waiting for the heap to be
+DST_CPWAIT  equ 5                   ; ...and it is waiting for the heap to be
                                     ; packed (SPEC.md 96.35). A posted
                                     ; OSAPI_MEM_COMPACT's post runs at ui_task's
                                     ; step 0, and the EVT_WAKE it sends lands
                                     ; here - so this is one more state and not
                                     ; a lifecycle, which is why a stale wake
                                     ; still finds the state advanced
+DST_HELD    equ 4                   ; ...and launched with Shift or Alt held:
+                                    ; named and staged, and it waits for Run
+                                    ; or Enter (SPEC.md 96.21.9). RAN, ERR and
+                                    ; HELD are CONTIGUOUS on purpose: they are
+                                    ; the states Enter may (re)start, and the
+                                    ; key handler tests them as one range
 
 ; --- INT 33h's VIRTUAL SCREEN (SPEC.md 96.10), which is not the machine's ----
 ; A mouse driver's coordinates are a 640x200 grid whatever the adapter is
@@ -808,6 +1062,9 @@ DER_HAND    equ 8                   ; ARM 3 WAS REFUSED, AND IT IS NEVER ABOUT
                                     ; does no sizing at all - it tears the
                                     ; kernel out and hands the program ~600K,
                                     ; so anything DOS could launch will launch
+%ifdef DVW_SPLIT                    ; kern_big's and kern_emu's only, so it
+DER_DVWP    equ 9                   ; shares DER_RESET's number: the windowed
+%endif                              ; part could not be had (SPEC.md 96.54.9)
 DER_RESET   equ 9                   ; kern_mega (DOS_MEGA's table only): the
                                     ; session came back from a warm reset
                                     ; (KERN-MEGA-DOS-PLAN 10.3.1, W7) and the
@@ -888,11 +1145,16 @@ dos_entry:
     pop es
 %endif
 
+%ifdef DOS_WTAIL
+    mov si, dos_htpl                ; HEADLESS (SPEC.md 96.44.20): a one-line
+%endif                              ; window of its own, and no menu, no
+    WIN_ONLY                        ; buttons, no console (DOS-HEADLESS 4.4)
     mov si, dos_tpl                 ; THE TEMPLATE IS THE VGA/CGA SIZE and
-    call OSAPI_WM_CREATE            ; dos_pref is the rest (SPEC.md 96.32).
-    jc .out                         ; dos_size is GONE: it computed 90% of the
-    mov [dos_win], bx               ; desktop band with a mul and a div, and
-                                    ; the requirement is a COUNT of columns
+    WIN_END                         ; dos_pref is the rest (SPEC.md 96.32).
+    call OSAPI_WM_CREATE            ; dos_size is GONE: it computed 90% of the
+    jc .out                         ; desktop band with a mul and a div, and
+    mov [dos_win], bx               ; the requirement is a COUNT of columns
+    WIN_ONLYF                       ; THE WINDOW'S FURNITURE
     mov si, dos_menus               ; ...and the menu bar gains a Program menu
     call OSAPI_MENU_SET             ; (SPEC.md 96.32.3)
 
@@ -910,6 +1172,7 @@ dos_entry:
     call os88ui_btninit             ; 20.5.1.3.3's cell now lets it write
     pop dx                          ; late. dos_click is OUR own click work
     mov bx, [dos_win]               ; and the library chains to it
+    WIN_END
 
 
 %ifdef DOS_MEGA                     ; (kern_mega: the proc keeps dos_dsel,
@@ -966,6 +1229,10 @@ dos_entry:
                                     ; compaction that cannot reach the hole
                                     ; are the same number and different bugs
 
+%ifdef DOS_WTAIL
+    call dos_fld_def                ; the settings' defaults, on both hosts
+%endif
+    WIN_ONLY
     call dos_keeph                  ; **KEEPH FIRST, THEN THE PREFERENCE.** On
     mov si, dos_pref                ; a CGA the dock's strip is the difference
     call OSAPI_WM_PREFER            ; between 15 console rows and 17, and the
@@ -980,6 +1247,7 @@ dos_entry:
                                     ; the first paint can read a screen whose
                                     ; attribute is still a zeroed bss's
 %endif
+    WIN_END
 
     mov bx, [dos_win]               ; **NAMED, not whatever the last call left
     mov ax, dos_wake                ; in BX.** The slot takes BX = the window
@@ -991,8 +1259,16 @@ dos_entry:
                                     ; nowhere - Run, Enter-re-run and the
                                     ; console's own launch all stuck at
                                     ; DST_READY with nothing to see
+    WIN_ONLY                        ; ...and the window's two: a close that
+                                    ; stops a windowed run, and the About card
+%ifdef DVW
+    mov ax, HENT(dvw_onclose)       ; a running program is stopped by a close,
+    call OSAPI_WM_ONCLOSE           ; not orphaned behind a hidden window
+%endif                              ; (SPEC.md 96.54). BX is still the window:
+                                    ; every slot preserves it
     mov si, dos_about
     call OSAPI_ABOUT_SET
+    WIN_END
 
     mov byte [dos_pvol], 0xFF       ; **THE SENTINEL, BECAUSE BSS IS ZERO AND
                                     ; ZERO IS DRIVE A:** (SPEC.md 96.6.3).
@@ -1029,6 +1305,23 @@ dos_entry:
                                     ; (dos_handoff), which is after the launch
                                     ; that would have been eaten
 %endif
+%ifdef DOS_WIN16
+    mov si, dos_doc                 ; THE LOADER ASKED (SPEC.md 124.3.1):
+    cmp byte [si], 0                ; OSAPI_ARG_FILE is read-and-clear, so the
+    je .idle                        ; document is the locator it banked here -
+    mov dx, [si + 13]               ; name[0] = 0 for a launch with none - in
+    mov bl, [si + 15]               ; OUR segment, so the copy is DS to DS and
+    mov [dos_dir], dx               ; ES stays the kernel's
+    mov [dos_vol], bl
+    mov di, dos_name
+    mov cx, 13
+.cpd:
+    lodsb
+    mov [di], al
+    inc di
+    or al, al
+    loopnz .cpd
+%else
     call OSAPI_ARG_FILE             ; CF=1 = launched empty, the ordinary case
     jc .idle                        ; for every package and the COMMAND.COM
                                     ; door for this one (wave 7)
@@ -1043,10 +1336,12 @@ dos_entry:
     inc di
     or al, al
     loopnz .cp
+%endif
 
     call dos_lnk_open               ; A SHORTCUT names another program and
                                     ; carries its arguments (SPEC.md 96.21);
                                     ; anything else is the program itself
+    WIN_ONLY
     call dos_path_make              ; ...and EITHER WAY the box shows the
                                     ; fully qualified path of what is about to
                                     ; run (SPEC.md 96.32.3). AFTER the link is
@@ -1055,6 +1350,13 @@ dos_entry:
                                     ; PROGRAM's rather than the shortcut's.
                                     ; A refusal leaves the bare name there,
                                     ; which is still true and still runs
+    WIN_END
+    WIN_ONLY                        ; **SHIFT OR ALT HELD: NAME IT, RUN NOTHING**
+    mov ah, 2                       ; (SPEC.md 96.21.9). The BIOS's shift state
+    int 0x16                        ; is a LEVEL the ROM's int 09h keeps, so it
+    test al, 0x0B                   ; is current whenever it is asked: bits 0-1
+    jnz .held                       ; Shift, bit 3 Alt. int 16h and not 0040:0017
+    WIN_END                         ; because segment 0 is NULL on kern_mega
     mov byte [dos_state], DST_READY
     mov bx, [dos_win]
     call OSAPI_WM_WAKE              ; ...and run it from the wake handler, which
@@ -1069,8 +1371,21 @@ dos_entry:
                                     ; mounts on the way, and the symptom is a
                                     ; window that sits on "Starting..." for ever
 
+.held:                              ; everything a launch stages is staged -
+    mov byte [dos_state], DST_HELD  ; the path box, a .LNK's arguments and its
+    mov ax, [dos_dir]               ; settings - and the prompt stands in the
+    mov [dos_curdir], ax            ; PROGRAM's folder, so SETUP or INSTALL
+%ifdef DOS_WIN16                    ; typed there is the one beside it - and
+    mov byte [dos_w16k], 0          ; THAT one is not the file the loader
+%endif                              ; read, so the next wake asks (124.3.1)
+    WIN_ONLY
+    mov si, dos_c_held
+    call con_say
+    WIN_END
+    jmp short .arm
 .idle:
     mov byte [dos_state], DST_IDLE
+.arm:
 %ifndef KD_BACKEND
     call dos_keyarm                 ; the console: Alt+Enter from its prompt
 %endif
@@ -1089,7 +1404,9 @@ dos_entry:
     ; question. `dos_wholedone` records the refusal and returns with
     ; `[dos_state]` still DST_READY and nothing to undo, which is right - and
     ; left `A:\>` on the glass over a DOS standing on B:.
+    WIN_ONLY
     call dos_prompt                 ; ...and BEFORE the `clc`: it spends the
+    WIN_END
 %endif                              ; flags, and the CF here is the loader's
     mov bx, [dos_win]
     clc
@@ -1111,17 +1428,31 @@ dos_entry:
 ; does nothing, rather than launching the program twice.
 ; -----------------------------------------------------------------------------
 dos_wake:
+%ifdef DVW
+    cmp byte [dvw_run], 0           ; A PROGRAM ON THE WORKER (SPEC.md 96.54):
+    je .nodvw                       ; its doors, its paint and its end are
+    WIN_ONLY
+    jmp HENT(dvw_wake)              ; all this wake is for, and nothing else
+                                    ; may start while it runs. A TAIL CALL:
+                                    ; .out is a bare `ret` and nothing is
+                                    ; pushed above it (size pass, 96.54.8)
+    WIN_END
+.nodvw:
+%endif
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     cmp byte [dos_pkgq], 0          ; **A `.O88` TYPED AT THE PROMPT** (SPEC.md
     je .nopkg                       ; 96.33.17): OSAPI_PKG_START wants the gfx
-    call dos_pkg_go                 ; lock FREE and W_ONKEY holds it, so the
-    jmp .out                        ; console posts and this is where it lands
+    WIN_ONLY
+    jmp dos_pkg_go                  ; lock FREE and W_ONKEY holds it, so the
+                                    ; console posts and this is where it lands
+                                    ; (a tail call, for .out's bare `ret`)
                                     ; - the same place a DOS program's own
                                     ; launch is serviced, and for the same
                                     ; reason. It is tested FIRST and clears its
                                     ; own flag, so it neither reads nor moves
                                     ; [dos_state]: a package is not the thing
                                     ; `run it again` re-runs
+    WIN_END
 .nopkg:                             ; **AND THE MISS LANDS HERE AND NOT PAST
                                     ; THE BLOCK BELOW** (SPEC.md 96.41.4). It
                                     ; was `.notpkg`, which is where the STATE
@@ -1232,19 +1563,16 @@ dos_wake:
     ; starts, so a line written there is about a launch that has not happened
     ; (SPEC.md 96.35.1). Before `dos_swap`, which is the repaint, for
     ; `dos_repaint`'s reason one arm over.
-    call dos_con_ended
-    mov bx, [dos_win]
+%ifdef DOS_WTAIL
+    jmp dos_endk                    ; the window's end (dos_endk_w), or the
+%else                               ; headless toast - a tail call: .out is ret
+    call dos_con_ended              ; the exit line, the repaint and the full
+    mov bx, [dos_win]               ; screen are the console's
     call dos_swap
     call dos_fsx_back               ; ...AND BACK INTO THE FULL SCREEN when the
-                                    ; command was typed there (SPEC.md
-                                    ; 96.33.16): the posted path leaves dos_run
-                                    ; by `.outq`, past its own call - so the
-                                    ; return is where [dos_fsxgo] is spent, or
-                                    ; it stood until some later WINDOWED exit
-                                    ; spent it and threw that console into the
-                                    ; full screen. kern_mega's trip (14.106) and
-                                    ; kern_big's shut-down arm alike (14.113)
+                                    ; command was typed there (dos_endk_w)
     jmp short .out
+%endif
 .nocode:
 %endif
     cmp byte [dos_state], DST_CPWAIT
@@ -1282,9 +1610,14 @@ dos_wake:
     cmp byte [dos_state], DST_READY
     jne .out
 %ifdef DOS_WIN16
-    call dos_w16_try            ; SPEC.md 124.3: a WINDOWS program is WIN16's,
-    jc .out                     ; asked before anything is claimed or taken
-%endif                          ; out - and before arm 3's question, too
+    shr byte [dos_w16k], 1      ; THE LOADER READ THIS FILE and it is no NE
+    jc .w16no                   ; (SPEC.md 124.3.1): once, the launch's own
+    call dos_w16_try            ; wake. SPEC.md 124.3: a WINDOWS program is
+    jc .out                     ; WIN16's, asked before anything is claimed or
+.w16no:                         ; taken out - and before arm 3's question, too.
+                                ; Headless as well: a link's target, run with
+                                ; no window, is still WIN16's (96.44.20)
+%endif
 %ifdef DOSKPART
     call dos_wholeask           ; SPEC.md 96.42: arm 3 with nothing to come
     jc .out                     ; back to asks FIRST, and the answer comes back
@@ -1332,6 +1665,29 @@ dos_run:
     push si
     push di
     push es
+%ifdef DOS_SETPART
+    call dos_sp_drop                ; **THE SETUP PAGE'S CODE GOES FIRST**
+%endif                              ; (SPEC.md 96.32.2.3): it is a PINNED claim,
+                                    ; and the program's arena and the posted
+                                    ; pass below should meet no wall. A page
+                                    ; still up reads it again at its repaint
+%ifdef DVW
+    ; --- `Run in a window`, THE MODE (SPEC.md 96.32.2.4, 96.54.10) ----------
+    ; The box and the menu item are one byte, read HERE so that every way into
+    ; a run - the bar, Enter, the menu's `Run`, a .LNK saved with it ticked,
+    ; and every program TYPED AT THE PROMPT - reaches it, and on BOTH passes
+    ; of a compaction wake: dvw_want is read below this line four times
+    ; before it is spent. Arm 1 ignores the box: a
+    ; window cannot shut the OS down. dos_mem_fix first, so a link's arm 1
+    ; that this machine demotes is arm 0 and gets its window.
+    call dos_mem_fix
+    cmp byte [dos_keepc], DOS_MEM_WHOLE
+    je .nobox
+    cmp byte [dos_mwin + OS88UI_CK_ON], 0
+    je .nobox
+    mov byte [dvw_want], 1
+.nobox:
+%endif
 
     mov dx, [dos_dir]               ; ...stand where the file is (SPEC.md 19.2.1
     mov bl, [dos_vol]               ; put us there already, but a quiet GOTO is
@@ -1345,13 +1701,25 @@ dos_run:
     jne .floor                      ; THE COMPACTION WAKE resumes here: the
                                     ; buffers are claimed already, and claiming
                                     ; them twice would leak 2KB a launch
+%ifdef DVW
+    mov word [dvw_cap], DVW_DEFKB   ; AN AUTOMATIC LIMIT STARTS AT THE DEFAULT
+%endif                              ; on each launch, and only dvw_regrow
+                                    ; raises it (SPEC.md 96.54.2.1) - here,
+                                    ; which the compaction wake skips, so a
+                                    ; raise outlives the pass it posted
 %ifndef KD_BACKEND
+    WIN_ONLY
     call dos_con_starting           ; **SAID BEFORE IT HAPPENS** (SPEC.md
                                     ; 96.33.20.1), and HERE rather than at
                                     ; `.there`: everything above this point
                                     ; runs again on the compaction wake, and a
                                     ; launch that had to wait for a pass would
                                     ; announce itself twice
+    WIN_END
+    call dos_mem_fix                ; the arm FIRST, because dos_pkt_bufs reads
+                                    ; the network part only for an arm that
+                                    ; will publish it (SPEC.md 96.23.11) -
+                                    ; and `.floor` asks again, which is free
     call dos_pkt_bufs               ; THE PACKET DRIVER'S BUFFERS FIRST (SPEC.md
                                     ; 96.23.7): the sizing below takes
                                     ; everything left, so a claim after it is a
@@ -1365,6 +1733,18 @@ dos_run:
                                     ; compaction pass over a heap this block is
                                     ; already standing in, and pinned it
                                     ; stranded 39.5KB under itself
+%ifdef DVW_SPLIT
+    WIN_ONLY
+    call dvw_pfetch                 ; **THE WINDOW'S PART** (SPEC.md 96.54.9),
+    WIN_END
+    jnc .dvwok                      ; here for the network's reason: before the
+    mov al, DER_DVWP                ; arena is sized, so it is placed with the
+    jmp .err                        ; part in the heap - and a REFUSED fetch
+.dvwok:                             ; refuses the run, in the window, rather
+                                    ; than handing the user the full screen
+                                    ; they did not ask for. A run on the full
+                                    ; screen drops the part instead
+%endif
 %endif
 .floor:
     call dos_mem_fix                ; ...and the ARM is the user's, once this
@@ -1375,6 +1755,10 @@ dos_run:
     ; HERE, before the arena is claimed and before a driver is unmounted: what
     ; follows posts a teardown and RETURNS, so every byte this routine would
     ; otherwise have spent is a byte the handoff would have to give back.
+%ifdef DVW
+    cmp byte [dvw_want], 0          ; a run in the window never takes the
+    jne .notwhole                   ; whole machine (SPEC.md 96.54)
+%endif
     cmp byte [dos_keepc], DOS_MEM_WHOLE
     jne .notwhole
     call dos_handoff
@@ -1440,6 +1824,22 @@ dos_run:
     ; the hole reachable is that a package cannot compact the heap it is
     ; standing in: OSAPI_MEM_COMPACT's post records the wish and RETURNS, and the
     ; pass runs at ui_task's step 0 with nothing held (SPEC.md 66.4.3).
+%ifdef DVW
+    ; **A WINDOW IS NOT THE WHOLE MACHINE** (SPEC.md 96.54.2): with no limit
+    ; of the user's, a run in the window is given DVW_DEFKB and not
+    ; everything, or a second DOS window has nothing left to run in. Set on
+    ; every pass, the compaction wake's included; the bracket's run is
+    ; unchanged, its cap being the user's own word as before. AX rides
+    ; through dos_drv_take, which preserves every register.
+    mov ax, [dos_memkb]
+    cmp byte [dvw_want], 0          ; ...AND NO DRIVER COMES OUT FOR THE
+    je .take                        ; WINDOW (SPEC.md 96.54): the desktop goes
+    or ax, ax                       ; on running and its sound driver with it
+    jnz .kept
+    mov ax, [dvw_cap]               ; AUTOMATIC: DVW_DEFKB, or what dvw_regrow
+    jmp short .kept                 ; raised it to for this program (96.54.2.1)
+.take:
+%endif
     call dos_drv_take               ; THE DRIVERS OUT FIRST, on every arm and
                                     ; before any claim: it is what CREATES the
                                     ; hole the no-cap arm sizes into, and the
@@ -1453,11 +1853,15 @@ dos_run:
                                     ; dos_drv_back, which .out does on every
                                     ; path but the posted one (96.35.5). On
                                     ; the wake it is a no-op: [dos_drvout]
+%ifdef DVW
+.kept:
+    mov [dvw_cap], ax
+%endif
     cmp byte [dos_cpw], 0
     jne .ask                        ; on the wake the heap IS packed, so plain
                                     ; avail is exact and posting again is how a
                                     ; program spins (SPEC.md 66.4.3.2)
-    cmp word [dos_memkb], 0
+    cmp word [DOS_ACAP], 0
     je .unmount                     ; NO CAP: we want the maximum, so the
                                     ; question is only whether a pass adds any
     push bx                         ; ...A CAP, and the cheaper road: a program
@@ -1465,7 +1869,7 @@ dos_run:
     pop bx                          ; 300K free needs no compaction and no
                                     ; silence. Net of the floor, like every
                                     ; AVAIL on this task from .sized on
-    cmp ax, [dos_memkb]
+    cmp ax, [DOS_ACAP]
     jae .ask                        ; it fits: claim it and ask nothing more
 .unmount:
     push bx
@@ -1477,13 +1881,13 @@ dos_run:
     xor ah, ah                      ; THE SAME LEVEL, or the two are answers to
     call OSAPI_MEM_COMPACT          ; different questions (SPEC.md 66.4.3.2) -
     pop bx                          ; AH = MEMC_WHATIF
-    cmp word [dos_memkb], 0
+    cmp word [DOS_ACAP], 0
     jne .capmax
     cmp ax, [dos_akb]               ; no cap: does a pass add anything at all?
     jbe .ask                        ; no - claim what is there
     jmp short .post
 .capmax:
-    cmp ax, [dos_memkb]             ; a cap: could a pass even fill it?
+    cmp ax, [DOS_ACAP]             ; a cap: could a pass even fill it?
     jb .lift                        ; no, and nothing else will either - CF is
                                     ; set, and .lift keeps it
 .post:
@@ -1511,7 +1915,7 @@ dos_run:
                                     ; compaction would recover (SPEC.md 50.6.3,
                                     ; 66.10.3). Nothing to compute, nothing to
                                     ; probe, and BX is an OUTPUT here
-    mov dx, [dos_memkb]             ; ...and the user's own cap, if there is
+    mov dx, [DOS_ACAP]             ; ...and the user's own cap, if there is
     or dx, dx                       ; one. 0 is "as much as the machine will
     jz .cap                         ; give", which is what a double click gets
     cmp ax, dx
@@ -1572,6 +1976,9 @@ dos_run:
     jnc .ready
     jmp short .freeerr              ; AL is already a DER_*
 .isCOM:
+    mov byte [dos_isexe], 0         ; DECIDED ON EVERY LAUNCH (SPEC.md 96.8.3):
+                                    ; left at an earlier .EXE's 1, this .COM
+                                    ; was entered at THAT program's CS:IP
     mov dx, [dos_imghi]             ; a .COM is ONE segment: 64KB - the PSP -
     or dx, dx                       ; the pushed word is the ceiling, so a high
     jnz .toobig                     ; word at all is a file that cannot be one
@@ -1591,6 +1998,23 @@ dos_run:
                                     ; Only DX and the flags are spent
 %endif
 
+%ifdef DVW
+    xor al, al                      ; **RUN IN THE WINDOW** (SPEC.md 96.54),
+    xchg al, [dvw_want]             ; read and spent in one: the worker takes
+    or al, al                       ; it from here, and dvw_wake pays this
+    jz .bracket                     ; routine's tail when the program ends.
+    WIN_ONLY                        ; (dvw_want is never set headless)
+%ifdef DVW_SPLIT
+    call dvw_pin                    ; the IVT and the worker will name it
+%endif
+    call HENT(dvw_start)            ; No worker - the task table full - and
+    jnc .outq                       ; the full screen still works, so that is
+%ifdef DVW_SPLIT
+    call dvw_relax                  ; (...and no run names the part after all)
+%endif
+    WIN_END
+.bracket:                           ; what it gets. AX is spent: GFX_LOCK
+%endif
     call OSAPI_GFX_LOCK             ; ...and only NOW, because fsx_run wants it
     mov ax, dos_fsx_main            ; held and nothing above this may pay for it
     mov bx, [dos_win]
@@ -1613,6 +2037,14 @@ dos_run:
     mov byte [dos_state], DST_RAN
     jmp short .free
 .freeerr:
+%ifdef DVW
+    cmp byte [dvw_want], 0          ; **A WINDOW GROWS TO ITS PROGRAM** (SPEC.md
+    je .noreg                       ; 96.54.2.1): a DER_FIT under an Automatic
+    call HENT(dvw_regrow)           ; limit frees the arena and raises the cap
+    jnc .noreg                      ; to what the header asks - and the sizing
+    jmp .floor                      ; runs again, posted pass and all
+.noreg:
+%endif
     mov [dos_err], al
     mov byte [dos_state], DST_ERR
 .free:
@@ -1633,12 +2065,16 @@ dos_run:
     mov [dos_err], al
     mov byte [dos_state], DST_ERR
 .out:
+%ifdef DVW
+    mov byte [dvw_want], 0          ; a run that never reached the bracket
+%endif                              ; does not leave the next one windowed
     mov byte [dos_cpw], 0           ; THE REAL EXIT, so the next launch in this
                                     ; instance sizes from the start again
 %ifndef KD_BACKEND
-    call dn_shut                    ; every translated flow closed, before the
-                                    ; driver that owns its sockets is resumed
-    call dos_pkt_shut               ; THE RAW CLAIM GOES BACK FIRST, on every
+    call dos_pkt_shut               ; every translated flow closed (dn_shut),
+                                    ; before the driver that owns its sockets
+                                    ; is resumed - and THE RAW CLAIM GOES BACK
+                                    ; FIRST, on every
                                     ; path here for dos_drv_back's own reason
                                     ; (SPEC.md 96.23.5): a release by a caller
                                     ; that does not hold one is a no-op, and a
@@ -1664,6 +2100,9 @@ dos_run:
                                     ; exactly as it skips the resume: the
                                     ; compaction is going to run and then come
                                     ; back through here
+%ifdef DOS_WTAIL
+    call dos_endr                   ; the window's end (dos_endr_w), or the
+%else                               ; headless toast
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     call dos_con_ended              ; ...and the console says what happened, which
                                     ; is where §96.32's three status lines went
@@ -1689,19 +2128,39 @@ dos_run:
                                     ; after dos_repaint so the window under it
                                     ; is right when the bracket next comes down
 %endif
+%endif                              ; DOS_WTAIL
 .outq:                              ; ...AND THE POSTED PATH, which reaches
                                     ; none of the above on purpose: nothing has
                                     ; ended, the drivers must stay out for the
                                     ; pass to have their space, and the window
                                     ; still says what it said (SPEC.md 96.35.1)
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
+
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
+%ifdef DOS_WTAIL
+; -----------------------------------------------------------------------------
+; dos_endk_w - dos_wake's end, the window's (dos_endk): the exit line, the
+; repaint, and BACK INTO THE FULL SCREEN when the command was typed there
+; (SPEC.md 96.33.16) - the posted path leaves dos_run by `.outq`, past its own
+; call, so the return is where [dos_fsxgo] is spent, or it stood until some
+; later WINDOWED exit spent it and threw that console into the full screen.
+; kern_mega's trip (14.106) and kern_big's shut-down arm alike (14.113)
+; -----------------------------------------------------------------------------
+dos_endk_w:
+    call dos_con_ended
+    mov bx, [dos_win]
+    call dos_swap
+    jmp dos_fsx_back
+
+; dos_endr_w - dos_run's end, the window's (dos_endr): the console's account
+; of the run, then dos_repaint - THE WINDOW DOES NOT REPAINT ITSELF, so every
+; FAILURE path would leave "Starting..." on the glass - and back into the full
+; screen, after the repaint so the window under it is right (dos_run's notes)
+dos_endr_w:
+    call dos_con_ended
+    call dos_repaint
+    jmp dos_fsx_back
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dos_repaint - the content, under a lock WE take
@@ -1717,6 +2176,10 @@ dos_repaint:
     call OSAPI_GFX_LOCK             ; a wake handler is the one callback
     mov si, [dos_win]               ; without the lock, and it MAY take it for
                                     ; a burst it can state (SPEC.md 74.1)
+    mov bx, si                      ; ...CUT TO WHAT IS VISIBLE (SPEC.md
+    call OSAPI_WM_CLIP_SET          ; 96.54.10): a run in the window ends
+    jc .hid                         ; behind whatever the user went on to use,
+                                    ; and an unclipped repaint lands on it
     mov al, CWHITE                  ; **THE INK FIRST** (SPEC.md 96.19.5). AL
     call OSAPI_SET_COLOR            ; is the LOW BYTE of the AX that
                                     ; WM_CONTENT is about to answer x1 in, so
@@ -1741,6 +2204,7 @@ dos_repaint:
 .nofill:
     mov si, [dos_win]
     call dos_paint
+.hid:
     call OSAPI_GFX_UNLOCK
     pop si
     pop dx
@@ -1748,6 +2212,7 @@ dos_repaint:
     pop bx
     pop ax
     ret
+WIN_CODE_END
 %endif                              ; KD_BACKEND
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -1793,72 +2258,100 @@ dos_is_exe:
 
 ; -----------------------------------------------------------------------------
 ; dos_load - read the program into the arena at PSP:0100
-; in:  [dos_ldpsp], [dos_ldpara], [dos_name]
-; out: CF=0 and [dos_imgsz] = the bytes; CF=1 with AL = a DER_*
+; in:  [dos_ldpsp], [dos_ldpara], [dos_ldname]
+; out: CF=0 ([dos_imgsz]/[dos_imghi] = the bytes, for a file read whole);
+;      CF=1 with AL = a DER_*
+;
+; **AN .EXE IS READ AS FAR AS ITS LOAD MODULE AND NO FURTHER** (SPEC.md
+; 96.8.2). The first granule says which kind of file this is; an `MZ` header
+; then says how many 512-byte pages its header + image take, and only those
+; are read - DOS's own rule, which leaves overlays and appended data on the
+; disk for the program to open itself. Anything else - a .COM, or a
+; COMPRESSED file, whose first bytes are the wrapper because DBE_RDAT is raw
+; (SPEC.md 20.14.3) - is read WHOLE, as it always was.
 ; -----------------------------------------------------------------------------
 dos_load:
     push bx
     push cx
     push dx
     push si
+    push di
+    push bp
     push es
 
-    mov ax, [dos_ldpsp]             ; THE PROGRAM BEING LOADED, not the arena
-    add ax, 16                      ; (SPEC.md 96.14): a child from AH=4Bh is
-    mov es, ax                      ; loaded exactly this way into a block of
-    xor bx, bx                      ; its own, and everything below here would
-                                    ; otherwise be the first program's for ever
-    mov ax, [dos_ldpara]            ; the capacity is everything from the image
-    sub ax, 16                      ; to the top of ITS block, in paragraphs...
-    mov dx, 16
-    mul dx                          ; ...as a 32-bit byte count in DX:AX, which
-    mov cx, ax                      ; is what OSAPI_FILE_READ takes in DX:CX
+                                    ; THE PROGRAM BEING LOADED, not the arena
+                                    ; (SPEC.md 96.14): a child from AH=4Bh is
+                                    ; loaded exactly this way into a block of
+                                    ; its own. dos_ldrd's first chunk sets ES
+                                    ; to [dos_ldpsp]+16, DI being 0 - which is
+                                    ; the probe's buffer, dos_is_exe's ES:0 and
+                                    ; .whole's ES:BX, so it is not set here
     mov si, [dos_ldname]            ; THE NAME IS AN ARGUMENT TOO: AH=4Bh loads
-                                    ; a file the running program named, and
-                                    ; [dos_name] is the one the DESKTOP did -
-                                    ; which made the first child a second copy
-                                    ; of its own parent
-    call dos_be_read                ; DX:AX = bytes read
-    jc .rerr
-
-    mov [dos_imgsz], ax             ; the WHOLE 32-bit size: an .EXE may be
-    mov [dos_imghi], dx             ; bigger than a segment and the .COM
-    pop es                          ; ceiling is the .COM path's business
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    clc
-    ret
+                                    ; a file the running program named
+    xor bx, bx                      ; ES:0 is every chunk's buffer, and BX
+    xor di, di                      ; stays 0 through every read below
+    mov bp, 32                      ; THE PROBE: the first SECTOR, which is
+    call dos_ldrd                   ; READ_AT's granule on kern_big and kern_dos
+    jc .whole                       ; (SPEC.md 18.4.4.2). kern_small's is a
+                                    ; CLUSTER and refuses it, and so reads the
+                                    ; file whole, as it always did. 32
+                                    ; paragraphs is under the smallest block
+                                    ; AH=4Bh gives a child (64), so the probe
+                                    ; needs no bound of its own
+    call dos_is_exe                 ; CF=1 = 'MZ' at ES:0
+    jnc .whole
+    mov ax, [es:MZ_CP]              ; header + image in 512-byte PAGES, the
+    dec ax                          ; last one partial or not: the bytes DOS
+    cmp ah, 7                       ; reads, rounded up to a sector - which is
+    jae .whole                      ; the granule, so no rounding is needed.
+    inc ax                          ; None at all, or past 896KB, is the whole
+    mov cl, 5                       ; read's and dos_exe_setup's to refuse
+    shl ax, cl                      ; ...in paragraphs. The slack is the
+    xchg ax, bp                     ; overlay's first bytes, inside the block
+    lea ax, [bp+16]                 ; DOES THE BLOCK HOLD THE PSP AND THE
+    cmp [dos_ldpara], ax            ; MODULE? Decided from the header, before
+    jb .nofit                       ; anything more is read
+    mov ax, bp                      ; ONE OPERATION FOR THE MODULE (SPEC.md
+    sub ax, di                      ; 96.8.2.1, 12.8.10): the paragraphs left
+    mov cx, 16                      ; to read, as bytes - one bar where each
+    mul cx                          ; 32KB chunk's READ_AT filled it again.
+    xchg ax, cx                     ; Advisory: kern_dos refuses it
+    call dos_be_fsop
+    call dos_ldrd                   ; DI = 32: the probe's sector is in already
+    call dsh_opend                  ; ...ended, the flags kept
+    jnc .out                        ; CF=0 is the answer
 .rerr:
     ; --- "TOO BIG" IS NOT "COULD NOT BE READ" (SPEC.md 96.8.1) -------------
     ; `OSAPI_FILE_READ` answers `FERR_BIG` for a file larger than the buffer
     ; it was handed, and decides it FROM THE DIRECTORY ENTRY before any data
     ; I/O - so it is not a read that went wrong, it is a program that does not
-    ; fit in the arena this arm gives. Reported from the field about Battle
-    ; Chess: a 494KB `.EXE` double-clicked on a 445KB arena said *"It could
-    ; not be read."*, which names the disk for a fact about memory and tells
-    ; the user nothing they can act on.
-    ;
-    ; `dos_exe_setup` already has the OTHER half of this - `.nofit` answers
-    ; DER_FIT when image + MINALLOC + PSP overflows the block - and that arm
-    ; is only ever reached by a file small enough to have been READ first. A
-    ; program bigger than the whole arena never gets that far, which is why
-    ; the two look like different failures and are one.
+    ; fit in the arena this arm gives. `.read` answers the same code for a
+    ; load module past the block, decided from the header before it reads.
     cmp ax, FERR_BIG
-    je .nofit
-    mov al, DER_READ
-    jmp short .out
+    mov al, DER_READ                ; (a `mov`: the flags are still the cmp's)
+    jne .err
 .nofit:
     mov al, DER_FIT
+.err:
+    stc
 .out:
     pop es
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    stc
-    ret
+    pop bp
+    jmp dos_popb_5                  ; DI..BX: the shared epilogue (96.54.8),
+                                    ; three bytes that put dos_cpm's `align 16`
+                                    ; a paragraph lower
+.whole:
+    mov ax, [dos_ldpara]            ; the capacity is everything from the image
+    sub ax, 16                      ; to the top of ITS block, in paragraphs...
+    mov dx, 16
+    mul dx                          ; ...as a 32-bit byte count in DX:AX, which
+    mov cx, ax                      ; is what OSAPI_FILE_READ takes in DX:CX
+    call dos_be_read                ; DX:AX = bytes read; BX is still 0
+    jc .rerr
+    mov [dos_imgsz], ax             ; the WHOLE 32-bit size: an .EXE may be
+    mov [dos_imghi], dx             ; bigger than a segment and the .COM
+    jmp short .out                  ; ceiling is the .COM path's business;
+                                    ; CF=0 is still the read's
 %endif                              ; DOS_EXTCORE
 
 
@@ -2108,6 +2601,206 @@ dos_movedown:
     ret
 %endif                              ; DOS_EXTCORE
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
+%ifdef DOS_WTAIL
+; -----------------------------------------------------------------------------
+; dos_fsx_cone - Full Screen's fsx proc, RESIDENT (DOS-HEADLESS-PLAN 4.5)
+;
+; `dos_fsx_con` is the console's, so it is the tail's - and an OSAPI_FSX_RUN
+; proc above I_SIZE is REFUSED by the kernel's fence (inst_pkg_fence), I_SIZE
+; being the resident host's image + bss alone. So the slot is handed this,
+; which is below it, and the jump is bracketed like every other way into the
+; tail: a headless host never runs Full Screen, having no console to show.
+; -----------------------------------------------------------------------------
+dos_fsx_cone:
+    WIN_ONLY
+    jmp dos_fsx_con
+    WIN_END
+    ret
+
+; =============================================================================
+; THE HEADLESS HOST (SPEC.md 96.44.20, docs/plans/DOS-HEADLESS-PLAN.md 5)
+;
+; A .LNK saved with `Close when done` (ShowCommand = 7) is read by the LOADER,
+; which marks part 1 - the window - lazy, so this region never holds it, and
+; writes [dos_head]. What is left of a window is what OSAPI_FSX_RUN and
+; OSAPI_WM_WAKE need one for: a frame and one line, `Starting NAME`, drawn
+; by the four routines below, which name nothing of the tail. The program
+; runs in the bracket (or on the whole machine), and its end is a toast for a
+; non-zero exit or a refusal, and the instance closing.
+; =============================================================================
+; dos_fld_def - the settings' defaults: the arm, the cache's dial and the
+; Hard Drives box. Everything else's default is the zero the bss already
+; holds. dos_entry calls it on BOTH hosts, before the window's dos_fld_init
+; (whose field blocks are the tail's) - one copy of the three stores
+dos_fld_def:
+    mov word [dos_keepc], DOS_MEM_IN
+    mov word [dos_cache], DOS_CA_AUTO
+    mov byte [dos_mhdd + OS88UI_CK_ON], 1
+    ret
+
+; dos_hpaint - W_PAINT: `Starting NAME` and the ground beside it, each pixel
+; once (SPEC.md 6.1) - two opaque runs, the name's on the cell grid the first
+; leaves, and one fill to the right edge. The content is exactly the line's
+; height (dos_htpl), so there is no ground under it. SI = the window, the gfx
+; lock held
+dos_hpaint:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov bx, si
+    call OSAPI_WM_GEOM              ; CX = the content's width
+    mov di, cx
+    call OSAPI_WM_CONTENT           ; AX = left, DX = top
+    add di, ax
+    dec di                          ; DI = the right edge
+    mov cx, ax
+    mov si, dos_hs_start
+    mov ax, (CWHITE << 8) | CBLACK
+    call OSAPI_FONT_RUN
+    add cx, 8 * (dos_hs_end - dos_hs_start)
+    mov si, dos_name
+    call OSAPI_FONT_RUN
+    call OSAPI_FONT_WIDTH           ; AX = the name's pixels
+    add ax, cx                      ; AX = past the text
+    cmp ax, di
+    ja .out
+    push ax
+    mov al, CWHITE
+    call OSAPI_SET_COLOR
+    pop ax
+    mov bx, dx                      ; BX = top
+    add dx, 7                       ; DX = the line's bottom
+    mov cx, di
+    call OSAPI_GFX_FILL             ; ...beside the line
+.out:
+    jmp dos_hpop_6                  ; the host's shared epilogue (96.54.8)
+
+; dos_hcat - append DS:SI's NUL string at ES:DI = DS:DI, NUL included; DI is
+; left ON the NUL, so the next one overwrites it
+dos_hcat:
+    lodsb
+    stosb
+    or al, al
+    jnz dos_hcat
+    dec di
+    ret
+
+; dos_hq - ZF = 0 headless (DOS-HEADLESS-PLAN 4.4): every WIN_ONLY bracket's
+; test, and tools/doswtail.py finds the brackets by their calls to it
+dos_hq:
+    cmp byte [dos_head], 0
+    ret
+
+; dos_endk / dos_endr - a run is over, from dos_wake's side (the program came
+; back to a wake: the bracket's resume, kern_dos's return) and from dos_run's.
+; Each is one bracket: the window's own end is the tail's (dos_endk_w,
+; dos_endr_w), a headless host's is dos_hend, which both fall into
+dos_endk:
+    WIN_ONLY
+    jmp dos_endk_w
+    WIN_END
+dos_endr:
+    WIN_ONLY
+    jmp dos_endr_w
+    WIN_END
+; dos_hend - a headless run is over: say so if it is worth saying, and go.
+; A toast is COPIED by the kernel, so the instance may close while it is up
+; (OSAPI_TOAST); OSAPI_WM_CLOSE is deferred to the next UI pass, so this
+; returns and draws nothing after it. The line is built in dos_lbuf: the
+; .LNK's buffer, which a headless host is done with once dos_entry has read
+; the shortcut (a Save Shortcut is a window's)
+dos_hend:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    mov di, dos_lbuf
+    cmp byte [dos_state], DST_ERR
+    jne .ran
+    xor bx, bx                      ; a refusal's short form, words FIRST so
+    mov bl, [dos_err]               ; the 24 cells the bar shows lose the name
+    cmp bl, DOS_HERN                ; and not the reason. Past the list: the
+    jb .ix                          ; first reads as well as any (nothing sets
+    xor bl, bl                      ; one today)
+.ix:
+    mov bl, [dos_hero + bx]
+    lea si, [dos_hers + bx]
+    call dos_hcat
+    jmp short .nm
+.ran:
+    mov al, [dos_exit]
+    or al, al
+    jz .close                       ; exit 0 is not news
+    mov si, dos_hs_exit
+    call dos_hcat                   ; (lodsb: AL is spent)
+    mov al, [dos_exit]
+    mov bl, 10
+    xor cx, cx
+    ; STKBALANCE-LOOP: one digit pushed a turn and the second loop pops them; the count is in CX
+.d:                                 ; the code's digits, least first, onto the
+    xor ah, ah                      ; stack - no leading zeros
+    div bl
+    push ax                         ; AH = the digit
+    inc cx
+    or al, al
+    jnz .d
+.e:
+    pop ax
+    mov al, ah
+    add al, '0'
+    stosb
+    loop .e
+.nm:
+    mov si, dos_hs_sep
+    call dos_hcat
+    mov si, dos_name
+    call dos_hcat
+    mov si, dos_lbuf
+    xor cx, cx
+    call OSAPI_TOAST
+.close:
+    mov bx, [dos_win]
+    call OSAPI_WM_CLOSE
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
+
+dos_htpl:
+    dw 0, MBAR_H, 8 * DOS_HTXT, 8 + TITLE_H + 1
+    dw dos_ttl, dos_hpaint, 0, 0
+dos_ttl:      db 'DOS', 0           ; ...the window's caption too: resident for
+                                    ; both templates, and the menu bar's head
+dos_hs_start: db 'Starting '
+dos_hs_end:   db 0
+dos_hs_exit:  db 'Exit ', 0
+dos_hs_sep:   db ': ', 0
+dos_hero:                           ; DER_* in order: each one's short form,
+    db dos_her0 - dos_hers          ; a toast's head, as an offset into the
+    db dos_her1 - dos_hers          ; list - which holds each form ONCE
+    db dos_her2 - dos_hers
+    db dos_her3 - dos_hers
+    db dos_her4 - dos_hers          ; DER_FSX: the screen was in use
+    db dos_her5 - dos_hers          ; DER_EXE
+    db dos_her5 - dos_hers          ; DER_BADEXE
+    db dos_her1 - dos_hers          ; DER_FIT
+    db dos_her8 - dos_hers          ; DER_HAND
+    db dos_her4 - dos_hers          ; DER_DVWP
+DOS_HERN    equ $ - dos_hero
+dos_hers:
+dos_her0:     db 'No folder', 0
+dos_her1:     db 'No memory', 0
+dos_her2:     db 'Read error', 0
+dos_her3:     db 'Too large', 0
+dos_her4:     db 'Refused', 0
+dos_her5:     db 'Bad .EXE', 0
+dos_her8:     db 'Busy', 0
+%endif
 
 ; =============================================================================
 ; THE BRACKET (SPEC.md 96.2)
@@ -2146,6 +2839,8 @@ dos_fsx_main:
                                     ; CLEARED, so without this a program starts
                                     ; on a blank screen and the command line
                                     ; that launched it is not above its output
+    WIN_ONLY                        ; the console onto the screen is the
+                                    ; window's: a headless run starts clean
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     mov bx, [dos_win]
     call OSAPI_FSX_CAPS             ; DL = the DISPLAY's own kind, which
@@ -2169,6 +2864,7 @@ dos_fsx_main:
     mov ah, 0x02                    ; and overwrite the history just painted
     int 0x10
 %endif
+    WIN_END
 .noseed:
 
     call OSAPI_VIDEO                ; AX = width, BX = height: INT 33h's scale
@@ -2441,6 +3137,17 @@ dos_hook_vectors:
     mov [es:bx+2], cs
     jmp short .hk
 .hkd:
+    mov [dos_m33hk], al                 ; **A FRESH TABLE HOOKS NOTHING YET**
+                                        ; (AL = 0, the table's own end)
+                                        ; (SPEC.md 96.54.8): dos_m33_arm hooks
+                                        ; IRQ0 once, on a program's first
+                                        ; 0Ch, and the flag outlived the run
+                                        ; that set it - so the NEXT run's
+                                        ; handler was never hooked, in the
+                                        ; bracket (whose restore puts the
+                                        ; whole IVT back) and in a window
+                                        ; alike. Cleared with the table it
+                                        ; describes
     call dos_m33_hidden                 ; **AND THE CURSOR STARTS AWAY**
                                         ; (SPEC.md 96.10.5): the show counter
                                         ; is -1, which is not the zero a bss
@@ -2746,31 +3453,44 @@ dos_build_psp:
     call dos_psp_make               ; ...which is a routine of its own, because
                                     ; AH=4Bh's child needs one too (SPEC.md
                                     ; 96.14) and it is not at the arena's base
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_7                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
 ; -----------------------------------------------------------------------------
-; dos_fcb_blank - the unparsed FCB DOS leaves when there is no argument for it
-; in:  ES = the PSP, DI = 5Ch or 6Ch; out: DI past the name
+; dos_fcb_arg - the next word of the tail, parsed into one of the PSP's FCBs
+; in:  DS:SI = the tail (ours), ES = the PSP, DI = 5Ch or 6Ch
+; out: SI past the word; every other register preserved
+;
+; AH=29h's own parse (SPEC.md 96.28), blanks skipped first as COMMAND asks it
+; to: `FOO.TXT Z:BAR` is drive 0 and FOO TXT, then drive 26 and BAR - and
+; nothing at all is drive 0 and eleven blanks, the shape 96.21.6 is about.
 ; -----------------------------------------------------------------------------
-dos_fcb_blank:
+dos_fcb_arg:
     push ax
+    push bx
     push cx
-    mov byte [es:di], 0             ; drive 0 = "whichever is current"
-    inc di
-    mov cx, 11
-    mov al, ' '                     ; ...and a name of spaces, which is what a
-    cld                             ; tail with nothing in it parses to
-    rep stosb
+    push di
+.sk:
+    lodsb
+    cmp al, ' '
+    je .sk
+    cmp al, 9
+    je .sk
+    dec si
+    mov di, dos_pfcb
+    call dos_int21.pf_core
+    pop di
+    push di
+    push si
+    mov si, dos_pfcb
+    mov cx, 12
+    cld
+    rep movsb
+    pop si
+    pop di
     pop cx
+    pop bx
     pop ax
     ret
 %endif                              ; DOS_EXTCORE
@@ -2813,10 +3533,7 @@ dos_jft_sync:
     pop es
     pop di
     pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_3                  ; the shared epilogue (96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -2846,7 +3563,7 @@ dos_psp_make:
                                     ; fields, in the same order as before)
     mov word [es:di+0x00], 0x20CD   ; INT 20h, so a .COM that plain `ret`s
                                     ; lands here and terminates
-    mov ax, [dos_ldpsp]
+    mov ax, es                      ; = [dos_ldpsp], a byte shorter
     add ax, [dos_ldpara]
     mov [es:0x02], ax               ; the paragraph past the block - mechanism 1
 
@@ -2901,7 +3618,7 @@ dos_psp_make:
 .cpmhi:
     sub ax, bx
     jc .cpmset                      ; borrowed back under 10000h: it fits
-    mov ax, [dos_ldpsp]             ; ...and otherwise the old field
+    mov ax, es                      ; ...and otherwise the old field
     add ax, 5
     sub ax, bx
 .cpmset:
@@ -2950,17 +3667,18 @@ dos_psp_make:
     rep stosb                       ; ...which leaves DI at 2Ch: the base for
                                     ; every store below, a byte shorter each
     mov word [es:di-0x2C+0x18], 0x0101  ; 0, 1: stdin and stdout, the console
-    mov byte [es:di-0x2C+0x1A], 0x01    ; 2: stderr, the same device
-    mov byte [es:di-0x2C+0x1B], 0x00    ; 3: AUX
+    mov word [es:di-0x2C+0x1A], 0x0001  ; 2: stderr, the same device, and
+                                        ; 3: AUX
     mov byte [es:di-0x2C+0x1C], 0x02    ; 4: PRN
     mov word [es:di-0x2C+0x32], 20      ; ...and its size and address, which is
     mov word [es:di-0x2C+0x34], 0x0018  ; how a program with more than twenty
     mov ax, [dos_ldpsp]                 ; files open finds the table that
     mov [es:di-0x2C+0x36], ax           ; replaced it
-    mov word [es:di-0x2C+0x38], 0xFFFF  ; the previous PSP: DOS 3 leaves
-    mov word [es:di-0x2C+0x3A], 0xFFFF  ; FFFF:FFFF and a program may test for it
+    mov ax, 0xFFFF                      ; the previous PSP: DOS 3 leaves
+    mov [es:di-0x2C+0x38], ax           ; FFFF:FFFF and a program may test for it
+    mov [es:di-0x2C+0x3A], ax
     mov ax, [dos_arena]
-    add ax, DOS_ENVSEG
+    inc ax
     mov [es:di-0x2C+0x2C], ax       ; ...and one environment, shared: a child
                                     ; inherits the parent's, which is the
                                     ; default AH=4Bh's block asks for with a 0
@@ -2968,14 +3686,12 @@ dos_psp_make:
     mov byte [es:di-0x2C+0x52], 0xCB
     call dos_psp_tail               ; THE ARGUMENTS (SPEC.md 96.19), or the
                                     ; empty tail this used to write flat
-    mov di, 0x5C                    ; ...and the two FCBs, in the shape an
-    call dos_fcb_blank              ; EMPTY tail parses to. Zero - which this
-    mov di, 0x6C                    ; wrote before - is a name of eleven NULs
-    call dos_fcb_blank              ; on drive A and not a blank one, so a
-                                    ; program that opens FCB 1 without reading
-                                    ; the tail got a file that cannot exist
-                                    ; rather than one obviously unnamed
-                                    ; (SPEC.md 96.21.6)
+    mov si, dos_args                ; ...and the two FCBs: the first two words
+    mov di, 0x5C                    ; of the tail PARSED into them, as COMMAND
+    call dos_fcb_arg                ; does (SPEC.md 96.56.3) - and an empty
+    mov di, 0x6C                    ; tail parses to drive 0 and eleven
+    call dos_fcb_arg                ; blanks, not to zero (96.21.6). An EXEC's
+                                    ; child takes its block's instead
 
     ; --- the stack, AND ONLY A .COM HAS ONE HERE (SPEC.md 96.3.1) ------------
     ; An .EXE brings its own SS:SP out of its header and DOS does not touch
@@ -3000,20 +3716,18 @@ dos_psp_make:
 .small:
     mov cl, 4
     shl ax, cl
-    sub ax, 2
-    mov bx, ax
+    xchg ax, bx                     ; (AX is dead from here: one byte)
+    dec bx
+    dec bx
 .sp:
-    sub bx, 2                       ; ...and the 0 word DOS pushes, which is
+    dec bx                          ; ...and the 0 word DOS pushes, which is
+    dec bx
     mov [dos_prgsp], bx             ; the offset half of that PSP:0000 return
     mov word [es:bx], 0
 .nostk:
     pop es
     pop di
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_4                  ; the shared epilogue (96.54.8)
 
 %ifdef DOS_MEGA
 ; dos_hvec - AX = a handler in this segment: DX:AX = the far address to
@@ -3060,6 +3774,60 @@ dos_cpm:
     pop ax
     pop bp
     retf 2
+%endif                              ; DOS_EXTCORE
+%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
+
+; -----------------------------------------------------------------------------
+; dos_ldrd - paragraphs [DI, BP) of the program's file, to [dos_ldpsp]+16+DI
+; in:  DI and BP whole sectors (DI <= BP), SI = the name, BX = 0
+; out: CF=0 and DI = BP, or the file's end; CF=1 with AX = FERR_*. ES = the
+;      last chunk's segment, [dos_ldpsp]+16+DI as it was - set before the read,
+;      so on CF=1 too, and dos_load relies on the first one's
+;
+; dos_load's (SPEC.md 96.8.2), in chunks of 32KB at most so a chunk lands in
+; one segment; a file that ends early ends the loop, as the whole read's short
+; file always has. The caller bounds BP by the block. It is a routine of its
+; own and not a local label so that it sits AFTER `dos_cpm`'s `align 16`: in
+; front of it, its bytes were paid for again in padding.
+; -----------------------------------------------------------------------------
+dos_ldrd:
+    mov cx, bp
+    sub cx, di                      ; CF=0: DI <= BP
+    jbe .ret
+    cmp ch, 8                       ; 2,048 paragraphs at most
+    jb .chunk
+    mov cx, 0x800
+.chunk:
+    push cx
+    lea ax, [di+16]                 ; the buffer is ES:0 a chunk at a time, so
+    add ax, [dos_ldpsp]             ; no offset binds past 64KB
+    mov es, ax
+    mov ax, 16
+    mul cx
+    xchg ax, cx                     ; CX = the chunk in bytes, <= 32KB
+    mov ax, 16
+    mul di                          ; DX:AX = the file offset
+    call dos_be_rdat                ; DX:AX = delivered, 0 = at the end
+    pop cx
+    jc .ret
+    or ax, dx                       ; 0 delivered is the end, CF=0
+    jz .ret
+    add di, cx
+    jmp short dos_ldrd
+.ret:
+    ret
+
+; -----------------------------------------------------------------------------
+; dos_popa_N / dos_popb_N - the core's two shared epilogues (SPEC.md 96.54.8,
+; os88api.inc's OS88_POPLADDER). Ten routines ended in the same seven or six
+; pops and a `ret`; each ends in a near jump here instead - three bytes for
+; eight or seven. Two ladders because the two shapes cannot share one: the
+; six-register routines push BX..ES and not AX, and their `ret` comes straight
+; after `pop bx`. A near jump costs no stack, so no slice is deeper for it.
+; Placed AFTER dos_cpm's `align 16`, where its bytes are not paid for twice.
+; -----------------------------------------------------------------------------
+    OS88_POPLADDER dos_popa, ax, bx, cx, dx, si, di, es
+    OS88_POPLADDER dos_popb, bx, cx, dx, si, di, es
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -3197,13 +3965,24 @@ dos_int21:
     mov bx, [.t21 + bx]
     xchg bx, [bp-10]
     ret
-.hifn:                              ; above the table: 68h and 6Ah (commit
-    cmp ah, 0x68                    ; and extended commit) are the only two,
+.hifn:                              ; above the table: 62h (get PSP), and 68h
+    cmp ah, 0x62                    ; and 6Ah (commit and extended commit)
+    je .getpsp                      ; are the only three,
+    cmp ah, 0x68
     je .hidsk                       ; and 69h between them is not a call this
     cmp ah, 0x6A                    ; DOS answers
     jne .bad
 .hidsk:
     jmp .dskreset
+.getpsp:
+    ; AH=62h, and AH=51h through the table: out BX = the RUNNING program's
+    ; PSP (SPEC.md 96.55). Unimplemented, it fell to .bad and BX came back
+    ; as whatever the program had in it - and DOS sets no carry for this
+    ; call, so nobody looks: IBM DOS 3.30's XCOPY.EXE stores BX as its PSP
+    ; segment, parses its command tail out of that, and prints "Invalid
+    ; parameter" for every command line it is given.
+    mov bx, [dos_ldpsp]
+    jmp .ok
 
 .term0:
     ; AH=00h IS `INT 20h` THROUGH THE OTHER DOOR, and its exit code is ZERO
@@ -3251,16 +4030,16 @@ dos_int21:
 ; instead of jumping over two expanded ones.
 .t21:                               ; DOS_T21_N words, 00h up: the handler,
     dw .term0, .getce, .putc, .bad, .bad, .bad, .dconio, .getc   ; 00h
-    dw .getc, .puts, .bad, .kbhit, .flushin, .dskreset, .seldrv, .bad   ; 08h
-    dw .bad, .bad, .bad, .bad, .bad, .bad, .bad, .bad   ; 10h
+    dw .getc, .puts, .bad, .kbhit, .flushin, .dskreset, .seldrv, .fcbop ; 08h
+    dw .fcbcl, .fcbop, .fcbop, .fcbop, .fcbrd, .fcbrd, .fcbop, .fcbop ; 10h
     dw .bad, .curdrv, .setdta, .bad, .bad, .bad, .bad, .bad   ; 18h
-    dw .bad, .bad, .bad, .bad, .bad, .setvec, .bad, .bad   ; 20h
-    dw .bad, .parsefcb, .getdate, .setdate, .gettime, .settime, .bad, .getdta   ; 28h
-    dw .ver, .term, .bad, .bad, .bad, .getvec, .dfree, .bad   ; 30h
+    dw .bad, .fcbrd, .fcbrd, .fcbop, .fcbsr, .setvec, .bad, .fcbrd ; 20h
+    dw .fcbrd, .parsefcb, .getdate, .setdate, .gettime, .settime, .setvfy, .getdta ; 28h
+    dw .ver, .term, .bad, .brk, .bad, .getvec, .dfree, .swch   ; 30h
     dw .bad, .mkdir, .rmdir, .chdir, .create, .open, .close, .read   ; 38h
     dw .write, .unlink, .seek, .getattr, .ioctl, .bad, .bad, .getcwd   ; 40h
     dw .alloc, .free, .resize, .exec, .term, .retcode, .ff, .fn   ; 48h
-    dw .bad, .bad, .bad, .bad, .bad, .bad, .rename   ; 50h
+    dw .bad, .getpsp, .bad, .bad, .getvfy, .bad, .rename ; 50h: 51h is 62h
 DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
 
 .getce:
@@ -3722,80 +4501,60 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; here at all, so an installer read "one sector per cluster" and three
     ; stale registers. Prince of Persia's INSTALL selects C:, is told it is
     ; standing on C:, asks this, and prints "Invalid drive letter" (96.27.1).
+    ;
+    ; **AND IT ASKS ABOUT THE DRIVE, NOT ABOUT WHAT IS MOUNTED** (SPEC.md
+    ; 96.27.2). OSAPI_VOL_STAT answers for the volume the MACHINE stands on,
+    ; and since 96.48 `AH=0Eh` moves only the PROGRAM - the mount waits for
+    ; the next name. So the installer's select-C:-then-ask was answered with
+    ; the FLOPPY it had just read its source list off: 106 free clusters of
+    ; 1KB, "Not enough space on destination disk". `dos_fh_stand` puts the
+    ; machine on the drive asked about, in that drive's folder, and moves the
+    ; program nowhere - which is also what DOS does: AH=36h changes no drive.
     push bx
     push si
     push di
     push es
-    mov al, dl
-    or al, al
-    jnz .df1
-    mov al, [dos_vol]               ; 0 = the drive we are on
-    jmp short .dfv
+    sub dl, 1                       ; 1-based -> a volume index, and CF = it
+    jnc .df1                        ; was 0, the drive the program is on
+    mov dl, [dos_vol]
 .df1:
-    dec al                          ; 1-based -> a volume index
-.dfv:
-    mov bh, [dos_vol]               ; where to come back to...
-    mov di, bx                      ; ...banked in DI's high byte, because BX
-                                    ; is about to be an ANSWER (the free
-                                    ; count), and .dfhome used to read the
-                                    ; home drive out of BH AFTER that load
-    cmp al, bh
-    je .dfask                       ; the common case by far: a program selects
-                                    ; the drive and then asks about it
-    mov dl, al
-    call dos_drv_sel                ; A REAL MOUNT, and dos_drv_sel is the one
-    cmp al, [dos_vol]               ; place that knows how to put itself back
-    jne .dfbad                      ; if the mount refuses
-.dfask:
+    cmp dl, DVOL_MAX
+    jae .dfbad                      ; past the array dos_fh_stand indexes
+    call dos_fh_stand               ; THE MACHINE onto it (CF = not there)
+    jc .dfbad
     call dos_be_vstat               ; AX = sectors per cluster, BX = free
                                     ; clusters, CX = bytes per sector, DX =
                                     ; total clusters - AH=36h's own four, which
                                     ; is the slot's shape BECAUSE this is its
                                     ; caller (SPEC.md 18.4.6). THROUGH THE BACK
-                                    ; END (96.4.1): the slot mounts the volume
-                                    ; and reads its FAT, which is disk work on
-                                    ; the program's stack
-    jc .dfback
-    call .dfhome
+                                    ; END (96.4.1): the slot reads the FAT,
+                                    ; which is disk work on the program's stack
+    jc .dfbad
+    mov [bp-8], dx                  ; DX is an ANSWER (SPEC.md 96.7.1)...
     pop es
     pop di
     pop si
-    add sp, 2                       ; BX is an ANSWER: drop the banked one
-    mov [bp-8], dx                  ; ...and so is DX (SPEC.md 96.7.1)
-    jmp .ok
-.dfback:
-    call .dfhome
+    pop dx                          ; ...and so is BX: drop the banked one
+    jmp .ok                         ; into DX, which .ok reloads from [bp-8]
 .dfbad:
     mov ax, 0xFFFF                  ; DOS's own "invalid drive", and a value a
     pop es                          ; program can test even when it ignores the
     pop di                          ; flag - which for this call every program
     pop si                          ; does, DOS never setting CF here
-    add sp, 2
+    pop bx
     jmp .ok
-; --- .dfhome - back to the drive we were standing on, if we left it ---------
-; in: DI's high byte = that drive; preserves everything (dos_drv_sel does)
-.dfhome:
-    push ax
-    push dx
-    mov dx, di
-    mov dl, dh
-    cmp dl, [dos_vol]
-    je .dfh
-    call dos_drv_sel
-.dfh:
-    pop dx
-    pop ax
-    ret
 
 .setdta:
     mov [dos_dta], dx               ; AH=1Ah: DS:DX, and DS is the program's -
-    mov ax, [bp]                    ; which for every real program is the PSP
-    mov [dos_dtaseg], ax            ; it already runs on
+    push word [bp]                  ; which for every real program is the PSP
+    pop word [dos_dtaseg]           ; it already runs on. AX COMES BACK, as
+                                    ; DOS gives it (96.56.3)
     jmp .ok
 .getdta:
     mov bx, [dos_dta]               ; AH=2Fh: out ES:BX - and ES is written into
-    mov ax, [dos_dtaseg]            ; the gate's banked slot, which .leave
-    mov [bp-6], ax                  ; restores from (SPEC.md 96.7.1)
+    push word [dos_dtaseg]          ; the gate's banked slot, which .leave
+    pop word [bp-6]                 ; restores from (SPEC.md 96.7.1); AX is
+                                    ; the program's, as for 1Ah
     jmp .ok
 
 ; --- find first / find next (SPEC.md 96.12.1) --------------------------------
@@ -3815,7 +4574,8 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     mov word [es:di+DTA_ORD], 0     ; there: .fstep below wants the DTA's BASE,
     push si                         ; and a stosw/rep movsb pair would leave it
     push di                         ; fifteen bytes along - which reads the
-    add di, DTA_PAT                 ; ordinal out of the pattern
+    inc di                          ; ordinal out of the pattern
+    inc di
     mov si, dos_fname
     mov cx, 13                      ; the pattern lives in the DTA, so AH=4Fh
     cld                             ; needs no state of ours at all. DOS keeps
@@ -3909,45 +4669,7 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; --- phase 2: the parse, entirely in our own segment ------------------
     mov si, dos_pfbuf
     mov di, dos_pfcb
-    xor bh, bh                      ; BH = the answer, BL = "a ? was stored"
-    xor bl, bl
-    xor al, al                      ; the drive byte: 0 = the one we are on
-    cmp byte [si+1], ':'
-    jne .pf_drvset
-    mov al, [si]
-    cmp al, 'a'
-    jb .pf_dup
-    cmp al, 'z'
-    ja .pf_dup
-    sub al, 32
-.pf_dup:
-    sub al, 'A' - 1                 ; the FCB numbers A: as 1, not as 0
-    add si, 2
-    cmp al, DVOL_MAX
-    jbe .pf_drvset
-    mov bh, 0xFF                    ; past the last drive - and the byte STILL
-.pf_drvset:                         ; goes in, measured: Z: writes 26
-    mov [di], al
-    inc di
-    mov cx, 8                       ; the name...
-    call .pf_field
-    mov cx, 3                       ; ...and the extension, which is there only
-    cmp byte [si], '.'              ; if a dot says so
-    jne .pf_noext
-    inc si
-    call .pf_field
-    jmp short .pf_ans
-.pf_noext:
-    mov al, ' '                     ; no dot, so the extension is three blanks
-.pf_nex:
-    mov [di], al
-    inc di
-    loop .pf_nex
-.pf_ans:
-    or bh, bh
-    jnz .pf_out                     ; FFh beats everything
-    mov bh, bl                      ; ...otherwise 1 if any ? landed, else 0
-.pf_out:
+    call .pf_core
     sub si, dos_pfbuf               ; how far the parse got, plus the blanks
     add si, dx                      ; phase 1 skipped - an ADVANCE and not a
     add [bp-2], si                  ; pointer, so it is ADDED to the banked
@@ -3974,6 +4696,52 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     pop bx
     jmp .ok                         ; .ok and NOT .badax: there is no carry in
                                     ; this call's contract at all
+
+; --- .pf_core - DS:SI a name -> DS:DI's twelve FCB bytes; out BH = AL's answer
+; and SI past what was parsed. A routine since SPEC.md 96.56.3: the PSP's two
+; FCBs are this parse of the command tail (dos_fcb_arg), as COMMAND's are
+.pf_core:
+    xor bh, bh                      ; BH = the answer, BL = "a ? was stored"
+    xor bl, bl
+    xor al, al                      ; the drive byte: 0 = the one we are on
+    cmp byte [si+1], ':'
+    jne .pf_drvset
+    mov al, [si]
+    cmp al, 'a'
+    jb .pf_dup
+    cmp al, 'z'
+    ja .pf_dup
+    sub al, 32
+.pf_dup:
+    sub al, 'A' - 1                 ; the FCB numbers A: as 1, not as 0
+    inc si
+    inc si
+    cmp al, DVOL_MAX
+    jbe .pf_drvset
+    mov bh, 0xFF                    ; past the last drive - and the byte STILL
+.pf_drvset:                         ; goes in, measured: Z: writes 26
+    mov [di], al
+    inc di
+    mov cx, 8                       ; the name...
+    call .pf_field
+    mov cx, 3                       ; ...and the extension, which is there only
+    cmp byte [si], '.'              ; if a dot says so
+    jne .pf_noext
+    inc si
+    call .pf_field
+    jmp short .pf_ans
+.pf_noext:
+    mov al, ' '                     ; no dot, so the extension is three blanks
+.pf_nex:
+    mov [di], al
+    inc di
+    loop .pf_nex
+.pf_ans:
+    or bh, bh
+    jnz .pf_out                     ; FFh beats everything
+    mov bh, bl                      ; ...otherwise 1 if any ? landed, else 0
+.pf_out:
+    ret
 
 ; --- .pf_field - CX bytes of one FCB field at DS:DI from DS:SI --------------
 ; Stops at a separator, blank-pads what is left, and expands `*` to `?` for
@@ -4316,6 +5084,565 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
 .dbad:
     mov al, 0xFF
     jmp .ok
+.swch:
+    ; AH=37h AL=0: out DL = the switch character, '/' (COMMAND reads it so:
+    ; DIR/W). Changing it, and DOS 2's AL=2/3, are not ours: AL=FFh, DOS's
+    ; own "invalid subfunction", with no carry (SPEC.md 96.56)
+    mov dl, '/'
+    or al, al
+    jnz .dbad
+    jmp short .dlok
+.brk:
+    ; AH=33h, Ctrl-Break: AL=0 asks (out DL), AL=1 sets from DL (SPEC.md
+    ; 96.56). This DOS checks for no break, so the state is OFF and a set is
+    ; taken and changes nothing. **AH COMES BACK**: WordPerfect 4.1 asks,
+    ; then `mov al, 1 / int 21h` on the AH it was handed back - and .bad's
+    ; AX=0001 made that AH=00h, TERMINATE, exit code 0 and not a word said.
+    cmp al, 1
+    ja .dbad
+    je .brkok                       ; a set: DX is the program's own
+    mov dl, 0
+.dlok:
+    mov [bp-8], dl                  ; DL is the answer, into the banked DX
+.brkok:
+    jmp .ok
+;
+; --- THE FCB FILE CALLS (SPEC.md 96.56.1, 96.56.2, 96.56.3) ------------------
+; An FCB is a HANDLE in DOS's reserved bytes: the open is AH=3Dh on the name
+; the FCB spells, its handle goes at FCB+18h, and the close and the block moves
+; are AH=3Eh and AH=42h + 3Fh/40h on it - each a NESTED INT 21h, which the gate
+; takes on the stack it is already on (96.7.2). The search, the delete, the
+; rename and the size are AH=4Eh/4Fh, 41h and 56h on the same name. So nothing
+; below knows a file system, and an open FCB costs a handle out of the
+; program's twenty, as under DOS 3. An extended FCB (FFh, five bytes and an
+; attribute) is read past, and its attribute is what a find, a make and a
+; delete are asked with.
+.fcbop:
+    ; AH=0Fh open, 16h make (or empty), 11h/12h find, 13h delete, 17h rename,
+    ; 23h size: DS:DX = the FCB; out AL = 0, or FFh (no such file, or it
+    ; cannot be made, removed or renamed). Every nested call finds into a
+    ; find record of OUR OWN on the stack, so the program's DTA is written by
+    ; 11h/12h alone, and in DOS's layout rather than ours (96.56.3)
+    push bx
+    push ax
+    push cx
+    call .fcbptr                    ; DS:SI = the FCB, AL its attribute -
+    push ax                         ; NOT into the FCB: 17h's new name is
+    mov bx, ax                      ; there (BH = the call, BL the attribute)
+    push word [cs:dos_dtaseg]
+    push word [cs:dos_dta]
+    sub sp, 60                      ; [sp] = "D:NAMEXXXX.EXT",0, [sp+16] the
+    mov di, sp                      ; find record, [sp+60] the program's DTA
+    lea ax, [di+16]
+    mov [cs:dos_dta], ax
+    mov [cs:dos_dtaseg], ss
+    push ss
+    pop es
+    push si
+    call .fspell
+    pop si
+    mov di, [cs:dos_dta]            ; DI = the find record from here on, and
+    mov cl, bl                      ; SI the FCB: the gate gives both back
+    and cx, 0x7F                    ; across every nested call. CX = the
+    push ss                         ; attribute, 0 unless extended
+    pop ds
+    mov dx, sp
+    cmp bh, 0x13
+    je .fodel
+    cmp bh, 0x17
+    je .foren
+    cmp bh, 0x16
+    je .foopen
+    cmp bh, 0x0F
+    je .foopen
+    mov ah, 0x4E                    ; 11h, 12h and 23h are a find
+    int 0x21
+    jc .foend
+    cmp bh, 0x12
+    jne .fo8
+    mov es, [bp]                    ; 12h: the walk again, and on from where
+    mov ax, [es:si+0x1C]            ; the last 11h/12h on this FCB left it
+    mov [di+DTA_ORD], ax
+    mov ah, 0x4F
+    int 0x21
+    jc .foend
+.fo8:
+    cmp bh, 0x23
+    jne .fook
+    mov ds, [bp]                    ; 23h: the size in RECORDS, a part one
+    mov cx, [si+0x0E]               ; counted, at the FCB's own record size -
+    or cx, cx                       ; 0 meaning 128, MEASURED
+    jnz .fz1
+    mov cl, 0x80
+.fz1:
+    mov ax, [ss:di+DTA_SIZE]
+    mov dx, [ss:di+DTA_SIZE+2]
+    dec cx
+    add ax, cx
+    adc dx, 0
+    inc cx
+    xchg ax, bx
+    xchg ax, dx
+    xor dx, dx
+    div cx
+    xchg ax, bx
+    div cx
+    mov [si+0x21], ax               ; THREE bytes at any record size: IBM DOS
+    mov [si+0x23], bl               ; 3.30 leaves +24h as it was
+    jmp short .fook
+.foopen:
+    cmp bh, 0x16                    ; 0Fh -> 3Dh, open read AND write, as an
+    mov ax, 0x3C02                  ; FCB is; 16h -> 3Ch, CX the attribute
+    adc ah, 0
+    int 0x21
+    jc .foend
+    mov ds, [bp]
+    xchg bx, ax
+    mov [si+0x18], bx               ; THE HANDLE, in DOS's reserved bytes
+    xor ax, ax
+    mov [si+0x0C], ax               ; current block 0, records of 128
+    mov word [si+0x0E], 128
+    mov [si+0x14], ax               ; the date and the time: this DOS's
+    mov [si+0x16], ax               ; directory has none to give (96.12.1)
+    mov ax, 0x4202                  ; the size, from the end. Nothing reads
+    xor cx, cx                      ; the position: every move seeks first
+    cwd
+    int 0x21
+    mov [si+0x10], ax
+    mov [si+0x12], dx
+.fook:
+    clc
+.foend:                             ; CF = refused; DS:SI may be anything
+    sbb al, al                      ; AL = FFh, or 0
+    mov ds, [bp]                    ; (SI is the FCB on every path here)
+    jnz .fo4
+    cmp byte [si], 0                ; the drive NAMED: 0 means the current
+    jne .fo6                        ; one, and DOS writes the one it means
+    mov al, [cs:dos_vol]
+    inc ax
+    mov [si], al
+    xor al, al
+.fo6:
+    mov bx, [ss:di+48]              ; BH = the call, BL the attribute
+    cmp bh, 0x11
+    je .fsconv
+    cmp bh, 0x12
+    je .fsconv
+.fo4:
+    add sp, 60
+    pop word [cs:dos_dta]
+    pop word [cs:dos_dtaseg]
+    pop cx                          ; (the call and the attribute)
+    pop cx
+    jmp .fcbret
+.fsconv:
+    ; DOS's FCB search leaves the drive and a DIRECTORY ENTRY in the DTA -
+    ; name 11, attribute, ten reserved, time, date, cluster 0, size - behind
+    ; FFh, five zeros and the attribute asked for when the FCB is extended
+    mov ax, [ss:di+DTA_ORD]         ; where the walk is, for the next 12h
+    mov [si+0x1C], ax
+    mov bh, [si]                    ; the drive
+    mov si, di
+    les di, [ss:si+44]              ; the program's DTA, banked above ours
+    push ss
+    pop ds
+    or bl, bl
+    jns .fs0
+    mov al, 0xFF
+    stosb
+    xor ax, ax
+    stosw
+    stosw
+    stosb
+    mov al, bl
+    and al, 0x7F
+    stosb
+.fs0:
+    mov al, bh
+    stosb
+    push si
+    add si, DTA_NAME
+    call .f11
+    pop si
+    mov al, [si+DTA_ATTR]
+    stosb
+    mov cx, 10
+    xor ax, ax
+    rep stosb
+    add si, DTA_TIME
+    movsw                           ; the time and the date
+    movsw
+    stosw                           ; cluster 0
+    movsw                           ; the size
+    movsw
+    jmp short .fo4                  ; AL = 0
+.fodel:
+    ; 13h: every file the name MATCHES, '?' and all - DOS's delete takes a
+    ; pattern where AH=41h takes a name. So: find the first match, remove it,
+    ; ask again from the top (a removal moves what a find-next would count);
+    ; one that will not go is stepped past with a find-next, so the walk ends
+    mov bl, 0xFF                    ; FFh until something is removed
+.fd1:
+    push cx
+    mov ah, 0x4E
+    int 0x21
+.fdhit:
+    pop cx
+    jc .fd3
+    push dx
+    call .fdname
+    mov ah, 0x41
+    int 0x21
+    pop dx
+    jc .fdnext
+    xor bx, bx
+    jmp short .fd1
+.fdnext:
+    push cx
+    mov ah, 0x4F
+    int 0x21
+    jmp short .fdhit
+.fd3:
+    add bl, 1                       ; CF = nothing removed (or renamed)
+.foend1:
+    jmp .foend
+.foren:
+    ; 17h: every file the old name (FCB+1) MATCHES, renamed to the new one at
+    ; FCB+11h - where a '?' keeps the old name's own letter, so FCBW?.TMP to
+    ; FCBV?.TMP renames FCBW1 to FCBV1. On the FCB's one drive, as DOS does;
+    ; a rename refused (the new name is there) ends it with FFh. The walk is
+    ; 4Eh/4Fh: a rename leaves the entry where it is, so it counts the same
+    mov bl, 0xFF
+    mov ah, 0x4E
+.frn1:
+    push cx
+    int 0x21
+    pop cx
+    jc .fd3
+    push cx
+    push si
+    push di
+    lea si, [di+DTA_NAME]           ; the old name, eleven letters at
+    sub di, 11                      ; [sp+5]...
+    call .f11
+    pop di
+    pop si
+    mov ds, [bp]
+    push si
+    mov al, [si]                    ; ...behind the FCB's drive at [sp+4]
+    mov [es:di-12], al
+    add si, 0x11
+    push di
+    sub di, 11
+    mov cx, 11
+.frm:
+    lodsb                           ; ...and the new name's letters over it,
+    cmp al, '?'                     ; but for a '?'
+    je .frq
+    mov [es:di], al
+.frq:
+    inc di
+    loop .frm
+    pop di
+    pop si
+    push si
+    push di
+    push ss
+    pop ds
+    lea si, [di-12]
+    sub di, 16
+    call .fspell                    ; "D:NEWNAME.EXT" at [sp], which spells
+    pop di                          ; into its own source from below and
+    pop si                          ; never overtakes it
+    pop cx
+    call .fdname                    ; DS:DX = the old name
+    push di
+    sub di, 16                      ; ES:DI = the new
+    mov ah, 0x56
+    int 0x21
+    pop di
+    jc .foend1                      ; refused: FFh, and no further
+    xor bx, bx
+    mov ah, 0x4F
+    jmp short .frn1
+.fdname:                            ; out DX = the find record's name, with
+    lea dx, [di+DTA_NAME]           ; the spelled name's drive in front of
+    cmp byte [di-15], ':'           ; it if that had one (over the size's top
+    jne .fdn1                       ; word, which nothing reads)
+    dec dx
+    dec dx
+    mov ax, [di-16]
+    mov [di+DTA_NAME-2], ax
+.fdn1:
+    ret
+.fspell:                            ; DS:SI = a drive byte and eleven letters
+    lodsb                           ; -> ES:DI "D:NAME.EXT",0, blanks dropped;
+    or al, al                       ; drive 0 is the current one, no letter
+    jz .fo1
+    add al, 'A' - 1
+    mov ah, ':'
+    stosw
+.fo1:
+    mov cl, 8
+    call .fcbcp
+    mov al, '.'
+    stosb
+    mov cl, 3
+    call .fcbcp
+    cmp byte [es:di-1], '.'         ; no extension: "NAME", not "NAME."
+    jne .fo2
+    dec di
+.fo2:
+    mov byte [es:di], 0
+    ret
+.f11:                               ; DS:SI "NAME.EXT",0 -> ES:DI, eleven
+    push di                         ; letters blank-padded; DI past them
+    mov cx, 11
+    mov al, ' '
+    rep stosb
+    pop di
+    push di
+.f1:
+    lodsb
+    or al, al
+    jz .f3
+    cmp al, '.'
+    jne .f2
+    pop di
+    push di
+    add di, 8
+    jmp short .f1
+.f2:
+    stosb
+    jmp short .f1
+.f3:
+    pop di
+    add di, 11
+    ret
+.fcbcl:
+    ; AH=10h: DS:DX = the FCB; out AL = 0, or FFh
+    push bx
+    push ax
+    call .fcbptr
+    mov bx, [si+0x18]
+    mov ah, 0x3E
+    int 0x21
+    sbb al, al
+    mov byte [si+0x19], 0xFF        ; the handle is no longer the FCB's: a
+                                    ; second close or a stale read answers
+                                    ; error 6 rather than reach the file the
+                                    ; number names next (96.56.1)
+.fcbret:                            ; AL = the answer, and the AH that was asked
+    pop bx
+    mov ah, bh
+    pop bx
+    jmp .ok
+.fcbrd:
+    ; AH=27h read, AH=28h write: CX = records, DS:DX = the FCB, its random
+    ; record at +21h, the data the DTA's (AH=1Ah). Out AL = 0 all of them, 1
+    ; end of file (read) or disk full (write), 3 a read's last record partial
+    ; and zero-filled; CX = the records moved, and the random record moved on
+    ; by that many, block and current with it (MEASURED, 96.56.3). A write of
+    ; 0 records sets the file's length there, which is AH=40h's CX = 0
+    ; (96.11.6.2) and so needs nothing of its own.
+    ;
+    ; AH=21h/22h and AH=14h/15h are ONE record through the same body (96.56.2,
+    ; 96.56.3): 21h/22h at the random record, which they do not move, and
+    ; 14h/15h at block x 128 + current, which they advance - the random
+    ; record banked at FCB+1Ch and given back. All four set block and current
+    ; from where they ended, and none touches CX. A write puts the file's
+    ; size in the FCB, as DOS keeps it there.
+    push bx
+    push ax
+    push cx                         ; the program's CX
+    cmp ah, 0x27
+    jae .fr0
+    mov cx, 1                       ; 14h, 15h, 21h, 22h: one record
+.fr0:
+    push cx                         ; the records asked
+    call .fcbptr
+    mov [si+0x1A], ah               ; the call, in DOS's reserved bytes
+    mov al, ah                      ; FCB+1Bh = 1 to READ, 0 to WRITE: each
+    cmp al, 0x16                    ; pair is a read and a write, and once
+    adc al, 0                       ; 14h/15h move up one the write is the
+    and al, 1                       ; EVEN one of each
+    mov [si+0x1B], al
+    cmp ah, 0x15
+    ja .frs
+    les ax, [si+0x21]               ; 14h/15h: the random record out of the
+    mov [si+0x1C], ax               ; way (FCB+1Ch..1Fh are DOS's and unused)
+    mov [si+0x1E], es
+    call .fcbcur
+    mov [si+0x21], ax
+    mov [si+0x23], dx
+.frs:
+    mov di, [si+0x0E]               ; DI = the record size, 0 meaning 128
+    or di, di
+    jnz .fr1
+    mov di, 128
+    mov [si+0x0E], di
+.fr1:
+    mov ax, [si+0x21]               ; CX:DX = record * size: four bytes of
+    mul di                          ; record below 64, three at or above it
+    push ax
+    mov cx, dx
+    mov ax, [si+0x23]
+    cmp di, 64
+    jb .fr2
+    xor ah, ah
+.fr2:
+    mul di
+    add cx, ax
+    pop dx
+    mov bx, [si+0x18]
+    mov ax, 0x4200
+    int 0x21
+    mov ax, [cs:dos_dta]            ; **THE DTA'S SEGMENT BOUNDS IT** (96.56.3):
+    neg ax                          ; AX = the bytes left in it, FFFFh at
+    jnz .frw0                       ; offset 0 - one call's most
+    dec ax
+.frw0:
+    xor dx, dx
+    div di                          ; AX = the records that fit
+    pop cx                          ; the records asked
+    cmp ax, cx
+    jb .frw1                        ; more than fit: AL = 2, and nothing moves
+    push cx
+    xchg ax, cx
+    mul di                          ; < 64KB now
+    xchg cx, ax                     ; CX = the bytes asked for
+    mov ah, 0x40                    ; 3Fh to read, 40h to write
+    sub ah, [si+0x1B]
+    push ds
+    lds dx, [cs:dos_dta]
+    int 0x21
+    jnc .fr3
+    xor ax, ax
+.fr3:
+    push ds
+    pop es
+    add dx, ax                      ; ES:DX = past what came
+    push dx
+    xor dx, dx
+    div di                          ; AX = whole records, DX = the partial
+    mov cx, di
+    sub cx, dx                      ; ...and what it lacks of a record
+    pop di
+    pop ds                          ; the FCB's segment again
+    pop bx                          ; the records asked
+    or dx, dx
+    jz .fr4
+    cmp byte [si+0x1B], 0
+    je .frfull                      ; a write is short only when the disk is
+    inc ax                          ; a partial is a record read, padded
+    push ax
+    xor al, al
+    rep stosb
+    pop ax
+    mov dl, 3
+    jmp short .fr5
+.frw1:
+    xor ax, ax                      ; no record moved, and AL = 2: a wrap in
+    mov dl, 2                       ; the DTA reads and writes nothing
+    jmp short .fr5
+.frfull:
+    xor dx, dx                      ; ...full, which is AL = 1
+.fr4:
+    cmp ax, bx
+    je .fr5                         ; DL = 0: all of them
+    inc dx                          ; DL = 1: the file ended
+.fr5:
+    cmp byte [si+0x1B], 0           ; a write: the file's size into the FCB,
+    jne .fr6                        ; from its end
+    push ax
+    push dx
+    mov bx, [si+0x18]
+    mov ax, 0x4202
+    xor cx, cx
+    cwd
+    int 0x21
+    mov [si+0x10], ax
+    mov [si+0x12], dx
+    pop dx
+    pop ax
+.fr6:
+    add [si+0x21], ax
+    adc word [si+0x23], 0
+    xchg cx, ax
+    mov al, dl
+    pop dx                          ; the program's CX
+    cmp byte [si+0x1A], 0x27
+    jae .fq1                        ; 27h/28h answer in CX
+    xchg cx, dx                     ; DX = 0 or 1 record moved
+    cmp byte [si+0x1A], 0x21
+    jb .fq1
+    sub [si+0x21], dx               ; 21h/22h: the random record stays put
+    sbb word [si+0x23], 0
+.fq1:
+    les bx, [si+0x21]               ; block and current from where it ended:
+    mov dx, es
+    mov [si+0x20], bl               ; current = record mod 128...
+    and byte [si+0x20], 0x7F
+    shl bx, 1                       ; ...block = record / 128
+    rcl dx, 1
+    mov bl, bh
+    mov bh, dl
+    mov [si+0x0C], bx
+    cmp byte [si+0x1A], 0x15
+    ja .fcbret
+    les bx, [si+0x1C]               ; 14h/15h: the random record given back
+    mov [si+0x21], bx
+    mov [si+0x23], es
+    jmp .fcbret
+.fcbsr:
+    ; AH=24h: the random record from the current block and record
+    push bx
+    push ax
+    call .fcbptr
+    call .fcbcur
+    mov [si+0x21], ax
+    mov [si+0x23], dx
+    xor al, al
+    jmp .fcbret
+.fcbcur:                            ; DX:AX = block x 128 + current record
+    mov ax, [si+0x0C]
+    xor dx, dx
+    mov dl, ah
+    mov ah, al
+    xor al, al
+    shr dx, 1
+    rcr ax, 1
+    or al, [si+0x20]
+    ret
+.fcbptr:                            ; out DS:SI = the FCB the program named,
+    mov ds, [bp]                    ; past an extended one's seven bytes; AL
+    mov si, [bp-8]                  ; = 0, or an extended FCB's attribute
+    mov al, 0                       ; with bit 7 set. AH is kept
+    cld                             ; (the program's DF is not ours)
+    cmp byte [si], 0xFF
+    jne .fp1
+    mov al, [si+6]
+    or al, 0x80
+    add si, 7
+.fp1:
+    ret
+.fcbcp:                             ; CL name bytes DS:SI -> ES:DI, no blanks
+    xor ch, ch
+.fc1:
+    lodsb
+    cmp al, ' '
+    je .fc2
+    stosb
+.fc2:
+    loop .fc1
+    ret
+.setvfy:
+    and al, 1                       ; AH=2Eh: AL = 0/1, kept for AH=54h to
+    mov [dos_vfy], al               ; give back. The write path has no
+    jmp .ok                         ; verify to switch: a flag, as DOS keeps
+.getvfy:
+    mov al, [dos_vfy]               ; AH=54h: out AL
+    jmp .ok
 .gettime:
     ; AH=2Ch: out CH = hours, CL = minutes, DH = seconds, DL = hundredths.
     call dos_date_roll
@@ -4467,8 +5794,10 @@ DOS_T21_N equ ($ - .t21) / 2        ; ...or .bad for a function we lack
     ; **AND AH=68h/6Ah, COMMIT FILE, IS THE SAME CALL** (SPEC.md 96.53):
     ; one window and one held stream on the machine, so committing one
     ; handle's writes and committing all of them are the same two steps.
+    push ax                         ; (AX comes back, AH above all: 96.56.3)
     call dos_fh_flush               ; ONE window, so this IS "flush everything"
     call dos_fh_cmall               ; ...and the held stream's FAT and entry
+    pop ax
     jmp .ok
 
 .ioctl:
@@ -4785,7 +6114,8 @@ dos_terminate:
     mov ax, [cs:dos_psv_ss]
     mov ss, ax
     mov ax, [cs:dos_psv_sp]
-    sub ax, 2
+    dec ax
+    dec ax
     mov sp, ax
     sti
     push cs
@@ -5056,14 +6386,7 @@ dos_trace_dump:
                                     ; in the directory the program was
                                     ; launched from
 .nopart:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 %endif                              ; KD_BACKEND
 
 dos_trace:
@@ -5310,7 +6633,12 @@ DBE_WSEQ    equ 46                  ; SI = name, ES:BX = bytes, CX = count
                                     ; (0 = commit the held stream), AL =
                                     ; WSEQF_*, DI = the token in and out
                                     ; (SPEC.md 18.4.9)
-DBE_NENT    equ 24
+DBE_FSOP    equ 48                  ; DX:CX = one operation's bytes, 0 = its
+                                    ; end (OSAPI_FS_OP, SPEC.md 12.8.10). A
+                                    ; host with no file widget refuses it -
+                                    ; kern_dos does - and it is advisory, so
+                                    ; the caller reads no answer
+DBE_NENT    equ 25
 
 ; --- THE HOST'S HOOKS (SPEC.md 96.44.3) -------------------------------------
 ; Where the CORE would otherwise have to know which host it is in. Each is a
@@ -5497,6 +6825,11 @@ dos_be_wseq:
     jmp dos_be_go
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
+dos_be_fsop:
+    mov word [dos_betgt], DBE_FSOP
+    jmp dos_be_go
+%endif                              ; DOS_EXTCORE
+%ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 dos_be_xcopy:
     mov word [dos_betgt], DBE_XCOPY
 %endif                              ; DOS_EXTCORE
@@ -5589,9 +6922,17 @@ dos_be_go:
 ; -----------------------------------------------------------------------------
 dos_hk_bind:
     push ax
+%ifdef DOS_WTAIL
+    mov word [dos_hkv + DHK_POLL], dos_hk_poll
+    WIN_ONLY                        ; the program's last screen and its INT
+    mov word [dos_hkv + DHK_SNAP], dos_snap ; 21h output are the CONSOLE's,
+    mov word [dos_hkv + DHK_TTY],  dos_hk_tty ; and a headless host has none:
+    WIN_END                         ; 0 = the ROM's teletype (DOS-HEADLESS 2)
+%else
     mov word [dos_hkv + DHK_SNAP], dos_snap
     mov word [dos_hkv + DHK_POLL], dos_hk_poll
     mov word [dos_hkv + DHK_TTY],  dos_hk_tty
+%endif
     mov word [dos_hkv + DHK_MOUSE], dos_hk_mouse
     mov word [dos_hkv + DHK_TXT],  dos_hk_txt
     mov word [dos_hkv + DHK_CLAIM], dos_hk_claim
@@ -5618,10 +6959,20 @@ dos_hk_free:
 
 ; --- dos_hk_poll - DHK_POLL: drain the packet driver if there is one ---------
 dos_hk_poll:
+%ifdef DOS_NETINLINE
     cmp byte [dos_pkt_raw], 0
     je .no
     call dos_pkt_poll
 .no:
+%elifdef DOS_NETPART
+    cmp word [dos_pkt_bseg], 0      ; the claim IS the code (SPEC.md 96.23.11):
+    je .no                          ; no claim, nothing to drain, and the
+    push ax                         ; part's own poll asks [dos_pkt_raw]
+    mov al, PN_D_POLL
+    call far [dos_pkt_door]
+    pop ax
+.no:
+%endif
     ret
 
 ; --- dos_hk_tty - DHK_TTY: the console, when the window is up (SPEC.md 96.33)-
@@ -5633,6 +6984,7 @@ dos_hk_poll:
 ; offset. MEASURED: a probe's `COUNT ` and `TERM ` labels vanished and their
 ; VALUES survived, because AH=09h was reading a program byte that happened to
 ; be 0 and AH=02h was reading ours.
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
 dos_hk_tty:
     cmp byte [cs:dos_inbr], 0
     jne .rom                        ; inside the bracket the ROM's teletype IS
@@ -5649,11 +7001,15 @@ dos_hk_tty:
                                     ; DIR row and TYPE of the prompt's
                                     ; (KERN-MEGA-PLAN 14.54)
     call con_write
+%ifdef DVW
+    mov byte [dvw_dirty], 1         ; the worker's tick posts the paint (DS
+                                    ; is ours from the push above)
+%endif
                                     ; IT DRAWS NOTHING HERE: a verb that
                                     ; printed a directory would take the gfx
                                     ; lock per character. dos_con_run spends
                                     ; the marks once, after the verb returned
-    cmp byte [cs:dos_fsxup], 0      ; **FULL SCREEN STREAMS A LINE AT A TIME**
+    cmp byte [dos_fsxup], 0         ; **FULL SCREEN STREAMS A LINE AT A TIME**
     je .nofs                        ; (SPEC.md 96.33.11): there the same paint
     cmp al, 10                      ; is a rep movsw of eighty words, so the
     jne .nofs                       ; argument that forbids it in a window does
@@ -5697,6 +7053,7 @@ dos_reloc:                          ; BX = the base it WAS at, DX = where it
 ; the machine where FSI describes the surface this bracket was given.
 ; `kern_dos` has no bracket and reads the BDA; this host has a bracket and
 ; reads its record. Two hosts, two bodies, one core (96.44.3).
+WIN_CODE_END
 dos_hk_txt:
     mov ax, [dos_fsi + FSI_SEG]
     or ax, ax
@@ -5753,6 +7110,13 @@ dos_hk_mouse:
 
     DOS_BETAB                       ; dos_betab: (apps/dos/dosbe.inc)
 
+%include "dosw.inc"                 ; the live window (SPEC.md 96.54)
+%include "doswr.inc"                ; ...and, parted, its resident half (96.54.9)
+; dos_hpop_N - the WINDOWED HOST's shared epilogue (SPEC.md 96.54.8): nine of
+; its routines ended in the same seven pops and a `ret`. The core has its own
+; two (dos_popa/dos_popb) - it is assembled apart and cannot name this one.
+    OS88_POPLADDER dos_hpop, ax, bx, cx, dx, si, di, es
+%include "doswm.inc"                ; ...and its mouse (SPEC.md 96.54.4)
 %endif                              ; KD_BACKEND
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
@@ -5764,6 +7128,7 @@ dos_hk_mouse:
 ; in:  SI = window ptr; the gfx lock is held
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
 dos_paint:
     push ax
     push bx
@@ -5772,6 +7137,9 @@ dos_paint:
     push si
     push di
 
+%ifdef DVW
+    call dos_wlabel                 ; the menu's mode mark (SPEC.md 96.54.10)
+%endif
     mov bx, si                      ; THE BAND FIRST, on every page: it is a
     call dos_con_geom               ; property of the WINDOW and not of the
                                     ; page, and a painter that asked for it
@@ -5779,16 +7147,28 @@ dos_paint:
                                     ; of them after a resize (SPEC.md 96.32)
     cmp byte [dos_page], DOS_PAGE_MAIN
     je .mainpage
-    mov bx, si                      ; --- a SETUP page: its body, then the
-    push bx                         ;     furniture every one of them shares
-    call dos_paint_set              ; ...and there is only the one now
-    pop bx
-    call dos_paint_furn
-    jmp .card                       ; ...and the About card over it, which is
-.mainpage:                          ; the window's and not the page's
+    mov bx, si                      ; --- a SETUP page
+%ifdef DOS_SETPART
+    mov al, SPD_PAINT               ; (the PART's, SPEC.md 96.32.2.3)
+    call dos_spdo
+    jnc .card                       ; ...and the About card over it, which is
+                                    ; the window's and not the page's
+    mov byte [dos_page], DOS_PAGE_MAIN  ; **A PAGE WHOSE CODE CANNOT BE HAD
+%else                               ; IS THE MAIN PAGE** - the toast said why
+    SPB_PAINT
+    jmp .card
+%endif
+.mainpage:
 
     cmp byte [dos_state], DST_READY  ; THE RE-KICK (SPEC.md 74.1): the kernel
+%ifdef DVW
+    je .kick                         ; (...and a run in the window: its wake
+    cmp byte [dvw_run], 0            ; draws what this expose's cut paint
+    je .nokick                       ; could not, SPEC.md 96.54.10)
+.kick:
+%else
     jne .nokick                      ; keeps at most one queued wake per window,
+%endif
     mov bx, si                       ; so this is free when one is already
     call OSAPI_WM_WAKE               ; waiting and is the difference between a
 .nokick:                             ; full ring costing a frame and costing
@@ -5814,10 +7194,10 @@ dos_paint:
     ; leaving it - con_scrollpaint would blit a screen that has just been drawn
     ; from the buffer and mark only the rows it vacated (telnet's te_screen
     ; carries the same pair and the same reason).
-    call con_markall
-    call con_rows_owed
-    call con_takescroll
-%endif
+    call con_takescroll             ; ...FIRST (SPEC.md 96.54.14): con_takerow
+    call con_markall                ; refuses a row while a debt stands, so
+    call con_rows_owed              ; the debt is dropped and then every row
+%endif                              ; drawn, which is the same screen
 .card:
     ; --- AND THE ABOUT CARD LAST, OVER WHICHEVER PAGE IT WAS (SPEC.md 96.51) -
     ; Both branches arrive here - the setup page by `jmp .card` above and the
@@ -5843,29 +7223,13 @@ dos_paint:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_line - one opaque run at BX, DX
-; in:  SI = NUL string, BX = x, DX = y
-; out: nothing; preserves all registers
-;
-; font_run and not a fill-then-letter pair: one pass draws the ground and the
-; glyphs, so the line is never momentarily blank (SPEC.md 6.1).
-; -----------------------------------------------------------------------------
-dos_line:
-    push ax
-    push cx
-    push dx
-    mov cx, bx
-    mov al, CBLACK
-    mov ah, CWHITE
-    call OSAPI_FONT_RUN
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_fmt_exit - stamp the exit code into dos_l2_ran
 ; in:  nothing; out: SI = the line
+;
+; THE EXIT REPORT IS THE TAIL'S (DOS-HEADLESS-PLAN 1.2's X bucket): this,
+; dos_err_line and the DER_* sentences have one caller, the console's
+; dos_con_ended, and a headless host says its end in a toast of its own
+; (dos_hend) - so 544 bytes a headless region never ran are not in it
 ; -----------------------------------------------------------------------------
 dos_fmt_exit:
     push ax
@@ -5902,10 +7266,21 @@ dos_err_line:
     xor ah, ah
     shl ax, 1
     mov bx, ax
-    mov si, [dos_errs + bx]
-    cmp byte [dos_err], DER_FSX     ; the unsupported-function case borrows the
-    jne .out                        ; refusal line and stamps the number, so
+    mov si, [dos_errs + bx]         ; AX = the code TWICE from here, AH = 0
+    cmp al, DER_FSX * 2             ; the unsupported-function case borrows the
+    jne .nofn                       ; refusal line and stamps the number, so
     call dos_fmt_fn                 ; "it asked for AH=3Dh" is on the glass
+.nofn:                              ; (AX preserved)
+%ifdef DVW
+    cmp al, DER_FIT * 2             ; **A WINDOW'S 128K IS NOT THE MACHINE**
+    jne .out                        ; (SPEC.md 96.54.2): the default cap was
+    cmp word [dos_memkb], 0         ; in force when there is no limit of the
+    jne .out                        ; user's and the cap is still DVW_DEFKB -
+    cmp word [dvw_cap], DVW_DEFKB   ; unraised (a .COM, a compressed file,
+    jne .out                        ; kern_small), the machine not being short
+    mov si, dos_e_wfit              ; (96.54.2.1). "Shut down the OS" is the
+                                    ; bracket's way out, not this one's
+%endif
 .out:
     pop bx
     pop ax
@@ -6070,10 +7445,10 @@ dos_swap:
 ; THE X IS 8-ALIGNED AND THAT IS NOT TIDINESS (SPEC.md 6.1). font_run's
 ; single-store fast path needs the pen on a multiple of 8; a spanning window's
 ; content origin already is one (11.95.2); so the centring margin is rounded
-; DOWN to a multiple of 8 rather than halved exactly. On VGA and CGA it is 0
-; and on Hercules's 720 it is 40, which is a multiple of 8 already - so the
-; rounding never costs a pixel on any adapter in this tree and is there for
-; the one that is not.
+; DOWN to a multiple of 8 rather than halved exactly. It is 0 on every
+; adapter in this tree - Hercules too, since its frame stopped spanning and
+; became snug round the band (SPEC.md 96.32.5) - and the margin is there for a
+; window a user or a display has made wider than the band.
 ; -----------------------------------------------------------------------------
 dos_con_geom:
     push ax
@@ -6102,8 +7477,8 @@ dos_con_geom:
     shl ax, cl                      ; ...and back to pixels, to centre it
     pop dx                          ; the height...
     pop cx                          ; ...and the width, both back
-    sub cx, ax                      ; CX = the slack: 0 on VGA and CGA, 80 on
-    shr cx, 1                       ; Hercules
+    sub cx, ax                      ; CX = the slack: 0 on every adapter
+    shr cx, 1                       ; (96.32.5), more on a wider window
     and cx, 0xFFF8                  ; **DOWN to a multiple of 8** (SPEC.md
     push cx                         ; 6.1), and the WHOLE word: a display wide
                                     ; enough to make the margin exceed 255
@@ -6361,14 +7736,7 @@ dos_path_make:
     call .sync
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 ; --- .sync - the FIELD, re-measured from the text just written -------------
 ; **INSIDE THE PROC AND NOT BESIDE ONE CALLER** (SPEC.md 96.33.10.1).
@@ -6456,7 +7824,8 @@ dos_pt_body:
     cmp al, 26
     jae .no
     mov [dos_tvol], al
-    add si, 2
+    inc si
+    inc si
     jmp short .havevol
 .novol:
     mov al, [dos_vol]
@@ -6642,75 +8011,6 @@ dos_keeph:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_sav_go - the Save Shortcut button was pressed
-; in:  BX = the window
-;
-; The kernel's Standard File dialog in SAVE mode (SPEC.md 38), with the
-; completion proc below. The DEFAULT NAME is the program's own with .LNK on
-; it, because that is what the user would type.
-; -----------------------------------------------------------------------------
-dos_sav_go:
-    push ax
-    push cx
-    push si
-    push di
-    call dos_lnk_build              ; **BUILT BEFORE THE DIALOG OPENS**, and
-    jc .out                         ; that is not an ordering preference: the
-    mov [dos_lend], cx              ; dialog NAVIGATES, so by the time its
-                                    ; completion runs the instance stands
-                                    ; wherever the user went - and the link's
-                                    ; WORKING_DIR would be that folder rather
-                                    ; than the program's. It read `\` before
-                                    ; this moved
-    call dos_sav_dfl                ; dos_wname = `NAME.LNK`
-    mov bx, [dos_win]               ; **BX IS THE WINDOW WE WANT TO HEAR BACK
-                                    ; ABOUT**, and leaving it out is a dialog
-                                    ; given a garbage pointer - which opens,
-                                    ; closes on Enter, and writes nothing
-    mov si, dos_wname
-    mov di, dos_sav_done
-    mov al, FDLG_SAVE
-    call OSAPI_FILE_DLG             ; CF=1 = one is already up, or no room -
-.out:                               ; and a refusal needs no report: the user
-    pop di                          ; pressed a button and nothing happened,
-    pop si                          ; which is what a busy dialog looks like
-    pop cx
-    pop ax
-    ret
-
-; --- dos_sav_dfl - `NAME.LNK` from dos_name, into dos_sbuf ------------------
-dos_sav_dfl:
-    push ax
-    push cx
-    push si
-    push di
-    mov si, dos_name
-    mov di, dos_wname
-    mov cx, 8
-.c:
-    mov al, [si]
-    or al, al
-    jz .ext
-    cmp al, '.'
-    je .ext
-    mov [di], al
-    inc si
-    inc di
-    dec cx
-    jnz .c
-.ext:
-    mov byte [di+0], '.'
-    mov byte [di+1], 'L'
-    mov byte [di+2], 'N'
-    mov byte [di+3], 'K'
-    mov byte [di+4], 0
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_sav_done - the dialog's completion (SPEC.md 38.6)
 ; in:  AL = the mode it ran in, SI = OUR window ptr, DI = the chosen name IN
 ;      KERNEL_SEG (ES points there); UI task, gfx lock HELD, the dialog window
@@ -6767,542 +8067,16 @@ dos_sav_done:
     mov si, [dos_win]
     call dos_paint                  ; the dialog's window was destroyed over
                                     ; ours and nothing else will put it back
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
-; dos_paint_furn - the setup area's title and its bottom row (SPEC.md 96.32.2)
-; in:  BX = the window, gfx lock held (every painter has it)
-; out: nothing; every register preserved
-;
-; ONE ROUTINE FOR EVERY SETUP PAGE, which is the point: `<`, `>`, Save Shortcut
-; and Return are in the same place whatever is above them, so the pointer does
-; not have to hunt and a third page costs a string rather than a layout. The
-; TITLE is what says which page is up - a page that looked the same as its
-; neighbour but behaved differently would be the worst of the three shapes.
-; -----------------------------------------------------------------------------
-dos_paint_furn:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bx
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov bx, ax
-    add bx, DOS_SETPAD
-    add dx, DOS_TITY
-    mov si, dos_l_tset              ; THE page's name, there being one
-    mov ax, (CWHITE << 8) | CBLACK
-    mov cx, bx
-    call OSAPI_FONT_RUN
-    pop bx
-
-    push bx                         ; ...and THE COMMAND, beside it (SPEC.md
-    call dos_cmd_place              ; 96.32.2.2): the same box the main page's
-    mov si, dos_pln                 ; bar carries, on the row that names the
-    call os88line_draw              ; page, because what every option below
-    pop bx                          ; applies to is the command
-
-    call dos_furn_rects             ; the two rects, both from one arithmetic
-    push bx
-    mov bx, dos_btrec
-    mov al, DOS_BT_SAV
-    call os88ui_btn
-    mov al, DOS_BT_RET
-    call os88ui_btn
-    pop bx
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
-; dos_furn_rects - the bottom row's two buttons (SPEC.md 96.32.2)
-; in:  BX = the window
-; out: dos_srect and dos_trect filled; every register preserved
-;
-; dos_bar_rects' shape one page down, and for its reason: the two words are
-; RIGHT-anchored, and both share a row
-; whose y comes from the content BOX rather than a constant - so the row sits
-; on the bottom of a CGA window and of a VGA one without a per-adapter number.
-; -----------------------------------------------------------------------------
-dos_furn_rects:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    mov si, dos_btrec               ; the Setup page's pair, aimed here for
-    mov word [si+OS88UI_BT_RECTS], dos_trect
-    mov word [si+OS88UI_BT_LABELS], dos_bt_setl
-    mov word [si+OS88UI_BT_N], 2    ; dos_bar_rects' reason
-    call OSAPI_WM_GEOM              ; CX = content width, DX = its height
-    jc .out
-    mov di, cx
-    sub dx, DOS_BTNH + DOS_FURNB    ; DX = the row's top, from the BOTTOM
-    push dx
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    pop cx
-    add dx, cx                      ; ...and now it is a screen row
-    mov bx, dx
-    add bx, DOS_BTNH - 1            ; BX = its last line, rects being inclusive
-
-    mov si, dos_trect               ; --- 'Return', right-anchored ---
-    mov cx, ax
-    add cx, di
-    sub cx, DOS_SETPAD + DOS_RETW
-    mov [si+0], cx
-    mov [si+2], dx
-    mov [si+6], bx
-    push cx
-    add cx, DOS_RETW - 1
-    mov [si+4], cx
-    pop cx
-    mov si, dos_srect               ; --- ...and 'Save Shortcut' beside it ---
-    sub cx, DOS_BARGAP + DOS_SAVW
-    mov [si+0], cx
-    mov [si+2], dx
-    mov [si+6], bx
-    add cx, DOS_SAVW - 1
-    mov [si+4], cx
-.out:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_paint_set - the Setup page's body (SPEC.md 96.32.2)
-; in:  BX = the window, gfx lock held
-; out: CF=0; every register preserved
-;
-; TWO HALVES. The left is what a RUN needs - the arguments and one environment
-; row - and the right is §96.25's memory block, which used to be a page and is
-; three lines and a control. The env box here IS Environment's first row: one
-; buffer, two rects, so there is no mirroring to keep in step and no way for
-; the user to type into the one nothing reads.
-; -----------------------------------------------------------------------------
-dos_paint_set:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push bx
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    mov cx, ax
-    add cx, DOS_SETPAD
-    add dx, DOS_BODYY
-    mov ax, (CWHITE << 8) | CBLACK
-    push dx
-    mov si, dos_l_args
-    call OSAPI_FONT_RUN             ; 'Arguments:'
-    pop dx
-    push dx
-    add dx, DOS_SLBL2
-    mov ax, (CWHITE << 8) | CBLACK
-    mov si, dos_l_envb
-    call OSAPI_FONT_RUN             ; 'Environment'
-    pop dx
-    pop bx
-
-    push bx                         ; ...and the two boxes under them
-    call dos_fld_place
-    mov si, dos_ln
-    call os88line_draw
-    pop bx
-    push bx                         ; ...and EVERY environment row under it
-    xor cx, cx                      ; (SPEC.md 96.32.2.1), where there used to
-.erow:                              ; be one and a page button to reach the
-    push cx                         ; other three
-    call dos_erow
-    call os88line_draw
-    pop cx
-    inc cx
-    cmp cx, DOS_ENVN
-    jb .erow
-    pop bx
-
-    call dos_paint_mem              ; ...and the right half, which is §96.25's
-                                    ; block drawn at an origin of its own
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_mck_place - the three check boxes and the drop-down's figures, put where
-;                 the window is now (SPEC.md 96.36.7)
-; in:  BX = the window; every register preserved
-;
-; ONE PLACER FOR ALL THREE, because they share an origin and a width and are
-; recomputed on every paint and every click for dos_mfld_place's reason. It
-; also reads the two CLASS FIGURES - what the hard disks and the network are
-; holding - and banks them, because the label prints one and dos_mem_arena
-; adds the same one, and two reads could answer differently across a driver
-; being unloaded between them (SPEC.md 47 rule 5).
-; -----------------------------------------------------------------------------
-dos_mck_place:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di                         ; dos_mem_num2 patches THROUGH DI, and the
-                                    ; click path banks nothing in it any more -
-                                    ; but the contract says every register, and
-                                    ; a placer that quietly kept one would be
-                                    ; the next silent defect of exactly this
-                                    ; shape (SPEC.md 96.36.4)
-    call dos_mem_org
-    mov al, DRVC_DISK               ; WHAT EACH CLASS IS HOLDING, once
-    call dos_classk                 ; (SPEC.md 51.12)
-    mov [dos_mhkb], ax
-    mov al, DRVC_NET
-    call dos_classk
-    mov [dos_mnkb], ax
-    mov al, DRVC_SOUND              ; ...AND THE ONE WITH NO BOX (SPEC.md
-    call dos_classk                 ; 96.36.7.2): dos_drv_take unmounts the
-    mov [dos_msnk], ax              ; sound driver on EVERY arm and the user is
-                                    ; never asked, because a DOS program cannot
-                                    ; reach it - so it is a term in the figure
-                                    ; and not a control
-
-    ; --- ...AND THE CAPTIONS, WHICH ARE THE OTHER QUESTION (SPEC.md 51.12.1) -
-    ; `(Up to NNK)` is about the CLASS and not about this machine's state, so
-    ; it is a BUILD-TIME constant and the answer is the same on every machine.
-    ; Fed the figures above it read `(Up to  0K)` on a machine with nothing of
-    ; that class mounted - a true number that reads exactly like a page whose
-    ; arithmetic has broken, and the state DOS is MOST often opened in,
-    ; since a user shutting the OS down for a DOS program tends not to have a
-    ; hard disk or a card in the first place.
-    mov ax, DRVM_CEIL_DISK          ; ...and the ceiling is a CONSTANT and not
-    mov di, dos_mhddk               ; a call (SPEC.md 51.12.1): the slot used
-    call dos_mem_num2               ; to walk a table of build-time figures to
-    mov ax, DRVM_CEIL_NET           ; add them up, and the SDK carries the sum
-    mov di, dos_mnetk               ; that walk was producing
-    call dos_mem_num2
-    mov si, dos_mhdd                ; ...then the three rects, one pitch apart
-    mov ax, dos_l_mhdd
-    mov dx, DOS_MHDDY
-    call dos_mck1
-    mov si, dos_mnet
-    mov ax, dos_l_mnet
-    mov dx, DOS_MNETY
-    call dos_mck1
-    mov si, dos_mmou
-    mov ax, dos_l_mmou
-    mov dx, DOS_MMOUY
-    call dos_mck1
-%ifdef DOS_MEGA
-    mov si, dos_mhma
-    mov ax, dos_l_mhma
-    mov dx, DOS_MHMAY
-    call dos_mck1
-    mov si, dos_msav
-    mov ax, dos_l_msav
-    mov dx, DOS_MSAVY
-    call dos_mck1
+; --- THE SETUP PAGE, INLINE (SPEC.md 96.32.2.3) -------------------------------
+; Where the page is a PART (DOS_SETPART) this file names none of it: the
+; -DDOS_SETEMIT assembly includes dosset.inc at the END, in a section of its
+; own, and the Makefile cuts it off. Everywhere else it is here, as it was.
+WIN_CODE_END
+%ifndef DOS_SETPART
+%include "dosset.inc"
 %endif
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; dos_classk - one class's KB, with the refusal folded into the figure
-; in:  AL = a DRVC_*
-; out: AX = the KB, 0 where the slot refused; clobbers flags
-;
-; Three call sites wanted the same two instructions after the slot. There
-; used to be a third instruction and two more sites: the slot's answer once
-; carried `DRVM_PLUS` in bit 15 and once had a CEILING form, and both went
-; when it stopped quoting drv_memk (SPEC.md 51.12.2, 51.12.1) - what it
-; weighs now is the heap, in plain kilobytes.
-dos_classk:
-    call OSAPI_DRV_CLASSK
-    jnc .ok
-    xor ax, ax                      ; CF = nothing of that class - the figure
-.ok:                                ; is 0 and not whatever AX was left as
-    ret
-
-; dos_mck1 - one box's rect and label (internal)
-; in:  SI = the record, AX = its label, DX = the row offset from [dos_my]
-; out: nothing; AX, DX and SI preserved
-dos_mck1:
-    push ax
-    push cx
-    push dx
-    mov [si+OS88UI_CK_LABEL], ax
-    mov cx, [dos_mx]
-    add cx, DOS_MSUBX
-    mov [si+OS88UI_CK_RECT+0], cx
-    add cx, OS88UI_CKBOX + OS88UI_CKGAP + 8 * DOS_MCKW
-    dec cx                          ; ...x2 INCLUSIVE, os88ui_rad's rule
-    mov [si+OS88UI_CK_RECT+4], cx
-    add dx, [dos_my]
-    mov [si+OS88UI_CK_RECT+2], dx
-    add dx, OS88UI_CKBOX
-    dec dx
-    mov [si+OS88UI_CK_RECT+6], dx
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_mck_di - DI = OS88UI_DIS when the box at BX names a class nothing has
-;              mounted (SPEC.md 47 rule 5, 96.36.7)
-; in:  BX = dos_mhdd or dos_mnet
-; out: DI; every other register preserved
-;
-; **GREY A FACT.** A box that would unmount a driver the machine has not got
-; is offering to give back memory nobody is holding, and OSAPI_DRV_CLASSK's CF
-; is that fact - banked in the figure by dos_mck_place, so this is a compare
-; and not a second call. The box is forced ON with it: an unticked box means
-; "take it out" and there is nothing to take out, so an off box would be
-; describing an action rather than a state.
-; -----------------------------------------------------------------------------
-dos_mck_di:
-    push ax
-    mov di, OS88UI_DIS              ; **AND A SUBSECTION BELONGS TO ITS ARM**
-    cmp bx, dos_mmou                ; (SPEC.md 96.36.9): a box whose arm is not
-    jne .arm0                       ; the pick cannot be used, so it is greyed
-%ifdef DOS_MEGA
-    xor di, di                      ; ...BUT kern_mega's page draws no radio
-    jmp short .out                  ; (KERN-MEGA-DOS-PLAN 12.1 item 1): every
-                                    ; launch is the whole machine and
-                                    ; KDLF_NOMOUSE is honoured on it, while
-                                    ; [dos_keepc] stays arm 0 for the drivers'
-                                    ; rows - so the arm test greyed this box for
-                                    ; good (KERN-MEGA-PLAN 14.43's finding)
-%endif
-    cmp byte [dos_keepc], DOS_MEM_WHOLE ; - and a press on it falls through to
-    jne .out                        ; the radio, which picks that arm
-    xor di, di                      ; (96.36.4). Two clicks, and the first one
-    jmp short .out                  ; says what the second will mean
-.arm0:
-    cmp byte [dos_keepc], DOS_MEM_IN
-    jne .out
-    xor di, di                      ; **AND LIVE WHATEVER IS MOUNTED** (SPEC.md
-.out:                               ; 96.36.7.1). It used to grey a box whose
-    pop ax                          ; class had nothing loaded, and force it
-    ret                             ; ON, on the ground that an unticked box
-                                    ; would describe an action rather than a
-                                    ; state. That reads the box as a REPORT
-                                    ; about this machine, and it is a REQUEST
-                                    ; about the program: `include these if
-                                    ; available`. A .LNK outlives the setup it
-                                    ; was saved under, so a machine with no
-                                    ; card is exactly when the user needs to
-                                    ; be able to say what they want on the
-                                    ; machine that has one.
-                                    ;
-                                    ; The arithmetic needs nothing: the figure
-                                    ; a clear box adds is the class's own, and
-                                    ; a class with nothing loaded reports ZERO
-                                    ; - so an empty class moves the estimate by
-                                    ; 0 whichever way its box is set, which is
-                                    ; the only honest answer about the machine
-                                    ; in front of you. `Up to` in the label is
-                                    ; what says the tick is about another one
-
-; -----------------------------------------------------------------------------
-; dos_mck_hit - test the box at BX against the banked press, if it is live
-; in:  BX = one of the three records; [dos_mpx]/[dos_mpy] = the point
-; out: CF = 0 it was HIT AND TOGGLED (the box redrew itself), CF = 1 it was
-;      not ours - greyed, or the point is elsewhere
-;
-; It reloads the point rather than taking it in CX/DX because that is the one
-; thing every caller here gets wrong: `dos_mck_di` answers in DI and
-; `os88ui_drpress` zeroes it, so a point banked in a register does not survive
-; the control before this one (SPEC.md 96.36.4).
-; -----------------------------------------------------------------------------
-dos_mck_hit:
-    push cx
-    push dx
-    push di
-    call dos_mck_di
-    or di, di
-    pop di
-    jnz .no                     ; greyed: nothing to give, and the press
-    mov cx, [dos_mpx]           ; belongs to the arm under it (SPEC.md 96.36.9)
-    mov dx, [dos_mpy]
-    call os88ui_chkhit
-    jmp short .out
-.no:
-    stc
-.out:
-    pop dx
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_drop_place - the disk cache's box, and WHICH LIST IS IN IT (96.36.6)
-; in:  BX = the window; every register preserved
-;
-; **THE LIST IS THE ARM'S**, and the pick is remembered per arm: arm 1 has the
-; whole rung ladder because `kd_giveback` sheds one at a time, and arm 0 has
-; Auto and Off because the kernel's claim is taken at a mount and is either
-; standing or shed. Swapping the list without swapping the pick would leave
-; SEL indexing past the short one, which draws a caption out of whatever
-; follows the table.
-; -----------------------------------------------------------------------------
-dos_drop_place:
-    push ax
-    push cx
-    push dx
-    push si
-    call dos_mem_org
-    mov si, dos_mdr
-    mov word [si+OS88UI_DR_WIN], bx
-    mov word [si+OS88UI_DR_ITEMS], dos_ca_items     ; ONE LIST ON BOTH ARMS
-    mov word [si+OS88UI_DR_N], DOS_CA_N             ; (96.36.6): since SPEC.md
-                                    ; 18.95.8 arm 0 can hold a WIDTH too, so
-                                    ; there is nothing to swap, nothing to park
-                                    ; and no second length to clamp against
-    mov ax, [dos_mx]
-    add ax, DOS_MCACX
-    mov [si+OS88UI_DR_RECT+0], ax
-    add ax, DOS_MCACW
-    dec ax
-    mov [si+OS88UI_DR_RECT+4], ax
-    mov dx, [dos_my]
-    add dx, DOS_MCACY
-    mov [si+OS88UI_DR_RECT+2], dx
-    add dx, DOS_MCACH
-    dec dx
-    mov [si+OS88UI_DR_RECT+6], dx
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_mfld_place - put the memory limit field where the window is now
-; in:  BX = the window; every register preserved
-;
-; dos_fld_place's shape and for its reason: os88line's rect is in SCREEN
-; coordinates, so a banked one puts the caret one drag behind.
-; -----------------------------------------------------------------------------
-dos_mfld_place:
-    push ax
-    push cx
-    push dx
-    push si
-    call dos_mem_org                ; the BLOCK's origin (SPEC.md 96.32.2),
-    mov ax, [dos_mx]                ; never the content edge
-    mov dx, [dos_my]
-    mov si, dos_mln
-    mov cx, ax
-    add cx, DOS_MSUBX + DOS_MFLDX   ; ...indented into arm 0's subsection
-    mov [si+LN_X1], cx
-    add cx, DOS_MFLDW
-    mov [si+LN_X2], cx
-    mov cx, dx
-    add cx, DOS_MFLDY
-    mov [si+LN_Y1], cx
-    add cx, DOS_FLDH
-    mov [si+LN_Y2], cx
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_mrad_place - put the radio group's record where the window is now
-; in:  BX = the window; every register preserved
-;
-; The RECT IS THE WHOLE CLICKABLE AREA - every ring, gap and label of every
-; arm - which is os88ui_rad's own contract, so a press on the words counts and
-; the row is worked out by dividing the press's y by the pitch. Recomputed
-; from the content origin on every paint and every click for dos_fld_place's
-; reason: the rect is in SCREEN coordinates and a window moves.
-;
-; THE OTHER FOUR FIELDS ARE SET HERE TOO, not once at entry, for the same
-; reason the rect is: this runs before every paint and before every click, so
-; a record filled in one place cannot disagree with itself. The exception is
-; OS88UI_RD_SEL, which IS [dos_keepc] (SPEC.md 96.36) and is the user's.
-;
-; DOS_MEM_WHOLE's greying is DI's bit 2 and comes from dos_mem_whole - one
-; predicate, three consumers (SPEC.md 47 rule 4), of which this is the one
-; that makes the ring and the label dither.
-; -----------------------------------------------------------------------------
-dos_mrad_place:
-    push ax
-    push cx
-    push dx
-    push si
-    push di
-    call dos_mem_org                ; the BLOCK's origin, as above
-    mov ax, [dos_mx]
-    mov dx, [dos_my]
-    xor di, di
-    call dos_mem_whole              ; CF = 1: the third arm cannot be picked.
-    jnc .live                       ; **IT ANSWERS IN SI**, so it is asked
-    mov di, 1 << DOS_MEM_WHOLE      ; BEFORE the record is pointed at and not
-.live:                              ; after - the reason it returns and the
-    mov si, dos_mrad                ; record live in the same register, and
-                                    ; the wrong order writes the rect into the
-                                    ; LABEL and draws the group at 0,0
-    mov word [si+OS88UI_RD_ITEMS], dos_mem_items
-    mov word [si+OS88UI_RD_N], DOS_MEM_N
-    mov word [si+OS88UI_RD_PITCH], DOS_MRADP
-    mov [si+OS88UI_RD_DIS], di
-    mov cx, ax
-    mov [si+0], cx
-    add cx, OS88UI_RDBOX + OS88UI_RDGAP + 8 * DOS_MEMI_N
-    mov [si+4], cx                  ; ...x2 INCLUSIVE, so the longest label's
-    dec word [si+4]                 ; last cell is inside and the next is not
-    mov cx, dx
-    add cx, DOS_MRADY
-    mov [si+2], cx
-    mov cx, dx                      ; **AND y2 IS NOT y1 + N*PITCH** (SPEC.md
-    add cx, DOS_MRADB               ; 96.36.4): two rows of the pitch would
-    dec cx                          ; reach past the block, and os88ui_radhit
-    mov [si+6], cx                  ; tests the rect FIRST and divides
-                                    ; afterwards. It used to stop one line
-                                    ; above the disk cache's box, which was
-                                    ; below it; the dial is at the TOP now
-                                    ; (96.36.6.3) so there is nothing left to
-                                    ; stop short of and this is simply the
-                                    ; block's own last line. It still has to
-                                    ; clear arm 1's band MIDDLE - y1 + pitch +
-                                    ; pitch/2 - which is what every kd* row
-                                    ; clicks that arm at
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop ax
-    ret
-
 ; -----------------------------------------------------------------------------
 ; dos_mem_whole - may the program have the WHOLE machine? (SPEC.md 96.36.1)
 ; out: CF = 1 it may not, and SI = the reason to put on the glass
@@ -7341,7 +8115,9 @@ dos_mem_whole:
     ret
 .no:
 %endif
-    mov si, dos_l_memw3
+    WIN_ONLY                        ; the reason is the Setup page's, and a
+    mov si, dos_l_memw3             ; headless host has none (CF is the
+    WIN_END                         ; answer dos_mem_fix reads)
     stc
     ret
 
@@ -7433,7 +8209,10 @@ dos_handoff:
     mov di, dos_kdh
     mov word [di+KDH_MAGIC], KDH_SIG & 0xFFFF
     mov word [di+KDH_MAGIC+2], KDH_SIG >> 16
-    mov byte [di+KDH_PAD], 0
+    mov al, [dos_hlprow + OP_R_KIND]    ; the FORMAT the stub decodes with
+    mov [di+KDH_FMT], al            ; (SPEC.md 96.44.18): the loader wrote the
+                                    ; table's OP_T_FMT into HELP's kind byte,
+                                    ; and one file has one format
     mov al, [dos_pkgvol]
     mov [di+KDH_VOL], al
     mov ax, [dos_pkgdir]
@@ -7456,7 +8235,7 @@ dos_handoff:
 %else
  %define DOS_KDR dos_kdrow
 %endif
-    mov ax, [DOS_KDR + OP_R_OFF]    ; the part's first file SECTOR, which is
+    mov ax, [DOS_KDR + OP_R_OFF]    ; the part's first file PARAGRAPH, which is
     mov [di+KDH_POFF], ax           ; what os88pkg.py wrote there
     mov ax, [DOS_KDR + OP_R_ZKB]    ; ...and on an OP_COMP row this word is the
     mov [di+KDH_PLEN], ax           ; PACKED length (SPEC.md 20.12.7)
@@ -7597,9 +8376,10 @@ dos_wholeask:
     call dos_hasfixed
     jnc .no                     ; there is one: the session comes back (96.41)
                                 ; and there is nothing to warn about
-    push ax
-    push bx
-    push si
+    WIN_ONLY                    ; the question is a WINDOW's dialog, and a
+    push ax                     ; headless shortcut saved with arm 3 IS the
+    push bx                     ; confirmation: the user ticked both boxes
+    push si                     ; and saved (DOS-HEADLESS-PLAN 5)
     push di
     call OSAPI_GFX_LOCK
     mov al, OS88UI_ADANGER
@@ -7612,15 +8392,25 @@ dos_wholeask:
     pop si
     pop bx
     pop ax
-    jc .no                      ; REFUSED - one was already up and has been
-                                ; raised. Falling through to the launch there
-                                ; would run the program behind its own question
+%ifdef DOS_WTAIL
+    jnc .hold                   ; CF = 1: REFUSED - one was already up and has
+    WIN_END                     ; been raised. Falling through to the launch
+.no:                            ; there would run the program behind its own
+    clc                         ; question. (A headless host lands here too:
+    ret                         ; its shortcut is the confirmation)
+.hold:
+    stc
+    ret
+%else                           ; (the same, in the order every other build
+    jc .no                      ; has always assembled it)
+    WIN_END
 .hold:
     stc
     ret
 .no:
     clc
     ret
+%endif
 
 ; dos_wholedone - the alert's answer. AL = 0 Cancel, 1 Proceed, or
 ;                 OS88UI_ACANCEL for a dismissal; the lock is NOT held
@@ -7841,256 +8631,6 @@ dos_mem_fix:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_mem_row - redraw the arena line alone, after a control has moved it
-; in:  BX = the window; the gfx lock is held. Every register preserved
-;
-; ONE ROW AND NOT THE BLOCK (PERFORMANCE.md's first rule): a check box redraws
-; its own mark and a drop-down its own caption, so the only other pixels that
-; changed are these eleven cells - and the line is an opaque font_run, so it
-; needs no ground laid under it (SPEC.md 13.14.6).
-; -----------------------------------------------------------------------------
-dos_mem_row:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call dos_mem_arena
-    mov di, dos_marn
-    call dos_mem_num
-    mov bx, [dos_mx]
-    mov dx, [dos_my]
-    add dx, DOS_MARNY
-    mov si, dos_l_marn
-    call dos_line
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_mem_arena - THE ONE FIGURE, as the controls under it stand (96.36.3)
-; out: AX = the KB this page's settings would hand the program; flags
-;
-; It replaces the two numbers the page used to be a choice BETWEEN, because
-; the page is no longer a choice between two numbers: it is an arm, three
-; boxes, a dial and a cap, and what the user wants to know is what all of them
-; together come to. So it is read on every paint and after every control that
-; can move it - one row, live.
-;
-; **ARM 0's TERMS ARE EXACT AND ARM 1's ARE ESTIMATES**, which is what the '~'
-; in front of the row is about. Inside the OS the kernel answers the same
-; question `dos_run` asks, so what the page shows is what the program gets;
-; the driver boxes add figures that are build-time constants (SPEC.md 51.12)
-; and a driver's real claim can be a rung lower. Shutting the OS down cannot
-; be asked of anything - the machine it describes does not exist yet - so it
-; is conventional memory less what `kern_dos` is known to keep.
-;
-; **AND THE SAME QUESTION IS THE WHAT-IF, NOT PLAIN AVAIL** (SPEC.md 96.25.1.1).
-; dos_run posts OSAPI_MEM_COMPACT and claims on the wake, so what it
-; hands the program is a heap that has been packed with OUR OWN REGION IN THE
-; PASS - which is exactly the question the what-if answers and exactly
-; the one plain avail does not, a package being pinned by the act of asking
-; (SPEC.md 66.4.3). It made no difference for a release because this region
-; could not move at all: it is PART 0 of a re-homed DOS.O88 and the carve was
-; refused its declaration, so the excuse bought nothing and the two slots
-; agreed by accident. SPEC.md 66.6.1.2 unpinned it and the accident ended -
-; measured on a 360KB desktop, the page said 442K/474K and the launch handed
-; out 445K/477K, under-promising by the 3KB the region's own move recovers.
-;
-; The what-if is documented as a measurement rather than a promise, and for
-; THIS package it is the promise: the post is what makes it true, and dos_run
-; sends one whenever a pass would add anything (SPEC.md 66.4.3.2).
-; -----------------------------------------------------------------------------
-dos_mem_arena:
-    push bx
-    push cx
-    push dx
-    push di
-    push es
-    cmp byte [dos_keepc], DOS_MEM_WHOLE
-    je .whole
-
-    ; --- ARM 0: the kernel's own answer, plus what the boxes would hand back --
-    mov ax, DOS_PG_FLOOR            ; AH = MEMC_WHATIF, AL = the level, which is
-    call OSAPI_MEM_COMPACT          ; the floor dos_run will set - ON EVERY RUNG
-                                    ; of the dial now (SPEC.md 18.95.8), so this
-                                    ; no longer picks between two levels. The
-                                    ; what-if reads its level from AL rather
-                                    ; than from the task's floor the way
-                                    ; OSAPI_MEM_AVAIL does
-    call dos_cache_give             ; ...PLUS what the dial hands back out of
-    add ax, cx                      ; the cache, which is the one term the
-                                    ; what-if cannot see: it was asked at a
-                                    ; floor that counts the window as KEPT, and
-                                    ; the dial is about to narrow it. Auto
-                                    ; answers 0 here, which is right - it
-                                    ; commands nothing
-    ; ...AND AN UNTICKED BOX IS A DRIVER THAT WILL NOT BE THERE (96.36.7) -
-    ; **ASKED OF THE ROUTINE THE LAUNCH ITSELF ASKS** (SPEC.md 96.36.7.3).
-    ; This used to read the two check boxes directly, which is the same
-    ; question one step short of the answer: `dos_drv_take` passed a mask of
-    ; ZERO for a cycle, so every term added here was a promise nothing kept.
-    ; One reader means the figure and the sweep cannot disagree again, and it
-    ; carries the guard with it - a class the launch will keep adds nothing,
-    ; whatever its box says. A class nothing has mounted reports 0 KB either
-    ; way (96.36.7.1).
-    call dos_spmask                 ; BL = what the launch will really let go
-    test bl, 1 << DRVC_DISK
-    jz .nohdd
-    add ax, [dos_mhkb]
-.nohdd:
-    test bl, 1 << DRVC_NET
-    jz .snd
-    add ax, [dos_mnkb]
-.snd:
-    add ax, [dos_msnk]              ; ...AND THE SOUND DRIVER, UNCONDITIONALLY
-                                    ; (SPEC.md 96.36.7.2). It has no box
-                                    ; because there is nothing to ask: a DOS
-                                    ; program cannot reach it either way, so
-                                    ; dos_drv_take unmounts it on every arm and
-                                    ; every path. The what-if above is asked
-                                    ; while it is still MOUNTED, so without
-                                    ; this line the page under-reported by the
-                                    ; whole of it on any machine with a card,
-                                    ; silently.
-                                    ;
-                                    ; IT IS A FLOOR. Measured card against
-                                    ; bare, the launch delivers the SAME 443KB
-                                    ; either way - so what comes back is 48KB
-                                    ; where drv_memk says 34, the other 14
-                                    ; being the MERGE the unmount unlocks
-                                    ; (docs/plans/HEAP-UNPIN-PLAN.md 2.0). No
-                                    ; constant can carry that, so the residual
-                                    ; stays under-reported - which is the safe
-                                    ; direction, and 48 under became 14
-    ; ...AND THE PACKET DRIVER'S BUFFERS COME OUT OF IT (SPEC.md 96.23.7.1).
-    ; dos_pkt_bufs claims them BEFORE the what-if above was ever asked, out of
-    ; the same heap, so on a machine with a wire the row promised three
-    ; kilobytes the program could never be handed. It is the same reader the
-    ; claim uses, which is what stops the two disagreeing again - and it
-    ; answers 0 on a machine with no wire and on one whose card the Network
-    ; box has just told the launch to let go.
-    push ax
-    call dos_pkt_want               ; CX = the KB, or CF = 1 for none
-    pop ax
-    jc .cap
-    cmp ax, cx                      ; ...and never BELOW zero: `.cap` clamps
-    jbe .none                       ; against the user's ceiling and has no
-    sub ax, cx                      ; floor, so an underflow here would print a
-    jmp short .cap                  ; 65,000K row on a machine too tight to run
-.none:                              ; DOS at all
-    xor ax, ax
-    jmp short .cap
-                                    ; ...and the LIMIT is arm 0's too, which
-                                    ; is why the other arm jumps past it:
-                                    ; `dos_lbfill` fills KDL_CAP from the BDA
-                                    ; and never from [dos_memkb], so a cap
-                                    ; shown on arm 1 would be a promise the
-                                    ; launch does not keep (SPEC.md 96.36.7)
-
-    ; --- ARM 1: conventional memory, less what kern_dos is known to keep ------
-    ; Every term is a constant this build knows, which is the only instrument
-    ; there is: the machine being described has no kernel in it, so nothing
-    ; can be asked. SK_KERN + SK_HEAP is everything from KERNEL_SEG up, and
-    ; DOS_LOWKB is what sits below it - the IVT, the BDA and the boot area.
-.whole:
-    push ds
-    pop es
-    mov di, dos_skbuf
-    call OSAPI_SYS_KB
-    mov ax, [dos_skbuf + SK_KERN]
-    add ax, [dos_skbuf + SK_HEAP]
-    add ax, DOS_LOWKB
-%ifndef DOS_MEGA
-    sub ax, DOS_KDKB                ; ...less kern_dos's own resident span
-%else
-    sub ax, DOS_KDKB_HMA            ; ...less kern_dos's own resident span,
-    cmp byte [dos_mhma + OS88UI_CK_ON], 0   ; which on kern_mega is the HMA
-    jne .kdhma                      ; arm's or the LOW one's (96.40.9.2)
-    sub ax, DOS_KDKB_LOW - DOS_KDKB_HMA
-.kdhma:
-%endif
-    sub ax, DSH_CPKB                ; ...and the buffer COPY and TYPE share
-    call dos_cache_kb               ; ...and the rung the dial is asking for
-    sub ax, cx
-    jmp short .out
-.cap:
-    mov cx, [dos_memkb]             ; ...and the user's own ceiling, which is
-    jcxz .out                       ; the one term that is neither estimate nor
-    cmp ax, cx                      ; measurement: it is a decision
-    jbe .out
-    mov ax, cx
-.out:
-    pop es
-    pop di
-    pop dx
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_cache_kb - what the dial is asking the cache to cost, in KB
-; out: CX = the KB; AX and every other register preserved
-;
-; `(runs * 9 + 1) >> 1` is `dsk_rah_want`'s own arithmetic and `kd_rahkb`'s,
-; mirrored here for the same reason those two mirror each other: a figure on
-; the glass that disagrees with the claim is worse than no figure.
-; -----------------------------------------------------------------------------
-dos_cache_kb:
-    push ax
-    push bx
-    mov bl, [dos_cache]
-    xor bh, bh
-    mov al, [bx + dos_ca_runs]      ; the ladder, one byte a row
-    xor ah, ah
-    call dos_rah_kb
-    pop bx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_rah_kb - ...and the same sum for a width that is not the dial's
-; in:  AX = chunks
-; out: CX = the KB they cost; every other register preserved
-; -----------------------------------------------------------------------------
-dos_rah_kb:
-    push bx
-    mov bx, ax
-    mov cx, ax
-    shl cx, 1
-    shl cx, 1
-    shl cx, 1                       ; CX = runs * 8 (cpu 8086: no shl by an
-    add cx, bx                      ; immediate other than 1)...
-    inc cx
-    shr cx, 1                       ; ...and KB = ceil(runs * 4.5)
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_cache_ask - what the KERNEL is holding, in chunks (SPEC.md 18.95.8)
-; out: CF = 0 with AX = the width held now, 0 = none; CF = 1 = no such slot
-;      (a kernel older than 18.95.8), AX = 0. Every other register preserved
-;
-; `DSK_RAH_AUTO` is the sentinel that means *no ceiling of mine*, which is the
-; truth outside a launch - DOS has commanded nothing - so ASKING IS NOT A
-; SIDE EFFECT and the slot needs no read-only spelling. Where a previous launch
-; left the cache shed it takes it BACK, which is the resting state every figure
-; on this page is supposed to describe.
-; -----------------------------------------------------------------------------
-dos_cache_ask:
-    mov al, DSK_RAH_AUTO
-    call OSAPI_DSK_CACHE
-    jnc .out
-    xor ax, ax
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_cache_arm - hand the dial to the kernel (SPEC.md 18.95.8)
 ; preserves every register; the flags are NOT preserved
 ;
@@ -8130,248 +8670,13 @@ dos_cache_free:
     pop ax
     ret
 
-; -----------------------------------------------------------------------------
-; dos_cache_give - the KB the dial is going to hand back out of the cache
-; out: CX = the KB, 0 = none; every other register preserved
-;
-; The one term arm 0's estimate cannot get from the what-if. `OSAPI_MEM_COMPACT`
-; is asked at `DOS_PG_FLOOR`, which counts the read-ahead window as KEPT - and
-; that is right, because the dial usually keeps some of it. What the dial gives
-; up is the difference between the two widths, and it is computed as two KB
-; figures rather than one width: `ceil(a * 4.5) - ceil(b * 4.5)` is not
-; `ceil((a - b) * 4.5)` when one of them is odd (7 and 2 agree at 23, 2 and 1
-; disagree at 4 against 5), and a figure that is 1 KB over is a promise the
-; claim does not keep.
-; -----------------------------------------------------------------------------
-dos_cache_give:
-    push ax
-    push bx
-    push dx
-    xor cx, cx
-    cmp byte [dos_cache], DOS_CA_AUTO
-    je .out                         ; Auto commands nothing, so nothing moves
-    call dos_cache_ask              ; AX = what is held now...
-    call dos_rah_kb
-    mov dx, cx                      ; DX = what it costs
-    mov bl, [dos_cache]
-    xor bh, bh
-    mov al, [bx + dos_ca_runs]      ; ...and what the dial leaves standing
-    xor ah, ah
-    call dos_rah_kb
-    sub dx, cx
-    mov cx, dx
-    jnc .out
-    xor cx, cx                      ; a dial ASKING FOR MORE than is held frees
-.out:                               ; nothing - the kernel's own two bounds are
-    pop dx                          ; what held it down and this cannot lift
-    pop bx                          ; them (SPEC.md 18.95.8)
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_paint_mem - the memory page (SPEC.md 96.25)
-; in:  BX = the window; the gfx lock is held, as every W_PAINT's is
-;
-; NO GROUND FILL (SPEC.md 13.14.6), dos_paint_env's reason exactly: every line
-; is an opaque font_run, an os88line or a control that draws its own ground.
-; -----------------------------------------------------------------------------
-; -----------------------------------------------------------------------------
-; dos_mem_org - the memory block's top-left, into [dos_mx]/[dos_my]
-; in:  BX = the window; every register preserved
-;
-; **IT IS THE SETUP PAGE'S RIGHT HALF NOW** (SPEC.md 96.32.2), and this is the
-; whole of what moving it cost: the block already painted from a banked origin
-; because the heading, the figures, the field and the check box all had to
-; agree on one, so giving that origin a different answer moves the lot. The
-; two placers ask for it rather than computing from the content edge, which is
-; what they did when the block had a page to itself.
-; -----------------------------------------------------------------------------
-dos_mem_org:
-    push ax
-    push cx
-    push dx
-    call OSAPI_WM_GEOM              ; CX = content width
-    jc .out
-    shr cx, 1                       ; ...and the block lives in the right half
-    push cx
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    pop cx
-    add ax, cx
-    add ax, DOS_SETPAD
-    mov [dos_mx], ax
-    add dx, DOS_BODYY
-    mov [dos_my], dx
-.out:
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-dos_paint_mem:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    call dos_mem_org                ; [dos_mx]/[dos_my] = the block's top-left
-
-    ; **THE FIGURES BEFORE THE FIGURE THEY ARE TERMS OF** (SPEC.md 96.36.3.1).
-    ; dos_mck_place reads the three class words the arena is a sum of, and it
-    ; DRAWS NOTHING - it is rects and literals - so it sat two blocks below,
-    ; where the boxes it places are. That made the FIRST paint of a fresh
-    ; window compute the arena from the bss zeros the loader left, so the
-    ; sound term was missing from it and from nothing else; the next recompute
-    ; - a click, the dial, a keystroke - had them, and the figure moved with
-    ; the user having changed nothing. Reported from the field as `433K, then
-    ; 467K after going back in`.
-    push bx
-    call dos_mck_place              ; all three boxes, and their figures
-    pop bx
-
-    push bx                         ; **THE ARENA, AND IT IS ONE LINE NOW**
-    call dos_mem_arena              ; (SPEC.md 96.36.3): AX = the estimate this
-    mov di, dos_marn                ; page's own controls add up to, patched
-    call dos_mem_num                ; into the run it is drawn as
-    mov bx, [dos_mx]
-    mov dx, [dos_my]
-    add dx, DOS_MARNY
-    mov si, dos_l_marn
-    call dos_line
-    pop bx
-
-    push bx                         ; ...and the choice itself, FIRST of the
-%ifdef DOS_MEGA
-    mov bx, [dos_mx]                ; **ON kern_mega THERE IS NO CHOICE**
-    mov dx, [dos_my]                ; (KERN-MEGA-DOS-PLAN 12.1 item 1): one
-    add dx, DOS_MRADY               ; line saying what will happen, where the
-    mov si, dos_l_mpark             ; radio stood, and no control to click
-    call dos_line
-%else
-    call dos_mrad_place             ; controls because its subsections are the
-    mov bx, dos_mrad                ; ground the rest of them stand on
-    xor di, di
-    call os88ui_rad
-%endif
-    pop bx
-
-    ; --- ARM 0's subsection: the two drivers, and the limit ------------------
-    push bx                         ; ...placed at the top, with the figures
-    mov bx, dos_mhdd
-    call dos_mck_di                 ; DI = OS88UI_DIS when this one is dead
-    call os88ui_chk
-    mov bx, dos_mnet
-    call dos_mck_di
-    call os88ui_chk
-    pop bx
-
-    ; --- the limit: its box, its label and its unit, all three together -----
-    ; **AND ALL THREE GREY WITH THE ARM** (SPEC.md 96.36.10.2). It is arm 0's
-    ; control exactly as the two driver boxes above it are, and the click path
-    ; has always known that - `.notck` refuses the press on any other arm and
-    ; lets it fall through to the radio - but the DRAWING did not, so the field
-    ; sat there black and typeable on an arm that ignores it. 47 rule 2 is why
-    ; the three are one bracket: half a control greyed is worse than none.
-    push bx
-    mov byte [dos_mln+LN_DIS], 0
-    cmp byte [dos_keepc], DOS_MEM_IN
-    je .lim
-    mov byte [dos_mln+LN_DIS], 1    ; the frame takes the pen below instead of
-    stc                             ; forcing black, and no caret is drawn
-    call OSAPI_GFX_PEN
-.lim:
-    call dos_mfld_place             ; THE BOX FIRST, because it is the only one
-    mov si, dos_mln                 ; of the three that reads [gfx_color] - the
-    call os88line_draw              ; other two are opaque font_run pairs with
-    mov bx, [dos_mx]                ; their colours in AL/AH, and take their
-    add bx, DOS_MSUBX               ; grey from [gfx_dis] alone (font_ink)
-    mov dx, [dos_my]
-    add dx, DOS_MFLDY + 3
-    mov si, dos_l_meml
-    call dos_line
-    mov bx, [dos_mx]                ; ...and the UNIT, hard against the box
-    add bx, DOS_MSUBX + DOS_MFLDX + DOS_MFLDW + DOS_MFLDKX
-    mov dx, [dos_my]
-    add dx, DOS_MFLDY + 3
-    mov si, dos_l_memk
-    call dos_line
-    clc                             ; ...and the pen back at once, whichever
-    call OSAPI_GFX_PEN              ; arm it was: the lock is held for the
-    pop bx                          ; whole page and whatever paints next
-                                    ; would inherit it (the `.why` caption
-                                    ; below states the same rule)
-
-    ; --- ARM 1's: the mouse box, OR why the arm cannot be picked -------------
-    ; ONE ROW, TWO THINGS, and they never want it at once (SPEC.md 96.36.8):
-    ; an arm that is greyed is not offering its option either.
-    push bx
-    call dos_mem_whole              ; (SPEC.md 47 rule 3): consumer two of the
-    jc .why                         ; one predicate
-    mov bx, dos_mmou
-    call dos_mck_di                 ; greyed while arm 0 is the pick (96.36.9)
-    call os88ui_chk
-%ifdef DOS_MEGA
-    mov bx, dos_mhma                ; ...and kern_mega's HMA box, which has no
-    xor di, di                      ; arm to belong to and nothing to grey on:
-    call os88ui_chk                 ; this DOS.O88 runs only in protected mode,
-                                    ; where both kern_dos images can run
-    call dos_msav_di                ; ...and the save box, greyed where no
-    mov bx, dos_msav                ; fixed disk could hold the image
-    call os88ui_chk                 ; (SPEC.md 47: a fact, hb_pick's)
-%endif
-    jmp short .nowhy
-.why:
-    mov bx, [dos_mx]                ; a caption explaining a control that is
-    add bx, DOS_MSUBX               ; not disabled is noise, so this is drawn
-    mov dx, [dos_my]                ; only when the arm really is
-    add dx, DOS_MMOUY + 3
-    stc                             ; **IN THE DISABLED PEN** (SPEC.md 47 rule
-    call OSAPI_GFX_PEN              ; 2, 96.36.1): it belongs to the row above
-    call dos_line                   ; it. Drawn solid it is the HEAVIEST text
-    clc                             ; on the block and sits at the labels' own
-    call OSAPI_GFX_PEN              ; indent, so it reads as a THIRD arm that
-.nowhy:                             ; is live - which is rule 2's confusion one
-    pop bx                          ; level out. And the pen goes back at once:
-                                    ; gfx_unlock clears the flag but the lock
-                                    ; is held for the whole page, so whatever
-                                    ; paints after this would inherit it
-
-    ; --- ...and the disk cache, which belongs to neither ---------------------
-    push bx
-    mov bx, [dos_mx]
-    mov dx, [dos_my]
-    add dx, DOS_MCACY + 3
-    mov si, dos_l_memc
-    call dos_line
-    pop bx
-    push bx
-    call dos_drop_place             ; the list is the ARM's (SPEC.md 96.36.6)
-    mov bx, dos_mdr
-    xor di, di
-    call os88ui_drop
-    pop bx
-
-    pop di                          ; **NO PAGE BUTTON HERE.** The setup area's
-                                    ; furniture - the title, the arrows, Save
-                                    ; Shortcut and Return - is drawn once by
-                                    ; dos_paint_furn for whichever page is up,
-                                    ; so a page draws only its own body
-                                    ; (SPEC.md 96.32.2)
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-
 ; in:  AX = 0..65535, DI -> five bytes inside a literal; clobbers nothing
 ;
 ; Into the LITERAL rather than into a buffer, which is dos_fmt_exit's shape
 ; one line along: the line is drawn by one opaque font_run and a number
 ; assembled anywhere else would need a second store to get there.
 ; -----------------------------------------------------------------------------
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
 dos_mem_num:
     mov cx, 5                       ; the arena's field: five digits, which is
     jmp short dos_mem_numn          ; every KB figure a machine under 1MB has
@@ -8516,290 +8821,6 @@ dos_mem_put:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_click_mem - a press on the memory page
-; in:  BX = the window, CX = x, DX = y
-; -----------------------------------------------------------------------------
-dos_click_mem:
-    push ax
-    push si
-    push di
-    mov [dos_mpx], cx               ; **THE POINT GOES IN THE IMAGE AND NOT IN
-    mov [dos_mpy], dx               ; A REGISTER** (SPEC.md 96.36.4): five
-                                    ; controls are tested with it now, and two
-                                    ; of the library calls between them do not
-                                    ; preserve DI
-
-    ; --- THE DROP-DOWN FIRST, and then the boxes (SPEC.md 96.36.4) ----------
-    ; A pitch here is a SUBSECTION, so the radio's own rect covers everything
-    ; between the two headings - which is where the boxes are. The order is
-    ; the fix and not a hack: os88ui's controls all answer "was this mine",
-    ; so the INNERMOST one asks first and whatever no control claims falls
-    ; through to the arm it is standing in.
-    push bx
-    call dos_drop_place
-    mov bx, dos_mdr
-    call os88ui_drpress             ; AH = 1 SPENT here, AL = the new pick or
-    pop bx                          ; 0FFh, CF = 1 the save-under was REFUSED
-    jc .repaint                     ; **A PICK IS AL, AND ONLY AL** (SPEC.md
-                                    ; 13.14.1). CF=1 is one case and it is not
-                                    ; this one - the bank was refused, so the
-                                    ; write-back never happened and the whole
-                                    ; half is owed; `wd_drrep` states the same
-                                    ; rule in as many words. And AH=1 means
-                                    ; SPENT, which an OPENING press is too. So
-                                    ; the pick is AL != 0FFh and nothing else:
-    cmp al, 0FFh                    ; testing CF or AH reads a pick as an open
-    je .nopick                      ; and leaves the figure above STANDING at
-    call dos_mem_row                ; the last value - which is what shipped,
-                                    ; and which the field reported as `changing
-                                    ; the disk cache does not change the
-                                    ; estimate` (96.36.6.2). The BOX repaints
-                                    ; either way - os88ui_drbox runs on the
-                                    ; CF=0 path - so the caption and the
-                                    ; caption's consequence disagreed, which is
-                                    ; the shape that reads as a dead control
-.nopick:
-    or ah, ah
-    jz .boxes
-    call dos_defocus
-    jmp .out
-.boxes:
-    push bx                         ; ...then the three check boxes, of which
-    call dos_mck_place              ; only the arm's own are live
-    mov bx, dos_mhdd
-    call dos_mck_hit                ; a greyed box is not offered, which is
-    jnc .ckhit                      ; SPEC.md 47 rule 6 - and here it means the
-    mov bx, dos_mnet                ; press belongs to the ARM under it
-    call dos_mck_hit
-    jnc .ckhit
-    call dos_mem_whole              ; arm 1's box is not offered while the arm
-    jc .notck                       ; itself is greyed - the row is carrying
-    mov bx, dos_mmou                ; the REASON there (96.36.8)
-    call dos_mck_hit
-%ifdef DOS_MEGA
-    jnc .ckhit
-    push cx                         ; ...and the HMA box (96.40.9.2), live
-    push dx                         ; whenever the page is
-    mov bx, dos_mhma
-    mov cx, [dos_mpx]
-    mov dx, [dos_mpy]
-    call os88ui_chkhit
-    jnc .hmahit
-    push di
-    call dos_msav_di                ; ...and the save box, not offered greyed
-    or di, di                       ; (47 rule 6)
-    pop di
-    stc
-    jnz .hmahit
-    mov bx, dos_msav
-    call os88ui_chkhit
-.hmahit:
-    pop dx
-    pop cx
-%endif
-    jc .notck
-.ckhit:
-    pop bx                          ; the box redrew itself, but the ARENA row
-    call dos_mem_row                ; above it has just moved (96.36.3)
-    jmp short .out
-.notck:
-    pop bx
-    cmp byte [dos_keepc], DOS_MEM_IN
-    jne .notfld                     ; ...THEN THE LIMIT, which is arm 0's own
-                                    ; (SPEC.md 96.36.9) and is INSIDE the
-                                    ; radio's rect like the boxes above it -
-                                    ; so it asks before the arm does, or a
-                                    ; press on it picks the arm it is already
-                                    ; in and never reaches the caret
-    call dos_mfld_place
-    mov si, dos_mln
-    mov cx, [dos_mpx]
-    mov dx, [dos_mpy]
-    call os88line_hit
-    jc .notfld
-    call dos_defocus_but            ; ...and a field keeping the caret while
-    cmp byte [si+LN_FOCUS], 0       ; another control is worked is a caret the
-    jne .move                       ; user cannot account for
-    mov byte [si+LN_FOCUS], 1
-    call os88line_draw
-    jmp short .out
-.move:
-    mov cx, [dos_mpx]
-    mov dx, [dos_mpy]
-    call dos_caret_to               ; ...and the BAR follows it (96.32.4)
-    jmp short .out
-
-.notfld:
-    mov cx, [dos_mpx]
-    mov dx, [dos_mpy]
-%ifdef DOS_MEGA
-    jmp short .away                 ; no radio on kern_mega (12.1 item 1), so
-                                    ; nothing here took it: REFUSE it, or the
-                                    ; arguments box and the environment rows
-                                    ; beside this block never see a press
-                                    ; (KERN-MEGA-PLAN 14.77)
-%endif
-    call dos_mrad_place             ; ...AND THE ARM LAST, which is what
-    push bx                         ; anything inside a subsection that no
-    mov bx, dos_mrad                ; control of its own claimed belongs to.
-    call os88ui_radhit              ; os88ui_radhit takes the point in CX/DX,
-    pop bx                          ; moves the record's own SEL word and
-    jc .away                        ; redraws THE TWO DOTS that changed - not
-    jz .repaint                     ; the group and not the page (13.17.4).
-    call dos_defocus                ; **TEST ZF BEFORE ANYTHING ELSE IS
-    jmp short .out                  ; CALLED**: dos_defocus clobbers the flags,
-                                    ; and reading its answer instead of
-                                    ; radhit's is a pick that moves and a block
-                                    ; that does not repaint. A greyed arm is
-                                    ; swallowed here (CF=0, ZF=0), which is
-                                    ; SPEC.md 47 rule 6: the control already
-                                    ; said why. **A REAL CHANGE REPAINTS THE
-                                    ; BLOCK**, because the two subsections
-                                    ; under it and the cache's own LIST are
-                                    ; the arm's (96.36.6)
-.repaint:
-    call dos_defocus
-    call dos_paint_mem              ; the whole right half, under the lock the
-    jmp short .out                  ; handler already holds
-.away:
-    ; The POINT is still in CX/DX for dos_fld_hit, which tests the two boxes
-    ; beside this block with it - and os88ui_radhit DOES carry os88ui_bhit's
-    ; "every register preserved", which the check box it replaced did not, so
-    ; the point survives a miss without being banked first.
-    pop di                          ; **IT REFUSES WHAT IT DID NOT USE** now
-    pop si                          ; (SPEC.md 96.32.2): this block shares the
-    pop ax                          ; Setup page with two more boxes, so a
-    stc                             ; click outside its own two controls is
-    ret                             ; theirs to test - where it used to be the
-                                    ; whole page and could defocus on sight
-.out:
-    pop di
-    pop si
-    pop ax
-    clc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_fld_place - put the arguments field where the window is now
-; in:  BX = the window; out: nothing, every register preserved
-;
-; The rect is recomputed from the CONTENT origin on every paint rather than
-; banked, because a window moves and os88line's rect is in SCREEN coordinates
-; (its LN_X1 comment says so). Banking it would put the caret one drag behind.
-; -----------------------------------------------------------------------------
-dos_fld_place:
-    mov si, dos_ln
-    push dx
-    mov dx, DOS_SFLD1
-    call dos_setbox
-    pop dx
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_cmd_place - the COMMAND box, on the Setup page's TITLE row (SPEC.md
-;                 96.32.2.2)
-; in:  BX = the window
-; out: dos_pln's rect; SI is clobbered, every other register preserved
-;
-; **IT IS THE SAME BLOCK the main page's top bar places** (96.32.1) and not a
-; second one: one `os88line` record, one buffer, so the two rects are two VIEWS
-; of the command and there is nothing to mirror. `dos_senv_place` makes the
-; same trade one control along, and for the same reason - whichever page is up
-; placed it last, which is exactly what a hit test wants.
-;
-; It sits beside the page's own name rather than in either column, because the
-; command is what all the setup below APPLIES to: it is the header, not a
-; field. So it spans everything the name does not.
-; -----------------------------------------------------------------------------
-dos_cmd_place:
-    push ax
-    push cx
-    push dx
-    call OSAPI_WM_GEOM              ; CX = content width
-    jc .out
-    push cx
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    pop cx
-    mov si, dos_pln
-    add cx, ax                      ; CX = the content's RIGHT edge, before AX
-    add ax, DOS_CMDX                ; is spent on the left one
-    mov [si+LN_X1], ax
-    sub cx, DOS_SETPAD + 1
-    mov [si+LN_X2], cx
-    add dx, DOS_CMDY
-    mov [si+LN_Y1], dx
-    add dx, DOS_FLDH
-    mov [si+LN_Y2], dx
-.out:
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_senv_place - ...and the environment box beside it, on the SAME page
-; in:  BX = the window; every register preserved
-;
-; IT IS Environment's FIRST ROW (SPEC.md 96.32.2) - dos_eln, not a block of
-; its own - so the two rects address one buffer and there is nothing to
-; mirror. dos_erow places the same block for the other page, and whichever
-; page is up placed it last, which is exactly what a hit test wants.
-; -----------------------------------------------------------------------------
-dos_senv_place:
-    push cx
-    push si
-    xor cx, cx
-.row:
-    call dos_erow
-    inc cx
-    cmp cx, DOS_ENVN
-    jb .row
-    pop si
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_setbox - put the block at SI in the Setup page's LEFT column, DX rows
-;              down from the body top
-; in:  BX = the window, SI = an os88line block, DX = the row offset
-; out: the block's rect; SI and every other register preserved
-;
-; THE COLUMN IS HALF THE CONTENT and the content is 640 or 720, so a box here
-; is 304 or 344 px - 38 or 43 cells - against the 256 it had when the whole
-; window was 288 wide. Computed rather than a constant for that reason: the
-; number that was right for one window is wrong for all three.
-; -----------------------------------------------------------------------------
-dos_setbox:
-    push ax
-    push cx
-    push dx
-    push di
-    mov di, dx                      ; DI = the row offset, across the calls
-    call OSAPI_WM_GEOM              ; CX = content width
-    jc .out
-    shr cx, 1                       ; ...the left half of it
-    sub cx, DOS_SETPAD * 2
-    push cx
-    call OSAPI_WM_CONTENT           ; AX = content left, DX = content top
-    pop cx
-    mov ax, ax
-    add ax, DOS_SETPAD
-    mov [si+LN_X1], ax
-    add ax, cx
-    mov [si+LN_X2], ax
-    add dx, DOS_BODYY
-    add dx, di
-    mov [si+LN_Y1], dx
-    add dx, DOS_FLDH
-    mov [si+LN_Y2], dx
-.out:
-    pop di
-    pop dx
-    pop cx
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_key - W_ONKEY. The field owns a keystroke it can use; everything else
 ; comes back here (os88line_key's CF is that split).
 ; in:  AL = ascii, AH = scan, SI = the window
@@ -8818,6 +8839,28 @@ dos_key:
     ; box either. CF = 1 from here means it was ours.
     call dos_abdismiss
     jc .done
+%ifdef DVW_SPLIT
+    cmp byte [dvw_run], 0           ; **A RUNNING PROGRAM OWNS THE KEYS**, and
+    je .nodvw                       ; what it does with them - the ring, the
+    call hent_dvw_key               ; frozen test, Alt+Enter's post - is the
+    jmp .done                       ; PART's (SPEC.md 96.54.9): its cells
+.nodvw:                             ; decide it. CF=0 (.done's clc)
+%elifdef DVW
+    cmp byte [dvw_run], 0           ; **A RUNNING PROGRAM OWNS THE KEYS**
+    je .nodvw                       ; (SPEC.md 96.54): into its ring, which
+    cmp ax, KSC_ENTER << 8          ; its INT 16h drains - but ALT+ENTER is
+    jne .dvkey                      ; the full screen (96.54.1), for a running
+    mov byte [dvw_fsreq], 1         ; program and a frozen one alike, entered
+    call OSAPI_WM_WAKE              ; from the wake: the bracket wants the
+    jmp short .dvtook               ; lock free and this holds it. BX = SI =
+.dvkey:                             ; the window, since the entry's `mov bx,
+    cmp byte [dvw_frz], 0           ; si`. A frozen program takes no keys
+    jne .dvtook
+    call dvw_kput
+.dvtook:
+    jmp .done                       ; CF=0, the key is consumed (.done's clc)
+.nodvw:
+%endif
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
     ; --- ALT+ENTER IS FULL SCREEN, ABOVE EVERYTHING (SPEC.md 96.33.5.1) -----
     ; AX = 0x1C00 is the kernel's synthesised keystroke (SPEC.md 9.7.1) - no
@@ -8890,7 +8933,12 @@ dos_key:
     cmp si, dos_mln                  ; ...AND THE LIMIT MOVES THE FIGURE ABOVE
     jne .done                        ; IT (SPEC.md 96.36.10). Every other field
     call dos_mem_parse               ; on this page redraws itself and nothing
-    call dos_mem_row                 ; else; this one is a TERM of the arena
+%ifdef DOS_SETPART                  ; else; this one is a TERM of the arena
+    mov al, SPD_ROW
+    call dos_spdo
+%else
+    call dos_mem_row
+%endif
                                      ; row, and its value was reaching
                                      ; [dos_memkb] only at dos_mem_take, whose
                                      ; four callers are all leaving the page or
@@ -8919,18 +8967,18 @@ dos_key:
                                      ; the dosargs row drives; Enter on a line
                                      ; the user has typed may not silently
                                      ; re-launch the last program instead
-    cmp byte [dos_state], DST_RAN
-    je .again
-    cmp byte [dos_state], DST_ERR
-    je .again
+    cmp byte [dos_state], DST_RAN    ; RAN, ERR or HELD (96.21.9): a held
+    jb .console                      ; launch's Enter on an empty line is the
+    cmp byte [dos_state], DST_HELD   ; start it was spared
+    jbe .again
     jmp short .console               ; ...and with nothing to re-run it is the
                                      ; prompt's again, which is a fresh line
                                      ; and what DOS does with a bare Enter
 .rerun:
     cmp byte [dos_state], DST_RAN    ; only from a program that has FINISHED -
-    je .again                        ; DST_READY is one already queued and a
-    cmp byte [dos_state], DST_ERR    ; second wake would run it twice
-    jne .no
+    jb .no                           ; DST_READY is one already queued and a
+    cmp byte [dos_state], DST_HELD   ; second wake would run it twice - or
+    ja .no                           ; one held at its launch (96.21.9)
 .again:
     mov byte [dos_state], DST_READY
     mov bx, [dos_win]
@@ -8998,9 +9046,16 @@ dos_click:
 
     ; --- THE SETUP PAGE: its own controls, the buttons having had the press --
 .setup:
-    call dos_click_mem              ; the memory block's field and its radio
-    jnc .out                        ; CF=1 = none of those, so it is the
-    call dos_fld_hit                ; arguments box or an environment row
+%ifdef DOS_SETPART
+    mov al, SPD_CLICK               ; every control the page has, the
+    call dos_spdo                   ; part's (SPEC.md 96.32.2.3)
+%else
+    SPB_CLICK .wl
+%endif
+.wl:
+%ifdef DVW
+    call dos_wlabel                 ; the box, the arm or `Close when done`
+%endif                              ; may have moved (SPEC.md 96.54.10)
     jmp .out
 
     ; --- one field, hit-tested ----------------------------------------------
@@ -9105,9 +9160,7 @@ dos_onup:
     jne .setup
     cmp al, DOS_BT_ENV
     jne .run
-    call dos_defocus                ; the caret does not follow us off the page
-    mov byte [dos_page], DOS_PAGE_SET
-    call dos_swap
+    call dos_set_open               ; Setup, the bar's button
     jmp short .out
 .run:
     call dos_defocus
@@ -9124,11 +9177,19 @@ dos_onup:
                                     ; typed, silently
     mov byte [dos_page], DOS_PAGE_MAIN
     call dos_swap
+%ifdef DOS_SETPART
+    call dos_sp_drop                ; ...and the page's code goes back with
+%endif                              ; it (SPEC.md 96.32.2.3)
     jmp short .out
 .sav:
     call dos_defocus                ; ...as Run does, and for its reason
     call dos_mem_take               ; ...and the shortcut carries what is in
-    call dos_sav_go                 ; the boxes NOW, for the same reason
+%ifdef DOS_SETPART                 ; the boxes NOW, for the same reason -
+    mov al, SPD_SAVE                ; the writer being the Setup part's
+    call dos_spdo
+%else
+    call dos_sav_go
+%endif
 .out:
     pop di
     pop si
@@ -9137,6 +9198,27 @@ dos_onup:
     pop bx
     pop ax
     ret
+
+; -----------------------------------------------------------------------------
+; dos_set_open - the main page gives way to Setup: the bar's button and the
+; menu's 'Environment' both. in: BX = the window; out: nothing, every register
+; as dos_swap leaves it
+; -----------------------------------------------------------------------------
+dos_set_open:
+    call dos_defocus                ; the caret does not follow us off the page
+%ifdef DOS_SETPART
+    call dos_sp_get                 ; **THE PAGE'S CODE, READ NOW** (SPEC.md
+    jc .r                           ; 96.32.2.3) - or not opened, and the
+%endif                              ; menu bar says why
+%ifdef DOS_WTAIL
+    call dos_hne_ask                ; ...and is the program an NE (96.44.20)
+%endif
+    mov byte [dos_page], DOS_PAGE_SET
+    jmp dos_swap
+%ifdef DOS_SETPART
+.r:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dos_defocus - no field on either page keeps the caret
@@ -9274,6 +9356,19 @@ dos_oncmd:
     push ax
     push bx
     mov bx, si
+%ifdef DVW
+    cmp al, 3                       ; 'Run in Window' is a MODE (SPEC.md
+    jne .notw                       ; 96.54.10): it flips the Setup box's byte,
+    xor byte [dos_mwin + OS88UI_CK_ON], 1   ; which is what dos_run reads on
+    call dos_wlabel                 ; every launch - the prompt's too - and
+    cmp byte [dos_page], DOS_PAGE_MAIN  ; runs nothing. Live during a run: it
+    je .out                         ; says what the NEXT launch does. Greyed
+    call dos_swap                   ; where the box is (dos_wlabel), so no
+    jmp short .out                  ; test here; on Setup the page repaints
+.notw:                              ; so the box follows the menu
+    cmp byte [dvw_run], 0           ; nothing else on this menu while a
+    jne .out                        ; program is running in the window
+%endif
     or al, al
     jnz .notrun
     call dos_defocus                ; ...the caret too, exactly as the BUTTON
@@ -9285,10 +9380,8 @@ dos_oncmd:
     cmp al, 1
     jne .full
 .env:
-    call dos_defocus                ; 'Environment', which is the bar's other
-    mov byte [dos_page], DOS_PAGE_SET
-    mov bx, [dos_win]
-    call dos_swap
+    mov bx, [dos_win]               ; 'Environment', which is the bar's other
+    call dos_set_open               ; button, and opens the page the same way
     jmp short .out
 .full:
 %ifndef KD_BACKEND                  ; 96.43: the console is the window's
@@ -9302,6 +9395,38 @@ dos_oncmd:
     pop bx
     pop ax
     ret
+
+%ifdef DVW
+; -----------------------------------------------------------------------------
+; dos_wlabel - `Run in Window` as the mode stands (SPEC.md 96.54.10)
+; in:  nothing; out: nothing, every register preserved
+;
+; The item's first byte is a GUTTER, `*` ticked and a space cleared (Desk
+; Clock's mark), and it greys where the Setup box greys: arm 1, and `Close
+; when done`. Run at every paint and every Setup press, so the item cannot
+; disagree with the box.
+; -----------------------------------------------------------------------------
+dos_wlabel:
+    push ax
+    mov ax, dos_l_wrun0
+    cmp byte [dos_keepc], DOS_MEM_WHOLE
+    je .set
+%ifdef DOS_WTAIL
+    cmp byte [dos_mhead + OS88UI_CK_ON], 0
+    jne .set
+%endif
+    mov al, ' '
+    cmp byte [dos_mwin + OS88UI_CK_ON], 0
+    je .mk
+    mov al, '*'
+.mk:
+    mov [dos_l_wrun], al
+    mov ax, dos_l_wrun
+.set:
+    mov [dos_items_prog + 6], ax
+    pop ax
+    ret
+%endif
 %endif                              ; KD_BACKEND
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
@@ -9392,6 +9517,10 @@ dos_path_args:
 dos_go:
     push ax
     push bx
+%ifdef DVW
+    cmp byte [dvw_run], 0           ; one program a window (SPEC.md 96.54)
+    jne .out
+%endif
     cmp byte [dos_path], 0
     je .out                         ; the internal interface: not yet ours
     call dos_path_args              ; **AND THE BOX MAY HOLD ARGUMENTS** (SPEC.md
@@ -9429,63 +9558,6 @@ dos_go:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_fld_hit - the Setup page's two left-column boxes (SPEC.md 96.32.2)
-; in:  BX = the window, CX/DX = the point, the rects already placed
-; out: nothing; every register preserved
-;
-; The memory block's own two controls have had their turn before this is
-; reached, so a click that is not in either of these is a click on the page
-; background - and the caret goes out, because a caret on a page the user has
-; clicked away from is one they cannot account for.
-; -----------------------------------------------------------------------------
-dos_fld_hit:
-    push cx
-    push si
-    push di
-    push bp
-    mov si, dos_pln                 ; THE COMMAND BOX FIRST (SPEC.md 96.32.2.2):
-    call os88line_hit               ; it is on this page too now, and it is the
-    jnc .take                       ; one every option below is about
-    mov si, dos_ln
-    call os88line_hit               ; preserves CX and DX, so every test below
-    jnc .take                       ; gets the same point
-    ; **AND EVERY ENVIRONMENT ROW** (SPEC.md 96.32.2.1) - `dos_click_env`'s
-    ; loop, moved here now that there is no second page for it to live on.
-    ; `dos_erow` spends CX on the row index, so the point is banked across it
-    ; exactly as that routine's own caller used to bank it.
-    mov di, cx
-    mov bp, dx
-    xor cx, cx
-.erow:
-    push cx
-    call dos_erow
-    mov cx, di
-    mov dx, bp
-    call os88line_hit
-    pop cx
-    jnc .take
-    inc cx
-    cmp cx, DOS_ENVN
-    jb .erow
-    call dos_defocus
-    jmp short .out
-.take:
-    cmp byte [si+LN_FOCUS], 0
-    jne .move                       ; already ours: just move the caret
-    call dos_defocus
-    mov byte [si+LN_FOCUS], 1
-    call os88line_draw
-    jmp short .out
-.move:
-    call dos_caret_to               ; ...and the BAR follows it (96.32.4)
-.out:
-    pop bp
-    pop di
-    pop si
-    pop cx
-    ret
-
-; -----------------------------------------------------------------------------
 ; dos_place - put every control of the page that is up where the window is now
 ; in:  BX = the window; every register preserved
 ;
@@ -9511,12 +9583,14 @@ dos_place:
     call dos_bar_rects              ; the path box and the bar's two buttons
     jmp short .out
 .setup:
-    call dos_furn_rects             ; Save Shortcut and Return
-    call dos_cmd_place              ; ...the command box on the title row...
-    call dos_fld_place              ; ...the arguments box...
-    call dos_senv_place             ; ...every environment row under it...
-    call dos_mfld_place             ; ...and the memory block's two
-    call dos_mrad_place
+%ifdef DOS_SETPART
+    mov al, SPD_PLACE               ; Save Shortcut and Return, the command
+    call dos_spdo                   ; box, the arguments and environment
+                                    ; boxes and the memory block's two - the
+                                    ; Setup part's to place (96.32.2.3)
+%else
+    SPB_PLACE
+%endif
 .out:
     pop di
     pop si
@@ -9586,14 +9660,23 @@ dos_fld_init:
     mov byte [si+LN_FOCUS], 0
     mov byte [dos_mbuf], 0
     mov word [dos_memkb], 0         ; 0 = as much as the machine will give,
-    mov word [dos_keepc], DOS_MEM_IN    ; which is what a double click gets.
+%ifndef DOS_WTAIL                   ; (DOS_WTAIL: dos_entry's dos_fld_def has
+    mov word [dos_keepc], DOS_MEM_IN    ; set these three on both hosts)
+                                    ; which is what a double click gets.
                                     ; A WORD: OS88UI_RD_SEL is one (96.36)
     mov word [dos_cache], DOS_CA_AUTO   ; ...and the cache's dial, the same way
                                     ; - one list on both arms (96.36.6), so
                                     ; there is no parked second pick
     mov byte [dos_mhdd + OS88UI_CK_ON], 1   ; ...and the three boxes, which are
-    mov byte [dos_mnet + OS88UI_CK_ON], 1   ; TICKED by default: a tick is
+%endif
+    mov byte [dos_mnet + OS88UI_CK_ON], 0   ; ...but NETWORK CLEARED (SPEC.md
+                                    ; 96.36.7.4, the owner's: "if they want
+                                    ; network, they have to go ask for it") -
+                                    ; and the other two TICKED: a tick is
     mov byte [dos_mmou + OS88UI_CK_ON], 0   ; "leave it as it is" on the two
+%ifdef DVW
+    mov byte [dos_mwin + OS88UI_CK_ON], 0   ; (and Run in a window CLEARED:
+%endif                                      ; the bracket is the default, 96.32.2.4)
 %ifdef DOS_MEGA
     mov byte [dos_mhma + OS88UI_CK_ON], 1   ; (and kern_dos in the HMA, which
                                             ; is the arena kern_mega shipped)
@@ -9612,29 +9695,6 @@ dos_fld_init:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_erow - the Nth environment row's block and its rect
-; in:  CX = the row (0..DOS_ENVN-1), BX = the window
-; out: SI = its os88line block, rect filled in; CX preserved
-; -----------------------------------------------------------------------------
-dos_erow:
-    push ax
-    push cx
-    push dx
-    mov ax, DOS_LNSZ
-    mul cx                          ; DX:AX, and DX is banked - the high half
-    mov si, dos_eln                 ; a row index lands there is nobody's
-    add si, ax
-    mov ax, DOS_EROWH               ; **THE LEFT COLUMN, NOT THE WHOLE WIDTH**
-    mul cx                          ; (SPEC.md 96.32.2.1). The rows had the
-    add ax, DOS_SFLD2               ; window to themselves on a page of their
-    mov dx, ax                      ; own; they sit under the first one in
-    call dos_setbox                 ; Setup's left column now - which is the
-    pop dx                          ; SAME width row 0 has always had there,
-    pop cx                          ; `os88line` scrolling a 48-char buffer
-    pop ax                          ; through a ~37-cell box either way, so
-    ret                             ; nothing narrowed
-
-; -----------------------------------------------------------------------------
 ; dos_lnk_open - was this instance handed a .LNK? If so, BECOME what it names
 ; in:  dos_name = what we were launched with, [dos_dir]/[dos_vol] its folder
 ; out: nothing; on any refusal the state is left exactly as it was
@@ -9650,6 +9710,7 @@ dos_erow:
 ; alternative - a half-applied link - is a window naming a program the user
 ; never chose.
 ; -----------------------------------------------------------------------------
+WIN_CODE_END
 dos_lnk_open:
     push ax
     push bx
@@ -9676,16 +9737,14 @@ dos_lnk_open:
     mov cx, ax                      ; AX = bytes delivered
     call dos_lnk_parse              ; ...which rewrites dos_name on success
     jc .out
+%ifdef DOS_WIN16
+    mov byte [dos_w16k], 0          ; the loader read the LINK, not what it
+%endif                              ; names: the wake asks again (124.3.1)
+    WIN_ONLY
     call dos_fld_reload             ; the fields show what the link carried
+    WIN_END
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 ; --- dos_is_lnk - does the NUL 8.3 name at SI end in .LNK? ------------------
 ; out: CF=0 yes. Case-insensitive: a FAT name is upper case and this one came
@@ -9739,6 +9798,7 @@ dos_upc:
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 
 ; --- dos_fld_reload - the fields show what is in the buffers now ------------
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
 dos_fld_reload:
     push bx
     push cx
@@ -9761,314 +9821,6 @@ dos_fld_reload:
     ret
 
 ; -----------------------------------------------------------------------------
-; dos_lnk_build - this instance's state as a Shell Link, into dos_lbuf
-; out: CX = its length; CF=1 = it does not fit LNK_MAX
-;
-; THE HEADER IS 76 BYTES AND ALMOST ALL OF IT IS LEGALLY ZERO - three
-; FILETIMEs, the file size, the icon index, the hotkey and three reserved
-; fields. What is not zero is the size dword, the fixed CLSID, LinkFlags and
-; ShowCommand, so the template below IS the header and nothing is patched.
-;
-; Each StringData entry is a 2-byte CHARACTER COUNT then the characters, NOT
-; NUL-terminated. Count is characters rather than bytes, which are the same
-; thing here only because IsUnicode is clear.
-; -----------------------------------------------------------------------------
-dos_lnk_build:
-    push ax
-    push bx
-    push dx
-    push si
-    push di
-    push es
-    push ds
-    pop es
-    mov di, dos_lbuf
-    mov si, dos_lnk_hdr
-    mov cx, LNK_HDR
-    cld
-    rep movsb
-
-    call dos_lnk_wdir               ; WORKING_DIR: the folder we came from
-    jc .no
-    call dos_lnk_rel                ; RELATIVE_PATH: `.\` and the 8.3 name
-    jc .no
-    mov si, dos_args                ; COMMAND_LINE_ARGUMENTS
-    call dos_lnk_str
-    jc .no
-    call dos_lnk_env                ; ...and ours, in an ExtraData block
-    jc .no
-    call dos_lnk_mem                ; ...and the memory settings, in a SECOND
-    jc .no                          ; one (SPEC.md 96.25.2)
-    xor ax, ax                      ; the terminal block: any value below 4
-    stosw
-    stosw
-    mov cx, di
-    sub cx, dos_lbuf
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop bx
-    pop ax
-    ret
-
-; --- dos_lnk_str - SI = a NUL string -> a counted StringData at ES:DI --------
-; out: DI advanced; CF=1 = it would pass LNK_MAX and nothing was written
-dos_lnk_str:
-    push ax
-    push cx
-    push si
-    mov ax, si
-    xor cx, cx
-.len:
-    cmp byte [si], 0
-    je .got
-    inc si
-    inc cx
-    jmp short .len
-.got:
-    mov si, ax                      ; ...back to the start
-    mov ax, di
-    sub ax, dos_lbuf
-    add ax, cx
-    add ax, 2
-    cmp ax, LNK_MAX
-    ja .no
-    mov ax, cx
-    stosw                           ; the character count...
-    jcxz .done
-    rep movsb                       ; ...and the characters, no NUL
-.done:
-    pop si
-    pop cx
-    pop ax
-    clc
-    ret
-.no:
-    pop si
-    pop cx
-    pop ax
-    stc
-    ret
-
-; --- dos_lnk_wdir - the launch folder, as a StringData ----------------------
-; **DI IS AN OUTPUT AND MUST NOT BE RESTORED.** dos_lnk_str advances it past
-; the entry it wrote, and an earlier version of this banked DI across the
-; whole routine - so the working directory was written and then OVERWRITTEN by
-; the next string, and every field in the file came out one place early.
-dos_lnk_wdir:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    ; **STAND WHERE THE PROGRAM IS, FIRST** - dos_path_make's own opening, and
-    ; for the same reason: `OSAPI_FILE_PATH` answers for where the MACHINE is
-    ; standing (SPEC.md 96.48), which a program that has walked away with
-    ; AH=3Bh or AH=0Eh has moved. `dos_sav_go` already orders the build before
-    ; the dialog, so the DIALOG's navigation cannot reach this; the program is
-    ; the other mover, and until 96.21.2.1 it could only ever write a wrong
-    ; FOLDER - under a drive letter it is a wrong folder stated confidently.
-    mov dx, [dos_dir]
-    mov bl, [dos_vol]
-    call dos_be_goto
-    jc .bare
-    push di                         ; ...only across the CALL that needs it as
-    mov di, dos_pbuf + 2            ; a destination of its own - and TWO ALONG,
-    mov cx, DOS_PBUF - 2            ; because the drive goes in front of it
-                                    ; (SPEC.md 96.21.2.1)
-    call OSAPI_FILE_PATH            ; ES is the caller's DS: an X cell sets it
-    pop di
-    jnc .drv
-.bare:
-    mov byte [dos_pbuf+2], '\'      ; a refusal is not fatal - `\` is a folder
-    mov byte [dos_pbuf+3], 0        ; and the link still resolves from it
-.drv:
-    ; **AND THE DRIVE, WHICH OSAPI_FILE_PATH DOES NOT ANSWER** (SPEC.md
-    ; 19.2.4: OSAPI_FILE_HERE answers that question, so the path slot does
-    ; not). Without it a shortcut says `\PRINCE` and resolves against
-    ; whichever volume it was READ from, which is right exactly as often as
-    ; the link and its program are on one disk.
-    mov al, [dos_vol]               ; the box's own volume, which is the one
-    add al, 'A'                     ; dos_run resolves the program on
-    mov [dos_pbuf+0], al
-    mov byte [dos_pbuf+1], ':'
-    mov si, dos_pbuf
-    call dos_lnk_str                ; ...and DI comes out ADVANCED
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- dos_lnk_rel - `.\NAME.EXT`, which is BOTH spellings --------------------
-; Windows wants a link-relative path and so do we, and `.\` satisfies each.
-dos_lnk_rel:
-    push ax
-    push cx
-    push si
-    push bx
-    mov bx, dos_sbuf
-    mov byte [bx], '.'
-    mov byte [bx+1], '\'
-    inc bx
-    inc bx
-    mov si, dos_name
-.c:
-    mov al, [si]
-    mov [bx], al
-    inc si
-    inc bx
-    or al, al
-    jnz .c
-    mov si, dos_sbuf
-    call dos_lnk_str
-    pop bx
-    pop si
-    pop cx
-    pop ax
-    ret
-
-; --- dos_lnk_env - the four rows, in an ExtraData block ---------------------
-; {size, signature, data}: size counts ITSELF and the signature, so an
-; unknown-signature reader steps over the whole thing with one add - which is
-; what makes a private block legal rather than a squat.
-dos_lnk_env:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    mov dx, di                      ; bank where the size goes
-    add di, 8                       ; ...and step over it and the signature
-    mov bx, dos_ebuf
-    mov cx, DOS_ENVN
-.row:
-    push cx
-    mov si, bx
-    cmp byte [si], 0
-    je .next
-    mov ax, di
-    sub ax, dos_lbuf
-    add ax, DOS_ENVBUF + 8
-    cmp ax, LNK_MAX
-    ja .no
-.cp:
-    mov al, [si]
-    stosb
-    inc si
-    or al, al
-    jnz .cp                         ; ...NUL and all: the block is a SET, and
-                                    ; a set's members are NUL-terminated
-.next:
-    pop cx
-    add bx, DOS_ENVBUF
-    loop .row
-    xor al, al
-    stosb                           ; ...and the bare NUL that ends the set
-    mov ax, di                      ; now the size, over the hole banked above
-    sub ax, dx
-    push di
-    mov di, dx
-    stosw
-    xor ax, ax
-    stosw                           ; ...a dword, and 512 never needs the top
-    mov ax, LNK_EXTSIG & 0xFFFF
-    stosw
-    mov ax, LNK_EXTSIG >> 16
-    stosw
-    pop di                          ; ...back to the END of the block
-    clc
-    jmp short .out
-.no:
-    pop cx
-    stc
-.out:
-    pop si                          ; **DI IS NOT RESTORED**, for dos_lnk_wdir's
-    pop dx                          ; reason: it is an OUTPUT. Banking it here
-    pop cx                          ; left the block written and then
-    pop bx                          ; OVERWRITTEN by the terminal marker, which
-    pop ax                          ; presents as a link with no environment
-    ret
-
-; --- dos_lnk_mem - the memory settings, in an ExtraData block of their own --
-; A SECOND BLOCK and not two more fields on the first (SPEC.md 96.25.2): that
-; one ends in a bare NUL after a variable number of rows, so anything appended
-; to it sits at an offset that depends on what the user typed. Here the two
-; fields are at a fixed offset inside a fixed-size block, and a reader that
-; does not know the signature steps over it with one add - which is what
-; ExtraData is specified for.
-dos_lnk_mem:
-    push ax
-    mov ax, di
-    sub ax, dos_lbuf
-    add ax, LNK_EXT2SZ
-    cmp ax, LNK_MAX
-    ja .no
-    mov ax, LNK_EXT2SZ              ; BlockSize, counting itself
-    stosw
-    xor ax, ax
-    stosw
-    mov ax, LNK_EXTSIG2 & 0xFFFF
-    stosw
-    mov ax, LNK_EXTSIG2 >> 16
-    stosw
-    mov ax, [dos_memkb]             ; the cap, 0 = as much as the machine gives
-    stosw
-    mov al, [dos_keepc]             ; ...the arm...
-    stosb
-    mov al, [dos_cache]             ; ...and the cache dial, WHICH TOOK THE
-    stosb                           ; PAD BYTE (SPEC.md 96.36.6): the signature
-                                    ; did not move, and a link written before
-                                    ; the dial existed reads a zero there -
-                                    ; which is Auto, the default a link
-                                    ; without one would have been saved with
-    ; **AND THE THREE BOXES** (SPEC.md 96.25.2.1). They are requests about
-    ; the program and not reports about this machine (96.36.7.1) - which is
-    ; the whole reason a shortcut has to carry them - and for as long as the
-    ; boxes have existed this block did not, so `Disable the mouse` came back
-    ; unticked from every shortcut that was saved with it ticked.
-    xor al, al
-    cmp byte [dos_mhdd + OS88UI_CK_ON], 0
-    jne .bnet
-    or al, LNK_BX_NOHDD
-.bnet:
-    cmp byte [dos_mnet + OS88UI_CK_ON], 0
-    jne .bmou
-    or al, LNK_BX_NONET
-.bmou:
-    cmp byte [dos_mmou + OS88UI_CK_ON], 0
-    je .bhma
-    or al, LNK_BX_NOMOU
-.bhma:
-%ifdef DOS_MEGA
-    cmp byte [dos_mhma + OS88UI_CK_ON], 0
-    jne .bsav
-    or al, LNK_BX_NOHMA
-.bsav:
-    cmp byte [dos_msav + OS88UI_CK_ON], 0
-    je .bput
-    or al, LNK_BX_SAVE
-%endif
-.bput:
-    xor ah, ah                      ; ...and the pad, zero
-    stosw
-    clc
-    jmp short .out
-.no:
-    stc
-.out:
-    pop ax
-    ret                             ; DI IS NOT RESTORED - it is an OUTPUT, for
-                                    ; dos_lnk_env's reason
-
-; -----------------------------------------------------------------------------
 ; dos_lnk_parse - dos_lbuf holds CX bytes of a .LNK; take it apart
 ; out: CF=0 and dos_name/dos_args/dos_ebuf filled; CF=1 = not one of OURS
 ;
@@ -10084,6 +9836,7 @@ dos_lnk_mem:
 ; count that runs past the end of a SHORT file would otherwise read whatever
 ; follows it in our own image (SPEC.md 20.8 rule 2).
 ; -----------------------------------------------------------------------------
+WIN_CODE_END
 dos_lnk_parse:
     push ax
     push bx
@@ -10101,6 +9854,16 @@ dos_lnk_parse:
     jne .no                         ; is as much of a 16-byte constant as is
     cmp byte [dos_lbuf+5], 0x14     ; worth comparing to refuse a wrong file
     jne .no
+%ifdef DOS_WTAIL
+    WIN_ONLY                        ; (the box is the tail's: a headless host
+    xor al, al                      ; already knows, the loader having read it)
+    cmp word [dos_lbuf+LNK_SHOW], LNK_SW_HEAD   ; **ShowCommand = 7 IS CLOSE
+    jne .show                       ; WHEN DONE** (SPEC.md 96.44.20): the
+    inc ax                          ; header's own field, which the loader
+.show:                              ; reads too - SW_SHOWMINNOACTIVE, no window
+    mov [dos_mhead + OS88UI_CK_ON], al
+    WIN_END
+%endif
     mov ax, [dos_lbuf+20]           ; LinkFlags
     test ax, 0x03                   ; HasLinkTargetIDList | HasLinkInfo
     jnz .no                         ; ...a Windows-authored one. Refused.
@@ -10449,7 +10212,8 @@ dos_lnk_takeb:
     cmp ax, 2
     jb .no
     mov cx, [dos_lbuf+si]
-    add si, 2
+    inc si
+    inc si
     mov bx, [dos_lend]
     sub bx, si
     cmp cx, bx
@@ -10630,7 +10394,9 @@ dos_lnk_memr:
 .nobox:                             ; inside it; an older, 12-byte link keeps
                                     ; the defaults dos_fld_init set
     call dos_mem_fix
+    WIN_ONLY
     call dos_mem_put                ; ...and the field shows what the link said
+    WIN_END
     pop ax
     ret
 
@@ -10654,6 +10420,14 @@ dos_lnk_boxes:
     shr al, 1
     shr al, 1
     mov [dos_mmou + OS88UI_CK_ON], al
+%ifdef DVW
+    mov al, ah                      ; Run in a window: set = TICKED
+    and al, LNK_BX_WIN              ; (SPEC.md 96.32.2.4)
+    jz .nowin
+    mov al, 1
+.nowin:
+    mov [dos_mwin + OS88UI_CK_ON], al
+%endif
 %ifdef DOS_MEGA
     mov al, ah                      ; the HMA: set = UNTICKED (96.40.9.2)
     and al, LNK_BX_NOHMA
@@ -10859,29 +10633,37 @@ dos_envpath:
 ; =============================================================================
 ; DATA
 ; =============================================================================
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
 dos_tpl:
-    dw 0, MBAR_H, DOS_CONW, DOS_FRAMEH
-                                    ; x, y, w, h (SPEC.md 96.32). **x IS 0 AND
-                                    ; THAT IS THE WHOLE TRICK**: the span test
-                                    ; 11.95.3 applies is "starts at its
+    dw DOS_HERCX, MBAR_H, DOS_CONW, DOS_FRAMEH
+                                    ; x, y, w, h (SPEC.md 96.32). On VGA and
+                                    ; CGA wm_fit clamps x to 0, because a
+                                    ; 640-wide frame has nowhere else to be,
+                                    ; and that is THE WHOLE TRICK: the span
+                                    ; test 11.95.3 applies is "starts at its
                                     ; display's first column and reaches its
-                                    ; last", so this is what buys the two
+                                    ; last", so the clamp is what buys the two
                                     ; border pixels back and puts the content
-                                    ; origin on an 8-aligned column. The WIDTH
-                                    ; is per-adapter and dos_pref says so;
-                                    ; this row is the VGA/CGA one
+                                    ; origin on column 0. On Hercules the frame
+                                    ; is DOS_HERCW and this x CENTRES it
+                                    ; (SPEC.md 96.32.5). The WIDTH is
+                                    ; per-adapter and dos_pref says so; this
+                                    ; row is the VGA/CGA one
     dw dos_ttl, dos_paint, dos_key, 0   ; W_ONCLICK is installed by
                                     ; os88ui_btninit (SPEC.md
                                     ; 20.5.1.3.3), so the buttons see
                                     ; the press before dos_click does
 
-    OS88_PREFER dos_pref, DOS_CONW, DOS_FRAMEH,  720, DOS_FRAMEH,  DOS_CONW, 300
+    OS88_PREFER dos_pref, DOS_CONW, DOS_FRAMEH,  DOS_HERCW, DOS_FRAMEH,  DOS_CONW, 300
                                     ; **A REAL WIDTH AND A GENEROUS HEIGHT**,
                                     ; which is OSAPI_WM_PREFER's own advice
                                     ; (SPEC.md 11.100.1): the width is what
-                                    ; matters and is almost never clamped, so
-                                    ; Hercules gets its full 720 and the
-                                    ; console centres in it. The CGA row asks
+                                    ; matters and is almost never clamped.
+                                    ; Hercules is NOT given its full 720 any
+                                    ; more (SPEC.md 96.32.5): 80 cells and two
+                                    ; borders, snug, where the spanning frame
+                                    ; left 40 px of empty window each side of
+                                    ; the band. The CGA row asks
                                     ; for 300 and is clamped to what the band
                                     ; plus the dock's strip allows - 17 rows
                                     ; instead of 25 - so this package never
@@ -10889,17 +10671,32 @@ dos_tpl:
 
     ; --- THE MENU (SPEC.md 12.2), which this package has never had ---------
     OS88_MENUSET dos_menus, dos_ttl, dos_oncmd
+%ifdef DVW
+        OS88_MENU dos_m_prog, dos_items_prog, 4
+%else
         OS88_MENU dos_m_prog, dos_items_prog, 3
+%endif
     OS88_MENUSET_END dos_menus
 
 dos_m_prog: db 'Program', 0
 dos_items_prog: dw dos_l_run, dos_l_tset, dos_l_full
+%ifdef DVW
+                dw dos_l_wrun
+dos_l_wrun: db ' Run in Window', 0  ; SPEC.md 96.54.10: a MODE, its first
+                                    ; byte the mark (dos_wlabel)
+dos_l_wrun0: db MENU_DIS, 'Run in Window (see Setup)', 0
+%endif
 
+%ifndef DOS_WTAIL                   ; (DOS_WTAIL: beside dos_htpl, resident)
 dos_ttl:    db 'DOS', 0
+%endif
 dos_l_args: db 'Arguments:', 0
 dos_l_envb: db 'Environment:', 0    ; ...and the rows under it are NAME=VALUE,
                                     ; one to a line (SPEC.md 96.32.2.1)
 dos_l_retb: db 'Return', 0          ; --- the setup area's furniture (96.32.2)
+%ifdef DOS_SETPART
+dos_s_nosetp: db 'Cannot open '     ; the part's refusal (96.32.2.3), whose
+%endif                              ; last word is the page's own name
 dos_l_tset: db 'Setup', 0           ; ...and its name, which the title row
                                     ; shows and the bar's own button carries -
                                     ; one page, one word (SPEC.md 96.32.2.1)
@@ -10943,10 +10740,17 @@ dos_l_msav:  db 'Save the session to disk', 0    ; ...and HIBERNAT.IMG first
 ; which invites the question *which program* - the answer being the one this
 ; DOS is about to run, under whatever is ticked below. One value, one name for
 ; it, and no word about arms: the user is picking options, not picking arms.
-dos_l_marn: db 'Est DOS Ram (Current Machine): '
+dos_l_marn: db 'Est DOS Ram (Current Machine):'
 %endif                              ; KD_BACKEND
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
-dos_marn:   db '     KB', 0
+dos_marn:   db '     KB ', 0       ; ...and the cell after the KB is a `+`
+                                     ; for an AUTOMATIC window's figure
+                                     ; (SPEC.md 96.54.2.1), a blank otherwise
+                                     ; - never a NUL, or a shorter opaque run
+                                     ; would leave the last `+` standing. The
+                                     ; label gave its trailing blank for it, so
+                                     ; the run is no wider than it was: the
+                                     ; five-wide field pads with blanks anyway
 %endif                              ; KD_BACKEND
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 ; --- the two arms, and the words under the greyed one (SPEC.md 96.36) -------
@@ -11019,6 +10823,18 @@ DOS_MCKW    equ 24                  ; ...and kern_mega's save box, a cell more
 ; hands `kern_dos` a zero KDL_MOUBASE, which kdmouse.inc already reads as
 ; "no mouse: nothing is hooked and INT 33h answers the still pointer".
 dos_l_mmou: db 'Disable the mouse', 0
+%ifdef DVW
+dos_l_mwin: db 'Run in a window', 0 ; ...and the furniture row's (96.32.2.4)
+%if $ - dos_l_mwin - 1 != DOS_MWINW
+ %error "DOS_MWINW is the label's length in cells: it sizes the box's rect"
+%endif
+%ifdef DOS_WTAIL
+dos_l_mhead: db 'Close when done', 0 ; ...and beside it (SPEC.md 96.44.20)
+%if $ - dos_l_mhead - 1 != DOS_MWINW
+ %error "Close when done is placed with DOS_MWINW: the two labels are one width"
+%endif
+%endif
+%endif
 
 ; --- the disk cache's two lists (SPEC.md 96.36.6) ---------------------------
 ; ARM 1's is the whole ladder, because `kd_giveback` sheds a rung at a time
@@ -11038,6 +10854,7 @@ dos_l_ca3: db '9K', 0
 dos_l_ca4: db 'Off (SLOW!)', 0
 ; ...and what each row is worth in RUNS, which is what the launch block
 ; carries and what dos_cache_kb turns into the KB on the glass.
+WIN_CODE_END
 dos_ca_runs:
     db DOS_CA_AUTORUN               ; Auto - kern_dos's own KD_RAH_KEEP
     db 7                            ; 32K
@@ -11046,28 +10863,6 @@ dos_ca_runs:
     db 0                            ; Off
 dos_lnk_root: db '\', 0
 
-; --- the Shell Link header, 76 bytes, fixed (SPEC.md 96.21) ------------------
-dos_lnk_hdr:
-    dd 0x0000004C                   ; HeaderSize, and the format's own magic
-    db 0x01,0x14,0x02,0x00          ; LinkCLSID {00021401-0000-0000-
-    db 0x00,0x00, 0x00,0x00         ;            C000-000000000046}, in the
-    db 0xC0,0x00,0x00,0x00,0x00,0x00,0x00,0x46   ; mixed-endian GUID order
-    dd LNK_F_WDIR | LNK_F_RELP | LNK_F_ARGS      ; LinkFlags
-    dd 0                            ; FileAttributes
-    dd 0, 0                         ; CreationTime  - legally zero...
-    dd 0, 0                         ; AccessTime
-    dd 0, 0                         ; WriteTime
-    dd 0                            ; FileSize      - ...and so is this
-    dd 0                            ; IconIndex
-    dd 1                            ; ShowCommand = SW_SHOWNORMAL
-    dw 0                            ; HotKey
-    dw 0                            ; Reserved1
-    dd 0                            ; Reserved2
-    dd 0                            ; Reserved3
-DOS_LNK_HDRLEN equ $ - dos_lnk_hdr
-%if DOS_LNK_HDRLEN != LNK_HDR
- %error "the Shell Link header is 76 bytes and this template is not"
-%endif
 %endif                              ; KD_BACKEND
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -11096,6 +10891,8 @@ dos_bdalist:
     dw 0xFFFF, 0
 %endif                              ; DOS_EXTCORE
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
+WIN_CODE                            ; the exit report's words are the tail's
+                                    ; (dos_fmt_exit's note, DOS-HEADLESS 1.2)
 
 ; **THE SIX STATUS LINES ARE GONE, AND THAT IS SPEC.md 96.33 ARRIVING.** They
 ; stood in the console's band under a comment saying they would go when it
@@ -11130,6 +10927,9 @@ dos_errs:
 %ifdef DOS_MEGA
     dw dos_e_reset                  ; DER_RESET: kern_mega's W7
 %endif
+%ifdef DVW_SPLIT
+    dw dos_e_dvwp                   ; DER_DVWP (SPEC.md 96.54.9)
+%endif
 dos_e_goto:  db 'Its folder could not be opened.', 0
 dos_e_mem:   db 'Not enough memory.', 0
 dos_e_hand:  db 'A handover is already under way.', 0
@@ -11141,6 +10941,12 @@ dos_e_badexe: db 'Its .EXE header is malformed.', 0
 dos_e_reset: db 'The machine was restarted while it ran.', 0
 %endif
 dos_e_fit:   db 'Not enough RAM - try Setup, "Shut down the OS".', 0
+%ifdef DVW
+dos_e_wfit:  db 'Too big for a window', 0x27, 's 128K - raise Setup', 0x27, 's Memory limit.', 0
+%ifdef DVW_SPLIT
+dos_e_dvwp:  db 'Run in Window could not load its part of DOS.O88.', 0
+%endif
+%endif
                                     ; **IT SAID DOS 3.30'S OWN WORDS**,
                                     ; `Program too big to fit in memory.`,
                                     ; measured at COMMAND.COM offset 2436 -
@@ -11153,6 +10959,7 @@ dos_e_fit:   db 'Not enough RAM - try Setup, "Shut down the OS".', 0
                                     ; ~600KB in it, one page away. A user told
                                     ; `too big to fit` closes the window; one
                                     ; told where the room is opens Setup
+WIN_CODE_END
 dos_s_blast: db 'BLASTER=A', 0      ; dos_blaster_set's, which is the window's
                                     ; too (SPEC.md 96.44.15)
 %endif                              ; KD_BACKEND
@@ -11169,8 +10976,10 @@ dos_mlen:    db 31,28,31,30,31,30,31,31,30,31,30,31
 dos_dowt:    db 0,3,2,5,0,3,5,1,4,6,2,4    ; Sakamoto's month table
 %endif                              ; DOS_EXTCORE
 %ifndef KD_BACKEND                  ; dos_fmt_fn's, and so the window's
+WIN_CODE                            ; ...and the tail's (DOS-HEADLESS 1.2)
 dos_e_fn:    db 'It asked for INT 21h AH='  ; (SPEC.md 96.44.15)
 dos_fnd:     db '00h.', 0
+WIN_CODE_END
 %endif                              ; KD_BACKEND
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -11627,17 +11436,33 @@ dos_m33_tick:
                                     ; second has installed no handler and
                                     ; polls nothing, and the tick is the only
                                     ; thing left that can move its pointer
+    call dos_m33_evt
+    pop ds
+    pop ax
+    iret
+
+; -----------------------------------------------------------------------------
+; dos_m33_evt - the event handler's dispatch, without the tick around it
+; in:  DS = ours; out: every register and the flags but IF preserved
+;
+; A PROC OF ITS OWN BECAUSE A WINDOW HAS A SECOND CALLER (SPEC.md 96.54.4):
+; a program in its window that waits on a key spends its ticks ASLEEP with
+; its world out, so IRQ0 lands on the desktop's vector and `dos_m33_tick`
+; never runs - the windowed host calls this as its worker wakes instead. The
+; host side is the same contract as the tick's: on the program's stack, with
+; the program's world in.
+; -----------------------------------------------------------------------------
+dos_m33_evt:
     cmp word [dos_m33h+2], 0        ; no handler: two instructions a tick
-    je .out0
+    je .ret0
     cmp byte [dos_m33bsy], 0        ; a callback that ran long enough to be
     je .call                        ; interrupted by the next tick
-.out0:                              ; AN EPILOGUE OF ITS OWN, three bytes: the
-    pop ds                          ; tick with no handler is the common one,
-    pop ax                          ; and the far `.out` cost it a `jcc +3 /
-    iret                            ; jmp near` every 55 ms (SPEC.md 96.7.3)
-.call:
+.ret0:                              ; a `ret` HERE and not a jump to the one
+    ret                             ; below: that is past a short jcc's reach,
+.call:                              ; which on an 8086 is five bytes, not two
     mov byte [dos_m33bsy], 1
 
+    push ax
     push bx
     push cx
     push dx
@@ -11661,9 +11486,10 @@ dos_m33_tick:
 .moved:
     or al, 1
 .nomove:
-    mov ah, [dos_m33lb]
-    mov si, bx                      ; SI = the live mask, AH = the last one
-    test si, 1
+    mov ah, [dos_m33lb]             ; BL = the live mask, AH = the last one
+    test bl, 1                      ; (BL and not a copy in SI: four bytes,
+                                    ; which kept the core in CORE_MAX at the
+                                    ; merge of SPEC.md 96.8.2 and 96.54.4)
     jz .lup
     test ah, 1
     jnz .rbtn
@@ -11674,7 +11500,7 @@ dos_m33_tick:
     jz .rbtn
     or al, 4                        ; left UP
 .rbtn:
-    test si, 2
+    test bl, 2
     jz .rup
     test ah, 2
     jnz .evdone
@@ -11728,17 +11554,9 @@ dos_m33_tick:
                                     ; DS = OURS, which is the driver's own -
                                     ; a handler sets up its own from CS
 .nothing:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    mov byte [dos_m33bsy], 0
-.out:
-    pop ds
-    pop ax
-    iret
+    mov byte [dos_m33bsy], 0        ; free BEFORE the pops: a tick landing in
+    jmp dos_popa_7                  ; them nests shallower than the callback
+                                    ; above already did (size pass, 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -12564,8 +12382,228 @@ dos_trmove:
 %include "os88parts.inc"
 dos_kdrow   equ dos_hbss + DOS_B_KDROW   ; the HOST's block (SPEC.md 96.44.5)
 dos_corerow equ dos_hbss + DOS_B_COREROW
+%ifdef DOS_WIN16
+dos_doc     equ dos_hbss + DOS_B_DOC     ; the loader's hand-on (124.3.1)
+dos_w16k    equ dos_hbss + DOS_B_W16K
+%endif
 %ifdef DOS_MEGA
 dos_kdlrow  equ dos_hbss + DOS_B_KDLROW
+%endif
+dos_hlprow  equ dos_hbss + DOS_B_HLPROW  ; HELP's text (DOS-PARTS-PLAN 1.1)
+%ifdef DOS_NETPART
+dos_netrow  equ dos_hbss + DOS_B_NETROW  ; ...and the network part's (96.23.11)
+%endif
+%ifdef DOS_SETPART
+dos_setrow  equ dos_hbss + DOS_B_SETROW  ; ...and the Setup page's (96.32.2.3)
+%endif
+%ifdef DVW_SPLIT
+dos_dvwrow  equ dos_hbss + DOS_B_DVWROW  ; ...and the window's (96.54.9)
+%endif
+%ifndef KD_BACKEND
+%include "os88pself.inc"            ; op_self, which reads it: the parts
+                                    ; standard's OP_SELF read, opted into
+
+; -----------------------------------------------------------------------------
+; dos_pself - op_self, standing in DOS.O88's own folder and back again
+; in:  SI = the row (the loader wrote the stream's FORMAT into its kind byte),
+;      AH = the least KB the claim must be (0 = what the read needs)
+; out: CF=0, DX = the claim, CX = the part's length; CF=1 = not had
+; clobbers: AX, BX, SI, DI, BP, ES, flags
+;
+; Our file is in OUR folder and the prompt stands in its own, so the instance
+; goes there and back (dos_pkgwhere banked it). HELP's (DOS-PARTS-PLAN 1.1)
+; and the network part's (SPEC.md 96.23.11) - one copy of the walk.
+; dos_pself0 is the same with AH = 0, HELP's and the Setup part's
+; -----------------------------------------------------------------------------
+dos_pself0:
+    xor ah, ah                      ; no floor: the part and nothing else
+dos_pself:
+    push ax                         ; the floor, across the kernel's answer
+    call OSAPI_FILE_HERE            ; where the prompt stands
+    pop ax
+    push bx
+    push dx
+    push ax
+    mov dx, [dos_pkgdir]
+    mov bl, [dos_pkgvol]
+    call OSAPI_FILE_GOTO_QM         ; where DOS.O88 is (AX = its answer)
+    pop ax
+    jc .home
+    mov di, dos_pkgname
+    mov al, [si+OP_R_KIND]          ; the FORMAT: dsl_entry wrote it there
+    call op_self                    ; DX = the claim, CX = its length
+.home:
+    mov bp, dx
+    pop dx
+    pop bx
+    pushf
+    call OSAPI_FILE_GOTO_QM         ; ...and back
+    popf
+    mov dx, bp
+    ret
+
+%ifdef DOS_SETPART
+; =============================================================================
+; THE SETUP PAGE'S HOST HALF (SPEC.md 96.32.2.3): the part is far code with
+; OUR DS, read when Setup opens and freed when it closes. This is all of it
+; that is resident - a bouncer, a fetch, a free and a door.
+; =============================================================================
+; dos_sp_bounce - the part's way back in: `call SPH(x)` stored x in
+; [dos_sp_tgt] and far-called here. Nothing is touched on the way, so the
+; routine's registers and FLAGS are the part's answer exactly.
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
+dos_sp_bounce:
+    call [dos_sp_tgt]
+    retf
+
+; -----------------------------------------------------------------------------
+; dos_sp_get - make sure the Setup part is held
+; out: CF = 0 it is; CF = 1 it could not be had, and the menu bar says so.
+;      Every register preserved
+;
+; **THE CLAIM STAYS PINNED** while it is held (SPEC.md 96.32.2.3): it is CODE,
+; and its own return addresses are on the stack across every kernel call it
+; makes - os88ui's save-under claim among them - so a block that moved would
+; be returned into where it used to be.
+; -----------------------------------------------------------------------------
+dos_sp_get:
+    cmp word [dos_spdoor+2], 0
+    jne .have                       ; (CF = 0 out of the compare's jne)
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov ax, DOS_PG_FLOOR            ; THE WALL IT IS, PRICED (SPEC.md
+    call OSAPI_MEM_COMPACT          ; 96.32.2.3.1): the what-if before the
+    push ax                         ; claim, against the one after it below
+    mov si, dos_setrow
+    call dos_pself0                 ; DX = the claim, CX = the part's length
+    pop cx                          ; CX = the what-if with no part held
+    jc .no
+    mov ax, DOS_PG_FLOOR            ; ...and with it: a PINNED claim, so the
+    call OSAPI_MEM_COMPACT          ; plan packs around it and whatever lies
+    sub cx, ax                      ; under it is out of the arena. dos_run
+    jae .wall                       ; drops it first, so the page owes the
+    xor cx, cx                      ; program the difference back - which
+.wall:                              ; dos_mem_arena adds to every reading
+    mov [dos_spwall], cx
+    mov [dos_spdoor+2], dx          ; the offset word is 0 for ever (bss), and
+                                    ; the way back is the part's to write
+                                    ; (sp_door: its offset is assembled in)
+    jmp short .out
+.no:
+    push ds
+    pop es
+    mov si, dos_s_nosetp            ; `Cannot open Setup` (SPEC.md 47: a
+    xor cx, cx                      ; refusal says so where the user is)
+    call OSAPI_TOAST
+    stc
+.out:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+.have:
+    ret
+
+%ifdef DOS_WTAIL
+; -----------------------------------------------------------------------------
+; dos_hne_ask - is the program the Setup page is about a WINDOWS one? (SPEC.md
+; 96.44.20). `Close when done` greys for an NE: the program is WIN16's and
+; opens in WIN16's window (SPEC.md 124.3.1), so a DOS with no window says
+; nothing about it - a headless host hands it on as well. Asked as the page
+; opens, of the program DOS last named - the one a shortcut or a run set -
+; and a box the link left ticked is cleared with it. The answer is KEPT
+; against the locator it was asked of (`[dos_hnek]`, dos_pgdoc's shape), so
+; flipping between the pages reads the header once and not every time: the
+; question is a DFREE and a cluster or two on the disk. Preserves every
+; register
+; -----------------------------------------------------------------------------
+dos_hne_ask:
+    pushf
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, dos_name                ; the same program, folder and volume as
+    mov di, dos_hnek                ; last time: the same answer
+    mov cx, 13
+    repe cmpsb
+    jne .ask
+    mov ax, [dos_dir]
+    cmp ax, [dos_hnek + 13]
+    jne .ask
+    mov al, [dos_vol]
+    cmp al, [dos_hnek + 15]
+    je .known
+.ask:
+    mov si, dos_name                ; ...else ask, and keep what was asked
+    mov di, dos_hnek
+    mov cx, 13
+    rep movsb
+    mov ax, [dos_dir]
+    stosw
+    mov al, [dos_vol]
+    stosb
+    mov byte [dos_hne], 0
+%ifdef DOS_WIN16                        ; no WIN16 to hand an NE to, no NE
+    cmp byte [dos_name], 0
+    je .known
+    call dos_w16_isne
+    jnc .known
+    mov byte [dos_hne], 1
+%endif
+.known:
+    cmp byte [dos_hne], 0
+    je .r
+    mov byte [dos_mhead + OS88UI_CK_ON], 0
+.r:
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    popf
+    ret
+%endif
+WIN_CODE_END
+
+; dos_sp_drop - give the part back, if it is held. Every register preserved;
+; the flags are not
+dos_sp_drop:
+    push dx
+    xor dx, dx
+    xchg dx, [dos_spdoor+2]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
+    pop dx
+    ret
+
+; dos_spdo - door AL of the Setup part (dosset.inc's sp_door), fetching it
+; first if it is not held. out: CF = 1 it could not be had and nothing ran
+WIN_CODE                            ; the window's (DOS-HEADLESS-PLAN 4.4)
+dos_spdo:
+    call dos_sp_get
+    jc .r
+    call far [dos_spdoor]
+.r:
+    ret
+WIN_CODE_END
+%endif                              ; DOS_SETPART
 %endif
 %endif
 
@@ -12574,113 +12612,11 @@ dos_kdlrow  equ dos_hbss + DOS_B_KDLROW
                                     ; at the end, and the bss table below
                                     ; cannot see an equ from there
 
-PKT_NHAND   equ 4                   ; handles. mTCP opens ONE (IP) and ARP
-                                    ; rides the same one; four is room for a
-                                    ; client that separates them and one more
-PKT_HUSED   equ 0                   ; --- a handle row ---
-PKT_HTYPE   equ 1                   ; word: the ethertype, big-endian as it
-                                    ; sits on the wire. 0 = every frame
-PKT_HRCVO   equ 3                   ; word: the client's receiver...
-PKT_HRCVS   equ 5                   ; word: ...far
-PKT_HSIZE   equ 7
-
-PKT_VEC_LO  equ 0x60                ; the range the spec reserves, and which a
-PKT_VEC_HI  equ 0x80                ; client walks looking for the signature
-
-; --- what CF=1 means, in DH (Crynwr) -----------------------------------------
-PKE_BADHAND equ 1
-PKE_NOCLASS equ 2
-PKE_NOTYPE  equ 3
-PKE_NONUM   equ 4
-PKE_BADTYPE equ 5
-PKE_NOSPACE equ 9
-PKE_TYPEUSED equ 10
-PKE_BADCMD  equ 11
-PKE_CANTSEND equ 12
-
-; --- get_statistics' record: six DWORDS, in the Crynwr order -----------------
-; These are the numbers mTCP's PKTTOOL prints, so they are kept for real
-; rather than left at zero - and they used to be two DIAGNOSTIC word counters
-; written over bytes_out and errors_in, which made a debugging aid into a
-; wrong answer to a published call.
-PKS_PIN     equ 0                   ; packets in  - frames handed to a client
-PKS_POUT    equ 4                   ; packets out - frames a client sent
-PKS_BIN     equ 8                   ; ...and their lengths, as the client
-PKS_BOUT    equ 12                  ; asked for them rather than as padded
-PKS_ERRIN   equ 16                  ; errors in: nothing here can report one -
-                                    ; a frame the driver could not read never
-                                    ; reaches us at all
-PKS_DROP    equ 20                  ; dropped: no handle matched it, or the
-                                    ; client refused the buffer
-
-PKT_ETYPE   equ 12                  ; where the ethertype sits in a frame. The
-                                    ; ABI publishes the header's SIZE and this
-                                    ; is the one offset inside it a demux needs
-PKT_STK     equ 1024                ; the tick poll's own stack
-                                    ; (SPEC.md 96.23.4.1). The chain under it
-                                    ; is OSAPI_DRV_CALL into the kernel, the
-                                    ; driver's verb, ne_rx's DMA loop and then
-                                    ; the CLIENT's receiver - and the last of
-                                    ; those is the one we cannot measure, so
-                                    ; this is cut generously rather than to a
-                                    ; walked depth
-
-; =============================================================================
-; THE NETWORK CLAIM (SPEC.md 96.23.7) - every byte the wire needs, and NONE
-; of it in this package's bss
-; =============================================================================
-; **A BSS BYTE IS A BYTE THE DOS PROGRAM CANNOT HAVE.** §96.3 hands the
-; program OSAPI_MEM_AVAIL's whole answer, and this package's image + bss is
-; claimed off the same heap first - so every byte declared below the DBSS
-; macro comes straight out of the arena, on every machine, whether or not
-; there is a wire to use it. The frames, the staging copy and the poll's
-; private stack were 4,052 bytes of exactly that: on the 128KB floor machine
-; that is 8% of the arena spent on a driver kern_small does not even ship
-; (SPEC.md 24.5).
-;
-; So they live in a claim `dos_pkt_bufs` takes only when net_find answers -
-; and the shape that makes it nearly free is that **DS IS THIS CLAIM inside
-; every dn_* routine** (SPEC.md 96.26.6). dosnet.inc's premise was already
-; "one segment, no segment override", so pointing that one segment at the
-; claim instead of at ourselves leaves all 78 of its frame references
-; untouched: what changes is the VALUE of the symbols, not the code.
-;
-; It also collapses two branches that were only ever about which buffer:
-; dos_pkt_deliver and dos_pkt_poll each had a `[dos_pkt_xl]` arm choosing
-; between the claim and our bss, and both arms are now the same claim.
-; **THE ORDER IS THE CARD'S NEEDS FIRST**, so that the two routes' claims
-; nest: a card wants the received frame and the stack and nothing else, and
-; putting the cable-only parts above them means the card claims 3KB rather
-; than paying for a hole.
-PKB_RX      equ 0                   ; NET_FRAME: the frame FOR the client -
-                                    ; the card's received one, or the one the
-                                    ; translation built
-PKB_STK     equ 1536                ; PKT_STK bytes of private stack
-PKB_STKTOP  equ PKB_STK + PKT_STK
-PKB_TX      equ PKB_STKTOP          ; NET_FRAME: the CLIENT's own frame,
-                                    ; staged - the CABLE PATH ALONE, because
-                                    ; the card hands the client's buffer to
-                                    ; the driver where it lies (96.23.8)
-PKB_STATE   equ PKB_TX + 1536       ; ...and the translation's own state, laid
-                                    ; out by dosnetabi.inc's DNB_*
-PKT_RXOFF   equ PKB_RX              ; the packet driver's own name for it,
-                                    ; kept because SPEC.md 96.23.7 publishes
-                                    ; that one
-
-; **THE TWO ROUTES CLAIM DIFFERENT AMOUNTS**, which is the other half of not
-; spending a byte that cannot be used: a card needs the received frame and the
-; stack and nothing else, because send_pkt hands the client's own buffer to the
-; driver where it lies (SPEC.md 96.23.8). The cable needs the staging frame and
-; the whole translation state on top.
-PKB_CARDKB  equ (PKB_STK + PKT_STK + 1023) / 1024
-PKB_XLKB    equ (PKB_STATE + DNB_SIZE + 1023) / 1024
-
-PKT_CLASS   equ 1                   ; DIX Ethernet (Blue Book), which is what
-                                    ; an NE2000 is and what mTCP expects
-PKT_TYPE    equ 1
-PKT_FUNC    equ 2                   ; basic plus extended: set/get_rcv_mode
-                                    ; and get_statistics are answered
-PKT_VERSION equ 9
+%include "dospktabi.inc"             ; the packet driver's numbers and the
+                                    ; network part's ABI (SPEC.md 96.23.11)
+%if DOS_ENVN != PN_ENVN || DOS_ENVBUF != PN_ENVBUF
+ %error "dospktabi.inc's PN_ENVN/PN_ENVBUF must match DOS_ENVN/DOS_ENVBUF: the network part walks the environment rows by them (SPEC.md 96.23.11)"
+%endif
 
 ; **THE CHAIN STARTS PAST THE PARTS STANDARD'S OWN BSS** in the trace build
 ; (SPEC.md 96.29.1). os88parts.inc puts its OP_BSS bytes at OP_BSS_AT, which
@@ -12753,6 +12689,24 @@ DOS_CBASE   equ os88_image_end
     %1 equ HB
     %assign HB HB + %2
 %endmacro
+; ...and a THIRD, for the window's tail (DOS-HEADLESS-PLAN 4.4): a row only
+; the window reads, based past the tail's code at `dos_wbss` so that a host
+; with no tail holds none of it - its cell is `DOS_WB + DOS_B_X`. With no
+; tail it IS an HBSS row, in place, and DOS_WB is dos_hbss.
+%assign WB 0
+%macro WBSS 2
+ %ifdef DOS_WTAIL
+    %1 equ WB
+    %assign WB WB + %2
+ %else
+    HBSS %1, %2
+ %endif
+%endmacro
+%ifdef DOS_WTAIL
+ %define DOS_WB dos_wbss           ; ...and the base a WBSS row's cell is at
+%else
+ %define DOS_WB dos_hbss
+%endif
 
 ; --- AND THE VERY FIRST ROW IS THE LOADER'S (SPEC.md 96.44.4) ---------------
 ; `apps/dos/dosload.asm` writes the `kern_dos` part's table row into the head
@@ -12779,25 +12733,48 @@ DOS_CBASE   equ os88_image_end
     HBSS DOS_B_KDLROW, 8         ; ...and kern_mega's LOW kern_dos, part 3,
                                  ; beside them (SPEC.md 96.40.9.2)
 %endif
+%ifdef DOS_WIN16                 ; ...and the DOCUMENT, after them (SPEC.md
+    HBSS DOS_B_DOC, 16           ; 124.3.1): the loader asked OSAPI_ARG_FILE,
+    HBSS DOS_B_W16K, 1           ; which is read-and-clear, so it is here or
+%endif                           ; nowhere - and 1 = it was read and is no NE
+%ifdef DOSKPART
+    HBSS DOS_B_HLPROW, 8         ; ...and HELP's text's row, LAST of the
+%endif                           ; loader's block (DOS-PARTS-PLAN 1.1): its
+                                 ; kind byte carries the stream's format
+%ifdef DOS_NETPART
+    HBSS DOS_B_NETROW, 8         ; ...and the NETWORK part's after it (SPEC.md
+%endif                           ; 96.23.11), the same shape
+%ifdef DOS_SETPART
+    HBSS DOS_B_SETROW, 8         ; ...and the SETUP page's after THAT (SPEC.md
+%endif                           ; 96.32.2.3), the same shape again
+; --- DOS_PART_DVW's row: the windowed layer (SPEC.md 96.54.9) --------------
+%ifdef DVW_SPLIT
+    HBSS DOS_B_DVWROW, 8         ; ...and the WINDOW's after that, the same
+%endif                           ; shape again (dosload.asm's DSLH_DVWROW)
+; --- end DOS_PART_DVW's row -------------------------------------------------
+%ifdef DOS_WTAIL
+    HBSS DOS_B_HEAD, 1           ; **NON-ZERO = HEADLESS** (DOS-HEADLESS-PLAN
+%endif                           ; 4.4): the tail is not in this region, and
+                                 ; every WIN_ONLY bracket tests this byte
     ; --- THE CONSOLE BAND (SPEC.md 96.32), four words dos_con_geom fills and
     ;     the console wave reads. Not banked "for one paint" like the line
     ;     above: they are the answer to a question about the WINDOW, so
     ;     anything that wants them asks for them again rather than trusting a
     ;     paint to have run.
 %ifndef KD_BACKEND                  ; the window's own state (SPEC.md 96.43.2)
-    HBSS DOS_B_CONX,  2          ; the band's left in SCREEN px, 8-aligned
-    HBSS DOS_B_CONY,  2          ; ...its top, below the bar
-    HBSS DOS_B_CONCOLS, 2        ; ...and its size in CELLS: 80, and the rows
-    HBSS DOS_B_CONROWS, 2        ; are 25 or whatever the adapter allows
+    WBSS DOS_B_CONX,  2          ; the band's left in SCREEN px, 8-aligned
+    WBSS DOS_B_CONY,  2          ; ...its top, below the bar
+    WBSS DOS_B_CONCOLS, 2        ; ...and its size in CELLS: 80, and the rows
+    WBSS DOS_B_CONROWS, 2        ; are 25 or whatever the adapter allows
     ; --- THE TOP BAR (SPEC.md 96.32.1) --------------------------------------
-    HBSS DOS_B_PLN,   DOS_LNSZ   ; the path box's os88line block...
-    HBSS DOS_B_PATH,  DOS_PBUF   ; ...and its text, which is the only place
+    WBSS DOS_B_PLN,   DOS_LNSZ   ; the path box's os88line block...
+    WBSS DOS_B_PATH,  DOS_PBUF   ; ...and its text, which is the only place
                                  ; this DOS has ever held a PATH rather than
                                  ; a volume, a cluster and an 8.3 name
-    HBSS DOS_B_ERECT, 8          ; 'Environment' and 'Run', four words each
-    HBSS DOS_B_RRECT, 8
-    HBSS DOS_B_TVOL,  1          ; dos_path_take's scratch: the parsed volume
-    HBSS DOS_B_TNAME, 13         ; and name, held apart until the walk has
+    WBSS DOS_B_ERECT, 8          ; 'Environment' and 'Run', four words each
+    WBSS DOS_B_RRECT, 8
+    WBSS DOS_B_TVOL,  1          ; dos_path_take's scratch: the parsed volume
+    WBSS DOS_B_TNAME, 13         ; and name, held apart until the walk has
                                  ; agreed, so a typo cannot half-commit
 DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
                                  ; and it has to be one: this block is laid
@@ -12808,26 +12785,26 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
                                  ; which is the only thing that makes a second
                                  ; copy of a number safe
     ; --- THE SETUP AREA'S FURNITURE (SPEC.md 96.32.2), four words each -------
-    HBSS DOS_B_TRECT, 8          ; 'Return' and 'Save Shortcut', and they are
-    HBSS DOS_B_SRECT, 8          ; ADJACENT ON PURPOSE (SPEC.md 20.5.1.3): a
+    WBSS DOS_B_TRECT, 8          ; 'Return' and 'Save Shortcut', and they are
+    WBSS DOS_B_SRECT, 8          ; ADJACENT ON PURPOSE (SPEC.md 20.5.1.3): a
                                  ; button group's rects must be contiguous
                                  ; because os88ui_btnpress walks them, so this
                                  ; pair is the Setup page's group and the pair
                                  ; above is the bar's. dos_srect used to sit
                                  ; nine declarations further down
-    HBSS DOS_B_LNV,   2          ; the field's view and length as they were
-    HBSS DOS_B_LNL,   2          ; before a keystroke (os88line_edit's inputs)
-    HBSS DOS_B_LNC,   2          ; ...and its caret, which is the third of them
-    HBSS DOS_B_NCELL, 2          ; glyph cells the edits have redrawn...
-    HBSS DOS_B_NKEY,  2          ; ...over this many keystrokes
-    HBSS DOS_B_PAGE,  1          ; which page is up (DOS_PAGE_*)
-    HBSS DOS_B_BTREC, DOS_BTREC_SZ  ; the standard button record (20.5.1.4),
+    WBSS DOS_B_LNV,   2          ; the field's view and length as they were
+    WBSS DOS_B_LNL,   2          ; before a keystroke (os88line_edit's inputs)
+    WBSS DOS_B_LNC,   2          ; ...and its caret, which is the third of them
+    WBSS DOS_B_NCELL, 2          ; glyph cells the edits have redrawn...
+    WBSS DOS_B_NKEY,  2          ; ...over this many keystrokes
+    WBSS DOS_B_PAGE,  1          ; which page is up (DOS_PAGE_*)
+    WBSS DOS_B_BTREC, DOS_BTREC_SZ  ; the standard button record (20.5.1.4),
                                  ; REPOINTED per page by dos_place - one
                                  ; record, because only one page is ever up.
                                  ; DOS_B_SRECT is NOT here any more: it moved
                                  ; up beside DOS_B_TRECT, a button group's
                                  ; rects having to be contiguous
-    HBSS DOS_B_ABON,  1          ; the About card is up (SPEC.md 96.51)
+    WBSS DOS_B_ABON,  1          ; the About card is up (SPEC.md 96.51)
 %endif
     DBSS DOS_B_ERP,   2          ; the environment row being emitted
 %ifndef KD_BACKEND                  ; the window's own state (SPEC.md 96.43.2)
@@ -12837,17 +12814,17 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
     DBSS DOS_B_CNAME, 14         ; one component of a link's working directory
     DBSS DOS_B_FBUF,  24         ; ...and OSAPI_FIND_SZ while it is looked up
 %ifndef KD_BACKEND                  ; the window's own state (SPEC.md 96.43.2)
-    HBSS DOS_B_WNAME, 14         ; ...and the name a Save dialog chose, which
+    WBSS DOS_B_WNAME, 14         ; ...and the name a Save dialog chose, which
                                  ; may NOT share dos_sbuf: the builder uses it
     HBSS DOS_B_LEND,  2          ; how many bytes of dos_lbuf are real
 %endif
     DBSS DOS_B_EBUF,  DOS_ENVN * DOS_ENVBUF   ; the environment rows...
 %ifndef KD_BACKEND                  ; the window's own state (SPEC.md 96.43.2)
-    HBSS DOS_B_ELN,   DOS_ENVN * DOS_LNSZ     ; ...and their field blocks
+    WBSS DOS_B_ELN,   DOS_ENVN * DOS_LNSZ     ; ...and their field blocks
 %endif
     DBSS DOS_B_ARGS,  DOS_ARGSZ  ; the user's arguments, NUL-terminated
     DBSS DOS_B_PBUF,  DOS_PBUF   ; ...and the program's own path, for the env
-    HBSS DOS_B_LN,    DOS_LNSZ  ; the arguments field's block (os88line.inc)
+    WBSS DOS_B_LN,    DOS_LNSZ  ; the arguments field's block (os88line.inc)
     DBSS DOS_B_HKV,   DHK_NENT * 2  ; **THE HOST'S HOOKS** (96.44.3): zero is
                                  ; "this host does not want it", which is what
                                  ; a zeroed bss already says
@@ -12868,6 +12845,21 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
     HBSS DOS_B_MHDD,  DOS_MCKSZ  ; the two driver boxes (SPEC.md 96.36.7):
     HBSS DOS_B_MNET,  DOS_MCKSZ  ; Hard Drives and Network, arm 0's
     HBSS DOS_B_MMOU,  DOS_MCKSZ  ; ...and Disable the mouse, arm 1's (96.36.8)
+%ifdef DVW
+    HBSS DOS_B_MWIN,  DOS_MCKSZ  ; ...and Run in a window, the furniture
+%endif                           ; row's (96.32.2.4)
+%ifdef DOS_WTAIL
+    WBSS DOS_B_MHEAD, DOS_MCKSZ  ; ...and Close when done, beside it (SPEC.md
+    WBSS DOS_B_HNE,   1          ; 96.44.20) - the TAIL's: only the Setup page
+    WBSS DOS_B_HNEK,  16         ; shows it and the .LNK reader's store is a
+%endif                           ; window's; 1 = the target is an NE, asked of
+                                 ; the locator in HNEK (name, folder, volume)
+%ifdef DOS_SETPART
+    HBSS DOS_B_SPDOOR, 4         ; the Setup part's door, 0:claim - its
+                                 ; segment word 0 = not held (96.32.2.3)
+    HBSS DOS_B_SPTGT, 2          ; ...and the host routine its bouncer calls
+    HBSS DOS_B_SPWALL, 2         ; ...and the KB its claim walls off (96.32.2.3.1)
+%endif
 %ifdef DOS_MEGA
     HBSS DOS_B_MHMA,  DOS_MCKSZ  ; ...and Load DOS in the HMA (96.40.9.2)
     HBSS DOS_B_MSAV,  DOS_MCKSZ  ; ...and Save the session to disk (96.40.9.3)
@@ -12884,12 +12876,12 @@ DOS_BTREC_SZ equ 18              ; **A MIRROR OF os88ui.inc's OS88UI_BT_SIZE**,
                                  ; this one collides with it
                                  ; used by the label AND by the arena figure,
                                  ; which must not disagree
-    HBSS DOS_B_MBUF,  DOS_MEMBUF ; the limit field's text...
-    HBSS DOS_B_MLN,   DOS_LNSZ   ; ...and its os88line block
-    HBSS DOS_B_MX,    2          ; the memory page's content origin, banked
-    HBSS DOS_B_MY,    2          ; for one paint
-    HBSS DOS_B_MSX,   2          ; ...and A PRESS's own x and y, banked for one
-    HBSS DOS_B_MSY,   2          ; click (SPEC.md 96.36.4). It used to ride in
+    WBSS DOS_B_MBUF,  DOS_MEMBUF ; the limit field's text...
+    WBSS DOS_B_MLN,   DOS_LNSZ   ; ...and its os88line block
+    WBSS DOS_B_MX,    2          ; the memory page's content origin, banked
+    WBSS DOS_B_MY,    2          ; for one paint
+    WBSS DOS_B_MSX,   2          ; ...and A PRESS's own x and y, banked for one
+    WBSS DOS_B_MSY,   2          ; click (SPEC.md 96.36.4). It used to ride in
                                  ; DI and BP, which worked while the only
                                  ; control on the block was os88ui_rad - every
                                  ; register preserved - and stopped working the
@@ -13237,6 +13229,9 @@ dos_fh_setup:
 ; DTAs, cannot tread on each other. DOS does exactly this, for exactly that.
 DTA_ORD     equ 0                   ; word: the kernel ordinal to ask next
 DTA_PAT     equ 2                   ; char[13]: the pattern, as it was given
+%if DTA_PAT != 2
+ %error "`inc di` twice stands for `add di, DTA_PAT` (size pass, SPEC.md 96.54.8)"
+%endif
 DTA_MASK    equ 15                  ; byte: the ATTRIBUTE MASK AH=4Eh was
                                     ; given, which DOS also keeps in the
                                     ; reserved head of the DTA. AH=4Fh needs
@@ -13291,7 +13286,8 @@ dos_find_step:
                                     ; not a file a DOS program can be shown
     mov di, [dos_dtasv]
     mov es, [dos_dtasvs]
-    add di, DTA_PAT
+    inc di
+    inc di
     mov si, dos_fent
     call dos_wild                   ; DS:SI the name, ES:DI the pattern
     mov cx, [dos_ford]
@@ -13344,13 +13340,7 @@ dos_find_step:
     mov al, 18
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dos_popb_6                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -13615,14 +13605,7 @@ dos_cd_go:
 .no:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_7                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -13770,14 +13753,7 @@ dos_drv_sel:
                                 ; what a real DOS does, AH=0Eh touching no
                                 ; drive at all
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_7                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 
 ; =============================================================================
@@ -14141,14 +14117,7 @@ dos_time_set:
     mov [es:0x6E], di
     mov [dos_lasttl], si            ; ...and midnight is measured from here now
     mov [dos_lastth], di
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_7                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -14200,8 +14169,15 @@ dos_prog_enter:
     sti
     mov ds, dx
     mov es, dx
-    xor ax, ax                      ; AL/AH = the two FCB drive checks, and 0
-                                    ; is "both valid"
+    xor ax, ax                      ; AL/AH = the two FCB drive checks: FFh
+    cmp byte [es:0x5C], DVOL_MAX    ; for a drive past the last, as DOS does
+    jbe .d1                         ; (MEASURED, `FOO Z:BAR` enters with
+    mov al, 0xFF                    ; AX=FF00h, SPEC.md 96.56.3)
+.d1:
+    cmp byte [es:0x6C], DVOL_MAX
+    jbe .d2
+    mov ah, 0xFF
+.d2:
     push si
     push di
     retf
@@ -14289,13 +14265,7 @@ dos_exec_load:
 .err:
     stc
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dos_popb_6                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -14357,6 +14327,23 @@ dos_exec_tail:
     push es
     mov es, [dos_xparms]
     mov di, [dos_xparm]
+    mov ax, 0x5C                    ; THE BLOCK'S TWO FCBs, at +6 and +0Ah,
+.fcb:                               ; into 5Ch and 6Ch - TWELVE bytes each and
+    push di                         ; not sixteen: MEASURED, a child sees
+    push es                         ; 5Ch+12..15 as zero whatever the block's
+    lds si, [es:di+6]               ; FCB holds there (SPEC.md 96.56.3)
+    mov es, [cs:dos_ldpsp]
+    mov di, ax
+    mov cx, 12
+    cld
+    rep movsb
+    pop es
+    pop di
+    add di, 4
+    add al, 0x10
+    cmp al, 0x6C
+    jbe .fcb
+    sub di, 8
     mov si, [es:di+2]
     mov ax, [es:di+4]
     or ax, ax
@@ -14540,7 +14527,7 @@ dos_xms_ent:
     jmp .out
 .ver:
     mov ax, 0x0300                  ; XMS 3.0
-    mov bx, 0
+    xor bx, bx
     xor dx, dx                      ; ...and NO HMA: the high memory area is a
     jmp .out                        ; 286 addressing trick and this is an 8086
                                     ; contract (SPEC.md 96.15.2)
@@ -15157,714 +15144,79 @@ dos_xms_move:
 ; and no ISR to hand over: this is a translation and not a negotiation. The
 ; price is that receive is a POLL underneath an UP-CALL, which is 96.23.4.
 
-dos_pkt_name: db 'os8088 ETHER', 0
+%ifdef DOS_NETINLINE
+%include "dospkt.inc"                ; the family itself (SPEC.md 96.23.11)
+%endif
 
+%ifdef DOS_NONET
+; --- kern_mega: NO packet driver (SPEC.md 96.23.11) --------------------------
+; Every launch there is the whole machine (dos_mem_fix), and kern_dos has no
+; packet driver (96.43) - so dos_pkt_start was unreachable and the family was
+; code that could only claim 3KB and give it back. The four the host calls
+; answer `no wire` and do nothing.
+dos_pkt_want:
+    xor cx, cx
+    stc
+    ret
+dos_pkt_bufs:
+dos_pkt_start:
+dos_pkt_shut:
+    ret
+%else
+
+%ifdef DOS_NETPART
 ; -----------------------------------------------------------------------------
-; dos_pkt_entry - THE VECTOR (SPEC.md 96.23.2)
-;
-; The first three bytes are a jump and the signature starts at offset 3, which
-; is the whole of how a client finds this. A short jump would be two and put
-; the signature one byte early, so the assertion below is not decoration - it
-; is the one thing in this file a reader cannot check by eye.
+; dos_pkt_start - publish the interface: the PART's (SPEC.md 96.23.11), PINNED
+;                 first, because from here the program's vector and INT 08h
+;                 point into the claim and nothing could re-aim a copy of them
+; in:  nothing; out: nothing; every register preserved
 ; -----------------------------------------------------------------------------
-dos_pkt_entry:
-    jmp strict near dos_pkt_go
-dos_pkt_sig:
-    db 'PKT DRVR', 0
-%if dos_pkt_sig - dos_pkt_entry != 3
- %error "the PKT DRVR signature must begin at offset 3 of the handler (Crynwr)"
+dos_pkt_start:
+    cmp word [dos_pkt_bseg], 0
+    je .none                        ; no wire, or a run that never read it
+    push ax
+    xor ax, ax
+    call dos_pkt_rloc               ; pinned until dos_pkt_shut frees it
+    mov al, PN_D_START
+    call far [dos_pkt_door]
+    pop ax
+.none:
+    ret
 %endif
 
 ; -----------------------------------------------------------------------------
-; The gate, in dos_int21's shape and for its reasons (SPEC.md 96.7.1): entered
-; on the CLIENT's stack with the client's segment registers, so the first thing
-; it does is reach its own data through CS, and the carry flag it returns is
-; the one in the FLAGS image the `int` pushed.
+; dos_pkt_shut - every translated flow closed, the handles and the raw claim
+;                given back, and THEN the claim itself (SPEC.md 96.23.5, 96.23.7)
+; in:  nothing; out: nothing; every register preserved
 ;
-;   [bp]=DS [bp+2]=BP [bp+4]=IP [bp+6]=CS [bp+8]=FLAGS
-;   [bp-2]=SI [bp-4]=DI [bp-6]=ES
-;
-; SI, DI and ES are banked BELOW bp and restored from there, so a handler that
-; leaves the stack at any depth still returns the client's registers - and
-; `driver_info` writes its DS:SI answer into [bp] and [bp-2] rather than into
-; the live registers, which is the same trick AH=35h uses one section up.
+; ONE CALL AT BOTH OF dos_run's exits and dvw's: it was `dn_shut` then this,
+; at each site, and the part's door does the pair (96.23.11). The kernel
+; frees a dead instance's claims anyway, so the free is about handing memory
+; back MID-SESSION - which is exactly what a DOS window that stays open after
+; a run is.
 ; -----------------------------------------------------------------------------
-dos_pkt_go:
-    sti
-    push bp
-    push ds
-    mov bp, sp
-    push si
-    push di
-    push es
-    push ds                         ; **THE CLIENT'S DS, BANKED FROM THE
-    push cs                         ; REGISTER** (SPEC.md 96.23.9) - the
-    pop ds                          ; version that read it back out of [bp]
-    pop word [dos_pkt_cds]          ; answered our OWN segment, and `[bp]` is
-                                    ; SS-relative so it was never going to be
-                                    ; checkable by eye. This pops the value
-                                    ; pushed one instruction earlier, with DS
-                                    ; already ours so the store lands here
-
-    call dos_pkt_poll               ; **DRAIN FIRST** (SPEC.md 96.23.4): a
-                                    ; client in a send loop receives as it
-                                    ; sends, without waiting for a tick
-
-    cmp ah, 1
-    je .info
-    cmp ah, 2
-    je .access
-    cmp ah, 3
-    je .release
-    cmp ah, 4
-    je .send
-    cmp ah, 5
-    je .term
-    cmp ah, 6
-    je .getaddr
-    cmp ah, 20
-    je .setmode
-    cmp ah, 21
-    je .getmode
-    cmp ah, 24
-    je .stats
-    mov dh, PKE_BADCMD              ; a client asking for a feature it can
-    jmp .err                        ; live without expects exactly this
-
-; --- AH=1 driver_info --------------------------------------------------------
-; out BX=version CH=class DX=type CL=number DS:SI=name AL=functionality
-.info:
-    mov bx, PKT_VERSION
-    mov ch, PKT_CLASS
-    mov dx, PKT_TYPE
-    mov cl, 0                       ; interface number
-    mov al, PKT_FUNC
-    mov word [bp-2], dos_pkt_name   ; the BANKED SI and DS, not the live ones:
-    mov [bp], cs                    ; the exit path restores both from here
-    jmp .ok
-
-; --- AH=2 access_type --------------------------------------------------------
-; in AL=if_class BX=if_type DL=if_number DS:SI=type CX=typelen ES:DI=receiver
-; out AX = a handle
-;
-; DS:SI is the CLIENT's - our own DS is CS by now - so the ethertype is read
-; through the banked [bp]. ES and DI are still the client's in the live
-; registers, which is what makes the receiver pointer a plain bank.
-.access:
-    cmp al, PKT_CLASS
-    jne .noclass
-    cmp bx, PKT_TYPE                ; 0FFFFh is the spec's "any type of card"
-    je .clsok
-    cmp bx, 0xFFFF
-    jne .notype
-.clsok:
-    or dl, dl                       ; one card, number 0
-    jz .numok
-    cmp dl, 0xFF
-    jne .nonum
-.numok:
-    push cx
-    push si
-    xor ax, ax                      ; AX = the ethertype, 0 = every frame
-    or cx, cx
-    jz .anytype
-    cmp cx, 2                       ; **A LENGTH OTHER THAN 2 IS REFUSED**
-    jne .badtype                    ; rather than read short: an ethertype is
-    push es                         ; two bytes and a client that passed a
-    mov es, [bp]                    ; longer one means a protocol this card
-    mov ah, [es:si]                 ; layer does not have (802.2 LSAPs)
-    mov al, [es:si+1]
-    pop es
-.anytype:
-    call dos_pkt_hnew               ; BX = the row, or CF=1 = full
-    jc .nospace
-    mov [bx+PKT_HTYPE], ax
-    mov [bx+PKT_HRCVO], di
-    mov ax, es
-    mov [bx+PKT_HRCVS], ax
-    mov byte [bx+PKT_HUSED], 1
-    call dos_pkt_claim              ; **THE WIRE, ON THE FIRST HANDLE**
-    jc .noclaim                     ; (SPEC.md 96.23.5) - not at bracket entry
-    mov ax, bx                      ; the handle IS the row address: it is
-    pop si                          ; ours to choose and this makes every
-    pop cx                          ; later lookup a bounds check instead of
-    jmp .ok                         ; a multiply
-.badtype:
-    pop si
-    pop cx
-    mov dh, PKE_BADTYPE
-    jmp .err
-.nospace:
-    pop si
-    pop cx
-    mov dh, PKE_NOSPACE
-    jmp .err
-.noclaim:
-    mov byte [bx+PKT_HUSED], 0      ; the row goes back: a handle that cannot
-    pop si                          ; receive is worse than a refusal
-    pop cx
-    mov dh, PKE_NOSPACE
-    jmp .err
-.noclass:
-    mov dh, PKE_NOCLASS
-    jmp .err
-.notype:
-    mov dh, PKE_NOTYPE
-    jmp .err
-.nonum:
-    mov dh, PKE_NONUM
-    jmp .err
-
-; --- AH=3 release_type -------------------------------------------------------
-; in BX = the handle
-.release:
-    call dos_pkt_hchk
-    jc .badhand
-    mov byte [bx+PKT_HUSED], 0
-    call dos_pkt_idle               ; the last handle takes the claim with it
-    jmp .ok
-.badhand:
-    mov dh, PKE_BADHAND
-    jmp .err
-
-; --- AH=4 send_pkt -----------------------------------------------------------
-; in DS:SI = the frame, CX = its length. The client's DS again.
-.send:
-    cmp cx, NET_EHSIZE
-    jb .cantsend
-    cmp cx, NET_FRAME
-    ja .cantsend
-    ; --- **THERE IS NO STAGING COPY** (SPEC.md 96.23.8) --------------------
-    ; NETV_RAWTX takes the segment (SPEC.md 72.22.4), so the client's own
-    ; buffer is handed over where it lies: DX = the DS the `int` pushed, SI =
-    ; the offset it was called with. The driver copies into eth_txb either
-    ; way, so a staging copy of ours was a SECOND copy of 1,514 bytes on a
-    ; 4.77MHz machine and 1,514 bytes of claim to hold it - and it was where
-    ; a whole class of segment bug lived, because it was the one place this
-    ; package addressed the client's memory itself.
-    mov dx, [dos_pkt_cds]           ; the CLIENT's DS, banked at the gate
-    push cx                         ; ...and the LENGTH, because get_statistics
-                                    ; wants it after the route has run and
-                                    ; OSAPI_DRV_CALL publishes CX as the
-                                    ; driver's to define
-    cmp byte [dos_pkt_xl], 0
-    jne .xlate                      ; the cable carries no frames (SPEC.md
-                                    ; 72.22.3), so they are TRANSLATED
-    mov bh, DRVC_NET
-    mov bl, NETV_RAWTX
-    call OSAPI_DRV_CALL
-    jnc .sent
-    pop cx
-    jmp short .cantsend
-.xlate:
-    ; --- the translation reads the frame in OUR segment --------------------
-    ; dn_tx and everything under it use no segment override, because every
-    ; other byte they touch is ours. So this is the one copy the card path
-    ; does not make - 42 to 1514 bytes, against a wire that moves 3,741 a
-    ; second, which is not the cost that decides anything here.
-    push cx
-    push si
-    push di
-    push es
-    push ds
-    mov es, [dos_pkt_bseg]          ; ES:DI is the CLAIM's staging frame and
-    mov di, dos_pkt_txs             ; DS:SI the client's own buffer
-    mov ds, dx
-    call dos_pkt_copy               ; DS:SI -> ES:DI, CX bytes
-    pop ds
-    pop es
-    pop di
-    pop si
-    pop cx
-    mov si, dos_pkt_txs
-    call dn_tx
-.sent:
-    ; --- get_statistics' OWN numbers, and they are the real ones -----------
-    ; Both routes end here so the count is written once. It is the client's
-    ; own frame length that is added, not the driver's padded one: a Crynwr
-    ; client asked for these bytes and mTCP's PKTTOOL prints them back.
-    pop cx
-    add word [dos_pkt_stats+PKS_POUT], 1
-    adc word [dos_pkt_stats+PKS_POUT+2], 0
-    add word [dos_pkt_stats+PKS_BOUT], cx
-    adc word [dos_pkt_stats+PKS_BOUT+2], 0
-    jmp .ok
-.cantsend:
-    mov dh, PKE_CANTSEND
-    jmp .err
-
-; --- AH=5 terminate ----------------------------------------------------------
-.term:
-    call dos_pkt_hchk
-    jc .badhand
-    call dos_pkt_rawdrop            ; NOT dos_pkt_shut: the buffers are the
-    jmp .ok                         ; bracket's and a program that terminates
-                                    ; the driver may still open it again
-
-; --- AH=6 get_address --------------------------------------------------------
-; in BX = handle, ES:DI = a buffer, CX = its size; out CX = bytes written
-.getaddr:
-    call dos_pkt_hchk
-    jc .badhand
-    cmp cx, 6
-    jb .badhand
-    push si
-    push di
-    mov si, dos_pkt_mac             ; banked by the claim (SPEC.md 72.22), so
-    mov cx, 6                       ; this costs no driver call at all
-    call dos_pkt_copy             ; DS:SI -> ES:DI
-    pop di
-    pop si
-    mov cx, 6
-    jmp .ok
-
-; --- AH=20 / 21 set and get receive mode -------------------------------------
-; 3 is "every frame addressed to me, plus broadcast", which is the mode
-; ne_init leaves the card in and the only one this driver can honestly offer.
-.setmode:
-    cmp cx, 3
-    jne .badmode
-    mov byte [dos_pkt_mode], 3
-    jmp .ok
-.badmode:
-    mov dh, PKE_BADTYPE
-    jmp .err
-.getmode:
-    xor ax, ax
-    mov al, [dos_pkt_mode]
-    jmp .ok
-
-; --- AH=24 get_statistics ----------------------------------------------------
-; out DS:SI = six dwords: packets in, packets out, bytes in, bytes out,
-;     errors in, packets dropped.
-.stats:
-    mov word [bp-2], dos_pkt_stats
-    mov [bp], cs
-    jmp .ok
-
-.ok:
-    and word [bp+8], 0xFFFE         ; CF=0 in the RETURNED flags, not the live
-    jmp short .leave                ; ones - the iret would discard those
-.err:
-    or word [bp+8], 1
-.leave:
-    ; STKBALANCE-OK: dos_int21's arrangement and its reasons (SPEC.md 96.7.1)
-    ; - the frame is restored from `bp`, so this gate's promise does not rest
-    ; on every handler above being balanced.
-    mov si, [bp-2]
-    mov di, [bp-4]
-    mov es, [bp-6]
-    mov sp, bp
-    pop ds
-    pop bp
-    iret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_hnew / dos_pkt_hchk - the handle table
-;
-; **A HANDLE IS THE ROW'S OWN ADDRESS**, which is ours to choose and makes
-; every later lookup a bounds check rather than a multiply. hchk is what makes
-; that safe: a client handing back a number it made up is refused before it
-; can index anything.
-; out: hnew  CF=0 with BX = a free row, CF=1 = the table is full
-;      hchk  CF=0 = BX is one of ours and in use
-; -----------------------------------------------------------------------------
-dos_pkt_hnew:
-    push cx
-    mov bx, dos_pkt_htab
-    mov cx, PKT_NHAND
-.l:
-    cmp byte [bx+PKT_HUSED], 0
-    je .got
-    add bx, PKT_HSIZE
-    loop .l
-    pop cx
-    stc
-    ret
-.got:
-    pop cx
-    clc
-    ret
-
-dos_pkt_hchk:
-    push ax
-    push dx
-    mov ax, bx
-    sub ax, dos_pkt_htab            ; below the table wraps to a huge unsigned,
-    cmp ax, PKT_NHAND * PKT_HSIZE   ; so one compare catches both ends
-    jae .no
-    mov dl, PKT_HSIZE               ; ...and it must be ON a row boundary, not
-    div dl                          ; merely inside the table: AX is under 28,
-    or ah, ah                       ; so a BYTE divide, AH = the remainder.
-    jnz .no                         ; (It was `div cx`, and CX is the CLIENT's
-                                    ; - get_address's buffer size, read after
-                                    ; this returns - which it overwrote with 7;
-                                    ; SPEC.md 96.44.16)
-    cmp byte [bx+PKT_HUSED], 0
-    je .no
-    pop dx
-    pop ax
-    clc
-    ret
-.no:
-    pop dx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_claim / dos_pkt_idle / dos_pkt_shut - the raw claim's lifetime
-;
-; Taken on the FIRST handle and dropped when the last one goes or the bracket
-; ends (SPEC.md 96.23.5). A DOS program that never asks for a packet driver
-; leaves our own stack running, which is most of them.
-; -----------------------------------------------------------------------------
-dos_pkt_claim:
-    cmp byte [dos_pkt_raw], 0
-    jne .have
-    ; --- **THE CABLE HAS NO RAW CLAIM TO TAKE** (SPEC.md 96.26.4) ----------
-    ; NETV_RAW is one of the three verbs NET.DRV refuses (72.22.3), so asking
-    ; for it here would fail every access_type on the machine this translation
-    ; exists for. There is nothing to claim: no ring, no card, and our own
-    ; stack is not using a wire the DOS program can collide with.
-    ;
-    ; It also has to invent the STATION ADDRESS the claim would have handed
-    ; back, because get_address must answer something and there is no PROM to
-    ; read. Locally-administered unicast again, and one digit off the
-    ; gateway's - a client that saw its own address on both ends of a frame
-    ; would drop it as a loop.
-    cmp byte [dos_pkt_xl], 0
-    je .real
-    push ax
-    push cx
-    push si
-    push di
-    mov si, dn_ourmac_c             ; **THE IMAGE COPY AND NOT THE CLAIM'S**:
-    mov di, dos_pkt_mac             ; dn_ourmac is an offset into the network
-    mov cx, 6                       ; claim now (SPEC.md 96.26.6) and DS here
-    call dn_copy                    ; is ours, so reading it would fetch six
-                                    ; bytes of our own bss. The constant is in
-                                    ; the image, which is the one place both
-                                    ; segments can see
-    pop di
-    pop si
-    pop cx
-    mov byte [dos_pkt_raw], 1
-    xor ax, ax                      ; ...AND THE BUFFERS ARE PINNED FROM HERE
-    call dos_pkt_rloc               ; (96.23.7.2): dos_pkt_tick's stack is in
-                                    ; them from this instruction on. BEFORE the
-                                    ; `pop ax` and not after: this arm restores
-                                    ; the caller's AX on its way out, and a
-                                    ; clobber below the pop is a routine that
-                                    ; has quietly stopped preserving a register
-    pop ax
-    clc
-    ret
-.real:
-    push ax
-    push bx
-    push di
-    mov di, dos_pkt_mac             ; the claim hands back the station address
-    mov al, 1                       ; (SPEC.md 72.22) - a consumer that is the
-    mov bh, DRVC_NET                ; stack now cannot build a frame without it
-    mov bl, NETV_RAW
-    call OSAPI_DRV_CALL
-    jc .no
-    mov byte [dos_pkt_raw], 1
-    xor ax, ax                      ; ...and the buffers are pinned from here
-    call dos_pkt_rloc               ; too - the card route's stack is the same
-    pop di                          ; stack (96.23.7.2)
-    pop bx
-    pop ax
-.have:
-    clc
-    ret
-.no:
-    pop di
-    pop bx
-    pop ax
-    stc
-    ret
-
-dos_pkt_idle:                       ; the LAST handle takes the claim with it
-    push bx
-    push cx
-    mov bx, dos_pkt_htab
-    mov cx, PKT_NHAND
-.l:
-    cmp byte [bx+PKT_HUSED], 0
-    jne .busy
-    add bx, PKT_HSIZE
-    loop .l
-    pop cx
-    pop bx
-    jmp dos_pkt_rawdrop             ; a TAIL JUMP and not a fall-through: the
-                                    ; label between them would take the local
-                                    ; names below it into its own namespace,
-                                    ; which is how `.busy` stopped resolving
-.busy:
-    pop cx
-    pop bx
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_rawdrop - the handles and the raw claim, but NOT the buffers
-; dos_pkt_shut    - ...and the buffers too, which only the bracket may do
-;
-; **THE SPLIT IS THE POINT.** The first version had release_type free the
-; buffer claim along with everything else, and that is unrecoverable: §96.3
-; has already given the whole heap to the program, so a client that released
-; a handle and asked for another got its access_type refused for ever. The
-; buffers belong to the BRACKET's lifetime and the raw claim to the handles'.
-; -----------------------------------------------------------------------------
-dos_pkt_rawdrop:
-    push ax
-    push bx
-    push cx
-    push di
-    mov cx, PKT_NHAND               ; every handle goes, whichever path came
-    mov bx, dos_pkt_htab            ; here: terminate is defined to end them
-.z:
-    mov byte [bx+PKT_HUSED], 0
-    add bx, PKT_HSIZE
-    loop .z
-    cmp byte [dos_pkt_raw], 0
-    je .out
-    cmp byte [dos_pkt_xl], 0        ; nothing was claimed on the translation
-    jne .letgo                      ; path, so there is nothing to give back
-    xor di, di                      ; no MAC wanted on the way out
-    xor al, al                      ; release
-    mov bh, DRVC_NET
-    mov bl, NETV_RAW
-    call OSAPI_DRV_CALL
-.letgo:
-    mov byte [dos_pkt_raw], 0
-    mov ax, dos_pkt_reloc           ; ...and nothing is standing on the private
-    call dos_pkt_rloc               ; stack any more, so the block may move
-                                    ; again (96.23.7.2)
-.out:
-    pop di
-    pop cx
-    pop bx
-    pop ax
-    ret
-
 dos_pkt_shut:
-    call dos_pkt_rawdrop
-    cmp word [dos_pkt_bseg], 0      ; ...and NOW the buffers. The kernel frees
-    je .nobuf                       ; a dead instance's claims anyway
-    push dx                         ; (os88api.inc), so this is only about
-    mov dx, [dos_pkt_bseg]          ; handing memory back MID-SESSION - which
-    call OSAPI_MEM_FREE             ; is exactly what a DOS window that stays
-    mov word [dos_pkt_bseg], 0      ; open after a run is
+%ifdef DOS_NETPART
+    cmp word [dos_pkt_bseg], 0
+    je .nobuf
+    push ax
+    xor ax, ax                      ; pinned for the call INTO it: a run that
+    call dos_pkt_rloc               ; refused before dos_pkt_start left it
+    mov al, PN_D_SHUT               ; movable
+    call far [dos_pkt_door]
+    pop ax
+%else
+    call dn_shut                    ; before the driver that owns its sockets
+    call dos_pkt_rawdrop            ; is resumed (the callers' order)
+    cmp word [dos_pkt_bseg], 0
+    je .nobuf
+%endif
+    push dx
+    mov dx, [dos_pkt_bseg]
+    call OSAPI_MEM_FREE
+    mov word [dos_pkt_bseg], 0
     pop dx
 .nobuf:
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_poll - drain the ring, up-calling the client once per frame
-;
-; **BP IS NOT TOUCHED**: this is called from the gate, where BP is the frame
-; pointer every exit path restores the client's registers through.
-;
-; The budget is what stops a busy segment of network from holding a tick for
-; as long as it likes, and it is the ring's own depth rather than a guess: the
-; NE2000 holds about ten frames, so a drain of ten empties whatever was there
-; and an eleventh would be a frame that arrived while we were working.
-; -----------------------------------------------------------------------------
-PKT_BUDGET  equ 10
-
-dos_pkt_poll:
-    cmp byte [dos_pkt_raw], 0
-    je .out                         ; no claim, no frames - and this is the
-                                    ; common case: most DOS programs are not
-                                    ; network programs
-    cmp byte [dos_pkt_busy], 0
-    jne .out                        ; **THE TICK CAN LAND INSIDE A CALL** and
-                                    ; the client's receiver is not re-entrant
-                                    ; merely because ours is
-    cmp word [dos_pkt_bseg], 0      ; **AND THE CLAIM GUARD IS BOTH ROUTES'**
-    je .out                         ; now (SPEC.md 96.23.7): it was the card's
-                                    ; alone while the translation kept its
-                                    ; frame in bss, and the symptom of getting
-                                    ; that wrong was an ARP that vanished -
-                                    ; dn_tx had swallowed the request and
-                                    ; built the reply correctly, and this test
-                                    ; stopped the poll before anything came to
-                                    ; collect it
-    mov byte [dos_pkt_busy], 1
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
-    push es
-    mov dx, PKT_BUDGET
-.f:
-    push dx                         ; the budget: DX is the segment argument now
-    cmp byte [dos_pkt_xl], 0
-    jne .xl
-    mov di, PKT_RXOFF
-    mov cx, NET_FRAME
-    mov dx, [dos_pkt_bseg]
-    mov bh, DRVC_NET
-    mov bl, NETV_RAWRX
-    call OSAPI_DRV_CALL
-    pop dx
-    jc .done
-    jmp short .got
-.xl:
-    call dn_ready                   ; ...and it is ALREADY at PKB_RX, because
-    pop dx                          ; the translation BUILT it there - which
-    jc .done                        ; is the one place the two routes differ
-                                    ; and the only reason this branch is left
-.got:                        ; the ring is empty
-    cmp cx, NET_FRAME                ; the TRUE length may exceed what we asked
-    ja .next                        ; for (SPEC.md 72.22.2), and a cut frame
-                                    ; handed to a stack is worse than none
-    cmp cx, NET_EHSIZE
-    jbe .next
-    push dx                         ; **THE BUDGET GOES ON THE STACK ACROSS
-    call dos_pkt_deliver            ; THE UP-CALL**, because DX is not ours
-    pop dx                          ; over it: dos_pkt_deliver far-calls the
-                                    ; CLIENT's receiver twice, and a client
-                                    ; owes us no register at all. With the
-                                    ; count in DX a receiver that used it
-                                    ; turned a ten-frame drain into up to
-                                    ; 65,535 of them, inside a tick handler -
-                                    ; the same livelock dn_pump's CL counter
-                                    ; had, one layer out
-.next:
-    dec dx
-    jnz .f
-.done:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    mov byte [dos_pkt_busy], 0
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_deliver - one frame in the claim, CX bytes, to whoever registered
-;
-; **THE UP-CALL IS TWO CALLS** and that is the Crynwr contract rather than a
-; choice (SPEC.md 96.23.4): AX=0 asks the client for somewhere to put CX
-; bytes, and AX=1 hands the same buffer back full. A client that answers 0:0
-; has refused it, and the frame is gone - it is off the ring already and there
-; is nowhere to put it back.
-; -----------------------------------------------------------------------------
-dos_pkt_deliver:
-    push es                         ; **ONE SOURCE ON BOTH ROUTES NOW** - the
-    mov es, [dos_pkt_bseg]          ; card writes the claim through NETV_RAWRX
-    mov ax, [es:PKT_RXOFF+PKT_ETYPE] ; and the translation BUILDS in it
-    pop es                          ; (SPEC.md 96.23.7), so the two arms this
-                                    ; routine had, and the [dos_pkt_xl] test
-                                    ; that chose between them, are gone
-    xchg al, ah                     ; the wire is big-endian and we are not
-    mov bx, dos_pkt_htab
-    mov si, PKT_NHAND
-.l:
-    cmp byte [bx+PKT_HUSED], 0
-    je .next
-    cmp word [bx+PKT_HTYPE], 0
-    je .hit                         ; 0 = every frame, whatever its type
-    cmp [bx+PKT_HTYPE], ax
-    je .hit
-.next:
-    add bx, PKT_HSIZE
-    dec si
-    jnz .l
-                                    ; nobody registered for it, so it is
-                                    ; dropped - which is what a packet driver
-                                    ; does and not an error of ours, and
-                                    ; get_statistics has a FIELD for saying so
-.dropped:
-    add word [dos_pkt_stats+PKS_DROP], 1
-    adc word [dos_pkt_stats+PKS_DROP+2], 0
-    ret
-.hit:
-    mov ax, [bx+PKT_HRCVO]
-    mov [dos_pkt_cvec], ax
-    mov ax, [bx+PKT_HRCVS]
-    mov [dos_pkt_cvec+2], ax
-    mov [dos_pkt_chand], bx         ; the handle, which both calls carry
-
-    push cx                         ; --- call one: where shall I put it? ---
-    xor ax, ax
-    push ds
-    push bp                         ; the CLIENT is about to run: it owes us
-    call far [dos_pkt_cvec]         ; nothing, and BP is the gate's frame
-    pop bp
-    pop ds
-    pop cx
-    mov ax, es
-    or ax, di
-    jz .dropped                     ; 0:0 - refused, and the frame is gone -
-                                    ; it is off the ring already and there is
-                                    ; nowhere to put it back, so it is a DROP
-                                    ; and get_statistics counts it as one
-
-    push cx                         ; --- the copy, the claim to theirs ---
-    push di
-    push es
-    push ds
-    mov si, PKT_RXOFF               ; DS:SI is the claim and ES:DI the buffer
-    mov ds, [dos_pkt_bseg]          ; the client just gave us
-    call dos_pkt_copy
-    pop ds
-    pop es
-    pop di
-    pop cx
-
-    mov bx, [dos_pkt_chand]         ; --- call two: here it is ---
-    mov si, di                      ; DS:SI is the buffer THEY chose, which is
-    mov ax, 1                       ; what the contract hands back
-    push ds
-    push bp
-    push es
-    pop ds                          ; **DS IS THE CLIENT'S FROM HERE TO THE
-    call far [cs:dos_pkt_cvec]      ; POP**, so the vector is only reachable
-    pop bp                          ; with an override - and reading it from
-    pop ds                          ; the client's segment would be a wild
-                                    ; far call into the program's own data
-    add word [dos_pkt_stats+PKS_PIN], 1
-    adc word [dos_pkt_stats+PKS_PIN+2], 0
-    add word [dos_pkt_stats+PKS_BIN], cx
-    adc word [dos_pkt_stats+PKS_BIN+2], 0
-.out:
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_copy - DS:SI -> ES:DI, CX bytes
-;
-; Written out rather than `rep movsb` for the reason every package here has
-; one of these: a package's ES is the kernel's on entry to a callback and its
-; own only where it has just set it, so the string instructions are the one
-; family whose implicit segment is worth not relying on.
-; -----------------------------------------------------------------------------
-dos_pkt_copy:
-    push ax
-    push cx
-    push si
-    push di
-    jcxz .out
-.l:
-    mov al, [si]
-    mov [es:di], al
-    inc si
-    inc di
-    loop .l
-.out:
-    pop di
-    pop si
-    pop cx
-    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -15889,13 +15241,62 @@ dos_pkt_bufs:
     push dx
     push di
     push es
+%ifdef DOS_NETPART
+    push si
+    push bp
+%endif
     mov word [dos_pkt_bseg], 0
     mov byte [dos_pkt_xl], 0
+%ifdef DOS_NETPART
+    ; --- **NOT FOR A RUN THAT WILL NEVER PUBLISH** (SPEC.md 96.23.11) -------
+    ; Reading the part is a disk read, so it is spent only on a run that will
+    ; reach dos_pkt_start: not a run in the window (96.54 publishes no packet
+    ; driver) and not the whole machine (kern_dos has none, 96.43). dos_run
+    ; has fixed the arm before this, so the arm tested is the arm that runs.
+%ifdef DVW
+    cmp byte [dvw_want], 0
+    jne .out
+%endif
+    cmp byte [dos_keepc], DOS_MEM_WHOLE
+    je .out
+%endif
     call dos_pkt_want               ; CX = the KB, AL = the translation flag -
     jc .out                         ; ONE reader for the size and the route, so
     mov [dos_pkt_xl], al            ; the figure on the Memory page and the
                                     ; claim taken here cannot disagree
                                     ; (SPEC.md 96.23.7.1, 47 rule 5)
+%ifdef DOS_NETPART
+    ; --- **THE CODE AND THE BUFFERS ARE ONE CLAIM** (SPEC.md 96.23.11) ------
+    ; op_self expands the part into the head of a claim of at least CX KB -
+    ; the part's image, its cells and the buffers, which is what
+    ; dos_pkt_want sized from the row - so the network spends ONE of the
+    ; eight owner claims and [dos_pkt_bseg] still names the whole of it.
+    push cx
+    mov ah, cl                      ; the floor (a dozen KB: one byte)
+    mov si, dos_netrow
+    call dos_pself                  ; DX = the claim, CX = the part's length
+    pop ax                          ; AX = the KB
+    jc .out                         ; **A REFUSAL IS SURVIVABLE**, as the
+    mov [dos_pkt_bseg], dx          ; claim's always was: the program runs
+                                    ; and nothing is published
+    mov es, dx                      ; ...and everything PAST the image is
+    mov di, cx                      ; zeroed, for 96.23.7's reason - and
+    mov cl, 10                      ; because op_self leaves the stream's
+    shl ax, cl                      ; tail in it
+    sub ax, di                      ; (dos_pkt_want sized the claim from this
+    mov cx, ax                      ; very length, so it is never negative)
+    xor al, al
+    cld
+    rep stosb
+    mov al, PN_D_INIT               ; the part's own start: the route, the
+    mov ah, [dos_pkt_xl]            ; class it answers on, and where the
+    mov bl, [net_cls]               ; environment rows are (OS88LISTEN=,
+    mov dx, ds                      ; 96.26.8) - then dn_init on the cable
+    mov si, dos_ebuf
+    call far [dos_pkt_door]
+    cmp byte [dos_pkt_xl], 0
+    je .decl
+%else
     mov ax, cx
     push cx
     call OSAPI_MEM_CLAIM
@@ -15926,6 +15327,7 @@ dos_pkt_bufs:
     call dn_init                    ; ...and THEN the translation's own start,
                                     ; which copies the two MACs in and needs
                                     ; the claim to exist (SPEC.md 96.26.6)
+%endif
 %ifdef DOSNET_CARD
     mov bh, DRVC_NET                ; **AND THE CARD'S RING POOL, NOW** (SPEC.md
     mov bl, NETV_STATE              ; 72.13.4): ETHER.DRV claims it at a
@@ -15949,10 +15351,16 @@ dos_pkt_bufs:
     ; and 39.5KB of stranded floor.
     ;
     ; ONE WORD NAMES IT and every reader loads [dos_pkt_bseg] fresh, which is
-    ; the whole of why the proc is two instructions.
+    ; the whole of why the proc is two instructions. In the PART the claim
+    ; holds code, and it is declared only HERE - after PN_D_INIT has returned
+    ; - so no compaction can move code that is running (SPEC.md 96.23.11).
     mov ax, dos_pkt_reloc
     call dos_pkt_rloc
 .out:
+%ifdef DOS_NETPART
+    pop bp
+    pop si
+%endif
     pop es
     pop di
     pop dx
@@ -15981,6 +15389,12 @@ dos_pkt_bufs:
 ; -----------------------------------------------------------------------------
 dos_pkt_want:
     push bx
+    ; --- **THE BOX GATES BOTH ROUTES** (SPEC.md 96.36.7.4) ------------------
+    ; Cleared - which is the default now - means no packet driver at all, on
+    ; the card and on the cable alike, so neither the claim nor the part is
+    ; ever read. Asked FIRST, so a cleared box costs no net_find either.
+    cmp byte [dos_mnet + OS88UI_CK_ON], 0
+    je .no
     call net_find                   ; **EITHER WIRE** (SPEC.md 96.26.1): the
     jc .no                          ; CARD if there is one and the CABLE if
                                     ; there is not - net_find's own preference
@@ -16006,15 +15420,36 @@ dos_pkt_want:
     call dos_spmask                 ; BL = what the launch will really let go
     test bl, 1 << DRVC_NET
     jnz .no                         ; ...and the card is one of them
-    mov cx, PKB_CARDKB              ; ...and the two want DIFFERENT amounts
+%ifdef DOS_NETPART
+    mov cx, PKB_CARDB               ; ...and the two want DIFFERENT amounts
+%else
+    mov cx, PKB_CARDKB
+%endif
     xor al, al
-    pop bx
-    clc
-    ret
+    jmp short .size
 %endif
 .xlate:
-    mov cx, PKB_XLKB                ; the translation wants the staging frame
+%ifdef DOS_NETPART
+    mov cx, PKB_XLB                 ; the translation wants the staging frame
+%else
+    mov cx, PKB_XLKB
+%endif
     mov al, 1                       ; and its own state as well
+.size:
+%ifdef DOS_NETPART
+    ; --- ...AND IN THE PART, THE CODE AND ITS CELLS TOO (SPEC.md 96.23.11) ---
+    ; The claim is the part's image (the row's own length, which is where the
+    ; part's cells begin), PN_STATE of cells, and the buffers - in BYTES until
+    ; here, so the one rounding is the claim's own.
+    add cx, [dos_netrow + OP_R_LEN]
+    jc .no
+    add cx, PN_STATE + 1023
+    jc .no
+    mov cl, ch
+    xor ch, ch
+    shr cl, 1
+    shr cl, 1                       ; CX = KB
+%endif
     pop bx
     clc
     ret
@@ -16069,216 +15504,8 @@ dos_pkt_rloc:
     popf
     ret
 
-; -----------------------------------------------------------------------------
-; dos_pkt_start - publish the interface, if there is a card to publish it over
-;
-; **NOT PUBLISHED ON A MACHINE WITH NO NIC**, and that is SPEC.md 96.15.1's
-; argument for the third time in this package: a signature a client can find,
-; over a card that is not there, sends it to open a handle that cannot work
-; and it has no way to ask why. Its absence sends it to its own "no packet
-; driver" path, which every mTCP application has and which says so.
-;
-; The CARD by name and not net_find: the cable answers the socket verbs too
-; and refuses every raw one (SPEC.md 72.22.3), so preferring one of two is
-; the wrong question here.
-; -----------------------------------------------------------------------------
-dos_pkt_start:
-    push bx
-    mov byte [dos_pkt_vec], 0
-    mov byte [dos_pkt_raw], 0
-    mov byte [dos_pkt_busy], 0
-    mov word [dos_pkt_can], 0x5A5A  ; the canary, armed
-    mov byte [dos_pkt_mode], 3      ; what the card is in, and what get_rcv_mode
-                                    ; answers until somebody sets it
-    cmp byte [dos_pkt_xl], 0        ; the translation needs no buffers...
-    jne .go
-    cmp word [dos_pkt_bseg], 0      ; ...and the card path's dos_pkt_bufs
-    je .none                        ; already asked whether there is a card
-                                    ; AND got the buffers for it, so that is
-                                    ; both of its questions in one compare
-.go:
-    call dos_pkt_install
-    cmp byte [dos_pkt_vec], 0
-    je .none
-    call dos_pkt_hook08
-.none:
-    pop bx
-    ret
 
-; -----------------------------------------------------------------------------
-; dos_pkt_install - find a free vector and put ourselves on it (SPEC.md 96.23.2)
-; out: [dos_pkt_vec] = the vector taken, or 0 if every one was occupied
-;
-; **SEARCHED RATHER THAN CHOSEN**, which costs four instructions and buys the
-; case that actually happens: a program the user ran earlier left something at
-; 60h, or the .COM being run is itself a packet driver for a card we have not
-; got. A vector whose handler already answers to `PKT DRVR` is somebody's.
-; -----------------------------------------------------------------------------
-dos_pkt_install:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push es
-    mov byte [dos_pkt_vec], 0
-    mov bl, PKT_VEC_LO
-.v:
-    mov bh, 0
-    mov ax, bx
-    shl ax, 1
-    shl ax, 1                       ; the vector's slot: v * 4
-    mov si, ax
-    xor ax, ax
-    mov es, ax
-    mov ax, [es:si+2]               ; its segment...
-    or ax, [es:si]                  ; ...and offset: a NULL vector is free
-    jz .take
-    call dos_pkt_issig              ; ...and so is one nobody signed
-    jc .take
-.next:
-    inc bl
-    cmp bl, PKT_VEC_HI
-    jbe .v
-    jmp short .out                  ; every one taken: [dos_pkt_vec] stays 0
-                                    ; and dos_run reports it
-.take:
-    cli
-    mov word [es:si], dos_pkt_entry
-    mov [es:si+2], cs
-    sti
-    mov [dos_pkt_vec], bl
-.out:
-    pop es
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; --- dos_pkt_issig - does the handler at ES:SI carry `PKT DRVR` at offset 3? --
-; out: CF=1 = it does NOT (the vector is free to take)
-dos_pkt_issig:
-    push ax
-    push bx
-    push cx
-    push si
-    push di
-    push ds
-    push es
-    mov ax, [es:si+2]
-    mov bx, [es:si]
-    mov ds, ax
-    mov si, bx
-    add si, 3
-    push cs
-    pop es
-    mov di, dos_pkt_sig
-    mov cx, 8
-.c:
-    mov al, [si]
-    cmp al, [es:di]
-    jne .free
-    inc si
-    inc di
-    loop .c
-    pop es                          ; every byte matched: somebody else's
-    pop ds
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    clc
-    ret
-.free:
-    pop es
-    pop ds
-    pop di
-    pop si
-    pop cx
-    pop bx
-    pop ax
-    stc
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_hook08 - chain INT 08h for the life of the bracket (SPEC.md 96.23.4)
-;
-; This is the poll that makes asynchronous delivery real: a client that calls
-; us once and then waits still receives. The unhook is dos_restore_machine's,
-; which puts the WHOLE IVT back.
-; -----------------------------------------------------------------------------
-dos_pkt_hook08:
-    push ax
-    push es
-    xor ax, ax
-    mov es, ax
-    cli
-    mov ax, [es:0x08*4]
-    mov [dos_pkt_old08], ax
-    mov ax, [es:0x08*4+2]
-    mov [dos_pkt_old08+2], ax
-    mov word [es:0x08*4], dos_pkt_tick
-    mov [es:0x08*4+2], cs
-    sti
-    pop es
-    pop ax
-    ret
-
-; -----------------------------------------------------------------------------
-; dos_pkt_tick - IRQ0, chained, with the poll on a stack of our own
-;
-; **THE CHAIN GOES FIRST**, so the tick reaches the kernel at the depth it
-; always did and on the stack it always did - the scheduler saves SP per task
-; and a private one under it is a thing nothing here has tested.
-;
-; **THEN THE STACK SWAPS** (SPEC.md 96.23.4.1). The poll's deepest chain is
-; OSAPI_DRV_CALL into the kernel, into the driver, into ne_rx's byte-at-a-time
-; DMA loop and out into the client's receiver, and without this it would land
-; on whatever stack the DOS program was running on at whatever depth it had
-; reached - a .COM's default being 256 bytes under its own image. `mov
-; [cs:x], sp` and `mov sp, imm16` need no register, which is what makes the
-; swap possible at a gate where every register is the program's.
-; -----------------------------------------------------------------------------
-dos_pkt_tick:
-    pushf                           ; the chain, exactly as an `int` would
-    call far [cs:dos_pkt_old08]     ; have entered it - and through CS, since
-                                    ; DS is the interrupted program's
-    push ax
-    push ds
-    push cs
-    pop ds
-    cmp byte [dos_pkt_raw], 0       ; nothing claimed: not even the swap
-    je .out
-    cmp byte [dos_pkt_busy], 0      ; already inside a poll somewhere below
-    jne .out
-    mov [dos_pkt_sss], ss
-    mov [dos_pkt_ssp], sp
-    mov ax, [dos_pkt_bseg]          ; **THE STACK IS IN THE NETWORK CLAIM**
-                                    ; (SPEC.md 96.23.7), not in our bss - and
-                                    ; [dos_pkt_raw] above is what proves there
-                                    ; is one: a claim that was refused
-                                    ; publishes no interface, so nothing can
-                                    ; have taken a handle
-    cli
-    mov ss, ax                      ; **SS AND SP IN CONSECUTIVE INSTRUCTIONS**
-    mov sp, dos_pkt_stk_top         ; - an 8086 masks interrupts for one
-    sti                             ; instruction after a `mov ss`, which is
-                                    ; exactly this pair and is why the `cli`
-                                    ; is belt and braces rather than the rule
-    call dos_pkt_poll
-    cli
-    mov ss, [dos_pkt_sss]
-    mov sp, [dos_pkt_ssp]
-    sti
-.out:
-    pop ds
-    pop ax
-    iret
-
-
+%endif                              ; DOS_NONET
 %endif                              ; KD_BACKEND
 %ifndef KD_BACKEND                  ; THE WINDOW HALF (SPEC.md 96.43.2)
 ; -----------------------------------------------------------------------------
@@ -16387,14 +15614,7 @@ dos_drv_take:
 .sound:
     call dos_blaster_set
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 ; -----------------------------------------------------------------------------
 ; dos_drv_back - ...and back again
@@ -16423,14 +15643,7 @@ dos_drv_back:
                                     ; outlive the call that meant it
     call OSAPI_DRV_SUSPEND
     mov byte [dos_drvout], 0
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_hpop_7                  ; the host's shared epilogue (96.54.8)
 
 ; -----------------------------------------------------------------------------
 ; dos_blaster_set - "BLASTER=A220 I5 D1 T4" from the record at SI
@@ -16791,13 +16004,7 @@ dos_fh_rdloop:
 .rerr:
     stc
 .rout:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dos_popb_6                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -17300,13 +16507,7 @@ dos_fh_wiloop:
 .ierr:
     stc
 .iout:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dos_popb_6                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -17375,13 +16576,7 @@ dos_fh_wrloop:
 .werr:
     stc
 .wout:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    ret
+    jmp dos_popb_6                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -17616,7 +16811,8 @@ dos_fh_core:
     cmp byte [si+1], ':'            ; and goes in [dos_fdrv], where dos_fh_enter
     jne .nodrv                      ; picks it up. A LETTER IS NOT CHECKED HERE:
     mov al, [si]                    ; anything that is not a volume falls out of
-    add si, 2                       ; range and dos_fh_enter refuses it with the
+    inc si                          ; range and dos_fh_enter refuses it with the
+    inc si
     cmp al, 'a'                     ; code a real DOS gives, which is 3 and not
     jb .drvup                       ; 15 (measured - drvname.asm under IBM DOS
     cmp al, 'z'                     ; 3.30)
@@ -17633,7 +16829,8 @@ dos_fh_core:
     cmp byte [si+1], '/'
     jne .nodot
 .skip2:
-    add si, 2
+    inc si
+    inc si
 .nodot:
     mov byte [es:dos_fabs], 0       ; A LEADING SEPARATOR IS STRIPPED AND
     cmp byte [si], '\'              ; REMEMBERED (SPEC.md 96.12.2): "\" is the
@@ -18258,14 +17455,7 @@ dos_fh_flush:
     stc                             ; answers for a write that will not go
     ret
 .out:
-    pop es
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-    ret
+    jmp dos_popa_7                  ; the shared epilogue (SPEC.md 96.54.8)
 %endif                              ; DOS_EXTCORE
 %ifndef DOS_EXTCORE                ; THE CORE (SPEC.md 96.44)
 
@@ -18537,7 +17727,7 @@ dos_fh_fill:
     DBSS DOS_B_RNVOL,  1       ; ...the volume it was ASKED on, which is what
     DBSS DOS_B_RNDRV,  1       ; an unqualified name means; the old name's
     DBSS DOS_B_RNABS,  1       ; drive; and whether it carried a separator
-    DBSS DOS_B_RNPAD,  1
+    DBSS DOS_B_VFY,    1       ; AH=2Eh's verify flag (96.56.3)
     DBSS DOS_B_FNSEG, 2        ; the segment dos_fh_core reads a name FROM
     DBSS DOS_B_FDRV,  1        ; ...and the DRIVE it named, 0xFF = none
 ; --- WHERE THE MACHINE IS STANDING, which is not where the PROGRAM is ------
@@ -18590,7 +17780,9 @@ dos_fh_fill:
 ; None of this is resident: a package's bss is zeroed into its heap claim at
 ; launch and goes back when the window closes, so what it costs is a DOS
 ; session's memory and not a machine's.
-%ifndef KD_BACKEND                  ; 96.43: no driver, so no packet driver
+%ifdef DOS_NETINLINE                ; 96.43: no driver, so no packet driver;
+                                    ; and in a PART the cells are the claim's
+                                    ; (SPEC.md 96.23.11)
     HBSS DOS_B_PKTVEC,  1           ; the vector we took, 0 = none
     HBSS DOS_B_PKTRAW,  1           ; 1 = we hold NETV_RAW
     HBSS DOS_B_PKTBSY,  1           ; the poll's re-entrancy guard
@@ -18615,18 +17807,23 @@ dos_fh_fill:
                                     ; (SPEC.md 96.23.9) - NOT read back out of
                                     ; the stack frame, which is what the first
                                     ; version did and got wrong
-    HBSS DOS_B_PKTBSEG, 2           ; **THE FRAME BUFFER IS A HEAP CLAIM**
-                                    ; (SPEC.md 96.23.7) and this is its segment,
-                                    ; 0 = none. They were 3,028 bytes of bss,
-                                    ; which every DOS window paid for on every
-                                    ; machine - including every machine with no
-                                    ; card in it
     HBSS DOS_B_PKTSTAT, 24          ; six dwords, get_statistics' own order
 ; --- AND NOTHING FOR THE WIRE ITSELF (SPEC.md 96.23.7) -----------------------
 ; Every frame, the staging copy, the poll's private stack and the whole of the
 ; cable translation's state are in the NETWORK CLAIM - see PKB_* above. They
 ; were 4,052 bytes of this table, which every DOS window paid for on every
 ; machine, including the 128KB one that ships no network driver at all.
+%endif
+%ifdef DOS_NETPART
+    HBSS DOS_B_PKTDOOR, 2           ; the far door's OFFSET, always 0, and...
+%endif
+%ifdef DOS_NETANY                   ; inline or a part: the host keeps these
+    HBSS DOS_B_PKTBSEG, 2           ; **THE FRAME BUFFER IS A HEAP CLAIM**
+                                    ; (SPEC.md 96.23.7) and this is its segment,
+                                    ; 0 = none. They were 3,028 bytes of bss,
+                                    ; which every DOS window paid for on every
+                                    ; machine - including every machine with no
+                                    ; card in it
     HBSS DOS_B_PKTXL,   1           ; **WHICH PATH, and it is NOT the same
                                     ; question as which CLASS** (SPEC.md
                                     ; 96.26.1): the translation calls sockets
@@ -18634,7 +17831,7 @@ dos_fh_fill:
                                     ; the path on a card machine - which is
                                     ; how it is tested at all - must not
                                     ; forge the class underneath it
-%endif                              ; KD_BACKEND
+%endif                              ; DOS_NONET
 ; --- the built-in commands' own state (SPEC.md 96.30, apps/dos/dosh.inc) -----
     DBSS DOS_B_SHLINE,  DSH_LINE    ; the command tail, unpacked
     DBSS DOS_B_SHVERB,  DSH_ARG     ; the verb, upper-cased
@@ -18772,6 +17969,96 @@ whether it uses the cells or not"
 DVOL_CAP in apps/dos/doscall.inc, which every host reads, and NEVER size the \
 table from DVOL_MAX (SPEC.md 96.44.2.1)"
 %endif
+%ifdef DVW_SPLIT                    ; --- the live window, PARTED (96.54.9) ---
+    ; Only what host code reads while the part may be ABSENT: the rest is
+    ; the part's, laid out by apps/dos/doswcell.inc
+    HBSS DOS_B_DVWF,  6         ; want, run, go, done, spawn, dirty
+    HBSS DOS_B_DVWH,  6         ; three words: the arena cap, the posted
+                                ; door's target and the part's segment
+dvw_want    equ dos_hbss + DOS_B_DVWF + 0   ; Run in Window was asked for
+dvw_run     equ dvw_want + 1    ; a program is on the worker
+dvw_go      equ dvw_want + 2    ; ...UI -> worker: start it (run's PAIR)
+dvw_done    equ dvw_want + 3    ; ...worker -> UI: it ended
+dvw_spawn   equ dvw_want + 4    ; the worker exists, and outlives the part
+dvw_dirty   equ dvw_want + 5    ; the console owes the band a paint
+dvw_cap     equ dos_hbss + DOS_B_DVWH       ; word: this run's arena cap
+dvw_rtgt    equ dvw_cap + 2     ; word: a posted door (HICALL's thunk)
+dvw_pseg    equ dvw_cap + 4     ; word: the part's claim, 0 = not fetched
+%if dvw_go != dvw_run + 1
+ %error "dvw_start sets run and go with one word store"
+%endif
+%elifdef DVW                        ; --- the live window (SPEC.md 96.54) ---
+    HBSS DOS_B_DVWF,  28        ; the flag bytes below, in order
+    HBSS DOS_B_DVWC,  4         ; the capture's segment, and our CS for FFh
+    HBSS DOS_B_DVWSM, 50        ; TopView's row sums, CON_ROWS words (96.54.5:
+                                ; os88con.inc comes later, so dosw.inc asserts)
+    HBSS DOS_B_DVWW,  16        ; eight words: LOW_SEG, two stacks, AX, a nap,
+                                ; and this run's arena cap
+    HBSS DOS_B_DVWK8, 4         ; the kernel's int 08h, far
+    HBSS DOS_B_DVWR,  22        ; a posted door: its target, ten registers
+    HBSS DOS_B_DVWQ,  32        ; the window's keys, sixteen
+    HBSS DOS_B_DVWX,  DVW_XB_SIZE   ; the program's vectors and BDA...
+    HBSS DOS_B_DVWD,  DVW_XB_SIZE   ; ...and the desktop's, while it runs
+    HBSS DOS_B_DWM,   10        ; INT 33h in the window (doswm.inc)
+dvw_want    equ dos_hbss + DOS_B_DVWF + 0   ; Run in Window was asked for
+dvw_run     equ dvw_want + 1    ; a program is on the worker
+dvw_go      equ dvw_want + 2    ; ...UI -> worker: start it
+dvw_done    equ dvw_want + 3    ; ...worker -> UI: it ended
+dvw_kill    equ dvw_want + 4    ; the window is closing: stop it
+dvw_in      equ dvw_want + 5    ; the instance's world is in the IVT
+dvw_spawn   equ dvw_want + 6    ; the worker exists (it is for ever)
+dvw_rq      equ dvw_want + 7    ; a door: 1 posted, 2 served, 0 done
+dvw_dirty   equ dvw_want + 8    ; the console owes the band a paint
+dvw_chp     equ dvw_want + 9    ; the capture is a lone Hercules's PAGE 1
+                                ; (96.54.6.1; + 9 was dvw_walk's, 96.54.3)
+dvw_poll    equ dvw_want + 10   ; empty AH=01h polls, for the yield
+dvw_kh      equ dvw_want + 11   ; the key ring's head...
+dvw_kt      equ dvw_want + 12   ; ...and tail
+dvw_closeq  equ dvw_want + 13   ; a refused close, owed when the run ends
+dvw_fs      equ dvw_want + 14   ; the program is on the FULL SCREEN
+dvw_frz     equ dvw_want + 15   ; FROZEN in the window (96.54.1) - the byte
+                                ; after dvw_fs, so one word tests the pair
+dvw_fsreq   equ dvw_want + 16   ; ...asked for: Alt+Enter, or a graphics mode
+dvw_parked  equ dvw_want + 17   ; ...and the worker has stopped for it
+dvw_gfx     equ dvw_want + 18   ; it set a graphics mode: no way back
+dvw_cmode   equ dvw_want + 19   ; 0, DVWC_TV, _SEG or _HP (96.54.5-6.1)
+dvw_ctick   equ dvw_want + 20   ; ...and the capture's tick count
+dvw_dkind   equ dvw_want + 21   ; the desktop's VID_* kind (96.54.7)
+dvw_hprow   equ dvw_want + 22   ; DVWC_HP's probe row, FFh once promoted
+dvw_owe     equ dvw_want + 23   ; the band, owed whole (96.54.10)
+dvw_kbusy   equ dvw_want + 24   ; ticks a poll stays awake after a key
+dvw_ptk     equ dvw_want + 25   ; dvw_xpost was reached from a tick...
+dvw_pgap    equ dvw_want + 26   ; ...and the ticks since its last post
+%if dvw_kill != dvw_done + 1 || dvw_kt != dvw_kh + 1 || dvw_fs != dvw_closeq + 1 || dvw_fsreq != dvw_frz + 1 || dvw_gfx != dvw_parked + 1 || dvw_go != dvw_run + 1
+ %error "dvw_start (dosw.inc) clears these flags in word PAIRS: keep each pair adjacent"
+%endif
+dvw_cseg    equ dos_hbss + DOS_B_DVWC       ; word: B800h or B000h
+dvw_csview  equ dvw_cseg + 2                ; word: our CS, as TopView saw it
+dvw_sums    equ dos_hbss + DOS_B_DVWSM
+dvw_cap     equ dvw_lss + 14    ; word: this run's arena cap (96.54.2)
+dvw_lss     equ dos_hbss + DOS_B_DVWW + 0
+dvw_fss     equ dvw_lss + 2
+dvw_fsp     equ dvw_lss + 4
+dvw_nss     equ dvw_lss + 6
+dvw_nsp     equ dvw_lss + 8
+dvw_tax     equ dvw_lss + 10
+dvw_narg    equ dvw_lss + 12
+dvw_k08     equ dos_hbss + DOS_B_DVWK8
+dvw_rtgt    equ dos_hbss + DOS_B_DVWR
+dvw_r_ax    equ dvw_rtgt + 2
+dvw_r_bx    equ dvw_rtgt + 4
+dvw_r_cx    equ dvw_rtgt + 6
+dvw_r_dx    equ dvw_rtgt + 8
+dvw_r_si    equ dvw_rtgt + 10
+dvw_r_di    equ dvw_rtgt + 12
+dvw_r_bp    equ dvw_rtgt + 14
+dvw_r_es    equ dvw_rtgt + 16
+dvw_r_ds    equ dvw_rtgt + 18
+dvw_r_fl    equ dvw_rtgt + 20
+dvw_kq      equ dos_hbss + DOS_B_DVWQ
+dvw_xblk    equ dos_hbss + DOS_B_DVWX
+dvw_xdsk    equ dos_hbss + DOS_B_DVWD
+%endif
 %ifdef DOS_CORE_INLINE
 DOS_BSS_SIZE equ CORE_BSS_SIZE + HB ; the core's cells are in here too
 %else
@@ -18784,12 +18071,15 @@ DOS_BSS_SIZE equ HB
                                     ; a file, over the back end like every
                                     ; other file verb
 %ifndef KD_BACKEND                  ; the console's, so 96.43 takes it too
+WIN_CODE
 %include "dosc.inc"                 ; ...AND THE PROMPT THAT TYPES INTO IT
+WIN_CODE_END                        ; (DOS-HEADLESS-PLAN 4.4: the window's)
                                     ; (SPEC.md 96.33): an input, an output and
                                     ; a prompt, and not one verb of its own
 %ifdef DOS_WIN16
 %include "dosw16.inc"               ; ...and the door a Windows program leaves
-%endif                              ; by, to WIN16 (SPEC.md 124.3)
+%endif                              ; by, to WIN16 (SPEC.md 124.3) - RESIDENT,
+                                    ; a headless host's door too (96.44.20)
 %endif
 
 ; os88ui.inc first (os88line.inc needs its UI_* macros), and both LAST -
@@ -18824,6 +18114,11 @@ DOS_BSS_SIZE equ HB
                                     ; taken down from outside, so its drag,
                                     ; release and close are out (SPEC.md
                                     ; 13.14.7, apps size pass 2b)
+%ifdef DOS_SETPART
+%define OS88UI_CTLEXT               ; ...and where the Setup page is a PART,
+%endif                              ; the box, radio, dial and their glyph are
+                                    ; ITS code, not the window's: the page is
+                                    ; their only caller (SPEC.md 96.32.2.3)
 %define OS88UI_ABOUT                ; ...and the About card (SPEC.md 96.51).
                                     ; dos_about was a bare `ret` for the whole
                                     ; of this package's life, so the kernel put
@@ -18839,14 +18134,18 @@ DOS_BSS_SIZE equ HB
                                     ; a package pays for the controls it uses -
                                     ; one level up: a build with no window uses
                                     ; none
+WIN_CODE
 %include "os88ui.inc"
+WIN_CODE_END                        ; (DOS-HEADLESS-PLAN 4.4: the window's)
 %if DOS_BTREC_SZ != OS88UI_BT_SIZE
  %error "DOS_BTREC_SZ mirrors OS88UI_BT_SIZE and they have drifted - the HBSS block is laid out before this include, so the size must be written twice; fix the literal"
 %endif
 %define OS88LINE_NOSET              ; the fields are filled in place and
                                     ; resynced (96.21.1), never replaced
                                     ; (apps size pass 2b)
+WIN_CODE
 %include "os88line.inc"
+WIN_CODE_END                        ; (DOS-HEADLESS-PLAN 4.4: the window's)
 %endif
 ; --- THE CONSOLE (SPEC.md 96.33), telnet's screen as a shared include -------
 ; **ITS BSS GOES LAST**, past this package's own chain, which is the one line
@@ -18856,7 +18155,11 @@ DOS_BSS_SIZE equ HB
 ; table - which is exactly the silent overlap SPEC.md 96.29.1 cost a session.
 ; DOS_BSS_SIZE is an `equ` a few lines above, so there is nothing to keep in
 ; step by hand.
+%ifdef DOS_WTAIL
+%define CON_BSS_AT (dos_wbss + WB)  ; ...in the TAIL's bss, after its rows
+%else
 %define CON_BSS_AT (os88_image_end + DOS_BSS_SIZE)
+%endif
 %define CON_FSX                     ; the FULL-SCREEN renderer (SPEC.md 70.8.13,
                                     ; 96.33.5): the same buffer on real text
                                     ; VRAM, driven by dosc.inc's own bracket
@@ -18876,15 +18179,25 @@ DOS_BSS_SIZE equ HB
                                     ; 96.33.1) - and con_open, since the
                                     ; attribute a zeroed bss leaves is black
                                     ; on black
+WIN_CODE
 %include "os88con.inc"
+WIN_CODE_END                        ; (DOS-HEADLESS-PLAN 4.4: the window's)
+%ifdef DVW
+%if CON_ROWS * 2 != 50
+ %error "dos.asm reserves 50 bytes for dvw_sums - one word a CON_ROWS row"
+%endif
+%endif
 %else
 CON_BSS     equ 0                   ; ...and the carrier's own arithmetic still
                                     ; adds it, so it has a value rather than an
                                     ; %ifdef at every site that reads it
 %endif                              ; KD_BACKEND
-%ifndef KD_BACKEND                  ; the network family, for 96.43's reason
+%ifdef DOS_NETINLINE                ; the network family, for 96.43's reason -
 %include "dosnet.inc"               ; THE CABLE TRANSLATION (SPEC.md 96.26) -
-                                    ; only reached when the route is the cable
+%endif                              ; only reached when the route is the cable;
+                                    ; in the PART otherwise (96.23.11)
+%ifndef KD_BACKEND
+%ifndef DOS_NONET
 %include "os88sock.inc"             ; net_try - WHICH driver answers (SPEC.md
                                     ; 20.11.1). The packet driver wants the
                                     ; CARD and not the cable, so it asks
@@ -18892,6 +18205,7 @@ CON_BSS     equ 0                   ; ...and the carrier's own arithmetic still
                                     ; net_find, whose job is to prefer one of
                                     ; two and whose second answer refuses
                                     ; every verb this feature is made of
+%endif                              ; DOS_NONET
 %endif                              ; KD_BACKEND
 
 %ifndef KD_BACKEND                  ; the mirrors below compare against a
@@ -18923,7 +18237,12 @@ above reserves three records this file does not own"
 %endif                              ; KD_BACKEND
 
 %ifndef KD_BACKEND
+%ifdef DOS_WTAIL
+    OS88_BSS DOS_BSS_SIZE           ; the RESIDENT host's: the console's and
+                                    ; every WBSS row are the tail's
+%else
     OS88_BSS DOS_BSS_SIZE + CON_BSS
+%endif
     OS88_IMAGE_END
 %endif
 
@@ -18944,6 +18263,9 @@ dos_hbss    equ os88_image_end   ; the HOST's block IS the package's bss
 %endif
 
 dos_win equ dos_hbss + DOS_B_WIN     ; word: our window
+%ifdef DOS_WTAIL
+dos_head equ dos_hbss + DOS_B_HEAD   ; byte: no tail in this region (4.4)
+%endif
 dos_state equ dos_hbss + DOS_B_STATE   ; byte: DST_*
 dos_err     equ DOS_CBASE + DOS_B_ERR     ; byte: DER_*, when DST_ERR
 dos_exit    equ DOS_CBASE + DOS_B_EXIT    ; byte: the program's exit code
@@ -18959,59 +18281,59 @@ dos_prgsp   equ DOS_CBASE + DOS_B_PRGSP   ; word: the program's first SP
 dos_sv_ss   equ DOS_CBASE + DOS_B_SVSS    ; word: OUR stack, banked
 dos_sv_sp   equ DOS_CBASE + DOS_B_SVSP    ; word: ...across the far jump
 %ifndef KD_BACKEND
-dos_conx equ dos_hbss + DOS_B_CONX    ; the console band (SPEC.md
+dos_conx equ DOS_WB + DOS_B_CONX    ; the console band (SPEC.md
 %endif
 %ifndef KD_BACKEND
-dos_cony equ dos_hbss + DOS_B_CONY    ; 96.32): top-left in screen
+dos_cony equ DOS_WB + DOS_B_CONY    ; 96.32): top-left in screen
 %endif
 %ifndef KD_BACKEND
-dos_concols equ dos_hbss + DOS_B_CONCOLS ; pixels, size in CELLS, all
+dos_concols equ DOS_WB + DOS_B_CONCOLS ; pixels, size in CELLS, all
 %endif
 %ifndef KD_BACKEND
-dos_conrows equ dos_hbss + DOS_B_CONROWS ; four filled by dos_con_geom
+dos_conrows equ DOS_WB + DOS_B_CONROWS ; four filled by dos_con_geom
 %endif
 %ifndef KD_BACKEND
-dos_pln equ dos_hbss + DOS_B_PLN     ; the path box (SPEC.md 96.32.1)
+dos_pln equ DOS_WB + DOS_B_PLN     ; the path box (SPEC.md 96.32.1)
 %endif
 %ifndef KD_BACKEND
-dos_path equ dos_hbss + DOS_B_PATH    ; ...and its text
+dos_path equ DOS_WB + DOS_B_PATH    ; ...and its text
 %endif
 %ifndef KD_BACKEND
-dos_erect equ dos_hbss + DOS_B_ERECT   ; 'Environment' on the bar
+dos_erect equ DOS_WB + DOS_B_ERECT   ; 'Environment' on the bar
 %endif
 %ifndef KD_BACKEND
-dos_rrect equ dos_hbss + DOS_B_RRECT   ; ...and 'Run'
+dos_rrect equ DOS_WB + DOS_B_RRECT   ; ...and 'Run'
 %endif
 %ifndef KD_BACKEND
-dos_tvol equ dos_hbss + DOS_B_TVOL    ; dos_path_take's scratch pair
+dos_tvol equ DOS_WB + DOS_B_TVOL    ; dos_path_take's scratch pair
 %endif
 %ifndef KD_BACKEND
-dos_tname equ dos_hbss + DOS_B_TNAME
+dos_tname equ DOS_WB + DOS_B_TNAME
 %endif
 %ifndef KD_BACKEND
 %endif
 %ifndef KD_BACKEND
 %endif
 %ifndef KD_BACKEND
-dos_trect equ dos_hbss + DOS_B_TRECT   ; ...and 'Return'
+dos_trect equ DOS_WB + DOS_B_TRECT   ; ...and 'Return'
 %endif
 %ifndef KD_BACKEND
-dos_lnv equ dos_hbss + DOS_B_LNV     ; word: LN_VIEW before a key
+dos_lnv equ DOS_WB + DOS_B_LNV     ; word: LN_VIEW before a key
 %endif
 %ifndef KD_BACKEND
-dos_lnl equ dos_hbss + DOS_B_LNL     ; word: LN_LEN before a key
+dos_lnl equ DOS_WB + DOS_B_LNL     ; word: LN_LEN before a key
 %endif
 %ifndef KD_BACKEND
-dos_lnc equ dos_hbss + DOS_B_LNC     ; word: LN_CAR before a key
+dos_lnc equ DOS_WB + DOS_B_LNC     ; word: LN_CAR before a key
 %endif
 %ifndef KD_BACKEND
-dos_ncell equ dos_hbss + DOS_B_NCELL   ; word: cells the edits redrew
+dos_ncell equ DOS_WB + DOS_B_NCELL   ; word: cells the edits redrew
 %endif
 %ifndef KD_BACKEND
-dos_nkey equ dos_hbss + DOS_B_NKEY    ; word: ...over this many keys
+dos_nkey equ DOS_WB + DOS_B_NKEY    ; word: ...over this many keys
 %endif
 %ifndef KD_BACKEND
-dos_page equ dos_hbss + DOS_B_PAGE    ; byte: DOS_PAGE_*
+dos_page equ DOS_WB + DOS_B_PAGE    ; byte: DOS_PAGE_*
 %endif
 %ifndef KD_BACKEND
 ; --- the button groups' indices, PLUS ONE (os88ui_btn's convention) --------
@@ -19023,13 +18345,13 @@ DOS_BT_RUN equ 2
 DOS_BT_RET equ 1                       ; the Setup page: 'Return', then 'Save
 DOS_BT_SAV equ 2                       ; Shortcut' - a different page, so the
                                        ; numbers may repeat
-dos_btrec equ dos_hbss + DOS_B_BTREC   ; ...and the button group's record
+dos_btrec equ DOS_WB + DOS_B_BTREC   ; ...and the button group's record
 %endif
 %ifndef KD_BACKEND
-dos_srect equ dos_hbss + DOS_B_SRECT   ; ...and Save Shortcut's
+dos_srect equ DOS_WB + DOS_B_SRECT   ; ...and Save Shortcut's
 %endif
 %ifndef KD_BACKEND
-dos_abon equ dos_hbss + DOS_B_ABON    ; byte: the About card is up
+dos_abon equ DOS_WB + DOS_B_ABON    ; byte: the About card is up
 %endif
 dos_erp     equ DOS_CBASE + DOS_B_ERP     ; word: the row being emitted
 %ifndef KD_BACKEND
@@ -19041,21 +18363,21 @@ dos_sbuf equ dos_hbss + DOS_B_SBUF    ; `.\NAME.EXT` while building
 dos_cname   equ DOS_CBASE + DOS_B_CNAME   ; one path component
 dos_fbuf    equ DOS_CBASE + DOS_B_FBUF    ; OSAPI_FIND_SZ, for the walk
 %ifndef KD_BACKEND
-dos_wname equ dos_hbss + DOS_B_WNAME   ; ...the name to write it under
+dos_wname equ DOS_WB + DOS_B_WNAME   ; ...the name to write it under
 %endif
 %ifndef KD_BACKEND
 dos_lend equ dos_hbss + DOS_B_LEND    ; word: bytes of dos_lbuf read
 %endif
 dos_ebuf    equ DOS_CBASE + DOS_B_EBUF    ; the four environment rows
 %ifndef KD_BACKEND
-dos_eln equ dos_hbss + DOS_B_ELN     ; ...and their os88line blocks
+dos_eln equ DOS_WB + DOS_B_ELN     ; ...and their os88line blocks
 %endif
 dos_args    equ DOS_CBASE + DOS_B_ARGS    ; 128: the command tail the user
                                                ; typed, without its count or
                                                ; its 0Dh - both are DOS's
                                                ; framing and go on at the PSP
 dos_pbuf    equ DOS_CBASE + DOS_B_PBUF    ; the program's own path
-dos_ln equ dos_hbss + DOS_B_LN      ; the field's os88line block
+dos_ln equ DOS_WB + DOS_B_LN      ; the field's os88line block
 dos_hkv     equ DOS_CBASE + DOS_B_HKV     ; DHK_NENT words (96.44.3)
 dos_bevec   equ DOS_CBASE + DOS_B_BEVEC   ; DBE_NENT words (96.44.1)
 %ifdef DOSKPART
@@ -19087,6 +18409,19 @@ dos_mnet equ dos_hbss + DOS_B_MNET
 %endif
 %ifndef KD_BACKEND
 dos_mmou equ dos_hbss + DOS_B_MMOU   ; ...and the mouse's (96.36.8)
+%ifdef DVW
+dos_mwin equ dos_hbss + DOS_B_MWIN   ; ...and Run in a window (96.32.2.4)
+%ifdef DOS_WTAIL
+dos_mhead equ DOS_WB + DOS_B_MHEAD  ; ...and Close when done (96.44.20)
+dos_hne equ DOS_WB + DOS_B_HNE      ; ...and the target is an NE: it greys
+dos_hnek equ DOS_WB + DOS_B_HNEK    ; ...and what that was asked of (16)
+%endif
+%endif
+%ifdef DOS_SETPART
+dos_spdoor equ dos_hbss + DOS_B_SPDOOR   ; dword: the Setup part's door
+dos_sp_tgt equ dos_hbss + DOS_B_SPTGT    ; word: ...and its bouncer's target
+dos_spwall equ dos_hbss + DOS_B_SPWALL  ; word: ...and the KB it walls off
+%endif
 %ifdef DOS_MEGA
 dos_mhma equ dos_hbss + DOS_B_MHMA   ; ...and kern_mega's HMA box (96.40.9.2)
 dos_msav equ dos_hbss + DOS_B_MSAV   ; ...and its save box (96.40.9.3)
@@ -19105,22 +18440,22 @@ dos_mnkb equ dos_hbss + DOS_B_MNKB
 dos_msnk equ dos_hbss + DOS_B_MSNK   ; ...and the sound driver's (96.36.7.2)
 %endif
 %ifndef KD_BACKEND
-dos_mbuf equ dos_hbss + DOS_B_MBUF    ; the limit field's text
+dos_mbuf equ DOS_WB + DOS_B_MBUF    ; the limit field's text
 %endif
 %ifndef KD_BACKEND
-dos_mln equ dos_hbss + DOS_B_MLN     ; ...and its os88line block
+dos_mln equ DOS_WB + DOS_B_MLN     ; ...and its os88line block
 %endif
 %ifndef KD_BACKEND
-dos_mx equ dos_hbss + DOS_B_MX      ; word: this paint's content x
+dos_mx equ DOS_WB + DOS_B_MX      ; word: this paint's content x
 %endif
 %ifndef KD_BACKEND
-dos_my equ dos_hbss + DOS_B_MY      ; word: ...and its top
+dos_my equ DOS_WB + DOS_B_MY      ; word: ...and its top
 %endif
 %ifndef KD_BACKEND
-dos_mpx equ dos_hbss + DOS_B_MSX    ; word: a press's x, banked for one click
+dos_mpx equ DOS_WB + DOS_B_MSX    ; word: a press's x, banked for one click
 %endif
 %ifndef KD_BACKEND
-dos_mpy equ dos_hbss + DOS_B_MSY    ; word: ...and its y (SPEC.md 96.36.4)
+dos_mpy equ DOS_WB + DOS_B_MSY    ; word: ...and its y (SPEC.md 96.36.4)
 %endif
 dos_pic1    equ DOS_CBASE + DOS_B_PIC1    ; byte: the 8259 masks as found
 dos_pic2    equ DOS_CBASE + DOS_B_PIC2    ; byte:
@@ -19325,6 +18660,7 @@ dos_fname2  equ DOS_CBASE + DOS_B_FNAME2  ; AH=56h's second name
 dos_rnvol   equ DOS_CBASE + DOS_B_RNVOL   ; ...and its three bytes of
 dos_rndrv   equ DOS_CBASE + DOS_B_RNDRV   ; drive arithmetic
 dos_rnabs   equ DOS_CBASE + DOS_B_RNABS
+dos_vfy     equ DOS_CBASE + DOS_B_VFY     ; AH=2Eh/54h's byte
 dos_fnseg   equ DOS_CBASE + DOS_B_FNSEG   ; word: where a name is read from
 dos_fdrv    equ DOS_CBASE + DOS_B_FDRV    ; byte: the drive a name named
 dos_pvol    equ DOS_CBASE + DOS_B_PVOL    ; byte: the volume the MACHINE is
@@ -19360,7 +18696,7 @@ dos_ivt     equ DOS_CBASE + DOS_B_IVT     ; 1024: the whole vector table
 dos_bda     equ DOS_CBASE + DOS_B_BDA     ; 256:  ...and the whole BDA
 
 ; --- the packet driver's (SPEC.md 96.23) -------------------------------------
-%ifndef KD_BACKEND                  ; 96.43
+%ifdef DOS_NETINLINE                ; 96.43; a PART's are its own (96.23.11)
 dos_pkt_vec equ dos_hbss + DOS_B_PKTVEC
 dos_pkt_raw   equ dos_hbss + DOS_B_PKTRAW
 dos_pkt_busy equ dos_hbss + DOS_B_PKTBSY
@@ -19374,38 +18710,18 @@ dos_pkt_sss equ dos_hbss + DOS_B_PKTSSS
 dos_pkt_ssp equ dos_hbss + DOS_B_PKTSSP
 dos_pkt_can equ dos_hbss + DOS_B_PKTCAN
 dos_pkt_cds equ dos_hbss + DOS_B_PKTCDS
-dos_pkt_bseg equ dos_hbss + DOS_B_PKTBSEG
 dos_pkt_stats equ dos_hbss + DOS_B_PKTSTAT
 
+PN_BUFSYMS 0                        ; ...and the network claim's offsets, at its
+                                    ; base: dospktabi.inc (SPEC.md 96.26.6)
+%endif
+%ifdef DOS_NETPART
+dos_pkt_door equ dos_hbss + DOS_B_PKTDOOR  ; the far door, whose SEGMENT word
+%endif                                     ; IS [dos_pkt_bseg] (96.23.11)
+%ifdef DOS_NETANY
+dos_pkt_bseg equ dos_hbss + DOS_B_PKTBSEG
 dos_pkt_xl equ dos_hbss + DOS_B_PKTXL
-
-; --- the cable translation's, IN THE NETWORK CLAIM (SPEC.md 96.26.6) --------
-; These are offsets into [dos_pkt_bseg] and NOT into our own segment, which is
-; the whole of what made the move cheap: dosnet.inc already addressed all of
-; them DS-relative with no override, so pointing DS at the claim leaves its
-; seventy-eight frame references untouched and only these fourteen lines move.
-dn_flows    equ PKB_STATE + DNB_FLOWS
-dn_names    equ PKB_STATE + DNB_NAMES
-dn_qname    equ PKB_STATE + DNB_QNAME
-dn_pend     equ PKB_STATE + DNB_PEND
-dn_lastip   equ PKB_STATE + DNB_LASTIP
-dn_pseudo   equ PKB_STATE + DNB_PSEUDO
-dn_rr       equ PKB_STATE + DNB_RR
-dn_gwmac    equ PKB_STATE + DNB_GWMAC       ; copied out of the image by
-dn_ourmac   equ PKB_STATE + DNB_OURMAC      ; dn_init (dn_mac_c below)
-dn_lsn      equ PKB_STATE + DNB_LSN         ; the inbound listeners (96.26.8)
-dn_lrr      equ PKB_STATE + DNB_LRR
-dn_cip      equ PKB_STATE + DNB_CIP         ; ...and the client's own address
-dn_frame    equ PKB_RX                      ; the frame we build FOR the
-                                            ; client, which is also...
-dos_pkt_rxs equ PKB_RX                      ; ...the one dos_pkt_deliver hands
-                                            ; over, on EITHER route: the card
-                                            ; writes the same offset through
-                                            ; NETV_RAWRX, which is why both
-                                            ; of that routine's arms collapsed
-dos_pkt_txs equ PKB_TX                      ; and the client's own, staged
-dos_pkt_stk_top equ PKB_STKTOP
-%endif                              ; KD_BACKEND
+%endif
 
 ; --- AND THE bss SHIPS INSIDE THE PART (SPEC.md 96.44.4, 51.1.2) ------------
 ; `DOSKPART` is the arm that becomes PART 0 of `DOS.O88`, and a part is not
@@ -19421,4 +18737,31 @@ dos_pkt_stk_top equ PKB_STKTOP
 ; comment.
 %ifdef DOSKPART
     times OS88_BSS_SIZE db 0
+%endif
+; --- ...AND THE TAIL'S OWN bss, AFTER ITS CODE (DOS-HEADLESS-PLAN 4.4) ------
+; Zeros in the file for the reason above, at the very end of the tail, so the
+; parts standard's OP_ZFILL keeps them off the disk and off the decoder.
+%ifdef DOS_WTAIL
+DOS_WBSS_SIZE equ WB + CON_BSS
+section .wtext
+dos_wbss:
+    times DOS_WBSS_SIZE db 0
+dos_wtail_end:                      ; ...where part 1 ends: the Setup page's
+section .text                       ; headless figure adds DOS_WTAILKB
+%define DOS_WTAILKB ((dos_wtail_end - dos_wtail_beg) >> 10)
+%endif
+
+; --- THE SETUP PART, APPENDED (SPEC.md 96.32.2.3) ----------------------------
+; Only the Makefile's second assembly (-DDOS_SETEMIT) emits it, AFTER every
+; byte of the host above - so the host is the same bytes either way, which
+; tools/dossetchk.py checks before it cuts the part off. vstart=0: the part is
+; read into a claim of its own and runs at that claim's offset 0.
+%ifdef DOS_SETEMIT
+%ifdef DOS_WTAIL
+section .setp vstart=0 follows=.wtext align=16
+%else
+section .setp vstart=0 follows=.text align=16
+%endif
+%include "dosset.inc"
+section .text
 %endif

@@ -89,6 +89,8 @@ wo_new:
 ; wo_empty - wo_new without the title (an Open sets its own at once: two
 ; captions for one open would be 34 rows for nothing). clobbers as wo_new
 wo_empty:
+    mov al, WRO_SCAN                ; (a scan's bar with it: SPEC.md 12.8.10)
+    call wr_opend
     mov byte [we_busy], 0           ; a scan or a refinement: abandoned
     mov dx, [wo_ioseg]
     call wo_free
@@ -315,11 +317,13 @@ wo_open:
     mov [wo_frames+2], dx
     ; --- its envelope's claim (SPEC.md 123.5) and the view cache ----------------
     call we_envsize                 ; CL = the block shift, BX = the blocks,
-    mov [di+WS_BS], cl              ; AX = the claim in KB (0: an empty sound)
-    mov [di+WS_NBLK], bx
+    mov [di+WS_BS], cl              ; AX = the claim in paragraphs (0: an
+    mov [di+WS_NBLK], bx            ; empty sound)
     or ax, ax
     jz .noenv
-    call OSAPI_MEM_CLAIM
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     mov bl, E_MEM
     jc .refuse
     mov [di+WS_ENV], dx

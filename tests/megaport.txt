@@ -423,5 +423,6 @@ telzm secs=180 OS88_MEGA_EMU=86box   # Zmodem receive over 86Box's slirp: the ba
 # SEG_WIN or an identity selector. Red: cs_win made to hand back the bare
 # paragraph (the pre-MC7 spelling), and the Tune tab never identifies
 redlinevga secs=90   # the whole Bench run on a 386: 25 rows timed (a host-speed CPU row under one PIT count reads n/a), the CPUID name, the report saved to B:, the views and Quit
+redlineinspvga secs=60   # the Inspect tab under protected mode: its module a lazy part far-called through op_cseg's code selector, the ROM map through SEG_WIN, no int 15h C0h and no IVT, every page and INSPECT1.TXT
 redlinechipvga secs=60   # the Tune tab on an AT-class tier: the F000h fingerprint through SEG_WIN, the read-only port probes RUN, the option-ROM scan, the pick and CHIPSET1/2.TXT
 redlinechipvga@tune secs=150 -chipset= +--tune +os8088_redline_vga_gla   # the WRITE path: Mfg spec and the verified sweep (a cli window and a BIOS floppy read into the package's selector), REDLINE.CFG and AUTOSTRT\RLAPPLY.LNK on A:, RLAPPLY before, after and at a power cycle

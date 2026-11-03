@@ -497,6 +497,12 @@ static int n_mkdir;
 int os88_file_mkdir(const char *name) { n_mkdir++; ferr = OS88_FERR_FULL; return -1; }
 int os88_mem_free(unsigned seg) { printf("HARNESS: os88_mem_free(%04x): not here\n", seg); exit(1); }
 unsigned os88_mem_regrow(unsigned seg, int kb) { printf("HARNESS: os88_mem_regrow: not here\n"); exit(1); }
+unsigned os88_mem_regrow_p(unsigned seg, unsigned paras) { printf("HARNESS: os88_mem_regrow_p: not here\n"); exit(1); }
+unsigned os88_mem_claim_p(unsigned paras)
+{
+    printf("HARNESS: os88_mem_claim_p(%u): not a claim this program makes\n", paras);
+    exit(1);
+}
 int  os88_peek(unsigned seg, unsigned off) { printf("HARNESS: os88_peek: not here\n"); exit(1); }
 void os88_poke(unsigned seg, unsigned off, int value)
 {

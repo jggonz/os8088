@@ -23,7 +23,7 @@ Press it to drop the panel.
 
 ![Before any Sticky App is running, each one offers Add.](shot:stikmenu-drv-add){left}
 
-The panel lists every Sticky App it finds in the `STIKAPPS` folder of the
+The panel lists the Sticky Apps it finds in the `STIKAPPS` folder of the
 system disk and of any hard disk, one row each, with its picture, its name
 and a line about what it does.
 
@@ -39,6 +39,10 @@ and a line about what it does.
 The last line, **Drag a Sticky App to move it.**, is a hint and not a
 choice. When there are more Sticky Apps than fit, the panel has a pager that
 turns to the next page.
+
+The panel lists eight Sticky Apps at most, the system disk's first. If it
+finds more, the last line reads **Only the first 8 are listed.** instead of
+the hint.
 
 A Sticky App that is copied into a `STIKAPPS` folder shows up the next time
 you open the menu. There is nothing to refresh.

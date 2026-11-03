@@ -97,11 +97,23 @@ KERNEL_SEG  equ KD_SEG          ; ...and the kernel's own files call it this
 ; so the knob pays a kilobyte over the shipped rung exactly as it did.
 %ifndef KD_MEGA                 ; (kern_mega's arm is below this one)
 %ifdef DOSR_MARK                ; SPEC.md 96.49's resume trace is 542 bytes
-KD_IMG_KB   equ 34              ; and the shipped image has 133 of its rung
+KD_IMG_KB   equ 35              ; and the shipped image has 133 of its rung
 %else                           ; left: the KNOB pays the kilobyte, as a DOS
                                 ; program on a trace build, and no shipped one
-KD_IMG_KB   equ 33              ; 34 until SPEC.md 96.11.7's character devices
+KD_IMG_KB   equ 34              ; 34 until SPEC.md 96.11.7's character devices
 %endif                          ; raised CORE_MAX by a kilobyte to 35, and 33
+; **33 -> 34 FOR SPEC.md 96.56**, WordPerfect 4.1's FCB file calls: the core
+; grew 527 bytes against the 133 left, MEASURED 34,266 of 34,816. The knob
+; arm stays 34 and fits by 8 (34,808): its kilobyte is now the shipped one's.
+; **AND THE KNOB 34 -> 35 FOR SPEC.md 96.56.2**, Galaxy Trek's 14h/21h/24h:
+; CORE_MAX +144 against the knob's 8. The SHIPPED arm stays 34 - it had ~550.
+; **AND BOTH ARMS STAY FOR SPEC.md 96.56.3**, the rest of the FCB family:
+; CORE_MAX +368, MEASURED 34,794 of 34,816 shipped (22 left) and 35,336 of
+; 35,840 on the knob. The next core byte past 22 is a kilobyte off the DOS
+; program on the third arm.
+; **AND STILL FOR SPEC.md 96.56.1's two FCB repairs**: CORE_MAX +16, MEASURED
+; 34,785 of 34,816 shipped (31 left - the tree had drifted down) and 35,327
+; on the knob.
 ; **kern_mega's kern_dos IS A KILOBYTE BIGGER, and only kern_mega's**
 ; (SPEC.md 96.15.4, docs/plans/completed/KERN-MEGA-DOS-PLAN.md 6, 12.1 item 4): the XMS
 ; door over the arena is 842 bytes of code and 98 of bss (kerndos/kdxms.inc),
@@ -125,13 +137,18 @@ KD_IMG_KB   equ 33              ; 34 until SPEC.md 96.11.7's character devices
 ; bss took the image 37,843 -> 38,375 of 38,912, past the 45 left. The HMA's
 ; kilobyte again; the LOW image below takes the same 532 bytes inside its own
 ; rung (35,951 -> 36,483 of 36,864), so no DOS program pays for it
+; **38 -> 39 FOR SPEC.md 96.56**'s FCB file calls: 38,937 of 38,912, 25
+; over. The HMA's kilobyte; the LOW image below pays its own, off the program
 %elifdef KD_HMA
-KD_IMG_KB   equ 38
+KD_IMG_KB   equ 39
 %else
 ; **kern_mega's LOW kern_dos** (KD_LOWDOS, SPEC.md 96.40.9.2) has neither the
 ; HMA's low half nor the loader's EXEPACK unpacker - with A20 shut the
 ; program's own runs - and this rung IS off the program again, as on kern_big
-KD_IMG_KB   equ 36
+; **36 -> 37 FOR SPEC.md 96.56**: 36,982 of 36,864, 118 over
+; (96.56.3's +368 fit both kern_mega images: 39,465 of 39,936 HMA, 37,510
+; of 37,888 low)
+KD_IMG_KB   equ 37
 %endif
                                 ; since apps size pass 1 (above): this rung
                                 ; reserves the core's block, so a kilobyte

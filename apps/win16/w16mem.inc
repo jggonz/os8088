@@ -336,45 +336,41 @@ w16_garena:
     inc si
     cmp si, 2 * W16_NARENA
     jb .cnt
-    mov dx, W16_ARENAKB
+    mov dx, W16_ARENAKB * 64        ; ...all in PARAGRAPHS (SPEC.md 50.3.7)
     jcxz .fl
-    mov dx, 2 * W16_ARENAKB
+    mov dx, 2 * W16_ARENAKB * 64
     cmp cx, 1
     je .fl
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
-    sub ax, W16_ARKEEP
-    jb .fl
-    cmp ax, dx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest claim, paragraphs
+    sub ax, W16_ARKEEP * 64         ;   (BX and CX are not ours to keep:
+    jb .fl                          ;   both come back off the stack or are
+    cmp ax, dx                      ;   set again below)
     jbe .fl
     mov dx, ax
 .fl:
     pop bx
     pop si
-    mov ax, bx                      ; KB = ceil(paragraphs / 64)
-    add ax, 63
-    mov cl, 6
-    shr ax, cl
-    push ax                         ; (the request's own KB, to fall back to)
+    mov ax, bx                      ; the request's own paragraphs, to fall
+    push ax                         ;   back to
     cmp ax, dx
     jae .kb
     mov ax, dx
 .kb:
-    call OSAPI_MEM_CLAIM            ; DX = the segment
+    call w16_gclaimp                ; DX = the segment, AX = GRANTED
     mov cx, ax
     pop ax
     jnc .got
     cmp ax, cx
     je .no                          ; it was the request's own size
-    mov cx, ax
-    call OSAPI_MEM_CLAIM            ; the floor would not go: the request
+    call w16_gclaimp                ; the floor would not go: the request
     jc .no
+    mov cx, ax
 .got:
     mov [w16_arena + si], dx
     mov es, dx
-    mov ax, cx
-    mov cl, 6
-    shl ax, cl                      ; paragraphs
-    mov [es:GH_SIZE], ax
+    mov ax, cx                      ; the arena is all it was granted: the
+    mov [es:GH_SIZE], ax            ;   granule's slack is a free block's
     mov byte [es:GH_FLAGS], 0
     mov word [es:GH_MAGIC], GH_SIG
     add ax, dx
@@ -389,6 +385,18 @@ w16_garena:
     pop dx
     pop cx
     pop ax
+    ret
+
+; w16_gclaimp - AX = paragraphs: an os8088 claim -> DX, AX = the paragraphs
+; GRANTED; CF=1 none, AX kept. Keeps all else
+w16_gclaimp:
+    push bx
+    push cx
+    xor cx, cx                      ; no page-safe head
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -978,15 +986,13 @@ w16k_gcompact:
     xor ax, ax
     jmp short .kb
 .room:
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
-    cmp ax, 1023
-    jbe .kb
-    mov ax, 1023
-.kb:
+    push bx
     push cx
-    mov cl, 6
-    shl ax, cl
-    pop cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest claim, in PARAGRAPHS -
+    pop cx                          ;   what w16_garena is given to the
+    pop bx                          ;   paragraph (SPEC.md 50.3.7)
+.kb:
     cmp ax, cx
     jbe .have
     mov cx, ax

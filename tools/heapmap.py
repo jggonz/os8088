@@ -199,7 +199,7 @@ def pool(q):
     past the first megabyte, unique and ordered; only `sel`, `own`, `para`
     and `pinned` mean anything. q is a MegaBochs (tools/os88megabochs.py)."""
     g = os88geom
-    raw = q.read(q.sym("mx_tab"), MX_NBLK * MX_BLKSZ)
+    raw = q.read(q.tail("mx_tab"), MX_NBLK * MX_BLKSZ)
     inst = q.read(q.sym("inst_tab"), 12 * g.I_RECSZ)
     out = []
     for i in range(MX_NBLK):
@@ -256,7 +256,7 @@ class Map(object):
         claims = [Claim(raw[i * MC_SIZE:(i + 1) * MC_SIZE])
                   for i in range(MEM_MAX)]
         if getattr(q, "bochs", False):          # kern_mega under Bochs
-            sel = q.read(q.sym("mem_sel"), MEM_MAX * 2)
+            sel = q.read(q.tail("mem_sel"), MEM_MAX * 2)
             for i, c in enumerate(claims):
                 c.sel = u16(sel, 2 * i) or c.seg
         self.claims = sorted(claims, key=lambda c: c.seg)

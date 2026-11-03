@@ -77,7 +77,7 @@ def build(image: bytes, blob: int, head: int, margin: int):
         if os88lz.decompress(z, os88lz.LZ4, len(raw), tail=False) != raw:
             fail("lz4 did not round-trip the kernel - tools/os88lz.py is the "
                  "reference boot/boot2.asm copies, so this is a bug there")
-        m = os88lz.in_place_margin(raw, os88lz.LZ4, tail=False)
+        m = os88lz.in_place_margin(raw, os88lz.LZ4, packed=z, tail=False)
         worst = max(worst, m)
         # A BLOCK BUT THE LAST MUST SHRINK: kz_all lands block i at head +
         # i * KZ_BLK, so every one before the last is exactly BLK and always

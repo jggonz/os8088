@@ -2639,7 +2639,7 @@ gr_title: db 'Gorillas',0
 gr_ablines: dw gr_title, gr_credit, gr_credit2, gr_credit3, 0
 gr_credit: db 'After QBasic Gorillas (1990)',0
 gr_credit2: db 'Original: Microsoft Corporation',0
-gr_credit3: db '8086 port for os8088',0
+gr_credit3: db 'Ported by Jorge Gonzalez',0
 gr_status: db '               Score 000 - 000  ',0
 gr_prompt: db ' Angle: 45             Wind +000',0
 gr_velocity: db ' Velocity: 70     ',0

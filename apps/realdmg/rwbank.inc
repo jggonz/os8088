@@ -498,11 +498,11 @@ rw_b0set:
     mov byte [op_subv], 0
     sub ax, 1 + 400h
     mov dx, [op_base]
-    call rw_sub                     ; (none: 0, and bank 0 reads as garbage
-    jnc .b                          ;   - no LDT entry left at all)
-    xor dx, dx
-.b:
-    mov [rw_b0], dx
+    call rw_sub                     ; (none - no LDT entry left at all - is
+    mov [rw_b0], dx                 ;   the carve itself, rw_sub's DX: bank 0
+                                    ;   reads as garbage OF OURS, where a 0 was
+                                    ;   mega_null0's segment 0, the IVT - and
+                                    ;   rw_pmfill's 0 for a bank maps this)
     cmp byte [rw_bcache], 0
     jne .x
     mov word [rdg_nres], 1          ; one claim: the table is rw_pmfill's

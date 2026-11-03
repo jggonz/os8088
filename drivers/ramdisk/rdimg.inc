@@ -529,6 +529,7 @@ rd_preserve:
     je rd_img_enoimg
     call rd_wbuf_get
     jc rd_img_emem
+    call rd_iop_go              ; ONE bar for the whole image (rd_iop_go)
     call rd_meta_build
     mov es, [rd_wseg]           ; --- the metadata block, one write ----------
     xor bx, bx
@@ -585,7 +586,8 @@ rd_img_fail:                    ; AL = the RDERR_*. The 4KB block goes back if
     stc                         ; ([rd_wown] is 0 outside a get/free pair) -
                                 ; so every failure can come through here
 rd_img_out:                     ; rd_preserve's and rd_load's ONE exit: their
-    pop es                      ; frames are the same six registers
+    call rd_iop_end             ; frames are the same six registers - and the
+    pop es                      ; image's one operation ends here, every way
     pop di
     pop si
     pop dx
@@ -635,6 +637,7 @@ rd_load:
     call rd_unmount
     mov ax, [rd_want]
     mov [rd_kb], ax
+    call rd_iop_go              ; the image's size is known: ONE bar for it
     call rd_store_get
     jc rd_img_emem
     call rd_wbuf_get            ; a fresh one - on the extended path this is
@@ -659,7 +662,9 @@ rd_load:
 .chunk:
     jc .done
     call rd_blk_out             ; the DESTINATION, by the same arithmetic that
-    push bx                     ; answers where a run is readable
+    cmp byte [rd_xerr], 0       ; answers where a run is readable - and no
+    jne .nofile                 ; window for it (rd_at) is refused BEFORE the
+    push bx                     ; read lands anywhere
     mov es, bx
     xor bx, bx
     mov cx, [rd_ilen]
@@ -693,6 +698,48 @@ rd_load:
     jmp rd_img_emnt
 .nofile:                        ; the chunk loop's refusals, which are too far
     jmp rd_img_efile            ; down for a short jump back to the block
+
+; rd_iop_go / rd_iop_end - a Preserve or a Load is ONE operation (SPEC.md
+; 12.8.10): 32KB a chunk was ~9 bars for a 288KB store, and is one. The total
+; is EXACT - the store's bytes plus the two 4KB blocks still to move (a Load's
+; first read of the metadata is before its size is known, and is its own) -
+; and every byte of it is a read or a write, never both. The kernel owns it
+; as 0FFh (the Control Panel asks as the machine), so only rd_iop_end ends it,
+; and rd_img_out is both verbs' one exit. [rd_iop] says ours: a refusal (a
+; clone's bar parked on the menu bar, say) must not end somebody else's.
+; Advisory. rd_iop_go keeps every register; rd_iop_end keeps them and the flags
+rd_iop_go:
+    push ax
+    push cx
+    push dx
+    call rd_kb_bytes            ; DX:AX = the store
+    xchg cx, ax
+    add cx, RDI_META + RDI_CTAB
+    adc dx, 0
+    call OSAPI_FS_OP
+    jc .no
+    mov byte [rd_iop], 1
+.no:
+    pop dx
+    pop cx
+    pop ax
+    ret
+
+rd_iop_end:
+    pushf
+    cmp byte [rd_iop], 0
+    je .r
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FS_OP
+    mov byte [rd_iop], 0
+    pop dx
+    pop cx
+.r:
+    popf
+    ret
 
 ; rd_wseq - one HELD chunk of the image: ES:BX, CX bytes, onto [rd_iname]
 ; under [rd_itok]. out: CF/AX as OSAPI_FILE_WRITE_SEQ. clobbers: AX, SI, DI

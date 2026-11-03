@@ -77,3 +77,7 @@
 ; polls 03h without resetting first reads the whole virtual screen rather than
 ; a window of 0..0.
     DOSC_E dos_m33_wall
+; ...and one more, at the end: SPEC.md 96.54.4's event dispatch, which the
+; windowed host runs as its worker wakes - a program waiting on a key in its
+; window sleeps through every tick, so the tick never calls its handler.
+    DOSC_E dos_m33_evt

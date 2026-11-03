@@ -400,7 +400,7 @@ def main():
         return marty_leg(bad, blank, "--boot" in sys.argv[1:])
     if "--boot" in sys.argv[1:]:
         return boot_leg(bad)
-    # -DHDTOOL_KB and every other define off the Makefile's own recipe, and
+    # -DHDTOOL_PARA and every other define off the Makefile's own recipe, and
     # the result checked against build/hdd.bin (tools/os88drvsym.py)
     try:
         syms = os88drvsym.symbols("hdd.bin")

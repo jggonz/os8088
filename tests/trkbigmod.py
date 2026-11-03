@@ -62,6 +62,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
 import os88build                                         # noqa: E402
 import os88ui, os88geom, os88marty as M                  # noqa: E402
+from os88geom import MEM_GRAN                            # noqa: E402
 from trackmove import pkg_syms, u16                      # noqa: E402
 from heapcheck import claims                             # noqa: E402
 
@@ -92,6 +93,9 @@ def main():
     # this was the one path the row opened itself.
     modsz = os.path.getsize(os88build.at("build/bigmod.mod"))
     needk = (modsz + 1023) // 1024
+    # ...and what Tracker CLAIMS, paragraphs to the heap's granule (SPEC.md
+    # 50.3.7): the heap's shape is judged against this, not the KB
+    needp = -(-((modsz + 15) // 16) // MEM_GRAN) * MEM_GRAN
     print("== %s is %d bytes = %d KB ==" % (MOD, modsz, needk))
 
     # **`boot=` AND NOT A SETTLE** (docs/WRITING-TESTS.md 59). This row's apps
@@ -157,7 +161,7 @@ def main():
             print("     arena %d KB, largest run %d KB, %d KB free above it,"
                   " module wants %d KB"
                   % ((top - base) // 64, big // 64, above // 64, needk))
-            return big // 64, above // 64
+            return big, above
 
         def snd_seg():
             return u16(m.read(S("drv_tab") + SND_ROW * DRVR_SZ + DRVR_SEG, 2))
@@ -223,9 +227,9 @@ def main():
                 ui.close(w)
         M.settle(m, limit=90)
         run, above = layout("Sheet / Paint / Clear Skies closed")
-        check(3, "the heap is the shape", run < needk and run + above >= needk,
+        check(3, "the heap is the shape", run < needp and run + above >= needp,
               "(%d KB in one run, %d more above it, wants %d)"
-              % (run, above, needk))
+              % (run // 64, above // 64, needk))
         if bad:
             print("     a run that simply fitted would reach the same green"
                   " having tested nothing (docs/WRITING-TESTS.md 1)")
@@ -297,7 +301,7 @@ def main():
                       and k.startswith(("trk_s_", "mp_title"))), "+%04x" % msg)
         check(5, "the module loaded", loaded,
               "(claim %04x, %d KB, status %s)"
-              % (tw2("trk_modseg"), tw2("trk_capk"), named))
+              % (tw2("trk_modseg"), tw2("trk_capp") // 64, named))
         print("     Tracker's region %04x -> %04x, SOUND.DRV %04x -> %04x"
               % (seg0, seg2, snd0, snd_seg()))
         print("VERDICT:", "OK" if not bad else "%d PROBLEM(S)" % bad)

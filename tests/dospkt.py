@@ -42,6 +42,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "..", "tools"))
 
 import dispcp                                                 # noqa: E402
+import dosmap                                                  # noqa: E402
 import ethernet as eth                                       # noqa: E402
 import os88build                                             # noqa: E402
 import os88qemu                                              # noqa: E402
@@ -149,6 +150,9 @@ def main():
         wins = dispcp.win_list(m, eth.S)
         wx, wy = dispcp.win_rect(m, eth.S, wins[-1])[:2]
         dispcp.open_named(m, mouse, eth.S, eth.settle, wx, wy, "DOSPKT.COM")
+        # ...WITH NO PACKET DRIVER, since Network starts cleared (SPEC.md
+        # 96.36.7.4): tick it and Run again, as a user would
+        dosmap.network_rerun(m, mouse, eth.settle, dosmap.package(), "dospkt")
         say("dospkt: launched; the probe holds the screen on int 16h")
 
         # it sends, then waits ~3s of BIOS ticks for the reply - so the

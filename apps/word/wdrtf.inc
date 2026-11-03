@@ -447,7 +447,7 @@ wd_isrtfimg:
 wd_rtfparse:
     mov [wd_dfsize], ax
     mov byte [wd_dtrunc], 0
-    mov ax, WD_MAXKB
+    mov ax, WD_MAXKB * 64
     call wd_resize
     jc .no
     mov word [wd_len], 0

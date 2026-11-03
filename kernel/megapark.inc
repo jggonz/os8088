@@ -86,10 +86,12 @@ mpk_stub:
     cmp ax, [MPK_SAVE + 4]
     jne .badc
 .cells:
-    call .pit                       ; the clock starts
-    xor ax, ax
+%ifdef MEGA_DIAG                    ; THE TIMES ARE MEGADIAG=1's (its DOSP
+    call .pit                       ; line, megados.inc's MEGA_DPITCK): the
+    xor ax, ax                      ; clock starts
     mov [MPK_C_PACC], ax
     mov [MPK_C_PACC + 2], ax
+%endif
     ; --- the sum, over the list after the header's cells ----------------------
     mov bp, [MPK_NREG]
     mov si, MPK_REG
@@ -131,11 +133,11 @@ mpk_stub:
     pop ds
     MPK_SUMLINES
     pop ds
-    push ax
-    push bx
+%ifdef MEGA_DIAG
+    push ax                         ; (BX is MPK_SUMLINES's: SP's, below)
     call .pit
-    pop bx
     pop ax
+%endif
     mov bx, sp
     inc word [bx+2]
     jmp .chunk
@@ -175,10 +177,8 @@ mpk_stub:
 .rst:
     mov ax, bp
     mov dx, si
-    mov cl, 10
-    shr ax, cl
-    mov cl, 6
-    shl dx, cl
+    shr ax, 10
+    shl dx, 6
     or ax, dx
     mov cx, [MPK_C_PKB]
     sub cx, ax
@@ -187,9 +187,7 @@ mpk_stub:
     jb .last                        ; 32KB and the last on P, which is any
     mov cx, 32                      ; whole KB
 .last:
-    xchg ch, cl                     ; KB -> bytes
-    shl cx, 1
-    shl cx, 1
+    shl cx, 10                      ; KB -> bytes
     mov ax, bp
     and ax, 0x7FFF
     sub cx, ax                      ; (bp's own place in its 32KB, which is 0
@@ -200,7 +198,8 @@ mpk_stub:
     jmp short .rst
 .restored:
     MPKMARK 43, 'R'                 ; conventional memory is back
-    call .pit
+%ifdef MEGA_DIAG                    ; BX = ms out, CX = ms back: mega_dwake
+    call .pit                       ; reads them for MEGADIAG=1 alone
     mov ax, [MPK_C_PACC]            ; kern_dos left PIT channel 0 in the
     mov dx, [MPK_C_PACC + 2]        ; ROM's mode 3: two counts a clock
     mov bx, 2 * 1193
@@ -211,6 +210,7 @@ mpk_stub:
     mov cx, ax
 .tset:
     mov bx, [MPK_C_POUT]
+%endif
     MPKMARK 44, 'K'                 ; ...into the kernel's tables and out
     lgdt [MPK_C_KGDTR]              ; the kernel's own tables, verified
     lidt [MPK_C_KIDTR]
@@ -283,7 +283,9 @@ mpk_stub:
     mov dx, si
     mov di, MPK_GDT + 0x20
     call .desc
+%ifdef MEGA_DIAG
     call .pit
+%endif
     push word 0x18
     pop ds
     push word 0x20
@@ -344,7 +346,9 @@ mpk_stub:
     pop es
     pop ds
     pop si
+%ifdef MEGA_DIAG
     call .pit
+%endif
     jmp short .xc
 .xcd:
     add sp, 12
@@ -358,6 +362,7 @@ mpk_stub:
     mov word [di+6], 0
     ret
 
+%ifdef MEGA_DIAG
 .pit:                               ; PIT ch0's counts since the last call,
     xor al, al                      ; into MPK_C_PACC. Clobbers AX, BX
     out 0x43, al
@@ -371,6 +376,7 @@ mpk_stub:
     add [MPK_C_PACC], bx
     adc word [MPK_C_PACC + 2], 0
     ret
+%endif
 
 mpk_tabs    dw MEGA_GDT_N * 8 - 1   ; mega_gdtr and mega_idtr, as the cells
             dw 0, 0                 ; must hold them - their BASES written

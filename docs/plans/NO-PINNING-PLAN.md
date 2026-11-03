@@ -4,8 +4,9 @@
 carve), the ratchet (4.1: `tests/pins.txt`, `t_pins`, `pinsrt`), K1a, K2, K8,
 K9, A1-A8, C5, P1 and the 2.x table's rows are built (sections 1-8 record
 each). What is still open is the **seven `N` lines** left in `tests/pins.txt`
-(K3 kern_mega's descriptor tables, the Sticky Apps panel's second save-under,
-and the rest each with its reason there); a row that leaves pins.txt is how
+(K3 kern_mega's descriptor tables and the rest, each with its reason
+there; the Sticky Apps panel's second save-under went with STIKMENU.DRV's
+size pass, which takes `menu_drop`'s movable one alone); a row that leaves pins.txt is how
 this file closes.
 Branch `no-pinning`, cut from `elendilon`.
 

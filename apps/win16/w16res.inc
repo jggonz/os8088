@@ -89,17 +89,23 @@ w16_copyres:
     mov es, [w16_rtab]
     mov si, 2
 .type:
+    mov ax, si                      ; w16_rscan's bounds: a type header and
+    add ax, 8                       ;   an entry are only walked whole inside
+    cmp ax, [w16_rtlen]             ;   the table, so a count-0 type with no
+    ja .done                        ;   terminator stops at its end
     cmp word [es:si], 0
     je .done
     mov cx, [es:si + 2]
-    add si, 8
+    mov si, ax
 .ent:
     jcxz .type
+    mov ax, si
+    add ax, RN_SIZE
+    cmp ax, [w16_rtlen]
+    ja .done
     mov word [es:si + RN_HANDLE], 0
     mov word [es:si + RN_USAGE], 0
-    add si, RN_SIZE
-    cmp si, [w16_rtlen]
-    jae .done
+    mov si, ax
     dec cx
     jmp short .ent
 .done:
@@ -373,6 +379,11 @@ w16_rscan:
     mov es, [w16_rtab]
     mov di, 2
 .type:
+    mov ax, di                      ; a type header past the table: none
+    add ax, 8
+    jc .none
+    cmp ax, [w16_rtlen]
+    ja .none
     mov ax, [es:di]
     or ax, ax
     jz .out
@@ -386,6 +397,10 @@ w16_rscan:
     jne .skip
 .ent:
     jcxz .none
+    mov ax, di                      ; an entry past the table is not one:
+    add ax, RN_SIZE                 ;   w16_rload would write its cache
+    cmp ax, [w16_rtlen]             ;   words outside the claim
+    ja .none
     mov ax, [es:di + RN_ID]
     mov bx, [w16_rnk]
     mov si, w16_rnamb
@@ -397,9 +412,10 @@ w16_rscan:
 .skip:
     mov ax, RN_SIZE                 ; past this type's entries
     mul cx
+    jc .none                        ; (a count that wraps 16 bits is damage)
     add di, ax
-    cmp di, [w16_rtlen]
-    jb .type
+    jc .none
+    jmp short .type
 .none:
     xor ax, ax
     jmp short .out

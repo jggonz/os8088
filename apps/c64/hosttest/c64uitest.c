@@ -599,7 +599,7 @@ int  os88_file_dlg(int mode, void *win, const char *d) { return 0; }
  * for the only two sizes the program asks for at launch, and answered EVERY
  * os88_file_read_seg() by opening C64.ROM whatever name it was handed. Smart
  * attach could not be modelled at all: a .PRG asks for a claim of
- * ceil(size / 1KB), reads the file into it and moves it into the C64's RAM,
+ * ceil(size / 16) paragraphs, reads the file into it and moves it into the C64's RAM,
  * and with fixed segments and one file that whole path was untestable - which
  * is why TWO arithmetic defects in it survived the wave. `size_lo + 1023` is
  * 16-bit on the target and wraps above 64,512 bytes, and the end test
@@ -662,6 +662,25 @@ unsigned os88_mem_claim(int kb)
             return claim[i].seg;
         }
     return 0;                           /* the heap is full: a normal path */
+}
+
+/* ...and the paragraph door (SPEC.md 50.3.7), which the .PRG attach uses:
+ * the capacity is EXACTLY what was asked for, no granule over it, so a read
+ * past the request fails here even where the kernel's rounding would hide it */
+unsigned os88_mem_claim_p(unsigned paras)
+{
+    int i;
+    if (paras == 0)
+        return 0;
+    for (i = 0; i < CLAIM_MAX; i++)
+        if (!claim[i].live) {
+            claim[i].live = 1;
+            claim[i].seg = (unsigned)(0x4000 + i * 0x400);
+            claim[i].cap = (long)paras * 16;
+            claims_live++;
+            return claim[i].seg;
+        }
+    return 0;
 }
 
 int os88_mem_free(unsigned seg)

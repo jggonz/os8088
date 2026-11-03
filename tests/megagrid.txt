@@ -26,4 +26,14 @@
 #     that aims a WINDOW at a paragraph (OSAPI_SEG's SEG_AT) is not a segment
 #     built at all, and its paragraph need not be on any grid
 1 apps/xtmp3/x3hold.inc  # x3_rseq's .conv: the hold's paragraph and an offset under 16, loaded through x3h_at's SEG_AT window - a window aimed at RAM under kern_mega, the sum only on a real-mode kernel (where any paragraph is a segment)
-3 apps/browser/browser.asm  # the Browser's three one-paragraph normalisations - br_docmap's, br_srcat's and br_srcems_map's - each the REAL-MODE arm only: br_docmap takes the sum only while [br_docfar] is 0, which kern_mega never leaves it (br_entry banks CPU_F_PM there), br_srcat only while [br_mega] is 0, and br_srcems_map's paragraph goes through br_at, a SEG_AT window under kern_mega - so under protected mode each is a bound window aimed at the byte or a window aimed at RAM, never a segment built (tests/brmega.py)
+2 apps/browser/browser.asm  # the Browser's three one-paragraph normalisations - br_docmap's, br_srcat's and br_srcems_map's - each the REAL-MODE arm only: br_docmap takes the sum only while [br_docfar] is 0, which kern_mega never leaves it (br_entry banks CPU_F_PM there), br_srcat only while [br_mega] is 0, and br_srcems_map's paragraph goes through br_at, a SEG_AT window under kern_mega - so under protected mode each is a bound window aimed at the byte or a window aimed at RAM, never a segment built (tests/brmega.py) - the scanner reads two since br_srcems_map's br_at answer is tested before the segment load (6accb8cd)
+
+# --- SPEC.md 50.3.7: a BYTE COUNT rounded up to paragraphs as the SIZE handed
+#     to OSAPI_MEM_P - the `add R, 15` and the shift by four are the claim's
+#     length, never added to a segment, and the `mov es` the scan meets after
+#     loads the BASE the claim answers in DX (a selector under kern_mega)
+1 apps/artful/atcmd.inc  # the strip command's word list: 2 x the selection's length, rounded to paragraphs for OSAPI_MEM_P, then ES = the claim's own DX
+1 apps/artful/atui.inc  # at_subank's banked pull-down rect: planes x rows x byte columns, rounded to paragraphs for OSAPI_MEM_P, then ES = the claim's own DX
+1 apps/notepad/notepad.asm  # np_stghold's CR/LF staging: the note's bytes plus one a newline, rounded to paragraphs for OSAPI_MEM_P, then ES = the claim's own DX
+1 apps/word/wddoc.inc  # wd_docparse's document size: the .DOC's character count, rounded to paragraphs for wd_resize's MEMP_REGROW; the ES loaded after is [wd_pseg], a claim's own base
+1 apps/scribe/scdoc.inc  # sc_docparse's document size, WORD's wd_docparse copied: the .DOC's character count rounded to paragraphs for sc_resize's MEMP_REGROW; the ES loaded after is [sc_pseg], a claim's own base

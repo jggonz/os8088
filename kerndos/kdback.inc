@@ -286,6 +286,8 @@ dos_k_xcaps:
 dos_k_xalloc:
 dos_k_xfree:
 %endif
+dos_k_fsop:                         ; ...and the file widget's one bar (SPEC.md
+                                    ; 12.8.10): there is no menu bar here
 kd_k_refuse:
     stc
     ret
@@ -322,4 +324,4 @@ kdb_betab:
     dw dos_k_append, dos_k_delete, dos_k_dfree, dos_k_mkdir, dos_k_rmdir
     dw dos_k_xcaps, dos_k_xalloc, dos_k_xfree, dos_k_xcopy, dos_k_rename
     dw dos_k_copy, dos_k_move, dos_k_path, dos_k_vstat, dos_k_wrat
-    dw dos_k_here, dos_k_vkind, dos_k_rseq, dos_k_wseq
+    dw dos_k_here, dos_k_vkind, dos_k_rseq, dos_k_wseq, dos_k_fsop

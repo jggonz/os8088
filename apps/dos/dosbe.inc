@@ -116,6 +116,10 @@ dos_k_wrat:
     call OSAPI_FILE_WRITE_AT
     ret
 
+dos_k_fsop:
+    call OSAPI_FS_OP
+    ret
+
 dos_k_rseq:                         ; SPEC.md 18.4.8.1: READ_AT's registers
     jmp os88_rseq                   ; plus DS:DI, and READ_AT itself on the
                                     ; small kernel
@@ -170,5 +174,5 @@ dos_betab:
     dw dos_k_append, dos_k_delete, dos_k_dfree, dos_k_mkdir, dos_k_rmdir
     dw dos_k_xcaps, dos_k_xalloc, dos_k_xfree, dos_k_xcopy, dos_k_rename
     dw dos_k_copy, dos_k_move, dos_k_path, dos_k_vstat, dos_k_wrat
-    dw dos_k_here, dos_k_vkind, dos_k_rseq, dos_k_wseq
+    dw dos_k_here, dos_k_vkind, dos_k_rseq, dos_k_wseq, dos_k_fsop
 %endmacro

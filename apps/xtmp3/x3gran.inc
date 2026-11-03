@@ -176,8 +176,8 @@ X3_MAXSEG   equ 6       ; work segments a backend may ask for
 X3C_OFFER   equ 0       ; db  bit n = profile n is offered by this part
 X3C_NSEG    equ 1       ; db  work segments wanted, 0..X3_MAXSEG
 X3C_PARA    equ 2       ; 6 dw  paragraphs of each (1..4096): the caller
-                        ;     claims each as its own block (OSAPI_MEM_CLAIM,
-                        ;     in KB rounded up) and passes the segments to OPEN
+                        ;     claims each as its own block (OSAPI_MEM_P,
+                        ;     in paragraphs) and passes the segments to OPEN
 X3C_TKB     equ 14      ; dw  KB of those that are EXPANDED TABLES (the rest
                         ;     is state) - for the Status line and 121.10's sum
 X3C_PARTKB  equ 16      ; dw  KB of the part itself, as claimed (its tables

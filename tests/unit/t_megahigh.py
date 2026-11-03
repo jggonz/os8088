@@ -52,8 +52,9 @@ class byte says, and the carve itself goes above 1MB with the program's KEEP
 so it lives here and not in the registry.
 
 DOS IS THE ONE PACKAGE WHOSE HEADER DEPENDS ON THE BUILD. kern_mega's
-DOS.O88 is build/<megak>/kdos/DOS.O88, whose part 0 is `dosp.bin`, built
-from apps/dos/dos.asm with -DDOSKPART -DDOS_EXTCORE and, under KERN_MEGA,
+DOS.O88 is build/<megak>/kdos/DOS.O88, whose part 0 is `dosp.bin`, cut
+(SPEC.md 96.44.19; on kern_mega copied whole) from `dospw.bin`, the build
+of apps/dos/dos.asm with -DDOSKPART -DDOS_EXTCORE and, under KERN_MEGA,
 -DDOS_MEGA - the arm whose header says OS88_HIGH. `dos.bin` is the same file
 built plain, for the icon pipeline, and ships nowhere. SHIPPED_STEM names
 that, the defines are read off that recipe rather than restated, and the
@@ -102,7 +103,7 @@ MINREASON = 40          # a reason with a mechanism in it, not "not yet"
 # The one package whose SHIPPED header is not the plain build's: see the
 # docstring. Asserted against the Makefile below, so a renamed part fails
 # here rather than quietly checking the icon pipeline's build instead.
-SHIPPED_STEM = {"apps/dos/dos.asm": "dosp"}
+SHIPPED_STEM = {"apps/dos/dos.asm": "dospw"}
 
 REHOME = re.compile(r"^\s*OS88_REHOME\b", re.M)
 OWN_CLAIM = re.compile(r"^\s*call\s+OSAPI_MEM_(?:CLAIM|CLAIM_HI|HUGE)\b",
@@ -404,9 +405,11 @@ def main():
                   "the one kern_mega's disk carries; a stale name would "
                   "check a build nobody ships",
               got=[r[0] for r in allr.get(src, [])], want=stem)
-    check("dosp.bin" in mk and
-          re.search(r"/kdos/DOS\.O88\s*:\s*\$\(BUILD\)/dosload\.bin\s+"
-                    r"\$\(BUILD\)/dosp\.bin", mk),
+    check(re.search(r"/kdos/DOS\.O88\s*:\s*\$\(BUILD\)/dosload\.bin\s+"
+                    r"\$\(DOSPARTBINS\)", mk) and
+          re.search(r"^DOSPARTBINS\s*=\s*\$\(BUILD\)/dosp\.bin", mk, re.M) and
+          re.search(r"^\$\(BUILD\)/dosp\.bin\s*:\s*\$\(BUILD\)/dospw\.bin",
+                    mk, re.M),
           "megahigh: kdos/DOS.O88 is no longer dosload.bin + dosp.bin",
           why="SHIPPED_STEM's DOS line rests on that recipe: the DOS package "
               "kern_mega's system disk carries is that file, its program "

@@ -470,10 +470,12 @@ at_cmd_none:
 .want:
     push ax                         ; the clamp, if the claim is granted
     shl ax, 1
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl                      ; AX = KB for that many words
-    call OSAPI_MEM_CLAIM            ; AX KB -> DX segment, CF = refused
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                      ; AX = PARAGRAPHS for that many words
+    xor cx, cx                      ; (SPEC.md 50.3.7)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; -> DX segment, CF = refused
     pop cx
     jc .refused
     mov es, dx

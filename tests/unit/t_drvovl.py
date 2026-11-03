@@ -12,8 +12,8 @@ driver loaded, its Control Panel cells published, and every control on the
 page inert. That shipped, and it cost the RAM disk to save 646 bytes.
 Since SPEC.md 20.13.3.1 a compressed driver IS a 'CZ' file and
 `OSAPI_FILE_READ` is the transparent read (20.14.3): each overlay's loader
-takes a claim the Makefile cuts from the IMAGE (`-DRAMPAGE_KB` and
-`-DHDTOOL_KB`, off the `.bin`), reads at offset 0 with that capacity, and
+takes a claim the Makefile cuts from the IMAGE (`-DRAMPAGE_PARA` and
+`-DHDTOOL_PARA`, off the `.bin`), reads at offset 0 with that capacity, and
 what lands is the image, expanded - so both overlays ship packed by the same
 rule as every other driver, and `tests/rdup.py` and `tests/hddcp.py` drive
 the pages off them.

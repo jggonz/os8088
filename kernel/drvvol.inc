@@ -263,10 +263,9 @@ drv_find:
 %endif
     test dx, dx
     jnz .no
-    mov ax, cx                  ; CF = 0 from the `test`, which `mov` keeps
-.out:
+    mov ax, cx                  ; CF = 0 from the `test`, which `mov` keeps -
+    CLC_OR_STC .no              ; ...and SKIPF1's own `test` says it again,
+                                ; over the refusal's `stc` (kernel size pass
+                                ; 17, -1: .no jumped back here)
     jmp dskw_isempty.out        ; the same five pops (size pass 10, -3)
-.no:
-    stc
-    jmp short .out
 section .text                   ; SPEC.md 1: every file ends where it began

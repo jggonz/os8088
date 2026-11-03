@@ -215,7 +215,7 @@ CC_OVLZ := $(BUILD)/ovlz
 define CC_OVLZ_RULE
 $(CC_OVLZ)/$(1): $(BUILD)/$(1) tools/os88lz.py $(PKGZSTAMP)
 	@mkdir -p $$(@D)
-	$(if $(PKGZ),python3 tools/os88lz.py --wrap $$@ --fmt $(PKGZ) $$<,cp $$< $$@)
+	$(if $(PKGZ),python3 tools/os88lz.py --wrap $$@ --fmt $(PKGZ) --filter $$<,cp $$< $$@)
 endef
 
 # -----------------------------------------------------------------------------

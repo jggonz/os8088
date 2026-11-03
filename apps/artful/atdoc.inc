@@ -40,15 +40,16 @@
 ; =============================================================================
 
 ; -----------------------------------------------------------------------------
-; at_dresize - make the document claim AX kilobytes, text and gap intact
-; in:  AX = the wanted size in KB (clamped to AT_KB0..AT_MAXKB)
+; at_dresize - make the document claim AX paragraphs, text and gap intact
+; in:  AX = the wanted size in paragraphs (clamped to AT_KB0..AT_MAXKB)
 ; out: CF=0 with [at_dseg]/[at_dcap]/[at_ge] updated, or CF=1 and nothing
 ;      moved; preserves every register
 ;
-; ALWAYS OSAPI_MEM_REGROW, never claim-copy-free: a regrow extends in place
-; when the paragraphs above it are free, so it needs the DIFFERENCE rather
-; than old + new at once, and when it must move it brings the bytes with it
-; (SPEC.md 50.3.1).
+; ALWAYS a regrow, never claim-copy-free: a regrow extends in place when the
+; paragraphs above it are free, so it needs the DIFFERENCE rather than old +
+; new at once, and when it must move it brings the bytes with it (SPEC.md
+; 50.3.1). OSAPI_MEM_P's (SPEC.md 50.3.7): the document is a byte count, so
+; it pays the heap's granule and not a whole KB.
 ;
 ; The gap is what makes this more than a resize. Text is [0, at_gs) ++
 ; [at_ge, cap), so growing the buffer must ALSO slide the high run up to the
@@ -66,16 +67,16 @@ at_dresize:
     push di
     push ds
     push es
-    cmp ax, AT_KB0
+    cmp ax, AT_KB0 * 64
     jae .lo
-    mov ax, AT_KB0
+    mov ax, AT_KB0 * 64
 .lo:
-    cmp ax, AT_MAXKB
+    cmp ax, AT_MAXKB * 64
     jbe .hi
-    mov ax, AT_MAXKB
+    mov ax, AT_MAXKB * 64
 .hi:
-    mov [at_dkb], ax                ; the wanted size in KB...
-    mov cl, 10
+    mov [at_dpara], ax              ; the wanted size in paragraphs...
+    mov cl, 4
     shl ax, cl
     mov [at_dnew], ax               ; ...and in bytes
     cmp ax, [at_dcap]
@@ -90,9 +91,10 @@ at_dresize:
     jb .shrink
 
     ; --- grow: the BLOCK first, then the high run up to the new ceiling ---
-    mov ax, [at_dkb]
+    mov ax, [at_dpara]
     mov dx, [at_dseg]
-    call OSAPI_MEM_REGROW           ; out CF=0 and DX = the base NOW
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P                ; out CF=0 and DX = the base NOW
     jc .no                          ; refused: nothing has moved yet
     mov [at_dseg], dx
     mov cx, [at_dtail]
@@ -130,9 +132,10 @@ at_dresize:
     pop ds
 .books:
     call at_dfin                    ; at_ge and at_dcap, before the regrow
-    mov ax, [at_dkb]
+    mov ax, [at_dpara]
     mov dx, [at_dseg]
-    call OSAPI_MEM_REGROW           ; a shrink always succeeds in place
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P                ; a shrink always succeeds in place
     jc .ok
     mov [at_dseg], dx
     jmp short .ok
@@ -173,9 +176,9 @@ at_dgrow:
     push ax
     push cx
     mov ax, [at_dcap]
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    add ax, AT_GROWKB
+    add ax, AT_GROWKB * 64
     call at_dresize
     pop cx
     pop ax
@@ -190,10 +193,10 @@ at_dfit:
     push ax
     push cx
     call at_dlen
-    add ax, 1023
-    mov cl, 10
+    add ax, 15                      ; (<= AT_MAXKB * 1024: no carry)
+    mov cl, 4
     shr ax, cl
-    add ax, AT_GROWKB
+    add ax, AT_GROWKB * 64
     call at_dresize                 ; a shrink always succeeds in place
     pop cx
     pop ax

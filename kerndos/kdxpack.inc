@@ -587,10 +587,13 @@ kd_tolow:
                                         ; yet - the program this replaces is
                                         ; what we are abandoning)
 
-    ; part 3 begins at file SECTOR KDL_L3OFF: skip that many sectors into the
-    ; chain, which is (L3OFF / spc) whole clusters and (L3OFF mod spc) sectors
-    ; into the one it lands in - dskw_read_at's own arithmetic (18.4.4.2).
+    ; part 3 begins at file PARAGRAPH KDL_L3OFF (SPEC.md 20.12.2), so in the
+    ; sector L3OFF >> 5, (L3OFF & 31) paragraphs in: skip that many sectors
+    ; into the chain, which is (sectors / spc) whole clusters and (sectors mod
+    ; spc) into the one it lands in - dskw_read_at's own arithmetic (18.4.4.2)
     mov ax, [si+KDL_L3OFF]
+    mov cl, 5
+    shr ax, cl
     xor dx, dx
     mov bl, [dsk_spc]
     xor bh, bh
@@ -610,9 +613,15 @@ kd_tolow:
     mov [dsk_csk], dl                   ; sectors into the landed cluster
     push ax                             ; the landed cluster
 
-    mov ax, [si+KDL_L3ZB]               ; the packed bytes, as whole sectors
-    add ax, 511
-    mov cl, 9
+    mov ax, [si+KDL_L3ZB]               ; the packed bytes, as paragraphs...
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    mov bx, [si+KDL_L3OFF]
+    and bx, 31                          ; ...past the stream's place in its
+    add ax, bx                          ; first sector...
+    add ax, 31
+    mov cl, 5
     shr ax, cl
     mov dx, ax                          ; DX = sectors to read
 
@@ -634,7 +643,10 @@ kd_tolow:
     ; --- expand it to the window's base -------------------------------------
     mov si, [kd_lbp]                    ; the packed length, out of the block
     mov cx, [si+KDL_L3ZB]               ; (DS is still KD_SEG here)
-    mov ds, [cs:kxl_strm]               ; DS:SI = the stream
+    mov ax, [si+KDL_L3OFF]
+    and ax, 31                          ; the stream is its place in its first
+    add ax, [cs:kxl_strm]               ; sector up what was read
+    mov ds, ax                          ; DS:SI = the stream
     xor si, si
     mov es, [cs:kxl_stg]                ; ES = the window's base
     call kxl_dec                        ; DI = the unpacked length (U)
@@ -692,8 +704,11 @@ kd_tolow:
 .ret:
     ret
 
+%include "lzfilt.inc"               ; kxl_dec undoes the near-call filter
+                                    ; (SPEC.md 20.13.9) with the kernel's body
 ; -----------------------------------------------------------------------------
-; kxl_dec - expand ONE os88lz LZ4 stream in place (SPEC.md 20.13.7)
+; kxl_dec - expand ONE os88lz LZ4 stream in place (SPEC.md 20.13.7), and
+;           undo the near-call filter if the stream carries it (20.13.9)
 ; in:  DS:SI = the stream (SI = 0), CX = its packed bytes, ES = the output
 ;      segment (DI starts 0); output below the stream in the window
 ; out: DI = the unpacked length. Clobbers AX, BX, CX, SI, DI, DS, BP, flags
@@ -711,8 +726,12 @@ kd_tolow:
 kxl_dec:
     xor di, di
     add cx, si                          ; the stream's end (SI = 0)
-    mov ax, [si]                        ; the T word...
-    add si, 2
+    lodsw                               ; the T word...
+    cmp ax, LZ_ESC                      ; ...or the FILTER'S ESCAPE (SPEC.md
+    pushf                               ; 20.13.9), kept for the end, and
+    jne .t                              ; the real T after it
+    lodsw
+.t:
     sub cx, ax                          ; ...and so where the raw tail begins
     mov [cs:kxl_tail], cx
     mov [cs:kxl_tlen], ax
@@ -770,6 +789,10 @@ kxl_dec:
 .tail:
     mov cx, [cs:kxl_tlen]               ; the raw tail, DS:SI standing on it
     rep movsb
+    popf
+    jne .ret
+    LZ_UNE8                             ; the output is ES:0..DI (lzfilt.inc)
+.ret:
     ret
 
 kxp_msg:    db 'Packed file is corrupt'

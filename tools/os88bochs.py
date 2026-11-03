@@ -1014,6 +1014,18 @@ class Box(object):
             self._map = kmap(self.build)
         return self._map[name]
 
+    def tail(self, name):
+        """The LINEAR address of a table in kern_mega's TABLES' TAIL
+        (os88sym.TAIL: mx_tab, mem_sel, mega_wtab, mega_ustab) - above 1MB
+        since kern_mega size pass 2, where this machine's tables are, so it
+        is read off the guest (os88sym.tail) and is not a label."""
+        sys.path.insert(0, os.path.join(ROOT, "tools"))
+        import os88sym
+        path = os.path.join(self.build or os.path.join(ROOT, "build"),
+                            "megak", "kernel.map")
+        return os88sym.tail(name, self.read, self.sym,
+                            os88sym._parse_map(path)[2])
+
     def ptime(self):
         """Bochs's instruction clock, read in one stop of the guest."""
         m = re.findall(r"ptime: (\d+)", self.dbg(["ptime"]))
@@ -1140,8 +1152,9 @@ class Box(object):
     # true only while the KERNEL is in conventional memory: in a DOS trip
     # that RAM is kern_dos's, so every read checks a constant of the image
     # first (`home`).
-    _HOME = ("mega_tmem", b"real mode: no room for kern_mega's tables")
-    # ...a toast's text in .text (mega.inc), never written: at its address
+    _HOME = ("mega_s_kbdos", b"Use this disk's DOS.O88")
+    # ...a refusal's text in .text (megados.inc's mega_pkgok), never
+    # written: at its address
     # while the kernel is resident, kern_dos's bytes while it is parked
 
     def _home_span(self):

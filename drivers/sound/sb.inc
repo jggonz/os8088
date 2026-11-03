@@ -2859,16 +2859,18 @@ sbl_reloc:
 ; SIZED TO THE ASK (SPEC.md 34.6.3). It was a flat SBL_POOLKB, walking down
 ; in 4KB tiers when the heap would not fund it - so a Tracker playing an 8KB
 ; ring held a 20KB pool, and a 16KB one held 4KB it never touched. Now the
-; first grant decides: its size in whole KB, at least SBL_POOLMIN so a small
-; first grant leaves room beside it. A later grant that does not fit GROWS the
+; first grant decides: its size in PARAGRAPHS (it was whole KB until SPEC.md
+; 50.3.7's door), at least SBL_POOLMIN KB so a small first grant leaves room
+; beside it. A later grant that does not fit GROWS the
 ; pool (sbl_pool_grow). And the tiers are gone because they cannot help: a
 ; pool smaller than the grant it was claimed for is a refusal either way, and
 ; the callers that can live with less - Tracker, Audio, the Recorder - already
 ; tier their own grant and ask again.
 ;
-; PAGE-SAFE WHEN IT CAN BE (SPEC.md 34.5.2): OSAPI_MEM_CLAIM_DMA_HI with the
-; whole pool as the head, so a ring granted out of it is one the 8237 can play
-; in place - which is what spares the 8KB double buffer. From the TOP, the door
+; PAGE-SAFE WHEN IT CAN BE (SPEC.md 34.5.2): OSAPI_MEM_P's MEMP_CLAIM_HI with
+; the whole pool as the head (OSAPI_MEM_CLAIM_DMA_HI's claim, in paragraphs),
+; so a ring granted out of it is one the 8237 can play in place - which is
+; what spares the 8KB double buffer. From the TOP, the door
 ; for memory a chip is pointed at (SPEC.md 50.3.2); movable all the same, the
 ; compactor honouring the head (SPEC.md 66.4.2). When the heap has no such run
 ; the plain claim is the fallback: the pool still works, and a stream out of
@@ -2879,32 +2881,43 @@ sbl_pool_get:
     push bx
     push cx
     push dx
+    push si
     cmp word [sbl_poolseg], 0
     jne .ok                     ; already held: grants share one claim
-    call sbl_kb                 ; AX = CX in whole KB
-    cmp ax, SBL_POOLMIN
-    jae .min
-    mov ax, SBL_POOLMIN
+    call sbl_para               ; AX = CX in PARAGRAPHS (SPEC.md 50.3.7): a
+    cmp ax, SBL_POOLMIN * 64    ; grant is a package's BYTE count, so a
+    jae .min                    ; whole KB of it was half a granule more on
+    mov ax, SBL_POOLMIN * 64    ; average for as long as the pool is held
 .min:
-    mov bx, ax                  ; BX = the KB, across both asks
-    mov cx, ax                  ; the whole pool is the chip's
-    call OSAPI_MEM_CLAIM_DMA_HI ; out CF, DX = base segment
-    jnc .got
-    mov ax, bx
-    call OSAPI_MEM_CLAIM_HI     ; not page-safe, but a pool all the same
+    mov si, ax                  ; SI = the ask, across both asks (DX is the
+    mov cx, ax                  ; door's output either way). The whole pool
+    mov bl, MEMP_CLAIM_HI       ; is the chip's HEAD, and the head in
+    call OSAPI_MEM_P            ; paragraphs is exactly the ask. What is
+    jnc .got                    ; GRANTED past it - the granule's slack - is
+                                ; page-safe too, with no head to say so: the
+                                ; base is 512-aligned (the DISK class, no
+                                ; MEMP_CPU) and a page edge is a multiple of
+                                ; 512, so an edge the ask's last byte does
+                                ; not reach is at least a granule further on.
+                                ; The pool keeps going top-down (SPEC.md
+                                ; 50.3.2), and on kern_mega a head takes it
+                                ; bottom-up, as the KB door did (14.55)
+    mov ax, si
+    xor cx, cx                  ; not page-safe, but a pool all the same
+    call OSAPI_MEM_P            ; (BL is still MEMP_CLAIM_HI: kept)
     jc .fail
 .got:
     mov [sbl_poolseg], dx
-    mov ax, bx                  ; [sbl_poolsz] = the KB in bytes
-    mov cl, 10
-    shl ax, cl
-    mov [sbl_poolsz], ax
+    mov cl, 4                   ; [sbl_poolsz] = what was GRANTED, in bytes:
+    shl ax, cl                  ; at most SBL_POOLKB's 1,280 paragraphs, so a
+    mov [sbl_poolsz], ax        ; word holds it, and the slack is the pool's
     mov ax, sbl_reloc           ; ...and it is MOVABLE (SPEC.md 66.5.5): a
     call OSAPI_MEM_MOVABLE      ; LATE claim, so it lands wherever the heap
                                 ; is by then (docs/FIELD-NOTES.md 2)
 .ok:
     clc
 .fail:                          ; (both refusals arrive with CF = 1)
+    pop si
     pop dx
     pop cx
     pop bx
@@ -2918,7 +2931,8 @@ sbl_pool_get:
 ;      ceiling or the heap refused, and nothing changed
 ; clobbers: nothing (flags)
 ;
-; OSAPI_MEM_REGROW, which extends in place when it can and moves otherwise,
+; OSAPI_MEM_P's MEMP_REGROW (OSAPI_MEM_REGROW in paragraphs), which extends in
+; place when it can and moves otherwise,
 ; the page-safe head re-honoured either way (SPEC.md 50.3). It adds the WHOLE
 ; grant at the top rather than the shortfall, because a pool with room that is
 ; not contiguous is the case this is reached in as often as a small one. Never
@@ -2927,42 +2941,48 @@ sbl_pool_get:
 ; -----------------------------------------------------------------------------
 sbl_pool_grow:
     push ax
+    push bx
     push cx
     push dx
-    call sbl_kb                 ; AX = the grant in KB...
-    mov cl, [sbl_poolsz+1]      ; CX = the pool in KB: always whole KB
-    xor ch, ch                  ; (sbl_pool_get), so the high byte / 4
+    call sbl_para               ; AX = the grant in PARAGRAPHS...
+    mov cx, [sbl_poolsz]        ; CX = the pool in paragraphs: always what a
+    shr cx, 1                   ; claim GRANTED, so a whole number of them
+    shr cx, 1                   ; (sbl_pool_get, below)
     shr cx, 1
     shr cx, 1
     add ax, cx                  ; ...plus the pool
-    cmp ax, SBL_POOLKB
+    cmp ax, SBL_POOLKB * 64
     jbe .ask
-    mov ax, SBL_POOLKB          ; the ceiling (a recording holds up to it)
+    mov ax, SBL_POOLKB * 64     ; the ceiling (a recording holds up to it)
     cmp ax, cx
     jbe .fail                   ; ...and the pool is already there
 .ask:
     mov dx, [sbl_poolseg]
-    call OSAPI_MEM_REGROW       ; out CF, DX = the base NOW
+    mov bl, MEMP_REGROW         ; out CF, DX = the base NOW, AX = the
+    call OSAPI_MEM_P            ; paragraphs granted (SPEC.md 50.3.7)
     jc .fail
     mov [sbl_poolseg], dx
-    mov cl, 10                  ; [sbl_poolsz] = AX KB in bytes
-    shl ax, cl
+    mov cl, 4                   ; [sbl_poolsz] = what was granted, in bytes:
+    shl ax, cl                  ; 1,280 paragraphs at the ceiling, 20,480
     mov [sbl_poolsz], ax
     CLC_OR_STC .fail
 .out:
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
-; sbl_kb - AX = CX bytes in whole KB, rounded up (CX up to 0xFFFF). Flags.
-sbl_kb:
+; sbl_para - AX = CX bytes in PARAGRAPHS, rounded up (CX up to 0xFFFF): the
+; same 17-bit sum the KB helper it replaced took, shifted 4 rather than 10.
+; Flags.
+sbl_para:
     push cx
     mov ax, cx
-    add ax, 1023                ; the carry is bit 16 of the sum...
+    add ax, 15                  ; the carry is bit 16 of the sum...
     rcr ax, 1                   ; ...and comes back in as bit 15
-    mov cl, 9
-    shr ax, cl                  ; 17 bits >> 10 in all
+    mov cl, 3
+    shr ax, cl                  ; 17 bits >> 4 in all
     pop cx
     ret
 

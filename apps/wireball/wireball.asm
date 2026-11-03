@@ -224,11 +224,13 @@ wb_game: db 'Game',0
 wb_serial: db 'Serial match',0
 wb_local: db 'Practice',0
 wb_title: db 'WireBall',0
-wb_ablines: dw wb_a1,wb_a2,wb_a3,wb_a4,0
+wb_ablines: dw wb_a1,wb_a2,wb_a3,wb_a4,wb_a5,wb_a6,0
 wb_a1: db 'WireBall for os8088',0
 wb_a2: db 'Pong over a null modem',0
 wb_a3: db 'COM1/COM2 - 2400 baud, 8N1',0
 wb_a4: db 'Serial protocol version 3',0
+wb_a5: db 'Contributed by',0
+wb_a6: db 'Jorge Gonzalez',0
 %define OS88UI_ABOUT
 %define OS88UI_ARM
 %include "os88ui.inc"

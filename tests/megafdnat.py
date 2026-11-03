@@ -26,8 +26,8 @@ with Copy and Paste - a native READ and a native WRITE of 240 sectors:
   3. A:'s BIG.DAT is B:'s byte for byte;
   4. nothing charged an exception to a loaded image.
 
-THE FAILING CASE (docs/WRITING-TESTS.md 1): --break plants `stc / ret` at
-the head of `.mega`'s mm_fdout - at its copy ABOVE 1MB, where it runs once
+THE FAILING CASE (docs/WRITING-TESTS.md 1): --break plants `jmp mega_fdlj`
+(the time-out's own exit) at the head of `.mega`'s mm_fdout - at its copy ABOVE 1MB, where it runs once
 mega_enter has moved `.mega` - so every native command byte times out. The
 row goes red on 1 and 2 (8 fallbacks, the path off, 48 resets) while the
 copy itself still succeeds through the BIOS, which is exactly why 3 alone
@@ -94,10 +94,21 @@ def main():
     copied = False
     try:
         if A.brk:
+            # A TIME-OUT, as the code takes one (mm_fdtmo): inside mega_fdgo
+            # ([mega_fdbusy] set) mm_fdout's failure is mega_fdlj (kern_mega
+            # size pass 2), and outside it - mega_fd13's reset probe, asked
+            # before the flag - CF = 1. An unconditional jump would longjmp
+            # out of the probe to a stale [mega_fdsp]
             a = mega_lin(b, "mm_fdout")
-            b.cmd("memw 0x%X F9" % a)               # stc
-            b.cmd("memw 0x%X C3" % (a + 1))         # ret
-            print("   --break: mm_fdout at 0x%X is stc / ret" % a)
+            fb = CZ.S("mega_fdbusy")
+            rel = (CZ.S("mega_fdlj") - (CZ.S("mm_fdout") + 10)) & 0xFFFF
+            code = [0x80, 0x3E, fb & 0xFF, fb >> 8, 0x01,  # cmp [busy], 1
+                    0x72, 0x03,                            # jb .out
+                    0xE9, rel & 0xFF, rel >> 8,            # jmp mega_fdlj
+                    0xF9, 0xC3]                            # .out: stc / ret
+            for i, x in enumerate(code):
+                b.cmd("memw 0x%X %02X" % (a + i, x))
+            print("   --break: mm_fdout at 0x%X times out every byte" % a)
         want(CZ.rb(b, S("mega_fdoff")) == 0,
              "1. the native floppy path is on after boot")
         slota, _ = CZ.disk_window(b, "A")

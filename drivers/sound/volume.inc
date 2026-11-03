@@ -123,18 +123,23 @@ volume_popup:
     ; X and width are byte-aligned: 26 columns * actual rows * planes, and
     ; the slider's band in front of them (kernel size pass 15: it was 968
     ; resident bytes of every mixer machine, for a panel that is up for
-    ; seconds). 3KB mono, 9KB VGA/EGA, 16/31KB VESA at 8/16bpp - each one
-    ; KB above what the saved pixels alone took.
+    ; seconds). In PARAGRAPHS (SPEC.md 50.3.7): the saved pixels and the
+    ; band are a BYTE count, and a whole KB of it was up to a KB more than
+    ; they took - 3KB mono, 9KB VGA/EGA, 16/31KB VESA at 8/16bpp - where the
+    ; granule is half that. CX = 0: no DMA head, and the DISK class's
+    ; 512-aligned base is not needed but costs nothing at a 512 granule.
     sub ax, MVP_Y-1
     mov bx, MVP_W/8
     mul bx
     xor bx, bx
     mov bl, [volume_planes]
     mul bx
-    add ax, VOLUME_BANDSZ + 1023
-    mov cl, 10
+    add ax, VOLUME_BANDSZ + 15
+    mov cl, 4
     shr ax, cl
-    call OSAPI_MEM_CLAIM
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nomem
     mov [volume_save], dx
     call OSAPI_GFX_LOCK

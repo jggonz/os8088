@@ -1137,7 +1137,7 @@ px_ab1:      db 'Pixelstein 3D  version 1.0', 0     ; THE NUMBERS ARE MEASURED
 px_ab2:      db 'A raycast shooter in the shape of', 0   ; (SPEC.md 97.13):
 px_ab3:      db 'the 1992 one: eight floors, guards,', 0 ; MartyPC's cycle-
 px_ab4:      db 'dogs, doors and keys, for the 8088.', 0 ; exact 5150 CGA. The
-px_ab5:      db 0                                        ; FINISHED frame on
+px_ab5:      db 'Contributed by Jorge Gonzalez', 0       ; FINISHED frame on
 px_ab6:      db 'A 4.77 MHz 5150 with CGA plays 8.5', 0  ; scene A (the sim
 px_ab7:      db 'fps at Textured Low res 64x80 (the', 0  ; running - what a
 px_ab8:      db 'finished frame, the world running);', 0 ; player sees; review

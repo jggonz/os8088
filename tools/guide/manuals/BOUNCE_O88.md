@@ -32,7 +32,7 @@ when the window comes back.
 
 | Item | What it does |
 |---|---|
-| About Bounce | Shows a small card with the program's name. Click in the window to put it away |
+| About Bounce | Shows a small card with the program's name and who made it. Click in the window to put it away |
 | Close | Closes this Bounce |
 
 ## Good to know

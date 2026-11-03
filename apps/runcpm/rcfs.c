@@ -203,7 +203,8 @@ struct rc_ofile {
                                               * is filled, and this is the
                                               * word os88_onmove keeps */
     unsigned size;                           /* bytes, 0..65535 */
-    unsigned kb;                             /* the claim's size */
+    unsigned para;                           /* the claim's size, in
+                                              * paragraphs (SPEC.md 50.3.7) */
     unsigned lru;                            /* rc_oft_clock at last use */
 };                                           /* 24 bytes a row: walked by
                                               * pointer, never indexed */
@@ -871,41 +872,43 @@ static struct rc_ofile *rc_oft_slot(void)
     }
 }
 
-/* rc_oft_claim - a claim of kb KB, evicting clean entries until it can be
- * had; 0 = refused */
-static unsigned rc_oft_claim(int kb)
+/* rc_oft_claim - a claim of `para` paragraphs, evicting clean entries until
+ * it can be had; 0 = refused. PARAGRAPHS and not KB (SPEC.md 50.3.7): a file
+ * is a byte count, and a whole KB of it is half a granule more on average,
+ * per open file */
+static unsigned rc_oft_claim(unsigned para)
 {
     unsigned s;
-    while ((s = os88_mem_claim(kb)) == 0)
+    while ((s = os88_mem_claim_p(para)) == 0)
         if (!rc_oft_evict())
             return 0;
     return s;
 }
 
-/* rc_kb - bytes as whole KB, rounded up, in 16 bits (never n + 1023) */
-static unsigned rc_kb(unsigned n)
+/* rc_para - bytes as whole paragraphs, rounded up, in 16 bits (never
+ * n + 15, which wraps for the last fifteen bytes below 64KB) */
+static unsigned rc_para(unsigned n)
 {
-    return (n >> 10) + ((n & 1023) ? 1 : 0);
+    return (n >> 4) + ((n & 15) ? 1 : 0);
 }
 
 /* rc_oft_grow - room for `need` bytes in entry o (regrow, moving if it
  * must; clean entries evicted for the room); 0 = ok, -1 = refused */
 static int rc_oft_grow(struct rc_ofile *o, unsigned need)
 {
-    unsigned s;
-    int kb;
-    if (o->kb >= 64 || need <= (o->kb << 10))
+    unsigned s, para;
+    if (o->para >= 4096 || need <= (o->para << 4))
         return 0;
-    kb = (int)rc_kb(need) + 3;               /* 3KB of slack: a SAVE growing
+    para = rc_para(need) + 3 * 64;           /* 3KB of slack: a SAVE growing
                                               * a record at a time regrows
                                               * every 24 records, not 8 */
-    if (kb > 64)
-        kb = 64;
-    while ((s = os88_mem_regrow(o->seg, kb)) == 0)
+    if (para > 4096)
+        para = 4096;
+    while ((s = os88_mem_regrow_p(o->seg, para)) == 0)
         if (!rc_oft_evict())
             return -1;
     o->seg = s;
-    o->kb = (unsigned)kb;
+    o->para = para;
     return 0;
 }
 
@@ -919,8 +922,8 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
 {
     struct rc_ofile *o;
     struct rc_dent *e;
-    int k, exists;
-    unsigned size, n, cap;
+    int exists;
+    unsigned size, n, cap, k;
     o = rc_oft_find(d, u, n11);
     if (o) {
         if (mode == 2) {
@@ -950,7 +953,7 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
         return 0;
     if (mode == 2)
         size = 0;
-    k = (int)rc_kb(size);
+    k = rc_para(size);
     if (k < 1)
         k = 1;
     o->seg = rc_oft_claim(k);
@@ -958,7 +961,7 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
         rc_toast_name(rc_s_ram, n11, rc_empty);
         return 0;
     }
-    o->kb = (unsigned)k;
+    o->para = k;
     o->live = 1;
     o->drive = (unsigned char)d;
     o->user = (unsigned char)u;
@@ -971,7 +974,7 @@ static struct rc_ofile *rc_oft_get(int d, int u, const char *n11, int mode)
     o->lru = ++rc_oft_clock;
     if (exists && mode != 2 && size) {
         rc_n11_host(n11, rc_hname);
-        cap = (k >= 64) ? 0xFFFF : (unsigned)(k << 10);
+        cap = (k >= 4096) ? 0xFFFF : (k << 4);
         n = 0;
         if (rc_fs_cd(d, u) == 0)             /* STAND THERE: rc_dc_want does
                                               * not move when the slot was

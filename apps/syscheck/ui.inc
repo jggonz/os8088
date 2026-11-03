@@ -846,6 +846,10 @@ sc_cnttext:
     mov ax, [sc_nfold]
     call dec_u16
     mov si, sc_c_pkgs
+    cmp byte [sc_task], TASK_REL
+    je .pk
+    mov si, sc_c_moved              ; a disk task: the files moved
+.pk:
     call sc_scpy
     mov ax, [sc_npkg]
     jmp dec_u16
@@ -981,9 +985,11 @@ sc_rowtext:
     pop ax
     mov bx, ax
     shl bx, 1
-    mov si, [sc_rnames+bx]
+    call sc_rname
     mov di, sc_txt
     call sc_scpy
+    cmp byte [sc_task], TASK_REL
+    jne .lead                       ; the disk rows carry no count
     cmp ax, SC_DRV                  ; a count where there is one to give
     jne .p
     mov ax, SC_NDRV
@@ -1229,7 +1235,7 @@ sc_drawfind:
     mov bl, [sc_sel]
     xor bh, bh
     shl bx, 1
-    mov si, [sc_rnames+bx]
+    call sc_rname
     call sc_scpy
     mov si, sc_txt
     mov cx, [sc_geo+SCG_FTX]
@@ -1633,6 +1639,15 @@ sc_lcol:    db CDGRAY, CBLUE, CGREEN, CBROWN, CRED
 sc_pat50:   db 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55, 0xAA, 0x55
 
 ; --- the rows' names (SPEC.md 118.1) -------------------------------------------
+; sc_rname - SI = row BX/2's name: the release checks', or the disk task's
+sc_rname:
+    mov si, [sc_rnames+bx]
+    cmp byte [sc_task], TASK_REL
+    je .r
+    mov si, [sc_dnames+bx]
+.r:
+    ret
+
 sc_rnames:  dw sc_n0, sc_n1, sc_n2, sc_n3, sc_n4, sc_n5, sc_n6, sc_n7, sc_n8
 sc_n0:      db 'Kernel and boot files', 0
 sc_n1:      db 'Drivers', 0
@@ -1680,6 +1695,7 @@ sc_s_fat16: db ' FAT16', 0
 sc_c_files:    db 'Files ', 0
 sc_c_folders:  db '  Folders ', 0
 sc_c_pkgs:     db '  Packages ', 0
+sc_c_moved:    db '  Moved ', 0
 sc_c_done:     db 'Done - ', 0
 sc_c_stopd:    db 'Stopped - ', 0
 sc_c_filesin:  db ' files in ', 0

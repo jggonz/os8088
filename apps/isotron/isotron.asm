@@ -999,7 +999,7 @@ it_it_end:   db 'End Game', 0
 ; --- the About card: the name, what it is, the keys. No credit line, no
 ; legal line and no year (SPEC.md 108.1)
 it_ablines:
-    dw it_ab1, it_ab2, it_ab3, it_ab4, it_ab5, it_ab6, it_ab7, 0
+    dw it_ab1, it_ab2, it_ab3, it_ab4, it_ab5, it_ab6, it_ab7, it_ab2, it_ab8, 0
 it_ab1:      db 'isoTron', 0
 it_ab2:      db 0
 it_ab3:      db 'A light-wall duel in three dimensions.', 0
@@ -1007,6 +1007,7 @@ it_ab4:      db 'Ins/Del or the arrows turn. F10 faster.', 0
 it_ab5:      db '1, 2 or 3 starts a game; P pauses.', 0
 it_ab6:      db 'F or Alt+Enter: full screen.', 0
 it_ab7:      db 'C in a game: the colours.', 0   ; (C at the title is a tier)
+it_ab8:      db 'Contributed by Jorge Gonzalez', 0
 
 ; --- the shared controls (SPEC.md 20.5.1) -------------------------------------
 %define OS88UI_ABOUT

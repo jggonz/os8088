@@ -653,8 +653,10 @@ def cmd_trace(a):
                 if w.used and w.visible and w.title.startswith("DOS"):
                     raw = bytes(m.read(ui.sym("wm_wins") + w.i * os88geom.WIN_SIZE,
                                        os88geom.WIN_SIZE))
-                    return struct.unpack_from("<H", raw, os88geom.W_SEG)[0]
-            return None
+                    sg = struct.unpack_from("<H", raw, os88geom.W_SEG)[0]
+                    if sg:              # a DISK window showing a folder
+                        return sg       # called DOS has the title too, and
+            return None                 # no segment: it is not ours
 
         try:
             os88marty.until(m, lambda _: arena(), "a DOS window", poll=0.2,
@@ -712,6 +714,7 @@ def cmd_trace(a):
         if last is None:
             raise SystemExit("os88dosdbg: the program made no INT 21h call at all")
         total, wr, ring, psp = last
+        trseg = w16(sym["dos_trseg"])        # poll()'s was its own local
         nm = m.read(base + sym["dos_trnmi"], 1)[0]
         raw = bytes(m.read(base + sym["dos_trnm"], nm * 13))
         names = [raw[i * 13:(i + 1) * 13].split(b"\0")[0].decode("latin1")

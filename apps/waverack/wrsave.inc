@@ -37,6 +37,8 @@
 WSM_SAVE    equ 0                   ; [ws_mode]: Save - the document's file
 WSM_AS      equ 1                   ; Save As - the whole, a new name
 WSM_SEL     equ 2                   ; Save Selection As - [s, e)
+WRO_SAVE    equ 1                   ; [wr_fsop]: whose OSAPI_FS_OP is open -
+WRO_SCAN    equ 2                   ; a save's or an envelope scan's
 WS_OUTKB    equ WO_IOKB             ; the output claim's floor, KB: a
                                     ; cluster past it sizes it ([ws_osz])
 
@@ -382,6 +384,14 @@ ws_go:
     call ws_end
     jmp ws_no
 .made:
+    mov cx, [ws_bytes]              ; ONE BAR for the save (SPEC.md 12.8.10),
+    mov dx, [ws_bytes+2]            ; parked between the ticks: every frame
+    shl cx, 1                       ; read once and written once, and the
+    rcl dx, 1                       ; header - exact but for the pad byte.
+    add cx, 44                      ; Ended by ws_end, which every way out
+    adc dx, 0                       ; takes (the finish, a failure, a cancel)
+    mov al, WRO_SAVE
+    call wr_opbeg
     call ws_header
     mov word [ws_fill], 44
     xor al, al
@@ -639,12 +649,45 @@ ws_rearm:
 
 ; ws_end - not saving: the output claim back. keeps all but flags
 ws_end:
+    push ax
+    mov al, WRO_SAVE
+    call wr_opend
+    pop ax
     push dx
     mov dx, [ws_oseg]
     call wo_free
     mov [ws_oseg], dx
     mov byte [ws_busy], 0
     pop dx
+    ret
+
+; wr_opbeg - AL = the site (WRO_*), DX:CX = the bytes its operation moves:
+; OSAPI_FS_OP begun, and [wr_fsop] = AL only when it was TAKEN (SPEC.md
+; 12.8.10: refused - a save's rescan, say, while the save's own is open -
+; the I/O goes on and reports as it always did). keeps all
+wr_opbeg:
+    call OSAPI_FS_OP
+    jc .r
+    mov [wr_fsop], al
+.r:
+    ret
+
+; wr_opend - AL = the site: its operation ended if its own begin opened it.
+; The SITE is asked, not just the instance, because the kernel cannot tell
+; a save from a scan, and wo_empty (the scan's end) must not end a save's.
+; keeps all but flags
+wr_opend:
+    cmp [wr_fsop], al
+    jne .r
+    mov byte [wr_fsop], 0
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FS_OP
+    pop dx
+    pop cx
+.r:
     ret
 
 ; ws_cancel - Stop or Escape while saving (and the window's close). clobbers
@@ -832,12 +875,16 @@ ws_rebase:
     mov al, [wo_sh]
     mov [di+WS_SH], al
     call we_envsize                 ; CL = the block shift, BX = blocks, AX
-    mov [di+WS_BS], cl              ; = KB
+    mov [di+WS_BS], cl              ; = paragraphs
     mov [di+WS_NBLK], bx
     pop bx                          ; BX = its index
     or ax, ax
     jz .noenv
-    call OSAPI_MEM_CLAIM
+    push bx
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx                          ; (pop keeps CF)
     jnc .env
     call wo_new                     ; no room for its envelope: nothing to
     mov byte [ws_rb], 2             ; show it with - and ws_finish must not

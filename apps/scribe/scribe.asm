@@ -750,12 +750,17 @@ sc_entry:
                                     ; a stride of ONE - not wrong, but 64
                                     ; entries covering 64 rows and halving four
                                     ; times to catch up on the first count
-    mov ax, SC_KB0                  ; the document, before anything else: an
-    call OSAPI_MEM_CLAIM            ; editor with nowhere to put the text is
-    jc .nomem                       ; not a window worth opening, and the
-    mov [sc_dseg], dx               ; loader's LD_EABORT says so for us
-    mov ax, SC_KB0                  ; ...and the CHP claim, one attribute byte
-    call OSAPI_MEM_CLAIM            ; per character, grown/shrunk in lockstep
+    xor cx, cx                      ; both in PARAGRAPHS (SPEC.md 50.3.7):
+    mov bl, MEMP_CLAIM              ; sc_resize grows them by a byte count,
+    mov ax, SC_KB0 * 64             ; which MEMP_REGROW takes as it stands
+    call OSAPI_MEM_P                ; (a kern_mega pool block too: the verb's
+    jc .nomem                       ; own arm resizes one, in KB). The
+    mov [sc_dseg], dx               ; document, before anything else: an
+                                    ; editor with nowhere to put the text is
+                                    ; not a window worth opening, and the
+                                    ; loader's LD_EABORT says so for us
+    mov ax, SC_KB0 * 64             ; ...and the CHP claim, one attribute byte
+    call OSAPI_MEM_P                ; per character, grown/shrunk in lockstep
     jc .nomem                       ; by sc_resize (SPEC.md 68.3). Claimed here
     mov [sc_cseg], dx               ; so sc_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
@@ -782,7 +787,7 @@ sc_entry:
     pop ax                          ; yet, and a compaction inside the second
                                     ; or third claim found the first pinned
     mov word [sc_papn], 1
-    mov word [sc_capkb], SC_KB0
+    mov word [sc_cappara], SC_KB0 * 64
     mov word [sc_cap], SC_KB0 * 1024
     call sc_defname                 ; the name and the TITLE the template
     call sc_compttl                 ; points at (SPEC.md 68.2: 'Microsoft
@@ -7122,64 +7127,61 @@ sc_picmov:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_resize - make the document claim AX kilobytes
-; in:  AX = the wanted size in KB (clamped to SC_KB0..SC_MAXKB)
-; out: CF=0 with [sc_dseg]/[sc_capkb]/[sc_cap] updated, or CF=1 and all three
-;      unchanged; preserves every register
+; sc_resize - make the document claim AX paragraphs
+; in:  AX = the wanted size in paragraphs (clamped to SC_KB0..SC_MAXKB)
+; out: CF=0 with [sc_dseg]/[sc_cappara]/[sc_cap] updated, or CF=1 and all
+;      three unchanged; preserves every register
 ;
-; ALWAYS through OSAPI_MEM_REGROW, never claim-copy-free: a regrow extends in
-; place when the paragraphs above it are free, so it needs the DIFFERENCE
-; rather than old + new at once, and when it does have to move it brings the
-; bytes with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which
-; is what makes File > New's give-back free.
+; ALWAYS through a regrow, never claim-copy-free: a regrow extends in place
+; when the paragraphs above it are free, so it needs the DIFFERENCE rather
+; than old + new at once, and when it does have to move it brings the bytes
+; with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which is what
+; makes File > New's give-back free. In PARAGRAPHS (SPEC.md 50.3.7), so the
+; note pays the heap's granule and not a whole KB - and [sc_cap] is what was
+; GRANTED, so the granule's slack is typing room rather than a hole.
 ; -----------------------------------------------------------------------------
 sc_resize:
     push ax
+    push bx
     push dx
-    cmp ax, SC_KB0
+    cmp ax, SC_KB0 * 64
     jae .lo
-    mov ax, SC_KB0
+    mov ax, SC_KB0 * 64
 .lo:
-    cmp ax, SC_MAXKB
+    cmp ax, SC_MAXKB * 64
     jbe .hi
-    mov ax, SC_MAXKB
+    mov ax, SC_MAXKB * 64
 .hi:
-    cmp ax, [sc_capkb]
+    cmp ax, [sc_cappara]
     je .same                        ; already that size: nothing to ask for
-    push ax
+    mov bl, MEMP_REGROW
     mov dx, [sc_dseg]
-    call OSAPI_MEM_REGROW           ; out CF=0 and DX = the base NOW
-    pop ax
-    jc .out                         ; refused: the old claim stands untouched
+    call OSAPI_MEM_P                ; out CF=0, DX = the base NOW and AX =
+    jc .out                         ; the paragraphs granted; refused: the
+                                    ; old claim stands untouched
     mov [sc_dseg], dx               ; ...and a grow that MOVED reports a new
                                     ; base, which is the whole reason DX is
                                     ; the answer (SPEC.md 50.3.1)
-    push ax                         ; --- the CHP claim, in lockstep (SPEC.md
-    mov dx, [sc_cseg]               ; 65.3): one attribute byte per character,
-    call OSAPI_MEM_REGROW           ; so the two claims are always the same
-    pop ax                          ; size. If the mirror is refused, the text
-    jnc .cok                        ; claim is put back - a shrink (or a
-    push ax                         ; same-size ask) always succeeds in place,
-    mov ax, [sc_capkb]              ; so the pair stays consistent and the
-    mov dx, [sc_dseg]               ; caller sees one refusal
-    call OSAPI_MEM_REGROW
-    mov [sc_dseg], dx
-    pop ax
-    stc
+    mov dx, [sc_cseg]               ; --- the CHP claim, in lockstep (SPEC.md
+    call OSAPI_MEM_P                ; 65.3): one attribute byte per character,
+    jnc .cok                        ; so the two claims are always the same
+    mov ax, [sc_cappara]            ; size. If the mirror is refused, the text
+    mov dx, [sc_dseg]               ; claim is put back - a shrink (or a
+    call OSAPI_MEM_P                ; same-size ask) always succeeds in place,
+    mov [sc_dseg], dx               ; so the pair stays consistent and the
+    stc                             ; caller sees one refusal
     jmp short .out
 .cok:
     mov [sc_cseg], dx
-    mov [sc_capkb], ax
-    push cx                         ; CL is borrowed for the shift and PUT
-    mov cl, 10                      ; BACK: sc_load banks its text length in
-    shl ax, cl                      ; CX across this call, and a public
-    pop cx                          ; routine preserves what it does not
-                                    ; answer with (SPEC.md 1)
-    mov [sc_cap], ax                ; SC_MAXKB * 1024 fits a word by design
+    mov [sc_cappara], ax
+    mov bx, 16
+    mul bx                          ; DX is banked: SC_MAXKB * 1024 fits a
+    mov [sc_cap], ax                ; word by design
 .same:
     clc
 .out:
     pop dx
+    pop bx
     pop ax
     ret
 
@@ -7198,10 +7200,10 @@ sc_fitclaim:
     push ax
     push cx
     mov ax, [sc_len]
-    add ax, 1023                ; the note's own whole kilobytes...
-    mov cl, 10
+    add ax, 15                  ; the note's own paragraphs (<= SC_MAXKB * 1024,
+    mov cl, 4                   ; so no carry)...
     shr ax, cl
-    add ax, SC_GROWKB           ; ...plus one to type into
+    add ax, SC_GROWKB * 64      ; ...plus a kilobyte to type into
     call sc_resize              ; a shrink always succeeds in place
     pop cx
     pop ax
@@ -7223,8 +7225,8 @@ sc_room:
     mov ax, [sc_len]
     cmp ax, [sc_cap]
     jb .yes
-    mov ax, [sc_capkb]
-    add ax, SC_GROWKB
+    mov ax, [sc_cappara]
+    add ax, SC_GROWKB * 64
     call sc_resize
     jc .no
     mov ax, [sc_len]
@@ -7574,7 +7576,7 @@ sc_load:
 .plain:
     ; --- plain-text import (65.4): fold from staging into the document -----
     push ax                     ; the byte count
-    mov ax, SC_MAXKB            ; open the claim to its ceiling; the fold
+    mov ax, SC_MAXKB * 64       ; open the claim to its ceiling; the fold
     call sc_resize              ; only ever SHRINKS what arrived
     pop ax
     jc .nomem3
@@ -9659,7 +9661,7 @@ sc_new:
                                 ; it is here for the invalidation sc_clamp
                                 ; carries (SPEC.md 27.4/27.5)
     push ax                     ; ...and give the heap back what the old note
-    mov ax, SC_KB0              ; had grown into. A shrink always succeeds in
+    mov ax, SC_KB0 * 64         ; had grown into. A shrink always succeeds in
     call sc_resize              ; place, so this cannot fail (SPEC.md 50.3.1)
     pop ax
     mov byte [sc_dirty], 0      ; a fresh document matches nothing on disk
@@ -10309,10 +10311,10 @@ sc_capfor:
     cmp bx, [sc_cap]
     jbe .yes
     mov ax, bx
-    add ax, 1023
+    add ax, 15
     jc .no                      ; past 64KB, which SC_MAXKB refuses anyway
-    mov cl, 10
-    shr ax, cl
+    mov cl, 4
+    shr ax, cl                  ; paragraphs
     call sc_resize              ; clamps to SC_MAXKB and may be refused
     jc .no
     cmp bx, [sc_cap]
@@ -11338,7 +11340,7 @@ sc_uclear:
     jz .out
     call OSAPI_MEM_FREE         ; the owner is our segment, which the slot's
     mov word [sc_useg], 0       ; X stub supplies (SPEC.md 50.3)
-    mov word [sc_ukb], 0
+    mov word [sc_upara], 0
     mov dx, [sc_cuseg]          ; ...and the CHP arena beside it (SPEC.md
     or dx, dx                   ; 65.3): the two live and die together
     jz .out
@@ -11380,26 +11382,31 @@ sc_utop_rec:
     ret
 
 ; -----------------------------------------------------------------------------
-; sc_ugrow - make the arena AX kilobytes
-; in:  AX = KB; out: CF = 1 refused; preserves all registers
+; sc_ugrow - make the arena AX paragraphs
+; in:  AX = paragraphs; out: CF = 1 refused; preserves all registers
+;
+; OSAPI_MEM_P's (SPEC.md 50.3.7): the arena is a byte count, so it pays the
+; granule rather than a whole KB, and [sc_upara] is what was GRANTED.
 ; -----------------------------------------------------------------------------
 sc_ugrow:
     push ax
     push bx
+    push cx
     push dx
-    cmp ax, [sc_ukb]
+    cmp ax, [sc_upara]
     jbe .yes
     cmp word [sc_useg], 0
     jne .re
-    call OSAPI_MEM_CLAIM        ; out CF = 0, DX = the base
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no
     mov [sc_useg], dx
-    push ax                     ; ...and the CHP arena, same size (SPEC.md
-    call OSAPI_MEM_CLAIM        ; 65.3): every blob offset means the same
-    pop ax                      ; thing in both, so nothing forks
-    jc .cfail0
+    call OSAPI_MEM_P            ; ...and the CHP arena, same size (SPEC.md
+    jc .cfail0                  ; 65.3): every blob offset means the same
+                                ; thing in both, so nothing forks
     mov [sc_cuseg], dx
-    mov [sc_ukb], ax
+    mov [sc_upara], ax
     push ax                     ; ...and both MOVE (SPEC.md 95.14): every
     mov ax, sc_reloc            ; record indexes them by OFFSET, and a regrow
     call OSAPI_MEM_MOVABLE      ; below carries the declaration with the
@@ -11413,25 +11420,22 @@ sc_ugrow:
     mov word [sc_useg], 0
     jmp short .no
 .re:
+    mov bl, MEMP_REGROW
     mov dx, [sc_useg]
-    call OSAPI_MEM_REGROW       ; out CF = 0, DX = the base NOW - a grow that
+    call OSAPI_MEM_P            ; out CF = 0, DX = the base NOW - a grow that
     jc .no                      ; had to move reports a new one (50.3.1)
     mov [sc_useg], dx
-    push ax
     mov dx, [sc_cuseg]
-    call OSAPI_MEM_REGROW
-    pop ax
+    call OSAPI_MEM_P
     jc .cfail1
     mov [sc_cuseg], dx
-    mov [sc_ukb], ax
+    mov [sc_upara], ax
     jmp short .yes
 .cfail1:
-    push ax                     ; the mirror was refused: shrink the text
-    mov ax, [sc_ukb]            ; arena back (a shrink succeeds in place)
-    mov dx, [sc_useg]           ; and report one refusal
-    call OSAPI_MEM_REGROW
+    mov ax, [sc_upara]          ; the mirror was refused: shrink the text
+    mov dx, [sc_useg]           ; arena back (a shrink succeeds in place)
+    call OSAPI_MEM_P            ; and report one refusal
     mov [sc_useg], dx
-    pop ax
     jmp short .no
 .yes:
     clc
@@ -11440,6 +11444,7 @@ sc_ugrow:
     stc
 .out:
     pop dx
+    pop cx
     pop bx
     pop ax
     ret
@@ -11545,19 +11550,20 @@ sc_uroom:
     mov ax, [sc_utop]
     add ax, cx
     jc .evict
-    mov bx, [sc_ukb]
+    mov bx, [sc_upara]
     push cx
-    mov cl, 10
-    shl bx, cl
+    mov cl, 4
+    shl bx, cl                  ; <= SC_UMAXKB * 1024, so it fits
     pop cx
     cmp ax, bx
     jbe .yes
     push cx
-    add ax, 1023
-    mov cl, 10
+    add ax, 15                  ; paragraphs, the carry coming back in as
+    rcr ax, 1                   ; bit 15
+    mov cl, 3
     shr ax, cl
     pop cx
-    cmp ax, SC_UMAXKB
+    cmp ax, SC_UMAXKB * 64
     ja .evict
     call sc_ugrow
     jnc .yes
@@ -17082,16 +17088,18 @@ sc_pictkeep:
     mul word [si+IMG_H]             ; DX:AX = the bytes it actually occupies.
     or dx, dx                       ; img_setgeom already proved this fits a
     jnz .no                         ; word, so a high half means something is
-    add ax, 1023                    ; wrong rather than merely large
+    add ax, 15                      ; wrong rather than merely large
     jc .no
-    mov cl, 10
-    shr ax, cl                      ; ...in kilobytes, rounded up
-    or ax, ax
-    jnz .kbok
-    inc ax
+    mov cl, 4
+    shr ax, cl                      ; ...in PARAGRAPHS, rounded up (SPEC.md
+    jnz .kbok                       ; 50.3.7): the picture keeps half a KB
+    inc ax                          ; less of the scratch on average
 .kbok:
     mov dx, [sc_picseg]
-    call OSAPI_MEM_REGROW           ; a shrink: in place, DX unchanged
+    push bx
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P                ; a shrink: in place, DX unchanged
+    pop bx                          ; (BX is the slot; pop keeps CF)
     jc .no
     mov word [sc_picseg], 0         ; the picture's now - not pictload's to free
     mov cl, 3
@@ -20484,7 +20492,7 @@ SC_BTREC_SZ equ 18
     SCVAR sc_useg, 2        ; word: the arena claim, 0 = none held. Claimed on
                             ; the first edit worth remembering and given back
                             ; by File > New, a load and sc_uclear
-    SCVAR sc_ukb,  2        ; word: its size in KB
+    SCVAR sc_upara, 2       ; word: its size in paragraphs, as granted
     SCVAR sc_utop, 2        ; word: bytes of it in use - also the top record's
                             ; blob end, which is what makes an append free
     SCVAR sc_un,   1        ; byte: records live, 0..SC_UNDO
@@ -21241,7 +21249,7 @@ sc_dseg     equ os88_image_end + 433    ; word: the document claim's segment.
                                        ; than open a window with nowhere to
                                        ; put the text, so nothing below has
                                        ; to test it
-sc_capkb    equ os88_image_end + 435    ; word: its size in KB...
+sc_cappara  equ os88_image_end + 435    ; word: its size in paragraphs...
 sc_cap      equ os88_image_end + 437    ; word: ...and in bytes, kept in step
                                        ; by sc_resize. SC_MAXKB * 1024 fits a
                                        ; word, which is what bounds the note

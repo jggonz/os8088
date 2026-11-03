@@ -249,7 +249,9 @@ DRVR_DISP   equ 0               ; dw: PKG_DISP - the dispatcher's offset
 DRVR_SEG    equ 2               ; dw: the segment it runs in, 0 = not loaded
 DRVR_FILE   equ 4               ; dw: -> its NUL 8.3 file name (.text)
 DRVR_TITLE  equ 6               ; dw: -> its display name (.text)
-DRVR_KB     equ 8               ; dw: KB its claim took, 0 = not loaded
+DRVR_PARA   equ 8               ; dw: PARAGRAPHS its claim took, 0 = not
+                                ; loaded (a whole number of granules,
+                                ; SPEC.md 50.2.1; it was KB)
 DRVR_ENT    equ 10              ; dw: its entry offset, banked at load
 DRVR_CLASS  equ 12              ; db: the DRVC_* this row expects
 DRVR_WANT   equ 13              ; db: 1 = the user wants it loaded
@@ -365,10 +367,12 @@ DRV_H_BSSP  equ 31              ; byte: THE BSS SIZE IN PARAGRAPHS
                                 ; cover the bss, which for the shipped set is
                                 ; four drivers and none of them at boot
 DRV_HDR_SZ  equ 0x20
-DRV_VER     equ 11              ; 4 until the API table moved, 7 until two
+DRV_VER     equ 12              ; 4 until the API table moved, 7 until two
                                 ; cells were re-contracted, 9 until the RAM
-                                ; disk's class moved (SPEC.md 20.2.0): a
-                                ; driver far-calls the table too.
+                                ; disk's class moved, 11 until the heap's
+                                ; granule became 512 bytes and a driver's
+                                ; strip rung with it (SPEC.md 20.2.0,
+                                ; 50.2.1): a driver far-calls the table too.
                                 ; Mirrored in drivers/os88drv.inc and
                                 ; tools/os88drv.py
 DRV_MAX_KB  equ 40              ; the biggest driver image we will claim
@@ -1297,9 +1301,33 @@ drv_svcix:   db 0*DRV_SVCH+1, 1*DRV_SVCH+1, 0, 2*DRV_SVCH+1
 %endif
 %endif
 
-drv_cfgname: db 'SYSTEM.CFG', 0
-drv_sysname: db 'KERNEL.SYS', 0 ; what makes a disk THE system disk (19.6): the
-                                ; settings are written beside it or not at all
+; SYSTEM.CFG's and KERNEL.SYS's NAMES are not resident (kernel size pass
+; 16): the file API reads a name through DS, so each image STAGES its own copy
+; into cp_sbuf - CTRL.DRV through cp_stage (cpc_cfgname, cpc_sysname) and the
+; boot through CFGN_STAGE below, in `.cfx` where there is one.
+;
+; CFGN_STAGE <label>, <ret|retf> - 'SYSTEM.CFG' into cp_sbuf; out: SI =
+; cp_sbuf. DS = KERNEL_SEG; every other register and DF kept, flags not. The
+; name is read `cs:`, so it is the expanding image's own
+%macro CFGN_STAGE 2
+%1:
+    push ax
+    push di
+    mov si, %%s
+    mov di, cp_sbuf
+%%c:
+    mov al, [cs:si]
+    inc si
+    mov [di], al
+    inc di
+    or al, al
+    jnz %%c
+    pop di
+    pop ax
+    mov si, cp_sbuf
+    %2
+%%s: db 'SYSTEM.CFG', 0
+%endmacro
 
 drv_tab:
     dw PKG_DISP, 0              ; row 0: the sound driver (SPEC.md 34/51.4)
@@ -1534,7 +1562,7 @@ thmv_row:
     dw 0, 0                      ; DRVR_FILE, DRVR_TITLE - the name is CTRL.DRV's,
                                   ; staged into FILE before each load (kernel/
                                   ; ctrl.inc, cp_thmv_open); nothing reads TITLE
-    dw 0, 0                      ; DRVR_KB, DRVR_ENT
+    dw 0, 0                      ; DRVR_PARA, DRVR_ENT
     db DRVC_OVL                  ; DRVR_CLASS - not a class the kernel loads,
                                   ; so this can never take a publication slot
     db 0                         ; DRVR_WANT - no settings bit can reach it
@@ -1556,7 +1584,7 @@ DRV_CALLMAX equ DRV_MAX
 ; proper is state the machine writes. Nothing at runtime ever stores here.
 ;
 ; The figure is what the driver holds while performing its PRIMARY FUNCTION:
-; its image, which is a heap claim like any other (DRVR_KB), plus the claims it
+; its image, which is a heap claim like any other (DRVR_PARA), plus the claims it
 ; takes to do the job. It is NOT what it holds while being configured - the
 ; hard disk's Install path claims up to HIW_KMAXKB and pulls HDDTOOL.DRV in
 ; beside it, and pricing a driver at what its dialogs cost is not the question
@@ -1571,6 +1599,9 @@ DRV_CALLMAX equ DRV_MAX
 ; here (SPEC.md 1): a driver that grows a kilobyte is otherwise a number on
 ; screen that quietly stops being true.
 ; =============================================================================
+; EVERY FIGURE HERE IS IN HALF-KB (SPEC.md 31.6.2, 50.2.1): a driver's image
+; is claimed to the heap's 512-byte granule, so a whole KB was a figure up to
+; half a KB high, and the column prints `~34.5K` where the half is real.
 DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; drawn as a '+'. The RAM disk's alone: its
                                 ; arena is [rd_kb], which is the USER's number
@@ -1578,25 +1609,25 @@ DRVM_PLUS    equ 0x8000         ; "...and the store you size on its own page",
                                 ; RD_MAXKB is 16,384 - a column showing that
                                 ; would be arithmetic rather than advice
 
-DRVM_IMG_SND equ 11             ; ceil(build/sound.drv   / 1024) - t_drvmem
+DRVM_IMG_SND equ 21             ; ceil(build/sound.drv / 512) - t_drvmem
                                 ; (as LOADED it holds less: DRV_H_KEEP hands
                                 ; the tail back, with a mixer or without -
                                 ; SPEC.md 34.15.1)
-DRVM_IMG_HDD equ 4              ; ceil(build/hdd.drv     / 1024)   checks
-DRVM_IMG_ETH equ 17             ; ceil(build/ether.drv   / 1024)   every one
-DRVM_IMG_RAM equ 6              ; ceil(build/ramdisk.drv / 1024)   of these
-DRVM_IMG_NET equ 5              ; ceil(build/net.drv     / 1024) - FIVE
+DRVM_IMG_HDD equ 8              ; ceil(build/hdd.drv / 512)   checks
+DRVM_IMG_ETH equ 34             ; ceil(build/ether.drv / 512)   every one
+DRVM_IMG_RAM equ 11              ; ceil(build/ramdisk.drv / 512)   of these
+DRVM_IMG_NET equ 9              ; ceil(build/net.drv / 512) - 4.5K
                                 ; since SPEC.md 62.11.3's size pass, the
                                 ; Wire's desktop icon (drivers/wirezone.inc,
                                 ; SPEC.md 26.7) included
-DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 1024)
-DRVM_IMG_USBM equ 2             ; ceil(build/usbmouse.drv / 1024)
-DRVM_IMG_EMS equ 1              ; ceil(build/ems.drv / 1024)
-DRVM_IMG_CD  equ 9              ; ceil(build/cdrom.drv / 1024)
-DRVM_IMG_HTTP equ 6             ; ceil(build/httpfs.drv / 1024)
-DRVM_IMG_VESA equ 8             ; ceil(build/vesa.drv / 1024)
+DRVM_IMG_VMM equ 1              ; ceil(build/vmmouse.drv / 512)
+DRVM_IMG_USBM equ 3             ; ceil(build/usbmouse.drv / 512)
+DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
+DRVM_IMG_CD  equ 18              ; ceil(build/cdrom.drv / 512)
+DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
+DRVM_IMG_VESA equ 16             ; ceil(build/vesa.drv / 512)
 
-DRVM_SND     equ DRVM_IMG_SND + 16        ; SBL_PLAYKB: what it holds PLAYING -
+DRVM_SND     equ DRVM_IMG_SND + 16*2      ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
                                 ; double buffer (SPEC.md 34.5.2). It was
                                 ; image + 8 + 20, the worst case no shipped
@@ -1609,19 +1640,25 @@ DRVM_HDD     equ DRVM_IMG_HDD ; the hard disk claims NOTHING while doing its
                                 ; - and SPEC.md 22.6 retired the donation, so
                                 ; a mounted partition costs this driver a row
                                 ; of its own bss and not a byte of heap
-DRVM_ETH     equ DRVM_IMG_ETH + 17        ; THE RING POOL at its top rung, not
+DRVM_ETH     equ DRVM_IMG_ETH + 33        ; THE RING POOL at its top rung, not
                                 ; one ring per socket (SPEC.md 72.21): the bulk
                                 ; pair plus three lean ones is 16,896 bytes
                                 ; where a pair per slot was 36,864 (13,824
                                 ; until the send ring held a window, 72.4.3).
                                 ; sk_claim is a ladder down to SK_RXCAP0 and
-                                ; this is its top
-DRVM_RAM     equ (DRVM_IMG_RAM + 7 + 8) | DRVM_PLUS
-                                ; RD_TABMAXKB (the directory AND the chain
+                                ; this is its top - 33 HALVES, not 34, since
+                                ; sk_try claims it in paragraphs (SPEC.md
+                                ; 50.3.7): 16.5KB is a whole number of
+                                ; granules and the KB door's 17 was not it
+DRVM_RAM     equ (DRVM_IMG_RAM + 13 + 8*2) | DRVM_PLUS
+                                ; RD_TABMAXB (the directory AND the chain
                                 ; table, one claim since SPEC.md 62.9.13.1 -
                                 ; the 2,304-byte directory left the image for
                                 ; it, so a loaded idle driver is 6K and a
-                                ; mounted one is priced with its rows here) +
+                                ; mounted one is priced with its rows here;
+                                ; 6,400 bytes, 13 halves since rd_claimp asks
+                                ; in paragraphs, SPEC.md 50.3.7, where the KB
+                                ; door's RD_TABMAXKB was 7KB) +
                                 ; RD_EXTMAXKB (the bounce, which the extended
                                 ; store lends as its image block). The two
                                 ; paths are exclusive - conventional takes an
@@ -1635,7 +1672,7 @@ DRVM_VESA    equ DRVM_IMG_VESA  ; VESA.DRV claims nothing: its probe buffers,
                                 ; are bss, inside the image
 DRVM_EMS     equ DRVM_IMG_EMS   ; EMS.DRV claims nothing: its tables are its
                                 ; bss, and the board's memory is not the heap's
-DRVM_HTTP    equ DRVM_IMG_HTTP + 16 ; HTTPFS.DRV: its image, and the index it
+DRVM_HTTP    equ DRVM_IMG_HTTP + 16*2 ; HTTPFS.DRV: its image, and the index it
                                 ; holds while a drive is mounted - HF_MAXREC
                                 ; records at most, one 16 KB claim (121.3)
 DRVM_CD      equ DRVM_IMG_CD    ; CDROM.DRV claims nothing: its sector
@@ -1700,7 +1737,9 @@ section .text
 ; literal safe, and it is the half a package could never have had.
 DRVM_CEIL_DISK equ 4            ; MIRRORED in apps/os88api.inc - t_mirror
 DRVM_CEIL_NET  equ 34           ; ...ditto
-%if DRVM_CEIL_DISK != DRVM_HDD || DRVM_CEIL_NET != DRVM_ETH
+%if DRVM_CEIL_DISK != (DRVM_HDD + 1) / 2 || DRVM_CEIL_NET != (DRVM_ETH + 1) / 2
+                                ; (the ceilings are KB, drv_memk half-KB:
+                                ; a ceiling is rounded UP)
   %error "a class ceiling has drifted from drv_memk - apps/os88api.inc too"
 %endif
 
@@ -1757,7 +1796,7 @@ drv_init_x:
     mov bx, drv_tab             ; is not what these live in - clear the three
 .next:                          ; per-load words the table ships non-zero.
     mov [bx+DRVR_SEG], ax       ; `mov word [bx+d8],0` is five bytes and
-    mov [bx+DRVR_KB], ax        ; `mov [bx+d8],ax` is three
+    mov [bx+DRVR_PARA], ax        ; `mov [bx+d8],ax` is three
     mov [bx+DRVR_ENT], ax
     add bx, DRVR_SIZE
     inc cx
@@ -1823,21 +1862,16 @@ drv_cls_svc_x:
 
 ; drv_cls_idx - AL = class -> DI = class-1, CF=1 if out of range (internal)
 drv_cls_idx:
-    xor di, di                  ; BEFORE the range tests, and load-bearing:
-                                ; drv_cls_fp_x and drv_cls_svc_x both publish
-                                ; "CF = 1 and DI = 0 if the class is out of
-                                ; range" and neither has a .bad tail of its own
-    cmp al, 1
-    jb .bad
-    cmp al, DRVC_MAX
-    ja .bad
     mov di, ax                  ; AH is the caller's and must never reach the
     and di, 0x00FF              ; index, so zero-extend AL by hand
-    dec di
-    ret
-.bad:
-    stc
-    ret
+    dec di                      ; ...and class 0 wraps to FFFF, so ONE unsigned
+    cmp di, DRVC_MAX            ; compare is both range tests: CF = 1 iff the
+    cmc                         ; index is 0..DRVC_MAX-1, complemented into
+    jnc .ret                    ; the answer (kernel size pass 17, -3)
+    xor di, di                  ; ...and load-bearing: drv_cls_fp_x and
+    stc                         ; drv_cls_svc_x both publish "CF = 1 and DI =
+.ret:                           ; 0 if the class is out of range" and neither
+    ret                         ; has a .bad tail of its own
 
 ; -----------------------------------------------------------------------------
 ; drv_owns_seg - is BX the image segment of a driver that is loaded RIGHT NOW?
@@ -1870,16 +1904,13 @@ drv_cls_idx:
 ; is not enough, because drv_publish arms a slot only after DRVV_ATTACH
 ; returns and a worker spawned from inside attach would outlive a refusal.
 drv_pub_seg:
-    push ax
-    push cx
-    push di
+    call kentc_di
     mov al, 1
 .scan:
     call drv_cls_fp_x           ; (AX survives it)
     jc .next
     mov cx, [di+2]
-    or cx, cx
-    jz .next
+    jcxz .next                  ; (kernel size pass 17, -2: `or cx, cx / jz`)
     cmp cx, bx
     je .out                     ; ...equal, so CF = 0 already: the answer
 .next:
@@ -1888,10 +1919,7 @@ drv_pub_seg:
     jbe .scan
     stc
 .out:
-    pop di
-    pop cx
-    pop ax
-    ret
+    jmp kretc_di
 
 drv_owns_seg_x:
     push ax
@@ -2023,7 +2051,7 @@ section .cold
 ; checkbox wants: there is nothing to unmount and nothing to get back.
 ;
 ; **IT WEIGHS THE HEAP AND NOT drv_memk** (SPEC.md 51.12.2): a driver's IMAGE
-; is owned by MEM_K_DRV, so it is named by its own base and DRVR_KB is the KB
+; is owned by MEM_K_DRV, so it is named by its own base and DRVR_PARA is the KB
 ; drv_load claimed for it; everything the driver then claims for ITSELF
 ; carries that base as its owner word (mem_own's `mov bx, es`), which is
 ; exactly what mem_owned_kb sums. Two lookups a row, no probe, and nothing
@@ -2033,7 +2061,7 @@ section .cold
 ; 51.12.3). `CX = how many rows answered` was published, returned and read by
 ; nobody, and it was carried only to reach `jcxz` - so the refusal is
 ; `cmp ax, 1` instead: CF = 1 exactly when AX = 0, and AX = 0 exactly when no
-; row of the class is loaded, because drv_load writes DRVR_SEG and DRVR_KB
+; row of the class is loaded, because drv_load writes DRVR_SEG and DRVR_PARA
 ; together and a driver image is never under a kilobyte (drv_load's own
 ; `cmp ax, DRV_HDR_SZ / jb .bad`). Four bytes for eight, and one fewer
 ; register in the contract.
@@ -2059,10 +2087,15 @@ osapi_drv_classk_x:
 %ifdef KERN_MEGA
     inc cx
 %endif
-    add si, [bx+DRVR_KB]        ; the image drv_load claimed...
-    mov bx, [bx+DRVR_SEG]       ; ...and everything that names it as owner.
-    call mem_owned_kb           ; BX is the row pointer and this spends it,
-    add si, ax                  ; which costs nothing: .row rebuilds it
+    mov ax, [bx+DRVR_PARA]      ; the image drv_load claimed, in paragraphs
+    add ax, 63                  ; and ROUNDED UP to the KB (EMS.DRV and
+                                ; SERIAL.DRV are under one: truncated, a
+                                ; loaded class would answer 0, which is "not
+                                ; loaded")...
+    mov bx, [bx+DRVR_SEG]       ; ...and everything that names it as owner,
+    call mem_owned_kba          ; summed with it in paragraphs before the one
+    add si, ax                  ; shift. BX is the row pointer and this spends
+                                ; it, which costs nothing: .row rebuilds it
 .next:
     inc dh
     cmp dh, DRV_MAX
@@ -2070,7 +2103,7 @@ osapi_drv_classk_x:
     mov ax, si
 %ifdef KERN_MEGA
     ; **NOT `cmp ax, 1` HERE**: drv_hi_move puts a driver's image above 1MB
-    ; and zeroes its DRVR_KB ("no heap held"), and its claims follow it into
+    ; and zeroes its DRVR_PARA ("no heap held"), and its claims follow it into
     ; the pool - so a LOADED class could weigh 0 conventional KB and answer
     ; "nothing of that class is loaded". INSTALL's network check
     ; (in_netck) read ETHER.DRV as absent and never asked the network
@@ -2257,8 +2290,10 @@ drv_call_ent:                   ; ...and the same thing for a caller that has
                                 ; nothing is re-parented, and drvf_drv_call
                                 ; (the far thunk) and :2002 (which passes
                                 ; [drv_dlg_cb] in BP) still enter at drv_call
-                                ; itself. The fifth site READS BP BACK
-                                ; afterwards and is deliberately left alone
+                                ; itself. The fifth, drv_unload_x, TESTS the
+                                ; entry first; it does that on the row's own
+                                ; word now and comes here too (kernel size
+                                ; pass 17)
 drv_call:
     cmp bx, drv_tab             ; ...AND BX MUST BE A ROW AT ALL. This one is
     jb .stray                   ; checked FIRST and on BX itself, because it is
@@ -2409,7 +2444,7 @@ drv_svc_call_x:
     mov ds, [es:drv_fseg]       ; things it was handed through
     call wm_nest_pushd          ; SPEC.md 66.6.3
 %ifdef KERN_MEGA
-    MEGA_PCALL [es:drv_fptr], [es:drv_fseg] ; the CODE alias (kernel/mega.inc)
+    MEGA_PCALLC [es:drv_fptr], [es:drv_fseg] ; the CODE alias (kernel/mega.inc)
 %else
     call far [es:drv_fptr]
 %endif
@@ -2468,7 +2503,7 @@ drv_blk_call_x:
     mov ds, [es:drv_blkseg]
     call wm_nest_pushd          ; SPEC.md 66.6.3
 %ifdef KERN_MEGA
-    MEGA_PCALL [es:drv_blkfp], [es:drv_blkseg] ; the CODE alias (mega.inc)
+    MEGA_PCALLC [es:drv_blkfp], [es:drv_blkseg] ; the CODE alias (mega.inc)
 %else
     call far [es:drv_blkfp]
 %endif
@@ -3178,10 +3213,7 @@ osapi_drv_dlg_x:                ; THE BODY IS CTRL.DRV's, modc_e_dlg (ctrl.inc,
 ; throw that away.
 ; -----------------------------------------------------------------------------
 drv_dlg_done_x:
-    push ax
-    push bx
-    push si
-    push bp
+    call kentc_bp
     mov bx, [drv_dlg_row]
     or bx, bx
     jz .out
@@ -3196,11 +3228,7 @@ drv_dlg_done_x:
     mov word [drv_dlg_row], 0
     call drv_call               ; BX = the row, BP = its near proc; AL, DX:CX
 .out:                           ; and ES:DI are the page's own arguments
-    pop bp
-    pop si
-    pop bx
-    pop ax
-    ret
+    jmp kretc_bp
 %else
 osapi_drv_dlg_x:                ; the cell exists, the body does not
     stc
@@ -3226,33 +3254,28 @@ osapi_drv_dlg_x:                ; the cell exists, the body does not
 ; -----------------------------------------------------------------------------
 drv_cp_class_x:
     push bx
-    push cx
     push di
     mov bl, al                  ; BL = the ordinal wanted, BH the tally so far
     xor bh, bh
-    mov cl, 1                   ; CL = the class (drv_cls_svc_x banks CX)
-.next:
-    mov al, cl
-    call drv_cls_svc_x
+    mov al, 1                   ; AL = the class, counted in AL itself: it is
+.next:                          ; drv_cls_svc_x's argument, which banks AX,
+    call drv_cls_svc_x          ; and the hit's answer as well (kernel size
+                                ; pass 17, -9: CL was the class, copied into
+                                ; AL every pass and back out at .hit)
     jc .skip                    ; class 3, DRVC_POINT and DRVC_EMS keep no copy
     cmp word [di+DSV_CPNAME], 0
     je .skip
-    cmp bl, bh
-    je .hit
+    cmp bl, bh                  ; equal: CF = 0 already, and AL is the class
+    je .out
     inc bh
 .skip:
-    inc cl
-    cmp cl, DRVC_MAX
+    inc ax                      ; (AL <= DRVC_MAX + 1: no carry reaches AH)
+    cmp al, DRVC_MAX
     jbe .next
-.done:
     mov al, bh                  ; ...which is the COUNT, for the entry above.
     stc                         ; Both ctrl.inc callers test CF, so AL on the
-    SKIPCX2                     ; refusal path changing is invisible (mov cx, imm16 over .hit's mov: no flag, CX popped - pass 15)
-.hit:                           ; (the `cmp bl, bh` that came here was equal,
-    mov al, cl                  ; so CF = 0 already, and `mov` keeps it)
-.out:
+.out:                           ; refusal path changing is invisible
     pop di
-    pop cx
     pop bx
     ret
 
@@ -3367,9 +3390,11 @@ drv_load_at:
                                 ; mod_need does the identical thing with
                                 ; mod_fsz - one register audit, both files
 
-    call mem_bytes_kb_x         ; -> whole KB (the size is well under 64KB,
-    cmp ax, DRV_MAX_KB          ; so this cannot carry out)
-    ja .big
+    cmp ax, DRV_MAX_KB * 1024   ; the bound FIRST, on the bytes: the round-
+    ja .big                     ; up below carries for a size near 64KB
+    call mem_bytes_gp_x         ; -> paragraphs, a whole number of granules
+                                ; (SPEC.md 50.2.1): the claim is the file to
+                                ; 512 bytes, where it was to a whole KB
     push bx                     ; ...AT THE SIZE THE DIRECTORY REPORTED, and
                                 ; not a byte more (SPEC.md 51.1.2). This used
                                 ; to add a DRV_BSS_KB of 4 for a bss the
@@ -3380,23 +3405,29 @@ drv_load_at:
                                 ; the image. drv_bss GROWS instead, once it
                                 ; knows the figure
     mov bx, MEM_K_DRV
-    call mem_claim_hi_x           ; a driver's base IS its CS - top-down, like
+    call mem_claimp_hi_x        ; a driver's base IS its CS - top-down, like
     pop bx                      ; a package's region, and movable for the same
     jc .nomem                   ; reason (SPEC.md 66.6.3)
     DDG 4
     mov [bx+DRVR_SEG], dx       ; ...which also arms drv_call
-    mov [bx+DRVR_KB], ax
+    mov [bx+DRVR_PARA], ax
 
-    push ax                     ; ...AND IT MAY MOVE. The proc is the KERNEL's,
-    push bx                     ; because every word that names a driver image
-    push dx                     ; is the kernel's - mem_region_reloc's table
-    mov bx, MEM_K_DRV           ; walk is all of them - and the claim's owner is
-    mov ax, mem_region_reloc    ; a kernel tag, so mem_reloc_call dispatches it
-    call mem_movable_x          ; through cw_mem_disp and not through a driver's
-    pop dx                      ; dispatcher. NO DECLARATION IS ASKED OF THE
-    pop bx                      ; DRIVER: mem_can_move asks the three facts
-    pop ax                      ; instead, of which the IVT scan is the one a
-                                ; declaration would have got wrong
+    push bx                     ; ...AND IT MAY MOVE. The proc is the KERNEL's,
+    mov bx, MEM_K_DRV           ; because every word that names a driver image
+    mov ax, mem_region_reloc    ; is the kernel's - mem_region_reloc's table
+    call mem_movable_x          ; walk is all of them - and the claim's owner is
+    pop bx                      ; a kernel tag, so mem_reloc_call dispatches it
+                                ; through cw_mem_disp and not through a driver's
+                                ; dispatcher. NO DECLARATION IS ASKED OF THE
+                                ; DRIVER: mem_can_move asks the three facts
+                                ; instead, of which the IVT scan is the one a
+                                ; declaration would have got wrong. NO BANK of
+                                ; DX or AX round it (kernel size pass 17, -4):
+                                ; mem_movable_x writes neither (mem_find_own
+                                ; READS DX, and both exits are mem_free_x's
+                                ; pushf/si frame), and AX is spent - the
+                                ; PARA store above was its last reader and
+                                ; dskw_read_x below takes no AX
 
     push bx                     ; the row - BX is the read's own destination
     mov es, dx                  ; offset, and the claim starts at ES:0000.
@@ -3489,11 +3520,14 @@ drv_load_at:
 ; -----------------------------------------------------------------------------
 ; drv_check - validate a loaded driver image (module internal)
 ; in:  BX = row ptr with DRVR_SEG live, BP = the bytes that arrived
+; in:  ...and ES = the image already: drv_load_at, the one caller, read the
+;      file into ES:0 and dskw_read_x keeps ES (kernel size pass 17, -3: the
+;      `mov es, [bx+DRVR_SEG]` that reloaded it is gone)
 ; out: CF = 0 and [bx+DRVR_ENT] filled; CF = 1 malformed - and ES = the image
 ;      either way, which drv_bss, drv_hi and the attach half's HMA placement
-;      all take it in (kernel size pass 15: no bank, -3; drv_load_at, the one
-;      caller, read it in ES already and its kretc_es restores the caller's)
-; clobbers: AX, SI, ES, flags
+;      all take it in (kernel size pass 15: no bank, -3; its kretc_es
+;      restores the caller's)
+; clobbers: AX, SI, flags
 ;
 ; ld_check_hdr's tests, on a driver - and it is now literally them: the
 ; magic, the version, the link word and the dispatcher pair are ld_hdr_ok
@@ -3507,7 +3541,6 @@ drv_load_at:
 ; [es:si+n] is a byte shorter than [es:n] for every one of these fields.
 ; -----------------------------------------------------------------------------
 drv_check:
-    mov es, [bx+DRVR_SEG]
     xor si, si
     mov al, DRV_VER
     call ld_hdr_ok
@@ -3527,11 +3560,16 @@ drv_check:
     mov ax, [es:si+DRV_H_ENTRY]
     cmp ax, DRV_HDR_SZ
     jb .bad
-    cmp ax, [es:si+DRV_H_IMG]               ; ...and the entry is inside the
-    jae .bad                                ; image
+    cmp bp, ax                              ; ...and the entry is inside the
+    jbe .bad                                ; image - BP, which the compare
+                                            ; above has just made the header's
+                                            ; DRV_H_IMG, and the operands the
+                                            ; other way round so the success
+                                            ; path leaves with CF = 0 and no
+                                            ; `clc` (kernel size pass 17, -3)
     mov [bx+DRVR_ENT], ax                   ; banked: an unload must not be
                                             ; steerable by a driver that has
-    clc                                     ; since scribbled on its own
+                                            ; since scribbled on its own
     ret                                     ; header
 .bad:
     stc
@@ -3541,7 +3579,7 @@ drv_check:
 ; drv_bss - zero the bss the file did not carry, inside the claim the
 ;           directory already sized for it (module internal; SPEC.md 51.1.2,
 ;           docs/plans/O88-COMPRESSION-PLAN.md 12.6)
-; in:  BX = the row, with DRVR_SEG and DRVR_KB live, ES = its image (as
+; in:  BX = the row, with DRVR_SEG and DRVR_PARA live, ES = its image (as
 ;      drv_check leaves it); BP = the file's bytes
 ; out: CF = 0 and the bss is zeroed. CF = 1 - `image + bss` does not fit the
 ;      claim, so NOTHING has been zeroed; the row still names the claim the
@@ -3600,11 +3638,13 @@ drv_bss:                        ; (ES = the image, from drv_check; no frame -
     mov cl, 4
     shl ax, cl                  ; AX = the bss in BYTES, at most 4,080
     mov si, ax                  ; ...banked, because the test spends AX
-    mov di, [es:DRV_H_IMG]      ; the bss begins where the image ends, which
-    add ax, di                  ; drv_check has just made equal to BP
-    call mem_bytes_kb_x         ; -> whole KB of image + bss
-    cmp ax, [bx+DRVR_KB]        ; THE ONE BOUND TEST, and it is about a byte
-    ja .nofit                   ; read off a disk. os88drv.py leaves enough of
+    mov di, bp                  ; the bss begins where the image ends, which
+    add ax, di                  ; drv_check has just made equal to BP - so BP
+                                ; it is (kernel size pass 17, -3)
+    call mem_bytes_gp_x         ; -> the granules of image + bss (at most
+                                ; DRV_MAX_KB + 4,080 bytes: no carry)
+    cmp ax, [bx+DRVR_PARA]      ; THE ONE BOUND TEST, and it is about a byte
+    ja drv_check.bad            ; read off a disk. os88drv.py leaves enough of
                                 ; the trailing zero run in the image that the
                                 ; directory's own size already covers the bss
                                 ; (SPEC.md 51.1.2), so a driver this tree
@@ -3622,9 +3662,6 @@ drv_bss:                        ; (ES = the image, from drv_check; no frame -
                                 ; and CF = 0 from the `xor al, al` above:
                                 ; neither `cld` nor a string op writes it
 .out:
-    ret
-.nofit:
-    stc
     ret
 
 section .modc                   ; IMAGE CODE (see VGC_FORCE's banner below):
@@ -3693,21 +3730,29 @@ section .modc                   ; IMAGE CODE (see VGC_FORCE's banner below):
 %ifdef KERN_BIG
     mov es, [bx+DRVR_SEG]       ; ...THEN GIVE BACK THE TAIL IT DISOWNED
     mov ax, [es:DRV_H_KEEP]     ; (SPEC.md 51.1.3): SOUND.DRV's attach-only
-    add ax, 1023                ; code, 11KB becoming 10 - and with no mixer
-    jc .keepall                 ; its popup too, 7. Before tier and READY, so
-    mov cl, 10                  ; no verb after the attach is ever sent to a
-    shr ax, cl                  ; driver holding more than it said it needs.
+    add ax, 511                 ; code, 11KB becoming 10 - and with no mixer
+    and ax, -512                ; its popup too, 7. Before tier and READY, so
+    mov cl, 4                   ; no verb after the attach is ever sent to a
+    shr ax, cl                  ; driver holding more than it said it needs -
+                                ; to the 512-byte rung an image is claimed in
+                                ; (SPEC.md 50.2.1, mem_bytes_gp_x), not the KB.
+                                ; NO CARRY TEST: the word is the driver's own,
+                                ; written by its attach - it is not read off
+                                ; a disk - and the BOOT BLOB this expands into
+                                ; is full to the byte. A driver writing more
+                                ; than 0xFE00 here is a driver that lies in
+                                ; kernel code anyway
     jz .keepall                 ; 0 = it said nothing: every driver built
-    cmp ax, [bx+DRVR_KB]        ; before the word, and every one that keeps
-    jae .keepall                ; it all. DRVR_KB 0 is the HMA or kern_mega's
+    cmp ax, [bx+DRVR_PARA]      ; before the word, and every one that keeps
+    jae .keepall                ; it all. DRVR_PARA 0 is the HMA or kern_mega's
     mov dx, es                  ; pool, which no claim holds, and `jae` takes
     push bx                     ; that too. mem_regrow's shrink keeps the
     mov bx, MEM_K_DRV           ; BASE, so no CS and no hooked vector moves -
     call %2                     ; and costs no resident byte, being reached
-    dw mem_regrow               ; through THIS image's own hop into .cold
-    pop bx
+    dw mem_regrowp              ; through THIS image's own hop into .cold
+    pop bx                      ; (the PARAGRAPH door, SPEC.md 50.2.1)
     jc .keepall                 ; refused: it keeps what it has, as before
-    mov [bx+DRVR_KB], ax        ; the Drivers page weighs the claim it HOLDS
+    mov [bx+DRVR_PARA], ax      ; the Drivers page weighs the claim it HOLDS
 .keepall:
 %endif
     cmp byte [bx+DRVR_CLASS], DRVC_SOUND
@@ -3760,7 +3805,7 @@ section .modc                   ; IMAGE CODE (see VGC_FORCE's banner below):
 ; -----------------------------------------------------------------------------
 ; %1_hma - drv_hma_try: run a just-loaded driver from the HMA instead (image
 ;          internal; docs/plans/HMA-PLAN.md 5)
-; in:  BX = the row: DRVR_SEG/DRVR_KB/DRVR_ENT live, the image checked and its
+; in:  BX = the row: DRVR_SEG/DRVR_PARA/DRVR_ENT live, the image checked and its
 ;      bss zeroed, and NOTHING of it run yet; ES = that image's claim, which
 ;      drv_load_row loaded for the read and dskw_read_x, drv_check and
 ;      drv_bss all keep
@@ -3787,7 +3832,7 @@ section .modc                   ; IMAGE CODE (see VGC_FORCE's banner below):
     jc .out
     xchg ax, [bx+DRVR_SEG]      ; the row names the HMA from here...
     xchg dx, ax                 ; ...and DX the claim it was read into
-    and word [bx+DRVR_KB], 0    ; no heap held
+    and word [bx+DRVR_PARA], 0    ; no heap held
     mov word [bx+DRVR_DISP], DRV_HMA_ORG + PKG_DISP
     add byte [bx+DRVR_ENT+1], DRV_HMA_ORG >> 8  ; (the low byte is the same)
     push bx
@@ -4011,11 +4056,11 @@ drv_unload_x:
     call drv_row_x
     cmp word [bx+DRVR_SEG], 0
     je .out
-    mov bp, [bx+DRVR_ENT]
-    or bp, bp
-    jz .free                    ; never attached: nothing could have spawned
+    cmp word [bx+DRVR_ENT], 0
+    je .free                    ; never attached: nothing could have spawned
     mov al, DRVV_DETACH
-    call drv_call
+    call drv_call_ent           ; ...which loads the BP the test above read
+                                ; (kernel size pass 17, -1)
     ; Detach told the workers to die; now WAIT for the deaths themselves
     ; before a byte of the image is freed. [drv_wcnt] falls inside
     ; task_exit's IF=0 window (drv_task), so zero means no task's CS points
@@ -4056,15 +4101,16 @@ drv_unload_x:
 ; -----------------------------------------------------------------------------
 drv_shutdown_x:
     push ax
-    push cx
-    xor cx, cx
-.next:
-    mov al, cl                  ; NO loaded-row pre-check: drv_unload_x's own
+    xor ax, ax                  ; AL = the row, counted in AL itself: drv_unload_x
+.next:                          ; is a KENT routine and hands AX back as it
+                                ; was given (kernel size pass 17, -5: CX was
+                                ; the counter, copied into AL every pass).
+                                ; NO loaded-row pre-check: drv_unload_x's own
     call drv_unload_x           ; first three instructions are drv_row_x and
-    inc cx                      ; `cmp word [bx+DRVR_SEG],0 / je .out`, so an
-    cmp cx, DRV_MAX             ; unloaded row already returns having done
+    inc ax                      ; `cmp word [bx+DRVR_SEG],0 / je .out`, so an
+    cmp al, DRV_MAX             ; unloaded row already returns having done
     jb .next                    ; nothing. It costs one extra prologue per
-    pop cx                      ; unloaded row, at most five, once, on the way
+                                ; unloaded row, at most five, once, on the way
     pop ax                      ; to int 19h - and it frees BX with it
     retf
 
@@ -4072,12 +4118,13 @@ drv_shutdown_x:
 ; drv_release - give the image's claim back and disarm the row (internal)
 ; in:  BX = row ptr
 ; out: nothing (all registers preserved)
+;
+; The KENT ladder's frame (kernel size pass 17, -7): it banks CX and BX as
+; well as the four this used to push, so the table clear's CX and the owner
+; sweep's BX need no bank of their own and the tail is one rung.
 ; -----------------------------------------------------------------------------
 drv_release:
-    push ax
-    push bx
-    push dx
-    push di
+    call kentc_di               ; KENT: push ax..di
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .out
@@ -4119,18 +4166,15 @@ drv_release:
     mov word [di+drv_owner], 0  ; one call (kernel size pass 15, -19): the
     call drv_cls_svc_x          ; owner, then the service table, in that
     jc .nosvc                   ; order. DRVC_POINT has no table to clear
-    push ax                     ; AL is the class still (below), and CX and ES
-    push cx                     ; are the caller's
-    push es
-    push ds
-    pop es
-    mov cx, DSV_SIZE            ; the table alone: the 16-byte staged sink
-    xor al, al                  ; name this once also cleared is gone, and
-    cld                         ; drv_cfg now sits right behind drv_svc
-    rep stosb
-    pop es
-    pop cx
-    pop ax
+    mov cx, DSV_SIZE / 2        ; AL the class still (below): the table
+    call dsk_ent_zero.zero      ; alone, a word at a time through DS:DI -
+                                ; disk.inc's loop, which touches DI, CX and
+                                ; nothing else, so AX and ES need no bank
+                                ; (kernel size pass 16, -8), and CX is the
+                                ; ladder's (pass 17).
+                                ; The 16-byte staged sink name this once also
+                                ; cleared is gone, and drv_cfg now sits right
+                                ; behind drv_svc
 .nosvc:
     call cp_drv_gone_x            ; a page this driver owned is on screen no
                                 ; longer, and [cp_sel] must not name it
@@ -4162,13 +4206,13 @@ drv_release:
 .novol:
     xor ax, ax                  ; ...and drv_call is disarmed the same way.
     mov [bx+DRVR_SEG], ax       ; The class byte AL was spent above, and two
-    mov [bx+DRVR_KB], ax        ; register stores beat two immediate ones by
+    mov [bx+DRVR_PARA], ax        ; register stores beat two immediate ones by
                                 ; four bytes against the two the zero costs
 %ifdef HMA_DRV
     mov [bx+DRVR_DISP+1], al    ; ...and a row that ran from the HMA is a
 %endif                          ; heap row again: E00C -> PKG_DISP, AL is 0
-    push bx                     ; anything the DRIVER itself claimed is owned
-    mov bx, dx                  ; by its segment (mem_own), so sweep those
+    mov bx, dx                  ; anything the DRIVER itself claimed is owned
+                                ; by its segment (mem_own), so sweep those
     call mem_free_owner_x         ; FIRST - the image's own free below takes
 %ifdef HMA_DRV                  ; that segment out of existence, and a claim
     mov al, ROMF_HDROP          ; whose owner word no longer names anything
@@ -4179,7 +4223,7 @@ drv_release:
                                 ; that is where it ran - CF = 0 then, which
                                 ; leaves no claim to free
 %ifdef KERN_MEGA
-    MEGA_ISHI dx                ; an image ABOVE 1MB (drv_hi): its pool block
+    call mem_ishidx             ; an image ABOVE 1MB (drv_hi): its pool block
     jc .lowimg                  ; and its selector pair go back, there being
                                 ; no claim
     xchg ax, dx
@@ -4190,14 +4234,9 @@ drv_release:
 %endif
     mov bx, MEM_K_DRV
     call mem_free_x
-.hma:
-    pop bx
+.hma:                           ; BX is the ladder's to restore
 .out:
-    pop di
-    pop dx
-    pop bx
-    pop ax
-    ret
+    jmp kretc_di
 
 %ifdef KERN_MEGA
 ; -----------------------------------------------------------------------------
@@ -4252,7 +4291,7 @@ drv_hi_move:
     mov bx, MEM_K_DRV           ; nothing names now
     call mem_free_x
     pop bx
-    mov word [bx+DRVR_KB], 0    ; no heap held
+    mov word [bx+DRVR_PARA], 0    ; no heap held
     mov es, [bx+DRVR_SEG]
 %ifdef MEGA_E9
     call MEGA_SEL_CODE:mega_drvsayf ; its name to the debug port
@@ -4337,9 +4376,9 @@ drv_hiboot_f:
     mov dx, [bx+DRVR_SEG]
     or dx, dx
     jz .n
-    MEGA_ISHI dx
+    call mem_ishidx
     jnc .n                      ; already above 1MB
-    cmp word [bx+DRVR_KB], 0
+    cmp word [bx+DRVR_PARA], 0
     je .n                       ; not a heap claim
     mov es, dx
     test byte [es:DRV_H_DSV], 0x80
@@ -4454,7 +4493,7 @@ drv_task_x:
     inc byte [drv_wcnt]         ; BEFORE the task can run, so the count never
     call KERNEL_SEG:cw_task_spawn             ; lags a worker that spawned and died at once
     jc .spfail                  ; (task_spawn preserves IF, so nothing runs
-    push bx                     ; until our popf)
+                                ; until our popf)
     mov bl, al                  ; AL = the slot: a driver's worker is service
     xor bh, bh                  ; plumbing and survives the fsx freeze
     mov cl, 3                   ; (SPEC.md 53.2) - stamped inside the same
@@ -4462,8 +4501,9 @@ drv_task_x:
                                 ; before the bit is on. CX is SCH_DRV_STK's
                                 ; already, so CL is free for the shift
     or byte [bx+sch_tasks+T_FLAGS], TF_SERVICE
-    pop bx
-    popf
+    popf                        ; (no bank of BX round the stamp: .out pops
+                                ; the caller's, and nothing between reads it -
+                                ; kernel size pass 17, -2)
     clc
     jmp short .out
 .spfail:
@@ -4519,13 +4559,11 @@ drv_cfg_macros:                 ; NOT CALLED, and not a routine: it ENDS
 ; which is why one macro serves both: every kernel reference is unchanged and
 ; only the parser's OWN tables need `cs:`.
 ;
-; THE THREE THINGS THAT STAY, and each is a rule rather than an oversight:
+; THE TWO THINGS THAT STAY, and each is a rule rather than an oversight (the
+; two filenames are STAGED by each image since kernel size pass 16):
 ;   * `drv_cfg`, the settings struct - osapi_drv_cfg hands a driver its blob
 ;     out of it at any moment in the session (SPEC.md 51.9), so it is live
 ;     state and not scaffolding;
-;   * `drv_cfgname` and `drv_sysname` - dskw_read, dskw_stat and dskw_write_sys
-;     each read a filename through DS, so a name in an image is a filename read
-;     out of the kernel at the image's offset;
 ;   * the far entries below, four bytes each, because a call out of an image is
 ;     a far call.
 ;
@@ -4576,10 +4614,10 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     int 0x10                    ; else leaves AL as it was, and is left alone
     cmp al, 0x1A
     jne %%out
-    xor ax, ax                  ; DS = 0: the BIOS's records at 0:487h..489h
 %ifdef KERN_MEGA
-    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
-%else
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector (no zero:
+%else                           ; AX is reloaded below before it is read)
+    xor ax, ax                  ; DS = 0: the BIOS's records at 0:487h..489h
     mov ds, ax                  ; need no prefix, and nothing below reads the
 %endif
     pushf                       ; kernel's own (kernel size pass 12)
@@ -5010,8 +5048,11 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     mov bx, %1 %+ _buf          ; the read takes ES:BX, which is what makes
     mov cx, CFG_FBUF            ; that free rather than awkward
     xor dx, dx
-    mov si, drv_cfgname         ; ...but the NAME is read through DS, so it is
-                                ; one of the two things that stay resident
+%ifdef COLD_SLIDE               ; ...but the NAME is read through DS, so it is
+    call CFX_RAM:cfx_cfgname    ; STAGED, into cp_sbuf: the copy is in `.cfx`
+%else                           ; where there is one (kernel size pass 16),
+    call %1 %+ _cfgname         ; this image's own where there is not
+%endif
 %ifdef OS88_SHORTCUTS
     call ovl_sc_load            ; a file with SHORTCUTS after its terminator
     jnc %%have                  ; is read whole into their claim and its head
@@ -5165,8 +5206,8 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
                                 ; 52.10.3) - and must not move them (51.5.2)
     call COLD_SEG:drvf_drv_mounted
     jc %%nodisk
-    mov si, drv_sysname         ; through DS: a filename always is
-    call COLD_SEG:dwf_dskw_stat ; the disk in A: is not guaranteed to be ours
+    CPSTAGE %1 %+ _sysname      ; through DS: a filename always is, so it
+    call COLD_SEG:dwf_dskw_stat ; is staged (kernel size pass 16) ; the disk in A: is not guaranteed to be ours
     jc %%notsys
 
     call %1 %+ _fdtest          ; a Cylinder the machine cannot do goes back
@@ -5183,7 +5224,7 @@ section .modc                   ; **THE MACROS BELOW ARE IMAGE CODE, AND THIS
     jc %%nomem                  ; ES:BX is a claim holding these settings AND
 %endif                          ; their trailer (SPEC.md 26.8.6)
     xor dx, dx                  ; DX:CX = the count; a settings file is bytes
-    mov si, drv_cfgname
+    CPSTAGE %1 %+ _cfgname      ; (cp_stage keeps ES:BX, CX and DX)
     call COLD_SEG:dwf_dskw_write_sys
                                 ; _sys: SYSTEM.CFG is hidden + system, so it
                                 ; is neither listed nor deletable, and only
@@ -5255,6 +5296,9 @@ CFG_DATA   ovc
 ovc_buf     equ BOOT2_PAD       ; .boot2 is vstart 0: its end IS this offset
 CFG_SHARED ovc
 CFG_BOOT   ovc
+%ifndef COLD_SLIDE
+CFGN_STAGE ovc_cfgname, ret     ; (.cfx's cfx_cfgname on kern_big and kern_emu)
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ovl_cfg_load - the entry drv_boot reaches through SPLCALL (SPEC.md 2.5.1)
@@ -6107,6 +6151,9 @@ CFG_DATA   cpc
 CFG_MAP    cpc
 CFG_SHARED cpc
 CFG_SAVE   cpc
+CPS cpc_sysname, 'KERNEL.SYS'   ; what makes a disk THE system disk (19.6): the
+                                ; settings are written beside it or not at all
+CPS cpc_cfgname, 'SYSTEM.CFG'
 %ifdef KERN_BIG
 cp_vgc_force:                   ; SPEC.md 39.28: THE ONE COPY, in the settings
     VGC_FORCE                   ; core - SC_OP_VGC at boot (drv_boot_x) and
@@ -6114,13 +6161,14 @@ cp_vgc_force:                   ; SPEC.md 39.28: THE ONE COPY, in the settings
 section .modcb                  ; the writer's file buffer is the module's
 cpc_buf:    resb CFG_FBUF       ; own BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md
                                 ; 3): cpc_ser fills it whole before a byte of it
-                                ; is written, so it wants no zeroing, and it
-                                ; costs the image nothing (kernel size pass 8).
-                                ; ES = CS reaches it. On kern_big too, where a
-                                ; desktop gesture loads the settings CORE alone:
-                                ; mod_need claims the WHOLE image for MOD_SETS
-                                ; as well, so this tail is inside that claim on
-                                ; either load (SPEC.md 2.8.7)
+                                ; is written. Zeros at the file's end (kernel.asm
+                                ; 's MODB_TAIL), so the claim holds it with no
+                                ; figure in the kernel. ES = CS reaches it. On
+                                ; kern_big too, where a desktop gesture loads
+                                ; the settings CORE alone: mod_need claims the
+                                ; WHOLE image for MOD_SETS as well, so this tail
+                                ; is inside that claim on either load (SPEC.md
+                                ; 2.8.7), though that read stops short of it
 section .modc
 
 ; =============================================================================
@@ -6205,7 +6253,7 @@ cpc_fdtest:
     mov si, dx                  ; SI = the claim, for the free
 %ifdef KERN_MEGA
     mov ax, dx                  ; kern_mega: the page arithmetic below is on
-    call KERNEL_SEG:mega_s2segf ; the claim's real PARAGRAPH (a selector in
+    call COLD_SEG:mega_s2segc ; the claim's real PARAGRAPH (a selector in
     cmp ax, 0xFFFF              ; protected mode), and every segment register
     je .free                    ; is loaded through a scratch selector
     mov dx, ax                  ; (KSEG, KERN-MEGA-MEMORY-PLAN MC7.6)
@@ -6506,11 +6554,11 @@ drv_pkg_call_x:
 .none:
     pop ax
     pop di
-    pop bp
-    pop ds
     xor ax, ax
     stc
-    ret
+    jmp short .done             ; ...and .done's two pops and `ret`, which
+                                ; were written out a second time here (kernel
+                                ; size pass 17, -1)
 
 ; -----------------------------------------------------------------------------
 ; drv_pkg_disp - drv_pkg_call_x's far call, synthesised on the CALLER'S STACK

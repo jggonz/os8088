@@ -54,7 +54,7 @@ import os88ne                                              # noqa: E402
 
 try:
     from unicorn import Uc, UC_ARCH_X86, UC_MODE_16, UC_HOOK_INTR
-    from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_DX, UC_X86_REG_SP,
+    from unicorn.x86_const import (UC_X86_REG_AX, UC_X86_REG_BL, UC_X86_REG_DX, UC_X86_REG_SP,
                                    UC_X86_REG_SS, UC_X86_REG_DS, UC_X86_REG_ES,
                                    UC_X86_REG_CS, UC_X86_REG_IP, UC_X86_REG_FLAGS)
 except Exception:                                          # pragma: no cover
@@ -112,6 +112,9 @@ def api(name):
 
 IMAGE, PART, S = assemble()
 CLAIM_CELL, FREE_CELL = api("OSAPI_MEM_CLAIM"), api("OSAPI_MEM_FREE")
+# the package sweep moved the census's claim onto OSAPI_MEM_P, BL = MEMP_CLAIM
+# (= 0); its cell is an X stub, so the int lands a byte further in
+MEMP_CELL = api("OSAPI_MEM_P")
 REFUSAL = {}
 for k, tier in (("w16_r_c186", "186"), ("w16_r_c286", "286"),
                 ("w16_r_c386", "386"), ("w16_r_cbig", "too large"),
@@ -284,6 +287,9 @@ class Machine:
             ip = mu.reg_read(UC_X86_REG_IP)
             cell = ip - 2
             fl = mu.reg_read(UC_X86_REG_FLAGS)
+            if cell in (MEMP_CELL, MEMP_CELL + 1) and \
+                    mu.reg_read(UC_X86_REG_BL) == 0:
+                cell = CLAIM_CELL
             if cell == CLAIM_CELL:
                 mu.reg_write(UC_X86_REG_DX, CLAIM)
                 fl &= ~1

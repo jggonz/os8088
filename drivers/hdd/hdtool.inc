@@ -94,7 +94,7 @@ hd_tname:    db 'HDDTOOL.DRV', 0
 ; back. Anything that fails after the claim frees it, so a refused tool costs
 ; the time and nothing else.
 ;
-; HDTOOL_KB is injected by the Makefile from the tool's own built size, the
+; HDTOOL_PARA is injected by the Makefile from the tool's own built size, the
 ; way boot.asm is told KERNEL_SECTORS - there is no file-size slot in the API
 ; and a driver cannot ask. It is a CEILING and not an assertion: a tool bigger
 ; than the claim is refused by OSAPI_FILE_READ before any data moves
@@ -132,12 +132,17 @@ hd_tool_need:
                                 ; folder shown. CF=1 has moved NOTHING, so the
                                 ; read below never runs in the user's folder
 
-    mov ax, HDTOOL_KB
-    call OSAPI_MEM_CLAIM_HI     ; owner = our segment, so drv_release sweeps
-    jc .fail                    ; it even if we never get to free it - and
-    mov [hd_tseg], dx           ; FROM THE TOP (SPEC.md 50.3.2.1): [hd_tfar]
+    mov ax, HDTOOL_PARA         ; PARAGRAPHS (SPEC.md 50.3.7): the image is
+    xor cx, cx                  ; a byte count, 16,510 today, and a KB door
+    mov bl, MEMP_CLAIM_HI       ; held 17KB of heap for it while the page was
+    call OSAPI_MEM_P            ; open where the granule holds 16.5. CX = 0,
+                                ; no DMA head; the DISK class, because the
+                                ; tool's own sector buffers take int 13h
+    jc .fail                    ; owner = our segment, so drv_release sweeps
+    mov [hd_tseg], dx           ; it even if we never get to free it - and
+                                ; FROM THE TOP (SPEC.md 50.3.2.1): [hd_tfar]
                                 ; is PKG_DISP:[hd_tseg], so this image's base
-                                ; is its CS and it can never move. HDTOOL_KB
+                                ; is its CS and it can never move. HDTOOL_PARA
                                 ; of pinned claim in the middle of the arena is
                                 ; also the largest single thing this driver
                                 ; ever puts there - and the figure is DERIVED
@@ -147,7 +152,9 @@ hd_tool_need:
 
     mov es, dx
     xor bx, bx
-    mov cx, HDTOOL_KB * 1024
+    mov cx, HDTOOL_PARA * 16    ; the read's capacity: the image, to the
+                                ; paragraph (64KB would not fit CX - and a
+                                ; tool over 64KB is refused below anyway)
     xor dx, dx
     mov si, hd_tname
     call OSAPI_FILE_READ        ; DX:AX = the file's size

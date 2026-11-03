@@ -26,8 +26,11 @@
 ;   is the place, and says what it does and does NOT buy. Only the trailing
 ;   run is stripped; a zeroed table with code after it still ships. The kernel
 ;   claims from the size the directory entry reported - your IMAGE, since
-;   SPEC.md 20.13.3.1's read expands the file into the claim - and GROWS it to
-;   `image + bss` once it has read your header (SPEC.md 51.1.2). Anything bulk
+;   SPEC.md 20.13.3.1's read expands the file into the claim - rounded up to
+;   the heap's 512-byte granule, and os88drv.py leaves enough of the zero run
+;   in the file that this already covers `image + bss`: the kernel CHECKS that
+;   once it has read your header and does not grow anything (SPEC.md 51.1.2,
+;   50.2.1). Anything bulk
 ;   (a DMA buffer,
 ;   a ring) is still your own OSAPI_MEM_CLAIM at attach, freed at detach: the
 ;   header's byte caps a bss at 255 paragraphs.
@@ -681,9 +684,10 @@ FSV_SIZE     equ 30
 ; refuse on a machine that had the room all along.
 ; A DRIVER FAR-CALLS THE API TABLE TOO, so its format byte moves with it
 ; (SPEC.md 20.2.0): 4 until pass 4 renumbered the cells, 7 until two were
-; re-contracted in place, 9 until the RAM disk's class moved, 11 now.
-; Mirrored in kernel/driver.inc and tools/os88drv.py.
-DRV_VER equ 11
+; re-contracted in place, 9 until the RAM disk's class moved, 11 until the
+; heap's granule became 512 bytes and the strip rung with it (SPEC.md 50.2.1),
+; 12 now. Mirrored in kernel/driver.inc and tools/os88drv.py.
+DRV_VER equ 12
 
 ; -----------------------------------------------------------------------------
 ; OS88_DRIVER 'NAME', class, entry [, dsvlen] - open the driver and emit its
@@ -861,8 +865,9 @@ OS88_STATE_LEN equ os88_drv_end - os88_state
 ; WHAT IT BUYS IS DISK, NOT RAM, and that is worth saying because the opposite
 ; is the natural reading. os88drv.py strips the image's trailing zeros into
 ; header +31 and drv_bss zeroes them again at load - but the strip stops at
-; the image's own KB rung (SPEC.md 51.1.2), and the kernel claims KB of
-; image + bss either way, so a cell costs the same RAM wherever it sits. What
+; the image's own granule rung (SPEC.md 51.1.2, 50.2.1: 512 bytes), and the
+; kernel claims the granules of image + bss either way, so a cell costs the
+; same RAM wherever it sits. What
 ; moving state here takes off is a zero run's share of the FILE, and the files
 ; are LZ4 (SPEC.md 20.13.5), which codes a run of zeros in a few bytes:
 ; measured over every shipped driver on 2026-10-04, cutting EVERY interior

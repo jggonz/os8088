@@ -835,6 +835,34 @@ unsigned os88_mem_claim(int kb)
     return 0;
 }
 
+/* ...the paragraph door (SPEC.md 50.3.7), which Load and Save Program use:
+ * the same slots, sized in paragraphs */
+unsigned os88_mem_claim_p(unsigned paras)
+{
+    int i;
+
+    if (h_claim_refuse) {
+        h_claim_refuse = 0;
+        return 0;
+    }
+    if (paras < 1 || (long)paras * 16 > H_SCRBYTES) {
+        fail("a transient claim of an impossible size");
+        return 0;
+    }
+    for (i = 0; i < H_SCR_MAX; i++)
+        if (!h_scr_live[i]) {
+            h_scr_live[i] = 1;
+            h_scr_kb[i] = (int)((paras + 63) >> 6);
+            h_claim_n++;
+            if (!h_claim_keep)
+                memset(h_scr_mem[i], 0xCC, sizeof(h_scr_mem[i]));
+            return H_SCRSEG0 + (unsigned)i;
+        }
+    fail("more transient claims live at once than the harness models - which "
+         "on the machine is a claim nobody freed");
+    return 0;
+}
+
 int os88_mem_free(unsigned seg)
 {
     if (seg >= H_SCRSEG0 && seg < H_SCRSEG0 + H_SCR_MAX) {
@@ -891,7 +919,8 @@ int os88_mem_movable(unsigned seg, int on)
  * asserted is that os88_main shrank THE CARVE, to the main ROM and no less,
  * and did it once. */
 unsigned a2_opbase = H_ROMSEG;
-static int h_regrow_n, h_regrow_kb;
+static int h_regrow_n;
+static long h_regrow_bytes;
 
 /* the paragraph under a segment: itself, the harness being real mode */
 unsigned os88_seg_para(unsigned seg)
@@ -906,7 +935,18 @@ unsigned os88_mem_regrow(unsigned seg, int kb)
         return 0;
     }
     h_regrow_n++;
-    h_regrow_kb = kb;
+    h_regrow_bytes = (long)kb * 1024;
+    return seg;
+}
+
+unsigned os88_mem_regrow_p(unsigned seg, unsigned paras)
+{
+    if (seg != H_ROMSEG) {
+        fail("os88_mem_regrow_p on a segment that is not the parts carve");
+        return 0;
+    }
+    h_regrow_n++;
+    h_regrow_bytes = (long)paras * 16;
     return seg;
 }
 int os88_peek(unsigned seg, unsigned off) { return segbase(seg)[off]; }
@@ -2492,8 +2532,8 @@ int main(void)
     /* ...AND THE CARVE WAS SHRUNK TO THE MAIN ROM, after that decode and not
      * before it: 12KB holds $D000-$FFFF and nothing a running machine reads
      * is past it (APPLE2-SPEC section 1.5). */
-    if (h_regrow_n != 1 || h_regrow_kb * 1024L < A2_ROM_KEEP
-        || h_regrow_kb * 1024L >= (long)sizeof(h_rom))
+    if (h_regrow_n != 1 || h_regrow_bytes < A2_ROM_KEEP
+        || h_regrow_bytes >= (long)sizeof(h_rom))
         fail("os88_main did not shrink the ROM carve to the main ROM once");
     for (i = 0; i < 128; i++) {
         int want = 0, b;

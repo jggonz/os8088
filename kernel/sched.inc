@@ -642,10 +642,10 @@ sched_stop:
     push di
     push es
 
-    xor ax, ax
 %ifdef KERN_MEGA
-    MEGA_SEG0 es                  ; segment 0 is the NULL selector
-%else
+    MEGA_SEG0 es                  ; segment 0 is the NULL selector (no zero:
+%else                           ; AX is written before it is read)
+    xor ax, ax
     mov es, ax
 %endif
     mov si, sch_old08           ; the saved vector, word by word, onto 0:20h
@@ -1204,7 +1204,7 @@ task_exit:
 ;           clobber nothing. Every call site already tolerated the list:
 ;           sch_isr holds a full frame, sch_switch's .pick pushes DX and BX,
 ;           task_exit banks the record pointer in DI first, task_cycles and
-;           task_debit push BX/CX/SI.
+;           inst_charge (task_debit's body) push BX/CX/SI.
 ;
 ; WHAT THE MOVE COSTS, said out loud. On the charging arm it is exactly
 ; neutral - the same five instructions, relocated from .cohere, which every
@@ -1293,56 +1293,9 @@ task_cycles:
     pop bx
     ret
 
-; -----------------------------------------------------------------------------
-; task_debit - close a task_cycles stamp: return the cycles elapsed since it
-;              and REMOVE them from the running task's counter
-;
-; Move, not copy (SPEC.md 8.1): the caller adds the amount to some other
-; counter (an instance's I_CYC, SPEC.md 29), so the two together still
-; partition one total. Nesting works for free - an inner debit lowers the
-; outer pair's end reading by exactly the inner amount, so the outer stretch
-; is credited only with what it did itself.
-;
-; A negative difference is forced to 0 and nothing is subtracted: sch_account
-; can hand back a slightly backwards timestamp when its pending-IRQ
-; disambiguation guesses the wrong side of a counter reload, and an unclamped
-; borrow would wrap the caller's 32-bit counter to just under 2^32 (seen in
-; practice as a package's tally jumping backwards by ~0.6 tick).
-;
-; in:       DX:AX = stamp from task_cycles, taken on THIS task
-; out:      DX:AX = elapsed cycles (0 if the counter regressed), already
-;           subtracted from sch_cycles[sch_cur]
-; clobbers: nothing else (flags)
-; -----------------------------------------------------------------------------
-task_debit:
-    push bx
-    push cx
-    push si
-    push di
-    push bp
-    mov bp, ax                  ; BP:DI = the start stamp - sch_account
-    mov di, dx                  ; clobbers AX/BX/CX/DX/SI, but not BP/DI
-    pushf
-    cli
-    call sch_account            ; ...which hands back SI = the slot's offset
-    mov ax, [si+sch_cycles]
-    mov dx, [si+sch_cycles+2]
-    sub ax, bp                  ; DX:AX = now - start
-    sbb dx, di
-    test dx, dx                 ; counter regressed: report nothing and leave
-    jns .take                   ; the task's tally alone - by taking ZERO off
-    xor ax, ax                  ; it, which is the same store with none of the
-    cwd                         ; branches (AX = 0, so DX = 0)
-.take:
-    sub [si+sch_cycles], ax     ; ...and off the task's tally it comes
-    sbb [si+sch_cycles+2], dx
-    popf
-    pop bp
-    pop di
-    pop si
-    pop cx
-    pop bx
-    ret
+; (task_debit, which closed a task_cycles stamp and MOVED the cycles off the
+; running task's counter, is written into its one caller, inst_charge in
+; instance.inc - kernel size pass 16)
 
 ; -----------------------------------------------------------------------------
 ; cp_schset - sched_mode_set, select the scheduling mode (SPEC.md 8.2)
@@ -2178,14 +2131,18 @@ sch_isr:
     cmp byte [sch_chbusy], 0    ; NESTED? (SPEC.md 8.5.1) The ROM sends its EOI
     jne .chskip                 ; and then stis, so a second IRQ0 can re-enter
                                 ; this ISR - and that one may not chain again
-                                ; on the private stack (sch_chsave is one
-                                ; word), and it is ALREADY on that stack, so
+                                ; on the private stack (the saved SP is one
+                                ; register), and it is ALREADY on that stack, so
                                 ; the switch below is refused for it too: a
                                 ; task record must never hold a private SP.
                                 ; Everything else that can land in that window
                                 ; - int 09h, a mouse gate frame, the floppy's
                                 ; completion - nests harmlessly, and the stack
                                 ; is sized for it
+    mov bx, sp                  ; the task's SP, in a register across the
+                                ; ROM (an ISR, it keeps every one) - it was
+                                ; [sch_chsave] (kernel size pass 16, fsx_rtick's
+                                ; shape: both arms share one chain below)
     mov ax, ss
     cmp ax, LOW_SEG             ; **ONLY ON A TASK STACK** (SPEC.md 8.5). SS is
     jne .chplain                ; LOW_SEG for every os8088 context, but not
@@ -2198,17 +2155,21 @@ sch_isr:
                                 ; ROMs do not hop; where one does, the chain
                                 ; runs in place as it did before 8.5
     inc byte [sch_chbusy]
-    mov [sch_chsave], sp
     mov sp, sch_chstack + SCH_CHSTK
+.chplain:                       ; (not a task stack: chain where we stand)
     pushf                       ; chain: BIOS ticks its count and sends EOI
     call far [sch_old08]
-    mov sp, [sch_chsave]        ; ...and the ROM's iret restored our IF=0 with
-    dec byte [sch_chbusy]       ; the flags the pushf banked, so this is back
-    jmp short .chained          ; inside the ISR's own contract
-.chplain:
-    pushf                       ; not a task stack: chain where we stand
-    call far [sch_old08]
-    jmp short .chained
+    mov sp, bx                  ; ...and the ROM's iret restored our IF=0 with
+    mov byte [sch_chbusy], 0    ; the flags the pushf banked, so this is back
+    jmp short .chained          ; inside the ISR's own contract. BOTH no-ops
+                                ; on the plain arm: SP never moved, and the
+                                ; flag was 0 at the test above (a nested IRQ0
+                                ; inside a ROM service's stack is plain too,
+                                ; and leaves it 0). Faster on the task-stack
+                                ; arm, the common one - SP by register, a
+                                ; store for the dec, one jump fewer; ~+3
+                                ; clocks on the plain arm (kernel size pass 16,
+                                ; -10)
 .chskip:
     inc word [sch_chskip]       ; the claim in SPEC.md 8.5.1 is a READING, not
                                 ; an argument: STKDIAG publishes this
@@ -2916,8 +2877,7 @@ sch_dpcol:  resw 1                      ; the death panel's pen x (SPEC.md
                                         ; 8.8); its y is the constant SDP_Y
 sch_dphc:   resb 2                      ; one hex digit, as an ASCIIZ string
 %ifndef NO_CHAINPRIV
-sch_chsave: resw 1                      ; the task's SP across the chain...
-sch_chskip: resw 1                      ; ...how many chains a nested tick has
+sch_chskip: resw 1                      ; how many chains a nested tick has
                                         ; skipped (SPEC.md 8.5.1), so the
                                         ; "one transfer in 280" claim is a
                                         ; reading. STKDIAG publishes it.
@@ -2946,7 +2906,7 @@ fsx_task:   resb 1                      ; the fsx freeze (SPEC.md 53.2):
 fsx_worker: resb 1                      ; the kept worker's slot, 0xFF none
 %ifndef NO_CHAINPRIV
 sch_chbusy: resb 1                      ; non-zero while the ROM has the chain
-%endif                                  ; (8.5, sch_chsave above)
+%endif                                  ; (8.5, sch_chskip above)
 %ifdef KERN_BIG
 sch_rbusy:  resb 1                      ; FSXF_RATE's hook is running (53.2.2)
 %endif

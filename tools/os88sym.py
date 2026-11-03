@@ -691,6 +691,32 @@ def linear(name, defines=()):
     return segment_of(name, defines) * 16 + s[name]
 
 
+# kern_mega's TABLES' TAIL (kern_mega size pass 2, kernel/mega.inc): the four
+# tables only protected mode reads live past the IDT's last gate in the
+# tables' block - above 1MB, wherever mega_layoutf put it on THIS machine -
+# so their names are `equ` OFFSETS into the tail, not labels, and linear()
+# refuses them (KeyError). tail() is the one place that knows where they are.
+TAIL = ("mx_tab", "mem_sel", "mega_wtab", "mega_ustab")
+
+
+def tail(name, read, sym, equ):
+    """The LINEAR address of tail table NAME on the running machine.
+
+    READ(addr, n) -> bytes reads guest memory, SYM(label) -> a label's linear
+    address (the harness's own), EQU the map's equates. The tail starts at
+    [mega_tbllin] + [mega_ldtend] + MEGA_IDT_SIZE: the GDT's base, the LDT on
+    it, the IDT after. Before the switch (or on a refused machine) there is
+    no tail and [mega_tbllin] says so (0): ValueError.
+    """
+    if name not in TAIL:
+        raise KeyError("%r is not in kern_mega's tables' tail" % name)
+    tb = int.from_bytes(bytes(read(sym("mega_tbllin"), 4)), "little")
+    if not tb:
+        raise ValueError("kern_mega has no tables yet (mega_tbllin is 0)")
+    le = int.from_bytes(bytes(read(sym("mega_ldtend"), 2)), "little")
+    return tb + le + equ["MEGA_IDT_SIZE"] + equ[name]
+
+
 def wfield(slot, field, defines=()):
     """The linear address of window SLOT's record field FIELD (a W_* equate).
 

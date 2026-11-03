@@ -180,21 +180,28 @@ tsp_ring:
     cmp word [tsp_rseg], 0
     jne .ok
     push ax
+    push bx
+    push cx
     push dx
-    mov ax, (TSP_RL + SPKFX_RINGEND + 1023) / 1024 ; the ring, its table
-                                    ; and the shaper's family (34.11.9)
-    call OSAPI_MEM_CLAIM
-    jc .no
+    mov ax, OS88_BYTES_PARA(TSP_RL + SPKFX_RINGEND) ; the ring, its table
+    xor cx, cx                      ; and the shaper's family (34.11.9): 19,472
+    mov bl, MEMP_CLAIM              ; bytes, in PARAGRAPHS (SPEC.md 50.3.7) -
+    call OSAPI_MEM_P                ; 19.5KB at the granule where a KB door
+    jc .no                          ; took 20
     mov [tsp_rseg], dx
     mov ax, tsp_rmove               ; MOVABLE while no play runs (45.25.6):
     call OSAPI_MEM_MOVABLE          ; tsp_start pins it, tsp_halt declares
     pop dx                          ; it again
+    pop cx
+    pop bx
     pop ax
 .ok:
     clc
     ret
 .no:
     pop dx
+    pop cx
+    pop bx
     pop ax
     push si
     mov si, trk_s_nomem

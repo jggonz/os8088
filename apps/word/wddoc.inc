@@ -1061,13 +1061,13 @@ wd_docparse:
     mov [wd_dccp], ax
     mov byte [wd_dtrunc], 1
 .fits:
-    mov ax, [wd_dccp]
-    add ax, 1023
+    mov ax, [wd_dccp]               ; <= WD_MAXKB * 1024: no carry
+    add ax, 15
     push cx
-    mov cl, 10
-    shr ax, cl
+    mov cl, 4
+    shr ax, cl                      ; the text's paragraphs...
     pop cx
-    inc ax
+    add ax, 64                      ; ...and a kilobyte to type into
     call wd_resize
     jc .no
     mov word [wd_papn], 1           ; a fresh dictionary: entry 0 is Normal

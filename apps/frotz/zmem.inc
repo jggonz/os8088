@@ -430,7 +430,7 @@ zm_pcaddr:
 
 ; =============================================================================
 ; zm_pages - build [zf_stab] over the story claim (zio.inc's zi_load)
-; in:  [zf_sseg] = the claim, [zf_skb] = its size in KB
+; in:  [zf_sseg] = the claim, [zf_spara] = its size in paragraphs
 ; out: CF = 1 a page could not be given a segment (kern_mega with no LDT entry
 ;      free): the story cannot run. Preserves every register.
 ;
@@ -448,9 +448,7 @@ zm_pages:
     push dx
     push di
     push bp
-    mov bp, [zf_skb]
-    mov cl, 6
-    shl bp, cl                      ; BP = the claim in paragraphs (<= 0x8000)
+    mov bp, [zf_spara]              ; BP = the claim in paragraphs
     mov di, zf_stab
     xor ax, ax                      ; AX = the page's paragraph offset
 .page:
@@ -545,7 +543,7 @@ zm_hgw:
 
 ; =============================================================================
 ; zm_setup - parse and validate the header, then write our half of it back
-; in:  [zf_sseg] holds the loaded story; [zf_skb] its claim in KB and
+; in:  [zf_sseg] holds the loaded story; [zf_spara] its claim in paragraphs and
 ;      [zf_slen_l]/[zf_slen_h] the file's length if zi_load knew them (0 = it
 ;      did not, and the header's own length is taken instead)
 ; out: CF = 0 and AL = ZERR_NONE, every zf_* header field cached;
@@ -679,20 +677,22 @@ zm_setup:
     mov cx, ax
     or cx, dx
     jz .nosize                      ; nobody knows the length; skip both checks
-    add ax, 1023                    ; round up to whole KB, which is the unit
+    add ax, 15                      ; round up to whole PARAGRAPHS, the unit
     adc dx, 0                       ; both the claim and the ceilings speak in
-    mov cl, 10
+    cmp dx, 16
+    jae .bad                        ; 1MB or more is past every ceiling
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
-    or ax, dx                       ; AX = length in KB
+    or ax, dx                       ; AX = length in paragraphs
     mov cl, [zm_lsc]
     dec cl
-    mov bx, 128                     ; Standard 1.1.4: 128KB v1-3, 256KB v4-5,
+    mov bx, 128 * 64                ; Standard 1.1.4: 128KB v1-3, 256KB v4-5,
     shl bx, cl                      ; 512KB v6-8 - the same ladder as the
     cmp ax, bx                      ; length divisor, which is why it is reused
     ja .bad
-    mov bx, [zf_skb]
+    mov bx, [zf_spara]
     or bx, bx
     jz .nosize
     cmp ax, bx

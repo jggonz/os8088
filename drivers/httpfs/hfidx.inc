@@ -116,11 +116,13 @@ hf_fetch:
     mov ax, HFE_INDEX
     or dx, dx
     jnz .drop
-    mov ax, cx                  ; the claim, in KB
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    call OSAPI_MEM_CLAIM_HI     ; owner = our segment: drv_release sweeps it
+    mov ax, cx                  ; the claim, in PARAGRAPHS (SPEC.md
+    add ax, 15                  ; 50.3.7): the index is a byte count held
+    mov cl, 4                   ; for the whole mount, and a whole KB of it
+    shr ax, cl                  ; is half a granule more on average
+    xor cx, cx
+    mov bl, MEMP_CLAIM_HI
+    call OSAPI_MEM_P            ; owner = our segment: drv_release sweeps it
     jnc .claimed
     mov ax, HFE_MEM
     jmp short .drop

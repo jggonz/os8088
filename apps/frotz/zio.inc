@@ -111,7 +111,7 @@ ZI_DYNMAX    equ 0E000h
 ; --- our own bss, out of zio.inc's slack in zbss.inc -------------------------
 %define zi_fsz_l      (os88_image_end + ZIO_SLACK + 0)   ; the dialog's DX:CX
 %define zi_fsz_h      (os88_image_end + ZIO_SLACK + 2)
-%define zi_kb         (os88_image_end + ZIO_SLACK + 4)   ; KB the story needs
+%define zi_para       (os88_image_end + ZIO_SLACK + 4)   ; paragraphs the story needs
 %define zi_dlg        (os88_image_end + ZIO_SLACK + 6)   ; byte: ZID_*
 %define zi_taddr      (os88_image_end + ZIO_SLACK + 8)   ; readline: text buffer
 %define zi_paddr      (os88_image_end + ZIO_SLACK + 10)  ; readline: parse buffer
@@ -291,10 +291,8 @@ zi_yield:
     sub ax, cx                      ; saved, so AX = paragraphs into it
     jb .nofix                       ; below the claim: never ours
     push dx
-    mov dx, [zf_skb]
-    mov cl, 6
-    shl dx, cl                      ; DX = the claim in paragraphs; 508KB is
-    cmp ax, dx                      ; 32,512, so this cannot overflow a word
+    mov dx, [zf_spara]              ; DX = the claim in paragraphs
+    cmp ax, dx
     pop dx
     jae .nofix                      ; past its end: not ours either
     mov ax, es
@@ -331,25 +329,6 @@ zi_zsp:
     mov ds, [zf_stkseg]
     mov [bx], ax
     pop ds
-    ret
-
-; -----------------------------------------------------------------------------
-; zi_kbof - bytes to whole KB, rounded up
-; in:  AX = a byte count; out: AX = KB. Preserves every other register.
-; -----------------------------------------------------------------------------
-zi_kbof:
-    push cx
-    push dx
-    xor dx, dx
-    add ax, 1023
-    adc dx, 0                       ; 32 bits: 0xFC00 bytes would wrap 16
-    mov cx, 10
-.shift:
-    shr dx, 1
-    rcr ax, 1
-    loop .shift
-    pop dx
-    pop cx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -642,17 +621,20 @@ zi_dlg_story:
     mov ax, cx
     or ax, dx
     jz .nofile                      ; 0 means "the listing had no size"
-    or dh, dh
-    jnz .toobig                     ; >= 16MB: not a story, and not claimable
-    add cx, 1023
-    adc dx, 0
-    mov al, ch                      ; AX = (DX:CX) >> 8 ...
-    mov ah, dl
-    mov cl, 2
-    shr ax, cl                      ; ... >> 2 again = KB, rounded up
-    mov [zi_kb], ax
+    add cx, 15                      ; PARAGRAPHS, not KB: the claim is
+    adc dx, 0                       ; rounded to the heap's granule and not
+    cmp dx, 16                      ; to a whole KB (SPEC.md 50.3.7). 1MB or
+    jae .toobig                     ; more is no conventional claim at all
+    mov ax, cx                      ; AX = (DX:CX) >> 4, DX < 16
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or ax, dx
+    mov [zi_para], ax
     push ax
-    call OSAPI_MEM_AVAIL            ; AX = the LARGEST FREE RUN, not the total
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the LARGEST FREE RUN, not the total
     pop cx
     cmp cx, ax
     ja .toobig
@@ -748,8 +730,8 @@ zi_dlg_restore:
     mov byte [zf_reqres], ZRES_FAIL
     cmp word [zi_savseg], 0
     je .done
-    mov ax, [zi_savkb]
-    mov bx, 1024
+    mov ax, [zi_savpara]
+    mov bx, 16
     mul bx                          ; DX:AX = the staging capacity in bytes
     cmp [zi_fsz_h], dx
     ja .toobig
@@ -788,7 +770,7 @@ zi_dlg_restore:
 
 ; =============================================================================
 ; zi_load - UI task: claim, read and start the story named in [zi_name]
-; in:  [zi_name], [zi_kb], [zi_fsz_l]/[zi_fsz_h]; the gfx lock is HELD
+; in:  [zi_name], [zi_para], [zi_fsz_l]/[zi_fsz_h]; the gfx lock is HELD
 ; out: CF = 1 refused (with the reason already on screen); preserves nothing
 ;
 ; Every claim Frotz will hold is made here, in this order, and the order is
@@ -807,29 +789,34 @@ zi_load:
                                     ; zm_setup, whose zt_f2keep would otherwise
                                     ; carry the last story's bit into this one
 
-    mov ax, [zi_kb]
-    call OSAPI_MEM_CLAIM            ; out CF=0 and DX = the base SEGMENT
-    jc .nomem
+    mov ax, [zi_para]
+    xor cx, cx                      ; no DMA head
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; out CF=0, DX = the base SEGMENT and AX =
+    jc .nomem                       ; the paragraphs GRANTED, which are ours
+    mov [zi_para], ax
     ; A SELECTOR (kern_mega: every claim is one, KERN-MEGA-MEMORY-PLAN MC7)
     ; faults past its end where a segment reads garbage, and a story may name
     ; any 16-bit address through [zf_sseg] (zmem.inc's <64KB arm): so a claim
     ; under 64KB is made 64KB there, and every such address is inside it. A
     ; bigger claim's selector already covers its first 64KB, and the pages
     ; past that are zm_pages'. Bit 2 is TI: a real-mode claim is 512-byte
-    ; aligned and never has it, so this costs the XT nothing.
+    ; aligned and never has it, so this costs the XT nothing. The 64KB one
+    ; stays on the KB door ON PURPOSE: as an OS88_HIGHMEM claim of 64KB it
+    ; goes above 1MB, where OSAPI_MEM_P's would be conventional memory.
     test dl, 4
     jz .claimed
-    cmp word [zi_kb], 64
+    cmp ax, 64 * 64
     jae .claimed
     call OSAPI_MEM_FREE
     mov ax, 64
-    mov [zi_kb], ax
     call OSAPI_MEM_CLAIM
     jc .nomem
+    mov word [zi_para], 64 * 64
 .claimed:
     mov [zf_sseg], dx
-    mov ax, [zi_kb]
-    mov [zf_skb], ax
+    mov ax, [zi_para]
+    mov [zf_spara], ax
     call zm_pages                   ; the page table: a segment per 32KB
     jc .nomem                       ; (kern_mega: no LDT entry for one)
 
@@ -896,17 +883,24 @@ zi_load:
     ; frame chain, and fifty-two bytes of chunk headers and pads. The chain is
     ; never longer in Quetzal than in our own stack - eight bytes of frame
     ; header against our ten - so dynamic memory + ZI_STKKB + 52 bytes is the
-    ; most a save can be, and ONE more KB covers the 52 with 972 to spare.
-    ; The undo snapshot is twelve bytes of registers + dynamic memory + the
-    ; stack as it stands, which the same figure covers. It was + 2 KB, which
-    ; was a whole KB of every running story's heap, twice.
+    ; most a save can be, and FOUR more paragraphs cover the 52 with 12 to
+    ; spare. The undo snapshot is twelve bytes of registers + dynamic memory
+    ; + the stack as it stands, which the same figure covers. It was + 1 KB
+    ; and the dynamic memory in whole KB, which was up to two KB of every
+    ; running story's heap, twice: in paragraphs it is the granule's rounding
+    ; alone, and what the granule grants on top is ours (SPEC.md 50.3.7).
     mov ax, [zf_static]             ; the length of dynamic memory
     mov [zi_dyn], ax
-    call zi_kbof
-    add ax, ZI_STKKB + 1
-    mov [zi_savkb], ax
-    call OSAPI_MEM_CLAIM
+    add ax, 15                      ; a header word: 17 bits, so the carry
+    rcr ax, 1                       ; comes back in as bit 15
+    mov cl, 3
+    shr ax, cl
+    add ax, ZI_STKKB * 64 + 4
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; AX = the paragraphs granted
     jc .nosave
+    mov [zi_savpara], ax
     mov [zi_savseg], dx
     mov ax, zf_reloc            ; ...AND IT MOVES (NO-PINNING A3): the worker
     call OSAPI_MEM_MOVABLE      ; stages into it and parses out of it with ES
@@ -916,17 +910,19 @@ zi_load:
                                 ; (zi_savpin)
     jmp short .undo
 .nosave:
-    mov word [zi_savkb], 0
+    mov word [zi_savpara], 0
     mov si, zi_m_nosave
     call zw_notice
 
 .undo:
     ; @save_undo is allowed to answer "cannot" (Standard 6.1.2), so this claim
     ; is asked for and not insisted on.
-    mov ax, [zi_savkb]
+    mov ax, [zi_savpara]
     or ax, ax
     jz .script
-    call OSAPI_MEM_CLAIM
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .noundo
     mov [zi_undoseg], dx
     mov ax, zf_reloc            ; one word too, and NOT a file target - a
