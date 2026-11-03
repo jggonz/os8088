@@ -17,7 +17,10 @@ in place):
   1. "ovrtest: 0 wrong": a 100-byte moveable block's selector reaches
      exactly GlobalSize; a GlobalReAlloc to 6000 bytes with a fixed block
      after it answers the SAME selector, with the new limit and the old
-     bytes, and its last byte is writable (w16_phfix, w16s_gwin);
+     bytes, and its last byte is writable (w16_phfix, w16s_gwin); and a
+     40 KB moveable block grown to 80 KB reads back whole through
+     __AHINCR, past 64 KB as well as before it (w16_pblk's tiles after a
+     grow, WIN16-NEXT-PLAN N1);
   2. "ovrtest: armed ...": it is about to write one byte past the block;
   3. kern_mega CLOSES WIN16 for the fault (`faults()`'s CLOSED line, vector
      0D) - and OVRTEST.TXT never gets "SURVIVED the overrun".

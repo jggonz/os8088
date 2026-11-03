@@ -17010,9 +17010,10 @@ SOAK = [
     Row("win16big", "soak", py("tests/win16big.py"), 60.0,
         "SPEC.md 124.20, WIN16-ANY-PLAN S15: BIG.EXE (`make win16fixtures`, "
         "tests/win16/big.c) - 17 code segments and about 155 KB of code, each "
-        "of sixteen functions far-called forward and back, and a 128 KB "
+        "of sixteen functions far-called forward and back, a 96 KB "
         "GlobalAlloc block written through a __huge pointer and read back by "
-        "adding __AHINCR (KERNEL.114) to the segment. Its MessageBox, read "
+        "adding __AHINCR (KERNEL.114) to the segment, and a 40 KB block "
+        "GlobalReAlloc grows to 80 KB, read back the same way. Its MessageBox, read "
         "off the program's stack, must be the sums the row computes itself",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",

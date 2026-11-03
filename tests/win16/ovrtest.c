@@ -11,6 +11,12 @@
  *   ovrtest: armed <selector> limit <limit>            just before the overrun
  *   ovrtest: SURVIVED the overrun                      only when it did not fault
  *
+ * Before the overrun it grows a 40 KB moveable block to 80 KB with
+ * GlobalReAlloc and reads the whole of it back through __AHINCR: the 40 KB
+ * written before the grow and the 40 KB after it, past 64 KB (WIN16-NEXT-PLAN
+ * N1: a grown block's selector that reached only its first 64 KB). A wrong
+ * byte is the check "grow".
+ *
  * tests/win16ovr.py reads the file: the first line must say 0 wrong, the
  * second must be there and the third must not. In real mode (every kernel
  * but kern_mega) it says so on one line and overruns nothing.
@@ -19,6 +25,15 @@
 #include <stdio.h>
 #include <string.h>
 #include <dos.h>
+
+/* KERNEL.114, imported by ovrtest.wlk: its OFFSET is the value, the
+ * selector step to the next 64 KB of a block */
+extern char __far __AHINCR;
+#pragma aux __AHINCR "*"
+
+#define GROW_A 40960L
+#define GROW_N 81920L
+#define GROW_B(i) ((unsigned char)((i) * 5 + ((i) >> 8)))
 
 static char res[256];
 static char path[128];
@@ -31,6 +46,45 @@ static void check(int ok, const char *tag)
         strcat(res, " ");
         strcat(res, tag);
     }
+}
+
+/* the grow: a 40 KB block made 80 KB, every byte read back across 64 KB */
+static void grow(void)
+{
+    HGLOBAL g, g2;
+    unsigned char __huge *p;
+    unsigned char __far *b;
+    unsigned incr = (unsigned)(void __near *)&__AHINCR;
+    long i;
+    unsigned bad = 0;
+
+    g = GlobalAlloc(GMEM_MOVEABLE, GROW_A);
+    check(g != 0, "growalloc");
+    if (!g)
+        return;
+    p = (unsigned char __huge *)GlobalLock(g);
+    for (i = 0; i < GROW_A; i++)
+        p[i] = GROW_B(i);
+    GlobalUnlock(g);
+    g2 = GlobalReAlloc(g, GROW_N, GMEM_MOVEABLE);
+    check(g2 != 0, "growrealloc");
+    if (!g2) {
+        GlobalFree(g);
+        return;
+    }
+    check(GlobalSize(g2) >= GROW_N, "growsize");
+    p = (unsigned char __huge *)GlobalLock(g2);
+    for (i = GROW_A; i < GROW_N; i++)
+        p[i] = GROW_B(i);
+    for (i = 0; i < GROW_N; i++) {
+        b = (unsigned char __far *)MK_FP(FP_SEG(p) +
+                (unsigned)(i >> 16) * incr, (unsigned)i);
+        if (*b != GROW_B(i))
+            bad++;
+    }
+    check(bad == 0, "grow");
+    GlobalUnlock(g2);
+    GlobalFree(g2);
 }
 
 static void line(const char *s, int fresh)
@@ -104,6 +158,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(q[5999] == 0x5A, "tail");
     if (pad)
         GlobalFree(pad);
+    grow();
 
 done:
     if (fails)
