@@ -311,8 +311,8 @@ had added.
     "bss": 5411,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37455,
-    "coldpara": 2341,
+    "cold": 37467,
+    "coldpara": 2342,
     "colds": 3758,
     "fatpara": 288,
     "fats": 2976,
@@ -333,7 +333,7 @@ had added.
     "vgabuf": 336,
     "vgabufpara": 21,
     "vgars": 3631,
-    "vgas": 6099
+    "vgas": 6100
   },
   "emu": {
     "blobseg": 6272,
@@ -342,8 +342,8 @@ had added.
     "bss": 5411,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37455,
-    "coldpara": 2341,
+    "cold": 37467,
+    "coldpara": 2342,
     "colds": 3790,
     "fatpara": 288,
     "fats": 3008,
@@ -364,7 +364,7 @@ had added.
     "vgabuf": 336,
     "vgabufpara": 21,
     "vgars": 3663,
-    "vgas": 6131
+    "vgas": 6132
   },
   "mega": {
     "blobseg": 8480,
@@ -373,7 +373,7 @@ had added.
     "bss": 5449,
     "budget": 68096,
     "codemax": 65536,
-    "cold": 45641,
+    "cold": 45653,
     "coldpara": 2880,
     "colds": 4000,
     "fatpara": 288,
@@ -802,7 +802,7 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,424 | 37.7% |
+| the file system, end to end | 29,436 | 37.7% |
 | the window system and its furniture | 22,161 | 28.4% |
 | drawing: adapters, primitives, glyphs, icons | 10,694 | 13.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 7,770 | 10.0% |
@@ -810,7 +810,7 @@ there and nowhere else.
 | the Control Panel | 292 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 287 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **78,031** | |
+| **total** | **78,043** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -818,7 +818,7 @@ there and nowhere else.
 |---|---:|---:|---:|---:|---:|---:|
 | `files.inc` — the Disk window (§22) | 1,164 | 7,870 | **9,034** | 572 | — | — |
 | `wm.inc` — the window manager (§11) | 8,659 | 154 | **8,813** | 1,152 | — | 34 |
-| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 398 | 6,723 | **7,121** | 416 | — | — |
+| `disk.inc` — volumes, mount, the FAT read path (§18–19) | 398 | 6,725 | **7,123** | 416 | — | — |
 | `diskw.inc` — the FAT write path (§18.4–18.6) | 24 | 4,953 | **4,977** | 180 | — | — |
 | `vga12.inc` — the VGA planar primitives (§5) | 3,524 | 1,406 | **4,930** | 38 | 526 | — |
 | `mouse.inc` — serial mouse and the cursor (§9) | 3,741 | — | **3,741** | 111 | 824 | — |
@@ -831,7 +831,7 @@ there and nowhere else.
 | `driver.inc` — loadable drivers + `SYSTEM.CFG` (§51) | 472 | 1,537 | **2,009** | 388 | — | 2,041 |
 | `desk.inc` — the desktop and volume zones (§14/§26.1) | 23 | 1,885 | **1,908** | 91 | — | — |
 | `instance.inc` — instances and the built-in kinds (§29) | 1,657 | 126 | **1,783** | 705 | — | — |
-| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,663 | **1,663** | 152 | — | — |
+| `filecp.inc` — Cut/Copy/Paste (§22.3–22.5) | — | 1,673 | **1,673** | 152 | — | — |
 | `loader.inc` — the package loader (§21) | 4 | 1,346 | **1,350** | 48 | — | — |
 | `sched.inc` — pre-emptive scheduling (§7–8) | 1,299 | — | **1,299** | 210 | 2,944 | — |
 | `softgfx.inc` — the software renderer, §39.5's 1bpp driver (§32) | 1,241 | — | **1,241** | 20 | — | — |
@@ -877,7 +877,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,173 | 277 | **2,450** | — | — | 666 |
-| **total** | **40,576** | **37,455** | **78,031** | **5,411** | **5,358** | **6,455** |
+| **total** | **40,576** | **37,467** | **78,043** | **5,411** | **5,358** | **6,455** |
 <!-- END generated table -->
 
 ### Reading it

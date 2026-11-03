@@ -5372,9 +5372,15 @@ mega_hibnc:
     pusha                           ; the loop's state is in BX CX DX SI DI
     push es                         ; and ES, so they are banked rather than
     int 0x13                        ; trusted to the ROM (14.135); native or
-    pop es                          ; reflected, the landing low. AX's answer
-    popa                            ; is never read, CF is, and pop/popa
-    jc .err                         ; keep it
+    pop es                          ; reflected, the landing low. CF is read,
+    jnc .ixok                       ; and on a failure AH is too: the ROM's
+    push bp                         ; status goes into the banked run word,
+    mov bp, sp                      ; under the pusha frame, before popa
+    mov [ss:bp+19], ah              ; throws AX away (mov, push and pop
+    pop bp                          ; write no flag)
+.ixok:
+    popa
+    jc .err
     pop ax                          ; AL = this run's sectors, AH = the call
     cmp ah, 2
     jne .adv
@@ -5408,7 +5414,8 @@ mega_hibnc:
     and byte [ss:bp+26], 0xFE
     jmp short .ans
 .err:
-    pop cx                          ; (this run's sectors: not moved)
+    pop ax                          ; AH = the ROM's status (.xfer), AL this
+                                    ; run's sectors: not moved
     or byte [ss:bp+26], 1
 .ans:
     mov al, [ss:bp+18]              ; AL = the sectors moved: the caller's

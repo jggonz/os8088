@@ -477,15 +477,16 @@ mem_movable_x:
 
 ; --- THE READ-AHEAD'S LADDER (SPEC.md 96.44.11) ------------------------------
 ; The one claim this allocator ever holds is `disk.inc`'s directory read-ahead,
-; and it takes **32 KB** - the `DSK_RAH_RUNS` ceiling, because it solves its
+; and it takes **31.5 KB** - the `DSK_RAH_RUNS` ceiling, because it solves its
 ; width from `mem_avail_lvl_x`, which here answers the whole arena. That is
 ; memory the DOS program is going to want, so it is given back a RUNG AT A
 ; TIME rather than all at once, and the rungs are widths the cache is still
 ; useful at.
 ;
-; `(runs * 9 + 1) >> 1` is the KB a width costs - `dsk_rah_want`'s own
-; arithmetic, mirrored here because the two have to agree to the byte or the
-; base moves somewhere the slots do not follow.
+; `runs * 288` is the PARAGRAPHS a width costs - `dsk_rah_want`'s own
+; arithmetic (it claims through `mem_claimp_x`), mirrored here because the two
+; have to agree to the byte or the base moves somewhere the slots do not
+; follow. A KB mirror rounds an odd width up by 512 bytes and did exactly that.
 %ifndef KD_RAH_KEEP
 KD_RAH_KEEP equ 2               ; **WHAT THE PROGRAM DOES NOT GET** (SPEC.md
 %endif                          ; 96.44.11.4): the width `kd_giveback` stops
@@ -494,7 +495,7 @@ KD_RAH_KEEP equ 2               ; **WHAT THE PROGRAM DOES NOT GET** (SPEC.md
                                 ; program everything - and it is measured, not
                                 ; assumed: see 96.44.11.4 for what each rung
                                 ; costs the program and buys the drive
-KD_RAH_L1   equ 4               ; 7 runs = 32 KB, and the rungs below it:
+KD_RAH_L1   equ 4               ; 7 runs = 31.5 KB, and the rungs below it:
 KD_RAH_L2   equ 2               ; 4 = 18 KB, 2 = 9 KB, 0 = gone. Two is under
                                 ; `DSK_RAH_MIN`'s "worth having" floor on
                                 ; purpose: by the time this rung is reached the
@@ -505,17 +506,20 @@ KD_RAH_L2   equ 2               ; 4 = 18 KB, 2 = 9 KB, 0 = gone. Two is under
   %error "kd_shed may narrow the read-ahead to 0 or to a width of at least two, never one: dsk_rah_fill's page-straddle skip (SPEC.md 18.95.7.1) takes the NEXT slot, and at width one there is none"
 %endif
 
-; kd_rahkb - what a width costs, in KB
-; in:  AX = runs; out: AX = KB; clobbers AX (the output)
-kd_rahkb:
+; kd_rahpara - what a width costs, in paragraphs
+; in:  AX = runs; out: AX = paragraphs; clobbers AX (the output)
+kd_rahpara:
     push bx
     mov bx, ax
     shl ax, 1
     shl ax, 1
     shl ax, 1
     add ax, bx                  ; n*9 (a chunk is DSK_RAH_SECS = 9 sectors)
-    inc ax
-    shr ax, 1                   ; ...and KB = ceil(n * 4.5)
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1
+    shl ax, 1                   ; ...and n * 288 paragraphs, no CL so CX lives
     pop bx
     ret
 
@@ -557,8 +561,8 @@ kd_shed:
                                 ; it is CHECKED, and a shed that cannot prove
                                 ; it simply keeps the cache
     mov ax, [dsk_rah_runs]
-    call kd_rahkb
-    mov cx, ax                  ; CX = the KB we hold
+    call kd_rahpara
+    mov cx, ax                  ; CX = the paragraphs we hold
     mov ax, [dsk_rah_runs]
     xor dx, dx                  ; DX = the width we are going to
     cmp ax, KD_RAH_L1
@@ -571,15 +575,13 @@ kd_shed:
     mov dx, KD_RAH_L2
 .have:
     mov ax, dx
-    call kd_rahkb
-    sub cx, ax                  ; CX = the KB this rung releases
+    call kd_rahpara
+    sub cx, ax                  ; CX = the paragraphs this rung releases
     jbe .none                   ; a ladder whose rungs cost the same would spin
     call dsk_rah_flush          ; no record may name a chunk we are giving away
     mov word [dsk_rah_next], 0  ; ...and no cursor may point past the new width
     mov [dsk_rah_runs], dx
-    mov ax, cx
-    mov cl, 6
-    shl ax, cl                  ; KB -> paragraphs
+    mov ax, cx                  ; at most 7 * 288 = 2,016, a word
     add [kd_top], ax
     or dx, dx
     jz .gone

@@ -2785,6 +2785,7 @@ mem_cp_dest:
     sub di, [ss:si+MC_PARA]
 .page:
     push cx                     ; CX is the walk's largest run. NOT AX: it is
+.pchk:
     mov ax, [ss:si+MC_DMA]      ; the walk's scratch, and the one caller banks
     and ax, MC_DMA_HEAD         ; it at its own entry (size pass 10). AX = the
     jz .out                     ; page-safe head, 0 = no constraint (bit 15 is
@@ -2821,9 +2822,11 @@ mem_cp_dest:
     jne .adn                    ; with the walk's rule that a destination
     add di, 31                  ; never moves the wrong way; one that would
     and di, -32                 ; pass the base is "leave it", as above
-    cmp di, [ss:si+MC_SEG]
-    jbe .aok
-    jmp short .astay
+    cmp di, [ss:si+MC_SEG]      ; ...and rounding UP can push the head over
+    jbe .pchk                   ; a page floor the test above passed, so the
+    jmp short .astay            ; aligned base is tested again (32-aligned
+                                ; now, so it ends at .aok, a page floor or
+                                ; .stay - MC_SEG - on that second pass)
 .adn:
     and di, -32
     cmp di, [ss:si+MC_SEG]

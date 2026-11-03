@@ -1795,11 +1795,6 @@ fcp_xfer:
     mov [fcp_rcur+FSEQ_OFF], di ; offset 0. A generation of 0 can never be
     mov [fcp_rcur+FSEQ_OFF+2], di   ; hot - [dsk_mgen] starts at 1 and moves
                                 ; in twos - so the rest needs no zeroing
-  %ifdef FPG_OPS
-    mov si, fcp_fname           ; the size, for the OPERATION's scale
-    FCPX dskw_stat_x
-    jc .err
-  %endif
 %else
     mov si, fcp_fname           ; open the streaming read, in the CURRENT
     FCPX dskw_stat_x            ; directory: BX = first cluster, DX:CX = size
@@ -1819,11 +1814,6 @@ fcp_xfer:
     ; bytes comes back only for an EMPTY file's first chunk - fcp_rdnext's
     ; take is min(what is left, the chunk) and the loop goes round only while
     ; something is left - and that creates a real empty file.
-%ifdef FPG_OPS
-    shl cx, 1                   ; the copy is ONE operation to the user: its
-    rcl dx, 1                   ; read and its write, every chunk of both, on
-    call KERNEL_SEG:fpg_opbegin ; one bar (SPEC.md 12.8)
-%endif
 .chunk:
     call fcp_rdnext             ; AX = bytes; a chain that ended early says so
     jc .err
@@ -1840,6 +1830,15 @@ fcp_xfer:
     jc .err
     cmp byte [fcp_made], 0
     jne .more
+%ifdef FPG_OPS
+    mov cx, [fcp_rcur+RSQ_SIZE] ; the copy is ONE operation to the user: its
+    mov dx, [fcp_rcur+RSQ_SIZE+2]   ; read and its write, every chunk of
+    shl cx, 1                   ; both, on one bar (SPEC.md 12.8.8) - armed
+    rcl dx, 1                   ; HERE, off the size READ_SEQ's first call
+    sub cx, FCV(fcp_flen)       ; statted, and less that first chunk, whose
+    sbb dx, 0                   ; read nothing counted. fcp_room clobbers DX
+    call KERNEL_SEG:fpg_opbegin ; and fcp_wprep reloads CX
+%endif
     call fcp_room               ; ...but ASK FIRST (SPEC.md 22.5.2). Here and
     mov ax, FERR_FULL           ; not earlier, because this is the first moment
     jc .err                     ; the destination volume is current - so the

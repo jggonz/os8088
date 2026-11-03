@@ -1600,6 +1600,8 @@ dsk_xfer:
     je .success                 ; 12.8.8): a DVK_DRV volume - HDD.DRV's C: -
     call dsk_fpgdata            ; (its data sectors, as .count's)
     jc .success
+    jcxz .success               ; [a 0-count piece moves nothing, and `loop`
+                                ; would step the bar 65,536 times for it]
 .drvnotch:                      ; leaves before .notch ever runs, so a copy
     mov bp, fpg_step            ; onto one counted its reads and not one of
     call ct_cw_mem_disp         ; its writes and ended at half the bar. Per

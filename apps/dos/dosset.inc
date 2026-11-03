@@ -1092,9 +1092,9 @@ dos_cache_give:
 ; dos_cache_kb - what the dial is asking the cache to cost, in KB
 ; out: CX = the KB; AX and every other register preserved
 ;
-; `(runs * 9 + 1) >> 1` is `dsk_rah_want`'s own arithmetic and `kd_rahkb`'s,
-; mirrored here for the same reason those two mirror each other: a figure on
-; the glass that disagrees with the claim is worse than no figure.
+; `(runs * 9 + 1) >> 1` is the claim `dsk_rah_want` and `kd_rahpara` make
+; (`runs * 288` paragraphs) in whole KB, an odd width's half KB rounded up:
+; a figure on the glass that disagrees with the claim is worse than no figure.
 ; -----------------------------------------------------------------------------
 dos_cache_kb:
     push ax

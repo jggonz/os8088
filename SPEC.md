@@ -27509,7 +27509,10 @@ once and sets `FPG_OP` (bit 3 of `[fpg_on]`). Until the end clears it
   rows install onto cannot show it.
 - **`fpg_finish` clears the whole byte** and with it the operation, so there
   is still no bracket to forget. `fcp_xfer` is the first caller: one
-  operation per file, twice the source's size.
+  operation per file, twice the source's size less its first chunk - armed
+  after that chunk is read, off the size `READ_SEQ`'s first call statted, so
+  a copy pays no second stat of the name and the read nothing counted is not
+  in the scale.
 - **`fpg_opbegin` refuses while any operation is owned** (`[fpg_pown]` not
   `FPG_NOWN` = 0FEh, §12.8.9), so a kernel operation inside a package's is not a second
   scale.
@@ -50161,8 +50164,10 @@ next pass (at most one tick later), exactly as it spends a double-click
 **THE ENTRY PROC THEN REFUSES, and the refusal is SILENT.** `assoc_run`
 finds `[assoc_dapp]` standing again after `ld_run_name` returns - it consumed
 the slot before the load, so only a post made during it can have put one
-back - and treats the refusal as a hand-on: no `ld_say_status` (so no `Load
-failed` toast), no `files_refresh` (so no whole-screen repaint, which
+back; *standing* means a slot or `ASSOC_FIND`, below `ASSOC_FLUSH`, because
+the flush `assoc_locate` posts when it learns where the program was found is
+not a hand-on and must not cost the launch its handover - and treats the
+refusal as a hand-on: no `ld_say_status` (so no `Load failed` toast), no `files_refresh` (so no whole-screen repaint, which
 `ld_owed` charges any other `LD_EABORT`), only `assoc_back`. The loader's
 abort path still sweeps the instance's windows and frees its region and
 every claim (§20.2), so nothing of the refusing package outlives it.
@@ -187532,9 +187537,12 @@ correct only because every caller happens to RAISE the top.
 ##### 96.44.11.1 The ladder, and where its rungs can actually fire
 
 The cache is **purgeable** here, in rungs: `kd_shed` steps `[dsk_rah_runs]`
-7 → `KD_RAH_L1` → `KD_RAH_L2` → 0, which is **32 KB → 18 → 9 → gone**. Not
-32/16/8: a slot is `DSK_RAH_SECS` = 9 sectors and the kernel sizes the claim as
-`ceil(n × 4.5 KB)` (§18.95.5), so the reachable widths are multiples of 4.5.
+7 → `KD_RAH_L1` → `KD_RAH_L2` → 0, which is **31.5 KB → 18 → 9 → gone**. Not
+32/16/8: a slot is `DSK_RAH_SECS` = 9 sectors and the kernel claims exactly
+`n × 288` paragraphs through `mem_claimp_x` (§18.95.5), so the reachable widths
+are multiples of 4.5. `kd_shed` measures each rung in those same paragraphs
+(`kd_rahpara`): a KB mirror rounds an odd width up by 512 bytes, which moved
+the surviving base above the claim's own top.
 `KD_RAH_L1` = 4 slots is `DSK_RAH_MIN` exactly — the kernel's own documented
 floor, *"18KB of claim behind a 36KB bar and 93% of what the ceiling saves"* —
 and `KD_RAH_L2` = 2 is deliberately below it, because at that point the

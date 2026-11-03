@@ -262,14 +262,15 @@ toast_show:
     inc di
     loop .cp
 .end:
-    mov byte [di], 0
 %ifdef TOAST_Q
     pop cx                      ; the TTL
     cmp di, bx
 %else
     cmp di, toast_buf
 %endif
-    je .kill                    ; nothing sayable: this is a retire
+    je .kill                    ; nothing sayable: this is a retire, and it
+    mov byte [di], 0            ; writes NO slot - BX may be toast_qbuf, the
+                                ; queued record of a raiser that is not us
 %ifdef TOAST_Q
     mov [bx+TOAST_RTTL], cx     ; the RECORD's TTL and raiser, either slot's
     mov [bx+TOAST_RINST], dh    ; (so a closing app takes its own message)
