@@ -2644,8 +2644,10 @@ endif
 # it is no mod_tab row and the kernel never loads it - System Check does, from
 # the folder SYSCHECK.O88 sits in - so it ships where $(SYSTOOLS) does and on
 # util360's root beside it, and never on the 360KB system disk, which has no
-# room for it. It is kern_big's alone, as System Check is.
-FSCKMOD = $(BUILD)/fscheck.drv
+# room for it. It is kern_big's alone, as System Check is - and only
+# kern_big's kernel build cuts it (-m 10 below), so a KERN_SMALL=1 tree has
+# none to put on a disk.
+FSCKMOD = $(if $(KERN_SMALL),,$(BUILD)/fscheck.drv)
 KMODARGS = -m 0=$(BUILD)/ctrl.drv -m 1=$(BUILD)/format.drv \
            -m 2=$(BUILD)/diskops.drv
 # ...and kern_small's FIFTH and SIXTH, Cut/Copy/Paste (SPEC.md 22.3, MOD_FCP)

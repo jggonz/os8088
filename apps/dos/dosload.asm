@@ -697,7 +697,13 @@ dsl_opend:
 
 dsl_crow equ os88_image_end + OP_BSS    ; the CORE row, banked before the fetch
 %ifndef DOS_WIN16                       ; that spends it
+%ifdef DOS_MEGA
 DSL_BSS  equ OP_ROW
+%else
+dsl_head equ dsl_crow + OP_ROW          ; never set without dsl_w16, which is
+                                        ; what reads a link: 0, the zeroed bss
+DSL_BSS  equ OP_ROW + 1
+%endif
 %else
 dsl_doc  equ dsl_crow + OP_ROW          ; the document's 16-byte locator, as
                                         ; OSAPI_ARG_FILE answered (SPEC.md

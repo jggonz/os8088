@@ -12558,11 +12558,13 @@ dos_hne_ask:
     mov al, [dos_vol]
     stosb
     mov byte [dos_hne], 0
+%ifdef DOS_WIN16                        ; no WIN16 to hand an NE to, no NE
     cmp byte [dos_name], 0
     je .known
     call dos_w16_isne
     jnc .known
     mov byte [dos_hne], 1
+%endif
 .known:
     cmp byte [dos_hne], 0
     je .r
