@@ -100,6 +100,13 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
 - [ ] **Q1: a protected-mode fault in program code takes the machine down.**
   - With DS = SS = the program's DGROUP, `mega_fown` does not attribute the fault to WIN16. The result is "FAULT 0D … reboot", where it should close the package.
   - The kernel has to recognise a WIN16 program's selectors as WIN16's: the LDT range WIN16 owns, or a registered owner word in the shape of D2's hook.
+  - **Seen under Bochs in N3 (#327, `win16ovr`).** OVRTEST's write one byte past its block raises the #GP that N1 promised. But `[mega_infault]` = 1 and the machine stops, where Windows would close the program.
+  - **Why the kernel cannot tell who owns the fault.**
+    - `mega_cs2ds` assumes an image's code/data selector pair, with the data selector 8 above the code selector.
+    - `mega_fown` then searches conventional paragraphs below A000.
+    - A WIN16 program's CS is a SUB or tile selector over WIN16's memory, which has been above 1 MB since S22 batch 9. So neither test finds an owner.
+  - **The proposed fix** is to attribute a CS that is not an image pair by its descriptor's BASE, the way 14.137's `mega_bown` does: a pool block's `MX_OWN`, or `mem_tab`'s `MC_OWN` below 1 MB. It needs its own owner rows.
+  - **Check, not yet done:** whether the +8 assumption can blame a fault on whichever package owns the selector 8 above the faulting one. If it can, it would close the WRONG package, which is worse than halting.
 
 - [ ] **Q2: real mode's STACK OVERFLOW TASK 00 (UI task)** during `win16xvol`'s copy across volumes on `kern_big`.
   - The copy still finishes and reports XVOL OK.
