@@ -126,7 +126,12 @@ def leg_d(work, bimg, bad):
                    capture_output=True)
     subprocess.run(["mcopy", "-i", aimg, lnk, "::AUTOSTRT/T16.LNK"], env=env,
                    check=True, capture_output=True)
-    with os88ui.boot(aimg, apps=bimg, machine=XT, verbose=False) as ui:
+    # quick: launch's own picture settle runs before os88ui turns the saver
+    # off, and with the link's MessageBox up and no input the saver came on
+    # inside it (seen: sea life at 90 guest seconds, and "the desktop never
+    # appeared" in N3's re-run soak); every look below is a guest read
+    with os88ui.boot(aimg, apps=bimg, machine=XT, verbose=False,
+                     quick=True) as ui:
         got = {}
 
         def w16():
