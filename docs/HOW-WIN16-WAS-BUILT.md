@@ -4577,6 +4577,7 @@ The numbers, all looks on QEMU:
 | | LDT entries at the peak, of 1,992 |
 |---|---:|
 | before the stopgap | ran out |
+| the stopgap (a selector to the claim's end), at the last dialog | 1,825 |
 | handle descriptors alone | 1,859 |
 | plus the first walk sites | 1,740 |
 | plus the four traced sites, to the copy's end | 1,635 |

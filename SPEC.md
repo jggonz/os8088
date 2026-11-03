@@ -99593,13 +99593,19 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   recorded in `mega_wtab` under the caller, its row's byte 3 marking it
   bound. `SEG_WIN`, `SEG_AT` and `SEG_WINL` naming one of the caller's own
   as the window to re-aim **re-bind** it when, and only when, the new base
-  lies in a claim or a pool block: the reach is clipped at that block's end
+  lies in a claim or a pool block **of the caller's own** (`mega_bown`: a
+  conventional claim recorded under its slot, a pool block under 0A0h |
+  slot or a driver's 0C0h | row): the reach is clipped at that block's end
   and a pool block is flagged as `SEG_BWIN` flags it (`mega_wbind`, the one
   body the two share), so it is a bound window of that block from then on
   and the old block's free and moves no longer touch it. Aimed outside every
   block it is passed over and the caller gets a window of its own, because
   a bound window there would be freed and moved with no block (KERN-MEGA-PLAN
-  14.135, 14.137). A
+  14.135, 14.137); so is one aimed into ANOTHER owner's block, or `SEG_AT`
+  would bind a window into another package's memory, which 14.135 closed
+  for `SEG_FREE`. A window is tied to its block by its base alone, so after
+  a re-bind the old block's free and moves no longer touch it and the new
+  block's do. A
   SUB, SUBC pair or bound window left past a claim's end when a regrow or
   a re-home's trim shrinks it is freed with the space (`mega_mpgap`,
   KERN-MEGA-PLAN 14.135). **`SEG_AIM`** re-aims it to a 32-bit byte offset into the block,
@@ -238059,9 +238065,11 @@ what the numbers mean**:
   complete*): the LDT's present entries go from 1,367 to a high-water of
   **1,658 of its 1,992**, 15 of them handle descriptors (WIN16's two walk
   descriptors among them), reached at the last dialog's bitmap.
-  Before the handle descriptors the setup ran the LDT out (`FAULT 0D` in
-  `w16vt_esax`): the Setup Toolkit's grow-by-a-paragraph loop handed out
-  395 distinct selectors over 25 block positions. With them alone the
+  Before D1 the setup ran the LDT out (`FAULT 0D` in `w16vt_esax`): the
+  Setup Toolkit's grow-by-a-paragraph loop handed out 395 distinct
+  selectors over 25 block positions. With D1's stopgap, a selector to the
+  claim's end, the peak was 1,825 at the last dialog (92%). With the
+  handle descriptors alone the
   high-water was 1,859; the first walk sites took it to 1,740 and the
   last four (a new block's header, a split's remainder header twice, a
   freed block's header) to 1,635 by the copy's end, which the last

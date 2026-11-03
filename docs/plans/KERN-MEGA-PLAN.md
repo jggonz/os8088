@@ -13514,8 +13514,27 @@ window. `mega_segbw` calls the same routine, so the inline lookup it had
 is gone. WIN16 frees a window it was answered fresh, so a refused
 re-bind leaks no LDT entry.
 
+**Conditions (the lead's, 2026-11-03).**
+- **Only into the caller's OWN block.** `mega_bown` checks that the
+  block the new base lies in belongs to the window's owner: a conventional
+  claim's `MC_OWN` against the slot, or a pool block's `MX_OWN` against
+  0A0h | slot (a driver's 0C0h | row). A base inside anyone else's block
+  gets a fresh window, as outside every block. Otherwise `SEG_AT` would
+  bind a window into another package's memory, which 14.135 closed for
+  `SEG_FREE`. `SEG_BWIN` makes no such test of the selector it is handed,
+  and was left as it is.
+- **The old block forgets it.** A window is tied to its block by its base
+  alone: the free and a move each look for descriptors based inside the
+  block. So after the re-bind the old block's free and moves no longer see
+  it, and the new block's do. The old block keeps its `MX_FWIN` if it is a
+  pool block. That is 14.135's documented, benign case: a move with the
+  rate hook held off.
+- **kern_big and kern_small are byte-identical.** Checked by assembling
+  both with and without the change (`mega.inc` is `KERN_MEGA`'s alone).
+
 Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,592,
-24,576 rung, 474 left. That is the same rung as 14.136's re-measure, and
+24,576 rung, 474 left. The owner test added 112 bytes on 2026-11-03,
+after 14.138's `SEG_HND`: `.mega` 22,912, 154 left, the same rung. That is the same rung as 14.136's re-measure, and
 the routine shared with `mega_segbw` paid for most of itself. Resident,
 LOW and `.cold` are unchanged. kern_big and kern_small are not touched.
 
@@ -13549,14 +13568,15 @@ takes it, as `SEG_TILE`'s tiles. WIN16 holds one per global block under
 Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,800
 (+208 over 14.137's 22,592: the body's 191, its dispatch and
 `mega_dfind`'s test). That is 24,310 with its scratch, in the same 24,576
-rung, 266 left. Resident, LOW and `.cold` are unchanged; kern_big and
+rung, 266 left. With 14.137's owner test after it: 22,912, 154 left. Resident, LOW and `.cold` are unchanged; kern_big and
 kern_small are byte-identical. A constant was added to `apps/os88api.inc`,
 so `tools/abi.lock.json` was refreshed with no bump.
 
 Seen (QEMU, kern_mega, looks, 2026-11-03):
 - Mozart's setup runs to its last dialog with every file copied. The LDT's
-  high-water is 1,658 of 1,992 entries, at its last dialog. It was 1,859 with handle
-  descriptors alone, and the setup ran out before D1.
+  high-water is 1,658 of 1,992 entries, at its last dialog. With D1's
+  stopgap it was 1,825 (92%), with handle descriptors alone 1,859, and the
+  setup ran out before D1.
 - Arcade's setup reaches *Congratulations!*.
 
 The overrun itself cannot be seen under QEMU, which checks no data
