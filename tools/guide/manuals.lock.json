@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "484aa10f3",
+  "stamped": "072167d52",
   "strings": "4fe195f6a33d805e",
-  "why": "D4: a big bitmap's own claim on both arms (SPEC.md 124.15.2)"
+  "why": "loader relocation rule: PMODE-only programs take the segment itself; below the manual's level of detail"
  },
  "WIN16_TXT": {
   "sources": [
