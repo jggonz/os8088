@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "f948f4347",
+  "stamped": "484aa10f3",
   "strings": "4fe195f6a33d805e",
-  "why": "Mozart's setup completes: a big bitmap's own claim on kern_mega (SPEC.md 124.15.2)"
+  "why": "D4: a big bitmap's own claim on both arms (SPEC.md 124.15.2)"
  },
  "WIN16_TXT": {
   "sources": [
