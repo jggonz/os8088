@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "7111ba35e",
+  "stamped": "ad390599c",
   "strings": "4fe195f6a33d805e",
-  "why": "WIN16 S24 M1: discardable library code (SPEC.md 124.26.11)"
+  "why": "N1: handle descriptors and walk descriptors on kern_mega (SPEC.md 124.31.3)"
  },
  "WIN16_TXT": {
   "sources": [
