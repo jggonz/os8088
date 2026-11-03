@@ -259,6 +259,10 @@
   %endif
 %endmacro
 
+; w16_vclaimm - no code: the name tests/pins.txt keys W16VCLAIM's real-mode
+; arm by (t_pins names a claim by the label it sits under, and a macro body
+; has none of its own)
+w16_vclaimm:
 ; W16VCLAIM / W16VFREE - a claim of WIN16's own, entered in the map: AX =
 ; PARAGRAPHS -> CF=0 DX = its virtual base, AX = the paragraphs GRANTED; CF=1
 ; none (OSAPI_MEM_P's MEMP_CLAIM, SPEC.md 50.3.7). Keeps the rest. Freed with
