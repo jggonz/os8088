@@ -730,7 +730,7 @@ def leg5(work, fails):
         if chk:
             fails.append("lost chains were saved as %r" % chk)
         text = run_task(ui, flush, 3, False, fails,
-                        also="not done: a folder's")
+                        also="not done: a folder was")
         print(text)
         need(fails, text, ["not done: a folder was not checked"],
              "defragment with a folder too deep")
