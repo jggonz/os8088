@@ -1,0 +1,132 @@
+# WIN16-NEXT-PLAN: closing Phase B/C, and what it leaves open
+
+**Status: PLAN.** This plan follows `docs/plans/WIN16-ANY-PLAN.md`:
+
+- Its Phase A (S14–S21) is merged as #322.
+- Its Phases B and C (S22–S25) are on PR #327, branch `plan/win16-phase-bc`.
+
+This plan holds two things:
+
+1. What #327 still owes before it merges (N0–N3).
+2. The limits and open items it will merge with (L1, L2, Q1–Q5), so they are not lost once that PR closes.
+
+The contract stays SPEC.md §124. The diary stays `docs/HOW-WIN16-WAS-BUILT.md`.
+
+The owner's end goal is unchanged:
+
+> The end goal is to be able to run any Win16 application (including CD-ROM
+> based win16 applications with installers), so don't block ourselves out of
+> that ultimate goal.
+
+## 1. Where #327 stands (2026-11-02)
+
+Measured on QEMU's `kern_mega`, by looking at the screen, not by suite rows:
+
+- **Microsoft Arcade 1.0's setup** (the Setup Toolkit installer, O3) runs to "Congratulations! Microsoft Arcade Setup successful!".
+  - `C:\ARCADE` holds all 22 files its INF lists, at their sizes.
+  - The ARCADE Program Manager group has its five links.
+- **Mozart's setup** (the O3 CD title's installer) copies every file, including VBRUN300.DLL, its VBXs, fonts and MSACM. It makes its Program Manager group through DDE.
+  - Its final "Setup complete" dialog is invisible. The cause is that a 42 KB bitmap cannot be had from the heap; N0 is the fix.
+
+The owner's decisions taken on the way:
+
+- **D1:** GlobalReAlloc keeps a quarter's slack. A program's block selector reaches its claim's end, as a stopgap.
+- **D2:** a BIOS call made from a Windows program's stack runs on a stack WIN16 lends, with no LOW rung.
+- **D3:** library code is discardable (M1).
+- Two boot-only `.mega` rungs, recorded in KERN-MEGA-PLAN 14.135.
+
+## 2. Before #327 merges
+
+- [ ] **N0: commit M1, discardable library code** (SPEC.md 124.26.11).
+  - It is implemented and was uncommitted when this plan was written. One bug is already fixed: a reloaded library segment bound its imports of other libraries as missing.
+  - *Done when* Mozart's setup shows its final dialog on `kern_mega`, Arcade's setup still reaches *Congratulations!*, and the SPEC states both:
+    - what is discarded: library segments reached only through entry tables (at=3);
+    - what is kept: segments named by number (at=2/5), which is all of VBRUN300 and MOZART.EXE (L1).
+
+- [ ] **N1: replace D1's stopgap with the proper fix.** This brings back the overrun fault that Windows gives.
+  - D1's (a) lets a program's block selector reach its claim's end. An overrun of a global block then writes into the next block silently, where Windows faults. SPEC.md 124.31.3 marks it as a stopgap.
+  - The replacement has two parts:
+    - **One descriptor per handle.** GlobalReAlloc re-aims that descriptor's base and limit in place, on the same selector, as Windows' protected modes do. A block that grows a step at a time then costs no new LDT entry, and its limit stays its own length.
+    - **A bound walk window** (`SEG_BWIN` + `SEG_AIM`, re-based by the compactor) for WIN16's own header, split and zeroing touches. Before, one Mozart setup run took a W16SEG at 880 distinct paragraphs, and each one cost an LDT entry. Through the window it costs none.
+  - Cost: about 110 bytes for the window and more for per-handle descriptors, in the protected-mode image. If they do not fit after M1, move cold code into an on-demand part first (parts 9 and 10 are the precedent). If they still do not fit, the numbers go to the owner.
+  - *Done when:*
+    - a fixture's write one byte past a global block faults on `kern_mega`, and the fixture is a row;
+    - the LDT's high-water mark across Mozart's whole setup is measured and written into SPEC.md 124.31.3, against the 2,016 entries there are;
+    - (a) is gone from SPEC.md 124.31.3, and its stopgap text with it.
+
+- [ ] **N2: finish the plan, the diary and the PR description.**
+  - WIN16-ANY-PLAN's S22–S25 checkboxes, ticked only for what was seen.
+  - The diary's Phase B/C chapters, with what each milestone measured.
+  - #327's body: what works, what was decided, the rung record, the rows to run, and this plan's L1/L2 and Q1–Q5 as what remains.
+
+- [ ] **N3: the final pass, once, at the end** (CLAUDE.md, *Testing*).
+  1. Refresh `build/win16/DOS.O88` first, with `make build/win16/DOS.O88` or `make win16test`. A plain `make` leaves it stale, and every win16* row puts it on its B:, so a stale copy tests the wrong DOS core.
+  2. Run the deduplicated soak union of every row S14–S25 named, in one `os88test.py soak -k … -k …` call.
+  3. Then run `make test-full` alone, with no concurrent `make`, because the buildmatrix row clobbers.
+  4. Run `make budget-check`.
+  5. If anything fails, re-run only the failing rows. Re-run `test-full` only if a fix touched code outside them.
+
+## 3. The limits #327 merges with
+
+- [ ] **L1: Mozart itself, not its installer.**
+  - `MOZART.EXE` (248 KB) is Visual Basic 3.0 p-code over `VBRUN300.DLL` (398 KB, 101 segments, protected mode only).
+  - Both load segment numbers into registers directly:
+    - VBRUN300 has 2,567 segment-only relocations in code and 112 in data, which name 98 of its 101 code segments;
+    - MOZART.EXE has 606.
+  - Under SPEC.md 124.26.1 a segment named by number is kept, so M1 discards none of their code. About 520 KB of fixed code (VBRUN300 329 KB, MOZART 184 KB) has to sit in `kern_mega`'s four arenas, about 810 KB. The setup's libraries will have exited by then.
+  - **First, measure** whether Mozart starts from its desktop link and plays (S25). Do not assume either way.
+  - **If it does not fit:**
+    - Making those segments discardable needs a new `kern_mega` hook. A dropped segment's selector is marked not present, and the `#NP` fault it raises reloads the segment and restarts the instruction, as Windows' standard mode did.
+    - That is a kernel change, so it is **owner decision O8**. It goes to the owner with:
+      - its `.mega` and resident cost;
+      - its re-entry argument, since a fault can arrive inside a BIOS call or a callback;
+      - the arithmetic that says Mozart needs it.
+    - Any large Visual Basic 3.0 program will eventually need the same hook, so this is the route the end goal runs through.
+
+- [ ] **L2: Sir Hangman's install, a known limit in S25.**
+  - Sir Hangman 1.0 is the InstallShield 3 installer, O3.
+  - Its engine, `_INST16.EX_` expanded to `_INS0433._MP` (542,720 bytes, module ISINST30), has 607 selector fixups by segment number into its 64 discardable code segments. So `w16l_keepck` keeps all 64, 404 KB, and a launch from the launcher's task refused with "Not enough memory to load it".
+  - Started as the first program, from a claim of its own, the engine loads.
+  - The routes:
+    - a later program's segment block as a claim of its own, as the first program's is;
+    - O8's `#NP` reload (L1), which would cover it too.
+  - The program itself, `HANGMAN.EXE`, is VB 3.0 again, so after the install it is L1's question.
+
+## 4. Open items found on the way (not blocking #327)
+
+Each was recorded in the Phase B/C report and not yet closed. Re-check each one against the merged tree before starting it.
+
+- [ ] **Q1: a protected-mode fault in program code takes the machine down.**
+  - With DS = SS = the program's DGROUP, `mega_fown` does not attribute the fault to WIN16. The result is "FAULT 0D … reboot", where it should close the package.
+  - The kernel has to recognise a WIN16 program's selectors as WIN16's: the LDT range WIN16 owns, or a registered owner word in the shape of D2's hook.
+
+- [ ] **Q2: real mode's STACK OVERFLOW TASK 00 (UI task)** during `win16xvol`'s copy across volumes on `kern_big`.
+  - The copy still finishes and reports XVOL OK.
+  - It is not SPEC.md 96.11.11's doing. It was seen with a core that never asks DFREE, and with the older core.
+  - It is undiagnosed, and it matters for the real-mode installers.
+
+- [ ] **Q3: MSCDEX's `int 2Fh` is deferred** (SPEC.md 124.33.3).
+  - It costs about 100 image bytes, and no target has yet been seen to ask for it.
+  - Mozart's CD-ROM run (L1) is where the question is answered.
+
+- [ ] **Q4: the rest of S25's acceptance.**
+  - Arcade's five games are 386 code over `WAVEMIX`, started from their links.
+  - Mozart's Red Book tracks play through S23's `cdaudio`, on 86Box's `286-mega-cdrom` and `386-mega-cdrom`.
+  - What of all three runs in real mode, where their CPU tier allows.
+  - `tools/w16reach.py` re-run against WIN16-ANY-PLAN §1.
+
+- [ ] **Q5: main's #328** ("Elendilon -> Main", d323a9a65) is merged into #327. It changed:
+  - heap claims to paragraphs rounded to 512 bytes, with `OSAPI_MEM_P` (SPEC.md 50.2.1, 50.3.7);
+  - parts to 16-byte paragraphs (SPEC.md 20.12.2);
+  - packing, with the near-call filter (SPEC.md 20.13.9);
+  - the DOS core, now live in a window (SPEC.md 96.54).
+
+  After that merge, N0–N3's evidence is retaken on the merged tree, not carried over from before it.
+
+## 5. Sources
+
+As WIN16-ANY-PLAN's, plus #327's record:
+
+- the Phase B/C report: its milestones 30–51;
+- its SPEC sections: 124.26.10–124.26.11, 124.31.2–124.31.3, and 50.6.11 (D2's lent stack);
+- KERN-MEGA-PLAN 14.135.
