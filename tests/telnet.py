@@ -217,6 +217,14 @@ def main():
             try:
                 for n, data in pairs:
                     poke(n, data)
+                    if n == "con_drb":
+                        # **A BIT WITHOUT A SPAN IS A ROW THAT DRAWS ITS
+                        # STALE SPAN** (SPEC.md 96.33.12), and the windowed
+                        # renderer honours the span now - so a poked mark
+                        # is con_mark's, the whole row, as every carrier
+                        # marker that sets a bit must
+                        poke("con_dc0", bytes(CON_ROWS))
+                        poke("con_dc1", bytes([CON_COLS - 1] * CON_ROWS))
             finally:
                 m.run()
 

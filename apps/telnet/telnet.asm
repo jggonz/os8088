@@ -600,14 +600,14 @@ te_screen:
     loop .w
 .wout:
     pop cx
-    call con_markall
+    call con_takescroll             ; the debt FIRST: con_takerow refuses a row
+    call con_markall                ; while one stands (SPEC.md 96.54.14)
     cmp byte [tz_pan], 0
     je .rows                        ; a transfer is up: the panel has the
     jmp tz_panel                    ; terminal's area and the marks just set are
                                     ; what puts the text back afterwards
 .rows:
-    call con_rows_owed
-    jmp con_takescroll              ; **AND THE SCROLL DEBT, WHICH IT DID NOT.**
+    jmp con_rows_owed               ; **THE DEBT IS DROPPED, NOT SPENT** (above).
                                     ; Every row has just been drawn from the
                                     ; buffer, so a pending "blit the pixels up
                                     ; by N" is not owed - and spending it is

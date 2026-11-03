@@ -401,9 +401,12 @@ bn_ttl:     db 'Bounce', 0
 ; the standard About card's lines (SPEC.md 20.5.1): 2*7 + lines*12 tall in a
 ; 111px content, so up to four
 bn_ablines:
-    dw bn_ab1, bn_ab2, 0
+    dw bn_ab1, bn_ab2, bn_abz, bn_abc, bn_abn, 0
 bn_ab1:     db 'Bounce for os8088', 0
 bn_ab2:     db 'a square, bouncing', 0
+bn_abz:     db 0
+bn_abc:     db 'Contributed by', 0
+bn_abn:     db 'Jorge Gonzalez', 0
 
 ; --- the shared controls (SPEC.md 20.5.1) ---------------------------------------
 %define OS88UI_ABOUT            ; the standard About card, and NOTHING else -

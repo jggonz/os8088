@@ -137,8 +137,8 @@ n_loadgfx:
     ret
 ; Would the heap hold what the bracket is about to fetch? DL = FSX_CAPS's
 ; display kind. CF=1 = no: both sprite banks plus the largest scene, each
-; priced as op_fetch will claim it (op_lazykb: the read, its cluster slack and
-; R). It is asked on the DESKTOP because the fetches happen after the mode is
+; priced as op_fetch will claim it (op_lazyp: the read, its cluster slack and
+; R, in PARAGRAPHS as MEMP_AVAIL answers - SPEC.md 50.3.7). It is asked on the DESKTOP because the fetches happen after the mode is
 ; set, where op_fetch's refusal toast would be drawn into the game's own
 ; framebuffer (SPEC 53.7) - so the refusal a busy heap can cause is said here,
 ; in the window, and what is left to refuse inside is a disk that will not
@@ -165,7 +165,7 @@ n_fsxroom:
 .scene:
     call op_row
     push ax
-    call op_lazykb
+    call op_lazyp
     pop si                         ; (the row index; SI is free here)
     jc .out
     cmp ax,bp
@@ -180,7 +180,7 @@ n_fsxroom:
 .bank:
     call op_row
     push ax
-    call op_lazykb
+    call op_lazyp
     pop si
     jc .out
     add bp,ax
@@ -188,7 +188,8 @@ n_fsxroom:
     xchg ax,si
     inc ax
     loop .bank
-    call OSAPI_MEM_AVAIL           ; AX = KB
+    mov bl,MEMP_AVAIL              ; AX = paragraphs (BX and CX are spent:
+    call OSAPI_MEM_P               ; MEMP_AVAIL answers in both)
     cmp ax,bp
 .out:
     ret

@@ -380,7 +380,9 @@ static void ovl_grey_more(int head, int on, int strid)
  *
  *   0  Lemmings for os8088            the product, in the house form
  *   1  The DOS release, 1991          what it is a port OF
- *   3  the port line, in two halves
+ *   2  the port line, in two halves
+ *   4  Ported by Jorge Gonzalez       who made this port; it takes the blank
+ *                                     row 2 used to be, the card being full
  *   6  Lemmings By DMA Design         the original's two principals and its
  *   7  Programming By Russell Kay     rightsholder - Lemmix SCredits' "Original
  *   8  Copyright 1991 Psygnosis Ltd.  credits..." block, verbatim
@@ -419,9 +421,9 @@ static void ovl_about(void *win)
 
     lem_ab[0] = lem_prodline;
     lem_ab[1] = lem_str(LEMS_VERSION);
-    lem_ab[2] = "";
-    lem_ab[3] = lem_ab1;
-    lem_ab[4] = lem_ab2;
+    lem_ab[2] = lem_ab1;
+    lem_ab[3] = lem_ab2;
+    lem_ab[4] = "Ported by Jorge Gonzalez";
     lem_ab[5] = "";
     lem_ab[6] = lem_str(LEMS_CREDIT1);
     lem_ab[7] = lem_str(LEMS_CREDIT2);

@@ -14,7 +14,7 @@ past the slack, kept the whole claim, and op_drop ran the slack arithmetic
 backwards to free it. MSEG's own verdict (`MSEG 7/7 OK`) is computed over the
 moved bytes, so a copy one byte off fails assertion 2.
 
-`op_fetch` claims `op_lazykb`'s figure for an `OP_COMP | OP_LAZY` row - R plus
+`op_fetch` claims `op_lazyp`'s figure for an `OP_COMP | OP_LAZY` row - R plus
 the read of the packed part rounded to whole clusters - because a read may
 only BEGIN on a cluster boundary and the stream has to sit above its output
 while it expands. Once it has expanded the claim is shrunk in place to what
@@ -43,9 +43,11 @@ FOUR ASSERTIONS:
      output one pointer off would fail all three;
 
   3. THE SEGMENT IS A CLAIM'S OWN BASE AND THE CLAIM IS THE PART: some live
-     claim begins exactly at op_seg's answer, and it is `len` rounded up to a
-     KB, in paragraphs. Expanded past the slack, as this first shipped, no
-     claim begins there (the part is slack/16 paragraphs into one) and the
+     claim begins exactly at op_seg's answer, and it is `len` rounded up to
+     the heap's GRANULE, in paragraphs - MEMP_REGROW's figure (SPEC.md
+     50.3.7; it was a KB through OSAPI_MEM_REGROW). Expanded past the
+     slack, as this first shipped, no claim begins there (the part is
+     slack/16 paragraphs into one) and the
      claim that holds it is `slack + len` rounded to a KB - 6KB against 3KB on
      this fixture;
 
@@ -73,6 +75,7 @@ import os88sym                                               # noqa: E402
 import os88geom                                              # noqa: E402
 import dispcp                                                # noqa: E402
 import msegsym                                               # noqa: E402
+from os88geom import MEM_GRAN                                 # noqa: E402
 
 ARGS = [a for a in sys.argv[1:] if a != "--plain"]
 PLAIN = len(ARGS) != len(sys.argv) - 1
@@ -143,11 +146,12 @@ def run():
         0 if PLAIN else os88parts.EQU["OP_COMP"])
     img = open(os88build.at(APPS_IMG), "rb").read(512)
     clb = struct.unpack_from("<H", img, 11)[0] * img[13]
-    slack = (row["off"] * 512) & (clb - 1)
-    kept_kb = (row["len"] + 1023) // 1024
-    say("part %d: sector %d, %d bytes unpacked, flags 0x%02X; clusters %d "
+    slack = os88parts.byte_off(row) & (clb - 1)
+    # what MEMP_REGROW keeps: `len` in paragraphs, rounded to the granule
+    kept_para = ((row["len"] + 15) // 16 + MEM_GRAN - 1) // MEM_GRAN * MEM_GRAN
+    say("part %d: file byte %d, %d bytes unpacked, flags 0x%02X; clusters %d "
         "bytes, so the head slack is %d"
-        % (LAZY, row["off"], row["len"], row["flags"], clb, slack))
+        % (LAZY, os88parts.byte_off(row), row["len"], row["flags"], clb, slack))
 
     # --- 1. the fixture is what it says ----------------------------------
     if (row["flags"] & (want_flags | os88parts.EQU["OP_COMP"])) != want_flags:
@@ -238,13 +242,14 @@ def run():
                 % (ps, ["%04X+%d" % c[:2] for c in holder],
                    ps - holder[0][0] if holder else -1, slack, slack // 16,
                    KIND))
-        elif at and at[0][1] != kept_kb * 64:
+        elif at and at[0][1] != kept_para:
             fails.append(
                 "the claim at %04X is %d paragraphs and the part is %d bytes, "
-                "so the session should keep %dKB = %d paragraphs. op_fetch "
-                "shrinks the claim through OSAPI_MEM_REGROW once the part "
-                "has arrived (SPEC.md 88.10.4.1, 20.12.7.4.4)"
-                % (ps, at[0][1], row["len"], kept_kb, kept_kb * 64))
+                "so the session should keep %d paragraphs - `len` to the "
+                "granule. op_fetch shrinks the claim through OSAPI_MEM_P's "
+                "MEMP_REGROW once the part has arrived (SPEC.md 88.10.4.1, "
+                "20.12.7.4.4, 50.3.7)"
+                % (ps, at[0][1], row["len"], kept_para))
         if len(new) != 1:
             fails.append("the fetch added %d claims and should add ONE "
                          "(SPEC.md 20.12.4): %r" % (len(new), new))
@@ -271,11 +276,11 @@ def run():
         # what the fetch kept before it put the part on the base: a
         # compressed row was shrunk past the slack, a plain one never
         # shrunk at all and kept the whole read, rounded to a cluster
-        was = ((slack + row["len"] + clb - 1) // clb * clb // 1024 if PLAIN
-               else (slack + row["len"] + 1023) // 1024)
-        say("kept %dKB for a %d-byte part on %d-byte clusters (the slack in "
-            "front of it made it %dKB)"
-            % (kept_kb, row["len"], clb, was))
+        was = ((slack + row["len"] + clb - 1) // clb * clb // 16 if PLAIN
+               else (slack + row["len"] + 1023) // 1024 * 64)
+        say("kept %d paragraphs for a %d-byte part on %d-byte clusters (the "
+            "slack in front of it made it %d)"
+            % (kept_para, row["len"], clb, was))
 
 
 def main():

@@ -1215,16 +1215,22 @@ cc_ovneed:
     push si
     push di
     push es
-    mov ax, [cc_ovsize]             ; KB = ceil(size / 1024), computed here
-    add ax, 1023                    ; rather than by the assembler: nasm will
-    mov cl, 10                      ; not divide a section-relative label, and
-    shr ax, cl                      ; a build that fails on arithmetic is a
-    mov di, ax                      ; worse trade than four instructions
-    xor cx, cx                      ; the DMA door with no head: conventional
-    call OSAPI_MEM_CLAIM_DMA_HI     ; on kern_mega for an OS88_HIGHMEM package
-                                    ; too, OS88_CODESEL converting this value
-                                    ; (KERN-MEGA-PLAN 14.12).
-                                    ; AX = KB; out DX = the segment. FROM THE
+    mov ax, [cc_ovsize]             ; PARAGRAPHS = ceil(size / 16), computed
+    add ax, 15                      ; here rather than by the assembler: nasm
+    mov cl, 4                       ; will not divide a section-relative label,
+    shr ax, cl                      ; and a build that fails on arithmetic is a
+                                    ; worse trade than four instructions
+    mov cx, MEMP_CONV               ; no DMA head, CONVENTIONAL on kern_mega
+                                    ; (a module whose base is a CS), and the
+                                    ; paragraph door
+    mov bl, MEMP_CLAIM_HI           ; (SPEC.md 50.3.7): the claim is the module
+    call OSAPI_MEM_P                ; to the heap's granule, where the KB door
+    mov di, ax                      ; took it to a whole KB. DI = the paragraphs
+                                    ; GRANTED. CONVENTIONAL on kern_mega for an
+                                    ; OS88_HIGHMEM package too, as the DMA door
+                                    ; with no head it replaces was, OS88_CODESEL
+                                    ; converting this value (KERN-MEGA-PLAN
+                                    ; 14.12). Out DX = the segment. FROM THE
                                     ; TOP (SPEC.md 50.3.2), because this
                                     ; block's base IS A CS and that is the
                                     ; rule's own first clause. It was the low
@@ -1245,7 +1251,7 @@ cc_ovneed:
     mov es, dx
     xor bx, bx                      ; ES:BX = the claim, from its first byte
     mov cx, di                      ; CX = the capacity, in bytes
-    mov ax, 1024
+    mov ax, 16
     mul cx                          ; DX:AX - the claim is under 64KB by
     mov cx, ax                      ; construction (it is a segment), so DX is
     xor dx, dx                      ; 0 and the count is CX alone

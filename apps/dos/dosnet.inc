@@ -174,14 +174,30 @@ dn_init_x:
 ; this is the second place in this file that needs the override. An unprefixed
 ; read would scan whatever the claim holds at that offset.
 ; -----------------------------------------------------------------------------
+%ifdef PN_ROOT
+ %define DN_ENV es                  ; **IN THE PART the rows are the HOST's**
+                                    ; (SPEC.md 96.23.11): CS is the network
+                                    ; claim, so PN_D_INIT hands their segment
+                                    ; and offset in and they are read through
+                                    ; ES - which OSAPI_DRV_CALL may move, so
+                                    ; dn_lsn_ports keeps it across dn_listen
+%else
+ %define DN_ENV cs
+%endif
 dn_lsn_init:
     push ax
     push bx
     push cx
     push dx
     push si
-    mov cx, DOS_ENVN
+%ifdef PN_ROOT
+    push es
+    mov es, [dos_pkt_eseg]
+    mov si, [dos_pkt_eoff]
+%else
     mov si, dos_ebuf
+%endif
+    mov cx, DOS_ENVN
 .row:
     push cx
     push si                         ; **THE ROW'S BASE HAS TO SURVIVE BOTH
@@ -197,6 +213,9 @@ dn_lsn_init:
     pop cx                          ; the ordinary case, `MTCPCFG=` being the
     add si, DOS_ENVBUF              ; row a user types beside it
     loop .row
+%ifdef PN_ROOT
+    pop es
+%endif
     pop si
     pop dx
     pop cx
@@ -213,7 +232,7 @@ dn_streqc:
     mov al, [cs:di]
     or al, al
     jz .yes
-    mov ah, [cs:si]
+    mov ah, [DN_ENV:si]
     cmp al, ah
     jne .no
     inc si
@@ -239,7 +258,7 @@ dn_lsn_ports:
     xor ax, ax                      ; --- one decimal number ---
     xor cx, cx                      ; CX counts the digits, so a stray comma
 .dig:                               ; cannot become port 0
-    mov dl, [cs:si]
+    mov dl, [DN_ENV:si]
     cmp dl, '0'
     jb .end
     cmp dl, '9'
@@ -266,9 +285,15 @@ dn_lsn_ports:
     jcxz .done
     or ax, ax
     jz .done
+%ifdef PN_ROOT
+    push es
+%endif
     call dn_listen                  ; AX = the port, host order
+%ifdef PN_ROOT
+    pop es
+%endif
 .done:
-    mov dl, [cs:si]
+    mov dl, [DN_ENV:si]
     cmp dl, ','
     jne .out
     inc si

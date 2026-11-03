@@ -1,0 +1,10 @@
+# tests/abicompat.py's acknowledgements: SDK constants whose value changed
+# since the last release WITHOUT a guard bump, each with why a release
+# package still runs. `NAME reason` acknowledges leg C; `note: text` records a
+# contract that moved in prose only, which no leg can see. Clear the file at
+# each release - it describes the gap between ONE release and the tip.
+
+KDH_PAD   byte 5 of DOS.O88's hand-off record to HIBER.DRV is KDH_FMT now (SPEC.md 96.44.18); 0 = LZ4 is what every earlier poster wrote
+KDH_SIG   'KDH1' -> 'KDH2' (SPEC.md 96.40.1): the record's part offsets are paragraphs. A release DOS.O88 on this kernel posts KDH1 and this HIBER.DRV refuses it at the magic, so "give the program the whole machine" is refused rather than misread; DOS.O88's windowed path is untouched
+
+note: SOUND.DRV verb 4 (record) now REQUIRES SND_OPENF_EXT (SPEC.md 34.6.5, commit 4038879d): the grant-and-drain record stream is gone and its form answers 7. The release's RECORDER.O88 records that way, so on this kernel it opens and plays but REC is refused. RECORDER is live-media only (no 360KB apps disk carries it), so leg F does not launch it. No guard moved: it is a driver verb, not a cell

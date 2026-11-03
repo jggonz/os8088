@@ -40,7 +40,7 @@ EV_EMBOSS   equ 18
 EV_PIXEL    equ 19                  ; blocks of PE_PIXN
 EV_N        equ 20
 EV_WORK     equ 0x80                ; | an operation, on the UI task: AX = the
-                                    ; work claim's KB it needs, and
+                                    ; work claim's PARAGRAPHS it needs, and
                                     ; [px_edw] [px_edh] the destination's
                                     ; size; CF = 1 it cannot be done (too
                                     ; wide for one work segment)

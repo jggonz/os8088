@@ -25,7 +25,16 @@ WHAT IT ASSERTS, and the two failures are DIFFERENT SIZES on purpose:
     that the arena - which is ONE run - cannot reach the floor under it
     (96.23.7.2).
 
-2.  **NO CLAIM DOS HOLDS IS PINNED BELOW THE ARENA.** That is the
+    **THE ARMS RUN CLEARED FIRST** since SPEC.md 96.36.7.4 made a cleared
+    Network box the default: the association open is the cleared arm (card
+    unmounted, nothing of the network claimed or read), and one press ticks
+    it for the second (card kept, the network part read, SPEC.md 96.23.11).
+
+2.  **NO CLAIM DOS HOLDS IS PINNED BELOW THE ARENA** - except the network
+    claim itself while the program runs: it holds the packet driver's CODE
+    and the program's vector points into it, so it is pinned for the bracket
+    on purpose (96.23.11), and a pin ACROSS the compaction pass is still
+    assertion 1's ~40K. That is the
     mechanism behind assertion 1 and it is read out of `mem_tab` itself, so a
     build that loses the `OSAPI_MEM_MOVABLE` declaration is named rather than
     inferred from a number. A claim is born pinned (SPEC.md 66.2), so this is
@@ -202,36 +211,65 @@ def main():
         def arena_row():
             raw = m.read(base() + dm["dos_marn"], 8).split(b"\0")[0]
             try:
-                return int(raw.decode("latin-1").rstrip("KB").strip())
+                return int(raw.decode("latin-1").strip().rstrip("+KB"))
             except ValueError:
                 fail("the arena row reads %r and should be digits and a KB - "
                      "the Memory page has never been painted (96.36.3)" % raw)
 
-        # --- 2: THE MECHANISM, read out of mem_tab --------------------------
-        # Done first because it is the one that names a routine: assertion 1
-        # is a number, and a number is what the pin looks like from outside.
-        pseg = pkg_seg(m)
-        got = word("dos_akb")
-        rows = claims(m)
-        arena = [c for c in rows if c[1] // 64 >= got - 1 and c[3]]
-        abase = arena[0][0] if arena else None
-        walls = [c for c in rows
-                 if c[3] and abase and c[0] < abase and c[2] == pseg]
-        if walls:
-            fails.append(
-                "DOS holds %d PINNED claim(s) below its own arena: %s."
-                " A claim is born pinned (SPEC.md 66.2) and dos_pkt_bufs takes"
-                " its buffers BEFORE dos_run's compaction pass, so one left"
-                " undeclared is a wall with a hole under it that the arena -"
-                " which is ONE run - cannot reach (96.23.7.2). The"
-                " declaration is `mov ax, dos_pkt_reloc / call dos_pkt_rloc`"
-                " in dos_pkt_bufs's `.decl`"
-                % (len(walls), ", ".join("%04X+%.1fK" % (c[0], c[1] / 64.0)
-                                         for c in walls)))
-        else:
-            say("dosnetarena: no claim of DOS's is pinned below the arena")
+        def walls(got, what):
+            # --- 2: THE MECHANISM, read out of mem_tab ----------------------
+            # Done first in each arm because it is the one that names a
+            # routine: assertion 1 is a number, and a number is what the pin
+            # looks like from outside. **THE NETWORK CLAIM ITSELF IS EXCUSED
+            # WHILE THE PROGRAM RUNS** (SPEC.md 96.23.11): it holds the
+            # packet driver's CODE, the program's vector and INT 08h point
+            # into it, so it is pinned from dos_pkt_start to the bracket's
+            # end on purpose. What this assertion is for - a claim pinned
+            # ACROSS dos_run's compaction pass - assertion 1 still catches,
+            # as the ~40K drift it was measured at.
+            pseg = pkg_seg(m)
+            bseg = u16(m.read((pseg << 4) + dm["dos_pkt_bseg"], 2))
+            rows = claims(m)
+            arena = [c for c in rows if c[1] // 64 >= got - 1 and c[3]]
+            abase = arena[0][0] if arena else None
+            ws = [c for c in rows
+                  if c[3] and abase and c[0] < abase and c[2] == pseg
+                  and c[0] != bseg]
+            if ws:
+                fails.append(
+                    "%s: DOS holds %d PINNED claim(s) below its own arena: "
+                    "%s. A claim is born pinned (SPEC.md 66.2) and "
+                    "dos_pkt_bufs takes its buffers BEFORE dos_run's "
+                    "compaction pass, so one left undeclared is a wall with a "
+                    "hole under it that the arena - which is ONE run - cannot "
+                    "reach (96.23.7.2). The declaration is `mov ax, "
+                    "dos_pkt_reloc / call dos_pkt_rloc` in dos_pkt_bufs's "
+                    "`.decl`"
+                    % (what, len(ws), ", ".join("%04X+%.1fK"
+                                                % (c[0], c[1] / 64.0)
+                                                for c in ws)))
+            else:
+                say("dosnetarena: %s: no claim of DOS's is pinned below the "
+                    "arena" % what)
+            return bseg
 
-        # --- 1: the promise IS the delivery, in both arms -------------------
+        # --- ARM 1: Network CLEARED, which is the DEFAULT (96.36.7.4) -------
+        # An association open runs the program with a fresh window's settings,
+        # so this is the arm a double click gets: the card let go for the run
+        # and no packet driver, so NOTHING of the network is claimed or read.
+        got = word("dos_akb")
+        if u16(m.read(drvrow, 2)):
+            fails.append(
+                "the Network box is cleared by default (SPEC.md 96.36.7.4) "
+                "and ETHER.DRV is STILL MOUNTED under the program. dos_spmask "
+                "is supposed to set 1<<DRVC_NET in OSAPI_DRV_SUSPEND's BL")
+        if walls(got, "Network CLEARED"):
+            fails.append(
+                "the Network box is cleared and DOS took a network claim "
+                "anyway - dos_pkt_want answers no wire for a cleared box, on "
+                "either route (SPEC.md 96.36.7.4), so neither the claim nor "
+                "the part should be read")
+
         # **LET THE PROGRAM OUT FIRST.** An association open of a `.COM` runs
         # it (SPEC.md 54), so DOS arrives inside its own fsx bracket with
         # the program on the screen - no window and no page. DOSPKT.COM holds
@@ -246,22 +284,20 @@ def main():
         mouse.click(*dosmap.centre(m, pkg_seg(m), dm, "dos_erect"))
         eth.settle(m)
         promised = arena_row()
-        say("dosnetarena: Network TICKED - page ~%d K, program got %d K"
+        say("dosnetarena: Network CLEARED - page ~%d K, program got %d K"
             % (promised, got))
         if abs(promised - got) > SLACK:
             fails.append(
-                "with the card KEPT the page promised ~%d K and the program "
-                "was handed %d, a drift of %d against a slack of %d. ~3 is "
-                "dos_mem_arena not subtracting the packet buffers it is about "
-                "to spend (96.23.7.1); ~40 is one of them pinned across the "
-                "compaction pass (96.23.7.2)"
+                "with the card RELEASED the page promised ~%d K and the "
+                "program was handed %d, a drift of %d against a slack of %d"
                 % (promised, got, got - promised, SLACK))
 
+        # --- ARM 2: Network TICKED - the card kept, the part read ------------
         r4 = [u16(m.read(base() + dm["dos_mnet"] + 2 * i, 2)) for i in range(4)]
         mouse.click(r4[0] + 4, r4[1] + 5)
         eth.settle(m)
-        if m.read(base() + dm["dos_mnet"] + 10, 1)[0]:
-            fail("a press inside the Network box did not clear it - the box "
+        if not m.read(base() + dm["dos_mnet"] + 10, 1)[0]:
+            fail("a press inside the Network box did not tick it - the box "
                  "is live on a machine with a card (SPEC.md 96.36.7)")
         promised2 = arena_row()
 
@@ -269,40 +305,44 @@ def main():
         eth.settle(m)
         mouse.click(*dosmap.centre(m, pkg_seg(m), dm, "dos_rrect"))
 
-        # Run is a relaunch: the card unmounted and the arena sized again.
-        # Both are the guest's own words, so they are what is waited for; an
+        # Run is a relaunch: the arena sized again, with the card KEPT this
+        # time. That is the guest's own word, so it is what is waited for; an
         # arena that does NOT move is the failure below, and then this spends
         # the eight seconds the old sleep did.
         def relaunched():
             sg = pkg_seg(m)
-            return bool(sg) and not u16(m.read(drvrow, 2)) and \
+            return bool(sg) and \
                 u16(m.read((sg << 4) + dm["dos_akb"], 2)) != got
         if os88qemu.acted(m, relaunched, secs=8, what="the relaunch",
                           poll=0.25):
             os88qemu.quiesce(m, lambda: word("dos_akb"), secs=0.25,
                              what="the relaunched arena")
         got2 = word("dos_akb")
-        say("dosnetarena: Network CLEARED - page ~%d K, program got %d K"
+        say("dosnetarena: Network TICKED - page ~%d K, program got %d K"
             % (promised2, got2))
-        if u16(m.read(eth.S("drv_tab") + eth.ETH_ROW * eth.DRVR_SZ
-                      + eth.DRVR_SEG, 2)):
+        if not u16(m.read(drvrow, 2)):
             fails.append(
-                "the Network box was cleared and ETHER.DRV is STILL MOUNTED. "
-                "dos_spmask is supposed to set 1<<DRVC_NET in "
-                "OSAPI_DRV_SUSPEND's BL, which takes DRVC_NET off hbm_sweep's "
-                "skip list (SPEC.md 51.11.4, 96.36.7.3)")
+                "the Network box was ticked and ETHER.DRV was UNMOUNTED for "
+                "the run - a ticked box keeps DRVC_NET (SPEC.md 96.36.7)")
+        if not walls(got2, "Network TICKED"):
+            fails.append(
+                "the Network box was ticked on a machine with a card and DOS "
+                "holds no network claim - the packet driver's part was never "
+                "read (SPEC.md 96.23.11), so no interface was published")
         if abs(promised2 - got2) > SLACK:
             fails.append(
-                "with the card RELEASED the page promised ~%d K and the "
-                "program was handed %d, a drift of %d against a slack of %d"
+                "with the card KEPT the page promised ~%d K and the program "
+                "was handed %d, a drift of %d against a slack of %d. ~7 is "
+                "dos_mem_arena not subtracting the network claim it is about "
+                "to spend (96.23.7.1, 96.23.11); ~40 is the claim pinned "
+                "across the compaction pass (96.23.7.2)"
                 % (promised2, got2, got2 - promised2, SLACK))
-        if got2 <= got:
+        if got2 >= got:
             fails.append(
-                "releasing the card moved the program's arena %d -> %d. "
-                "ETHER.DRV's image and its ring are ~33KB and the launch "
-                "unmounts them before it sizes the arena, so they should come "
-                "back (SPEC.md 96.35)" % (got, got2))
-
+                "keeping the card moved the program's arena %d -> %d. "
+                "ETHER.DRV's image and its ring are ~33KB and a cleared box "
+                "unmounts them before the arena is sized, so the ticked arm "
+                "must be the SMALLER one (SPEC.md 96.35)" % (got, got2))
         for f in fails:
             say("dosnetarena: " + f)
         say("dosnetarena: %s" % ("FAILED" if fails else "ok"))

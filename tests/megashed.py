@@ -49,7 +49,8 @@ def w16(b, i):
 
 
 def table(box):
-    X, K = box.reads([("mx_tab", MX_BLKSZ * MX_NBLK), ("xm_kb", 2)])
+    X, K = box.reads([(box.tail("mx_tab"), MX_BLKSZ * MX_NBLK),
+                      ("xm_kb", 2)])
     rows = []
     for k in range(MX_NBLK):
         e = X[k * MX_BLKSZ:(k + 1) * MX_BLKSZ]
@@ -111,7 +112,7 @@ def main():
         if at < xkb:
             gaps.append((at, xkb - at))
         free = [r["k"] for r in rows if not r["kb"]]
-        mxa = box.sym("mx_tab")
+        mxa = box.tail("mx_tab")
         cmds = []
         for (o, kb), k in zip(gaps, free):
             e = mxa + k * MX_BLKSZ

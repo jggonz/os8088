@@ -28,8 +28,9 @@ Five verdicts, and the fourth is the positive control WRITING-TESTS 1 asks
 for - a Note Pad that never said "Too large" at all would pass the other four:
 
   loaded    README.TXT opens with np_len at the CRLF file FOLDED, and the
-            claim where np_fitclaim leaves it: the note plus NP_GROWKB,
-            DERIVED from Note Pad's own equs (FIT_KB below)
+            claim where np_fitclaim leaves it: the note plus NP_GROWKB in
+            paragraphs, to the heap's granule, DERIVED from Note Pad's own
+            equs and kernel/memory.inc's MEM_GRAN (FIT_PARA below)
   shed      ...AND THE SHED IS WHAT PAID FOR IT, which is the leg's whole
             subject and was not asserted for two cycles. It is measured as
             the CACHES FALLING across the load (19,456 -> 11,264 here) and
@@ -143,7 +144,24 @@ def _np_equ(name):
 
 NP_KB0, NP_GROWKB, NP_MAXKB = (_np_equ(n) for n in
                                ("NP_KB0", "NP_GROWKB", "NP_MAXKB"))
-FIT_KB = min(NP_MAXKB, max(NP_KB0, (WANT_LEN + 1023) // 1024 + NP_GROWKB))
+
+
+def _mem_gran():
+    import re
+    with open(os.path.join(os.path.dirname(__file__), "..", "kernel",
+                           "memory.inc")) as f:
+        hit = re.search(r"^MEM_GRAN\s+equ\s+(\d+)", f.read(), re.M)
+    if not hit:
+        sys.exit("regrowshed: no `MEM_GRAN equ` in kernel/memory.inc")
+    return int(hit.group(1))
+
+
+# np_resize counts PARAGRAPHS (SPEC.md 50.3.7) and keeps what OSAPI_MEM_P
+# GRANTED, which is the request rounded up to the granule
+GRAN = _mem_gran()
+FIT_PARA = min(NP_MAXKB * 64, max(NP_KB0 * 64,
+                                  (WANT_LEN + 15) // 16 + NP_GROWKB * 64))
+FIT_PARA = (FIT_PARA + GRAN - 1) // GRAN * GRAN
 
 fails = []
 
@@ -186,7 +204,7 @@ os88sym.default_defines(*ARM)
 # THE SMALL BUILD'S OWN LAYOUT (dispapps.sym's note): the disk carries the
 # APP_SMALL Note Pad, whose np_* offsets are not the shipped build's.
 NP = dict((k, dispapps.sym("notepad", k, small=True))
-          for k in ("np_len", "np_cap", "np_capkb", "np_dseg"))
+          for k in ("np_len", "np_cap", "np_cappara", "np_dseg"))
 
 # THE TOOBIG LEG'S SUBJECT, on a scratch copy of the boot disk (see the
 # docstring's `toobig`). Plain text and not 'CZ', so the size on disk IS the
@@ -313,7 +331,7 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
     def npstate(win):
         p = npseg(win)
         return dict((k, u16(m.readseg(p, NP[k], 2)))
-                    for k in ("np_len", "np_cap", "np_capkb", "np_dseg"))
+                    for k in ("np_len", "np_cap", "np_cappara", "np_dseg"))
 
     def open_file(win, path, tag):
         """File > Open in `win`, then walk to `path` and pick it.
@@ -396,8 +414,8 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
                  "instead of starting another - two regions is the staging")
     run, purge = heap("two Note Pads, caches warm")
     st = npstate(first)
-    print("    claim starts at %d bytes (np_capkb=%d)"
-          % (st["np_cap"], st["np_capkb"]))
+    print("    claim starts at %d bytes (np_cappara=%d)"
+          % (st["np_cap"], st["np_cappara"]))
 
     # 1. THE SHED. The claim needs 16,384 and the largest run is smaller
     #    than that with tens of KB sitting in caches - which is the whole
@@ -406,10 +424,10 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
           % (WANT_LEN, st["np_cap"]))
     t = open_file(first, "README.TXT", "loaded")
     st = npstate(first)
-    check("loaded", st["np_len"] == WANT_LEN and st["np_capkb"] == FIT_KB,
-          "(np_len=%d want %d, np_capkb=%d want %d, toast %r; the run was %d "
+    check("loaded", st["np_len"] == WANT_LEN and st["np_cappara"] == FIT_PARA,
+          "(np_len=%d want %d, np_cappara=%d want %d, toast %r; the run was %d "
           "with %d in caches)"
-          % (st["np_len"], WANT_LEN, st["np_capkb"], FIT_KB, t, run, purge))
+          % (st["np_len"], WANT_LEN, st["np_cappara"], FIT_PARA, t, run, purge))
 
     # ...AND THE SHED IS WHAT FUNDED IT, asserted rather than assumed. This
     # leg used to print a NOTE when the largest free run it had measured was
@@ -434,7 +452,7 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
     #    "Too large", the KERNEL's words (OSAPI_FERR_TEXT, SPEC.md 18.4.11),
     #    where Note Pad's own table said "Too big" - and since
     #    np_load sizes by the PROBE (SPEC.md 27.6) it is said off the file's
-    #    own KB with NOTHING claimed, so np_capkb stays the manual's fit. It
+    #    own KB with NOTHING claimed, so np_cappara stays the manual's fit. It
     #    used to be opened to the ceiling first and read 16. Without this leg a
     #    Note Pad that had simply stopped saying "Too large" would pass every
     #    other one.
@@ -445,10 +463,10 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
     #    subject was a package somebody else's size pass shrank.
     t = open_file(first, BIG_NAME, "toobig")
     st = npstate(first)
-    check("toobig", t == "Too large" and st["np_capkb"] == FIT_KB,
-          "(toast %r, np_capkb=%d want %d, nothing claimed - %s is %d "
+    check("toobig", t == "Too large" and st["np_cappara"] == FIT_PARA,
+          "(toast %r, np_cappara=%d want %d, nothing claimed - %s is %d "
           "bytes on disk against a %d-byte ceiling)"
-          % (t, st["np_capkb"], FIT_KB, BIG_NAME, _ON_DISK[0], NP_CEIL))
+          % (t, st["np_cappara"], FIT_PARA, BIG_NAME, _ON_DISK[0], NP_CEIL))
     # ...and SPEC.md 27.6's other promise, for free: a refused load leaves
     # the note exactly as it was.
     check("intact", st["np_len"] == WANT_LEN,
@@ -488,7 +506,7 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
         run, purge = heap("%s standing" % filler)
     t = open_file(second, "README.TXT", "nomem")
     st = npstate(second)
-    if st["np_capkb"] >= 16:
+    if st["np_cappara"] >= 16 * 64:          # NP_MAXKB, in paragraphs
         # A LEG THAT HAS LOST ITS SUBJECT FAILS (WRITING-TESTS 1), as `toobig`
         # does. This was a NOTE and a pass, and it stood green for the whole
         # time the refusal was not happening.
@@ -499,9 +517,9 @@ with os88ui.boot(_BOOT, machine=MACHINE, limit=180) as ui:
               % (t, run))
     else:
         check("nomem", t == "No memory",
-              "(toast %r with np_capkb=%d short of %d - a refused CLAIM must "
+              "(toast %r with np_cappara=%d short of %d - a refused CLAIM must "
               "not be reported as a file that is too big, SPEC.md 27.6.1)"
-              % (t, st["np_capkb"], 16))
+              % (t, st["np_cappara"], 16 * 64))
 
 print()
 if fails:

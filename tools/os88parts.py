@@ -74,6 +74,7 @@ PKG_MIRROR = {
     "OPF_ZERO": "OP_ZERO",
     "OPF_OPT": "OP_OPT",
     "OPF_LAZY": "OP_LAZY",
+    "OPF_ZFILL": "OP_ZFILL",
     "PK_SEG": "OP_SEG",
     "PK_ASSET": "OP_ASSET",
 }
@@ -95,7 +96,16 @@ def off(name):
 
 # --- the part TABLE, decoded out of a package image --------------------------
 
-MAGIC = b"O88PARTS"
+MAGIC = b"O88PARTP"          # `off` in 16-byte PARAGRAPHS (SPEC.md 20.12.2)
+MAGIC_512 = b"O88PARTS"      # ...and the table before SPEC.md 20.12.2.1, `off`
+                             # in 512-byte sectors: still READ, so a file
+                             # packed before decodes; os88pkg.py packs none
+
+
+def gran(image):
+    """The granule a table's `off` counts in: 16, or 512 on an old table."""
+    at = table_at(image)
+    return 512 if at is not None and image[at:at + 8] == MAGIC_512 else 16
 
 
 def table_at(image):
@@ -106,10 +116,13 @@ def table_at(image):
     nothing to compute (SPEC.md 20.12.3). Two tables is as bad as none, and
     os88pkg.py refuses that at pack time.
     """
-    at = image.find(MAGIC)
-    if at < 0 or image.find(MAGIC, at + 1) >= 0:
+    hits = [a for m in (MAGIC, MAGIC_512)
+            for a in (image.find(m), image.find(m, image.find(m) + 1))
+            if a >= 0]
+    hits = sorted(set(hits))
+    if len(hits) != 1:
         return None
-    return at
+    return hits[0]
 
 
 def _u16(b, i):
@@ -119,7 +132,9 @@ def _u16(b, i):
 def rows(image):
     """[{kind, flags, off, len, zkb}] for a package image.
 
-    `off` is in 512-byte units and 0 means "no file bytes" - a scratch part.
+    `off` is in the table's GRANULE (16 bytes; 512 on an 'O88PARTS' table,
+    gran()) and 0 means "no file bytes" - a scratch part. `gran` is on every
+    row, so a caller never multiplies by a remembered 512.
     `zkb` is the declared scratch KB, and on a LAZY row it is instead where a
     fetched part banks its SEGMENT, so it can be non-zero on a row that
     declared no scratch at all (SPEC.md 20.12.4).
@@ -130,6 +145,7 @@ def rows(image):
             "no %r in this image, or two of them - it is not a parts package"
             % MAGIC.decode())
     hdr, row = EQU["OP_T_ROWS"], EQU["OP_ROW"]
+    g = gran(image)
     out = []
     for i in range(image[at + hdr - 2]):
         b = at + hdr + row * i
@@ -137,13 +153,26 @@ def rows(image):
                     "flags": image[b + EQU["OP_R_FLAG"]],
                     "off": _u16(image, b + EQU["OP_R_OFF"]),
                     "len": _u16(image, b + EQU["OP_R_LEN"]),
-                    "zkb": _u16(image, b + EQU["OP_R_ZKB"])})
+                    "zkb": _u16(image, b + EQU["OP_R_ZKB"]),
+                    "gran": g})
     return out
 
 
 def sectors(row):
     """A filed row's length in 512-byte sectors; 0 for a scratch one."""
     return 0 if not row["off"] else (row["len"] + 511) // 512
+
+
+def granules(row):
+    """A filed row's length in its table's granules - what op_size counts
+    and what the guest's [op_secs]/[op_first] are in; 0 for a scratch row."""
+    g = row.get("gran", 16)
+    return 0 if not row["off"] else (row["len"] + g - 1) // g
+
+
+def byte_off(row):
+    """A filed row's byte offset in the FILE."""
+    return row["off"] * row.get("gran", 16)
 
 
 def run_sectors(rows_):
@@ -154,12 +183,16 @@ def run_sectors(rows_):
     at its unpacked `len`, which OP_COMP does not relieve because the CLAIM
     is cut from the unpacked total. A packed part on the floppy is fewer
     sectors than this; the bound is not about the floppy."""
+    # IN SECTOR EQUIVALENTS of the table's own granules, so the comparison
+    # with OP_SECMAX is the guest's `cmp dx, OP_RUNMAX` exactly: a run of g
+    # paragraph granules is g / 32 sectors, and a fraction is kept rather
+    # than rounded up, which would refuse a run op_size accepts
     run = 0
     for r in rows_:
         if not r["off"] or r["flags"] & EQU["OP_LAZY"]:
             continue
-        run += sectors(r)
-    return run
+        run += granules(r) * r.get("gran", 16)
+    return run / 512 if run % 512 else run // 512
 
 
 def run_of(path):
@@ -194,16 +227,26 @@ def part_bytes(raw, i):
     `raw` is the file as it lies on the floppy; the TABLE is read out of the
     IMAGE (os88pkg.image_unwrap), because since SPEC.md 20.13.8 a parted
     package's image may itself be packed - and the offsets it holds are
-    sectors of `raw`, so the part's bytes come out of `raw`.
+    paragraphs (sectors, on an old table) of `raw`, so the part's bytes
+    come out of `raw`.
     """
     row = image_rows(raw)[i]
     if not row["off"]:
         raise ValueError("part %d has no file bytes (a scratch row)" % i)
-    at = row["off"] * 512
+    at = byte_off(row)
     if not row["flags"] & EQU["OP_COMP"]:
         return raw[at:at + row["len"]]
     import os88lz
-    return os88lz.decompress(raw[at:at + row["zkb"]], os88lz.LZ4, row["len"])
+    z = raw[at:at + row["zkb"]]
+    if row["flags"] & EQU["OP_ZFILL"]:
+        # SPEC.md 20.12.7.5: a head S1, P1, B, S2 and two streams, landing at
+        # 0 and at B, and every byte of the row they do not write is zero
+        s1, p1, b, s2 = (_u16(z, k) for k in (0, 2, 4, 6))
+        out = bytearray(row["len"])
+        out[:s1] = os88lz.decompress(z[8:8 + p1], os88lz.LZ4, s1)
+        out[b:b + s2] = os88lz.decompress(z[8 + p1:], os88lz.LZ4, s2)
+        return bytes(out)
+    return os88lz.decompress(z, os88lz.LZ4, row["len"])
 
 
 # --- and the same question asked of the harness ------------------------------
@@ -304,7 +347,7 @@ def main_run(argv):
     for k, r in enumerate(rows_):
         print("  part %d %-5s %s len %6d%s" % (
             k, "SEG" if r["kind"] == EQU["OP_SEG"] else "ASSET",
-            "scratch" if not r["off"] else "sector %3d" % r["off"], r["len"],
+            "scratch" if not r["off"] else "byte %6d" % byte_off(r), r["len"],
             " lazy" if r["flags"] & EQU["OP_LAZY"] else ""))
     ok = run < limit
     print("os88parts: %s: the eager run is %d unpacked sectors, %s %d (SPEC.md 20.12.11)"

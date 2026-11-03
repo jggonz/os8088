@@ -669,7 +669,8 @@ mx_bass: db 'Bass       ',0
 mx_treble: db 'Treble     ',0
 mx_ablines:
     db 'Mixer',0,'Hardware source levels',0,'and stereo balance',0
-    db 'Arrow keys: select / adjust',0,'Tab: level or balance',0,OS88UI_ABEND
+    db 'Arrow keys: select / adjust',0,'Tab: level or balance',0
+    db 'Contributed by',0,'Jorge Gonzalez',0,OS88UI_ABEND
 
 mx_win: dw 0
 mx_ox: dw 0

@@ -27,6 +27,14 @@ ways to use it:
 - **Double-click DOS.O88** itself. The window opens at the prompt, and you
   type the name of a program or a command.
 
+To open a program or a shortcut **without running it**, hold **Alt** while
+you double-click it, or select it and hold **Shift** while you press
+`Enter`. The command box, the arguments and the settings are all filled in,
+the prompt stands in the program's own folder, and the console says nothing
+was started. Click **Run** to start it, type a command such as `SETUP` at the
+prompt, or change the settings and use **Save Shortcut** to update a `.LNK`
+without running it.
+
 DOS needs a machine with the full system (it is not on the disks for the
 smallest, 128KB machines). A Sound Blaster, a hard disk and a network card
 are all optional; a program that wants one can use it when it is there.
@@ -70,6 +78,23 @@ The exit code is the number the program handed back when it finished, and
 the arena is the memory the program was given.
 
 ![OS88NET.COM run with no arguments. With no parallel port to use, it says so and ends.](shot:dos-ended){full}
+
+## Running in the window
+
+**Program > Run in Window** keeps programs on the desktop instead. While it
+is ticked (the menu shows `*Run in Window`), every program started from the
+prompt runs inside the console, one after another, and the prompt stays in
+the window between them. The rest of the desktop keeps working: you can
+move the window, open folders and use other programs while a text program
+runs. Choose the item again to go back to the whole screen. It is the same
+setting as **Run in a window** on the Setup page, and a shortcut saved with
+it ticked runs that way.
+
+A program that switches to a graphics mode takes the whole screen for as
+long as it draws there, and the window comes back when it returns to text.
+Programs written for TopView or DESQview, such as WordPerfect 4.1, draw into
+the window directly and run at close to their full-screen speed. Closing the
+window stops the program in it.
 
 To run the same program again, press `Enter` with nothing typed, or click
 **Run**.
@@ -149,7 +174,18 @@ Blaster, DOS adds a `BLASTER=` line by itself, describing the card.
 
 The right half is about memory. **Est DOS Ram (Current Machine)** is how much
 memory the program will get with the settings as they stand. It changes as
-you change them.
+you change them. With **Run in a window** ticked it is the window's share,
+**128KB+** while **Limit** is empty: a window starts at 128KB and grows by
+itself, in 16KB steps, for a program that needs more - WordPerfect 4.1 gets
+144KB. Type a Limit and the window is that size exactly, and a program too
+big for it is refused.
+
+**Close when done** is for shortcuts. A shortcut saved with it ticked runs
+its program with only a small `Starting` window behind it, and that window
+closes when the program ends; a message appears only if the program could
+not run or ended with an error. It cannot be ticked together with **Run in a
+window**, and it is greyed for a Windows program. With it ticked the memory
+figure is a little larger, because the console is left out.
 
 **Disk cache** decides how much of that memory DOS keeps for speeding up
 disk reads: **Auto**, **32K**, **18K**, **9K** or **Off (SLOW!)**. A program
@@ -164,7 +200,8 @@ The two choices below it say where the program runs:
   Clear one to unload that driver while the program runs and give its
   memory to the program; it comes back afterwards. The figure beside each is
   the most memory that kind of driver can take. **Limit** caps the memory the program is
-  given, in kilobytes. Leave it empty to give it all there is.
+  given, in kilobytes. Leave it empty to give it all there is - or, in a
+  window, 128KB and as much more as the program needs.
 - **Shut down the OS** unloads os8088 itself and gives the program nearly
   the whole machine: on a 640KB PC, roughly 150KB more than Inside the OS.
   On a machine with a hard disk, os8088 saves your session to the disk first
@@ -203,6 +240,7 @@ the program itself always uses the default settings.
 | Run | `Enter` in the command box | Runs the program the command box names |
 | Setup | | Opens the Setup page |
 | Full Screen | `Alt+Enter` | Puts the console on the whole text screen |
+| Run in Window | | Runs programs from the prompt inside the window while ticked |
 
 ![The Program menu.](shot:dos-menu){right}
 

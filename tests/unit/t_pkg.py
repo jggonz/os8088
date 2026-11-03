@@ -339,6 +339,15 @@ def main():
             if ln.startswith("SYSROOT :=") and "kdos/DOS.O88" in ln:
                 sysarts["DOS.O88"] = read(parted)
                 break
+    # ...and the 360KB system disks carry a THIRD build of it, the same parts
+    # packed LZB (SPEC.md 96.44.18), named by $(SYSROOT360) the same way.
+    sys360 = dict(sysarts)
+    lzb360 = os.path.join(build, "kdos360", "DOS.O88")
+    if os.path.exists(lzb360) and os.path.exists(mk):
+        for ln in open(mk):
+            if ln.startswith("SYSROOT360 :=") and "kdos360/DOS.O88" in ln:
+                sys360["DOS.O88"] = read(lzb360)
+                break
 
     # ...and every file on every image must BE one of them.
     compared = 0
@@ -353,6 +362,8 @@ def main():
             stem, ext = name11[:8].strip().decode(), name11[8:].strip().decode()
             fname = ("%s.%s" % (stem, ext)) if ext else stem
             table = sysarts if img in SYSTEM_IMAGES else arts
+            if img in SYSTEM_IMAGES and "360" in img:
+                table = sys360
             if fname.upper() not in table:
                 continue                            # generated on the volume
             want = table[fname.upper()]

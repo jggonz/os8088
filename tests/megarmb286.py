@@ -170,7 +170,7 @@ def main():
         b.kernel_up(prompts=PROMPTS)
         b.until(lambda: b.byte("mega_on"), "protected mode", 30000, 250)
         b.ui_done(cap_ms=10000)
-        ip = koff(b, "mega_down.hang") - 2    # (`int 3` is CD 03 before it)
+        ip = koff(b, "mega_svc_lo.rdown")    # (the drop's own `int 3`)
         rtick = koff(b, "fsx_rtick")
         r0 = resets(b, ip)
         since = lines_now(b)

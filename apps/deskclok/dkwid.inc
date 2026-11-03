@@ -698,25 +698,27 @@ dk_cbuild:
     mov cl, [ck_np]
     xor ch, ch
     mul cx                      ; DX:AX = the bytes
-    add ax, 1023
+    add ax, 15
     adc dx, 0
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
-    or ax, dx                   ; AX = the KB
-    cmp word [dk_cseg], 0
-    je .claim
-    cmp al, [dk_ckb]
+    or ax, dx                   ; AX = the PARAGRAPHS (SPEC.md 50.3.7):
+    cmp word [dk_cseg], 0       ; the face is a byte count, held for as
+    je .claim                   ; long as the clock is on the desk
+    cmp ax, [dk_cpara]
     jbe .have
     mov dx, [dk_cseg]           ; too small: give it back, take a bigger one
     call OSAPI_MEM_FREE
     mov word [dk_cseg], 0
 .claim:
-    call OSAPI_MEM_CLAIM        ; DX = the segment, CF = 1 refused
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; DX = the segment, CF = 1 refused
     jc .x
     mov [dk_cseg], dx
-    mov [dk_ckb], al
+    mov [dk_cpara], ax          ; (what was granted)
     push ax                     ; ...AND IT MOVES (NO-PINNING A3, SPEC.md
     mov ax, dk_creloc           ; 110.14.10): dk_creloc's header
     call OSAPI_MEM_MOVABLE

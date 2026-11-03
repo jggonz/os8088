@@ -20,7 +20,9 @@ kern_mega under Bochs at 1MB, 4MB and 16MB and asserts, per machine:
      MEGA_LDT_FREE0 + MEGA_LDT_BASE + one entry per 16KB of extended memory
      (to 15MB), rounded up to a 64-byte line;
   3. the IDTR's base is the GDT's plus [mega_ldtend], and [mega_tblkb] the
-     block's KB - printed, so the saving is a number on every run;
+     block's KB - printed, so the saving is a number on every run - with
+     the tables' TAIL past the IDT in it (MEGA_MXT_SIZE, kern_mega size
+     pass 2), and MEGA_SEL_MXT's base the IDT's end;
   4. the desktop is up, B:'s Disk window and the Task Manager open, and no
      kern_mega FAULT or CLOSED line is written.
 
@@ -50,6 +52,8 @@ GDT_N = EQ["MEGA_GDT_N"]
 FREE0 = EQ["MEGA_LDT_FREE0"]
 LBASE = EQ["MEGA_LDT_BASE"]
 IDT = EQ["MEGA_IDT_SIZE"]
+MXT = EQ["MEGA_MXT_SIZE"]
+SEL_MXT = EQ["MEGA_SEL_MXT"]
 FAILS = []
 
 
@@ -111,9 +115,13 @@ def machine(megs, keep):
              "2. %dMB: the LDT on the GDT (base %06Xh against %06Xh), %d "
              "entries for %dKB extended (want %d), limit %04Xh"
              % (megs, lb, gb, n, ext, exp_n, ll))
-        want(ib == gb + end and kb == (end + IDT + 1023) // 1024,
-             "3. %dMB: the IDT at the GDT + %04Xh (%06Xh), the block %dKB "
-             "(82 before MC7's step 6)" % (megs, end, ib, kb))
+        d = box.read(gb + (SEL_MXT & 0xFFF8), 8)
+        tb = d[2] | d[3] << 8 | d[4] << 16
+        want(ib == gb + end and kb == (end + IDT + MXT + 1023) // 1024
+             and tb == ib + IDT and (d[0] | d[1] << 8) == MXT - 1,
+             "3. %dMB: the IDT at the GDT + %04Xh (%06Xh), the tail at "
+             "%06Xh, the block %dKB (82 before MC7's step 6)"
+             % (megs, end, ib, tb, kb))
         box.dbl(591, 105, "B:'s Disk window")
         menu(box, 51)
         box.ui_done("the Task Manager", secs=120)

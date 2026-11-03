@@ -288,11 +288,10 @@ spk_pcm_idle:
 ; audio cannot silence an alert.
 ; -----------------------------------------------------------------------------
 snd_tone_req:
-    push bx
-    push cx
-    push dx
-    push si
-    pushf
+    push bx                     ; BX and SI only: nothing here writes CX, and
+    push si                     ; DX comes back as it came, the one write to
+    pushf                       ; it (DL, for the sink) banked round its call
+                                ; (kernel size pass 17, -4)
     cli
     cmp byte [snd_live], 0      ; not initialised: .bss is garbage - refuse
     je .refuse
@@ -320,29 +319,27 @@ snd_tone_req:
                                 ; priority, DH the instance: one word
                                 ; (adjacent - the %if under the .bss)
     mov [snd_town_exp], cx
-    mov byte [snd_town_act], 1
-    mov byte [snd_ch2mode], 1
+    mov al, 1                   ; one immediate for both bytes (AL is the
+    mov [snd_town_act], al      ; generation's below - kernel size pass 16, -2)
+    mov [snd_ch2mode], al
 .granted:                       ; ...and a release updates the record too
     inc byte [snd_gen]          ; (34.3): the generation, which is AL, the
     mov al, [snd_gen]           ; answer to both
     popf
-    clc
-    jmp short .out
-
-.off:                           ; --- tone off: release the channel ----------
-    call snd_town_off
-    jmp short .granted          ; same window close, same CF=0 answer, same
-                                ; AL = the generation
-
+    SKIPF2                      ; CF = 0 over .refuse's popf/stc (kernel size
+                                ; pass 16: -2 against clc and a jump)
 .refuse:
     popf
     stc
 .out:
     pop si
-    pop dx
-    pop cx
     pop bx
     ret
+
+.off:                           ; --- tone off: release the channel ----------
+    call snd_town_off
+    jmp short .granted          ; same window close, same CF=0 answer, same
+                                ; AL = the generation
 
 ; -----------------------------------------------------------------------------
 ; snd_town_off - silence the owning tone and free the channel (internal)
@@ -1089,14 +1086,9 @@ osapi_fsx_spk:
     jne spk_off.err             ; there is the real-mode contract, refused
     call .open                  ; as before so an older library falls back
     jc .pmo
-    push ax                     ; IRQ0's gate: the caller's ISR, its CODE
-    mov ax, [spk_seg]           ; selector BX banked in [spk_seg] by .open
-    call MEGA_SEL_CODE:spk_gate0f
-    pop ax
-    mov cx, KERNEL_SEG          ; ...and the chain: the kernel's IRQ0, the
-    mov dx, sch_isr             ; gate's own target before (KERNEL_SEG is a
-.pmo:                           ; code selector there)
-    ret
+    call MEGA_SEL_CODE:spk_gate0f ; IRQ0's gate: the caller's ISR, its CODE
+.pmo:                           ; selector BX banked in [spk_seg] by .open,
+    ret                         ; and CX:DX the chain (spk_gate0f, `.mega`)
 .rm:
 .open:
 %endif
@@ -1172,9 +1164,11 @@ section .text
 section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
 ; -----------------------------------------------------------------------------
 ; spk_gate0f / spk_gate0kf - FAR, protected mode: IRQ0's IDT gate (20h) to
-; AX:SI (the speaker door's open, osapi_fsx_spk) / back to the kernel's own
-; sch_isr (spk_off). Every register kept (kern_mega size pass 1: the two
-; writes were inline in .text)
+; [spk_seg]:SI (the speaker door's open, osapi_fsx_spk), with CX:DX = the
+; chain it hands back, the kernel's own IRQ0 (KERNEL_SEG:sch_isr - a code
+; selector there) / back to that sch_isr (spk_off). spk_gate0kf keeps every
+; register, spk_gate0f all but CX and DX (kern_mega size pass 1: the two
+; writes were inline in .text; pass 2: and the open's tail with them)
 ; -----------------------------------------------------------------------------
 spk_gate0kf:
     push ax
@@ -1186,7 +1180,12 @@ spk_gate0kf:
     pop ax
     retf
 spk_gate0f:
+    push ax
+    mov ax, [spk_seg]
     call spk_gate0
+    pop ax
+    mov cx, KERNEL_SEG
+    mov dx, sch_isr
     retf
 spk_gate0:
     push es

@@ -1313,13 +1313,12 @@ pa_begin:
     jnz .huge
     cmp ax, 0xFFFF - AN_GTAB
     ja .huge
-    add ax, AN_GTAB + 1023          ; the claim it needs, KB - the sum in
-    mov al, ah                      ; 17 bits: a 320 x 200 frame is 64,000
-    mov ah, 0                       ; and its sum carries (review-w8 A1: it
-    adc ah, ah                      ; read as 0 KB, and the backup ran ~63
-    shr ax, 1                       ; KB past a 1 KB claim)
-    shr ax, 1
-    cmp ax, [es:px_ankb]
+    add ax, AN_GTAB + 15            ; the claim it needs, in PARAGRAPHS
+    rcr ax, 1                       ; (SPEC.md 50.3.7) - the sum in 17 bits:
+    shr ax, 1                       ; a 320 x 200 frame is 64,000 and its sum
+    shr ax, 1                       ; carries (review-w8 A1: it read as 0 KB,
+    shr ax, 1                       ; and the backup ran ~63 KB past a 1 KB
+    cmp ax, [es:px_anpara]          ; claim)
     jbe .room
     mov [es:px_anneed], ax
     mov ax, PXD_MEM
@@ -2053,7 +2052,7 @@ av_start:
     call OSAPI_MEM_CLAIM
     jc .nomem
     mov [px_anseg], dx
-    mov word [px_ankb], 1
+    mov word [px_anpara], 64
     push es
     mov es, dx
     xor di, di
@@ -2066,14 +2065,14 @@ av_start:
 .have:
     PSV SV_RINGCL
     jc .nomem
-    mov ax, [px_cur + PXR_MW]       ; LZW_KB and a row, KB
-    add ax, 1023
-    mov al, ah
-    xor ah, ah
-    shr ax, 1
-    shr ax, 1
-    add ax, LZW_KB
-    call OSAPI_MEM_CLAIM
+    mov ax, [px_cur + PXR_MW]       ; LZW_KB and a row, in PARAGRAPHS
+    add ax, 15                      ; (SPEC.md 50.3.7): the row is a byte
+    mov cl, 4                       ; count, held for the whole pass
+    shr ax, cl
+    add ax, LZW_KB * 64
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nring
     mov [px_wbase], dx
     xor ax, ax                      ; THE STREAM: from the frame, or from the
@@ -2178,7 +2177,9 @@ av_wake:
     mov ax, [px_anneed]             ; THE BACKUP'S ROOM: a claim that big, the
     cmp ax, 0xFFFF                  ; global table copied over
     je .nm
-    call OSAPI_MEM_CLAIM
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; (paragraphs: pa_job's sum)
     jc .nm
     push ds
     push es
@@ -2199,7 +2200,7 @@ av_wake:
     mov ax, [px_mrelp]              ; (the bigger claim moves as the first
     call OSAPI_MEM_MOVABLE          ; did, between the passes)
     mov ax, [px_anneed]
-    mov [px_ankb], ax
+    mov [px_anpara], ax
     jmp short .x
 .nm:
     mov si, av_s_mem

@@ -100,7 +100,8 @@ DOS_MEM_IN, DOS_MEM_WHOLE = 0, 1
 # every launch is the whole machine, so [dos_keepc] is PROMOTED to
 # DOS_MEM_WHOLE and arm 0's controls - the two driver boxes and the limit -
 # are greyed and keep what they hold. What a link CARRIES on that machine is
-# asserted as what it is: no limit, the whole arm, both driver boxes ticked.
+# asserted as what it is: no limit, the whole arm, Hard drives ticked and
+# Network at its default, which is CLEARED since SPEC.md 96.36.7.4.
 MEGA = bool(os.environ.get("OS88_MEGA"))
 ARM = DOS_MEM_WHOLE if MEGA else DOS_MEM_IN
 WANT_LIMIT = 0 if MEGA else None        # None: LIMIT, as typed
@@ -377,7 +378,10 @@ def main():
             os88marty.settle(m)
 
         # **AND THE BOXES, which the link did not carry** (SPEC.md 96.25.2.1).
-        # Network is arm 0's and live under it, so it is CLICKED off. Disable
+        # Network is arm 0's and live under it, so it is CLICKED - ON, since
+        # SPEC.md 96.36.7.4 made cleared the default: a link has to carry the
+        # NON-default to prove it carries anything, and a ticked Network is
+        # the saved choice 96.36.7.4 promises to keep. Disable
         # the mouse is arm 1's and greyed under arm 0 (96.36.9), and a press
         # there would pick arm 1 - which is not this row's arm, and on a
         # floppy-only machine may not be a pick at all (96.36.1) - so its tick
@@ -387,9 +391,10 @@ def main():
         if not getattr(m, "bochs", False):
             mo.click(*dosmap.centre(m, pseg, dm, "dos_mnet"))
             os88marty.settle(m)
-            if m.read(dosmap.lin(m, pseg, dm["dos_mnet"]) + CK_ON, 1)[0]:
-                fail("clicking the Network box left it ticked (SPEC.md "
-                     "96.36.7)")
+            if not m.read(dosmap.lin(m, pseg, dm["dos_mnet"]) + CK_ON, 1)[0]:
+                fail("clicking the Network box left it clear - it starts "
+                     "cleared (SPEC.md 96.36.7.4) and one press ticks it "
+                     "(96.36.7)")
         # (kern_mega: ONE ARM, the whole machine - dos_mem_fix PROMOTES
         # [dos_keepc] to DOS_MEM_WHOLE and arm 0's two driver boxes are greyed
         # ticked with it (KERN-MEGA-DOS-PLAN 12.1 item 1), so there is no
@@ -451,11 +456,13 @@ def main():
     if "boxes" not in got:
         fail("the memory block is the old 12 bytes and carries none of the "
              "page's three boxes (SPEC.md 96.25.2.1)")
-    wbox = BX_NOMOU if MEGA else BX_NONET | BX_NOMOU
+    # (kern_big: Network CLICKED on, so its bit is clear; kern_mega: never
+    # pressed, so it is the default - cleared since 96.36.7.4 - and set)
+    wbox = BX_NONET | BX_NOMOU if MEGA else BX_NOMOU
     if got["boxes"] != wbox:
         fail("the memory block's box byte is %#04x and the page had Network "
-             "unticked and Disable the mouse ticked - %#04x (SPEC.md "
-             "96.25.2.1)" % (got["boxes"], wbox))
+             "%s and Disable the mouse ticked - %#04x (SPEC.md 96.25.2.1)"
+             % (got["boxes"], "unticked" if MEGA else "ticked", wbox))
     # **AND WORKING_DIR CARRIES THE DRIVE** (SPEC.md 96.21.2.1).
     # OSAPI_FILE_PATH answers no drive letter by design (19.2.4), so DOS
     # wrote `\BIN` and the link resolved against whichever volume it happened
@@ -563,11 +570,12 @@ def main():
                  for n in ("dos_mhdd", "dos_mnet", "dos_mmou")]
         print("doslnk: the relaunched DOS's boxes: hard drives %d, network "
               "%d, disable the mouse %d" % tuple(boxes))
-        if boxes != ([1, 1, 1] if mega else [1, 0, 1]):
+        want = [1, 0, 1] if mega else [1, 1, 1]
+        if boxes != want:
             fail("the shortcut reopened with hard drives %d, network %d and "
-                 "disable the mouse %d, and it carries 1/0/1 - the box byte "
-                 "was written and not read (SPEC.md 96.25.2.1)"
-                 % tuple(boxes))
+                 "disable the mouse %d, and it carries %d/%d/%d - the box "
+                 "byte was written and not read (SPEC.md 96.25.2.1, 96.36.7.4)"
+                 % tuple(boxes + want))
         m.type_text("x")
 
     # --- 5: THE SECOND TRY, when the disk has moved (SPEC.md 96.21.2.1) -----

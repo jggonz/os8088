@@ -20,13 +20,14 @@ wf_fx_need:
     jc .out
     mov al, WF_P_FX
     call op_row
-    call op_lazykb
+    call op_lazyp               ; PARAGRAPHS, as op_fetch claims them and as
+    jc .out                     ; MEMP_AVAIL answers (SPEC.md 50.3.7)
+    add ax, 8 * 64              ; and leave the heap something
     jc .out
-    add ax, 8                   ; and leave the heap something
-    jc .out
-    xchg ax, bx
-    call OSAPI_MEM_AVAIL
-    cmp ax, bx
+    xchg ax, dx                 ; (not BX: MEMP_AVAIL answers there)
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P
+    cmp ax, dx
     jb .out
     mov al, WF_P_FX
     call op_fetch

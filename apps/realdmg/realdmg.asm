@@ -791,6 +791,11 @@ rw_load:
     inc byte [rw_mhold]
     call rw_mpin
     call rw_load0
+    xor cx, cx                      ; ...and the load's one operation over,
+    mov dx, cx                      ;   if it was ours (SPEC.md 12.8.10): an
+    call OSAPI_FS_OP                ;   end we do not own is refused, so no
+                                    ;   flag - every way out of rw_load0 is
+                                    ;   this one
     dec byte [rw_mhold]
     jmp rw_mfree
 rw_load0:
@@ -816,6 +821,13 @@ rw_load0:
     jb .notrom
 .sized:
     mov [rw_romkb], dx
+    push dx                         ; ONE OPERATION for the cartridge's reads
+    mov ax, 1024                    ;   (SPEC.md 12.8.10): the bank cache's
+    mul dx                          ;   64 bank reads of a 1MB cart were 64
+    xchg ax, cx                     ;   fills. DX:CX = the ROM's bytes, which
+    call OSAPI_FS_OP                ;   leaves out the recompiler's part and
+    pop dx                          ;   the code images: an UNDER-estimate,
+                                    ;   so the bar clamps full a moment early
 %ifdef RDG_AOT
 %ifdef PKG_MEGA
     cmp byte [rw_pm], 0             ; KERN_MEGA'S ARM UNDER CPU_F_PM (REALDMG-
@@ -881,10 +893,10 @@ rw_load0:
     mov dx, [rw_jitseg]
     call OSAPI_MEM_FREE
     mov word [rw_jitseg], 0
-    call rw_jpkb                    ; the claim WITH the recompiler's part,
-    add ax, 64 + 16                 ;   read again into its new tail: the
+    call rw_jppara                  ; the claim WITH the recompiler's part,
+    add ax, (64 + 16) * 64          ;   read again into its new tail: the
     mov byte [rw_hmask], 7          ;   64 + 16 this was left the part past
-    call OSAPI_MEM_CLAIM            ;   the claim's end and its pointers at
+    call rw_pclaim                  ;   the claim's end and its pointers at
     jc .nojit                       ;   the old place, and the slots were
     mov bx, 1000h + 400h            ;   claimed over it - a 1MB cartridge
     RW_JSEGS                        ;   hung on its first frame, or ran the
@@ -1388,26 +1400,26 @@ rw_jitget:                          ; (CF = 1: none, a game running too)
 %ifdef PKG_MEGA
     call rw_jtx                     ; kern_mega's arm: the table above 1MB,
     jc .conv                        ;   the claim the cache and the part
-    call rw_jpkb                    ;   alone (16.2.5)
-    add ax, 64
+    call rw_jppara                  ;   alone (16.2.5)
+    add ax, 64 * 64
     mov byte [rw_hmask], JIT_HMMAX
-    call OSAPI_MEM_CLAIM
+    call rw_pclaim
     mov bx, 1000h
     jnc .got
     jmp short .r
 .conv:
 %endif
-    call rw_jpkb                    ; AX = the recompiler's own KB, its part
-    push ax                         ;   read into the claim's tail (16.9)
-    add ax, 64 + JIT_HASHN * 8 / 1024 ; the cache and its block table: 64KB
-    mov byte [rw_hmask], JIT_HMMAX  ;   of table, a quarter of the slot
-    call OSAPI_MEM_CLAIM            ;   fights 16KB's has (REALDMG-SPEC
-    pop ax                          ;   16.3: Kirby's Dream Land 330 -> 266
-    mov bx, 1000h + JIT_HASHN / 2   ;   ticks, the CPU alone) - or 16KB
-    jnc .got
-    add ax, 64 + 16
+    call rw_jppara                  ; AX = the recompiler's own paragraphs,
+    push ax                         ;   its part read into the claim's tail
+    add ax, (64 + JIT_HASHN * 8 / 1024) * 64 ; (16.9). The cache and its
+    mov byte [rw_hmask], JIT_HMMAX  ;   block table: 64KB of table, a
+    call rw_pclaim                  ;   quarter of the slot fights 16KB's
+    pop ax                          ;   has (REALDMG-SPEC 16.3: Kirby's
+    mov bx, 1000h + JIT_HASHN / 2   ;   Dream Land 330 -> 266 ticks, the CPU
+    jnc .got                        ;   alone) - or 16KB
+    add ax, (64 + 16) * 64
     mov byte [rw_hmask], 7
-    call OSAPI_MEM_CLAIM            ; DX = its segment (the state block
+    call rw_pclaim                  ; DX = its segment (the state block
     mov bx, 1000h + 400h            ;   names it: rw_mreloc, rwmove.inc)
     jc .r
 .got:
@@ -1469,15 +1481,29 @@ rw_jtx:
     ret
 %endif
 
-; rw_jpkb - AX = the KB the recompiler's part takes in its claim: its
-; expanded length, and a sector over for the stream read beneath its end
-rw_jpkb:
+; rw_jppara - AX = the PARAGRAPHS the recompiler's part takes in its claim:
+; its expanded length, and a sector over for the stream read beneath its end.
+; Paragraphs rather than KB (SPEC.md 50.3.7): the part is a byte count, and
+; the claim it ends is held for as long as the recompiler is
+rw_jppara:
     mov ax, [op_table + OP_T_ROWS + RWJ_PART * OP_ROW + OP_R_LEN]
-    add ax, 1023 + 512
-    mov al, ah
-    xor ah, ah
-    shr al, 1
-    shr al, 1
+    add ax, 512 + 15
+    rcr ax, 1                       ; (a carry comes back in as bit 15)
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    ret
+
+; rw_pclaim - OSAPI_MEM_P's bottom-up claim of AX paragraphs, no DMA head:
+; out CF, DX = the base, AX = the paragraphs granted; BX and CX kept
+rw_pclaim:
+    push bx
+    push cx
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
     ret
 
 ; rw_jpart - BX = a segment in the recompiler's claim: the recompiler read
@@ -1516,19 +1542,28 @@ rw_jpart:
     mov si, op_table + OP_T_ROWS + RWJ_PART * OP_ROW
     mov cx, [si + OP_R_ZKB]         ; CX = the packed bytes
     mov bx, [si + OP_R_LEN]         ; BX = what they expand to
-    sub bx, cx                      ; BX = R, a sector boundary: where the
-    jbe .no                         ;   stream is read, up from where it
-    add bx, 511                     ;   expands to
-    and bx, ~511
-    mov ax, [si + OP_R_OFF]         ; DX:AX = the part's byte offset
-    mov dx, ax
+    sub bx, cx                      ; BX = len - packed, which the stream
+    jbe .no                         ;   must start at least that far up
+    mov ax, [si + OP_R_OFF]         ; DX:AX = the part's byte offset: `off`
+    mov dx, ax                      ;   is PARAGRAPHS (SPEC.md 20.12.2)
     push cx
-    mov cl, 9
+    mov cl, OP_GSH
     shl ax, cl
-    mov cl, 7
+    mov cl, 16 - OP_GSH
     shr dx, cl
     pop cx
+    mov di, ax
+    and di, 511                     ; DI = its place in its SECTOR, where
+    sub ax, di                      ;   READ_AT starts (SPEC.md 18.4.4.2)
+    sub bx, di                      ; BX = R, a sector boundary: the read
+    jae .rpos                       ;   lands there and the stream DI past
+    xor bx, bx                      ;   it, still len - packed up from
+.rpos:                              ;   where it expands to - and the claim
+    add bx, 511                     ;   (rw_jppara) is no bigger than for a
+    and bx, ~511                    ;   part on a sector
     mov es, bp
+    push cx
+    add cx, di                      ; the slack and the stream must arrive
     push cx
     add cx, 511
     and cx, ~511                    ; whole sectors, the file ending inside
@@ -1536,10 +1571,12 @@ rw_jpart:
     mov si, op_name
     call OSAPI_FILE_READ_AT         ; DX:AX = the bytes delivered
     pop si                          ; SI = R
-    pop cx
-    jc .no
+    pop cx                          ; CX = slack + packed
+    jc .nop
     cmp ax, cx
+    pop cx                          ; CX = the packed bytes
     jb .no
+    add si, di                      ; SI = the stream
     mov al, [op_table + OP_T_FMT]
     xor ah, ah
     mov dx, [op_table + OP_T_ROWS + RWJ_PART * OP_ROW + OP_R_LEN]
@@ -1554,6 +1591,8 @@ rw_jpart:
     call rw_jdset
     clc
     jmp short .r
+.nop:
+    pop cx
 .no:
     stc
 .r:
@@ -4969,13 +5008,15 @@ rw_s_noram:     db 'REALDMG: no room for RAM', 0
 rw_s_nosave:    db 'REALDMG: save failed', 0
 
 rw_ablines:
-    dw rw_ab1, rw_ab2, rw_ab3, rw_ab4, rw_ab5, rw_ab7, 0
+    dw rw_ab1, rw_ab2, rw_ab3, rw_ab8, rw_ab9, rw_ab3, rw_ab4, rw_ab5, rw_ab7, 0
 rw_ab1:         db 'RealDMG', 0
 rw_ab2:         db 'a Game Boy for os8088', 0
 rw_ab3:         db 0
 rw_ab4:         db 'Keys: Machine >', 0     ; (they are the user's now)
 rw_ab5:         db 'Controls...', 0
 rw_ab7:         db 'F1 = speed', 0
+rw_ab8:         db 'Contributed by', 0
+rw_ab9:         db 'Elendilon', 0
 
 %include "rdgdefs.inc"
 %define RDG_CSEL                            ; (rw_csel: REALDMG-SPEC 16.2.4)

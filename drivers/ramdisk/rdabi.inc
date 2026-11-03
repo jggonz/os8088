@@ -63,7 +63,14 @@ RD_TABMAXKB  equ (RD_DIRB + RD_MAXEXT * 2 + 1023) / 1024   ; ...and the
                                  ; because it is what CONVENTIONAL memory has
                                  ; to fund for an EXTENDED store, and naming it
                                  ; is half of not confusing that gate with a
-                                 ; ceiling (SPEC.md 62.9.10.3)
+                                 ; ceiling (SPEC.md 62.9.10.3). A KB figure on
+                                 ; purpose: the gate compares OSAPI_MEM_AVAIL's
+                                 ; KB, and rounding UP is the safe side of it
+RD_TABMAXB   equ RD_DIRB + RD_MAXEXT * 2  ; ...and the same claim in BYTES,
+                                 ; 6,400: what rd_claimp really asks for at
+                                 ; its largest, to the paragraph (SPEC.md
+                                 ; 50.3.7), and so what the Drivers page
+                                 ; prices - 6.5KB at the granule (DRVM_RAM)
 RD_EXTMINKB  equ 1               ; ...and the smallest extent
 RD_EXTMAXKB  equ 8               ; ...and the largest, which is what makes
                                  ; RD_MAXKB the product of the two above

@@ -695,12 +695,17 @@ wd_entry:
                                     ; a stride of ONE - not wrong, but 64
                                     ; entries covering 64 rows and halving four
                                     ; times to catch up on the first count
-    mov ax, WD_KB0                  ; the document, before anything else: an
-    call OSAPI_MEM_CLAIM            ; editor with nowhere to put the text is
-    jc .nomem                       ; not a window worth opening, and the
-    mov [wd_dseg], dx               ; loader's LD_EABORT says so for us
-    mov ax, WD_KB0                  ; ...and the CHP claim, one attribute byte
-    call OSAPI_MEM_CLAIM            ; per character, grown/shrunk in lockstep
+    xor cx, cx                      ; both in PARAGRAPHS (SPEC.md 50.3.7):
+    mov bl, MEMP_CLAIM              ; wd_resize grows them by a byte count,
+    mov ax, WD_KB0 * 64             ; which MEMP_REGROW takes as it stands
+    call OSAPI_MEM_P                ; (a kern_mega pool block too: the verb's
+    jc .nomem                       ; own arm resizes one, in KB). The
+    mov [wd_dseg], dx               ; document, before anything else: an
+                                    ; editor with nowhere to put the text is
+                                    ; not a window worth opening, and the
+                                    ; loader's LD_EABORT says so for us
+    mov ax, WD_KB0 * 64             ; ...and the CHP claim, one attribute byte
+    call OSAPI_MEM_P                ; per character, grown/shrunk in lockstep
     jc .nomem                       ; by wd_resize (SPEC.md 68.3). Claimed here
     mov [wd_cseg], dx               ; so wd_arg's load can zero it; a refusal
                                     ; aborts the launch and ld_unreserve frees
@@ -727,7 +732,7 @@ wd_entry:
     pop ax                          ; compaction inside the second or third
                                     ; claim found the first still pinned
     mov word [wd_papn], 1
-    mov word [wd_capkb], WD_KB0
+    mov word [wd_cappara], WD_KB0 * 64
     mov word [wd_cap], WD_KB0 * 1024
     call wd_defname                 ; the name and the TITLE the template
     call wd_compttl                 ; points at (SPEC.md 68.2: 'Microsoft
@@ -8769,64 +8774,61 @@ wd_dmov:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_resize - make the document claim AX kilobytes
-; in:  AX = the wanted size in KB (clamped to WD_KB0..WD_MAXKB)
-; out: CF=0 with [wd_dseg]/[wd_capkb]/[wd_cap] updated, or CF=1 and all three
-;      unchanged; preserves every register
+; wd_resize - make the document claim AX paragraphs
+; in:  AX = the wanted size in paragraphs (clamped to WD_KB0..WD_MAXKB)
+; out: CF=0 with [wd_dseg]/[wd_cappara]/[wd_cap] updated, or CF=1 and all
+;      three unchanged; preserves every register
 ;
-; ALWAYS through OSAPI_MEM_REGROW, never claim-copy-free: a regrow extends in
-; place when the paragraphs above it are free, so it needs the DIFFERENCE
-; rather than old + new at once, and when it does have to move it brings the
-; bytes with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which
-; is what makes File > New's give-back free.
+; ALWAYS through a regrow, never claim-copy-free: a regrow extends in place
+; when the paragraphs above it are free, so it needs the DIFFERENCE rather
+; than old + new at once, and when it does have to move it brings the bytes
+; with it (SPEC.md 50.3.1). Shrinking always succeeds in place, which is what
+; makes File > New's give-back free. In PARAGRAPHS (SPEC.md 50.3.7), so the
+; note pays the heap's granule and not a whole KB - and [wd_cap] is what was
+; GRANTED, so the granule's slack is typing room rather than a hole.
 ; -----------------------------------------------------------------------------
 wd_resize:
     push ax
+    push bx
     push dx
-    cmp ax, WD_KB0
+    cmp ax, WD_KB0 * 64
     jae .lo
-    mov ax, WD_KB0
+    mov ax, WD_KB0 * 64
 .lo:
-    cmp ax, WD_MAXKB
+    cmp ax, WD_MAXKB * 64
     jbe .hi
-    mov ax, WD_MAXKB
+    mov ax, WD_MAXKB * 64
 .hi:
-    cmp ax, [wd_capkb]
+    cmp ax, [wd_cappara]
     je .same                        ; already that size: nothing to ask for
-    push ax
+    mov bl, MEMP_REGROW
     mov dx, [wd_dseg]
-    call OSAPI_MEM_REGROW           ; out CF=0 and DX = the base NOW
-    pop ax
-    jc .out                         ; refused: the old claim stands untouched
+    call OSAPI_MEM_P                ; out CF=0, DX = the base NOW and AX =
+    jc .out                         ; the paragraphs granted; refused: the
+                                    ; old claim stands untouched
     mov [wd_dseg], dx               ; ...and a grow that MOVED reports a new
                                     ; base, which is the whole reason DX is
                                     ; the answer (SPEC.md 50.3.1)
-    push ax                         ; --- the CHP claim, in lockstep (SPEC.md
-    mov dx, [wd_cseg]               ; 65.3): one attribute byte per character,
-    call OSAPI_MEM_REGROW           ; so the two claims are always the same
-    pop ax                          ; size. If the mirror is refused, the text
-    jnc .cok                        ; claim is put back - a shrink (or a
-    push ax                         ; same-size ask) always succeeds in place,
-    mov ax, [wd_capkb]              ; so the pair stays consistent and the
-    mov dx, [wd_dseg]               ; caller sees one refusal
-    call OSAPI_MEM_REGROW
-    mov [wd_dseg], dx
-    pop ax
-    stc
+    mov dx, [wd_cseg]               ; --- the CHP claim, in lockstep (SPEC.md
+    call OSAPI_MEM_P                ; 65.3): one attribute byte per character,
+    jnc .cok                        ; so the two claims are always the same
+    mov ax, [wd_cappara]            ; size. If the mirror is refused, the text
+    mov dx, [wd_dseg]               ; claim is put back - a shrink (or a
+    call OSAPI_MEM_P                ; same-size ask) always succeeds in place,
+    mov [wd_dseg], dx               ; so the pair stays consistent and the
+    stc                             ; caller sees one refusal
     jmp short .out
 .cok:
     mov [wd_cseg], dx
-    mov [wd_capkb], ax
-    push cx                         ; CL is borrowed for the shift and PUT
-    mov cl, 10                      ; BACK: wd_load banks its text length in
-    shl ax, cl                      ; CX across this call, and a public
-    pop cx                          ; routine preserves what it does not
-                                    ; answer with (SPEC.md 1)
-    mov [wd_cap], ax                ; WD_MAXKB * 1024 fits a word by design
+    mov [wd_cappara], ax
+    mov bx, 16
+    mul bx                          ; DX is banked: WD_MAXKB * 1024 fits a
+    mov [wd_cap], ax                ; word by design
 .same:
     clc
 .out:
     pop dx
+    pop bx
     pop ax
     ret
 
@@ -8845,10 +8847,10 @@ wd_fitclaim:
     push ax
     push cx
     mov ax, [wd_len]
-    add ax, 1023                ; the note's own whole kilobytes...
-    mov cl, 10
+    add ax, 15                  ; the note's own paragraphs (<= WD_MAXKB * 1024,
+    mov cl, 4                   ; so no carry)...
     shr ax, cl
-    add ax, WD_GROWKB           ; ...plus one to type into
+    add ax, WD_GROWKB * 64      ; ...plus a kilobyte to type into
     call wd_resize              ; a shrink always succeeds in place
     pop cx
     pop ax
@@ -8870,8 +8872,8 @@ wd_room:
     mov ax, [wd_len]
     cmp ax, [wd_cap]
     jb .yes
-    mov ax, [wd_capkb]
-    add ax, WD_GROWKB
+    mov ax, [wd_cappara]
+    add ax, WD_GROWKB * 64
     call wd_resize
     jc .no
     mov ax, [wd_len]
@@ -9116,7 +9118,7 @@ wd_load:
 .plain:
     ; --- plain-text import (65.4): fold from staging into the document -----
     push ax                     ; the byte count
-    mov ax, WD_MAXKB            ; open the claim to its ceiling; the fold
+    mov ax, WD_MAXKB * 64       ; open the claim to its ceiling; the fold
     call wd_resize              ; only ever SHRINKS what arrived
     pop ax
     jc .nomem3
@@ -11826,7 +11828,7 @@ wd_new:
                                 ; it is here for the invalidation wd_clamp
                                 ; carries (SPEC.md 27.4/27.5)
     push ax                     ; ...and give the heap back what the old note
-    mov ax, WD_KB0              ; had grown into. A shrink always succeeds in
+    mov ax, WD_KB0 * 64         ; had grown into. A shrink always succeeds in
     call wd_resize              ; place, so this cannot fail (SPEC.md 50.3.1)
     pop ax
     mov byte [wd_dirty], 0      ; a fresh document matches nothing on disk
@@ -12460,10 +12462,10 @@ wd_capfor:
     cmp bx, [wd_cap]
     jbe .yes
     mov ax, bx
-    add ax, 1023
+    add ax, 15
     jc .no                      ; past 64KB, which WD_MAXKB refuses anyway
-    mov cl, 10
-    shr ax, cl
+    mov cl, 4
+    shr ax, cl                  ; paragraphs
     call wd_resize              ; clamps to WD_MAXKB and may be refused
     jc .no
     cmp bx, [wd_cap]
@@ -13432,7 +13434,7 @@ wd_uclear:
     jz .out
     call OSAPI_MEM_FREE         ; the owner is our segment, which the slot's
     mov word [wd_useg], 0       ; X stub supplies (SPEC.md 50.3)
-    mov word [wd_ukb], 0
+    mov word [wd_upara], 0
     mov dx, [wd_cuseg]          ; ...and the CHP arena beside it (SPEC.md
     or dx, dx                   ; 65.3): the two live and die together
     jz .out
@@ -13471,26 +13473,31 @@ wd_utop_rec:
     ret
 
 ; -----------------------------------------------------------------------------
-; wd_ugrow - make the arena AX kilobytes
-; in:  AX = KB; out: CF = 1 refused; preserves all registers
+; wd_ugrow - make the arena AX paragraphs
+; in:  AX = paragraphs; out: CF = 1 refused; preserves all registers
+;
+; OSAPI_MEM_P's (SPEC.md 50.3.7): the arena is a byte count, so it pays the
+; granule rather than a whole KB, and [wd_upara] is what was GRANTED.
 ; -----------------------------------------------------------------------------
 wd_ugrow:
     push ax
     push bx
+    push cx
     push dx
-    cmp ax, [wd_ukb]
+    cmp ax, [wd_upara]
     jbe .yes
     cmp word [wd_useg], 0
     jne .re
-    call OSAPI_MEM_CLAIM        ; out CF = 0, DX = the base
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P            ; out CF = 0, DX = the base, AX = granted
     jc .no
     mov [wd_useg], dx
-    push ax                     ; ...and the CHP arena, same size (SPEC.md
-    call OSAPI_MEM_CLAIM        ; 65.3): every blob offset means the same
-    pop ax                      ; thing in both, so nothing forks
-    jc .cfail0
+    call OSAPI_MEM_P            ; ...and the CHP arena, same size (SPEC.md
+    jc .cfail0                  ; 65.3): every blob offset means the same
+                                ; thing in both, so nothing forks
     mov [wd_cuseg], dx
-    mov [wd_ukb], ax
+    mov [wd_upara], ax
     push ax                     ; ...and both MOVE (SPEC.md 68.3.2): every
     mov ax, wd_reloc            ; record indexes them by OFFSET, and a regrow
     call OSAPI_MEM_MOVABLE      ; below carries the declaration with the
@@ -13504,25 +13511,22 @@ wd_ugrow:
     mov word [wd_useg], 0
     jmp short .no
 .re:
+    mov bl, MEMP_REGROW
     mov dx, [wd_useg]
-    call OSAPI_MEM_REGROW       ; out CF = 0, DX = the base NOW - a grow that
+    call OSAPI_MEM_P            ; out CF = 0, DX = the base NOW - a grow that
     jc .no                      ; had to move reports a new one (50.3.1)
     mov [wd_useg], dx
-    push ax
     mov dx, [wd_cuseg]
-    call OSAPI_MEM_REGROW
-    pop ax
+    call OSAPI_MEM_P
     jc .cfail1
     mov [wd_cuseg], dx
-    mov [wd_ukb], ax
+    mov [wd_upara], ax
     jmp short .yes
 .cfail1:
-    push ax                     ; the mirror was refused: shrink the text
-    mov ax, [wd_ukb]            ; arena back (a shrink succeeds in place)
-    mov dx, [wd_useg]           ; and report one refusal
-    call OSAPI_MEM_REGROW
+    mov ax, [wd_upara]          ; the mirror was refused: shrink the text
+    mov dx, [wd_useg]           ; arena back (a shrink succeeds in place)
+    call OSAPI_MEM_P            ; and report one refusal
     mov [wd_useg], dx
-    pop ax
     jmp short .no
 .yes:
     clc
@@ -13530,7 +13534,7 @@ wd_ugrow:
 .no:
     stc
 .out:
-    jmp wd_rdba
+    jmp wd_rdcba
 
 ; -----------------------------------------------------------------------------
 ; wd_udrop0 - forget the OLDEST record, sliding the arena down under it
@@ -13630,19 +13634,20 @@ wd_uroom:
     mov ax, [wd_utop]
     add ax, cx
     jc .evict
-    mov bx, [wd_ukb]
+    mov bx, [wd_upara]
     push cx
-    mov cl, 10
-    shl bx, cl
+    mov cl, 4
+    shl bx, cl                  ; <= WD_UMAXKB * 1024, so it fits
     pop cx
     cmp ax, bx
     jbe .yes
     push cx
-    add ax, 1023
-    mov cl, 10
+    add ax, 15                  ; paragraphs, the carry coming back in as
+    rcr ax, 1                   ; bit 15
+    mov cl, 3
     shr ax, cl
     pop cx
-    cmp ax, WD_UMAXKB
+    cmp ax, WD_UMAXKB * 64
     ja .evict
     call wd_ugrow
     jnc .yes
@@ -21668,7 +21673,7 @@ WD_BTREC_SZ equ 18
     WDVAR wd_useg, 2        ; word: the arena claim, 0 = none held. Claimed on
                             ; the first edit worth remembering and given back
                             ; by File > New, a load and wd_uclear
-    WDVAR wd_ukb,  2        ; word: its size in KB
+    WDVAR wd_upara, 2       ; word: its size in paragraphs, as granted
     WDVAR wd_utop, 2        ; word: bytes of it in use - also the top record's
                             ; blob end, which is what makes an append free
     WDVAR wd_un,   1        ; byte: records live, 0..WD_UNDO
@@ -22530,7 +22535,7 @@ wd_dseg     equ os88_image_end + 433    ; word: the document claim's segment.
                                        ; than open a window with nowhere to
                                        ; put the text, so nothing below has
                                        ; to test it
-wd_capkb    equ os88_image_end + 435    ; word: its size in KB...
+wd_cappara  equ os88_image_end + 435    ; word: its size in paragraphs...
 wd_cap      equ os88_image_end + 437    ; word: ...and in bytes, kept in step
                                        ; by wd_resize. WD_MAXKB * 1024 fits a
                                        ; word, which is what bounds the note

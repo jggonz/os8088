@@ -84,10 +84,7 @@ ICO_IBUF_SZ equ 2 * ICO_IBUF_H * (ICO_IBUF_WW * 2)  ; mask table + data table
   %error "icon_draw_x takes exactly two kinds in ONE compare (`cmp al, ICO_STAGE_WW / ja .refuse`): ICON_SOLID = 0 and the plain ICO_STAGE_WW = 1 (SPEC.md 25.6.2). A wider stage needs a kind byte that is not the width, the solid fill sized by it and the resb below re-sized"
 %endif
 icon_draw_x:
-    push ax
-    push cx
-    push si
-    push di
+    call kent_di                ; icon_draw below takes kent_bp anyway (pass 16)
     mov ax, [es:si]             ; the header: the KIND (AL), then rows (AH)
     cmp al, ICO_STAGE_WW        ; ONE compare, the kind's whole refusal: 1 is
 %ifdef KERN_SMALL               ; the plain record...
@@ -166,11 +163,7 @@ icon_draw_x:
     call icon_draw
     clc
 .out:
-    pop di
-    pop si
-    pop cx
-    pop ax
-    ret                         ; a pop writes no flags, so CF survives it
+    jmp kret_di                 ; a pop writes no flags, so CF survives it
 .refuse:
     mov word [ico_c1], (CBLACK << 8) | CWHITE   ; SPEC.md 25.6: the pen is
                                 ; ONE-SHOT, and a refusal spends it too. Without

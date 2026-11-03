@@ -163,6 +163,9 @@ def main():
         try:
             m.write(pseg * 16 + sy["con_scr"], bytes(buf))
             m.write(pseg * 16 + sy["con_drb"], bytes([0xFF, 0xFF, 0xFF, 0x01]))
+            m.write(pseg * 16 + sy["con_dc0"], bytes(25))      # ...and the
+            m.write(pseg * 16 + sy["con_dc1"], bytes([79] * 25))   # SPANS: a
+            # bit without one is a row that draws its stale span (96.33.12)
             m.write(pseg * 16 + sy["con_cvis"], bytes([0]))   # no underline to
                                                              # account for
             m.write(pseg * 16 + sy["con_scrl"], bytes([0, 0]))

@@ -79,7 +79,12 @@ PSP fields that were zero here and are not zero under DOS, found that way.
 | `tests/dostrap/twoopen.asm` | is it the file, or is it the *second handle*? |
 | `tests/dostrap/diskcost.asm` | what one open and one read cost the DRIVE — the only SPEED probe |
 | `tests/dostrap/dfree.asm` | what `AH=36h` answers, for every drive letter |
+| `tests/dostrap/dfsel.asm` | ...and what it answers for the drive `AH=0Eh` just SELECTED, which `dfree` never does (SPEC.md 96.27.2) |
+| `tests/dostrap/getpsp.asm` | does `AH=62h`/`51h` answer the RUNNING program's PSP, parent and child alike? (SPEC.md 96.55) |
 | `tests/dostrap/cx0.asm` | what `AH=40h` with `CX=0` does to a file's LENGTH (SPEC.md 96.11.6.2) |
+| `tests/dostrap/fcbrd.asm` | what the FCB READ calls (`0Fh`, `14h`, `21h`, `24h`, `27h`, `10h`) answer, padding included (SPEC.md 96.56.2) |
+| `tests/dostrap/fcbio.asm` | `AH=33h`/`37h` and the FCB file calls - make, write, open, read, find, delete by pattern - WordPerfect 4.1's whole set (SPEC.md 96.56) |
+| `tests/dostrap/exenext.asm` | one source, two programs: does the `.COM` typed after an `.EXE` run as ITSELF, or at the `.EXE`'s stale entry? (SPEC.md 96.8.3) |
 | `apps/dos/dos.asm`, `%ifdef DOSTRACE` | DOS's own ring — **not in any shipped build** |
 
 Both Python tools carry `--selfcheck`, which needs no emulator and no network.
@@ -466,6 +471,13 @@ it is the answer a program can act on **when it ignores the carry — which for
 this call every program does**, DOS never setting `CF` here. That is the exact
 shape of the defect §96.27 fixed: unimplemented, the call returned `AX=1` with
 `CF`, and Prince's installer read it as one sector per cluster.
+
+**It never SELECTS, and that is the one shape it cannot see.** It names each
+drive in `DL`, and a drive that is not the program's own took the old handler
+through a path that mounted - while the installer selects C: with `AH=0Eh`
+and *then* asks about C:, which since §96.48 left the floppy mounted and
+answered for it. `dfsel.asm` is that shape: select, ask as `0` and by
+number, select back, ask again (SPEC.md 96.27.2, `tests/dosdfsel.py`).
 
 ### `renref.asm` — `AH=56h` renames, and it also MOVES
 

@@ -727,34 +727,35 @@ zp_streq:
 ; out: CF=0 loaded and [zp_src] = ZP_SRC_PIX; CF=1 refused and nothing is held.
 ;      Module-internal: clobbers freely (zp_load holds the registers).
 ;
-; The claim is rounded to KB the way tracker.asm does it, because the KB slots
-; are the native shape and only they work before there is an instance.
+; The claim is in PARAGRAPHS (SPEC.md 50.3.7): the archive is a byte count, and
+; a whole KB of it would be half a granule of heap more on average.
 ; -----------------------------------------------------------------------------
 zp_load_pix:
     mov ax, [zp_fsz_l]
     mov dx, [zp_fsz_h]
     cmp dx, 8
     jae .no                         ; over 512KB is not a picture archive
-    add ax, 1023                    ; round up to whole KB, in 32 bits, so a
-    adc dx, 0                       ; 64KB-crossing size does not wrap
-    mov cl, 10
+    add ax, 15                      ; round up to whole paragraphs, in 32
+    adc dx, 0                       ; bits, so a 64KB-crossing size does not
+    mov cl, 4                       ; wrap
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
-    or ax, dx                       ; AX = KB to claim
+    or ax, dx                       ; AX = paragraphs to claim
     jz .no
-    cmp ax, ZP_MAXKB
+    cmp ax, ZP_MAXKB * 64
     ja .no
-    mov [zp_kb], ax
-    call OSAPI_MEM_CLAIM            ; AX = KB -> DX = base segment, CF=1 refused
-    jc .no
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; DX = base segment, AX = paragraphs
+    jc .no                          ; granted; CF=1 refused
     mov [zp_seg], dx
+    mov [zp_para], ax
 
-    mov ax, [zp_kb]                 ; DX:CX = the buffer's capacity in bytes
-    mov dx, ax
-    mov cl, 10
+    mov dx, ax                      ; DX:CX = the buffer's capacity in bytes
+    mov cl, 4
     shl ax, cl
-    mov cl, 6
+    mov cl, 12
     shr dx, cl
     mov cx, ax
     mov es, [zp_seg]
@@ -839,7 +840,7 @@ zp_free:
     mov dx, [zp_seg]                ; DX, not AX (SPEC.md 50.3)
     call OSAPI_MEM_FREE
     mov [zp_seg], ax
-    mov [zp_kb], ax
+    mov [zp_para], ax
 .out:
     mov [zp_count], ax              ; cleared unconditionally: "no drawable
     mov [zp_dirlen], ax             ; pictures" is the state every failure

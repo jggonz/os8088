@@ -77,7 +77,8 @@ def _map(src, defines, incs):
             os.unlink(f)
         except OSError:
             pass
-    if "os88_image_end" not in out and "start" not in out:
+    if "os88_image_end" not in out and "start" not in out \
+            and "pn_door" not in out and "dvwp_entries" not in out:
         sys.exit("dosmap: %s's map looks empty" % src)
     _CACHE[key] = out
     return out
@@ -145,6 +146,91 @@ def package(*defines, shipped=True):
                 ("apps", os.path.join("apps", "dos"),
                  os.path.join("drivers", "net"),
                  "kerndos"))          # -DDOSKPART's launch block (96.40)
+
+
+def netpart():
+    """Every label and equate in DOS's NETWORK PART (apps/dos/dosnetp.asm,
+    SPEC.md 96.23.11), as an offset in the network CLAIM - which is
+    `[dos_pkt_bseg]` in the host's map. The packet driver's own cells
+    (`dos_pkt_raw`, `dos_pkt_stats`, ...) and the translation's rows
+    (`dn_lsn`, `dn_flows`, ...) live there on a shipped DOS.O88, so a row
+    reads them as `(bseg << 4) + netpart()[name]` and not out of the host."""
+    return _map(os.path.join(ROOT, "apps", "dos", "dosnetp.asm"), [],
+                ("apps", os.path.join("apps", "dos"),
+                 os.path.join("drivers", "net")))
+
+
+def windowpart():
+    """Every label in DOS's WINDOWED PART (apps/dos/doswp.asm, SPEC.md
+    96.54.9), as an offset in the part's CLAIM - which is `[dvw_pseg]` in the
+    host's map. The layer's own cells (`dvw_fs`, `dvw_cmode`, `dvw_xblk`,
+    the `dwm_*` ...) live there on a shipped DOS.O88; only the cells the host
+    reads while the part may be absent (`dvw_run`, `dvw_dirty`, `dvw_want`,
+    `dvw_pseg` ...) stay in the host. It assembles against the build's own
+    $(BUILD)/doswexp.inc, so build first. kern_mega has no windowed layer."""
+    if os.environ.get("OS88_MEGA"):
+        return {}
+    return _map(os.path.join(ROOT, "apps", "dos", "doswp.asm"), [],
+                ("apps", os.path.join("apps", "dos"), "build"))
+
+
+def cell(m, dm, base, name):
+    """The linear address of DOS cell NAME in a live instance whose host is at
+    linear BASE: the host's own when its map has it, else the windowed part's
+    (`[dvw_pseg]`, SPEC.md 96.54.9) - the INLINE layer (build/dos.o88) keeps
+    every cell in the host and answers from the first arm. None when the
+    cell is the part's and the part is not fetched (no Run in Window yet)."""
+    if name in dm:
+        return base + dm[name]
+    pseg = int.from_bytes(m.read(base + dm["dvw_pseg"], 2), "little")
+    if not pseg:
+        return None
+    return lin(m, pseg) + windowpart()[name]
+
+
+def cellread(m, dm, base, name, n):
+    """N bytes of cell NAME (`cell`); zeros while the part is not fetched,
+    which is every windowed flag's value with no run in a window"""
+    a = cell(m, dm, base, name)
+    return bytes(n) if a is None else m.read(a, n)
+
+
+def network_rerun(m, mouse, settle, dm, who):
+    """Tick DOS's `Network` box and Run again - QEMU rows (eth.Qemu).
+
+    **A DOUBLE CLICK HAS NO PACKET DRIVER since SPEC.md 96.36.7.4**: a fresh
+    window starts with Network CLEARED (the owner's: "if they want network,
+    they have to go ask for it"), so the association open that every network
+    row starts with runs the probe with no interface at all. This is what a
+    user does about it - let the program out, open the page, tick the box,
+    Run - and the row's own assertions then read the SECOND run. DOSPKT.COM
+    prints READY and holds on int 16h whether or not it found a driver, so
+    READY is the first run's end either way."""
+    import os88qemu
+
+    def seg():
+        try:
+            return instance(m)
+        except RuntimeError:
+            return None
+    os88qemu.acted(m, lambda: b"READY" in m.read(0xB8000, 4000)[::2],
+                   secs=60, what="%s: the first run's READY" % who,
+                   poll=0.25)
+    m.hmp("sendkey ret")
+    os88qemu.acted(m, lambda: seg() is not None, secs=30,
+                   what="%s: the DOS window" % who, poll=0.5)
+    settle(m)
+    mouse.click(*centre(m, seg(), dm, "dos_erect"))
+    settle(m)
+    x1, y1 = rect(m, seg(), dm, "dos_mnet")[:2]
+    mouse.click(x1 + 4, y1 + 5)
+    settle(m)
+    if not m.read(lin(m, seg(), dm["dos_mnet"] + dm["OS88UI_CK_ON"]), 1)[0]:
+        raise RuntimeError("%s: a press on the Network box did not tick it "
+                           "(SPEC.md 96.36.7)" % who)
+    mouse.click(*centre(m, seg(), dm, "dos_trect"))
+    settle(m)
+    mouse.click(*centre(m, seg(), dm, "dos_rrect"))
 
 
 def kerndos():
@@ -219,6 +305,47 @@ def centre(m, pseg, dm, name):
     """...and the middle of it, which is what a click wants."""
     x1, y1, x2, y2 = rect(m, pseg, dm, name)
     return (x1 + x2) // 2, (y1 + y2) // 2
+
+
+def wmode(ui):
+    """The frontmost DOS window's `Run in Window` MODE (SPEC.md 96.54.10), as
+    its menu item reads: True ticked (`*Run in Window`), False cleared, None
+    greyed. The item's first byte is the mark, so this reads what a user
+    sees rather than the box's byte."""
+    for title, _x0, _x1, items in ui.menus():
+        if title != "Program":
+            continue
+        for text, enabled in items:
+            if text[1:].startswith("Run in Window") or \
+                    text.startswith("Run in Window"):
+                if not enabled:
+                    return None
+                return text[:1] == "*"
+    raise RuntimeError("dosmap.wmode: the frontmost window has no Program > "
+                       "Run in Window item")
+
+
+def set_wmode(ui, on):
+    """Tick or clear the mode through the menu item - which only toggles and
+    runs nothing - and confirm it took."""
+    if wmode(ui) != on:
+        ui.menu_pick("Program", "Run in Window")
+    if wmode(ui) != on:
+        raise RuntimeError("dosmap.set_wmode: Program > Run in Window did "
+                           "not %s the mode" % ("tick" if on else "clear"))
+
+
+def run_in_window(ui):
+    """The path box's program in the window: the mode ticked, then `Run` -
+    what `Program > Run in Window` itself did before it became a mode."""
+    set_wmode(ui, True)
+    ui.menu_pick("Program", "Run")
+
+
+def run_full(ui):
+    """...and on the full screen: the mode cleared, then `Run`."""
+    set_wmode(ui, False)
+    ui.menu_pick("Program", "Run")
 
 
 def sdk_const(name, default=None):

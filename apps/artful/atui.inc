@@ -460,15 +460,17 @@ at_subank:
     mov bx, 1                       ; 8 or 16 on a packed display is BYTES a
 .planes:                            ; column, taken as it comes (120.5)
     mul bx                          ; DX:AX: 16 x a panel passes 64KB
-    add ax, 1023
+    add ax, 15
     adc dx, 0
-    mov cl, 10
+    mov cl, 4
     shr ax, cl
-    mov cl, 6
+    mov cl, 12
     shl dx, cl
-    add ax, dx                      ; AX = KB, rounded up (ZF = none)
-    jz .no
-    call OSAPI_MEM_CLAIM            ; out CF=0, DX = base segment
+    add ax, dx                      ; AX = PARAGRAPHS, rounded up (ZF =
+    jz .no                          ; none; SPEC.md 50.3.7)
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; out CF=0, DX = base segment
     jc .no
     mov [at_suseg], dx
     mov es, dx

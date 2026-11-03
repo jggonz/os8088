@@ -322,10 +322,8 @@ npb_run:
     ; --- the report BECOMES the note -----------------------------------------
     mov cx, di
     sub cx, npb_buf             ; CX = bytes written
-    mov ax, [np_capkb]          ; ...and the claim will hold them: the smallest
-    mov bx, 1024                ; one is NP_KB0 = 1KB and the report is ~400
-    mul bx
-    cmp cx, ax
+    mov ax, [np_cap]            ; ...and the claim will hold them: the smallest
+    cmp cx, ax                  ; one is NP_KB0 = 1KB and the report is ~400
     jbe .fits
     mov cx, ax
 .fits:

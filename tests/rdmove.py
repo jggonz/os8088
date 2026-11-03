@@ -93,7 +93,7 @@ def drv_syms():
     """[rd_arena]'s offset in the driver's image, by re-assembling it.
 
     Off the Makefile's own recipe (tools/os88drvsym.py), which carries
-    -DRAMPAGE_KB off rampage.bin - the define this helper once left out and
+    -DRAMPAGE_PARA off rampage.bin - the define this helper once left out and
     so assembled to an ERROR - and checks the result against build/ramdisk.bin.
     """
     import os88drvsym

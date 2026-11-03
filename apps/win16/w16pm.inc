@@ -238,14 +238,21 @@
   %endif
 %endmacro
 
-; W16VCLAIM / W16VFREE - a claim of WIN16's own, entered in the map: as
-; OSAPI_MEM_CLAIM (AX = KB -> CF=0 DX = its virtual base) and OSAPI_MEM_FREE
-; (DX = it). Real mode: those calls.
+; W16VCLAIM / W16VFREE - a claim of WIN16's own, entered in the map: AX =
+; PARAGRAPHS -> CF=0 DX = its virtual base, AX = the paragraphs GRANTED; CF=1
+; none (OSAPI_MEM_P's MEMP_CLAIM, SPEC.md 50.3.7). Keeps the rest. Freed with
+; W16VFREE (DX = it), OSAPI_MEM_FREE's. Real mode: those calls.
 %macro W16VCLAIM 0
 %ifdef PKG_MEGA
     W16IMG w16_vclaim
 %else
-    call OSAPI_MEM_CLAIM
+    push bx
+    push cx
+    xor cx, cx                      ; no page-safe head
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop cx
+    pop bx
 %endif
 %endmacro
 %macro W16VFREE 0
@@ -519,35 +526,43 @@ w16v%1_myds: dw 0                   ;   parts 9 and 10's, at W16S_MYDS)
 ; -----------------------------------------------------------------------------
 %macro W16PM_IMAGE 0
 
-; w16_vclaim - AX = KB: a claim entered in the map. out: CF=0 DX = its
-; virtual base; CF=1 none (no memory, or no room in the map). Keeps every
-; other register. A plain claim (OSAPI_MEM_HUGE's past 64 KB), so with
-; OS88_HIGHMEM it may be above 1 MB,
+; w16_vclaim - AX = PARAGRAPHS: a claim entered in the map. out: CF=0 DX = its
+; virtual base, AX = the paragraphs granted; CF=1 none (no memory, or no room
+; in the map). Keeps every other register. A plain claim (OSAPI_MEM_HUGE's
+; past 64 KB), so with OS88_HIGHMEM it may be above 1 MB,
 ; and so may everything the program is handed: the selector functions' window
 ; is SEG_WINL's, at a linear base, and GlobalDOSAlloc claims its own block
 ; through the DMA door (SPEC.md 124.31.3)
 w16_vclaim:
-    cmp ax, 64
+    push cx
+    push bx
+    cmp ax, 0x1000
     ja .huge
-    call OSAPI_MEM_CLAIM            ; 64 KB or less: one selector over it
+    xor cx, cx                      ; 64 KB or less: one selector over it
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; AX = granted
     jmp short .got
 .huge:
-    push bx                         ; more: one block under a run of them,
-    push cx                         ;   the first of which names it (the map
-    xor bx, bx                      ;   SEG_SUBs into it, past 64 KB too)
+    add ax, 63                      ; more: one block under a run of them,
+    rcr ax, 1                       ;   the first of which names it (the map
+    mov cl, 5                       ;   SEG_SUBs into it, past 64 KB too);
+    shr ax, cl                      ;   OSAPI_MEM_HUGE's unit is the KB
+    xor bx, bx
     call OSAPI_MEM_HUGE
-    pop cx
-    pop bx
+    jc .got
+    mov cl, 6
+    shl ax, cl                      ; granted, in paragraphs
+    clc
 .got:
+    pop bx
     jc .out
-    push cx
     mov cx, ax
     call w16_vnew                   ; DX = the virtual base
-    pop cx
     jnc .out
     call OSAPI_MEM_FREE             ; (DX = the claim still)
     stc
 .out:
+    pop cx
     ret
 
 ; w16_vfree - DX = a virtual base from w16_vclaim (or a selector, as it is):
@@ -559,7 +574,7 @@ w16_vfree:
     pop dx
     ret
 
-; w16_vnew - DX = a selector, CX = KB: a row for it at the first virtual base
+; w16_vnew - DX = a selector, CX = paragraphs: a row for it at the first virtual base
 ; that holds it, with the low five bits of its linear paragraph, so what
 ; WIN16 aligns to 512 bytes in virtual paragraphs is aligned in memory too
 ; (w16_kclaim: every disk-visible base). out: CF=0 DX = the base; CF=1 none,
@@ -570,10 +585,6 @@ w16_vnew:
     push cx
     push si
     push di
-    mov ax, cx
-    mov cl, 6
-    shl ax, cl                      ; paragraphs (a KB count is under 1024)
-    mov cx, ax
     xor di, di                      ; DI = a free row
     mov si, w16_vmap
     mov bx, W16V_N

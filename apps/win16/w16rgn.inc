@@ -857,12 +857,17 @@ w16r_snap:
     or dx, dx
     jnz .no
     push ax
-    add ax, 1023                    ; a claim of os8088's own, out of the
+    add ax, 15                      ; a claim of os8088's own, out of the
     rcr ax, 1                       ;   room WIN16's heap leaves (W16_ARKEEP):
-    mov cl, 9                       ;   an allocation in the global heap could
-    shr ax, cl                      ;   discard a block of the program's while
-    call OSAPI_MEM_CLAIM            ;   it holds it unlocked, which Windows'
-    pop cx                          ;   GDI never did
+    shr ax, 1                       ;   an allocation in the global heap could
+    shr ax, 1                       ;   discard a block of the program's while
+    shr ax, 1                       ;   it holds it unlocked, which Windows'
+    push bx                         ;   GDI never did. In PARAGRAPHS, a byte
+    xor cx, cx                      ;   count's door (SPEC.md 50.3.7)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
+    pop cx
     jc .no
     mov [w16_fmseg], dx
     push di

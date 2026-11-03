@@ -114,6 +114,14 @@ OP_COMP       equ 16            ; ...and the part is COMPRESSED on the disk
                                 ; claim, so a refusal still costs no disk -
                                 ; and `zkb`, which the macro already forbids
                                 ; on a file-backed row, carries the packed one
+OP_ZFILL      equ 64            ; ...and on an EAGER OP_COMP row, the part is
+                                ; stored as TWO streams with a head saying
+                                ; where each lands, and op_unpack ZEROES every
+                                ; byte of `len` they do not write (SPEC.md
+                                ; 20.12.7.5). os88pkg.py cuts them round the
+                                ; longest run of zeros and the trailing ones,
+                                ; so a bss or a reserved hole costs neither
+                                ; the disk nor a decoder writing it out
 OP_MARGIN     equ 0             ; what a compressed run needs ABOVE its
                                 ; unpacked bytes: NOTHING, since every stream
                                 ; ends in a raw tail (SPEC.md 20.13.7) - the
@@ -121,7 +129,7 @@ OP_MARGIN     equ 0             ; what a compressed run needs ABOVE its
                                 ; is written in terms of it and reads better
                                 ; with the term in than with it silently gone
 
-OP_ROW        equ 8             ; db kind, db flags, dw off (512-byte units),
+OP_ROW        equ 8             ; db kind, db flags, dw off (16-byte units),
 OP_R_KIND     equ 0             ; dw len, dw zkb - off and len are os88pkg.py's
 OP_R_FLAG     equ 1             ; and zkb is yours
 OP_R_OFF      equ 2
@@ -140,7 +148,7 @@ OP_SELF       equ 256           ; **AN ASSEMBLER-ONLY FLAG, never in the file**
                                 ; OP_LAZY row it says THE PACKAGE READS THIS
                                 ; PART ITSELF (OSAPI_FILE_READ_AT off op_row's
                                 ; `off`), so the standard carries no op_fetch,
-                                ; op_drop, op_lazyok or op_lazykb for it - a
+                                ; op_drop, op_lazyok or op_lazyp for it - a
                                 ; table whose every lazy row says so assembles
                                 ; none of them (SPEC.md 20.12.9.1). Clear Skies'
                                 ; loader is the shape: its streams part is only
@@ -187,6 +195,23 @@ OP_SECMAX     equ 1920          ; the carve's ceiling in sectors, packed AND
                                 ; PARAGRAPHS in a word, and 1,920 sectors plus
                                 ; a 32KB cluster of slack is 65,503 of them.
                                 ; Mirrored by os88pkg.py (t_lzfmt checks)
+
+; --- THE GRANULE a part's `off` counts in (SPEC.md 20.12.2, 20.12.2.1) ------
+; A 16-byte PARAGRAPH. It was a 512-byte sector until docs/plans/completed/
+; PART-PACKING-PLAN.md, which is up to 511 bytes of 0xE5 a part on the disk;
+; the head slack a cluster-aligned read leaves is a multiple of 16 either way,
+; which is all a segment adjustment needs, so every address the standard
+; hands out is still a segment with offset 0. The TABLE says so by its magic,
+; 'O88PARTP' ('O88PARTS' was the 512 table), so os88pkg.py lays it out to
+; match and a tool that knows only the old magic refuses rather than misread.
+;
+; A PACKAGE THAT READS A PART FOR ITSELF converts `off` with these and never
+; with a literal shift - tests/unit/t_partoff.py fails the build on one - and
+; starts its read at the sector (or cluster) AT OR BELOW off x 16, stepping
+; over the head slack: a part is no longer on a sector (op_self's arithmetic)
+OP_GSH        equ 4             ; granule = 1 << OP_GSH bytes = a paragraph
+OP_GRAN       equ 1 << OP_GSH
+OP_RUNMAX     equ OP_SECMAX << (9 - OP_GSH) ; the carve's ceiling, in granules
 OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
                                 ; EVERY legal cluster size (512 bytes to 32KB,
                                 ; a power of two capped at 64 sectors by BPB
@@ -223,6 +248,8 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
 %assign OP_HAS_PLAZY 0              ; ...a PLAIN lazy row op_fetch reads, which
                                     ; is what earns its move-down (SPEC.md
                                     ; 20.12.7.4.4) - ZLAZY's other half
+%assign OP_HAS_ZFILL 0              ; ...an OP_ZFILL row, which is what earns
+                                    ; op_unpack its zero fill (20.12.7.5)
 %assign OP_HAS_CARVE 0              ; ...and a row that is NOT lazy, which is
                                     ; what earns op_size, op_claim, op_unpack
                                     ; and op_load's whole body: a table of
@@ -231,7 +258,7 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
 %assign OP_HAS_FETCH 0              ; ...and either of them: a lazy row the
                                     ; STANDARD fetches rather than one marked
                                     ; OP_SELF, which is what earns op_fetch,
-                                    ; op_drop, op_lazyok and op_lazykb (SPEC.md
+                                    ; op_drop, op_lazyok and op_lazyp (SPEC.md
                                     ; 20.12.9.1). OP_HAS_LAZY still says there
                                     ; is a lazy row at all, which op_size steps
                                     ; over and op_seg answers 0 for
@@ -243,7 +270,7 @@ OP_CHUNK      equ 32768         ; bytes a read moves at a time: a multiple of
         %error "OS88_PARTS_BEGIN with no parts in it - drop the block and the flag"
     %endif
 op_table:
-    db 'O88PARTS'
+    db 'O88PARTP'               ; `off` in PARAGRAPHS (SPEC.md 20.12.2.1)
 op_t_n:
     db %1                       ; the count, and THREE things check it: this
                                 ; macro's brackets count the rows, os88pkg.py
@@ -259,6 +286,9 @@ op_t_n:
     %endif
     %if ((%2) & OP_ZERO) && ((%3) < 1)
         %error "OP_ZERO with no KB: a scratch part of nothing is not a part"
+    %endif
+    %if ((%2) & OP_ZERO) && ((%3) >= 1024)
+        %error "OP_ZERO of 1,024 KB or more: op_size totals the carve in PARAGRAPHS, a word of which is 1MB, and no conventional heap holds that much anyway"
     %endif
     %if !((%2) & OP_ZERO) && ((%3) != 0)
         %error "a KB on a FILE-BACKED part: the carve is contiguous, so a part that wants scratch beside it declares a second, OP_ZERO part"
@@ -292,6 +322,12 @@ op_t_n:
     %if ((%2) & OP_COMP) && ((%2) & OP_XMS)
         %error "OP_COMP with OP_XMS: the span above 1MB is staged through a transient conventional buffer a chunk at a time, and a stream cannot be expanded a chunk at a time - the parts up there are stored plain"
     %endif
+    %if ((%2) & OP_ZFILL) && (!((%2) & OP_COMP) || ((%2) & OP_LAZY))
+        %error "OP_ZFILL off an EAGER OP_COMP row: it is op_unpack's, and op_unpack expands the carve - a lazy row is op_fetch's, and a plain row has no stream to stop short"
+    %endif
+    %if ((%2) & OP_ZFILL)
+        %assign OP_HAS_ZFILL 1
+    %endif
     %if ((%2) & OP_XMS)
         %assign OP_HAS_XMS 1
     %endif
@@ -320,7 +356,7 @@ op_t_n:
     %endif
     db %1                       ; +0 kind
     db (%2) & 0xFF              ; +1 flags - OP_SELF is above the byte
-    dw 0                        ; +2 off, in 512-byte units - the packer's
+    dw 0                        ; +2 off, in OP_GRAN units - the packer's
     dw 0                        ; +4 len, in bytes           - the packer's
     dw %3                       ; +6 zkb, in KB              - yours
     %assign OS88_PART_N OS88_PART_N + 1
@@ -389,9 +425,9 @@ op_zshadow:
 ; keeps up to whichever of them ENDS highest. That is the program alone for
 ; a carve whose only other rows are lazy (DOS.O88, Clear Skies), part 1 for
 ; Word, the asset for tests/rehome and the scratch for Pixelstein, and what
-; it returns to the heap is the read's margin past it - R's extra sector, the
-; run rounded to clusters and the claim rounded to a KB - which nothing ever
-; reads. A loader that has put something of its OWN past its parts (no
+; it returns to the heap is the read's margin past it - R's extra sector and
+; the run rounded to clusters (and the claim rounded to a KB, until the carve
+; was claimed through OSAPI_MEM_P) - which nothing ever reads. A loader that has put something of its OWN past its parts (no
 ; loader in the tree does) cannot use this and writes the call itself.
 ;
 ; AN INDEX AND NOT A SEGMENT, and the walk in PARAGRAPHS INTO THE CARVE
@@ -471,9 +507,15 @@ op_zshadow:
 ; moves and the whole chain follows, which is the only reason the standard
 ; needed no second version for C.
 op_name     equ OP_BSS_AT + 0       ; the file we came out of, NUL-term
-op_first    equ OP_BSS_AT + 13      ; the carved run's first sector
-op_secs     equ OP_BSS_AT + 15      ; ...its length in sectors, 0 = none
-op_kb       equ OP_BSS_AT + 17      ; ...in KB
+op_first    equ OP_BSS_AT + 13      ; the carved run's first GRANULE (16 B)
+op_secs     equ OP_BSS_AT + 15      ; ...its length in granules, 0 = none
+op_np       equ OP_BSS_AT + 17      ; ...the total GRANTED, in PARAGRAPHS:
+                                    ; the run plus whichever scratch the
+                                    ; machine allowed (SPEC.md 50.3.7). It was
+                                    ; op_kb, in KB, and the rename is so that a
+                                    ; package reading the old word fails to
+                                    ; assemble rather than reading a figure 64
+                                    ; times what it expects
 op_bendh    equ OP_BSS_AT + 19      ; op_bend's HIGH word. It was op_bytes,
                                     ; the run in a word of bytes, which is
                                     ; what held the carve under 64KB; the
@@ -486,9 +528,11 @@ op_slack    equ OP_BSS_AT + 27      ; ...how far the run is past it
 op_cap      equ OP_BSS_AT + 29      ; the capacity that read asks for, in
                                     ; PARAGRAPHS (SPEC.md 20.12.11)
 op_base     equ OP_BSS_AT + 31      ; the claim it lands in
-op_reqkb    equ OP_BSS_AT + 33      ; the run plus the REQUIRED scratch...
-op_allkb    equ OP_BSS_AT + 35      ; ...and plus the optional too
-op_runkb    equ OP_BSS_AT + 37      ; KB from the base to the scratch area
+op_reqp     equ OP_BSS_AT + 33      ; the run plus the REQUIRED scratch...
+op_allp     equ OP_BSS_AT + 35      ; ...and plus the optional too
+op_runp     equ OP_BSS_AT + 37      ; ...and from the base to the scratch
+                                    ; area: all three in PARAGRAPHS, each
+                                    ; renamed from its _kb for op_np's reason
 op_optok    equ OP_BSS_AT + 39      ; byte: were the optional parts
                                          ; granted? A package that greys a row
                                          ; reads this rather than testing
@@ -499,9 +543,10 @@ op_xmson    equ OP_BSS_AT + 40      ; byte: is there a store to put the
                                          ; OP_XMS parts in? Asked ONCE, before
                                          ; the sizing, because the answer moves
                                          ; those parts between two totals
-op_xoff     equ OP_BSS_AT + 41      ; the XMS span's first sector...
-op_xsecs    equ OP_BSS_AT + 43      ; ...its length in sectors...
-op_xmskb    equ OP_BSS_AT + 45      ; ...and the KB it wants up there
+op_xoff     equ OP_BSS_AT + 41      ; the XMS span's first granule...
+op_xsecs    equ OP_BSS_AT + 43      ; ...its length in granules...
+op_xmskb    equ OP_BSS_AT + 45      ; ...and the KB it wants up there - KB
+                                    ; still, as OSAPI_XMEM_ALLOC counts
 op_xlin     equ OP_BSS_AT + 47      ; the one block it all landed in (32)
 op_xcur     equ OP_BSS_AT + 51      ; ...and where the climb is up to (32),
                                          ; which is a SECOND word and not a
@@ -538,7 +583,7 @@ op_zn       equ OP_BSS_AT + 73      ; byte: how many rows carry OP_COMP. ZERO
                                     ; what it took before, so a package with no
                                     ; compressed part is unchanged to the
                                     ; instruction (SPEC.md 20.12.7)
-op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in sectors.
+op_usecs    equ OP_BSS_AT + 74      ; the run's UNPACKED length in granules.
                                     ; The claim is cut from this and the READ
                                     ; from op_secs, and the two are the same
                                     ; run measured at its two ends.

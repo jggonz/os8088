@@ -351,13 +351,18 @@ vp_rmklist:
 ; vp_rpost - right after OSAPI_FSX_RUN, protected mode again, flags kept: the
 ; kernel's answer onto the card, and what the bracket owed undone - the block
 ; decoder's pointers made again on its selector, the frame put in the box,
-; the door's claims given back. Every register kept
+; the door's claims given back. A REFUSED OSAPI_FSX_RUN (CF = 1) answers
+; nothing in SI - it is the door's 0 still, which reads "Real mode" - so the
+; card's line is none ([vp_rwhy] = FFh). Every register kept
 vp_rpost:
     pushf
-    cmp byte [vp_rasked], 0
-    je .o
     push ax
-    mov ax, si
+    mov ax, si                      ; (mov keeps CF: the bracket's answer)
+    jnc .a
+    mov al, 0xFF                    ; refused: no bracket ran, no line
+.a:
+    cmp byte [vp_rasked], 0
+    je .oa
     mov [vp_rwhy], al               ; (0: it ran in real mode)
     cmp byte [vp_rran], 0
     je .f
@@ -372,8 +377,8 @@ vp_rpost:
 .f:
     call vp_rxgive                  ; (the XMS let go of inside)
     call vp_rgive
+.oa:
     pop ax
-.o:
     popf
     ret
 

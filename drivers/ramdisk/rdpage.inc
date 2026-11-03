@@ -74,7 +74,7 @@ rd_page_home:
 ; read, validate the image that actually ARRIVED, hand it its init call, come
 ; back. Anything that fails after the claim frees it.
 ;
-; RAMPAGE_KB is injected by the Makefile from the page's own built size, the
+; RAMPAGE_PARA is injected by the Makefile from the page's own built size, the
 ; way boot.asm is told KERNEL_SECTORS - there is no file-size slot in the API
 ; and a driver cannot ask. It is a CEILING and not an assertion.
 ; -----------------------------------------------------------------------------
@@ -101,8 +101,11 @@ rd_page_need:
                                 ; folder shown. CF=1 has moved NOTHING, so the
                                 ; read below never runs in the user's folder
 
-    mov ax, RAMPAGE_KB
-    call OSAPI_MEM_CLAIM_HI     ; owner = our segment, so drv_release sweeps it
+    mov ax, RAMPAGE_PARA        ; PARAGRAPHS (SPEC.md 50.3.7): the page is a
+    xor cx, cx                  ; byte count, 2,438 today - 3KB through a KB
+    mov bl, MEMP_CLAIM_HI       ; door, 2.5 at the granule - and CX = 0 asks
+    call OSAPI_MEM_P            ; no DMA head
+                                ; owner = our segment, so drv_release sweeps it
     jc .fail                    ; even if we never get to free it - and FROM
     mov [rd_pseg], dx           ; THE TOP (SPEC.md 50.3.2.1), because this
                                 ; image's base IS its CS: [rd_pfar] is
@@ -117,7 +120,8 @@ rd_page_need:
 
     mov es, dx
     xor bx, bx
-    mov cx, RAMPAGE_KB * 1024
+    mov cx, RAMPAGE_PARA * 16   ; the read's capacity: the image, to the
+                                ; paragraph
     xor dx, dx
     mov si, rd_pname
     call OSAPI_FILE_READ        ; DX:AX = the file's size

@@ -74,13 +74,16 @@ MACH = "os8088_5150_cga_gla"
 
 RD_N, RD_SEL, RD_PITCH, RD_DIS = 10, 12, 14, 16
 WHOLE, NARM = 1, 2
-DOS_PSPP = 10                   # apps/dos/dos.asm: the PSP's paragraph in the
-                                # block, mirrored here only to say what the KB
-                                # figure is a figure OF
+# DOS_PSPP - the PSP's paragraph in the block, which is what the program's KB
+# figure is a figure OF - is READ OFF THE MAP below and not mirrored here. A
+# copy said 10 for a year after SPEC.md 96.20 grew the environment to 32
+# paragraphs and moved the PSP to 34: the 24-paragraph error is 384 bytes, so
+# the row passed whenever the arena's fraction of a KB happened to absorb it
+# and went red, blaming the arena, the day a layout shift did not.
 A_BW, A_BG, A_BH, A_BTNY, TITLE_H = 72, 12, 13, 46, 18
 
 WANT = ("kd_top", "kd_floor", "dos_arena", "dos_apara", "dos_wbytes",
-        "dos_wseg", "dsk_rah_seg", "dsk_rah_runs")
+        "dos_wseg", "dsk_rah_seg", "dsk_rah_runs", "DOS_PSPP")
 
 
 def fail(msg):
@@ -328,7 +331,7 @@ def check(m, syms, rs, at):
         # arena satisfies it too, and would leave every check above green with
         # the program 32 KB worse off - which is the opposite of what 96.44.11
         # is for.
-        want = ((top - floor - wpara - DOS_PSPP) * 16) // 1024
+        want = ((top - floor - wpara - syms["DOS_PSPP"]) * 16) // 1024
         if kb < want:
             fail("the program reads %d KB above its PSP and the machine has "
                  "room for %d: the overlap was resolved by SHRINKING the "

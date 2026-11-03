@@ -198,15 +198,8 @@ ld_lname_cp:
     mov di, ld_lname
     mov cx, LD_NAMELEN
     cld
-.cp:
-    lodsb
-    stosb
-    or al, al
-    jz .done
-    loop .cp
-    mov byte [di], 0            ; twelve characters and no terminator: end it.
-.done:                          ; ES == DS, so no override is needed
-    jmp kretc_di
+    call fm_ncpy                ; the same loop and the same terminator,
+    jmp kretc_di                ; written once in files.inc (pass 17, -8)
 
 ; -----------------------------------------------------------------------------
 ; ld_unreserve - give back a region, and anything the entry proc claimed
@@ -248,7 +241,10 @@ ld_unreserve:
     jz .out
     call mem_free_owner_x
 %ifdef KERN_MEGA
-    MEGA_ISHI [ld_base]         ; a region placed ABOVE 1MB (ld_hi): its
+    push ax
+    mov ax, [ld_base]           ; a region placed ABOVE 1MB (ld_hi): its
+    call mem_ishiax
+    pop ax
     jc .lo                      ; pair and pool block
     push ax
     push dx
@@ -397,14 +393,13 @@ ld_hdr_size:
     jbe .bad                    ; taken leaves CF = 0 and is the answer: the
     mov [ld_ent], ax            ; `clc` it needed the other way round is gone
     ret                         ; (kernel size pass 12)
-.bad:                           ; ...and BOTH REFUSALS ARE ld_check_hdr's TOO:
+.toobig:
+    mov al, LD_EBIG
+    SKIPF2                      ; test ax, imm16 over .bad's `mov al` (pass
+.bad:                           ; 17, -1). BOTH REFUSALS ARE ld_check_hdr's TOO:
     mov al, LD_EBAD             ; its own ladder above jumps here rather than
 .stc:                           ; carrying a second pair four bytes long - and
     stc                         ; so are ld_hdr_ok's, the body just above
-    ret
-.toobig:
-    mov al, LD_EBIG
-    stc
     ret
 
 ; -----------------------------------------------------------------------------
@@ -412,7 +407,7 @@ ld_hdr_size:
 ; in:  ES:SI -> 32 readable header bytes; [ld_fsz] = the file's byte count
 ; out: CF = 0 and [ld_img]/[ld_bss]/[ld_ent] filled, or CF = 1 and
 ;      AL = LD_EBAD / LD_EBIG / LD_EVER
-; clobbers: AX, DX
+; clobbers: AX, CX, DX
 ;
 ; ES:SI AND NOT DS:SI, which is what drv_check and mod_check have always
 ; taken. It used to read through DS alone, so both callers STAGED 32 bytes
@@ -517,16 +512,16 @@ ld_check_hdr:
     ; this is where the flags byte is already in hand and both callers of this
     ; routine want them. AX is spent by now and DX is documented as clobbered.
     mov al, [es:si+LD_H_FLAGS]
-    shr al, 1                               ; bits 3 and 4, as a number: 0 =
-    shr al, 1                               ; plain, 1 = LZ4, 3 = LZB - and 2,
-    shr al, 1                               ; bit 4 without bit 3, is not a
-    and al, LD_CFMT_KEEP                    ; thing os88pkg.py writes; it reads
-    mov [ld_cfmt], al                       ; (CX is a caller's, so no `shr
-                                            ; al, cl`)
+    mov cl, 3                               ; bits 3 and 4, as a number: 0 =
+    shr al, cl                              ; plain, 1 = LZ4, 3 = LZB - and 2,
+    and al, LD_CFMT_KEEP                    ; bit 4 without bit 3, is not a
+    mov [ld_cfmt], al                       ; thing os88pkg.py writes; it reads
                                             ; as LZB and the decoder refuses
                                             ; the plain bytes it is then given,
                                             ; which is a refusal by the right
-                                            ; route
+                                            ; route. CX IS SPENT on the count:
+                                            ; none of the three callers reads
+                                            ; it after (kernel size pass 16)
 .out:
     ret
 
@@ -691,16 +686,16 @@ loader_run_x:
                                 ; the kernel segment (SPEC.md 2.1)
 .body:
     call ld_run_body_x          ; in: SI -> the staged entry; out: AL = LD_*
-.said:
+    SKIPF2                      ; over .badix's `mov al` (pass 17, -1)
+.badix:
+    mov al, LD_EBAD             ; ld_take.bad's verdict, reached without it:
+.said:                          ; an index past the end is not a file
     call ld_say_status          ; record the verdict and SAY it (SPEC.md 59)
     call ld_owed                ; ...and the repaint, if this load left one
                                 ; owed - the body both far entries share, and
                                 ; its banner is where the reasoning lives
 
     jmp kretfc_es
-.badix:
-    mov al, LD_EBAD             ; ld_take.bad's verdict, reached without it:
-    jmp short .said             ; an index past the end is not a file
 
 ; -----------------------------------------------------------------------------
 ; ld_run_body - the load pipeline (module-internal; loader_run saves regs)
@@ -760,8 +755,7 @@ ld_run_name_x:
     call ld_lname_cp            ; ...and AX - the cluster `.peek` takes from
                                 ; the register - is one of the four it banks
     jmp ld_run_body_x.peek      ; joins the pipeline exactly where the index
-.fail:                          ; resolver leaves it - [ld_fsz] and [ld_clus]
-    ret                         ; are the rest of what step 1 produces
+.fail equ ld_owed.no   ; its neighbour's ret (kernel size pass 16)
 
 ; -----------------------------------------------------------------------------
 ; ld_res_name - fill [ld_fsz]/[ld_clus] from a name (module internal)
@@ -1012,7 +1006,10 @@ ld_run_body_x:
     test al, 0x10               ; bit 4 says which format (SPEC.md 20.13): the
     mov al, LZ_LZ4              ; decoder wants 0 or 1, and CX - the file's
     jz .fmt                     ; length - is not a register to shift by
-    mov al, LZ_LZB
+    inc ax                      ; LZ_LZB, one past LZ_LZ4 (pass 17, -1)
+%if LZ_LZB != LZ_LZ4 + 1
+  %error "ld_run_body_x steps LZ_LZ4 to LZ_LZB with one inc"
+%endif
 .fmt:
     xor di, di
     push ax                     ; ...the format, across the copy
@@ -1028,12 +1025,12 @@ ld_run_body_x:
     mov cx, es
 %ifdef KERN_MEGA
     xchg ax, cx                 ; (the region is its pair's DATA selector in
-    call KERNEL_SEG:mega_s2segf ; protected mode, KERN-MEGA-MEMORY-PLAN MC7.4:
+    call COLD_SEG:mega_s2segc   ; protected mode, KERN-MEGA-MEMORY-PLAN MC7.4:
     xchg ax, cx                 ; its real segment, a conventional claim's)
 %endif
     add ax, cx                  ; ...is where the body's segment starts
 %ifdef KERN_MEGA
-    call KERNEL_SEG:mega_oddsegf ; off the identity grid: a selector for it
+    call COLD_SEG:mega_oddsegc  ; off the identity grid: a selector for it
 %endif
     pop cx
     sub cx, bx                  ; the body's length
@@ -1190,12 +1187,14 @@ ld_alloc:
                                 ; entry offset into the dispatcher below,
                                 ; and loader_run is UI-task-only and one
                                 ; load at a time (SPEC.md 21)
-    call mem_bytes_kb_x         ; the region is a heap claim now (SPEC.md
-                                ; 20.1/50.3), so it rounds to whole KB rather
-                                ; than to the 512 bytes int 13h needs - which
-                                ; mem_claim's own granularity then guarantees
+    mov cl, 4                   ; the region is a heap claim (SPEC.md
+    shr ax, cl                  ; 20.1/50.3) of EXACTLY the 512 bytes int 13h
+                                ; needs, in paragraphs: the granule is 512
+                                ; (SPEC.md 50.2.1), so the claim is the size
+                                ; asked for to the byte. It was rounded on to
+                                ; a whole KB - 515 bytes a launch on average
     call ld_slot                ; BX = the owner word: this record's slot
-    call mem_claim_hi_x ; from the TOP down, away from the data claims
+    call mem_claimp_hi_x        ; from the TOP down, away from the data claims
     jc .nodrv                   ; growing up from the bottom (SPEC.md 50.3)
     mov [ld_base], dx
 %ifdef KERN_BIG
@@ -1213,18 +1212,16 @@ ld_alloc:
                                 ; launch takes (SPEC.md 20.12.10)
 %endif
     shl ax, cl                  ; I_SIZE is bytes, and it is what the region
-                                ; occupies now, not what the file needed.
-                                ; **CL IS STILL 10**, set by mem_bytes_kb_x
-                                ; and documented as one of its outputs BECAUSE
-                                ; of this line. That rests on TWO DOCUMENTED
-                                ; CONTRACTS either side of it:
-                                ; ld_slot preserves CX (it pushes it - and its
-                                ; header says "clobbers: nothing else") and
-                                ; mem_claim_hi_x "clobbers: DX (an output) and
-                                ; the flags - every other register preserved",
-                                ; which holds through mem_compact's far calls
-                                ; into package relocation procs. The `jc`
-                                ; between them jumps AWAY, not through.
+                                ; occupies now: the paragraphs asked for, back
+                                ; to bytes. **CL IS STILL 4**, set above, which
+                                ; rests on TWO DOCUMENTED CONTRACTS either side
+                                ; of it: ld_slot preserves CX (it pushes it -
+                                ; and its header says "clobbers: nothing
+                                ; else") and mem_claimp_hi_x "clobbers: DX (an
+                                ; output) and the flags - every other register
+                                ; preserved", which holds through mem_compact's
+                                ; far calls into package relocation procs. The
+                                ; `jc` between them jumps AWAY, not through.
                                 ; WHAT A WRONG SHIFT COSTS: [ld_need] becomes
                                 ; I_SIZE, and I_SIZE is the bound in two
                                 ; OWNERSHIP FENCES - fsx.inc's "an entry inside
@@ -1233,16 +1230,13 @@ ld_alloc:
                                 ; path. Too large a value widens a security
                                 ; fence, silently. Loosen either contract and
                                 ; this line has to come back.
-    sbb ax, 0                   ; ...and SATURATED: a region over 63KB is a
-                                ; 64KB claim, and 64 << 10 is 0 in a word,
-                                ; which is what I_SIZE says for a BUILT-IN
-                                ; (inst_icon_ptr, inst_sweep_seg). The bit
-                                ; the shift pushed out is in CF, so a 64KB
-                                ; region reads 0xFFFF and every smaller one
-                                ; is untouched (SPEC.md 20.1.1). Both fences
-                                ; test `< I_SIZE`, so this refuses offset
-                                ; 0xFFFF alone, which image + bss <= 0xFE00
-                                ; already does
+                                ; NO SATURATION any more: the value is
+                                ; roundup512(image + bss) <= APP_MAX_SIZE =
+                                ; 0xFE00, and the granule divides 512, so the
+                                ; claim is that and the shift cannot carry. It
+                                ; was a whole KB, and 64 << 10 is 0 in a word,
+                                ; which is what `sbb ax, 0` was for (SPEC.md
+                                ; 20.1.1)
     mov [ld_need], ax
     clc                         ; `shl ax, cl` above WRITES CF, and this
     ret                         ; routine's answer is CF - it was the caller's
@@ -1366,7 +1360,7 @@ ld_start:
     call COLD_SEG:mega_pcin_n   ; kern_mega's CATCH: a fault in the entry
                                 ; proc comes back here as a refusal, CF = 1
                                 ; (KERN-MEGA-PLAN 14.42, mega_fkill)
-    MEGA_PCALL [es:ld_fp], [es:ld_base] ; the CODE alias (kernel/mega.inc)
+    MEGA_PCALLC [es:ld_fp], [es:ld_base] ; the CODE alias (kernel/mega.inc)
 ..@mega_pcret_l:
     call COLD_SEG:mega_pcout_n  ; (needs no DS: the frame names the task)
 %else
@@ -1515,6 +1509,15 @@ ld_start:
                                 ; window, on a launch that is being abandoned)
                                 ; and ld_unreserve banks it anyway; AX and CX
                                 ; survive, ld_slot banking CX itself
+%ifdef TOAST_Q
+    mov si, toast_qinst         ; a QUEUED message of the package's is
+    mov al, [toast_qwant]       ; re-homed the same way - the two messages
+    call .rehtoast              ; are records of one shape (toast.inc), so
+    mov si, toast_inst          ; one body asks each (kernel size pass 16)
+    mov ax, [toast_on]          ; toast_kill's own test: on OR staged
+    or al, ah
+    call .rehtoast
+%else
     cmp bl, [toast_inst]
     jne .unsaid
     cmp word [toast_on], 0      ; toast_kill's own test: on OR staged
@@ -1522,10 +1525,22 @@ ld_start:
     mov byte [toast_inst], 0xFF
     mov byte [ld_said], 1
 .unsaid:
+%endif
     call ld_unreserve           ; the region, and anything the entry proc
                                 ; claimed before it declared itself broken
     mov al, LD_EABORT
     ret
+%ifdef TOAST_Q
+.rehtoast:                      ; SI = a message's raiser byte, AL = 0 when
+    cmp bl, [si]                ; it is not live: the reserved slot's live
+    jne .rht                    ; message re-homed to the kernel, and said.
+    or al, al                   ; SI and AX are dead after (ld_unreserve
+    jz .rht                     ; banks what it needs)
+    mov byte [si], 0xFF
+    mov byte [ld_said], 1
+.rht:
+    ret
+%endif
 
 %ifndef KERN_SMALL
 .rehome:
@@ -1692,7 +1707,7 @@ ld_start:
                                 ; and must not go with it. AX is still
                                 ; [ld_rehome]: both calls preserve it
 %ifdef KERN_MEGA
-    MEGA_ISHI dx                ; A LOADER PLACED ABOVE 1MB (ld_hi) is a pool
+    call mem_ishidx             ; A LOADER PLACED ABOVE 1MB (ld_hi) is a pool
     jc .rhlo                    ; block and a code/data pair, not a mem_tab
     push ax                     ; record: mem_free_x would find nothing, the
     mov ax, dx                  ; carry was never read, and the block and two
@@ -1883,10 +1898,10 @@ ld_pkg_start_x:
     cld                         ; the last thing this block may read
     rep movsb
     pop ds
-    call ld_start               ; 7, 8 and 9 - and ES is the region, which is
-.bad_out:                       ; what that routine's step 7 wants. It answers
-    ret                         ; in AL and frees the region itself when the
-                                ; entry proc aborts
+    jmp ld_start                ; 7, 8 and 9 - and ES is the region, which is
+                                ; what that routine's step 7 wants. It answers
+                                ; in AL and frees the region itself when the
+                                ; entry proc aborts (a tail jump: pass 17, -1)
 .badpop:
     pop si
 .bad:
@@ -1990,12 +2005,25 @@ ld_pkg_byname:
                                 ; caller stands, and the caller is the one who
                                 ; told us the document's own dir and volume
                                 ; anyway (both are banked above)
+    inc byte [ui_post]          ; ...and SAY SO (SPEC.md 13.13), which is the
+                                ; whole of the POSTED form (SPEC.md 21.5.4):
+    cmp [ld_base], ax           ; asked FROM AN ENTRY PROC - a launch is in
+    jne .posted                 ; flight, [ld_base] names its region - this
+                                ; must not re-enter ld_start under the outer
+                                ; launch's state. [assoc_dapp] above IS the
+                                ; post: ui_task's .chk_assoc spends it on its
+                                ; next pass, and assoc_run_x, seeing it stand
+                                ; when the entry proc refuses, says nothing
+                                ; and repaints nothing for that refusal. The
+                                ; over-set [ui_post] on the called arm costs
+                                ; one sweep of the posted flags (13.13)
     COLDCALL assoc_run_x        ; **CALLED, NOT POSTED**: this slot already
                                 ; requires the UI task with the gfx lock FREE
                                 ; (21.5), which is the context assoc_run
                                 ; wants - so there is nothing to defer to.
                                 ; FAR, because assoc_run far-returns, being
                                 ; ui.inc's own callee
+.posted:
     xor al, al                  ; it reported its own verdict to the user
     ret                         ; (ld_say_status) - 21.5.3's thinner answer
 .nodoc:
@@ -2028,13 +2056,10 @@ ldf_ld_pkg_start:
     call ld_owed                ; the repaint this load still owes, if any -
                                 ; and it banks AX itself, which is what the
                                 ; `push ax` / `pop ax` around this used to be
-    or al, al
-    jnz .fail                   ; every LD_* but LD_OK, ld_start's own
-    xor ax, ax                  ; LD_EABORT included: AX = 0 and CF = 0 on the
-    retf                        ; way out, and `xor` is what clears the flag
-.fail:
-    stc
-    retf                        ; retf touches no flags, so the answer stands
+    cmp al, 1                   ; every LD_* but LD_OK, ld_start's own
+    cmc                         ; LD_EABORT included, is CF = 1 - `cmp`
+    mov ah, 0                   ; borrows on 0 alone. AH = 0 writes no flag,
+    retf                        ; so LD_OK is AX = 0 (pass 17, -3)
 
 ; -----------------------------------------------------------------------------
 section .bss
@@ -2179,7 +2204,7 @@ osapi_pkg_rehome_x:
     or dx, dx                   ; a segment of 0 is the heap's own "no claim"
     jz .no                      ; and can never be a part's base
 %ifdef KERN_MEGA
-    MEGA_ISHI dx                ; kern_mega: a pool selector (an OS88_HIGHMEM
+    call mem_ishidx             ; kern_mega: a pool selector (an OS88_HIGHMEM
     jnc .no                     ; claim) has no code half and no heap record,
 %endif                          ; and the re-home runs code at its base
     mov [ld_rehome], dx

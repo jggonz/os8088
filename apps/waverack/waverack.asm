@@ -157,9 +157,11 @@ wr_entry:
 .bw:
     sub cx, MBAR_H                  ; its desktop band, for the size table
     mov [wr_pband], cx
-    mov ax, WRL_BANDKB              ; the waveform band (SPEC.md 123.5): a
-    call OSAPI_MEM_CLAIM            ; refusal is not fatal - the waveform is
-    jnc .band                       ; then drawn without its grid
+    mov ax, OS88_BYTES_PARA(WRL_BANDSZ) ; the waveform band (SPEC.md 123.5),
+    xor cx, cx                      ; in PARAGRAPHS (50.3.7): 9,600 bytes is
+    mov bl, MEMP_CLAIM              ; 9.5 KB at the granule. A refusal is not
+    call OSAPI_MEM_P                ; fatal - the waveform is then drawn
+    jnc .band                       ; without its grid
     xor dx, dx
 .band:
     mov [wr_bseg], dx
@@ -2626,10 +2628,13 @@ wr_s_mono:   db '  Mono', 0
 wr_s_stereo: db ' Stereo', 0
 
 wr_ablines:
-    dw wr_ab1, wr_ab2, wr_ab3, 0
+    dw wr_ab1, wr_ab2, wr_ab3, wr_abz, wr_abc, wr_abn, 0
 wr_ab1:     db 'WaveRack for os8088', 0
 wr_ab2:     db 'records, plays and', 0
 wr_ab3:     db 'edits WAV sound', 0
+wr_abz:     db 0
+wr_abc:     db 'Contributed by', 0
+wr_abn:     db 'Jorge Gonzalez', 0
 
 %define WRART_DATA
 %include "wrart.inc"
@@ -2785,6 +2790,9 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wx_tmp, WO_NPC * WP_SIZE    ; the list being built
     ; --- the save (wrsave.inc) --------------------------------------------------
     WRV ws_busy, 1                  ; 1 = a save is writing (state BUSY)
+    WRV wr_fsop, 2                  ; OSAPI_FS_OP's owner, WRO_* (0 none; a WORD for parity;
+                                    ; outside wo_zero0..1 - wo_empty must
+                                    ; not forget a save's)
     WRV ws_mode, 1                  ; WSM_*
     WRV ws_made, 1                  ; WRSAVE.$$$ exists
     WRV ws_padded, 1                ; the pad byte is decided
@@ -2999,7 +3007,8 @@ WRB_SIZE0   equ 240 + WR_NB * 10 + WF_NKEYS * 2 + WD_BANDSZ
     WRV wc_rcap, 4                  ; bytes captured, this stream
     WRV wc_rrd, 4                   ; bytes read out of the ring, this stream
     WRV wc_frames, 4                ; the take's frames: written and staged
-    WRV wc_wrote, 4                 ; ...written
+    WRV wc_wrote, 4                 ; ...written (the RIFF pad not counted)
+    WRV wc_padded, 1                ; the pad byte written (wc_wlast)
     WRV wc_puto, 2                  ; the unit being filled: its bytes...
     WRV wc_putu, 1                  ; ...and which (the copier's)
     WRV wc_getu, 1                  ; the next unit to write (the UI's)

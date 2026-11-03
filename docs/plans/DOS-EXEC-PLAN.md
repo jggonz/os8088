@@ -949,7 +949,9 @@ A section written now so it does not have to be discovered later.
   crash before terminating. We restore at exit; a program that never reaches
   our exit path never gives us one.
 - **Multitasking.** The bracket is exclusive by design. One DOS program at a
-  time, and os8088 is frozen behind it.
+  time, and os8088 is frozen behind it. **Outside the bracket it is planned**:
+  docs/plans/DOS-WINDOWED-PLAN.md runs each program on its own window's
+  worker, TopView/DESQview's shape, for no resident byte.
 - **`.EXE`s larger than the arena**, and any program wanting more than
   ~433KB. Not many.
 

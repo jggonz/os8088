@@ -625,15 +625,17 @@ dd_bdreloc:
 .o:
     ret
 
-; dd_bdkb_calc - AX = KB the board picture needs at the current layout
-dd_bdkb_calc:
+; dd_bdpara_calc - AX = the PARAGRAPHS the board picture needs at the
+; current layout: a byte count, so the claim pays the heap's granule and not a
+; whole KB (SPEC.md 50.3.7)
+dd_bdpara_calc:
     push dx
     push cx
     mov ax, [dd_sb]
     mul word [dd_mh]                ; 56 * 496 = 27,776: one word, just
-    add ax, 1023
+    add ax, 15
     adc dx, 0
-    mov cl, 10
+    mov cl, 4
 .sh:
     shr dx, 1
     rcr ax, 1
@@ -666,27 +668,28 @@ dd_bdkb_calc:
 ; at the new layout straight after, so nothing in the tail is ever read again.
 ; -----------------------------------------------------------------------------
 dd_fit_claim:
-    call dd_bdkb_calc
+    call dd_bdpara_calc
     cmp word [dd_bdseg], 0
     jne .grow
-    call OSAPI_MEM_CLAIM            ; out DX = the base, AX = KB given
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; out DX = the base, AX = paragraphs given
     jc .no
     mov [dd_bdseg], dx
-    mov [dd_bdkb], ax
+    mov [dd_bdpara], ax
     mov ax, dd_bdreloc              ; ...AND IT MOVES (NO-PINNING A3, SPEC.md
     call OSAPI_MEM_MOVABLE          ; 93.3.4.6): dd_bdreloc's header. A regrow
     clc                             ; below keeps the declaration (50.3.1)
     ret
 .grow:
-    cmp ax, [dd_bdkb]
+    cmp ax, [dd_bdpara]
     je .fits
-    push ax
     mov dx, [dd_bdseg]
-    call OSAPI_MEM_REGROW           ; DX = the claim's base NOW - a regrow may
-    pop cx                          ; move it, and every reader goes through
-    jc .no                          ; [dd_bdseg]
-    mov [dd_bdseg], dx
-    mov [dd_bdkb], cx
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P                ; DX = the claim's base NOW - a regrow may
+    jc .no                          ; move it, and every reader goes through
+    mov [dd_bdseg], dx              ; [dd_bdseg]; AX = the paragraphs given
+    mov [dd_bdpara], ax
 .fits:
     clc
     ret

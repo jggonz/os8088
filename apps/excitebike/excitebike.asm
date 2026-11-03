@@ -198,10 +198,11 @@ xb_onkey:
 xb_tpl: dw 52, 32, 452, 284, xb_title, xb_paint, xb_onkey, xb_click
 OS88_PREFER xb_pref, 452,284,452,284,452,154
 xb_title: db 'Excitebike',0
-xb_credits: dw xb_title,xb_credit1,xb_credit2,xb_credit3,0
+xb_credits: dw xb_title,xb_credit1,xb_credit2,xb_credit3,xb_credit4,0
 xb_credit1: db 'Native 8086 motocross racer',0
 xb_credit2: db 'Original artwork, sound and code',0
 xb_credit3: db 'Inspired by Excitebike (Nintendo, 1984)',0
+xb_credit4: db 'Ported by Jorge Gonzalez',0
 
 %include "front.inc"
 %include "video.inc"

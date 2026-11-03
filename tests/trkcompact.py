@@ -52,6 +52,7 @@ sys.path.insert(0, os.path.join(_OS88_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_OS88_ROOT, "tests"))
 import os88fixture                                       # noqa: E402
 import os88ui, os88geom, os88marty                       # noqa: E402
+from os88geom import MEM_GRAN                            # noqa: E402
 from trackmove import pkg_syms, u16, disk                # noqa: E402
 from heapcheck import claims                             # noqa: E402
 
@@ -72,6 +73,10 @@ def main():
     os88fixture.need("build/trackmove360.img")
     modsz = os.path.getsize("apps/tracker/beverly.mod")
     needk = (modsz + 1023) // 1024
+    # ...and what Tracker CLAIMS, which is paragraphs to the heap's granule
+    # (SPEC.md 50.3.7): every fit below is decided against this, because a run
+    # a KB rounding calls short can still hold the module
+    needp = -(-((modsz + 15) // 16) // MEM_GRAN) * MEM_GRAN
 
     with os88ui.boot("build/os8088-360.img", apps=disk(),
                      machine=a.machine, quick=True) as ui:
@@ -106,7 +111,7 @@ def main():
             return sorted(out, key=lambda t: key(t[0]), reverse=True)
 
         def layout(tag):
-            """Print the arena and answer the largest run in KB, PURGEABLE
+            """Print the arena and answer the largest run in PARAGRAPHS, PURGEABLE
             CLAIMS COUNTED AS FREE - which is the number a package is quoted
             (SPEC.md 50.6.4: an ordinary claim outranks every cache and
             mem_claim sheds them all on its way down), and it is the reason
@@ -157,19 +162,19 @@ def main():
             gap(top)
             print("     largest run %d KB, module wants %d KB"
                   % (big // 64, needk))
-            return big // 64
+            return big
 
         ui.open_drive("B")
         run = None
         for i in range(MAXTRK):
             ui.open(PKG)
             run = layout("%d instance(s)" % (i + 1))
-            if run < needk:
+            if run < needp:
                 break
         else:
             print("FAIL: %d instances and the floor run is still %d KB - this"
                   " machine has more heap than the test can fill" % (MAXTRK,
-                                                                     run))
+                                                                     run // 64))
             return 1
         # --- EXTRA more, and then EXTRA+1 come off the ceiling --------------
         # One region of room is not enough once the floor is modelled right.
@@ -206,23 +211,23 @@ def main():
         print("  trackers at %s" % " ".join("%04x" % key(s) for s, _ in tk))
 
         top = tk[:extra + 1]
-        rgnkb = sum(c[1] // 64 for c in claims(m, S)
+        rgnp = sum(c[1] for c in claims(m, S)
                     if c[0] in [key(sg) for sg, _ in top])
         for _, w in top:
             ui.close(w)
         ui.settle()
         run2 = layout("...and the top %d closed" % len(top))
-        if run2 >= needk:
+        if run2 >= needp:
             print("FAIL: the floor run is %d KB and the module wants %d - the"
-                  " load would simply fit" % (run2, needk))
+                  " load would simply fit" % (run2 // 64, needk))
             return 1
-        if run2 + rgnkb < needk:
+        if run2 + rgnp < needp:
             print("FAIL: %d KB of floor plus %d KB of regions is still under the"
                   " module's %d - no compaction could fund this load"
-                  % (run2, rgnkb, needk))
+                  % (run2 // 64, rgnp // 64, needk))
             return 1
         print("     PRECONDITION: %d KB free, %d KB if the asker moves too,"
-              " module wants %d" % (run2, run2 + rgnkb, needk))
+              " module wants %d" % (run2 // 64, (run2 + rgnp) // 64, needk))
 
         tk = trackers()
         seg0, win = tk[0]

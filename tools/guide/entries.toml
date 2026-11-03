@@ -147,6 +147,12 @@ kind = "system"
 summary = "Formats a blank floppy so the system can store files on it. Loaded when you choose Format Disk."
 short = "Formats blank floppies"
 
+["FSCHECK.DRV"]
+title = "Disk checker"
+kind = "system"
+summary = "Checks a disk's file allocation table, folders and file chains, repairs what it safely can, and defragments the disk. Loaded by System Check, beside which it sits."
+short = "Checks, repairs, defragments"
+
 ["HIBER.DRV"]
 title = "Hibernate"
 kind = "system"
@@ -403,7 +409,7 @@ short = "Install os8088 on a hard disk"
 ["SYSCHECK.O88"]
 title = "System Check"
 kind = "program"
-summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove."
+summary = "Checks the disk the machine starts from for parts left over or broken by an upgrade, and cleans up what is safe to remove. Also checks, repairs and defragments any disk, with FSCHECK.DRV."
 short = "Installed system checker"
 
 ["TASKMGR.O88"]

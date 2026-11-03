@@ -851,7 +851,7 @@ clo_read1:
 clo_kpara:
     push ax
     mov ax, dx
-    call KERNEL_SEG:mega_s2segf
+    call COLD_SEG:mega_s2segc
     cmp ax, 0xFFFF
     je .hi
     xchg dx, ax
@@ -1872,6 +1872,9 @@ clo_imgsize:
 clo_imgrun:
     push bx
     push cx
+%ifdef FPG_PARK
+    call clo_opgo               ; ONE bar for the whole image, both ends
+%endif
     mov al, [es:CL_FDRV]        ; STAND WHERE THE FILE IS, once, before
     mov bx, [es:CL_FCLUS]       ; anything reads or writes it. Free when the
     call COLD_SEG:dskf_dsk_goto ; volume has not moved - dsk_goto re-aims
@@ -2151,6 +2154,9 @@ clo_move:
     push di
     push bp
     push es
+%ifdef FPG_PARK
+    call clo_opgo               ; the clone is ONE operation (below)
+%endif
 
     push cx                     ; SPEC.md 12.8's bar, scaled to THIS pass:
     push dx                     ; DX:CX = its bytes (12.8.1). A 1.44MB run is
@@ -2226,6 +2232,36 @@ clo_move:
     pop es
     pop bp
     jmp clo_x5                 ; (the shared epilogue, below clo_cat)
+
+%ifdef FPG_PARK
+; -----------------------------------------------------------------------------
+; clo_opgo - the WHOLE clone is one operation (SPEC.md 12.8.10): CL_TOT
+;            sectors read and CL_TOT written, so 1KB a sector, on ONE bar
+;            that parks on the menu bar across a same-drive clone's swap
+;            prompts instead of filling once a pass. EXACT for a disk end,
+;            one sector OVER for the target (LBA 0 is clo_fin's raw write,
+;            uncounted), and short of nothing. The kernel owns it as 0FFh,
+;            so only an end ends it, and clo_free - which every outcome of
+;            every clone reaches, Esc and a closed window included - is that
+;            end. Called by every pass: past the first it is the caller's
+;            own operation already, which the cell refuses as NESTING and
+;            leaves alone. Advisory: refused, each pass is its own bar as
+;            before. in: ES = the claim. Every register kept
+; -----------------------------------------------------------------------------
+clo_opgo:
+    push ax
+    push cx
+    push dx
+    mov ax, [es:CL_TOT]
+    mov cx, 1024
+    mul cx
+    xchg cx, ax                 ; DX:CX = the bytes (2,880 x 1KB fits)
+    call KERNEL_SEG:apic_fs_op
+    pop dx
+    pop cx
+    pop ax
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; clo_span - CX sectors from LBA AX, between the drive and ES:0
@@ -2336,7 +2372,7 @@ clo_span:
     push dx                     ; kern_mega: the buffer's K5 slides onto
     xchg dx, ax                 ; itself, DX paragraphs (DL is the
     mov ax, es                  ; direction, kept)
-    call KERNEL_SEG:mega_slidef
+    call COLD_SEG:mega_slidec
     pop dx
 %else
     mov bx, es                  ; ...and an 8086 has no `add reg, sreg`. BX is
@@ -2906,6 +2942,11 @@ clo_free:
     or ax, ax
     jz .out
     KSEG es, ax, MEGA_SEL_K4
+%ifdef FPG_PARK
+    xor cx, cx                  ; DX:CX = 0: the clone's ONE operation is over
+    xor dx, dx                  ; (clo_opgo). Every way a clone stops comes
+    call KERNEL_SEG:apic_fs_op  ; here, so this is its only end; refused (CF)
+%endif                          ; when it never began, or is a package's
 %ifdef CLO_XMS
     cmp word [es:CL_XKB], 0
     je .noxms
@@ -3043,8 +3084,10 @@ clo_unmnt:
 ; through clo_mount's own exit
 ; -----------------------------------------------------------------------------
 clo_umount:
-    CSDO mov [CSEG clo_mvol], al
-    CSDO mov [CSEG clo_mseg], es
+    CSDO_ON
+    mov [CSEG clo_mvol], al
+    mov [CSEG clo_mseg], es
+    CSDO_OFF
     mov [mem_pinimg], es        ; clo_unmnt's pin, for the eject
 .drop:                          ; (clo_unmnt's: both cells already stored)
     call clo_mdrop

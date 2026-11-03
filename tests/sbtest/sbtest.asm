@@ -30,9 +30,13 @@
 ;            RESUME (D4h) and play it (SPEC.md 34.5). On an INPUT stream
 ;            the feed must refuse with err 7 (SPEC.md 34.6) - the digit
 ;            lands on line 1.
-;   key 'r'  verb 4 open-in (Phase 5): grant 6,000 B, open a capture at
-;            8,000 Hz - 'R' on success; while an out-stream is open the
-;            open-in must refuse '1' (half-duplex, SPEC.md 34.3/34.6).
+;   key 'r'  verb 4 open-in: a capture at 8,000 Hz into a 4KB ring of our
+;            own (SND_OPENF_EXT, SPEC.md 34.6.4 - since 34.6.5 the only
+;            record stream; without the flag the driver answers 7) - 'R' on
+;            success; while an out-stream is open the open-in must refuse
+;            '1' (half-duplex, SPEC.md 34.3/34.6). A 6,000 B grant rides
+;            beside it for 'f' alone, so the feed still stages and verb 1
+;            still answers an input stream with 7.
 ;   key 'd'  the verb 6 -> verb 5 staging round-trip (Phase 5): stage a
 ;            known 16-byte pattern into a scratch grant, read it back via
 ;            verb 5, compare - 'Y' good / 'N' mismatch on line 2. Proves
@@ -307,25 +311,43 @@ sb_start:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_close - close the stream and free its grant
+; sb_close - close the stream and free its grant (and a record ring)
 ; in:  nothing ([sb_hand]/[sb_goff] live)
 ; out: nothing; preserves all registers
 ; -----------------------------------------------------------------------------
 sb_close:
     push ax
     push cx
+    push dx
     push si
     mov ah, [sb_hand]
-    mov al, 2                       ; verb 2: close
-    call OSAPI_SND_STREAM
+    mov al, 2                       ; verb 2: close - the card stops writing
+    call OSAPI_SND_STREAM           ; the ring before it is freed below
     mov si, [sb_goff]
     mov ax, 0x0107                  ; verb 7, sub-op 1: free
     call OSAPI_SND_STREAM
+    call sb_rfree
     mov byte [sb_openf], 0
     mov byte [sb_s1+10], '-'
     pop si
+    pop dx
     pop cx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; sb_rfree - free the record ring, if one is held
+; in:  nothing; out: [sb_rseg] = 0; preserves all registers
+; -----------------------------------------------------------------------------
+sb_rfree:
+    push dx
+    xor dx, dx
+    xchg dx, [sb_rseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -377,19 +399,27 @@ sb_feed:
     ret
 
 ; -----------------------------------------------------------------------------
-; sb_rec - verb 4 open-in: grant 6,000 B and open a capture at 8,000 Hz
+; sb_rec - verb 4 open-in: a capture at 8,000 Hz into our own 4KB ring
 ; in:  nothing
 ; out: nothing; sb_s1 patched ('R' recording, or the error digit - '1' is
-;      the half-duplex refusal while an out-stream is open); sb_openf set
-;      and sb_tot = 0 on success (so 'f' probes the input-feed err 7);
-;      preserves all registers
+;      the half-duplex refusal while an out-stream is open, '9' no DMA
+;      claim for the ring); sb_openf set and sb_tot = 0 on success (so 'f'
+;      probes the input-feed err 7); preserves all registers
+;
+; The external ring is Recorder's open (apps/recorder, rc_do_rec): DI:SI the
+; ring in an OSAPI_MEM_CLAIM_DMA_HI claim, its two control words after it,
+; CX = 0, size code 0 (4KB) and the default 2,048-byte block. The grant is
+; not the stream's - the driver reads neither it nor CX - and is held only
+; so 'f' has somewhere to stage.
 ; -----------------------------------------------------------------------------
+SB_RKB   equ 5                      ; the 4KB ring and its two words
 sb_rec:
     push ax
     push bx
     push cx
     push dx
     push si
+    push di
     mov cx, 6000
     mov ax, 0x0007                  ; verb 7 grant, sub-op 0: alloc
     call OSAPI_SND_STREAM
@@ -399,16 +429,27 @@ sb_rec:
     mov ax, si                      ; show the grant offset on line 1
     mov bx, sb_s1+2
     call sb_putu5
-    mov ax, 0x0004                  ; verb 4 open-in: capture capacity CX
-    mov si, [sb_gtmp]               ; into the grant at SI (SPEC.md 20.3)
-    mov cx, 6000
+    mov ax, SB_RKB
+    mov cx, ax                      ; all of it is the card's: page-safe
+    mov word [sb_rtmp], 0           ; (nothing to free if this refuses)
+    call OSAPI_MEM_CLAIM_DMA_HI     ; DX = the ring's segment
+    mov al, 9
+    jc .freefail
+    mov [sb_rtmp], dx               ; a candidate, like the grant: an open
+                                    ; stream's [sb_rseg] survives a refusal
+    mov di, dx                      ; DI:SI = the ring, CX unread
+    xor si, si
+    xor cx, cx
     mov dx, 8000
+    mov ax, ((SND_OPENF_RING | SND_OPENF_EXT) << 8) | 4
     call OSAPI_SND_STREAM           ; out AL = err, AH = handle
     or al, al
     jnz .freefail
     mov [sb_hand], ah
     mov ax, [sb_gtmp]
     mov [sb_goff], ax
+    mov ax, [sb_rtmp]
+    mov [sb_rseg], ax
     mov word [sb_tot], 0            ; no valid length: 'f' now probes the
     mov byte [sb_openf], 1          ; input-feed refusal (SPEC.md 34.6)
     mov byte [sb_s1+10], 'R'
@@ -418,11 +459,17 @@ sb_rec:
     mov si, [sb_gtmp]
     mov ax, 0x0107                  ; verb 7, sub-op 1: free
     call OSAPI_SND_STREAM
+    mov dx, [sb_rtmp]               ; ...and the candidate ring, if claimed
+    or dx, dx
+    jz .nor
+    call OSAPI_MEM_FREE
+.nor:
     pop ax
 .fail:
-    add al, '0'                     ; the error digit (1..8)
+    add al, '0'                     ; the error digit (1..9)
     mov [sb_s1+10], al
 .out:
+    pop di
     pop si
     pop dx
     pop cx
@@ -627,6 +674,8 @@ sb_ttmp  equ os88_image_end + 8     ; word: candidate staged total
 sb_chunk equ os88_image_end + 10    ; 800 B: the synthesised chunk
 sb_pat   equ os88_image_end + 810   ; 16 B: the round-trip pattern out...
 sb_pat2  equ os88_image_end + 826   ; 16 B: ...and what verb 5 brought back
+sb_rseg  equ os88_image_end + 842   ; word: the OPEN record ring's segment
+sb_rtmp  equ os88_image_end + 844   ; word: candidate ring (sb_gtmp's shape)
 
-    OS88_BSS 842
+    OS88_BSS 846
     OS88_IMAGE_END

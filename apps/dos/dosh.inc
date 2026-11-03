@@ -78,7 +78,8 @@ dsh_tail:
     or al, 0x20
     cmp al, 'c'
     jne .noc
-    add si, 2
+    inc si
+    inc si
     call dsh_bank                   ; A CHILD SHELL'S DIRECTORY DIES WITH IT
     call dsh_run                    ; under DOS - `command /c cd \FOO` leaves
     push ax                         ; the caller exactly where it was - and
@@ -588,7 +589,8 @@ dsh_resolve:
     cmp byte [dsh_spec+1], ':'
     jne .nodir
     mov si, dsh_spec                ; "d:" is the whole folder part
-    add si, 2
+    inc si
+    inc si
 .havecut:
     push si                         ; SI is the leaf, and everything before it
     mov di, dsh_leaf                ; is the folder
@@ -1055,6 +1057,26 @@ dsh_bufput:
 ; a DOS program inside an fsx bracket has.
 ; -----------------------------------------------------------------------------
 dsh_stream:
+    mov cx, [dsh_fnd+18]            ; ONE OPERATION PER FILE (SPEC.md 12.8.10):
+    mov dx, [dsh_fnd+20]            ; dsh_nth's entry, read once and written
+    shl cx, 1                       ; once, so twice its size - one bar where
+    rcl dx, 1                       ; each chunk's read and write each filled
+    call dos_be_fsop                ; it. Advisory: refused, the copy is as it
+    call dsh_stream0                ; was. A 0-byte file asks an END, which is
+                                    ; refused like the one below
+; --- dsh_opend - the operation over; the flags kept, CX and DX not ---------
+; UNCONDITIONAL, AND THAT IS CORRECT HERE: an end the caller does not own is
+; refused, and DOS.O88 never holds one of its own around a command - its
+; launch's ends in dsl_entry - so this ends what the begin opened or nothing
+dsh_opend:
+    pushf
+    xor cx, cx
+    mov dx, cx
+    call dos_be_fsop
+    popf
+    ret
+
+dsh_stream0:
     xor ax, ax
     mov [dsh_off], ax
     mov [dsh_off+2], ax
@@ -1388,6 +1410,10 @@ dsh_c_type:
     jc .nofile                      ; COMPRESSED? DX:AX = the UNPACKED size,
     test bl, OSAPI_FIND_CZ          ; BL = the flags
     jnz .czarm
+    xchg ax, cx                     ; ONE OPERATION for the chunks (SPEC.md
+    call dos_be_fsop                ; 12.8.10): DX:CX = the size. .fin and
+                                    ; .bad end it, and every other way to
+                                    ; them asks an end that is refused
 
     mov ax, DSH_CPKB                ; --- PLAIN: stream it, a cluster-shaped
     call dsh_bufget                 ; chunk at a time
@@ -1456,6 +1482,7 @@ dsh_c_type:
     xor bx, bx
     call .put
 .fin:
+    call dsh_opend
     call dsh_bufput
     call dsh_home
     xor al, al
@@ -1500,6 +1527,7 @@ dsh_c_type:
     mov si, dsh_s_nofile            ; to give it (96.30.7)
     mov ah, DSHW_NOFILE
 .bad:
+    call dsh_opend
     call dsh_home
     call dsh_say
     mov [dsh_why], ah
@@ -2054,7 +2082,8 @@ dsh_ssort:
     xor bp, bp                      ; BP = i*2
 .outer:
     mov ax, bp
-    add ax, 2
+    inc ax
+    inc ax
     cmp ax, cx
     jae .out                        ; the last element has nothing to pick from
     mov di, bp                      ; DI = the smallest seen, as an index slot
@@ -2066,7 +2095,8 @@ dsh_ssort:
     jnc .innext                     ; not smaller: keep looking
     mov di, si
 .innext:
-    add si, 2
+    inc si
+    inc si
     jmp short .inner
 .place:
     cmp di, bp
@@ -2080,7 +2110,8 @@ dsh_ssort:
     mov [es:si], dx
     mov [es:bx], ax
 .next:
-    add bp, 2
+    inc bp
+    inc bp
     jmp short .outer
 .out:
     pop bp

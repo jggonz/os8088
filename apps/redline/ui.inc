@@ -248,7 +248,7 @@ ru_geometry:
     add ax, 8
     mov bx, [ru_y]
     add bx, 3
-    mov cx, 2
+    mov cx, 3                       ; Benchmark, Inspect, Tune
 .tab:
     mov [di], ax
     mov [di+2], bx
@@ -261,6 +261,19 @@ ru_geometry:
     add di, 8
     add ax, 100
     loop .tab
+    cmp byte [cs_tab], RU_TINSP
+    jne .nosub
+    call ri_geom                    ; the Inspect tab: its foot and sub-pages
+    jmp short .bench
+.nosub:
+    mov cx, RI_NPAGE                ; the sub-page strip is Inspect's alone:
+.park:                              ; parked where no press reaches it
+    mov word [di], 0x7FFF
+    mov word [di+2], 0x7FFF
+    mov word [di+4], 0
+    mov word [di+6], 0
+    add di, 8
+    loop .park
     cmp byte [cs_tab], 0
     je .bench
     call cs_geom                    ; the Tune tab lays its own foot out
@@ -367,6 +380,11 @@ ru_paint:
     jne .running
     cmp byte [cs_tab], 0
     je .benchtab
+    cmp byte [cs_tab], RU_TINSP
+    jne .tunetab
+    call ri_tabpaint                ; the Inspect tab: its strip and its pane
+    jmp .buttons
+.tunetab:
     call cs_tabpaint                ; the Tune tab: its pane and its foot
     jmp .buttons
 .benchtab:
@@ -409,6 +427,15 @@ ru_pop6:                            ; ...and of those that save the first six
     pop ax
     ret
 
+; ru_btn1 - AL = one of ru_buttons' controls, index PLUS ONE: it alone,
+; redrawn (the Inspect strip's latch moving). Preserves every register
+ru_btn1:
+    push bx
+    mov bx, ru_buttons
+    call os88ui_btn
+    pop bx
+    ret
+
 ru_buttons_paint:
     push ax
     push bx
@@ -427,12 +454,19 @@ ru_buttons_paint:
     ; view buttons are. The foot is each tab's own: Tune greys its writes
     mov word [ru_buttonflags+12], 0
     mov word [ru_buttonflags+14], 0
+    mov word [ru_buttonflags+16], 0
     xor bx, bx
     mov bl, [cs_tab]
-    shl bx, 1
+    mov bl, [ru_tabbtn+bx]          ; the tab's button: they are drawn in
+    shl bx, 1                       ; Benchmark, Inspect, Tune order
     mov word [ru_buttonflags+12+bx], OS88UI_LATCH
-    or bx, bx
-    jz .bench
+    cmp byte [cs_tab], 0
+    je .bench
+    cmp byte [cs_tab], RU_TINSP
+    jne .tuneflags
+    call ri_flags
+    jmp short .draw
+.tuneflags:
     call cs_flags
     jmp short .draw
 .bench:
@@ -445,22 +479,34 @@ ru_buttons_paint:
 .draw:
     mov bx, ru_buttons
     mov ax, 1
+    push bx                         ; CX = the live foot buttons: six on
+    xor cx, cx                      ; the Benchmark tab, fewer on the others,
+    mov bl, [cs_tab]                ; whose rest are parked (cs_geom, ri_geom)
+    xor bh, bh
+    mov cl, [ru_footn+bx]
+    pop bx
 .button:
-    cmp ax, CS_NBTN + 1             ; the Tune foot has CS_NBTN: the rest of
-    jb .one                         ; the six are parked where nothing reaches
-    cmp ax, 7                       ; them (chipset.inc, cs_geom)
-    jae .one
-    cmp byte [cs_tab], 0
+    cmp ax, RU_NBTN - RI_NPAGE + 1
+    jb .foot
+    cmp byte [cs_tab], RU_TINSP     ; the sub-page strip: Inspect's alone
     jne .next
+    jmp short .one
+.foot:
+    cmp ax, 7
+    jae .one                        ; the three tabs, always
+    cmp ax, cx
+    ja .next
 .one:
     call os88ui_btn
 .next:
     inc ax
-    cmp ax, 9
+    cmp ax, RU_NBTN + 1
     jb .button
     call ru_heading_paint
     cmp byte [cs_tab], 0
     je .hint
+    cmp byte [cs_tab], RU_TINSP
+    je .nohint
     call cs_droppaint               ; last: an open list lies over the foot
     jmp ru_pop6
 .hint:
@@ -1055,6 +1101,48 @@ ru_spto:
 .out:
     pop cx
     pop ax
+    ret
+
+; ru_spkey - AX = a key (AH its scan code), BX = a pane: the paging keys
+; (PgDn PgUp Down Up End Home) scroll it, CLIPPED; any other does nothing.
+; The Tune and Inspect tabs' panes both. Clobbers AX, CX
+ru_spkey:
+    call ru_clip
+    jc .out
+    call ru_geometry
+    mov cx, ax                      ; CL = ascii, CH = scan code
+    mov ax, [bx+SP_TOP]
+    cmp ch, 0x51
+    je .pgdn
+    cmp ch, 0x49
+    je .pgup
+    cmp ch, 0x50
+    je .down
+    cmp ch, 0x48
+    je .up
+    cmp ch, 0x4F
+    je .end
+    cmp ch, 0x47
+    jne .out
+    xor ax, ax
+    jmp short .go
+.pgdn:
+    add ax, [bx+SP_VIS]
+    jmp short .go
+.pgup:
+    sub ax, [bx+SP_VIS]
+    jmp short .go
+.down:
+    inc ax
+    jmp short .go
+.up:
+    dec ax
+    jmp short .go
+.end:
+    mov ax, [bx+SP_CNT]             ; ru_spto clamps to the last full page
+.go:
+    call ru_spto
+.out:
     ret
 
 ; BX = pane, CX/DX = a press in screen coordinates -> CF = 1 when the press
@@ -1848,6 +1936,15 @@ ru_press:
     call ru_geometry
     cmp byte [cs_tab], 0
     je .bench
+    cmp byte [cs_tab], RU_TINSP
+    jne .tune
+    push bx
+    mov bx, ri_pane                 ; the Inspect pane's bar first
+    call ru_sphit
+    pop bx
+    jc .done
+    jmp short .sdk
+.tune:
     call cs_press                   ; the drop-down and the pane's bar first
     jc .done
     jmp short .sdk
@@ -1881,6 +1978,8 @@ ru_wheel:
     mov dx, WHEEL_STEPS
     imul dx
     xchg ax, di                     ; DI = the signed lines
+    cmp byte [cs_tab], RU_TINSP
+    je .insp
     cmp byte [cs_tab], 0
     jne .tune
     cmp byte [ru_view], 1
@@ -1922,6 +2021,12 @@ ru_wheel:
     call ru_geometry
     mov bx, cs_pane
     jmp short .go
+.insp:
+    call ru_clip
+    jc .ret
+    call ru_geometry
+    mov bx, ri_pane
+    jmp short .go
 .report:
     mov ax, [bl_top]
     push ax
@@ -1943,8 +2048,8 @@ ru_wheel:
 ru_drag:
     push bx
     call ru_geometry
-    cmp byte [cs_tab], 0
-    je .btn
+    cmp byte [cs_tab], RU_TTUNE     ; the drop-downs are the Tune tab's
+    jne .btn
     mov bx, cs_drop
     call os88ui_drdrag
     mov bx, cs_tgt
@@ -1958,8 +2063,8 @@ ru_mouseup:
     push ax
     push bx
     call ru_geometry
-    cmp byte [cs_tab], 0
-    je .btn
+    cmp byte [cs_tab], RU_TTUNE
+    jne .btn
     call cs_release                 ; CF = 1: the drop-down took it
     jc .out
 .btn:
@@ -1969,10 +2074,14 @@ ru_mouseup:
     jz .out
     mov bx, ax
     dec bx
-    mov al, [ru_actions+bx]
-    cmp byte [cs_tab], 0
-    je .key
-    mov al, [cs_actions+bx]         ; the Tune tab's foot means other things
+    push si                         ; each tab's foot means its own things
+    xor ax, ax
+    mov al, [cs_tab]
+    mov si, ax
+    shl si, 1
+    mov si, [ru_acttabs+si]
+    mov al, [si+bx]
+    pop si
 .key:
     xor ah, ah
     call rl_key
@@ -2046,15 +2155,25 @@ ru_anim: dw RU_ANIM_STEPS
 ru_ink: db CRED
 ru_scale: dd 5000
 ru_clocklabel: dw ru_mhzest
-; EIGHT BUTTONS: the six along the foot and the two TABS across the top
-; (SPEC.md 103.6). The Tune tab relabels the foot (chipset.inc, cs_settab)
-OS88UI_BTNREC ru_buttons, ru_rects, ru_buttonlabels, ru_buttonflags, 8
+; SEVENTEEN BUTTONS: the six along the foot, the three TABS across the top
+; (SPEC.md 103.6) and the Inspect tab's eight sub-pages under them (103.7).
+; Tune and Inspect relabel the foot (chipset.inc, cs_tabset)
+OS88UI_BTNREC ru_buttons, ru_rects, ru_buttonlabels, ru_buttonflags, RU_NBTN
 ru_buttonlabels: dw ru_summary, ru_detailed, ru_compare, rl_runitem, ru_save, ru_quit
-                 dw ru_tbench, ru_ttune
+                 dw ru_tbench, ru_tinsp, ru_ttune
+                 dw ri_p0, ri_p1, ri_p2, ri_p3, ri_p4, ri_p5, ri_p6, ri_p7
 ru_benchlabels: dw ru_summary, ru_detailed, ru_compare, rl_runitem, ru_save, ru_quit
-rl_cmdkeys: db 'rsudch'             ; the Bench menu's six, in its order
-ru_actions: db 'udcrsqbh'           ; the buttons' keys: six, then the tabs
+rl_cmdkeys: db 'rsudcih'            ; the Bench menu's seven, in its order
+ru_actions: db 'udcrsqbih'          ; the buttons' keys: six, then the tabs
+            db '12345678'           ; ...and Inspect's sub-pages (RI_NPAGE)
+RU_TTUNE equ 1                      ; [cs_tab]: 0 Benchmark, 1 Tune, 2 Inspect
+RU_TINSP equ 2                      ; - Inspect DRAWN between the other two
+RU_NBTN  equ 9 + RI_NPAGE           ; six foot, three tabs, the sub-pages
+ru_tabbtn: db 0, 2, 1               ; [cs_tab] -> its tab's place (6 + n)
+ru_footn:  db 6, CS_NBTN, RI_NBTN   ; [cs_tab] -> live foot buttons
+ru_acttabs: dw ru_actions, cs_actions, ri_actions
 ru_tbench: db 'Benchmark', 0
+ru_tinsp: db 'Inspect', 0
 ru_ttune: db 'Tune', 0
 ru_summary: db 'Summary', 0
 ru_detailed: db 'Detailed', 0

@@ -220,6 +220,18 @@ def plant(vhd):
     open(vhd, "wb").write(blob)        # upgrade's commit must overwrite
 
 
+def walk(vol, first=0, path=""):
+    """(path, attr, size) of every FILE on a volume, the size its directory
+    entry's - what the file OCCUPIES."""
+    for name, attr, clus, size in vol.entries(first):
+        if name in (".", ".."):
+            continue
+        if attr & 0x10:
+            yield from walk(vol, clus, path + name + "/")
+        else:
+            yield path + name, attr, size
+
+
 def tool_seg(m):
     """HDDTOOL.DRV's claim, as HDD.DRV holds it: 0 = given back."""
     row = m.sym("drv_tab") + 1 * 16    # row 1, the hard disk (drv_tab order)
@@ -278,6 +290,29 @@ def main():
                 or int(m_.group(1)) < 20 or "Writing ASSOC.DAT" not in log:
             sys.exit("install: FAIL - the log does not end as an install "
                      "does (ASSOC.DAT, the totals, Finished.): %r" % log)
+        # THE TOTAL IS WHAT THE COPY MOVES (SPEC.md 117.4.1): the raw copy
+        # moves a compressed file's PACKED bytes, so its KB is the source
+        # directory entry's size and never what it expands to (20.14.3). The
+        # nine-line box has scrolled every file line away by now, but the
+        # total counts them all and can be worked out exactly from the two
+        # floppies: every file on each, less ASSOC.DAT (written, not copied)
+        # and less the apps disk's system files (left alone, 52.10.12).
+        # Through OSAPI_FILE_FIND it was 705 KB against 668 here.
+        want_n = want_kb = 0
+        for img, apps in ((src, False), (ID.Vol(open(M.apps_disk(
+                os88build.at("build/apps360.img")), "rb").read()), True)):
+            for p, attr, size in walk(img):
+                if p == "ASSOC.DAT" or (apps and attr & 6):
+                    continue
+                want_n += 1
+                want_kb += -(-size // 1024)
+        if (int(m_.group(1)), int(m_.group(2))) != (want_n, want_kb):
+            sys.exit("install: FAIL - the log's total is %s files, %s KB and "
+                     "the copy moves %d files, %d KB: it reports a size the "
+                     "copy does not move (SPEC.md 117.4.1)"
+                     % (m_.group(1), m_.group(2), want_n, want_kb))
+        print("  log: %d files, %d KB - the bytes the copy moves"
+              % (want_n, want_kb))
         v = ID.partition(vhd)
         tree = v.tree()
         bad = [p for p in ("KERNEL.SYS", "BOOTHD.SYS", "INSTALL.O88",

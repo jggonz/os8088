@@ -795,7 +795,8 @@ wc_wfull:
     ret
 
 ; wc_wlast - the unit being filled, its [wc_puto] bytes: the take's last
-; write, any length (the copier stood aside for good). out: CF as wc_write.
+; write, any length (the copier stood aside for good), and the RIFF pad byte
+; with it when the take's length is odd ([wc_padded]). out: CF as wc_write.
 ; clobbers AX, BX, CX, DX, SI, DI
 wc_wlast:
     mov cx, [wc_puto]
@@ -803,9 +804,25 @@ wc_wlast:
     xor bh, bh
     shl bx, 1
     mov ax, [wc_useg + bx]
+    mov bx, [wc_wrote]              ; THE TAKE'S LENGTH ODD - only an
+    add bx, cx                      ; overrun's, the chunks being cut at the
+    and bx, 1                       ; strip's columns - a RIFF pad byte (0)
+    jz .w                           ; after it, in the unit's room: a unit is
+    push es                         ; never left full ([wc_puto] < [wc_osz])
+    mov es, ax
+    mov di, cx
+    mov byte [es:di], 0
+    pop es
+    inc cx
+.w:
+    push bx
     call wc_write
+    pop bx
     jc .out
     mov word [wc_puto], 0
+    mov [wc_padded], bl             ; the pad is in RIFF's size and not in
+    sub [wc_wrote], bx              ; data's (wc_header)
+    sbb word [wc_wrote+2], 0
 .out:
     ret
 
@@ -920,15 +937,17 @@ wc_header:
     pop ax
     mov word [es:0], 'RI'
     mov word [es:2], 'FF'
-    mov bx, ax                      ; RIFF's size: the cluster + data - 8
-    mov cx, dx
+    mov bx, ax                      ; RIFF's size: the cluster + data +
+    mov cx, dx                      ; the pad - 8
     or bx, cx
     jz .r0                          ; (an unfinished take says 0)
     mov bx, ax
     add bx, [wc_clu]
     adc cx, 0
-    sub bx, 8
-    sbb cx, 0
+    cmp byte [wc_padded], 1         ; CF = the pad byte written (wc_wlast)
+    cmc
+    adc bx, -8
+    adc cx, -1
 .r0:
     mov [es:4], bx
     mov [es:6], cx
@@ -1028,12 +1047,87 @@ wc_stand:
 
 ; -----------------------------------------------------------------------------
 ; wc_name - the take's name: VOICEnnn.WAV, the first of 001..999 not in the
-;           folder. out: CF = 1 all taken, SI = why. clobbers AX, BX, CX, DX,
-;           SI, DI
+;           folder. ONE walk of the folder marks every number a name of that
+;           shape already holds - a bit each, in the strip's page, which no
+;           take is drawing at Record (wc_snap's rule) - and the first clear
+;           bit is taken: a lookup per candidate was a whole walk each, and
+;           OSAPI_FILE_FIND re-walks to its ordinal, so the folder's tenth
+;           take cost ten walks of ten. A folder of that name counts as taken
+;           too: the create could not have it either. out: CF = 1 all taken,
+;           SI = why. clobbers AX, BX, CX, DX, SI, DI
 ; -----------------------------------------------------------------------------
+WC_USEDW    equ (1000 + 15) / 16        ; the bitmap, in words
+%if WC_USEDW * 2 > WC_MAXCOL * 2
+%error "wc_name's bitmap does not fit the strip's page"
+%endif
 wc_name:
-    mov word [wc_n], 1
-.try:
+    push es
+    push ds
+    pop es
+    mov di, wc_cols                 ; nothing taken yet
+    mov cx, WC_USEDW
+    xor ax, ax
+    cld
+    rep stosw
+    xor cx, cx                      ; ordinal 0 (CX = the next, each call)
+.next:
+    mov di, wo_fbuf
+    call OSAPI_FILE_FIND_RAW
+    jc .walked
+    mov si, wo_fbuf                 ; 'VOICE', any case...
+    mov di, wc_s_voice
+    call wc_cmpi
+    jne .next
+    xor bx, bx                      ; ...three digits...
+    mov dl, 3
+.dig:
+    lodsb
+    sub al, '0'
+    cmp al, 9
+    ja .next
+    xchg ax, bx                     ; AL = the number so far (<= 99), BL =
+    xor bh, bh                      ; the digit
+    mov ah, 10
+    mul ah
+    add bx, ax
+    dec dl
+    jnz .dig
+    mov di, wc_s_wav                ; ...'.WAV', and the name's end
+    call wc_cmpi
+    jne .next
+    cmp byte [si], 0
+    jne .next
+    push cx                         ; taken: its bit
+    mov cl, bl
+    and cl, 7
+    mov al, 1
+    shl al, cl
+    mov cl, 3
+    shr bx, cl
+    or [wc_cols + bx], al
+    pop cx
+    jmp short .next
+.walked:
+    pop es
+    mov ax, 1                       ; the first clear bit, 1..999
+.pick:
+    mov bx, ax
+    mov cl, 3
+    shr bx, cl
+    mov cl, al
+    and cl, 7
+    mov dl, 1
+    shl dl, cl
+    test [wc_cols + bx], dl
+    jz .free
+    inc ax
+    cmp ax, 1000
+    jb .pick
+    mov si, wc_s_names              ; 'No free VOICE name'
+    stc
+    ret
+.free:
+    mov [wc_n], ax
     mov si, wc_s_voice              ; 'VOICE' + three digits + '.WAV'
     mov di, wc_name0
     call wr_put
@@ -1051,20 +1145,21 @@ wc_name:
     mov si, wc_s_wav
     call wr_put
     mov byte [di], 0
-    mov si, wc_name0                ; there already?
-    mov di, wo_nbuf
-    call wr_put
-    mov byte [di], 0
-    call wo_find
-    jc .free
-    inc word [wc_n]
-    cmp word [wc_n], 1000
-    jb .try
-    mov si, wc_s_names              ; 'No free VOICE name'
-    stc
-    ret
-.free:
     clc
+    ret
+
+; wc_cmpi - the name at SI against the NUL-ended upper-case pattern at DI,
+; any case: ZF = 1 it begins with it, SI past it. clobbers AX, DI
+wc_cmpi:
+    mov ah, [di]
+    or ah, ah
+    jz .out
+    inc di
+    lodsb
+    call wr_upper
+    cmp al, ah
+    je wc_cmpi
+.out:
     ret
 
 ; -----------------------------------------------------------------------------

@@ -2505,7 +2505,10 @@ w16d_erepl:
     call w16d_edel
     call w16d_ebuf                  ; CX = the length now
     mov ax, [bx + EC_LIMIT]
-    sub ax, cx                      ; AX = the room
+    sub ax, cx                      ; AX = the room: none when WM_SETTEXT
+    jae .room                       ;   (which takes 255 whatever the
+    xor ax, ax                      ;   limit) or EM_LIMITTEXT put the text
+.room:                              ;   past it
     pop si
     pop cx
     cmp cx, ax

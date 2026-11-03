@@ -14,8 +14,15 @@ each would otherwise surface as System Check calling a fresh install broken.
 
 It also holds the two things SPEC.md 118.2 says about SYSCHECK.O88 itself:
 every system disk carries it in SYSTEM\\, and the manifest does not name it.
+
+And it holds FSCHECK.DRV's retired list to apps/syscheck/retired.txt (SPEC.md
+118.8.1): the engine deletes a hidden + system driver only when its own list
+names it, so a .DRV line added to the text file and not to kernel/fsck.inc
+would be a leftover Clean Up offers and cannot remove - and one in the image
+and not in the text file would be a name nothing ever asks for.
 """
 import os
+import re
 import struct
 import sys
 
@@ -66,7 +73,36 @@ def folder(fat, name):
     return None
 
 
+def retired_lists():
+    """(retired.txt's .DRV names, fsck.inc's fsk_retired names), in order."""
+    txt = []
+    with open(os.path.join(ROOT, "apps", "syscheck", "retired.txt")) as f:
+        for line in f:
+            w = line.split("#", 1)[0].split()
+            if w and w[0].upper().endswith(".DRV"):
+                txt.append(w[0].upper())
+    img, on = [], False
+    with open(os.path.join(ROOT, "kernel", "fsck.inc")) as f:
+        for line in f:
+            if line.startswith("fsk_retired:"):
+                on = True
+                continue
+            if not on:
+                continue
+            m = re.match(r"\s*db '(.{8})(.{3})'", line)
+            if m:
+                img.append("%s.%s" % (m.group(1).rstrip(), m.group(2).rstrip()))
+            elif re.match(r"\s*db 0\b", line):
+                break
+    return txt, img
+
+
 def main():
+    txt, img = retired_lists()
+    check(txt and txt == img,
+          "FSCHECK.DRV's retired list is retired.txt's .DRV lines, in order "
+          "(SPEC.md 118.8.1)", "edit kernel/fsck.inc's fsk_retired with it",
+          got=img, want=txt)
     inc = os.path.join(BUILD, "syscheck_man.inc")
     if not os.path.exists(inc):
         print("t_sysman: no %s - run make" % inc)

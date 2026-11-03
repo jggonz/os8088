@@ -328,8 +328,10 @@ tp_deferred_ld:
 ; an open TeXPad holds its document's KB and not 8 of them. TP_SRC_MAX is
 ; still the document's ceiling and the status strip still says so.
 tp_claim_src:
-    mov ax, TP_SRC_KB0
-    call OSAPI_MEM_CLAIM
+    mov ax, TP_SRC_KB0 * 64     ; in PARAGRAPHS, as tp_srcpara regrows it
+    xor cx, cx                  ; (SPEC.md 50.3.7)
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .bad
     mov [tp_srcseg], dx
     mov word [tp_srccap], TP_SRC_KB0 * 1024
@@ -363,34 +365,34 @@ tp_srcpin:
     ret
 
 ; AX = the bytes the document is about to need: CF=0 once the claim holds
-; them, growing it to the KB they round up to (OSAPI_MEM_REGROW, SPEC.md
+; them, growing it to the paragraphs they round up to (MEMP_REGROW, SPEC.md
 ; 50.3.1, which brings the bytes with it when it has to move); CF=1 when the
 ; heap says no, and the claim is untouched. Preserves every register.
 tp_srcfit:
     cmp [tp_srccap], ax
     jae tp_srcby.o              ; (CF=0)
 
-; AX = bytes, at least 1: the claim regrown to the KB they round up to, at
-; most TP_SRC_KB. CF as tp_srckb. Preserves every register.
+; AX = bytes, at least 1: the claim regrown to the paragraphs they round up
+; to, at most TP_SRC_KB's. CF as tp_srcpara. Preserves every register.
 tp_srcby:
     push ax
-    add ax, 1023
-    mov al, ah
-    shr al, 1
-    shr al, 1
-    xor ah, ah                  ; the KB, at most TP_SRC_KB
-    call tp_srckb
+    push cx
+    add ax, 15                  ; (at most TP_SRC_KB * 1024: no carry)
+    mov cl, 4
+    shr ax, cl                  ; the paragraphs
+    call tp_srcpara
+    pop cx
     pop ax
 .o:
     ret
 
 ; The claim cut back to the document it holds - [tp_srclen] rounded up to a
-; KB, and never under one. A shrink is always granted in place. Preserves
+; paragraph, and never under one. A shrink is always granted in place. Preserves
 ; every register.
 tp_srctrim:
     push ax
     mov ax, [tp_srclen]
-    or ax, ax                   ; an empty document still holds one KB
+    or ax, ax                   ; an empty document still holds a granule
     jnz .k
     inc ax
 .k:
@@ -398,23 +400,26 @@ tp_srctrim:
     pop ax
     ret
 
-; AX = KB: the source claim regrown to it, [tp_srcseg] and [tp_srccap]
-; following. CF=1 refused. Preserves every register.
-tp_srckb:
+; AX = paragraphs: the source claim regrown to it, [tp_srcseg] and
+; [tp_srccap] following - the capacity is what was GRANTED, so the granule's
+; slack is typing room (SPEC.md 50.3.7). CF=1 refused. Preserves every
+; register.
+tp_srcpara:
     push ax
+    push bx
     push dx
     mov dx, [tp_srcseg]
-    call OSAPI_MEM_REGROW
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P            ; AX = the paragraphs granted
     jc .o
     mov [tp_srcseg], dx
-    mov ah, al
-    xor al, al
-    shl ax, 1
-    shl ax, 1                   ; KB * 1024
+    mov bx, 16
+    mul bx                      ; at most TP_SRC_KB * 1024: DX is banked
     mov [tp_srccap], ax
     clc
 .o:
     pop dx
+    pop bx
     pop ax
     ret
 

@@ -159,9 +159,11 @@ AT_NMENUS  equ 5
 at_entry:
     push ds                         ; ES arrives = KERNEL_SEG (SPEC.md 20.2);
     pop es                          ; the string ops below want ES = ours
-    mov ax, AT_KB0                  ; the document, before anything else: an
-    call OSAPI_MEM_CLAIM            ; editor with nowhere to type is not a
-    jc .out                         ; window worth opening, so a refusal is
+    mov ax, AT_KB0 * 64             ; the document, before anything else: an
+    xor cx, cx                      ; editor with nowhere to type is not a
+    mov bl, MEMP_CLAIM              ; window worth opening, so a refusal is
+    call OSAPI_MEM_P                ; LD_EABORT (in paragraphs, as at_dresize
+    jc .out                         ; regrows it: SPEC.md 50.3.7)
     mov [at_dseg], dx               ; LD_EABORT and the loader says so - and
     mov word [at_dcap], AT_KB0*1024 ; nothing below has to test [at_dseg]
     mov ax, at_reloc                ; ...and it MOVES (SPEC.md 66.5.7): an
@@ -1191,9 +1193,9 @@ at_dseg     equ at_bss_base                  ; word: the document claim, and
                                              ; editor with nowhere to type
 at_dcap     equ at_dseg + 2                  ; word: its capacity in bytes,
                                              ; kept in step by at_dresize
-at_dkb      equ at_dcap + 2                  ; word } at_dresize's scratch: the
-at_dnew     equ at_dkb + 2                   ; word } size it is moving to, in
-at_dtail    equ at_dnew + 2                  ; word } KB and in bytes, and the
+at_dpara    equ at_dcap + 2                  ; word } at_dresize's scratch: the
+at_dnew     equ at_dpara + 2                 ; word } size it is moving to, in
+at_dtail    equ at_dnew + 2                  ; word } paragraphs and bytes, and the
                                              ; length of the gap's high run,
                                              ; which has to survive a segment
                                              ; switch that makes no package

@@ -41,8 +41,12 @@
 
 # --- packages ---------------------------------------------------------------
 15 apps/sheet/sheet.asm            # seven dialog engines, a record each
-4 apps/dos/dos.asm                 # the bar's two and the Setup page's two,
-                                   # one record repointed per page
+2 apps/dos/dos.asm                 # the bar's two, one record repointed per
+                                   # page...
+1 apps/dos/dosset.inc              # ...and the Setup page's pair, which is the
+                                   # Setup PART's (SPEC.md 96.32.2.3): its stub
+                                   # is the one call site, the two draws in
+                                   # dos_paint_furn going through it
 1 apps/ftpd/ftpd.asm               # Start/Stop, Setup, Done - one shared body (fd_btn_draw)
 2 apps/word/word.asm               # staged N=1: entries in its own WDD list
 2 apps/scribe/scribe.asm           # Word's shape, same lineage
@@ -145,7 +149,7 @@
 # live count out of a rectangle's coordinates and Date/Time went white.
 2 kernel/ctrl.inc                  # every Control Panel page's buttons - ONE per kernel: the far entry on kern_big, CTRL.DRV's own os88ui_kbtn on kern_small (kernel size pass 14)
 1 kernel/hiber.inc                 # the hibernate prompt's
-1 apps/redline/ui.inc              # both tabs' foot and the tabs themselves; SDK arm/track/release
+2 apps/redline/ui.inc              # the three tabs' foot, the tabs themselves and Inspect's sub-page strip (ru_btn1 redraws the two strip buttons a page change moves); SDK arm/track/release
 1 apps/pixel/pxui.inc              # every PiXEL control, through px_btn; SDK arm/track/release
 2 kernel/shutdown.inc              # modal confirmation; release inside the armed control - ONE per kernel, as ctrl.inc's
 5 apps/wireball/wbfront.inc        # splash play/help/sound controls; SDK init installs press/drag/release, launch only on release

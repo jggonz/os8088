@@ -121,7 +121,7 @@ def host_leg():
         if cf:
             raise RuntimeError("EV_WORK refused %s" % name)
         dw, dh = p.r16("px_edw"), p.r16("px_edh")
-        p.w16("px_ewseg", p.claim(ax * 1024 + 16) if ax else 0)
+        p.w16("px_ewseg", p.claim(ax * 16 + 16) if ax else 0)   # paragraphs
         if inplace or name in ("ROT180", "FLIPH", "FLIPV"):
             p.w16("px_edseg", 0)
             ds = seg
@@ -191,7 +191,7 @@ def host_leg():
             p.w16("px_ep", a, 2 * k)
         ax, cf = p.decode(EV[name] | 0x80)
         check("%s%r of %dx%d: refused, not wrapped" % (name, args, ww, hh),
-              cf, "EV_WORK answered %d KB" % ax)
+              cf, "EV_WORK answered %d paragraphs" % ax)
 
 
 # =============================================================================

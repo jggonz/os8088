@@ -541,7 +541,11 @@ rl_test_entry:
     jmp .halt
 '''.replace('TIER', str(tier))
             asm, binary = td / 'probe.asm', td / 'probe.bin'
-            asm.write_text(src + wrapper + '\ndw rl_test_entry\n' + '\n'.join('dw '+n for n in fields))
+            # redline.asm ENDS IN .modi, the Inspect module (SPEC.md 103.7.2):
+            # the probe is package code, so it goes back to .text, and the
+            # symbol words go after the module, at the file's end
+            asm.write_text(src + '\nsection .text\n' + wrapper + '\nsection .modi\n'
+                           + 'dw rl_test_entry\n' + '\n'.join('dw '+n for n in fields))
             subprocess.run(['nasm', '-f', 'bin', '-I', str(ROOT/'apps')+'/', '-I', str(ROOT/'tests')+'/',
                             '-o', str(binary), str(asm)], check=True, cwd=ROOT)
             blob = binary.read_bytes()
@@ -598,7 +602,9 @@ fail:
             bootbin = td / 'boot.bin'
             subprocess.run(['nasm', '-f', 'bin', '-o', str(bootbin), str(boot)], check=True)
             disk, dump = td / 'probe.img', td / 'probe.dump'
-            assert len(blob) <= 89*512, len(blob)  # the five reads above
+            # the five reads above: the package and the probe after it. The
+            # module past them is never called here and need not load
+            assert syms['entry'] + 256 <= 89*512, syms['entry']
             disk.write_bytes((bootbin.read_bytes()+blob).ljust(1440*1024, b'\0'))
             run = subprocess.run(['qemu-system-i386', '-machine', 'pc', '-cpu', cpu, '-m', str(ram),
                                   '-drive', 'file=%s,format=raw,if=floppy' % disk,
@@ -687,8 +693,8 @@ rl_nec_first: dw 0
     labels = ['rl_nec_entry', 'rl_nec_done', 'rl_nec_first', 'rl_cpuname']
     with tempfile.TemporaryDirectory() as td:
         asm, binary = Path(td)/'nec.asm', Path(td)/'nec.bin'
-        asm.write_text((ROOT/'apps/redline/redline.asm').read_text() + wrapper +
-                       '\n' + '\n'.join('dw '+n for n in labels))
+        asm.write_text((ROOT/'apps/redline/redline.asm').read_text() + '\nsection .text\n'
+                       + wrapper + '\nsection .modi\n' + '\n'.join('dw '+n for n in labels))
         subprocess.run(['nasm', '-f', 'bin', '-I', str(ROOT/'apps')+'/',
                         '-I', str(ROOT/'tests')+'/', '-o', str(binary), str(asm)],
                        check=True, cwd=ROOT)
@@ -747,7 +753,7 @@ def chipset(machine):
         ui.open('REDLINE.O88')
         p = R.Probe(ui, sym)
         has = lambda t: any(w.title == t for w in ui.windows())
-        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 64)[i * 8:i * 8 + 8])
+        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 72)[i * 8:i * 8 + 8])
         flags = lambda: struct.unpack('<8H', p.data('ru_buttonflags', 16))
 
         def press(i):
@@ -755,8 +761,8 @@ def chipset(machine):
             ui.m.run()
             ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2, settle=0)
 
-        M.until(ui.m, lambda _: rect(7) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
-        press(7)                                    # the Tune TAB
+        M.until(ui.m, lambda _: rect(8) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
+        press(8)                                    # the Tune TAB (Inspect is 7)
         crc = crc16(ui.m.read(0xF0000, 0x10000))
         M.until(ui.m, lambda _: p.data('cs_tab') == b'\1' and p.word('cs_crc') == crc
                 and p.data('cs_measd') == b'\1' and rect(5)[0] == 0x7FFF,
@@ -826,7 +832,7 @@ def chipset(machine):
         M.until(ui.m, lambda _: not any(f & 1 for f in flags()[:6]),
                 'the Benchmark foot is live again', limit=20)
         # back to Tune - the pick outlives the tab - and Quit closes REDLINE
-        press(7)
+        press(8)                    # the Tune tab (Inspect is 7, 103.7)
         M.until(ui.m, lambda _: p.data('cs_tab') == b'\1' and rect(5)[0] == 0x7FFF,
                 'the Tune tab again', limit=20)
         assert p.data('cs_pick') == b'\7', "the user's pick outlives the tab"
@@ -874,7 +880,7 @@ def tune(machine):
         ui.open('APPS')
         ui.open('REDLINE.O88')
         p = R.Probe(ui, sym)
-        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 64)[i * 8:i * 8 + 8])
+        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 72)[i * 8:i * 8 + 8])
         stat = lambda: p.data('cs_stat', 19).decode('ascii').rstrip()
 
         def press(i):
@@ -898,8 +904,8 @@ def tune(machine):
             ui.mo.click((x1 + x2) // 2, top + 1 + item * 12 + 6, settle=0)
             M.until(ui.m, lambda _: p.data(rec, 17)[16] == 0, '%s closes' % rec, limit=20)
 
-        M.until(ui.m, lambda _: rect(7) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
-        press(7)
+        M.until(ui.m, lambda _: rect(8) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
+        press(8)                    # the Tune tab (Inspect is 7, 103.7)
         M.until(ui.m, lambda _: p.data('cs_tab') == b'\1' and p.data('cs_measd') == b'\1',
                 'the Tune tab identifies and measures', limit=60)
         # 1. FE3600 (row 1), Target Mfg spec, T, Proceed: R4 10
@@ -973,6 +979,102 @@ def tune(machine):
           'before, after and at boot: OK' % machine, flush=True)
 
 
+def inspect(machine):
+    """THE INSPECT TAB (SPEC.md 103.7), by its buttons and keys: the tab
+    probes once and fetches its module (a part of REDLINE.O88), every page
+    composes with what this machine IS, a sub-page button and the keys move
+    between pages with the strip's latch following, and Save report writes
+    INSPECT1.TXT holding all eight pages with no padding."""
+    import os88ui
+    import os88flush as F
+    import os88marty as M
+    sym = R.symbols()
+    with os88ui.boot(str(ROOT / 'build/os8088-360.img'),
+                     apps=str(ROOT / 'build/redline360.img'), machine=machine,
+                     quick=True) as ui:
+        ui.still(0)
+        ui.open_drive('B')
+        ui.open('REDLINE.O88')
+        p = R.Probe(ui, sym)
+        rect = lambda i: struct.unpack('<4h', p.data('ru_rects', 17 * 8)[i * 8:i * 8 + 8])
+        flags = lambda: struct.unpack('<17H', p.data('ru_buttonflags', 34))
+
+        def press(i):
+            x1, y1, x2, y2 = rect(i)
+            ui.m.run()
+            ui.mo.click((x1 + x2) // 2, (y1 + y2) // 2, settle=0)
+
+        def lines():
+            seg, n = p.word('ri_mseg'), p.word('ri_nl')
+            base = (ui.m.lin(seg) if hasattr(ui.m, 'lin') else seg << 4)
+            out = []
+            for i in range(n):
+                t = ui.m.read(base + sym['ri_lines'] + i * 74, 72)
+                out.append((ui.m.read(base + sym['ri_lattr'] + i, 1)[0],
+                            t.split(b'\0')[0].decode('latin1').rstrip()))
+            return out
+
+        def page(n, how):
+            how()
+            # the strip's latch moves LAST, after the page is composed and
+            # the pane drawn (ri_redraw), so it is what says the change is done
+            R.wait(ui, lambda: p.data('ri_page')[0] == n and flags()[9 + n] & 32,
+                   'page %d, and the strip latches it' % n, seconds=60)
+            assert sum(1 for f in flags()[9:] if f & 32) == 1, 'one page latched'
+            return lines()
+
+        M.until(ui.m, lambda _: rect(7) != (0, 0, 0, 0), 'REDLINE paints its tabs', limit=30)
+        assert p.data('ru_buttonlabels', 18)[14:16] != b'\0\0'
+        press(7)                                    # Inspect: between the two
+        R.wait(ui, lambda: p.data('cs_tab') == b'\2' and p.data('ri_ready') == b'\1'
+               and p.word('ri_nl') > 0, 'the Inspect tab probes and composes', seconds=120)
+        assert p.word('ri_mseg'), 'the module was not fetched'
+        summ = lines()
+        text = '\n'.join(t for _, t in summ)
+        cpu = sym_str(ui, p, 'rl_cpuname')
+        brand = p.data('rl_brand', 48).split(b'\0')[0].decode('latin1').strip()
+        cpu = brand or cpu                          # CPUID's name where it gave one
+        adapter = {0: 'VGA', 1: 'Hercules', 2: 'CGA', 3: 'EGA'}[p.word('rl_video') & 255]
+        assert ('Processor               ' + cpu) in text, (cpu, text)
+        assert ('Adapter                 ' + adapter) in text, text
+        assert sum(1 for a, _ in summ if a == 1) == 5, 'five headers on Summary'
+        print('  Summary: %s, %s, %d lines' % (cpu, adapter, len(summ)), flush=True)
+        irq = page(6, lambda: R.key(ui, 'Digit7'))
+        if os.environ.get('OS88_MEGA'):             # kern_mega: no IVT to read,
+            assert any('not read in protected mode' in t for _, t in irq), irq
+        else:                                       # ...and the page says so
+            assert any(t.split()[:3] == ['0', 'System', 'timer'] and 'os8088 kernel' in t
+                       for _, t in irq), irq
+        dev = page(7, lambda: R.key(ui, 'ArrowRight'))
+        assert any('REDLINE' in t and 'program' in t for _, t in dev), dev
+        mem = page(2, lambda: press(9 + 2))         # the Memory button
+        bars = [t for a, t in mem if a == 2]
+        assert len(bars) >= 6 and all(t.endswith('%') for t in bars), bars
+        assert any('System BIOS ROM' in t for _, t in mem), mem
+        print('  pages: IRQ0 the kernel\'s, REDLINE running, %d bars' % len(bars), flush=True)
+        press(1)                                    # Save report
+        ui.wait_toast(says='INSPECT1.TXT')          # said once it is written
+        assert p.data('ri_page')[0] == 2 and p.word('ri_nl') == len(mem), \
+            'the page shown is composed again after the save'
+        ui.settle()
+        rep = F.Flush(marty=ui.m).volume(1).read('INSPECT1.TXT').decode('ascii')
+        for h in ('Machine', 'Processor', 'Conventional memory', 'Primary display',
+                  'os8088 volumes', 'Serial ports', 'Interrupt lines (8259)', 'Sound'):
+            assert '\r\n ' + h + '\r\n' in rep or rep.startswith(' ' + h + '\r\n'), (h, rep)
+        assert not any(l.endswith(' ') for l in rep.split('\r\n')), 'padding saved'
+        press(2)                                    # Quit, the foot's third
+        M.until(ui.m, lambda _: not any(w.title == 'REDLINE' for w in ui.windows()),
+                'Quit closes REDLINE', limit=20)
+    print('REDLINE Inspect %s: eight pages, the strip, keys, INSPECT1.TXT, Quit: OK'
+          % machine, flush=True)
+
+
+def sym_str(ui, p, name):
+    """The NUL string a package word points at."""
+    off = p.word(name)
+    return ui.m.read(p.base + off, 40).split(b'\0')[0].decode('latin1')
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--host', action='store_true')
@@ -982,6 +1084,7 @@ def main():
     ap.add_argument('--machine')
     ap.add_argument('--chipset', metavar='MACHINE')
     ap.add_argument('--tune', metavar='MACHINE')
+    ap.add_argument('--inspect', metavar='MACHINE')
     args = ap.parse_args()
     if args.host: host()
     if args.modern: modern()
@@ -990,8 +1093,9 @@ def main():
     if args.machine: native(args.machine)
     if args.chipset: chipset(args.chipset)
     if args.tune: tune(args.tune)
+    if args.inspect: inspect(args.inspect)
     assert (args.host or args.modern or args.nec or args.machine or args.scene
-            or args.chipset or args.tune)
+            or args.chipset or args.tune or args.inspect)
 
 
 if __name__ == '__main__':

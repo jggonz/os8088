@@ -34,6 +34,9 @@ X3HK_NONE   equ 0
 X3HK_XMS    equ 1
 X3HK_CONV   equ 2
 
+X3OP_HOLD   equ 1                   ; [x3_fsop]: whose OSAPI_FS_OP is open -
+X3OP_CONV   equ 2                   ; the hold's or a Decode First's
+
 ; -----------------------------------------------------------------------------
 ; x3h_begin - the current track, open, about to calibrate or convert. out:
 ; CF = 0 go on now (held already, or nothing to hold: it streams); CF = 1 a
@@ -82,23 +85,40 @@ x3h_begin:
     je .now
     cmp bx, X3H_CAPKB
     ja .now
-    push bx
-    call OSAPI_MEM_AVAIL            ; AX = the largest run, BX = all, KB
-    pop cx                          ; CX = ours
-    cmp ax, cx
+    mov ax, [x3h_size]              ; ...and in PARAGRAPHS from here (SPEC.md
+    mov dx, [x3h_size+2]            ; 50.3.7): the conventional hold is a
+    add ax, 15                      ; byte count, so it pays the heap's
+    adc dx, 0                       ; granule and not a whole KB. Under
+    mov cl, 4                       ; X3H_CAPKB, so DX<<12 fits a word
+    shr ax, cl
+    mov cl, 12
+    shl dx, cl
+    or dx, ax                       ; DX = ours, which MEMP_AVAIL keeps
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest claim, BX = all, paras
+    cmp ax, dx
     jb .now
-    sub bx, cx
+    sub bx, dx
     jb .now
-    cmp bx, X3H_MARGKB
+    cmp bx, X3H_MARGKB * 64
     jb .now
-    mov ax, cx
-    mov [x3h_ckb], cx               ; (its KB: a read's capacity stays in it;
-    call OSAPI_MEM_CLAIM            ; banked first - the claim spends CX)
-    jc .now
+    xchg ax, dx
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; AX = the paragraphs GRANTED: a read's
+    jc .now                         ; capacity, the granule's slack ours
+    mov [x3h_cpara], ax
     mov [x3h_base], dx
     mov byte [x3h_kind], X3HK_CONV
+    xor ax, ax                      ; the window made NOW: a first creation is
+    call x3h_at                     ; the only SEG_AT that can fail (no LDT
+    jc .nowin                       ; entry), so no later re-aim tests CF
     call x3_ldecl                   ; MOVABLE (x3_rmove), pinned per read
 .go:
+    mov cx, [x3h_size]              ; ONE BAR for the load (SPEC.md 12.8.10):
+    mov dx, [x3h_size+2]            ; the file, read once - exact - parked on
+    mov al, X3OP_HOLD               ; the menu bar between the timer passes
+    call x3_opbeg                   ; rather than one blink a chunk
     call x3h_keyset
     xor ax, ax
     mov [x3h_have], ax
@@ -114,6 +134,8 @@ x3h_begin:
     call x3_memck
     stc
     ret
+.nowin:
+    call x3h_free                   ; no window: no hold, the track streams
 .now:
     clc
     ret
@@ -171,6 +193,8 @@ x3h_tick:
 .fail:
     call x3h_free
 .done:
+    mov al, X3OP_HOLD               ; the file in (or given up): the bar's
+    call x3_opend                   ; operation over
     mov byte [x3_st+X3S_PCT], 100
     jmp x3l_start                   ; the track's ladder (or job), as x3_go
 
@@ -203,13 +227,13 @@ x3h_read1:
     mov cx, 32768
     cmp byte [x3h_kind], X3HK_CONV  ; a conventional hold's last chunk: no
     jne .cx                         ; more capacity than the claim has left
-    push ax                         ; (a KB multiple: whole sectors fit it)
-    push dx
-    mov si, [x3h_ckb]               ; its bytes = KB x 1024, less the have
-    mov ax, si
-    mov cl, 10
+    push ax                         ; (a granule multiple: whole sectors fit
+    push dx                         ; it)
+    mov si, [x3h_cpara]             ; its bytes = paragraphs x 16, less the
+    mov ax, si                      ; have
+    mov cl, 4
     shl ax, cl
-    mov cl, 6
+    mov cl, 12
     shr si, cl
     mov dx, si
     sub ax, [x3h_have]
@@ -436,7 +460,10 @@ x3h_same:
 ; re-aimed there (KERN-MEGA-MEMORY-PLAN MC7); every real-mode kernel refuses
 ; the verb with every register kept and the sum is the answer. No 8086 has
 ; a conventional hold (x3h_open), so the XT never pays the call. Every
-; other register kept
+; other register kept. CF = 1 exactly when AX = 0: no LDT entry free, which
+; kern_mega answers with CF = 0 and the NULL selector - and an access through
+; that is completed as segment 0 (mega_null0), the interrupt vector table.
+; Only a NEW window can fail, and x3h_begin makes it before the hold is used
 x3h_at:
     push bx
     push cx
@@ -450,6 +477,7 @@ x3h_at:
 .w:
     mov [x3h_win], dx
     xchg ax, dx
+    cmp ax, 1                       ; CF = 1 exactly when AX = 0
     pop dx
     pop cx
     pop bx
@@ -480,6 +508,8 @@ x3h_keyset:
 x3h_free:
     push ax
     push dx
+    mov al, X3OP_HOLD               ; a load cut short (Stop, a failed read,
+    call x3_opend                   ; another track) ends its bar too
     mov al, [x3h_kind]
     mov byte [x3h_kind], X3HK_NONE
     mov byte [x3h_on], 0
@@ -497,4 +527,32 @@ x3h_free:
 .o:
     pop dx
     pop ax
+    ret
+
+; x3_opbeg - AL = the site (X3OP_*), DX:CX = the bytes its operation moves:
+; OSAPI_FS_OP begun, and [x3_fsop] = AL only when it was TAKEN (SPEC.md
+; 12.8.10: refused, the I/O goes on and reports as it always did). keeps all
+x3_opbeg:
+    call OSAPI_FS_OP
+    jc .r
+    mov [x3_fsop], al
+.r:
+    ret
+
+; x3_opend - AL = the site: its operation ended if its own begin opened it.
+; The SITE is asked and not just the instance, because the kernel cannot
+; tell our two apart and x3_plan frees the hold (x3h_free) INSIDE a Decode
+; First's x3c_start. keeps all but flags
+x3_opend:
+    cmp [x3_fsop], al
+    jne .r
+    mov byte [x3_fsop], 0
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FS_OP
+    pop dx
+    pop cx
+.r:
     ret

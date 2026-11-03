@@ -47,14 +47,16 @@ modc_e_shutdown:
     call sd_disp                ; clear the display and reset planar state
     mov ax, [vid_cw]
     shr ax, 1
-    CSDO mov [CSEG sd_l_cx], ax
+    CSDO_ON
+    mov [CSEG sd_l_cx], ax
     mov bx, ax                  ; ...and kept, for the line's x below
     sub ax, SPL_SPINB*4
     and ax, 0xFFF8
-    CSDO mov [CSEG sd_l_spp], ax
+    mov [CSEG sd_l_spp], ax
     mov cl, 3
     shr ax, cl
-    CSDO mov [CSEG sd_l_spx], ax
+    mov [CSEG sd_l_spx], ax
+    CSDO_OFF
     mov ax, [vid_ch]
     shr ax, 1
     sub ax, 42
@@ -116,8 +118,10 @@ sd_confirm:
     mov si, sd_save
     call sd_text
     xor ax, ax
-    CSDO mov [CSEG sd_arm], ax   ; sd_arm and sd_down, one store (%if below)
-    CSDO mov [CSEG sd_prev], al
+    CSDO_ON
+    mov [CSEG sd_arm], ax       ; sd_arm and sd_down, one store (%if below)
+    mov [CSEG sd_prev], al
+    CSDO_OFF
     call sd_rebuttons.draw      ; both buttons, then the pointer on
     CSDO mov byte [CSEG sd_active], 1
 .poll:

@@ -37,7 +37,13 @@ def run(card, machine, image):
             return int.from_bytes(m.read(slot + 2, 2), "little")
 
         def active():
-            return (word(m, "mod_tab") != 0 and
+            # The SLOT must name the loaded image: mod_need sets the row's
+            # segment before it fills CPFP, and in between seg() is still
+            # mod_gone's KERNEL_SEG - whose byte at sd_active's offset may
+            # read 1 by layout, which handed the steps below garbage for the
+            # dialog's origin (kernel size pass 16)
+            mseg = word(m, "mod_tab")
+            return (mseg != 0 and seg() == mseg and
                     m.readseg(seg(), offsets["sd_active"], 1) == b"\x01")
 
         def prompt():

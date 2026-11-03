@@ -170,7 +170,7 @@ evq_push:
 ; evq_drain - empty the ring, owing every wake (SPEC.md 74.1.1)
 ; in:  DI -> an 8-byte record buffer IN DS, PRIVATE TO THE CALLER
 ; out: the ring is empty; DI preserved (evq_pop preserves it, and
-;      wm_wake_eaten preserves every register)
+;      evq_mup's wake bookkeeping banks what it spends)
 ; clobbers: flags
 ;
 ; THE BUFFER IS AN IN-PARAMETER AND THAT IS THE POINT.  Three drains had this
@@ -195,9 +195,9 @@ evq_push:
 evq_drain:
     call evq_mup                ; evq_mup IS this loop with one record kept:
     jnc evq_drain               ; it stops early only on an EVT_MUP, which it
-    ret                         ; has consumed - and wm_wake_eaten on an MUP
-                                ; would have done nothing (it acts on a WAKE
-                                ; alone) - so going round again until the ring
+    ret                         ; has consumed - and the wake bookkeeping on
+                                ; an MUP would have done nothing (it acts on a
+                                ; WAKE alone) - so going round again until the ring
                                 ; is empty is the same drain, every wake still
                                 ; OWED (kernel size pass 10: 5 bytes)
 
@@ -216,8 +216,8 @@ evq_drain:
 ;
 ; THE BUFFER IS AN IN-PARAMETER for evq_drain's reason, one paragraph up: a
 ; buffer here would be shared, and all four callers already own `ui_ev`.
-; evq_pop preserves DI and wm_wake_eaten preserves every register, so DI is
-; still the record on every pass; and `cmp word [di+EV_TYPE]` addresses DS,
+; evq_pop preserves DI and the wake bookkeeping banks the one register it
+; spends, so DI is still the record on every pass; and `cmp word [di+EV_TYPE]` addresses DS,
 ; which is KERNEL_SEG at all four sites including the two in `.cold`.
 ; -----------------------------------------------------------------------------
 evq_mup:
@@ -226,8 +226,19 @@ evq_mup:
     jc .out
     cmp word [di + EV_TYPE], EVT_MUP
     je .out                     ; equal, so CF is already 0 - the "found" answer
-    call wm_wake_eaten
-    jmp short .dl
+    cmp word [di + EV_TYPE], EVT_WAKE   ; THE WAKE BOOKKEEPING (SPEC.md
+    jne .dl                     ; 74.1.1): a drain threw a record away, and if
+    push bx                     ; it was a WAKE the window's flag drops from
+    mov bx, [di + EV_A]         ; WKQ_RING to WKQ_EATEN - "still owed, no
+    cmp byte [bx + W_WKQ], WKQ_RING ; record". Not ours to downgrade
+    jne .pop                    ; otherwise: a stale record for a slot already
+    inc byte [bx + W_WKQ]       ; re-promised, or already eaten. (RING + 1 IS
+    mov byte [wm_wkdef], 1      ; EATEN - wm.inc's %if.) wm_wkdef is the
+.pop:                           ; one byte ui_task tests per pass, and its redo
+    pop bx                      ; puts a fresh record back in the ring. It was
+    jmp short .dl               ; wm_wake_eaten, whose last caller this loop
+                                ; was (kernel size pass 17: -4, and -1 for the
+                                ; inc)
 .out:
     ret
 

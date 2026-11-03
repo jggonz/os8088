@@ -134,9 +134,15 @@ toast_want:  db 0               ; staged by toast_show, not yet put up
 %if (toast_on - toast_dirty) != 1 || (toast_want - toast_dirty) != 2
   %error "toast.inc: the three flag bytes are stored and tested in PAIRS as words - dirty+on at [toast_dirty], on+want at [toast_on] - so they must stay adjacent in that order. Reorder them and every one of those sites writes or tests the wrong byte, silently"
 %endif
+%ifdef TOAST_Q
+toast_qwant: db 0               ; a message waits in toast_qbuf
+%else                           ; (TOAST_Q: both in the message's RECORD, .bss)
 toast_inst:  db 0FFh            ; the raiser's instance slot (0FFh = kernel)
+%endif
 toast_die:   dw 0               ; the tick it expires at
+%ifndef TOAST_Q
 toast_ttl:   dw TOAST_TICKS     ; ...and how long it was asked for
+%endif
 toast_scell: dw 0               ; the strip's first bar cell (toast_place),
 toast_scn:   dw 0               ; how many cells it takes, 0 = no strip,
 toast_scov:  db 0               ; and 1 = it is over the CLOCK and hides the
@@ -209,17 +215,41 @@ toast_show:
                                 ; BIT 15 IS THE WHOLE TEST, so it is asked of
                                 ; CH: same predicate as `cmp cx,0x7FFF / jbe`
                                 ; at every value including both boundaries
+%ifdef TOAST_Q
+    push cx                     ; the TTL, until the destination is known
+    call inst_caller            ; DH = who is asking (SPEC.md 19.2.1)
+    mov bx, toast_buf           ; TOAST QUEUE: a DIFFERENT raiser's message
+    cmp word [toast_on], 0      ; while one is up or staged waits in the one
+    je .dst                     ; queued slot (latest wins there); the SAME
+    cmp dh, [toast_inst]        ; raiser replaces its own, as before - which
+    je .dst                     ; is what keeps `Encoding...` -> `Saved` one
+    mov bx, toast_qbuf          ; message and not two
+.dst:
+    mov di, bx
+%else
     mov [toast_ttl], cx
     mov di, toast_buf
+%endif
     mov cx, TOAST_MAX
+%ifdef TOAST_Q
+%if TOAST_SCAN != 256
+  %error "toast.inc: the scan bound is counted in DL from 0, which is 256"
+%endif
+    mov dl, 0                   ; DL counts 256 down; DH is the raiser
+%else
     mov dx, TOAST_SCAN
+%endif
 .cp:
     es lodsb                    ; the same instruction files.inc:2050 uses in
                                 ; the same role, and it is why the `cld` above
                                 ; is not optional
     or al, al
     jz .end
+%ifdef TOAST_Q
+    dec dl                      ; the OTHER bound: CX counts characters KEPT,
+%else
     dec dx                      ; the OTHER bound: CX counts characters KEPT,
+%endif
     jz .end                     ; so a string that never offers a printable
                                 ; byte or a NUL - and every byte from a
                                 ; package is hostile - would spin this loop
@@ -232,11 +262,24 @@ toast_show:
     inc di
     loop .cp
 .end:
-    mov byte [di], 0
+%ifdef TOAST_Q
+    pop cx                      ; the TTL
+    cmp di, bx
+%else
     cmp di, toast_buf
-    je .kill                    ; nothing sayable: this is a retire
+%endif
+    je .kill                    ; nothing sayable: this is a retire, and it
+    mov byte [di], 0            ; writes NO slot - BX may be toast_qbuf, the
+                                ; queued record of a raiser that is not us
+%ifdef TOAST_Q
+    mov [bx+TOAST_RTTL], cx     ; the RECORD's TTL and raiser, either slot's
+    mov [bx+TOAST_RINST], dh    ; (so a closing app takes its own message)
+    cmp bx, toast_buf
+    jne .queue
+%else
     call inst_caller            ; DH = who is asking (SPEC.md 19.2.1), so a
     mov [toast_inst], dh        ; closing app takes its own message with it
+%endif
     mov byte [toast_want], 1
     popf
     call toast_now              ; ...and if the caller can be shown to hold
@@ -244,6 +287,16 @@ toast_show:
                                 ; than on the next idle pass (SPEC.md 59.4)
 .kill:
     call toast_kill             ; preserves the flags, so the popf below is
+%ifdef TOAST_Q                  ; still the caller's
+    cmp dh, [toast_qinst]       ; ...and the raiser's own QUEUED message goes
+    jne .kq                     ; too, or retiring would pop it up
+    mov al, 0                   ; AL is kent_di's: the byte both arms store,
+    SKIPF2                      ; the queue's 1 skipped (flags only, and the
+.queue:                         ; popf puts them back) - one store for the
+    mov al, 1                   ; two, and no jump over this block (kernel
+    mov [toast_qwant], al       ; size pass 17, -4)
+.kq:
+%endif
     popf                        ; still the caller's
 .out:
     clc                         ; ONE `clc`: nothing here refuses today, and
@@ -386,10 +439,11 @@ toast_arm:
     mov ax, [ticks]
     add ax, [toast_ttl]
     mov [toast_die], ax
-    mov word [toast_dirty], 0x0100  ; dirty = 0, on = 1, in one store - and
-                                    ; still AFTER [toast_die], so no pass can
-                                    ; see on=1 beside a stale expiry
-    mov byte [menu_bdirty], 1   ; **AND THE MENUS SEGMENT IS OWED A LOOK**
+    mov ax, 0x0100              ; dirty = 0, on = 1, in one store - and
+    mov [toast_dirty], ax       ; still AFTER [toast_die], so no pass can
+                                ; see on=1 beside a stale expiry; AH is the
+                                ; 1 below (kernel size pass 16, -1)
+    mov [menu_bdirty], ah       ; **AND THE MENUS SEGMENT IS OWED A LOOK**
                                 ; (SPEC.md 59.9): the strip's first choice of
                                 ; home is the gap that segment's last menu
                                 ; leaves, and menu_bar_text - the only thing
@@ -419,7 +473,11 @@ toast_arm:
 ;           [toast_scell] = its first cell (0 = x MENU_TXT_X0)
 ;           [toast_scov]  = 1 when it is over the clock, which hides the
 ;                           speaker (SPEC.md 34.15) and is menu_ckend's cue
-; clobbers: nothing (flags only)
+; clobbers: AX, BX, CX, DX, SI, DI (flags). Both calls are the menu bar's
+;           composition - menu_bt_ent's (whose callers are menu_draw_bar,
+;           which banks every register, and ui_task's clock step, which holds
+;           none across it) and menu_bt_raw's own, banked at its entry - so
+;           the kent_di/kret_di frame this made went (kernel size pass 17, -5)
 ;
 ; **CENTRED IN THE GAP**, between the end of the last menu and the clock's
 ; first GLYPH - its midpoint on the gap's, half the slack each side, `shr`
@@ -441,8 +499,6 @@ toast_arm:
 ; and goes underneath its operation, where it used to be shunted along.
 ; -----------------------------------------------------------------------------
 toast_place:
-    call kent_di                ; the shared ladder's frame, so `.out` is a
-                                ; rung (kernel size pass 15: DI banked too)
     xor ax, ax
     mov [toast_scn], ax
     mov [toast_scov], al        ; menu_ckend below asks it: the speaker SHOWS
@@ -470,7 +526,7 @@ toast_place:
     mov [toast_scell], ax
     mov [toast_scn], cx
 .out:
-    jmp kret_di                 ; pops di, si, dx, cx, bx, ax - kent_di above
+    ret
 
 ; -----------------------------------------------------------------------------
 ; toast_up - is a strip up and within its time? (SPEC.md 12.8.7, 59.9)
@@ -508,7 +564,11 @@ toast_pass:
     or ah, ah                   ; %if beside them pins, read in ONE load where
     jnz .up                     ; it was two compares against memory (kernel
     or al, al                   ; size pass 10: 3 bytes)
+%ifdef TOAST_Q
+    jz .q  
+%else
     jz .chk
+%endif
     mov ax, [ticks]
     sub ax, [toast_die]
     js .chk                     ; MODULAR arithmetic between two free-running
@@ -517,6 +577,34 @@ toast_pass:
                                 ; 45.15's stamp compare. A `jg` honours OF
                                 ; and would hold a toast across the wrap
     mov word [toast_dirty], 0x0001  ; dirty = 1, on = 0, in one store...
+%ifdef TOAST_Q
+.q:                             ; THE QUEUED MESSAGE, if any, goes up in the
+    pushf                       ; same composition that retires this one -
+    cli                         ; the staged record becomes it, whole (text,
+    mov al, 0                   ; TTL, raiser). toast_show from a worker
+    xchg al, [toast_qwant]      ; writes the slot, hence the cli. Taken and
+    or al, al                   ; cleared in one exchange, AL kept for the
+    jz .nq                      ; test past the popf. It was
+    push cx                     ; toast_promote, called from here alone
+    push si                     ; (kernel size pass 16: -8, and the pass
+    push di                     ; with nothing up no longer calls out)
+    push es
+    push ds
+    pop es
+    cld
+    mov si, toast_qbuf
+    mov di, toast_buf
+    mov cx, TOAST_RSIZE / 2
+    rep movsw
+    pop es
+    pop di
+    pop si
+    pop cx
+.nq:
+    popf
+    or al, al                   ; (AX is toast_pass's: banked at its head)
+    jnz .up
+%endif
 .chk:                           ; ...and FALLS INTO the test, where it used to
                                 ; step over `.up` with a `jmp short`. `.up` is
                                 ; at the foot of the routine now
@@ -566,7 +654,9 @@ toast_kill:
                                 ; some OTHER task staged in the gap
     cmp word [toast_on], 0      ; "on OR want", as one word over the pair
     je .out
-    mov word [toast_on], 0      ; ...and both cleared as one
+    and word [toast_on], 0      ; ...and both cleared as one (`and`: a byte
+                                ; under `mov`, the flags dead before popf -
+                                ; kernel size pass 16)
     mov byte [toast_dirty], 1
 .out:
     popf
@@ -590,6 +680,18 @@ toast_owner_gone:
                                 ; toast_show from another task
     push ax
     call inst_idx               ; AL = this record's instance index. NO "is
+%ifdef FPG_PARK
+    cmp al, [fpg_pown]          ; ...and a parked progress widget of its own
+    jne .np                     ; (SPEC.md 12.8): disowned, so the next
+    mov byte [fpg_pown], FPG_NOWN ; gfx_unlock takes it down
+.np:
+%endif
+%ifdef TOAST_Q
+    cmp al, [toast_qinst]       ; (its queued message first)
+    jne .nq
+    mov byte [toast_qwant], 0
+.nq:
+%endif
     cmp al, [toast_inst]        ; anything up?" test first: toast_kill opens
     jne .out                    ; with exactly that test (`cmp word
     call toast_kill             ; [toast_on], 0`, one word over the pair) and
@@ -609,8 +711,32 @@ toast_owner_gone:
 
 section .bss
 
+%ifdef TOAST_Q
+; TWO RECORDS OF ONE SHAPE - the text, its TTL, its raiser - so toast_show
+; fills either through BX and toast_pass moves one whole into the other
+; (kernel size pass 16). [toast_inst] is read only while a toast is up or
+; staged, which writes it first, so .bss's lack of an initialiser is never
+; seen (toast_owner_gone and ld_start each ask [toast_on] or toast_kill,
+; which does, before acting on a match)
+toast_qbuf:  resb TOAST_MAX + 1 ; the QUEUED message (toast_qwant)
+toast_qttl:  resw 1
+toast_qinst: resb 1
+%endif
 toast_buf:   resb TOAST_MAX + 1 ; the staged message. .bss because it is read
                                 ; only while [toast_on] is set, and .bss is
                                 ; off the image rung
+%ifdef TOAST_Q
+toast_ttl:   resw 1             ; ...how long it was asked for
+toast_inst:  resb 1             ; ...and the raiser's slot (0FFh = kernel)
+TOAST_RTTL  equ toast_ttl - toast_buf
+TOAST_RINST equ toast_inst - toast_buf
+TOAST_RSIZE equ toast_inst + 1 - toast_buf
+%if TOAST_RSIZE & 1
+  %error "toast.inc: toast_pass moves a record with rep movsw - keep TOAST_RSIZE even"
+%endif
+%if (toast_qttl - toast_qbuf) != TOAST_RTTL || (toast_qinst - toast_qbuf) != TOAST_RINST || (toast_buf - toast_qbuf) != TOAST_RSIZE
+  %error "toast.inc: the queued and the staged message are two records of ONE shape (text, TTL, raiser), filled through one base register and promoted as one copy"
+%endif
+%endif
 
 section .text

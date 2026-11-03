@@ -49,20 +49,20 @@
 static void ovl_load_prg(const char *name, unsigned size_lo)
 {
     static char msg[C64_MSGMAX];
-    unsigned seg, kb, got, load, n;
+    unsigned seg, paras, got, load, n;
 
     if (size_lo < 3) {
         c64_say("PRG too short.");
         return;
     }
-    /* CEILING IN 16 BITS, and this is not the obvious `(size + 1023) >> 10`:
+    /* CEILING IN 16 BITS, and this is not the obvious OS88_BYTES_PARA(size):
      * `size_lo` is `unsigned` and that is SIXTEEN bits on the target, so the
-     * addition wraps for every PRG over 64,512 bytes and asks for a 0KB or a
-     * 1KB claim for a file up to 65,533 - which os88_onfile lets through, and
-     * which then reads 64KB into a 1KB claim. The shift-then-round form
-     * cannot overflow. */
-    kb = (int)(size_lo >> 10) + ((size_lo & 1023) != 0);
-    seg = os88_mem_claim((int)kb);
+     * addition wraps for a PRG of the last 15 bytes below 64KB and asks for a
+     * 0-paragraph claim - which os88_onfile lets through, and which then
+     * reads 64KB into nothing. The shift-then-round form cannot overflow.
+     * PARAGRAPHS and not KB (SPEC.md 50.3.7): the PRG is a byte count. */
+    paras = (size_lo >> 4) + ((size_lo & 15) != 0);
+    seg = os88_mem_claim_p(paras);
     if (seg == 0) {
         c64_say("PRG: no heap for it.");
         return;

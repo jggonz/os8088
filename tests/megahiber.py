@@ -60,7 +60,8 @@ def traps(lines):
 
 def pool(box):
     """[(entry, off, kb, own)] of mx_tab and the pool's KB"""
-    X, K = box.reads([("mx_tab", MX_BLKSZ * MX_NBLK), ("xm_kb", 2)])
+    X, K = box.reads([(box.tail("mx_tab"), MX_BLKSZ * MX_NBLK),
+                      ("xm_kb", 2)])
     rows = [(k,) + struct.unpack_from("<HHB", X, k * MX_BLKSZ)
             for k in range(MX_NBLK)]
     return rows, struct.unpack_from("<H", K, 0)[0]
@@ -79,7 +80,7 @@ def fill(box):
     if at < xkb:
         gaps.append((at, xkb - at))
     free = [k for k, _, kb, _ in rows if not kb]
-    base = box.sym("mx_tab")
+    base = box.tail("mx_tab")
     made, cmds = [], []
     for (o, kb), k in zip(gaps, free):
         e = base + k * MX_BLKSZ

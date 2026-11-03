@@ -139,6 +139,157 @@ sc_drawchoose:
     inc ax
     cmp al, [sc_nvol]
     jb .r
+    ; --- what to do with it (SPEC.md 118.14): a column of its own, beside
+    ; the drives, so CGA's short card holds all four on its first lines
+    xor ax, ax                      ; the heading on the first line
+    call sc_trowy                   ; DX = its y, CF = no room
+    jc .out
+    call sc_tcolx                   ; CX = the column's x, BX = its cells
+    mov si, sc_h_task
+    mov ax, SC_INK
+    call sc_run_at
+    xor ax, ax
+.t:
+    call sc_drawtrow
+    inc ax
+    cmp al, SC_NTASK
+    jb .t
+.out:
+    ret
+
+; sc_trowy - DX = the y of chooser line AX; CF = 1 past the card's foot.
+;            Keeps the rest
+sc_trowy:
+    cmp ax, [sc_geo+SCG_VFIT]
+    jae .no
+    push ax
+    push bx
+    mov bx, ax
+    mov ax, [sc_geo+SCG_LP]
+    mul bx
+    add ax, [sc_geo+SCG_VY0]
+    mov dx, ax
+    pop bx
+    pop ax
+    clc
+    ret
+.no:
+    stc
+    ret
+
+; sc_tcolx - CX = the task column's x (half the card, on a cell), BX = its
+;            cells; sc_vcellsh - BX = the drive column's cells. Keep the rest
+sc_tcolx:
+    call sc_vcellsh
+    mov cx, bx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add cx, [sc_geo+SCG_KTX]
+    push cx
+    call sc_vcells
+    pop cx
+    push ax
+    mov ax, bx
+    call sc_vcellsh
+    sub ax, bx
+    xchg ax, bx
+    pop ax
+    ret
+sc_vcellsh:
+    call sc_vcells
+    shr bx, 1
+    ret
+
+; sc_drawtrow - task row AX ("  > Check the disk"); keeps AX
+sc_drawtrow:
+    push ax
+    push ax
+    inc ax                          ; under the heading
+    call sc_trowy
+    pop ax
+    jc .out
+    mov di, sc_txt
+    mov word [di], '  '
+    mov word [di+2], '  '
+    cmp al, [sc_task]
+    jne .n
+    mov byte [di+2], '>'
+.n:
+    add di, 4
+    mov bx, ax
+    shl bx, 1
+    mov si, [sc_tnames+bx]
+    call sc_scpy
+    call sc_tcolx
+    mov si, sc_txt
+    mov ax, SC_INK
+    call sc_run_at
+.out:
+    pop ax
+    ret
+
+; sc_tmove - choose task AL (a key or a click); redraws the two rows
+sc_tmove:
+    cmp al, SC_NTASK
+    jae .out
+    mov ah, [sc_task]
+    cmp al, ah
+    je .out
+    mov [sc_task], al
+    push si
+    push ax
+    mov bx, si
+    call OSAPI_WM_CLIP_SET
+    pop ax
+    jc .done
+    call sc_pen
+    push ax
+    mov al, ah
+    xor ah, ah
+    call sc_drawtrow
+    pop ax
+    xor ah, ah
+    call sc_drawtrow
+.done:
+    pop si
+.out:
+    ret
+
+; sc_hittask - AL = the task row under CX,DX (screen), CF = 1 none
+sc_hittask:
+    push bx
+    push cx
+    push dx
+    cmp byte [sc_laid], 0
+    je .no
+    cmp cx, [sc_geo+SCG_KX2]
+    ja .no
+    push cx
+    call sc_tcolx                   ; the right column
+    mov bx, cx
+    pop cx
+    cmp cx, bx
+    jb .no
+    mov ax, dx
+    sub ax, [sc_geo+SCG_VY0]
+    jb .no
+    xor dx, dx
+    div word [sc_geo+SCG_LP]
+    cmp ax, [sc_geo+SCG_VFIT]
+    jae .no
+    sub ax, 1                       ; under the heading
+    jb .no
+    cmp ax, SC_NTASK
+    jae .no
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop dx
+    pop cx
+    pop bx
     ret
 
 ; sc_vcells - BX = the chooser's text cells (keeps the rest)
@@ -202,7 +353,7 @@ sc_drawvrow:
     mov ax, SC_INV
 .c:
     mov cx, [sc_geo+SCG_KTX]
-    call sc_vcells
+    call sc_vcellsh                 ; the left column: the tasks are beside
     mov si, sc_txt
     call sc_run_at
 .out:
@@ -218,8 +369,12 @@ sc_hitvol:
     je .no
     cmp cx, [sc_geo+SCG_KX1]
     jb .no
-    cmp cx, [sc_geo+SCG_KX2]
-    ja .no
+    push cx
+    call sc_tcolx                   ; CX = where the task column begins
+    mov bx, cx
+    pop cx
+    cmp cx, bx
+    jae .no
     mov ax, dx
     sub ax, [sc_geo+SCG_VY0]
     jb .no
@@ -314,7 +469,13 @@ sc_vmove:
 ; in:  CX, DX = the press; out: CF = 1 the press was the chooser's
 sc_vclick:
     call sc_hitvol
+    jnc .vol
+    call sc_hittask                 ; ...or a task row (SPEC.md 118.14)
     jc .no
+    call sc_tmove
+    stc
+    ret
+.vol:
     push ax
     call OSAPI_GET_TICKS
     mov dx, ax
@@ -337,7 +498,7 @@ sc_vclick:
     clc
     ret
 
-sc_h_choose: db 'Choose the drive to check, then Scan', 0
+sc_h_choose: db 'Choose the drive and what to do, then Scan', 0
 sc_v_floppy: db 'floppy', 0
 sc_v_hd:     db 'hard disk', 0
 sc_v_link:   db 'network or RAM disk', 0

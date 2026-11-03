@@ -787,8 +787,12 @@ br_dl_claim:
     mov ax, [br_dl_needkb]
     call br_dl_memroom
     jc .bad
-    mov ax, [br_dl_needkb]
-    call br_claim
+    mov ax, [br_dl_clustersz]       ; the claim is the cluster ITSELF, in
+    mov cl, 4                       ; PARAGRAPHS (SPEC.md 50.3.7): a 512-byte
+    shr ax, cl                      ; cluster no longer holds a whole KB. The
+    xor cx, cx                      ; reserve check above stays in KB, which
+    mov bl, MEMP_CLAIM              ; only rounds it the cautious way
+    call br_claimp
     jc .bad
     mov [br_dl_bufseg], dx
     call br_movable                 ; it MOVES (NO-PINNING A3): br_reloc names
@@ -1458,6 +1462,22 @@ br_dl_onwake:
     call br_dl_redraw
     jmp .out
 .write:
+    ; --- ONE BAR FOR THE DOWNLOAD (SPEC.md 12.8.10, 71.20): a cluster is
+    ; written a wake, so on a hard disk the widget blinked per cluster.
+    ; Begun at the FIRST write, the one moment Content-Length is known on
+    ; this task and nothing is on the disk yet; no length, no bar. The
+    ; answer is not kept: br_dl_close_stream, which every way a download
+    ; stops goes through, ends it unconditionally (an end not ours is
+    ; refused), and a close of the Browser ends it in the kernel
+    mov ax, [br_dl_written]
+    or ax, [br_dl_written+2]
+    jnz .wr
+    cmp byte [br_dl_have_len], 0
+    je .wr
+    mov cx, [br_dl_total]
+    mov dx, [br_dl_total+2]
+    call OSAPI_FS_OP
+.wr:
     mov si, br_dl_name
     mov es, [br_dl_bufseg]
     xor bx, bx
@@ -1636,6 +1656,9 @@ br_dl_close_stream:
     push si
     push di
     push es
+    xor cx, cx                      ; the download's one bar comes down
+    xor dx, dx                      ; (.write's OSAPI_FS_OP): every terminal
+    call OSAPI_FS_OP                ; path comes through here
     cmp byte [br_dl_seq], 2
     je .fallback
     cmp byte [br_dl_stream], 0

@@ -95,7 +95,7 @@ def noise(path, kb, seed):
     (u, p), = st["blocks"]
     if u != p:
         raise SystemExit("vidmove: %s is packed, not stored" % path)
-    return (u + 2 * CLUSTER + 1023) // 1024     # its claim, vp_bkkb's
+    return (u + 2 * CLUSTER + 1023) // 1024     # its claim (vp_bkpara's), to the KB
 
 
 class Q(object):

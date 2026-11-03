@@ -31,7 +31,7 @@ ADAPTERS = {"cga": (0x0102, "CGA 640x200x1 Dynamic"),
             "herc": (0x0101, "Hercules 720x348x1 Dynamic"),
             "vga": (0x0400, "VGA 640x480x4 Default")}
 
-NAMES = ("os88ui_awin", "os88ui_ar", "cs_setv", "cs_meth", "cs_saved", "cs_tfast", "cs_amsg", "cs_s_saved",
+NAMES = ("rl_brand", "ri_page", "ri_nl", "ri_mseg", "ri_ready", "ri_lines", "ri_lattr", "ri_pane", "os88ui_awin", "os88ui_ar", "cs_setv", "cs_meth", "cs_saved", "cs_tfast", "cs_amsg", "cs_s_saved",
          "cs_crc", "cs_tier", "cs_pres", "cs_lines", "cs_tab", "cs_measd", "cs_drop", "cs_pick", "cs_found", "cs_pane",
          "cs_act", "cs_sw_fail", "cs_sw_bad", "cs_sw_n", "cs_sw_log", "cs_warn", "cs_tgt", "cs_target", "cs_stat", "cs_mhz", "cs_tq", "cs_rd8", "cs_nsio", "ru_buttonflags", "ru_buttonlabels", "ru_benchlabels",
          "rl_ran", "rl_runs", "bl_saved", "rl_results", "rl_convkb", "rl_cpuname", "rl_early", "rl_video",
@@ -93,6 +93,9 @@ def workload_shape(root=ROOT):
         lo, hi = struct.unpack("<2H", data[-4:])
         mask = bytearray(len(data))
         for line in lst.read_text(errors="replace").splitlines():
+            if "section .modi" in line:
+                break                   # the Inspect module (SPEC.md 103.7.2):
+                                        # its own addresses, from 0, alias these
             m = lst_re.match(line)
             if not m:
                 continue

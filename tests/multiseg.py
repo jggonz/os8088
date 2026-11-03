@@ -201,26 +201,33 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     ms_seg = msegsym.sym("ms_seg", COMP)
 
     # THE HEAD SLACK, and this is what makes the two geometries different
-    # rows rather than one run twice. A part begins on a 512-byte boundary in
-    # the FILE; a read may only begin on a CLUSTER boundary, which is 512
-    # bytes here and 1KB on the 360KB disk. MSEG's image is padded to three
-    # sectors so its first part lands at 1,536 - 512 past a 1KB cluster - so
-    # the 360KB read starts BELOW the run and op_seg has to add the slack
-    # back. Unpadded it was 1,024, aligned on both, and this row passed
-    # without ever running the arithmetic it exists for (SPEC.md 20.12.2).
+    # rows rather than one run twice. A part begins on a PARAGRAPH of the
+    # FILE (SPEC.md 20.12.2); a read may only begin on a CLUSTER boundary,
+    # which is 512 bytes here and 1KB on the 360KB disk - so the read starts
+    # BELOW the run and op_seg has to add the slack back. The figure the
+    # guest must have is the table's own: the first EAGER filed part's byte
+    # offset modulo the cluster. Unpadded, MSEG's run once began cluster-
+    # aligned on both geometries and this row passed without ever running
+    # the arithmetic it exists for, so a zero slack is refused outright on
+    # the 360KB disk - the image is padded so it is not.
     slack = struct.unpack_from(
         "<H", m.read(lin(seg) + msegsym.sym("op_slack", COMP), 2), 0)[0]
-    want_slack = 512 if GEOM == "360" else 0
+    clb = 1024 if GEOM == "360" else 512
+    first = next(r for r in os88parts.rows(_image_of(O88))
+                 if r["off"] and not r["flags"] & os88parts.EQU["OP_LAZY"])
+    want_slack = os88parts.byte_off(first) % clb
     say("op_slack = %d (want %d on a %s disk)" % (slack, want_slack, GEOM))
     if slack != want_slack:
         fails.append(
-            "the head slack is %d and should be %d. At 1440 the cluster is "
-            "512 bytes and a 512-aligned part is always cluster-aligned too, "
-            "so the slack is zero and the arithmetic never runs; at 360 the "
-            "cluster is 1KB and MSEG's three-sector image puts its first "
-            "part 512 past one. A zero here at 360 means this row is passing "
-            "without testing what it is for (SPEC.md 20.12.2)"
-            % (slack, want_slack))
+            "the head slack is %d and should be %d - the first eager part's "
+            "file offset %d modulo the %d-byte cluster (SPEC.md 20.12.2)"
+            % (slack, want_slack, os88parts.byte_off(first), clb))
+    if GEOM == "360" and not want_slack:
+        fails.append(
+            "the first eager part starts cluster-aligned on the 360KB disk, "
+            "so the head slack is zero and this row is passing without "
+            "testing what it is for - MSEG's image padding has to move "
+            "(SPEC.md 20.12.2)")
     # THE CARVE'S OWN SIZE, on the --wide fixture: past 128 sectors at the
     # end the READ moves (op_secs) and the end the CLAIM is cut from
     # (op_usecs). Either at or under 128 is a run the old bound allowed, and
@@ -229,12 +236,15 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
         secs, usecs = (struct.unpack_from(
             "<H", m.read(lin(seg) + msegsym.sym(n, COMP), 2), 0)[0]
             for n in ("op_secs", "op_usecs"))
-        say("carve: %d sectors read, %d unpacked (want both > 128)"
-            % (secs, usecs))
-        if secs <= 128 or usecs <= 128:
+        # op_secs/op_usecs count GRANULES since SPEC.md 20.12.2: 64KB is
+        # 128 sectors, which is 4,096 of them
+        big = 65536 // os88parts.rows(_image_of(O88))[0]["gran"]
+        say("carve: %d granules read, %d unpacked (want both > %d)"
+            % (secs, usecs, big))
+        if secs <= big or usecs <= big:
             fails.append(
-                "the WIDE carve is %d sectors read and %d unpacked - at least "
-                "one is within the 128 the bound used to be, so this row is "
+                "the WIDE carve is %d granules read and %d unpacked - at least "
+                "one is within the 64KB the bound used to be, so this row is "
                 "not testing a carve past 64KB (SPEC.md 20.12.11). "
                 "tests/multiseg/mkwide.py's padding is what makes it wide"
                 % (secs, usecs))
@@ -259,7 +269,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
             fails.append("the OP_XMS part did not go above 1MB on kern_mega: "
                          "op_seg %04X, ms_xwhere %r (want 0000, 'X')"
                          % (segs[XMS], xw))
-        mx = m.read(S("mx_tab"), 96 * 10)
+        mx = m.read(m.tail("mx_tab"), 96 * 10)
         mine = [(mx[k] | mx[k + 1] << 8, mx[k + 4]) for k in range(0, len(mx), 10)
                 if (mx[k + 2] | mx[k + 3] << 8) and mx[k + 4] < 0x80]
         say("pool blocks an instance owns: %r" % mine)
@@ -289,7 +299,7 @@ with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
     if segs[SCRATCH] and lin(segs[SCRATCH]) < max(lin(v) for v in segs[:SCRATCH]):
         fails.append(
             "the scratch part landed at %04X, below the filed parts %r. It "
-            "belongs AFTER the carved run in the one claim - op_runkb is the "
+            "belongs AFTER the carved run in the one claim - op_runp is the "
             "offset that puts it there (SPEC.md 20.12.4)"
             % (segs[SCRATCH], segs[:SCRATCH]))
 

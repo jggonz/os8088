@@ -97,7 +97,7 @@ set up with the sound driver, [[SOUND.DRV]]. `M`, or the **Sound** button, turns
 
 | Item | What it does |
 |---|---|
-| About WireBall | Shows the program's name and its serial settings |
+| About WireBall | Shows the program's name, its serial settings and who made it |
 | Close | Closes WireBall |
 
 ## Good to know

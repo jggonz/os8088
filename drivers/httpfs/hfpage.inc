@@ -94,8 +94,8 @@ hp_drop:                        ; ...and DRVV_DETACH's, which owes nothing
 ; preserves every register
 ;
 ; Off the BOOT volume's root, where HTTPDRV.CFG is and where the drivers are,
-; by hp_root's quiet goto. HFPAGE_KB is the Makefile's, off httppage.bin -
-; the claim a CEILING, as RAMPAGE_KB is: OSAPI_FILE_READ is the transparent
+; by hp_root's quiet goto. HFPAGE_PARA is the Makefile's, off httppage.bin -
+; the claim a CEILING, as RAMPAGE_PARA is: OSAPI_FILE_READ is the transparent
 ; read, so a 'CZ' file arrives as the image (SPEC.md 20.13.5.1). From the TOP
 ; (SPEC.md 50.3.2.1): its base is a CS, so no compaction may have it
 ; -----------------------------------------------------------------------------
@@ -111,13 +111,15 @@ hp_need:
     push es
     call hp_root
     jc .back
-    mov ax, HFPAGE_KB
-    call OSAPI_MEM_CLAIM_HI
+    mov ax, HFPAGE_PARA         ; PARAGRAPHS (SPEC.md 50.3.7): the page is a
+    xor cx, cx                  ; byte count, 2,350 today - 3KB through a KB
+    mov bl, MEMP_CLAIM_HI       ; door, 2.5 at the granule - and CX = 0 asks
+    call OSAPI_MEM_P            ; no DMA head
     jc .back
     mov [hf_pseg], dx
     mov es, dx
     xor di, di                  ; ZEROED FIRST: the page's state is the zeros
-    mov cx, HFPAGE_KB * 512     ; os88drv strips off the FILE, which drv_bss
+    mov cx, HFPAGE_PARA * 8     ; os88drv strips off the FILE, which drv_bss
     xor ax, ax                  ; puts back for a driver the kernel loads and
     cld
     rep stosw                   ; nothing puts back for this one - a warm boot
@@ -125,7 +127,8 @@ hp_need:
                                 ; address it already had (rampage.asm's rp_bss
                                 ; is the same answer, from the other side)
     xor bx, bx
-    mov cx, HFPAGE_KB * 1024
+    mov cx, HFPAGE_PARA * 16    ; the read's capacity: the image, to the
+                                ; paragraph
     xor dx, dx
     mov si, hf_s_page
     call OSAPI_FILE_READ

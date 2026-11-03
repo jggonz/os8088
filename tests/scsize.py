@@ -280,14 +280,17 @@ def main():
         pw, ph, ps, pseg = (u16(rec, k) for k in (0, 2, 4, 6))
         check("PICTURE: 64 x 48 in the table", (pw, ph) == (64, 48),
               "%d x %d" % (pw, ph))
-        kb = (ps * ph + 1023) // 1024
+        # TO THE GRANULE (SPEC.md 50.2.1): sc_pictkeep shrinks the decode
+        # scratch through OSAPI_MEM_P's MEMP_REGROW, so the picture keeps its
+        # bytes to 512 and not to a whole KB - 64 x 48 at 4 bits is 1.5 KB
+        para = (ps * ph + 511) // 512 * 32
         pc = [c for c in claims() if c.sel == pseg]
-        check("PICTURE: its claim is exactly its own %d KB" % kb,
-              len(pc) == 1 and pc[0].para == kb * 64,
+        check("PICTURE: its claim is exactly its own %.1f KB" % (para / 64.0),
+              len(pc) == 1 and pc[0].para == para,
               "%r" % [(c.sel, c.para) for c in pc])
         check("PICTURE: no scratch or staging claim left",
               W("sc_picseg") == 0 and W("sc_stgseg") == 0
-              and mine() == sorted(before + [(pseg, kb * 64)]),
+              and mine() == sorted(before + [(pseg, para)]),
               "%r -> %r" % (before, mine()))
         pix = bytes(m.read(lin(pseg), ps * ph))
         save_as("T2.RTF")

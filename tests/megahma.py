@@ -60,7 +60,7 @@ def w16(b, i):
 
 
 def rows(box):
-    X = box.read("mx_tab", MX_BLKSZ * MX_NBLK)
+    X = box.read(box.tail("mx_tab"), MX_BLKSZ * MX_NBLK)
     return [(k, w16(X, k * MX_BLKSZ), w16(X, k * MX_BLKSZ + 2))
             for k in range(MX_NBLK)]
 
@@ -91,7 +91,7 @@ def main():
             print("FAIL: the HMA is not free at the desktop: %s" % used)
             return 1
         free = [k for k, o, kb in r if not kb]
-        e = box.sym("mx_tab") + free[0] * MX_BLKSZ
+        e = box.tail("mx_tab") + free[0] * MX_BLKSZ
         cmds = ["setpmem 0x%x 2 0" % e,                # MX_OFF: the base
                 "setpmem 0x%x 2 0x08FE" % (e + 4),     # FEh, MX_FPIN
                 "setpmem 0x%x 2 0" % (e + 6),

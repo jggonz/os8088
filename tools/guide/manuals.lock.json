@@ -9,9 +9,9 @@
   "sources": [
    "apps/1942"
   ],
-  "stamped": "e4576a70",
-  "strings": "a912f744a77d6729",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "24c3d243",
+  "strings": "9993ada410382e10",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "1STREAD_ME": {
   "sources": [],
@@ -123,9 +123,9 @@
   "sources": [
    "apps/bounce"
   ],
-  "stamped": "e4576a70",
-  "strings": "48d2f716be01fa6b",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "24c3d243",
+  "strings": "945242275f9dc221",
+  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
  },
  "BROWSER_HTM": {
   "sources": [],
@@ -185,9 +185,9 @@
   "sources": [
    "apps/cdrack"
   ],
-  "stamped": "ca9acbde",
-  "strings": "4d867d0ae6645bc7",
-  "why": "CDRack replaces the CD Player: rewritten for the three layouts, the two themes, the toggles, the volume and the keys"
+  "stamped": "24c3d243",
+  "strings": "5321092161a6da65",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "CDROM_DRV": {
   "sources": [
@@ -255,9 +255,9 @@
   "sources": [
    "kernel/ctrl.inc"
   ],
-  "stamped": "603832f2",
-  "strings": "2d063e04ea0308f5",
-  "why": "the Display page's Vesa row: named for the screen, clicked again to step through the card's screens, Set Primary applies (SPEC.md 120.6); the rest of the page reads as before"
+  "stamped": "1b5a0fd9",
+  "strings": "5a8f150309d151bc",
+  "why": "kernel size pass 16: ctrl.inc's changes are internal - the save's no-system-disk line moved into CTRL.DRV with its text unchanged, and SYSTEM.CFG/KERNEL.SYS are staged into cp_sbuf; nothing a user reads changed"
  },
  "CWORD": {
   "sources": [],
@@ -291,17 +291,17 @@
   "sources": [
    "apps/deskcal"
   ],
-  "stamped": "d0d605c1",
-  "strings": "32eeb74bb5d87863",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "24c3d243",
+  "strings": "4d80da1eef4442d3",
+  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
  },
  "DESKCLOK_O88": {
   "sources": [
    "apps/deskclok"
   ],
-  "stamped": "0606f018",
-  "strings": "9c05a589765551da",
-  "why": "new page: written from apps/deskclok (Clock/Face/Size menus, key tables of the clock, settings and alarm windows, panel strings) and SPEC.md 110.14; shots taken on a VGA XT"
+  "stamped": "24c3d243",
+  "strings": "8e09971d85e72afc",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "DESK_DRV": {
   "sources": [
@@ -343,9 +343,9 @@
   "sources": [
    "apps/dos"
   ],
-  "stamped": "32a760e15",
-  "strings": "562e87c75fe90f35",
-  "why": "merge of S21 batches 6-7: the join box (w16join.inc) in DOS's launch path"
+  "stamped": "b4a36e9e",
+  "strings": "78cda70b8ce3db92",
+  "why": "Shift/Alt held at a launch opens without running (SPEC.md 96.21.9): one paragraph under Starting DOS; the rest of the page describes the program as it is"
  },
  "DOTDEL_O88": {
   "sources": [
@@ -359,9 +359,9 @@
   "sources": [
    "apps/drmario"
   ],
-  "stamped": "9deeee7d",
-  "strings": "1aec5c4536fddfd4",
-  "why": "Enter after game over retries as a new game from score 0; P ignored on the clear and game-over screens"
+  "stamped": "24c3d243",
+  "strings": "1a85ef959db6ffd7",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "EMS_DRV": {
   "sources": [
@@ -471,6 +471,15 @@
   "strings": "d537d1f582955449",
   "why": "Save/Restore Game greyed outside the story's own prompt; Story > Start/Stop Transcript works (stream 2, SCRIPT.TXT on Enter); .SAV double-click refusal; refusal under the splash"
  },
+ "FSCHECK_DRV": {
+  "sources": [
+   "kernel/fsck.inc",
+   "apps/syscheck/disk.inc"
+  ],
+  "stamped": "5d148b4e3",
+  "strings": "56f35984ce04b211",
+  "why": "PR 328 review: repairs that free wait for a complete walk; PARTIAL message"
+ },
  "FTPD_O88": {
   "sources": [
    "apps/ftpd"
@@ -512,9 +521,9 @@
   "sources": [
    "apps/gorillas"
   ],
-  "stamped": "eb3a53c1",
-  "strings": "32a3e259cd3ebe70",
-  "why": "#281 edited the page with the change (seventh setup question for aim guides, the learning computer opponent) and did not restamp; checked against apps/gorillas README and setup"
+  "stamped": "24c3d243",
+  "strings": "de77bf1c8a06a43d",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "GUIDE_TEX": {
   "sources": [],
@@ -584,9 +593,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "1b59b4c1c",
+  "stamped": "e88b5c64",
   "strings": "2b391919e4c9218d",
-  "why": "only OS88VER.TXT changed (release 20261030's four what's-new lines); the page describes those lines generically, no words owed"
+  "why": "only OS88VER.TXT changed (20261026 -> 20261030 release notes); the page names no release or its notes, so unchanged"
  },
  "INTRO_MID": {
   "sources": [],
@@ -598,9 +607,9 @@
   "sources": [
    "apps/isotron"
   ],
-  "stamped": "e4576a70",
-  "strings": "8d43b3b01f3ba1c0",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "24c3d243",
+  "strings": "87bbdd1750b09ec6",
+  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
  },
  "JETBRAIN_F88": {
   "sources": [],
@@ -630,9 +639,9 @@
   "sources": [
    "apps/lemmings"
   ],
-  "stamped": "ea7b512a",
-  "strings": "4580619ce2a0ff64",
-  "why": "MC7: claims over 64KB through os88_seg_sub windows and the OS88_HIGH/HIGHMEM declaration - internal; the only new string is a host test's failure message, nothing a user reads"
+  "stamped": "24c3d243",
+  "strings": "ad653e4f5adb1ad8",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "LICENSE": {
   "sources": [],
@@ -682,9 +691,9 @@
   "sources": [
    "apps/midirack"
   ],
-  "stamped": "a6a3ab5a",
-  "strings": "d1bd34a96a4616f4",
-  "why": "the refused Play when the card's or the speaker's ring cannot be claimed (KERN-MEGA-PLAN 14.55, 14.59) described; the grant-ring fallback is below the page's detail"
+  "stamped": "24c3d243",
+  "strings": "4881920cc0a727ff",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "MINES_O88": {
   "sources": [
@@ -708,9 +717,9 @@
    "apps/os88mixui.inc",
    "drivers/sound/sndpkg.inc"
   ],
-  "stamped": "32e6dce5",
-  "strings": "ed45625209cc733e",
-  "why": "Document smooth requested positions, one-percent keys and hardware readback updates"
+  "stamped": "24c3d243",
+  "strings": "3a5158ffe6f55c5b",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "MOUNTAIN_BMP": {
   "sources": [],
@@ -798,9 +807,9 @@
   "sources": [
    "apps/paint"
   ],
-  "stamped": "6495d304",
-  "strings": "6aad204f2e3bef9f",
-  "why": "Saving... toast replaced by Encoding GIF around a GIF's encode; the page's save paragraph rewritten to match"
+  "stamped": "24c3d243",
+  "strings": "786fe899f9ba6932",
+  "why": "only a rare kern_mega refusal string was added (No LDT entry); below the page's level of detail"
  },
  "PAPER_TEX": {
   "sources": [],
@@ -826,9 +835,9 @@
   "sources": [
    "apps/pixel"
   ],
-  "stamped": "e4576a70",
-  "strings": "40931b541b447702",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "24c3d243",
+  "strings": "60dc14a5e710d600",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "PONG_WAB": {
   "sources": [],
@@ -858,9 +867,9 @@
   "sources": [
    "apps/pixelstein"
   ],
-  "stamped": "e4576a70",
-  "strings": "c16e1c2472ca5437",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "24c3d243",
+  "strings": "0801bd0d530bdea0",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "RAMDISK_DRV": {
   "sources": [
@@ -888,17 +897,17 @@
   "sources": [
    "apps/realdmg"
   ],
-  "stamped": "ce861766",
-  "strings": "c112221783311c2f",
-  "why": "91816de9 only changes the kern_mega arm's window title to (Un)RealDMG under protected mode; the page describes no window title and its kern_mega lines (memory above 1MB, PRE refused) are unchanged"
+  "stamped": "24c3d243",
+  "strings": "538de81c8b536080",
+  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
  },
  "REDLINE_O88": {
   "sources": [
    "apps/redline"
   ],
-  "stamped": "d511fdd4",
-  "strings": "613189b6ce818efd",
-  "why": "the benchmark's progress panel clears to the window edge: no stray glyph; text unchanged"
+  "stamped": "1b555f02",
+  "strings": "4f8e15c5f39d9498",
+  "why": "the Inspect tab (SPEC.md 103.7): a section with its eight pages, buttons and keys; I and H in the key table; Inspect in the Bench menu; INSPECTn.TXT in Files"
  },
  "RLAPPLY_O88": {
   "sources": [
@@ -1048,25 +1057,25 @@
   "sources": [
    "kernel/stikmenu.inc"
   ],
-  "stamped": "e4576a70",
-  "strings": "8b9860220a28a7ab",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "7ce68bd14",
+  "strings": "46bee294ee36d33d",
+  "why": "PR #328 review: the eight-App cap and the line that says so (SPEC.md 110.12)"
  },
  "STIKNOTE_O88": {
   "sources": [
    "apps/stiknote"
   ],
-  "stamped": "d0d605c1",
-  "strings": "c5eb21b124ad2c07",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "24c3d243",
+  "strings": "e07155f5f159206c",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "SYSCHECK_O88": {
   "sources": [
    "apps/syscheck"
   ],
-  "stamped": "b4d46a82",
-  "strings": "6c7bfd7a870376d8",
-  "why": "Section renumber 116 to 118 in source comments only; the page already describes the drive chooser and cites no section"
+  "stamped": "5d148b4e3",
+  "strings": "367e018389ad0046",
+  "why": "PR 328 review: PARTIAL message fits the report column"
  },
  "SYSTEM": {
   "sources": [],
@@ -1106,9 +1115,9 @@
   "sources": [
    "apps/taskmgr"
   ],
-  "stamped": "086f52d4",
+  "stamped": "e353077e",
   "strings": "cd3e0dc061f03cd1",
-  "why": "Memory page on the protected-mode build: System is the first 640K and System>1MB everything above (drivers included), the map shows the whole machine in two boxes, ADDR is a five-digit address above 1MB; IVT+BIOS and System HMA described as the rows they are"
+  "why": "Memory page: resting the pointer on the map lights the row that holds that memory (SPEC.md 28.4.16) - which row, System standing for its closed members, front window only, unlit rows; the open size checked against image+bss 14,514 (about 15K)"
  },
  "TELNET_O88": {
   "sources": [
@@ -1146,9 +1155,9 @@
   "sources": [
    "apps/timer"
   ],
-  "stamped": "e4576a70",
-  "strings": "de7a6242f989b7a6",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "5d148b4e3",
+  "strings": "adc1e93ddbd77c7e",
+  "why": "PR 328 review: About card fitted to two lines; the page's 'shows who made it' still holds"
  },
  "TIMES_F88": {
   "sources": [],
@@ -1224,17 +1233,17 @@
    "kernel/vidext.inc",
    "kernel/ctrl.inc"
   ],
-  "stamped": "603832f2",
-  "strings": "85e31060566354fb",
-  "why": "new page for VESA.DRV (SPEC.md 120): what it does, how it is loaded, choosing a screen, what it does not offer"
+  "stamped": "1b5a0fd9",
+  "strings": "287b8f561883cf80",
+  "why": "kernel size pass 16: ctrl.inc's changes are internal - the save's no-system-disk line moved into CTRL.DRV with its text unchanged, and SYSTEM.CFG/KERNEL.SYS are staged into cp_sbuf; nothing a user reads changed"
  },
  "VIDEO_O88": {
   "sources": [
    "apps/video"
   ],
-  "stamped": "e88b5c64",
-  "strings": "38f69d0a3ba07d6b",
-  "why": "string diff from 6b05fb4e (the old stamp 7feb6f7f was squashed away; 6b05fb4e matches its fingerprint): only vcold.asm's info-card ninth line, built into the kern_mega arm alone (MEGAAPPDIR), which no released disk carries; the page describes the shipped player, so unchanged"
+  "stamped": "24c3d243",
+  "strings": "6ad659a8b7aa49d5",
+  "why": "only a rare kern_mega refusal string was added (No LDT entry); below the page's level of detail"
  },
  "VMMOUSE_DRV": {
   "sources": [
@@ -1248,9 +1257,9 @@
   "sources": [
    "apps/waverack"
   ],
-  "stamped": "45eeb8dd7",
-  "strings": "f2f678d1c518c94a",
-  "why": "Checked against the review fixes: 'Take still recording' on a save over a live take, Record greyed on a floppy above 8,000 Hz and after a DSP 1.x answers once, the take's endings without 'kept' when nothing was written - all said; the overrun's minutes form is below the page's detail"
+  "stamped": "24c3d243",
+  "strings": "14ed3781c620b1bb",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  },
  "WEAVE": {
   "sources": [],
@@ -1302,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "084991764",
-  "strings": "debee5372c95da3c",
-  "why": "the arm lends kern_mega a 1 KB stack for BIOS calls (SEG_LEND): internal, no user-visible change"
+  "stamped": "e1a8c21f5",
+  "strings": "4fe195f6a33d805e",
+  "why": "merge of main (#328) into Phase B/C: WIN16's claims in paragraphs on both arms and the DOS core's cluster routine shortened; below the page's level of detail"
  },
  "WIN16_TXT": {
   "sources": [
@@ -1326,17 +1335,17 @@
   "sources": [
    "apps/wireball"
   ],
-  "stamped": "d0d605c1",
-  "strings": "72c6168584fb83c1",
-  "why": "checked: only spec citations left user-visible strings (About text, read-me lines, usage); nothing the page says changed"
+  "stamped": "24c3d243",
+  "strings": "7434735380a98b18",
+  "why": "About card gained a credit line (ec45f031, and Desk Calendar's 'by jggonz'); the page's About description now says it shows who made it"
  },
  "WIRECHAT_O88": {
   "sources": [
    "apps/wirechat"
   ],
-  "stamped": "99a078b7",
-  "strings": "46102694697221e1",
-  "why": "Wired default (LEDs, colour on a colour screen), Mono-Dark, header without the display words, Find highlights the input box: Themes, Searching and the window table rewritten"
+  "stamped": "24c3d243",
+  "strings": "fd2e07efd394d8ce",
+  "why": "credit line in About and the five-theme help line; the page already describes Wired, Mono-Dark, Blue, Green and Amber and the About card's credit"
  },
  "WIREFLET_O88": {
   "sources": [
@@ -1378,8 +1387,8 @@
   "sources": [
    "apps/xtmp3"
   ],
-  "stamped": "74fd2859",
-  "strings": "e290cfe92f1bcc9d",
-  "why": "round 7: Loading - the whole song read into memory before it plays when there is room, playback then reads no disk"
+  "stamped": "24c3d243",
+  "strings": "4f1c265a642e8c1e",
+  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
  }
 }

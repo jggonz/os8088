@@ -60,14 +60,14 @@ class Own(dispcells.Cells):
     def __init__(self, mm, mmo):
         self.occl = self.took = self.dropped = 0
         dispcells.Cells.__init__(self, mm, mmo)
-        for nm in ("wm_su_occl", "wm_su_take", "wm_su_drop"):
+        for nm in ("wm_su_try.occl", "wm_su_take", "wm_su_drop"):
             self.at[mm.sym(nm)] = nm
-        mm.bp_exec("font_run_x", "gfx_fill", "wm_su_occl", "wm_su_take",
+        mm.bp_exec("font_run_x", "gfx_fill", "wm_su_try.occl", "wm_su_take",
                    "wm_su_drop")
         mm.run()
 
     def on_stop(self, r, sym):
-        if sym == "wm_su_occl":
+        if sym == "wm_su_try.occl":
             self.occl += 1
         elif sym == "wm_su_take":
             self.took += 1
@@ -87,14 +87,14 @@ class MegaOwn(object):
     interval paint has exactly one door, `tm_update` (the worker's, after
     tm_quiet said the page moved), so a stop there IS the page drawing
     cells, and a page that did not enter it drew none. `cells` counts those
-    entries; wm_su_occl/take/drop are the kernel's same three. The waits are
-    GUEST seconds, capped at six memory-page paints (TM_INT x TM_SLOW is 2 s)
-    where a pump of N frames would be N/60 of them."""
+    entries; wm_su_try.occl/take/drop are the kernel's same three. The
+    waits are GUEST seconds, capped at six memory-page paints (TM_INT x
+    TM_SLOW is 2 s) where a pump of N frames would be N/60 of them."""
 
     def __init__(self, m, mo, upd):
         self.m, self.mo, self.upd = m, mo, upd
         self.occl = self.took = self.dropped = self.cells = self.fills = 0
-        self.tr = os88marty.bp_trace(m, "wm_su_occl", "wm_su_take",
+        self.tr = os88marty.bp_trace(m, "wm_su_try.occl", "wm_su_take",
                                      "wm_su_drop", upd)
         self.tr.__enter__()
 
@@ -106,7 +106,7 @@ class MegaOwn(object):
 
     def close(self):
         self.tr.__exit__(None, None, None)
-        self.occl = self.tr.count("wm_su_occl")
+        self.occl = self.tr.count("wm_su_try.occl")
         self.took = self.tr.count("wm_su_take")
         self.dropped = self.tr.count("wm_su_drop")
         self.cells = self.tr.count("%05X" % self.upd)
