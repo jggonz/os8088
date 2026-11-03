@@ -37,13 +37,14 @@ The owner's decisions taken on the way:
 
 ## 2. Before #327 merges
 
-- [ ] **N0: commit M1, discardable library code** (SPEC.md 124.26.11).
+- [x] **N0: commit M1, discardable library code** (SPEC.md 124.26.11). DONE on #327 (7111ba35e, f948f4347). Seen on QEMU's `kern_mega`: Mozart's last dialog with its picture, then *Microsoft Mozart Setup is complete*; Arcade's *Congratulations!*
   - It is implemented and was uncommitted when this plan was written. One bug is already fixed: a reloaded library segment bound its imports of other libraries as missing.
   - *Done when* Mozart's setup shows its final dialog on `kern_mega`, Arcade's setup still reaches *Congratulations!*, and the SPEC states both:
     - what is discarded: library segments reached only through entry tables (at=3);
     - what is kept: segments named by number (at=2/5), which is all of VBRUN300 and MOZART.EXE (L1).
 
 - [ ] **N1: replace D1's stopgap with the proper fix.** This brings back the overrun fault that Windows gives.
+  - *Status:* implemented on #327 (ad390599c, `SEG_HND`, KERN-MEGA-PLAN 14.138). The stopgap text is gone, and the LDT high-water across Mozart's setup is 1,658 of 1,992. **Ticked when `win16ovr` passes under Bochs in N3**, since QEMU checks no segment limit and the fault has not yet been seen.
   - D1's (a) lets a program's block selector reach its claim's end. An overrun of a global block then writes into the next block silently, where Windows faults. SPEC.md 124.31.3 marks it as a stopgap.
   - The replacement has two parts:
     - **One descriptor per handle.** GlobalReAlloc re-aims that descriptor's base and limit in place, on the same selector, as Windows' protected modes do. A block that grows a step at a time then costs no new LDT entry, and its limit stays its own length.
@@ -54,7 +55,7 @@ The owner's decisions taken on the way:
     - the LDT's high-water mark across Mozart's whole setup is measured and written into SPEC.md 124.31.3, against the 2,016 entries there are;
     - (a) is gone from SPEC.md 124.31.3, and its stopgap text with it.
 
-- [ ] **N2: finish the plan, the diary and the PR description.**
+- [x] **N2: finish the plan, the diary and the PR description.** DONE on #327 (f948f4347). S22 is ticked; S23, S24 and S25 stay open for what nobody has seen yet.
   - WIN16-ANY-PLAN's S22–S25 checkboxes, ticked only for what was seen.
   - The diary's Phase B/C chapters, with what each milestone measured.
   - #327's body: what works, what was decided, the rung record, the rows to run, and this plan's L1/L2 and Q1–Q5 as what remains.
@@ -127,7 +128,7 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - **ASSOC_PWBANK.** A posted `OSAPI_PKG_START` document launch (SPEC.md 21.5.4) re-banked the document's locator from `[dsk_cwd]`. Through a link to another volume, `sc_walk` had already moved the machine back to the link's own drive, so WIN16 was handed `C:\SETUP.EXE` and answered "This is not a Windows program".
   - **KERN-MEGA-PLAN 14.137.** 14.135's low stopped `mega_wset` from re-aiming a BOUND window. GlobalReAlloc's move of a locked block into another arena then left the program's selector on the freed block, so Mozart's script engine wrote over a new block's header. The fix re-binds the caller's own bound window when the new base lies in a block the caller owns. A base anywhere else still gets a fresh window.
 
-- [ ] **Q6: two 42 KB blocks at once.** Mozart's final dialog does `LoadBitmap` of a 435x194 4bpp DIB, which needs the resource and the bitmap's bits at the same time.
+- [x] **Q6: two 42 KB blocks at once.** Closed for Mozart by route (D) in f948f4347; (A) and (C) below stay open for the general case. Mozart's final dialog does `LoadBitmap` of a 435x194 4bpp DIB, which needs the resource and the bitmap's bits at the same time.
   - Arena 3's 65 KB free is split by MSCOMSTF segments that are really on the stack, and by 32 KB of KEEP library code.
   - N0 takes route **(D)**: when the global heap refuses a bitmap's bits, they get a claim of their own (one vmap row). This is a fallback for bitmaps only, never for GlobalAlloc, so it is not a fifth arena.
   - Two routes stay open:
