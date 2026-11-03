@@ -237229,3 +237229,287 @@ the instance's stay within §124.25.1's eight. When the MessageBox is
 closed and the instance ends, the heap must be the one before the launch.
 Program Manager 3.0 starting Clock, and Calculator's Help menu opening
 Windows Help, are Microsoft's programs, and are looked at (124.28.10).
+
+## 125. VIDEO BATTLE — a battle played as joined video clips (`apps/vbattle/`, `VBATTLE.O88`, `.VBT`)
+
+A turn-based battle on a 4.77 MHz 8088 whose picture is **video**. An idle
+loop plays in the top of the screen while the player chooses a command in
+the band under it. The command's clip joins the loop at an anchor frame and
+seams back onto it at its end, so the battle reads as one continuous scene.
+docs/plans/VIDEO-BATTLE-PLAN.md is the feasibility study and the story list.
+
+It is an engine, and the battles are data. A `.VBT` bundle holds:
+- the idle loop;
+- the action clips;
+- the music;
+- the effects;
+- a script of who has which command.
+
+`tools/os88vbt.py` builds one. Its `demo` command builds an ORIGINAL
+battle, drawn and scored by `tools/vbtscene.py` with nothing captured, so
+the engine can be built, tested and shown from the tree. A battle made from
+captured footage is its maker's, and none is committed.
+
+### 125.1 What is shared, and what is its own
+
+| from | for |
+|---|---|
+| `apps/video/vdec.inc` (`vd_native`), as SOURCE | every frame: the Video Player's ten lists (98.1.3) |
+| `tools/os88vid.py` (`Geom`, `seam_ops`, `to_lists`, `decode_lists`) | the host's records, and the reference decoder `verify` runs every join through |
+| `OSAPI_FSX_RUN` with `FSXF_RATE` (53.2.2) | the bracket, and the hook the frames are drawn from |
+| `OSAPI_SND_STREAM`'s external ring (34.5.3) | the sound |
+| `OSAPI_FILE_READ_SEQ` (18.4.8) | every read |
+
+The Video Player's reader, ring, seeking, posters and windowed play are NOT
+used. A V88 file interleaves its sound with its frames and is one stream.
+A battle is many short streams and one continuous sound, so the container
+is the battle's own (125.2) and only the record format is shared.
+
+### 125.2 The bundle
+
+Little-endian. Every region starts on a 4 KB boundary, because
+`OSAPI_FILE_READ_SEQ` seeks and reads in cluster multiples, and 4 KB covers
+every floppy and a FAT16 disk to 128 MB. A region is at most 60 KB, so it
+is read into one claim with one capacity word.
+
+| offset | what |
+|---|---|
+| 0 | the header (125.2.1) |
+| 512 | the clip table, 32 bytes a clip, at most 32 clips (125.2.2) |
+| 1536 | the script (125.2.4) |
+| 4096 | the VIDEO RESIDENT block: the idle loop's records, every entry record, the entry tables, the idle table |
+| then | the MUSIC: unsigned 8-bit, 64..191 |
+| then | the EFFECTS: signed 8-bit, -64..63, back to back |
+| then | each clip's stream: its records, back to back |
+
+**The ranges are the mix.** The music is held to 64..191 and an effect to
+-64..63, so their sum never leaves 0..255. Mixing in one effect is then one
+`add` per sample, with no clip and no branch.
+
+#### 125.2.1 The header
+
+| off | size | field |
+|---|---|---|
+| 0 | 4 | `VBT1` |
+| 4 | 2 | version, 1 |
+| 6 | 2 | 512 |
+| 8 | 1 | the CGA4 palette byte (98.1.3.3) |
+| 9 | 1 | the canvas's rows (142 in the demo; the band is the rest) |
+| 10 | 2 | frames a second |
+| 12 | 2 | the sample rate |
+| 14 | 2 | samples a frame: the frame clock in the sound's units |
+| 16 | 2 | clips |
+| 18 | 2 | idle frames, N |
+| 20 | 2 | anchors, at most 16 |
+| 22 | 2 | effects, at most 16 |
+| 30 | 4+2 | the resident block's offset and length |
+| 36 | 4+4 | the music's offset and its region's length |
+| 44 | 4 | the music's length in samples |
+| 50 | 2 | the idle table's offset in the resident block: N words, record *i*'s offset |
+| 52 | 4 | the file's length |
+| 56 | 4+2 | the effects' offset and length |
+| 64 | 2 x 16 | the anchors: idle frame numbers |
+| 96 | 6 x 16 | each effect's offset in the effects and its length |
+| 192 | 8 x 16 | each effect's name, for a reader |
+
+#### 125.2.2 The clip table
+
+| off | size | field |
+|---|---|---|
+| 0 | 4 | the stream's offset |
+| 4 | 4 | its length (at most 60 KB) |
+| 8 | 2 | its records |
+| 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT), 2 FULL (the whole screen: the intro), 4 ENDS (the battle ends on it, and its last frame is held) |
+| 12 | 2 | EXIT |
+| 14 | 2 | the entry table's offset in the resident block: a word for each anchor |
+| 16 | 1+1 | two effects (FFh none) |
+| 18 | 2+2 | the frames they start on |
+| 24 | 8 | the name |
+
+#### 125.2.3 Records, and why every join is exact
+
+A record is a length word (counting itself) and then the ten lists.
+`vd_native` decodes them onto CGA's B800h with BP = 0, the way a CGA4 V88
+frame decodes (98.1.2). A record is a list of absolute stores, so it is
+correct only on top of the screen it was made against. **The host makes
+each one between the screens the decoder will really hold:**
+
+- idle record *i* takes idle frame *i* − 1 to *i*, and record 0 takes the
+  last frame to the first;
+- an action's ENTRY record for anchor *k* takes idle frame *k* to the
+  action's frame 0. Its stream then starts at frame 1;
+- a JOINS clip's last record is a SEAM: its last frame onto idle frame
+  EXIT, as LOOPREC is (98.1.1.2). The loop goes on at EXIT + 1;
+- a FULL clip (the intro) starts on black, and its seam takes the whole
+  screen to idle frame EXIT with the band's rows black.
+
+`os88vbt.py verify` (which `demo` runs before it writes) checks every join.
+It plays the intro onto the loop through `decode_lists`, plays two laps of
+the loop, and requires lap 2 to be lap 1. Then, for every clip and every
+anchor, it decodes the entry and the stream from that anchor's real screen
+and requires the seam to land on idle frame EXIT byte for byte.
+
+A captured battle's clips are lossy V88 encodes. Their DECODED screens are
+what `os88vbt` would make records between, so the joins stay exact. That
+importer is not written yet (VIDEO-BATTLE-PLAN 9).
+
+#### 125.2.4 The script
+
+512 bytes:
+- 0: the party's size, and commands per member (4).
+- 2: the enemy: its name (10), its HP, its attack clip, the damage that
+  attack does, the victory clip and the defeat clip.
+- 24 + 64*m: member *m*: its name (8), its HP and MP (the most, and where
+  it starts), then four commands of 12 bytes: a label (6), the clip (FFh
+  none), the kind (0 damage the enemy, 1 heal the party), the amount, and
+  the MP it costs.
+
+### 125.3 The engine
+
+Three pieces, the Video Player's own shape (98.3):
+
+- **`vb_hook`, `FSXF_RATE`'s hook at divisor 2,048 (582.6 Hz).** It draws
+  the frames that are due, at most two a call, with IF = 1 while it
+  decodes. It keeps the card's ring 4 KB ahead. It starts each action at
+  its anchor. It reads no disk and calls nothing in the kernel.
+- **`vb_main`, the bracket's foreground.** It reads the keys (int 16h),
+  runs the battle, draws the band and reads ahead, one piece per pass, then
+  waits with `FSXW_FRAME`.
+- **the window.** A title, "Enter or click: play", and the last thing that
+  went wrong.
+
+**The clock is the card.** Frame *n* is due at sample *n* × spf. The
+played position is the ring's consumed count, plus the periods since the
+card's last block × 19 samples, capped at 1,892 samples and never moving
+backwards (98.3.1's `vp_adue`). With no card the clock is the PIT's
+periods × 18.9246 samples, kept in 16.16, so the same battle runs silent.
+
+A frame whose record is not yet read is **waited for**. The frame is not
+drawn and the clock is not advanced past it. A play more than six frames
+behind is forgiven (`[vb_late]` counts it): the picture runs slow, never
+wrong. A delta frame cannot be skipped.
+
+**An action starts at an anchor.** The foreground sets `[vb_pend]`. On
+each idle frame the hook first waits for the clip's first 24 KB (or all of
+it) to be read. Then it takes the nearest anchor at least two frames on,
+and books the clip's effects at the samples their frames will be shown at.
+When the loop shows that anchor, the next frame is the entry record. The
+demo's anchors are every sixth frame of a 24-frame loop, so a command waits
+0.13 to 0.53 s for its clip to begin.
+
+**The effects are booked ahead, not started when seen.** The writer runs
+4 KB (0.37 s) ahead of the card. An effect started when its frame is drawn
+would sound 0.37 s late. One booked at its frame's sample is exact once it
+is at least 4 KB ahead, and is started part-way in otherwise. A queue of
+two holds a clip's two cues; when the second starts it replaces the first,
+so one effect sounds at a time.
+
+### 125.4 Reading ahead, and memory
+
+Before the bracket, with "Loading..." in the window, `vb_load` reads:
+- the first 4 KB (the header, the clip table and the script), into the
+  package's own bss;
+- the resident block, into a claim;
+- the effects, into a claim;
+- the music, in 32 KB pages of a claim each;
+- the intro, whole.
+
+None is pinned by more than its own claim, and every claim is the default:
+pinned (§66).
+
+**In the bracket, the reader reads one 4 KB piece per pass**, of the first
+clip in this order that is not wholly read:
+1. the action pending;
+2. the clip under the menu's cursor;
+3. the enemy's attack;
+4. (memory allowing) every other clip.
+
+Moving the cursor only changes which clip is first. What was read is kept,
+so a read dropped by a new cursor position resumes where it stopped when
+the cursor comes back. A claim that cannot be had frees every clip that is
+not playing, pending or under the cursor, and stops step 4 for the session.
+
+The piece is 4 KB so that a key waits at most about a revolution of a
+360 KB floppy. Keys wait in the BIOS buffer while a read runs and are not
+lost (measured on MartyPC's 5150: an Enter taken 0.4 s after it was
+pressed, behind an 8 KB read).
+
+The demo battle on a 640 KB machine:
+
+| | bytes |
+|---|---|
+| the package's image | 8,053 (6,078 packed on the disk) |
+| its bss | 5,394 (the first 4 KB of the bundle among it) |
+| the resident block | 35,432 (claimed 36 KB) |
+| the effects | 34,176 (36 KB) |
+| the music, 6.4 s | 70,560 (three pages, 72 KB) |
+| the card's ring | 17 KB, `OSAPI_MEM_CLAIM_DMA_HI` |
+| every clip, read ahead | 169,391 |
+
+### 125.5 The band
+
+The band is rows 142 to 199 of mode 4, drawn straight into B800h. It is
+outside the canvas, so no record writes there and nothing is saved or
+restored around it. Each cell is its eight rows of two bytes, ground and
+glyph in one store (6.1's rule, by hand: the desktop's slots are not legal
+in the bracket, 53.7). The glyphs are `OSAPI_FONT_GLYPHS`'s, copied before
+the bracket.
+
+It holds:
+- the menu: four commands, the cursor's inverse;
+- the enemy's name;
+- each member's HP and MP;
+- a message line.
+
+`[vb_dirty]` says which of the menu, the party and the message to redraw,
+and nothing else is drawn. **The selected member is the band's**: whose
+turn it is is drawn inverse there, and the footage carries no marker, so
+no clip is captured twice to show it.
+
+The four colours are the bundle's palette byte, set as
+`vp_cgaset .c4` sets it (mode 5's cyan, red and white through 3D8h on a
+CGA, and palette register 2 on an EGA or a VGA).
+
+### 125.6 The battle
+
+The turns go member 0, member 1, the enemy, and repeat. A member at 0 HP is
+skipped.
+- A command whose MP the member lacks says so and waits.
+- A party command's effect is applied when its clip is over: damage to the
+  enemy, or a heal of every member standing, up to their most.
+- The enemy attacks one standing member, alternating, for its damage.
+- The enemy at 0 HP plays the victory clip and holds it; the party at 0 HP
+  plays the defeat clip and holds it.
+
+Esc leaves at any time. The card is closed, and the kernel puts the desktop
+back. Playing again starts from the intro, with what was read kept.
+
+### 125.7 What is not done
+
+**Refusals.**
+- `kern_small` refuses `FSXF_RATE`, and the window says "Needs the full
+  kernel".
+- kern_mega is NOT TRIED. The package does no arithmetic on a segment:
+  each region is a claim of its own and is addressed only through it, and
+  the framebuffer is `FSI_SEG`'s. So nothing here assumes real mode, but
+  no run has said so.
+
+**Other adapters.** Hercules and VGA renditions are not written: a bundle
+is CGA4, and a VGA plays it in mode 4.
+
+**Hardware not yet heard.** The PC speaker (VIDEO-BATTLE-PLAN 3.2) is not
+an output.
+
+**Not yet built:**
+- the importer for captured V88 clips (125.2.3);
+- streaming the music from disk: it is resident, so a long piece needs
+  memory;
+- a suite row.
+
+**Measured so far, on MartyPC's `os8088_5150_sb_gla` (5150, CGA, SB 2.01,
+640 KB) from the 360 KB disk.**
+- The load before the intro takes about 14 guest seconds.
+- The intro and the battle play with the card consuming at its rate and
+  the ring never dry: no 20 ms window of the capture is silent.
+- The effects sound at the hits.
+- `[vb_late]` reached 6 in a ten-turn session.

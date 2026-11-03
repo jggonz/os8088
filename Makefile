@@ -20081,6 +20081,31 @@ $(BUILD)/wireflet120.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/
 $(BUILD)/wireflet360.img: $(BUILD)/wireflet.o88 apps/wirefleet/README.TXT tools/os88disk.py
 	python3 tools/os88disk.py --size 360 -o $@ $< apps/wirefleet/README.TXT
 
+# VIDEO BATTLE (SPEC.md 125): a battle played as joined video clips. The
+# package, the original demo battle's bundle (tools/os88vbt.py demo, drawn
+# and scored by tools/vbtscene.py - nothing captured), and an on-demand disk
+# carrying both, in all four geometries.
+.PHONY: vbattle vbattledisk
+#> [Applications] vbattle :: Video Battle's package and its demo bundle (SPEC.md 125)
+vbattle: $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
+$(BUILD)/vbattle.bin: apps/vbattle/vbattle.asm apps/video/vdec.inc apps/os88api.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/vbattle.lst -o $@ $<
+$(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
+$(BUILD)/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
+	python3 tools/os88vbt.py demo $@
+#> [Applications] vbattledisk :: Video Battle's floppy, package and demo battle, in all four geometries
+vbattledisk: $(BUILD)/vbattle.img $(BUILD)/vbattle720.img $(BUILD)/vbattle120.img $(BUILD)/vbattle360.img
+VBATTLEFILES = $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
+$(BUILD)/vbattle.img: $(VBATTLEFILES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(VBATTLEFILES)
+$(BUILD)/vbattle720.img: $(VBATTLEFILES) tools/os88disk.py
+	python3 tools/os88disk.py --size 720 -o $@ $(VBATTLEFILES)
+$(BUILD)/vbattle120.img: $(VBATTLEFILES) tools/os88disk.py
+	python3 tools/os88disk.py --size 1200 -o $@ $(VBATTLEFILES)
+$(BUILD)/vbattle360.img: $(VBATTLEFILES) tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $(VBATTLEFILES)
+
 .PHONY: wireball wireballdisk wireballtest wireball-pair
 wireball-pair:
 	python3 tools/wireball-pair.py
