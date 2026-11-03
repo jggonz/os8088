@@ -13482,3 +13482,11 @@ D2), 410 left in its 7,680 rung. kern_big and kern_small are
 byte-identical. The lead accepted the crossing. Winning D2's 272 bytes
 back would mean moving the frame shuffle into WIN16, whose image is the
 tighter of the two.
+
+**Re-measured after #327 merged #328** (whose kern_mega size pass 2 moved
+the baseline): `.mega` is 22,560 against main's 21,712 (+848, the same
+two changes), 24,070 with its scratch in a 24,576 rung against main's
+23,222 in 23,552 - still two rungs, still boot only. Resident 62,976 of
+68,096, unchanged from main; LOW 5,576 in 6,144 (56 left); kern_big and
+kern_small differ from main only by `assoc_ownex` (SPEC.md 54.4.2.4), and
+`make budget-check` passes on all four kernels.
