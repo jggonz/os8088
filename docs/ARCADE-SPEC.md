@@ -459,8 +459,10 @@ v's colour has plane p's bit) and OPACITY, the DAC triples, and the two tile
 maps. A tile row's byte for plane p is (m0 AND S0p) OR ... OR (m3 AND S3p); a
 sprite row is the same in words, shifted into the box (two shifts by CL),
 cut into each plane through its opaque mask. Sprites 7 to 0, so 0 is on top;
-clipped to the playfield's rows 16-271 (MAME's spriteclip); flips are the
-table's rows (x) and its second copy (y).
+clipped to the playfield's rows 16-271 (MAME's spriteclip). An attribute's
+bit 0 is the x flip and bit 1 the y flip, as in MAME's driver (x being the
+board's unturned axis); the x flip is the table's rows reversed and the y
+flip its second copy. Sprites 0-2 sit one pixel over (MAME's xoffsethack).
 
 **Cached, and written only where the glass changes.** Each screen tile's 32
 plane bytes are kept as composed (part 7) and copied into the next box that

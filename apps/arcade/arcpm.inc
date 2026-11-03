@@ -434,7 +434,11 @@ pm_sprites:
 .s:
     push ds
     mov ds, [ar_vseg]
-    mov al, [si+0x4FF0]             ; code << 2 | x flip << 1 | y flip
+    mov al, [si+0x4FF0]             ; code << 2 | y flip << 1 | x flip
+    test al, 3                      ;   (MAME's fx is bit 0); held here
+    jpe .same                       ;   swapped, x flip in bit 1, the one
+    xor al, 3                       ;   that reverses a turned sprite's rows
+.same:
     mov ah, [si+0x4FF1]             ; the palette
     mov cl, [si+PM_SPRXY]           ; MAME: sx = 272 - [5061], sy = [5060]
     mov ch, [si+PM_SPRXY+1]         ;   - 31; turned, portrait x = 239 -
@@ -445,6 +449,10 @@ pm_sprites:
     mov dl, cl
     mov dh, 0
     sub ax, dx
+    cmp si, 6                       ; MAME's xoffsethack: sprites 0-2 sit
+    jae .xo                         ;   one pixel over
+    dec ax
+.xo:
     mov [di+PMS_X], ax
     mov ax, 272
     mov dl, ch

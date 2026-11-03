@@ -28,7 +28,8 @@
 # clockwise (ROT90), so a landscape pixel (x, y) lands at portrait column
 # 223 - y, row x. A tile's portrait (row r, column c) is its landscape
 # (x = r, y = 7 - c); a sprite's is (x = r, y = 15 - c). A sprite's x flip
-# (bit 1) is then the rows' order, and its y flip (bit 0) the columns'.
+# (MAME's fx, bit 0 of its attribute) is then the rows' order, and its y
+# flip (bit 1) the columns'; arcpm.inc swaps the two bits as it reads them.
 # =============================================================================
 import sys
 

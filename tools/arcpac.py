@@ -173,9 +173,10 @@ class Board:
         for s in range(7, -1, -1):
             attr = self.m[0x4FF0 + 2 * s]
             color = self.m[0x4FF1 + 2 * s] & 0x1F
-            code, fx, fy = attr >> 2, attr & 2, attr & 1
+            code, fx, fy = attr >> 2, attr & 1, attr & 2   # MAME: x flip is bit 0
             sx = 272 - self.m[0x5060 + 2 * s + 1]
-            sy = self.m[0x5060 + 2 * s] - 31
+            sy = self.m[0x5060 + 2 * s] - 31 + (1 if s < 3 else 0)   # MAME's
+            #   xoffsethack: sprites 0-2 one pixel over
             for y in range(16):
                 for x in range(16):
                     px = 15 - x if fx else x
