@@ -12679,11 +12679,14 @@ mega_wset:
     cmp [di+2], bl
     jne .wx
     cmp byte [di+3], 0              ; ...and UNBOUND, or BOUND and aimed
-    je .wx                          ; INSIDE a block: re-bound there, reach
-    call mega_wbind                 ; clipped and the block flagged as
-    sbb bh, bh                      ; SEG_BWIN's. Outside every block it
-.wx:                                ; would be freed and moved with no block
-    pop ds                          ; (14.135), so it gets a fresh window
+    je .wx                          ; INSIDE a block OF ITS OWNER'S: re-bound
+    call mega_bown                  ; there, reach clipped and the block
+    jc .wn                          ; flagged as SEG_BWIN's. Another's block,
+    call mega_wbind                 ; or outside every block, where it would
+.wn:                                ; be freed and moved with no block
+    sbb bh, bh                      ; (14.135), gets a fresh window
+.wx:
+    pop ds
     je .own                         ; (14.137: WIN16's GlobalReAlloc carries
 .nown:                              ; a program's window to another arena)
     pop di
@@ -12891,6 +12894,72 @@ mega_wbind:
     pop bx
     pop ax
 .o:
+    ret
+
+; mega_bown - DX:AX = a base, BL = a window's owner (mega_segown's) -> CF = 0
+; the block it lies in is that owner's: a conventional claim recorded under
+; the slot, a pool block under 0A0h | slot, or a driver's pool block under its
+; 0C0h | row. CF = 1 someone else's, nobody's, or in no block - so mega_wset's
+; re-bind never binds a window into another package's memory (14.137, the
+; rule 14.135 made for SEG_FREE). Keeps all
+mega_bown:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    cmp bl, 0xFF
+    je .no
+    cmp dx, MEGA_XPOOL >> 16
+    jb .conv
+    MXT_ES                          ; (the tables' tail)
+    cmp bl, 0xC0
+    jae .p
+    or bl, 0xA0
+.p:
+    call mx_rel                     ; AX = its KB from the pool's base
+    jc .no
+    call mx_inblk                   ; SI = the block
+    jc .no
+    cmp [es:si+MX_OWN], bl
+    je .yes
+.no:
+    stc
+    jmp short .o
+.conv:
+    cmp bl, 0xC0                    ; (a driver's conventional claim: not
+    jae .no                         ;   matched, so a fresh window)
+    shr ax, 4
+    shl dx, 12
+    or ax, dx                       ; AX = its paragraph
+    mov si, mem_tab
+.l:
+    mov cx, [ss:si+MC_SEG]
+    jcxz .n
+    cmp ax, cx
+    jb .n
+    add cx, [ss:si+MC_PARA]
+    cmp ax, cx
+    jb .f
+.n:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .l
+    jmp short .no
+.f:
+    xor bh, bh
+    cmp [ss:si+MC_OWN], bx
+    jne .no
+.yes:
+    clc
+.o:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; mega_segbw - SEG_BWIN's body (FAR's tail, mega_segf): DX = a selector of the
