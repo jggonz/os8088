@@ -13555,7 +13555,7 @@ so `tools/abi.lock.json` was refreshed with no bump.
 
 Seen (QEMU, kern_mega, looks, 2026-11-03):
 - Mozart's setup runs to its last dialog with every file copied. The LDT's
-  high-water is 1,635 of 1,992 entries. It was 1,859 with handle
+  high-water is 1,658 of 1,992 entries, at its last dialog. It was 1,859 with handle
   descriptors alone, and the setup ran out before D1.
 - Arcade's setup reaches *Congratulations!*.
 

@@ -233876,7 +233876,16 @@ directory here.
 **How a bitmap is kept.** Its pixels are converted once, when it is made,
 into os8088's sixteen colours, 4 bits a pixel, top row first, in a fixed
 block of the program's global heap (§124.20.2; until S15 a heap claim of its
-own, and an owner's claims are eight). Each palette entry becomes the nearest
+own, and an owner's claims are eight). **On the `kern_mega` arm, when the
+heap refuses the block, the bits get a claim of their own** (one map row,
+§124.31.3; `w16_bmnew`), given back by `DeleteObject` or the program's end
+(`w16_bmown` knows one by its map row starting at the bits, which an arena's
+block never does, its header being first). It is a fallback for bitmaps
+only, never for `GlobalAlloc`, so it is not a fifth arena. `LoadBitmap`
+needs the resource and the bits at once, two blocks of the same size for a
+large DIB: Mozart's setup's last dialog loads a 435x194 4bpp bitmap, 42 KB
+twice, where the arenas' largest run was 33.8 KB (WIN16-NEXT-PLAN Q6,
+route D, seen 2026-11-03). Each palette entry becomes the nearest
 of the sixteen, and on a 1bpp display it then goes through §124.8.1's mono
 map, as `SetDIBitsToDevice`'s pixels do. **A 1-bit DIB keeps its palette's
 two colours**, as Windows 3.x's `LoadBitmap` made a bitmap compatible with
@@ -236833,9 +236842,9 @@ plus the bitmap's 42.8 KB resource, which now loads. The library code
 left beside them is 32 KB that this section keeps, and two MSCOMSTF
 segments the stack names. `LoadBitmap("MAILMAN")`, 435x194 at 4bpp,
 also needs a second 42 KB block for the bitmap's bits (§124.15.2), and
-the largest free run is 33.8 KB. The dialog runs, invisible without its
-bitmap, and nothing faults. Where the second block comes from is an open
-decision (WIN16-NEXT-PLAN N0).
+the largest free run is 33.8 KB. On the arm those bits now get a claim of
+their own (§124.15.2), and the dialog shows, MAILMAN and all, followed by
+*Microsoft Mozart Setup is complete*.
 
 **Which segments.** §124.26.1's rule, applied to each library, on a CPU
 the census does not decide for. On an 8088 the census sweeps all of a
@@ -238046,15 +238055,17 @@ what the numbers mean**:
   (`w16_gdiscard`'s `.kept`). They are given back before their arena goes
   (`w16_vwdrop`), since the kernel frees what is based in a claim with it.
 - **Measured, Mozart's setup on kern_mega** (QEMU, 2026-11-03, from its
-  first screen to its last dialog with every file copied): the LDT's
-  present entries go from 1,370 to a high-water of **1,635 of its 1,992**,
-  15 of them handle descriptors (WIN16's two walk descriptors among them).
+  first screen through every file to *Microsoft Mozart Setup is
+  complete*): the LDT's present entries go from 1,367 to a high-water of
+  **1,658 of its 1,992**, 15 of them handle descriptors (WIN16's two walk
+  descriptors among them), reached at the last dialog's bitmap.
   Before the handle descriptors the setup ran the LDT out (`FAULT 0D` in
   `w16vt_esax`): the Setup Toolkit's grow-by-a-paragraph loop handed out
   395 distinct selectors over 25 block positions. With them alone the
   high-water was 1,859; the first walk sites took it to 1,740 and the
   last four (a new block's header, a split's remainder header twice, a
-  freed block's header) to 1,635. What is left is mostly SUBs of interior
+  freed block's header) to 1,635 by the copy's end, which the last
+  dialog's bitmap takes to 1,658. What is left is mostly SUBs of interior
   paragraphs a program's own segments and resources are carved at, which
   go with their claims.
 - **Above 1 MB** (batch 7). The arm says `OS88_HIGH | OS88_HIGHMEM`:
@@ -238112,10 +238123,15 @@ is refused. The arm moves it as follows:
   so the selector the program holds names the new block. A locked block
   with no handle descriptor (none was to be had) stays put and the realloc
   is refused, as for any other program.
-- A block grown past 64 KB after it was handed out keeps its one handle
-  descriptor, reaching its first 64 KB (`w16_phset`); it is not tiled, as
-  Windows' would have been. A block over 64 KB when it is first handed out
-  is tiled (`w16_ptile`, §124.31.6).
+- A block over 64 KB is tiled (`w16_ptile`, §124.31.6) when it is handed
+  out, as Windows' would have been. One that had a handle descriptor before
+  it grew keeps it re-aimed at its first 64 KB (`w16_phset`), and at the
+  next ask the flag goes and the block is tiled. The old descriptor is then
+  the arena's until the arena goes: a selector the program still holds
+  reaches the block's first 64 KB, and the huge pointer it is answered
+  reaches all of it. Mozart's script engine grows a block past 64 KB and
+  walks it with `__AHINCR`. Answering it the handle descriptor alone gave
+  *Parsetime error: Syntax error* at `SETUP.MST(45)` (seen 2026-11-03).
 - Until the handle descriptors this was a bound window (`SEG_BWIN`) per
   locked block, one of `mega_wtab`'s 32 rows each; a descriptor per handle
   needs no row.

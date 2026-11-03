@@ -1000,9 +1000,10 @@ w16_pout:
 ; block and reaches its length, GlobalReAlloc re-aims it in place
 ; (w16_phfix), and the block's free gives it back. So the selector a program
 ; holds follows the block, and an overrun past it faults, as on Windows
-; (SPEC.md 124.31.3). Over 64 KB: its tiles, unless it was handed out smaller
-; and grew, when its handle descriptor reaches its first 64 KB. No entry to be
-; had: a SUB to the claim's end. Keeps every other register.
+; (SPEC.md 124.31.3). Over 64 KB: its tiles. A block handed out smaller that
+; grew past 64 KB is tiled at its next ask, and its handle descriptor is left
+; reaching its first 64 KB until the arena goes. No entry to be had: a SUB to
+; the claim's end. Keeps every other register.
 w16_pblk:
     push bx
     push cx
@@ -1012,10 +1013,10 @@ w16_pblk:
     mov cx, [es:GH_SIZE]
     inc ax
     dec cx
-    test byte [es:GH_FLAGS], GHF_HND ; (one it has is kept past 64 KB too)
-    jnz .have
     cmp cx, 0x1000
-    ja .huge
+    ja .big
+    test byte [es:GH_FLAGS], GHF_HND
+    jnz .have
     call w16_phset
     jnc .have
     xor bl, bl
@@ -1029,8 +1030,9 @@ w16_pblk:
     pop cx
     pop bx
     ret
-.huge:
-    call w16_ptile
+.big:
+    and byte [es:GH_FLAGS], ~GHF_HND ; over 64 KB: tiled, and a handle
+    call w16_ptile                  ;   descriptor it had left to the arena
     jmp short .out
 
 ; w16_vwalk0 / w16_vwalk1 - W16WALK's: AX = a virtual paragraph in an arena

@@ -4485,3 +4485,178 @@ through the copy. `MOZART\` holds its 11 files and `ILLUS256\HD\`, and
 VBRUN300.DLL went into WIN16's folder. Its group MICROSOF was made with two
 links. The final dialog still does not show, because the heap is short of
 room for its bitmap; that is the next piece of work.
+
+## 2026-11-03: a library's code comes and goes
+
+With its stack lent, Mozart's setup reached its last dialog and stopped
+there. The dialog wants a 42 KB bitmap, and the heap had nowhere to put it.
+Four arenas held 810 KB with 68 KB free, but the largest run was 20 KB.
+Most of the rest was library code: the Setup Toolkit's nine libraries, about
+160 KB, kept fixed for the whole setup because WIN16 had never discarded a
+library's code. Real-mode Windows did. The lead approved doing the same
+(M1) and refused a second step that would have grown the number of arenas.
+
+The machinery was already there for a program's own segments: thunks, a
+module block, and a stack scan that pins a segment someone will return
+into. A library added three surprises, and each one was a fault.
+
+- **`FAULT 05`, then `FAULT 04`.** A library exports some entries from a
+  FIXED bundle in its entry table, which names a segment that may now be
+  discardable. Those entries got no thunk, so a call through one jumped
+  into an empty one. Every exported entry into a discardable segment now
+  gets a thunk, whatever bundle it is in.
+- **A far return into selector C000h.** MSCUISTF's segment 4 names itself
+  by number, at offset 2287. Its exported ordinal 12 begins that segment.
+  The value escapes as a dialog procedure's address and outlives a
+  discard. A program's self-reference is applied again at each load, so it
+  is safe. A library's can leak, so a library's segment that names itself
+  is now kept. Three of the Toolkit's modules have one: MSCUISTF, ENCCDPRF
+  and MMUTIL, five small segments in all.
+- **Pins that were not there.** The stack scan matched any word on the
+  stack that looked like a code selector. On kern_mega selectors and stack
+  offsets are numbers in the same range, so a saved BP or a local pinned
+  segments nobody would return into. The scan now pins only a far return
+  address: a selector of a loaded segment with an offset inside its length.
+
+No binding is left pointing into code that has gone. A far pointer to a
+library's entry in a discardable segment is bound to that library's thunk,
+from a program, another library or WIN16. A thunk is what changes when the
+segment is loaded or discarded, so none of the bound pointers ever names a
+block that has gone (SPEC.md 124.26.11).
+
+**Seen (QEMU, kern_mega, looks):** Mozart's setup runs to its last dialog
+with nothing faulting. At that dialog 50 of MSCOMSTF's segments have gone,
+and the bitmap's 42.8 KB resource loads. Arcade still reaches
+*Congratulations!*.
+
+**The dialog is still not seen.** `LoadBitmap` needs a second block of the
+same size for the bitmap's bits, and the largest run left is 33.8 KB. The
+dialog runs, invisible: its window record has a size made of whatever
+`GetObject` left. Three ways out went to the lead: give a big bitmap a claim
+of its own, stream a big DIB a row at a time, or compact the arenas. The
+first was taken, below.
+
+## 2026-11-03: a selector for every handle
+
+The stopgap selector from 2026-11-02 kept the LDT alive. It did so by
+reaching to the end of the claim, so a write past a block landed in its
+neighbour. The lead wanted the real thing before the merge: what Windows'
+standard mode did. One selector per handle, and `GlobalReAlloc` changes its
+base and limit in place.
+
+Nothing in `OSAPI_SEG` could re-aim a descriptor that way.
+- A SUB is shared by anyone asking for the same base and limit, so
+  re-aiming one moves somebody else's.
+- A bound window can be re-aimed, but kern_mega has only 32 window rows,
+  and Mozart's setup alone holds a dozen handles at once.
+
+So kern_mega got a thirteenth verb, `SEG_HND`. It makes a fresh descriptor
+based in a block and re-aims or frees it on request. It is marked with the
+one bit of a descriptor that software may use: the 386's AVL bit, in a byte
+a 286 never reads. The kernel's SUB lookup passes a marked entry by, and the
+entry needs no window row. It cost `.mega` 208 bytes in the same rung, and
+kern_big and kern_small not a byte.
+
+On WIN16's side:
+- Each global block under 64 KB gets its handle descriptor the first time
+  the program is given its selector.
+- A grow, a shrink or a move re-aims it.
+- Freeing the block frees it.
+
+That alone took the LDT's peak across Mozart's setup to 1,859 entries.
+WIN16's own touches of block headers were the rest. A fit, a merge or a
+discard walks an arena a header at a time, and every header was a new SUB
+that lived until its arena went. Two more handle descriptors, which WIN16
+keeps for itself and re-aims at each step, replaced them. A trace build
+that logged where SUBs were made showed four more sites worth moving: a
+new block's header, a split's remainder (twice), and a freed block's
+header.
+
+The numbers, all looks on QEMU:
+
+| | LDT entries at the peak, of 1,992 |
+|---|---:|
+| before the stopgap | ran out |
+| handle descriptors alone | 1,859 |
+| plus the first walk sites | 1,740 |
+| plus the four traced sites, to the copy's end | 1,635 |
+| ...and through the last dialog's bitmap | **1,658** |
+
+(The 2026-11-02 entry says the LDT has 2,016 entries. Read off the
+descriptor table, it has 1,992.)
+
+**QEMU cannot see the point of it.** The fixture written for the overrun,
+`OVRTEST.EXE`, reported its selector unchanged across a `GlobalReAlloc`,
+with the new limit and the old bytes. Then it wrote one byte past the block
+and said it had survived. QEMU's TCG checks no data segment's limit. Bochs
+does, so the row `win16ovr` boots kern_mega under Bochs, and it runs in the
+final pass with everything else.
+
+## 2026-11-03: Mozart's setup is complete
+
+The lead's plan for the bitmap was route D: when the global heap refuses
+a bitmap's bits, give them a claim of their own. That takes one row of
+WIN16's memory map, and only a bitmap may use it, so it is not a fifth
+arena by another name. `DeleteObject` gives the claim back, and so does the
+program's end. Telling a claim from an arena's block needs no new state:
+a claim's map row starts at the bits, while an arena's block never starts
+at its row, because a header comes first. The code is all in the library
+part, and the arm's image did not grow.
+
+The first look after it failed much earlier, which was useful. `_MSTEST`
+said *Parsetime error: Syntax error* at `SETUP.MST(45)`, before the first
+dialog. The cause was a change made to `w16_pblk` that same morning,
+AFTER the morning's looks: a block holding a handle descriptor was answered
+that descriptor even once it had grown past 64 KB. Mozart's script engine
+grows such a block and walks it with huge pointers, `__AHINCR` = 8, so the
+selector 8 above the handle descriptor was somebody else's. Such a block
+is now tiled at its next ask, as it was before the handle descriptors. Its
+old descriptor stays with the arena, reaching the first 64 KB, in case the
+program still holds it.
+
+**Seen (QEMU, kern_mega, looks):**
+- Mozart's last dialog shows, the registration card with its picture.
+- *Continue* brings *Microsoft Mozart Setup is complete*.
+- *Return to Windows* says the new configuration needs a restart, then
+  ends the setup on the desktop with the group's shortcut.
+- Across the whole run the LDT peaks at 1,658 of 1,992.
+- Arcade still reaches *Congratulations!*.
+
+The lesson is the old one: a change made after the look is a change
+nobody looked at.
+
+## Phase B/C: where it stands (2026-11-03)
+
+**Works, seen:**
+- Protected mode on kern_mega:
+  - Registry Editor, Solitaire, Minesweeper, Write, Paintbrush, Cardfile
+    and Calendar, Write's document above 1 MB;
+  - on 86Box's 286 and 386 as well as QEMU.
+- MMSYSTEM: the clock, mmio, `waveOut`, `waveIn`, MCI, `timeSetEvent` and
+  `midiOut`, each against a fixture that says 0 wrong.
+- The Program Manager DDE server: a group is a desktop shortcut to a
+  folder of links.
+- Microsoft Arcade's setup from its floppy, to *Congratulations!*.
+- Mozart's setup from its CD, through its copy and its group to *Setup
+  is complete*.
+
+**Decided, by the lead, with the owner's standing rules:**
+- A grow in place keeps a quarter more than asked (D1(b)).
+- One descriptor per handle replaced the stopgap (D1(a)).
+- A BIOS call on a program's stack runs on a stack WIN16 lends, not on a
+  low rung every kern_mega machine would pay for (D2).
+- A library's code is discardable (M1), and the number of arenas stays
+  four (no M2).
+- Sir Hangman is a known limit: its installer keeps 404 KB of code.
+
+**Not done:**
+- Mozart itself, started from its link. It is Visual Basic 3.0 over
+  VBRUN300, about 520 KB of code that cannot be discarded
+  (WIN16-NEXT-PLAN L1).
+- Sound Recorder playing, and Media Player playing an audio CD, have not
+  been heard. QEMU's drive refuses `PLAY AUDIO`, and 86Box's
+  `386-mega-cdrom` has not been listened to.
+- MSCDEX's `int 2Fh`.
+- A `win16setup` row.
+- Phase A's rows have no kern_mega leg.
+- The final pass (S25) is still to run.
