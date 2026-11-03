@@ -33,7 +33,7 @@ The owner's decisions taken on the way:
 - **D1:** GlobalReAlloc keeps a quarter's slack. A program's block selector reaches its claim's end, as a stopgap.
 - **D2:** a BIOS call made from a Windows program's stack runs on a stack WIN16 lends, with no LOW rung.
 - **D3:** library code is discardable (M1).
-- Two boot-only `.mega` rungs, recorded in KERN-MEGA-PLAN 14.135.
+- Two boot-only `.mega` rungs, recorded in KERN-MEGA-PLAN 14.136.
 
 ## 2. Before #327 merges
 
@@ -115,13 +115,13 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - What of all three runs in real mode, where their CPU tier allows.
   - `tools/w16reach.py` re-run against WIN16-ANY-PLAN §1.
 
-- [ ] **Q5: main's #328** ("Elendilon -> Main", d323a9a65) is merged into #327. It changed:
-  - heap claims to paragraphs rounded to 512 bytes, with `OSAPI_MEM_P` (SPEC.md 50.2.1, 50.3.7);
+- [ ] **Q5: re-verify after main's #328.** #328 ("Elendilon -> Main", d323a9a65) was merged into #327 on 2026-11-02 (e1a8c21f5). It changed:
+  - heap claims to paragraphs rounded to 512 bytes, with `OSAPI_MEM_P` (SPEC.md 50.2.1, 50.3.7). WIN16's own claims followed on both arms.
   - parts to 16-byte paragraphs (SPEC.md 20.12.2);
   - packing, with the near-call filter (SPEC.md 20.13.9);
-  - the DOS core, now live in a window (SPEC.md 96.54).
+  - the DOS core, now live in a window (SPEC.md 96.54). Its budget went up by 32 bytes for 96.11.11, and kern_dos kept its 34 KB at the owner's word, paid for by kd_resume's shared exits.
 
-  After that merge, N0–N3's evidence is retaken on the merged tree, not carried over from before it.
+  So N0–N3's evidence is retaken on the merged tree, not carried over from before it.
 
 ## 5. Sources
 
@@ -129,4 +129,4 @@ As WIN16-ANY-PLAN's, plus #327's record:
 
 - the Phase B/C report: its milestones 30–51;
 - its SPEC sections: 124.26.10–124.26.11, 124.31.2–124.31.3, and 50.6.11 (D2's lent stack);
-- KERN-MEGA-PLAN 14.135.
+- KERN-MEGA-PLAN 14.136.
