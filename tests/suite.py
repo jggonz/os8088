@@ -4608,6 +4608,13 @@ SOAK = [
         "play. The ROM is fetched (make arcaderom), never committed",
         needs=("nasm", "unicorn"),
         wants=("build/arcade/invcode.bin", "build/arcade-rom/INVADERS.ROM")),
+    Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
+        "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "
+        "played full screen for 10 guest seconds - a coin, a start, fire and "
+        "move - delivers the board's 59.54 frames a second within 3% with at "
+        "most one half frame dropped, read off the host's counters in the view; "
+        "and Esc ends the bracket. Red with AR_HALF at 1.5x (39.65 frames/s)",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
     Row("redlinehost", "soak", py("tests/redline.py", "--host"), 1.0,
         "REDLINE four FAT12 geometries and actual recorded reference (SPEC.md 103)",
         needs=("nasm",), wants=("build/redline.img", "build/redline720.img",

@@ -450,44 +450,73 @@ its rows; the soak union and `test-full` run once, after the last wave.
 - [x] Disassemble Q\*bert's reset code to see whether a native core is
       possible (section 8.2).
 
+### What changed when it was built (2026-11-03)
+
+Waves 1 to 4 were built in one round, and three of this plan's decisions
+did not survive contact with the measurements. docs/ARCADE-SPEC.md is what
+the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
+
+1. **Ahead-of-time translation replaced the interpreter.** Section 4.5's
+   "static AOT, the natural default" became the ONLY tier: an 8KB ROM that
+   is never banked translates whole, with no dispatch at all, and the
+   8080's flags stay in the 8086's FLAGS between instructions. There is no
+   generated interpreter and no block recompiler, so there was nothing to
+   factor out of `rdgtmpl.py` (section 1.3): the SM83's flag templates are
+   not the 8080's, and the translator emits 8086 text directly.
+2. **The interrupts run on the PC's clock, not the 8080's** (ARCADE-SPEC 5).
+   Space Invaders keeps its game time in its two interrupt handlers, so a
+   slow host keeps game speed and loses only main-loop passes. That is
+   section 4.6's idle rule obtained for free, and it is why the 8088
+   reaches the board's frame rate.
+3. **Sideways was not needed** (section 5.4): drawing only the cells a
+   store CHANGED, the transpose costs a few cells a frame.
+
 ### Wave 1: the contract, the oracle, the 8080 core
-- [ ] `docs/ARCADE-SPEC.md`: the register map, the state block, the
-      core-to-board vectors, the view, the dirty map and the part layouts.
-- [ ] `tools/arcsim.py`: the model as a tool. It writes traces, digests and
-      PBMs, and replays an input script.
-- [ ] `tools/getarcrom.py` with the section 9 pins, and
-      `tools/getarctest.py` for the 8080 test programs.
-- [ ] Factor `rdgtmpl.py` into shared source, then `apps/arcade/arcgen.py`
-      (the 8080 table). Check that RealDMG's build is byte-identical.
-- [ ] `tests/arccore/`: the bare harness and the CP/M shim. **8080EXM
-      passes. The core matches arcsim.py's trace for the first 1,500
-      frames of Invaders.**
+- [x] `docs/ARCADE-SPEC.md`.
+- [x] `tools/arcsim.py`: `stats`, `seeds` and `digest` (PBM and VRAM SHA-1).
+- [x] `tools/getarcrom.py` with the section 9 pins (`make arcaderom`).
+- [x] The 8080 translator, `apps/arcade/arcaot.py`, with liveness for the
+      flags and three loop idioms.
+- [x] **The translation matches arcsim.py instruction by instruction**:
+      `tests/arclock.py` (row `arclock`), 2,293,923 instructions over 600
+      frames under Unicorn, and red when an idiom is broken.
+- [ ] `tools/getarctest.py` and 8080EXM under a CP/M shim. The lockstep
+      covers what Space Invaders executes; the exhaustive CPU test would
+      cover what it does not, and would pin AC (ARCADE-SPEC 3.5).
 
 ### Wave 2: the board, and the number that decides the rest
-- [ ] The Midway 8080 board driver: the memory map and mirrors, the shift
-      register, the watchdog, inputs, DIP switches, RST 1 and RST 2.
-- [ ] Frame digests match the model at frames 300, 600, 900 and 1,500.
-- [ ] **MEASURE**: guest cycles per frame for the interpreter on MartyPC's
-      8088, then on 86Box's `286-victory`. These replace section 3's
-      predictions, and they decide whether waves 4 and 7 are needed.
+- [x] The Midway 8080 board: the shift register, the watchdog, inputs, RST 1
+      and RST 2. The memory mirrors were not needed: MEASURED, nothing above
+      3FFF is touched.
+- [x] **MEASURED on MartyPC's 5150 in play** (`tests/arcspeed.py`, row
+      `arcspeed`): 59.62 frames a second against the board's 59.54, none
+      dropped, 1.2 to 1.5 main-loop passes a frame against a real 8080's
+      3.85. On 86Box's 16 MHz 286 (`at286_vga`, not cycle-accurate): no
+      drops and about twelve times the 8080's main-loop passes.
+- [ ] Machine > DIP Switches (the DIPs are fixed at 3 bases, extra at 1500).
 
 ### Wave 3: the package, playable
-- [ ] `ARCADE.O88`: the game list, the window, keys (coin, start, move,
-      fire), and Machine > DIP Switches.
-- [ ] The dirty-cell transpose. Full screen on VGA (with the overlay
-      bands), Hercules and CGA. Sideways on every adapter.
-- [ ] Sound: `tools/arcsfx.py` clips for the SB, and the speaker fallback.
-- [ ] Every package convention: `OSAPI_ABOUT_SET`,
-      `OS88_REGION_MOVABLE`, exit restoring the desktop, and a check of
-      `docs/INDEX.md` for each facility before it is written.
-- [ ] `arcadedisk` in the four geometries.
+- [x] `ARCADE.O88`: the window, Game > Play and Reset, About, keys.
+- [x] The changed-cell transpose, full screen on VGA (with the overlay
+      bands), Hercules and CGA.
+- [x] Sound on the speaker, through `OSAPI_SND_TONE`. NOT yet listened to:
+      no row captures it.
+- [ ] The Sound Blaster clips (`tools/arcsfx.py`).
+- [x] `OSAPI_ABOUT_SET`, `OS88_REGION_MOVABLE`, Esc restoring the desktop.
+- [x] `arcadedisk` in the four geometries; a `local` line in RETIRED.txt.
+- [ ] A game list, once there is a second board.
+- [ ] A picture in the window, not only full screen.
 
-### Wave 4: speed (only if wave 2's numbers ask for it)
-- [ ] Share the block recompiler with RealDMG, and add the `cnt_nz`
-      idiom and the 15C7 idiom.
-- [ ] The static AOT image, built from the fetched ROM.
-- [ ] The idle rule, with its off switch, gated as section 4.6 says.
-- [ ] Re-measure the 8088 and the 286.
+### Wave 4: speed - done as part of waves 1-3, because the 8088 asked
+- [x] Loop idioms: `copy` (REP MOVSB to RAM), `count`, `scan`.
+- [x] A VRAM store compares first and lists its cell once; the host draws
+      the list, with an unrolled put per adapter.
+- [x] `IN 3` inline; four key polls a frame instead of nine; one PIT read a
+      run; poll points weighted by their loop's size.
+- [ ] An interpreter for a PC the translation lacks. Today a miss stops the
+      game with "Arcade: no code at XXXX"; seeds from the model and
+      speculative walks of the ROM's data cover every PC the model and
+      MartyPC have reached.
 
 ### Wave 5: the Z80 core
 - [ ] The generator's Z80 table: prefixes, IX/IY in the state block, the
