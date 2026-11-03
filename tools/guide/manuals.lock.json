@@ -476,9 +476,9 @@
    "kernel/fsck.inc",
    "apps/syscheck/disk.inc"
   ],
-  "stamped": "28649b125",
-  "strings": "33bb31190f3c1c11",
-  "why": "checked against fsck.inc and disk.inc: the page names no finding or repair rule - the new PARTIAL message is described on System Check's page, which owns the disk tasks"
+  "stamped": "5d148b4e3",
+  "strings": "56f35984ce04b211",
+  "why": "PR 328 review: repairs that free wait for a complete walk; PARTIAL message"
  },
  "FTPD_O88": {
   "sources": [
@@ -1073,9 +1073,9 @@
   "sources": [
    "apps/syscheck"
   ],
-  "stamped": "28649b125",
-  "strings": "f2bffe9123cba57f",
-  "why": "the PARTIAL message (a folder too deep or damaged leaves lost space and the defragmenter alone), a shared LONG tail left uncut, and folders asked again before each move"
+  "stamped": "5d148b4e3",
+  "strings": "367e018389ad0046",
+  "why": "PR 328 review: PARTIAL message fits the report column"
  },
  "SYSTEM": {
   "sources": [],
@@ -1155,9 +1155,9 @@
   "sources": [
    "apps/timer"
   ],
-  "stamped": "24c3d243",
-  "strings": "e9aabbc59981e7c7",
-  "why": "only an About-card credit line changed (ec45f031 / 'by jggonz'); the page already says the card shows who made it, its credits, or a line about it, so nothing quoted is wrong"
+  "stamped": "5d148b4e3",
+  "strings": "adc1e93ddbd77c7e",
+  "why": "PR 328 review: About card fitted to two lines; the page's 'shows who made it' still holds"
  },
  "TIMES_F88": {
   "sources": [],
