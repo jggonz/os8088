@@ -2300,7 +2300,22 @@ tm_sample:
     ; bytes (SPEC.md 50.2.1) half of every claim's rows can be a half-KB the
     ; KB figures drop - which put the two pages a KB apart over the same
     ; package and RAM's free half a KB off AVAIL
+    ;
+    ; NOT ON THE MEMORY PAGE'S QUIET INTERVALS: that page draws every figure
+    ; off its own paint's tm_csnap, and tm_claims is the table tm_classify
+    ; filed tm_cgid from - a snapshot here with no paint behind it pairs the
+    ; hover's records with another table's groups (SPEC.md 28.4.16). On the
+    ; interval tm_paintdue will pass it still runs, so tm_quiet's key holds
+    ; the tm_ikp the paint is about to sum
+%ifdef TMF_MEM
+    cmp byte [tm_view], 0
+    je .csums
+    cmp byte [tm_slow], TM_SLOW - 1
+    jb .csumd
+.csums:
+%endif
     call tm_csums               ; [tm_usedp] and every paragraph figure
+.csumd:
     mov ax, [tm_usedp]
     call tm_kround              ; the bar is pixels: whole KB is plenty
     mov cx, [tm_totkb]          ; barw = usedK*TM_GW/totalK (all KB)
@@ -2340,9 +2355,16 @@ tm_sample:
 ; and the UI task set none), so the heap is that plus the claims summed below.
 ; Exact BY CONSTRUCTION only if the table cannot move between the two calls -
 ; which is why both are inside one pushf/cli: no IRQ0, no switch, no other
-; task's claim. The sums are inside it too, so a paint on the UI task never
-; reads tm_ikp half-summed. ~32 records and a slot scan each, a few ms at the
-; worst, against MEMP_AVAIL's own walk that already runs with interrupts off.
+; task's claim. THE PAINT'S SUMS ARE NOT: ~32 records and a slot scan each
+; are 3-5 ms on an 8088, on top of MEMP_AVAIL's ~10 already masked, and a
+; 1200-baud mouse byte is 8.3. So the paint (BP = 2) sums its own copy of the
+; table with interrupts ON, into tm_ikps and two registers, and publishes in
+; a second short pushf/cli - a paint on the UI task never reads tm_ikp half-
+; summed either way. tm_ikps is the paint's alone because every paint holds
+; the gfx lock; a table the worker rewrites under a UI paint's sums is a newer
+; one, and costs that one paint what a compaction does (the check below). The
+; sample (no lock, and no walk as a rule) sums in place inside its one
+; window, as it always did.
 ;
 ; The one moment it cannot be trusted is INSIDE a compaction, which parks
 ; with [mem_cp_busy] set and answers 0/0 to a caller that arrives in the gap
@@ -2367,13 +2389,7 @@ tm_csums:                       ; ...the SAMPLE's: the claim table and the
     push es
     TM_ES_DATA
     pushf
-    cli                         ; ONE MOMENT: the table, the free heap and
-    xor ax, ax                  ; the sums - from zero INSIDE it, or a paint
-    mov di, tm_ikp              ; on the UI task reads a row zeroed and not
-    mov cx, INST_MAX            ; yet summed (a debugger stop found one)
-    cld
-    rep stosw
-    mov [tm_kclp], ax           ; ...System's too
+    cli                         ; ONE MOMENT: the table and the free heap
     mov di, tm_claims
     TM_CLAIM_SNAPSHOT
     or bp, bp                   ; THE SAMPLE DOES NOT WALK THE HEAP. MEMP_AVAIL
@@ -2399,6 +2415,21 @@ tm_csums:                       ; ...the SAMPLE's: the claim table and the
     mov [tm_avl], bx
 %endif
 .sums:
+    mov di, tm_ikp              ; the SAMPLE sums in place, still masked...
+%ifdef TMF_MEM
+    test bp, 2                  ; ...the PAINT (tm_csnap: BP = 2 by now) into
+    jz .zero                    ; its own tm_ikps, interrupts back on: the
+    popf                        ; moment is taken, and outside a paint only
+    pushf                       ; the worker's paint-due interval rewrites
+    mov di, tm_ikps             ; tm_claims (tm_sample, tm_quiet)
+.zero:
+%endif
+    push di
+    xor ax, ax                  ; from zero, or a paint on the UI task reads
+    mov cx, INST_MAX            ; a row zeroed and not yet summed (a
+    cld                         ; debugger stop found one)
+    rep stosw
+    pop di                      ; CX = 0 out of the rep: System's
     xor dx, dx                  ; DX = every claim that is not a cache
     mov si, tm_claims
 .c:
@@ -2416,17 +2447,29 @@ tm_csums:                       ; ...the SAMPLE's: the claim table and the
     call tm_cslot               ; whose: an instance's slot...
     jc .sys
     shl bx, 1
-    add [tm_ikp+bx], ax
+    add [di+bx], ax
     jmp short .nb
 .sys:
-    add [tm_kclp], ax           ; ...or nobody's, which is System's
+    add cx, ax                  ; ...or nobody's, which is System's
 .nb:
     pop bx
 .n:
     add si, CLS_RECSZ
     cmp si, tm_claims + CLAIM_SNAPSHOT_SIZE
     jb .c
-    popf
+    cli                         ; THE PUBLISH: every figure below in one
+%ifdef TMF_MEM                  ; window (the sample's is still the first)
+    cmp di, tm_ikp
+    je .pub
+    mov si, di                  ; the paint's rows, a 12-word copy
+    mov di, tm_ikp
+    push cx
+    mov cx, INST_MAX
+    rep movsw
+    pop cx
+.pub:
+%endif
+    mov [tm_kclp], cx
     mov [tm_clmp], dx
     mov cl, 6
     mov ax, [tm_heapp]          ; (no walk: the size banked, which agrees)
@@ -2452,6 +2495,7 @@ tm_csums:                       ; ...the SAMPLE's: the claim table and the
     add ax, [tm_lowp]           ; ...and RAM's used half is everything that
     add ax, dx                  ; is not the free heap: IVT+BIOS + System +
     mov [tm_usedp], ax          ; every claim that is not a cache
+    popf
     pop es
     pop di
     pop si
@@ -4248,8 +4292,8 @@ tm_hover:
     add ax, [tm_hibase]         ; record's offset, XMW_KB of it
     cmp ax, dx
     ja .xn
-    sub ax, bp
-    jge .xh
+    sub ax, bp                  ; UNSIGNED: KB above 1MB pass 32,767
+    jae .xh
     neg ax
     cmp [si+XMW_KB], ax
     jbe .xn
@@ -4285,7 +4329,7 @@ tm_hover:
     cmp ax, dx
     ja .cn                      ; starts past the column
     sub ax, bp
-    jge .ch                     ; starts inside it
+    jae .ch                     ; starts inside it
     neg ax                      ; ...or before it: AX = lo - a, and the
     push dx                     ; band reaches lo when its size exceeds that
     mov dx, [si+CLS_PARA]       ; (a size under a KB is drawn as one column
@@ -4344,11 +4388,15 @@ tm_hover:
 .pick:
     cmp ax, [tm_hgid]           ; [tm_hgid] and [tm_hcid] as one word
     je .out                     ; no change: nothing taken, nothing drawn
-    mov [tm_hgid], ax
     call OSAPI_GFX_LOCK
+    mov [tm_hgid], ax           ; UNDER the lock, whatever is refused: a walk
+                                ; reads it row by row holding the lock, so a
+                                ; store between two of its rows lit both
     mov bx, [tm_win]
-    test word [es:bx+W_FLAGS], 2    ; the refresh's own three refusals
+    test word [es:bx+W_FLAGS], 2    ; the refresh's own three refusals...
     jz .un
+    cmp byte [tm_view], 0       ; ...and the page, as tm_update asks it: a
+    je .un                      ; click that turned it held the lock first
     call OSAPI_WM_CLIP_SET
     jc .un
     cmp byte [tm_abon], 0       ; (NOT tm_view_begin: [tm_cx]/[tm_cy] are
@@ -9424,7 +9472,10 @@ TM_XWN      equ 64              ; OSAPI_XMEM_WALK's records: kern_mega's pool
                                 ; of programs takes ~60, plus the five fixed
                                 ; areas in front (KERN-MEGA-PLAN 14.70.2). A
                                 ; block past this is in no group and no total
-tm_pm       equ tm_fhk + 2      ; byte: CPU_F_PM - extended memory is RAM
+tm_ikps     equ tm_fhk + 2      ; INST_MAX words: a PAINT's tm_ikp, summed
+                                ; with interrupts on and then copied in one
+                                ; window (tm_csnap)
+tm_pm       equ tm_ikps + INST_MAX * 2  ; byte: CPU_F_PM - extended memory is RAM
 tm_hion     equ tm_pm + 1       ; byte: RAM above 1MB is accounted - the pool
                                 ; walks (SPEC.md 28.4.8): tm_hikb runs
 tm_hiused   equ tm_hion + 1     ; KB above 1MB in use (tm_hikb)...

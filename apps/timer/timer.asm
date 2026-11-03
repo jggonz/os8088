@@ -666,12 +666,11 @@ tm_lim:     db 24, 60, 60
     OS88UI_BTNREC tm_btrec, tm_rects, tm_btlbl, tm_bflags, TM_NB, tm_place
 
 ; the standard About card's lines (SPEC.md 20.5.1). The card is 2*7 + lines*12
-; tall and the content is 41, so TWO lines is this window's ceiling.
+; tall and the content is 41, so TWO lines is this window's ceiling - and they
+; are the credit, split as Minesweeper's is (SPEC.md 20.5.1.2): the title bar
+; above the card already says Timer.
 tm_ablines:
-    dw tm_ab1, tm_ab2, tm_abz, tm_abc, tm_abn, 0
-tm_ab1:     db 'Timer for os8088', 0
-tm_ab2:     db 'a stopwatch', 0
-tm_abz:     db 0
+    dw tm_abc, tm_abn, 0
 tm_abc:     db 'Contributed by', 0
 tm_abn:     db 'Jorge Gonzalez', 0
 

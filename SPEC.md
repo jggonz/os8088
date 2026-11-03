@@ -64874,11 +64874,25 @@ against exactly that figure. The page below reads none of the claim totals.)
 `apps/taskmgr`):
 
 - **One moment.** `OSAPI_CLAIM_SNAPSHOT` and `OSAPI_MEM_P`'s `MEMP_AVAIL`
-  (§50.3.7) are taken inside ONE `pushf`/`cli`, and the sums below with them,
-  so no task switch can put a claim between the table and the free figure and
-  no paint reads a half-summed row. The window is the snapshot's 32 records,
-  a slot scan each and `MEMP_AVAIL`'s own walk, which already runs with
-  interrupts off.
+  (§50.3.7) are taken inside ONE `pushf`/`cli`, so no task switch can put a
+  claim between the table and the free figure. **A paint's sums are not
+  inside it**: 32 records and a slot scan each are 3-5 ms on an 8088, on top
+  of `MEMP_AVAIL`'s walk that is already longer than a 1200-baud mouse byte,
+  so `tm_csnap` sums its own copy of the table with interrupts on, into
+  `tm_ikps` (the paint's alone: every paint holds the gfx lock) and two
+  registers, and publishes every figure in a second short `pushf`/`cli` - no
+  paint reads a half-summed row either way. A sample, which holds no lock and
+  as a rule does not walk, sums in place inside its one window.
+- **The sample's table is the paint's.** On the memory page a sample takes
+  the snapshot only on the interval `tm_paintdue` will pass: the page draws
+  every figure off its own paint's `tm_csnap`, and `tm_claims` is the table
+  `tm_classify` filed `[tm_cgid]` from, so a snapshot with no paint behind it
+  paired the hover's records (§28.4.16) with another table's groups for up to
+  `TM_SLOW` intervals. On the interval that paints it still runs, so
+  `tm_quiet`'s key holds the `tm_ikp` the paint is about to sum (§28.6.1).
+  The two, with §28.4.16's lock rule, cost +50 bytes of image and 24 of bss
+  on both full arms, neither crossing its 512-byte claim rung (14,703 of
+  14,848; kern_mega's 15,317 of 15,360); the small build is the same size.
 - **The walk is not taken every interval.** `MEMP_AVAIL` is ~49,000 cycles
   with interrupts off on an 8088 (measured under MartyPC with two packages
   open), longer than a serial mouse byte takes at 1200 baud (~8.3 ms), so
@@ -65624,6 +65638,17 @@ so `tm_sample`'s interval and the graph's meaning are unchanged. A poll is
 where the last pick read it (`[tm_hmx]`/`[tm_hmy]`) that is all: the answer
 stands. A walk forgets the place (a claim may have come or gone under a
 still pointer), and so does losing the front.
+
+**The pick is stored under the lock.** `tm_hover` compares with no lock and,
+on a change, takes it and only then writes `[tm_hgid]` - unconditionally, so
+a refused toggle still leaves the next walk the pick a still pointer will not
+re-make. A walk reads `[tm_hgid]` row by row holding the lock, so a store
+between two of its rows lit both and left the old one inverted. Under the
+lock the toggle refuses as the refresh does (`W_FLAGS`, the clip, the About
+card) and on `[tm_view]` as well, as `tm_update` does: a click that turns the
+page holds the lock first, and a poll that had passed its own view test drew
+the memory page's row on the performance page. The map's columns above 1MB
+compare UNSIGNED, KB there passing 32,767 on a 64MB kern_mega machine.
 
 **A change is two XOR fills, not a walk.** The page's walk holds the gfx
 lock ~50 ms on a 5150 whether or not it draws anything (`TM_SLOW`'s
@@ -222178,7 +222203,9 @@ one `OSAPI_FONT_RUN`.
 
 ### 111.5 About, and the row
 
-The standard About card (§20.5.1), two lines — 41px of content holds two.
+The standard About card (§20.5.1), two lines — 41px of content holds two,
+and they are the credit, `Contributed by` / `Jorge Gonzalez`, split as
+Minesweeper's is (§20.5.1.2); the title bar above the card names the program.
 While the card is up the button record is told it has NO buttons, so a
 press anywhere in the content reaches the dismissal rather than the button
 under the card - and that zero IS the card's state (§111.6): there is no
