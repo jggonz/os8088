@@ -232,6 +232,37 @@ def filtered():
     return fails
 
 
+def escape_reserved():
+    """A T word of 0xFFFF is the filter's ESCAPE (SPEC.md 20.13.9.4), and a
+    real tail of exactly that many bytes was legal before it: so _cut, which
+    every encoder ends in, refuses it as it refuses a longer one, and a
+    decoder given an output past FILT_MAX reads it as the plain tail an
+    earlier kernel's Compress verb could have written."""
+    fails = []
+    for n, ok in ((0xFFFE, True), (0xFFFF, False)):
+        src = b"A" * 10 + bytes(range(256)) * (n // 256) + bytes(n % 256)
+        try:
+            z = os88lz._cut(src, bytearray(2) + b"sym", [(10, 5)])
+            if not ok:
+                fails.append("_cut wrote a T of 0x%04X - the filter's escape"
+                             % int.from_bytes(z[:2], "little"))
+        except ValueError:
+            if ok:
+                fails.append("_cut refused a tail of 0x%04X" % n)
+    tail = bytes(range(256)) * 255 + bytes(255)
+    old = b"\xFF\xFF" + bytes([0x15, 0x41, 0x01, 0x00]) + tail
+    want = b"A" * 10 + tail
+    if os88lz.is_filtered(old, len(want)):
+        fails.append("a plain stream with a T of 0xFFFF and %d bytes of "
+                     "output was taken for a filtered one" % len(want))
+    try:
+        if os88lz.decompress(old, os88lz.LZ4, len(want)) != want:
+            fails.append("a plain stream with a T of 0xFFFF decodes wrong")
+    except ValueError as e:
+        fails.append("a plain stream with a T of 0xFFFF was refused: %s" % e)
+    return fails
+
+
 def corpus():
     """the awkward cases, then whatever of the real tree happens to be built"""
     yield "empty", b""
@@ -386,6 +417,7 @@ def main():
 
     fails += big_lzb()
     fails += filtered()
+    fails += escape_reserved()
     fails += lengths()
     fails += mirrors()
 

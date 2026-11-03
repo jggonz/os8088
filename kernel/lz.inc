@@ -232,7 +232,9 @@ lz_decomp_big:
     xchg ax, cx                 ; (AL the format and AH the end's high byte,
     lodsw                       ; out of lodsw's way) T: how much of the
     cmp ax, LZ_ESC              ; output is stored raw - unless it is the
-    jne .noesc                  ; FILTER'S ESCAPE (SPEC.md 20.13.9): then
+    jne .noesc                  ; FILTER'S ESCAPE (SPEC.md 20.13.9, and
+    test bx, bx                 ; only under 64KB of output, as every
+    jnz .noesc                  ; filtered stream is - 20.13.9.4): then
     inc cx                      ; the format byte remembers it - CL is 0 or
     inc cx                      ; 1, so +2 is | LZ_FILT and a byte under the
     lodsw                       ; `or` - and the real T is the next word,

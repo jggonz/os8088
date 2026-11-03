@@ -196,7 +196,8 @@ cmz_kseg:   dw KERNEL_SEG
 ;         (STREAMED, the container counts, and the new file is the caller's
 ;         to delete)
 ;      CF=1, AX = 1: the raw tail would be over 64KB, which the T word cannot
-;         count - the file's last 64KB do not compress
+;         count - the file's last 64KB do not compress - or exactly 0xFFFF,
+;         which is the filter's escape (SPEC.md 20.13.9.4)
 ;      CF=1, AX = 2: a streamed read or write failed, FERR_* in [cs:cmz_err]
 ; clobbers: AX BX CX DX SI DI, flags. DS, ES and BP come back.
 ;
@@ -466,6 +467,9 @@ cmz_pack:
     sbb dx, [cs:cmz_ksa+2]      ; T
     or dx, dx
     jnz .tail                   ; a tail the T word cannot count
+    cmp ax, LZ_ESC
+    je .tail                    ; ...or one it cannot say: 0xFFFF is the
+                                ; filter's escape (SPEC.md 20.13.9.4)
 %ifdef CMZ_STREAM
     CSDO mov [CSEG cmz_tl], ax   ; (the streamed ending's: the whole one has CX)
 %endif

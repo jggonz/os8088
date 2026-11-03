@@ -48579,11 +48579,24 @@ counts; the kernel stream stays plain.
 ##### 20.13.9.4 The format number does not move
 
 By 20.2.0.1's rule: every package, driver and module built before this runs
-on this kernel unchanged - none starts with the escape, because no encoder
-wrote one - and an older kernel handed a filtered one refuses it by the
-existing tail test, the correct outcome by the correct route. `PKG_FMT` and
-`DRV_VER` stay; the SDK's `OSAPI_DECOMP` comment names the escape, which
-moves the ABI lock's fingerprint and nothing else.
+on this kernel unchanged, and an older kernel handed a filtered one refuses
+it by the existing tail test, the correct outcome by the correct route.
+`PKG_FMT` and `DRV_VER` stay; the SDK's `OSAPI_DECOMP` comment names the
+escape, which moves the ABI lock's fingerprint and nothing else.
+
+**A real tail of exactly `0xFFFF` bytes was legal before the escape**: a
+stream over 64KB whose cut falls 65,535 bytes from its end (20.13.7, 20.14.5),
+which either encoder could write and a kernel before this read. So the value
+is RESERVED from both sides. **Neither encoder writes it now**: `os88lz._cut`
+refuses a tail of `0xFFFF` as it refuses a longer one, and `cmz_pack` sends it
+out the same `AX = 1` door (20.15.1). **And a decoder takes the escape only
+when the expected output fits one segment** - `lz_decomp_x` when its `BX` is
+0, `os88lz.decompress` when `outlen` is at most `FILT_MAX`. Every filtered
+stream's output does (20.13.9), and a plain stream whose T is `0xFFFF` with a
+symbol in front of the tail produces more than that, so a file an earlier
+kernel's Compress verb wrote that way still reads as the plain stream it is.
+`kds_expand` and `kxl_dec` read only streams the build wrote, so the encoders'
+refusal is all they need. `tests/unit/t_lzfmt.py` holds both halves.
 
 ### 20.14 A COMPRESSED FILE — the kernel expands it on the way in
 
@@ -49243,7 +49256,8 @@ in:  AX = the SOURCE segment, the source at AX:0000
 out: CF=0 and DX:AX = the packed length, which is < SI:CX — a whole stream,
      T word and raw tail included (§20.13.7)
      CF=1, AX = 0: it did not get smaller, and the output is undefined
-     CF=1, AX = 1: the raw tail is over 64KB, which the T word cannot count
+     CF=1, AX = 1: the raw tail is over 64KB, which the T word cannot count,
+                   or exactly 0xFFFF, the filter's escape (§20.13.9.4)
 ```
 
 **Segments and not pointers**, because the far pointer this is reached through
@@ -221130,6 +221144,19 @@ description and the 32x32 picture in one copy, the card's own order), so
 the scan is the only disk work: a page turn reads nothing. Raising
 `STM_MAX` costs 220 bytes of the image an entry; nothing else changes.
 
+**Eight, not the 64 this menu first listed, is the owner's decision** at the
+module's size pass: 64 entries were what made `STIKMENU.DRV` a 14,780-byte
+image and a 15 KB claim, and 8 make it 7,876 bytes, the line below included,
+and an 8 KB one (the table below). **Past eight the menu SAYS so rather than
+dropping Apps silently.** The scan goes on past the eighth only until one
+more App passes every test above - that one is not listed, and the walk
+stops there, so the cost is at most the peeks of the files between - and
+sets `stm_over`; the panel's last row then reads `Only the first 8 are
+listed.` in place of its hint, in plain text on every adapter (28
+characters, inside the 29-cell minimum width the hint already reserves, so
+the panel's width is unchanged). Which eight is the scan's order: the boot
+volume's first, each folder in directory order.
+
 An App is **RUNNING** when a live package instance's `I_NAME` - its header's
 program name, the loader's copy - is the App's: `stik_single`'s test (§110.5.2)
 from the kernel's side. The header says how many are (`1 Sticky App active`,
@@ -221249,7 +221276,7 @@ fallback, no `DESK.DRV`) is listed and toggled but not arranged or hidden.
 | kern_big | **+72** | **+8** | **+47** | image 272 (352), cold 78 (125) |
 | kern_emu | +72 | +8 | +47 | image **13** (93), cold 78 (125) |
 | kern_small | 0 | 0 | +8 | image 429 (429), cold 46 (54): the card's ladder step alone |
-| `STIKMENU.DRV` (on demand) | | | | 3,556 bytes on the disk ('CZ') - **seven** 512-byte clusters, where 3,609 was eight - a 7,814-byte image: 3,552 of code, 330 of tables and strings, and the scratch - 1,760 for 8 entries, 1,960 for the band - zeros that pack to nothing and come back zero at every load. An **8 KB** claim from the press to the act, beside the save-under. It was 14,780 and 15 KB before the size pass, which took `STM_MAX` 64 -> 8, the TALL layout, the second part of the save-under, the picture re-read and most of the card check; a second pass then took the fixed row total into the layout table (`LY_REST`) and the slab flags into a register, for the 25 packed bytes the cluster wanted. LZB would pack it to 3,169 with no code change, and was refused: about +0.2 s of decode on the 8088 every time the menu opens (46.11.1's ratio) |
+| `STIKMENU.DRV` (on demand) | | | | 3,533 bytes on the disk ('CZ') - **seven** 512-byte clusters, where 3,609 was eight - a 7,876-byte image: 3,584 of code, 359 of tables and strings, and the scratch - 1,760 for 8 entries, 1,960 for the band - zeros that pack to nothing and come back zero at every load. An **8 KB** claim from the press to the act, beside the save-under. It was 14,780 and 15 KB before the size pass, which took `STM_MAX` 64 -> 8, the TALL layout, the second part of the save-under, the picture re-read and most of the card check; a second pass then took the fixed row total into the layout table (`LY_REST`) and the slab flags into a register, for the 25 packed bytes the cluster wanted; the over-cap line (110.12) then added 62 bytes of image and still packs into seven. LZB would pack it to 3,169 with no code change, and was refused: about +0.2 s of decode on the 8088 every time the menu opens (46.11.1's ratio) |
 
 The `.text` is the title, the two set entries (one since §22.28.1 took the
 Disk window's back out, -6), `menu_track`'s test, `CMD_STIK`

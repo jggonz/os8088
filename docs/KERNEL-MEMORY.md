@@ -311,7 +311,7 @@ had added.
     "bss": 5411,
     "budget": 100864,
     "codemax": 65536,
-    "cold": 37467,
+    "cold": 37471,
     "coldpara": 2342,
     "colds": 3758,
     "fatpara": 288,
@@ -409,7 +409,7 @@ had added.
     "bss": 2945,
     "budget": 64000,
     "codemax": 65536,
-    "cold": 21221,
+    "cold": 21225,
     "coldpara": 1327,
     "colds": 2452,
     "fatpara": 64,
@@ -802,7 +802,7 @@ there and nowhere else.
 <!-- kernsize:themes -->
 | theme | bytes | share |
 |---|---:|---:|
-| the file system, end to end | 29,436 | 37.7% |
+| the file system, end to end | 29,440 | 37.7% |
 | the window system and its furniture | 22,161 | 28.4% |
 | drawing: adapters, primitives, glyphs, icons | 10,694 | 13.7% |
 | hardware: drivers, clock, mouse, sound, CPU, XMS | 7,770 | 10.0% |
@@ -810,7 +810,7 @@ there and nowhere else.
 | the Control Panel | 292 | 0.4% |
 | the About box, the one built-in kind left in apps.inc | 287 | 0.4% |
 | kern_mega: protected mode, the pool, the DOS park | 0 | 0.0% |
-| **total** | **78,043** | |
+| **total** | **78,047** | |
 <!-- /kernsize:themes -->
 
 <!-- BEGIN generated table -->
@@ -844,7 +844,7 @@ there and nowhere else.
 | `viddet.inc` — adapter detection and geometry (§39) | 625 | — | **625** | — | — | 324 |
 | `mod.inc` — on-demand kernel modules (§2.8) | 155 | 378 | **533** | — | — | — |
 | `clock.inc` — the clock ladder (§37) | 474 | 30 | **504** | 59 | — | — |
-| `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 498 | **498** | — | — | — |
+| `lz.inc` — the LZ decoder for packages, drivers, files and the kernel itself (§20.13) | — | 502 | **502** | — | — | — |
 | `vidsel.inc` — which adapters the machine HAS, and switching between them (§39.11) | 485 | — | **485** | 74 | — | 419 |
 | `toast.inc` — the menu bar's transient message (§59) | 474 | — | **474** | 56 | — | — |
 | `blank.inc` — the idle screen blanker (§64) | 197 | 235 | **432** | — | — | — |
@@ -877,7 +877,7 @@ there and nowhere else.
 | `dockmod.inc` — `DOCK.DRV`, the Advanced Dock runtime (§30.5), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `extmod.inc` — `EXTD.DRV`, the extended desktop's placement policy (§39.19.6), an on-demand module on `kern_big` | — | — | **0** | — | — | — |
 | `kernel.asm` — API table, entry points, `kmain`, the shims | 2,173 | 277 | **2,450** | — | — | 666 |
-| **total** | **40,576** | **37,467** | **78,043** | **5,411** | **5,358** | **6,455** |
+| **total** | **40,576** | **37,471** | **78,047** | **5,411** | **5,358** | **6,455** |
 <!-- END generated table -->
 
 ### Reading it

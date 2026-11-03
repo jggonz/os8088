@@ -1652,8 +1652,12 @@ w16_prologs:
     jc .done
     jmp short .bundle
 .entries:
-    mov ax, si                      ; the whole entry inside the file
-    add ax, 5
+    mov ax, 3                       ; the whole entry inside the file: a
+    cmp dl, 0xFF                    ; fixed one is 3 bytes, a movable 6
+    jne .sz
+    mov al, 6
+.sz:
+    add ax, si
     jc .done
     cmp ax, [w16_fend]
     ja .done

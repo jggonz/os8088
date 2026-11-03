@@ -139,11 +139,12 @@ def _cut(src, out, bounds):
         if p - c > mx:
             mx, kp, kc = p - c, p, c
     tail = src[kp:]
-    if len(tail) > 0xFFFF:
+    if len(tail) >= LZ_ESC:
         # a tail the T word cannot count: the stream is over 64KB whatever
         # else is in it, which is a file that compressed badly and is stored
         # plain (cz_wrap, SPEC.md 20.14.5) - so this is a refusal, not a
-        # stream
+        # stream. 0xFFFF exactly is refused too: it is the filter's escape
+        # (SPEC.md 20.13.9.4), as kernel/compress.inc's cmz_pack refuses it
         raise ValueError(f"a raw tail of {len(tail)} bytes does not fit T")
     return len(tail).to_bytes(2, "little") + bytes(out[2:kc]) + tail
 
@@ -779,9 +780,13 @@ def bcj_decode(src):
     return bytes(s)
 
 
-def is_filtered(stream):
+def is_filtered(stream, outlen=None):
     """True when a stream (with its T word, SPEC.md 20.13.7) carries the
-    filter's escape."""
+    filter's escape. Given `outlen`, only an output the filter can cover
+    counts: a T of 0xFFFF in front of more than that is a real tail an
+    earlier encoder wrote (SPEC.md 20.13.9.4, kernel/lz.inc's BX test)."""
+    if outlen is not None and outlen > FILT_MAX:
+        return False
     return len(stream) >= 2 and int.from_bytes(stream[:2], "little") == LZ_ESC
 
 
@@ -797,17 +802,17 @@ def compress(data, fmt=LZ4, tail=True, filt=False):
     if filt and tail and 3 <= len(data) <= FILT_MAX:
         f = bcj_encode(data)
         if f != bytes(data):
-            zf = compress(f, fmt)
+            try:
+                zf = compress(f, fmt)
+            except ValueError:  # all tail at 0xFFFF (_cut): longer than z
+                zf = z
             if len(zf) + 2 < len(z):
                 return LZ_ESC.to_bytes(2, "little") + zf
     return z
 
 
 def decompress(data, fmt, outlen, tail=True):
-    if tail and is_filtered(data):
-        if outlen > FILT_MAX:
-            raise ValueError(f"a filtered stream of {outlen} bytes - the "
-                             "filter stops at 64KB (SPEC.md 20.13.9)")
+    if tail and is_filtered(data, outlen):
         return bcj_decode(decompress(data[2:], fmt, outlen))
     if fmt == LZ4:
         return lz4_decompress(data, outlen, tail=tail)
@@ -831,7 +836,7 @@ def in_place_margin(data, fmt=LZ4, packed=None, tail=True):
     rather than about what this module would have written."""
     z = compress(data, fmt, tail=tail) if packed is None else packed
     n, zl = len(data), len(z)
-    esc = 2 if tail and is_filtered(z) else 0   # the escape is consumed
+    esc = 2 if tail and is_filtered(z, n) else 0   # the escape is consumed
                                     # before anything is produced, like T
     if fmt == LZ4:
         p, end = (_tail_bounds(z[esc:]) if tail else (0, zl))

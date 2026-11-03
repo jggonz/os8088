@@ -1057,9 +1057,9 @@
   "sources": [
    "kernel/stikmenu.inc"
   ],
-  "stamped": "e4576a70",
-  "strings": "8b9860220a28a7ab",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "7ce68bd14",
+  "strings": "46bee294ee36d33d",
+  "why": "PR #328 review: the eight-App cap and the line that says so (SPEC.md 110.12)"
  },
  "STIKNOTE_O88": {
   "sources": [

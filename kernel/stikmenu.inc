@@ -112,7 +112,9 @@ STM_MAX     equ 8               ; Sticky Apps listed at most, PAGED: the
                                 ; panel shows what the screen holds and a
                                 ; pager row turns the page (SPEC.md 110.12).
                                 ; The tree ships three; raising it costs
-                                ; STE_SIZE bytes of the image apiece
+                                ; STE_SIZE bytes of the image apiece. One
+                                ; past it sets stm_over, and the hint row
+                                ; says so instead of its hint
 STM_PGMAX   equ 8               ; App slots on one page, at most
 STE_VOL     equ 0               ; byte: the volume it was found on
 STE_RUN     equ 1               ; byte: 1 = an instance of it is running
@@ -235,6 +237,7 @@ smn_track:
 ; -----------------------------------------------------------------------------
 stm_scan:
     CSDO mov byte [CSEG stm_n], 0
+    CSDO mov byte [CSEG stm_over], 0
     call COLD_SEG:drvf_drv_vol_bank
     mov al, [dsk_bootvol]
     call stm_scanvol
@@ -287,8 +290,8 @@ stm_scanvol:
     jc .ret
     xor cx, cx                  ; the ordinal: dsk_find_x is stateless, so the
 .f:                             ; peeks between the calls cannot disturb it
-    cmp byte [cs:stm_n], STM_MAX
-    jae .ret
+    cmp byte [cs:stm_over], 0
+    jne .ret                    ; one App past STM_MAX: no need to look on
     PUSH_CSDATA
     pop es
     mov di, stm_find
@@ -380,6 +383,11 @@ stm_take:
     jne .no                     ; the file says, and stm_text letters any
     cmp byte [es:si+STM_C_NAME], 0 ; unprintable byte as a space.
     je .no                      ; tools/os88pkg.py checks the rest at build
+    cmp byte [cs:stm_n], STM_MAX
+    jb .room
+    CSDO mov byte [CSEG stm_over], 1 ; a real App with no room: left out,
+    ret                         ; and the hint row says so
+.room:
     mov al, [cs:stm_n]
     call stm_ent                ; CS:DI = the next entry
     mov al, [cs:stm_vol]
@@ -1109,6 +1117,10 @@ stm_c_hint:
     mov ah, [cs:si+LY_HDRX]
     call stm_at
     mov si, stm_s_hint
+    cmp byte [cs:stm_over], 0
+    je .h
+    mov si, stm_s_over          ; Apps were left out: say that instead
+.h:
     xor dl, dl
     jmp stm_text
 
@@ -1451,7 +1463,7 @@ stm_count:
     jz .r
     push di
     mov di, stm_cnt
-    call stm_num                ; STM_MAX is 64: one or two digits
+    call stm_num                ; STM_MAX is 8: one digit (stm_num has two)
     mov si, stm_s_app
     call stm_cat
     cmp byte [cs:stm_nrun], 1
@@ -2019,6 +2031,10 @@ stm_s_hide: db 'Hide All Sticky Apps', 0
 stm_s_show: db 'Show All Sticky Apps', 0
 stm_s_more: db 'More Sticky Apps...', 0
 stm_s_hint: db 'Drag a Sticky App to move it.', 0
+stm_s_over: db 'Only the first ', '0' + STM_MAX, ' are listed.', 0
+%if STM_MAX > 9
+  %error "stm_s_over spells STM_MAX as one digit"
+%endif
 stm_s_on:   db 'On', 0
 stm_s_next: db 'Next page (', 0
 stm_s_first: db 'First page (', 0
@@ -2041,6 +2057,7 @@ stm_stridew: dw 0
 stm_stride: db 0
 stm_ly:     dw 0
 stm_n:      db 0
+stm_over:   db 0                ; 1 = an App past STM_MAX was left out
 stm_shown:  db 0
 stm_nrun:   db 0
 stm_ndesk:  db 0                ; ...and stm_nvis, the word stm_census writes

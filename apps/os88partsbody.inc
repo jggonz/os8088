@@ -1055,6 +1055,7 @@ op_unpack:
 ; has there and CF its answer.
 .zfill:
     call op_unpto               ; ES = the landing, BX = the stream
+    jc .refuse                  ; (no window: op_at)
     push ds                     ; [bp+14] ours
     push bp                     ; [bp+12] the landing's paragraph
     mov ax, [si+OP_R_LEN]
