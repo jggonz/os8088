@@ -88,12 +88,24 @@ python3 $S run w31 "win /s calc"        # Windows 3.1 has no real mode; standard
 ```
 
 The WIN16 rows that run Microsoft's programs (`win16mines`, `win16calc`,
-`win16cpu`, `win16pbrush` and their XT legs) read them from `build/win16/`,
-never from this tree. `samples` puts them there, renamed where two versions
-share a name: CALC, CLOCK, Paintbrush (`PBRUSH.EXE` with its `PBRUSH.DLL`),
-REVERSI and WRITE from Windows 3.0, `W31CALC.EXE`, `W31MINE.EXE` and
-`W31NOTE.EXE` (Notepad 3.1, on COMMDLG, for `win16cdlg`) from 3.1, and WinMine 2.9 as `WINMINE.EXE`. `make clean` removes them, so
-run it again after one:
+`win16cpu`, `win16pbrush`, `win16write`, `win16sol`, `win16fam`, `win16cdlg`
+and the XT legs) read them from `build/win16/`, never from this tree. A row
+whose programs are missing SKIPS, and the soak counts that skip as a
+failure, so `samples` must cover every name a row asks for. It puts them
+there, renamed where two versions share a name:
+
+- **Windows 3.0:** CALC, CLOCK, Paintbrush (`PBRUSH.EXE` with its
+  `PBRUSH.DLL`), REVERSI, WRITE and SOL. Also S17's families: NOTEPAD,
+  CARDFILE, CALENDAR, CLIPBRD, PIFEDIT and TASKMAN.
+- **Windows 3.1:** `W31CALC.EXE`, `W31MINE.EXE`, `W31NOTE.EXE` (Notepad 3.1,
+  on COMMDLG, for `win16cdlg`) and `W31SOL.EXE`. Also CHARMAP and the four
+  screen savers, whose `.SCR` files become `SSSTARS`, `SSMARQUE`, `SSMYST`
+  and `SSFLYWIN` `.EXE`.
+- **WinMine 2.9** as `WINMINE.EXE`.
+
+The 3.1 programs are read off `w31/c-pristine.img` the first time they are
+needed, so an older `win16ref/` gains a new name without a reinstall.
+`make clean` removes them, so run it again after one:
 
 ```sh
 python3 $S samples                      # win16ref/samples/ -> build/win16/

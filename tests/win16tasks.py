@@ -22,7 +22,9 @@ reads: "TASKS OK", or each check that failed on either side.
 
 The row also watches the kernel's claim records while the programs run:
 the instance's (WIN16's, with every task's memory) are at most the eight
-an owner may hold (SPEC.md 124.25.1), and when the MessageBox is closed and
+an owner may hold (SPEC.md 124.25.1), counted per owner word as the kernel
+counts them: the package image's claim is the instance slot's, the rest
+WIN16's segment's, and when the MessageBox is closed and
 the instance ends, the heap is the one before the launch: every task's
 claim and block went back.
 
@@ -96,9 +98,16 @@ def main():
         def ready():
             # the image's claim is the slot's; every claim WIN16 makes is
             # stamped with the segment it runs in (SPEC.md 50.3, mem_own).
+            # The bound is PER OWNER WORD, as mem_claim counts it
+            # (kernel/memory.inc, MEM_OWNER_MAX): the slot's image claim is
+            # not one of WIN16's eight, and adding the two together reported
+            # a legal 8 + 1 as "9, past the 8" (SPEC.md 124.25.1).
             # A SAMPLE, so it can miss a peak and never invent one: the
             # bound below is a check that may pass short, not a measurement
-            n = sum(1 for c in claims(d, sym) if c[2] in (own[0], p.seg))
+            mine = sorted(c for c in claims(d, sym) if c[2] in (own[0], p.seg))
+            n = max(sum(1 for c in mine if c[2] == o) for o in (own[0], p.seg))
+            if n > seen["max"]:
+                seen["at"] = mine
             seen["max"] = max(seen["max"], n)
             return p.waiting_msgbox(F.msgrow())
         d.wait(ready, 600, "TASKS's MessageBox")
@@ -108,8 +117,10 @@ def main():
         live = [i for i in range(F.W16_MAXTASK)
                 if raw[i * F.W16K_SIZE + F.W16K_ST]]
         print("1. state %d, task records live %s (current %d), at most %d "
-              "claims of the instance's seen" % (st, live, p.pb("w16_cur"),
+              "claims under one of the instance's owners seen" % (st, live, p.pb("w16_cur"),
                                                   seen["max"]))
+        print("   at the peak (segment, paragraphs, owner): %s" % ", ".join(
+            "%04x/%04x/%04x" % c for c in seen.get("at", ())))
         if st in (F.W16S_REFUSED, F.W16S_ENDED):
             bad.append("WIN16 %s it: %s / %s" % (
                 "refused" if st == F.W16S_REFUSED else "ended",
@@ -125,8 +136,8 @@ def main():
                            "one started while TASKS still ran in the "
                            "instance (SPEC.md 124.28.1)" % live)
             if seen["max"] > MAXCLAIMS:
-                bad.append("%d claims of the instance's, past the %d an owner "
-                           "may hold" % (seen["max"], MAXCLAIMS))
+                bad.append("%d claims under one owner of the instance's, past "
+                           "the %d an owner may hold" % (seen["max"], MAXCLAIMS))
             d.key("Enter")
             d.wait(lambda: p.pb("w16_state") == F.W16S_ENDED or F.gone(ui, p),
                    60, "the instance to end after its MessageBox")
