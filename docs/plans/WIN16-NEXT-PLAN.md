@@ -137,6 +137,11 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
 
 - [ ] **Q7: `SEG_BWIN` checks no owner** (SPEC.md 50.6.11). Found while fixing 14.137 on #327. `mega_wset`'s re-bind now asks `mega_bown` (a claim's `MC_OWN`, a pool block's `MX_OWN`), but `SEG_BWIN` itself binds a window into any block it is given. That is 14.135 item 2's class of hole, one verb along. The fix is the same test at `SEG_BWIN`'s entry. Every shipped caller binds its own block, so the fix should refuse none of them. It is a kernel `.mega` change, so it goes in its own PR, with megaown's row.
 
+- [ ] **Q8: `w16censall` fails on main as well as on #327** (`tests/unit/t_w16cens.py`). It fails for Windows 3.1 Media Player's and Sound Recorder's segment 1, which were added to `win16ref/samples/w31mm`. The guest walk reaches 1,138 and 1,108 bytes that the host's does not.
+  - The cause is a divergence on overlapping decodes. `tools/os88ne.py` reads MPLAYER's switch table at 0x87C one word past its end, which seeds 0x16A, inside `sub ax,7` at 0x169. The guest stops before that word, and from there the two walks reach different functions.
+  - It reproduces identically on main's d323a9a65, so it is not Phase B/C's doing.
+  - The fix is to bound the host's table read the way the guest does, or to decide which walk is right and make the other match. Then re-run the row.
+
 ## 5. Sources
 
 As WIN16-ANY-PLAN's, plus #327's record:
