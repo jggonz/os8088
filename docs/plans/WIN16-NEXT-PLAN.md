@@ -43,8 +43,8 @@ The owner's decisions taken on the way:
     - what is discarded: library segments reached only through entry tables (at=3);
     - what is kept: segments named by number (at=2/5), which is all of VBRUN300 and MOZART.EXE (L1).
 
-- [ ] **N1: replace D1's stopgap with the proper fix.** This brings back the overrun fault that Windows gives.
-  - *Status:* implemented on #327 (ad390599c, `SEG_HND`, KERN-MEGA-PLAN 14.138). The stopgap text is gone, and the LDT high-water across Mozart's setup is 1,658 of 1,992. **Ticked when `win16ovr` passes under Bochs in N3**, since QEMU checks no segment limit and the fault has not yet been seen.
+- [x] **N1: replace D1's stopgap with the proper fix.** This brings back the overrun fault that Windows gives.
+  - *Status:* implemented on #327 (ad390599c, `SEG_HND`, KERN-MEGA-PLAN 14.138). The stopgap text is gone, and the LDT high-water across Mozart's setup is 1,658 of 1,992. DONE: `win16ovr` passes under Bochs (74fe5956f). The write one byte past OVRTEST's block raises #GP inside the program's code, and its 40→80 KB grow reads back with 0 wrong. What happens after the fault is Q1's: the machine stops where Windows would close the program.
   - D1's (a) lets a program's block selector reach its claim's end. An overrun of a global block then writes into the next block silently, where Windows faults. SPEC.md 124.31.3 marks it as a stopgap.
   - The replacement has two parts:
     - **One descriptor per handle.** GlobalReAlloc re-aims that descriptor's base and limit in place, on the same selector, as Windows' protected modes do. A block that grows a step at a time then costs no new LDT entry, and its limit stays its own length.
