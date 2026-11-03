@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "072167d52",
+  "stamped": "dc4aa4f05",
   "strings": "4fe195f6a33d805e",
-  "why": "loader relocation rule: PMODE-only programs take the segment itself; below the manual's level of detail"
+  "why": "a zero-byte label for the pin registry; WIN16.O88 byte-identical on both arms"
  },
  "WIN16_TXT": {
   "sources": [
