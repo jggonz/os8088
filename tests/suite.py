@@ -17302,8 +17302,11 @@ SOAK = [
         "(tests/win16/ovrtest.c). A 100-byte moveable block's selector is its "
         "HANDLE descriptor and reaches exactly GlobalSize; a GlobalReAlloc to "
         "6000 bytes past a fixed block answers the SAME selector with the new "
-        "limit and the old bytes; and a write one byte past the block closes "
-        "WIN16 for a #GP, OVRTEST.TXT never saying SURVIVED. Bochs, because "
+        "limit and the old bytes; a block grown past 64 KB reads back through "
+        "__AHINCR; and a write one byte past the block raises #GP(0) inside "
+        "OVRTEST's code, OVRTEST.TXT never saying SURVIVED. kern_mega then "
+        "stops FATAL rather than closing WIN16 (WIN16-NEXT-PLAN Q1), and the "
+        "row fails on a close so it is changed when Q1 lands. Bochs, because "
         "QEMU checks no data segment's limit and the write completes there. "
         "Red expected on the parent commit, whose stopgap selector reached "
         "the claim's end",

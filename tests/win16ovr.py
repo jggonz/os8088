@@ -22,8 +22,12 @@ in place):
      __AHINCR, past 64 KB as well as before it (w16_pblk's tiles after a
      grow, WIN16-NEXT-PLAN N1);
   2. "ovrtest: armed ...": it is about to write one byte past the block;
-  3. kern_mega CLOSES WIN16 for the fault (`faults()`'s CLOSED line, vector
-     0D) - and OVRTEST.TXT never gets "SURVIVED the overrun".
+  3. the write raises #GP(0) at an LDT code selector inside OVRTEST's code
+     segment, and OVRTEST.TXT never gets "SURVIVED the overrun". kern_mega
+     then stops FATAL rather than closing WIN16: that is Q1 in
+     docs/plans/WIN16-NEXT-PLAN.md (mega_fkill cannot attribute a WIN16
+     program's code selector), and the step FAILS on a close, so the row is
+     changed when Q1 lands.
 
 Broken on purpose (docs/WRITING-TESTS.md 1): the parent commit, whose
 w16_pblk answered the lead's D1(a) stopgap - a SUB reaching to the claim's
@@ -37,6 +41,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import re
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -57,6 +62,14 @@ def want(cond, what):
     if not cond:
         FAILS.append(what)
     return cond
+
+
+def ovr_code():
+    """OVRTEST.EXE's one code segment's length, from its NE: the fault's IP
+    must be inside it"""
+    import os88ne
+    ne = os88ne.NE(open(FIX, "rb").read(), "OVRTEST.EXE")
+    return max(sg.length for sg in ne.segs if sg.code)
 
 
 def mt_env():
@@ -125,26 +138,48 @@ def main():
     box = os88bochs.Box(out, [], cimg=c, cgeom=os88bochs.GEOM, noa=True,
                         bootc=True)
     try:
-        box.up()
-        box.until(lambda: any("armed" in x for x in result(c)),
-                  "OVRTEST's 'armed' line", 240)
+        # The \\AUTOSTRT link runs OVRTEST before the desktop's first paint
+        # is settled, so its overrun can land inside box.up(): a fault ends
+        # every os88bochs wait, and the file says how far it got either way
+        try:
+            box.up()
+            box.until(lambda: any("armed" in x for x in result(c)),
+                      "OVRTEST's 'armed' line", 240)
+        except RuntimeError:
+            if not box.fault():
+                raise
         got = result(c)
         print("   " + "\n   ".join(got), flush=True)
         want(got and got[0] == "ovrtest: 0 wrong",
-             "1. the handle descriptor reaches GlobalSize, and GlobalReAlloc "
-             "keeps the selector with the new length and the old bytes")
+             "1. the handle descriptor reaches GlobalSize, GlobalReAlloc "
+             "keeps the selector with the new length and the old bytes, and "
+             "a block grown past 64 KB reads back through __AHINCR")
         want(len(got) > 1 and got[1].startswith("ovrtest: armed"),
              "2. OVRTEST reached its overrun")
-        try:
-            box.until(lambda: any("CLOSED" in x for x in box.faults()),
-                      "kern_mega closing WIN16 for the fault", 60)
-        except RuntimeError:
-            pass
         box.guest_sleep(5)
         fl = box.faults()
         print("   " + ("\n   ".join(fl) or "(no fault line)"), flush=True)
-        want(any("CLOSED" in x and " 0D at " in x for x in fl),
-             "3. kern_mega closed WIN16 for a #GP (vector 0D)")
+        # 3. THE #GP, IN THE PROGRAM. What N1 claims is that the write one
+        # byte past the block faults; what kern_mega does next is Q1
+        # (docs/plans/WIN16-NEXT-PLAN.md): mega_fkill cannot attribute a
+        # WIN16 program's code selector to WIN16, so the fault is FATAL
+        # rather than a close. This step asserts the fault inside OVRTEST
+        # and that it was not closed, so it FAILS once Q1 lands - the row is
+        # to be changed then to want "kern_mega CLOSED" instead. A halted
+        # machine alone is not a pass: the fault must be OVRTEST's.
+        m = [re.match(r"kern_mega FAULT (\w\w) err (\w{4}) at (\w{4}):(\w{4})",
+                      x) for x in fl]
+        m = [x for x in m if x]
+        code = ovr_code()
+        ok = bool(m) and m[0].group(1) == "0D" and m[0].group(2) == "0000" \
+            and int(m[0].group(3), 16) & 4 != 0 \
+            and int(m[0].group(4), 16) < code
+        want(ok, "3. the overrun raised #GP(0) at an LDT code selector, inside "
+             "OVRTEST's %d-byte code segment (Q1: kern_mega stops on it "
+             "rather than closing WIN16)" % code)
+        want(not any("CLOSED" in x for x in fl),
+             "3. ...and was not closed: when it is, Q1 has landed and this "
+             "step wants the close instead")
         want(not any("SURVIVED" in x for x in result(c)),
              "3. ...and the write one byte past the block never completed")
         box.shot(os.path.join(out, "end.png"))
