@@ -4728,6 +4728,15 @@ fd_wake:
                                     ; byte and reads the stage the moment it
                                     ; goes to zero
 .glass:
+    cmp byte [fd_xf], FX_RETR       ; A RETR'S BAR (fd_do_rdchk) comes down
+    jne .opend                      ; with its LAST READ, [fd_lmore] 0, rather
+    cmp byte [fd_lmore], 0          ; than with the send behind it, which is
+    jne .opkeep                     ; the worker's; and on any wake once the
+.opend:                             ; worker has dropped the RETR (an abort, a
+    xor cx, cx                      ; stall, the client gone). An end that is
+    xor dx, dx                      ; not ours is refused, so there is no
+    call OSAPI_FS_OP                ; flag (SPEC.md 12.8.10)
+.opkeep:
     FT_B FT_GLASS                   ; **THE WHOLE OF IT**, gfx lock and unlock
     call fd_paint_now               ; included: FT_DRAW inside only ever timed
     FT_E FT_GLASS                   ; the drawing (SPEC.md 77.39)
@@ -5562,7 +5571,12 @@ fd_do_rdchk:
     mov byte [fd_xf], FX_RETR
     call fd_xstart              ; the clock (SPEC.md 77.23)
     mov byte [fd_lmore], 1          ; ...so the worker's first act is FR_READ
-    ret
+    mov cx, [fd_fbuf+18]            ; ONE BAR FOR THE FILE'S READS (SPEC.md
+    mov dx, [fd_fbuf+20]            ; 12.8.10): a chunk a wake, so the widget
+    call OSAPI_FS_OP                ; blinked per chunk. The size FIND gave is
+    ret                             ; exact; fd_wake's .glass ends it. A STOR
+                                    ; has none: no ALLO is parsed, so nothing
+                                    ; knows its size before its last byte
 .no:
     mov si, fd_r550
 .fail:

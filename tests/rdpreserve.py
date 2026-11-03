@@ -142,12 +142,12 @@ def drv_syms(src):
         cp, mp = os.path.join(d, "r.asm"), os.path.join(d, "r.map")
         open(cp, "w").write(open(os.path.join(rd, "ramdisk.asm")).read()
                             + "\n[map symbols %s]\n" % mp)
-        kb = (os.path.getsize(os88build.at("build/rampage.bin")) + 1023) // 1024
+        para = (os.path.getsize(os88build.at("build/rampage.bin")) + 15) // 16
         subprocess.run(["nasm", "-f", "bin", "-w+error",
                         "-I", rd + "/", "-I", os.path.join(src, "drivers/"),
                         "-I", os.path.join(src, "apps/"),
                         "-I", os88build.at("build") + "/",
-                        "-DRAMPAGE_KB=%d" % kb,
+                        "-DRAMPAGE_PARA=%d" % para,
                         "-o", os.path.join(d, "r.bin"), cp], check=True)
         out = {}
         for line in open(mp):

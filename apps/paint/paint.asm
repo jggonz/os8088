@@ -1513,9 +1513,9 @@ pt_uwinof:
     inc bx
     inc bx
     loop .k
-    xor ax, ax                      ; not one of ours, which cannot happen:
-    jmp short .out                  ; the null selector faults at its use
-.hit:                               ; rather than writing some other window
+    mov ax, [pt_uwin]               ; not one of ours, which cannot happen:
+    jmp short .out                  ; the undo claim's window 0, never the
+.hit:                               ; null selector (pt_subwin's reason)
     mov ax, [pt_uwin+bx]
 .out:
     pop cx
@@ -2046,10 +2046,15 @@ pt_layout:
 ; OSAPI_SEG's SEG_SUB, which answers the same selector for the same window
 ; asked again. Only ever reached in protected mode: every caller is behind a
 ; selector test, and a real-mode kernel's answer would be DX + AX x 800h
-; anyway. A refusal (no LDT entry left - the LDT grows, so it is not
-; expected) answers the NULL selector, so the first use faults at its
-; instruction and the kernel closes Paint rather than letting a row land
-; in some other window.
+; anyway. A REFUSAL (no LDT entry left - the LDT grows, so it is not
+; expected) keeps DX, the claim itself, and says so once a session: NEVER
+; the null selector, because an access through that does not fault -
+; kern_mega's mega_null0 completes it as segment 0, the interrupt vector
+; table. Every use of a window is at an offset under 32KB plus one row, so
+; through the claim's own window 0 it lands in a wrong row OF OURS and in
+; nobody else's memory - a damaged picture, which the toast says, where a
+; null selector was a damaged machine. Not routed to a refusal: pt_resize's
+; in-place passes ask while they move rows and have nothing to unwind to.
 ; -----------------------------------------------------------------------------
 pt_subwin:
     or ax, ax
@@ -2063,7 +2068,13 @@ pt_subwin:
     mov bl, SEG_SUB
     call OSAPI_SEG
     jnc .ok
-    xor dx, dx
+    cmp byte [pt_wno], 0            ; (DX kept: the claim - see above)
+    jne .ok
+    mov byte [pt_wno], 1            ; once a session
+    push si
+    mov si, pt_s_nowin
+    call pt_msg_show
+    pop si
 .ok:
     pop cx
     pop bx
@@ -16370,6 +16381,7 @@ pt_ab_4:     db 'Contributed by Elendilon', 0
 %endif
 pt_q_pre:     db 'Save changes to ', 0   ; SPEC.md 42.16, + a name + '?'
 pt_s_anon:    db 'this picture', 0
+pt_s_nowin:   db 'No LDT entry: damaged', 0
 pt_s_defname: db 'PICTURE.'
 pt_s_ebmp:    db 'BMP', 0           ; the extension is the default name's tail
 %ifdef PTF_GIF
@@ -16769,6 +16781,7 @@ pt_ic_text:
     PTBYTE pt_pmw                   ; offsets, and 1 while that layout holds
     PTWORD pt_urseg                 ; pt_uswap_row: the undo row's segment
 %endif
+    PTBYTE pt_wno                   ; pt_subwin: a window refused (toasted)
     PTWORD pt_lbx                   ; pt_lnblit: a stroke segment's own band
     PTWORD pt_lby                   ; (SPEC.md 42.23.8), kept apart from the
     PTWORD pt_lbw                   ; four above because pt_blit is this

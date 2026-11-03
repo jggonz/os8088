@@ -20,7 +20,7 @@ with an SB16 and an IDE disk holding a FAT16 partition and HELLO.TXT:
 
   A. -m 128.
      1. all three rows name a segment in the HMA pool (derived from the origin), hold no heap
-        (DRVR_KB 0), and dispatch at DRV_HMA_ORG + PKG_DISP;
+        (DRVR_PARA 0), and dispatch at DRV_HMA_ORG + PKG_DISP;
      2. the tail's block table holds exactly those three images, each owned
         by its own segment, and each image IS its org-DRV_HMA_ORG assembly
         (build/<name>.hma.bin), header fields os88drv.py rewrites aside;

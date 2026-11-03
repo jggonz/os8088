@@ -24,3 +24,5 @@
 
 wd_s_abou3  apps/word/word.asm      # the About BOX's third line, drawn by wd_about with OSAPI_FONT_RUN into a panel it sized. wd_about also toasts wd_s_abou2 on the no-room fallback, which is why the walker sees both
 sc_s_abou3  apps/scribe/scribe.asm  # the same, in sc_about: OSAPI_FONT_RUN into the box, never toasted
+mega_mon    kernel/mega.inc  # an E9 debug-console line (MEGA_E9 builds only), written by mm_say to port E9h; the routine that loads it toasts mega_on's own line after it, which is why the walker sees both
+mega_mfdoff kernel/mega.inc  # the same: E9 by mm_say, beside MEGADIAG's toast of mega_tfdoff, which is the glass's copy

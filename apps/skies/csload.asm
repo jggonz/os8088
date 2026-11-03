@@ -46,7 +46,8 @@ CS_NPARTS    equ 2
 ; is the other end of them. The kernel is not involved and has no opinion; it
 ; does not zero a part, which is the whole of what makes this work.
 CSH_MAGIC  equ 0                ; word: 'CS' - the loader ran
-CSH_SEC    equ 2                ; word: the sector csw.z begins at
+CSH_PARA   equ 2                ; word: the PARAGRAPH csw.z begins at
+                                ; (its row's `off`, SPEC.md 20.12.2)
 CSH_CLB    equ 4                ; word: this volume's bytes per cluster
 
 LD_H_IMG   equ 8                ; ...and the two header fields it reads them
@@ -83,7 +84,7 @@ csl_entry:
     mov al, CS_PART_STR
     call op_row                     ; SI -> the table row
     mov ax, [si+OP_R_OFF]
-    mov [es:di+CSH_SEC], ax
+    mov [es:di+CSH_PARA], ax        ; ...in the table's own unit
 
     ; --- and the hand-over --------------------------------------------------
     ; In the KEEP form (SPEC.md 20.12.10.5): the standard works out, from the

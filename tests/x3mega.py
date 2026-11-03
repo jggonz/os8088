@@ -24,8 +24,9 @@ AFTERHRS.MP3 on a B: floppy, and opens the MP3 from B:'s listing:
         are above 1MB; the track plays on the card (MD_LIVE, the stream
         open, granules decoding and frames counting up) with its gulps
         COPIED out of the hold; Stop.
-  conv  OSAPI_XMEM_CAPS made to answer 0 for the open (the kernel's cell,
-        patched in guest memory and put back once the hold is taken) so the
+  conv  OSAPI_XMEM_CAPS made to answer 0 for the open (the kernel's cell's
+        dispatch word pointed at xm_caps.none in guest memory, and put back
+        once the hold is taken - the word, never the code: CAPS_WORD) so the
         hold is a CONVENTIONAL claim - 30 KB, OS88_HIGHMEM, so a pool block
         above 1MB, read and served through x3h_at's window, which must be
         based inside it. Then Stop, XT STANDARD by Q, Decode First (D) onto
@@ -85,10 +86,25 @@ Q_XTSTD = 4
 X3HK_XMS, X3HK_CONV = 1, 2
 X3_PCMRES = 2560
 # OSAPI_XMEM_CAPS's cell, KERNEL_SEG:015Ah - at its physical place, the
-# kernel's code being at 0060:0 in protected mode as in real mode - and the
-# answer "no pool" (AX = 0: the three cells after it all refuse)
+# kernel's code being at 0060:0 in protected mode as in real mode. It is a
+# rare cell, `push bp / call api_rs / dw xm_caps`, and the leg points its
+# DISPATCH WORD (+4) at xm_caps.none - the kernel's own "no pool" answer
+# (AX = 0, DX:CX = 0, BL = every block entry free) - and puts it back.
+#
+# THE WORD AND NEVER THE CODE: Bochs's decoded-instruction cache does not
+# see a debugger `setpmem`, so code patched in and then restored keeps
+# EXECUTING the patch. This leg once wrote `xor ax, ax / retf` over the
+# cell's first three bytes, and the restored cell went on running a stale
+# two-byte `xor ax, ax` where the memory said `push bp`, then decoded the
+# rest of the cell from its third byte - so the second call (the Decode
+# First's x3h_begin) ran without its `push bp`, and api_rs's `retf` took
+# the caller's banked BX as its CS: `kern_mega FAULT 0D err 001C at
+# 0060:055A`. Which bytes followed decided whether it faulted, so it came
+# and went with api_rs's address. The dispatch word is DATA - api_rs reads
+# it through CS with `mov bp, [cs:bp]` on every call - so a debugger write
+# to it is seen at once
 CAPS_CELL = 0x600 + 0x15A
-CAPS_NONE = bytes((0x31, 0xC0, 0xCB))          # xor ax, ax / retf
+CAPS_WORD = CAPS_CELL + 4
 ROW0_Y, ROW_X, ROW_H = 123, 170, 16            # a Disk window's rows
 # THE PLAY LEG'S CPU. Auto's ladder (x3eng.inc x3l_run) MEASURES each rung's
 # decode in audio seconds a guest second and plays live only on one that
@@ -271,29 +287,36 @@ def leg_conv(out):
     box, d = boot(leg, out, MP3)
     cell = None
     try:
-        cell = box.read(CAPS_CELL, len(CAPS_NONE))
-        want(cell[:1] == b"\x55", "%s: OSAPI_XMEM_CAPS's cell where the API "
-             "table puts it (%s)" % (leg, cell.hex()))
-        box.dbg(["setpmem 0x%x 1 0x%x" % (CAPS_CELL + i, v)
-                 for i, v in enumerate(CAPS_NONE)])
+        body = box.sym("xm_caps") - 0x600
+        none = box.sym("xm_caps.none") - 0x600
+        got = box.read(CAPS_CELL, 6)
+        if not want(got[:2] == b"\x55\xe8" and
+                    struct.unpack_from("<H", got, 4)[0] == body,
+                    "%s: OSAPI_XMEM_CAPS's cell where the API table puts "
+                    "it, dispatching to xm_caps at %04X (%s)"
+                    % (leg, body, got.hex())):
+            raise RuntimeError("no OSAPI_XMEM_CAPS cell to point")
+        cell = got[4:6]
+        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, none)])
         open_mp3(box)
         x = X3(box)
         box.until(lambda: bad_lines(box) or x.b("x3h_kind") != 0,
                   "the hold", 120, poll=0.3)
-        box.dbg(["setpmem 0x%x 1 0x%x" % (CAPS_CELL + i, v)
-                 for i, v in enumerate(cell)])
+        box.dbg(["setpmem 0x%x 2 0x%x" % (CAPS_WORD, body)])
         cell = None
         box.until(lambda: bad_lines(box) or
                   x.st()["md"] not in (MD_IDLE, MD_CHECK, MD_LOAD),
                   "Auto's decision", 240, poll=0.5)
-        hb, hw, hk = x.w("x3h_base"), x.w("x3h_win"), x.w("x3h_ckb")
+        # x3h_cpara: the hold's PARAGRAPHS, as granted (SPEC.md 50.3.7)
+        hb, hw, hp = x.w("x3h_base"), x.w("x3h_win"), x.w("x3h_cpara")
         want(x.b("x3h_kind") == X3HK_CONV and x.b("x3h_on") == 1 and
              hb and above(box, hb), "%s: the file held whole in a "
              "CONVENTIONAL claim of %d KB, an LDT selector above 1MB "
-             "(%04X at %06X)" % (leg, hk, hb, box.sel_base(hb) if hb else 0))
+             "(%04X at %06X)" % (leg, hp // 64, hb,
+                                 box.sel_base(hb) if hb else 0))
         hbase = box.sel_base(hb) if hb else 0
         wb = box.sel_base(hw) if hw & 4 else 0
-        want(hw and hw != hb and hbase <= wb < hbase + hk * 1024,
+        want(hw and hw != hb and hbase <= wb < hbase + hp * 16,
              "%s: x3h_at's window %04X based inside the hold (+%X)"
              % (leg, hw, wb - hbase))
         common(leg, box, x)
@@ -357,8 +380,8 @@ def leg_conv(out):
     finally:
         if cell is not None:
             try:
-                box.dbg(["setpmem 0x%x 1 0x%x" % (CAPS_CELL + i, v)
-                         for i, v in enumerate(cell)])
+                box.dbg(["setpmem 0x%x 2 0x%x"
+                         % (CAPS_WORD, struct.unpack("<H", cell)[0])])
             except Exception:   # noqa: BLE001
                 pass
         b = bad_lines(box)

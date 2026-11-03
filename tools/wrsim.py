@@ -382,7 +382,7 @@ def take_header(rate, clu, data_len):
     """the take's header, ONE CLUSTER long: RIFF (the file's bytes - 8, or 0
     while unfinished), WAVE, a 16-byte fmt (PCM, mono, RATE, 8-bit), JUNK of
     zeros to 8 bytes short of the cluster, data (DATA_LEN, 0 unfinished)"""
-    riff = (clu + data_len - 8) if data_len else 0
+    riff = (clu + data_len + (data_len & 1) - 8) if data_len else 0
     h = b"RIFF" + struct.pack("<I", riff) + b"WAVE"
     h += b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, rate, rate, 1, 8)
     h += b"JUNK" + struct.pack("<I", clu - 52) + bytes(clu - 52)

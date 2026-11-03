@@ -389,7 +389,9 @@ lnk_open:
     pop ax
 .walk:
     call sc_walk
-    mov word [lnk_argo], 0      ; SPENT OR NOT, it dies with the launch
+    and word [lnk_argo], 0      ; SPENT OR NOT, it dies with the launch (`and`:
+                                ; a byte under `mov`, flags dead before the
+                                ; `add sp` - kernel size pass 16)
 .pop:
     add sp, LNK_SIZE
 .done:
@@ -1321,10 +1323,12 @@ sc_m_row:
 ; the way, it packs round whatever lands next to it.
 ; -----------------------------------------------------------------------------
 sc_m_cell:
-    CSDO mov [CSEG sc_px], cx
-    CSDO mov [CSEG sc_py], dx
-    CSDO mov [CSEG sc_ex], bl
-    CSDO mov word [CSEG sc_best], 0xFFFF
+    CSDO_ON
+    mov [CSEG sc_px], cx
+    mov [CSEG sc_py], dx
+    mov [CSEG sc_ex], bl
+    mov word [CSEG sc_best], 0xFFFF
+    CSDO_OFF
     xor bx, bx                  ; BL = the cell
 .cell:
     cmp bl, [desk_ncell]
@@ -1355,8 +1359,10 @@ sc_m_cell:
     add ax, dx
     cmp ax, [cs:sc_best]
     jae .next
-    CSDO mov [CSEG sc_best], ax
-    CSDO mov [CSEG sc_bc], bl
+    CSDO_ON
+    mov [CSEG sc_best], ax
+    mov [CSEG sc_bc], bl
+    CSDO_OFF
 .next:
     inc bx
     jmp .cell                   ; (short where it reaches: kern_mega's CSDO
@@ -1547,9 +1553,10 @@ sc_m_del:
 ; is none" the ask set.
 ;
 ; A CLAIM OF ITS OWN, PINNED, for the length of the write: CTRL.DRV's bss is
-; the slack in its own KB rounding (kernel.asm's MODC_BSS assertion) and two
-; KB of rows do not fit there, and a buffer the write is reading must not be
-; moved by a compaction the write itself triggers. sc_m_serx gives it back.
+; the SYSTEM.CFG buffer alone (kernel.asm's MODC_BSS), two KB of rows would be
+; two KB more of every CTRL.DRV claim, and a buffer the write is reading must
+; not be moved by a compaction the write itself triggers. sc_m_serx gives it
+; back.
 ; -----------------------------------------------------------------------------
 sc_m_ser:
     CSDO mov word [CSEG sc_tseg], 0
@@ -1748,8 +1755,7 @@ ovl_sc_load:
     push dx
     push si
     push di
-    push es
-    mov si, drv_cfgname
+    push es                     ; SI = the name, staged by the caller
     call COLD_SEG:dwf_dskw_stat ; DX:CX = its size
     jc ovl_sc_plain
     or dx, dx
@@ -1772,7 +1778,7 @@ ovl_sc_load:
     mov es, dx
     xor bx, bx
     mov cx, di
-    xor dx, dx                  ; SI is still drv_cfgname: dskw_stat and the
+    xor dx, dx                  ; SI is still the name: dskw_stat and the
                                 ; heap's entries all keep it
     call COLD_SEG:dwf_dskw_read ; AX = the bytes read
     jc ovl_sc_drop
@@ -2062,9 +2068,11 @@ as_bootc:                       ; (call COLD_SEG: from kmain, after mega_enter)
 
 section .modc                   ; ...and the image's own scratch, IN the
 sc_mz       db 0                ; image: a module may write its own bytes
-sc_px       dw 0                ; (MODULE-SELFCONTAIN-PLAN), and its bss is
-sc_py       dw 0                ; only the slack in its KB rounding, which
-sc_ex       db 0                ; the settings buffer already spends
+sc_px       dw 0                ; (MODULE-SELFCONTAIN-PLAN), and its bss
+sc_py       dw 0                ; (`.modcb`) lies past the panel half, which
+sc_ex       db 0                ; a desktop gesture's core-only read stops
+                                ; short of - the claim covers it, the read
+                                ; does not zero it
 sc_best     dw 0                ; sc_m_cell: the point, the zone it leaves
 sc_bc       db 0                ; out, the nearest distance so far and its
                                 ; cell; sc_m_ser's claim and the rows it holds

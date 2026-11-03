@@ -180,7 +180,8 @@ def main():
         inst = 0x600 + sym("inst_tab")
         e9 = box.e9
         low = low_lin(out, e9)          # SS's base: LOW_SEG, off the machine
-        mx = low + sym("mx_tab")        # .lowbss since KERN-MEGA-PLAN 14.49
+        mx = box.tail("mx_tab")         # the tables' tail, above 1MB since
+                                        # kern_mega size pass 2
         mem = low + sym("mem_tab")
         n = os.path.getsize(e9)
         cmds = ["xp /%dhx 0x%x" % (I_RECSZ * INST_MAX // 2, inst),

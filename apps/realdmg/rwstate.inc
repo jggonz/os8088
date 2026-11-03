@@ -123,6 +123,13 @@ rw_stgrab:
 ; rw_strun - the machine going again from here: no time owed for the disk's,
 ; and the next frame drawn whole
 rw_strun:
+    push cx
+    push dx
+    xor cx, cx                      ; a state's one operation over (SPEC.md
+    mov dx, cx                      ;   12.8.10): rw_stop begins it, and every
+    call OSAPI_FS_OP                ;   save and load ends here - an end we do
+    pop dx                          ;   not own is refused, so no flag
+    pop cx
     call rw_dmgfull
     call OSAPI_GET_TICKS
     mov [rw_last], ax
@@ -131,6 +138,25 @@ rw_strun:
     mov byte [rw_fsfrac], 0
     call rw_drawnow
     mov byte [rw_stq], 0
+    ret
+
+; rw_stop - AX = the RAM part's bytes: kept in [rw_stlen], and the state's
+; transfers begun as one operation (SPEC.md 12.8.10). A save writes, and a
+; load reads, the same 8000h + RAM + record (the load's size probe moves
+; nothing), so one total serves both. Refused, the I/O is as it was
+rw_stop:
+    mov [rw_stlen], ax
+    push ax
+    push cx
+    push dx
+    add ax, 8000h + ST_RECSZ        ; (at most 66KB: the carry is the high
+    sbb dx, dx                      ;   word)
+    neg dx
+    xchg cx, ax
+    call OSAPI_FS_OP
+    pop dx
+    pop cx
+    pop ax
     ret
 
 ; rw_stsave - F5, Save State > Save State: the slot's file written
@@ -152,8 +178,8 @@ rw_stwr:
     call rdg_stcompose
     call rdg_stram                   ; AX = the RAM part's bytes
     pop ds
-    mov [rw_stlen], ax
-    call rw_ssnm
+    call rw_stop                    ; [rw_stlen] = AX, and ONE bar for the
+    call rw_ssnm                    ;   three transfers that follow
     mov dx, [rw_romdir]             ; beside the game
     mov bl, [rw_romvol]
     call rw_fgo
@@ -219,7 +245,7 @@ rw_strd:
     mov ds, [cs:rdg_viewseg]
     call rdg_stram
     pop ds
-    mov [rw_stlen], ax
+    call rw_stop
     call rw_ssnm
     mov dx, [rw_romdir]
     mov bl, [rw_romvol]

@@ -25,7 +25,7 @@ at_cmd_newdoc:
     mov word [at_gs], 0             ; empty FIRST - the whole buffer is gap -
     mov ax, [at_dcap]               ; so the shrink below has no high run to
     mov [at_ge], ax                 ; carry down and cannot refuse
-    mov ax, AT_KB0                  ; ...and this is the moment to give the
+    mov ax, AT_KB0 * 64             ; ...and this is the moment to give the
     call at_dresize                 ; heap back whatever the old document
     mov ax, [at_dcap]               ; grew into (SPEC.md 46.9)
     mov [at_ge], ax
@@ -356,7 +356,7 @@ at_load_named:
     push si
     push di
     push es
-    mov ax, AT_MAXKB                ; open the claim to its ceiling for the
+    mov ax, AT_MAXKB * 64           ; open the claim to its ceiling for the
     call at_dresize                 ; read: nothing knows the file's size
                                     ; until the read reports it, and the fold
                                     ; below only ever SHRINKS what arrived, so

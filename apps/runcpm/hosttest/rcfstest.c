@@ -115,7 +115,7 @@ struct rc_zregs rc_z;
 static unsigned char zram[65536];
 #define NCLAIM 20
 static unsigned char *cl_mem[NCLAIM];    /* by index; seg = 0x1000 * (i + 1) */
-static unsigned cl_kb[NCLAIM];
+static unsigned cl_para[NCLAIM];         /* each claim's size, paragraphs */
 static int cl_live[NCLAIM];
 static int cl_mov[NCLAIM];               /* os88_mem_movable's last word on it
                                           * (SPEC.md 66.2): a claim is born 0 */
@@ -132,16 +132,19 @@ static int ci(unsigned seg)
     return i;
 }
 static int live_claims(void) { int i, n = 0; for (i = 0; i < NCLAIM; i++) n += cl_live[i]; return n; }
-unsigned os88_mem_claim(int kb)
+/* the paragraph door (SPEC.md 50.3.7), which the open-file table uses: the
+ * capacity is EXACTLY what was asked for, no granule over it */
+unsigned os88_mem_claim_p(unsigned para)
 {
     int i;
     if (cl_limit && live_claims() >= cl_limit) return 0;
     for (i = 0; i < NCLAIM; i++) if (!cl_live[i]) break;
     if (i == NCLAIM) return 0;
     cl_mem[i] = malloc(65536); memset(cl_mem[i], 0xA5, 65536);   /* garbage */
-    cl_kb[i] = kb; cl_live[i] = 1; cl_mov[i] = 0; n_claims_made++;
+    cl_para[i] = para; cl_live[i] = 1; cl_mov[i] = 0; n_claims_made++;
     return (unsigned)(0x1000 * (i + 1));
 }
+unsigned os88_mem_claim(int kb) { return os88_mem_claim_p((unsigned)kb * 64); }
 /* os88_mem_movable - the record says so, and nothing more: the harness never
  * compacts. What it checks is the DISCIPLINE (SPEC.md 66.5.7.1): a file call
  * may not be handed a movable claim, so the two seg stubs below refuse one */
@@ -155,26 +158,27 @@ static void not_movable(unsigned seg, const char *what)
 }
 int os88_mem_free(unsigned seg) { int i = ci(seg); free(cl_mem[i]); cl_mem[i] = 0; cl_live[i] = 0; n_frees++; return 0; }
 /* regrow ALWAYS MOVES here: a caller keeping the old segment reads garbage */
-unsigned os88_mem_regrow(unsigned seg, int kb)
+unsigned os88_mem_regrow_p(unsigned seg, unsigned para)
 {
     int i = ci(seg), j;
     for (j = 0; j < NCLAIM; j++) if (!cl_live[j]) break;
     if (j == NCLAIM) return 0;
     cl_mem[j] = malloc(65536); memset(cl_mem[j], 0xA5, 65536);
-    memcpy(cl_mem[j], cl_mem[i], cl_kb[i] << 10);
-    cl_kb[j] = kb; cl_live[j] = 1; cl_mov[j] = cl_mov[i];   /* MC_RLOC rides
+    memcpy(cl_mem[j], cl_mem[i], (size_t)cl_para[i] << 4);
+    cl_para[j] = para; cl_live[j] = 1; cl_mov[j] = cl_mov[i];   /* MC_RLOC rides
                                           * through a regrow (SPEC.md 66.7) */
     free(cl_mem[i]); cl_mem[i] = 0; cl_live[i] = 0;
     n_regrows++;
     return (unsigned)(0x1000 * (j + 1));
 }
+unsigned os88_mem_regrow(unsigned seg, int kb) { return os88_mem_regrow_p(seg, (unsigned)kb * 64); }
 unsigned os88_mem_largest_kb(void) { return 200; }
 int  os88_peek(unsigned seg, unsigned off) { return cl_mem[ci(seg)][off & 0xFFFF]; }
 void os88_poke(unsigned seg, unsigned off, int v) { cl_mem[ci(seg)][off & 0xFFFF] = (unsigned char)v; }
 static void claim_bounds(int i, unsigned off, unsigned n)
 {
-    if ((unsigned long)off + n > ((unsigned long)cl_kb[i] << 10) && cl_kb[i] < 64) {
-        printf("HARNESS: access %u+%u past a %uKB claim\n", off, n, cl_kb[i]); exit(1);
+    if ((unsigned long)off + n > ((unsigned long)cl_para[i] << 4) && cl_para[i] < 4096) {
+        printf("HARNESS: access %u+%u past a %u-paragraph claim\n", off, n, cl_para[i]); exit(1);
     }
 }
 int  rc_rd(unsigned a) { return zram[a & 0xFFFF]; }

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""timerrace - SPEC.md 13.9.2: ui_timer_pass asks AGAIN, under the gfx lock,
+"""timerrace - SPEC.md 13.9.2: ui_timer_pass (ui_task's .tp_* step since
+kernel size pass 16) asks AGAIN, under the gfx lock,
 whether the window it is about to call still exists.
 
     make && python3 tests/timerrace.py
@@ -15,12 +16,12 @@ The real interleaving needs a worker to win a lock at one instant, so this
 gate MAKES that instant instead of waiting for it, with two breakpoints:
   1. A Disk window's record is given a due timer (W_TIMER behind [ticks], a
      non-zero W_ONTIMER, [wm_tarm] set) and the guest is stopped at
-     `ui_timer_pass.locked` - the first instruction after gfx_lock
+     `ui_task.tp_locked` - the first instruction after gfx_lock
      returned, the record in SI asserted to be that window's.
   2. W_FLAGS bit 0 is cleared there: the window was destroyed while the pass
      waited, exactly as a worker's teardown leaves it. Then run with
      breakpoints on `ui_bill` (the handler called - the defect) and on
-     `ui_timer_pass.gone` (the dispatch skipped - the fix), and see which
+     `ui_task.tp_gone` (the dispatch skipped - the fix), and see which
      comes first.
 The record is put back before the guest goes on. Break on purpose - the
 `jz .gone` after the re-test taken out - and step 2 stops at ui_bill.
@@ -55,12 +56,12 @@ def main():
         struct.pack_into("<HH", raw, W_ONTIMER, 1, (ticks - 4) & 0xFFFF)
         m.write(rec + W_ONTIMER, bytes(raw[W_ONTIMER:W_TIMER + 2]))
         m.write(m.sym("wm_tarm"), b"\x01")
-        m.bp_exec("ui_timer_pass.locked")
+        m.bp_exec("ui_task.tp_locked")
         m.run()
         st = m.wait_stop(20)
         r = m.regs()
         si_lin = lin(r["ds"], r["si"])
-        print("   1. stopped at ui_timer_pass.locked: %s, SI the record's %s"
+        print("   1. stopped at ui_task.tp_locked: %s, SI the record's %s"
               % (st, si_lin == rec))
         if st is None or si_lin != rec:
             bad.append("the pass never dispatched this window's timer under "
@@ -69,16 +70,16 @@ def main():
         else:
             fl = m.read(rec, 1)[0]
             m.write(rec, bytes([fl & 0xFE]))         # destroyed meanwhile
-            m.bp_exec("ui_bill", "ui_timer_pass.gone")
+            m.bp_exec("ui_bill", "ui_task.tp_gone")
             m.run()
             st = m.wait_stop(20)
             r = m.regs()
             at = lin(r["cs"], r["ip"])
             where = "ui_bill" if at == m.sym("ui_bill") else \
-                "ui_timer_pass.gone" if at == m.sym("ui_timer_pass.gone") \
+                "ui_task.tp_gone" if at == m.sym("ui_task.tp_gone") \
                 else "%05X" % at
             print("   2. W_FLAGS cleared; the next stop: %s" % where)
-            if where != "ui_timer_pass.gone":
+            if where != "ui_task.tp_gone":
                 bad.append("a window destroyed while the pass waited for the "
                            "lock was still dispatched (stopped at %s)" % where)
             m.write(rec, bytes([fl]))                 # ...put back, unarmed

@@ -95,9 +95,14 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
 ; a DATA selector based there, to 64KB or the claim's end (OSAPI_SEG's
 ; SEG_SUB; DX + AX on every real-mode kernel). The same window asked again
 ; answers the same selector, so asking per OPEN costs one LDT entry and not
-; one a call. Refused (no LDT entry free): DX = 0, the null selector, so a
-; use is a #GP the kernel closes us for - never somebody else's memory.
-; Every other register kept (the flags are not)
+; one a call. Refused (no LDT entry free): DX KEPT, the claim we named -
+; NEVER the null selector, because a use of that is not a #GP: kern_mega's
+; mega_null0 completes it as segment 0, the interrupt vector table. Through
+; the claim itself a use lands at the wrong place IN IT, or past its limit,
+; which is a #GP of a live selector the kernel closes us for: our own data
+; damaged at worst, never somebody else's memory. Every other register kept
+; (the flags are not). Four bytes shorter than the 0 was at every site, so
+; no site's parity pad moves
 %macro PXSUB 0
     push ax
     push bx
@@ -105,9 +110,6 @@ MWT_NONE    equ 0xFFFF              ; (no selector and no heap segment)
     mov bl, SEG_SUB
     xor cx, cx
     call OSAPI_SEG
-    jnc %%ok
-    xor dx, dx
-%%ok:
     pop cx
     pop bx
     pop ax

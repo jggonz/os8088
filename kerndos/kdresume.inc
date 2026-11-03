@@ -59,32 +59,34 @@ kd_resume:
                                 ; no question (KERN-MEGA-MEMORY-PLAN D5)
 %endif
     test word [si+KDL_FLAGS], KDLF_HIBER
-    jz .no                      ; no image was written: 96.42's floppy arm,
-                                ; where the machine restarts and says so
+    jnz .hib                    ; no image was written: 96.42's floppy arm,
+.tno:                           ; where the machine restarts and says so -
+    jmp .no                     ; and the way out the jumps below take, .no
+.hib:                           ; being past a short jump's reach
     cmp word [si+KDL_WAKE + 2], 0
-    je .no                      ; ...and no wake address is the same answer
+    je .tno                     ; ...and no wake address is the same answer
                                 ; from the other side: a kernel too old to
                                 ; carry one (KDL_VER's whole job)
 %ifndef KD_MEGA
     call kdr_hma                ; 0. what the image does not carry (96.49.9)
-    jc .no
+    jc .tno
 %endif
 
     ; --- 1. the volume the image is on, and the image ------------------------
     mov al, [si+KDL_HBVOL]
     cmp al, DVOL_MAX
-    jae .no
+    jae .tno
     mov [kdr_vol], al
     mov dl, al
     call disk_mount_x
-    jc .no
+    jc .tno
     xor ax, ax                  ; the ROOT: hb_probe writes the pointer and
     call dsk_chdir_q_x          ; the image there (SPEC.md 87.1). THE QUIET
                                 ; ONE (96.47): this stands in a directory to
                                 ; READ one file out of it and never to list
                                 ; it, and the loud chdir rebuilds the global
                                 ; listing on the way
-    jc .no
+    jc .tno
     mov si, kdr_s_img
     ; **BY NAME OFF THE DIRECTORY, NEVER OUT OF THE GLOBAL LISTING**
     ; (SPEC.md 96.49.7). It was `dsk_find_name_x` then `dsk_get_dir_x`, which
@@ -97,7 +99,7 @@ kd_resume:
     ; directory and answers in registers, which is the same correction
     ; `hbm_findimg` took on the kernel's side of this file.
     call dskw_stat_x            ; BX = the first cluster - NOT the FAT
-    jc .no                      ; record's own 26 (SPEC.md 96.37.1 item 4) -
+    jc .tno                     ; record's own 26 (SPEC.md 96.37.1 item 4) -
     mov [kdr_clus], bx          ; and DX:CX = the size
     ; **AND ITS LENGTH, WHICH IS THE FILE'S AND NOT MEMORY'S.** The first
     ; version sized the walk from `[kd_top]` - DOS.O88's banked BDA figure -
@@ -126,7 +128,7 @@ kd_resume:
     shl dx, cl                  ; the high word's bits fold down beside them
     or ax, dx
     or ax, ax
-    jz .no
+    jz .tno
     mov [kdr_secs], ax
 
     ; --- 2. the transport, out of the table 96.46 carried --------------------
@@ -153,11 +155,14 @@ kd_resume:
     mov si, [kd_lbp]
     mov ax, [si+KDL_HDSPT]
     or ax, ax
-    jz .no                      ; a zero geometry is the mount failing later
+    jnz .spt                    ; a zero geometry is the mount failing later
+.tno2:
+    jmp .no                     ; (a second way out, for the jumps below)
+.spt:
     mov [kdr_spt], ax
     mov ax, [si+KDL_HDHDS]
     or ax, ax
-    jz .no
+    jz .tno2
     mov [kdr_heads], ax
 
     ; --- 3. the staging area, which is FREE now the program has gone --------
@@ -223,7 +228,7 @@ kd_resume:
                                 ; whole line, and so also before the walk
     mov es, [kdr_stage]
     call kd_extents             ; the chain, into HS_EXT
-    jc .no                      ; ...and a refusal HERE still only costs the
+    jc .tno2                    ; ...and a refusal HERE still only costs the
                                 ; long way home: `kd_leave` reboots, os8088's
                                 ; own `hb_probe` finds the pointer and the
                                 ; session comes back. What the line promises

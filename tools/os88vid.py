@@ -5243,10 +5243,12 @@ class HeadOptions:
 
 
 def first_shown(r):
-    """The first frame a play from the start SHOWS (98.2.9, 98.3.5): a
-    colour play starts from key 0, past any pre-roll, and a one-bit or
-    composite one from the stream's first record"""
-    return r.keys[0][0] if r.keys and r.pixfmt >= PF_VGA8 else 0
+    """The first frame a play from the start SHOWS (98.2.9, 98.3.5): key 0,
+    past any pre-roll, in EVERY format since 98.2.9.3 - a one-bit or
+    composite play took the stream's first record and showed the paint-in,
+    and so did this preview of it. Key 0 at frame 0 is frame 0 either way;
+    no keys at all, the first record"""
+    return r.keys[0][0] if r.keys else 0
 
 
 def key_at(r, f):

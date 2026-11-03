@@ -1284,7 +1284,7 @@ dd_spct:     dw DD_PCTPAC, DD_PCTGH, DD_PCTFRI, DD_PCTEYE, DD_PCTTUN
     DWORDV dd_pilw
     DWORDV dd_pilh
     DWORDV dd_bdseg                 ; the wall picture's claim
-    DWORDV dd_bdkb
+    DWORDV dd_bdpara
     DWORDV dd_clipy0                ; the board row dd_blit treats as its top
 
 ; --- the board -----------------------------------------------------------------

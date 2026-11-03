@@ -198,7 +198,7 @@ def setting(m, mo, kind, cfg, want_cfg=None):
         # the kernel's (an mx_tab owner of C0h and up, mega_ownerf)
         m.pause()
         try:
-            raw = m.read(m.sym("mx_tab"), eq["MX_NBLK"] * eq["MX_BLKSZ"])
+            raw = m.read(m.tail("mx_tab"), eq["MX_NBLK"] * eq["MX_BLKSZ"])
             at = m.lin(seg)
         finally:
             m.run()
@@ -210,7 +210,16 @@ def setting(m, mo, kind, cfg, want_cfg=None):
                                if raw[i + eq["MX_OWN"]] >= 0xC0
                                else raw[i + eq["MX_OWN"]])
     if seg:
-        paras = ((eq["MODK_SIZE"] + 1023) // 1024) * 64
+        # THE CLAIM IS THE FILE TO THE SECTOR, not to the KB: mod_need sizes
+        # it with mem_bytes_gp_x (SPEC.md 50.2.1 - a disk image's claim is
+        # what the read delivers, 512-aligned), and DOCK.DRV unpacks to
+        # exactly MODK_SIZE. aafe18bc moved the kernel and this line kept the
+        # KB. kern_mega's protected-mode pool still counts whole KB (mx_tab's
+        # MX_KB above), and the KB over the sector is the KB over the bytes
+        if getattr(m, "bochs", False):
+            paras = ((eq["MODK_SIZE"] + 1023) // 1024) * 64
+        else:
+            paras = ((eq["MODK_SIZE"] + 511) // 512) * 32
         check(claims.get(seg) == (paras, eq["MEM_K_MOD"]),
               "advanced Dock has exactly its rounded module claim")
     elif before_seg:

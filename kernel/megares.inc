@@ -36,7 +36,9 @@
 ; a refusal: the fresh session went at the drop. It is a sentence, a key and
 ; a restart, kern_big's stub's own answer.
 ; =============================================================================
-cpu 8086
+cpu 286                             ; (kern_mega's CPU floor: the stub runs on
+                                    ; no machine below a 286. The tail goes
+                                    ; back to `cpu 8086` before hiber.inc does)
 
 MR_C        equ 0x0460          ; dw conventional sectors to put back
 MR_XLO      equ 0x0462          ; dw this stage's first file sector (MR_C - 32)
@@ -116,8 +118,7 @@ mrs_stub:
     sub [MR_LEFT], cx
     call mr_sum                     ; CX sectors of the bounce
     mov ax, cx
-    mov cl, 9
-    shl ax, cl
+    shl ax, 9
     mov [MR_BYTES], ax
     mov di, [MR_SKIP]
     mov word [MR_SKIP], 0
@@ -178,13 +179,10 @@ mrs_stub:
     jbe .c2
     mov cx, 127
 .c2:
-    push cx
     mov bx, ax
-    mov cl, 5
-    shl bx, cl                      ; ES = k x 32: linear k x 512
+    shl bx, 5                       ; ES = k x 32: linear k x 512
     mov es, bx
     xor bx, bx
-    pop cx
     call mr_read
     add [MR_K], cx
     jmp short .cnv
@@ -210,8 +208,7 @@ mrs_stub:
     jmp short .cpy
 .xsave:
     sub ax, [MR_XLO]                ; the stage's own bytes: into the text
-    mov cl, 9                       ; page, which the tail copies home
-    shl ax, cl
+    shl ax, 9                       ; page, which the tail copies home
     mov di, ax
     mov es, [MR_FBSEG]
 .cpy:
@@ -262,9 +259,7 @@ mr_ldrun:
     mov si, [MR_RUN]
     cmp si, [MR_NRUN]
     jae .o
-    shl si, 1
-    shl si, 1
-    shl si, 1
+    shl si, 3
     add si, MR_RUNS
     mov di, MR_D
     push cs
@@ -293,8 +288,7 @@ mr_sum:
     mov ds, bx
     xor si, si
     mov bx, cx
-    mov cl, 8
-    shl bx, cl                      ; words
+    shl bx, 8                       ; words
 .l:
     add ax, [si]
     adc ax, 0
@@ -313,10 +307,7 @@ mr_sum:
 ; mr_move - CX bytes (even) from MR_BNC:DI to linear [MR_D], int 15h AH=87h.
 ; Every register kept but flags; a refusal is .fail's
 mr_move:
-    push ax
-    push cx
-    push si
-    push di
+    pusha
     push es
     push cs
     pop es
@@ -344,10 +335,7 @@ mr_move:
     mov ah, 0x87
     int 0x15
     pop es
-    pop di
-    pop si
-    pop cx
-    pop ax
+    popa
     jc .bad
     ret
 .bad:
@@ -359,12 +347,7 @@ mr_move:
 ; keeps the run inside one 64KB DMA page. Every register kept but flags; a
 ; disk that refuses three times, or a sector past the list, is .fail's
 mr_read:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    push di
+    pusha
     mov [MR_RK], ax
     mov [MR_RN], cx
 .more:
@@ -416,8 +399,7 @@ mr_read:
     div word [HS_HEADS]             ; AX = the cylinder, DX = the head
     mov ch, al
     mov cl, ah
-    ror cl, 1
-    ror cl, 1
+    ror cl, 2
     and cl, 0xC0
     or cl, [MR_SECT]
     mov dh, dl
@@ -444,17 +426,11 @@ mr_read:
     mov ax, [MR_CNT]
     add [MR_RK], ax
     sub [MR_RN], ax
-    mov cl, 9
-    shl ax, cl
+    shl ax, 9
     add bx, ax                      ; ...and on in the destination
     jmp .more
 .done:
-    pop di
-    pop si
-    pop dx
-    pop cx
-    pop bx
-    pop ax
+    popa
     ret
 
 ; mr_a20 - A20 OPEN and proved (kerndos/kdpark.inc's sequence): the tail's

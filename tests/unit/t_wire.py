@@ -76,7 +76,7 @@ S_FILEMAX = 64512
 S_SCMAX = 32                            # sidecars a record (8 before v1.0.20261002.1)
 S_DESCN, S_DESCW = 5, 28
 S_WF_DISK, S_WF_PIC, S_WF_NEW, S_WF_FLOPPY, S_WF_ARC = 1, 2, 4, 8, 16
-S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 6   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
+S_PKGFMT_OFF, S_NEEDW_OFF, S_LEVEL = 252, 253, 7   # WC_PKGFMT, WC_NEEDW, WIRE_LEVEL
 S_PKGFMT = 10                           # SPEC.md 20.2's format byte
 S_ARCMAX = 0x100000                 # WIRE_ARCMAX, the archive's own ceiling
 
@@ -1688,16 +1688,18 @@ def archive_refusals(tmp, mod):
 def fence(tmp, mod):
     """A package calling a cell an older kernel lacks needs a level-3 Wire.
 
-    build/notepad.o88 far-calls OSAPI_WM_ONWHEEL (0x0499) and build/hello.o88
-    calls nothing past 0x046D, so they are the two sides of the line.
+    build/wirechat.o88 far-calls OSAPI_WM_ONWHEEL (0x0499) and nothing newer,
+    and build/hello.o88 calls nothing past 0x046D, so they are the two sides of
+    the line. (It was Note Pad until Note Pad's document moved onto
+    OSAPI_MEM_P, 0x04E9, which made it a level-7 package - SPEC.md 50.3.7.)
     """
-    note = os.path.join(BUILD, "notepad.o88")
+    note = os.path.join(BUILD, "wirechat.o88")
     if not os.path.exists(note):
-        check(False, "no build/notepad.o88", "the fence needs a package that "
+        check(False, "no build/wirechat.o88", "the fence needs a package that "
               "calls a cell past 0x046D; run `make`")
         return
     lvl, top = mod.cell_level([open(note, "rb").read()])
-    eq(lvl, 3, "Notepad's wheel call needs a level-3 Wire",
+    eq(lvl, 3, "WireChat's wheel call needs a level-3 Wire",
        "it far-calls 0x0499, which v1.0.20261014's kernel does not have")
     lvl, _ = mod.cell_level([open(os.path.join(BUILD, "hello.o88"), "rb").read()])
     eq(lvl, 0, "Hello calls nothing past 0x046D")
@@ -1730,12 +1732,22 @@ def fence(tmp, mod):
     if os.path.exists(pix):
         lvl, top = mod.cell_level([open(pix, "rb").read()])
         if top is not None and top >= 0x04E3:
-            eq(lvl, 6, "PiXEL's OSAPI_SEG (0x04E3) needs a level-6 Wire",
-               "WIRE_CELL_LEVELS has no row for v1.0.20261026's table end")
+            check(lvl is not None and lvl >= 6,
+                  "PiXEL's OSAPI_SEG (0x04E3) needs at least a level-6 Wire",
+                  "WIRE_CELL_LEVELS has no row for v1.0.20261026's table end",
+                  got=lvl, want=">= 6")
+    # LEVEL 7: OSAPI_MEM_P (0x04E9, SPEC.md 50.3.7) is past the level-6
+    # Wire's table, and the parts library claims through it (SPEC.md
+    # 20.12.14) - so a parted package is level 7, and PiXEL is one
+    if os.path.exists(pix):
+        lvl, top = mod.cell_level([open(pix, "rb").read()])
+        if top is not None and top >= 0x04E9:
+            eq(lvl, 7, "PiXEL's OSAPI_MEM_P (0x04E9) needs a level-7 Wire",
+               "WIRE_CELL_LEVELS has no row for the level-6 Wire's table end")
 
     pub = os.path.join(tmp, "fpkg")
     os.makedirs(pub, exist_ok=True)
-    for stem, src in (("NOTE", "notepad.o88"), ("HELLO", "hello.o88")):
+    for stem, src in (("NOTE", "wirechat.o88"), ("HELLO", "hello.o88")):
         open(os.path.join(pub, stem + ".O88"), "wb").write(
             open(os.path.join(BUILD, src), "rb").read())
 

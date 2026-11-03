@@ -201,7 +201,7 @@ def main():
             st = clip(v88, 175, 2)
             (ulen, plen), = st["blocks"]
             # the claim is the block plus a READ GRANULE either side
-            # (vp_bkkb): C:'s 2 KB clusters made that 2 * 2048 until
+            # (vp_bkpara): C:'s 2 KB clusters made that 2 * 2048 until
             # SPEC.md 98.1.7.6 had kern_big read in SECTORS on any volume
             # whose cluster is over 1 KB - so 2 * 512 now, and the old
             # figure asked for 3 KB the player no longer claims

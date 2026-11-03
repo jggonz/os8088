@@ -2101,6 +2101,28 @@ tree the row passes on, not the one it was first read off:
   the row that says so.
 - The boot blob's classic ending: one dialect instead of two, ~22 bytes of
   blob, `KZ_MARGIN` gone.
+- An OPTIMAL LZ4 parse on the host - **TAKEN** (SPEC.md 20.13). The lazy
+  parse's docstring said an exact one "costs far more than the fraction of a
+  percent it buys"; docs/reports/DOS-PACKED-COST-2026-11-01.md measured that
+  fraction at 0.3-0.4% on DOS.O88 and it is the one size lever with no cost on
+  the machine. `os88lz.lz4_compress` is now a backward shortest path over
+  sequence starts - exact for every literal-run length through a sliding
+  minimum, lengths 4..32 exact and the extension-tier ends past that - with
+  the format, MFLIMIT, LASTLITS and the raw tail untouched. Over the 220
+  distinct streams of a clean `make`: 1,945,452 -> 1,935,658 bytes (-9,794,
+  never larger on any stream), 2.9 s -> 13.9 s of encoder CPU; a clean
+  `make -j4` on a 4-core box took 61 s lazy and 62 and 85 s optimal, the
+  spread being the box rather than the ~3 s a core the parse adds. Depth 512 would
+  take another 935 bytes for another 8.5 s of CPU and was not taken.
+- **The near-call filter — TAKEN, as SPEC.md 20.13.9**, after
+  `docs/reports/DOS-PACKED-COST-2026-11-01.md` found 74% of a code stream's
+  LZ4 bytes to be literals and a `call rel16` to be the commonest reason.
+  It is a property of the STREAM (a leading `0xFFFF` escape that an older
+  kernel refuses as an over-long tail), so no container, format byte or
+  directory hint moved; `E8` alone, for `repne scasb`; +44 resident bytes on
+  every kernel; 225 clusters over the seventeen shipped images. KERNEL.SYS
+  stays plain (20.13.9.3) - 1,401 bytes against ~355 ms of boot and a full
+  blob.
 
 ## 14. Decisions still open before wave 1
 

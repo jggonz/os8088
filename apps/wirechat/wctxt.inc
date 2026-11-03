@@ -186,6 +186,8 @@ wc_ab2:         db 'Chat rooms on the wire', 0
 wc_ab3:         db 0
 wc_ab4:         db 'Server: os8088.com/chat', 0
 wc_ab5:         db 'Two flags remove a message', 0
+wc_ab6:         db 'Contributed by', 0
+wc_ab7:         db 'Jorge Gonzalez', 0
 
 ; --- F1's card: the keys (SPEC.md 113.6.3) -----------------------------------
 wc_h1:          db 'WireChat keys', 0

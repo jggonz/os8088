@@ -207,4 +207,5 @@ something.
 - On a machine without the desktop layer (the small 128KB system), Desk
   Calendar opens as an ordinary window with a title bar, and it does not come
   back by itself at the next start.
-- **Desk Calendar > About Desk Calendar** shows its name on the menu bar.
+- **Desk Calendar > About Desk Calendar** shows its name and who made it on the
+  menu bar.

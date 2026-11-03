@@ -71,12 +71,14 @@ xs_claim1 equ $                     ; (tests/excitebike_video.py --smallclaim re
     ; the tail goes back to the heap now - before the CGA's 48 KB dictionary claim, which
     ; is the peak.  A shrink is always in place (the base, and so [xs_cfar], stays put).
     ; [xb_sprkb] keeps saying which BUDGET was taken: it is what decided the compile.
-    mov ax, [xb_sprused]
-    add ax, 1023
-    mov cl, 10
+    mov ax, [xb_sprused]            ; ...in PARAGRAPHS (SPEC.md 50.3.7):
+    add ax, 15                      ; the DMA door's claim is conventional on
+    rcr ax, 1                       ; every kernel, so MEMP_REGROW reaches it
+    mov cl, 3
     shr ax, cl
     mov dx, [xb_sprseg]
-    call OSAPI_MEM_REGROW
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P
     RESTORE
     clc
     ret

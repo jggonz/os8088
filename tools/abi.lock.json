@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "3c6f392370f38193a2ea6b5f08e47eebf7e851382427e9f368c4daa643210a83",
-  "version": 11
+  "fingerprint": "0f17acae1ca4de60fdd48e140f548898441e90799fc732ee896f5b3d6e2a6428",
+  "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "5cca6914516318e7e7c6852771672de8eabf29c87141074c3953fe187cf24841",
+  "fingerprint": "cd1bc0d0b8699cc39ae0a3de4a6b6f2287138bdb77884c35ee158afff2fb53e0",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1312,6 +1312,265 @@
    "to": 11
   },
   {
+   "fingerprint": "d2af41bcf7c469dda9ff98524beaaa98fe6210fa0fc07304e2b757879ca7f8d8",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "DRV_VER 11 -> 12: the heap's granule is 512 bytes (SPEC.md 50.2.1), so a driver's claim is its file rounded to 512 and os88drv.py's strip rung moved from the KB to the granule; a driver stripped to a KB rung can be refused .nofit by the new kernel",
+   "to": 12
+  },
+  {
+   "fingerprint": "16a8f939e12d80c10c28eb1e2a8d63ac99bf6ea297f39b469686e50de7197a8f",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_P appended at 0x04E9 (SPEC.md 50.3.7): the claim heap in paragraphs. An append: every package built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "f9e0348a06fb379d3f9e5ed3cec4f89fd5e7f5ea11811762f24bd638f79edf82",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_P appended at 0x04E9 (SPEC.md 50.3.7): the claim heap in paragraphs. An append: every package built before still runs",
+   "to": 12
+  },
+  {
+   "fingerprint": "2c5fbae2b82a8b736dbbeaa0c5ff9a575215addee9e9bc0f422aeedea3a1d9ed",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_P's verbs renumbered before release: MEMP_CPU (bit 1 of a claim, SPEC.md 50.2.1.1) moved REGROW to 4 and AVAIL to 5; the cell is new on this branch and nothing outside it was built against the old numbers",
+   "to": 10
+  },
+  {
+   "fingerprint": "de0a39799866e38ec7bb48bdace847cc264bb1bed93fb4db8a3a13676d1dba57",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_P's verbs renumbered before release: MEMP_CPU (bit 1 of a claim, SPEC.md 50.2.1.1) moved REGROW to 4 and AVAIL to 5; the cell is new on this branch and nothing outside it was built against the old numbers",
+   "to": 12
+  },
+  {
+   "fingerprint": "289dfcefbd092b5345e13f94c6ed5716447770d156a3d360800a8cef111247d9",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_P's contract comment: on kern_mega it offers the pool first, as the KB doors do (SPEC.md 50.3.7); nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "aa2a9ba164eb0151402dfffb9e0bd22c1a91b605ebd785d21609a9b4549d3f2f",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_P's contract comment: on kern_mega it offers the pool first, as the KB doors do (SPEC.md 50.3.7); nothing built before changes",
+   "to": 12
+  },
+  {
+   "fingerprint": "319afd98b6651e2dbd50488abca951e4249404729ecccbd19dd1cc8f2ec552c5",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "MEMP_CONV (CX bit 15) added to OSAPI_MEM_P's claim verbs: stay conventional on kern_mega. A new value in a free bit; nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "871c0e5f66c40f6120e3a0215585a4e3899a121e4c94627cd0f3d2ca2b8bec1e",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "MEMP_CONV (CX bit 15) added to OSAPI_MEM_P's claim verbs: stay conventional on kern_mega. A new value in a free bit; nothing built before changes",
+   "to": 12
+  },
+  {
+   "fingerprint": "10a838bdc12d31771a7cda9536b781acd4df08ea095fe77d49b26544bacd298f",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "MEMP_KPARTS (OSAPI_MEM_P verb 6) appended: the kernel's resident FAT window and its two stack terms in bytes (SPEC.md 50.3.7, 28.4.7); nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "5223b416e13f5840512f1ebcdd49c61d2f7c480c016980b308b03fa4f9d6e72d",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "MEMP_KPARTS (OSAPI_MEM_P verb 6) appended: the kernel's resident FAT window and its two stack terms in bytes (SPEC.md 50.3.7, 28.4.7); nothing built before changes",
+   "to": 12
+  },
+  {
+   "fingerprint": "5c94f8709a6113277a3ab8ecbae3a50eac760ac62ecdbd3795a51add7b9e0ed3",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_FS_OP moved to 0x04EF at the toast-n-progress -> elendilon merge: elendilon had appended OSAPI_MEM_P at 0x04E9 first. Both are appends to a table no release has shipped; every package built before still runs",
+   "to": 10
+  },
+  {
+   "fingerprint": "c99d40ca2f5f1300b2248b6e017e273104027131becbb9725e8f33cfa52a000a",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_FS_OP moved to 0x04EF at the toast-n-progress -> elendilon merge: elendilon had appended OSAPI_MEM_P at 0x04E9 first. Both are appends to a table no release has shipped; every package built before still runs",
+   "to": 12
+  },
+  {
+   "fingerprint": "2f4376cd8be289c1eeae2bb85f6f464f9c1b2f067e85cd3d4c56461755494bc7",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_P contract clarified at the code-review merge: CX is kept (the kernel no longer masks MEMP_CONV in place) and a refused claim/regrow returns AX = the request rounded to the granule. Every package built before still runs; no bump.",
+   "to": 10
+  },
+  {
+   "fingerprint": "0748b366414ba23dbd8ddf8ad78e06df4aaecfa57e2985f45402721d4b2db9f2",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_P contract clarified at the code-review merge: CX is kept (the kernel no longer masks MEMP_CONV in place) and a refused claim/regrow returns AX = the request rounded to the granule. Every package built before still runs; no bump.",
+   "to": 12
+  },
+  {
+   "fingerprint": "e99924eff56554ad5f91607134365e92b8562f5cd257e1b010e7f5caf7bbaf59",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge elendilon into dos-windowed: OSAPI_PKG_START's posted form (SPEC.md 21.5.4) beside elendilon's own SDK changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "1aafaaaae7f263d601e655097de0099de7fe11c9245799673e3a0952feea5152",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge elendilon into dos-windowed: OSAPI_PKG_START's posted form (SPEC.md 21.5.4) beside elendilon's own SDK changes",
+   "to": 12
+  },
+  {
+   "fingerprint": "8f5f61082310f57fedd43574826a6c8224b92cb50f008fac696e2e40942b1565",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "KDH record KDH1 to KDH2, KDH_POFF and KDH_COFF in PARAGRAPHS (SPEC.md 20.12.2.1, 96.40.1): the DOS to HIBER.DRV hand-off record's unit moved with the part layout. No PKG_FMT bump: the loader runs every old package unchanged (flags bit 2 and the link word keep their meaning), an old O88PARTS package carries its own 512 reader, and a DOS.O88 and HIBER.DRV from different trees refuse the hand-off at the magic rather than misread it",
+   "to": 10
+  },
+  {
+   "fingerprint": "fd810f5016e92ba83cd2bc0f366b0f66bbe785a19ed50051699ab00468fa6ee8",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "KDH record KDH1 to KDH2, KDH_POFF and KDH_COFF in PARAGRAPHS (SPEC.md 20.12.2.1, 96.40.1): the DOS to HIBER.DRV hand-off record's unit moved with the part layout. No PKG_FMT bump: the loader runs every old package unchanged (flags bit 2 and the link word keep their meaning), an old O88PARTS package carries its own 512 reader, and a DOS.O88 and HIBER.DRV from different trees refuse the hand-off at the magic rather than misread it",
+   "to": 12
+  },
+  {
+   "fingerprint": "4d2e0218eebaefd14e7ae6d5f347a1dddf8916ab304f2c2d6c746bb4b203af0e",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "KDH_PAD (byte 5 of the DOS handoff record, always 0) becomes KDH_FMT, the parts' format; 0 = LZ4 is what every earlier poster wrote, so nothing built before stops running (SPEC.md 96.44.18)",
+   "to": 10
+  },
+  {
+   "fingerprint": "5bdccbdf468b427fc98fd02c2dbc52504cab5184825cdcd63ea80eadc96b476b",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "KDH_PAD (byte 5 of the DOS handoff record, always 0) becomes KDH_FMT, the parts' format; 0 = LZ4 is what every earlier poster wrote, so nothing built before stops running (SPEC.md 96.44.18)",
+   "to": 12
+  },
+  {
+   "fingerprint": "b250fcbc4502c9c74e5a6ef7d7b80e945b0622ccb6fef0b849d281cd51f454ab",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_VOL_CHECK appended at 0x04F5 (SPEC.md 118.14): a cell added at the end, nothing built before moves",
+   "to": 10
+  },
+  {
+   "fingerprint": "2f2273b03c9a10b581e9eb19e97829a91e76def2516b8585263a03dfba956506",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_VOL_CHECK appended at 0x04F5 (SPEC.md 118.14): a cell added at the end, nothing built before moves",
+   "to": 12
+  },
+  {
+   "fingerprint": "44a0766621438dfa0b5db5f74a7f1d813143f1af07a7610bad0a9200bfde86a4",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_VOL_CHECK's note: kern_mega runs it (SEG_SUBC pair); a comment, nothing moves",
+   "to": 10
+  },
+  {
+   "fingerprint": "d3652eeaed49bb595793c626e35da04e215e3c86fadd7121b4d19e1671bcc5a8",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_VOL_CHECK's note: kern_mega runs it (SEG_SUBC pair); a comment, nothing moves",
+   "to": 12
+  },
+  {
+   "fingerprint": "4a0665629401226cb08aff8c05291f2d72b31179550bd22f52e2c6c991c909c9",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_VOL_CHECK's record: FSW_MOVEDF, FSW_OTHERS (folders, SPEC.md 118.14.5) - appended fields",
+   "to": 10
+  },
+  {
+   "fingerprint": "1216911f5ae86d74a64f36449694ac7a0c25c7eeb2caa2785a3fabcbbf89f87e",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_VOL_CHECK's record: FSW_MOVEDF, FSW_OTHERS (folders, SPEC.md 118.14.5) - appended fields",
+   "to": 12
+  },
+  {
+   "fingerprint": "a083253391b36c1a4c553594f2de94687e3163dbb269698f82295fe5867006fb",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge elendilon (System Check / FSCHECK.DRV, SPEC.md 118.14) into dos-windowed beside its DOS SDK changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "46c78c2bdc7b6426445728405fe5ee148904e6de7486a0aa5225505756acaee7",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge elendilon (System Check / FSCHECK.DRV, SPEC.md 118.14) into dos-windowed beside its DOS SDK changes",
+   "to": 12
+  },
+  {
+   "fingerprint": "66106ace3758cdb35747765fbe3eef9eadf5b7ebfa0e1ff26de57c3c066a5f89",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_VOL_CHECK gains FSK_DELSYS (4) and FSKE_NOENT (9): a verb added, nothing built before changes meaning (SPEC.md 118.8.1)",
+   "to": 10
+  },
+  {
+   "fingerprint": "75ba34e0b52cbbed4490c684919366ae504bf3e09dbb124673f98fae427d4c54",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_VOL_CHECK gains FSK_DELSYS (4) and FSKE_NOENT (9): a verb added, nothing built before changes meaning (SPEC.md 118.8.1)",
+   "to": 12
+  },
+  {
+   "fingerprint": "54c7de6d3b267988c676271e9c0e6119124bf9adf6250b6dcb0fb6cff351c6b1",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "FSK_DELSYS gains its second form, FSKD_REFUSED, and FSKD_RETIRED names the first: a verb's argument added, nothing built before changes meaning (SPEC.md 118.8.2)",
+   "to": 10
+  },
+  {
+   "fingerprint": "a2dcb930673ad25612facb7b78d963746339f122e89c3460b461bd3712ec82b7",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "FSK_DELSYS gains its second form, FSKD_REFUSED, and FSKD_RETIRED names the first: a verb's argument added, nothing built before changes meaning (SPEC.md 118.8.2)",
+   "to": 12
+  },
+  {
+   "fingerprint": "7975321a2775ff8bcb8fc20d99837f9f38cc55270eee83b44f9fd3c8d51658db",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_MEM_COMPACT gains MEMC_WHATIF_P (AH=2): the what-if in paragraphs. AH=1 is still the post; nothing built before sends AH=2, so no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "cd219a97c9dfeb30311cf91d864e3f5949dce50805bcdc76cf5772f47ad05d26",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_MEM_COMPACT gains MEMC_WHATIF_P (AH=2): the what-if in paragraphs. AH=1 is still the post; nothing built before sends AH=2, so no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "a6d586d0eb0696dc8fa259267e07770ed49c7d55efc5eb7aacd2041c51d0616e",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 10
+  },
+  {
+   "fingerprint": "dd65d06f134f6c98e5d9f63ab55715739302ae94bfca91bf54d65a74c6d9b6c8",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 12
+  },
+  {
    "fingerprint": "a0397190f55d645219e231a7744875ba7ac369d25fc066c0ce33b0745bf17474",
    "from": 10,
    "guard": "PKG_FMT",
@@ -1394,6 +1653,20 @@
    "guard": "DRV_VER",
    "reason": "SEG_LEND (11): the lent stack's DX is a claim's real paragraph, converted to its selector by the kernel - no identity grid",
    "to": 11
+  },
+  {
+   "fingerprint": "cd1bc0d0b8699cc39ae0a3de4a6b6f2287138bdb77884c35ee158afff2fb53e0",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of main (#328) into Phase B/C (#327): main's three cells and DRV_VER 12 beside the branch's SEG_TILE, SEG_WINL and SEG_LEND, each an added OSAPI_SEG verb; nothing built before is affected",
+   "to": 10
+  },
+  {
+   "fingerprint": "0f17acae1ca4de60fdd48e140f548898441e90799fc732ee896f5b3d6e2a6428",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of main (#328) into Phase B/C (#327): main's three cells and DRV_VER 12 beside the branch's SEG_TILE, SEG_WINL and SEG_LEND, each an added OSAPI_SEG verb; nothing built before is affected",
+   "to": 12
   }
  ]
 }

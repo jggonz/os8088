@@ -358,8 +358,8 @@ while one records.
 ## The RealDMG menu
 
 The menu beside the System menu has **About RealDMG**, which names the
-program and reminds you where the keys are, and **Close**, which closes the
-window.
+program and who made it and reminds you where the keys are, and **Close**,
+which closes the window.
 
 ## Files
 

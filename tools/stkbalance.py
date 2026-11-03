@@ -322,13 +322,20 @@ class Unit(object):
 # and on kern_mega the same word, converted), and `CSDO insn` is `insn` with
 # DS swapped around it and put back - so it moves SP as `insn` does
 SEGPUSH = re.compile(r"^(?:PUSH_CSDATA|PUSH_KCODE)\s*$", re.I)
-CSDO = re.compile(r"^CSDO\s+", re.I)
+CSDO = re.compile(r"^CSDOF?\s+", re.I)
+# ...and CSDO_ON / CSDO_OFF, CSDO for a run: kern_mega's `push ds` and `pop ds`
+# (nothing on any other build), counted as kern_mega's - a jump out of a run
+# is the defect, and only that build's depth sees it
+CSDOON = re.compile(r"^CSDO_ON\s*$", re.I)
+CSDOOFF = re.compile(r"^CSDO_OFF\s*$", re.I)
 
 
 def delta(text):
     """How this instruction moves SP, in words. None = not a stack move."""
-    if SEGPUSH.match(text):
+    if SEGPUSH.match(text) or CSDOON.match(text):
         return 1
+    if CSDOOFF.match(text):
+        return -1
     if CSDO.match(text):
         return delta(CSDO.sub("", text))
     if PUSH.match(text):

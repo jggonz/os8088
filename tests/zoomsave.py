@@ -12,7 +12,7 @@ covered window across a maximize.
 
   BANK      zoom a window over the Task Manager, and wm_su_take fires for the
             TASK MANAGER - not just for the window doing the zooming.
-  RESTORE   un-zoom, and wm_su_occl fires for it: the cache was still there
+  RESTORE   un-zoom, and wm_su_try.occl fires for it: the cache was still there
             and the reveal was answered from it. That call sits in wm_su_try
             past every refusal in wm_su_ck, so reaching it IS the restore.
   SAME      ...and the glass equals a forced full repaint, which is what stops
@@ -24,8 +24,8 @@ covered window across a maximize.
             hook.
 
 BOTH RETRY THE GESTURE, up to three times, and that is not slack: the
-breakpoint pump loses hits. Measured directly - wm_su_occl reported without
-wm_su_try, and wm_su_occl is reachable through no other path - so a run can
+breakpoint pump loses hits. Measured directly - wm_su_try.occl reported without
+wm_su_try, and wm_su_try.occl is reachable through no other path - so a run can
 observe nothing where the kernel did everything right. Repeating the same
 gesture is a fair way to ask again, and the leg still fails if the event
 never happens at all. The pump is what wants fixing; until it is, this is
@@ -169,7 +169,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         return b[0] | (b[1] << 8)
 
     # --- BANK --------------------------------------------------------------
-    b = dispcells.Bp(m, mo, {"wm_su_take": "di", "wm_su_occl": "di",
+    b = dispcells.Bp(m, mo, {"wm_su_take": "di", "wm_su_try.occl": "di",
                              "wm_su_precover": "di"}, ours)
     b.dblclick(d.x + 60, d.y + 9)               # zoom it over everything
     b.pump(900, 4)
@@ -196,7 +196,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
 
     # --- RESTORE -----------------------------------------------------------
     was = held(slot)                            # ...and what it is holding as
-    b = dispcells.Bp(m, mo, {"wm_su_take": "di", "wm_su_occl": "di",
+    b = dispcells.Bp(m, mo, {"wm_su_take": "di", "wm_su_try.occl": "di",
                              "wm_su_try": "di", "wm_su_ck": "di"}, ours)
     n = {}
     # TWO WAYS THIS LEG USED TO LOSE THE ANSWER, and neither was the kernel:
@@ -204,7 +204,7 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     #
     # A DOUBLE-CLICK CAN MISS with breakpoints armed - the pump services
     # between the four edges and the two presses can fall outside the window,
-    # so nothing un-zooms, nothing is revealed, and wm_su_occl cannot fire
+    # so nothing un-zooms, nothing is revealed, and wm_su_try.occl cannot fire
     # whatever the cache did. Hence the retry on the RECT.
     #
     # And THE REVEAL CAN LAND AFTER A FIXED PUMP. Un-zooming repaints most of
@@ -216,10 +216,10 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
         b.dblclick(big.x + 60, big.y + 9)       # ...down
         for _ in range(8):
             b.pump(600, 4)
-            if b.n.get("wm_su_occl/us"):
+            if b.n.get("wm_su_try.occl/us"):
                 break
         n = b.take()
-        if n.get("wm_su_occl/us"):
+        if n.get("wm_su_try.occl/us"):
             break
         cur = [x for x in os88geom.windows(m) if x.i == disk][0]
         if (cur.x, cur.y, cur.w, cur.h) != (big.x, big.y, big.w, big.h):
@@ -239,8 +239,8 @@ with os88marty.launch("build/os8088-360.img", apps="build/apps360.img",
     if (fin.x, fin.y, fin.w, fin.h) == (big.x, big.y, big.w, big.h):
         fails.append("RESTORE: the window never un-zoomed, so nothing was "
                      "revealed - the double-click did not land")
-    if not n.get("wm_su_occl/us"):
-        fails.append("RESTORE: wm_su_occl never fired for the Task Manager - "
+    if not n.get("wm_su_try.occl/us"):
+        fails.append("RESTORE: wm_su_try.occl never fired for the Task Manager - "
                      "the cache the zoom took did not survive to answer the "
                      "reveal, so nothing was saved by taking it")
 

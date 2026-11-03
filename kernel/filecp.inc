@@ -303,11 +303,15 @@ FCPBODY fcp_arm
 .keepl:
 %endif
 
+%ifdef FCP_MOD
     push ax
     push bx
     push cx
     push si
     push di
+%else
+    FCPX kentc_di               ; kern_big: the ladder is the frame - DX is
+%endif                          ; banked too and kept (kernel size pass 17)
     mov [fcp_cbop], al
     mov di, [fm_vp]
     mov ax, bx                  ; the INDEX is an argument: Cut and Copy pass
@@ -331,12 +335,16 @@ FCPBODY fcp_arm
     mov byte [fcp_cbop], FCP_NONE
     stc
 .out:
+%ifdef FCP_MOD
     pop di
     pop si
     pop cx
     pop bx
     pop ax
     ret
+%else
+    FCPXJ kretc_di              ; ...and CF, the answer, survives its pops
+%endif
 
 ; fcp_ncopy - CX bytes from DS:SI to DS:DI. disk.inc's dsk_ncopy is this
 ; body to the instruction, and both are `.cold` = COLD_SEG.
@@ -1006,9 +1014,7 @@ fcp_step:
     mov al, FCPS_ASK            ; the buffer and the frames stay claimed:
     ret                         ; this is a pause, not an end
 .fail:
-    mov [fcp_err], al
-    mov al, FCPS_ERR
-    jmp fcp_stop                ; ...and the same here
+    jmp fcp_run2.seterr         ; fcp_run2's own three-instruction exit (pass 16)
 
 ; -----------------------------------------------------------------------------
 ; fcp_relink - move an entry inside ONE volume by moving its directory entry
@@ -1387,9 +1393,7 @@ fcp_mksub:
     mov al, [fcp_ddrv]
     mov bx, FF(FCP_FDST)        ; (BX is the output: the frame is not needed
     FCPX dsk_goto               ; again until fcp_step asks for it)
-    jnc .go
-    ret
-.go:
+    jc fcp_mkroot.out           ; ...its CF = 1 is the answer (pass 16)
     mov si, fcp_cname
 
 ; -----------------------------------------------------------------------------
@@ -1444,12 +1448,13 @@ fcp_file1:
     mov FCV(fcp_ovwsz+2), ax    ; otherwise (SPEC.md 22.5.2)
     call fcp_fnames             ; publish this file's source and destination
     call fcp_gofd               ; does the destination already hold it?
-    jc .err
+    jc fcp_ensure.fail          ; (the two exits are fcp_ensure's, just above:
+                                ; kernel size pass 17)
     mov si, fcp_fname
     FCPX dskw_stat_x
     jc .free                    ; FERR_NOENT is the ordinary case
     test al, DSKW_DIR
-    jnz .clash                  ; a FOLDER of that name: not a replaceable
+    jnz fcp_ensure.clash        ; a FOLDER of that name: not a replaceable
     mov FCV(fcp_ovwsz), cx      ; a FILE of that name: its clusters come back
     mov FCV(fcp_ovwsz+2), dx    ; when dskw_write replaces it, so fcp_room may
                                 ; count them as room. Banked HERE because this
@@ -1465,14 +1470,9 @@ fcp_file1:
                                 ; borrows
 .free:
     cmp ax, FERR_NOENT
-    jne .err
+    jne fcp_ensure.fail
 .go:
     jmp fcp_xfer                ; ...whose CF and AX are this routine's
-.clash:
-    mov ax, FERR_EXIST
-.err:
-    stc
-    ret
 
 ; -----------------------------------------------------------------------------
 ; fcp_fnames - publish the pending file's source and destination
@@ -1830,6 +1830,15 @@ fcp_xfer:
     jc .err
     cmp byte [fcp_made], 0
     jne .more
+%ifdef FPG_OPS
+    mov cx, [fcp_rcur+RSQ_SIZE] ; the copy is ONE operation to the user: its
+    mov dx, [fcp_rcur+RSQ_SIZE+2]   ; read and its write, every chunk of
+    shl cx, 1                   ; both, on one bar (SPEC.md 12.8.8) - armed
+    rcl dx, 1                   ; HERE, off the size READ_SEQ's first call
+    sub cx, FCV(fcp_flen)       ; statted, and less that first chunk, whose
+    sbb dx, 0                   ; read nothing counted. fcp_room clobbers DX
+    call KERNEL_SEG:fpg_opbegin ; and fcp_wprep reloads CX
+%endif
     call fcp_room               ; ...but ASK FIRST (SPEC.md 22.5.2). Here and
     mov ax, FERR_FULL           ; not earlier, because this is the first moment
     jc .err                     ; the destination volume is current - so the
@@ -1884,6 +1893,13 @@ fcp_xfer:
     call fcp_undo               ; ...and a partial destination goes with it
     stc                         ; (SPEC.md 22.5.2). It preserves AX and the
 .out:                           ; flags, the FERR_* being on its way out
+%ifdef FPG_OPS
+fcp_opend:                      ; (a label for tests/fpgop.py's trace)
+    ; STKBALANCE-OK: a label inside fcp_xfer, never called - reached by falling from .out, so its pop es / ret are fcp_xfer's own push es and return
+    pushf                       ; flags kept: CF is the answer
+    and byte [fpg_on], ~FPG_OP & 0FFh ; ...and the operation's scale ends
+    popf                        ; (fpg_opend was this, far: size pass 16)
+%endif
     pop es
     ret
 
@@ -2092,8 +2108,8 @@ fcp_made:   resb 1              ; 1 = fcp_xfer has CREATED the destination, so
 ; whole life is inside one copy operation, fcp_fin drops the image at the end
 ; of every one, and a suspended paste still holds the image while the user
 ; reads the overwrite question - so there is no moment when any of it is
-; wanted and FILECP.DRV is out. mod_need zeroes the claim's tail, so it starts
-; zeroed exactly as `.bss` did. The descent stack went first; the scalars
+; wanted and FILECP.DRV is out. It is zeros at the end of the FILE (kernel.asm's
+; MODB_TAIL), so every load reads it in zeroed, exactly as `.bss` started. The descent stack went first; the scalars
 ; below followed in kernel size pass 13, through FCV(), once 6.4.1's failure
 ; had a cause: the four fcp_go* doors were RESIDENT and read fcp_dcwd,
 ; fcp_fsclus and fcp_fdclus through DS, and fm_paste_res reads [fcp_err]

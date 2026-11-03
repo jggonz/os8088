@@ -636,7 +636,7 @@ WM_THEME    equ 4
 
 ; --- the About card's lines (SPEC.md 12.2, 20.5.1) ----------------------------
 wc_ablines:
-    dw wc_ab1, wc_ab2, wc_ab3, wc_ab4, wc_ab5, 0
+    dw wc_ab1, wc_ab2, wc_ab3, wc_ab4, wc_ab5, wc_ab3, wc_ab6, wc_ab7, 0
 wc_hlplines:                            ; F1's card: the keys (SPEC.md 113.6.3)
     dw wc_h1, wc_h2, wc_h3, wc_h4, wc_h5, wc_h6, wc_h7, 0
 

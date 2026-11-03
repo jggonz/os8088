@@ -195,7 +195,7 @@ rp_rdisp:   dw PKG_DISP, 0      ; ...and a far pointer to its dispatcher, whose
 ; drv_bss to zero at load (SPEC.md 51.1.2) - which this image never reaches:
 ; RAMDISK.DRV reads it with OSAPI_FILE_READ (rd_page_need), the claim is not
 ; cleared, and the stripped tail would arrive holding whatever the heap held.
-; The claim still COVERS it - RAMPAGE_KB is cut from rampage.bin, zeros and
+; The claim still COVERS it - RAMPAGE_PARA is cut from rampage.bin, zeros and
 ; all - so what the strip saves is floppy, and what this saves is the hazard.
 rp_bss:
 rp_px:      dw 0                ; the pane's origin, banked per paint or click

@@ -1648,6 +1648,15 @@ w16t_exec:
     xor al, 1                       ; (kept as its XOR with SW_SHOWNORMAL)
     mov [w16_show], al
     ICALL w16_ldin                  ; CF=1 refused: what it took, given back
+    pushf                           ; its one operation over (w16l_opbegin):
+    push cx                         ;   an end this task does not own is
+    push dx                         ;   refused, so a load refused before
+    xor cx, cx                      ;   its begin needs no flag
+    mov dx, cx
+    call OSAPI_FS_OP
+    pop dx
+    pop cx
+    popf
     jc .refused
     push ds                         ; the command tail into its PSP
     W16SEG es, [w16_psp]

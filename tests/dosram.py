@@ -176,7 +176,7 @@ def main():
         def arena():
             raw = m.read(pb() + dm["dos_marn"], 8).split(b"\0")[0]
             try:
-                return int(raw.decode("latin-1").rstrip("KB").strip())
+                return int(raw.decode("latin-1").strip().rstrip("+KB"))
             except ValueError:
                 fail("the arena row reads %r and should be digits and a KB - "
                      "the page has never been painted (SPEC.md 96.36.3)" % raw)

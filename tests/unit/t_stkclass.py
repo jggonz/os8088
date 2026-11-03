@@ -290,11 +290,22 @@ def main():
                 else ex.submit(depth, t[1], t[2]) for t in todo]
         walked = [f.result() for f in futs]
     assembled = [t[0] for t in todo if not t[4]]
+    misses = []
     for (app, asm, root, cls, _), (got, why) in zip(todo, walked):
         if got is None:
-            unfound.append("%s (%s): %s" % (app, root, why))
+            misses.append((app, root, why))
             continue
         rows.append((app, root, cls, got, cls / float(got + FLOOR)))
+    # **A PARTS PACKAGE ASSEMBLES ONE SOURCE INTO SEVERAL IMAGES** (SPEC.md
+    # 96.44): apps/dos/doscore.asm %includes dos.asm whole with the host half
+    # left out, so it READS the worker's spawn (dosw.inc) and does not
+    # ASSEMBLE the worker. A root missing from one image is measured when a
+    # sibling image of the same package assembles it; a root no image of the
+    # package assembles is still a failure.
+    sized = set((r[0], r[1]) for r in rows)
+    for app, root, why in misses:
+        if (app, root) not in sized:
+            unfound.append("%s (%s): %s" % (app, root, why))
 
     h.check(not unfound,
             "every worker root resolves to a chain",

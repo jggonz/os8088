@@ -638,8 +638,9 @@ pe_tailof:
 ; =============================================================================
 
 ; pe_layout - for verb CL: the destination's size into [px_edw] [px_edh],
-; the work claim's regions into the part's own words, and AX = its KB (0 =
-; none). CF = 1 the regions do not fit one segment. Preserves all but AX
+; the work claim's regions into the part's own words, and AX = its
+; PARAGRAPHS (0 = none; OSAPI_MEM_P's, SPEC.md 50.3.7). CF = 1 the regions do
+; not fit one segment. Preserves all but AX
 pe_layout:
     push bx
     push cx
@@ -826,15 +827,10 @@ pe_layout:
     cmp word [px_edh], PX_DIMMAX
     ja .big0
     pop ax
-    add ax, 1023
-    jc .big1
-.kb:
-    mov cl, 10
+    add ax, 15                      ; PARAGRAPHS, the carry back in as bit
+    rcr ax, 1                       ; 15: a run up to 65,535 bytes is 4,096
+    mov cl, 3
     shr ax, cl
-    clc
-    jmp short .out
-.big1:
-    mov ax, 64                      ; (a run up to 65,535 bytes: 64 KB)
     clc
     jmp short .out
 .big0:
@@ -848,6 +844,10 @@ pe_layout:
     pop cx
     pop bx
     ret
+    nop                             ; PARITY PAD, never executed: what
+                                    ; follows keeps its measured even shift
+                                    ; (the paragraph tail above is 6 bytes
+                                    ; shorter and its jumps 3)
 
 ; pe_x3 - AX = 3 AX (CF on overflow). Preserves all else
 pe_x3:
@@ -3506,12 +3506,12 @@ pf_start:
 pf_go:                              ; flip's only once it is sure to run
                                     ; (review-w7 F11: a refused one kept it)
     mov cl, [px_eop]
-    call pe_layout                  ; AX = the work's KB, the destination's
-    jnc .w                          ; size in [px_edw] [px_edh]
+    call pe_layout                  ; AX = the work's paragraphs, the
+    jnc .w                          ; destination's size in [px_edw] [px_edh]
     mov si, pf_s_wide
     jmp .say
 .w:
-    mov [px_ewkb], ax
+    mov [px_ewpara], ax
     xor ax, ax
     mov [px_edseg], ax
     mov [px_ewseg], ax
@@ -3545,10 +3545,12 @@ pf_go:                              ; flip's only once it is sure to run
     clc
     ret
 .work:
-    mov ax, [px_ewkb]
-    or ax, ax
-    jz .start
-    call OSAPI_MEM_CLAIM
+    mov ax, [px_ewpara]             ; the work claim, in PARAGRAPHS (SPEC.md
+    or ax, ax                       ; 50.3.7): a byte count, so it pays the
+    jz .start                       ; heap's granule and not a whole KB
+    xor cx, cx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
     jc .nowork
     mov [px_ewseg], dx
 .start:

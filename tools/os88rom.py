@@ -34,6 +34,7 @@ Usage:
 """
 
 import argparse
+import bisect
 import os
 import re
 import shutil
@@ -620,7 +621,16 @@ def kernel_tables(build, variant):
     addrs = [v for v, _ in tsyms]
     for k, (v, name) in enumerate(tsyms):
         if name.split(".")[0] in data and "." not in name:
-            end = addrs[k + 1] if k + 1 < len(addrs) else ten - tst
+            # ...to the next label at a HIGHER address. A marker label that
+            # emits nothing shares its address with the data after it and can
+            # sort after it by name - viddet.inc's `vid_tab_end` beside
+            # `vid_seg` - and taking ITS address as the end gave vid_seg an
+            # EMPTY span: the word the boot writes (the adapter's segment) was
+            # hashed, and the ROM refused the kernel whenever vid_seg sat at
+            # an even address (kernel size pass 16; it had sat at an odd one,
+            # where the round-up to whole words covered it by luck)
+            j = bisect.bisect_right(addrs, v)
+            end = addrs[j] if j < len(addrs) else ten - tst
             for w in range(v // 2, (end + 1) // 2):
                 skip.add(w)
     nwords = (ten - tst) // 2

@@ -42,7 +42,7 @@ from os88geom import VID_VESA                               # noqa: E402
 from pxsyms import pkg_syms, instance, u16                  # noqa: E402
 
 # apps/os88ui.inc's drop-down record (OS88UI_DR_*)
-DR_RECT, DR_N, DR_OPEN, DR_SEG, DR_KB, DR_TOP = 0, 10, 16, 18, 20, 22
+DR_RECT, DR_N, DR_OPEN, DR_SEG, DR_PARA, DR_TOP = 0, 10, 16, 18, 20, 22
 DRIH = 12                           # OS88UI_DRIH: an item's pitch in rows
 
 
@@ -105,29 +105,30 @@ def main():
             fails.append("the drop-down did not open on the click at the centre "
                          "of %r" % (rect,))
             raise SystemExit(0)
-        dseg, kb, n = W("px_fdrop", DR_SEG), W("px_fdrop", DR_KB), W("px_fdrop", DR_N)
+        # DR_PARA: the claim's paragraphs as granted (SPEC.md 50.3.7)
+        dseg, para, n = W("px_fdrop", DR_SEG), W("px_fdrop", DR_PARA), W("px_fdrop", DR_N)
         cols = (rect[2] >> 3) - (rect[0] >> 3) + 1
         rows = n * DRIH                      # a floor: the list is the items
         need = depth * rows * cols           # ...and a 16bpp save is 16 bytes
         print("vesasu: the list is %d items over %d byte columns; the claim is "
-              "%dKB at %04X, a %dbpp save of it at least %d bytes"
-              % (n, cols, kb, dseg, depth, need))
+              "%d paragraphs at %04X, a %dbpp save of it at least %d bytes"
+              % (n, cols, para, dseg, depth, need))
         if not dseg:
             fails.append("the open list has no save-under claim (the claim was "
                          "refused, or never asked for)")
-        elif kb * 1024 < need:
-            fails.append("the save-under claim is %dKB and the %dbpp save of a "
+        elif para * 16 < need:
+            fails.append("the save-under claim is %d paragraphs and the %dbpp save of a "
                          "%d-row, %d-column list is at least %d bytes: the sizer "
                          "folded DH to one plane and OSAPI_GFX_SAVE wrote the rest "
-                         "past the claim" % (kb, depth, rows, cols, need))
+                         "past the claim" % (para, depth, rows, cols, need))
         # ...and the kernel's own table agrees with the record
         m = heapmap.Map(q, heapmap.symbols())
         mine = [c for c in m.claims if c.seg == dseg]
         if dseg and not mine:
             fails.append("no claim in mem_tab starts at %04X, the record's segment" % dseg)
-        elif mine and mine[0].para != kb * 64:
+        elif mine and mine[0].para != para:
             fails.append("mem_tab's claim at %04X is %d paragraphs, the record says "
-                         "%dKB" % (dseg, mine[0].para, kb))
+                         "%d" % (dseg, mine[0].para, para))
         last = None
         for c in m.claims:
             if last is not None and c.seg < last.end:

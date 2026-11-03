@@ -212,12 +212,12 @@ FIXTURE = {
         # THE ARCHIVE (SPEC.md 92.13). Tier 0 so the 8088/8086 filter keeps
         # it: assertion 4 counts what that filter shows, and a tier-3 archive
         # would leave the two assertions reading each other's fixture.
-        # needs_wire 6: the tree carries build/mseg.o88, whose parts library
-        # calls OSAPI_SEG (0x04E3) - the cell fence (SPEC.md 92.2), declared
-        # as the site's own entries declare it, and what this tree's Wire
-        # (WIRE_LEVEL 6) installs
+        # needs_wire 7: the tree carries build/mseg.o88, whose parts library
+        # calls OSAPI_MEM_P (0x04E9) and OSAPI_FS_OP (0x04EF, SPEC.md 12.8.10)
+        # - the cell fence (SPEC.md 92.2), declared as the site's own entries
+        # declare it, and what this tree's Wire (WIRE_LEVEL 7) installs
         {"stem": "TREEONE", "title": "A whole tree", "kind": 0, "tier": 0,
-         "needs_wire": 6,
+         "needs_wire": 7,
          "archive": {"file": "TREEONE.WPK"},
          "description": "Folders, in one stream."},
         # A VERSION 2 ARCHIVE (SPEC.md 92.13.1): one file past the claim, so
@@ -446,7 +446,7 @@ def bss_offsets():
     for want in ("wr_n", "wr_state", "wr_nodrv", "wr_filter", "wr_sel",
                  "wr_grey", "wr_ox", "wr_oy", "wr_sb", "wr_catseg",
                  "wr_adone", "wr_an", "wr_aph", "wr_ramjob", "wr_msg",
-                 "wr_fseg", "wr_rlen", "wr_catkb"):
+                 "wr_fseg", "wr_rlen", "wr_catpara"):
         if want not in out:
             sys.exit("thewire: %s is not in apps/thewire/thewire.asm's bss "
                      "block - the block moved and every offset this file "
@@ -1130,17 +1130,18 @@ def main():
 
         # --- 3b: the catalog claim is the catalog's size, and Refresh -------
         # SPEC.md 92.2: the claim is made at WIRE_CATMAX before the length is
-        # known and shrunk to the catalog's own KB once it is accepted, so a
-        # Refresh has to GROW it back before the next fetch - a REGROW that
-        # may move it. The fixture catalog is a few KB, so [wr_catkb] must
-        # read under 16 now, and a Refresh through the real File menu must
-        # ask the host again and land the same four records.
-        kb0 = b("wr_catkb")[0]
-        say("catalog claim: %d KB (the ceiling is %d)"
-            % (kb0, os88wire.WIRE_CATMAX // 1024))
-        if not 0 < kb0 < os88wire.WIRE_CATMAX // 1024:
-            no("[wr_catkb] is %d: the accepted catalog's claim was not shrunk "
-               "to the catalog" % kb0)
+        # known and shrunk to the catalog's own paragraphs once it is accepted
+        # (SPEC.md 50.3.7), so a Refresh has to GROW it back before the next
+        # fetch - a REGROW that may move it. The fixture catalog is a few KB,
+        # so [wr_catpara] must read under 1024 now, and a Refresh through the
+        # real File menu must ask the host again and land the same four
+        # records.
+        kb0 = w("wr_catpara")
+        say("catalog claim: %d paragraphs (the ceiling is %d)"
+            % (kb0, os88wire.WIRE_CATMAX // 16))
+        if not 0 < kb0 < os88wire.WIRE_CATMAX // 16:
+            no("[wr_catpara] is %d: the accepted catalog's claim was not "
+               "shrunk to the catalog" % kb0)
         def refresh():
             """File > Refresh through the real menu; the Wire must be in front.
             Answers the menu cell's x and how many requests the host had."""
@@ -1166,15 +1167,15 @@ def main():
             return fx, nasked
 
         fx, nasked = refresh()
-        kb1 = b("wr_catkb")[0]
-        say("after Refresh: asked %d -> %d, wr_n = %d, claim %d KB"
+        kb1 = w("wr_catpara")
+        say("after Refresh: asked %d -> %d, wr_n = %d, claim %d paragraphs"
             % (nasked, len(srv.asked), w("wr_n"), kb1))
         if len(srv.asked) <= nasked:
             no("File > Refresh asked the host for nothing (menu cell x %d)"
                % fx)
         elif w("wr_n") != NREC or kb1 != kb0:
             no("Refresh did not land the same catalog in the same-size claim "
-               "(wr_n %d, %d KB against %d)" % (w("wr_n"), kb1, kb0))
+               "(wr_n %d, %d paragraphs against %d)" % (w("wr_n"), kb1, kb0))
 
         ox, oy = w("wr_ox"), w("wr_oy")
         say("content origin (%d, %d)" % (ox, oy))
@@ -1586,8 +1587,8 @@ def main():
         c0 = w("wr_catseg")
         held = claims(m)
         rloc = held.get(c0, (0, 0))[1]
-        kb2 = b("wr_catkb")[0]
-        cbytes = m.read(c0 * 16, kb2 * 1024)
+        kb2 = w("wr_catpara")
+        cbytes = m.read(c0 * 16, kb2 * 16)
         post(m, ww)
         os88qemu.poke(m.hmp, S("cp_dirty"), b"\x01")  # repaint it all, so the
         os88qemu.pace(m, 1.5)          # list is counted again out of the claim
@@ -1604,7 +1605,7 @@ def main():
             no("the catalog did not move, so assertion 17 proved nothing - "
                "the heap map follows")
             heapmap(m)
-        elif m.read(c1 * 16, kb2 * 1024) != cbytes:
+        elif m.read(c1 * 16, kb2 * 16) != cbytes:
             no("the catalog's bytes changed in the move")
         os88qemu.acted(m, lambda: shown() == NREC, secs=3,
                        what="the list after the move", poll=0.1)

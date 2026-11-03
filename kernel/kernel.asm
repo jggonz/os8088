@@ -415,9 +415,9 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %endmacro
 %macro KPARA 0
 %ifdef KERN_MEGA
-    call KERNEL_SEG:mega_s2segf
-%endif
-%endmacro
+    call COLD_SEG:mega_s2segc   ; (kern_mega: the far body)
+%endif                          ; (kern_mega size pass 2; a `.cold` site
+%endmacro                       ; writes `push cs / call mega_s2segc` itself)
 
 ; DSKW_LD sreg, mem - a file door's segment word ([dskw_seg], [dskw_wseg])
 ; into a segment register: the selector itself on the selector arm, and on
@@ -492,13 +492,108 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %endif
 %endmacro
 %macro CSDO 1+
+ %ifdef CSDO_OPEN
+  %error "CSDO inside CSDO_ON: DS is the image's already - drop the CSDO"
+ %endif
  %ifdef KERN_MEGA
-    push ds
-    call KERNEL_SEG:mega_dsimg  ; DS = the image's data segment (mega.inc)
+    CSDO_ENTER                  ; DS = the image's data segment (mega.inc)
     %1
     pop ds
  %else
     %1
+ %endif
+%endmacro
+; CSDOF insn - CSDO with the far call INLINE, never the image's door: for a
+; site on a per-byte or per-position path, where the door's near call and
+; return would be a cycle cost (kern_mega size pass 2)
+%macro CSDOF 1+
+ %ifdef CSDO_OPEN
+  %error "CSDOF inside CSDO_ON: DS is the image's already - drop the CSDOF"
+ %endif
+ %ifdef KERN_MEGA
+    push ds
+    call KERNEL_SEG:mega_dsimg
+    %1
+    pop ds
+ %else
+    %1
+ %endif
+%endmacro
+; CSDO_ON ... CSDO_OFF - CSDO for a RUN of instructions: DS = the image ONCE
+; for all of them, and the caller's DS back at the end - one `push ds`, one
+; mega_dsimg and one `pop ds` where a CSDO a line spends them per line, seven
+; bytes and a far call each (kern_mega size pass 2). Nothing at all on every
+; other build, where `[CSEG x]` is `[cs:x]` and needs no DS. Between the two,
+; on kern_mega, DS is the IMAGE: so the run is entered only at its CSDO_ON
+; and left only at its CSDO_OFF (a loop inside it is fine; no call, return,
+; int, string instruction or unbalanced push/pop) and every memory operand
+; must name its segment - [CSEG x], [cs:x], [es:x], [ss:x] or a BP base -
+; which tests/unit/t_cswrite.py checks, because a plain `[x]` in the run
+; assembles cleanly on every build and is wrong only on kern_mega. FLAGS are
+; kept across both ends, CSDO's promise; SP is one word lower inside, so a
+; `mov [CSEG x], sp` in a run is CSDO_SP's trap (below). Not nestable
+%macro CSDO_ON 0
+ %ifdef CSDO_OPEN
+  %error "CSDO_ON inside CSDO_ON"
+ %endif
+ %define CSDO_OPEN
+ %ifdef KERN_MEGA
+    CSDO_ENTER
+ %endif
+%endmacro
+%macro CSDO_OFF 0
+ %ifndef CSDO_OPEN
+  %error "CSDO_OFF with no CSDO_ON"
+ %endif
+ %undef CSDO_OPEN
+ %ifdef KERN_MEGA
+    pop ds
+ %endif
+%endmacro
+; CSDO_ENTER - `push ds` and DS = the calling image's data segment
+; (mega_dsimg): the head of CSDO and CSDO_ON on kern_mega. In CTRL.DRV
+; (`.modc`, and `.modu`, which follows it in the one CS) it is `call
+; csd_modc`, THREE bytes against six: a SWAP door (CSDO_SDOOR, 22 bytes, in
+; the settings core so that either load has it) pushes DS UNDER its own
+; return, so the `pop ds` after the instruction finds it, then sets DS through
+; mega_dsimg, which reads the CS off the door's far call - the image's own -
+; exactly as off a site's. Everywhere else it is `push ds / call
+; KERNEL_SEG:mega_dsimg`, as before. Every register and FLAGS kept; the door
+; is two bytes deeper on the stack than the inline form.
+; WHY ONLY CTRL.DRV (kern_mega size pass 2, measured): CTRL.DRV is the one
+; image shipped UNPACKED (the settings core is a partial read). Every other
+; module is a packed file, where the six bytes the far call spends are the
+; SAME six at every site and cost the packer next to nothing, while a near
+; call's displacement differs at every site and does not pack at all - doors
+; took DISKOPS.DRV's image 11,323 -> 11,074 and its FILE 9,575 -> 9,771,
+; STIKMENU.DRV's 15,308 -> 15,103 and 4,255 -> 4,377. Runs (CSDO_ON) shrink
+; both, so they are the lever there
+%macro CSDO_ENTER 0
+ %ifidni __?SECT?__, [section .modc]
+    call csd_modc
+ %elifidni __?SECT?__, [section .modu]
+    call csd_modc               ; (.modu follows .modc in CTRL.DRV's one CS,
+                                ; and the door is in the SETTINGS CORE, which
+                                ; is loaded on either load - SPEC.md 2.8.7)
+ %else
+    push ds
+    call KERNEL_SEG:mega_dsimg
+ %endif
+%endmacro
+%macro CSDO_SDOOR 1
+ %ifdef KERN_MEGA
+%1:                             ; SS:SP -> the site's return
+    push ds
+    push bp
+    mov bp, sp                  ; [bp+2] = DS, [bp+4] = the return...
+    push ax
+    mov ax, [bp+4]
+    xchg ax, [bp+2]
+    mov [bp+4], ax              ; ...swapped: the return, then DS under it
+    pop ax                      ; (mov and xchg write no flag)
+    pop bp
+    call KERNEL_SEG:mega_dsimg
+    ret
  %endif
 %endmacro
 ; CSDO_SP var - bank SP in the image's variable VAR: `CSDO mov [CSEG var], sp`
@@ -507,12 +602,14 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 ; `ret`s into the call that was made after the bank, which on a join's refusal
 ; looped toasting for ever (KERN-MEGA-PLAN 14.84). Flags kept, CSDO's promise.
 %macro CSDO_SP 1
-    CSDO mov [CSEG %1], sp      ; kern_mega: SP - 2, CSDO's push under it...
+    CSDO_ON
+    mov [CSEG %1], sp           ; kern_mega: SP - 2, CSDO_ON's push under it...
  %ifdef KERN_MEGA
     pushf
-    CSDO add word [CSEG %1], 2  ; ...so the frame is two above
+    add word [CSEG %1], 2       ; ...so the frame is two above
     popf
  %endif
+    CSDO_OFF
 %endmacro
 ; KDATAR_M reg - KDATAR_C's twin for an on-demand MODULE (.mod*): the kernel's
 ; DATA segment, KERNEL_SEG in real mode and the data alias once mega_enter has
@@ -590,6 +687,23 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
 %%back:
  cpu 8086
 %endmacro
+; MEGA_PCALLC off, seg - MEGA_PCALL for a `.cold` site, whose CSELTOP is the
+; near mem_cselc (memory.inc) rather than twenty-five bytes inline (kern_mega
+; size pass 2). The same frame and the same registers reach the callee
+%macro MEGA_PCALLC 2
+ %ifnidni __?SECT?__, [section .cold]
+  %error "MEGA_PCALLC outside .cold"
+ %endif
+ cpu 286
+    push cs
+    push word %%back
+    push word %2
+    call mem_cselc
+    push word %1
+    retf
+%%back:
+ cpu 8086
+%endmacro
 ; MEGA_ICWB field - the body of a five-byte INLINE cell that installs a
 ; handler: `mov [byte cs:bx+field], ax`, BX = the window, AX = the proc. The
 ; same shape as MEGA_ICW one step along: kern_mega jumps to a stub that does
@@ -640,6 +754,17 @@ PKG_DISP     equ 12             ; the dispatcher's fixed offset INSIDE the
  %ifndef NOVIDEXT
   %define VID_EXT 1
  %endif
+%endif
+
+; OS88_FSCK - the disk checker and defragmenter's kernel half (SPEC.md
+; 118.14): OSAPI_VOL_CHECK's stub, the per-volume write generation
+; [dsk_wgen] that disk_write_x bumps, and FSCHECK.DRV's image, which the
+; PACKAGE loads (it is no mod_tab row). Every kern_big build carries the image
+; so the module map is the same shape on kern_big, kern_emu and kern_mega.
+; kern_mega runs it through the claim's CODE selector (fsck.inc's stub).
+%ifdef KERN_BIG                 ; kern_big, kern_emu and kern_mega
+ %define OS88_FSCKIMG 1         ; the image...
+ %define OS88_FSCK 1            ; ...and the cell, its stub and [dsk_wgen]
 %endif
 
 ; BANDCOMP - the 1bpp band composer (SPEC.md 5.9), and since SPEC.md 5.9.6 it
@@ -1061,6 +1186,29 @@ DRV_HMA_SEG equ 0xF000
   %ifndef MSELOFF
     %define FM_MSEL 1
   %endif
+%endif
+
+; TOAST_Q and FPG_OPS are kern_big's, for the same file-order reason (loader,
+; filecp and fprog all test them). TOAST_Q: a toast from a different raiser
+; QUEUES behind the one up (SPEC.md 59) instead of replacing it. FPG_OPS: an
+; OPERATION scale for the file-progress widget, so a copy is one bar and not
+; one per chunk (SPEC.md 12.8). kern_small has neither: it is the machine with
+; the fewest raisers and the smallest files, and both arms assemble it
+; byte for byte as before (docs/reports/TOAST-QUEUE-OP-PROGRESS-COST-2026-10-31.md)
+%ifdef KERN_BIG
+  %define TOAST_Q 1
+  %define FPG_OPS 1
+  %define FPG_PARK 1             ; ...and a PACKAGE'S operation, which
+%endif                            ; outlives a lock hold (OSAPI_FS_OP). Take
+                                  ; this line out for the unparked variant
+; FPG_ARMED - "is the widget ARMED?", ZF = 0 yes. A parked widget (FPG_PARK)
+; keeps its FPG_SHOWN and FPG_OP bits with bit 0 clear, so the test is the
+; bit; without parking every set bit implies bit 0, and the byte compare is
+; what has always been assembled
+%ifdef FPG_PARK
+  %define FPG_ARMED test byte [fpg_on], 1
+%else
+  %define FPG_ARMED cmp byte [fpg_on], 0
 %endif
 
 ; KBD_I15 - SPEC.md 9.7.2: the scancode from the AT BIOS's own int 15h AH=4Fh
@@ -1928,52 +2076,48 @@ section .modu    follows=.modc vfollows=.modc align=1 valign=1
                                 ; `.modu` (tools/os88ovlchk.py), because on a
                                 ; core-only load it is not there
 %ifdef OS88_DRIVERS
-section .modcb   nobits vfollows=.modu ; CTRL.DRV's own scratch: the SYSTEM.CFG
-                                ; writer's file buffer (driver.inc, CFG_DATA
-                                ; cpc). NOT zeroed - MOD_BSS stays kern_small's
-                                ; FCP_MOD alone - because its one user fills it
-                                ; before it reads it (kernel size pass 8)
+section .modcb   nobits vstart=MODC_IMG ; CTRL.DRV's own scratch: the
+                                ; SYSTEM.CFG writer's file buffer (driver.inc,
+                                ; CFG_DATA cpc), at the image's end and NOT
+                                ; vfollows: the image ENDS in zeros of this
+                                ; section's length (MODB_TAIL, far below), so
+                                ; its end is past them (MODULE-SELFCONTAIN-PLAN
+                                ; 3.5)
 %endif
 section .modf    start=MODF_START vstart=0
 section .modl    start=MODL_START vstart=0
 %ifdef KERN_BIG
 section .modh    start=MODH_START vstart=0
-section .modhb   nobits vfollows=.modh ; HIBER.DRV's own scratch: the DOS
+section .modhb   nobits vstart=MODH_IMG ; HIBER.DRV's own scratch: the DOS
                                 ; handoff's record copy and the pointer file's
-                                ; buffer (hiber.inc). NOT zeroed, `.modcb`'s
-                                ; terms: every cell is written before it is read
+                                ; buffer (hiber.inc)
 %endif
 %ifdef FCP_MOD
-  %define MOD_BSS 1             ; ...and THIS is what mod_need's zeroing hangs
-                                ; off: a build with no module bss has nothing
-                                ; to zero and must not carry the code. FDLG.DRV
-                                ; declares the second (`.moddb`, kernel size
-                                ; pass 13) and FDLG_MOD is kern_small's exactly
-                                ; as FCP_MOD is, so one condition covers both;
-                                ; widen it if a module ever declares one alone.
-%ifndef FDLG_MOD
- %error "MOD_BSS hangs off FCP_MOD and FDLG.DRV's .moddb needs it: they are one build's"
-%endif
 section .modp    start=MODP_START vstart=0
-; ...AND ITS OWN BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.1). A module runs
-; from a heap claim and mod_need sizes that claim in whole KB
-; (mem_bytes_kb_x), so every image already owns memory past its own end for
-; exactly as long as it is loaded - and a module's scratch can live THERE
-; instead of in the kernel's `.bss`, where it is resident whether the feature
-; has ever been opened or not.
+; ...AND ITS OWN BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.1, 3.5). A
+; module's scratch lives in the module's own heap claim rather than in the
+; kernel's `.bss`, where it would be resident whether the feature has ever
+; been opened or not - and what puts it in the claim is the FILE: each image
+; ENDS in zeros exactly as long as its bss (MODB_TAIL, below the module
+; sizes), so the directory size is image + bss, mod_need claims that to the
+; granule like any other file, and the read itself delivers the zeros on
+; every load. The kernel carries no bss figure, no zeroing and no rounding
+; argument; the module packs ('CZ', SPEC.md 20.13.5) to a handful of bytes
+; for them.
 ;
-; `nobits`, so not one byte of it reaches the floppy; `vfollows`, so its
-; labels are offsets from the same claim base the image's are and `[cs:x]`
-; reaches them. What may live here is SCRATCH and not PENDING state
+; `nobits` with `vstart=` the image's own length, so its labels are the
+; offsets of THOSE zeros - the same claim base the image's are, reached by
+; `[cs:x]`. Not `vfollows`, which would start it after the zeros instead.
+; What may live here is SCRATCH and not PENDING state
 ; (MODULE-SELFCONTAIN-PLAN 3.4): anything that has to outlive mod_drop - the
 ; clipboard's own selection - stays in the kernel.
-section .modpb   nobits vfollows=.modp
+section .modpb   nobits vstart=MODP_IMG
 %endif
 %ifdef FDLG_MOD
 section .modd    start=MODD_START vstart=0
-section .moddb   nobits vfollows=.modd ; FDLG.DRV's own scratch: one dialog's
-                                ; state (fdlg.inc), zeroed by mod_need with the
-                                ; rest of the claim's tail (kernel size pass 13)
+section .moddb   nobits vstart=MODD_IMG ; FDLG.DRV's own scratch: one dialog's
+                                ; state (fdlg.inc), zeros in the file
+                                ; (kernel size pass 13)
 %endif
 %ifdef DOCK_OPT
 section .modk    start=MODK_START vstart=0
@@ -1982,14 +2126,16 @@ section .modk    start=MODK_START vstart=0
 section .modx    start=MODX_START vstart=0
 section .modw    start=MODW_START vstart=0
 section .modj    start=MODJ_START vstart=0  ; DESK.DRV (SPEC.md 11.103.10)
-section .modwb   nobits vfollows=.modw ; WIN95.DRV's own scratch: one title
-                                ; bar's band and caption, the sticky menu's
-                                ; last pointer (winmod.inc). NOT zeroed,
-                                ; `.modcb`'s terms: every cell is written
-                                ; before it is read (kernel size pass 12)
+section .modwb   nobits vstart=MODW_IMG ; WIN95.DRV's own scratch: one
+                                ; title bar's band and caption, the sticky
+                                ; menu's last pointer (winmod.inc, kernel size
+                                ; pass 12)
 section .modn    start=MODN_START vstart=0  ; STIKMENU.DRV (SPEC.md 110.12)
 %endif
 section .mods    start=MODSER_START vstart=0 ; SERIAL.DRV (SPEC.md 115)
+%ifdef OS88_FSCKIMG
+section .modfs   start=MODFS_START vstart=0 ; FSCHECK.DRV (SPEC.md 118.14)
+%endif
 section .modmap  start=MODMAP_START vstart=0
 section .text
 
@@ -2365,6 +2511,12 @@ dbg_reg_at:                     ; 0060:000E - THE DEBUG REGISTRY (SPEC.md 57)
 %endmacro
 %macro SKIPCX2 0                ; mov cx, imm16 over two bytes: CX, no flag
     db 0xB9
+%endmacro
+%macro SKIPBL1 0                ; mov bl, imm8 over one byte: BL, no flag
+    db 0xB3                     ; (kernel size pass 16)
+%endmacro
+%macro SKIPAX2 0                ; mov ax, imm16 over two bytes: AX, no flag
+    db 0xB8
 %endmacro
 
 osapi_table:
@@ -4137,7 +4289,37 @@ rmk_seg:          ; (a real-mode bracket keeps it: fsx_rkeep)
                                   ;          (KERN-MEGA-MEMORY-PLAN MC7). Every
                                   ;          real-mode kernel answers what the
                                   ;          caller's own arithmetic would
-osapi_table_end:                  ; 0x04E9 today (0x04E3 before OSAPI_SEG,
+    OSAPI_RCXCELL osapi_mem_p     ; 0x04E9 - X: BL = a MEMP_* verb: the
+                                  ;          claim heap in PARAGRAPHS (SPEC.md
+                                  ;          50.3.7) - a claim either way up,
+                                  ;          a regrow and the free figures,
+                                  ;          each answering what was granted
+                                  ;          and the granule
+apic_fs_op:                       ; (the cell's own address, for the kernel's
+                                  ; modules: the clone, the join - SPEC.md 12.8.10)
+%ifdef FPG_PARK
+    OSAPI_RSLOT osapi_fs_op       ; 0x04EF - DX:CX = the bytes ONE operation
+                                  ;          of yours will move, every chunk
+                                  ;          and every lock hold of it; 0 =
+                                  ;          it is over. CF=1 refused (another
+                                  ;          package holds the widget, or it
+                                  ;          could not arm). SPEC.md 12.8.
+%else
+    OSAPI_XREFUSE                 ; 0x04EF - OSAPI_FS_OP, refused here
+%endif
+%ifdef OS88_FSCK
+    OSAPI_RCSLOT osapi_vol_check  ; 0x04F5 - CHECK, REPAIR OR DEFRAGMENT the
+                                  ;          volume you stand on (SPEC.md
+                                  ;          118.14.2): AL = FSK_* verb, ES =
+                                  ;          FSCHECK.DRV's image as YOU loaded
+                                  ;          it, DX = your workspace claim
+%else
+    OSAPI_XREFUSE                 ; 0x04F5 - OSAPI_VOL_CHECK, refused here
+%endif
+osapi_table_end:                  ; 0x04FB today (0x04F5 before OSAPI_VOL_CHECK,
+                                  ; 0x04EF before OSAPI_FS_OP,
+                                  ; 0x04E9 before OSAPI_MEM_P,
+                                  ; 0x04E3 before OSAPI_SEG,
                                   ; 0x04DD before OSAPI_ARG_TEXT,
                                   ; 0x04D7 before OSAPI_IMG_NAME,
                                   ; 0x04D1 before OSAPI_MEM_SUBSEG,
@@ -4179,8 +4361,8 @@ OSAPI_TABLE_LEN equ osapi_table_end - osapi_table
 %if OSAPI_TABLE_OFF != 0x0010
 %error "os8088 API jump table must start at offset 0x0010"
 %endif
-%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 116*6 + 6*3 + 6 + 12*5 + 4*6 + 8
-%error "os8088 API jump table must be exactly 0x04D9 bytes: 44 SLOT (8), 11 XCELL (7), 116 rare (6), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
+%if OSAPI_TABLE_LEN != 44*8 + 11*7 + 119*6 + 6*3 + 6 + 12*5 + 4*6 + 8
+%error "os8088 API jump table must be exactly 0x04EB bytes: 44 SLOT (8), 11 XCELL (7), 119 rare (6, OSAPI_FS_OP and OSAPI_VOL_CHECK XREFUSE ICELLs of the same 6 where they are off), 6 JCELL (3), 1 FCELL (6), 17 ICELL (12 of 5, 4 of 6 - OSAPI_WM_ONWHEEL's for parity, SPEC.md 13.18 - 1 of 8 - OSAPI_THM_SET, SPEC.md 76.14.14)"
 %endif
 
 %ifdef KERN_MEGA
@@ -4314,7 +4496,9 @@ api_rxc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the targe
     pop es                      ; ES = the caller's DS
     KDS
                                 ; DS = KERNEL_SEG (api_far reads its word by it)
-    call KERNEL_SEG:api_far     ; COLD_SEG:BP, and the body's retf lands here
+    push cs                     ; COLD_SEG:BP, and the body's retf lands here:
+    call api_far                ; the far frame is CS and a near call (-1 a
+                                ; site on `call KERNEL_SEG:`, kernel size pass 17)
     jmp short api_x.done
 
 ; The rare SLOT bodies (OSAPI_RCSLOT for a .cold routine, OSAPI_RSLOT for a
@@ -4328,16 +4512,17 @@ api_rsc:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the targe
     mov bp, [cs:bp]
     push ds
     KDS
-    call KERNEL_SEG:api_far     ; COLD_SEG:BP
-    pop ds
-    pop bp
-    retf
+    push cs                     ; COLD_SEG:BP (the far frame as api_rxc's)
+    call api_far
+    jmp short api_rs.tail       ; api_rs's own three-instruction tail (kernel
+                                ; size pass 17, -1: a rare cell's jump)
 api_rs:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target word's address, and the push bp the cell made is the frame
     pop bp
     mov bp, [cs:bp]
     push ds
     KDS
     call bp
+.tail:
     pop ds
     pop bp
     retf
@@ -4362,7 +4547,10 @@ api_rs:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
 %else                           ; immediate a 286 can push and DS is not read.
  %define API_COLDSEG [api_coldseg] ; ONE push line either way: stkbalance
 %endif                          ; reads the source and not the %ifdef
-api_far:
+api_far:                        ; ovlchk: builds its own far frame - its
+                                ; retf is a jump to COLD_SEG:BP, and the BODY's
+                                ; retf takes the frame the caller made with
+                                ; `push cs / call api_far` (kernel size pass 17)
     push word API_COLDSEG
     push bp
     retf
@@ -4432,16 +4620,15 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
                                 ; (was api_n: the N body, reached only by falling through from api_rn)
     push ds
     push si
-    push di
-    push es
-    call api_cpname             ; caller DS:SI -> KERNEL:api_name, <= 13 bytes
-    pop es                      ; the caller's ES back: it is the buffer
-    pop di                      ; and its DI, which the callee may need
+    call api_cpname             ; caller DS:SI -> KERNEL:api_name, <= 13 bytes;
+                                ; the caller's ES (the buffer) and DI (which
+                                ; the callee may need) come back from it
     KDS
                                 ; DS = KERNEL
     call inst_vol_enter         ; this instance's own folder (SPEC.md 19.2.1);
     mov si, api_name            ; preserves every register and the flags
-    call KERNEL_SEG:api_far     ; COLD_SEG:BP, the cold file door
+    push cs                     ; COLD_SEG:BP, the cold file door (the far
+    call api_far                ; frame as api_rxc's)
     pop si
     pop ds
     pop bp
@@ -4470,17 +4657,15 @@ api_rn:  ; STKBALANCE-OK: pops the rare cell's return address - it IS the target
 api_fdlg_open:
     push ds
     push si
-    push di
-    push es
     or si, si
     jz .nodef                   ; "no default": the ZERO is the argument, so it
-    call api_cpname             ; must reach fdlg_open unstaged and unchanged
+    call api_cpname             ; must reach fdlg_open unstaged and unchanged -
+                                ; and the caller's ES (the buffer) and DI (an
+                                ; input: the completion proc's offset) come
+                                ; back from it
     mov si, api_name            ; a kernel offset, so it survives the DS switch
 .nodef:                         ; (SI is 0 already on the `jz` that brings it
 .go:                            ; here - kernel size pass 15, -4)
-    pop es                      ; the caller's ES back: it is the buffer
-    pop di                      ; and its DI, which fdlg_open needs as an
-                                ; input (the completion proc's offset)
     KDS
                                 ; DS = KERNEL
     call COLD_SEG:fdf_fdlg_open
@@ -4710,8 +4895,6 @@ api_file_write_sys:
 api_file_sysc:
     push ds
     push si
-    push di
-    push es
     push bx                     ; the caller's buffer offset: live, and
     mov bx, ds                  ; drv_owns_seg wants a register
     push ds                     ; ...AND THE CALLER'S DS IS KEPT, because
@@ -4726,8 +4909,7 @@ api_file_sysc:
     pop bx
     jc .refuse
     call api_cpname             ; caller DS:SI -> KERNEL:api_name, <= 13 bytes
-    pop es                      ; the caller's ES back: it is the buffer
-    pop di
+                                ; (ES - the buffer - and DI kept)
     KDS
                                 ; DS = KERNEL
                                 ; NO V (SPEC.md 19.2.1): the installer names
@@ -4735,17 +4917,14 @@ api_file_sysc:
                                 ; its own instance's folder put underneath it
     mov si, api_name
     call far [api_sysfp]        ; COLD_SEG:the verb the entry chose
+.out:
     pop si
     pop ds
     retf
 .refuse:                        ; DS is already KERNEL; unwind what is left
-    pop es
-    pop di
-    pop si
-    pop ds
     mov ax, FERR_PROT           ; the same answer DSKW_PROT gives a package
     stc                         ; that names a system file: it is protected,
-    retf                        ; and from out there that is the whole truth
+    jmp short .out              ; and from out there that is the whole truth
 %endif                          ; OS88_DRIVERS
 
 ; ...and the two-name case, which needs DI as well and so is written out
@@ -4755,7 +4934,7 @@ api_file_rename:
     push di
     push es
     push di                     ; bank the new-name pointer across the first
-    call api_cpname             ; copy, which needs DI itself - the old name,
+    call api_cpname0            ; copy, which needs DI itself - the old name,
                                 ; and ES = KERNEL for the second from here
     pop si                      ; SI = the caller's DI = the new name
     mov di, api_name2
@@ -4870,19 +5049,24 @@ ovw_mou_lockon:     call mou_lockon     ; ...and one for SPEC.md 9.11:
 ; (cw_clk_ns_put and cw_clk_tobcd went with them in kernel size pass 9: the
 ; port helpers are a copy in each image now, near-called - SPEC.md 37.94.)
 ; -----------------------------------------------------------------------------
-api_cpname:                     ; ...the same into KERNEL:api_name, which is
-    KES                         ; what four of the five callers want, and the
-                                ; three instructions they each wrote out ahead
+api_cpname:                     ; ...the same into KERNEL:api_name, and the
+    push es                     ; caller's ES and DI KEPT: three of the four
+    push di                     ; callers banked both around the call and put
+    call api_cpname0            ; them back on the next instruction, so the
+    pop di                      ; bank is here once (kernel size pass 16, -6).
+    pop es                      ; The fourth, the rename, wants ES = KERNEL
+    ret                         ; and DI spent for its second copy: cpname0
+api_cpname0:                    ; ...what that one wants, and the
+    KES                         ; three instructions it would write out ahead
     mov di, api_name            ; of it (ES = KERNEL on the way out)
 api_copyname:
     push ax                     ; AX and CX ONLY, and both are arguments the
     push cx                     ; caller is still carrying: AX is DX:AX's low
     cld                         ; half for READ_AT and AL for RMDIR, CX the
                                 ; byte count for WRITE/READ/APPEND. SI and DI
-                                ; are SPENT - all four call sites overwrite
-                                ; both on the instruction after the call, and
-                                ; all four already banked the caller's pair in
-                                ; their own prologue
+                                ; are SPENT - api_cpname banks DI for three of
+                                ; the four callers, and every one of them has
+                                ; banked SI in its own prologue
     mov cx, 13
 .c:
     lodsb
@@ -5209,6 +5393,17 @@ api_sysfp:  dw dwf_dskw_write_sys  ; which verb the shared fenced cell runs:
 %macro COLDCALL 1
 %ifnidn __?SECT?__, [section .cold]
   %error "COLDCALL outside .cold - CS is not COLD_SEG here; use call COLD_SEG:"
+%endif
+    push cs
+    call %1
+%endmacro
+; TEXTCALL - the same two instructions in `.text`, for a FAR entry there
+; called from `.text` (kernel size pass 16): CS is KERNEL_SEG (kern_mega's
+; code selector in protected mode, which is what its retf wants back), and
+; `push cs` + a near call is a byte under `call KERNEL_SEG:`
+%macro TEXTCALL 1
+%ifnidn __?SECT?__, [section .text]
+  %error "TEXTCALL outside .text - CS is not KERNEL_SEG here"
 %endif
     push cs
     call %1
@@ -5709,6 +5904,14 @@ kmain_o:
                                 ; so still no resident byte
 %endif
 %endif
+%ifdef KERN_MEGA
+    BLOBCALL mega_gateb         ; ...and the half of kmain's mega_enter that
+                                ; has no side effect (kern_mega size pass 2):
+                                ; the tier and where the tables go, asked
+                                ; here so the code that asks is given back
+                                ; with the blob. LAST, as near the switch as
+                                ; the blob reaches
+%endif
 
     retf
 %ifdef BOOT_MARK
@@ -5748,7 +5951,8 @@ kmain:
     mov sp, STK0_TOP            ; the image, so a stack offset stays small and
     sti                         ; the kernel's own 64KB window stays for code
 %ifdef KERN_MEGA
-    mov word [ss:mega_seg0], 0  ; ...and low memory is segment 0 (MEGA_SEG0)
+    and word [ss:mega_seg0], 0  ; ...and low memory is segment 0 (MEGA_SEG0)
+                                ; (`and`, flags dead: a byte under `mov`)
     mov byte [ss:mega_pm], 0    ; real mode, for .cold's KDATAR_C (mega.inc):
 %endif                          ; nothing promises .lowbss is zero at boot
     cld
@@ -6164,23 +6368,23 @@ osapi_img_name:                 ; (api_rsc's far body: DS = KDATA)
     jmp short .no
 %endif
 .mod:                           ; SI is the row's segment word either way, and
-    mov al, 1                   ; the name's pointer is the word after it in a
+    mov ch, 1                   ; the name's pointer is the word after it in a
     SKIPF2                      ; drv_tab row and a mod_tab row alike (asserted
                                 ; - and test ax, imm16 over the mov below keeps
-                                ; AL; the `or` in .c writes CF - pass 15)
+                                ; CH; the `or` in .c writes CF - pass 15)
 .drv:                           ; below), so one load serves both
-    mov al, 0
-.name:
-    mov si, [si+DRVR_FILE-DRVR_SEG]
+    mov ch, 0                   ; THE ANSWER IN CH, banked CX's high half, so
+.name:                          ; the copy is lodsb/stosb through AL (kernel
+    mov si, [si+DRVR_FILE-DRVR_SEG] ; size pass 16, -2)
     push di
+    cld
 .c:
-    mov cl, [si]
-    mov [es:di], cl
-    inc si
-    inc di
-    or cl, cl
+    lodsb
+    stosb
+    or al, al
     jnz .c
-    pop di                      ; (or: CF = 0)
+    pop di                      ; (or: CF = 0, and mov keeps it)
+    mov al, ch
 .out:
     pop si
     pop cx
@@ -6374,9 +6578,9 @@ osapi_file_here:
     push ax                     ; the reading is instance.inc's inst_where (DL
     call inst_where             ; = drive, AX = directory, the machine's own for
     mov bl, dl                  ; no instance), which banks BX - so BH is still
-    mov dx, ax                  ; the caller's here - and spends only DH, an
-    pop ax                      ; output
-    ret
+    xchg ax, dx                 ; the caller's here - and spends only DH, an
+    pop ax                      ; output. (`xchg`, a byte under `mov dx, ax`:
+    ret                         ; AX is the pushed one - kernel size pass 16)
 
 ; OSAPI_VOL_SYS (out BL = [dsk_bootvol], nothing else touched, flags
 ; included) is an INLINE cell (SPEC.md 20.3). [dsk_bootvol] is A: on a floppy
@@ -6956,6 +7160,8 @@ EXT_PHASE   equ 15              ; ui_drag_phase's arm, UNGATED: registers kept
 %include "stikmenu.inc"           ; STIKMENU.DRV, the Sticky Apps menu (110.12)
                                   ; (SPEC.md 39.19.6) - kern_big only
 %include "serial.inc"             ; SERIAL.DRV, desktop UART lease (115)
+%include "fsck.inc"               ; FSCHECK.DRV, the disk checker and
+                                  ; defragmenter System Check loads (118.14)
 %include "ctrl.inc"
 %include "desksc.inc"           ; desktop shortcuts (SPEC.md 26.8): empty
                                 ; unless OS88_SHORTCUTS (kern_big). AFTER
@@ -8313,6 +8519,14 @@ SPL_RES_SIZE equ spw_resident_end - $$
 %endif
 
 section .lowbss
+resb ($-$$) % 2                 ; TASK 0's STACK SITS ON THIS END (STK0_BOT =
+                                ; KLOW_SIZE), so the end is kept EVEN: an odd
+                                ; .lowbss put every push of the UI task on an
+                                ; odd address - two bus cycles a word on a
+                                ; 16-bit bus, and a canary at STK0_BOT that
+                                ; straddles. kern_mega's was 0x15C1 for its
+                                ; whole life. `alignb` spelled out, as
+                                ; sch_stacks' and mou_pstack's are
 kernel_low_end:
 KLOW_SIZE equ kernel_low_end - $$
 
@@ -8511,6 +8725,9 @@ cfx_grid:
 ; cfx_ctxcap - vid_ctx_capture for the blob's bvs_disp_init (vidsel.inc's
 ; VID_CTXCAP), here for cfx_grid's reason
 VID_CTXCAP cfx_ctxcap, retf
+; cfx_cfgname - SYSTEM.CFG's name staged for the blob's ovc_load (driver.inc's
+; CFGN_STAGE), here for cfx_grid's reason (kernel size pass 16)
+CFGN_STAGE cfx_cfgname, retf
 %if cfx_grid - $$ < KVGABUF_SIZE
   %error "cfx_grid lies in the RAM `.vgabuf` shares with `.cfx`"
 %endif
@@ -8631,18 +8848,42 @@ MODJ_START   equ MODW_START + MODW_SIZE   ; DESK.DRV (SPEC.md 11.103.10) and
 MODN_START   equ MODJ_START + MODJ_SIZE   ; STIKMENU.DRV (SPEC.md 110.12) are
 MODSER_START equ MODN_START + MODN_SIZE   ; serial follows the big desktop modules
 %endif
+%ifdef OS88_FSCKIMG
+MODFS_START  equ MODSER_START + SER_IMAGE_SIZE ; FSCHECK.DRV: an image and NO
+MODMAP_START equ MODFS_START + MODFS_SIZE      ; mod_tab row (SPEC.md 118.14.1)
+%else
 MODMAP_START equ MODSER_START + SER_IMAGE_SIZE
+%endif
+
+; MODB_TAIL img, bss - A MODULE'S BSS IS ZEROS IN ITS OWN FILE
+; (MODULE-SELFCONTAIN-PLAN 3.5). Emitted as the image's LAST bytes: `img` is
+; the image's length before them, which is the `vstart=` its nobits bss
+; section was declared with at the top of the file, so every bss label is
+; the offset of one of these zeros; `bss` is that section's length, measured
+; ABOVE this line because `times` wants its count known when it is read.
+; The image's end label then follows, so MOD_H_IMG, the module map's size and
+; the directory size are all image + bss - and mod_need's claim, the FILE to
+; the granule, holds the bss with no figure of its own in the kernel, and no
+; rounding argument to make. It replaces a nobits tail that lived in the KB
+; rounding of a claim sized from the image alone: an image that grew to
+; within its bss of a KB boundary had no room left (the dead-zone pads
+; this deleted), and a 512-byte granule halved the slack outright.
+%macro MODB_TAIL 2
+%1 equ $ - $$
+    times %2 db 0
+%endmacro
 
 %ifdef KERN_BIG
 section .modx
 modx_end:
 MODX_SIZE equ modx_end - $$
-section .modw
-modw_end:
-MODW_SIZE equ modw_end - $$
 section .modwb
 modwb_end:
 MODW_BSS equ modwb_end - $$
+section .modw
+    MODB_TAIL MODW_IMG, MODW_BSS
+modw_end:
+MODW_SIZE equ modw_end - $$
 %if MODW_SIZE > MOD_MAX_KB*1024
   %error "WIN95.DRV exceeds its maximum claim"
 %endif
@@ -8651,9 +8892,6 @@ modj_end:
 MODJ_SIZE equ modj_end - $$
 %if MODJ_SIZE > MOD_MAX_KB*1024
   %error "DESK.DRV exceeds its maximum claim"
-%endif
-%if MODW_SIZE + MODW_BSS > ((MODW_SIZE + 1023) / 1024) * 1024
-  %error "WIN95.DRV's bss (wn_tmp, wn_cap) does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
 %endif
 section .modn
 modn_end:
@@ -8672,35 +8910,23 @@ MODK_SIZE equ modk_end - $$
 %endif
 
 %ifdef OS88_DRIVERS
-section .modcb                  ; ABOVE `.modu`'s end and not with the other
-modcb_end:                      ; bss ends below: the pad two blocks down is a
-MODC_BSS equ modcb_end - $$     ; `times`, whose count must be known when it
-%endif                          ; is read
+section .modcb
+modcb_end:
+MODC_BSS equ modcb_end - $$
+%endif
 
 section .modc
+    CSDO_SDOOR csd_modc          ; (the settings core's: .modu's sites use it)
 mods_end:
 MODS_SIZE equ mods_end - $$     ; the settings core: CTRL.DRV's first bytes
 section .modu
 %ifdef OS88_DRIVERS
-                                ; THE DEAD ZONE (MODULE-SELFCONTAIN-PLAN 3.2):
-MODC_UNPAD equ MODS_SIZE + ($ - $$) ; an image that ends fewer than MODC_BSS
-                                ; bytes short of a KB boundary has no room for
-                                ; its bss in the claim mod_need makes, which
-                                ; is the image's own KB rounding. The pad
-                                ; carries the image ONE BYTE PAST that
-                                ; boundary, so the claim is the next KB - the
-                                ; claim the bss needs anyway - for no resident
-                                ; byte, where the plan's named fallback is 8 of
-                                ; them. Zero bytes outside the zone, so a build
-                                ; that fits is byte-identical; it is what keeps
-                                ; ANIMOFF=1
-                                ; assembling, whose fewer bytes of panel land
-                                ; CTRL.DRV inside the zone (SPEC.md 2.8) - the
-                                ; case main's size pass 10 met with a pad for
-                                ; that knob alone; this one is the general
-                                ; form of the same answer
-    times (MODC_UNPAD + MODC_BSS > ((MODC_UNPAD + 1023) / 1024) * 1024) * (((MODC_UNPAD + 1023) / 1024) * 1024 + 1 - MODC_UNPAD) db 0
-%endif
+MODC_IMG equ MODS_SIZE + ($ - $$) ; MODB_TAIL's shape BY HAND: `.modu`
+    times MODC_BSS db 0         ; vfollows the core, so the image's length is
+%endif                          ; both halves and not this section's own $$.
+                                ; The settings core's claim is MODC_SIZE, so
+                                ; cpc_buf is inside it on that load too
+                                ; (SPEC.md 2.8.7), though the read stops short
 modc_end:
 MODU_SIZE equ modc_end - $$     ; ...the panel behind it...
 MODC_SIZE equ MODS_SIZE + MODU_SIZE ; ...and the WHOLE image: align=1 on both
@@ -8750,53 +8976,33 @@ modl_end:
 MODL_SIZE equ modl_end - $$
 
 %ifdef KERN_BIG
-section .modh
-%ifdef DOSR_MARK
-; DOSRMARK=1's trace (kernel/hbmark.inc, staged through hbstub.inc) is ~290
-; bytes of the IMAGE, and the bss below has to fit the KB rounding of the
-; claim the image sizes (MODULE-SELFCONTAIN-PLAN 3.2): the shipped image
-; leaves it 63 bytes of slack, so the knob overran it by 227 and the kernel
-; refused to assemble. The knob pads its own image to ONE byte past a KB
-; boundary instead, which leaves 1,023 bytes of rounding whatever either
-; side grows to - a disk-only cost, and only on a build that ships nowhere.
-    align 1024, db 0
-    db 0
-%endif
 section .modhb
 modhb_end:
 MODH_BSS equ modhb_end - $$
 section .modh
-MODH_UNPAD equ $ - $$           ; THE DEAD ZONE, `.modu`'s pad below and for its
-                                ; reason (MODULE-SELFCONTAIN-PLAN 3.2): an image
-                                ; ending fewer than MODH_BSS bytes short of a KB
-                                ; boundary is carried one byte past it, so the
-                                ; claim is the next KB - which the bss needs
-                                ; anyway. Zero bytes outside the zone. It is in
-                                ; the zone since kernel size pass 13 put the
-                                ; attach half of a driver load in this image
-                                ; (driver.inc's DRV_ATTACH hdl): 6 KB -> 7 KB
-                                ; of claim while HIBER.DRV is loaded
-    times (MODH_UNPAD + MODH_BSS > ((MODH_UNPAD + 1023) / 1024) * 1024) * (((MODH_UNPAD + 1023) / 1024) * 1024 + 1 - MODH_UNPAD) db 0
+    MODB_TAIL MODH_IMG, MODH_BSS
 modh_end:
 MODH_SIZE equ modh_end - $$
 %endif
 
 %ifdef FCP_MOD
-section .modp
-modp_end:
-MODP_SIZE equ modp_end - $$
 section .modpb
 modpb_end:
 MODP_BSS equ modpb_end - $$
+section .modp
+    MODB_TAIL MODP_IMG, MODP_BSS
+modp_end:
+MODP_SIZE equ modp_end - $$
 %endif
 
 %ifdef FDLG_MOD
-section .modd
-modd_end:
-MODD_SIZE equ modd_end - $$
 section .moddb
 moddb_end:
 MODD_BSS equ moddb_end - $$
+section .modd
+    MODB_TAIL MODD_IMG, MODD_BSS
+modd_end:
+MODD_SIZE equ modd_end - $$
 %endif
 
 ; ...and each of them has to fit the claim mod_need makes for it. MOD_MAX_KB
@@ -8806,11 +9012,6 @@ MODD_BSS equ moddb_end - $$
 ; This is where that gets said, while the number is still a constant.
 %if MODC_SIZE > MOD_MAX_KB*1024
 %error "the ctrl module is over MOD_MAX_KB - mod_need would refuse it at run time"
-%endif
-%ifdef OS88_DRIVERS
- %if MODC_SIZE + MODC_BSS > ((MODC_SIZE + 1023) / 1024) * 1024
-%error "CTRL.DRV's bss (the SYSTEM.CFG writer's buffer) does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
- %endif
 %endif
 %if MODF_SIZE > MOD_MAX_KB*1024
 %error "the format module is over MOD_MAX_KB - mod_need would refuse it at run time"
@@ -8822,32 +9023,15 @@ MODD_BSS equ moddb_end - $$
  %if MODH_SIZE > MOD_MAX_KB*1024
 %error "the hibernate module is over MOD_MAX_KB - mod_need would refuse it at run time"
  %endif
- %if MODH_SIZE + MODH_BSS > ((MODH_SIZE + 1023) / 1024) * 1024
-%error "HIBER.DRV's bss (the DOS record and the pointer buffer) does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
- %endif
 %endif
 %ifdef FCP_MOD
  %if MODP_SIZE > MOD_MAX_KB*1024
 %error "the Cut/Copy/Paste module is over MOD_MAX_KB - mod_need would refuse it at run time"
  %endif
-; ...and its bss has to fit inside the KB ROUNDING of that same claim, which
-; is what makes it cost no heap at all (MODULE-SELFCONTAIN-PLAN 3.2). The risk
-; is a CLIFF and not a slope - an image that grows past a KB boundary loses
-; the room all at once - so it is asserted here, in the file that grew, rather
-; than discovered as a module scribbling on whatever follows its claim.
-; If this ever fires, MODULE-SELFCONTAIN-PLAN 3.2 names the fallback: a word
-; per module in mod_tab, added to AX before mem_bytes_kb_x, for 12 resident
-; bytes on kern_small. Do that WHEN it fires and not before.
- %if MODP_SIZE + MODP_BSS > ((MODP_SIZE + 1023) / 1024) * 1024
-%error "FILECP.DRV's bss does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
- %endif
 %endif
 %ifdef FDLG_MOD
  %if MODD_SIZE > MOD_MAX_KB*1024
 %error "the file dialog module is over MOD_MAX_KB - mod_need would refuse it at run time"
- %endif
- %if MODD_SIZE + MODD_BSS > ((MODD_SIZE + 1023) / 1024) * 1024
-%error "FDLG.DRV's bss does not fit its claim's KB rounding - see MODULE-SELFCONTAIN-PLAN 3.2"
  %endif
 %endif
 
@@ -8864,7 +9048,7 @@ MODD_BSS equ moddb_end - $$
 section .modmap
 mod_map:
     db 'O8MM'
-    db MOD_NIMG                 ; rows below - IMAGES, so MOD_SETS (CTRL.DRV's
+    db MOD_NIMG + MOD_NFSCK     ; rows below - IMAGES, so MOD_SETS (CTRL.DRV's
                                 ; own first bytes, SPEC.md 2.8.7) is not one
     db 0
     dd MODC_START, MODC_SIZE
@@ -8903,6 +9087,10 @@ mod_map:
 %endif
     dd MODSER_START, SER_IMAGE_SIZE
     dw SER_NENT
+%ifdef OS88_FSCKIMG
+    dd MODFS_START, MODFS_SIZE  ; FSCHECK.DRV, LAST: the package loads it, so
+    dw FSK_NENT                 ; its id is past every mod_tab row's (118.14.1)
+%endif
     dd MODMAP_START             ; ...where the table began, and
     dw 0x384F                   ; the last two bytes of the file
 modmap_end:
@@ -9312,13 +9500,20 @@ SK_MEGA_KB equ SK_R(SK_CUM4) - SK_R(SK_CUM4 - MEGA_PARA * 16) ; rungs when they
 %endif
 ;
 ; 6b. ...and so is every claim in it, which is what a package region rides
-;     on now that it is a claim rather than a pool slot: mem_claim rounds to
-;     whole KB, so every base it hands out is HEAP_SEG + n*64 paragraphs.
-;     MEM_PARA_KB is that 64; if it ever stopped being a multiple of 32 an
-;     int 13h read of a package image could straddle a 64KB DMA boundary and
-;     the symptom would be "Disk error" on the LARGE packages only.
-%if MEM_PARA_KB % 32
-%error "a heap claim is not 512-byte aligned - a package image is read into one"
+;     on now that it is a claim rather than a pool slot: mem_claim rounds
+;     every size to MEM_GRAN paragraphs (SPEC.md 50.2.1), so every base it
+;     hands out is the floor, the top or a claim edge - HEAP_SEG + n*MEM_GRAN
+;     paragraphs. If the granule ever stopped being a multiple of 32 an int
+;     13h read of a package image could straddle a 64KB DMA boundary and the
+;     symptom would be "Disk error" on the LARGE packages only. A finer
+;     granule needs SPEC.md 50.2.1's DISK class first, which aligns the base
+;     itself rather than inheriting it from the size
+%ifndef MEM_ALIGN_CLASS
+ %if MEM_GRAN % 32
+ %error "a heap claim is not 512-byte aligned - a package image is read into one"
+ %endif
+%elif MEM_GRAN & (MEM_GRAN - 1)
+ %error "MEM_GRAN must be a power of two: the granule mask is `and ax, -MEM_GRAN`"
 %endif
 ; 4b. (retired, SPEC.md 2.9.14) the boot overlay had to EXIST, because an
 ;    empty `.ovl` sent every blob call OVL_AT bytes into the padding between
@@ -9462,6 +9657,9 @@ section .text
 section .lowbss
 %if ($ - $$) != KLOW_SIZE
   %error "something landed in .lowbss below kernel_low_end - KLOW_SIZE and LOW_PARA under-report it"
+%endif
+%if (STK0_BOT % 2) || (STK0_TOP % 2) || (STK0_SIZE % 2)
+  %error "task 0's stack must be WORD-aligned (STK0_BOT, STK0_TOP and STK0_SIZE all even): the UI task pushes words there and a word canary is seeded at STK0_BOT. The pad before kernel_low_end is what keeps it so - do not delete it"
 %endif
 section .vgabuf
 %if ($ - $$) != KVGABUF_SIZE

@@ -439,13 +439,13 @@ xb_partget:
     jc .no
     mov ax, [si+OP_R_OFF]
     mov dx, ax
-    mov cl, 9
+    mov cl, OP_GSH
     shl ax, cl
-    mov cl, 7
+    mov cl, 16 - OP_GSH
     shr dx, cl                      ; DX:AX = the part's byte offset
     mov bx, [op_clb]
     dec bx
-    and bx, ax                      ; BX = the head slack (a multiple of 512)
+    and bx, ax                      ; BX = the head slack (a multiple of 16)
     sub ax, bx
     sbb dx, 0
     mov [op_off], ax
@@ -501,6 +501,7 @@ xb_partget:
     push dx                         ; through one of the standard's windows -
     call op_ata                     ; a sum on every real-mode kernel, a
     pop dx                          ; window on kern_mega (MC7)
+    jc .free                        ; (no LDT entry: the null window)
     xchg ax, bx                     ; BX = the stream's own segment
     push si
     push dx
@@ -520,12 +521,15 @@ xb_partget:
     jc .free
     mov cx, [si+OP_R_LEN]
     mov ax, cx
-    add ax, 1023
+    add ax, 15
     rcr ax, 1
     push cx
-    mov cl, 9
-    shr ax, cl                      ; KB the part keeps
-    call OSAPI_MEM_REGROW           ; a shrink: in place, DX unchanged
+    push bx
+    mov cl, 3
+    shr ax, cl                      ; PARAGRAPHS the part keeps (SPEC.md
+    mov bl, MEMP_REGROW             ; 50.3.7) - the claim was the DMA door's,
+    call OSAPI_MEM_P                ; so conventional on every kernel, and a
+    pop bx                          ; shrink: in place, DX unchanged
     pop cx
     clc
     ret

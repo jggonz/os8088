@@ -1827,6 +1827,22 @@ x3c_unique:
 ; progress window up. On any refusal x3_st says why and nothing is left
 ; -----------------------------------------------------------------------------
 x3c_start:
+    mov ax, [x3c_need]              ; ONE BAR for the job (SPEC.md 12.8.10),
+    mov dx, [x3c_need+2]            ; parked between the wakes: the WAV's
+    mov cx, 10                      ; estimate in bytes (x3c_needkb's, the
+.kb:                                ; header cluster and a margin in it, so
+    shl ax, 1                       ; the bar ends a little short)...
+    rcl dx, 1
+    loop .kb
+    cmp byte [x3h_on], 0            ; ...and the source, when no hold has it:
+    jne .op                         ; the ring's reads count too
+    add ax, [x3_flen]
+    adc dx, [x3_flen+2]
+.op:
+    xchg cx, ax                     ; (CX = 0 off the loop)
+    mov al, X3OP_CONV
+    call x3_opbeg                   ; ended by x3c_teardown, which every way
+                                    ; out takes
     mov word [x3_st+X3S_PEAK], 0    ; the peak is this job's (x3_memck)
     call x3_memck
     call x3_cluget                  ; the DESTINATION's cluster
@@ -1870,7 +1886,8 @@ x3c_start:
     xor cx, cx                      ; kern_mega a selector that moves with the
     call OSAPI_SEG                  ; ring's claim (KERN-MEGA-MEMORY-PLAN MC7)
     pop bx
-    mov [x3c_sseg], dx
+    jc .nomem                       ; (no LDT entry: DX kept, the RING's -
+    mov [x3c_sseg], dx              ; the stage never written over it)
     call x3c_tmpname                ; X3nnnnnn.TMP, free here
     jc .wrerr
     call x3c_hdr                    ; the header cluster at the stage's 0
@@ -1921,6 +1938,9 @@ x3c_start:
 .nomem:
     mov word [x3c_err], ap_s_nomem
     jmp short .fail
+    nop                             ; (never run: the stage's `jc .nomem`
+                                    ; above is five bytes, and what follows
+                                    ; keeps its even shift)
 .wrerr:
     mov word [x3c_err], x3c_s_cantw
     jmp short .fail
@@ -2386,6 +2406,8 @@ x3c_abort:
 ; file deleted (this job's, by its own name, in its own folder), the stage
 ; freed, the progress window down. keeps nothing
 x3c_teardown:
+    mov al, X3OP_CONV               ; the job's bar: over, whichever way
+    call x3_opend
     call x3_park
     and byte [x3_req], ~(X3R_WRITE | X3R_END)
     cmp byte [x3c_tmade], 0

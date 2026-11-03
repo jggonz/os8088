@@ -1884,6 +1884,38 @@ pu_start:
     PSV SV_EPROG
     PSV SV_FLAGS
     PSV SV_UPDATE
+    ; --- ONE BAR FOR THE SAVE (SPEC.md 12.8.10): pu_pump writes a slot a
+    ; lock-free wake, so the widget came up and went down per slot. DX:CX =
+    ; the file's bytes - EXACT for BMP and PIX (the header and the rows as
+    ; pw_bmp8, pw_bmp24 and pw_pix pad them), and the raw master, w x h, for
+    ; the packed three: an upper bound for PNG and GIF, an estimate for PCX
+    ; (a clamp at full if a noisy picture outgrows it). Advisory and not
+    ; kept: one save at a time, so pu_fin's end is unconditional
+    mov ax, [px_cur + PXR_MW]
+    mov bl, [px_wfmt]
+    mov cx, 54 + 1024               ; BMP 8: the header and the palette
+    cmp bl, WF_BMP
+    je .b4
+    mov cx, 54
+    cmp bl, WF_BMP24
+    jne .px
+    call pw_x3
+.b4:
+    add ax, 3                       ; a row padded to a dword
+    and al, 0xFC
+    jmp short .m
+.px:
+    xor cx, cx
+    cmp bl, WF_PIX
+    jne .m
+    inc ax                          ; (w + 1) / 2 after a 32-byte header
+    shr ax, 1
+    mov cl, 32
+.m:
+    mul word [px_cur + PXR_MH]
+    add cx, ax
+    adc dx, 0
+    call OSAPI_FS_OP
     clc
     ret
 .nw:
@@ -2014,6 +2046,9 @@ pu_fin:
                                     ; and answer between W_ONWAKE's pump and
                                     ; its look at [px_job] (a PCX lost its
                                     ; final 1,325 bytes so)
+    xor cx, cx                      ; ...and the save's one bar comes down
+    xor dx, dx                      ; (SPEC.md 12.8.10, pu_start), whichever
+    call OSAPI_FS_OP                ; way it ended
     PSV SV_WFREE
     call pu_sfree                   ; ...and the scratch
     cmp byte [px_wres], 0           ; the worker's answer, or the disk's

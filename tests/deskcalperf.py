@@ -269,7 +269,7 @@ def ui_leg(tmp, machine, label, results):
         print("%s: About            %s" % (label, ab))
         r["about"] = ab.row()
         txt = ui.wait_toast(says="Desk Calendar")
-        check(txt == "Desk Calendar for os8088", "%s: About says %r"
+        check(txt == "Desk Calendar by jggonz", "%s: About says %r"
               % (label, txt))
         check(ab.n == 0, "%s: About draws nothing on the cards (%d calls: "
               "%r) - the tag row's plate is the bar's focus edge, not About's"

@@ -468,15 +468,15 @@ mou_pout:
 ; ins:  AH = register offset, AL = value
 ; outs: none (all registers preserved)
 ; -----------------------------------------------------------------------------
+%if MOU_PEND != 4
+  %error "mou_pall calls mou_pout for rows 0 and 2 by name: MOU_NPORT is 2"
+%endif
 mou_pall:
     push bx
-    xor bx, bx
-.port:
+    xor bx, bx                  ; TWO PORTS, TWO CALLS (kernel size pass 17,
+    call mou_pout               ; -2): the loop's `inc/inc/cmp/jb` was longer
+    mov bl, 2                   ; than its second iteration written out
     call mou_pout
-    inc bx
-    inc bx
-    cmp bx, MOU_PEND
-    jb .port
     pop bx
     ret
 
@@ -1176,81 +1176,9 @@ mou_settle:
     ret
 %endif
 
-; -----------------------------------------------------------------------------
-; mou_claim - one more complete packet, on port BX (SPEC.md 9.5)
-;
-; [mou_need] of them IN A ROW on one port settles [mou_port] and sets
-; [mou_seen]. The run is per port, like the decoder that feeds it, so the two
-; ports race independently and whichever gets there first is the mouse.
-;
-; A run, and not the first packet, because a well-formed Microsoft packet is
-; only "a byte with bit 6 set, then two without" - and a modem's 'O','K',CR,LF
-; is exactly that. So is 'RING'+CRLF, and so is 'NO CARRIER'+CRLF: each of
-; them completes ONE packet, which under a first-past-the-post rule handed the
-; mouse's slot to the modem and masked the real mouse off for the session.
-;
-; But a COUNT alone is not enough either, and that is worth stating because it
-; is what a first attempt got wrong: nothing decayed, so four result codes
-; seconds apart accumulated to a run of four exactly as four mouse packets
-; would. What actually separates a mouse from ASCII is not how many packets
-; complete but that a mouse's bytes are ALL of them - they arrive in threes
-; with nothing between - so the ISR breaks the run on either protocol
-; violation: a bit-6 byte arriving mid-packet (a resync) and a bit-6-clear
-; byte arriving between packets (a stray). Every modem string above dies on
-; its second byte: 'RING' is R then I, both bit-6, and that is a resync.
-; mou_hotplug's reset edge clears the run too, so nothing can be built up
-; across one.
-;
-; The residual is a port carrying BINARY traffic in the seconds before the
-; mouse is first moved - random bytes do satisfy the protocol occasionally,
-; and MOU_LOCKN is what prices that: eight clean packets is 24 bytes that all
-; had to fall right, against a mouse that emits them in a fifth of a second of
-; motion. It is bounded anyway by mou_lockon masking the loser the moment the
-; mouse is found.
-;
-; Nothing the OTHER port does can break this port's run, and that separation is
-; the whole reason the decoders are per port. It was shared once, and a modem
-; chattering on COM1 then reset the run of a mouse moving on COM2 - so the
-; mouse never reached the threshold and never claimed its port at all, while
-; the modem's own violations kept it from claiming one either. A device that
-; cannot win must not be able to stop the one that should.
-;
-; ISR context, IF = 0.
-; ins:  BX = the port row the packet arrived on
-; outs: none (all registers preserved)
-; -----------------------------------------------------------------------------
-mou_claim:
-    push ax
-    cmp byte [mou_seen], 0
-    jne .out                    ; settled, and never revisited
-    mov ax, [ticks]             ; a line error on this port in the last
-    sub ax, [bx+mou_errt]       ; MOU_ERRQ ticks (SPEC.md 9.5.6): a cable's
-    cmp ax, MOU_ERRQ            ; stream at another baud rate decodes as
-    jae .count                  ; packets now and then - on a ONE-port
-    mov byte [bx+mou_run], -1   ; machine, where one packet settles, within
-                                ; its first frame. Wrap-safe, like [ticks].
-                                ; -1, so the `inc` below makes the run 0 and
-                                ; the compare after it - [mou_need] is never
-                                ; 0 - leaves by .out: the zeroing and the exit
-                                ; in one store (kernel size pass 14, -1; 17
-                                ; bytes, and mouse_unhook's pad went with it)
-.count:
-    inc byte [bx+mou_run]
-    mov al, [bx+mou_need]       ; 1 where the probe found one port, MOU_LOCKN
-    cmp byte [bx+mou_run], al   ; where it found two - and 1 again on a port
-                                ; whose identify burst already named it the
-                                ; only mouse-shaped one (SPEC.md 9.4.1)
-    jb .out
-    mov ah, bl                  ; settled. mou_hotplug's next pass retires
-    mov al, [mou_lfired]        ; every other port - and THIS is the line those
-%ifdef KERN_BIG                 ; packets came in on, which the base cannot say
-    call mou_settle             ; (SPEC.md 9.5.2.1). The [mou_seen] test the
-%else                           ; routine repeats is four lines above, so on
-    MOU_SETTLE_STORES           ; the build where this is the ONLY settle site
-%endif                          ; the stores go in without one
-.out:
-    pop ax
-    ret
+; (mou_claim - one more complete packet on port BX, SPEC.md 9.5 - is written
+; in mou_byte's .pkt arm, its one caller, since kernel size pass 17: the
+; account of the RUN it keeps is there too.)
 
 ; -----------------------------------------------------------------------------
 ; mou_newround - forget every port's part-built packet and part-built run
@@ -1271,7 +1199,8 @@ mou_newround:
     mov [mou_run], ax
     mov [mou_run+2], ax
     pop ax
-    ret
+.ret:                           ; (mou_hotplug's settled exit lands here, a
+    ret                         ; ret within short reach - kernel size pass 17)
 
 ; -----------------------------------------------------------------------------
 ; mou_lockon - the mouse has spoken on port [mou_port]: retire the others
@@ -1362,7 +1291,11 @@ mou_lockon:
 ; -----------------------------------------------------------------------------
 mou_hotplug:
     cmp byte [mou_hpst], 2      ; TERMINAL: the mouse exists and its ports are
-    je .out                     ; settled (.have, below). ONE compare a pass
+%ifdef KERN_BIG
+    je mou_newround.ret         ; settled (.have, below). ONE compare a pass
+%else
+    je .out
+%endif
     push ax                     ; for the rest of the session - and state 2 is
     push bx                     ; reached only through .have, so it implies
     push cx                     ; [mou_seen], which nothing ever clears
@@ -1445,8 +1378,10 @@ mou_hotplug:
     call mou_lockon             ; ...and only then retire the ports the mouse
     mov byte [mou_hpst], 2      ; did not speak on. State 2 is terminal: this
     jmp short .done             ; is one compare per UI pass from here on
-.out:
-    ret
+%ifndef KERN_BIG                ; (kern_big's settled exit is mou_newround's
+.out:                           ; ret, -1, whose odd byte evens mou_claim's
+    ret                         ; move into mou_byte there; kern_small's
+%endif                          ; claim was an even size and keeps its own)
 
 ; -----------------------------------------------------------------------------
 ; mouse_unhook - silence every UART we programmed (IER=0), mask its IRQ again,
@@ -1468,10 +1403,10 @@ mouse_unhook:
     mov ax, 0x0100              ; IER = 0: no more UART interrupts
     call mou_pall
 
-    xor ax, ax
 %ifdef KERN_MEGA
-    MEGA_SEG0 es                  ; segment 0 is the NULL selector
-%else
+    MEGA_SEG0 es                  ; segment 0 is the NULL selector (and no
+%else                           ; zero: AX is written before it is read)
+    xor ax, ax
     mov es, ax
 %endif
     xor bx, bx
@@ -1632,10 +1567,10 @@ osapi_mouse:
     mov di, 2
 .row:
     mov si, [di+mou_ivecs]
-    xor ax, ax
 %ifdef KERN_MEGA
-    MEGA_SEG0 es                  ; segment 0 is the NULL selector
-%else
+    MEGA_SEG0 es                  ; segment 0 is the NULL selector (and no
+%else                           ; zero: AX is popped or reloaded below)
+    xor ax, ax
     mov es, ax
 %endif
     mov cx, cs
@@ -2571,13 +2506,14 @@ kbm_pass:
 ; ScrollLock test, kbm_ui's ScrollLock level and kbm_isr's keypad-5 test each
 ; banked a segment register to reach this byte. kbm_ui takes the bit itself
 ; as its level (0 or 10h - [kbm_slast] is only ever compared with it).
-; out: AL = KB_FLAG; AH = 0; every other register preserved, flags clobbered
+; out: AL = KB_FLAG; AH = 0 (kern_mega: AH is kept - none of the three reads
+;      it); every other register preserved, flags clobbered
 kbm_shf:
     push ds
-    xor ax, ax                  ; segment 0, LINEAR offset: 0040:0017 is
 %ifdef KERN_MEGA
-    MEGA_SEG0 ds                  ; segment 0 is the NULL selector
-%else
+    MEGA_SEG0 ds                  ; segment 0 is the NULL selector (AH is
+%else                           ; then the caller's: no caller reads it)
+    xor ax, ax                  ; segment 0, LINEAR offset: 0040:0017 is
     mov ds, ax                  ; 0000:0417 (a byte shorter than mov ax, 40h).
 %endif
     mov al, [0x417]             ; NOT 0x17 with segment 0: that reads the
@@ -2658,15 +2594,47 @@ kbm_rclick:                     ; latches too - menu_popup ends on a level poll
 ; A DROPPED MENU IS A LIST, and gets asked first (SPEC.md 9.6.3): a press with
 ; a vertical component there moves one ITEM rather than KBM_MIN pixels, and
 ; menu_kbnav has already placed the pointer when it answers CF = 0. Asking it
-; ABOVE kbm_accel is what keeps the two mechanisms apart - a placed press never
+; ABOVE the step ramp is what keeps the two mechanisms apart - a placed press never
 ; stamps [kbm_last], so the first arrow AFTER the menu closes sees a large tick
 ; gap and starts fresh at KBM_MIN, which is what it should do anyway.
 kbm_move:
     mov al, [bx+2]              ; dy: the axis a menu is a list along
     call COLD_SEG:menu_kbnav    ; FAR: it is cold (SPEC.md 12.10)
     jnc .paint                  ; placed - the repaint below is all that is left
-    call kbm_accel              ; DL = px this press is worth, and imul does
-    mov al, [bx+1]              ; not disturb it, so it serves both axes
+    ; --- DL = how far this press moves the pointer (it was kbm_accel, with
+    ; this one caller, until kernel size pass 17 wrote it here: AX and CX are
+    ; dead at this point - kbm_key's frame puts CX back, and AX is about to
+    ; be the step's product - so its three banks, its call and its jump to
+    ; the ladder went). A fixed step cannot be right: small enough to aim
+    ; with is too small to cross the screen with. Presses arriving closer
+    ; together than KBM_GAP are a held key (typematic repeat), and the step
+    ; grows while that lasts.
+    mov ax, [ticks]
+    mov dx, ax
+    xchg dx, [kbm_last]         ; the tick of THIS press banked, the last one's
+    sub ax, dx                  ; in DX: wrap-safe, like every other tick
+    mov dl, KBM_MIN             ; compare here
+    mov cl, [bx]                ; the direction this press is (the row's scan)
+    cmp ax, KBM_GAP
+    jae .set                    ; a fresh tap starts slow again...
+    cmp cl, [kbm_lastk]
+    jne .set                    ; ...and so does a CHANGE OF DIRECTION, which
+                                ; is what a person does the instant they
+                                ; overshoot. Without it the correction is
+                                ; travelling at full speed too, and a menu item
+                                ; sits unreachable between two 24px strides -
+                                ; which is exactly how this first failed to
+                                ; pick one
+    mov dl, [kbm_step]
+    add dl, KBM_ACC
+    cmp dl, KBM_MAX
+    jbe .set
+    mov dl, KBM_MAX
+.set:
+    mov [kbm_step], dl
+    mov [kbm_lastk], cl
+    mov al, [bx+1]              ; DL is the step, and imul does not disturb
+                                ; it, so it serves both axes
     imul dl                     ; dx (-1, 0, +1) x the step -> AX, signed
     add ax, [mouse_x]
     push ax                     ; banked on OUR stack until y is ready, for
@@ -2725,40 +2693,6 @@ kbm_move:
     stc
     ret
 
-; --- kbm_accel - DL = how far this press moves the pointer -------------------
-; A fixed step cannot be right: small enough to aim with is too small to cross
-; the screen with. Presses arriving closer together than KBM_GAP are a held
-; key (typematic repeat), and the step grows while that lasts.
-; clobbers: DL
-kbm_accel:
-    push ax
-    push bx
-    push cx
-    mov ch, [bx]                ; the direction this press is (the row's scan)
-    mov bx, [ticks]
-    mov ax, bx
-    sub ax, [kbm_last]          ; wrap-safe, like every other tick compare here
-    mov [kbm_last], bx
-    mov dl, KBM_MIN
-    cmp ax, KBM_GAP
-    jae .set                    ; a fresh tap starts slow again...
-    cmp ch, [kbm_lastk]
-    jne .set                    ; ...and so does a CHANGE OF DIRECTION, which
-                                ; is what a person does the instant they
-                                ; overshoot. Without it the correction is
-                                ; travelling at full speed too, and a menu item
-                                ; sits unreachable between two 24px strides -
-                                ; which is exactly how this first failed to
-                                ; pick one
-    mov dl, [kbm_step]
-    add dl, KBM_ACC
-    cmp dl, KBM_MAX
-    jbe .set
-    mov dl, KBM_MAX
-.set:
-    mov [kbm_step], dl
-    mov [kbm_lastk], ch
-    jmp kret_cx
 
 ; -----------------------------------------------------------------------------
 ; mou_clamp - the nearest legal pointer position (SPEC.md 39.15.4)
@@ -3322,10 +3256,10 @@ kbd_ovflow:
     push ax
     push bx
     push es
-    xor ax, ax                  ; segment 0, LINEAR offsets: 0040:001A is
 %ifdef KERN_MEGA
-    MEGA_SEG0 es                  ; segment 0 is the NULL selector
-%else
+    MEGA_SEG0 es                  ; segment 0 is the NULL selector (AX is
+%else                           ; loaded below before it is read)
+    xor ax, ax                  ; segment 0, LINEAR offsets: 0040:001A is
     mov es, ax                  ; 0000:041A (size pass 9, a byte shorter). The
 %endif
     mov ax, [es:0x41A]          ; head - where the reader is - and the
@@ -3517,9 +3451,10 @@ kbm_poll0:
 ;      stated rather than tightened because SPEC.md 7.1.4.1 is what a routine
 ;      promising more than it keeps costs here.
 ; -----------------------------------------------------------------------------
-kbm_ui:
-    cmp byte [mou_ptr], 0
-    jne .out                    ; a machine with a mouse pays this compare
+kbm_ui:                         ; ui_task tests [mou_ptr] before calling
+                                ; (kernel size pass 16: the second compare
+                                ; that was here went, -8): a machine with a
+                                ; mouse pays that compare and not the call
     call kbm_shf                ; AL = the ScrollLock level, 0 or 10h: the bit
     and al, 0x10                ; itself, which is all [kbm_slast] is compared
                                 ; with (AX is this routine's to spend)
@@ -3540,7 +3475,7 @@ kbm_ui:
     call gfx_unlock
 .relax:
     cmp word [ui_ev + EV_TYPE], EVT_MDOWN
-    jne .p5                     ; .p5 and NOT .out: nothing to release is the
+    jne .p5                     ; .p5, the spend: nothing to release is the
     test byte [mouse_btn], 0x01 ; commonest pass there is, and it is exactly
     jz .p5                      ; the pass a fresh keypad-5 press arrives in
     and byte [mouse_btn], 0xFE  ; bit 1 is the right button's own latch, and is
@@ -3553,8 +3488,6 @@ kbm_ui:
                                 ; the release would be taken back by the very
                                 ; pass that made it (SPEC.md 9.6.4). A tail
                                 ; jump, for kbm_poll0's reason
-.out:
-    ret
 
 ; mou_evfill - stamp an event record at DS:SI and queue it
 ; in:  AX = EVT_*, SI -> an 8-byte record in DS, PRIVATE TO THE CALLER
@@ -3638,10 +3571,14 @@ kbd_dnmap   times KBD_MAPSZ db 0 ; ...and the bit per key. Zeroed again at the
 kbd_ovn     db 0                ; SPEC.md 9.8: beeps this overrun burst has
                                 ; already spent, reset when the buffer next
                                 ; reads empty
-kbd_ovb     db 0                ; ...and one the ISR has asked for and no pass
-                                ; has sounded yet. Both .text with a real
-                                ; initialiser for kbd_armed's reason - the ISR
-                                ; reads them on the machine's first keystroke
+                                ; (...and kbd_ovb, the one the ISR has asked
+                                ; for and no pass has sounded yet, is in
+                                ; ui.inc after ui_task: kernel size pass 16
+                                ; moved the byte to keep every hot routine
+                                ; between here and there at its parity.)
+                                ; .text with a real initialiser for
+                                ; kbd_armed's reason - the ISR reads it on
+                                ; the machine's first keystroke
 
 ; -----------------------------------------------------------------------------
 
@@ -3879,9 +3816,49 @@ mou_byte:
     mov byte [bx+mou_phase], 3  ; third byte: Y low 6 bits, packet complete -
                                 ; and phase 3 rather than 0, so the wheel byte
                                 ; that MAY follow is recognised by position
-    call mou_claim              ; ...and a RUN of them is PROOF OF MOUSE: the
-                                ; port is settled and the hot-plug poller
-                                ; stands down for the session
+    ; --- ...and a RUN of them is PROOF OF MOUSE (it was mou_claim, with this
+    ; one call, until kernel size pass 17: the call and its ret went, and a
+    ; SETTLED port - every packet of the session after the first few - now
+    ; skips the whole arm on one compare where it paid a call, a bank and
+    ; two compares of the same byte). [mou_need] of them IN A ROW on one port
+    ; settles [mou_port] and sets [mou_seen]; the run is per port, like the
+    ; decoder that feeds it, so the two ports race independently and
+    ; whichever gets there first is the mouse. A run, and not the first
+    ; packet, because a modem's 'OK'+CRLF is a well-formed packet; the ISR
+    ; breaks the run on either protocol violation (a resync, a stray), and
+    ; mou_hotplug's reset edge clears it too. Nothing the OTHER port does can
+    ; break this port's run: a device that cannot win must not be able to
+    ; stop the one that should (SPEC.md 9.5).
+    cmp byte [mou_seen], 0
+    jne .settled                ; settled, and never revisited
+    push ax                     ; AL is the packet's third byte
+    mov ax, [ticks]             ; a line error on this port in the last
+    sub ax, [bx+mou_errt]       ; MOU_ERRQ ticks (SPEC.md 9.5.6): a cable's
+    cmp ax, MOU_ERRQ            ; stream at another baud rate decodes as
+    jae .ccount                  ; packets now and then - on a ONE-port
+    mov byte [bx+mou_run], -1   ; machine, where one packet settles, within
+                                ; its first frame. Wrap-safe, like [ticks].
+                                ; -1, so the `inc` below makes the run 0 and
+                                ; the compare after it - [mou_need] is never
+                                ; 0 - leaves by .cout: the zeroing and the exit
+                                ; in one store (kernel size pass 14, -1; 17
+                                ; bytes, and mouse_unhook's pad went with it)
+.ccount:
+    inc byte [bx+mou_run]
+    mov al, [bx+mou_need]       ; 1 where the probe found one port, MOU_LOCKN
+    cmp byte [bx+mou_run], al   ; where it found two - and 1 again on a port
+                                ; whose identify burst already named it the
+                                ; only mouse-shaped one (SPEC.md 9.4.1)
+    jb .cout
+    mov ah, bl                  ; settled. mou_hotplug's next pass retires
+    mov al, [mou_lfired]        ; every other port - and THIS is the line those
+%ifdef KERN_BIG                 ; packets came in on, which the base cannot say
+    call mou_settle             ; (SPEC.md 9.5.2.1). The [mou_seen] test the
+%else                           ; routine repeats is four lines above, so on
+    MOU_SETTLE_STORES           ; the build where this is the ONLY settle site
+%endif                          ; the stores go in without one
+.cout:
+    pop ax
     cmp byte [mou_seen], 0      ; still unsettled? then this packet COUNTS and
     je .jbout                    ; does nothing else. A device on its way to
                                 ; losing the contest must not move the cursor
@@ -3890,6 +3867,7 @@ mou_byte:
                                 ; lowercase letter is the LEFT BUTTON. The
                                 ; packet that SETTLES the port is acted on, so
                                 ; a one-port machine loses nothing at all
+.settled:
     mov dh, [bx+mou_b0]         ; stage the packet out of this port's slot: BX
     mov dl, [bx+mou_b1]         ; belongs to the decode from here on
     mov bl, al                  ; BL = Y low bits, decoded below
@@ -4215,7 +4193,7 @@ mou_apply:
 %endif
     cmp byte [gfx_lock_flag], 0
     jne .dirty
-    cmp byte [fpg_on], 0        ; ...OR AN UNLOCKED PAINTER IS UP (SPEC.md
+    FPG_ARMED                   ; ...OR AN UNLOCKED PAINTER IS UP (SPEC.md
                                 ; 12.8.4). The progress widget is the one
                                 ; painter in the machine that draws with the
                                 ; lock FREE, and free is the one state this ISR
@@ -4244,7 +4222,7 @@ mou_apply:
 .redraw:
 %ifdef GFXAUDIT
     inc word [gfx_aud_mv]       ; the control: how many draws there were AT ALL
-    cmp byte [fpg_on], 0        ; **THE GATE** (SPEC.md 12.8.4): a draw here
+    FPG_ARMED                   ; **THE GATE** (SPEC.md 12.8.4): a draw here
     je .nogate                  ; with the widget up is the defect itself -
                                 ; unreachable on a kernel that has the compare
                                 ; above, and one per packet on one that does not
@@ -4262,7 +4240,7 @@ mou_apply:
 .norace:                        ; at the door
 %endif
 %ifndef NOCURDISK
-    cmp byte [fpg_on], 0        ; **AND IT MAY NOT LAND ON THE WIDGET** (SPEC.md
+    FPG_ARMED                   ; **AND IT MAY NOT LAND ON THE WIDGET** (SPEC.md
     je .go                      ; 7.4.2). Reachable only from the int 13h path
                                 ; above - the ordinary gates already sent an
                                 ; armed widget to .dirty - and it replaces that
@@ -5263,83 +5241,11 @@ cur_busy_on:
 ; [cur_shchk] covers the case the position compare cannot see - the pointer
 ; standing still while the window under it is raised, hidden, closed or
 ; dragged out from under it.
-cur_shape_pass:
-    ; THE "NOTHING MOVED" TEST IS ABOVE THE FRAME, and that is the whole of
-    ; SPEC.md 7.2.2. It used to sit below four pushes, so the pass that has
-    ; nothing to do - which is nearly every pass - paid 108 cycles of banking
-    ; to reach three compares. The UI ladder calls this 671 times a second on
-    ; an idle desktop: 300 cycles a pass, 4.2% of the machine, to answer no.
-    ;
-    ; One register is enough to ask, so one is what the fast path banks.
-    cmp byte [cur_shchk], 0
-    je .quiet                   ; ONE BYTE, and the UI ladder asks it too, so
-                                ; on a quiet pass this routine is not even
-                                ; called (SPEC.md 7.2.1.1)
-    push ax
-    push bx
-    push cx
-    push dx
-    mov byte [cur_shchk], 0
-    mov cx, [mouse_x]           ; straight into wm_hit's own registers (they
-    mov dx, [mouse_y]           ; went through AX/BX until size pass 9)
-    call wm_hit                 ; BX = the topmost visible window over the
-                                ; point (0 = none), AL = which part of it
-%ifdef KERN_BIG
-    cmp bx, [cur_hovw]          ; THE HOVER EDGE (SPEC.md 11.103.7): the same
-    je .hov                     ; answer, asked whether it CHANGED - one
-    push bx                     ; compare per pass, and only a change pays the
-    xchg bx, [cur_hovw]         ; far call: [cur_hovw] = the new window HERE,
-    call far [DKDFP + DKD_HOVER] ; so it is current with no image too, and
-    pop bx                      ; DESK.DRV's dkd_hover (SPEC.md 11.103.10)
-.hov:                           ; takes WF_HOVER off the OLD one (BX) and on
-                                ; the new, each a desk window's, with a wake to
-                                ; each. With no image the slot is mod_gone:
-                                ; no desk window exists, so nothing is hovered.
-                                ; CX is spent, AX is kept
-%endif
-    mov ah, CUR_ARROWSH
-    or bx, bx
-    jz .set                     ; the desktop, the dock and the menu bar are
-                                ; the kernel's, and the kernel points with an
-                                ; arrow
-    or al, al
-    jnz .set                    ; the title bar and its three boxes are the
-                                ; kernel's too, drawn by the kernel and
-                                ; clicked through the kernel - only a window's
-                                ; CONTENT is the application's to dress
-    mov ah, [bx + W_FLAGS + 1]  ; the high byte (SPEC.md 7.2.1), whose TOP bit
-    and ah, ~WF_HIBITS & 0xFF   ; the kernel's bits are NOT a shape (SPEC.md
-                                ; 11.99.2, 11.96.17) - WF_STALE, WF_NOANIM and
-                                ; WF_1BPP, named once in wm.inc so a fourth
-                                ; cannot be added to one mask and not this one
-.set:
-    cmp ah, [cur_shape]
-    je .out                     ; THE COMMON ANSWER, and the compare has to be
-                                ; HERE rather than only inside cur_shape_set:
-                                ; a pointer moving INSIDE the window it was
-                                ; already over would otherwise pay a
-                                ; gfx_lock/gfx_unlock pair per move for a
-                                ; shape that did not change - which is
-                                ; PERFORMANCE.md Part 9 Set 4's 21.8%, the
-                                ; single most expensive thing in this kernel,
-                                ; charged to every mouse move on every
-                                ; machine. It also leaves a window in which
-                                ; the arrow is off the glass, which is how it
-                                ; was caught: the no-regression A/B against a
-                                ; reference kernel found the pointer MISSING
-                                ; from 5 of 18 captured frames
-    mov al, ah
-    mov bp, cur_shape_set       ; cur_shape_set draws, so it needs the lock -
-    call ui_lcall               ; and this is a .yield caller, which holds
-                                ; none. ui_lcall is the lock/call/unlock
-                                ; triple in six bytes; BP is spent on it
-.out:
-    pop dx
-    pop cx
-    pop bx
-    pop ax
-.quiet:
-    ret
+; (WRITTEN IN ui_task's .chk_curs, its one call, by kernel size pass 16:
+; there AX..DX are dead, so the four banks went with the call and the ret,
+; and the "nothing moved" compare above the frame was the caller's too - 19
+; bytes, and a cheaper pass. The banner above and the comments in ui_task's
+; copy are the routine's.)
 
 ; -----------------------------------------------------------------------------
 ; cur_move - move the cursor to (AX, BX), writing every byte EXACTLY ONCE
@@ -6451,6 +6357,9 @@ vid_rowtab  resw VID_ROWTAB     ; viddet.inc's row table, declared HERE so the
 mou_pstack  resb MOU_PSTK       ; the mouse ISR's own stack (MOUPRIV_ENTER).
                                 ; .lowbss and not .bss: SS is LOW_SEG for every
                                 ; task and the swap moves SP alone
+%if ((mou_pstack - $$) % 2) || (MOU_PSTK % 2)
+  %error "mou_pstack must be WORD-aligned with an EVEN size: the ISR runs on it with SP = mou_pstack + MOU_PSTK, so either odd puts every push on an odd address. The pad above is what guarantees it"
+%endif
 %ifdef VID_ROWTAB_MOU
 %if mou_pstack - vid_rowtab != VID_ROWTAB * 2
   %error "vid_rowtab must lie directly under mou_pstack: a packed display's arrow runs on into it (SPEC.md 120.3.3)"

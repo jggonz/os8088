@@ -364,6 +364,23 @@ def main():
         rx, ry = dispcp.row_xy(bx, by, row)         # click can never land on
         say("doscable: DOSPKT.COM is row %d at (%d,%d)" % (row, rx, ry))
         mo.dblclick(rx, ry, settle=0.0)             # whatever sorted there
+        # **...AND THAT RUN HAS NO PACKET DRIVER** (SPEC.md 96.36.7.4): a
+        # fresh window starts with Network CLEARED, which now gates the cable
+        # as well as the card, so the probe finds no interface, says READY
+        # and holds on int 16h without a byte on the wire. What a user does
+        # about it is what this does: let it out, tick the box, Run again -
+        # POKED rather than clicked, for the environment row's reason below
+        # (doslnk and dosnetarena click it). The stepped launch is the SECOND
+        # run, from the window's own Enter.
+        os88marty.settle(m)
+        m.key("Enter")                          # the probe off its int 16h
+        os88marty.settle(m)
+        g = dispapps.pkg_seg(m, 0)
+        if not g:
+            say("doscable: FAILED - no DOS window after the first run")
+            return 1
+        m.write((g[1] << 4) + dm["dos_mnet"] + dm["OS88UI_CK_ON"], b"\x01")
+        m.key("Enter")                          # ...and Run, with the wire
         m.pause()
         p.sync()
         p.allow(2000000000)                     # a LIFETIME ceiling, re-anchored
@@ -495,10 +512,13 @@ def main():
         # network CLAIM (SPEC.md 96.26.6), so they are read through
         # [dos_pkt_bseg] with the offsets dosmap now takes off nasm's absolute
         # equates rather than a test transcribing them.
+        # ...AND SINCE SPEC.md 96.23.11 THE CLAIM HOLDS THE NETWORK PART, so
+        # its offsets are the PART's map (dosmap.netpart), not the host's.
+        nm = dosmap.netpart()
         bseg = int.from_bytes(m.read((pseg << 4) + dm["dos_pkt_bseg"], 2),
                               "little")
         if bseg:
-            raw = m.read((bseg << 4) + dm["dn_lsn"],
+            raw = m.read((bseg << 4) + nm["dn_lsn"],
                          dm["DN_NLSN"] * dm["DN_L_SIZE"])
             for i in range(dm["DN_NLSN"]):
                 r = raw[i * dm["DN_L_SIZE"]:(i + 1) * dm["DN_L_SIZE"]]
@@ -517,12 +537,12 @@ def main():
         # costs the frame - `.dropped` is the same arm as "nobody registered
         # for this type", and get_statistics has a field for it (§96.23.3).
         drop = pin = 0
-        if pseg:
+        if bseg:                        # the part's cells (SPEC.md 96.23.11)
             drop = int.from_bytes(
-                m.read((pseg << 4) + dm["dos_pkt_stats"] + dm["PKS_DROP"], 4),
+                m.read((bseg << 4) + nm["dos_pkt_stats"] + dm["PKS_DROP"], 4),
                 "little")
             pin = int.from_bytes(
-                m.read((pseg << 4) + dm["dos_pkt_stats"] + dm["PKS_PIN"], 4),
+                m.read((bseg << 4) + nm["dos_pkt_stats"] + dm["PKS_PIN"], 4),
                 "little")
         say("doscable: the driver counted %d frame(s) in and %d dropped"
             % (pin, drop))
@@ -533,17 +553,17 @@ def main():
         # to collect freezes EVERY flow, not only the inbound one.
         pend, praw, pbusy, flows = 0, 0, 0, []
         if bseg:
-            pend = int.from_bytes(m.read((bseg << 4) + dm["dn_pend"], 2),
+            pend = int.from_bytes(m.read((bseg << 4) + nm["dn_pend"], 2),
                                   "little")
-            raw = m.read((bseg << 4) + dm["dn_flows"],
+            raw = m.read((bseg << 4) + nm["dn_flows"],
                          dm["DN_NFLOW"] * dm["DN_F_SIZE"])
             for i in range(dm["DN_NFLOW"]):
                 r = raw[i * dm["DN_F_SIZE"]:(i + 1) * dm["DN_F_SIZE"]]
                 if r[dm["DN_F_USED"]]:
                     flows.append((r[dm["DN_F_HAND"]], r[dm["DN_F_ST"]]))
-        if pseg:
-            praw = m.read((pseg << 4) + dm["dos_pkt_raw"], 1)[0]
-            pbusy = m.read((pseg << 4) + dm["dos_pkt_busy"], 1)[0]
+        if bseg:
+            praw = m.read((bseg << 4) + nm["dos_pkt_raw"], 1)[0]
+            pbusy = m.read((bseg << 4) + nm["dos_pkt_busy"], 1)[0]
         say("doscable: [dn_pend]=%d [dos_pkt_raw]=%d [dos_pkt_busy]=%d "
             "flows (handle, state) = %r" % (pend, praw, pbusy, flows))
 

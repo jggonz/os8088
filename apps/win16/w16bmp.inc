@@ -85,6 +85,8 @@ w16_bmnew:
     jle .no
     or dx, dx
     jle .no
+    cmp ax, 2 * W16_GBUF            ; w16_bmfill converts a row in the band
+    ja .no
     xor bx, bx
 .find:
     cmp word [w16b_seg + bx], 0
@@ -440,26 +442,18 @@ W16LIB w16u_loadbmp
 w16_dibmake:
     mov [w16b_rs], es
     push si
-    ICALL w16_dibhdr
+    ICALL w16_dibhdr                ; CX = the bits' offset
     pop si
     jc .no
     mov ax, [w16_dwid]
     mov dx, [w16_dhgt]
-    push si
+    push cx
     call w16_bmnew
-    pop si
+    pop cx
     jc .no
     push ax
-    mov es, [w16b_rs]               ; the bits follow the header and palette
-    mov ax, 2
-    cmp byte [w16_dbpp], 1
-    je .pn
-    mov ax, 16
-.pn:
-    mul word [w16_dpal]
-    add ax, [es:si]
-    add ax, si
-    mov [w16_dbits], ax
+    mov es, [w16b_rs]               ; the bits follow the header and the
+    mov [w16_dbits], cx             ;   palette, biClrUsed entries of it
     mov [w16_dbits + 2], es
     call w16_bmfill
     pop ax

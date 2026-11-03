@@ -349,10 +349,15 @@ rw_partsmv:
     inc si
     jmp short .tab
 .fix:                               ; ES:DI moves with the carve if it lay
-    mov dx, [es:di]                 ;   in it - unless it is a SELECTOR
-    test dl, 4                      ;   (bit 2, the LDT's: a heap segment is
-    jnz .r                          ;   a multiple of 32), a code alias or
-    sub dx, bx                      ;   kern_mega's banks in place (10.3.1)
+    mov dx, [es:di]                 ;   in it - unless it is a SELECTOR (bit
+%ifdef PKG_MEGA                     ;   2, the LDT's), a code alias or kern_
+    cmp byte [rw_pm], 0             ;   mega's banks in place (10.3.1). Asked
+    je .seg                         ;   only under CPU_F_PM: a PART is on a
+    test dl, 4                      ;   PARAGRAPH since SPEC.md 20.12.2.1, so
+    jnz .r                          ;   the core's real-mode segment has bit 2
+.seg:                               ;   set as often as not, and the test
+%endif                              ;   skipped it (the carve moved, it did not)
+    sub dx, bx
     cmp dx, cx
     jae .r
     add [es:di], ax

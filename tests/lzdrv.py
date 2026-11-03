@@ -287,7 +287,7 @@ def run(a, sysimg, plain):
                 m.read(S("drv_tab") + RD_ROW * DRVR_SZ + 8, 2), "little")
             have = kb * 1024
             if getattr(m, "selector", None) and not kb:
-                # kern_mega: DRVR_KB is 0 by design - the image is in the
+                # kern_mega: DRVR_PARA is 0 by design - the image is in the
                 # pool above 1MB and no heap claim holds it (driver.inc's
                 # .keepall) - so what covers image + bss is the SELECTOR
                 # the row names, and its limit is the question

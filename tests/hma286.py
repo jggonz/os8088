@@ -156,7 +156,7 @@ def rows(b):
     for name, r, _f in hmadrv.DRVS:
         rec = tab[r * DRVR_SIZE:(r + 1) * DRVR_SIZE]
         out[name] = {"seg": u16(rec, EQ["DRVR_SEG"]),
-                     "kb": u16(rec, EQ["DRVR_KB"])}
+                     "kb": u16(rec, EQ["DRVR_PARA"])}
     return out
 
 
@@ -288,11 +288,11 @@ def arm_run(arm, keep):
              "1. `.cold` runs from the HMA")
         row = S("xm_row")
         xseg = u16(b.memr(row + EQ["DRVR_SEG"], 2))
-        xkb = u16(b.memr(row + EQ["DRVR_KB"], 2))
+        xkb = u16(b.memr(row + EQ["DRVR_PARA"], 2))
         lall = b.memr((xseg << 4) + xs["xm_lall"], 1)[0]
-        want(xseg and xkb == 2 and lall == 1,
-             "1. XMEM.DRV at %04X in %d KB, its LOADALL transport %s on "
-             "this 286" % (xseg, xkb, "VERIFIED" if lall == 1 else
+        want(xseg and xkb == 128 and lall == 1,     # 2,041 bytes: 4 granules
+             "1. XMEM.DRV at %04X in %d paragraphs, its LOADALL transport %s "
+             "on this 286" % (xseg, xkb, "VERIFIED" if lall == 1 else
                            "refused ([xm_lall] %d)" % lall))
         r = rows(b)
         blk = blocks(b)

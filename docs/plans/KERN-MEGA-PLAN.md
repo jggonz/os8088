@@ -72,8 +72,10 @@ Video Player and RealDMG (their `PKG_MEGA` arms run instead).
 - Performance: a #GP a write through CS (Sheet's macro module, PiXEL's PXSW
   sites, Word's and Scribe's undo, RealDMG), `drv_fs_call`'s 512-byte
   bounce, the Sound Blaster's IRQ discovery trapping on segment 0.
-- MC9, what still goes low (DMA rings above 1MB, BIGSP, `mx_tab`):
-  KERN-MEGA-MEMORY-PLAN section 5, deferred.
+- MC9, what still goes low (DMA rings above 1MB, BIGSP): KERN-MEGA-MEMORY-PLAN
+  section 5, deferred. (`mx_tab` went above 1MB in kern_mega size pass 2, with
+  `mem_sel`, `mega_wtab` and `mega_ustab`: the tables' tail past the IDT,
+  `MEGA_SEL_MXT`, docs/plans/completed/msp2/pmmem.md.)
 - Field: the Victory's 640K-1MB Task Manager rows (14.70.3), T69/LASTX on the
   PicoMEM (14.73; works on 86Box), the PicoMEM's IRQ reflections (in 86Box
   with the card's own firmware they carry its Sound Blaster and its mouse:
@@ -9806,7 +9808,7 @@ were `RFL` and `Q`, which fire while a PicoMEM's Sound Blaster plays.
 | message on the glass | raised in | when | verdict |
 |---|---|---|---|
 | `Entered protected mode` | `mega_enter`'s tail (`mega_mtoast`, 8 s) | once, at boot, entering protected mode | **KEEP** - the owner's startup toast. It named the route back (`protected, 286 reset` / `protected, 386 CR0`) until the owner asked for wording true on any CPU; **MEGADIAG** keeps the route |
-| `real mode: 8086-class CPU`, `... no 82KB for kern_mega's tables`, `... A20 will not open`, `... a task predates it` | `mega_gatef` (`.cold`) | at boot, when kern_mega declines protected mode and runs as kern_big | **KEEP** - the machine is not what the disk says, and this is the only place it is said |
+| `No PM: 8086-class CPU`, `No PM: no table room`, `No PM: A20 will not open`, `No PM: an older task` (kern_mega size pass 2: the old `real mode: ...` lines were 25-41 characters and truncated at TOAST_MAX's 24) | `mega_gatef` (`.cold`) | at boot, when kern_mega declines protected mode and runs as kern_big | **KEEP** - the machine is not what the disk says, and this is the only place it is said |
 | `NAME vv at cccc:iiii` | `mega_fkdo` (14.42) | a package was closed because it faulted | **KEEP** - a program vanished; kern_big's equivalent is the stop screen |
 | ` kern_mega FAULT vv err eeee at cccc:iiii sp ssss - reboot ` | `mega_report` | a KERNEL fault: the machine stops | **KEEP** - the stop screen |
 | `Use this disk's DOS.O88` | `mega_pkgok` | kern_big's DOS.O88 started on kern_mega | **KEEP** - a refusal |
@@ -9820,7 +9822,7 @@ were `RFL` and `Q`, which fire while a PicoMEM's Sound Blaster plays.
 | `Q cc ss oo bb vv rr` | `mega_rfsec`, after RFL | the PicoMEM's request queue, the same second | **MEGADIAG** |
 | `DOSP kkkkK o tttt b tttt` | `mega_dwake` (`megados.inc`) | every return from a DOS park | **MEGADIAG** |
 | `FD BIOS ss s0s1s2 Dmm` | `mega_fdjudge` | the first native floppy fallback of a boot | **MEGADIAG** ("disk status") |
-| `native floppy off: BIOS from now` | `mega_fdjudge` | eight fallbacks in a row switched the native path off | **MEGADIAG** - its E9 line stays |
+| `Floppy: BIOS from now` (was `native floppy off: ...`, 32 characters) | `mega_fdjudge` | eight fallbacks in a row switched the native path off | **MEGADIAG** - its E9 line stays |
 | `H ssss:oooo bbbbbbbb rrr` | `hbm_d1why` (`kernel/hiber.inc`) | the DOS handoff record read back wrong | **MEGADIAG** - the shipped kern_mega says kern_big's `Not our handoff record` instead, so the refusal stays and only its hex goes |
 
 E9 (`out 0xE9`) is invisible on real hardware and is NOT a toast, so every
@@ -13382,7 +13384,85 @@ at least 0.6 of a frame after the card opens (57-60 ms; 15-18 before).
 Red, both legs: `vp_lnow`'s staging out (the contiguity, 5,332 of 10,945),
 its frame-0 piece out (the start, sample 914, and the 17 ms).
 
-### 14.135 WIN16 Phase B/C's kern_mega work crossed two `.mega` rungs (2026-11-02) - RECORDED, ACCEPTED
+### 14.135 The code review's kern_mega findings: a park message to nowhere, a window anyone could free, and the BIOS's segments (2026-11-01) - FIXED, NOT YET RUN
+
+From docs/reports/CODE-REVIEW-TWO-CYCLES-2026-11-01.md, findings 4, 17 and 18
+and its kern_mega lows. Each was checked by reading the code before it was
+changed. Every change is in `.mega`; the cost is +160 bytes of it and nothing
+else (`.text`, `.cold`, `.bss`, `MEGA_RESIDENT` and `.mega`'s rung
+unchanged). kern_big and kern_small `kernel.bin` are byte-identical to the
+tree before.
+
+1. **`mega_dhcfill` built the park header's descriptor 28h out of ES**
+   (finding 4, REAL). Since MC7, ES there is the selector `hbm_stageseg`
+   returns, so the text page's base was selector x 16, and the park stub's
+   bad-sum line (and `DOSRMARK=1`'s trace) went to an arbitrary address
+   below 1MB. The user saw a silent wait for a key. 14.77 had fixed the same
+   mistake in `KDL_STAGE`. The descriptor is now built from `[mega_dstg]`,
+   which `mega_dstgs` has already set in `mega_dosgo`. The comment that said
+   "B000 or B800" for ES is corrected.
+2. **`SEG_FREE` freed any `mega_wtab` row** (finding 17, REAL): `.free`
+   asked `mega_wslot` and never `mega_segown`. A free of another owner's
+   window is now refused with CF = 1 and nothing done (SPEC.md 50.6.11's
+   table says so). Every shipped caller frees its own window with DS = its
+   own segment, so none of them is refused.
+3. **`mega_ustab`'s rows went stale, and a full table faulted the
+   reflection** (finding 18, REAL in both halves). `mega_rseg` brings
+   *any* segment that is not a claim's base to `mega_useg`, a segment
+   inside a claim included. `mega_cdin` excluded only `mega_wtab`'s
+   windows, so a claim's free (`mega_cdfree`) freed a row's selector while
+   the row still named it. That selector could then be handed to someone
+   else and handed back again for the old segment. A claim's move
+   (`mega_mpmovef`, `mx_desc`) rebased it, so the row mapped segment X to
+   X + the move. A row names a PHYSICAL segment, so `mega_iswin` now
+   answers CF = 0 for a ustab selector too, and none of the three walks
+   touches it. With the table full, `mega_rseg` used to return the raw
+   segment, and the reflection epilogue's `pop es` raised a #GP that
+   `.stale` reports, because the value is a GDT index. It now returns the
+   NULL selector, so the pop loads and a USE faults instead. The eight rows
+   are now permanent (they always were, in effect) and bounded; the table
+   was not grown.
+4. **The lows.**
+   - `mega_wset`'s `.own` re-aimed a BOUND window too (REAL): `SEG_WIN` or
+     `SEG_AT` naming a `SEG_BWIN` window aimed it outside its block, where
+     the block's free and move no longer saw it and `SEG_AIM` refused it.
+     A bound window is now not "the caller's to re-aim" there, and the
+     caller gets a window of its own.
+   - `mega_mpsyncf` left descriptors past a shrunk end live (REAL).
+     `mega_mpgap` now frees every allocator descriptor based in the free
+     runs either side of the record after a regrow or a re-home's trim:
+     one walk of `mem_tab` and two `mega_cdfree`s, with IF = 0 as the
+     callers already hold it. It does not need the old extent, because
+     nothing legitimate is based in free conventional heap (windows and
+     ustab rows are excluded by `mega_cdin`, and kernel segments are GDT
+     entries the walk does not reach).
+   - `MX_FWIN` never cleared: REAL, but BENIGN, and documented rather than
+     fixed. The flag is cleared at the entry's next take. While the block
+     lives after its last bound window, the flag only makes its moves hold
+     the rate hook off, which is the safe direction.
+   - `mega_rseg` took segments 0008h-0038h as identity selectors (REAL).
+     Those are GDT entries 1-7, the kernel's own, with other bases. It
+     also took KERNEL_SEG's and COLD_SEG's entries, which are CODE. These
+     go to `mega_p2d`/`mega_useg` now. `mega_oddsegc` has the same test
+     and was NOT changed: its callers pass paragraphs the kernel computed
+     (output buffers, windows, heap), and none of them points into the IVT.
+     That was read from the five call sites, not tested.
+   - `mega_hibnc` trusted the ROM with BX, CX, DX, SI, DI and ES across
+     `int 13h` (REAL as a dependency). They are now banked with
+     `pusha`/`push es` around the call. That costs 16 more bytes of the
+     calling stack and two of code. AX's answer was never read, and CF
+     survives the pops.
+   - `mega_enter`'s header said BX and BP were kept. It is a comment fix:
+     `mega_enterf` walks `sch_tasks` in BX, and kmain keeps nothing across
+     the call but the AX it pushes.
+
+Assembled: kern_mega, kern_big and kern_small kernels, in private trees
+against a HEAD worktree. Not yet run under an emulator (no Bochs in the
+container). The covering rows are `megadosp`, `megadosroom`, `megahiber`,
+`megaown`, `megarehome`, `megaxmove`, `megavidring`, `megatbl`, `brmega`,
+and megaport's `c64part` and `c64move` (14.80's windows).
+
+### 14.136 WIN16 Phase B/C's kern_mega work crossed two `.mega` rungs (2026-11-02) - RECORDED, ACCEPTED
 
 A rung crossing is never silent, so here are both. Measured with
 `tools/kernsize.py --build build/megak` against `origin/main` (6dfafef44),

@@ -348,36 +348,36 @@ w16_garena:
     inc si
     cmp si, 2 * W16_NARENA
     jb .cnt
-    mov dx, W16_ARENAKB
+    mov dx, W16_ARENAKB * 64        ; ...all in PARAGRAPHS (SPEC.md 50.3.7)
     jcxz .fl
-    mov dx, 2 * W16_ARENAKB
+    mov dx, 2 * W16_ARENAKB * 64
     cmp cx, 1
     je .fl
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
-    sub ax, W16_ARKEEP
-    jb .fl
-    cmp ax, dx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest claim, paragraphs
+    sub ax, W16_ARKEEP * 64         ;   (BX and CX are not ours to keep:
+    jb .fl                          ;   both come back off the stack or are
+    cmp ax, dx                      ;   set again below)
     jbe .fl
     mov dx, ax
 .fl:
     pop bx
     pop si
-    mov ax, bx                      ; KB = ceil(paragraphs / 64)
-    add ax, 63
-    mov cl, 6
-    shr ax, cl
-    push ax                         ; (the request's own KB, to fall back to)
+    mov ax, bx                      ; the request's own paragraphs, to fall
+    push ax                         ;   back to
     cmp ax, dx
     jae .kb
     mov ax, dx
 .kb:
-    W16VCLAIM                       ; DX = the segment
+    push ax                         ; what this try asks
+    W16VCLAIM                       ; DX = the segment, AX = GRANTED
     mov cx, ax
+    pop ax
     jnc .got1
     pop cx                          ; the floor would not go: three
     push cx                         ;   quarters of it, and again, down to
     cmp ax, cx                      ;   the request (the arm's map is 960
-    je .no1                         ;   KB, so a fourth arena is what it
+    jbe .no1                        ;   KB, so a fourth arena is what it
     mov dx, ax                      ;   has left: halving left a third of
     shr dx, 1                       ;   that unused)
     shr dx, 1
@@ -395,10 +395,8 @@ w16_garena:
 .got:
     mov [w16_arena + si], dx
     W16SEG es, dx
-    mov ax, cx
-    mov cl, 6
-    shl ax, cl                      ; paragraphs
-    mov [es:GH_SIZE], ax
+    mov ax, cx                      ; the arena is all it was granted: the
+    mov [es:GH_SIZE], ax            ;   granule's slack is a free block's
     mov byte [es:GH_FLAGS], 0
     mov word [es:GH_MAGIC], GH_SIG
     add ax, dx
@@ -1061,21 +1059,19 @@ w16k_gcomp1:
     xor ax, ax
     jmp short .kb
 .room:
-    call OSAPI_MEM_AVAIL            ; AX = the largest free run, KB
-%ifdef PKG_MEGA
-    or di, di
+    push bx
+    push cx
+    mov bl, MEMP_AVAIL
+    call OSAPI_MEM_P                ; AX = the largest claim, in PARAGRAPHS -
+%ifdef PKG_MEGA                     ;   what w16_garena is given to the
+    or di, di                       ;   paragraph (SPEC.md 50.3.7)
     jz .cap
     xchg ax, bx                     ; ...or BX, all of it, for GetFreeSpace
 .cap:
 %endif
-    cmp ax, 1023
-    jbe .kb
-    mov ax, 1023
-.kb:
-    push cx
-    mov cl, 6
-    shl ax, cl
     pop cx
+    pop bx
+.kb:
 %ifdef PKG_MEGA
     or di, di
     jz .most

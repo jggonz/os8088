@@ -280,7 +280,7 @@ KDL_SNAPLIN equ 506             ; dw THE PROGRAM'S LAST SCREEN (KERN-MEGA-PLAN
 ; zero offset or cluster is a sender that did not fill them, and the switch is
 ; not tried. Four bytes in the gap between the body and the park's fields, the
 ; body ending at 483, and four of the park's reserve.
-KDL_L3OFF   equ 484             ; dw part 3's first file SECTOR (DOS.O88's)
+KDL_L3OFF   equ 484             ; dw part 3's first file PARAGRAPH (DOS.O88's)
 KDL_L3ZB    equ 486             ; dw ...and its PACKED bytes (DOS.O88's)
 KDL_O88CL   equ 508             ; dw DOS.O88's first cluster (the kernel's)
 KDL_O88V    equ 510             ; db ...and its volume (the kernel's)

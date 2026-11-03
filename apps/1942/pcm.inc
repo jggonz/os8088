@@ -25,13 +25,13 @@ n_pcm_open:
     jc .bad
     mov al,N_P_SFX
     call op_row
-    call op_lazykb
-    jc .bad
-    xchg ax,bp                  ; BP, NOT BX: OSAPI_MEM_AVAIL answers BX =
-    call OSAPI_MEM_AVAIL        ; the TOTAL free, so the old `cmp ax,bx` was
-    cmp ax,bp                   ; the largest run against the total - true
-    jb .bad                     ; only for a heap in one piece, and false
-                                ; whenever the ring sits below other claims,
+    call op_lazyp               ; PARAGRAPHS, as MEMP_AVAIL answers (SPEC.md
+    jc .bad                     ; 50.3.7)
+    xchg ax,bp                  ; BP, NOT BX: MEMP_AVAIL answers BX = the
+    mov bl,MEMP_AVAIL           ; TOTAL free, so the old `cmp ax,bx` was the
+    call OSAPI_MEM_P            ; largest run against the total - true
+    cmp ax,bp                   ; only for a heap in one piece, and false
+    jb .bad                     ; whenever the ring sits below other claims,
                                 ; as it does on kern_mega (KERN-MEGA-PLAN
                                 ; 14.55). n_pushall banked BP
     ; The bank is a part of 1942.O88 (N_P_SFX), built with the package, so the

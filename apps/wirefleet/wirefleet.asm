@@ -3,6 +3,9 @@
     OS88_HEADER 'WireFleet', wf_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
 %define OP_ONMOVE wf_partsmv        ; the stamp bank's claim MOVES (SPEC.md
                                     ; 20.12.12, 114.11): wf_fx_need declares it
+%define OP_NO_FSOP                  ; image + bss is at APP_MAX_SIZE with
+                                    ; 3 bytes spare: no room for the parts'
+                                    ; one-bar operation (SPEC.md 20.12.9.6)
 %include "os88parts.inc"
     OS88_ICON16
     dw 0,0,0x0180,0x03c0,0x03c0,0x07e0,0x1ff8,0x7ffe

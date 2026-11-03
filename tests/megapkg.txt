@@ -129,3 +129,8 @@ apps/win16/win16.asm 1          # WIN16 REFUSING TO START (SPEC.md 124.1,
     # kern_mega refuses it outright, in WIN16's words rather than
     # os88mega.inc's (whose toast names a MEGA apps disk WIN16 has no arm on).
     # A correctness refusal and ~30 bytes, not kern_mega work
+apps/redline/inspmod.inc 3       # THE SHIPPED BUILD STAYING CORRECT, not a
+    # kern_mega arm: the Inspect module's ri_pm (`test byte [ri_cpu + 1],
+    # CPU_F_PM`) keeps int 15h C0h - whose answer is a real-mode ES:BX - and
+    # the IVT read off kern_mega, and ri_cpuf names the bit on the CPU page
+    # (SPEC.md 103.7.1). Three lines, no code that runs only there

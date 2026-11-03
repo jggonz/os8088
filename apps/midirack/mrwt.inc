@@ -205,6 +205,14 @@ mwt_load:
     mov si, mwt_bname
     mov di, mwt_cur
     call os88_rseq_new              ; the cursor names no file: start it cold
+    mov ax, [mr_bankkb]             ; ONE BAR for the bank (SPEC.md 12.8.10)
+    mov dx, ax                      ; and not one a chunk: its KB in bytes,
+    mov cl, 10                      ; over by under a KB. Ended at .out on
+    shl ax, cl                      ; every way out, unconditionally - this
+    mov cl, 6                       ; package opens no other operation, and
+    shr dx, cl                      ; an end the kernel did not give us is
+    mov cx, ax                      ; refused, so a refused begin costs one
+    call OSAPI_FS_OP                ; call
     xor ax, ax                      ; DX:AX = its offset in the file
     xor dx, dx
     xor bx, bx                      ; ES:BX = where the chunk lands
@@ -270,6 +278,11 @@ mwt_load:
 .no:
     stc
 .out:
+    pushf                           ; the bank's bar over (above): the CF
+    xor cx, cx                      ; out is the load's
+    xor dx, dx
+    call OSAPI_FS_OP
+    popf
     pop es
     pop bp
     pop di

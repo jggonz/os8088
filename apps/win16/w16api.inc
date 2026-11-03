@@ -1340,7 +1340,8 @@ w16_lastpart:
 section .text
 
 w16_s_about:    db 'About ', 0
-w16_s_on8088:   db 13, 10, 'WIN16 on os8088', 0
+w16_s_on8088:   db 13, 10, 'WIN16 on os8088', 13, 10
+                db 'Contributed by Jorge Gonzalez', 0
 
 ; w16_fcopyn - ES:SI a far string -> DS:DI, at most CX characters, stopping
 ; at its NUL or at DL (0 = none). DI and SI end past what was copied; no NUL

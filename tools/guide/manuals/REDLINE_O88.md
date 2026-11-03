@@ -7,8 +7,11 @@ A score of **1.00x** means "as fast as that PC", **2.00x** means twice as
 fast. It also lists what it found in the machine: the processor, the memory,
 the video adapter and the BIOS.
 
-On a 286 or 386, REDLINE's second tab, **Tune**, can identify the chipset and
-make the expansion bus faster for 8-bit cards.
+Its second tab, **Inspect**, is a survey of the machine in eight pages:
+the processor and its features, the memory and what uses it, the displays,
+the drives, the ports, every interrupt line and what is installed. On a 286
+or 386, its third tab, **Tune**, can identify the chipset and make the
+expansion bus faster for 8-bit cards.
 
 ![REDLINE's Summary after a benchmark on a 4.77 MHz XT with VGA. Every score is close to 1.00x, because this machine is the reference PC.](shot:redline-summary){full}
 
@@ -91,6 +94,40 @@ Press **Save...**, the `S` key, or choose **Bench > Save Report**. REDLINE
 writes the Detailed report as **REDLINE.TXT** in the folder it was opened
 from, ready to read in Note Pad ([[NOTEPAD.O88]]) or to copy to another computer.
 
+## The Inspect tab
+
+The **Inspect** tab (`I`, or **Bench > Inspect**) lists what is in the
+machine and what os8088 made of it. It only reads: it changes nothing. The
+first time it opens it reads the rest of itself from REDLINE.O88, so the
+disk REDLINE came from must still be in its drive.
+
+A row of buttons under the tabs picks a page, and so do the keys `1` to `8`,
+`Left` and `Right`, and `Tab`:
+
+| Page | What it shows |
+|---|---|
+| Summary | The machine, its BIOS, processor, coprocessor and clock speed, the memory, the display, how many drives and ports, which os8088 kernel is running, how long it took to start, the date and time, and how many programs are running |
+| CPU | The processor's class, its bus width and prefetch queue on an 8088 or 8086, its vendor, name, family, model, stepping and features on a processor that can name itself, its speed and how it was measured, the memory features in use, and the coprocessor: an 8087, a 287, a 387 or later, or one built into the processor |
+| Memory | Bars showing how the conventional memory is used: the system, its buffers, the memory programs can have, what is taken and what is free. Then extended and expanded memory, and a map of the area above 640KB: the video memory, every option ROM with its size and whether its checksum is right, and the system BIOS |
+| Video | The adapter, screen size and colours, the BIOS screen modes, every display and the full-screen modes os8088 can use on each, and what an EGA or VGA BIOS reports about itself |
+| Drives | How many floppy and fixed disks the BIOS found, every os8088 drive letter and how it is reached, which one the machine started from, the size and free space of the current drive, and which disk drivers are loaded |
+| Ports | Each serial port with its chip, speed and settings, and the signals from whatever is plugged in; each parallel port with the printer's state; the game port; the keyboard |
+| IRQ/DMA | Each interrupt line: what it is normally for, whether it is switched on, and whether the BIOS, an option ROM, os8088 or one of its drivers answers it. Then the DMA channels |
+| Devices | Sound, the pointer, the network card, expanded memory, the clock, what the BIOS was told at power-on, every driver loaded and every program running |
+
+The page scrolls like Tune's, with the arrow keys, `PgUp`, `PgDn`, `Home`
+and `End`, or the scroll bar. Some things are deliberately not read, and the
+page says why where they would go: the geometry of the disks, whether a
+serial port has a 16550's buffer, and what a DMA transfer is doing.
+
+The buttons along the bottom:
+
+| Button | Key | What it does |
+|---|---|---|
+| Refresh | `R` | Reads everything again |
+| Save report | `S` | Writes all eight pages to `INSPECT1.TXT`, then `INSPECT2.TXT` and so on, in the current folder |
+| Quit | `Q` | Closes REDLINE |
+
 ## The Tune tab
 
 The **Tune** tab (`H`, or **Bench > Tune**) is for AT-class machines: 286
@@ -155,6 +192,7 @@ hardware at all: an XT's bus has nothing to tune.
 | Summary | `U` | The dashboard view |
 | Detailed | `D` | The full report |
 | Compare | `C` | The workload bars, large |
+| Inspect | `I` | The Inspect tab |
 | Tune | `H` | The Tune tab |
 
 The **REDLINE** menu has **About REDLINE** and **Close**. The **Quit**
@@ -167,6 +205,8 @@ button, or `Q`, also closes REDLINE.
 | `Tab` | Next view: Summary, Detailed, Compare |
 | `F1` | Detailed, at the first page |
 | `B` | The Benchmark tab |
+| `I` | The Inspect tab |
+| `H` | The Tune tab |
 | `Up`, `Down`, `PgUp`, `PgDn`, `Home`, `End` | Scroll the results in Summary and Compare, or move through the report in Detailed |
 | `Space` | The next page of results, in Summary and Compare |
 
@@ -175,6 +215,7 @@ button, or `Q`, also closes REDLINE.
 | File | Written by | Where |
 |---|---|---|
 | REDLINE.TXT | Save | The folder REDLINE was opened from |
+| INSPECT1.TXT, INSPECT2.TXT... | Save report, on the Inspect tab | The current folder |
 | CHIPSET1.TXT, CHIPSET2.TXT... | Save report, on the Tune tab | The current folder |
 | REDLINE.CFG | Apply on boot | `SYSTEM\APPDATA` on the boot disk |
 

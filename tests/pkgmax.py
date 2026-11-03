@@ -69,7 +69,7 @@ MEGA = bool(os.environ.get("OS88_MEGA"))     # kern_mega under Bochs
 def pool(m, S):
     """kern_mega's pool blocks as (KB offset, KB, owner) - mx_tab in
     kernel/mega.inc: MX_OFF, MX_KB, MX_OWN, 96 records of 10 bytes."""
-    mx = m.read(S("mx_tab"), 96 * 10)
+    mx = m.read(m.tail("mx_tab"), 96 * 10)
     return [(u16(mx, k), u16(mx, k + 2), mx[k + 4])
             for k in range(0, len(mx), 10) if u16(mx, k + 2)]
 

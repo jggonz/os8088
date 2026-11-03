@@ -98,7 +98,7 @@ colours on and off. On a black-and-white display the item reads
 
 | Menu | Item | What it does |
 |---|---|---|
-| isoTron | About isoTron | Shows the name and the main keys |
+| isoTron | About isoTron | Shows the name, the main keys and who made it |
 | isoTron | Close | Closes isoTron |
 | Game | Rookie, Veteran, Lunatic | Starts a new game at that level, with sound |
 | Game | Sound: On / Sound: Off | Turns the sound off or on. The label shows the sound as it is now |

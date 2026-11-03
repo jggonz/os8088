@@ -72,6 +72,8 @@ Double-click a drive icon. Up to four windows. Refresh re-reads after a floppy s
 
 Double-click opens a folder, runs a program, or opens a document in its program (found on any mounted disk). Right-click an item or empty space for a menu, including Open in New Window and Paste Into.
 
+Ctrl+click adds or drops an item, Shift+click or Shift+arrows pick a run, Ctrl+A picks all; Cut, Copy, Paste, Delete and a drag then act on the whole set (not on the 128KB system).
+
 FILE MENU
 Open, New Folder, Rename, Delete. Compress packs a file (programs still read it, so it only saves room); Uncompress undoes it, Uncompress To joins a split set. Format Disk, Clone Disk (floppy to floppy or to a .IMG file) and Write Img (an image back onto a floppy) need a floppy window.
 

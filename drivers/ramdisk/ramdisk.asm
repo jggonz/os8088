@@ -576,7 +576,7 @@ rd_extkb:   dw RD_EXTMINKB      ; the geometry rd_geom derives from [rd_kb]:
 rd_extb:    dw RD_EXTMINKB * 1024   ; the extent in KB and in bytes...
 rd_extpara: dw RD_EXTMINKB * 64     ; ...in paragraphs, for a conventional
 rd_next:    dw 0                ; store...and how many there are
-rd_ctabkb:  dw 0                ; ...and what the table costs
+rd_ctabp:   dw 0                ; ...and what the table costs, in paragraphs
 
 ; --- the volume --------------------------------------------------------------
 rd_vol:     db 0xFF             ; the volume index we registered, FF = none
@@ -614,6 +614,7 @@ rd_rcur:    times FSEQ_SIZE db 0 ; ...and the Load's READ_SEQ cursor (SPEC.md
 rd_wseg:    dw 0                ; the metadata block's buffer...
 rd_wown:    db 0                ; ...and whether it is ours to free
 rd_badcode: db 0                ; rd_meta_check's verdict
+rd_iop:     db 0, 0             ; (a pad byte: nothing after moves odd) 1 = rd_iop_go's OSAPI_FS_OP is ours to end
 rd_bdrv:    db 0                ; where the caller was standing, banked across
 rd_bcwd:    dw 0                ; a visit to the image's folder
 rd_dlgmode: db 0                ; FDLG_OPEN / FDLG_SAVE, across the dialog

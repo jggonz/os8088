@@ -98,6 +98,8 @@ HBX_HMAX    equ (512 - 12) / 8  ; the runs the section's head can list: 12
 
 %include "hbstage.inc"        ; SPEC.md 87.5's staging map, shared as SOURCE
                               ; with kerndos/kdresume.inc (SPEC.md 96.49)
+%include "lzfilt.inc"         ; kds_expand undoes the near-call filter
+                              ; (SPEC.md 20.13.9) with kernel/lz.inc's body
 %ifdef DOSR_MARK
   %include "hbmark.inc"       ; ...and the trace, which hbm_wake stamps 500
 %endif                        ; lines before hbstub.inc is included
@@ -120,10 +122,10 @@ KDS_PLEN    equ 0x0430          ; dd the part's PACKED bytes
 KDS_ULEN    equ 0x0434          ; dd ...and what they expand to
 KDS_TSEG    equ 0x0438          ; dw where the packed stream is read
 ; --- AND THE CORE PART'S, because the stub expands TWICE (SPEC.md 96.44.5.4)
-; ONE extent list covers both: os88pkg.py lays parts out in table order and
-; 512-aligned, so the core's bytes are immediately followed by kern_dos's and
-; a single run reads the pair. KDS_CDELTA is how far into that run kern_dos's
-; stream begins, in PARAGRAPHS.
+; ONE extent list covers both: os88pkg.py lays parts out in table order, on
+; paragraphs, so the core's bytes are followed by kern_dos's and a single run
+; reads the pair. KDS_CDELTA is how far into that run kern_dos's stream
+; begins, in PARAGRAPHS, and KDS_CHEAD how far the core's does.
 KDS_CPLEN   equ 0x043A          ; dd the CORE part's packed bytes
 KDS_CDELTA  equ 0x043E          ; dw paragraphs from the run's base to
                                 ; kern_dos's own stream
@@ -133,6 +135,11 @@ KDS_KSEG    equ 0x044A          ; dw kern_mega: the stub's own pick of
 KDS_KORG    equ 0x044C          ; dw kern_dos's segment and origin, HMA or LOW
                                 ; (96.40.9.2) - above HS_TICK0's dword
 %endif
+KDS_CHEAD   equ 0x044E          ; dw ...and to the CORE's: the run starts on
+                                ; the sector the core starts in, and a part
+                                ; starts on a paragraph (SPEC.md 20.12.2)
+KDS_FMT     equ 0x0450          ; db the two streams' format, KDH_FMT's byte:
+                                ; LZ_LZB = the 360KB disk's DOS.O88 (96.44.18)
 KDS_LB      equ 0x0500          ; db[512] the launch block, on HS_IVT's ground
 KDS_TMPSEG  equ 0x1000          ; 64KB up: above kern_dos's image, which starts
                                 ; at KD_SEG and is 46KB, so the stream and the
@@ -231,12 +238,13 @@ KDL_DPT_LEN equ 11              ; TABLE, the one field DOS.O88 cannot fill.
 
 ; --- the record a package posts (SPEC.md 96.40) -----------------------------
 ; MIRRORED in apps/os88api.inc, and t_mirror is the guard.
-KDH_MAGIC   equ 0               ; dd 'KDH1'
+KDH_MAGIC   equ 0               ; dd 'KDH2' ('KDH1' named parts in SECTORS)
 KDH_VOL     equ 4               ; db the volume DOS.O88 is on
-KDH_PAD     equ 5               ; db 0
+KDH_FMT     equ 5               ; db the kern_dos and core parts' FORMAT,
+                                ; OP_T_FMT's byte: 0 = LZ4, 1 = LZB (96.44.18)
 KDH_DIR     equ 6               ; dw its folder's first cluster, 0 = the root
 KDH_NAME    equ 8               ; db[13] its 8.3 name, NUL-terminated
-KDH_POFF    equ 21              ; dw the part's first file SECTOR
+KDH_POFF    equ 21              ; dw the part's first file PARAGRAPH
 KDH_PLEN    equ 23              ; dd its packed bytes
 KDH_ULEN    equ 27              ; dd ...and its unpacked bytes
 KDH_LB      equ 31              ; db[512] the launch block, verbatim
@@ -251,7 +259,7 @@ KDH_CODE    equ 545             ; dw the exit code the RESTORED kernel pokes in,
 ; They go on the END rather than beside KDH_POFF, so KDH_LB's offset does not
 ; move: the launch block is 512 of the 547 and every field before it is one a
 ; wave already published.
-KDH_COFF    equ 547             ; dw the CORE part's first file SECTOR
+KDH_COFF    equ 547             ; dw the CORE part's first file PARAGRAPH
 KDH_CPLEN   equ 549             ; dd its packed bytes
 KDH_CULEN   equ 553             ; dd ...and its unpacked bytes
 KDH_CORG    equ 557             ; dw where the core sits in kern_dos's
@@ -259,7 +267,7 @@ KDH_CORG    equ 557             ; dw where the core sits in kern_dos's
 KDH_AKB     equ 559             ; dw the ARENA the program was given, in KB,
                                 ; poked in beside KDH_CODE (SPEC.md 96.41.1)
 KDH_SIZE    equ 561
-KDH_SIG     equ 0x3148444B      ; 'KDH1', little-endian
+KDH_SIG     equ 0x3248444B      ; 'KDH2', little-endian (SPEC.md 96.40.1)
 KDH_NOCODE  equ 0xFFFF          ; ...and what KDH_CODE says until it has one
 
 ; --- the exit code's mailbox (SPEC.md 96.41) --------------------------------
@@ -508,33 +516,30 @@ osapi_dos_handoff_x:
 ; -----------------------------------------------------------------------------
 hb_pick_x:
     push bx
-    push cx
-    mov cl, [dsk_bootvol]
+    mov bl, [dsk_bootvol]       ; BL IS THE COUNTER: it is dsk_vol_fixed_x's
+    call hb_pick1               ; own argument and that routine banks BX, so
+    jnc .out                    ; nothing copies it in (kernel size pass 17,
+    xor bx, bx                  ; -4: CL counted, with a bank of its own and
+.vol:                           ; a `mov bl, cl` every pass)
     call hb_pick1
     jnc .out
-    xor cx, cx
-.vol:
-    call hb_pick1
-    jnc .out
-    inc cx
-    cmp cx, DVOL_MAX
+    inc bx
+    cmp bl, DVOL_MAX
     jb .vol
     stc
 .out:
-    pop cx
     pop bx
     retf
 
-hb_pick1:                       ; is volume CL one? out: CF = 0 and AL = CL
-    mov bl, cl
+hb_pick1:                       ; is volume BL one? out: CF = 0 and AL = BL
     call dsk_vol_fixed_x        ; AL = 1 fixed, AH = the kind; CF = no row
     jc .no
     or al, al
     jz .no
     cmp ah, DVK_FILE
     je .no
-    mov al, cl
-    CLC_OR_STC .no              ; CF = 0 AL = CL, or (.no) CF = 1
+    mov al, bl
+    CLC_OR_STC .no              ; CF = 0 AL = BL, or (.no) CF = 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -573,10 +578,8 @@ HB_XMIN_KB equ (MPK_HDR + 512 + 1023) / 1024
 %endif                          ; the header and the section's head, beside
                                 ; the tables' [mega_tblkb] (MC7's step 6)
 hb_ok_x:
-    push bx
-    push cx                     ; ...and these two, for the reason above
-    push dx
-    COLDCALL hb_pick_x          ; the volume a hibernate would go to
+    call kentc_di               ; AX too - a clobber, so the ladder may keep
+    COLDCALL hb_pick_x          ; it - and kretfc_di is the far end (pass 16)
     mov bx, menu_s_hibernh      ; ...none: '(no disk)'. A `mov` writes no
     jc .set                     ; flag, so the string can be chosen first
 %ifdef VID_EXT
@@ -601,10 +604,7 @@ hb_ok_x:
     mov bx, menu_s_hiberxm      ; (size pass 10: the reason no longer goes
 .set:                           ; through AL and back, -10)
     mov [menu_items_logo + 8], bx   ; item 4 of the System menu
-    pop dx
-    pop cx
-    pop bx
-    retf
+    jmp kretfc_di
 
 ; --- far entries for the module (SPEC.md 2.6): cold bodies that end in a near
 ; --- ret, reached from a segment of their own. Four bytes each.
@@ -672,11 +672,9 @@ hbf_kinit:
 ; toast names it the way the Control Panel's does, out of the same table.
 hbf_open:
     call hbf_need
-    jc .no
+    jc hbf_perform.toast        ; in reach without the relay (pass 16)
     call far [HBFP + HBE_OPEN*4]
     retf
-.no:
-    jmp short hbf_perform.toast ; the toast and the retf, hbf_perform's
 
 hbf_nodisk:
     push ax
@@ -1010,7 +1008,7 @@ hbm_toast:
 ; hbm_d1why - "Not our handoff record" as a field reading (KERN-MEGA-PLAN 10.3
 ; item 54.2): `H ssss:oooo bbbbbbbb rrr`, the pointer DOS.O88 posted, the
 ; first four bytes found there read DIRECTLY (no string op, nothing that can
-; fault - a good record reads 4B444831, 'KDH1'), and mega_strcal's REP MOVS
+; fault - a good record reads 4B444832, 'KDH2'), and mega_strcal's REP MOVS
 ; figures for SI, DI and CX. Built in hbm_dosrec, whose copy has just failed.
 ; TOAST_MAX is 24 and this is 24. DS = KERNEL. out: SI = the string. Clobbers
 ; AX, CX, DI, ES
@@ -1873,8 +1871,10 @@ hbm_wrimg:
 .rimg:                          ; includes the masks and the wake address
 %endif
     call hbm_psum               ; 5. THE PROGRAMS' SUM, taken here, the last
-    CSDO mov [CSEG hbm_psv], ax ;    instant before the write: nothing that
-    CSDO mov [CSEG hbm_psv + 2], dx ; runs from here touches a program's
+    CSDO_ON
+    mov [CSEG hbm_psv], ax      ;    instant before the write: nothing that
+    mov [CSEG hbm_psv + 2], dx  ; runs from here touches a program's
+    CSDO_OFF
                                 ;    memory, so the image holds what this
                                 ;    read (SPEC.md 87.4.1). Into this image,
                                 ;    so it is written with it
@@ -1885,6 +1885,25 @@ hbm_wrimg:
 %ifdef KERN_MEGA
     test byte [cpu_feat], CPU_F_PM
     jz .rsz
+%ifdef FPG_OPS
+    ; ONE BAR FOR THE WHOLE IMAGE (SPEC.md 12.8.8): it is ~20 appends here and
+    ; each filled the bar. EXACT: the conventional chunks, chunk 0 twice (it is
+    ; written for its size and then put right with two write-ats, hbm_xwconv),
+    ; the extended section in the whole chunks hbm_xwrite flushes, and the
+    ; pointer. In-hold: the lock is held to the end, and nothing ends it but
+    ; the unlock - which a hibernate never reaches and a refusal does
+    call hbm_xconv              ; DX:AX = the conventional chunks
+    mov cx, [mega_hbxl]         ; + the section (hbm_xplan), whole chunks
+    mov bx, [mega_hbxl + 2]
+    add cx, HBX_CHUNK - 1
+    adc bx, 0
+    and cx, -HBX_CHUNK
+    add cx, ax
+    adc dx, bx
+    add cx, HBX_CHUNK + HBP_SIZE    ; + chunk 0's second write + the pointer
+    adc dx, 0
+    call KERNEL_SEG:fpg_opbegin
+%endif
     call hbm_xconv              ; ...in whole chunks, so the section appends,
     call hbm_xwconv             ; and a chunk a call (below)
     jmp short .rwrote
@@ -2813,9 +2832,11 @@ hbm_dosrun:
 .vkind:
     mov al, DVK_BIOS
 .vput:
-    CSDO mov [CSEG di], ax             ; kind, unit
-    CSDO mov [CSEG di+2], cx           ; ...base
-    CSDO mov [CSEG di+4], dx
+    CSDO_ON
+    mov [CSEG di], ax           ; kind, unit
+    mov [CSEG di+2], cx         ; ...base
+    mov [CSEG di+4], dx
+    CSDO_OFF
     add bx, DV_SIZE
     add bp, 4
     add di, KDL_VROW
@@ -2855,9 +2876,11 @@ hbm_dosrun:
     call hbm_cb                 ; 18.4), not out of the global listing: one
     jc .b3                      ; far call where find-then-stage was two, and
 %ifdef KERN_MEGA
-    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_O88CL], bx    ; ...and WHERE DOS.O88 IS,
+    CSDO_ON
+    mov [CSEG hbm_dosrec + KDH_LB + KDL_O88CL], bx ; ...and WHERE DOS.O88 IS,
     mov al, [cs:hbm_dosrec + KDH_VOL]               ; for the HMA kern_dos to
-    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_O88V], al     ; read part 3 off it on a
+    mov [CSEG hbm_dosrec + KDH_LB + KDL_O88V], al ; read part 3 off it on a
+    CSDO_OFF
                                         ; refused EXEPACK switch (96.40.9.1).
                                         ; CSDO, as step 3c's own writes are:
                                         ; each was a mega_gpw fixup until
@@ -2878,22 +2901,34 @@ hbm_dosrun:
     call hbm_cb                 ; DX = its segment
     jc .b5
     mov [hb_xseg], dx
-    ; **ONE RUN COVERS BOTH PARTS** (SPEC.md 96.44.5.4). The core is part 1 and
-    ; `kern_dos` is part 2; `os88pkg.py` lays parts out in TABLE ORDER, each
-    ; 512-aligned, so the core's packed bytes are immediately followed by
-    ; `kern_dos`'s and the extent list wanted is one range from KDH_COFF to the
-    ; end of KDH_PLEN. Nothing here knows that adjacency as a fact - it takes
-    ; the difference of the two offsets DOS.O88 posted, so a layout that ever
-    ; put something between them would read that something too and still hand
-    ; the stub the right two streams.
-    mov ax, [cs:hbm_dosrec + KDH_PLEN]  ; the PACKED bytes, as sectors: what
-    add ax, 511                         ; the stub reads is the stream and not
-    mov cl, 9                           ; what it expands to
+    ; **ONE RUN COVERS BOTH PARTS** (SPEC.md 96.44.5.4). The core and
+    ; `kern_dos` are parts 2 and 3 (1 and 2 on kern_mega, whose DOS.O88 has no
+    ; window part, SPEC.md 96.44.19); `os88pkg.py` lays parts out in TABLE ORDER, each
+    ; on a PARAGRAPH (SPEC.md 20.12.2), so the core's packed bytes are
+    ; followed by `kern_dos`'s and the extent list wanted is one range from
+    ; the sector KDH_COFF is in to the end of KDH_PLEN. Nothing here knows that
+    ; adjacency as a fact - it takes the difference of the two offsets DOS.O88
+    ; posted, so a layout that ever put something between them would read that
+    ; something too and still hand the stub the right two streams. EVERY TERM
+    ; IS PARAGRAPHS, which a word holds for a 1MB file, so nothing is
+    ; multiplied into bytes on the way to the sector count.
+    mov ax, [cs:hbm_dosrec + KDH_PLEN]  ; the PACKED bytes, as paragraphs: what
+    add ax, 15                          ; the stub reads is the stream and not
+    rcr ax, 1                           ; what it expands to (the carry comes
+    mov cl, 3                           ; back in as bit 15)
     shr ax, cl
-    mov cx, [cs:hbm_dosrec + KDH_COFF]  ; CX = sectors to skip: the CORE's
-    mov bx, [cs:hbm_dosrec + KDH_POFF]  ; start, which is the lower of the two
-    sub bx, cx                          ; BX = the gap to kern_dos's stream...
-    add bx, ax                          ; ...plus kern_dos's own sectors
+    mov dx, [cs:hbm_dosrec + KDH_COFF]  ; DX = the CORE's paragraph, the lower
+    mov bx, [cs:hbm_dosrec + KDH_POFF]  ; of the two
+    sub bx, dx                          ; BX = the gap to kern_dos's stream...
+    add bx, ax                          ; ...plus kern_dos's own paragraphs...
+    mov ax, dx
+    and ax, 31
+    add bx, ax                          ; ...from the core's SECTOR's start
+    add bx, 31
+    mov cl, 5
+    shr bx, cl                          ; BX = sectors to take
+    shr dx, cl
+    mov cx, dx                          ; CX = sectors to skip
     pop ax                      ; DOS.O88's first cluster, from step 2
     call hbm_extat
     jc .b6
@@ -3009,11 +3044,15 @@ hbm_dosrun:
 .snap:
     mov [mega_dsnap], ax
     mov [mega_dsnap+2], dx
-    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_SNAPLIN], ax
-    CSDO mov [CSEG hbm_dosrec + KDH_LB + KDL_SNAPHI], dl
+    CSDO_ON
+    mov [CSEG hbm_dosrec + KDH_LB + KDL_SNAPLIN], ax
+    mov [CSEG hbm_dosrec + KDH_LB + KDL_SNAPHI], dl
+    CSDO_OFF
     call hbm_psum               ; THE PROGRAMS' SUM, as hbm_wrimg's step 5
-    CSDO mov [CSEG hbm_psv], ax ; takes it for an image: hbm_wake 3a checks
-    CSDO mov [CSEG hbm_psv + 2], dx ; it on this way home too, and without
+    CSDO_ON
+    mov [CSEG hbm_psv], ax      ; takes it for an image: hbm_wake 3a checks
+    mov [CSEG hbm_psv + 2], dx  ; it on this way home too, and without
+    CSDO_OFF
                                 ; it every trip compared against a stale
                                 ; figure and refused (KERN-MEGA-PLAN 14.22).
                                 ; Before the snapshot, so the park holds it
@@ -3116,12 +3155,17 @@ hbm_dosrun:
     rep movsw                       ; nothing over there reads one
     mov ax, [cs:hbm_dosrec + KDH_CORG]  ; **`cs:` THOUGH DS IS CS HERE**: the
     mov [es:KDS_CORG], ax               ; module's own data is CS-relative
-    mov ax, [cs:hbm_dosrec + KDH_POFF]  ; (SPEC.md 2.8.6) and os88ovlchk reads
-    sub ax, [cs:hbm_dosrec + KDH_COFF]  ; the instruction rather than the two
-    mov cl, 5                       ; lines of context that make it safe. The
-    shl ax, cl                      ; delta is exact: the parts are
-                                    ; 512-aligned, so a sector is 32 paragraphs
-    mov [es:KDS_CDELTA], ax
+    mov ax, [cs:hbm_dosrec + KDH_COFF]  ; (SPEC.md 2.8.6) and os88ovlchk reads
+    and ax, 31                      ; the instruction rather than the two
+    mov [es:KDS_CHEAD], ax          ; lines of context that make it safe. The
+    add ax, [cs:hbm_dosrec + KDH_POFF]  ; run starts on the SECTOR the core
+    sub ax, [cs:hbm_dosrec + KDH_COFF]  ; starts in, so the core's stream is
+    mov [es:KDS_CDELTA], ax         ; its place in that sector up the run and
+    mov al, [cs:hbm_dosrec + KDH_FMT]   ; ...and which decoder (96.44.18)
+    mov [es:KDS_FMT], al
+                                    ; kern_dos's that plus the gap - both in
+                                    ; paragraphs, exact because a part starts
+                                    ; on one (SPEC.md 20.12.2)
     mov si, hbm_dosrec + KDH_LB     ; ...and the launch block, verbatim
     mov di, KDS_LB
     mov cx, KDL_SIZE / 2
@@ -3479,8 +3523,10 @@ hbm_extat:
     xor di, di
     mov word [hb_nx], 0
     mov si, ax                  ; SI = the cluster in hand
-    CSDO mov [CSEG hbm_xskip], cx
-    CSDO mov [CSEG hbm_xtake], bx
+    CSDO_ON
+    mov [CSEG hbm_xskip], cx
+    mov [CSEG hbm_xtake], bx
+    CSDO_OFF
 .clus:
     mov al, [dsk_spc]
     xor ah, ah
@@ -3524,9 +3570,11 @@ hbm_extat:
 .grown:
     add ax, dx
     adc bx, 0
-    CSDO mov [CSEG hbm_nextlo], ax
-    CSDO mov [CSEG hbm_nexthi], bx
-    CSDO sub [CSEG hbm_xtake], dx
+    CSDO_ON
+    mov [CSEG hbm_nextlo], ax
+    mov [CSEG hbm_nexthi], bx
+    sub [CSEG hbm_xtake], dx
+    CSDO_OFF
     jz .done
 .next:
     mov ax, si
@@ -3880,7 +3928,7 @@ hbm_xplan:
     mov ax, [mega_tbllin + 2]   ; is not in it: a code selector,
     mov [es:di+6], ax
     mov ax, [mega_ldtend]       ; ...its bytes: the GDT with the LDT on it,
-    add ax, MEGA_IDT_SIZE       ; and the IDT (MC7's step 6)
+    add ax, MEGA_TBL_TAIL       ; the IDT (MC7's step 6) and the tail past it
     mov [es:di+8], ax
     mov word [es:di+10], 0
     add ax, 512
@@ -3889,7 +3937,13 @@ hbm_xplan:
     add di, MPK_CPYSZ           ; so KERNEL.SYS's bytes, as a boot makes them
     mov si, mx_tab
 .mx:
-    mov ax, [ss:si+MX_KB]          ; every block the pool has given out, the
+    push ds                     ; the entry, through DS for two reads: ES is
+    mov ax, MEGA_SEL_MXT        ; the list's, and the pool's table is the
+    mov ds, ax                  ; tables' tail (kern_mega size pass 2)
+    mov ax, [si+MX_KB]
+    mov bx, [si+MX_OFF]
+    pop ds
+                                ; every block the pool has given out, the
     or ax, ax                   ; kernel's own among them (track 1's modules
     jz .next                    ; and caches: hbm_wake flushes the caches),
                                 ; the HMA's too since it is pool (MC4)
@@ -3902,7 +3956,7 @@ hbm_xplan:
     mov [es:di+10], dx
     add [mega_hbxl], ax
     adc [mega_hbxl + 2], dx
-    mov ax, [ss:si+MX_OFF]
+    mov ax, bx
     mov dx, ax
     mov cl, 10
     shl ax, cl
@@ -4101,15 +4155,17 @@ hbm_xwrite:
     call .flush
     jc .fail
 .done:
-    CSDO mov byte [CSEG hbm_ptrfix + HBP_XFLG], 1
-    mov ax, [mega_dsum]
-    CSDO mov [CSEG hbm_ptrfix + HBP_XSUM], ax
-    mov ax, [mega_dsum + 2]
-    CSDO mov [CSEG hbm_ptrfix + HBP_XSUM + 2], ax
-    mov ax, [mega_hbxd]
-    CSDO mov [CSEG hbm_ptrfix + HBP_XLEN], ax
-    mov ax, [mega_hbxd + 2]
-    CSDO mov [CSEG hbm_ptrfix + HBP_XLEN + 2], ax
+    mov ax, [mega_dsum]         ; the four words read FIRST, through the
+    mov bx, [mega_dsum + 2]     ; kernel's DS, so one run stores all five
+    mov cx, [mega_hbxd]         ; (BX CX SI are this routine's to clobber)
+    mov si, [mega_hbxd + 2]
+    CSDO_ON
+    mov byte [CSEG hbm_ptrfix + HBP_XFLG], 1
+    mov [CSEG hbm_ptrfix + HBP_XSUM], ax
+    mov [CSEG hbm_ptrfix + HBP_XSUM + 2], bx
+    mov [CSEG hbm_ptrfix + HBP_XLEN], cx
+    mov [CSEG hbm_ptrfix + HBP_XLEN + 2], si
+    CSDO_OFF
     pop dx
     call hbm_xfree
     clc
@@ -4163,7 +4219,7 @@ hbm_xruns:
     cmp [es:si+6], ax
     jne .no
     mov ax, [mega_ldtend]       ; ...and its size, this machine's (MC7's
-    add ax, MEGA_IDT_SIZE       ; step 6): an image of other tables is
+    add ax, MEGA_TBL_TAIL       ; step 6): an image of other tables is
     cmp [es:si+8], ax           ; refused, before MC7 or not
     jne .no
     cmp word [es:si+10], 0
@@ -4284,7 +4340,8 @@ hbm_xres:
     mov cl, 7
     shl dx, cl
     or ax, dx
-    CSDO mov [CSEG hbm_mrs0], ax ; ...which is where the section's head is
+    CSDO_ON
+    mov [CSEG hbm_mrs0], ax     ; ...which is where the section's head is
     mov bx, [cs:hbm_ptrbuf + HBP_XLEN]
     mov dx, [cs:hbm_ptrbuf + HBP_XLEN + 2]
     mov cl, 9
@@ -4292,7 +4349,8 @@ hbm_xres:
     mov cl, 7
     shl dx, cl
     or bx, dx
-    CSDO mov [CSEG hbm_mrsn], bx
+    mov [CSEG hbm_mrsn], bx
+    CSDO_OFF
     add bx, ax                  ; BX = the file's sectors
     pop ax                      ; AX = the first cluster
     jc .bad1
@@ -4555,10 +4613,10 @@ hbm_wake:
     inc bx
     jz .clkdone                 ; 0xFFFFFFFF: the clock above is current
     push es
-    xor bx, bx
 %ifdef KERN_MEGA
     MEGA_SEG0 es                ; (segment 0 is the NULL selector there)
 %else
+    xor bx, bx
     mov es, bx
 %endif
     mov bx, [es:0x046C]         ; the ROM's own tick, now
@@ -4992,7 +5050,7 @@ hbm_wake:
     MEGA_ISHI word [font_seg]   ; a POOL block is the heap copy too: kern_mega
     mov ax, [font_seg]          ; moves it above 1MB at the switch (KERN-MEGA-
     jnc .fcopy                  ; PLAN 14.120), where s2seg reads FFFF
-    call KERNEL_SEG:mega_s2segf ; a selector there: the paragraph it names
+    call COLD_SEG:mega_s2segc ; a selector there: the paragraph it names
 %else                           ; (MC7), which is what tells the two apart
     mov ax, [font_seg]
 %endif
@@ -5313,8 +5371,10 @@ kds_stub:
     mov es, ax
 %endif
     mov cx, [KDS_CPLEN]
-    push ds
-    mov ds, [cs:KDS_TSEG]       ; the core's stream IS the run's own base
+    mov ax, [KDS_TSEG]          ; the core's stream is KDS_CHEAD paragraphs
+    add ax, [KDS_CHEAD]         ; up the run: its place in the sector the
+    push ds                     ; run began on (SPEC.md 96.44.5.4)
+    mov ds, ax
     xor si, si
 %ifndef KERN_MEGA
     call kds_expand
@@ -5401,22 +5461,59 @@ kds_expand:
     xor di, di
 kds_expand_at:                  ; ...or from DI (kern_mega's HMA image)
     add cx, si                  ; the stream's end...
-    mov ax, [si]
-    add si, 2                   ; ...past the T word
+    lodsw                       ; ovlchk: lods DS = the stream
+                                ; ...past the T word - OR THE FILTER'S ESCAPE
+    cmp ax, LZ_ESC              ; (SPEC.md 20.13.9): then the real T is the
+    pushf                       ; next word, and ZF is kept for the end
+    jne .t
+    lodsw                       ; ovlchk: lods DS = the stream
+.t:
+    push di                     ; ...with where the output starts, which the
+                                ; filter's offsets count from
     sub cx, ax                  ; ...and so where the raw tail begins: the ONLY
     mov [cs:HS_LBA], cx         ; source bound the loop tests
     mov [cs:HS_LEFT], ax        ; ...and how much of it there is
-.seq:
+    cmp byte [cs:KDS_FMT], LZ_LZB
+    jne .seq                    ; LZ4: every disk but the 360KB one
+
+    ; --- LZB, kernel/lz.inc's lz_lzb with no bounds (SPEC.md 96.44.18) ------
+    ; The 360KB disk's DOS.O88. The same framing as LZ4's - T word or escape,
+    ; symbols, raw tail - so it shares .tail, the match copy and the filter's
+    ; inverse; only the symbols differ. A flag bit per symbol, MSB first out
+    ; of DL with a guard bit: 0 = one literal, 1 = a match of gamma bytes from
+    ; ((gamma - 2) << 8 | byte) back.
+    mov dl, 0x80                ; the guard alone: the first read refills
+.lzbl:
     cmp si, [cs:HS_LBA]
     jae .tail
-    mov al, [si]                ; the token: literal length in the high nibble,
-    inc si                      ; match length - 4 in the low one.
-    mov bl, al                  ; **THE STRING FORM IS REFUSED IN A MODULE
-                                ; IMAGE** (SPEC.md 2.8.6): a module's own data
-                                ; is CS-relative and os88ovlchk cannot see that
-                                ; this body is COPIED OUT of the module before
-                                ; it runs. Two bytes a site, and hbs_stub reads
-                                ; its own string the same way
+    call .bit
+    jc .lzbm
+    movsb
+    jmp short .lzbl
+.lzbm:
+    call .gam                   ; the length...
+    mov cx, ax
+    call .gam                   ; ...and (offset >> 8) + 2
+    dec ax
+    dec ax
+    mov ah, al
+    lodsb                       ; ovlchk: lods DS = the stream
+    xchg ax, bp                 ; BP = the offset, as .cp takes it
+    call .cp
+    jmp short .lzbl
+
+    ; --- LZ4: the loop's test is at the BOTTOM, .seq, so a sequence ends in
+    ; `call .cp` and falls into it rather than jumping back to the top
+.sym:
+    lodsb                       ; ovlchk: lods DS = the stream
+                                ; the token: literal length in the high nibble,
+    mov bl, al                  ; match length - 4 in the low one.
+                                ; **`lods` IS REFUSED IN A MODULE IMAGE**
+                                ; (SPEC.md 2.8.6), because there DS is the
+                                ; kernel; this body is COPIED OUT of the module
+                                ; and runs with the kernel gone and DS = the
+                                ; stream, which the marker says and os88ovlchk
+                                ; reads - two bytes a site, four a word
     mov cl, 4
     shr al, cl
     xor ah, ah
@@ -5424,10 +5521,9 @@ kds_expand_at:                  ; ...or from DI (kern_mega's HMA image)
     cmp al, 15
     jne .lits
 .lx:
-    mov al, [si]
-    inc si
-    xor ah, ah
-    add cx, ax
+    lodsb                       ; ovlchk: lods DS = the stream
+                                ; AH is still the zero above: neither this
+    add cx, ax                  ; nor the add touches it
     cmp al, 255
     je .lx
 .lits:
@@ -5435,24 +5531,35 @@ kds_expand_at:                  ; ...or from DI (kern_mega's HMA image)
     cmp si, [cs:HS_LBA]
     jae .tail                   ; the symbols never end on a literal run in
                                 ; this format - the tail is what ends it
-    mov ax, [si]                ; the match offset
-    add si, 2
-    mov bp, ax
+    lodsw                       ; ovlchk: lods DS = the stream
+    xchg ax, bp                 ; BP = the match offset
     mov al, bl
-    and al, 0x0F
-    xor ah, ah
+    and ax, 0x0F                ; ...and AX the match length's nibble
     mov cx, ax
     cmp al, 15
     jne .mat
 .mx:
-    mov al, [si]
-    inc si
-    xor ah, ah
+    lodsb                       ; ovlchk: lods DS = the stream
     add cx, ax
     cmp al, 255
     je .mx
 .mat:
     add cx, 4                   ; the minimum match, which the token omits
+    call .cp
+.seq:
+    cmp si, [cs:HS_LBA]
+    jb .sym
+.tail:
+    mov cx, [cs:HS_LEFT]        ; SI is standing on it
+    rep movsb
+    pop bx                      ; the output's first offset
+    popf
+    jne .ret
+    LZ_UNE8 bx                  ; ...over ES:BX..DI (lzfilt.inc)
+.ret:
+    ret
+
+.cp:                            ; CX bytes from BP back, both formats' match
     push ds
     push si
     mov si, di
@@ -5462,10 +5569,22 @@ kds_expand_at:                  ; ...or from DI (kern_mega's HMA image)
     rep movsb
     pop si
     pop ds
-    jmp short .seq
-.tail:
-    mov cx, [cs:HS_LEFT]        ; SI is standing on it
-    rep movsb
+    ret
+.gam:
+    mov ax, 1
+.g:
+    call .bit
+    adc ax, ax
+    call .bit
+    jc .g
+    ret
+.bit:                           ; CF = the next flag bit (LZ_GETBIT)
+    add dl, dl
+    jnz .bok
+    mov dl, [si]
+    inc si                      ; `inc` keeps the guard's CF for the adc
+    adc dl, dl
+.bok:
     ret
 
 kds_s_fail: db 13, 10, 'kern_dos could not be read off the disk.', 13, 10
@@ -5580,13 +5699,12 @@ hbm_s_off:  db 13, 10, 'os8088 has hibernated.', 13, 10, 13, 10
 KGO_PAIR hbg
 
 ; --- THE IMAGE'S OWN BSS (docs/plans/MODULE-SELFCONTAIN-PLAN.md 3.1) --------
-; `nobits`, in the tail of the module's own claim: mod_need rounds the claim up
-; to whole KB and kernel.asm asserts this fits that rounding, so none of it is
-; on the floppy and none of it costs heap. **NOT ZEROED** - MOD_BSS is
-; kern_small's alone - so every cell here is written before it is read, and
-; the one flag that was relying on the image's zero (hbm_dosheld) is cleared
-; at hbm_dosrun's head. Read and written through `cs:` like the image's data:
-; the section follows `.modh` in the same claim. SCRATCH only, never state
+; `nobits`, at the image's own end: the image ends in zeros this long
+; (kernel.asm's MODB_TAIL), so the file - and the claim mod_need makes from it
+; - holds it, and the read delivers it zeroed. Packed, the zeros cost the
+; floppy a few bytes. Every cell is written before it is read anyway, and the
+; one flag that once relied on the image's zero (hbm_dosheld) is cleared at
+; hbm_dosrun's head. Read and written through `cs:` like the image's data. SCRATCH only, never state
 ; that has to outlive a mod_drop (MODULE-SELFCONTAIN-PLAN 3.4) - the ptrbuf
 ; carries the wake address from hbm_ask to hbm_res, and the module is never
 ; dropped between those two (hb_mode stays RESUME, not GONE).

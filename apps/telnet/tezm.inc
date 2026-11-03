@@ -1675,6 +1675,12 @@ tz_wake:
 .data:
     call tz_commit
 .clr:
+    cmp byte [tz_st], ZR_DATA       ; a commit mid-file keeps the file's bar;
+    je .keep                        ; ZEOF's last one, TZ_DONE, or a commit
+    xor cx, cx                      ; that outlived tz_end end it (SPEC.md
+    xor dx, dx                      ; 12.8.10, tz_dlgdone's .op)
+    call OSAPI_FS_OP
+.keep:
     mov byte [tz_req], TZ_NONE      ; **LAST, AND AFTER EVERY RESULT IS
                                     ; WRITTEN**: the worker reads the stage the
                                     ; moment this byte goes to zero
@@ -2004,12 +2010,24 @@ tz_dlgdone:
     mul bx                          ; ...and back to bytes, which is 4,096 for
     mov [tz_chunk], ax              ; every power-of-two cluster at or below it
     mov byte [tz_dbl], 1
-    jmp short .sized
+    jmp short .op
 .single:
     cmp bx, TZ_STGSZ
     ja .big
     mov [tz_chunk], bx              ; 4,097..8,192: the whole area, SINGLE-
     mov byte [tz_dbl], 0            ; buffered - the worker fills it, then waits
+.op:
+    ; --- ONE BAR FOR THE FILE (SPEC.md 12.8.10, 70.11.5): a commit is 4 KB a
+    ; wake, so the widget blinked per chunk. The ZFILE's size is what the
+    ; writes move (0, not sent, begins nothing). The END FIRST: the last
+    ; commit of the file before this one can race its ZEOF (tz_wake's .clr),
+    ; and an end we do not own is refused, so there is no flag to keep
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FS_OP
+    mov cx, [tz_fsz]
+    mov dx, [tz_fsz+2]
+    call OSAPI_FS_OP
     jmp short .sized
 .big:
     mov byte [tz_rst], TZR_BIG

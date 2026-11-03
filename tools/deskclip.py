@@ -62,7 +62,7 @@ PHASES = [("wm_paint_dmg", "setup"), ("wm_dmg_gray", "ground"),
 PRIMS = ["gfx_fill", "gfx_fill_d", "gfx_fill_gray", "gfx_fill_gray_d",
          "gfx_fill_pat", "gfx_xor_fill", "font_run_x", "font_char", "ico_core",
          "gfx_restore", "gfx_blit1", "gfx_blit4"]
-MARKS = ["wm_paint_dmg.out", "desk_draw_zone", "wm_draw_win", "wm_dw_cull"]
+MARKS = ["wm_paint_dmg.out", "desk_draw_zone", "wm_draw_win", "wm_draw_win.cull"]
 CALLS = ["gfx_fill", "gfx_fill_gray", "gfx_fill_pat", "gfx_xor_fill",
          "font_run_x", "font_char", "ico_core", "gfx_restore", "gfx_blit1",
          "gfx_blit4"]
@@ -244,7 +244,7 @@ def analyse(p):
         res["wins"].append({"slot": p[i]["hit"]["slot"],
                             "son": p[i]["hit"]["son"],
                             "sub": p[i]["hit"]["sub"],
-                            "paint": any(h["name"] == "wm_dw_cull" for h in seg),
+                            "paint": any(h["name"] == "wm_draw_win.cull" for h in seg),
                             "cycles": p[j]["cycles"] - p[i]["cycles"],
                             "cnt": cnt})
     return res

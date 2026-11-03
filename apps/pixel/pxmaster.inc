@@ -532,8 +532,24 @@ px_wsubs:
 ; quantiser's pages, the row buffer, the accumulators below 1/1, a PCX line,
 ; a KB of the decoder's tables. Sets the sub-buffers' offsets - [px_wo_acc]
 ; [px_wo_lin] [px_wo_lut] in paragraphs from the row - and [px_tquant].
-; AX = KB; CF = 1 too large. Preserves all but AX
+; AX = KB; CF = 1 too large. Preserves all but AX. The PLANNER's figure
+; (px_pickscale, px_keepok - every sum there is KB); the claim itself is
+; px_wkp's PARAGRAPHS (SPEC.md 50.3.7), half a KB less on average
 px_wkb:
+    call px_wkp
+    jc .r
+    push cx
+    add ax, 63
+    mov cl, 6
+    shr ax, cl                      ; paragraphs -> KB, up
+    pop cx
+    clc
+.r:
+    ret
+    nop                             ; PARITY PAD, never executed: what
+                                    ; follows keeps its measured even shift
+; px_wkp - px_wkb's work claim in PARAGRAPHS: the claim's own figure
+px_wkp:
     push bx
     push cx
     push dx
@@ -605,9 +621,6 @@ px_wkb:
     add dx, QT_SIZE / 16            ; ...and the quantiser's pages below the
     jc .big                         ; row
     mov ax, dx
-    add ax, 63
-    mov cl, 6
-    shr ax, cl                      ; paragraphs -> KB, up
     clc
     jmp short .out
 .big:
@@ -697,9 +710,11 @@ px_claims:
     call px_mwinval                 ; (its segment may be one a table was of)
     mov ax, px_mreloc
     call OSAPI_MEM_MOVABLE
-    call px_wkb                     ; the work claim: the quantiser's tables
-    call OSAPI_MEM_CLAIM            ; at its base, the row's segment after
-    jc .nomem2                      ; them
+    call px_wkp                     ; the work claim: the quantiser's tables
+    xor cx, cx                      ; at its base, the row's segment after
+    mov bl, MEMP_CLAIM              ; them - in PARAGRAPHS (SPEC.md 50.3.7)
+    call OSAPI_MEM_P
+    jc .nomem2
     mov [px_wbase], dx
     call px_wsubs                   ; ...and its sub-buffers' selectors
     cmp byte [px_rflat], 0          ; the ring, unless the file is in memory

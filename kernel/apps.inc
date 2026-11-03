@@ -96,14 +96,13 @@ app_about_paint_x:
                                 ; else in this window draws
     mov bx, si                  ; window ptr for the centering helper
     mov dx, [bx+W_Y]
-    add dx, TITLE_H + 22        ; first line: content top + 22 (four lines of
-                                ; 8px on 16px pitch, centred in 101px)
+    add dx, TITLE_H + 22 - 16   ; first line: content top + 22 (four lines of
+                                ; 8px on 16px pitch, centred in 101px) - less
+                                ; the 16 the helper steps down before each
     mov si, app_about_s1
     call app_about_center_x
-    add dx, 16
     mov si, app_about_s2
     call app_about_center_x
-    add dx, 16
     mov si, app_about_s3p       ; third line follows the live scheduler mode
     call KERNEL_SEG:sched_mode_get         ; AL = 0 pre-emptive, 1 cooperative
     or al, al
@@ -111,36 +110,39 @@ app_about_paint_x:
     mov si, app_about_s3c
 .s3:
     call app_about_center_x
-    add dx, 16
     mov al, [vid_kind]          ; fourth line: the adapter in use. Indexed
     cbw                         ; through SI, which is about to hold the
-    mov si, ax                  ; string anyway, rather than borrowing BX -
+    xchg si, ax                 ; string anyway, rather than borrowing BX -
     add si, si                  ; that is the window ptr app_about_center
     mov si, [si + app_about_vid]   ; wants. cbw is safe because [vid_kind] is
-    call app_about_center_x        ; 0, 1 or 2 (kernel/viddet.inc)
+    call app_about_center_x        ; 0, 1 or 2 (kernel/viddet.inc). xchg, not
+                                   ; mov: AX is the helper's to write next
+                                   ; (kernel size pass 17, -1)
 
     jmp kretc_di
 
 ; -----------------------------------------------------------------------------
-; app_about_center - draw one string centered horizontally in a window
-; in:  SI = NUL string, BX = window ptr, DX = y
-; out: nothing
+; app_about_center - step down a line and draw one string centered
+;                    horizontally in a window
+; in:  SI = NUL string, BX = window ptr, DX = the PREVIOUS line's y
+; out: DX = this line's y (DX + 16)
 ; clobbers: AX, CX (internal helper)
 ;
-; THE KERNEL'S DIALOG-CENTRING HELPER rather than About's alone (SPEC.md
-; 14.6.3): ui_note_paint_x centres both lines of every note and alert through
-; it, so it stays whichever way About goes.
+; About's alone: ui_note_paint_x used to centre its notes through it (SPEC.md
+; 14.6.3) and no longer does, so the 16px line pitch every call stepped by
+; after it is the helper's first instruction (kernel size pass 17: -6).
 ; -----------------------------------------------------------------------------
 app_about_center_x:
+    add dx, 16
     call ct_font_width                     ; AX = string width, px
     mov cx, [bx+W_W]
-    dec cx                      ; content width, two bytes rather than three
-    dec cx
     sub cx, ax
-    shr cx, 1                   ; centering offset
-    add cx, [bx+W_X]
-    inc cx                      ; content left = W_X + 1
-    mov ax, (CWHITE << 8) | CBLACK  ; AL = ink, AH = the content's own ground:
-    jmp ct_cw_font_run                        ; W_PAINT arrives white-filled (6.6.5)
+    shr cx, 1                   ; centering offset: ((W - 2 - w) >> 1) + 1,
+    add cx, [bx+W_X]            ; the content's centre, is (W - w) >> 1 for
+                                ; any W - w >= 2 - and every line here is far
+                                ; narrower than the box (kernel size pass 17:
+                                ; dec, dec and inc were -3)
+    jmp fm_brun                 ; ...and fm_brun is the black-on-white run,
+                                ; spelled once (kernel size pass 16)
 
 section .text

@@ -182,9 +182,9 @@ def run(tag, machine, why, image, apps):
         check(p.b("dd_ok") == 1, "%s: the layout accepts the surface" % tag,
               "(content %dx%d)" % (p.w("dd_cw"), p.w("dd_ch")))
         check(p.w("dd_bdseg") != 0, "%s: the board picture is claimed" % tag,
-              "(tile %dx%d, board %dx%d, %d KB)"
+              "(tile %dx%d, board %dx%d, %.1f KB)"
               % (p.w("dd_tw"), p.w("dd_th"), p.w("dd_mw"), p.w("dd_mh"),
-                 p.w("dd_bdkb")))
+                 p.w("dd_bdpara") / 64.0))
 
         # --- D: Smiles eats ------------------------------------------------
         # ON THE GAME'S OWN CLOCK, which is tests/dotdel.py's idiom and not a
@@ -212,7 +212,8 @@ def run(tag, machine, why, image, apps):
 
         # --- E: fullscreen re-cuts the board, and Escape puts it back ------
         tile0 = (p.w("dd_tw"), p.w("dd_th"))
-        kb0 = p.w("dd_bdkb")
+        para0 = p.w("dd_bdpara")        # the claim, in paragraphs (SPEC.md
+                                        # 50.3.7)
         m.key("KeyF")
         # the re-cut is a claim, a regrow and a whole repaint of a bigger
         # board: the tile moving and dd_full clearing is that being done
@@ -221,12 +222,12 @@ def run(tag, machine, why, image, apps):
                  and p.b("dd_full") == 0, 10)
         os88marty.quiesce(m, layout, guest=0.5, what="the re-cut")
         big = (p.w("dd_tw"), p.w("dd_th"))
-        big_kb = p.w("dd_bdkb")
+        big_para = p.w("dd_bdpara")
         check(p.b("dd_ok") == 1 and p.w("dd_bdseg") != 0 and big > tile0,
               "%s: fullscreen re-cuts the board BIGGER" % tag,
-              "(tile %dx%d -> %dx%d, board %dx%d, %d KB)"
+              "(tile %dx%d -> %dx%d, board %dx%d, %.1f KB)"
               % (tile0[0], tile0[1], big[0], big[1],
-                 p.w("dd_mw"), p.w("dd_mh"), p.w("dd_bdkb")))
+                 p.w("dd_mw"), p.w("dd_mh"), p.w("dd_bdpara") / 64.0))
         a, used = arena(m)
         print("       arena %.1f KB, claimed at the widest %.1f KB, free %s"
               % (a / 1024.0, used / 1024.0,
@@ -244,11 +245,12 @@ def run(tag, machine, why, image, apps):
         # window needs (dd_fit_claim), where it used to keep the fullscreen
         # size for the rest of the session - 7 KB of a 52.5 KB arena here
         a2, used2 = arena(m)
-        check(p.w("dd_bdkb") == kb0,
+        check(p.w("dd_bdpara") == para0,
               "%s: Escape gives the fullscreen claim back" % tag,
-              "(%d KB windowed, %d KB fullscreen, %d KB after; claimed "
+              "(%.1f KB windowed, %.1f KB fullscreen, %.1f KB after; claimed "
               "%.1f KB -> %.1f KB)"
-              % (kb0, big_kb, p.w("dd_bdkb"), used / 1024.0, used2 / 1024.0))
+              % (para0 / 64.0, big_para / 64.0, p.w("dd_bdpara") / 64.0,
+                 used / 1024.0, used2 / 1024.0))
 
 
 def main(argv):

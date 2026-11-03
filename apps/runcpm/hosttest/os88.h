@@ -100,8 +100,10 @@ int  os88_toast(const char *text, int ticks);
 int  os88_cpu(void);
 
 unsigned os88_mem_claim(int kb);
+unsigned os88_mem_claim_p(unsigned paras);
 int      os88_mem_free(unsigned seg);
 unsigned os88_mem_regrow(unsigned seg, int kb);
+unsigned os88_mem_regrow_p(unsigned seg, unsigned paras);
 int      os88_mem_movable(unsigned seg, int on);
 void     os88_onmove(unsigned was, unsigned now);
 unsigned os88_mem_largest_kb(void);

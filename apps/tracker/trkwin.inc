@@ -125,6 +125,9 @@ TWO_ABOUT   equ 7
 ; the visualiser modes (tw_viz is the PICK, tw_vizm what is drawn)
 TWV_VU      equ 0
 TWV_SPEC    equ 1
+%if TWV_SPEC != 1
+  %error "trk_entry stores the 1 it already holds as the XT's default pick"
+%endif
 TWV_SCOPE   equ 2
 TWV_OFF     equ 3                   ; nothing: a PICK now (SPEC.md 45.23), and
                                     ; still what XT mode's 11 kHz forces
@@ -134,16 +137,24 @@ TW_OFFLEN   equ 19                  ; tw_s_voff's length (asserted below)
 TW_SOFFLEN  equ 18                  ; tw_s_soff's
 TW_COFFLEN  equ 16                  ; tw_s_coff's (a Covox's, SPEC.md 45.25.5)
 TW_UOFFLEN  equ 9                   ; ...and tw_s_uoff's
-TW_NBAND    equ 16                  ; the 286+ spectrum: sixteen bands...
-TW_BPITCH2  equ 14                  ; ...at this pitch...
-TW_BANDW    equ 12                  ; ...and this bar width, with markers
+TW_SPAN     equ 224                 ; the width the bands are centred in
+TW_NBAND    equ 18                  ; the 286+ spectrum: eighteen bands, two
+                                    ; semitones each (SPEC.md 45.24.2)...
+TW_BPITCH2  equ 12                  ; ...at this pitch...
+TW_BANDW    equ 10                  ; ...and this bar width, with markers
 %ifndef TW_XTNB
 TW_XTNB     equ 12                  ; the XT spectrum's bands (SPEC.md 45.24.1):
 %endif                              ; bars only, three semitones each
-TW_XTPIT    equ (TW_NBAND * TW_BPITCH2) / TW_XTNB  ; the same span...
+TW_XTPIT    equ TW_SPAN / TW_XTNB   ; the same span...
 TW_XTBW     equ TW_XTPIT * TW_BANDW / TW_BPITCH2   ; ...and proportions
 %if TW_XTNB > TW_NBAND || TW_XTNB < 2
   %error "TW_XTNB is 2..TW_NBAND"
+%endif
+%if 36 % TW_NBAND || 36 % TW_XTNB   ; a band is WHOLE semitones, or a note
+  %error "a band count must divide the 36 notes (SPEC.md 45.24.2)"
+%endif                              ; lands between two bands
+%if TW_NBAND * TW_BPITCH2 > TW_SPAN
+  %error "the 286+ bands overrun TW_SPAN"
 %endif
 %ifndef TW_BHOLD
 TW_BHOLD    equ 2                   ; a struck bar holds this many TICKS
@@ -605,7 +616,7 @@ tw_vizfx:
 
 ; -----------------------------------------------------------------------------
 ; tw_vgeom - the spectrum's shape for this machine and mode: the 286+ face's
-; sixteen bands with peak markers (SPEC.md 45.24), or, where the XT meter is
+; eighteen bands with peak markers (SPEC.md 45.24, 45.24.2), or, where the XT meter is
 ; forced, TW_XTNB bars and no markers (45.24.1). Sets [tw_nb], [tw_mk],
 ; [tw_bpit], [tw_bw], [tw_bx0]; CF = 1 when the bands or the markers moved,
 ; so the pane starts again. Preserves all but the flags.
@@ -625,9 +636,9 @@ tw_vgeom:
     mov [tw_nb], ax
     mov [tw_bpit], bx
     mov ax, bx
-    mul byte [tw_nb]                ; the bands' span, centred in 16 x 14
+    mul byte [tw_nb]                ; the bands' span, centred in TW_SPAN
     neg ax
-    add ax, TW_NBAND * TW_BPITCH2
+    add ax, TW_SPAN
     shr ax, 1
     add ax, 8
     mov [tw_bx0], ax
@@ -1865,7 +1876,7 @@ tw_skick:
 %else
 ; -----------------------------------------------------------------------------
 ; tw_spec - [tw_nb] bands, each a column that moves by its difference:
-; sixteen with peak markers, or the XT's twelve bars (tw_vgeom). The levels
+; eighteen with peak markers, or the XT's twelve bars (tw_vgeom). The levels
 ; live in tw_band (0..64), kicked by tw_skick as a note is HEARD and decayed
 ; by tw_vtick; tw_bh holds each column's drawn height, and tw_peak / tw_ph
 ; each band's peak marker (SPEC.md 45.24, 45.24.1).
@@ -2179,8 +2190,8 @@ tw_scolr:
 
 ; -----------------------------------------------------------------------------
 ; tw_skick - a note on channel BX became AUDIBLE in the row whose stamp is SI
-;            (called by tui_sync, SPEC.md 45.12.1): kick the band it lands in
-;            and half as much into each neighbour. preserves all
+;            (called by tui_sync, SPEC.md 45.12.1): kick the band it lands in,
+;            and only that band (45.24.2). preserves all
 ;
 ; The band is the NOTE, read from the pattern cell the listener is hearing -
 ; the stamp names the pattern and the row - so the spectrum follows the music
@@ -2227,20 +2238,8 @@ tw_skick:
     mov cl, al                      ; CL = the band
     xor ch, ch
     mov al, [tui_vu + bx]           ; ...kicked to the needle's own level
-    mov di, cx
-    call tw_kick1
-    cmp byte [tw_mk], 0             ; the XT's bars light ONE band a note:
-    je .done                        ; a neighbour is two more columns moving
-    shr al, 1
-    dec di
-    js .r
-    call tw_kick1
-.r:
-    add di, 2
-    cmp di, TW_NBAND
-    jae .done
-    call tw_kick1
-.done:
+    mov di, cx                      ; ONE band a note, on both faces
+    call tw_kick1                   ; (SPEC.md 45.24.2): no neighbour moves
     pop es
     pop di
     pop si

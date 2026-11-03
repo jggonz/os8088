@@ -1,6 +1,7 @@
 # A module that is fully contained on disk
 
-**Status: W0 BUILT (6.1); W1–W5 proposed.** The measurement behind it is
+**Status: W0 BUILT (6.1); W1–W5 proposed. 3.5 BUILT: a module's bss is zeros
+at the end of its own file, and the claim is the file to the granule.** The measurement behind it is
 `docs/reports/MODULE-RESIDENT-DATA-2026-09-12.md`, taken at `6c91a3a`, and
 every byte figure in this document comes from it or from
 `tools/os88modcost.py --api` on that same commit. Re-derive them with
@@ -161,6 +162,9 @@ on the floppy does not grow**.
 
 ### 3.2 Nothing claims it, because the claim is already made
 
+**SUPERSEDED by 3.5** - the granule went to 512 bytes, which halved the slack
+this section stands on, and the bss moved into the file.
+
 An assembly-time assertion beside the existing
 `MODC_SIZE > MOD_MAX_KB*1024` one:
 
@@ -184,6 +188,8 @@ assertion fires and not before** — spending it up front buys nothing and is
 exactly the "design for rungs" argument CLAUDE.md refuses.
 
 ### 3.3 `mod_need` zeroes it, once
+
+**SUPERSEDED by 3.5** - the read delivers the zeros, and this code is deleted.
 
 After `dskw_read_x` returns, the bytes between the image end and the claim end are whatever the heap had. `mod_need`
 already holds both figures — `BP` is the image size and `AX` was the claim in
@@ -217,6 +223,66 @@ So a module's `.bss` is **two populations**, and only one may move:
 answer is a property of the feature rather than of the variable. Getting it
 wrong is silent: a clipboard that forgets what was copied, on a machine that
 otherwise works.
+
+### 3.5 BUILT: the bss is ZEROS IN THE FILE, and the claim is the file
+
+When SPEC.md 50.2.1 took the heap granule from 1KB to 512 bytes, 3.2's slack
+halved and stopped being a design to stand on: `HIBER.DRV`'s 594 bytes of bss
+could never fit a 512-byte rounding, and `WIN95.DRV` (1,440 + 126) failed at
+once. Two designs were weighed:
+
+* **(A) the bss is part of the FILE** - each image ends in zeros exactly as
+  long as its bss (kernel.asm's `MODB_TAIL`), the bss section is `nobits`
+  with `vstart=` the image's own length so its labels ARE those zeros, and
+  `MOD_H_IMG`, the module map and the directory size all become image + bss.
+  `mod_need` claims the file to the granule (`mem_bytes_gp_x` +
+  `mem_claimp_hi_x`, the `MOD_MAX_KB` bound on the BYTES first) with no bss
+  figure in the kernel at all, and the read - or the ROM's copy - delivers
+  the zeros on every load, so 3.3's zeroing is deleted.
+* **(B) keep `nobits` and tell `mod_need` the bss size** - 3.2's named
+  fallback, a word (or a byte) per row: resident bytes on both kernels, plus
+  3.3's zeroing kept.
+
+**A was taken, on resident bytes**: `kern_big` `.text`/`.bss`/`.cold`
+**+0/+0/+0**, `kern_small` **+0/+0/-22** (3.3's zeroing), `kern_mega`
+`.cold` **-4** (`mod_hi` sizes its pair from the file, `inc`/`and` where it
+re-derived the KB claim). The five fit-asserts, `MODC_UNPAD`, `MODH_UNPAD`
+and `DOSRMARK=1`'s `align 1024` pad are deleted. What it costs is disk and
+ROM, neither resident: the packed modules grow 2 to 11 bytes each
+(LZ4 on a run of zeros), no file crosses a cluster on any geometry, and
+`kern_big`'s `CTRL.DRV` - shipped PLAIN for the settings core (SPEC.md
+2.8.7) - grows by its whole 164-byte bss, 15,093 -> 15,257, inside the same
+30 sectors. `make rom`'s small ROM holds the same five images with 4,215
+bytes spare against 4,285; the big ROM holds only `EXTD.DRV`, which has no
+bss, and is unchanged.
+
+The claims, image + bss, before (KB, from the image, pad included) and after
+(the 512-byte granule, from the file):
+
+| module | image | bss | claim before | claim after |
+|---|---:|---:|---:|---:|
+| `CTRL.DRV` (`kern_big`) | 15,093 | 164 | 15,360 | 15,360 |
+| `FORMAT.DRV` (`kern_big`) | 3,179 | 0 | 4,096 | 3,584 |
+| `DISKOPS.DRV` (`kern_big`) | 10,135 | 0 | 10,240 | 10,240 |
+| `HIBER.DRV` | 7,079 (+90 pad before) | 594 | 8,192 | 7,680 |
+| `DOCK.DRV` | 2,252 | 0 | 3,072 | 2,560 |
+| `EXTD.DRV` | 1,872 | 0 | 2,048 | 2,048 |
+| `WIN95.DRV` | 1,440 | 126 | 2,048 | 2,048 |
+| `DESK.DRV` | 4,520 | 0 | 5,120 | 4,608 |
+| `STIKMENU.DRV` | 14,780 | 0 | 15,360 | 14,848 |
+| `SERIAL.DRV` (both) | 909 | 0 | 1,024 | 1,024 |
+| `CTRL.DRV` (`kern_small`) | 5,619 | 0 | 6,144 | 5,632 |
+| `FORMAT.DRV` (`kern_small`) | 1,279 | 0 | 2,048 | 1,536 |
+| `DISKOPS.DRV` (`kern_small`) | 7,196 | 0 | 8,192 | 7,680 |
+| `FILECP.DRV` | 1,821 | 76 | 2,048 | 2,048 |
+| `FDLG.DRV` | 1,587 | 16 | 2,048 | 2,048 |
+
+**One behaviour changed and it is benign**: every module's bss now starts
+zeroed on every load, where `kern_big`'s were not zeroed at all. The rule
+that its cells are written before they are read stands - and the settings
+core (`MOD_SETS`), whose read stops at `MODS_SIZE`, still gets `cpc_buf`
+unzeroed in a claim of the whole image. Nothing in the kernel names a
+module's bss size any more, so a module no longer cares what the granule is.
 
 ## 4. The gate, because both directions of this mistake are silent
 

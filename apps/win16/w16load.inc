@@ -164,11 +164,7 @@ w16_load:
     mov [w16_hpos], ax
     inc word [w16_hpos]             ; the records start word-aligned
     and word [w16_hpos], 0xFFFE
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    mov [w16_hkb], ax
-    call OSAPI_MEM_CLAIM
+    call w16l_hclaim                ; the tables, to the paragraph
     jnc .tclaimed
     mov si, w16_r_mem
     jmp .refuse
@@ -250,6 +246,7 @@ w16_load:
     jmp .refuse
 .modok:
     mov [w16_nmod], ax
+    call w16l_opbegin               ; ONE OPERATION from here (SPEC.md 12.8.10)
 
     cmp byte [w16_ntk], 0           ; nothing bound yet (SPEC.md 124.19.1),
     jne .bound                      ;   unless a task runs: the table is
@@ -360,16 +357,20 @@ w16_load:
     pop bp
     ret
 
-; w16l_pclaim - AX = KB: the program's segments' claim (w16_lay1) -> DX, CF=1
-; none. A later task's is a block of the global heap: the first program's
-; claim is one of WIN16's eight and a second cannot be had (124.28.5)
+; w16l_pclaim - AX = PARAGRAPHS: the program's segments' claim (w16_lay1)
+; -> DX, CX = the paragraphs granted; CF=1 none. A later task's is a block of
+; the global heap: the first program's claim is one of WIN16's eight and a
+; second cannot be had (124.28.5). Both in paragraphs (SPEC.md 50.3.7).
+; Clobbers AX.
 w16l_pclaim:
     cmp byte [w16_ntk], 0
     jne .blk
-    W16VCLAIM                       ; (the arm: entered in the map, 124.31.3)
+    W16VCLAIM                       ; AX = the paragraphs GRANTED (the
+    xchg ax, cx                     ;   arm: entered in the map, 124.31.3)
     ret
 .blk:
-    ICALL w16_kclaim
+    mov cx, ax                      ; a heap block is what it was asked for
+    ICALL w16_kclaimp
     ret
 
 ; w16l_pfree - DX = what w16l_pclaim gave: given back
@@ -506,15 +507,9 @@ w16_lay1:
     ICALL w16_rlayout
     add bp, ax
     jc .huge
-    mov ax, bp
-    add ax, 63                      ; KB, rounded up: past 64KB since S15
-    rcr ax, 1                       ;   (SPEC.md 124.20.2), so the carry is
-    mov cl, 5                       ;   bit 16
-    shr ax, cl
-    push ax
-    call w16l_pclaim
-    pop cx                          ; CX = KB
-    jnc .got
+    mov ax, bp                      ; PARAGRAPHS (SPEC.md 50.3.7): the image
+    call w16l_pclaim                ;   pays the heap's granule, not a whole
+    jnc .got                        ;   KB. CX = the paragraphs GRANTED
 .huge:
     mov si, w16_r_mem
     pop bp
@@ -522,9 +517,7 @@ w16_lay1:
     ret
 .got:
     mov [w16_pseg], dx
-    mov ax, cx                      ; the top: base + KB * 64
-    mov cl, 6
-    shl ax, cl
+    mov ax, cx                      ; the top: base + what was granted
     add ax, dx
     mov [w16_ptop], ax
     ; zero the claim, 4KB at a time (BSS, the heap and the stack are zero)
@@ -724,29 +717,115 @@ w16l_secoff:
     pop cx
     ret
 
+; w16l_opbegin - begin the load's ONE file operation (SPEC.md 12.8.10), sized
+; from what a load really reads: every segment with bytes in the file that is
+; not discardable code - those are read when first called, under no bar
+; (SPEC.md 124.26.3) - and, on the first program, the SMALLEST System font's
+; packed length, which w16_facein fetches before w16_wake ends it. A later
+; task's load ends at its own w16_ldin call (w16task.inc). The tables already
+; read and a library's segments are not in it: an under-estimate, which
+; clamps full early, where the whole file would be an over-estimate that
+; never fills. Refused (a wider operation open), the transfers report as
+; always. in: ES = the tables, [w16_ne], [w16_nseg]. Keeps all
+w16l_opbegin:
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
+    mov al, [w16_cdo]
+    push ax
+    mov byte [w16_cdo], 1           ; the program's own: isdisc answers
+    mov di, [w16_ne]
+    add di, [es:di + NE_SEGTAB]
+    xor bx, bx
+    xor cx, cx                      ; DX:CX = the bytes
+    xor dx, dx
+.seg:
+    cmp word [es:di], 0             ; nothing in the file
+    je .next
+    call w16l_isdisc
+    jc .next
+    mov ax, [es:di + 2]             ; length, 0 = 64KB
+    add cx, ax
+    adc dx, 0
+    or ax, ax
+    jnz .next
+    inc dx
+.next:
+    add di, 8
+    inc bx
+    inc bx
+    mov ax, bx
+    shr ax, 1
+    cmp ax, [w16_nseg]
+    jb .seg
+    cmp byte [w16_ntk], 0           ; the first program: and its face
+    jne .go
+    add cx, [op_table + OP_T_ROWS + W16P_SYS08 * OP_ROW + OP_R_ZKB]
+    adc dx, 0
+.go:
+    mov ax, cx
+    or ax, dx
+    jz .none                        ; DX:CX = 0 would be an END
+    call OSAPI_FS_OP
+.none:
+    pop ax
+    mov [w16_cdo], al
+    pop di
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_b2p - AX = bytes -> AX = paragraphs, rounded up (to 1000h for FFF1h
+; and over: the add's carry is the quotient's bit 12). Keeps all but AX and
+; the flags
+w16l_b2p:
+    add ax, 15
+    rcr ax, 1                       ; (the carry is bit 16)
+    shr ax, 1
+    shr ax, 1
+    shr ax, 1
+    ret
+
+; w16l_hclaim - AX = the tables' bytes: claimed in PARAGRAPHS (SPEC.md
+; 50.3.7) -> DX, [w16_htp] = the paragraphs granted; CF=1 none. Keeps all
+; but AX, CX, DX
+w16l_hclaim:
+    call w16l_b2p
+    push bx
+    xor cx, cx                      ; no page-safe head
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P                ; AX = the paragraphs GRANTED
+    pop bx
+    mov [w16_htp], ax
+    ret
+
 ; w16l_hgrow - make the tables' claim hold AX bytes. out: CF=0 ES = it (and
 ; [w16_fseg]); CF=1 no memory. Keeps all but ES.
 w16l_hgrow:
     push ax
+    push bx
     push cx
     push dx
-    add ax, 1023
-    rcr ax, 1                       ; (the carry is bit 16)
-    mov cl, 9
-    shr ax, cl                      ; KB
-    cmp ax, [w16_hkb]
+    call w16l_b2p                   ; AX = paragraphs (SPEC.md 50.3.7)
+    cmp ax, [w16_htp]
     jbe .fits
     mov dx, [w16_fseg]
-    call OSAPI_MEM_REGROW           ; DX = its base now
+    mov bl, MEMP_REGROW
+    call OSAPI_MEM_P                ; DX = its base now, AX = granted
     jc .out
     mov [w16_fseg], dx
-    mov [w16_hkb], ax
+    mov [w16_htp], ax
 .fits:
     mov es, [w16_fseg]
     clc
 .out:
     pop dx
     pop cx
+    pop bx
     pop ax
     ret
 
@@ -1541,10 +1620,10 @@ w16_site:
     clc
     ret
 .far:
+    call w16_site4                  ; four bytes, where w16_inrange checked
+    jc .bad                         ;   the first two
     mov [es:di], ax
-    mov [es:di + 2], dx
-    clc
-    ret
+    jmp short .far2
 .off:
     mov [es:di], ax
     clc
@@ -1573,9 +1652,24 @@ w16_site:
     clc
     ret
 .afar:
+    call w16_site4
+    jc .bad
     add [es:di], ax
+.far2:
     mov [es:di + 2], dx
     clc
+    ret
+
+; w16_site4 - CF=1 if a far pointer at DI runs past segment [w16_rseg]:
+; DI <= length - 4, 0 (64KB) giving FFFC. A segment shorter than 4 bytes is
+; a paragraph of its claim, so its far pointer still lands in its own padding.
+w16_site4:
+    push bx
+    mov bx, [w16_rseg]
+    mov bx, [w16_slen + bx]
+    sub bx, 4
+    cmp bx, di
+    pop bx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -1676,6 +1770,10 @@ w16_prologs:
     mov bx, si
     add si, [es:bx + NE_ENTTAB]
 .bundle:
+    mov ax, si                      ; the count and the indicator inside the
+    inc ax                          ;   file, as w16c_ents bounds them
+    cmp ax, [w16_fend]
+    jae .done
     xor cx, cx
     mov cl, [es:si]                 ; count
     jcxz .done
@@ -1688,8 +1786,18 @@ w16_prologs:
     mov ax, 3                       ; constants: 3 bytes each, nothing to do
     mul cx
     add si, ax
+    jc .done
     jmp short .bundle
 .entries:
+    mov ax, 3                       ; the whole entry inside the file: a
+    cmp dl, 0xFF                    ; fixed one is 3 bytes, a movable 6
+    jne .sz
+    mov al, 6
+.sz:
+    add ax, si
+    jc .done
+    cmp ax, [w16_fend]
+    ja .done
     mov al, [es:si]                 ; flags
     cmp dl, 0xFF
     je .mov
@@ -1825,8 +1933,16 @@ w16_frame:
     mov [w16_scratch], ax           ; the entry's CS
     mov ax, [es:si + NE_SP]
     or ax, ax
-    jnz .sp
+    jnz .spck
     mov ax, [w16_lbase]             ; static data + stack: the heap's start
+    jmp short .sp
+.spck:
+    mov dx, [w16_dgsize]            ; the header's SP must be inside DGROUP:
+    dec dx                          ;   SP - 1 <= size - 1, 0 (64KB) being
+    dec ax                          ;   FFFF on both sides
+    cmp ax, dx
+    ja .bad
+    inc ax
 .sp:
     and al, 0xFE
     or ax, ax
@@ -2358,11 +2474,7 @@ w16l_ldlib:
     mov [w16_hpos], ax
     inc word [w16_hpos]
     and word [w16_hpos], 0xFFFE
-    add ax, 1023
-    mov cl, 10
-    shr ax, cl
-    mov [w16_hkb], ax
-    call OSAPI_MEM_CLAIM
+    call w16l_hclaim                ; the tables, to the paragraph
     jnc .tclaimed
     mov si, w16_r_mem
     jmp .refuse
@@ -3221,7 +3333,7 @@ w16l_pop:
     ret
 
 w16l_svtab:                         ; what one module's load holds, address
-    dw w16_fseg, 2,  w16_hpos, 2,  w16_hkb, 2,  w16_ne, 2,  w16_nseg, 2
+    dw w16_fseg, 2,  w16_hpos, 2,  w16_htp, 2,  w16_ne, 2,  w16_nseg, 2
     dw w16_nmod, 2,  w16_modid, 32,  w16_fend, 2,  w16_name, 14
     dw w16_dgroup, 2,  w16_dgsize, 2,  w16_lbase, 2,  w16_pseg, 2
     dw w16_psp, 2,  w16_ptop, 2,  w16_dgfull, 1,  w16_rtab, 2
@@ -3480,11 +3592,8 @@ w16l_cmake:
     shl cx, 1
     add ax, cx
     jc .big
-    add ax, 1023                    ; KB (the carry is bit 16)
-    rcr ax, 1
-    mov cl, 9
-    shr ax, cl
-    ICALL w16_kclaim                ; DX = the block
+    call w16l_b2p                   ; PARAGRAPHS (SPEC.md 50.3.7)
+    ICALL w16_kclaimp               ; DX = the block
     jnc .have
     mov si, w16_r_mem
     jmp short .fail
@@ -4085,11 +4194,8 @@ w16l_segin:
     mov ax, [w16_csz]
 .claim:
     push ax                         ; the cluster cache, a block of WIN16's:
-    add ax, 1023                    ;   W16_FCACHE KB, or one cluster when
-    rcr ax, 1                       ;   that cannot be had (124.26.3)
-    mov cl, 9
-    shr ax, cl
-    ICALL w16_kclaim
+    call w16l_b2p                   ;   W16_FCACHE KB, or one cluster when
+    ICALL w16_kclaimp               ;   that cannot be had (124.26.3)
     pop ax
     jnc .cached
     cmp ax, [w16_clus]
@@ -4319,8 +4425,8 @@ w16l_keep:
     push dx
     push di
     push es
-    mov ax, (w16l_end - w16l_base + 1023) / 1024
-    ICALL w16_kclaim
+    mov ax, (w16l_end - w16l_base + 15) / 16  ; PARAGRAPHS (SPEC.md 50.3.7)
+    ICALL w16_kclaimp
     jc .mem
     W16SEG es, dx
     xor si, si
@@ -4353,7 +4459,8 @@ section .text
 ; --- the loader's own bss, beside the package's -----------------------------
 ; (declared here, in the image, rather than in w16_* bss: they are scratch
 ; for one load and a few bytes)
-w16_fend:   dw 0                    ; the file's last valid offset + 1
+w16_fend:   dw 0                    ; the NE tables' extent from the header,
+                                    ; = the tables claim's last valid offset + 1
 w16l_code:  dw 0                    ; a library's code block (w16l_laylib)
 w16l_dgb:   dd 0                    ; ...its DGROUP's bytes
 w16l_rp:    dw 0                    ; ...its record, being written

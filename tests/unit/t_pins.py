@@ -134,6 +134,34 @@ def read(path):
 _CODE = {}
 _HOT = {}
 HOT = re.compile(r"\b(?:call|jmp)\b|mem_claim|mem_movable")
+# OSAPI_MEM_P (SPEC.md 50.3.7) is ONE cell for four verbs, and only two of them
+# claim: the verb is BL, set a few lines above the call. A line that calls it
+# is rewritten to the claim cell's name when that verb is MEMP_CLAIM or
+# MEMP_CLAIM_HI (or BL is zeroed / bumped - parts' op_fetch), and to a name no
+# pattern matches when it is MEMP_AVAIL or MEMP_REGROW, so the walks below see
+# a claim exactly where one is made. Without this the registry was BLIND to
+# every claim the granule's sweep moved onto the paragraph door.
+MEMP_CALL = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_P\b")
+MEMP_VERB = re.compile(r"\bmov\s+bl\s*,\s*(MEMP_\w+(?:\s*\|\s*MEMP_\w+)?)")
+
+
+def memp_verb(lines, i):
+    """'claim' or 'ask' for a `call OSAPI_MEM_P` at line i."""
+    for j in range(i - 1, max(-1, i - 14), -1):
+        c = asm_code(lines[j])
+        m = MEMP_VERB.search(c)
+        if m:
+            v = m.group(1)
+            # a CLAIM only by name (MEMP_CLAIM, MEMP_CLAIM_HI, either with
+            # MEMP_CPU): every other verb asks or resizes, and a verb added
+            # later is a question until it is named here - MEMP_KPARTS was
+            # read as a claim when this tested for AVAIL and REGROW instead
+            return "claim" if "MEMP_CLAIM" in v else "ask"
+        if re.search(r"\b(?:xor|sub)\s+(?:bx\s*,\s*bx|bl\s*,\s*bl)\b", c):
+            return "claim"
+        if LABEL.match(lines[j]) and not lines[j].lstrip().startswith("."):
+            break
+    return "claim"
 
 
 def hot(lines):
@@ -142,9 +170,16 @@ def hot(lines):
     file; it is what keeps 141 units over one tree under a few seconds."""
     tab = _HOT.get(id(lines))
     if tab is None or tab[0] is not lines:
-        tab = _HOT[id(lines)] = (lines, [
-            (i, asm_code(ln)) for i, ln in enumerate(lines)
-            if HOT.search(asm_code(ln))])
+        rows = []
+        for i, ln in enumerate(lines):
+            c = asm_code(ln)
+            if not HOT.search(c):
+                continue
+            if MEMP_CALL.search(c):
+                c = MEMP_CALL.sub("call OSAPI_MEM_CLAIM" if memp_verb(lines, i)
+                                  == "claim" else "call OSAPI_MEMP_ASK", c)
+            rows.append((i, c))
+        tab = _HOT[id(lines)] = (lines, rows)
     return tab[1]
 
 
@@ -167,7 +202,8 @@ API_CLAIM = re.compile(r"\bcall\s+(?:far\s+)?OSAPI_MEM_(?:CLAIM|CLAIM_DMA|"
                        r"CLAIM_HI|CLAIM_DMA_HI|HUGE)\b")
 K_CLAIM = re.compile(r"\b(?:call\s+(?:far\s+)?(?:COLD_SEG:)?|[A-Z_]+\s+)"
                      r"(?:mem_claim|mem_claim_x|mem_claim_hi_x|mem_claim_dma_x|"
-                     r"mem_claim_dma_hi_x|mmf_mem_claim)\b"
+                     r"mem_claim_dma_hi_x|mmf_mem_claim|mem_claimp_x|"
+                     r"mem_claimp_hi_x|mem_claimp_dma_x|mem_claimp_sd)\b"
                      r"|\bmov\s+bp\s*,\s*mem_claim\w*\b")
 OP_LOAD = re.compile(r"\bcall\s+op_load\b")
 OP_FETCH = re.compile(r"\bcall\s+op_fetch\b")
@@ -413,8 +449,8 @@ class Unit(object):
                 s.key, s.word, s.direct = nxt.key, nxt.word, nxt.direct
                 s.stores = nxt.stores
         cwraps = self._c_wrappers()
-        call = re.compile(r"([A-Za-z_][\w\.\->\[\]]*)\s*=\s*(?:os88_mem_(?:claim|"
-                          r"huge)|%s)\s*\(" % "|".join(sorted(cwraps) or ["$^"]))
+        call = re.compile(r"([A-Za-z_][\w\.\->\[\]]*)\s*=\s*(?:os88_mem_(?:claim_p|"
+                          r"claim|huge)|%s)\s*\(" % "|".join(sorted(cwraps) or ["$^"]))
         for f in self.c:
             if self.only is not None and f not in self.only:
                 continue
@@ -438,7 +474,7 @@ class Unit(object):
         To a fixpoint, so a wrapper of a wrapper is seen through too."""
         wraps = set()
         while True:
-            pat = re.compile(r"([A-Za-z_]\w*)\s*=\s*(?:os88_mem_(?:claim|huge)%s)"
+            pat = re.compile(r"([A-Za-z_]\w*)\s*=\s*(?:os88_mem_(?:claim_p|claim|huge)%s)"
                              r"\s*\(" % "".join("|" + w for w in sorted(wraps)))
             new = set()
             for f in self.c:
@@ -729,7 +765,7 @@ class Site(object):
 
 
 # --- the C vocabulary ----------------------------------------------------------
-C_CLAIM = re.compile(r"([A-Za-z_][\w\.\->\[\]]*)\s*=\s*os88_mem_(?:claim|huge)"
+C_CLAIM = re.compile(r"([A-Za-z_][\w\.\->\[\]]*)\s*=\s*os88_mem_(?:claim_p|claim|huge)"
                      r"\s*\(")
 C_DECL = re.compile(r"\bos88_mem_movable\s*\(\s*([^,]+?)\s*,\s*([^)]+?)\s*\)")
 C_FUNC = re.compile(r"^[A-Za-z_][\w\s\*]*?\b([A-Za-z_]\w*)\s*\([^;]*$")

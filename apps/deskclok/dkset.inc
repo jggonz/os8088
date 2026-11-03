@@ -536,14 +536,15 @@ dk_stall:
     cmp byte [ck_np], 4
     jne .x
     mov ax, DK_SETW / 8 * 4
-    mul bx
-    mov cx, ax                  ; CX = the bytes
-    add ax, 1023
-    mov al, ah
-    shr al, 1
-    shr al, 1
-    xor ah, ah                  ; AX = the KB
-    call OSAPI_MEM_CLAIM
+    mul bx                      ; AX = the bytes...
+    add ax, 15
+    mov cl, 4
+    shr ax, cl                  ; ...as PARAGRAPHS (SPEC.md 50.3.7)
+    xor cx, cx
+    push bx
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    pop bx
     jc .x
     mov [dk_sbseg], dx
     mov [ck_bseg], dx

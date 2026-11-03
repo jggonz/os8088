@@ -15,6 +15,25 @@ Each leg boots its own private QEMU (pidfile, its own socket, its disks under
 build/x3l*) and reads XTMP3's state out of its bss by the shipped build's own
 map (tests/xtmp3eng.py's Rig, which this row extends).
 
+THE CLOCK IS THE GUEST'S (-icount, os88qemu.icount; OS88_QEMU_ICOUNT=0 is
+the A/B). Every live leg starts under Auto or runs a rung's slow window, and
+both are TIMINGS: the probe and the window divide audio by pit_now's wall
+time. QEMU is exact about the work and not about how long it takes, and the
+case that proved it is a LAYOUT one: when the kernel grew 512 bytes (the
+toast queue, 1cee9991 - and 512 inert bytes of .bss on the commit before it
+do the same) the decode worker's stack slice moved into the 4 KB page that
+holds the start of the kernel's .vga rung. QEMU's TCG takes every store to a
+page holding translated code through its self-modifying-code slow path, so
+each push and call the decoder makes went that way: the STANDARD part ran
+~20x slower in host time, Auto probed Original at 0.95x and played Quarter.
+The guest's instructions were identical to the instruction (the same probes
+under -icount read 2.26x on both kernels), so the verdict was the emulator's
+memory map and not the machine's. Under -icount the PIT, the BIOS tick and
+the wav audiodev count instructions and the verdict cannot move with the
+layout or with host load; the SB16's DMA does too on `qemuvt`, put first
+on PATH when this tree has one (os88build.qemuvt(); a stock QEMU moves it
+in host time, which is what every leg had before)
+
 Legs (each one boot unless it says otherwise):
   orig44    C128.MP3 (44.1 kHz L/R stereo, LAME tag) under Auto: ORIGINAL, 16-bit
             stereo - the capture IS x3sim's trimmed PCM, every sample, the two
@@ -94,6 +113,8 @@ class LRig(E.Rig):
             a += ["-device", "sb16,audiodev=a0" + self.sbopt, "-audiodev",
                   "wav,id=a0,path=%s,out.frequency=%d,out.channels=2,"
                   "out.format=s16" % (self.wav, self.afreq)]
+        a += os88qemu.icount()          # A FIXED-SPEED guest (THE CLOCK,
+                                        # in the module's docstring)
         a += ["-boot", "a", "-chardev", "msmouse,id=m0", "-serial",
               "chardev:m0", "-display", "none", "-qmp",
               "unix:%s,server,nowait" % self.sock, "-daemonize",
@@ -599,8 +620,20 @@ def main():
         if not os.path.exists(os88build.at(f)):
             sys.exit("xtmp3live: no %s - make && make "
                      "build/mixercfg/SYSTEM.CFG" % f)
+    if os88qemu.icount():
+        # THE CARD'S CLOCK, as xtmp3eng's rate legs take it: the patched
+        # QEMU (`qemuvt`, os88build.qemuvt()) moves the SB16's DMA on the
+        # guest's virtual clock under -icount, where a stock one moves it in
+        # host time - which is what every leg's card did before this row ran
+        # under -icount, so a stock QEMU is no worse than it was
+        vt = (os88build.qemuvt() if os.environ.get("OS88_QEMUVT") != "0"
+              else None)
+        if vt:
+            os.environ["PATH"] = (os.path.dirname(vt) + os.pathsep +
+                                  os.environ.get("PATH", ""))
     for name in a.leg or list(LEGS):
-        print("xtmp3live: %s" % name)
+        print("xtmp3live: %s%s" % (name, " (-icount)" if os88qemu.icount()
+                                   else ""))
         LEGS[name]()
     if E.bad:
         print("xtmp3live: %d FAILED" % len(E.bad))

@@ -43,8 +43,22 @@ An AH88 firmware report may cap at 15/64MB; E820 usable memory excludes
 reserved ranges and is not a physical DIMM count. No destructive RAM probe.
 BIOS ports/date/equipment and OS video/FPU information are read-only.
 
-REDLINE has two tabs across its top: Benchmark (all of the above) and
-Tune, for AT-class boards. Tune fingerprints the BIOS, probes for the
+REDLINE has three tabs across its top: Benchmark (all of the above),
+Inspect and Tune.
+
+Inspect (key I) is a survey of the machine in eight pages, picked with the
+strip of buttons under the tabs, keys 1-8, or Left/Right: Summary, CPU,
+Memory, Video, Drives, Ports, IRQ/DMA and Devices. It names the machine
+and its BIOS, the CPU, its features and the coprocessor, the memory account
+as bars and the upper memory map with every option ROM, each display and
+the fullscreen modes os8088 offers on it, the drives and volumes, the COM
+and LPT ports with their settings, every interrupt line with its mask and
+whose handler it is, the DMA channels, sound, the loaded drivers and the
+running programs. It only reads. Refresh (R) probes again, and Save report
+(S) writes every page into INSPECT1.TXT, INSPECT2.TXT, ... Drive geometry,
+a 16550's FIFO and live DMA state are not read, and the page says why.
+
+Tune is for AT-class boards. Tune fingerprints the BIOS, probes for the
 chipset read-only, names what it found, and times an 8-bit read from the
 screen, a PicoMEM and each option ROM in ns a byte. The drop-down names the
 chipset instead, and your pick wins. An 8088 or 8086 touches no port at

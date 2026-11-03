@@ -607,8 +607,8 @@ rd_readat:
 .take:
     mov [rd_n], ax
     mov word [rd_n+2], 0
-    xor ax, ax                  ; store -> caller, no reports
-    call rd_io
+    mov ax, 0x0100              ; store -> caller, reporting each piece:
+    call rd_io                  ; a READ_AT is a copy's read (SPEC.md 12.8.8)
     jc rd_e_io                  ; (62.9.10.2)
     mov ax, [rd_n]
     jmp short .out
@@ -664,7 +664,8 @@ rd_write:
     mov [es:si+RDE_SIZE+2], ax
     or ax, cx
     jz .ok                      ; CF = 0
-    mov ax, 0x0001              ; caller -> store, no reports
+    mov ax, 0x0101              ; caller -> store, reporting each piece:
+                                ; a copy ONTO the disk counts its writes (12.8.8)
     call rd_io
     jc rd_e2_io                 ; (62.9.10.2)
 .ok:
@@ -736,7 +737,8 @@ rd_append:
     mov [es:si+RDE_SIZE+2], dx
     cmp word [rd_n], 0
     je .ok                      ; CF = 0
-    mov ax, 0x0001              ; caller -> store, no reports
+    mov ax, 0x0101              ; caller -> store, reporting each piece:
+                                ; a copy ONTO the disk counts its writes (12.8.8)
     call rd_io
     jc rd_e2_io                  ; (62.9.10.2)
 .ok:

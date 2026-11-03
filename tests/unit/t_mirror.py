@@ -106,6 +106,13 @@ ASM = ["boot/boot.asm", "boot/boothd.asm",
        # block promises this row keeps the two the same.
        "apps/os88gfx.inc",
        "drivers/os88drv.inc",
+       # System Check judges every driver and module on a disk against the
+       # versions this kernel takes (SPEC.md 118.1), and spells DRV_VER and
+       # MOD_VER out because a package cannot include a kernel header. It
+       # sat at DRV_VER 11 for a whole cycle after the kernel moved to 12, so
+       # a current driver that differed read as the wrong version and an OLD
+       # one as merely different (SPEC.md 118.8.2)
+       "apps/syscheck/syscheck.asm",
        # The screen saver's private ABI (SPEC.md 79.3): five verbs, the
        # settings block's four offsets, the mode bits and the minutes clamp,
        # all written out in kernel/blank.inc AND in the overlay because an

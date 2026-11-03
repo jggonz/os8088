@@ -406,6 +406,7 @@ KNOBS = [
     # hook, no VID_VESA kind and no VESA.DRV row - the kernel the hook's
     # resident cost is measured against, and the only build of its arms
     ("novidext",    ["NOVIDEXT=1"]),
+    ("memgran256",  ["MEMGRAN=16"]),    # SPEC.md 50.2.1.1's DISK class
     ("lddiag",      ["LDDIAG=1"]),
     ("drvdiag",     ["DRVDIAG=1"]),
     # The three this PR added and nothing else names: NOFLUSHR is SPEC.md
