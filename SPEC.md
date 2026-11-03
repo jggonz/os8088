@@ -99548,6 +99548,7 @@ verb:
 | `SEG_TILE` 9 | DX = a selector of the caller's based in a claim or a pool block, AX = a paragraph offset, CX = a count of 64KB tiles | DX = the first of CX data selectors, each 8 above the last and based 64KB further on, the last cut at the block's end (§124.31.2) |
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
+| `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99561,7 +99562,9 @@ every machine. `SEG_TILE` is refused there too, by the same `ja`: a
 real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 `SEG_WINL` is refused there as well: a real-mode kernel has nothing above
 1MB to window, and below it the caller's paragraph is its own answer. So is
-`SEG_LEND`: real mode has no stack the BIOS cannot use.
+`SEG_LEND`: real mode has no stack the BIOS cannot use, and so is
+`SEG_HND`: a real-mode caller's block is its paragraph, which needs no
+descriptor.
 `.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
@@ -99626,6 +99629,23 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   entries, or CX = 0), 2 (the null selector) and 3 (a tile in no block).
   It is WIN16's (`__AHINCR` = 8, §124.31.6) and costs `.mega` 195 bytes
   and every other kernel nothing.
+- A **HANDLE descriptor** (`SEG_HND`, `mega_segh`) is a Windows handle's
+  selector: one per global block, re-aimed IN PLACE - base and limit, the
+  same selector - when the block grows, shrinks or moves, so the selector a
+  program holds follows its block and an access one byte past the block's
+  length faults, as on Windows. It is a fresh data descriptor based in its
+  block, so the compactor rebases it and the block's free takes it, as a
+  tile's; and it is marked in byte 6's AVL bit (`MEGA_HAVL`, 10h: the 386's
+  bit for software, a reserved byte a 286 never reads), which `mega_dfind`
+  passes by, so a SUB never answers one and re-aiming one moves nobody
+  else's. It is not a window: it has no `mega_wtab` row, so the 32 rows do
+  not bound how many a program holds - Mozart's setup peaks at 15 at once,
+  WIN16's two walk descriptors among them, and a program may hold hundreds. It stays a plain DPL 0 data segment, so a
+  program may load it into SS as Windows allowed. WIN16 also re-aims two of
+  them as its own WALK descriptors over its arenas (§124.31.3). Refusals 1
+  (no free entry), 3 (the base in no block) and 4 (DX not a handle
+  descriptor), DX kept. `.mega` +208 (the body's 191, its dispatch and
+  `mega_dfind`'s test), every other kernel nothing.
 - **Freeing an entry clears any window row naming it** (`mega_ldt_free`), so
   a window that went with its block cannot be freed a second time at its
   owner's end, after the entry is somebody else's.
@@ -99641,7 +99661,8 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   in `vd_n_p3` (MEGA-VIDEO-REALMODE-PLAN W5, KERN-MEGA-PLAN 14.128).
 - Refusals: CF = 1, AX = 1 when no LDT entry or no `mega_wtab` row is free,
   2 for the null selector, 3 not in a block (`SEG_SUBC`, `SEG_BWIN`), 4 not a
-  bound window of the caller's and 5 past its block's end (`SEG_AIM`). Every
+  bound window of the caller's and 5 past its block's end (`SEG_AIM`), 4
+  also not a handle descriptor (`SEG_HND`). Every
   register but AX is kept, so a refused `SEG_SUB` still holds the caller's
   own DX. **A wrapper never turns a refusal into DX = 0 "so a use faults"**:
   it does not - `mega_null0` completes an access through the null selector
@@ -237969,15 +237990,17 @@ what the numbers mean**:
   the claim in the map and answers `SEG_SUB(claim, vpara - vbase, 0)`, a
   data selector reaching to the claim's end (64 KB at most). The kernel
   answers the same selector for the same base, so a header asked for twice
-  costs one LDT entry; a freed block's two (its header's and its data's)
-  are given back with `SEG_FREE`.
+  costs one LDT entry. A SUB is given back only with its claim (`SEG_FREE`
+  frees windows alone, §50.6.11), so WIN16's walks over an arena use the
+  WALK descriptors below instead.
 - **The program never sees one.** Every value the program is given or
   hands back is a **selector**, converted at the edge:
   - out: `GlobalAlloc` (a `GMEM_FIXED` handle is a selector, as standard
     mode answered), `GlobalLock`, `LockResource`, `GetCodeHandle`, the
-    loader's fixups, DGROUP, the PSP: `w16_psel`, `SEG_SUB` (data) or
-    `SEG_SUBC`'s code half (a code segment), reaching the block's own
-    length so an overrun faults as it did on Windows;
+    loader's fixups, DGROUP, the PSP. A global block under 64 KB is answered
+    its HANDLE descriptor (`w16_pblk`, below); a code segment `SEG_SUBC`'s
+    code half and anything else `SEG_SUB` (`w16_psel`), each reaching the
+    block's own length so an overrun faults as it did on Windows;
   - in: `GlobalHandle`, `GlobalFree`, `GlobalSize`, `GlobalFlags` on a
     fixed handle, `LockSegment`, `FreeSelector`: `w16_pvirt`, `SEG_LIN` and
     the map, back to the virtual paragraph.
@@ -237995,26 +238018,45 @@ what the numbers mean**:
 - The map keeps a claim's 512-byte phase: a virtual base has the low five
   bits of the claim's linear paragraph, so `w16_kclaim`'s alignment of a
   disk-visible block is an alignment in memory too.
-- `SEG_SUB` gives a block's selector back only with its claim, so every
-  distinct paragraph `W16SEG` is handed costs an LDT entry until its arena
-  goes. That is bounded for the first targets and is batch 7's to tighten
-  (a freeable selector per block, over `SEG_TILE`).
-- **STOPGAP, to be replaced before #327 merges** *(S24, the lead's D1)*.
-  The selector a program is given for a global block under 64 KB
-  (`w16_pblk`) reaches to its claim's END, not the block's length. A block
-  then keeps one selector wherever its length goes, and the kernel's
-  base-and-limit dedupe answers the same entry. Before this, the Setup
-  Toolkit's grow-by-a-paragraph loop handed out 395 distinct selectors over
-  25 block positions, and Mozart's setup ran the LDT's 2,016 entries out
-  (`FAULT 0D` in `w16vt_esax`). With this and the GlobalReAlloc rule
-  above, the LDT levels at 1,646. **What it gives up:** an overrun of the
-  block lands in its neighbour instead of faulting, as it did on Windows.
-  **What replaces it:** one descriptor per handle, which `GlobalReAlloc`
-  retargets IN PLACE (a new base and a new limit on the same selector, as
-  Windows' standard mode did), so an overrun faults again and a grow costs
-  no entry. Beside it, a bound walk window (`SEG_BWIN`/`SEG_AIM`) for
-  WIN16's own `W16SEG` touches of headers and zeroing, which the trace
-  build counted at 880 distinct paragraphs.
+- **One descriptor per handle** *(S24, the lead's D1, replacing its
+  stopgap)*. A global block under 64 KB has ONE selector for the program, a
+  handle descriptor (`SEG_HND`, §50.6.11) made at the first time the block
+  is handed out (`w16_pblk`) and kept in its header (`GH_TSEL`, flag
+  `GHF_HND`). It is based at the block's data and reaches exactly its
+  length. `GlobalReAlloc` re-aims it IN PLACE - a new base and a new limit
+  on the same selector, as Windows' standard mode did - when the block grows
+  or shrinks where it is (`w16_phfix`) and when it moves, to another arena
+  or not (`w16s_gwin`, part 9, carries it to the new header). The block's
+  free gives it back (`w16_gfreeblk`), and the compactor rebases it with
+  its arena as it does every descriptor based in a block. So a grow costs no
+  LDT entry, the selector a program holds follows its block, and **an
+  access one byte past the block's length faults** (`tests/win16ovr.py`,
+  with the fixture `OVRTEST.EXE`). No entry to be had, the block is
+  answered a SUB to its claim's end, as before. A block over 64 KB is
+  answered its tiles (§124.31.6).
+- **Two walk descriptors** for WIN16's own touches. Every `W16SEG` of a
+  paragraph nobody asked for before is an LDT entry until its arena goes,
+  and the heap's walks - a fit, a merge, a discard, a zeroing, a split's
+  remainder header - touch a new paragraph each step. Those sites say
+  `W16WALK n, sreg, reg` instead (`w16_vwalk0`/`w16_vwalk1`): one of two
+  handle descriptors WIN16 holds for itself (`w16_wwin`), re-aimed at the
+  paragraph with 64 KB of reach clipped at its claim's end. Two, because a
+  merge reads the next header while holding the current one; a routine that
+  calls another which walks re-aims its own after the call
+  (`w16_gdiscard`'s `.kept`). They are given back before their arena goes
+  (`w16_vwdrop`), since the kernel frees what is based in a claim with it.
+- **Measured, Mozart's setup on kern_mega** (QEMU, 2026-11-03, from its
+  first screen to its last dialog with every file copied): the LDT's
+  present entries go from 1,370 to a high-water of **1,635 of its 1,992**,
+  15 of them handle descriptors (WIN16's two walk descriptors among them).
+  Before the handle descriptors the setup ran the LDT out (`FAULT 0D` in
+  `w16vt_esax`): the Setup Toolkit's grow-by-a-paragraph loop handed out
+  395 distinct selectors over 25 block positions. With them alone the
+  high-water was 1,859; the first walk sites took it to 1,740 and the
+  last four (a new block's header, a split's remainder header twice, a
+  freed block's header) to 1,635. What is left is mostly SUBs of interior
+  paragraphs a program's own segments and resources are carved at, which
+  go with their claims.
 - **Above 1 MB** (batch 7). The arm says `OS88_HIGH | OS88_HIGHMEM`:
   - kern_mega loads WIN16's image above 1 MB. It is a code/data pair
     there as below, and nothing in the arm does a sum on its own CS or DS
@@ -238061,26 +238103,22 @@ parser block to 65 and refuses with *Parser out of memory* when the move
 is refused. The arm moves it as follows:
 
 - The loader sets `w16_pmonly` (per task) from the program's `NEF_PMODE`.
-- At such a program's first `GlobalLock` of a moveable block under 64 KB,
-  `w16_plock` makes a **bound window** (`SEG_BWIN`) from the block's own
-  `SEG_SUB`. That aims it at the block. The header keeps it in `GH_TSEL`
-  with `GH_TN` = 0, and later locks answer it. Other programs and other
-  blocks are answered as before, by `w16_pblk`.
-- `GlobalReAlloc` takes such a block down the ordinary move path: any
-  arena, a new arena, discarding. Between the copy and the old block's
-  free, `w16s_gwin` (part 9) moves the window to the new header. It then
-  re-aims the window with `SEG_AT` on the caller's own window, which keeps
-  it bound and puts its base in the new block's claim (§50.6.11's re-bind);
-  that is how it crosses arenas. Were it refused, the kernel's answer is a
-  window of its own, which `w16s_gwin` frees, and the program keeps the
-  stale one. Then `SEG_AIM` gives the window the block's
-  reach. The kernel finds a bound window's block from where it points, and
-  compaction rebases every descriptor based in a moving block (§50.6.11),
-  so the window follows its new arena from then on.
-- `w16_gfreeblk` frees a moveable block's window with the block.
-- A block grown in place past 64 KB is tiled (`w16_ptile`). Its window is
-  then the arena's until the arena goes: it is one `mega_wtab` row, and
-  only a locked block grown that way costs one.
+- `GlobalLock` answers the block's handle descriptor (above), as for
+  every program.
+- `GlobalReAlloc` takes such a LOCKED block down the ordinary move path
+  when it holds a handle descriptor: any arena, a new arena, discarding.
+  Between the copy and the old block's free, `w16s_gwin` (part 9) moves the
+  descriptor to the new header and re-aims it there with the new length,
+  so the selector the program holds names the new block. A locked block
+  with no handle descriptor (none was to be had) stays put and the realloc
+  is refused, as for any other program.
+- A block grown past 64 KB after it was handed out keeps its one handle
+  descriptor, reaching its first 64 KB (`w16_phset`); it is not tiled, as
+  Windows' would have been. A block over 64 KB when it is first handed out
+  is tiled (`w16_ptile`, §124.31.6).
+- Until the handle descriptors this was a bound window (`SEG_BWIN`) per
+  locked block, one of `mega_wtab`'s 32 rows each; a descriptor per handle
+  needs no row.
 - Real mode is unchanged: a locked moveable block stays put there, as in
   real-mode Windows. Measured on Arcade's setup: the realloc is handle
   0110h, 33 to 65 paragraphs, in a 32 KB arena whose blocks are all in use

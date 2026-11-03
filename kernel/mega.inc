@@ -12339,8 +12339,12 @@ mega_segf:
     je .winl
     cmp bl, SEG_LEND
     je .lend
+    cmp bl, SEG_HND
+    je .hndj
     stc
     retf
+.hndj:
+    jmp mega_segh
 .lend:                              ; SEG_LEND: DX = the segment of a claim
     push bx                         ; below 1MB, CX = the top of the stack in
     push dx                         ; it, or DX = 0 to take it back (SPEC.md
@@ -13047,6 +13051,121 @@ mega_segtile:
     stc
     retf
 
+; mega_segh - SEG_HND's body (mega_segf, SPEC.md 50.6.11, 124.31.3): SI = a
+; selector based in a claim or a pool block, AX = a paragraph offset into it,
+; CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new
+; one -> CF = 0, DX = it, based there and reaching CX clipped at that block's
+; end. SI = 0 frees DX. A handle descriptor is a Windows handle's selector:
+; one per global block, re-aimed in place when the block grows or moves, so
+; the selector a program holds follows it and an overrun past its length
+; faults. It is a SUB's data descriptor with byte 6's AVL bit set (MEGA_HAVL:
+; the 386's bit for software, and a word a 286 never reads), so mega_dfind
+; never answers it for a SUB and re-aiming one moves nobody else's - and it
+; stays a plain DPL 0 data segment, which a program may load into SS as Windows
+; allowed. Based in its block, the compactor rebases it
+; (mx_desc) and the block's free takes it, as a tile's. CF = 1: AX = 1 no free
+; entry, 3 the base in no block, 4 DX not a handle descriptor; DX kept
+MEGA_HAVL   equ 0x10                ; a handle descriptor's mark, in byte 6
+mega_segh:
+    push bx
+    push cx
+    push si
+    push di
+    push ax
+    push dx
+    mov bx, sp                      ; [ss:bx] = DX, [ss:bx+2] = AX
+    or dx, dx
+    jz .base
+    mov di, dx                      ; DX: an LDT entry marked a handle's
+    and di, 0xFFF8
+    test dl, 4
+    jz .not
+    cmp di, MEGA_LDT_FREE0 * 8
+    jb .not
+    cmp di, [ss:mega_ldte]
+    jae .not
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    test byte [es:di+6], MEGA_HAVL
+    pop es
+    jz .not
+    or si, si
+    jnz .base
+    mov ax, dx
+    call mega_ldt_free
+    jmp short .ok
+.base:
+    mov ax, si
+    call mega_selbase               ; DX:AX = SI's base
+    jc .nb
+    mov di, [ss:bx+2]               ; ...+ the paragraphs
+    push di
+    shl di, 4
+    add ax, di
+    pop di
+    adc dl, 0
+    shr di, 12
+    add dx, di
+    dec cx                          ; the limit (0 - 1 = 64KB)
+    call mega_bclip                 ; ...clipped at the block's end
+    jc .nb
+    mov di, [ss:bx]
+    or di, di
+    jnz .re
+    push bx
+    mov bl, 0x92
+    call mega_ldt_alloc             ; AX = a new one...
+    pop bx
+    jc .full
+    mov [ss:bx], ax
+    mov di, ax
+    and di, 0xFFF8
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    mov byte [es:di+6], MEGA_HAVL   ; ...marked a handle's
+    pop es
+    jmp short .ok
+.re:
+    and di, 0xFFF8
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    pushf
+    cli
+    mov [es:di], cx
+    mov [es:di+2], ax
+    mov [es:di+4], dl
+    popf
+    pop es
+.ok:
+    pop dx
+    pop ax
+    pop di
+    pop si
+    pop cx
+    pop bx
+    clc
+    retf
+.full:
+    mov ax, 1
+    jmp short .no
+.nb:
+    mov ax, 3
+    jmp short .no
+.not:
+    mov ax, 4
+.no:
+    pop dx
+    add sp, 2                       ; the caller's AX: the reason instead
+    pop di
+    pop si
+    pop cx
+    pop bx
+    stc
+    retf
+
 ; mega_segaim - SEG_AIM's body (mega_segf): DX = a BOUND window of the caller's
 ; (SEG_BWIN), CX:AX = a byte offset into its block -> CF = 0, DX = the same
 ; window, its base the block's + the offset and its reach 64KB or to the
@@ -13186,6 +13305,8 @@ mega_dfind:
     jne .n
     cmp [es:di], cx
     jne .n
+    test byte [es:di+6], MEGA_HAVL  ; ...no HANDLE descriptor (SEG_HND),
+    jnz .n                          ;   which its holder re-aims, and
     push dx                         ; ...AND NO WINDOW (SPEC.md 50.6.11): a
     push di                         ; window is its owner's to re-aim, and
     lea dx, [di+4]                  ; one left over this very base answered

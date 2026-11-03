@@ -13523,3 +13523,41 @@ Seen (QEMU, kern_mega, looks): Arcade 1.0's setup reaches
 *Congratulations!*. Mozart's runs through every file and its Program
 Manager group. Its last dialog is SPEC.md 124.26.11's to answer, not the
 kernel's.
+
+### 14.138 `SEG_HND`: a descriptor per Windows handle, re-aimed in place (2026-11-03) - FIXED
+
+The lead's D1 for #327: WIN16's stopgap gave a global block a SUB that
+reached to its CLAIM's end, so a block kept one selector however its length
+moved, and the LDT stopped running out under Mozart's setup. What it gave up
+was the overrun: a write past the block landed in its neighbour. Windows'
+standard mode keeps ONE selector per handle and changes its base and limit
+when `GlobalReAlloc` grows or moves the block. Nothing in `OSAPI_SEG` could
+do that. A SUB is deduped by base and limit, so re-aiming one would move
+somebody else's. A bound window can be re-aimed, but there are only 32
+`mega_wtab` rows, and Mozart's setup alone holds 15 handles at once.
+
+`OSAPI_SEG` verb 12, `SEG_HND` (`mega_segh`, SPEC.md 50.6.11), makes a
+fresh data descriptor based in a claim or a pool block. It re-aims the same
+descriptor in place, or frees it when SI = 0. It is marked in byte 6's AVL
+bit (`MEGA_HAVL`, 10h; a reserved byte on a 286). `mega_dfind` passes a
+marked entry by, so no SUB is ever answered one. It has no `mega_wtab` row.
+Being based in its block, the compactor rebases it and the block's free
+takes it, as `SEG_TILE`'s tiles. WIN16 holds one per global block under
+64 KB, plus two of its own as walk descriptors for its arena walks
+(SPEC.md 124.31.3).
+
+Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,800
+(+208 over 14.137's 22,592: the body's 191, its dispatch and
+`mega_dfind`'s test). That is 24,310 with its scratch, in the same 24,576
+rung, 266 left. Resident, LOW and `.cold` are unchanged; kern_big and
+kern_small are byte-identical. A constant was added to `apps/os88api.inc`,
+so `tools/abi.lock.json` was refreshed with no bump.
+
+Seen (QEMU, kern_mega, looks, 2026-11-03):
+- Mozart's setup runs to its last dialog with every file copied. The LDT's
+  high-water is 1,635 of 1,992 entries. It was 1,859 with handle
+  descriptors alone, and the setup ran out before D1.
+- Arcade's setup reaches *Congratulations!*.
+
+The overrun itself cannot be seen under QEMU, which checks no data
+segment's limit. `tests/win16ovr.py` is Bochs's row for it.

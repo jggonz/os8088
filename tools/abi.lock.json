@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "0f17acae1ca4de60fdd48e140f548898441e90799fc732ee896f5b3d6e2a6428",
+  "fingerprint": "b395855801841c165384d1de40d49211f904236065209360de6bf08d64fae6d6",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "cd1bc0d0b8699cc39ae0a3de4a6b6f2287138bdb77884c35ee158afff2fb53e0",
+  "fingerprint": "39a274c118888d92511f7330c4e8c6580e37c07f782609cadbd63a8ac79ce2c5",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1666,6 +1666,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "merge of main (#328) into Phase B/C (#327): main's three cells and DRV_VER 12 beside the branch's SEG_TILE, SEG_WINL and SEG_LEND, each an added OSAPI_SEG verb; nothing built before is affected",
+   "to": 12
+  },
+  {
+   "fingerprint": "39a274c118888d92511f7330c4e8c6580e37c07f782609cadbd63a8ac79ce2c5",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SEG_HND (12): a re-aimable handle descriptor verb for OSAPI_SEG on kern_mega (SPEC.md 50.6.11); a constant added, nothing built before moves",
+   "to": 10
+  },
+  {
+   "fingerprint": "b395855801841c165384d1de40d49211f904236065209360de6bf08d64fae6d6",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "SEG_HND (12): a re-aimable handle descriptor verb for OSAPI_SEG on kern_mega (SPEC.md 50.6.11); a constant added, nothing built before moves",
    "to": 12
   }
  ]

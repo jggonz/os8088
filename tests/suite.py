@@ -17292,6 +17292,21 @@ SOAK = [
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/win16/TINY16.EXE",
                "build/DOSHELLO.EXE", "build/dosp.bin")),
+    Row("win16ovr", "soak", py("tests/win16ovr.py"), 90.0,
+        "SPEC.md 124.31.3 and 50.6.11 (SEG_HND), WIN16-ANY-PLAN S24: under "
+        "Bochs, kern_mega boots off C: and \\AUTOSTRT opens OVRTEST.EXE "
+        "(tests/win16/ovrtest.c). A 100-byte moveable block's selector is its "
+        "HANDLE descriptor and reaches exactly GlobalSize; a GlobalReAlloc to "
+        "6000 bytes past a fixed block answers the SAME selector with the new "
+        "limit and the old bytes; and a write one byte past the block closes "
+        "WIN16 for a #GP, OVRTEST.TXT never saying SURVIVED. Bochs, because "
+        "QEMU checks no data segment's limit and the write completes there. "
+        "Red expected on the parent commit, whose stopgap selector reached "
+        "the claim's end",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/OVRTEST.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

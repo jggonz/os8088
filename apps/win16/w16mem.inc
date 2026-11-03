@@ -64,6 +64,8 @@ GHF_CODE  equ 8                 ; a discardable code segment, GH_OWNER its
                                 ;   number (SPEC.md 124.26.3)
 GHF_ICON  equ 16                ; an icon CreateCursorIconIndirect made, which
                                 ;   DestroyIcon frees (124.27.7)
+GHF_HND   equ 32                ; the kern_mega arm's: GH_TSEL is the block's
+                                ;   handle descriptor (w16_pblk, 124.31.3)
 W16G_HIGH equ 0x01              ; w16_gnew's CL: from the TOP of an arena, the
                                 ;   last free run that holds it (124.26.3)
 W16G_NOCODE equ 0x04            ; ...and: the program's code is not discarded
@@ -128,7 +130,7 @@ w16_gnew:
     call w16_gfit
     jc .fail
 .got:
-    W16SEG es, ax                      ; ES = the header
+    W16WALK 0, es, ax               ; ES = the header
     mov byte [es:GH_LOCK], 0
     mov byte [es:GH_TASK], 0        ; nobody's until w16_gmine
     mov word [es:GH_OWNER], 0
@@ -183,7 +185,7 @@ w16_gzero:
 .chunk:
     or bx, bx
     jz .done
-    W16SEG es, ax
+    W16WALK 1, es, ax
     mov cx, bx
     cmp cx, 0x0FFF
     jbe .last
@@ -252,7 +254,7 @@ w16_gfit:
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
-    W16SEG es, ax
+    W16WALK 0, es, ax
     mov cx, [es:GH_SIZE]
     test byte [es:GH_FLAGS], GHF_USED
     jz .free
@@ -278,13 +280,13 @@ w16_gfit:
     jmp short .skip
 .top:                               ; the last fit: the top of it is the block
     mov ax, dx
-    W16SEG es, ax
+    W16WALK 0, es, ax
     mov cx, [es:GH_SIZE]
     sub cx, bx
     jz .exact
     mov [es:GH_SIZE], cx            ; the bottom stays free
     add ax, cx
-    W16SEG es, ax
+    W16WALK 0, es, ax
     mov [es:GH_SIZE], bx
     jmp short .exact
 .low:
@@ -293,7 +295,7 @@ w16_gfit:
     mov dx, ax                      ; the rest becomes a free block
     add dx, bx
     push es
-    W16SEG es, dx
+    W16WALK 1, es, dx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], 0
     mov word [es:GH_MAGIC], GH_SIG
@@ -424,17 +426,13 @@ w16_gfreeblk:
     push dx
     push si
     push es
-    W16SEG es, ax
+    W16WALK 1, es, ax
 %ifdef PKG_MEGA
-    test byte [es:GH_FLAGS], GHF_MOVE ; a moveable block's bound window goes
-    jz .nowin                       ;   with it (w16_plock). A huge block's
-    cmp byte [es:GH_TN], 0          ;   tiles are the arena's
-    jne .nowin
-    xor dx, dx
-    xchg dx, [es:GH_TSEL]
-    or dx, dx
-    jz .nowin
-    mov bl, SEG_FREE
+    test byte [es:GH_FLAGS], GHF_HND ; its handle descriptor goes with it
+    jz .nowin                       ;   (w16_pblk). A huge block's tiles
+    xor si, si                      ;   are the arena's
+    mov dx, [es:GH_TSEL]
+    mov bl, SEG_HND
     call OSAPI_SEG
 .nowin:
 %endif
@@ -461,7 +459,7 @@ w16_gfreeblk:
 .walk:
     cmp ax, [w16_arenae + si]
     jae .walked
-    W16SEG es, ax
+    W16WALK 0, es, ax
     test byte [es:GH_FLAGS], GHF_USED
     jz .free
     mov bx, 1
@@ -473,7 +471,7 @@ w16_gfreeblk:
     cmp cx, [w16_arenae + si]
     jae .walked
     push es
-    W16SEG es, cx
+    W16WALK 1, es, cx
     test byte [es:GH_FLAGS], GHF_USED
     mov cx, [es:GH_SIZE]
     pop es
@@ -486,6 +484,9 @@ w16_gfreeblk:
 .walked:
     or bx, bx
     jnz .out
+%ifdef PKG_MEGA
+    call w16_vwdrop                 ; (a walk descriptor may be in it)
+%endif
     mov dx, [w16_arena + si]        ; nothing used: give it back
     W16VFREE
     mov word [w16_arena + si], 0
@@ -718,7 +719,7 @@ w16_gdiscard:
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
-    W16SEG es, ax
+    W16WALK 0, es, ax
     test byte [es:GH_FLAGS], GHF_USED
     jz .skip
     test byte [es:GH_FLAGS], GHF_RES
@@ -735,9 +736,11 @@ w16_gdiscard:
 .disc:
     pop si                          ;   its block is gone; start the arena again
     pop ax
-    jc .skip
+    jc .kept
     mov bx, 1
     jmp short .arena                ; (the arena itself may be gone)
+.kept:
+    W16WALK 0, es, ax               ; (the call may have walked: aimed again)
 .skip:
     add ax, [es:GH_SIZE]
     jmp short .blk
@@ -764,6 +767,9 @@ w16_gfreeall:
     mov dx, [w16_arena + si]
     or dx, dx
     jz .n
+%ifdef PKG_MEGA
+    call w16_vwdrop
+%endif
     W16VFREE
     mov word [w16_arena + si], 0
     mov word [w16_arenae + si], 0
@@ -872,7 +878,7 @@ w16k_glock:
     inc dx
 %ifdef PKG_MEGA
     xchg ax, dx
-    call w16_plock                  ; the program's selector for it
+    call w16_pblk                   ; the program's selector for it
     xchg ax, dx
 %endif
     xor ax, ax
@@ -1025,7 +1031,7 @@ w16k_gcomp1:
 .blk:
     cmp ax, [w16_arenae + si]
     jae .nexta
-    W16SEG es, ax
+    W16WALK 0, es, ax
     mov dx, [es:GH_SIZE]
     call w16_gcan
     jc .brk
@@ -1230,13 +1236,16 @@ w16k_grealloc:
     W16VOF ax, es
     add ax, bx
     push es
-    W16SEG es, ax
+    W16WALK 1, es, ax
     sub cx, bx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], GHF_USED
     mov word [es:GH_MAGIC], GH_SIG
     pop es
     call w16_gfreeblk               ; (marks it free and merges)
+%ifdef PKG_MEGA
+    call w16_phfix                  ; its selector, at its new length
+%endif
 .same:
     mov ax, di
     jmp .out
@@ -1281,6 +1290,9 @@ w16k_grealloc:
     cmp bx, cx
     jb .shrinkto
 .keepall:
+%ifdef PKG_MEGA
+    call w16_phfix                  ; its selector, at its new length
+%endif
     mov ax, di
     jmp .out
 .shrinkto:
@@ -1288,15 +1300,14 @@ w16k_grealloc:
     W16VOF ax, es
     add ax, bx
     push es
-    W16SEG es, ax
+    W16WALK 1, es, ax
     sub cx, bx
     mov [es:GH_SIZE], cx
     mov byte [es:GH_FLAGS], GHF_USED
     mov word [es:GH_MAGIC], GH_SIG
     pop es
     call w16_gfreeblk
-    mov ax, di
-    jmp .out
+    jmp short .keepall
 .nonext:
     pop es
 .move:
@@ -1313,10 +1324,10 @@ w16k_grealloc:
     jnz .fail
 %else
     jz .unlocked
-    cmp byte [es:GH_TN], 0          ; ...or a protected-mode program's, whose
-    jne .fail                       ;   bound window goes with it (w16_plock,
-    cmp word [es:GH_TSEL], 0        ;   w16s_gwin; SPEC.md 124.31.3)
-    je .fail
+    cmp byte [w16_pmonly], 0        ; ...or a protected-mode-only program's,
+    je .fail                        ;   whose selector follows it (w16_pblk,
+    test byte [es:GH_FLAGS], GHF_HND ;   w16s_gwin; SPEC.md 124.31.3)
+    jz .fail
 %endif
 .unlocked:
 %ifdef PKG_MEGA
@@ -1373,7 +1384,7 @@ w16k_grealloc:
     mov [es:GH_OWNER], cx
     pop es
 %ifdef PKG_MEGA
-    SCALL w16s_gwin                 ; ...and its bound window, if it has one
+    SCALL w16s_gwin                 ; ...and its handle descriptor, if any
 %endif
     mov ax, [w16_gold]
     call w16_gfreeblk
@@ -1439,7 +1450,7 @@ w16_zparas:
 .c:
     or dx, dx
     jz .d
-    W16SEG es, ax
+    W16WALK 1, es, ax
     mov cx, dx
     cmp cx, 0x0FFF
     jbe .l

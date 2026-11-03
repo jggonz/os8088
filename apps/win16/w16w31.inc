@@ -46,86 +46,29 @@ w16n_tail:
 %ifdef PKG_MEGA
 ; w16s_gwin - GlobalReAlloc's move (w16k_grealloc), between the copy and
 ; the old block's free: [w16_gold] = the old header, ES = the new block's
-; data. A bound window the old one holds (w16_plock: a moveable block a
-; protected-mode-only program has locked) goes to the new header, and is
-; re-aimed at the new block: SEG_AT on the caller's own window keeps it
-; bound and moves it into the new block's claim - another arena is fine,
-; the kernel finding a bound window's block from where it points - then
-; SEG_AIM gives it the block's reach. The selector the program holds
-; follows the block, as standard mode's did. Keeps every register.
+; data, whose header has the old one's flags already. The old block's handle
+; descriptor (w16_pblk) goes to the new header and is re-aimed there with
+; the new length, in place, another arena or not: the selector the program
+; holds follows the block, as standard mode's did. Keeps every register.
 ; (SPEC.md 124.31.3)
 w16s_gwin:
     push ax
-    push bx
     push cx
-    push dx
-    push si
     push es
-    W16VOF ax, es
-    mov si, ax                      ; SI = the new data
+    W16VOF cx, es
+    dec cx                          ; CX = the new header
     mov ax, [w16_gold]
     W16SEG es, ax
-    cmp byte [es:GH_TN], 0          ; (a huge block's tiles stay the arena's)
-    jne .out
-    xor cx, cx
-    xchg cx, [es:GH_TSEL]           ; CX = the window, the old block's no more
-    jcxz .out
-    lea ax, [si - 1]
-    W16SEG es, ax
-    mov [es:GH_TSEL], cx
-    mov ax, si
-    ICALL w16_vfind                 ; SI = its arena's row, DX = paragraphs in
-    jc .out
-    push ax
-    mov ax, dx
-    mov dx, [si + W16V_SEL]
-    mov bl, SEG_AT
-    call OSAPI_SEG                  ; CX's window, into the new block's claim
-    cmp dx, cx                      ;   (KERN-MEGA-PLAN 14.137) - or, were
-    je .aim                         ;   that refused, a window of its own,
-    mov bl, SEG_FREE                ;   which is not wanted
-    call OSAPI_SEG
-.aim:
-    pop ax
-    call w16s_paim                  ; ...with that block's reach
+    test byte [es:GH_FLAGS], GHF_HND
+    jz .out
+    and byte [es:GH_FLAGS], ~GHF_HND ; the old block's no more...
+    mov ax, [es:GH_TSEL]
+    W16SEG es, cx
+    mov [es:GH_TSEL], ax            ; ...the new one's (GHF_HND came with
+    ICALL w16_phfix                 ;   the flags), aimed at it
 .out:
     pop es
-    pop si
-    pop dx
     pop cx
-    pop bx
-    pop ax
-    ret
-
-; w16s_paim - AX = a global block's data paragraph, ES = its header, whose
-; bound window (GH_TSEL) is re-aimed there and GH_TVP set. CF=1 refused.
-; Keeps every register.
-w16s_paim:
-    push ax
-    push bx
-    push cx
-    push dx
-    push si
-    ICALL w16_vfind                 ; DX = paragraphs into the arena
-    jc .out
-    push ax
-    mov ax, dx                      ; CX:AX = the byte offset there
-    mov cl, 4
-    shl ax, cl
-    mov cl, 12
-    shr dx, cl
-    mov cx, dx
-    mov dx, [es:GH_TSEL]
-    mov bl, SEG_AIM
-    call OSAPI_SEG
-    pop ax
-    jc .out
-    mov [es:GH_TVP], ax
-.out:
-    pop si
-    pop dx
-    pop cx
-    pop bx
     pop ax
     ret
 %endif
