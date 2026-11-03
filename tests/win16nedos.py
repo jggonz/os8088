@@ -93,7 +93,8 @@ def claims(ui):
 def win16_vars(ui):
     """WIN16's (w16_vol, w16_name, w16_l1) out of its instance's bss,
     through the package's own map (win16fpu.pkg_syms); None when WIN16 is
-    not running"""
+    not running. The instance is the package whose w16_name is the NE: its
+    I_NAME is the program's (TINY16), not WIN16's, once it runs"""
     import win16fpu
     S = win16fpu.pkg_syms()
     raw = bytes(ui.m.read(ui.sym("inst_tab"), geom.INST_MAX * geom.I_RECSZ))
@@ -101,14 +102,13 @@ def win16_vars(ui):
         r = raw[i * geom.I_RECSZ:(i + 1) * geom.I_RECSZ]
         if r[geom.I_STATE] != 1 or not r[geom.I_KIND] & geom.KIND_PKG:
             continue
-        nm = r[geom.I_NAME:geom.I_NAME + 16].split(b"\0")[0]
-        if not nm.upper().startswith(b"WIN16"):
-            continue
         base = struct.unpack_from("<H", r, geom.I_SPTR)[0] << 4
 
         def text(n):
             return bytes(ui.m.read(base + S[n], 48)).split(b"\0")[0] \
                 .decode("latin-1")
+        if text("w16_name").upper() != NE:
+            continue
         return (bytes(ui.m.read(base + S["w16_vol"], 1))[0], text("w16_name"),
                 text("w16_l1"))
     return None
@@ -133,7 +133,7 @@ def leg_d(work, bimg, bad):
             for w in ui.windows():
                 if w.visible and w.title in W16TITLES:
                     v = win16_vars(ui)
-                    if v and v[2]:
+                    if v:
                         got["v"] = v
                         return True
             return False
