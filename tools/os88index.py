@@ -773,37 +773,48 @@ def build():
     w("## docs/")
     w("")
     w("**The DIRECTORY says what a document is, and the filename does not.** "
-      "`docs/` describes how the system works today - instructions, contracts "
-      "and maintained reference. Everything under `docs/plans/` is a design "
-      "record: what was considered, including the options that were rejected, "
-      "and it is never a description of what shipped - SPEC.md is the current "
-      "state and these are how it got there. `docs/plans/completed/` is the "
-      "subset whose work has landed; what stays directly in `docs/plans/` "
-      "still has work open. `docs/history/` is superseded or closed - a record "
-      "of a moment that has passed, and true of no tree you can check out. "
-      "`docs/reports/` is a MEASUREMENT taken at a point in time: true of the "
-      "tree it was taken on, quotable with its date and its box, and never to "
-      "be read as a description of today.")
+      "The documents below describe how the system works TODAY - "
+      "instructions, contracts and maintained reference. Everything else "
+      "under `docs/` is NOT where to learn how something works, and is "
+      "deliberately not listed by name: `docs/plans/` is work proposed or "
+      "half-done, `docs/plans/completed/` is how something got built (never "
+      "what it does now), `docs/history/` is superseded, and `docs/reports/` "
+      "is a dated MEASUREMENT of one tree. SPEC.md, the files below and the "
+      "code are the authority.")
     w("")
     docs = doc_files()
-    for kind, label in (
-            ("reference", "*How it works today - `docs/` (%d):*"),
-            ("plan", "*Plans with work still open - `docs/plans/` (%d):*"),
-            ("completed", "*Design records for what shipped - "
-                          "`docs/plans/completed/` (%d):*"),
-            ("history", "*Superseded and closed - `docs/history/` (%d):*"),
-            ("report", "*Measurements, each true of the tree it was taken on "
-                       "- `docs/reports/` (%d):*")):
-        names = [os.path.basename(n) for n, k in docs if k == kind]
-        w(label % len(names) + " "
-          + ", ".join("`%s`" % n for n in names))
-        w("")
+    refs = [n for n, k in docs if k == "reference"]
+    w("*How it works today - `docs/` (%d):* " % len(refs)
+      + ", ".join("[%s](%s)" % ((n[len("docs/"):],) * 2) for n in refs))
+    w("")
+    counts = dict((k, sum(1 for _n, kk in docs if kk == k))
+                  for k in ("plan", "completed", "history", "report"))
+    w("*Not reference:* %(plan)d open plans in `docs/plans/`, %(completed)d "
+      "design records in `docs/plans/completed/`, %(history)d superseded "
+      "files in `docs/history/`, %(report)d measurements in "
+      "`docs/reports/`." % counts)
+    w("")
     return "\n".join(L) + "\n"
+
+
+def check_misfiled():
+    """A plan or handoff filed as reference is a stale document dressed as a
+    current one: the directory is what tells a reader not to trust it. So a
+    file directly in `docs/` whose NAME says plan or handoff fails the build -
+    it belongs in docs/plans/ (open) or docs/plans/completed/ (shipped)."""
+    bad = [n for n, k in doc_files() if k == "reference"
+           and re.search(r"PLAN|HANDOFF", os.path.basename(n))]
+    for n in bad:
+        print("os88index: %s is a plan filed as reference - git mv it to "
+              "docs/plans/ (open) or docs/plans/completed/ (shipped)" % n)
+    return not bad
 
 
 def main():
     if not check_includes():          # a stale list is a stale index, and this
         return 1                      # one is hand-written, so it is checked
+    if not check_misfiled():
+        return 1
     text = build()
     if "--check" in sys.argv:
         try:

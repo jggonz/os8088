@@ -237,7 +237,7 @@ eth_ready:
                                 ; and above the [eth_up] test, because a card
                                 ; that found no address is still a card and
                                 ; the Wire's own window is what says so
-                                ; (SPEC.md 26.7, docs/WIRE-PLAN.md §7)
+                                ; (SPEC.md 26.7, docs/plans/completed/WIRE-PLAN.md §7)
     cmp byte [eth_up], 0
     je  .out
     call eth_cfg_load           ; a MANUAL address the user set and the panel

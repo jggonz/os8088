@@ -452,7 +452,15 @@ it maps:
 - **selectors** - `m.lin(seg, off)` reads the LDT or the GDT. kern_mega's
   GDT is an identity map except the kernel's DATA (0010, based at
   KERNEL_SEG x 16; KERNEL_SEG's own 0060 is its read-only CODE) and
-  COLD_SEG, whose base is `.cold`'s copy above 1MB (tests/tnest.py).
+  COLD_SEG, whose base is `.cold`'s copy above 1MB (tests/tnest.py) - and
+  it STOPS at COLD_SEG: the entries past it are zero padding and the
+  scratches, so a made-up "segment" there is no selector at all.
+- **segment registers** - `setreg("ds", v)` in protected mode loads the
+  descriptor, and Bochs REFUSES a selector it cannot load (a zero entry
+  prints "points to a system descriptor") and leaves the register as it
+  was. The shim reads every segment register back and raises when the set
+  did not take: tests/tnest.py's leg 7 once read the previous DS, 0010,
+  back as the fake image it had picked past the identity map.
 - **the mouse and keys** - `launch(..., wheel=True)` is an IntelliMouse and
   `m.wheel()` turns it (Bochs 2.7 never clears its last Z, so the shim
   follows each turn with a zero-sum motion, or the next stop sends one more

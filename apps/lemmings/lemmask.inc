@@ -20,7 +20,7 @@
 ;
 ; WHY IT IS ASSEMBLY. lem_has_pixel is called 4 to 8 times per lemming per tick
 ; and a tick on a 4.77 MHz 8088 is ~16,000 instructions
-; (docs/LEMMINGS-PORT-PLAN.md's corrected frame budget). A SmallerC cdecl call
+; (docs/plans/completed/LEMMINGS-PORT-PLAN.md's corrected frame budget). A SmallerC cdecl call
 ; is the caller pushing the arguments, the call, the callee's push bp / mov
 ; bp,sp / ... / leave / ret and the caller's add sp - 20 to 30 instructions
 ; BEFORE the body. Sixty lemmings at six probes is 360 calls a tick, 9,000 of

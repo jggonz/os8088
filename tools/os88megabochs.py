@@ -812,7 +812,22 @@ class MegaBochs(MegaMixin, om.Marty):
             self._stopped(["set $eflags = 0x%x" % v])
             return {}
         reg = {"ip": "eip"}.get(reg, reg)
-        self._stopped(["set %s = 0x%x" % (reg, value)])
+        if reg not in ("cs", "ds", "es", "ss", "fs", "gs"):
+            self._stopped(["set %s = 0x%x" % (reg, value)])
+            return {}
+        # A SEGMENT REGISTER IS READ BACK. In protected mode Bochs loads the
+        # descriptor, and for a selector it will not load (a zero padding
+        # entry of the GDT reads as a "system descriptor") it prints a line
+        # and leaves the register AS IT WAS - and this answered ok, so
+        # tests/tnest.py's leg 7 recorded the previous DS (0010) for the
+        # image it believed it had entered
+        t = self._stopped(["set %s = 0x%x" % (reg, value), "sreg"])
+        got = re.search(r"^%s:0x([0-9a-f]+)" % reg, t, re.M)
+        if not got or int(got.group(1), 16) != value & 0xFFFF:
+            raise om.MartyError("os88megabochs: `set %s = 0x%x` did not take"
+                                " (%s): %s" % (reg, value, got and
+                                               "still 0x" + got.group(1),
+                                               t.strip().splitlines()[0]))
         return {}
 
     def _c_park(self, cs, ip, **_):

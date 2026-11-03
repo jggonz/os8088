@@ -623,6 +623,26 @@ class UI:
         gy = w.y + geom.TITLE_H // 2
         self._grab(w, gx, gy)
         self.mo.to(gx + (x - w.x), gy + (y - w.y), l=True)
+        # **THE OUTLINE HAS TO CATCH THE POINTER BEFORE THE RELEASE**, as an
+        # eye waits for it. SPEC.md 13's drag loop drops the window where the
+        # OUTLINE was last drawn: ui_drag_step samples mouse_x/y once a pass,
+        # a pass lingers a whole tick, and the release is taken at the top of
+        # the next pass with the position the last step left. `to` proves only
+        # the POINTER: measured on 86Box, 3 of 32 drags returned from it with
+        # the outline still at the window's origin, so a release decoded
+        # inside that pass would drop the window short of the pointer. The
+        # kernel's own words say when the loop has seen where the pointer is:
+        # ui_curx/cury = ui_origx/y + (mouse - ui_startx/y), six contiguous
+        # words read in one transfer.
+        def caught():
+            b = self.m.read(self._S("ui_startx"), 12)
+            sx, sy, ox, oy, cx, cy = struct.unpack("<6H", b)
+            mx, my, _ = self.mo.where()
+            return (((ox + mx - sx) & 0xFFFF, (oy + my - sy) & 0xFFFF)
+                    == (cx, cy))
+        self._wait(caught, "the drag outline of %r to reach the pointer "
+                   "(ui_drag_step samples mouse_x/y once a pass)" % w.title,
+                   limit)
         self.mo._edge(False)
         # ARRIVED *AND THE DRAG IS OVER*, which is two facts and not one.
         # ui_drag stores the drop and then, still under the gfx lock, has
@@ -665,8 +685,9 @@ class UI:
                 "snaps to (%d,%d) - and landed at (%d,%d). It MOVED, so the "
                 "gesture arrived; the window manager put it somewhere else. "
                 "wm_land_fit and wm_dock_snap both refuse a destination, and "
-                "a window may not be dragged off its display."
-                % ((w.title, x, y) + want + got))
+                "a window may not be dragged off its display. The drag's "
+                "own words: %s" % ((w.title, x, y) + want + got
+                                   + (self._dragwords(),)))
         return self._refresh(w)
 
     # =========================================================================
@@ -900,6 +921,16 @@ class UI:
                              "%r, press aimed at (%d,%d)"
                              % (self._word("ui_dragwin"), self.mo.where()[2],
                                 self.mo.where()[:2], gx, gy))
+
+    def _dragwords(self):
+        """ui_track's six words and the pointer, for a drag's failure."""
+        try:
+            b = self.m.read(self._S("ui_startx"), 12)
+            sx, sy, ox, oy, cx, cy = struct.unpack("<6H", b)
+            return ("press (%d,%d), origin (%d,%d), outline (%d,%d), pointer "
+                    "%r" % (sx, sy, ox, oy, cx, cy, self.mo.where()))
+        except Exception as e:                              # noqa: BLE001
+            return "(unreadable: %s)" % e
 
     def drag_window(self, w, dx, dy, limit=T_MOVE):
         """move_window by a DELTA. The spelling most callers mean."""

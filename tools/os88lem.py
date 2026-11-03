@@ -17,7 +17,7 @@ DETERMINISTIC: the same input rebuilds the same bytes. `--selfcheck` proves it
 by building twice and comparing.
 
 WHERE THE READERS COME FROM. The DAT/GROUNDxO/level/VGASPEC readers below are
-lemtool/lemdat.py's, reused rather than re-derived (docs/LEMMINGS-PORT-PLAN.md
+lemtool/lemdat.py's, reused rather than re-derived (docs/plans/completed/LEMMINGS-PORT-PLAN.md
 decision 9), with SPEC.md 116.3.1's nine rulings applied where the three
 reimplementations disagree:
 

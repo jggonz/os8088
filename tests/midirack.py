@@ -412,18 +412,34 @@ def arm_sbmem(ui, p):
     # in its own record, and declared again after the leg
     song = rloc_set(m, para(m, p.w("mr_fseg")), 0)
     # THE HEAP TAKEN: each key is one more fill and an ask (tests/filler),
-    # until nothing of the ring's size could be funded at all
+    # until nothing of the ring's size could be funded at all. THE KERNEL'S
+    # OWN ANSWER decides that and not the total: the song is a wall now (just
+    # above), so each side of it keeps the fill's FL_LEAVE - 8.5 KB and 8.5
+    # KB measured, 17 KB "reachable" and no 17 KB run anywhere. The filler
+    # leaves OSAPI_MEM_AVAIL's largest run (mem_avail: both compaction passes,
+    # every pin, every cache shed) and a round count in its bss, and the
+    # round is waited on in guest state rather than for a guest second
     fl = ui.path("FILLER.O88")         # the acting Disk window, B:/APPS
-    for _ in range(8):
-        if heap(m)[1] < MRB_KB:
-            break
+    fp = mrprobe.attach_filler(ui)
+
+    def fl_round(key):
+        n = fp.w("fl_nround")
         ui.raise_window(fl)
-        m.key("KeyA")
-        M.guest_sleep(m, 1.0)
+        m.key(key)
+        M.until(m, lambda _: fp.w("fl_nround") != n, "the filler's round",
+                poll=.05, limit=20)
+    run = None
+    for _ in range(8):
+        fl_round("KeyA")
+        run = fp.w("fl_run")
+        if run < MRB_KB:
+            break
     reach = heap(m)[1]
-    if reach >= MRB_KB:
-        fail("sbmem: the filler left %d KB reachable - the refusal cannot be "
-             "forced on this machine" % reach)
+    if run >= MRB_KB:
+        fail("sbmem: the filler left a %d KB run (%d KB reachable in all) - "
+             "the refusal cannot be forced on this machine" % (run, reach))
+    print("PASS sbmem: the filler left a %d KB run, %d KB reachable in all, "
+          "under the ring's %d KB" % (run, reach, MRB_KB), flush=True)
     # NO EXTERNAL RING TO BE HAD: the grant ring plays instead (14.59)
     ui.raise_window(ui.window("MIDIRack"))
     ui.menu_pick("Play", "Play")
@@ -448,9 +464,7 @@ def arm_sbmem(ui, p):
     stop(ui, p)
     rloc_set(m, para(m, p.w("mr_fseg")), song)   # the song movable again
     # ...AND THE REST TAKEN ('T'): neither ring, so both Plays refuse in words
-    ui.raise_window(fl)
-    m.key("KeyT")
-    M.guest_sleep(m, 1.0)
+    fl_round("KeyT")
     reach = heap(m)[1]
     if reach >= 4:
         fail("sbmem: 'T' left %d KB reachable - a 4 KB grant can still be "

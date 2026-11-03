@@ -69,7 +69,7 @@ of the CPU model:
   of those faults a second (docs/REALDMG-SPEC.md section 16.2.4). Bochs
   always had the check; `pmoderetf` and `pmodeiret` had it here already.
 
-Three more serve the port backend (*kern_big rows on 86Box* and *kern_mega
+Five more serve the port backend (*kern_big rows on 86Box* and *kern_mega
 rows on 86Box*, below), and each is inert until something asks for it:
 
 - **`04-sb-capture.patch`** - with `OS88_SBWAV=FILE`, the first Sound
@@ -105,8 +105,20 @@ rows on 86Box*, below), and each is inert until something asks for it:
   `-1fd` and `-usbm` twins) is that card as the field 2.x is jumpered, IRQ 7
   and DRQ 1 (docs/plans/completed/PICOMEM-EMU-PLAN.md).
 
-A binary built before these three is refused by the backend, which names
-the rebuild (`python3 tools/os88box.py build`).
+- **`08-automation-mouse-raw.patch`** - the automation socket's `mouse dx
+  dy` is GUEST motion and is never scaled by the window's ratio. Upstream
+  scales it like a host pointer, and `mouse_subtract_y` converts with the X
+  ratio and subtracts with the Y one, so on a VGA a +20 arrived as +19 and
+  the held-back count paid out on a LATER report: a pointer `os88mouse.to`
+  had proven at its target moved one more pixel, and a drag dropped a pixel
+  off (`mega-deskzoom-86box`, "landed at (207,29)" for (207,30)). A host
+  pointer on a visible window is scaled exactly as before.
+
+`build.sh` records the hash of the patches it applied in `86Box.patches`
+beside the binary, and the backend refuses a binary whose record does not
+match this tree's `tools/86box/patches/` (or that has none), naming the
+rebuild (`python3 tools/os88box.py build`). A patch that changes behaviour
+and adds no verb cannot be probed for, which is why the record exists.
 
 ## Use
 

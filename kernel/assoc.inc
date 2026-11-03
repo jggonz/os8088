@@ -1301,10 +1301,14 @@ assoc_run_x:
     jb .fwd                     ; PROGRAM for this document (SPEC.md 21.5.4)
                                 ; and refused: a hand-on, not a failure - no
                                 ; toast, and no repaint, the posted launch
-                                ; being the next thing on the glass. A slot
-                                ; or ASSOC_FIND is below ASSOC_FLUSH; the
-                                ; flush assoc_locate's .learn posts is not a
-                                ; hand-on, and must not cost the handover
+                                ; being the next thing on the glass. BELOW
+                                ; ASSOC_FLUSH, NOT `!= 0xFF`: a FLUSH posted
+                                ; since the consume is no hand-on - and
+                                ; assoc_locate's own .learn posts one, on
+                                ; THIS run, whenever the volume's cache did
+                                ; not know where the program is (54.7.6.1),
+                                ; which skipped the handover and opened the
+                                ; program EMPTY (SPEC.md 21.5.4.1)
     call ld_say_status          ; record the verdict and SAY it (SPEC.md
                                 ; 59/22.9) - loader.inc's, `.cold` like this,
                                 ; so the call is near, and it preserves every

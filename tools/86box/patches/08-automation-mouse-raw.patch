@@ -1,0 +1,29 @@
+diff --git a/src/device/mouse.c b/src/device/mouse.c
+index 8d0e461..e0b139c 100644
+--- a/src/device/mouse.c
++++ b/src/device/mouse.c
+@@ -242,7 +242,14 @@ mouse_scale_coord_x(double x, int mul)
+ {
+     double ratio = 1.0;
+ 
+-    if (!mouse_raw)        
++    /* os8088 (08-automation-mouse-raw.patch): the automation socket's
++       `mouse dx dy` is GUEST motion, not host pixels, so it is never scaled
++       by the window's ratio. Scaled, a delta left a fractional residue in
++       mouse_y, and mouse_subtract_y converts with the X ratio and subtracts
++       with the Y one, so the residue paid out as phantom counts on later
++       polls - a pointer a harness had proven at its target moved one more
++       pixel under the button release. */
++    if (!mouse_raw && !mouse_automation)
+         ratio = ((double) monitors[0].mon_unscaled_size_x) / monitors[0].mon_res_x;
+ 
+     if (mul)
+@@ -258,7 +265,7 @@ mouse_scale_coord_y(double y, int mul)
+ {
+     double ratio = 1.0;
+ 
+-    if (!mouse_raw)        
++    if (!mouse_raw && !mouse_automation) /* (see mouse_scale_coord_x) */
+         ratio = ((double) monitors[0].mon_efscrnsz_y) / monitors[0].mon_res_y;
+ 
+     if (mul)

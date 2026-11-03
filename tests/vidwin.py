@@ -53,7 +53,24 @@ skipped) - the frame in the box after the click is not the frame played.
    bracket's door pays it off under whatever clip region is armed - the
    window's, which the player had just drawn through (12.8.5.2). Broken on
    purpose - vp_srun's OSAPI_WM_CLIP_CLEAR taken out - [fpg_on] reads 0 and
-   the widget's pixels stay on the bar, frozen, for the whole play.
+   the widget's pixels stay on the bar, frozen, for the whole play. (That
+   break no longer goes red on either kernel as of 2026-11-03: it needs a
+   key's record read in the lock hold Play starts in, and neither machine
+   reads one there now - the 5150 at 640KB holds no file, kern_mega holds
+   all of it. The bars below are what the row can still see.)
+
+   And the bar is read against a BARE one, taken at the end with nothing of
+   the file left to load: on a machine with a HOLD (98.3.18 - kern_mega's
+   86Box) the load's widget is PARKED on the bar before Play (12.8.9), so
+   the bar as it was there is not bare. Broken on purpose - vp_srun's
+   vp_opend taken out, the parked operation carried into the bracket and
+   its end refused inside kern_mega's real-mode one - the widget stays on
+   the bar through every play and never comes down.
+
+Every state a wait looks for is one the guest HOLDS (vp_stopat): a play
+in the window seen at frame 30, 100 or a key's + 11 rather than "done >=
+45" off a host poll, which at 86Box's 6x-8x under a loaded host came after
+the play had ended (the resumed play, the F swap).
 """
 import argparse
 import os
@@ -263,7 +280,13 @@ def main():
                 # the poster the box showed, never the black the first
                 # frame is drawn on - which it did for the whole fill
                 pkey = r.keys[rw("vp_dkey")][0]
-                bar0 = bar()                # (no disk is busy: the bar bare)
+                # (NOT the bar as it is here: on a machine with the memory
+                # for a HOLD - kern_mega's - the hold's load is still on it,
+                # its widget PARKED (SPEC.md 12.8.9), and a bar compared
+                # with that passes with the widget frozen on it. The bare
+                # bar is read at the end, with nothing of the file's left
+                # to load - bare_bar() - and every reading against it)
+                bars = []
                 m.type_text("p")
                 fills = []
                 while rb("vp_ready") == 0:
@@ -307,12 +330,12 @@ def main():
                         # THE WIDGET GOES WHEN THE BRACKET COMES (SPEC.md
                         # 12.8.5.2): the fill that armed it before the play
                         # must not leave it on the bar, frozen, for the play
-                        b1 = bar()
-                        print("   the bar's widget span playing: %s"
-                              % ("bare" if b1 == bar0 else "NOT BARE"))
-                        if b1 != bar0:
-                            bad.append("the file-activity widget stayed on "
-                                       "the bar into the in-window play")
+                        m.pause()
+                        bars.append(("playing", bar(), rb("vp_xon")
+                                     and not rb("vp_xfull"),
+                                     "the file-activity widget stayed on "
+                                     "the bar into the in-window play"))
+                        m.run()
                     i = stops.index(n)
                     ww("vp_stopat", stops[i + 1] if i + 1 < len(stops)
                        else 0xFFFF)
@@ -354,39 +377,53 @@ def main():
                     bad.append("paused on the desktop, Play still shows Pause")
                 if rb("vp_played") or rb("vp_upause") != 1:
                     bad.append("the click ended the play instead of pausing")
-                ww("vp_stopat", 0xFFFF)
+                # EVERY STATE A WAIT LOOKS FOR IS ONE THE GUEST HOLDS: a
+                # play back in the window is a state for its 90 frames only,
+                # three guest seconds - one host poll at 86Box's 8x - and a
+                # poll that missed them waited for a play long over. So the
+                # resumed play is held at frame 100, in the window, until
+                # it has been seen there
+                ww("vp_stopat", 100)
                 m.type_text(" ")
-                wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 1,
+                wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 1
+                     and rb("vp_held") == 1 and rw("vp_done") == 100,
                      "Space to resume in the window")
+                ww("vp_stopat", 0xFFFF)
+                m.write(base + syms["vp_held"], b"\0")
                 # (its time is not checked: the row's own hold at frame 60
                 # is play time. vidsndpause measures a desktop pause's)
                 check_end("a play paused by a click",
                           play_end("the resumed play's end"), 1000)
-                # --- 4: F swaps while playing, both ways
+                # --- 4: F swaps while playing, both ways - each side seen
+                # at a HOLD, so no host poll can miss it: frame 30 in the
+                # window, the full screen still held there after F, then
+                # frame 100 - in the window again after the second F, or
+                # in the full screen if F's way back took longer than the
+                # 70 frames between, the F then landing on the hold.
+                # (These were waits on passing states - done >= 30, done
+                # >= 45 - read off host polls, and under a loaded host at
+                # 86Box's 6x to 8x a poll came after the play's end)
                 m.write(base + syms["vp_played"], b"\0")
+                ww("vp_stopat", 30)
+                m.write(base + syms["vp_held"], b"\0")
                 m.type_text("p")
-                wait(lambda mm: rb("vp_ready") == 1 and rw("vp_done") >= 30,
+                wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 1
+                     and rb("vp_held") == 1 and rw("vp_done") == 30,
                      "the play to frame 30")
                 m.type_text("f")
-                # (A SHORT POLL: the hold below is armed when this is seen,
-                # and a 0.3 s host poll is 1.8 guest seconds - 54 frames -
-                # on kern_mega's 86Box at 6x, whose real-mode bracket
-                # (MEGA-VIDEO-REALMODE-PLAN W5) reaches the full screen
-                # fast enough that the play ran past 100 between two)
                 wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 0
-                     and rw("vp_done") >= 45, "F to go on in the full screen",
-                     poll=0.02)
+                     and rw("vp_done") == 30, "F to go on in the full screen")
                 playing_fs = rb("vp_upause") == 0
-                # step 5's hold is ARMED HERE, not after the window's frame
-                # 60 is seen: a hold fires at exactly its frame, and a host
-                # polling late under load let the play run past 100 before
-                # the write landed - the hold then never came (the soak's
-                # intermittent, VIDEO-PLAN 14.1)
+                # step 5's hold, at frame 100: armed with the guest STOPPED,
+                # and the hold at 30 released in the same stop
+                m.pause()
                 ww("vp_stopat", 100)
                 m.write(base + syms["vp_held"], b"\0")
+                m.run()
                 m.type_text("f")
                 wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 1
-                     and rw("vp_done") >= 60, "F to come back to the window")
+                     and rb("vp_held") == 1 and rw("vp_done") == 100,
+                     "F to come back to the window")
                 playing_w = rb("vp_upause") == 0
                 print("   F while playing: full screen %s, the window %s"
                       % ("playing" if playing_fs else "PAUSED",
@@ -413,20 +450,44 @@ def main():
                 # --- 6: PLAY FROM THAT KEY, and the widget is gone with the
                 # bracket's start: the key's record is read BEFORE the
                 # bracket, in the same lock hold, and arms it (12.8.5.2)
-                ww("vp_stopat", 0xFFFF)
+                # (held at 11 frames past the key, as every state looked
+                # for here is: a guest state, not a passing one)
+                ww("vp_stopat", keys[want_k] + 11)
+                m.write(base + syms["vp_held"], b"\0")
                 m.type_text("p")
                 wait(lambda mm: rb("vp_ready") == 1 and rb("vp_winm") == 1
-                     and rw("vp_done") > keys[want_k] + 10,
+                     and rb("vp_held") == 1
+                     and rw("vp_done") == keys[want_k] + 11,
                      "the play from key %d" % want_k)
                 m.pause()
-                b2, fon = bar(), m.read(m.sym("fpg_on"), 1)[0]
+                bars.append(("Play from key %d" % want_k, bar(),
+                             rb("vp_xon") and not rb("vp_xfull"),
+                             "Play from key %d left the file-activity "
+                             "widget on the bar, frozen" % want_k))
+                print("   Play from key %d: [fpg_on] %d" % (
+                    want_k, m.read(m.sym("fpg_on"), 1)[0]))
+                ww("vp_stopat", 0xFFFF)
+                m.write(base + syms["vp_held"], b"\0")
                 m.run()
-                print("   Play from key %d: the bar's widget span %s, "
-                      "[fpg_on] %d" % (want_k, "bare" if b2 == bar0
-                                        else "NOT BARE", fon))
-                if b2 != bar0:
-                    bad.append("Play from key %d left the file-activity "
-                               "widget on the bar, frozen" % want_k)
+                # THE BARE BAR: the play over and nothing of the file left
+                # to load - no hold, or a full one - so no operation is
+                # parked on it and the last unlock took the widget down
+                wait(lambda mm: rb("vp_played") == 1, "the play to end")
+                wait(lambda mm: (not rb("vp_xon") or rb("vp_xfull")) and
+                     mm.read(mm.sym("fpg_on"), 1)[0] == 0 and
+                     mm.read(mm.sym("fpg_pown"), 1)[0] == 0xFE,
+                     "the hold's load to end and its widget to come down "
+                     "(an operation parked for good: SPEC.md 12.8.9)")
+                os88marty.pace(m, 0.5)
+                m.pause()
+                bare = bar()
+                m.run()
+                for what, b, loading, why in bars:
+                    print("   the bar's widget span, %s%s: %s" % (
+                        what, " (the hold still loading)" if loading else "",
+                        "bare" if b == bare else "NOT BARE"))
+                    if b != bare:
+                        bad.append(why)
             except Stop as e:
                 bad.append(str(e))
     for b in bad:

@@ -35,9 +35,9 @@
   "sources": [
    "apps/apple2"
   ],
-  "stamped": "e4576a70",
-  "strings": "84a2ce489ed87f7e",
-  "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
+  "stamped": "2206227d",
+  "strings": "fce633db958ead5c",
+  "why": "only docs/APPLE2-PORT-PLAN.md -> docs/plans/completed/ path renames in comments and README.TXT; nothing the page describes changed"
  },
  "APPS": {
   "sources": [],
@@ -799,9 +799,9 @@
   "sources": [
    "apps/paccman"
   ],
-  "stamped": "066560d2",
-  "strings": "2eacb02ecd0d6758",
-  "why": "merge of two fixes: the disk's read-me is README.TXT (plain ASCII), and full screen mid-game draws correctly; both reflected on the page"
+  "stamped": "2206227d",
+  "strings": "1ed7784a6a152635",
+  "why": "only docs/PACCMAN-PORT-PLAN.md -> docs/plans/completed/ path renames in comments and README.md; nothing the page describes changed"
  },
  "PAINT_O88": {
   "sources": [

@@ -148,9 +148,23 @@ def build_base(sha):
         print("abicompat: building the base %s into %s (log: %s)"
               % (sha[:12], src, log), flush=True)
         jobs = str(max(1, (os.cpu_count() or 2)))
+        # THE BASE'S BUILD IS ITS OWN, so none of THIS run's OS88_* reaches
+        # it. Under a frozen soak the runner sets $OS88_BUILD (and the tree's
+        # siblings) for every row, and the base's Makefile calls os88sym
+        # without naming a build of its own: it then checked the base's map
+        # against the frozen tree's kernel.bin and refused, so the base
+        # "did not build" on every soak and on no bare run
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("OS88_")}
         with open(log, "w") as lf:
-            r = subprocess.run(["make", "-C", src, "BUILD=build", "-j" + jobs],
-                               stdout=lf, stderr=subprocess.STDOUT)
+            # ...and its ARTEFACTS, not its gates: `all` ends in checkdocs
+            # and test-fast, which are the BASE's opinions of THIS box -
+            # its t_w16cens answered a capability this box gained after the
+            # release with exit 77, which that runner counted as a failure.
+            # Whether the base was a good tree was settled when it shipped
+            r = subprocess.run(["make", "-C", src, "BUILD=build", "-j" + jobs,
+                                "-o", "test-fast", "-o", "checkdocs"],
+                               stdout=lf, stderr=subprocess.STDOUT, env=env)
         if r.returncode:
             raise SystemExit("abicompat: the base did not build - see %s"
                              % log)
@@ -504,9 +518,19 @@ def launch_leg(a):
 def run_leg(tools, sysimg, appsimg, pkgs, tag):
     out = tempfile.mktemp(prefix="abicompat-%s-" % tag, suffix=".json")
     print("F    --- %s: %s + %s" % (tag, sysimg, appsimg), flush=True)
+    # THE RELEASE'S LEG READS THE RELEASE'S KERNEL, so it gets none of this
+    # run's OS88_* - a frozen soak's $OS88_BUILD names the TIP's kernel, and
+    # the base's os88sym then refused its own map against it and every
+    # release leg died before a launch - and $OS88_BUILD is the base's build
+    env = None
+    if os.path.abspath(tools) != os.path.abspath(TOOLS):
+        env = {k: v for k, v in os.environ.items()
+               if not k.startswith("OS88_")}
+        env["OS88_BUILD"] = os.path.join(os.path.dirname(
+            os.path.abspath(tools)), "build")
     r = subprocess.run([sys.executable, os.path.abspath(__file__), "--leg",
                         "--tools", tools, "--sys", sysimg, "--apps", appsimg,
-                        "--pkgs", json.dumps(pkgs), "--out", out])
+                        "--pkgs", json.dumps(pkgs), "--out", out], env=env)
     if r.returncode or not os.path.exists(out):
         say("F", "FAIL", "the %s leg did not finish (exit %d)"
             % (tag, r.returncode))

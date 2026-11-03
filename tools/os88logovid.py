@@ -36,6 +36,14 @@ the package once; and from frame LOOP on the scene is periodic - every bit
 in step with a period that divides the loop's length - so the file's seam
 (SPEC.md 98.1.1.2) takes the last frame back to frame LOOP exactly, and the
 lettering stays once it has appeared.
+
+THE BITS (SPEC.md 98.3.11): each is an EMISSION with a time of its own - it
+enters at the canvas edge or leaves a pin's foot, rides the whole trace
+with one digit, and is gone at the other end, the pin or past the edge
+(clipped there, so it slides rather than pops). The intro is the same rule
+with a start: nothing reaches a pin before BIT_IN, the chip sends nothing
+before BIT_OUT. build() refuses a file whose frame NFRAMES is not frame
+LOOP.
 """
 import argparse
 import math
@@ -206,15 +214,26 @@ def burn_times(tex, spans, t0, dt, speed):
 
 class Trace:
     """A board trace from a pin's foot outward: a polyline on the board
-    (z = 0), and the bits that ride it"""
+    (z = 0), and the bits that ride it.
 
-    def __init__(self, pts, inward, phase, spacing, speed):
+    A BIT IS AN EMISSION: bit j leaves its spawn end - the canvas edge for
+    an inward trace, the pin's foot for an outward one - at frame
+    T_j = off + j x gap and rides at `speed` mm a frame until it reaches the
+    other end, where it is gone. It is the same bit, with the same digit,
+    for the whole of its ride: no bit appears or vanishes part way along,
+    and none changes from a 1 to a 0 (the owner's report: they FLIPPED on
+    the loop, when a bit's digit belonged to a slot that wrapped round
+    rather than to the bit)"""
+
+    def __init__(self, pts, inward, off, gap, speed, start=None):
         self.pts = [np.array(p, float) for p in pts]
         self.seg = [np.linalg.norm(b - a) for a, b in zip(self.pts,
                                                           self.pts[1:])]
         self.length = sum(self.seg)
-        self.inward, self.phase = inward, phase
-        self.spacing, self.speed = spacing, speed
+        self.inward, self.off = inward, off
+        self.gap, self.speed = gap, speed       # gap: FRAMES, dividing PERIOD
+        self.k = PERIOD // gap                  # bits emitted a loop
+        self.start = start                      # outward: the first emission
 
     def at(self, s):
         """The board point s millimetres from the pin's end"""
@@ -224,12 +243,105 @@ class Trace:
             s -= n
         return self.pts[-1]
 
+    def riding(self, f):
+        """The bits on the trace at frame f, as (j, s): s millimetres from
+        the pin's end. The age is (f - j gap) - off, integers first, so
+        frame f and frame f + PERIOD give bit j and bit j + k exactly the
+        same place - the seam (98.1.1.2) has nothing to round"""
+        life = self.length / self.speed
+        j1 = int(math.floor((f - self.off) / self.gap))
+        j0 = int(math.floor((f - self.off - life) / self.gap))
+        for j in range(j0, j1 + 1):
+            age = (f - j * self.gap) - self.off
+            d = age * self.speed
+            if d < 0 or d > self.length:
+                continue
+            if self.inward:
+                # THE INTRO: nothing reaches the pins before BIT_IN, so a
+                # bit that would have is never on the trace at all
+                if (j * self.gap + self.off) + life < BIT_IN:
+                    continue
+                yield j, self.length - d
+            else:
+                # ...and the chip sends nothing before ITS first emission
+                if j * self.gap + self.off < self.start:
+                    continue
+                yield j, d
+
+
+# EXPERIMENTS (--fx, comma-separated), each off by default so the shipped
+# file is the one with none:
+#   sweeploop  the light sweep repeats every loop rather than once
+#   morph      a front-side bit dissolves into its pin and the pin flashes;
+#              an outward one flashes out of the pin and condenses
+#   trail      the traces sit dim, and a bit lights its own behind it
+#   glow       a bit lights the board round it, a pool in perspective
+#   scale      a digit's size follows its distance from the eye
+#   pop        no morph: a front bit pops into its pin, which flashes
+#   trailbold  the traces stay solid, and a bit's trail is a BOLDER line
+#              behind it, tapering back to the trace's one pixel
+#   flicker    the letter over the pin a bit enters dims for a moment
+#   shadow     each digit casts a hard shadow down and to the right
+#   nohalo     a digit has no black ground: its pixels alone, over the scene
+#   lift       a digit rides just above its wire rather than centred on it
+#
+# THE SHIPPED FILE is the owner's pick of 2026-11-03 ("A"): the sweep every
+# loop, the front bits morphing into their pins with the flash and its glow
+# on the package, and the bold trails - and, the same day, the digits
+# TRANSPARENT and riding just above their wires, which with the trail
+# reads as skating along them. The rest stay here as the fallbacks for
+# room: -lift,-nohalo is 5.6 KB smaller, FACE_GLOW = 0 another 5.7.
+# --fx adds to it and -name takes one away, so --fx=-morph,pop is the same
+# picture with the bits popping
+FX_SHIP = ("sweeploop", "morph", "trailbold", "nohalo", "lift")
+FX = set(FX_SHIP)
+TRACE_LIT, TRACE_DIM = 0.95, 0.30
+TRAIL_MM = 6.0                  # a trail's fall to 1/e, behind its bit
+TRAIL_CUT = 3 * TRAIL_MM        # ...and where it ends (5% of its light)
+BOLD_MM = 4.0                   # a bold trail's taper, to the trace's width
+BOLD_W = 0.8                    # ...from this many pixels' extra half-width
+GLOW_MM = 2.6                   # a pool's radius to 1/e
+SLIDE_MM = 1.5                  # ...the last of which it slides onto the pin
+MORPH_MM = 4.5                  # the last of a trace a bit morphs along
+FACE_GLOW = 0.75                # the flash's light on the package's face
+FLASH = 6                       # frames a pin stays lit round its bit
+
+BIT_IN = 16                     # the first bit reaches a pin; the burn begins
+BIT_OUT = 16                    # the chip's first bit out
+# a bit's sprite, in canvas units, at its largest on any adapter: a bit is
+# off the canvas once its CENTRE is this far past an edge
+SPRITE_HALF = 0.035
+
+
+def canvas_exit(tr):
+    """How far along an outward trace (mm from the pin) a bit has left the
+    canvas, sprite and all"""
+    m = SPRITE_HALF
+    s = 0.0
+    while s < tr.length:
+        p, _ = CAM.project((*tr.at(s), 0.0))
+        if not (-m <= p[0] < PHYS_W + m and -m <= p[1] < PHYS_H + m):
+            break
+        s += 0.1
+    # a lit trail follows a bit off the canvas, so the trace is clear of
+    # it only once the bit is that much further on
+    tail = TRAIL_CUT if "trail" in FX else \
+        BOLD_MM if "trailbold" in FX else 0.0
+    return min(tr.length, s + tail)
+
 
 def make_traces():
     """Traces off chosen pins: straight out, a 45 degree bend, and on to
     beyond the canvas. Every loop motion is periodic in PERIOD frames: a
-    bit moves `speed` mm a frame and they are `spacing` apart, with
-    spacing x k = speed x PERIOD, so the pattern returns to itself"""
+    trace emits a bit every `gap` frames and gap divides PERIOD.
+
+    THE LOOP IS WHOLE FROM FRAME LOOP: every bit the steady state has on
+    the canvas there must have been emitted. An inward one was emitted off
+    the canvas, so it can have been at any time; an outward one left the
+    chip, which sends nothing before BIT_OUT - so an outward trace's bits
+    must cross the canvas in LOOP - BIT_OUT frames, and a long one (up the
+    board, behind the chip) rides that much faster. Its pixels are fewer a
+    millimetre there, which is why it does not look it"""
     rng = np.random.RandomState(88)
     out = []
     for side in (-1, 1):
@@ -247,10 +359,15 @@ def make_traces():
             pts = [(x, y0), (x, y1), (x + bend * far, y1 + side * far)]
             speed = [0.9, 1.1, 1.3][i % 3]
             k = [1, 2, 1][(i + (side > 0)) % 3]
-            spacing = speed * PERIOD / k
+            gap = PERIOD // k
             inward = ((i + (side > 0)) % 2) == 0
-            out.append(Trace(pts, inward, rng.uniform(0, spacing), spacing,
-                             speed))
+            off = rng.uniform(0, gap)
+            tr = Trace(pts, inward, off, gap, speed, BIT_OUT)
+            tr.pin = i
+            if not inward:
+                tr.speed = max(speed, canvas_exit(tr) /
+                               float(LOOP - BIT_OUT - 1))
+            out.append(tr)
     return out
 
 
@@ -268,6 +385,11 @@ DIGITS = {
     "cga": {"0": ["01110", "10001", "10001", "01110"],
             "1": ["00100", "01100", "00100", "01110"]},
 }
+
+
+# what a morphing bit becomes: a LINE - the pin's leg - at each adapter's
+# digit height (a T, shoulder and leg, read as a letter: the owner's L)
+PINGLYPH = {n: ["00100"] * len(d["0"]) for n, d in DIGITS.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -288,6 +410,7 @@ class Renderer:
         self.burn = burn_times(self.tex, self.spans, t0=16, dt=4.0,
                                speed=9.0)
         self.traces = make_traces()
+        self.pin_near = {}
         self._static()
 
     # --- planes and coverage -------------------------------------------------
@@ -308,13 +431,47 @@ class Renderer:
         # adapter's pixel size along each axis
         px = PHYS_W / self.w
         self.trace_mask = np.zeros(X.shape, bool)
+        self.trace_pix = []             # per trace: (flat index, s in mm)
         for tr in self.traces:
-            for a, b in zip(tr.pts, tr.pts[1:]):
+            idx, sv, cum = [], [], 0.0
+            for a, b, n in zip(tr.pts, tr.pts[1:], tr.seg):
                 pa = CAM.project((*a, 0.0))[0]
                 pb = CAM.project((*b, 0.0))[0]
                 d = self.seg_dist(X, Y, pa, pb)
-                self.trace_mask |= d < px * 0.62
-        img = np.where(self.trace_mask, 0.95, img)
+                m = d < px * 0.62
+                self.trace_mask |= m
+                fi = np.flatnonzero(m)
+                ab = b - a
+                t = ((bx.flat[fi] - a[0]) * ab[0] + (by.flat[fi] - a[1]) *
+                     ab[1]) / (ab @ ab)
+                idx.append(fi)
+                sv.append(cum + np.clip(t, 0, 1) * n)
+                cum += n
+            self.trace_pix.append((np.concatenate(idx), np.concatenate(sv)))
+        img = np.where(self.trace_mask,
+                       TRACE_DIM if "trail" in FX else TRACE_LIT, img)
+        # the BOLD trail's band: every sample within a couple of pixels of
+        # a trace, with its s and its distance from the line IN PIXELS of
+        # this adapter, so the taper is the same pixel count everywhere
+        self.band = []
+        if "trailbold" in FX:
+            Xp, Yp = X / PHYS_W * self.w, Y / PHYS_H * self.h
+            for tr in self.traces:
+                idx, sv, dv, cum = [], [], [], 0.0
+                for a, b, n in zip(tr.pts, tr.pts[1:], tr.seg):
+                    pa = np.array(self.pixel_of((*a, 0.0)))
+                    pb = np.array(self.pixel_of((*b, 0.0)))
+                    d = self.seg_dist(Xp, Yp, pa, pb)
+                    fi = np.flatnonzero(d < 2.2)
+                    ab = b - a
+                    t = ((bx.flat[fi] - a[0]) * ab[0] + (by.flat[fi] - a[1])
+                         * ab[1]) / (ab @ ab)
+                    idx.append(fi)
+                    sv.append(cum + np.clip(t, 0, 1) * n)
+                    dv.append(d.flat[fi])
+                    cum += n
+                self.band.append((np.concatenate(idx), np.concatenate(sv),
+                                  np.concatenate(dv)))
         # the package's shadow, down and to the right of it
         sh = self.poly([(-hl + 1.5, -hw - 0.5, 0), (hl + 3.5, -hw - 0.5, 0),
                         (hl + 3.5, hw + 2.5, 0), (-hl + 1.5, hw + 2.5, 0)])
@@ -334,6 +491,7 @@ class Renderer:
             in_poly(top, X, Y)
         Hf = CAM.plane((-hl, -hw, z0), (1, 0, 0), (0, 0, 1))
         fa, fb = to_plane(Hf, X, Y)
+        self.fa, self.fb, self.mf = fa, fb, mf
         if self.name == "cga":
             # CGA's rows are 2.4 pixels tall, and a dithered face there is a
             # field of stripes: the faces are flat, the front edged in light
@@ -375,6 +533,12 @@ class Renderer:
         occ = mf | me | mt | self.pinmask_far[0] | self.pinmask_near[0]
         self.occ_far = occ.reshape(self.h, self.ssy, self.w,
                                    self.ssx).mean(axis=(1, 3)) > 0.5
+        self.occ_ss = occ
+        self.band = [(i[~occ.flat[i]], sv[~occ.flat[i]], dv[~occ.flat[i]])
+                     for i, sv, dv in self.band]
+        # a trail is seen only where nothing nearer covers its trace
+        self.trace_pix = [(i[~occ.flat[i]], sv[~occ.flat[i]])
+                          for i, sv in self.trace_pix]
 
     def seg_dist(self, px, py, a, b):
         ab = b - a
@@ -402,6 +566,8 @@ class Renderer:
             ms, ml = in_poly(sh, X, Y), in_poly(leg, X, Y)
             shade = np.where(ms, 0.88, np.where(ml & ~mask, 0.62, shade))
             mask |= ms | ml
+            if side < 0:
+                self.pin_near[i] = ms | ml
         return mask, shade
 
     def board(self, bx, by):
@@ -449,18 +615,127 @@ class Renderer:
         # the burning front glows past the ink a little
         front = inb & self.tex[ty, tx] & (self.burn[ty, tx] > f) & \
             (self.burn[ty, tx] <= f + 1.5)
-        img = np.where(lit, 1.0, np.where(front, 0.55, img))
+        lv = np.ones(img.shape)
+        if "flicker" in FX:
+            # THE CHIP TAKES A BIT: the letter over the pin it entered by
+            # dims for a moment, as if busy
+            x0w = (BODY_L - ww) / 2
+            for tr in self.traces:
+                if not tr.inward:
+                    continue
+                if not any(0 <= dt < 2 for dt in self.events(tr, f)):
+                    continue
+                dt = min(dt for dt in self.events(tr, f) if 0 <= dt < 2)
+                tx_pin = (pin_x(tr.pin) + hl - x0w) / ww * tw
+                for x0g, x1g in self.spans:
+                    if x0g - 20 <= tx_pin < x1g + 20:
+                        m = (tx >= x0g) & (tx < x1g)
+                        lv = np.where(m, np.minimum(lv, 0.35 + 0.3 * dt),
+                                      lv)
+        img = np.where(lit, lv, np.where(front, 0.55, img))
         # THE SWEEP: once, after the lettering, a band of light across the
         # package - top and front - from the left to the right
         s0, s1 = 44, 56
-        if s0 <= f < s1:
-            pos = (f - s0) / float(s1 - s0 - 1) * 1.4 - 0.2
+        fr = f
+        if "sweeploop" in FX and f >= s0:
+            fr = s0 + (f - s0) % PERIOD     # the sweep, every loop
+        if s0 <= fr < s1:
+            pos = (fr - s0) / float(s1 - s0 - 1) * 1.4 - 0.2
             band = np.exp(-((self.ta / BODY_L + self.tb / BODY_W * 0.35
                              - pos) / 0.06) ** 2)
             glow = self.mt & ~lit
             img = np.where(glow, np.minimum(1.0, img + 0.85 * band), img)
+        img = self.lights(img, f)
         # to one bit, anchored to the pixel grid
         return self.dither(img, f)
+
+    def lights(self, img, f):
+        """The experiments that LIGHT something, in grey before the dither:
+        a trace behind its bit, the board round it, a pin taking one"""
+        flat = img.reshape(-1)
+        for ti, tr in enumerate(self.traces):
+            near = tr.pts[0][1] < 0
+            if "trail" in FX:
+                pi, ps = self.trace_pix[ti]
+                lum = np.zeros(len(pi))
+                for j, sb in tr.riding(f):
+                    d = (ps - sb) if tr.inward else (sb - ps)
+                    lum = np.maximum(lum, np.where((d >= 0) &
+                                                   (d < TRAIL_CUT),
+                                                   np.exp(-d / TRAIL_MM), 0))
+                flat[pi] = np.maximum(flat[pi], TRACE_DIM +
+                                      (TRACE_LIT - TRACE_DIM) * lum)
+            if "trailbold" in FX:
+                pi, ps, pd = self.band[ti]
+                lum = np.zeros(len(pi))
+                for j, sb in tr.riding(f):
+                    d = (ps - sb) if tr.inward else (sb - ps)
+                    lum = np.maximum(lum, np.clip(1.0 - d / BOLD_MM, 0, 1)
+                                     * (d >= 0))
+                on = pd < 0.5 + BOLD_W * lum
+                flat[pi[on]] = 1.0
+            if "glow" in FX:
+                for j, sb in tr.riding(f):
+                    c = tr.at(sb)
+                    r = GLOW_MM * 2.5
+                    box = [CAM.project((c[0] + dx, c[1] + dy, 0.0))[0]
+                           for dx in (-r, r) for dy in (-r, r)]
+                    xs = [q[0] for q in box]
+                    ys = [q[1] for q in box]
+                    W, H = self.X.shape[1], self.X.shape[0]
+                    x0 = max(0, int(min(xs) / PHYS_W * W))
+                    x1 = min(W, int(max(xs) / PHYS_W * W) + 1)
+                    y0 = max(0, int(min(ys) / PHYS_H * H))
+                    y1 = min(H, int(max(ys) / PHYS_H * H) + 1)
+                    if x0 >= x1 or y0 >= y1:
+                        continue
+                    sl = (slice(y0, y1), slice(x0, x1))
+                    g = 0.55 * np.exp(-((self.bx[sl] - c[0]) ** 2 +
+                                        (self.by[sl] - c[1]) ** 2) /
+                                      GLOW_MM ** 2)
+                    g = np.where(self.occ_ss[sl], 0, g)
+                    img[sl] = np.maximum(img[sl], img[sl] + g)
+            if ("morph" in FX or "pop" in FX) and near:
+                pm = self.pin_near[tr.pin]
+                lv = 0.0
+                for dt in self.events(tr, f):
+                    if -1 < dt < FLASH:
+                        lv = max(lv, 1.0 - max(dt, 0) / FLASH)
+                if lv > 0:
+                    img = np.where(pm, np.maximum(img, 0.62 + 0.6 * lv),
+                                   img)
+                    # ...and the package takes the light in above the pin:
+                    # a glow on its front face, brightest at the pin
+                    gx = np.abs(self.fa - (pin_x(tr.pin) + BODY_L / 2))
+                    gl = lv * FACE_GLOW * np.exp(-(gx / 1.6) ** 2) * \
+                        np.clip(1.0 - (self.fb - 1.0) /
+                                (BODY_Z1 - BODY_Z0), 0, 1)
+                    img = np.where(self.mf, img + gl, img)
+                    flat = img.reshape(-1)
+        return np.minimum(img, 1.0)
+
+    def ink(self, spr, under):
+        """A digit's sprite over what is under it: with its halo, the
+        sprite as it is (black round white); without, its white alone"""
+        return spr | under if "nohalo" in FX else spr
+
+    def events(self, tr, f):
+        """Frames since each bit's arrival at the pin (inward) or until
+        its departure (outward), for the bits near frame f"""
+        life = tr.length / tr.speed
+        out = []
+        for j in range(int(math.floor((f - tr.off - life) / tr.gap)) - 1,
+                       int(math.floor((f - tr.off) / tr.gap)) + 2):
+            t0 = j * tr.gap + tr.off
+            if tr.inward:
+                if t0 + life < BIT_IN:
+                    continue
+                out.append(f - (t0 + life))
+            else:
+                if t0 < tr.start:
+                    continue
+                out.append(t0 - f)
+        return out
 
     def dither(self, img, f):
         ss, sy = self.ssx, self.ssy
@@ -479,36 +754,177 @@ class Renderer:
         gh = len(glyphs["0"])
         gw = 5
         for ti, tr in enumerate(self.traces):
-            if f < LOOP and not tr.inward and f < 36:
-                continue                    # the intro: only bits coming IN
             far = tr.pts[0][1] > 0          # behind the package, from here
-            n = int(tr.length / tr.spacing) + 2
-            for k in range(n):
-                s = (tr.phase + k * tr.spacing + tr.speed * f) % \
-                    (n * tr.spacing)
-                if tr.inward:
-                    s = n * tr.spacing - s
-                if s < 0.6 or s > tr.length:
+            for j, s in tr.riding(f):
+                ch = "1" if (ti * 7 + (j % tr.k) * 3) % 5 < 2 else "0"
+                if "shadow" in FX and s >= 0.6:
+                    p, _ = CAM.project((*tr.at(s), 0.0))
+                    qx = int(math.floor(p[0] / PHYS_W * self.w)) - gw // 2
+                    qy = int(math.floor(p[1] / PHYS_H * self.h)) - gh // 2
+                    ox, oy = (2, 1) if self.name == "cga" else (2, 2)
+                    for yy, row in enumerate(glyphs[ch]):
+                        for xx, c in enumerate(row):
+                            X_, Y_ = qx + xx + ox, qy + yy + oy
+                            if c == "1" and 0 <= X_ < self.w and \
+                                    0 <= Y_ < self.h and not \
+                                    (far and self.occ_far[Y_, X_]):
+                                out[Y_, X_] = False
+                if "morph" in FX and not far and s < MORPH_MM:
+                    self.particles(out, tr, s, glyphs[ch] if
+                                   "scale" not in FX else
+                                   self.glyph(ch, s, tr))
                     continue
-                if f < 16 and s < 4.0:
-                    continue                # nothing reaches the pins yet
+                if s < 0.6:
+                    continue                # at the pin: into the chip
+                if "scale" in FX:
+                    g = self.glyph(ch, s, tr)
+                    self.stamp(out, tr, s, g, far)
+                    continue
                 p, _ = CAM.project((*tr.at(s), 0.0))
-                px = int(p[0] / PHYS_W * self.w)
-                py = int(p[1] / PHYS_H * self.h)
-                ch = "1" if (ti * 7 + k * 3) % 5 < 2 else "0"
+                px = int(math.floor(p[0] / PHYS_W * self.w))
+                py = int(math.floor(p[1] / PHYS_H * self.h))
+                # the bit's digit is the BIT's, periodic in the bits a
+                # loop emits, so the seam meets the same digit it left
                 g = glyphs[ch]
                 x0, y0 = px - gw // 2, py - gh // 2
-                if x0 < 1 or y0 < 1 or x0 + gw + 1 >= self.w or \
-                        y0 + gh + 1 >= self.h:
-                    continue
+                if "lift" in FX:
+                    y0 = py - gh - 1        # riding ON the wire, not in it
                 spr = np.zeros((gh + 2, gw + 2), bool)   # the halo...
                 for yy, row in enumerate(g):
                     for xx, c in enumerate(row):
                         if c == "1":
                             spr[yy + 1, xx + 1] = True        # ...the digit
-                box = (slice(y0 - 1, y0 + gh + 1), slice(x0 - 1, x0 + gw + 1))
+                # CLIPPED to the canvas, so a bit slides in at an edge and
+                # off at one rather than popping a pixel short of it
+                bx0, by0 = x0 - 1, y0 - 1
+                cx0, cy0 = max(bx0, 0), max(by0, 0)
+                cx1 = min(bx0 + gw + 2, self.w)
+                cy1 = min(by0 + gh + 2, self.h)
+                if cx0 >= cx1 or cy0 >= cy1:
+                    continue
+                spr = spr[cy0 - by0:cy1 - by0, cx0 - bx0:cx1 - bx0]
+                box = (slice(cy0, cy1), slice(cx0, cx1))
                 vis = ~self.occ_far[box] if far else True
-                out[box] = np.where(vis, spr, out[box])
+                out[box] = np.where(vis, self.ink(spr, out[box]), out[box])
+
+
+def _morph_methods():
+    def pixel(self, s, tr):
+        p, _ = CAM.project((*tr.at(s), 0.0))
+        return p[0] / PHYS_W * self.w, p[1] / PHYS_H * self.h
+
+    def glyph(self, ch, s, tr):
+        """A digit at the size its distance gives it: drawn from strokes,
+        a ring and a stem, at any size - the reference size is the
+        hand-cut one"""
+        base = DIGITS[self.name][ch]
+        bh, bw = len(base), 5
+        _, z = CAM.project((*tr.at(s), 0.0))
+        _, z0 = CAM.project((0.0, 0.0, 0.0))
+        k = z0 / z
+        w = int(round(bw * k))
+        h = int(round(bh * k))
+        w, h = max(3, min(9, w)), max(3, min(bh + 4, h))
+        uu = (np.arange(w * 4) + 0.5) / (w * 4)
+        vv = (np.arange(h * 4) + 0.5) / (h * 4)
+        U, V = np.meshgrid(uu, vv)
+        th = 1.15 / w, 1.15 / h             # a stroke about a pixel
+        if ch == "0":
+            e = ((U - 0.5) / 0.5) ** 2 + ((V - 0.5) / 0.5) ** 2
+            ei = ((U - 0.5) / (0.5 - th[0])) ** 2 + \
+                ((V - 0.5) / (0.5 - th[1])) ** 2
+            m = (e <= 1.0) & (ei > 1.0)
+        else:
+            m = np.abs(U - 0.5) < th[0] / 2 + 0.02
+            m |= (V > 1 - th[1]) & (np.abs(U - 0.5) < 0.32)
+            m |= (V < 0.38) & (np.abs((0.5 - U) - (V * 0.5)) < th[0] / 2) \
+                & (U < 0.5)
+        m = m.reshape(h, 4, w, 4).mean(axis=(1, 3)) > 0.3
+        return ["".join("1" if c else "0" for c in row) for row in m]
+
+    def stamp(self, out, tr, s, g, far):
+        gh, gw = len(g), len(g[0])
+        fx_, fy_ = self.pixel(s, tr)
+        x0 = int(math.floor(fx_)) - gw // 2
+        y0 = int(math.floor(fy_)) - gh // 2
+        spr = np.zeros((gh + 2, gw + 2), bool)
+        for yy, row in enumerate(g):
+            for xx, c in enumerate(row):
+                if c == "1":
+                    spr[yy + 1, xx + 1] = True
+        bx0, by0 = x0 - 1, y0 - 1
+        cx0, cy0 = max(bx0, 0), max(by0, 0)
+        cx1, cy1 = min(bx0 + gw + 2, self.w), min(by0 + gh + 2, self.h)
+        if cx0 >= cx1 or cy0 >= cy1:
+            return
+        spr = spr[cy0 - by0:cy1 - by0, cx0 - bx0:cx1 - bx0]
+        box = (slice(cy0, cy1), slice(cx0, cx1))
+        vis = ~self.occ_far[box] if far else True
+        out[box] = np.where(vis, self.ink(spr, out[box]), out[box])
+
+    def particles(self, out, tr, s, g):
+        """THE MORPH, in two parts. Riding the last MORPH_MM of the trace
+        the digit's pixels flow into a PIN - a little T, a shoulder and a
+        leg, the shape the pins are drawn as - each pixel to its own place;
+        then over the last SLIDE_MM the pin slides up onto the real one and
+        is taken in, which is where it flashes. An outward bit is the same
+        film run backwards: the pin flashes, a pin leaves it, and it
+        condenses into a digit"""
+        pin = PINGLYPH[self.name]
+        gh, gw = len(g), len(g[0])
+        ph, pw = len(pin), len(pin[0])
+        cx, cy = self.pixel(s, tr)
+        if s > SLIDE_MM:
+            t = (MORPH_MM - s) / (MORPH_MM - SLIDE_MM)
+            e = t * t * (3 - 2 * t)
+            ox, oy = cx, cy
+        else:
+            e = 1.0
+            # where the pin glyph sits when it IS the pin: its leg's foot
+            # on the pin's foot, its shoulder on the pin's shoulder
+            x = pin_x(tr.pin)
+            fx_, fy_ = self.pixel_of((x, -PIN_Y, 0.0))
+            u = 1.0 - max(s, 0.0) / SLIDE_MM
+            u = u * u * (3 - 2 * u)
+            ox = cx + (fx_ - cx) * u
+            oy = cy + (fy_ - (ph - 1) / 2.0 - cy) * u
+        src = sorted([(xx - gw // 2, yy - gh // 2)
+                      for yy, row in enumerate(g)
+                      for xx, c in enumerate(row) if c == "1"],
+                     key=lambda q: (q[1], q[0]))
+        dst = sorted([(xx - pw // 2, yy - (ph - 1) / 2.0 + (gh - ph) / 2.0
+                       * 0)
+                      for yy, row in enumerate(pin)
+                      for xx, c in enumerate(row) if c == "1"],
+                     key=lambda q: (q[1], q[0]))
+        ns, nd = len(src), len(dst)
+        pairs = {(src[i * ns // nd], dst[i]) for i in range(nd)} | \
+            {(src[i], dst[i * nd // ns]) for i in range(ns)}
+        pts = set()
+        for (sx, sy), (dx, dy) in pairs:
+            px = ox + sx + (dx - sx) * e
+            py = oy + sy + (dy - sy) * e
+            pts.add((int(math.floor(px)), int(math.floor(py))))
+        halo = s > SLIDE_MM * 0.35 and "nohalo" not in FX
+        if halo:
+            for px, py in pts:
+                for dx in (-1, 0, 1):
+                    for dy in (-1, 0, 1):
+                        if 0 <= px + dx < self.w and 0 <= py + dy < self.h:
+                            out[py + dy, px + dx] = False
+        for px, py in pts:
+            if 0 <= px < self.w and 0 <= py < self.h:
+                out[py, px] = True
+
+    def pixel_of(self, p3):
+        p, _ = CAM.project(p3)
+        return p[0] / PHYS_W * self.w, p[1] / PHYS_H * self.h
+
+    for fn in (pixel, glyph, stamp, particles, pixel_of):
+        setattr(Renderer, fn.__name__, fn)
+
+
+_morph_methods()
 
 
 def canvas_bytes(bits):
@@ -559,6 +975,14 @@ def build(out, ground="board", pack=None, sound=False):
     ws, names = [], ("vga", "herc", "cga")
     for name in names:
         r, fr = render_all(name, ground)
+        # THE SEAM, checked here rather than trusted: the frame after the
+        # last must BE frame LOOP, pixel for pixel, or the loop flips
+        # something as it joins (the owner's report: digits did)
+        d = int((r.frame(NFRAMES) != fr[LOOP]).sum())
+        if d:
+            raise SystemExit("%s: frame %d is not frame %d (%d pixels): "
+                             "the loop would jump at the seam"
+                             % (name, NFRAMES, LOOP, d))
         ws.append(writer(name, fr, sound))
     tg = [vid.TARGETS[n] for n in names]
     extra = dict(audio_fmt=vid.AUD_PCM8, abytes=SPF, audio=soundtrack(),
@@ -679,7 +1103,16 @@ def main():
     ap.add_argument("--sound", action="store_true",
                     help="the LISTENING copy: a PCM8 track, not live")
     ap.add_argument("--wav", metavar="OUT", help="the sound alone, as a WAV")
+    ap.add_argument("--fx", default="",
+                    metavar="[-]NAME,...",
+                    help="experiments, comma-separated: sweeploop, morph, "
+                    "trail, glow, scale")
     a = ap.parse_args()
+    for x in a.fx.split(","):
+        if x.startswith("-"):
+            FX.discard(x[1:])
+        elif x:
+            FX.add(x)
     if a.wav:
         wav(a.wav)
     if a.preview:

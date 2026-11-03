@@ -48,7 +48,7 @@
  * with no min() and no advance.
  *
  * ----------------------------------------------------------------------------
- * WHAT WAVE 1 IS (docs/APPLE2-PORT-PLAN.md)
+ * WHAT WAVE 1 IS (docs/plans/completed/APPLE2-PORT-PLAN.md)
  * ----------------------------------------------------------------------------
  * The redraw path, built before there is anything to draw: the window and its
  * chrome, the ROM part, THE CHARGEN DECODE AND THE 7-BIT REVERSE TABLE
@@ -57,7 +57,7 @@
  * menus, the status row, and the whole harness kit.
  *
  * ----------------------------------------------------------------------------
- * WHAT WAVE 2 ADDED (docs/APPLE2-PORT-PLAN.md)
+ * WHAT WAVE 2 ADDED (docs/plans/completed/APPLE2-PORT-PLAN.md)
  * ----------------------------------------------------------------------------
  * The 6502, the Apple II memory model, the soft switches in both directions,
  * the II+ keyboard byte map and the reset line, both kinds. Wave 1's
@@ -74,7 +74,7 @@
  * on disk 54,272 with the ROM part inside it.
  *
  * ----------------------------------------------------------------------------
- * WHAT WAVE 7 ADDED (docs/APPLE2-PORT-PLAN.md)
+ * WHAT WAVE 7 ADDED (docs/plans/completed/APPLE2-PORT-PLAN.md)
  * ----------------------------------------------------------------------------
  * The polish: WELCOME.BAS on all four disks and on `make allapps` (section
  * 16.2), `vm/xt-apple2` and `vm/286-apple2`, `tests/apple2part.py`, the

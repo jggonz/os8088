@@ -2973,10 +2973,48 @@ kbm_isr:
     pop ax
     iret
 %else
-    pop ds
+%ifndef KERN_MEGA
+    ; THE ROM'S HANDLER RUNS WITH ONLY THE KEYBOARD OPEN (SPEC.md 9.8.3). It
+    ; is CALLED where it was jumped to, with every IRQ but IRQ1 masked at the
+    ; PIC and the IMR put back as it was after its iret. GLaBIOS sends its EOI
+    ; and `sti`s in its first ten instructions and only then reads KB_FLAG
+    ; (the IBM ROM `sti`s at once), so a TICK landing in there ran inside it:
+    ; ~3,500 cycles of sch_isr, or a switch that parked it with its task. The
+    ; next byte arrives a millisecond after the acknowledge regardless, and a
+    ; Ctrl make stretched past that let R's handler nest, read KB_FLAG without
+    ; Ctrl and store a plain 'r' - and a parked one also left Ctrl stuck on.
+    ; Unstretched, a handler is ~2,500 cycles from IRQ1 to its iret, inside
+    ; the millisecond on every keyboard (9.8.2). A masked edge is latched in
+    ; the IRR and taken at the restore, so nothing is lost: the tick is late
+    ; by one handler. IRQ1 stays open for the ROM's Pause, whose loop waits
+    ; for the next key to nest; a nested handler saves and restores in turn.
+    ; The ROM's iret restores OUR flags (IF = 0). Not int 15h's chain
+    ; (9.7.2), whose CF is its answer and which an iret here would throw away
+    ; - and not kern_mega's, whose chain is mega_k09 and whose AT-class ROM
+    ; shuts the keyboard interface for its handler's length anyway (9.8.2)
+%ifdef KBD_I15
+    cmp byte [kbm_ivec], 0x54
+    je .jmp9
+%endif
+    pop ds                      ; the interrupted DS: nothing below reads one
+    in al, 0x21                 ; (AX is banked: the self-chain test's CS)
+    push ax                     ; the IMR as it was...
+    or al, 0xFD                 ; ...and every line but the keyboard's shut
+    out 0x21, al
+    pushf
+    call far [cs:kbm_old9]
     pop ax
+    out 0x21, al                ; the IMR back, and with it any edge latched
+    pop ax                      ; meanwhile - after our iret, IF being 0
+    iret
+.jmp9:
+%endif
+%if %isdef(KBD_I15) || %isdef(KERN_MEGA)
+    pop ds                      ; (the only builds that still jump: kern_small
+    pop ax                      ; has no other chain, and carries no copy)
 .far:                           ; (kbm_i15's chain for every AH but 4Fh too)
     jmp far [cs:kbm_old9]       ; CS, not DS: DS is the interrupted code's again
+%endif
 %endif
 .selfchain:
     mov al, 0x20                ; the EOI is the BIOS's job and there is no

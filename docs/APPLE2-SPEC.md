@@ -4,7 +4,7 @@
 as `docs/C64-SPEC.md` stands to `apps/c64`: every symbol, constant, string,
 register answer and layout the port depends on is pinned here, and the change
 goes in here *before* it goes in the code. The design record - the intake, the
-decisions, the waves, the risks - is `docs/APPLE2-PORT-PLAN.md`.
+decisions, the waves, the risks - is `docs/plans/completed/APPLE2-PORT-PLAN.md`.
 
 **It lives outside SPEC.md by the user's instruction, on the C64 precedent.**
 SPEC.md gets no new section for this port.
@@ -3423,7 +3423,7 @@ counters are in memory now and the file says why.
 whose first job is a measured size line. Machine > Configure Slots... greys in
 the meantime with section 10.3's fact.
 
-**The wave keeps its number** in `docs/APPLE2-PORT-PLAN.md` - it is wave 6,
+**The wave keeps its number** in `docs/plans/completed/APPLE2-PORT-PLAN.md` - it is wave 6,
 marked "follow-up PR" - because renumbering a wave that is written down is how
 a plan and a branch stop agreeing.
 
@@ -3506,7 +3506,7 @@ resident image, bss, `APPLE2.OVL`, resident shims, largest C frame.
 families assembled is not an honest measurement of a core, and quoting one
 would set a budget against a number nobody can reproduce. What wave 1's build
 prints (`image 19,300 + bss 10,312`, `APPLE2.OVL` 843) is recorded in
-`docs/APPLE2-PORT-PLAN.md`'s wave-1 paragraph as evidence that the package
+`docs/plans/completed/APPLE2-PORT-PLAN.md`'s wave-1 paragraph as evidence that the package
 BUILDS and packs, and it is **not** a budget figure and not to be compared
 with the headline below: there is no 6502 in it.
 
@@ -4464,7 +4464,7 @@ already exceed two ticks in the worst case and did before this change, for the
 flush's reason above and not the slice's.
 
 **THE PLAN PREDICTED 3-4% AND IT WAS OUT BY SIX**, and the reason is not the
-one this section first gave. docs/APPLE2-PORT-PLAN.md's risk section arrived
+one this section first gave. docs/plans/completed/APPLE2-PORT-PLAN.md's risk section arrived
 at "~400 8088 clocks per emulated 6502 instruction" and divided by nothing
 else. The measurement says **~415 clocks per emulated CYCLE** - about 1,250 a
 6502 instruction, three times the plan's figure - on a cycle-accurate 4.77 MHz
@@ -4513,7 +4513,7 @@ pattern of `?` with the menu shut.
 ### 16.5 Automated evidence, and manual evidence
 
 **Automated evidence** is section 16.6's harnesses and the QMP screendumps.
-**Every `done_when` in `docs/APPLE2-PORT-PLAN.md` rests only on it.**
+**Every `done_when` in `docs/plans/completed/APPLE2-PORT-PLAN.md` rests only on it.**
 
 **Manual evidence** is the three 86Box machines and anything read off them by
 a person: the measured XT speed, the chord table, the look of a scroll, the
@@ -4788,7 +4788,7 @@ named here so the next reader does not go looking for its row.
 NOT committed in the web repo until the OS side is done and the user has said
 go.**
 
-**The brand table in `docs/WIRE-PLAN.md` is fixed by the user and is not to be
+**The brand table in `docs/plans/completed/WIRE-PLAN.md` is fixed by the user and is not to be
 reworded.**
 
 ### 18.1 The record

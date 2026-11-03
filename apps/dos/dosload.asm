@@ -453,7 +453,7 @@ dsl_pmok:
     ; bar. op_load's and op_fetch's own begins are refused as nesting. A
     ; document's probe (dsl_w16) has begun it already, with its cluster in it;
     ; .out, the one exit, ends it
-%ifndef DOS_MEGA
+%ifdef DOS_WIN16                ; (headless needs a LINK, and only the WIN16 arm reads one)
     ; **HEADLESS: THE WINDOW IS NEVER CLAIMED** (SPEC.md 96.44.20). The table
     ; is this image's, which is per-instance RAM, and op_size sizes the carve
     ; from the EAGER rows alone - so one bit makes part 1 a lazy row nobody
@@ -545,7 +545,11 @@ dsl_pmok:
     call dsl_row                    ; 96.54.9), DI there again, the same way
     mov al, [op_table + OP_T_FMT]
     mov [es:di - OP_ROW], al
+%ifdef DOS_WIN16
     mov al, [dsl_head]              ; ...and LAST, the byte that says this
+%else                               ; (no WIN16, no link probe: never headless)
+    xor al, al
+%endif
     mov [es:di], al                 ; region has no window (DSLH_HEAD, the
 %endif                              ; host's [dos_head], SPEC.md 96.44.20)
 ; --- end DOS_PART_DVW's row ---------------------------------------------------
@@ -588,7 +592,7 @@ dsl_opsz:
     xor dx, dx
     add cx, [op_table + OP_T_ROWS + DOS_PART_CORE * OP_ROW + OP_R_ZKB]
     adc dx, dx
-%ifndef DOS_MEGA
+%ifdef DOS_WIN16
     cmp byte [dsl_head], 0
     jne .r                          ; ...so the bar counts only a window it
     add cx, [op_table + OP_T_ROWS + DOS_PART_WIN * OP_ROW + OP_R_ZKB]

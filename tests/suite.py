@@ -4330,14 +4330,15 @@ SOAK = [
         needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
     Row("pkgmax", "soak", py("tests/pkgmax.py"), 20.0,
         "SPEC.md 20.1.1: a package of EXACTLY APP_MAX_SIZE (0xFE00) loads, "
-        "runs and closes. Over 63KB the region is a whole 64KB claim, the one "
-        "size two 16-bit words in the loader used to wrap on - "
-        "mem_bytes_kb_x's `add ax, 1023` answered 0 KB, and ld_alloc's "
-        "I_SIZE = KB << 10 read 0, which is how the instance table says "
-        "BUILT-IN. PKGMAX.O88 (tests/pkgbig/pkgmax.asm) is image + bss = "
+        "runs and closes. It is the edge two 16-bit words in the loader used "
+        "to wrap on while the heap counted KB (mem_bytes_kb_x's `add ax, "
+        "1023` answered 0 KB, and ld_alloc's I_SIZE = KB << 10 read 0, which "
+        "is how the instance table says BUILT-IN); since SPEC.md 50.2.1's "
+        "granule the region is claimed to exactly roundup512(image + bss). "
+        "PKGMAX.O88 (tests/pkgbig/pkgmax.asm) is image + bss = "
         "0xFE00 to the byte and marks the last byte of its bss. Asserts off "
         "guest state: LD_OK and a window; a PACKAGE instance with I_SIZE "
-        "0xFFFF (saturated); one 4,096-paragraph claim owned by it; the mark "
+        "0xFE00; one 4,064-paragraph claim owned by it; the mark "
         "at segment:0xFDFF; and nothing left after the close box. Shares "
         "build/pkgbig.img with pkgbig and pkgfence - `make pkgbig`.",
         needs=("marty",), serial=True, wants=("build/pkgbig.img",)),
@@ -5381,8 +5382,10 @@ SOAK = [
         "105.8.3; KERN-MEGA-PLAN 14.55, 14.59): the card's external ring in "
         "the claim map during a play and gone at Stop; the speaker's held "
         "through a pause, gone at the Stop after it and at Esc in the "
-        "bracket, and not held while the card plays; tests/filler under "
-        "17 KB and the card's Play is on the GRANT ring and consuming; the "
+        "bracket, and not held while the card plays; tests/filler takes the "
+        "largest fundable run (its own OSAPI_MEM_AVAIL, read off its bss "
+        "after a round counted in guest state) under 17 KB and the card's "
+        "Play is on the GRANT ring and consuming; the "
         "filler's T takes the rest and the card's Play and the speaker's are "
         "REFUSED with their messages, nothing open or held; the filler "
         "closed, both play again. Red with the card's ring kept at Stop, "
@@ -7694,6 +7697,25 @@ SOAK = [
         "BIOS buffer drained, and one more paced key still lands. Red on a "
         "MartyPC built without patch 14 (leg B stops in sch_stkdie).",
         needs=("marty",)),
+    Row("kbdpreempt", "soak", py("tests/kbdpreempt.py"), 35.0,
+        "A TICK INSIDE THE ROM'S int 09h MUST NOT SPLIT A KEY FROM ITS "
+        "MODIFIER (SPEC.md 9.8.3). pxdecode failed twice with a Ctrl+R that "
+        "never reached PiXEL: it arrived as a plain 'r', and Ctrl stayed "
+        "stuck in KB_FLAG. GLaBIOS EOIs and stis before it reads KB_FLAG, "
+        "so a tick landing there ran inside it - sch_isr's ~3,500 cycles, "
+        "or a switch that parked it - and R's byte, a millisecond behind, "
+        "nested and read the flags without Ctrl. kbm_isr now calls the ROM "
+        "with every IRQ but IRQ1 masked. Leg A puts the tick in that window "
+        "on purpose: stop at sch_isr, advance to N cycles before the tick "
+        "after next, send Ctrl+R, read the ring slot. 259 trials over leads "
+        "of 516-1837 cycles must all store 1312, with Ctrl released, and the "
+        "tick must be held on >= 10 of them by under one handler's length. "
+        "Leg B: Pause (Ctrl+NumLock waits in int 09h for a NESTED key) still "
+        "ends on a key. RED, both measured: before the fix the 532-cycle "
+        "lead stored 1372 with Ctrl stuck (90 of 261 passed), and masking "
+        "IRQ1 too never ends the Pause. 35s is 28.5 measured",
+        needs=("marty",),
+        wants=("build/os8088.img", "build/apps.img")),
     Row("kbd4f", "soak", py("tests/kbd4f.py"), 8.0,
         "THE SCANCODE COMES FROM THE ROM'S int 15h AH=4Fh, NOT A PEEK (SPEC.md "
         "9.7.2). kbm_isr used to read port 60h ahead of the ROM whenever the "

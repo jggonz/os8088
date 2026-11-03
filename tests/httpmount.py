@@ -49,6 +49,7 @@ server delivers.)
 import atexit
 import os
 import re
+import select
 import shutil
 import signal
 import struct
@@ -187,19 +188,64 @@ def dns_stub(log):
 
 
 def server(root, log):
+    """tools/os88httpdrv.py's server on the fixture, with NO HOST-TIME
+    TIMEOUT ANYWHERE. It closed an idle connection after 3 host seconds,
+    and that timer was also every read's and every write's: a guest the host
+    starves - Bochs under a loaded soak - left a reply's tail unacked for
+    longer than that, and the server dropped the connection MID-BODY, or
+    closed a kept one between a peek and its read, so a leg failed on the
+    host's clock rather than the machine's. A connection is now closed only
+    when the test says so, at a LEG BOUNDARY (`httpd.close_idle()`), where
+    the guest is idle by construction - which is what the timer was for: the
+    driver's next GET then meets a server-closed connection and reopens."""
     class H(os88httpdrv.Handler):
-        timeout = 3             # idle connections closed between legs, so
-                                # the drive's reopen path runs too
+        timeout = None          # never on the host's clock (above)
+        served = False
+        kicked = False
+
+        def handle_one_request(self):
+            # After the first request: wait for the next one, or for
+            # close_idle's kick. Polled at 100 ms of host time, which bounds
+            # only how soon a kick is seen and never how long the guest has
+            if self.served:
+                with httpd.idle_lk:
+                    httpd.idle.add(self)
+                while True:
+                    r = select.select([self.connection], [], [], 0.1)[0]
+                    with httpd.idle_lk:
+                        if self.kicked:
+                            httpd.idle.discard(self)
+                            self.close_connection = True
+                            self.log_message("Idle connection closed")
+                            return
+                        if r:
+                            httpd.idle.discard(self)
+                            break
+            super().handle_one_request()
+            self.served = True
 
         def log_message(self, fmt, *a):
-            log.add((fmt % a) + " [%s] port %d" % (self.headers.get("Range", ""),
-                                                    self.client_address[1]))
+            hd = getattr(self, "headers", None)
+            log.add((fmt % a) + " [%s] port %d" % (
+                hd.get("Range", "") if hd is not None else "",
+                self.client_address[1]))
     h = lambda *a, **k: H(*a, directory=root, **k)            # noqa: E731
     # the guest reaches this at 10.0.2.2:PORT, baked into HTTPDRV.CFG - the
     # one shared thing left, so it is LEASED (SOAK-PARALLEL.md 17.3)
     os88qemu.lease_port(PORT)
     httpd = os88httpdrv.Server(("127.0.0.1", PORT), h)
     httpd.ranges = True
+    httpd.idle = set()
+    httpd.idle_lk = threading.Lock()
+
+    def close_idle():
+        """Close every connection waiting for its next request: call it
+        only where the guest has no verb in flight (a leg boundary)."""
+        with httpd.idle_lk:
+            for c in httpd.idle:
+                c.kicked = True
+            return len(httpd.idle)
+    httpd.close_idle = close_idle
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
     return httpd
 
@@ -466,6 +512,7 @@ def main():
             bad.append("3. a listing went to the wire: %r" % extra)
 
         # --- 4: a package off the drive -----------------------------------
+        httpd.close_idle()              # a leg boundary: the guest is idle
         w = open_row(q, ui, w, "APPS", vol, None)
         before = set(o.i for o in ui.windows())
         n0 = len(log.gets())
@@ -488,6 +535,7 @@ def main():
                      lambda f: any(n == "APPS" for n, _ in ui.listing(f)))
 
         # --- 5 and 6: BIG.BIN with Range:, BIG2.BIN without ---------------
+        httpd.close_idle()              # a leg boundary: the guest is idle
         n0 = len(log.gets())
         e5 = copy_to_b(q, ui, S, vol, "BIG.BIN", bad, "5.")
         ports = log.ports(n0)
@@ -496,6 +544,7 @@ def main():
         if len(ports) > 1 and len(set(ports)) != 1:
             bad.append("5. the copy's %d requests took %d connections"
                        % (len(ports), len(set(ports))))
+        httpd.close_idle()
         httpd.ranges = False
         n0 = len(log.gets())
         e6 = copy_to_b(q, ui, S, vol, "BIG2.BIN", bad, "6.")
@@ -504,6 +553,7 @@ def main():
         httpd.ranges = True
 
         # --- 7: a paste ONTO the drive is refused -------------------------
+        httpd.close_idle()              # a leg boundary: the guest is idle
         w = front_on(ui, 1)
         if w:
             i, _ = ui.entry("BIG.BIN", w)
@@ -530,6 +580,7 @@ def main():
         print("   7. a paste onto the drive: busy %d, fcp_err %d, the drive "
               "lists BIG.BIN: %s" % (busy, e7, listed and "BIG.BIN" in listed))
         # --- 8: a PACKED file, opened, arrives unpacked -----------------
+        httpd.close_idle()              # a leg boundary: the guest is idle
         from trackmove import pkg_syms
         P = pkg_syms("apps/notepad/notepad.asm", incs=("apps/",))
         raise_vol(q, ui, vol)
@@ -588,8 +639,8 @@ def main():
         allp = log.ports()
         runs = sum(1 for k in range(len(allp)) if k == 0 or allp[k] != allp[k - 1])
         print("   the whole run: %d requests over %d connections (the server "
-              "closes an idle one after 3 s, so each leg after the first "
-              "reopens)" % (len(allp), runs))
+              "closes an idle one at each leg boundary, so each leg after "
+              "the first reopens)" % (len(allp), runs))
         hashed = [g for g in log.gets() if "A#B" in g]
         if hashed:
             bad.append("2. a path went out unescaped: %r" % hashed)

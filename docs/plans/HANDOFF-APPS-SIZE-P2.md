@@ -305,7 +305,7 @@ owner's rule: soak and `test-full` run ONCE, after the last batch):
   one side, so prefer layout and data wins over logic rewrites.
 - **The Wire, Task Manager, RLAPPLY**: system apps on every system disk
   (`SYSTEM/`); The Wire's brand table is fixed by the owner (CLAUDE.md,
-  docs/WIRE-PLAN.md) and is not reworded.
+  docs/plans/completed/WIRE-PLAN.md) and is not reworded.
 
 ### 4.6 What packs, and what does not
 

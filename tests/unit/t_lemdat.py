@@ -920,7 +920,7 @@ def check_bands(sections, lem, out_dir, geom):
     check(nplay == want_play,
           "%s carries %d playable levels and the pin says %d - the converter "
           "dropped or gained levels without a decision. DROPPING A LEVEL IS "
-          "THE OWNER'S CALL (docs/LEMMINGS-PORT-PLAN.md wave 6, SPEC.md "
+          "THE OWNER'S CALL (docs/plans/completed/LEMMINGS-PORT-PLAN.md wave 6, SPEC.md "
           "116.9): tools/os88lem.py's LEVEL_PIN refuses the plan with the "
           "cluster arithmetic, and `make lemmings-data` prints it"
           % (geom, nplay, want_play))

@@ -8,7 +8,7 @@
 ; THIS FILE IS EMPTY ON PURPOSE, AND IT EXISTS ON PURPOSE
 ; ----------------------------------------------------------------------------
 ; Read-only Disk II is a FOLLOW-UP PULL REQUEST (APPLE2-SPEC section 14,
-; docs/APPLE2-PORT-PLAN.md Decision 13). What lands here when it comes is
+; docs/plans/completed/APPLE2-PORT-PLAN.md Decision 13). What lands here when it comes is
 ; pinned in section 14 so that the follow-up is a transcription and not a
 ; re-design: 48 self-sync $FF; `D5 AA 96` with 4-and-4 volume, track, sector
 ; and checksum; `DE AA EB`; 6 sync; `D5 AA AD`; Code62's 343 bytes with its

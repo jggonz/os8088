@@ -4,7 +4,7 @@
  * PaccMan: a native reimplementation, in C (SPEC.md 73), of Andre Weissflog's
  * pacman.c - https://github.com/floooh/pacman.c, MIT, (c) 2020 Andre
  * Weissflog - at commit 0f5ec5a. SPEC.md 91 is the contract and
- * docs/PACCMAN-PORT-PLAN.md the design record.
+ * docs/plans/completed/PACCMAN-PORT-PLAN.md the design record.
  *
  * DERIVED MATERIAL AND PROVENANCE. The screens, tables, timings and rules are
  * the reference's, taken from its source and not from memory; its code is

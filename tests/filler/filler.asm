@@ -16,7 +16,10 @@
 ;
 ; So this one asserts NOTHING. It reports four numbers - free KB, blocks held,
 ; asks made, asks granted - and the row driving it reads whatever it is
-; actually about out of the kernel.
+; actually about out of the kernel. After every key round it also leaves
+; OSAPI_MEM_AVAIL's two answers and a round count in its bss (fl_onkey), so a
+; row can wait on the round in GUEST state and read the largest fundable run
+; the kernel itself computed.
 ;
 ; WHY THE FILL IS ONE PINNED CLAIM. Undeclared is the default (SPEC.md 66.2),
 ; and that is what is wanted here: a filler the ascending pass could pack would
@@ -206,6 +209,17 @@ fl_onkey:
 .ask:
     call fl_ask                 ; freed, and only then ask again
 .paint:
+    call OSAPI_MEM_AVAIL        ; THE ANSWER THE ROUND LEFT, for a row to read
+    mov [fl_run], ax            ; rather than recompute: the largest run the
+    mov [fl_tot], bx            ; kernel would fund (mem_avail models both
+    inc word [fl_nround]        ; compaction passes and every pin) and the
+                                ; total. The total is NOT what decides a claim
+                                ; once a pinned claim walls the arena in two:
+                                ; MIDIRack's sbmem leg found 8.5 KB either side
+                                ; of a pinned song, 17 KB "free" and no 17 KB
+                                ; claim fundable. The round count is written
+                                ; LAST, so a row that sees it move reads the
+                                ; finished round, whatever the host's clock did
     call fl_paint               ; THE GFX LOCK IS HELD in a key callback
                                 ; (SPEC.md 13), so the window is redrawn here
                                 ; rather than through a repaint request - and
@@ -329,3 +343,6 @@ fl_nok     equ os88_image_end + 18   ; word: ...and granted
 fl_done    equ os88_image_end + 20   ; byte: the first fill has run
 fl_got     equ os88_image_end + 22   ; word: KB of the largest grant
 fl_buf     equ os88_image_end + 24   ; 6 bytes: the number formatter
+fl_run     equ os88_image_end + 30   ; word: OSAPI_MEM_AVAIL's AX after a round
+fl_tot     equ os88_image_end + 32   ; word: ...and its BX
+fl_nround  equ os88_image_end + 34   ; word: key rounds finished (fl_onkey)

@@ -257,6 +257,7 @@ $(BUILD)/ccsmoke.img: $(BUILD)/ccsmoke.o88 tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/ccsmoke.o88
 	@python3 tools/os88disk.py --verify $@
 
+#> [Applications] cc-smoke :: the C toolchain's smoke test package (tools/setup-cc.sh fetches SmallerC first)
 .PHONY: cc-smoke
 cc-smoke: $(BUILD)/ccsmoke.img
 

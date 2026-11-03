@@ -10225,6 +10225,32 @@ vp_xopbeg:
     mov cx, [vp_xcap]
     mov dx, [vp_xcap+2]
     jmp short vp_opend.go
+; vp_xreop - after a bracket (vp_srun, which ended it at the door): a
+; TIMER-fed hold still loading begins its operation again, over the bytes it
+; has still to read. A bank fills while a play reads and has none (vp_xopen).
+; Refused, or nothing left to read, nothing changes. Every register kept
+vp_xreop:
+    cmp byte [vp_xon], 0
+    je .r
+    cmp byte [vp_xbank], 0
+    jne .r
+    cmp byte [vp_xfull], 0
+    jne .r
+    push cx
+    push dx
+    mov cx, [vp_xcap]
+    mov dx, [vp_xcap+2]
+    sub cx, [vp_xhave]
+    sbb dx, [vp_xhave+2]
+    jc .p                           ; (more held than the cap: none to read)
+    jnz vp_opend.go
+    jcxz .p
+    jmp short vp_opend.go
+.p:
+    pop dx
+    pop cx
+.r:
+    ret
 ; vp_xdone - the hold has all of the file: [vp_xfull], and its bar over
 vp_xdone:
     mov byte [vp_xfull], 1
@@ -14921,6 +14947,16 @@ vp_srun:
     je .go                          ; the rows between are left behind (the
     call vp_pposter                 ; owner's report)
 .go:
+    call vp_opend
+                                    ; (SPEC.md 12.8.10): an owned operation
+                                    ; PARKS at fsx_run's fpg_finish rather
+                                    ; than coming down (12.8.9), so it stayed
+                                    ; on the bar, frozen, for a whole play in
+                                    ; the window - and its end, made inside,
+                                    ; is refused by kern_mega's real-mode
+                                    ; table, so it stayed for good. Refused
+                                    ; when none is ours; vp_xreop begins it
+                                    ; again after
     call OSAPI_WM_CLIP_CLEAR        ; THE BRACKET'S DOOR PAYS OFF THE WIDGET
                                     ; under whatever region is armed (SPEC.md
                                     ; 12.8.5.2): a play from a key reads its
@@ -15062,6 +15098,7 @@ vp_srun:
     call vp_fmt                     ; now: Play resumes it)
     call vp_repaint
 .out:
+    call vp_xreop                   ; (the hold's bar again, if it still loads)
     call vp_parm                    ; (a session left paused banks on)
     pop di
     pop dx

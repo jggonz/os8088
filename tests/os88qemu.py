@@ -904,20 +904,57 @@ def mouse_to(m, sym, hmp, x, y, btn=0):
                          % (x, y, cx, cy))
 
 
+DBL_TICKS = 9           # every double-click detector's window: UI_TDBLT,
+                        # DESK_DBLT, FM_DBLCLK, FD_DBLCLK (os88mouse's too)
+
+
+def _sep(m):
+    """Separate a PRESS from the last one this module made, on the GUEST's
+    clock - os88mouse's `_sep`, which the MartyPC driver has always had and
+    this one did not.
+
+    Two verbs in a row put their presses a fixed amount of HOST work apart,
+    and on QEMU that is the guest's time too, so a fast host puts them inside
+    the kernel's 9-tick double-click window: a click on a title bar that
+    another click on it preceded by half a second ZOOMS the window instead of
+    raising it (SPEC.md 11.95's ui_tdbl), and leaves it where it was in the
+    z-order. win16desk did exactly that, every run, raising B:'s window twice
+    around a quick launch: "timed out waiting for B:'s window to come to the
+    front", with the window zoomed under the program it was meant to cover.
+    `mouse_dblclick` is the one verb that WANTS to be inside the window, and
+    it skips this between its own two presses - never before the first."""
+    last = getattr(m, "_press_t", None)
+    if last is None:
+        return
+    c = Clock(m)
+    while (c.last - last) & 0xFFFF <= DBL_TICKS and not c.stalled():
+        time.sleep(0.01)
+        c.step()
+
+
 def mouse_button(m, sym, hmp, mask):
     """Set the buttons to `mask` (HMP's: 1 left, 2 right) and wait until the
-    kernel has decoded that level - mouse_btn's bit 0 left, bit 1 right."""
+    kernel has decoded that level - mouse_btn's bit 0 left, bit 1 right. A
+    PRESS is first separated from the last press on the guest's clock
+    (`_sep`), so two calls never make a double-click the caller did not
+    ask for."""
     want = (1 if mask & 1 else 0) | (2 if mask & 2 else 0)
-    for _ in range(3):
-        hmp("mouse_button %d" % mask)
-        c = Clock(m)
-        lim = to_ticks(PKT_SECS)
-        while c.step() < lim and not c.stalled():
+    if want & ~mouse_where(m, sym)[2] & 3:
+        _sep(m)
+    try:
+        for _ in range(3):
+            hmp("mouse_button %d" % mask)
+            c = Clock(m)
+            lim = to_ticks(PKT_SECS)
+            while c.step() < lim and not c.stalled():
+                if mouse_where(m, sym)[2] & 3 == want:
+                    return
+                time.sleep(0.003)
             if mouse_where(m, sym)[2] & 3 == want:
                 return
-            time.sleep(0.003)
-        if mouse_where(m, sym)[2] & 3 == want:
-            return
+    finally:
+        if want:
+            m._press_t = ticks(m)
     raise MouseError("the button level %d was never decoded (mouse_btn = %02x)"
                      % (want, mouse_where(m, sym)[2]))
 
@@ -1040,12 +1077,32 @@ def mouse_dblclick(m, sym, hmp, x, y):
     # guest whatever the host is doing.
     # (one command a call: some callers' `hmp` takes exactly one - trkscrl's
     # and minesrc's did, and a four-argument call was a TypeError there)
-    for edge in (1, 0, 1, 0):
-        hmp("mouse_button %d" % edge)
+    _sep(m)                     # the FIRST press, from whatever came before
+    # ...AND ON 86Box THE GUEST IS STOPPED AROUND THEM. Its serial mouse
+    # reports a LEVEL at its own poll, so os88qmpmega proves each edge on
+    # the guest before taking the next - and if the guest ran between two
+    # of those, this process's round trips were guest time: box-ethernet's
+    # BROWSER.O88 double-click was born 26 ticks press to press on a loaded
+    # box. Stopped, the server ADVANCES the guest edge by edge itself
+    # (os88qmpmega.Server._box_edges), so the span is the UART's and the
+    # ISR's whatever the host does; `cont` hands it back. Only a guest
+    # that is RUNNING is stopped, and only it is resumed
+    held = False
+    if BOX86:
+        held = "running" in str(hmp("info status") or "")
+        if held:
+            hmp("stop")
+    try:
+        for edge in (1, 0, 1, 0):
+            hmp("mouse_button %d" % edge)
+    finally:
+        if held:
+            hmp("cont")
     c = Clock(m)
     lim = to_ticks(PKT_SECS)
     while (mouse_where(m, sym)[2] & 3 or c.step() < 2) and c.step() < lim:
         time.sleep(0.005)
+    m._press_t = ticks(m)       # ...and a click after it is separated
 
 
 def launch_test(tmp, sysimg="build/os8088.img", apps="build/apps.img",
@@ -1313,6 +1370,9 @@ MEGA = bool(os.environ.get("OS88_MEGA"))
 # QMP server over it. `lin`, `drv_base` and `mega_twin` stay MEGA's alone -
 # a real-mode kernel's segment is `seg << 4` whatever runs it
 SERVED = MEGA or (os.environ.get("OS88_EMU") or "").lower() == "86box"
+# ...and BOX86 the served machines that are 86Box (os88qmpmega's BOX86)
+BOX86 = os.environ.get("OS88_MEGA_EMU") == "86box" or \
+    (os.environ.get("OS88_EMU") or "").lower() == "86box"
 
 
 def lin(seg, off=0):

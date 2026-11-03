@@ -280,7 +280,7 @@ the memory hooks and the dispatch table only), `a2io.c` (stub), `a2kbd.c`
 `a2fsx.inc` (stub), `COPYING`, `README.TXT`, `build.sh`,
 `hosttest/os88.h`, `hosttest/a2uitest.c`, `hosttest/a2memtest.asm`,
 `hosttest/a2memtest.sh`, `tools/a2ref.py`, `tests/a2band/a2bandbench.asm`,
-`Makefile`, `docs/APPLE2-SPEC.md`, `docs/APPLE2-PORT-PLAN.md`,
+`Makefile`, `docs/APPLE2-SPEC.md`, `docs/plans/completed/APPLE2-PORT-PLAN.md`,
 `docs/INDEX.md`, `vm/386-apple2/86box.cfg`.
 
 **Done when**
@@ -740,7 +740,7 @@ is registered in `tests/suite.py`.
   and where the two chords (Ctrl+F2, Ctrl+F3) and Alt+Enter are confirmed on a
   real AT/XT BIOS rather than on QEMU's SeaBIOS. Manual evidence; no gate
   rests on them.
-- **`docs/APPLE2-SPEC.md` and `docs/APPLE2-PORT-PLAN.md` reconciled against
+- **`docs/APPLE2-SPEC.md` and `docs/plans/completed/APPLE2-PORT-PLAN.md` reconciled against
   the LAST build** - every number re-measured, because the C64 re-edited one
   figure three times in one session; the `README.md` table row;
   `docs/INDEX.md` regenerated again if any doc was added; the port skill's
@@ -762,7 +762,7 @@ is registered in `tests/suite.py`.
 **Files**
 
 `apps/apple2/a2about.c`, `README.TXT`, `COPYING`, `WELCOME.BAS`, `icon.inc`,
-`Makefile`, `README.md`, `docs/APPLE2-SPEC.md`, `docs/APPLE2-PORT-PLAN.md`,
+`Makefile`, `README.md`, `docs/APPLE2-SPEC.md`, `docs/plans/completed/APPLE2-PORT-PLAN.md`,
 `docs/INDEX.md`, `.claude/skills/port-to-os8088/LESSONS.md`,
 `tests/apple2part.py`, `tests/suite.py`, `vm/xt-apple2/86box.cfg`,
 `vm/286-apple2/86box.cfg`, and in os8088-web on branch `apple2-wire`:

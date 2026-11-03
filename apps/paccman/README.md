@@ -3,7 +3,7 @@
 A native reimplementation, in C, of Andre Weissflog's **`pacman.c`** — the
 arcade-faithful C99 Pac-Man at <https://github.com/floooh/pacman.c> — for
 os8088. Package `PACCMAN`, product name **PaccMan**. `SPEC.md` §91 is the
-contract and `docs/PACCMAN-PORT-PLAN.md` the design record.
+contract and `docs/plans/completed/PACCMAN-PORT-PLAN.md` the design record.
 
 The reference commit is **`0f5ec5a384c1988d9889046d92e615219e1cf3b4`**
 (2 Jul 2026). That hash is pinned in `tools/paccman_assets.py`, printed in
@@ -397,7 +397,7 @@ the whole of the "maybe more performant on XTs" premise. But turning the
 packed band into four planes costs **41.78 ms**, so a whole colour band is
 69.60 ms against the ~68.5 ms it would cost to compose and send the same band
 through `BLIT4`: **a wash**, which is the outcome
-`docs/PACCMAN-PORT-PLAN.md` named as its first risk. Composing straight into
+`docs/plans/completed/PACCMAN-PORT-PLAN.md` named as its first risk. Composing straight into
 planar on the colour path — the answer that risk carried with it — is a
 recorded follow-up and is what the fps below would move.
 
