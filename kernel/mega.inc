@@ -12674,11 +12674,14 @@ mega_wset:
     pop ds
     cmp [di+2], bl
     jne .wx
-    cmp byte [di+3], 0              ; ...and UNBOUND: a SEG_BWIN window is
-.wx:                                ; SEG_AIM's to re-aim, inside its block,
-    pop ds                          ; and aimed outside it here it was freed
-    je .own                         ; and moved with no block (14.135)
-.nown:
+    cmp byte [di+3], 0              ; ...and UNBOUND, or BOUND and aimed
+    je .wx                          ; INSIDE a block: re-bound there, reach
+    call mega_wbind                 ; clipped and the block flagged as
+    sbb bh, bh                      ; SEG_BWIN's. Outside every block it
+.wx:                                ; would be freed and moved with no block
+    pop ds                          ; (14.135), so it gets a fresh window
+    je .own                         ; (14.137: WIN16's GlobalReAlloc carries
+.nown:                              ; a program's window to another arena)
     pop di
 .nm:
     or di, di
@@ -12853,6 +12856,39 @@ mega_bclip:
     pop ax
     ret
 
+; mega_wbind - DX:AX = a BOUND window's base, CX = its reach: CF = 0 when the
+; base lies in a block - a conventional claim or a pool block - with CX clipped
+; at that block's end, and a pool block flagged MX_FWIN, so it moves with the
+; rate hook held off as an OSAPI_XMEM_RUN block does (mx_cpflags). The flag is
+; STICKY for the block's life: SEG_FREE and the owner's end leave it, and the
+; entry's next take clears it (mx_alloc's MX_OWN/MX_FL word). What it costs once
+; the window is gone is a move with the hook held off, the safe side, so no
+; walk is spent on it (14.135). CF = 1 in no block. Keeps all but CX. SEG_BWIN
+; making one and mega_wset re-binding one (14.137) are the two callers
+mega_wbind:
+    call mega_bclip                 ; CX = the reach; CF = 1 in no block
+    jc .o
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    push es
+    MXT_ES                          ; (mega_blkof reads the tables' tail)
+    call mega_blkof                 ; BX = a pool block's entry, 0 a claim's
+    or bx, bx                       ; (CF = 0 both ways: `or` clears it)
+    jz .c
+    or byte [es:bx+MX_FL], MX_FWIN
+.c:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+.o:
+    ret
+
 ; mega_segbw - SEG_BWIN's body (FAR's tail, mega_segf): DX = a selector of the
 ; caller's -> CF = 0, DX = a NEW data selector over the block its base lies in
 ; - the pool's or a conventional claim - aimed at that base, 64KB long or to
@@ -12872,7 +12908,7 @@ mega_segbw:
     call mega_selbase               ; DX:AX = its base
     jc .null
     mov cx, 0xFFFF
-    call mega_bclip                 ; CX = the reach
+    call mega_wbind                 ; CX = the reach, the block flagged
     jnc .in
     mov ax, 3
     jmp short .no
@@ -12880,23 +12916,6 @@ mega_segbw:
     mov ax, 2
     jmp short .no
 .in:
-    push es                         ; (ES the tables' tail, for mega_blkof
-    MXT_ES                          ; and the flag: the caller's back before
-    push ax                         ; mega_segown reads it)
-    push dx
-    call mega_blkof                 ; BX = a pool block's entry, 0 a claim's
-    pop dx
-    pop ax
-    or bx, bx
-    jz .nofl
-    or byte [es:bx+MX_FL], MX_FWIN  ; STICKY for the block's life: SEG_FREE
-.nofl:                              ; and the owner's end leave it, and the
-                                    ; entry's next take clears it (mx_alloc's
-                                    ; MX_OWN/MX_FL word). What it costs once
-                                    ; the window is gone is a move with the
-                                    ; rate hook held off, which is the safe
-                                    ; side, so no walk is spent on it (14.135)
-    pop es
     call mega_segown                ; BL = the caller's owner
     mov bh, 1                       ; BOUND: a free row and a FRESH entry,
     call mega_wnew                  ; never a match - re-aiming it must move

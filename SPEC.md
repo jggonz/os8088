@@ -99588,8 +99588,15 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
 - A **BOUND window** (`SEG_BWIN`) is a fresh descriptor - never a match, so
   re-aiming it moves nobody else's - based in a claim or a pool block and
   recorded in `mega_wtab` under the caller, its row's byte 3 marking it
-  bound; `SEG_WIN` and `SEG_AT` never re-aim one (named as the window to
-  re-aim, it is passed over and the caller gets a window of its own). A
+  bound. `SEG_WIN`, `SEG_AT` and `SEG_WINL` naming one of the caller's own
+  as the window to re-aim **re-bind** it when, and only when, the new base
+  lies in a claim or a pool block: the reach is clipped at that block's end
+  and a pool block is flagged as `SEG_BWIN` flags it (`mega_wbind`, the one
+  body the two share), so it is a bound window of that block from then on
+  and the old block's free and moves no longer touch it. Aimed outside every
+  block it is passed over and the caller gets a window of its own, because
+  a bound window there would be freed and moved with no block (KERN-MEGA-PLAN
+  14.135, 14.137). A
   SUB, SUBC pair or bound window left past a claim's end when a regrow or
   a re-home's trim shrinks it is freed with the space (`mega_mpgap`,
   KERN-MEGA-PLAN 14.135). **`SEG_AIM`** re-aims it to a 32-bit byte offset into the block,
@@ -108587,8 +108594,17 @@ folder**, which is the audit rather than the hope:
 - the document is handed over by PULL (§54.5), so nothing has to be standing
   in its directory when the entry proc runs.
 
-**With no poster the current volume IS the home** — that is a package's own
-request rather than a double-click, and there is no window to ask.
+**With no poster the home is the LOCATOR** when a package handed one over:
+`OSAPI_PKG_START`'s document arm banks its 16 bytes and marks `[assoc_pwin]`
+`ASSOC_PWBANK`, and `assoc_run_x` takes the folder and volume from them. The
+current volume answered before, which was right only while the caller still
+stood there. A POSTED launch (§21.5.4) runs on `ui_task`'s next pass, after
+the caller has unwound, by when `assoc_back` or an `\AUTOSTRT` walk has moved
+the volume. DOS's loader posts a Windows program to WIN16 that way
+(§96.44.4), and WIN16 was handed the link's drive root instead of the
+program's folder: *This is not a Windows program* for every setup started
+from a link. With no poster and no locator, the current volume is still the
+home.
 
 **The trap is the pointer's name.** `[assoc_pwin]`, like `[ld_pwin]`, holds
 the poster's **state block** and not its window record; `FS_DRV`/`FS_CWD` are
@@ -221621,10 +221637,12 @@ the name (`np_arg`), so Ctrl+S writes back to the note.
   lock FREE (§21.5) and a press holds it, so the press records the open and
   posts `OSAPI_WM_WAKE`; `sn_wake` (the include's `STIK_WAKE`, which then runs
   the hover edge exactly as `stik_wake` always does) makes the launch.
-- **It stands in NOTES for the call.** `assoc_run_x` takes the document's
-  folder from where the caller STANDS (`.curvol`, no poster), not from the
-  locator's directory word - the first build stood at home, and Note Pad
-  opened an empty `WELCOME.TXT` there and saved it into `STIKAPPS\`.
+- **It stands in NOTES for the call.** `assoc_run_x` took the document's
+  folder from where the caller STANDS, not from the locator's directory
+  word - the first build stood at home, and Note Pad opened an empty
+  `WELCOME.TXT` there and saved it into `STIKAPPS\`. The locator decides now
+  (§54.9.1's `ASSOC_PWBANK`), and `sn_ndir` is NOTES' cluster, so both
+  answers agree; the pad still stands there for its own writes.
 - **THE WATCH.** `OSAPI_SYS_SNAPSHOT` before and after the launch: the
   instance slot that came alive across it is what the association started -
   every launch runs on the UI task and the UI task is inside the call - so no

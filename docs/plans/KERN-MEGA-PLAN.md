@@ -13490,3 +13490,36 @@ two changes), 24,070 with its scratch in a 24,576 rung against main's
 68,096, unchanged from main; LOW 5,576 in 6,144 (56 left); kern_big and
 kern_small differ from main only by `assoc_ownex` (SPEC.md 54.4.2.4), and
 `make budget-check` passes on all four kernels.
+
+### 14.137 A bound window re-aimed inside a block is re-bound there, not replaced (2026-11-03) - FIXED
+
+14.135's fourth item gave a caller a fresh window whenever `SEG_WIN`,
+`SEG_AT` or `SEG_WINL` named one of its BOUND windows. That was right for
+a window aimed outside every block, and wrong for one aimed inside
+another. WIN16's `GlobalReAlloc` (`w16s_gwin`, SPEC.md 124.31.3) carries a
+protected-mode-only program's window from a block to its new home,
+possibly in another arena, with `SEG_AT`. After #328 that call answered a
+new selector and left the old one aimed where the block had been. The
+program kept the selector it had, so it wrote over the heap headers
+behind the moved block. Microsoft Arcade's setup stopped at
+`MSTEST: parse error` and Mozart's well before its copy.
+
+`mega_wset` now asks `mega_wbind` first. Called with the new base and
+reach, it answers CF = 0 when the base lies in a conventional claim or a
+pool block. It then clips the reach to that block's end and flags a pool
+block `MX_FWIN`, which is exactly what `SEG_BWIN` does when it makes a
+bound window, and the window is re-aimed in place as its owner's.
+Outside every block 14.135's rule stands, and the caller gets a fresh
+window. `mega_segbw` calls the same routine, so the inline lookup it had
+is gone. WIN16 frees a window it was answered fresh, so a refused
+re-bind leaks no LDT entry.
+
+Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,592,
+24,576 rung, 474 left. That is the same rung as 14.136's re-measure, and
+the routine shared with `mega_segbw` paid for most of itself. Resident,
+LOW and `.cold` are unchanged. kern_big and kern_small are not touched.
+
+Seen (QEMU, kern_mega, looks): Arcade 1.0's setup reaches
+*Congratulations!*. Mozart's runs through every file and its Program
+Manager group. Its last dialog is SPEC.md 124.26.11's to answer, not the
+kernel's.
