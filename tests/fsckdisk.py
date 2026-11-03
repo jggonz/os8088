@@ -715,7 +715,7 @@ def leg5(work, fails):
         text = run_task(ui, flush, 2, True, fails)
         print(text)
         need(fails, text, ["nested %d deep - its contents not checked" % DEEPN,
-                           "not done: a folder's contents were not checked"],
+                           "not done: a folder was not checked"],
              "repair with a folder too deep")
         if "lost clusters freed" in text or " clusters saved" in text:
             fails.append("lost clusters were saved or freed after a folder "
@@ -732,7 +732,7 @@ def leg5(work, fails):
         text = run_task(ui, flush, 3, False, fails,
                         also="not done: a folder's")
         print(text)
-        need(fails, text, ["not done: a folder's contents were not checked"],
+        need(fails, text, ["not done: a folder was not checked"],
              "defragment with a folder too deep")
         v = Vol(flush.snapshot(1))
     if v.read(live) != data:

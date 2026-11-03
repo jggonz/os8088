@@ -499,7 +499,7 @@ sc_df19:    db 'not run: ', 1, ' errors - run Check and repair', 0
 sc_df20:    db 'not asked', 0
 sc_df21:    db 'folders not moved: close other programs (', 1, ')', 0
 sc_df22:    db 1, ' folders moved', 0
-sc_df23:    db "not done: a folder's contents were not checked", 0
+sc_df23:    db "not done: a folder was not checked", 0
 sc_df_fixed: db ' (fixed)', 0
 sc_dr_none:  db 'not asked', 0
 sc_dr_nofix: db 'nothing needed repairing', 0

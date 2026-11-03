@@ -97,7 +97,7 @@ long is left uncut too when another file shares its clusters.
 A folder nested too deep, or one whose own chain is damaged, is not looked
 into, so nothing can say what the files in it use. Then lost space is left
 where it is and the disk is not defragmented, and the report says *not
-done: a folder's contents were not checked*. Move the folder higher up, or
+done: a folder was not checked*. Move the folder higher up, or
 repair what is wrong with it, and check again.
 
 **Defragment the disk** only runs on a disk with nothing broken, so run
