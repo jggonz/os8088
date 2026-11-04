@@ -31,19 +31,21 @@
 A2F_ENTRY    equ 0x0210             ; m65gen.py's ENTRY
 A2F_FIXUP    equ 0x0203             ; ...its FIXUP: dw h_FE body, x_hb1
 A2F_PARTLEN  equ 0xFE00             ; ...and PART_LEN
-A2F_RSN_HB1  equ 2
-A2F_RSN_HBR  equ 3
+A2F_RSN_HB1  equ 2                  ; one instruction
+A2F_RSN_HBR  equ 3                  ; the region: until PC leaves $C000-$CFFF
+A2F_RSN_HBI  equ 4                  ; the interrupt flag's: a short run
+A2F_HBI_RUN  equ 64                 ; ...this many cycles at most, so CLI's
+                                    ; and PLP's one-instruction delays hold
 A2_SCR_PV    equ 0x38               ; the fast core's V, B, D, I
 A2_SCR_HBK   equ 0x3A               ; "stop when PC leaves $C000-$CFFF"
 A2_SCR_CUTF  equ 0x3B               ; a2_cut() ran during this a2_run
-A2_SCR_IORD  equ 0x40               ; the two far doors, written per run
-A2_SCR_IOWR  equ 0x44
 A2_SCR_FEND  equ 0x50               ; the fast core's scratch ends here
 
 section .bss
 a2f_far:    resw 2                  ; the far pointer the call goes through
 a2f_left:   resw 1                  ; cycles left of the run in progress
-a2f_clkb:   resw 1                  ; CLKB across a one-instruction step
+a2f_clkb:   resw 1                  ; CLKB across an accurate-core run
+a2f_bud:    resw 1                  ; ...and that run's budget
 
 section .text
 
@@ -68,21 +70,24 @@ _a2_run:
     mov es, [_a2_m+AM_RAMSEG]
     mov byte [es:A2_SCR_BASE + A2_SCR_CUTF], 0
     mov byte [es:A2_SCR_BASE + A2_SCR_HBK], 0
-    mov word [es:A2_SCR_BASE + A2_SCR_IORD], a2f_iord
-    mov [es:A2_SCR_BASE + A2_SCR_IORD + 2], cs
-    mov word [es:A2_SCR_BASE + A2_SCR_IOWR], a2f_iowr
-    mov [es:A2_SCR_BASE + A2_SCR_IOWR + 2], cs
 
 .loop:
     mov ax, [_a2_fseg]
     mov word [a2f_far], A2F_ENTRY
     mov [a2f_far+2], ax
+    ; THE FRAME (m65gen.py's header): the two doors, then the far call
+    push cs
+    mov ax, a2f_iowr
+    push ax
+    push cs
+    mov ax, a2f_iord
+    push ax
     mov ax, [a2f_left]
     mov dx, [_a2_m+AM_RAMSEG]
     mov bx, _a2_m
     push ds
     pop es
-    call far [a2f_far]
+    call far [a2f_far]              ; (its retf takes the doors off)
     mov cx, [_a2_m+AM_CNT]
     mov [a2f_left], cx
     cmp ax, A2F_RSN_HB1
@@ -92,26 +97,34 @@ _a2_run:
     cmp ax, A2F_RSN_HBR
     je .region
 
-    ; --- ONE INSTRUCTION ON THE ACCURATE CORE. Its budget is 1, so it runs
-    ; exactly one; CLKB moves for the step so that a2_now() inside it reads
-    ; the clock this run would have had (CLKB - DEAD, DEAD starting at 1 in
-    ; place of `left`).
+    ; --- A SHORT RUN ON THE ACCURATE CORE: one instruction (reason 2), or
+    ; the interrupt flag's few (reason 4). CLKB moves for it, so that a2_now()
+    ; inside it reads the clock this run would have had (CLKB - DEAD, DEAD
+    ; starting at the short budget in place of `left`).
+    mov cx, 1
+    cmp ax, A2F_RSN_HBI
+    jne .short
+    mov cx, A2F_HBI_RUN
+    cmp cx, [a2f_left]
+    jle .short
+    mov cx, [a2f_left]
+.short:
+    mov [a2f_bud], cx
     mov es, [_a2_m+AM_RAMSEG]
     mov ax, [es:A2_SCR_BASE + A2_SCR_CLKB]
     mov [a2f_clkb], ax
-    mov cx, [a2f_left]
-    dec cx
-    sub [es:A2_SCR_BASE + A2_SCR_CLKB], cx
-    mov ax, 1
-    push ax
+    mov ax, [a2f_left]
+    sub ax, cx                      ; left - budget
+    sub [es:A2_SCR_BASE + A2_SCR_CLKB], ax
+    push cx
     call a2_arun
     add sp, 2
     mov es, [_a2_m+AM_RAMSEG]
     mov cx, [a2f_clkb]
     mov [es:A2_SCR_BASE + A2_SCR_CLKB], cx
-    mov cx, [_a2_m+AM_CNT]          ; left -= 1 - cnt
+    mov cx, [_a2_m+AM_CNT]          ; left -= budget - cnt
     add cx, [a2f_left]
-    dec cx
+    sub cx, [a2f_bud]
     mov [a2f_left], cx
     jmp short .back
 
@@ -161,6 +174,22 @@ _a2_run:
     ret
 .yes:
     stc
+    ret
+
+; -----------------------------------------------------------------------------
+; unsigned a2f_codesel(unsigned seg) - the selector to FAR CALL code in a
+; claim through: the segment itself on a real-mode kernel, its pair's code
+; half under kern_mega (os88api.inc's OSAPI_MEM_CODESEL). 0 = none.
+; -----------------------------------------------------------------------------
+_a2f_codesel:
+    push bp
+    mov bp, sp
+    mov dx, [bp+4]
+    call OSAPI_MEM_CODESEL
+    jnc .ok
+    xor ax, ax
+.ok:
+    pop bp
     ret
 
 ; -----------------------------------------------------------------------------

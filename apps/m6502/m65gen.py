@@ -2,37 +2,48 @@
 """apps/m6502/m65gen.py - the FAST 6502 core's generator (docs/plans/FAST6502-PLAN.md)
 
     python3 apps/m6502/m65gen.py --machine apple2 -o build/apple2/a2fast.asm
+    python3 apps/m6502/m65gen.py --machine c64 -o build/c64/c64fast.asm
 
-Writes one NASM source for a flat 64KB segment: the handler for opcode X at
+Writes one NASM source for a flat segment: the handler for opcode X at
 X x 256, dispatched by `mov dh,[si] / inc si / jmp dx` with DL = 0, and the
 shared tails (the entry, the exits, the I/O call-outs, the damage marker) in
 the slots of opcodes this core does not run. Nothing it writes is committed.
+APPLE2-SPEC section 4.6 and C64-SPEC section 4.7 are the contracts.
 
-THE REGISTER PLAN (APPLE2-SPEC section 4.6):
+THE REGISTER PLAN:
     A = AL    N, Z, C in AH, lahf's layout (N bit 7, Z bit 6, C bit 0)
     X = CL    Y = CH    PC = SI    S = DI as $0100+S
     BX = the effective address    DH = data    DL = 0 at every dispatch
-    BP = the cycle countdown       DS = the guest's 64KB image
-    V, D, I and B in the scratch page's PV byte, at their P positions
+    BP = the cycle countdown       DS = the guest's 64KB
+    ES = the segment PC is fetched through (the C64's: DS on the Apple II)
+    V, D, I and B in the flag byte PV, at their P positions
+
+THE FRAME. Everything the core keeps that is not the 6502 is on the caller's
+stack, so the core never writes its own segment (which kern_mega gives it as
+a read-only code selector). At handler level, SP = F:
+    F+0 the machine record     F+2 the package's DS   F+4..F+10 saved regs
+    F+12 the far return        F+16 the read door     F+20 the write door
+    F+24.. the profile's own words (the C64's fetch segment per region)
+The package pushes F+24.. and the doors before the far call; `retf` drops them.
 
 EVERY HANDLER ENDS `sub bp,cycles / jle exit / mov dh,[si] / inc si / jmp dx`,
 so the run stops before the instruction that finds the budget spent - the
 accurate core's rule exactly, and `ran = asked - cnt` is exact.
 
-WHAT IT DOES NOT RUN IT HANDS BACK (x_hb1): every illegal opcode, BRK, ADC and
-SBC with D set, the I-flag instructions while an interrupt line is up, and a
-read-modify-write above $BFFF. The accurate core runs that one instruction on
-the same machine record. A control transfer into $C000-$CFFF (or to $FFFE and
-up, where an operand word would wrap the segment) hands back the REGION
-(x_hbr), and the accurate core runs until PC leaves it.
+WHAT IT DOES NOT RUN IT HANDS BACK: reason 2 (x_hb1) runs ONE instruction on
+the accurate core - every illegal opcode, BRK, decimal ADC/SBC, and the
+profile's own cases; reason 4 (x_hbi) is the interrupt flag's - CLI, SEI, PLP
+or RTI while the interrupt byte is up, or an interrupt pending at entry - and
+the accurate core gets a short run, so its one-instruction delays hold; reason
+3 (x_hbr) is a REGION, a PC this core cannot fetch from.
 """
 import argparse
 import sys
 
 # ---------------------------------------------------------------------------
 # The legal NMOS opcodes: op -> (mnemonic, mode, base cycles). Every other
-# opcode is handed back. Cycles are the accurate core's table (a2_cyc), which
-# tools check against this one (m65gen.py --check-cycles FILE).
+# opcode is handed back. Cycles are the accurate cores' table (a2_cyc,
+# c64_cyc), which --check-cycles compares against this one on every build.
 # ---------------------------------------------------------------------------
 OPS = {}
 
@@ -80,61 +91,85 @@ F5 SBC zpx 4; F6 INC zpx 6; F8 SED imp 2; F9 SBC absy 4; FD SBC absx 4;
 FE INC absx 7
 """)
 
-# the read modes that pay a cycle when the index carries into the high byte
-PENALTY = {"absx", "absy", "indy"}
+PENALTY = {"absx", "absy", "indy"}      # read modes that pay an index carry
 READS = {"LDA", "LDX", "LDY", "ORA", "AND", "EOR", "ADC", "SBC", "CMP",
          "CPX", "CPY", "BIT"}
 RMW = {"ASL", "LSR", "ROL", "ROR", "INC", "DEC"}
 STORES = {"STA": "al", "STX": "cl", "STY": "ch"}
 REG = {"A": "al", "X": "cl", "Y": "ch"}
+ZP = ("zp", "zpx", "zpy")
 
 # ---------------------------------------------------------------------------
-# The machine profile: the guest's map, and the scratch page both cores share
+# The machines
 # ---------------------------------------------------------------------------
 APPLE2 = dict(
     name="apple2",
     scr=0xC100,                 # the accurate core's scratch page, A2_SCR_BASE
+    pv=0xC138,                  # the flag byte (APPLE2-SPEC 4.6)
+    fetch="",                   # PC is fetched through DS: the image holds the ROM
     io_lo=0xC0, io_hi=0xD0,     # $C000-$CFFF: reads above $C1FF are the image
     io_call=0xC0,               # the page whose reads and writes call out
     ram_top=0xC0,               # a write at or above this page is not RAM
     video=((0x04, 0x0C), (0x20, 0x60)),     # the pages the flush reads
-    # A NEW PC AT OR ABOVE THIS (and below $D000, or at $FFFE and up) IS
-    # HANDED BACK: $C000-$CFFF is I/O and slot space, and an instruction at
-    # $BFFE or $BFFF takes operand bytes from the soft switches, which the
-    # image cannot answer. (Fall-through or a branch inside page $BF into
-    # $BFFE is not caught - APPLE2-SPEC section 4.6's stated deviation.)
+    # A NEW PC IN [$BFFE, $D000) IS HANDED BACK: $C000-$CFFF is I/O and slot
+    # space, and an instruction at $BFFE or $BFFF takes operand bytes from the
+    # soft switches, which the image cannot answer. (Fall-through or a branch
+    # inside page $BF into $BFFE is not caught - the stated deviation.)
     ct_lo=0xBFFE,
-    kb_latch=True,              # $C000-$C00F answered from S_KBV (a2io.c)
     ct_top=False,               # $FFFE-$FFFF are the ROM's RTI and a hand-back
+    kb_latch=True,              # $C000-$C00F answered from KBV (a2io.c)
+    frame_extra=0,
+)
+C64 = dict(
+    name="c64",
+    scr=0xFFC0,                 # the accurate core's scratch, C64_SCR_BASE
+    pv=0xFFF9,                  # its one spare byte: writes there are dropped
+    fetch="es:",                # PC through ES: RAM, or a ROM bank's segment
+    ct_top=True,                # $FFFE-$FFFF can be RAM holding anything
+    frame_extra=5,              # the fetch segment of each region, F+24..F+31,
+                                # and the CHARGEN's, F+32 (C64-SPEC 4.7)
 )
 
-# scratch offsets - the first block is the accurate core's (a2cpu.inc), the
-# second is this core's and the wrapper's (APPLE2-SPEC section 4.6)
+# the accurate cores' scratch offsets (a2cpu.inc, c64cpu.inc - the same block)
 S_DIRTY, S_CARRY, S_DEAD, S_IRQ = 0x00, 0x22, 0x24, 0x2A
 S_WLO, S_WHI, S_ANY, S_WATLO, S_WATHI = 0x2C, 0x2E, 0x30, 0x32, 0x34
-S_PV, S_RSN, S_HBK, S_CUTF = 0x38, 0x39, 0x3A, 0x3B
-S_PKGDS, S_REC, S_IORD, S_IOWR, S_SPSAVE = 0x3C, 0x3E, 0x40, 0x44, 0x48
-S_KBV, S_KBOK = 0x4A, 0x4B      # the keyboard latch, mirrored by a2io.c
-S_IDLEOK = 0x4C                 # a2f_image: the ROM's KEYIN loop is at $FD1B
+S_MAPA, S_MAPD, S_MAPE = 0x36, 0x37, 0x38      # the C64's bank map
+# ...and the Apple II's own, beyond them in its page (APPLE2-SPEC 4.6)
+S_KBV, S_KBOK, S_IDLEOK = 0x4A, 0x4B, 0x4C
 
-# the machine record (a2cpu.inc's _a2_m)
+# the machine record - the same first ten words in _a2_m and _c64_m
 AM_PC, AM_A, AM_X, AM_Y, AM_S, AM_P, AM_CNT, AM_REASON = 4, 6, 8, 10, 12, 14, 16, 18
 
-RSN_SLICE, RSN_HB1, RSN_HBR = 0, 2, 3
+# the frame (the module's header)
+F_REC, F_PKGDS, F_IORD, F_IOWR, F_EXTRA = 0, 2, 16, 20, 24
+
+RSN_SLICE, RSN_HB1, RSN_HBR, RSN_HBI = 0, 2, 3, 4
 ENTRY = 0x0210                  # in opcode $02's slot, after its hand-back stub
 # A PART IS AT MOST 65,024 BYTES (os88pkg.py: its length is a sector count in a
 # word), and the slots of $FE and $FF begin at $FE00. So the part is the
-# segment's first $FE00 bytes, and the package copies it into a 64KB claim of
-# its own and writes those two slots as near jumps: $FE (INC abs,X) to its
-# body in a spare slot, $FF (not a legal opcode) to the hand-back. The two
-# targets are a table at FIXUP, which the package reads out of the part.
+# segment's first $FE00 bytes; the package copies it into a 64KB claim of its
+# own and writes those two slots as near jumps: $FE (INC abs,X) to its body in
+# a spare slot, $FF (not a legal opcode) to the hand-back. The two targets are
+# a table at FIXUP, which the package reads out of the part.
 PART_LEN = 0xFE00
 FIXUP = 0x0203                  # dw h_FE body, x_hb1 - in $02's slot
+
+# the C64's regions, as WORD indices into the frame's fetch segments: what a
+# PC's page is fetched through depends on the bank map only for these
+C64_REGION = [0] * 256
+for _p in range(0xA0, 0xC0):
+    C64_REGION[_p] = 2          # BASIC, or RAM
+for _p in range(0xD0, 0xE0):
+    C64_REGION[_p] = 4          # I/O, CHARGEN or RAM
+for _p in range(0xE0, 0x100):
+    C64_REGION[_p] = 6          # KERNAL, or RAM
 
 
 class Gen:
     def __init__(self, prof):
         self.p = prof
+        self.c64 = prof["name"] == "c64"
+        self.F = prof["fetch"]
         self.out = []
         self.n = 0
 
@@ -148,38 +183,43 @@ class Gen:
         self.n += 1
         return ".g%d" % self.n
 
+    def fetch_op(self):
+        return ["    mov dh, [%ssi]" % self.F, "    inc si", "    jmp dx"]
+
     # --- the end of every handler ----------------------------------------
     def next(self, cyc):
         """charge CYC and dispatch the next opcode, or leave through x_slice"""
         x = self.lab()
-        self.L("    sub bp, %d" % cyc, "    jle %s" % x,
-               "    mov dh, [si]", "    inc si", "    jmp dx",
-               "%s: jmp x_slice" % x)
-
-    def ct_check(self, hb):
-        """a new PC in [ct_lo, io_hi x 256) jumps to HB: ONE unsigned range
-        test, so neither a RAM nor a ROM target takes a jump. BX is free.
-        (A machine whose top two bytes can hold a 3-byte instruction - RAM
-        there - also needs $FFFE and up: `mov bx,[si]` at $FFFF faults a 286.
-        The Apple II's are the ROM's, RTI and an opcode this core hands
-        back, so its profile says ct_top=False.)"""
-        lo, hi = self.p["ct_lo"], self.p["io_hi"] << 8
-        self.L("    lea bx, [si+0x%04X]" % ((0x10000 - lo) & 0xFFFF),
-               "    cmp bx, 0x%04X" % (hi - lo), "    jb %s" % hb)
-        if self.p.get("ct_top", True):
-            self.L("    cmp si, 0xFFFE", "    jae %s" % hb)
+        self.L("    sub bp, %d" % cyc, "    jle %s" % x, *self.fetch_op())
+        self.L("%s: jmp x_slice" % x)
 
     def next_ct(self, cyc):
-        """...after a control transfer: SI is a new PC, which may be in the
-        I/O region, and that is handed back"""
+        """...after a control transfer: SI is a new PC, which may be one this
+        core cannot fetch from (handed back), and on the C64 may need another
+        fetch segment. BX is free here."""
         x, hb = self.lab(), self.lab()
         self.L("    sub bp, %d" % cyc, "    jle %s" % x)
         self.ct_check(hb)
-        self.L("    mov dh, [si]", "    inc si", "    jmp dx",
-               "%s: jmp x_hbr" % hb,
-               "%s: jmp x_slice" % x)
+        self.L(*self.fetch_op())
+        self.L("%s: jmp x_hbr" % hb, "%s: jmp x_slice" % x)
+
+    def ct_check(self, hb):
+        if self.c64:
+            self.L(*self.c64_fes(hb))
+        else:
+            # ONE unsigned range test, so neither a RAM nor a ROM target
+            # takes a jump
+            lo, hi = self.p["ct_lo"], self.p["io_hi"] << 8
+            self.L("    lea bx, [si+0x%04X]" % ((0x10000 - lo) & 0xFFFF),
+                   "    cmp bx, 0x%04X" % (hi - lo), "    jb %s" % hb)
+        if self.p["ct_top"]:
+            # `mov bx,[si]` at $FFFF faults a 286: a PC there is handed back
+            self.L("    cmp si, 0xFFFE", "    jae %s" % hb)
 
     # --- flags -----------------------------------------------------------
+    def PV(self):
+        return "0x%04X" % self.p["pv"]
+
     def nz(self, r):
         """N and Z from R, C kept: sahf puts C in CF, inc/dec leave CF alone"""
         self.L("    sahf", "    inc %s" % r, "    dec %s" % r, "    lahf")
@@ -187,57 +227,68 @@ class Gen:
     def v_from_of(self):
         v1, vd = self.lab(), self.lab()
         self.L("    jo %s" % v1,
-               "    and byte [%s], 0xBF" % self.scr(S_PV), "    jmp short %s" % vd,
-               "%s: or byte [%s], 0x40" % (v1, self.scr(S_PV)), "%s:" % vd)
+               "    and byte [%s], 0xBF" % self.PV(), "    jmp short %s" % vd,
+               "%s: or byte [%s], 0x40" % (v1, self.PV()), "%s:" % vd)
 
     # --- addressing: the effective address into BX ------------------------
-    def ea(self, mode, penalty, pen_lab):
-        """BX = the effective address. On a PENALTY mode an index carry jumps
-        to PEN_LAB (which charges the cycle and comes back)"""
-        L = self.L
+    def ea(self, mode, penalty, pen, handback):
+        L, F = self.L, self.F
         if mode == "zp":
-            L("    mov bl, [si]", "    inc si", "    xor bh, bh")
+            L("    mov bl, [%ssi]" % F, "    inc si", "    xor bh, bh")
         elif mode in ("zpx", "zpy"):
-            L("    mov bl, [si]", "    inc si",
+            L("    mov bl, [%ssi]" % F, "    inc si",
               "    add bl, %s" % ("cl" if mode == "zpx" else "ch"), "    xor bh, bh")
         elif mode in ("abs", "absx", "absy"):
-            L("    mov bx, [si]", "    add si, 2")
+            L("    mov bx, [%ssi]" % F, "    add si, 2")
             if mode != "abs":
-                self.index("cl" if mode == "absx" else "ch", penalty, pen_lab)
-        elif mode == "indx":
-            L("    mov bl, [si]", "    inc si", "    add bl, cl", "    xor bh, bh",
-              "    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
+                self.index("cl" if mode == "absx" else "ch", penalty, pen)
+        elif mode in ("indx", "indy"):
+            L("    mov bl, [%ssi]" % F, "    inc si")
+            if mode == "indx":
+                L("    add bl, cl")
+            L("    xor bh, bh")
+            if self.c64:
+                # a pointer in $FF/$00/$01 reads the processor port: the
+                # accurate core's (the pointer read has no side effect)
+                L("    cmp bl, 2", "    jb %s" % handback(1),
+                  "    cmp bl, 0xFF", "    je %s" % handback(1))
+            L("    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
               "    mov bl, dl", "    xor dl, dl")
-        elif mode == "indy":
-            L("    mov bl, [si]", "    inc si", "    xor bh, bh",
-              "    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
-              "    mov bl, dl", "    xor dl, dl")
-            self.index("ch", penalty, pen_lab)
+            if mode == "indy":
+                self.index("ch", penalty, pen)
         else:
             raise ValueError(mode)
 
-    def index(self, reg, penalty, pen_lab):
+    def index(self, reg, penalty, pen):
         if penalty:
             back = self.lab()
-            self.L("    add bl, %s" % reg, "    jc %s" % pen_lab[0], "%s:" % back)
-            pen_lab.append(back)
+            self.L("    add bl, %s" % reg, "    jc %s" % pen[0], "%s:" % back)
+            pen.append(back)
         else:
             self.L("    add bl, %s" % reg, "    adc bh, 0")
 
-    def pen_tail(self, pen_lab):
-        if len(pen_lab) == 2:
-            self.L("%s: inc bh" % pen_lab[0], "    dec bp", "    jmp short %s" % pen_lab[1])
+    def pen_tail(self, pen):
+        if len(pen) == 2:
+            self.L("%s: inc bh" % pen[0], "    dec bp", "    jmp short %s" % pen[1])
 
     # --- memory ----------------------------------------------------------
     def read(self, mode, dst, cyc, idle=False):
-        """DST = the byte at BX (zero page and the stack are always RAM)"""
-        if mode in ("zp", "zpx", "zpy"):
+        """DST = the byte at BX (zero page is always RAM; the C64's $00/$01
+        read-back is kept in RAM by its package while this core runs)"""
+        if mode in ZP:
             self.L("    mov %s, [bx]" % dst)
             return
-        hi, k, io, call = self.lab(), self.lab(), self.lab(), self.lab()
+        hi, k = self.lab(), self.lab()
+        top = 0xA0 if self.c64 else self.p["io_lo"]
         # RAM FALLS THROUGH: the one compare, not taken
-        self.L("    cmp bh, 0x%02X" % self.p["io_lo"], "    jae %s" % hi,
+        self.L("    cmp bh, 0x%02X" % top, "    jae %s" % hi,
                "    mov %s, [bx]" % dst, "%s:" % k)
+        if self.c64:
+            blk = ["%s: mov dl, %d" % (hi, cyc), "    call rd_hi", "    xor dl, dl"]
+            blk += (["    mov %s, dh" % dst] if dst != "dh" else []) + ["    jmp %s" % k]
+            self.later.append(blk)
+            return
+        io, call = self.lab(), self.lab()
         blk = ["%s: cmp bh, 0x%02X" % (hi, self.p["io_call"] + 2), "    jb %s" % io,
                "    mov %s, [bx]" % dst, "    jmp %s" % k,         # the ROM
                "%s:" % io]
@@ -253,8 +304,7 @@ class Gen:
                 # budget ends - kbd_idle runs it as a counter
                 blk += ["    test %s, 0x80" % dst, "    jnz %s" % k,
                         "    cmp si, 0xFD24", "    jne %s" % k,
-                        "    cmp bp, 19", "    jle %s" % k,   # a pass must fit
-
+                        "    cmp bp, 19", "    jle %s" % k,          # a pass must fit
                         "    cmp byte [%s], 0" % self.scr(S_IDLEOK), "    je %s" % k,
                         "    jmp kbd_idle"]
             blk += ["    jmp %s" % k]
@@ -262,21 +312,38 @@ class Gen:
         blk += (["    mov %s, dh" % dst] if dst != "dh" else []) + ["    jmp %s" % k]
         self.later.append(blk)
 
-    def write(self, mode, src, cyc):
+    def write(self, mode, src, cyc, handback):
         """the byte SRC to BX: RAM, the I/O call-out, or dropped; and the
-        damage mark on the display pages"""
-        if mode in ("zp", "zpx", "zpy"):
-            self.L("    mov [bx], %s" % src)
+        damage mark"""
+        L = self.L
+        if mode in ZP:
+            if self.c64:
+                # $00/$01 is the processor port: a write there re-banks
+                L("    cmp bl, 2", "    jb %s" % handback(1))
+            L("    mov [bx], %s" % src)
+            return
+        if self.c64:
+            wd, wh = self.lab(), self.lab()
+            consumed = 1 if mode in ("indx", "indy") else 2
+            L("    cmp bx, 2", "    jb %s" % handback(consumed),
+              "    cmp bh, 0xD0", "    jae %s" % wh,
+              "    mov [bx], %s" % src,
+              "    call c64_mark",
+              "%s:" % wd)
+            self.later.append(["%s:" % wh]
+                              + (["    mov dh, %s" % src] if src != "dh" else [])
+                              + ["    mov dl, %d" % cyc, "    call wr_hi",
+                                 "    xor dl, dl", "    jmp %s" % wd])
             return
         wd, wv, wh = self.lab(), self.lab(), self.lab()
         (a0, a1), (b0, b1) = self.p["video"]
-        self.L("    cmp bh, 0x%02X" % self.p["ram_top"], "    jae %s" % wh,
-               "    mov [bx], %s" % src,
-               "    cmp bh, 0x%02X" % b1, "    jae %s" % wd,
-               "    cmp bh, 0x%02X" % b0, "    jae %s" % wv,
-               "    cmp bh, 0x%02X" % a1, "    jae %s" % wd,
-               "    cmp bh, 0x%02X" % a0, "    jb %s" % wd,
-               "%s: call vid_mark" % wv, "%s:" % wd)
+        L("    cmp bh, 0x%02X" % self.p["ram_top"], "    jae %s" % wh,
+          "    mov [bx], %s" % src,
+          "    cmp bh, 0x%02X" % b1, "    jae %s" % wd,
+          "    cmp bh, 0x%02X" % b0, "    jae %s" % wv,
+          "    cmp bh, 0x%02X" % a1, "    jae %s" % wd,
+          "    cmp bh, 0x%02X" % a0, "    jb %s" % wd,
+          "%s: call vid_mark" % wv, "%s:" % wd)
         self.later.append(["%s:" % wh]
                           + (["    mov dh, %s" % src] if src != "dh" else [])
                           + ["    mov dl, %d" % cyc, "    call wr_io",
@@ -302,24 +369,25 @@ class Gen:
                 hb[consumed] = self.lab()
             return hb[consumed]
 
-        L = self.L
+        L, F = self.L, self.F
         pen = [self.lab()] if mode in PENALTY and mn in READS else []
-        operand = mode not in ("imp", "acc", "rel")
 
         if mn == "BRK":
             L("    jmp x_hb1")
             return
         if mn in ("ADC", "SBC"):
-            L("    test byte [%s], 0x08" % self.scr(S_PV), "    jnz %s" % handback())
+            L("    test byte [%s], 0x08" % self.PV(), "    jnz %s" % handback())
+        hbi = None
         if mn in ("CLI", "SEI", "PLP", "RTI"):
-            L("    cmp byte [%s], 0" % self.scr(S_IRQ), "    jne %s" % handback())
+            hbi = self.lab()
+            L("    cmp byte [%s], 0" % self.scr(S_IRQ), "    jne %s" % hbi)
 
         if mn in READS:
             if mode == "imm":
-                L("    mov dh, [si]", "    inc si")
+                L("    mov dh, [%ssi]" % F, "    inc si")
                 src = "dh"
             else:
-                self.ea(mode, mode in PENALTY, pen)
+                self.ea(mode, mode in PENALTY, pen, handback)
                 dst = {"LDA": "al", "LDX": "cl", "LDY": "ch"}.get(mn, "dh")
                 self.read(mode, dst, cyc,
                           idle=(mn == "BIT" and mode == "abs" and self.p.get("kb_latch")))
@@ -327,28 +395,37 @@ class Gen:
             self.alu(mn, src)
             self.next(cyc)
         elif mn in STORES:
-            self.ea(mode, False, pen)
-            self.write(mode, STORES[mn], cyc)
+            self.ea(mode, False, pen, handback)
+            self.write(mode, STORES[mn], cyc, handback)
             self.next(cyc)
         elif mn in RMW and mode == "acc":
             self.shift(mn, "al")
             self.next(cyc)
-        elif mn in RMW and mode in ("zp", "zpx") and mn not in ("ROL", "ROR"):
-            # zero page is RAM and never a display page: the operation on
-            # the byte itself, flags straight out of it
-            self.ea(mode, False, pen)
+        elif mn in RMW and mode in ZP:
+            self.ea(mode, False, pen, handback)
+            if self.c64:
+                L("    cmp bl, 2", "    jb %s" % handback(1))
             if mn in ("INC", "DEC"):
                 L("    sahf", "    %s byte [bx]" % mn.lower(), "    lahf")
-            else:
+            elif mn in ("ASL", "LSR"):
                 L("    %s byte [bx], 1" % ("shl" if mn == "ASL" else "shr"), "    lahf")
+            else:
+                L("    mov dh, [bx]")
+                self.shift(mn, "dh")
+                L("    mov [bx], dh")
             self.next(cyc)
         elif mn in RMW:
-            self.ea(mode, False, pen)
-            if mode not in ("zp", "zpx"):
-                L("    cmp bh, 0x%02X" % self.p["ram_top"], "    jae %s" % handback(2))
+            # a read-modify-write of anything but plain RAM is the accurate
+            # core's: I/O (the dummy write), and on the C64 a ROM read with a
+            # RAM write under it
+            self.ea(mode, False, pen, handback)
+            top = 0xA0 if self.c64 else self.p["ram_top"]
+            L("    cmp bh, 0x%02X" % top, "    jae %s" % handback(2))
+            if self.c64:
+                L("    cmp bx, 2", "    jb %s" % handback(2))
             L("    mov dh, [bx]")
             self.shift(mn, "dh")
-            self.write(mode, "dh", cyc)
+            self.write(mode, "dh", cyc, handback)
             self.next(cyc)
         elif mode == "rel":
             self.branch(mn)
@@ -358,6 +435,8 @@ class Gen:
         self.pen_tail(pen)
         for blk in self.later:
             L(*blk)
+        if hbi:
+            L("%s: jmp x_hbi" % hbi)
         for consumed, lab in sorted(hb.items()):
             # x_hb1 takes off the opcode byte itself
             if consumed:
@@ -392,8 +471,8 @@ class Gen:
               "%s: test %s, 0x80" % (nz, src), "    jz %s" % n0,
               "    or ah, 0x80",
               "%s: mov dl, %s" % (n0, src), "    and dl, 0x40",
-              "    and byte [%s], 0xBF" % self.scr(S_PV),
-              "    or [%s], dl" % self.scr(S_PV), "    xor dl, dl")
+              "    and byte [%s], 0xBF" % self.PV(),
+              "    or [%s], dl" % self.PV(), "    xor dl, dl")
 
     def shift(self, mn, r):
         L = self.L
@@ -408,15 +487,15 @@ class Gen:
             L("    sahf", "    %s %s" % (mn.lower(), r), "    lahf")
 
     def branch(self, mn):
-        L = self.L
-        test = {"BPL": ("ah", 0x80, "jnz"), "BMI": ("ah", 0x80, "jz"),
-                "BVC": ("pv", 0x40, "jnz"), "BVS": ("pv", 0x40, "jz"),
-                "BCC": ("ah", 0x01, "jnz"), "BCS": ("ah", 0x01, "jz"),
-                "BNE": ("ah", 0x40, "jnz"), "BEQ": ("ah", 0x40, "jz")}[mn]
-        reg, mask, not_taken = test
+        L, F = self.L, self.F
+        reg, mask, not_taken = {
+            "BPL": ("ah", 0x80, "jnz"), "BMI": ("ah", 0x80, "jz"),
+            "BVC": ("pv", 0x40, "jnz"), "BVS": ("pv", 0x40, "jz"),
+            "BCC": ("ah", 0x01, "jnz"), "BCS": ("ah", 0x01, "jz"),
+            "BNE": ("ah", 0x40, "jnz"), "BEQ": ("ah", 0x40, "jz")}[mn]
         nt, back, xf, xb, done = (self.lab() for _ in range(5))
-        where = "byte [%s]" % self.scr(S_PV) if reg == "pv" else "ah"
-        L("    mov dh, [si]", "    inc si",
+        where = "byte [%s]" % self.PV() if reg == "pv" else "ah"
+        L("    mov dh, [%ssi]" % F, "    inc si",
           "    test %s, 0x%02X" % (where, mask), "    %s %s" % (not_taken, nt),
           "    mov bx, si",
           "    test dh, dh", "    js %s" % back,
@@ -427,26 +506,30 @@ class Gen:
         self.next(3)
         L("%s:" % nt)
         self.next(2)
+        # ACROSS A PAGE: the extra cycle, and the target checked as a jump's
         L("%s: inc bh" % xf, "    jmp short %s" % done,
           "%s: dec bh" % xb,
           "%s: mov si, bx" % done)
         self.next_ct(4)
 
     def misc(self, mn, mode, cyc, handback):
-        L, P = self.L, self.scr(S_PV)
+        L, P, F = self.L, self.PV(), self.F
         if mn == "JMP" and mode == "abs":
-            L("    mov si, [si]")
+            L("    mov si, [%ssi]" % F)
             self.next_ct(cyc)
         elif mn == "JMP":                       # (ind), with the NMOS page wrap
-            L("    mov bx, [si]",
-              "    cmp bh, 0x%02X" % self.p["io_lo"], "    jae %s" % handback(),
-              "    mov dl, [bx]", "    inc bl", "    mov dh, [bx]",
+            L("    mov bx, [%ssi]" % F,
+              "    cmp bh, 0x%02X" % (0xA0 if self.c64 else self.p["io_lo"]),
+              "    jae %s" % handback())
+            if self.c64:
+                L("    cmp bx, 2", "    jb %s" % handback())
+            L("    mov dl, [bx]", "    inc bl", "    mov dh, [bx]",
               "    mov si, dx", "    xor dl, dl")
             self.next_ct(cyc)
         elif mn == "JSR":
             # ONE WORD onto the stack while S is not at the page's bottom
             slow, j = self.lab(), self.lab()
-            L("    mov bx, [si]", "    inc si",
+            L("    mov bx, [%ssi]" % F, "    inc si",
               "    cmp di, 0x0101", "    jb %s" % slow,
               "    mov [di-1], si", "    sub di, 2",
               "%s: mov si, bx" % j)
@@ -523,16 +606,17 @@ class Gen:
     # --- the shared tails ------------------------------------------------
     def tails(self):
         """name -> lines, each placed in an unused opcode's slot"""
-        P, S = self.scr(S_PV), self.scr
+        P, S, F = self.PV(), self.scr, self.F
+        retn = 8 + 2 * self.p["frame_extra"]
         t = {}
         t["entry"] = [
-            # far-called: AX = cycles, DX = the guest image's segment,
-            # ES = the package's data segment, BX = its machine record
+            # FAR-called, with the doors (and the profile's words) pushed:
+            # AX = cycles, DX = the guest's segment, ES = the package's data
+            # segment, BX = its machine record
             "entry:",
-            "    push bp", "    push si", "    push di", "    push ds", "    push es",
+            "    push bp", "    push si", "    push di", "    push ds",
+            "    push es", "    push bx",                # F+2, F+0
             "    mov ds, dx",
-            "    mov [%s], es" % S(S_PKGDS), "    mov [%s], bx" % S(S_REC),
-            "    mov [%s], sp" % S(S_SPSAVE),
             "    mov bp, ax",
             "    mov word [%s], 0" % S(S_CARRY),
             "    mov si, [es:bx+%d]" % AM_PC,
@@ -544,49 +628,58 @@ class Gen:
             "    mov al, [es:bx+%d]" % AM_A,
             "    call setp",
             "    xor dl, dl",
+            "    push ds", "    pop es",                  # (the Apple II's fetch)
             # an interrupt pending at the top of a run is the accurate core's
-            "    test byte [%s], 0x02" % S(S_IRQ), "    jnz .hb",
+            "    test byte [%s], 0x02" % S(S_IRQ), "    jnz .hbi",
             "    test byte [%s], 0x01" % S(S_IRQ), "    jz .ok",
-            "    test byte [%s], 0x04" % P, "    jz .hb",
+            "    test byte [%s], 0x04" % P, "    jz .hbi",
             ".ok:",
-            "    lea bx, [si+0x%04X]" % ((0x10000 - self.p["ct_lo"]) & 0xFFFF),
-            "    cmp bx, 0x%04X" % ((self.p["io_hi"] << 8) - self.p["ct_lo"]),
-            "    jb .hbr",
-        ] + (["    cmp si, 0xFFFE", "    jae .hbr"] if self.p.get("ct_top", True) else []) + [
             "    cmp bp, 0", "    jle .slice",
-            "    mov dh, [si]", "    inc si", "    jmp dx",
+        ]
+        hb = ".hbr"
+        if self.c64:
+            t["entry"] += self.c64_fes(".hbr")
+        else:
+            lo, hi = self.p["ct_lo"], self.p["io_hi"] << 8
+            t["entry"] += ["    lea bx, [si+0x%04X]" % ((0x10000 - lo) & 0xFFFF),
+                           "    cmp bx, 0x%04X" % (hi - lo), "    jb .hbr"]
+        if self.p["ct_top"]:
+            t["entry"] += ["    cmp si, 0xFFFE", "    jae .hbr"]
+        t["entry"] += self.fetch_op() + [
             ".slice: jmp x_slice",
-            ".hb: jmp x_hb0",
+            ".hbi: jmp x_hbi0",
             ".hbr: jmp x_hbr",
         ]
         t["exits"] = [
             "x_hb1:",                       # SI is past the opcode: rewind it
             "    dec si",
-            "x_hb0:",
-            "    mov byte [%s], %d" % (S(S_RSN), RSN_HB1), "    jmp short x_out",
+            "    mov dl, %d" % RSN_HB1, "    jmp short x_out",
+            "x_hbi:",                       # the interrupt flag's, from a handler
+            "    dec si",
+            "x_hbi0:",                      # ...and from the entry (SI at the opcode)
+            "    mov dl, %d" % RSN_HBI, "    jmp short x_out",
             "x_hbr:",
-            "    mov byte [%s], %d" % (S(S_RSN), RSN_HBR), "    jmp short x_out",
+            "    mov dl, %d" % RSN_HBR, "    jmp short x_out",
             "x_slice:",
-            "    mov byte [%s], %d" % (S(S_RSN), RSN_SLICE),
+            "    mov dl, %d" % RSN_SLICE,
             "x_out:",
             "    add bp, [%s]" % S(S_CARRY),
             "    mov word [%s], 0" % S(S_CARRY),
             "    mov [%s], bp" % S(S_DEAD),
-            "    mov es, [%s]" % S(S_PKGDS),
-            "    mov bx, [%s]" % S(S_REC),
+            "    pop bx",                   # F+0 the record
+            "    pop es",                   # F+2 the package's DS
+            "    xor dh, dh",
+            "    mov [es:bx+%d], dx" % AM_REASON,
             "    mov [es:bx+%d], si" % AM_PC,
             "    mov [es:bx+%d], bp" % AM_CNT,
-            "    xor dh, dh",
             "    mov dl, al", "    mov [es:bx+%d], dx" % AM_A,
             "    mov dl, cl", "    mov [es:bx+%d], dx" % AM_X,
             "    mov dl, ch", "    mov [es:bx+%d], dx" % AM_Y,
             "    mov dx, di", "    and dx, 0x00FF", "    mov [es:bx+%d], dx" % AM_S,
             "    call getp", "    xor dh, dh", "    mov [es:bx+%d], dx" % AM_P,
-            "    mov dl, [%s]" % S(S_RSN), "    mov [es:bx+%d], dx" % AM_REASON,
-            "    mov ax, dx",
-            "    mov sp, [%s]" % S(S_SPSAVE),
-            "    pop es", "    pop ds", "    pop di", "    pop si", "    pop bp",
-            "    retf",
+            "    mov ax, [es:bx+%d]" % AM_REASON,
+            "    pop ds", "    pop di", "    pop si", "    pop bp",
+            "    retf %d" % retn,
         ]
         t["pflags"] = [
             # getp - AH (N,Z,C) and PV (V,B,D,I) -> a 6502 P byte in DL
@@ -599,88 +692,60 @@ class Gen:
             "    or dl, 0x20",
             "    pop ax",
             "    ret",
-            # setp - a 6502 P byte in DL -> AH and PV
+            # setp - a 6502 P byte in DL -> AH and PV's four bits (PV's other
+            # bits are the package's: the C64 keeps its two flags there)
             "setp:",
             "    push dx",
             "    mov ah, dl", "    and ah, 0x81",
             "    and dl, 0x02", "    ror dl, 1", "    ror dl, 1", "    ror dl, 1",
             "    or ah, dl",
             "    pop dx", "    push dx",
-            "    and dl, 0x5C", "    mov [%s], dl" % P,
+            "    and dl, 0x5C",
+            "    and byte [%s], 0xA3" % P, "    or [%s], dl" % P,
             "    pop dx",
             "    ret",
         ]
-        t["io"] = [
-            # rd_io - BX in $C000-$C1FF (DL = this instruction's cycles) -> DH.
-            # $C0xx calls out, with the clock as the accurate core would have
-            # it there; $C1xx is slot space and answers $FF.
-            "rd_io:",
-            "    cmp bh, 0x%02X" % self.p["io_call"], "    jne .ff",
-        ] + ([
-            # THE KEYBOARD LATCH, answered here while a2io.c says it may be
-            # ($C000-$C00F is the latch alone while no paste is in flight)
-            "    cmp bl, 0x10", "    jae .call",
-            "    cmp byte [%s], 0" % S(S_KBOK), "    je .call",
-            "    mov dh, [%s]" % S(S_KBV),
-            "    ret",
-            ".call:",
-        ] if self.p.get("kb_latch") else []) + [
-            "    push ax",
-            "    mov al, dl", "    xor ah, ah",
-            "    mov dx, bp", "    sub dx, ax", "    mov [%s], dx" % S(S_DEAD),
-            "    call far [%s]" % S(S_IORD),
-            "    mov bp, [%s]" % S(S_DEAD), "    add bp, ax",
-            "    pop ax",
-            "    ret",
-            ".ff:",
-            "    mov dh, 0xFF",
-            "    ret",
-            # wr_io - DH to BX at or above $C000: $C0xx calls out, the rest drops
-            "wr_io:",
-            "    cmp bh, 0x%02X" % self.p["io_call"], "    jne .drop",
-            "    push ax",
-            "    push dx",
-            "    mov al, dl", "    xor ah, ah",
-            "    mov dx, bp", "    sub dx, ax", "    mov [%s], dx" % S(S_DEAD),
-            "    pop dx",
-            "    call far [%s]" % S(S_IOWR),
-            "    mov bp, [%s]" % S(S_DEAD), "    add bp, ax",
-            "    pop ax",
-            ".drop:",
-            "    ret",
-        ]
-        t["idle"] = [
-            # kbd_idle - THE AUTOSTART ROM'S KEYIN LOOP, run as a counter:
-            #   $FD1B INC $4E (5) / BNE $FD21 (3, or 2 and INC $4F (5)) /
-            #   $FD21 BIT $C000 (4) / BPL $FD1B (3)
-            # Entered from the BIT at $FD21 with no key in the latch, which
-            # cannot change inside a run (a2io.c's mirror). Whole passes from
-            # that BIT back to it cost 15 cycles, or 19 when $4E wraps, and
-            # change nothing but $4E/$4F and flags the next BIT overwrites -
-            # so they are taken while one fits with a cycle to spare, and the
-            # BIT is then run for real. a2f_image sets IDLEOK only when the
-            # ROM's bytes are these.
-            "kbd_idle:",
-            ".loop:",
-            "    cmp bp, 19", "    jle .out",
-            "    sub bp, 15",
-            "    inc byte [0x004E]", "    jnz .loop",
-            "    sub bp, 4",
-            "    inc byte [0x004F]",
-            "    jmp short .loop",
-            ".out:",
-            "    mov si, 0xFD21",
-            "    mov dh, [si]", "    inc si", "    jmp dx",
-        ]
-        t["vid"] = [
-            # vid_mark - BX was just written on a display page: the page's bit,
-            # "the core wrote something", and the write window when BX is in
-            # the watch range - the accurate core's a2_wr_bx, kept to the
-            # pages the flush reads
-            "vid_mark:",
+        # the far doors, read out of the frame: a tail near-called from a
+        # handler sees F at BP+4 once it has pushed BP
+        # (a tail near-called from a handler pushes BP - the countdown - and
+        # sees it at [bp], its return at [bp+2] and F at [bp+4]: the clock is
+        # read and written there around a call-out, and the doors are F's)
+        door_rd = "    call far [bp+%d]" % (4 + F_IORD)
+        door_wr = "    call far [bp+%d]" % (4 + F_IOWR)
+        if self.c64:
+            t["io"] = self.c64_io()
+        else:
+            t["io"] = self.apple_io(door_rd, door_wr)
+        if self.p.get("kb_latch"):
+            t["idle"] = [
+                # kbd_idle - THE AUTOSTART ROM'S KEYIN LOOP, run as a counter:
+                #   $FD1B INC $4E (5) / BNE $FD21 (3, or 2 and INC $4F (5)) /
+                #   $FD21 BIT $C000 (4) / BPL $FD1B (3)
+                # Entered from the BIT at $FD21 with no key in the latch,
+                # which cannot change inside a run (a2io.c's mirror). Whole
+                # passes from that BIT back to it cost 15 cycles, or 19 when
+                # $4E wraps, and change nothing but $4E/$4F and flags the
+                # next BIT overwrites - so they are taken while one fits with
+                # a cycle to spare, and the BIT is then run for real.
+                # a2f_image arms IDLEOK only when the ROM holds these bytes.
+                "kbd_idle:",
+                ".loop:",
+                "    cmp bp, 19", "    jle .out",
+                "    sub bp, 15",
+                "    inc byte [0x004E]", "    jnz .loop",
+                "    sub bp, 4",
+                "    inc byte [0x004F]",
+                "    jmp short .loop",
+                ".out:",
+                "    mov si, 0xFD21",
+            ] + self.fetch_op()
+        mark = [
+            # the damage mark - BX was just written: the page's bit, "the core
+            # wrote something", and the write window when BX is in the watch
+            # range (the accurate cores' write path, section 7.5 / 9.2)
             "    push bx", "    push dx",
             "    mov dl, bh", "    and dl, 7",
-            "    mov dh, 0x80",                  # a2_dmask: 0x80 >> (page & 7)
+            "    mov dh, 0x80",                  # the mask: 0x80 >> (page & 7)
             "    xchg cl, dl", "    shr dh, cl", "    xchg cl, dl",
             "    mov bl, bh", "    xor bh, bh",
             "    shr bl, 1", "    shr bl, 1", "    shr bl, 1",
@@ -697,24 +762,163 @@ class Gen:
             ".out:",
             "    ret",
         ]
+        t["vid"] = [("c64_mark:" if self.c64 else "vid_mark:")] + mark
         return t
 
+    def apple_io(self, door_rd, door_wr):
+        S = self.scr
+        return [
+            # rd_io - BX in $C000-$C1FF (DL = this instruction's cycles) -> DH.
+            # $C0xx calls out, with the clock as the accurate core would have
+            # it there; $C1xx is slot space and answers $FF.
+            "rd_io:",
+            "    cmp bh, 0x%02X" % self.p["io_call"], "    jne .ff",
+            "    push bp", "    mov bp, sp",
+            "    push ax",
+            "    mov al, dl", "    xor ah, ah",
+            "    mov dx, [bp]", "    sub dx, ax", "    mov [%s], dx" % S(S_DEAD),
+            door_rd,
+            "    push dx",                  # (DH is the answer)
+            "    mov dx, [%s]" % S(S_DEAD), "    add dx, ax", "    mov [bp], dx",
+            "    pop dx",
+            "    pop ax",
+            "    pop bp",
+            "    ret",
+            ".ff:",
+            "    mov dh, 0xFF",
+            "    ret",
+            # wr_io - DH to BX at or above $C000: $C0xx calls out, the rest drops
+            "wr_io:",
+            "    cmp bh, 0x%02X" % self.p["io_call"], "    jne .drop",
+            "    push bp", "    mov bp, sp",
+            "    push ax",
+            "    push dx",
+            "    mov al, dl", "    xor ah, ah",
+            "    mov dx, [bp]", "    sub dx, ax", "    mov [%s], dx" % S(S_DEAD),
+            "    pop dx",
+            door_wr,
+            "    mov dx, [%s]" % S(S_DEAD), "    add dx, ax", "    mov [bp], dx",
+            "    pop ax",
+            "    pop bp",
+            ".drop:",
+            "    ret",
+        ]
+
+    def c64_fes(self, hb):
+        """ES = the fetch segment for a new PC in SI, out of the frame's
+        region words (0 = hand back). Below $A000 it is always RAM - DS - with
+        no table; at $A000 and up the region table, whose entries are WORD
+        indices from page $A0. BP is the countdown, borrowed around the read."""
+        r0, done = self.lab(), self.lab()
+        return ["    mov bx, si",
+                "    cmp bh, 0xA0", "    jb %s" % r0,
+                "    mov bl, bh", "    xor bh, bh",
+                "    mov bl, [cs:bx+c64_region-0xA0]",
+                "    push bp", "    mov bp, sp", "    add bp, bx",
+                "    mov bx, [bp+%d]" % (2 + F_EXTRA),          # (no [bp+bx])
+                "    pop bp",
+                "    test bx, bx", "    jz %s" % hb,
+                "    mov es, bx", "    jmp short %s" % done,
+                "%s: mov bx, ds" % r0, "    mov es, bx",
+                "%s:" % done]
+
+    def c64_io(self):
+        S = self.scr
+        # THE C64'S READS AT $A000 AND UP and WRITES AT $D000 AND UP, by the
+        # bank map the package's c64io.c keeps in MAPA/MAPD/MAPE (C64-SPEC 3.3)
+        return [
+            # rd_hi - BX >= $A000, DL = this instruction's cycles -> DH
+            "rd_hi:",
+            "    cmp bh, 0xC0", "    jb .a",
+            "    cmp bh, 0xD0", "    jb .ram",
+            "    cmp bh, 0xE0", "    jb .d",
+            "    cmp byte [%s], 2" % S(S_MAPE), "    jne .ram",       # KERNAL?
+            "    push es",
+            "    push bp", "    mov bp, sp",
+            "    mov es, [bp+%d]" % (6 + F_EXTRA + 6),                # region 3
+            "    pop bp",
+            "    mov dh, [es:bx]",
+            "    pop es",
+            "    ret",
+            ".a:",
+            "    cmp byte [%s], 1" % S(S_MAPA), "    jne .ram",       # BASIC?
+            "    push es",
+            "    push bp", "    mov bp, sp",
+            "    mov es, [bp+%d]" % (6 + F_EXTRA + 2),                # region 1
+            "    pop bp",
+            "    mov dh, [es:bx]",
+            "    pop es",
+            "    ret",
+            ".ram:",
+            "    mov dh, [bx]",
+            "    ret",
+            ".d:",
+            "    cmp byte [%s], 4" % S(S_MAPD), "    je .io",         # I/O?
+            "    cmp byte [%s], 3" % S(S_MAPD), "    jne .ram",       # CHARGEN?
+            "    push es",
+            "    push bp", "    mov bp, sp",
+            "    mov es, [bp+%d]" % (6 + F_EXTRA + 8),                # the CHARGEN
+            "    pop bp",
+            "    mov dh, [es:bx]",
+            "    pop es",
+            "    ret",
+            ".io:",
+            "    push bp", "    mov bp, sp",
+            "    push ax",
+            "    mov al, dl", "    xor ah, ah",
+            "    mov dx, [bp]", "    sub dx, ax", "    mov [%s], dx" % S(S_DEAD),
+            "    push es",
+            "    call far [bp+%d]" % (4 + F_IORD),
+            "    pop es",
+            "    push dx",                  # (DH is the answer)
+            "    mov dx, [%s]" % S(S_DEAD), "    add dx, ax", "    mov [bp], dx",
+            "    pop dx",
+            "    pop ax",
+            "    pop bp",
+            "    ret",
+            # wr_hi - DH to BX >= $D000: I/O calls out, $FFC0-$FFF9 (the
+            # accurate core's scratch) drops, and the rest is RAM, marked
+            "wr_hi:",
+            "    cmp bh, 0xE0", "    jae .e",
+            "    cmp byte [%s], 4" % S(S_MAPD), "    je .io",
+            ".ram:",
+            "    mov [bx], dh",
+            "    jmp c64_mark",
+            ".e:",
+            "    cmp bx, 0x%04X" % self.p["scr"], "    jb .ram",
+            "    cmp bx, 0x%04X" % (self.p["scr"] + 0x3A), "    jae .ram",
+            "    ret",
+            ".io:",
+            "    push bp", "    mov bp, sp",
+            "    push ax",
+            "    push dx",
+            "    mov al, dl", "    xor ah, ah",
+            "    mov dx, [bp]", "    sub dx, ax", "    mov [%s], dx" % S(S_DEAD),
+            "    pop dx",
+            "    push es",
+            "    call far [bp+%d]" % (4 + F_IOWR),
+            "    pop es",
+            "    mov dx, [%s]" % S(S_DEAD), "    add dx, ax", "    mov [bp], dx",
+            "    pop ax",
+            "    pop bp",
+            "    ret",
+        ]
+
     def emit(self):
-        p = self.p
-        L = self.L
+        p, L = self.p, self.L
         L("; GENERATED by apps/m6502/m65gen.py --machine %s - do not edit" % p["name"],
           "cpu 8086", "bits 16", "org 0",
           "SCR  equ 0x%04X" % p["scr"],
           "SCRD equ 0x%04X - 0x10000" % p["scr"],
           "")
         tails = self.tails()
-        # the slots of opcodes this core hands back hold the shared tails
-        spare = [op for op in range(256) if op not in OPS]
         place = {0x02: "entry", 0x12: "exits", 0x22: "pflags", 0x32: "io",
-                 0x42: "vid", 0x52: "idle"}
-        for op in range(256):
-            if op >= PART_LEN >> 8:
-                break
+                 0x42: "vid", 0x52: "idle", 0x62: "region"}
+        if self.c64:
+            tails["region"] = ["c64_region:"] + [
+                "    db " + ", ".join(str(v) for v in C64_REGION[i:i + 16])
+                for i in range(0xA0, 256, 16)]
+        for op in range(PART_LEN >> 8):
             L("", "; --- $%02X %s" % (op, " ".join(map(str, OPS.get(op, ("hand back",))))),
               "    times 0x%04X-($-$$) db 0xCC" % (op * 256),
               "h_%02X:" % op)
@@ -728,15 +932,15 @@ class Gen:
                 if op == 0x03:              # $FE's body, which $FE00 jumps to
                     L("h_FE:")
                     self.handler(0xFE)
-                if op in place:
+                if place.get(op) in tails:
                     L(*tails[place[op]])
         L("", "    times 0x%04X-($-$$) db 0xCC" % PART_LEN,
           "; ASSERTED: the fixup table and the entry are where the package",
           "; looks for them (a negative TIMES is an assembly error)",
           "    times -((entry - $$ - 0x%04X) * (entry - $$ - 0x%04X)) db 0" % (ENTRY, ENTRY),
           "    times -((h_02 - $$ + 3 - 0x%04X) * (h_02 - $$ + 3 - 0x%04X)) db 0" % (FIXUP, FIXUP))
-        assert set(place.values()) == set(tails), "a tail with no slot"
-        assert all(op in spare for op in place)
+        assert set(tails) <= set(place.values()), "a tail with no slot"
+        assert all(op not in OPS for op in place)
         return "\n".join(self.out) + "\n"
 
 
@@ -759,7 +963,7 @@ def check_cycles(path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="apple2", choices=["apple2"])
+    ap.add_argument("--machine", default="apple2", choices=["apple2", "c64"])
     ap.add_argument("-o", "--out")
     ap.add_argument("--check-cycles")
     a = ap.parse_args()
@@ -767,7 +971,7 @@ def main():
         check_cycles(a.check_cycles)
     if a.out:
         assert len(OPS) == 151, len(OPS)
-        src = Gen(APPLE2).emit()
+        src = Gen(APPLE2 if a.machine == "apple2" else C64).emit()
         with open(a.out, "w") as f:
             f.write(src)
 

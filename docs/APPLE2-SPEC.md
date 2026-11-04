@@ -617,7 +617,17 @@ segment's first `$FE00` bytes: `a2_fast_init` claims 64KB, copies the part in
 (`a2f_core`), writes the `$FE` and `$FF` slots as near jumps to the targets
 the part's table at `$0203` names (INC abs,X's body lives in a spare slot),
 and gives the part back. Both 64KB claims are movable; `os88_onmove` follows
-`a2_fseg`.
+`a2_fcode`. **The far call goes through `a2_fseg` = `OSAPI_MEM_CODESEL` of that
+claim**: the same value on a real-mode kernel, the claim's code half under
+kern_mega, where a far call through the data half is a #GP per transfer.
+
+**The frame.** Nothing the core keeps is in its own segment, which kern_mega
+makes read-only: the machine record, the package's DS and the two I/O doors
+(`a2f_iord`, `a2f_iowr`, far, pushed by `a2fast.inc` before the call and
+dropped by the core's `retf 8`) are on the caller's stack, and the core reads
+them from there. A tail near-called from a handler sees the countdown it
+pushed at `[bp]`, so the clock is synced and restored in place around a
+call-out.
 
 **The registers.** A = AL; N, Z, C in AH in `lahf`'s layout, as above; X = CL;
 Y = CH; PC = SI; S = DI as `$0100+S`; BX the effective address; DH the data;
@@ -662,13 +672,14 @@ opcode this core hands back, so `mov bx,[si]` at `$FFFF` - which faults a 286
 S is not at the stack page's edge.
 
 **What it hands back, and how.** Reason 2 (one instruction): every illegal
-opcode, `BRK`, `ADC`/`SBC` with D set, `CLI`/`SEI`/`PLP`/`RTI` while the
-interrupt byte is non-zero, a read-modify-write at `$C000` and up, `JMP
-($C0xx)`/`($C1xx)`, an interrupt pending at entry, and a fetch of the I/O
-page's `$02`. `a2fast.inc` runs the accurate core with a budget of 1 and
-`CLKB` moved for the step, so `a2_now()` reads the clock the run would have
-had. Reason 3 (the region): a jump, call, return or entry whose PC is in
-`$BFFE-$CFFF` or at `$FFFE` and up. The accurate core runs with `HBK` set
+opcode, `BRK`, `ADC`/`SBC` with D set, a read-modify-write at `$C000` and up,
+`JMP ($C0xx)`/`($C1xx)`, and a fetch of the I/O page's `$02`. `a2fast.inc`
+runs the accurate core with a budget of 1 and `CLKB` moved for the step, so
+`a2_now()` reads the clock the run would have had. Reason 4 (the interrupt flag's): `CLI`, `SEI`, `PLP` or `RTI` while the
+interrupt byte is up, or an interrupt pending at entry - the accurate core
+gets a run of at most 64 cycles, so that its one-instruction delay after
+`CLI`/`PLP` falls inside it. Reason 3 (the region): a jump, call, return or
+entry whose PC is in `$BFFE-$CFFF`. The accurate core runs with `HBK` set
 (`$C13A`) and `a2_rebias_go` ends the run at its first re-bias out of that
 region (`a2_hbk`, `a2_cut`'s own arithmetic). `a2_cut` sets `CUTF` (`$C13B`) so
 a cut ends the wrapper's loop as well.

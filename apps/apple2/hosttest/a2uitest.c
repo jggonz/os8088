@@ -907,6 +907,7 @@ void os88_part_drop(int i) { (void)i; }
 void a2f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
 void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg)
 { (void)newseg; (void)oldseg; (void)romseg; }
+unsigned a2f_codesel(unsigned seg) { return seg; }
 /* os88_mem_movable - the record says so; the harness never compacts. What is
  * checked is WHO declares WHAT, and WHEN (APPLE2-SPEC 3.1.1): the RAM once
  * os88_main has made every claim, Paste's queue once it is filled */

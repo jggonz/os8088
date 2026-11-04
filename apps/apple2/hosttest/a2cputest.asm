@@ -2023,6 +2023,11 @@ same_n:  dw 0
 SEG_LIN equ 0
 SEG_WIN equ 2
 %define OSAPI_SEG hst_seg
+%define OSAPI_MEM_CODESEL hst_codesel   ; ...and OSAPI_MEM_CODESEL's: the
+hst_codesel:                            ; segment itself (a2fast.inc)
+    mov ax, dx
+    clc
+    ret
 hst_seg:
     cmp bl, SEG_LIN
     jne .out

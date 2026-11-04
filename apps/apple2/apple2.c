@@ -182,9 +182,13 @@ unsigned a2_div32(unsigned hi, unsigned lo, unsigned d);
                                              * 8) */
 
 /* --- a2cpu.inc: the core (section 4) -------------------------------------- */
-/* THE FAST CORE (section 4.6): a2_fseg is its 64KB code segment, 0 = the
- * accurate core runs the machine alone. a2fast.inc reads it. */
+/* THE FAST CORE (section 4.6): a2_fcode is its 64KB claim and a2_fseg the
+ * selector a far call reaches it through - the same value on a real-mode
+ * kernel, the claim's code half under kern_mega. a2_fseg 0 = the accurate
+ * core runs the machine alone. a2fast.inc reads it. */
 unsigned a2_fseg;
+static unsigned a2_fcode;
+unsigned a2f_codesel(unsigned seg);
 void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg);
 void a2f_core(unsigned dstseg, unsigned partseg);
 int  a2_run(unsigned cycles);           /* -> A2_RUN_*, and a2_m.cnt is what
@@ -1537,12 +1541,18 @@ static void a2_fast_init(void)
     }
     a2f_core(code, os88_part_seg(A2_FAST_PART));
     os88_part_drop(A2_FAST_PART);
+    if (a2f_codesel(code) == 0) {           /* nothing to far call it by */
+        os88_mem_free(img);
+        os88_mem_free(code);
+        return;
+    }
     a2f_image(img, a2_m.ramseg, a2_m.romseg);
     os88_mem_free(a2_m.ramseg);
     a2_m.ramseg = img;
     os88_mem_movable(img, 1);
-    os88_mem_movable(code, 1);              /* os88_onmove follows a2_fseg */
-    a2_fseg = code;
+    os88_mem_movable(code, 1);              /* os88_onmove follows both */
+    a2_fcode = code;
+    a2_fseg = a2f_codesel(code);
 }
 
 /* a2_slice - one run of the core for the wall budget.
@@ -2417,8 +2427,10 @@ void os88_onmove(unsigned was, unsigned now)
     a2_m.romseg = os88_part_seg(A2_ROM_PART);
     if (a2_m.ramseg == was)
         a2_m.ramseg = now;
-    else if (a2_fseg == was)                /* the fast core's code (4.6) */
-        a2_fseg = now;
+    else if (a2_fcode == was) {             /* the fast core's code (4.6) */
+        a2_fcode = now;
+        a2_fseg = a2f_codesel(now);
+    }
     else if (a2_paste_seg == was)
         a2_paste_seg = now;
 }
