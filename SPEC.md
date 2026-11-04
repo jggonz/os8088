@@ -232683,6 +232683,14 @@ is KNOWN to start, and follows the control flow:
    procedure reached only through a near pointer in data still moves the
    verdict.
 
+A far call or jump (`9A`/`EA`) is followed to the program's own segment it
+names: by a far-pointer relocation on its operand, or by a SELECTOR-ONLY
+relocation (`RA_SEGMENT`) on the segment word, in which case the offset is the
+literal in the code. The machine reads both from the relocated operand and so
+always followed the second; the host did not until Windows 3.1's Media Player
+and Sound Recorder (`9A 70 14 <seg>` in segment 1) disagreed on 1,138 and
+1,108 bytes (WIN16-NEXT-PLAN Q8).
+
 Two instructions end a path besides `ret`/`jmp`: a far call to
 `KERNEL.FatalExit`/`FatalAppExit`, and `int 21h` after `mov ah, 4Ch`.
 

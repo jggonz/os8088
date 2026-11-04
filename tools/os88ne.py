@@ -779,6 +779,13 @@ def census(ne):
                         r = ne.resolve(at_tgt[1])
                         if r:
                             seed(*r)
+                    elif at_tgt is None:
+                        # a selector-only relocation (RA_SEGMENT) on the
+                        # segment word: the offset is the literal in the code
+                        sel = c.seg.site.get(ins.far + 2)
+                        if (sel and sel[0] == RA_SEGMENT and sel[1][0] == "internal"
+                                and sel[1][1] != 0xFF):
+                            seed(sel[1][1], struct.unpack_from("<H", code, ins.far)[0])
                     elif at_tgt and at_tgt[1][0] == "import":
                         _, mod, o = at_tgt[1]
                         key = (mod.upper(), o.upper() if isinstance(o, str) else o)
