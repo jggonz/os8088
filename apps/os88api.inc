@@ -2298,7 +2298,9 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          50.6.11, 124.31.3). CF=1 on a
                                  ;          real-mode kernel
                                  ; SEG_TYPE DX = a WINDOW of yours (SEG_WIN,
-                                 ;          SEG_WINL, SEG_AT), CX = 0 data
+                                 ;          SEG_WINL, SEG_AT) or a HANDLE
+                                 ;          descriptor (SEG_HND) in a block
+                                 ;          of yours, CX = 0 data
                                  ;          or 1 code -> the descriptor's
                                  ;          type set in place, base, limit
                                  ;          and selector kept (SPEC.md

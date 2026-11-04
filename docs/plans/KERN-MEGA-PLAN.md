@@ -13748,11 +13748,18 @@ build ASTEROID starts: Quick Help, the Asteroids window, and the attract
 mode playing; F2 then gives its own "Application Error: Error code = -1.
 Continue?" box (the next thing to chase; not a fault, WIN16 is not closed).
 
-*The owner test* is `SEG_FREE`'s (14.135): the caller's `mega_segown` byte
-against the window's `mega_wtab` row. A selector with no row (a block's, a
-SUB, a pair, a handle descriptor) is not a window and is refused with AX = 4;
-it is shared or tied to a block, and retyping it would change it for
-everyone. `mega_wfind` skips a code window so a data question over the same
+*The owner test* is `SEG_FREE`'s (14.135) for a window: the caller's
+`mega_segown` byte against the window's `mega_wtab` row. A selector with no
+row is a handle descriptor of a block of the caller's own (`mega_bown`, as
+above) or it is refused with AX = 4: a block's own selector, a SUB, a pair and
+a tile are shared or tied to a block, and retyping one would change it for
+everyone. DX must first be an allocator LDT entry (TI set, at or above
+`MEGA_LDT_FREE0`, below `mega_ldte`, as `mega_segh` bounds its own DX) and the
+caller somebody (`mega_segown` not FFh). Without that bound, found in review,
+DX = 0 matched a FREE row of `mega_wtab` - a free row's selector word is 0 and
+its owner byte is left from its last holder - and retyped entry 0, the GDT's
+under the allocator's range; and a DX past the LDT read beyond the alias, a
+#GP inside the kernel. `.cold` +23 for it. `mega_wfind` skips a code window so a data question over the same
 base and reach (`SEG_WIN`, a non-block `SEG_SUB`) does not answer it.
 
 *Coherence* (the question asked): a WINDOW does not follow a block that

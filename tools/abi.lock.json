@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "c9eb3c2e71af6e5b8a5fe2ad0384fc7e237fbb406499a2b2d98c8c47ba0968f0",
+  "fingerprint": "7cc433063010f456ecdeb7138fa66091d96f92b434e12c5fe25d6c62e6254858",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "96f9c23b13730deb03010bef500010bb44ec962465de220e038ce002a5dcc918",
+  "fingerprint": "d373cf366d9b17abe348a0881bb075f524c7f047e03707356a0376fa7ca5c668",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1708,6 +1708,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "OSAPI_SEG gains SEG_TYPE (13), additive: a window's code/data retype (KERN-MEGA-PLAN 14.142)",
+   "to": 12
+  },
+  {
+   "fingerprint": "d373cf366d9b17abe348a0881bb075f524c7f047e03707356a0376fa7ca5c668",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SEG_TYPE's comment names the handle descriptor it already took (14.142 review): a contract clarified, no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "7cc433063010f456ecdeb7138fa66091d96f92b434e12c5fe25d6c62e6254858",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "SEG_TYPE's comment names the handle descriptor it already took (14.142 review): a contract clarified, no bump",
    "to": 12
   }
  ]
