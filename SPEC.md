@@ -236960,15 +236960,29 @@ Windows 3.1 gave it (`CS_DBLCLKS` for `BUTTON`, `EDIT`, `LISTBOX` and
 `cbClsExtra` and `cbWndExtra` 0 (WIN16's controls keep their state in the
 record, not in window words), `hInstance` DGROUP's, `hIcon` and `hCursor` 0,
 `hbrBackground` `COLOR_WINDOW + 1`, `lpszMenuName` NULL, `lpszClassName` as
-asked. A superclass that adds `cbWndExtra` words of its own gets them at
-offset 0, which is where Windows gave a program the words after the control's
-own six, so a program that reads its words by `GetClassInfo`'s count is
-right; one that assumed Windows' count is not (open).
+asked. A superclass adds its own `cbWndExtra` words after the base class's, so with
+0 they start at offset 0 and WIN16's controls never touch them; a program that
+assumed Windows' own count for a control is wrong (open, none seen).
 
 **What it costs.** Resident: no byte on either arm. The bind table's fixed rows
 take seven of the 384 slots (the largest import list measured is 270), the
 handler and the `GetClassInfo` arm are in parts, and the fixed row table is in
-the loader part. Part bytes: see the diary.
+the loader part. Part bytes (kern_mega arm): the library part (dialog part) 64,717 to
+64,782 (+65, the handler), the system-library part 39,091 to 39,258 (+167, the
+`GetClassInfo` arm), the loader part 17,072 to 17,100 (+28, seven fixed rows).
+Image + bss of `win16.o88`: 37,887 + 26,706 before and after.
+
+**What it did not cure (seen 2026-11-04, kern_mega, Mozart).** `GetClassInfo`
+and `RegisterClass` now succeed for VBRUN300's superclasses, which fill the
+class table: `W16_MAXCLS` is 12, and VB registers `ThunderRTMain`,
+`PictureBox`, `TextBox`, `Frame`, `CommandButton`, `CheckBox`, `OptionButton`,
+`ComboBox`, `ListBox`, `HScrollBar`, `VScrollBar` and `Timer` before the
+13th, `ThunderPrinter`, is refused and VB ends with *Unexpected error;
+quitting*. With 17 it gets to `ThunderDriveList` and stops at the next. VB 3
+has about 26 classes, so the table needs about 32 records, 33 bytes each
+(`W16C_SIZE` and `w16_ctask`), 660 resident bytes against 458 of room and a
+60-byte allowance: an owner decision (a heap claim for the table is the
+way that costs none).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
