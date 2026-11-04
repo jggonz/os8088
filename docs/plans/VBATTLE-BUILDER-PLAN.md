@@ -350,7 +350,10 @@ any of the builder's (section 7's order moves). Its contents:
 ### 10.5 The waves, again
 
 0. **Clip streaming**, in the engine and the bundle (10.1). The demo grows a
-   clip far larger than memory to prove it.
+   clip far larger than memory to prove it. **DONE 2026-11-04** (SPEC.md
+   125, format version 3): two 48 KB clip rings, each record's sound, per
+   clip anchors, the openings chained, the music joining at an offset. The
+   234 KB Limit streamed in real time on MartyPC's XT with 0 late frames.
 1. **The model and the command line**:
    - `vbtproj`, `vbtana`, `os88vbt build PROJECT`;
    - the demo re-expressed as a project;

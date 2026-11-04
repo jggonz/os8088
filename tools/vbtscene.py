@@ -507,37 +507,113 @@ def clip_defeat():
     return fr, cues
 
 
-def clip_intro():
-    """320 x 200: the title over black, the scene wiping in from the top;
-    the last frame is idle frame 0 with the band rows black"""
+def clip_title():
+    """OPENING 1, 320 x 200 and played whole with its own sound: the title
+    over drifting stars, then the screen goes black"""
     fr = []
-    base = scene(0)
-    for i in range(30):
+    for i in range(40):
         c = Canvas(FULL_H)
-        # stars drifting down
         rng = np.random.RandomState(11)
         for _ in range(60):
             x, y = rng.randint(0, W), rng.randint(0, FULL_H)
             c.a[(y + i * 2) % FULL_H, x] = CYAN
         t = min(1.0, i / 10)
         y = int(30 + 40 * (1 - ease(t)))
-        c.text((54, y), "VIDEO BATTLE", WHITE, scale=3)
-        if i > 12:
+        if i < 36:
+            c.text((54, y), "VIDEO BATTLE", WHITE, scale=3)
+        if 12 < i < 36:
             c.text((92, y + 44), "an os8088 demo", CYAN, scale=1)
-            c.text((96, y + 58), "press any key", RED if i % 4 < 2 else BLACK)
-        fr.append(c.a)
-    for i in range(10):                        # the wipe
-        c = Canvas(FULL_H)
-        rows = int(H * (i + 1) / 10)
-        c.a[:rows] = base[:rows]
         fr.append(c.a)
     return fr, {}
+
+
+def clip_reveal():
+    """THE SCENE OPENING: the battle wipes in from the top while the menu is
+    already up; its last frame is idle frame 0, and the music comes in"""
+    fr = []
+    base = scene(0)
+    for i in range(14):
+        c = Canvas()
+        rows = int(H * min(1.0, (i + 1) / 12))
+        c.a[:rows] = base[:rows]
+        fr.append(c.a)
+    for i in range(4):
+        fr.append(base.copy())
+    return fr, {}
+
+
+def ring_overlay(cx, cy, r, colour, width=3):
+    def ov(c):
+        for k in range(width):
+            c.ellipse((cx - r - k, cy - r * 0.6 - k, cx + r + k, cy + r * 0.6 + k),
+                      colour, None)
+    return ov
+
+
+def clip_ari_limit():
+    """ARI'S LIMIT: nine seconds of a lot moving - a leap, twelve slashes,
+    rings of light over the whole field, the beetle thrown about. It is
+    there to be far bigger than memory, so the engine has to STREAM it"""
+    fr, cues = [], {}
+    tx, ty = BEETLE_XY[0] + 70, BEETLE_XY[1] - 6
+    n_up, n_cuts, n_rings, n_down = 14, 48, 40, 14
+    for i in range(n_up):                       # the leap
+        u = ease((i + 1) / n_up)
+        fr.append(scene(i * 0.4, ari=dict(x=ARI_XY[0] + (tx + 30 - ARI_XY[0]) * u,
+                                          y=ARI_XY[1] - 60 * math.sin(math.pi * u * 0.9),
+                                          pose="raise")))
+    cues[2] = "limit_rise"
+    rng = np.random.RandomState(4)
+    for i in range(n_cuts):                     # twelve slashes, four frames each
+        k = i // 4
+        a0 = rng.uniform(0, math.pi)
+
+        def ov(c, i=i, k=k, a0=a0):
+            if i % 4 in (0, 1, 2):
+                r = 70
+                c.line([(tx + math.cos(a0) * r, ty + math.sin(a0) * r * 0.6),
+                        (tx - math.cos(a0) * r, ty - math.sin(a0) * r * 0.6)],
+                       WHITE, 3)
+                c.line([(tx + math.cos(a0) * r, ty + math.sin(a0) * r * 0.6 + 2),
+                        (tx - math.cos(a0) * r, ty - math.sin(a0) * r * 0.6 + 2)],
+                       CYAN, 1)
+            if i % 4 == 1:
+                spark(c, tx, ty, 22 + (k % 3) * 6)
+        sx = tx + 40 + 20 * math.sin(i * 0.7)
+        sy = ARI_XY[1] - 30 + 16 * math.cos(i * 0.9)
+        fr.append(scene(i * 0.5, beetle_kw=dict(hurt=(6 if i % 2 else -6),
+                                                flash=i % 4 == 1),
+                        ari=dict(x=sx, y=sy, pose="slash" if i % 2 else "raise"),
+                        overlay=ov))
+        if i % 8 == 1:
+            cues[n_up + i] = "slash"
+    for i in range(n_rings):                    # the rings
+        def ov(c, i=i):
+            for j in range(4):
+                r = (i * 6 + j * 40) % 180
+                if r > 4:
+                    ring_overlay(tx, ty, r, (WHITE, CYAN, RED, WHITE)[j], 2)(c)
+            if i < 24:
+                spark(c, tx, ty, 10 + (i % 6) * 5, WHITE)
+        fr.append(scene(i * 0.6, beetle_kw=dict(hurt=(5 if i % 2 else -5),
+                                                flash=i % 3 == 0, y=BEETLE_XY[1] - 10 * math.sin(i * 0.3)),
+                        ari=dict(x=tx + 40, y=ARI_XY[1] - 40, pose="raise"),
+                        overlay=ov))
+    cues[n_up + n_cuts] = "limit_burst"
+    for i in range(n_down):                     # home
+        u = ease((i + 1) / n_down)
+        fr.append(scene(0, ari=dict(x=tx + 40 + (ARI_XY[0] - tx - 40) * u,
+                                    y=ARI_XY[1] - 40 * (1 - u),
+                                    pose="run" if i < n_down - 1 else "stand")))
+    fr.append(scene(0))
+    return fr, cues
 
 
 CLIPS = [
     # name, maker, joins back to the idle loop
     ("ari_attack", clip_ari_attack, True),
     ("ari_bolt", clip_ari_bolt, True),
+    ("ari_limit", clip_ari_limit, True),
     ("bram_attack", clip_bram_attack, True),
     ("bram_heal", clip_bram_heal, True),
     ("beetle_attack", clip_beetle_attack, True),
@@ -650,6 +726,40 @@ def sfx(name):
         t = np.arange(n) / RATE
         x = x * 0.7 + 0.5 * np.sign(np.sin(2 * np.pi * 90 * t))
         return x * np.exp(-t * 7)
+    if name == "limit_rise":               # a rising sweep under the leap
+        n = int(RATE * 1.0)
+        t = np.arange(n) / RATE
+        ph = np.cumsum(2 * np.pi * (200 + 900 * t) / RATE)
+        return np.sign(np.sin(ph)) * np.linspace(0.2, 0.8, n) * np.linspace(1, 0.3, n)
+    if name == "limit_burst":              # the rings: a long noisy roar
+        n = int(RATE * 2.2)
+        x = rng.uniform(-1, 1, n)
+        y = np.zeros(n); acc = 0.0
+        for i in range(n):
+            acc += (x[i] - acc) * 0.15
+            y[i] = acc
+        y /= max(1e-9, np.abs(y).max())
+        t = np.arange(n) / RATE
+        return y * np.exp(-t * 1.2) * (0.7 + 0.3 * np.sin(2 * np.pi * 7 * t))
+    if name == "fanfare":                  # opening 1's own sound
+        notes = [(57, 0.18), (61, 0.18), (64, 0.18), (69, 0.6), (64, 0.18),
+                 (69, 1.0)]
+        out = []
+        for m, d in notes:
+            n = int(RATE * d)
+            t = np.arange(n) / RATE
+            f = 440.0 * 2 ** ((m - 69) / 12)
+            w = 0.6 * np.sign(np.sin(2 * np.pi * f * t)) + \
+                0.3 * np.sign(np.sin(2 * np.pi * f * 1.5 * t))
+            out.append(w * _env(n, 0.005, 0.06))
+        out.append(np.zeros(int(RATE * 0.6)))
+        return np.concatenate(out) * 0.8
+    if name == "riser":                    # the scene opening's own sound
+        n = int(RATE * 1.2)
+        t = np.arange(n) / RATE
+        roll = np.where((t * 16) % 1.0 < 0.3, 1.0, 0.0) * rng.uniform(-1, 1, n)
+        ph = np.cumsum(2 * np.pi * (110 + 110 * t / t[-1]) / RATE)
+        return (0.5 * roll + 0.4 * np.sign(np.sin(ph))) * np.linspace(0.3, 1, n)
     if name == "tick":                      # the menu's cursor: a blip
         n = int(RATE * 0.035)
         t = np.arange(n) / RATE
@@ -668,7 +778,8 @@ def sfx(name):
     raise KeyError(name)
 
 
-SFX = ["slash", "zap", "shot", "boom", "chime", "crash"]
+SFX = ["slash", "zap", "shot", "boom", "chime", "crash", "limit_rise",
+       "limit_burst", "fanfare", "riser"]
 UI_SFX = ["tick", "ok", "deny"]
 
 

@@ -373,6 +373,11 @@ evidence names the machine.
   49.8 s of frames, never dry, the effects at the hits.*
 - [x] **The selection is the band's.** The member whose turn it is is
   drawn inverse in the band, so no clip carries a marker.
+- [x] **Clips of any length stream** (format version 3, 2026-11-04): two
+  48 KB rings; each record carries its frame's sound; the openings play in
+  turn and the music joins after them. *MartyPC `os8088_xt_hdd_sb`: a
+  234 KB clip in real time, a battle with 0 late frames, 0 stalls and the
+  music in exactly where the openings end.*
 - [ ] **Captured footage.** An importer that takes the DECODED screens of
   lossy V88 clips and makes exact records between them (SPEC.md 125.2.3).
 - [x] **Music streamed from disk** (2026-11-04): a 32 KB ring refilled 4 KB

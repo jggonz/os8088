@@ -111,6 +111,44 @@ Discoveries:
   median little, because the read a key waits for is usually one already
   started.
 
+## The third wave: clips stream (2026-11-04)
+
+The owner, on reading the builder's design: streaming is core, so it comes
+before the builder. With it came openings with their own sound, the music
+joining after them, and the band's and video's sizes as the project's.
+
+Decisions:
+- **Format version 3**: a clip is a stream of any length, and each record
+  carries its frame's sound. An action's effects are mixed into its sound
+  by the builder, so the engine's effect queue went. The openings are clips
+  of their own kind, chained exactly by seams from a black screen.
+- **Two 48 KB clip rings with 16 KB guards.** The guard holds a copy of
+  the ring's first 16 KB, so a record that starts near the end is whole
+  where it lies, and records are capped at 16 KB.
+- **Sound and picture are two cursors on one ring.** The sound runs ahead
+  by the card's lead, so the ring keeps what is past the earlier one.
+
+Discoveries:
+- **Every read was a seek.** One file cursor served the music and the
+  clips, so each read walked the file's chain from its start. A 279 KB clip
+  600 KB into the bundle took 36 s to play its 7.8. Each stream got its own
+  cursor; the battle's length halved at once.
+- **An off-by-one in the openings' order** left the second opening unread
+  until its sound was due. The stalls it caused looked like disk throughput
+  until a frame-by-frame log showed them starting exactly at the join.
+- **The disk's kind decides the rate a clip may have.** With the bugs gone,
+  the first Limit (34.6 KB/s plus 11 for the music) still could not be fed
+  by MartyPC's XT-IDE, whose CPU copies every byte while it also decodes.
+  Its sky flashes, 7 KB a frame, were the weight; without them the clip is
+  29 KB/s and plays in real time. A DMA disk is another matter, and the
+  builder will budget each clip against the profile's disk.
+
+| MartyPC `os8088_xt_hdd_sb`, C: | |
+|---|---|
+| the Limit, 234 KB | 7.58 s captured for 7.8 s |
+| a battle to victory | 0 late frames, 0 stalls, 0 sound frames late, 0 music underruns |
+| the music's join | at 3.903 s, the openings' end, correlation 0.97 |
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

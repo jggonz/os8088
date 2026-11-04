@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """os88vbt - the host half of Video Battle (SPEC.md 125): a .VBT bundle.
 
-A battle played as joined video clips. The bundle holds an idle loop, a
-set of action clips (each carrying the sound effects only it uses), the
-menu's own sounds, the music and a battle script, laid out for the engine
+A battle played as joined video clips. The bundle holds the openings, an
+idle loop, a set of action clips (each a stream of frames carrying its own
+sound), the menu's own sounds, the music and a battle script, laid out for the engine
 (apps/vbattle/). Every frame is a record of the Video Player's ten lists
 (SPEC.md 98.1.3, os88vid.to_lists), decoded by apps/video/vdec.inc. Every
 JOIN is exact by construction: the records are made between the screens
@@ -20,13 +20,14 @@ Commands:
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
 
-Format version 2 (SPEC.md 125.2), little-endian:
+Format version 3 (SPEC.md 125.2), little-endian:
     0             the header
     512           the clip table, 48 bytes a clip
     2048          the battle script
-    then, each on 4 KB: the VIDEO RESIDENT block, the MUSIC (streamed by
-                  the engine), the MENU's effects (resident), and each
-                  clip's region - its own effects, then its records
+    then, each on 4 KB: the VIDEO RESIDENT block (the idle loop, every
+                  clip's entries), the MUSIC (streamed), the MENU's effects
+                  (resident), and each clip's STREAM - its records, each
+                  carrying its frame's sound; any length, streamed
 """
 
 import argparse
@@ -40,14 +41,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 2
+VERSION = 3
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
                     # floppy and a FAT16 hard disk to 128 MB
-REGION_MAX = 60 * 1024  # a region is read into one claim's piece, in one
-                    # capacity word, rounded up to ALIGN
+REGION_MAX = 60 * 1024  # a RESIDENT region is read into one claim's piece
+REC_MAX = 16384     # a record is read contiguously out of a clip's ring, so
+                    # it is at most the ring's guard (VB_CGUARD, 125.4)
 MAX_CLIPS = 32
+MAX_OPEN = 8
+MAX_ANCH = 16
 CLIP_TAB = 512
 CLIP_SZ = 48
 SCRIPT_AT = 2048
@@ -58,8 +62,10 @@ MUSIC_RES = 61440   # music this short the engine holds resident (VB_MRES)
 
 # clip flags
 CF_JOINS = 1        # the last record is a seam onto idle frame EXIT
-CF_FULL = 2         # a full screen clip (the intro): 200 rows
+CF_FULL = 2         # its records address the whole screen (an opening)
 CF_ENDS = 4         # the battle ends on it; its last frame is held
+CF_OWNSND = 8       # its sound is played INSTEAD of the music (an opening)
+CF_OPENING = 16     # one of the openings, played in turn before the battle
 
 NO_SFX = 0xFF
 
@@ -67,10 +73,11 @@ NO_SFX = 0xFF
 K_HIT = 0           # damage the enemy
 K_HEAL = 1          # heal the whole party
 
-# the menu's sounds, header bytes 24..26 (125.2.1)
-UI_SOUNDS = ("tick", "ok", "deny")
+# the menu's sounds, header bytes 24..28 (125.2.1)
+UI_SOUNDS = ("move", "open", "close", "take", "deny")
 
 ROWS_FULL = 200
+REC_HDR = 4         # a record: its length (all of it), its sound's length
 
 
 def pad(b, n=SECTOR):
@@ -89,6 +96,15 @@ def surface_of(px, rows):
     return s
 
 
+def full_of(px):
+    """A frame of the canvas's rows as a whole screen: the rows under it
+    (the band's) black"""
+    if px.shape[0] == ROWS_FULL:
+        return px
+    return np.vstack([px, np.zeros((ROWS_FULL - px.shape[0], px.shape[1]),
+                                   np.uint8)])
+
+
 GEOMS = {}
 
 
@@ -98,21 +114,27 @@ def geom(rows):
     return GEOMS[rows]
 
 
-def rec(a, b, rows):
-    """The record that takes surface a to surface b: a length word, then
-    the ten lists (SPEC.md 98.1.3)"""
-    ops = V.seam_ops(a, b, geom(rows))
-    lists = V.to_lists(ops)[0]
-    if len(lists) + 2 > 65000:
-        raise ValueError("a record of %d bytes" % len(lists))
-    return struct.pack("<H", len(lists) + 2) + lists
+def rec(a, b, rows, audio=b""):
+    """The record that takes surface a to surface b, with its frame's sound:
+    its length (all of it), the sound's length, the ten lists (SPEC.md
+    98.1.3), the sound (125.2.3)"""
+    lists = V.to_lists(V.seam_ops(a, b, geom(rows)))[0] if a is not None \
+        else EMPTY_LISTS
+    n = REC_HDR + len(lists) + len(audio)
+    if n > REC_MAX:
+        raise ValueError("a record of %d bytes, over %d" % (n, REC_MAX))
+    return struct.pack("<HH", n, len(audio)) + lists + audio
+
+
+EMPTY_LISTS = bytes(V.NLISTS)       # ten empty lists: a frame of sound only
 
 
 def decode(surf, r):
-    n = struct.unpack_from("<H", r, 0)[0]
-    used = V.decode_lists(surf, r[2:n])
-    if used != n - 2:
-        raise ValueError("a record's lists end at %d of %d" % (used, n - 2))
+    n, alen = struct.unpack_from("<HH", r, 0)
+    used = V.decode_lists(surf, r[REC_HDR:n - alen])
+    if used != n - alen - REC_HDR:
+        raise ValueError("a record's lists end at %d of %d"
+                         % (used, n - alen - REC_HDR))
 
 
 def music_bytes(x):
@@ -126,88 +148,133 @@ def sfx_bytes(x):
     return np.clip(np.round(x * 63.5), -64, 63).astype(np.int8).tobytes()
 
 
+def own_bytes(x):
+    """A clip's OWN sound, played instead of the music: unsigned, 0..255"""
+    return np.clip(np.round(x * 127 + 128), 0, 255).astype(np.uint8).tobytes()
+
+
+def frame_sound(track, nframes, spf, own):
+    """A clip's sound cut a frame each: bytes, or b"" for a silent frame
+    (125.2.3: a frame with no sound carries none)"""
+    out = []
+    for f in range(nframes):
+        x = track[f * spf:(f + 1) * spf] if track is not None else []
+        if len(x) == 0 or not np.any(np.abs(x) > 1.0 / 128):
+            out.append(b"")
+            continue
+        if len(x) < spf:
+            x = np.concatenate([x, np.zeros(spf - len(x))])
+        out.append(own_bytes(x) if own else sfx_bytes(x))
+    return out
+
+
+def place(effects, nframes, spf, sfx):
+    """An action's sound: its effects placed at their frames, mixed"""
+    if not effects:
+        return None
+    t = np.zeros(nframes * spf)
+    for f, name in effects.items():
+        x = sfx[name]
+        a = f * spf
+        n = min(len(x), len(t) - a)
+        if n > 0:
+            t[a:a + n] += x[:n]
+    return t
+
+
 class Battle:
     """What a bundle is made of, in host terms"""
 
     def __init__(self, cgapal, rows, fps, rate):
         self.cgapal, self.rows, self.fps, self.rate = cgapal, rows, fps, rate
         self.idle = []          # pixel frames
-        self.anchors = []       # idle frame numbers an action may start at
+        self.anchors = []       # the idle frames a clip may start at, unless
+                                # it names its own
+        self.openings = []      # dicts: name, frames, sound (float), full
+        self.music_at = 0       # the sample the music comes in at
         self.clips = []         # dicts: name, frames, cues {frame: sfx name},
-                                # joins, exit, full, ends
+                                # joins, exit, ends, anchors
         self.music = None       # float array, -1..1
         self.sfx = {}           # name -> float array: every effect
-        self.ui = {}            # 'tick'/'ok'/'deny' -> an effect's name
+        self.ui = {}            # a UI_SOUNDS name -> an effect's name
+        self.band = (0, 142, 40, 58)    # cells across, rows down, cells, rows
+        self.canvas = (0, 0, 320, 142)  # pixels
         self.script = None      # dict
 
 
 def build(b):
     rows = b.rows
+    spf = b.rate // b.fps
     idle_s = [surface_of(f, rows) for f in b.idle]
     n = len(idle_s)
     if n < 2:
         raise ValueError("an idle loop of %d frames" % n)
-    # --- the video resident block: the idle loop's records, then entries
+    # --- the video resident block: the idle loop's records, the entries
     vres = bytearray()
     idle_off = []
     for i in range(n):
         idle_off.append(len(vres))
         vres += rec(idle_s[i - 1], idle_s[i], rows)
-    clip_rows = []
-    regions = []
+    clip_rows, regions = [], []
+    maxrec = [0]
+
+    def stream(recs):
+        maxrec[0] = max([maxrec[0]] + [len(r) for r in recs])
+        return b"".join(recs)
+
+    # --- the openings, in turn from a black screen: every record over the
+    # whole screen, a canvas frame with the band's rows black under it
+    scr = np.zeros((ROWS_FULL, 320), np.uint8)
+    for k, o in enumerate(b.openings):
+        last = k == len(b.openings) - 1
+        fr = [full_of(f) for f in o["frames"]]
+        snd = frame_sound(o.get("sound"), len(fr), spf, True)
+        prev = surface_of(scr, ROWS_FULL)
+        recs = []
+        for f, a in zip(fr, snd):
+            cur = surface_of(f, ROWS_FULL)
+            recs.append(rec(prev, cur, ROWS_FULL, a))
+            prev = cur
+        flags = CF_OPENING | CF_FULL | CF_OWNSND
+        exit_to = 0
+        if last:            # the scene opening seams onto the idle loop
+            flags |= CF_JOINS
+            exit_to = o.get("exit", 0)
+            recs.append(rec(prev, surface_of(full_of(b.idle[exit_to]),
+                                             ROWS_FULL), ROWS_FULL))
+        scr = fr[-1]
+        regions.append(stream(recs))
+        clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
+                              exit=exit_to, anch=[]))
+    # --- the actions: an entry from each anchor; record 0 is frame 0's
+    # sound alone (the entry drew its picture); the last record the seam
     for c in b.clips:
-        full = c.get("full", False)
-        crow = ROWS_FULL if full else rows
-        fs = [surface_of(f, crow) for f in c["frames"]]
-        ent = []
-        if not full:
-            for k in b.anchors:
-                ent.append(len(vres))
-                vres += rec(idle_s[k], fs[0], rows)
-        # the clip's own effects first, so they are in memory before any of
-        # its records - a clip may start before it is all read (125.4)
-        cues = sorted(c.get("cues", {}).items())[:2]
-        effs, where = bytearray(), {}
-        for _, name in cues:
-            if name not in where:
-                d = sfx_bytes(b.sfx[name])
-                where[name] = (len(effs), len(d))
-                effs += d
-        rec_at = len(effs)
-        body = bytearray(effs)
-        prev = bytearray(65536) if full else fs[0]
-        nrec = 0
-        if full:                        # (its frame 0 too: it starts on black)
-            body += rec(prev, fs[0], crow)
-            prev = fs[0]
-            nrec = 1
-        for f in fs[1:]:                # (an action's frame 0 is its entry's)
-            body += rec(prev, f, crow)
-            prev = f
-            nrec += 1
+        fs = [surface_of(f, rows) for f in c["frames"]]
+        anch = []
+        for k in c.get("anchors", b.anchors):
+            anch.append((k, len(vres)))
+            vres += rec(idle_s[k], fs[0], rows)
+        snd = frame_sound(place(c.get("cues", {}), len(fs), spf, b.sfx),
+                          len(fs), spf, False)
+        recs = [rec(None, None, rows, snd[0])]
+        for i in range(1, len(fs)):
+            recs.append(rec(fs[i - 1], fs[i], rows, snd[i]))
         exit_to = c.get("exit", 0)
+        flags = CF_ENDS if c.get("ends") else 0
         if c.get("joins"):
-            # the exit seam: the last frame's screen onto idle frame EXIT.
-            # The intro seams onto it with the band's rows black - its own
-            # last frame holds them black
-            tgt = idle_s[exit_to] if not full else surface_of(
-                np.vstack([b.idle[exit_to],
-                           np.zeros((ROWS_FULL - rows, 320), np.uint8)]),
-                ROWS_FULL)
-            body += rec(prev, tgt, crow)
-            nrec += 1
-        if len(body) > REGION_MAX:
-            raise ValueError("clip %s is %d bytes, over %d"
-                             % (c["name"], len(body), REGION_MAX))
-        regions.append(bytes(body))
-        clip_rows.append(dict(c, nrec=nrec, entries=ent, exit=exit_to,
-                              rec_at=rec_at,
-                              cueat=[(f, where[nm]) for f, nm in cues]))
-    ent_tab = {}
-    for i, c in enumerate(clip_rows):
-        if c["entries"]:
-            ent_tab[i] = len(vres)
-            vres += struct.pack("<%dH" % len(c["entries"]), *c["entries"])
+            flags |= CF_JOINS
+            recs.append(rec(fs[-1], idle_s[exit_to], rows))
+        regions.append(stream(recs))
+        clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
+                              exit=exit_to, anch=anch))
+    if len(clip_rows) > MAX_CLIPS:
+        raise ValueError("%d clips" % len(clip_rows))
+    for c in clip_rows:
+        if len(c["anch"]) > MAX_ANCH:
+            raise ValueError("clip %s: %d anchors" % (c["name"], len(c["anch"])))
+        c["anchtab"] = len(vres) if c["anch"] else 0
+        for k, o in c["anch"]:
+            vres += struct.pack("<HH", k, o)
     idle_tab = len(vres)
     vres += struct.pack("<%dH" % n, *idle_off)
     if len(vres) > REGION_MAX:
@@ -218,6 +285,8 @@ def build(b):
     mus = music_bytes(b.music)
     if not ALIGN <= len(mus) <= MUSIC_MAX:
         raise ValueError("music of %d bytes" % len(mus))
+    if not 0 <= b.music_at < len(mus):
+        raise ValueError("the music's join at %d of %d" % (b.music_at, len(mus)))
     uib, ui_tab, ui_ids = bytearray(), [], []
     for k in UI_SOUNDS:
         nm = b.ui.get(k)
@@ -247,40 +316,37 @@ def build(b):
 
     h = bytearray(SECTOR)
     struct.pack_into("<4sHHBBHHHHHHH", h, 0, MAGIC, VERSION, SECTOR,
-                     b.cgapal, rows, b.fps, b.rate, b.rate // b.fps,
-                     len(clip_rows), n, len(b.anchors), len(ui_tab))
-    h[24:27] = bytes(ui_ids)
+                     b.cgapal, rows, b.fps, b.rate, spf, len(clip_rows), n,
+                     len(b.openings), len(ui_tab))
+    h[24:29] = bytes(ui_ids)
     struct.pack_into("<IH", h, 30, vres_at, len(vres))
     struct.pack_into("<II", h, 36, mus_at, len(pad(mus, ALIGN)))
     struct.pack_into("<I", h, 44, len(mus))
-    struct.pack_into("<H", h, 50, idle_tab)
+    struct.pack_into("<I", h, 48, b.music_at)
     struct.pack_into("<I", h, 52, total)
     struct.pack_into("<IH", h, 56, ui_at, len(uib))
-    for i, k in enumerate(b.anchors):           # 64: anchors, 16 words
-        struct.pack_into("<H", h, 64 + 2 * i, k)
+    struct.pack_into("<H", h, 62, idle_tab)
+    h[64:68] = bytes(b.band)
+    struct.pack_into("<HHHH", h, 68, *b.canvas)
+    struct.pack_into("<H", h, 76, maxrec[0])
+    opens = list(range(len(b.openings)))
+    if len(opens) > MAX_OPEN:
+        raise ValueError("%d openings" % len(opens))
+    h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
         h[192 + 8 * i:200 + 8 * i] = nm.upper().encode()[:8].ljust(8, b" ")
 
     ct = bytearray(SCRIPT_AT - CLIP_TAB)
-    if len(clip_rows) > MAX_CLIPS:
-        raise ValueError("%d clips" % len(clip_rows))
     for i, c in enumerate(clip_rows):
-        flags = ((CF_JOINS if c.get("joins") else 0) |
-                 (CF_FULL if c.get("full") else 0) |
-                 (CF_ENDS if c.get("ends") else 0))
         at = i * CLIP_SZ
-        cue = c["cueat"] + [(0xFFFF, (0, 0))] * 2
-        struct.pack_into("<IIHHHHBBHHH", ct, at, offs[i], len(regions[i]),
-                         c["nrec"], flags, c["exit"], ent_tab.get(i, 0),
-                         1 if len(c["cueat"]) > 0 else 0,
-                         1 if len(c["cueat"]) > 1 else 0,
-                         cue[0][0], cue[1][0], c["rec_at"])
+        struct.pack_into("<IIHHHHH", ct, at, offs[i], len(regions[i]),
+                         c["nrec"], c["flags"], c["exit"], c["anchtab"],
+                         len(c["anch"]))
         ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
-        struct.pack_into("<HHHH", ct, at + 32, cue[0][1][0], cue[0][1][1],
-                         cue[1][1][0], cue[1][1][1])
 
-    sc = script_bytes(b, [c["name"] for c in clip_rows])
+    names = [c["name"] for c in clip_rows]
+    sc = script_bytes(b, names)
     meta = bytearray(h) + ct + sc
     assert len(meta) <= META
     out = pad(meta, ALIGN) + pad(vres, ALIGN) + pad(mus, ALIGN) + \
@@ -330,51 +396,50 @@ class Bundle:
     def __init__(self, data):
         self.d = data
         (magic, ver, hsz, self.cgapal, self.rows, self.fps, self.rate,
-         self.spf, self.nclips, self.nidle, self.nanch, self.nui) = \
+         self.spf, self.nclips, self.nidle, self.nopen, self.nui) = \
             struct.unpack_from("<4sHHBBHHHHHHH", data, 0)
         if magic != MAGIC or ver != VERSION:
             raise ValueError("not a VBT1 file of version %d" % VERSION)
-        self.ui_ids = list(data[24:27])
+        self.ui_ids = list(data[24:29])
         self.vres_at, vlen = struct.unpack_from("<IH", data, 30)
         self.vres = data[self.vres_at:self.vres_at + vlen]
         self.mus_at = struct.unpack_from("<I", data, 36)[0]
         self.mlen = struct.unpack_from("<I", data, 44)[0]
+        self.music_at = struct.unpack_from("<I", data, 48)[0]
         self.mus = data[self.mus_at:self.mus_at + self.mlen]
-        self.idle_tab = struct.unpack_from("<H", data, 50)[0]
         self.total = struct.unpack_from("<I", data, 52)[0]
         self.ui_at, ulen = struct.unpack_from("<IH", data, 56)
         self.uib = data[self.ui_at:self.ui_at + ulen]
-        self.anchors = [struct.unpack_from("<H", data, 64 + 2 * i)[0]
-                        for i in range(self.nanch)]
+        self.idle_tab = struct.unpack_from("<H", data, 62)[0]
+        self.band = tuple(data[64:68])
+        self.canvas = struct.unpack_from("<HHHH", data, 68)
+        self.maxrec = struct.unpack_from("<H", data, 76)[0]
+        self.openings = [x for x in data[80:88] if x != NO_SFX]
         self.ui = [struct.unpack_from("<IH", data, 96 + 6 * i)
                    for i in range(self.nui)]
         self.clips = []
         for i in range(self.nclips):
             at = CLIP_TAB + i * CLIP_SZ
-            (off, ln, nrec, flags, ex, ent, c0, c1, f0, f1, rec_at) = \
-                struct.unpack_from("<IIHHHHBBHHH", data, at)
+            (off, ln, nrec, flags, ex, anchtab, nanch) = \
+                struct.unpack_from("<IIHHHHH", data, at)
             name = data[at + 24:at + 32].decode().strip()
-            e0, l0, e1, l1 = struct.unpack_from("<HHHH", data, at + 32)
-            cues = [(f0, e0, l0)] if c0 else []
-            if c1:
-                cues.append((f1, e1, l1))
+            anch = [struct.unpack_from("<HH", self.vres, anchtab + 4 * j)
+                    for j in range(nanch)]
             self.clips.append(dict(off=off, len=ln, nrec=nrec, flags=flags,
-                                   exit=ex, ent=ent, cues=cues, name=name,
-                                   rec_at=rec_at))
+                                   exit=ex, anch=anch, name=name))
 
     def idle_rec(self, i):
         o = struct.unpack_from("<H", self.vres, self.idle_tab + 2 * i)[0]
         n = struct.unpack_from("<H", self.vres, o)[0]
         return self.vres[o:o + n]
 
-    def entry_rec(self, c, a):
-        o = struct.unpack_from("<H", self.vres, c["ent"] + 2 * a)[0]
+    def vrec(self, o):
         n = struct.unpack_from("<H", self.vres, o)[0]
         return self.vres[o:o + n]
 
     def stream(self, c):
         s = self.d[c["off"]:c["off"] + c["len"]]
-        out, at = [], c["rec_at"]
+        out, at = [], 0
         while at < len(s):
             n = struct.unpack_from("<H", s, at)[0]
             out.append(s[at:at + n])
@@ -386,8 +451,10 @@ class Bundle:
 
 
 def verify(data, quiet=False):
-    """Plays every path in the bundle through the reference decoder and
-    checks each join lands on the idle loop's own screen"""
+    """Plays every path in the bundle through the reference decoder: the
+    openings in turn from black onto the idle loop, two laps of the loop,
+    and every action from every one of its anchors, each seam required to
+    land on the loop's own screen"""
     b = Bundle(data)
     g = geom(b.rows)
 
@@ -395,17 +462,17 @@ def verify(data, quiet=False):
         return bytes(s[x] for base in g.base for x in range(base, base + 80))
 
     scr = bytearray(65536)
-    idle = [None] * b.nidle
-    intro = [c for c in b.clips if c["flags"] & CF_FULL]
-    if intro:
-        for r in b.stream(intro[0]):
+    cur = 0
+    for ci in b.openings:
+        c = b.clips[ci]
+        for r in b.stream(c):
             decode(scr, r)
-        if not intro[0]["flags"] & CF_JOINS:
-            raise ValueError("the intro does not join the loop")
-        cur = intro[0]["exit"]
-    else:
+        cur = c["exit"]
+    if not b.openings:
         decode(scr, b.idle_rec(0))
-        cur = 0
+    elif not b.clips[b.openings[-1]]["flags"] & CF_JOINS:
+        raise ValueError("the last opening does not join the loop")
+    idle = [None] * b.nidle
     for lap in range(2):            # two laps: lap 2 must be lap 1
         for k in range(b.nidle):
             i = (cur + 1 + k) % b.nidle
@@ -416,16 +483,15 @@ def verify(data, quiet=False):
             idle[i] = cv
     paths = 0
     for c in b.clips:
-        for f, o, ln in c["cues"]:
-            if o + ln > c["rec_at"]:
-                raise ValueError("clip %s: an effect past its own" % c["name"])
-        if c["flags"] & CF_FULL:
+        if c["flags"] & CF_OPENING:
             continue
-        for a, k in enumerate(b.anchors):
+        if not c["anch"]:
+            raise ValueError("clip %s has no anchor" % c["name"])
+        for k, o in c["anch"]:
             s = bytearray(65536)
             for y, base in enumerate(g.base):
                 s[base:base + 80] = idle[k][y * 80:(y + 1) * 80]
-            decode(s, b.entry_rec(c, a))
+            decode(s, b.vrec(o))
             for r in b.stream(c):
                 decode(s, r)
             if c["flags"] & CF_JOINS and canvas(s) != idle[c["exit"]]:
@@ -433,36 +499,44 @@ def verify(data, quiet=False):
                                  % (c["name"], k, c["exit"]))
             paths += 1
     if not quiet:
-        print("verify: idle %d frames, %d clips, %d paths joined exactly"
-              % (b.nidle, len(b.clips), paths))
+        print("verify: %d openings onto an idle loop of %d frames, %d clips, "
+              "%d paths joined exactly" % (len(b.openings), b.nidle,
+                                          len(b.clips), paths))
     return b
 
 
 # --- the demo battle --------------------------------------------------------------
 
-def demo(bars=16):
+def demo(bars=16, floppy=False):
     import vbtscene as S
     b = Battle(0x50, S.H, S.FPS, S.RATE)
     b.idle = S.clip_idle()
     b.anchors = [0, 6, 12, 18]
-    intro, _ = S.clip_intro()
-    b.clips.append(dict(name="intro", frames=intro, full=True, joins=True,
-                        exit=0))
+    b.sfx = {n: S.sfx(n) for n in S.SFX + S.UI_SFX}
+    title, _ = S.clip_title()
+    reveal, _ = S.clip_reveal()
+    b.openings = [dict(name="title", frames=title, sound=b.sfx["fanfare"]),
+                  dict(name="reveal", frames=reveal, sound=b.sfx["riser"],
+                       exit=0)]
     for name, mk, joins in S.CLIPS:
+        if floppy and name == "ari_limit":
+            continue                # (a floppy's battle has no Limit)
         fr, cues = mk()
         b.clips.append(dict(name=name, frames=fr, cues=cues, joins=joins,
                             exit=0, ends=not joins))
-    b.music = S.music(bars=bars)
-    b.sfx = {n: S.sfx(n) for n in S.SFX + S.UI_SFX}
-    b.ui = dict(tick="tick", ok="ok", deny="deny")
+    b.music = S.music(bars=2 if floppy else bars)
+    b.music_at = 0
+    b.ui = dict(move="tick", take="ok", deny="deny")
     b.script = dict(
-        enemy=dict(name="BEETLE", hp=900, clip="beetle_attack",
+        enemy=dict(name="BEETLE", hp=1200, clip="beetle_attack",
                    damage=74, victory="victory", defeat="defeat"),
         party=[
             dict(name="ARI", hp=320, mp=40, commands=[
                 dict(label="Attack", clip="ari_attack", kind=K_HIT, amount=95),
                 dict(label="Bolt", clip="ari_bolt", kind=K_HIT, amount=180,
-                     mp=10)]),
+                     mp=10),
+                dict(label="Limit", clip="ari_limit", kind=K_HIT, amount=420,
+                     mp=20)][:2 if floppy else 3]),
             dict(name="BRAM", hp=260, mp=60, commands=[
                 dict(label="Fire", clip="bram_attack", kind=K_HIT, amount=130,
                      mp=8),
@@ -477,7 +551,7 @@ def preview(b, d):
     import vbtscene as S
     from PIL import Image
     os.makedirs(d, exist_ok=True)
-    for c in b.clips:
+    for c in b.openings + b.clips:
         fr = c["frames"]
         sel = [fr[i] for i in range(0, len(fr), max(1, len(fr) // 6))][:6]
         im = np.concatenate([np.vstack([f, np.zeros((200 - f.shape[0], 320),
@@ -486,7 +560,7 @@ def preview(b, d):
 
 
 def cmd_demo(a):
-    b = demo(a.bars)
+    b = demo(a.bars, a.floppy)
     data = build(b)
     verify(data)
     with open(a.out, "wb") as f:
@@ -499,21 +573,24 @@ def cmd_demo(a):
 def cmd_info(a):
     d = open(a.file, "rb").read()
     b = Bundle(d)
-    print("%s: %d bytes, CGA4 palette %02Xh, canvas 320 x %d, %d fps, %d Hz"
-          % (a.file, len(d), b.cgapal, b.rows, b.fps, b.rate))
-    print("  idle loop %d frames, anchors %s; video resident %d bytes"
-          % (b.nidle, b.anchors, len(b.vres)))
-    print("  music %d bytes (%.1f s, %s); the menu's %d effects in %d "
-          "bytes (resident)" % (b.mlen, b.mlen / b.rate,
-                                "resident" if b.mlen <= MUSIC_RES else "streamed",
-                                b.nui, len(b.uib)))
+    print("%s: %d bytes, CGA4 palette %02Xh, canvas %s, band %s, %d fps, "
+          "%d Hz" % (a.file, len(d), b.cgapal, b.canvas, b.band, b.fps, b.rate))
+    print("  idle loop %d frames; video resident %d bytes; largest record %d"
+          % (b.nidle, len(b.vres), b.maxrec))
+    print("  music %d bytes (%.1f s, %s), in at %d; the menu's %d effects in "
+          "%d bytes" % (b.mlen, b.mlen / b.rate,
+                        "resident" if b.mlen <= MUSIC_RES else "streamed",
+                        b.music_at, b.nui, len(b.uib)))
     for c in b.clips:
-        fl = "".join(n for bit, n in ((CF_FULL, "F"), (CF_JOINS, "J"),
+        fl = "".join(n for bit, n in ((CF_OPENING, "O"), (CF_FULL, "F"),
+                                      (CF_OWNSND, "S"), (CF_JOINS, "J"),
                                       (CF_ENDS, "E")) if c["flags"] & bit)
         sec = c["nrec"] / b.fps
-        print("  %-8s %3d records %6d bytes (%5d of effects) %5.1f KB/s  %-2s "
-              "exit %d" % (c["name"], c["nrec"], c["len"], c["rec_at"],
-                           c["len"] / 1024 / max(sec, 0.01), fl, c["exit"]))
+        snd = sum(struct.unpack_from("<H", r, 2)[0] for r in b.stream(c))
+        print("  %-8s %3d records %7d bytes (%6d of sound) %5.1f KB/s  %-4s "
+              "anchors %s exit %d" % (c["name"], c["nrec"], c["len"], snd,
+                                      c["len"] / 1024 / max(sec, 0.01), fl,
+                                      [k for k, _ in c["anch"]], c["exit"]))
 
 
 def cmd_verify(a):
@@ -527,6 +604,9 @@ def main(argv=None):
     q.add_argument("out")
     q.add_argument("--bars", type=int, default=16,
                    help="the music's length in bars of 1.6 s (default 16)")
+    q.add_argument("--floppy", action="store_true",
+                   help="the floppy's battle: no Limit, and 3.2 s of music, "
+                        "short enough to be resident (SPEC.md 125.4)")
     q.add_argument("--preview", help="write a contact sheet per clip here")
     q.set_defaults(fn=cmd_demo)
     q = sp.add_parser("info")
