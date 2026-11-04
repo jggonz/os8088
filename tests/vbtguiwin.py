@@ -71,18 +71,50 @@ def inner(tmp):
         app.root.update()
         return app, errs
 
+    seen = {"bar": 0, "title": 0, "moved": 0, "what": "", "ph": 0}
+
     def pump(app, cond, secs=90):
         t = time.time()
         while time.time() - t < secs:
             app.root.update()
+            if app.pending and app.job is not None:     # the list it went to
+                seen["ph"] += any("reading" in app.openings_tab.lb.get(k)
+                                  for k in range(app.openings_tab.lb.size()))
+            if app.job is not None:     # WHILE A JOB RUNS: what the eye has
+                seen["bar"] = max(seen["bar"],
+                                  app.pbar.winfo_height()
+                                  if app.pbar.winfo_ismapped() else 0)
+                seen["title"] += app.root.title().startswith("[")
+                seen["moved"] += str(app.pbar.cget("mode")) == \
+                    "indeterminate" or float(app.pbar.cget("value")) > 0
+                seen["what"] = seen["what"] or app.status.cget("text")
             time.sleep(0.02)
             if cond():
                 return True
         return False
 
-    # A: the owner's sequence
+    # the status bar keeps its line however tall a tab asks to be (the Idle
+    # tab's empty picture asked for 5,000 px, and the bar was 1 px high)
     answer["p"] = os.path.join(tmp, "a.vbp")
     app, errs = window()
+    hs = []
+    for geo in ("1300x760", "1000x500"):
+        app.root.geometry(geo)
+        want_h = int(geo.split("x")[1])
+        for _ in range(100):            # (until the resize has landed)
+            app.root.update()
+            if app.root.winfo_height() == want_h:
+                break
+            time.sleep(0.02)
+        app.root.update()
+        hs.append(app.status.master.winfo_height())
+    ok(min(hs) >= 20 and app.nb.winfo_reqheight() < 1200,
+       "the status bar and its progress keep their line: %s px high at "
+       "1300x760 and 1000x500 (the tabs ask %d)"
+       % (hs, app.nb.winfo_reqheight()))
+    app.root.geometry("1300x760")
+
+    # A: the owner's sequence
     app.q.put(("drop", ([vids[0]], app.openings_tab.f)))
     got = pump(app, lambda: app.proj.d["clips"] and not app.pending
                and not app.job)
@@ -90,6 +122,13 @@ def inner(tmp):
        [o["clip"] for o in app.proj.d.get("openings", [])] == ["clip0"],
        "A. the first video of a NEW project, dropped on the Openings tab: "
        "saved, read and opening 1 (clips %s)" % list(app.proj.d["clips"]))
+    ok(seen["bar"] >= 10 and seen["moved"] > 0 and seen["title"] > 0,
+       "A. ...and while it was read, SOMETHING WAS SEEN to happen: the bar "
+       "%d px high and moving, %r, the title showing it"
+       % (seen["bar"], seen["what"]))
+    ok(seen["ph"] > 0, "A. ...shown in the Openings list as it was read "
+       "('(reading...)', greyed)")
+    ok(app.openings_tab.i() == 0, "A. ...the new opening chosen in the list")
     app.q.put(("drop", ([vids[1]], app.openings_tab.f)))
     app.add_clip_file(vids[2])          # (what "Add Videos..." does)
     got = pump(app, lambda: len(app.proj.d["clips"]) >= 3 and not app.pending

@@ -505,9 +505,18 @@ class App(object):
         if path:
             self.open_path(path)
         self.refresh()
+        self._fit()
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.root.after(50, self._poll)
         self.drop_how = enable_drop(self.root, self._dropped)
+
+    def _fit(self):
+        """The window as tall as its tallest tab asks, so nothing is cut off
+        below - no taller than the screen less its taskbar's room"""
+        self.root.update_idletasks()
+        h = min(max(760, self.root.winfo_reqheight()),
+                self.root.winfo_screenheight() - 80)
+        self.root.geometry("1300x%d" % h)
 
     # --- drag and drop ----------------------------------------------------------
     def _dropped(self, paths):
@@ -535,8 +544,7 @@ class App(object):
                 if inside(where, self.idle_tab.f) or (where is None and tab == 1):
                     self.idle_tab.take(p)
                 elif inside(where, self.openings_tab.f):
-                    self.add_clip_file(p, lambda cid: self.edit(
-                        "add_opening", cid))
+                    self.add_clip_file(p, self._as_opening)
                 else:
                     self.add_clip_file(p)
                     self.nb.select(2)
@@ -580,6 +588,16 @@ class App(object):
                         self.proj.d["sounds"])
         self.edit("add_sound", sid, path=path)
         return sid
+
+    def _as_opening(self, cid):
+        """A clip dropped on the Openings tab, once it is one: the next
+        opening, and chosen in the list so it is seen to arrive"""
+        self.edit("add_opening", cid)
+        lb = self.openings_tab.lb
+        lb.selection_clear(0, "end")
+        lb.selection_set("end")
+        lb.see("end")
+        self.openings_tab._pick()
 
     def add_clip_file(self, path, then=None):
         """VIDEO at PATH as a new CLIP, all of it to start: queued, since
@@ -639,6 +657,13 @@ class App(object):
 
     def _body(self):
         ttk = self.ttk
+        # THE STATUS BAR FIRST: the packer gives space in packing order, so a
+        # bar packed after the notebook got what the tabs left - nothing,
+        # whenever one asked for more than the window - and a job's progress
+        # was never seen (the owner, 2026-11-04)
+        bar = ttk.Frame(self.root)
+        bar.pack(fill="x", side="bottom")
+        ttk.Separator(self.root).pack(fill="x", side="bottom")
         self.nb = ttk.Notebook(self.root)
         self.nb.pack(fill="both", expand=True)
         self.battle_tab = BattleTab(self, self.nb)
@@ -659,8 +684,6 @@ class App(object):
         self.nb.add(self.party_tab.f, text="Characters & menus")
         self.nb.add(self.enemy_tab.f, text="Enemy")
         self.nb.add(self.build_tab.f, text="Build")
-        bar = ttk.Frame(self.root)
-        bar.pack(fill="x", side="bottom")
         self.status = ttk.Label(bar, text="Ready")
         self.status.pack(side="left", padx=6)
         self.cancel_b = ttk.Button(bar, text="Cancel", command=self.cancel,
@@ -670,7 +693,7 @@ class App(object):
         self.pbar.pack(side="right", padx=4)
 
     def refresh(self):
-        self.root.title(title_of(self.proj, self.dirty()))
+        self._title()
         self.recent_menu.delete(0, "end")
         for p in recent_load():
             self.recent_menu.add_command(label=p,
@@ -695,6 +718,15 @@ class App(object):
 
     def say(self, text):
         self.status.config(text=text)
+        self._title()
+
+    def _title(self):
+        """The window's title, and while a job runs ITS PROGRESS ahead of it
+        - seen on the taskbar, and wherever the window is"""
+        t = title_of(self.proj, self.dirty())
+        if self.job is not None:
+            t = "[%s] %s" % (self.status.cget("text").rstrip("."), t)
+        self.root.title(t)
 
     def _ask_save(self):
         from tkinter import messagebox
@@ -1252,7 +1284,12 @@ class IdleTab(object):
             side="left", padx=4)
         mid = ttk.Frame(f)
         mid.pack(fill="both", expand=True, pady=6)
-        self.pic = tk.Label(mid, bg="black", width=640, height=284)
+        # (a blank image FIRST: a tk.Label with none measures width and
+        # height in characters and lines, and 284 lines asked the window for
+        # 5,000 px - which the notebook took, and the status bar with its
+        # progress below it was left one pixel high on every tab)
+        self._blank = tk.PhotoImage(width=640, height=284)
+        self.pic = tk.Label(mid, bg="black", image=self._blank)
         self.pic.pack(side="left", anchor="n")
         side = ttk.Frame(mid)
         side.pack(side="left", fill="y", padx=8)
@@ -1647,6 +1684,11 @@ class ClipsTab(object):
                 ", ".join(map(str, c["anchors"])) or "none!"
             self.lb.insert("", "end", iid=cid, text=cid, values=(
                 joins, "-" if c.get("ends") or opening else c["exit"]))
+        for k, (path, _then) in enumerate(self.app.pending):
+            self.lb.insert("", "end", iid="*pending %d" % k, tags=("pending",),
+                           text=os.path.basename(path),
+                           values=("(reading...)", ""))  # (cid(): not a clip)
+        self.lb.tag_configure("pending", foreground="grey40")
         if keep in d["clips"] and self.lb.selection() != (keep,):
             self.lb.selection_set(keep)
         self.scb.config(values=list(d["sources"]))
@@ -2190,6 +2232,11 @@ class OpeningsTab(object):
         self.lb.delete(0, "end")
         for line in opening_lines(self.app.proj):
             self.lb.insert("end", line)
+        for path, then in self.app.pending:     # A VIDEO ON ITS WAY: seen at
+            if then == self.app._as_opening:    # once where it was dropped
+                self.lb.insert("end", "   %s  (reading...)"
+                               % os.path.basename(path))
+                self.lb.itemconfig("end", foreground="grey40")
         if keep is not None and keep < len(d["openings"]):
             self.lb.selection_set(keep)
         clips = list(d["clips"])
