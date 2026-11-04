@@ -16724,6 +16724,18 @@ SOAK = [
         "at a score of 0. A model or build that goes wrong here writes a "
         "bundle that verifies and plays the wrong battle",
         needs=("pil",)),
+    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 14.0,
+        "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
+        "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
+        "over all 96 CGA4 bytes (a swatch showing one set while the encode "
+        "used another), the band the rest of 200 rows, the music's loop "
+        "found at a planted passage's length to the sample and honoured by "
+        "the build (the music region IS the loop, the join from its start), "
+        "a vbtana job answering as the call does, and Cancel killing an "
+        "encode and every worker it started with no cache left that loads "
+        "short. Broken on purpose (Cancel killing the parent alone, the set "
+        "bits swapped) it FAILS naming it. SKIPS the cancel without ffmpeg",
+        needs=("pil",)),
     Row("videnc", "soak", py("tests/videnc.py"), 1300.0,
         "SPEC.md 98.2.1: the encoder front end and its budgets, host-side. "
         "ffmpeg makes a 16:9 source with a still tail and tools/os88venc.py "

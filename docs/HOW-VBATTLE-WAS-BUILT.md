@@ -289,6 +289,44 @@ Observed: the demo project builds `demo`'s bundle byte for byte, full and
 floppy; the H3 project, its points from `recommend`, plays to victory on
 86Box's ST11M with 0 stalls, 0 late, 0 sound late and 0 underruns.
 
+## The builder, wave 2: a window over the model (2026-11-04)
+
+The owner sent two more clips (a victory, and the scorpion hitting the
+knight), "not great, but building up a test setup we can exercise", and
+said to go for wave 2.
+
+Decisions:
+- **The window is a view and every long thing is a process.** The encoder
+  window learned that the hard way (98.2.11.1), so here it is the shape
+  from the first line: finding loops, encoding a source, costing the loop
+  and making a WAV to listen to are `vbtana` commands that answer in JSON
+  lines, and Cancel kills the process group.
+- **The music's loop is found by listening, then placed by the waveform.**
+  Short spectra are compared over a 2 s window after each candidate start
+  and end; the best end is then moved to the sample where the waveforms
+  agree, so the jump is in phase. On the demo's music the candidates come
+  out on whole bars (19.2, 6.4, 12.8 s for bars of 1.6 s), found in 0.2 s.
+- **The difference is marked in a colour the palette does not have.** The
+  first draft marked it red, which is one of the battle's own four.
+
+Discoveries:
+- **An ending clip is not an exit.** The analysis offered the new victory
+  clip an "out" point that rejoins the idle loop (44% of pixels apart:
+  it never will); an ending plays to its last frame. The project now says
+  so, and the Clips tab will need to.
+- **A cancelled encode leaves workers dying for a moment.** The test's
+  first look, half a second after the kill, saw nine. They are a pool's,
+  in the same session, and gone within a second; the test now waits, and
+  fails when the kill misses them (broken on purpose: killing only the
+  parent leaves them running).
+- **This container's Python has no Tk.** The system's 3.12 does once
+  `python3-tk` is installed; the window was driven and photographed there,
+  under Xvfb.
+
+Observed: every tab action above, driven by a script under Xvfb on the H3
+project. Not observed: the window on Windows or macOS, or a real person's
+hand on it.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

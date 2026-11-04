@@ -1,7 +1,8 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: wave 1 BUILT (2026-11-04): the model, the analysis and the
-command line (10.5).** The window is not built yet. It turns a battle's footage into a `.VBT` bundle (SPEC.md
+**Status: waves 1 and 2 BUILT (2026-11-04): the model, the analysis,
+the command line, and the window's shell with its Battle and Idle tabs
+(10.5).** The Clips, Menus and Build tabs are waves 3 to 5. It turns a battle's footage into a `.VBT` bundle (SPEC.md
 §125) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an
 action DOES.
@@ -382,7 +383,29 @@ any of the builder's (section 7's order moves). Its contents:
    HIT clip, the enemy's first move). `check()` says so as INFO on each
    project. The rules are wave 4.
 2. **The window's shell; the Battle tab (sizes, palette, music and its
-   loop) and the Idle tab.**
+   loop) and the Idle tab.** **DONE 2026-11-04** (`tools/os88vbtgui.py`):
+   - [x] the shell: New, Open, Open recent, Save, Save as, Undo and Redo
+     (the model's), the title's unsaved mark, and a JOB runner: every long
+     piece of work is a `vbtana` or `os88vbt` process with JSON lines on
+     stdout, a progress bar, and a Cancel that kills its process group;
+   - [x] the Battle tab: the name, the profile it is made for (with the
+     encoder's own description), the CGA4 palette (set, bright,
+     background, four swatches), the video's rows over the band's, and
+     the MUSIC: a sound, Add a file, Listen, FIND LOOPS (`music_loops`:
+     the spectra's similarity over a 2 s window, each end then placed to
+     the sample by the waveforms), Use, Listen to its jump (a WAV of 3 s
+     either side, through the platform's player), the loop and the join
+     typed in seconds;
+   - [x] the Idle tab: a source (Add a video), its frames loaded (encoded
+     in a job the first time), a scrubber, the loop's frames, RECOMMEND,
+     Use, PLAY ACROSS THE SEAM, DIFFERENCE AT THE SEAM (in the colour
+     furthest from the palette's four), COST IT (the records the engine
+     will hold);
+   - [x] the model: the music's LOOP, which the build makes the music's
+     region (the join counted from its start);
+   - [x] `tests/vbtguitest.py` (soak): the window without a window.
+   Seen under Xvfb on the owner's H3 project; the screenshots went to the
+   owner. Not seen on Windows or macOS.
 3. **The Clips tab**: attachments, effects on the timeline, listening.
 4. **The Menus and Characters tabs**, and the engine's menu tree,
    backgrounds and rules (11).

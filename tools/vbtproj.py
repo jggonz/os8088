@@ -17,7 +17,9 @@ A project file (version 1):
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
                     | {"kind": "source", "source", "in", "out", "level"}},
-     "music":    {"sound", "join"} - the sample it comes in at,
+     "music":    {"sound", "join", "loop"} - the sample it comes in at, and
+                 the loop [start, end) in the sound's samples (null: all
+                 of it); the join is inside the loop,
      "ui_sounds":{"move"|"open"|"close"|"take"|"deny": sound id},
      "idle":     {"source", "loop": [a, b]} - source frames a..b-1, looped,
      "clips":    {id: {"source", "in", "out", "anchors": [k...], "exit",
@@ -209,8 +211,17 @@ class Project:
             d["openings"].append({"clip": clip, "sound": sound})
         self._edit(f)
 
-    def set_music(self, sound, join=0):
-        self.set(("music",), {"sound": sound, "join": join})
+    def set_music(self, sound, join=0, loop=None):
+        self.set(("music",), {"sound": sound, "join": join,
+                              "loop": list(loop) if loop else None})
+
+    def set_music_loop(self, start, end):
+        def f(d):
+            m = d["music"]
+            m["loop"] = [start, end]
+            if not start <= m["join"] < end:
+                m["join"] = start
+        self._edit(f)
 
     def add_character(self, name, **stats):
         def f(d):
@@ -366,6 +377,13 @@ class Project:
             err("music", "no music")
         elif d["music"]["sound"] not in d["sounds"]:
             err("music", "no sound %s" % d["music"]["sound"])
+        elif d["music"].get("loop"):
+            a, b = d["music"]["loop"]
+            if not 0 <= a < b:
+                err("music", "a loop of %d..%d" % (a, b))
+            elif not a <= d["music"]["join"] < b:
+                err("music", "the join at %d is outside the loop %d..%d"
+                    % (d["music"]["join"], a, b))
         for k, v in d["ui_sounds"].items():
             if k not in UI_SOUNDS:
                 err("ui_sounds", "no menu sound called %s" % k)

@@ -237661,10 +237661,11 @@ is CGA4, and a VGA plays it in mode 4.
 an output.
 
 **Not yet built:**
-- the builder's WINDOW (docs/plans/VBATTLE-BUILDER-PLAN.md). Its model,
-  analysis and command line are built: `tools/vbtproj.py` (a project),
-  `tools/vbtana.py` (decoded screens, cached; loop and attachment points),
-  `os88vbt.py build PROJECT`. The shipped `BATTLE.VBT` is the demo, and
+- the builder's WINDOW past its Battle and Idle tabs
+  (docs/plans/VBATTLE-BUILDER-PLAN.md). Built: `tools/vbtproj.py` (a
+  project), `tools/vbtana.py` (decoded screens, cached; loop and
+  attachment points; the music's loop), `os88vbt.py build PROJECT`, and
+  `tools/os88vbtgui.py` (the shell, the Battle and Idle tabs). The shipped `BATTLE.VBT` is the demo, and
   the demo as a project builds it byte for byte (`tests/vbtbuild.py`);
 - menus as a tree, characters and the action verbs (the plan's 11);
 - a suite row.

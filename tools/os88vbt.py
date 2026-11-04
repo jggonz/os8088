@@ -606,8 +606,12 @@ def battle_of(proj, progress=None):
         b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg),
                             cues=cues, joins=c["joins"], exit=c["exit"],
                             ends=c["ends"], anchors=c["anchors"]))
-    b.music = b.sfx[d["music"]["sound"]]
-    b.music_at = d["music"]["join"]
+    b.music = b.sfx[d["music"]["sound"]]   # all music loops (10.2): the
+    b.music_at = d["music"]["join"]        # region is the loop, and the
+    lp = d["music"].get("loop")            # engine plays it round
+    if lp:
+        b.music = b.music[lp[0]:lp[1]]
+        b.music_at -= lp[0]
     b.ui = dict(d["ui_sounds"])
     b.script = proj.engine_script()
     return b
