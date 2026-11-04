@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "menu.h"
+#include "restxt.h"
 
 static int colour = IDM_RED, news, inits, pops, stubborn;
 static char s1[40], s2[40], mem[48];
@@ -150,11 +151,13 @@ int PASCAL WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show)
                         40, 40, 280, 200, NULL, NULL, hInst, NULL);
     ShowWindow(hwnd, show);
     UpdateWindow(hwnd);
+    restxt(hInst, "MENU.TXT", "menu: up");
     while (GetMessage(&m, NULL, 0, 0)) {
         if (!TranslateAccelerator(hwnd, acc, &m)) {
             TranslateMessage(&m);
             DispatchMessage(&m);
         }
     }
+    restxt(hInst, "MENU.TXT", "menu: ended");
     return m.wParam;
 }

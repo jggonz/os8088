@@ -23,6 +23,7 @@
  */
 #include <windows.h>
 #include <string.h>
+#include "restxt.h"
 
 static char res[240];
 static FARPROC baseEdit, baseButton, oldEdit;
@@ -209,6 +210,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(lstrcmpi(buf, "Grow00") == 0, "growname");
     GetClassName(e, buf, sizeof buf);       /* moved, and still its own */
     check(lstrcmpi(buf, "SupEdit") == 0, "movedname");
+
+    restxt(inst, "CTLPROC.TXT", res[0] ? res : "CTLPROC OK");
 
     MessageBox(top, res[0] ? res : "CTLPROC OK", "CTLPROC", MB_OK);
     DestroyWindow(top);

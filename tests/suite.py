@@ -17447,6 +17447,61 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
                "build/win16/CSALIAS.EXE")),
+    Row("win16megabigbmp", "soak", py("tests/win16mega.py", "BIGBMP"), 120.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE on kern_mega, under "
+        "Bochs (tests/win16mega.py; the kern_big row win16bigbmp is real "
+        "mode). Tiled bitmaps past W16_BMMAX = 64,000 bytes through "
+        "kern_mega's selectors (SEG_SUB, mega_bclip), the arm Paintbrush "
+        "and Centipede need; BIGBMP writes BIGBMP.TXT and it must say "
+        "BIGBMP OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/BIGBMP.EXE")),
+    Row("win16megactlproc", "soak", py("tests/win16mega.py", "CTLPROC"), 120.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc round 2: CTLPROC.EXE on "
+        "kern_mega, under Bochs (tests/win16mega.py). It registers 75 "
+        "classes, so the class table grows once; on kern_mega the old block "
+        "is freed through W16VOF + w16_gfreeh, which no row had run. "
+        "CTLPROC.TXT must say CTLPROC OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/CTLPROC.EXE")),
+    Row("win16megadgroup", "soak", py("tests/win16mega.py", "DGROUP"), 120.0,
+        "SPEC.md 124.9.2, WIN16-NEXT dgroup: DGROUP.EXE on kern_mega, under "
+        "Bochs (tests/win16mega.py). The program's DGROUP answers "
+        "GlobalHandle/Size/Lock/ReAlloc and GMEM_MODIFY, whose kern_mega "
+        "fix had review only. DGROUP.TXT must say DGROUP OK, with no fault "
+        "line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/DGROUP.EXE")),
+    Row("win16megamemdc", "soak", py("tests/win16mega.py", "MEMDC"), 120.0,
+        "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE on kern_mega, "
+        "under Bochs (tests/win16mega.py). KNOWN TO FAIL: it is a #GP at "
+        "122C:8896 on kern_mega (bigbmp-report.md, bigbmp-verify.md section "
+        "4), unattributed; the registry has no expected-failure mechanism, "
+        "so the row is registered normally and the final pass shows whether "
+        "it still does. MEMDC.TXT must say MEMDC OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/MEMDC.EXE")),
+    Row("win16megamenu", "soak", py("tests/win16mega.py", "MENU"), 120.0,
+        "SPEC.md 124, WIN16-NEXT astexit (astexit-verify.md, Open: a "
+        "kern_mega leg): MENU.EXE on kern_mega, under Bochs "
+        "(tests/win16mega.py). File > Exit (Alt+F, X) ends the program from "
+        "a menu command: MENU.TXT says menu: ended, WIN16's instance is "
+        "gone, and there is no fault line or kern_mega CLOSED toast "
+        "(ASTEROID's #GP on Game > Exit). Bochs input is unproven here, so "
+        "a red may be the keys and not the kernel: look at end.png with "
+        "--keep",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/MENU.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
