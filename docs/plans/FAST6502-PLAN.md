@@ -103,5 +103,5 @@ the alarm model through the same `expire`.
 | 1 | APPLE2 on the generated core: boots to `]`, Dormann and the decimal oracle pass, a2cputest's fast-core leg | **landed** - 48% idle, 61% under BASIC on the 286 (APPLE2-SPEC 4.6); Dormann and all rows pass on both cores |
 | 1b | the core's own cost: a profile shows the idle loop at ~120 host clocks an emulated instruction, taken jumps and code bytes | **landed** - one-test jump targets, word JSR/RTS, RAM reads fall through, the KEYIN counter: 547% idle, 67% under BASIC |
 | 1c | Applesoft and the Monitor translated AHEAD OF TIME (the ARCADE branch's `arcaot.py` shape: the ROM is fixed), the interpreter keeping RAM programs | |
-| 2 | C64 on the generated core | |
+| 2 | C64 on the generated core | **landed** - 40% idle, 47% under BASIC on the 286 (C64-SPEC 4.7); Dormann and every applicable row pass on the fast leg |
 | 3 | the speed pass: 286 and XT measured, the diary, the SPEC sections' measured lines | |

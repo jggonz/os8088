@@ -333,7 +333,10 @@ CT_W equ -18                        ; a WORD temporary (the branch's old PC)
 ; spent (negative by up to one instruction's cost), so the caller's
 ; `ran = cycles - cnt` is exact.
 ; =============================================================================
-_c64_run:
+%ifndef C64_FAST
+_c64_run:                           ; ...with the fast core, c64fast.inc's
+%endif                              ; _c64_run is the door and calls this one
+c64_arun:
     push bp
     mov bp, sp
     push si                         ; [bp-2]
@@ -451,6 +454,9 @@ c64_rebias:
 .ram:
     mov es, [cs:_c64_m+CM_RAMSEG]
 .go:
+%ifdef C64_FAST
+    call c64_hbk                    ; PC has left the fast core's region
+%endif
     mov [C64_SCR_BASE + C64_SCR_FES], es
     mov dh, [es:si]
     inc si
@@ -2266,9 +2272,31 @@ _c64_cut:
     inc bx
     add [C64_SCR_BASE + C64_SCR_CARRY], bx
     mov word [C64_SCR_BASE + C64_SCR_DEAD], -1
+%ifdef C64_FAST
+    or byte [0xFFF9], 0x01          ; ...and the fast core's wrapper ends its
+%endif                              ; loop too (c64fast.inc, CUTF)
     pop bx
     pop ds
     ret
+
+%ifdef C64_FAST
+; c64_hbk - THE FAST CORE'S REGION HAND-BACK ENDS HERE (C64-SPEC section
+; 4.7): c64fast.inc runs this core with HBK ($FFF9 bit 1) set while PC is
+; where the fast core cannot fetch, and the first re-bias that lands
+; somewhere it can ends the run - the countdown taken to zero and what it
+; held put in CARRY, c64_cut()'s own arithmetic - so the instruction being
+; fetched still runs and `ran = asked - cnt` stays exact.
+c64_hbk:
+    test byte [0xFFF9], 0x02
+    jz .out
+    push bx
+    mov bx, [C64_SCR_BASE + C64_SCR_DEAD]
+    add [C64_SCR_BASE + C64_SCR_CARRY], bx
+    mov word [C64_SCR_BASE + C64_SCR_DEAD], 0
+    pop bx
+.out:
+    ret
+%endif
 
 ; void c64_rebank(void) - the map changed under the core's feet ($00/$01, or a
 ; reset). Emptying the fetch region forces the next fetch through c64_rebias,

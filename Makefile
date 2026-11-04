@@ -11124,7 +11124,7 @@ rczex: $(BUILD)/runcpm.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part))
+$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/c64/c64fast.bin))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): c64.c #includes the parts,
 # and the shim %includes the three hand-written pieces and the icon. Every one
@@ -11135,7 +11135,8 @@ $(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part))
 C64SRC := apps/c64/c64io.c apps/c64/c64kbd.c apps/c64/c64scr.c \
           apps/c64/c64menu.c apps/c64/c64cmd.c apps/c64/c64load.c \
           apps/c64/c64about.c
-C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc
+C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc \
+          apps/c64/c64fast.inc
 C64HOST := apps/c64/build.sh apps/c64/hosttest/os88.h \
            apps/c64/hosttest/c64uitest.c apps/c64/hosttest/c64memtest.asm \
            apps/c64/hosttest/c64memtest.sh tools/c64ref.py $(C64INC)
@@ -11400,6 +11401,14 @@ $(BUILD)/apple2/a2fast.asm: apps/m6502/m65gen.py apps/apple2/a2cpu.inc | $(BUILD
 
 $(BUILD)/apple2/a2fast.bin: $(BUILD)/apple2/a2fast.asm
 	$(NASM) -f bin -w+error -l $(BUILD)/apple2/a2fast.lst -o $@ $<
+
+# ...and the C64's (C64-SPEC section 4.7), part 1 of C64.O88
+$(BUILD)/c64/c64fast.asm: apps/m6502/m65gen.py apps/c64/c64cpu.inc | $(BUILD)
+	@mkdir -p $(BUILD)/c64
+	python3 apps/m6502/m65gen.py --machine c64 --check-cycles apps/c64/c64cpu.inc -o $@
+
+$(BUILD)/c64/c64fast.bin: $(BUILD)/c64/c64fast.asm
+	$(NASM) -f bin -w+error -l $(BUILD)/c64/c64fast.lst -o $@ $<
 
 # THE DISK. APPLE2.O88 is ONE FILE: the ROM is its part 0 and the overlay its
 # part 1 (APPLE2-SPEC 1.5 and 15.5.1, SPEC.md 73.14.2 - `part`, the fifth

@@ -641,6 +641,85 @@ harness CLEARS the bytes a row reads before it runs — a control that read
 the value the positive run had left at the same address passed, which is a
 control proving nothing.
 
+### 4.7 The fast core (docs/plans/FAST6502-PLAN.md)
+
+**C64.O88's part 2 is a second 6510 core**, written by `apps/m6502/m65gen.py
+--machine c64` and far-called through `apps/c64/c64fast.inc`. It is
+APPLE2-SPEC 4.6's core one machine along - the same generator, the same
+handlers, the same frame and hand-back protocol - and this section says only
+what the C64 does differently. It runs the machine on the same `_c64_m` and
+the same scratch as the accurate core above, which stays the oracle and the
+fallback when the part cannot be had.
+
+**Measured, 86Box `286-victory` (16 MHz 286), at the commit that lands this:**
+
+| | accurate core | fast core |
+|---|---|---|
+| idle at `READY.` | 11.6% | 40% |
+| `FOR I=1 TO 30000:NEXT` | 13% | 47% |
+
+**The part is the table's LAST row**, after the overlay: the overlay is
+eager, and a lazy row may not precede an eager one (SPEC.md 20.12.4). The
+build puts it there through `CC_PACKAGE`'s sixth argument and the shim says
+so with `CC_PARTS_AFTER_OVL` (apps/cc/Makefile.inc, crt0.asm).
+`c64_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
+(`c64f_core`), the part dropped, and the far call through
+`OSAPI_MEM_CODESEL`'s answer (`c64_fseg`; `c64_fcode` is the claim, followed
+by `os88_onmove`). **It runs in the RAM claim the accurate core already has**:
+there is no image to build, because the ROMs are not copied in.
+
+**PC is fetched through ES**, chosen at every jump, call, return, branch
+across a page and entry from the bank map: below `$A000` and at
+`$C000-$CFFF` the RAM; at `$A000-$BFFF` and `$E000-$FFFF` the ROM bank's
+segment (`c64_rbset`'s, the same windows the accurate core fetches through)
+or the RAM; at `$D000-$DFFF` the RAM, or a hand-back of the region when I/O
+or the CHARGEN is mapped there. `c64fast.inc` pushes the five segments into
+the frame per call, from MAPA/MAPD/MAPE - only a hand-back can change the
+map. `$FFFE` and up are handed back too: RAM there can hold a three-byte
+instruction whose operand word would wrap the segment, which faults a 286.
+
+**Memory.** Data goes through DS, the RAM. Reads below `$A000` are one
+compare and one `mov`; at `$A000` and up `rd_hi` answers by the map - RAM, a
+ROM bank through its segment, I/O through the read door, the CHARGEN.
+Writes below `$D000` store and mark; at `$D000` and up `wr_hi` calls I/O out,
+drops `$FFC0-$FFF9` (the scratch, as the accurate core does) and stores the
+rest. **Every RAM write outside zero page and the stack marks damage** - the
+page bit, the wrote byte and the window of section 9.2 - because the VIC can
+fetch from anywhere. A read-modify-write at `$A000` and up, or of `$00/$01`,
+is handed back.
+
+**`$00/$01`.** While the fast core runs, `c64fast.inc` puts the port's
+read-back (`c64_io_rd`'s own answer) in RAM `$0000/$0001` and keeps the RAM
+bytes aside, so a zero-page read is a `mov`; they go back the moment the
+core returns, so the accurate core and the C never see the difference. A
+write there, by any mode, is handed back (the accurate core re-banks), and
+so is an indirect pointer at `$FF`, `$00` or `$01`.
+
+**The flag byte is `$FFF9`**, the one spare byte of section 3.5's scratch,
+which a guest write already drops: V, B, D and I in bits 2-6 as on the Apple
+II, and the wrapper's two flags in bits 0 (CUTF, which `c64_cut` sets)
+and 1 (HBK, which `c64_hbk` at `c64_rebias.go` reads).
+
+**THE STATED DEVIATIONS**, each exact on the accurate core:
+- **A fetch that FALLS THROUGH a region boundary** - `$9FFF` into `$A000`,
+  `$BFFF` into `$C000`, `$CFFF` into `$D000`, `$DFFF` into `$E000`, an
+  operand straddling one - is fetched through the segment chosen at the last
+  jump. Section 4.6's row 4 asks exactly this and is the accurate core's
+  alone; no shipped program is known to run off the end of a ROM bank.
+- **Zero-page and stack writes mark no damage.** A VIC screen, charset or
+  sprite in pages `$00`-`$01` is not redrawn by them.
+
+**The gate** is `make c64cputest`'s fast leg: every row but 4 and 6 (the
+accurate core's fetch ES), and Dormann's functional test in the all-RAM map,
+each control made in the core that runs it (`C64CPU_ONLY=fast`).
+
+**Seen once and not yet explained**: typed through 86Box with each key held
+40 ms, a line lost and substituted characters on the fast core and not on
+the accurate one; held 150 ms, both type and answer identically (`PRINT
+6*7, SQR(2)` -> `42  1.41421356`). Section 7.2's level keyboard is sampled
+once a wake, and the faster core changes how much machine runs between two
+samples. A field check on real keys is owed.
+
 ---
 
 ## 5. The VIC-II

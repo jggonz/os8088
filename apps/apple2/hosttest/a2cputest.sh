@@ -187,6 +187,10 @@ for MODE in real neg; do
     fi
 done
 
-[ "${A2CPU_ONLY:-}" = plain ] || fast_leg
-echo "a2cputest: PASS - twelve rows, and every negative control failed, on both cores"
+if [ "${A2CPU_ONLY:-}" = plain ]; then
+    echo "a2cputest: PASS - twelve rows, and every negative control failed (the accurate core alone)"
+else
+    fast_leg
+    echo "a2cputest: PASS - twelve rows, and every negative control failed, on both cores"
+fi
 exit 0

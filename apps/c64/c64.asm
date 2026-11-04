@@ -94,6 +94,7 @@
                                     ; re-reads c64_m.romseg through
                                     ; os88_part_seg, so crt0 declares it
 
+%define CC_PARTS_AFTER_OVL 1        ; the fast core's row follows the overlay
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the
                                     ; whole API bridge
@@ -120,9 +121,16 @@
 ; 73.14.2.1). It is claimed top-down
 ; (SPEC.md 20.12.10.8), so the ~2KB of module that used to sit in a movable
 ; claim of its own now sits beside the ROM at the ceiling, not mid-arena.
-    CC_PARTS_BEGIN 2
+    CC_PARTS_BEGIN 3
       OS88_PART OP_ASSET, OP_COMP
       CC_OVL_ROW
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 2 THE FAST 6510 CORE (C64-SPEC
+                                    ; 4.7): apps/m6502/m65gen.py's, fetched
+                                    ; in os88_main and far-called; without it
+                                    ; the accurate core runs the machine alone.
+                                    ; AFTER the overlay because that one is
+                                    ; eager, and every lazy row follows every
+                                    ; eager one (the Makefile's sixth argument)
     CC_PARTS_END
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/
@@ -136,7 +144,9 @@ section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
                                     ; V30, a 286), where an 8088 does not care
                                     ; (PERFORMANCE.md Part 7, os88rdiff.py)
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is assembly):
+%define C64_FAST                    ; the accurate core's hand-back hooks
 %include "c64/c64cpu.inc"           ; the 6510 core - _c64_run(cycles). Wave 1
+%include "c64/c64fast.inc"          ; ...and the fast core's door (C64-SPEC 4.7)
                                     ; is the register file, the 256-entry
                                     ; dispatch table and the entry/exit shell
 %include "c64/c64mem.inc"           ; the RAM/ROM claim accessors and movers,

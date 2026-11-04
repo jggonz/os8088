@@ -48,6 +48,13 @@ SEG_ROM     equ 0x6000              ; ...and C64.ROM's 20KB
 
 IMG_SECTORS equ 64                  ; 32KB of harness; the program follows
 DORMSEC     equ 64                  ; ...at this sector, 128 sectors of it
+%ifdef FAST
+; THE FAST CORE'S LEG (C64-SPEC section 4.7): the same rows, through
+; c64fast.inc's _c64_run, with the part's $FE00 bytes read from CORESEC
+SEG_CODE    equ 0x7000
+CORESEC     equ 192
+CORESECS    equ 127
+%endif
 
 %macro PUSHI 1
     mov ax, %1
@@ -139,6 +146,9 @@ body:
     mov word [_c64_m+CM_RAMSEG], SEG_RAM
     mov word [_c64_m+CM_ROMSEG], SEG_ROM
     call mem_init
+%ifdef FAST
+    call fast_load
+%endif
 
 %ifdef DORMANN
     jmp dormann_main
@@ -412,14 +422,16 @@ rows_main:
     call control
     mov byte [neg_port], 0
 
-    mov si, msg_r4
-    call puts
-    call row_bound
+%ifndef FAST                        ; (row 4 is the accurate core's: a
+    mov si, msg_r4                  ; fetch FALLING THROUGH a region boundary
+    call puts                       ; is the fast core's stated deviation,
+    call row_bound                  ; C64-SPEC 4.7)
     call verdict
     mov byte [neg_stale], 1
     call row_bound
     call control
     mov byte [neg_stale], 0
+%endif
 
     mov si, msg_r5
     call puts
@@ -430,6 +442,7 @@ rows_main:
     call control
     mov byte [neg_io], 0
 
+%ifndef FAST                        ; (the accurate core's fetch ES)
     mov si, msg_r6
     call puts
     call row_seg
@@ -438,6 +451,7 @@ rows_main:
     call row_seg                    ; the call out: a DELIBERATELY STALE ES
     call control
     call unpatch_esfix
+%endif
 
     mov si, msg_r7
     call puts
@@ -465,19 +479,35 @@ rows_main:
     call puts
     call row_cyc
     call verdict
+%ifdef FAST
+    call fpatch_cyc                 ; LDA abs,X charges 3 in the fast core
+    call row_cyc
+    call control
+    call funpatch_cyc
+%else
     call patch_cyc                  ; one opcode's cost made wrong
     call row_cyc
     call control
     call unpatch_cyc
+%endif
 
     mov si, msg_r10
     call puts
     call row_dec
     call verdict
+%ifdef FAST
+    mov ax, 0xF8                    ; the fast core's SED sent to CLD: no
+    mov bx, 0xD8                    ; decimal flag, so no ADC is handed back
+    call fpatch                     ; and every answer is binary
+    call row_dec
+    call control
+    call funpatch
+%else
     call patch_dec                  ; the decimal path's carry made wrong
     call row_dec
     call control
     call unpatch_dec
+%endif
 
     mov si, msg_r11
     call puts
@@ -1951,8 +1981,14 @@ dormann_main:
     ; notices within its first few hundred instructions. A run that reaches
     ; the success trap with this in place would mean the test was not being
     ; run at all.
+  %ifdef FAST
+    mov ax, 0x69                    ; the fast core's ADC # slot sent to ORA #
+    mov bx, 0x09
+    call fpatch
+  %else
     mov ax, [cs:c64_tab + 0x09*2]
     mov [cs:c64_tab + 0x69*2], ax
+  %endif
     mov si, msg_neg
     call puts
 %endif
@@ -2080,6 +2116,11 @@ same_n:  dw 0
 SEG_LIN equ 0
 SEG_WIN equ 2
 %define OSAPI_SEG hst_seg
+%define OSAPI_MEM_CODESEL hst_codesel   ; ...and OSAPI_MEM_CODESEL's: the
+hst_codesel:                            ; segment itself (c64fast.inc)
+    mov ax, dx
+    clc
+    ret
 hst_seg:
     cmp bl, SEG_LIN
     jne .out
@@ -2094,7 +2135,110 @@ hst_seg:
     clc
     ret
 
+%ifdef FAST
+%define C64_FAST
+%endif
 %include "c64cpu.inc"
+%ifdef FAST
+%include "c64fast.inc"
+
+section .text
+fast_load:
+    push es
+    mov ax, SEG_CODE
+    mov es, ax
+    xor bx, bx
+    mov word [lba], CORESEC
+    mov cx, CORESECS
+.rd:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rd
+    pop es
+    PUSHI SEG_CODE
+    PUSHI SEG_CODE
+    call _c64f_core
+    add sp, 4
+    mov word [_c64_fseg], SEG_CODE
+    ret
+
+; fpatch - AX = an opcode whose fast-core slot now JUMPS to opcode BX's slot
+; (its first three bytes saved for funpatch)
+fpatch:
+    push es
+    push di
+    mov di, SEG_CODE
+    mov es, di
+    mov [fp_op], ax
+    mov ah, al
+    xor al, al
+    mov di, ax
+    mov ax, [es:di]
+    mov [fp_save], ax
+    mov al, [es:di+2]
+    mov [fp_save+2], al
+    mov ah, bl
+    xor al, al
+    sub ax, di
+    sub ax, 3
+    mov byte [es:di], 0xE9
+    mov [es:di+1], ax
+    pop di
+    pop es
+    ret
+
+; fpatch_cyc / funpatch_cyc - LDA abs,X ($BD)'s first `sub bp,4` made 3, and back
+fpatch_cyc:
+    mov ah, 4
+    mov al, 3
+    jmp short fcyc
+funpatch_cyc:
+    mov ah, 3
+    mov al, 4
+fcyc:
+    push es
+    push di
+    push cx
+    mov di, SEG_CODE
+    mov es, di
+    mov di, 0xBD00
+    mov cx, 254
+.f: cmp word [es:di], 0xED83
+    jne .n
+    cmp [es:di+2], ah
+    jne .n
+    mov [es:di+2], al
+    jmp short .o
+.n: inc di
+    loop .f
+.o: pop cx
+    pop di
+    pop es
+    ret
+
+funpatch:
+    push es
+    push di
+    mov di, SEG_CODE
+    mov es, di
+    mov ax, [fp_op]
+    mov ah, al
+    xor al, al
+    mov di, ax
+    mov ax, [fp_save]
+    mov [es:di], ax
+    mov al, [fp_save+2]
+    mov [es:di+2], al
+    pop di
+    pop es
+    ret
+
+section .data
+_c64_fseg:  dw 0
+fp_op:      dw 0
+fp_save:    db 0, 0, 0
+%endif
 %include "c64mem.inc"
 
 section .text

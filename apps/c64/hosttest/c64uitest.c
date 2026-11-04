@@ -764,6 +764,12 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
  * wave 6 made: a required part is here when os88_main runs or the launch
  * never got that far. `--no-rom`, a whole second process that existed to draw
  * the notice a mis-copied disk showed, went with it. */
+/* THE FAST CORE'S PART IS REFUSED HERE (C64-SPEC section 4.7): this host has
+ * no 8086 to run it, and a refused fetch is the path that leaves the
+ * accurate core's stub - the one every case below drives - running alone */
+void c64f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
+unsigned c64f_codesel(unsigned seg) { return seg; }
+
 unsigned os88_part_seg(int i)
 {
     FILE *f;
@@ -786,7 +792,8 @@ unsigned os88_part_seg(int i)
     return h_rom_seg;
 }
 
-int os88_part_fetch(int i) { (void)i; return 0; }
+int os88_part_fetch(int i) { return i == 2 ? -1 : 0; }  /* part 2 is the fast
+                                             * core, refused (C64-SPEC 4.7) */
 void os88_part_drop(int i) { (void)i; }
 int os88_part_lazyok(int i) { (void)i; return 1; }
 int os88_part_optok(void) { return 1; }

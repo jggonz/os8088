@@ -105,6 +105,45 @@ pad() {                             # pad <image> <sectors>
 }
 
 # =============================================================================
+# THE FAST CORE'S LEG (C64-SPEC section 4.7): APPLE2's a2cputest one machine
+# along - the same rows bar row 4 (a fetch falling through a region boundary,
+# the fast core's stated deviation) and row 6 (the accurate core's fetch ES),
+# and Dormann. C64CPU_ONLY=fast runs this leg alone; =plain the others alone.
+# =============================================================================
+FASTBIN=$BUILD/c64/c64fast.bin
+fast_leg() {
+    [ -f "$FASTBIN" ] || { echo "c64cputest: $FASTBIN is missing - make c64"; exit 1; }
+    [ "$(wc -c < "$FASTBIN")" -eq 65024 ] || { echo "c64cputest: $FASTBIN is not 65,024 bytes"; exit 1; }
+    for MODE in rows real neg; do
+        IMG=$BUILD/c64cputest-fast-$MODE.img
+        case $MODE in
+            rows) FL="-DFAST" ;;
+            real) FL="-DFAST -DDORMANN -DDORMOK=$DORMOK" ;;
+            neg)  FL="-DFAST -DDORMANN -DDORMOK=$DORMOK -DNEG" ;;
+        esac
+        # shellcheck disable=SC2086
+        nasm -f bin -w+error -I apps/c64/ $FL $DEC -o $IMG apps/c64/hosttest/c64cputest.asm
+        pad $IMG 64
+        cat "$DORM" >> $IMG
+        cat "$FASTBIN" >> $IMG
+        pad $IMG 2880
+        run $IMG "fast-$MODE" > $BUILD/c64cputest-fast-$MODE.log || true
+        cat $BUILD/c64cputest-fast-$MODE.log
+        case $MODE in
+            rows|real) grep -q "c64cputest: PASS" $BUILD/c64cputest-fast-$MODE.log || {
+                echo "c64cputest: the FAST CORE's $MODE leg FAILED"; exit 1; } ;;
+            neg) grep -q "control fails: ok" $BUILD/c64cputest-fast-$MODE.log || {
+                echo "c64cputest: the fast core's Dormann NEGATIVE CONTROL passed"; exit 1; } ;;
+        esac
+    done
+}
+if [ "${C64CPU_ONLY:-}" = fast ]; then
+    fast_leg
+    echo "c64cputest: PASS - the fast core's leg"
+    exit 0
+fi
+
+# =============================================================================
 # THE ROWS (seconds)
 # =============================================================================
 IMG=$BUILD/c64cputest-rows.img
@@ -140,5 +179,10 @@ for MODE in real neg; do
     fi
 done
 
-echo "c64cputest: PASS - twelve rows, and every negative control failed"
+if [ "${C64CPU_ONLY:-}" = plain ]; then
+    echo "c64cputest: PASS - twelve rows, and every negative control failed (the accurate core alone)"
+else
+    fast_leg
+    echo "c64cputest: PASS - twelve rows, and every negative control failed, on both cores"
+fi
 exit 0

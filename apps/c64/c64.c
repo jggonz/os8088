@@ -112,6 +112,14 @@ unsigned c64_div32(unsigned hi, unsigned lo, unsigned d);   /* (hi:lo)/d, and
                                              * of 10.2 need one `div` */
 
 /* --- c64cpu.inc: the core (4.5) ----------------------------------------- */
+/* THE FAST CORE (C64-SPEC section 4.7): c64_fcode is its 64KB claim and
+ * c64_fseg the selector a far call reaches it through - the same value on a
+ * real-mode kernel, the claim's code half under kern_mega. c64_fseg 0 = the
+ * accurate core runs the machine alone. c64fast.inc reads it. */
+unsigned c64_fseg;
+static unsigned c64_fcode;
+void c64f_core(unsigned dstseg, unsigned partseg);
+unsigned c64f_codesel(unsigned seg);
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
                                          * was NOT spent, so the caller's
                                          * `ran = asked - cnt` is exact */
@@ -193,6 +201,7 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
  * useless without, and the whole halted-machine state that existed to say so
  * when it went missing is gone with it. */
 #define C64_ROM_PART    0
+#define C64_FAST_PART   2                   /* the fast 6510 core (4.7) */
 #define C64_ROM_KERNAL  0x0000
 #define C64_ROM_BASIC   0x2000
 #define C64_ROM_CHARGEN 0x4000
@@ -500,6 +509,9 @@ void os88_onmove(unsigned was, unsigned now)
         if (c64_chr_seg == was)
             c64_chr_seg = now;
         c64_m.ramseg = now;
+    } else if (c64_fcode == was) {         /* the fast core's code (4.7) */
+        c64_fcode = now;
+        c64_fseg = c64f_codesel(now);
     } else if (c64_paste_seg == was) {
         c64_paste_seg = now;
     }
@@ -1672,6 +1684,35 @@ static void c64_refuse_kb(const char *what)
     os88_toast(c64_line, 0);
 }
 
+/* c64_fast_init - THE FAST CORE (section 4.7). The part is $FE00 bytes (a
+ * part's length is a sector count in a word) and the core a 64KB segment, so
+ * the code is a claim of our own with the part copied in and its last two
+ * slots written, and the part goes back. It runs in the RAM claim the
+ * accurate core already has. Any refusal leaves the accurate core running
+ * the machine alone - a slower machine and not a broken one, so nothing is
+ * said. */
+static void c64_fast_init(void)
+{
+    unsigned code;
+
+    if (os88_part_fetch(C64_FAST_PART) != 0)
+        return;
+    code = os88_mem_claim(64);
+    if (code == 0) {
+        os88_part_drop(C64_FAST_PART);
+        return;
+    }
+    c64f_core(code, os88_part_seg(C64_FAST_PART));
+    os88_part_drop(C64_FAST_PART);
+    if (c64f_codesel(code) == 0) {
+        os88_mem_free(code);
+        return;
+    }
+    os88_mem_movable(code, 1);              /* os88_onmove follows it */
+    c64_fcode = code;
+    c64_fseg = c64f_codesel(code);
+}
+
 void *os88_main(void)
 {
     static struct os88_video vid;
@@ -1781,6 +1822,7 @@ void *os88_main(void)
      * (build/port-shots/wave2-03-launch.png). RUNCPM posts its first wake
      * from its own paint for the same reason. */
     c64_kick = 1;
+    c64_fast_init();
     /* THE RAM MAY MOVE FROM HERE ON (C64-SPEC 3.1.1): every claim this
      * launch makes is made, every copy of the segment (c64_chr_seg, through
      * c64_frame_regs above) is taken, and os88_onmove keeps them. The parts

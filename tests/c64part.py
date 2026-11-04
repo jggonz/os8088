@@ -83,7 +83,9 @@ SYS_IMG = sys.argv[2] if len(sys.argv) > 2 else "build/os8088-360.img"
 APPS_IMG = "build/c64.img"
 O88 = "build/c64.o88"
 ROM_PART = 0
-OVL_PART = 1                            # CC_OVL_ROW, the table's LAST row
+OVL_PART = 1                            # CC_OVL_ROW, eager
+FAST_PART = 2                           # the fast core, LAZY and so after it
+                                        # (C64-SPEC 4.7)
 CM_RAMSEG, CM_ROMSEG = 0, 2             # apps/c64/c64cpu.inc's machine record
 C64_MATRIX = 0x0400                     # the default screen matrix
 fails = []
@@ -119,12 +121,21 @@ def run():
     if image >= len(blob):
         fails.append("C64.O88's image (%d) is not smaller than the file (%d) "
                      "- the ROM was not appended" % (image, len(blob)))
-    if len(rows) != 2 or rows[ROM_PART]["len"] != 20480:
+    if len(rows) != 3 or rows[ROM_PART]["len"] != 20480:
         fails.append("the part table is %r and should be an ASSET of 20,480 "
                      "bytes - the KERNAL, BASIC and CHARGEN of C64-SPEC 1.4 - "
-                     "and the overlay's row after it" % (rows,))
+                     "the overlay's row after it, and the fast core's last"
+                     % (rows,))
+    elif (rows[FAST_PART]["kind"] != os88parts.EQU["OP_SEG"]
+            or not rows[FAST_PART]["flags"] & os88parts.EQU["OP_LAZY"]
+            or rows[FAST_PART]["len"] != 0xFE00
+            or os88parts.part_bytes(blob, FAST_PART)
+            != open(os.path.join(ROOT, "build", "c64", "c64fast.bin"), "rb").read()):
+        fails.append("part 2 is %r and should be the fast core: a LAZY "
+                     "OP_SEG of $FE00 bytes unpacking to build/c64/c64fast.bin "
+                     "(C64-SPEC 4.7)" % (rows[FAST_PART],))
     ovl = open(os.path.join(ROOT, "build", "C64.OVL"), "rb").read()
-    if len(rows) == 2:
+    if len(rows) == 3:
         orow = rows[OVL_PART]
         if (orow["len"] != len(ovl)
                 or orow["kind"] != os88parts.EQU["OP_SEG"]
