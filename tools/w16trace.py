@@ -132,6 +132,9 @@ def find(mem, name, S, C):
 
 def report(mem, base, S, C, H):
     ring = C.get("W16_TRN")
+    for d in os.environ.get("W16_DEFINES", "").split():   # a -D is no equ
+        if d.startswith("W16_TRN="):
+            ring = int(d[8:], 0)
     n = struct.unpack_from("<H", mem, base + S["w16_trn"][1])[0]
     nb = struct.unpack_from("<H", mem, base + S["w16_nbind"][1])[0]
     print("WIN16 at linear %06X: %d calls, %d bind slots, a ring of %d"
