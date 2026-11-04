@@ -37,8 +37,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from m65gen import OPS, PENALTY, READS, RMW, STORES, REG, APPLE2, Gen  # noqa: E402
-from m65gen import XR_RESUME, XR_SLICE                                  # noqa: E402
-F_AOT, F_TAB, F_CORE = 24, 26, 28   # the Apple II's frame words (m65gen.py)
+from m65gen import XR_RESUME, XR_SLICE, C64, MAXBLK, PENALTY as _PEN    # noqa: E402,F401
 
 LEN = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "zpx": 2, "zpy": 2, "rel": 2,
        "abs": 3, "absx": 3, "absy": 3, "ind": 3, "indx": 2, "indy": 2}
@@ -52,15 +51,21 @@ LEAVE = {"BRK", "CLI", "SEI", "PLP", "RTI", "SED"}
 
 
 class Rom:
-    def __init__(self, data, base):
+    """the bytes translated: one range (the Apple II's ROM, a test range of
+    RAM) or several (the C64's BASIC and KERNAL, with I/O between them)"""
+
+    def __init__(self, data, base, more=()):
         self.data, self.base = data, base
-        self.top = base + len(data)
+        self.segs = [(base, data)] + list(more)
 
     def has(self, a):
-        return self.base <= a < self.top
+        return any(b <= a < b + len(d) for b, d in self.segs)
 
     def b(self, a):
-        return self.data[a - self.base]
+        for b, d in self.segs:
+            if b <= a < b + len(d):
+                return d[a - b]
+        raise IndexError(a)
 
     def w(self, a):
         return self.b(a) | (self.b(a + 1) << 8)
@@ -112,13 +117,22 @@ def walk(rom, seeds):
 
 
 class Aot:
-    def __init__(self, prof, rom, pcs):
+    def __init__(self, prof, rom, pcs, mine=None, bank=None):
+        """PCS is every PC translated; MINE the ones this segment holds (the
+        C64's BASIC and KERNAL are a segment each, BANK 0 and 1)"""
         self.p, self.rom, self.pcs = prof, rom, pcs
+        self.mine = pcs if mine is None else mine
+        self.bank = bank
         self.out = []
         self.n = 0
         self.ctl = False
         self.g = Gen(prof)      # the memory helpers come from the core's own
         self.g.out = self.out   # ...written into THIS file, in place
+        self.c64 = prof["name"] == "c64"
+        self.exact = bool(prof.get("exact"))
+        self.fa = prof["aot_frame"]     # the frame's translation words
+        self.cur = None                 # the PC being translated
+        self.tail = []
 
     def L(self, *l):
         self.out.extend(l)
@@ -135,7 +149,7 @@ class Aot:
         """control goes to TARGET: a jump within this code if it is
         translated, else out to the core at that PC; CHECK the countdown
         first (the instruction's cycles are already taken)"""
-        if check:
+        if check and not self.exact:
             x = self.lab()
             self.L("    jle %s" % x)
             self.go(target)
@@ -144,10 +158,47 @@ class Aot:
             self.go(target)
 
     def go(self, target):
-        if target in self.pcs:
+        if target in self.mine:
             self.L("    jmp p_%04X" % target)
+        elif target in self.pcs:
+            # THE OTHER BANK'S SEGMENT, through the table (a_far). The KERNAL
+            # into BASIC only while BASIC is mapped in; the other way needs no
+            # test - BASIC in means the KERNAL in (c64io.c's map)
+            k = self.lab()
+            if self.cur >= 0xE000:
+                self.L("    cmp byte [SCR+0x36], 1", "    jne %s" % k)
+            self.L("    mov bx, 0x%04X" % target, "    jmp a_far",
+                   "%s: mov si, 0x%04X" % (k, target), "    jmp xa_resume")
         else:
             self.L("    mov si, 0x%04X" % target, "    jmp xa_resume")
+
+    def far(self, fo):
+        """BX = an offset in the segment the frame's word FO names: there"""
+        self.L("    mov dx, bx", "    mov bx, sp",
+               "    push word [ss:bx+%d]" % fo, "    push dx",
+               "    xor dl, dl", "    retf")
+
+    def frame_of(self, bank):
+        return self.fa + (6 if bank else 0)     # BASIC's code, the KERNAL's
+
+    def bail(self, cyc):
+        """a label that leaves to the core at THIS instruction, its cycles
+        given back: what the core hands back is decided after the address"""
+        b = self.lab()
+        self.tail.append(["%s: add bp, %d" % (b, cyc), "    mov si, 0x%04X" % self.cur,
+                          "    jmp xa_resume"])
+        return b
+
+    def known_rom(self, a):
+        """the C64: a ROM byte this code may fold - its own bank, which is in
+        while this runs, and the KERNAL from BASIC"""
+        if self.cur is None or not self.rom.has(a):
+            return False
+        if 0xA000 <= self.cur < 0xC000:
+            return 0xA000 <= a < 0xC000 or a >= 0xE000
+        if self.cur >= 0xE000:
+            return a >= 0xE000
+        return False
 
     # --- flags -----------------------------------------------------------
     def nz(self, r, live):
@@ -199,10 +250,12 @@ class Aot:
             return "rom"
         return None
 
-    def read(self, mode, opnd, dst, penalty):
+    def read(self, mode, opnd, dst, penalty, cyc=0):
         """DST = the operand. The core's read path where the address is not
         known; otherwise the one instruction it comes to"""
         L = self.L
+        if self.c64:
+            return self.read_c64(mode, opnd, dst, penalty, cyc)
         if mode == "imm":
             L("    mov %s, 0x%02X" % (dst, opnd))
             return
@@ -235,8 +288,113 @@ class Aot:
                          + (["    mov %s, dh" % dst] if dst != "dh" else [])
                          + ["    jmp %s" % k])
 
-    def write(self, mode, opnd, src):
+    def read_c64(self, mode, opnd, dst, penalty, cyc):
+        """the C64: RAM below $A000 and at $C000-$CFFF; above, the bank map,
+        through the core's rd_hi (DL = 0: the cycles are already taken)"""
         L = self.L
+        if mode == "imm":
+            L("    mov %s, 0x%02X" % (dst, opnd))
+            return
+        if mode == "zp":
+            L("    mov %s, [0x%04X]" % (dst, opnd))
+            return
+        if mode == "abs":
+            if opnd < 0xA000 or 0xC000 <= opnd < 0xD000:
+                L("    mov %s, [0x%04X]" % (dst, opnd))
+            elif self.known_rom(opnd):
+                L("    mov %s, 0x%02X" % (dst, self.rom.b(opnd)))
+            else:
+                L("    mov bx, 0x%04X" % opnd, "    call rd_hi")
+                if dst != "dh":
+                    L("    mov %s, dh" % dst)
+            return
+        if mode == "indx":
+            # a pointer in $FF/$00/$01 is the core's, as the core says
+            b = self.bail(cyc)
+            L("    mov bl, 0x%02X" % opnd, "    add bl, cl",
+              "    cmp bl, 2", "    jb %s" % b, "    cmp bl, 0xFF", "    je %s" % b,
+              "    xor bh, bh",
+              "    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
+              "    mov bl, dl", "    xor dl, dl")
+        else:
+            self.ea(mode, opnd, penalty)
+        if mode in ("zpx", "zpy") or (mode in ("absx", "absy") and opnd + 255 < 0xA000):
+            L("    mov %s, [bx]" % dst)
+            return
+        k, x = self.lab(), self.lab()
+        L("    cmp bh, 0xA0", "    jae %s" % x, "    mov %s, [bx]" % dst, "%s:" % k)
+        self.tail.append(["%s: call rd_hi" % x]
+                         + (["    mov %s, dh" % dst] if dst != "dh" else [])
+                         + ["    jmp %s" % k])
+
+    def cut(self):
+        """after a write that called out: c64_cut() leaves the countdown at
+        -1 and the core ends the run after this instruction - so does this"""
+        x = self.lab()
+        self.tail.append(["%s: mov si, 0x%04X" % (x, self.nxt), "    jmp xa_slice"])
+        self.L("    or bp, bp", "    jle %s" % x)
+
+    def mark_const(self, a):
+        """c64_mark for an address known here: the page's dirty bit and "the
+        core wrote" inline, and the call only inside the watch window (the
+        KERNAL's keyboard wait stores to $0292 on every pass)"""
+        from m65gen import S_DIRTY, S_ANY, S_WATLO, S_WATHI
+        pg, k = a >> 8, self.lab()
+        self.L("    or byte [SCR+0x%02X], 0x%02X" % (S_DIRTY + (pg >> 3), 0x80 >> (pg & 7)),
+               "    mov byte [SCR+0x%02X], 1" % S_ANY,
+               "    cmp word [SCR+0x%02X], 0x%04X" % (S_WATLO, a), "    ja %s" % k,
+               "    cmp word [SCR+0x%02X], 0x%04X" % (S_WATHI, a), "    jb %s" % k,
+               "    mov bx, 0x%04X" % a, "    call c64_mark",
+               "%s:" % k)
+
+    def write_c64(self, mode, opnd, src, cyc):
+        """the C64: $00/$01 (the processor port) is the core's; RAM below
+        $D000 with the damage mark; above it the core's wr_hi"""
+        L = self.L
+        if mode == "zp":
+            L("    mov [0x%04X], %s" % (opnd, src))         # (>= 2: insn's)
+            return
+        if mode == "abs":
+            if opnd < 0xD000:
+                L("    mov [0x%04X], %s" % (opnd, src))
+                self.mark_const(opnd)
+            else:
+                L("    mov bx, 0x%04X" % opnd)
+                if src != "dh":
+                    L("    mov dh, %s" % src)
+                L("    call wr_hi")
+                self.cut()
+            return
+        if mode in ("zpx", "zpy"):
+            self.ea(mode, opnd, False)
+            L("    cmp bl, 2", "    jb %s" % self.bail(cyc), "    mov [bx], %s" % src)
+            return
+        if mode == "indx":
+            b = self.bail(cyc)
+            L("    mov bl, 0x%02X" % opnd, "    add bl, cl",
+              "    cmp bl, 2", "    jb %s" % b, "    cmp bl, 0xFF", "    je %s" % b,
+              "    xor bh, bh",
+              "    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
+              "    mov bl, dl", "    xor dl, dl")
+        else:
+            self.ea(mode, opnd, False)
+        if not (mode in ("absx", "absy") and opnd >= 2):
+            L("    cmp bx, 2", "    jb %s" % self.bail(cyc))
+        k, x = self.lab(), self.lab()
+        if mode in ("absx", "absy") and opnd + 255 < 0xD000:
+            L("    mov [bx], %s" % src, "    call c64_mark")
+            return
+        L("    cmp bh, 0xD0", "    jae %s" % x,
+          "    mov [bx], %s" % src, "    call c64_mark", "%s:" % k)
+        c = self.lab()
+        self.tail.append(["%s:" % x] + (["    mov dh, %s" % src] if src != "dh" else [])
+                         + ["    call wr_hi", "    or bp, bp", "    jg %s" % k,
+                            "%s: mov si, 0x%04X" % (c, self.nxt), "    jmp xa_slice"])
+
+    def write(self, mode, opnd, src, cyc=0):
+        L = self.L
+        if self.c64:
+            return self.write_c64(mode, opnd, src, cyc)
         (a0, a1), (b0, b1) = self.p["video"]
         if mode == "zp":
             L("    mov [0x%04X], %s" % (opnd, src))
@@ -273,6 +431,8 @@ class Aot:
         """BX is the 6502's next PC (after RTS, or JMP through RAM), the
         countdown's flags just set: through the table if it is in the ROM,
         else out to the core"""
+        if self.exact:
+            return self.rts_to_exact()
         out, ex, res = self.lab(), self.lab(), self.lab()
         self.L("    jle %s" % out,
                "    cmp bx, 0x%04X" % self.rom.base, "    jb %s" % ex,
@@ -286,12 +446,66 @@ class Aot:
                "%s: mov si, bx" % ex,
                "%s: jmp xa_resume" % res)
 
+    def rts_to_exact(self):
+        """...on an exact profile: into the table only with more than MAXBLK
+        left, since the target may be inside a block; and on the C64 only
+        into a bank that is mapped in. ES is the table throughout"""
+        ex, res = self.lab(), self.lab()
+        L = self.L
+        L("    cmp bp, %d" % MAXBLK, "    jle %s" % ex)
+        if self.c64 and self.bank is not None:
+            b = self.lab()
+            L("    cmp bh, 0xA0", "    jb %s" % ex,
+              "    cmp bh, 0xC0", "    jb %s" % b,
+              "    cmp bh, 0xE0", "    jb %s" % ex,
+              "    cmp byte [SCR+0x38], 2", "    jne %s" % ex,     # MAPE
+              "    mov si, bx", "    sub bh, 0xC0",
+              "    shl bx, 1", "    mov bx, [es:bx]",
+              "    test bx, bx", "    jz %s" % res)
+            if self.bank == 1:
+                L("    jmp bx")
+            else:
+                self.far(self.frame_of(1))
+            L("%s: cmp byte [SCR+0x36], 1" % b, "    jne %s" % ex,  # MAPA
+              "    mov si, bx", "    sub bh, 0xA0",
+              "    shl bx, 1", "    mov bx, [es:bx]",
+              "    test bx, bx", "    jz %s" % res)
+            if self.bank == 0:
+                L("    jmp bx")
+            else:
+                self.far(self.frame_of(0))
+            L("%s: mov si, bx" % ex,
+              "%s: jmp xa_resume" % res)
+            return
+        else:
+            lo = self.rom.base
+            hi = lo + len(self.rom.data)
+            L("    cmp bx, 0x%04X" % lo, "    jb %s" % ex,
+              "    cmp bx, 0x%04X" % hi, "    jae %s" % ex,
+              "    mov si, bx", "    sub bx, 0x%04X" % lo)
+        L("    shl bx, 1",
+          "    mov bx, [es:bx]",
+          "    test bx, bx", "    jz %s" % res,
+          "    jmp bx",
+          "%s: mov si, bx" % ex,
+          "%s: jmp xa_resume" % res)
+
     # --- one instruction -------------------------------------------------
     def insn(self, pc, live_nz):
         mn, mode, cyc, opnd, n = decode(self.rom, pc)
         L = self.L
         nxt = pc + n
+        self.cur, self.nxt = pc, nxt
         self.L("p_%04X:" % pc)
+        if self.exact and pc in self.leaders:
+            # THE BLOCK'S COST, tested before it runs: the core runs a block
+            # the budget cannot cover, and ends the run where it would
+            k = self.lab()
+            L("    cmp bp, %d" % self.leaders[pc], "    jg %s" % k,
+              "    mov si, 0x%04X" % pc, "    jmp xa_resume", "%s:" % k)
+        if self.c64 and self.static_core(mn, mode, opnd):
+            L("    mov si, 0x%04X" % pc, "    jmp xa_resume")
+            return False
         if mn in LEAVE or (mn in ("ADC", "SBC")) and False:
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")
             return False
@@ -300,7 +514,7 @@ class Aot:
             k = self.lab()
             L("    test byte [%s], 0x08" % self.PV(), "    jz %s" % k,
               "    mov si, 0x%04X" % pc, "    jmp xa_resume", "%s:" % k)
-        if mn in RMW and mode not in ("acc", "zp", "zpx") and \
+        if not self.c64 and mn in RMW and mode not in ("acc", "zp", "zpx") and \
                 not (mode == "abs" and opnd < 0xC000) and \
                 not (mode == "absx" and opnd + 255 < 0xC000):
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")   # I/O or ROM
@@ -308,7 +522,7 @@ class Aot:
         L("    sub bp, %d" % cyc)
         if mn in READS:
             dst = {"LDA": "al", "LDX": "cl", "LDY": "ch"}.get(mn, "dh")
-            self.read(mode, opnd, dst, mode in PENALTY)
+            self.read(mode, opnd, dst, mode in PENALTY, cyc)
             src = dst
             if mn in ("LDA", "LDX", "LDY"):
                 self.nz(dst, live_nz)
@@ -340,7 +554,7 @@ class Aot:
                   "    and byte [%s], 0xBF" % self.PV(),
                   "    or [%s], dl" % self.PV(), "    xor dl, dl")
         elif mn in STORES:
-            self.write(mode, opnd, STORES[mn])
+            self.write(mode, opnd, STORES[mn], cyc)
         elif mn in RMW:
             if mode == "acc":
                 self.shift(mn, "al", live_nz)
@@ -357,9 +571,20 @@ class Aot:
                     L("    mov bx, 0x%04X" % opnd)
                 else:
                     self.ea(mode, opnd, False)
+                if self.c64 and mode == "zpx":
+                    L("    cmp bl, 2", "    jb %s" % self.bail(cyc))
+                elif self.c64 and mode == "absx" and not (2 <= opnd and opnd + 255 < 0xA000):
+                    b = self.bail(cyc)
+                    L("    cmp bh, 0xA0", "    jae %s" % b, "    cmp bx, 2", "    jb %s" % b)
                 L("    mov dh, [bx]")
                 self.shift(mn, "dh", True)
                 L("    mov [bx], dh")
+                if self.c64:
+                    if mode == "abs":
+                        self.mark_const(opnd)
+                    elif mode == "absx":
+                        L("    call c64_mark")
+                    return True
                 (a0, a1), (b0, b1) = self.p["video"]
                 if mode == "abs":
                     pg = opnd >> 8
@@ -392,14 +617,17 @@ class Aot:
             return True
         elif mn == "JMP":
             if mode == "abs":
-                if opnd <= pc:          # only a backward one can loop
+                if opnd <= pc and not self.exact:   # only a backward one can loop
                     L("    or bp, bp")
                 self.to(opnd, check=opnd <= pc)
                 return False
             # (ind): the pointer is in RAM or the ROM, with the NMOS page wrap
             ptr = opnd
             hi = (ptr & 0xFF00) | ((ptr + 1) & 0xFF)
-            if 0xC000 <= ptr < 0xD000 or 0xC000 <= hi < 0xD000:
+            if self.c64 and (ptr >= 0xA000 or hi >= 0xA000 or ptr < 2):
+                L("    add bp, %d" % cyc, "    mov si, 0x%04X" % pc, "    jmp xa_resume")
+                return False
+            if not self.c64 and (0xC000 <= ptr < 0xD000 or 0xC000 <= hi < 0xD000):
                 L("    add bp, %d" % cyc, "    mov si, 0x%04X" % pc, "    jmp xa_resume")
                 return False
             L("    mov bl, [0x%04X]" % ptr, "    mov bh, [0x%04X]" % hi,
@@ -453,6 +681,26 @@ class Aot:
             raise ValueError(mn)
         return True                 # falls through to the next PC
 
+    def static_core(self, mn, mode, opnd):
+        """the C64: an instruction whose operand alone says the core runs it
+        - a write to the processor port, a read-modify-write of what may not
+        be RAM, a pointer in $FF/$00/$01"""
+        writes = mn in STORES or (mn in RMW and mode != "acc")
+        if writes and mode in ("zp", "abs") and opnd < 2:
+            return True
+        if mn in RMW and mode == "abs" and opnd >= 0xA000:
+            return True
+        return mode == "indy" and opnd in (0x00, 0x01, 0xFF)
+
+    def may_exit(self, mn, mode, opnd):
+        """the C64: may this instruction leave for the core before it writes
+        N and Z (a bail on its address, or a write that called out)"""
+        if self.static_core(mn, mode, opnd):
+            return True
+        if mn in STORES or (mn in RMW and mode not in ("acc", "zp")):
+            return True
+        return mode in ("indx", "indy")
+
     def shift(self, mn, r, live):
         L = self.L
         if mn == "ASL":
@@ -478,40 +726,50 @@ class Aot:
         ARE that routine (a patched CHRGET, or decimal mode, goes to the
         core at the same PC, which runs whatever is there)."""
         L, PV = self.L, self.PV()
-        sig = [(0xB1, 0xB8E6), (0xB3, 0x02D0), (0xB5, 0xB9E6), (0xBA, 0x3AC9),
-               (0xBC, 0x0AB0), (0xBE, 0x20C9), (0xC0, 0xEFF0), (0xC2, 0xE938),
-               (0xC4, 0x3830), (0xC6, 0xD0E9)]
-        for entry, lab in ((0xB1, "a_chrget"), (0xB7, "a_chrgot")):
+        # THE SAME ROUTINE IN BOTH BASICS (Microsoft's), at $00B1 in
+        # Applesoft and $0073 on the C64: TXTPTR is its 8th and 9th bytes
+        B = min(self.p["chrget"])
+        T = B + 7
+        sig = [(B, 0xE6 | T << 8), (B + 2, 0x02D0), (B + 4, 0xE6 | (T + 1) << 8),
+               (B + 9, 0x3AC9), (B + 11, 0x0AB0), (B + 13, 0x20C9), (B + 15, 0xEFF0),
+               (B + 17, 0xE938), (B + 19, 0x3830), (B + 21, 0xD0E9)]
+        top = 0xA0 if self.c64 else 0xC0
+        for entry, lab in ((B, "a_chrget"), (B + 6, "a_chrgot")):
             L("%s:" % lab)
             for a, w in sig:
                 L("    cmp word [0x%04X], 0x%04X" % (a, w), "    jne .core")
-            L("    cmp byte [0x00B7], 0xAD", "    jne .core",
-              "    cmp byte [0x00C8], 0x60", "    jne .core",
+            L("    cmp byte [0x%04X], 0xAD" % (B + 6), "    jne .core",
+              "    cmp byte [0x%04X], 0x60" % (B + 23), "    jne .core",
               "    test byte [%s], 0x08" % PV, "    jnz .core")
-            L("    jmp %s" % ("a_chrbody.inc" if entry == 0xB1 else "a_chrbody.lda"))
+            if self.exact:
+                # the whole routine's worst path is 38 cycles: the core runs
+                # it where that does not fit, so the run ends where it would
+                L("    cmp bp, 40", "    jle .core")
+            L("    jmp %s" % ("a_chrbody.inc" if entry == B else "a_chrbody.lda"))
             L(".core: mov si, 0x%04X" % entry, "    jmp xa_resume")
-        L("a_chrbody:",
+        loop = (["    cmp bp, 40", "    jle .loopx", "    jmp .inc",
+                 ".loopx: mov si, 0x%04X" % B, "    jmp xa_resume"] if self.exact else
+                ["    jle .loopx", "    jmp .inc",
+                 ".loopx: mov si, 0x%04X" % B, "    jmp xa_slice"])
+        L(*["a_chrbody:",
           ".inc:",
           "    sub bp, 5",
-          "    inc byte [0x00B8]",              # INC TXTPTR
+          "    inc byte [0x%04X]" % T,          # INC TXTPTR
           "    jz .hi",
           "    sub bp, 3",                      # BNE, taken
           "    jmp short .lda",
           ".hi: sub bp, 7",                     # BNE not (2), INC TXTPTR+1 (5)
-          "    inc byte [0x00B9]",
+          "    inc byte [0x%04X]" % (T + 1),
           ".lda:",
           "    sub bp, 6",                      # LDA abs (4), CMP # (2)
-          "    mov bx, [0x00B8]",
-          "    cmp bh, 0xC0", "    jae .rd",
+          "    mov bx, [0x%04X]" % T,
+          "    cmp bh, 0x%02X" % top, "    jae .rd",
           "    mov al, [bx]",
           ".got:",
           "    cmp al, 0x3A", "    jae .ge",
           "    sub bp, 4",                      # BCS not (2), CMP # (2)
           "    cmp al, 0x20", "    jne .digit",
-          "    sub bp, 3",                      # BEQ taken: the space loop
-          "    jle .loopx",
-          "    jmp .inc",
-          ".loopx: mov si, 0x00B1", "    jmp xa_slice",
+          "    sub bp, 3"] + loop + [           # BEQ taken: the space loop
           ".digit:",
           "    sub bp, 10",                     # BEQ not, SEC, SBC, SEC, SBC
           "    or ah, 0x01", "    sahf", "    cmc", "    sbb al, 0x30", "    cmc", "    lahf",
@@ -524,9 +782,9 @@ class Aot:
           ".rts:",
           "    sub bp, 6",
           "    jmp a_rts",
-          ".rd: call ra_any",
+          ".rd: call %s" % ("rd_hi" if self.c64 else "ra_any"),
           "    mov al, dh",
-          "    jmp .got")
+          "    jmp .got"])
 
     # --- the whole ------------------------------------------------------
     def liveness(self):
@@ -540,7 +798,13 @@ class Aot:
             if mn in TRANSFERS or mode == "rel" or mn in LEAVE or nxt not in self.pcs:
                 live[pc] = True
                 continue
-            nmn, nmode = decode(self.rom, nxt)[:2]
+            if self.exact and nxt in self.leaders:
+                live[pc] = True                 # its block test may leave
+                continue
+            nmn, nmode, _, nopnd = decode(self.rom, nxt)[:4]
+            if self.c64 and self.may_exit(nmn, nmode, nopnd):
+                live[pc] = True
+                continue
             if nmode == "rel" or nmn in ("PHP", "ADC", "SBC") or nmn in LEAVE \
                     or nmn in TRANSFERS:
                 live[pc] = True                 # it reads them, or leaves
@@ -556,9 +820,70 @@ class Aot:
                 live[pc] = live.get(nxt, True)
         return live
 
+    def cost(self, pc):
+        """the most an instruction can take: its cycles, a page crossed, a
+        branch taken across one"""
+        mn, mode, cyc = decode(self.rom, pc)[:3]
+        return cyc + (1 if mode in PENALTY and mn in READS else 0) + \
+            (2 if mode == "rel" else 0)
+
+    def falls(self, pc):
+        """does control reach the next PC in order (a branch not taken does)"""
+        mn, mode, cyc, opnd, n = decode(self.rom, pc)
+        if mn in TRANSFERS or mn in LEAVE:
+            return False
+        return not (self.c64 and self.static_core(mn, mode, opnd))
+
+    def blocks(self):
+        """EXACT PROFILES: the PCs whose translation tests the countdown, ->
+        what the code from there to the next block can take at most.
+
+        A PC entered from OUTSIDE the translation (the core's ct_rom) or
+        through the table (RTS, JMP through a pointer) is entered only with
+        more than MAXBLK left, so it needs no test of its own. What does is
+        a PC a STATIC jump enters - JMP, JSR, a branch backwards, a branch
+        forwards out of its own block - and one that a block too long for
+        MAXBLK falls into. Within a block control only moves forwards, and
+        what it skips it does not pay, so the block's straight sum bounds
+        every path through it."""
+        into, targets, fwd = set(), set(), []
+        for pc in self.pcs:
+            mn, mode, cyc, opnd, n = decode(self.rom, pc)
+            nxt = pc + n
+            if mode == "rel":
+                t = (nxt + (opnd - 256 if opnd & 0x80 else opnd)) & 0xFFFF
+                if t <= pc:
+                    targets.add(t)
+                else:
+                    fwd.append((pc, t))
+            elif mn in ("JMP", "JSR") and mode == "abs":
+                targets.add(opnd)
+            if self.falls(pc):
+                into.add(nxt)
+        checked = targets & self.pcs
+        while True:
+            block_of, cost, start, total = {}, {}, None, 0
+            for pc in sorted(self.pcs):
+                c = self.cost(pc)
+                if pc in checked or pc not in into or start is None:
+                    start, total = pc, 0
+                elif total + c > MAXBLK:
+                    checked.add(pc)             # fallen into: it must test
+                    start, total = pc, 0
+                total += c
+                block_of[pc] = start
+                cost[start] = total
+            more = {t for src, t in fwd
+                    if t in self.pcs and t not in checked and block_of[t] != block_of[src]}
+            if not more:
+                return {pc: cost[pc] for pc in checked}
+            checked |= more
+
     def emit(self):
         L = self.L
         p = self.p
+        self.leaders = self.blocks() if self.exact else {}
+        F_CORE = self.fa + 4
         L("; GENERATED by apps/m6502/m65aot.py --machine %s - do not edit" % p["name"],
           "cpu 8086", "bits 16", "org 0",
           "SCR  equ 0x%04X" % p["scr"],
@@ -581,6 +906,8 @@ class Aot:
         # $BFFF for a read), DH the byte, the cycles already counted
         # (CALLED, so the doors they reach are one call deeper than a
         # handler's: rd_io2/wr_io2 read the frame two bytes further on)
+        if self.c64:
+            return self.emit_rest()
         mark = len(self.out)
         L("ra_any:")
         self.g.later = []
@@ -602,6 +929,25 @@ class Aot:
         L(*[l.replace("rd_io:", "rd_io2:").replace("wr_io:", "wr_io2:") for l in io2])
         if self.p.get("chrget"):
             self.emit_chrget()
+        return self.emit_rest()
+
+    def emit_rest(self):
+        L = self.L
+        if self.c64:
+            # (the C64's memory paths are the core's own rd_hi and wr_hi,
+            # called from this code at the depth a handler calls them)
+            if self.p.get("chrget"):
+                self.emit_chrget()
+            if self.bank is not None:
+                # a_far - BX = a PC of the OTHER bank, mapped in and a block's
+                # start (its own test): its translation, in its segment
+                L("a_far:",
+                  "    mov si, bx",
+                  "    sub bh, 0x%02X" % (0xC0 if self.bank == 0 else 0xA0),
+                  "    shl bx, 1", "    mov bx, [es:bx]",
+                  "    test bx, bx", "    jz .res")
+                self.far(self.frame_of(1 - self.bank))
+                L(".res: jmp xa_resume")
         # V from the 8086's OF, once (ADC, SBC)
         L("a_vof:",
           "    jo .v",
@@ -634,7 +980,7 @@ class Aot:
         self.tail = []
         prev_falls = False
         last = None
-        for pc in sorted(self.pcs):
+        for pc in sorted(self.mine):
             if prev_falls and last is not None and last != pc:
                 L("    mov si, 0x%04X" % last, "    jmp xa_resume")
             prev_falls = self.insn(pc, live[pc])
@@ -657,7 +1003,7 @@ class Aot:
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--machine", default="apple2", choices=["apple2"])
+    ap.add_argument("--machine", default="apple2", choices=["apple2", "c64"])
     ap.add_argument("--rom", required=True)
     ap.add_argument("--seeds", required=True)
     ap.add_argument("-o", "--out", required=True)
@@ -665,12 +1011,18 @@ def main():
     ap.add_argument("--range", help="LO:HI hex - translate this part of a 64KB "
                     "IMAGE instead of a ROM (a2cputest's Dormann)")
     a = ap.parse_args()
-    prof = APPLE2
+    prof = APPLE2 if a.machine == "apple2" else C64
     if a.range:
         lo, hi = (int(v, 16) for v in a.range.split(":"))
         rom = Rom(open(a.rom, "rb").read()[lo:hi], lo)
-        prof = dict(APPLE2, aot=(lo, hi), chrget=None)
+        prof = dict(prof, aot=(lo, hi), chrget=None)
         seeds = []
+    elif a.machine == "c64":
+        # C64.ROM is the package's part 0: the KERNAL at 0, BASIC at $2000
+        # (c64cpu.inc's C64_ROMS_*)
+        img = open(a.rom, "rb").read()
+        rom = Rom(img[0x2000:0x4000], 0xA000, [(0xE000, img[0:0x2000])])
+        seeds = [rom.w(0xFFFC), rom.w(0xFFFE), rom.w(0xFFFA)]
     else:
         rom = Rom(open(a.rom, "rb").read()[:0x3000], 0xD000)
         seeds = [rom.w(0xFFFC), rom.w(0xFFFE), rom.w(0xFFFA)]
@@ -678,9 +1030,9 @@ def main():
     pcs = walk(rom, seeds)
     # THE KEYIN LOOP STAYS THE CORE'S: it runs it as an exact counter while
     # no key is latched (m65gen.py's kbd_idle), which no translation beats
-    if not a.range:
+    if not a.range and a.machine == "apple2":
         pcs -= {0xFD1B, 0xFD1D, 0xFD1F, 0xFD21, 0xFD24}
-    else:
+    elif a.range:
         # A RANGE OF RAM CAN BE WRITTEN, which a ROM cannot: an instruction
         # whose bytes a fixed-address store in the program writes (Dormann's
         # branch test rewrites a BEQ's offset at $04E6) is left to the core,
@@ -697,33 +1049,52 @@ def main():
         if smc:
             print("m65aot: %d PC(s) written by the program left to the core: %s"
                   % (len(smc), " ".join("$%04X" % p for p in sorted(smc))))
-    src = Aot(prof, rom, pcs).emit()
-    # ASSEMBLED HERE, for the symbol map the PC table is made from
+    # ONE SEGMENT, or on the C64 one per bank - BASIC's to -o, the KERNAL's
+    # to the same name with a `k` (each its own part: together they pass
+    # what a part can hold)
     import re
     import subprocess
-    bin_out = os.path.splitext(a.out)[0] + ".bin"
-    map_out = os.path.splitext(a.out)[0] + ".map"
-    with open(a.out, "w") as f:
-        f.write("[map symbols %s]\n" % map_out + src)
-    subprocess.run(["nasm", "-f", "bin", "-w+error", "-o", bin_out, a.out], check=True)
-    size = os.path.getsize(bin_out)
-    if size > 0xFE00:
-        raise SystemExit("m65aot: the translation is %d bytes and a part stops "
-                         "at 65,024" % size)
-    labs = {}
-    for line in open(map_out):
-        m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+p_([0-9A-F]{4})\s*$", line)
-        if m:
-            labs[int(m.group(3), 16)] = int(m.group(2), 16)
-    tab = bytearray(2 * len(rom.data))
+    if a.machine == "c64" and not a.range:
+        outs = [(a.out, {p for p in pcs if p < 0xC000}, 0),
+                (os.path.splitext(a.out)[0] + "k.asm", {p for p in pcs if p >= 0xE000}, 1)]
+    else:
+        outs = [(a.out, None, None)]
+    labs, sizes = {}, []
+    for out, mine, bank in outs:
+        src = Aot(prof, rom, pcs, mine, bank).emit()
+        # ASSEMBLED HERE, for the symbol map the PC table is made from
+        bin_out = os.path.splitext(out)[0] + ".bin"
+        map_out = os.path.splitext(out)[0] + ".map"
+        with open(out, "w") as f:
+            f.write("[map symbols %s]\n" % map_out + src)
+        subprocess.run(["nasm", "-f", "bin", "-w+error", "-o", bin_out, out], check=True)
+        size = os.path.getsize(bin_out)
+        sizes.append(size)
+        if size > 0xFE00:
+            raise SystemExit("m65aot: %s is %d bytes and a part stops at 65,024"
+                             % (bin_out, size))
+        for line in open(map_out):
+            m = re.match(r"\s*([0-9A-F]+)\s+([0-9A-F]+)\s+p_([0-9A-F]{4})\s*$", line)
+            if m and (mine is None or int(m.group(3), 16) in mine):
+                labs[int(m.group(3), 16)] = int(m.group(2), 16)
+    # THE TABLE: a word per PC of each range, the ranges one after another
+    # (the C64's: BASIC's 8K, then the KERNAL's - the core's ct_rom)
+    tab = bytearray(2 * sum(len(d) for b, d in rom.segs))
     for pc, off in labs.items():
         if off == 0:
             raise SystemExit("m65aot: a translation at offset 0 reads as none")
-        tab[2 * (pc - rom.base):2 * (pc - rom.base) + 2] = off.to_bytes(2, "little")
+        i = 0
+        for b, d in rom.segs:
+            if b <= pc < b + len(d):
+                i += pc - b
+                break
+            i += len(d)
+        tab[2 * i:2 * i + 2] = off.to_bytes(2, "little")
     with open(a.table, "wb") as f:
         f.write(tab)
-    print("m65aot: %d seeds, %d ROM PCs translated, %d bytes; the PC table %d "
-          "entries -> %s, %s" % (len(seeds), len(pcs), size, len(labs), bin_out, a.table))
+    print("m65aot: %d seeds, %d ROM PCs translated, %s bytes; the PC table %d "
+          "entries -> %s" % (len(seeds), len(pcs), " + ".join(map(str, sizes)),
+                             len(labs), a.table))
 
 
 if __name__ == "__main__":

@@ -117,6 +117,15 @@ unsigned c64_div32(unsigned hi, unsigned lo, unsigned d);   /* (hi:lo)/d, and
  * real-mode kernel, the claim's code half under kern_mega. c64_fseg 0 = the
  * accurate core runs the machine alone. c64fast.inc reads it. */
 unsigned c64_fseg;
+unsigned c64_faot;                          /* BASIC'S AND THE KERNAL'S
+                                             * TRANSLATIONS (4.8): BASIC's
+                                             * call selector (0 = the core
+                                             * runs the ROMs itself), the
+                                             * KERNAL's, and the PC table's
+                                             * segment. c64fast.inc puts all
+                                             * three in the frame */
+unsigned c64_fakb;
+unsigned c64_ftab;
 static unsigned c64_fcode;
 void c64f_core(unsigned dstseg, unsigned partseg);
 unsigned c64f_codesel(unsigned seg);
@@ -202,6 +211,9 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
  * when it went missing is gone with it. */
 #define C64_ROM_PART    0
 #define C64_FAST_PART   2                   /* the fast 6510 core (4.7) */
+#define C64_AOTB_PART   3                   /* BASIC, translated (4.8) */
+#define C64_AOTK_PART   4                   /* ...the KERNAL */
+#define C64_AOTPC_PART  5                   /* ...and their PC table */
 #define C64_ROM_KERNAL  0x0000
 #define C64_ROM_BASIC   0x2000
 #define C64_ROM_CHARGEN 0x4000
@@ -1763,6 +1775,25 @@ static void c64_fast_init(void)
     os88_mem_movable(code, 1);              /* os88_onmove follows it */
     c64_fcode = code;
     c64_fseg = c64f_codesel(code);
+    /* ...AND BASIC AND THE KERNAL TRANSLATED AHEAD OF TIME (section 4.8),
+     * all three parts or none: they are fetched pinned, and the core enters
+     * either segment through the table */
+    if (os88_part_fetch(C64_AOTB_PART) != 0)
+        return;
+    if (os88_part_fetch(C64_AOTK_PART) != 0) {
+        os88_part_drop(C64_AOTB_PART);
+        return;
+    }
+    if (os88_part_fetch(C64_AOTPC_PART) != 0) {
+        os88_part_drop(C64_AOTK_PART);
+        os88_part_drop(C64_AOTB_PART);
+        return;
+    }
+    c64_fakb = c64f_codesel(os88_part_seg(C64_AOTK_PART));
+    c64_ftab = os88_part_seg(C64_AOTPC_PART);
+    c64_faot = c64f_codesel(os88_part_seg(C64_AOTB_PART));
+    if (c64_faot == 0 || c64_fakb == 0)
+        c64_faot = 0;
 }
 
 void *os88_main(void)

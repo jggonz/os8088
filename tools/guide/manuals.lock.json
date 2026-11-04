@@ -35,9 +35,9 @@
   "sources": [
    "apps/apple2"
   ],
-  "stamped": "2206227d",
-  "strings": "fce633db958ead5c",
-  "why": "only docs/APPLE2-PORT-PLAN.md -> docs/plans/completed/ path renames in comments and README.TXT; nothing the page describes changed"
+  "stamped": "fae17be3",
+  "strings": "3a45cab2f2f03ebd",
+  "why": "speed paragraph: the fast core, the ROM translation and the 1.02 MHz throttle on a 286"
  },
  "APPS": {
   "sources": [],
@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "86ee3df0",
-  "strings": "3308f2081ea59ce1",
-  "why": "checked: Smart attach dialog opens with Open greyed until a file is picked, Preferences items aligned; the page describes neither in detail"
+  "stamped": "fae17be3",
+  "strings": "0b5b771a1f9eb9c6",
+  "why": "speed paragraph: the fast core, BASIC/KERNAL translation and the throttle"
  },
  "CALC_O88": {
   "sources": [

@@ -94,7 +94,7 @@
                                     ; re-reads c64_m.romseg through
                                     ; os88_part_seg, so crt0 declares it
 
-%define CC_PARTS_AFTER_OVL 1        ; the fast core's row follows the overlay
+%define CC_PARTS_AFTER_OVL 4        ; the fast core's rows follow the overlay
 %include "cc/crt0.asm"              ; the sections, the 32-byte header, the
                                     ; entry and callback trampolines, and the
                                     ; whole API bridge
@@ -121,7 +121,7 @@
 ; 73.14.2.1). It is claimed top-down
 ; (SPEC.md 20.12.10.8), so the ~2KB of module that used to sit in a movable
 ; claim of its own now sits beside the ROM at the ceiling, not mid-arena.
-    CC_PARTS_BEGIN 3
+    CC_PARTS_BEGIN 6
       OS88_PART OP_ASSET, OP_COMP
       CC_OVL_ROW
       OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 2 THE FAST 6510 CORE (C64-SPEC
@@ -131,6 +131,10 @@
                                     ; AFTER the overlay because that one is
                                     ; eager, and every lazy row follows every
                                     ; eager one (the Makefile's sixth argument)
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 3 BASIC TRANSLATED AHEAD OF TIME
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 4 ...the KERNAL (C64-SPEC 4.8:
+                                    ; apps/m6502/m65aot.py's, a segment each)
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 5 ...and their PC table
     CC_PARTS_END
 
 %include "c64.gen.asm"              ; the compiled C, found through -I build/

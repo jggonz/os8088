@@ -104,4 +104,5 @@ the alarm model through the same `expire`.
 | 1b | the core's own cost: a profile shows the idle loop at ~120 host clocks an emulated instruction, taken jumps and code bytes | **landed** - one-test jump targets, word JSR/RTS, RAM reads fall through, the KEYIN counter: 547% idle, 67% under BASIC |
 | 1c | Applesoft and the Monitor translated AHEAD OF TIME (the ARCADE branch's `arcaot.py` shape: the ROM is fixed), the interpreter keeping RAM programs | **landed** - 4,596 ROM PCs in 56KB, 109% under BASIC on the 286 under warp (APPLE2-SPEC 4.7); Dormann runs through the translation |
 | 2 | C64 on the generated core | **landed** - 40% idle, 47% under BASIC on the 286 (C64-SPEC 4.7); Dormann and every applicable row pass on the fast leg |
+| 2b | BASIC and the KERNAL translated ahead of time, a segment each, the run's end kept exact | **landed** - 99.8% idle (throttled), 81% under BASIC on the 286 (C64-SPEC 4.8); Dormann runs through the translation |
 | 3 | the speed pass: 286 and XT measured, the diary, the SPEC sections' measured lines | |

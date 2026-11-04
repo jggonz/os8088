@@ -86,6 +86,10 @@ ROM_PART = 0
 OVL_PART = 1                            # CC_OVL_ROW, eager
 FAST_PART = 2                           # the fast core, LAZY and so after it
                                         # (C64-SPEC 4.7)
+AOT_PARTS = ((3, "OP_SEG", "c64aot.bin"),       # BASIC translated (4.8)
+             (4, "OP_SEG", "c64aotk.bin"),      # ...the KERNAL
+             (5, "OP_ASSET", "c64aotpc.bin"))   # ...their PC table
+NPARTS = 6
 CM_RAMSEG, CM_ROMSEG = 0, 2             # apps/c64/c64cpu.inc's machine record
 C64_MATRIX = 0x0400                     # the default screen matrix
 fails = []
@@ -121,7 +125,7 @@ def run():
     if image >= len(blob):
         fails.append("C64.O88's image (%d) is not smaller than the file (%d) "
                      "- the ROM was not appended" % (image, len(blob)))
-    if len(rows) != 3 or rows[ROM_PART]["len"] != 20480:
+    if len(rows) != NPARTS or rows[ROM_PART]["len"] != 20480:
         fails.append("the part table is %r and should be an ASSET of 20,480 "
                      "bytes - the KERNAL, BASIC and CHARGEN of C64-SPEC 1.4 - "
                      "the overlay's row after it, and the fast core's last"
@@ -134,8 +138,16 @@ def run():
         fails.append("part 2 is %r and should be the fast core: a LAZY "
                      "OP_SEG of $FE00 bytes unpacking to build/c64/c64fast.bin "
                      "(C64-SPEC 4.7)" % (rows[FAST_PART],))
+    if len(rows) == NPARTS:
+        for n, kind, f in AOT_PARTS:
+            if (rows[n]["kind"] != os88parts.EQU[kind]
+                    or not rows[n]["flags"] & os88parts.EQU["OP_LAZY"]
+                    or os88parts.part_bytes(blob, n)
+                    != open(os.path.join(ROOT, "build", "c64", f), "rb").read()):
+                fails.append("part %d is %r and should be a LAZY %s unpacking "
+                             "to build/c64/%s (C64-SPEC 4.8)" % (n, rows[n], kind, f))
     ovl = open(os.path.join(ROOT, "build", "C64.OVL"), "rb").read()
-    if len(rows) == 3:
+    if len(rows) == NPARTS:
         orow = rows[OVL_PART]
         if (orow["len"] != len(ovl)
                 or orow["kind"] != os88parts.EQU["OP_SEG"]
@@ -267,6 +279,22 @@ def run():
                     "the guest holds %s and build/C64.OVL holds %s - every "
                     "menu command far-calls into these bytes"
                     % (oseg, off, got.hex(), ovl[off:off + 16].hex()))
+
+        # --- 5d. ...and BASIC and the KERNAL translated (C64-SPEC 4.8):
+        # os88_main's c64_fast_init fetched all three lazy parts, and each
+        # names its own bytes. (On kern_mega the two code words are
+        # selectors, read through the linear base os88marty resolves.)
+        for sym, (n, kind, f) in zip(("_c64_faot", "_c64_fakb", "_c64_ftab"), AOT_PARTS):
+            sg = u16(m.read(lin(seg, C64.sym(sym)), 2))
+            want = open(os.path.join(ROOT, "build", "c64", f), "rb").read()[:64]
+            got = bytes(m.read(lin(sg), 64)) if sg else b""
+            say("%s %04X" % (sym, sg))
+            if got != want:
+                fails.append(
+                    "%s is %04X and does not hold build/c64/%s's first bytes: "
+                    "c64_fast_init fetches parts 3-5 when the fast core is "
+                    "there, and the core enters BASIC and the KERNAL through "
+                    "them (C64-SPEC 4.8)" % (sym, sg, f))
 
         # --- and the machine is RUNNING, which is as far as this row goes -
         st = u16(m.read(lin(seg, C64.sym("_c64_state")), 2))

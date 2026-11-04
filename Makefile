@@ -11124,7 +11124,7 @@ rczex: $(BUILD)/runcpm.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/c64/c64fast.bin))
+$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/c64/c64fast.bin $(BUILD)/c64/c64aot.bin $(BUILD)/c64/c64aotk.bin $(BUILD)/c64/c64aotpc.bin))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): c64.c #includes the parts,
 # and the shim %includes the three hand-written pieces and the icon. Every one
@@ -11426,6 +11426,21 @@ $(BUILD)/c64/c64fast.asm: apps/m6502/m65gen.py apps/c64/c64cpu.inc | $(BUILD)
 
 $(BUILD)/c64/c64fast.bin: $(BUILD)/c64/c64fast.asm
 	$(NASM) -f bin -w+error -l $(BUILD)/c64/c64fast.lst -o $@ $<
+
+# ...AND BASIC AND THE KERNAL TRANSLATED AHEAD OF TIME (C64-SPEC section 4.8):
+# tools/c64trace.py types BASIC at the KERNAL on tools/py6502.py for the
+# seeds, and apps/m6502/m65aot.py writes a segment per bank (parts 3 and 4)
+# and the PC table (part 5). Made from the fetched ROM, so never committed.
+$(BUILD)/c64/c64rom.seeds: tools/c64trace.py tools/py6502.py $(BUILD)/c64-rom/C64.ROM
+	@mkdir -p $(BUILD)/c64
+	python3 tools/c64trace.py $(BUILD)/c64-rom/C64.ROM -o $@
+
+$(BUILD)/c64/c64aotk.bin $(BUILD)/c64/c64aotpc.bin: $(BUILD)/c64/c64aot.bin
+$(BUILD)/c64/c64aot.bin: apps/m6502/m65aot.py apps/m6502/m65gen.py \
+                         $(BUILD)/c64/c64rom.seeds $(BUILD)/c64-rom/C64.ROM
+	python3 apps/m6502/m65aot.py --machine c64 --rom $(BUILD)/c64-rom/C64.ROM \
+	    --seeds $(BUILD)/c64/c64rom.seeds -o $(BUILD)/c64/c64aot.asm \
+	    --table $(BUILD)/c64/c64aotpc.bin
 
 # THE DISK. APPLE2.O88 is ONE FILE: the ROM is its part 0 and the overlay its
 # part 1 (APPLE2-SPEC 1.5 and 15.5.1, SPEC.md 73.14.2 - `part`, the fifth

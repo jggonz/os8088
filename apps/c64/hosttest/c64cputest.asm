@@ -54,6 +54,16 @@ DORMSEC     equ 64                  ; ...at this sector, 128 sectors of it
 SEG_CODE    equ 0x7000
 CORESEC     equ 192
 CORESECS    equ 127
+%ifdef AOT
+; ...AND THE TRANSLATED LEGS (C64-SPEC 4.8): Dormann's own code, half of it
+; translated ahead of time by m65aot.py, the core built for that range
+SEG_AOT     equ 0x8000
+SEG_TAB     equ 0x9000
+AOTSEC      equ CORESEC + CORESECS
+AOTSECS     equ 127
+TABSEC      equ AOTSEC + AOTSECS
+TABSECS     equ 40
+%endif
 %endif
 
 %macro PUSHI 1
@@ -1981,7 +1991,16 @@ dormann_main:
     ; notices within its first few hundred instructions. A run that reaches
     ; the success trap with this in place would mean the test was not being
     ; run at all.
-  %ifdef FAST
+  %ifdef AOT
+    ; THE TRANSLATED LEG'S CONTROL: the first translated ADC #'s 8086 ADC
+    ; (opcode 14h) made an OR (0Ch) in the translation itself - proof that
+    ; the translated code is what runs
+    push es
+    mov ax, SEG_AOT
+    mov es, ax
+    mov byte [es:CTL_ADC], 0x0C
+    pop es
+  %elifdef FAST
     mov ax, 0x69                    ; the fast core's ADC # slot sent to ORA #
     mov bx, 0x09
     call fpatch
@@ -2161,6 +2180,33 @@ fast_load:
     call _c64f_core
     add sp, 4
     mov word [_c64_fseg], SEG_CODE
+%ifdef AOT
+    push es
+    mov ax, SEG_AOT
+    mov es, ax
+    xor bx, bx
+    mov word [lba], AOTSEC
+    mov cx, AOTSECS
+.ra:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .ra
+    mov ax, SEG_TAB
+    mov es, ax
+    xor bx, bx
+    mov word [lba], TABSEC
+    mov cx, TABSECS
+.rt:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rt
+    pop es
+    mov word [_c64_faot], SEG_AOT
+    mov word [_c64_fakb], SEG_AOT   ; (a range is one segment)
+    mov word [_c64_ftab], SEG_TAB
+%endif
     ret
 
 ; fpatch - AX = an opcode whose fast-core slot now JUMPS to opcode BX's slot
@@ -2236,6 +2282,9 @@ funpatch:
 
 section .data
 _c64_fseg:  dw 0
+_c64_faot:  dw 0                    ; the translation (C64-SPEC 4.8): 0 = none
+_c64_fakb:  dw 0
+_c64_ftab:  dw 0
 fp_op:      dw 0
 fp_save:    db 0, 0, 0
 %endif

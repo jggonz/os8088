@@ -19,11 +19,14 @@
 ;   _c64f_codesel the selector a far call reaches it by.
 ;
 ; WHAT THE C64 ADDS TO THE APPLE II's PROTOCOL:
-;   - FIVE MORE FRAME WORDS: the fetch segment of each region of the bank
+;   - NINE MORE FRAME WORDS: the fetch segment of each region of the bank
 ;     map ($0000-$9FFF and $C000-$CFFF; $A000-$BFFF; $D000-$DFFF;
 ;     $E000-$FFFF), 0 where PC there is handed back, and the CHARGEN's for a
 ;     data read - made here from MAPA/MAPD/MAPE and c64_rbset's segments,
-;     per call, because only a hand-back can change the map;
+;     per call, because only a hand-back can change the map - and four for
+;     BASIC and the KERNAL translated ahead of time (C64-SPEC 4.8): each
+;     bank's code selector, the PC table, and this core's own for the way
+;     back;
 ;   - THE PROCESSOR PORT IN RAM WHILE THE FAST CORE RUNS: $0000/$0001 hold
 ;     the port's read-back (c64_io_rd's own answer) so a zero-page read is a
 ;     `mov`; the RAM bytes under it are kept here and put back after, so the
@@ -80,6 +83,10 @@ _c64_run:
     mov [c64f_far+2], ax
     ; THE FRAME (m65gen.py's header): the region words, the doors, the call
     mov es, [_c64_m+CM_RAMSEG]
+    push word [_c64_fakb]           ; F+40 the KERNAL's translation (4.8)
+    push word [_c64_fseg]           ; F+38 the core, for the translation's way back
+    push word [_c64_ftab]           ; F+36 the PC table
+    push word [_c64_faot]           ; F+34 BASIC's translation (0: none)
     push word [c64_rbc]             ; F+32 the CHARGEN, for a data read
     mov ax, [_c64_m+CM_RAMSEG]
     cmp byte [es:C64_SCR_BASE + C64_SCR_MAPE], C64_MAP_KERNAL

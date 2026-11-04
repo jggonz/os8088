@@ -733,6 +733,95 @@ the accurate one; held 150 ms, both type and answer identically (`PRINT
 once a wake, and the faster core changes how much machine runs between two
 samples. A field check on real keys is owed.
 
+### 4.8 BASIC and the KERNAL translated ahead of time (FAST6502-PLAN.md wave 2b)
+
+**C64.O88's parts 3, 4 and 5 are the two ROM banks as 8086 code**:
+`apps/m6502/m65aot.py --machine c64` translates BASIC (`$A000-$BFFF`, part
+3) and the KERNAL (`$E000-$FFFF`, part 4) into **a segment each**, and part
+5 is their PC table, a word per PC, BASIC's 8K and then the KERNAL's (32,768
+bytes). This is APPLE2-SPEC 4.7's translation one machine along, and this
+section says only what the C64 does differently. Programs in RAM stay the
+fast core's.
+
+**Measured, 86Box `286-victory`, at the commit that lands this:**
+
+| | fast core (4.7) | translated |
+|---|---|---|
+| idle at `READY.`, throttled | 40% | **99.8%** (104.6% under warp) |
+| `10 I=I+1 / 20 GOTO 10` | 47% | **81%** |
+
+**Two segments, because one does not hold both**: 5,436 PCs come to 51,061
+bytes of BASIC and 29,720 of KERNAL, and a part stops at 65,024. Within a
+bank, control moves by near jumps. A static call into the other bank
+(BASIC calling `CHROUT`, the stop-key test that runs every statement) goes
+through `a_far`, which looks the target up in the table and far-jumps into the other
+segment.
+
+**Which PCs.** `tools/c64trace.py` is `tools/a2trace.py` for the C64. It
+boots the KERNAL on `tools/py6502.py` with the processor port's eight
+banking cases, a raster counter for `CINT`'s PAL test, and CIA 1's 1/60 s
+interrupt, so that the clock, the cursor and the keyboard scan run. It types
+BASIC into the keyboard buffer at the editor's wait loop (`$E5CD`). On the
+build of this commit it records 4,184 PCs, and a static walk from them
+reaches 5,436.
+
+**A TRANSLATION IS VALID ONLY WHILE ITS BANK IS MAPPED IN**, and the bank map
+is the one thing translated code must never get wrong:
+- the core enters through `ct_rom` only when `c64_fes` chose a ROM bank's
+  segment for that PC. RAM under the ROM always runs on the core;
+- a write to `$00/$01`, the only thing that changes the map, always leaves
+  for the core at that instruction (statically or on the address), and the
+  core hands it back as in 4.7;
+- a return or a jump through a pointer into a bank checks MAPA (BASIC) or
+  MAPE (the KERNAL) before it uses the table;
+- a static call from the KERNAL into BASIC checks MAPA. The other way needs
+  no test: in `c64io.c`'s map, BASIC in means the KERNAL in.
+
+**Reads** below `$A000` and at `$C000-$CFFF` are a `mov`. A ROM byte at a
+fixed address in the running bank, or in the KERNAL when the code is BASIC's,
+is folded to a constant. Everything else goes through the core's own `rd_hi`
+and `wr_hi`, called at the depth a handler calls them. **Writes** below `$D000` mark
+damage as the core does. At a fixed address the page bit is set inline, and
+`c64_mark` is called only inside the watch window: the KERNAL's keyboard
+wait stores to `$0292` on every pass, which is what took idle from 69% to 99.8%.
+
+**THE RUN ENDS EXACTLY WHERE THE CORE'S WOULD** - unlike the Apple II's
+translation, because here interrupts are due at exact cycles (section 4.4's
+alarms). The translation is cut into blocks.
+- Each block a STATIC jump enters (`JMP`, `JSR`, a backward branch, a
+  forward branch out of its block) and each block that the one before
+  falls into past `MAXBLK` (120 cycles) starts with a test: the block's
+  worst-case cost, compared with the countdown. A block the budget
+  cannot cover is the core's, and the core ends the run after the
+  instruction that spends it, exactly as section 4.5 says.
+- Any other entry (from `ct_rom`, `RTS` or `JMP (ind)`) is taken only with
+  more than `MAXBLK` left.
+- A write that calls out and is cut (`c64_cut`, an interrupt raised by
+  the write) leaves after that instruction, as the core does.
+
+So `ran = asked - cnt` stays exact, and so does the cycle an interrupt is
+taken at. CHRGET (`$0073`) runs natively as on the Apple II, and only with
+40 cycles in hand, its worst path being 38.
+
+**What it leaves to the core** is 4.7's list: `BRK`, `CLI`, `SEI`, `PLP`,
+`RTI` and `SED`, decimal `ADC`/`SBC`, a read-modify-write that might not be
+RAM, a pointer in `$FF/$00/$01`, `JMP (ind)` through a pointer at `$A000`
+and up.
+
+**The frame** grows by four words (`c64fast.inc`): BASIC's code selector
+(F+34, 0 = no translation), the table (F+36), the core's own selector for
+the way back (F+38), and the KERNAL's code selector (F+40). `c64_fast_init`
+fetches the three parts after the core, all or none, as pinned claims of
+their own length (part 4's and part 5's, 29,720 and 32,768 bytes, and part
+3's 51,061).
+
+**The gate** is `make c64cputest`'s AOT leg (`C64CPU_ONLY=aot`), the
+Apple II's leg one machine along. It translates Dormann's functional test in
+two halves (`--range`) with a core built for each half, runs each to
+`$3469`, and patches the translated `ADC #` to an `OR` as the control.
+`tests/c64part.py` checks that the three parts unpack to their files and that
+each fetched claim holds its file's first bytes.
+
 ---
 
 ## 5. The VIC-II

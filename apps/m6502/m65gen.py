@@ -121,6 +121,7 @@ APPLE2 = dict(
     aot=(0xD000, 0x10000),      # the main ROM, translated (m65aot.py, 4.7)
     chrget={0x00B1: "a_chrget", 0x00B7: "a_chrgot"},  # ...and CHRGET native
     frame_extra=3,              # F+24 its code, F+26 its PC table, F+28 us
+    aot_frame=24,
 )
 C64 = dict(
     name="c64",
@@ -128,9 +129,20 @@ C64 = dict(
     pv=0xFFF9,                  # its one spare byte: writes there are dropped
     fetch="es:",                # PC through ES: RAM, or a ROM bank's segment
     ct_top=True,                # $FFFE-$FFFF can be RAM holding anything
-    frame_extra=5,              # the fetch segment of each region, F+24..F+31,
-                                # and the CHARGEN's, F+32 (C64-SPEC 4.7)
+    frame_extra=9,              # the fetch segment of each region, F+24..F+31,
+                                # and the CHARGEN's, F+32 (C64-SPEC 4.7); then
+                                # BASIC's translation F+34, the PC table F+36,
+                                # this core F+38, the KERNAL's translation
+                                # F+40 (4.8)
+    aot=(0xA000, 0x10000),      # BASIC and the KERNAL, translated (m65aot.py)
+    aot_frame=34,
+    chrget={0x0073: "a_chrget", 0x0079: "a_chrgot"},
+    exact=True,                 # the translation keeps the run's end exact
 )
+# THE LONGEST BLOCK a translation may run without testing the countdown
+# (m65aot.py, exact profiles): a PC entered from outside its block's start is
+# entered only with more than this left
+MAXBLK = 120
 
 # the accurate cores' scratch offsets (a2cpu.inc, c64cpu.inc - the same block)
 S_DIRTY, S_CARRY, S_DEAD, S_IRQ = 0x00, 0x22, 0x24, 0x2A
@@ -782,6 +794,69 @@ class Gen:
         return t
 
     def aot_tails(self):
+        if self.c64:
+            return self.aot_tails_c64()
+        return self.aot_tails_apple()
+
+    def aot_tails_c64(self):
+        """THE C64's doors (C64-SPEC 4.8). c64_fes has set ES to SI's fetch
+        segment: DS for RAM, a ROM bank's own segment where BASIC or the
+        KERNAL is mapped in - which is the one fact that says the translation
+        of that PC is the instruction there. The run's end stays exact: a PC
+        is entered only with more than MAXBLK left, and every block of the
+        translation tests what it costs before it runs (m65aot.py)."""
+        fa = self.p["aot_frame"]
+        lo, hi = self.p["aot"]
+        rom = (lo, hi) == (0xA000, 0x10000)
+        lines = ["ct_rom:"]
+        if rom:
+            lines += ["    mov bx, es", "    mov dx, ds",
+                      "    cmp bx, dx", "    je .fetch"]   # RAM under the ROM
+        lines += [
+            "    cmp bp, %d" % MAXBLK, "    jle .fetch",
+            "    mov dx, es",
+            "    mov bx, sp",
+            "    cmp word [ss:bx+%d], 0" % fa, "    je .fetch",
+            "    mov es, [ss:bx+%d]" % (fa + 2),
+            "    mov bx, si"]
+        go = ["    shl bx, 1",
+              "    mov bx, [es:bx]",
+              "    test bx, bx", "    jz .none",
+              "    xor dl, dl",
+              "    mov si, sp"]
+        if rom:
+            # the table: BASIC's 8K PCs, then the KERNAL's; and each bank's
+            # translation in a segment of its own, F+34 and F+40
+            lines += ["    sub bh, 0xA0", "    cmp bh, 0x20", "    jb .b",
+                      "    sub bh, 0x20"] + go + [
+                      "    push word [ss:si+%d]" % (fa + 6), "    push bx", "    retf",
+                      ".b:"]
+        else:
+            lines += ["    sub bx, 0x%04X" % lo]
+        lines += go + [
+            "    push word [ss:si+%d]" % fa,
+            "    push bx",
+            "    retf",
+            ".none: mov es, dx",
+            ".fetch: xor dl, dl"] + self.fetch_op()
+        hb = self.lab()
+        res = ["    xor dl, dl"] + self.c64_fes(hb)
+        if self.p["ct_top"]:
+            res += ["    cmp si, 0xFFFE", "    jae %s" % hb]
+        res += self.fetch_op() + ["%s: jmp x_hbr" % hb]
+        return lines + [
+            # xr_resume - from the translation, SI the PC to run next: the
+            # check any new PC gets, and no table (the translation came here
+            # because that PC has none, or its block did not fit the budget)
+            "    times 0x%04X-($-$$) db 0xCC" % XR_RESUME,
+            "xr_resume:",
+            "    jmp xr_resume_body",
+            "    times 0x%04X-($-$$) db 0xCC" % XR_SLICE,
+            "xr_slice:",
+            "    jmp x_slice",
+            "xr_resume_body:"] + res
+
+    def aot_tails_apple(self):
         """THE TRANSLATED ROM's doors (m65aot.py; APPLE2-SPEC 4.7). The frame
         carries the translation's code segment at F+24 (0: none), its PC
         table's at F+26 and this core's own at F+28."""
@@ -791,15 +866,15 @@ class Gen:
             # table's word for it, and a far jump there if it names one
             "ct_rom:",
             "    mov bx, sp",
-            "    cmp word [ss:bx+%d], 0" % F_EXTRA, "    je .fetch",
+            "    cmp word [ss:bx+%d], 0" % self.p["aot_frame"], "    je .fetch",
             # ES = the PC table, and the translation keeps it there for its
             # own lookups (this core's Apple II path never reads ES)
-            "    mov es, [ss:bx+%d]" % (F_EXTRA + 2),
+            "    mov es, [ss:bx+%d]" % (self.p["aot_frame"] + 2),
             "    mov bx, si", "    shl bx, 1",
             "    mov bx, [es:bx+0x%04X]" % ((-lo * 2) & 0xFFFF),
             "    test bx, bx", "    jz .fetch",
             "    mov si, sp",
-            "    push word [ss:si+%d]" % F_EXTRA,
+            "    push word [ss:si+%d]" % self.p["aot_frame"],
             "    push bx",
             "    retf",
             ".fetch:",

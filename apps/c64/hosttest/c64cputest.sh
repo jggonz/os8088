@@ -137,6 +137,55 @@ fast_leg() {
         esac
     done
 }
+# =============================================================================
+# THE TRANSLATED LEGS (C64-SPEC section 4.8): APPLE2's a2cputest one machine
+# along - Dormann's code translated ahead of time by apps/m6502/m65aot.py, in
+# two halves, each run with a core built for its half's range (m65gen.py
+# --aot-range) and the other half on the core. Seeds are tools/py6502.py's
+# trace of the same test. The control makes the first translated ADC # an OR
+# in the translation, and must fail. C64CPU_ONLY=aot runs this leg alone.
+# =============================================================================
+aot_leg() {
+    mkdir -p $BUILD/c64
+    python3 tools/py6502.py --dormann "$DORM" --trace-out $BUILD/c64/dorm.seeds >/dev/null
+    for R in 0400:1E00 1E00:4000; do
+        N=${R%%:*}
+        python3 apps/m6502/m65aot.py --machine c64 --rom "$DORM" --range $R \
+            --seeds $BUILD/c64/dorm.seeds \
+            -o $BUILD/c64/dormaot_$N.asm --table $BUILD/c64/dormaotpc_$N.bin
+        python3 apps/m6502/m65gen.py --machine c64 --aot-range $R -o $BUILD/c64/c64fast_dt$N.asm
+        nasm -f bin -w+error -o $BUILD/c64/c64fast_dt$N.bin $BUILD/c64/c64fast_dt$N.asm
+        CTL=0x$(awk '$3 == "ctl_adc" {print $1}' $BUILD/c64/dormaot_$N.map)
+        for MODE in real neg; do
+            IMG=$BUILD/c64cputest-aot$N-$MODE.img
+            FL="-DFAST -DAOT -DCTL_ADC=$CTL -DDORMANN -DDORMOK=$DORMOK"
+            [ $MODE = neg ] && FL="$FL -DNEG"
+            # shellcheck disable=SC2086
+            nasm -f bin -w+error -I apps/c64/ $FL $DEC -o $IMG apps/c64/hosttest/c64cputest.asm
+            pad $IMG 64
+            cat "$DORM" >> $IMG
+            cat $BUILD/c64/c64fast_dt$N.bin >> $IMG
+            cat $BUILD/c64/dormaot_$N.bin >> $IMG
+            pad $IMG $((64 + 128 + 127 + 127))
+            cat $BUILD/c64/dormaotpc_$N.bin >> $IMG
+            pad $IMG 2880
+            run $IMG "aot$N-$MODE" > $BUILD/c64cputest-aot$N-$MODE.log || true
+            cat $BUILD/c64cputest-aot$N-$MODE.log
+            if [ $MODE = real ]; then
+                grep -q "c64cputest: PASS" $BUILD/c64cputest-aot$N-$MODE.log || {
+                    echo "c64cputest: Dormann through the translation of $R FAILED"; exit 1; }
+            else
+                grep -q "control fails: ok" $BUILD/c64cputest-aot$N-$MODE.log || {
+                    echo "c64cputest: the translated leg's control passed ($R)"; exit 1; }
+            fi
+        done
+    done
+}
+if [ "${C64CPU_ONLY:-}" = aot ]; then
+    aot_leg
+    echo "c64cputest: PASS - the translated legs"
+    exit 0
+fi
 if [ "${C64CPU_ONLY:-}" = fast ]; then
     fast_leg
     echo "c64cputest: PASS - the fast core's leg"
