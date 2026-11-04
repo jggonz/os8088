@@ -8429,17 +8429,23 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
-$(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
+# The part's symbols are the browser's OWN tree's (-I $(BUILD)/): a BUILD=
+# tree read build/'s copy until 2026-11-04, a stale map's or none at all
+$(BUILD)/brdownload_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_paint.inc \
+                           apps/browser/brcopyselection.inc tools/brdlsyms.py | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
+	        -o $@
+
+$(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols.inc \
                            apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
                            apps/browser/brdownload_const.inc \
                            apps/browser/brdocmarks.inc \
                            apps/browser/brcopyselection.inc \
                            tools/brdlsyms.py apps/os88api.inc | $(BUILD)
-	python3 tools/brdlsyms.py $(BUILD)/browser.map \
-	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
-	        -o $(BUILD)/brdownload_part_symbols.inc
-	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ \
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ \
 	        -o $@ apps/browser/brdownload_part.asm
 	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
 
