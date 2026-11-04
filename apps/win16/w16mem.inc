@@ -50,6 +50,9 @@ GMEM_NOTIFY_HI      equ 0x40    ; GMEM_NOTIFY (0x4000), the same
 GH_SIZE   equ 0                 ; paragraphs, the header included
 GH_FLAGS  equ 2                 ; GHF_*
 GH_LOCK   equ 3
+%if GH_LOCK != GH_FLAGS + 1
+  %error "GlobalReAlloc copies GH_FLAGS and GH_LOCK as one word"
+%endif
 GH_HANDLE equ 4                 ; what GlobalAlloc answered for it
 GH_OWNER  equ 6                 ; a resource's entry offset (w16res.inc), or 0
 GH_MAGIC  equ 8
@@ -1274,17 +1277,17 @@ w16k_grealloc:
     mov ax, [w16_gold]
     push es
     W16SEG es, ax
-    mov bl, [es:GH_FLAGS]
-    mov bh, [es:GH_LOCK]
+    mov bx, [es:GH_FLAGS]           ; (and GH_LOCK, the byte after)
     mov cx, [es:GH_OWNER]
-    pop es
+    mov dl, [es:GH_TASK]            ; the task whose end frees it, which
+    pop es                          ;   w16_gnew left as nobody's
     W16VOF ax, es
     dec ax
     push es
     W16SEG es, ax                      ; ES = the new header
-    mov [es:GH_FLAGS], bl
-    mov [es:GH_LOCK], bh
+    mov [es:GH_FLAGS], bx
     mov [es:GH_OWNER], cx
+    mov [es:GH_TASK], dl
     pop es
 %ifdef PKG_MEGA
     SCALL w16s_gwin                 ; ...and its handle descriptor, if any

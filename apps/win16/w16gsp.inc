@@ -349,23 +349,15 @@ w16s_dgz:                           ; more than it holds: refused
 ; A local heap that is full grows (SPEC.md 124.25.19). The image's w16_lnewg
 ; calls this when w16_lnew found no room.
 ; in:  ES = the heap's segment (the caller's DS), CX = the bytes asked
-; out: CF=0 the heap's end moved out by at least what was needed, ES kept;
-;      CF=1 it cannot grow. Keeps all.
-; The program's own DGROUP grows into the tail it was laid out with; a global
-; block into its own tail, and failing that by GlobalReAlloc, in place only: a
-; block that would have to move is left (no pointer into it could follow).
+; out: CF=0 the heap's end moved out by at least what was needed, ES kept
+;      (reloaded: on kern_mega its descriptor may have been re-aimed); CF=1
+;      it cannot grow. Keeps all.
+; Never over the program's stack: a heap with the stack above it in its own
+; segment does not grow. The program's own DGROUP grows into the tail it was
+; laid out with; a global block into its own tail, and failing that by
+; GlobalReAlloc: in place, or on kern_mega moved, when the heap's selector is
+; the block's handle descriptor, which follows it (w16_pblk).
 ; -----------------------------------------------------------------------------
-%macro LFAKE 1                      ; the args are on the stack: run the image's
-    push word [w16_pss]             ;   gate routine %1 on them, as a call from
-    push word [w16_psp_]            ;   the program would
-    mov [w16_pss], ss
-    mov [w16_psp_], sp
-    add word [w16_psp_], 4 - W16F_ARGS
-    ICALL %1
-    pop word [w16_psp_]
-    pop word [w16_pss]
-%endmacro
-
 w16s_lgrow:
     push ax
     push bx
@@ -383,6 +375,11 @@ w16s_lgrow:
     jne .no
     mov dx, [es:bx + LH_END]
     mov ax, es
+    cmp ax, [w16_pss]               ; the program's stack in this segment and
+    jne .nss                        ;   above the heap (Visual Basic's, at the
+    cmp [w16_psp_], dx              ;   top of its DGROUP): the room past the
+    jae .no                         ;   heap's end is the stack's
+.nss:
     cmp ax, [w16_dgroup]
     jne .blk
     mov ax, [w16_dgsize]            ; the program's DGROUP: its whole size
@@ -397,13 +394,36 @@ w16s_lgrow:
 .no:
     stc
     jmp short .done
-.ext:                               ; the heap ends at AX: the room is one more
-    mov es, [bp]                    ;   free block, merged by the walk
-    mov bx, [es:6]
-    mov si, [es:bx + LH_END]
-    mov di, ax
-    sub di, si
-    mov [es:si], di
+.ext:                               ; the heap ends at AX: the room joins the
+    mov es, [bp]                    ;   last block if that one is free, so
+    mov bx, [es:6]                  ;   LocalCompact sees one block; else it
+    mov si, [es:bx + LH_FIRST]      ;   is one more free block at the old end
+    mov dx, [es:bx + LH_END]
+    xor di, di
+.lw:
+    cmp si, dx
+    jae .le
+    mov di, si                      ; DI = the last block walked
+    mov cx, [es:si]
+    and cx, 0xFFFC
+    jz .le                          ; (a broken heap: no merge)
+    add si, cx
+    jmp short .lw
+.le:
+    mov cx, ax
+    sub cx, dx                      ; CX = the room
+    cmp si, dx
+    jne .nb                         ; the last block does not end at the end
+    or di, di
+    jz .nb
+    test byte [es:di], LB_USED
+    jnz .nb
+    add [es:di], cx
+    jmp short .set
+.nb:
+    mov si, dx
+    mov [es:si], cx
+.set:
     mov [es:bx + LH_END], ax
     clc
 .done:
@@ -418,7 +438,9 @@ w16s_lgrow:
     ret
 .blk:                               ; a global block: its handle, as the program
     push ax                         ;   would ask GlobalHandle(seg)
-    LFAKE w16k_ghandle
+    mov si, w16k_ghandle            ; XSEC-OK: an image routine, .fake ICALLs it
+    mov cx, 2
+    call .fake
     add sp, 2
     or ax, ax
     jz .no
@@ -432,7 +454,7 @@ w16s_lgrow:
     jc .no                          ; BX = the end it needs
     cmp ax, bx
     jae .chk                        ; the block has the room already
-    ; the block is grown in place, with some over for the next request
+    ; the block is grown, with some over for the next request
     mov si, bx
     add bx, 512
     jc .exact
@@ -444,16 +466,18 @@ w16s_lgrow:
     cmp bx, 0xFFF0
     ja .no
 %ifdef PKG_MEGA
-    mov cl, 1                       ; a locked block moves with its selector
-    xchg cl, [w16_pmonly]           ;   (124.31.3), as a heap that is full
-    push cx                         ;   needs: the program holds DS, which
-%endif                              ;   follows it. GlobalReAlloc's rule is
-    xor ax, ax                      ;   the one for a protected-mode-only
-    push di                         ;   program's, for this call alone.
+    mov cl, ch                      ; CH (.blkcap's): 1 when the heap's selector
+    xchg cl, [w16_pmonly]           ;   follows the block, and then a locked
+    push cx                         ;   block may move (124.31.3) for this call,
+%endif                              ;   as Windows' did: 0, and none moves that
+    xor ax, ax                      ;   would leave the program's DS behind,
+    push di                         ;   whatever the program's own rule
     push ax                         ; GlobalReAlloc(hMem, BX bytes, 0)
     push bx
     push ax
-    LFAKE w16k_grealloc
+    mov si, w16k_grealloc           ; XSEC-OK: an image routine, .fake ICALLs it
+    mov cx, 8
+    call .fake
     add sp, 8
 %ifdef PKG_MEGA
     pop cx
@@ -463,12 +487,12 @@ w16s_lgrow:
     jz .no
     call .blkcap                    ; ...and what it holds now
     jc .no
-    mov es, [bp]
-    mov bx, [es:6]
-    mov dx, [es:bx + LH_END]
     jmp .chk
-; .blkcap - DI = hMem -> AX = the block's room in bytes, rounded to 4; CF=1 if
-; it is no block, is discarded, or would MOVE to grow (moveable, unlocked)
+; .blkcap - DI = hMem -> AX = the block's room in bytes, rounded to 4, ES the
+; heap's segment reloaded, BX its descriptor, DX its end; CF=1 if it is no
+; block, is discarded, or would MOVE to grow and the program's DS could not
+; follow (real mode: a moveable block unlocked; kern_mega: one whose handle
+; descriptor is not the heap's selector, which CH = 0 says)
 .blkcap:
     mov ax, di
 %ifdef PKG_MEGA
@@ -478,8 +502,22 @@ w16s_lgrow:
     jc .bc
     cmp byte [w16_gdisc], 0
     jne .bcn
+%ifdef PKG_MEGA
+    xor ch, ch
+    test byte [es:GH_FLAGS], GHF_HND
+    jz .bm
+    mov ax, [es:GH_TSEL]
+    cmp ax, [bp]
+    jne .bm
+    inc ch                          ; the selector the program holds is this
+.bm:                                ;   block's: wherever it goes, DS follows
+%endif
     test byte [es:GH_FLAGS], GHF_MOVE
     jz .bf
+%ifdef PKG_MEGA
+    or ch, ch
+    jnz .bf
+%endif
     cmp byte [es:GH_LOCK], 0
     je .bcn
 .bf:
@@ -494,14 +532,54 @@ w16s_lgrow:
     shl ax, cl
 .br:
     and al, 0xFC
-    mov dx, [bp]
-    mov es, dx
-    mov bx, [es:6]
+    mov es, [bp]                    ; (a fresh load: the descriptor's base and
+    mov bx, [es:6]                  ;   length as they are now)
     mov dx, [es:bx + LH_END]
     clc
     ret
 .bcn:
     stc
 .bc:
+    ret
+; .fake - SI = an image routine that reads its arguments as a gate's do
+; (w16_args), CX = their bytes, on our stack above .fake's return address:
+; it runs on a frame laid on the PROGRAM's stack just below the gate's, a
+; copy of that frame with the arguments over it - so what it reads of the
+; frame is the program's, and a discard's scan of the program's stack for the
+; code it is running (w16l_inuse, SPEC.md 124.26.5) still walks that stack,
+; which a frame on our own stack would have hidden. AX, DX the answer; BX,
+; CX, SI, DI clobbered, [w16_psp_] kept.
+.fake:
+    push es
+    push word [w16_psp_]
+    mov es, [w16_pss]
+    mov bx, [w16_psp_]              ; ES:BX = the gate's frame
+    mov di, bx
+    sub di, cx
+    sub di, W16F_ARGS               ; ES:DI = the one below it
+    mov [w16_psp_], di
+    push cx
+    mov cx, W16F_ARGS / 2
+    cld
+.ff:
+    mov ax, [es:bx]
+    stosw
+    inc bx
+    inc bx
+    loop .ff
+    pop cx
+    shr cx, 1
+    mov bx, sp
+    add bx, 6                       ; past [w16_psp_], ES and the return
+.fa:
+    mov ax, [ss:bx]
+    stosw
+    inc bx
+    inc bx
+    loop .fa
+    mov [w16_ifn], si               ; ICALL's, the routine in SI
+    call far [w16_ibv]
+    pop word [w16_psp_]
+    pop es
     ret
 section .text
