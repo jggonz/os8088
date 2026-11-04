@@ -1,8 +1,9 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: waves 1 and 2 BUILT (2026-11-04): the model, the analysis,
-the command line, and the window's shell with its Battle and Idle tabs
-(10.5).** The Clips, Menus and Build tabs are waves 3 to 5. It turns a battle's footage into a `.VBT` bundle (SPEC.md
+**Status: waves 1 to 3 BUILT (2026-11-04): the model, the analysis,
+the command line, and the window's shell with its Battle, Idle and Clips
+tabs (10.5).** The Menus and Build tabs are waves 4 and 5. `make
+vbtbundle` zips the builder for a machine with no os8088 tree. It turns a battle's footage into a `.VBT` bundle (SPEC.md
 §125) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an
 action DOES.
@@ -407,6 +408,24 @@ any of the builder's (section 7's order moves). Its contents:
    Seen under Xvfb on the owner's H3 project; the screenshots went to the
    owner. Not seen on Windows or macOS.
 3. **The Clips tab**: attachments, effects on the timeline, listening.
+   **DONE 2026-11-04**:
+   - [x] the clips, New clip (a name and a source, the whole of it to
+     start) and Delete (refused while an action, opening or ending uses
+     it); the source, In and Out (its cues move with the in point and
+     those off its end go; its own soundtrack follows), and ENDING (the
+     battle ends on it: held, no exit - the wave 2 lesson);
+   - [x] the idle loop's FILMSTRIP: every frame with the clip's in frame's
+     score against it, the ENTRY's real bytes, a bar, the out frame's
+     score, the anchors boxed, the exit dashed, the recommended ones'
+     bars green. Click selects, double-click toggles an anchor,
+     right-click makes the exit;
+   - [x] DIFFERENCE from the selected idle frame, the longest wait, and
+     RECOMMEND / USE over the clip's whole source;
+   - [x] EFFECTS on the clip's own timeline: a sound at the frame under
+     the scrubber, dragged to move, a level, removed; a sound file, or the
+     clip's OWN SOUNDTRACK; LISTEN, which mixes the cues with the build's
+     own call, so what is heard is what is baked (`tests/vbtguitest.py`
+     holds them equal frame for frame).
 4. **The Menus and Characters tabs**, and the engine's menu tree,
    backgrounds and rules (11).
 5. **The openings** in the window (10.3), and **the Build tab**.

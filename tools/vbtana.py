@@ -401,6 +401,59 @@ def sound_wav(x, rate, path):
     return path
 
 
+# --- a clip against the loop (4.3), and its sound (10.2) -------------------------------
+
+def clip_report(proj, cid, progress=_nop):
+    """Everything the Clips tab shows about clip CID against the idle loop:
+    for its IN frame against every idle frame, the score and the ENTRY's
+    bytes (the record that would join them); for its OUT frame, the score
+    against every idle frame (its exit); the longest wait its anchors make;
+    and what the analysis RECOMMENDS over its whole source"""
+    import os88vbt as B
+    c = proj.d["clips"][cid]
+    rows = proj.d["target"]["canvas"][3]
+    idle = idle_of(proj, progress)
+    src = screens(proj, c["source"], progress)
+    first, last = src[c["in"]], src[c["out"]]
+    s0 = B.surface_of(first, rows)
+    ent, ins = [], []
+    for k, f in enumerate(idle):
+        ins.append(diff(first, f))
+        ent.append(len(B.rec(B.surface_of(f, rows), s0, rows)))
+        progress("entries", k + 1, len(idle), cid)
+    outs = [diff(last, f) for f in idle]
+    rec = attach(src, idle)
+    if c.get("ends"):       # an ending plays to its source's end: no exit
+        rec["last"] = len(src) - 1
+        rec["exit"] = None
+    return dict(entry_scores=ins, entry_bytes=ent, exit_scores=outs,
+                wait=wait_frames(c["anchors"], len(idle)),
+                frames=len(src), recommend=dict(
+                    first=rec["first"], last=rec["last"],
+                    anchors=rec["anchors"], exit=rec["exit"]))
+
+
+def clip_sound(proj, cid):
+    """Clip CID's sound as the BUILD bakes it: its cues placed at their
+    frames and mixed (os88vbt.place, the same call), floats at the battle's
+    rate; None for a silent clip"""
+    import os88vbt as B
+    c = proj.d["clips"][cid]
+    t = proj.d["target"]
+    spf = t["rate"] // t["fps"]
+    sfx, cues = {}, []
+    for q in c["cues"]:
+        nm, lv = q["sound"], q.get("level", 1.0)
+        if nm not in sfx:
+            sfx[nm] = sound(proj, nm)
+        if lv != 1.0:
+            key = "%s*%g" % (nm, lv)
+            sfx[key] = sfx[nm] * lv
+            nm = key
+        cues.append((q["frame"], nm))
+    return B.place(cues, c["out"] - c["in"] + 1, spf, sfx)
+
+
 # --- the command line: every long piece of work the window runs, as a process
 # whose progress and answer are JSON lines on stdout (plan 2) ---------------------
 
@@ -429,6 +482,13 @@ def main(argv=None):
     q.add_argument("out")
     q.add_argument("--loop", type=int, nargs=2,
                    help="the jump of a loop START END, in samples")
+    q = sp.add_parser("clip", help="a clip against the idle loop")
+    q.add_argument("project")
+    q.add_argument("clip")
+    q = sp.add_parser("clipwav", help="a clip's sound, as the build bakes it")
+    q.add_argument("project")
+    q.add_argument("clip")
+    q.add_argument("out")
     a = ap.parse_args(argv)
     proj = P.Project.load(a.project)
 
@@ -454,6 +514,15 @@ def main(argv=None):
         say(dict(stage="done", rate=rate, samples=len(x), loops=[
             dict(score=s, start=x0, end=x1) for s, x0, x1 in
             music_loops(x, rate, a.min_secs)]))
+    elif a.cmd == "clip":
+        say(dict(stage="done", **clip_report(proj, a.clip, progress)))
+    elif a.cmd == "clipwav":
+        x = clip_sound(proj, a.clip)
+        t = proj.d["target"]
+        c = proj.d["clips"][a.clip]
+        n = (c["out"] - c["in"] + 1) * (t["rate"] // t["fps"])
+        sound_wav(x if x is not None else np.zeros(n), t["rate"], a.out)
+        say(dict(stage="done", out=a.out, silent=x is None))
     elif a.cmd == "wav":
         x = sound(proj, a.sound)
         rate = proj.d["target"]["rate"]

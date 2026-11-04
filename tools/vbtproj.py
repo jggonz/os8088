@@ -87,6 +87,11 @@ def upgrade(d):
     return d
 
 
+def own_sound(cid):
+    """The id of clip CID's own soundtrack, as a sound"""
+    return cid + "_own"
+
+
 class Problem:
     """One finding of check(): ERROR stops a build, WARN is said, INFO is
     what the engine of today does not play yet"""
@@ -204,6 +209,81 @@ class Project:
         def f(d):
             d["clips"][cid]["cues"].append(
                 {"frame": frame, "sound": sound, "level": level})
+        self._edit(f)
+
+    def remove_clip(self, cid):
+        """Refused while anything uses it: an action's pool, an opening, an
+        ending"""
+        if cid in self.clips_used():
+            raise ValueError("%s is in use: take it out of what uses it "
+                             "first" % cid)
+        def f(d):
+            del d["clips"][cid]
+        self._edit(f)
+
+    def set_clip_range(self, cid, first, last):
+        """The clip's in and out, in its source's frames. Its cues move with
+        its in point (a cue is placed on the clip's own frames) and any that
+        fall off its end are dropped"""
+        def f(d):
+            c = d["clips"][cid]
+            if last < first:
+                raise ValueError("out before in")
+            shift = first - c["in"]
+            c["in"], c["out"] = first, last
+            n = last - first + 1
+            c["cues"] = [dict(q, frame=q["frame"] - shift) for q in c["cues"]
+                         if 0 <= q["frame"] - shift < n]
+            own = d["sounds"].get(own_sound(cid))
+            if own and own["kind"] == "source":     # its own soundtrack
+                own["in"], own["out"] = first, last     # follows it
+        self._edit(f)
+
+    def use_own_sound(self, cid, level=1.0):
+        """The clip's own soundtrack (its source's audio over in..out) as a
+        cue at its frame 0, following its in and out from here on"""
+        def f(d):
+            c = d["clips"][cid]
+            sid = own_sound(cid)
+            d["sounds"][sid] = {"kind": "source", "source": c["source"],
+                                "in": c["in"], "out": c["out"],
+                                "level": level}
+            if not any(q["sound"] == sid for q in c["cues"]):
+                c["cues"].append({"frame": 0, "sound": sid, "level": 1.0})
+        self._edit(f)
+
+    def toggle_anchor(self, cid, k):
+        def f(d):
+            a = set(d["clips"][cid]["anchors"])
+            a ^= {k}
+            d["clips"][cid]["anchors"] = sorted(a)
+        self._edit(f)
+
+    def set_exit(self, cid, k):
+        self.set(("clips", cid, "exit"), k)
+
+    def set_ends(self, cid, ends):
+        """An ENDING (the battle ends on it, its last frame held) does not
+        join the loop again; anything else does"""
+        def f(d):
+            d["clips"][cid]["ends"] = bool(ends)
+            d["clips"][cid]["joins"] = not ends
+        self._edit(f)
+
+    def move_cue(self, cid, i, frame):
+        def f(d):
+            c = d["clips"][cid]
+            if not 0 <= frame <= c["out"] - c["in"]:
+                raise ValueError("frame %d is off the clip" % frame)
+            c["cues"][i]["frame"] = frame
+        self._edit(f)
+
+    def set_cue_level(self, cid, i, level):
+        self.set(("clips", cid, "cues", i, "level"), float(level))
+
+    def remove_cue(self, cid, i):
+        def f(d):
+            del d["clips"][cid]["cues"][i]
         self._edit(f)
 
     def add_opening(self, clip, sound=None):

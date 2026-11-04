@@ -327,6 +327,36 @@ Observed: every tab action above, driven by a script under Xvfb on the H3
 project. Not observed: the window on Windows or macOS, or a real person's
 hand on it.
 
+## The builder, wave 3: the Clips tab, and a zip (2026-11-04)
+
+The owner asked for a package target like the encoder's, "then send me
+the zip of that after each round, will make it easier to set up". `make
+vbtbundle` is the encoder bundle's shape, its file list computed by the
+same import closure; its test unpacks it outside the tree and builds the
+demo battle there, byte for byte the tree's. Broken on purpose (a module
+taken out of the zip) it fails as the owner would have, with an
+ImportError.
+
+Decisions:
+- **The filmstrip shows BYTES as well as scores.** A score says how alike
+  two frames look; the entry's size says what joining them costs. Costing
+  all 30 of the owner's idle frames takes 0.1 s, so every frame shows both.
+- **The report is computed in the window, the encode in a job.** Once a
+  source's screens are cached a clip's report is 0.3 s; the first look at
+  a source is still a cancellable process, and the tab will not compute
+  anything until both sources are in hand.
+- **Listen is the build's own mix.** The Clips tab's sound and the
+  bundle's sound come from one call (`os88vbt.place`), and the test holds
+  them equal frame for frame; broken on purpose (cues a frame late), it
+  fails on every clip with an effect.
+- **A clip's own soundtrack follows its range.** An action cut from
+  footage usually wants the footage's sound; it is a sound of its own,
+  named after the clip, and moving the clip's in or out moves it too.
+
+Observed: the tab driven under Xvfb on the H3 project - the scorpion's
+hit against the strip, idle frame 3 selected and differenced, an anchor
+toggled and undone, the new victory clip shown as an ending with no exit.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

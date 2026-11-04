@@ -16734,7 +16734,7 @@ SOAK = [
         "bytes made twice. A module the closure missed fails here as an "
         "ImportError, where the owner would otherwise meet it",
         needs=("pil",), wants=("build/os8088-battle-builder.zip",)),
-    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 14.0,
+    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 17.0,
         "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
         "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
         "over all 96 CGA4 bytes (a swatch showing one set while the encode "
@@ -16743,8 +16743,12 @@ SOAK = [
         "the build (the music region IS the loop, the join from its start), "
         "a vbtana job answering as the call does, and Cancel killing an "
         "encode and every worker it started with no cache left that loads "
-        "short. Broken on purpose (Cancel killing the parent alone, the set "
-        "bits swapped) it FAILS naming it. SKIPS the cancel without ffmpeg",
+        "short. Wave 3's Clips tab: what Listen plays must be what the "
+        "build bakes, frame for frame, and the filmstrip's entry bytes the "
+        "bundle's own; a range carries its cues and own soundtrack; an "
+        "ending has no exit. Broken on purpose (Cancel killing the parent "
+        "alone, the set bits swapped, cues placed a frame late) it FAILS "
+        "naming it. SKIPS the cancel without ffmpeg",
         needs=("pil",)),
     Row("videnc", "soak", py("tests/videnc.py"), 1300.0,
         "SPEC.md 98.2.1: the encoder front end and its budgets, host-side. "

@@ -40,9 +40,9 @@ os8088: put the two side by side on a disk.
 
     python3 os88vbtgui.py [PROJECT.vbp]
 
-The window (this round: the Battle and Idle tabs; the Clips, Menus and
-Build tabs come in later rounds - see docs/plans/VBATTLE-BUILDER-PLAN.md
-in the os8088 tree). Everything it does is also a command:
+The window: the Battle, Idle and Clips tabs (the Menus and Build tabs
+come in later rounds - see docs/plans/VBATTLE-BUILDER-PLAN.md in the
+os8088 tree). Everything it does is also a command:
 
     python3 os88vbt.py demo-project demo.vbp     the demo battle, as a
                                                  project (no footage needed)

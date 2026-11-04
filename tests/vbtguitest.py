@@ -18,6 +18,13 @@ The window is a view; what it decides and runs is reached here with no Tk:
      score is 1. A loop set in the model moves a join that falls outside
      it inside, and the BUILD honours it: the bundle's music is the loop,
      the join counted from its start.
+  6. THE CLIPS TAB (wave 3): what Listen plays is what the build bakes,
+     sample for sample (clip_sound against the bundle's records); the
+     filmstrip's entry bytes are the bundle's entries' own lengths; a new
+     range carries the cues with it and drops those off its end, and the
+     clip's own soundtrack follows it; an ending has no exit; a cue cannot
+     leave its clip; a clip in use cannot be deleted; and the timeline's
+     place and frame are inverses.
   5. THE JOBS: a vbtana process answers as the in-process call does; a
      WAV of a loop's jump is as long as asked; and CANCEL kills an encode
      and everything it started, and leaves no cache that loads short.
@@ -112,6 +119,55 @@ with tempfile.TemporaryDirectory() as tdir:
     pr.set(("music", "join"), 99)
     ok(any(p.where == "music" for p in pr.errors()),
        "a join outside the loop is an ERROR")
+
+    # 6
+    import os88vbt as B2
+    pr = P.Project.load(vbp)
+    bd = B2.Bundle(B2.build_project(pr))
+    spf = pr.d["target"]["rate"] // pr.d["target"]["fps"]
+    for cid in ("ari_attack", "ari_limit", "bram_heal"):
+        snd = B2.frame_sound(A.clip_sound(pr, cid), pr.clip_frames(cid), spf,
+                             False)
+        bc = next(c for c in bd.clips if c["name"] == cid.upper()[:8])
+        recs = bd.stream(bc)
+        baked = [r[struct.unpack_from("<HH", r)[0] -
+                   struct.unpack_from("<HH", r)[1]:] for r in recs]
+        ok(baked[:len(snd)] == snd, "%s: Listen is the baked sound, frame "
+           "for frame" % cid)
+        rp = A.clip_report(pr, cid)
+        ents = {k: struct.unpack_from("<H", bd.ents, o * 16)[0]
+                for k, o in bc["anch"]}
+        ok(all(rp["entry_bytes"][k] == n for k, n in ents.items()),
+           "%s: the filmstrip's entry bytes are the bundle's (%s)" %
+           (cid, sorted(ents.items())[:2]))
+    ok(rp["wait"] == 6, "four anchors 6 apart wait 6 frames (%s)" % rp["wait"])
+    c = pr.d["clips"]["ari_bolt"]
+    pr.add_cue("ari_bolt", c["out"] - c["in"], "zap")
+    n0 = len(c["cues"])
+    pr.set_clip_range("ari_bolt", c["in"] + 2, c["out"] - 1)
+    c = pr.d["clips"]["ari_bolt"]
+    ok(len(c["cues"]) < n0 and all(0 <= q["frame"] <= c["out"] - c["in"]
+                                   for q in c["cues"]),
+       "a new range moves the cues and drops the one off its end")
+    pr.use_own_sound("ari_bolt")
+    pr.set_clip_range("ari_bolt", c["in"] + 1, c["out"])
+    own = pr.d["sounds"][P.own_sound("ari_bolt")]
+    ok((own["in"], own["out"]) == (c["in"], c["out"]),
+       "the clip's own soundtrack follows its range")
+    pr.set_ends("ari_bolt", True)
+    ok(pr.d["clips"]["ari_bolt"]["joins"] is False, "an ending does not join")
+    try:
+        pr.move_cue("ari_bolt", 0, 999)
+        ok(False, "a cue cannot leave its clip")
+    except ValueError:
+        ok(True, "a cue cannot leave its clip")
+    try:
+        pr.remove_clip("ari_attack")
+        ok(False, "a clip in use cannot be deleted")
+    except ValueError:
+        ok(True, "a clip in use cannot be deleted")
+    ok(all(G.x_cue(G.cue_x(f, 37, 640), 37, 640) == f for f in range(37)),
+       "the timeline's place and frame are inverses")
 
     # 5
     r = G.Job("vbtana", ["loops", vbp, "idle", "--min", "12"]).run()
