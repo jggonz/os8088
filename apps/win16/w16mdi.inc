@@ -4196,9 +4196,9 @@ W16TSK w16u_getclsw
     mov ax, [es:bx + 2]
     ICALL w16_hwnd2rec              ; BX = its record; keeps CX
     jc .zero
-    cmp byte [bx + W16W_KIND], 0
-    jne .zero
-    mov al, [bx + W16W_CLS]
+    mov al, [bx + W16W_CLS]         ; the program's classes, a superclass's
+    cmp al, 0xFF                    ;   control among them (124.25.18)
+    je .zero
     ICALL w16_clsget
     mov si, ax
     xor dx, dx

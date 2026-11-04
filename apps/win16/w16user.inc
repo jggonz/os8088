@@ -379,7 +379,7 @@ w16_clsget:
     mov ax, w16_ccb
     ret
 
-; w16_clsput - w16_ccb is put back as class [w16_ccbi] (SetClassWord). Keeps
+; w16_clsput - w16_ccb is put back as class [w16_cbi] (SetClassWord). Keeps
 ; every register.
 w16_clsput:
     push ax

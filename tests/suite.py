@@ -17133,7 +17133,10 @@ SOAK = [
         "and Button, SUPERCLASSES both (a class of its own over the copied "
         "procedure, forwarding with CallWindowProc) and uses them - "
         "WM_SETTEXT, EM_SETSEL, EM_REPLACESEL, WM_GETTEXT, BM_SETCHECK, "
-        "BM_GETCHECK - and SUBCLASSES a plain Edit with SetWindowLong "
+        "BM_GETCHECK - checks the superclass keeps its class name and a "
+        "multi-line one its own window word after Edit's 18 bytes, makes one "
+        "that answers WM_CREATE itself (its Edit state made at the first "
+        "message it forwards), and SUBCLASSES a plain Edit with SetWindowLong "
         "(GWL_WNDPROC), eating one key; its MessageBox must be CTLPROC OK. "
         "What Visual Basic 3.0's runtime does to every control it makes",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
@@ -17317,6 +17320,19 @@ SOAK = [
         "sentence, and WIN16's load and discard counters both moved",
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
         wants=("build/os8088.img", "build/win16/DOS.O88")),
+    Row("win16thunk", "soak", py("tests/win16thunk.py"), 120.0,
+        "SPEC.md 124.26.14, WIN16-NEXT c3 (the real-mode arm): THKCALL.EXE "
+        "(tests/win16/thkcall.asm, assembled, with Microsoft's linker's "
+        "`9Ah offset` and a SELECTOR relocation on the segment word) under "
+        "QEMU on kern_big, WIN16 built W16DEFS=-DW16_CODEKB=5 into a private "
+        "tree: two 3,500-byte discardable segments reached by far calls only "
+        "are loaded and discarded in turn through per-target thunks, a third "
+        "that a `mov ax, seg` in the first also names is kept when the first "
+        "loads (not at launch) and stays loaded, and the MessageBox says "
+        "`thkcall: abacxba` with 5 segments loaded and 4 discarded",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img", "build/win16/DOS.O88",
+               "build/win16/THKCALL.EXE")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "

@@ -359,18 +359,12 @@ w16s_clsadd:
     jne .have
     mov ax, W16_MAXCLS * W16C_STRIDE
     xor dx, dx
-    xor cl, cl                      ; fixed
-    ICALL w16_gnew                  ; AX = the handle, DX = the segment
-    or ax, ax
-    jz .no
-    W16TOSEL dx                     ; (the arm: a selector, 124.31.3)
-    mov [w16_clsseg], dx
-    mov es, dx                      ; no class is made: every name NUL
-    xor di, di
-    mov cx, (W16_MAXCLS * W16C_STRIDE) / 2
-    xor ax, ax
-    cld
-    rep stosw
+    mov cl, W16G_HIGH | GMEM_ZEROINIT   ; fixed, and zeroed: every name NUL. At
+    ICALL w16_gnew                  ;   the top of the heap, so it is not the
+    or ax, ax                       ;   block a GlobalAlloc's local heap grows
+    jz .no                          ;   into (124.25.19). AX = the handle,
+    W16TOSEL dx                     ;   DX = the segment (the arm: a selector,
+    mov [w16_clsseg], dx            ;   124.31.3)
 .have:
     mov es, [w16_clsseg]
     xor bx, bx
@@ -399,6 +393,69 @@ w16s_clsadd:
     pop dx
     pop cx
     pop bx
+    ret
+
+; w16_ctlkrow - a CLASS entry of WIN16's controls (slots W16_CTLK + kind,
+; SPEC.md 124.25.18), which GetClassInfo hands out as a class's window
+; procedure: w16_ctlrow's arguments and answer. A window of the program's
+; own class that calls one is a control of that class from this message on:
+; Visual Basic's ThunderTextBox forwards to "Edit"'s, and the window keeps the
+; program's procedure while its state lives in its record, as a subclassed
+; control's does. Windows made that state at WM_NCCREATE, which WIN16 does not
+; send, so it is made at the window's WM_CREATE - and, for a procedure that
+; answered WM_CREATE itself, before the first message it does forward (a
+; control with no state would draw from, and type into, segment 0), and a
+; WM_CREATE it forwards after that is answered 0 rather than made twice. A
+; window that is a control already keeps its kind. Here rather than in the dialog
+; part: part 3 is full, and a program's class never fetched it.
+W16SYS w16_ctlkrow
+    push si
+    mov ax, [w16_idx]               ; the slot the gate is serving
+    sub ax, W16_CTLK
+    push ax                         ; = the kind
+    ICALL w16_args
+    ICALL w16_smargs
+    ICALL w16_hwnd2rec
+    pop ax
+    jc .no
+    ICALL w16_dlgin                 ; the controls' part
+    jc .no
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    je .prog
+    cmp word [w16_sm_msg], WM_CREATE    ; a control already: made once, so a
+    je .no                              ;   WM_CREATE forwarded late is 0
+    jmp short .go
+.prog:
+    mov [bx + W16W_KIND], al
+    cmp word [w16_sm_msg], WM_CREATE
+    je .go
+    mov si, w16_sm_msg              ; its WM_CREATE first, lParam 0 as a
+    push word [si]                  ;   dialog's control has it
+    push word [si + 2]
+    push word [si + 4]
+    push word [si + 6]
+    mov word [si], WM_CREATE
+    xor ax, ax
+    mov [si + 2], ax
+    mov [si + 4], ax
+    mov [si + 6], ax
+    ICALL w16_intproc
+    pop word [si + 6]
+    pop word [si + 4]
+    pop word [si + 2]
+    pop word [si]
+    and ax, dx
+    inc ax
+    jnz .go
+    mov byte [bx + W16W_KIND], W16Q_PROG    ; refused: the program's again
+.no:
+    xor ax, ax
+    xor dx, dx
+    pop si
+    ret
+.go:
+    ICALL w16_intproc
+    pop si
     ret
 
 ; GetClassInfo (USER.404) - args: +0 lpWndClass, +4 lpszClassName,
@@ -462,11 +519,15 @@ W16SYS w16n_clsinfo
     mov [es:di], ax
     xor ax, ax                      ; no class or window extra words, no icon,
     mov [es:di + 6], ax             ;   cursor or menu: the state is in the
-    mov [es:di + 8], ax             ;   window's record
+    mov [es:di + 8], ax             ;   window's record...
     mov [es:di + 12], ax
     mov [es:di + 14], ax
     mov [es:di + 18], ax
     mov [es:di + 20], ax
+    cmp si, W16Q_EDIT               ; ...but a multi-line EDIT keeps its view
+    jne .xw                         ;   and undo in the first 18 extra bytes
+    mov byte [es:di + 8], ME_XTRA   ;   (w16edml.inc): a superclass's own
+.xw:                                ;   words go after them
     mov ax, [w16_dgroup]
     mov [es:di + 10], ax
     mov word [es:di + 16], COLOR_WINDOW + 1
