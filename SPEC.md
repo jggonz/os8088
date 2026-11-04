@@ -234740,8 +234740,10 @@ trailing backslash, as Windows.
 
 **One routine names it**: `w16f_sysdir` (`w16file.inc`) writes the path at DI,
 upper case, ending in `\`, as `w16f_windir` does for the Windows directory.
-`VerFindFile` (§124.24.9) and `OpenFile` (§124.21.3) use it, and so does the
-loader's library search (§124.23.1.1). `w16f_mksys` makes the folder. The
+`VerFindFile` (§124.24.9) and `OpenFile` (§124.21.3) use it, and the
+loader's library search (§124.23.1.1) walks to the same folder by
+`W16L_SYSDEPTH` (`w16load.inc`: two folders below `SYSTEM\APPDATA`, the
+second being `od_s_system`), which is the same name in directory form. `w16f_mksys` makes the folder. The
 program search of §124.28.5 already looked in `SYSTEM` under the Windows
 directory. The room: 8 resident bytes (`\SYSTEM`, `w16s_sfx`); the code is
 the library part's.

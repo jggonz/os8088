@@ -478,7 +478,7 @@ W16LIB w16k_openfile
     jz .use
     call w16f_putpath
     xor ax, ax
-    jmp short .out
+    jmp .out
 .use:
     test ax, OF_CREATE
     jz .find
