@@ -1173,6 +1173,35 @@ void c64_bandbm(unsigned char *dst, const unsigned char *xm,
 
 int c64_rvdiff(const unsigned char *a, const unsigned char *b)
 { return memcmp(a, b, 48) != 0; }
+int c64_neq(const unsigned char *a, const unsigned char *b, int n)
+{ return memcmp(a, b, (size_t)n * 2) != 0; }
+/* c64band.inc's c64_bandfind, in C (C64-SPEC 9.4.1) */
+int c64_bfbest;
+extern int c64_sb0, c64_sb1;
+int c64_bandfind(const unsigned *sig, const unsigned *shsig, int n, int kmax)
+{
+    int k, i, j, run, ch, st = 0, bk = 0;
+    c64_bfbest = 0;
+    for (k = -kmax; k <= kmax; k++) {
+        if (k == 0)
+            continue;
+        run = ch = 0;
+        for (i = 0; i <= n; i++) {
+            j = i + k;
+            if (i < n && j >= 0 && j < n && sig[i] == shsig[j]) {
+                if (!run) st = i;
+                run++;
+                if (sig[i] != shsig[i]) ch++;
+                continue;
+            }
+            if (ch > c64_bfbest) {
+                c64_bfbest = ch; bk = k; c64_sb0 = st; c64_sb1 = st + run - 1;
+            }
+            run = ch = 0;
+        }
+    }
+    return bk;
+}
 unsigned c64_scr_left(void)
 {
     /* (DEAD $24, CARRY $22: c64.c's C64_SCR_* are below this) */
@@ -1768,6 +1797,7 @@ static void glass_moved_up(int k)
  * a MODEL, not a measurement of the whole path - which is exactly what
  * PERFORMANCE.md rule 4 asks for until a counter on the target replaces it.
  * ========================================================================*/
+static unsigned b_proved;
 static int b_blit, b_fill, b_scroll, b_frame, b_run, b_str, b_bandc, b_cells,
            b_span, b_sig;
 static long b_blit_bytes, b_run_cells, b_str_cells, b_scr_acc, b_scr_take;
@@ -1788,6 +1818,7 @@ static long b_cpb, b_cprow, b_cpcell, b_x2;
 static void cost_begin(void)
 {
     b_blit = n_blit; b_fill = n_fill; b_scroll = n_scroll; b_frame = n_frame;
+    b_proved = c64_n_proved;
     b_run = n_run; b_str = n_str;
     b_bandc = n_band_calls; b_cells = n_band_cells;
     b_span = n_span_calls; b_sig = n_sig_calls;
@@ -2309,13 +2340,18 @@ int main(int argc, char **argv)
      * convention. A row that scrolled up is one row HIGHER on the glass than
      * it was, and the VACATED rows are the k at the BOTTOM. */
     glass_moved_up(9);
-    /* ...AND EVERY SHIFTED ROW WAS STILL COMPOSED AND COMPARED. 9.4: the
-     * signature is a HINT and nothing rests on it. Skipping the 16 slid rows
-     * would save 188 ms and buy a wrong screen that never repairs itself
-     * (the collision step below). */
-    if (n_band_calls - b_bandc != C64_ROWS)
-        fail("a k = 9 shift did not compose and compare every row - the "
-             "16-bit signature is a hint, not proof (9.4)");
+    /* ...AND THE 16 SLID ROWS WERE PROVED, NOT GUESSED (9.4.1). The
+     * signature is still a HINT and nothing rests on it: a slid row is
+     * skipped only when its forty matrix bytes and forty colour nibbles read
+     * exactly what the row it came from was drawn from (c64_srcsh), which is
+     * the same picture. So the 9 vacated rows are composed and the 16 slid
+     * ones cost a 40-byte copy and an 80-byte compare each - it was 25
+     * composes and compares. audit() above checked every pixel. The
+     * collision step below is the case the proof exists to catch. Verified
+     * red with c64_neq answering 0 (the collision's row 0 then stays wrong) */
+    if (n_band_calls - b_bandc != 9 || c64_n_proved - b_proved != 16)
+        fail("a k = 9 shift did not compose its 9 vacated rows and PROVE its "
+             "16 slid ones (9.4.1)");
 
     /* ...and the same shift with gfx_scroll REFUSING: the fallback must be
      * spans and the shadow must stay true (9.4) */
@@ -2358,15 +2394,20 @@ int main(int argc, char **argv)
      * against the row's own sources, which is the one thing audit() cannot
      * do here: a package that slides its shadow the same wrong way agrees
      * with itself. */
+    /* (...and rows 2-6 really do move up one, behind it: the band test
+     * wants three CHANGED rows before it believes a scroll, 9.4.1, and a
+     * single collision alone is not one) */
     for (i = 0; i < C64_ROWS; i++)
         for (k = 0; k < 40; k++)
-            c64_wr(0x0400 + i * 40 + k, (i == 1 && k == 5) ? 34 : 32);
+            c64_wr(0x0400 + i * 40 + k, (i == 1 && k == 5) ? 34
+                   : (i >= 2 && i <= 6 && k == 10) ? (1 + i) : 32);
     flush_now();
     audit("before the signature collision");
     cost_begin();
     for (i = 0; i < C64_ROWS; i++)
         for (k = 0; k < 40; k++)
-            c64_wr(0x0400 + i * 40 + k, (i == 0 && k == 6) ? 36 : 32);
+            c64_wr(0x0400 + i * 40 + k, (i == 0 && k == 6) ? 36
+                   : (i >= 1 && i <= 5 && k == 10) ? (2 + i) : 32);
     flush_now();
     cost_row("a k = 1 shift the signature got WRONG");
     if (n_scroll - b_scroll != 1)
@@ -2374,6 +2415,77 @@ int main(int argc, char **argv)
              "it is not testing what it says");
     audit("after the signature collision");
     row_truth(0, "after the signature collision");
+
+    /* --- A PARTIAL SCROLL, DOWN (9.4.1): rows 0-11 move down one into 1-12
+     * and a new row 0 comes in, rows 13-24 standing still - the Portland
+     * CUG demo's falling snow. One gfx_scroll of the band, its 12 slid rows
+     * proved from their bytes, only the new row 0 composed, and every pixel
+     * right (audit). Verified red with the band test kept to whole-screen,
+     * upward shifts: no scroll, 13 composes. */
+    for (i = 0; i < C64_ROWS; i++)
+        for (k = 0; k < 40; k++)
+            c64_wr(0x0400 + i * 40 + k, (unsigned char)(1 + ((i * 11 + k * 3) % 26)));
+    flush_now();
+    audit("before the partial scroll");
+    cost_begin();
+    memmove(ram + 0x0400 + 40, ram + 0x0400, 12 * 40);
+    for (k = 0; k < 40; k++)
+        ram[0x0400 + k] = (unsigned char)(1 + ((k * 5) % 26));
+    for (i = 0x0400; i < 0x0400 + 13 * 40; i++)
+        c64_dirty((unsigned)i);
+    c64_scr_wr(0x2C, 0x00); c64_scr_wr(0x2D, 0x04);
+    c64_scr_wr(0x2E, (0x0400 + 13 * 40 - 1) & 0xFF);
+    c64_scr_wr(0x2F, (0x0400 + 13 * 40 - 1) >> 8);
+    c64_dirty_any = 1;
+    flush_now();
+    cost_row("a partial scroll down, rows 0-12");
+    audit("after the partial scroll");
+    if (n_scroll - b_scroll != 1 || n_band_calls - b_bandc != 1
+            || c64_n_proved - b_proved != 12)
+        fail("a partial downward scroll was not one gfx_scroll, one composed "
+             "row and twelve proved ones (9.4.1)");
+
+    /* --- ...AND A SPRITE OVER THE BAND (9.4.1). The scroll moves the
+     * GLASS, sprite pixels and all, so a sprite drawn over rows 5-7 lands on
+     * rows 6-8 - and in the same frame the sprite is switched off. Every row
+     * of the band must then be its text and nothing else: a slid row is
+     * examined whole, and one that came from under a sprite is never proved
+     * (its record says so). Verified red with the proof trusting a record
+     * made under a sprite: the sprite's pixels survive on rows 6-8. (The
+     * whole-row mark, c64_rowd 8, guards a slid row whose bytes were NOT
+     * rewritten, which a page-granular dirty set cannot produce here.) */
+    {
+        int r, j;
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0xFF);
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 1);
+        c64_io_wr(0xD000, 24 + 40);
+        c64_io_wr(0xD001, 50 + 40);         /* rows 5-7 */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+        memmove(ram + 0x0400 + 40, ram + 0x0400, 12 * 40);
+        for (k = 0; k < 40; k++)
+            ram[0x0400 + k] = (unsigned char)(1 + ((k * 7) % 26));
+        for (i = 0x0400; i < 0x0400 + 13 * 40; i++)
+            c64_dirty((unsigned)i);
+        c64_scr_wr(0x2C, 0x00); c64_scr_wr(0x2D, 0x04);
+        c64_scr_wr(0x2E, (0x0400 + 13 * 40 - 1) & 0xFF);
+        c64_scr_wr(0x2F, (0x0400 + 13 * 40 - 1) >> 8);
+        c64_io_wr(0xD015, 0);               /* ...and the sprite goes */
+        c64_latch(0);
+        c64_latch(0);
+        c64_dirty_any = 1;
+        b_scroll = n_scroll;
+        flush_now();
+        if (n_scroll - b_scroll != 1)
+            fail("the band under a sprite did not scroll - the sprite case "
+                 "is not reaching what it tests");
+        for (r = 0; r <= 12; r++)
+            row_truth(r, "after a band scroll under a sprite");
+    }
 
     /* --- AND gfx_blit1 REFUSING: 9.5's SECOND PATH, ONCE ---------------
      * os88.h:446 - blit1 answers -1 with NOTHING DRAWN, for a broken argument
@@ -2490,19 +2602,41 @@ int main(int argc, char **argv)
         fail("a register write that changed nothing drew something");
     c64_io_wr(0xDD00, 0x17);
 
+    /* --- a FINE-SCROLL write composes NOTHING (5.1, 9.10) ---------------
+     * The fine scroll is not honoured, so it cannot change the picture: a
+     * program smooth-scrolling with $D011/$D016's low bits every frame
+     * recomposed every row every frame until the latch's change test was
+     * masked to the bits the composer draws from. Verified red with the
+     * mask removed. */
+    cost_begin();
+    c64_io_wr(0xD016, (c64_vic[0x16] ^ 0x01));   /* fine scroll x */
+    c64_io_wr(0xD011, (c64_vic[0x11] ^ 0x07));   /* ...and y */
+    flush_now();
+    cost_row("a fine-scroll change, $D011 and $D016");
+    audit("after a fine-scroll change");
+    if (n_band_calls - b_bandc != 0 || n_blit - b_blit != 0)
+        fail("a fine-scroll write recomposed or drew - it cannot change the "
+             "picture here (5.1)");
+    c64_io_wr(0xD016, (c64_vic[0x16] ^ 0x01));
+    c64_io_wr(0xD011, (c64_vic[0x11] ^ 0x07));
+
     /* --- a register write that DOES change: recompose, then COMPARE ----- */
     cost_begin();
-    c64_io_wr(0xD016, (c64_vic[0x16] ^ 0x01));   /* fine scroll x: every row
-                                                  * recomposes, and composes
-                                                  * the SAME pixels */
+    c64_io_wr(0xD021, 9);                   /* brown paper: the same luminance
+                                             * as blue (60, 9.6), so every row
+                                             * recomposes and composes the SAME
+                                             * pixels */
     flush_now();
-    cost_row("a $D016 change that draws the same picture");
-    audit("after a $D016 change");
+    cost_row("a $D021 change that draws the same picture");
+    audit("after a $D021 change");
     if (n_band_calls - b_bandc == 0)
         fail("a frame-register change did not recompose");
     if (n_blit - b_blit != 0)
         fail("a frame-register change that composed the same pixels still "
              "drew - the shadow compare was forced off");
+    c64_io_wr(0xD021, 6);
+    flush_now();                            /* (back: and a flush in THIS tick
+                                             * for the row below) */
 
     /* --- a slice with no tick boundary costs nothing (9.7) -------------- */
     cost_begin();

@@ -82,7 +82,39 @@ _c64_osc3:
 .clk:
     mov ax, [c64_o3nz]
     mov dx, [c64_o3nz+2]
+    ; EIGHT CLOCKS AT ONCE while eight remain: a new bit feeds back only 17
+    ; clocks later (bit 0 to bit 17), so the next eight feedback bits are all
+    ; old bits - ((lfsr >> 15) ^ (lfsr >> 10)) & $FF, the first of them in
+    ; bit 7 - and the register shifts a byte. The same register as eight
+    ; single clocks, and 8x fewer passes: $D41B read for a random number
+    ; every snowflake was 4.5% of a 286 one clock at a time
+.byte:
+    cmp cx, 8
+    jb .step
+    push cx
+    mov bl, dl
+    shl bl, 1
+    mov bh, ah
+    rol bh, 1
+    and bh, 1
+    or bl, bh                       ; BL = (lfsr >> 15) & $FF
+    mov bh, dl
+    mov cl, 6
+    shl bh, cl
+    mov cl, ah
+    shr cl, 1
+    shr cl, 1
+    or bh, cl                       ; BH = (lfsr >> 10) & $FF
+    xor bl, bh
+    mov dl, ah
+    and dl, 0x7F                    ; bits 22-16 = old bits 14-8
+    mov ah, al                      ; bits 15-8 = old 7-0
+    mov al, bl                      ; bits 7-0 = the eight new
+    pop cx
+    sub cx, 8
+    jmp .byte
 .step:
+    jcxz .stored
     mov bl, dl                      ; bit 22 is DL bit 6, bit 17 DL bit 1
     rol bl, 1
     rol bl, 1                       ; bit 6 -> bit 0
@@ -95,6 +127,7 @@ _c64_osc3:
     or al, bl
     and dx, 0x007F
     loop .step
+.stored:
     mov [c64_o3nz], ax
     mov [c64_o3nz+2], dx
 .wave:

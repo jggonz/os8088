@@ -937,6 +937,31 @@ body:
     dw _c64_osc3
     cmp ax, 0xFC
     jne .f6
+    ; ...and the EIGHT-AT-A-TIME path: from TEST, 64 clocks (eight bytes) and
+    ; then 13 (one byte and five singles), against a single-clock model's
+    ; register ($7C03E0 -> $C4, $7C1F1F -> $CB)
+    PUSHI 0
+    PUSHI 0x08
+    PUSHI 0
+    PUSHI 0
+    call disc_call
+    dw _c64_osc3
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x4000
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xC4
+    jne .f6
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x0D00
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xCB
+    jne .f6
     ; c64_scr_left: DEAD $1234 + CARRY $0011, out of the claim's scratch
     push es
     mov ax, SEG_RAM
@@ -955,6 +980,24 @@ body:
     mov word [es:C64_SCR_BASE + C64_SCR_DEAD], 0
     mov word [es:C64_SCR_BASE + C64_SCR_CARRY], 0
     pop es
+    ; c64_bandfind (C64-SPEC 9.4.1): rows 2-6 of 8 moved DOWN one (sig[i] is
+    ; shsig[i-1], and each differs from its own old row); rows 0, 1 and 7
+    ; stand still. The answer is k = -1 over rows 2..6, five changed
+    mov word [pushes], 4
+    PUSHI 3
+    PUSHI 8
+    PUSHI bf_sh
+    PUSHI bf_sig
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -1
+    jne .f6
+    cmp word [_c64_sb0], 2
+    jne .f6
+    cmp word [_c64_sb1], 6
+    jne .f6
+    cmp word [_c64_bfbest], 5
+    jne .f6
     jmp .c8done
 ; compare 8 bytes [si] with [di] (ZF set when equal), and CX bytes
 .c8cmp:
@@ -1407,6 +1450,10 @@ section .text
 section .data
 _c64_cmask: times 32 db 0xFF
 _c64_dmask: times 64 db 0
+_c64_sb0:   dw 0
+_c64_sb1:   dw 0
+bf_sig:     dw 10, 30, 11, 22, 23, 24, 25, 17
+bf_sh:      dw 10, 11, 22, 23, 24, 25, 26, 17
 _c64_bgfill: db 0
 ; Edit > Copy's two package globals (c64kbd.c bss on the target). The real
 ; c64_sctab is built by ovl_conv_init from VICE's three transcribed

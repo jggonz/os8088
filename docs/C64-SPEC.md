@@ -1590,6 +1590,43 @@ last one, so the shift test is not the one-row test:
 `FOR`-loop of `PRINT`s that scrolls nine lines between two ticks is one scroll
 of nine rows.
 
+### 9.4.1 Bands, both directions, and the source proof
+
+**The shift test finds a BAND** (`c64band.inc`'s `c64_bandfind`, called by
+`c64_shift_test`): for k = ±1..±`C64_SHKMAX` (12), the longest run of rows
+whose signature is the shadow's k rows away, scored by how many of them
+CHANGED - blank rows match every k and score nothing - and three at least.
+The whole-screen scroll is the run of every row; a demo that scrolls the top
+half of its screen down is a run of half of them. It is asked once a quarter
+of the rows on the glass are dirty (it was four fifths). **The band's rect
+scrolls** (`os88_gfx_scroll`'s `dy` is signed: up for k > 0, down for k < 0),
+the shadow, the signatures and the source record (below) slide a row at a
+time in the order that never reads an overwritten row (`c64_row_slide`),
+and the vacated rows are forced. **Sprites no longer stop it**: a slid row
+is examined whole (`c64_rowd` 8), so a sprite's pixels that moved with the
+glass are composed over and compared away.
+
+**THE SOURCE PROOF.** A row composed in standard text with no sprite over it
+records what it was drawn from - its 40 matrix bytes and 40 colour nibbles
+(`c64_srcsh`, 2,000 bytes of bss, `c64_srcok` while the record is the whole
+row's). A row dirty only through its matrix (`c64_rowd` 1, or 8 when slid),
+nothing forced, whose sources read the same as its record is **the same
+picture, proved** - its character set and registers would have made it
+`c64_rowd` 2 - so it is neither composed nor compared (`c64_neq`). After a
+scroll the record slides with the shadow, and that is what makes a moved row
+free: §9.4's rule that the signature is a hint stands, because the proof is
+the bytes and not the signature. A row composed under a sprite records
+`c64_srcok` 0, which slides too, so one that inherited sprite pixels is never
+proved. `c64uitest`: a k = 9 shift composes its 9 vacated rows and proves the
+16 slid ones (it was 25 composes); the collision fixture (§9.4) now moves
+rows 2-6 behind the colliding row, scrolls, and row 0 is recomposed because
+its BYTES differ; a partial scroll DOWN is one scroll, one composed row and
+twelve proved; a band under a sprite switched off in the same frame leaves no
+sprite pixel (red with the proof trusting a record made under a sprite).
+Measured on `286-victory`: a BASIC loop printing and scrolling, in warp,
+28.0% -> 30.8%. On the 286 the composer is the cost; on an 8088 the blits a
+scroll saves are.
+
 ### 9.5 The composers
 
 `apps/c64/c64band.inc` — `rcband.inc`'s shape, **1bpp only**, every entry
@@ -1896,6 +1933,12 @@ frame's top, and carries a flag so that the NEXT latch applies it even if
 nothing more is written (`c64_dl_tail`). The rows composed are therefore
 the frame that has just been displayed, one frame after it was displayed —
 which is the same 20 ms §9.9 already spends.
+
+**Only the bits the composer draws from count as a change**: `$D011`'s BMM
+and ECM, `$D016`'s MCM, and the rest of the set whole. The fine scroll, the
+24/25-row and 38/40-column flags and the display enable are not honoured
+(§5.1), and the Portland CUG demo's snow, smooth-scrolled by writing `$D011`
+every frame, recomposed every row every frame until the test was masked.
 
 A row whose display registers changed is marked WHOLE (`c64_row_whole`) —
 its sources moved without its matrix cells moving, so the write-window span
@@ -2607,7 +2650,10 @@ bits 22-15 folded by bit 23, pulse against `$D410/$D411`'s width; several
 waveforms AND. TEST holds the accumulator at 0 and the LFSR at all ones, and
 a SID reset goes through TEST, because a zero LFSR shifts in zeros for ever.
 A write to `$D40E-$D412` first brings the oscillator up to now at the old
-settings. **This is the C64's random number generator** - voice 3 on noise,
+settings. **The LFSR clocks eight at a time** while eight remain: a new bit
+feeds back only 17 clocks later, so the next eight feedback bits are all old
+ones - `((lfsr >> 15) ^ (lfsr >> 10)) & $FF` - and the register shifts a
+byte; `c64memtest` checks 64 and 77 clocks against a single-clock model. **This is the C64's random number generator** - voice 3 on noise,
 read at `$D41B` - and the Portland Commodore Users Group's Christmas demo
 places its snow with it: answering the stored byte, every flake fell in
 column 0. **`$D41C`** is the sustain level while voice 3's gate is open and

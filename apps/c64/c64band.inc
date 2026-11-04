@@ -53,6 +53,10 @@ c64_x2tab:  resb 512
 
 ; c64_bandbm's per-cell colour block: four colours' 4x4 Bayer phases, laid
 ; [pair value * 4 + line & 3] so a line reads all four at [bx], [bx+4], ...
+_c64_bfbest: resw 1                  ; c64_bandfind's best score...
+c64_bfk:    resw 1                  ; ...its k...
+c64_bfkk:   resw 1                  ; ...the k being tried...
+c64_bfst:   resw 1                  ; ...and the run's first row
 c64_bmblk:  resb 16
 c64_bmend:  resw 1                  ; ...and where its cell's eight lines end
 
@@ -288,6 +292,128 @@ _c64_sprrow:
     dec word [bp+10]
     jnz .lp
 .out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_bandfind(const unsigned *sig, const unsigned *shsig, int n, int kmax)
+; C64-SPEC 9.4.1's band test: for k = -kmax..kmax (not 0), the longest run of
+; rows i with sig[i] == shsig[i+k], scored by how many of them CHANGED
+; (sig[i] != shsig[i]). Answers the best k (0: no run scored), and leaves the
+; run's first and last row in _c64_sb0/_c64_sb1 and its score in _c64_bfbest.
+; It was C, and 14% of a 286 under the Portland CUG demo's snow.
+; -----------------------------------------------------------------------------
+_c64_bandfind:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov word [_c64_bfbest], 0
+    mov word [c64_bfk], 0
+    mov ax, [bp+10]
+    neg ax
+    mov [c64_bfkk], ax              ; k = -kmax
+.kloop:
+    mov ax, [c64_bfkk]
+    cmp ax, [bp+10]
+    jle .kgo
+    jmp .done
+.kgo:
+    or ax, ax
+    jnz .k1
+    jmp .knext
+.k1:
+    xor cx, cx                      ; CX = the run, DX = its changed rows
+    xor dx, dx
+    xor bx, bx                      ; BX = i
+.iloop:
+    cmp bx, [bp+8]
+    jge .iend
+    mov ax, bx
+    add ax, [c64_bfkk]              ; j = i + k
+    js .brk
+    cmp ax, [bp+8]
+    jge .brk
+    mov si, bx
+    shl si, 1
+    add si, [bp+4]
+    mov si, [si]                    ; sig[i]
+    mov di, ax
+    shl di, 1
+    add di, [bp+6]
+    cmp si, [di]                    ; shsig[j]
+    jne .brk
+    or cx, cx
+    jnz .run
+    mov [c64_bfst], bx
+.run:
+    inc cx
+    mov di, bx
+    shl di, 1
+    add di, [bp+6]
+    cmp si, [di]                    ; shsig[i]: did it change?
+    je .inext
+    inc dx
+    jmp short .inext
+.brk:
+    call .score
+    xor cx, cx
+    xor dx, dx
+.inext:
+    inc bx
+    jmp .iloop
+.iend:
+    call .score
+.knext:
+    inc word [c64_bfkk]
+    jmp .kloop
+.done:
+    mov ax, [c64_bfk]
+    pop di
+    pop si
+    pop bp
+    ret
+; the run that just ended (CX rows, DX changed, from c64_bfst): the best yet?
+.score:
+    cmp dx, [_c64_bfbest]
+    jle .sr
+    mov [_c64_bfbest], dx
+    mov ax, [c64_bfkk]
+    mov [c64_bfk], ax
+    mov ax, [c64_bfst]
+    mov [_c64_sb0], ax
+    add ax, cx
+    dec ax
+    mov [_c64_sb1], ax
+.sr:
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_neq(const unsigned char *a, const unsigned char *b, int nwords)
+; 1 when NWORDS words at A and B differ, else 0 (C64-SPEC 9.4.1's source
+; proof: a row's 80 source bytes against what it was drawn from)
+; -----------------------------------------------------------------------------
+_c64_neq:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov cx, [bp+8]
+    xor ax, ax
+    jcxz .same
+    repe cmpsw
+    je .same
+    inc ax
+.same:
+    pop es
     pop di
     pop si
     pop bp

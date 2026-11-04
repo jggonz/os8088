@@ -789,7 +789,14 @@ static void c64_latch(int force)
         if (c64_rvdiff(cur, c64_rv[r])) {
             unch = 0;
             ch = 0;
-            if (cur[0x11] != c64_rv[r][0x11] || cur[0x16] != c64_rv[r][0x16]
+            /* ONLY THE BITS THE COMPOSER DRAWS FROM (5.1): $D011's BMM and
+             * ECM, $D016's MCM. The fine scroll, the 24/25-row and 38/40-
+             * column flags and the display enable are not honoured, so a
+             * program smooth-scrolling with them - the Portland CUG demo's
+             * falling snow writes $D011 every frame - recomposed every row
+             * every frame for a picture that did not change */
+            if (((cur[0x11] ^ c64_rv[r][0x11]) & 0x60)
+                    || ((cur[0x16] ^ c64_rv[r][0x16]) & 0x10)
                     || cur[0x18] != c64_rv[r][0x18]
                     || ((cur[C64_RV_DD] ^ c64_rv[r][C64_RV_DD]) & 3))
                 ch = 1;

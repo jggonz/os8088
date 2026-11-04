@@ -150,6 +150,9 @@ void c64_bandbm(unsigned char *dst, const unsigned char *xm,
                 const unsigned char *xb, const unsigned char *col,
                 int n, int mc, int bg);
 int  c64_rvdiff(const unsigned char *a, const unsigned char *b);
+int  c64_neq(const unsigned char *a, const unsigned char *b, int nwords);
+int  c64_bandfind(const unsigned *sig, const unsigned *shsig, int n, int kmax);
+extern int c64_bfbest;                  /* (c64band.inc's) */
 void c64_sprrow(unsigned char *dst, const unsigned char *on,
                 const unsigned char *lit, int n, int cell, int sh,
                 int f, int l);

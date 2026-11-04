@@ -63,12 +63,31 @@
  * every adapter: wm_fit clamps the window on a 200-line desktop, and an
  * absolute 20 there is a threshold the screen can never reach, so no scroll
  * is ever detected on the target machine. See c64_flush. */
-#define C64_SHIFT_NUM 4
-#define C64_SHIFT_DEN 5
+#define C64_SHIFT_NUM 1                     /* a QUARTER of the rows dirty (9.4.1) */
+#define C64_SHIFT_DEN 4
 
 static unsigned char c64_sh[C64_SHBYTES];   /* the frame shadow: the pixels
                                              * last blitted, not a model */
 static unsigned char c64_bnd[C64_BSTRIDE * 8];  /* one composed band */
+/* THE SOURCES EACH ROW WAS DRAWN FROM (9.4.1): its forty matrix bytes and
+ * its forty colour nibbles, as they stood when the row was composed in
+ * standard text with no sprite over it, and c64_srcok[r] while they are the
+ * WHOLE row's. A row dirty only through its matrix (c64_rowd 1) whose
+ * sources read the same is the same picture - its character set and its
+ * registers would have made it c64_rowd 2 - so it is skipped, with no
+ * compose and no compare. After a scroll the record slides with the shadow,
+ * and that is what makes a moved row free rather than a signature's hint */
+static unsigned char c64_srcsh[C64_ROWS][C64_COLS * 2];
+static unsigned char c64_srcok[C64_ROWS];
+static unsigned char c64_srct[C64_COLS * 2];
+
+/* c64_row_slide - row FROM's shadows to row TO: the pixels and the sources */
+static void c64_row_slide(int to, int from)
+{
+    os88_memcpy(c64_sh + C64_X320(to), c64_sh + C64_X320(from), 320);
+    os88_memcpy(c64_srcsh[to], c64_srcsh[from], C64_COLS * 2);
+    c64_srcok[to] = c64_srcok[from];
+}
 /* ...AND ITS PIXEL-DOUBLED TWIN, WHICH IS THE WHOLE OF FULLSCREEN'S 2x (9.8).
  * The frame shadow stays 320x200 and every compare, signature and span is
  * still in C64 pixels: the doubling happens at BLIT TIME and nowhere else, so
@@ -154,7 +173,7 @@ static int c64_border_lit;
  * build fails loudly on any that is missed. */
 #ifdef C64_HOST
 static unsigned c64_n_blit, c64_n_fill, c64_n_scroll, c64_n_cell;
-static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2;
+static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2, c64_n_proved;
 #endif
 
 /* --- the status row's last state, for the delta draw (10) ---------------- */
@@ -393,6 +412,7 @@ static void c64_force_rows(int r0, int r1, int c0, int c1)
 
 static void c64_sh_inval(void)
 {
+    os88_memset(c64_srcok, 0, C64_ROWS);    /* no row's sources are known */
     c64_sh_ok = 0;
     c64_st_ok = 0;
     c64_dirty_all();
@@ -1955,6 +1975,11 @@ static void c64_row_font(int i, int f, int l, int sx, int y)
  * identical value per recomposed row - 25 x C64BENCH_SIG = 25.8 ms of pure
  * duplicate on the one path that recomposes everything. The gfx lock is held
  * for the whole flush, so the sources cannot move in between. */
+/* THE BAND THE LAST SHIFT TEST FOUND (9.4.1): its rows as they are NOW,
+ * c64_sb0..c64_sb1, which were c64_sb0+k..c64_sb1+k before */
+int c64_sb0, c64_sb1;                       /* (c64band.inc writes them) */
+
+#define C64_SHKMAX 12                       /* the furthest a band is sought */
 static int c64_shift_test(int nrows)
 {
     int i, k, moved;
@@ -1969,18 +1994,16 @@ static int c64_shift_test(int nrows)
             moved = 1;
     if (!moved)
         return 0;
-    for (k = 1; k <= nrows - 1; k++) {
-        int ok = 1;
-        for (i = 0; i + k < nrows; i++) {
-            if (c64_sig[i] != c64_shsig[i + k]) {
-                ok = 0;
-                break;
-            }
-        }
-        if (ok)
-            return k;
-    }
-    return 0;
+    /* A BAND, UP OR DOWN (9.4.1). The longest run of rows i whose signature
+     * is the shadow's at i + k, scored by how many of them CHANGED - a run of
+     * blank rows matches every k and proves nothing, so it scores nothing -
+     * for k = +-1 .. +-C64_SHKMAX (c64band.inc's c64_bandfind). The whole-
+     * screen scroll the KERNAL does is the run covering every row; a demo
+     * that scrolls the top half of its screen down is a run of half of them.
+     * Three changed rows at least. */
+    k = c64_bandfind(c64_sig, c64_shsig, nrows,
+                     (nrows - 1 < C64_SHKMAX) ? nrows - 1 : C64_SHKMAX);
+    return (c64_bfbest >= 3) ? k : 0;
 }
 
 /* c64_span_of - row i's changed cell span, out of the write window and the
@@ -2033,7 +2056,7 @@ static int c64_span_of(int i)
 static void c64_flush(void *win)
 {
     int i, k, sp, f, l, df, dl, nrows, w, trust, rc;
-    int ox, oy, sx, sy, sty;
+    int ox, oy, sx, sy, sty, r0, r1, v0, v1;
 
     if (c64_geom(win) < 0)
         return;
@@ -2098,9 +2121,13 @@ static void c64_flush(void *win)
      * signature means anything. */
     k = 0;
     if (c64_sh_ok)
-        if ((c64_rgfx | c64_rsplit | c64_spr_any) == 0)  /* plain text, one
-                                             * register set, no sprite: the
-                                             * only screen a signature names */
+        if ((c64_rgfx | c64_rsplit) == 0)   /* plain text and one register
+                                             * set: the only screen a matrix
+                                             * signature names. SPRITES ARE
+                                             * FINE since 9.4.1: a slid row is
+                                             * examined whole (c64_rowd 8) and
+                                             * one with a sprite over it then
+                                             * or now is never proved */
             if (c64_hold_r0 > c64_hold_r1)
                 if (nrows > 1) {
                     int nd = 0;
@@ -2144,49 +2171,55 @@ static void c64_flush(void *win)
          * (9.4) and both stay multiples of 8 at either scale, because c64_gsx
          * is snapped and 40 * 16 is 640. A refusal falls back to bands here as
          * it always did. */
-        if (os88_gfx_scroll(sx, sy, sx + C64_COLS * c64_scw - 1,
-                            sy + nrows * c64_sch - 1,
+        /* THE BAND'S RECT (9.4.1): up, the rows sb0..sb1+k move up k and
+         * sb1+1..sb1+k are vacated; down, sb0-m..sb1 move down m and
+         * sb0-m..sb0-1 are vacated */
+        if (k > 0) {
+            r0 = c64_sb0;
+            r1 = c64_sb1 + k;
+            v0 = c64_sb1 + 1;
+        } else {
+            r0 = c64_sb0 + k;
+            r1 = c64_sb1;
+            v0 = r0;
+        }
+        v1 = v0 + ((k > 0) ? k : -k) - 1;
+        if (os88_gfx_scroll(sx, sy + r0 * c64_sch,
+                            sx + C64_COLS * c64_scw - 1,
+                            sy + (r1 + 1) * c64_sch - 1,
                             k * c64_sch) == 0) {
 #ifdef C64_HOST
             c64_n_scroll++;
 #endif
-            os88_memcpy(c64_sh, c64_sh + C64_X320(k),
-                        C64_X40((nrows - k) * 8));
-            /* the k vacated rows: gfx_scroll leaves them for us, so they are
-             * drawn WHATEVER the compare says - a stale shadow row that
-             * happened to match would leave the glass blank (9.4) */
-            c64_force_rows(nrows - k, nrows - 1, 0, C64_COLS - 1);
-            for (i = nrows - k; i < nrows; i++) {
+            /* the shadows slide with it, a row at a time, in the order
+             * that never reads a row it has overwritten: the pixels, the
+             * sources each row was drawn from (c64_srcsh), and the
+             * signatures, which c64_sig[] already holds for the band */
+            if (k > 0) {
+                for (i = c64_sb0; i <= c64_sb1; i++)
+                    c64_row_slide(i, i + k);
+            } else {
+                for (i = c64_sb1; i >= c64_sb0; i--)
+                    c64_row_slide(i, i + k);
+            }
+            for (i = c64_sb0; i <= c64_sb1; i++) {
+                c64_shsig[i] = c64_sig[i];
+                /* SLID: the glass holds the row it came from, so the row is
+                 * examined WHOLE - proved, or composed and compared against
+                 * the slid shadow - even where nothing in its matrix moved,
+                 * because a sprite drawn over the row it came from moved
+                 * with it */
+                c64_rowd[i] = (c64_rowd[i] & 6) ? 2 : 8;
+            }
+            c64_dirty_any = 1;
+            /* the vacated rows: gfx_scroll leaves them for us, so they are
+             * drawn WHATEVER the compare says (9.4) */
+            c64_force_rows(v0, v1, 0, C64_COLS - 1);
+            for (i = v0; i <= v1; i++) {
                 c64_rowd[i] = 2;
                 c64_shsig[i] = 0;
+                c64_srcok[i] = 0;
             }
-            /* the shifted rows' signatures moved with them - and c64_sig[]
-             * already holds exactly those values, because that is what the
-             * test compared. No c64_rowsig call: the slide is a copy.
-             *
-             * AND `c64_rowd` IS *NOT* CLEARED FOR THE SHIFTED ROWS, WHICH
-             * WAS PROPOSED AND IS WRONG. Clearing it would skip composing and
-             * comparing the 16 rows the scroll slid, on the strength of the
-             * 16-bit signature alone - and C64-SPEC §9.4 is explicit that the
-             * signature is a HINT and that NOTHING RESTS ON IT: "after the
-             * scroll is emitted the shadow is moved with it and every row
-             * still goes through c64_rowspan against the moved shadow, so a
-             * row that did not really shift simply compares unequal and is
-             * drawn. The scroll is an optimisation whose failure mode is a
-             * redraw, never a wrong screen." A collision is trivial to build
-             * - screen code 1 in column 0 and screen code 2 in column 1 with
-             * everything else blank sign identically, because the signature
-             * is an XOR under a rotate - and skipping the compare turns that
-             * from a wasted recompose into WRONG PIXELS THAT NEVER GO AWAY,
-             * since the flags are then clear and nothing asks again.
-             * hosttest/c64uitest.c drives exactly that pair.
-             *
-             * So the 25 recomposes a scrolled frame costs are the price of
-             * the guarantee, and §9.7's `a k = 9 shift` row is what it costs
-             * (256.0 ms). The signature saves the SCROLL - 1 call plus k rows
-             * of drawing instead of 25 - not the compare. */
-            for (i = 0; i + k < nrows; i++)
-                c64_shsig[i] = c64_sig[i];
         } else {
             k = 0;                          /* refused: spans, and the shadow
                                              * stays true - nothing moved */
@@ -2205,6 +2238,28 @@ static void c64_flush(void *win)
         if ((c64_rowd[i] | c64_force[i]) == 0)
             if (c64_sh_ok)
                 continue;
+        /* THE SOURCE PROOF (9.4.1): dirty only through its matrix, nothing
+         * unknown on the glass, plain text and no sprite, and its sources
+         * read what it was drawn from - the same pixels, proved and not
+         * guessed, so neither the compose nor the compare is owed */
+        if ((c64_rowd[i] == 1) | (c64_rowd[i] == 8))
+            if (c64_force[i] == 0)
+                if (c64_srcok[i] & c64_sh_ok)
+                    if ((c64_rmode[i] | c64_spsig[i]) == 0) {
+                        c64_zcopy_out(c64_srct, c64_rmb[i] + C64_X40(i),
+                                      C64_COLS);
+                        os88_memcpy(c64_srct + C64_COLS, c64_col + C64_X40(i),
+                                    C64_COLS);
+                        if (!c64_neq(c64_srct, c64_srcsh[i], C64_COLS)) {
+#ifdef C64_HOST
+                            c64_n_proved++;
+#endif
+                            c64_rowd[i] = 0;
+                            continue;
+                        }
+                    }
+        if (c64_rowd[i] == 8)
+            c64_rowd[i] = 2;                /* slid and not proved: whole */
 
         /* THE COMPOSE SPAN, and whether the shadow may be trusted for it.
          *   the shadow is invalid            -> the whole row, drawn
@@ -2276,6 +2331,17 @@ static void c64_flush(void *win)
         }
         if (c64_spsig[i])
             c64_spr_draw(i, f, l);
+        /* ...and the record of what it was drawn from (9.4.1) */
+        if ((c64_rmode[i] | c64_spsig[i]) == 0) {
+            c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
+                          l - f + 1);
+            os88_memcpy(c64_srcsh[i] + C64_COLS + f, c64_col + C64_X40(i) + f,
+                        l - f + 1);
+            if ((f == 0) & (l == C64_COLS - 1))
+                c64_srcok[i] = 1;
+        } else {
+            c64_srcok[i] = 0;
+        }
 #ifdef C64_HOST
         c64_n_cell += (unsigned)(l - f + 1);
         c64_n_rows++;
