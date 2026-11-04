@@ -235446,10 +235446,66 @@ code.
 | | |
 |---|---|
 | a library | an imported module whose name is not one of WIN16's own (`w16_modnames`: KERNEL, USER, GDI, KEYBOARD, SOUND, WIN87EM, SHELL, and S19's) |
-| its file | `<NAME>.DLL` - the module's name, up to 8 characters - in the **program's own folder**. Windows also searched the current directory, the Windows and system directories and the PATH; os8088 has none of those, and a library beside its program is how every target ships. Paintbrush names its library `PBRUSH` while the library calls itself `SCOOLVM`: the import's name finds the file, and the file's own module name is kept as well, both answering `GetModuleHandle` |
+| its file | `<NAME>.DLL` - the module's name, up to 8 characters - in the **program's own folder**, and if it is not there in **WIN16's Windows and system directories** (below). Paintbrush names its library `PBRUSH` while the library calls itself `SCOOLVM`: the import's name finds the file, and the file's own module name is kept as well, both answering `GetModuleHandle` |
 | not there | its imports bind to missing-import stubs, named, as a module WIN16 lacks did (§124.12). Windows refused such a program at load; WIN16 runs it until it calls into the absent library and then says which function |
 | refused | a library the loader refuses for its own reason (§124.3: self-loading, protected mode only, an iterated segment, tables too large, a CPU the census rules out) refuses the PROGRAM, line 1 the reason and line 2 the library's file name |
 | a library of a library | loaded the same way, while the library that imports it is loading. At most `W16_NLIB` = 8 libraries are loaded at once and `W16_LDEPTH` = 4 deep. **Libraries may import each other in a cycle** (§124.23.2.1) |
+
+##### 124.23.1.1 The search order *(2026-11-04, WIN16-NEXT libpath)*
+
+Windows 3.1 searched the current directory, the Windows directory, the system
+directory, the directory of the program's EXE and then the PATH. A setup
+installs a shared library (Visual Basic's `VBRUN300.DLL` and its `.VBX`s, which
+Microsoft's Setup Toolkit copies into the system directory) where Windows
+would find it, so a program started from its link after its setup was refused
+(*Needs VBRUN300.100*): WIN16 looked beside the program only. WIN16 now
+searches, for an implicit import, for `LoadLibrary` and for the library of a
+library alike:
+
+1. **the program's own folder**: WIN16's current folder while it loads, so
+   Windows' current directory and the EXE's directory are one place here, as
+   `GetModuleFileName` already says;
+2. **the Windows directory**, `SYSTEM\APPDATA\WIN16` on WIN16's volume
+   (`GetWindowsDirectory`, §124.20.5);
+3. **the system directory**, `SYSTEM` under the Windows directory
+   (`GetSystemDirectory`), when there is one. A folder that is not there is
+   remembered as absent for the rest of that load and costs nothing again in
+   it.
+
+The PATH is not searched: WIN16 has none. The order puts the program's folder
+first although Windows put it fourth, because it is the cheaper miss and the
+hot one: the folder is the one the program was just read from. A library found
+there costs nothing the old loader did not; one found in the Windows directory
+costs one failed lookup in the first folder and, the first time only, the walk
+to it (three directory reads); one found in the system directory two failed
+lookups and a second walk. The folders' first clusters are kept for the rest of
+the load, so every later miss in it is one lookup, and each lookup that misses
+the directory cache is an `int 13h` (~400 ms on the target XT): a library
+nobody has costs three lookups and, once a load, two walks. **What is kept
+lasts one load** - a program's start with every library it brings in, or one
+`LoadLibrary` - and the next load walks again the first time it misses: a
+setup CREATES the system directory while WIN16 runs (Microsoft's Setup
+Toolkit makes the folders it copies into), so a folder remembered as absent,
+or at a first cluster, from an earlier load would hide what the setup just
+installed, or name a folder that has since been removed. **The two folders are named in one place**
+(`W16L_WINDEPTH`, `W16L_SYSDEPTH` and `w16l_gofold` in `w16load.inc`: how far
+below `SYSTEM\APPDATA` each is), so a change to where the system directory
+is changes there only. A library of a library is looked for first in the
+folder its importer was found in (libraries that ship together are installed
+together), then in the Windows and system directories, and last in the
+program's own folder when its importer was not found there: Windows searched
+the EXE's directory for every library, and a shared library in the system
+directory may import one its program ships beside itself (`CMDIALOG.VBX`
+imports `COMMDLG`, `MCI.VBX` `MMSYSTEM`; those two are WIN16's own, but a
+title's own DLL need not be).
+
+A library loaded from either folder keeps that folder as its own (the module
+block's folder and volume, §124.26.11), so its discardable segments and its
+resources are read from it later, and not from the program's, and
+`GetModuleFileName` on its handle answers that folder with the library's file
+name: Visual Basic's runtime and the setup engines find their own files beside
+themselves by it. An EXE is looked for as before (§124.28.5); this changes
+libraries only.
 
 #### 124.23.2 Where it lives
 
@@ -235569,11 +235625,11 @@ line 2 the library's file.
 
 | call | |
 |---|---|
-| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for in the program's folder, by its 8.3 name. A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
+| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for by its 8.3 name in the program's folder, then in the Windows directory and the system directory (§124.23.1.1). A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
-| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's name in that form. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS. It is the library part's (§124.19): a program asks once or twice, at its start, and the 133 bytes it took from the image paid for `RegisterClass`'s local-over-global rule (§124.28.3) |
+| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's volume, folder and name, the folder the library was found in (§124.23.1.1). The instance is put back in the folder it stood in, which until 2026-11-04 it was not: the call left it in the program's. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS. It is the library part's (§124.19): a program asks once or twice, at its start, and the 133 bytes it took from the image paid for `RegisterClass`'s local-over-global rule (§124.28.3) |
 | `GetModuleUsage` (KERNEL.48) | a library's count; 1 for anything else, as before |
 
 #### 124.23.6 Not done, pinned
@@ -238593,6 +238649,88 @@ the program's DS back from its own stack first and stores through it
 (six bytes more on both arms). Write 3.0 calls int 21h itself and does
 not take this path, which is why the census did not list it. S25's pass
 counts again.
+
+#### 124.31.11 A fault in the program's code closes WIN16 *(WIN16-NEXT-PLAN Q1; KERN-MEGA-PLAN 14.140)*
+
+A protected-mode fault raised by a Win16 program's own instruction (a write
+past a segment's limit, a load of a bad selector: vectors 0, 3-7, 0Bh-0Dh)
+CLOSES WIN16 the way a package's own fault is closed (KERN-MEGA-PLAN 14.42),
+with the same toast, and does not stop the machine. Windows closes the
+offending program; WIN16 is one instance that may hold several programs
+(S-batch "several programs in one instance"), so today the whole instance
+closes with it. Closing one program of several is open.
+
+- **Attribution is by the code selector's BASE** when it is not an image's
+  pair. A program's CS is a SUB, a `SEG_SUBC` half or a tile over WIN16's
+  memory (124.31.3), so `mega_cs2ds`'s "data twin is 8 above" finds no
+  instance. `mega_fbown` reads the selector's base and asks the memory: above
+  1MB the pool block's owner byte (`MX_OWN`: the slot, `80h | slot` a region,
+  `A0h | slot` a claim), below it `mem_tab`'s `MC_OWN`. A selector below the
+  LDT allocator's range, a driver's block (`C0h |`), a kernel block, or no
+  block at all, is nobody's and the fault stays fatal.
+- **Naming is not closing.** The close still needs the running task's
+  innermost catch (`wm_pkgcall`, the loader's entry call) to name that same
+  instance, above the fault on the stack, or the instance's own worker. A
+  program therefore cannot get ANOTHER package closed: a CS over memory a
+  different package owns finds a catch for WIN16 and is refused.
+- **The +8 pair rule cannot blame the wrong package.** `mega_ldt2ds` takes a
+  twin only if the next entry is a present writable data descriptor over the
+  SAME base, and `mega_fown` then needs that selector to be a live instance's
+  `I_SPTR`, which is a pair's data half, so its code half is the entry before
+  it. A lone code selector cannot sit in that slot while the pair lives.
+- **Re-entry.** A fault whose CS is a GDT selector (a BIOS call run on the
+  stack `SEG_LEND` lent, the reflected `int 10h`-`1Fh` of 124.31.2) is the
+  kernel's and stays fatal as before: `mega_fkill` rejects it before any
+  attribution. A fault in the program's code inside a callback unwinds to that
+  callback's catch; the stack lent by `SEG_LEND` is the instance's own and
+  goes with it (`mx_relinst`).
+- **Every path that runs program code is inside WIN16's catch.** The
+  program runs only on the UI task's coroutine (124.2.1), entered from one
+  of WIN16's own callbacks - the tick's first instruction (`w16_go1`,
+  124.31.8), a wake, a kick, a host send, a cross-task run (124.28.6) - each
+  dispatched by `wm_pkgcall`, which pushes the catch. A kernel callback that
+  arrives inside a run waits its turn (`w16_inprog`) and resumes nothing; a
+  file dialog is asynchronous (`w16_ofnback`), and `timeSetEvent`'s and
+  `CALLBACK_FUNCTION`'s calls are made where the program waits for a message
+  (124.32.6). So no other catch ever sits between the program and WIN16's.
+  The fault arrives on the program's own stack; `mega_fkill` skips the
+  stack-order test for a stack that is not `LOW_SEG` and unwinds to the catch
+  on `LOW_SEG`, dropping WIN16's host frames with the program's.
+- **The toast names the program**, not WIN16 (`OVRTEST 0D at 11BC:0517`):
+  `w16_ownname` puts the first program's stem in WIN16's header, which is
+  what the instance and the toast are called by.
+- **A close puts the machine's vectors back (KERN-MEGA-PLAN 14.141).**
+  While program code runs, IVT 21h, 2Fh, 31h and 34h-3Dh (or 3Dh and 02h
+  with a native x87) name WIN16's code (`w16_i21_on`), and only
+  `w16_i21_off` puts the machine's back; a fault close never runs WIN16's
+  code. So the kernel does it: at the switch `mega_mxtinit` copies those
+  fourteen cells, the software vectors a package may take (124.31.2's (d1)
+  set, 21h, 2Fh, 31h, 34h-3Dh) and the NMI's, into the tables' tail
+  (`mega_ivts`, above 1MB, nothing resident). At a fault close (`mega_fkill`,
+  the incident's first fault, before the unwind) each cell whose segment is a
+  present descriptor of THE CLOSED INSTANCE - its image or a part of it,
+  named by `mega_fkill`'s own attribution - gets the machine's value back:
+  the switch's copy, but for 21h, which in real mode is IRQ1's (the PIC stays
+  at 20h across a reflection) and gets IVT 09h, the mirror `mega_ivt_sync`
+  keeps there. A cell another package holds is left alone, and so is one
+  holding a real-mode address. **Why the switch's copy and not WIN16's saved one**:
+  WIN16's copy is in the instance's own bss, the memory being given up, and
+  it is exactly what goes stale - nothing else in the tree writes those
+  cells and keeps them (the DOS core takes 21h, 2Fh and 34h-3Eh for its own
+  bracket and gives them back; `MEGA_DIAG`'s shim is one floppy call long),
+  so the switch's value IS the machine's. A hibernate carries the copy with
+  the tail and the IVT with the image, so the two stay one machine's. Since
+  every other way out of a run passes `w16_i21_off` (the gate, the exit, the
+  forward to DOS) and a fatal fault halts, the next WIN16 run always finds
+  the machine's vectors and cannot save a stale one as the original.
+- **Test.** `tests/win16ovr.py` steps 3 and 4 (Bochs): OVRTEST's write one
+  byte past its block raises #GP(0) inside its code, `kern_mega CLOSED`
+  follows, `[mega_infault]` stays 0, and `mega_fkdo` completes the close
+  (`[mega_fkslot]` back to 0, no instance left). Seen 2026-11-04. Step 5:
+  after the close, none of the fourteen cells names an LDT code selector
+  below A000h, which is `mega_swok`'s test for a package's handler. Seen
+  passing under Bochs: 21h is IVT 09h's `F000:E987` again, 2Fh and 31h the
+  BIOS's `F000:FF53`, where the close used to leave WIN16's `10E4:xxxx`.
 
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 

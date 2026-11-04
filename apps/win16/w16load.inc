@@ -254,6 +254,9 @@ w16_load:
     call w16_bindinit               ;   every task's (124.28.2)
 .bound:
     call w16_modules                ; which of the imported modules are ours,
+    xor ax, ax                      ;   (a load of its own: the two folders
+    mov [w16_winf], ax              ;   walked to afresh, SPEC.md 124.23.1.1)
+    mov [w16_sysf], ax
     call w16l_libs                  ;   and its own libraries, loaded first
     jc .refused                     ;   (SPEC.md 124.23.1): lines written
     mov es, [w16_fseg]
@@ -2441,11 +2444,150 @@ w16l_need:
     pop cx
     ret
 
-; w16l_ldlib - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
+; w16l_ldlib - [w16_lname]'s library: in the folder that is current (the
+; program's, or the importer's for a library of a library), else in WIN16's
+; Windows directory, else in its system directory, else - a library's library
+; whose importer was found elsewhere - in the program's own folder (SPEC.md
+; 124.23.1.1), each by w16l_ldlib1. The folder stood in is put back. out and
+; clobbers as w16l_ldlib1's (GOTO_QM's CX, SI and DI banked: a program on a
+; redirected volume, a CD-ROM title, is the driver's to clobber them)
+w16l_ldlib:
+    call w16l_ldlib1
+    jc .r                           ; refused: the folder decided
+    cmp al, 0xFF                    ; found: CF=0 and ZF=0 after the CMC (the
+    cmc                             ;   CMP borrows for any record below
+    jne .r                          ;   0FFh, which CF=1 would call refused)
+    push cx
+    push bx
+    push dx
+    push si
+    push di
+    call OSAPI_FILE_HERE            ; the first look's folder, to come back to
+    push dx
+    push bx
+    mov bx, w16_winf
+    mov cx, W16L_WINDEPTH
+    call w16l_gofold
+    jc .sys
+    call w16l_ldlib1
+    jc .rest
+    cmp al, 0xFF
+    cmc
+    jne .rest
+.sys:
+    mov bx, w16_sysf
+    mov cx, W16L_SYSDEPTH
+    call w16l_gofold
+    jc .prog
+    call w16l_ldlib1
+    jc .rest
+    cmp al, 0xFF
+    cmc
+    jne .rest
+.prog:
+    pop bx                          ; the first look's folder: the program's
+    pop dx                          ;   own, unless this is a library's
+    push dx                         ;   library whose importer was elsewhere
+    push bx
+    cmp dx, [w16_dir]
+    jne .there
+    cmp bl, [w16_vol]
+    je .none
+.there:
+    mov dx, [w16_dir]
+    mov bl, [w16_vol]
+    call OSAPI_FILE_GOTO_QM
+    jc .none
+    call w16l_ldlib1
+    jmp short .rest
+.none:
+    mov al, 0xFF
+    clc
+.rest:
+    pushf                           ; (the answer kept while the folder
+    pop cx                          ;   goes back: AX, the flags in CX)
+    pop bx
+    pop dx
+    push cx
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
+    popf
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop cx
+.r:
+    ret
+
+; THE TWO FOLDERS' NAMES, in one place: how many folders below
+; SYSTEM\APPDATA on WIN16's volume each is. The Windows directory is WIN16
+; (the first name, w16pf_s_dir); the system directory is SYSTEM under it
+; (the second, od_s_system), as Windows has C:\WINDOWS and C:\WINDOWS\SYSTEM
+W16L_WINDEPTH equ 1
+W16L_SYSDEPTH equ 2
+
+; w16l_gofold - stand in a folder on WIN16's volume: BX = the word that keeps
+; its first cluster (0 not walked to yet, 0FFFFh there is none), CX = its
+; depth (above). Walked the first time in a load (od_enter, od_dive) and kept
+; for the rest of it, so a second miss is a lookup and not a walk; one that is
+; not there is kept as absent and costs nothing again in that load. Each load
+; clears both words (w16l_load, w16l_rtlib): a setup creates the folder while
+; WIN16 runs. CF=1 there is none and the folder stood in
+; is unchanged. Keeps all but the flags
+w16l_gofold:
+    push ax
+    push bx
+    push dx
+    push si
+    mov dx, [bx]
+    cmp dx, 0xFFFF
+    je .none
+    or dx, dx
+    jnz .go
+    push bx
+    ICALL od_enter                  ; SYSTEM\APPDATA, WIN16's volume
+    jc .eout
+    mov si, w16pf_s_dir             ; ...WIN16
+    ICALL od_dive
+    jc .fail
+    cmp cx, 2
+    jb .got
+    mov si, od_s_system             ; ...SYSTEM
+    ICALL od_dive
+    jc .fail
+.got:
+    pop bx
+    mov [bx], dx
+    ICALL od_back
+    jmp short .go
+.fail:
+    pop bx
+    mov word [bx], 0xFFFF
+    ICALL od_back
+.none:
+    stc
+    jmp short .out
+.eout:
+    pop bx
+    stc
+    jmp short .out
+.go:
+    mov bl, [w16_homev]
+    call OSAPI_FILE_GOTO_QM
+.out:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16l_ldlib1 - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
 ; is current and the cluster cache claimed. out: CF=0 AL = its record, or
 ; 0FFh no such file; CF=1 refused with the lines written (line 2 the
 ; library's file). Clobbers AX; keeps the rest.
-w16l_ldlib:
+w16l_ldlib1:
     push bx
     push cx
     push dx
@@ -2690,6 +2832,9 @@ w16l_rtlib:
     jc .fail
     mov [w16_cseg], dx
     mov word [w16_clen], 0
+    xor ax, ax                      ; a load of its own: the two folders
+    mov [w16_winf], ax              ;   walked to afresh (SPEC.md 124.23.1.1)
+    mov [w16_sysf], ax
     call w16l_ldlib
     pushf
     jc .nokeep

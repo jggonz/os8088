@@ -479,6 +479,13 @@ w16_rread:
     mov [w16_rbackv], bl
     mov dx, [w16_dir]
     mov bl, [w16_vol]
+    mov si, [w16_rfp]               ; a library's own folder (it may be WIN16's
+    or si, si                       ;   system folder, SPEC.md 124.23.1.1)
+    jz .gohere
+    W16SEG es, [si - W16L_FILE + W16L_MREC]
+    mov dx, [es:W16LM_DIR]
+    mov bl, [es:W16LM_VOL]
+.gohere:
     call OSAPI_FILE_GOTO_QM
     jc .fail
     mov bp, [w16_rdat]              ; BP = the paragraph being filled

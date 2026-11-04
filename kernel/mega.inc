@@ -2491,13 +2491,9 @@ mega_fkill:
 .vok:
     cmp word [sch_rbusy], 0         ; the rate hook in flight, or the
     jne .ret                        ; scheduler locked ([sch_lock], the next)
-    mov ax, [ss:bp+26]              ; --- the code: a package's
-    test al, 4
-    jz .ret                         ; a GDT CS
-    call mega_cs2ds                 ; AX = S
-    jc .ret
-    call mega_fown                  ; DI = the record, DX = its region
-    jc .ret
+    mov ax, [ss:bp+26]              ; --- the code: a package's, by its pair
+    call mega_fattr                 ; or its BASE (14.140): DI = the record,
+    jc .ret                         ; DX = its region
     ; --- the catch
     mov bl, [sch_cur]
     xor bh, bh
@@ -2579,7 +2575,8 @@ mega_fkill:
     mov byte [es:mega_fkn], 1
     push cx
     call mega_fkmsg_mk              ; the toast and the E9 line, once
-    pop cx
+    call COLD_SEG:mega_fkivt        ; ...and the vectors it held, the
+    pop cx                          ; machine's again (14.141)
 .go:
     or byte [mega_tellq], 0x40      ; ui_task closes it and says so
     cmp byte [di+I_STATE], 1        ; dying from here: its own API calls
@@ -2655,6 +2652,76 @@ mega_fkill:
     mov ds, ax
     ret
 
+; mega_fattr - AX = a CODE selector -> DI = the package instance it is the
+; code of, DX = that instance's region; CF = 1 nobody's (KERN-MEGA-PLAN
+; 14.140): an image's pair (mega_cs2ds, mega_fown), else the instance whose
+; memory its base lies in (mega_fbown). A GDT selector is the kernel's.
+; mega_fkill's for the faulting CS and mega_fkivt's for a vector. ES =
+; .lowbss, DS = the kernel's data. Clobbers AX, BX, CX, SI
+mega_fattr:
+    test al, 4
+    jz mega_fown.no                 ; a GDT selector
+    push ax
+    call mega_cs2ds                 ; AX = S
+    jc .b
+    call mega_fown                  ; DI = the record, DX = its region
+    jnc .o
+.b:
+    pop ax
+    jmp short mega_fbown
+.o:
+    pop ax                          ; (POP keeps CF = 0)
+    ret
+mega_fattrf:                        ; (mega_fkivt's, from `.cold`)
+    call mega_fattr
+    retf
+
+; the cells mega_mxtinit copies into mega_ivts and mega_fkivt puts back: the
+; NMI's and the software vectors a package may take (mega_i21's 21h and
+; mega_swv's 2Fh, 31h, 34h-3Dh)
+MEGA_FKVN   equ 14
+mega_fkvec  db 0x02, 0x21, 0x2F, 0x31, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39
+            db 0x3A, 0x3B, 0x3C, 0x3D
+%if $ - mega_fkvec != MEGA_FKVN
+  %error "mega_fkvec: MEGA_FKVN cells, one row of mega_ivts each"
+%endif
+
+; mega_fbown - AX = a CODE selector in the allocator's range that is not an
+; image's pair (mega_cs2ds / mega_fown found no owner) -> DI = the package
+; instance whose MEMORY its base lies in, DX = that instance's region; CF = 1
+; none. KERN-MEGA-PLAN 14.140, mega_bown's rule applied to a fault: above 1MB
+; the pool block's MX_OWN (slot, 80h | slot a region, A0h | slot a claim);
+; below it mem_tab's MC_OWN. A driver's (C0h|), the kernel's (F0h, FEh, FFh)
+; or no block: nobody's, so the fault stays fatal. It only NAMES the
+; instance: mega_fkill's catch must still call into that very instance, so a
+; program can never get another package closed. Both halves end in
+; mega_fown's own walk and slot test (.para, .slot). ES = .lowbss in and out.
+; Clobbers AX, BX, CX, SI
+mega_fbown:
+    cmp ax, MEGA_LDT_FREE0 * 8      ; (the fixed aliases are the GDT's)
+    jb mega_fown.no
+    call mega_selbase               ; DX:AX = its base
+    jc mega_fown.no
+    cmp dx, MEGA_XPOOL >> 16
+    jb .conv
+    call mx_rel                     ; AX = its KB from the pool's base
+    jc mega_fown.no
+    push es
+    MXT_ES
+    call mx_inblk                   ; SI = the block (or mx_tab_end: read
+    mov al, [es:si+MX_OWN]          ;   before the test, inside the tail's
+    pop es                          ;   limit - checked below; MOV and POP
+    jc mega_fown.no                 ;   keep CF)
+    test al, 0x50                   ; a slot, 80h | slot, A0h | slot: bits 4
+    jnz mega_fown.no                ;   and 6 are set in C0h|, F0h, FEh, FFh
+    and ax, 0x000F                  ; AX = the slot
+    jmp short mega_fown.slot
+.conv:
+    shr ax, 4
+    shl dx, 12
+    or ax, dx                       ; AX = its paragraph, any one of a claim
+    jmp short mega_fown.para
+
 ; mega_fown - AX = a data segment -> DI = the package instance it is part of,
 ; DX = that instance's region; CF = 1 none. A PUBLISHED record is asked
 ; first: [ld_base] outlives its launch, and a region the compactor has since
@@ -2673,6 +2740,7 @@ mega_fown:
 .scan:
     test al, 7                      ; a paragraph below the ROM: an overlay
     jnz .no                         ; or a part, inside a claim
+.para:                              ; (mega_fbown: a code base's paragraph)
     cmp ax, 0xA000
     jae .no
     mov bx, mem_tab
@@ -2693,7 +2761,8 @@ mega_fown:
     ret
 .hit:
     mov ax, [es:bx+MC_OWN]          ; an instance's slot, or a package's
-    cmp ax, INST_MAX                ; segment
+.slot:                              ; segment (mega_fbown: a pool block's slot)
+    cmp ax, INST_MAX
     jae .seg
     shl ax, 5
     add ax, inst_tab
@@ -2965,6 +3034,67 @@ mega_pcout_n:
     pop bx
     pop bp
     popf
+    retf
+; mega_fkivt - DI = the record a fault close is closing (mega_fkill, the
+; incident's first fault, FAR): each IVT cell mega_ivts holds whose segment
+; is a descriptor mega_fattr names as THAT instance gets the machine's value
+; back (KERN-MEGA-PLAN 14.141) - WIN16's 21h, 2Fh, 31h and 34h-3Dh or 3Dh
+; and 02h, which only its own w16_i21_off gives back and a close never runs.
+; The machine's is the switch's copy, but for 21h: IRQ1's cell in real mode
+; (the PIC stays at 20h across a reflection), which mega_ivt_sync keeps a
+; mirror of IVT 09h. A cell another package holds, or a real-mode address,
+; is left as it is. `lar` first: a real-mode segment past the LDT's end
+; would fault the fault handler in mega_selbase. In `.cold` for the rung
+; (`.mega`'s had 74 bytes). DS = the kernel's data, ES = .lowbss, IF = 0.
+; Keeps every register
+mega_fkivt:
+    pusha
+    push ds
+    mov bp, di                      ; BP = the record
+    mov si, mega_ivts               ; (the rows are past mx_tab, NOT at the
+.l:                                 ;   tail's 0: 14.141's first Bochs run)
+    push word MEGA_SEL_MXT
+    pop ds
+    lodsw
+    xchg bx, ax                     ; BX = the cell
+    lodsw
+    push ax                         ; the switch's offset...
+    lodsw
+    push ax                         ; ...and segment
+    push word MEGA_SEL_LOW0
+    pop ds
+    mov ax, [bx+2]                  ; the segment it holds now
+    push word MEGA_SEL_KDATA
+    pop ds
+    lar cx, ax                      ; a descriptor at all
+    jnz .n
+    push bx
+    push si
+    call MEGA_SEL_CODE:mega_fattrf  ; DI = whose code it names
+    pop si
+    pop bx
+    jc .n
+    cmp di, bp
+    jne .n
+    push word MEGA_SEL_LOW0
+    pop ds
+    pop word [bx+2]
+    pop word [bx]
+    cmp bx, 0x21 * 4                ; 21h: IRQ1's, as mega_ivt_sync mirrors
+    jne .l2                         ; IVT 09h into it
+    mov ax, [0x09 * 4]
+    mov [bx], ax
+    mov ax, [0x09 * 4 + 2]
+    mov [bx+2], ax
+    jmp short .l2
+.n:
+    pop ax
+    pop ax
+.l2:
+    cmp si, mega_ivts_end
+    jb .l
+    pop ds
+    popa
     retf
 section .text
 mega_tcall:                         ; `.mega`'s way into a near .text routine:
@@ -8561,9 +8691,15 @@ mem_sel     equ mega_wtab_end       ; a conventional claim's DATA selector,
 mx_tab      equ mem_sel + MEGA_MSELN * 2 ; THE POOL'S BLOCK TABLE
 mx_tab_end  equ mx_tab + MX_NBLK * MX_BLKSZ ; (KERN-MEGA-PLAN 14.49). Zeroed
                                     ; with the rest of the tail
-MEGA_MXT_SIZE equ (mx_tab_end + 63) & ~63 ; whole 64-byte lines: the park
+mega_ivts   equ mx_tab_end          ; the IVT cells as the switch found them
+                                    ; (KERN-MEGA-PLAN 14.141): {cell, offset,
+mega_ivts_end equ mega_ivts + MEGA_FKVN * 6 ; segment} a row, mega_fkvec's
+MEGA_MXT_SIZE equ (mega_ivts_end + 63) & ~63 ; whole 64-byte lines: the park
                                     ; sums lines (mega_dsave)
 MEGA_MXT_LINES equ MEGA_MXT_SIZE / 64
+%if mx_tab_end + MX_OWN >= MEGA_MXT_SIZE
+  %error "mega_fbown reads MX_OWN at mx_tab_end (no block): past the tail's limit"
+%endif
 MEGA_TBL_TAIL equ MEGA_IDT_SIZE + MEGA_MXT_SIZE ; the block past the LDT
 MEGA_SEL_MXT equ (MEGA_GDT_SCR - 3) * 8 ; data, base past the IDT: the tail
 %if MEGA_GDT_SCR - 3 < MEGA_GDT_ID
@@ -13846,6 +13982,27 @@ mega_mxtinit:
     xor ax, ax
     cld
     rep stosw
+    push bx                         ; ...and mega_fkvec's IVT cells as the
+    push si                         ; switch finds them, for mega_fkivt
+    push ds                         ; (KERN-MEGA-PLAN 14.141)
+    push word MEGA_SEL_LOW0
+    pop ds
+    mov di, mega_ivts
+    xor bx, bx
+.iv:
+    mov al, [cs:mega_fkvec+bx]
+    inc bx
+    cbw
+    shl ax, 2
+    stosw                           ; the cell
+    xchg si, ax
+    movsw                           ; its offset and segment
+    movsw
+    cmp bx, MEGA_FKVN
+    jb .iv
+    pop ds
+    pop si
+    pop bx
     pop es
     pop dx
     ret
