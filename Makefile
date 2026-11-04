@@ -15348,6 +15348,8 @@ $(BUILD)/megacdcfg/system.cfg: | $(BUILD)
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
 	  ((1 << 8) | 1).to_bytes(2,'little') + b'\0\0')" > $@
 
+# KMODDIR: pciethertest.img's reason, below - kern_mega's own modules
+$(BUILD)/megacdtest.img: KMODDIR := $(MEGADIR)
 $(BUILD)/megacdtest.img: $(BUILD)/mega.img $(BUILD)/megacdcfg/system.cfg $(BUILD)/cdlnk/CDRACK.LNK
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
@@ -15390,6 +15392,11 @@ $(BUILD)/pciethercfg/system.cfg: $(PCIETHERSTAMP) | $(BUILD)
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
 	  (1 << $(PCIETHER_CFGBIT)).to_bytes(2,'little') + b'\0\0')" > $@
 
+# KMODDIR IS mega.img's: $(MEGADRIVERS) carries the on-demand kernel modules
+# (CTRL.DRV, DISKOPS.DRV, ...) through $(DRIVERS), and those are cut per
+# kernel and refused by their layout stamp on any other one. Without this
+# line the disk carried kern_big's copies beside kern_mega's KERNEL.SYS
+$(BUILD)/pciethertest.img: KMODDIR := $(MEGADIR)
 $(BUILD)/pciethertest.img: $(BUILD)/mega.img $(BUILD)/pciethercfg/system.cfg
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
