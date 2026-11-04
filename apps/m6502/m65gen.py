@@ -657,6 +657,7 @@ class Gen:
             "    call setp",
             "    xor dl, dl",
             "    push ds", "    pop es",                  # (the Apple II's fetch)
+        ] + (self.tracelog(0xE1E1) if self.p.get("aot") else []) + [
             # an interrupt pending at the top of a run is the accurate core's
             "    test byte [%s], 0x02" % S(S_IRQ), "    jnz .hbi",
             "    test byte [%s], 0x01" % S(S_IRQ), "    jz .ok",
@@ -814,6 +815,8 @@ class Gen:
                       "    cmp bx, dx", "    je .fetch"]   # RAM under the ROM
         lines += [
             "    cmp bp, %d" % MAXBLK, "    jle .fetch",
+            # (a translation never runs in decimal mode: m65aot.py)
+            "    test byte [%s], 0x08" % self.PV(), "    jnz .fetch",
             "    mov dx, es",
             "    mov bx, sp",
             "    cmp word [ss:bx+%d], 0" % fa, "    je .fetch",
@@ -856,6 +859,20 @@ class Gen:
             "    jmp x_slice",
             "xr_resume_body:"] + res
 
+    def tracelog(self, marker):
+        """DEBUG ONLY (M65AOT_TRACE): MARKER and SI into m65aot's ring"""
+        import os
+        if not os.environ.get("M65AOT_TRACE"):
+            return []
+        return ["    pushf", "    push bx", "    mov bx, [0xC2FE]",
+                "    mov word [bx+0xC300], 0x%04X" % marker,
+                "    mov [bx+0xC302], si",
+                "    mov [bx+0xC304], di",
+                "    push ax", "    mov ax, [di+1]", "    mov [bx+0xC306], ax",
+                "    mov [bx+0xC308], bp", "    pop ax",
+                "    add bx, 10", "    and bx, 0xFF", "    mov [0xC2FE], bx",
+                "    pop bx", "    popf"]
+
     def aot_tails_apple(self):
         """THE TRANSLATED ROM's doors (m65aot.py; APPLE2-SPEC 4.7). The frame
         carries the translation's code segment at F+24 (0: none), its PC
@@ -864,9 +881,11 @@ class Gen:
         return [
             # ct_rom - SI is a ROM PC this core was about to fetch: the PC
             # table's word for it, and a far jump there if it names one
-            "ct_rom:",
+            "ct_rom:"] + self.tracelog(0xCCCC) + [
             "    mov bx, sp",
             "    cmp word [ss:bx+%d], 0" % self.p["aot_frame"], "    je .fetch",
+            # (a translation never runs in decimal mode: m65aot.py)
+            "    test byte [%s], 0x08" % self.PV(), "    jnz .fetch",
             # ES = the PC table, and the translation keeps it there for its
             # own lookups (this core's Apple II path never reads ES)
             "    mov es, [ss:bx+%d]" % (self.p["aot_frame"] + 2),
@@ -885,15 +904,17 @@ class Gen:
             # here because that PC has none, or is not in the ROM)
             "    times 0x%04X-($-$$) db 0xCC" % XR_RESUME,
             "xr_resume:",
+            "    jmp xr_res_t",
+            "    times 0x%04X-($-$$) db 0xCC" % XR_SLICE,
+            "xr_slice:",                    # ...and the budget spent there
+            "    jmp x_slice",
+            "xr_res_t:"] + self.tracelog(0xEEEE) + [
             "    xor dl, dl",
             "    lea bx, [si+0x%04X]" % ((0x10000 - self.p["ct_lo"]) & 0xFFFF),
             "    cmp bx, 0x%04X" % ((self.p["io_hi"] << 8) - self.p["ct_lo"]),
             "    jb .hbr",
         ] + self.fetch_op() + [
             ".hbr: jmp x_hbr",
-            "    times 0x%04X-($-$$) db 0xCC" % XR_SLICE,
-            "xr_slice:",                    # ...and the budget spent there
-            "    jmp x_slice",
         ]
 
     def apple_io(self, door_rd, door_wr):

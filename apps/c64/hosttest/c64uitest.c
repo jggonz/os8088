@@ -3304,6 +3304,38 @@ int main(int argc, char **argv)
             fail("the released key was left on the down-list");
         c64_cyc_lo = 0;
 
+        /* RULE 5: TAPS ONE AT A TIME. `a` then `s`, both already up on the
+         * host: `s` waits in the ring until `a` has had its scan interval and
+         * left, and never shares the matrix with it. Then `s` again at once:
+         * it waits until `s` has been seen UP for an interval too. Verified
+         * to fail with c64_kbd_busy answering 0: both keys are in the
+         * matrix at the first poll. */
+        c64_kbd_init();
+        os88_onkey('a', 0x1E, win);
+        os88_onkey('s', 0x1F, win);
+        c64_kbd_poll();
+        if (c64_ndown != 1 || c64_down[0] != 0x1E)
+            fail("two taps went into the matrix together (7.2's rule 5): a "
+                 "KERNAL scan reads two keys down as one of them or neither");
+        c64_cyc_lo = (unsigned)C64K_FRESH_CYC + 1;
+        c64_kbd_poll();                     /* `a` leaves */
+        c64_kbd_poll();                     /* ...and `s` goes in */
+        if (c64_ndown != 1 || c64_down[0] != 0x1F)
+            fail("the waiting tap did not follow once the first had left");
+        os88_onkey('s', 0x1F, win);
+        c64_cyc_lo = 2u * C64K_FRESH_CYC + 2;
+        c64_kbd_poll();                     /* the first `s` leaves */
+        c64_kbd_poll();
+        if (c64_ndown != 0)
+            fail("a second tap of the same key followed with no gap: the "
+                 "scan would read one long press (7.2's rule 5)");
+        c64_cyc_lo = 3u * C64K_FRESH_CYC + 3;
+        c64_kbd_poll();
+        if (c64_ndown != 1 || c64_down[0] != 0x1F)
+            fail("the second tap of the same key never went in");
+        c64_kbd_init();
+        c64_cyc_lo = 0;
+
         /* RULE 3: the matrix is REBUILT from the whole down-list. Two keys
          * that both want the synthetic SHIFT, one released: the survivor
          * must still have it. `!` is 7/0 with SHIFT and `"` is 7/3 with

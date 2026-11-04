@@ -783,13 +783,21 @@ spent.** Every cycle is still counted, so `ran = asked - cnt` stays exact and
 the clock a soft switch reads is exact; the Apple II+ has no interrupt
 source, so nothing in the machine can see the overshoot.
 
-**Flags.** N and Z are computed only where something can read them: a later
-instruction before they are written again, a branch, or an exit. C and V are
+**Flags.** N, Z and V are computed only where something can read them: a
+later instruction before they are written again, a branch, or an exit. C is
 always computed.
 
-**What it leaves to the core**: `BRK`, `CLI`, `SEI`, `PLP`, `RTI` and `SED`
-exit to `xr_resume` at their own PC, and the core runs them under 4.6's rules.
-So does **`KEYIN`'s loop (`$FD1B-$FD24`)**. It stays untranslated so that 4.6's counter, which
+**A TRANSLATION NEVER RUNS IN DECIMAL MODE.** `SED` leaves for the core at its
+own PC; `PLP` and `RTI` leave at the next PC when what they pulled sets D; and
+`ct_rom` will not enter a translation while D is set. So `ADC` and `SBC` need
+no test of their own, and a decimal-mode stretch of ROM runs on the core.
+
+**What it leaves to the core**: `BRK` and `SED`, which exit to `xr_resume` at
+their own PC. `CLI`, `SEI`, `PLP` and `RTI` exit there only while the
+interrupt byte is up, which is when the core's own handlers hand them to the
+accurate core; otherwise they are a flag and a pull. Microsoft BASIC's
+divide loop runs `PHP`/`PLP` once a bit, and on the core it was a fifth of a
+floating-point program's time. So does **`KEYIN`'s loop (`$FD1B-$FD24`)**. It stays untranslated so that 4.6's counter, which
 takes whole idle passes at once, still applies; translating it would be
 slower.
 
@@ -808,12 +816,20 @@ leaves `a2_faot`/`a2_ftab` 0, and the fast core runs the ROM itself.
 
 **The gate** is `make a2cputest`'s AOT leg (`A2CPU_ONLY=aot`). It builds
 test cores and translations of Dormann's functional test itself
-(`--range`), in two halves (`$0400-$1DFF` and `$1E00-$3FFF`), so that every
-instruction the test makes is translated code, and runs each half to `$3469`.
+(`--range`), in three parts (`$0400-$13FF`, `$1400-$29FF`, `$2A00-$3FFF`; one
+segment holds none of it whole), and runs each to `$3469` in slices of 997
+cycles. The core consults the table only at a jump or a run's start, and
+Dormann falls through whole stretches with no jump, so short odd slices are
+what start runs all over each part - and enter its translation mid-block.
 The test writes its own code at `$04E5`, so in range mode the translator
 leaves every PC that a fixed-address store writes to the core. **The negative
-control** patches the translated `ADC #`'s body (`ctl_adc`) to an `OR`, and the
-run must then fail. `tests/apple2part.py` checks that both parts unpack to
+control** takes 8 off the 8086 opcode of every translated `ADC` and `CMP`
+(`ctl_list`): `ADC` becomes `OR` and `CMP` `XOR`, and the run must then
+fail. Every part of the test checks its results with `CMP`, which is why the
+control is not `ADC` alone - one part runs none. **A trap is the WHOLE state
+repeating** - PC, registers and a sum of zero page - three slices running:
+a loop whose only untranslated instructions are a stub's ends every slice
+on the stub, with only its counters in zero page moving. `tests/apple2part.py` checks that both parts unpack to
 their build files and are claimed at their own length.
 
 ### 4.5 Reset, both kinds

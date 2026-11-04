@@ -147,25 +147,25 @@ fast_leg() {
 }
 # =============================================================================
 # THE TRANSLATED LEGS (APPLE2-SPEC section 4.7): Dormann's code translated
-# ahead of time by apps/m6502/m65aot.py, in two halves - one segment holds
-# neither whole - each run with a core built for its half's range
-# (m65gen.py --aot-range), the other half on the core. Seeds are
-# tools/py6502.py's trace of the same test. The control makes the first
-# translated ADC # an OR in the translation, and must fail.
+# ahead of time by apps/m6502/m65aot.py, in three parts - one segment holds
+# none of it whole - each run with a core built for its part's range
+# (m65gen.py --aot-range), the rest on the core. Seeds are tools/py6502.py's
+# trace of the same test. The control breaks every translated ADC and CMP in
+# the translation, and must fail. A2AOT_RANGES="LO:HI ..." runs other parts.
 # =============================================================================
 aot_leg() {
     mkdir -p $BUILD/apple2
     python3 tools/py6502.py --dormann "$DORM" --trace-out $BUILD/apple2/dorm.seeds >/dev/null
-    for R in 0400:1E00 1E00:4000; do
+    for R in ${A2AOT_RANGES:-0400:1400 1400:2A00 2A00:4000}; do
         N=${R%%:*}
         python3 apps/m6502/m65aot.py --rom "$DORM" --range $R --seeds $BUILD/apple2/dorm.seeds \
             -o $BUILD/apple2/dormaot_$N.asm --table $BUILD/apple2/dormaotpc_$N.bin
         python3 apps/m6502/m65gen.py --machine apple2 --aot-range $R -o $BUILD/apple2/a2fast_dt$N.asm
         nasm -f bin -w+error -o $BUILD/apple2/a2fast_dt$N.bin $BUILD/apple2/a2fast_dt$N.asm
-        CTL=0x$(awk '$3 == "ctl_adc" {print $1}' $BUILD/apple2/dormaot_$N.map)
+        CTL=0x$(awk '$3 == "ctl_list" {print $1}' $BUILD/apple2/dormaot_$N.map)
         for MODE in real neg; do
             IMG=$BUILD/a2cputest-aot$N-$MODE.img
-            FL="-DFAST -DAOT -DCTL_ADC=$CTL -DDORMANN -DDORMOK=$DORMOK"
+            FL="-DFAST -DAOT -DCTL_LIST=$CTL -DDORMANN -DDORMOK=$DORMOK${M65AOT_TRACE:+ -DTRACE}${AOT_SLICE:+ -DAOT_SLICE=$AOT_SLICE}"
             [ $MODE = neg ] && FL="$FL -DNEG"
             # shellcheck disable=SC2086
             nasm -f bin -w+error -I apps/apple2/ $FL $DEC -o $IMG apps/apple2/hosttest/a2cputest.asm

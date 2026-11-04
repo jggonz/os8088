@@ -37,7 +37,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from m65gen import OPS, PENALTY, READS, RMW, STORES, REG, APPLE2, Gen  # noqa: E402
-from m65gen import XR_RESUME, XR_SLICE, C64, MAXBLK, PENALTY as _PEN    # noqa: E402,F401
+from m65gen import XR_RESUME, XR_SLICE, C64, MAXBLK, F_EXTRA            # noqa: E402
 
 LEN = {"imp": 1, "acc": 1, "imm": 2, "zp": 2, "zpx": 2, "zpy": 2, "rel": 2,
        "abs": 3, "absx": 3, "absy": 3, "ind": 3, "indx": 2, "indy": 2}
@@ -47,7 +47,15 @@ WRITES_NZ = {"LDA", "LDX", "LDY", "ORA", "AND", "EOR", "ADC", "SBC", "CMP",
              "DEY", "PLP", "RTI"}
 TRANSFERS = {"JMP", "JSR", "RTS", "RTI", "BRK"}
 # what this translator leaves to the core: it exits there and the core runs it
-LEAVE = {"BRK", "CLI", "SEI", "PLP", "RTI", "SED"}
+LEAVE = {"BRK", "SED"}
+                            # PLP and RTI leave when they set D, and the core's
+                            # ct_rom will not enter with it set, so ADC and SBC
+                            # need no test)
+# ...and these are the core's only while the interrupt byte is up (its own
+# handlers test it first): a run of the accurate core then takes the one-
+# instruction delay. Otherwise they are a flag and a pull - and Microsoft
+# BASIC's divide loop runs PHP/PLP once a bit
+IRQ_GATED = {"CLI", "SEI", "PLP", "RTI"}
 
 
 class Rom:
@@ -132,6 +140,7 @@ class Aot:
         self.exact = bool(prof.get("exact"))
         self.fa = prof["aot_frame"]     # the frame's translation words
         self.cur = None                 # the PC being translated
+        self.ctls = []                  # (--range: the gate's ADC sites)
         self.tail = []
 
     def L(self, *l):
@@ -318,14 +327,39 @@ class Aot:
               "    mov bl, dl", "    xor dl, dl")
         else:
             self.ea(mode, opnd, penalty)
-        if mode in ("zpx", "zpy") or (mode in ("absx", "absy") and opnd + 255 < 0xA000):
+        if mode in ("zpx", "zpy"):
             L("    mov %s, [bx]" % dst)
             return
+        if mode in ("absx", "absy"):
+            c0, c1 = self.rclass(opnd), self.rclass(min(opnd + 255, 0xFFFF))
+            if c0 == c1 == "ram":
+                L("    mov %s, [bx]" % dst)
+                return
+            if c0 == c1 and c0 in ("B", "K"):
+                # A TABLE IN A BANK THAT IS MAPPED IN (this code runs from it,
+                # or from BASIC with the KERNAL): through its segment, inline
+                L("    mov si, sp", "    push es",
+                  "    mov es, [ss:si+%d]" % (F_EXTRA + (2 if c0 == "B" else 6)),
+                  "    mov %s, [es:bx]" % dst, "    pop es")
+                return
         k, x = self.lab(), self.lab()
         L("    cmp bh, 0xA0", "    jae %s" % x, "    mov %s, [bx]" % dst, "%s:" % k)
-        self.tail.append(["%s: call rd_hi" % x]
+        self.tail.append(["%s: call %s" % (x, "rd_ctx" if self.bank is not None else "rd_hi")]
                          + (["    mov %s, dh" % dst] if dst != "dh" else [])
                          + ["    jmp %s" % k])
+
+    def rclass(self, a):
+        """the C64: what a read of A is while this code runs - RAM, a bank
+        known to be mapped in ("B", "K"), or the map's to say (None)"""
+        if a < 0xA000 or 0xC000 <= a < 0xD000:
+            return "ram"
+        if self.bank is None:
+            return None
+        if 0xA000 <= a < 0xC000 and self.bank == 0:
+            return "B"
+        if a >= 0xE000:
+            return "K"
+        return None
 
     def cut(self):
         """after a write that called out: c64_cut() leaves the countdown at
@@ -497,6 +531,13 @@ class Aot:
         nxt = pc + n
         self.cur, self.nxt = pc, nxt
         self.L("p_%04X:" % pc)
+        if os.environ.get("M65AOT_TRACE"):
+            # DEBUG ONLY: every translated PC into a 128-word ring at $C300
+            # (the Apple II test image's slot space), its index at $C2FE
+            L("    pushf", "    push bx", "    mov bx, [0xC2FE]",
+              "    mov word [bx+0xC300], 0x%04X" % pc,
+              "    add bx, 2", "    and bx, 0xFF", "    mov [0xC2FE], bx",
+              "    pop bx", "    popf")
         if self.exact and pc in self.leaders:
             # THE BLOCK'S COST, tested before it runs: the core runs a block
             # the budget cannot cover, and ends the run where it would
@@ -506,13 +547,13 @@ class Aot:
         if self.c64 and self.static_core(mn, mode, opnd):
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")
             return False
-        if mn in LEAVE or (mn in ("ADC", "SBC")) and False:
+        if mn in LEAVE:
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")
             return False
-        if mn in ("ADC", "SBC"):
-            # decimal: the core's (it hands it back); binary: here
+        if mn in IRQ_GATED:
+            from m65gen import S_IRQ
             k = self.lab()
-            L("    test byte [%s], 0x08" % self.PV(), "    jz %s" % k,
+            L("    cmp byte [SCR+0x%02X], 0" % S_IRQ, "    je %s" % k,
               "    mov si, 0x%04X" % pc, "    jmp xa_resume", "%s:" % k)
         if not self.c64 and mn in RMW and mode not in ("acc", "zp", "zpx") and \
                 not (mode == "abs" and opnd < 0xC000) and \
@@ -531,18 +572,28 @@ class Aot:
                 self.nz("al", live_nz)
             elif mn == "ADC":
                 L("    sahf")
-                if mode == "imm" and not self.ctl:
-                    # THE GATE'S HANDLE (a2cputest's translated legs): the
-                    # first ADC # translated, which its control makes an OR
-                    self.ctl = True
-                    L("ctl_adc:")
+                if self.p.get("gate"):
+                    # THE GATE'S HANDLE (the cputest harnesses' translated
+                    # legs): every ADC's and CMP's 8086 opcode is listed in
+                    # ctl_list, and the control takes 8 off each - ADC
+                    # becomes OR
+                    self.ctls.append("..@ctl%d" % len(self.ctls))
+                    L("%s:" % self.ctls[-1])
                 L("    adc al, %s" % src, "    lahf")
-                self.v_from_of()
+                if self.vlive[pc]:
+                    self.v_from_of()
             elif mn == "SBC":
                 L("    sahf", "    cmc", "    sbb al, %s" % src, "    cmc", "    lahf")
-                self.v_from_of()
+                if self.vlive[pc]:
+                    self.v_from_of()
             elif mn in ("CMP", "CPX", "CPY"):
                 reg = {"CMP": "al", "CPX": "cl", "CPY": "ch"}[mn]
+                if self.p.get("gate"):
+                    # (the gate: a CMP's opcode less 8 is an XOR, which
+                    # clobbers what it compared - every part of Dormann
+                    # checks its results with CMP)
+                    self.ctls.append("..@ctl%d" % len(self.ctls))
+                    L("%s:" % self.ctls[-1])
                 L("    cmp %s, %s" % (reg, src), "    cmc", "    lahf")
             elif mn == "BIT":
                 nzl, n0 = self.lab(), self.lab()
@@ -635,7 +686,14 @@ class Aot:
             self.rts_to()
             return False
         elif mn == "JSR":
-            L("    mov dx, 0x%04X" % ((pc + 2) & 0xFFFF), "    call a_jsr")
+            # the return address pushed as one word, inline; a_jsr where S is
+            # at the stack page's edge
+            sl, back = self.lab(), self.lab()
+            L("    cmp di, 0x0101", "    jb %s" % sl,
+              "    mov word [di-1], 0x%04X" % ((pc + 2) & 0xFFFF), "    sub di, 2",
+              "%s:" % back)
+            self.tail.append(["%s: mov dx, 0x%04X" % (sl, (pc + 2) & 0xFFFF),
+                              "    call a_jsr", "    jmp %s" % back])
             # NO TEST: a call makes no loop by itself - every loop has a
             # backward branch, a backward JMP or an RTS in it, which test
             if opnd in (self.p.get("chrget") or {}):
@@ -673,8 +731,27 @@ class Aot:
                 L("    %s %s" % (op, r))
         elif mn in ("CLC", "SEC"):
             L("    and ah, 0xFE" if mn == "CLC" else "    or ah, 0x01")
-        elif mn in ("CLV", "CLD"):
-            L("    and byte [%s], 0x%02X" % (self.PV(), 0xFF ^ (0x40 if mn == "CLV" else 0x08)))
+        elif mn in ("CLV", "CLD", "CLI"):
+            L("    and byte [%s], 0x%02X" % (self.PV(), 0xFF ^ {"CLV": 0x40, "CLD": 0x08, "CLI": 0x04}[mn]))
+        elif mn == "SEI":
+            L("    or byte [%s], 0x04" % self.PV())
+        elif mn == "PLP":
+            self.pop("dl")
+            L("    call setp", "    xor dl, dl")
+            x = self.lab()
+            L("    test byte [%s], 0x08" % self.PV(), "    jnz %s" % x)
+            self.tail.append(["%s: mov si, 0x%04X" % (x, nxt), "    jmp xa_resume"])
+        elif mn == "RTI":
+            self.pop("dl")
+            L("    call setp", "    xor dl, dl")
+            self.pop("bl")
+            self.pop("bh")
+            x = self.lab()
+            L("    test byte [%s], 0x08" % self.PV(), "    jz %s" % x,
+              "    mov si, bx", "    jmp xa_resume", "%s:" % x)
+            L("    or bp, bp")
+            self.rts_to()
+            return False
         elif mn == "NOP":
             pass
         else:
@@ -739,8 +816,7 @@ class Aot:
             for a, w in sig:
                 L("    cmp word [0x%04X], 0x%04X" % (a, w), "    jne .core")
             L("    cmp byte [0x%04X], 0xAD" % (B + 6), "    jne .core",
-              "    cmp byte [0x%04X], 0x60" % (B + 23), "    jne .core",
-              "    test byte [%s], 0x08" % PV, "    jnz .core")
+              "    cmp byte [0x%04X], 0x60" % (B + 23), "    jne .core")
             if self.exact:
                 # the whole routine's worst path is 38 cycles: the core runs
                 # it where that does not fit, so the run ends where it would
@@ -805,7 +881,8 @@ class Aot:
             if self.c64 and self.may_exit(nmn, nmode, nopnd):
                 live[pc] = True
                 continue
-            if nmode == "rel" or nmn in ("PHP", "ADC", "SBC") or nmn in LEAVE \
+            if nmode == "rel" or nmn == "PHP" or nmn in LEAVE \
+                    or nmn in IRQ_GATED \
                     or nmn in TRANSFERS:
                 live[pc] = True                 # it reads them, or leaves
             elif nmn in RMW and nmode not in ("acc", "zp", "zpx"):
@@ -815,6 +892,30 @@ class Aot:
                 # it could leave before writing them (a decimal ADC, or a
                 # read through the core's ladder that returns, which keeps
                 # them) - only the ADC/SBC case exits, and those read C
+                live[pc] = False
+            else:
+                live[pc] = live.get(nxt, True)
+        return live
+
+    def vliveness(self):
+        """V live-out per PC, NZ's rule for the overflow flag: read by BVC,
+        BVS and PHP, written by ADC, SBC, BIT, CLV and PLP - and any exit
+        counts as a read"""
+        live = {}
+        for pc in sorted(self.pcs, reverse=True):
+            mn, mode, cyc, opnd, n = decode(self.rom, pc)
+            nxt = pc + n
+            if mn in TRANSFERS or mode == "rel" or mn in LEAVE or nxt not in self.pcs \
+                    or (self.exact and nxt in self.leaders):
+                live[pc] = True
+                continue
+            nmn, nmode, _, nopnd = decode(self.rom, nxt)[:4]
+            if nmn in ("BVC", "BVS", "PHP") or nmn in LEAVE or nmn in IRQ_GATED \
+                    or nmn in TRANSFERS or nmode == "rel" \
+                    or (self.c64 and self.may_exit(nmn, nmode, nopnd)) \
+                    or (not self.c64 and nmn in RMW and nmode not in ("acc", "zp", "zpx")):
+                live[pc] = True
+            elif nmn in ("ADC", "SBC", "BIT", "CLV"):
                 live[pc] = False
             else:
                 live[pc] = live.get(nxt, True)
@@ -939,6 +1040,25 @@ class Aot:
             if self.p.get("chrget"):
                 self.emit_chrget()
             if self.bank is not None:
+                # rd_ctx - BX >= $A000 -> DH, the bank map as this segment's
+                # code knows it: its own bank is mapped in, and the KERNAL
+                # whenever BASIC is. The rest is rd_hi's (jumped to: the
+                # depth is the caller's)
+                L("rd_ctx:",
+                  "    cmp bh, 0xC0", "    jae .c")
+                if self.bank == 0:
+                    L("    mov si, sp", "    push es",
+                      "    mov es, [ss:si+%d]" % (2 + F_EXTRA + 2),
+                      "    mov dh, [es:bx]", "    pop es", "    ret")
+                else:
+                    L("    jmp rd_hi")
+                L(".c: cmp bh, 0xE0", "    jae .k",
+                  "    cmp bh, 0xD0", "    jae .io",
+                  "    mov dh, [bx]", "    ret",
+                  ".io: jmp rd_hi",
+                  ".k: mov si, sp", "    push es",
+                  "    mov es, [ss:si+%d]" % (2 + F_EXTRA + 6),
+                  "    mov dh, [es:bx]", "    pop es", "    ret")
                 # a_far - BX = a PC of the OTHER bank, mapped in and a block's
                 # start (its own test): its translation, in its segment
                 L("a_far:",
@@ -977,6 +1097,7 @@ class Aot:
         L(*t["vid"])
         L(*t["pflags"])
         live = self.liveness()
+        self.vlive = self.vliveness()
         self.tail = []
         prev_falls = False
         last = None
@@ -998,6 +1119,8 @@ class Aot:
             self.tail = []
         if prev_falls:
             L("    mov si, 0x%04X" % last, "    jmp xa_resume")
+        if self.p.get("gate"):
+            L("ctl_list:", *["    dw %s" % c for c in self.ctls], "    dw 0")
         return "\n".join(self.out) + "\n"
 
 
@@ -1015,7 +1138,7 @@ def main():
     if a.range:
         lo, hi = (int(v, 16) for v in a.range.split(":"))
         rom = Rom(open(a.rom, "rb").read()[lo:hi], lo)
-        prof = dict(prof, aot=(lo, hi), chrget=None)
+        prof = dict(prof, aot=(lo, hi), chrget=None, gate=True)
         seeds = []
     elif a.machine == "c64":
         # C64.ROM is the package's part 0: the KERNAL at 0, BASIC at $2000

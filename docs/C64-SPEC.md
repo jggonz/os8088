@@ -748,7 +748,8 @@ fast core's.
 | | fast core (4.7) | translated |
 |---|---|---|
 | idle at `READY.`, throttled | 40% | **99.8%** (104.6% under warp) |
-| `10 I=I+1 / 20 GOTO 10` | 47% | **81%** |
+| `10 I=I+1 / 20 GOTO 10` | 47% | **87.5%** (81% before the inline `PLP`, the decimal hoist and the inline reads) |
+| a floating-point loop (`A=I*2.5/3`, an array store, `GOSUB`, `STR$`) | - | **87.5%** (76% before) |
 
 **Two segments, because one does not hold both**: 5,436 PCs come to 51,061
 bytes of BASIC and 29,720 of KERNAL, and a part stops at 65,024. Within a
@@ -803,10 +804,16 @@ So `ran = asked - cnt` stays exact, and so does the cycle an interrupt is
 taken at. CHRGET (`$0073`) runs natively as on the Apple II, and only with
 40 cycles in hand, its worst path being 38.
 
-**What it leaves to the core** is 4.7's list: `BRK`, `CLI`, `SEI`, `PLP`,
-`RTI` and `SED`, decimal `ADC`/`SBC`, a read-modify-write that might not be
-RAM, a pointer in `$FF/$00/$01`, `JMP (ind)` through a pointer at `$A000`
-and up.
+**What it leaves to the core** is APPLE2-SPEC 4.7's list - `BRK`, `SED`,
+any decimal-mode stretch, and `CLI`, `SEI`, `PLP` or `RTI` while the
+interrupt byte is up - and a read-modify-write that might not be RAM, a
+pointer in `$FF/$00/$01`, `JMP (ind)` through a pointer at `$A000` and up.
+
+**ROM tables are read through their bank's segment, inline**, wherever the
+running bank says it is mapped: `LDA $A09E,Y` in BASIC is a `push es / mov
+es, [frame] / mov al, [es:bx] / pop es`, and a read whose address the code
+cannot bound goes through `rd_ctx`, which knows the same. **`JSR` pushes its
+return address inline.**
 
 **The frame** grows by four words (`c64fast.inc`): BASIC's code selector
 (F+34, 0 = no translation), the table (F+36), the core's own selector for
@@ -816,9 +823,9 @@ their own length (part 4's and part 5's, 29,720 and 32,768 bytes, and part
 3's 51,061).
 
 **The gate** is `make c64cputest`'s AOT leg (`C64CPU_ONLY=aot`), the
-Apple II's leg one machine along. It translates Dormann's functional test in
-two halves (`--range`) with a core built for each half, runs each to
-`$3469`, and patches the translated `ADC #` to an `OR` as the control.
+Apple II's leg one machine along: Dormann's functional test in three parts
+(`--range`) with a core built for each, slices of 997 cycles, and every
+translated `ADC` and `CMP` broken as the control.
 `tests/c64part.py` checks that the three parts unpack to their files and that
 each fetched claim holds its file's first bytes.
 
@@ -1001,6 +1008,15 @@ Four rules, each of which exists because getting it wrong is silent:
    program that never scans the matrix cannot make a key stick; the harness
    asserts a press whose host key is already up survives polls at 4,000
    cycles and is gone one poll after 20,001.
+5. **Taps are taken ONE AT A TIME** (`c64_kbd_busy`). While a press whose
+   host key is already up is still inside its fresh window, the next press
+   waits in the ring; and a second tap of the key that just left waits until
+   the matrix has shown it up for `C64K_FRESH_CYC`. Rule 4 makes every tap
+   20,000 emulated cycles long, so on a machine running below about half a
+   C64's speed taps typed 40 ms apart overlap in the matrix, and the KERNAL's
+   scan reads two keys down as one of them or neither - measured on 86Box,
+   `PRINT` typed at 12% came out `PRIT`. A key HELD on the host never waits
+   and never blocks, so chords and game keys go in together as they are.
 
 The **down-list is `C64K_DOWNMAX` = 16 entries** and its overflow path is
 bounded: the 17th simultaneous key is dropped, not written past the end. The

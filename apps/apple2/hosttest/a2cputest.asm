@@ -51,6 +51,9 @@ SEG_ROM     equ 0x6000              ; ...and APPLE2.ROM's part, $D000-$FFFF at
 
 IMG_SECTORS equ 64                  ; 32KB of harness; the program follows
 DORMSEC     equ 64                  ; ...at this sector, 128 sectors of it
+%ifndef AOT_SLICE
+%define AOT_SLICE 997               ; (the translated legs' slice, below)
+%endif
 %ifdef FAST
 ; THE FAST CORE'S LEG (APPLE2-SPEC section 4.6): the same rows, run through
 ; a2fast.inc's _a2_run - the generated core, handing back to the accurate one
@@ -1918,13 +1921,21 @@ dormann_main:
     ; the success trap with this in place would mean the test was not being
     ; run at all.
 %ifdef AOT
-    ; THE TRANSLATED LEG'S CONTROL: the first translated ADC #'s 8086 ADC
-    ; (opcode 14h) made an OR (0Ch) in the translation itself - proof that
-    ; the translated code is what runs
+    ; THE TRANSLATED LEG'S CONTROL: every translated ADC and CMP, listed at
+    ; CTL_LIST, has 8 taken off its 8086 opcode - ADC becomes OR and CMP
+    ; XOR - in the translation itself: proof that the translated code is
+    ; what runs
     push es
     mov ax, SEG_AOT
     mov es, ax
-    mov byte [es:CTL_ADC], 0x0C
+    mov bx, CTL_LIST
+.ctl: mov si, [es:bx]
+    test si, si
+    jz .ctld
+    sub byte [es:si], 8
+    add bx, 2
+    jmp short .ctl
+.ctld:
     pop es
 %elifdef FAST
     mov ax, 0x69                    ; the fast core's ADC # slot sent to ORA #
@@ -1942,17 +1953,36 @@ dormann_main:
     ; expires before its first fetch - which reads exactly like a test that
     ; will not start. The package's own cap is 16,384 for the same reason.
     mov cx, 20000                   ; outer passes of 30,000 cycles each
+%ifdef AOT
+    mov cx, 0xFFFF                  ; ...or of 997 (see below)
+%endif
 .run:
     push cx
+%ifdef AOT
+    ; THE TRANSLATED LEGS RUN SHORT ODD SLICES: the core consults the PC
+    ; table only at a jump or a run's start, and Dormann falls through whole
+    ; stretches with no jump - a part entered only that way would run on the
+    ; core, and its control would prove nothing. 997 cycles start runs all
+    ; over each part, and enter its translation mid-block
+    PUSHI AOT_SLICE
+%else
     PUSHI 30000
+%endif
     call _a2_run
     add sp, 2
     pop cx
     cmp ax, A2_RUN_JAM
     je .stuck
     ; ...has the program counter settled on a `jmp *`?
-    mov ax, [_a2_m+AM_PC]
+    ; A `jmp *` repeats the WHOLE state, not only the PC: a loop whose only
+    ; untranslated instructions are a stub's (Dormann's $0211 ADC #/RTS)
+    ; ends every slice on the stub's PC while A, X and the flags move on
+    call state_sig
     cmp ax, [cs:last_pc]
+    jne .moved
+    cmp bx, [cs:last_ax]
+    jne .moved
+    cmp dx, [cs:last_ys]
     jne .moved
     inc word [cs:same_n]
     cmp word [cs:same_n], 3
@@ -1960,9 +1990,15 @@ dormann_main:
     jmp short .cont
 .moved:
     mov [cs:last_pc], ax
+    mov [cs:last_ax], bx
+    mov [cs:last_ys], dx
     mov word [cs:same_n], 0
 .cont:
     loop .run
+%ifdef AOT
+    dec word [cs:aot_outer]         ; 0xFFFF x 32 slices of 997: the same
+    jnz .run                        ; ~2 billion cycles of slack as above
+%endif
     mov si, msg_slow
     call puts
     mov al, 5
@@ -2024,14 +2060,72 @@ dormann_main:
     mov al, 0
     jmp exit
 %else
+%ifdef TRACE
+    ; (DEBUG: M65AOT_TRACE's ring of translated PCs, oldest first)
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov bx, [es:0xC2FE]
+    mov cx, 128
+.tr: mov ax, [es:bx+0xC300]
+    call puthex
+    mov al, ' '
+    call putc
+    add bx, 2
+    and bx, 0xFF
+    loop .tr
+    pop es
+    mov si, msg_nl
+    call puts
+    mov ax, [_a2_fseg]
+    call puthex
+    mov ax, [a2f_left]
+    call puthex
+    mov ax, [_a2_m+AM_CNT]
+    call puthex
+    mov ax, [_a2_m+AM_REASON]
+    call puthex
+    mov si, msg_nl
+    call puts
+%endif
     mov si, msg_fail
     call puts
     mov al, 3
     jmp exit
 %endif
 
+aot_outer: dw 32
 last_pc: dw 0xFFFF
+last_ax: dw 0                       ; A | X << 8
+last_ys: dw 0                       ; Y | S << 8, P folded in
 same_n:  dw 0
+
+; state_sig - AX = PC, BX = A | X << 8 folded with zero page, DX = (Y | S
+; << 8) xor P
+state_sig:
+    mov ax, [_a2_m+AM_PC]
+    mov bl, [_a2_m+AM_A]
+    mov bh, [_a2_m+AM_X]
+    mov dl, [_a2_m+AM_Y]
+    mov dh, [_a2_m+AM_S]
+    xor dl, [_a2_m+AM_P]
+    ; ...and zero page, where a test keeps its loop counters: a loop that
+    ; leaves every register as it found it still moves those
+    push ds
+    push si
+    push cx
+    mov si, [_a2_m+AM_RAMSEG]
+    mov ds, si
+    xor si, si
+    mov cx, 128
+.zp: add bx, [si]
+    rol bx, 1
+    add si, 2
+    loop .zp
+    pop cx
+    pop si
+    pop ds
+    ret
 %endif
 
 ; =============================================================================
