@@ -235671,7 +235671,7 @@ state went in with S18, in the library part:
 |---|---|
 | `GlobalNotify` (KERNEL.154) | kept by nothing: a block allocated `GMEM_NOTIFY` is never discarded (§124.9, S19b), so there is no discard to be told of |
 | `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle; the block becomes the last, or the first, a shortage discards (§124.9, S19b) |
-| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less. On kern_mega the largest run plus all of the heap's free memory outside the arenas (§124.25.1) |
+| `GetFreeSpace` (KERNEL.169) | what `GlobalAlloc` could obtain, as a SUM, as Windows 3.1's standard mode answered: the free and discardable memory of the arenas plus the room a new arena could take (§124.25.1, *What GetFreeSpace says*). `GlobalCompact(0)` answers the largest block of the same accounting |
 | `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
 | `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
 | `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
@@ -236261,20 +236261,40 @@ The count was chosen against the eight, not against the memory:
 the three is free, so they say what `GlobalAlloc` can actually get. Since S20
 they count the code segments `GlobalAlloc` may discard as well (§124.26.5).
 
-**Not done, pinned:** `GetFreeSpace` still answers the largest free run
-(§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
-it, so its bands are smaller here than on Windows, and it keeps more of
-them.
+**What GetFreeSpace says** *(owner decision, 2026-11-04)*. Windows 3.1's
+standard mode answered `GetFreeSpace(0)` with the SUM of the global heap's
+free and discardable memory, and `GlobalCompact(0)` with its largest block.
+WIN16 answers both from one accounting of what `GlobalAlloc` could really
+obtain, per arm, with no special case for any caller:
 
-**On kern_mega, nearer the sum** *(WIN16 S24)*: `GetFreeSpace` answers the
-largest run in an arena **plus all of the heap's free memory** outside the
-arenas, whether or not a slot is free (`OSAPI_MEM_AVAIL`'s BX), at most a
-megabyte. InstallShield 3's launcher (`SETUP.EXE`, *ISSET_SE*) refuses below
-700,000 bytes with an error whose text its own string table lacks, so it
-showed an empty box; on QEMU's 16 MB kern_mega the largest run was 388 KB
-and the heap held 510 KB more. Real mode keeps the largest run: 640 KB never
-reaches 700,000, and on Windows 3.0's real mode that launcher refused too.
-`GlobalCompact` is unchanged on both: it is what one `GlobalAlloc` gets.
+- **the arenas**: the sum over all of them of the free blocks and of the
+  loaded code segments that are not kept (`w16_gcan`, §124.26.5), one
+  paragraph of header less. `GlobalCompact`'s figure is the largest run of
+  these, not the sum;
+- **room for a new arena**, counted only while one of the four arena slots
+  is free (the room is `R`, and `L` is the largest block it could be):
+  - *kern_big*: `OSAPI_MEM_P` `MEMP_AVAIL`'s total `R` and largest claim `L`
+    of the conventional heap;
+  - *kern_mega*: the claims come from the heap above and below 1 MB, and
+    each is entered in the 960 KB map (§124.31.3), so `R` is the smaller of
+    the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
+    the conventional heap's total plus the extended pool's free KB
+    (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
+    and the larger of the conventional largest claim and the pool's KB. No
+    room while the map has no free row.
+
+`GetFreeSpace` is the arenas' sum plus `R`; `GlobalCompact` is the larger of
+the arenas' largest run and `L`. The figure is at most the map's size on
+kern_mega and at most 640 KB on kern_big, so on kern_big it cannot reach
+InstallShield 3's 700,000 (its launcher `SETUP.EXE` refuses below that with
+string 7068, *Error 111*, and on Windows 3.0's real mode refused too); on
+kern_mega it passes while the map is mostly free. Before this the answer was
+the largest run (kern_big) or the largest run plus the conventional heap's
+free memory (kern_mega), which on QEMU was 545,376 bytes while 154 KB of the
+map and the whole extended pool were unused. A program that sizes buffers
+from it (Paintbrush's band manager, §124.25) is told more than before, and
+what it is told it can now be given. The code is in the system-library
+part (§124.24.1), so the image grows only by `GlobalCompact`'s call into it.
 
 #### 124.25.2 A library's local heap has room *(S19b batch 1)*
 
@@ -236776,9 +236796,9 @@ entry pointed into another segment. Windows Help started by Calculator
   scans from the int's frame.
 
 **What a program is told is free.** `GlobalCompact` and `GetFreeSpace`
-(§124.25.1) answer the largest run of an arena made of free blocks and of
-loaded code segments that are not kept (`w16_gcan`), since `GlobalAlloc`
-discards those to make the room. One that is in use is counted too: the
+(§124.25.1) count the free blocks and the loaded code segments that are not
+kept (`w16_gcan`) of the arenas - the largest run for `GlobalCompact`, the sum
+for `GetFreeSpace` - since `GlobalAlloc` discards those to make the room. One that is in use is counted too: the
 stack is scanned only when a segment is about to go, and Windows counted
 all of its discardable memory. Without this Paintbrush 3.0 stopped at
 *Insufficient memory to edit image* on QEMU's 640 KB: its start-up loads

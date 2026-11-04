@@ -310,6 +310,7 @@ section .w16dlg
 %endmacro
 %include "win16/w16pm.inc"      ; the kern_mega arm's memory (124.31.3)
     W16BSS w16_win, 2           ; our window
+    W16BSS w16_gsum, 2          ; GetFreeSpace's running sum (w16mem.inc)
     W16BSS w16_state, 1         ; W16S_*
     W16BSS w16_locked, 2        ; 1 = the callback that resumed holds the lock
                                 ;   (a word: saved and put back whole)
@@ -2380,6 +2381,7 @@ w16_cputest:
 %include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
+%include "win16/w16gsp.inc"     ; GlobalCompact, GetFreeSpace: part 9 (124.25.1)
 %ifdef PKG_MEGA
 %include "win16/w16sel.inc"     ; the selector functions: part 9 (124.31.6)
 %include "win16/w16i31.inc"     ; DPMI 0.9, a subset: part 9 too (124.31.6)
