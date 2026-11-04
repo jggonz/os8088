@@ -209,6 +209,22 @@ pm_voices:                          ; the volume's register, the frequency's
     db 0x5F, 0x5B
     dw 0
 
+; pm_on / pm_off - Pac-Man picked, and given back: the shadow of the glass
+; and the tiles' cached planes (64KB, ARCADE-SPEC 7.7) claimed for it and
+; freed after. pm_setup clears it in every bracket
+pm_on:
+    mov ax, 64
+    call OSAPI_MEM_CLAIM
+    jc .r
+    mov [pm_shseg], dx
+.r:
+    ret
+pm_off:
+    mov dx, [pm_shseg]
+    call OSAPI_MEM_FREE
+    mov word [pm_shseg], 0
+    ret
+
 ; =============================================================================
 ; the WSG on a stream and on FM (ARCADE-SPEC 8.4)
 ; =============================================================================
@@ -507,7 +523,7 @@ pm_setup:
     xor bx, bx                      ;   default palette points it at
 .dac:
     mov dx, 0x3C8
-    mov al, [pm_acmap+bx]
+    mov al, [ar_acmap+bx]
     out dx, al
     inc dx
     mov cx, 3
@@ -557,7 +573,6 @@ pm_setup:
     clc
     ret
 
-pm_acmap:   db 0, 1, 2, 3, 4, 5, 0x14, 7, 0x38, 0x39, 0x3A, 0x3B, 0x3C, 0x3D, 0x3E, 0x3F
 
 ; pm_whole - the whole screen, in 4 x 4 tiles, and the write list emptied
 ; with every tile's flag

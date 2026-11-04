@@ -68,6 +68,42 @@ OUT_PORTS = {
     6: [],                      # the watchdog: nothing to feed
 }
 VRAM_LO, VRAM_HI = 0x2400, 0x4000
+# THE ROM, as the CPU sees it (ARCADE-SPEC 3.2): Space Invaders' 0000-1FFFh,
+# or a Taito colour board's 0000-1FFFh and 4000-4FFFh (MAME 8080bw). main()
+# sets these from the image's size; the PC table covers 0..TABLE_PCS-1.
+ROM_REGIONS = [(0x0000, 0x2000)]
+TABLE_PCS = 0x4000
+
+
+def board_rom(img, name='the image'):
+    """The CPU's 64KB from a board image, ROM_REGIONS and TABLE_PCS set from
+    it: Space Invaders' 8KB, or a Taito colour board's 22KB - 0000-4FFFh,
+    then the colour maps, which are not the CPU's - whose second region ends
+    at the last 2KB chip that is not all zeros (Part II has one, Lunar
+    Rescue two)."""
+    global TABLE_PCS
+    if len(img) == 0x2000:
+        ROM_REGIONS[:] = [(0x0000, 0x2000)]
+    elif len(img) == 0x5800:
+        top = 0x5000
+        while top > 0x4000 and not any(img[top - 0x800:top]):
+            top -= 0x800
+        ROM_REGIONS[:] = [(0x0000, 0x2000), (0x4000, top)]
+    else:
+        raise SystemExit('arcaot: %s is neither an 8KB nor a 22KB board image' % name)
+    TABLE_PCS = max(0x4000, ROM_REGIONS[-1][1])
+    return bytes(img[:0x5000]) + bytes(0x10000 - min(len(img), 0x5000))
+
+
+def in_rom(a):
+    return any(lo <= a < hi for lo, hi in ROM_REGIONS)
+
+
+def region_of(a):
+    for lo, hi in ROM_REGIONS:
+        if lo <= a < hi:
+            return hi
+    return None
 
 
 def oplen(o):
@@ -154,7 +190,7 @@ def walk(rom, seeds):
     work = [0x0000, 0x0008, 0x0010] + list(seeds)
     while work:
         pc = work.pop()
-        while pc not in code and pc < 0x2000:
+        while pc not in code and in_rom(pc):
             i = Ins(rom, pc)
             code[pc] = i
             for s in i.succ:
@@ -168,7 +204,7 @@ def walk(rom, seeds):
             pc += i.n
     for i in code.values():                  # an instruction running into
         for s in i.succ:                     # one we did not decode is two
-            if s != UNKNOWN and s not in code and s < 0x2000:
+            if s != UNKNOWN and s not in code and in_rom(s):
                 raise SystemExit('arcaot: %04X runs into %04X, which the walk '
                                  'did not reach' % (i.pc, s))
     return code
@@ -188,11 +224,11 @@ def speculate(rom, code):
         for k in range(i.pc, i.pc + i.n):
             owner[k] = i.pc
     added = 0
-    for a in range(0, 0x2000 - 1):
+    for a in (k for lo, hi in ROM_REGIONS for k in range(lo, hi - 1)):
         if a in owner or a + 1 in owner:
             continue
         w = rom[a] | (rom[a + 1] << 8)
-        if w >= 0x2000 or w in code or w in owner:
+        if not in_rom(w) or w in code or w in owner:
             continue
         trial = {}
         work = [w]
@@ -200,12 +236,12 @@ def speculate(rom, code):
         while work and ok:
             pc = work.pop()
             while pc not in code and pc not in trial:
-                if pc >= 0x2000 or pc in owner:
+                if not in_rom(pc) or pc in owner:
                     ok = pc not in owner or owner[pc] == pc
                     break
                 i = Ins(rom, pc)
                 o = i.op
-                if pc + i.n > 0x2000 or any(k in owner and owner[k] != pc
+                if pc + i.n > region_of(pc) or any(k in owner and owner[k] != pc
                                             for k in range(pc, pc + i.n)) \
                         or any(k in trial for k in range(pc + 1, pc + i.n)):
                     ok = False
@@ -213,6 +249,9 @@ def speculate(rom, code):
                 if (o == 0xd3 and i.imm not in OUT_PORTS) or \
                         (o == 0xdb and i.imm not in IN_PORTS) or o == 0x76:
                     ok = False
+                    break
+                if any(t != UNKNOWN and not in_rom(t) for t in i.succ):
+                    ok = False              # a jump out of the ROM: data
                     break
                 trial[pc] = i
                 for t in i.succ:
@@ -275,6 +314,42 @@ def mark_polls(code):
                 head.weight = max(head.weight, min(127, w))
         if o == 0x76:
             i.poll = True
+
+
+# SPIN LOOPS (ARCADE-SPEC 3.7, the plan's idle rule): a loop that loads A
+# afresh at its head, touches nothing but A and the flags after - no carry
+# read, so every pass is the same pass - stores nothing, and leaves only by
+# its own backward branch can end only when an INTERRUPT changes what it
+# reads. Its backward branch becomes a HLT that resumes at the head: the host
+# then sleeps to the next interrupt instead of the 8088 running the wait at
+# full speed, which on Lunar Rescue was 63% of the machine and long runs
+# that dropped frames (MEASURED, MartyPC's 5150). The branch's PC -> the head.
+SPINS = {}
+SPIN_HEAD = {0x3a, 0x0a, 0x1a, 0xdb, 0x3e} | {0x78 + r for r in range(8) if r != 6} | {0x7e}
+SPIN_BODY = (SPIN_HEAD | set(range(0x80, 0x88)) | set(range(0x90, 0x98))
+             | set(range(0xa0, 0xc0)) | {0xc6, 0xd6, 0xe6, 0xee, 0xf6, 0xfe}
+             | {0x07, 0x0f, 0x2f, 0x00})
+
+
+def find_spins(code):
+    out = {}
+    for i in code.values():
+        o = i.op
+        if not ((o & 0xc7) == 0xc2 or o in (0xc3, 0xcb)) or i.imm > i.pc:
+            continue
+        head = code.get(i.imm)
+        if head is None or head.op not in SPIN_HEAD:
+            continue
+        pc, ok = i.imm, True
+        while pc < i.pc:
+            j = code.get(pc)
+            if j is None or not (j.op in SPIN_BODY or (j.op == 0xd3 and j.imm == 6)):
+                ok = False
+                break
+            pc += j.n
+        if ok and pc == i.pc:
+            out[i.pc] = i.imm
+    return out
 
 
 def guard(live, body):
@@ -435,6 +510,11 @@ def translate(i, code, longjcc):
         if p == 3:
             return ['lahf', 'xchg al, ah', 'push ax', 'mov al, ah']
         return ['push %s' % RP[p]]
+    if i.pc in SPINS:                       # a spin loop's branch: HLT
+        halt = ['mov si, 0x%04X' % SPINS[i.pc], 'jmp arc_halt']
+        if o in (0xc3, 0xcb):
+            return halt
+        return ['j%s .n' % INV[CC[(o >> 3) & 7]]] + halt + ['.n:']
     if (o & 0xc7) == 0xc2:
         cc = CC[(o >> 3) & 7]
         if i.pc in longjcc or i.imm not in code:
@@ -665,14 +745,15 @@ def settle(emit_fn, nasm, incdirs, name):
     raise SystemExit('%s: the short jumps never settled' % name)
 
 
-def finish(binary, syms, code_pcs, out_bin, out_aux, name, aux_size=0x8000):
+def finish(binary, syms, code_pcs, out_bin, out_aux, name, aux_size=0x8000,
+           table_pcs=0x4000):
     """Write the code part and aux's PC table (ARCADE-SPEC 2.2): word n is
     the offset of the translation of PC n, or arc_miss's."""
     if len(binary) > 0x10000:
         raise SystemExit('%s: the code part is %d bytes, over a segment' % (name, len(binary)))
     miss = syms['arc_miss']
     table = bytearray()
-    for pc in range(0x4000):
+    for pc in range(table_pcs):
         off = syms.get('L%04X' % pc, miss) if pc in code_pcs else miss
         table += bytes([off & 255, off >> 8])
     open(out_bin, 'wb').write(binary)
@@ -692,15 +773,15 @@ def main():
                     help="aux's size: the table, then the list and the flags")
     ap.add_argument('--no-speculate', action='store_true',
                     help='no tentative walks from data words')
+    ap.add_argument('--no-spins', action='store_true',
+                    help='run spin loops as loops, not as a HLT')
     ap.add_argument('--no-idioms', action='store_true',
                     help='translate every loop instruction by instruction')
     ap.add_argument('--probe', type=lambda x: int(x, 16), action='append', default=[],
                     help='count arrivals at this 8080 PC in the word at V_PROBE '
                          '(an instrument build only: tests/arcspeed.py)')
     a = ap.parse_args()
-    rom = open(a.rom, 'rb').read()
-    if len(rom) != 0x2000:
-        raise SystemExit('arcaot: %s is not an 8KB board image' % a.rom)
+    rom = board_rom(open(a.rom, 'rb').read(), a.rom)
     seeds = []
     for line in open(a.seeds):
         line = line.split('#')[0].strip()
@@ -711,6 +792,9 @@ def main():
     spec = 0 if a.no_speculate else speculate(rom, code)
     liveness(code)
     mark_polls(code)
+    SPINS.clear()
+    if not a.no_spins:
+        SPINS.update(find_spins(code))
     IDIOMS.clear()
     if not a.no_idioms:
         IDIOMS.update(find_idioms(rom, code))
@@ -718,11 +802,13 @@ def main():
     asm, binary, syms, longjcc = settle(lambda lj: emit(code, lj, romname),
                                         a.nasm, [HERE], 'arcaot')
     open(a.out, 'w').write(asm)
-    size = finish(binary, syms, code, a.bin, a.aux, 'arcaot', a.aux_kb * 1024)
+    size = finish(binary, syms, code, a.bin, a.aux, 'arcaot', a.aux_kb * 1024,
+                  TABLE_PCS)
     polls = sum(1 for i in code.values() if i.poll)
     print('arcaot: %d instructions (%d of them speculative), %d poll points, '
-          '%d long branches, %d bytes of code, idioms %s -> %s'
+          '%d long branches, %d bytes of code, spins %s, idioms %s -> %s'
           % (len(code), spec, polls, len(longjcc), size,
+             ' '.join('%04X' % p for p in sorted(SPINS.values())) or 'none',
              ' '.join('%s@%04X' % (v[0], k) for k, v in sorted(IDIOMS.items())) or 'none',
              a.out))
 

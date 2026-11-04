@@ -423,6 +423,12 @@ four members, at the root of the zip:
 | `invaders.f` | 1000 | 2048 | 0ccead96 | `5c8e573ebde9a673d4e7809d3f36aaa20d9062f3616d025d85c3f04fcfe11d72` |
 | `invaders.e` | 1800 | 2048 | 14e538b0 | `0a97ed62e2063c13e373a9a61ea3d8fbb701e414af05953e16f823fd879d5f49` |
 
+**Space Invaders Part II** (`arcade_invadpt2/invadpt2.zip`, SHA-1
+`228cadc2b54fcedc131a8a46cae6818bae255b1a`) and **Lunar Rescue**
+(`arcade_lrescue/lrescue.zip`, SHA-1
+`3da8bff250a9665bb5f7ce2b7700dcaa579cbf84`), fetched 2026-11-04: every
+chip's CRC32 is MAME's, and `tools/getarcrom.py` pins each by SHA-256.
+
 **Pac-Man** is supplied by the owner (`--from <dir>`), and checked against
 MAME's `pacman` (Midway) or `puckman` (Namco) CRCs. **Pengo `pengo2u`**
 (`arcade_pengo`, public) is the fallback for proving the Namco-family
@@ -552,8 +558,15 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
       hashes.
 
 ### Wave 7: more boards (each conditional)
-- [ ] The Midway 8080 family as tables: Lunar Rescue, Space Invaders
-      Part II (colour), Gun Fight, Sea Wolf.
+- [x] The 8080 family as tables (a board's WIRING, ARCADE-SPEC 5.3):
+      **Space Invaders Part II and Lunar Rescue** (Taito's colour boards:
+      ROM at 4000h too, a colour a cell from a map PROM on VGA), each at
+      the board's full 59.5 frames/s on the 5150 - Lunar Rescue only
+      after spin loops became a HLT (ARCADE-SPEC 3.7). Every board's parts
+      are now lazy, so one board is in memory at a time.
+- [ ] Gun Fight and Sea Wolf: Midway boards with other inputs (two
+      players' aim; a periscope dial), fetched and pinned the same way
+      (archive.org's `arcade_gunfight`, `arcade_seawolf` are public).
 - [ ] The native-8088 probe: Q\*bert's attract mode (section 8.2).
 - [ ] Lady Bug or Berzerk on the Z80 core.
 

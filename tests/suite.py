@@ -4622,6 +4622,36 @@ SOAK = [
         needs=("nasm", "unicorn"),
         wants=("build/arcade/paccode.bin", "build/arcade/pacaux.bin",
                "build/arcade-rom/PACMAN.ROM")),
+    Row("arclockpt2", "soak", py("tests/arclock.py", "build/arcade/pt2code.bin",
+                                 "build/arcade/pt2aux.bin", "build/arcade-rom/INVADPT2.ROM",
+                                 "--board", "invadpt2", "--frames", "600"), 41.0,
+        "ARCADE's translated Space Invaders Part II (ARCADE-SPEC section 5.3, Taito's "
+        "colour board: ROM at 4000h too) under Unicorn in LOCKSTEP with "
+        "tools/arcsim.py's board, as row arclock: every 8080 instruction, the "
+        "flags where read, RAM each frame, a spin loop's HLT resumed where the "
+        "model's interrupt lands (ARCADE-SPEC 3.7). The ROM is fetched (make "
+        "arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/pt2code.bin", "build/arcade/pt2aux.bin",
+               "build/arcade-rom/INVADPT2.ROM")),
+    Row("arclocklr", "soak", py("tests/arclock.py", "build/arcade/lrcode.bin",
+                                "build/arcade/lraux.bin", "build/arcade-rom/LRESCUE.ROM",
+                                "--board", "lrescue", "--frames", "1000"), 63.0,
+        "ARCADE's translated Lunar Rescue (ARCADE-SPEC section 5.3) under Unicorn "
+        "in LOCKSTEP with tools/arcsim.py's board through 1,000 frames - its "
+        "descent, past the coin and the start - as row arclock. The ROM is "
+        "fetched (make arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/lrcode.bin", "build/arcade/lraux.bin",
+               "build/arcade-rom/LRESCUE.ROM")),
+    Row("arcspeedlr", "soak", py("tests/arcspeed.py", "--game", "Lunar Rescue"), 14.0,
+        "ARCADE's Lunar Rescue on MartyPC's 5150 (ARCADE-SPEC sections 3.7 and 5): "
+        "picked from Game (its parts read), played 10 guest seconds, the "
+        "board's 59.54 frames a second within 3% with at most one half frame "
+        "dropped. Its wait for the interrupt (05D8h) was 63% of the 8088 and "
+        "dropped 32 half frames before spin loops became a HLT (ARCADE-SPEC "
+        "3.7); red with arcaot.py --no-spins",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
     Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
         "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "
         "played full screen for 10 guest seconds - a coin, a start, fire and "

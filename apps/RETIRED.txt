@@ -67,13 +67,13 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # and committed, so it needs no user-supplied asset, but it is not
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
-local      arcade      # docs/ARCADE-SPEC.md. Its games are Taito's Space Invaders
-                       # ROM, commercially owned, FETCHED at a pin by
-                       # tools/getarcrom.py, and Namco's Pac-Man, which only the
-                       # owner's own copy supplies (make arcaderom-pacman
-                       # GETPACFROM=<zip>); neither is committed, and the code part
-                       # is translated FROM that ROM at build time - so `make
-                       # arcade` / `make arcadedisk` build it standalone and no
+local      arcade      # docs/ARCADE-SPEC.md. Its games are Taito's Space Invaders,
+                       # Space Invaders Part II and Lunar Rescue ROMs, commercially
+                       # owned, FETCHED at pins by tools/getarcrom.py, and Namco's
+                       # Pac-Man, which only the owner's own copy supplies (make
+                       # arcaderom-pacman GETPACFROM=<zip>); none is committed, and
+                       # the code parts are translated FROM them at build time - so
+                       # `make arcade` / `make arcadedisk` build it standalone and no
                        # standard image, allapps floppy or live payload carries
                        # it until the owner decides whether it rides them the way
                        # the fetched Apple II ROM does.

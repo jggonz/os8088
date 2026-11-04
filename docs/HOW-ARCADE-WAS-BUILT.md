@@ -199,3 +199,57 @@ voice per sample, four samples a pass. 86Box shows the chase and death
 scenes dropping a few frames a second with a card in the machine whichever
 route plays - the cost of the sound driver being loaded at all, since the
 same scenes drop none on the same machine without a card.
+
+## Wave 7: two more boards that were mostly a table
+
+**The cheapest new games were the ones the 8080 translator already knew.**
+Taito's Space Invaders Part II and Lunar Rescue run on the Space Invaders
+board with ROM at 4000h as well and a colour map PROM. MAME's 8080bw driver
+says what differs - which ports read what at rest, which sound bits mean
+what, how a cell's colour is found - and in the package that became a
+board's WIRING, a small table, not new code. Both ROM sets are public on the
+Internet Archive and their CRCs are MAME's.
+
+**What had to change underneath:**
+- The translator's idea of "the ROM" became regions, and a colour board's
+  second region ends at its last chip that is not all zeros. Without that,
+  a speculative walk ran through Part II's empty 4800-4FFFh and into a jump
+  past the board's address space.
+- The PC table grew to 4FFFh's PC and ran into the write list, which moved
+  above everything at C000h.
+- The package had always loaded every part. With four boards that would
+  have been half a megabyte, so every board became LAZY: Game reads the
+  board it picks and drops the one before.
+
+**The colour took three tries.** The first picture had brown where cyan
+belonged: mode 12h's attribute palette sends pixel value 6 to DAC register
+14h. The second had the left 32 pixels black and half the header missing:
+MAME indexes the colour map from the start of RAM, 2000h, not from video
+RAM at 2400h, so every lookup was four bands off. The third was right, and
+the screen and a dump of the guest's own video RAM agreed byte for byte.
+
+**Lunar Rescue dropped a frame every third of a second on the 5150.** A
+profile put 63% of the 8088 in one four-instruction loop - LDA, ANA A,
+OUT 6, JNZ - the game waiting for its interrupt. Each pass was cheap in
+the run budget's units, so the budget grew, and the runs after it ran long.
+The plan had a lever for this (its "idle rule"): a loop that reloads A,
+touches nothing else, stores nothing and leaves only by its own branch can
+only be ended by an interrupt, so its branch is now a HLT. The host sleeps
+to the next interrupt; 32 half frames dropped in 10 seconds became 1. The
+first try made Part II worse - a run a HLT ended looked "short" and doubled
+the budget - until halted runs, like EI-ended ones, stopped teaching the
+budget anything.
+
+**The lockstep found two of its own bugs.** Two 8080 PCs can share one
+8086 offset (a NOP translates to nothing), and the harness named an
+interrupt by the first of them; and it handed the 8086 side the next
+frame's inputs one instruction early, so an IN right before the boundary
+read the future. Both were the harness, both are fixed, and all four
+boards now agree through their play.
+
+**Sound came along for free, almost.** Part II's sound bits are Space
+Invaders', so it plays the same synthesised clips. Lunar Rescue got five
+of its own - the thrust, two footsteps, the count of the men saved, the
+rescue ship's beep - and borrowed the rest. Its end-of-level tunes are a
+one-bit waveform the CPU toggles in time, which a once-a-frame latch cannot
+carry, so they are not played.

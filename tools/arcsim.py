@@ -36,19 +36,46 @@ CYC = [
  5,10,10,10,11,11,7,11,5,10,10,10,11,17,7,11, 5,10,10,10,11,11,7,11,5,10,10,10,11,17,7,11,
  5,10,10,18,11,11,7,11,5,5,10,4,11,17,7,11, 5,10,10,4,11,11,7,11,5,5,10,4,11,17,7,11]
 
+# THE BOARDS (ARCADE-SPEC 5.3, 9): Midway's Space Invaders, and Taito's
+# colour boards - the same board with ROM at 4000h too and a colour map PROM
+# (MAME 8080bw.cpp). in0/in1/in2 are the ports at rest; coin is IN 1's bit 0
+# pressed, active high on our Space Invaders (as it has always been run) and
+# active low on Taito's (MAME); `both` puts player 1's fire, left and right
+# on IN 2 as well as IN 1 (an upright cabinet's wiring).
+BOARDS = {
+    'invaders': dict(size=0x2000, in0=0x00, in1=0x08, in2=0x00, coin_low=False, both=False),
+    'invadpt2': dict(size=0x5800, in0=0xF4, in1=0x81, in2=0x00, coin_low=True, both=True),
+    'lrescue':  dict(size=0x5800, in0=0xFF, in1=0x89, in2=0x00, coin_low=True, both=True),
+}
+ROMTOP = 0x5000             # a colour board's image: the CPU's 0000-4FFFh,
+                            #   then the colour maps (not the CPU's)
+
+
+def is_rom(a):
+    """ROM in the CPU's view: 0000-1FFFh and 4000-5FFFh (MAME mw8080bw)."""
+    a &= 0x7fff
+    return a < 0x2000 or 0x4000 <= a < 0x6000
+
+
 class M:
-    def __init__(s, rom):
-        s.m = bytearray(0x10000); s.m[0:len(rom)] = rom
+    def __init__(s, rom, board='invaders'):
+        s.board = BOARDS[board]
+        s.m = bytearray(0x10000); s.m[0:min(len(rom), ROMTOP)] = rom[:ROMTOP]
+        s.prom = bytes(rom[ROMTOP:])
         s.a=s.b=s.c=s.d=s.e=s.h=s.l=0; s.sp=0; s.pc=0
         s.fs=s.fz=s.fac=s.fp=s.fc=0
         s.ie=0; s.cyc=0; s.halted=0
-        s.shift=0; s.shoff=0; s.in1=0x08; s.in2=0x00
+        s.shift=0; s.shoff=0; s.in0=s.board['in0']; s.in1=s.board['in1']; s.in2=s.board['in2']
         s.vw=0; s.vwchg=0; s.vdirty=set(); s.ios=collections.Counter()
-        s.romw=0; s.sound=[]; s.inisr=0; s.isrsp=0; s.pchl=set(); s.intpc=set()
-    def rd(s,a): return s.m[a & 0x3fff]
+        s.romw=0; s.mirror=0; s.sound=[]; s.inisr=0; s.isrsp=0; s.pchl=set(); s.intpc=set()
+    def rd(s,a):
+        a &= 0x7fff
+        if a >= 0x6000: s.mirror += 1; a -= 0x4000      # RAM's mirror
+        return s.m[a]
     def wr(s,a,v):
-        a &= 0x3fff
-        if a < 0x2000: s.romw += 1; return
+        a &= 0x7fff
+        if a >= 0x6000: s.mirror += 1; a -= 0x4000
+        if a < 0x2000 or a >= 0x4000: s.romw += 1; return
         if a >= 0x2400:
             s.vw += 1
             if s.m[a] != v:
@@ -99,6 +126,7 @@ class M:
         return (not s.fz, s.fz, not s.fc, s.fc, not s.fp, s.fp, not s.fs, s.fs)[c]
     def io_in(s,p):
         s.ios['in%d'%p]+=1
+        if p==0: return s.in0
         if p==1: return s.in1
         if p==2: return s.in2
         if p==3: return ((s.shift << s.shoff) >> 8) & 255
@@ -188,27 +216,30 @@ class M:
 HALF = 2000000 // 120          # T-states between the two interrupts
 
 
-def script(fr):
-    """IN 1 for frame fr: coin at 300, 1P start at 360, then fire and move.
-    A second coin at 3000 and a 2P start at 3060 reach the two-player code."""
-    v = 0x08
+def script(fr, board=None):
+    """IN 1 (and IN 2) for frame fr: coin at 300, 1P start at 360, then fire
+    and move. A second coin at 3000 and a 2P start at 3060 reach the
+    two-player code. Out (in1, in2)."""
+    b = board or BOARDS['invaders']
+    v = b['in1']
+    ctl = 0
     if 300 <= fr < 305 or 3000 <= fr < 3005 or 3010 <= fr < 3015:
-        v |= 0x01
+        v ^= 0x01                               # the coin, either polarity
     if 360 <= fr < 365:
         v |= 0x04
     if 3060 <= fr < 3065:
         v |= 0x02
     if fr >= 420:
         if (fr // 20) % 2:
-            v |= 0x10
-        v |= 0x20 if (fr // 90) % 2 else 0x40
-    return v
+            ctl |= 0x10
+        ctl |= 0x20 if (fr // 90) % 2 else 0x40
+    return v | ctl, b['in2'] | (ctl if b['both'] else 0)
 
 
 def run(m, frames, each=None):
     """Run `frames` frames; each(fr, m, n) after each frame, n instructions."""
     for fr in range(frames):
-        m.in1 = script(fr)
+        m.in1, m.in2 = script(fr, m.board)
         n = 0
         c0 = m.cyc
         for half in (1, 2):
@@ -245,7 +276,7 @@ def vram_sha1(m):
 
 
 def cmd_stats(rom, a):
-    m = M(rom)
+    m = M(rom, a.board)
     per = []
     isr = [0, 0]
     hot = collections.Counter()
@@ -282,13 +313,13 @@ def cmd_stats(rom, a):
             print('  %04x %5.1f%%  op %02x' % (pc, 100 * n / tot, m.m[pc]))
         print('avg T-states/instr in play %.2f' % (
             sum(CYC[o] * n for o, n in ops.items()) / sum(ops.values())))
-    print('rom writes', m.romw, 'io', dict(m.ios))
+    print('rom writes', m.romw, 'RAM mirror accesses', m.mirror, 'io', dict(m.ios))
     if a.pbm:
         pbm(m, a.pbm)
 
 
 def cmd_seeds(rom, a):
-    m = M(rom)
+    m = M(rom, a.board)
     after = set()                   # the return sites the walk already has
 
     def instr(m, pc, op, fr):
@@ -297,7 +328,7 @@ def cmd_seeds(rom, a):
     run(m, a.frames, (None, instr))
     lines = ['# PCHL and RET targets tools/arcsim.py reached in %d frames of its script.' % a.frames,
              '# Addresses only: no ROM byte. apps/arcade/arcaot.py walks from each.']
-    lines += ['%04X' % p for p in sorted(m.pchl - after - m.intpc) if p < 0x2000]
+    lines += ['%04X' % p for p in sorted(m.pchl - after - m.intpc) if is_rom(p) and p < ROMTOP]
     out = '\n'.join(lines) + '\n'
     if a.output:
         open(a.output, 'w').write(out)
@@ -307,7 +338,7 @@ def cmd_seeds(rom, a):
 
 def cmd_digest(rom, a):
     at = sorted(int(x) for x in a.at.split(','))
-    m = M(rom)
+    m = M(rom, a.board)
 
     def frame(fr, m, n):
         if fr + 1 in at:
@@ -332,10 +363,12 @@ def main():
     p.add_argument('rom')
     p.add_argument('--at', required=True)
     p.add_argument('--pbm-prefix')
+    for p in sub.choices.values():
+        p.add_argument('--board', choices=sorted(BOARDS), default='invaders')
     a = ap.parse_args()
     rom = open(a.rom, 'rb').read()
-    if len(rom) != 0x2000:
-        sys.exit('arcsim: %s is %d bytes, not an 8KB board image' % (a.rom, len(rom)))
+    if len(rom) != BOARDS[a.board]['size']:
+        sys.exit('arcsim: %s is %d bytes, not the %s board image' % (a.rom, len(rom), a.board))
     {'stats': cmd_stats, 'seeds': cmd_seeds, 'digest': cmd_digest}[a.cmd](rom, a)
 
 

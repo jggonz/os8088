@@ -104,13 +104,15 @@ AH_ENTER    equ 2               ; dw arc_enter: far-call CS:this
 AH_END      equ 4               ; dw the end of the translated code
 
 ; --- AUX (ARCADE-SPEC 2.2): the PC table, the write list, the flags --------
-; The PC TABLE is aux's first 32KB - 16,384 words, the translation of every
-; guest PC 0000-3FFF - so RET and JP (HL) are `jmp [es:si]`, and the code
-; part holds code alone: Pac-Man's is 50KB of it.
+; The PC TABLE is aux's first 32KB, or 40KB - a word for every guest PC,
+; 0000-3FFF, or to 4FFF on a Taito colour board whose ROM goes on at 4000h
+; - so RET and JP (HL) are `jmp [es:si]`, and the code part holds code
+; alone: Pac-Man's is 57KB of it. The list sits above everything else.
 AUX_TABLE   equ 0
-AUX_LPTR    equ 0x8000          ; the write list's next free offset
-AUX_LIST    equ 0x8002          ; ...the list: a CELL's key a word, each at
-                                ;   most once until drawn
-AUX_FLAGS   equ 0x8000          ; Space Invaders: a cell's flag at 8000h +
+AUX_FLAGS   equ 0x8000          ; the 8080 boards: a cell's flag at 8000h +
                                 ;   its key (the address AND FF1Fh: A400-BF1F)
-ARC_AUX_KB  equ 48
+AUX_LPTR    equ 0xC000          ; the write list's next free offset
+AUX_LIST    equ 0xC002          ; ...the list: a CELL's key (a tile's index on
+                                ;   Pac-Man) a word, each at most once until
+                                ;   drawn: at most 0C702h
+ARC_AUX_KB  equ 50

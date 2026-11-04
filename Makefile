@@ -11470,14 +11470,37 @@ ARCROM := $(BUILD)/arcade-rom/INVADERS.ROM
 $(ARCROM): tools/getarcrom.py | $(BUILD)
 	python3 tools/getarcrom.py invaders -o $@ $(if $(GETARCFROM),--from $(GETARCFROM))
 
-#> [Applications] arcaderom :: fetch the Space Invaders ROM at pinned hashes (never committed)
-arcaderom: $(ARCROM)
+# Taito's colour boards - Space Invaders Part II and Lunar Rescue - are the
+# same 8080 board with ROM at 4000h too and a colour map (ARCADE-SPEC 5.3):
+# fetched the same way, at their own pins, and translated the same way.
+ARCPT2ROM := $(BUILD)/arcade-rom/INVADPT2.ROM
+ARCLRROM := $(BUILD)/arcade-rom/LRESCUE.ROM
+$(ARCPT2ROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py invadpt2 -o $@
+$(ARCLRROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py lrescue -o $@
+
+#> [Applications] arcaderom :: fetch the 8080 boards' ROMs (Space Invaders, Part II, Lunar Rescue) at pinned hashes (never committed)
+arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM)
+
+$(BUILD)/arcade/pt2code.bin: apps/arcade/arcaot.py apps/arcade/invadpt2.seeds \
+                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCPT2ROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCPT2ROM) apps/arcade/invadpt2.seeds \
+		$(BUILD)/arcade/pt2code.asm $@ $(BUILD)/arcade/pt2aux.bin --aux-kb 50
+$(BUILD)/arcade/pt2aux.bin: $(BUILD)/arcade/pt2code.bin
+$(BUILD)/arcade/lrcode.bin: apps/arcade/arcaot.py apps/arcade/lrescue.seeds \
+                            apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCLRROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCLRROM) apps/arcade/lrescue.seeds \
+		$(BUILD)/arcade/lrcode.asm $@ $(BUILD)/arcade/lraux.bin --aux-kb 50
+$(BUILD)/arcade/lraux.bin: $(BUILD)/arcade/lrcode.bin
 
 $(BUILD)/arcade/invcode.bin: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcaot.py $(ARCROM) apps/arcade/invaders.seeds \
-		$(BUILD)/arcade/invcode.asm $@ $(BUILD)/arcade/invaux.bin --aux-kb 48
+		$(BUILD)/arcade/invcode.asm $@ $(BUILD)/arcade/invaux.bin --aux-kb 50
 $(BUILD)/arcade/invaux.bin: $(BUILD)/arcade/invcode.bin
 
 # PAC-MAN IS THE OWNER'S ROM, NEVER FETCHED (ARCADE-SPEC 7): no public
@@ -11497,7 +11520,7 @@ $(BUILD)/arcade/paccode.bin: apps/arcade/arcz80t.py apps/arcade/z80dec.py apps/a
                              apps/arcade/arcdefs.inc $(ARCPMROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcz80t.py $(ARCPMROM) apps/arcade/pacman.seeds \
-		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 37
+		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 50
 $(BUILD)/arcade/pacaux.bin: $(BUILD)/arcade/paccode.bin
 $(BUILD)/arcade/PACMAN.PRT: apps/arcade/arcpmgfx.py $(ARCPMROM)
 	@mkdir -p $(BUILD)/arcade
@@ -11512,7 +11535,9 @@ ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.i
               apps/arcade/arcsnd.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
-ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM)
+ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) \
+                $(BUILD)/arcade/pt2code.bin $(BUILD)/arcade/pt2aux.bin $(ARCPT2ROM) \
+                $(BUILD)/arcade/lrcode.bin $(BUILD)/arcade/lraux.bin $(ARCLRROM)
 ARCADE_DEF :=
 ifneq ($(ARC_PM),)
 ARCADE_PARTS += $(BUILD)/arcade/paccode.bin $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/PACMAN.PRT
@@ -11525,7 +11550,7 @@ $(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) | $(BUILD)
 $(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
 
-#> [Applications] arcade :: ARCADE, Space Invaders' 8080 translated to 8086 (docs/ARCADE-SPEC.md)
+#> [Applications] arcade :: ARCADE, arcade boards translated to 8086: three 8080 boards, and Pac-Man with your ROM (docs/ARCADE-SPEC.md)
 arcade: $(BUILD)/arcade.o88
 
 #> [Applications] arclock :: ARCADE's translated code in lockstep with tools/arcsim.py (needs unicorn)

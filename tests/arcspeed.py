@@ -3,7 +3,7 @@
 # os8088 - tests/arcspeed.py - ARCADE keeps the board's time on a 4.77 MHz 8088
 # (docs/ARCADE-SPEC.md sections 5 and 6.2)
 #
-#     python3 tests/arcspeed.py [--machine os8088_5150_cga] [--secs 10]
+#     python3 tests/arcspeed.py [--machine os8088_5150_cga] [--secs 10] [--game NAME]
 #
 # Boots the system disk with build/arcade360.img in B: on MartyPC, opens
 # ARCADE.O88, plays full screen - a coin, a start, fire and move - and reads
@@ -27,6 +27,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 os.chdir(ROOT)
+import os88marty                    # noqa: E402
 import os88ui                       # noqa: E402
 
 MHZ = 4.77273
@@ -55,12 +56,19 @@ def main():
     ap.add_argument('--secs', type=float, default=10.0)
     ap.add_argument('--system', default='build/os8088-360.img')
     ap.add_argument('--apps', default='build/arcade360.img')
+    ap.add_argument('--game', help="a Game menu item: another board than the first")
     a = ap.parse_args()
     bad = []
     with os88ui.boot(a.system, apps=a.apps, machine=a.machine, quick=True) as ui:
         m = ui.m
         ui.path('B:/ARCADE.O88')
-        m.key('Enter')
+        if a.game:                          # the board's parts read, then
+            m.run()                         #   play (ar_oncmd)
+            os88marty.guest_sleep(m, 1)
+            ui.menu_pick('Game', a.game)
+            m.pause()
+        else:
+            m.key('Enter')
         m.advance(frames=300)               # the board's power-on
         m.key('Digit5')
         m.advance(frames=300)

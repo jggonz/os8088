@@ -8,12 +8,14 @@ here *before* it goes in the code. The design record is
 docs/plans/ARCADE-EMU-PLAN.md. It is cited from outside as "ARCADE-SPEC
 section N".
 
-**What is built, stated once:** two boards. Midway's 8080 B&W board running
-Space Invaders (Taito, 1978), full screen on VGA, Hercules and CGA; and
-Namco's Pac-Man board (Midway, 1980), its Z80 translated by section 7's
-translator, full screen on VGA only, built in only when the owner has
-supplied the ROM. Both have speaker sound. There is no windowed picture, no
-Sound Blaster, no save state, and no interpreter for a guest PC the
+**What is built, stated once:** four boards. Midway's 8080 B&W board running
+Space Invaders (Taito, 1978), and Taito's two colour boards on the same
+8080 design - Space Invaders Part II (1979) and Lunar Rescue (1979) - full
+screen on VGA (in colour), Hercules and CGA; and Namco's Pac-Man board
+(Midway, 1980), its Z80 translated by section 7's translator, full screen on
+VGA only, built in only when the owner has supplied the ROM. All have sound
+on a Sound Blaster, an AdLib or the speaker (section 8). There is no
+windowed picture, no save state, and no interpreter for a guest PC the
 translation does not hold (section 3.2 says what happens then).
 
 ---
@@ -48,7 +50,7 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 | `apps/arcade/arcrt.inc` | the runtime the translation carries: the code part's header, `arc_enter` and the ways back to the host (section 3.4) |
 | `apps/arcade/arcdefs.inc` | the layout both sides share: the view's cells, the aux segment, the header (section 2) |
 | `apps/arcade/arcade.asm` | the package: the window, the full-screen bracket, the clock, the keys, the picture and the sound (sections 4, 5) |
-| `apps/arcade/invaders.seeds` | entry points no static walk finds, as ADDRESSES (section 3.2). No ROM byte |
+| `apps/arcade/<game>.seeds` | entry points no static walk finds, as ADDRESSES (section 3.2): `invaders`, `invadpt2` (six), `lrescue` (none), `pacman`. No ROM byte |
 | `tools/getarcrom.py` | fetches and checks the ROM (section 1.3) |
 | `tools/arcsim.py` | the reference model: an 8080 and the board in Python (section 6) |
 | `tests/arclock.py` | the translation in lockstep with the model (section 6.1) |
@@ -56,17 +58,24 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 ### 1.2 The package
 
 `ARCADE.O88` is the package image plus its parts (SPEC.md 20.12): a VIEW all
-boards share, and three for each board, LZ4-packed on the disk.
+boards share, and three for each board, LZ4-packed on the disk. **Every
+board's parts are LAZY** (`OP_LAZY`): Game reads the three of the board it
+picks (`op_fetch`, on the desktop, where a refusal may toast) and drops the
+previous board's (`op_drop`), so one board's ~90KB is in memory, never all
+four - and a board that cannot be read leaves the one before it picked.
+Pac-Man's 64KB shadow of the glass is a claim its pick makes (`BD_ON`) and
+its drop frees (`BD_OFF`), not a part.
 
 | part | what | size |
 |---|---|---|
-| 0 | the VIEW: the board's address space and the cells (section 2.1), zero-filled | 25KB |
-| 1, 2, 3 | Space Invaders: the CODE PART (header, runtime, translation), AUX (the PC table, then room for the write list and the flags), the ROM | 13KB, 48KB, 8KB |
-| 4, 5, 6 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 56KB, 37KB, 48KB |
-| 7 | Pac-Man: the shadow of the glass and the tiles' cached planes, zero-filled | 64KB |
-| last (4, or 8 with Pac-Man) | Space Invaders' sounds (`arcsfx.py`), LAZY: read only for a stream | 34KB |
+| 0 | the VIEW: the board's address space and the cells (section 2.1), zero-filled, the one eager part | 25KB |
+| 1, 2, 3 | Space Invaders: the CODE PART (header, runtime, translation), AUX (the PC table, then the flags and the write list), the ROM | 13KB, 50KB, 8KB |
+| 4, 5, 6 | Space Invaders Part II: the same three; its ROM part is the CPU's 0000-4FFFh and the two colour maps (section 4.3) | 23KB, 50KB, 22KB |
+| 7, 8, 9 | Lunar Rescue: the same | 30KB, 50KB, 22KB |
+| 10, 11, 12 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 57KB, 50KB, 48KB |
+| last (10, or 13 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 41KB |
 
-With both boards it is 89KB on the disk.
+With every board it is 193KB on the disk.
 
 The shipped build refuses to start under kern_mega's protected mode
 (`OS88_MEGA_REFUSE`): the host far-jumps into part 0, which is a data
@@ -79,7 +88,13 @@ fetches MAME's `invaders` set from ONE archive.org item
 (`arcade_invaders/invaders.zip`, SHA-1 `8d2d4172...`), checks each of its
 four 2KB chips by SHA-256, and writes the 8KB board image
 `build/arcade-rom/INVADERS.ROM` with `invaders.h/g/f/e` at 0000/0800/1000/
-1800. A mismatch is a hard failure. `--from <dir-or-zip>` takes a set the
+1800. A mismatch is a hard failure. **Taito's colour boards** the same way:
+`invadpt2` (`arcade_invadpt2/invadpt2.zip`, SHA-1 `228cadc2...`) and
+`lrescue` (`arcade_lrescue/lrescue.zip`, SHA-1 `3da8bff2...`), every chip's
+CRC32 MAME's, into a 22KB image: the CPU's 0000-4FFFh as it sees it (RAM's
+2000-3FFFh zero) and the colour maps at 5000h and 5400h (Lunar Rescue has
+one map, loaded twice, as MAME's `ROM_RELOAD`). `make arcaderom` fetches all
+three. `--from <dir-or-zip>` takes a set the
 owner already has (`make arcaderom GETARCFROM=...`). The code part is built
 from that image, so it too lives only in `build/` and on the floppy, and the
 package is a `local` line in apps/RETIRED.txt: standalone disks, no standard
@@ -123,11 +138,14 @@ section 7.4) - are the cells the core and the host share:
 
 | offset | what |
 |---|---|
-| `AUX_TABLE` 0 | the PC TABLE: 16,384 words, the translation of every guest PC 0000-3FFF (section 3.2). RET and JP (HL) are `jmp [es:si]` |
-| `AUX_LPTR` 8000h | the write list's next free offset. ES:DI holds it while translated code runs |
-| `AUX_LIST` 8002h | the write list: cell (or tile) keys, a word each, each at most once until drawn |
-| `AUX_FLAGS` + key, A400-BF1F | Space Invaders' CELL FLAGS: one byte per 8x8 cell, at 8000h + the cell's key (section 4.1) |
+| `AUX_TABLE` 0 | the PC TABLE: a word for every guest PC 0000-3FFF, or 0000-4FFF on a Taito colour board (section 3.2). RET and JP (HL) are `jmp [es:si]` |
+| `AUX_FLAGS` + key, A400-BF1F | the 8080 boards' CELL FLAGS: one byte per 8x8 cell, at 8000h + the cell's key (section 4.1) |
 | `PM_TFLAG` + tile, 9000-93FF | Pac-Man's TILE FLAGS: a byte for each video RAM index (section 7.7) |
+| `AUX_LPTR` C000h | the write list's next free offset. ES:DI holds it while translated code runs |
+| `AUX_LIST` C002h | the write list: cell (or tile) keys, a word each, each at most once until drawn - to C701h at most |
+
+The list moved above everything else, from 8000h, when a colour board's
+table grew to 4FFFh's PC and reached it: every board's aux is 50KB.
 
 The table moved here from the code part when Pac-Man's translation, 56KB on
 its own, left no room for it beside.
@@ -170,14 +188,21 @@ site after every call. **Seeds** are what no walk finds:
   an interrupt's. For Space Invaders that is six: 026F (a return address the
   object dispatcher pushes as a constant) and five object handlers.
 - **Speculative walks** of every word in the ROM's DATA (bytes no decoded
-  instruction covers) that points below 2000h. One is kept only if every
-  instruction it decodes is whole, overlaps nothing already decoded, and
-  uses only the board's ports. This found 050E, a sixth object handler in
-  the table at 1BC0 that the model's script had not reached. Most of what it
-  adds is runs of zero bytes, which translate to nothing.
+  instruction covers) that points into the ROM. One is kept only if every
+  instruction it decodes is whole, overlaps nothing already decoded, uses
+  only the board's ports, and jumps or calls nowhere outside the ROM. This
+  found 050E, a sixth object handler in the table at 1BC0 that the model's
+  script had not reached. Most of what it adds is runs of zero bytes, which
+  translate to nothing.
 
-`--no-speculate` turns the second off. The result for Space Invaders: 4,469
-instructions, 2,189 of them speculative.
+**The ROM** is 0000-1FFFh on Space Invaders, and 0000-1FFFh and 4000h up to
+the last 2KB chip that is not all zeros on a Taito colour board (`board_rom`:
+47FFh on Part II, 4FFFh on Lunar Rescue). Without the bound a speculative
+walk ran through Part II's empty 4800h-4FFFh and into a jump past 7FFFh.
+
+`--no-speculate` turns the second off. The result for Space Invaders: 4,366
+instructions, 2,086 of them speculative; Part II 4,415 (706); Lunar Rescue
+5,227 (740).
 
 **The PC table** is the first 32KB of aux: 16,384 words, the translation of
 every 8080 PC 0000-3FFF, or `arc_miss`, written by the translator from
@@ -260,6 +285,26 @@ last set - so the liveness pass and the lockstep cannot tell. An idiom is
 not taken if any other instruction jumps inside it. `--no-idioms` turns
 them off.
 
+### 3.7 Spin loops are a HLT
+
+A loop whose head loads A afresh (LDA, LDAX, MOV A,r, MOV A,M, MVI A, IN),
+whose every other instruction touches only A and the flags without reading
+the carry (the ALU ops but ADC, SBB, ACI, SBI; RLC, RRC, CMA, NOP, another
+load of A), which stores nothing, writes no port but the watchdog's (OUT 6),
+and leaves only by its own backward branch, does the same thing every pass:
+nothing but an INTERRUPT can end it. Its branch becomes `mov si, head /
+jmp arc_halt` (`find_spins`), and the host sleeps to the next interrupt as
+for a HLT, resuming at the head. A run so ended does not adapt the budget,
+any more than one an EI ended (section 5.2): it measured a wait, not work.
+
+Lunar Rescue's wait for its interrupt (05D8: LDA / ANA A / OUT 6 / JNZ) was
+**63% of the 5150 in play**, the budget grown long over its cheap passes,
+and 32 half frames dropped in 10 s; as a HLT, 1 (row `arcspeedlr`, red with
+`--no-spins`). Found: Space Invaders 0ADA 18B8 18C0, Part II 0CB9 45E4
+45FF, Lunar Rescue 010A 0481 05D8 46EA 4ECA 4F36. The lockstep lets the
+model spin and puts its interrupt where the 8086 side resumes, the head - a
+few T-states late at most, on a pass that changes nothing.
+
 ---
 
 ## 4. The picture
@@ -289,11 +334,22 @@ adapter's own loop puts them (`ar_put_vga`, `_herc`, `_cga`).
 
 | adapter | mode | rows | colour |
 |---|---|---|---|
-| VGA | `FSXM_VGA12` 640x480 | 256 rows into 480: in each cell 7 doubled and 1 single; 448 wide, centred | the game writes PLANE 0 only. The cabinet's cellophane is filled ONCE into planes 1-2 at entry (red over rows 32-63, green over 184-239, green over the spare bases in 240-255), and DAC entries 0-5 colour each band's lit pixels, so the overlay costs nothing a frame |
+| VGA | `FSXM_VGA12` 640x480 | 256 rows into 480: in each cell 7 doubled and 1 single; 448 wide, centred | Space Invaders: the game writes PLANE 0 only. The cabinet's cellophane is filled ONCE into planes 1-2 at entry (red over rows 32-63, green over 184-239, green over the spare bases in 240-255), and DAC entries 0-5 colour each band's lit pixels, so the overlay costs nothing a frame. A Taito COLOUR board: see below |
 | Hercules | `FSXM_HERC` 720x348 | 256 rows 1:1, from row 46; 448 wide | mono |
 | CGA | `FSXM_CGA640` 640x200 | 256 into 200: each cell's 8 rows into 6, or 7 in every fourth cell, MERGED by OR inside the cell so no two cells share a screen row | mono |
 
 The first adapter `OSAPI_FSX_CAPS` offers, in that order, is used.
+
+**A Taito colour board on VGA** has a colour a CELL: its map's byte at
+(H - 20h) x 32 + the column - MAME indexes it from RAM's start, and
+2000-23FFh is never shown - its low 3 bits RBG (bit 0 red, 1 blue, 2 green).
+Part II's maps are two, OUT 5 bit 5 picking; Lunar Rescue's one. OUT 3 bit 2
+turns every cell red. The DAC's registers for pixel values 0-7 - through
+mode 12h's attribute palette, where 6 is 14h - get the eight colours, all
+three planes are written, and SET/RESET zeroes the planes a cell's colour
+has not got, so a cell is still ONE write a byte; a cell whose colour
+differs from the last costs one OUT. A change of map or of red redraws every
+cell. Hercules and CGA draw them in black and white.
 
 ### 4.4 Entering
 
@@ -333,10 +389,21 @@ The loop is one loop for every board; a BOARD is the table of what differs
 (`ar_boards`, `BD_*`): its parts, its program's length, a reset proc for its
 own cells, a setup proc for the bracket (the mode, the tables, the first
 picture), its interrupt proc - deliver, or say it is masked - and its frame
-proc (picture, sound, keys), its PIT period and its interrupts a frame.
-Game > Space Invaders and Game > Pac-Man select one, which powers it on.
-A coin, a start and Esc are TYPED for every board (`ar_typed`); the held
-controls are each board's own.
+proc (picture, sound, keys), its PIT period and its interrupts a frame, its
+sound procs (section 8), and the hooks its pick and its drop run (`BD_ON`,
+`BD_OFF`). Game > a board's name selects one, which reads its parts and
+powers it on. A coin, a start and Esc are TYPED for every board
+(`ar_typed`); the held controls are each board's own.
+
+**The three 8080 boards are one board with a WIRING** (`BD_X`, `X_*`): its
+input ports at rest (Space Invaders' IN 1 08h; Part II's IN 0 F4h and IN 1
+81h, Lunar Rescue's FFh and 89h - MAME 8080bw's), whether it has colour
+maps, and its sound: the speaker's cues, the stream's clips, the FM voices,
+and which bit's sound LOOPS while held (Space Invaders' saucer, OUT 3 bit 0;
+Lunar Rescue's rescue ship, OUT 5 bit 4). The coin is IN 1 bit 0 FLIPPED:
+active high on our Space Invaders, as it has always been run, and low on
+Taito's boards. Fire, left and right are bits 4-6 of IN 1 and of IN 2 (an
+upright cabinet's wiring).
 
 ### 5.2 A run's length
 
@@ -570,6 +637,16 @@ other sample, at 4,000 Hz** (`OSAPI_CPU_INFO`): at 8,000 the clips cost the
 | OUT 3 bit 4 | an extra base | once |
 | OUT 5 bits 0-3 | the fleet's four steps | once each |
 | OUT 5 bit 4 | the saucer hit | once |
+
+Space Invaders Part II's sound bits are Space Invaders' (MAME plays it the
+same samples). **Lunar Rescue's** are its own (MAME 8080bw_a.cpp
+`lrescue_sh_port_*`): OUT 3 bits 0-4 the thrust, a shot, the death, an alien
+hit, the bonus ship; OUT 5 bits 0-2 a footstep high and low and the count of
+the men saved, bit 4 the rescue ship (on while held). `arcsfx.py`
+synthesises five clips of its own - the thrust, the two footsteps, the
+count, the rescue ship's beep as a seamless loop - and it shares the shot,
+the hits and the extra ship. OUT 5 bit 3 is a ONE-BIT tune the CPU plays by
+toggling it, which a frame's latch cannot carry: not played.
 
 A rising bit starts its clip again from the top; up to three clips sound at
 once, and a fourth takes the slot of the one nearest its end. **The mix is one

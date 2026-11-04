@@ -77,17 +77,20 @@ class Invaders:
     ramlo, ramhi = 0x2000, 0x4000
     sp0 = 0x2400
 
-    def __init__(self, rom):
+    def __init__(self, img, name='invaders'):
         import arcsim
         import arcaot
         self.arcsim = arcsim
-        self.m = arcsim.M(rom)
+        self.m = arcsim.M(img, name)
         self.m.sp = self.sp0
+        self.img = img
+        rom = arcaot.board_rom(img)             # the CPU's view of it
         self.rom = rom
+        self.table_pcs = arcaot.TABLE_PCS
         self.half = 1
         self.end = arcsim.HALF
         self.frame = 0
-        flow = arcaot.walk(rom, seeds_of('invaders'))
+        flow = arcaot.walk(rom, seeds_of(name))
         arcaot.speculate(rom, flow)
         arcaot.liveness(flow)
         arcaot.mark_polls(flow)
@@ -96,10 +99,11 @@ class Invaders:
         self.C, self.Z, self.ALL = arcaot.C, arcaot.Z, arcaot.ALL
 
     def view(self):
-        return self.rom
+        return self.img[:0x5000]
 
     def setup(self, u):
-        u.mem_write(VSEG * 16 + D['V_IN1'], bytes([0x08]))
+        b = self.m.board
+        u.mem_write(VSEG * 16 + D['V_IN0'], bytes([b['in0'], b['in1'], b['in2']]))
 
     def regs(self):
         m = self.m
@@ -135,6 +139,27 @@ class Invaders:
                 m.step()
         if m.cyc < self.end:
             return None
+        return self._cross(u)
+
+    def wait_halt(self, u, resume):
+        """The 8086 side reached arc_halt, resuming at `resume`: a HLT, or a
+        spin loop's branch (arcaot.py's SPINS). Run the model - its HLT, or
+        its spin - until the interrupt goes in; a spin's only where the
+        8086 side will resume, the loop's head, a few T-states late at most
+        (every pass is the same, so nothing else can differ)."""
+        m = self.m
+        while True:
+            if m.halted:
+                m.cyc = max(m.cyc, self.end)
+            if m.cyc >= self.end and (m.halted or m.pc == resume):
+                took = self._cross(u)
+                if took:
+                    return took
+                continue
+            m.step()
+
+    def _cross(self, u):
+        m = self.m
         n = self.half
         took = (m.pc, n * 8) if m.ie else None
         m.interrupt(n)
@@ -142,8 +167,11 @@ class Invaders:
         self.end += self.arcsim.HALF
         if n == 2:
             self.frame += 1
-            m.in1 = self.arcsim.script(self.frame)
-            u.mem_write(VSEG * 16 + D['V_IN1'], bytes([m.in1]))
+            m.in1, m.in2 = self.arcsim.script(self.frame, m.board)
+            # the 8086 side gets them when the interrupt goes IN, not now:
+            # it has still to run the instruction the model just stepped,
+            # and an IN there would read the next frame's (main's redirect)
+            self.pending = bytes([m.in1, m.in2])
             self.newframe = True
         return took
 
@@ -269,15 +297,17 @@ def main():
     ap.add_argument('code')
     ap.add_argument('aux')
     ap.add_argument('rom')
-    ap.add_argument('--board', default='invaders', choices=('invaders', 'pacman'))
+    ap.add_argument('--board', default='invaders',
+                    choices=('invaders', 'invadpt2', 'lrescue', 'pacman'))
     ap.add_argument('--frames', type=int, default=600)
     a = ap.parse_args()
     code = open(a.code, 'rb').read()
     aux = open(a.aux, 'rb').read()
     img = open(a.rom, 'rb').read()
-    bd = Invaders(img) if a.board == 'invaders' else PacMan(img)
+    bd = PacMan(img) if a.board == 'pacman' else Invaders(img, a.board)
     bd.newframe = False
-    table = [aux[2 * p] | (aux[2 * p + 1] << 8) for p in range(0x4000)]
+    npcs = getattr(bd, 'table_pcs', 0x4000)
+    table = [aux[2 * p] | (aux[2 * p + 1] << 8) for p in range(npcs)]
     miss = table[0x3FFF]
     at = {}
     for pc, off in enumerate(table):
@@ -341,6 +371,9 @@ def main():
                 return fail('interrupted at %04X, the model at %04X' % (pc, st['redirect'][0]))
             uc.emu_stop()
             return True
+        if getattr(bd, 'pending', None):        # the next frame's inputs, once
+            uc.mem_write(VSEG * 16 + D['V_IN1'], bd.pending)   # the model's
+            bd.pending = None                   #   step is behind both sides
         if bd.newframe:
             bd.newframe = False
             msg = compare_ram()
@@ -394,6 +427,7 @@ def main():
             return
         if off == halt_entry:
             st['halt'] = True
+            st['halt_pc'] = uc.reg_read(X.UC_X86_REG_SI)
             uc.emu_stop()
             return
         pcs = at.get(off)
@@ -404,7 +438,10 @@ def main():
             fail('the 8086 side is at %s, the model at %04X'
                  % ('/'.join('%04X' % p for p in pcs), want))
             return
-        for pc in pcs:
+        if st['redirect'] and st['redirect'][0] in pcs:
+            one(uc, st['redirect'][0])      # PCs sharing an offset (a NOP's
+            return                          #   and the next): the one the
+        for pc in pcs:                      #   model is at was jumped to
             if pc == bd.regs()[0] or st['redirect']:
                 if one(uc, pc):
                     return
@@ -440,10 +477,16 @@ def main():
             break
         if st['halt']:
             st['halt'] = False
-            st['redirect'] = bd.wait_halt(u)
+            if isinstance(bd, PacMan):
+                st['redirect'] = bd.wait_halt(u)
+            else:
+                st['redirect'] = bd.wait_halt(u, st['halt_pc'])
         if st['redirect']:
             ret, vec = st['redirect']
             st['redirect'] = None
+            if getattr(bd, 'pending', None):
+                u.mem_write(VSEG * 16 + D['V_IN1'], bd.pending)
+                bd.pending = None
             live = bd.lin(ret)
             fl = u.reg_read(X.UC_X86_REG_EFLAGS) & 0xD5
             bd.setf((bd.f() & live) | (fl & ~live & 0xD5) | (bd.f() & 0x2A & 0))

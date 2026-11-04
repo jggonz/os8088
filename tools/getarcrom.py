@@ -56,6 +56,54 @@ SETS = {
         ],
         'size': 0x2000,
     },
+    # Taito's colour boards (MAME 8080bw.cpp): Space Invaders' board with
+    # ROM at 4000h as well, and a colour map PROM. The image is 0000-4FFFh
+    # as the CPU sees it (RAM's 2000-3FFFh zero) and the two colour maps
+    # at 5000h and 5400h (ARCADE-SPEC 9).
+    'invadpt2': {
+        'url': 'https://archive.org/download/arcade_invadpt2/invadpt2.zip',
+        'zipsha1': '228cadc2b54fcedc131a8a46cae6818bae255b1a',
+        'members': [
+            ('pv01', 0x0000,                                        # 7288a511
+             'c12ed67ae4e664994dfef0f23d6bb9c041c611c66b704630ee413410d2601524'),
+            ('pv02', 0x0800,                                        # 097dd8d5
+             'f20ca15d8c2b447ad4601f4ce071177d43483e93ca83300c2363209d3107873e'),
+            ('pv03', 0x1000,                                        # 1766337e
+             '00eb1e9be39b98a86e8a5f2213881b516c3ce0d0e7310b11861e9d9ed4edd8b4'),
+            ('pv04', 0x1800,                                        # 8f0e62e0
+             '662f6cdb7cd16ae1402863b1b0c5c2683a2276c8b20781a9aa826291a31b2e94'),
+            ('pv05', 0x4000,                                        # 19b505e9
+             '584d276508e91316d42f11afb8de7a5321395205d03983f224215f703b7855d9'),
+            ('pv06.1', 0x5000,                                      # a732810b
+             '7d7c5481d716d3bbc98036a04c14e7de8be0b78e7ca1ab81f3687649116d6c22'),
+            ('pv07.2', 0x5400,                                      # 2c5b91cb
+             '3f8419a18354c41bb3ca3f7e419f743e90d3aca65c8fdd6fe4eab3165039c2ef'),
+        ],
+        'size': 0x5800,
+    },
+    'lrescue': {
+        'url': 'https://archive.org/download/arcade_lrescue/lrescue.zip',
+        'zipsha1': '3da8bff250a9665bb5f7ce2b7700dcaa579cbf84',
+        'members': [
+            ('lrescue.1', 0x0000,                                   # 2bbc4778
+             '50218ec69cb1d2d0bdd3bb1096510c970643741646c641a1f5c72e92918320d6'),
+            ('lrescue.2', 0x0800,                                   # 49e79706
+             '0a6ee07b3aeaf4d336479b408c4af4b9e7ac7a0ffcf5b682f936ed56aaab739d'),
+            ('lrescue.3', 0x1000,                                   # 1ac969be
+             '8716fc612631a8f1af07fb4a7397d5f51a6482f95ebf581f6a54f22706d75f11'),
+            ('lrescue.4', 0x1800,                                   # 782fee3c
+             '214eba8596011d0910f2d6f3d797603293d5da91f47a87175ab896f2ba5c5246'),
+            ('lrescue.5', 0x4000,                                   # 58fde8bc
+             '272dc05049f3d420573aa51b8870831b47f7226a9d3d26fa0ef145782cf7e618'),
+            ('lrescue.6', 0x4800,                                   # bfb0f65d
+             '2547a97cda1f1f3a3b9a65bea52d1f4fbb6e8ed9d27c25aa28aa8ec22c1edd4f'),
+            ('7643-1.cpu', 0x5000,                                  # 8b2e38de: ONE
+             'e6f5d2e53c318e97e88d93df9054da488ad2f39d91196a7047dd6d8df089ce8d'),
+            ('7643-1.cpu', 0x5400,                                  # map, twice
+             'e6f5d2e53c318e97e88d93df9054da488ad2f39d91196a7047dd6d8df089ce8d'),
+        ],
+        'size': 0x5800,
+    },
     # MAME's `pacman` (Midway). NOT fetched: no public archive.org item
     # carries it (arcade_pacman, arcade_puckman and arcade_mspacman are
     # dark), so the owner supplies it with --from and the hashes check it.

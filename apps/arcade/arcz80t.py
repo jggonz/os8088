@@ -651,7 +651,7 @@ def main():
     ap.add_argument('bin', help='the code part')
     ap.add_argument('aux', help="aux's PC table, 32KB")
     ap.add_argument('--nasm', default='nasm')
-    ap.add_argument('--aux-kb', type=int, default=37,
+    ap.add_argument("--aux-kb", type=int, default=50,
                     help="aux's size: the table, the list and the tile flags (9400h)")
     ap.add_argument('--no-speculate', action='store_true')
     a = ap.parse_args()

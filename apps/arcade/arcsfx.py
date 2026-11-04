@@ -23,11 +23,15 @@ import sys
 
 RATE = 8000
 PEAK = 42
-# The clip order is the package's (arcade.asm's inv_clips): the saucer, a
-# shot, the base hit, an invader hit, an extra base, the fleet's four steps,
-# the saucer hit.
+# The clip order is the package's (arcsnd.inc's inv_cbits and lr_cbits):
+# the saucer, a shot, the base hit, an invader hit, an extra base, the
+# fleet's four steps, the saucer hit - Space Invaders' and Part II's - then
+# Lunar Rescue's own: the thrust, a footstep high and low, the count of the
+# men saved, the rescue ship's beep (it shares the shot, the hits and the
+# extra ship).
 NAMES = ('ufo', 'shot', 'basehit', 'invhit', 'extra',
-         'fleet1', 'fleet2', 'fleet3', 'fleet4', 'ufohit')
+         'fleet1', 'fleet2', 'fleet3', 'fleet4', 'ufohit',
+         'thrust', 'stephi', 'steplo', 'count', 'rescue')
 
 
 class Noise:
@@ -171,10 +175,43 @@ def ufohit():
     return norm([a * b for a, b in zip(x, e)], peak=PEAK * 0.8)
 
 
+def thrust():
+    """Lunar Rescue's thrust: a low roar - noise through a low band-pass,
+    swelling and fading over half a second."""
+    n = int(0.5 * RATE)
+    nz = Noise(0x7A57)
+    x = bandpass([nz() for _ in range(n)], 260, q=1.2)
+    e = [min(1.0, i / (0.08 * RATE)) * math.exp(-i / (0.3 * RATE)) for i in range(n)]
+    return norm([a * b for a, b in zip(x, e)])
+
+
+def step(hz):
+    """A footstep: a short soft square blip."""
+    n = int(0.06 * RATE)
+    x = tone([hz] * n, shape=lambda p: 1.0 if p % 1.0 < 0.5 else -1.0)
+    x = lowpass(x, 1800)
+    e = env_exp(n, 0.02)
+    return norm([a * b for a, b in zip(x, e)], peak=PEAK * 0.7, fade=16)
+
+
+def rescue():
+    """The rescue ship's beep, a LOOP: a 1,000 Hz triangle on for 0.1 s and
+    off for 0.1 s, whole cycles so it repeats without a seam."""
+    n = int(0.2 * RATE)
+    on = n // 2
+    x = tone([1000] * n)
+    g = [1.0 if i < on else 0.0 for i in range(n)]
+    g = lowpass(g, 300)
+    y = [a * b for a, b in zip(x, g)]
+    m = max(abs(v) for v in y)
+    return [v * PEAK * 0.7 / m for v in y]
+
+
 def clips():
     # the fleet's pitches are the speaker's (arcade.asm's ar_n_f1..f4)
     return [ufo(), shot(), basehit(), invhit(), extra(),
-            fleet(110), fleet(98), fleet(87), fleet(82), ufohit()]
+            fleet(110), fleet(98), fleet(87), fleet(82), ufohit(),
+            thrust(), step(660), step(440), step(1500), rescue()]
 
 
 def wav(path, x):

@@ -538,10 +538,11 @@ inv_sbtick:
     loop .stop
     ret
 .amp:
-    test bx, 0x1F1E                 ; nothing rose but perhaps the saucer:
-    jz .ufo1                        ;   the cues not walked
+    mov si, [ar_bx]
+    test bx, [si+X_CMASK]           ; nothing rose but perhaps the held
+    jz .ufo1                        ;   sound: the cues not walked
     push ax
-    mov si, inv_cbits
+    mov si, [si+X_CBITS]
 .c:
     lodsw                           ; AX = the bit, then the clip
     or ax, ax
@@ -559,23 +560,29 @@ inv_sbtick:
 .ufo:
     pop ax
 .ufo1:
-    mov di, inv_v                   ; the saucer's voice, if it sounds
-    mov cx, INV_NV
+    mov si, [ar_bx]                 ; the held sound (the saucer, the rescue
+    mov dx, [si+X_LOOP]             ;   ship): its clip loops while its bit
+    mov cl, [si+X_LCLIP]            ;   is up
+    mov ch, cl
+    inc ch                          ; CH = clip + 1, as a voice holds it
+    mov di, inv_v
+    mov bx, INV_NV
 .f:
-    cmp byte [di+INV_V_CLIP], INV_CUFO + 1
+    cmp [di+INV_V_CLIP], ch
     je .have
     add di, INV_V_SIZE
-    loop .f
-    test al, 0x01
+    dec bx
+    jnz .f
+    test ax, dx
     jz .r
-    mov al, INV_CUFO                ; held and silent: start it, looping
+    mov al, cl                      ; held and silent: start it, looping
     call inv_start
     mov ax, [di+INV_V_POS]
     mov [di+INV_V_LOOP], ax
 .r:
     ret
 .have:
-    test al, 0x01
+    test ax, dx
     jnz .r
     mov byte [di+INV_V_CLIP], 0     ; let go: it stops
     ret
@@ -835,29 +842,28 @@ inv_fmframe:
     mov word [inv_fseq], 0
     ret
 .amp:
-    mov [inv_fout3], al
+    mov [inv_fheld], ax
     ; channel 0: a step's note, struck on its rise; the patch decays it
-    mov si, inv_fsteps
-    mov cx, 4
-    mov bx, 0x0100
+    mov si, [ar_bx]
+    mov si, [si+X_FSTEP]
 .step:
-    lodsw
-    test [inv_frise], bx
-    jnz .strike
-    shl bx, 1
-    loop .step
-    jmp short .ufo
-.strike:
-    push ax
+    lodsw                           ; the bit
+    or ax, ax
+    jz .ufo
+    mov dx, ax
+    lodsw                           ; Hz
+    test [inv_frise], dx
+    jz .step
     xor bx, bx
     mov cx, 0x010F                  ; full, struck again
-    pop ax
     call ar_fmset
 .ufo:
     ; channel 1: the saucer, swept 600-1,000 Hz and back each 16 frames
     xor ax, ax
     xor cx, cx
-    test byte [inv_fout3], 0x01
+    mov si, [ar_bx]
+    mov dx, [si+X_LOOP]
+    test [inv_fheld], dx
     jz .usnd
     inc byte [inv_fwarb]
     mov al, [inv_fwarb]
@@ -874,7 +880,8 @@ inv_fmframe:
     mov bx, 1
     call ar_fmset
     ; channel 2: the noises - the loudest new one starts its level
-    mov si, inv_fnoise
+    mov si, [ar_bx]
+    mov si, [si+X_FNOISE]
 .nz:
     lodsw                           ; the bit
     or ax, ax
@@ -908,17 +915,21 @@ inv_fmframe:
     mov [inv_fnzc], al
     dec byte [inv_fnz]
 .tones:
-    ; channel 3: the extra base and the saucer hit, the speaker's notes
-    mov dx, [inv_frise]
-    test dx, 0x1000
-    jz .xt
-    mov word [inv_fseq], ar_n_ufohit
-    mov byte [inv_fwait], 0
-.xt:
-    test dx, 0x0010
+    ; channel 3: note sequences - the extra base and the saucer hit on
+    ; Space Invaders - the speaker's own tables
+    mov si, [ar_bx]
+    mov si, [si+X_FTONE]
+.tn:
+    lodsw
+    or ax, ax
     jz .seq
-    mov word [inv_fseq], ar_n_extra
+    mov dx, ax
+    lodsw
+    test [inv_frise], dx
+    jz .tn
+    mov [inv_fseq], ax
     mov byte [inv_fwait], 0
+    jmp .tn
 .seq:
     mov si, [inv_fseq]
     or si, si
@@ -946,7 +957,44 @@ inv_fmframe:
     mov bx, 3
     jmp ar_fmset
 
-inv_fsteps: dw 110, 98, 87, 82      ; the fleet's pitches, the speaker's
+inv_fsteps:                         ; the fleet's four steps, the speaker's
+    dw 0x0100, 110, 0x0200, 98, 0x0400, 87, 0x0800, 82, 0
+inv_ftones:
+    dw 0x1000, ar_n_ufohit, 0x0010, ar_n_extra, 0
+
+; Lunar Rescue on FM and on the stream (MAME 8080bw_a.cpp's lrescue_sh_*)
+lr_fsteps:                          ; the footsteps, high and low; the count
+    dw 0x0100, 660, 0x0200, 440, 0x0400, 1500, 0
+lr_fnoise:                          ; the bit, Hz, the level, frames a step
+    dw 0x0004, 300                  ; the death
+    db 15, 5
+    dw 0x0008, 900                  ; an alien hit
+    db 15, 1
+    dw 0x0002, 1600                 ; a shot
+    db 12, 1
+    dw 0x0001, 180                  ; the thrust
+    db 10, 2
+    dw 0
+lr_ftones:
+    dw 0x0010, ar_n_extra, 0
+lr_cbits:                           ; the bit, the clip (arcsfx.py's order)
+    dw 0x0001
+    db 10                           ; the thrust
+    dw 0x0002
+    db 1                            ; a shot
+    dw 0x0004
+    db 2                            ; the death
+    dw 0x0008
+    db 3                            ; an alien hit
+    dw 0x0010
+    db 4                            ; the bonus ship
+    dw 0x0100
+    db 11                           ; a footstep, high
+    dw 0x0200
+    db 12                           ; ...and low
+    dw 0x0400
+    db 13                           ; the count of the men saved
+    dw 0
 inv_fnoise:                         ; the bit, Hz, the level, frames a step
     dw 0x0004, 300                  ; the base hit: long
     db 15, 5
