@@ -236546,13 +236546,12 @@ from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
 asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
 bitmap when the answer is at least four times the picture: 614,400 bytes for
 640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
-`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
-(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
-for this operation*, both before this change and after it (a look of each,
+`W16_BMMAX` (64,000) refuses. **Closed by §124.25.16:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 started to its window and said *Insufficient memory
+for this operation*, before this change and after it (a look of each,
 2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
-(`win16pbrush`). The one-band bitmap is the likely cause, read from
-`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
-what would cure it, not a smaller figure.
+(`win16pbrush`). The one-band bitmap was the cause, and the cure is a
+bitmap past 64,000 bytes, not a smaller figure: §124.25.16.
 
 The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
 and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
@@ -237055,6 +237054,104 @@ crosses between it and another part. Gates: `tests/win16/vbuser.c`
 (TrackPopupMenu shown and dismissed; the owner's `WM_COMMAND`) and
 `tests/win16/memdc.c` (`vbgdi`: Arc and Pie, unchanged), rows `win16vbuser` and
 `win16memdc`.
+
+#### 124.25.16 A bitmap past 64,000 bytes: tiles *(WIN16-NEXT-PLAN, bigbmp)*
+
+A GDI bitmap used to be one segment, so `W16_BMMAX` (64,000 bytes of
+converted pixels) was its largest and `CreateBitmap`, `CreateCompatibleBitmap`
+and `CreateDIBitmap` answered NULL for more. A program that sizes its pictures
+from `GetFreeSpace` (§124.25.1) hits it: Paintbrush's band manager
+(`PBRUSH.DLL`) keeps the whole picture as one band when the figure is at
+least four times the picture, which for 640 x 480 at 16 colours is a
+153,600-byte `CreateBitmap(640, 480)`; on kern_mega the honest figure is that
+large, so Paintbrush 3.0 always took the path and ended in *Insufficient
+memory for this operation*. **Seen (QEMU kern_mega, 2026-11-04):** the A/B
+fixture `BIGBMP.EXE` (`tests/win16/bigbmp.c`) with the old WIN16 fails every
+check from the first, `CreateCompatibleBitmap(dc, 640, 480)` answering NULL;
+with this change it passes (§ *What was seen*, below).
+
+**A bitmap may now be as large as a global block, tiled.** Windows keeps such
+a bitmap as a huge object and so does WIN16, with the machinery §124.31.6
+already has for `GlobalAlloc` over 64 KB - and without `SEG_TILE`, because
+the bitmap's rows are only ever addressed as *a segment and an offset*:
+- **One block.** A bitmap whose pixels are over `W16_BMMAX` is one **fixed
+  block of the global heap** (`w16_gnew`, up to its 1023 KB), never the claim
+  of its own §124.15.2 falls back to for a small one: a claim is a row of
+  the map and one of eight to twelve. It is asked for with `GMEM_ZEROINIT`
+  (black is 0 in both nibbles), so `w16_gzero` clears it through the arm's
+  walk descriptor and the clearing leaves no selector behind; a `W16SEG` at
+  a paragraph that is not a tile's would hold an LDT entry until the arena
+  goes. A heap that is short answers the `GlobalNotify` procedures first
+  (`w16k_gnask`) and then NULL, as before.
+- **The same on both arms.** A tile's segment is `block + k * 1000h`
+  paragraphs on kern_big and on kern_mega alike: on the arm WIN16 computes
+  in *virtual paragraphs* (§124.31.3) and `W16SEG` turns one into a data
+  selector reaching to the claim's end, so a virtual paragraph 1000h on is
+  the next 64 KB of the same arena. No `SEG_TILE`, no selector held, and
+  nothing to give back: a tiled bitmap goes with its block, at
+  `DeleteObject` or the program's end.
+- **How a bitmap says so.** The slot's `w16b_mono` high byte is 1 for the
+  claim of its own (§124.15.2) and **2 for a tiled bitmap** (`w16_bmown`
+  tests bit 0 only). Every other bitmap is the one-segment case and its code
+  is the multiply it was.
+- **One routine finds a row.** `w16_bmrp` (AX = a row, BX = the slot * 2 ->
+  AX = the row's byte offset, DX = the segment to pass to `W16SEG`) is the
+  only place that knows. What addresses a row by it: the pixel and row
+  routines under every drawing call and ROP (`w16_bmaddr`, `w16_bmrow`,
+  `w16_bm2bm`, `w16_roprow`), `SetDIBits`'s fill and `GetDIBits`'s read
+  (`w16_bmfills`, `w16_gdrow`), `GetPixel` on a bitmap and flood fill's
+  read. A BitBlt from a tiled bitmap to the screen is one
+  `OSAPI_GFX_BLIT4` **per tile** the source rows cross.
+- **The tiles' code is part 9's, not part 3's.** The library part is one
+  64 KB segment and was within a few hundred bytes of it, so it keeps only
+  the one-segment case of each routine and a test of the high byte; a tiled
+  bitmap's arithmetic, its making and its per-tile blit are in the
+  system-library part (§124.24.1), reached from part 3 through the image's
+  `w16_scall` (`w16_bmsys`, the `SLCALL` shape the other way): `w16_bmrps`
+  and `w16_bmcaps`, which part 9's own callers call directly, `w16_bmhuge`
+  and `w16_bmtiles`. **The part is there whenever a tiled bitmap is**:
+  `w16_bmnew` makes one only through part 9 - a part that cannot be fetched
+  is a NULL bitmap, not a later call to nowhere - and part 9 stays until
+  the program ends (§124.24.1), after its bitmaps are gone. Only a tiled
+  bitmap pays the two gates a row.
+- **What stays one segment.** `GetBitmapBits`, `SetBitmapBits` and the
+  initial bits of `CreateBitmap` take a program buffer of at most 64 KB (the
+  call is one segment's: §124.15.2), so they reach the first tile's rows
+  (`w16_bmcap`: `65535 / stride` rows, at most the bitmap's); a program that
+  moves a huge picture through them with a huge pointer gets the first tile.
+  `GetDIBits` and `SetDIBits` reach every row. `CreatePatternBrush` reads
+  the first eight rows, which are in the first tile.
+
+**Cost.** WIN16's resident growth is **6 bytes of bss and no byte of image**
+on both arms (`w16b_ty`, `w16b_tdy`, `w16_gdseg`). The library part grows
+**68 bytes on kern_mega and 75 on kern_big** (`.w16dlg` 64,717 -> 64,785 of
+65,536, and 63,911 -> 63,986), the system-library part 251 and 250. The
+first build kept everything in part 3 (+303, 65,020 bytes: 516 left) and was
+moved out before it merged. **kern_big keeps the limit in effect, not in
+code:** the code is the same on both arms, so a real-mode machine makes a
+tiled bitmap whenever the heap holds the block, and on a 640 KB machine with
+the figure `GetFreeSpace` gives there (under 614,400, §124.25.1) Paintbrush
+keeps its bands as before (`win16pbrush` is unchanged: its bitmaps are below
+`W16_BMMAX`). A 153,600-byte bitmap does not fit a small real-mode heap and
+answers NULL there, as a program on Windows 3.0 in real mode would be told.
+No kernel byte.
+
+**What was seen (QEMU, kern_mega, -m 16, a hard disk with WIN16, 2026-11-04):**
+`BIGBMP.EXE` with the new WIN16 said *BIGBMP OK*: tile 0, the seam between
+rows 203 and 204, tile 1, tile 2, a BitBlt of tile 2's block onto the window,
+a BitBlt that starts in tile 0 and ends in tile 1, GetDIBits of a tile-2
+scan, SetDIBits of one, and a StretchBlt across the seam; with the old WIN16 it
+named `make select tile0 seam ...` and so on, from the first call. Paintbrush
+3.0 (`PBRUSH.EXE`) then started to its window with no *Insufficient memory*
+box and drew a stroke on the canvas. **Seen again after the move to part 9
+(the same rig, 2026-11-04):** the fixture, grown by a line and an
+`ExtFloodFill` across a seam, a BitBlt from an odd column (the band's path),
+a pattern brush made from the bitmap, copies both ways with a second tiled
+bitmap whose tiles are 262 rows (500 x 400), and a monochrome bitmap of
+102,400 bytes, said *BIGBMP OK*; Paintbrush started as before. **Rows:** `win16bigbmp` runs the
+fixture on kern_big, `win16memdc` and `win16pbrush` are the small-bitmap
+guards. **Not done:** kern_mega has no row for the fixture (no QEMU rig
+loads WIN16 on the arm; `tests/win16ovr.py` does it under Bochs).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

@@ -17189,6 +17189,21 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16bigbmp", "soak", py("tests/win16bigbmp.py"), 60.0,
+        "SPEC.md 124.25.16, WIN16-NEXT-PLAN: BIGBMP.EXE (`make "
+        "win16fixtures`, tests/win16/bigbmp.c) makes a 640 x 480 bitmap, "
+        "153,600 bytes in WIN16's 4 bits a pixel, which is three tiles - "
+        "past W16_BMMAX's 64,000 - selects it into a memory DC, draws in "
+        "each tile and across the seam, reads every pixel back, BitBlts the "
+        "last tile's block and a source across the seam onto the window, "
+        "reads a scan through GetDIBits, writes one through SetDIBits, "
+        "StretchBlts the seam, draws a line and an ExtFloodFill across a "
+        "seam, blits from an odd column, makes a pattern brush of it, copies "
+        "both ways with a second tiled bitmap of other tile heights and fills "
+        "a tiled monochrome one; its MessageBox must be BIGBMP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16mdi", "soak", py("tests/win16mdi.py"), 60.0,
         "SPEC.md 124.27, WIN16-ANY-PLAN S20b: MDI.EXE (`make win16fixtures`, "
         "tests/win16/mdi.c) makes an MDICLIENT and three children by "
