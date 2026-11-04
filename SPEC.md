@@ -99560,7 +99560,7 @@ verb:
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
-| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code | the descriptor's type set in place, 92h / 9Ah; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window (a SUB, a pair, a tile, another's window or handle descriptor) |
+| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code | the descriptor's type set in place, 92h / 9Ah; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99684,8 +99684,9 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   makes a window of its own. A window does not follow a block that moves, code
   or data; a handle descriptor does, being re-aimed in place (above), and keeps
   its new type when it is. `.mega` +16 (the dispatch, the `mega_wfind` test
-  and `mega_bownf`'s door), `.cold` +104 (the body), no rung crossed; every
-  other kernel nothing.
+  and `mega_bownf`'s door), `.cold` +127 (the body, which first refuses a DX
+  that is no allocator LDT entry and a caller that is nobody's, `mega_segh`'s
+  bound), no rung crossed; every other kernel nothing.
 - **Freeing an entry clears any window row naming it** (`mega_ldt_free`), so
   a window that went with its block cannot be freed a second time at its
   owner's end, after the entry is somebody else's.

@@ -17366,10 +17366,12 @@ SOAK = [
     Row("win16csalias", "soak", py("tests/win16csalias.py"), 90.0,
         "SPEC.md 124.31.6, 50.6.11 (SEG_TYPE), KERN-MEGA-PLAN 14.142: under "
         "Bochs, kern_mega boots off C: and \\AUTOSTRT opens CSALIAS.EXE "
-        "(tests/win16/csalias.c), which copies mov ax,1234h / retf into a "
-        "global block, far-calls it through AllocDStoCSAlias and "
-        "PrestoChangoSelector's code selectors (1234h back), flips a window to "
-        "data and back in place, frees the alias, and is refused when it "
+        "(tests/win16/csalias.c), which copies mov ax,1234h / retf and a LAR "
+        "probe into a global block, far-calls it through AllocDStoCSAlias and "
+        "PrestoChangoSelector's code selectors (1234h back, LAR says code), "
+        "takes AllocDStoCSAlias's new code window over a selector in no claim "
+        "(the ROM) and frees it, flips a window and the block's own handle "
+        "descriptor (ASTEROID's idiom) in place, and is refused when it "
         "PrestoChangos onto a selector it does not own. No fault line. "
         "Red expected before 14.142: the far call is a #GP and WIN16 closes",
         needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,

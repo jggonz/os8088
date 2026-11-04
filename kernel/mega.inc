@@ -12771,6 +12771,16 @@ mega_segty:
     push ax
     push di
     push es
+    test dl, 4                      ; AN ALLOCATOR LDT ENTRY OR NOTHING, and
+    jz .no                          ; never nobody's (BL = FFh). Unchecked,
+    mov di, dx                      ; DX = 0 matched a FREE row of mega_wtab
+    and di, 0xFFF8                  ; (its selector word 0, its owner byte
+    cmp di, MEGA_LDT_FREE0 * 8      ; left) and retyped entry 0 - the GDT's,
+    jb .no                          ; below the allocator's range - and a DX
+    cmp di, [ss:mega_ldte]          ; past the LDT's end read beyond the
+    jae .no                         ; alias, a #GP in the kernel (mega_segh
+    cmp bl, 0xFF                    ; bounds its DX the same way)
+    je .no
     MXT_ES
     mov di, mega_wtab
 .l:
@@ -12779,11 +12789,9 @@ mega_segty:
     add di, 4
     cmp di, mega_wtab_end
     jb .l
-    test dl, 4                      ; not a window: a handle descriptor of
-    jz .no                          ; the caller's block (an LDT one, AVL
-    mov di, dx                      ; set, based in a block the caller owns)
-    and di, 0xFFF8
-    mov ax, MEGA_SEL_LDTD
+    mov di, dx                      ; not a window: a handle descriptor of
+    and di, 0xFFF8                  ; the caller's block (AVL set, based in
+    mov ax, MEGA_SEL_LDTD           ; a block the caller owns)
     mov es, ax
     test byte [es:di+6], MEGA_HAVL
     jz .no

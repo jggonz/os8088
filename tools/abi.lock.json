@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9140bd1abaf4ca4a4bcc3eea9f0ab68611f8453ff4870b5419dce0a5287dd3be",
+  "fingerprint": "9ef25b5f2c092866dbd2a23489ede5dda8938176533146153c149a548834c7e5",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "91bba68c75d8bce5334bee68d993e01e3ff4ca013e067684ee02c296c05fe2dc",
+  "fingerprint": "c73c313456ef8f24672d3754142305f496f10c717072a6347f0f38d071b4ce46",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1711,17 +1711,17 @@
    "to": 12
   },
   {
-   "fingerprint": "91bba68c75d8bce5334bee68d993e01e3ff4ca013e067684ee02c296c05fe2dc",
+   "fingerprint": "c73c313456ef8f24672d3754142305f496f10c717072a6347f0f38d071b4ce46",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "merge of plan/win16-next (main's #333 PCIETHER) with csalias's OSAPI_SEG SEG_TYPE (13), additive (KERN-MEGA-PLAN 14.142); everything built before still runs - no bump",
+   "reason": "OSAPI_SEG SEG_TYPE (13): a code/data retype of the caller's own window or handle descriptor (SPEC 50.6.11, KERN-MEGA-PLAN 14.142), appended after SEG_HND; older kernels refuse it, so everything built before still runs - no bump",
    "to": 10
   },
   {
-   "fingerprint": "9140bd1abaf4ca4a4bcc3eea9f0ab68611f8453ff4870b5419dce0a5287dd3be",
+   "fingerprint": "9ef25b5f2c092866dbd2a23489ede5dda8938176533146153c149a548834c7e5",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "merge of plan/win16-next (main's #333 PCIETHER) with csalias's OSAPI_SEG SEG_TYPE (13), additive (KERN-MEGA-PLAN 14.142); everything built before still runs - no bump",
+   "reason": "OSAPI_SEG SEG_TYPE (13): a code/data retype of the caller's own window or handle descriptor (SPEC 50.6.11, KERN-MEGA-PLAN 14.142), appended after SEG_HND; older kernels refuse it, so everything built before still runs - no bump",
    "to": 12
   }
  ]
