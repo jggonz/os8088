@@ -237225,7 +237225,7 @@ take seven of the 384 slots (the largest import list measured is 270), the
 handler and the `GetClassInfo` arm are in the system-library part, and the
 fixed row table is in the loader part (a fixed row names a `W16P_SYS` handler
 as well as a `W16P_LIB` one). Part bytes, kern_mega arm, against the
-plan branch at 9ca188639: the system-library part 38,506 to 38,946 (+440,
+plan branch at 9ca188639: the system-library part 38,506 to 39,011 (+505,
 with §124.25.18.1's), the loader part 17,072 to 17,100 (+28, seven fixed
 rows), the dialog part 64,845 to 64,843 (-2).
 
@@ -237238,39 +237238,61 @@ registers `ThunderRTMain`, `PictureBox`, `TextBox`, `Frame`, `CommandButton`,
 and `Timer` before its 13th, `ThunderPrinter`, which was refused (seen
 2026-11-04: *Unexpected error; quitting*). VB 3 has about 26 classes.
 
-**The table is now a block of the program's global memory**, `W16_MAXCLS` = 64
-records of `W16C_STRIDE` = 33 bytes (the 32-byte record and its task, now
-`W16C_TASK`, in it), made fixed by `w16_gnew` at the first `RegisterClass` by
-`w16s_clsadd` (system-library part), its segment in `w16_clsseg` (0 = none yet:
-`GetClassInfo` and `CreateWindow` find nothing without asking for memory). It
-is asked for zeroed and from the TOP of the heap (`W16G_HIGH`, as a code
-segment is), so it is not the block a `GlobalAlloc` segment's local heap
-grows into in place (WIN16-NEXT `lheap`). It belongs to no task (`GH_TASK` 0), so a
-task's end does not free it under the others; the program's end frees it with
-the arenas, and `w16_clsseg` goes back to 0 there with the USER heap's
-segment. It is not a map claim, so it costs none of an owner's eight. **The
-block is not grown** (DECISIONS 13:05 asked for growth; open): 64 is the
-limit, and a failed block or a full table answers `RegisterClass` FALSE and
-the program carries on. Growing it is a new block, the records copied and the
-old one freed - atoms are indexes and nothing holds a record's address, so
-nothing else changes - but on the kern_mega arm the old block's selector has
-to go with it, which nothing here has needed before; the index is a byte
-(`W16W_CLS`, 0FFh = none), so 255 is the ceiling.
+**The table is now a block of the program's global memory** that grows:
+`W16C_STRIDE` = 33 bytes a record (the 32-byte record and its task, now
+`W16C_TASK`, in it), and `w16_clsend` the records' end (records x 33; 0 =
+no block). `w16s_clsadd` (system-library part) takes the first free record;
+with none, or no block yet, it makes a block `W16_MAXCLS` = 64 records longer
+by `w16_gnew` - fixed, zeroed, and from the TOP of the heap (`W16G_HIGH`, as
+a code segment is), so it is not the block a `GlobalAlloc` segment's local
+heap grows into in place (WIN16-NEXT `lheap`) - copies the records into it at
+the same offsets, frees the old one (`w16_gfreeh` of the handle `W16VOF` gives
+back from its selector: a fixed block's handle is its paragraph) and only then
+answers. 64, 128, 192, then **`W16_CLSCAP` = 255**: a class's index is
+`W16W_CLS`'s byte, 0FFh meaning one of WIN16's. **A class's atom is `0C000h` +
+its index**, and indexes do not move with the block, so every atom a program
+holds, every window's `W16W_CLS` and `[w16_cbi]` stay good across a growth;
+nothing else holds a record's address. The segment is `w16_clsseg`. It belongs
+to no task (`GH_TASK` 0), so a task's end does not free it under the others;
+the program's end frees it with the arenas, and `w16_clsseg` and `w16_clsend`
+go back to 0 there beside the USER heap's segment (on kern_mega a stale
+selector in `w16_clsseg` would fault at its next load). It is not a map claim,
+so it costs none of an owner's eight. A block that cannot be made (no memory)
+or a table at the cap answers `RegisterClass` FALSE, the old table untouched,
+and the program carries on.
 
 **No record is read in place.** `w16_clsget` (AL = the index) copies a record
 into `w16_ccb`, one 33-byte record in bss with its index in `w16_cbi`, and
 answers its address; `w16_findcls` answers that copy (BX = `w16_ccb`), so
 every user reads `[bx + W16C_*]` as before. The copy is good until the next
-lookup. `w16_clsput` writes it back (`SetClassWord`). A class's atom is
-`0C000h` + its index, no longer its record's offset. A task's end clears its
-classes in the block (`w16t_end`).
+lookup. `w16_clsput` writes it back (`SetClassWord`). `w16_findcls` walks
+from `[w16_clsend]` down (a task's own class over a global one of its name,
+§124.28.3) and computes the index from the offset; `GetClassInfo` takes an
+atom only inside the block as it is. A task's end clears its classes in the
+block (`w16t_end`).
 
 **What it costs**, image + bss of `win16.o88` against the plan branch at
 9ca188639 (both sections together): kern_mega arm 37,915 + 26,696 = 64,611
-before, 37,970 + 26,336 = 64,306 after, **-305 resident bytes**; real-mode arm
-36,298 + 27,471 = 63,769 before, 36,353 + 27,111 = 63,464 after, **-305**
-(the bss falls by 360, the lookups and the two helpers add 55). 64 records is
-2,112 bytes of the program's global heap, taken at the first class.
+before, 37,963 + 26,338 = 64,301 after, **-310 resident bytes**; real-mode
+arm 36,298 + 27,471 = 63,769 before, 36,346 + 27,113 = 63,459 after, **-310**
+(the bss falls by 358: 396 of table out, a record's copy, its index and two
+words in; the lookups and helpers add 48). The growth is in the
+system-library part; resident, it cost nothing - `w16_findcls` over
+`[w16_clsend]` is shorter than over a constant count. 64 records is 2,112
+bytes of the program's global heap, taken at the first class; 255 is 8,415.
+
+**Names stay 16 characters.** VBRUN300's controls are `Thunder` + a name (the
+DLL holds `Thunder` alone beside `ThunderRTMain` and the names, so the
+prefix is inferred from its strings, not read off a call), and eight of them are longer than 16 (`ThunderPictureBox`, `ThunderCommandButton`,
+`ThunderOptionButton`, `ThunderHScrollBar`, `ThunderVScrollBar`,
+`ThunderDriveListBox`, `ThunderDirListBox`, `ThunderFileListBox`), stored as
+their first 16 - all distinct, and distinct from the VBX models Mozart and Sir
+Hangman carry (`MsgBlaster`, `PicClip`, `RtfLabel`, `SPush`, the MCI, common
+dialog and grid controls), so no lookup collides. What a 16-character name
+does cost is `GetClassName`, which answers the stored name - upper case and
+cut at 16 - so a program comparing it with a long name of its own does not
+match (open; VB calls `GetClassName` then `lstrcmpi` on its MessageBox path,
+operand not read).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
