@@ -123,8 +123,10 @@ w16_copyres:
 
 ; -----------------------------------------------------------------------------
 ; w16_rkey - a far type or name, DX:AX -> a key: AX = 8000h | id for an
-; integer (MAKEINTRESOURCE, or a string "#123"), else AX = 0 and the name in
-; DI's 16-byte buffer, upper case. Keeps the rest.
+; integer (MAKEINTRESOURCE, or a string "#123"), else AX = 0 and DX:AX kept
+; as a far pointer in DI's 4-byte word pair (w16_rtyp, w16_rnam): the name is
+; compared where the program keeps it, case blind, so it has no length limit
+; but Windows' own (SPEC.md 124.10). Keeps the rest.
 ; -----------------------------------------------------------------------------
 w16_rkey:
     push bx
@@ -156,23 +158,8 @@ w16_rkey:
     or ah, 0x80
     jmp short .out
 .str:
-    mov cx, 15
-.ch:
-    mov al, [es:si]
-    cmp al, 'a'
-    jb .up
-    cmp al, 'z'
-    ja .up
-    sub al, 0x20
-.up:
-    mov [di], al
-    or al, al
-    jz .end
-    inc si
-    inc di
-    loop .ch
-    mov byte [di], 0
-.end:
+    mov [di], ax                    ; the name, far: compared in place
+    mov [di + 2], dx
     xor ax, ax
 .out:
     pop es
@@ -182,7 +169,7 @@ w16_rkey:
     ret
 
 ; w16_rmatch - does table word AX (an rtTypeID or rnID) match key BX (with
-; string SI)? ZF=1 yes. ES = the table. Keeps all.
+; its string's far pointer at SI)? ZF=1 yes. ES = the table. Keeps all.
 w16_rmatch:
     push ax
     push cx
@@ -200,23 +187,25 @@ w16_rmatch:
     jae .no
     mov cl, [es:di]
     xor ch, ch
+    push ds
+    lds si, [si]                    ; DS:SI = the program's own string
 .c:
     inc di
     jcxz .tail
+    mov al, [si]
+    call w16_rup
+    mov ah, al
     mov al, [es:di]
-    cmp al, 'a'
-    jb .u
-    cmp al, 'z'
-    ja .u
-    sub al, 0x20
-.u:
-    cmp al, [si]
-    jne .out
+    call w16_rup
+    cmp al, ah
+    jne .pop
     inc si
     dec cx
     jmp short .c
 .tail:
     cmp byte [si], 0
+.pop:
+    pop ds
     jmp short .out
 .no:
     or sp, sp                       ; ZF = 0
@@ -227,9 +216,19 @@ w16_rmatch:
     pop ax
     ret
 
+; w16_rup - AL upper-cased, a-z only (the resource compiler's own fold)
+w16_rup:
+    cmp al, 'a'
+    jb .o
+    cmp al, 'z'
+    ja .o
+    sub al, 0x20
+.o:
+    ret
+
 ; -----------------------------------------------------------------------------
-; w16_rfind - [w16_rtk]/[w16_rnk] (keys, w16_rkey's, with the strings in
-; w16_rtypb/w16_rnamb) -> AX = the entry's offset in the table, 0 = none.
+; w16_rfind - [w16_rtk]/[w16_rnk] (keys, w16_rkey's, with the strings' far
+; pointers in w16_rtyp/w16_rnam) -> AX = the entry's offset in the table, 0 = none.
 ; A string type or name the table does not carry is looked up in the
 ; program's RT_NAMETABLE (SPEC.md 124.10): a Windows 3.0 linker gave every
 ; resource a number and wrote the names there, CALC 3.00's "SC" for DIALOG 1
@@ -295,7 +294,7 @@ w16_rscan:
     add di, 8
     push di
     mov bx, [w16_rtk]
-    mov si, w16_rtypb
+    mov si, w16_rtyp
     call w16_rmatch
     pop di
     jne .skip
@@ -307,7 +306,7 @@ w16_rscan:
     ja .none
     mov ax, [es:di + RN_ID]
     mov bx, [w16_rnk]
-    mov si, w16_rnamb
+    mov si, w16_rnam
     call w16_rmatch
     je .hit
     add di, RN_SIZE
@@ -657,12 +656,12 @@ w16k_findres:
     push word [es:bx + 2]
     mov ax, [es:bx + 4]
     mov dx, [es:bx + 6]
-    mov di, w16_rnamb
+    mov di, w16_rnam
     call w16_rkey
     mov [w16_rnk], ax
     pop dx
     pop ax
-    mov di, w16_rtypb
+    mov di, w16_rtyp
     call w16_rkey
     mov [w16_rtk], ax
     call w16_rfind
@@ -857,7 +856,7 @@ w16_rnametab:
     inc bx
     jmp short .name
 .bytype:
-    mov si, w16_rtypb
+    mov si, w16_rtyp
     call w16_rnmcmp
     jne .next
 .name:
@@ -871,7 +870,7 @@ w16_rnametab:
     jne .next
     jmp short .hit
 .byname:
-    mov si, w16_rnamb
+    mov si, w16_rnam
     call w16_rnmcmp
     jne .next
 .hit:
@@ -900,11 +899,22 @@ w16_rnametab:
     pop bp
     ret
 
-; w16_rnmcmp - the name at ES:BX against the upper-case one at DS:SI, case
-; blind: ZF=1 the same, BX past its NUL. Keeps all but BX, SI, the flags.
+; w16_rnmcmp - the name at ES:BX against the program's, its far pointer at
+; DS:SI, case blind: ZF=1 the same, BX past its NUL. Keeps all but BX, SI,
+; the flags.
 w16_rnmcmp:
     push ax
+    push ds
+    lds si, [si]
 .c:
+    mov al, [si]
+    cmp al, 'a'
+    jb .k
+    cmp al, 'z'
+    ja .k
+    sub al, 0x20
+.k:
+    mov ah, al
     mov al, [es:bx]
     cmp al, 'a'
     jb .u
@@ -912,13 +922,14 @@ w16_rnmcmp:
     ja .u
     sub al, 0x20
 .u:
-    cmp al, [si]
+    cmp al, ah
     jne .o
     inc bx
     inc si
     or al, al
     jnz .c
 .o:
+    pop ds
     pop ax
     ret
 section .text

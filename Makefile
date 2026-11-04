@@ -19290,7 +19290,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
 # by the import lines in its own .wlk, so it links without them.
@@ -19423,13 +19423,15 @@ $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
 		--second $(BUILD)/win16/w16fp.bin --mark W16X87EM \
 		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR \
 		--second $(BUILD)/win16/w16sys.bin --mark W16SYSLB \
-		--second $(BUILD)/win16/w16tsk.bin --mark W16TSKPT
+		--second $(BUILD)/win16/w16tsk.bin --mark W16TSKPT \
+		--second $(BUILD)/win16/w16rare.bin --mark W16RAREP
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part $(BUILD)/win16/w16fp.bin --part $(BUILD)/win16/w16ld.bin \
 		--part $(BUILD)/win16/icons.bin --part $(BUILD)/doscore.bin \
 		--part $(BUILD)/win16/w16dosh.bin --part $(BUILD)/win16/w16sys.bin \
 		--part $(BUILD)/win16/w16tsk.bin \
+		--part $(BUILD)/win16/w16rare.bin \
 		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
@@ -19478,13 +19480,15 @@ $(MEGAAPPDIR)/win16.o88: $(MEGAAPPDIR)/win16.bin $(W16FACES) $(BUILD)/win16/icon
 		--second $(MEGAAPPDIR)/win16/w16fp.bin --mark W16X87EM \
 		--second $(MEGAAPPDIR)/win16/w16ld.bin --mark W16LOADR \
 		--second $(MEGAAPPDIR)/win16/w16sys.bin --mark W16SYSLB \
-		--second $(MEGAAPPDIR)/win16/w16tsk.bin --mark W16TSKPT
+		--second $(MEGAAPPDIR)/win16/w16tsk.bin --mark W16TSKPT \
+		--second $(MEGAAPPDIR)/win16/w16rare.bin --mark W16RAREP
 	$(OS88PKG) $(MEGAAPPDIR)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(MEGAAPPDIR)/win16/w16dlg.bin \
 		--part $(MEGAAPPDIR)/win16/w16fp.bin --part $(MEGAAPPDIR)/win16/w16ld.bin \
 		--part $(BUILD)/win16/icons.bin --part $(MEGAAPPDIR)/doscore.bin \
 		--part $(MEGAAPPDIR)/win16/w16dosh.bin --part $(MEGAAPPDIR)/win16/w16sys.bin \
 		--part $(MEGAAPPDIR)/win16/w16tsk.bin \
+		--part $(MEGAAPPDIR)/win16/w16rare.bin \
 		--part-compress lz4
 
 # ...and kern_mega's WIN16 DISKS: $(WIN16IMG)'s shape - WIN16\,

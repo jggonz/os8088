@@ -356,7 +356,7 @@ w16_dlgres:
     push dx
     push si
     push di
-    mov di, w16_rnamb
+    mov di, w16_rnam
     call w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_DIALOG
