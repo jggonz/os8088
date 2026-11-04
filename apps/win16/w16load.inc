@@ -60,6 +60,8 @@ W16CL_SIZE equ 6
 W16CLF_DISC equ 1               ; discardable (124.26.1)
 W16CLF_KEEP equ 2               ; ...but named by its number: never discarded
 W16CLF_NEW  equ 4               ; ...its block taken at a launch, not yet filled
+W16CLF_HOLD equ 8               ; ...loaded by a thunk, held while the segments
+                                ;   its records kept are read (124.26.14)
 W16TK_SIZE equ 8                ; a thunk (124.26.2): jmp/call far, the segment,
 W16TK_SEG  equ 5                ;   the entry's offset
 W16TK_OFF  equ 6
@@ -1389,12 +1391,11 @@ w16_reloc1:
     mov dx, ax
     mov ax, [es:si + 6]
 %ifndef PKG_MEGA
-    call w16l_c3                    ; CL = 0 as before, 1 through thunks,
-    cmp cl, 1                       ;   2 no memory (SPEC.md 124.26.14)
-    jb .ownseg
+    call w16l_c3                    ; CL = 0 as before, 1 applied through
+    cmp cl, 1                       ;   thunks, 2 no memory (SPEC.md
+    jb .ownseg                      ;   124.26.14)
     ja .c3mem
-    mov bl, 0x80                    ; DX = the thunks' paragraph, AX = the
-    jmp .apply2                     ;   segment's number
+    jmp .ok
 .c3mem:
     pop di
     pop si
@@ -1438,20 +1439,12 @@ w16_reloc1:
     pop ax
 %endif
 .apply:                             ; DX:AX = the target
-%ifndef PKG_MEGA
-    xor bl, bl                      ; (BL = 80h: the sites take thunks)
-.apply2:
-%endif
     cmp byte [w16_rpass], 1         ; only pass 1 writes
     jne .ok
     mov cl, [es:si]                 ; the address type
     and cl, 0x7F
     mov di, [es:si + 2]             ; the first site
     mov ch, [es:si + 1]
-%ifndef PKG_MEGA
-    and ch, 0x7F                    ; (a file's own bit 7 is nothing)
-    or ch, bl
-%endif
     push es
     mov bx, [w16_rseg]
     W16SEG es, [w16_sbase + bx]
@@ -1657,10 +1650,6 @@ w16l_preach:
 ; w16_site - write DX:AX at ES:DI by address type CL; CH bit 2 = additive.
 ; out CF=1 an address type WIN16 does not know
 w16_site:
-%ifndef PKG_MEGA
-    test ch, 0x80                   ; a far call's site (SPEC.md 124.26.14):
-    jnz .xsel                       ;   AX = the segment's number, DX = the
-%endif                              ;   thunks' paragraph
     test ch, 4
     jnz .add
     cmp cl, 0                       ; low byte
@@ -1722,26 +1711,6 @@ w16_site:
     mov [es:di + 2], dx
     clc
     ret
-%ifndef PKG_MEGA
-.xsel:
-    push ax
-    push cx
-    push dx
-    push di
-    mov cx, [es:di - 2]             ; the call's offset: a literal
-    mov dx, ax
-    call w16l_xfind                 ; DI = the pair's thunk
-    mov cx, di
-    pop di
-    pop dx
-    jc .xfull
-    mov [es:di - 2], cx
-    mov [es:di], dx
-.xfull:
-    pop cx
-    pop ax
-    ret                             ; (CF=1: the pool was full: a bad record)
-%endif
 
 ; w16_site4 - CF=1 if a far pointer at DI runs past segment [w16_rseg]:
 ; DI <= length - 4, 0 (64KB) giving FFFC. A segment shorter than 4 bytes is
@@ -3863,8 +3832,8 @@ w16l_cmake:
 .some:
     call w16l_nord
 %ifndef PKG_MEGA
-    push ax                         ; + the far calls' thunk pool, if the
-    call w16l_cpool                 ;   records could use one (124.26.14)
+    push ax                         ; + the far calls' thunks, if the
+    call w16l_cpool                 ;   records could use any (124.26.14)
     pop cx
     add ax, cx
 %endif
@@ -3890,9 +3859,6 @@ w16l_cmake:
     shl cx, 1
     add cx, dx
     shl cx, 1                       ; * W16CL_SIZE
-%ifndef PKG_MEGA
-    add cx, 2                       ; the pool's base word (124.26.14)
-%endif
     add ax, cx
     add ax, 15
     jc .big
@@ -3956,9 +3922,6 @@ w16l_cmake:
     pop ds
     call w16l_lfill
     call w16l_tinit
-%ifndef PKG_MEGA
-    call w16l_psave
-%endif
 .ok:
     clc
 .out:
@@ -4146,25 +4109,24 @@ w16l_thkset:
 ; =============================================================================
 ; FAR CALLS THROUGH THUNKS (SPEC.md 124.26.14). A record that names a
 ; discardable segment by number, whose every site is a CALL FAR / JMP FAR with
-; the offset a literal before it, is given per-target thunks from a pool at the
-; end of the module block's thunk table, so the segment stays discardable.
-; Anything else keeps the segment, as 124.26.1 always did, but when the record
-; is applied and not at launch.
+; the offset a literal before it, is given per-target thunks in the module
+; block's thunk table, so the segment stays discardable. Anything else keeps
+; the segment, as 124.26.1 always did, but when the record is applied and not
+; at launch.
 ; =============================================================================
 
-; w16l_cpool - ES = the tables: AX = how many pool thunks the module block
-; needs (0 none), from the records that could be far calls (address type 2,
-; not additive, internal, a discardable segment other than the source). The
+; w16l_cpool - ES = the tables: AX = how many thunks to add to the table for
+; far calls (0 none), from the records that could be ones (w16l_c3ok). The
 ; sites are not in memory yet: only the records are counted. Keeps the rest.
 w16l_cpool:
     push bx
     push cx
     push dx
     push si
-    push bp
-    xor bp, bp
+    xor ax, ax
     xor bx, bx                      ; BX = the source's index * 2
 .src:
+    mov [w16_rseg], bx
     mov si, [w16_rtoff + bx]
     or si, si
     jz .nsrc
@@ -4172,146 +4134,73 @@ w16l_cpool:
     add si, 2
     jcxz .nsrc
 .rec:
-    test byte [es:si + 1], 7        ; internal, not additive
+    test byte [es:si + 1], 3        ; internal, by number
     jnz .nrec
-    mov al, [es:si]
-    and al, 0x7F
-    cmp al, 2
-    jne .nrec
-    mov al, [es:si + 4]
-    cmp al, 0xFF
+    mov dl, [es:si + 4]
+    cmp dl, 0xFF
     je .nrec
-    xor ah, ah
-    mov dx, ax                      ; DX = its number
-    mov ax, bx
-    shr ax, 1
-    inc ax
-    cmp ax, dx                      ; itself
-    je .nrec
-    push bx
-    mov bx, dx
-    dec bx
-    shl bx, 1
-    call w16l_isdisc
-    pop bx
-    jnc .nrec
-    inc bp
+    xor dh, dh
+    call w16l_c3ok
+    adc ax, 0
 .nrec:
     add si, 8
     loop .rec
 .nsrc:
     inc bx
     inc bx
-    mov ax, bx
-    shr ax, 1
-    cmp ax, [w16_nseg]
+    mov dx, bx
+    shr dx, 1
+    cmp dx, [w16_nseg]
     jb .src
-    mov ax, bp
-    or ax, ax
+    shl ax, 1                       ; two a record, 16 to 512
     jz .out
-    shl ax, 1                       ; two thunks a record, 16 to 512
     cmp ax, 16
     jae .big
     mov ax, 16
 .big:
     cmp ax, 512
-    jbe .pad
+    jbe .out
     mov ax, 512
-.pad:
-    inc ax                          ; one unused thunk before the pool, so
-.out:                               ;   its offset is never 0 ("none")
-    pop bp
+.out:
     pop si
     pop dx
     pop cx
     pop bx
     ret
 
-; w16l_psave - ES = the tables, the module block made: the pool's first offset
-; into the word after the live table (0 = no pool). Keeps all.
-w16l_psave:
-    push ax
-    push bx
-    push cx
-    push es
-    call w16l_nord                  ; AX = the ordinals
-    mov cx, [w16_cnord]
-    sub cx, ax
-    jz .out                         ; no pool
-    inc ax                          ; (past the unused thunk)
-    shl ax, 1
-    shl ax, 1
-    shl ax, 1                       ; its offset in the thunks
-    mov bx, [w16_cnseg]
-    mov cx, bx
-    shl bx, 1
-    add bx, cx
-    shl bx, 1                       ; * W16CL_SIZE: the word after the table
-    W16SEG es, [w16_clive]
-    mov [es:bx], ax
-.out:
-    pop es
-    pop cx
-    pop bx
-    pop ax
-    ret
-
-; w16l_pbase - AX = the pool's first offset in the thunks, 0 none. Keeps the
-; rest.
-w16l_pbase:
-    xor ax, ax
-    cmp word [w16_cmb], 0
-    je .out
-    push bx
-    push es
-    mov ax, [w16_cnseg]
-    mov bx, ax
-    shl ax, 1
-    add bx, ax
-    shl bx, 1
-    W16SEG es, [w16_clive]
-    mov ax, [es:bx]
-    pop es
-    pop bx
-.out:
-    ret
-
-; w16l_c3ok - in w16_reloc1: DX = a segment named by number from the record at
-; ES:SI (the source is segment [w16_rseg]). CF=1 it is a far call's candidate
-; (SPEC.md 124.26.14): a discardable segment other than the source's own, by a
-; non-additive selector fixup, in a module with a pool. Keeps all.
+; w16l_c3ok - ES:SI -> an internal record naming segment DX by number, from
+; segment [w16_rseg]; ES = the tables. CF=1 it may be a far call's (SPEC.md
+; 124.26.14): a selector, not additive, to a discardable segment other than
+; the source. Keeps all.
 w16l_c3ok:
-    cmp byte [w16_cdo], 0
-    je .no
     push ax
+    push bx
     mov al, [es:si]
     and al, 0x7F
     cmp al, 2
-    jne .not
+    jne .no
     test byte [es:si + 1], 4
-    jnz .not
-    mov ax, [w16_rseg]
-    shr ax, 1
-    inc ax
-    cmp ax, dx
-    je .not
-    call w16l_pbase
-    or ax, ax
-    jz .not
-    pop ax
-    jmp w16l_isdlive                ; CF=1 a discardable one
-.not:
-    pop ax
+    jnz .no
+    mov bx, dx
+    dec bx
+    shl bx, 1
+    cmp bx, [w16_rseg]
+    je .no
+    call w16l_isdisc                ; CF=1 a discardable one
+    jmp short .out
 .no:
     clc
+.out:
+    pop bx
+    pop ax
     ret
 
-; w16l_c3 - in w16_reloc1's apply pass, a fixed-segment record: DX = the
-; segment, ES:SI = the record. out: CL = 0 as before (DX, AX as in), 1 every
-; site is a far call and takes a thunk (DX = the thunks' paragraph, AX = the
-; segment's number), 2 no memory for the segment it had to keep. A record
-; with a site that is not proved keeps the segment: flagged, and a block taken
-; if it has none; w16l_pend reads it. Keeps the rest.
+; w16l_c3 - in w16_reloc1's apply pass, a record naming segment DX by number,
+; ES:SI = the record, ES = the tables. out: CL = 0 as before (DX, AX as in);
+; 1 every site was a far call and has been given its thunk: the record is
+; applied; 2 no memory for the segment it had to keep. A record with a site
+; that is not proved keeps the segment: flagged, and a block taken if it has
+; none, which w16l_pend fills. Keeps the rest.
 w16l_c3:
     xor cl, cl
     cmp byte [w16_rpass], 1
@@ -4329,37 +4218,32 @@ w16l_c3:
     test byte [es:si + W16CL_FL], W16CLF_KEEP
     pop si
     pop es
-    jnz .norm                       ; kept already
+    jnz .keep                       ; kept already (a block if it lost one)
+    mov bx, [w16_rseg]
+    call w16l_segtab                ; ES:DI -> the source's row
+    test word [es:di + 4], NSF_DATA ; a data segment's site is no call
+    jnz .keep
     mov bx, bp
     dec bx
     shl bx, 1
-    call w16l_segtab                ; AX = its size
-    mov bx, ax                      ; BX = its size
-    mov di, [w16_ne]
-    add di, [es:di + NE_SEGTAB]
-    mov ax, [w16_rseg]
-    shl ax, 1
-    shl ax, 1                       ; * 8: the source's row
-    add di, ax
-    test word [es:di + 4], NSF_DATA ; a data segment's site is no call
-    jnz .keep
+    call w16l_segtab
+    mov bx, ax                      ; BX = the target's size
     mov di, [es:si + 2]             ; the first site
-    mov ax, es
-    push ax                         ; the tables
+    push es                         ; the tables
     mov si, [w16_rseg]
     W16SEG es, [w16_sbase + si]     ; the source's bytes
-    push di
-    xor dl, dl                      ; every site checked first, so a record
-    call w16l_c3walk                ;   that fails makes no thunk
+    ICALL w16_inrange               ; a first site outside it is the apply
+    jc .nope                        ;   pass's refusal, as before
+    xor dl, dl                      ; every site checked, then the thunks
+.walk:                              ;   made, then written: a record that
+    push di                         ;   fails makes none, and one whose
+    call w16l_c3walk                ;   thunks are made cannot fail
     pop di
     jc .nope
-    mov dl, 1                       ; then the thunks
-    call w16l_c3walk
-    jc .nope
-.proved:
+    inc dx
+    cmp dl, 3
+    jb .walk
     pop es
-    mov dx, [w16_cthk]
-    mov ax, bp
     mov cl, 1
     jmp short .pop
 .nope:
@@ -4372,7 +4256,6 @@ w16l_c3:
     cmp word [es:si + W16CL_BASE], 0
     pop es
     jne .norm                       ; loaded: its paragraph stands
-    mov dx, bp
     call w16l_segalloc              ; a block now, its content after
     mov cl, 2
     jc .pop
@@ -4384,15 +4267,14 @@ w16l_c3:
     pop di
     pop si
     pop bx
-    cmp cl, 1
-    je .ret                         ; (DX:AX are the thunks')
     mov ax, [es:si + 6]
 .ret:
     ret
 
 ; (w16l_c3's chain walk: ES = the source's bytes, DI = the first site, BX =
-; the target's size, BP = its number, DL = 0 check / 1 make the thunks. CF=1 a
-; site is no far call, or the pool is full. Keeps all but SI, DI, CX, AX.)
+; the target's size, BP = its number, DL = 0 check, 1 make the thunks, 2 write
+; them. CF=1 a site is no far call, or the table is full. Keeps all but SI,
+; DI, CX, AX.)
 w16l_c3walk:
     mov si, 0x4000                  ; bounds a chain that loops
 .site:
@@ -4409,17 +4291,23 @@ w16l_c3walk:
     mov cx, [es:di - 2]             ; the offset, a literal: inside the target
     cmp cx, bx
     jae .bad
+    mov ax, [es:di]                 ; the chain's next site, read first
     or dl, dl
     jz .next
     push dx
-    mov dx, bp
     push di
+    mov dx, bp
     call w16l_xfind                 ; the pair's thunk
+    mov cx, di
     pop di
     pop dx
-    jc .bad                         ; the pool is full
+    jc .bad                         ; the table is full
+    cmp dl, 2
+    jne .next
+    mov [es:di - 2], cx             ; the site: the thunk
+    push word [w16_cthk]
+    pop word [es:di]
 .next:
-    mov ax, [es:di]                 ; the chain's next site
     cmp ax, di
     je .ok
     mov di, ax
@@ -4434,36 +4322,44 @@ w16l_c3walk:
     stc
     ret
 
-; w16l_xfind - DX = a segment's number, CX = an offset in it: the pool thunk
-; for the pair, made if there is none (calling w16_thkhit, or jumping if the
-; segment is loaded). out: CF=0 DI = its offset in the thunks; CF=1 the pool
-; is full. Keeps the rest.
+; w16l_xfind - DX = a segment's number, CX = an offset in it: the thunk for
+; the pair, the first free one made if there is none (calling w16_thkhit, or
+; jumping if the segment is loaded). Any thunk of the pair will do, an
+; entry's among them, and a free one is any an ordinal has no use for.
+; out: CF=0 DI = its offset in the thunks; CF=1 none is free. Keeps the rest.
 w16l_xfind:
     push ax
     push bx
     push es
-    call w16l_pbase
-    mov di, ax
-    or ax, ax
-    jz .full
+    W16SEG es, [w16_cthk]
     mov bx, [w16_cnord]
     shl bx, 1
     shl bx, 1
     shl bx, 1
-    W16SEG es, [w16_cthk]
+    mov ax, 0xFFFF                  ; AX = the first free one, none yet
+    xor di, di
 .scan:
     cmp di, bx
-    jae .full
+    jae .new
     cmp byte [es:di], 0
-    je .add
+    je .free
     cmp [es:di + W16TK_SEG], dl
     jne .next
     cmp [es:di + W16TK_OFF], cx
     je .found
+    jmp short .next
+.free:
+    cmp ax, 0xFFFF
+    jne .next
+    mov ax, di
 .next:
     add di, W16TK_SIZE
     jmp short .scan
-.add:
+.new:
+    mov di, ax
+    inc ax
+    stc
+    jz .out                         ; none free
     mov ax, cx
     call w16l_thk1                  ; not loaded: calls w16_thkhit
     push si
@@ -4475,14 +4371,10 @@ w16l_xfind:
     or ax, ax
     jz .found
     mov byte [es:di], 0xEA          ; jmp far the entry
-    push word [es:di + W16TK_OFF]
-    pop word [es:di + 1]
+    mov [es:di + 1], cx
     mov [es:di + 3], ax
 .found:
     clc
-    jmp short .out
-.full:
-    stc
 .out:
     pop es
     pop bx
@@ -4496,62 +4388,37 @@ w16l_xfind:
 ; then. Keeps all.
 w16l_pend:
     push ax
-    push bx
     push dx
     push si
     push es
+    xor al, al                      ; AL = 1 once one has failed
 .again:
-    xor bx, bx
+    xor dx, dx
 .seg:
-    mov dx, bx
-    shr dx, 1
     inc dx
+    cmp dx, [w16_nseg]
+    ja .done
     call w16l_isdlive
-    jnc .next
+    jnc .seg
     call w16l_lent
-    mov ax, [es:si + W16CL_BASE]
     test byte [es:si + W16CL_FL], W16CLF_NEW
-    jz .next
-    or ax, ax
-    jz .next
+    jz .seg
+    cmp word [es:si + W16CL_BASE], 0
+    je .seg
+    or al, al
+    jnz .drop
     W16SEG es, [w16_cmb]
     call w16l_segfill
-    jc .fail
-    jmp short .again
-.next:
-    inc bx
-    inc bx
-    mov ax, bx
-    shr ax, 1
-    cmp ax, [w16_nseg]
-    jb .seg
-    clc
-    jmp short .out
-.fail:
-    xor bx, bx                      ; the ones still unfilled go back
+    jnc .again
+    inc ax                          ; refused: this one and the rest go back
 .drop:
-    mov dx, bx
-    shr dx, 1
-    inc dx
-    call w16l_isdlive
-    jnc .dnext
-    call w16l_lent
-    test byte [es:si + W16CL_FL], W16CLF_NEW
-    jz .dnext
     call w16l_segdrop
-.dnext:
-    inc bx
-    inc bx
-    mov ax, bx
-    shr ax, 1
-    cmp ax, [w16_nseg]
-    jb .drop
-    stc
-.out:
+    jmp short .seg
+.done:
+    shr al, 1                       ; CF = refused
     pop es
     pop si
     pop dx
-    pop bx
     pop ax
     ret
 %endif
@@ -5108,8 +4975,13 @@ w16l_segin1:
     W16SEG es, [w16_cmb]
     call w16l_segfill
 %ifndef PKG_MEGA
-    jc .nopend
-    call w16l_pend                  ; what it kept (124.26.14); CF as fill's
+    jc .nopend                      ; what it kept (124.26.14), read with it
+    call w16l_lent                  ;   held: their records may need room,
+    or byte [es:si + W16CL_FL], W16CLF_HOLD ; and it is filled, not yet on
+    call w16l_pend                  ;   any stack, and what w16_segld jumps
+    pushf                           ;   to; CF as the fill's
+    and byte [es:si + W16CL_FL], ~W16CLF_HOLD
+    popf
 .nopend:
 %endif
     pop word [w16_csz]              ; (the flags kept)
@@ -5362,7 +5234,11 @@ w16l_oldest:
     mov cx, [w16_cnseg]
 .seg:
     mov al, [es:si + W16CL_FL]
+%ifdef PKG_MEGA
     and al, W16CLF_DISC | W16CLF_KEEP | W16CLF_NEW
+%else
+    and al, W16CLF_DISC | W16CLF_KEEP | W16CLF_NEW | W16CLF_HOLD
+%endif
     cmp al, W16CLF_DISC
     jne .next
     cmp word [es:si + W16CL_BASE], 0
