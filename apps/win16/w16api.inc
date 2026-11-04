@@ -1716,30 +1716,54 @@ w16k_isdbcs:
     ret
 
 ; GetModuleFileName (KERNEL.49): "A:\DIR\NAME.EXE", the program's folder
-; from the root (OSAPI_FILE_PATH), truncated to the buffer. A setup takes its
-; own files from that folder: _MSTEST's from a temporary one. The library
-; part's (SPEC.md 124.19): a program asks once or twice, at its start.
-; args: +0 nSize, +2 lpBuffer (off, seg), +6 hModule
+; from the root (OSAPI_FILE_PATH), truncated to the buffer; on a library's
+; handle the folder the library was found in (SPEC.md 124.23.1.1), as its
+; module block keeps it. A setup takes its own files from that folder:
+; _MSTEST's from a temporary one. The instance is put back where it stood.
+; The library part's (SPEC.md 124.19): a program asks once or twice, at its
+; start. args: +0 nSize, +2 lpBuffer (off, seg), +6 hModule
 section .w16dlg
 W16LIB w16k_getmodfn
     push si
     push di
+    call OSAPI_FILE_HERE            ; where the instance stands, put back
+    push dx
+    push bx
+    ICALL w16_args
+    mov ax, [es:bx + 6]             ; hModule: a library's (SPEC.md 124.23.5)
+    ICALL w16_libof                 ; SI -> its record
+    mov dx, [w16_dir]               ; ...or the program's
+    mov al, [w16_vol]
+    mov di, w16_name
+    jc .who
+    lea di, [si + W16L_FILE]
+    W16SEG es, [si + W16L_MREC]     ; its own folder and volume (124.26.11)
+    mov dx, [es:W16LM_DIR]
+    mov al, [es:W16LM_VOL]
+.who:
+    push di                         ; the name
+    push ax                         ; AL = the volume
+    push dx                         ; the folder
     ICALL w16_args
     mov cx, [es:bx]                 ; nSize
     les di, [es:bx + 2]
     mov [w16_scratch + 2], di       ; where the name starts, for the length
+    pop dx
+    pop bx                          ; BL = the volume
     xor ax, ax
-    jcxz .out
+    jcxz .none
     dec cx                          ; room for the NUL
-    mov al, [w16_vol]
+    mov al, bl
     add al, 'A'
     call .put
     mov al, ':'
     call .put
     push cx                         ; the folder (SPEC.md 124.23.5): from
-    mov dx, [w16_dir]               ;   the root, "\" at the root itself
-    mov bl, [w16_vol]
-    call OSAPI_FILE_GOTO_QM
+    push di                         ;   the root, "\" at the root itself
+    call OSAPI_FILE_GOTO_QM         ;   (CX and DI the driver's on a
+    pop di                          ;   redirected volume)
+    pop cx
+    push cx
     inc cx                          ; (its NUL takes the room kept for ours)
     push ds                         ; an X cell: the buffer is the caller's
     push es                         ;   DS's, so the program's segment is ours
@@ -1758,17 +1782,7 @@ W16LIB w16k_getmodfn
     mov al, '\'
     call .put
 .sep:
-    push bx
-    push es
-    ICALL w16_args
-    mov ax, [es:bx + 6]             ; hModule: a library's (SPEC.md 124.23.5)
-    pop es
-    ICALL w16_libof                 ; SI -> its record
-    lea si, [si + W16L_FILE]
-    jnc .lib
-    mov si, w16_name
-.lib:
-    pop bx
+    pop si                          ; the name
 .name:
     lodsb
     or al, al
@@ -1779,7 +1793,15 @@ W16LIB w16k_getmodfn
     mov byte [es:di], 0
     mov ax, di
     sub ax, [w16_scratch + 2]
-.out:
+    jmp short .back
+.none:
+    pop si
+.back:
+    pop bx                          ; the instance where it stood
+    pop dx
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
     pop di
     pop si
     ret
