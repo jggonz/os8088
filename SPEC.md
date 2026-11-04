@@ -233558,15 +233558,22 @@ a load from inside a paint is legal.
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
 
-**A string type or name is kept to 31 characters** *(2026-11-04)*. `w16_rkey`
-copies the string into `w16_rtypb` or `w16_rnamb` for the table's compare, and
-both held 15 characters and a NUL. A longer name was cut and then matched
-nothing, because the compare reads the table's whole name against the cut key:
-Microsoft Arcade's Asteroids asks for dialog `"NUMBEROFPLAYERSDIALOG"` (21
-characters) when F2 starts a game, `DialogBoxParam` answered -1, and the
-program reported its own *Error code = -1. Continue?*. Both buffers are 32
-bytes now (+32 bytes of bss); a name of more than 31 characters is still cut,
-and still finds nothing.
+**A string type or name is compared where the program keeps it** *(2026-11-04)*.
+`w16_rkey` keeps a string's far pointer in `w16_rtyp` or `w16_rnam` (four
+bytes each), and `w16_rmatch` and the name table's `w16_rnmcmp` read the
+program's string in place, case blind (a-z, as the resource compiler folds),
+against the table's length-prefixed name. So a name has no length of WIN16's
+own: the table's count byte is the limit, 255, as it is on Windows. It used to
+be copied, upper-cased, into a 16-byte buffer, which kept 15 characters, and a
+longer name was cut and then matched nothing, because the compare reads the
+table's whole name against the cut key: Microsoft Arcade's Asteroids asks for
+dialog `"NUMBEROFPLAYERSDIALOG"` (21 characters) when F2 starts a game,
+`DialogBoxParam` answered -1, and the program reported its own *Error code =
+-1. Continue?*. The pointer is only read inside the call that was handed it;
+a name inside a resource (a dialog's `SS_ICON` text) is in a template the
+dialog holds (`RN_USAGE`) while it reads it, so the name table's own load
+cannot discard it underneath. `W16FIX` `LONGNAME` is the gate: a dialog, a
+menu and a bitmap named in 21, 40 and 255 characters.
 
 **A string name may be in the name table** *(S10; any type at S11)*. A
 Windows 3.0 linker numbered every resource and wrote the names into an
