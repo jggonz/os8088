@@ -89,13 +89,14 @@ def unpack(cv, h, wb):
     return px
 
 
-def screens(proj, sid, progress=_nop):
-    """Source SID's frames, as the decoder will show them"""
+def screens(proj, sid, progress=_nop, full=False):
+    """Source SID's frames, as the decoder will show them - the canvas's
+    rows, or FULL: the whole 200 (a full-screen opening, 125.3)"""
     s = proj.d["sources"][sid]
     if s["kind"] == "scene":
         return [np.asarray(f, np.uint8) for f in _scene(s["name"])]
     t = proj.d["target"]
-    rows = t["canvas"][3]
+    rows = 200 if full else t["canvas"][3]
     path = proj.here(s["path"])
     key = hashlib.sha1(json.dumps(
         [ENC_KEY, file_hash(path), rows, t["fps"], t["profile"],
@@ -316,11 +317,12 @@ def herc_of_cga(px, rows):
                                yy, 1][..., None]], 2).reshape(rows, w * 2)
 
 
-def rend_screens(proj, sid, kind, progress=_nop):
+def rend_screens(proj, sid, kind, progress=_nop, full=False):
     """Source SID's frames in rendition KIND, as the adapter will show them:
-    palette indexes for cga4 and vga4, bits for herc"""
+    palette indexes for cga4 and vga4, bits for herc. FULL: over the whole
+    screen (a full-screen opening), not the canvas"""
     if kind == "cga4":
-        return screens(proj, sid, progress)
+        return screens(proj, sid, progress, full)
     s = proj.d["sources"][sid]
     if s["kind"] == "scene":
         base = screens(proj, sid, progress)     # (CGA values: the VGA's
@@ -336,7 +338,9 @@ def rend_screens(proj, sid, kind, progress=_nop):
             else:                   # for one onto Hercules' band - scaled
                 out.append(herc_of_cga(f, crow))    # whole, the picture ran
         return out                                  # into the band's rows
-    w, h, _ = rend_size(proj, kind)
+    w, h, fh = rend_size(proj, kind)
+    if full:
+        h = fh
     t = proj.d["target"]
     k = t.get("vga_colours", 8)
     key = hashlib.sha1(json.dumps(
@@ -347,7 +351,7 @@ def rend_screens(proj, sid, kind, progress=_nop):
     if os.path.exists(npy):
         return list(np.load(npy))
     fr = rgb_frames(proj, sid, w, h, kind, progress)
-    n = len(screens(proj, sid, progress))   # the CGA encode's count rules
+    n = len(screens(proj, sid, progress, full))   # (the CGA encode's count)
     fr = fr[:n] if len(fr) >= n else np.concatenate(
         [fr, np.repeat(fr[-1:], n - len(fr), 0)])
     progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
@@ -358,10 +362,10 @@ def rend_screens(proj, sid, kind, progress=_nop):
     return list(q)
 
 
-def frames_of(proj, cid, progress=_nop, kind="cga4"):
-    """Clip CID's frames: its source's, in..out"""
+def frames_of(proj, cid, progress=_nop, kind="cga4", full=False):
+    """Clip CID's frames: its source's, in..out (FULL: the whole screen's)"""
     c = proj.d["clips"][cid]
-    return rend_screens(proj, c["source"], kind, progress)[
+    return rend_screens(proj, c["source"], kind, progress, full)[
         c["in"]:c["out"] + 1]
 
 

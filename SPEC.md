@@ -237402,7 +237402,14 @@ the decoder will really hold:**
   over the whole screen. A canvas frame is the canvas with the band's rows
   black under it, so the first opening's last frame and the next one's
   first are joined by a seam like any other. The last opening, the SCENE
-  opening, JOINS the loop. **A battle given no opening gets one**, START:
+  opening, JOINS the loop. **Each opening is FULL SCREEN or WITH THE
+  MENU** (the project's `"full"`, the Openings tab's Screen choice): a
+  full one is encoded over the whole screen - 200 rows, Hercules' 348 -
+  and carries `CF_FULL`; one with the menu is the canvas over black. The
+  full ones come first and the last is with the menu (it joins the idle
+  loop): the check refuses any other order, since the band, once it is
+  up, stays. The title's way out (opening 0, ENTER) is flagged full: the
+  band is not up before the openings. **A battle given no opening gets one**, START:
   idle frame 0 alone, from black, joined onto the loop. Without it the
   engine began the loop over a black screen, and the loop's records, each
   a difference from the frame before, drew only what changed.
@@ -237533,8 +237540,10 @@ OWN sound is written in its place, and the music stands still under it.
 alike. Opening *i* is read into ring *i* mod 2, so the next one's head is
 read while the last one plays. The picture starts the next when it shows
 the last record. The sound, which runs ahead, starts the next one's at the
-sample the last one's ends. The band is drawn once the scene opening's
-first frame is up. When the scene opening's sound ends, the MUSIC comes in
+sample the last one's ends. The band is let in (`[vb_bandok]`) at the
+first frame of the first opening WITHOUT `CF_FULL` - or, where every
+opening has it (a bundle made before the choice, when all did), of the
+scene opening, as it always was. When the scene opening's sound ends, the MUSIC comes in
 at the bundle's join (`VH_MUSAT`): its ring was filled from there before
 the play began.
 
@@ -238102,8 +238111,8 @@ window's table to `vb_fmasks`).
   refused with the sizes before anything is written.
 
 **Not yet built:**
-- an opening that is not full screen (the band up under the first one):
-  every opening addresses the whole screen (CF_FULL);
+- a FULL-SCREEN title loop or end loop: theirs are the canvas's frames
+  over black, as openings were before the Screen choice;
 - **a stance's own idle loop**: every stance shares the battle's;
 - a time gauge (ATB), several enemies, status ailments past guard and
   charge.

@@ -93,9 +93,12 @@ vb_leave_go:
     mov word [vb_lk], 0xFFFF
     mov byte [vb_lwant], 0
     call vb_onextset                ; (opening 0 plays: the next is 1)
-    mov al, [vb_cc]                 ; the only opening: the band may come
+    test word [vb_cflags], CF_FULL  ; an opening with the menu, or the
+    jz .bok                         ; only one: the band may come
+    mov al, [vb_cc]
     cmp al, [vb_olast]
     jne .x
+.bok:
     mov byte [vb_bandok], 1
 .x:
     clc

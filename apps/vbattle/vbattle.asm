@@ -2024,11 +2024,14 @@ vb_frame:
     inc word [vb_cfr]
     test word [vb_cflags], CF_OPENING
     jz .cnt
-    cmp word [vb_cfr], 1            ; the LAST opening's first frame is up:
-    jne .cnt                        ; the band may be drawn under it now
-    mov al, [vb_cc]
-    cmp al, [vb_olast]
-    jne .cnt
+    cmp word [vb_cfr], 1            ; an opening WITH THE MENU (not CF_FULL)
+    jne .cnt                        ; has its first frame up, or the LAST
+    test word [vb_cflags], CF_FULL  ; opening has: the band may be drawn
+    jz .bok                         ; under it now (125.3: a full-screen
+    mov al, [vb_cc]                 ; opening owns the band's rows, and
+    cmp al, [vb_olast]              ; every opening was one before format
+    jne .cnt                        ; 7's per-opening choice)
+.bok:
     mov byte [vb_bandok], 1
 .cnt:
     dec word [vb_cleft]

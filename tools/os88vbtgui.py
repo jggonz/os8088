@@ -2118,8 +2118,9 @@ def opening_lines(proj):
     for i, o in enumerate(d["openings"]):
         c = d["clips"].get(o["clip"], {})
         n = c.get("out", 0) - c.get("in", 0) + 1
-        out.append("%d. %-14s %5.1f s  %s%s" % (
+        out.append("%d. %-14s %5.1f s  %-11s %s%s" % (
             i + 1, o["clip"], n / float(d["target"]["fps"]),
+            "FULL SCREEN" if o.get("full") else "with menu",
             o.get("sound") or "(silent)",
             "  - the scene: joins idle frame %d" % c.get("exit", 0)
             if i == len(d["openings"]) - 1 else ""))
@@ -2184,8 +2185,21 @@ class OpeningsTab(object):
                    ).grid(row=2, column=2, sticky="w", padx=4)
         ttk.Button(of, text="Recommend", command=self._rec_exit
                    ).grid(row=2, column=3, sticky="w")
+        # FULL SCREEN, or the canvas with the menu below (125.3): the full
+        # ones first, the last always with the menu
+        ttk.Label(of, text="Screen").grid(row=3, column=0, sticky="w")
+        self.fullv = tk.IntVar()
+        sb = ttk.Frame(of)
+        sb.grid(row=3, column=1, columnspan=3, sticky="w")
+        self.full_rb = ttk.Radiobutton(sb, text="Full screen",
+                                       variable=self.fullv, value=1,
+                                       command=self._set_full)
+        self.full_rb.pack(side="left")
+        ttk.Radiobutton(sb, text="With the menu (video at the top)",
+                        variable=self.fullv, value=0,
+                        command=self._set_full).pack(side="left", padx=6)
         self.exit_l = ttk.Label(of, text="", wraplength=380)
-        self.exit_l.grid(row=3, column=0, columnspan=4, sticky="w")
+        self.exit_l.grid(row=4, column=0, columnspan=4, sticky="w")
         # the music coming in
         mf = ttk.LabelFrame(left, text="The music comes in", padding=6)
         mf.pack(anchor="w", fill="x", pady=4)
@@ -2251,11 +2265,16 @@ class OpeningsTab(object):
             last = i == len(d["openings"]) - 1
             c = d["clips"].get(o["clip"])
             self.exitv.set(c["exit"] if c else 0)
+            self.fullv.set(1 if o.get("full") else 0)
+            self.full_rb.config(state="disabled" if last else "normal")
             st = "normal" if last else "disabled"
             self.exitsp.config(state=st)
             if not last:
                 self.exit_l.config(text="Only the last opening joins the "
                                    "idle loop: this one runs into the next.")
+            else:
+                self.exit_l.config(text="The last opening joins the idle "
+                                   "loop, so it plays with the menu.")
         self._join_text()
         self.frames = None if self.frames and self.frames[2] != self._key() \
             else self.frames
@@ -2280,6 +2299,20 @@ class OpeningsTab(object):
                                n / float(fps), secs(j or 0, rate), m["sound"],
                                " - not Used yet" if self.pending_join is not None
                                and self.pending_join != m.get("join") else ""))
+
+    def _set_full(self):
+        """Full screen, or with the menu. The full ones must come first and
+        the last is with the menu: an order that breaks that is said in the
+        status bar at once (and the Build tab's checks refuse it)"""
+        i = self.i()
+        if i is None:
+            return
+        self.app.edit("set_opening", i, full=bool(self.fullv.get()))
+        bad = [p for p in self.app.proj.check()
+               if p.where.startswith("openings.") and "full screen" in p.text]
+        if bad:
+            self.app.say("Note: opening %d: %s" % (
+                int(bad[0].where.split(".")[1]) + 1, bad[0].text))
 
     def _pick(self):
         self.refresh()

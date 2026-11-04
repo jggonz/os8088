@@ -16839,6 +16839,16 @@ SOAK = [
         "outside the BIOS. Broken on purpose (a yield re-borrowing a byte "
         "on) victory never comes",
         needs=("86box",)),
+    Row("vbtopenfull", "soak", py("tests/vbtopenfull.py"), 30.0,
+        "SPEC.md 125.3: a FULL-SCREEN opening and then one WITH THE MENU, "
+        "the owner's ask. On the host the full one is encoded over all 200 "
+        "rows with CF_FULL and the menu one is the canvas over black, and "
+        "the check refuses a full one last or after a menu one; on MartyPC's "
+        "CGA XT the full one's picture fills the band's rows with the band "
+        "held back, the band let in at the menu opening's first frame and "
+        "up under it before the idle loop. Broken on purpose (the band let "
+        "in at any opening) the glass check fails",
+        needs=("marty", "ffmpeg")),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

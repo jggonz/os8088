@@ -374,7 +374,11 @@ def build(b):
         prev = surface_of(scr, REND.full)
         recs = []
         anch = []
-        flags = CF_OPENING | CF_FULL | CF_OWNSND
+        # FULL SCREEN, or with the menu (125.3): only a full one's flag
+        # says so, and the engine brings the band in at the first opening
+        # without it - or, for a bundle where every opening has it (format
+        # 7 before the choice), at the last
+        flags = CF_OPENING | CF_OWNSND | (CF_FULL if o.get("full") else 0)
         if o.get("enter"):          # ENTERED at the title's frames, as an
             flags |= CF_ENTER       # action is at the idle loop's: an entry
             cur = surface_of(fr[0], REND.full)      # from each anchor, and
@@ -857,9 +861,11 @@ def battle_of(proj, progress=None, kind="cga4"):
     for i, o in enumerate(d["openings"]):
         c = d["clips"][o["clip"]]
         pg("clips", i, len(d["clips"]), o["clip"])
-        b.openings.append(dict(name=o["clip"], frames=A.frames_of(proj, o["clip"], pg, kind),
-                               sound=b.sfx[o["sound"]] if o.get("sound") else None,
-                               exit=c["exit"]))
+        full = bool(o.get("full"))
+        b.openings.append(dict(name=o["clip"], frames=A.frames_of(
+            proj, o["clip"], pg, kind, full=full),
+            sound=b.sfx[o["sound"]] if o.get("sound") else None,
+            exit=c["exit"], full=full))
     # a clip only a loop or the title's way out plays is not an action's
     tt = d.get("title") or {}
     loops_only = {tt.get("clip"), tt.get("leave")} | {
@@ -908,7 +914,9 @@ def battle_of(proj, progress=None, kind="cga4"):
             b.openings.insert(0, dict(      # (its sound: its cues, mixed,
                 name=t["leave"], frames=A.frames_of(proj, t["leave"], pg, kind),
                 sound=A.clip_sound(proj, t["leave"]),   # played as its own)
-                exit=lc["exit"], enter=True, anchors=list(t["anchors"])))
+                exit=lc["exit"], enter=True, anchors=list(t["anchors"]),
+                full=True))     # (the band not yet: the title's way out is
+                                # before every opening, full-screen or not)
     made = {}
     for k in ("victory", "defeat"):
         en = d["endings"][k]

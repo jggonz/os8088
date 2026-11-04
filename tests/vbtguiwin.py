@@ -137,6 +137,24 @@ def inner(tmp):
        == ["clip0", "clip1"] and "clip2" in app.proj.d["clips"],
        "A. ...a second dropped there is opening 2, a third added is a clip "
        "(openings %s)" % [o["clip"] for o in app.proj.d.get("openings", [])])
+    # FULL SCREEN, or with the menu (125.3): opening 1 set full through its
+    # radio button; the last's "Full screen" greyed (it joins the idle loop)
+    ot = app.openings_tab
+    app.nb.select(ot.f)
+    ot.lb.selection_clear(0, "end")
+    ot.lb.selection_set(0)
+    ot._pick()
+    ot.fullv.set(1)
+    ot._set_full()
+    line0 = ot.lb.get(0)
+    ot.lb.selection_clear(0, "end")
+    ot.lb.selection_set(1)
+    ot._pick()
+    ok(app.proj.d["openings"][0].get("full") is True
+       and "FULL SCREEN" in line0 and "full" not in app.proj.d["openings"][1]
+       and str(ot.full_rb.cget("state")) == "disabled",
+       "A. opening 1 set FULL SCREEN by its button (%r); the last's button "
+       "greyed" % line0.strip())
     st = app.status.cget("text")
     ok(not errs and not st.startswith(("Error", "Could not", "Failed")),
        "A. nothing raised in a Tk callback (%d), the status %r"
