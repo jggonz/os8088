@@ -409,6 +409,47 @@ on MartyPC's XT, 43 turns, the same; broken on purpose (the engine's
 damage shift 3 for 4) it fails at turn 1. The builder's three new tabs were
 driven under Xvfb on the H3 project; not seen on Windows or macOS.
 
+## The owner's first look at the window (2026-11-04)
+
+The owner used the builder and came back with a list before wave 5. Most of
+it was one complaint in different places: the window answered what was SET
+when it was asked what was CLICKED, and it did things quietly.
+
+- **The idle preview jumped.** Two faults, both the window's, neither the
+  loop's. "Play across the seam" played the loop's last eight frames into
+  its first eight and then went round - so every sixteen frames it jumped
+  from the eighth frame back to the end, a jump the battle never plays.
+  And Recommend highlighted its best loop without putting it in the boxes
+  (Tk's `selection_set` fires no event), so Play went on playing the old
+  loop, or after a fresh load the whole video, which is no loop at all.
+  Now "Play the loop" plays start to end-1 round and round, as the engine
+  does; "Across the seam" holds black before it goes round; and the
+  highlighted candidate is the one previewed, marked "not Set yet".
+- **The previews show the choice.** The Idle tab's picture, seam and cost
+  follow the boxes and the clicked candidate; the Clips tab's picture is
+  whatever was clicked last - a frame of the clip (the scrubber), of its
+  source (the In or Out field, without setting it), or of the idle loop
+  (the filmstrip).
+- **Adding.** Drag and drop anywhere: a project opens; a video becomes a
+  clip (on the Idle tab, the idle's source, loaded and recommended at
+  once); a sound joins the sounds (on the music, it is the music; on a
+  clip, a cue at its frame); a picture joins the band pictures. The Clips
+  tab has its own "Add videos...", several at once, read one after another.
+  A video already a source is that source, not a second copy.
+- **A bar.** Reading a video showed nothing for a minute or two; the
+  encoder's own `--progress` now drives a percentage and the bar.
+- **Own soundtrack, frames x to y**, and any cue can STOP at a frame. One
+  helper (`os88vbt.cue_key`) cuts and levels a cue for both the build and
+  Listen, so they stay equal - the test holds them so with a stopped cue.
+- **The endings** moved from the Enemy tab to the Battle tab: how a battle
+  ends is the battle's, whoever the enemy is. The bundle is unchanged.
+
+Found by driving it under Xvfb, not by the owner: the clip list, made a
+Treeview so its notes had room, re-selected its clip on every rebuild, and
+the selection event rebuilt it again - a loop that froze the window the
+first time a clip was chosen. `_pick` now ignores a re-selection of the
+clip it already holds.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

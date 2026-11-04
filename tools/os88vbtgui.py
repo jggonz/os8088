@@ -115,11 +115,11 @@ class Job(object):
 
 def progress_text(ev):
     st, done, of, what = (ev.get(k) for k in ("stage", "done", "of", "what"))
-    words = {"encode": "Encoding", "decode": "Decoding", "cost": "Costing",
+    words = {"encode": "Reading the video", "decode": "Decoding", "cost": "Costing",
              "analyse": "Listening to", "clips": "Clips:", "check": "Checking"}
     w = words.get(st, str(st).capitalize())
     if of:
-        return "%s %s - %d of %d" % (w, what or "", done, of)
+        return "%s %s - %d%%" % (w, what or "", 100 * done // max(1, of))
     return "%s %s" % (w, what or "")
 
 
@@ -166,9 +166,44 @@ def palette_byte(st, bright, bg):
 
 
 def profiles():
-    """(name, what) for every encoder profile a battle can target"""
+    """(name, what) for every encoder profile a battle can target: what the
+    machine IS (the encoder window's own words for its "made for" choice),
+    not whose it is"""
     import os88venc
-    return [(k, v.get("what", "")) for k, v in os88venc.PROFILES.items()]
+    help_ = os88venc.CHOICE_HELP.get("profile", {})
+    return [(k, help_.get(k, "")) for k in os88venc.PROFILES]
+
+
+VIDEO_EXT = (".mp4", ".mkv", ".mov", ".avi", ".webm", ".m4v", ".mpg",
+             ".mpeg", ".wmv", ".flv", ".gif", ".ts")
+SOUND_EXT = (".wav", ".mp3", ".ogg", ".flac", ".m4a", ".aac", ".opus",
+             ".wma", ".aif", ".aiff", ".mod")
+
+
+def drop_kind(path):
+    """What a dropped file is: "project", "video", "sound", "picture" or
+    None"""
+    e = os.path.splitext(path)[1].lower()
+    if e == ".vbp":
+        return "project"
+    if e in VIDEO_EXT:
+        return "video"
+    if e in SOUND_EXT:
+        return "sound"
+    if e in (".png", ".bmp", ".jpg", ".jpeg", ".gif"):
+        return "picture"
+    return None
+
+
+def unique_id(base, taken, n=16):
+    """BASE cut to N, made unique against TAKEN with a number"""
+    b = "".join(ch if ch.isalnum() or ch in "_-" else "_" for ch in base)[:n] or "x"
+    if b not in taken:
+        return b
+    k = 2
+    while ("%s%d" % (b[:n - len(str(k))], k)) in taken:
+        k += 1
+    return "%s%d" % (b[:n - len(str(k))], k)
 
 
 def sizes_for(rows):
@@ -194,6 +229,16 @@ def seam_order(loop, around=8):
     a, b = loop
     k = min(around, (b - a) // 2)
     return list(range(b - k, b)) + list(range(a, a + k))
+
+
+def play_order(loop, whole=True, around=8, gap=8):
+    """What a preview plays, round and round: the WHOLE loop, start to
+    end-1, as the engine plays it - or only across its SEAM, with GAP
+    black frames (None) before it goes round again, so the preview's own
+    restart is never mistaken for the seam"""
+    if whole:
+        return list(range(loop[0], loop[1]))
+    return seam_order(loop, around) + [None] * gap
 
 
 def frame_image(px, pal, scale=SCALE):
@@ -445,8 +490,10 @@ class App(object):
         import tkinter as tk
         from tkinter import ttk
         self.tk, self.ttk = tk, ttk
-        self.root = tk.Tk()
+        from os88drop import make_root, enable_drop
+        self.root = make_root()         # drag and drop, where installed
         self.root.geometry("1300x760")
+        self.pending = []               # videos waiting to become clips
         self.proj = P.Project()
         self.saved = self._state()
         self.job = None
@@ -460,6 +507,94 @@ class App(object):
         self.refresh()
         self.root.protocol("WM_DELETE_WINDOW", self.quit)
         self.root.after(50, self._poll)
+        self.drop_how = enable_drop(self.root, self._dropped)
+
+    # --- drag and drop ----------------------------------------------------------
+    def _dropped(self, paths):
+        """ON TK'S THREAD: the files, and the widget under the pointer when
+        they landed - queued, and taken in the pump"""
+        x, y = self.root.winfo_pointerxy()
+        self.q.put(("drop", (paths, self.root.winfo_containing(x, y))))
+
+    def drop(self, paths, where=None):
+        """Files dropped on the window: a project anywhere is opened; a
+        video always becomes a clip - or, dropped on the Idle tab, the idle
+        loop's source; a sound always joins the sounds, and dropped on the
+        music it is the music, on a clip's effects a cue at its frame; a
+        picture joins the band pictures"""
+        tab = self.nb.index(self.nb.select())
+        inside = lambda w, frame: w is not None and str(w).startswith(str(frame))
+        for p in paths:
+            k = drop_kind(p)
+            if k == "project":
+                if self._ask_save():
+                    self.open_path(p)
+                return
+            if k == "video":
+                if inside(where, self.idle_tab.f) or (where is None and tab == 1):
+                    self.idle_tab.take(p)
+                else:
+                    self.add_clip_file(p)
+                    self.nb.select(2)
+            elif k == "sound":
+                sid = self.add_sound_file(p)
+                if inside(where, self.battle_tab.mf):
+                    self.edit("set_music", sid, 0)
+                elif inside(where, self.clips_tab.f) and self.clips_tab.cid():
+                    self.edit("add_cue", self.clips_tab.cid(),
+                              int(self.clips_tab.scrub.get()), sid)
+            elif k == "picture":
+                d = self.proj.d
+                name = unique_id(os.path.splitext(os.path.basename(p))[0],
+                                 [im["name"] for im in d.get("images", [])], 12)
+                self.edit("set", ("images",), list(d.get("images", [])) + [
+                    {"name": name, "path": p, "col": 0, "row": 0, "dither": True}])
+            else:
+                self.say("Not a video, a sound, a picture or a project: %s"
+                         % os.path.basename(p))
+
+    def add_video(self, path):
+        """VIDEO at PATH as a source (its name from the file's); its id. A
+        video already a source is that source (its frames read once)"""
+        for sid, src in self.proj.d["sources"].items():
+            if src.get("path") and os.path.abspath(self.proj.here(
+                    src["path"])) == os.path.abspath(path):
+                return sid
+        sid = unique_id(os.path.splitext(os.path.basename(path))[0],
+                        self.proj.d["sources"])
+        self.edit("add_source", sid, path=path)
+        return sid
+
+    def add_sound_file(self, path):
+        for sid, snd in self.proj.d["sounds"].items():
+            if snd.get("path") == path:
+                return sid
+        sid = unique_id(os.path.splitext(os.path.basename(path))[0],
+                        self.proj.d["sounds"])
+        self.edit("add_sound", sid, path=path)
+        return sid
+
+    def add_clip_file(self, path):
+        """VIDEO at PATH as a new CLIP, all of it to start: queued, since
+        each is read by a job of its own, one after another"""
+        self.pending.append(path)
+        if len(self.pending) == 1:
+            self._next_clip()
+
+    def _next_clip(self):
+        if not self.pending or self.job:    # (a job's end starts it)
+            return
+        path = self.pending[0]
+        sid = self.add_video(path)
+        cid = unique_id(sid, self.proj.d["clips"])
+
+        def got(fr):
+            self.edit("add_clip", cid, sid, (0, len(fr) - 1), anchors=())
+            self.pending.pop(0)
+            self.clips_tab.select(cid)
+            if self.pending:
+                self._next_clip()
+        self.screens(sid, got)
 
     # --- the shell -----------------------------------------------------------
     def _state(self):
@@ -638,7 +773,8 @@ class App(object):
             return
         self.job = Job(tool, argv).start()
         self.cancel_b.config(state="normal")
-        self.pbar.config(value=0, maximum=1)
+        self.pbar.config(mode="indeterminate", value=0, maximum=1)
+        self.pbar.start(40)            # (moving at once: a job has begun)
         self.say(what or "Working...")
         job, q = self.job, self.q
 
@@ -658,22 +794,35 @@ class App(object):
         try:
             while True:
                 kind, ev = self.q.get_nowait()
+                if kind == "drop":
+                    self.drop(*ev)
+                    continue
                 if kind == "prog":
                     self.say(progress_text(ev))
                     if ev.get("of"):
+                        if str(self.pbar.cget("mode")) != "determinate":
+                            self.pbar.stop()
+                            self.pbar.config(mode="determinate")
                         self.pbar.config(maximum=ev["of"], value=ev["done"])
+                    elif str(self.pbar.cget("mode")) != "indeterminate":
+                        self.pbar.config(mode="indeterminate")
+                        self.pbar.start(40)
                 elif kind == "exit":
                     job, rc, log = ev
                     self.job = None
                     self.cancel_b.config(state="disabled")
-                    self.pbar.config(value=0)
-                    if job.killed:
-                        self.say("Cancelled")
-                    elif rc != 0:
-                        self.say("Failed: %s" % (log[-1] if log else rc))
+                    self.pbar.stop()
+                    self.pbar.config(mode="determinate", value=0)
+                    if job.killed or rc != 0:
+                        self.say("Cancelled" if job.killed else
+                                 "Failed: %s" % (log[-1] if log else rc))
+                        if self.pending:        # the videos still to come
+                            self.pending = []   # are not taken either
                     elif job.result is not None:
                         self.say("Done")
                         self._done(job.result)
+                    if self.pending and not self.job:   # a clip waiting on
+                        self._next_clip()               # another job
         except queue.Empty:
             pass
         self.root.after(50, self._poll)
@@ -697,7 +846,8 @@ class App(object):
             self.frames[sid] = A.screens(self.proj, sid)
             then(self.frames[sid])
         self.run("vbtana", ["screens", self.proj.path, sid], got,
-                 "Encoding %s..." % sid)
+                 "Reading %s (the first look encodes it; after that it is "
+                 "kept)..." % sid)
 
     def _cached(self, sid):
         import hashlib
@@ -795,8 +945,25 @@ class BattleTab(object):
                            "engine's)").grid(row=1, column=0, columnspan=3,
                                              sticky="w")
         r += 1
+        # how it ends: the battle's own last clips, whoever the enemy is
+        ef = ttk.LabelFrame(f, text="How it ends (each clip is played to its "
+                            "end and held)", padding=6)
+        ef.grid(row=r, column=0, columnspan=5, sticky="we", pady=6)
+        self.endv = {}
+        for i, (k, label) in enumerate((("victory", "Victory clip"),
+                                        ("defeat", "Defeat clip"))):
+            ttk.Label(ef, text=label).grid(row=0, column=2 * i, sticky="w",
+                                           padx=(0 if i == 0 else 16, 4))
+            v = self.endv[k] = tk.StringVar()
+            cb = ttk.Combobox(ef, textvariable=v, state="readonly", width=18)
+            cb.grid(row=0, column=2 * i + 1, sticky="w")
+            cb.bind("<<ComboboxSelected>>", lambda ev, k=k: self._end(k))
+            self.endv[k + "_cb"] = cb
+        ttk.Label(ef, text="An escape ends it on the escape action's own "
+                  "clip.").grid(row=1, column=0, columnspan=4, sticky="w")
+        r += 1
         # the music
-        mf = ttk.LabelFrame(f, text="Music (it always loops)", padding=6)
+        self.mf = mf = ttk.LabelFrame(f, text="Music (it always loops)", padding=6)
         mf.grid(row=r, column=0, columnspan=5, sticky="nswe", pady=6)
         f.rowconfigure(r, weight=1)
         f.columnconfigure(4, weight=1)
@@ -856,6 +1023,9 @@ class BattleTab(object):
         c.create_rectangle(0, rows * k, 159, 100, fill="#664", outline="")
         c.create_text(80, rows * k / 2, text="video", fill="white")
         c.create_text(80, (rows * k + 100) / 2, text="band", fill="white")
+        for k in ("victory", "defeat"):
+            self.endv[k + "_cb"].config(values=list(d["clips"]))
+            self.endv[k].set(d["enemy"].get(k) or "")
         snd = [s for s in d["sounds"]]
         self.mcb.config(values=snd)
         m = d.get("music") or {}
@@ -865,6 +1035,11 @@ class BattleTab(object):
         self.lstart.set("%.3f" % secs(lp[0], rate) if lp else "")
         self.lend.set("%.3f" % secs(lp[1], rate) if lp else "")
         self.join.set("%.3f" % secs(m.get("join", 0), rate) if m else "")
+
+    def _end(self, k):
+        v = self.endv[k].get() or None
+        if self.app.proj.d["enemy"].get(k) != v:
+            self.app.edit("set", ("enemy", k), v)
 
     def _swatches(self, b):
         import vbtana as A
@@ -1001,20 +1176,30 @@ class IdleTab(object):
         side.pack(side="left", fill="y", padx=8)
         ttk.Label(side, text="Loop: frames").grid(row=0, column=0, sticky="w")
         self.la, self.lb_ = tk.IntVar(), tk.IntVar()
-        ttk.Spinbox(side, from_=0, to=9999, textvariable=self.la, width=6
-                    ).grid(row=0, column=1)
+        self.mloop = None           # the model's loop the boxes last showed
+        for col, var in ((1, self.la), (3, self.lb_)):
+            sp = ttk.Spinbox(side, from_=0, to=9999, textvariable=var, width=6,
+                             command=self._pending)
+            sp.grid(row=0, column=col)
+            sp.bind("<Return>", lambda e: self._pending())
+            sp.bind("<FocusOut>", lambda e: self._pending())
         ttk.Label(side, text="to (not incl.)").grid(row=0, column=2)
-        ttk.Spinbox(side, from_=0, to=9999, textvariable=self.lb_, width=6
-                    ).grid(row=0, column=3)
         ttk.Button(side, text="Set", command=self._set).grid(row=0, column=4)
         ttk.Button(side, text="Recommend", command=self._recommend
                    ).grid(row=1, column=0, pady=6, sticky="w")
         ttk.Button(side, text="Use", command=self._use).grid(row=1, column=1)
-        self.cl = tk.Listbox(side, height=6, width=46)
+        self.cl = tk.Listbox(side, height=6, width=46, exportselection=False)
         self.cl.grid(row=2, column=0, columnspan=5, sticky="we")
-        self.play_b = ttk.Button(side, text="Play across the seam",
-                                 command=self._play)
-        self.play_b.grid(row=3, column=0, columnspan=2, pady=6, sticky="w")
+        self.cl.bind("<<ListboxSelect>>", lambda e: self._cand())
+        pb = ttk.Frame(side)
+        pb.grid(row=3, column=0, columnspan=2, pady=6, sticky="w")
+        self.play_b = ttk.Button(pb, text="Play the loop",
+                                 command=lambda: self._play(True))
+        self.play_b.pack(side="left")
+        self.seam_b = ttk.Button(pb, text="Across the seam",
+                                 command=lambda: self._play(False))
+        self.seam_b.pack(side="left")
+        self.whole = True
         self.diff = tk.IntVar()
         ttk.Checkbutton(side, text="Difference at the seam", variable=self.diff,
                         command=self._show_seam).grid(row=3, column=2,
@@ -1037,8 +1222,10 @@ class IdleTab(object):
         i = d.get("idle")
         if i:
             self.src.set(i["source"])
-            self.la.set(i["loop"][0])
-            self.lb_.set(i["loop"][1])
+            if self.mloop != tuple(i["loop"]):  # (a choice not yet Set stays)
+                self.mloop = tuple(i["loop"])
+                self.la.set(i["loop"][0])
+                self.lb_.set(i["loop"][1])
             fr = self.app.frames.get(i["source"])
             self.info.config(text="The loop: %d frames, %.2f s%s" % (
                 i["loop"][1] - i["loop"][0],
@@ -1052,30 +1239,37 @@ class IdleTab(object):
 
     def _add(self):
         from tkinter import filedialog
-        p = filedialog.askopenfilename(title="A video")
-        if not p:
-            return
-        sid = os.path.splitext(os.path.basename(p))[0][:16]
-        self.app.edit("add_source", sid, path=p)
-        self.src.set(sid)
-        self._pick()
+        p = filedialog.askopenfilename(title="The idle loop's video")
+        if p:
+            self.take(p)
 
-    def _pick(self):
+    def take(self, path):
+        """VIDEO at PATH as the idle loop's source: added, read, and its
+        loop recommended - all in one, since that is what it was added for
+        (a drop onto this tab comes here too)"""
+        sid = self.app.add_video(path)
+        self.src.set(sid)
+        self._pick(recommend=True)
+
+    def _pick(self, recommend=False):
         sid = self.src.get()
         i = self.app.proj.d.get("idle")
-        if not i or i["source"] != sid:
-            self.app.edit("set_idle", sid, (0, 2))
-        self._load()
+        new = not i or i["source"] != sid
+        self._load(new, recommend or new)
 
-    def _load(self):
+    def _load(self, new=False, recommend=False):
         sid = self.src.get()
         if not sid:
             return
 
         def got(fr):
             self.scrub.config(to=len(fr) - 1)
-            self._show(self.app.proj.d["idle"]["loop"][0])
+            if new:                 # a new source: its whole length, until
+                self.app.edit("set_idle", sid, (0, len(fr)))   # the loop is
+            self._show(self.app.proj.d["idle"]["loop"][0])     # chosen
             self.refresh()
+            if recommend:
+                self._recommend()
         self.app.screens(sid, got)
 
     def _show(self, n):
@@ -1087,7 +1281,39 @@ class IdleTab(object):
                         height=self._img.height())
 
     def _set(self):
-        self.app.edit("set_idle", self.src.get(), (self.la.get(), self.lb_.get()))
+        self.app.edit("set_idle", self.src.get(), self.preview_loop())
+
+    def preview_loop(self):
+        """The loop the previews show: the one being CHOSEN - a candidate
+        clicked, or the boxes typed in - not yet the one Set"""
+        try:
+            a, b = int(self.la.get()), int(self.lb_.get())
+        except (ValueError, self.app.tk.TclError):
+            return tuple(self.app.proj.d["idle"]["loop"])
+        return (a, b) if b - a >= 2 else tuple(self.app.proj.d["idle"]["loop"])
+
+    def _cand(self):
+        sel = self.cl.curselection()
+        if sel and self.cands:
+            c = self.cands[sel[0]]
+            self.la.set(c["start"])
+            self.lb_.set(c["end"])
+            self._pending()
+
+    def _pending(self):
+        """The choice changed: the previews follow it"""
+        if self.app.anim:
+            self._play(self.whole)  # (stopped...)
+            self._play(self.whole)  # (...and played again, the new loop)
+        elif self.diff.get():
+            self._show_seam()
+        else:
+            self._show(self.preview_loop()[0])
+        a, b = self.preview_loop()
+        self.info.config(text="Showing frames %d to %d (%d frames, %.2f s)%s" % (
+            a, b - 1, b - a, (b - a) / self.app.proj.d["target"]["fps"],
+            "" if (a, b) == tuple(self.app.proj.d["idle"]["loop"])
+            else " - not Set yet"))
 
     def _recommend(self):
         sid = self.src.get()
@@ -1102,8 +1328,9 @@ class IdleTab(object):
                                "differs %.2f%%" % (c["start"], c["end"] - 1,
                                                    c["end"] - c["start"],
                                                    c["score"] * 100))
-            if self.cands:
-                self.cl.selection_set(0)
+            if self.cands:              # the best one highlighted IS the
+                self.cl.selection_set(0)    # one previewed (not Set yet):
+                self._cand()                # selection_set fires no event
         self.app.run("vbtana", ["loops", self.app.proj.path, sid], got,
                      "Looking for the loop...")
 
@@ -1114,18 +1341,24 @@ class IdleTab(object):
             self.app.edit("set_idle", self.src.get(), (c["start"], c["end"]))
             self._show(c["start"])
 
-    def _play(self):
+    def _play(self, whole=True):
+        """Play the loop being chosen, the whole of it or across its seam;
+        pressed again (either), Stop"""
         fr = self._frames()
         if fr is None:
             return self.app.say("Load the frames first")
         if self.app.anim:
             self.app.root.after_cancel(self.app.anim)
             self.app.anim = None
-            self.play_b.config(text="Play across the seam")
+            self.play_b.config(text="Play the loop")
+            self.seam_b.config(text="Across the seam")
             return
-        order = seam_order(self.app.proj.d["idle"]["loop"])
-        imgs = [self.app.photo(fr[n]) for n in order]
-        self.play_b.config(text="Stop")
+        import numpy as np
+        self.whole = whole
+        black = self.app.photo(np.zeros_like(fr[0]), pal=0)
+        imgs = [black if n is None else self.app.photo(fr[n])
+                for n in play_order(self.preview_loop(), whole)]
+        (self.play_b if whole else self.seam_b).config(text="Stop")
         step = [0]
 
         def tick():
@@ -1142,7 +1375,7 @@ class IdleTab(object):
         fr = self._frames()
         if fr is None:
             return
-        a, b = self.app.proj.d["idle"]["loop"]
+        a, b = self.preview_loop()
         if not self.diff.get():
             return self._show(a)
         rgb = A.diff_rgb(fr[b - 1], fr[a], self.app.proj.d["target"]["palette"])
@@ -1150,7 +1383,7 @@ class IdleTab(object):
         im = im.resize((im.width * SCALE, im.height * SCALE), Image.NEAREST)
         self._img = ImageTk.PhotoImage(im)
         self.pic.config(image=self._img)
-        self.app.say("The seam: frame %d onto frame %d, %.2f%% of pixels in red"
+        self.app.say("The seam: frame %d onto frame %d, %.2f%% of pixels marked"
                      % (b - 1, a, A.diff(fr[b - 1], fr[a]) * 100))
 
     def _cost(self):
@@ -1159,8 +1392,9 @@ class IdleTab(object):
                              "seam's record %d bytes; the largest %d bytes"
                              % (res["frames"], res["total"] / 1024.0,
                                 res["seam"], res["largest"]))
-        self.app.run("vbtana", ["cost", self.app.proj.path], got,
-                     "Costing the loop...")
+        a, b = self.preview_loop()
+        self.app.run("vbtana", ["cost", self.app.proj.path, "--loop", str(a),
+                                str(b)], got, "Costing the loop...")
 
 
 # --- the Clips tab (4.3, 10.2) --------------------------------------------------------
@@ -1180,14 +1414,24 @@ class ClipsTab(object):
         self.sel = 0                # the idle frame selected on the strip
         self.thumbs = {}
         self.drag = None
+        self.view = ("clip", 0)     # what the picture shows: what was clicked
         left = ttk.Frame(f)
         left.grid(row=0, column=0, sticky="ns")
-        self.lb = tk.Listbox(left, height=14, width=26, exportselection=False)
+        self.lb = ttk.Treeview(left, columns=("joins", "exit"), height=12,
+                               selectmode="browse")
+        self.lb.heading("#0", text="Clip")
+        self.lb.heading("joins", text="Joins at")
+        self.lb.heading("exit", text="Exits to")
+        self.lb.column("#0", width=130)
+        self.lb.column("joins", width=150)
+        self.lb.column("exit", width=60)
         self.lb.pack(fill="y")
-        self.lb.bind("<<ListboxSelect>>", lambda e: self._pick())
+        self.picked = None          # the clip _pick last took up
+        self.lb.bind("<<TreeviewSelect>>", lambda e: self._pick(False))
         bb = ttk.Frame(left)
         bb.pack(fill="x", pady=4)
-        ttk.Button(bb, text="New clip...", command=self._new).pack(side="left")
+        ttk.Button(bb, text="Add videos...", command=self._add_videos).pack(side="left")
+        ttk.Button(bb, text="From a source...", command=self._new).pack(side="left")
         ttk.Button(bb, text="Delete", command=self._delete).pack(side="left")
         ttk.Label(left, text="Source").pack(anchor="w")
         self.src = tk.StringVar()
@@ -1199,11 +1443,12 @@ class ClipsTab(object):
         rf.pack(anchor="w", pady=4)
         ttk.Label(rf, text="In").grid(row=0, column=0)
         self.cin, self.cout = tk.IntVar(), tk.IntVar()
-        ttk.Spinbox(rf, from_=0, to=99999, width=6, textvariable=self.cin
-                    ).grid(row=0, column=1)
+        for col, var in ((1, self.cin), (3, self.cout)):
+            sp = ttk.Spinbox(rf, from_=0, to=99999, width=6, textvariable=var,
+                             command=lambda var=var: self._look_src(var))
+            sp.grid(row=0, column=col)
+            sp.bind("<Return>", lambda e, var=var: self._look_src(var))
         ttk.Label(rf, text="Out").grid(row=0, column=2)
-        ttk.Spinbox(rf, from_=0, to=99999, width=6, textvariable=self.cout
-                    ).grid(row=0, column=3)
         ttk.Button(rf, text="Set", command=self._range).grid(row=0, column=4)
         self.ends = tk.IntVar()
         ttk.Checkbutton(left, text="The battle ends on it (held, no exit)",
@@ -1222,7 +1467,7 @@ class ClipsTab(object):
         self.pic.pack()
         self.scrub = tk.Scale(mid, from_=0, to=0, orient="horizontal",
                               length=640, label="The clip's frame",
-                              command=lambda v: self._show())
+                              command=lambda v: self._look("clip", int(v)))
         self.scrub.pack()
         self.tl = tk.Canvas(mid, width=640, height=44, bg="#223",
                             highlightthickness=0)
@@ -1257,20 +1502,32 @@ class ClipsTab(object):
                    ).grid(row=0, column=2)
         ttk.Button(ef, text="A sound file...", command=self._add_file
                    ).grid(row=1, column=0, sticky="w")
-        ttk.Button(ef, text="Its own soundtrack", command=self._own
-                   ).grid(row=1, column=1, columnspan=2, sticky="w")
-        self.cues = tk.Listbox(ef, height=5, width=36, exportselection=False)
-        self.cues.grid(row=2, column=0, columnspan=3, sticky="we", pady=4)
-        ttk.Label(ef, text="Level").grid(row=3, column=0, sticky="e")
+        ow = ttk.Frame(ef)
+        ow.grid(row=2, column=0, columnspan=3, sticky="w")
+        ttk.Button(ow, text="Its own soundtrack, frames", command=self._own
+                   ).pack(side="left")
+        self.ofrom, self.oto = tk.IntVar(), tk.IntVar()
+        ttk.Spinbox(ow, from_=0, to=9999, width=4, textvariable=self.ofrom
+                    ).pack(side="left")
+        ttk.Label(ow, text="to").pack(side="left")
+        ttk.Spinbox(ow, from_=0, to=9999, width=4, textvariable=self.oto
+                    ).pack(side="left")
+        self.cues = tk.Listbox(ef, height=5, width=40, exportselection=False)
+        self.cues.grid(row=3, column=0, columnspan=3, sticky="we", pady=4)
+        self.cues.bind("<<ListboxSelect>>", lambda e: self._cue_pick())
+        cf = ttk.Frame(ef)
+        cf.grid(row=4, column=0, columnspan=3, sticky="w")
+        ttk.Label(cf, text="Level").pack(side="left")
         self.lvl = tk.StringVar(value="1.0")
-        ttk.Entry(ef, textvariable=self.lvl, width=6).grid(row=3, column=1,
-                                                           sticky="w")
-        ttk.Button(ef, text="Set", command=self._level).grid(row=3, column=2,
-                                                             sticky="w")
+        ttk.Entry(cf, textvariable=self.lvl, width=5).pack(side="left")
+        ttk.Label(cf, text="stops at frame").pack(side="left", padx=(6, 0))
+        self.until = tk.StringVar(value="")
+        ttk.Entry(cf, textvariable=self.until, width=5).pack(side="left")
+        ttk.Button(cf, text="Set", command=self._level).pack(side="left")
         ttk.Button(ef, text="Remove", command=self._rm_cue
-                   ).grid(row=4, column=0, sticky="w")
+                   ).grid(row=5, column=0, sticky="w")
         ttk.Button(ef, text="Listen to the clip's sound", command=self._listen
-                   ).grid(row=4, column=1, columnspan=2, sticky="w")
+                   ).grid(row=5, column=1, columnspan=2, sticky="w")
         # the idle loop's filmstrip
         sf = ttk.LabelFrame(f, text="The idle loop: click a frame to select "
                             "it; double-click toggles an anchor; right-click "
@@ -1289,19 +1546,27 @@ class ClipsTab(object):
 
     # --- what is shown --------------------------------------------------------
     def cid(self):
-        sel = self.lb.curselection()
-        names = list(self.app.proj.d["clips"])
-        return names[sel[0]] if sel and sel[0] < len(names) else None
+        sel = self.lb.selection()
+        return sel[0] if sel and sel[0] in self.app.proj.d["clips"] else None
+
+    def select(self, cid):
+        self.app.nb.select(self.f)
+        if self.lb.exists(cid):
+            self.lb.selection_set(cid)
+            self.lb.see(cid)
 
     def refresh(self):
         d = self.app.proj.d
         keep = self.cid()
-        self.lb.delete(0, "end")
+        self.lb.delete(*self.lb.get_children())
         for cid, c in d["clips"].items():
-            self.lb.insert("end", "%s  (%s)" % (cid, clip_flags(c)))
-        names = list(d["clips"])
-        if keep in names:
-            self.lb.selection_set(names.index(keep))
+            opening = any(o["clip"] == cid for o in d["openings"])
+            joins = "opening" if opening else "(ends)" if c.get("ends") else \
+                ", ".join(map(str, c["anchors"])) or "none!"
+            self.lb.insert("", "end", iid=cid, text=cid, values=(
+                joins, "-" if c.get("ends") or opening else c["exit"]))
+        if keep in d["clips"] and self.lb.selection() != (keep,):
+            self.lb.selection_set(keep)
         self.scb.config(values=list(d["sources"]))
         self.ecb.config(values=list(d["sounds"]))
         cid = self.cid()
@@ -1313,19 +1578,31 @@ class ClipsTab(object):
         self.cout.set(c["out"])
         self.ends.set(1 if c.get("ends") else 0)
         self.scrub.config(to=c["out"] - c["in"])
+        n = c["out"] - c["in"]
+        if not self.oto.get() or self.oto.get() > n:
+            self.ofrom.set(0)
+            self.oto.set(n)
         self.cues.delete(0, "end")
         for q in c["cues"]:
-            self.cues.insert("end", "frame %3d  %-16s level %.2f" % (
-                q["frame"], q["sound"], q.get("level", 1.0)))
+            self.cues.insert("end", "frame %3d%s  %-14s level %.2f" % (
+                q["frame"], " to %d" % q["until"] if q.get("until") is not None else "",
+                q["sound"][:14], q.get("level", 1.0)))
         if self.rep is not None:
             self._report()
 
-    def _pick(self):
+    def _pick(self, again=True):
+        """A clip chosen: read its frames and the idle's, then report. A
+        Treeview re-selecting the same clip (refresh rebuilds the list,
+        which fires the event again) is not a new choice"""
         cid = self.cid()
-        if not cid or not self.app.proj.d.get("idle"):
+        if not cid or (not again and cid == self.picked):
+            return
+        self.picked = cid
+        if not self.app.proj.d.get("idle"):
             return
         c = self.app.proj.d["clips"][cid]
         idle_src = self.app.proj.d["idle"]["source"]
+        self.view = ("clip", int(self.scrub.get()))
 
         def go(_):
             self.app.screens(c["source"], lambda __: self._report())
@@ -1366,19 +1643,47 @@ class ClipsTab(object):
         fr = self.app.frames.get(i["source"])
         return None if fr is None else fr[i["loop"][0]:i["loop"][1]]
 
+    def _look(self, kind, n):
+        """Show what was CLICKED: a frame of the clip (the scrub), of its
+        source (the In or Out field), or of the idle loop (the strip) -
+        not what is set"""
+        self.view = (kind, int(n))
+        self._show()
+
+    def _look_src(self, var):
+        try:
+            self._look("src", var.get())
+        except Exception:
+            pass
+
+    def _view_px(self):
+        """The picture of what was clicked, and the clip frame it is (for
+        the difference); None before the frames are read"""
+        fr, c = self._frames()
+        idle = self._idle()
+        kind, n = self.view
+        if kind == "idle":
+            return (None if idle is None else idle[min(n, len(idle) - 1)]), \
+                "idle frame %d" % n
+        if fr is None:
+            return None, ""
+        if kind == "src":
+            n = max(0, min(n, len(fr) - 1))
+            return fr[n], "source frame %d" % n
+        n = max(0, min(n, c["out"] - c["in"]))
+        return fr[c["in"] + n], "clip frame %d" % n
+
     def _show(self):
         import vbtana as A
         from PIL import Image, ImageTk
         if not self.cid():
             return
-        fr, c = self._frames()
         idle = self._idle()
-        if fr is None:
+        px, what = self._view_px()
+        if px is None:
             return
-        n = int(self.scrub.get())
-        px = fr[c["in"] + n]
         pal = self.app.proj.d["target"]["palette"]
-        if self.diff.get() and idle is not None:
+        if self.diff.get() and idle is not None and self.view[0] != "idle":
             im = Image.fromarray(A.diff_rgb(px, idle[self.sel], pal))
             im = im.resize((im.width * SCALE, im.height * SCALE), Image.NEAREST)
             self._img = ImageTk.PhotoImage(im)
@@ -1460,7 +1765,9 @@ class ClipsTab(object):
         else:
             self._strip_draw()
             self._sel_text()
-            self._show()
+            if not self.diff.get():     # the difference keeps the clip's
+                self.view = ("idle", k)     # frame; the picture alone
+            self._show()                    # shows the frame clicked
 
     # --- the clip's timeline: its effects, dragged -----------------------------
     def _tl_draw(self):
@@ -1535,11 +1842,19 @@ class ClipsTab(object):
 
         def got(fr):
             self.app.edit("add_clip", name, sid, (0, len(fr) - 1), anchors=())
-            names = list(self.app.proj.d["clips"])
-            self.lb.selection_clear(0, "end")
-            self.lb.selection_set(names.index(name))
-            self._pick()
+            self.select(name)
         self.app.screens(sid, got)
+
+    def _add_videos(self):
+        """Each video a source and a clip of the whole of it (App.add_clip_file,
+        what a video dropped on the window does)"""
+        from tkinter import filedialog
+        ps = filedialog.askopenfilenames(title="Videos for clips",
+                                         filetypes=[("Video", " ".join(
+                                             "*" + e for e in VIDEO_EXT)),
+                                             ("Everything", "*")])
+        for p in ps or ():
+            self.app.add_clip_file(p)
 
     def _delete(self):
         if self.cid():
@@ -1582,7 +1897,7 @@ class ClipsTab(object):
             if r["exit"] is not None:
                 c["exit"] = r["exit"]
             own = d["sounds"].get(P.own_sound(cid))
-            if own and own["kind"] == "source":
+            if own and own["kind"] == "source" and own.get("whole", True):
                 own["in"], own["out"] = c["in"], c["out"]
         p._edit(f)
         self.app.refresh()
@@ -1611,7 +1926,21 @@ class ClipsTab(object):
 
     def _own(self):
         if self.cid():
-            self.app.edit("use_own_sound", self.cid())
+            try:
+                self.app.edit("use_own_sound", self.cid(), 1.0,
+                              self.ofrom.get(), self.oto.get())
+            except Exception:
+                self.app.say("Its own soundtrack: two frame numbers of the clip")
+
+    def _cue_pick(self):
+        i = self._cue_i()
+        c = self.app.proj.d["clips"].get(self.cid() or "")
+        if i is None or not c or i >= len(c["cues"]):
+            return
+        q = c["cues"][i]
+        self.lvl.set("%g" % q.get("level", 1.0))
+        self.until.set("" if q.get("until") is None else str(q["until"]))
+        self.scrub.set(q["frame"])
 
     def _cue_i(self):
         s = self.cues.curselection()
@@ -1622,9 +1951,18 @@ class ClipsTab(object):
         if i is None or not self.cid():
             return
         try:
-            self.app.edit("set_cue_level", self.cid(), i, float(self.lvl.get()))
+            lv = float(self.lvl.get())
+            u = self.until.get().strip()
+            u = int(u) if u else None
         except ValueError:
-            self.app.say("A level is a number: 1.0 is as recorded")
+            return self.app.say("A level is a number (1.0 is as recorded), "
+                                "and it stops at a frame of the clip or at "
+                                "nothing (it plays out)")
+        q = self.app.proj.d["clips"][self.cid()]["cues"][i]
+        if lv != q.get("level", 1.0):
+            self.app.edit("set_cue_level", self.cid(), i, lv)
+        if u != q.get("until"):
+            self.app.edit("set_cue_until", self.cid(), i, u)
 
     def _rm_cue(self):
         i = self._cue_i()
@@ -2168,7 +2506,8 @@ class PartyTab(object):
 # --- the Enemy tab (11.1, 11.2.1, 11.2.2) -------------------------------------------------
 
 class EnemyTab(object):
-    """The enemy: its stats, its victory and defeat clips, and its STANCES -
+    """The enemy: its stats and its STANCES (the battle's endings are the
+    Battle tab's) -
     each with its modifiers, its weighted moves and their target rules, its
     responses, its automatic change and its return"""
 
@@ -2195,11 +2534,6 @@ class EnemyTab(object):
         for k in ("hp", "mp", "atk", "mag", "def", "mdef", "evade"):
             form.entry(k.upper(), e.get(k, 0), lambda v, k=k: self.app.edit(
                 "set", ("enemy", k), as_int(v)))
-        clips = list(P_.d["clips"])
-        form.choice("Victory clip", e.get("victory") or "", clips,
-                    lambda v: self.app.edit("set", ("enemy", "victory"), v))
-        form.choice("Defeat clip", e.get("defeat") or "", clips,
-                    lambda v: self.app.edit("set", ("enemy", "defeat"), v))
         names = [s["name"] for s in e["stances"]]
         form.choice("Starts in", e.get("start_stance", names[0]), names,
                     lambda v: self.app.edit("set", ("enemy", "start_stance"), v))

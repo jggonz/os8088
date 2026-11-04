@@ -452,6 +452,14 @@ any of the builder's (section 7's order moves). Its contents:
      43 turns), both soak.
    Not in it: a stance's own idle loop (it shares the battle's; `check`
    says so); a time gauge, several enemies.
+   - [x] **the owner's first feedback** (2026-11-04): drag and drop (a
+     project anywhere; videos into clips, or the idle's source on the Idle
+     tab; sounds into the sounds, the music or a clip's cues), Add videos
+     on the Clips tab, previews of what is CLICKED rather than what is set,
+     "Play the loop" whole (the seam preview's own restart had looked like
+     a jump), Recommend's best loop previewed at once, a progress bar for
+     reading a video, its own soundtrack over frames x to y and cues that
+     stop, the endings on the Battle tab.
 5. **The openings** in the window (10.3), and **the Build tab**.
 
 ## 11. What an action does: a small, fixed set of verbs

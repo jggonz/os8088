@@ -22,7 +22,9 @@ The window is a view; what it decides and runs is reached here with no Tk:
      sample for sample (clip_sound against the bundle's records); the
      filmstrip's entry bytes are the bundle's entries' own lengths; a new
      range carries the cues with it and drops those off its end, and the
-     clip's own soundtrack follows it; an ending has no exit; a cue cannot
+     clip's own soundtrack follows it - or, a part of it (frames x to y),
+     stays on its footage; a cue that stops is silent after it and still
+     what is baked; a dropped file's kind and id; an ending has no exit; a cue cannot
      leave its clip; a clip in use cannot be deleted; and the timeline's
      place and frame are inverses.
   5. THE JOBS: a vbtana process answers as the in-process call does; a
@@ -82,6 +84,11 @@ for n in (142, 100, 141, 0, 300):
 # 3
 ok(G.seam_order((1, 31), 3) == [28, 29, 30, 1, 2, 3],
    "the seam plays the loop's last frames into its first")
+ok(G.play_order((5, 40)) == list(range(5, 40)),
+   "Play the loop plays it whole, start to end-1, as the engine does")
+ok(G.play_order((1, 31), False, 3, 2) == [28, 29, 30, 1, 2, 3, None, None],
+   "...and across the seam holds black before it goes round, so its own "
+   "restart is not a seam")
 
 # 4
 rate = 11025
@@ -154,6 +161,47 @@ with tempfile.TemporaryDirectory() as tdir:
     own = pr.d["sounds"][P.own_sound("ari_bolt")]
     ok((own["in"], own["out"]) == (c["in"], c["out"]),
        "the clip's own soundtrack follows its range")
+    c = pr.d["clips"]["ari_bolt"]
+    pr.use_own_sound("ari_bolt", 1.0, 2, 5)
+    own = pr.d["sounds"][P.own_sound("ari_bolt")]
+    mine = [q for q in c["cues"] if q["sound"] == P.own_sound("ari_bolt")]
+    ok((own["in"], own["out"]) == (c["in"] + 2, c["in"] + 5) and
+       [q["frame"] for q in mine] == [2],
+       "its own soundtrack from frame 2 to 5: that footage's sound, one cue "
+       "at frame 2")
+    at = own["in"]
+    pr.set_clip_range("ari_bolt", c["in"] + 1, c["out"])
+    c = pr.d["clips"]["ari_bolt"]
+    mine = [q for q in c["cues"] if q["sound"] == P.own_sound("ari_bolt")]
+    ok(own["in"] == at and mine[0]["frame"] == at - c["in"],
+       "...and a new in point leaves it on that footage (cue at %d)"
+       % mine[0]["frame"])
+    # a cue that STOPS: what Listen plays is still what the build bakes
+    q0 = pr.d["clips"]["bram_heal"]["cues"][0]
+    pr.set_cue_until("bram_heal", 0, q0["frame"] + 3)
+    try:
+        pr.set_cue_until("bram_heal", 0, q0["frame"])
+        ok(False, "a cue cannot stop where it starts")
+    except ValueError:
+        ok(True, "a cue cannot stop where it starts")
+    bd = B2.Bundle(B2.build_project(pr))
+    snd = B2.frame_sound(A.clip_sound(pr, "bram_heal"),
+                         pr.clip_frames("bram_heal"), spf, False)
+    bc = next(c for c in bd.clips if c["name"] == "BRAM_HEA")
+    recs = bd.stream(bc)
+    baked = [r[struct.unpack_from("<HH", r)[0] -
+               struct.unpack_from("<HH", r)[1]:] for r in recs]
+    tail = A.clip_sound(pr, "bram_heal")[(q0["frame"] + 3) * spf:]
+    ok(baked[:len(snd)] == snd and not np.any(tail),
+       "a cue stopped at frame %d: silent after it, and Listen is the baked "
+       "sound" % (q0["frame"] + 3))
+    ok([G.drop_kind(x) for x in ("a.VBP", "b.mp4", "c.wav", "d.png", "e.txt")]
+       == ["project", "video", "sound", "picture", None],
+       "a dropped file is a project, a video, a sound, a picture or nothing")
+    ok(G.unique_id("my clip!", {"my_clip_"}) == "my_clip_2" and
+       G.unique_id("x" * 20, {}) == "x" * 16 and
+       G.unique_id("x" * 20, {"x" * 16}) == "x" * 15 + "2",
+       "a dropped file's id: cut, cleaned, numbered against what is taken")
     pr.set_ends("ari_bolt", True)
     ok(pr.d["clips"]["ari_bolt"]["joins"] is False, "an ending does not join")
     try:

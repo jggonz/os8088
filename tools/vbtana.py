@@ -103,14 +103,34 @@ def screens(proj, sid, progress=_nop):
     npy = os.path.join(cache_dir(proj), key + ".npy")
     if os.path.exists(npy):
         return list(np.load(npy))
-    progress("encode", 0, 1, sid)
+    progress("encode", 0, 0, sid)
     v88 = os.path.join(cache_dir(proj), key + ".V88")
-    subprocess.run([sys.executable, os.path.join(HERE, "os88venc.py"), path,
-                    v88, "--quiet", "--preset", "cga4",
-                    "--box", "320x%d" % rows, "--fit", "fill",
-                    "--fps", str(t["fps"]), "--audio", "none",
-                    "--profile", t["profile"]] + palette_args(t["palette"]),
-                   check=True)
+    # the encoder's own reports (--progress, SPEC.md 98.2.11.1), passed on:
+    # a first look at a video is a minute or two, and a window that says
+    # nothing for that long looks stuck
+    pr = subprocess.Popen(
+        [sys.executable, "-u", os.path.join(HERE, "os88venc.py"), path, v88,
+         "--quiet", "--progress", "--preset", "cga4",
+         "--box", "320x%d" % rows, "--fit", "fill", "--fps", str(t["fps"]),
+         "--audio", "none", "--profile", t["profile"]] +
+        palette_args(t["palette"]), stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
+    mark = "@@progress "
+    tail = []
+    for line in pr.stdout:
+        if line.startswith(mark):
+            try:
+                ev = json.loads(line[len(mark):])
+                progress("encode", int(ev.get("done") or 0),
+                         int(ev.get("total") or 0),
+                         "%s: %s" % (sid, ev.get("step", "")))
+            except (ValueError, TypeError):
+                pass
+        else:
+            tail = (tail + [line.rstrip()])[-20:]
+    if pr.wait() != 0:
+        raise RuntimeError("os88venc could not read %s:\n%s"
+                           % (path, "\n".join(tail)))
     r = V.Reader(v88)
     fr = []
     for n in range(r.frames):
@@ -157,7 +177,9 @@ def sound(proj, sid):
             S.sfx(s["name"])
     elif s["kind"] == "file":
         x = _ffmpeg(proj.here(s["path"]), rate)
-    else:
+    elif proj.d["sources"][s["source"]]["kind"] == "scene":
+        x = np.zeros((s["out"] + 1 - s["in"]) * rate // fps)  # (a made-up
+    else:                                       # video has no soundtrack)
         src = proj.d["sources"][s["source"]]
         x = _ffmpeg(proj.here(src["path"]), rate, s["in"] / fps,
                     (s["out"] + 1) / fps)
@@ -443,14 +465,9 @@ def clip_sound(proj, cid):
     spf = t["rate"] // t["fps"]
     sfx, cues = {}, []
     for q in c["cues"]:
-        nm, lv = q["sound"], q.get("level", 1.0)
-        if nm not in sfx:
-            sfx[nm] = sound(proj, nm)
-        if lv != 1.0:
-            key = "%s*%g" % (nm, lv)
-            sfx[key] = sfx[nm] * lv
-            nm = key
-        cues.append((q["frame"], nm))
+        if q["sound"] not in sfx:
+            sfx[q["sound"]] = sound(proj, q["sound"])
+        cues.append((q["frame"], B.cue_key(q, sfx, spf)))
     return B.place(cues, c["out"] - c["in"] + 1, spf, sfx)
 
 

@@ -16,7 +16,10 @@ A project file (version 1):
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
-                    | {"kind": "source", "source", "in", "out", "level"}},
+                    | {"kind": "source", "source", "in", "out", "level",
+                       "whole"}} - "whole": a clip's own soundtrack over all
+                       of it, which follows its in and out (else a part,
+                       which stays on its footage),
      "music":    {"sound", "join", "loop"} - the sample it comes in at, and
                  the loop [start, end) in the sound's samples (null: all
                  of it); the join is inside the loop,
@@ -24,7 +27,8 @@ A project file (version 1):
      "idle":     {"source", "loop": [a, b]} - source frames a..b-1, looped,
      "clips":    {id: {"source", "in", "out", "anchors": [k...], "exit",
                        "joins", "ends", "cues": [{"frame", "sound",
-                       "level"}]}},
+                       "level", "until"?}]}} - a cue with "until" stops at
+                       that frame of the clip,
      "openings": [{"clip", "sound"}] - in turn; the last joins the loop,
      "characters": [{"name", "hp", "mp", "atk", "mag", "def", "mdef",
                      "evade", "menu": {"top": [ITEM], "side": [action]}}],
@@ -254,21 +258,47 @@ class Project:
             c["cues"] = [dict(q, frame=q["frame"] - shift) for q in c["cues"]
                          if 0 <= q["frame"] - shift < n]
             own = d["sounds"].get(own_sound(cid))
-            if own and own["kind"] == "source":     # its own soundtrack
-                own["in"], own["out"] = first, last     # follows it
+            if own and own["kind"] == "source":     # its own soundtrack:
+                if own.get("whole", True):          # the whole clip's
+                    own["in"], own["out"] = first, last     # follows it;
+                else:                               # a part of it stays
+                    own["in"] = max(own["in"], first)   # on its footage
+                    own["out"] = min(own["out"], last)
+                    if own["out"] < own["in"]:
+                        own["in"], own["out"] = first, last
+                    for q in c["cues"]:
+                        if q["sound"] == own_sound(cid):
+                            q["frame"] = own["in"] - first
         self._edit(f)
 
-    def use_own_sound(self, cid, level=1.0):
-        """The clip's own soundtrack (its source's audio over in..out) as a
-        cue at its frame 0, following its in and out from here on"""
+    def use_own_sound(self, cid, level=1.0, first=0, last=None):
+        """The clip's own soundtrack - its source's audio under the clip's
+        frames FIRST..LAST (the whole clip by default) - as a cue at frame
+        FIRST. The whole clip's follows its in and out from here on; a part
+        stays on the footage it was taken from"""
         def f(d):
             c = d["clips"][cid]
+            n = c["out"] - c["in"]
+            lo = max(0, min(first, n))
+            hi = n if last is None else max(lo, min(last, n))
             sid = own_sound(cid)
             d["sounds"][sid] = {"kind": "source", "source": c["source"],
-                                "in": c["in"], "out": c["out"],
-                                "level": level}
-            if not any(q["sound"] == sid for q in c["cues"]):
-                c["cues"].append({"frame": 0, "sound": sid, "level": 1.0})
+                                "in": c["in"] + lo, "out": c["in"] + hi,
+                                "level": level, "whole": lo == 0 and hi == n}
+            c["cues"] = [q for q in c["cues"] if q["sound"] != sid]
+            c["cues"].append({"frame": lo, "sound": sid, "level": 1.0})
+        self._edit(f)
+
+    def set_cue_until(self, cid, i, until):
+        """Cue I stops at the clip's frame UNTIL (None: plays out)"""
+        def f(d):
+            q = d["clips"][cid]["cues"][i]
+            if until is None:
+                q.pop("until", None)
+            elif until <= q["frame"]:
+                raise ValueError("a cue stops after the frame it starts at")
+            else:
+                q["until"] = int(until)
         self._edit(f)
 
     def toggle_anchor(self, cid, k):

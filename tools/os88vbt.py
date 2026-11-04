@@ -188,6 +188,23 @@ def place(effects, nframes, spf, sfx):
     return t
 
 
+def cue_key(q, sfx, spf):
+    """Cue Q's sound as the build places it, added to SFX under its own
+    name: its LEVEL applied and, when it has an UNTIL (the clip frame it
+    stops at), cut there. The Listen button (vbtana.clip_sound) and the
+    build both come through here, so what is heard is what is built"""
+    nm, lv, until = q["sound"], q.get("level", 1.0), q.get("until")
+    if lv == 1.0 and until is None:
+        return nm
+    key = "%s*%g" % (nm, lv) + ("" if until is None else "@%d" % until)
+    if key not in sfx:
+        x = sfx[nm] * lv
+        if until is not None:
+            x = x[:max(0, until - q["frame"]) * spf]
+        sfx[key] = x
+    return key
+
+
 class Battle:
     """What a bundle is made of, in host terms"""
 
@@ -537,14 +554,8 @@ def battle_of(proj, progress=None):
         if cid in opened:
             continue
         pg("clips", i, len(d["clips"]), cid)
-        cues = []
-        for q in c["cues"]:
-            nm = q["sound"]
-            lv = q.get("level", 1.0)
-            if lv != 1.0:
-                nm = "%s*%g" % (q["sound"], lv)
-                b.sfx[nm] = b.sfx[q["sound"]] * lv
-            cues.append((q["frame"], nm))
+        spf = t["rate"] // t["fps"]
+        cues = [(q["frame"], cue_key(q, b.sfx, spf)) for q in c["cues"]]
         b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg),
                             cues=cues, joins=c["joins"], exit=c["exit"],
                             ends=c["ends"], anchors=c["anchors"]))
