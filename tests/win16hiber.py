@@ -18,8 +18,10 @@ the program's own folder, the association's rung 2.
      still RUNNING (W16S_RUN) - nothing of it was held across the image but
      its own claims (124.18.6);
   3. it is PLAYED ON: F3 makes MENU open a MessageBox, which must come up and
-     be answered, and its close box then closes it - WIN16's window gone and
-     the instance free.
+     be answered;
+  4. and File > Exit, through the menu from the keyboard, ends it - WIN16's
+     window gone and the instance free. The command ends the program inside
+     the menu loop, in WIN16's dialog part, which is SPEC.md 124.8.3's case.
 
 The hard disk is MartyPC's XT-IDE, as every hibernate row's is; the
 assertions are memory reads and never times.
@@ -147,11 +149,20 @@ def main():
             M.until(m, lambda mm: not serves(mm.read, seg * 16, S, row),
                     "the MessageBox to be answered", poll=0.1, limit=60)
             H.quiet(m)
-            import os88geom as geom
-            mo.click(*geom.close_xy(x, y, ww, m=m, sym=m.sym))
+            # 4. File > Exit from the KEYBOARD: the menu loop runs in WIN16's
+            # dialog part, the command ends the program inside it, and the end
+            # is finished from the wake (SPEC.md 124.8.3) - it used to free
+            # the part under its own frame, a #GP on kern_mega
+            m.key("AltLeft", down=True, up=False)
+            m.key("KeyF")
+            m.key("AltLeft", down=False, up=True)
+            M.until(m, lambda mm: pb(mm, seg, S, "w16_mtrk") != 0,
+                    "Alt+F to open MENU's File menu", poll=0.1, limit=60)
+            m.key("KeyX")
             M.until(m, lambda mm: win16(mm, S)[0] is None,
-                    "MENU to close and WIN16 with it", poll=0.1, limit=120)
-            check(True, "its close box closed it, and WIN16's instance is free")
+                    "File > Exit to end MENU and WIN16 with it", poll=0.1,
+                    limit=120)
+            check(True, "File > Exit ended it, and WIN16's instance is free")
     finally:
         H.sweep()
     done("win16hiber")

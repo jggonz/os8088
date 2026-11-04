@@ -1410,8 +1410,8 @@ w16_wake:
     je .nosh                        ;   where the lock is free (124.24.10)
     TCALL w16t_shrun
 .nosh:
-    cmp byte [w16_state], W16S_ENDED
-    je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
+    cmp byte [w16_state], W16S_ENDED ; it ended inside a W_PAINT (w16_ppaint)
+    je w16_endnow                   ;   or a w16_after posted this (124.8.3)
     cmp byte [w16_inpeek], 0
     jne w16_peekwake                ; a PeekMessage that found nothing
     cmp byte [w16_state], W16S_RUN
@@ -1461,12 +1461,24 @@ w16_wake:
 ; in:  anything a callback has; out: nothing
 ; The program is waiting (nothing to do) or it has ended, and an ended
 ; program takes its window with it, as a Windows program's did.
+; THE LAST TASK'S END IS FINISHED FROM THE WAKE (SPEC.md 124.8.3): giving the
+; program back drops the parts, and a caller may be one - the menu code
+; (w16_mhpost) and the task part (w16t_serve) reach here by ICALL, and
+; w16_ibgate's retf would return into the dropped part. So it only posts a
+; wake, and w16_wake, with nothing but the UI task's dispatch under it, comes
+; back to w16_endnow. w16_close gives it back too, should the user's close
+; come first. Several tasks: one ends here (w16t_end drops no part).
 ; -----------------------------------------------------------------------------
 w16_after:
     cmp byte [w16_state], W16S_ENDED
-    jne .trim
+    jne w16_endnow.trim
+    cmp byte [w16_ntk], 2
+    jae w16_endnow.many
+    jmp w16_wakeme
+w16_endnow:                         ; the wake's: it has ended, freed now
     cmp byte [w16_ntk], 2           ; one of several: it alone ends, and
     jb .last                        ;   the rest go on (SPEC.md 124.28.7)
+.many:
     TCALL w16t_end
     jmp short .trim
 .last:
