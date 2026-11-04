@@ -236551,9 +236551,9 @@ ARCCTL.DLL) names every call WIN16 lacked, and these are all of them:
 | call | answer |
 |---|---|
 | `SetProp` (USER.26), `GetProp` (USER.25), `RemoveProp` (USER.24), `EnumProps` (USER.27) | window properties, below |
-| `WaitMessage` (USER.112) | the program waits for one os8088 UI pass, as a `PeekMessage` that found nothing does (§124.12), and goes on. Windows returns when a message is queued; WIN16 may return before, and a program that calls it from a loop which tests the queue (the usual form) behaves the same |
-| `CloseWindow` (USER.43) | 0: there is no icon to go to, as `OpenIcon` (USER.44) answers a constant |
-| `ExcludeUpdateRgn` (USER.238) | 1, `NULLREGION`: nothing is excluded from the DC, so a paint draws what it would have left |
+| `WaitMessage` (USER.112) | returns at once when a message is there (it is left there), or an owner-drawn item is owed (§124.22.14), or, on kern_mega, the program has MMSYSTEM's calls' block (§124.32.6), whose calls are made from `GetMessage` and `PeekMessage`; otherwise the program **waits as in `GetMessage`** (`[w16_inget]` = 2), taking no UI pass and no CPU, and the next `w16_kick` (a key, the mouse, a timer, a paint, a post, the close box) resumes it without taking anything. A kick that brings no message is a return Windows would not make; a program calls it from a loop that tests the queue, which then waits again |
+| `CloseWindow` (USER.43) | nothing (it is `void` in Windows 3.1): there is no icon to go to, as `OpenIcon` (USER.44) answers a constant |
+| `ExcludeUpdateRgn` (USER.238) | 2, `SIMPLEREGION`: the DC's clip is left as it was, which is one rectangle and not empty. Nothing is excluded, so a program that draws outside `WM_PAINT` draws into the invalid part as well, and the `WM_PAINT` that follows draws it again: overdraw, never a missing pixel. `NULLREGION` would say the clip is now EMPTY, and a program that tests the answer before drawing would draw nothing. A real one is not one call: a DC's clip here is one rectangle (§124.25.6), so the update rectangle could be taken off it only from an edge, as `ExcludeClipRect` does |
 
 **Properties.** A property is a (name, HANDLE) pair on a window. The table is
 `W16_NPROP` = **32** records of six bytes (the HWND, 0 for a free record, the
@@ -236568,11 +236568,14 @@ that never sets one does not fetch the part for it.
   full, or a name that cannot be an atom. Setting a property that exists
   replaces its HANDLE. `GetProp` answers the HANDLE or 0; `RemoveProp`
   answers it and frees the record.
-- `EnumProps` calls the function `(hwnd, name, hData)` for each of the
-  window's properties, until one answers FALSE, and answers 1. The name is
-  the atom in the low word with 0 in the high word, **the form Windows gives
-  a property set with an atom, and used here for a string-named one as well**:
-  a callback that reads the name as a string is the one case that differs.
+- `EnumProps` calls the function `(hwnd, lpszString, hData)`, pascal, for
+  each of the window's properties, until one answers FALSE, and answers the
+  last answer, or -1 for a window with none. As Windows gives it, the name of
+  a property set with a string is a far pointer to the string - a copy, in 32
+  bytes of the call's own room on the program's stack (§124.2.2, the
+  `LOGFONT` of `EnumFontFamilies`' shape), gone when it returns - and one set
+  with an atom is the atom in the low word and 0 in the high. A string atom
+  (C000h and up) given as `MAKEINTATOM` is enumerated as its string.
 - **They go with the window**: `w16_cargone`, which `w16_wndfree` calls for
   every window that is freed, drops a window's properties when the task
   part is loaded (when it is not, none was ever set). Windows leaves the
@@ -236585,10 +236588,10 @@ and DDE among them, and a property name takes one for as long as the
 instance lives. A program that makes a new string name a window would
 exhaust them; Arcade's names are a handful, shared by every window of a kind.
 
-**Checked by** `tests/win16/props16.c` (Open Watcom, `make win16fixtures`),
-which sets, gets, replaces, enumerates and removes string- and atom-named
-properties and checks that a destroyed window's are gone, as a leg of the
-`win16user` row.
+**Checked by** `tests/win16/props.c` (`PROPS.EXE`, Open Watcom, `make
+win16fixtures`), which sets, gets, replaces, enumerates and removes string-
+and atom-named properties, reads a string-named one's name in the callback,
+and checks that a destroyed window's are gone; the `win16props` row runs it.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

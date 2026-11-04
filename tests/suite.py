@@ -17109,8 +17109,10 @@ SOAK = [
         "SPEC.md 124.25.13, WIN16-NEXT-PLAN: PROPS.EXE (`make "
         "win16fixtures`, tests/win16/props.c) sets, gets, replaces, "
         "enumerates and removes string- and atom-named window properties "
-        "(USER.24-27) on several windows, checks that a destroyed window's "
-        "properties go with it, and calls WaitMessage and CloseWindow, the "
+        "(USER.24-27) on several windows, reads a string-named one's name in "
+        "EnumProps' callback, checks that a destroyed window's properties go "
+        "with it and that WaitMessage with an empty queue waits for a timer, "
+        "and calls CloseWindow, the "
         "calls Microsoft Arcade's five games were refused for; its "
         "MessageBox must be PROPS OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,

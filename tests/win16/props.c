@@ -4,11 +4,13 @@
  * SetProp, GetProp and RemoveProp on two windows, with a string name (in
  * another case to find it) and an atom name (GlobalAddAtom's, and a
  * MAKEINTATOM-style integer); a second SetProp replaces the HANDLE; the two
- * windows' properties of one name are apart; EnumProps counts and sums them
- * and stops when its callback answers FALSE; RemoveProp answers the HANDLE
- * and the next GetProp 0; a destroyed window's properties are gone (a new
- * window in its slot starts with none, and EnumProps over the dead HWND
- * calls nothing); and WaitMessage returns.
+ * windows' properties of one name are apart; EnumProps counts and sums them,
+ * gives a string-named one's name as a string and an integer atom's as the
+ * atom, answers the callback's last answer (0 when it stopped) and -1 for a
+ * window with none; RemoveProp answers the HANDLE and the next GetProp 0; a
+ * destroyed window's properties are gone (a new window in its slot starts
+ * with none, and EnumProps over it calls nothing); and WaitMessage returns at
+ * once with a message queued, and with none waits for the timer's.
  *
  * Every check that fails is named in the message box, which
  * tests/win16props.py reads; "PROPS OK" when none does.
@@ -20,6 +22,7 @@ static char res[200];
 static int enumn;
 static unsigned enumsum;
 static int stopafter;
+static int enumstr, enumatom;
 
 static void check(int ok, const char *tag)
 {
@@ -31,7 +34,11 @@ static void check(int ok, const char *tag)
 
 int __export CALLBACK EnumProc(HWND hwnd, LPCSTR name, HANDLE h)
 {
-    (void)hwnd; (void)name;
+    (void)hwnd;
+    if (HIWORD((DWORD)name) != 0 && lstrcmpi(name, "spin") == 0)
+        enumstr++;
+    if (HIWORD((DWORD)name) == 0 && LOWORD((DWORD)name) == 0x1234)
+        enumatom++;
     enumn++;
     enumsum += (unsigned)h;
     return stopafter == 0 || enumn < stopafter;
@@ -82,15 +89,17 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(SetProp(a, MAKEINTATOM(at), (HANDLE)0x4444), "seta");
     check(GetProp(a, MAKEINTATOM(at)) == (HANDLE)0x4444, "geta");
     check(GetProp(a, "PropAtom") == (HANDLE)0x4444, "atomstr");
-    check(SetProp(a, MAKEINTATOM(0xC1FF), (HANDLE)0x5555)
-          && GetProp(a, MAKEINTATOM(0xC1FF)) == (HANDLE)0x5555, "atomint");
+    check(SetProp(a, MAKEINTATOM(0x1234), (HANDLE)0x5555)
+          && GetProp(a, MAKEINTATOM(0x1234)) == (HANDLE)0x5555, "atomint");
 
-    /* enumeration: a has three string/atom props + 0xC1FF = three */
-    enumn = 0; enumsum = 0; stopafter = 0;
-    check(EnumProps(a, (PROPENUMPROC)EnumProc) != 0, "enumret");
+    /* enumeration: a has three string/atom props + 0x1234 = three */
+    enumn = 0; enumsum = 0; stopafter = 0; enumstr = 0; enumatom = 0;
+    check(EnumProps(a, (PROPENUMPROC)EnumProc) == 1, "enumret");
     check(enumn == 3 && enumsum == 0x3333u + 0x4444u + 0x5555u, "enum");
+    check(enumstr == 1, "enumstr");
+    check(enumatom == 1, "enumatom");
     enumn = 0; enumsum = 0; stopafter = 2;
-    EnumProps(a, (PROPENUMPROC)EnumProc);
+    check(EnumProps(a, (PROPENUMPROC)EnumProc) == 0, "enumstopret");
     check(enumn == 2, "enumstop");
     enumn = 0; stopafter = 0;
     EnumProps(b, (PROPENUMPROC)EnumProc);
@@ -110,14 +119,21 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     c = CreateWindow("Props", "C", WS_CHILD, 0, 0, 20, 20, a, NULL, inst, NULL);
     check(GetProp(c, "Spin") == 0, "gone");
     enumn = 0;
-    EnumProps(c, (PROPENUMPROC)EnumProc);
+    check(EnumProps(c, (PROPENUMPROC)EnumProc) == -1, "enumnone");
     check(enumn == 0, "gonenum");
     DestroyWindow(c);
 
     /* the rest of Arcade's imports */
     PostMessage(a, WM_USER, 0, 0L);
+    WaitMessage();                  /* one is there: back at once */
+    check(PeekMessage(&m, NULL, 0, 0, PM_NOREMOVE), "wait");
+    while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE))
+        DispatchMessage(&m);
+    SetTimer(a, 1, 100, NULL);      /* none: it waits for the timer's */
     WaitMessage();
-    check(PeekMessage(&m, a, WM_USER, WM_USER, PM_REMOVE) || 1, "wait");
+    check(PeekMessage(&m, NULL, 0, 0, PM_REMOVE)
+          && m.message == WM_TIMER, "waittimer");
+    KillTimer(a, 1);
     CloseWindow(a);
     check(GetProp(a, "PropAtom") == (HANDLE)0x4444, "afterclose");
 

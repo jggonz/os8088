@@ -519,7 +519,7 @@ W16EXPORT W16M_USER,       225,     10, w16u_enumwnd        ; EnumTaskWindows(wo
 W16EXPORT W16M_USER,       272,     2,  w16u_iszoomed       ; IsZoomed(word)
 W16EXPORT W16M_USER,       44,      2,  w16_ans1            ; OpenIcon(word)
 W16EXPORT W16M_USER,       43,      2,  w16_ans0            ; CloseWindow(word): no icon to go to (124.25.13)
-W16EXPORT W16M_USER,       238,     4,  w16_ans1            ; ExcludeUpdateRgn(word word): NULLREGION, nothing excluded
+W16EXPORT W16M_USER,       238,     4,  w16_ans2            ; ExcludeUpdateRgn(word word): SIMPLEREGION, nothing excluded
 W16EXPORT W16M_USER,       112,     0,  w16u_waitmsg        ; WaitMessage()
 W16EXPORT W16M_USER,       24,      6,  w16i_remprop        ; RemoveProp(word ptr)
 W16EXPORT W16M_USER,       25,      6,  w16i_getprop        ; GetProp(word str)

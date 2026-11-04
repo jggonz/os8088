@@ -1890,10 +1890,30 @@ w16u_getmsg:
     mov bx, 6
     jmp w16_putmsg
 .wait:
+    mov al, 1                       ; nothing to give: the next callback that
+.waitas:                            ;   has something resumes it (w16_kick);
+    mov [w16_inget], al             ;   AL = 2 for WaitMessage's wait
     mov ax, [w16_idx]
     mov [w16_widx], ax
-    mov byte [w16_inget], 1         ; nothing to give: the next callback that
-    mov byte [w16_pend], 1          ;   has something resumes it (w16_kick)
+    mov byte [w16_pend], 1
+.ret:
+    ret
+
+; WaitMessage (USER.112, no arguments) - back at once when there is a
+; message, which stays where it is, or an owner-drawn item or (kern_mega)
+; an MMSYSTEM call owed; else the program waits as in GetMessage, and is
+; resumed by the next w16_kick, taking nothing (SPEC.md 124.25.13)
+w16u_waitmsg:
+    cmp byte [w16_odn], 0
+    jne .ret
+%ifdef PKG_MEGA
+    cmp word [w16mm_tev], 0
+    jne .ret
+%endif
+    xor al, al
+    call w16_nextmsg
+    mov al, 2
+    jc w16u_getmsg.waitas
 .ret:
     ret
 
@@ -1911,11 +1931,6 @@ w16u_peekmsg:
 .msg:
     call w16_peekmsg
     jnc .out
-; WaitMessage (USER.112, no arguments): the program waits for one os8088 UI
-; pass as a PeekMessage that found nothing does, and goes on (SPEC.md
-; 124.25.13); w16_peekmsg answers it at once, having no MSG to fill
-w16u_waitmsg equ w16u_peekmsg.park
-.park:
     mov ax, [w16_idx]
     mov [w16_widx], ax
     mov byte [w16_inpeek], 1
@@ -1928,11 +1943,6 @@ w16u_waitmsg equ w16u_peekmsg.park
 ; w16_peekmsg - PeekMessage's answer, from the waiting frame's arguments.
 ; CF=1 nothing: AX = 0. CF=0: the MSG is filled and AX = 1.
 w16_peekmsg:
-    cmp word [w16_nargb], 0         ; WaitMessage's: nothing to fill
-    jne .pm
-    clc
-    ret
-.pm:
     call w16_args
     mov al, [es:bx]
     and al, PM_REMOVE
@@ -1984,6 +1994,8 @@ w16_peekwake:
 w16_kick:
     cmp byte [w16_inget], 0
     je .modal
+    cmp byte [w16_inget], 2         ; WaitMessage's wait: any kick ends it
+    je .go
     cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
     je .msg                         ;   GetMessage asked again after it
     call w16_reidx
@@ -2008,6 +2020,7 @@ w16_kick:
     jc .out
     mov bx, 6
     call w16_putmsg
+.go:
     mov byte [w16_inget], 0
     xor dx, dx
     call w16_resume

@@ -463,14 +463,18 @@ w16i_prop:
     ret
 
 ; EnumProps (USER.27) - args: +0 lpEnumFunc, +4 hWnd. The callback for each
-; of the window's properties, (hwnd, name, hData) with the atom in the name's
-; low word and 0 in its high - the form Windows gives an atom-named property,
-; and for a string-named one too - until one answers FALSE. AX = 1
+; of the window's properties, (hwnd, lpszString, hData), until one answers
+; FALSE: a string-named property's name is a far pointer to a copy of the
+; string on the program's stack, an atom-named one's the atom in the low
+; word and 0 in the high, as Windows gives them. AX = the callback's last
+; answer, -1 when the window has none
 W16TSK w16i_enumprops
     xor cx, cx
-w16i_epgo:                          ; CX = the record to try from
-    push si
+    mov ax, -1
+w16i_epgo:                          ; CX = the record to try from, AX = the
+    push si                         ;   answer if no record is left
     push di
+    push ax
     ICALL w16_args
     mov dx, [es:bx + 4]             ; the window
     push ds
@@ -494,25 +498,50 @@ w16i_epgo:                          ; CX = the record to try from
 .take:
     mov di, [si + 4]
     pop ds
+    pop si                          ; (the answer: there is a record)
     ICALL w16_args                  ; (before cbopen moves the frame)
     push word [es:bx + 2]           ; the function
     push word [es:bx]
-    push ax                         ; its name: the atom
-    push di                         ; the HANDLE
     push dx                         ; the window
+    push di                         ; the HANDLE
+    mov si, ax
+    sub si, 0xC000                  ; SI = a string atom's index
+    push ax                         ; the atom
     mov ax, cx                      ; the next record, the continuation's word
     inc ax
+    xor cx, cx                      ; an atom's name takes no room...
+    cmp si, W16_NATOM
+    jae .open
+    mov cl, 32                      ; ...a string's, a copy of it
+.open:
+    push si
     mov si, w16i_epnext_c
-    xor cx, cx
-    ICALL w16_cbopen
-    pop ax
+    ICALL w16_cbopen                ; ES:DI = the room (the program's stack)
+    pop si
+    pop bx                          ; BX = the name's offset: the atom...
+    xor ax, ax                      ; ...AX its segment, 0
+    cmp si, W16_NATOM
+    jae .name
+    mov bx, di                      ; ...or the copy, at ES:DI
+    mov cl, 5
+    shl si, cl
+    add si, w16i_atoms
+    push ds
+    W16SEG ds, [w16_tseg]
+    mov cx, 16
+    cld
+    rep movsw
+    pop ds
+    mov ax, es
+.name:
+    pop di                          ; the HANDLE
+    pop cx                          ; the window
+    xchg ax, cx
     ICALL w16_ppush                 ; pascal: hwnd,
-    pop di
-    pop bx
-    xor ax, ax
-    ICALL w16_ppush                 ;   the name's segment, 0,
+    mov ax, cx
+    ICALL w16_ppush                 ;   the name's segment,
     mov ax, bx
-    ICALL w16_ppush                 ;   its offset, the atom,
+    ICALL w16_ppush                 ;   its offset,
     mov ax, di
     ICALL w16_ppush                 ;   then hData
     pop ax
@@ -523,7 +552,7 @@ w16i_epgo:                          ; CX = the record to try from
     ret
 .done:
     pop ds
-    mov ax, 1
+    pop ax
     xor dx, dx
     pop di
     pop si

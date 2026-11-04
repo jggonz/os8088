@@ -10,9 +10,12 @@
 
 PROPS.EXE (tests/win16/props.c, `make win16fixtures`) sets, gets, replaces,
 enumerates and removes string- and atom-named window properties on several
-windows, checks that a destroyed window's are gone and that WaitMessage and
-CloseWindow return. Its MessageBox, read off the program's stack, is
-"PROPS OK" or names each check that failed.
+windows (EnumProps' callback is given a string-named one's name as a string),
+checks that a destroyed window's are gone, that WaitMessage returns at once
+with a message queued and with none waits for a timer's, and that CloseWindow
+returns. Its MessageBox, read off the program's stack, is "PROPS OK" or names
+each check that failed. A WaitMessage that never returned is a row that
+times out without the box.
 """
 import argparse
 import os
