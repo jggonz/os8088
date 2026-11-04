@@ -12,8 +12,11 @@ VBUSER.EXE (tests/win16/vbuser.c, `make win16fixtures`) calls GetCurrentPDB,
 SetHandleCount, GetCodeHandle, FreeModule (on W16DLL.DLL, loaded twice),
 GetClassWord and GetClassLong, GetUpdateRgn, BeginDeferWindowPos,
 DeferWindowPos and EndDeferWindowPos, CreateIcon, EndMenu and
-TrackPopupMenu, and checks each answer against a value it computes; the
-refusal of TrackPopupMenu (FALSE) is one of its checks. Its MessageBox, read
+TrackPopupMenu, and checks each answer against a value it computes. The two
+TrackPopupMenu calls (SPEC.md 124.25.16) wait for the host: this row sends Down
+and Enter to the first popup (the window must get WM_COMMAND 1) and Esc to the
+second (no command), each time the menu loop shows `w16_mtrk` set with a popup
+open. Its MessageBox, read
 off the program's stack, is "VBUSER OK" or names each check that failed.
 """
 import argparse
@@ -51,8 +54,23 @@ def main():
         ui = os88ui.UI(d, mouse=object(), sym=xmcheck.sym, verbose=False)
         S = F.pkg_syms()
         dw = F.open_b(d, ui, xmcheck.sym)
+        st = {"last": None, "n": 0}
+
+        def pump(p):
+            # the host half of TrackPopupMenu: answer each popup once it is
+            # up. A popup is NEW by the x it was placed at (w16_mnx): the gap
+            # between two menus is too short for a poll to see
+            if p.pb("w16_mtrk") == 1 and p.pb("w16_mkbd") == 2 \
+                    and p.pb("w16_mlev") >= 1 and p.pw("w16_mnx") != st["last"]:
+                st["last"] = p.pw("w16_mnx")
+                for k in (("down", "ret"), ("esc",))[min(st["n"], 1)]:
+                    d.hmp("sendkey " + k)
+                st["n"] += 1
+
         F.run_prog(d, ui, xmcheck.sym, S, dw, "VBUSER.EXE", bad, "QEMU",
-                   want={"VBUSER.EXE": "VBUSER OK"})
+                   want={"VBUSER.EXE": "VBUSER OK"}, pump=pump)
+        if st["n"] != 2:
+            bad.append("TrackPopupMenu was answered %d times, not 2" % st["n"])
         if not a.keep:
             d.p.close()
     finally:

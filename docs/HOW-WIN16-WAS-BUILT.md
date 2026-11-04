@@ -4820,3 +4820,35 @@ Its one `FreeModule` ignores the answer, which is TRUE now anyway. Its one
 `TrackPopupMenu` is the `PopupMenu` method (the flags it builds are the
 method's argument), so a refusal there costs a program's right-click menu
 and nothing at start-up.
+
+### Part 11, and a popup menu with no bar (WIN16-NEXT `part11`, 2026-11-04)
+
+The refusal above was the cheap answer, and Visual Basic's `PopupMenu` is a
+real feature, so `TrackPopupMenu` was built, and in a new part, because the
+library part had 819 bytes of its 64 KB left and part 9 is fetched whole by 42
+of the 85 programs. Part 11 is part 10's shape (SPEC.md 124.25.16), and
+Arc and Pie moved into it: part 9 fell by 775 bytes for the 1,048 bytes of the
+new part, which Arc, Pie and the menu share.
+
+What worked: the menu loop of 124.11 needed almost nothing to run with no bar.
+Level 0 is the popup, `w16_mhbar` is 0 (`w16_mget` of it fails by itself, so
+every bar branch of the hit test falls to "nothing"), and a key byte says which
+kind of loop it is. Two things had to be taught to the library part: the last
+popup closing ends the loop (`w16_mcloseto`), and the import answers TRUE where
+the bar's `DefWindowProc` answers 0. 28 bytes. The rest is the handler, in the
+part, and it is `w16_mtbegin`'s state written again with the popup's menu.
+
+The merged dispatch is what made the plumbing cheap. Parts 9, 10 and 11 have
+their bss blocks 8 bytes apart, so the dispatch finds a part's block from its
+number and one fetch and one drop serve all three: the third part cost the
+image 18 bytes (10 of code, 8 of bss) where the second had cost 35.
+
+Looked at, on QEMU (VGA desktop, kern_big with the shipped WIN16): the popup
+drawn at the screen point, the first item inverted after Down, the popup gone
+after Enter and the second one, right aligned, up. The fixture ended
+"VBUSER OK". A trap for the next person driving it from the host: **the
+screen saver turns the screen black after about two minutes of idle, and the
+first key only wakes it** - a host script that waits that long before sending
+Esc sends it to the saver and not to the menu. And polling `w16_mtrk` for "the
+menu loop ended and another started" misses the gap: it is shorter than a poll,
+so the test tells popups apart by the x they were placed at (`w16_mnx`).

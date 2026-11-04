@@ -990,7 +990,7 @@ W16EXPORT W16M_USER,       259,     2,  w16_ans1            ; BeginDeferWindowPo
 W16EXPORT W16M_USER,       260,     16, w16u_setwndpos      ; DeferWindowPos(word x2 s_word x4 word): SetWindowPos's, at once
 W16EXPORT W16M_USER,       261,     2,  w16_ans1            ; EndDeferWindowPos(word): TRUE
 W16EXPORT W16M_USER,       407,     18, w16i_createicon     ; CreateIcon(word x5 ptr ptr)
-W16EXPORT W16M_USER,       416,     16, w16_ans0            ; TrackPopupMenu(word word s_word x3 word ptr): refused, FALSE
+W16EXPORT W16M_USER,       416,     16, w16u_trackpop       ; TrackPopupMenu(word word s_word x3 word ptr): part 11 (124.25.16)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 W16EXPORT W16M_KEYBOARD,   6,       8,  w16kb_oem2ansi      ; OemToAnsi(str ptr)
 W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()

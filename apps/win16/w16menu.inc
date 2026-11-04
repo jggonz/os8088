@@ -2492,6 +2492,11 @@ w16_mcloseto:
     call w16_mplev
     call w16_mpclose
     pop ax
+    cmp byte [w16_mlev], 0          ; TrackPopupMenu's loop has no bar: its
+    jne .l                          ;   last popup down ends it (124.25.16)
+    cmp byte [w16_mkbd], 2
+    jne .l
+    mov byte [w16_mtrk], 0
     jmp short .l
 .out:
     pop bx
@@ -2733,8 +2738,17 @@ w16_mt_tail:
 .ret:
     ret
 .done:
-    xor ax, ax
+    jmp short w16_mans
+
+; w16_mans - AX:DX = what the loop's import answers once it has ended: 0 for
+; DefWindowProc, TRUE for TrackPopupMenu (w16_mkbd 2, 124.25.16)
+w16_mans:
     xor dx, dx
+    xor ax, ax
+    cmp byte [w16_mkbd], 2
+    jne .r
+    inc ax
+.r:
     ret
 
 ; w16_mtbegin - DefWindowProc enters the loop: BX = the window, AX = its
@@ -3218,8 +3232,7 @@ w16_mhpost:
 .nosend:
     cmp byte [w16_mtrk], 0
     jne .still
-    xor ax, ax
-    xor dx, dx
+    call w16_mans
     ICALL w16_resume
 .after:
     ICALL w16_after                  ; (the lock still marked held)

@@ -38,7 +38,7 @@ sys.path[:0] = [os.path.join(ROOT, "tests"), os.path.join(ROOT, "tools")]
 os.chdir(ROOT)
 
 MEGA = ("PKG_MEGA", "DOS_MEGA")
-PARTSECT = {".text": 0, ".w16dlg": 3, ".w16sys": 9, ".w16tsk": 10}  # W16P_*
+PARTSECT = {".text": 0, ".w16dlg": 3, ".w16sys": 9, ".w16tsk": 10, ".w16rare": 11}  # W16P_*
 
 
 def defines(mega):

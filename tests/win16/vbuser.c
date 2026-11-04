@@ -23,7 +23,13 @@
  *  CreateIcon         a 16x16 1-bit icon is an icon (not the cursor
  *                     LoadCursor hands out) and DestroyIcon takes it back
  *  EndMenu            with no menu loop running, nothing happens
- *  TrackPopupMenu     refused: FALSE, with no loop left running (124.25.15)
+ *  TrackPopupMenu     a popup at a screen point (part 11, 124.25.16). The
+ *                     test drives it from the host: the first popup is
+ *                     answered Down, Enter (WM_COMMAND 1 reaches the window,
+ *                     TRUE comes back, WM_INITMENUPOPUP was sent) and the
+ *                     second, right aligned, Esc (no command, TRUE again).
+ *                     A handle that is no menu and a window that is none
+ *                     answer FALSE
  *
  * The MessageBox is "VBUSER OK", or "VBUSER FAIL" and each check that failed.
  */
@@ -56,6 +62,7 @@ extern BOOL    WINAPI VbuTrack(HMENU, UINT, int, int, int, HWND,
 #define GCW_HBRBACK_  (-10)
 
 static char res[200];
+static int ninit, lastcmd;
 static const char cls[] = "VBUCLS";
 
 static void check(int ok, const char *tag)
@@ -75,7 +82,25 @@ LRESULT __export CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
         EndPaint(hwnd, &ps);
         return 0;
     }
+    if (msg == WM_INITMENUPOPUP) {
+        ninit++;
+        return 0;
+    }
+    if (msg == WM_COMMAND) {
+        lastcmd = wp;
+        return 0;
+    }
     return DefWindowProc(hwnd, msg, wp, lp);
+}
+
+static void pump(void)
+{
+    MSG m;
+
+    while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
 }
 
 int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
@@ -200,11 +225,32 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     if (ic)
         check(DestroyIcon(ic) != 0, "icon:destroy");
 
-    /* menus: EndMenu with no loop is nothing, TrackPopupMenu is refused */
+    /* menus: EndMenu with no loop is nothing; TrackPopupMenu is shown, and
+       the host (tests/win16vbuser.py) answers it: Down, Enter, then Esc */
     VbuEndmenu();
     pop = CreatePopupMenu();
     AppendMenu(pop, MF_STRING, 1, "one");
-    check(VbuTrack(pop, TPM_LEFTALIGN, 20, 20, 0, hwnd, NULL) == 0, "track");
+    AppendMenu(pop, MF_STRING, 2, "two");
+    check(VbuTrack(0xBEEF, TPM_LEFTALIGN, 20, 20, 0, hwnd, NULL) == 0,
+          "track:nomenu");
+    check(VbuTrack(pop, TPM_LEFTALIGN, 20, 20, 0, NULL, NULL) == 0,
+          "track:nownd");
+    pt.x = 20;
+    pt.y = 20;
+    ClientToScreen(hwnd, &pt);
+    ninit = 0;
+    lastcmd = 0;
+    check(VbuTrack(pop, TPM_LEFTALIGN, pt.x, pt.y, 0, hwnd, NULL) == 1,
+          "track:true");
+    pump();
+    check(ninit == 1, "track:init");
+    check(lastcmd == 1, "track:cmd");
+    lastcmd = 0;
+    check(VbuTrack(pop, TPM_RIGHTALIGN | TPM_RIGHTBUTTON, pt.x + 100, pt.y,
+                   0, hwnd, NULL) == 1, "track:esc");
+    pump();
+    check(ninit == 2, "track:init2");
+    check(lastcmd == 0, "track:nocmd");
     VbuEndmenu();
     DestroyMenu(pop);
 

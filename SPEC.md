@@ -236768,7 +236768,8 @@ and checks that a destroyed window's are gone; the `win16props` row runs it.
 
 `VBRUN300.DLL` imports nine GDI functions WIN16 lacked. All nine are exports
 now, and none costs a resident byte: the rows are the loader part's and the
-handlers are the system-library part's (part 9).
+handlers are the system-library part's (part 9) - except `Arc` and `Pie`, which
+are part 11's (§124.25.16) since the rare part came.
 
 **What a missing import does (the question L1 asked).** A program that imports
 a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
@@ -236816,11 +236817,16 @@ part's gate), GetUpdateRgn in the system-library part (9). The library part
 | `GetUpdateRgn` (USER.237) | the window's update region into a region; NULLREGION, SIMPLEREGION, COMPLEXREGION or ERROR | **approximate, as every region is**: the invalid rectangle, in the client and cut to it, is the region's bounding rectangle; SIMPLEREGION, or an empty region and NULLREGION; ERROR (0) for a window or region that is not one. `bErase` is not acted on, as `GetUpdateRect`'s is not |
 | `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` (USER.259-.261) | batch window moves, applied at the end | **at once, which Windows allows**: Begin answers the handle 1, Defer **is** `SetWindowPos` (its eight words' last seven are SetWindowPos's, and it answers 1, or 0 for a window that is not one), End answers TRUE. The handle is not a count of anything, so a batch larger than `n` is not refused |
 | `CreateIcon` (USER.407) | an icon from device bits | **CreateCursorIconIndirect's body** (§124.27.7), with the `CURSORICONINFO`'s row bytes worked out as `((nWidth * nBitsPixel + 15) / 16) * 2`: 1 plane of 1 or 4 bits, 4 planes of 1 bit, at most 64 square; any other shape answers the one cursor `LoadCursor` hands out. `DestroyIcon` frees it |
-| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **refused: FALSE**, no popup shown. §124.11's loop is the bar's (`WM_INITMENU`, the bar's title, `w16_mhit` on the bar), and a popup with no bar under it needs its own start, its own hit test and its own dismissal. Estimated at 600-900 bytes of the library part, which has 800 left on the kern_mega arm, and a trampoline of about 8 resident. Not done here |
+| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **done in part 11** (§124.25.16): a popup at a screen point, tracked with the mouse and the keys, `WM_INITMENUPOPUP` sent and the pick POSTED as `WM_COMMAND`; TRUE once the menu has been shown and ended, FALSE when nothing was shown. It was refused here first (FALSE, no popup), because §124.11's loop was the bar's |
 
 Gates: `tests/win16/vbuser.c` (`make win16fixtures`) checks every row above
-that is not a refusal against a value it can compute, and the TrackPopupMenu
-refusal; `tests/win16vbuser.py` (row `win16vbuser`) runs it.
+against a value it can compute, and that `TrackPopupMenu` is no longer a
+refusal (it is shown and ended with Esc; §124.25.16); `tests/win16vbuser.py`
+(row `win16vbuser`) runs it.
+
+The three `DeferWindowPos` rows stayed where they were: they are rows only,
+`SetWindowPos`'s handler under a new count of arguments, with no code of their
+own to move to a part.
 
 **What Mozart and Hangman do now** (looked at on `kern_mega`, QEMU 486 with
 16 MB, 2026-11-04, with `vbgdi`'s, `props`' and `libpath`'s calls merged and
@@ -236840,6 +236846,80 @@ before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
 `GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
 out at 64 KB whenever the arena has room (§124.21.4), is the next step, and
 is not done here.
+
+#### 124.25.16 Part 11: the rare part, and TrackPopupMenu *(WIN16-NEXT `part11`)*
+
+Imports keep arriving on the way to "any Win16 program", and most of them are
+called by one program in ten. Part 9 is fetched whole by 42 of the 85 programs
+WIN16 has been measured against (WIN16-NEXT-PLAN), and the library part
+(part 3) had 819 bytes of its 64 KB left on the kern_mega arm. So **part 11,
+`W16P_RARE`, `section .w16rare`, is the home of a rarely called import from
+now on**: a row says part 11 and the handler is declared `W16RARE`. It is
+part 10's shape (§124.28.13): an 8-byte block of bss (the segment, the
+vector, the routine), a header with the short jump, the cut mark `W16RAREP`
+at +2, WIN16's data selector at `W16S_MYDS` (+10) and the gate `w16r_gate` at
+`W16S_GATE` (+12); the dispatch fetches it at the first call and keeps it
+until the instance's last program ends. The image never calls into it with a
+macro (no handler there is reached from another part of WIN16); from it the
+image is `ICALL` and the library part `SLCALL`, as from part 10.
+
+**The three system parts share one path.** Parts 9, 10 and 11 have their bss
+blocks in a row, 8 bytes apart (`w16_sseg`, `w16_tseg`, `w16_rseg`;
+`win16.asm` asserts it), so the dispatch finds a part's block from its
+number (`block = w16_sseg + (part - 9) * 8`), `w16_ptin` fetches by it and
+`w16_ptdrop` frees all three at a program's end. That replaced a branch each
+for parts 9 and 10 and a drop each, so the third part cost the image fewer
+bytes than the second had.
+
+| import | where it was | where it is |
+|---|---|---|
+| `Arc`, `Pie` (GDI.23, .26) | part 9 (`w16rgn.inc`) | part 11 (`w16rare.inc`), the code unchanged: they still draw through `Polyline` and `Polygon` (§124.25.14) |
+| `TrackPopupMenu` (USER.416) | refused: FALSE | part 11, with 28 bytes in the library part (the loop's ending and its answer) |
+| `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` | image rows, no code | unchanged (nothing to move) |
+
+**TrackPopupMenu(hMenu, fuFlags, x, y, nReserved, hwnd, lpRect).** `x` and `y`
+are SCREEN coordinates. It answers FALSE, with nothing shown, for a handle
+that is not a menu, a window that is not one, or while another menu loop (the
+bar's or an earlier popup) is running; otherwise it shows the popup and the
+program WAITS in the call, as it waits in `DefWindowProc` for the bar, and
+the call answers TRUE when the menu has ended, whichever way.
+
+- **The loop is §124.11's, with no bar.** The same state, hit test, drawing,
+  banking, keys and callbacks; what differs is that level 0 of the loop is the
+  popup itself (`w16_mhbar` = 0, `w16_mkbd` = 2), so a click anywhere but on a
+  popup ends it, and the last popup closing ends it (`w16_mcloseto` says so).
+  The popup's frame sits with its top left at `x`, `y`, moved back inside the
+  window's content as every popup is (§124.11), and what it covers is banked
+  and put back.
+- **`WM_INITMENUPOPUP`** is SENT to `hwnd` with `wParam` = `hMenu` and `lParam`
+  = 0 (position 0, not a system menu), so the program can grey and check items
+  before the popup is laid out. `WM_INITMENU` is NOT sent: Windows 3.1's
+  `TrackPopupMenu` did not.
+- **A pick POSTS `WM_COMMAND`** to `hwnd` with the item's ID, as the bar's does
+  (`wParam` = the ID, `lParam` = 0); a submenu opens beside its parent; Esc,
+  F10, a click outside the menu, or the program ending ends it with nothing
+  posted. Up, Down, Left, Right, Enter and a mnemonic letter work as in the
+  bar's popups, and the release after a press on an item picks it.
+- **The flags.** `TPM_LEFTALIGN` (0) puts `x` at the popup's left edge,
+  `TPM_CENTERALIGN` (4) at its centre and `TPM_RIGHTALIGN` (8) at its right
+  edge; `TPM_LEFTBUTTON` (0) is the only button the loop takes. `TPM_RIGHTBUTTON`
+  (2) is ACCEPTED and changes nothing: a right click while a menu is up is
+  swallowed, as the bar's is, and does not choose an item. `lpRect` (the area
+  the popup must not cover) and `nReserved` are ignored.
+- **A popup stays inside the window's content** (§124.11): a point outside it
+  is clamped, so a popup asked for at the screen's edge appears at the content's
+  edge, not on the desktop.
+
+The resident cost, image plus bss, is **18 bytes on both arms** (10 of code,
+8 of bss for the third block) against a limit of 60 for the whole change; part 9
+fell by 775 bytes (Arc and Pie), part 11 is 1,048, and the library part gained
+28: the ending test in `w16_mcloseto` (19) and `w16_mans` (9), the answer TRUE
+where the bar's loop answers 0 (791 of its 64 KB left on the kern_mega arm). `tests/unit/t_w16xsec.py` knows the
+part: a row naming a `W16RARE` handler must say part 11, and no near call
+crosses between it and another part. Gates: `tests/win16/vbuser.c`
+(TrackPopupMenu shown and dismissed; the owner's `WM_COMMAND`) and
+`tests/win16/memdc.c` (`vbgdi`: Arc and Pie, unchanged), rows `win16vbuser` and
+`win16memdc`.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
