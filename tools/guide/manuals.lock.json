@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "898f5e5b",
-  "strings": "91915f2df6565f00",
-  "why": "Full screen: colour on VGA, the chords that work inside it; Good to know: colour is the VGA full screen"
+  "stamped": "f7920ab8",
+  "strings": "04023e02f4e8fcbd",
+  "why": "Good to know: FM sound with a card enabled, the speaker playing the newest note"
  },
  "CALC_O88": {
   "sources": [
