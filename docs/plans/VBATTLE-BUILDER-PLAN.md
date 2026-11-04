@@ -434,6 +434,71 @@ loop if it has one. Several idle loops means the resident block holds
 several loops, so a battle with many stances can be refused by the
 builder's memory budget (4.5) before it is built.
 
+### 11.2.2 Misses, defence, and moves that are not attacks (the owner, 2026-11-04)
+
+Five more, with the owner's first three enemy clips (the scorpion on the
+gunner: HIT, MISS, DEFENDED). Where 11.2 already had a piece, this says
+what is added to it.
+
+- **MISSES.** Every action that targets has a MISS CHANCE (11.2's
+  accuracy, now on the enemy's moves as well as the party's). A miss plays
+  the action's MISS pool: "the scorpion strikes the gunner and misses" is
+  its own footage, keyed by target like HIT. A character may also have an
+  EVADE stat, added to the attacker's miss chance (0 for none). An empty
+  MISS pool plays HIT with no damage and "Miss" on the band.
+- **DEFEND has clips of its own, both sides of it.** GUARD (11.2) is
+  the defend verb; what was missing is footage:
+  - the guard ACTION's own pool, played when a character chooses Defend
+    (the gunner raising their guard);
+  - a DEFENDED pool on every attack, played instead of HIT when the target
+    is guarding ("the scorpion strikes the gunner, who blocks it"), keyed
+    by target. An empty DEFENDED pool falls back to HIT; the halved damage
+    is the same either way.
+  So an enemy attack has up to five pools: HIT, MISS, DEFENDED, CRITICAL,
+  FINISHING, each optionally per target. Which one plays is decided by the
+  roll BEFORE the clip is chosen, so the footage always agrees with the
+  number.
+- **A STANCE CHANGE IS AN ACTION, and it lasts *n* turns.** STANCE *s*
+  (11.2.1) becomes a move in its own right in the enemy's pool, with a
+  DURATION: *n* of the enemy's turns, after which it returns to the stance
+  it came from (or *n* = 0, until another move or rule changes it). It
+  deals no damage and has no target; its clip is the change (old idle onto
+  the new stance's idle), and the return is a clip of its own, chosen
+  when the duration runs out, before the enemy's next move.
+- **A move with NO TARGET.** Target "none": the enemy roars, circles,
+  wipes its blade. No damage, no roll; it plays its pool and says its
+  line. It may carry the non-damage verbs (BOOST or LOWER a stat, STANCE),
+  so "it roars, and its ATK rises" is one of these.
+- **An AREA attack.** Target "all characters" for the enemy, as "all
+  allies" already is for the party. Each character standing is rolled for
+  on its own (miss, guard, damage), and the band shows each result. The
+  CLIP is one footage of the whole party being hit, so its pools are not
+  per target: HIT when at least one is hit, MISS when all miss. DEFENDED
+  is used only when every character hit was guarding.
+
+The target rules for the enemy's single-target moves, so that a move can
+say who it goes for: random among the standing, the lowest HP, the one
+who hit it last, alternating (what the engine does today), or a named
+character.
+
+What it costs on top of 11.4: a target kind (4 values) and a duration
+byte a move, three more pool slots an action, an EVADE byte a character,
+and the per-target rolls of an area attack - about 300 bytes of engine,
+and nothing per frame.
+
+**Found on the way: the resident block is the budget that runs out
+first.** Every clip's ENTRY (its first frame, as a difference from the idle
+frame of each anchor) is held resident beside the idle loop, so that a
+chosen action starts on the very next frame. With the owner's footage
+that is about 2.2 KB a clip on top of a 48.7 KB idle loop, and eight clips
+(knight 2, gunner 2, scorpion 3, victory) came to 65,365 bytes, over the
+block's 60 KB. A battle with pools of clips per target will have dozens.
+So, before the pools: an entry for a clip with ONE anchor moves into the
+clip's own stream (its head is read before the clip may start anyway,
+and 40 KB of it is far more than the entry), and only clips with several
+anchors keep resident entries. The builder's budget (4.5) shows the
+block's bytes per clip either way.
+
 ### 11.3 The arithmetic, one formula each
 
 So that the builder can show "about 95 damage" beside an action:
@@ -449,7 +514,8 @@ action.
 ### 11.4 What it costs
 
 - the bundle: a few hundred bytes of tables;
-- the engine: an interpreter for nine verbs, perhaps 2 KB of code.
+- the engine: an interpreter for nine verbs, perhaps 2 KB of code, and
+  about 300 bytes more for 11.2.2.
 
 ### 11.5 What it does not do
 
