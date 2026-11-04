@@ -612,6 +612,7 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_gdseg, 2         ; ...and the segment its row lies in
     W16BSS w16_gdstr, 2         ; ...a scan's bytes
     W16BSS w16_gdbpp, 1         ; ...and bits a pixel
+    W16BSS w16_fsh, 1           ; FloodFill: 2, ExtFloodFill 0 (w16rgn.inc)
     W16BSS w16_fmode, 1         ; ExtFloodFill's: its type, the colour it
     W16BSS w16_fcol, 1          ;   reads, the brush's it paints
     W16BSS w16_ffill, 1
