@@ -65,6 +65,10 @@ NEEDS
       python3 -m pip install numpy pillow
   ffmpeg and ffprobe on the PATH (https://ffmpeg.org): they read your
   footage and sounds.
+  To DROP files on the window (a project, videos, sounds, pictures):
+  built in on Windows; on macOS and Linux
+      python3 -m pip install tkinterdnd2
+  (without it, every drop has a button that does the same).
   To LISTEN in the window: afplay (macOS), winsound (Windows, built in),
   or paplay, aplay or ffplay (Linux).
 """
