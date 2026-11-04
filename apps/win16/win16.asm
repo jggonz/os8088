@@ -1179,7 +1179,7 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16b_dy0, 2
     W16BSS w16b_sx, 2           ; ...the source column, the cut corner's
     W16BSS w16b_sy, 2
-    W16BSS w16b_ty, 2                   ; a tiled source's rows (124.25.16):
+    W16BSS w16b_ty, 2                   ; a tiled source's rows (124.25.17):
     W16BSS w16b_tdy, 2                  ;   the next one, and where it lands
     W16BSS w16b_sx0, 2          ; ...the DDA's first column and error
     W16BSS w16b_err0, 2

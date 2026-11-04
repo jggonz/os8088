@@ -236546,12 +236546,12 @@ from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
 asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
 bitmap when the answer is at least four times the picture: 614,400 bytes for
 640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
-`W16_BMMAX` (64,000) refuses. **Closed by §124.25.16:** on kern_mega under QEMU
+`W16_BMMAX` (64,000) refuses. **Closed by §124.25.17:** on kern_mega under QEMU
 (16 MB) Paintbrush 3.0 started to its window and said *Insufficient memory
 for this operation*, before this change and after it (a look of each,
 2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
 (`win16pbrush`). The one-band bitmap was the cause, and the cure is a
-bitmap past 64,000 bytes, not a smaller figure: §124.25.16.
+bitmap past 64,000 bytes, not a smaller figure: §124.25.17.
 
 The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
 and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
@@ -237055,7 +237055,7 @@ crosses between it and another part. Gates: `tests/win16/vbuser.c`
 `tests/win16/memdc.c` (`vbgdi`: Arc and Pie, unchanged), rows `win16vbuser` and
 `win16memdc`.
 
-#### 124.25.16 A bitmap past 64,000 bytes: tiles *(WIN16-NEXT-PLAN, bigbmp)*
+#### 124.25.17 A bitmap past 64,000 bytes: tiles *(WIN16-NEXT-PLAN, bigbmp)*
 
 A GDI bitmap used to be one segment, so `W16_BMMAX` (64,000 bytes of
 converted pixels) was its largest and `CreateBitmap`, `CreateCompatibleBitmap`

@@ -1,4 +1,4 @@
-/* bigbmp.c - WIN16 fixture (SPEC.md 124.25.16): a GDI bitmap past 64,000
+/* bigbmp.c - WIN16 fixture (SPEC.md 124.25.17): a GDI bitmap past 64,000
  * bytes, as Paintbrush 3.0's band manager makes one.
  *
  * PBRUSH.DLL sizes its picture bands from GetFreeSpace: when it is at least

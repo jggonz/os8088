@@ -942,7 +942,7 @@ W16LIB w16g_getpixel
     cmp dx, [w16b_h + bx]
     jge .inv
     mov ax, dx                      ; the nibble: row * stride + x / 2
-    call w16_bmrp                   ; (a tiled row: SPEC.md 124.25.16)
+    call w16_bmrp                   ; (a tiled row: SPEC.md 124.25.17)
     mov si, cx
     shr si, 1
     add si, ax

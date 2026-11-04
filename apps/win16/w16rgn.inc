@@ -43,7 +43,7 @@ W16SYS w16g_setbmbits
     mov [w16_scratch], cx           ; bytes left to take
     mov bp, si                      ; BP = where they began
     call w16_bmcaps                 ; (a tiled bitmap: the first tile's rows,
-    mov dx, ax                      ;   SPEC.md 124.25.16)
+    mov dx, ax                      ;   SPEC.md 124.25.17)
     mov [w16_scratch + 2], dx       ; rows to go
     xor di, di                      ; DI = the row in the bitmap
     cmp byte [w16b_mono + bx], 0
@@ -486,7 +486,7 @@ W16SYS w16g_getdibits
     ret
 
 ; -----------------------------------------------------------------------------
-; A TILED bitmap (SPEC.md 124.25.16): past W16_BMMAX, one fixed block of the
+; A TILED bitmap (SPEC.md 124.25.17): past W16_BMMAX, one fixed block of the
 ; global heap cut into tiles of 65535 / stride rows, each 64KB (1000h
 ; paragraphs) after the last, so no row straddles two and the next tile is
 ; the block's paragraph + 1000h on both arms. Part 9's, out of the library
@@ -633,7 +633,7 @@ w16_gdrow:
     push bp
     mov bx, [w16_gdslot]
     mov ax, dx
-    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.16)
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.17)
     mov si, ax                      ; SI = the row in the bitmap
     mov [w16_gdseg], dx             ; ...and the segment it is in
     mov bp, di
@@ -890,7 +890,7 @@ w16r_can:
     mov bx, [w16_fbm]
     push ax
     mov ax, dx
-    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.16)
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.17)
     mov [w16_gdseg], dx
     mov dx, ax
     pop ax

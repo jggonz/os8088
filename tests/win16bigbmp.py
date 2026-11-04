@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""win16bigbmp - a GDI bitmap past 64,000 bytes (SPEC.md 124.25.16,
+"""win16bigbmp - a GDI bitmap past 64,000 bytes (SPEC.md 124.25.17,
 docs/plans/WIN16-NEXT-PLAN.md).
 
     python3 tests/win16bigbmp.py            (row win16bigbmp)

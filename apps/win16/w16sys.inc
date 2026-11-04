@@ -1137,7 +1137,7 @@ W16LIB w16g_getbmbits
     mov [w16_scratch], cx           ; bytes left to give
     mov bp, di                      ; BP = where they began
     call w16_bmcap                  ; (a tiled bitmap: the first tile's rows,
-    mov dx, ax                      ;   SPEC.md 124.25.16)
+    mov dx, ax                      ;   SPEC.md 124.25.17)
     mov [w16_scratch + 2], dx       ; rows to go
     xor si, si                      ; SI = the row in the bitmap
     cmp byte [w16b_mono + bx], 0

@@ -56,7 +56,7 @@ w16_bmslot:
 ; w16_bmrp - AX = a row, BX = bitmap slot * 2 -> AX = the row's byte offset,
 ; DX = the segment (the arm: the virtual paragraph) it lies in, for W16SEG.
 ; Keeps all but AX and DX. A bitmap of one segment is a multiply; a TILED one
-; (w16b_mono high byte 2, SPEC.md 124.25.16) is part 9's w16_bmrps, which
+; (w16b_mono high byte 2, SPEC.md 124.25.17) is part 9's w16_bmrps, which
 ; w16_bmnew fetched to make it, so it is here while the bitmap is.
 w16_bmrp:
     test byte [w16b_mono + bx + 1], 2
@@ -66,7 +66,7 @@ w16_bmrp:
     ret
 .t:
     mov word [w16_sfn], w16_bmrps
-; w16_bmsys - part 3 -> part 9 for a tiled bitmap's work (SPEC.md 124.25.16):
+; w16_bmsys - part 3 -> part 9 for a tiled bitmap's work (SPEC.md 124.25.17):
 ; the image's SCALL half, through ICALL, [w16_sfn] the routine. Every
 ; register and the flags pass both ways
 w16_bmsys:
@@ -163,7 +163,7 @@ w16_bmnew:
     pop si                          ;   up, and the call runs again after
     jmp short .no                   ;   (SPEC.md 124.9.1)
 .huge:                              ; past W16_BMMAX: a TILED bitmap, part 9's
-    xor ax, ax                      ;   (SPEC.md 124.25.16; AX = 0 stays if
+    xor ax, ax                      ;   (SPEC.md 124.25.17; AX = 0 stays if
     mov word [w16_sfn], w16_bmhuge  ;   the part cannot be fetched)
     call w16_bmsys                  ; CF=0 AX = the handle; CF=1 AX = 1 the
     jnc .out                        ;   heap is short, 0 too large
@@ -931,7 +931,7 @@ w16_bmcopy:
 .none:
     ret
 .tiles:                             ; a tiled source: one BLIT4 a tile, in
-    mov word [w16_sfn], w16_bmtiles ;   part 9 (SPEC.md 124.25.16)
+    mov word [w16_sfn], w16_bmtiles ;   part 9 (SPEC.md 124.25.17)
     call w16_bmsys
     pop es
     ret
