@@ -46,7 +46,31 @@ static unsigned char c64_vic[64];
  * frame registers as they stood at the top of the display window, taken once
  * a frame (c64_latch). The live registers above are what the 6510 reads. */
 #define C64_LATCH_LINE 51                   /* the 25-row window's first line */
-static unsigned char c64_vl11, c64_vl16, c64_vl18, c64_vl20, c64_vl21, c64_vldd;
+/* ...AND THE ROWS (9.10): the VIC's registers $D000-$D02E and $DD00 (at
+ * C64_RV_DD) as they stood at each character row's first line in the frame
+ * last latched, out of a log of every write to them stamped with its raster
+ * line - so a raster split (a bitmap above a text scroller, a rasterbar in
+ * $D021, a sprite multiplexer moving its eight down the screen) is drawn row
+ * by row, and a screen nobody splits costs what it cost. c64_rv0 is the state
+ * NOW: the last latch's, with every logged write since applied. */
+#define C64_RVN   0x30
+#define C64_RV_DD 0x2F
+static unsigned char c64_rv[C64_ROWS][C64_RVN];
+static unsigned char c64_rv0[C64_RVN];
+static int c64_rsplit;                      /* the latched frame's rows differ */
+#define C64_DLOG 128
+static unsigned c64_dl_d[C64_DLOG];         /* the line, relative to the latch */
+static unsigned char c64_dl_r[C64_DLOG], c64_dl_v[C64_DLOG];
+static int c64_dln, c64_dl_over;
+/* the cycles c64_slice asked of the run in progress, and c64fast.inc's
+ * correction for its short accurate runs (whose countdown starts at their
+ * own budget, not the run's): the run's elapsed cycles are
+ * c64_run_n - DEAD - c64f_adj */
+unsigned c64_run_n;
+unsigned c64f_adj;
+static int c64_dl_tail;
+static unsigned char c64_rsame[C64_ROWS];  /* row r was row r-1's set */                     /* the last latch left writes
+                                             * below the display for the next */
 static void c64_latch(int force);
 static unsigned char c64_sid[32];           /* $D400-$D41C */
 
@@ -424,9 +448,35 @@ static int c64_rcmp_line(void)
     return (int)(((unsigned)c64_vic[0x12]) | (((unsigned)(c64_vic[0x11] & 0x80)) << 1));
 }
 
+/* c64_line_now - the raster line THIS INSTANT is on, 0..311. Inside a run
+ * that is the cycle clock plus what the run has spent so far: the run's
+ * budget less the countdown, less what c64_cut() moved into CARRY, less
+ * c64f_adj while the fast core has handed a short run to the accurate one.
+ * $D012 read the line the RUN STARTED on until 9.10 - so a program polling
+ * it for a line saw the line only at the next run boundary, and its raster
+ * split landed wherever that was: the Christmas demo's text-mode write
+ * moved between line 242 and line 53 from frame to frame */
+static int c64_line_now(void)
+{
+    unsigned cyc, el;
+    int dead;
+
+    cyc = (unsigned)c64_frame_cyc;
+    if (c64_in_run) {
+        dead = c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8);
+        dead += c64_scr_rd(C64_SCR_CARRY) | (c64_scr_rd(C64_SCR_CARRY + 1) << 8);
+        el = c64_run_n - (unsigned)dead - c64f_adj;
+        if (el < 0x8000u)
+            cyc += el;
+    }
+    while (cyc >= C64_PAL_FRAME)
+        cyc -= C64_PAL_FRAME;
+    return (int)(cyc / C64_PAL_LINE);
+}
+
 static int c64_raster_now(void)
 {
-    return (int)(((unsigned)c64_frame_cyc) / C64_PAL_LINE);
+    return c64_line_now();
 }
 
 static int c64_alarm_next(void)
@@ -653,38 +703,117 @@ static void c64_timer_step(int k, int n)
  * The `n` passed here is never more than one frame, because the display latch is
  * always an armed alarm and the slice never runs past its deadline by more
  * than one instruction. */
-/* c64_latch - THE DISPLAY LATCH (C64-SPEC 9.9). The composer draws one
- * mode, one matrix and one pair of colours for the whole screen, and it used
- * to take them from the live registers at every write - so a program that
- * splits the screen with raster interrupts (a bitmap above a text scroller,
- * rasterbars in $D020) changed them twice a frame, each change a full
- * repaint, and the flush showed whichever half it happened to sample:
- * flicker, and the most expensive flush there is. Taken once a frame at the
- * top of the display window, the latch is the same every frame for any such
- * program, and only a real change costs a repaint. FORCE copies without
- * acting (a reset, whose callers rebuild the screen state themselves). */
+/* c64_latch - THE DISPLAY LATCH (C64-SPEC 9.9, 9.10). The composer used to
+ * take the mode, matrix and colours from the live registers at every write -
+ * so a program that splits the screen with raster interrupts (a bitmap above
+ * a text scroller, rasterbars in $D020) changed them twice a frame, each
+ * change a full repaint, and the flush showed whichever half it happened to
+ * sample. Taken once a frame at the top of the display window, out of the
+ * frame's log of display-register writes, each ROW gets the set that stood
+ * on it - the same every frame for any such program, so only a real change
+ * costs a repaint. FORCE copies without acting (a reset, whose callers
+ * rebuild the screen state themselves). */
 static void c64_latch(int force)
 {
-    int frame, lum, bord;
+    static unsigned char cur[C64_RVN];
+    int r, i, k, frame, lum, bord, lim, ch, ap, same, unch, dif0;
 
-    frame = c64_vl11 != c64_vic[0x11] || c64_vl16 != c64_vic[0x16]
-         || c64_vl18 != c64_vic[0x18] || ((c64_vldd ^ c64_cia[1][0x00]) & 3);
-    lum = c64_vl21 != c64_vic[0x21];
-    bord = c64_vl20 != c64_vic[0x20];
-    c64_vl11 = c64_vic[0x11];
-    c64_vl16 = c64_vic[0x16];
-    c64_vl18 = c64_vic[0x18];
-    c64_vl20 = c64_vic[0x20];
-    c64_vl21 = c64_vic[0x21];
-    c64_vldd = c64_cia[1][0x00];
-    if (force)
+    if (force | c64_dl_over) {
+        /* a reset (its callers rebuild the screen from here themselves), or
+         * a frame that wrote past the log: every row is the live registers */
+        for (k = 0; k < C64_RV_DD; k++)
+            cur[k] = c64_vic[k];
+        cur[C64_RV_DD] = c64_cia[1][0x00];
+        c64_dln = 0;
+        c64_dl_over = 0;
+    } else {
+        if ((c64_dln | c64_rsplit | c64_dl_tail) == 0)
+            return;                         /* nothing written, nothing split,
+                                             * nothing left over: every row is
+                                             * what it was */
+        os88_memcpy(cur, c64_rv0, C64_RVN);
+    }
+    frame = 0;
+    lum = 0;
+    bord = 0;
+    i = 0;
+    c64_rsplit = 0;
+    unch = 1;
+    dif0 = 0;
+    /* ROW BY ROW, AND A ROW NOTHING WAS WRITTEN AT IS USUALLY FREE. Row r is
+     * unchanged when nothing was applied at it, the row above it is
+     * unchanged, and it was the same as the row above it LAST frame
+     * (c64_rsame) - so a split that is the same every frame compares only
+     * the rows its writes land on, not 25 x 48 bytes. The Christmas demo's
+     * latch was 9% of a 286 before this */
+    for (r = 0; r < C64_ROWS; r++) {
+        lim = (r << 3) + 3;                 /* a write in a row's first HALF
+                                             * is the row's: it is on most of
+                                             * the row's lines (9.10) */
+        ap = 0;
+        while (i < c64_dln && (int)c64_dl_d[i] <= lim) {
+            cur[c64_dl_r[i]] = c64_dl_v[i];
+            i++;
+            ap = 1;
+        }
+        same = c64_rsame[r];
+        c64_rsame[r] = (unsigned char)((r != 0) & (ap ^ 1));
+        if (r != 0)
+            if ((ap | (unch ^ 1) | (same ^ 1)) == 0) {
+                c64_rsplit |= dif0;         /* (cur, and so dif0, as above) */
+                continue;                   /* unch stays 1 */
+            }
+        unch = 1;
+        if (c64_rvdiff(cur, c64_rv[r])) {
+            unch = 0;
+            ch = 0;
+            if (cur[0x11] != c64_rv[r][0x11] || cur[0x16] != c64_rv[r][0x16]
+                    || cur[0x18] != c64_rv[r][0x18]
+                    || ((cur[C64_RV_DD] ^ c64_rv[r][C64_RV_DD]) & 3))
+                ch = 1;
+            for (k = 0x21; k <= 0x24; k++)
+                if (cur[k] != c64_rv[r][k])
+                    ch = 1;
+            if (ch) {
+                frame = 1;
+                if (force == 0)
+                    c64_row_whole(r);
+            }
+            if (r == 0) {
+                lum = cur[0x21] != c64_rv[0][0x21];
+                bord = cur[0x20] != c64_rv[0][0x20];
+            }
+            if (cur[0x15] | c64_rv[r][0x15])
+                c64_dirty_any = 1;          /* a sprite register: nothing else
+                                             * raises the wake's flush gate,
+                                             * and c64_spr_dirty is in it */
+            os88_memcpy(c64_rv[r], cur, C64_RVN);
+            c64_rchg[r] = 1;
+        }
+        if (r != 0)
+            if (ap)
+                if (c64_rsplit == 0)        /* (once split, it stays split) */
+                    dif0 = c64_rvdiff(cur, c64_rv[0]);
+        c64_rsplit |= dif0;
+    }
+    c64_dl_tail = 0;
+    for (; i < c64_dln; i++) {              /* the rest of the frame, and what
+                                             * the top of the next was given:
+                                             * the NEXT latch's rows, even if
+                                             * nothing is written before it */
+        cur[c64_dl_r[i]] = c64_dl_v[i];
+        c64_dl_tail = 1;
+    }
+    os88_memcpy(c64_rv0, cur, C64_RVN);
+    c64_dln = 0;
+    if (force) {
+        c64_fr_stale = 1;                   /* (its callers recompute them) */
         return;
-    if (frame) {
+    }
+    if (frame)
         c64_frame_regs();                   /* the matrix may have moved: the
                                              * core's write window watches the
                                              * NEW one from here on (9.2) */
-        c64_dirty_all();
-    }
     if (lum) {
         c64_lum_update();                   /* $D021 changes what every colour
                                              * resolves to in 1bpp (9.6) */
@@ -697,6 +826,31 @@ static void c64_latch(int force)
         if (c64_border_dirty)
             c64_dirty_any = 1;
     }
+}
+
+/* c64_line_rel - the raster line this instant is on, relative to the
+ * display latch's line (0..311): where a logged write lands (9.10) */
+static unsigned c64_line_rel(void)
+{
+    unsigned cyc;
+
+    cyc = (unsigned)c64_line_now();
+    return (cyc >= C64_LATCH_LINE) ? cyc - C64_LATCH_LINE
+                                   : cyc + C64_PAL_LINES - C64_LATCH_LINE;
+}
+
+/* c64_dlog - one display-register write into the frame's log (9.10) */
+static void c64_dlog(int reg, int v)
+{
+    if (c64_dln >= C64_DLOG) {
+        c64_dl_over = 1;                    /* the frame is drawn from the live
+                                             * registers (c64_latch) */
+        return;
+    }
+    c64_dl_d[c64_dln] = c64_line_rel();
+    c64_dl_r[c64_dln] = (unsigned char)reg;
+    c64_dl_v[c64_dln] = (unsigned char)v;
+    c64_dln++;
 }
 
 static void c64_advance(int n)
@@ -1114,9 +1268,25 @@ static void c64_io_wr(unsigned a, int v)
             c64_irq_update();
             return;
         }
-        (void)old;
+        /* THE RASTER COMPARE MOVED, AND THE RUN WAS SIZED FOR THE OLD ONE.
+         * c64_alarm_next measured this run to the line $D012 named when it
+         * started, so a raster IRQ handler that sets up the NEXT line ran on
+         * past it - to the display latch, as often as not - and took that
+         * interrupt late, at the run's end. The Christmas demo's chain
+         * (lines 240 and 10) took its line-10 IRQ at line 52, after the
+         * latch, every few frames: its picture flipped to text. Ending the
+         * run makes the next one measure to the new line (9.10, 4.4) */
+        if (c64_in_run)
+            if ((r == 0x12) | ((r == 0x11) & (((old ^ v) & 0x80) != 0)))
+                if (old != (unsigned char)v)
+                    c64_cut();
         /* (the frame registers reach the screen through the display latch,
-         * once a frame - c64_latch, 9.9 - and not from here) */
+         * once a frame - c64_latch, 9.9 - row by row out of this log, 9.10) */
+        if (old != (unsigned char)v)
+            if (r != 0x12)
+                if ((r < 0x19) | (r > 0x1F) | (r == 0x1B) | (r == 0x1C) | (r == 0x1D))
+                    if (r <= 0x2E)
+                        c64_dlog((int)r, v);
         return;
     }
     if (p <= 0x0700) {
@@ -1154,8 +1324,10 @@ static void c64_io_wr(unsigned a, int v)
          * user port, and the KERNAL bit-bangs CLK and DATA through them for
          * every byte it loads from drive 8 - so dirtying on any write to
          * $DD00 was a full-screen repaint per serial edge. */
-        (void)old;                          /* (the bank, too, reaches the
+        if (r == 0x00)                      /* (the bank, too, reaches the
                                              * screen through c64_latch) */
+            if ((((unsigned char)v ^ old) & 3) != 0)
+                c64_dlog(C64_RV_DD, v);
         return;
     }
 }

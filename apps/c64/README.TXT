@@ -51,7 +51,9 @@ serial port answers. Typed at this machine, verbatim:
 
 Programs are loaded with File > Smart attach... from a .PRG file. The screen
 is monochrome on every adapter, VGA included, resolved from the C64's 16
-colours by luminance. Every menu item that cannot work in this build is
+colours by luminance: text crisply, bitmap and multicolour pictures as a
+dither, sprites lit or dark against the paper. A split screen is drawn split
+by character row. Sprites are always in front and never collide. Every menu item that cannot work in this build is
 present, greyed, and names the fact that greys it.
 
 COPY AND PASTE

@@ -138,9 +138,13 @@ _c64_run:
     mov cx, [c64f_left]
 .short:
     mov [c64f_bud], cx
+    mov ax, [c64f_left]             ; its countdown starts at CX, not at what
+    sub ax, cx                      ; is left of the run: c64io.c's
+    mov [_c64f_adj], ax             ; c64_line_rel takes the difference off
     push cx
     call c64_arun
     add sp, 2
+    mov word [_c64f_adj], 0
     mov cx, [_c64_m+CM_CNT]         ; left -= budget - cnt
     add cx, [c64f_left]
     sub cx, [c64f_bud]

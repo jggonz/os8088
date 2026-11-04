@@ -888,13 +888,19 @@ each fetched claim holds its file's first bytes.
 
 ### 5.1 What is modelled
 
-- **Standard text mode is composed** — glyphs from the CHARGEN ROM or the
-  RAM character set the VIC is pointed at, resolved to 1bpp by luminance
-  (§9.6). The mode is read from `$D011` bits 5–6 (ECM, BMM) and `$D016`
-  bit 4 (MCM); **any mode other than standard text fills the span with the
-  background's luminance level** (`c64_band1`'s `mode != 0` arm). There is
-  no bitmap, multicolour or extended-background composer, and no sprite
-  drawing: the sprite registers are stored and nothing reads them.
+- **Every display mode is composed, per character row** (§9.10). Standard
+  text is `c64_band1`'s, as it always was — glyphs from the CHARGEN ROM or
+  the RAM character set the VIC is pointed at, resolved to 1bpp by
+  luminance (§9.6). The mode is read from `$D011` bits 5–6 (ECM, BMM) and
+  `$D016` bit 4 (MCM), and the other four legal modes are `c64_bandx`'s:
+  hires and multicolour bitmap, multicolour text and extended background
+  colour. A picture made of more than two colours a cell is ORDERED-DITHERED
+  by luminance on a 4×4 Bayer matrix (`c64_dmask`); a cell of one ink on one
+  paper keeps §9.6's crisp rule. The three illegal modes (5–7) are black,
+  as the VIC shows them.
+- **The sprites are drawn** (§9.11), from each row's own sprite registers,
+  lit or dark against that row's paper by luminance. Expanded X and Y and
+  multicolour sprites are honoured.
 - Screen base and character base from `$D018` **and** the CIA2 `$DD00` bank
   bits (§6.2).
 - Border and background `$D020`/`$D021`. A `$D020` write costs a fill only
@@ -908,8 +914,8 @@ each fetched claim holds its file's first bytes.
   disabled — the commonest raster wait there is — sees the bit, and bit 7
   drops when the flag is acknowledged. The compare is an alarm on every frame.
 - **Not honoured, silently**: the 25/24-row and 40/38-column flags and the
-  fine scroll bits of `$D011`/`$D016`. A program that uses them draws the
-  same picture as one that does not.
+  fine scroll bits of `$D011`/`$D016`, and the display-enable bit. A program
+  that uses them draws the same picture as one that does not.
 
 ### 5.2 Timing — the PAL frame, off the cycle clock
 
@@ -927,17 +933,23 @@ line takes effect from that line.
 
 ### 5.3 What does not carry
 
-- **Sprites** — not drawn at all (§5.1).
-- **Sprite–sprite and sprite–background collision:** `$D01E` and `$D01F`
-  **answer 0.**
-- **Bitmap, multicolour and extended-background modes** — filled with the
-  background level (§5.1).
+- **Sprite priority and collision.** Every sprite is drawn in FRONT of
+  the screen whatever `$D01B` says, sprite 0 over sprite 7, and `$D01E` and
+  `$D01F` **answer 0** — a game that tests a collision register sees none.
+- **Raster splits finer than a character row** (§9.10): a register written
+  part-way down a row takes effect from the next row. A rasterbar is a
+  border or paper colour per ROW, never per line.
 - **Cycle-exact raster effects** — mid-line colour changes, bad-line timing,
-  FLD, FLI, sprite stretching, opening the border, fine scroll.
-- **Colour.** §9.6.
+  FLD, FLI, sprite stretching, opening the border, fine scroll, and a sprite
+  multiplexed twice within one row.
+- **Colour.** §9.6. A colour composer is a separate piece of work: §9.6's
+  windowed 4bpp path is priced out per colour RUN, and the answer is a
+  fullscreen mode of its own (the APPLE2's §13 FSX mode is the shape).
 
-Text, BASIC, the KERNAL and text-mode programs are unaffected; games and
-demos mostly are not text-mode programs.
+Text, BASIC, the KERNAL and text-mode programs are unaffected. A game or
+demo that splits the screen by character row, draws in bitmap or
+multicolour, or moves sprites is drawn; one that depends on the cycle-exact
+VIC is not.
 
 ---
 
@@ -1532,7 +1544,10 @@ constants and the eight rows are unrolled (PERFORMANCE.md Set 64):
 
 | routine | does |
 |---|---|
-| `c64_band1(dst, first, last, mseg, moff, col, gseg, goff, mode, bg)` | composes cells `first..last` × 8 rows into a 1bpp band: text by glyph through the 16 `{and, xor}` pairs `c64_lum_update` builds (§9.6); **`mode != 0` fills the span with the background's level** (§5.1) |
+| `c64_band1(dst, first, last, mseg, moff, col, gseg, goff, mode, bg)` | composes cells `first..last` × 8 rows into a 1bpp band: text by glyph through the 16 `{and, xor}` pairs `c64_cmask_for` builds for the row's paper (§9.6). The flush hands it standard-text rows only; `mode != 0` still fills with the background's level, a fallback nothing calls |
+| `c64_bandbm(dst, xm, xb, col, n, mc, bg)` | `n` cells of a BITMAP row (§9.10), hires or multicolour, from near copies of the cells' matrix and bitmap bytes: each colour is its 4×4 Bayer pattern out of `c64_dmask`, and a multicolour byte is split into its four pair-value masks in seven ALU ops — no per-pair loop and no shift by a count. It replaced C that was 73% of a 286 under a bitmap demo |
+| `c64_sprrow(dst, on, lit, n, cell, sh, f, l)` | one line of a sprite onto one band line (§9.11): `n` bytes of set and lit pixels, shifted `sh` right from `cell`, clipped to cells `f..l`; each byte goes into both its cells through one `shr ax, cl` |
+| `c64_rvdiff(a, b)` | whether two 48-byte display-register sets differ (§9.10), `repe cmpsw` |
 | `c64_rowspan(a, b, n)` | compares a composed band against the frame shadow — eight pixel rows of `n` bytes at stride 40, both in the package's own segment — and answers `(first << 8) \| last`, the differing CELL columns, or −1 for "same". Both scans are `repe cmpsb` and the second sets `DF` on purpose, which is why §3.6's harness covers this file |
 | `c64_rowcopy(dst, src, n)` | brings the shadow up to date with what was drawn |
 | `c64_rowsig(mseg, moff, col, n)` | §9.4's shift test: a 16-bit signature of one row's SOURCES |
@@ -1774,7 +1789,7 @@ refused `blit1` must come down to 1:1.
 **The screen is drawn from a LATCH, not from the live registers.** `$D011`,
 `$D016`, `$D018`, `$D020`, `$D021` and `$DD00`'s bank bits are copied once a
 frame, at the first line of the 25-row display window (`C64_LATCH_LINE` =
-51), into `c64_vl11` and its five siblings, and `c64_frame_regs`,
+51), into a register set PER CHARACTER ROW (§9.10), and `c64_frame_regs`,
 `c64_lum_update` and the composers read those. The 6510 still reads and
 writes the live registers.
 
@@ -1796,12 +1811,107 @@ a frame. A reset copies the latch without acting (`c64_latch(1)`), because
 its callers rebuild the screen state from it themselves.
 
 **What it costs a program that does not split the screen** is up to one
-frame (20 ms) between a register write and the screen showing it.
+frame (20 ms) between a register write and the screen showing it — two since
+§9.10, for a write below the display.
 
 **Measured, 86Box `286-victory`**: the demo runs at **96.6%** without warp,
 from 61-80%. `c64uitest` asserts that a write does not reach the screen
 before line 51, that crossing line 51 latches, and that a split which is
 bitmap at line 51 stays bitmap. The row is red without the latch.
+
+### 9.10 Per-row display registers — a raster split, by character row
+
+**The latch takes a register set for EACH of the 25 rows**, not one for
+the frame. `c64_io_wr` appends every display-register write that CHANGES a
+value — VIC `$D000`–`$D02E` less the raster, IRQ and collision registers,
+and `$DD00`'s bank bits as index `$2F` (`C64_RV_DD`) — to a 128-entry log
+(`C64_DLOG`), stamped with its raster line relative to line 51
+(`c64_line_rel`). Inside a run the line is the cycle clock plus the run's
+elapsed cycles: `c64_run_n` less the core's DEAD countdown, less
+`c64f_adj` while the fast core has handed a short run to the accurate one.
+
+At the latch, row *r* is the previous frame's top state plus every logged
+write at a relative line ≤ 8*r* + 3 — **a write in a row's first half is
+that row's**, being on most of its lines. (It was ≤ 8*r*, and the Christmas
+demo's bitmap-on write, which lands at line 52 on some frames and in the top
+border on others, flipped row 0 between text and bitmap: a whole-row
+recompose twice a second and a wrong row in between.) What was written below the display goes into `c64_rv0`, the next
+frame's top, and carries a flag so that the NEXT latch applies it even if
+nothing more is written (`c64_dl_tail`). The rows composed are therefore
+the frame that has just been displayed, one frame after it was displayed —
+which is the same 20 ms §9.9 already spends.
+
+A row whose display registers changed is marked WHOLE (`c64_row_whole`) —
+its sources moved without its matrix cells moving, so the write-window span
+would answer *nothing* — and recomposed, then compared against the shadow,
+so a split that is the same every frame costs a compare and no drawing. A
+row with no write landing on it, unchanged above and the same as the row
+above last frame (`c64_rsame`), is not even compared: a split that repeats
+compares only the rows its writes land on. **A bitmap write narrows**: a
+dirty 256-byte page is 32 cells of a bitmap row, and those cells
+(`c64_row_gspan`, `c64_gf`/`c64_gl`, bit 2 of `c64_rowd`) are what is
+recomposed — not the row's forty.
+
+**Two timing faults this exposed, both fixed here, both general.** `$D012`
+read the line the RUN started on, so a program polling it for a line saw it
+only at the next run boundary; it now adds what the run has spent
+(`c64_line_now`, the same arithmetic as the log's stamp, CARRY included).
+And a write that MOVES the raster compare (`$D012`, or `$D011` bit 7) now
+ends the run (`c64_cut`), because the run was sized to the old compare line:
+an IRQ handler that set up the next line ran on to the latch and took that
+interrupt late. The Christmas demo's IRQs at lines 240 and 10 were landing
+at 52 and 53 every few frames, flipping its whole picture to text and back.
+
+**What it costs where nobody uses it**: nothing a text program pays for. No
+display register written, nothing split and no tail → `c64_latch` returns at
+its first test. A write is one log append. The scroll test (§9.4) still runs
+only on an unsplit standard-text screen with no sprite; a split or a
+graphics mode makes every changed row a whole-row recompose instead, which
+is the price of drawing it at all. **A log that overflows** (more than 128
+changing writes a frame — a rasterbar per line) makes the frame the live
+registers, un-split, rather than dropping writes.
+
+### 9.11 Sprites — over each row, from that row's registers
+
+`c64_spr_draw` lays the eight sprites over a composed row after the
+composer, from that row's register set — so a multiplexer that reuses its
+eight sprites further down the screen shows each instance where it stood.
+The data pointer is the row's matrix + `$3F8 + k`, in the row's bank. Each
+pixel is lit or dark against the row's paper by luminance; sprite 0 is
+drawn last, on top.
+
+**What a row's sprites look like is a signature**, `c64_spsig[r]`: per
+sprite on the row, its position, size, colours, multicolour bit and data
+pointer, and a nonzero bit for *a sprite is here*. `c64_spr_dirty` takes it
+once a flush, at the end of `c64_dirty_scan`. A row whose signature changed,
+or whose sprite data's page was written, recomposes the CELLS its sprites
+were over and are over now (`c64_sxf`/`c64_sxl`), not the row. It is not
+looked at all when the latch did not move the row's registers
+(`c64_rchg`) and none of its sprites' data pages (`c64_spg0..1`) or its
+pointer page was written. A screen that has never had a sprite on pays one
+OR over 25 bytes a flush. A sprite-register change raises the wake's flush
+gate itself: a machine that only moves a sprite writes no RAM, and nothing
+else would.
+
+**Measured, 86Box `286-victory`** (C64-SPEC 4.7.1's demo and two BASIC
+loops; text-mode programs are unchanged):
+
+| program | before | now |
+|---|---|---|
+| `10 i=i+1:goto 10`, warp | 107.8% | 107.0% |
+| the floating-point loop, warp | 104.0% | 104.0% |
+| the Christmas demo, multicolour bitmap + text scroller + sprites | ~97%, the bitmap a background fill | 91.5–97.8%, drawn |
+| ...in warp | 179% | 125% |
+| BASIC moving two sprites, X and Y expanded, `POKE 53248,X` in a loop | (not drawn) | 45% |
+
+The last row is the adversarial case: BASIC rewrites the sprite X registers
+about twenty times a frame, each landing on a different row, so every row is
+a split with its own sprite positions to derive and draw. A game sets them
+once a frame, in an interrupt below the display.
+
+`c64uitest` composes a hires and a multicolour bitmap byte, a sprite over
+text, a write to its data and switching it off, each read back off the
+shadow; each was verified red by breaking the arm it tests.
 
 ## 10. The status bar
 

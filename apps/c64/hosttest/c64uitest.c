@@ -1004,6 +1004,55 @@ void c64_band1(unsigned char *dst, int first, int last,
     }
 }
 
+/* c64band.inc's c64_bandbm, in C (C64-SPEC 9.10); c64memtest runs the
+ * shipping one on a real x86 */
+extern unsigned char c64_dmask[16][4];
+static long n_bm_cells;
+void c64_bandbm(unsigned char *dst, const unsigned char *xm,
+                const unsigned char *xb, const unsigned char *col,
+                int n, int mc, int bg)
+{
+    int c, y;
+    for (c = 0; c < n; c++) {
+        const unsigned char *d0 = c64_dmask[bg & 15];
+        const unsigned char *d1 = c64_dmask[xm[c] >> 4];
+        const unsigned char *d2 = c64_dmask[xm[c] & 15];
+        const unsigned char *d3 = c64_dmask[col[c] & 15];
+        n_bm_cells++;
+        for (y = 0; y < 8; y++) {
+            unsigned b = xb[c * 8 + y], o = 0;
+            int k;
+            if (!mc)
+                o = (b & d1[y & 3]) | (~b & d2[y & 3]);
+            else
+                for (k = 0; k < 4; k++) {
+                    unsigned p = (b >> (6 - 2 * k)) & 3;
+                    const unsigned char *d = p == 0 ? d0 : p == 1 ? d1 : p == 2 ? d2 : d3;
+                    o |= d[y & 3] & (0xC0 >> (2 * k));
+                }
+            dst[y * HB_STRIDE + c] = (unsigned char)o;
+        }
+    }
+}
+
+int c64_rvdiff(const unsigned char *a, const unsigned char *b)
+{ return memcmp(a, b, 48) != 0; }
+
+void c64_sprrow(unsigned char *dst, const unsigned char *on,
+                const unsigned char *lit, int n, int cell, int sh, int f, int l)
+{
+    int k;
+    for (k = 0; k < n; k++, cell++) {
+        unsigned o = (unsigned)on[k] << 8, t = (unsigned)lit[k] << 8;
+        o >>= sh;
+        t >>= sh;
+        if (cell >= f && cell <= l)
+            dst[cell] = (unsigned char)((dst[cell] & ~(o >> 8)) | (t >> 8));
+        if (cell + 1 >= f && cell + 1 <= l)
+            dst[cell + 1] = (unsigned char)((dst[cell + 1] & ~o) | t);
+    }
+}
+
 int c64_rowspan(const unsigned char *a, const unsigned char *b, int n)
 {
     int k, c, f = 0x7FFF, l = -1;
@@ -1661,7 +1710,12 @@ static void flush_now(void)
     c64_latch(0);                           /* the register writes the script
                                              * made reach the screen at the
                                              * display latch's line, once a
-                                             * frame (9.9): one has passed */
+                                             * frame (9.9) - and a write in the
+                                             * lines BELOW the display is the
+                                             * next frame's (9.10), so it is
+                                             * TWO latches that put whatever
+                                             * the script wrote on every row */
+    c64_latch(0);
     os88_onwake(the_win);                   /* the wake runs with the lock NOT
                                              * held and takes it itself (74.1) */
     if (lock_depth != 0) { fail("a wake left the gfx lock held"); exit(1); }
@@ -3276,20 +3330,115 @@ int main(int argc, char **argv)
             fail("a $D011 write reached the screen before the display "
                  "latch's line (9.9)");
         c64_advance((int)C64_X63(C64_LATCH_LINE) + 10);
+        /* (that latch composed the frame BEFORE it, 9.10: a write in the
+         * lines above the display is the NEXT frame's, every row of it) */
+        c64_advance((int)C64_X63(8 * 21 + 5));  /* row 21's second half... */
+        c64_io_wr(0xD011, 0x1B);            /* ...text for the scroller below */
+        c64_advance((int)C64_X63(60));      /* ...and below the display, */
+        c64_io_wr(0xD011, 0x3B);            /* bitmap on again for the top */
+        c64_advance((int)C64_X63(C64_PAL_LINES - 8 * 21 - 5 - 60));
         if (c64_mode != 2)
             fail("crossing line 51 did not take the display latch: the "
                  "bitmap mode set above it is not on the screen");
-        c64_io_wr(0xD011, 0x1B);            /* ...off for the scroller below */
-        c64_advance(5000);
-        c64_io_wr(0xD011, 0x3B);            /* ...and on again before 51 */
-        c64_advance(C64_PAL_FRAME - 5000);
-        if (c64_mode != 2)
+        /* PER ROW (9.10): rows 0-21 drew bitmap and 22-24 text, which is
+         * what a split screen IS. Verified red with c64_latch applying the
+         * whole log to every row: the screen is one mode */
+        if (c64_rmode[0] != 2 || c64_rmode[21] != 2 || c64_rmode[22] != 0
+                || c64_rmode[24] != 0 || !c64_rsplit)
+            fail("a $D011 split below row 21 did not make rows 0-21 bitmap "
+                 "and 22-24 text (9.10)");
+        c64_advance(C64_PAL_FRAME);         /* the same frame again, NOTHING
+                                             * written: it stays split */
+        if (c64_mode != 2 || c64_rmode[24] != 2)
             fail("a split that is bitmap at line 51 every frame flipped the "
                  "screen to text: the latch read a write below its line");
         c64_reset_regs();
         c64_map_publish();
         c64_frame_regs();
         c64_scr_wr(C64_SCR_IRQ, 0);
+    }
+
+    /* --- THE OTHER MODES AND THE SPRITES, IN 1BPP (9.10, 9.11). Each case
+     * reads the shadow - what went to the glass - at row 0, line 0, cell 0.
+     * Verified red with c64_bandx's bitmap cases swapped, and with the
+     * c64_spr_draw call taken out of c64_flush. */
+    {
+        int j;
+        c64_io_wr(0xD021, 6);               /* blue paper: luminance 60 */
+        c64_io_wr(0xD018, 0x18);            /* matrix $0400, bitmap $2000 */
+        c64_io_wr(0xD011, 0x3B);            /* BMM */
+        for (j = 0; j < 1000; j++)
+            c64_wr(0x0400 + j, 0x10);       /* 1 = white, 0 = black */
+        for (j = 0; j < 8000; j++)
+            c64_wr(0x2000 + j, 0xAA);
+        for (j = 0; j < 1000; j++)
+            c64_col[j] = 1;
+        flush_now();
+        if (c64_sh[0] != 0xAA || c64_sh[C64_X320(24) + 7 * 40 + 39] != 0xAA)
+            fail("a hires bitmap of white-on-black $AA did not reach the "
+                 "glass as $AA (9.10)");
+        c64_io_wr(0xD016, c64_vic[0x16] | 0x10);    /* ...and MCM */
+        flush_now();                        /* (MCM itself: every row) */
+        j = (int)c64_n_cell;
+        c64_wr(0x2000, 0x1B);               /* pairs 00 01 10 11: paper,
+                                             * white, black, colour RAM's 1 */
+        flush_now();
+        if ((int)c64_n_cell - j > 32)
+            fail("one bitmap byte written recomposed more than its page's 32 "
+                 "cells (9.10)");
+        /* paper 60 on line 0 of the Bayer matrix (8, 136, ...) is `10`, white
+         * `11`, black `00`, white `11` */
+        if (c64_sh[0] != 0xB3)
+            fail("a multicolour bitmap byte did not dither its four colours "
+                 "by luminance (9.10)");
+        c64_io_wr(0xD016, c64_vic[0x16] & ~0x10);
+        c64_io_wr(0xD011, 0x1B);
+        c64_io_wr(0xD018, 0x15);            /* text, the ROM's characters */
+        for (j = 0; j < 1000; j++)
+            c64_wr(0x0400 + j, 0x20);       /* spaces */
+        flush_now();
+        if (c64_sh[0] != 0x00)
+            fail("the screen of spaces is not dark on a dark paper");
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0);
+        c64_wr(0x0340, 0xFF);
+        c64_wr(0x0341, 0x0F);
+        c64_wr(0x07F8, 0x0D);               /* sprite 0's data at $0340 */
+        c64_io_wr(0xD027, 1);               /* white */
+        c64_io_wr(0xD000, 24);              /* the display's top-left */
+        c64_io_wr(0xD001, 50);
+        c64_io_wr(0xD015, 1);
+        flush_now();
+        if (c64_sh[0] != 0xFF || c64_sh[1] != 0x0F || c64_sh[40] != 0x00)
+            fail("sprite 0 at the display's top-left did not draw its first "
+                 "line over the text (9.11)");
+        c64_wr(0x0340, 0x81);               /* its DATA changes, nothing else */
+        flush_now();
+        if (c64_sh[0] != 0x81)
+            fail("a write to a sprite's data did not redraw it (9.11)");
+        j = (int)c64_n_cell;
+        c64_dirty_any = 0;
+        c64_io_wr(0xD000, 27);              /* three pixels right */
+        c64_latch(0);
+        c64_latch(0);
+        if (!c64_dirty_any)                 /* (a machine that only moves a
+                                             * sprite writes no RAM: the wake
+                                             * flushes on this flag or not at
+                                             * all - found on the glass, a
+                                             * BASIC loop of POKE 53248,X) */
+            fail("a sprite register change did not raise the flush gate (9.11)");
+        flush_now();
+        if (c64_sh[0] != 0x10 || c64_sh[1] != 0x21 || c64_sh[2] != 0xE0)
+            fail("a sprite three pixels off a cell boundary did not shift its "
+                 "bytes across the cells (9.11)");
+        if ((int)c64_n_cell - j > 3 * 4)    /* 21 lines: rows 0-2 */
+            fail("a sprite moving three pixels recomposed more than the four "
+                 "cells a row it was and is over (9.11)");
+        c64_io_wr(0xD015, 0);
+        flush_now();
+        if (c64_sh[0] != 0x00 || c64_sh[1] != 0x00)
+            fail("a sprite switched off stayed on the glass (9.11)");
+        c64_io_wr(0xD021, 6);
     }
 
     /* --- THE FREE-RUNNING TIMER, WHICH IS WHERE A SIGNED COMPARE HANGS.

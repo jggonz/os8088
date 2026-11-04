@@ -678,6 +678,91 @@ body:
     cmp ax, [sig1]
     je .f6
     mov byte [colrow+5], 0
+
+    ; c64_bandbm (C64-SPEC 9.10): one cell, multicolour then hires. Colour 1
+    ; is all-lit, 0 all-dark, and 6 - the paper - a different bit on each of
+    ; its four line phases, so a block laid out wrong or a phase that does
+    ; not wrap at four reads as a wrong byte
+    mov word [_c64_dmask+4], 0xFFFF         ; colour 1
+    mov word [_c64_dmask+6], 0xFFFF
+    mov word [_c64_dmask+24], 0x4080        ; colour 6: 0x80, 0x40, 0x20, 0x10
+    mov word [_c64_dmask+26], 0x1020
+    mov byte [bmxm], 0x10                   ; high nibble white, low black
+    mov byte [colrow+0], 1                  ; colour RAM white
+    mov cx, 8
+    mov di, bmxb
+.bmf:
+    mov byte [di], 0x1B                     ; pairs 00 01 10 11
+    inc di
+    loop .bmf
+    mov byte [banda+1], 0xCC
+    mov word [pushes], 7
+    PUSHI 6                                 ; bg
+    PUSHI 1                                 ; mc
+    PUSHI 1                                 ; n
+    PUSHI colrow
+    PUSHI bmxb
+    PUSHI bmxm
+    PUSHI banda
+    call disc_call
+    dw _c64_bandbm
+    ; line y: paper's phase & 0xC0 | white 0x30 | black 0 | white 0x03
+    mov si, bmwant
+    xor di, di
+    mov cx, 8
+.bmc:
+    mov al, [banda+di]
+    cmp al, [si]
+    jne .f6
+    inc si
+    add di, 40
+    loop .bmc
+    cmp byte [banda+1], 0xCC                ; ...and nothing past n
+    jne .f6
+    mov cx, 8
+    mov di, bmxb
+.bmh:
+    mov byte [di], 0xAA
+    inc di
+    loop .bmh
+    PUSHI 6                                 ; ...hires: 1 = white, 0 = black
+    PUSHI 0
+    PUSHI 1
+    PUSHI colrow
+    PUSHI bmxb
+    PUSHI bmxm
+    PUSHI banda
+    call disc_call
+    dw _c64_bandbm
+    cmp byte [banda], 0xAA
+    jne .f6
+    cmp byte [banda+280], 0xAA
+    jne .f6
+    mov byte [colrow+0], 0
+
+    ; c64_sprrow (C64-SPEC 9.11): $FF on, $0F of it lit, at cell 1 shifted
+    ; three right over a band of $AA, cells 1..1 only: cell 1 is the byte's
+    ; top five pixels set, the lit ones bright - (AA & ~1F) | 01 = A1 - and
+    ; cell 2, the spill, is outside F..L and must stay $AA
+    mov byte [banda+1], 0xAA
+    mov byte [banda+2], 0xAA
+    mov byte [bmxm], 0xFF                   ; (on)
+    mov byte [bmxb], 0x0F                   ; (lit)
+    mov word [pushes], 8
+    PUSHI 1                                 ; l
+    PUSHI 1                                 ; f
+    PUSHI 3                                 ; sh
+    PUSHI 1                                 ; cell
+    PUSHI 1                                 ; n
+    PUSHI bmxb
+    PUSHI bmxm
+    PUSHI banda
+    call disc_call
+    dw _c64_sprrow
+    cmp byte [banda+1], 0xA1
+    jne .f6
+    cmp byte [banda+2], 0xAA
+    jne .f6
     mov al, '.'
     call putc
     jmp .x2
@@ -1114,6 +1199,7 @@ section .text
 ; globals there, so nasm can see the label). Here they stand in for it.
 section .data
 _c64_cmask: times 32 db 0xFF
+_c64_dmask: times 64 db 0
 _c64_bgfill: db 0
 ; Edit > Copy's two package globals (c64kbd.c bss on the target). The real
 ; c64_sctab is built by ovl_conv_init from VICE's three transcribed
@@ -1218,6 +1304,9 @@ src:         times 24 db 0
 dst:         times 24 db 0
              times 4 db 0xCC
              times 4 db 0xCC
+bmxm:        db 0
+bmxb:        times 8 db 0
+bmwant:      db 0xB3, 0x73, 0x33, 0x33, 0xB3, 0x73, 0x33, 0x33
 banda:       times 320 db 0
              times 4 db 0xCC
 bandb:       times 320 db 0

@@ -146,6 +146,13 @@ void c64_band1(unsigned char *dst, int first, int last,
                const unsigned char *col,
                unsigned gseg, unsigned goff,
                int mode, int bg);
+void c64_bandbm(unsigned char *dst, const unsigned char *xm,
+                const unsigned char *xb, const unsigned char *col,
+                int n, int mc, int bg);
+int  c64_rvdiff(const unsigned char *a, const unsigned char *b);
+void c64_sprrow(unsigned char *dst, const unsigned char *on,
+                const unsigned char *lit, int n, int cell, int sh,
+                int f, int l);
 int  c64_rowspan(const unsigned char *a, const unsigned char *b, int n);
 void c64_rowcopy(unsigned char *dst, const unsigned char *src, int n);
 unsigned c64_rowsig(unsigned mseg, unsigned moff,
@@ -447,7 +454,12 @@ static void c64_force_rows(int r0, int r1, int c0, int c1);
 static void c64_lum_update(void);
 static void c64_dirty_all(void);
 static void c64_row_dirty(int row);
+static void c64_row_whole(int row);
 static void c64_frame_regs(void);
+static unsigned char c64_rchg[25];          /* a row's register set moved since
+                                             * c64_spr_dirty looked (9.11) */
+static int c64_fr_stale = 1;                /* c64_rv moved without c64scr.c's
+                                             * per-row tables following (9.10) */
 static int  c64_geom(void *win);
 static void c64_watch_set(void);
 static void c64_menu_state(void);
@@ -1295,6 +1307,8 @@ static int c64_slice(int left)
         d = c64_alarm_next();
         n = (d < left) ? d : left;
         c64_in_run = 1;
+        c64_run_n = (unsigned)n;            /* (where a logged write lands,
+                                             * c64io.c's c64_line_rel) */
         r = c64_run((unsigned)n);
         c64_in_run = 0;
         ran = n - (int)c64_m.cnt;           /* cnt is what was NOT spent, and
@@ -1866,6 +1880,7 @@ void *os88_main(void)
                                              * and tests/c64band's numbers */
     c64_reset_regs();                       /* the VIC/CIA/SID register files */
     c64_lum_update();                       /* the 1bpp masks, off $D021 (9.6) */
+    c64_dither_init();                      /* ...and the other modes' (9.10) */
     c64_ram_pattern();                      /* power-on RAM is VICE's factory
                                              * pattern and not zeros
                                              * (src/ram.c:169-177), and the
