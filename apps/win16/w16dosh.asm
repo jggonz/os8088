@@ -35,6 +35,9 @@ w16dh_tab_done:
     dw 0                            ; W16DH_HSS
     dw 0                            ; W16DH_HSP
     db DOS_WKB                      ; W16DH_WKB
+%ifdef PKG_MEGA
+    dw dos_wseg                     ; W16DH_WSEGP
+%endif
 
 ; -----------------------------------------------------------------------------
 ; w16dh_i21 - the core's int 21h, on the stack the image named

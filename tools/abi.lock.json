@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "dd65d06f134f6c98e5d9f63ab55715739302ae94bfca91bf54d65a74c6d9b6c8",
+  "fingerprint": "b395855801841c165384d1de40d49211f904236065209360de6bf08d64fae6d6",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "a6d586d0eb0696dc8fa259267e07770ed49c7d55efc5eb7aacd2041c51d0616e",
+  "fingerprint": "39a274c118888d92511f7330c4e8c6580e37c07f782609cadbd63a8ac79ce2c5",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1568,6 +1568,118 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 12
+  },
+  {
+   "fingerprint": "a0397190f55d645219e231a7744875ba7ac369d25fc066c0ce33b0745bf17474",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 10
+  },
+  {
+   "fingerprint": "9734b5671841222e9e5d59dd62dfa395729e99ff0cf2b820e498091aaa023e41",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SND_STREAM's contract now says what SPEC.md 34.6.5 already pinned: verb 4 (open-in) requires SND_OPENF_EXT in AH and answers 7 without it, and verb 0 alone answers 8 (a record stream claims no double buffer). No bump: an .o88 built before that records into a grant is refused with 7 - it runs and says so - and the only callers built against the new form (Recorder, WaveRack) ship with the driver",
+   "to": 11
+  },
+  {
+   "fingerprint": "812bea7390d26981b067155963ed6cee7f15f736fd8135f9740516ee2d0ba558",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG gains SEG_TILE (9), kern_mega's consecutive selectors (SPEC.md 124.31.2, O2(b)); a verb added, nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "9ae6ee9a1429a9d7cf3e4bb817396a0abbbca5c31c04353047c531b48dd8d60c",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG gains SEG_TILE (9), kern_mega's consecutive selectors (SPEC.md 124.31.2, O2(b)); a verb added, nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "b9bcbbfb756e8d9fdfaff717bdfabff5bac94f564b68afde7d6db819613b56dd",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG verb 10, SEG_WINL: SEG_WIN at a 32-bit linear base (SPEC.md 50.6.11, 124.31.3); an added verb, nothing built before is affected",
+   "to": 10
+  },
+  {
+   "fingerprint": "9eeae4ce134a4d80853273893f7275b2d439f36881fe8e8acd4fa8f50f362fb4",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG verb 10, SEG_WINL: SEG_WIN at a 32-bit linear base (SPEC.md 50.6.11, 124.31.3); an added verb, nothing built before is affected",
+   "to": 11
+  },
+  {
+   "fingerprint": "f787019b8fb65bb00f62fb3c2b9562af40f8698cbbb2929273095f483d3d8e69",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of main into Phase B/C: OSAPI_SEG's SEG_TILE (9) and SEG_WINL (10) beside main's FSXF_REAL - added verbs and bits on both sides, no cell moved; nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "a03ee4ef7389a154d69fa422445efd96cf0ad3b594a9fc7d3a8373e49e5a59f7",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "merge of main into Phase B/C: OSAPI_SEG's SEG_TILE (9) and SEG_WINL (10) beside main's FSXF_REAL - added verbs and bits on both sides, no cell moved; nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "7910b4516843e48e8c9b1b469cca8958c56325f743f209df07aa95f7a7db1ac0",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG gains SEG_LEND (11), kern_mega's lent stack for a foreign caller's BIOS int (SPEC.md 50.6.11, 124.31.2); a verb added, nothing built before changes",
+   "to": 10
+  },
+  {
+   "fingerprint": "bc820e18dfe10ea59b4c30c23057f1107da0ef302d644b0927a68f0169f9b976",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG gains SEG_LEND (11), kern_mega's lent stack for a foreign caller's BIOS int (SPEC.md 50.6.11, 124.31.2); a verb added, nothing built before changes",
+   "to": 11
+  },
+  {
+   "fingerprint": "5cca6914516318e7e7c6852771672de8eabf29c87141074c3953fe187cf24841",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SEG_LEND (11): the lent stack's DX is a claim's real paragraph, converted to its selector by the kernel - no identity grid",
+   "to": 10
+  },
+  {
+   "fingerprint": "3c6f392370f38193a2ea6b5f08e47eebf7e851382427e9f368c4daa643210a83",
+   "from": 11,
+   "guard": "DRV_VER",
+   "reason": "SEG_LEND (11): the lent stack's DX is a claim's real paragraph, converted to its selector by the kernel - no identity grid",
+   "to": 11
+  },
+  {
+   "fingerprint": "cd1bc0d0b8699cc39ae0a3de4a6b6f2287138bdb77884c35ee158afff2fb53e0",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of main (#328) into Phase B/C (#327): main's three cells and DRV_VER 12 beside the branch's SEG_TILE, SEG_WINL and SEG_LEND, each an added OSAPI_SEG verb; nothing built before is affected",
+   "to": 10
+  },
+  {
+   "fingerprint": "0f17acae1ca4de60fdd48e140f548898441e90799fc732ee896f5b3d6e2a6428",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of main (#328) into Phase B/C (#327): main's three cells and DRV_VER 12 beside the branch's SEG_TILE, SEG_WINL and SEG_LEND, each an added OSAPI_SEG verb; nothing built before is affected",
+   "to": 12
+  },
+  {
+   "fingerprint": "39a274c118888d92511f7330c4e8c6580e37c07f782609cadbd63a8ac79ce2c5",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SEG_HND (12): a re-aimable handle descriptor verb for OSAPI_SEG on kern_mega (SPEC.md 50.6.11); a constant added, nothing built before moves",
+   "to": 10
+  },
+  {
+   "fingerprint": "b395855801841c165384d1de40d49211f904236065209360de6bf08d64fae6d6",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "SEG_HND (12): a re-aimable handle descriptor verb for OSAPI_SEG on kern_mega (SPEC.md 50.6.11); a constant added, nothing built before moves",
    "to": 12
   }
  ]

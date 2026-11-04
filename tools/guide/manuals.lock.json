@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "db5f8851",
-  "strings": "24601ea4726e08aa",
-  "why": "post-merge fixes: paragraph claims, the load's one file operation and the join from a double-click; below the page's level of detail"
+  "stamped": "dc4aa4f05",
+  "strings": "4fe195f6a33d805e",
+  "why": "a zero-byte label for the pin registry; WIN16.O88 byte-identical on both arms"
  },
  "WIN16_TXT": {
   "sources": [

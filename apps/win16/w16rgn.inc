@@ -56,7 +56,7 @@ W16SYS w16g_setbmbits
     mov al, [es:si]
     inc si
     push es
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     stosb
     pop es
     loop .cb
@@ -105,7 +105,7 @@ W16SYS w16g_setbmbits
     shr dx, 1                       ; (CF = the low nibble)
     pushf
     add di, dx
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     popf
     pop ax
     jc .lo
@@ -191,6 +191,138 @@ W16SYS w16g_setdibits
 .no:
     xor ax, ax
 .out:
+    pop di
+    pop si
+    ret
+
+; =============================================================================
+; SetDIBitsToDevice (GDI.443) - args: +0 wUsage, +2 lpbmi, +6 lpBits,
+; +10 cScanLines, +12 uStartScan, +14 ySrc, +16 xSrc, +18 cy, +20 cx,
+; +22 yDest, +24 xDest, +26 hDC
+;
+; A DIB's rows run bottom up and ySrc counts from its bottom; lpBits holds
+; cScanLines of them starting at uStartScan. The visible part - the clip, and
+; the rows lpBits has - is converted into a 4bpp block in os8088's colours
+; (each palette entry the nearest of the sixteen) and put down with one
+; OSAPI_GFX_BLIT4 per W16_GBUF of it. 1 and 4 bits a pixel, BITMAPINFOHEADER
+; or the older BITMAPCOREHEADER, DIB_RGB_COLORS. Answers the rows drawn.
+; Part 9's, beside SetDIBits: it fetched the part for w16_dibuse already.
+; =============================================================================
+W16SYS w16g_setdib
+    push si
+    push di
+    push bp
+    xor ax, ax
+    mov [w16_dres], ax
+    cmp byte [w16_dcon], 0
+    je .ret
+    ICALL w16_args
+    cmp word [es:bx + 26], W16_HDC  ; another DC's: nothing drawn
+    jne .ret
+    mov ax, [es:bx]                 ; DIB_PAL_COLORS: through the selected
+    call w16_dibuse                 ;   palette (SPEC.md 124.25.8)
+    jc .ret
+    push es
+    push bx
+    les si, [es:bx + 2]             ; the header
+    ICALL w16_dibhdr
+    pop bx
+    pop es
+    jc .ret
+    ; --- the visible rectangle, on the screen ---
+    mov ax, [es:bx + 24]
+    add ax, [w16_ox]
+    mov [w16_rl], ax                ; the destination's left ...
+    mov [w16_dx0], ax
+    mov ax, [es:bx + 22]
+    add ax, [w16_oy]
+    mov [w16_rt], ax
+    mov [w16_dy0], ax
+    mov ax, [w16_rl]
+    add ax, [es:bx + 20]
+    dec ax
+    mov [w16_rr], ax
+    mov ax, [w16_rt]
+    add ax, [es:bx + 18]
+    dec ax
+    mov [w16_rb], ax
+    mov ax, [es:bx + 16]
+    mov [w16_dsx], ax
+    mov ax, [es:bx + 14]
+    add ax, [es:bx + 18]
+    dec ax
+    mov [w16_dtop], ax              ; the source row at the top, bottom up
+    mov ax, [es:bx + 12]
+    mov [w16_dstart], ax
+    mov ax, [es:bx + 10]
+    mov [w16_dlines], ax
+    les si, [es:bx + 6]
+    mov [w16_dbits], si
+    mov [w16_dbits + 2], es
+    ICALL w16_cliprect              ; [w16_rl]..[w16_rb] cut to the clip
+    jc .ret
+    ; --- band by band: as many rows as W16_GBUF holds ---
+    mov ax, [w16_rr]
+    sub ax, [w16_rl]
+    inc ax
+    mov [w16_dvw], ax
+    inc ax
+    shr ax, 1
+    mov [w16_d4s], ax               ; 4bpp bytes a row
+    mov bx, ax
+    mov ax, W16_GBUF
+    xor dx, dx
+    div bx
+    or ax, ax
+    jz .ret                         ; a row wider than the buffer (it is not)
+    mov [w16_dband], ax
+    mov dx, [w16_rt]                ; DX = the screen row
+.band:
+    cmp dx, [w16_rb]
+    jg .ret
+    mov [w16_dby], dx
+    mov di, w16_gbuf
+    xor cx, cx                      ; CX = rows in this band
+.brow:
+    cmp dx, [w16_rb]
+    jg .bput
+    cmp cx, [w16_dband]
+    jae .bput
+    ICALL w16_dibrow                ; CF=1: lpBits has not that row
+    jc .bput
+    add di, [w16_d4s]
+    inc dx
+    inc cx
+    jmp short .brow
+.bput:
+    jcxz .skip
+    push dx
+    push es
+    push ds
+    pop es
+    mov si, w16_gbuf
+    mov bp, [w16_d4s]
+    mov ax, [w16_rl]
+    mov bx, [w16_dby]
+    mov dx, cx
+    add [w16_dres], cx
+    mov cx, [w16_dvw]
+    cmp byte [w16_mtgt], 0
+    jne .mem
+    call OSAPI_GFX_BLIT4
+.put:
+    pop es
+    pop dx
+    jmp short .band
+.skip:
+    inc dx                          ; a row lpBits has not: not drawn
+    jmp short .band
+.mem:                               ; a memory DC's bitmap (SPEC.md 124.25.3)
+    SLCALL w16_mblit4
+    jmp short .put
+.ret:
+    mov ax, [w16_dres]
+    pop bp
     pop di
     pop si
     ret
@@ -330,13 +462,15 @@ W16SYS w16g_getdibits
     sub dx, ax                      ; DX = the bitmap's row
     call w16_gdrow
     inc bp
-    mov ax, di                      ; the next row: lpBits may run past a
-    mov cl, 4                       ;   segment (a huge pointer), so ES:DI
-    shr ax, cl                      ;   is made the smallest offset again
-    mov cx, es
+%ifndef PKG_MEGA                    ; (the arm: a selector is not a paragraph;
+    mov ax, di                      ;   a DIB past 64KB is S22 batch 7's)
+    mov cl, 4                       ; the next row: lpBits may run past a
+    shr ax, cl                      ;   segment (a huge pointer), so ES:DI
+    mov cx, es                      ;   is made the smallest offset again
     add cx, ax
     mov es, cx
     and di, 15
+%endif
     jmp short .scan
 .done:
     mov ax, bp
@@ -372,7 +506,7 @@ w16_gdrow:
     shr dx, 1
     pushf
     add si, dx
-    mov ds, [w16b_seg + bx]
+    W16SEG ds, [w16b_seg + bx]
     mov al, [si]
     popf
     pop dx
@@ -432,7 +566,7 @@ w16_gdrow:
     pop bx
 .next:
     inc dx
-    jmp short .px
+    jmp .px
 .pad:
     cmp byte [w16_gdbpp], 1         ; a part-filled byte of bits, shifted up
     jne .p4end
@@ -619,7 +753,7 @@ w16r_can:
     shr ax, 1                       ; CF = a low nibble
     pushf
     add ax, dx
-    mov es, [w16b_seg + bx]
+    W16SEG es, [w16b_seg + bx]
     mov bx, ax
     mov al, [es:bx]
     popf
@@ -1633,7 +1767,7 @@ W16SYS w16g_crepal
     push es
     pop ds
     lea dx, [bx + 4]
-    mov es, ax
+    W16SEG es, ax
     xchg dx, si                     ; DS:SI = the entries, DX = the slot
     xor di, di
     mov ax, cx

@@ -32,6 +32,10 @@ W16DH_WKB   equ W16DH_ORG + 13      ; byte: the read window's floor in KB,
                                     ;   DOS's DOS_WKB, checked against
 W16DH_WFLOOR equ 8                  ;   ...this, which sizes the block before
                                     ;   the host is read (SPEC.md 124.25.1)
+W16DH_WSEGP equ W16DH_ORG + 14      ; word, the kern_mega arm's only: the
+                                    ;   address of the core's dos_wseg, which
+                                    ;   the image makes a selector after
+                                    ;   W16DH_INIT (SPEC.md 124.31.7)
 W16DH_PATH  equ W16DH_ORG + W16DH_MAX - 96  ; the program's file, "X:\...",
                                     ;   80 bytes and a NUL at most, written at
                                     ;   W16DH_INIT (0 = not known)

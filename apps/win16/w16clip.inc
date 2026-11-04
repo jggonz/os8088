@@ -107,7 +107,7 @@ w16_clgetb:
     or ax, ax
     jz .zero
     mov bx, ax                      ; BX = the first block
-    mov es, dx
+    W16SEG es, dx
     xor di, di
     mov cx, si
     call OSAPI_CLIP_GET             ; CX = the bytes copied
@@ -146,7 +146,7 @@ w16_clgetb:
     push ds
     mov di, es                      ; DS = the first's data, ES = the second's
     mov ds, di
-    mov es, dx
+    W16SEG es, dx
     mov cx, si                      ; CX = the bytes
     xor si, si
     xor di, di
@@ -261,139 +261,8 @@ W16LIB w16u_cbchain
     xor dx, dx
     ret
 
-; AddAtom (KERNEL.70), GlobalAddAtom (USER.268) - args: +0 lpszName. A
-; MAKEINTATOM (no segment) is its own atom; a name is RegisterClipboardFormat's
-; place for it, as Windows' formats are global atoms (SPEC.md 124.25.10)
-W16LIB w16k_addatom
-    ICALL w16_args
-    cmp word [es:bx + 2], 0
-    jne w16u_regcbfmt
-    mov ax, [es:bx]
-    xor dx, dx
-    ret
-
-; RegisterClipboardFormat (USER.145) - args: +0 lpszFormat: C000h + its
-; place in WIN16's table, the same for the same name (case aside); 0 when
-; the W16_NCBF places are taken. Nothing is ever put on os8088's clipboard
-; in one: it carries text
-W16LIB w16u_regcbfmt
-    push si
-    push di
-    ICALL w16_args
-    les di, [es:bx]
-    xor bx, bx                      ; BX = the place
-    mov si, w16_cbfn
-.f:
-    cmp byte [si], 0
-    je .new
-    push si
-    push di
-.c:
-    mov al, [es:di]
-    mov ah, [si]
-    call w16_up2
-    cmp al, ah
-    jne .ne
-    or al, al
-    jz .eq
-    inc si
-    inc di
-    jmp short .c
-.eq:
-    pop di
-    pop si
-    jmp short .have
-.ne:
-    pop di
-    pop si
-    add si, 32
-    inc bx
-    cmp bx, W16_NCBF
-    jb .f
-    xor ax, ax
-    jmp short .out
-.new:
-    mov cx, 31                      ; the name, cut to 31
-.cp:
-    mov al, [es:di]
-    mov [si], al
-    or al, al
-    jz .have
-    inc si
-    inc di
-    loop .cp
-    mov byte [si], 0
-.have:
-    mov ax, 0xC000
-    add ax, bx
-.out:
-    xor dx, dx
-    pop di
-    pop si
-    ret
-
-; w16_up2 - AL and AH each upper-cased (a-z). Keeps the rest
-w16_up2:
-    cmp al, 'a'
-    jb .h
-    cmp al, 'z'
-    ja .h
-    sub al, 0x20
-.h:
-    cmp ah, 'a'
-    jb .out
-    cmp ah, 'z'
-    ja .out
-    sub ah, 0x20
-.out:
-    ret
-
-; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszFormatName,
-; +6 wFormat: a registered format's name, cut to the buffer; the answer is
-; its length, 0 for any other format
-W16LIB w16u_cbfmtname
-    push si
-    push di
-    ICALL w16_args
-    mov cx, [es:bx]
-    mov ax, [es:bx + 6]
-    les di, [es:bx + 2]
-    sub ax, 0xC000
-    jb .zero
-    cmp ax, W16_NCBF
-    jae .zero
-    mov si, ax
-    push cx
-    mov cl, 5
-    shl si, cl
-    pop cx
-    add si, w16_cbfn
-    cmp byte [si], 0
-    je .zero
-    jcxz .zero
-    dec cx                          ; room for the NUL
-    xor ax, ax
-.cp:
-    jcxz .end
-    mov dl, [si]
-    or dl, dl
-    jz .end
-    mov [es:di], dl
-    inc si
-    inc di
-    inc ax
-    dec cx
-    jmp short .cp
-.end:
-    mov byte [es:di], 0
-    jmp short .out
-.zero:
-    xor ax, ax
-.out:
-    xor dx, dx
-    pop di
-    pop si
-    ret
+; AddAtom, RegisterClipboardFormat and the names back are the system-library
+; part's, beside the table (w16mdi.inc's w16i_atom, SPEC.md 124.25.10)
 
 ; EmptyClipboard (USER.139)
 W16LIB w16u_emptycb
@@ -442,9 +311,9 @@ W16LIB w16u_setcbdata
     shl cx, 1
     shl cx, 1
     shl cx, 1                       ; CX = its bytes
-    mov ax, es
+    W16VOF ax, es
     inc ax
-    mov es, ax
+    W16SEG es, ax
     xor si, si
     call w16_clput
     jc .bad

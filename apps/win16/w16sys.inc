@@ -132,13 +132,8 @@ W16LIB w16k_loadlib
     jc .refused
     cmp al, 0xFF
     je .nofile
-    xor ah, ah
-    call w16l_recp                  ; BX -> it
-    cmp byte [bx + W16L_OWED], 0
-    je .found
-    mov byte [bx + W16L_OWED], 0
-    mov si, w16k_llback_c           ; its LibMain, then w16k_llback answers
-    call w16l_lmcall
+    mov [w16_lltgt], al             ; its LibMain, and those of every library
+    call w16k_llrun                 ;   it brought in (w16k_llrun)
     jmp short .out
 .found:
     xor ah, ah
@@ -161,6 +156,50 @@ W16LIB w16k_loadlib
     pop di
     pop si
     ret
+
+; w16k_llrun - LoadLibrary's LibMains: every library the load brought in
+; that owes one, the last loaded first - the libraries [w16_lltgt] imports,
+; which Windows initialised before it - and then [w16_lltgt]'s own, whose
+; continuation answers; or its hInstance when it owes none. Before, only
+; the library asked for was called, and Microsoft's setup engine looped on
+; LoadString(NULL): MSCOMSTF's LibMain, which keeps its hInstance, never ran
+; (SPEC.md 124.23.5)
+w16k_llrun:
+    push bx
+    mov ax, W16_NLIB
+.f:
+    dec ax
+    js .tgt
+    cmp al, [w16_lltgt]
+    je .f
+    call w16l_recp
+    cmp byte [bx + W16L_COUNT], 0
+    je .f
+    cmp byte [bx + W16L_OWED], 0
+    je .f
+    mov si, w16k_llnext_c
+    jmp short .call
+.tgt:
+    mov al, [w16_lltgt]
+    xor ah, ah
+    call w16l_recp
+    cmp byte [bx + W16L_OWED], 0
+    je .done
+    mov si, w16k_llback_c           ; ...then w16k_llback answers
+.call:
+    mov byte [bx + W16L_OWED], 0
+    call w16l_lmcall
+    pop bx
+    ret
+.done:
+    mov ax, [bx + W16L_HINST]
+    xor dx, dx
+    pop bx
+    ret
+
+; ...an imported library's LibMain has answered: the next
+LCONT w16k_llnext
+    jmp w16k_llrun
 
 ; LoadLibrary's continuation: AX = LibMain's answer, CX = the record
 LCONT w16k_llback
@@ -192,8 +231,7 @@ W16LIB w16k_freelib
     dec byte [si + W16L_COUNT]
     jnz .out
     inc byte [si + W16L_COUNT]      ; alive while its WEP runs
-    push cs
-    pop es
+    W16CSEG es
     mov di, w16_s_wep               ; XSEC-OK: ES = CS
     mov cl, 3
     ICALL w16_libproc               ; BL = the record -> DX:AX
@@ -368,7 +406,7 @@ W16LIB w16u_getclsname
     pop di
     sub ax, di
     ret
-w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co
+w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co, .md, .pg   ; W16Q_BUTTON.. order
 .b:  db 'Button', 0
 .e:  db 'Edit', 0
 .s:  db 'Static', 0
@@ -376,6 +414,8 @@ w16u_clsn:  dw .b, .e, .s, .l, .d, .sc, .co
 .d:  db '#32770', 0
 .sc: db 'ScrollBar', 0
 .co: db 'ComboBox', 0
+.md: db 'MDIClient', 0
+.pg: db 'Progman', 0                 ; the DDE server's (SPEC.md 124.33.2)
 
 ; EnumWindows (USER.54) - args: +0 lParam (long), +4 lpEnumFunc. The
 ; callback for each of the program's top-level windows, (hwnd, lParam), as a
@@ -535,11 +575,11 @@ w16l_lmcall:
     mov [w16_lmds], ax
     mov ax, [bx + W16L_HEAP]
     mov [w16_lmcx], ax
-    mov ax, [w16_psp]
+    W16PSP
     mov [w16_lmes], ax
     mov word [w16_lmsi], 0x80       ; the PSP's tail length: a 0, so ""
     push es
-    mov es, [bx + W16L_MREC]
+    W16SEG es, [bx + W16L_MREC]
     mov ax, [es:W16LM_IP]
     mov [w16_lmfar], ax
     mov bx, [es:W16LM_CS]
@@ -549,8 +589,80 @@ w16l_lmcall:
     mov [w16_lmfar + 2], ax
     pop es
     mov ax, w16_lmtramp
-    mov dx, ds
+    W16ICS dx
     ICALL w16_cbcall
+    ret
+
+; w16n_rset - SI -> a library's record, BX = its index: its resources are
+; the current ones - the table its loader kept in its module block, its file,
+; and the GH_OWNER bits its blocks are marked with (8000h, the index in bits
+; 12-14, the entry's offset below). SPEC.md 124.23.6. Keeps all.
+w16n_rset:
+    push ax
+    push cx
+    push es
+    W16SEG es, [si + W16L_MREC]
+    mov ax, [es:W16LM_RTAB]
+    add ax, [si + W16L_MREC]
+    mov [w16_rtab], ax
+    mov ax, [es:W16LM_RTLEN]
+    mov [w16_rtlen], ax
+    lea ax, [si + W16L_FILE]
+    mov [w16_rfp], ax
+    mov ah, bl
+    mov cl, 4
+    shl ah, cl
+    or ah, 0x80
+    xor al, al
+    mov [w16_rown], ax
+    pop es
+    pop cx
+    pop ax
+    ret
+
+; w16n_rown - SI = a library's resource block's GH_OWNER: its library's
+; resources current (w16n_rset), SI = the entry. Keeps the rest.
+w16n_rown:
+    push ax
+    push bx
+    push cx
+    mov bx, si
+    mov cl, 12
+    shr bx, cl
+    and bx, 7
+    and si, 0x0FFF
+    push si
+    mov ax, bx
+    call w16l_recp
+    mov si, bx
+    mov bx, ax
+    call w16n_rset
+    pop si
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16n_rdisc - the discard sweep met a library's resource: AX = its GH_OWNER.
+; w16_rdiscard on its library's table, the current one put back. CF as
+; w16_rdiscard's. Keeps all.
+w16n_rdisc:
+    push si
+    push word [w16_rtab]
+    push word [w16_rtlen]
+    push word [w16_rfp]
+    push word [w16_rown]
+    mov si, ax
+    call w16n_rown
+    push ax
+    mov ax, si
+    ICALL w16_rdiscard
+    pop ax
+    pop word [w16_rown]
+    pop word [w16_rfp]
+    pop word [w16_rtlen]
+    pop word [w16_rtab]
+    pop si
     ret
 
 ; w16l_recp - AX = a record's index -> BX -> it. Keeps the rest.
@@ -572,7 +684,7 @@ w16l_drop:
     push si
     push es
     call w16l_recp
-    mov es, [bx + W16L_MREC]
+    W16SEG es, [bx + W16L_MREC]
     xor si, si
 .dep:
     mov al, [es:W16LM_LIBS + si]
@@ -592,12 +704,23 @@ w16l_drop:
     inc si
     cmp si, 16
     jb .dep
+    cmp word [es:W16LM_CD], 0       ; its discardable code, and its module
+    je .ncd                         ;   block (SPEC.md 124.26.11)
+    push bx
+    mov si, bx
+    mov bx, w16l_libfree            ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall
+    pop bx
+.ncd:
     mov ax, [bx + W16L_CODE]
     or ax, ax
     jz .nc
     ICALL w16_gfreeh
 .nc:
     mov ax, [bx + W16L_HINST]
+%ifdef PKG_MEGA
+    ICALL w16_pin                   ; (the program's selector: 124.31.3)
+%endif
     cmp ax, [bx + W16L_MREC]
     je .nd
     ICALL w16_gfreeh
@@ -644,8 +767,8 @@ W16LIB w16kb_oem2ansi
     push di
     push ds
     ICALL w16_args
-    les di, [es:bx]
-    lds si, [es:bx + 4]
+    lds si, [es:bx + 4]             ; (the source first: LES would take the
+    les di, [es:bx]                 ;   ES the arguments are read through)
     cld
 .c:
     lodsb
@@ -1001,7 +1124,7 @@ W16LIB w16g_getbmbits
     call .room
     jc .cend
     push ds
-    mov ds, [w16b_seg + bx]
+    W16SEG ds, [w16b_seg + bx]
     lodsb
     pop ds
     stosb
@@ -1043,7 +1166,7 @@ W16LIB w16g_getbmbits
     push dx
     shr dx, 1
     add si, dx
-    mov ds, [w16b_seg + bx]
+    W16SEG ds, [w16b_seg + bx]
     mov al, [si]
     pop dx
     pop si
@@ -1106,11 +1229,22 @@ W16LIB w16_segld
     mov al, [es:di]                 ; its segment
     xor ah, ah
     mov si, [es:di + 1]             ; its entry's offset
+    mov dx, es                      ; ...and whose thunks (124.26.11)
     mov bx, w16l_segin              ; XSEC-OK: part 5's, w16_ldcall calls it there
     ICALL w16_ldcall                ; DX = the segment; CF=1 lines written
     pop bx
     pop es
     jc .fail
+%ifdef PKG_MEGA
+    push ax                         ; its code selector (SPEC.md 124.31.4)
+    push cx
+    mov ax, dx
+    mov cl, 1
+    ICALL w16_ssel
+    mov dx, ax
+    pop cx
+    pop ax
+%endif
     mov [es:bx + W16F_IP], si
     mov [es:bx + W16F_CS], dx
     mov ax, [w16_thax]
@@ -1579,7 +1713,7 @@ W16LIB w16g_charwidth
     cld
 .c:
     push es
-    mov es, si
+    W16SEG es, si
     mov al, dl                      ; w16_glyph's lookup, here
     sub al, [es:W16F_FIRST]
     jb .def
@@ -2099,7 +2233,7 @@ w16g_lfill:
     rep stosw
     pop di
     push es
-    mov es, [w16_face]              ; its height and width
+    W16SEG es, [w16_face]              ; its height and width
     mov al, [es:W16F_ROWS]
     mov cl, [es:W16F_AVG]
     pop es
@@ -2702,7 +2836,7 @@ W16LIB w16k_gnask
     or ax, ax
     jz .n                           ; discarded already
     dec ax
-    mov es, ax
+    W16SEG es, ax
     cmp byte [es:GH_LOCK], 0
     jne .n
     mov ax, [w16_ghage + si]
@@ -2748,7 +2882,7 @@ LCONT w16k_gnback
     or ax, ax
     jz .again                       ; it gave the block up itself
     dec ax
-    mov es, ax
+    W16SEG es, ax
     cmp byte [es:GH_LOCK], 0
     jne .kept
     ICALL w16_gfreeblk

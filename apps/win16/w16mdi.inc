@@ -14,14 +14,15 @@ section .w16tsk follows=.w16sys vstart=0 align=1
 w16k_base:
     jmp short w16k_gate             ; +0  tools/os88ovl.py: a short jump ...
     db 'W16TSKPT'                   ; +2  ...before the cut mark
+w16vq_myds: dw 0                    ; +10 the arm's WIN16 data selector
 ; w16k_gate - the part's one way in (SPEC.md 124.28.13): the dispatch and
 ; TCALL far-call it with [w16_tfn] naming a near routine here. CS = this
 ; part, DS = WIN16's image; every register and the flags pass both ways
 w16k_gate:
     call [w16_tfn]
     retf
-%if w16k_gate - w16k_base != W16S_GATE
-  %error "w16k_gate is not at W16S_GATE"
+%if w16k_gate - w16k_base != W16S_GATE || w16vq_myds - w16k_base != W16S_MYDS
+  %error "w16k_gate or w16vq_myds is not where W16S_GATE and W16S_MYDS say"
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -159,32 +160,81 @@ W16TSK w16i_lpadd
 ; there, and with it the program: here the program ends, as a
 ; PostQuitMessage(0) ends it, and the call answers FALSE - "an application
 ; refused" - so that a program that goes on to its message loop meets the
-; WM_QUIT there
+; WM_QUIT there. A setup's EW_RESTARTWINDOWS or EW_REBOOTSYSTEM is told,
+; in a toast, that os8088 needs neither (SPEC.md 124.33.3)
+EW_RESTARTWINDOWS equ 0x42
+EW_REBOOTSYSTEM   equ 0x43
 W16TSK w16i_exitwin
+    ICALL w16_args
+    mov ax, [es:bx + 2]             ; dwReturnCode's low word
+    cmp ax, EW_RESTARTWINDOWS
+    je .say
+    cmp ax, EW_REBOOTSYSTEM
+    jne .quit
+.say:
+    push si
+    W16CSEG es
+    mov si, w16i_s_norst            ; XSEC-OK: ES = CS
+    xor cx, cx
+    call OSAPI_TOAST
+    pop si
+.quit:
     mov word [w16_quitcode], 0
     mov byte [w16_quit], 1
     xor ax, ax
     xor dx, dx
     ret
 
-; GlobalFindAtom (USER.270) - args: +0 lpszName. A MAKEINTATOM is its own;
-; a name is the atom GlobalAddAtom gave it (w16u_regcbfmt's table), or 0
+w16i_s_norst: db 'No restart is needed', 0       ; (short: a toast's box is)
+
+; THE ATOMS (SPEC.md 124.25.10): one table of W16_NATOM names in this part,
+; read and written through a data segment for it - Windows' clipboard
+; formats are global atoms, so RegisterClipboardFormat is GlobalAddAtom.
+; Atom C000h + i is place i, the same for the same name, case aside. Every
+; task of the instance shares it (DDE's atoms are named by one task and read
+; by another); nothing is ever deleted.
+;
+; GlobalFindAtom (USER.270) - args: +0 lpszName: its atom, or 0. AddAtom
+; (KERNEL.70), GlobalAddAtom (USER.268), RegisterClipboardFormat (USER.145)
+; - the same, given a place when it has none: 0 when the table is full. A
+; MAKEINTATOM (no segment) is its own atom for all four
 W16TSK w16i_findatom
-    push si
+    xor ax, ax
+    jmp short w16i_atom
+W16TSK w16i_addatom
+    mov al, 1
+w16i_atom:
     push di
+    push ax                         ; AL = 1: add a name not there
     ICALL w16_args
     les di, [es:bx]
-    mov ax, es
-    or ax, ax
-    jnz .name
-    mov ax, di
-    jmp short .out
-.name:
+    pop ax
+    mov dx, es
+    or dx, dx
+    jz .int
+    call w16i_atomat
+    pop di
+    ret
+.int:
+    mov ax, di                      ; (DX = 0, the segment)
+    pop di
+    ret
+
+; w16i_atomat - ES:DI = a name, AL = 1 to add it when it is not there:
+; AX = its atom, 0 when it is not there or the table is full; DX = 0.
+; Keeps the rest
+w16i_atomat:
+    push bx
+    push cx
+    push si
+    push ds
+    W16SEG ds, [w16_tseg]           ; the table's segment: this part's
     xor bx, bx                      ; BX = the place
-    mov si, w16_cbfn
+    mov si, w16i_atoms
 .f:
     cmp byte [si], 0
-    je .none
+    je .new
+    push ax
     push si
     push di
 .c:
@@ -195,31 +245,101 @@ W16TSK w16i_findatom
     call w16i_up
     cmp al, ah
     jne .ne
-    or al, al
-    jz .eq
     inc si
     inc di
-    jmp short .c
-.eq:
+    or al, al
+    jnz .c
     pop di
     pop si
-    mov ax, 0xC000
-    add ax, bx
-    jmp short .out
+    pop ax
+    jmp short .have
 .ne:
     pop di
     pop si
+    pop ax
     add si, 32
     inc bx
-    cmp bx, W16_NCBF
+    cmp bx, W16_NATOM
     jb .f
-.none:
+    jmp short .zero
+.new:
+    or al, al
+    jz .zero
+    push di
+    mov cx, 31                      ; the name, cut to 31
+.cp:
+    mov al, [es:di]
+    mov [si], al
+    or al, al
+    jz .cpd
+    inc si
+    inc di
+    loop .cp
+    mov byte [si], 0
+.cpd:
+    pop di
+.have:
+    mov ax, 0xC000
+    add ax, bx
+    jmp short .out
+.zero:
     xor ax, ax
 .out:
     xor dx, dx
+    pop ds
+    pop si
+    pop cx
+    pop bx
+    ret
+
+; GetAtomName (KERNEL.72), GlobalGetAtomName (USER.271),
+; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszBuffer,
+; +6 the atom: its name, cut to the buffer; the answer is its length, 0 for
+; any other atom
+W16TSK w16i_atomname
+    push si
+    push di
+    push ds
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov si, [es:bx + 6]
+    les di, [es:bx + 2]
+    xor ax, ax                      ; AX = the length
+    sub si, 0xC000
+    jb .out
+    cmp si, W16_NATOM
+    jae .out
+    jcxz .out
+    push cx
+    mov cl, 5
+    shl si, cl
+    pop cx
+    add si, w16i_atoms
+    W16SEG ds, [w16_tseg]
+    cmp byte [si], 0
+    je .out
+    dec cx                          ; room for the NUL
+.cp:
+    jcxz .end
+    mov dl, [si]
+    or dl, dl
+    jz .end
+    mov [es:di], dl
+    inc si
+    inc di
+    inc ax
+    dec cx
+    jmp short .cp
+.end:
+    mov byte [es:di], 0
+.out:
+    xor dx, dx
+    pop ds
     pop di
     pop si
     ret
+
+w16i_atoms: times W16_NATOM * 32 db 0
 
 ; w16i_up - AL upper-cased, as AnsiUpper does: a-z, and the accented letters
 ; E0h-FEh but F7h. Keeps the rest
@@ -289,23 +409,55 @@ w16i_bool:                          ; CF=0 TRUE, CF=1 FALSE
     xor dx, dx
     ret
 
-; AnsiUpperBuff (USER.437) - args: +0 cbLength (0 is 65,536), +2 lpsz.
-; Every byte upper-cased, NULs included. AX = the length
+; AnsiUpperBuff (USER.437), AnsiLowerBuff (USER.438) - args: +0 cbLength
+; (0 is 65,536), +2 lpsz. Every byte upper- or lower-cased, NULs included.
+; AX = the length
 W16TSK w16i_upbuff
+    mov ah, 0
+    jmp short w16i_cvbuff
+W16TSK w16i_lowbuff
+    mov ah, 1
+w16i_cvbuff:
     push si
+    push ax
     ICALL w16_args
+    pop dx                          ; DH = which
     mov cx, [es:bx]
     les si, [es:bx + 2]
-    mov dx, cx
+    push cx
 .c:
     mov al, [es:si]
+    or dh, dh
+    jnz .low
     call w16i_up
+    jmp short .put
+.low:
+    call w16i_low
+.put:
     mov [es:si], al
     inc si
     loop .c
-    mov ax, dx
+    pop ax
     xor dx, dx
     pop si
+    ret
+
+; w16i_low - AL lower-cased, as AnsiLower does: A-Z, and C0h-DEh but D7h.
+; Keeps the rest
+w16i_low:
+    cmp al, 'A'
+    jb .out
+    cmp al, 'Z'
+    jbe .cv
+    cmp al, 0xC0
+    jb .out
+    cmp al, 0xD7
+    je .out
+    cmp al, 0xDF
+    jae .out
+.cv:
+    add al, 0x20
+.out:
     ret
 
 ; GetIconID (USER.455) - args: +0 dwResType, +4 hResource: of an
@@ -320,9 +472,9 @@ W16TSK w16i_iconid
     jc .zero
     cmp byte [w16_gdisc], 0
     jne .zero
-    mov ax, es
-    inc ax
-    mov es, ax
+    W16VOF ax, es                   ; its data, past the header (the arm:
+    inc ax                          ;   a virtual paragraph, SPEC.md
+    W16SEG es, ax                   ;   124.31.3)
     mov cx, [es:4]                  ; its images, 14 bytes each from +6
     jcxz .zero
     mov si, 6
@@ -1391,7 +1543,7 @@ w16i_mdicreate:
     add ax, [bx + MC_N]
     mov [es:di + 6], ax             ; hMenu: its ID
     call w16i_defpos
-    mov ax, w16_stubs + 6 * W16_CWROW
+    mov ax, w16_stubs + W16_STUBSZ * W16_CWROW
     mov dx, ds
     ICALL w16_cbcall
     xor ax, ax
@@ -1730,7 +1882,7 @@ w16i_mdidestroy:
     ICALL w16_cbopen
     pop ax
     ICALL w16_ppush                 ; DestroyWindow's one argument
-    mov ax, w16_stubs + 6 * W16_DWROW
+    mov ax, w16_stubs + W16_STUBSZ * W16_DWROW
     mov dx, ds
     ICALL w16_cbcall
 .none:
@@ -3798,10 +3950,10 @@ W16TSK w16i_cursorind
     jz .fall
     mov [cs:w16i_ihd], ax
     dec dx                          ; its header: an icon WIN16 made
-    mov es, dx
+    W16SEG es, dx
     or byte [es:GH_FLAGS], GHF_ICON
     inc dx
-    mov es, dx
+    W16SEG es, dx
     cld
     xor di, di
     xor ax, ax

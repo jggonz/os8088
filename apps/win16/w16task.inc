@@ -284,6 +284,25 @@ w16t_qpost:
 ; turn is asked for with a wake, since the post may be made inside a run
 ; whose callback runs no turns. CF=1 the queue is full
 W16TSK w16t_post
+    push bx
+    push ax
+    mov ax, [w16_sm_hwnd]           ; Program Manager's DDE server's window
+    ICALL w16_hwnd2rec              ;   (SPEC.md 124.33.2): the post is run
+    jc .notdde                      ;   now, and not queued
+    cmp byte [bx + W16W_KIND], W16Q_DDE
+    jne .notdde
+    pop ax
+    push cx
+    push dx
+    call w16pg_post
+    pop dx
+    pop cx
+    pop bx
+    clc
+    ret
+.notdde:
+    pop ax
+    pop bx
     push si
     push ax
     mov ax, [w16_sm_hwnd]
@@ -708,7 +727,7 @@ W16TSK w16t_end
     mov word [si + W16K_CTX], 0
     mov word [di + W16K_CTX], 0
     mov [w16_cur], al
-    mov ax, es
+    W16VOF ax, es
     ICALL w16_gfreeh
     cmp byte [w16_ntk], 1           ; the last left, its segments a block:
     jne .hand                       ;   they go with the arenas when it ends
@@ -733,7 +752,7 @@ W16TSK w16t_end
 w16t_codefree:
     cmp word [w16_cmb], 0
     je .out
-    mov es, [w16_clive]
+    W16SEG es, [w16_clive]
     xor bx, bx
     mov cx, [w16_cnseg]
     jcxz .blk
@@ -774,7 +793,7 @@ w16t_gfree:
 .blk:
     cmp bx, [w16_arenae + si]
     jae .nexta
-    mov es, bx
+    W16WALK 0, es, bx
     test byte [es:GH_FLAGS], GHF_USED
     jz .skip
     cmp [es:GH_TASK], dl
@@ -1383,8 +1402,16 @@ w16t_bfrom:                         ; CX = the first slot
     pop bp
     ret
 .done:
+    mov ax, [bp]                    ; the message as the caller sent it
+    mov dx, [bp + 2]
+    mov cx, [bp + 4]
+    mov bx, [bp + 6]
     add sp, 8
     pop bp
+    cmp ax, WM_DDE_INITIATE         ; ...and Program Manager last, which is
+    jne .one                        ;   WIN16's (SPEC.md 124.33.2), in part 9
+    jmp w16pg_init
+.one:
     mov ax, 1
     xor dx, dx
     ret
@@ -1604,7 +1631,7 @@ w16t_exec:
     or ax, ax
     jz .nomem
     mov [cs:w16t_blk], ax
-    mov es, ax
+    W16SEG es, ax
     call w16t_xchg                  ; the caller's state out to it
     mov al, [cs:w16t_new]
     xchg al, [w16_cur]
@@ -1632,7 +1659,7 @@ w16t_exec:
     popf
     jc .refused
     push ds                         ; the command tail into its PSP
-    mov es, [w16_psp]
+    W16SEG es, [w16_psp]
     mov di, 0x81
     mov cx, [cs:w16t_tn]
     mov [es:0x80], cl
@@ -1645,7 +1672,7 @@ w16t_exec:
     call w16t_rec
     mov byte [si + W16K_ST], W16KS_NEW
     push word [si + W16K_H]
-    mov es, [cs:w16t_blk]           ; the caller back, the new task parked
+    W16SEG es, [cs:w16t_blk]        ; the caller back, the new task parked
     call w16t_xchg                  ;   in the block
     mov [si + W16K_CTX], es
     mov al, [cs:w16t_old]
@@ -1655,11 +1682,11 @@ w16t_exec:
     pop ax
     jmp short .home
 .refused:
-    mov es, [cs:w16t_blk]
+    W16SEG es, [cs:w16t_blk]
     call w16t_xchg
     mov al, [cs:w16t_old]
     mov [w16_cur], al
-    mov ax, es
+    W16VOF ax, es
     ICALL w16_gfreeh
     mov ax, 11
 .home:
@@ -1760,10 +1787,13 @@ w16t_name:
     ret
 
 ; w16t_where - the folder holding [w16_mbtext], looked for as Windows looked
-; (124.28.5): the caller's own, the Windows directory, SYSTEM under it, then
-; the folder WIN16 was started from. out: CF=0 DX = it, BL = its volume;
-; CF=1 none has it. Clobbers AX, SI
+; (124.28.5): the name as written, against the DOS's current folder; the
+; caller's own, the Windows directory, SYSTEM under it, then the folder WIN16
+; was started from. out: CF=0 DX = it, BL = its volume; CF=1 none has it.
+; Clobbers AX, CX, SI, DI, ES
 w16t_where:
+    call w16t_cwd                   ; as the caller wrote it, first
+    jnc .ret
     mov dx, [w16_dir]
     mov bl, [w16_vol]
     call w16t_in
@@ -1792,6 +1822,71 @@ w16t_where:
     call OSAPI_FILE_HERE            ; DX, BL: where it stands now
     ICALL od_back
     clc
+    ret
+
+; w16t_cwd - the name as the caller wrote it, its drive and folders kept and
+; its file part w16t_name's, opened through WIN16's DOS: a name with no
+; folder is the CURRENT directory's, the first place Windows looks. Microsoft's
+; Setup Toolkit selects C:, changes into C:\~MSSTFQF.T and starts
+; "_mstest arcade.mst" there (124.28.5). The open leaves the machine in the
+; program's folder, so a byte read stands it on the file before WIN16 asks
+; where: InstallShield starts C:\...\_INS0433._MP from A:. out: CF=0 DX = the
+; folder holding it, BL = its volume. Clobbers AX, CX, SI, DI, ES
+w16t_cwd:
+    push ds
+    pop es
+    mov di, w16_dtbuf
+    push ds
+    lds si, [cs:w16t_np]
+    mov cx, si                      ; CX = past the last \ / or :
+.scan:
+    lodsb
+    cmp al, ' '
+    jbe .end
+    cmp al, '\'
+    je .sep
+    cmp al, '/'
+    je .sep
+    cmp al, ':'
+    jne .scan
+.sep:
+    mov cx, si
+    jmp short .scan
+.end:
+    mov si, [cs:w16t_np]
+    sub cx, si                      ; the drive and folders' length
+    cmp cx, 128
+    ja .no
+    cld
+    rep movsb
+    pop ds
+    mov si, w16_mbtext              ; ...and the file, .EXE when it had none
+    ICALL w16_strcpy
+    mov ax, 0x3D00                  ; open, for reading: the DOS resolves it
+    mov dx, w16_dtbuf               ;   against its current drive and folder
+    ICALL w16_dcall
+    jc .ret
+    xchg ax, bx                     ; BX = the handle
+    push bx
+    mov ah, 0x3F                    ; a byte read, which stands the machine
+    mov cx, 1                       ;   where the file is: an open of a name
+    mov dx, w16_dtbuf               ;   with a folder walks back to the
+    ICALL w16_dcall                 ;   program's (SPEC.md 96.48, 124.28.5)
+    call OSAPI_FILE_HERE            ; DX, BL: where the file is
+    pop ax
+    push bx
+    push dx
+    xchg ax, bx
+    mov ah, 0x3E
+    ICALL w16_dcall
+    pop dx
+    pop bx
+    clc
+.ret:
+    ret
+.no:
+    pop ds
+    stc
     ret
 
 ; w16t_in - DX = a folder, BL = its volume: CF=0 [w16_mbtext] is there.

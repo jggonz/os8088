@@ -89,6 +89,7 @@ W16Q_DIALOG equ 5               ; DefDlgProc, which calls the program's
 W16Q_SCROLL equ 6               ; the SCROLLBAR control (SPEC.md 124.22.8)
 W16Q_COMBO  equ 7               ; the COMBOBOX control (SPEC.md 124.22.14)
 W16Q_MDI    equ 8               ; MDICLIENT (SPEC.md 124.27.2), part 10's
+W16Q_DDE    equ 9               ; Program Manager's DDE server (124.33.2)
 
 ; --- owner-drawn items owed (SPEC.md 124.22.14, w16combo.inc) -----------------
 W16_ODQN    equ 8               ; the queue's entries: a window, its items
@@ -212,6 +213,7 @@ WS_MINIMIZE_HI equ 0x2000
 WS_MAXIMIZE_HI equ 0x0100
 SWP_NOSIZE    equ 0x0001
 SWP_NOMOVE    equ 0x0002
+SWP_SHOWWINDOW equ 0x0040
 PM_REMOVE     equ 0x0001
 
 ; =============================================================================
@@ -350,15 +352,15 @@ w16_findcls:
     push cx
     push si
     push di
-    mov bx, w16_cls
-    mov cx, W16_MAXCLS
-.cls:
-    cmp byte [bx + W16C_NAME], 0
+    mov bx, w16_cls + (W16_MAXCLS - 1) * W16C_SIZE
+    mov cx, W16_MAXCLS              ; from the last: a task's own class,
+.cls:                               ;   registered over a global one of the
+    cmp byte [bx + W16C_NAME], 0    ;   name, lies after it (SPEC.md 124.28.3)
     je .next
     test byte [bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
     jnz .any                        ; a task's class is its own, unless it
-    mov si, W16_MAXCLS              ;   is global (SPEC.md 124.28.3)
-    sub si, cx
+    mov si, cx                      ;   is global (SPEC.md 124.28.3)
+    dec si
     mov al, [w16_ctask + si]
     or al, al
     jz .any
@@ -382,7 +384,7 @@ w16_findcls:
 .ne:
     pop cx
 .next:
-    add bx, W16C_SIZE
+    sub bx, W16C_SIZE
     loop .cls
     stc
     jmp short .out
@@ -408,8 +410,13 @@ w16u_regclass:
     mov dx, [es:si + 24]
     call w16_farname
     jc .fail
-    call w16_findcls
-    jnc .fail                       ; Windows refuses a second registration
+    call w16_findcls                ; Windows refuses a second registration,
+    jc .new                         ;   but a local class over a global one
+    test byte [bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI ; of its name is
+    jz .fail                        ;   legal (MMUTIL's STEXT under
+    test byte [es:si + 1], CS_GLOBALCLASS_HI ; MSINSSTF's: SPEC.md 124.28.3)
+    jnz .fail
+.new:
     mov di, w16_cls
     mov cx, W16_MAXCLS
 .free:
@@ -889,14 +896,29 @@ w16u_movewnd:
     jmp short w16_moveto
 
 ; SetWindowPos (USER.232) - args: +0 flags, +2 cy, +4 cx, +6 y, +8 x,
-; +10 hWndInsertAfter, +12 hWnd. The Z order is os8088's.
+; +10 hWndInsertAfter, +12 hWnd. The Z order is os8088's. SWP_SHOWWINDOW
+; makes a child visible and repaints it there: MSCUISTF's dialogs (Arcade's
+; and Mozart's SETUP) are WS_CHILD with no WS_VISIBLE, shown so.
 w16u_setwndpos:
     call w16_args
+    xor cx, cx                      ; CX = 1: shown, so repainted even
+    test byte [es:bx], SWP_SHOWWINDOW ;   where it stays
+    jz .nshow
+    mov ax, [es:bx + 12]
+    call w16_hwnd2rec
+    jc .nshow0
+    or byte [bx + W16W_FLAGS], W16WF_VIS
+    inc cx
+.nshow0:
+    call w16_args
+.nshow:
     mov al, [es:bx]
     and al, SWP_NOSIZE | SWP_NOMOVE
     mov [w16_mvfl], al
     cmp al, SWP_NOSIZE | SWP_NOMOVE
-    je .one
+    jne .move
+    jcxz .one
+.move:
     mov ax, [es:bx + 8]
     mov [w16_mvx], ax
     mov ax, [es:bx + 6]
@@ -1193,7 +1215,9 @@ w16_destroyx:
     call w16_hwnd2rec
     pop dx
     jc .no
-    call w16_uncover                ; a visible child: its parent repaints
+    test byte [bx + W16W_FLAGS], W16WF_DYING
+    jnz w16_dwnext.done             ; going already: its WM_DESTROY is being
+    call w16_uncover                ;   sent, and is not sent twice                ; a visible child: its parent repaints
     or byte [bx + W16W_FLAGS], W16WF_DYING
 .mark:                              ; every window inside it, or owned by
     xor ah, ah                      ;   one that goes, goes too
@@ -1250,6 +1274,7 @@ w16_dwnext:
     add bx, W16W_SIZE
     cmp bx, w16_wnd + W16_MAXWND * W16W_SIZE
     jb .f
+.done:
     mov ax, dx                      ; none left: the final answer
     xor dx, dx
     jmp si
@@ -1428,8 +1453,7 @@ w16u_sendmsg:
     pop si
     ret
 .bc:
-    TCALL w16t_bsend
-    ret
+    TJMP w16t_bsend
 .no:
     xor ax, ax
     xor dx, dx
@@ -1441,8 +1465,7 @@ w16u_postmsg:
     call w16_smargs
     cmp ax, HWND_BROADCAST
     jne .one
-    TCALL w16t_bpost
-    ret
+    TJMP w16t_bpost
 .one:
     xor al, al
     call w16_post
@@ -1563,10 +1586,12 @@ w16_xlatemsg:
 ; several tasks, the queue of the window's task (w16t_post, SPEC.md 124.28.4);
 ; w16_postq is the current task's queue whatever the window.
 w16_post:
-    cmp byte [w16_ntk], 2
-    jb w16_postq
-    TCALL w16t_post
-    ret
+    cmp word [w16_ntk], 2           ; (and w16_ddeup: the DDE server's posts
+    jb w16_postq                    ;   are w16t_post's too, SPEC.md 124.33.2)
+%if w16_ddeup != w16_ntk + 1
+  %error "w16_post: w16_ddeup is not the byte after w16_ntk"
+%endif
+    TJMP w16t_post
 w16_postq:
     push bx
     push cx
@@ -1854,6 +1879,11 @@ w16u_getmsg:
     LCALL w16_odgo
     jnc .ret
 .msg:
+%ifdef PKG_MEGA
+    xor al, al                      ; MMSYSTEM's calls owed: made, and this
+    call w16_mmowed                 ;   comes back (SPEC.md 124.32.6)
+    jnc .ret
+%endif
     mov al, 1
     call w16_nextmsg
     jc .wait
@@ -1907,22 +1937,33 @@ w16_peekmsg:
     ret
 
 ; w16_peekwake - the wake that a waiting PeekMessage asked for: answer it,
-; with a message if there is one now, and run on. No lock is held.
+; with a message if there is one now, and run on. [w16_locked] is the
+; caller's: 0 from the wake (w16_wake), and 1 when w16t_serve serves a
+; parked task from inside a callback that holds the gfx lock (w16_ontimer's
+; w16_after). It was zeroed here, and a second task's ShowWindow then asked
+; the kernel for the lock its own callback held, and waited for ever
+; (Microsoft's setup engine, 2026-11-02)
 w16_peekwake:
     mov byte [w16_inpeek], 0
     cmp byte [w16_odn], 0           ; an owner-drawn item owed: sent, and
     je .msg                         ;   PeekMessage asked again after it
     call w16_reidx
-    mov byte [w16_locked], 0
     mov al, W16OD_PEEK
     LCALL w16_odgo
     jc .msg
     call w16_resumecb
     jmp w16_after
 .msg:
+%ifdef PKG_MEGA
+    mov al, 1                       ; MMSYSTEM's calls owed, likewise
+    call w16_mmre                   ;   (SPEC.md 124.32.6)
+    jc .mm
+    call w16_resumecb
+    jmp w16_after
+.mm:
+%endif
     call w16_peekmsg
     xor dx, dx
-    mov byte [w16_locked], 0
     call w16_resume
     jmp w16_after
 
@@ -1943,6 +1984,15 @@ w16_kick:
     call w16_resumecb
     ret
 .msg:
+%ifdef PKG_MEGA
+    xor al, al                      ; MMSYSTEM's calls owed, likewise
+    call w16_mmre                   ;   (SPEC.md 124.32.6)
+    jc .mm
+    mov byte [w16_inget], 0
+    call w16_resumecb
+    ret
+.mm:
+%endif
     mov al, 1
     call w16_nextmsg
     jc .out
@@ -2416,8 +2466,7 @@ w16u_defproc:
     jb .nottext
     cmp cx, WM_GETTEXTLENGTH
     ja .nottext
-    LCALL w16_dptext
-    ret
+    LJMP w16_dptext
 .nottext:
     cmp cx, WM_CLOSE
     jne .notclose
@@ -2434,8 +2483,7 @@ w16u_defproc:
     call w16_hwnd2rec
     jc .zero
     xor dl, dl
-    LCALL w16_mtbegin
-    ret
+    LJMP w16_mtbegin
 .notnc:
     cmp cx, WM_SYSKEYDOWN
     jb .notsc
@@ -2514,8 +2562,7 @@ w16u_defproc:
     call w16_rec2hwnd               ;   and its messages that window's too
     mov dl, 1
     mov dh, [w16_sm_lp]
-    LCALL w16_mtbegin
-    ret
+    LJMP w16_mtbegin
 .notkm:
     cmp cx, SC_CLOSE
     jne .zero
@@ -2714,6 +2761,15 @@ w16_tarm:
     jbe .nohv
     mov bx, 1
 .nohv:
+    mov al, [w16_go1]               ; the first run's tick (124.31.8)
+%ifdef PKG_MEGA
+    or al, [w16mm_wq]               ; ...and a waveOut block queued: every
+%else                               ;   tick (124.32.3; BX is 1 at least)
+    or al, al
+%endif
+    jz .nowo
+    mov bx, 1
+.nowo:
     mov ax, bx
     inc bx
     jnz .arm
@@ -2730,6 +2786,21 @@ w16_tarm:
 
 ; w16_ontimer - OSAPI_WM_ONTIMER: SI = our window, the gfx lock held
 w16_ontimer:
+    cmp byte [w16_go1], 0           ; the program's first instruction: here,
+    je .nogo                        ;   where the UI task's stack is shallow,
+    mov byte [w16_go1], 0           ;   rather than in the wake (124.31.8)
+    cmp byte [w16_state], W16S_RUN
+    jne .nogo
+    call w16_tarm                   ; the tick, as the wake armed it
+    push word [w16_locked]
+    mov byte [w16_locked], 1
+    xor ax, ax
+    xor dx, dx
+    call w16_resume
+    call w16_after
+    pop word [w16_locked]
+    ret
+.nogo:
     push si
     call OSAPI_GET_TICKS
     mov dx, ax
@@ -2757,6 +2828,12 @@ w16_ontimer:
     je .nosnd                       ;   the library part's
     LCALL w16s_tick
 .nosnd:
+%ifdef PKG_MEGA
+    cmp byte [w16mm_wq], 0          ; waveOut's copy (SPEC.md 124.32.3)
+    je .nowo
+    SCALL w16mm_wtick
+.nowo:
+%endif
     call w16_ofnpoll                ; a file dialog gone unanswered (124.24.2)
     call w16_hover                  ; a move with no button down (124.8)
     call w16_tarm
@@ -2873,8 +2950,7 @@ w16_onclick:
     call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mclick
-    ret
+    LJMP w16_mclick
 .nt:
     call w16_onbar
     jc w16_barpress
@@ -2895,8 +2971,7 @@ w16_onup:
     call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mup
-    ret
+    LJMP w16_mup
 .nt:
     cmp byte [w16_meat], 0
     je .mine
@@ -2911,8 +2986,7 @@ w16_ondrag:
     call w16_cbin                   ; its task first (SPEC.md 124.28.4)
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mdrag
-    ret
+    LJMP w16_mdrag
 .nt:
     cmp byte [w16_meat], 0
     jne .eat
@@ -3136,8 +3210,7 @@ w16_onkey:
 .base:
     cmp byte [w16_mtrk], 0
     je .nt
-    LCALL w16_mkey
-    ret
+    LJMP w16_mkey
 .nt:
     push di
     push ax
@@ -3151,8 +3224,7 @@ w16_onkey:
     jae .out
     mov [w16_kascii + bx], al       ; TranslateMessage's WM_CHAR, by scan
     push es
-    xor cx, cx
-    mov es, cx
+    W16SEG0 cx, es                  ; (segment 0: a window on the arm)
     mov cl, [es:0x417]              ; the BIOS's shift state, as pressed
     pop es
     and cl, 0x0F
@@ -3269,8 +3341,7 @@ w16_ticksms:
     push bx
     push cx
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     pushf
     cli
     mov ax, [es:0x46C]

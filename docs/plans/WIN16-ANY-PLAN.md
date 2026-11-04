@@ -116,10 +116,68 @@ These are facts about the tree on 2026-10-30, not choices.
 |---|---|---|---|
 | O1 | Build the protected-mode arm (R3) on `kern_mega`? | **Yes, as phase B**, after phase A's real-mode stories | Three Windows 3.1 programs are marked protected-mode only, and so are four of its own libraries (COMMDLG, SHELL, MMSYSTEM, TOOLHELP), which suggests that 3.1-era installers' libraries will be too; O3's installers are where that is measured. It is also how a 200 KB program gets memory above 1 MB. It runs on a 286 or better only |
 | O2 | Spend kernel bytes? (a) a queue behind `OSAPI_WM_CLOSE`; (b) on `kern_mega` only, a verb handing out **consecutive** LDT selectors, which Windows' `__AHINCR = 8` huge pointers need; (c) `MEM_OWNER_MAX` | (a) **yes**, a few resident bytes, and it is a kernel defect regardless of WIN16; (b) **yes**, when S22 reaches it; (c) **no**: WIN16 sub-allocates. **The owner answered yes to (a) and (b) on 2026-11-01** | WIN16 has spent no kernel byte so far, and each of these is the owner's to allow |
-| O3 | Which CD-ROM titles and installers are the acceptance targets? | **Two installers**, one built with the Microsoft Setup Toolkit (`_MSSETUP.EXE`) and one with 16-bit InstallShield, each pinned by SHA-256 off archive.org the way `win16ref.py` pins Windows; plus **one CD-ROM title** whose program runs from the disc | They are the two toolkits seen most often in installers of the period. A title the owner cares about makes a better target than one chosen here |
+| O3 | Which CD-ROM titles and installers are the acceptance targets? | **Two installers**, one built with the Microsoft Setup Toolkit (`_MSSETUP.EXE`) and one with 16-bit InstallShield, each pinned by SHA-256 off archive.org the way `win16ref.py` pins Windows; plus **one CD-ROM title** whose program runs from the disc. **Chosen 2026-11-01 at the owner's request ("look for a suitable ISO title from archive.org to try"): Microsoft Multimedia Mozart (1993) as the title, Microsoft Arcade 1.0 (1993) for the Setup Toolkit, and Sir Hangman 1.0 (1995) for InstallShield 3; section 3.1 below** | They are the two toolkits seen most often in installers of the period. A title the owner cares about makes a better target than one chosen here |
 | O4 | Split the layer into one far-called part per Windows module (D11)? | **Yes**, as S14, before anything grows | Constraint 1 |
 | O5 | Where is "the Windows directory" when a program is installed? | **Unchanged: `SYSTEM\APPDATA\WIN16`** on the disk WIN16 started from, with `SYSTEM\` under it as `GetSystemDirectory`. `LoadLibrary` searches the program's folder, then the system directory, then the Windows directory, Windows' own order | S7's profiles already live there, and a second root would split one program's state across two |
 | O6 | OLE, printing, networks | **Answer "not available"**, never a refusal at load: `OleRegisterClientDoc` fails, `PrintDlg` returns `FALSE`, `Escape` reports no printer | WRITE, CARDFILE and PACKAGER import OLECLI and run fine without it on a Windows with no OLE servers |
+| O7 | Route a protected-mode program's own software interrupts (21h, 2Fh, 31h, 34h-3Dh) to the package that hooked them, on `kern_mega`? (d1) gate 21h asks the master PIC's in-service register; (d2) move the protected-mode PIC base off 20h | **(d1), answered yes 2026-11-01**: gate 21h is IRQ1 when the master 8259 has it in service and a package's own `int 21h` otherwise, and 2Fh, 31h and 34h-3Dh read the IVT at the int (`mega_swv`). `.mega` alone: +332 bytes, one 512-byte `.mega` rung (+512 of `KERN_SIZE` while booting, nothing below 1 MB once the switch has moved `.mega` up); kern_big and kern_small byte-identical (SPEC.md 20.18.1, 124.31.2) | 21h is IRQ1's gate in protected mode, so without it no program runs past its first `int 21h`; and a package's IVT write never reaches `mega_ivt_sync`, so DPMI and the x87 vectors have to be read at the int |
+
+### 3.1 O3's targets, chosen (2026-11-01)
+
+Each is fetched by `win16ref.py titles` into the git-ignored `win16ref/`,
+SHA-256-pinned, and never enters the tree. `w16unpack.py` (beside it) opens
+what the toolkits compress, so `tools/w16reach.py` can read every program.
+
+| role | title | archive.org item, file | SHA-256 | what it is |
+|---|---|---|---|---|
+| **the CD-ROM title** | *Microsoft Multimedia Mozart: The Dissonant Quartet* 1.0, Microsoft Home, 1993 | `Microsoft_Multimedia_Mozart_Win3.1_Eng`, `MSMOZART.bin` + `.cue` (the whole mixed-mode disc, 699 MB); `MSMOZART`, `MSMOZART.iso` (its data track alone, 147 MB) | `222209d6...` (bin), `8ef7ad55...` (cue), `c17aedd7...` (iso) | an ISO 9660 data track and **six Red Book audio tracks**. `\MOZART\MOZART.EXE` runs **from the disc**; the setup installs only shared libraries and a group |
+| **the Setup Toolkit installer** | *Microsoft Arcade* 1.0, Microsoft, 1993 | `microsoft-arcade-v-1.0-microsoft-1993`, `Microsoft Arcade v1.0 (Microsoft) (1993).img` (one 1.44 MB disk) | `b7bfabca...` | `SETUP.EXE`, `SETUP.LST`, `_MSSETUP.EX_`, `_MSTEST.EX_` and the `MS*STF.DLL` set, SZDD-compressed: the toolkit in its textbook form. Five games (Asteroids, Battlezone, Centipede, Missile Command, Tempest) |
+| **the InstallShield installer** | *Sir Hangman* 1.0, Ssorg Software, 1995 | `Night_Owl_The_Best_of_Shareware_NOPV-20_Night_Owl_Publisher_1996`, `...(1996).ISO/001A/SIR_HM10.ZIP` (archive.org's own copy-out of one file of the disc) | `f9c9896f...` | **InstallShield 3.0** (Stirling Technologies' copyright in `_INST16.EX_`): `SETUP.EXE`, `_INST16.EX_`, `_SETUP.LIB`, `SETUP.INS`, `SETUP.PKG`, `PROGRAM.LIB`, `SYSTEM.LIB`. Makes the group "Ssorg Games" |
+
+Full hashes are in `win16ref.py`'s `TITLES`, which refuses a mismatch.
+
+**What the census says** (`tools/w16reach.py`, 2026-11-01, against WIN16's
+560 exports):
+
+| program | CPU | in the way | what it needs |
+|---|---|---|---|
+| `MOZART.EXE` (248 KB) | 8086 | R2, R4 | one import, `VBRUN300.100`: it is **Visual Basic 3.0** p-code |
+| `VBRUN300.DLL` (398 KB, 101 segments) | 186 + x87 | R2, **R3** | 300 imports, 48 missing; protected mode only. The same file, byte for byte, rides with Sir Hangman |
+| Mozart's `SETUP.EXE`, `_MSTEST.EXE` | 186, 386 | **R3** | the Setup Toolkit's bootstrap and its MS Test interpreter; `SETUP.MST` calls `CreateProgManGroup` and `CreateProgManItem` (S24's DDE server) |
+| Mozart's `ENCCDPRF.DLL`, `MMUTIL.DLL` | 186 | R3, R4 | MMSYSTEM: the setup's performance check (`MMPERF.DAT`, `MMPERF.INC`) |
+| Arcade's `SETUP.EXE`, `_MSTEST.EXE` | 186, 386 | **R3** | as Mozart's |
+| Arcade's five games (165-408 KB) | **386 + x87** | R2, R3, R4 | `WAVEMIX.DLL` over MMSYSTEM's `waveOut*` (S23), and three libraries of their own |
+| `HANGMAN.EXE` (623 KB) | 8086 | R2, R4 | `VBRUN300.100`, with MCI, GRID and CMDIALOG VBXs |
+| InstallShield's `SETUP.EXE`, `_INST16.EXE` (543 KB, 68 segments) | 186 (+ x87) | R2, R4 | **real-mode capable**; `DDEML` for the Program Manager conversation |
+
+So the three are one layer apart, and it is the same layer: **Visual Basic
+3.0's runtime** carries the title and one installer's program, and every
+Setup Toolkit bootstrap is protected mode only. That is S22's. CD audio
+(`MCI.VBX` over `mciSendCommand`'s `cdaudio`) and WAV are S23's. The
+Program Manager DDE, `WinExec` and the CD's `int 2Fh` are S24's.
+
+**Licences, honestly.** Sir Hangman is ASP shareware whose `README.TXT`
+grants redistribution of the unregistered version; it is the one of the
+three that is plainly redistributable. Mozart and Arcade are Microsoft's
+commercial titles, long out of print, hosted by archive.org without a
+stated licence. None of the three is redistributed by this tree: the user
+fetches them.
+
+**Rejected, and why:**
+
+- *Microsoft Multimedia Beethoven* (1992): its data track is **High Sierra**,
+  not ISO 9660, which `CDROM.DRV` does not read (§119.3.1 asks for `CD001`),
+  and its program is the ToolBook runtime (`TBOOK.EX_`). A second runtime
+  and a driver change before the first title runs.
+- *Microsoft Multimedia Stravinsky*, *Strauss*, *Schubert*: Mozart's engine
+  on larger discs; Mozart's data track is the smallest (147 MB).
+- *Living Books* (Broderbund, 1992-): a 256-colour engine on a 16-colour
+  desktop.
+- *Netscape Navigator 2* and *Acrobat Reader 3*, 16-bit: InstallShield 3, but
+  multi-megabyte programs over Winsock, with an evaluation licence
+  (Netscape); a target for after this plan.
+- archive.org's Windows 3.x Software Library (`softwarelibrary_win3`): its
+  items are **installed** trees, run in the browser, not installers.
 
 ---
 
@@ -1412,9 +1470,13 @@ its table goes in the diary, so the reach is measured, not claimed.
       AX, so the part's vectors were read from the interrupt table and its
       end stub was written into it. `w16_pfetch` already changes folder,
       so the outer change is gone: 29 bytes back.
-- [ ] **S22: The `kern_mega` arm (R3).**
+- [x] **S22: The `kern_mega` arm (R3).**
   - *As a user on a 286, Registry Editor runs, and Write keeps its document
-    in memory above 1 MB.*
+    in memory above 1 MB.* **Both are seen (batches 8 and 9), REGEDIT 3.1
+    on 86Box's 1 MB AMI 286.** The Bochs trap census was taken (Write 3.0,
+    114,952 traps, S24 batch 1). Not done: Phase A's rows have no
+    kern_mega leg. The first WIN16 row on kern_mega is `win16ovr`
+    (S24 batch 7), and the rest is listed under S25.
   - WIN16 gains a `PKG_MEGA` arm (§20.18), as the shipped packages with a
     kern_mega arm have. On it:
     - a program's segments get **LDT selectors** through `OSAPI_SEG`
@@ -1436,6 +1498,101 @@ its table goes in the diary, so the reach is measured, not claimed.
   - **Verification:** Bochs MEGATRAP (docs/BOCHS.md) for the trap census;
     86Box `286-mega` and a 386 to look at; the same rows as phase A on the
     mega disks.
+  - **The contract is SPEC.md 124.31** (pinned 2026-11-01). The batches:
+    - [x] *1: the contract and the build.* SPEC.md 124.31; the arm built
+      in kern_mega's tree (`-DPKG_MEGA -DDOS_MEGA`) and put on
+      `build/megawin16.img` and `megawin16-120.img` by `make mega`;
+      kern_mega's `DOS.O88` hands an NE over; the arm accepts `NEF_PMODE`
+      and refuses a real-mode kernel.
+    - [x] *2: virtual paragraphs.* `apps/win16/w16pm.inc`: the map,
+      `W16SEG`/`W16VOF`/`W16TOSEL`, the claim wrappers, the edge
+      (`w16_psel`, `w16_pvirt`, `w16_pin`, `w16_pout`); the global heap,
+      `w16_kclaim`/`w16_pkeep`, the face, bitmaps, resources, menus and
+      dialogs' segment loads through them. The census is out of the arm
+      (it decides only for an 8088), which is what pays for it: the arm
+      has 1,656 bytes of room against the real-mode build's 1,279.
+      **Seen 2026-11-01: TINY16 runs on kern_mega in protected mode** -
+      InitTask, InitApp and its MessageBox, drawn - and stops at its exit's
+      `int 21h` (item 4).
+    - [x] *3: the loader.* A program's own segments: selectors per
+      segment, fixups, DGROUP and the PSP as selectors, the image's code
+      half for imports, part 3/5/9 vectors through code halves. Then
+      discardable code (the module block's thunks name code halves; a code
+      segment's selector reaches its claim's end so the thunk, the
+      `w16_segld` frame and the stack scan agree), libraries (DGROUP and
+      hInstance as `w16_pblk` selectors, `W16LM_SEGS` as the program's
+      selectors), `W16CSEG` for the 27 `push cs / pop ds` sites, and
+      AH=35h's stand-in for the machine's vectors (124.31.4-124.31.6).
+      **Seen 2026-11-01 on a dev kern_mega with 124.31.2's (d1): W31MINE
+      plays, CLOCK, SOL, NOTEPAD and DLLUSE (two libraries) run in
+      protected mode.** CALC and FPU stop at the x87 vectors (item 4);
+      PBRUSH at the DOS host's far call (item 6, since done).
+    - [x] *4: the vectors.* O7, (d1), answered yes 2026-11-01: gate 21h
+      asks the master PIC's in-service register, and 2Fh, 31h and 34h-3Dh
+      read the IVT at the int (`mega_swv`, SPEC.md 20.18.1). `.mega` +332
+      bytes; kern_big and kern_small byte-identical.
+    - [x] *5: what the program is told* (124.31.6). `GetWinFlags` answers
+      standard mode; `SEG_TILE` (kern_mega, O2(b)) tiles a block over
+      64 KB; the selector functions (`w16sel.inc`) and a DPMI 0.9 subset on
+      `int 31h` (`w16i31.inc`); a freed ES comes back 0. New fixture
+      `SELTEST.EXE` (`tests/win16/seltest.c`). **Seen 2026-11-01 on the dev
+      kern_mega with (d1): BIG's 128 KB huge block reads back with 0 wrong
+      at `__AHINCR` 8; SELTEST says 0 wrong, flags 0415; and with (d1)'s
+      software vectors read at the int, CALCULATOR computes (9 x 9, then
+      sqrt) and the FPU fixture answers.**
+    - [x] *6: DOS* (124.31.7): the core unchanged; the block's code half,
+      the PSP's selector, the window's cell rewritten as a selector after
+      `W16DH_INIT`. **Seen 2026-11-01: PAINTBRUSH (with PBRUSH.DLL) draws
+      a line; WRITE, CARDFILE, CALENDAR and Windows 3.1 Solitaire run in
+      protected mode.** REGEDIT is not in the fixture set here; it is
+      S25's, with the win16ref programs.
+    - [x] *7: above 1 MB*, retiring WIN16's `tests/megahigh.txt` lines.
+      The arm says `OS88_HIGH | OS88_HIGHMEM`. Its image (37,877 bytes and
+      26,382 of bss) and its own plain claims go above 1 MB. The map's
+      claims, which hold everything the program is handed, stay
+      conventional through the DMA door, because `SEG_WIN` and
+      `GlobalDOSAlloc` need a paragraph (124.31.3). **Seen 2026-11-01 on
+      the dev kern_mega with (d1):** SELTEST reports WIN16's image at
+      linear `00F9D000` with 0 wrong. BIG, Minesweeper 3.1 and Paintbrush
+      run as they did below 1 MB.
+    - [x] *8: a period BIOS and Windows 3.1's own* (124.31.3, 124.31.8).
+      On a copy of `vm/386dx` (86Box, the Micronics 386 with its saved
+      CMOS; `vm/286-mega` stops at a CMOS prompt nobody here can answer)
+      SOL 3.1 found two defects QEMU runs through: the int 21h clock wrote
+      through a DS loaded from CS (`FAULT 0D err 0000`; `W16CSDS` now), and
+      the load, called from the document handover inside `\AUTOSTRT`'s
+      `lnk_open`, reached 514 bytes of task 0's 510 (the arm now loads from
+      the ring's wake: 336). **Seen 2026-11-01: REGEDIT 3.1 opens its
+      Registration Info Editor and SOL 3.1 deals under QEMU, and SOL 3.1
+      deals on 86Box's 386, on the stock kern_mega.** WRITE 3.1 (not 3.0,
+      which runs) wants four calls from the lead's files: `LocalHandleDelta`
+      (KERNEL.310) through `GetProcAddress`, which it calls without a
+      check, then `GetAtomName` (KERNEL.72), `SetErrorMode` (KERNEL.107)
+      and `ScrollDC` (USER.221).
+      **Seen 2026-11-01 on a copy of `vm/286` (86Box's AMI 286, 12.5 MHz,
+      1 MB):** SOL 3.1 deals, REGEDIT 3.1 opens, SELTEST says 0 wrong with
+      flags 0013 (`WF_PMODE | WF_CPU286 | WF_STANDARD`); BIG's 128 KB
+      `GlobalAlloc` is refused there, honestly, on 1 MB. WRITE 3.0 faulted
+      on 86Box's 386 at the DOS host's first store through CS: the trap
+      that completes it read `mega_ldtl` through SS, the program's stack.
+      **Fixed in SPEC.md 20.18.2**, with `MEGA_CSELTOP`'s `[ss:mega_pm]`
+      and `mega_gpfix`'s `[ss:mega_ldte]` (`.mega` +18, `.cold` +4; kern_big
+      and kern_small byte-identical). **Seen 2026-11-01:** WRITE 3.0 opens on
+      86Box's 386, and TMTEST with an SB16 says 0 wrong under QEMU, where
+      the sound tick's `retf` used to fault.
+    - [x] *9: the program's memory above 1 MB* (owner decision (e1),
+      2026-11-01; SPEC.md 50.6.11, 124.31.3). kern_mega gains `OSAPI_SEG`
+      verb 10, `SEG_WINL`: `SEG_WIN` at a 32-bit linear base (`.mega` +18;
+      kern_big and kern_small byte-identical; ABI lock refreshed, no bump).
+      The map's claims are plain (`OSAPI_MEM_HUGE` past 64 KB), so the
+      program's image, resources and arenas go above 1 MB; the selector
+      functions' windows are `SEG_WINL`s; `GlobalDOSAlloc` takes a
+      conventional claim of its own; and the map's cached linear bases are
+      checked against the claim, because the pool moves blocks. **Seen
+      2026-11-01: Write 3.0 keeps its document above 1 MB** - the text typed
+      into it is at linear `F89D9A`, inside the map's first claim, and all
+      four of the map's claims are above 1 MB (QEMU). Write 3.0 opens on
+      86Box's 386 and 1 MB 286; BIG's 128 KB block and SELTEST read 0 wrong.
 
 - [ ] **S23: MMSYSTEM (R4).**
   - *As a user, Sound Recorder plays a WAV through my Sound Blaster, and
@@ -1446,6 +1603,95 @@ its table goes in the diary, so the reach is measured, not claimed.
     SOUND.DRV has a MIDI device; `timeGetTime` and `timeSetEvent`.
   - **Targets:** SOUNDREC and MPLAYER 3.1, both protected mode only and
     386 code, so after S22.
+  - The module is the kern_mega arm's alone (SPEC.md 124.32): every
+    importer is a protected-mode program.
+    - [x] *Batch 1: the clock, the devices and mmio* (124.32.1-2), in
+      part 9 (`w16mm.inc`); new fixture `MMTEST.EXE`. **Seen 2026-11-01
+      on the dev kern_mega:** "mmtest: 0 wrong, waveOut 0, step 1 ms".
+      Its RIFF file went out through CreateChunk and Ascend and back in
+      three ways (Descend and Read; GetInfo and Advance; a memory file),
+      then EXIST and DELETE. Arm: 589 bytes of room.
+    - [x] *Batch 2: `waveOut` and `sndPlaySound`* over SOUND.DRV's ring
+      (124.32.3). **Seen 2026-11-01 on the dev kern_mega with an SB16:**
+      "mmtest: 0 wrong, waveOut 1, step 1 ms, played 486 ms". Three
+      blocks were done in order with their `MM_WOM_DONE`, the position
+      was right, and the capture holds the tone. With no card: "0 wrong,
+      waveOut 0". The arm's third arena now keeps 96 KB (124.31.1), so the
+      library part can still be fetched. Arm: 31 bytes of room (65,024 less
+      image and bss; the earlier "589" was against 65,536).
+    - [x] *Batch 3: MCI* (124.32.4), `cdaudio` over CDROM.DRV's door and
+      `waveaudio` streaming a file through 124.32.3's device; commands and
+      strings, notices, `MCI_WAIT`, Windows' error sentences. New fixture
+      `MCITEST.EXE`. **Seen 2026-11-01 on the dev kern_mega with an SB16
+      and the gate's CDROM.DRV:** "mcitest: 0 wrong, wave 1, cd 2, waited
+      328 ms", and the capture holds 0.8 s of tone (a 500 ms play, then a
+      300 ms one with `MCI_WAIT`). `cd 2`: QEMU's drive refuses PLAY AUDIO,
+      so the play answers `MCIERR_HARDWARE` as 124.32.4 says. The first
+      look overran the UI task's stack, so the arm now runs a program's
+      first instruction from WIN16's tick (124.31.8): `w16_hsp` went from
+      274 bytes below the stack's top to 66. Arm: 279 bytes of room.
+      **Open:** on the same kernel SELTEST computes "0 wrong" (read out of
+      its memory) but its MessageBox draws with no text; at the batch's
+      base it overran the stack before reaching the box. Bisected
+      2026-11-01 with truncated copies of SELTEST:
+      - fine: everything through DPMI `0000h`; also `AllocSelector(0)`
+        then `SetSelectorBase` to DGROUP or to B8000h;
+      - text lost: a DPMI-allocated selector re-aimed, by `0007h` or by
+        `SetSelectorBase`;
+      - one launch faulted in the menu part (`pop es` = 5588h) instead.
+      Not found yet. The same day, program selectors became fresh windows
+      recorded in a table (124.31.6), because `SEG_WIN`'s match handed two
+      callers one selector.
+    - [ ] *Batch 4: `waveIn`, `timeSetEvent`, `midiOut`*; SOUNDREC and
+      MPLAYER.
+      - [x] `waveIn` (124.32.5): one device over SOUND.DRV's external
+        record ring, 16 KB in a DMA claim of WIN16's own, filled into the
+        program's queue on WIN16's turns; half-duplex against `waveOut`,
+        `sndPlaySound` and MCI. New fixture `WITEST.EXE`. **Seen
+        2026-11-01 on a dev kern_mega with an SB16:** "witest: 0 wrong,
+        waveIn 1, start 0, captured 0, recorded 0". QEMU's SB16 sends no
+        capture interrupt, so both blocks come back from the reset empty,
+        as 124.32.5 says. Recording real sound is a 86Box `386-sound` (or
+        hardware) look. MMTEST and MCITEST still 0 wrong. Arm: 238 bytes
+        of room.
+      - [x] `timeSetEvent` and `CALLBACK_FUNCTION` (124.32.6): eight
+        events and a queue of eight owed calls in one block of the program's
+        heap, called where the program waits for a message (GetMessage, its
+        wait, PeekMessage's answer); waveOut and waveIn notices go to a
+        procedure with the open's `dwInstance`. New fixture `TMTEST.EXE`.
+        **Seen 2026-11-01 on a dev kern_mega with an SB16:** "tmtest: 0
+        wrong, periodic 15, waited 198 ms, wave 1/1/1, in 1/2/1"; without a
+        card the timer half alone, 0 wrong. MMTEST, MCITEST and WITEST are
+        still 0 wrong. Arm: 147 bytes of room.
+      - [x] `midiOut` (124.32.7): device 0 over SOUND.DRV's MPU-401 verbs,
+        one `HMIDIOUT` at a time, laid out where the notices read an
+        `HWAVEOUT`; a short message with running status, a long one sent
+        16 bytes at a time through WIN16's own scratch before it returns,
+        `midiOutReset` as a close and a reopen. New fixture `MOTEST.EXE`.
+        **Seen 2026-11-01 on a dev kern_mega:** under QEMU (no MPU-401)
+        "motest: 0 wrong, midiOut 0"; on 86Box's 386 with an SB16's
+        MPU-401 (`386-midirack`'s machine, booted from the look disks)
+        "motest: 0 wrong, midiOut 1, 1/1/1" - caps, open, a second open
+        refused, a note under running status, an unprepared and a prepared
+        long message, reset and close, each notice once to a procedure.
+        On the way, `waveOutGetErrorText` and `waveInGetErrorText` answered
+        255 for an undefined number instead of `MMSYSERR_BADERRNUM`: the
+        table scan's `lodsb` overwrote the answer. Fixed. Arm: 138 bytes
+        of room.
+      - **Found on the way, and not waveIn's:** on kern_mega with
+        `SOUND.DRV` loaded, any WIN16 program whose first MessageBox comes
+        two seconds after the last disk read dies. A probe that waits and
+        then calls MessageBox, and makes no MMSYSTEM call, shows it: at
+        500 ms it passes; at 2,000 and 4,000 ms it fails, with STACK
+        OVERFLOW TASK 00 on the smsw kernel and the sound tick's FAULT 0D
+        on the d1 one. Without SOUND.DRV it passes, and on kern_big it
+        passes with it. The library part is fetched from a floppy whose
+        motor has stopped. The BIOS fallback's spin-up wait takes IRQ0s,
+        and SOUND.DRV's tick runs on top of them on the UI task's
+        512-byte stack. A local prototype with a 1 KB `STK0_SIZE` on
+        kern_mega passes all four probes. There the stack's high-water
+        mark read 499 bytes. A kernel decision for the owner;
+        uncommitted.
   - **Verification:** `make test-snd`'s capture; 86Box `386-sound` and
     `386-mega-cdrom` to listen to.
 
@@ -1467,17 +1713,170 @@ its table goes in the diary, so the reach is measured, not claimed.
     `\AUTOSTRT` holds (§26.10), in a desktop folder named for the group.
   - `ExitWindows` with `EW_RESTARTWINDOWS` ends the setup and says that a
     restart is not needed.
-  - **Targets:** the two installers of O3, through both toolkits'
-    bootstraps: `SETUP.EXE`, which copies the toolkit to a temporary folder
-    and `WinExec`s it (S21).
+  - **Targets:** the two installers of O3 (section 3.1), through both
+    toolkits' bootstraps: `SETUP.EXE`, which copies the toolkit to a
+    temporary folder and `WinExec`s it (S21).
+    - *Microsoft Arcade* 1.0 off its floppy: the Setup Toolkit's
+      `SETUP.EXE` copies `_MSTEST.EXE`, the `MS*STF.DLL` set and
+      `ARCADE.MST` to `~MSSTFQF.T` and runs `_mstest arcade.mst`; the
+      script makes the group with `CreateProgManGroup` (DDE).
+    - *Sir Hangman* 1.0 off its folder: InstallShield 3's `SETUP.EXE`
+      expands `_INST16.EX_` and runs it against `SETUP.INS`; it unpacks
+      `PROGRAM.LIB` into the folder the user chose and `SYSTEM.LIB`'s
+      `VBRUN300.DLL`, `MMSYSTEM.DLL`, `COMMDLG.DLL` and three VBXs into the
+      system directory, then makes "Ssorg Games" through `DDEML`. Its
+      bootstrap is real-mode capable, so it is also the real-mode leg.
+      Its `MMSYSTEM.DLL` and `COMMDLG.DLL` are Windows for Workgroups'
+      (4.00): WIN16's own modules must keep answering for those names when
+      a copy of the real one lands in the system directory, as winevdm's
+      built-ins do.
+    - *Microsoft Multimedia Mozart*'s own setup, off its CD: the Setup
+      Toolkit again, from `\SETUP.LST`, with a performance check over
+      MMSYSTEM (`ENCCDPRF.DLL`, `MMPERF.INC`) and a 16- or 256-colour art
+      set chosen from the display.
   - **Verification:** a `win16setup` row runs an installer fixture to its
     end and reads the installed files and the links off the image.
+  - [x] **Batch 1: the calls around it** (SPEC.md 124.33.1, 2026-11-01).
+    Twenty-two export rows, both arms: Write 3.1's `LocalHandleDelta`
+    (by name as well), `GetAtomName`, `SetErrorMode` and `ScrollDC`;
+    Sound Recorder's and Media Player's `GetWindowPlacement`,
+    `SetMessageQueue` and `DeleteMetaFile`; and the setup bootstrap's
+    `_hread`, `hmemcpy`, `lstrcpyn`, `GetClassInfo`, `SubtractRect`,
+    `RedrawWindow`, `AnsiLowerBuff`, `GetSystemPaletteEntries`,
+    `GetTextExtentPoint`, `MoveToEx`, `GetMetaFile`, the three
+    extent and origin getters and `GetAspectRatioFilter`. Part 9's
+    (`w16w31.inc`); no image byte on either arm. With it, the arm reads
+    segment 0 through a window (SPEC.md 124.31.10). That is aimed at the
+    fourteen image sites that made 114,482 of the 114,952 traps in Write
+    3.0's Bochs census; S25's pass counts again.
+    Then their bitmap buttons: a dialog's control now gets its name in
+    `WM_CREATE`, `EnableWindow` repaints a program's own child window,
+    `StretchBlt` draws into a memory DC, and a monochrome source is inked
+    there with the DC's colours. Media Player's Play and Eject and Sound
+    Recorder's Record show their glyphs. A disabled glyph greys with a
+    checker since batch 3's look: a memory DC takes `DPSoa` under a
+    checkered brush now.
+  - [x] Batch 2: the Program Manager DDE server, over S21 batch 5's
+    routing (SPEC.md 124.33.2). `w16progm.inc`, all of it part 9's: a
+    group is a folder in the Windows directory's `GROUPS` with a desktop
+    shortcut, an item a link in it. The atom table moved into part 9
+    first (16 names, SPEC.md 124.28.6), which also gave the kern_mega
+    arm back the room S21 batch 5's merge took. Looked at, both arms:
+    `PMDDE.EXE` says *PMDDE OK*, the shortcut is on the desktop, its
+    folder holds the link, and the link starts the program. Row
+    `win16pmdde`, for the final pass.
+  - [x] Batch 3: the rest of the list that needs no installer
+    (SPEC.md 124.33.3). `ExitWindows(EW_RESTARTWINDOWS)` ends the setup
+    with a toast that no restart is needed; `GetDriveType` already
+    answered a CD `DRIVE_REMOTE`, as under MSCDEX. **MSCDEX's `int 2Fh` is
+    not done**: a third swapped vector is about 100 image bytes and the
+    kern_mega arm has 98, and no target installer has been seen to ask.
+    S25's installs decide it.
+  - [x] Batch 4: a setup started from a floppy with WIN16 on the hard
+    disk, which is how Microsoft Arcade's setup is run (SPEC.md 54.4.2.4,
+    96.11.11, 96.27.1, 124.14, 124.28.5):
+    - The DOS→WIN16 hand-back no longer loops when WIN16.O88 is not found.
+    - AH=36h answers for the drive it names.
+    - A profile named with a path is read through the DOS.
+    - LZCopy's ES load is `W16SEG` on the arm.
+    - The DOS core's window takes each file's own volume's cluster. New
+      fixture `XVOL.EXE`.
+    - WinExec opens the name as written in the current folder first.
+    - GetModuleHandle answers another task's module name.
+
+    Arcade's setup now copies its second stage to `C:\~MSSTFQF.T` and
+    starts `_MSTEST`.
+  - [x] Batch 5: both setups further (SPEC.md 124.19.1, 124.25.1,
+    124.26.2.1, 124.28.5, 124.31.8):
+    - Batch 4's `GP 03E0` was WIN16's thunk read as `_MSTEST`'s data. A
+      segment or offset relocation to a moveable entry now takes the
+      segment's own address, as does every relocation of an NEF_PMODE
+      program.
+    - Real mode's first instruction comes from the tick, which ends the
+      *STACK OVERFLOW TASK 00*.
+    - Sir Hangman's launcher: GetFreeSpace on kern_mega counts the heap's
+      free memory outside the arenas; WinExec of a name with a folder reads
+      a byte so the machine stands on the file; a bind slot is shared by
+      handler.
+
+    **Open, and each needs a decision:**
+    - Arcade's `_MSTEST` stops at *Parser out of memory*: GlobalReAlloc of a
+      LOCKED moveable block, which Windows' protected modes move under the
+      same selector.
+    - Sir Hangman's engine (`_INST16`, 68 segments) makes 607 selector
+      fixups into its 64 discardable code segments, so all 404 KB are kept.
+      Beside the launcher, three arenas cannot hold them, though the heap
+      has 505 KB free outside them.
+    - **Sir Hangman has no real-mode leg after all.** Its launcher refuses
+      when GetFreeSpace is below 700,000 bytes, which a 640 KB machine
+      never reaches; Windows 3.0's real mode refused it too.
+  - [x] Batch 6: Arcade and Mozart to their ends on kern_mega
+    (SPEC.md 124.26.11, 124.31.2, 124.31.3; KERN-MEGA-PLAN 14.136,
+    14.137):
+    - A locked moveable block of a protected-mode-only program moves under
+      its selector (*Parser out of memory* gone).
+    - GlobalReAlloc's grow in place keeps a quarter more than was asked
+      (the lead's D1(b)).
+    - A BIOS `int 10h` from a program's own stack runs on a stack WIN16
+      lends (`SEG_LEND`, the lead's D2).
+    - A bound window re-aimed inside a block is re-bound there.
+    - A library's code is discardable, as a program's is (the lead's M1).
+      MSCUISTF's self-reference made Mozart fault with a far return into
+      C000h until it was kept.
+
+    **Seen 2026-11-03 (QEMU, kern_mega, looks):**
+    - Arcade 1.0's setup reaches *Congratulations!*.
+    - Mozart's setup runs from its Welcome through every file to its
+      Program Manager group, MICROSOF, with two links. Nothing faults.
+    - Mozart's last dialog was not seen until batch 8. Its 435x194
+      bitmap needs a second 42 KB block, and the largest free run was
+      33.8 KB, so the dialog ran invisible.
+  - [x] Batch 7: one descriptor per handle (SPEC.md 50.6.11 `SEG_HND`,
+    124.31.3; KERN-MEGA-PLAN 14.138), replacing batch 6's stopgap selector,
+    which reached to the claim's end:
+    - A global block's selector reaches exactly its length.
+    - GlobalReAlloc re-aims it in place, so the program's selector follows
+      the block.
+    - Two walk descriptors replace a SUB per paragraph in WIN16's heap
+      walks.
+
+    **Seen (QEMU, looks):** across Mozart's whole setup the LDT peaks at
+    1,658 of 1,992 entries; before batch 6 it ran out. Arcade still reaches
+    *Congratulations!*. New Bochs row `win16ovr` (fixture `OVRTEST.EXE`):
+    an overrun faults. QEMU checks no data-segment limit, so this cannot be
+    seen there, and the row has not run yet. It is the final pass's.
+
+  - [x] Batch 8: Mozart's setup completes (SPEC.md 124.15.2, 124.31.3;
+    WIN16-NEXT-PLAN Q6, route D):
+    - On the arm, a bitmap whose bits the heap refuses gets a claim of
+      its own.
+    - A block that held a handle descriptor and grew past 64 KB is tiled
+      at its next ask. Without that, Mozart's script engine said
+      *Parsetime error* at `SETUP.MST(45)`.
+
+    **Seen 2026-11-03 (QEMU, kern_mega, looks):**
+    - Mozart's last dialog shows with its picture. Then *Microsoft Mozart
+      Setup is complete*, and *Return to Windows* ends the setup on the
+      desktop, with the group's shortcut there.
+    - Arcade still reaches *Congratulations!*.
+
+  **Left in S24:**
+  - Sir Hangman is a known limit (the lead's call): its engine keeps 404 KB
+    of code.
+  - MSCDEX's `int 2Fh` is not done.
+  - The `win16setup` row is not written.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running
     on os8088, and what still does not run.*
-  - The O3 title installed from its CD and run from its desktop link on
-    86Box's `286-mega-cdrom` and `386-mega-cdrom`.
+  - The O3 title, *Microsoft Multimedia Mozart* (section 3.1), installed
+    from its CD and run from its desktop link on 86Box's `286-mega-cdrom`
+    and `386-mega-cdrom`, playing its Red Book tracks (S23's `cdaudio`) and
+    its WAVs. It rests on **Visual Basic 3.0's runtime**, which is
+    protected mode only, so it is S22's first real program after REGEDIT.
+  - *Microsoft Arcade* and *Sir Hangman* installed and their programs
+    started from their links: Arcade's games are 386 code over `WAVEMIX`
+    (S23), and Sir Hangman is VB 3.0 again.
   - What of it runs in real mode, on the XT, where its CPU tier allows.
   - `tools/w16reach.py` over Windows 3.0's and 3.1's programs, and the
     titles' own, with how many now run, compared with this plan's §1.

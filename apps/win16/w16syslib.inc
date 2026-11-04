@@ -15,7 +15,9 @@
 ; Cancel, which the completion is never told of (124.24.2).
 ; =============================================================================
 
-W16S_GATE   equ 10                  ; w16s_gate's offset in the part
+W16S_MYDS   equ 10                  ; the arm's word for WIN16's data selector
+W16S_GATE   equ 12                  ; w16s_gate's offset in the part (and both
+                                    ;   at the same offsets in part 10)
 
 OFN_HWND    equ 4                   ; OPENFILENAME (commdlg.h, Windows 3.1)
 OFN_FILE    equ 24                  ; lpstrFile
@@ -31,17 +33,22 @@ FNERR_BUFFERTOOSMALL equ 0x3003
 PDERR_NODEFAULTPRN   equ 0x1008
 
 section .w16sys follows=.w16ld vstart=0 align=1
+%if ($ - $$) != 0                   ; a file that switched to .w16sys before
+  %error "part 9 does not start with its header: include it after this file"
+%endif                              ;   here would come first in the part
 w16s_base:
     jmp short w16s_gate             ; +0  tools/os88ovl.py: a short jump ...
     db 'W16SYSLB'                   ; +2  ...before the cut mark
+w16vs_myds: dw 0                    ; +10 the arm's WIN16 data selector
+                                    ;   (w16_ptin, SPEC.md 124.31.3)
 ; w16s_gate - the part's one way in (SPEC.md 124.24.1): the gate's dispatch
 ; and SCALL far-call it with [w16_sfn] naming a near routine here. CS = this
 ; part, DS = WIN16's image; every register and the flags pass both ways
 w16s_gate:
     call [w16_sfn]
     retf
-%if w16s_gate - w16s_base != W16S_GATE
-  %error "w16s_gate is not at W16S_GATE"
+%if w16s_gate - w16s_base != W16S_GATE || w16vs_myds - w16s_base != W16S_MYDS
+  %error "w16s_gate or w16vs_myds is not where W16S_GATE and W16S_MYDS say"
 %endif
 
 ; =============================================================================
@@ -1458,8 +1465,7 @@ w16c_path:
     call w16v_join
     jc .fnf
     mov dx, w16v_path               ; XSEC-OK: the part's buffer, ES = CS
-    push cs
-    pop es
+    W16CSEG es
     mov ax, 0x3D00
     ICALL w16_dcall
     jc .no
@@ -1622,8 +1628,7 @@ w16c_locate:
 ; CF=1 it has none. Keeps all but AX
 w16c_cwd:
     push es
-    push cs
-    pop es
+    W16CSEG es
     mov ah, 0x47
     ICALL w16_dcall
     pop es
@@ -1634,8 +1639,7 @@ w16c_cwd:
 w16c_cd:
     push ax
     push es
-    push cs
-    pop es
+    W16CSEG es
     mov ah, 0x3B
     ICALL w16_dcall
     pop es

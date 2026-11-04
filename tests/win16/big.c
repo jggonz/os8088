@@ -7,6 +7,11 @@
  * __huge pointer, whose arithmetic crosses 64 KB with __AHINCR. It was 128
  * KB until S21: beside this program's own 216 KB claim and WIN16's grown
  * parts, a 129 KB claim no longer fits in 640 KB (SPEC.md 124.20).
+ * Then a 40 KB moveable block is written, grown by GlobalReAlloc past 64 KB
+ * to 80 KB, and read back across the whole 80 KB with __AHINCR: what was
+ * written before the grow must still be there, and the bytes past 64 KB
+ * must be the block's own (WIN16-NEXT-PLAN N1: a block grown past 64 KB whose
+ * selector reached only its first 64 KB, and only a look caught it).
  *
  * The answer goes into a MessageBox, which tests/win16big.py reads off the
  * program's stack and compares with the same sums computed in Python.
@@ -14,6 +19,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <dos.h>
+#include <string.h>
 
 /* one step: h = (h * 31 + k) ^ (h >> 3), in 16 bits */
 #define S1(k)   h = (unsigned)((h * 31u + (unsigned)(k)) ^ (h >> 3));
@@ -62,6 +68,9 @@ static unsigned (__far *fns[16])(unsigned) = {
 };
 
 #define HUGE_N 98304L
+#define GROW_A 40960L                   /* the block before GlobalReAlloc */
+#define GROW_N 81920L                   /*   and after it: past 64 KB */
+#define GROW_B(i) ((unsigned char)((i) * 5 + ((i) >> 8)))
 
 /* KERNEL.114, imported by big.wlk: its OFFSET is the value, 1000h in real
  * mode, which a program adds to a segment to step 64 KB (MS C's own idiom) */
@@ -70,8 +79,9 @@ extern char __far __AHINCR;
 
 int PASCAL WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show)
 {
-    char buf[120];
-    unsigned h = 1, sum = 0, bad = 0;
+    char buf[200];
+    unsigned h = 1, sum = 0, bad = 0, gsum = 0, gbad = 0;
+    HGLOBAL g2;
     long i;
     int k;
     HGLOBAL g;
@@ -103,6 +113,35 @@ int PASCAL WinMain(HINSTANCE hInst, HINSTANCE hPrev, LPSTR cmd, int show)
         GlobalFree(g);
         sprintf(buf, "big: code %04X\nhuge %ld bytes, sum %04X, %u wrong"
                 "\n__AHINCR %04X", h, HUGE_N, sum, bad, incr);
+        g = GlobalAlloc(GMEM_MOVEABLE, GROW_A);     /* the grow */
+        g2 = 0;
+        if (g) {
+            p = (unsigned char __huge *)GlobalLock(g);
+            for (i = 0; i < GROW_A; i++)
+                p[i] = GROW_B(i);
+            GlobalUnlock(g);
+            g2 = GlobalReAlloc(g, GROW_N, GMEM_MOVEABLE);
+        }
+        if (g2 == 0) {
+            sprintf(buf + strlen(buf), "\ngrow failed");
+            if (g)
+                GlobalFree(g);
+        } else {
+            p = (unsigned char __huge *)GlobalLock(g2);
+            for (i = GROW_A; i < GROW_N; i++)
+                p[i] = GROW_B(i);
+            for (i = 0; i < GROW_N; i++) {
+                q = (unsigned char __far *)MK_FP(FP_SEG(p) +
+                        (unsigned)(i >> 16) * incr, (unsigned)i);
+                if (*q != GROW_B(i))
+                    gbad++;
+                gsum = (unsigned)((gsum * 31u + *q) ^ (gsum >> 3));
+            }
+            GlobalUnlock(g2);
+            GlobalFree(g2);
+            sprintf(buf + strlen(buf), "\ngrow %ld to %ld, sum %04X, %u wrong",
+                    GROW_A, GROW_N, gsum, gbad);
+        }
     }
     MessageBox(NULL, buf, "WIN16 big", MB_OK);
     return 0;

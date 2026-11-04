@@ -434,6 +434,7 @@ W16DC_BCL   equ w16_bcl - w16_dchide
 W16DC_OX    equ w16_ox - w16_dchide
 W16DC_OY    equ w16_oy - w16_dchide
 W16DC_TPAP  equ w16_tpap - w16_dchide
+W16DC_TCOL  equ w16_tcol - w16_dchide
 
 ; w16_odarg - the call's hDC, its last argument, resolved when it names an
 ; own DC or the shared one with an own DC open (SPEC.md 124.25.11). Keeps
@@ -1261,8 +1262,7 @@ w16g_select:
     LCALL w16_mdcslot                ; BX = its slot
     pop ax
     jc .no
-    LCALL w16_bmselect
-    ret
+    LJMP w16_bmselect
 .win:
     cmp ax, W16_BMSTK               ; a bitmap into the window's DC: no
     je .no
@@ -2012,7 +2012,7 @@ w16_textw:
     push si
     push es
     xor ax, ax
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     jcxz .out
 .c:
     push ax
@@ -2062,8 +2062,7 @@ w16_txtcopy:
 w16g_settextcol:
     mov si, w16_trgb
     mov di, w16_tcol
-    LCALL w16_cref                    ; SetBkColor's body too (w16acc.inc)
-    ret
+    LJMP w16_cref                     ; SetBkColor's body too (w16acc.inc)
 
 ; GetTextExtent (GDI.91) - args: +0 nCount, +2 lpString, +6 hDC. DX:AX =
 ; height:width.
@@ -2074,7 +2073,7 @@ w16g_textext:
     call w16_txtcopy
     mov si, w16_txt
     call w16_textw
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov dl, [es:W16F_ROWS]
     xor dh, dh
     ret
@@ -2093,7 +2092,7 @@ w16g_textmet:
 ; w16_tmfill - ES:DI -> TM_SIZE bytes: the TEXTMETRIC. Clobbers AX, BX, DI.
 w16_tmfill:
     push ds
-    mov ds, [w16_face]
+    W16SEG ds, [w16_face]
     xor ah, ah
     mov al, [W16F_ROWS]
     stosw                           ; tmHeight
@@ -2181,7 +2180,7 @@ w16g_textout:
 ; -----------------------------------------------------------------------------
 w16_txtdraw:
     push es
-    mov es, [w16_face]
+    W16SEG es, [w16_face]
     mov si, w16_txt
     mov cx, [w16_tn]
     call w16_textw                  ; AX = the string's width
@@ -2611,137 +2610,6 @@ w16_bandop:
     pop cx
     ret
 
-; =============================================================================
-; SetDIBitsToDevice (GDI.443) - args: +0 wUsage, +2 lpbmi, +6 lpBits,
-; +10 cScanLines, +12 uStartScan, +14 ySrc, +16 xSrc, +18 cy, +20 cx,
-; +22 yDest, +24 xDest, +26 hDC
-;
-; A DIB's rows run bottom up and ySrc counts from its bottom; lpBits holds
-; cScanLines of them starting at uStartScan. The visible part - the clip, and
-; the rows lpBits has - is converted into a 4bpp block in os8088's colours
-; (each palette entry the nearest of the sixteen) and put down with one
-; OSAPI_GFX_BLIT4 per W16_GBUF of it. 1 and 4 bits a pixel, BITMAPINFOHEADER
-; or the older BITMAPCOREHEADER, DIB_RGB_COLORS. Answers the rows drawn.
-; =============================================================================
-w16g_setdib:
-    push si
-    push di
-    push bp
-    xor ax, ax
-    mov [w16_dres], ax
-    cmp byte [w16_dcon], 0
-    je .ret
-    call w16_args
-    cmp word [es:bx + 26], W16_HDC  ; another DC's: nothing drawn
-    jne .ret
-    mov ax, [es:bx]                 ; DIB_PAL_COLORS: through the selected
-    SCALL w16_dibuse                ;   palette (SPEC.md 124.25.8)
-    jc .ret
-    push es
-    push bx
-    les si, [es:bx + 2]             ; the header
-    call w16_dibhdr
-    pop bx
-    pop es
-    jc .ret
-    ; --- the visible rectangle, on the screen ---
-    mov ax, [es:bx + 24]
-    add ax, [w16_ox]
-    mov [w16_rl], ax                ; the destination's left ...
-    mov [w16_dx0], ax
-    mov ax, [es:bx + 22]
-    add ax, [w16_oy]
-    mov [w16_rt], ax
-    mov [w16_dy0], ax
-    mov ax, [w16_rl]
-    add ax, [es:bx + 20]
-    dec ax
-    mov [w16_rr], ax
-    mov ax, [w16_rt]
-    add ax, [es:bx + 18]
-    dec ax
-    mov [w16_rb], ax
-    mov ax, [es:bx + 16]
-    mov [w16_dsx], ax
-    mov ax, [es:bx + 14]
-    add ax, [es:bx + 18]
-    dec ax
-    mov [w16_dtop], ax              ; the source row at the top, bottom up
-    mov ax, [es:bx + 12]
-    mov [w16_dstart], ax
-    mov ax, [es:bx + 10]
-    mov [w16_dlines], ax
-    les si, [es:bx + 6]
-    mov [w16_dbits], si
-    mov [w16_dbits + 2], es
-    call w16_cliprect               ; [w16_rl]..[w16_rb] cut to the clip
-    jc .ret
-    ; --- band by band: as many rows as W16_GBUF holds ---
-    mov ax, [w16_rr]
-    sub ax, [w16_rl]
-    inc ax
-    mov [w16_dvw], ax
-    inc ax
-    shr ax, 1
-    mov [w16_d4s], ax               ; 4bpp bytes a row
-    mov bx, ax
-    mov ax, W16_GBUF
-    xor dx, dx
-    div bx
-    or ax, ax
-    jz .ret                         ; a row wider than the buffer (it is not)
-    mov [w16_dband], ax
-    mov dx, [w16_rt]                ; DX = the screen row
-.band:
-    cmp dx, [w16_rb]
-    jg .ret
-    mov [w16_dby], dx
-    mov di, w16_gbuf
-    xor cx, cx                      ; CX = rows in this band
-.brow:
-    cmp dx, [w16_rb]
-    jg .bput
-    cmp cx, [w16_dband]
-    jae .bput
-    call w16_dibrow                 ; CF=1: lpBits has not that row
-    jc .bput
-    add di, [w16_d4s]
-    inc dx
-    inc cx
-    jmp short .brow
-.bput:
-    jcxz .skip
-    push dx
-    push es
-    push ds
-    pop es
-    mov si, w16_gbuf
-    mov bp, [w16_d4s]
-    mov ax, [w16_rl]
-    mov bx, [w16_dby]
-    mov dx, cx
-    add [w16_dres], cx
-    mov cx, [w16_dvw]
-    cmp byte [w16_mtgt], 0
-    jne .mem
-    call OSAPI_GFX_BLIT4
-.put:
-    pop es
-    pop dx
-    jmp short .band
-.skip:
-    inc dx                          ; a row lpBits has not: not drawn
-    jmp short .band
-.mem:                               ; a memory DC's bitmap (SPEC.md 124.25.3)
-    LCALL w16_mblit4
-    jmp short .put
-.ret:
-    mov ax, [w16_dres]
-    pop bp
-    pop di
-    pop si
-    ret
-
 ; w16_dibhdr - ES:SI = a BITMAPINFO (or BITMAPCOREINFO) -> [w16_dwid],
 ; [w16_dhgt], [w16_dbpp], [w16_dpal], [w16_dstride], and [w16_dmap] its
 ; palette as os8088's colours (through the mono map on a 1bpp display),
@@ -2800,7 +2668,7 @@ w16_dibhdr:
     push es                         ;   first entry past its end
     push si
     mov si, [es:si]
-    mov es, [w16_dpalc]
+    W16SEG es, [w16_dpalc]
     cmp si, [es:0]
     jb .pin
     xor si, si

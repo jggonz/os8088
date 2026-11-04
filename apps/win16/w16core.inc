@@ -119,6 +119,14 @@ w16_epi:
 .bank:
     mov bx, [w16_rbx]
     mov cx, [w16_rcx]
+%ifdef PKG_MEGA
+cpu 286                             ; a selector the call freed (GlobalFree,
+    verr word [w16_res]             ;   FreeSelector) comes back as 0, as
+cpu 8086                            ;   standard mode's KERNEL gave it
+    jz .esok
+    mov word [w16_res], 0
+.esok:
+%endif
     mov es, [w16_res]
     mov ax, [w16_rax]
     mov dx, [w16_rdx]
@@ -129,10 +137,21 @@ w16_epi:
     retf
 
 ; -----------------------------------------------------------------------------
+; w16_gstub - a stub's near call (w16_stubs): AX = its slot, off the return
+; address, which is popped - then the gate, with the program's far call on top
 ; w16_gate - every import arrives here (SPEC.md 124.2.1)
 ; in:  a far call from the program, AX = the export row (the stub's), the
 ;      program's SS:SP and DS; BX, CX, ES may be a register function's inputs
 ; -----------------------------------------------------------------------------
+w16_gstub:
+    ; STKBALANCE-OK: the stub's near call is popped here and never returned to
+    pop ax
+    sub ax, w16_stubs + 3
+    shr ax, 1
+    shr ax, 1
+%if W16_STUBSZ != 4
+  %error "w16_gstub: a stub is not four bytes"
+%endif
 w16_gate:
     ; STKBALANCE-OK: the other half of w16_resume's switch. It arrives on the
     ; program's stack by a far call and leaves on the HOST's, through
@@ -141,7 +160,7 @@ w16_gate:
     push ds
     push si
     push di
-    mov bp, cs
+    W16CSDS bp
     mov ds, bp
     mov [w16_idx], ax
 %ifdef W16_TRACE
@@ -224,6 +243,20 @@ w16_dispatch:
     and al, ~W16B_NORET & 0xFF
     cmp al, W16B_MISS               ; (before W16B_MDC: 7Fh has its bit)
     je .miss
+    test al, W16B_RES               ; a resource call: a library's hInstance
+    jz .nores                       ;   reads the library's resources, and
+    push word [w16_rtab]            ;   the program's are current again after
+    push word [w16_rtlen]           ;   (SPEC.md 124.23.6)
+    push word [w16_rfp]
+    push word [w16_rown]
+    call w16_rin
+    call .nores
+    pop word [w16_rown]
+    pop word [w16_rfp]
+    pop word [w16_rtlen]
+    pop word [w16_rtab]
+    ret
+.nores:
     test al, W16B_MDC
     jz .plain
     call w16_odarg                  ; an own DC's the open DC (124.25.11)
@@ -233,7 +266,7 @@ w16_dispatch:
     jmp w16_mdcout
 .plain:
     mov al, [bx + W16B_PART]
-    and al, ~(W16B_NORET | W16B_MDC) & 0xFF
+    and al, ~(W16B_NORET | W16B_MDC | W16B_RES) & 0xFF
     test al, W16B_DCF
     jnz .dcf
 .go:
@@ -389,8 +422,12 @@ w16_resumecb:
 ; callee's answer, kept through CS because DS is the program's.
 w16_cbret:
     ; STKBALANCE-OK: reached by the callee's retf, and left through the gate
+%ifdef PKG_MEGA
+    call w16_dxax                   ; (no write through CS: 124.31.5)
+%else
     mov [cs:w16_cbax], ax
     mov [cs:w16_cbdx], dx
+%endif
     push cs                         ; a far return for the gate's frame, never
     call w16_cbret2                 ; used: the handler discards the frame
 w16_cbret2:
@@ -403,10 +440,40 @@ w16_cbret2:
 ; and DX are the entry's, kept through CS because DS is the program's.
 w16_thkhit:
     ; STKBALANCE-OK: reached by the thunk's far call, and left through the gate
+%ifdef PKG_MEGA
+    call w16_dxth
+%else
     mov [cs:w16_thax], ax
     mov [cs:w16_thdx], dx
+%endif
     mov ax, W16_SLROW
     jmp w16_gate
+
+%ifdef PKG_MEGA
+; w16_dxax / w16_dxth - the arm's [cs:] store of DX:AX, through our data
+; selector rather than CS (SPEC.md 124.31.5): to w16_cbax/w16_cbdx, or to
+; w16_thax/w16_thdx. Keeps all, the flags too.
+w16_dxax:
+    push bx
+    mov bx, w16_cbax
+    jmp short w16_dxst
+w16_dxth:
+    push bx
+    mov bx, w16_thax
+w16_dxst:
+    pushf
+    push ds
+    push bp
+    W16CSDS bp
+    mov ds, bp
+    mov [bx], ax
+    mov [bx + 2], dx
+    pop bp
+    pop ds
+    popf
+    pop bx
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; w16_cbdone - the W16_CBROW handler: discard the stub's frame, the record
@@ -517,20 +584,33 @@ w16_args:
 
 ; -----------------------------------------------------------------------------
 ; w16_i21_on / w16_i21_off - int 21h is the program's only while its code
-; runs (SPEC.md 124.2.1), and so are int 34h-3Dh and int 2 (124.5). IF = 0
+; runs (SPEC.md 124.2.1), and so are int 2Fh, 34h-3Dh and int 2 (124.5). IF = 0
 ; on entry to both; DS = ours.
 ; -----------------------------------------------------------------------------
 w16_i21_on:
     push ax
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov ax, [es:0x21 * 4]
     mov [w16_old21], ax
     mov ax, [es:0x21 * 4 + 2]
     mov [w16_old21 + 2], ax
     mov word [es:0x21 * 4], w16_i21
     mov [es:0x21 * 4 + 2], cs
+    mov ax, [es:0x2F * 4]           ; ...the multiplex (SPEC.md 124.2.1)
+    mov [w16_old2f], ax
+    mov ax, [es:0x2F * 4 + 2]
+    mov [w16_old2f + 2], ax
+    mov word [es:0x2F * 4], w16_i2f
+    mov [es:0x2F * 4 + 2], cs
+%ifdef PKG_MEGA
+    mov ax, [es:0x31 * 4]           ; ...and DPMI's (SPEC.md 124.31.6)
+    mov [w16_old31], ax
+    mov ax, [es:0x31 * 4 + 2]
+    mov [w16_old31 + 2], ax
+    mov word [es:0x31 * 4], w16_i31
+    mov [es:0x31 * 4 + 2], cs
+%endif
     pop es
     pop ax
     jmp w16x_on                     ; and the x87's (SPEC.md 124.5)
@@ -538,12 +618,21 @@ w16_i21_on:
 w16_i21_off:
     push ax
     push es
-    xor ax, ax
-    mov es, ax
+    W16SEG0 ax, es
     mov ax, [w16_old21]
     mov [es:0x21 * 4], ax
     mov ax, [w16_old21 + 2]
     mov [es:0x21 * 4 + 2], ax
+    mov ax, [w16_old2f]
+    mov [es:0x2F * 4], ax
+    mov ax, [w16_old2f + 2]
+    mov [es:0x2F * 4 + 2], ax
+%ifdef PKG_MEGA
+    mov ax, [w16_old31]
+    mov [es:0x31 * 4], ax
+    mov ax, [w16_old31 + 2]
+    mov [es:0x31 * 4 + 2], ax
+%endif
     pop es
     pop ax
     jmp w16x_off

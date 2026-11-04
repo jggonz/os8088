@@ -2250,6 +2250,18 @@ FAST = [
         "not read its own data without cs:. S14 moves handlers into the "
         "library part, and this is what keeps that move honest",
         needs=("nasm",)),
+    Row("w16wrap", "fast", py("tests/unit/t_w16wrap.py"), 3.0,
+        "A near call or jmp adds a 16-bit displacement to IP modulo 64 KB, "
+        "and QEMU (11.0) skips that wrap when the jump stays on one 4 KB "
+        "page of a segment whose base is not page-aligned - which a call "
+        "from a >60 KB part's first bytes to its last makes, and on kern_mega "
+        "the library part's first function called its arm thunk at the end: "
+        "the CPU ran zeros below the part and pushed ES round LOW_SEG, read "
+        "as a STACK OVERFLOW. SPEC.md 124.31.3: in both builds, image and "
+        "parts, no E8/E9 whose IP wraps with a displacement under 4 KB. Reads "
+        "the maps the Makefile writes beside win16.bin; assembles (cached) "
+        "when they are stale",
+        needs=("nasm",)),
 ]
 
 # --------------------------------------------------------------------------
@@ -16998,9 +17010,10 @@ SOAK = [
     Row("win16big", "soak", py("tests/win16big.py"), 60.0,
         "SPEC.md 124.20, WIN16-ANY-PLAN S15: BIG.EXE (`make win16fixtures`, "
         "tests/win16/big.c) - 17 code segments and about 155 KB of code, each "
-        "of sixteen functions far-called forward and back, and a 128 KB "
+        "of sixteen functions far-called forward and back, a 96 KB "
         "GlobalAlloc block written through a __huge pointer and read back by "
-        "adding __AHINCR (KERNEL.114) to the segment. Its MessageBox, read "
+        "adding __AHINCR (KERNEL.114) to the segment, and a 40 KB block "
+        "GlobalReAlloc grows to 80 KB, read back the same way. Its MessageBox, read "
         "off the program's stack, must be the sums the row computes itself",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
@@ -17130,6 +17143,44 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16pmdde", "soak", py("tests/win16pmdde.py"), 60.0,
+        "SPEC.md 124.33.2, WIN16-ANY-PLAN S24: PMDDE.EXE (`make "
+        "win16fixtures`, tests/win16/pmdde.c) talks to Program Manager over "
+        "DDE as a setup program does - WM_DDE_INITIATE to HWND_BROADCAST "
+        "answered inside the send by a window of class Progman, blocks of "
+        "CreateGroup, ShowGroup, AddItem, DeleteItem and DeleteGroup "
+        "acknowledged, an unknown command and a WM_DDE_REQUEST refused, "
+        "WM_DDE_TERMINATE both ways - and its MessageBox must be PMDDE OK; "
+        "then B: must hold the group's folder in the Windows directory's "
+        "GROUPS with a link to B:\\PMDDE.EXE and not the deleted item or "
+        "group, and A:'s SYSTEM.CFG the group's desktop shortcut and not "
+        "the deleted group's",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16nowin", "soak", py("tests/win16nowin.py"), 60.0,
+        "SPEC.md 54.4.2.4, 124.18.1, WIN16-ANY-PLAN S24: TINY16.EXE alone on "
+        "B:, the shipped system disk in A: with APPS\\DOS.O88 and no "
+        "WIN16.O88 anywhere - a double-click on it opens DOS, which hands "
+        "the NE to a WIN16 that is not there, and the toast must say it "
+        "needs WIN16.O88 with the machine still running; before 54.4.2.4 "
+        "the miss re-ran the sweep by extension into DOS again, nesting a "
+        "DOS a round, and stopped on STACK OVERFLOW TASK 00 with no toast",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img",)),
+    Row("win16xvol", "soak", py("tests/win16xvol.py"), 90.0,
+        "SPEC.md 96.11.11, 96.27.1, 124.28.5, WIN16-ANY-PLAN S24: XVOL.EXE "
+        "(`make win16fixtures`, tests/win16/xvol.c) on A:, a copy of the "
+        "system disk, with WIN16 and its DOS on B:, so the Windows directory "
+        "is on another volume than the program, as for a setup run from its "
+        "floppy - AH=36h answers for the Windows directory's drive, the "
+        "program copies itself a kilobyte at a time into WINDIR\\XVOLDIR "
+        "and WINDIR\\~XVOL.T and compares each copy, and its MessageBox "
+        "must be XVOL OK; then both COPY.BIN files on B: must be XVOL.EXE "
+        "byte for byte",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16pbrush", "soak", py("tests/win16pbrush.py"), 240.0,
         "SPEC.md 124.8, 124.9, 124.25, 96.11.6.4, WIN16-ANY-PLAN S19b: Windows 3.0's "
         "Paintbrush (PBRUSH.EXE and .DLL - Microsoft's, in build/win16/ only "
@@ -17237,11 +17288,32 @@ SOAK = [
         "MZ still opens DOS, and an NE TYPED at its prompt still reaches "
         "WIN16 through the host's own arm. TINY16.EXE is assembled here, so "
         "it needs neither Microsoft's samples nor Watcom. Red on c714ec45 "
-        "(DOS's window at frame 261, a 55,328-byte carve)",
-        needs=("marty", "nasm"), timeout=600,
+        "(DOS's window at frame 261, a 55,328-byte carve). Leg D, a second "
+        "boot: an \\AUTOSTRT link on A: to B:\\TINY16.EXE must hand WIN16 "
+        "B:'s file (w16_vol 1), the posted launch keeping the document's "
+        "locator (ASSOC_PWBANK, SPEC.md 21.5.4)",
+        needs=("marty", "nasm", "mtools"), timeout=900,
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/win16/TINY16.EXE",
                "build/DOSHELLO.EXE", "build/dosp.bin")),
+    Row("win16ovr", "soak", py("tests/win16ovr.py"), 90.0,
+        "SPEC.md 124.31.3 and 50.6.11 (SEG_HND), WIN16-ANY-PLAN S24: under "
+        "Bochs, kern_mega boots off C: and \\AUTOSTRT opens OVRTEST.EXE "
+        "(tests/win16/ovrtest.c). A 100-byte moveable block's selector is its "
+        "HANDLE descriptor and reaches exactly GlobalSize; a GlobalReAlloc to "
+        "6000 bytes past a fixed block answers the SAME selector with the new "
+        "limit and the old bytes; a block grown past 64 KB reads back through "
+        "__AHINCR; and a write one byte past the block raises #GP(0) inside "
+        "OVRTEST's code, OVRTEST.TXT never saying SURVIVED. kern_mega then "
+        "stops FATAL rather than closing WIN16 (WIN16-NEXT-PLAN Q1), and the "
+        "row fails on a close so it is changed when Q1 lands. Bochs, because "
+        "QEMU checks no data segment's limit and the write completes there. "
+        "Red expected on the parent commit, whose stopgap selector reached "
+        "the claim's end",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/OVRTEST.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

@@ -21,8 +21,9 @@ and that TASKB, holding WIN16's window now, puts up the MessageBox this row
 reads: "TASKS OK", or each check that failed on either side.
 
 The row also watches the kernel's claim records while the programs run:
-the instance's (WIN16's, with every task's memory) are at most the eight
-an owner may hold (SPEC.md 124.25.1), and when the MessageBox is closed and
+WIN16's (every claim it makes, with every task's memory; the image's claim
+is the instance slot's and not among them) are at most the eight an owner
+may hold (SPEC.md 124.25.1), and when the MessageBox is closed and
 the instance ends, the heap is the one before the launch: every task's
 claim and block went back.
 """
@@ -82,13 +83,18 @@ def main():
         seen = {"max": 0, "tasks": 0}
 
         def ready():
-            # the image's claim is the slot's; every claim WIN16 makes is
-            # stamped with the segment it runs in (SPEC.md 50.3, mem_own)
-            n = sum(1 for c in claims(d, sym) if c[2] in (own[0], p.seg))
+            # every claim WIN16 makes is stamped with the segment it runs in
+            # (SPEC.md 50.3, mem_own), and those are the owner's eight; the
+            # image's claim is the slot's and is not one of them
+            n = sum(1 for c in claims(d, sym) if c[2] == p.seg)
             seen["max"] = max(seen["max"], n)
             seen["tasks"] = max(seen["tasks"], p.pb("w16_ntk"))
             return p.waiting_msgbox(F.msgrow())
-        d.wait(ready, 600, "TASKS's MessageBox")
+        # no sleep between looks: on QEMU TASKB is in the table for 10 to
+        # 170 ms at a time, and a tenth of a second's poll missed it
+        if not d.q.acted(d, ready, secs=600, what="TASKS's MessageBox",
+                         poll=0):
+            raise RuntimeError("timed out waiting for TASKS's MessageBox")
         d.idle(3.0)
         st = p.pb("w16_state")
         print("1. state %d, at most %d tasks and %d claims of the instance's "

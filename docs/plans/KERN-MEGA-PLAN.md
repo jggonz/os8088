@@ -13461,3 +13461,123 @@ against a HEAD worktree. Not yet run under an emulator (no Bochs in the
 container). The covering rows are `megadosp`, `megadosroom`, `megahiber`,
 `megaown`, `megarehome`, `megaxmove`, `megavidring`, `megatbl`, `brmega`,
 and megaport's `c64part` and `c64move` (14.80's windows).
+
+### 14.136 WIN16 Phase B/C's kern_mega work crossed two `.mega` rungs (2026-11-02) - RECORDED, ACCEPTED
+
+A rung crossing is never silent, so here are both. Measured with
+`tools/kernsize.py --build build/megak` against `origin/main` (6dfafef44),
+before D2 (084991764~1) and after it:
+
+| | `.mega` | its rung (with its 1,490-byte scratch) | left |
+|---|---:|---:|---:|
+| main | 21,440 | 23,040 | 110 |
+| before D2: SEG_TILE, O7's software interrupts, 20.18.2, SEG_WINL | 22,016 (+576) | 23,552 | 46 |
+| after D2: SEG_LEND, `mega_svc_lend`/`mega_svc_fb` (SPEC.md 50.6.11, 124.31.2) | 22,288 (+272) | 24,064 | 286 |
+
+Both crossings cost only at boot. The `.mega` rung is part of `KERN_SIZE`
+until the switch, when it is given to the heap, and after that the code
+runs above 1MB. The resident footprint (`MEGA_RESIDENT`) is unchanged at
+65,024 of `KERN_BUDGET` 68,096. LOW is not crossed: `.lowbss` 6,758 (+7,
+D2), 410 left in its 7,680 rung. kern_big and kern_small are
+byte-identical. The lead accepted the crossing. Winning D2's 272 bytes
+back would mean moving the frame shuffle into WIN16, whose image is the
+tighter of the two.
+
+**Re-measured after #327 merged #328** (whose kern_mega size pass 2 moved
+the baseline): `.mega` is 22,560 against main's 21,712 (+848, the same
+two changes), 24,070 with its scratch in a 24,576 rung against main's
+23,222 in 23,552 - still two rungs, still boot only. Resident 62,976 of
+68,096, unchanged from main; LOW 5,576 in 6,144 (56 left); kern_big and
+kern_small differ from main only by `assoc_ownex` (SPEC.md 54.4.2.4), and
+`make budget-check` passes on all four kernels.
+
+### 14.137 A bound window re-aimed inside a block is re-bound there, not replaced (2026-11-03) - FIXED
+
+14.135's fourth item gave a caller a fresh window whenever `SEG_WIN`,
+`SEG_AT` or `SEG_WINL` named one of its BOUND windows. That was right for
+a window aimed outside every block, and wrong for one aimed inside
+another. WIN16's `GlobalReAlloc` (`w16s_gwin`, SPEC.md 124.31.3) carries a
+protected-mode-only program's window from a block to its new home,
+possibly in another arena, with `SEG_AT`. After #328 that call answered a
+new selector and left the old one aimed where the block had been. The
+program kept the selector it had, so it wrote over the heap headers
+behind the moved block. Microsoft Arcade's setup stopped at
+`MSTEST: parse error` and Mozart's well before its copy.
+
+`mega_wset` now asks `mega_wbind` first. Called with the new base and
+reach, it answers CF = 0 when the base lies in a conventional claim or a
+pool block. It then clips the reach to that block's end and flags a pool
+block `MX_FWIN`, which is exactly what `SEG_BWIN` does when it makes a
+bound window, and the window is re-aimed in place as its owner's.
+Outside every block 14.135's rule stands, and the caller gets a fresh
+window. `mega_segbw` calls the same routine, so the inline lookup it had
+is gone. WIN16 frees a window it was answered fresh, so a refused
+re-bind leaks no LDT entry.
+
+**Conditions (the lead's, 2026-11-03).**
+- **Only into the caller's OWN block.** `mega_bown` checks that the
+  block the new base lies in belongs to the window's owner: a conventional
+  claim's `MC_OWN` against the slot, or a pool block's `MX_OWN` against
+  0A0h | slot (a driver's 0C0h | row). A base inside anyone else's block
+  gets a fresh window, as outside every block. Otherwise `SEG_AT` would
+  bind a window into another package's memory, which 14.135 closed for
+  `SEG_FREE`. `SEG_BWIN` makes no such test of the selector it is handed,
+  and was left as it is.
+- **The old block forgets it.** A window is tied to its block by its base
+  alone: the free and a move each look for descriptors based inside the
+  block. So after the re-bind the old block's free and moves no longer see
+  it, and the new block's do. The old block keeps its `MX_FWIN` if it is a
+  pool block. That is 14.135's documented, benign case: a move with the
+  rate hook held off.
+- **kern_big and kern_small are byte-identical.** Checked by assembling
+  both with and without the change (`mega.inc` is `KERN_MEGA`'s alone).
+
+Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,592,
+24,576 rung, 474 left. The owner test added 112 bytes on 2026-11-03,
+after 14.138's `SEG_HND`: `.mega` 22,912, 154 left, the same rung. That is the same rung as 14.136's re-measure, and
+the routine shared with `mega_segbw` paid for most of itself. Resident,
+LOW and `.cold` are unchanged. kern_big and kern_small are not touched.
+
+Seen (QEMU, kern_mega, looks): Arcade 1.0's setup reaches
+*Congratulations!*. Mozart's runs through every file and its Program
+Manager group. Its last dialog is SPEC.md 124.26.11's to answer, not the
+kernel's.
+
+### 14.138 `SEG_HND`: a descriptor per Windows handle, re-aimed in place (2026-11-03) - FIXED
+
+The lead's D1 for #327: WIN16's stopgap gave a global block a SUB that
+reached to its CLAIM's end, so a block kept one selector however its length
+moved, and the LDT stopped running out under Mozart's setup. What it gave up
+was the overrun: a write past the block landed in its neighbour. Windows'
+standard mode keeps ONE selector per handle and changes its base and limit
+when `GlobalReAlloc` grows or moves the block. Nothing in `OSAPI_SEG` could
+do that. A SUB is deduped by base and limit, so re-aiming one would move
+somebody else's. A bound window can be re-aimed, but there are only 32
+`mega_wtab` rows, and Mozart's setup alone holds 15 handles at once.
+
+`OSAPI_SEG` verb 12, `SEG_HND` (`mega_segh`, SPEC.md 50.6.11), makes a
+fresh data descriptor based in a claim or a pool block. It re-aims the same
+descriptor in place, or frees it when SI = 0. It is marked in byte 6's AVL
+bit (`MEGA_HAVL`, 10h; a reserved byte on a 286). `mega_dfind` passes a
+marked entry by, so no SUB is ever answered one. It has no `mega_wtab` row.
+Being based in its block, the compactor rebases it and the block's free
+takes it, as `SEG_TILE`'s tiles. WIN16 holds one per global block under
+64 KB, plus two of its own as walk descriptors for its arena walks
+(SPEC.md 124.31.3).
+
+Measured with `tools/kernsize.py --build build/megak`: `.mega` 22,800
+(+208 over 14.137's 22,592: the body's 191, its dispatch and
+`mega_dfind`'s test). That is 24,310 with its scratch, in the same 24,576
+rung, 266 left. With 14.137's owner test after it: 22,912, 154 left. Resident, LOW and `.cold` are unchanged; kern_big and
+kern_small are byte-identical. A constant was added to `apps/os88api.inc`,
+so `tools/abi.lock.json` was refreshed with no bump.
+
+Seen (QEMU, kern_mega, looks, 2026-11-03):
+- Mozart's setup runs to its last dialog with every file copied. The LDT's
+  high-water is 1,658 of 1,992 entries, at its last dialog. With D1's
+  stopgap it was 1,825 (92%), with handle descriptors alone 1,859, and the
+  setup ran out before D1.
+- Arcade's setup reaches *Congratulations!*.
+
+The overrun itself cannot be seen under QEMU, which checks no data
+segment's limit. `tests/win16ovr.py` is Bochs's row for it.
