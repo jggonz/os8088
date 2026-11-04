@@ -93,7 +93,10 @@ w16_i21:
 %ifdef W16_TRACE
     push bx
     push ax
-    mov bx, [cs:w16_trn]
+    push ds                         ; DS = ours: a write through cs: is a
+    W16CSDS bx                      ;   #GP a call on kern_mega (SPEC.md 20.18)
+    mov ds, bx
+    mov bx, [w16_trn]
 %ifdef W16_TRFIRST                 ; keep the FIRST W16_TRN, the last slot
     cmp bx, W16_TRN - 1             ;   taking every call after them
     jb short $+5
@@ -103,8 +106,9 @@ w16_i21:
     shl bx, 1
     mov al, ah
     mov ah, 0x80
-    mov [cs:w16_trc + bx], ax
-    inc word [cs:w16_trn]
+    mov [w16_trc + bx], ax
+    inc word [w16_trn]
+    pop ds
     pop ax
     pop bx
 %endif

@@ -17116,6 +17116,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16props", "soak", py("tests/win16props.py"), 60.0,
+        "SPEC.md 124.25.13, WIN16-NEXT-PLAN: PROPS.EXE (`make "
+        "win16fixtures`, tests/win16/props.c) sets, gets, replaces, "
+        "enumerates and removes string- and atom-named window properties "
+        "(USER.24-27) on several windows, reads a string-named one's name in "
+        "EnumProps' callback, checks that a destroyed window's properties go "
+        "with it and that WaitMessage with an empty queue waits for a timer, "
+        "and calls CloseWindow, the "
+        "calls Microsoft Arcade's five games were refused for; its "
+        "MessageBox must be PROPS OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
         "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
         "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "
