@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "0fdcd33c5fde0fb4d4e1f651d737fcd3dc99f1ee690f050f0b4c34096e070609",
+  "fingerprint": "13a5c870d85edf613b26648ac05ff66ebb08664f9916217dd2301b77781170c2",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "2ae8155f5544c3cc052357b994b82c18c8583418e7583fe8cc044703a175a482",
+  "fingerprint": "5e9db0fe543d3c84fd019245cd7f9a628b082f5ebbdf476ac44af92875716261",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1694,6 +1694,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "DRVM_CEIL_NET_MEGA = 39: DRVC_NET's caption ceiling on kern_mega, where PCIETHER.DRV (SPEC.md 125.5) is the class's larger row; DRVM_CEIL_NET stays 34 for every other kernel (owner: ceiling per kernel, 2026-11-04). A caption's ceiling constant added at the end of a block; every cell, record and header is unchanged, so everything built before still runs - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "5e9db0fe543d3c84fd019245cd7f9a628b082f5ebbdf476ac44af92875716261",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 125.1: PCIETHER.DRV's drv_tab row on every big build (kern_big, kern_emu, kern_mega). DQ_MAXREC 11 -> 12 in the kernel and both SDKs for kern_emu's twelfth row; DRVC_NET is never suspended (96.23.6), so no record reaches an older buffer. DRVM_CEIL_NET_MEGA renamed DRVM_CEIL_NET_PCI (39, the big builds' DRVC_NET ceiling, which every DOS.O88 quotes); DRVM_CEIL_NET 34 stays kern_small's. No cell moved, nothing built before stops running: neither number bumps",
+   "to": 10
+  },
+  {
+   "fingerprint": "13a5c870d85edf613b26648ac05ff66ebb08664f9916217dd2301b77781170c2",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 125.1: PCIETHER.DRV's drv_tab row on every big build (kern_big, kern_emu, kern_mega). DQ_MAXREC 11 -> 12 in the kernel and both SDKs for kern_emu's twelfth row; DRVC_NET is never suspended (96.23.6), so no record reaches an older buffer. DRVM_CEIL_NET_MEGA renamed DRVM_CEIL_NET_PCI (39, the big builds' DRVC_NET ceiling, which every DOS.O88 quotes); DRVM_CEIL_NET 34 stays kern_small's. No cell moved, nothing built before stops running: neither number bumps",
    "to": 12
   }
  ]

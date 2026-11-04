@@ -19847,6 +19847,21 @@ SOAK = [
                "build/pciether.drv", "build/mega.img",
                "build/browser.o88", "build/browser.map"),
         locks=("port:8090",)),
+    Row("pcibig", "soak", py("tests/pciether.py", "--big"), 20.0,
+        "SPEC.md 125.1, 125.6: the pciether row on kern_big, which carries "
+        "PCIETHER.DRV's drv_tab row since the owner widened it from kern_mega "
+        "(2026-11-04) - the shipped real-mode kernel booting `make "
+        "pcibigtest`'s disk on QEMU with a PCI RTL8139: the driver attached "
+        "off SYSTEM.CFG bit 11, the PCI BIOS reached directly (no "
+        "reflection), the ring a conventional paragraph, DHCP bound, the "
+        "Browser's page fetched and the counters moving with no "
+        "receive-overflow reset. QEMU by name, for the pciether row's reasons.",
+        needs=("qemu", "nasm"), serial=True,
+        wants=("build/pcibigtest.img", "build/brtest.img",
+               "build/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/kernel.sys",
+               "build/browser.o88", "build/browser.map"),
+        locks=("port:8090",)),
     Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
         "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "
         "response through the NE2000 into cluster-aligned disk writes; the "

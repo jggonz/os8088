@@ -100393,12 +100393,13 @@ or read, and the row reads `Attached twice (bug)` beside its own name on the
 Drivers page. (It sat immediately before the attach until kernel size pass
 11; ahead of the read it costs no disk work, and from there the five
 refusals after it reach their answers with two-byte jumps.)
-**kern_mega words it differently** (§125.5): the same refusal, at the same
-place, banks `DRVE_CLASS` = 9 (kern_mega's alone; `DRVE_NERR` is 10 there)
-and the row reads `Class already in use`, because `ETHER.DRV` and
-`PCIETHER.DRV` are alternatives the user chose between and "bug" is the wrong
-word for it. `drivers/os88drv.inc` does not carry the code: no driver returns
-it. The other kernels keep `Attached twice (bug)` byte for byte.
+**The big builds word it differently** (§125.5): the same refusal, at the
+same place, banks `DRVE_CLASS` = 9 (kern_big's, kern_emu's and kern_mega's;
+`DRVE_NERR` is 10 there) and the row reads `Class already in use`, because
+`ETHER.DRV` and `PCIETHER.DRV` are alternatives the user chose between and
+"bug" is the wrong word for it. `drivers/os88drv.inc` does not carry the code:
+no driver returns it. kern_small, which has no second `DRVC_NET` row, keeps
+`Attached twice (bug)` byte for byte.
 Without that test `drv_publish` overwrites the slot unconditionally — the
 first driver's volumes stay mounted and browsable while every verb on them
 dispatches into the SECOND driver, which is this section's own bug one level
@@ -100560,12 +100561,13 @@ running DSP are all exactly as they were. **The kernel raises it in one place
 too** — a load into a class whose publication slot another row already holds
 (§51.2.1) — and it is the same sentence: the machine is fine, and the
 software is asking for something a class-keyed slot cannot do. **Except on
-kern_mega**, which banks `DRVE_CLASS` (`Class already in use`) for that one
-case instead, because there two rows of one class — `ETHER.DRV` and
-`PCIETHER.DRV` — are alternatives the user chose between (§125.5). It is a
-kernel-only code: `drivers/os88drv.inc` does not carry it, and a driver that
-answered 9 anyway would be banked as it on kern_mega and as `DRVE_HW` on the
-other kernels (`DRVE_NERR` is 10 there and 9 elsewhere).
+the big builds** (kern_big, kern_emu, kern_mega), which bank `DRVE_CLASS`
+(`Class already in use`) for that one case instead, because there two rows of
+one class — `ETHER.DRV` and `PCIETHER.DRV` — are alternatives the user chose
+between (§125.5). It is a kernel-only code: `drivers/os88drv.inc` does not
+carry it, and a driver that answered 9 anyway would be banked as it on a big
+build and as `DRVE_HW` on kern_small (`DRVE_NERR` is 10 there and 9 on
+kern_small).
 
 Two plumbing details make it *arrive*, and without either the refusal is
 correct and silent. `drv_attach` **keeps an attach refusal's `AL`** — it
@@ -183557,9 +183559,11 @@ the number of drivers that went — the bitmap of classes the first body also
 answered in `AX` is withdrawn, its one reader having stored it in a word
 nothing read back. `DQ_MAXREC` is published in `os88api.inc` so a
 caller can size that buffer without mirroring the kernel's own `DRV_MAX`.
-It is 10: kern_emu has ten rows with both CD-ROM and VESA enabled, kern_big
-nine and kern_small four. VESA is kept by the suspend sweep (§120.4), so
-this conservative bound adds no record to an older caller's buffer.
+It is 12: kern_emu has twelve rows (CD-ROM, HTTP, VESA and §125's
+`PCIETHER.DRV`), kern_big and kern_mega eleven, and kern_small four. VESA is
+kept by the suspend sweep (§120.4) and `DRVC_NET` is never suspended
+(§96.23.6), so neither of the two rows that widened it adds a record to an
+older caller's buffer.
 The kernel asserts `DRV_MAX <= DQ_MAXREC` at assembly time, because a row
 added here without widening the SDK
 would write past the end of somebody's buffer.
@@ -183823,17 +183827,18 @@ The literal is what makes the mirror possible: `t_mirror` compares the text
 when a value is not a number, and the SDK cannot see `DRVM_HDD`. So the kernel
 carries `equ 32` and the `%if` is what makes `32` safe.
 
-**One ceiling is per KERNEL: `DRVM_CEIL_NET_MEGA`** (§125.5, the owner's
-decision of 2026-11-04). kern_mega has a second `DRVC_NET` row,
+**One ceiling is per KERNEL: `DRVM_CEIL_NET_PCI`** (§125.5; the owner's
+decision of 2026-11-04, widened from kern_mega to every big build the same
+day, §125.1). kern_big, kern_emu and kern_mega have a second `DRVC_NET` row,
 `PCIETHER.DRV`, and the two are ALTERNATIVES in one publication slot
-(`drv_load_at` refuses whichever attaches second), so kern_mega's ceiling is
-the **larger** of the two rows and not their sum: 39 KB against
-`ETHER.DRV`'s 34. The caption is per kernel because `DOS.O88` already is —
-kern_mega's disks carry a copy assembled `-DDOS_MEGA` (§96, KERN-MEGA-DOS-PLAN
-12.1 item 4), and that copy alone quotes `DRVM_CEIL_NET_MEGA`; every other
-`DOS.O88` quotes `DRVM_CEIL_NET` and is byte-identical to what it was.
-`t_drvmem` holds each to the rows its own kernel has, and the `%if` pins the
-kern_mega one to whichever of the two rows is larger.
+(`drv_load_at` refuses whichever attaches second), so their ceiling is the
+**larger** of the two rows and not their sum: 39 KB against `ETHER.DRV`'s 34.
+Every kernel `DOS.O88` runs on has the row, so every `DOS.O88` - the shipped
+one and kern_mega's `-DDOS_MEGA` copy (§96, KERN-MEGA-DOS-PLAN 12.1 item 4)
+alike - quotes `DRVM_CEIL_NET_PCI`; `DRVM_CEIL_NET` is kern_small's, which has
+no PCI row and no `DOS.O88`. `t_drvmem` holds each to the rows its own kernel
+has, and the `%if` pins the big builds' one to whichever of the two rows is
+larger.
 
 **On `kern_small` the caption now says `Up to 32K` where the slot used to make
 it say `Up to  0K`**, and that is the fix arriving on one more machine rather
@@ -239283,7 +239288,7 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   installs will show whether one does. If one does, the hook goes in
   with the bytes found for it.
 
-## 125. PCIETHER.DRV — PCI network cards for kern_mega (`drivers/pciether/`)
+## 125. PCIETHER.DRV — PCI network cards for the big builds (`drivers/pciether/`)
 
 *Design record and story list: docs/plans/PCIETHER-PLAN.md. Status per story
 is in the plan; this section is the contract and says per item whether it is
@@ -239300,10 +239305,17 @@ driver on purpose: the next PCI NIC is a row in its backend table and a
 
 - **A separate driver, `PCIETHER.DRV`**, not a second backend inside
   `ETHER.DRV` — so later PCI NICs land in it.
-- **kern_mega only.** Its `drv_tab` row, its `SYSTEM.CFG` bit and the file
-  itself exist on kern_mega's build and disks and nowhere else. kern_big,
-  kern_emu and kern_small are byte-identical to before; no shipped floppy but
-  kern_mega's system disks carries the file.
+- **Every big build: kern_big, kern_emu and kern_mega** (widened the same
+  day from the first decision's "kern_mega only", for a releasable kern_big
+  with PCI networking). Its `drv_tab` row, its `SYSTEM.CFG` bit and the file
+  exist on those three kernels and their system disks; kern_small is
+  byte-identical to before and its disks never carry the file. **A machine
+  with no PCI bus is not affected beyond the row's bytes**: the row is not
+  wanted by default (§51.3), so the driver is never read, and on kern_big the
+  row, its strings and `DRVE_CLASS` cost 72 bytes (`.text` +29, `.cold` +43;
+  the boot blob +14, given back) and **cross no 512-byte rung** - `KERN_SIZE`
+  and so the heap are unchanged (`tools/kernsize.py`, 2026-11-04). The
+  360KB system disk leaves the file off (§125.6): no XT has a PCI slot.
 
 ### 125.2 One stack, shared as SOURCE (pinned; shipped)
 
@@ -239359,8 +239371,10 @@ needs no 32-bit register for the BIOS:
 | `B10Bh`/`B10Ch` write byte/word | BX, DI, CL / CX | CF |
 
 The probe (`drivers/pciether/pci.inc`, `pci_probe`) runs only when
-`OSAPI_CPU_INFO` answers a 386 or better: kern_mega boots on a 286, and no 286
-board carries PCI. The backend table (`pce_tab`) is rows of `{vendor, device,
+`OSAPI_CPU_INFO` answers a 386 or better: kern_big boots on an 8088 and
+kern_mega on a 286, and no board below a 386 carries PCI. On kern_big and
+kern_emu the image runs in real mode and issues `int 1Ah` straight to the
+BIOS; kern_mega reflects it (§125.8 item 1). The backend table (`pce_tab`) is rows of `{vendor, device,
 name, vectors}` ending in a zero vendor; each row is asked `B102h` with SI=0.
 BAR0 (config `10h`) must be an I/O BAR (bit 0 set); the base is the word AND
 `FFFCh`. A row that matches but whose BAR0 is not I/O is skipped with the card
@@ -239383,9 +239397,12 @@ ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
   split - and, at offset 9,744, one 1,536-byte transmit buffer (4-byte aligned:
   a paragraph base is). 11,280 bytes, 11,776 at the 512-byte granule. Claimed
   at attach only when an RTL8139 was found, freed at detach. Its bus address is
-  the claim's linear base from `OSAPI_SEG` `SEG_LIN`; kern_mega does not page,
-  so linear is physical and the card, a 32-bit bus master, may reach it
-  wherever the heap put it. **A boot attach claims in real mode** (SYSTEM.CFG's
+  the claim's linear base from `OSAPI_SEG` `SEG_LIN` - on a real-mode kernel
+  the paragraph times 16, below 1MB; kern_mega does not page, so linear is
+  physical there too - and the card, a 32-bit bus master, may reach it
+  wherever the heap put it. On kern_big and kern_emu `MEMP_CONV` is masked off
+  (`osapi_mem_p`): every claim there is conventional already, and `SEG_WIN`
+  answers the paragraph itself. **A boot attach claims in real mode** (SYSTEM.CFG's
   drivers load before `mega_enter`), so the claim's name is a paragraph that
   `mem_xlatf` cannot re-point - a pinned record gets the kernel's half only
   (KERN-MEGA-MEMORY-PLAN MC7.4) - and loading it in protected mode is a #GP.
@@ -239434,16 +239451,22 @@ ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
   first draft's "every access is 8- or 16-bit, a 32-bit register as two word
   writes", which is the one reading a real 8139 accepts and a model that
   implements those registers for a dword access only (QEMU's `rtl8139`, for
-  `RBSTART`, `RCR`, `TCR`) would drop. The prefix executes on the 386+ the PCI
+  `RBSTART`, `RCR`, `TCR`) would drop. **Both dword doors hold `cli` across
+  the top half** (`pushf`/`cli` ... `popf`, `vmmouse.asm`'s `vmm_atom`
+  argument): a real-mode kernel's `sch_switch` saves 16-bit registers only, so
+  a tick between the `pop eax` and the `out` could run a task or a BIOS
+  handler that spends EAX's top half - `XMEM.DRV`'s movers, SeaBIOS's C - and
+  hand the card some other dword. The prefix executes on the 386+ the PCI
   gate guarantees; `CR`, `CONFIG1` and `IDR` are byte accesses, `IMR`, `ISR`
   and `CAPR` word ones.
 - **Detach stops the DMA before freeing the claim**: `IMR` = 0, `CR` = 0, RST,
   wait, then free. A card left running writes into whatever the heap gives that
   memory to next.
 
-### 125.5 The kern_mega row (pinned)
+### 125.5 The big builds' row (pinned)
 
-One `drv_tab` row on kern_mega only, appended last: file `PCIETHER.DRV`,
+One `drv_tab` row on kern_big, kern_emu and kern_mega (`DRV_PCIETH`,
+`kernel/driver.inc`, defined wherever `KERN_BIG` is), appended last: file `PCIETHER.DRV`,
 title `PCI Ethernet`, class **`DRVC_NET`** — the same class as `ETHER.DRV`'s,
 so packages, `apps/os88sock.inc`'s `net_find`, the DOS packet layer and The
 Wire need no change. One class has one publication slot (§51.2.1), so the two
@@ -239453,18 +239476,20 @@ nothing of the first disturbed. That refusal already existed
 (`drv_load_at`, §51.2.1: it compares `[drv_owner]` for the row's class
 against the row, ahead of any disk work, and `[drv_owner]` is written only by
 `drv_publish` after a successful attach, so an `ETHER.DRV` that found no card
-leaves the slot free for `PCIETHER.DRV`). What kern_mega adds is the words:
+leaves the slot free for `PCIETHER.DRV`). What the row's builds add is the words:
 `DRVE_CLASS`, `Class already in use`, in place of `DRVE_TWICE`'s
-`Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** (§125.8
-item 2). Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
+`Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** on every
+build that has the row (§125.8 item 2), so one settings file means the same
+on all three. Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
 half-KB: 17,153 bytes with its bss) + `DRVM_RT_PCIETH` (23: `rt_claim`'s
 ring, slack, overrun and transmit buffer, `RT_CLAIM` = 11,280 bytes, held
 from attach to detach) + `DRVM_SK_PCIETH` (21: the socket pool at the
 **middle** rung, because `sk_cardcap` holds a rung to the 8KB ring less
 `SK_RINGSLK` and `SK_RXMAX` never fits) = **78 half-KB, 39 KB** — against
-`ETHER.DRV`'s 67. The two are alternatives, so kern_mega's `DRVC_NET` ceiling
-is the larger and not their sum: `DRVM_CEIL_NET_MEGA` = 39, which kern_mega's
-`-DDOS_MEGA` `DOS.O88` quotes, while `DRVM_CEIL_NET` stays 34 everywhere else
+`ETHER.DRV`'s 67. The two are alternatives, so the big builds' `DRVC_NET`
+ceiling is the larger and not their sum: `DRVM_CEIL_NET_PCI` = 39, which every
+`DOS.O88` quotes (the shipped one and kern_mega's `-DDOS_MEGA` copy), while
+`DRVM_CEIL_NET` stays 34 for kern_small, which has no PCI row and no DOS
 (§51.12.1; `tests/unit/t_drvmem.py` re-derives every term from
 `drivers/pciether/`). Not wanted by default (§51.3). When both rows are
 wanted, `drv_boot` walks the table in row order, so `ETHER.DRV` (row 2) is
@@ -239472,29 +239497,42 @@ tried first: with an ISA card it owns the class and `PCIETHER.DRV` reads
 `Class already in use`; with none it fails `No hardware found`, the slot
 stays free and `PCIETHER.DRV` attaches. Unticking the owner releases the slot
 (`drv_release` zeroes `[drv_owner]` only for the row that holds it). It must
-cross no kern_mega resident rung; `make budget-check` holds
-`KERN_MEGA_RESIDENT_KB`.
+cross no resident rung on any of the three; `make budget-check` holds
+`KERN_BUDGET` for kern_big and kern_emu and `KERN_MEGA_RESIDENT_KB` for
+kern_mega. The row is LAST on each, so it is row 10 on kern_big and kern_mega
+(after `VESA.DRV`'s row 9) and row 11 on kern_emu, whose absolute mouse is
+its row 5; `DRV_MAX` is 11, 12 and 11, and `DQ_MAXREC` went to 12 for
+kern_emu (§51.11.2).
 
 ### 125.6 Disks and machines (pinned)
 
-`PCIETHER.DRV` ships in `SYSTEM/` on kern_mega's system disks (`make mega`)
-and on no other image. A gate disk with `SYSTEM.CFG` already wanting it
-(ethertest's shape on kern_mega) is built on demand. QEMU is the gate: its
-`rtl8139` is a PCI device behind SeaBIOS's PCI BIOS, on the slirp network
-§72.9 already uses. Bochs has no RTL8139 and MartyPC no NIC at all; an 86Box
-PCI machine with its RTL8139C+ is where a person LOOKS.
+`PCIETHER.DRV` ships beside the other drivers on every big build's system disks: kern_big's
+1.44MB, 1.2MB and 720KB disks (it rides `$(DRIVERS)`), kern_emu's `emu.img`
+(`$(EMUDRIVERS)` is `$(DRIVERS)` plus the mouse), kern_mega's (`make mega`),
+the live media and therefore the INSTALL trees cut from them. **Not the 360KB
+system disk** (`$(SYS360OMITDRV)`, §24.3.1.6's rule one bus along): no XT has
+a PCI slot, the driver refuses below a 386, and at 22 clusters it would take
+two thirds of what that disk has left. System Check's manifest marks it
+optional for that reason, so a hard disk installed from the 360KB disk is not
+reported as missing it. kern_small's disks never carry it. A gate disk with
+`SYSTEM.CFG` already wanting it (ethertest's shape) is built on demand per
+kernel. QEMU is the gate: its `rtl8139` is a PCI device behind SeaBIOS's PCI
+BIOS, on the slirp network §72.9 already uses. Bochs has no RTL8139 and
+MartyPC no NIC at all; an 86Box PCI machine with its RTL8139C+ is where a
+person LOOKS.
 
-*Shipped (harness, S7-S9, unrun until the lead's final pass):* `MEGADRIVERS`
-(Makefile) names `$(BUILD)/pciether.drv` as a prerequisite of both kern_mega
-system disks, so a tree without the driver's rule stops `make mega` with
-make's "No rule to make target" - a mega disk must not quietly ship without
-it. `make pciethertest` builds `build/pciethertest.img` (`mega.img`'s files
-plus a `SYSTEM.CFG` whose bit is `PCIETHER_CFGBIT`, default 11 - §125.5's bit;
-the kernel's `drv_cfgbit` is the authority and the variable follows it). `make
-run-pciether` is the interactive QEMU machine (`-m 16`, `-device rtl8139` on
+*Shipped:* `MEGADRIVERS` (Makefile) refuses to build unless
+`$(BUILD)/pciether.drv` is in `$(DRIVERS)`, so a mega disk cannot quietly ship
+without it. `make pciethertest` builds `build/pciethertest.img` (`mega.img`'s
+files plus a `SYSTEM.CFG` whose bit is `PCIETHER_CFGBIT`, default 11 -
+§125.5's bit; the kernel's `drv_cfgbit` is the authority and the variable
+follows it) and `make pcibigtest` builds `build/pcibigtest.img`, the same
+`SYSTEM.CFG` on kern_big's shipped 1.44MB system disk. `make run-pciether`
+and `make run-pcibig` are the interactive QEMU machines (`-device rtl8139` on
 user networking); `os88qemu.make_test("PCIETHER=1", ...)` is the same machine
-for rows, and `tests/pciether.py` (soak row `pciether`) is the gate.
-`vm/pentium-pciether` (`make pentium-pciether`) is the 86Box profile.
+for rows, and `tests/pciether.py` is the gate - soak row `pciether` on
+kern_mega, `pcibig` (`--big`) on kern_big. `vm/pentium-pciether` (`make
+pentium-pciether`) is the 86Box profile.
 
 ### 125.7 What is not here
 
@@ -239524,11 +239562,15 @@ for rows, and `tests/pciether.py` (soak row `pciether`) is the gate.
    at all.) On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
    CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
    made. A few hundred microseconds a call, at attach only. *Seen on a
-   machine: no - the first run is the harness's (S8).*
+   machine: no - the first run is the harness's (S8).* **On kern_big and
+   kern_emu there is nothing to reflect**: the kernel is real mode
+   throughout, the `int 1Ah` goes to the BIOS's own vector, and
+   `OS88_DRV_HIGHOK` is not a flag those loaders act on.
 2. **The `SYSTEM.CFG` bit and the row: settled.** Bit **11** (0-10 are taken
    on every build; 5 is the absolute mouse's even where a build has no such
-   row), row **10** on kern_mega (after VESA.DRV's row 9), `DRV_MAX` 11 there
-   (`DRV_PX`, `kernel/driver.inc`). Its heap price, 39 KB, and the
+   row), row **10** on kern_mega and kern_big (after VESA.DRV's row 9) and
+   row **11** on kern_emu, `DRV_MAX` 11, 11 and 12 (`DRV_PX`,
+   `kernel/driver.inc`). Its heap price, 39 KB, and the
    per-kernel `DRVC_NET` ceiling are §125.5's.
 3. Sizes, from the build of 2026-11-04 (after the verifier's fixes): image
    17,259 bytes unpacked (`ETHER.DRV` 17,397), 10,950 packed (lz4), 352 bytes
