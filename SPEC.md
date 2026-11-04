@@ -233592,8 +233592,10 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
 - **It exits** (`int 21h` AH = 4Ch): its memory and its window go
   (§124.8).
 - **It calls an import WIN16 does not provide:** the stub (§124.3) ends it in
-  the same way, with a toast naming the call, *Needs USER.182, which WIN16
-  does not provide yet.*
+  the same way, but WIN16's window stays, its two lines naming the call:
+  *Needs USER.182* and *which WIN16 does not provide yet.* A toast would go
+  with the window that raised it (§59). So a program whose window goes with
+  no line at all ended itself (the first case), whatever it was doing.
 - **The user asks it to close:** the close box posts `WM_CLOSE`, and the
   program decides (§124.8).
 - **End Task (the owner, 2026-10-29):** a second click on the close box,
@@ -236683,10 +236685,11 @@ handlers are the system-library part's (part 9).
 **What a missing import does (the question L1 asked).** A program that imports
 a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
 import is bound to a stub, and the program runs until it CALLS it. The stub
-then ends the program, as `exit` does, with a toast naming the call. So a
-library that imports 23 functions it never calls in the program's first
-second is fine, and one that calls a missing function in its start-up ends
-the instance at once, with only that toast to say so.
+then ends the program, as `exit` does, with WIN16's window left up and its
+two lines naming the call (§124.25.15). So a library that imports 23
+functions it never calls in the program's first second is fine, and one that
+calls a missing function in its start-up ends the instance at once, with
+only those lines to say so.
 
 | call | what WIN16 does |
 |---|---|
@@ -236704,10 +236707,8 @@ GDI ones are `vbgdi`'s and `WaitMessage` is `props`'. These thirteen are the
 KERNEL and USER rest. **What a missing import does** is §124.12's: the stub
 ends the program the moment it is *called*, with the window left up and two
 lines naming it (*Needs USER.416 which WIN16 does not provide yet.*); an
-import never called costs nothing. So a program that "runs and exits after a
-second or two" did not exit silently, and WIN16's window says which
-function it was. The wording in §124.12 says toast; the code has used the
-window since a toast went with the window that raised it.
+import never called costs nothing. A missing import was therefore NOT why Mozart and Hangman left after a second
+or two with WIN16's window gone: that is below.
 
 None of the thirteen costs a resident byte. A row is the loader part's
 (§124.19.1) and every handler is in a part: GetCurrentPDB, GetCodeHandle,
@@ -236732,6 +236733,25 @@ part's gate), GetUpdateRgn in the system-library part (9). The library part
 Gates: `tests/win16/vbuser.c` (`make win16fixtures`) checks every row above
 that is not a refusal against a value it can compute, and the TrackPopupMenu
 refusal; `tests/win16vbuser.py` (row `win16vbuser`) runs it.
+
+**What Mozart and Hangman do now** (looked at on `kern_mega`, QEMU 486 with
+16 MB, 2026-11-04, with `vbgdi`'s, `props`' and `libpath`'s calls merged and
+VBRUN300 and every VBX in the Windows directory). Both show *Loading...*,
+then *Running* and a file bar, and then WIN16's window closes with no line,
+no toast and no dialog. Neither reaches one of these thirteen. A Visual Basic
+3.0 program's entry is one instruction, a far call to `VBRUN300.100` with the
+start registers of §124.3 (BX the stack's size, CX the heap's, DS = SS =
+DGROUP). Its first call is `GlobalHandle(SS)`: the runtime makes the
+program's DGROUP its own data segment, `GlobalReAlloc` to the stack, the heap
+and its own 8,856 bytes of data, copies its data to DGROUP:0 and moves the
+stack to the top. WIN16's DGROUP is no block of the global heap (§124.9), so
+`GlobalHandle` answers 0, and on 0 the runtime ends the program with
+`int 21h` `4CFFh`. A `-DW16_TRACE` build (§124.17.4) shows the three calls
+before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
+`KERNEL.21`. An `AH=4Ch` is not recorded. Answering `GlobalHandle`,
+`GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
+out at 64 KB whenever the arena has room (§124.21.4), is the next step, and
+is not done here.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

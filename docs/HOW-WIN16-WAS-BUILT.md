@@ -4792,3 +4792,31 @@ its start (`WM_INITMENU`), its hit test and its dismissal all assume the
 bar. A popup at a point is a second loop, estimated at 600-900 bytes of the
 library part against 800 left. It answers FALSE and shows nothing. SPEC.md
 124.25.15 has the table.
+
+**The look took that back** (`verify-vbuser`, 2026-11-04). With all of the
+VBRUN300 work merged, Mozart from its group link and Hangman from its folder
+both still showed *Running* and a file bar, and then WIN16's window closed
+with no line at all; every frame of the exit was captured, and there was no
+dialog and no toast either. A missing import leaves the window up, so this
+was something else. A `-DW16_TRACE` build of WIN16 (`tools/w16trace.py`)
+showed three calls in the ring: the libraries' `LibMain` gate, its return,
+and `GlobalHandle`. Then nothing, because `AH=4Ch` leaves before the trace
+point. VBRUN300's code says the rest. A VB 3.0 program's entry is a single
+far call to `VBRUN300.100`, which asks `GlobalHandle(SS)` for the program's
+DGROUP, grows it with `GlobalReAlloc` by its own 8,856 bytes of data and
+moves the stack to the top. WIN16's DGROUP is no global-heap block, so the
+answer is 0, and on 0 the runtime ends with `int 21h` `4CFFh`. The thirteen
+imports are still needed (their calls are further in), but the next wall is
+the program's own DGROUP as a global handle.
+
+While checking the thirteen against what VBRUN300 actually does with them:
+it calls `SetHandleCount` only on Windows 3.10 or later and otherwise grows
+the PSP's handle table itself, reading the table's size at `PSP:32h`, so
+`SetHandleCount` answers the table's size, 13, as Windows answers its own
+(never less than 20). It asks `GetClassWord` only for `GCW_CBWNDEXTRA`, to
+find its words at the end of a window's extra bytes, and `GetClassLong`
+only for `GCL_WNDPROC`, to ask whether a window is one of its own classes.
+Its one `FreeModule` ignores the answer, which is TRUE now anyway. Its one
+`TrackPopupMenu` is the `PopupMenu` method (the flags it builds are the
+method's argument), so a refusal there costs a program's right-click menu
+and nothing at start-up.
