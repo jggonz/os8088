@@ -1131,7 +1131,7 @@ def _killpid(pid):
 # wrong kernel and report on it.
 # -----------------------------------------------------------------------------
 _MT_KNOBS = {"TESTIMG", "TESTAPPS", "TESTHD", "ETHER", "ETHFWD", "ETHDUMP", "ADLIB",
-             "SB16", "NOCARD", "VMPORT", "MOUSEPORT"}
+             "SB16", "NOCARD", "VMPORT", "MOUSEPORT", "PCIETHER"}
 
 
 # The Makefile's ETHFWD=1 forwards, kept equal to its FTPPASV by hand: the
@@ -1266,6 +1266,20 @@ def make_test(*knobs, copy=True, extra=()):
     elif not kv.get("NOCARD"):
         cmd += ["-audiodev", "none,id=devsnd", "-device",
                 "adlib,audiodev=devsnd"]
+    if kv.get("PCIETHER"):
+        # PCIETHER.DRV's machine (SPEC.md 125.6, tests/pciether.py): the SAME
+        # slirp network as ETHER=1 with a PCI RTL8139 (10EC:8139) where the
+        # ISA NE2000 would be, and 16MB because kern_mega's protected mode
+        # wants memory above 1MB (the Makefile's M1 note). QEMU only - Bochs
+        # has no 8139 and 86Box takes the card from its profile
+        if kv.get("ETHER"):
+            raise ValueError("os88qemu.make_test: PCIETHER= replaces ETHER=, "
+                             "it is not an addition - one slirp, one card")
+        if SERVED:
+            raise ValueError("os88qemu.make_test: PCIETHER= is QEMU's alone "
+                             "(Bochs has no RTL8139; vm/pentium-pciether is 86Box's)")
+        cmd += ["-m", "16", "-netdev", "user,id=n0",
+                "-device", "rtl8139,netdev=n0"]
     if kv.get("ETHER"):
         net = "user,id=n0"
         if kv.get("ETHFWD"):

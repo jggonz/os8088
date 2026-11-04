@@ -19815,6 +19815,26 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
         locks=("port:8090",)),
+    Row("pciether", "soak", py("tests/pciether.py"), 120.0,
+        "SPEC.md 125 (docs/plans/PCIETHER-PLAN.md S8): PCIETHER.DRV on "
+        "kern_mega with a PCI RTL8139 (`-device rtl8139` on slirp, "
+        "os88qemu.make_test's PCIETHER=1) - the driver attached off a "
+        "SYSTEM.CFG that already asks for it (`make pciethertest`), the "
+        "station address QEMU's, DHCP bound to 10.0.2.15, the shipped "
+        "Browser fetching a page the row serves itself over TCP, and the "
+        "frame counters moving with no receive-overflow reset. QEMU by name: "
+        "MartyPC has no NIC, Bochs has no RTL8139 and 86Box cannot be "
+        "asserted against (vm/pentium-pciether is where a person LOOKS). "
+        "UNRUN when registered - the harness agent may not run a row - so the "
+        "first run is the lead's final pass; kern_mega's selectors are "
+        "decoded through the GDT/LDT in `info registers` (tests/pciether.py "
+        "MQemu), which one boot confirmed against CS.",
+        needs=("qemu", "nasm"), serial=True,
+        wants=("build/pciethertest.img", "build/brtest.img",
+               "build/megak/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/mega.img",
+               "build/browser.o88", "build/browser.map"),
+        locks=("port:8090",)),
     Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
         "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "
         "response through the NE2000 into cluster-aligned disk writes; the "
