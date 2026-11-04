@@ -809,6 +809,8 @@ def music_region(proj):
     """The music as the engine holds it: its LOOP (or all of it), the join's
     place in it, and the loop's first sample in the sound"""
     m = proj.d["music"]
+    if not m:                       # (no music: the build's second of
+        return np.zeros(proj.d["target"]["rate"]), 0, 0     # silence)
     x = sound(proj, m["sound"])
     lp = m.get("loop") or [0, len(x)]
     return x[lp[0]:lp[1]], m["join"] - lp[0], lp[0]

@@ -29,6 +29,7 @@ import vbtproj as P     # noqa: E402
 
 TITLE = "Video Battle builder"
 SCALE = 2               # a canvas pixel on the screen
+NO_MUSIC = "(no music)"
 BG_NAMES = ("Black", "Blue", "Green", "Cyan", "Red", "Magenta", "Brown",
             "Light grey", "Dark grey", "Light blue", "Light green",
             "Light cyan", "Light red", "Light magenta", "Yellow", "White")
@@ -398,7 +399,7 @@ def damage_preview(proj, aid):
         R = V.Rules(V.compile_rules(proj, idx, [(0, 0, 1, 1, 0)] *
                                     len(d.get("images", []))))
     except Exception as e:
-        return ["(not until the rules compile: %s)" % e]
+        return ["(the rules do not compile yet: %s)" % e]
     sim = V.Sim(R)
     a = d["actions"][aid]
     ai = list(d["actions"]).index(aid)
@@ -1121,6 +1122,8 @@ class BattleTab(object):
                    ).grid(row=0, column=2, padx=4)
         ttk.Button(mf, text="Listen", command=lambda: self._listen(False)
                    ).grid(row=0, column=3, padx=4)
+        ttk.Button(mf, text="Remove this sound", command=self._rm_sound
+                   ).grid(row=0, column=4, padx=4, sticky="w")
         ttk.Label(mf, text="Loop (seconds)").grid(row=1, column=0, sticky="w")
         self.lstart, self.lend = tk.StringVar(), tk.StringVar()
         lf = ttk.Frame(mf)
@@ -1191,10 +1194,10 @@ class BattleTab(object):
         for k in ("victory", "defeat"):
             self.endv[k + "_cb"].config(values=list(d["clips"]))
             self.endv[k].set(d["enemy"].get(k) or "")
-        snd = [s for s in d["sounds"]]
+        snd = [NO_MUSIC] + [s for s in d["sounds"]]
         self.mcb.config(values=snd)
         m = d.get("music") or {}
-        self.msound.set(m.get("sound", ""))
+        self.msound.set(m.get("sound", "") if m else NO_MUSIC)
         rate = t["rate"]
         lp = m.get("loop")
         self.lstart.set("%.3f" % secs(lp[0], rate) if lp else "")
@@ -1272,7 +1275,26 @@ class BattleTab(object):
         self.app.edit("set_music", sid, 0)
 
     def _music_sound(self):
+        if self.msound.get() == NO_MUSIC:
+            if self.app.proj.d.get("music"):
+                self.app.edit("set", ("music",), None)
+            return
         self.app.edit("set_music", self.msound.get(), 0)
+
+    def _rm_sound(self):
+        """The sound in the Sound box out of the project - the music's own
+        too, which leaves the battle with none; one anything else uses is
+        refused, saying what"""
+        from tkinter import messagebox
+        sid = self.msound.get()
+        if not sid or sid == NO_MUSIC:
+            return self.app.say("Choose the sound to remove in the Sound box")
+        users = self.app.proj.sound_users(sid)
+        if not messagebox.askyesno(TITLE, "Remove the sound %s%s?" % (
+                sid, " - the battle then has no music" if "the music" in users
+                else "")):
+            return
+        self.app.edit("remove_sound", sid)
 
     def _rate(self):
         return self.app.proj.d["target"]["rate"]
@@ -3670,7 +3692,7 @@ class PartyTab(object):
         try:
             im = vbtband.render(self.app.proj, ci, menu)
         except Exception as e:
-            self.band.config(text="(not until the rules compile: %s)" % e,
+            self.band.config(text="The band cannot be drawn yet: %s" % e,
                              fg="white", image="")
             return
         im = im.resize((im.width * 2, im.height * 2))

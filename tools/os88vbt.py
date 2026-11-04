@@ -855,8 +855,8 @@ def battle_of(proj, progress=None, kind="cga4"):
     b.band = tuple(t["band"])
     b.canvas = tuple(t["canvas"])
     b.idle = A.idle_of(proj, pg, kind)
-    for sid in d["sounds"]:
-        b.sfx[sid] = A.sound(proj, sid)
+    for sid in proj.sounds_used():      # (only what is used is read: a
+        b.sfx[sid] = A.sound(proj, sid)  # sound left over is no file to find)
     opened = [o["clip"] for o in d["openings"]]
     for i, o in enumerate(d["openings"]):
         c = d["clips"][o["clip"]]
@@ -887,12 +887,17 @@ def battle_of(proj, progress=None, kind="cga4"):
         b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg, kind),
                             cues=cues, joins=c["joins"], exit=c["exit"],
                             ends=c["ends"], anchors=c["anchors"]))
-    b.music = b.sfx[d["music"]["sound"]]   # all music loops (10.2): the
-    b.music_at = d["music"]["join"]        # region is the loop, and the
-    lp = d["music"].get("loop")            # engine plays it round
-    if lp:
-        b.music = b.music[lp[0]:lp[1]]
-        b.music_at -= lp[0]
+    if d["music"]:
+        b.music = b.sfx[d["music"]["sound"]]   # all music loops (10.2): the
+        b.music_at = d["music"]["join"]        # region is the loop, and the
+        lp = d["music"].get("loop")            # engine plays it round
+        if lp:
+            b.music = b.music[lp[0]:lp[1]]
+            b.music_at -= lp[0]
+    else:                   # NO MUSIC: a second of silence, played round as
+        import numpy as np  # any music is - the engine is the same
+        b.music = np.zeros(t["rate"])
+        b.music_at = 0
     b.ui = dict(d["ui_sounds"])
     # --- the title loop and the endings (125.3.1)
     b.fade_steps = d.get("fade_steps", 16)

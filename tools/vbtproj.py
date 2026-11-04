@@ -20,7 +20,8 @@ A project file (version 1):
                        "whole"}} - "whole": a clip's own soundtrack over all
                        of it, which follows its in and out (else a part,
                        which stays on its footage),
-     "music":    {"sound", "join", "loop"} - the sample it comes in at, and
+     "music":    null (none: silence, a second of it played round) |
+                 {"sound", "join", "loop"} - the sample it comes in at, and
                  the loop [start, end) in the sound's samples (null: all
                  of it); the join is inside the loop,
      "ui_sounds":{"move"|"open"|"close"|"take"|"deny": sound id},
@@ -237,6 +238,44 @@ class Project:
             raise ValueError("a sound is a file, a scene's or a source's")
         v["level"] = level
         self.set(("sounds", sid), v)
+
+    def sound_users(self, sid):
+        """What uses sound SID, as words: the music, the menu's sounds,
+        an opening's, a clip's cues, the title's and the end loops'"""
+        d, out = self.d, []
+        if (d.get("music") or {}).get("sound") == sid:
+            out.append("the music")
+        out += ["the menu's %s sound" % k for k, v in
+                d.get("ui_sounds", {}).items() if v == sid]
+        out += ["opening %d" % (i + 1) for i, o in enumerate(d["openings"])
+                if o.get("sound") == sid]
+        out += ["a cue of %s" % cid for cid, c in d["clips"].items()
+                if any(q["sound"] == sid for q in c.get("cues", []))]
+        if ((d.get("title") or {}).get("sound")) == sid:
+            out.append("the title loop")
+        for k, en in d.get("endings", {}).items():
+            if ((en.get("loop") or {}).get("sound")) == sid:
+                out.append("the %s end loop" % k)
+        return out
+
+    def sounds_used(self):
+        """Every sound something uses - the ones a build reads"""
+        return {sid for sid in self.d["sounds"] if self.sound_users(sid)}
+
+    def remove_sound(self, sid):
+        """Sound SID out of the project. The MUSIC may be it - removing the
+        music's sound leaves the battle with none; anything else that uses
+        it refuses, naming what"""
+        users = [u for u in self.sound_users(sid) if u != "the music"]
+        if users:
+            raise ValueError("%s is used by %s: take it out of those first"
+                             % (sid, ", ".join(users)))
+
+        def f(d):
+            del d["sounds"][sid]
+            if (d.get("music") or {}).get("sound") == sid:
+                d["music"] = None
+        self._edit(f)
 
     def set_idle(self, source, loop):
         self.set(("idle",), {"source": source, "loop": list(loop)})
@@ -639,8 +678,9 @@ class Project:
             if s["kind"] == "video" and self.path and \
                     not os.path.exists(self.here(s["path"])):
                 err("sources." + sid, "%s is missing" % s["path"])
+        used = self.sounds_used()
         for sid, s in d["sounds"].items():
-            if s["kind"] == "file" and self.path and \
+            if s["kind"] == "file" and self.path and sid in used and \
                     not os.path.exists(self.here(s["path"])):
                 err("sounds." + sid, "%s is missing" % s["path"])
             if s["kind"] == "source" and s["source"] not in d["sources"]:
@@ -699,7 +739,8 @@ class Project:
                     "the menu: the full-screen ones come first (the menu, "
                     "once it is there, stays)")
         if not d["music"]:
-            err("music", "no music")
+            info("music", "no music: after the openings the battle is "
+                 "silent but for its clips' and the menu's sounds")
         elif d["music"]["sound"] not in d["sounds"]:
             err("music", "no sound %s" % d["music"]["sound"])
         elif d["music"].get("loop"):

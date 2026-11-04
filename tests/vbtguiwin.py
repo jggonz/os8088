@@ -248,6 +248,30 @@ def inner(tmp):
        and app.proj.d.get("band_image") == "shield",
        "C. a band picture EDITED after it was added: moved (the band "
        "preview changes with it), renamed (the band's own use with it)")
+    # THE MUSIC: none chosen, then its sound removed; a sound the menu
+    # uses refuses (the owner: "no way to remove it, and it won't build
+    # without it")
+    from tkinter import messagebox
+    messagebox.askyesno = lambda *a, **k: True
+    bt = app.battle_tab
+    app.nb.select(bt.f)
+    msid = app.proj.d["music"]["sound"]
+    bt.msound.set("(no music)")
+    bt._music_sound()
+    none1 = app.proj.d["music"] is None
+    bt.msound.set(msid)
+    bt._music_sound()
+    bt._rm_sound()
+    gone = msid not in app.proj.d["sounds"] and app.proj.d["music"] is None
+    used = next(iter(app.proj.d["ui_sounds"].values()))
+    bt.msound.set(used)
+    bt._rm_sound()
+    ok(none1 and gone and used in app.proj.d["sounds"]
+       and "used by" in app.status.cget("text")
+       and not [x for x in app.proj.check() if x.where == "music"
+                and x.level == "ERROR"],
+       "C. the music set to none, its sound removed; a menu sound refuses "
+       "(%r)" % app.status.cget("text")[:70])
     ok(not errs, "C. nothing raised in a Tk callback (%d)" % len(errs))
     for e in errs[:2]:
         print(e)

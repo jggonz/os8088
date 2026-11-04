@@ -81,10 +81,13 @@ class RulesError(ValueError):
     pass
 
 
-def compile_rules(proj, clip_index, images=()):
+def compile_rules(proj, clip_index, images=(), preview=False):
     """The RULES block for project PROJ (a vbtproj.Project), its clips
     numbered by CLIP_INDEX {clip id: bundle index}. IMAGES: [(col, row,
     cells, rows, paragraph)] of the band pictures, in the order the
+    project's "images" list names them. PREVIEW (the band's, vbtband): the
+    victory and defeat clips may be unchosen yet - the band never plays
+    them. (The list goes on:)
     project's "images" list names them. Returns the bytes"""
     d = proj.d
     chars = d["characters"]
@@ -94,6 +97,16 @@ def compile_rules(proj, clip_index, images=()):
     if len(acts) > MAX_ACTS:
         raise RulesError("%d actions, at most %d" % (len(acts), MAX_ACTS))
     aidx = {a: i for i, a in enumerate(acts)}
+
+    def need(tab, key, what, kind):
+        """TAB[KEY], or a RulesError that says WHAT names nothing - a field
+        left unchosen in the window was a KeyError(None), which the window
+        showed as "None" (the owner, 2026-11-04)"""
+        if key in tab:
+            return tab[key]
+        if key in (None, ""):
+            raise RulesError("%s: no %s chosen" % (what, kind))
+        raise RulesError("%s: no %s called %s" % (what, kind, key))
     cname = [c["name"] for c in chars]
     stances = d["enemy"]["stances"]
     sidx = {s["name"]: i for i, s in enumerate(stances)}
@@ -103,7 +116,8 @@ def compile_rules(proj, clip_index, images=()):
     pools, pool_of = [], {}
 
     def pool(clips):
-        clips = [clip_index[c] for c in clips]
+        clips = [need(clip_index, c, "an action's clips", "clip")
+                 for c in clips]
         if not clips:
             return NONE
         if len(clips) > MAX_POOL:
@@ -134,16 +148,20 @@ def compile_rules(proj, clip_index, images=()):
         top = menu(c["name"], None, looks.get(c["name"] + ":top"), top_items)
         for it in c["menu"]["top"]:
             if "action" in it:
-                top_items.append((0, aidx[it["action"]]))
+                top_items.append((0, need(aidx, it["action"], "%s's menu"
+                                          % c["name"], "action")))
             else:
                 sub = menu(it["label"], None,
                            looks.get(c["name"] + ":" + it["label"]),
-                           [(0, aidx[a]) for a in it["sub"]])
+                           [(0, need(aidx, a, "%s's %s menu" % (
+                               c["name"], it["label"]), "action"))
+                            for a in it["sub"]])
                 top_items.append((1, sub))
         side = NONE
         if c["menu"]["side"]:
             side = menu("side", None, looks.get(c["name"] + ":side"),
-                        [(0, aidx[a]) for a in c["menu"]["side"]])
+                        [(0, need(aidx, a, "%s's side menu" % c["name"],
+                                  "action")) for a in c["menu"]["side"]])
         cmenus.append((top, side))
     for m in menus:
         if len(m["items"]) > MAX_ITEMS_MENU:
@@ -182,7 +200,8 @@ def compile_rules(proj, clip_index, images=()):
             r[9], n = COST_MP, cost["mp"]
         elif cost.get("item"):
             r[9], n = COST_ITEM, cost.get("n", 1)
-            r[12] = iidx[cost["item"]]
+            r[12] = need(iidx, cost["item"], "action %s's cost" % aid,
+                         "item")
         elif cost.get("limit"):
             r[9], n = COST_LIMIT, 0
         else:
@@ -221,7 +240,8 @@ def compile_rules(proj, clip_index, images=()):
                 bb = max(1, min(4, e.get("steps", 1)))
                 cc = e.get("turns", 3)
             elif e["verb"] == "stance":
-                aa = sidx[e["stance"]]
+                aa = need(sidx, e["stance"], "action %s's stance effect"
+                          % aid, "stance")
                 cc = e.get("duration", 0)
             r[at] = v
             r[at + 1] = aa
@@ -273,23 +293,33 @@ def compile_rules(proj, clip_index, images=()):
             raise RulesError("stance %s: %d moves, %d responses" %
                              (s["name"], len(moves), len(resp)))
         r[12], r[13] = len(moves), len(resp)
-        r[14] = aidx[s["return"]] if s.get("return") else NONE
+        w = "the enemy's stance %s" % s["name"]
+        r[14] = need(aidx, s["return"], w + " (its return)", "action") \
+            if s.get("return") else NONE
         for i, m in enumerate(moves):
+            if m.get("rule") == "named" and m.get("target") not in cname:
+                raise RulesError("%s: move %d aims at no character (%s)"
+                                 % (w, i + 1, m.get("target")))
             arg = cname.index(m["target"]) if m.get("rule") == "named" else 0
-            struct.pack_into("<4B", r, 16 + 4 * i, aidx[m["action"]],
+            struct.pack_into("<4B", r, 16 + 4 * i, need(
+                aidx, m.get("action"), "%s, move %d" % (w, i + 1), "action"),
                              max(1, min(255, m.get("weight", 1))),
                              RULES[m.get("rule", "alternate")], arg)
         for i, x in enumerate(resp):
             trig = x.get("trigger", "any")
-            arg = aidx[x["named"]] if trig == "named" else 0
+            arg = need(aidx, x.get("named"), "%s, response %d" % (w, i + 1),
+                       "action it answers") if trig == "named" else 0
             struct.pack_into("<4B", r, 40 + 4 * i, TRIG[trig], arg,
                              max(0, min(100, x.get("chance", 100))),
-                             aidx[x["action"]])
+                             need(aidx, x.get("action"), "%s, response %d"
+                                  % (w, i + 1), "action"))
         au = s.get("auto") or {}
         if au:
             struct.pack_into("<4B", r, 48, AUTO[au["kind"]], au["arg"],
-                             sidx[au["to"]],
-                             aidx[au["via"]] if au.get("via") else NONE)
+                             need(sidx, au.get("to"), w + " (its change)",
+                                  "stance"),
+                             need(aidx, au["via"], w + " (its change)",
+                                  "action") if au.get("via") else NONE)
         b += r
     table("stance", b)
     # pools, items, images
@@ -312,6 +342,12 @@ def compile_rules(proj, clip_index, images=()):
         raise RulesError("the rules are %d bytes, over %d" % (len(out), RULES_MAX))
 
     e = d["enemy"]
+
+    def end_clip(k):
+        if preview and e.get(k) is None:
+            return NONE
+        return need(clip_index, e.get(k), "the enemy's %s (the Enemy tab)"
+                    % k, "clip")
     struct.pack_into("<8B7H", out, 0, 1, len(chars), len(acts), len(menus),
                      len(stances), len(pools), len(items), len(images),
                      tabs["char"], tabs["act"], tabs["menu"], tabs["stance"],
@@ -325,7 +361,7 @@ def compile_rules(proj, clip_index, images=()):
                          e.get("atk", 16), e.get("mag", 16), e.get("def", 0),
                          e.get("mdef", 0))] +
                      [min(100, e.get("evade", 0)),
-                     clip_index[e["victory"]], clip_index[e["defeat"]],
+                     end_clip("victory"), end_clip("defeat"),
                      1 if d.get("seed") else 0, d.get("seed") or 0]))
     return bytes(out)
 

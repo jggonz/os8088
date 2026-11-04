@@ -16858,6 +16858,18 @@ SOAK = [
         "outside it, and the battle reaches its menu. Broken on purpose "
         "(the picture padded at the top left) four checks fail",
         needs=("marty", "ffmpeg")),
+    Row("vbtminimal", "soak", py("tests/vbtminimal.py"), 40.0,
+        "SPEC.md 125: THE SMALLEST BATTLE THAT BUILDS, the owner's 'a "
+        "minimal set to see the menu': one test pattern, one character, one "
+        "action, one enemy move, no music. On the host what is missing is "
+        "said by name - never 'None', a KeyError on an unchosen field (the "
+        "enemy's victory clip) - the band draws before the endings are "
+        "chosen, no music is not an error, a leftover sound whose file is "
+        "gone does not stop the build, and a sound in use refuses to be "
+        "removed; on MartyPC's CGA XT it plays to its menu with the band up "
+        "and to victory. Broken on purpose (the band demanding the endings) "
+        "it stops at the band",
+        needs=("marty", "ffmpeg")),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

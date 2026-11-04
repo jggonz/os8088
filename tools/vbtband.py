@@ -114,7 +114,7 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
     d = proj.d
     idx = {c: i for i, c in enumerate(d["clips"])}
     images, places = B.images_of(proj)
-    rules = V.Rules(V.compile_rules(proj, idx, places))
+    rules = V.Rules(V.compile_rules(proj, idx, places, preview=True))
     by = d["target"]["band"][1]
     b = Band(rules, images, by)
     ch = rules.chars[char]

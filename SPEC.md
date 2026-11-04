@@ -237540,7 +237540,13 @@ OWN sound is written in its place, and the music stands still under it.
 alike. Opening *i* is read into ring *i* mod 2, so the next one's head is
 read while the last one plays. The picture starts the next when it shows
 the last record. The sound, which runs ahead, starts the next one's at the
-sample the last one's ends. The band is let in (`[vb_bandok]`) at the
+sample the last one's ends. **A battle may have NO MUSIC** (the project's
+`"music"` null, the Battle tab's "(no music)"): the builder writes a second
+of silence as the music region, played round as any music is, so the engine
+is the same. A build reads only the sounds something uses
+(`Project.sounds_used`), and `remove_sound` takes one out - the music's own
+leaving the battle with none, any other refused while it is used, naming
+what uses it. The band is let in (`[vb_bandok]`) at the
 first frame of the first opening WITHOUT `CF_FULL` - or, where every
 opening has it (a bundle made before the choice, when all did), of the
 scene opening, as it always was. When the scene opening's sound ends, the MUSIC comes in
