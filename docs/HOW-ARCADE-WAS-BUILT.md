@@ -253,3 +253,47 @@ of its own - the thrust, two footsteps, the count of the men saved, the
 rescue ship's beep - and borrowed the rest. Its end-of-level tunes are a
 one-bit waveform the CPU toggles in time, which a once-a-frame latch cannot
 carry, so they are not played.
+
+## Gun Fight and Sea Wolf: the board the right way up
+
+**Midway's two oldest games here** run on the same 8080 board as Space
+Invaders, but the monitor stands the right way up, the ports are wired
+differently, and the controls are not buttons. Gun Fight decodes its OUT
+port with three AND gates, so one OUT can set the sound, the shift count
+and the shift data at once; Sea Wolf reads the shifter bit-reversed. A
+small per-board port map in the translator covers both. Gun Fight's aim
+lever and Sea Wolf's periscope are positional encoders read through
+MAME's tables; on a keyboard they became levers that move a notch while a
+key is held. Gun Fight is two players at one keyboard.
+
+**They draw past the bottom of the screen**, into ROM at 4000h, which the
+board ignores. The translator now drops stores into ROM - for a constant
+address at build time, for a computed one on the video path only.
+
+**A picture the lockstep could not see was wrong.** Sea Wolf showed
+"INSERT COIN" in the middle of a game. The 8080 erases its screen by
+pointing SP into video RAM and pushing zeros, and a PUSH listed no cells
+for the host to redraw. RAM agreed with the model to the byte, so the
+lockstep was green. Two new checks close that gap: `arclock --marks`
+holds the write list to the screen, and `tests/arcglass.py` stops on the
+host's renderer and compares the Hercules page with video RAM cell by
+cell. It finds 54 bad cells without the fix and none with it. (It also
+had to stop at the renderer's end: before that, the glass lagged video
+RAM by a frame, and a slow ship looked like a bug.)
+
+**The idea that did not survive measurement.** Neither game's main loop
+ever waits. A dispatcher runs a task list round and round, and a task
+that is not due returns at once - two thirds of everything Gun Fight's
+8080 runs. Treating those returns as a HLT looked like the obvious lever.
+The model said otherwise: halting at every such return changed the
+picture in 1,035 of 1,500 frames; halting only where an oracle proved the
+pass idle, in 1 for Gun Fight and still 1,106 for Sea Wolf, because
+resuming at the loop's head moves where the next interrupt lands. One of
+Sea Wolf's even ran with interrupts off, a hang as a HLT. So it is not
+done; the instrument (`arcsim.py idles`) and the finding stay.
+
+**Speed.** On the 5150 both keep the board's 59.5 frames a second. Some
+early measurements of these two came out at 40-44 frames a second; every
+measurement of the tree as committed, alone or two at once, holds the
+board's rate, and the rows `arcspeedgf` and `arcspeedsw` keep asking. The
+slow figures were not reproduced and are not explained.

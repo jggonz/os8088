@@ -13,7 +13,7 @@
 #         (docs/plans/ARCADE-EMU-PLAN.md section 2 is its output)
 #     python3 -I tools/arcsim.py seeds  ROM [--frames N] [-o FILE]
 #         every target a PCHL or a RET reached that is not the instruction
-#         after a CALL or an interrupt's return address: the entry points a static walk of the ROM cannot
+#         after a CALL: the entry points a static walk of the ROM cannot
 #         see, which apps/arcade/arcaot.py is handed as seeds
 #     python3 -I tools/arcsim.py digest ROM --at F[,F...] [--pbm-prefix P]
 #         the SHA-1 of VRAM (2400-3FFF) after frame F, and its screen
@@ -43,10 +43,30 @@ CYC = [
 # active low on Taito's (MAME); `both` puts player 1's fire, left and right
 # on IN 2 as well as IN 1 (an upright cabinet's wiring).
 BOARDS = {
-    'invaders': dict(size=0x2000, in0=0x00, in1=0x08, in2=0x00, coin_low=False, both=False),
-    'invadpt2': dict(size=0x5800, in0=0xF4, in1=0x81, in2=0x00, coin_low=True, both=True),
-    'lrescue':  dict(size=0x5800, in0=0xFF, in1=0x89, in2=0x00, coin_low=True, both=True),
+    'invaders': dict(size=0x2000, io='mw', in0=0x00, in1=0x08, in2=0x00, coin_low=False, both=False),
+    'invadpt2': dict(size=0x5800, io='mw', in0=0xF4, in1=0x81, in2=0x00, coin_low=True, both=True),
+    'lrescue':  dict(size=0x5800, io='mw', in0=0xFF, in1=0x89, in2=0x00, coin_low=True, both=True),
+    # Midway's landscape boards: Gun Fight's IN 0/1 are each gunman's stick,
+    # aim and trigger and IN 2 the coin, the start and the DIPs; Sea Wolf's
+    # IN 1 is the periscope and the trigger, IN 2 the coin and the start
+    'gunfight': dict(size=0x1000, io='gunfight', in0=0x30, in1=0x30, in2=0x10),
+    'seawolf':  dict(size=0x1000, io='seawolf', in0=0x40, in1=0x60, in2=0x00),
 }
+# the positional controls' encoders (MAME mw8080bw.cpp's remap tables, the
+# field then inverted): Gun Fight's 7-position aim, Sea Wolf's 30-position
+# periscope
+GF_AIM = (0x06, 0x02, 0x00, 0x04, 0x05, 0x01, 0x03)
+SW_SCOPE = (0x1e, 0x1c, 0x1d, 0x19, 0x18, 0x1a, 0x1b, 0x13, 0x12, 0x10,
+            0x11, 0x15, 0x14, 0x16, 0x17, 0x07, 0x06, 0x04, 0x05, 0x01,
+            0x00, 0x02, 0x03, 0x0b, 0x0a, 0x08, 0x09, 0x0d, 0x0c, 0x0e)
+
+
+def gf_aim(pos):
+    return ((~GF_AIM[pos]) & 7) << 4
+
+
+def sw_scope(pos):
+    return (~SW_SCOPE[pos]) & 0x1f
 ROMTOP = 0x5000             # a colour board's image: the CPU's 0000-4FFFh,
                             #   then the colour maps (not the CPU's)
 
@@ -68,6 +88,7 @@ class M:
         s.shift=0; s.shoff=0; s.in0=s.board['in0']; s.in1=s.board['in1']; s.in2=s.board['in2']
         s.vw=0; s.vwchg=0; s.vdirty=set(); s.ios=collections.Counter()
         s.romw=0; s.mirror=0; s.sound=[]; s.inisr=0; s.isrsp=0; s.pchl=set(); s.intpc=set()
+        s.lamp1=0; s.lamp2=0
     def rd(s,a):
         a &= 0x7fff
         if a >= 0x6000: s.mirror += 1; a -= 0x4000      # RAM's mirror
@@ -124,18 +145,42 @@ class M:
         else: r=a|v; s.fac=0; s.fc=0; s.a=r; s.szp(r)
     def cond(s,c):
         return (not s.fz, s.fz, not s.fc, s.fc, not s.fp, s.fp, not s.fs, s.fs)[c]
+    def shifted(s):
+        return ((s.shift << s.shoff) >> 8) & 255
     def io_in(s,p):
         s.ios['in%d'%p]+=1
-        if p==0: return s.in0
-        if p==1: return s.in1
-        if p==2: return s.in2
-        if p==3: return ((s.shift << s.shoff) >> 8) & 255
-        return 0
+        io = s.board['io']
+        if io == 'mw':
+            if p==0: return s.in0
+            if p==1: return s.in1
+            if p==2: return s.in2
+            if p==3: return s.shifted()
+            return 0
+        p &= 3                                  # 3 address lines, IN mirrored
+        if io == 'gunfight':
+            return (s.in0, s.in1, s.in2, s.shifted())[p]
+        if p == 0:                              # Sea Wolf: the shifter, reversed
+            return int('{:08b}'.format(s.shifted())[::-1], 2)
+        return (0, s.in0, s.in1, s.shifted())[p]
     def io_out(s,p,v):
         s.ios['out%d'%p]+=1
-        if p==2: s.shoff=v&7
-        elif p==4: s.shift=(v<<8)|(s.shift>>8)
-        elif p in (3,5): s.sound.append((p,v))
+        io = s.board['io']
+        if io == 'mw':
+            if p==2: s.shoff=v&7
+            elif p==4: s.shift=(v<<8)|(s.shift>>8)
+            elif p in (3,5): s.sound.append((p,v))
+        elif io == 'gunfight':                  # no decoder: three AND gates
+            p &= 7
+            if p & 1: s.sound.append((p,v))
+            if p & 2: s.shoff=v&7
+            if p & 4: s.shift=(v<<8)|(s.shift>>8)
+        else:
+            p &= 7
+            if p==1: s.lamp1=v
+            elif p==2: s.lamp2=v
+            elif p==3: s.shift=(v<<8)|(s.shift>>8)
+            elif p==4: s.shoff=v&7
+            elif p==5: s.sound.append((p,v))
     def interrupt(s,n):
         if not s.ie: return False
         s.ie=0; s.halted=0; s.isrsp=s.sp; s.intpc.add(s.pc); s.push(s.pc); s.pc=n*8; s.cyc+=11; s.inisr=1; return True
@@ -217,10 +262,27 @@ HALF = 2000000 // 120          # T-states between the two interrupts
 
 
 def script(fr, board=None):
-    """IN 1 (and IN 2) for frame fr: coin at 300, 1P start at 360, then fire
+    """The input ports for frame fr: coin at 300, 1P start at 360, then fire
     and move. A second coin at 3000 and a 2P start at 3060 reach the
-    two-player code. Out (in1, in2)."""
+    two-player code on the boards that have one. Out (in0, in1, in2)."""
     b = board or BOARDS['invaders']
+    if b['io'] == 'gunfight':
+        in2 = b['in2'] | (0x40 if 300 <= fr < 305 else 0) | (0x80 if 360 <= fr < 365 else 0)
+        in0, in1 = gf_aim(3), gf_aim(3)
+        if fr >= 420:
+            in0 = gf_aim((fr // 70) % 7) | (0x01, 0x08, 0x02, 0x04)[(fr // 50) % 4]
+            in0 |= 0x80 if (fr // 25) % 3 == 0 else 0
+            in1 = gf_aim(6 - (fr // 90) % 7) | (0x04, 0x01, 0x08, 0x02)[(fr // 65) % 4]
+            in1 |= 0x80 if (fr // 33) % 3 == 0 else 0
+        return in0, in1, in2
+    if b['io'] == 'seawolf':
+        in1 = b['in1'] | (0x01 if 300 <= fr < 305 else 0) | (0x02 if 360 <= fr < 365 else 0)
+        pos = 15
+        if fr >= 420:
+            k = (fr // 4) % 58
+            pos = k if k < 30 else 57 - k
+        in0 = b['in0'] | sw_scope(pos) | (0x20 if fr >= 420 and (fr // 30) % 2 else 0)
+        return in0, in1, b['in2']
     v = b['in1']
     ctl = 0
     if 300 <= fr < 305 or 3000 <= fr < 3005 or 3010 <= fr < 3015:
@@ -233,13 +295,13 @@ def script(fr, board=None):
         if (fr // 20) % 2:
             ctl |= 0x10
         ctl |= 0x20 if (fr // 90) % 2 else 0x40
-    return v | ctl, b['in2'] | (ctl if b['both'] else 0)
+    return b['in0'], v | ctl, b['in2'] | (ctl if b['both'] else 0)
 
 
 def run(m, frames, each=None):
     """Run `frames` frames; each(fr, m, n) after each frame, n instructions."""
     for fr in range(frames):
-        m.in1, m.in2 = script(fr, m.board)
+        m.in0, m.in1, m.in2 = script(fr, m.board)
         n = 0
         c0 = m.cyc
         for half in (1, 2):
@@ -328,12 +390,75 @@ def cmd_seeds(rom, a):
     run(m, a.frames, (None, instr))
     lines = ['# PCHL and RET targets tools/arcsim.py reached in %d frames of its script.' % a.frames,
              '# Addresses only: no ROM byte. apps/arcade/arcaot.py walks from each.']
-    lines += ['%04X' % p for p in sorted(m.pchl - after - m.intpc) if is_rom(p) and p < ROMTOP]
+    # (an interrupt's return PC is not taken out: one that is ALSO a PCHL
+    # target nothing else reaches is a seed - Gun Fight's 03C9)
+    lines += ['%04X' % p for p in sorted(m.pchl - after) if is_rom(p) and p < ROMTOP]
     out = '\n'.join(lines) + '\n'
     if a.output:
         open(a.output, 'w').write(out)
     else:
         sys.stdout.write(out)
+
+
+def cmd_idles(rom, a):
+    """IDLE RETURNS (ARCADE-SPEC 3.8): a RET (or a taken Rcc) that hands
+    control back to where it came from with nothing changed - the registers
+    and the flags, SP, and every RAM byte as it was when the CPU was last at
+    the return's target, with no interrupt between - a pass of a wait the
+    game's main loop makes through a dispatcher and a task. One whose passes
+    are all but always idle (busy no more than 2% of them) and carry 5% or
+    more of everything the CPU runs is printed as `IDLE pc`: arcaot.py makes
+    its return a HLT resuming at the popped address, and tests/arclock.py
+    holds the translation to the model's real spinning."""
+    m = M(rom, a.board)
+    journal = []
+    ow = m.wr
+
+    def wr(adr, v):
+        aa = adr & 0x7fff
+        if aa >= 0x6000:
+            aa -= 0x4000
+        if 0x2000 <= aa < 0x4000:
+            journal.append((aa, m.m[aa]))
+        ow(adr, v)
+    m.wr = wr
+    ints = [0]
+    oi = m.interrupt
+
+    def interrupt(n):
+        r = oi(n)
+        if r:
+            ints[0] += 1
+        return r
+    m.interrupt = interrupt
+    snap = {}
+    idle = collections.Counter()
+    busy = collections.Counter()
+    share = collections.Counter()
+    count = [0]
+
+    def regs():
+        return (m.a, m.b, m.c, m.d, m.e, m.h, m.l, m.sp, m.fs, m.fz, m.fp, m.fc)
+
+    def instr(mm, pc, op, fr):
+        count[0] += 1
+        if op == 0xc9 or ((op & 0xc7) == 0xc0 and m.pc != pc + 1):
+            sv = snap.get(m.pc)
+            if sv and sv[2] == ints[0]:
+                first = {}
+                for adr, old in journal[sv[1]:]:
+                    first.setdefault(adr, old)
+                if sv[0] == regs() and all(m.m[adr] == old for adr, old in first.items()):
+                    idle[pc] += 1
+                    share[pc] += count[0] - sv[3]
+                else:
+                    busy[pc] += 1
+        snap[m.pc] = (regs(), len(journal), ints[0], count[0])
+    run(m, a.frames, (None, instr))
+    for pc in sorted(idle):
+        if busy[pc] <= idle[pc] * 0.02 and share[pc] >= 0.05 * count[0]:
+            print('IDLE %04X    # %d idle passes, %d busy, %.0f%% of the run'
+                  % (pc, idle[pc], busy[pc], 100.0 * share[pc] / count[0]))
 
 
 def cmd_digest(rom, a):
@@ -359,6 +484,9 @@ def main():
     p.add_argument('rom')
     p.add_argument('--frames', type=int, default=6000)
     p.add_argument('-o', '--output')
+    p = sub.add_parser('idles')
+    p.add_argument('rom')
+    p.add_argument('--frames', type=int, default=1500)
     p = sub.add_parser('digest')
     p.add_argument('rom')
     p.add_argument('--at', required=True)
@@ -369,7 +497,8 @@ def main():
     rom = open(a.rom, 'rb').read()
     if len(rom) != BOARDS[a.board]['size']:
         sys.exit('arcsim: %s is %d bytes, not the %s board image' % (a.rom, len(rom), a.board))
-    {'stats': cmd_stats, 'seeds': cmd_seeds, 'digest': cmd_digest}[a.cmd](rom, a)
+    {'stats': cmd_stats, 'seeds': cmd_seeds, 'digest': cmd_digest,
+     'idles': cmd_idles}[a.cmd](rom, a)
 
 
 if __name__ == '__main__':

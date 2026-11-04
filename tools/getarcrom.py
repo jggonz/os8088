@@ -104,6 +104,38 @@ SETS = {
         ],
         'size': 0x5800,
     },
+    # Midway's landscape 8080 boards (MAME mw8080bw.cpp): 4KB at 0000h,
+    # the same RAM and shifter, other ports (ARCADE-SPEC 5.3)
+    'gunfight': {
+        'url': 'https://archive.org/download/arcade_gunfight/gunfight.zip',
+        'zipsha1': '52fcc4a337a2c205d817577cb219d6df60c0034f',
+        'members': [
+            ('7609h.bin', 0x0000,                                   # 0b117d73
+             'ae5c132f0f39d8c4e0d71efd12aee2d00bc888473cbfee92774d6367a41a27b6'),
+            ('7609g.bin', 0x0400,                                   # 57bc3159
+             '47381b943d9ed04d944ee3c33fbf70f6156867dc25c8c8b56f31ce55f0cce8ed'),
+            ('7609f.bin', 0x0800,                                   # 8049a6bd
+             '695cb997167455eb7a7b6e67cf5e03a86661879e1e09d88ed954f1750a678ed8'),
+            ('7609e.bin', 0x0C00,                                   # 773264e2
+             '2486aef09dc1e87555a0cc19373d8f78c3a7d54d179d4a9d84da445ab9b6e979'),
+        ],
+        'size': 0x1000,
+    },
+    'seawolf': {
+        'url': 'https://archive.org/download/arcade_seawolf/seawolf.zip',
+        'zipsha1': '18d1552851c15d8c000cf2f6396f49bb096d87a0',
+        'members': [
+            ('sw0041.h', 0x0000,                                    # 8f597323
+             '8ed90c137a08df198f6a69f0feb715bddf3c67e140988ee293037f4e01bc08ba'),
+            ('sw0042.g', 0x0400,                                    # db980974
+             'ce9fcfabc2491b57e3e7633f1a8d383f77bbe6087cbbb452741d1539eb1a260c'),
+            ('sw0043.f', 0x0800,                                    # e6ffa008
+             'c332d230afb741a857df99451aa2d91dabf9bc5f92292711556742f4221b33cf'),
+            ('sw0044.e', 0x0C00,                                    # c3557d6a
+             '8a25ff3410fb6b6542b9b295b7f2e338f8cd9dc8e6051fb805556cfe21cf4c0f'),
+        ],
+        'size': 0x1000,
+    },
     # MAME's `pacman` (Midway). NOT fetched: no public archive.org item
     # carries it (arcade_pacman, arcade_puckman and arcade_mspacman are
     # dark), so the owner supplies it with --from and the hashes check it.

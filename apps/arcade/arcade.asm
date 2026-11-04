@@ -40,9 +40,9 @@
 %include "os88parts.inc"
 
 %ifdef ARC_PACMAN
-    OS88_PARTS_BEGIN 14
+    OS88_PARTS_BEGIN 20
 %else
-    OS88_PARTS_BEGIN 11
+    OS88_PARTS_BEGIN 17
 %endif
       OS88_PART OP_ASSET, OP_ZERO, ARC_VIEW_KB      ; 0 the view, shared
       ; EVERY BOARD IS LAZY (ARCADE-SPEC 1.2): its code, aux and ROM parts
@@ -57,10 +57,16 @@
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 7 Lunar Rescue
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 8
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 9
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 10 Gun Fight
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 11
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 12
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 13 Sea Wolf
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 14
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 15
 %ifdef ARC_PACMAN
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 10 Pac-Man: code
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 11   aux
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 12   the ROM, and its tiles
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 16 Pac-Man: code
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 17   aux
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 18   the ROM, and its tiles
                                                     ;      turned (arcpmgfx.py)
 %endif
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; last: the 8080 boards'
@@ -69,9 +75,9 @@
     OS88_PARTS_END
 
 %ifdef ARC_PACMAN                   ; the parts named in code
-AR_P_INVSFX equ 13
+AR_P_INVSFX equ 19
 %else
-AR_P_INVSFX equ 10
+AR_P_INVSFX equ 16
 %endif
 
 AR_CONT_W   equ 300
@@ -137,6 +143,14 @@ X_FSTEP     equ 14                  ; dw FM: struck notes (dw bit, dw Hz)
 X_FNOISE    equ 16                  ; dw FM: noises (dw bit, dw Hz, db level,
                                     ;   db frames a step)
 X_FTONE     equ 18                  ; dw FM: note sequences (dw bit, dw notes)
+X_LAND      equ 13                  ; db 1: a LANDSCAPE board - a VRAM byte is
+                                    ;   8 pixels ACROSS, its bit 0 leftmost
+                                    ;   (Gun Fight, Sea Wolf: MAME ROT0)
+X_KEYS      equ 20                  ; dw near: a frame's held keys into the ports
+X_SDEC      equ 22                  ; dw near: AX = the sound latches as the bit
+                                    ;   word the sound layers read (OUT 3's bits
+                                    ;   low, OUT 5's high, bit 5 the amplifier)
+X_LAMPS     equ 24                  ; dw near: a frame's cabinet lamps, or 0
 
 ; =============================================================================
 ; ar_entry - in: DS = ours, ES = KERNEL_SEG. out: BX = window, CF = 0
@@ -354,6 +368,9 @@ inv_reset:
     mov al, [si+X_IN2]
     mov [es:V_IN2], al
     mov byte [ar_cstate], 0xFF      ; the colours to be decided afresh
+    mov word [gf_aim], 3            ; the levers at rest: the guns level,
+    mov word [gf_aim+2], 3          ;   the periscope ahead
+    mov word [sw_scope], 15
     pop si
     pop es
     ret
@@ -665,7 +682,6 @@ ar_loop:
 .deliver:
     mov bx, [ar_bd]                 ; the board's interrupt: in, or masked
     call [bx+BD_IRQ]                ;   and waiting (the EI that unmasks it
-    jc .run                         ;   ends the next run, ST_PEND)
     mov byte [ar_halted], 0
     mov ax, [ar_period]
     add [ar_due], ax
@@ -740,7 +756,9 @@ inv_frame:
     call ar_dirtyall
 .draw:
     call ar_render
-    jmp ar_keys
+    call ar_lamps
+    mov si, [ar_bx]                 ; the held keys, the board's way
+    jmp [si+X_KEYS]
 
 ; ar_hex4 - AX as four hex digits at DS:DI
 ar_hex4:
@@ -815,7 +833,7 @@ ar_typemap:                         ; a character typed, its logical bit
 ; =============================================================================
 ; ar_keys - Space Invaders' controls into IN 1 and IN 2, once a frame
 ; =============================================================================
-ar_keys:
+ar_keys8080:
     mov si, [ar_bx]
     mov bl, [si+X_IN1]              ; IN 1 at rest
     mov al, [ar_pbits]
@@ -875,6 +893,12 @@ ar_vinit:
     call ar_dblinit
     mov ax, [ar_fsi+FSI_SEG]
     mov [ar_vidseg], ax
+    mov word [ar_celf], ar_cell
+    mov si, [ar_bx]
+    cmp byte [si+X_LAND], 0
+    je .turned
+    jmp ar_vinitl                   ; Gun Fight, Sea Wolf (arcland.inc)
+.turned:
     xor bx, bx                      ; BX = Y
     mov di, ar_ytab
 .row:
@@ -1036,6 +1060,24 @@ ar_dblinit:
     mov [ar_dbl+si], dx
     inc bl
     jnz .dbl
+    xor bx, bx                      ; ...and ar_dblr: bit 0 leftmost (the
+.rev:                               ;   landscape boards'), the byte reversed
+    mov al, bl
+    mov cx, 8
+.rb:
+    shr al, 1
+    rcl ah, 1
+    loop .rb
+    mov al, ah
+    mov ah, 0
+    mov si, ax
+    shl si, 1
+    mov dx, [ar_dbl+si]
+    mov si, bx
+    shl si, 1
+    mov [ar_dblr+si], dx
+    inc bl
+    jnz .rev
     ret
 
 ; ar_dbl4hi - AH = AL's top four pixels, each doubled
@@ -1170,7 +1212,7 @@ ar_render:
     push si
     mov es, [ar_vseg]
     inc word [es:V_NCELL]
-    call ar_cell
+    call [ar_celf]
     pop si
     add si, 2
     jmp .cells
@@ -1365,10 +1407,29 @@ ar_put_cga:
 ; inside its own bracket, called only when the pitch changes. OUT 3 bit 5 is
 ; the amplifier: the attract mode turns it off, and so does this.
 ; =============================================================================
-ar_sound:
+; ar_sbits - AX = the board's sound bits (X_SDEC). ar_sdec8080: Space
+; Invaders' and Taito's, OUT 3 low and OUT 5 high as they are
+ar_sbits:
+    mov si, [ar_bx]
+    jmp [si+X_SDEC]
+ar_sdec8080:
     mov es, [ar_vseg]
     mov al, [es:V_SND3]
     mov ah, [es:V_SND5]
+    ret
+
+; ar_lamps - a frame's cabinet lamps, where the board has any (X_LAMPS)
+ar_lamps:
+    mov si, [ar_bx]
+    mov ax, [si+X_LAMPS]
+    or ax, ax
+    jz .r
+    jmp ax
+.r:
+    ret
+
+ar_sound:
+    call ar_sbits                   ; AX: the board's sound bits (X_SDEC)
     mov bx, [ar_sold]
     mov [ar_sold], ax
     not bx
@@ -1561,6 +1622,7 @@ lr_n_steplo: dw 440
 %include "os88pit.inc"
 %include "sndpkg.inc"                   ; SOUND.DRV's FM door (arcsnd.inc)
 %include "arcsnd.inc"
+%include "arcland.inc"
 %ifdef ARC_PACMAN
 %include "arcpm.inc"
 %endif
@@ -1570,7 +1632,7 @@ lr_n_steplo: dw 440
 ; =============================================================================
 ; --- the boards (ARCADE-SPEC 5.3) ---------------------------------------------
 ar_boards:
-    dw ar_bd_inv, ar_bd_pt2, ar_bd_lr
+    dw ar_bd_inv, ar_bd_pt2, ar_bd_lr, ar_bd_gf, ar_bd_sw
 %ifdef ARC_PACMAN
     dw ar_bd_pm
 %endif
@@ -1591,10 +1653,14 @@ ar_boards:
     dw ar_x_pt2
     AR_8080BOARD ar_bd_lr, ar_s_lr, 7, 8, 9, 0x5000
     dw ar_x_lr
+    AR_8080BOARD ar_bd_gf, ar_s_gf, 10, 11, 12, 0x1000
+    dw ar_x_gf
+    AR_8080BOARD ar_bd_sw, ar_s_sw, 13, 14, 15, 0x1000
+    dw ar_x_sw
 %ifdef ARC_PACMAN
 ar_bd_pm:
     dw ar_s_pm
-    db 10, 11, 12, 0
+    db 16, 17, 18, 0
     dw 0x4000, pm_reset, pm_setup, pm_irq, pm_frame
     dw 19688                        ; the board's 60.61 Hz (MAME pacman.cpp:
     db 1, 0                         ;   6.144 MHz, 384 x 264), one interrupt
@@ -1607,34 +1673,44 @@ ar_bd_pm:
 ar_x_inv:   db 0x00, 0x08, 0x00, 0
             dw ar_cues, 0x0001, inv_cbits, 0x1F1E
             db 0, 0
-            dw inv_fsteps, inv_fnoise, inv_ftones
+            dw inv_fsteps, inv_fnoise, inv_ftones, ar_keys8080, ar_sdec8080, 0
 ar_x_pt2:   db 0xF4, 0x81, 0x00, 1
             dw ar_cues, 0x0001, inv_cbits, 0x1F1E
             db 0, 0
-            dw inv_fsteps, inv_fnoise, inv_ftones
+            dw inv_fsteps, inv_fnoise, inv_ftones, ar_keys8080, ar_sdec8080, 0
 ar_x_lr:    db 0xFF, 0x89, 0x00, 1
             dw lr_cues, 0x1000, lr_cbits, 0x071F
             db 14, 0
-            dw lr_fsteps, lr_fnoise, lr_ftones
+            dw lr_fsteps, lr_fnoise, lr_ftones, ar_keys8080, ar_sdec8080, 0
+ar_x_gf:    db 0x30, 0x30, 0x10, 0  ; Gun Fight: the guns aimed level, a
+            dw gf_cues, 0, gf_cbits, 0x000F   ;   70-second game
+            db 0, 1
+            dw ar_none, gf_fnoise, ar_none, gf_keys, gf_sdec, 0
+ar_x_sw:    db 0x40, 0x60, 0x00, 0  ; Sea Wolf: 70 seconds, extended at 4000
+            dw sw_cues, 0, sw_cbits, 0x001F
+            db 0, 1
+            dw sw_fsteps, sw_fnoise, ar_none, sw_keys, sw_sdec, sw_lamps
+ar_none:    dw 0
 
 ar_tpl:
     dw 60, 40, AR_CONT_W+2, AR_CONT_H+TITLE_H+1
     dw ar_title, ar_paint, ar_onkey, ar_onclick
     OS88_MENUSET ar_menus, ar_title, ar_oncmd
 %ifdef ARC_PACMAN
-        OS88_MENU ar_m_game, ar_i_game, 6
+        OS88_MENU ar_m_game, ar_i_game, 8
 %else
-        OS88_MENU ar_m_game, ar_i_game, 5
+        OS88_MENU ar_m_game, ar_i_game, 7
 %endif
     OS88_MENUSET_END ar_menus
+ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pt2, ar_s_lr, ar_s_gf, ar_s_sw
 %ifdef ARC_PACMAN
-ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pt2, ar_s_lr, ar_s_pm
-%else
-ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pt2, ar_s_lr
+            dw ar_s_pm
 %endif
 ar_s_inv:   db 'Space Invaders', 0
 ar_s_pt2:   db 'Space Invaders Part II', 0
 ar_s_lr:    db 'Lunar Rescue', 0
+ar_s_gf:    db 'Gun Fight', 0
+ar_s_sw:    db 'Sea Wolf', 0
 ar_s_none:  db '(none)', 0
 ar_s_nobd:  db 'Arcade: no game is loaded - pick one from Game', 0
 ar_s_pm:    db 'Pac-Man', 0
@@ -1748,6 +1824,13 @@ AR_VAR inv_fnzhz, 2
 AR_VAR inv_fseq, 2
 AR_VAR inv_fwait, 1
 AR_VAR ar_dbl, 512
+AR_VAR ar_dblr, 512                 ; ...bit 0 leftmost (landscape boards)
+AR_VAR ar_celf, 2                   ; the cell drawer: turned or landscape
+AR_VAR ar_ccnt, 1
+AR_VAR gf_aim, 4                    ; Gun Fight's levers: notch, frames to go
+AR_VAR sw_scope, 2                  ; Sea Wolf's periscope: position, frames
+AR_VAR sw_lamp, 1                   ;   ...and its lamps as last drawn
+AR_VAR gf_odd, 1                    ; Gun Fight's keys: this frame or the next
 AR_VAR ar_ytab, 1024
 %ifdef ARC_PACMAN
 AR_VAR pm_yoff, 288 * 2             ; Pac-Man: a portrait row's screen offset
@@ -1801,3 +1884,4 @@ AR_VAR pm_wtabs, 3 * 256 + 255      ;     three, on a 256-byte page
 %endif
     OS88_BSS OP_BSS + AR_BSS
     OS88_IMAGE_END
+

@@ -68,6 +68,50 @@ OUT_PORTS = {
     6: [],                      # the watchdog: nothing to feed
 }
 VRAM_LO, VRAM_HI = 0x2400, 0x4000
+_SHOFF = ['mov ah, al', 'and ah, 7', 'mov [V_SHOFF], ah']
+_SHDATA = ['mov ah, [V_SHHI]', 'mov [V_SHLO], ah', 'mov [V_SHHI], al']
+NEED_REV = [False]
+PUSH_VRAM = [False]                 # PUSH may write the screen (ARCADE-SPEC 3.3)
+
+
+def set_ports(board):
+    """The board's I/O map (MAME mw8080bw.cpp; ARCADE-SPEC 5.3). Space
+    Invaders and Taito's two keep the map above. Gun Fight and Sea Wolf
+    decode only three address lines, so IN 4-7 are IN 0-3 again; Gun
+    Fight's OUT is three AND gates - bit 0 the sound, bit 1 the shift
+    count, bit 2 the shift data, any of them at once - and Sea Wolf reads
+    the shifter BIT-REVERSED at IN 0, its lamps at OUT 1 and 2 and its
+    sound at OUT 5."""
+    if board in (None, 'invaders', 'invadpt2', 'lrescue'):
+        return
+    shift = IN_PORTS[3]
+    PUSH_VRAM[0] = True             # both erase the screen with SP in it
+    IN_PORTS.clear()
+    OUT_PORTS.clear()
+    FLAGSAFE_IN.clear()
+    for p in range(8):
+        q = p & 3
+        if board == 'gunfight':
+            IN_PORTS[p] = (['mov al, [V_IN0]'], ['mov al, [V_IN1]'], ['mov al, [V_IN2]'], shift)[q]
+            if q < 3:
+                FLAGSAFE_IN.add(p)
+            body = []
+            if p & 1:
+                body += ['mov [V_SND3], al']
+            if p & 2:
+                body += _SHOFF
+            if p & 4:
+                body += _SHDATA
+            OUT_PORTS[p] = body
+        else:
+            IN_PORTS[p] = (shift + ['xor ah, ah', 'mov si, ax', 'mov al, [cs:si+arc_rev]'],
+                           ['mov al, [V_IN0]'], ['mov al, [V_IN1]'], shift)[q]
+            if q in (1, 2):
+                FLAGSAFE_IN.add(p)
+            OUT_PORTS[p] = {1: ['mov [V_LAMP1], al'], 2: ['mov [V_LAMP2], al'],
+                            3: list(_SHDATA), 4: list(_SHOFF),
+                            5: ['mov [V_SND5], al']}.get(p, [])
+            NEED_REV[0] = True
 # THE ROM, as the CPU sees it (ARCADE-SPEC 3.2): Space Invaders' 0000-1FFFh,
 # or a Taito colour board's 0000-1FFFh and 4000-4FFFh (MAME 8080bw). main()
 # sets these from the image's size; the PC table covers 0..TABLE_PCS-1.
@@ -82,7 +126,9 @@ def board_rom(img, name='the image'):
     at the last 2KB chip that is not all zeros (Part II has one, Lunar
     Rescue two)."""
     global TABLE_PCS
-    if len(img) == 0x2000:
+    if len(img) == 0x1000:              # Gun Fight, Sea Wolf: 4KB
+        ROM_REGIONS[:] = [(0x0000, 0x1000)]
+    elif len(img) == 0x2000:
         ROM_REGIONS[:] = [(0x0000, 0x2000)]
     elif len(img) == 0x5800:
         top = 0x5000
@@ -90,7 +136,7 @@ def board_rom(img, name='the image'):
             top -= 0x800
         ROM_REGIONS[:] = [(0x0000, 0x2000), (0x4000, top)]
     else:
-        raise SystemExit('arcaot: %s is neither an 8KB nor a 22KB board image' % name)
+        raise SystemExit('arcaot: %s is not a 4KB, 8KB or 22KB board image' % name)
     TABLE_PCS = max(0x4000, ROM_REGIONS[-1][1])
     return bytes(img[:0x5000]) + bytes(0x10000 - min(len(img), 0x5000))
 
@@ -325,6 +371,7 @@ def mark_polls(code):
 # full speed, which on Lunar Rescue was 63% of the machine and long runs
 # that dropped frames (MEASURED, MartyPC's 5150). The branch's PC -> the head.
 SPINS = {}
+IDLES = set()                           # IDLE returns (ARCADE-SPEC 3.8)
 SPIN_HEAD = {0x3a, 0x0a, 0x1a, 0xdb, 0x3e} | {0x78 + r for r in range(8) if r != 6} | {0x7e}
 SPIN_BODY = (SPIN_HEAD | set(range(0x80, 0x88)) | set(range(0x90, 0x98))
              | set(range(0xa0, 0xc0)) | {0xc6, 0xd6, 0xe6, 0xee, 0xf6, 0xfe}
@@ -372,6 +419,7 @@ def vstore(hreg, addr, src, live):
     (ARCADE-SPEC 4.1). ES:DI is the list's next free word. Everything but
     the MOV touches FLAGS, so it is guarded where they are live."""
     body = ['cmp %s, 0x24' % hreg, 'jb .r',
+            'cmp %s, 0x40' % hreg, 'jae .d',       # ROM from 4000h: ignored
             'cmp [%s], %s' % (addr, src), 'je .d',
             'mov [%s], %s' % (addr, src)]
     if addr == 'bx':
@@ -382,11 +430,25 @@ def vstore(hreg, addr, src, live):
 
 def vmark(live):
     """INR M / DCR M: the byte changed; mark its cell if it is VRAM."""
-    return guard(live, ['cmp bh, 0x24', 'jb .d', 'mov si, bx'] + MARK + ['.d:'])
+    return guard(live, ['cmp bh, 0x24', 'jb .d', 'cmp bh, 0x40', 'jae .d',
+                        'mov si, bx'] + MARK + ['.d:'])
+
+
+def ram_of(a):
+    """A constant address as the board decodes it (MAME mw8080bw: 15 lines;
+    ROM at 0000-1FFFh and 4000-5FFFh takes no write, RAM's 2000-3FFFh is
+    mirrored at 6000h): the view's offset to store to, or None."""
+    a &= 0x7fff
+    if a >= 0x6000:
+        a -= 0x4000
+    return a if 0x2000 <= a < 0x4000 else None
 
 
 def vconst_store(a, src_reg):
     """STA nn: decided by the assembler, nothing at run time for RAM."""
+    a = ram_of(a)
+    if a is None:
+        return []                       # into ROM: the board ignores it
     if not (VRAM_LO <= a < VRAM_HI):
         return ['mov [0x%04X], %s' % (a, src_reg)]
     k = a & 0xFF1F
@@ -472,11 +534,16 @@ def translate(i, code, longjcc):
     if o == 0x1a:
         return ['mov si, dx', 'mov al, [si]']
     if o == 0x22:
-        return ['mov [0x%04X], bx' % i.imm] + guard(out, vconst(i.imm) + vconst(i.imm + 1))
+        lo, hi = ram_of(i.imm), ram_of(i.imm + 1)
+        if lo is not None and hi == lo + 1:
+            return ['mov [0x%04X], bx' % lo] + guard(out, vconst(lo) + vconst(hi))
+        return ((['mov [0x%04X], bl' % lo] + guard(out, vconst(lo)) if lo is not None else []) +
+                (['mov [0x%04X], bh' % hi] + guard(out, vconst(hi)) if hi is not None else []))
     if o == 0x2a:
         return ['mov bx, [0x%04X]' % i.imm]
     if o == 0x32:
-        return guard(out, vconst_store(i.imm, 'al')) if VRAM_LO <= i.imm < VRAM_HI \
+        a = ram_of(i.imm)
+        return guard(out, vconst_store(i.imm, 'al')) if a is not None and VRAM_LO <= a < VRAM_HI \
             else vconst_store(i.imm, 'al')
     if o == 0x3a:
         return ['mov al, [0x%04X]' % i.imm]
@@ -508,8 +575,23 @@ def translate(i, code, longjcc):
     if (o & 0xcf) == 0xc5:
         p = (o >> 4) & 3
         if p == 3:
-            return ['lahf', 'xchg al, ah', 'push ax', 'mov al, ah']
-        return ['push %s' % RP[p]]
+            body = ['lahf', 'xchg al, ah', 'push ax', 'mov al, ah']
+        else:
+            body = ['push %s' % RP[p]]
+        if PUSH_VRAM[0]:                # Gun Fight and Sea Wolf erase the
+            mark = lambda n: ['and si, 0xFF1F', 'cmp byte [es:si+AUX_FLAGS], 0',
+                              'jne .m%d' % n, 'mov byte [es:si+AUX_FLAGS], 1',
+                              'mov [es:di], si', 'lea di, [di+2]', '.m%d:' % n]
+            live = out if p != 3 else 0 # screen with SP in it: both cells
+            body += guard(live, ['cmp sp, 0x2400', 'jb .p', 'cmp sp, 0x4000',
+                                 'jae .p', 'mov si, sp'] + mark(1) +
+                          ['mov si, sp', 'inc si'] + mark(2) + ['.p:'])
+        return body
+    if i.pc in IDLES and (o == 0xc9 or (o & 0xc7) == 0xc0):
+        halt = ['pop si', 'jmp arc_halt']   # an idle return: HLT, resuming
+        if o == 0xc9:                       #   where it returns to
+            return halt
+        return ['j%s .r' % INV[CC[(o >> 3) & 7]]] + halt + ['.r:']
     if i.pc in SPINS:                       # a spin loop's branch: HLT
         halt = ['mov si, 0x%04X' % SPINS[i.pc], 'jmp arc_halt']
         if o in (0xc3, 0xcb):
@@ -616,7 +698,7 @@ def idiom_code(kind, pc, n, exit_, code, live):
                 'mov al, [si-1]', 'jmp .done',
                 '.slow:', 'pop cx',
                 '.i:', 'mov al, [si]', 'cmp bh, 0x24', 'jb .r',
-                'cmp [bx], al', 'je .n', 'mov [bx], al', 'push si', 'mov si, bx',
+                'cmp bh, 0x40', 'jae .n', 'cmp [bx], al', 'je .n', 'mov [bx], al', 'push si', 'mov si, bx',
                 'and si, 0xFF1F', 'cmp byte [es:si+AUX_FLAGS], 0', 'jne .m',
                 'mov byte [es:si+AUX_FLAGS], 1', 'mov [es:di], si', 'lea di, [di+2]',
                 '.m:', 'pop si', 'jmp short .n', '.r:', 'mov [bx], al',
@@ -662,6 +744,10 @@ def emit(code, longjcc, romname):
     out = ['; GENERATED by apps/arcade/arcaot.py from %s - never committed' % romname,
            'cpu 8086', 'bits 16', 'org 0', '%include "arcdefs.inc"', '',
            '%include "arcrt.inc"', '']
+    if NEED_REV[0]:                     # Sea Wolf's IN 0: a byte reversed
+        out += ['arc_rev:'] + ['    db ' + ', '.join(
+            '0x%02X' % int('{:08b}'.format(b)[::-1], 2) for b in range(r, r + 16))
+            for r in range(0, 256, 16)] + ['']
     misses = set()
     for pc in sorted(code):
         i = code[pc]
@@ -773,6 +859,8 @@ def main():
                     help="aux's size: the table, then the list and the flags")
     ap.add_argument('--no-speculate', action='store_true',
                     help='no tentative walks from data words')
+    ap.add_argument('--board', help='the I/O map, when not Space Invaders\'s '
+                    '(gunfight, seawolf)')
     ap.add_argument('--no-spins', action='store_true',
                     help='run spin loops as loops, not as a HLT')
     ap.add_argument('--no-idioms', action='store_true',
@@ -782,10 +870,15 @@ def main():
                          '(an instrument build only: tests/arcspeed.py)')
     a = ap.parse_args()
     rom = board_rom(open(a.rom, 'rb').read(), a.rom)
+    set_ports(a.board)
     seeds = []
+    IDLES.clear()
     for line in open(a.seeds):
         line = line.split('#')[0].strip()
-        if line:
+        if line.startswith('IDLE '):
+            if not a.no_spins:
+                IDLES.add(int(line[5:], 16))
+        elif line:
             seeds.append(int(line, 16))
     PROBES[:] = a.probe
     code = walk(rom, seeds)
@@ -808,7 +901,8 @@ def main():
     print('arcaot: %d instructions (%d of them speculative), %d poll points, '
           '%d long branches, %d bytes of code, spins %s, idioms %s -> %s'
           % (len(code), spec, polls, len(longjcc), size,
-             ' '.join('%04X' % p for p in sorted(SPINS.values())) or 'none',
+             ' '.join(['%04X' % p for p in sorted(SPINS.values())] +
+                      ['idle %04X' % p for p in sorted(IDLES)]) or 'none',
              ' '.join('%s@%04X' % (v[0], k) for k, v in sorted(IDIOMS.items())) or 'none',
              a.out))
 

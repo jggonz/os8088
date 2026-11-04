@@ -4601,7 +4601,8 @@ SOAK = [
         needs=("nasm",)),
     Row("arclock", "soak", py("tests/arclock.py", "build/arcade/invcode.bin",
                               "build/arcade/invaux.bin",
-                              "build/arcade-rom/INVADERS.ROM", "--frames", "600"), 40.0,
+                              "build/arcade-rom/INVADERS.ROM", "--frames", "600",
+                              "--marks"), 45.0,
         "ARCADE's translated Space Invaders (docs/ARCADE-SPEC.md 6.1) under Unicorn in "
         "LOCKSTEP with tools/arcsim.py: PC, A, BC, DE, HL and SP at every 8080 "
         "instruction, the flags wherever the 8080 reads them, RAM and VRAM every "
@@ -4624,7 +4625,7 @@ SOAK = [
                "build/arcade-rom/PACMAN.ROM")),
     Row("arclockpt2", "soak", py("tests/arclock.py", "build/arcade/pt2code.bin",
                                  "build/arcade/pt2aux.bin", "build/arcade-rom/INVADPT2.ROM",
-                                 "--board", "invadpt2", "--frames", "600"), 41.0,
+                                 "--board", "invadpt2", "--frames", "600", "--marks"), 41.0,
         "ARCADE's translated Space Invaders Part II (ARCADE-SPEC section 5.3, Taito's "
         "colour board: ROM at 4000h too) under Unicorn in LOCKSTEP with "
         "tools/arcsim.py's board, as row arclock: every 8080 instruction, the "
@@ -4636,7 +4637,7 @@ SOAK = [
                "build/arcade-rom/INVADPT2.ROM")),
     Row("arclocklr", "soak", py("tests/arclock.py", "build/arcade/lrcode.bin",
                                 "build/arcade/lraux.bin", "build/arcade-rom/LRESCUE.ROM",
-                                "--board", "lrescue", "--frames", "1000"), 63.0,
+                                "--board", "lrescue", "--frames", "1000", "--marks"), 63.0,
         "ARCADE's translated Lunar Rescue (ARCADE-SPEC section 5.3) under Unicorn "
         "in LOCKSTEP with tools/arcsim.py's board through 1,000 frames - its "
         "descent, past the coin and the start - as row arclock. The ROM is "
@@ -4651,6 +4652,44 @@ SOAK = [
         "dropped. Its wait for the interrupt (05D8h) was 63% of the 8088 and "
         "dropped 32 half frames before spin loops became a HLT (ARCADE-SPEC "
         "3.7); red with arcaot.py --no-spins",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arclockgf", "soak", py("tests/arclock.py", "build/arcade/gfcode.bin",
+                                "build/arcade/gfaux.bin", "build/arcade-rom/GUNFIGHT.ROM",
+                                "--board", "gunfight", "--frames", "600", "--marks"), 62.0,
+        "ARCADE's translated Gun Fight (ARCADE-SPEC section 5.3: Midway's landscape "
+        "board, three-gate OUT decoding) under Unicorn in LOCKSTEP with "
+        "tools/arcsim.py, and --marks: every video RAM cell a frame changed "
+        "is on the write list the host draws from. The ROM is fetched (make "
+        "arcaderom), never committed",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/gfcode.bin", "build/arcade/gfaux.bin",
+               "build/arcade-rom/GUNFIGHT.ROM")),
+    Row("arclocksw", "soak", py("tests/arclock.py", "build/arcade/swcode.bin",
+                                "build/arcade/swaux.bin", "build/arcade-rom/SEAWOLF.ROM",
+                                "--board", "seawolf", "--frames", "600", "--marks"), 62.0,
+        "ARCADE's translated Sea Wolf (ARCADE-SPEC section 5.3: the shifter read "
+        "bit-reversed at IN 0, the screen erased with SP in it) under Unicorn "
+        "in LOCKSTEP with tools/arcsim.py, and --marks as row arclockgf",
+        needs=("nasm", "unicorn"),
+        wants=("build/arcade/swcode.bin", "build/arcade/swaux.bin",
+               "build/arcade-rom/SEAWOLF.ROM")),
+    Row("arcspeedgf", "soak", py("tests/arcspeed.py", "--game", "Gun Fight"), 14.0,
+        "ARCADE's Gun Fight on MartyPC's 5150 (ARCADE-SPEC section 5): the board's "
+        "59.54 frames a second within 3%, at most one half frame dropped, in "
+        "10 guest seconds - a board whose 8080 never waits, so the 8088 runs "
+        "all of it",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcspeedsw", "soak", py("tests/arcspeed.py", "--game", "Sea Wolf"), 14.0,
+        "ARCADE's Sea Wolf on MartyPC's 5150, as row arcspeedgf",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcglass", "soak", py("tests/arcglass.py"), 24.0,
+        "ARCADE's landscape boards' picture IS their video RAM (ARCADE-SPEC "
+        "section 4.6): Gun Fight and Sea Wolf played on MartyPC's Hercules "
+        "5150, and at the instant ar_render has drawn its list (a breakpoint), "
+        "the Hercules page compared cell by cell with the guest's VRAM drawn "
+        "the board's way, three frames: none may differ. Red (54 cells) with "
+        "a PUSH into VRAM not listing its cells, which left Sea Wolf's "
+        "INSERT COIN on the glass in play",
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
     Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
         "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "

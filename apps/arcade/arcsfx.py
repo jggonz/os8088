@@ -31,7 +31,8 @@ PEAK = 42
 # extra ship).
 NAMES = ('ufo', 'shot', 'basehit', 'invhit', 'extra',
          'fleet1', 'fleet2', 'fleet3', 'fleet4', 'ufohit',
-         'thrust', 'stephi', 'steplo', 'count', 'rescue')
+         'thrust', 'stephi', 'steplo', 'count', 'rescue',
+         'gunshot', 'gunhit', 'torpedo', 'dive', 'sonar')
 
 
 class Noise:
@@ -207,11 +208,61 @@ def rescue():
     return [v * PEAK * 0.7 / m for v in y]
 
 
+def gunshot():
+    """Gun Fight's shot: a crack - white noise, its edge falling fast."""
+    n = int(0.25 * RATE)
+    nz = Noise(0x6A1)
+    x = lowpass([nz() for _ in range(n)], [3000 * math.exp(-i / (0.03 * RATE)) + 300
+                                          for i in range(n)])
+    e = env_exp(n, 0.04)
+    return norm([a * b for a, b in zip(x, e)], fade=8)
+
+
+def gunhit():
+    """A gunman hit: a falling cry - a square sliding 700-150 Hz, noise
+    under it, over 0.45 s."""
+    n = int(0.45 * RATE)
+    nz = Noise(0x417)
+    sq = tone([150 + 550 * math.exp(-i / (0.2 * RATE)) for i in range(n)],
+              shape=lambda p: 1.0 if p % 1.0 < 0.5 else -1.0)
+    x = lowpass([0.8 * s + 0.3 * nz() for s in sq], 1500)
+    e = env_exp(n, 0.3)
+    return norm([a * b for a, b in zip(x, e)])
+
+
+def torpedo():
+    """Sea Wolf's torpedo away: a hiss through a band-pass rising
+    300-900 Hz, fading over half a second."""
+    n = int(0.5 * RATE)
+    nz = Noise(0x70E)
+    fc = [300 + 600 * (i / n) for i in range(n)]
+    x = bandpass([nz() for _ in range(n)], fc, q=2.5)
+    e = [min(1.0, i / (0.05 * RATE)) * math.exp(-i / (0.35 * RATE)) for i in range(n)]
+    return norm([a * b for a, b in zip(x, e)])
+
+
+def dive():
+    """A ship diving: a falling triangle, 400-80 Hz, over 0.6 s."""
+    n = int(0.6 * RATE)
+    x = tone([80 + 320 * (1 - i / n) for i in range(n)])
+    e = [min(1.0, 3 * (1 - i / n)) for i in range(n)]
+    return norm([a * b for a, b in zip(x, e)], peak=PEAK * 0.8)
+
+
+def sonar():
+    """The sonar's ping: a 1,200 Hz sine, struck and ringing out."""
+    n = int(0.4 * RATE)
+    x = [math.sin(2 * math.pi * 1200 * i / RATE) for i in range(n)]
+    e = env_exp(n, 0.15)
+    return norm([a * b for a, b in zip(x, e)], peak=PEAK * 0.8, fade=8)
+
+
 def clips():
     # the fleet's pitches are the speaker's (arcade.asm's ar_n_f1..f4)
     return [ufo(), shot(), basehit(), invhit(), extra(),
             fleet(110), fleet(98), fleet(87), fleet(82), ufohit(),
-            thrust(), step(660), step(440), step(1500), rescue()]
+            thrust(), step(660), step(440), step(1500), rescue(),
+            gunshot(), gunhit(), torpedo(), dive(), sonar()]
 
 
 def wav(path, x):

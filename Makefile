@@ -11480,8 +11480,29 @@ $(ARCPT2ROM): tools/getarcrom.py | $(BUILD)
 $(ARCLRROM): tools/getarcrom.py | $(BUILD)
 	python3 tools/getarcrom.py lrescue -o $@
 
-#> [Applications] arcaderom :: fetch the 8080 boards' ROMs (Space Invaders, Part II, Lunar Rescue) at pinned hashes (never committed)
-arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM)
+# Midway's landscape boards - Gun Fight and Sea Wolf - the same 8080 board
+# the right way up, with other ports (ARCADE-SPEC 5.3): --board names the map
+ARCGFROM := $(BUILD)/arcade-rom/GUNFIGHT.ROM
+ARCSWROM := $(BUILD)/arcade-rom/SEAWOLF.ROM
+$(ARCGFROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py gunfight -o $@
+$(ARCSWROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py seawolf -o $@
+$(BUILD)/arcade/gfcode.bin: apps/arcade/arcaot.py apps/arcade/gunfight.seeds \
+                            apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCGFROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCGFROM) apps/arcade/gunfight.seeds \
+		$(BUILD)/arcade/gfcode.asm $@ $(BUILD)/arcade/gfaux.bin --aux-kb 50 --board gunfight
+$(BUILD)/arcade/gfaux.bin: $(BUILD)/arcade/gfcode.bin
+$(BUILD)/arcade/swcode.bin: apps/arcade/arcaot.py apps/arcade/seawolf.seeds \
+                            apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCSWROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcaot.py $(ARCSWROM) apps/arcade/seawolf.seeds \
+		$(BUILD)/arcade/swcode.asm $@ $(BUILD)/arcade/swaux.bin --aux-kb 50 --board seawolf
+$(BUILD)/arcade/swaux.bin: $(BUILD)/arcade/swcode.bin
+
+#> [Applications] arcaderom :: fetch the 8080 boards' ROMs (Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf) at pinned hashes (never committed)
+arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) $(ARCGFROM) $(ARCSWROM)
 
 $(BUILD)/arcade/pt2code.bin: apps/arcade/arcaot.py apps/arcade/invadpt2.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCPT2ROM)
@@ -11532,12 +11553,14 @@ $(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
 	python3 apps/arcade/arcsfx.py $@
 
 ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc \
-              apps/arcade/arcsnd.inc drivers/sound/sndpkg.inc \
+              apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
 ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) \
                 $(BUILD)/arcade/pt2code.bin $(BUILD)/arcade/pt2aux.bin $(ARCPT2ROM) \
-                $(BUILD)/arcade/lrcode.bin $(BUILD)/arcade/lraux.bin $(ARCLRROM)
+                $(BUILD)/arcade/lrcode.bin $(BUILD)/arcade/lraux.bin $(ARCLRROM) \
+                $(BUILD)/arcade/gfcode.bin $(BUILD)/arcade/gfaux.bin $(ARCGFROM) \
+                $(BUILD)/arcade/swcode.bin $(BUILD)/arcade/swaux.bin $(ARCSWROM)
 ARCADE_DEF :=
 ifneq ($(ARC_PM),)
 ARCADE_PARTS += $(BUILD)/arcade/paccode.bin $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/PACMAN.PRT

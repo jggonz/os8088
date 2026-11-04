@@ -521,9 +521,7 @@ inv_sbprep:
 ; inv_sbtick - a frame: each rising bit starts its clip from the top, the
 ; saucer loops while its bit is held, the amplifier silences everything
 inv_sbtick:
-    mov es, [ar_vseg]
-    mov al, [es:V_SND3]
-    mov ah, [es:V_SND5]
+    call ar_sbits                   ; AX: the board's sound bits (X_SDEC)
     mov bx, [ar_sbold]
     mov [ar_sbold], ax
     not bx
@@ -820,9 +818,7 @@ inv_cbits:                          ; OUT 3 low, OUT 5 high: the bit, the clip
 ; inv_fmframe - channel 0 the fleet, 1 the saucer, 2 the noises, 3 the extra
 ; base and the saucer hit (8.3)
 inv_fmframe:
-    mov es, [ar_vseg]
-    mov al, [es:V_SND3]
-    mov ah, [es:V_SND5]
+    call ar_sbits                   ; AX: the board's sound bits (X_SDEC)
     mov dx, [ar_sbold]
     mov [ar_sbold], ax
     not dx

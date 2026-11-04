@@ -564,9 +564,12 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
       the board's full 59.5 frames/s on the 5150 - Lunar Rescue only
       after spin loops became a HLT (ARCADE-SPEC 3.7). Every board's parts
       are now lazy, so one board is in memory at a time.
-- [ ] Gun Fight and Sea Wolf: Midway boards with other inputs (two
-      players' aim; a periscope dial), fetched and pinned the same way
-      (archive.org's `arcade_gunfight`, `arcade_seawolf` are public).
+- [x] **Gun Fight and Sea Wolf**: Midway's landscape boards, their own
+      ports (ARCADE-SPEC 3.9), a landscape drawer (4.6), two gunmen at one
+      keyboard with aim levers, a 30-position periscope, Sea Wolf's lamps;
+      the board's full rate on the 5150. Their main loops never wait;
+      treating their idle returns as a HLT was measured and refused
+      (ARCADE-SPEC 3.8).
 - [ ] The native-8088 probe: Q\*bert's attract mode (section 8.2).
 - [ ] Lady Bug or Berzerk on the Z80 core.
 

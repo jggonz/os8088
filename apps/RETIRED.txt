@@ -68,7 +68,8 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
 local      arcade      # docs/ARCADE-SPEC.md. Its games are Taito's Space Invaders,
-                       # Space Invaders Part II and Lunar Rescue ROMs, commercially
+                       # Space Invaders Part II and Lunar Rescue and Midway's Gun
+                       # Fight and Sea Wolf ROMs, commercially
                        # owned, FETCHED at pins by tools/getarcrom.py, and Namco's
                        # Pac-Man, which only the owner's own copy supplies (make
                        # arcaderom-pacman GETPACFROM=<zip>); none is committed, and

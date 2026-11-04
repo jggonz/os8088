@@ -64,6 +64,8 @@ def seeds_of(name):
     out = []
     for x in open(os.path.join(ROOT, 'apps', 'arcade', name + '.seeds')):
         x = x.split('#')[0].strip()
+        if x.startswith('IDLE '):
+            continue
         if x.startswith('RST '):
             import arcz80t
             vec, k = x[4:].split()
@@ -85,6 +87,7 @@ class Invaders:
         self.m.sp = self.sp0
         self.img = img
         rom = arcaot.board_rom(img)             # the CPU's view of it
+        arcaot.set_ports(name)
         self.rom = rom
         self.table_pcs = arcaot.TABLE_PCS
         self.half = 1
@@ -167,11 +170,11 @@ class Invaders:
         self.end += self.arcsim.HALF
         if n == 2:
             self.frame += 1
-            m.in1, m.in2 = self.arcsim.script(self.frame, m.board)
+            m.in0, m.in1, m.in2 = self.arcsim.script(self.frame, m.board)
             # the 8086 side gets them when the interrupt goes IN, not now:
             # it has still to run the instruction the model just stepped,
             # and an IN there would read the next frame's (main's redirect)
-            self.pending = bytes([m.in1, m.in2])
+            self.pending = bytes([m.in0, m.in1, m.in2])
             self.newframe = True
         return took
 
@@ -298,8 +301,12 @@ def main():
     ap.add_argument('aux')
     ap.add_argument('rom')
     ap.add_argument('--board', default='invaders',
-                    choices=('invaders', 'invadpt2', 'lrescue', 'pacman'))
+                    choices=('invaders', 'invadpt2', 'lrescue', 'gunfight', 'seawolf',
+                             'pacman'))
     ap.add_argument('--frames', type=int, default=600)
+    ap.add_argument('--marks', action='store_true',
+                    help='hold the write list to the screen: every VRAM cell that '
+                         'changed in a frame must be on it (an 8080 board)')
     a = ap.parse_args()
     code = open(a.code, 'rb').read()
     aux = open(a.aux, 'rb').read()
@@ -349,6 +356,32 @@ def main():
         u.emu_stop()
         return True
 
+    seen = {'vram': bytes(u.mem_read(VSEG * 16 + 0x2400, 0x1C00))}
+
+    def check_marks():
+        """--marks: the host's half (ARCADE-SPEC 4.1). Every 8x8 cell whose
+        VRAM changed since the last frame must be on the write list (or
+        flagged, from a list kept in DI that a run has not saved yet); then
+        the flags cleared and the list emptied, as ar_render does."""
+        vram = bytes(u.mem_read(VSEG * 16 + 0x2400, 0x1C00))
+        di = u.reg_read(X.UC_X86_REG_DI)
+        lst = bytes(u.mem_read(ASEG * 16 + D['AUX_LIST'], max(0, di - D['AUX_LIST'])))
+        keys = {lst[i] | (lst[i + 1] << 8) for i in range(0, len(lst), 2)}
+        flags = bytes(u.mem_read(ASEG * 16 + D['AUX_FLAGS'] + 0x2400, 0x1C00))
+        old = seen['vram']
+        for o in range(0x1C00):
+            if vram[o] != old[o]:
+                key = 0x2400 + (o & 0xFF1F)
+                if key not in keys:
+                    return ('frame %d: VRAM %04X changed (%02X -> %02X) and its cell %04X '
+                            'is not on the write list (flag %d)'
+                            % (bd.frame, 0x2400 + o, old[o], vram[o], key, flags[key - 0x2400]))
+        for k in keys:
+            u.mem_write(ASEG * 16 + D['AUX_FLAGS'] + k, b'\x00')
+        u.reg_write(X.UC_X86_REG_DI, D['AUX_LIST'])
+        seen['vram'] = vram
+        return None
+
     def compare_ram():
         ram = bytearray(u.mem_read(VSEG * 16 + bd.ramlo, bd.ramhi - bd.ramlo))
         ref = bd.ram()
@@ -372,11 +405,11 @@ def main():
             uc.emu_stop()
             return True
         if getattr(bd, 'pending', None):        # the next frame's inputs, once
-            uc.mem_write(VSEG * 16 + D['V_IN1'], bd.pending)   # the model's
+            uc.mem_write(VSEG * 16 + D['V_IN0'], bd.pending)   # the model's
             bd.pending = None                   #   step is behind both sides
         if bd.newframe:
             bd.newframe = False
-            msg = compare_ram()
+            msg = compare_ram() or (check_marks() if a.marks else None)
             if msg:
                 return fail(msg)
             if bd.frame >= a.frames:
@@ -384,7 +417,8 @@ def main():
                 uc.emu_stop()
                 return True
         uc.reg_write(X.UC_X86_REG_BP, 0x7FFF)       # no poll ever exits
-        uc.reg_write(X.UC_X86_REG_DI, D['AUX_LIST'])    # nothing draws here
+        if not a.marks:
+            uc.reg_write(X.UC_X86_REG_DI, D['AUX_LIST'])    # nothing draws here
         got, fl = regs8086()
         want = bd.regs()
         if pc != want[0]:
@@ -485,7 +519,7 @@ def main():
             ret, vec = st['redirect']
             st['redirect'] = None
             if getattr(bd, 'pending', None):
-                u.mem_write(VSEG * 16 + D['V_IN1'], bd.pending)
+                u.mem_write(VSEG * 16 + D['V_IN0'], bd.pending)
                 bd.pending = None
             live = bd.lin(ret)
             fl = u.reg_read(X.UC_X86_REG_EFLAGS) & 0xD5

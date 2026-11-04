@@ -8,10 +8,14 @@ was made. Choose the game from the Game menu:
     Space Invaders Part II  Taito's colour board (1979).
     Lunar Rescue            Taito's colour board (1979): land on the
                             moon, carry the men up to the mother ship.
+    Gun Fight               Midway (1975): a duel, two players at one
+                            keyboard.
+    Sea Wolf                Midway (1976): sink the ships through the
+                            periscope.
     Pac-Man                 Namco's Z80 board (1980). VGA only, and a
                             286 or faster for the board's full speed.
 
-The three 8080 games run at full speed on an IBM PC/XT on any adapter;
+The five 8080 games run at full speed on an IBM PC/XT on any adapter;
 on VGA the two Taito games are in colour. A game is read from this disk
 when you pick it, and the one before is put away.
 
@@ -22,6 +26,14 @@ Open ARCADE.O88. Enter, Space or a click plays full screen:
     Arrows        move (Left, Right; Pac-Man: all four)
     Space         fire (Lunar Rescue: thrust)
     Esc           back to the window; the game waits where it was
+
+GUN FIGHT. The left gunman: W A S D to walk, R and F to raise and lower
+his gun, G to fire. The right gunman: the arrows, Page Up and Page Down,
+Space.
+
+SEA WOLF. Left and Right turn the periscope, Space fires. Under the
+picture (VGA and Hercules) are the cabinet's lamps: the four torpedoes,
+then READY, then RELOAD.
 
 Game > Reset powers the board off and on again.
 
@@ -41,7 +53,7 @@ Pac-Man's tall screen stands upright in the middle of the monitor,
 twice as wide and one and a half times as tall as the board's.
 
 THE ROMS. Space Invaders, Space Invaders Part II and Lunar Rescue are
-copyright Taito Corporation. Their ROMs were fetched from the Internet
+copyright Taito Corporation; Gun Fight and Sea Wolf, Midway. Their ROMs were fetched from the Internet
 Archive's arcade collection when this disk was built and checked against
 MAME's hashes. Pac-Man is copyright Bandai
 Namco; its ROM comes only from the builder's own copy, checked the same

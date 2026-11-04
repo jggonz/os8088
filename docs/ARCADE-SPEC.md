@@ -8,10 +8,11 @@ here *before* it goes in the code. The design record is
 docs/plans/ARCADE-EMU-PLAN.md. It is cited from outside as "ARCADE-SPEC
 section N".
 
-**What is built, stated once:** four boards. Midway's 8080 B&W board running
+**What is built, stated once:** six boards. Midway's 8080 B&W board running
 Space Invaders (Taito, 1978), and Taito's two colour boards on the same
 8080 design - Space Invaders Part II (1979) and Lunar Rescue (1979) - full
-screen on VGA (in colour), Hercules and CGA; and Namco's Pac-Man board
+screen on VGA (in colour), Hercules and CGA; Midway's two LANDSCAPE boards
+on it, Gun Fight (1975) and Sea Wolf (1976), on the same three; and Namco's Pac-Man board
 (Midway, 1980), its Z80 translated by section 7's translator, full screen on
 VGA only, built in only when the owner has supplied the ROM. All have sound
 on a Sound Blaster, an AdLib or the speaker (section 8). There is no
@@ -44,6 +45,8 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 | `apps/arcade/arcpm.inc` | the Pac-Man board's host half: its interrupt, keys, sound and picture (section 7.7) |
 | `apps/arcade/arcpmgfx.py` | Pac-Man's ROM part: the ROM and what is derived from it (section 7.7) |
 | `apps/arcade/arcsnd.inc` | the sound: the route, the stream, FM, and Space Invaders' half (section 8) |
+| `apps/arcade/arcland.inc` | the landscape boards: their picture, Gun Fight's and Sea Wolf's controls, sound and lamps (sections 4.6, 5.3) |
+| `tests/arcglass.py` | the landscape boards' glass held to their video RAM (section 4.6) |
 | `apps/arcade/arcsfx.py` | Space Invaders' sounds, SYNTHESISED - no recording, no ROM (section 8.3) |
 | `tests/arcsound.py` | the stream and FM routes on the 8088, the sound read back (section 8.5) |
 | `tools/arcz80.py`, `tools/arcpac.py` | the Z80 and the Pac-Man board in Python: the reference (section 7.6) |
@@ -71,11 +74,13 @@ its drop frees (`BD_OFF`), not a part.
 | 0 | the VIEW: the board's address space and the cells (section 2.1), zero-filled, the one eager part | 25KB |
 | 1, 2, 3 | Space Invaders: the CODE PART (header, runtime, translation), AUX (the PC table, then the flags and the write list), the ROM | 13KB, 50KB, 8KB |
 | 4, 5, 6 | Space Invaders Part II: the same three; its ROM part is the CPU's 0000-4FFFh and the two colour maps (section 4.3) | 23KB, 50KB, 22KB |
-| 7, 8, 9 | Lunar Rescue: the same | 30KB, 50KB, 22KB |
-| 10, 11, 12 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 57KB, 50KB, 48KB |
-| last (10, or 13 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 41KB |
+| 7, 8, 9 | Lunar Rescue: the same | 32KB, 50KB, 22KB |
+| 10, 11, 12 | Gun Fight: the same, its ROM 4KB | 12KB, 50KB, 4KB |
+| 13, 14, 15 | Sea Wolf: the same | 17KB, 50KB, 4KB |
+| 16, 17, 18 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 57KB, 50KB, 48KB |
+| last (16, or 19 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 58KB |
 
-With every board it is 193KB on the disk.
+With every board it is about 235KB on the disk.
 
 The shipped build refuses to start under kern_mega's protected mode
 (`OS88_MEGA_REFUSE`): the host far-jumps into part 0, which is a data
@@ -90,7 +95,10 @@ four 2KB chips by SHA-256, and writes the 8KB board image
 `build/arcade-rom/INVADERS.ROM` with `invaders.h/g/f/e` at 0000/0800/1000/
 1800. A mismatch is a hard failure. **Taito's colour boards** the same way:
 `invadpt2` (`arcade_invadpt2/invadpt2.zip`, SHA-1 `228cadc2...`) and
-`lrescue` (`arcade_lrescue/lrescue.zip`, SHA-1 `3da8bff2...`), every chip's
+`lrescue` (`arcade_lrescue/lrescue.zip`, SHA-1 `3da8bff2...`), and Midway's
+`gunfight` (`arcade_gunfight/gunfight.zip`, SHA-1 `52fcc4a3...`) and
+`seawolf` (`arcade_seawolf/seawolf.zip`, SHA-1 `18d15528...`) - four 1KB
+chips each, a 4KB image - every chip's
 CRC32 MAME's, into a 22KB image: the CPU's 0000-4FFFh as it sees it (RAM's
 2000-3FFFh zero) and the colour maps at 5000h and 5400h (Lunar Rescue has
 one map, loaded twice, as MAME's `ROM_RELOAD`). `make arcaderom` fetches all
@@ -202,7 +210,14 @@ walk ran through Part II's empty 4800h-4FFFh and into a jump past 7FFFh.
 
 `--no-speculate` turns the second off. The result for Space Invaders: 4,366
 instructions, 2,086 of them speculative; Part II 4,415 (706); Lunar Rescue
-5,227 (740).
+5,227 (740); Gun Fight 1,426 (178); Sea Wolf 2,078 (473).
+
+**An interrupt's return PC is a seed too.** `arcsim.py seeds` once left them
+out, as PCs the walk reaches anyway - until Gun Fight's 03C9, the
+instruction after a PCHL that a jump table sends it to, was ALSO where an
+interrupt had landed, and the translation had nothing there. Gun Fight now
+has 158 seeds, most of them return PCs; the older boards' seed files are
+kept as they were, which their lockstep holds.
 
 **The PC table** is the first 32KB of aux: 16,384 words, the translation of
 every 8080 PC 0000-3FFF, or `arc_miss`, written by the translator from
@@ -305,6 +320,47 @@ and 32 half frames dropped in 10 s; as a HLT, 1 (row `arcspeedlr`, red with
 model spin and puts its interrupt where the 8086 side resumes, the head - a
 few T-states late at most, on a pass that changes nothing.
 
+### 3.8 Idle returns: measured, and NOT taken
+
+Gun Fight's and Sea Wolf's main loops never wait in a loop of their own: a
+dispatcher runs a task list round and round, and a task that is not due
+returns at once - Gun Fight's at 0820 restores everything it touched, 64%
+of all it runs. `arcsim.py idles` finds such returns (a pass back to the
+return's target with registers, flags and every RAM byte as they were). As
+a HLT they changed the GAME: in the model, halting at every such return
+changed the picture in 1,035 of 1,500 frames of Gun Fight; halting only at
+the passes an oracle proved idle, in 1 - and in 1,106 of Sea Wolf's, where
+resuming at the loop's head moves where the next interrupt lands. And one
+of Sea Wolf's ran with interrupts off, a HLT there a hang. No idle return
+is translated as a HLT; the instrument stays. Both boards keep the board's
+time on the 5150 without it (row `arcspeedgf`, `arcspeedsw`).
+
+### 3.9 The boards' ports, their ROM, and a PUSH into the screen
+
+`arcaot.py --board` picks the I/O map (`set_ports`, MAME mw8080bw.cpp's):
+Space Invaders' and Taito's as section 2.1 has it; **Gun Fight**'s three
+address lines, IN 4-7 mirroring IN 0-3, and an OUT that is three AND gates -
+bit 0 the sound latch, bit 1 the shift count, bit 2 the shift data, any of
+them in one OUT; **Sea Wolf**'s shifter read BIT-REVERSED at IN 0 (a 256-byte
+table in the code part, `arc_rev`), its controls at IN 1 and 2, its lamps
+at OUT 1 and 2 (`V_LAMP1`, `V_LAMP2`), the shift data and count at OUT 3 and
+4, its sound at OUT 5.
+
+**A store into ROM is no store** (MAME: 0000-1FFFh and 4000-5FFFh take no
+write, RAM's 2000-3FFFh is mirrored at 6000h): Gun Fight and Sea Wolf draw
+past the screen's end, into 4000-42FFh. A store through H at 40h or above
+skips (one compare on the video path only, none on RAM's), INR/DCR M lists
+no cell there, and a constant address is decided by the translator
+(`ram_of`: ROM stores nothing, the mirror is RAM).
+
+**Gun Fight and Sea Wolf erase the screen with SP in it** (LXI SP,4010h,
+PUSH, PUSH...). On those two boards a PUSH whose SP is in video RAM lists
+both bytes' cells; the others' PUSH is unchanged. The lockstep cannot see a
+cell left unlisted - RAM agrees - so `tests/arclock.py --marks` holds the
+write list to the screen (every cell a frame changed is on it), and
+`tests/arcglass.py` the glass to video RAM; without it Sea Wolf's INSERT
+COIN stayed on the glass in play.
+
 ---
 
 ## 4. The picture
@@ -362,6 +418,25 @@ Section 8: the board's sound bits drive a Sound Blaster stream, the FM chip
 or the speaker, whichever the machine has and the Control Panel sends tones
 to.
 
+### 4.6 The landscape boards
+
+Gun Fight and Sea Wolf's monitor is the right way up (MAME ROT0): a video
+byte is 8 pixels ACROSS one of 224 lines, bit 0 leftmost. A cell is still 8
+lines of one byte column, so the write list and its keys are unchanged; the
+drawer (`ar_cellh_*`, `arcland.inc`) pushes the cell's 8 bytes and puts each
+line's byte doubled across (`ar_dblr`, the doubling table bit-reversed):
+
+| adapter | where | how |
+|---|---|---|
+| VGA | 512 x 448 from (64, 16) | every line twice; plane 0, DAC 1 white |
+| Hercules | 512 x 224 from (104, 62) | 1:1 |
+| CGA | 512 x 200 from x 64 | a cell's lines 6 and 7 MERGED (OR) in 24 cells of every 28; bands 3, 10, 17 and 24 keep 8 |
+
+**Sea Wolf's cabinet LAMPS** - its four torpedoes, READY and RELOAD (OUT 2) -
+are boxes under the picture on VGA and Hercules, lit or outlined, drawn when
+they change; CGA has no room under its picture. The explosion lamps (OUT 1)
+are not shown.
+
 ---
 
 ## 5. Time
@@ -404,6 +479,18 @@ Lunar Rescue's rescue ship, OUT 5 bit 4). The coin is IN 1 bit 0 FLIPPED:
 active high on our Space Invaders, as it has always been run, and low on
 Taito's boards. Fire, left and right are bits 4-6 of IN 1 and of IN 2 (an
 upright cabinet's wiring).
+
+**Gun Fight and Sea Wolf are LANDSCAPE wirings** (`X_LAND`) with procs of
+their own: the held keys (`X_KEYS`), the sound latches as the sound layers'
+bit word (`X_SDEC`), the cabinet's lamps (`X_LAMPS`). Gun Fight is two
+gunmen at one keyboard, each a stick, an aim lever and a trigger on IN 0
+and IN 1: the left W A S D, R and F to raise and lower the gun, G to fire;
+the right the arrows, Page Up and Page Down, Space. A lever moves a notch
+every 6 frames a key is held, through MAME's 7-position encoder table,
+inverted; the coin and the start are IN 2 bits 6 and 7. Its sticks are read
+every other frame: fourteen keys are fourteen far calls. Sea Wolf's
+periscope is a 30-position encoder (Left and Right, a position every 2
+frames), its trigger Space; the coin and start IN 2's bits 0 and 1.
 
 ### 5.2 A run's length
 
@@ -647,6 +734,13 @@ synthesises five clips of its own - the thrust, the two footsteps, the
 count, the rescue ship's beep as a seamless loop - and it shares the shot,
 the hits and the extra ship. OUT 5 bit 3 is a ONE-BIT tune the CPU plays by
 toggling it, which a frame's latch cannot carry: not played.
+
+**Gun Fight**'s sound latch holds a code in its top four bits, inverted - a
+left or right shot, a left or right hit - which `gf_sdec` turns into four
+bits; `arcsfx.py` synthesises the shot (a crack) and the hit (a falling
+cry). **Sea Wolf**'s OUT 5 bits 0-4: the ship hit (Space Invaders' base hit
+clip), a torpedo, the dive, the sonar's ping (three of its own), a mine
+hit (the invader hit's).
 
 A rising bit starts its clip again from the top; up to three clips sound at
 once, and a fourth takes the slot of the one nearest its end. **The mix is one

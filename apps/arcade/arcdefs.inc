@@ -42,6 +42,8 @@ V_SHHI      equ 0x601D          ;   a byte in at the top
 V_SHOFF     equ 0x601E          ; OUT 2: the offset IN 3 reads at
 V_SND3      equ 0x6020          ; OUT 3: UFO, shot, base hit, invader hit
 V_SND5      equ 0x6021          ; OUT 5: the four fleet notes, UFO hit
+V_LAMP1     equ 0x6022          ; Sea Wolf's OUT 1: the explosion lamps
+V_LAMP2     equ 0x6023          ; ...OUT 2: the torpedo, ready, reload lamps
 
 ; --- the Z80's own (ARCADE-SPEC 7.1): what the 8086 has no register for ---
 ST_IX       equ 0x6024
