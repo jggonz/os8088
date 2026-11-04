@@ -267,6 +267,7 @@ VM486VD := $(CURDIR)/vm/486-vesa-desk
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
 VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
+VMPENTPCI := $(CURDIR)/vm/pentium-pciether
 # The two Frotz machines (SPEC.md 61.9). Both carry a sound card, because
 # @sound_effect is part of what is being tested, and both have the FULL 640KB:
 # a Z-machine story is RESIDENT (SPEC.md 61.4) and 256KB does not hold the
@@ -2327,7 +2328,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 286-video viddemo-vga viddemo-cga viddemo-herc viddemozip 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium \
+        286-sound 286-video viddemo-vga viddemo-cga viddemo-herc viddemozip 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium pentium-pciether \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -4855,6 +4856,7 @@ $(shell mkdir -p $(BUILD); \
 # did nothing; the profiler's own symbol reader is what caught it, because it
 # re-assembles the source and refuses a build/ether.bin that does not match.
 $(BUILD)/ether.bin: drivers/ether/ether.asm drivers/ether/ne2000.inc \
+                    drivers/ether/ethdrv.inc drivers/ether/nicne2k.inc \
                     drivers/ether/inet.inc drivers/ether/tcp.inc \
                     drivers/ether/dns.inc drivers/ether/etherui.inc \
                     drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \
@@ -4872,6 +4874,33 @@ $(BUILD)/ether.bin: $(ETHSTAMP)
 
 $(BUILD)/ether.drv: $(BUILD)/ether.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ether.bin -o $@
+
+# PCIETHER.DRV (SPEC.md 125): the PCI half of the above, kern_mega only. It is
+# ether.asm's body (ethdrv.inc) and the stack's includes SHARED AS SOURCE over
+# a PCI backend, so every file the stack is made of is a prerequisite, and
+# ETHER.DRV's knobs (ETHDEF: a baked-in base or address, the stage timers) are
+# NOT passed - none of them means anything on a PCI bus. It is in `all` so it
+# keeps assembling; it is on NO disk here (kern_mega's recipes add it, 125.6).
+$(BUILD)/pciether.bin: drivers/pciether/pciether.asm drivers/pciether/pcifamily.inc \
+                       drivers/pciether/pci.inc drivers/pciether/rtl8139.inc \
+                       drivers/ether/ethdrv.inc \
+                       drivers/ether/inet.inc drivers/ether/tcp.inc \
+                       drivers/ether/dns.inc drivers/ether/etherui.inc \
+                       drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \
+                       drivers/ether/ethstate.inc drivers/ether/ethsock.inc \
+                       drivers/ether/ethusr.inc \
+                       drivers/net/netpkg.inc drivers/os88drv.inc \
+                       drivers/wirezone.inc \
+                       apps/os88api.inc apps/os88ui.inc apps/os88line.inc \
+                       | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/pciether/ -I drivers/ether/ \
+	        -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+	@echo "pciether: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pciether.drv: $(BUILD)/pciether.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pciether.bin -o $@
+
+all: $(BUILD)/pciether.drv
 
 # IT CARRIES THE WHOLE TCP/IP STACK NOW (SPEC.md 62.11.1): /N serves sockets,
 # and the stack it serves them with is drivers/ether's own, over a packet
@@ -15297,7 +15326,15 @@ MEGATOOLSARGS = SYSTEM:$(BUILD)/syscheck.o88 SYSTEM:$(MEGADIR)/fscheck.drv
 
 # NO COLDHMA.SYS and no XMEM.DRV: the HMA and everything above it are
 # kern_mega's own (kernel/mega.inc), and xm_sniff never asks for either.
-MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS))
+#
+# PCIETHER.DRV (SPEC.md 125.1, 125.6) is kern_mega's alone: it is appended HERE
+# and not to $(DRIVERS), so no other system disk, no apps disk and no live
+# payload ever names it. Its rule ($(BUILD)/pciether.drv) is the driver's own,
+# beside ether.drv's; until that branch is merged `make mega` stops with
+# make's "No rule to make target 'build/pciether.drv'", on purpose - a mega
+# disk that silently shipped without the driver the owner asked for would
+# be a disk that passes every check and has no PCI card in it.
+MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS)) $(BUILD)/pciether.drv
 $(BUILD)/mega.img: KMODDIR := $(MEGADIR)
 #
 # **ITS DOS.O88 IS kern_mega's OWN** (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 12.1
@@ -15350,6 +15387,8 @@ $(BUILD)/megacdcfg/system.cfg: | $(BUILD)
 	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
 	  ((1 << 8) | 1).to_bytes(2,'little') + b'\0\0')" > $@
 
+# KMODDIR: pciethertest.img's reason, below - kern_mega's own modules
+$(BUILD)/megacdtest.img: KMODDIR := $(MEGADIR)
 $(BUILD)/megacdtest.img: $(BUILD)/mega.img $(BUILD)/megacdcfg/system.cfg $(BUILD)/cdlnk/CDRACK.LNK
 	python3 tools/os88disk.py -o $@ --size 1440 \
 		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
@@ -15368,6 +15407,62 @@ megacdtest: $(BUILD)/megacdtest.img $(BUILD)/megacdsim.img $(BUILD)/cdfix.iso $(
 	@echo "            CDRack autostarted on D:\\TRACK02.CDA; build/megacdsim.img the"
 	@echo "            gate's CDROM.DRV for Bochs (build/cdfix.iso). 86Box: tools/os88box.py"
 	@echo "            launch 286-mega-cdrom (build/cdaudio.cue in the drive)"
+
+# PCIETHERTEST - kern_mega's PCI Ethernet gate disk (SPEC.md 125.6), ethertest's
+# shape on kern_mega: build/mega.img's files with a SYSTEM.CFG that already
+# wants PCIETHER.DRV, so the card is up and DHCP has run before the first paint
+# and tests/pciether.py reads state instead of clicking. **THE BIT IS THE
+# KERNEL'S AND NOT THIS FILE'S**: kernel/driver.inc's drv_cfgbit assigns it
+# (SPEC.md 125.5, 125.8 item 2), and PCIETHER_CFGBIT is the one place this tree
+# names it for a disk - 11 being the first bit after HTTPFS.DRV's 10. It is a
+# variable so that the kernel agent's choice is one edit; `make pciethertest
+# PCIETHER_CFGBIT=<n>` overrides it, and the disk is rebuilt when it changes.
+# Boot it on QEMU with an RTL8139 (`make run-pciether`, tests/pciether.py):
+# Bochs has no 8139 and MartyPC no NIC at all (docs/TESTING.md).
+PCIETHER_CFGBIT ?= 11
+PCIETHERSTAMP := $(BUILD)/.pciether-cfgbit-$(PCIETHER_CFGBIT)
+$(PCIETHERSTAMP): | $(BUILD)
+	@rm -f $(BUILD)/.pciether-cfgbit-*
+	@touch $@
+
+$(BUILD)/pciethercfg/system.cfg: $(PCIETHERSTAMP) | $(BUILD)
+	@mkdir -p $(BUILD)/pciethercfg
+	python3 -c "import sys; sys.stdout.buffer.write(b'O88CFG\0\0' + \
+	  (3).to_bytes(2,'little') + b'DW' + bytes([1,2]) + \
+	  (1 << $(PCIETHER_CFGBIT)).to_bytes(2,'little') + b'\0\0')" > $@
+
+# KMODDIR IS mega.img's: $(MEGADRIVERS) carries the on-demand kernel modules
+# (CTRL.DRV, DISKOPS.DRV, ...) through $(DRIVERS), and those are cut per
+# kernel and refused by their layout stamp on any other one. Without this
+# line the disk carried kern_big's copies beside kern_mega's KERNEL.SYS
+$(BUILD)/pciethertest.img: KMODDIR := $(MEGADIR)
+$(BUILD)/pciethertest.img: $(BUILD)/mega.img $(BUILD)/pciethercfg/system.cfg
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(MEGADIR)/boot.bin --kernel $(MEGADIR)/$(KERNNAME) \
+		$(MEGADRIVERS) $(MEGASYSAPPSARGS) $(MEGASYSOPTARGS) $(STIKARGS) $(MEGAINST) APPS:$(MEGADIR)/kdos/DOS.O88 $(MEGACOREARGS) $(SYSDOC) \
+		$(SYSLOGOARG) $(FACESARG) $(BUILD)/pciethercfg/system.cfg $(APPDATAFOLDER)
+
+.PHONY: pciethertest
+pciethertest: $(BUILD)/pciethertest.img
+	@echo "pciethertest: build/pciethertest.img - kern_mega, PCIETHER.DRV already wanted"
+	@echo "              (SYSTEM.CFG bit $(PCIETHER_CFGBIT)). Pair it with build/megaapps.img."
+	@echo "              Run it with: python3 tests/pciether.py"
+	@echo "              Look at it: make run-pciether (QEMU, an RTL8139 on slirp);"
+	@echo "              86Box: tools/os88box.py launch pentium-pciether"
+
+# RUN-PCIETHER - the interactive form of the gate's machine: kern_mega with a
+# PCI RTL8139 (`-device rtl8139`, the 10EC:8139 card PCIETHER.DRV drives) on
+# QEMU's user network instead of the ISA NE2000 that `make run ETHER=1`
+# carries. 16MB because kern_mega's protected mode wants memory above 1MB.
+# $(QMP_SOCK) is `make test`'s knob (line 60); the machine is a window, not
+# daemonized, and is not `make test`'s, so it is NOT stamped and builds nothing.
+.PHONY: run-pciether
+run-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
+	$(QEMU) -m 16 $(QEMUMACH) \
+		-drive file=$(BUILD)/pciethertest.img,format=raw,if=floppy \
+		-drive file=$(BUILD)/megaapps.img,format=raw,if=floppy,index=1 -boot a $(MOUSE) \
+		-netdev user,id=n0 -device rtl8139,netdev=n0 \
+		-qmp unix:$(QMP_SOCK),server,nowait
 
 # ONE GEOMETRY, and that is a decision rather than an omission. 360KB exists
 # for real period hardware - a 5.25" drive on an XT or an AT - and no machine
@@ -19063,6 +19158,18 @@ pentium: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VMPENT)/86box.cfg
 	$(BOX) -P $(VMPENT) -N
 
+# PCIETHER.DRV's machine (SPEC.md 125.6, docs/plans/PCIETHER-PLAN.md S9): a
+# Pentium on a PCI board (vm/pentium's p54tp4xe) with 86Box's Realtek
+# RTL8139C+ (`rtl8139c+`) on SLiRP, booting kern_mega's `make pciethertest`
+# disk with its apps disk in B: - to LOOK at the driver on a period PCI BIOS
+# rather than SeaBIOS (the Drivers page's PCI Ethernet row, the Ethernet
+# page naming RTL8139, The Wire or the Browser reaching the host's network).
+# 86Box cannot be keyed or asserted against (docs/86BOX.md); tests/pciether.py
+# is the gate and runs under QEMU. Interactive, like every 86Box target.
+pentium-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
+	@$(UNPROTECT) $(VMPENTPCI)/86box.cfg
+	$(BOX) -P $(VMPENTPCI) -N
+
 # NOTHING IN build/ IS TRACKED, and that is a decision rather than an accident.
 #
 # For most of this tree's life the opposite held: build/ was gitignored but 41
@@ -19183,7 +19290,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX PROPS BIGBMP
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS CSALIAS BIGBMP
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
 # by the import lines in its own .wlk, so it links without them.

@@ -776,7 +776,7 @@ the eight `286-525-*` application machines (`-z`, `-word`,
 1.2MB app disk in B: instead of the apps floppy, and the only machines in the
 tree that read that geometry at all: a 1.2MB drive wants the AT's 500 kbps
 controller, so no XT profile can host one),
-`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `xt-z`, `386-z`, `xt-word`,
+`386sx`, `386`, `386-sound`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega on a 430FX Pentium with the RTL8139C+ on SLiRP, booting `make pciethertest` - SPEC.md §125.6), `xt-z`, `386-z`, `xt-word`,
 `386-word`, `386-c-word`, `xt-paccman`, `386-paccman`, `xt-runcpm`, `286-runcpm`,
 `386-runcpm`, `xt-c64`,
 `286-c64`, `386-c64`, `xt-apple2`, `286-apple2`, `386-apple2`,
@@ -919,6 +919,13 @@ floppies into the git-ignored `win16ref/`, with the sample programs and
 reference screenshots - is `.claude/skills/win16-reference`
 (`/win16-reference`); its script recreates the lot and its traps are what
 getting Windows to boot here cost.
+Building out a feature's **user stories or open items in parallel** - each
+independent item to a sub-agent of its own in its own worktree on a cheaper
+model, one shared brief, a Monitor armed on every long-running agent, each
+finished branch verified and improved by an Opus reviewer before it is
+integrated into the feature's PR, and the final pass run once - is
+`.claude/skills/story-fanout` (`/story-fanout <plan or PR>`), whose
+`LESSONS.md` is what the WIN16 Phase B/C and WIN16-NEXT rounds learned.
 
 ## Shared agent skills
 

@@ -108,6 +108,11 @@ D drivers/sound/sb.inc sbl_seg           # the Sound Blaster DMA double buffer: 
                                          # 8237 is pointed at it for the whole of
                                          # one double-buffered stream, and
                                          # sbl_unpin frees it at the close
+D drivers/pciether/rtl8139.inc rt_seg    # the RTL8139's receive ring and transmit
+                                         # buffer: the card BUS-MASTERS into it from
+                                         # attach to detach (SPEC.md 125.4), so a move
+                                         # would leave it writing the old place;
+                                         # MEMP_CONV keeps it below 1MB, freed at detach
 D drivers/hdd/hdd.asm @hd_twins          # 1KB int 13h target for the two LBA 0
                                          # reads that prove a BIOS row, freed
                                          # inside the call

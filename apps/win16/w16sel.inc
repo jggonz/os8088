@@ -237,19 +237,84 @@ W16SYS w16q_setlim
     pop di
     ret
 
+; w16q_ctype - DX = a selector -> CF = 0 CX = the type a selector made from it
+; takes: 1 code when it is data, 0 data when it is code (LAR reads the access
+; byte, bit 3 = code); CF = 1 not a live selector. Keeps the rest. 286 code
+w16q_ctype:
+    push ax
+    xor cx, cx
+cpu 286
+    lar ax, dx
+cpu 8086
+    jnz .no
+    test ah, 8
+    jnz .o                          ; code: its alias is data (CF = 0)
+    inc cx
+.o:
+    pop ax
+    clc
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
+; w16q_retype - DX = a window of the program's, CX = 0 data / 1 code -> CF = 0
+; its type set in place (OSAPI_SEG SEG_TYPE, SPEC.md 50.6.11); CF = 1 refused.
+; Keeps the rest
+w16q_retype:
+    push ax
+    push bx
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
+    pop bx
+    jc .no
+    pop ax
+    ret
+.no:
+    pop ax
+    stc
+    ret
+
 ; PrestoChangoSelector (KERNEL.177) - args: +0 wDestSel, +2 wSourceSel.
-; wDestSel, a window, re-aimed at wSourceSel's base and reach: the code/data
-; flip itself is kern_mega's to complete, as every far call through a data
-; selector is (SPEC.md 20.18). Answers wDestSel, or 0
+; wDestSel, a window, re-aimed at wSourceSel's base and reach and given the
+; OTHER type, code from data and data from code, as Windows does (SPEC.md
+; 124.31.6): a REAL code selector, which a far call takes with no help from
+; kern_mega. Answers wDestSel, or 0
 W16SYS w16q_presto
     push di
     ICALL w16_args
     mov dx, [es:bx + 2]
-    call w16q_lin
+    call w16q_ctype
     mov ax, 0
     jc .out
     mov ax, [es:bx]
+    cmp ax, dx
+    jne .two
+    mov dx, ax                      ; source = destination: the selector
+    call w16q_retype                ; flipped in place - a window, or the
+    mov ax, dx                      ; handle descriptor of a block of the
+    jnc .out                        ; program's (Arcade's ASTEROID)
+    xor ax, ax
+    jmp short .out
+.two:
+    push cx                         ; the type it gets
+    call w16q_lin
+    mov ax, 0
+    jc .pop
+    mov ax, [es:bx]
     call w16q_win
+    or ax, ax
+    jz .pop
+    mov dx, ax
+    pop cx
+    call w16q_retype
+    mov ax, dx
+    jnc .out
+    xor ax, ax                      ; (a window it would not flip: refused)
+    jmp short .out
+.pop:
+    pop cx
 .out:
     xor dx, dx
     pop di
@@ -272,9 +337,12 @@ W16SYS w16q_csds
     ret
 
 ; AllocDStoCSAlias (KERNEL.171) - args: +0 wSelector. A code selector at its
-; base: a pair's code half (SEG_SUBC) in a claim; elsewhere a data one, whose
-; far calls kern_mega completes. 0 when none
+; base: a pair's code half (SEG_SUBC) in a claim, which follows the block; else
+; a new CODE window over the same base and reach (SEG_TYPE, SPEC.md 124.31.6),
+; recorded like any the program made, so FreeSelector gives it back. 0 when
+; none
 W16SYS w16q_dscs
+    push di
     ICALL w16_args
     mov dx, [es:bx]
     push dx
@@ -283,21 +351,29 @@ W16SYS w16q_dscs
     mov bl, SEG_SUBC
     call OSAPI_SEG
     pop ax
-    jc .data
-    sub dx, 8
+    jc .win
+    sub dx, 8                       ; the pair's code half
     mov ax, dx
     jmp short .out
-.data:
+.win:
     mov dx, ax
+    call w16q_lin                   ; DI:DX = its base, CX = its reach
+    jc .none
     xor ax, ax
-    xor cx, cx
-    mov bl, SEG_SUB
-    call OSAPI_SEG
+    call w16q_win                   ; AX = a new window
+    or ax, ax
+    jz .none
+    mov dx, ax
+    mov cx, 1
+    call w16q_retype
     mov ax, dx
     jnc .out
+    call w16q_wfree                 ; (not flipped: given back)
+.none:
     xor ax, ax
 .out:
     xor dx, dx
+    pop di
     ret
 
 ; GlobalDOSAlloc (KERNEL.184) - args: +0 dwBytes. A fixed block below 1 MB:

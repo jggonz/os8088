@@ -107,6 +107,18 @@ com_entry:
 OSAPI_GET_TICKS equ dos_ticks   ; ...NEAR calls here, where a package's are FAR
 OSAPI_RAND      equ dos_rand
 
+; The shared stack reaches its link layer through the NIC seam (SPEC.md 125.2):
+; here the "card" is pktdrv.inc's packet driver, under the 8390's old names.
+%define nic_rx      ne_rx
+%define nic_tx      ne_tx
+%define NIC_FRAME   NE_FRAME
+%macro NIC_STATE 0
+eth_txpg:   db NE_TXPAGE
+eth_pstart: db NE_PSTART
+eth_pstop:  db NE_PSTOP
+eth_next:   db NE_PSTART + 1
+%endmacro
+
 ; **THE ORDER IS ether.asm's AND IS NOT FREE**: ethstate.inc sizes its socket
 ; arrays with constants tcp.inc defines, so the state comes LAST - which is
 ; exactly where the driver keeps it, for exactly this reason.
