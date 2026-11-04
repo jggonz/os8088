@@ -233212,8 +233212,9 @@ parent's client, and nothing in os8088 knows it exists:
 - A disabled window (`EnableWindow`), or a window inside a disabled
   window, gets no mouse or key input.
 - `SetFocus` and `GetFocus`. `WM_SETFOCUS` and `WM_KILLFOCUS` go to WIN16's
-  own controls (§124.13) at once, and are posted to a program's own
-  windows (§124.22.6, S17).
+  own controls (§124.13) at once while the control's procedure is still
+  WIN16's, and are posted to a program's own windows and to a control whose
+  procedure a program has replaced (§124.22.6, §124.25.20).
 - `GetWindowText`, `SetWindowText` (a top-level window's is the os8088
   title), `GetWindowTextLength`, `GetParent`, `IsWindow`, `IsChild`,
   `IsWindowVisible`, `IsWindowEnabled`, `GetWindowRect`, `ScreenToClient`
@@ -237271,6 +237272,35 @@ before, 37,970 + 26,336 = 64,306 after, **-305 resident bytes**; real-mode arm
 36,298 + 27,471 = 63,769 before, 36,353 + 27,111 = 63,464 after, **-305**
 (the bss falls by 360, the lookups and the two helpers add 55). 64 records is
 2,112 bytes of the program's global heap, taken at the first class.
+
+#### 124.25.20 Focus and enable reach the window's procedure *(WIN16-NEXT `kindmsg`, DECISIONS 14:00)*
+
+Windows sends `WM_KILLFOCUS` and `WM_SETFOCUS` (SetFocus: the old window with
+wParam = the new, then the new with wParam = the old) and `WM_ENABLE`
+(EnableWindow, wParam = the new state) to the window's procedure, so a
+superclass (Visual Basic's `ThunderTextBox` over `Edit`) or a subclass
+(`SetWindowLong` `GWL_WNDPROC`) sees them; VB's GotFocus and LostFocus events
+are those messages. WIN16 chose the recipient by the window's *kind*, so a
+control whose procedure a program had replaced was still told directly and
+the program never knew. It is now chosen by whether the procedure is still
+WIN16's (`w16_isctl`, as `w16_sendwnd` and the dialog loop already choose):
+
+| message | procedure still WIN16's | procedure a program's |
+|---|---|---|
+| `WM_KILLFOCUS`, `WM_SETFOCUS` | at once, in the control | posted (124.22.6), in Windows' order |
+| `WM_ENABLE` | at once, in the control | posted |
+| `WM_SETTEXT` (`SetWindowText`) | at once | sent: the program's procedure runs, and its `CallWindowProc`/`DefWindowProc` reaches the control (already so since ctlproc) |
+
+Posted, not sent, because the focus change is made inside an import and a
+send to a program's procedure is a coroutine entry that must be able to
+re-enter `SetFocus` (a `WM_KILLFOCUS` handler that calls `SetFocus`): the
+state (`w16_focus`, the dialog's remembered control) is already final when
+the message is queued, as it is for a program's own window since S17. The
+control's own caret and selection therefore follow when the program's
+procedure forwards the message, as in Windows. `WM_GETDLGCODE` from the
+dialog loop and the creation messages to controls the dialog manager makes
+itself stay direct (`w16d_cmsg`, answered 0 for a replaced procedure):
+open. Cost: no resident byte beyond the figures in the kindmsg report.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

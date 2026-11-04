@@ -1613,7 +1613,7 @@ w16_enable:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     push cx
-    call w16_intproc
+    call w16_tellfocus              ; (a replaced procedure: posted)
     pop cx
 .out:
     mov ax, cx
@@ -1682,7 +1682,8 @@ w16_nfsend:
 ; -----------------------------------------------------------------------------
 ; w16_setfocus - AX = an HWND (0 = none) -> AX = the one that had the focus.
 ; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8) at
-; once, and are posted to a program's own window (124.22.6). A dialog keeps the control that
+; once, and are posted to a program's own window (124.22.6) or a control whose
+; procedure a program replaced (124.25.20). A dialog keeps the control that
 ; had its focus. Clobbers BX, CX, DX.
 ; -----------------------------------------------------------------------------
 w16_setfocus:
@@ -1780,6 +1781,8 @@ w16_tellfocus:
     je .prog
     cmp byte [bx + W16W_KIND], W16Q_DIALOG
     je .out
+    call w16_isctl                  ; a procedure the program replaced:
+    jc .prog                        ;   posted to it (SPEC.md 124.25.20)
     push ax
     push cx
     push dx

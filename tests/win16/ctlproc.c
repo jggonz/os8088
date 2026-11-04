@@ -13,7 +13,12 @@
  *   swallow     a superclass whose procedure answers WM_CREATE itself and
  *               forwards the rest is still a working multi-line Edit;
  *   subclass    SetWindowLong(GWL_WNDPROC) on a real Edit, eat one key and
- *               pass the rest to the old procedure.
+ *               pass the rest to the old procedure;
+ *   focus       SetFocus between a superclassed and a subclassed Edit,
+ *               EnableWindow and SetWindowText reach each procedure
+ *               (SPEC.md 124.25.20), in Windows' order: the old window's
+ *               WM_KILLFOCUS (wParam = the new) before the new one's
+ *               WM_SETFOCUS.
  *
  * Every check that fails is named in the message box, which
  * tests/win16ctlproc.py reads; "CTLPROC OK" when none does.
@@ -24,6 +29,34 @@
 static char res[240];
 static FARPROC baseEdit, baseButton, oldEdit;
 static int supseen, subseen, subate;
+static char evlog[32];
+static int evn;
+static HWND killwp;
+
+/* one letter a message, upper case for the superclass, lower for the subclass */
+static void ev(UINT msg, WPARAM wp, int sup)
+{
+    char c = 0;
+
+    if (msg == WM_SETFOCUS) c = 'f';
+    else if (msg == WM_KILLFOCUS) { c = 'k'; killwp = (HWND)wp; }
+    else if (msg == WM_ENABLE) c = 'e';
+    else if (msg == WM_SETTEXT) c = 't';
+    if (c && evn < (int)sizeof evlog - 1) {
+        evlog[evn++] = sup ? (char)(c - 32) : c;
+        evlog[evn] = 0;
+    }
+}
+
+static void pump(void)
+{
+    MSG m;
+
+    while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
+}
 
 static void check(int ok, const char *tag)
 {
@@ -36,6 +69,7 @@ static void check(int ok, const char *tag)
 LRESULT __export CALLBACK SupEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     supseen++;
+    ev(msg, wp, 1);
     return CallWindowProc(baseEdit, hwnd, msg, wp, lp);
 }
 
@@ -55,6 +89,7 @@ LRESULT __export CALLBACK SupButton(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 LRESULT __export CALLBACK SubEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     subseen++;
+    ev(msg, wp, 0);
     if (msg == WM_CHAR && wp == 'x') {
         subate++;
         return 0;
@@ -174,6 +209,27 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(strcmp(buf, "ab") == 0, "subtext");
     check(subate == 1, "subate");
     check(subseen >= 4, "subseen");
+
+    /* focus, enable and text reach the procedures, in Windows' order */
+    SetFocus(s);
+    pump();
+    evn = 0; evlog[0] = 0;
+    SetFocus(e);                        /* s: kill, e: set */
+    pump();
+    check(killwp == e, "killwp");
+    SetFocus(s);                        /* e: kill, s: set */
+    pump();
+    EnableWindow(e, FALSE);             /* posted to a program's procedure */
+    EnableWindow(e, TRUE);
+    pump();
+    SetWindowText(e, "q");
+    SetWindowText(s, "r");
+    pump();
+    check(strcmp(evlog, "kFKfEETt") == 0, "evorder");
+    if (strcmp(evlog, "kFKfEETt") != 0) {
+        strcat(res, " ev=");
+        strcat(res, evlog);
+    }
 
     MessageBox(top, res[0] ? res : "CTLPROC OK", "CTLPROC", MB_OK);
     DestroyWindow(top);
