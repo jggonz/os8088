@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "7f7b4113",
-  "strings": "f128397972066be6",
-  "why": "Good to know: the modes, sprites and row splits that are drawn, and sprite priority/collisions that are not"
+  "stamped": "898f5e5b",
+  "strings": "91915f2df6565f00",
+  "why": "Full screen: colour on VGA, the chords that work inside it; Good to know: colour is the VGA full screen"
  },
  "CALC_O88": {
   "sources": [
