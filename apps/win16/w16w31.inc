@@ -343,6 +343,64 @@ W16SYS w16n_getwpl
     pop di
     ret
 
+; w16s_clsadd - w16_ccb (a class, its W16C_TASK set) goes into the first free
+; record of the class block, which is claimed from the program's global memory
+; at the first class, W16_MAXCLS records at W16C_STRIDE (SPEC.md 124.25.18.1).
+; AL = its index, CF=0; CF=1 the block is full or memory is not there:
+; RegisterClass answers FALSE. Keeps the rest
+w16s_clsadd:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    cmp word [w16_clsseg], 0
+    jne .have
+    mov ax, W16_MAXCLS * W16C_STRIDE
+    xor dx, dx
+    xor cl, cl                      ; fixed
+    ICALL w16_gnew                  ; AX = the handle, DX = the segment
+    or ax, ax
+    jz .no
+    W16TOSEL dx                     ; (the arm: a selector, 124.31.3)
+    mov [w16_clsseg], dx
+    mov es, dx                      ; no class is made: every name NUL
+    xor di, di
+    mov cx, (W16_MAXCLS * W16C_STRIDE) / 2
+    xor ax, ax
+    cld
+    rep stosw
+.have:
+    mov es, [w16_clsseg]
+    xor bx, bx
+    xor ax, ax                      ; AL = the record's index
+.f:
+    cmp byte [es:bx + W16C_NAME], 0
+    je .take
+    add bx, W16C_STRIDE
+    inc ax
+    cmp ax, W16_MAXCLS
+    jb .f
+.no:
+    stc
+    jmp short .out
+.take:
+    mov di, bx
+    mov si, w16_ccb
+    mov cx, W16C_STRIDE
+    cld
+    rep movsb
+    clc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
 ; GetClassInfo (USER.404) - args: +0 lpWndClass, +4 lpszClassName,
 ; +8 hInstance. A class the program registered, by name or by the atom
 ; RegisterClass answered, as its WNDCLASS, or one of WIN16's control classes
@@ -355,13 +413,13 @@ W16SYS w16n_clsinfo
     mov dx, [es:bx + 6]
     or dx, dx
     jnz .name
-    sub ax, 0xC000                  ; the atom: its record's offset
+    sub ax, 0xC000                  ; the atom: its class's index
     jb .no
-    cmp ax, W16_MAXCLS * W16C_SIZE
+    cmp ax, W16_MAXCLS
     jae .no
-    test al, W16C_SIZE - 1
-    jnz .no
-    add ax, w16_cls
+    cmp word [w16_clsseg], 0
+    je .no
+    ICALL w16_clsget
     mov si, ax
     cmp byte [si + W16C_NAME], 0
     je .no

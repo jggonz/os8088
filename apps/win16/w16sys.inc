@@ -381,9 +381,7 @@ W16LIB w16u_getclsname
     or al, al
     jnz .ours
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls + W16C_NAME
+    ICALL w16_clsget                ; (W16C_NAME is 0)
     mov si, ax
     mov dx, 16
     jmp short .copy

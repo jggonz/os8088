@@ -1559,9 +1559,7 @@ w16u_findwnd:
     jne .next
     push cx
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    call w16_clsget
     mov di, ax
     mov si, w16_namebuf
     mov cx, 16
@@ -1609,9 +1607,7 @@ w16u_setclsword:
     cmp byte [bx + W16W_KIND], W16Q_PROG
     jne .no
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    call w16_clsget
     mov si, ax
     cmp cx, GCW_STYLE
     je .style
@@ -1619,6 +1615,7 @@ w16u_setclsword:
     jne .no
     mov ax, dx
     xchg ax, [si + W16C_HBR]
+    call w16_clsput
     push ax
     mov al, [bx + W16W_CLS]
     xor cx, cx
@@ -1642,6 +1639,7 @@ w16u_setclsword:
 .style:
     mov ax, dx
     xchg ax, [si + W16C_STYLE]
+    call w16_clsput
     jmp short .out
 .no:
     xor ax, ax

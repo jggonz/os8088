@@ -5576,10 +5576,7 @@ w16d_mkitem:
     jnc .bi
     ICALL w16_findcls               ; ...or a class the program registered,
     jc .refuse1                     ;   made as CreateWindow makes one
-    mov ax, bx                      ;   (SPEC.md 124.22.12)
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]               ;   (SPEC.md 124.22.12)
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -5736,10 +5733,7 @@ w16d_mkdlg:
     jc .fail
     ICALL w16_findcls               ; BX = the class
     jc .fail
-    mov ax, bx
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -5854,10 +5848,8 @@ w16d_ownwin:
     mov al, [bx + W16W_CLS]         ; the class's, by name
     cmp al, 0xFF
     je .size
-    mov ah, W16C_SIZE
-    mul ah
+    ICALL w16_clsget
     mov di, ax
-    add di, w16_cls
     mov ax, [di + W16C_MENU]
     mov dx, [di + W16C_MENU + 2]
     mov cx, ax

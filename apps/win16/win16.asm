@@ -71,7 +71,7 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 12             ; classes (SPEC.md 124.8; File Manager 3.0
+W16_MAXCLS   equ 64             ; classes (SPEC.md 124.8; File Manager 3.0
                                 ;   registers 9, SPEC.md 124.27)
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
@@ -80,7 +80,9 @@ W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16Q_NWIN    equ 16             ; selectors a program may make (124.31.6)
 W16Q_NDOS    equ 4              ; GlobalDOSAlloc's blocks at once (124.31.3)
-W16C_SIZE    equ 32             ; a class record
+W16C_SIZE    equ 32             ; a class record...
+W16C_STRIDE  equ 33             ; ...and its task byte: a record in the class
+                                ;   block (SPEC.md 124.25.18.1)
 W16W_SIZE    equ 102            ; a window record
 W16_MAXTASK  equ 4              ; Windows programs in one instance, its
                                 ;   tasks (SPEC.md 124.28.1)
@@ -491,7 +493,10 @@ section .w16dlg
     W16BSS w16_namebuf, 16      ; a class name, folded
     W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
     W16BSS w16_cwslot, 2
-    W16BSS w16_cls, W16_MAXCLS * W16C_SIZE
+    W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet
+                                ;   (SPEC.md 124.25.18.1), and the one record
+    W16BSS w16_ccb, W16C_STRIDE  ;   copied out of it, w16_clsget's
+    W16BSS w16_cbi, 1           ;   ...and its index
     W16BSS w16_wnd, W16_MAXWND * W16W_SIZE
     W16BSS w16_q, W16_QLEN * MSG_SIZE
     W16BSS w16_qhead, 1
@@ -1236,7 +1241,6 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
                                 ;   to w16t_post, which runs one to it there
                                 ;   (SPEC.md 124.33.2). Next to w16_ntk on purpose
     W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
-    W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 

@@ -233115,7 +233115,7 @@ as `?`.
 
 ### 124.8 USER: windows, the queue and the pump *(shipped in S3)*
 
-**Classes.** At most 12 (`W16_MAXCLS`; 8 until File Manager's nine, 124.27.1). `RegisterClass` copies:
+**Classes.** At most 64 (`W16_MAXCLS`; 12 until §124.25.18.1 moved the table out of bss, 8 before File Manager's nine, 124.27.1). `RegisterClass` copies:
 
 - the name: at most 15 characters, compared without regard to case, as
   Windows does;
@@ -236988,17 +236988,36 @@ the loader part. Part bytes (kern_mega arm): the library part (dialog part) 64,7
 `GetClassInfo` arm), the loader part 17,072 to 17,100 (+28, seven fixed rows).
 Image + bss of `win16.o88`: 37,887 + 26,706 before and after.
 
-**What it did not cure (seen 2026-11-04, kern_mega, Mozart).** `GetClassInfo`
-and `RegisterClass` now succeed for VBRUN300's superclasses, which fill the
-class table: `W16_MAXCLS` is 12, and VB registers `ThunderRTMain`,
-`PictureBox`, `TextBox`, `Frame`, `CommandButton`, `CheckBox`, `OptionButton`,
-`ComboBox`, `ListBox`, `HScrollBar`, `VScrollBar` and `Timer` before the
-13th, `ThunderPrinter`, is refused and VB ends with *Unexpected error;
-quitting*. With 17 it gets to `ThunderDriveList` and stops at the next. VB 3
-has about 26 classes, so the table needs about 32 records, 33 bytes each
-(`W16C_SIZE` and `w16_ctask`), 660 resident bytes against 458 of room and a
-60-byte allowance: an owner decision (a heap claim for the table is the
-way that costs none).
+##### 124.25.18.1 The class table is a block of global memory *(ctlproc, DECISIONS 13:05)*
+
+The first thing the superclasses met was the class table. It was `W16_MAXCLS`
+= 12 records of 32 bytes in bss (and `w16_ctask`, a byte each), and VB
+registers `ThunderRTMain`, `PictureBox`, `TextBox`, `Frame`, `CommandButton`,
+`CheckBox`, `OptionButton`, `ComboBox`, `ListBox`, `HScrollBar`, `VScrollBar`
+and `Timer` before its 13th, `ThunderPrinter`, which was refused (seen
+2026-11-04: *Unexpected error; quitting*). VB 3 has about 26 classes.
+
+**The table is now a block of the program's global memory**, `W16_MAXCLS` = 64
+records of `W16C_STRIDE` = 33 bytes (the 32-byte record and its task, now
+`W16C_TASK`, in it), made fixed by `w16_gnew` at the first `RegisterClass` by
+`w16s_clsadd` (system-library part), its segment in `w16_clsseg` (0 = none yet:
+`GetClassInfo` and `CreateWindow` find nothing without asking for memory). It
+is not a map claim, so it costs none of an owner's eight. The block is not
+grown: 64 is the limit, and a failed block or a full table answers
+`RegisterClass` FALSE and the program carries on.
+
+**No record is read in place.** `w16_clsget` (AL = the index) copies a record
+into `w16_ccb`, one 33-byte record in bss with its index in `w16_ccbi`, and
+answers its address; `w16_findcls` answers that copy (BX = `w16_ccb`), so
+every user reads `[bx + W16C_*]` as before. The copy is good until the next
+lookup. `w16_clsput` writes it back (`SetClassWord`). A class's atom is
+`0C000h` + its index, no longer its record's offset. A task's end clears its
+classes in the block (`w16t_end`).
+
+**What it costs**, `win16.o88`, kern_mega arm: image + bss 37,910 + 26,706
+before, 37,970 + 26,346 after: **-300 resident bytes** (the bss falls by 360,
+the lookups and the two helpers add 60). Part bytes: see the diary. 64 records
+is 2,112 bytes of the program's global heap, taken at the first class.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -237885,7 +237904,7 @@ owner is kept beside them, a byte for each, with the task's index plus 1:
 | table | owner | used for |
 |---|---|---|
 | windows | `w16_wtask`, a byte a window | which queue a window's input goes to; `GetWindowTask`; `EnumTaskWindows`; the windows a task's end destroys |
-| classes | `w16_ctask`, a byte a class | a class is its task's: `CreateWindow` finds the caller's class of that name, then a `CS_GLOBALCLASS` one, then WIN16's own; two programs can register one name |
+| classes | `W16C_TASK`, a byte a class (in the class block, 124.25.18.1) | a class is its task's: `CreateWindow` finds the caller's class of that name, then a `CS_GLOBALCLASS` one, then WIN16's own; two programs can register one name |
 | global blocks | `GH_TASK`, the byte at +10 of the block's header: the owner's index + 1, 0 none | the blocks a task's end frees |
 | timers | the timer record's `USED` byte, which is the setting task's index + 1 rather than 1 | which task hears `WM_TIMER` |
 

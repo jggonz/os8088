@@ -81,10 +81,9 @@ w16od_find:
     cmp byte [bx + W16W_KIND], 0    ; WIN16's own classes have none
     jne .no
     mov al, [bx + W16W_CLS]
-    mov cl, W16C_SIZE
-    mul cl
+    ICALL w16_clsget
     mov di, ax
-    test byte [w16_cls + di + W16C_STYLE], CS_OWNDC | CS_CLASSDC
+    test byte [di + W16C_STYLE], CS_OWNDC | CS_CLASSDC
     jz .no
     cmp word [w16_odseg], 0
     jne .have
