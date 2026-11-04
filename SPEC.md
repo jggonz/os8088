@@ -232547,9 +232547,12 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
   `kern_mega`, whose disks carry no WIN16 (§124.18.1). On a machine without
   WIN16.O88 a forward ends in the association search's `Needs WIN16.O88`
   toast with DOS's window already gone, which names what to get. The test
-  disk's DOS.O88 is a copy of the shipped one, in the ROOT beside the
-  programs, where the association's rung 2 (the document's own folder,
-  §54.4.2) finds it first.
+  disk's DOS.O88 is a copy of the shipped one, beside the programs - in the
+  ROOT with the TINY16 variants and in `FIXTURES\` with the Open Watcom
+  fixtures and their libraries, which `make win16test` takes by name and
+  keeps out of the root's 64 listed entries - where the association's rung 2
+  (the document's own folder, §54.4.2) finds it first. WIN16.O88 stays in
+  the root, which rung 3 reaches from either.
 - **Finding the package:** `WIN16` is a BUILT-IN app stem in
   `kernel/assoc.inc`, beside `DOS` and for DOS's reason: its documents sit on
   somebody else's disk, so a declaration harvested at a full mount could not
