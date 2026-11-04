@@ -76,8 +76,8 @@ w16_i2f:
 .ver:
     mov bx, 0x020A                  ; MSCDEX 2.10
     jmp short .out
-.lst:                               ; 150Dh: the unit of each CD drive
-    mov byte [es:bx], 0
+.lst:                               ; 150Dh: each CD drive's NUMBER (0 = A:),
+    mov [es:bx], dl                 ;   a byte each - not its unit, 1501h's
 .out:
     pop dx
     pop bp

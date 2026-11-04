@@ -4661,3 +4661,37 @@ nobody looked at.
 - A `win16setup` row.
 - Phase A's rows have no kern_mega leg.
 - The final pass (S25) is still to run.
+
+## 2026-11-04: MSCDEX answers (WIN16-NEXT-PLAN Q3)
+
+**What it is.** A CD-ROM title's installer asks DOS, through `int 2Fh`
+`15xxh`, whether MSCDEX is there and which letter the CD is. WIN16 already
+owned `int 2Fh` (124.2.1) and answered nothing, so no third vector was
+needed: `w16_i2f` now answers `1500h`, `150Bh`, `150Ch` and `150Dh` from
+one byte, the CD's volume, which `w16_entry` asks `CDROM.DRV` for once.
+Every other `15xxh` is refused rather than faked (SPEC.md 124.33.3).
+
+**Who asks.** A byte scan of the titles found Sir Hangman's `_INST16.EXE`
+asking `1500h` and `150Bh`, and Windows' own `MCICDA.DRV` asking
+`1500h`, `150Ch`, `150Dh` and `1510h`. Mozart's and Arcade's setups ask
+only APPEND.
+
+**A wrong answer caught in review.** The first version wrote the drive's
+unit, 0, into `150Dh`'s buffer. MSCDEX writes the drive's NUMBER there
+(0 = A:); the unit is `1501h`'s. The fixture had been written to the same
+misreading, so it passed. Both now say 3 for D:, and the fixture also checks
+that only one byte was written and that with no drive `150Bh`-`1510h`
+change nothing.
+
+**Why D: is 3.** The kernel keeps C: for a hard disk (SPEC.md 18.7.4), so
+a CD driver's volume is the first free row from D:. The row's first draft
+expected 2; the reason it is 3 is that reservation, not the run.
+
+**What it cost.** No kernel byte. Image + bss, against 65,024: real mode
+63,626 -> 63,736, the kern_mega arm 64,491 -> 64,601 (423 left). The old
+note's "the arm has 92" was stale; the arm had 533.
+
+**Tested.** Built; the row `win16mscdex` (three QEMU legs: a disc, an empty
+drive, no drive) was seen green on the first version and is to be re-run in
+the final pass with the corrected `150Dh`. The kern_mega arm's handler is
+not yet run in protected mode.

@@ -1278,8 +1278,8 @@ w16_entry:
     call OSAPI_DRV_CALL
     pop es
     jc .nocd
-    inc dl
-    mov [w16_cdvol], dl
+    inc dl                          ; DL = FFh, no volume registered (a full
+    mov [w16_cdvol], dl             ;   table, 119.4): 0, none, as no driver
 .nocd:
     call OSAPI_ARG_FILE             ; CF=1: launched empty
     jc .idle

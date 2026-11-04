@@ -239254,7 +239254,14 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   answers the CD-ROM multiplex, from one byte. `w16_entry` asks `CDROM.DRV`
   once (`CDV_DRIVE`, 119.4, `DI` = 0 so no string): if the driver is
   attached, its `DL` is the CD's volume index, kept as `w16_cdvol` = index +
-  1 (0 = none). The handler runs on the program's stack with IF = 0 and can
+  1 (0 = none; a driver whose volume the table refused answers `DL` = FFh,
+  which the same `+ 1` makes none). A volume index is the drive letter
+  (`GetDriveType` reads the same table), and a CD is never C:, which
+  `dsk_vol_add` keeps for a `DRVC_DISK` (18.7.4), so with no other driver's
+  volume ahead of it the CD is D:, 3. The byte is asked at the instance's
+  start and not again: a `CDROM.DRV` ticked or unticked in the Control Panel
+  while the instance runs is seen by the next WIN16 launched, as MSCDEX
+  loaded at boot is seen by the next Windows started. The handler runs on the program's stack with IF = 0 and can
   make no kernel call, so it reads that byte through CS and nothing else.
   **MSCDEX is "installed" exactly when that byte is not 0**, with the CD as
   the one drive, unit 0, at that volume's letter:
@@ -239264,7 +239271,7 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   | `1500h` installation check | `BX` = 1, `CX` = the drive (0 = A:) | `BX` = 0, the rest as it came |
   | `150Bh` is `CX` a CD drive | `BX` = `ADADh`, `AX` = 1 for the CD's letter, else 0 | every register as it came |
   | `150Ch` version | `BX` = `020Ah` (2.10) | as it came |
-  | `150Dh` drive letters | `ES:BX` is the caller's buffer, one byte per drive: 0, the unit | as it came |
+  | `150Dh` drive letters | `ES:BX` is the caller's buffer, one byte per drive: the drive's NUMBER, 0 = A: (the unit is `1501h`'s, not this) | as it came |
   | any other `15xxh` (`1501h` the device list, `1508h` absolute read, `1510h` device request) | CF = 1, `AX` = 1 (invalid function): refused, never faked | as it came |
 
   `1508h` and `1510h` are refused rather than answered because nothing asked
@@ -239276,5 +239283,13 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   WIN16 does not load: its MCI is `w16mci.inc`'s (124.32.4). The Mozart
   and Arcade installers ask only APPEND (`B700h`). A disc is not needed:
   like MSCDEX the answers describe the drive, and the disc is the file
-  layer's (`GetDriveType` of the letter is still 4). The kernels are
-  unchanged; the image cost is in the report of Q3 and in the diary.
+  layer's (`GetDriveType` of the letter is still 4). On kern_mega the
+  handler is entered in protected mode by `mega_swc` (20.18.1), with `CS`
+  the arm's code selector, so `[cs:w16_cdvol]` reads bss through it as
+  `w16file.inc`'s int 21h handler already does, and `150Dh`'s store is
+  through the selector the program put in `ES`. **What it cost**: no kernel
+  byte; image + bss against `APP_MAX_SIZE`'s 65,024, the real-mode arm
+  63,626 -> 63,736 (1,288 left) and the kern_mega arm 64,491 -> 64,601
+  (423 left), +110 each, 109 of handler and entry call and 1 of bss. The
+  "92" this note gave before was stale: the arm had 533 when it was
+  written over.

@@ -12,8 +12,9 @@ MSCDX.EXE (tests/win16/mscdx.c) asks 1500h, 150Bh for the CD's letter and the
 next, 150Ch, 150Dh and 1510h, and GetDriveType of the letter. Leg 1 boots the
 CD-ROM gate's system disk (SYSTEM.CFG wants CDROM.DRV) with build/cdfix.iso as
 the secondary master, so a drive is attached: the MessageBox must be
-"MSCDX OK n" with n the CD's letter (3: D:, measured: the first volume after the two
-floppies). Leg 2 boots the same disk with an EMPTY drive: still a drive, so
+"MSCDX OK n" with n the CD's letter: 3, D:, because C: is kept for a hard
+disk (SPEC.md 18.7.4) and a CD driver's volume is the first free row after
+it. Leg 2 boots the same disk with an EMPTY drive: still a drive, so
 OK again, which is MSCDEX's own rule (the answers describe the drive, not the
 disc). Leg 3, the shipped system disk with no CD at all, must say
 "MSCDX NONE". The MessageBox is read off the program's stack, as win16shx does.
