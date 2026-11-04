@@ -238509,6 +238509,44 @@ the program's DS back from its own stack first and stores through it
 not take this path, which is why the census did not list it. S25's pass
 counts again.
 
+#### 124.31.11 A fault in the program's code closes WIN16 *(WIN16-NEXT-PLAN Q1; KERN-MEGA-PLAN 14.139)*
+
+A protected-mode fault raised by a Win16 program's own instruction (a write
+past a segment's limit, a load of a bad selector: vectors 0, 3-7, 0Bh-0Dh)
+CLOSES WIN16 the way a package's own fault is closed (KERN-MEGA-PLAN 14.42),
+with the same toast, and does not stop the machine. Windows closes the
+offending program; WIN16 is one instance that may hold several programs
+(S-batch "several programs in one instance"), so today the whole instance
+closes with it. Closing one program of several is open.
+
+- **Attribution is by the code selector's BASE** when it is not an image's
+  pair. A program's CS is a SUB, a `SEG_SUBC` half or a tile over WIN16's
+  memory (124.31.3), so `mega_cs2ds`'s "data twin is 8 above" finds no
+  instance. `mega_fbown` reads the selector's base and asks the memory: above
+  1MB the pool block's owner byte (`MX_OWN`: the slot, `80h | slot` a region,
+  `A0h | slot` a claim), below it `mem_tab`'s `MC_OWN`. A selector below the
+  LDT allocator's range, a driver's block (`C0h |`), a kernel block, or no
+  block at all, is nobody's and the fault stays fatal.
+- **Naming is not closing.** The close still needs the running task's
+  innermost catch (`wm_pkgcall`, the loader's entry call) to name that same
+  instance, above the fault on the stack, or the instance's own worker. A
+  program therefore cannot get ANOTHER package closed: a CS over memory a
+  different package owns finds a catch for WIN16 and is refused.
+- **The +8 pair rule cannot blame the wrong package.** `mega_ldt2ds` takes a
+  twin only if the next entry is a present writable data descriptor over the
+  SAME base, and `mega_fown` then needs that selector to be a live instance's
+  `I_SPTR`, which is a pair's data half, so its code half is the entry before
+  it. A lone code selector cannot sit in that slot while the pair lives.
+- **Re-entry.** A fault whose CS is a GDT selector (a BIOS call run on the
+  stack `SEG_LEND` lent, the reflected `int 10h`-`1Fh` of 124.31.2) is the
+  kernel's and stays fatal as before: `mega_fkill` rejects it before any
+  attribution. A fault in the program's code inside a callback unwinds to that
+  callback's catch; the stack lent by `SEG_LEND` is the instance's own and
+  goes with it (`mx_relinst`).
+- **Test.** `tests/win16ovr.py` step 3 (Bochs): OVRTEST's write one byte past
+  its block raises #GP inside its code, `kern_mega CLOSED` follows, and
+  `[mega_infault]` stays 0.
+
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 
 Windows 3.1's multimedia library: the calls a program uses to time things,

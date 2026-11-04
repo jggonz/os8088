@@ -13581,3 +13581,22 @@ Seen (QEMU, kern_mega, looks, 2026-11-03):
 
 The overrun itself cannot be seen under QEMU, which checks no data
 segment's limit. `tests/win16ovr.py` is Bochs's row for it.
+
+### 14.139 A WIN16 program's fault closes WIN16, attributed by the code selector's base (2026-11-04)
+
+WIN16-NEXT-PLAN Q1. `mega_fkill` named the faulting package through
+`mega_cs2ds` (the data twin 8 above an image's code half) and `mega_fown`
+(an instance's `I_SPTR`, or a conventional claim's owner). A WIN16 program's
+CS is a SUB or tile of WIN16's memory, above 1MB since S22 batch 9, so
+neither found an owner and OVRTEST's #GP was fatal (`FAULT 0D`, halt).
+
+*The +8 check.* It cannot close the wrong package: `mega_ldt2ds` needs a
+present writable data entry over the same base next to the code entry, and
+`mega_fown` needs that selector to be a live instance's `I_SPTR`, a pair's data
+half; the code half is the entry before it. And the catch must still call into
+the same instance.
+
+*The fix.* When the pair lookup finds nothing, `mega_fbown` attributes the CS
+by its base: `MX_OWN` of the pool block (slot, `80h | slot`, `A0h | slot`) or
+`mem_tab`'s `MC_OWN` below 1MB, then the normal close. SPEC.md 124.31.11.
+A GDT CS (BIOS on a lent stack) stays fatal.

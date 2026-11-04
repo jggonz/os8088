@@ -2495,9 +2495,14 @@ mega_fkill:
     test al, 4
     jz .ret                         ; a GDT CS
     call mega_cs2ds                 ; AX = S
-    jc .ret
+    jc .byb
     call mega_fown                  ; DI = the record, DX = its region
-    jc .ret
+    jnc .own
+.byb:
+    mov ax, [ss:bp+26]              ; not an image's pair: whose memory is the
+    call mega_fbown                 ; code selector's BASE in (14.139)? A WIN16
+    jc .ret                         ; program's CS is a SUB or tile of WIN16's
+.own:
     ; --- the catch
     mov bl, [sch_cur]
     xor bh, bh
@@ -2653,6 +2658,73 @@ mega_fkill:
 .ret:
     mov ax, MEGA_SEL_KDATA
     mov ds, ax
+    ret
+
+; mega_fbown - AX = a CODE selector in the allocator's range that is not an
+; image's pair (mega_cs2ds / mega_fown found no owner) -> DI = the package
+; instance whose MEMORY its base lies in, DX = that instance's region; CF = 1
+; none. KERN-MEGA-PLAN 14.139, mega_bown's rule applied to a fault: above 1MB
+; the pool block's MX_OWN (slot, 80h | slot a region, A0h | slot a claim);
+; below it mem_tab's MC_OWN (mega_fown's .hit). A driver's (C0h|), the
+; kernel's (FDh-FFh) or no block: nobody's, so the fault stays fatal. It only
+; NAMES the instance: mega_fkill's catch must still call into that very
+; instance, so a program can never get another package closed. ES = .lowbss
+; in and out. Clobbers AX, BX, CX, SI
+mega_fbown:
+    cmp ax, MEGA_LDT_FREE0 * 8      ; (the fixed aliases are the GDT's)
+    jb .no
+    call mega_selbase               ; DX:AX = its base
+    jc .no
+    cmp dx, MEGA_XPOOL >> 16
+    jb .conv
+    call mx_rel                     ; AX = its KB from the pool's base
+    jc .no
+    push es
+    MXT_ES
+    call mx_inblk                   ; SI = the block
+    mov bl, [es:si+MX_OWN]          ; (MOV and POP keep CF)
+    pop es
+    jc .no
+    mov al, bl
+    and al, 0xF0
+    jz .slot
+    cmp al, 0x80
+    je .slot
+    cmp al, 0xA0
+    jne .no
+.slot:
+    and bl, 0x0F
+    cmp bl, MEGA_FKINST
+    jae .no
+    xor bh, bh
+    shl bx, 5                       ; I_RECSZ = 32
+    lea di, [bx+inst_tab]
+    cmp byte [di+I_STATE], 0
+    je .no
+    test byte [di+I_KIND], KIND_PKG
+    jz .no
+    mov dx, [di+I_SPTR]
+    clc
+    ret
+.conv:
+    shr ax, 4
+    shl dx, 12
+    or ax, dx                       ; AX = its paragraph
+    mov bx, mem_tab
+    mov cx, MEM_MAX
+.w:
+    cmp word [es:bx+MC_SEG], 0
+    je .wn
+    mov dx, ax
+    sub dx, [es:bx+MC_SEG]
+    jb .wn
+    cmp dx, [es:bx+MC_PARA]
+    jb mega_fown.hit
+.wn:
+    add bx, MC_SIZE
+    loop .w
+.no:
+    stc
     ret
 
 ; mega_fown - AX = a data segment -> DI = the package instance it is part of,
