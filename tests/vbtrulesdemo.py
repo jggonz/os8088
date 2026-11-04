@@ -29,6 +29,11 @@ def dmg(power, kind="physical", hits=1):
 
 def make_project(path=None, seed=SEED):
     p = B.demo_project(None)
+    p.set_title(None)                   # (the battle itself: no title loop,
+    for k in ("victory", "defeat"):     # and the endings held, as the
+        p.set_ending(k, "hold")         # lockstep's ending is read)
+    p.add_opening("title", "fanfare")
+    p.move_opening(1, -1)
     p.set(("name",), "The rules battle")
     p.set(("seed",), seed)
     p.set(("actions",), {})

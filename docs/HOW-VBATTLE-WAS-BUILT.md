@@ -497,6 +497,53 @@ demo's 848 KB against a 360 KB disk's 354.
 76% of the ST-225 with the music beside it - inside the disk, which is what
 the 86Box runs with no stalls said.
 
+## Loops at either end, and a fade the engine draws (2026-11-04)
+
+The owner asked for a looped opening and ending, "the intent here is fade
+transitions, but the user could provide clips that join in other ways too",
+and for the end to lead back round so the battle can be played in a loop.
+The pieces were mostly there: a clip that seams onto a loop (every action
+does it to the idle loop), clips entered at a loop's anchors, the openings'
+chain from black. What was new was a loop that is not the idle loop, and a
+fade.
+
+**A loop goes round in one ring.** The idle loop is resident; a title made
+from footage is not small enough for that. Streaming a loop would have
+meant the reader wrapping on the disk at a record boundary, which is not a
+cluster boundary. So a loop is read into one of the two clip rings whole,
+and at its lap's end the picture's and the sound's cursors simply go back
+to record 1. The price is a ceiling - a loop must fit a ring, 144 KB on a
+640 KB XT - and the engine refuses to play rather than lap over its own
+head, while the Build tab says TOO BIG first.
+
+**The fade freezes the frame and dissolves it.** "Draw less of the frame
+until we're drawing none of it" could have meant fading a moving picture,
+but masking every decoded frame on an XT is a second full-screen pass a
+frame it does not have. So the hook draws nothing while the UI task ANDs
+the screen with a 4 x 4 ordered threshold a step at a time, each step paced
+by the hook's own frame clock so the fade takes the same time on any
+machine, and the sound comes down a shift every quarter. The openings and a
+title both start from black, which a fade leaves, so the joins stay exact.
+The window previews it with the same table the engine uses; the test
+reads the table out of the engine's source to hold them equal.
+
+**An end loop lives in the canvas, not the whole screen.** A JOIN has to
+be exact, and an ending's last frame has the band under it - text the host
+cannot know. Keeping the end loop to the canvas keeps the join exact and
+leaves the band up to say "Enter: again".
+
+**Found on the way: `vb_start_clip` clobbered AL**, and both openings'
+sound bookings read it afterwards as the clip. It worked because opening 0
+was clip 0 and its exit 0 - the low byte of what AX held. It keeps AX now.
+
+Measured on MartyPC's XT (`tests/vbtloops.py`): the title laps and what is
+on the glass is one of its own frames 58 to 59 times in 61 to 63 looks
+(the rest catch a frame half drawn); the fade's 12 steps come in order and
+take the lit bytes from 636 to under a third; victory fades or joins its
+end loop and that laps; Enter plays again from the title. With `vb_fmask`
+drawing nothing the row fails (693 lit bytes before and after). The engine
+grew 1,620 bytes of image (14,645 to 16,265), 1,124 on the disk.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

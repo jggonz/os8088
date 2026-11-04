@@ -285,17 +285,19 @@ with tempfile.TemporaryDirectory() as tdir:
     x, at = A.openings_sound(pr)
     spf = pr.d["target"]["rate"] // pr.d["target"]["fps"]
     nf = [pr.clip_frames(o["clip"]) for o in pr.d["openings"]]
-    ok(len(x) == sum(nf) * spf and [a for a, _ in at] == [0, nf[0] * spf],
+    starts = [sum(nf[:i]) * spf for i in range(len(nf))]
+    ok(len(x) == sum(nf) * spf and [a for a, _ in at] == starts,
        "the openings' sound is each one's frames long, one after another "
        "(%d samples)" % len(x))
+    pr.add_opening("title")
     pr.move_opening(1, -1)
-    ok([o["clip"] for o in pr.d["openings"]] == ["reveal", "title"] and
+    ok([o["clip"] for o in pr.d["openings"]] == ["title", "reveal"] and
        G.opening_lines(pr)[1].endswith("joins idle frame %d" %
-                                       pr.d["clips"]["title"]["exit"]),
+                                       pr.d["clips"]["reveal"]["exit"]),
        "an opening moved earlier; the last is the scene's, and says where it "
        "joins")
     for _ in range(6):
-        pr.add_opening("title")
+        pr.add_opening("reveal")
     try:
         pr.add_opening("title")
         ok(False, "a ninth opening is refused")
@@ -320,9 +322,11 @@ with tempfile.TemporaryDirectory() as tdir:
     pr.set(("target", "profile"), "floppy")
     rows = G.budget_rows(A.budget(pr, data))
     tags = dict((v[0], t) for v, t in rows)
-    ok(rows[0][0][0] == "title" and tags["ari_limit"] == "over",
-       "the budget names clips as the project does, and the Limit is over a "
-       "floppy's disk (%s)" % tags["ari_limit"])
+    ok(rows[0][0][0] == pr.d["openings"][0]["clip"] and
+       tags["ari_limit"] == "over" and
+       any(v[0] == "the title (a loop)" for v, _ in rows),
+       "the budget names clips as the project does - the title loop too - "
+       "and the Limit is over a floppy's disk (%s)" % tags["ari_limit"])
     open(os.path.join(tdir, "BATTLE.VBT"), "wb").write(data)
     try:
         B2.disk_plan(pr, 0)
@@ -341,6 +345,53 @@ with tempfile.TemporaryDirectory() as tdir:
     ok(r.returncode == 0 and v.returncode == 0 and
        sorted(os.path.basename(f) for f in ls) == ["BATTLE.VBT", "VBATTLE.O88"],
        "a 1.44 MB floppy of it: VBATTLE.O88 and BATTLE.VBT, verified (%s)" % ls)
+
+    # 8: the title loop, the fade and the endings (SPEC.md 125.3.1)
+    import re
+    src = open(os.path.join(ROOT, "apps/vbattle/vbloop.inc")).read()
+    tab = src[src.index("vb_fmasks:"):]
+    eng = [[int(x, 16) for x in re.findall(r"0x([0-9A-F]{2})", ln)]
+           for ln in tab.splitlines()[1:17]]
+    ok(G.fade_masks() == eng, "the window's fade is the engine's: its 16 x 4 "
+       "masks are vbloop.inc's VB_FMASK")
+    px = np.full((8, 8), 3, np.uint8)
+    ok(not G.fade_frame(px, 16, 16).any() and
+       (G.fade_frame(px, 8, 16) == 0).sum() == 32 and
+       G.fade_frame(px, 0, 16).all(),
+       "a fade puts none, half, then all of the frame out")
+    ok(G.spread_anchors([0.03] * 16, [0, 1, 2, 3]) == [0, 4, 8, 12],
+       "anchors as good as each other are spread a quarter of the loop apart")
+    pr = P.Project.load(vbp)
+    pr.set_title("title", (10, 34), leave="reveal")
+    ok(any(x.where == "title" for x in pr.errors()),
+       "a title left by a clip with nowhere to enter it is an ERROR")
+    pr.set_title("title", (10, 34), leave="reveal", anchors=(0, 8, 16))
+    pr.set_ending("victory", "join", "victory", (0, 20))
+    pr.set_ending("defeat", "fade", "defeat", (0, 12))
+    ok(not pr.errors(), "a title left by REVEAL, victory joining and defeat "
+       "fading to their loops: no errors (%s)" % pr.errors())
+    data = B2.build_project(pr)         # (verify runs inside: every path)
+    bd = B2.Bundle(data)
+    tl = bd.clips[bd.title]
+    ok(bd.title != 0xFF and bd.leave == 0 and tl["flags"] & B2.CF_LOOP and
+       tl["nrec"] == 25 and bd.clips[0]["flags"] & B2.CF_ENTER and
+       len(bd.clips[0]["anch"]) == 3 and bd.endings["victory"][0] == 2 and
+       bd.endings["defeat"][0] == 1,
+       "it builds: the title a loop of 24 frames and its seam, opening 0 "
+       "entered at its 3 anchors, the endings' ways and loops in the header")
+    bad = bytearray(data)               # a lap that does not come round:
+    rs = bd.stream(tl)                  # its SEAM misses frame 0
+    s0 = tl["off"] + sum(len(r) for r in rs[:-1])
+    bad[s0 + len(rs[-1]) // 2] ^= 0x55
+    try:
+        B2.verify(bytes(bad), quiet=True)
+        ok(False, "a title whose lap is broken is refused")
+    except ValueError as e:
+        ok("loop" in str(e) or "title" in str(e) or "join" in str(e),
+           "a title whose lap is broken is refused: %s" % e)
+    pr.set_ending("victory", "join", None)
+    ok(any(x.where == "endings.victory" for x in pr.errors()),
+       "joining an end loop that is not there is an ERROR")
 
 
 if fails:

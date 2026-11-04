@@ -30,6 +30,13 @@ A project file (version 1):
                        "level", "until"?}]}} - a cue with "until" stops at
                        that frame of the clip,
      "openings": [{"clip", "sound"}] - in turn; the last joins the loop,
+     "title":    null | LOOP + {"leave": null (a fade) | a clip id, "anchors":
+                 [k...] (the title's frames the leaving clip is entered at)}
+                 - SPEC.md 125.3.1: before the openings, round until a key,
+     "endings":  {"victory"|"defeat": {"how": "hold" | "fade" (to its loop)
+                 | "join" (its clip seams onto its loop's frame 0) |
+                 "again" (fade, and play again), "loop": LOOP | null}},
+     "fade_steps": 1..16, a fade's steps, one a frame,
      "characters": [{"name", "hp", "mp", "atk", "mag", "def", "mdef",
                      "evade", "menu": {"top": [ITEM], "side": [action]}}],
                    ITEM = {"action": id} | {"label", "sub": [action ids]},
@@ -49,6 +56,8 @@ A project file (version 1):
               "effects": [{"verb", ...}] (vbtrules.compile_rules says which
               fields each verb reads), "pools": {POOL: [clips]},
               "by_target": {character name: {POOL: [clips]}}}
+    LOOP = {"clip", "loop": [a, b] (the clip's frames a..b-1, round), "sound":
+            a sound id or null}
     STANCE = {"name", "modifiers": {"atk"|"mag"|"def"|"mdef": %},
               "moves": [{"action", "weight", "rule", "target"}],
               "responses": [{"trigger", "named", "chance", "action"}],
@@ -64,6 +73,8 @@ import json
 import os
 
 FORMAT = "vbtproj"
+NO_ENDING = {"how": "hold", "loop": None}
+ENDING_HOWS = ("hold", "fade", "join", "again")
 VERSION = 1
 
 UI_SOUNDS = ("move", "open", "close", "take", "deny")
@@ -91,6 +102,9 @@ def blank():
         "ui_sounds": {}, "idle": None, "clips": {}, "openings": [],
         "characters": [], "actions": {}, "items": [], "images": [],
         "menu_looks": {}, "band_image": None, "seed": None,
+        "title": None, "endings": {"victory": dict(NO_ENDING),
+                                   "defeat": dict(NO_ENDING)},
+        "fade_steps": 16,
         "enemy": {"name": "ENEMY", "hp": 100, "mp": 0, "atk": 16, "mag": 16,
                   "def": 0, "mdef": 0, "evade": 0,
                   "stances": [{"name": "normal", "moves": [],
@@ -108,6 +122,11 @@ def upgrade(d):
     if not isinstance(v, int) or v < 1 or v > VERSION:
         raise ValueError("a project of version %r; this reads 1..%d"
                          % (v, VERSION))
+    d.setdefault("title", None)         # (the loops came after version 1's
+    d.setdefault("endings", {})         # first files: absent, there are none)
+    for k in ("victory", "defeat"):
+        d["endings"].setdefault(k, dict(NO_ENDING))
+    d.setdefault("fade_steps", 16)
     return d
 
 
@@ -526,7 +545,57 @@ class Project:
                     used += pool
         e = self.d["enemy"]
         used += [x for x in (e.get("victory"), e.get("defeat")) if x]
+        t = self.d.get("title")
+        if t:
+            used += [t["clip"]] + ([t["leave"]] if t.get("leave") else [])
+        for en in self.d["endings"].values():
+            if en.get("loop"):
+                used.append(en["loop"]["clip"])
         return used
+
+    # --- the title loop and the endings (SPEC.md 125.3.1) ---------------------
+    def set_title(self, clip, loop=None, sound=None, leave=None, anchors=()):
+        """The TITLE loop: clip CLIP's frames LOOP (all of it by default),
+        round until a key, then a fade (LEAVE None) or clip LEAVE, entered
+        at the title's frames ANCHORS. CLIP None: no title"""
+        def f(d):
+            if clip is None:
+                d["title"] = None
+                return
+            c = d["clips"][clip]
+            lp = list(loop) if loop else [0, c["out"] - c["in"] + 1]
+            d["title"] = {"clip": clip, "loop": lp, "sound": sound,
+                          "leave": leave, "anchors": sorted(set(anchors))}
+        self._edit(f)
+
+    def set_ending(self, outcome, how, clip=None, loop=None, sound=None):
+        """How OUTCOME ("victory"/"defeat") ends: HOW, and its END loop -
+        clip CLIP's frames LOOP - for "fade" and "join" """
+        if how not in ENDING_HOWS:
+            raise ValueError("an ending is %s" % ", ".join(ENDING_HOWS))
+
+        def f(d):
+            lp = None
+            if clip:
+                c = d["clips"][clip]
+                lp = {"clip": clip, "sound": sound, "loop": list(loop) if loop
+                      else [0, c["out"] - c["in"] + 1]}
+            d["endings"][outcome] = {"how": how, "loop": lp}
+        self._edit(f)
+
+    def loop_sound(self, clip, loop):
+        """Clip CLIP's own soundtrack under its frames LOOP, as a sound for a
+        title or end loop; its id"""
+        sid = "%s_lp" % clip[:12]
+
+        def f(d):
+            c = d["clips"][clip]
+            d["sounds"][sid] = {"kind": "source", "source": c["source"],
+                                "in": c["in"] + loop[0],
+                                "out": c["in"] + loop[1] - 1, "level": 1.0,
+                                "whole": False}
+        self._edit(f)
+        return sid
 
     # --- the checks -----------------------------------------------------------
     def check(self):
@@ -571,13 +640,17 @@ class Project:
             if b - a < 2:
                 err("idle", "a loop of %d frames" % (b - a))
         n = self.idle_frames() if d["idle"] else 0
+        tt = d.get("title") or {}         # (a title's or an end loop's clip
+        looped = {tt.get("clip"), tt.get("leave")} | {   # needs no anchor)
+            en["loop"]["clip"] for en in d["endings"].values() if en.get("loop")}
         for cid, c in d["clips"].items():
             w = "clips." + cid
             if c["source"] not in d["sources"]:
                 err(w, "no source %s" % c["source"])
             if c["out"] < c["in"]:
                 err(w, "out before in")
-            opening = any(o["clip"] == cid for o in d["openings"])
+            opening = any(o["clip"] == cid for o in d["openings"]) or \
+                cid in looped
             if not opening and not c["anchors"]:
                 err(w, "no anchor: it can never start")
             for k in c["anchors"]:
@@ -670,10 +743,56 @@ class Project:
         for k, lk in d.get("menu_looks", {}).items():
             if lk.get("image") and lk["image"] not in names:
                 err("menu_looks." + k, "no image %s" % lk["image"])
+        self._loops_check(err, warn)
         if not any(p.level == "ERROR" for p in out):
             out += self.rules_check()
         out += self.engine_gaps()
         return out
+
+    def _loops_check(self, err, warn):
+        d = self.d
+
+        def loop(w, lp, need=2):
+            if not lp:
+                return
+            c = d["clips"].get(lp["clip"])
+            if c is None:
+                return err(w, "no clip %s" % lp["clip"])
+            a, b = lp["loop"]
+            if not 0 <= a < b <= c["out"] - c["in"] + 1 or b - a < need:
+                err(w, "a loop of frames %d..%d of %s (%d frames)" % (
+                    a, b - 1, lp["clip"], c["out"] - c["in"] + 1))
+            if lp.get("sound") and lp["sound"] not in d["sounds"]:
+                err(w, "no sound %s" % lp["sound"])
+        t = d.get("title")
+        if t:
+            loop("title", t)
+            if t.get("leave"):
+                if t["leave"] not in d["clips"]:
+                    err("title", "no clip %s to leave by" % t["leave"])
+                n = t["loop"][1] - t["loop"][0]
+                if not t.get("anchors"):
+                    err("title", "it is left by %s and has no frame to enter "
+                        "it at (an anchor)" % t["leave"])
+                elif any(not 0 <= k < n for k in t["anchors"]) or \
+                        len(t["anchors"]) > 16:
+                    err("title", "anchors %s: 1 to 16 of its %d frames"
+                        % (t["anchors"], n))
+        if not 1 <= d.get("fade_steps", 16) <= 16:
+            err("fade_steps", "a fade is 1 to 16 steps")
+        e = d["enemy"]
+        for k, en in d["endings"].items():
+            w = "endings." + k
+            if en["how"] not in ENDING_HOWS:
+                err(w, "an ending is %s" % ", ".join(ENDING_HOWS))
+            elif en["how"] in ("fade", "join"):
+                if not en.get("loop"):
+                    err(w, "%s to an end loop, and there is none" % en["how"])
+                loop(w, en.get("loop"))
+                if en["how"] == "join" and not e.get(k):
+                    err(w, "joins its end loop, and there is no %s clip" % k)
+            elif en["how"] == "again" and en.get("loop"):
+                warn(w, "plays again: its end loop is not played")
 
     def errors(self):
         return [p for p in self.check() if p.level == "ERROR"]

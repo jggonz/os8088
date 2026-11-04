@@ -43,8 +43,11 @@ os8088: put the two side by side on a disk.
 
     python3 os88vbtgui.py [PROJECT.vbp]
 
-The window: the Battle, Idle, Clips, Openings, Actions, Characters & menus,
-Enemy and Build tabs. Build writes BATTLE.VBT beside the project, checks
+The window: the Battle, Idle, Clips, Openings, Title & endings, Actions,
+Characters & menus, Enemy and Build tabs. Title & endings is a TITLE loop
+before the openings (left on Enter by a fade, or by a clip) and how victory
+and defeat end: held, faded or joined to an END loop that waits for Enter,
+or faded into playing again. Build writes BATTLE.VBT beside the project, checks
 every join, shows each clip against the disk it is made for and what the
 engine will claim of a 640 KB machine, and makes a disk of it: a floppy, or
 a hard disk image for 86Box or a real disk (it BOOTS os8088: what it boots

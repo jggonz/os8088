@@ -16747,6 +16747,18 @@ SOAK = [
         "same ending. Broken on purpose (the engine's damage shift 3 not 4) "
         "it FAILS at turn 1 naming both states",
         needs=("marty",)),
+    Row("vbtloops", "soak", py("tests/vbtloops.py"), 50.0,
+        "SPEC.md 125.3.1: the Video Battle's TITLE loop, FADE and ENDINGS on "
+        "MartyPC's XT, two bundles of the demo with a 1-HP enemy. A: the "
+        "title laps twice and the glass shows its own frames (the host's "
+        "decode); Enter fades it, the steps in order and the lit bytes "
+        "falling to under a third; the openings, the menu, one Attack, "
+        "victory fades the canvas to its end loop, which laps; Enter fades "
+        "and the play starts over at the title. B: the title left by an "
+        "entered clip, and victory JOINING its end loop with no fade. "
+        "Broken on purpose (vb_fmask drawing nothing) it FAILS naming the "
+        "lit bytes before and after",
+        needs=("marty",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "

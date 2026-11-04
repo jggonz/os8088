@@ -648,11 +648,13 @@ class App(object):
         self.party_tab = PartyTab(self, self.nb)
         self.enemy_tab = EnemyTab(self, self.nb)
         self.openings_tab = OpeningsTab(self, self.nb)
+        self.loops_tab = LoopsTab(self, self.nb)
         self.build_tab = BuildTab(self, self.nb)
         self.nb.add(self.battle_tab.f, text="Battle")
         self.nb.add(self.idle_tab.f, text="Idle")
         self.nb.add(self.clips_tab.f, text="Clips")
         self.nb.add(self.openings_tab.f, text="Openings")
+        self.nb.add(self.loops_tab.f, text="Title & endings")
         self.nb.add(self.actions_tab.f, text="Actions")
         self.nb.add(self.party_tab.f, text="Characters & menus")
         self.nb.add(self.enemy_tab.f, text="Enemy")
@@ -680,6 +682,7 @@ class App(object):
         self.party_tab.refresh()
         self.enemy_tab.refresh()
         self.openings_tab.refresh()
+        self.loops_tab.refresh()
         self.build_tab.refresh()
 
     def edit(self, fn, *a, **kw):
@@ -2374,10 +2377,424 @@ class OpeningsTab(object):
                      "Mixing the start...")
 
 
+# --- the Title & endings tab (SPEC.md 125.3.1) ----------------------------------------
+
+BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
+HOW_LABELS = (("hold", "Hold its last frame"),
+              ("fade", "Fade to its end loop"),
+              ("join", "Join its end loop"),
+              ("again", "Fade, and play again"))
+
+
+def fade_masks():
+    """The fade's byte masks, by threshold 1..16 and the row's y & 3 - the
+    engine's VB_FMASK table (apps/vbattle/vbloop.inc), which the test holds
+    this to"""
+    out = []
+    for t in range(1, 17):
+        row = []
+        for y in range(4):
+            m = 0
+            for x in range(4):
+                if BAYER4[y][x] >= t:
+                    m |= 3 << (6 - 2 * x)
+            row.append(m)
+        out.append(row)
+    return out
+
+
+def fade_frame(px, step, steps):
+    """Pixel frame PX at fade step STEP of STEPS, as the engine draws it: the
+    pixels whose 4 x 4 rank is under the threshold put to colour 0"""
+    import numpy as np
+    t = step * 16 // steps
+    h, w = px.shape
+    rank = np.array(BAYER4)[np.arange(h)[:, None] % 4, np.arange(w)[None, :] % 4]
+    out = px.copy()
+    out[rank < t] = 0
+    return out
+
+
+def loop_lines(cands, fps, against=None):
+    """The candidates' lines: frames, seconds, the seam's difference - and,
+    for an ending that JOINS, how its last frame differs from each start"""
+    out = []
+    for c in cands:
+        out.append("frames %d to %d (%.1f s): the seam %.2f%%%s" % (
+            c["start"], c["end"] - 1, (c["end"] - c["start"]) / float(fps),
+            c["score"] * 100, "" if against is None else
+            ", joined %.2f%%" % (against[c["start"]] * 100)))
+    return out
+
+
+def spread_anchors(scores, best, most=4):
+    """Of the frames within reach of the BEST (vbtana.attach's anchors and
+    any as good), the lowest-scoring at least a quarter of the loop apart:
+    four anchors side by side wait as long as one"""
+    n = len(scores)
+    lo = min(scores)
+    pool = sorted(set(best) | {k for k in range(n)
+                               if scores[k] <= lo * 1.5 + 0.002},
+                  key=lambda k: (scores[k], k))
+    gap = max(1, n // most)
+    out = []
+    for k in pool:
+        if all(min(abs(k - j), n - abs(k - j)) >= gap for j in out):
+            out.append(k)
+        if len(out) == most:
+            break
+    return sorted(out)
+
+
+class LoopPanel(object):
+    """One loop - the title, or an ending's - with its clip, its frames,
+    the recommended loops of that clip (vbtana.loop_candidates, the idle
+    loop's own), its sound, and Play; and for an ending, how it is reached"""
+
+    def __init__(self, tab, parent, kind):
+        tk, ttk = tab.app.tk, tab.app.ttk
+        self.tab, self.app, self.kind = tab, tab.app, kind
+        self.cands, self.pending = [], None
+        title = {"title": "The title: before the openings, round until "
+                 "Enter or Space", "victory": "Victory",
+                 "defeat": "Defeat"}[kind]
+        self.f = f = ttk.LabelFrame(parent, text=title, padding=4)
+        r = 0
+        if kind != "title":
+            ttk.Label(f, text="Then").grid(row=r, column=0, sticky="w")
+            self.how = tk.StringVar()
+            cb = ttk.Combobox(f, textvariable=self.how, state="readonly",
+                              values=[l for _, l in HOW_LABELS], width=22)
+            cb.grid(row=r, column=1, columnspan=3, sticky="w")
+            cb.bind("<<ComboboxSelected>>", lambda e: self._commit())
+            r += 1
+        ttk.Label(f, text="Loop clip").grid(row=r, column=0, sticky="w")
+        self.clip = tk.StringVar()
+        self.clipcb = ttk.Combobox(f, textvariable=self.clip, state="readonly",
+                                   width=16)
+        self.clipcb.grid(row=r, column=1, columnspan=2, sticky="w")
+        self.clipcb.bind("<<ComboboxSelected>>", lambda e: self._clip())
+        r += 1
+        ttk.Label(f, text="Frames").grid(row=r, column=0, sticky="w")
+        self.a, self.b = tk.IntVar(), tk.IntVar()
+        ff = ttk.Frame(f)
+        ff.grid(row=r, column=1, columnspan=3, sticky="w")
+        ttk.Spinbox(ff, from_=0, to=9999, width=5, textvariable=self.a,
+                    command=self._look).pack(side="left")
+        ttk.Label(ff, text="to (not incl.)").pack(side="left")
+        ttk.Spinbox(ff, from_=1, to=9999, width=5, textvariable=self.b,
+                    command=self._look).pack(side="left")
+        ttk.Button(ff, text="Set", command=self._commit).pack(side="left")
+        r += 1
+        bf = ttk.Frame(f)
+        bf.grid(row=r, column=0, columnspan=4, sticky="w")
+        ttk.Button(bf, text="Recommend", command=self._recommend
+                   ).pack(side="left")
+        ttk.Button(bf, text="Play the loop", command=self._play
+                   ).pack(side="left")
+        r += 1
+        self.cl = tk.Listbox(f, height=3, width=54, exportselection=False)
+        self.cl.grid(row=r, column=0, columnspan=4, sticky="we")
+        self.cl.bind("<<ListboxSelect>>", lambda e: self._cand())
+        r += 1
+        ttk.Label(f, text="Its sound").grid(row=r, column=0, sticky="w")
+        self.snd = tk.StringVar()
+        self.sndcb = ttk.Combobox(f, textvariable=self.snd, state="readonly",
+                                  width=22)
+        self.sndcb.grid(row=r, column=1, columnspan=3, sticky="w")
+        self.sndcb.bind("<<ComboboxSelected>>", lambda e: self._commit())
+        r += 1
+        if kind == "title":
+            ttk.Label(f, text="Left by").grid(row=r, column=0, sticky="w")
+            self.leave = tk.StringVar()
+            self.leavecb = ttk.Combobox(f, textvariable=self.leave,
+                                        state="readonly", width=16)
+            self.leavecb.grid(row=r, column=1, columnspan=2, sticky="w")
+            self.leavecb.bind("<<ComboboxSelected>>", lambda e: self._commit())
+            r += 1
+            ttk.Label(f, text="Entered at").grid(row=r, column=0, sticky="w")
+            self.anch = tk.StringVar()
+            af = ttk.Frame(f)
+            af.grid(row=r, column=1, columnspan=3, sticky="w")
+            e = ttk.Entry(af, textvariable=self.anch, width=14)
+            e.pack(side="left")
+            e.bind("<Return>", lambda ev: self._commit())
+            ttk.Button(af, text="Recommend", command=self._rec_anchors
+                       ).pack(side="left")
+            r += 1
+        self.note = ttk.Label(f, text="", wraplength=400)
+        self.note.grid(row=r, column=0, columnspan=4, sticky="w")
+
+    # --- the model's view ------------------------------------------------------
+    def spec(self):
+        """The loop as the project holds it, or None"""
+        d = self.app.proj.d
+        if self.kind == "title":
+            return d.get("title")
+        return d["endings"][self.kind].get("loop")
+
+    def refresh(self):
+        d = self.app.proj.d
+        clips = ["(none)"] + list(d["clips"])
+        self.clipcb.config(values=clips)
+        self.sndcb.config(values=["(none)", "its own soundtrack"] +
+                          list(d["sounds"]))
+        lp = self.spec()
+        self.clip.set(lp["clip"] if lp else "(none)")
+        if lp:
+            self.a.set(lp["loop"][0])
+            self.b.set(lp["loop"][1])
+            self.snd.set(lp.get("sound") or "(none)")
+        if self.kind == "title":
+            self.leavecb.config(values=["a fade"] + list(d["clips"]))
+            t = d.get("title") or {}
+            self.leave.set(t.get("leave") or "a fade")
+            self.anch.set(" ".join(map(str, t.get("anchors", []))))
+            self.note.config(text="" if not lp else
+                             "Enter or Space: %s." % (
+                                 "the screen fades, and the openings play"
+                                 if not t.get("leave") else
+                                 "%s is played from the title's next anchor, "
+                                 "and the openings after it" % t["leave"]))
+        else:
+            en = d["endings"][self.kind]
+            self.how.set(dict(HOW_LABELS)[en["how"]])
+            ex = d["enemy"].get(self.kind)
+            self.note.config(text={
+                "hold": "Its clip's last frame stays up; Esc leaves.",
+                "fade": "The canvas fades, and the end loop goes round in it "
+                        "under the band; Enter plays again.",
+                "join": "%s's last frame joins the loop's first, exactly; "
+                        "Enter plays again." % (ex or "(no %s clip)" % self.kind),
+                "again": "The screen fades, and the play starts over."}[
+                            en["how"]])
+
+    def _commit(self):
+        """What the panel says, into the project"""
+        cid = self.clip.get()
+        cid = None if cid in ("", "(none)") else cid
+        try:
+            a, b = self.a.get(), self.b.get()
+        except Exception:
+            return self.app.say("A loop's frames are two numbers")
+        loop = (a, b) if cid else None
+        snd = self.snd.get()
+        if cid and snd == "%s_lp" % cid[:12]:   # its own: under the new frames
+            snd = "its own soundtrack"
+        if snd == "its own soundtrack" and cid:
+            snd = self.app.proj.loop_sound(cid, loop)
+        elif snd in ("", "(none)", "its own soundtrack"):
+            snd = None
+        if self.kind == "title":
+            lv = self.leave.get()
+            anchors = [int(x) for x in self.anch.get().replace(",", " ").split()
+                       if x.isdigit()]
+            self.app.edit("set_title", cid, loop, snd,
+                          None if lv in ("", "a fade") else lv, anchors)
+        else:
+            how = dict((l, k) for k, l in HOW_LABELS).get(self.how.get(), "hold")
+            self.app.edit("set_ending", self.kind, how, cid, loop, snd)
+
+    def _clip(self):
+        cid = self.clip.get()
+        if cid in self.app.proj.d["clips"]:
+            c = self.app.proj.d["clips"][cid]
+            self.a.set(0)
+            self.b.set(c["out"] - c["in"] + 1)
+        self.cands = []
+        self.cl.delete(0, "end")
+        self._commit()
+
+    # --- the clip's frames, and the recommendation ------------------------------
+    def frames(self, then):
+        d = self.app.proj.d
+        cid = self.clip.get()
+        if cid not in d["clips"]:
+            return self.app.say("Choose the loop's clip first")
+        c = d["clips"][cid]
+        self.app.screens(c["source"], lambda fr: then(fr[c["in"]:c["out"] + 1]))
+
+    def _recommend(self):
+        import vbtana as A
+        d = self.app.proj.d
+
+        def got(fr):
+            self.cands = [dict(score=sc, start=a, end=b) for sc, a, b in
+                          A.loop_candidates(fr, max(4, min(20, len(fr) // 3)))]
+            against = None
+            ex = d["enemy"].get(self.kind) if self.kind != "title" else None
+            if self.kind != "title" and d["endings"][self.kind]["how"] == "join" \
+                    and ex in d["clips"]:
+                ec = d["clips"][ex]
+                last = self.app.frames.get(ec["source"])
+                if last is not None:
+                    against = [A.diff(last[ec["out"]], f) for f in fr]
+            self.cl.delete(0, "end")
+            for line in loop_lines(self.cands, d["target"]["fps"], against):
+                self.cl.insert("end", line)
+            if self.cands:
+                self.cl.selection_set(0)
+                self._cand()
+        ex = d["enemy"].get(self.kind) if self.kind != "title" else None
+        if ex in d["clips"]:
+            self.app.screens(d["clips"][ex]["source"],
+                             lambda _: self.frames(got))
+        else:
+            self.frames(got)
+
+    def _cand(self):
+        s = self.cl.curselection()
+        if s and s[0] < len(self.cands):
+            c = self.cands[s[0]]
+            self.a.set(c["start"])
+            self.b.set(c["end"])
+            self.note.config(text="Frames %d to %d previewed - Set takes them."
+                             % (c["start"], c["end"] - 1))
+            self._look()
+
+    def _look(self):
+        self.frames(lambda fr: self.tab.show(fr[min(self.a.get(),
+                                                    len(fr) - 1)],
+                                             self.kind != "title"))
+
+    def _play(self):
+        def got(fr):
+            a, b = self.a.get(), self.b.get()
+            self.tab.play(fr[a:b], self.kind != "title")
+        self.frames(got)
+
+    def _rec_anchors(self):
+        """The title's frames its way out is most like at its start
+        (vbtana.attach, the clips' own rule)"""
+        import vbtana as A
+        d = self.app.proj.d
+        lv = self.leave.get()
+        if lv not in d["clips"]:
+            return self.app.say("Choose the clip the title is left by first")
+        lc = d["clips"][lv]
+
+        def got(fr):
+            loop = fr[self.a.get():self.b.get()]
+
+            def got2(lfr):
+                import os88vbt as B     # (both as whole screens: a title's
+                r = A.attach([B.full_of(lfr[lc["in"]])],    # frames may be
+                             [B.full_of(x) for x in loop], search=1)  # either)
+                ks = spread_anchors(r["entry_scores"], r["anchors"])
+                self.anch.set(" ".join(map(str, ks)))
+                self.note.config(text="Recommended: entered at title frames "
+                                 "%s (%.2f%% at the best). Return in the box "
+                                 "takes them." % (ks,
+                                                  min(r["entry_scores"]) * 100))
+            self.app.screens(lc["source"], got2)
+        self.frames(got)
+
+
+class LoopsTab(object):
+    """The title loop, and how victory and defeat end (SPEC.md 125.3.1): a
+    panel each, one picture for all three, and the fade"""
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        self.app = app
+        self.f = f = ttk.Frame(parent, padding=6)
+        left = ttk.Frame(f)
+        left.grid(row=0, column=0, sticky="nw")
+        self.panels = [LoopPanel(self, left, k)
+                       for k in ("title", "victory", "defeat")]
+        for p in self.panels:
+            p.f.pack(fill="x", pady=3)
+        right = ttk.Frame(f)
+        right.grid(row=0, column=1, sticky="n", padx=8)
+        self.pic = tk.Label(right, bg="black")
+        self.pic.pack()
+        ff = ttk.LabelFrame(right, text="The fade", padding=4)
+        ff.pack(fill="x", pady=4)
+        ttk.Label(ff, text="Steps, one a frame").pack(side="left")
+        self.steps = tk.IntVar()
+        sp = ttk.Spinbox(ff, from_=1, to=16, width=4, textvariable=self.steps,
+                         command=self._steps)
+        sp.pack(side="left")
+        sp.bind("<Return>", lambda e: self._steps())
+        ttk.Button(ff, text="Show it", command=self._fade
+                   ).pack(side="left", padx=4)
+        self.info = ttk.Label(right, text="", wraplength=640)
+        self.info.pack(anchor="w")
+        self.px = None
+
+    def refresh(self):
+        for p in self.panels:
+            p.refresh()
+        self.steps.set(self.app.proj.d.get("fade_steps", 16))
+
+    def _steps(self):
+        try:
+            n = max(1, min(16, int(self.steps.get())))
+        except Exception:
+            return
+        if n != self.app.proj.d.get("fade_steps"):
+            self.app.edit("set", ("fade_steps",), n)
+
+    def whole(self, px, canvas):
+        """An end loop's frame over the band's black, a title's as it is"""
+        import numpy as np
+        h = 200 - px.shape[0]
+        return np.vstack([px, np.zeros((h, px.shape[1]), px.dtype)]) \
+            if h > 0 else px
+
+    def show(self, px, canvas=False):
+        self.px = px
+        self._img = self.app.photo(self.whole(px, canvas))
+        self.pic.config(image=self._img)
+
+    def play(self, frames, canvas=False):
+        if self.app.anim:
+            self.app.root.after_cancel(self.app.anim)
+            self.app.anim = None
+            return
+        imgs = [self.app.photo(self.whole(f, canvas)) for f in frames]
+        fps = self.app.proj.d["target"]["fps"]
+        step = [0]
+
+        def tick():
+            self._img = imgs[step[0] % len(imgs)]
+            self.pic.config(image=self._img)
+            step[0] += 1
+            self.app.anim = self.app.root.after(1000 // fps, tick)
+        tick()
+        self.info.config(text="%d frames round; Play again stops it"
+                         % len(frames))
+
+    def _fade(self):
+        """The fade on the frame shown, step by step, as the engine draws it"""
+        if self.px is None:
+            return self.app.say("Show a frame first (a loop's Play or a "
+                                "candidate)")
+        n = self.app.proj.d.get("fade_steps", 16)
+        imgs = [self.app.photo(self.whole(fade_frame(self.px, k, n), False))
+                for k in range(n + 1)]
+        fps = self.app.proj.d["target"]["fps"]
+        step = [0]
+
+        def tick():
+            if step[0] > n:
+                self.app.anim = None
+                return
+            self._img = imgs[step[0]]
+            self.pic.config(image=self._img)
+            step[0] += 1
+            self.app.anim = self.app.root.after(1000 // fps, tick)
+        if self.app.anim:
+            self.app.root.after_cancel(self.app.anim)
+        tick()
+        self.info.config(text="A fade of %d steps: %.2f s" % (n, n / float(fps)))
+
+
 # --- the Build tab (plan 4.5) ------------------------------------------------------
 
 # where a check's WHERE sends the window: its tab (and a clip, selected)
 CHECK_TABS = (("clips.", "clips"), ("openings", "openings"),
+              ("title", "loops"), ("endings", "loops"), ("fade", "loops"),
               ("actions", "actions"), ("characters", "party"),
               ("menu", "party"), ("items", "party"), ("images", "party"),
               ("enemy", "enemy"), ("idle", "idle"), ("music", "battle"),
@@ -2399,10 +2816,13 @@ def budget_rows(bud):
     for c in bud["clips"]:
         w = c["with_music"]
         tag = "over" if w > 1.0 else "near" if w > 0.85 else ""
+        if c.get("loop") and not c["fits_ring"]:
+            tag = "over"                # a loop goes round in ONE ring
         rows.append(((c.get("id", c["name"]), "%d" % (c["bytes"] // 1024),
                       "%.1f" % c["secs"], "%.1f" % (c["rate"] / 1024),
                       "%.0f%%" % (w * 100), "%.2f" % c["head_secs"],
-                      "yes" if c["fits_ring"] else "streams",
+                      "yes" if c["fits_ring"] else
+                      "TOO BIG" if c.get("loop") else "streams",
                       " ".join(map(str, c["anchors"])) or "-",
                       "-" if c["wait"] is None or not c["anchors"]
                       else "%d" % c["wait"]), tag))

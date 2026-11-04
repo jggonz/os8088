@@ -39,6 +39,7 @@ Format version 5 (SPEC.md 125.2), little-endian:
 """
 
 import argparse
+import json
 import os
 import struct
 import sys
@@ -49,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 5
+VERSION = 6
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
@@ -75,6 +76,10 @@ CF_FULL = 2         # its records address the whole screen (an opening)
 CF_ENDS = 4         # the battle ends on it; its last frame is held
 CF_OWNSND = 8       # its sound is played INSTEAD of the music (an opening)
 CF_OPENING = 16     # one of the openings, played in turn before the battle
+CF_LOOP = 32        # a title or end loop: record 0 from black, the last the
+                    # seam onto frame 0, records 1.. round until a key
+CF_ENTER = 64       # opening 0, entered at the title loop's frames (anchors)
+ENDING_HOW = {"hold": 0, "fade": 1, "join": 2, "again": 3}
 
 NO_SFX = 0xFF
 
@@ -226,6 +231,11 @@ class Battle:
         self.canvas = (0, 0, 320, 142)  # pixels
         self.rules = None       # the RULES block (vbtrules.compile_rules)
         self.images = b""       # the band's pictures, back to back
+        self.title = None       # (125.3.1) dict: name, frames, sound - a
+                                # loop over the whole screen
+        self.endings = {}       # outcome -> (how, a loop dict or None);
+                                # an end loop is the canvas's
+        self.fade_steps = 16
 
 
 def build(b):
@@ -256,32 +266,45 @@ def build(b):
     openings = b.openings or [dict(name="start", frames=[b.idle[0]],
                                    sound=None, exit=0)]
     scr = np.zeros((ROWS_FULL, 320), np.uint8)
+    title_s = [surface_of(full_of(f), ROWS_FULL) for f in b.title["frames"]] \
+        if b.title else []
+    ents = bytearray()
     for k, o in enumerate(openings):
         last = k == len(openings) - 1
         fr = [full_of(f) for f in o["frames"]]
         snd = frame_sound(o.get("sound"), len(fr), spf, True)
         prev = surface_of(scr, ROWS_FULL)
         recs = []
+        anch = []
+        flags = CF_OPENING | CF_FULL | CF_OWNSND
+        if o.get("enter"):          # ENTERED at the title's frames, as an
+            flags |= CF_ENTER       # action is at the idle loop's: an entry
+            cur = surface_of(fr[0], ROWS_FULL)      # from each anchor, and
+            for ka in o["anchors"]:                 # its record 0 its sound
+                anch.append((ka, len(ents) >> 4))
+                ents += pad(rec(title_s[ka], cur, ROWS_FULL), 16)
+            recs.append(rec(None, None, ROWS_FULL, snd[0]))
+            prev = cur
+            fr, snd = fr[1:], snd[1:]
         for f, a in zip(fr, snd):
             cur = surface_of(f, ROWS_FULL)
             recs.append(rec(prev, cur, ROWS_FULL, a))
             prev = cur
-        flags = CF_OPENING | CF_FULL | CF_OWNSND
         exit_to = 0
         if last:            # the scene opening seams onto the idle loop
             flags |= CF_JOINS
             exit_to = o.get("exit", 0)
             recs.append(rec(prev, surface_of(full_of(b.idle[exit_to]),
                                              ROWS_FULL), ROWS_FULL))
-        scr = fr[-1]
+        scr = o["frames"][-1] if not fr else fr[-1]
+        scr = full_of(scr)
         regions.append(stream(recs))
         clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
-                              exit=exit_to, anch=[]))
+                              exit=exit_to, anch=anch))
     # --- the actions: an entry from each anchor, into the ENTRIES (each on
     # a paragraph, named by it: version 4, so that they are bounded by
     # memory and not by a 16-bit offset); record 0 is frame 0's sound alone
     # (the entry drew its picture); the last record the seam
-    ents = bytearray()
     for c in b.clips:
         fs = [surface_of(f, rows) for f in c["frames"]]
         anch = []
@@ -300,9 +323,43 @@ def build(b):
         if c.get("joins"):
             flags |= CF_JOINS
             recs.append(rec(fs[-1], idle_s[exit_to], rows))
+        elif c.get("join_loop") is not None:    # an ending that JOINS its
+            recs.append(rec(fs[-1], surface_of(     # end loop: the seam onto
+                c["join_loop"], rows), rows))       # its frame 0
         regions.append(stream(recs))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=anch))
+    # --- the LOOPS (125.3.1): the title over the whole screen, an end loop
+    # in the canvas. Record 0 from black, records 1..n-1, and record n the
+    # seam back onto frame 0; each carries its frame's sound (frame 0's
+    # twice: record n shows it again)
+    loop_ix = {}
+
+    def loop_clip(lp, full):
+        key = lp["name"]
+        if key in loop_ix:
+            return loop_ix[key]
+        rw = ROWS_FULL if full else rows
+        fr = [full_of(f) if full else f for f in lp["frames"]]
+        ss = [surface_of(f, rw) for f in fr]
+        snd = frame_sound(lp.get("sound"), len(ss), spf, True)
+        recs = [rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw, snd[0])]
+        for i in range(1, len(ss)):
+            recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))
+        recs.append(rec(ss[-1], ss[0], rw, snd[0]))
+        flags = CF_LOOP | (CF_FULL if full else 0) | \
+            (CF_OWNSND if lp.get("sound") is not None else 0)
+        regions.append(stream(recs))
+        clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
+                              exit=0, anch=[]))
+        loop_ix[key] = len(clip_rows) - 1
+        return loop_ix[key]
+    title_ix = loop_clip(b.title, True) if b.title else NO_SFX
+    leave_ix = 0 if openings[0].get("enter") else NO_SFX
+    ends = []
+    for k in ("victory", "defeat"):
+        how, lp = b.endings.get(k, ("hold", None))
+        ends += [ENDING_HOW[how], loop_clip(lp, False) if lp else NO_SFX]
     if len(clip_rows) > MAX_CLIPS:
         raise ValueError("%d clips" % len(clip_rows))
     for c in clip_rows:
@@ -375,6 +432,7 @@ def build(b):
     h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
     struct.pack_into("<II", h, 88, ent_at, len(ents))
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
+    h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
         h[192 + 8 * i:200 + 8 * i] = nm.upper().encode()[:8].ljust(8, b" ")
@@ -432,6 +490,10 @@ class Bundle:
         self.imgs = data[self.img_at:self.img_at + ilen]
         import vbtrules
         self.meta_len = struct.unpack_from("<H", data, 326)[0]
+        self.title, self.leave = data[330], data[331]
+        self.endings = {"victory": (data[332], data[333]),
+                        "defeat": (data[334], data[335])}
+        self.fade_steps = data[336]
         self.rules = vbtrules.Rules(data[SCRIPT_AT:self.meta_len])
         self.ui = [struct.unpack_from("<IH", data, 96 + 6 * i)
                    for i in range(self.nui)]
@@ -480,13 +542,60 @@ def verify(data, quiet=False):
     def canvas(s):
         return bytes(s[x] for base in g.base for x in range(base, base + 80))
 
+    def loop_lap(c):
+        """Loop clip C from black: the screens after record 0 and after
+        each of records 1..n, twice round - lap 2 must be lap 1, and its
+        last (the seam) frame 0 again"""
+        rs = b.stream(c)
+        s = bytearray(65536)
+        decode(s, rs[0])
+        first = bytes(s)
+        laps = []
+        for _ in range(2):
+            got = []
+            for r in rs[1:]:
+                decode(s, r)
+                got.append(bytes(s))
+            laps.append(got)
+        if laps[0] != laps[1] or laps[0][-1] != first:
+            raise ValueError("loop %s does not go round exactly" % c["name"])
+        return [first] + laps[0][:-1]       # frame k's screen
+
+    title = None
+    if b.title != NO_SFX:
+        title = loop_lap(b.clips[b.title])
+    for k, (how, li) in b.endings.items():
+        if li != NO_SFX:
+            loop_lap(b.clips[li])
+
+    def openings_from(scr):
+        cur = 0
+        for ci in b.openings:
+            c = b.clips[ci]
+            if c["flags"] & CF_ENTER:
+                continue
+            for r in b.stream(c):
+                decode(scr, r)
+            cur = c["exit"]
+        return cur
     scr = bytearray(65536)
-    cur = 0
-    for ci in b.openings:
-        c = b.clips[ci]
-        for r in b.stream(c):
-            decode(scr, r)
-        cur = c["exit"]
+    if b.openings and b.clips[b.openings[0]]["flags"] & CF_ENTER:
+        lc = b.clips[b.openings[0]]
+        if title is None or not lc["anch"]:
+            raise ValueError("an entered opening and no title to enter from")
+        ends = set()
+        for k, o in lc["anch"]:     # left from each of the title's frames
+            s2 = bytearray(title[k])
+            decode(s2, b.entry(o))
+            for r in b.stream(lc):
+                decode(s2, r)
+            cur = openings_from(s2)
+            ends.add(bytes(s2))
+        if len(ends) != 1:
+            raise ValueError("the title's way out ends differently by anchor")
+        scr = s2
+    else:
+        cur = openings_from(scr)
     if not b.openings:
         decode(scr, b.idle_rec(0))
     elif not b.clips[b.openings[-1]]["flags"] & CF_JOINS:
@@ -501,8 +610,13 @@ def verify(data, quiet=False):
                 raise ValueError("the idle loop's frame %d differs on lap 2" % i)
             idle[i] = cv
     paths = 0
+    vic, dft = b.rules.victory, b.rules.defeat
+    ending_name = {"victory": b.clips[vic]["name"] if vic not in (None, NO_SFX)
+                   else None,
+                   "defeat": b.clips[dft]["name"] if dft not in (None, NO_SFX)
+                   else None}
     for c in b.clips:
-        if c["flags"] & CF_OPENING:
+        if c["flags"] & (CF_OPENING | CF_LOOP):
             continue
         if not c["anch"]:
             raise ValueError("clip %s has no anchor" % c["name"])
@@ -516,6 +630,13 @@ def verify(data, quiet=False):
             if c["flags"] & CF_JOINS and canvas(s) != idle[c["exit"]]:
                 raise ValueError("clip %s from anchor %d misses idle %d"
                                  % (c["name"], k, c["exit"]))
+            for out_, (how, li) in b.endings.items():   # an ending that
+                if how == ENDING_HOW["join"] and li != NO_SFX and \
+                        c["name"] == ending_name.get(out_):
+                    lp = loop_lap(b.clips[li])               # JOINS its loop
+                    if canvas(s) != canvas(lp[0]):
+                        raise ValueError("ending %s misses its loop's frame 0"
+                                         % c["name"])
             paths += 1
     if not quiet:
         print("verify: %d openings onto an idle loop of %d frames, %d clips, "
@@ -552,8 +673,20 @@ def battle_of(proj, progress=None):
         b.openings.append(dict(name=o["clip"], frames=A.frames_of(proj, o["clip"], pg),
                                sound=b.sfx[o["sound"]] if o.get("sound") else None,
                                exit=c["exit"]))
+    # a clip only a loop or the title's way out plays is not an action's
+    tt = d.get("title") or {}
+    loops_only = {tt.get("clip"), tt.get("leave")} | {
+        en["loop"]["clip"] for en in d["endings"].values() if en.get("loop")}
+    rules_use = set()
+    for a in d["actions"].values():
+        for pool in a["pools"].values():
+            rules_use |= set(pool)
+        for per in a.get("by_target", {}).values():
+            for pool in per.values():
+                rules_use |= set(pool)
+    rules_use |= {d["enemy"].get("victory"), d["enemy"].get("defeat")}
     for i, (cid, c) in enumerate(d["clips"].items()):
-        if cid in opened:
+        if cid in opened or (cid in loops_only and cid not in rules_use):
             continue
         pg("clips", i, len(d["clips"]), cid)
         spf = t["rate"] // t["fps"]
@@ -568,6 +701,45 @@ def battle_of(proj, progress=None):
         b.music = b.music[lp[0]:lp[1]]
         b.music_at -= lp[0]
     b.ui = dict(d["ui_sounds"])
+    # --- the title loop and the endings (125.3.1)
+    b.fade_steps = d.get("fade_steps", 16)
+
+    def loop_of(lp, tag):
+        c = d["clips"][lp["clip"]]
+        fr = A.frames_of(proj, lp["clip"], pg)[lp["loop"][0]:lp["loop"][1]]
+        x = None
+        if lp.get("sound"):
+            x = b.sfx[lp["sound"]]
+        return dict(name=("%s%d" % (tag, lp["loop"][0]))[:8], frames=fr,
+                    sound=x, src=(lp["clip"], tuple(lp["loop"]),
+                                  lp.get("sound"), c["in"]))
+    t = d.get("title")
+    if t:
+        b.title = loop_of(t, "T")
+        if t.get("leave"):              # the clip it is left by: opening 0,
+            lc = d["clips"][t["leave"]]   # entered at the title's frames
+            b.openings.insert(0, dict(      # (its sound: its cues, mixed,
+                name=t["leave"], frames=A.frames_of(proj, t["leave"], pg),
+                sound=A.clip_sound(proj, t["leave"]),   # played as its own)
+                exit=lc["exit"], enter=True, anchors=list(t["anchors"])))
+    made = {}
+    for k in ("victory", "defeat"):
+        en = d["endings"][k]
+        lp = None
+        if en.get("loop") and en["how"] in ("fade", "join"):
+            key = json.dumps(en["loop"], sort_keys=True)
+            if key not in made:
+                made[key] = loop_of(en["loop"], "E")
+                made[key]["name"] = ("E%d%s" % (len(made), en["loop"]["clip"])
+                                     )[:8]
+            lp = made[key]
+        b.endings[k] = (en["how"] if lp or en["how"] in ("hold", "again")
+                        else "hold", lp)
+        clip = d["enemy"].get(k)
+        if en["how"] == "join" and lp and clip:
+            for c in b.clips:
+                if c["name"] == clip:
+                    c["join_loop"] = lp["frames"][0]
     import vbtrules
     # the clips as the bundle numbers them: the openings first - and a
     # battle with none gets START at 0 (build) - then the rest
@@ -657,8 +829,9 @@ def demo_project(path, bars=16, floppy=False):
         p.add_source(n, scene=n)
         p.add_clip(n, n, (0, len(P_frames(n)) - 1), anchors=(), exit=0,
                    joins=n == "reveal")
-    p.add_opening("title", "fanfare")
-    p.add_opening("reveal", "riser")
+    if floppy:                      # (the 360 KB disk has no room for the
+        p.add_opening("title", "fanfare")   # loops: its demo opens as
+    p.add_opening("reveal", "riser")        # before)
     for name, mk, joins in S.CLIPS:
         if floppy and name == "ari_limit":
             continue
@@ -698,7 +871,11 @@ def demo_project(path, bars=16, floppy=False):
     p.enemy_move("lunge")
     p.set(("enemy", "victory"), "victory")
     p.set(("enemy", "defeat"), "defeat")
-    if path:
+    if not floppy:                  # THE TITLE AND THE ENDINGS (125.3.1): the
+        p.set_title("title", (19, 35))      # title card round until a key,
+        p.set_ending("victory", "fade", "victory", (21, 31))   # a fade away;
+        p.set_ending("defeat", "again")     # victory's end loop; defeat
+    if path:                                # plays again
         p.save(path)
     return p
 

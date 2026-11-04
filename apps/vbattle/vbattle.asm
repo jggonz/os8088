@@ -81,6 +81,16 @@ CF_FULL     equ 2
 CF_ENDS     equ 4
 CF_OWNSND   equ 8               ; its sound is played instead of the music
 CF_OPENING  equ 16
+CF_LOOP     equ 32              ; a title or end loop (125.3.1)
+CF_ENTER    equ 64              ; opening 0, entered at the title's frames
+VH_TITLE    equ 330             ; the title loop's clip, FFh none
+VH_LEAVE    equ 331             ; FFh: the title is left by a fade
+VH_ENDS     equ 332             ; victory, defeat: (how, end loop) bytes
+VH_FSTEPS   equ 336             ; a fade's steps, 1..16
+EH_HOLD     equ 0
+EH_FADE     equ 1
+EH_JOIN     equ 2
+EH_AGAIN    equ 3
 RH_LEN      equ 0               ; a record: its length, all of it
 RH_ALEN     equ 2               ; ...its frame's sound's, at its end
 RH_SIZE     equ 4
@@ -156,6 +166,7 @@ VM_OFF      equ 0
 VM_CLIP     equ 1               ; a clip's records, in order
 VM_IDLE     equ 2               ; the idle loop
 VM_HOLD     equ 3               ; an ending's last frame, held
+VM_FADE     equ 4               ; the frame on the glass faded (the UI task's)
 
 ; the battle's states
 GS_INTRO    equ 0
@@ -581,7 +592,7 @@ vb_load:
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    cmp word [vb_meta+VH_VER], 5
+    cmp word [vb_meta+VH_VER], 6
     jne .fail1
     mov ax, [vb_meta+VH_NCLIPS]
     or ax, ax
@@ -1369,6 +1380,8 @@ vb_main:
     call vb_palette
     call vb_rclaim                  ; the clip rings, all there is (125.4)
     jc .out
+    call vb_lfits                   ; a loop goes round in one (125.3.1)
+    jc .rout
     call vb_rstart                  ; ...and the first opening's head
     jc .rout
     call vb_game_init
@@ -1380,6 +1393,7 @@ vb_main:
     cmp byte [vb_quit], 0
     jne .leave
     call vb_game
+    call vb_fadetick                ; a fade's next step, and what follows it
     mov si, vb_tg
     call vb_tmark
     mov ax, [vb_rcalls]
@@ -1412,16 +1426,22 @@ vb_main:
 ; vb_rstart - the rings empty, and the first opening's head read into ring
 ; 0 before the play starts. CF=1 and [vb_err] when a read fails
 vb_rstart:
+    mov al, [vb_meta+VH_TITLE]      ; a TITLE plays first, out of ring 1 -
+    mov bx, vb_rg1                  ; opening 0 is read into ring 0 while it
+    cmp al, 0xFF                    ; goes round (125.3.1)
+    jne .r
     cmp word [vb_meta+VH_NOPEN], 0
     je .ok
     mov al, [vb_meta+VH_OPENS]
     mov bx, vb_rg0
+.r:
+    mov [vb_rsring], bx
     call vb_rreset
 .head:
-    mov bx, vb_rg0
+    mov bx, [vb_rsring]
     call vb_rhead                   ; CF=1: its head is in
     jc .ok
-    mov bx, vb_rg0
+    mov bx, [vb_rsring]
     call vb_rpiece
     jc .bad
     or al, al
@@ -1536,8 +1556,10 @@ vb_radv:
 
 ; vb_start_clip - the hook plays clip AL out of ring BX from the record at
 ; its cursor (an opening's first, or an action's second: the entry drew its
-; first frame). Called from the hook, or before [vb_ready]
+; first frame). AL and BX kept. Called from the hook, or before
+; [vb_ready], or from the UI task with interrupts off
 vb_start_clip:
+    push ax                         ; (AL kept: callers book its sound by it)
     mov [vb_cc], al
     mov [vb_cring], bx
     mov byte [bx+RG_PLAY], 1
@@ -1552,7 +1574,47 @@ vb_start_clip:
     mov [vb_cflags], ax
     mov ax, [si+VC_EXIT]
     mov [vb_cexit], ax
+    test word [vb_cflags], CF_LOOP
+    jz .nl
+    mov ax, [si+VC_NREC]            ; A LOOP: its lap is records 1..n, from
+    dec ax                          ; record 0's end in its ring (it fits
+    mov [vb_lnrec], ax              ; whole, from the ring's start)
+    mov [vb_lring], bx
+    push es
+    mov es, [bx+RG_SEG]
+    mov ax, [es:RH_LEN]
+    pop es
+    mov [vb_lbase], ax
+.nl:
     mov byte [vb_mode], VM_CLIP
+    pop ax
+    ret
+
+; vb_lrewind - the loop in ring BX back to its lap's start: the picture's
+; cursor at record 1, its frame 0 on the glass (the seam drew it). The hook's
+vb_lrewind:
+    push di
+    mov di, RG_VOFF
+    call vb_lcur
+    pop di
+    mov ax, [vb_lnrec]
+    mov [vb_cleft], ax
+    mov word [vb_cfr], 1
+    ret
+
+; vb_lcur - ring BX's cursor at [bx+di] (a dword, then its segment and
+; offset) put at record 1 of the loop it holds. AX, CX, DX spent
+vb_lcur:
+    mov ax, [vb_lbase]
+    mov [bx+di], ax
+    mov word [bx+di+2], 0
+    mov dx, ax
+    and ax, 15
+    mov [bx+di+6], ax
+    mov cl, 4
+    shr dx, cl
+    add dx, [bx+RG_SEG]
+    mov [bx+di+4], dx
     ret
 
 ; vb_hook - FSXF_RATE's hook (53.2.2): AX = periods since the last call,
@@ -1657,9 +1719,38 @@ vb_frame:
     jne .none
     jmp .idle
 .none:
+    cmp al, VM_FADE                 ; A FADE: the UI task draws it, a step a
+    jne .nh                         ; frame of this clock
+    inc word [vb_fticks]
+    clc
+    ret
+.nh:
+    cmp al, VM_HOLD                 ; held: an end loop to start?
+    jne .nn
+    cmp byte [vb_estart], 0
+    je .nn
+    call vb_eloop_go
+.nn:
     clc
     ret
 .clip:
+    test word [vb_cflags], CF_LOOP  ; THE TITLE, left by a clip: entered at
+    jz .c0                          ; the anchor chosen, in place of the
+    cmp byte [vb_lwant], 0          ; frame after it
+    je .c0
+    cmp byte [vb_tplay], 0
+    je .c0
+    cmp word [vb_lk], 0xFFFF
+    jne .lk
+    call vb_lanchor
+    jmp short .c0
+.lk:
+    mov ax, [vb_cfr]
+    dec ax
+    cmp ax, [vb_lk]
+    jne .c0
+    jmp vb_leave_go
+.c0:
     mov bx, [vb_cring]
     call vb_rrec
     jc .wait
@@ -1684,6 +1775,13 @@ vb_frame:
     clc
     ret
 .over:
+    test word [vb_cflags], CF_LOOP  ; a loop's lap is over: round again
+    jz .ov
+    mov bx, [vb_cring]
+    call vb_lrewind
+    clc
+    ret
+.ov:
     mov al, [vb_cc]                 ; the clip is over
     mov [vb_cdone], al
     mov bx, [vb_cring]
@@ -1709,6 +1807,23 @@ vb_frame:
     ret
 .hold:
     mov byte [vb_mode], VM_HOLD
+    test word [vb_cflags], CF_ENDS  ; AN ENDING: how it goes on (125.3.1)
+    jz .hx
+    mov al, [vb_ehow]
+    cmp al, EH_JOIN                 ; it seamed onto its end loop's frame 0
+    jne .h1
+    mov byte [vb_estart], 2
+    jmp short .hx
+.h1:
+    cmp al, EH_FADE
+    jne .h2
+    mov byte [vb_fwant], 2          ; the canvas fades, then its end loop
+    jmp short .hx
+.h2:
+    cmp al, EH_AGAIN
+    jne .hx
+    mov byte [vb_fwant], 3          ; the screen fades, and the play again
+.hx:
     clc
     ret
 .wait:
@@ -2083,6 +2198,10 @@ vb_chunk:
     je .ui
     call vb_aframe
 .ui:
+    cmp byte [vb_fvol], 0           ; a fade: the sound comes down with it
+    je .ui0
+    call vb_atten
+.ui0:
     ; the menu's sound, over all of it
     cmp word [vb_ulen], 0
     je .noui
@@ -2231,6 +2350,18 @@ vb_anext:
     jne .rec
     ret
 .over:
+    test word [vb_aflags], CF_LOOP  ; A LOOP still on the glass: its sound
+    jz .ao                          ; goes round with it
+    cmp byte [bx+RG_VDONE], 0
+    jne .ao
+    push di
+    mov di, RG_AOFF
+    call vb_lcur
+    pop di
+    mov ax, [vb_lnrec]
+    mov [vb_aleft], ax
+    ret
+.ao:
     ; its sound is over
     mov byte [bx+RG_ADONE], 1
     mov word [vb_aring], 0
@@ -2263,6 +2394,11 @@ vb_anext:
 ; ring's AUDIO cursor (its first record). The next opening's is noted for
 ; when this one ends
 vb_asound:
+    mov bx, [vb_aring]              ; a loop's sound given way to the next
+    or bx, bx                       ; (the title's, as its way out starts)
+    jz .a0
+    mov byte [bx+RG_ADONE], 1
+.a0:
     mov bx, [vb_apring]
     mov word [vb_apring], 0
     mov [vb_aring], bx
@@ -2279,6 +2415,22 @@ vb_asound:
     mov ax, [si+VC_FLAGS]
     mov [vb_aflags], ax
     mov byte [vb_aonext], 0xFF
+    cmp byte [vb_askip], 0          ; an end loop JOINED: its frame 0 is up
+    je .k0                          ; already, so its sound starts at 1
+    mov byte [vb_askip], 0
+    push ax
+    push di
+    push si
+    mov cx, [vb_lbase]
+    add [bx+RG_AOFF], cx
+    adc word [bx+RG_AOFF+2], 0
+    mov di, RG_ASEG
+    call vb_cadv
+    dec word [vb_aleft]
+    pop si
+    pop di
+    pop ax
+.k0:
     test ax, CF_OPENING
     jz .out
     xor bx, bx                      ; AN OPENING: the one after it in turn,
@@ -2383,11 +2535,42 @@ vb_play_init:
     mov word [vb_cfr], 0
     mov byte [vb_onext], 0xFF
     mov byte [vb_olast], 0xFF
+    mov [vb_tplay], al              ; (125.3.1's: no title, fade, loop yet)
+    mov [vb_lwant], al
+    mov [vb_estart], al
+    mov [vb_eplay], al
+    mov [vb_fon], al
+    mov [vb_fwant], al
+    mov [vb_fvol], al
+    mov [vb_askip], al
+    mov word [vb_lk], 0xFFFF
+    mov byte [vb_eloop], 0xFF
+    mov byte [vb_ehow], EH_HOLD
+    mov al, [vb_meta+VH_FSTEPS]     ; a fade's steps, 1..16
+    dec al
+    and al, 15
+    inc al
+    mov [vb_fsteps], al
     mov cx, [vb_meta+VH_NOPEN]
     jcxz .loop
     mov bx, cx
     mov al, [vb_meta+VH_OPENS+bx-1]
     mov [vb_olast], al
+    mov al, [vb_meta+VH_TITLE]      ; A TITLE: it goes round out of ring 1
+    cmp al, 0xFF                    ; while opening 0 is read into ring 0
+    je .open
+    mov bx, vb_rg1
+    call vb_start_clip
+    mov byte [vb_tplay], 1
+    mov [vb_apring], bx
+    mov [vb_apclip], al
+    xor ax, ax
+    mov [vb_apat], ax
+    mov [vb_apat+2], ax
+    mov byte [vb_oidx], 0xFF
+    call vb_onextset                ; (the next is opening 0)
+    ret
+.open:
     mov byte [vb_oidx], 0
     mov al, [vb_meta+VH_OPENS]
     mov bx, vb_rg0
@@ -2491,8 +2674,21 @@ vb_reader:
 .pend:
     mov al, [vb_pend]               ; 4. the action pending
     cmp al, 0xFF
-    je .quiet
+    je .eloop
     mov dl, 0xFF
+    call vb_ringfor
+    jc .eloop
+    call vb_rhead
+    jnc .read
+.eloop:
+    cmp byte [vb_state], GS_END     ; 4b. an ending's END loop (125.3.1)
+    jne .quiet
+    mov al, [vb_eloop]
+    cmp al, 0xFF
+    je .quiet
+    cmp byte [vb_eplay], 0
+    jne .quiet
+    mov dl, [vb_pend]
     call vb_ringfor
     jc .quiet
     call vb_rhead
@@ -2517,7 +2713,9 @@ vb_reader:
     call vb_rhead
     jnc .read
 .enemy:
-    cmp byte [vb_state], GS_INTRO   ; 7. the enemy's
+    cmp byte [vb_state], GS_INTRO   ; 7. the enemy's (not before the battle,
+    je .top                         ; nor after it: an end loop's ring)
+    cmp byte [vb_state], GS_END
     je .top
     mov al, [vb_eclip]
     cmp al, 0xFF
@@ -2621,6 +2819,7 @@ vb_reader:
 
 %include "vbattle/vbrules.inc"
 %include "vbattle/vbgame.inc"
+%include "vbattle/vbloop.inc"
 
 ; vb_strncpy - at most CX bytes of DS:SI to DS:DI, trailing blanks dropped
 vb_strncpy:
@@ -2711,6 +2910,10 @@ vb_s_hp:      db ' HP', 0
 vb_s_hits:    db ' hits ', 0
 vb_s_victory: db 'VICTORY!   Esc to leave', 0
 vb_s_defeat:  db 'The party has fallen.   Esc to leave', 0
+vb_s_victl:   db 'VICTORY!   Enter: again   Esc: leave', 0
+vb_s_defl:    db 'The party has fallen.   Enter: again', 0
+vb_s_victa:   db 'VICTORY!', 0
+vb_s_defa:    db 'The party has fallen.', 0
 vb_s_head:    db '        HP          MP', 0
 
 %include "video/vdec.inc"
@@ -2867,6 +3070,28 @@ VB_VAR vb_tcomp, 1                  ; text into the composition
 VB_VAR vb_pimg, 2
 VB_VAR vb_pbband, 2
 ; the battle's state, zeroed at its start (vb_game_init)
+VB_VAR vb_tplay, 1                  ; the title goes round (125.3.1)
+VB_VAR vb_lwant, 1                  ; ...and is to be left by its clip
+VB_VAR vb_lk, 2                     ; the title frame it is left at, FFFFh
+VB_VAR vb_lent, 2                   ; ...and its entry's paragraph
+VB_VAR vb_lnow, 2
+VB_VAR vb_lnrec, 2                  ; a loop's lap: records 1..n
+VB_VAR vb_lbase, 2                  ; ...from record 0's end in its ring
+VB_VAR vb_lring, 2                  ; ...which ring
+VB_VAR vb_eloop, 1                  ; the ending's end loop, FFh
+VB_VAR vb_ehow, 1                   ; ...how the ending goes on (EH_*)
+VB_VAR vb_estart, 1                 ; 1: start it from 0, 2: from 1 (joined)
+VB_VAR vb_eplay, 1                  ; it goes round
+VB_VAR vb_askip, 1                  ; its sound from record 1 (joined)
+VB_VAR vb_fwant, 1                  ; a fade wanted: what follows it
+VB_VAR vb_fon, 1                    ; a fade under way
+VB_VAR vb_fnext, 1                  ; 1 opening 0, 2 the end loop, 3 again
+VB_VAR vb_fstep, 1
+VB_VAR vb_fsteps, 1
+VB_VAR vb_fvol, 1                   ; the sound's shift, 4 silent
+VB_VAR vb_frows, 2
+VB_VAR vb_fticks, 2                 ; the hook's frames since it began
+VB_VAR vb_rsring, 2
 VB_VAR vb_zstart, 0
 VB_VAR vb_rng, 2
 VB_VAR vb_hp, 8

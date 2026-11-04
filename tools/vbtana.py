@@ -261,10 +261,26 @@ def budget(proj, data):
                           wait=wait_frames([k for k, _ in c["anch"]],
                                            b.nidle)))
     d = proj.d                  # the project's own names, in the bundle's
-    opened = [o["clip"] for o in d["openings"]] or ["(start)"]     # order
-    ids = opened + [c for c in d["clips"] if c not in opened]
+    tt = d.get("title") or {}   # order (os88vbt.battle_of's)
+    opened = ([tt["leave"]] if tt.get("leave") else []) + \
+        [o["clip"] for o in d["openings"]]
+    opened = opened or ["(start)"]
+    looped = {tt.get("clip"), tt.get("leave")} | {
+        en["loop"]["clip"] for en in d["endings"].values() if en.get("loop")}
+    used = set(proj.clips_used()) - looped | {
+        d["enemy"].get("victory"), d["enemy"].get("defeat")}
+    for a in d["actions"].values():
+        for pool in a["pools"].values():
+            used |= set(pool)
+    ids = opened + [c for c in d["clips"] if c not in opened and
+                    (c not in looped or c in used)]
     for c, cid in zip(clips, ids):
         c["id"] = cid
+    for c, bc in zip(clips, b.clips):
+        c["loop"] = bool(bc["flags"] & 32)      # (os88vbt.CF_LOOP)
+        if c["loop"]:
+            c["id"] = "%s (a loop)" % ("the title" if b.clips.index(bc) ==
+                                       b.title else "an end loop")
     mem = memory(data)
     mrate = 0 if mem["music_resident"] else b.rate * 1.0   # 8-bit mono
     for c in clips:

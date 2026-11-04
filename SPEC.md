@@ -237323,7 +237323,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 5 |
+| 4 | 2 | version, 6 |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows |
@@ -237349,6 +237349,11 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 88 | 4+4 | the ENTRIES' offset and length |
 | 320 | 4+2 | the PICTURES' offset and length |
 | 326 | 2 | the first region's length: 4096 and the rules rounded to 4 KB |
+| 330 | 1 | the TITLE loop's clip (125.3.1), FFh none |
+| 331 | 1 | how the title is left on a key: FFh a FADE; otherwise the clip it is left by, which is opening 0 and ENTERED from the title's frames |
+| 332 | 1+1 | VICTORY: how it ends (0 HOLD, 1 FADE to its end loop, 2 JOIN its end loop, 3 FADE and play AGAIN) and its end loop's clip, FFh none |
+| 334 | 1+1 | DEFEAT: the same |
+| 336 | 1 | a fade's steps, 1 to 16 (one a frame) |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -237359,7 +237364,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 0 | 4 | the stream's offset |
 | 4 | 4 | its length: any |
 | 8 | 2 | its records |
-| 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT); 2 FULL (its records address the whole screen); 4 ENDS (the battle ends on it, and its last frame is held); 8 OWNSND (its sound plays INSTEAD of the music); 16 OPENING |
+| 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT); 2 FULL (its records address the whole screen); 4 ENDS (the battle ends on it, and its last frame is held); 8 OWNSND (its sound plays INSTEAD of the music); 16 OPENING; 32 LOOP (a title or end loop, 125.3.1: record 0 draws its frame 0 from black, the last is the seam back onto frame 0, and records 1 to the last play round until a key); 64 ENTER (left into from the title loop's frames, at its anchors: its first record is its sound alone) |
 | 12 | 2 | EXIT |
 | 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the entries) pairs |
 | 16 | 2 | its anchors, at most 16 |
@@ -237541,6 +237546,52 @@ blocks), from the key to the sound in the card's own capture:
   MartyPC's only hard disk is an XT-IDE, whose transfers the CPU makes, and
   the key waited about 180 ms for the read. The owner's ST11M moves its
   sectors by DMA (98.2.15.5); its time here is unmeasured.
+
+#### 125.3.1 The title loop, the fade, and the endings
+
+Both are optional, and a bundle with neither plays as version 5's did.
+
+- **The TITLE loop** plays before the openings, over the whole screen
+  (FULL), with its own sound or none: the music has not come in. It goes
+  round until Enter or Space. Its records: record 0 draws frame 0 from a
+  black screen, records 1 to *n* - 1 frame *i* - 1 to *i*, record *n* the
+  seam from frame *n* - 1 back onto frame 0, and the lap is records 1 to
+  *n*. Each record carries its frame's sound, so the lap's sound is frames
+  1 to *n* - 1 then 0, as its pictures are.
+- **It is left by a FADE or by a CLIP.**
+  - A **FADE** is the engine's, not the bundle's: the frame on the glass
+    is drawn with less of itself a step at a time, each step a 4 x 4
+    ordered-dither threshold putting more of its pixels to colour 0, until
+    none of it is left (`vb_fade`, [vb_fsteps] steps, one a frame, the
+    UI task's, the thresholds `vb_fmasks`). The sound comes down with it: a shift of one
+    more bit every quarter of the fade, then silence. The openings start
+    from black, which a fade leaves, so the join is exact.
+  - A **CLIP** is opening 0, flagged ENTER: entered at the title loop's
+    frames as an action is at the idle loop's (its anchors are title
+    frames, its entries in the ENTRIES, its first record its sound alone),
+    then on into the next opening as any opening is.
+- **A loop is played out of one ring, read whole**, and goes round in it:
+  at the lap's end the picture's cursor and the sound's go back to record
+  1. So a loop must fit a ring (125.4): the play refuses with "Not enough
+  memory" when one does not, and the builder's budget says so first.
+- **An ENDING** - VICTORY or DEFEAT; an escape holds, as before - is one of:
+  - **HOLD**: its clip's last frame held, Esc to leave (version 5's);
+  - **FADE to its end loop**: the canvas fades, and the END loop plays in
+    it from black;
+  - **JOIN its end loop**: the ending clip's last record is a seam onto
+    the end loop's frame 0, as a JOINS clip's is onto the idle loop, and
+    the loop goes on from its record 1;
+  - **FADE and play AGAIN**: the whole screen fades, and the play starts
+    over - the title loop if there is one, the openings if not.
+- **An END loop** plays in the CANVAS, as the idle loop does, its records
+  canvas rows: the band stays up under it with the ending's line, and
+  says Enter to play again. Its sound is its own (OWNSND), or, with none,
+  the music goes on under it. Enter or Space: the whole screen fades and
+  the play starts over. Esc leaves from anywhere, as always.
+- **The play starts over inside the bracket** (`vb_again`): the hook is
+  stopped, the music's ring is filled from its join again (`vb_load`'s
+  second-play path), the rings are emptied, the battle's state is set up
+  from the bundle, and the first head is read - all over a black screen.
 
 ### 125.4 Reading, and memory
 
@@ -237832,7 +237883,13 @@ the openings; the budget and this section's memory), `tools/vbtrules.py`
 (the rules, 125.6), `tools/vbtband.py` (the band's preview), `os88vbt.py
 build PROJECT` and `disk PROJECT`, and `tools/os88vbtgui.py` (the Battle,
 Idle, Clips, Openings, Actions, Characters & menus, Enemy and Build tabs).
-The shipped `BATTLE.VBT` is the demo, built through its project.
+The shipped `BATTLE.VBT` is the demo, built through its project. The
+title and endings (125.3.1) are the window's Title & endings tab: a panel
+each, its loop recommended as the idle loop's is (`loop_candidates`), the
+title's way out entered at anchors spread a quarter of its lap apart, an
+ending that joins shown how its last frame differs from each loop's start,
+and the fade previewed with the engine's own thresholds (the test holds the
+window's table to `vb_fmasks`).
 
 - **The join** (`vbtana.music_joins`): the music comes in when the scene
   opening's sound ends, at `VH_MUSAT`. The builder suggests where by the
@@ -237861,8 +237918,8 @@ The shipped `BATTLE.VBT` is the demo, built through its project.
 - a time gauge (ATB), several enemies, status ailments past guard and
   charge.
 
-The rows: `vbtbuild`, `vbtgui`, `vbtbundle`, `vbtrules` (host) and
-`vbtengine` (MartyPC), all `soak`.
+The rows: `vbtbuild`, `vbtgui`, `vbtbundle`, `vbtrules` (host),
+`vbtengine` and `vbtloops` (MartyPC), all `soak`.
 
 **What a disk delivered while the engine played was about half what it
 delivers alone - and it was the engine's copying, not the disk.** Measured on 86Box (a 5150, CGA, SB 2.0, an ST-225 on a

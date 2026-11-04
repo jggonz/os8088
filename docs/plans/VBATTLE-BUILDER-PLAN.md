@@ -1,6 +1,6 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: all five waves BUILT (2026-11-04): the model, the analysis, the
+**Status: all five waves BUILT, and the title and ending loops (6) (2026-11-04): the model, the analysis, the
 command line, the window's Battle, Idle, Clips, Openings, Actions,
 Characters & menus, Enemy and Build tabs, and the engine playing section
 11's rules (10.5). What is left is the owner's next round and the "Not in
@@ -485,6 +485,26 @@ any of the builder's (section 7's order moves). Its contents:
    - [x] `tests/vbtguitest.py` and `tests/vbtbundle.py`.
    Not in it: an opening that is not full screen; the clip cache of 4.5
    (the engine has two rings and no cache).
+6. **The title loop, the fade and the endings** (the owner, 2026-11-04:
+   "a looped opening and ending. The intent here is fade transitions, but
+   the user could provide clips that join in other ways too... The victory
+   would fade to the end clip, which would loop and wait for a key - or to
+   the opening clip, letting the user play in a loop either way").
+   **DONE 2026-11-04** (bundle version 6, SPEC.md 125.3.1):
+   - [x] a TITLE loop before the openings, full screen, round until Enter
+     or Space, its loop recommended as the idle loop's is; left by a FADE
+     the engine draws (a 4 x 4 ordered dissolve to colour 0, the sound a
+     shift lower each quarter) or by a CLIP entered at the title's anchors;
+   - [x] each ending HELD, FADED to its END loop (in the canvas, the band
+     up under it), JOINED to it (its last frame onto the loop's first,
+     exactly), or faded into playing AGAIN; Enter on an end loop plays
+     again, from the title; Esc leaves from anywhere;
+   - [x] the Title & endings tab, the demo's title and endings, verify's
+     laps and joins, and `tests/vbtloops.py` (MartyPC) for both ways in
+     and out.
+   Not in it: a loop bigger than a ring (it is refused, and the budget says
+   so first); a fade INTO a clip from black at the title (the openings
+   start from black anyway).
 
 ## 11. What an action does: a small, fixed set of verbs
 

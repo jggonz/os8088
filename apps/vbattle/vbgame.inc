@@ -106,8 +106,35 @@ vb_game:
 .g2:
     cmp bl, GS_WAIT
     je .wait
-    ret                             ; GS_END: nothing but Esc
+    cmp byte [vb_eplay], 0          ; GS_END: Esc, and on an END loop Enter
+    je .r                           ; or Space - the screen fades, and the
+    call .go                        ; play starts over (125.3.1)
+    jne .r
+    mov byte [vb_fwant], 3
+    ret
+.go:                                ; ZF=1 AL is Enter or Space, and no
+    cmp byte [vb_fon], 0            ; fade is under way
+    jne .gx
+    cmp al, 13
+    je .gx
+    cmp al, ' '
+.gx:
+    ret
 .intro:
+    cmp byte [vb_tplay], 0          ; THE TITLE goes round until Enter or
+    je .in                          ; Space: then a fade, or its clip
+    cmp byte [vb_lwant], 0
+    jne .r
+    call .go
+    jne .r
+    cmp byte [vb_meta+VH_LEAVE], 0xFF
+    jne .lc
+    mov byte [vb_fwant], 1
+    ret
+.lc:
+    mov byte [vb_lwant], 1
+    ret
+.in:
     cmp byte [vb_bandok], 0         ; THE SCENE OPENING'S first frame is up:
     je .r                           ; the band under it, the menu not yet
     cmp byte [vb_banddone], 0
@@ -447,14 +474,35 @@ vb_end_battle:
     mov al, [vb_over]
     mov bl, [RL+RH_VICT]
     mov si, vb_s_victory
+    mov di, VH_ENDS
     cmp al, OVER_WIN
-    je .e
+    je .w
     mov bl, [RL+RH_DEFT]
     mov si, vb_s_defeat
+    mov di, VH_ENDS+2
     cmp al, OVER_LOSE
-    je .e
+    je .w
     mov bl, NONE                    ; escaped: its own clip has played
     mov si, vb_s_escaped
+    jmp short .e
+.w:
+    mov ax, [vb_meta+di]            ; how it goes on, and its end loop
+    mov [vb_ehow], al               ; (125.3.1): the line says what a key
+    mov [vb_eloop], ah              ; does
+    cmp al, EH_HOLD
+    je .e
+    cmp di, VH_ENDS
+    jne .wd
+    mov si, vb_s_victl
+    cmp al, EH_AGAIN
+    jne .e
+    mov si, vb_s_victa
+    jmp short .e
+.wd:
+    mov si, vb_s_defl
+    cmp al, EH_AGAIN
+    jne .e
+    mov si, vb_s_defa
 .e:
     mov [vb_msg], si
     mov byte [vb_state], GS_END
