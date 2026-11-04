@@ -100418,6 +100418,12 @@ or read, and the row reads `Attached twice (bug)` beside its own name on the
 Drivers page. (It sat immediately before the attach until kernel size pass
 11; ahead of the read it costs no disk work, and from there the five
 refusals after it reach their answers with two-byte jumps.)
+**kern_mega words it differently** (§125.5): the same refusal, at the same
+place, banks `DRVE_CLASS` = 9 (kern_mega's alone; `DRVE_NERR` is 10 there)
+and the row reads `Class already in use`, because `ETHER.DRV` and
+`PCIETHER.DRV` are alternatives the user chose between and "bug" is the wrong
+word for it. `drivers/os88drv.inc` does not carry the code: no driver returns
+it. The other kernels keep `Attached twice (bug)` byte for byte.
 Without that test `drv_publish` overwrites the slot unconditionally — the
 first driver's volumes stay mounted and browsable while every verb on them
 dispatches into the SECOND driver, which is this section's own bug one level
@@ -100564,6 +100570,7 @@ DRVE_HW     it loaded and found no hardware
 DRVE_BUSY   ...or found it and cannot have it: port or IRQ in use
 DRVE_TWICE  it was asked to attach while already attached
 DRVE_NOVOL  it came up and found nothing to do (a READY answer, §51.3.2)
+DRVE_CLASS  kern_mega only: another row already owns this row's class (§125.5)
 ```
 
 **`DRVE_TWICE` is the only one that blames the software**, and that is why it
@@ -100577,7 +100584,13 @@ and before the first port write, so the live ring, the hooked vector and the
 running DSP are all exactly as they were. **The kernel raises it in one place
 too** — a load into a class whose publication slot another row already holds
 (§51.2.1) — and it is the same sentence: the machine is fine, and the
-software is asking for something a class-keyed slot cannot do.
+software is asking for something a class-keyed slot cannot do. **Except on
+kern_mega**, which banks `DRVE_CLASS` (`Class already in use`) for that one
+case instead, because there two rows of one class — `ETHER.DRV` and
+`PCIETHER.DRV` — are alternatives the user chose between (§125.5). It is a
+kernel-only code: `drivers/os88drv.inc` does not carry it, and a driver that
+answered 9 anyway would be banked as it on kern_mega and as `DRVE_HW` on the
+other kernels (`DRVE_NERR` is 10 there and 9 elsewhere).
 
 Two plumbing details make it *arrive*, and without either the refusal is
 correct and silent. `drv_attach` **keeps an attach refusal's `AL`** — it
@@ -183835,6 +183848,18 @@ The literal is what makes the mirror possible: `t_mirror` compares the text
 when a value is not a number, and the SDK cannot see `DRVM_HDD`. So the kernel
 carries `equ 32` and the `%if` is what makes `32` safe.
 
+**One ceiling is per KERNEL: `DRVM_CEIL_NET_MEGA`** (§125.5, the owner's
+decision of 2026-11-04). kern_mega has a second `DRVC_NET` row,
+`PCIETHER.DRV`, and the two are ALTERNATIVES in one publication slot
+(`drv_load_at` refuses whichever attaches second), so kern_mega's ceiling is
+the **larger** of the two rows and not their sum: 39 KB against
+`ETHER.DRV`'s 34. The caption is per kernel because `DOS.O88` already is —
+kern_mega's disks carry a copy assembled `-DDOS_MEGA` (§96, KERN-MEGA-DOS-PLAN
+12.1 item 4), and that copy alone quotes `DRVM_CEIL_NET_MEGA`; every other
+`DOS.O88` quotes `DRVM_CEIL_NET` and is byte-identical to what it was.
+`t_drvmem` holds each to the rows its own kernel has, and the `%if` pins the
+kern_mega one to whichever of the two rows is larger.
+
 **On `kern_small` the caption now says `Up to 32K` where the slot used to make
 it say `Up to  0K`**, and that is the fix arriving on one more machine rather
 than a regression. `Up to` is about the class (§96.36.7.1: the box is a
@@ -233619,8 +233644,10 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
 - **It exits** (`int 21h` AH = 4Ch): its memory and its window go
   (§124.8).
 - **It calls an import WIN16 does not provide:** the stub (§124.3) ends it in
-  the same way, with a toast naming the call, *Needs USER.182, which WIN16
-  does not provide yet.*
+  the same way, but WIN16's window stays, its two lines naming the call:
+  *Needs USER.182* and *which WIN16 does not provide yet.* A toast would go
+  with the window that raised it (§59). So a program whose window goes with
+  no line at all ended itself (the first case), whatever it was doing.
 - **The user asks it to close:** the close box posts `WM_CLOSE`, and the
   program decides (§124.8).
 - **End Task (the owner, 2026-10-29):** a second click on the close box,
@@ -234753,7 +234780,7 @@ common half (S17), and end it with the usual toast when it reaches them.
 
 | call | answer |
 |---|---|
-| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; both, since WIN16 has no SYSTEM folder of its own. The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
+| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; and for the system directory the `SYSTEM` folder under it (§124.20.5.1). The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
 | `OpenFile` | every file is absent until WIN16 has files (S16): `HFILE_ERROR`, the `OFSTRUCT`'s `nErrCode` 2 and its path empty. The Control Panel asks `OF_EXIST` for `SETUP.INF` and carries on without it |
 | `_lclose` | `HFILE_ERROR`: nothing is open |
 | `LoadLibrary`, `FreeLibrary` | 2, file not found, until a program's own DLLs load (S18); nothing to free |
@@ -234772,6 +234799,50 @@ itself and names in its dialog templates, and `DialogBox` refuses a template
 with a class it cannot create; S17 is where both land. The Settings menu has
 twelve items and the window's client is two rows of icons high, so its
 popup, which is kept inside the window (§124.11), shows the first eight.
+
+#### 124.20.5.1 The system directory *(2026-11-04, WIN16-NEXT mozcopy)*
+
+Windows 3.1 has two directories, `C:\WINDOWS` and `C:\WINDOWS\SYSTEM`, and
+WIN16 answered the one folder to both questions (O5, §124.14). Microsoft's
+Setup Toolkit showed why that cannot stand: Mozart's setup copies `MCI.VBX`,
+`MSGBLAST.VBX`, `MVFS2.DLL` and `PICCLIP.VBX` into `GetWindowsSysDir()`, and
+its last step is `RemoveFile(GetWindowsDir() + "\mci.vbx")` (and the other
+three), to get rid of copies an older Visual Basic put in the Windows
+directory. With one folder it deleted the files it had just installed. The
+setup reported *complete* and Mozart could not start for want of them.
+
+**WIN16's system directory is `SYSTEM` under its Windows directory**,
+`A:\SYSTEM\APPDATA\WIN16\SYSTEM` on WIN16's own volume. `GetSystemDirectory`
+answers it, and makes the folder if it is not there (a Setup Toolkit copies
+into it without a `CreateDir`); `GetWindowsDirectory` is as before. No
+trailing backslash, as Windows.
+
+**The folder is made by the kernel, not by WIN16's DOS** (`w16f_mksys`:
+`od_enter`, `od_dive` into `WIN16`, `OSAPI_FILE_MKDIR`, `od_back`). Through
+the DOS, the first `GetSystemDirectory` of a program that does no file I/O
+fetched the DOS core and host into a claim of their own, and a refusal was
+left as `AH=59h`'s answer, which Windows' call never touches. Every refusal
+changes nothing and the path is answered regardless: the folder already there,
+a read-only volume (WIN16 launched from a CD), a write-protected or full disk,
+a disk without WIN16's folder (§124.14: that folder is never created). A
+program then finds the system directory absent, as it finds the Windows
+directory unwritable. `VerFindFile` answers the path without making it: an
+installer that learns the folder only from `VerFindFile` and never asks
+`GetSystemDirectory` finds it absent on a disk where nothing has asked yet
+(open: part 9 is the one that would pay for making it there).
+
+**One name**: the folder's name is `od_s_system` (`apps/os88data.inc`), the
+same bytes the loader's library search (§124.23.1.1, `w16l_gofold`: two
+folders below `SYSTEM\APPDATA` by `W16L_SYSDEPTH`, the second being
+`od_s_system`) and the program search (§124.28.5, `w16t_where`) dive into.
+`w16f_sysdir` (`w16file.inc`) writes the path at DI from it, upper case,
+ending in `\`, as `w16f_windir` does for the Windows directory, and
+`OpenFile`'s search (§124.21.3) uses it; `GetSystemDirectory` and
+`VerFindFile` (§124.24.9) copy the same `od_s_system` after the Windows
+directory. The Windows directory is two spellings that agree today:
+`w16s_dir` (`:\SYSTEM\APPDATA\WIN16`) for the path and `od_enter` plus
+`w16pf_s_dir` for the walk. The room: no resident byte; 149 bytes of the
+library part (64,680 of it on kern_mega) and 11 of part 9.
 
 #### 124.20.6 The gate rows
 
@@ -234895,9 +234966,9 @@ an `int` does, so the two ways in are one DOS with one handle table.
 | `_lread`, `_lwrite` | `3Fh`, `40h`; the count, or -1. `_lwrite` of 0 bytes truncates, as `40h` does (§96.11.6.2) |
 | `_llseek(h, offset, origin)` | `42h`; the new position as a `LONG` |
 | `_lclose` | `3Eh`; 0, or -1 |
-| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5); the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
+| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5) and then in the system directory (§124.20.5.1), and not found there is `nErrCode` 2 even while the system folder is not made yet; the program's own folder (when the program has moved away from it) and `PATH` are not searched, Windows 3.1's last two places; the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
 | `GetTempFileName(drive, prefix, unique, buf)` | `X:\~PPPuuuu.TMP` in the Windows directory (Windows used `TEMP`, and WIN16 has no environment); `TF_FORCEDRIVE` puts it at the root of that drive. With `unique` 0 a number is taken from the clock and stepped until the name is free, and the file is CREATED, as Windows did, so a second call cannot answer the same name. The number |
-| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5) |
+| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5, §124.20.5.1) |
 | `AnsiToOem`, `OemToAnsi`, `AnsiToOemBuff`, `OemToAnsiBuff` | the bytes copied: the two sets agree on every character a file name holds |
 | `DOS3Call` | `int 21h`, and so the core for the calls 124.21.2 forwards |
 | `DlgDirList(dlg, spec, list, static, type)` | Windows 3.0's File Open: a folder or drive in the spec is moved to first (`0Eh`, `3Bh`) and the spec left holding its file part; the list box is emptied and given the files the spec finds (`4Eh`/`4Fh`, on a DTA of WIN16's, the program's put back after), then `[folder]` with `DDL_DIRECTORY` and `[-a-]` with `DDL_DRIVES`, in lower case as Windows showed them; the static control gets the current folder, `b:\docs`. FALSE for a folder or drive that is not there. The controls are WIN16's own (§124.13), so their procedures are called directly |
@@ -235779,7 +235850,7 @@ state went in with S18, in the library part:
 |---|---|
 | `GlobalNotify` (KERNEL.154) | kept by nothing: a block allocated `GMEM_NOTIFY` is never discarded (§124.9, S19b), so there is no discard to be told of |
 | `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle; the block becomes the last, or the first, a shortage discards (§124.9, S19b) |
-| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less. On kern_mega the largest run plus all of the heap's free memory outside the arenas (§124.25.1) |
+| `GetFreeSpace` (KERNEL.169) | what `GlobalAlloc` could obtain, as a SUM, as Windows 3.1's standard mode answered: the free and discardable memory of the arenas plus the room a new arena could take (§124.25.1, *What GetFreeSpace says*). `GlobalCompact(0)` answers the largest block of the same accounting |
 | `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
 | `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
 | `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
@@ -236109,9 +236180,10 @@ opens it, so a packed `.DL_` answers its version as its expansion would.
 | `VerFindFile` (VER.8) | where a file goes: a shared one (`VFFF_ISSHAREDFILE`) to the system directory, anything else to `szAppDir`. Where it is now: the destination if it is there, otherwise the other one of those two with `VFF_CURNEDEST`. A buffer too small is filled as far as it holds, with `VFF_BUFFTOOSMALL`, and each length is set to what was needed. Each length's pointer is read before its buffer's `les` (2026-11-02; the same defect as `OemToAnsi`'s, read through the buffer's segment) |
 | `VerInstallFile` (VER.9) | `szSrcDir\szSrcFileName`, expanded if it is SZDD, written to `szDestDir\szDestFileName`. Then, unless `VIFF_DONTDELETEOLD`, the copy in `szCurDir` is deleted when that is another directory. 0, or `VIF_CANNOTREADSRC`, `VIF_CANNOTCREATE`, `VIF_OUTOFSPACE` (a short write: the partial file is deleted) or `VIF_CANNOTDELETECUR` |
 
-WIN16's Windows directory and system directory are one directory (O5,
-§124.14), so a shared file and a program's own file found there are the same
-file.
+WIN16's system directory is `SYSTEM` under its Windows directory
+(§124.20.5.1): a shared file goes there and a program's own file to its
+`szAppDir`, as on Windows. (Until 2026-11-04 the two were one directory; see
+§124.20.5.1 for why that could not stay.)
 
 The language table is the one Windows 3.1's own `VER.DLL` answers, read off
 the reference machine (the win16-reference skill), with its ids. An id not
@@ -236250,8 +236322,9 @@ itself. **LZT.EXE** (`tests/win16/lzt.c`, its `VERSIONINFO` in
   and refuse a source that is not there.
 
 Its message box must be `LZT OK 24000`. When it has ended, `SAMPLE.TXT` at
-B:'s root and `SYSTEM\APPDATA\WIN16\SECOND.DAT` read off the floppy image
-must be the host's expansions, byte for byte.
+B:'s root and `SYSTEM\APPDATA\WIN16\SYSTEM\SECOND.DAT` (the system
+directory, §124.20.5.1) read off the floppy image must be the host's
+expansions, byte for byte.
 
 **`win16shx`** (soak, QEMU; `make win16fixtures`): `ROOT.TXT` at B:'s
 root and `SHX.TXT` in a folder, `DOCS`. **SHX.EXE** (`tests/win16/shx.c`)
@@ -236303,7 +236376,7 @@ So WIN16 keeps three kinds of claim and no more:
 
 | claim | how many |
 |---|---|
-| the program (§124.20.2) | one, and a second task's (§124.28.5) |
+| the program (§124.20.2) | one; on the kern_mega arm also a second task's (§124.28.5) |
 | the library part (§124.19) | one, from its first call |
 | the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21; on the kern_mega arm 3 until 2026-11-02, §124.31.1). They are 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again. Each is the size of a larger request instead. When a size cannot be had, the claim is tried at three quarters of that, and again, down to the request's own size (halves until 2026-11-02: Arcade's setup asked for 408 KB for its fourth arena with 374 KB left in the arm's map, got 204, and its `LoadBitmap` of a 277 x 160 picture then found no 22 KB run; three quarters gets 306) |
 
@@ -236369,20 +236442,62 @@ The count was chosen against the eight, not against the memory:
 the three is free, so they say what `GlobalAlloc` can actually get. Since S20
 they count the code segments `GlobalAlloc` may discard as well (§124.26.5).
 
-**Not done, pinned:** `GetFreeSpace` still answers the largest free run
-(§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
-it, so its bands are smaller here than on Windows, and it keeps more of
-them.
+**What GetFreeSpace says** *(owner decision, 2026-11-04)*. Windows 3.1's
+standard mode answered `GetFreeSpace(0)` with the SUM of the global heap's
+free and discardable memory, and `GlobalCompact(0)` with its largest block.
+WIN16 answers both from one accounting of what `GlobalAlloc` could really
+obtain, per arm, with no special case for any caller:
 
-**On kern_mega, nearer the sum** *(WIN16 S24)*: `GetFreeSpace` answers the
-largest run in an arena **plus all of the heap's free memory** outside the
-arenas, whether or not a slot is free (`OSAPI_MEM_AVAIL`'s BX), at most a
-megabyte. InstallShield 3's launcher (`SETUP.EXE`, *ISSET_SE*) refuses below
-700,000 bytes with an error whose text its own string table lacks, so it
-showed an empty box; on QEMU's 16 MB kern_mega the largest run was 388 KB
-and the heap held 510 KB more. Real mode keeps the largest run: 640 KB never
-reaches 700,000, and on Windows 3.0's real mode that launcher refused too.
-`GlobalCompact` is unchanged on both: it is what one `GlobalAlloc` gets.
+- **the arenas**: the sum over all of them of the free blocks and of the
+  loaded code segments that are not kept (`w16_gcan`, §124.26.5), one
+  paragraph of header less. `GlobalCompact`'s figure is the largest run of
+  these, not the sum;
+- **room for a new arena**, counted only while one of the four arena slots
+  is free (the room is `R`, and `L` is the largest block it could be):
+  - *kern_big*: `OSAPI_MEM_P` `MEMP_AVAIL`'s total `R` and largest claim `L`
+    of the conventional heap;
+  - *kern_mega*: the claims come from the heap above and below 1 MB, and
+    each is entered in the 960 KB map (§124.31.3), so `R` is the smaller of
+    the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
+    the conventional heap's total plus the extended pool's free KB
+    (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
+    and the larger of the conventional largest claim and the pool's KB. The
+    gap is taken less the 31 paragraphs `w16_vnew` may skip to keep a
+    claim's phase, and in whole KB, the unit the pool grants a claim in. No
+    room while the map has no free row;
+  - on both, `R` is at most one `L` for each arena that could still be made
+    (the free arena slots, and on kern_mega no more than its free map
+    rows): a heap of many small holes is not memory four arenas can take.
+
+`GetFreeSpace` is the arenas' sum plus `R`; `GlobalCompact` is the larger of
+the arenas' largest run and `L`. The figure is at most the map's size on
+kern_mega and at most 640 KB on kern_big, so on kern_big it cannot reach
+InstallShield 3's 700,000 (its launcher `SETUP.EXE` refuses below that with
+string 7068, *Error 111*, and on Windows 3.0's real mode refused too); on
+kern_mega it passes while the map is mostly free. Before this the answer was
+the largest run (kern_big) or the largest run plus the conventional heap's
+free memory (kern_mega), which on QEMU was 545,376 bytes while 154 KB of the
+map and the whole extended pool were unused. A program that sizes buffers
+from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
+asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
+bitmap when the answer is at least four times the picture: 614,400 bytes for
+640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
+`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
+for this operation*, both before this change and after it (a look of each,
+2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
+(`win16pbrush`). The one-band bitmap is the likely cause, read from
+`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
+what would cure it, not a smaller figure.
+
+The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
+and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
+that call into it, so a program that cannot have the part is answered 0
+rather than ended as a missing part ends a call: Calculator calls
+`GlobalCompact(-1)` only when a `GlobalReAlloc` was refused, the moment the
+part is least likely to fit, and then shows its own message. 0 is honest
+there: the part is a heap block of 16 KB (37 KB on kern_mega), and when it cannot be
+had no block that large can.
 
 #### 124.25.2 A library's local heap has room *(S19b batch 1)*
 
@@ -236710,10 +236825,11 @@ handlers are the system-library part's (part 9).
 **What a missing import does (the question L1 asked).** A program that imports
 a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
 import is bound to a stub, and the program runs until it CALLS it. The stub
-then ends the program, as `exit` does, with a toast naming the call. So a
-library that imports 23 functions it never calls in the program's first
-second is fine, and one that calls a missing function in its start-up ends
-the instance at once, with only that toast to say so.
+then ends the program, as `exit` does, with WIN16's window left up and its
+two lines naming the call (§124.25.15). So a library that imports 23
+functions it never calls in the program's first second is fine, and one that
+calls a missing function in its start-up ends the instance at once, with
+only those lines to say so.
 
 | call | what WIN16 does |
 |---|---|
@@ -236724,6 +236840,58 @@ the instance at once, with only that toast to say so.
 | `Arc`, `Pie` (GDI.23, 26) | the ellipse of the box, drawn counter-clockwise from the ray through the start point to the ray through the end point, as a polyline (`Arc`) or a polygon through the centre (`Pie`) of 64 vertices to the circle at most: the two end points are exact, the ones between are 5.625 degrees apart, which is under half a pixel from the true curve at a 300 pixel radius. `Pie` fills in the brush and draws its edges in the pen, `Arc` draws in the pen alone, and neither moves the current point. Identical start and end points draw the whole ellipse. They draw on every adapter's DC and on a memory DC, through `Polyline` and `Polygon` (§124.25.4), so a wide pen and the clip are theirs. The curve is not `Ellipse`'s pixel for pixel (`Ellipse` is `RoundRect`'s corner table) |
 | `CopyMetaFile` (GDI.151), `EnumMetaFile` (GDI.175), `PlayMetaFileRecord` (GDI.176) | 0. There are no metafiles here (§124.25.10): WIN16 never hands out a metafile handle, so there is none to copy, enumerate or play, and a program has to handle the 0 as it does when memory is short |
 
+#### 124.25.15 What Visual Basic 3.0's runtime imports of KERNEL and USER *(WIN16-NEXT L1, `vbuser`)*
+
+`VBRUN300.DLL` imports 23 functions WIN16 lacked (WIN16-NEXT-PLAN L1); the
+GDI ones are `vbgdi`'s and `WaitMessage` is `props`'. These thirteen are the
+KERNEL and USER rest. **What a missing import does** is §124.12's: the stub
+ends the program the moment it is *called*, with the window left up and two
+lines naming it (*Needs USER.416 which WIN16 does not provide yet.*); an
+import never called costs nothing. A missing import was therefore NOT why Mozart and Hangman left after a second
+or two with WIN16's window gone: that is below.
+
+None of the thirteen costs a resident byte. A row is the loader part's
+(§124.19.1) and every handler is in a part: GetCurrentPDB, GetCodeHandle,
+SetHandleCount, GetClassWord/Long, EndMenu and CreateIcon in the task part
+(10; EndMenu reaches the menu loop's `w16_mstop` through the library
+part's gate), GetUpdateRgn in the system-library part (9). The library part
+(3), which has the least room, grew by nothing.
+
+| function | contract on Windows 3.1 | WIN16 |
+|---|---|---|
+| `GetCurrentPDB` (KERNEL.37) | the current task's PSP segment | **exact**: InitTask's own ES, the selector on the kern_mega arm |
+| `SetHandleCount` (KERNEL.199) | the size of the task's handle table after the call: the ask, but never below the 20 a PSP starts with, nor above 255 | **the table's size, whatever is asked**: 13, the five devices and the `DOS_NFH` = 8 files of the one table WIN16's DOS holds (`apps/dos/dos.asm`). So an ask of 13 or less is met as Windows meets one under 20, with more than was asked, and a larger ask is told 13. VBRUN300's own Windows 3.0 path, which it takes below version 3.10, reads the PSP's table size the same way |
+| `FreeModule` (KERNEL.46) | lowers a module's count, frees it at 0; TRUE, FALSE for a handle that is no module | **FreeLibrary's** handler on the same row shape: a library's count lowered, its WEP called and blocks freed at 0, and TRUE (`FreeLibrary`, which shares it, is void). A module that is not a library (the program, WIN16's own) is left alone, and the answer is then not defined. VBRUN300's one call ignores the answer |
+| `GetCodeHandle` (KERNEL.93) | the handle of the code segment holding a function, reloading it if discarded | **approximate**: GlobalHandle's answer for the pointer's segment when that is a block of the global heap (a library's loaded code, a module block), else the segment itself, which is what a fixed segment's handle is in real-mode Windows. A discarded segment is not loaded by this call; its thunk is (§124.26.2), and the pointer a program has is a thunk's. VBRUN300 copies its own segment 1 with it: `GetCodeHandle`, `GlobalSize`, `GlobalLock`. A library's discardable segment is a block of its own (§124.26.11), so all three answer that segment; a segment in a program's own claim answers itself, and `GlobalSize` of that is 0 |
+| `GetClassWord`, `GetClassLong` (USER.129, .131) | a class field by `GCW_`/`GCL_` index | **exact** for `GCW_STYLE`, `GCL_WNDPROC`, `GCW_CBWNDEXTRA`, `GCW_HICON`, `GCW_HBRBACKGROUND`, `GCL_MENUNAME` and `GCW_ATOM` (the atom `GetClassInfo` takes); `GCW_HMODULE` is the current program's (a class record keeps no module, so a class a library registered answers the program too); `GCW_CBCLSEXTRA` and the class extra words are 0 (RegisterClass keeps none, as `GetClassInfo` says), `GCW_HCURSOR` is 0, and a WIN16 control class or a bad window answers 0. One handler: a word's DX is 0. VBRUN300 asks `GCW_CBWNDEXTRA` (and reads its own words at the end of a window's extra bytes) and `GCL_WNDPROC` (is this window one of its own classes?) |
+| `EndMenu` (USER.187) | ends the menu loop that is running | **exact** for the loop §124.11 runs (bar, popup, system menu); with none running it does nothing |
+| `GetUpdateRgn` (USER.237) | the window's update region into a region; NULLREGION, SIMPLEREGION, COMPLEXREGION or ERROR | **approximate, as every region is**: the invalid rectangle, in the client and cut to it, is the region's bounding rectangle; SIMPLEREGION, or an empty region and NULLREGION; ERROR (0) for a window or region that is not one. `bErase` is not acted on, as `GetUpdateRect`'s is not |
+| `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` (USER.259-.261) | batch window moves, applied at the end | **at once, which Windows allows**: Begin answers the handle 1, Defer **is** `SetWindowPos` (its eight words' last seven are SetWindowPos's, and it answers 1, or 0 for a window that is not one), End answers TRUE. The handle is not a count of anything, so a batch larger than `n` is not refused |
+| `CreateIcon` (USER.407) | an icon from device bits | **CreateCursorIconIndirect's body** (§124.27.7), with the `CURSORICONINFO`'s row bytes worked out as `((nWidth * nBitsPixel + 15) / 16) * 2`: 1 plane of 1 or 4 bits, 4 planes of 1 bit, at most 64 square; any other shape answers the one cursor `LoadCursor` hands out. `DestroyIcon` frees it |
+| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **refused: FALSE**, no popup shown. §124.11's loop is the bar's (`WM_INITMENU`, the bar's title, `w16_mhit` on the bar), and a popup with no bar under it needs its own start, its own hit test and its own dismissal. Estimated at 600-900 bytes of the library part, which has 800 left on the kern_mega arm, and a trampoline of about 8 resident. Not done here |
+
+Gates: `tests/win16/vbuser.c` (`make win16fixtures`) checks every row above
+that is not a refusal against a value it can compute, and the TrackPopupMenu
+refusal; `tests/win16vbuser.py` (row `win16vbuser`) runs it.
+
+**What Mozart and Hangman do now** (looked at on `kern_mega`, QEMU 486 with
+16 MB, 2026-11-04, with `vbgdi`'s, `props`' and `libpath`'s calls merged and
+VBRUN300 and every VBX in the Windows directory). Both show *Loading...*,
+then *Running* and a file bar, and then WIN16's window closes with no line,
+no toast and no dialog. Neither reaches one of these thirteen. A Visual Basic
+3.0 program's entry is one instruction, a far call to `VBRUN300.100` with the
+start registers of §124.3 (BX the stack's size, CX the heap's, DS = SS =
+DGROUP). Its first call is `GlobalHandle(SS)`: the runtime makes the
+program's DGROUP its own data segment, `GlobalReAlloc` to the stack, the heap
+and its own 8,856 bytes of data, copies its data to DGROUP:0 and moves the
+stack to the top. WIN16's DGROUP is no block of the global heap (§124.9), so
+`GlobalHandle` answers 0, and on 0 the runtime ends the program with
+`int 21h` `4CFFh`. A `-DW16_TRACE` build (§124.17.4) shows the three calls
+before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
+`KERNEL.21`. An `AH=4Ch` is not recorded. Answering `GlobalHandle`,
+`GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
+out at 64 KB whenever the arena has room (§124.21.4), is the next step, and
+is not done here.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -236960,9 +237128,9 @@ entry pointed into another segment. Windows Help started by Calculator
   scans from the int's frame.
 
 **What a program is told is free.** `GlobalCompact` and `GetFreeSpace`
-(§124.25.1) answer the largest run of an arena made of free blocks and of
-loaded code segments that are not kept (`w16_gcan`), since `GlobalAlloc`
-discards those to make the room. One that is in use is counted too: the
+(§124.25.1) count the free blocks and the loaded code segments that are not
+kept (`w16_gcan`) of the arenas - the largest run for `GlobalCompact`, the sum
+for `GetFreeSpace` - since `GlobalAlloc` discards those to make the room. One that is in use is counted too: the
 stack is scanned only when a segment is about to go, and Windows counted
 all of its discardable memory. Without this Paintbrush 3.0 stopped at
 *Insufficient memory to edit image* on QEMU's 640 KB: its start-up loads
@@ -237770,28 +237938,30 @@ Windows' own:**
 | 11 | it is not a Windows program WIN16 can run |
 | 16 | `W16_MAXTASK` tasks already run |
 
-**A second program takes a claim when it can** *(L2, 2026-11-04)*. The
-first program's segments are its claim, one of the eight (§124.25.1). A
-program started while only one task runs (`w16_ntk` = 1) asks for a claim
-of its own too, laid out as the first's is, and keeps it as `W16K_FL` = 0.
-It has to, because the arenas are a few claims of fixed size and nothing
-else in the machine can be spent on them: Sir Hangman's engine
-(`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code segments, 404 KB,
-beside the launcher that started it, and the engine's DGROUP, up to 64 KB,
-is room the arenas' code then cannot have. Counted against §124.25.1's
-kinds, two programs, the library part and four arenas are seven claims, and
-the eighth is left to the transient ones (a part read and copied, a large
-bitmap, the next program's NE tables), so **at most two tasks hold a
-claim**: a third program, or a second while two already run, and a program
-whose claim is refused, put their segments in one fixed block of the global
-heap, laid out as the claim would be, as before (`W16K_FL` = 1). The arenas
-grow to hold it, within their four (§124.25.1), and it loads less at launch
-than a first program does (§124.26.3). What that costs on `kern_big`, whose
-owner limit is eight (§50): with two programs holding claims and all four
-arenas made, a third launch has one claim left for its NE tables and, when
-no task has kept the loader part (§124.26.3), the part's own read as well,
-so it can be refused with *Not enough memory* where a block would have
-loaded it. `kern_mega` allows twelve, and its map ten rows (§124.31.3).
+**A second program takes a claim when it can, on kern_mega** *(L2, 2026-11-04)*.
+The first program's segments are its claim, one of the owner's claims
+(§124.25.1). On the kern_mega arm a program started while only one task runs
+(`w16_ntk` = 1) asks for a claim of its own too, laid out as the first's is,
+and keeps it as `W16K_FL` = 0. It has to, because the arenas are a few
+claims of fixed size and nothing else in the machine can be spent on them:
+Sir Hangman's engine (`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code
+segments, 404 KB, beside the launcher that started it, and the engine's
+DGROUP, up to 64 KB, is room the arenas' code then cannot have. So **at most
+two tasks hold a claim** there: a third program, or a second while two
+already run, and a program whose claim is refused, put their segments in one
+fixed block of the global heap, laid out as the claim would be
+(`W16K_FL` = 1). The arenas grow to hold it, within their four (§124.25.1),
+and it loads less at launch than a first program does (§124.26.3).
+`kern_mega` allows twelve claims and its map ten rows (§124.31.3).
+
+**On kern_big the first program's is the only program claim** *(lead
+decision, 2026-11-04)*. Its owner limit is eight (§50): one program claim,
+the library part and four arenas are six, and the NE tables' claim and the
+part's own read are the transient two. A second claim would leave a third
+launch with one, and a launch that loaded as a block before L2 could then be
+refused with *Not enough memory*. So on the real arm every program after
+the first puts its segments in a block of the global heap (`W16K_FL` = 1),
+as before L2, whatever `w16_ntk` is.
 
 **Either is given back on every exit** *(L2)*. `w16t_end` frees a dead
 task's segments by its `W16K_FL`: a claim through `W16VFREE` (which also
@@ -239637,3 +239807,258 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   (423 left), +110 each, 109 of handler and entry call and 1 of bss. The
   "92" this note gave before was stale: the arm had 533 when it was
   written over.
+
+## 125. PCIETHER.DRV — PCI network cards for kern_mega (`drivers/pciether/`)
+
+*Design record and story list: docs/plans/PCIETHER-PLAN.md. Status per story
+is in the plan; this section is the contract and says per item whether it is
+pinned or shipped.*
+
+`PCIETHER.DRV` is the PCI half of §72: the SAME TCP/IP stack and socket verbs
+as `ETHER.DRV`, in front of a card found on the PCI bus instead of at an ISA
+jumper. Its first card is the **Realtek RTL8139** family (8139, 8139A/B/C and
+the C+ in its normal-mode register set), PCI `10EC:8139`. It is a family
+driver on purpose: the next PCI NIC is a row in its backend table and a
+`<card>.inc` beside `rtl8139.inc`, not a new driver.
+
+### 125.1 Owner decisions (pinned 2026-11-04)
+
+- **A separate driver, `PCIETHER.DRV`**, not a second backend inside
+  `ETHER.DRV` — so later PCI NICs land in it.
+- **kern_mega only.** Its `drv_tab` row, its `SYSTEM.CFG` bit and the file
+  itself exist on kern_mega's build and disks and nowhere else. kern_big,
+  kern_emu and kern_small are byte-identical to before; no shipped floppy but
+  kern_mega's system disks carries the file.
+
+### 125.2 One stack, shared as SOURCE (pinned; shipped)
+
+`drivers/pciether/pciether.asm` includes `drivers/ether/ethdrv.inc` - the body
+that was `ether.asm`'s own (service table, attach/ready/detach, the DHCP wait,
+the package door) - and through it the stack: `inet.inc`, `tcp.inc`, `dns.inc`,
+`ethsock.inc`, `ethstate.inc`, `etherui.inc`, `ethcfg.inc`. Never a copy,
+WEAVE-SPEC §1.2's rule. The stack reaches the card only through the **NIC
+seam**, which the includer defines BEFORE including `ethdrv.inc`:
+
+| name | kind | meaning |
+|---|---|---|
+| `nic_init` | proc | bring the card up and start receiving; cannot fail; every register kept |
+| `nic_stop` | proc | silence the card (detach); cannot fail |
+| `nic_rx` | proc | one frame into `eth_rxb`: CF=0 and CX = its length; CF=1 = nothing; every register but CX kept |
+| `nic_tx` | proc | CX bytes of `eth_txb` onto the wire, padded to 60; CF=1 = the card never finished; every register kept |
+| `NIC_FRAME` | equ | the largest frame, 1,514 (checked against `NET_FRAME`) |
+| `NIC_BACKEND` | file | the card's source, included in place of `ne2000.inc` |
+| `NIC_DATA` | macro | card-specific tables, placed after the service table |
+| `NIC_ATTACH_FIND` | macro | find the card inside `eth_attach`: CF=0 falls into `.found`, none jumps to `.none` |
+| `NIC_STATE` | macro | the backend's words in `ethstate.inc` |
+| `NIC_UI_CARD`, `NIC_UI_STRINGS` | macros | the card's row on the Ethernet page (BX = the row's y) |
+| `NIC_RING_CONSTS` | macro | `NIC_RINGSZ`, `NIC1_RINGSZ`, `SK_RINGSLK`, and the build-time proof the socket ladder's rungs fit the ring |
+
+In `ETHER.DRV` they are `drivers/ether/nicne2k.inc`: `nic_rx`/`nic_tx`/
+`nic_init`/`nic_stop` are `%define`d to `ne_rx`/`ne_tx`/`ne_init`/`ne_stop`
+(`ethprof.inc` re-aims `ne_tx`), and each macro is the text that stood inline
+before. **`ETHER.DRV` assembles byte-identical across the seam** - the plain
+build, `-DETH_BASE` and `-DETHPROF` all `cmp` clean against the tree before it
+- and so does `OS88NET.COM`, the DOS end of the cable, which includes the same
+`inet.inc`/`tcp.inc`/`ethsock.inc`/`ethstate.inc` and supplies the seam names
+from `pktdrv.inc`'s packet driver (`os88net.asm`). In `PCIETHER.DRV` the four
+procs are one `jmp` each through the vectors of the backend the PCI probe
+chose (`pce_vt`), so the next card is a row in the backend table and a
+`<card>.inc` and not a new driver. `ETHPROF` is refused there: the stage
+timers are the 8390's.
+
+`ETHER.CFG` (§72.7) is shared: the manual address applies to either driver. The
+I/O base is not a field of that file or of the Setup window; the Ethernet page
+shows the 8390's base beside its name and `PCIETHER.DRV` shows the name alone.
+
+### 125.3 Finding the card: the PCI BIOS, 16-bit, at attach only (pinned; shipped)
+
+PCI configuration space is reached through the **PCI BIOS, `int 1Ah`
+AH=B1h**, with 16-bit registers only, so the image stays `cpu 8086` (§1) and
+needs no 32-bit register for the BIOS:
+
+| call | in | out |
+|---|---|---|
+| `B101h` present? | — | CF=0, AH=0, DX=`4350h` ('PC' of EDX=`'PCI '`) |
+| `B102h` find device | CX=device, DX=vendor, SI=index | CF=0, AH=0: BH=bus, BL=dev/fn |
+| `B108h`/`B109h` read byte/word | BX=bus/devfn, DI=register | CL / CX |
+| `B10Bh`/`B10Ch` write byte/word | BX, DI, CL / CX | CF |
+
+The probe (`drivers/pciether/pci.inc`, `pci_probe`) runs only when
+`OSAPI_CPU_INFO` answers a 386 or better: kern_mega boots on a 286, and no 286
+board carries PCI. The backend table (`pce_tab`) is rows of `{vendor, device,
+name, vectors}` ending in a zero vendor; each row is asked `B102h` with SI=0.
+BAR0 (config `10h`) must be an I/O BAR (bit 0 set); the base is the word AND
+`FFFCh`. A row that matches but whose BAR0 is not I/O is skipped with the card
+untouched; only a card we will drive gets the Command register (`04h`) I/O
+Space (bit 0) and Bus Master (bit 2) set. The vectors are `claim, init, rx,
+tx, stop`; the chosen row's are copied to `pce_vt` and the claim runs at
+attach, so a card with no memory for its ring is refused (`DRVE_HW`, as a
+missing card; the Drivers page cannot yet tell the two apart).
+
+### 125.4 RTL8139: polled, one ring, one transmit buffer (pinned; shipped)
+
+It **polls and hooks nothing**, as §72.2.1 — no IRQ, IMR = 0. The receive
+ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
+
+- **Memory.** One pinned heap claim (§66 default, `MEMP_CLAIM | MEMP_CPU`,
+  and `CX` = `MEMP_CONV`: the image is `OS88_DRV_HICLAIM`, and a claim with no
+  head would otherwise be offered the pool above 1MB, whose blocks move)
+  holds the receive ring - 8192 + 16 bytes with **WRAP = 1**,
+  plus 1,536 bytes of overrun so a frame that wraps is contiguous and is never
+  split - and, at offset 9,744, one 1,536-byte transmit buffer (4-byte aligned:
+  a paragraph base is). 11,280 bytes, 11,776 at the 512-byte granule. Claimed
+  at attach only when an RTL8139 was found, freed at detach. Its bus address is
+  the claim's linear base from `OSAPI_SEG` `SEG_LIN`; kern_mega does not page,
+  so linear is physical and the card, a 32-bit bus master, may reach it
+  wherever the heap put it. **A boot attach claims in real mode** (SYSTEM.CFG's
+  drivers load before `mega_enter`), so the claim's name is a paragraph that
+  `mem_xlatf` cannot re-point - a pinned record gets the kernel's half only
+  (KERN-MEGA-MEMORY-PLAN MC7.4) - and loading it in protected mode is a #GP.
+  The ring is therefore reached through `rt_es`: `OSAPI_SEG` `SEG_WIN` over
+  its physical paragraph, `EMS.DRV`'s `em_fsel` shape, which a real-mode
+  kernel answers with the paragraph and protected mode with a window kept
+  until detach. Detach's `OSAPI_MEM_FREE` of a paragraph-named claim is
+  refused under protected mode and `drv_release`'s owner sweep frees it, the
+  card being silenced first. The socket ladder's top rung (8 KB) does not fit
+  an 8 KB ring with a frame of slack, so `sk_cardcap` clamps to the 4 KB rung,
+  as for an NE1000: stop-and-wait TCP does not use more.
+- **Init.** `CONFIG1` = 0 (power on); `CR` = `10h` (RST) and wait, bounded, for
+  it to clear; station address from `IDR0..5`; `MAR0..7` = 0; `RBSTART` = ring;
+  `IMR` = 0; `ISR` cleared; `CR` = RE|TE (`0Ch`) **and only then** `RCR` and
+  `TCR` (Linux `8139too`: thresholds are ignored while Rx/Tx are off). `RCR` =
+  `E78Ah`: APM|AB (ours plus broadcast, §72.8's filter), WRAP, RBLEN = 8K,
+  MXDMA unlimited, RXFTH none. `TCR` = `03000700h` (standard IFG, MXDMA
+  unlimited). `CAPR` = `FFF0h`.
+- **Receive.** While `CR` bit 0 (BUFE) is clear: the 4-byte header at the
+  read offset is status (ROK = bit 0) and length (frame + 4-byte CRC). The
+  frame follows the header. Next offset = (off + len + 4 + 3) AND NOT 3,
+  modulo 8192, and `CAPR` is written **next offset − 16** (the chip's
+  documented bias). A length of `FFF0h` is a frame the chip is still copying
+  out of its FIFO (Linux `8139too`), so the ring is left as it is until the
+  next call. A bad header (ROK clear, length < 64 or > 1,536 + 4, Linux's
+  bound: the overrun area holds a frame that long from the ring's last dword,
+  checked at build time) or
+  `ISR` RXOVW/FOVW resets the receiver and throws the ring away, §72.2's
+  overflow rule (`eth_novw` counts it): `CR` = TE, wait for RE to clear, then
+  the init sequence from `RBSTART` on. A good frame longer than the stack's
+  1,514 is consumed and skipped. `ISR` bits are write-one-to-clear.
+- **Transmit.** The four `TSD`/`TSAD` slots are used in turn (the chip
+  requires it), all pointing at the one buffer; a frame shorter than 60 bytes
+  is padded. `TSAD[n]` = buffer, then `TSD[n]` is written - ERTXTH (8 =
+  256 bytes) in bits 21:16, the size in 12:0, OWN clear, which starts the send.
+  Wait, bounded in time (§72.2.2's rule, sized from the slowest machine:
+  65,535 reads of a PCI register, about 16 ms on a Pentium and 130 ms on a
+  386SX, against 1.2 ms for a full frame at 10 Mbit), for TOK or TUN (the low
+  word) or TABT (bit 30) before returning; the stack is stop-and-wait, so one
+  frame in flight is the design and not a limit. A timeout is CF=1, as the
+  8390's; TUN and TABT are the wire's loss and TCP retransmits.
+- **The 32-bit registers are 32-bit accesses.** `RBSTART`, `RCR`, `TCR`,
+  `TSAD` and `TSD` are written - and `TSD` read - as one dword: `out dx, ax`
+  with a `66h` prefix byte (`db 66h` to the assembler, so the image stays
+  `cpu 8086`), composed from two pushes and a `pop eax`. This replaces the
+  first draft's "every access is 8- or 16-bit, a 32-bit register as two word
+  writes", which is the one reading a real 8139 accepts and a model that
+  implements those registers for a dword access only (QEMU's `rtl8139`, for
+  `RBSTART`, `RCR`, `TCR`) would drop. The prefix executes on the 386+ the PCI
+  gate guarantees; `CR`, `CONFIG1` and `IDR` are byte accesses, `IMR`, `ISR`
+  and `CAPR` word ones.
+- **Detach stops the DMA before freeing the claim**: `IMR` = 0, `CR` = 0, RST,
+  wait, then free. A card left running writes into whatever the heap gives that
+  memory to next.
+
+### 125.5 The kern_mega row (pinned)
+
+One `drv_tab` row on kern_mega only, appended last: file `PCIETHER.DRV`,
+title `PCI Ethernet`, class **`DRVC_NET`** — the same class as `ETHER.DRV`'s,
+so packages, `apps/os88sock.inc`'s `net_find`, the DOS packet layer and The
+Wire need no change. One class has one publication slot (§51.2.1), so the two
+are ALTERNATIVES: when both are wanted the first to attach owns the class and
+the second is refused cleanly, with its reason on the Drivers page and
+nothing of the first disturbed. That refusal already existed
+(`drv_load_at`, §51.2.1: it compares `[drv_owner]` for the row's class
+against the row, ahead of any disk work, and `[drv_owner]` is written only by
+`drv_publish` after a successful attach, so an `ETHER.DRV` that found no card
+leaves the slot free for `PCIETHER.DRV`). What kern_mega adds is the words:
+`DRVE_CLASS`, `Class already in use`, in place of `DRVE_TWICE`'s
+`Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** (§125.8
+item 2). Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
+half-KB: 17,153 bytes with its bss) + `DRVM_RT_PCIETH` (23: `rt_claim`'s
+ring, slack, overrun and transmit buffer, `RT_CLAIM` = 11,280 bytes, held
+from attach to detach) + `DRVM_SK_PCIETH` (21: the socket pool at the
+**middle** rung, because `sk_cardcap` holds a rung to the 8KB ring less
+`SK_RINGSLK` and `SK_RXMAX` never fits) = **78 half-KB, 39 KB** — against
+`ETHER.DRV`'s 67. The two are alternatives, so kern_mega's `DRVC_NET` ceiling
+is the larger and not their sum: `DRVM_CEIL_NET_MEGA` = 39, which kern_mega's
+`-DDOS_MEGA` `DOS.O88` quotes, while `DRVM_CEIL_NET` stays 34 everywhere else
+(§51.12.1; `tests/unit/t_drvmem.py` re-derives every term from
+`drivers/pciether/`). Not wanted by default (§51.3). When both rows are
+wanted, `drv_boot` walks the table in row order, so `ETHER.DRV` (row 2) is
+tried first: with an ISA card it owns the class and `PCIETHER.DRV` reads
+`Class already in use`; with none it fails `No hardware found`, the slot
+stays free and `PCIETHER.DRV` attaches. Unticking the owner releases the slot
+(`drv_release` zeroes `[drv_owner]` only for the row that holds it). It must
+cross no kern_mega resident rung; `make budget-check` holds
+`KERN_MEGA_RESIDENT_KB`.
+
+### 125.6 Disks and machines (pinned)
+
+`PCIETHER.DRV` ships in `SYSTEM/` on kern_mega's system disks (`make mega`)
+and on no other image. A gate disk with `SYSTEM.CFG` already wanting it
+(ethertest's shape on kern_mega) is built on demand. QEMU is the gate: its
+`rtl8139` is a PCI device behind SeaBIOS's PCI BIOS, on the slirp network
+§72.9 already uses. Bochs has no RTL8139 and MartyPC no NIC at all; an 86Box
+PCI machine with its RTL8139C+ is where a person LOOKS.
+
+*Shipped (harness, S7-S9, unrun until the lead's final pass):* `MEGADRIVERS`
+(Makefile) names `$(BUILD)/pciether.drv` as a prerequisite of both kern_mega
+system disks, so a tree without the driver's rule stops `make mega` with
+make's "No rule to make target" - a mega disk must not quietly ship without
+it. `make pciethertest` builds `build/pciethertest.img` (`mega.img`'s files
+plus a `SYSTEM.CFG` whose bit is `PCIETHER_CFGBIT`, default 11 - §125.5's bit;
+the kernel's `drv_cfgbit` is the authority and the variable follows it). `make
+run-pciether` is the interactive QEMU machine (`-m 16`, `-device rtl8139` on
+user networking); `os88qemu.make_test("PCIETHER=1", ...)` is the same machine
+for rows, and `tests/pciether.py` (soak row `pciether`) is the gate.
+`vm/pentium-pciether` (`make pentium-pciether`) is the 86Box profile.
+
+### 125.7 What is not here
+
+- Interrupts, multicast, promiscuous reception: §72.8's list, unchanged.
+- C+ mode (descriptor rings, offload): the normal-mode register set is what
+  every 8139 has.
+- A second PCI card. One row in the backend table attaches; the next rows
+  (RTL8029 = an NE2000 on PCI, which `ne2000.inc` already drives given a
+  base; AMD PCnet; Intel 8255x) are plan items, not contract.
+
+### 125.8 Answered by the build, and what is still open
+
+1. **How a kern_mega driver reaches `int 1Ah`: it issues it.** kern_mega
+   points IDT vectors 10h-1Fh at sixteen five-byte stubs (`mega_ss`, kernel/
+   mega.inc) that push the vector and enter `mega_svc`, which reflects the
+   call to real mode with every IRQ the BIOS does not own masked, runs the
+   BIOS's own handler and returns its registers and flags. `HDD.DRV`'s
+   `int 13h`, `VESA.DRV`'s `int 10h`, `XMEM.DRV`'s `int 15h` and the kernel's
+   clock `int 1Ah` use the same door, so no kernel work is needed. DS and ES
+   reach the BIOS as real-mode segments - a selector above 1MB as `FFFFh`
+   (`mega_s2segc`), given back on the way out - and `B101h`-`B10Ch` take no
+   pointer and read neither, so `PCIETHER.DRV` is `OS88_DRV_HIGHOK` and
+   `OS88_DRV_HICLAIM` as `ETHER.DRV` is: the image runs above 1MB and the
+   socket pool is claimed there, and `HDD.DRV`, also `HIGHOK`, makes its
+   reflected `int 13h` from a high image the same way. (A boot attach runs in
+   real mode before the image is moved, so there the calls are not reflected
+   at all.) On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
+   CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
+   made. A few hundred microseconds a call, at attach only. *Seen on a
+   machine: no - the first run is the harness's (S8).*
+2. **The `SYSTEM.CFG` bit and the row: settled.** Bit **11** (0-10 are taken
+   on every build; 5 is the absolute mouse's even where a build has no such
+   row), row **10** on kern_mega (after VESA.DRV's row 9), `DRV_MAX` 11 there
+   (`DRV_PX`, `kernel/driver.inc`). Its heap price, 39 KB, and the
+   per-kernel `DRVC_NET` ceiling are §125.5's.
+3. Sizes, from the build of 2026-11-04 (after the verifier's fixes): image
+   17,259 bytes unpacked (`ETHER.DRV` 17,397), 10,950 packed (lz4), 352 bytes
+   of trailing zeros;
+   claim at attach 11,280 bytes (11,776 at the granule) plus the socket pool
+   when a package opens one (§72.13).
+4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
+   TSD's TOK/OWN timing has not been run; the harness's row is the first.

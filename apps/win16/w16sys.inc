@@ -9,18 +9,29 @@
 section .w16dlg
 
 ; GetWindowsDirectory (KERNEL.134), GetSystemDirectory (KERNEL.135) - the
-; folder WIN.INI is in (SPEC.md 124.14) as a DOS path: "A:\SYSTEM\APPDATA\
-; WIN16" on WIN16's own volume. One folder answers both: WIN16 has no SYSTEM
-; folder of its own. args: +0 nSize, +2 lpBuffer. Answers the length; a
-; buffer too small for it answers the size it needs, NUL included, as Windows
-; did, and is left alone
+; folder WIN.INI is in (SPEC.md 124.14) as a DOS path, "A:\SYSTEM\APPDATA\
+; WIN16" on WIN16's own volume, and SYSTEM under it (SPEC.md 124.20.5.1), as
+; Windows had C:\WINDOWS and C:\WINDOWS\SYSTEM. args: +0 nSize, +2 lpBuffer.
+; Answers the length; a buffer too small for it answers the size it needs,
+; NUL included, as Windows did, and is left alone. The system folder is made
+; on the first ask (a Setup Toolkit copies into it without a CreateDir)
+W16LIB w16k_sysdir
+    push si
+    push di
+    ICALL w16_args
+    mov dx, od_s_syslen             ; DX = the characters past the Windows
+    call w16f_mksys                 ;   directory: '\' and "SYSTEM"
+    jmp short w16k_dircom
 W16LIB w16k_windir
     push si
     push di
     ICALL w16_args
+    xor dx, dx
+w16k_dircom:
     mov cx, [es:bx]
     les di, [es:bx + 2]
     mov ax, w16s_dirlen + 1
+    add ax, dx                      ; the length, NUL with it
     cmp cx, ax
     jb .out
     mov al, [w16_homev]
@@ -28,9 +39,16 @@ W16LIB w16k_windir
     cld
     stosb
     mov si, w16s_dir
-    mov cx, w16s_dirlen
-    rep movsb                       ; the NUL with it
+    mov cx, w16s_dirlen             ; the NUL with it
+    rep movsb
+    mov cx, dx
+    jcxz .len
+    mov byte [es:di - 1], '\'       ; ...over it, and the system folder's
+    mov si, od_s_system             ;   name, its NUL with it
+    rep movsb
+.len:
     mov ax, w16s_dirlen
+    add ax, dx
 .out:
     pop di
     pop si
@@ -219,8 +237,10 @@ LCONT w16k_llback
     cwd
     ret
 
-; FreeLibrary (KERNEL.96) - args: +0 hLibModule. The count lowered; at 0
-; its WEP(WEP_FREE_DLL) called, then its blocks freed (w16k_flback)
+; FreeLibrary (KERNEL.96), FreeModule (KERNEL.46) - args: +0 hLibModule.
+; The count lowered; at 0 its WEP(WEP_FREE_DLL) called, then its blocks
+; freed (w16k_flback). TRUE, FreeModule's answer (FreeLibrary's is void);
+; a handle that is no library of ours is left alone (SPEC.md 124.25.15)
 W16LIB w16k_freelib
     push si
     push di
@@ -229,7 +249,7 @@ W16LIB w16k_freelib
     ICALL w16_libof                 ; SI -> it, BX = its record
     jc .out
     dec byte [si + W16L_COUNT]
-    jnz .out
+    jnz .true
     inc byte [si + W16L_COUNT]      ; alive while its WEP runs
     W16CSEG es
     mov di, w16_s_wep               ; XSEC-OK: ES = CS
@@ -251,6 +271,8 @@ W16LIB w16k_freelib
 .nowep:
     mov ax, bx
     call w16l_drop
+.true:
+    mov ax, 1
 .out:
     pop di
     pop si
@@ -259,7 +281,9 @@ w16_s_wep: db 'WEP'
 
 LCONT w16k_flback
     mov ax, cx
-    jmp w16l_drop
+    call w16l_drop
+    mov ax, 1
+    ret
 
 ; GetModuleUsage (KERNEL.48) - args: +0 hModule: a library's count, else 1
 W16LIB w16k_getmodu

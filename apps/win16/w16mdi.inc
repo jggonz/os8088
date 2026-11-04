@@ -4126,6 +4126,182 @@ W16TSK w16i_dumpicon
     cwd
     ret
 
+; =============================================================================
+; What Visual Basic 3.0's runtime imports of KERNEL and USER (SPEC.md 124.25.15)
+; =============================================================================
+
+; GetCurrentPDB (KERNEL.37) - no args: the program's PSP, as its InitTask
+; was given it (SPEC.md 124.25.15). A word; DX is cleared.
+W16TSK w16k_curpdb
+    W16PSP
+    xor dx, dx
+    ret
+
+; SetHandleCount (KERNEL.199) - args: +0 wNumber, not read. The answer is
+; the size of the handle table, as Windows' is (its PSP's, never below the
+; 20 a PSP starts with, so an ask under it gets more than it asked): here the
+; one table WIN16's DOS has, the five devices and DOS_NFH = 8 files
+; (apps/dos/dos.asm). VBRUN300's own Windows 3.0 path reads the PSP's table
+; size the same way (SPEC.md 124.25.15)
+W16_NHANDLE equ 13
+W16TSK w16k_sethcount
+    mov ax, W16_NHANDLE
+    xor dx, dx
+    ret
+
+; GetCodeHandle (KERNEL.93) - args: +0 lpProc. The handle of the block the
+; function's segment is, GlobalHandle's answer for it; a segment in a
+; program's own claim is no block of the global heap, and there (as in real
+; mode Windows, where a fixed segment's handle IS its segment) the answer is
+; the segment itself (SPEC.md 124.25.15). The frame's offset word is put over
+; with the segment so that GlobalHandle (w16k_ghandle) reads it as its own
+; argument; the gate pops the frame whole afterwards
+W16TSK w16k_codehandle
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+    mov [es:bx], ax
+    ICALL w16k_ghandle              ; AX = the handle, 0 not a block of ours
+    or ax, ax
+    jnz .out
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+.out:
+    xor dx, dx
+    ret
+
+; =============================================================================
+; A class's words and longs (SPEC.md 124.25.15)
+; =============================================================================
+
+; GetClassWord (USER.129), GetClassLong (USER.131) - args: +0 nIndex, +2
+; hWnd. The class of a window the program registered, by Windows' GCW_ and
+; GCL_ indices; the answer is the same for both, a long's DX being 0 for a
+; word. cbClsExtra is 0 (RegisterClass keeps none, as GetClassInfo says),
+; so a class extra word reads 0, as do the cursor and every index not
+; listed here; a window of WIN16's own control classes has no record, and 0.
+GCW_STYLE      equ -26
+GCL_WNDPROC    equ -24
+GCW_CBWNDEXTRA equ -18
+GCW_HMODULE    equ -16
+GCW_HICON      equ -14
+GCW_HBRBACK    equ -10
+GCL_MENUNAME   equ -8
+GCW_ATOM       equ -32
+W16TSK w16u_getclsw
+    push si
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov ax, [es:bx + 2]
+    ICALL w16_hwnd2rec              ; BX = its record; keeps CX
+    jc .zero
+    cmp byte [bx + W16W_KIND], 0
+    jne .zero
+    mov al, [bx + W16W_CLS]
+    mov ah, W16C_SIZE
+    mul ah
+    add ax, w16_cls
+    mov si, ax
+    xor dx, dx
+    cmp cx, GCW_STYLE
+    jne .n1
+    mov ax, [si + W16C_STYLE]
+    jmp short .out
+.n1:
+    cmp cx, GCL_WNDPROC
+    jne .n2
+    mov ax, [si + W16C_PROC]
+    mov dx, [si + W16C_PROC + 2]
+    jmp short .out
+.n2:
+    cmp cx, GCW_CBWNDEXTRA
+    jne .n3
+    mov ax, [si + W16C_WEXTRA]
+    jmp short .out
+.n3:
+    cmp cx, GCW_HMODULE
+    jne .n4
+    mov ax, [w16_dgroup]
+    jmp short .out
+.n4:
+    cmp cx, GCW_HICON
+    jne .n5
+    mov ax, [si + W16C_ICON]
+    jmp short .out
+.n5:
+    cmp cx, GCW_HBRBACK
+    jne .n6
+    mov ax, [si + W16C_HBR]
+    jmp short .out
+.n6:
+    cmp cx, GCL_MENUNAME
+    jne .n7
+    mov ax, [si + W16C_MENU]
+    mov dx, [si + W16C_MENU + 2]
+    jmp short .out
+.n7:
+    cmp cx, GCW_ATOM
+    jne .zero
+    mov ax, si                      ; the atom GetClassInfo takes: 0C000h
+    sub ax, w16_cls                 ;   and the record's offset
+    add ax, 0xC000
+    jmp short .out
+.zero:
+    xor ax, ax
+    cwd
+.out:
+    pop si
+    ret
+
+; EndMenu (USER.187) - no args. A menu loop that is running (a bar's, a
+; popup's, the system menu's) is ended as a click outside it ends it; with
+; none running it does nothing. The library part's w16_mstop does it, so it
+; stays out of that part, which has no room to spare (SPEC.md 124.25.15)
+W16TSK w16u_endmenu
+    cmp byte [w16_mtrk], 0
+    je .no
+    push si
+    push di
+    SLCALL w16_mstop
+    pop di
+    pop si
+.no:
+    ret
+
+; CreateIcon (USER.407) - args: +0 lpXORbits, +4 lpANDbits, +8 nBitsPixel,
+; +10 nPlanes, +12 nHeight, +14 nWidth, +16 hInstance. The same icon, made
+; from the same device bits: CreateCursorIconIndirect's own body, entered
+; with the CURSORICONINFO's fields worked out here - a row of one plane is
+; ((nWidth * nBitsPixel + 15) / 16) words (SPEC.md 124.25.15)
+W16TSK w16i_createicon
+    push si
+    push di
+    push es
+    ICALL w16_args
+    mov cx, [es:bx + 14]
+    mov [cs:w16i_iw], cx
+    mov ax, [es:bx + 12]
+    mov [cs:w16i_ih], ax
+    mov ax, [es:bx + 10]            ; AL = planes
+    mov ah, [es:bx + 8]             ; AH = bits a pixel
+    mov [cs:w16i_ipb], ax
+    mov al, ah
+    xor ah, ah
+    mul cx                          ; DX:AX = a plane's row in bits
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    shl ax, 1
+    mov [cs:w16i_iwb], ax
+    mov ax, [es:bx]
+    mov [cs:w16i_ixo], ax
+    mov ax, [es:bx + 2]
+    mov [cs:w16i_ixs], ax
+    mov ax, [es:bx + 4]
+    mov [cs:w16i_iao], ax
+    mov ax, [es:bx + 6]
+    mov [cs:w16i_ias], ax
+    jmp w16i_cichk
+
 ; CreateCursorIconIndirect (USER.408) - args: +0 lpXORbits, +4 lpANDbits,
 ; +8 lpCursorInfo, +12 hInst. An icon WIN16 can draw: a global block holding
 ; it as an RT_ICON image - a 40-byte header, sixteen colours, 4 bits a pixel
@@ -4158,6 +4334,7 @@ W16TSK w16i_cursorind
     mov [cs:w16i_iao], ax
     mov ax, [es:bx + 6]
     mov [cs:w16i_ias], ax
+w16i_cichk:                         ; CreateIcon (above) joins here
     mov ax, [cs:w16i_iw]
     dec ax
     cmp ax, 63

@@ -70,15 +70,8 @@ eth_cp_paint:
 
     ; --- the card ------------------------------------------------------------
     mov bx, EU_Y0
-    mov si, eu_s_ne1
-    cmp byte [eth_word], 0
-    je  .kind
-    mov si, eu_s_ne2
-.kind:
-    call eu_val
-    mov ax, [eth_base]
-    mov cx, EU_VX + 64
-    call eu_hex
+    NIC_UI_CARD                 ; the backend names its card, and an ISA one
+                                ; also its I/O base (nicne2k.inc)
 
     ; --- and its address, which is a fact about the hardware -----------------
     add bx, EU_ROW
@@ -676,8 +669,7 @@ eu_s_card:  db 'Card', 0       ; THE SEVEN ROW LABELS, in row order and end to
             db 'Rx', 0
 EU_NLAB     equ 7
 eu_s_tx:    db 'Tx', 0
-eu_s_ne1:   db 'Ne1000', 0
-eu_s_ne2:   db 'Ne2000', 0
+    NIC_UI_STRINGS
 eu_s_none:  db 'none', 0
 eu_dhs:     dw eu_s_idle        ; DH_IDLE      - the Dhcp row's word, by state
             dw eu_s_asking      ; DH_DISCOVER

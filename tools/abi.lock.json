@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "c9eb3c2e71af6e5b8a5fe2ad0384fc7e237fbb406499a2b2d98c8c47ba0968f0",
+  "fingerprint": "9140bd1abaf4ca4a4bcc3eea9f0ab68611f8453ff4870b5419dce0a5287dd3be",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "96f9c23b13730deb03010bef500010bb44ec962465de220e038ce002a5dcc918",
+  "fingerprint": "91bba68c75d8bce5334bee68d993e01e3ff4ca013e067684ee02c296c05fe2dc",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1683,31 +1683,45 @@
    "to": 12
   },
   {
-   "fingerprint": "2d2cafc60f297ddb7f1ce992380f927e6defa4b91e9a6f90e63b7b015dd4e35f",
+   "fingerprint": "2ae8155f5544c3cc052357b994b82c18c8583418e7583fe8cc044703a175a482",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "SEG_BWIN comment clarified: caller's own block (14.139)",
+   "reason": "DRVM_CEIL_NET_MEGA = 39: DRVC_NET's caption ceiling on kern_mega, where PCIETHER.DRV (SPEC.md 125.5) is the class's larger row; DRVM_CEIL_NET stays 34 for every other kernel (owner: ceiling per kernel, 2026-11-04). A caption's ceiling constant added at the end of a block; every cell, record and header is unchanged, so everything built before still runs - no bump",
    "to": 10
   },
   {
-   "fingerprint": "0e59be1d87f305c2679158b1cdd5bf47b8d0b1a1009e882bb5eba8360aac04a2",
+   "fingerprint": "0fdcd33c5fde0fb4d4e1f651d737fcd3dc99f1ee690f050f0b4c34096e070609",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "SEG_BWIN comment clarified: caller's own block (14.139)",
+   "reason": "DRVM_CEIL_NET_MEGA = 39: DRVC_NET's caption ceiling on kern_mega, where PCIETHER.DRV (SPEC.md 125.5) is the class's larger row; DRVM_CEIL_NET stays 34 for every other kernel (owner: ceiling per kernel, 2026-11-04). A caption's ceiling constant added at the end of a block; every cell, record and header is unchanged, so everything built before still runs - no bump",
    "to": 12
   },
   {
-   "fingerprint": "96f9c23b13730deb03010bef500010bb44ec962465de220e038ce002a5dcc918",
+   "fingerprint": "ea48ade03b96bea071fe19dcef24eca06e9edc6ef07f3b6b5b2ecb7c49ab225f",
    "from": 10,
    "guard": "PKG_FMT",
-   "reason": "OSAPI_SEG gains SEG_TYPE (13), additive: a window's code/data retype (KERN-MEGA-PLAN 14.142)",
+   "reason": "SEG_BWIN comment clarified: caller's own block (KERN-MEGA-PLAN 14.139), merged with main's DRVM_CEIL_NET_MEGA; comments only, everything built before still runs - no bump",
    "to": 10
   },
   {
-   "fingerprint": "c9eb3c2e71af6e5b8a5fe2ad0384fc7e237fbb406499a2b2d98c8c47ba0968f0",
+   "fingerprint": "ab9bd4de52d813d4d227abc9db5f6c20bcedac1a2474e197c0f69fd42c09dc2e",
    "from": 12,
    "guard": "DRV_VER",
-   "reason": "OSAPI_SEG gains SEG_TYPE (13), additive: a window's code/data retype (KERN-MEGA-PLAN 14.142)",
+   "reason": "SEG_BWIN comment clarified: caller's own block (KERN-MEGA-PLAN 14.139), merged with main's DRVM_CEIL_NET_MEGA; comments only, everything built before still runs - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "91bba68c75d8bce5334bee68d993e01e3ff4ca013e067684ee02c296c05fe2dc",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of plan/win16-next (main's #333 PCIETHER) with csalias's OSAPI_SEG SEG_TYPE (13), additive (KERN-MEGA-PLAN 14.142); everything built before still runs - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "9140bd1abaf4ca4a4bcc3eea9f0ab68611f8453ff4870b5419dce0a5287dd3be",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of plan/win16-next (main's #333 PCIETHER) with csalias's OSAPI_SEG SEG_TYPE (13), additive (KERN-MEGA-PLAN 14.142); everything built before still runs - no bump",
    "to": 12
   }
  ]

@@ -1108,6 +1108,78 @@ w16_rgnbx:
     stc
     ret
 
+; GetUpdateRgn (USER.237) - args: +0 bErase, +2 hRgn, +4 hWnd. The window's
+; invalid rectangle, in its client and cut to it, put into the region (a
+; region is its bounding rectangle here): SIMPLEREGION, or NULLREGION and an
+; empty region when nothing is invalid; ERROR (0) for a window or region that
+; is not one. bErase is not acted on, as GetUpdateRect's is not (SPEC.md
+; 124.25.15)
+W16SYS w16g_getupdrgn
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    mov di, [es:bx + 2]             ; DI = the region
+    ICALL w16_hwnd2rec              ; BX = the window's record
+    jc .err
+    push bx
+    mov ax, di
+    call w16_rgnbx                  ; BX = its rectangle in w16_orgn
+    pop si                          ; SI = the record
+    jc .err
+    mov di, bx
+    test byte [si + W16W_FLAGS], W16WF_INVAL
+    jz .null
+    mov bx, si
+    ICALL w16_csize                 ; CX, DX = the client
+    mov ax, [si + W16W_UR]
+    cmp ax, cx
+    jle .r
+    mov ax, cx
+.r:
+    mov cx, ax                      ; CX = right
+    mov ax, [si + W16W_UB]
+    cmp ax, dx
+    jle .b
+    mov ax, dx
+.b:
+    mov dx, ax                      ; DX = bottom
+    mov ax, [si + W16W_UL]
+    or ax, ax
+    jge .l
+    xor ax, ax
+.l:
+    mov bx, [si + W16W_UT]
+    or bx, bx
+    jge .t
+    xor bx, bx
+.t:
+    cmp ax, cx
+    jge .null
+    cmp bx, dx
+    jge .null
+    mov [w16_orgn + di], ax
+    mov [w16_orgn + di + 2], bx
+    mov [w16_orgn + di + 4], cx
+    mov [w16_orgn + di + 6], dx
+    mov ax, SIMPLEREGION
+    jmp short .out
+.null:
+    xor ax, ax
+    mov [w16_orgn + di], ax
+    mov [w16_orgn + di + 2], ax
+    mov [w16_orgn + di + 4], ax
+    mov [w16_orgn + di + 6], ax
+    mov ax, NULLREGION
+    jmp short .out
+.err:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
 ; w16_rgnnull - BX = a rectangle's offset in w16_orgn: CF=1 it is empty.
 ; Keeps all but AX.
 w16_rgnnull:
