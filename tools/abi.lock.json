@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "b395855801841c165384d1de40d49211f904236065209360de6bf08d64fae6d6",
+  "fingerprint": "0fdcd33c5fde0fb4d4e1f651d737fcd3dc99f1ee690f050f0b4c34096e070609",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "39a274c118888d92511f7330c4e8c6580e37c07f782609cadbd63a8ac79ce2c5",
+  "fingerprint": "2ae8155f5544c3cc052357b994b82c18c8583418e7583fe8cc044703a175a482",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1680,6 +1680,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "SEG_HND (12): a re-aimable handle descriptor verb for OSAPI_SEG on kern_mega (SPEC.md 50.6.11); a constant added, nothing built before moves",
+   "to": 12
+  },
+  {
+   "fingerprint": "2ae8155f5544c3cc052357b994b82c18c8583418e7583fe8cc044703a175a482",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "DRVM_CEIL_NET_MEGA = 39: DRVC_NET's caption ceiling on kern_mega, where PCIETHER.DRV (SPEC.md 125.5) is the class's larger row; DRVM_CEIL_NET stays 34 for every other kernel (owner: ceiling per kernel, 2026-11-04). A caption's ceiling constant added at the end of a block; every cell, record and header is unchanged, so everything built before still runs - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "0fdcd33c5fde0fb4d4e1f651d737fcd3dc99f1ee690f050f0b4c34096e070609",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "DRVM_CEIL_NET_MEGA = 39: DRVC_NET's caption ceiling on kern_mega, where PCIETHER.DRV (SPEC.md 125.5) is the class's larger row; DRVM_CEIL_NET stays 34 for every other kernel (owner: ceiling per kernel, 2026-11-04). A caption's ceiling constant added at the end of a block; every cell, record and header is unchanged, so everything built before still runs - no bump",
    "to": 12
   }
  ]
