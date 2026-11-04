@@ -188,6 +188,10 @@ unsigned a2_div32(unsigned hi, unsigned lo, unsigned d);
  * core runs the machine alone. a2fast.inc reads it. */
 unsigned a2_fseg;
 static unsigned a2_fcode;
+static int a2_fast_done;                    /* a2_fast_init has run, whatever
+                                             * it answered - the moment the
+                                             * heap stops changing under a
+                                             * reader (tests/apple2part.py) */
 unsigned a2f_codesel(unsigned seg);
 void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg);
 void a2f_core(unsigned dstseg, unsigned partseg);
@@ -1529,6 +1533,10 @@ static void a2_fast_init(void)
 {
     unsigned code, img;
 
+    a2_fast_done = 1;                       /* (set first: every return
+                                             * below is the end of it, and the
+                                             * UI task finishes this before
+                                             * anything else reads the heap) */
     if (os88_part_fetch(A2_FAST_PART) != 0)
         return;
     code = os88_mem_claim(64);

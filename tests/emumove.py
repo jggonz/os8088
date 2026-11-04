@@ -68,14 +68,15 @@ PKGS = {
     "c64": dict(disk="build/c64move360.img", shim="apps/c64/c64.asm",
                 name="C64.O88", title="VICE (C64)", rec="_c64_m",
                 state="_c64_state", jam=1, rom="build/c64-rom/C64.ROM",
-                keep=20480, ovl=True, chr="_c64_chr_seg"),
+                keep=20480, ovl=True, chr="_c64_chr_seg",
+                fcode="_c64_fcode", fseg="_c64_fseg"),
     # the Apple II's carve is shrunk to the main ROM once the chargen is
     # decoded (APPLE2-SPEC 1.5), so the last 16 bytes it KEEPS end at 0x3000
     "apple2": dict(disk="build/a2move360.img",
                    shim="apps/apple2/apple2.asm", name="APPLE2.O88",
                    title="Apple II", rec="_a2_m", state="_a2_state", jam=2,
                    rom="build/apple2-rom/APPLE2.ROM", keep=0x3000, ovl=False,
-                   chr=None),
+                   chr=None, fcode="_a2_fcode", fseg="_a2_fseg"),
 }
 
 
@@ -121,6 +122,9 @@ def main():
                 st["ovs"] = para(w(seg, "cc_ovseg"))
             if P["chr"]:
                 st["chr"] = para(w(seg, P["chr"]))
+            if P.get("fcode"):          # THE FAST CORE's code claim and the
+                st["fc"] = para(w(seg, P["fcode"]))    # selector it is called
+                st["fs"] = para(w(seg, P["fseg"]))     # through (FAST6502)
             return st
 
         def rloc(base):
@@ -178,6 +182,17 @@ def main():
         h1 = rloc(s1["ram"])
         ok2 = (bool(r_ram) and s1["ram"] != s0["ram"] and bool(h1)
                and h1[1] == r_ram[1])
+        if not ok2 and s0.get("fc"):
+            # WITH THE FAST CORE the package holds two more 64KB claims, made
+            # at the first wake where a 64KB hole was - so the one under the
+            # ceiling that the pass moves may be the core's CODE claim rather
+            # than the RAM (APPLE2-SPEC 4.6, C64-SPEC 4.7). Then it is THAT
+            # word os88_onmove has to follow, and the selector with it.
+            r_fc, h_fc = rloc(s0["fc"]), rloc(s1["fc"])
+            print("  2 (fast core) code %04x -> %04x, selector %04x -> %04x"
+                  % (s0["fc"], s1["fc"], s0["fs"], s1["fs"]))
+            ok2 = (bool(r_fc) and r_fc[3] and s1["fc"] != s0["fc"]
+                   and bool(h_fc) and h_fc[1] == r_fc[1] and s1["fs"] == s1["fc"])
         print("  2 the RAM moved          %s"
               % ("%04x -> %04x, and ramseg names it" % (s0["ram"], s1["ram"])
                  if ok2 else "NO: ramseg %04x, claim %r" % (s1["ram"], h1)))

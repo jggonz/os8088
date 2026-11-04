@@ -692,6 +692,18 @@ a branch inside page `$BF`, the fast core reads those bytes from the image's
 which is the cost this core exists to remove; no shipped Apple program is
 known to do this.
 
+**THE HEAP IS RESHAPED AT THE FIRST WAKE**: a 64KB code claim and a 64KB
+image replace the 49KB RAM, with a compaction on the way, which on an 8088 is
+seconds. `a2_fast_done` says it has run; `tests/apple2part.py` waits for it
+before it reads a claim. **`soak -k a2move` IS RED WITH THE FAST CORE, and the
+reason is placement, not a mover**: both 64KB claims are made where a 64KB
+hole is, which on that row's heap is the bottom, so Note Pad's close leaves
+no hole below either and the pass moves neither. Check 1 (both declared)
+passes, the carve and the region move and are followed, and the row now
+also accepts the code claim's move with `a2_fcode`/`a2_fseg` following
+(`tests/emumove.py`) - but it needs a scenario that puts a hole under them,
+which is owed.
+
 **The gate** is `make a2cputest`'s fast leg (section 4.4): the same rows bar
 row 6 (the accurate core's fetch ES), and Dormann's functional test, through
 `a2fast.inc`'s `_a2_run`. The four controls that the accurate core's tables

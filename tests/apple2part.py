@@ -241,6 +241,18 @@ def run():
                                                 + A2.sym("_a2_ovl_res"), 2)),
                         "the first wake's overlay fetch to answer",
                         limit=60.0, guest=30.0)
+        # THE FAST CORE'S START-UP RESHAPES THE HEAP (APPLE2-SPEC 4.6): two
+        # 64KB claims and a compaction, seconds of work on an 8088, at the
+        # first wake. Everything below reads claims, so it waits for that to
+        # be over - read part-way, the carve is read before it moves and the
+        # claims after (a2_fast_done is set as it begins; the wake does
+        # nothing else until it returns, so one more wait for the RAM claim's
+        # final size closes the window)
+        os88marty.until(m, lambda _: u16(m.read((seg << 4)
+                                                + A2.sym("_a2_fast_done"), 2)),
+                        "the fast core's start-up", poll=0.5, guest=120)
+        os88marty.quiesce(m, lambda: m.read(S("mem_tab"), MEM_MAX * MC_SIZE),
+                          guest=1.0, what="the heap after the fast core's start-up")
         pseg = u16(m.read((seg << 4) + A2.sym("op_base"), 2))
         slack = u16(m.read((seg << 4) + A2.sym("op_slack"), 2))
         want = (pseg + slack // 16) & 0xFFFF
