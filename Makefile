@@ -15082,10 +15082,15 @@ megatrap:
 # megatrap's reason: build/mega.img is always the shipped shape. A field run
 # that needs a reading takes build/megadiag/mega.img (or mega120.img), and
 # megarun.o88 and mbr.bin are there so that `tools/os88bochs.py --build
-# build/megadiag` boots it
+# build/megadiag` boots it. It also builds WIN16's kern_mega disks
+# (megawin16.img, megawin16-120.img) in the same tree, so the diagnostic
+# kernel and the package it is used to diagnose are one build: a MEGADIAG
+# kernel with no WIN16 disk of its own was paired with whatever build/ held
+# (2026-11-04, docs: SPEC.md 124.17.4)
 megadiag:
 	@$(MAKE) BUILD=$(BUILD)/megadiag MEGADIAG=1 $(BUILD)/megadiag/mega.img $(BUILD)/megadiag/mega120.img \
-		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin
+		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin \
+		$(BUILD)/megadiag/megawin16.img $(BUILD)/megadiag/megawin16-120.img
 .PHONY: megadiag
 
 # `make megafdmask` - kern_mega with MEGAFDMASK=1 (KERN-MEGA-PLAN 14.125), the

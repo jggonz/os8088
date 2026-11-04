@@ -234189,13 +234189,19 @@ change, they are the new anchor. The date's day of the week is computed
 asked for last: each export through the gate as its `w16api.inc` row, and
 each `int 21h` as 80h:AH. `tools/w16trace.py SOCK PROGRAM.EXE` reads it out
 of a running QEMU (with `W16_DEFINES=W16_TRACE` for the symbols). `W16_TRN`
-is 1024 unless defined. The ring and the row table beside it (two bytes a
-bind slot) stopped fitting WIN16's 64 KB at that size at S20. From S21 the
-table must shrink too: `W16_NBIND` is 384 unless defined. So a trace build
-is now `make W16DEFS='-DW16_TRACE -DW16_TRN=256 -DW16_NBIND=256' win16`,
-read with `W16_DEFINES='W16_TRACE W16_TRN=256 W16_NBIND=256'`. Such a build
-runs a program that binds at most 256 distinct imports, which every
-fixture does. It is how
+and `W16_NBIND` default to what BOTH arms hold, so a bare `-DW16_TRACE`
+assembles and packs on each: the real-mode arm takes `W16_TRN` 64 (its one
+data segment holds 128 at most, with the row table beside the ring at two
+bytes a bind slot), and the kern_mega arm (`-DPKG_MEGA`) `W16_TRN` 256 with
+`W16_NBIND` 288 (APP_MAX_SIZE), which is above the most measured, Paintbrush
+3.1's 270. The shipped build is unchanged to the byte. `W16DEFS=-DW16_TRACE`
+builds the real-mode arm into `win16.o88` and, with `KERN_MEGA=1`, the
+kern_mega arm into `megak/apps/win16.o88`; `tests/unit/t_buildmatrix.py`'s
+`w16trace` and `w16tracemega` rows assemble both, because the arm stopped
+assembling once with nothing red (2026-11-04, a 1024-entry ring). Read it with
+`W16_DEFINES=W16_TRACE` for the symbols. `make megadiag` builds `megawin16.img`
+in its own tree, so a MEGADIAG kernel and the WIN16 it diagnoses are one
+build. It is how
 CLOCK's spin on 2Ch was found: a program that stops drawing and asks for
 nothing new is waiting for something WIN16 never changes.
 

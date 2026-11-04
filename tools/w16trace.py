@@ -4,7 +4,7 @@
     nasm ... -DW16_TRACE ...   (W16_DEFINES=W16_TRACE for the tests' symbols)
     python3 tools/w16trace.py build/qmp.sock CLOCK.EXE
 
-A `-DW16_TRACE` build of WIN16 records the last W16_TRN (1024) things a program asked
+A `-DW16_TRACE` build of WIN16 records the last W16_TRN things (64 in real mode, 256 on kern_mega) a program asked
 for in a ring in its bss: every export through the gate as its w16api.inc
 row (the bind slot's, which the trace build keeps beside the bind table), and every int 21h as 80h:AH. It answers the question a program that
 "just stops" leaves - what did it ask for last, and what does it keep

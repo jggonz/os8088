@@ -506,6 +506,19 @@ KNOBS = [
 ]
 
 
+# WIN16's -DW16_TRACE arm (SPEC.md 124.17.4), BOTH arms, packed. W16DEFS is a
+# test define and not a stamped knob, so it rides in `extra` - which is why
+# these are not KNOBS rows (t_nasm3 passes its own `extra`). The arm stopped
+# assembling once without a word - its default ring outgrew the real-mode
+# data segment and kern_mega's APP_MAX_SIZE - and the measure run of
+# 2026-11-04 found it by needing it. Nothing else builds it.
+W16ROWS = [
+    ("w16trace",     [], "win16.o88", None, ["W16DEFS=-DW16_TRACE"]),
+    ("w16tracemega", ["KERN_MEGA=1"], "megak/apps/win16.o88", None,
+     ["W16DEFS=-DW16_TRACE"]),
+]
+
+
 def covered(knob):
     """Does some row build this knob? The two PRODUCT builds are their own
     targets below - `make small` and `make emu` - because each is a whole
@@ -655,6 +668,15 @@ def main():
                   got=err or "no kernel produced", want="a kernel")
             if ok:
                 sizes[name] = size
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
+        for name, ok, size, err in ex.map(lambda kv: build(*kv), W16ROWS):
+            check(ok, "make %s (WIN16 -DW16_TRACE) assembles and packs" % name,
+                  "the trace arm is the only way to see what a Win16 program "
+                  "asked for last; its ring and bind-row table share the "
+                  "package's one data segment (real mode) / APP_MAX_SIZE "
+                  "(kern_mega), and either overflows without a default build "
+                  "noticing", got=err or "no package produced", want="a package")
 
     # kern_small is a whole second tree, so it gets the real target - IN A
     # PRIVATE BUILD DIRECTORY, which is what removed the restore build that
