@@ -102,6 +102,8 @@ def main():
     rom = open(a.rom, "rb").read()[:0x3000]
     m = Apple(rom)
     m.trace = set()
+    m.dyn = set()                       # (an entry by RTS, JMP (ind) or
+                                        # an interrupt: written `XXXX D`)
     m.pc = m.rd16(0xFFFC)
     for line in PROGRAMS:
         m.keys += [ord(c) for c in line] + [13]
@@ -121,7 +123,7 @@ def main():
     with open(a.out, "w") as f:
         f.write("# APPLE2.ROM's executed PCs - tools/a2trace.py, %d instructions\n" % steps)
         for pc in rompcs:
-            f.write("%04X\n" % pc)
+            f.write("%04X%s\n" % (pc, " D" if pc in m.dyn else ""))
     print("a2trace: %d instructions, %d ROM PCs -> %s" % (steps, len(rompcs), a.out))
     if a.screen:
         for r in range(24):

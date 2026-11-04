@@ -690,7 +690,11 @@ which neither a RAM nor a ROM target takes a jump for. `$FFFE` and up need no
 test on this machine: the image's `$FFFE` is the ROM's `RTI` and `$FFFF` an
 opcode this core hands back, so `mov bx,[si]` at `$FFFF` - which faults a 286
 - cannot be reached. **JSR and RTS move the return address as one word** while
-S is not at the stack page's edge.
+S is not at the stack page's edge. **With a translation (4.7), a taken branch whose target is in its
+range goes through `ct_rom` as a jump's does** - one compare for a branch
+outside it - because the translation's table names only the starts of its
+straight runs, and a loop the core entered in the middle must be able to
+rejoin it.
 
 **What it hands back, and how.** Reason 2 (one instruction): every illegal
 opcode, `BRK`, `ADC`/`SBC` with D set, a read-modify-write at `$C000` and up,
@@ -742,10 +746,11 @@ segment (part 2, a lazy `OP_SEG`), and a table of words, one per PC from
 `OP_ASSET`, 24,576 bytes). The ROM is fixed, so the translation is made once,
 on the host, at build time; programs in RAM stay the fast core's.
 
-**Measured, 86Box `286-victory`, `10 I=I+1 / 20 GOTO 10`: 109% of a 1.02 MHz
-Apple under warp, against the fast core's 67%** (section 4.6) - so with the
-throttle on the machine runs at its own speed under BASIC as well as idle. A
-profile puts 84% of that loop in translated code.
+**Measured, 86Box `286-victory`, `10 I=I+1 / 20 GOTO 10`: 141.5% of a 1.02
+MHz Apple under warp, against the fast core's 67%** (section 4.6; 109% at
+the first cut, before the inline `PLP`, the dead-flag work and the groups
+below) - so with the throttle on the machine runs at its own speed under
+BASIC as well as idle.
 
 **Which PCs.** A ROM PC is translated when `tools/a2trace.py` saw one start an
 instruction, or when a static walk from those reaches it. The trace boots the
@@ -756,7 +761,8 @@ needs no disk or cassette. The trace is the walk's input because Applesoft
 dispatches its statements through `RTS` on pushed addresses, which no static
 walk follows. **A PC that is not translated is not wrong, only slower**: the
 table says 0 and the fast core runs it. On the build of this commit: 3,896
-traced, **4,596 translated, 59,941 bytes of code**.
+traced, **4,596 translated, 53,038 bytes of code, 1,874 of them entries**
+(the starts of their straight runs, below).
 
 **How it is entered.** A jump, call, return or new run whose target is in
 `$D000-$FFFF` goes through the core's `ct_rom` (its opcode `$72` slot): ES =
@@ -774,8 +780,22 @@ including the I/O call-outs and the damage marks. Inside ROM, a `JSR` to a trans
 target is a near call into a shared helper that pushes the 6502 return
 address and jumps; an `RTS` looks its target up in the table.
 
-**Time.** Every instruction subtracts its own cycles before its body, so
-every translated PC is a place to enter. The countdown is TESTED only at a
+**Time: ONE SUBTRACT A STRAIGHT RUN.** The translation is cut into GROUPS
+(`m65aot.py`'s `groups()`), and a group's first instruction takes the whole
+group's cycles off the countdown. A group ends at a branch or a transfer, at
+an access that may reach a device (whose clock is the countdown at THAT
+instruction's end, so nothing after it may be prepaid), and around an
+instruction that may leave for the core before it runs; an exit inside a
+group gives back what it prepaid for the instructions it did not run. **So
+only a group's start may be entered from outside**, and the PC table names
+no other: every static target, every return point, and every PC the trace
+saw `RTS`, `JMP (ind)`, `BRK` or an interrupt land on (the seeds marked
+`D`, which is how Applesoft's statement handlers stay entries). A run that
+starts anywhere else runs on the core to its next branch or jump - **the
+core's taken branches consult `ct_rom` as its jumps do** (section 4.6), so a
+loop the core entered in the middle rejoins the translation at its next
+pass. An instruction whose operand byte is another's opcode (the `BIT`
+skip) falls through to that other's translation. The countdown is TESTED only at a
 backward branch, a backward `JMP`, `RTS` and `JMP (ind)` - forward
 transfers and `JSR` cannot loop without passing one of those. **THE STATED
 DEVIATION: a run can finish a straight stretch of ROM after its budget is
@@ -808,8 +828,8 @@ check on the routine's RAM copy
 guards it, so a program that rewrites the routine gets the core instead.
 
 **Memory.** Both parts are fetched by `a2_fast_init` after the core, both or
-neither, as claims of their own length: **3,776 + 1,536 paragraphs** (60,416 and 24,576 bytes, to the heap's
-granule), on top of
+neither, as claims of their own length (53,038 and 24,576 bytes, to the
+heap's granule), on top of
 4.6's two 64KB claims. They are PINNED (they are fetched parts, not
 `os88_mem_claim`s, and nothing follows them on a move). A refusal of either
 leaves `a2_faot`/`a2_ftab` 0, and the fast core runs the ROM itself.

@@ -125,6 +125,8 @@ class C64(CPU):
         self.p |= 0x04
         self.pc = self.rd16(0xFFFE)
         self.cycles += 7
+        if self.dyn is not None:
+            self.dyn.add(self.pc)
 
 
 def main():
@@ -136,6 +138,8 @@ def main():
     rom = open(a.rom, "rb").read()
     m = C64(rom)
     m.trace = set()
+    m.dyn = set()                       # (an entry by RTS, JMP (ind) or
+                                        # an interrupt: written `XXXX D`)
     m.pc = m.rd16(0xFFFC)
     keys = []
     for line in PROGRAMS:
@@ -173,7 +177,7 @@ def main():
     with open(a.out, "w") as f:
         f.write("# C64.ROM's executed PCs - tools/c64trace.py, %d instructions\n" % steps)
         for pc in pcs:
-            f.write("%04X\n" % pc)
+            f.write("%04X%s\n" % (pc, " D" if pc in m.dyn else ""))
     print("c64trace: %d instructions, %d ROM PCs -> %s" % (steps, len(pcs), a.out))
 
 

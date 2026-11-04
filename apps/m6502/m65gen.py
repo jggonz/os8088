@@ -218,6 +218,19 @@ class Gen:
         self.L(*self.aot_or_fetch())
         self.L("%s: jmp x_hbr" % hb, "%s: jmp x_slice" % x)
 
+    def next_taken(self, cyc):
+        """...after a branch taken inside its page: on a profile with a
+        translation, the target goes through ct_rom as a jump's does - the
+        translation's table names only the starts of its straight runs
+        (m65aot.py's groups()), so a loop the core entered in the middle
+        rejoins it at its next branch rather than at its next jump"""
+        if not self.p.get("aot"):
+            return self.next(cyc)
+        x = self.lab()
+        self.L("    sub bp, %d" % cyc, "    jle %s" % x)
+        self.L(*self.aot_or_fetch())
+        self.L("%s: jmp x_slice" % x)
+
     def aot_or_fetch(self):
         """the next opcode - or, where the profile has a ROM translated ahead
         of time (m65aot.py) and SI is in it, ct_rom, which enters the
@@ -529,9 +542,9 @@ class Gen:
           "    test dh, dh", "    js %s" % back,
           "    add bl, dh", "    jc %s" % xf,
           "    mov si, bx")
-        self.next(3)
+        self.next_taken(3)
         L("%s: add bl, dh" % back, "    jnc %s" % xb, "    mov si, bx")
-        self.next(3)
+        self.next_taken(3)
         L("%s:" % nt)
         self.next(2)
         # ACROSS A PAGE: the extra cycle, and the target checked as a jump's
@@ -892,6 +905,7 @@ class Gen:
             "    mov bx, si", "    shl bx, 1",
             "    mov bx, [es:bx+0x%04X]" % ((-lo * 2) & 0xFFFF),
             "    test bx, bx", "    jz .fetch",
+        ] + (["    inc word [0xC2FC]"] if self.tracelog(0) else []) + [
             "    mov si, sp",
             "    push word [ss:si+%d]" % self.p["aot_frame"],
             "    push bx",

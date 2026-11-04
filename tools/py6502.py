@@ -38,6 +38,8 @@ class CPU:
         self.pc = 0
         self.cycles = 0
         self.trace = None
+        self.dyn = None     # (with trace) the PCs RTS, JMP (ind), BRK and an
+                            # interrupt landed on: m65aot.py's entries
 
     # --- the bus ---------------------------------------------------------
     def read(self, a):
@@ -242,6 +244,8 @@ class CPU:
                 ptr = self.fetch() | (self.fetch() << 8)
                 hi = (ptr & 0xFF00) | ((ptr + 1) & 0xFF)     # the page wrap
                 self.pc = self.read(ptr) | (self.read(hi) << 8)
+                if self.dyn is not None:
+                    self.dyn.add(self.pc)
         elif mn == "JSR":
             lo = self.fetch()
             ret = self.pc                       # on the high byte: PC + 2 - 1
@@ -251,10 +255,15 @@ class CPU:
         elif mn == "RTS":
             lo = self.pop()
             self.pc = ((lo | (self.pop() << 8)) + 1) & 0xFFFF
+            if self.dyn is not None:
+                self.dyn.add(self.pc)
         elif mn == "RTI":
             self.p = (self.pop() & ~B) | U
             lo = self.pop()
             self.pc = lo | (self.pop() << 8)
+            # (NOT an entry: an RTI from an interrupt lands wherever it struck,
+            # and marking those would cut every straight run of ROM into
+            # pieces - the core takes such a return to the next jump)
         elif mn == "BRK":
             self.pc = (self.pc + 1) & 0xFFFF
             self.push(self.pc >> 8)
@@ -262,6 +271,8 @@ class CPU:
             self.push(self.p | B | U)
             self.p |= I
             self.pc = self.rd16(0xFFFE)
+            if self.dyn is not None:
+                self.dyn.add(self.pc)
         elif mn == "PHA":
             self.push(self.a)
         elif mn == "PHP":
@@ -303,6 +314,7 @@ def dormann(path, trap=0x3469, limit=120_000_000, trace=False):
     cpu = CPU(bytearray(open(path, "rb").read()))
     if trace:
         cpu.trace = set()
+        cpu.dyn = set()
     cpu.pc = 0x0400
     last, same = -1, 0
     n = 0
@@ -328,7 +340,7 @@ def main():
             with open(a.trace_out, "w") as f:
                 f.write("# Dormann's executed PCs - tools/py6502.py\n")
                 for pc in sorted(p for p in cpu.trace if lo <= p < hi):
-                    f.write("%04X\n" % pc)
+                    f.write("%04X%s\n" % (pc, " D" if pc in cpu.dyn else ""))
         print("py6502: Dormann settled at $%04X after %d instructions, %d cycles"
               % (cpu.pc, n, cpu.cycles))
         return 0 if cpu.pc == 0x3469 else 1

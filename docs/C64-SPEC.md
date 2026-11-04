@@ -780,11 +780,20 @@ fast core's.
 | | fast core (4.7) | translated |
 |---|---|---|
 | idle at `READY.`, throttled | 40% | **99.8%** (104.6% under warp) |
-| `10 I=I+1 / 20 GOTO 10` | 47% | **87.5%** (81% before the inline `PLP`, the decimal hoist and the inline reads) |
-| a floating-point loop (`A=I*2.5/3`, an array store, `GOSUB`, `STR$`) | - | **87.5%** (76% before) |
+| `10 I=I+1 / 20 GOTO 10` | 47% | **98.8-99.5%** (81% at the first cut) |
+| a floating-point loop (`A=I*2.5/3`, an array store, `GOSUB`, `STR$`) | - | **97.2%** (76% at the first cut) |
 
-**Two segments, because one does not hold both**: 5,436 PCs come to 51,061
-bytes of BASIC and 29,720 of KERNAL, and a part stops at 65,024. Within a
+The rest of the way from the first cut: `PLP`/`CLI`/`SEI`/`RTI` inline, no
+decimal tests, dead V, inline `JSR` and ROM-table reads (87.5%); one
+subtract a straight run (APPLE2-SPEC 4.7's groups); a return that tests the
+bank map only from the KERNAL into BASIC; the `BIT` skip followed inside the
+translation; and `JMP $0073` - the comma test's tail call - into the native
+CHRGET. Of what is left, about 7% is the fast core and 18% the package's
+devices and run loop.
+
+**Two segments, because one does not hold both**: 5,436 PCs come to 49,247
+bytes of BASIC and 30,006 of KERNAL (2,379 entries, APPLE2-SPEC 4.7's
+groups), and a part stops at 65,024. Within a
 bank, control moves by near jumps. A static call into the other bank
 (BASIC calling `CHROUT`, the stop-key test that runs every statement) goes
 through `a_far`, which looks the target up in the table and far-jumps into the other
@@ -828,7 +837,8 @@ alarms). The translation is cut into blocks.
   cannot cover is the core's, and the core ends the run after the
   instruction that spends it, exactly as section 4.5 says.
 - Any other entry (from `ct_rom`, `RTS` or `JMP (ind)`) is taken only with
-  more than `MAXBLK` left.
+  more than `MAXBLK` left - and only at a group's start, the one place a
+  group's subtract is not already paid.
 - A write that calls out and is cut (`c64_cut`, an interrupt raised by
   the write) leaves after that instruction, as the core does.
 
@@ -851,8 +861,7 @@ return address inline.**
 (F+34, 0 = no translation), the table (F+36), the core's own selector for
 the way back (F+38), and the KERNAL's code selector (F+40). `c64_fast_init`
 fetches the three parts after the core, all or none, as pinned claims of
-their own length (part 4's and part 5's, 29,720 and 32,768 bytes, and part
-3's 51,061).
+their own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768).
 
 **The gate** is `make c64cputest`'s AOT leg (`C64CPU_ONLY=aot`), the
 Apple II's leg one machine along: Dormann's functional test in three parts

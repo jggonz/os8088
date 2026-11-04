@@ -1922,9 +1922,9 @@ dormann_main:
     ; run at all.
 %ifdef AOT
     ; THE TRANSLATED LEG'S CONTROL: every translated ADC and CMP, listed at
-    ; CTL_LIST, has 8 taken off its 8086 opcode - ADC becomes OR and CMP
-    ; XOR - in the translation itself: proof that the translated code is
-    ; what runs
+    ; CTL_LIST, is broken in the translation itself - ADC becomes OR, and
+    ; CMP becomes ADC (an XOR, 8 lower, leaves Z set for the equal values
+    ; Dormann's checks compare) - proof that the translated code is what runs
     push es
     mov ax, SEG_AOT
     mov es, ax
@@ -1932,7 +1932,11 @@ dormann_main:
 .ctl: mov si, [es:bx]
     test si, si
     jz .ctld
-    sub byte [es:si], 8
+    sub byte [es:si], 8             ; ADC (10h-15h) -> OR
+    cmp byte [es:si], 0x30
+    jb .ctln
+    sub byte [es:si], 0x20          ; CMP (38h-3Dh) -> ADC: equal values
+.ctln:                              ; no longer leave Z set
     add bx, 2
     jmp short .ctl
 .ctld:
@@ -2043,6 +2047,27 @@ dormann_main:
     cmp ax, DORMOK
     jne .bad
 %ifdef NEG
+%ifdef TRACE
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov bx, [es:0xC2FE]
+    mov cx, 128
+    mov ax, [es:0xC2FC]             ; (ct_rom's entries into it)
+    call puthex
+    mov al, ':'
+    call putc
+.trn: mov ax, [es:bx+0xC300]
+    call puthex
+    mov al, ' '
+    call putc
+    add bx, 2
+    and bx, 0xFF
+    loop .trn
+    pop es
+    mov si, msg_nl
+    call puts
+%endif
     mov si, msg_nbad
     call puts
     mov al, 3
