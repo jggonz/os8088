@@ -17172,7 +17172,10 @@ SOAK = [
         "DGROUP and allocates 100 blocks of 100 bytes (distinct, filled, read "
         "back), grows a moveable block with LocalReAlloc and calls "
         "LocalCompact; then a heap of 496 bytes in a locked GlobalAlloc block "
-        "of 2 KB takes 60 blocks, so the block grows in place; its "
+        "of 2 KB takes 60 blocks, so the block grows in place; the same in a "
+        "block whose neighbour is in use (kern_mega: it moves, its selector "
+        "following; real mode: it stops short, data intact); 70 window "
+        "classes, past the class block's first 64 (124.25.18.1); its "
         "MessageBox must be LHEAP OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",

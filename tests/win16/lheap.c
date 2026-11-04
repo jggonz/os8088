@@ -13,6 +13,14 @@
  *    LocalAlloc with DS set to that segment (first into the block's own tail,
  *    then, past 2 KB, by growing the block). Distinct, filled, read back; the
  *    block is then larger than it was.
+ * 3. The same in a block whose neighbour is in use, so it cannot grow in
+ *    place: on kern_mega (GetWinFlags WF_PMODE) it MOVES, its selector
+ *    following it, and all 60 blocks must be had and keep their data at the
+ *    same selector; in real mode nothing moves, so the heap stops short and
+ *    what it did hand out must be intact.
+ * 4. 70 window classes are registered, past the class block's first 64
+ *    records (SPEC.md 124.25.18.1): every atom nonzero and distinct, and the
+ *    first and the last found by GetClassInfo by name and by atom.
  *
  * Every check that fails is named in the message box, which
  * tests/win16lheap.py reads; "LHEAP OK" when none does.
@@ -28,6 +36,9 @@ extern void setds(unsigned s);
 
 static char res[200];
 static unsigned ptrs[100];
+static ATOM atoms[70];
+static char cname[8] = "LHC00";
+static WNDCLASS wc, wq;
 
 static void check(int ok, const char *tag)
 {
@@ -51,7 +62,9 @@ static unsigned lalloc_in(unsigned seg, unsigned n)
 
 int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
-    unsigned i, j, start, r, seg;
+    unsigned i, j, n, start, r, seg;
+    int pm;
+    HGLOBAL g2;
     HLOCAL h, h2;
     char *q;
     char far *f;
@@ -59,7 +72,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     DWORD size0, size1;
     int ok;
 
-    (void)inst; (void)prev; (void)cmd; (void)show;
+    (void)prev; (void)cmd; (void)show;
 
     /* 1. the program's DGROUP, a heap of 1 KB */
     start = *(unsigned *)6;
@@ -131,6 +144,62 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         check(size1 > size0, "grew");
         GlobalUnlock(g);
         GlobalFree(g);
+    }
+
+    /* 3. a block that must move to grow (kern_mega) */
+    g = GlobalAlloc(GMEM_MOVEABLE | GMEM_ZEROINIT, 2048L);
+    g2 = GlobalAlloc(GMEM_MOVEABLE, 2048L);     /* its neighbour, in use */
+    check(g != 0 && g2 != 0, "galloc3");
+    if (g && g2) {
+        pm = (GetWinFlags() & WF_PMODE) != 0;
+        f = (char far *)GlobalLock(g);
+        seg = FP_SEG(f);
+        check(LocalInit(seg, 16, 2000) != 0, "init3");
+        for (n = 0; n < 60; n++) {
+            r = lalloc_in(seg, 100);
+            if (r == 0)
+                break;
+            ptrs[n] = r;
+            _fmemset(MK_FP(seg, r), (int)(n + 1), 100);
+        }
+        check(!pm || n == 60, "move");
+        ok = 1;
+        for (i = 0; i < n; i++) {
+            f = (char far *)MK_FP(seg, ptrs[i]);
+            for (j = 0; j < 100; j++)
+                if (f[j] != (char)(i + 1)) { ok = 0; break; }
+        }
+        check(ok, "data3");
+        f = (char far *)GlobalLock(g);
+        check(FP_SEG(f) == seg, "sel3");
+        GlobalUnlock(g);
+        GlobalUnlock(g);
+    }
+    if (g)
+        GlobalFree(g);
+    if (g2)
+        GlobalFree(g2);
+
+    /* 4. classes past the class block's first 64 */
+    wc.lpfnWndProc = DefWindowProc;
+    wc.hInstance = inst;
+    wc.lpszClassName = cname;
+    ok = 1;
+    for (i = 0; i < 70; i++) {
+        cname[3] = (char)('0' + i / 10);
+        cname[4] = (char)('0' + i % 10);
+        wc.style = i;
+        atoms[i] = RegisterClass(&wc);
+        if (atoms[i] == 0) { ok = 0; break; }
+        for (j = 0; j < i; j++)
+            if (atoms[j] == atoms[i]) ok = 0;
+    }
+    check(ok, "classes");
+    if (ok) {
+        check(GetClassInfo(inst, "LHC00", &wq) && wq.style == 0, "cls0");
+        check(GetClassInfo(inst, "LHC69", &wq) && wq.style == 69, "cls69");
+        check(GetClassInfo(inst, (LPCSTR)MAKELP(0, atoms[69]), &wq)
+              && wq.style == 69, "atom69");
     }
 
     MessageBox(NULL, res[0] ? res : "LHEAP OK", "LHEAP", MB_OK);

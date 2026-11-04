@@ -12,7 +12,10 @@ in its DGROUP and allocates 100 blocks of 100 bytes in it, checks every
 answer distinct and every block's data, LocalReAllocs a moveable block
 larger and calls LocalCompact; then it LocalInit's a heap of 496 bytes in a
 locked GlobalAlloc block of 2 KB and allocates 60 blocks there, so the heap
-passes the block's own end and the block must grow. Its MessageBox, read off
+passes the block's own end and the block must grow; then the same in a block
+whose neighbour is in use (kern_mega moves it, real mode stops short with the
+data intact), and registers 70 window classes, past the class block's first
+64 records (SPEC.md 124.25.18.1). Its MessageBox, read off
 the program's stack, is "LHEAP OK" or names each check that failed.
 """
 import argparse

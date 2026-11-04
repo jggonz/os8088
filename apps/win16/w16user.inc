@@ -416,10 +416,14 @@ w16_findcls:
     or ax, ax
     jz .none                        ; no class was ever registered
     mov es, ax
-    mov bx, (W16_MAXCLS - 1) * W16C_STRIDE
-    mov cx, W16_MAXCLS              ; from the last: a task's own class,
-.cls:                               ;   registered over a global one of the
-    cmp byte [es:bx + W16C_NAME], 0 ;   name, lies after it (SPEC.md 124.28.3)
+    mov cx, [w16_clsn]              ; from the last: a task's own class,
+    mov ax, cx                      ;   registered over a global one of the
+    dec ax                          ;   name, lies after it (SPEC.md 124.28.3)
+    mov bl, W16C_STRIDE
+    mul bl
+    xchg ax, bx                     ; BX = the last record
+.cls:
+    cmp byte [es:bx + W16C_NAME], 0
     je .next
     test byte [es:bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
     jnz .any                        ; a task's class is its own, unless it

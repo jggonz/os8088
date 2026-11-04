@@ -345,9 +345,10 @@ W16SYS w16n_getwpl
 
 ; w16s_clsadd - w16_ccb (a class, its W16C_TASK set) goes into the first free
 ; record of the class block, which is claimed from the program's global memory
-; at the first class, W16_MAXCLS records at W16C_STRIDE (SPEC.md 124.25.18.1).
-; AL = its index, CF=0; CF=1 the block is full or memory is not there:
-; RegisterClass answers FALSE. Keeps the rest
+; at the first class, W16_MAXCLS records at W16C_STRIDE, and a full one is
+; grown by W16_CLSGROW records to W16_CLSTOP (SPEC.md 124.25.18.1).
+; AL = its index, CF=0; CF=1 the block is full at W16_CLSTOP or memory is not
+; there: RegisterClass answers FALSE. Keeps the rest
 w16s_clsadd:
     push bx
     push cx
@@ -365,6 +366,7 @@ w16s_clsadd:
     jz .no                          ;   into (124.25.19). AX = the handle,
     W16TOSEL dx                     ;   DX = the segment (the arm: a selector,
     mov [w16_clsseg], dx            ;   124.31.3)
+    mov word [w16_clsn], W16_MAXCLS
 .have:
     mov es, [w16_clsseg]
     xor bx, bx
@@ -374,8 +376,10 @@ w16s_clsadd:
     je .take
     add bx, W16C_STRIDE
     inc ax
-    cmp ax, W16_MAXCLS
+    cmp ax, [w16_clsn]
     jb .f
+    call .grow                      ; all used: a bigger block, the first new
+    jnc .take                       ;   record's
 .no:
     stc
     jmp short .out
@@ -393,6 +397,53 @@ w16s_clsadd:
     pop dx
     pop cx
     pop bx
+    ret
+; .grow - AX = the records, every one used, BX = their bytes, ES = the block:
+; a block of W16_CLSGROW more (at most W16_CLSTOP), the records copied, the
+; old block freed. ES = the new one, AX and BX kept (the first new record).
+; Atoms are indexes and nothing holds a record's address, so nothing else
+; changes; the old selector is W16TOSEL's, the map's for that paragraph, no
+; handle descriptor of the block's, so nothing is given back with it (124.31.3).
+; CF=1 at W16_CLSTOP, or no memory: the old block as it was
+.grow:
+    cmp ax, W16_CLSTOP
+    jae .gno
+    push ax
+    add ax, W16_CLSGROW
+    cmp ax, W16_CLSTOP
+    jbe .gn
+    mov ax, W16_CLSTOP
+.gn:
+    push ax                         ; the new count
+    mov cx, W16C_STRIDE
+    mul cx                          ; DX:AX = its bytes
+    mov cl, W16G_HIGH | GMEM_ZEROINIT
+    ICALL w16_gnew
+    or ax, ax
+    jz .gnf
+    W16TOSEL dx
+    mov es, dx
+    xor di, di
+    xor si, si
+    mov cx, bx
+    push ds
+    mov ds, [w16_clsseg]
+    cld
+    rep movsb
+    pop ds
+    mov ax, [w16_clsseg]            ; fixed: its segment is its handle
+    W16TOVIRT ax
+    ICALL w16_gfreeh
+    mov [w16_clsseg], dx
+    pop word [w16_clsn]
+    pop ax
+    clc
+    ret
+.gnf:
+    pop ax
+    pop ax
+.gno:
+    stc
     ret
 
 ; w16_ctlkrow - a CLASS entry of WIN16's controls (slots W16_CTLK + kind,
@@ -472,7 +523,7 @@ W16SYS w16n_clsinfo
     jnz .name
     sub ax, 0xC000                  ; the atom: its class's index
     jb .no
-    cmp ax, W16_MAXCLS
+    cmp ax, [w16_clsn]
     jae .no
     cmp word [w16_clsseg], 0
     je .no
