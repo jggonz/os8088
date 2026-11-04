@@ -55,53 +55,33 @@ w16_bmslot:
 
 ; w16_bmrp - AX = a row, BX = bitmap slot * 2 -> AX = the row's byte offset,
 ; DX = the segment (the arm: the virtual paragraph) it lies in, for W16SEG.
-; Keeps all but AX and DX. A TILED bitmap (w16b_mono high byte 2, SPEC.md
-; 124.25.16) holds 65535 / stride rows in a tile and its tiles are 1000h
-; paragraphs apart; any other is one segment and the row is a multiply.
+; Keeps all but AX and DX. A bitmap of one segment is a multiply; a TILED one
+; (w16b_mono high byte 2, SPEC.md 124.25.16) is part 9's w16_bmrps, which
+; w16_bmnew fetched to make it, so it is here while the bitmap is.
 w16_bmrp:
     test byte [w16b_mono + bx + 1], 2
-    jnz .tiled
+    jnz .t
     mul word [w16b_str + bx]
     mov dx, [w16b_seg + bx]
     ret
-.tiled:
-    push cx
-    mov cx, ax                      ; CX = the row
-    mov ax, 0xFFFF
-    xor dx, dx
-    div word [w16b_str + bx]        ; AX = the rows a tile holds
-    xchg ax, cx                     ; AX = the row, CX = that
-    xor dx, dx
-    div cx                          ; AX = its tile, DX = its row in it
-    xchg ax, dx
-    push dx
-    mul word [w16b_str + bx]        ; AX = the offset in the tile
-    pop dx
-    mov cl, 12
-    shl dx, cl
-    add dx, [w16b_seg + bx]
-    pop cx
+.t:
+    mov word [w16_sfn], w16_bmrps
+; w16_bmsys - part 3 -> part 9 for a tiled bitmap's work (SPEC.md 124.25.16):
+; the image's SCALL half, through ICALL, [w16_sfn] the routine. Every
+; register and the flags pass both ways
+w16_bmsys:
+    ICALL w16_scall
     ret
 
-; w16_bmcap - BX = bitmap slot * 2 -> AX = the rows one tile holds, at most
-; the bitmap's: what a call limited to one 64KB segment (Get/SetBitmapBits)
-; may reach. Keeps all but AX.
+; w16_bmcap - BX = bitmap slot * 2 -> AX = the rows a call limited to one 64KB
+; segment (Get/SetBitmapBits, CreateBitmap's bits) may reach: the bitmap's, or
+; a tiled one's first tile's (part 9's w16_bmcaps). Keeps all but AX.
 w16_bmcap:
     mov ax, [w16b_h + bx]
     test byte [w16b_mono + bx + 1], 2
     jz .out
-    push cx
-    push dx
-    mov cx, ax
-    mov ax, 0xFFFF
-    xor dx, dx
-    div word [w16b_str + bx]
-    cmp ax, cx
-    jbe .m
-    mov ax, cx
-.m:
-    pop dx
-    pop cx
+    mov word [w16_sfn], w16_bmcaps
+    jmp short w16_bmsys
 .out:
     ret
 
@@ -181,62 +161,15 @@ w16_bmnew:
     push si                         ; the heap is short: a GlobalNotify
     call w16k_gnask                 ;   procedure is asked to give a block
     pop si                          ;   up, and the call runs again after
-    jmp .no                         ;   (SPEC.md 124.9.1)
-.huge:                              ; past W16_BMMAX: a TILED bitmap (SPEC.md
-    mov ax, 0xFFFF                  ;   124.25.16), one global block of its
-    xor dx, dx                      ;   own, cleared 32KB at a time. Its tiles
-    div word [w16b_str + bx]        ;   are 64KB apart: AX = the rows a tile
-    mov cx, ax                      ;   holds,
-    mov ax, [w16b_h + bx]
-    xor dx, dx
-    div cx                          ; AX = the whole tiles, DX = rows beyond
-    mov cx, ax
-    mov ax, dx
-    mul word [w16b_str + bx]        ; DX = 0, AX = the last tile's bytes
-    mov dx, cx                      ; DX:AX = whole tiles * 64KB + that
-    cmp dx, 15
-    jae .no
-    push si
-    push dx
-    push ax                         ; (the bytes, for the clearing below)
-    xor cl, cl
-    ICALL w16_gnew                  ; DX:AX in, AX = handle, DX = segment
-    pop si                          ; SI = the bytes' low word
-    pop di                          ; DI = ...its high
-    or ax, ax
-    jz .hno
-    mov byte [w16b_mono + bx + 1], 2
-    mov [w16b_seg + bx], dx
-.hclr:
-    mov cx, 0x8000
-    or di, di
-    jnz .hfull
-    cmp si, cx
-    jae .hfull
-    mov cx, si
-.hfull:
-    W16SEG es, dx
-    push di
-    push cx
-    xor di, di
-    xor al, al
-    cld
-    rep stosb
-    pop cx
-    pop di
-    add dx, 0x800
-    sub si, cx
-    sbb di, 0
-    mov ax, si
-    or ax, di
-    jnz .hclr
-    pop si
-    lea ax, [bx + W16_BMP0]
-    clc
-    jmp .out
-.hno:
-    pop si
-    jmp .ask
+    jmp short .no                   ;   (SPEC.md 124.9.1)
+.huge:                              ; past W16_BMMAX: a TILED bitmap, part 9's
+    xor ax, ax                      ;   (SPEC.md 124.25.16; AX = 0 stays if
+    mov word [w16_sfn], w16_bmhuge  ;   the part cannot be fetched)
+    call w16_bmsys                  ; CF=0 AX = the handle; CF=1 AX = 1 the
+    jnc .out                        ;   heap is short, 0 too large
+    dec ax
+    jz .ask
+    jmp short .no
 .got:
     mov [w16b_seg + bx], dx
     W16SEG es, dx                      ; black: CBLACK in both halves
@@ -997,48 +930,9 @@ w16_bmcopy:
     pop es
 .none:
     ret
-.tiles:                             ; a tiled source (SPEC.md 124.25.16): one
-    mov ax, [w16b_sy]               ;   BLIT4 a tile, the source's rows from
-    mov [w16b_ty], ax               ;   w16b_ty to the tile's last
-    mov ax, [w16_rt]
-    mov [w16b_tdy], ax              ;   ...at the screen row w16b_tdy
-.tile:
-    mov ax, [w16b_ty]
-    call w16_bmrp                   ; AX = the offset, DX = the tile's segment
-    mov si, [w16b_sx]
-    shr si, 1
-    add si, ax
-    W16SEG es, dx
-    xor dx, dx
-    mov ax, 0xFFFF
-    div word [w16b_str + bx]        ; AX = rows a tile holds
-    mov cx, ax
-    mov ax, [w16b_ty]
-    xor dx, dx
-    div cx                          ; DX = its row in the tile
-    sub cx, dx                      ; CX = rows left in the tile
-    mov dx, [w16_rb]
-    sub dx, [w16b_tdy]
-    inc dx                          ; DX = screen rows still to draw
-    cmp dx, cx
-    jbe .tl
-    mov dx, cx
-.tl:
-    push dx
-    mov ax, [w16_rl]
-    mov cx, [w16_rr]
-    sub cx, ax
-    inc cx
-    push bx
-    mov bx, [w16b_tdy]
-    call OSAPI_GFX_BLIT4
-    pop bx
-    pop dx
-    add [w16b_tdy], dx
-    add [w16b_ty], dx
-    mov ax, [w16b_tdy]
-    cmp ax, [w16_rb]
-    jle .tile
+.tiles:                             ; a tiled source: one BLIT4 a tile, in
+    mov word [w16_sfn], w16_bmtiles ;   part 9 (SPEC.md 124.25.16)
+    call w16_bmsys
     pop es
     ret
 .odd:                               ; through the band: w16_bmscale's frame,

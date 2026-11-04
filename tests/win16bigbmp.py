@@ -14,7 +14,9 @@ into a memory DC, draws in each tile and across the seam between the
 first two, reads every pixel back, BitBlts a block of the last tile onto
 the window and a source that crosses the seam, reads a scan through
 GetDIBits, writes one through SetDIBits, StretchBlts the seam and deletes
-it. Its MessageBox, read off the program's stack, is "BIGBMP OK" or names
+it; and a line and an ExtFloodFill across a seam, a blit from an odd
+column, a pattern brush, copies both ways with a second tiled bitmap whose
+tiles are another height, and a tiled monochrome bitmap. Its MessageBox, read off the program's stack, is "BIGBMP OK" or names
 each check that failed. This row is kern_big's (QEMU, real mode); the
 kern_mega arm of the same fixture is looked at by hand (KERN-MEGA-PLAN).
 """

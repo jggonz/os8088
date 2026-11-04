@@ -42,7 +42,7 @@ W16SYS w16g_setbmbits
     jc .none
     mov [w16_scratch], cx           ; bytes left to take
     mov bp, si                      ; BP = where they began
-    SLCALL w16_bmcap                ; (a tiled bitmap: the first tile's rows,
+    call w16_bmcaps                 ; (a tiled bitmap: the first tile's rows,
     mov dx, ax                      ;   SPEC.md 124.25.16)
     mov [w16_scratch + 2], dx       ; rows to go
     xor di, di                      ; DI = the row in the bitmap
@@ -485,6 +485,147 @@ W16SYS w16g_getdibits
     pop si
     ret
 
+; -----------------------------------------------------------------------------
+; A TILED bitmap (SPEC.md 124.25.16): past W16_BMMAX, one fixed block of the
+; global heap cut into tiles of 65535 / stride rows, each 64KB (1000h
+; paragraphs) after the last, so no row straddles two and the next tile is
+; the block's paragraph + 1000h on both arms. Part 9's, out of the library
+; part's 64KB: w16_bmnew's .huge comes here first, which fetches the part,
+; and the part stays until the program ends, so every later call finds it.
+; -----------------------------------------------------------------------------
+
+; w16_bmtrow - BX = bitmap slot * 2 -> AX = the rows a tile holds. Keeps all
+; but AX
+w16_bmtrow:
+    push dx
+    mov ax, 0xFFFF
+    xor dx, dx
+    div word [w16b_str + bx]
+    pop dx
+    ret
+
+; w16_bmrps - w16_bmrp, here: AX = a row, BX = bitmap slot * 2 -> AX = its
+; byte offset, DX = the segment (the arm: the virtual paragraph) it is in.
+; Keeps all but AX and DX
+w16_bmrps:
+    test byte [w16b_mono + bx + 1], 2
+    jnz .tiled
+    mul word [w16b_str + bx]
+    mov dx, [w16b_seg + bx]
+    ret
+.tiled:
+    push cx
+    xchg ax, cx                     ; CX = the row
+    call w16_bmtrow
+    xchg ax, cx                     ; AX = the row, CX = rows a tile
+    xor dx, dx
+    div cx                          ; AX = its tile, DX = its row in it
+    xchg ax, dx
+    push dx
+    mul word [w16b_str + bx]        ; AX = the offset in the tile
+    pop dx
+    mov cl, 12
+    shl dx, cl                      ; the tile's paragraphs in
+    add dx, [w16b_seg + bx]
+    pop cx
+    ret
+
+; w16_bmcaps - w16_bmcap, here: BX = bitmap slot * 2 -> AX = the rows one
+; tile holds, at most the bitmap's. Keeps all but AX
+w16_bmcaps:
+    call w16_bmtrow
+    test byte [w16b_mono + bx + 1], 2
+    jz .h
+    cmp ax, [w16b_h + bx]
+    jbe .out
+.h:
+    mov ax, [w16b_h + bx]
+.out:
+    ret
+
+; w16_bmhuge - w16_bmnew's .huge: slot BX, its w16b_w, w16b_h and w16b_str
+; written -> CF=0 AX = the handle; CF=1 AX = 1 the heap is short, 0 too large.
+; ONE fixed block, (tiles - 1) x 64KB + the last tile's bytes, zeroed by
+; w16_gnew (black: CBLACK in both halves) through the arm's walk descriptor,
+; which holds no LDT entry past the call. Keeps all but AX
+w16_bmhuge:
+    push cx
+    push dx
+    call w16_bmtrow
+    mov cx, ax
+    mov ax, [w16b_h + bx]
+    xor dx, dx
+    div cx                          ; AX = the whole tiles, DX = rows beyond
+    xchg ax, dx
+    push dx
+    mul word [w16b_str + bx]        ; AX = the last tile's bytes (DX = 0)
+    pop dx                          ; DX:AX = whole tiles x 64KB + that
+    cmp dx, 15                      ; (w16_gnew's arena: under 1023KB)
+    jae .big
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle, DX = the segment
+    or ax, ax
+    mov ax, 1
+    stc
+    jz .out
+    mov byte [w16b_mono + bx + 1], 2
+    mov [w16b_seg + bx], dx
+    lea ax, [bx + W16_BMP0]
+    clc
+    jmp short .out
+.big:
+    xor ax, ax
+    stc
+.out:
+    pop dx
+    pop cx
+    ret
+
+; w16_bmtiles - w16_bmcopy's for a tiled source on a byte: one BLIT4 a tile,
+; the source's rows from [w16b_sy], to the screen rect [w16_rl..rr] x
+; [w16_rt..rb], BX = the slot, BP = the stride. Takes AX, CX, DX, SI, ES
+w16_bmtiles:
+    mov ax, [w16b_sy]
+    mov [w16b_ty], ax               ; the next source row
+    mov ax, [w16_rt]
+    mov [w16b_tdy], ax              ; ...and the screen row it lands on
+.tile:
+    mov ax, [w16b_ty]
+    call w16_bmrps                  ; AX = the offset, DX = the tile's segment
+    mov si, [w16b_sx]
+    shr si, 1
+    add si, ax
+    W16SEG es, dx
+    call w16_bmtrow
+    mov cx, ax
+    mov ax, [w16b_ty]
+    xor dx, dx
+    div cx                          ; DX = its row in the tile
+    sub cx, dx                      ; CX = rows left in the tile
+    mov dx, [w16_rb]
+    sub dx, [w16b_tdy]
+    inc dx                          ; DX = screen rows still to draw
+    cmp dx, cx
+    jbe .tl
+    mov dx, cx
+.tl:
+    push dx
+    mov ax, [w16_rl]
+    mov cx, [w16_rr]
+    sub cx, ax
+    inc cx
+    push bx
+    mov bx, [w16b_tdy]
+    call OSAPI_GFX_BLIT4
+    pop bx
+    pop dx
+    add [w16b_tdy], dx
+    add [w16b_ty], dx
+    mov ax, [w16b_tdy]
+    cmp ax, [w16_rb]
+    jle .tile
+    ret
+
 ; w16_gdrow - bitmap [w16_gdslot]'s row DX at ES:DI in [w16_gdbpp] bits a
 ; pixel, [w16_gdstr] bytes; DI past it. Keeps all but AX, CX, DX, SI.
 w16_gdrow:
@@ -492,7 +633,7 @@ w16_gdrow:
     push bp
     mov bx, [w16_gdslot]
     mov ax, dx
-    SLCALL w16_bmrp                 ; (a tiled row: SPEC.md 124.25.16)
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.16)
     mov si, ax                      ; SI = the row in the bitmap
     mov [w16_gdseg], dx             ; ...and the segment it is in
     mov bp, di
@@ -749,7 +890,7 @@ w16r_can:
     mov bx, [w16_fbm]
     push ax
     mov ax, dx
-    SLCALL w16_bmrp                 ; (a tiled row: SPEC.md 124.25.16)
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.16)
     mov [w16_gdseg], dx
     mov dx, ax
     pop ax

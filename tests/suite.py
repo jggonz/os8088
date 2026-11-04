@@ -17172,8 +17172,11 @@ SOAK = [
         "past W16_BMMAX's 64,000 - selects it into a memory DC, draws in "
         "each tile and across the seam, reads every pixel back, BitBlts the "
         "last tile's block and a source across the seam onto the window, "
-        "reads a scan through GetDIBits, writes one through SetDIBits and "
-        "StretchBlts the seam; its MessageBox must be BIGBMP OK",
+        "reads a scan through GetDIBits, writes one through SetDIBits, "
+        "StretchBlts the seam, draws a line and an ExtFloodFill across a "
+        "seam, blits from an odd column, makes a pattern brush of it, copies "
+        "both ways with a second tiled bitmap of other tile heights and fills "
+        "a tiled monochrome one; its MessageBox must be BIGBMP OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),

@@ -11,7 +11,11 @@
  * first two; every pixel is read back through GetPixel, a block of the last
  * tile is BitBlt'd onto the window and read there, a scan of it is read
  * through GetDIBits and another written through SetDIBits, a StretchBlt of
- * the seam goes to the window, and the bitmap is deleted.
+ * the seam goes to the window, and the bitmap is deleted. Before that: a
+ * line and a flood fill across the seam, a block from an odd column (the
+ * band's path), a pattern brush made from it, and copies into a second
+ * tiled bitmap whose tiles are a different height (500 x 400, 262 rows)
+ * and into a monochrome one past 64,000 bytes, each read back.
  *
  * Every check that fails is named in the message box, which
  * tests/win16bigbmp.py reads; "BIGBMP OK" when none does.
@@ -55,8 +59,10 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     WNDCLASS wc;
     HWND hwnd;
     HDC dc, bd;
-    HBITMAP big, bold;
-    HBRUSH red, blue;
+    HBITMAP big, bold, two, mono, tbold;
+    HBRUSH red, blue, green, pat;
+    HDC td;
+    HPEN rpen, open_;
     RECT rc;
     int i;
 
@@ -76,6 +82,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     dc = GetDC(hwnd);
     red = CreateSolidBrush(RED);
     blue = CreateSolidBrush(BLUE);
+    green = CreateSolidBrush(GREEN);
 
     big = CreateCompatibleBitmap(dc, 640, 480);
     check(big != NULL && !((UINT)big & 1), "make");
@@ -110,6 +117,82 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(GetPixel(dc, 10, 2 + 5) == RED && GetPixel(dc, 10, 2 + 4) == WHITE
           && GetPixel(dc, 10, 2 + 9) == RED && GetPixel(dc, 10, 2 + 15) == RED
           && GetPixel(dc, 10, 2 + 16) == WHITE, "bltseam");
+
+    /* a line down column 400 across the first seam (rows 150..260) */
+    rpen = CreatePen(PS_SOLID, 1, RED);
+    open_ = SelectObject(bd, rpen);
+    MoveTo(bd, 400, 150);
+    LineTo(bd, 400, 261);
+    SelectObject(bd, open_);
+    DeleteObject(rpen);
+    /* (off the stripe, rows 200..210: tile 0 above it, tile 1 below) */
+    check(GetPixel(bd, 400, 150) == RED && GetPixel(bd, 400, 199) == RED
+          && GetPixel(bd, 400, 211) == RED && GetPixel(bd, 400, 260) == RED
+          && GetPixel(bd, 400, 261) == WHITE && GetPixel(bd, 401, 230) == WHITE,
+          "line");
+    /* a red box round rows 380..439 x 500..559, filled green inside: the
+     * fill's reads and writes cross the second seam (row 408) */
+    SetRect(&rc, 500, 380, 560, 381);
+    FillRect(bd, &rc, red);
+    SetRect(&rc, 500, 439, 560, 440);
+    FillRect(bd, &rc, red);
+    SetRect(&rc, 500, 380, 501, 440);
+    FillRect(bd, &rc, red);
+    SetRect(&rc, 559, 380, 560, 440);
+    FillRect(bd, &rc, red);
+    open_ = SelectObject(bd, green);
+    ExtFloodFill(bd, 530, 390, RED, FLOODFILLBORDER);
+    SelectObject(bd, open_);
+    check(GetPixel(bd, 530, 390) == GREEN && GetPixel(bd, 530, 430) == GREEN
+          && GetPixel(bd, 502, 438) == GREEN && GetPixel(bd, 530, 445) == WHITE
+          && GetPixel(bd, 499, 400) == WHITE && GetPixel(bd, 500, 400) == RED,
+          "flood");
+    /* from an odd column, across the seam: the band's path to the screen */
+    PatBlt(dc, 4, 2, 100, 100, WHITENESS);
+    BitBlt(dc, 4, 2, 21, 20, bd, 39, 195, SRCCOPY);
+    check(GetPixel(dc, 4, 2) == WHITE && GetPixel(dc, 4 + 10, 2 + 4) == WHITE
+          && GetPixel(dc, 4 + 10, 2 + 5) == RED
+          && GetPixel(dc, 4 + 10, 2 + 15) == RED
+          && GetPixel(dc, 4 + 10, 2 + 16) == WHITE, "oddblt");
+    /* a pattern brush from it: rows 0..7, in the first tile */
+    pat = CreatePatternBrush(big);
+    check(pat != NULL, "patbrush");
+    if (pat)
+        DeleteObject(pat);
+
+    /* a second tiled bitmap, 262 rows a tile: copies between the two cross
+     * both bitmaps' seams at different rows */
+    two = CreateBitmap(500, 400, 1, 4, NULL);
+    check(two != NULL, "make2");
+    td = CreateCompatibleDC(dc);
+    tbold = SelectObject(td, two);
+    PatBlt(td, 0, 0, 500, 400, WHITENESS);
+    BitBlt(td, 0, 190, 500, 90, bd, 0, 150, SRCCOPY);
+    /* two's row r is big's r - 40: the stripe is rows 240..250 there */
+    check(GetPixel(td, 5, 239) == WHITE && GetPixel(td, 5, 240) == RED
+          && GetPixel(td, 5, 250) == RED && GetPixel(td, 5, 251) == WHITE
+          && GetPixel(td, 400, 262) == RED && GetPixel(td, 400, 261) == RED
+          && GetPixel(td, 400, 279) == RED && GetPixel(td, 401, 262) == WHITE,
+          "bm2bm");
+    /* and back: two's rows 250..275 (its seam at 262) onto big's 400.. */
+    BitBlt(bd, 0, 400, 500, 26, td, 0, 250, SRCCOPY);
+    check(GetPixel(bd, 400, 400) == RED && GetPixel(bd, 400, 425) == RED
+          && GetPixel(bd, 401, 412) == WHITE, "bm2bm2");
+    SelectObject(td, tbold);
+    check(DeleteObject(two), "delete2");
+
+    /* a monochrome bitmap past 64,000 bytes (WIN16 keeps it 4bpp: 102,400) */
+    mono = CreateBitmap(1024, 200, 1, 1, NULL);
+    check(mono != NULL, "makemono");
+    tbold = SelectObject(td, mono);
+    PatBlt(td, 0, 0, 1024, 200, WHITENESS);
+    SetRect(&rc, 1000, 120, 1010, 140);
+    FillRect(td, &rc, GetStockObject(BLACK_BRUSH));
+    check(GetPixel(td, 1005, 130) == BLACK && GetPixel(td, 1005, 119) == WHITE
+          && GetPixel(td, 1011, 130) == WHITE, "mono");
+    SelectObject(td, tbold);
+    DeleteDC(td);
+    check(DeleteObject(mono), "deletemono");
 
     memset(&bi, 0, sizeof(bi));
     bi.h.biSize = sizeof(BITMAPINFOHEADER);
@@ -155,6 +238,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(DeleteObject(big), "delete");
     DeleteObject(red);
     DeleteObject(blue);
+    DeleteObject(green);
     ReleaseDC(hwnd, dc);
 
     MessageBox(hwnd, res[0] ? res : "BIGBMP OK", "BIGBMP", MB_OK);
