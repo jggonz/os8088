@@ -217,6 +217,9 @@ W16P_SYS     equ 9              ; THE SYSTEM-LIBRARY PART (SPEC.md 124.24.1):
 W16P_TSK     equ 10             ; THE TASK PART (SPEC.md 124.28.13): MDI and
                                 ;   tasks, the system-library part's shape,
                                 ;   fetched only by a program that has them
+W16P_RARE    equ 11             ; THE RARE PART (SPEC.md 124.25.16): the home of
+                                ;   an import few programs call, part 10's
+                                ;   shape - Arc, Pie and TrackPopupMenu
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -291,6 +294,12 @@ section .w16tsk
 %endmacro
 %macro W16TSK 1                 ; in the task part: %1 is a HANDLER a row
 %define w16tsk_%1 1             ;   names, near, ending in ret
+%1:
+%endmacro
+; --- the rare part's (SPEC.md 124.25.16): a handler only; nothing in the image
+; calls into it by macro, so there is no RCALL
+%macro W16RARE 1                ; in the rare part: %1 is a HANDLER a row
+%define w16rare_%1 1            ;   names, near, ending in ret
 %1:
 %endmacro
 %macro DCONT 1                  ; in the part: %1 is a CONTINUATION
@@ -849,6 +858,9 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16_tseg, 2          ; the task part's, in the same layout - the
     W16BSS w16_tbv, 4           ;   segment, TCALL's vector (w16k_gate) and
     W16BSS w16_tfn, 2           ;   the routine (SPEC.md 124.28.13)
+    W16BSS w16_xseg, 2          ; the rare part's, the same layout again: the
+    W16BSS w16_xbv, 4           ;   three blocks are 8 bytes apart, which
+    W16BSS w16_xfn, 2           ;   w16_ptin and the dispatch rely on (124.25.16)
     W16BSS w16_cderr, 2         ; CommDlgExtendedError's answer (124.24.3)
     W16BSS w16_ofnwin, 2        ; the file dialog a GetOpenFileName waits on,
                                 ;   0 = none (SPEC.md 124.24.2)
@@ -1561,8 +1573,8 @@ w16_freeprog:
     SCALL w16mm_wend
 .nowo:
 %endif
-    call w16_sysout                 ; ...and the system-library part (124.24.1)
-    call w16_tskout                 ; ...and the task part (124.28.13)
+    call w16_ptdrop                 ; ...and the system-library, task and rare
+                                    ;   parts (124.24.1, 124.28.13, 124.25.16)
     call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_dosend                 ; its files closed, the DOS freed (124.21)
     call w16_gfreeall
@@ -1958,26 +1970,37 @@ w16_dlgout:
     ret
 
 ; -----------------------------------------------------------------------------
-; w16_sysin - the system-library part (SPEC.md 124.24.1), w16_tskin the task
-; part (124.28.13), fetched from WIN16's own folder if it is not here. CF=1:
-; it could not be, and op_fetch has said why. Keeps every register.
-; w16_sysout and w16_tskout drop them. Both parts' bss is one layout - the
-; segment, the vector, the routine - so one body serves both.
+; The system parts, 9 (system-library, SPEC.md 124.24.1), 10 (task, 124.28.13)
+; and 11 (rare, 124.25.16), fetched from WIN16's own folder if they are not
+; here. Their bss is one layout - the segment, the vector, the routine - three
+; blocks of 8 bytes in a row from w16_sseg, so a part's block is
+; w16_sseg + (part - 9) * 8 and one fetch (w16_ptin) and one drop
+; (w16_ptdrop) serve all three.
+;
+; w16_ptin - AL = the part, SI = its block: fetch it if it is not here. CF=1:
+; it could not be, and op_fetch has said why. Keeps every register but the
+; flags. w16_sysin and w16_tskin are the image's entries, keeping SI too.
 ; -----------------------------------------------------------------------------
 w16_tskin:
     push ax
     mov al, W16P_TSK
     push si
     mov si, w16_tseg
-    jmp short w16_ptin
+    jmp short w16_ptin1
 w16_sysin:
     push ax
     mov al, W16P_SYS
     push si
     mov si, w16_sseg
-w16_ptin:                            ; AL = the part, SI = its segment word
+w16_ptin1:
     ; STKBALANCE-OK: the shared tail of w16_tskin and w16_sysin, entered
     ; with their AX and SI pushed, which it pops
+    call w16_ptin
+    pop si
+    pop ax
+    ret
+w16_ptin:
+    push ax
     cmp word [si], 0                ;   (CF=0 when it is here)
     jne .out
     call w16_pkeep                  ; in the heap, not a claim (124.25.1)
@@ -1987,35 +2010,37 @@ w16_ptin:                            ; AL = the part, SI = its segment word
     push es
     W16SEG es, ax
     W16PMDS s, es                   ; the part told WIN16's data selector,
-    pop es                          ;   at W16S_MYDS in both parts' headers
+    pop es                          ;   at W16S_MYDS in all three parts' headers
     call w16_pcode                  ; the copy's code half (124.31.5)
 %endif
     mov [si + 4], ax                ; the vector's segment...
-    mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in both
+    mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in all
 .out:
-    pop si
     pop ax
     ret
-%if w16_sbv - w16_sseg != 2 || w16_tbv - w16_tseg != 2
+%if w16_sbv - w16_sseg != 2 || w16_tbv - w16_tseg != 2 || w16_xbv - w16_xseg != 2
   %error "w16_ptin: a part's vector is not after its segment"
 %endif
+%if w16_tseg - w16_sseg != 8 || w16_xseg - w16_tseg != 8
+  %error "w16_ptin: the parts' blocks are not 8 bytes apart"
+%endif
 
-w16_tskout:
-    push si
-    mov si, w16_tseg
-    jmp short w16_ptout
-w16_sysout:
+; w16_ptdrop - give back the three system parts, in order. Keeps every register.
+w16_ptdrop:
     push si
     mov si, w16_sseg
-w16_ptout:
+.l:
     push dx
     xor dx, dx
     xchg dx, [si]
     or dx, dx
-    jz .out
+    jz .n
     call w16_kfree
-.out:
+.n:
     pop dx
+    add si, 8
+    cmp si, w16_sseg + 3 * 8
+    jb .l
     pop si
     ret
 
@@ -2399,6 +2424,7 @@ w16_cputest:
 %include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 10 (124.27)
 %include "win16/w16task.inc"    ; several programs in one instance: part 10 (124.28)
 %include "win16/w16progm.inc"   ; Program Manager's DDE server: part 10 (124.33.2)
+%include "win16/w16rare.inc"    ; Arc, Pie, TrackPopupMenu: part 11 (124.25.16)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's
@@ -2417,6 +2443,8 @@ w16_exports:
     %assign w16pt W16P_SYS
   %elifdef w16tsk_%[w16x_p_%[k]]
     %assign w16pt W16P_TSK
+  %elifdef w16rare_%[w16x_p_%[k]]
+    %assign w16pt W16P_RARE
   %else
     %assign w16pt 0
   %endif
@@ -2471,6 +2499,8 @@ w16_pnames:
     %assign w16pt W16P_SYS
   %elifdef w16tsk_%[w16x_p_%[w16f]]
     %assign w16pt W16P_TSK
+  %elifdef w16rare_%[w16x_p_%[w16f]]
+    %assign w16pt W16P_RARE
   %else
     %assign w16pt 0
   %endif
@@ -2517,6 +2547,8 @@ section .w16sys
     W16PM_PART s, hdr
 section .w16tsk
     W16PM_PART q, hdr
+section .w16rare
+    W16PM_PART r, hdr
 section .text
     W16PM_IMAGE
     W16PM_PART t, cs
@@ -2553,7 +2585,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 11
+    OS88_PARTS_BEGIN 12
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
@@ -2565,6 +2597,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DHOST: w16dosh.asm
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_SYS: section .w16sys
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_TSK: section .w16tsk
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_RARE: section .w16rare
     OS88_PARTS_END
 
     OS88_IMAGE_END
