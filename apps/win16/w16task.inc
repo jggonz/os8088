@@ -666,7 +666,7 @@ W16TSK w16t_end
     mov byte [es:bx + W16C_NAME], 0
 .cn:
     add bx, W16C_STRIDE
-    cmp bx, W16_MAXCLS * W16C_STRIDE
+    cmp bx, [w16_clsend]
     jb .c
 .cx:
     mov bx, w16_tmr                 ; its timers with no window

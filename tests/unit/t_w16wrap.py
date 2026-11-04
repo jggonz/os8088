@@ -90,6 +90,11 @@ def labels(text):
 # data tables inside a part: ndisasm reads their bytes as instructions, and an
 # E8/E9 in one is a "call" that does not exist. Each is a label and its _end.
 DATA = ("w16_pnames",)
+# ...and the first 12 bytes of the package header (SPEC.md 20.2): the magic,
+# the version and the image and bss sizes at +8/+10, which are data too - a bss
+# size of 69E9h is an E9 "jmp" at +10 (2026-11-04, WIN16-NEXT ctlproc verify).
+# The three-byte dispatcher at +12 is code, and stays scanned.
+HDR_DATA = 12
 
 
 def data_ranges(tab):
@@ -122,6 +127,8 @@ def scan(binf, mapf):
                                  text=True, check=True).stdout
         wraps, bad = 0, []
         skip = data_ranges(tabs.get(sec, []))
+        if sec == ".text":              # the package header's words before its
+            skip.append((0, HDR_DATA))  #   dispatcher: the image and bss sizes
         for line in dis.splitlines():
             f = line.split(None, 2)
             if len(f) < 3 or f[1][:2] not in ("E8", "E9") or len(f[1]) != 6:

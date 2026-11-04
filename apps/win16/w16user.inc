@@ -412,14 +412,13 @@ w16_findcls:
     push si
     push di
     push es
-    mov ax, [w16_clsseg]
-    or ax, ax
-    jz .none                        ; no class was ever registered
-    mov es, ax
-    mov bx, (W16_MAXCLS - 1) * W16C_STRIDE
-    mov cx, W16_MAXCLS              ; from the last: a task's own class,
-.cls:                               ;   registered over a global one of the
-    cmp byte [es:bx + W16C_NAME], 0 ;   name, lies after it (SPEC.md 124.28.3)
+    mov es, [w16_clsseg]            ; (0 with no block, and then never read:
+    mov bx, [w16_clsend]            ;   [w16_clsend] is 0 too)
+.next:                              ; from the last: a task's own class,
+    sub bx, W16C_STRIDE             ;   registered over a global one of the
+    jb .out                         ;   name, lies after it (SPEC.md 124.28.3);
+                                    ;   CF=1, none
+    cmp byte [es:bx + W16C_NAME], 0
     je .next
     test byte [es:bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
     jnz .any                        ; a task's class is its own, unless it
@@ -432,29 +431,20 @@ w16_findcls:
 .any:
     mov si, w16_namebuf
     lea di, [bx + W16C_NAME]
-    push cx
     mov cx, 16
 .cmp:
     mov al, [si]
     cmp al, [es:di]
-    jne .ne
+    jne .next
     inc si
     inc di
     loop .cmp
-    pop cx                          ; all sixteen equal
-    dec cx                          ; (the slot's index)
-    mov al, cl
+    mov ax, bx                      ; all sixteen equal: the record's
+    mov cl, W16C_STRIDE             ;   index
+    div cl
     call w16_clsget
     mov bx, ax
     clc
-    jmp short .out
-.ne:
-    pop cx
-.next:
-    sub bx, W16C_STRIDE
-    loop .cls
-.none:
-    stc
 .out:
     pop es
     pop di
