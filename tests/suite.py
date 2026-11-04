@@ -17091,6 +17091,20 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16mscdex", "soak", py("tests/win16mscdex.py"), 90.0,
+        "SPEC.md 124.33.3, WIN16-NEXT-PLAN Q3: MSCDX.EXE (`make "
+        "win16fixtures`, tests/win16/mscdx.c) asks MSCDEX's int 2Fh 15xxh - "
+        "1500h, 150Bh for the CD's letter and the next, 150Ch, 150Dh, a "
+        "refused 1510h - and GetDriveType of the letter, on `make "
+        "cdromtest`'s disk with build/cdfix.iso in the drive, with the drive "
+        "empty, and on the shipped disk with no CD at all (MSCDEX absent: "
+        "BX = 0). Its MessageBox must say MSCDX OK 3, MSCDX OK 3 and MSCDX "
+        "NONE",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), serial=True,
+        timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88", "build/cdromtest.img",
+               "build/cdfix.iso")),
     Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
         "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
         "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "

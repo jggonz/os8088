@@ -118,9 +118,10 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - It is not SPEC.md 96.11.11's doing. It was seen with a core that never asks DFREE, and with the older core.
   - It is undiagnosed, and it matters for the real-mode installers.
 
-- [ ] **Q3: MSCDEX's `int 2Fh` is deferred** (SPEC.md 124.33.3).
+- [x] **Q3: MSCDEX's `int 2Fh` is deferred** (SPEC.md 124.33.3).
   - It costs about 100 image bytes, and no target has yet been seen to ask for it.
   - Mozart's CD-ROM run (L1) is where the question is answered.
+  - Done (2026-11-04): `w16_i2f` answers 1500h, 150Bh, 150Ch and 150Dh off `CDROM.DRV`'s volume; other 15xxh are refused. Sir Hangman's installer is the target that asks. +110 bytes of image and bss on each arm. Row `win16mscdex`; the kern_mega arm is not yet run.
 
 - [ ] **Q4: the rest of S25's acceptance.**
   - Arcade's five games are 386 code over `WAVEMIX`, started from their links.

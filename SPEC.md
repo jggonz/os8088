@@ -232440,12 +232440,12 @@ installs it and the gate's return to `LOW_SEG` restores it, both inside
 **So is `int 2Fh`, the multiplex** (2026-11-02), and nothing answers it:
 WIN16 is not a TSR and there is no DOS under it, so `w16_i2f` returns every
 register as it came, which is what DOS's own int 2Fh answers for a function
-nobody claims - an installation check (AL = 0) reads "not installed". It is
+nobody claims (but 15xxh, 124.33.3) - an installation check (AL = 0) reads "not installed". It is
 there because the vector it replaces is nobody's: on kern_mega a program's
 `int 2Fh` with no package behind IVT 2Fh is `mega_unh`, `FAULT FF`
 (§20.18.1), and an XT ROM may leave the vector 0000:0000. Arcade's and
 Mozart's SETUP ask for APPEND (`AX = B700h`) before their first dialog. On
-the arm `AX = 1686h` answers `AX = 0`, protected mode (124.31.6).
+the arm `AX = 1686h` answers `AX = 0`, protected mode (124.31.6). The MSCDEX functions `15xxh` are answered from 124.33.3 on; every other function is as above.
 
 #### 124.2.2 Calling the program back *(shipped in S3)*
 
@@ -239278,11 +239278,47 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   that path. Which DOS error the core answers was not checked here
   (Windows answered 5, access denied). S25's installs off a CD are the
   check.
-- **Not yet: MSCDEX's `int 2Fh` `15xxh`.** WIN16 hooks no `int 2Fh`.
-  Hooking it would be a third vector in `w16_i21_on`/`_off` and an entry
-  that changes stacks, in the image, at every way into and out of a
-  program. That is about 100 bytes, and the kern_mega arm has 92. No
-  target installer has yet been seen to ask: Arcade comes off a floppy,
-  and `GetDriveType` already answers the question for a CD. S25's
-  installs will show whether one does. If one does, the hook goes in
-  with the bytes found for it.
+- **MSCDEX's `int 2Fh` `15xxh`** (Q3, docs/plans/WIN16-NEXT-PLAN.md section 4).
+  `w16_i2f` (124.2.1) was already WIN16's and answered nothing; it now
+  answers the CD-ROM multiplex, from one byte. `w16_entry` asks `CDROM.DRV`
+  once (`CDV_DRIVE`, 119.4, `DI` = 0 so no string): if the driver is
+  attached, its `DL` is the CD's volume index, kept as `w16_cdvol` = index +
+  1 (0 = none; a driver whose volume the table refused answers `DL` = FFh,
+  which the same `+ 1` makes none). A volume index is the drive letter
+  (`GetDriveType` reads the same table), and a CD is never C:, which
+  `dsk_vol_add` keeps for a `DRVC_DISK` (18.7.4), so with no other driver's
+  volume ahead of it the CD is D:, 3. The byte is asked at the instance's
+  start and not again: a `CDROM.DRV` ticked or unticked in the Control Panel
+  while the instance runs is seen by the next WIN16 launched, as MSCDEX
+  loaded at boot is seen by the next Windows started. The handler runs on the program's stack with IF = 0 and can
+  make no kernel call, so it reads that byte through CS and nothing else.
+  **MSCDEX is "installed" exactly when that byte is not 0**, with the CD as
+  the one drive, unit 0, at that volume's letter:
+
+  | call | with a CD drive | with none |
+  |---|---|---|
+  | `1500h` installation check | `BX` = 1, `CX` = the drive (0 = A:) | `BX` = 0, the rest as it came |
+  | `150Bh` is `CX` a CD drive | `BX` = `ADADh`, `AX` = 1 for the CD's letter, else 0 | every register as it came |
+  | `150Ch` version | `BX` = `020Ah` (2.10) | as it came |
+  | `150Dh` drive letters | `ES:BX` is the caller's buffer, one byte per drive: the drive's NUMBER, 0 = A: (the unit is `1501h`'s, not this) | as it came |
+  | any other `15xxh` (`1501h` the device list, `1508h` absolute read, `1510h` device request) | CF = 1, `AX` = 1 (invalid function): refused, never faked | as it came |
+
+  `1508h` and `1510h` are refused rather than answered because nothing asked
+  (below), and a read answered here would go round `CDROM.DRV`'s
+  media-generation check (119.3.4). **What asks**: the census over
+  `win16ref/titles` found `int 2Fh` `1500h` and `150Bh` in Sir Hangman's
+  `_INST16.EXE` (both preset `BX` = 0, then test `BX`), and
+  `1500h`/`150Ch`/`150Dh`/`1510h` only in Windows' own `MCICDA.DRV`, which
+  WIN16 does not load: its MCI is `w16mci.inc`'s (124.32.4). The Mozart
+  and Arcade installers ask only APPEND (`B700h`). A disc is not needed:
+  like MSCDEX the answers describe the drive, and the disc is the file
+  layer's (`GetDriveType` of the letter is still 4). On kern_mega the
+  handler is entered in protected mode by `mega_swc` (20.18.1), with `CS`
+  the arm's code selector, so `[cs:w16_cdvol]` reads bss through it as
+  `w16file.inc`'s int 21h handler already does, and `150Dh`'s store is
+  through the selector the program put in `ES`. **What it cost**: no kernel
+  byte; image + bss against `APP_MAX_SIZE`'s 65,024, the real-mode arm
+  63,626 -> 63,736 (1,288 left) and the kern_mega arm 64,491 -> 64,601
+  (423 left), +110 each, 109 of handler and entry call and 1 of bss. The
+  "92" this note gave before was stale: the arm had 533 when it was
+  written over.

@@ -22,9 +22,10 @@ W16_IRET_FL equ 6               ; FLAGS in the iret frame, above the pushed BP
 ; w16_i2f - THE MULTIPLEX INTERRUPT while the program runs (SPEC.md 124.2.1).
 ; Nothing here is a TSR, so every function answers as DOS's int 2Fh does when
 ; nobody claims it: every register as it came, so an installation check
-; (AL = 0) reads "not installed" - APPEND (B700h), MSCDEX (1500h), XMS
-; (4300h), Windows' own (1600h). On the arm, 1686h answers AX = 0: the
-; program runs in protected mode with int 31h's DPMI (124.31.6).
+; (AL = 0) reads "not installed" - APPEND (B700h), XMS (4300h), Windows' own
+; (1600h). On the arm, 1686h answers AX = 0: the program runs in protected
+; mode with int 31h's DPMI. MSCDEX (15xxh) is answered from [w16_cdvol], the
+; CD's volume index + 1 that w16_entry asked CDROM.DRV for (SPEC.md 124.33.3).
 ; -----------------------------------------------------------------------------
 w16_i2f:
 %ifdef PKG_MEGA
@@ -33,6 +34,53 @@ w16_i2f:
     xor ax, ax
 .no:
 %endif
+    cmp ah, 0x15
+    jne .ret
+    cmp byte [cs:w16_cdvol], 0
+    jne .cd
+    or al, al                       ; no CD drive: 1500h says none, the rest
+    jne .ret                        ;   are as they came
+    xor bx, bx
+.ret:
+    iret
+.cd:
+    push bp
+    mov bp, sp
+    push dx
+    mov dl, [cs:w16_cdvol]
+    dec dl                          ; DX = the drive, 0 = A:
+    xor dh, dh
+    or al, al
+    je .cnt
+    cmp al, 0x0B
+    je .chk
+    cmp al, 0x0C
+    je .ver
+    cmp al, 0x0D
+    je .lst
+    mov ax, 1                       ; invalid function, refused (124.33.3)
+    or word [bp + W16_IRET_FL], 1
+    jmp short .out
+.cnt:                               ; 1500h: one drive, at DL
+    mov bx, 1
+    mov cl, dl
+    xor ch, ch
+    jmp short .out
+.chk:                               ; 150Bh: is CX a CD drive
+    mov bx, 0xADAD
+    xor ax, ax
+    cmp cx, dx
+    jne .out
+    inc ax
+    jmp short .out
+.ver:
+    mov bx, 0x020A                  ; MSCDEX 2.10
+    jmp short .out
+.lst:                               ; 150Dh: each CD drive's NUMBER (0 = A:),
+    mov [es:bx], dl                 ;   a byte each - not its unit, 1501h's
+.out:
+    pop dx
+    pop bp
     iret
 
 w16_i21:
