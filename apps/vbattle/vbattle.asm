@@ -364,22 +364,39 @@ vb_round:
     and ax, 0xF000
     ret
 
-; vb_claimk - DX = a claim of CX bytes rounded up to KB. CF=1 refused
-vb_claimk:
-    mov ax, cx
+; vb_kb - AX = DX:AX bytes in KB, rounded up (a claim's size). CX spent
+vb_kb:
     add ax, 1023
-    rcr ax, 1                       ; (a carry is the 17th bit)
-    mov cl, 9
-    shr ax, cl
-    call OSAPI_MEM_CLAIM
+    adc dx, 0
+    mov cx, 10
+.s:
+    shr dx, 1
+    rcr ax, 1
+    loop .s
     ret
 
-; vb_load - the header, the idle loop, the music, the effects and the
-; intro, each once a session. CF=1 and [vb_err] set on failure
+; vb_p2kb - AX = AX paragraphs in KB, rounded up. CX, DX spent
+vb_p2kb:
+    xor dx, dx
+    mov cx, 4
+.k:
+    shl ax, 1
+    rcl dx, 1
+    loop .k
+    jmp vb_kb
+
+; vb_load - what a play needs before it starts, each once a session, in
+; THREE claims - an owner may hold eight (MEM_OWNER_MAX, SPEC.md 50), and a
+; claim a region was one too many: the RESIDENT claim, carved into the idle
+; loop's block, the effects and the music's 32 KB pages; the card's ring
+; (vb_snd_open); and the CLIP CACHE (vb_cache, 125.4). Then the intro, read
+; whole. CF=1 and [vb_err] on failure
 vb_load:
     mov word [vb_err], 0
     cmp byte [vb_loaded], 0
-    jne .intro
+    je .first
+    jmp .intro
+.first:
     push ds                         ; the first region, into our bss
     pop es
     mov bx, vb_meta
@@ -388,111 +405,126 @@ vb_load:
     xor dx, dx
     call vb_read
     mov word [vb_err], vb_s_nofile
-    jc .fail
+    jc .fail1
     mov word [vb_err], vb_s_notvbt
     cmp word [vb_meta+VH_MAGIC], 'VB'
-    jne .fail
+    jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
-    jne .fail
+    jne .fail1
     cmp word [vb_meta+VH_VER], 1
-    jne .fail
+    jne .fail1
     mov ax, [vb_meta+VH_NCLIPS]
     or ax, ax
-    jz .fail
+    jz .fail1
     cmp ax, VB_MAXCLIP
-    ja .fail
-    mov ax, [vb_meta+VH_SPF]
-    or ax, ax
-    jz .fail
-    ; the idle loop and the entries: the resident block
+    ja .fail1
+    cmp word [vb_meta+VH_MLEN+2], 8 ; the music, at most 16 pages (512 KB)
+    jae .fail1
+    cmp word [vb_meta+VH_SPF], 0
+    jne .sized
+.fail1:
+    jmp .fail
+.sized:
+    ; the resident claim's three parts, each rounded to 4 KB, in paragraphs
+    mov cx, [vb_meta+VH_VRES+4]
+    call vb_round
+    mov cl, 4
+    shr ax, cl
+    mov [vb_psfx], ax               ; the effects start after the block
+    mov cx, [vb_meta+VH_SFX+4]
+    call vb_round
+    mov cl, 4
+    shr ax, cl
+    add ax, [vb_psfx]
+    mov [vb_pmus], ax               ; ...and the music after the effects
+    mov ax, [vb_meta+VH_MLEN]       ; the music rounded up to 4 KB, as bytes
+    mov dx, [vb_meta+VH_MLEN+2]
+    add ax, 4095
+    adc dx, 0
+    and ax, 0xF000
+    mov [vb_left], ax
+    mov [vb_left+2], dx
+    mov cx, 4                       ; ...and as paragraphs
+.mp:
+    shr dx, 1
+    rcr ax, 1
+    loop .mp
+    add ax, [vb_pmus]
+    call vb_p2kb
     mov word [vb_err], vb_s_nomem
+    call OSAPI_MEM_CLAIM
+    jc .fail1
+    mov [vb_vres], dx
+    mov ax, dx
+    add ax, [vb_psfx]
+    mov [vb_sfxseg], ax
+    add dx, [vb_pmus]
+    mov [vb_musseg], dx
+    ; the block and the effects
+    mov word [vb_err], vb_s_badread
+    mov es, [vb_vres]
+    xor bx, bx
     mov cx, [vb_meta+VH_VRES+4]
     call vb_round
     mov cx, ax
-    push cx
-    call vb_claimk
-    pop cx
-    jc .fail
-    mov [vb_vres], dx
-    mov es, dx
-    xor bx, bx
     mov ax, [vb_meta+VH_VRES]
     mov dx, [vb_meta+VH_VRES+2]
     call vb_read
-    mov word [vb_err], vb_s_badread
-    jc .fail
-    ; the effects
-    mov word [vb_err], vb_s_nomem
+    jc .fail1
     mov cx, [vb_meta+VH_SFX+4]
     jcxz .music
     call vb_round
     mov cx, ax
-    push cx
-    call vb_claimk
-    pop cx
-    jc .fail
-    mov [vb_sfxseg], dx
-    mov es, dx
+    mov es, [vb_sfxseg]
     xor bx, bx
     mov ax, [vb_meta+VH_SFX]
     mov dx, [vb_meta+VH_SFX+2]
     call vb_read
-    mov word [vb_err], vb_s_badread
-    jc .fail
+    jc .fail1
 .music:
-    ; the music, in 32 KB pages, a claim each
-    xor bp, bp                      ; the page
+    ; the music, 32 KB a read, each page a segment 800h on from the last
     mov ax, [vb_meta+VH_MUSIC]
     mov [vb_lo], ax
     mov ax, [vb_meta+VH_MUSIC+2]
     mov [vb_hi], ax
+    mov dx, [vb_musseg]
+    xor bp, bp                      ; the page
 .page:
-    mov ax, bp                      ; bytes left = mlen - page * 32 KB
-    mov dx, ax
-    shr dx, 1                       ; (page * 8000h: DX:AX)
-    mov ax, 0
-    rcr ax, 1
-    mov cx, [vb_meta+VH_MLEN]
-    mov bx, [vb_meta+VH_MLEN+2]
-    sub cx, ax
-    sbb bx, dx
-    jc .mdone
-    mov ax, cx
-    or ax, bx
+    mov ax, [vb_left]
+    or ax, [vb_left+2]
     jz .mdone
-    or bx, bx
-    jnz .full
-    cmp cx, VB_PAGE
-    jb .part
-.full:
-    mov cx, VB_PAGE
-.part:
     cmp bp, 16
     jae .mdone
-    call vb_round
-    mov cx, ax
-    push cx
-    mov word [vb_err], vb_s_nomem
-    call vb_claimk
-    pop cx
-    jc .fail
     mov bx, bp
     shl bx, 1
     mov [vb_mpg+bx], dx
+    mov cx, VB_PAGE
+    cmp word [vb_left+2], 0
+    jne .full
+    cmp word [vb_left], VB_PAGE
+    jae .full
+    mov cx, [vb_left]
+.full:
+    sub [vb_left], cx
+    sbb word [vb_left+2], 0
+    push dx
     mov es, dx
     xor bx, bx
     mov ax, [vb_lo]
     mov dx, [vb_hi]
-    push cx
     call vb_read
-    pop cx
+    pop dx
     mov word [vb_err], vb_s_badread
     jc .fail
     add word [vb_lo], VB_PAGE
     adc word [vb_hi], 0
+    add dx, VB_PAGE / 16
     inc bp
     jmp .page
 .mdone:
+    call vb_cache                   ; the clip cache's claim, and its carving
+    mov word [vb_err], vb_s_nomem
+    jc .fail
     mov byte [vb_loaded], 1
     call vb_fontload
 .intro:
@@ -509,8 +541,9 @@ vb_load:
     jmp .find
 .got:
     mov [vb_intro], bl
+    mov byte [vb_ask], 1
     call vb_ensure                  ; read all of it now
-    mov word [vb_err], vb_s_nomem
+    mov word [vb_err], vb_s_badread
     jc .fail
 .ok:
     mov word [vb_err], 0
@@ -518,6 +551,97 @@ vb_load:
     ret
 .fail:
     stc
+    ret
+
+; vb_csize - AX = clip BX's room in paragraphs (its stream rounded to 4 KB).
+; SI = its row; CX spent
+vb_csize:
+    call vb_crec
+    mov cx, [si+VC_LEN]
+    call vb_round
+    mov cl, 4
+    shr ax, cl
+    ret
+
+; vb_cache - the clip cache: ONE claim. Every clip in a place of its own
+; when they all fit (the demo's case); otherwise as many slots, each the
+; largest clip's size, as memory gives - eight at most, three at least (the
+; clip playing, the one pending and the one under the cursor). CF=1 when
+; not even three
+vb_cache:
+    xor bx, bx                      ; the total and the largest, paragraphs
+    xor di, di
+    mov word [vb_slotp], 0
+.t:
+    cmp bx, [vb_meta+VH_NCLIPS]
+    jae .sum
+    call vb_csize
+    add di, ax
+    jc .slots                       ; (past 1 MB: the slots, then)
+    cmp ax, [vb_slotp]
+    jbe .tn
+    mov [vb_slotp], ax
+.tn:
+    inc bx
+    jmp .t
+.sum:
+    mov ax, di
+    call vb_p2kb
+    call OSAPI_MEM_CLAIM
+    jc .slots
+    mov [vb_cbase], dx              ; EVERY CLIP IN ITS PLACE
+    mov byte [vb_nslot], 0
+    xor bx, bx
+.place:
+    cmp bx, [vb_meta+VH_NCLIPS]
+    jae .ok
+    mov di, bx
+    shl di, 1
+    mov [vb_cseg+di], dx
+    mov word [vb_cload+di], 0
+    push dx
+    call vb_csize
+    pop dx
+    add dx, ax
+    inc bx
+    jmp .place
+.ok:
+    clc
+    ret
+.slots:
+    mov byte [vb_nslot], 8          ; the most slots, then fewer
+.sl:
+    mov al, [vb_nslot]
+    xor ah, ah
+    mul word [vb_slotp]             ; DX:AX paragraphs
+    or dx, dx
+    jnz .less
+    call vb_p2kb
+    call OSAPI_MEM_CLAIM
+    jnc .have
+.less:
+    dec byte [vb_nslot]
+    cmp byte [vb_nslot], 3
+    jae .sl
+    mov byte [vb_nslot], 0
+    stc
+    ret
+.have:
+    mov [vb_cbase], dx
+    xor bx, bx                      ; every slot empty, no clip placed
+.e:
+    mov byte [vb_slot+bx], 0xFF
+    inc bx
+    cmp bx, 8
+    jb .e
+    xor bx, bx
+.z:
+    mov word [vb_cseg+bx], 0
+    mov word [vb_cload+bx], 0
+    add bx, 2
+    cmp bx, VB_MAXCLIP * 2
+    jb .z
+    clc
     ret
 
 ; vb_crec - SI = clip BX's row in the clip table. BX kept
@@ -548,32 +672,19 @@ vb_ensure:
 .out:
     ret
 
-; vb_piece - read the next piece of clip BX (a WORD index: BX = clip * 2
-; on entry is NOT used - BX is the clip number, and the tables are words,
-; so it is doubled here). CF=1: no memory for it, or a read error
+; vb_piece - read the next piece of clip BX (the clip's number). CF=1: no
+; room for it in the cache, or a read error. Only an ASKED clip ([vb_ask]
+; set) may take a slot from another
 vb_piece:
     push bp
     mov bp, bx
-    shl bp, 1                       ; BP = the word index
-    call vb_crec
-    cmp word [ds:vb_cseg+bp], 0
+    shl bp, 1                       ; BP = the word index (DS: overrides -
+    cmp word [ds:vb_cseg+bp], 0     ; BP names SS)
     jne .have
-    mov cx, [si+VC_LEN]
-    call vb_round
-    mov cx, ax
-    call vb_claimk
-    jnc .claimed
-    call vb_evict                   ; room: drop clips nobody needs
-    call vb_crec
-    mov cx, [si+VC_LEN]
-    call vb_round
-    mov cx, ax
-    call vb_claimk
-    jc .out
-.claimed:
-    mov [ds:vb_cseg+bp], dx
-    mov word [ds:vb_cload+bp], 0
+    call vb_slotfor                 ; slots only: a free one, or (asked) a
+    jc .out                         ; victim's
 .have:
+    call vb_crec
     mov cx, [si+VC_LEN]             ; what is left, rounded, at most a piece
     call vb_round
     sub ax, [ds:vb_cload+bp]
@@ -600,41 +711,63 @@ vb_piece:
     pop bp
     ret
 
-; vb_evict - free every clip that is not playing, pending or wanted
-vb_evict:
-    push bx
-    push dx
-    xor bx, bx
-.e:
-    cmp bx, [vb_meta+VH_NCLIPS]
-    jae .done
-    mov al, bl
-    cmp al, [vb_cc]
-    jne .e1
-    cmp byte [vb_mode], VM_CLIP
-    je .next
-.e1:
+; vb_slotfor - clip BX (BP = BX * 2) into a slot: a free one, or, when
+; [vb_ask], the next whose clip is not playing, pending or under the cursor
+; (round robin). CF=1 when there is none
+vb_slotfor:
+    cmp byte [vb_nslot], 0
+    je .none                        ; (every clip has its place: not here)
+    mov cl, [vb_nslot]
+    xor ch, ch
+    xor di, di
+.free:
+    cmp byte [vb_slot+di], 0xFF
+    je .take
+    inc di
+    cmp di, cx
+    jb .free
+    cmp byte [vb_ask], 0            ; reading ahead unasked: no victim
+    je .none
+.v:                                 ; a victim, from the last one taken on
+    mov di, [vb_snext]
+    inc di
+    mov ax, di                      ; (CX is the loop's count here)
+    cmp al, [vb_nslot]
+    jb .v1
+    xor di, di
+.v1:
+    mov [vb_snext], di
+    mov al, [vb_slot+di]
     cmp al, [vb_pend]
-    je .next
+    je .vn
     cmp al, [vb_want]
-    je .next
+    je .vn
+    cmp byte [vb_mode], VM_CLIP
+    jne .vok
+    cmp al, [vb_cc]
+    je .vn
+.vok:
+    xor ah, ah                      ; its clip forgets it
     push bx
+    mov bx, ax
     shl bx, 1
-    mov dx, [vb_cseg+bx]
-    or dx, dx
-    jz .z
-    call OSAPI_MEM_FREE
     mov word [vb_cseg+bx], 0
     mov word [vb_cload+bx], 0
-.z:
     pop bx
-.next:
-    inc bx
-    jmp .e
-.done:
-    mov byte [vb_nobg], 1           ; memory is short: no more reading ahead
-    pop dx                          ; of clips nobody asked for
-    pop bx
+    jmp short .take
+.vn:
+    loop .v
+.none:
+    stc
+    ret
+.take:
+    mov [vb_slot+di], bl
+    mov ax, di                      ; its segment: base + slot * size
+    mul word [vb_slotp]
+    add ax, [vb_cbase]
+    mov [ds:vb_cseg+bp], ax
+    mov word [ds:vb_cload+bp], 0
+    clc
     ret
 
 ; vb_fontload - the kernel's 8x8 glyphs into our bss, ' '..'~' (the
@@ -1379,6 +1512,7 @@ vb_snd_close:
 ; the one under the cursor, then the enemy's, then (memory allowing) any
 ; other. A new cursor position just changes which: what was read is kept
 vb_reader:
+    mov byte [vb_ask], 1            ; the asked: they may take a slot
     mov al, [vb_pend]
     cmp al, 0xFF
     jne .try
@@ -1391,8 +1525,7 @@ vb_reader:
     mov al, [vb_meta+VB_SCRIPT+VS_ECLIP]
     call .need
     jc .try
-    cmp byte [vb_nobg], 0
-    jne .out
+    mov byte [vb_ask], 0            ; the rest only into room that is free
     xor al, al
 .scan:
     cmp al, [vb_meta+VH_NCLIPS]
@@ -2224,7 +2357,16 @@ VB_VAR vb_snd, 1
 VB_VAR vb_kn, 1
 VB_VAR vb_cseg, VB_MAXCLIP*2
 VB_VAR vb_cload, VB_MAXCLIP*2
-VB_VAR vb_nobg, 1
+VB_VAR vb_ask, 1
+VB_VAR vb_psfx, 2
+VB_VAR vb_pmus, 2
+VB_VAR vb_musseg, 2
+VB_VAR vb_left, 4
+VB_VAR vb_cbase, 2
+VB_VAR vb_nslot, 1
+VB_VAR vb_slotp, 2
+VB_VAR vb_slot, 8
+VB_VAR vb_snext, 2
 VB_VAR vb_fsi, FSI_SIZE
 VB_VAR vb_vseg, 2
 VB_VAR vb_vid, 1

@@ -375,7 +375,7 @@ def clip_ari_bolt():
                 spark(c, BEETLE_XY[0] + 4, 70, 10 + i * 2)
         fr.append(scene(0, beetle_kw=dict(hurt=3 if i % 2 else -3,
                                           flash=i % 2 == 0),
-                        ari=dict(pose="raise"), overlay=ov, flash=i in (0, 2)))
+                        ari=dict(pose="raise"), overlay=ov))
     cues[6] = "zap"
     for i in range(6):
         fr.append(scene(0, ari=dict(pose="raise" if i < 3 else "stand")))

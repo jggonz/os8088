@@ -237395,7 +237395,7 @@ it) to be read. Then it takes the nearest anchor at least two frames on,
 and books the clip's effects at the samples their frames will be shown at.
 When the loop shows that anchor, the next frame is the entry record. The
 demo's anchors are every sixth frame of a 24-frame loop, so a command waits
-0.13 to 0.53 s for its clip to begin.
+0.13 to 0.47 s (two to seven frames) for its clip to begin.
 
 **The effects are booked ahead, not started when seen.** The writer runs
 4 KB (0.37 s) ahead of the card. An effect started when its frame is drawn
@@ -237406,45 +237406,56 @@ so one effect sounds at a time.
 
 ### 125.4 Reading ahead, and memory
 
-Before the bracket, with "Loading..." in the window, `vb_load` reads:
-- the first 4 KB (the header, the clip table and the script), into the
-  package's own bss;
-- the resident block, into a claim;
-- the effects, into a claim;
-- the music, in 32 KB pages of a claim each;
-- the intro, whole.
+**Three claims, and no more.** An owner may hold at most `MEM_OWNER_MAX` =
+8 claims (§50). The first build took one for each region and one for each
+clip. The ninth was then refused with 250 KB of heap free in one run, and
+the read-ahead could not keep a clip it had already read. Measured on
+MartyPC's 5150: from the first such refusal on, every action was read
+again from the floppy while it played, at about 12 KB/s against the
+beetle's 20, and 23 frames ran late in a ten-turn battle. So there are
+three claims, carved:
 
-None is pinned by more than its own claim, and every claim is the default:
-pinned (§66).
+- **the RESIDENT claim** (`vb_load`), read before the bracket with
+  "Loading..." in the window. It holds the idle loop's block, then the
+  effects, then the music in 32 KB pages. Each part is its own segment,
+  the claim's base plus the part's rounded offset;
+- **the card's ring** (`vb_snd_open`), `OSAPI_MEM_CLAIM_DMA_HI`, 17 KB;
+- **the CLIP CACHE** (`vb_cache`). When every clip fits (the demo's case),
+  each clip has a place of its own: the cache's base plus the sizes of the
+  clips before it, rounded to 4 KB. Otherwise the cache is three to eight
+  SLOTS, each the size of the largest clip. A clip gets a free slot; an
+  asked-for clip takes, round robin, the slot of one that is not playing,
+  pending or under the cursor.
 
-**In the bracket, the reader reads one 4 KB piece per pass**, of the first
-clip in this order that is not wholly read:
+All three are the default, pinned (§66). The package does arithmetic on a
+claim's segment to carve it, so it is real mode's (125.7).
+
+The intro is read whole before the bracket. **In the bracket the reader
+reads one 4 KB piece per pass**, of the first clip in this order that is
+not wholly read:
 1. the action pending;
 2. the clip under the menu's cursor;
 3. the enemy's attack;
-4. (memory allowing) every other clip.
+4. then, into free room only, every other clip in order.
 
 Moving the cursor only changes which clip is first. What was read is kept,
 so a read dropped by a new cursor position resumes where it stopped when
-the cursor comes back. A claim that cannot be had frees every clip that is
-not playing, pending or under the cursor, and stops step 4 for the session.
+the cursor comes back.
 
-The piece is 4 KB so that a key waits at most about a revolution of a
+The piece is 4 KB so that a key waits at most about one revolution of a
 360 KB floppy. Keys wait in the BIOS buffer while a read runs and are not
-lost (measured on MartyPC's 5150: an Enter taken 0.4 s after it was
-pressed, behind an 8 KB read).
+lost: on MartyPC's 5150, an Enter was taken 0.4 s after it was pressed,
+behind an 8 KB read (the first build's piece).
 
 The demo battle on a 640 KB machine:
 
 | | bytes |
 |---|---|
-| the package's image | 8,053 (6,078 packed on the disk) |
-| its bss | 5,394 (the first 4 KB of the bundle among it) |
-| the resident block | 35,432 (claimed 36 KB) |
-| the effects | 34,176 (36 KB) |
-| the music, 6.4 s | 70,560 (three pages, 72 KB) |
-| the card's ring | 17 KB, `OSAPI_MEM_CLAIM_DMA_HI` |
-| every clip, read ahead | 169,391 |
+| the package's image | 8,283 (6,300 packed on the disk) |
+| its bss | 5,419 (the first 4 KB of the bundle among it) |
+| the resident claim | 144 KB: the block 35,432 (36 KB), the effects 34,176 (36 KB), the music 70,560 (72 KB) |
+| the card's ring | 17 KB |
+| the clip cache | 168 KB: eight clips, 151,764 bytes, each rounded to 4 KB |
 
 ### 125.5 The band
 
@@ -237489,10 +237500,11 @@ back. Playing again starts from the intro, with what was read kept.
 **Refusals.**
 - `kern_small` refuses `FSXF_RATE`, and the window says "Needs the full
   kernel".
-- kern_mega is NOT TRIED. The package does no arithmetic on a segment:
-  each region is a claim of its own and is addressed only through it, and
-  the framebuffer is `FSI_SEG`'s. So nothing here assumes real mode, but
-  no run has said so.
+- **kern_mega is not supported.** The claims are carved by paragraph
+  arithmetic (125.4), which a selector does not allow (SPEC.md 20.18), and
+  no kern_mega disk carries the package. A refusal at the entry
+  (`OS88_MEGA_REFUSE`) wants a kern_mega arm beside it (`t_megapkg`), and
+  is for when the package ships.
 
 **Other adapters.** Hercules and VGA renditions are not written: a bundle
 is CGA4, and a VGA plays it in mode 4.
@@ -237506,10 +237518,21 @@ an output.
   memory;
 - a suite row.
 
-**Measured so far, on MartyPC's `os8088_5150_sb_gla` (5150, CGA, SB 2.01,
-640 KB) from the 360 KB disk.**
-- The load before the intro takes about 14 guest seconds.
-- The intro and the battle play with the card consuming at its rate and
-  the ring never dry: no 20 ms window of the capture is silent.
-- The effects sound at the hits.
-- `[vb_late]` reached 6 in a ten-turn session.
+**Measured on MartyPC's `os8088_5150_sb_gla`** (5150, CGA, SB 2.01,
+640 KB), from the 360 KB disk.
+
+- **The load** before the intro takes 14 guest seconds: 168 KB from the
+  floppy.
+- **A whole battle** from the intro to victory used every command over
+  four rounds. It took 600 captured frames, 49.8 guest seconds, and
+  **0 frames ran late** (`[vb_late]` = 0).
+- **The sound kept time with it.** The card's capture is 49.9 s against
+  the frames' 49.8. No 20 ms window of the capture is silent, so the ring
+  never ran dry, and the effects sound at the hits.
+- **A whole-canvas change TEARS on CGA.** Its one page means a record is
+  drawn where it is seen. The demo's first bolt flashed the whole sky,
+  changing every byte of the canvas, and was captured half drawn: CGA's
+  even-row bank new and its odd-row bank old. A captured battle's camera
+  cuts will do the same. A cut that must not tear wants Hercules's or a
+  VGA's second page, and those renditions are not written. The demo now
+  flashes the beetle alone.

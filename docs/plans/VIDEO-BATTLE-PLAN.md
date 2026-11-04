@@ -1,6 +1,12 @@
 # VIDEO-BATTLE — a battle played as joined video clips, on a 5150
 
-**Status: FEASIBILITY STUDY (2026-11-03).** Nothing here is built. This
+**Status: THE ENGINE IS BUILT (2026-11-04)**, with an original demo battle:
+`apps/vbattle/`, SPEC.md §125, `make vbattledisk`. The stories in section
+10 say what works and what is still to come. The study below is unchanged
+from 2026-11-03, and section 10 notes where the build went another way.
+How it was built is docs/HOW-VBATTLE-WAS-BUILT.md.
+
+**The study (2026-11-03).** This
 document answers the owner's question: can a single turn-based battle run as
 video on an IBM 5150? The design is a full-screen intro, then an idle loop
 in the upper part of the screen, a small interface drawn in the band below
@@ -342,3 +348,43 @@ a new small package** that includes the shared parts as SOURCE:
 4. Build the engine: band, menu, one action, prefetch on selection,
    effects on the clip clock.
 5. A 5150 with a card: one listen and one look.
+
+## 10. Stories (2026-11-04)
+
+Each story is checked only where it has been seen working, and the
+evidence names the machine.
+
+- [x] **A battle plays from a bundle.** `make vbattledisk`, open
+  `VBATTLE.O88` from B:, then Enter. The intro plays, then the idle loop
+  with the band, the turns, and victory or defeat. *MartyPC
+  `os8088_5150_sb_gla`, 360 KB disk: four rounds to victory, every command
+  used, 0 late frames.*
+- [x] **Joins are exact.** Each action enters from an anchor of the loop
+  and seams back onto it. *`os88vbt.py verify`, run by every `make
+  vbattle`: 28 paths, each byte for byte.*
+- [x] **The wait to start an action is bounded.** Four anchors on a
+  24-frame loop give 0.13 to 0.47 s (two to seven frames). The section 5.2 plan (several entry
+  records, no new footage) is what was built.
+- [x] **Reading ahead.** The clip under the cursor is read while the
+  player chooses, 4 KB a pass. A new cursor position drops that read and
+  starts the new one, and what was read is kept.
+- [x] **Music plus one effect.** The effects are booked at the samples of
+  their frames, and the card is the clock. *The SB capture: 49.9 s against
+  49.8 s of frames, never dry, the effects at the hits.*
+- [x] **The selection is the band's.** The member whose turn it is is
+  drawn inverse in the band, so no clip carries a marker.
+- [ ] **Captured footage.** An importer that takes the DECODED screens of
+  lossy V88 clips and makes exact records between them (SPEC.md 125.2.3).
+- [ ] **Music streamed from disk**, for a loop longer than memory holds.
+- [ ] **Hercules and VGA renditions.** Their second page would let a camera
+  cut flip instead of tear (SPEC.md 125.7).
+- [ ] **The PC speaker tier** (section 3.2).
+- [ ] **A suite row**: a battle to victory, `[vb_late]` = 0, and the card
+  consuming.
+- [ ] **The owner's 5150 with a card**: one look and one listen.
+
+Where the build went another way from the study:
+- **The container is the battle's own (`.VBT`), not V88.** Only the record
+  format is shared (SPEC.md 125.1).
+- **The music is resident**, not streamed, for the demo.
+- **Three claims, carved.** An owner may hold eight (SPEC.md 125.4).
