@@ -237502,10 +237502,16 @@ segment to carve it, so it is real mode's (125.7).
 
 **A clip ring holds a stream as it is read.** A piece is read at the
 stream's offset, always a cluster multiple, into the ring at its fill
-position. What the piece puts past the ring's end is copied to its start.
-What it puts in the ring's first 16 KB is copied past its end, into the
-guard. So a record that starts near the end is whole in the guard, and the
-hook decodes it where it lies. The hook gives back what is behind the
+position, and ends at the ring's end at the most. The reader then walks
+the records the piece completed (`RG_PIDX`, `RG_POFF`): the one that runs
+past the ring's end has its TAIL copied past the end, into the guard, so
+it is whole where it starts and the hook decodes it there. A header that
+runs past the end is copied the same way as soon as it is read, so the
+hook reads the right length and waits. **Nothing else is copied.** The
+first rings copied every byte read into their first 16 KB, and every byte
+a piece put past the end - a third of the stream and more, 88 to 136 KB a
+clip - and that copying was a third of the machine's time while a clip
+streamed (125.7). It is 18 to 30 KB a clip now. The hook gives back what is behind the
 earlier of its picture's cursor and its sound's. A ring is given back to the
 reader once its clip's picture and sound are both over, with its cursors
 back at the clip's top. A clip that fit the ring whole plays again from it
@@ -237635,8 +237641,8 @@ an output.
 - menus as a tree, characters and the action verbs (the plan's 11);
 - a suite row.
 
-**What a disk delivers while the engine plays is about half what it
-delivers alone.** Measured on 86Box (a 5150, CGA, SB 2.0, an ST-225 on a
+**What a disk delivered while the engine played was about half what it
+delivers alone - and it was the engine's copying, not the disk.** Measured on 86Box (a 5150, CGA, SB 2.0, an ST-225 on a
 Seagate ST11M, the owner's disk; 2026-11-04) with a bundle of the owner's
 own three generated clips: an idle of 30 frames, two attacks at 77.3 and
 53.5 KB/s (CGA4, 320x142, 15 fps, encoded for `5150-st225`) and 25.6 s of
@@ -237644,14 +237650,32 @@ streamed music. The battle played to victory. While a clip played the
 reader moved 59 to 77 KB/s, and every clip stalled: 1.8 to 2.7 s for the
 77 KB/s attack (6 s long), 0.6 to 0.8 s for the 53.5 KB/s ones (5 s). With
 the music resident, so that no read seeks between two streams, the reader
-moved 52 to 62 KB/s and the stalls were the same. So the second stream's
-seeks are not what limits it, and the reader's loop does not wait (its
-`FSXW_FRAME` is the hook's 1.7 ms period): the disk is slowed by the hook's
-decoding. The owner's ST11M plays Video Player's files up to about
-129 KB/s, and the encoder's `5150-st225` budgets 119, so the engine's
-reading under its own decode load is what to measure next, against Video
-Player's on the same machine. Until then a clip for this engine wants
-about 45 KB/s with the music streamed.
+moved 52 to 62 KB/s and the stalls were the same: the second stream's
+seeks are not what limits it.
+
+**Video Player on the same machine** played the owner's `TAKEONME.V88`
+(640x200 mono, 24 fps, 95.4 KB/s with its sound) with 0 stalls and 8 late
+periods, its reader moving about 115 KB/s - so the disk was not the limit.
+The engine's own account of its time (`[vb_hper]`, the hook's periods;
+`[vb_rper]`, those inside `vb_read`; the main loop's marks, `vb_tmark`)
+said why. **Inside a read the disk moved 140 to 200 KB/s**, but the reader
+was inside a read only 31 to 43% of the time; **copying the ring's first
+16 KB into its guard took 31 to 35%**, with the hook (about 37%) running
+over all of it. With only the straddling record's tail copied (above):
+
+| the 77 KB/s attack | before | after |
+|---|---|---|
+| copied a clip | 124 to 136 KB | 18 to 26 KB |
+| inside a read | 31 to 36% | 49 to 55% |
+| stalled | 1.9 to 2.5 s in 5.5 | 0.46 to 0.95 s in 4.7 |
+| the battle to victory | 54.3 s | 48.8 s |
+
+The 53.5 KB/s clips stall 0.33 to 0.51 s. What is left is the ring's
+depth: 48 KB is 0.6 s of the 77 KB/s clip, so a burst of catching up (two
+frames a hook call after a stall) leaves the reader no time to start its
+next piece, and a piece is cut at the ring's end. Video Player's ring is
+up to 15 x 32 KB. A deeper clip ring is the next step. The demo bundle
+still plays to victory, the Limit among it, with 0 stalls.
 
 **Measured on MartyPC's `os8088_xt_hdd_sb` with the version 3 bundle on
 C:** (2026-11-04).

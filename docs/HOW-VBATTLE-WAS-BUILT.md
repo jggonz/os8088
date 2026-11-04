@@ -196,6 +196,36 @@ Observed: the numbers above, on 86Box (not cycle-accurate). Not yet done:
 Video Player on the same 86Box machine, to say how much of the gap is the
 engine's.
 
+## Chasing the disk: Video Player as the yardstick (2026-11-04)
+
+The owner: Video Player plays their `TAKEONME.V88` (95 KB/s, 640x200
+mono, 24 fps) perfectly on the real machine, against a disk measured at
+119 KB/s. "These two are completing the same task, aside from the
+interface and sound mixing." So the same file went on the same 86Box
+ST11M: **0 stalls, its reader moving about 115 KB/s.** The gap was ours.
+
+The engine was given an account of its own time, in the hook's periods
+(1.7 ms): periods inside `vb_read`, and marks around each part of the main
+loop. The first answer was surprising - **inside a read the disk moved 140
+to 200 KB/s**, faster than Video Player's average. The reader was simply
+not reading most of the time. The marks then split the rest: the copying
+after each read was **a third of the machine**. The ring copied every byte
+that landed in its first 16 KB into the guard behind it, "so a record near
+the end is whole", and every byte a piece put past the end back to the
+start. That was 124 to 136 KB of `rep movsb` for a 412 KB clip, with the
+hook's decoding on top of it.
+
+Video Player had met this before (its `vp_mneed`: copy only as much as the
+super-packet that runs on needs). The engine now does the same: a piece
+ends at the ring's end, the reader walks the records it completed, and
+only the tail of the one record that runs past the end is copied. 18 to 30
+KB a clip. Stalls on the 77 KB/s attack fell from about 2 s to 0.5-0.95 s,
+the battle from 54 s to 49, and the demo still plays with none.
+
+Observed, not inferred: every number above is from the engine's own
+counters on 86Box. What is left is the ring's depth (48 KB, 0.6 s of that
+clip, against Video Player's up to 480 KB), and that is the next step.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

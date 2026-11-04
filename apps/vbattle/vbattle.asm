@@ -103,9 +103,10 @@ VB_PIECE    equ 4096            ; a read: a cluster multiple, and under a
                                 ; 360 KB track (9 sectors), so a key waits at
                                 ; most about a revolution for it
 VB_CR       equ 49152           ; a CLIP RING: 48 KB, read 4 KB a piece, and a
-VB_CGUARD   equ 16384           ; 16 KB guard past it holding a copy of its
-                                ; first 16 KB, so a record (at most the guard,
-                                ; VH_MAXREC) is whole at its cursor (125.4)
+VB_CGUARD   equ 16384           ; 16 KB guard past it: the tail of the record
+                                ; that runs past the end, copied, so a record
+                                ; (at most the guard, VH_MAXREC) is whole at
+                                ; its cursor (125.4)
 VB_SPIECE   equ 32768           ; the most a read moves while no menu waits
                                 ; on a key: as much as the ring has room for,
                                 ; up to this (125.4)
@@ -145,7 +146,9 @@ RG_AIDX     equ 16
 RG_VDONE    equ 18              ; its picture is over
 RG_ADONE    equ 19              ; ...and its sound
 RG_CUR      equ 20              ; its own file cursor (FSEQ_SIZE)
-RG_SIZE     equ 36
+RG_PIDX     equ 36              ; the next record not yet walked, in the
+RG_POFF     equ 38              ; ring, and its offset's low word
+RG_SIZE     equ 40
 
 ; the hook's modes
 VM_OFF      equ 0
@@ -352,6 +355,13 @@ vb_read:
     add [vb_rbytes], cx             ; (what was read, and in how many calls:
     adc word [vb_rbytes+2], 0       ; a reader's own account, 125.4)
     inc word [vb_rcalls]
+    pushf
+    cli
+    mov di, [vb_hper]               ; (the periods it takes)
+    mov [vb_rp0], di
+    mov di, [vb_hper+2]
+    mov [vb_rp0+2], di
+    popf
     mov di, [vb_rcur]
     cmp ax, [di+FSEQ_OFF]           ; where it is already: no seek
     jne .seek
@@ -406,11 +416,39 @@ vb_read:
 .ok:
     clc
 .out:
+    pushf
+    cli
+    mov ax, [vb_hper]
+    mov dx, [vb_hper+2]
+    sub ax, [vb_rp0]
+    sbb dx, [vb_rp0+2]
+    add [vb_rper], ax
+    adc [vb_rper+2], dx
+    popf
     mov es, [vb_rseg]
     mov word [vb_rcur], vb_cur      ; (the next read's own unless it says)
     pop bp
     pop di
     pop si
+    ret
+
+; vb_tmark - the periods since the last mark added to the dword at SI
+; (a diagnostic: where the foreground's time goes, 125.7). AX, DX spent
+vb_tmark:
+    pushf
+    cli
+    mov ax, [vb_hper]
+    mov dx, [vb_hper+2]
+    xchg ax, [vb_tlast]
+    xchg dx, [vb_tlast+2]
+    neg ax
+    adc dx, 0
+    neg dx
+    add ax, [vb_tlast]
+    adc dx, [vb_tlast+2]
+    add [si], ax
+    adc [si+2], dx
+    popf
     ret
 
 ; vb_round - AX = CX rounded up to 4 KB (a cluster multiple, 125.2)
@@ -659,6 +697,8 @@ vb_rreset:
     mov [bx+RG_VIDX], ax
     mov [bx+RG_AOFF], ax
     mov [bx+RG_AIDX], ax
+    mov [bx+RG_PIDX], ax
+    mov [bx+RG_POFF], ax
     mov [bx+RG_PLAY], al
     mov [bx+RG_VDONE], al
     mov [bx+RG_ADONE], al
@@ -689,13 +729,13 @@ vb_rhead:
     stc
     ret
 
-; vb_rpiece - one 4 KB piece of ring BX's clip, at the stream's fill
-; position, when it is not all read and the ring has room past what the
-; hook still wants of it (its picture's cursor and its sound's). What the
-; piece puts past the ring's end is copied to its start, and what it puts
-; in the ring's first VB_CGUARD bytes is copied past its end, so a record
-; is always whole at its cursor (125.4). Out AL = 1 a piece was read, 0
-; nothing to read; CF=1 a read failed
+; vb_rpiece - one piece of ring BX's clip, at the stream's fill position,
+; when it is not all read and the ring has room past what the hook still
+; wants of it (its picture's cursor and its sound's). A piece ends at the
+; ring's end at the most. The records it completes are walked, and the one
+; that runs past the end has its tail copied past it, into the guard, so a
+; record is always whole at its cursor (125.4) - that tail and nothing
+; else. Out AL = 1 a piece was read, 0 nothing to read; CF=1 a read failed
 vb_rpiece:
     push si
     push di
@@ -729,10 +769,9 @@ vb_rpiece:
     and ax, 0 - VB_PIECE
     jz .none
     call vb_psize                   ; the piece: as much of it as the
-    mov cx, [ds:bp+RG_FIDX]         ; moment allows, and no further than
-    neg cx                          ; the guard's end: 64 KB (the ring and
-    jz .p1                          ; its guard) less the index, 0 none
-    cmp ax, cx
+    mov cx, VB_CR                   ; moment allows, and no further than
+    sub cx, [ds:bp+RG_FIDX]         ; the ring's end: nothing is read into
+    cmp ax, cx                      ; the guard, so nothing is copied out
     jbe .p1
     mov ax, cx
 .p1:
@@ -759,54 +798,66 @@ vb_rpiece:
     mov [vb_rcur], di               ; on, with no walk of the chain
     call vb_read
     jc .out
-    mov bx, [ds:bp+RG_FIDX]
-    push ds
-    mov ax, [ds:bp+RG_SEG]
-    mov es, ax
-    mov ds, ax
-    cld
-    mov cx, [cs:vb_pn]              ; past the end: to the start. (DS is
-    mov ax, VB_CR                   ; the ring's: CS is ours.) Worked from
-    sub ax, bx                      ; the room before the end, not from the
-    sub cx, ax                      ; end's offset: a piece may end at 64 KB
-    jbe .mirror                     ; exactly, which a word cannot hold
-    mov si, VB_CR
-    xor di, di
-    rep movsb
-.mirror:
-    cmp bx, VB_CGUARD               ; in the first VB_CGUARD bytes: past the
-    jae .mirrored                   ; end as well
-    mov cx, VB_CGUARD
-    sub cx, bx
-    cmp cx, [cs:vb_pn]
-    jbe .m1
-    mov cx, [cs:vb_pn]
-.m1:
-    mov si, bx
-    mov di, bx
-    add di, VB_CR
-    rep movsb
-.mirrored:
-    pop ds
-    mov ax, VB_CR                   ; the fill index on, wrapped - from the
-    sub ax, bx                      ; room before the end, for the same
-    mov cx, [vb_pn]                 ; reason
-    cmp cx, ax
-    jb .w0
-    sub cx, ax                      ; past it: the piece's overhang
-    mov ax, cx
-    jmp short .w
-.w0:
-    mov ax, bx
-    add ax, cx
+    mov si, vb_tpre
+    call vb_tmark
+    mov ax, [ds:bp+RG_FIDX]         ; the fill index on: the piece ends at
+    add ax, [vb_pn]                 ; the ring's end at the most
+    cmp ax, VB_CR
+    jb .w
+    xor ax, ax
 .w:
     mov [ds:bp+RG_FIDX], ax
+    mov es, [ds:bp+RG_SEG]          ; THE RECORDS NOW WHOLE, walked: one
+    mov dx, [ds:bp+RG_FILL]         ; that runs past the ring's end has its
+    add dx, [vb_pn]                 ; tail copied past it, into the guard,
+.parse:                             ; and nothing else is (125.4). DX = the
+    mov si, [ds:bp+RG_PIDX]         ; new fill's low word
+    mov cx, dx
+    sub cx, [ds:bp+RG_POFF]         ; what is read of the record at PIDX
+    cmp cx, RH_SIZE
+    jb .pstop
+    mov al, [es:si+RH_LEN]          ; its length, its bytes either side of
+    mov bx, si                      ; the end
+    inc bx
+    cmp bx, VB_CR
+    jb .h1
+    xor bx, bx
+.h1:
+    mov ah, [es:bx]
+    cmp ax, RH_SIZE                 ; (a length that cannot be: left for
+    jb .pstop                       ; the hook to refuse)
+    cmp cx, ax
+    jb .pstop                       ; not all of it read yet
+    mov bx, si
+    add bx, ax                      ; its end (under 48 + 16 KB)
+    sub bx, VB_CR
+    jbe .pin
+    mov cx, bx                      ; past the end: its tail, into the guard
+    call vb_gcopy
+    jmp short .pnext
+.pin:
+    add bx, VB_CR
+    cmp bx, VB_CR
+    jb .pnext
+    xor bx, bx
+.pnext:
+    mov [ds:bp+RG_PIDX], bx
+    add [ds:bp+RG_POFF], ax
+    jmp short .parse
+.pstop:
+    cmp si, VB_CR - RH_SIZE         ; a header that runs past the end: its
+    jbe .pdone                      ; bytes there now, so the hook reads
+    mov cx, RH_SIZE                 ; the right length (and waits)
+    call vb_gcopy
+.pdone:
     pushf                           ; the fill on: published last, and whole
     cli                             ; (the hook reads it)
     mov ax, [vb_pn]
     add [ds:bp+RG_FILL], ax
     adc word [ds:bp+RG_FILL+2], 0
     popf
+    mov si, vb_tcp
+    call vb_tmark
     mov al, 1
     clc
     jmp short .out
@@ -816,6 +867,28 @@ vb_rpiece:
 .out:
     mov bx, bp
     pop bp
+    pop di
+    pop si
+    ret
+
+; vb_gcopy - CX bytes from the start of ring ES to past its end: a
+; record's tail into the guard (vb_rpiece). AX, BX, DX kept
+vb_gcopy:
+    push si
+    push di
+    push ds
+    add [cs:vb_ncopy], cx           ; (a diagnostic: bytes the reader copies)
+    adc word [cs:vb_ncopy+2], 0
+    push es
+    pop ds
+    xor si, si
+    mov di, VB_CR
+    cld
+    shr cx, 1
+    rep movsw
+    adc cx, cx
+    rep movsb
+    pop ds
     pop di
     pop si
     ret
@@ -958,6 +1031,8 @@ vb_mpiece:
     mov si, VB_MR
     xor di, di
     cld
+    add [cs:vb_ncopy], cx           ; (a diagnostic: bytes the reader copies)
+    adc word [cs:vb_ncopy+2], 0
     rep movsb
     pop ds
 .in:
@@ -1056,11 +1131,26 @@ vb_main:
     cmp byte [vb_quit], 0
     jne .leave
     call vb_game
+    mov si, vb_tg
+    call vb_tmark
+    mov ax, [vb_rcalls]
+    push ax
     call vb_reader
+    pop ax
+    cmp ax, [vb_rcalls]
+    jne .rd
+    inc word [vb_nidle]             ; (a pass that read nothing)
+.rd:
+    mov si, vb_tr
+    call vb_tmark
     call vb_band
     call vb_snd_keep
+    mov si, vb_tb
+    call vb_tmark
     mov al, FSXW_FRAME
     call OSAPI_FSX_WAIT
+    mov si, vb_tw
+    call vb_tmark
     jmp .loop
 .leave:
     mov byte [vb_ready], 0
@@ -1188,6 +1278,12 @@ vb_hook:
     jne .live
     ret
 .live:
+    add [vb_hper], ax               ; (the periods, counted: 125.7's account
+    adc word [vb_hper+2], 0         ; of where the reader's time goes; and
+    mov dx, ax                      ; the ones that passed while the hook
+    dec dx                          ; ran last, near enough)
+    add [vb_hbusy], dx
+    adc word [vb_hbusy+2], 0
     cmp byte [vb_snd], 0
     je .pit
     ; --- the card's clock: the bytes it has consumed, plus the periods
@@ -3020,6 +3116,19 @@ VB_VAR vb_pn, 2
 VB_VAR vb_mpn, 2
 VB_VAR vb_rbytes, 4
 VB_VAR vb_rcalls, 2
+VB_VAR vb_hper, 4                   ; hook periods, all told
+VB_VAR vb_rper, 4                   ; ...of them inside vb_read
+VB_VAR vb_rp0, 4
+VB_VAR vb_tlast, 4
+VB_VAR vb_tg, 4                     ; keys and the game
+VB_VAR vb_tr, 4                     ; the reader
+VB_VAR vb_tb, 4                     ; the band and the card
+VB_VAR vb_tw, 4                     ; the wait
+VB_VAR vb_nidle, 2
+VB_VAR vb_tpre, 4
+VB_VAR vb_tcp, 4
+VB_VAR vb_ncopy, 4
+VB_VAR vb_hbusy, 4
 VB_VAR vb_rseg, 2
 VB_VAR vb_rcap, 2
 VB_VAR vb_loaded, 1
