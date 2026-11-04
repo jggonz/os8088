@@ -102,7 +102,9 @@ VB_MAXOPEN  equ 8
 VB_PIECE    equ 4096            ; a read: a cluster multiple, and under a
                                 ; 360 KB track (9 sectors), so a key waits at
                                 ; most about a revolution for it
-VB_CR       equ 49152           ; a CLIP RING: 48 KB, read 4 KB a piece, and a
+VB_CRMIN    equ 48              ; a CLIP RING: as many KB as the machine has
+                                ; (125.4), split two ways - and at least this
+VB_RKEEP    equ 8               ; KB left free when the rings are sized
 VB_CGUARD   equ 16384           ; 16 KB guard past it: the tail of the record
                                 ; that runs past the end, copied, so a record
                                 ; (at most the guard, VH_MAXREC) is whole at
@@ -133,22 +135,31 @@ VB_DIV      equ 2048            ; the hook's PIT divisor: 582.6 Hz
 VB_SPP_LO   equ 0xECB0          ; 11,025 samples / 582.6 periods in 16.16:
 VB_SPP_HI   equ 0x0012          ; 18.9246 (the clock with no card)
 
-; a clip ring (vb_rg0, vb_rg1)
-RG_SEG      equ 0               ; its segment: VB_CR + VB_CGUARD bytes
+; a clip ring (vb_rg0, vb_rg1). A place in it is a SEGMENT and an offset
+; of 0..15 (vb_cadv): a ring is as big as the machine allows, so a 16-bit
+; index cannot hold it, and a stream's offsets are dwords
+RG_SEG      equ 0               ; its segment, its guard VB_CGUARD past its end
 RG_CLIP     equ 2               ; the clip it holds, FFh none
 RG_PLAY     equ 3               ; the hook plays from it
 RG_FILL     equ 4               ; dword: the stream's bytes read into it
-RG_FIDX     equ 8               ; ...and where the next lands
-RG_VOFF     equ 10              ; the picture's cursor (the stream's offset,
-RG_VIDX     equ 12              ; its low word) and its place in the ring
-RG_AOFF     equ 14              ; ...and the sound's
-RG_AIDX     equ 16
-RG_VDONE    equ 18              ; its picture is over
-RG_ADONE    equ 19              ; ...and its sound
-RG_CUR      equ 20              ; its own file cursor (FSEQ_SIZE)
-RG_PIDX     equ 36              ; the next record not yet walked, in the
-RG_POFF     equ 38              ; ring, and its offset's low word
-RG_SIZE     equ 40
+RG_FSEG     equ 8               ; ...and where the next lands (a piece is 4 KB
+                                ; whole, so a segment alone)
+RG_VOFF     equ 10              ; dword: the picture's cursor, in the stream
+RG_VSEG     equ 14              ; ...and its place in the ring: segment,
+RG_VOFS     equ 16              ; offset
+RG_AOFF     equ 18              ; the sound's cursor, the same way
+RG_ASEG     equ 22
+RG_AOFS     equ 24
+RG_VDONE    equ 26              ; its picture is over
+RG_ADONE    equ 27              ; ...and its sound
+RG_CUR      equ 28              ; its own file cursor (FSEQ_SIZE)
+RG_POFF     equ 44              ; dword: the next record not yet walked,
+RG_PSEG     equ 48              ; and its place
+RG_POFS     equ 50
+RG_END      equ 52              ; the segment of its end (its guard's start)
+RG_PARA     equ 54              ; its size: paragraphs...
+RG_BYTES    equ 56              ; ...and bytes (a dword)
+RG_SIZE     equ 60
 
 ; the hook's modes
 VM_OFF      equ 0
@@ -530,7 +541,7 @@ vb_load:
 .sized:
     ; the resident claim's parts, each rounded to 4 KB, in paragraphs: the
     ; block, the menu's effects, the music (its ring and guard, or all of
-    ; it), and the two clip rings of 64 KB
+    ; it). The clip rings are claimed per play, in the bracket (vb_rclaim)
     mov cx, [vb_meta+VH_VRES+4]
     call vb_round
     mov cl, 4
@@ -559,8 +570,6 @@ vb_load:
 .ring:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
-    mov [vb_prings], ax
-    add ax, 2 * (VB_CR + VB_CGUARD) / 16
     call vb_p2kb
     mov word [vb_err], vb_s_nomem
     call OSAPI_MEM_CLAIM
@@ -572,10 +581,8 @@ vb_load:
     mov ax, dx
     add ax, [vb_pmus]
     mov [vb_mring], ax
-    add dx, [vb_prings]
-    mov [vb_rg0+RG_SEG], dx
-    add dx, (VB_CR + VB_CGUARD) / 16
-    mov [vb_rg1+RG_SEG], dx
+    call vb_cardclaim               ; the card's ring, before the rings are
+                                    ; sized out of what is left
     ; the block and the menu's effects
     mov word [vb_err], vb_s_badread
     mov es, [vb_vres]
@@ -601,29 +608,6 @@ vb_load:
     mov byte [vb_loaded], 1
     call vb_fontload
 .again:
-    ; the rings empty; the first opening's head read now, into ring 0
-    mov bx, vb_rg0
-    mov al, 0xFF
-    call vb_rreset
-    mov bx, vb_rg1
-    mov al, 0xFF                    ; (vb_rreset spends AL)
-    call vb_rreset
-    cmp word [vb_meta+VH_NOPEN], 0
-    je .music
-    mov al, [vb_meta+VH_OPENS]
-    mov bx, vb_rg0
-    call vb_rreset
-.head:
-    mov bx, vb_rg0
-    call vb_rhead                   ; CF=1: its head is in
-    jc .music
-    mov bx, vb_rg0
-    call vb_rpiece
-    mov word [vb_err], vb_s_badread
-    jc .fail
-    or al, al
-    jnz .head
-.music:
     ; the music from where it comes in, its ring filled: it plays when the
     ; openings are over
     xor ax, ax
@@ -692,16 +676,141 @@ vb_rreset:
     xor ax, ax
     mov [bx+RG_FILL], ax
     mov [bx+RG_FILL+2], ax
-    mov [bx+RG_FIDX], ax
     mov [bx+RG_VOFF], ax
-    mov [bx+RG_VIDX], ax
+    mov [bx+RG_VOFF+2], ax
+    mov [bx+RG_VOFS], ax
     mov [bx+RG_AOFF], ax
-    mov [bx+RG_AIDX], ax
-    mov [bx+RG_PIDX], ax
+    mov [bx+RG_AOFF+2], ax
+    mov [bx+RG_AOFS], ax
     mov [bx+RG_POFF], ax
+    mov [bx+RG_POFF+2], ax
+    mov [bx+RG_POFS], ax
     mov [bx+RG_PLAY], al
     mov [bx+RG_VDONE], al
     mov [bx+RG_ADONE], al
+    mov ax, [bx+RG_SEG]
+    mov [bx+RG_FSEG], ax
+    mov [bx+RG_VSEG], ax
+    mov [bx+RG_ASEG], ax
+    mov [bx+RG_PSEG], ax
+    ret
+
+; vb_cadv - ring BX's place at [bx+di] (a segment, then an offset 0..15) on
+; by CX bytes, wrapped at the ring's end: a record that ran past it was
+; whole in the guard, and its tail is at the ring's start. AX, CX, DX
+; spent. From the hook too: no kernel call, two bytes of stack
+vb_cadv:
+    mov ax, [bx+di+2]
+    add ax, cx
+    mov dx, ax
+    and ax, 15
+    mov [bx+di+2], ax
+    mov cl, 4
+    shr dx, cl
+    add dx, [bx+di]
+    cmp dx, [bx+RG_END]
+    jb .in
+    sub dx, [bx+RG_PARA]
+.in:
+    mov [bx+di], dx
+    ret
+
+; vb_held - DX = what ring BX holds read past the stream offset at [bx+di]
+; (a dword), FFFFh for that or more. AX spent
+vb_held:
+    mov dx, [bx+RG_FILL]
+    mov ax, [bx+RG_FILL+2]
+    sub dx, [bx+di]
+    sbb ax, [bx+di+2]
+    jz .r
+    mov dx, 0xFFFF
+.r:
+    ret
+
+; vb_cardclaim - the card's ring, page-safe, from the top, when there is a
+; card that takes a background stream (vb_snd_open uses it). Claimed once
+vb_cardclaim:
+    cmp word [vb_ring], 0
+    jne .out
+    call OSAPI_SND_CAPS
+    test ax, SND_CAP_PCM_BG
+    jz .out
+    mov ax, VB_RL / 1024 + 1
+    mov cx, ax
+    call OSAPI_MEM_CLAIM_DMA_HI
+    jc .out
+    mov [vb_ring], dx
+.out:
+    ret
+
+; vb_rclaim - the two CLIP RINGS, as big as the machine allows: the largest
+; run less VB_RKEEP, split two ways, each less its guard and cut to whole
+; 4 KB (125.4). Nothing else can claim while the bracket runs, and they are
+; given back as it ends (vb_rfree). CF=1 and [vb_err] when there is not
+; room for VB_CRMIN each
+vb_rclaim:
+    call OSAPI_MEM_AVAIL            ; AX = the largest run, KB
+    sub ax, VB_RKEEP
+    jc .no
+    shr ax, 1
+    sub ax, VB_CGUARD / 1024
+    jc .no
+    and ax, 0xFFFC
+    cmp ax, VB_CRMIN
+    jb .no
+    mov [vb_rkb], ax
+    add ax, VB_CGUARD / 1024
+    shl ax, 1
+    call OSAPI_MEM_CLAIM
+    jc .no
+    mov [vb_rclm], dx
+    mov bx, vb_rg0
+    call .set
+    mov ax, [vb_rkb]
+    add ax, VB_CGUARD / 1024
+    mov cl, 6
+    shl ax, cl
+    add dx, ax
+    mov bx, vb_rg1
+    call .set
+    clc
+    ret
+.no:
+    mov word [vb_err], vb_s_nomem
+    stc
+    ret
+.set:                               ; ring BX at segment DX
+    mov [bx+RG_SEG], dx
+    mov ax, [vb_rkb]
+    mov cl, 6
+    shl ax, cl
+    mov [bx+RG_PARA], ax
+    add ax, dx
+    mov [bx+RG_END], ax
+    mov ax, [vb_rkb]
+    mov cl, 10
+    push dx
+    xor dx, dx
+.k:
+    shl ax, 1
+    rcl dx, 1
+    dec cl
+    jnz .k
+    mov [bx+RG_BYTES], ax
+    mov [bx+RG_BYTES+2], dx
+    pop dx
+    mov al, 0xFF
+    call vb_rreset
+    ret
+
+; vb_rfree - the clip rings given back
+vb_rfree:
+    xor dx, dx
+    xchg dx, [vb_rclm]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
     ret
 
 ; vb_rhead - CF=1 when ring BX holds its clip's head: VB_HEAD of it, or all
@@ -755,25 +864,38 @@ vb_rpiece:
     cmp ax, [si+VC_LEN]
     jae .none
 .some:
-    mov cx, [ds:bp+RG_FILL]         ; room: the ring less what is still
-    mov ax, cx                      ; wanted past the EARLIER cursor
-    sub cx, [ds:bp+RG_VOFF]
-    sub ax, [ds:bp+RG_AOFF]
-    cmp ax, cx
-    jbe .r1
-    mov cx, ax
+    mov ax, [ds:bp+RG_VOFF]         ; room: the ring less what is still
+    mov dx, [ds:bp+RG_VOFF+2]       ; wanted past the EARLIER cursor
+    cmp dx, [ds:bp+RG_AOFF+2]
+    jb .e1
+    ja .e2
+    cmp ax, [ds:bp+RG_AOFF]
+    jbe .e1
+.e2:
+    mov ax, [ds:bp+RG_AOFF]
+    mov dx, [ds:bp+RG_AOFF+2]
+.e1:
+    add ax, [ds:bp+RG_BYTES]        ; the ring's bytes, less the fill past
+    adc dx, [ds:bp+RG_BYTES+2]      ; that cursor
+    sub ax, [ds:bp+RG_FILL]
+    sbb dx, [ds:bp+RG_FILL+2]
+    jb .none
+    or dx, dx
+    jz .r1
+    mov ax, 0xF000                  ; (64 KB and more: more than a piece)
 .r1:
-    mov ax, VB_CR                   ; the room, in whole pieces
-    sub ax, cx
-    jc .none
-    and ax, 0 - VB_PIECE
+    and ax, 0 - VB_PIECE            ; in whole pieces
     jz .none
     call vb_psize                   ; the piece: as much of it as the
-    mov cx, VB_CR                   ; moment allows, and no further than
-    sub cx, [ds:bp+RG_FIDX]         ; the ring's end: nothing is read into
-    cmp ax, cx                      ; the guard, so nothing is copied out
+    mov dx, [ds:bp+RG_END]          ; moment allows, and no further than
+    sub dx, [ds:bp+RG_FSEG]         ; the ring's end: nothing is read into
+    cmp dx, 0x1000                  ; the guard, so nothing is copied out
+    jae .p1
+    mov cl, 4
+    shl dx, cl
+    cmp ax, dx
     jbe .p1
-    mov ax, cx
+    mov ax, dx
 .p1:
     mov [vb_pn], ax
     mov ax, [si+VC_LEN]             ; and no further than the clip's last
@@ -791,8 +913,8 @@ vb_rpiece:
     mov dx, [ds:bp+RG_FILL+2]
     add ax, [si+VC_OFF]
     adc dx, [si+VC_OFF+2]
-    mov es, [ds:bp+RG_SEG]
-    mov bx, [ds:bp+RG_FIDX]
+    mov es, [ds:bp+RG_FSEG]
+    xor bx, bx
     mov cx, [vb_pn]
     lea di, [ds:bp+RG_CUR]          ; its own cursor: a clip's reads follow
     mov [vb_rcur], di               ; on, with no walk of the chain
@@ -800,54 +922,74 @@ vb_rpiece:
     jc .out
     mov si, vb_tpre
     call vb_tmark
-    mov ax, [ds:bp+RG_FIDX]         ; the fill index on: the piece ends at
-    add ax, [vb_pn]                 ; the ring's end at the most
-    cmp ax, VB_CR
+    mov ax, [vb_pn]                 ; the fill's place on: the piece ends
+    mov cl, 4                       ; at the ring's end at the most
+    shr ax, cl
+    add ax, [ds:bp+RG_FSEG]
+    cmp ax, [ds:bp+RG_END]
     jb .w
-    xor ax, ax
+    mov ax, [ds:bp+RG_SEG]
 .w:
-    mov [ds:bp+RG_FIDX], ax
-    mov es, [ds:bp+RG_SEG]          ; THE RECORDS NOW WHOLE, walked: one
-    mov dx, [ds:bp+RG_FILL]         ; that runs past the ring's end has its
-    add dx, [vb_pn]                 ; tail copied past it, into the guard,
-.parse:                             ; and nothing else is (125.4). DX = the
-    mov si, [ds:bp+RG_PIDX]         ; new fill's low word
-    mov cx, dx
-    sub cx, [ds:bp+RG_POFF]         ; what is read of the record at PIDX
+    mov [ds:bp+RG_FSEG], ax
+.parse:                             ; THE RECORDS NOW WHOLE, walked: one
+    mov ax, [ds:bp+RG_FILL]         ; that runs past the ring's end has its
+    mov dx, [ds:bp+RG_FILL+2]       ; tail copied past it, into the guard,
+    add ax, [vb_pn]                 ; and nothing else is (125.4)
+    adc dx, 0
+    sub ax, [ds:bp+RG_POFF]         ; what is read of the record there
+    sbb dx, [ds:bp+RG_POFF+2]
+    jz .a1
+    mov ax, 0xFFFF
+.a1:
+    mov cx, ax
     cmp cx, RH_SIZE
     jb .pstop
-    mov al, [es:si+RH_LEN]          ; its length, its bytes either side of
-    mov bx, si                      ; the end
-    inc bx
-    cmp bx, VB_CR
-    jb .h1
-    xor bx, bx
+    mov es, [ds:bp+RG_PSEG]         ; its length, its second byte at the
+    mov si, [ds:bp+RG_POFS]         ; ring's start when the first is the
+    mov al, [es:si+RH_LEN]          ; ring's last
+    mov dx, [ds:bp+RG_END]
+    dec dx
+    cmp dx, [ds:bp+RG_PSEG]
+    jne .h0
+    cmp si, 15
+    jne .h0
+    mov es, [ds:bp+RG_SEG]
+    mov ah, [es:0]
+    jmp short .h1
+.h0:
+    mov ah, [es:si+RH_LEN+1]
 .h1:
-    mov ah, [es:bx]
     cmp ax, RH_SIZE                 ; (a length that cannot be: left for
     jb .pstop                       ; the hook to refuse)
     cmp cx, ax
     jb .pstop                       ; not all of it read yet
-    mov bx, si
-    add bx, ax                      ; its end (under 48 + 16 KB)
-    sub bx, VB_CR
+    mov dx, [ds:bp+RG_END]          ; past the end? (A record is 16 KB at
+    sub dx, [ds:bp+RG_PSEG]         ; most: farther off than that, no)
+    cmp dx, 0x402
+    jae .pin
+    mov cl, 4
+    shl dx, cl                      ; the bytes from its segment to the end
+    mov cx, si
+    add cx, ax
+    sub cx, dx                      ; ...its tail past it
     jbe .pin
-    mov cx, bx                      ; past the end: its tail, into the guard
     call vb_gcopy
-    jmp short .pnext
 .pin:
-    add bx, VB_CR
-    cmp bx, VB_CR
-    jb .pnext
-    xor bx, bx
-.pnext:
-    mov [ds:bp+RG_PIDX], bx
     add [ds:bp+RG_POFF], ax
-    jmp short .parse
+    adc word [ds:bp+RG_POFF+2], 0
+    mov cx, ax
+    mov bx, bp
+    mov di, RG_PSEG
+    call vb_cadv
+    jmp .parse
 .pstop:
-    cmp si, VB_CR - RH_SIZE         ; a header that runs past the end: its
-    jbe .pdone                      ; bytes there now, so the hook reads
-    mov cx, RH_SIZE                 ; the right length (and waits)
+    mov dx, [ds:bp+RG_END]          ; a header that runs past the end: its
+    sub dx, [ds:bp+RG_PSEG]         ; bytes there now, so the hook reads
+    cmp dx, 1                       ; the right length (and waits)
+    jne .pdone
+    cmp word [ds:bp+RG_POFS], 16 - RH_SIZE
+    jbe .pdone
+    mov cx, RH_SIZE
     call vb_gcopy
 .pdone:
     pushf                           ; the fill on: published last, and whole
@@ -871,23 +1013,25 @@ vb_rpiece:
     pop si
     ret
 
-; vb_gcopy - CX bytes from the start of ring ES to past its end: a
+; vb_gcopy - CX bytes from the start of ring DS:BP to past its end: a
 ; record's tail into the guard (vb_rpiece). AX, BX, DX kept
 vb_gcopy:
     push si
     push di
     push ds
-    add [cs:vb_ncopy], cx           ; (a diagnostic: bytes the reader copies)
-    adc word [cs:vb_ncopy+2], 0
     push es
-    pop ds
+    add [vb_ncopy], cx              ; (a diagnostic: bytes the reader copies)
+    adc word [vb_ncopy+2], 0
+    mov es, [ds:bp+RG_END]
+    mov ds, [ds:bp+RG_SEG]
     xor si, si
-    mov di, VB_CR
+    xor di, di
     cld
     shr cx, 1
     rep movsw
     adc cx, cx
     rep movsb
+    pop es
     pop ds
     pop di
     pop si
@@ -1122,6 +1266,10 @@ vb_main:
     mov ax, [vb_fsi+FSI_SEG]
     mov [vb_vseg], ax
     call vb_palette
+    call vb_rclaim                  ; the clip rings, all there is (125.4)
+    jc .out
+    call vb_rstart                  ; ...and the first opening's head
+    jc .rout
     call vb_game_init
     call vb_play_init
     call vb_snd_open
@@ -1155,6 +1303,34 @@ vb_main:
 .leave:
     mov byte [vb_ready], 0
     call vb_snd_close
+.rout:
+    call vb_rfree
+.out:
+    ret
+
+; vb_rstart - the rings empty, and the first opening's head read into ring
+; 0 before the play starts. CF=1 and [vb_err] when a read fails
+vb_rstart:
+    cmp word [vb_meta+VH_NOPEN], 0
+    je .ok
+    mov al, [vb_meta+VH_OPENS]
+    mov bx, vb_rg0
+    call vb_rreset
+.head:
+    mov bx, vb_rg0
+    call vb_rhead                   ; CF=1: its head is in
+    jc .ok
+    mov bx, vb_rg0
+    call vb_rpiece
+    jc .bad
+    or al, al
+    jnz .head
+.ok:
+    clc
+    ret
+.bad:
+    mov word [vb_err], vb_s_badread
+    stc
     ret
 
 ; vb_palette - mode 4's palette from the bundle's byte (Video Player's
@@ -1222,12 +1398,14 @@ vb_keys:
 ; vb_rrec - BX = a ring; out: CF=0 and SI = the record at its VIDEO cursor,
 ; whole in memory, CX = its length; CF=1 not read that far yet. AX, DX spent
 vb_rrec:
-    mov dx, [bx+RG_FILL]            ; what is read past the cursor (16 bits:
-    sub dx, [bx+RG_VOFF]            ; never more than the ring)
+    push di
+    mov di, RG_VOFF                 ; what is read past the cursor
+    call vb_held
+    pop di
     cmp dx, RH_SIZE
     jb .no
-    mov es, [bx+RG_SEG]
-    mov si, [bx+RG_VIDX]
+    mov es, [bx+RG_VSEG]
+    mov si, [bx+RG_VOFS]
     mov cx, [es:si+RH_LEN]
     cmp cx, dx
     ja .no
@@ -1237,16 +1415,15 @@ vb_rrec:
     stc
     ret
 
-; vb_radv - BX = a ring: its video cursor past CX bytes (a record)
+; vb_radv - BX = a ring: its video cursor past CX bytes (a record). AX, CX,
+; DX spent
 vb_radv:
     add [bx+RG_VOFF], cx
-    mov ax, [bx+RG_VIDX]
-    add ax, cx
-    cmp ax, VB_CR
-    jb .in
-    sub ax, VB_CR
-.in:
-    mov [bx+RG_VIDX], ax
+    adc word [bx+RG_VOFF+2], 0
+    push di
+    mov di, RG_VSEG
+    call vb_cadv
+    pop di
     ret
 
 ; vb_start_clip - the hook plays clip AL out of ring BX from the record at
@@ -1855,12 +2032,17 @@ vb_aframe:
     jne .out                        ; is a missed one, and plays as silence
     mov bx, [vb_aring]
     mov dx, [bx+RG_FILL]            ; this frame's record read?
+    mov ax, [bx+RG_FILL+2]
     sub dx, [bx+RG_AOFF]
+    sbb ax, [bx+RG_AOFF+2]
+    jz .h
+    mov dx, 0xFFFF
+.h:
     cmp dx, RH_SIZE
     jb .late
     push es
-    mov es, [bx+RG_SEG]
-    mov si, [bx+RG_AIDX]
+    mov es, [bx+RG_ASEG]
+    mov si, [bx+RG_AOFS]
     mov ax, [es:si+RH_LEN]
     cmp ax, dx
     ja .late1
@@ -1913,24 +2095,27 @@ vb_anext:
     inc word [vb_aowe]              ; a frame's time is over: one record owed
 .rec:
     mov bx, [vb_aring]
-    mov es, [bx+RG_SEG]
-    mov si, [bx+RG_AIDX]
+    mov es, [bx+RG_ASEG]
+    mov si, [bx+RG_AOFS]
     mov dx, [bx+RG_FILL]            ; the record read? If not, the sound's
-    sub dx, [bx+RG_AOFF]            ; frames go on without it, owed, and the
-    cmp dx, RH_SIZE                 ; sound passes over what it missed once
+    mov ax, [bx+RG_FILL+2]          ; frames go on without it, owed, and the
+    sub dx, [bx+RG_AOFF]            ; sound passes over what it missed once
+    sbb ax, [bx+RG_AOFF+2]
+    jz .h
+    mov dx, 0xFFFF
+.h:
+    cmp dx, RH_SIZE
     jb .stay                        ; it is: it keeps to the picture's
     mov cx, [es:si+RH_LEN]          ; timeline and never trails it (125.3)
     cmp cx, dx
     ja .stay
     dec word [vb_aowe]
     add [bx+RG_AOFF], cx
-    mov ax, si
-    add ax, cx
-    cmp ax, VB_CR
-    jb .in
-    sub ax, VB_CR
-.in:
-    mov [bx+RG_AIDX], ax
+    adc word [bx+RG_AOFF+2], 0
+    push di
+    mov di, RG_ASEG
+    call vb_cadv
+    pop di
     dec word [vb_aleft]
     jz .over
     cmp word [vb_aowe], 0           ; frames missed: passed over too
@@ -2250,17 +2435,26 @@ vb_reader:
     pushf                           ; top: a clip that fit the ring whole
     cli                             ; plays again from it unread; one that
     mov byte [bx+RG_PLAY], 0        ; did not has lost its head to its tail,
-    cmp word [bx+RG_FILL+2], 0      ; and the ring is nobody's. (Its played
-    jne .drop                       ; cursors left as they were, the enemy's
-    cmp word [bx+RG_FILL], VB_CR    ; turn replayed the knight's clip from
+    mov ax, [bx+RG_FILL+2]          ; and the ring is nobody's. (Its played
+    cmp ax, [bx+RG_BYTES+2]         ; cursors left as they were, the enemy's
+    jb .keep                        ; turn replayed the knight's clip from
     ja .drop                        ; its end: an idle screen, no reads)
+    mov ax, [bx+RG_FILL]
+    cmp ax, [bx+RG_BYTES]
+    ja .drop
+.keep:
     xor ax, ax
     mov [bx+RG_VOFF], ax
-    mov [bx+RG_VIDX], ax
+    mov [bx+RG_VOFF+2], ax
+    mov [bx+RG_VOFS], ax
     mov [bx+RG_AOFF], ax
-    mov [bx+RG_AIDX], ax
+    mov [bx+RG_AOFF+2], ax
+    mov [bx+RG_AOFS], ax
     mov [bx+RG_VDONE], al
     mov [bx+RG_ADONE], al
+    mov ax, [bx+RG_SEG]
+    mov [bx+RG_VSEG], ax
+    mov [bx+RG_ASEG], ax
     popf
     ret
 .drop:
@@ -2272,9 +2466,16 @@ vb_reader:
 .low:                               ; CF=1 ring BX is playing and under half
     call .play
     jnc .lno
-    mov ax, [bx+RG_FILL]
+    mov ax, [bx+RG_FILL]            ; (twice what it holds, against all
+    mov dx, [bx+RG_FILL+2]          ; of the ring)
     sub ax, [bx+RG_VOFF]
-    cmp ax, VB_CR / 2
+    sbb dx, [bx+RG_VOFF+2]
+    shl ax, 1
+    rcl dx, 1
+    cmp dx, [bx+RG_BYTES+2]
+    jb .lyes
+    ja .lno
+    cmp ax, [bx+RG_BYTES]
     jb .lyes
 .lno:
     clc
@@ -3128,6 +3329,8 @@ VB_VAR vb_nidle, 2
 VB_VAR vb_tpre, 4
 VB_VAR vb_tcp, 4
 VB_VAR vb_ncopy, 4
+VB_VAR vb_rkb, 2                    ; each clip ring's KB, this play
+VB_VAR vb_rclm, 2                   ; ...their claim
 VB_VAR vb_hbusy, 4
 VB_VAR vb_rseg, 2
 VB_VAR vb_rcap, 2
@@ -3142,7 +3345,6 @@ VB_VAR vb_munder, 2
 VB_VAR vb_mdry, 1
 VB_VAR vb_ui, 1
 VB_VAR vb_mres, 1
-VB_VAR vb_prings, 2
 VB_VAR vb_mskip, 2
 VB_VAR vb_rg0, RG_SIZE
 VB_VAR vb_rg1, RG_SIZE

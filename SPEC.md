@@ -237486,18 +237486,30 @@ blocks), from the key to the sound in the card's own capture:
 
 ### 125.4 Reading, and memory
 
-**Two claims** (an owner may hold eight, `MEM_OWNER_MAX`, §50):
+**Three claims** (an owner may hold eight, `MEM_OWNER_MAX`, §50):
 
-- **the RESIDENT claim** (`vb_load`). Each part is its own segment, the
-  claim's base plus the parts' rounded sizes before it:
+- **the RESIDENT claim** (`vb_load`), held while the window is open. Each
+  part is its own segment, the claim's base plus the parts' rounded sizes
+  before it:
   - the idle loop's block, with every clip's entries;
   - the menu's effects;
   - the music's RING, 32 KB (3 s at 11 kHz) with a 4 KB guard; or the
-    whole music when it is 60 KB or less;
-  - two CLIP RINGS of 48 KB, each with a 16 KB GUARD past it.
-- **the card's ring** (`vb_snd_open`), `OSAPI_MEM_CLAIM_DMA_HI`, 17 KB.
+    whole music when it is 60 KB or less.
+- **the card's ring** (`vb_cardclaim`, in `vb_load`), page-safe from the
+  top (`OSAPI_MEM_CLAIM_DMA_HI`), 17 KB, when there is a card. It is
+  claimed before the rings are sized, so that they leave nothing it needs.
+- **the two CLIP RINGS** (`vb_rclaim`), **claimed per play inside the
+  bracket and given back as it ends** (`vb_rfree`): nothing else can claim
+  while the full screen runs, so they are ALL there is. The largest run
+  (`OSAPI_MEM_AVAIL`) less 8 KB (`VB_RKEEP`), split two ways, each less its
+  16 KB GUARD and cut to whole 4 KB; at least 48 KB each (`VB_CRMIN`), or
+  Play says "Not enough memory". On the owner's 640 KB 5150 with an SB
+  that is **172 KB a ring**, 2.8 s of a 61 KB/s clip, where it was 48. Video
+  Player sizes its ring the same way (98.3). A ring so big takes more than
+  16 bits to index, so a place in it is a segment and an offset of 0..15
+  (`vb_cadv`), and a stream's cursors are dwords.
 
-The claim is the default, pinned (§66). The package does arithmetic on its
+The claims are the default, pinned (§66). The package does arithmetic on its
 segment to carve it, so it is real mode's (125.7).
 
 **A clip ring holds a stream as it is read.** A piece is read at the
@@ -237577,7 +237589,8 @@ The demo battle on a 640 KB machine:
 |---|---|
 | the package's image | 9,489 (7,306 packed on the disk) |
 | its bss | 5,352 (the first 4 KB of the bundle among it) |
-| the resident claim | 208 KB: the block 39,218 (40 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB), two clip rings and their guards (128 KB) |
+| the resident claim | 80 KB: the block 39,218 (40 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB) |
+| the clip rings, per play | all the largest run less 8 KB: on 86Box's 640 KB 5150, 2 x (172 + 16) KB |
 | the card's ring | 17 KB |
 | the bundle | 847,872 bytes on the disk: the music 282,240 (25.6 s), the Limit 249,650 |
 
@@ -237670,12 +237683,16 @@ over all of it. With only the straddling record's tail copied (above):
 | stalled | 1.9 to 2.5 s in 5.5 | 0.46 to 0.95 s in 4.7 |
 | the battle to victory | 54.3 s | 48.8 s |
 
-The 53.5 KB/s clips stall 0.33 to 0.51 s. What is left is the ring's
-depth: 48 KB is 0.6 s of the 77 KB/s clip, so a burst of catching up (two
-frames a hook call after a stall) leaves the reader no time to start its
-next piece, and a piece is cut at the ring's end. Video Player's ring is
-up to 15 x 32 KB. A deeper clip ring is the next step. The demo bundle
-still plays to victory, the Limit among it, with 0 stalls.
+The 53.5 KB/s clips stalled 0.33 to 0.51 s. What was left was the
+ring's depth: 48 KB is 0.6 s of the 77 KB/s clip, so a burst of catching
+up (two frames a hook call after a stall) left the reader no time to start
+its next piece. **With the rings sized from all the memory there is**
+(172 KB each, above) the same battle, and one with the owner's two gunner
+attacks added (55.8 and 70.6 KB/s), played to victory with **0 stalls, 0
+late frames, 0 frames of sound late and 0 music underruns**, every clip;
+the reader inside a read 39 to 72% of the time. A second play claimed the
+rings again (168 KB) and started. The demo bundle plays to victory, the
+Limit among it, with 0 stalls.
 
 **Measured on MartyPC's `os8088_xt_hdd_sb` with the version 3 bundle on
 C:** (2026-11-04).

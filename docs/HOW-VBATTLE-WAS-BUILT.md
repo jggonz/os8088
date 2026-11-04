@@ -226,6 +226,28 @@ Observed, not inferred: every number above is from the engine's own
 counters on 86Box. What is left is the ring's depth (48 KB, 0.6 s of that
 clip, against Video Player's up to 480 KB), and that is the next step.
 
+## The rings take all there is (2026-11-04)
+
+The owner: "We can and probably should take everything available; video
+player also made this change. Nothing else can take RAM from us while we
+run FSX." So the two clip rings left the resident claim, which the window
+holds as long as it is open, and became a claim of their own made inside
+the full-screen bracket and given back as it ends: the largest run less
+8 KB, split two ways. The card's ring had to move first, to the load, so
+the rings could not leave it without room.
+
+A ring of 172 KB does not fit a 16-bit index, so every place in a ring
+became a segment and an offset of 0..15, advanced by one helper the hook
+and the reader share, and the stream's cursors became dwords. The hook's
+stack budget (48 bytes) was the constraint on how that helper could look.
+
+Measured on 86Box's 5150 with the ST11M, the owner's footage with their two
+new gunner attacks (55.8 and 70.6 KB/s): **0 stalls, 0 late frames, 0
+frames of sound late, 0 music underruns**, every clip of a battle to
+victory, and a second play reclaiming the rings. The demo bundle the same.
+The gunner clips need nothing of their own: in at their first frame, out
+onto idle frame 0 at about 5.5 to 6% of pixels, like the knight's.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |
