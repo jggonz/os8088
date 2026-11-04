@@ -72,10 +72,7 @@ W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
 W16_MAXCLS   equ 64             ; classes (SPEC.md 124.8; File Manager 3.0
-                                ;   registers 9, SPEC.md 124.27): the class
-W16_CLSGROW  equ 32             ;   block's first records, and what a full one
-W16_CLSTOP   equ 255            ;   grows by, to 255 (W16W_CLS is a byte, 0FFh
-                                ;   = none: 124.25.18.1)
+                                ;   registers 9, SPEC.md 124.27)
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
                                 ;   Editor's Advanced 54 beside 23 open)
@@ -505,8 +502,7 @@ section .w16dlg
     W16BSS w16_namebuf, 16      ; a class name, folded
     W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
     W16BSS w16_cwslot, 2
-    W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet,
-    W16BSS w16_clsn, 2          ;   its records (124.25.18.1: it grows)
+    W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet
                                 ;   (SPEC.md 124.25.18.1), and the one record
     W16BSS w16_ccb, W16C_STRIDE  ;   copied out of it, w16_clsget's
     W16BSS w16_cbi, 1           ;   ...and its index

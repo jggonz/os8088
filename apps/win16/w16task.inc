@@ -658,7 +658,6 @@ W16TSK w16t_end
     jz .cx
     mov es, ax
     xor bx, bx
-    mov cx, [w16_clsn]              ; (the block grows: 124.25.18.1)
 .c:
     mov al, [cs:w16t_dead]
     cmp [es:bx + W16C_TASK], al
@@ -667,7 +666,8 @@ W16TSK w16t_end
     mov byte [es:bx + W16C_NAME], 0
 .cn:
     add bx, W16C_STRIDE
-    loop .c
+    cmp bx, W16_MAXCLS * W16C_STRIDE
+    jb .c
 .cx:
     mov bx, w16_tmr                 ; its timers with no window
     mov cx, W16_MAXTMR

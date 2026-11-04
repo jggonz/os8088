@@ -237248,20 +237248,14 @@ segment is), so it is not the block a `GlobalAlloc` segment's local heap
 grows into in place (WIN16-NEXT `lheap`). It belongs to no task (`GH_TASK` 0), so a
 task's end does not free it under the others; the program's end frees it with
 the arenas, and `w16_clsseg` goes back to 0 there with the USER heap's
-segment. It is not a map claim, so it costs none of an owner's eight.
-**A full block grows** (DECISIONS 13:05; WIN16-NEXT `lheap`): `w16s_clsadd`
-asks a block `W16_CLSGROW` = 32 records longer, from the top again, copies
-the records into it and frees the old one, and `w16_clsn` (2 bytes of bss)
-is the count every walk of the table reads - `w16_findcls`, `GetClassInfo`'s
-atom and `w16t_end`. Atoms are indexes and nothing holds a record's address,
-so nothing else changes. On the kern_mega arm the class block's selector is
-`W16TOSEL`'s, the map's selector for that paragraph, not a handle descriptor
-of the block's (nobody is handed one), so there is nothing to give back with
-the old block. The index is a byte (`W16W_CLS`, 0FFh = none), so
-`W16_CLSTOP` = 255 records is the ceiling; a full table there, or a grow with
-no memory, answers `RegisterClass` FALSE and the program carries on with the
-classes it has. It costs 8 resident bytes (6 of image in `w16_findcls`, 2 of
-bss) on both arms.
+segment. It is not a map claim, so it costs none of an owner's eight. **The
+block is not grown** (DECISIONS 13:05 asked for growth; open): 64 is the
+limit, and a failed block or a full table answers `RegisterClass` FALSE and
+the program carries on. Growing it is a new block, the records copied and the
+old one freed - atoms are indexes and nothing holds a record's address, so
+nothing else changes - but on the kern_mega arm the old block's selector has
+to go with it, which nothing here has needed before; the index is a byte
+(`W16W_CLS`, 0FFh = none), so 255 is the ceiling.
 
 **No record is read in place.** `w16_clsget` (AL = the index) copies a record
 into `w16_ccb`, one 33-byte record in bss with its index in `w16_cbi`, and
@@ -237376,7 +237370,7 @@ bytes), so a heap that never fills never fetches it. `LHEAP.EXE`
 `LocalReAlloc` of one larger, a `LocalInit` heap in a locked `GlobalAlloc`
 block that grows in place, the same in a block whose neighbour is in use
 (on `kern_mega` it must move and keep its selector; in real mode it stops
-short with its data intact), and 70 window classes (§124.25.18.1).
+short with its data intact), and 70 window classes, past the class block's first 64 (§124.25.18.1).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
