@@ -71,8 +71,12 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 64             ; classes (SPEC.md 124.8; File Manager 3.0
-                                ;   registers 9, SPEC.md 124.27)
+W16_MAXCLS   equ 64             ; classes: the class block's first records,
+                                ;   and what it grows by when they are used
+                                ;   (SPEC.md 124.25.18.1; VB 3.0 registers
+                                ;   ~26, File Manager 3.0 9, SPEC.md 124.27)
+W16_CLSCAP   equ 255            ; ...up to this: an index is W16W_CLS's byte,
+                                ;   0FFh "none"
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
                                 ;   Editor's Advanced 54 beside 23 open)
@@ -503,6 +507,7 @@ section .w16dlg
     W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
     W16BSS w16_cwslot, 2
     W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet
+    W16BSS w16_clsend, 2        ;   ...its records' end, records x W16C_STRIDE
                                 ;   (SPEC.md 124.25.18.1), and the one record
     W16BSS w16_ccb, W16C_STRIDE  ;   copied out of it, w16_clsget's
     W16BSS w16_cbi, 1           ;   ...and its index
@@ -1405,8 +1410,8 @@ w16_wake:
     je .nosh                        ;   where the lock is free (124.24.10)
     TCALL w16t_shrun
 .nosh:
-    cmp byte [w16_state], W16S_ENDED
-    je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
+    cmp byte [w16_state], W16S_ENDED ; it ended inside a W_PAINT (w16_ppaint)
+    je w16_endnow                   ;   or a w16_after posted this (124.8.3)
     cmp byte [w16_inpeek], 0
     jne w16_peekwake                ; a PeekMessage that found nothing
     cmp byte [w16_state], W16S_RUN
@@ -1456,12 +1461,24 @@ w16_wake:
 ; in:  anything a callback has; out: nothing
 ; The program is waiting (nothing to do) or it has ended, and an ended
 ; program takes its window with it, as a Windows program's did.
+; THE LAST TASK'S END IS FINISHED FROM THE WAKE (SPEC.md 124.8.3): giving the
+; program back drops the parts, and a caller may be one - the menu code
+; (w16_mhpost) and the task part (w16t_serve) reach here by ICALL, and
+; w16_ibgate's retf would return into the dropped part. So it only posts a
+; wake, and w16_wake, with nothing but the UI task's dispatch under it, comes
+; back to w16_endnow. w16_close gives it back too, should the user's close
+; come first. Several tasks: one ends here (w16t_end drops no part).
 ; -----------------------------------------------------------------------------
 w16_after:
     cmp byte [w16_state], W16S_ENDED
-    jne .trim
+    jne w16_endnow.trim
+    cmp byte [w16_ntk], 2
+    jae w16_endnow.many
+    jmp w16_wakeme
+w16_endnow:                         ; the wake's: it has ended, freed now
     cmp byte [w16_ntk], 2           ; one of several: it alone ends, and
     jb .last                        ;   the rest go on (SPEC.md 124.28.7)
+.many:
     TCALL w16t_end
     jmp short .trim
 .last:
@@ -1593,6 +1610,7 @@ w16_freeprog:
     xor ax, ax                      ; the USER heap went with the arenas,
     mov [w16_mseg], ax
     mov [w16_clsseg], ax            ;   and the class block (124.25.18.1)
+    mov [w16_clsend], ax
     mov [w16_msys], ax
     mov [w16_mtrk], al
     mov [w16_mlev], al

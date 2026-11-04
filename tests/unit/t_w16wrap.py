@@ -91,8 +91,10 @@ def labels(text):
 # E8/E9 in one is a "call" that does not exist. Each is a label and its _end.
 DATA = ("w16_pnames",)
 # ...and the image's first 96 bytes, the package header (32: sizes, name,
-# flags, the dispatcher's `call bp / retf`) and its icon (64): data whose
-# bytes are whatever the build makes them (tools/os88pkg.py's ICON_END)
+# flags, the dispatcher's `call bp / retf`, which has no E8/E9) and its icon
+# (64): data whose bytes are whatever the build makes them (tools/os88pkg.py's
+# ICON_END). A bss size of 69E8h or 69E9h at +10 read as an E8 call or an E9
+# jmp (2026-11-04, WIN16-NEXT lheap and ctlproc verifies).
 HEADER_ICON = 0x60
 
 
@@ -127,7 +129,7 @@ def scan(binf, mapf):
         wraps, bad = 0, []
         skip = data_ranges(tabs.get(sec, []))
         if start == 0:                  # the image's package header and icon
-            skip.append((0, HEADER_ICON))   # (its bss size at +10 read 69E8h)
+            skip.append((0, HEADER_ICON))
         for line in dis.splitlines():
             f = line.split(None, 2)
             if len(f) < 3 or f[1][:2] not in ("E8", "E9") or len(f[1]) != 6:

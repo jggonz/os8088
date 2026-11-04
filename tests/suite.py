@@ -17405,7 +17405,9 @@ SOAK = [
         "pass with a Windows program open - MENU.EXE through the shipped "
         "DOS.O88 forward off an XT-IDE disk's root, hibernated from the System "
         "menu, resumed at the same segment still running, then PLAYED ON: F3's "
-        "MessageBox up and answered, and its close box freeing WIN16. MartyPC",
+        "MessageBox up and answered, and File > Exit through the menu (Alt+F, "
+        "X: SPEC.md 124.8.3, an end inside the dialog part) freeing WIN16. "
+        "MartyPC",
         needs=("marty", "nasm", "win16fixtures"), serial=True, timeout=1800,
         wants=("build/kernel.sys", "build/win16.o88", "build/kdos/DOS.O88",
                "build/hiber.drv")),
