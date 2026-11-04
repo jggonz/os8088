@@ -89,6 +89,38 @@ def unpack(cv, h, wb):
     return px
 
 
+SCALES = (100, 75, 67, 50)     # a rendition's picture, % of its canvas
+
+
+def scale_of(proj, kind):
+    """Rendition KIND's PICTURE SIZE, % of the canvas (and of the screen,
+    for a full-screen opening): target.scale[kind], 100 when not set"""
+    return int((proj.d["target"].get("scale") or {}).get(kind, 100))
+
+
+def boxed(w, h, pct):
+    """The picture inside a W x H area at PCT%: (pw, ph, x0, y0), its width
+    and left edge in whole BYTES of every adapter's (8 pixels), its height
+    and top even - centred, black round it. A smaller picture is fewer
+    bytes a frame on every adapter: the black never changes, so no record
+    ever touches it, and the engine plays it as it is"""
+    if pct >= 100:
+        return w, h, 0, 0
+    pw = max(8, int(round(w * pct / 100.0 / 8)) * 8)
+    ph = max(2, int(round(h * pct / 100.0 / 2)) * 2)
+    return pw, ph, (w - pw) // 16 * 8, (h - ph) // 4 * 2
+
+
+def pad_into(fr, w, h, x0, y0):
+    """Frames FR (n x ph x pw) centred in black, n x H x W"""
+    fr = np.asarray(fr, np.uint8)
+    n, ph, pw = fr.shape[:3]
+    out = np.zeros((n, h, w), np.uint8)
+    ph, pw = min(ph, h - y0), min(pw, w - x0)
+    out[:, y0:y0 + ph, x0:x0 + pw] = fr[:, :ph, :pw]
+    return out
+
+
 def screens(proj, sid, progress=_nop, full=False):
     """Source SID's frames, as the decoder will show them - the canvas's
     rows, or FULL: the whole 200 (a full-screen opening, 125.3)"""
@@ -97,10 +129,13 @@ def screens(proj, sid, progress=_nop, full=False):
         return [np.asarray(f, np.uint8) for f in _scene(s["name"])]
     t = proj.d["target"]
     rows = 200 if full else t["canvas"][3]
+    pct = scale_of(proj, "cga4")
+    pw, ph, x0, y0 = boxed(320, rows, pct)
     path = proj.here(s["path"])
     key = hashlib.sha1(json.dumps(
         [ENC_KEY, file_hash(path), rows, t["fps"], t["profile"],
-         t["palette"]]).encode()).hexdigest()[:20]
+         t["palette"]] + ([pct] if pct < 100 else [])).encode()
+                       ).hexdigest()[:20]
     npy = os.path.join(cache_dir(proj), key + ".npy")
     if os.path.exists(npy):
         return list(np.load(npy))
@@ -112,7 +147,7 @@ def screens(proj, sid, progress=_nop, full=False):
     pr = subprocess.Popen(
         [sys.executable, "-u", os.path.join(HERE, "os88venc.py"), path, v88,
          "--quiet", "--progress", "--preset", "cga4",
-         "--box", "320x%d" % rows, "--fit", "fill", "--fps", str(t["fps"]),
+         "--box", "%dx%d" % (pw, ph), "--fit", "fill", "--fps", str(t["fps"]),
          "--audio", "none", "--profile", t["profile"]] +
         palette_args(t["palette"]), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
@@ -137,6 +172,8 @@ def screens(proj, sid, progress=_nop, full=False):
     for n in range(r.frames):
         fr.append(unpack(V.decode_at(r, n), r.g.h, r.g.wb))
         progress("decode", n + 1, r.frames, sid)
+    if pct < 100:                   # (the picture boxed in the canvas)
+        fr = list(pad_into(fr, 320, rows, x0, y0))
     tmp = npy + ".part.npy"         # whole or not at all: a Cancel that
     np.save(tmp, np.stack(fr))      # kills this mid-write leaves no
     os.replace(tmp, npy)            # cache that loads short
@@ -341,22 +378,26 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False):
     w, h, fh = rend_size(proj, kind)
     if full:
         h = fh
+    pct = scale_of(proj, kind)
+    pw, ph, x0, y0 = boxed(w, h, pct)
     t = proj.d["target"]
     k = t.get("vga_colours", 8)
     key = hashlib.sha1(json.dumps(
         ["q1", file_hash(proj.here(s["path"])), kind, w, h, k, t["palette"],
          HOLD_RGB, HOLD_LUM, battle_palette(proj, k) if kind == "vga4"
-         else None]).encode()).hexdigest()[:20]
+         else None] + ([pct] if pct < 100 else [])).encode()).hexdigest()[:20]
     npy = os.path.join(cache_dir(proj), key + ".q.npy")
     if os.path.exists(npy):
         return list(np.load(npy))
-    fr = rgb_frames(proj, sid, w, h, kind, progress)
+    fr = rgb_frames(proj, sid, pw, ph, kind, progress)
     n = len(screens(proj, sid, progress, full))   # (the CGA encode's count)
     fr = fr[:n] if len(fr) >= n else np.concatenate(
         [fr, np.repeat(fr[-1:], n - len(fr), 0)])
     progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
     q = quant_vga(fr, battle_palette(proj, k)) if kind == "vga4" \
         else quant_herc(fr)
+    if pct < 100:
+        q = pad_into(q, w, h, x0, y0)
     np.save(npy + ".part.npy", q)
     os.replace(npy + ".part.npy", npy)
     return list(q)

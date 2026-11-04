@@ -1043,6 +1043,23 @@ class BattleTab(object):
                                                   padx=12)
         self.rnote = ttk.Label(rf, text="", wraplength=900)
         self.rnote.grid(row=1, column=0, columnspan=4, sticky="w")
+        # THE PICTURE'S SIZE, each rendition's: a smaller picture centred in
+        # black is fewer bytes a frame - the black never changes - so a
+        # heavy adapter (Hercules' 640 x 232) can be set down
+        sz = ttk.Frame(rf)
+        sz.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(sz, text="Picture size, of the canvas:").pack(side="left")
+        self.scv = {}
+        for kind, lab in (("cga4", "CGA"), ("vga4", "VGA"),
+                          ("herc", "Hercules")):
+            ttk.Label(sz, text=lab).pack(side="left", padx=(10, 2))
+            v = self.scv[kind] = tk.StringVar()
+            cb = ttk.Combobox(sz, textvariable=v, state="readonly", width=5,
+                              values=["100%", "75%", "67%", "50%"])
+            cb.pack(side="left")
+            cb.bind("<<ComboboxSelected>>", lambda e: self._scale())
+        self.scnote = ttk.Label(rf, text="", wraplength=900)
+        self.scnote.grid(row=3, column=0, columnspan=4, sticky="w")
         r += 1
         # how it ends: the battle's own last clips, whoever the enemy is
         ef = ttk.LabelFrame(f, text="How it ends (each clip is played to its "
@@ -1127,6 +1144,22 @@ class BattleTab(object):
         self.rherc.set(1 if "herc" in rs else 0)
         self.rcol.set(str(t.get("vga_colours", 8)))
         self.rnote.config(text=REND_NOTE.get(int(self.rcol.get()), ""))
+        sc = t.get("scale") or {}
+        bits = []
+        for kind, (w, h) in (("cga4", (320, rows)), ("vga4", (320, rows)),
+                             ("herc", (640, 348 - 2 * (200 - rows)))):
+            pct = int(sc.get(kind, 100))
+            self.scv[kind].set("%d%%" % pct)
+            if pct < 100:
+                import vbtana as A
+                pw, ph, _, _ = A.boxed(w, h, pct)
+                bits.append("%s %d x %d of %d x %d (about %d%% of the bytes)"
+                            % ({"cga4": "CGA", "vga4": "VGA",
+                                "herc": "Hercules"}[kind], pw, ph, w, h,
+                               round(100.0 * pw * ph / (w * h))))
+        self.scnote.config(text=("The picture, centred in black: " +
+                                 "; ".join(bits) + ". The band is the same.")
+                           if bits else "")
         for k in ("victory", "defeat"):
             self.endv[k + "_cb"].config(values=list(d["clips"]))
             self.endv[k].set(d["enemy"].get(k) or "")
@@ -1149,6 +1182,18 @@ class BattleTab(object):
         n = int(self.rcol.get() or 8)
         if n != t.get("vga_colours", 8):
             self.app.edit("set", ("target", "vga_colours"), n)
+
+    def _scale(self):
+        t = self.app.proj.d["target"]
+        sc = dict(t.get("scale") or {})
+        for kind, v in self.scv.items():
+            pct = int(v.get().rstrip("%") or 100)
+            if pct == 100:
+                sc.pop(kind, None)
+            else:
+                sc[kind] = pct
+        if sc != (t.get("scale") or {}):
+            self.app.edit("set", ("target", "scale"), sc or None)
 
     def _end(self, k):
         v = self.endv[k].get() or None

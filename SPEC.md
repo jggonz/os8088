@@ -237652,6 +237652,16 @@ then sets the mode, the palette and the decode.
 - **A record may be 32 KB** where a whole screen is more than 16 (VGA's
   planes, Hercules'): the rings' guard is the header's largest record's,
   16 or 32 KB (`[vb_cgkb]`).
+- **A rendition's PICTURE can be set down** (`target.scale`, the Battle
+  tab's Picture size: 100, 75, 67 or 50% of the canvas - and of the screen,
+  for a full-screen opening): the footage is made at that size - CGA4 by the
+  encoder's own `--box`, VGA4 and Hercules by ffmpeg - and centred in black,
+  its width and left edge in whole bytes (`vbtana.boxed`, `pad_into`). The
+  black never changes, so no record touches it: a frame costs the picture's
+  area, about a quarter of Hercules' 640 x 232 at half size. The band and
+  the menus are the same, and the ENGINE IS UNCHANGED - a smaller picture
+  is only fewer bytes. `vbtscale` holds it on MartyPC's Hercules at 50%:
+  the picture lit inside its box on the glass and nothing outside it.
 
 `vbtadapters` holds each on MartyPC: the title byte for byte against the
 host's decode (VGA's planes read off the card), the fade, the band exact

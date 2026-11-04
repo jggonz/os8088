@@ -16849,6 +16849,15 @@ SOAK = [
         "up under it before the idle loop. Broken on purpose (the band let "
         "in at any opening) the glass check fails",
         needs=("marty", "ffmpeg")),
+    Row("vbtscale", "soak", py("tests/vbtscale.py"), 60.0,
+        "SPEC.md 125.3.2: a rendition's PICTURE SET DOWN, the owner's ask "
+        "(Hercules' 640 x 348 is heavy). On the host the picture at 50% is "
+        "320 x 174 centred in black on Hercules, CGA4 and VGA4 at 75% the "
+        "same, the bundle smaller, a 60% refused; on MartyPC's Hercules "
+        "5150 the half-size opening is lit inside its box and nothing "
+        "outside it, and the battle reaches its menu. Broken on purpose "
+        "(the picture padded at the top left) four checks fail",
+        needs=("marty", "ffmpeg")),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

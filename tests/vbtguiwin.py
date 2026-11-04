@@ -155,6 +155,18 @@ def inner(tmp):
        and str(ot.full_rb.cget("state")) == "disabled",
        "A. opening 1 set FULL SCREEN by its button (%r); the last's button "
        "greyed" % line0.strip())
+    # THE PICTURE'S SIZE (125.3.2): Hercules set down to half on the
+    # Battle tab, then back
+    bt = app.battle_tab
+    bt.scv["herc"].set("50%")
+    bt._scale()
+    sc1, note = app.proj.d["target"].get("scale"), bt.scnote.cget("text")
+    bt.scv["herc"].set("100%")
+    bt._scale()
+    ok(sc1 == {"herc": 50} and "320 x 116" in note
+       and not app.proj.d["target"].get("scale"),
+       "A. Hercules' picture set to 50%% (%r: %r), and back"
+       % (sc1, note[:60]))
     st = app.status.cget("text")
     ok(not errs and not st.startswith(("Error", "Could not", "Failed")),
        "A. nothing raised in a Tk callback (%d), the status %r"

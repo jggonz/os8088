@@ -628,6 +628,10 @@ class Project:
             err("target", "the canvas %s is off a 320x200 screen" % t["canvas"])
         if w != 320 or x != 0 or y != 0:
             info("target", "the engine plays a canvas at 0,0, 320 wide")
+        for k, v in (t.get("scale") or {}).items():
+            if k not in ("cga4", "vga4", "herc") or v not in (100, 75, 67, 50):
+                err("target.scale", "%s at %s%%: a picture is 100, 75, 67 or "
+                    "50%% of its canvas" % (k, v))
         bc, br, bn, bh = t["band"]
         if br < y + h and br + bh > y:
             err("target", "the band overlaps the canvas")
