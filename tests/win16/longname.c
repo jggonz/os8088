@@ -14,7 +14,9 @@
  *   - FindResource of a resource whose TYPE is 28 characters, and its data;
  *   - LoadAccelerators of a 26-character table;
  *   - FindResource in lower case (names are case blind), and the misses: a
- *     21-character name cut to 15 and one with a character too many.
+ *     21-character name cut to 15 and one with a character too many;
+ *   - GlobalAddAtom of a 40-character name twice is one atom, and
+ *     GlobalFindAtom finds it (the table keeps 31 characters of it).
  *
  * Every check that fails is named in the message box, which
  * tests/win16longname.py reads; "LONGNAME OK" when none does.
@@ -58,6 +60,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     HGLOBAL g;
     LPSTR p;
     int i, n;
+    ATOM a1, a2;
 
     (void)prev; (void)cmd; (void)show;
 
@@ -105,6 +108,11 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
 
     check(LoadAccelerators(inst, NACC) != 0, "acc26");
+
+    a1 = GlobalAddAtom(N40);
+    a2 = GlobalAddAtom(N40);
+    check(a1 != 0 && a1 == a2, "atom40");
+    check(a1 != 0 && GlobalFindAtom(N40) == a1, "findatom40");
 
     MessageBox(NULL, res[0] ? res : "LONGNAME OK", "WIN16 long names", MB_OK);
     return 0;

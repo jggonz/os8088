@@ -238034,7 +238034,11 @@ being the instance's. TASKS and TASKB hold a conversation from
 **Global atoms are the registered clipboard formats' table**
 (§124.25.10), as Windows' formats were global atoms. `GlobalAddAtom`,
 `GlobalFindAtom` and `GlobalGetAtomName` (USER.271, *S21 batch 5*) use
-it, and names compare without case, as `AnsiUpper` folds them.
+it, and names compare without case, as `AnsiUpper` folds them. A name
+is kept cut to 31 characters, so its first 31 decide: a longer name is
+found again rather than added once a call, which filled the table with
+copies of it and never found it *(2026-11-04)*. Two names the same for 31
+characters are one atom here, where Windows keeps 255.
 
 **The table is the task part's** *(S24 batch 2; part 10 since S21 batch
 6)*: `W16_NATOM` = 16 names of 31 characters, 512 bytes of part 10, read

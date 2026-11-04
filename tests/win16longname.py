@@ -13,7 +13,8 @@ named in 21 characters (Asteroids' own NUMBEROFPLAYERSDIALOG, which a 16-byte
 copy of the name cut to 15 and so never found), loads a menu named in 40, a
 bitmap named in 255 and one by "#300", a resource of a 28-character TYPE and
 accelerators named in 26, finds the dialog in lower case, and must NOT find
-it cut to 15 or with a character added. Its MessageBox, read off the
+it cut to 15 or with a character added; a 40-character global atom added
+twice is one atom, and GlobalFindAtom finds it. Its MessageBox, read off the
 program's stack, is "LONGNAME OK" or names each check that failed. A dialog
 that was never made is a row that reads "dlg21".
 """

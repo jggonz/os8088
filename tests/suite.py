@@ -17147,8 +17147,9 @@ SOAK = [
         "copy of the name never found, so Asteroids said Error code = -1 on "
         "F2), a menu in 40, a bitmap in 255 and by #300, a resource of a "
         "28-character type and accelerators in 26, the dialog in lower case, "
-        "and must miss it cut to 15 or one longer; its MessageBox must be "
-        "LONGNAME OK",
+        "and must miss it cut to 15 or one longer, and a 40-character "
+        "global atom added twice is one atom GlobalFindAtom finds; its "
+        "MessageBox must be LONGNAME OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),

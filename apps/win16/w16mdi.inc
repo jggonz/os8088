@@ -237,9 +237,10 @@ w16i_atomat:
     push ax
     push si
     push di
-.c:
-    mov al, [es:di]
-    call w16i_up
+    mov cx, 31                      ; a name is kept cut to 31, so 31 the
+.c:                                 ;   same is the same name: a longer one
+    mov al, [es:di]                 ;   found again, not added again (and
+    call w16i_up                    ;   the table filling with copies)
     mov ah, al
     mov al, [si]
     call w16i_up
@@ -248,7 +249,9 @@ w16i_atomat:
     inc si
     inc di
     or al, al
-    jnz .c
+    jz .eq
+    loop .c
+.eq:
     pop di
     pop si
     pop ax
