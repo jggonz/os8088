@@ -778,13 +778,30 @@ class App(object):
         return True
 
     def run(self, tool, argv, done, what=""):
-        """TOOL with ARGV as a process; DONE(result) in the window's thread"""
+        """TOOL with ARGV as a process; DONE(result) in the window's thread.
+        THE PROJECT'S PATH IN ARGV IS TAKEN AFTER THE SAVE: every caller
+        builds ARGV from `proj.path` before this asks for a save, and a
+        project never saved has none yet - so an argument that is None (or
+        the path the project had before a Save As) is the path it has now.
+        It was passed as None, Popen raised inside the event pump, and the
+        window answered nothing again: the first clip of a new project"""
         if self.job:
             self.say("Busy: Cancel first")
             return
+        was = self.proj.path
         if not self.need_saved():
+            self.say("Not saved, so nothing was done")
+            self.pending = []           # (a clip waiting on this is dropped,
+            return                      # not left to block the next one)
+        argv = [self.proj.path if a is None or (was and a == was) else a
+                for a in argv]
+        try:
+            self.job = Job(tool, argv).start()
+        except (OSError, TypeError, ValueError) as e:
+            self.job = None
+            self.pending = []
+            self.say("Could not start %s: %s" % (tool, e))
             return
-        self.job = Job(tool, argv).start()
         self.cancel_b.config(state="normal")
         self.pbar.config(mode="indeterminate", value=0, maximum=1)
         self.pbar.start(40)            # (moving at once: a job has begun)
@@ -804,6 +821,25 @@ class App(object):
         self._done = done
 
     def _poll(self):
+        """The event pump, every 50 ms. IT MUST NEVER DIE: an exception out
+        of a Tk callback is printed where nobody sees it (pythonw on
+        Windows has no console) and the callback is not scheduled again,
+        so every drop and every job's end after it went unanswered"""
+        try:
+            self._poll1()
+        except Exception as e:          # noqa: BLE001
+            import traceback
+            traceback.print_exc()
+            self.pending = []
+            if self.job is None:
+                self.pbar.stop()
+                self.pbar.config(mode="determinate", value=0)
+            self.say("Error: %s (%s) - see the console" % (
+                e, type(e).__name__))
+        finally:
+            self.root.after(50, self._poll)
+
+    def _poll1(self):
         try:
             while True:
                 kind, ev = self.q.get_nowait()
@@ -838,7 +874,6 @@ class App(object):
                         self._next_clip()               # another job
         except queue.Empty:
             pass
-        self.root.after(50, self._poll)
 
     def cancel(self):
         if self.job:

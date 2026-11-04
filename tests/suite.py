@@ -16839,6 +16839,18 @@ SOAK = [
         "outside the BIOS. Broken on purpose (a yield re-borrowing a byte "
         "on) victory never comes",
         needs=("86box",)),
+    Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
+        "The Video Battle builder's WINDOW under Xvfb, its event pump "
+        "driven: a NEW project's first video dropped on the Openings tab, "
+        "the save answered, is read and becomes opening 1, the next two an "
+        "opening and a clip, nothing raised in a Tk callback; the save "
+        "CANCELLED leaves nothing queued and the next drop still works. The "
+        "owner's report (2026-11-04): every job built its arguments from "
+        "the project's path before run() saved, so a never-saved project's "
+        "first job got None, Popen raised inside the pump and the window "
+        "answered nothing after. Broken on purpose (the path not taken "
+        "after the save) the first case fails",
+        needs=("tk", "ffmpeg")),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "

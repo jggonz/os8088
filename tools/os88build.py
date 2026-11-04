@@ -633,6 +633,25 @@ def nasm_version(path):
     return (int(m.group(1)), int(m.group(2))) if m else None
 
 
+def tk_python():
+    """An interpreter that can open the builder's WINDOW, or None: this one,
+    else a python3.N on PATH, whose `tkinter`, Pillow's `ImageTk` and numpy
+    all import - and `xvfb-run` to give it a display. A container's newest
+    python3 often has no Tk where the distribution's own python3.12 does
+    (tests/vbtguiwin.py)"""
+    import shutil
+    if not shutil.which("xvfb-run"):
+        return None
+    probe = "import tkinter, numpy; from PIL import ImageTk"
+    cands = [sys.executable] + [shutil.which("python3.%d" % n)
+                                for n in range(14, 10, -1)]
+    for c in cands:
+        if c and subprocess.run([c, "-c", probe], capture_output=True
+                                ).returncode == 0:
+            return c
+    return None
+
+
 def have_pil():
     """Can THIS interpreter write a picture through Pillow?
 

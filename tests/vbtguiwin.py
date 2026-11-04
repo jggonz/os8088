@@ -1,0 +1,147 @@
+#!/usr/bin/env python3
+"""The Video Battle builder's WINDOW, driven: the first clip of a NEW project
+(tools/os88vbtgui.py's event pump, which tests/vbtguitest.py never opens).
+
+    python3 tests/vbtguiwin.py
+
+The owner's report, 2026-11-04: a video dragged onto the Openings tab of a
+new project asked for the .vbp to be saved, and then nothing - no clip, no
+progress bar, and every later drop or "Add Videos..." did nothing either.
+Every job built its arguments from `proj.path` BEFORE run() asked for the
+save, so the first job of a never-saved project was started with None for
+its file; Popen raised inside the Tk callback that pumps the window's
+events, Tk printed it where nobody looks, and the pump was never scheduled
+again. This row drives that window under Xvfb:
+
+  A. a new project; a video dropped on the Openings tab; the save dialog
+     answered with a path - the clip is read and becomes opening 1; a second
+     dropped there is opening 2; a third added as "Add Videos..." adds one
+     is a clip; nothing raised in a Tk callback, the status not an error;
+  B. a new project; a video dropped; the save dialog CANCELLED - the status
+     says nothing was done, and the next drop (saved this time) still
+     becomes a clip: a cancelled save leaves nothing in the queue.
+
+Broken on purpose (run() not taking the path after the save) A and B fail:
+no clip is ever made (the pump survives it now, and says so).
+
+Needs a Python whose tkinter imports, xvfb-run, and ffmpeg
+(os88build.tk_python(); the suite's `tk` capability).
+"""
+import os
+import subprocess
+import sys
+import tempfile
+import time
+import traceback
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+sys.path.insert(0, os.path.join(ROOT, "tools"))
+fails = []
+
+
+def ok(cond, what):
+    print("%s %s" % ("ok  " if cond else "FAIL", what), flush=True)
+    if not cond:
+        fails.append(what)
+
+
+def inner(tmp):
+    import os88vbtgui as G
+    from tkinter import filedialog
+    vids = []
+    for n in range(4):
+        v = os.path.join(tmp, "clip%d.mp4" % n)
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", "testsrc=size=320x240:rate=15", "-f", "lavfi",
+                        "-i", "sine=f=%d" % (300 + 100 * n), "-t", "2",
+                        "-shortest", v], check=True)
+        vids.append(v)
+    answer = {"p": None}
+    filedialog.asksaveasfilename = lambda **k: answer["p"] or ""
+
+    def window():
+        app = G.App()
+        errs = []
+        app.root.report_callback_exception = lambda *e: errs.append(
+            "".join(traceback.format_exception(*e)))
+        names = [app.nb.tab(t, "text") for t in app.nb.tabs()]
+        app.nb.select(app.nb.tabs()[[i for i, n in enumerate(names)
+                                     if "pening" in n][0]])
+        app.root.update()
+        return app, errs
+
+    def pump(app, cond, secs=90):
+        t = time.time()
+        while time.time() - t < secs:
+            app.root.update()
+            time.sleep(0.02)
+            if cond():
+                return True
+        return False
+
+    # A: the owner's sequence
+    answer["p"] = os.path.join(tmp, "a.vbp")
+    app, errs = window()
+    app.q.put(("drop", ([vids[0]], app.openings_tab.f)))
+    got = pump(app, lambda: app.proj.d["clips"] and not app.pending
+               and not app.job)
+    ok(got and app.proj.path == answer["p"] and
+       [o["clip"] for o in app.proj.d.get("openings", [])] == ["clip0"],
+       "A. the first video of a NEW project, dropped on the Openings tab: "
+       "saved, read and opening 1 (clips %s)" % list(app.proj.d["clips"]))
+    app.q.put(("drop", ([vids[1]], app.openings_tab.f)))
+    app.add_clip_file(vids[2])          # (what "Add Videos..." does)
+    got = pump(app, lambda: len(app.proj.d["clips"]) >= 3 and not app.pending
+               and not app.job)
+    ok(got and [o["clip"] for o in app.proj.d["openings"]]
+       == ["clip0", "clip1"] and "clip2" in app.proj.d["clips"],
+       "A. ...a second dropped there is opening 2, a third added is a clip "
+       "(openings %s)" % [o["clip"] for o in app.proj.d.get("openings", [])])
+    st = app.status.cget("text")
+    ok(not errs and not st.startswith(("Error", "Could not", "Failed")),
+       "A. nothing raised in a Tk callback (%d), the status %r"
+       % (len(errs), st))
+    for e in errs[:2]:
+        print(e)
+    app.root.destroy()
+
+    # B: the save cancelled, then not
+    answer["p"] = None
+    app, errs = window()
+    app.q.put(("drop", ([vids[3]], app.openings_tab.f)))
+    pump(app, lambda: app.status.cget("text").startswith("Not saved"), 20)
+    ok(app.status.cget("text").startswith("Not saved") and not app.pending
+       and not app.job,
+       "B. the save CANCELLED: %r, nothing left queued"
+       % app.status.cget("text"))
+    answer["p"] = os.path.join(tmp, "b.vbp")
+    app.q.put(("drop", ([vids[3]], app.openings_tab.f)))
+    got = pump(app, lambda: app.proj.d["openings"] and not app.pending
+               and not app.job)
+    ok(got and not errs, "B. ...and the next drop, saved, is a clip and an "
+       "opening (%s)" % list(app.proj.d["clips"]))
+    app.root.destroy()
+
+
+def main():
+    if os.environ.get("VBTGUIWIN_INNER"):
+        with tempfile.TemporaryDirectory() as tmp:
+            inner(tmp)
+    else:
+        import os88build
+        py = os88build.tk_python()
+        if not py:
+            sys.exit("vbtguiwin: no python with tkinter and xvfb-run here")
+        return subprocess.run(
+            ["xvfb-run", "-a", py, os.path.abspath(__file__)],
+            env=dict(os.environ, VBTGUIWIN_INNER="1"), cwd=ROOT).returncode
+    if fails:
+        print("%d FAILED" % len(fails))
+        return 1
+    print("all passed")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
