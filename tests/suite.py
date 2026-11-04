@@ -16712,6 +16712,18 @@ SOAK = [
         wants=("build/video.o88", "build/kernel.sys", "build/boothd.bin",
                "build/mbr.bin", "build/hdd.drv", "build/ctrl.drv",
                "build/sound.drv")),
+    Row("vbtbuild", "soak", py("tests/vbtbuild.py"), 23.0,
+        "SPEC.md 125.2, VBATTLE-BUILDER-PLAN wave 1: the builder's project "
+        "model and build, host-side. The demo battle re-expressed as a "
+        "PROJECT must build the shipped BATTLE.VBT byte for byte (full and "
+        "floppy), and the bundle must be the same from two processes - it "
+        "was not, while vbtscene seeded its noise with str's per-process "
+        "hash(). Then the model's checks must bite (no anchor, a missing "
+        "action, a fifth character), undo must invert an edit, a save must "
+        "lose nothing, and the analysis must find a planted anchor and exit "
+        "at a score of 0. A model or build that goes wrong here writes a "
+        "bundle that verifies and plays the wrong battle",
+        needs=("pil",)),
     Row("videnc", "soak", py("tests/videnc.py"), 1300.0,
         "SPEC.md 98.2.1: the encoder front end and its budgets, host-side. "
         "ffmpeg makes a 16:9 source with a still tail and tools/os88venc.py "

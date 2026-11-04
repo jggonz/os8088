@@ -26,6 +26,7 @@ host tool (os88vbt.py) can join it to any anchor frame and back exactly.
 """
 
 import math
+import zlib
 import struct
 
 import numpy as np
@@ -689,7 +690,9 @@ def music(bars=16):
 
 
 def sfx(name):
-    rng = np.random.RandomState(abs(hash(name)) % 1000)
+    # (a seed from the name that is the same in every process: str's
+    # hash() is randomised per process, so the bundle was not reproducible)
+    rng = np.random.RandomState(zlib.crc32(name.encode()) % 1000)
     if name == "slash":
         n = int(RATE * 0.25)
         x = rng.uniform(-1, 1, n)

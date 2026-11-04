@@ -248,6 +248,47 @@ victory, and a second play reclaiming the rings. The demo bundle the same.
 The gunner clips need nothing of their own: in at their first frame, out
 onto idle frame 0 at about 5.5 to 6% of pixels, like the knight's.
 
+## The builder, wave 1: the project is the product (2026-11-04)
+
+The owner, on the engine: "good enough for now to move on to the builder."
+And on joins: their clips are generated, so each has one join point at
+most, and "we'll probably need a way to hold more than one set of join
+clips". The ~2 s an action can wait for its one anchor was, in their
+words, not intolerable for this style of battle.
+
+Decisions:
+- **The entries got a region of their own first** (bundle version 4).
+  Eight of the owner's clips had already overflowed the 60 KB the idle
+  loop and the entries shared. A paragraph number names each entry, so
+  any number of join sets can be held, as far as memory goes, and fewer
+  join points simply cost fewer bytes.
+- **The model before the window** (the plan's section 2): a project file,
+  every edit a method through one door so undo is free, the checks and
+  every recommendation computed and never stored. The window will be a
+  view of it; a test already drives it as the window will.
+- **A source is encoded once, whole, and sliced.** The joins are made
+  between DECODED screens, so a clip cut from the middle of an encode is
+  as exact as one encoded alone. The decoded screens are cached beside the
+  project by the source's content hash: the owner's eight clips took 90 s
+  the first time and the build 3 s after.
+
+Discoveries:
+- **The shipped bundle was never reproducible.** Re-expressing the demo as
+  a project and building it gave the same pictures and different sound.
+  `vbtscene` seeded its effects' noise with `hash(name)`, and Python
+  randomises a string's hash in every process. The fix is a stable seed
+  (a CRC of the name); the new test builds the demo in separate processes
+  to keep it fixed.
+- **A demo action does not start exactly on idle frame 0.** The test's
+  first draft asserted that it did, and the analysis disagreed for the
+  beetle's lunge (anchors 7, 9, 14, 23 score better). The analysis was
+  right; the test now plants a clip that starts on a known idle frame
+  instead.
+
+Observed: the demo project builds `demo`'s bundle byte for byte, full and
+floppy; the H3 project, its points from `recommend`, plays to victory on
+86Box's ST11M with 0 stalls, 0 late, 0 sound late and 0 underruns.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

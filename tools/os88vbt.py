@@ -16,6 +16,9 @@ the decoder will really hold, so
     goes on at EXIT + 1.
 
 Commands:
+    os88vbt.py build PROJECT [-o OUT.VBT] [--json]  a project (tools/vbtproj.py)
+    os88vbt.py demo-project OUT.vbp [--bars N] [--floppy]   the demo as one
+    os88vbt.py recommend PROJECT    the idle loop's and each clip's points
     os88vbt.py demo OUT.VBT [--bars N] [--preview DIR]   the original battle
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
@@ -172,11 +175,13 @@ def frame_sound(track, nframes, spf, own):
 
 
 def place(effects, nframes, spf, sfx):
-    """An action's sound: its effects placed at their frames, mixed"""
+    """An action's sound: its effects placed at their frames, mixed.
+    EFFECTS is {frame: name} or a list of (frame, name)"""
     if not effects:
         return None
     t = np.zeros(nframes * spf)
-    for f, name in effects.items():
+    items = effects.items() if isinstance(effects, dict) else effects
+    for f, name in items:
         x = sfx[name]
         a = f * spf
         n = min(len(x), len(t) - a)
@@ -565,6 +570,130 @@ def demo(bars=16, floppy=False):
     return b
 
 
+# --- a PROJECT (tools/vbtproj.py) built ----------------------------------------------
+
+def battle_of(proj, progress=None):
+    """A project as a Battle: every source's screens (tools/vbtana.py,
+    cached), its sounds, and the script the engine of today plays"""
+    import vbtana as A
+    pg = progress or (lambda *a: None)
+    d, t = proj.d, proj.d["target"]
+    b = Battle(t["palette"], t["canvas"][3], t["fps"], t["rate"])
+    b.band = tuple(t["band"])
+    b.canvas = tuple(t["canvas"])
+    b.idle = A.idle_of(proj, pg)
+    for sid in d["sounds"]:
+        b.sfx[sid] = A.sound(proj, sid)
+    opened = [o["clip"] for o in d["openings"]]
+    for i, o in enumerate(d["openings"]):
+        c = d["clips"][o["clip"]]
+        pg("clips", i, len(d["clips"]), o["clip"])
+        b.openings.append(dict(name=o["clip"], frames=A.frames_of(proj, o["clip"], pg),
+                               sound=b.sfx[o["sound"]] if o.get("sound") else None,
+                               exit=c["exit"]))
+    for i, (cid, c) in enumerate(d["clips"].items()):
+        if cid in opened:
+            continue
+        pg("clips", i, len(d["clips"]), cid)
+        cues = []
+        for q in c["cues"]:
+            nm = q["sound"]
+            lv = q.get("level", 1.0)
+            if lv != 1.0:
+                nm = "%s*%g" % (q["sound"], lv)
+                b.sfx[nm] = b.sfx[q["sound"]] * lv
+            cues.append((q["frame"], nm))
+        b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg),
+                            cues=cues, joins=c["joins"], exit=c["exit"],
+                            ends=c["ends"], anchors=c["anchors"]))
+    b.music = b.sfx[d["music"]["sound"]]
+    b.music_at = d["music"]["join"]
+    b.ui = dict(d["ui_sounds"])
+    b.script = proj.engine_script()
+    return b
+
+
+def build_project(proj, progress=None):
+    errs = proj.errors()
+    if errs:
+        raise ValueError("the project has errors:\n  " +
+                         "\n  ".join(map(repr, errs)))
+    b = battle_of(proj, progress)
+    data = build(b)
+    verify(data, quiet=True)
+    return data
+
+
+def demo_project(path, bars=16, floppy=False):
+    """The demo battle (demo()) as a PROJECT: every source a scene of
+    tools/vbtscene.py, so that it needs no footage. Building it must give
+    demo()'s bundle byte for byte (tests/vbtbuild.py)"""
+    import vbtproj as P
+    import vbtscene as S
+    p = P.Project()
+    p.set(("name",), "The demo battle")
+    p.set(("target", "palette"), 0x50)
+    p.set(("target", "fps"), S.FPS)
+    p.set(("target", "rate"), S.RATE)
+    p.set(("target", "canvas"), [0, 0, 320, S.H])
+    for n in S.SFX + S.UI_SFX:
+        p.add_sound(n, scene=n)
+    p.set(("sounds", "music"), {"kind": "scene", "name": "music",
+                                "bars": 2 if floppy else bars, "level": 1.0})
+    p.set_music("music", 0)
+    p.add_source("idle", scene="idle")
+    p.set_idle("idle", (0, S.IDLE_N))
+    for n in ("title", "reveal"):
+        p.add_source(n, scene=n)
+        p.add_clip(n, n, (0, len(P_frames(n)) - 1), anchors=(), exit=0,
+                   joins=n == "reveal")
+    p.add_opening("title", "fanfare")
+    p.add_opening("reveal", "riser")
+    for name, mk, joins in S.CLIPS:
+        if floppy and name == "ari_limit":
+            continue
+        fr, cues = mk()
+        p.add_source(name, scene=name)
+        p.add_clip(name, name, (0, len(fr) - 1), anchors=(0, 6, 12, 18),
+                   exit=0, joins=joins, ends=not joins,
+                   cues=[{"frame": f, "sound": c, "level": 1.0}
+                         for f, c in cues.items()])
+    for k, v in dict(move="tick", take="ok", deny="deny").items():
+        p.set(("ui_sounds", k), v)
+
+    def act(aid, label, clip, amount, mp=0, heal=False):
+        p.add_action(aid, label, target="allies" if heal else "enemy",
+                     effects=[{"verb": "heal" if heal else "damage",
+                               "amount": amount}],
+                     cost={"mp": mp} if mp else {}, pools={"hit": [clip]})
+    act("attack", "Attack", "ari_attack", 95)
+    act("bolt", "Bolt", "ari_bolt", 180, 10)
+    if not floppy:
+        act("limit", "Limit", "ari_limit", 420, 20)
+    act("fire", "Fire", "bram_attack", 130, 8)
+    act("heal", "Heal", "bram_heal", 90, 12, heal=True)
+    act("lunge", "Lunge", "beetle_attack", 74)
+    p.set(("actions", "lunge", "target"), "character")
+    ari = p.add_character("ARI", hp=320, mp=40)
+    for a in ("attack", "bolt") + (() if floppy else ("limit",)):
+        p.menu_add(ari, action=a)
+    bram = p.add_character("BRAM", hp=260, mp=60)
+    for a in ("fire", "heal"):
+        p.menu_add(bram, action=a)
+    p.set(("enemy", "name"), "BEETLE")
+    p.set(("enemy", "hp"), 1200)
+    p.enemy_move("lunge")
+    p.set(("enemy", "victory"), "victory")
+    p.set(("enemy", "defeat"), "defeat")
+    p.save(path)
+    return p
+
+
+def P_frames(name):
+    import vbtana as A
+    return A._scene(name)
+
+
 def preview(b, d):
     import vbtscene as S
     from PIL import Image
@@ -615,6 +744,69 @@ def cmd_verify(a):
     verify(open(a.file, "rb").read())
 
 
+def cmd_build(a):
+    import json
+    import vbtproj as P
+    import vbtana as A
+    proj = P.Project.load(a.project)
+
+    def say(o):
+        if a.json:
+            print(json.dumps(o), flush=True)
+
+    def progress(stage, done, of, what):
+        say(dict(stage=stage, done=done, of=of, what=what))
+    for x in proj.check():
+        if a.json:
+            say(dict(stage="check", level=x.level, where=x.where, text=x.text))
+        elif x.level != "INFO" or a.verbose:
+            print(x)
+    data = build_project(proj, progress)
+    out = a.out or os.path.join(os.path.dirname(proj.path), "BATTLE.VBT")
+    with open(out, "wb") as f:
+        f.write(data)
+    bud = A.budget(proj, data)
+    if a.json:
+        say(dict(stage="done", out=out, bytes=len(data), budget=bud))
+        return
+    print("%s: %d bytes; idle loop %d bytes, entries %d" % (
+        out, len(data), bud["idle_bytes"], bud["entries"]))
+    for c in bud["clips"]:
+        print("  %-14s %7d bytes %5.1f KB/s (%3.0f%% of the disk) anchors %s"
+              % (c["name"], c["bytes"], c["rate"] / 1024, c["of_disk"] * 100,
+                 c["anchors"]))
+
+
+def cmd_demo_project(a):
+    p = demo_project(a.out, a.bars, a.floppy)
+    print("%s: %d clips, %d characters" % (a.out, len(p.d["clips"]),
+                                          len(p.d["characters"])))
+
+
+def cmd_recommend(a):
+    import vbtproj as P
+    import vbtana as A
+    proj = P.Project.load(a.project)
+    i = proj.d["idle"]
+    src = A.screens(proj, i["source"])
+    print("idle (%s, %d frames): loop now %s" % (i["source"], len(src),
+                                                  i["loop"]))
+    for sc, s0, s1 in A.loop_candidates(src, a.min_loop):
+        print("  loop %3d..%3d (%d frames): its seam %.2f%% of pixels"
+              % (s0, s1 - 1, s1 - s0, sc * 100))
+    idle = A.idle_of(proj)
+    for cid, c in proj.d["clips"].items():
+        if any(o["clip"] == cid for o in proj.d["openings"]):
+            continue
+        fr = A.screens(proj, c["source"])
+        r = A.attach(fr, idle)
+        print("%s: in at %d (%.2f%%), anchors %s, out at %d onto idle %d "
+              "(%.2f%%); now in %d anchors %s out %d exit %d" % (
+                  cid, r["first"], r["in_score"] * 100, r["anchors"],
+                  r["last"], r["exit"], r["exit_score"] * 100, c["in"],
+                  c["anchors"], c["out"], c["exit"]))
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     sp = p.add_subparsers(dest="cmd", required=True)
@@ -627,6 +819,23 @@ def main(argv=None):
                         "short enough to be resident (SPEC.md 125.4)")
     q.add_argument("--preview", help="write a contact sheet per clip here")
     q.set_defaults(fn=cmd_demo)
+    q = sp.add_parser("build", help="build a project to a bundle")
+    q.add_argument("project")
+    q.add_argument("-o", "--out")
+    q.add_argument("--json", action="store_true",
+                   help="progress and the result as JSON lines")
+    q.add_argument("-v", "--verbose", action="store_true",
+                   help="also say what the engine does not play yet")
+    q.set_defaults(fn=cmd_build)
+    q = sp.add_parser("demo-project", help="the demo battle as a project")
+    q.add_argument("out")
+    q.add_argument("--bars", type=int, default=16)
+    q.add_argument("--floppy", action="store_true")
+    q.set_defaults(fn=cmd_demo_project)
+    q = sp.add_parser("recommend", help="the loop and attachment points")
+    q.add_argument("project")
+    q.add_argument("--min-loop", type=int, default=20)
+    q.set_defaults(fn=cmd_recommend)
     q = sp.add_parser("info")
     q.add_argument("file")
     q.set_defaults(fn=cmd_info)

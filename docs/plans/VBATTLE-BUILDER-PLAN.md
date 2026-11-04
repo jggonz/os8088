@@ -1,7 +1,7 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: DESIGN, revised with the owner's answers (2026-11-04).** Nothing
-here is built. It turns a battle's footage into a `.VBT` bundle (SPEC.md
+**Status: wave 1 BUILT (2026-11-04): the model, the analysis and the
+command line (10.5).** The window is not built yet. It turns a battle's footage into a `.VBT` bundle (SPEC.md
 §125) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an
 action DOES.
@@ -354,10 +354,33 @@ any of the builder's (section 7's order moves). Its contents:
    125, format version 3): two 48 KB clip rings, each record's sound, per
    clip anchors, the openings chained, the music joining at an offset. The
    250 KB Limit streamed in real time on MartyPC's XT with 0 late frames.
-1. **The model and the command line**:
-   - `vbtproj`, `vbtana`, `os88vbt build PROJECT`;
-   - the demo re-expressed as a project;
-   - characters, menus and actions in the model (section 11).
+1. **The model and the command line**. **DONE 2026-11-04**:
+   - [x] `tools/vbtproj.py`: the project file (version 1, an upgrader that
+     refuses what it cannot read), every edit a method through one door
+     with undo and redo, `check()` with ERROR / WARN / INFO (INFO: what
+     the engine of today does not play yet), and `engine_script()`, the
+     subset the engine plays now;
+   - [x] `tools/vbtana.py`: a source's DECODED screens (os88venc for the
+     target, cached by the source's content hash beside the project),
+     sounds (a file, a scene's, or a range of a source's own soundtrack),
+     loop candidates, attachment (in, anchors, out, exit, each scored),
+     the longest wait, the budget against the profile's disk;
+   - [x] `os88vbt.py build PROJECT [--json]`, `demo-project`, `recommend`;
+   - [x] the demo re-expressed as a project, building the shipped bundle
+     byte for byte; the owner's H3 footage as a project, its points from
+     `recommend`, played to victory on 86Box's ST11M with 0 stalls;
+   - [x] characters (1 to 4), menus (top, sub, side), actions with
+     section 11's verbs and pools, the enemy's stances and moves, in the
+     model and checked;
+   - [x] **the ENTRIES as a region of their own** (bundle version 4,
+     SPEC.md 125.2), for the owner's "more than one set of join clips":
+     a paragraph number names each entry, so they take what memory
+     there is rather than sharing 60 KB with the idle loop;
+   - [x] `tests/vbtbuild.py` (soak).
+   Not in it, and why: the engine still plays the subset `engine_script()`
+   makes (two characters, a flat menu of four, DAMAGE and HEAL, the first
+   HIT clip, the enemy's first move). `check()` says so as INFO on each
+   project. The rules are wave 4.
 2. **The window's shell; the Battle tab (sizes, palette, music and its
    loop) and the Idle tab.**
 3. **The Clips tab**: attachments, effects on the timeline, listening.
