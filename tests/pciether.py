@@ -216,7 +216,14 @@ def main():
     srv.start()
     say("http server on %s, %d byte page" % (URL, len(PAGE)))
 
-    os88qemu.make_test("PCIETHER=1", "TESTIMG=build/pciethertest.img",
+    # NOCARD=1: no AdLib. make_test gives every machine one by default, and
+    # kern_mega then loads SOUND.DRV (row 0, WANT 1) although this disk's
+    # SYSTEM.CFG wants bit 11 alone - against SPEC.md 51.3.1's "a settings
+    # file that deserialises always wins", and not this feature's to settle
+    # (docs/plans/PCIETHER-PLAN.md, open). The gate's machine is the card and
+    # nothing else, so "PCIETHER.DRV is the only driver up" stays an assertion
+    os88qemu.make_test("PCIETHER=1", "NOCARD=1",
+                       "TESTIMG=build/pciethertest.img",
                        "TESTAPPS=build/brtest.img")
     m = MQemu()
     try:
@@ -273,8 +280,22 @@ def main():
                      % (row, want, err))
         live = [i for i, s in enumerate(rows()) if s]
         if live != [row]:
-            fails.append("drv_tab rows %s hold a segment: the gate disk asks "
-                         "for PCIETHER.DRV (row %d) alone" % (live, row))
+            # name each one: its file (the kernel string DRVR_FILE points
+            # at), and the WANT and DRVE_* bytes that say why it is up
+            raw = m.read(S("drv_tab"), nrows * DRVR_SZ)
+            names = []
+            for i in live:
+                if i == row:
+                    continue
+                r = raw[i * DRVR_SZ:(i + 1) * DRVR_SZ]
+                kbase = S("drv_f_pcieth") - ksyms["drv_f_pcieth"]
+                fn = m.read(kbase + u16(r, DRVR_FILE), 13)
+                names.append("row %d %s want %d err %d" % (
+                    i, fn.split(b"\0")[0].decode("ascii", "replace"),
+                    r[DRVR_WANT], r[DRVR_ERR]))
+            fails.append("drv_tab rows %s hold a segment (%s): the gate disk "
+                         "asks for PCIETHER.DRV (row %d) alone"
+                         % (live, "; ".join(names), row))
         say("PCIETHER.DRV: row %d, selector/segment %04X, base %06X"
             % (row, seg, m.lin(seg)))
 

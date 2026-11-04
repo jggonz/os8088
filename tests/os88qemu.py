@@ -813,8 +813,15 @@ def seg_snap(q, word, spans, base=None, what="a read through a heap base",
     `word` names, in one consistent snapshot - os88marty.seg_snap's twin."""
     # (under $OS88_MEGA the word names an LDT SELECTOR: `lin` resolves it,
     # and os88geom.drv_base - a real-mode HMA sum - is lin's job there too)
-    lin = (lambda s: globals()["lin"](s, 0)) if MEGA \
-        else (base or (lambda s: s << 4))
+    # ...and a kern_mega guest under PLAIN QEMU (tests/pciether.py's MQemu,
+    # which decodes its own GDT/LDT because $OS88_MEGA means Bochs) carries
+    # `sel_base`: its words are selectors too, and `q.lin` resolves them
+    if MEGA:
+        lin = lambda s: globals()["lin"](s, 0)       # noqa: E731
+    elif hasattr(q, "sel_base"):
+        lin = lambda s: q.lin(s, 0)                  # noqa: E731
+    else:
+        lin = base or (lambda s: s << 4)
     u16 = lambda b: b[0] | (b[1] << 8)          # noqa: E731
     busy = _busy(q)
     for _ in range(2):

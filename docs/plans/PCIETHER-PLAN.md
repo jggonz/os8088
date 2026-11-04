@@ -24,28 +24,62 @@ working (a boot or a gate row said so, named beside it).
 
 ## Stories
 
-- [ ] **S1 Contract.** SPEC §125 and this plan. *(lead)*
-- [b] **S2 NIC seam.** `drivers/ether/` reaches the card through the names
-  §125.2 lists; `ETHER.DRV` assembles byte-identical. *(drv)*
-- [b] **S3 PCI layer.** `drivers/pciether/pci.inc`: present, find by
+**[x] = seen** by the `pciether` row on 2026-11-04 (QEMU, kern_mega, a PCI
+RTL8139 on slirp): PCIETHER.DRV attached at row 10 with its image above 1MB
+(FC3000), QEMU's station address read from IDR0..5, DHCP bound to 10.0.2.15,
+the Browser's GET reached the row's own server and the page laid out, rx 7
+tx 9, no overflow reset.
+
+- [x] **S1 Contract.** SPEC §125 and this plan. *(lead)*
+- [x] **S2 NIC seam.** `drivers/ether/` reaches the card through the names
+  §125.2 lists; `ETHER.DRV` assembles byte-identical (four variants and
+  `os88net.raw` re-`cmp`ed by the verifier; the ETHER.DRV rows below all
+  pass). *(drv)*
+- [x] **S3 PCI layer.** `drivers/pciether/pci.inc`: present, find by
   vendor:device table, config byte/word read/write, I/O BAR, enable I/O +
   bus master; the CPU gate. *(drv)*
-- [b] **S4 RTL8139 backend.** `drivers/pciether/rtl8139.inc` per §125.4:
-  reset, MAC, ring claim, receive, overflow, transmit, stop. *(drv)*
+- [x] **S4 RTL8139 backend.** `drivers/pciether/rtl8139.inc` per §125.4:
+  reset, MAC, ring claim, receive, transmit, stop. *Receive overflow and
+  detach were not exercised by the row.* *(drv)*
 - [b] **S5 The driver.** `pciether.asm`, its build rule, the Ethernet page
-  naming the card (`RTL8139`) and no I/O base field. *(drv)*
-- [ ] **S6 The kern_mega row.** `drv_tab`, `SYSTEM.CFG` bit, title, Drivers
-  page; second-of-class refusal; kern_mega budget held; other kernels
-  byte-identical. *(kmega)*
-- [ ] **S7 Disks.** On kern_mega's system disks only; a gate disk wanting
-  it. *(harness)*
-- [ ] **S8 QEMU gate.** A row that boots kern_mega with `-device rtl8139` on
-  slirp and checks DHCP bound, a TCP fetch from the host, and the counters;
-  registered in `tests/suite.py`. *(harness)*
-- [ ] **S9 Period machine.** A `vm/` 86Box profile — a PCI board with the
-  RTL8139C+ — booting the gate disk, and docs/86BOX.md's line. *(harness)*
+  naming the card (`RTL8139`) and no I/O base field. *Attached and served
+  sockets (seen); the Ethernet page itself was not looked at.* *(drv)*
+- [b] **S6 The kern_mega row.** `drv_tab` row 10, `SYSTEM.CFG` bit 11, title
+  `PCI Ethernet`, `DRVE_CLASS` "Class already in use"; DRVM_PCIETH 39 KB and a
+  per-kernel `DRVC_NET` ceiling (owner D3: `DRVM_CEIL_NET_MEGA` 39, 34
+  elsewhere); kern_mega 5,120 spare, no rung crossed; kern_big, kern_emu,
+  kern_small byte-identical. *The row attaching is seen; the Drivers page,
+  the second-of-class refusal and DOS's "Up to 39K" were not looked at.*
+  *(kmega)*
+- [x] **S7 Disks.** On kern_mega's system disks only; `make pciethertest`.
+  *(harness)*
+- [x] **S8 QEMU gate.** `tests/pciether.py`, soak row `pciether`, and
+  `stknosave-pciether` for the shared stack's NOSAVE markers. *(harness)*
+- [b] **S9 Period machine.** `vm/pentium-pciether` (430FX, `rtl8139c+` -
+  the internal name at 86Box's pinned commit) and `make pentium-pciether`.
+  *Never launched.* *(harness)*
 - [ ] **S10 Next cards** *(deferred)*: RTL8029 (NE2000 on PCI: `ne2000.inc`
   behind the PCI layer's base), AMD PCnet, Intel 8255x.
+
+## Open findings
+
+1. **kern_mega loaded SOUND.DRV against SYSTEM.CFG.** On QEMU with an AdLib,
+   the gate disk (bitmap 0x0800, bit 11 alone) came up with row 0 SOUND.DRV
+   `WANT 1, ERR 0`, against SPEC §51.3.1's "a settings file that
+   deserialises always wins". Not this feature's change (row 10 is appended
+   after every existing one); probably older kern_mega behaviour, unproven.
+   The gate now runs `NOCARD=1`. Needs its own look.
+2. **A 3.6-4KB frame at the ring's end** (WRAP=1, a jumbo or hostile frame)
+   can write up to ~512 bytes past the claim; Linux has the same exposure.
+   Closing it costs ~1KB of claim - an owner decision.
+3. **DOS trips with a live bus master.** Restart unloads every driver; nobody
+   has confirmed that kern_mega's DOS-trip and windowed-DOS paths never hand
+   the ring's conventional memory to DOS while the driver stays loaded.
+4. **No ring memory reads as "No hardware found"** (`eth_attach`'s `.none`).
+5. **RXOVW resets the whole ring** (§72.2's 8390 rule); Linux only acks it.
+6. **Rows not run:** `megacdrom` (its disk's `KMODDIR` changed),
+   `pmbox`, `pmbox2` - they need the automation 86Box (`build/86box/`), which
+   this machine has not built.
 
 ## Log
 - 2026-11-04 (drv): S2-S5 built, host checks only. ETHER.DRV (plain, -DETH_BASE,
@@ -63,3 +97,11 @@ working (a boot or a gate row said so, named beside it).
   `OS88_DRV_HICLAIM` alone sets no header bit) with the ring `MEMP_CONV`;
   `pci_present` keeps DI (B101h returns EDI); an `FFF0h` header waits, and the
   length bound is Linux's 1,536 + 4. Image 17,259 unpacked, 10,950 packed.
+- 2026-11-04 (lead, final pass): `pciether` failed twice before passing.
+  First `dispcp`'s listing read the Disk window's names through `dsk_dseg`
+  as a paragraph - under kern_mega it is a selector - so `os88qemu.seg_snap`
+  now resolves through `q.lin` when the QEMU object decodes selectors
+  (`MQemu`, nothing else). Then SOUND.DRV was up beside it (finding 1); the
+  gate's machine is now `NOCARD=1`. Union: 15 rows + `pciether` +
+  `stknosave-pciether` pass on the host, `megainst`, `megahddtick`, `brmega`
+  pass under Bochs in Docker.

@@ -2080,6 +2080,17 @@ FAST = [
         "is a landmine for whoever edits the TCP stack next. "
         "SOAK and not fast: every one of those markers is ETHER.DRV's "
         "own, so this is a per-driver row"),
+    Row("stknosave-pciether", "soak",
+        py("tools/stkdepth.py", "drivers/pciether/pciether.asm",
+           "-I", "drivers/pciether/", "-I", "drivers/ether/",
+           "-I", "drivers/net/", "-I", "drivers/", "-I", "apps/", "--check"),
+        0.4,
+        "...and the same markers as PCIETHER.DRV assembles them (SPEC.md "
+        "125.2): the stack is SHARED SOURCE, so a NOSAVE that holds in "
+        "ETHER.DRV's image can still break here, where the NIC seam calls "
+        "the RTL8139 backend and rt_es puts an OSAPI_SEG call on the "
+        "receive and transmit path. Measured 2026-11-04: 12 dropped saves "
+        "across 5 routines, all holding"),
     Row("sheetfmtlib", "fast",
         py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
         "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
@@ -19815,7 +19826,7 @@ SOAK = [
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
         locks=("port:8090",)),
-    Row("pciether", "soak", py("tests/pciether.py"), 120.0,
+    Row("pciether", "soak", py("tests/pciether.py"), 20.0,
         "SPEC.md 125 (docs/plans/PCIETHER-PLAN.md S8): PCIETHER.DRV on "
         "kern_mega with a PCI RTL8139 (`-device rtl8139` on slirp, "
         "os88qemu.make_test's PCIETHER=1) - the driver attached off a "
@@ -19825,10 +19836,11 @@ SOAK = [
         "frame counters moving with no receive-overflow reset. QEMU by name: "
         "MartyPC has no NIC, Bochs has no RTL8139 and 86Box cannot be "
         "asserted against (vm/pentium-pciether is where a person LOOKS). "
-        "UNRUN when registered - the harness agent may not run a row - so the "
-        "first run is the lead's final pass; kern_mega's selectors are "
-        "decoded through the GDT/LDT in `info registers` (tests/pciether.py "
-        "MQemu), which one boot confirmed against CS.",
+        "The machine carries no AdLib (NOCARD=1), so PCIETHER.DRV is the one "
+        "driver up. kern_mega's selectors are decoded through the GDT/LDT "
+        "in `info registers` (tests/pciether.py MQemu). Measured 14.7s on "
+        "2026-11-04, its first run: row 10, the image at FC3000 (above 1MB), "
+        "DHCP bound, the page fetched, rx 7 tx 9, no overflow reset.",
         needs=("qemu", "nasm"), serial=True,
         wants=("build/pciethertest.img", "build/brtest.img",
                "build/megak/kernel.map", "build/pciether.bin",
