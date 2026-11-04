@@ -2262,12 +2262,6 @@ w16_bindinit:
     stosb
     loop .c
     mov word [w16_nbind], W16_NFIXED
-%ifdef W16_TRACE
-    mov di, w16_trow                ; ES = DS here
-    mov cx, W16_NBIND
-    mov ax, 0xFFFF
-    rep stosw
-%endif
     pop es
     pop di
     pop si
@@ -2326,13 +2320,6 @@ w16_bindrow:
     jae .full
     inc word [w16_nbind]
     mov [cs:w16l_rowslot + bx], dx
-%ifdef W16_TRACE
-    push bx
-    mov bx, dx
-    shl bx, 1
-    mov [w16_trow + bx], ax
-    pop bx
-%endif
     mov bx, [cs:w16l_rowslot + bx]
     shl bx, 1
     shl bx, 1
