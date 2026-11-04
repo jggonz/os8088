@@ -11134,7 +11134,7 @@ $(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/
 # (LESSONS.md 9).
 C64SRC := apps/c64/c64io.c apps/c64/c64kbd.c apps/c64/c64scr.c \
           apps/c64/c64menu.c apps/c64/c64cmd.c apps/c64/c64load.c \
-          apps/c64/c64about.c
+          apps/c64/c64about.c apps/c64/c64disk.c
 C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc \
           apps/c64/c64fast.inc
 C64HOST := apps/c64/build.sh apps/c64/hosttest/os88.h \

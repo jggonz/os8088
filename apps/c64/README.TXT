@@ -35,9 +35,13 @@ distributes them.
 
 WHAT THIS MACHINE IS NOT
 ------------------------
-There is no 1541, no datasette and no cartridge port, so a LOAD from drive 8
-answers the way a C64 with nothing plugged into the serial port answers -
-which is the honest machine, not a defect. Typed at this machine, verbatim:
+There is no 1541, no datasette and no cartridge port. File > Attach disk
+image... puts a .D64 on drive 8, and the KERNAL's LOAD is served from it:
+LOAD"$",8 lists it, LOAD"NAME",8 and LOAD"*",8,1 load from it. That is not a
+real drive - a program with its own fast loader, or one that talks to the
+drive directly, finds nothing there. With no disk on drive 8 (or for any
+other device) a LOAD answers the way a C64 with nothing plugged into the
+serial port answers. Typed at this machine, verbatim:
 
     LOAD"*",8
 

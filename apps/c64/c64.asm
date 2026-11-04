@@ -158,4 +158,32 @@ section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
 %include "c64/c64band.inc"          ; the 1bpp composers, the span compare and
                                     ; the row signature (C64-SPEC 9.5)
 
+; -----------------------------------------------------------------------------
+; unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
+;                      unsigned off_lo, unsigned off_hi)
+; os88_file_read_at() into a FAR buffer at seg:0 - drive 8's image is a claim
+; of 171KB and read into it 32KB at a time (C64-SPEC 11.5). The same contract:
+; the offset and the capacity a whole number of clusters, the answer the bytes
+; delivered, 0 at the end or refused.
+; -----------------------------------------------------------------------------
+_c64_read_at:
+    push bp
+    mov bp, sp
+    push si
+    push es
+    mov si, [bp+4]
+    mov es, [bp+6]
+    xor bx, bx
+    mov cx, [bp+8]
+    mov ax, [bp+10]
+    mov dx, [bp+12]
+    call OSAPI_FILE_READ_AT
+    jnc .ok
+    xor ax, ax
+.ok:
+    pop es
+    pop si
+    pop bp
+    ret
+
     CC_IMAGE_END                    ; cc_bss_end and cc_image_end

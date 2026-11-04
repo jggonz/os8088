@@ -85,6 +85,7 @@
 #define C64_M_HELP  4
 
 #define C64_I_ATTACH   0                    /* File, 10 items */
+#define C64_I_DISK     1
 #define C64_I_RESETCPU 6
 #define C64_I_POWER    7
 #define C64_I_EXIT     9
@@ -120,26 +121,18 @@
  *     _tail and reset_submenu) ------------------------------------------- */
 static const char *c64_file_items[] = {
     "Smart attach...  Alt+A",               /* :279  + hotkeys.vhk <Alt>a */
-    D "Attach disk image",                  /* :286. NO CAPTION: it is a
-                                             * UI_MENU_TYPE_SUBMENU with a
-                                             * .submenu and NO .action, and a
-                                             * VICE hotkey binds to an ACTION,
-                                             * so VICE prints no chord on it.
-                                             * `<Alt>8` is drive-attach-8:0
-                                             * (hotkeys-drive.vhk:9), an item
-                                             * INSIDE that submenu, and
-                                             * captioning the head with it
-                                             * tells the reader Alt+8 opens a
-                                             * list when in VICE it attaches
-                                             * to drive 8.
-                                             * No 1541 in this build: a D64
-                                             * needs the drive's directory
-                                             * walk and the KERNAL serial
-                                             * traps. Create, Detach and the
-                                             * Flip list fold in below it -
-                                             * ONE section between separators
-                                             * (:286-:301) is one item by
-                                             * rule 1 */
+    "Attach disk image...",                 /* :286, a submenu in VICE whose
+                                             * Alt+8 item attaches to drive 8 -
+                                             * here the one thing it does: a
+                                             * D64 onto drive 8, through the
+                                             * same Standard File dialog as
+                                             * Smart attach (os88_onfile tells
+                                             * a D64 by its size). Drive 8 is
+                                             * not a 1541 but the KERNAL's
+                                             * LOAD served from the image
+                                             * (C64-SPEC 11.5): Create, Detach
+                                             * and the Flip list stay folded
+                                             * away, rule 1 */
     D "Detach datasette image",              /* :319. No tape emulation in this
                                              * build: T64/TAP are not read.
                                              * RULE 1'S STATED EXCEPTION, and

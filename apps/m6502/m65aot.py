@@ -1316,6 +1316,11 @@ def main():
     # no key is latched (m65gen.py's kbd_idle), which no translation beats
     if not a.range and a.machine == "apple2":
         pcs -= {0xFD1B, 0xFD1D, 0xFD1F, 0xFD21, 0xFD24}
+    # DRIVE 8'S TRAP (C64-SPEC 11.5): the package patches a JAM byte over the
+    # KERNAL's LDA #$60 at $F4C4, and the core must meet it - a translation of
+    # the ROM's own bytes there would run straight past
+    if not a.range and a.machine == "c64":
+        pcs -= {0xF4C4}
     elif a.range:
         # A RANGE OF RAM CAN BE WRITTEN, which a ROM cannot: an instruction
         # whose bytes a fixed-address store in the program writes (Dormann's

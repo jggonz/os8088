@@ -622,9 +622,17 @@ static unsigned h_rom_seg = SEG_ROM;    /* where os88_part_seg says the ROM is:
                                          * moved by the carve round trip below
                                          * (CC_ONMOVE_PARTS, C64-SPEC 3.1.1) */
 
+/* ONE BIG CLAIM - drive 8's D64 (C64-SPEC 11.5) is 171KB, more than any
+ * scratch slot: a claim of over 4,096 paragraphs lands here, and a segment
+ * anywhere inside it is an address inside it, as on the machine */
+#define H_BIGSEG 0xA000u
+static unsigned char h_big[200 * 1024];
+static unsigned h_big_paras;
 static unsigned char *segbase(unsigned seg)
 {
     int i;
+    if (h_big_paras && seg >= H_BIGSEG && seg < H_BIGSEG + h_big_paras)
+        return h_big + (long)(seg - H_BIGSEG) * 16;
     if (seg == SEG_RAM) return ram;
     if (seg == h_rom_seg) return rom;
     for (i = 0; i < CLAIM_MAX; i++)
@@ -636,6 +644,8 @@ static unsigned char *segbase(unsigned seg)
 static long segcap(unsigned seg)
 {
     int i;
+    if (h_big_paras && seg >= H_BIGSEG && seg < H_BIGSEG + h_big_paras)
+        return (long)(H_BIGSEG + h_big_paras - seg) * 16;
     if (seg == SEG_RAM) return 65536;
     if (seg == h_rom_seg) return 20480;
     for (i = 0; i < CLAIM_MAX; i++)
@@ -672,6 +682,13 @@ unsigned os88_mem_claim_p(unsigned paras)
     int i;
     if (paras == 0)
         return 0;
+    if (paras > 4096) {
+        if (h_big_paras || (long)paras * 16 > (long)sizeof(h_big))
+            return 0;
+        h_big_paras = paras;
+        claims_live++;
+        return H_BIGSEG;
+    }
     for (i = 0; i < CLAIM_MAX; i++)
         if (!claim[i].live) {
             claim[i].live = 1;
@@ -688,6 +705,7 @@ int os88_mem_free(unsigned seg)
     int i;
     if (seg == SEG_RAM) { ram_live = 0; return 0; }
     if (seg == SEG_ROM) { rom_live = 0; return 0; }
+    if (h_big_paras && seg == H_BIGSEG) { h_big_paras = 0; claims_live--; return 0; }
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg) {
             claim[i].live = 0;
@@ -718,6 +736,28 @@ int os88_mem_movable(unsigned seg, int on)
 unsigned os88_mem_largest_kb(void) { return 200; }
 int  os88_peek(unsigned seg, unsigned off) { return segbase(seg)[off]; }
 void os88_poke(unsigned seg, unsigned off, int v) { segbase(seg)[off] = (unsigned char)v; }
+
+/* drive 8's image fixture: what c64_read_at serves, by offset, 32KB a call
+ * (C64-SPEC 11.5) - and the call's contract checked as the kernel holds it */
+static unsigned char h_d64[174848];
+static long h_d64_len;
+unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
+                     unsigned off_lo, unsigned off_hi)
+{
+    long off = (long)off_lo | ((long)off_hi << 16), n;
+    (void)name;
+    if (cap % 512 || off % 512)
+        fail("c64_read_at off a cluster boundary");
+    if (segcap(seg) < (long)cap && off + cap < h_d64_len)
+        fail("c64_read_at into a claim smaller than its capacity");
+    if (off >= h_d64_len)
+        return 0;
+    n = h_d64_len - off;
+    if (n > cap)
+        n = cap;
+    memcpy(segbase(seg), h_d64 + off, (size_t)n);
+    return (unsigned)n;
+}
 
 /* the .PRG fixture the next os88_file_read_seg serves, by name */
 static char fx_name[16];
@@ -3148,6 +3188,79 @@ int main(int argc, char **argv)
         }
     }
 
+    /* --- DRIVE 8 (11.5): a D64 built here - the BAM, one directory sector,
+     * a two-sector PRG "HELLO" at $C000 (254 + 10 bytes, the load address
+     * first) - attached, and the KERNAL's LOAD trap served from it. The
+     * trap's three answers: the file (and its bytes, end, status and the
+     * return through LOADING), the directory as a BASIC program, FILE NOT
+     * FOUND; and a device that is not 8 runs the replaced LDA #$60.
+     * Verified to fail with the chain's second sector skipped (the end
+     * address and the tail bytes both go wrong). */
+    {
+        static const unsigned char nm[] = { 'H', 'E', 'L', 'L', 'O' };
+        unsigned b0, i4, endv;
+        long o18_0 = 357L * 256, o18_1 = 358L * 256, o1_0 = 0, o1_1 = 256;
+        memset(h_d64, 0, sizeof(h_d64));
+        h_d64_len = 174848;
+        h_d64[o18_0 + 0] = 18; h_d64[o18_0 + 1] = 1; h_d64[o18_0 + 2] = 0x41;
+        for (i4 = 1; i4 <= 35; i4++)
+            h_d64[o18_0 + 4 * i4] = (i4 == 1) ? 19 : (i4 == 18 ? 17 : 21);
+        memset(h_d64 + o18_0 + 0x90, 0xA0, 27);
+        memcpy(h_d64 + o18_0 + 0x90, "TEST DISK", 9);
+        h_d64[o18_0 + 0xA2] = 'I'; h_d64[o18_0 + 0xA3] = 'D';
+        h_d64[o18_0 + 0xA5] = '2'; h_d64[o18_0 + 0xA6] = 'A';
+        h_d64[o18_1 + 0] = 0; h_d64[o18_1 + 1] = 0xFF;      /* the last dir sector */
+        h_d64[o18_1 + 2] = 0x82;                             /* a closed PRG */
+        h_d64[o18_1 + 3] = 1; h_d64[o18_1 + 4] = 0;          /* starts at 1/0 */
+        memset(h_d64 + o18_1 + 5, 0xA0, 16);
+        memcpy(h_d64 + o18_1 + 5, nm, 5);
+        h_d64[o18_1 + 30] = 2;
+        h_d64[o1_0 + 0] = 1; h_d64[o1_0 + 1] = 1;            /* -> 1/1 */
+        h_d64[o1_0 + 2] = 0x00; h_d64[o1_0 + 3] = 0xC0;      /* load $C000 */
+        for (i4 = 4; i4 < 256; i4++) h_d64[o1_0 + i4] = (unsigned char)i4;
+        h_d64[o1_1 + 0] = 0; h_d64[o1_1 + 1] = 11;           /* last: 2..11 */
+        for (i4 = 2; i4 < 12; i4++) h_d64[o1_1 + i4] = (unsigned char)(0xE0 + i4);
+        ovl_d64_attach("TEST.D64", 0xAB00, 2);
+        if (c64_d64_seg == 0)
+            fail("a 174,848-byte D64 was not attached to drive 8");
+#define H_LOADCALL(nmp, nl, sa) do { unsigned k_; \
+            for (k_ = 0; k_ < (nl); k_++) c64_wr(0x0340 + k_, (nmp)[k_]); \
+            c64_wr(0xB7, (nl)); c64_wr(0xBB, 0x40); c64_wr(0xBC, 0x03); \
+            c64_wr(0xB9, (sa)); c64_wr(0xBA, 8); c64_wr(0x93, 0); \
+            c64_wr(0xC3, 0x01); c64_wr(0xC4, 0x08); \
+            c64_m.s = 0xF0; c64_m.pc = C64_D64_TRAP; ovl_d64_trap(); } while (0)
+        H_LOADCALL(nm, 5, 1);
+        endv = (unsigned)c64_rd(0xAE) | ((unsigned)c64_rd(0xAF) << 8);
+        if (c64_m.pc != C64_D64_LOADING || endv != 0xC000 + 252 + 10)
+            fail("LOAD\"HELLO\",8,1 from the D64 did not land at $C000 with "
+                 "its end in $AE/$AF and the KERNAL's LOADING next");
+        if (c64_rd(0xC000) != 4 || c64_rd(0xC000 + 252) != 0xE2 || c64_rd(0xC000 + 261) != 0xEB)
+            fail("the loaded file's bytes are not the image's, across its two sectors");
+        if (c64_rd(0x1EF) != ((C64_D64_EXIT - 1) & 0xFF) || c64_rd(0x1F0) != ((C64_D64_EXIT - 1) >> 8)
+            || c64_m.s != 0xEE)
+            fail("the trap did not push the KERNAL's own exit for LOADING to return into");
+        if (c64_rd(0x90) != 0x40)
+            fail("the status after a load is not the KERNAL's end-of-file");
+        H_LOADCALL((const unsigned char *)"H*", 2, 0);         /* SA 0: to X/Y's $0801 */
+        if (c64_rd(0x0801) != 4)
+            fail("LOAD\"H*\",8 did not match the pattern and load at $0801");
+        H_LOADCALL((const unsigned char *)"$", 1, 0);
+        b0 = (unsigned)c64_rd(0x0801) | ((unsigned)c64_rd(0x0802) << 8);
+        if (c64_rd(0x0805) != 0x12 || c64_rd(0x0807) != 'T' || b0 <= 0x0801)
+            fail("LOAD\"$\",8 did not make the directory's header line");
+        H_LOADCALL((const unsigned char *)"NOPE", 4, 0);
+        if (c64_m.pc != C64_D64_NOTFOUND)
+            fail("a name the disk has not got did not go to FILE NOT FOUND");
+        c64_wr(0xBA, 9);
+        c64_m.pc = C64_D64_TRAP;
+        c64_m.a = 0;
+        ovl_d64_trap();
+        if (c64_m.pc != C64_D64_TRAP + 2 || c64_m.a != 0x60)
+            fail("a LOAD from device 9 did not run the LDA #$60 the trap replaced");
+        os88_mem_free(c64_d64_seg);
+        c64_d64_seg = 0;
+    }
+
     /* --- THE DISPLAY LATCH (9.9). A split screen writes $D011 twice a
      * frame - bitmap on at the top, off for a scroller below - and the
      * screen must show what stood at line 51, every frame the same, rather
@@ -4636,6 +4749,10 @@ int main(int argc, char **argv)
     {
         static const char *msgs[] = {
             "A file dialog is already open.",
+            "Not a D64 image.",
+            "D64: no heap for it.",
+            "D64: cannot read it.",
+            "Disk on drive 8.",
             "No memory for the copy.",
             "No memory for the paste.",
             "Advanced one frame.",

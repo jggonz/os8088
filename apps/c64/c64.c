@@ -101,6 +101,8 @@ void c64_zcopy_in(unsigned a, const void *src, unsigned n);
 void c64_zcopy_out(void *dst, unsigned a, unsigned n);
 int  c64_copy_row(unsigned dseg, unsigned doff, int n);
 void c64_zzcopy_in(unsigned a, unsigned sseg, unsigned soff, unsigned n);
+unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
+                     unsigned off_lo, unsigned off_hi);   /* drive 8 (11.5) */
 void c64_zfill(unsigned a, int v, unsigned n);
 unsigned c64_muldiv(unsigned a, unsigned b, unsigned d);    /* (a*b)/d in 32
                                              * bits - `frames * 182 / elapsed`
@@ -486,6 +488,7 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
                                              * own uimachinemenu.c */
 #include "c64cmd.c"                         /* ovl_*: the command bodies */
 #include "c64load.c"                        /* ovl_*: Smart attach */
+#include "c64disk.c"                        /* ...and drive 8's D64 (11.5) */
 #include "c64about.c"                       /* ovl_*: the About panel */
 
 /* ==========================================================================
@@ -1045,6 +1048,14 @@ void os88_onfile(int mode, const char *name,
         return;
     if (name[0] == 0)
         return;
+    /* A D64 BY ITS SIZE - the dialog does not filter by extension (SPEC.md
+     * 38.9), and a .PRG of over 64KB is refused anyway - onto drive 8 */
+    if (size_hi == 2 || size_hi == 3) {
+        ovl_d64_attach(name, size_lo, size_hi);
+        c64_kick = 1;
+        os88_wm_wake(win);
+        return;
+    }
     if (size_hi != 0)
         size_lo = 0xFFFFu;                  /* ...so the one test below
                                              * refuses it too */
@@ -1295,6 +1306,12 @@ static int c64_slice(int left)
         c64_th_spend(ran);
         left -= ran;
         if (r == C64_RUN_JAM) {
+            if (c64_m.pc == C64_D64_TRAP) {
+                ovl_d64_trap();             /* drive 8 (11.5): the LOAD, or the
+                                             * one instruction the trap's byte
+                                             * replaced - and the machine runs on */
+                continue;
+            }
             c64_jam();
             break;
         }
@@ -1827,6 +1844,11 @@ void *os88_main(void)
         os88_toast("C64: the ROM claim is too low in memory", 0);
         return 0;
     }
+    /* DRIVE 8'S TRAP (11.5): the KERNAL's serial LOAD, just past SEARCHING
+     * FOR, stops on a JAM byte here and c64_slice serves it - from a D64
+     * when one is on drive 8, and otherwise by running the LDA #$60 it
+     * replaced. Patched in THIS copy of the ROM, not the file */
+    os88_poke(c64_m.romseg, C64_D64_TRAPOFF, 0x02);
     /* WHAT CAN THIS MACHINE'S SOUND HARDWARE DO (11.4)? Asked ONCE, here, and
      * tested rather than guessed (SPEC.md 73.11): §11.4 puts SID voice 1's
      * gate and frequency on OSAPI_SND_TONE, and a package that calls a slot

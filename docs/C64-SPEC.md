@@ -2100,7 +2100,7 @@ Live items:
 
 | item | the fact |
 |---|---|
-| File > Attach disk image (ONE item: the whole disk section folds into it, §11.1 rule 1; no caption — Alt+8/9/0/1 and Alt+I/K/N belong to items inside the submenus) | no 1541 in this build: a D64 needs the drive's directory walk and the KERNAL serial traps, and this port loads `.PRG` files only |
+| File > Attach disk image's submenu (Create, Detach, the Flip list - folded into the one live item, §11.1 rule 1; §11.5 is what it does) | drive 8 is a LOAD trap, not a 1541 in this build: a D64 needs the drive's directory walk and the KERNAL serial traps, and this port loads `.PRG` files only |
 | File > Detach datasette image (the tape section; Alt+T captions kept) | no tape emulation: T64/TAP are not read |
 | File > Cartridge freeze (the cartridge section; Alt+C / Alt+Z captions kept) | no cartridge port: the bank maps carry the cartridge-less 7 of VICE's 32 (§3.3) |
 | File > Printer/plotter (no caption; Alt+3/4/5/6 are the `printer-formfeed-*` actions inside it) | no printer path in this OS |
@@ -2176,9 +2176,10 @@ program) or `SYS`. The plan's wave 4 specified VICE's RAM-injection autostart
 (`OSAPI_FILE_READ_AT` exists unwrapped and offers nothing this needs — no new
 slot, §15.2.)
 
-**`LOAD"*",8` answers with the KERNAL's `?DEVICE NOT PRESENT  ERROR`.** That
-is the honest machine with no drive, written here so nobody files it as a
-defect. The ROM is the authority; transcribed from the machine, here and in
+**With no disk on drive 8 (§11.5), `LOAD"*",8` answers with the KERNAL's
+`?DEVICE NOT PRESENT  ERROR`** - and so does any device but 8, disk or no
+disk. That is the honest machine with nothing on the bus, written here so
+nobody files it as a defect. The ROM is the authority; transcribed from the machine, here and in
 `README.TXT`:
 
 ```
@@ -2193,6 +2194,69 @@ READY.
 CIA2 PRA modelled and not stored (§6.2): with the raw register answered, DATA
 IN reads low — a device answering — and the KERNAL waits at `SEARCHING FOR *`
 for ever.
+
+### 11.5 Drive 8 - a D64, and the KERNAL's LOAD served from it
+
+**File > Attach disk image...** - and Smart attach, which shares its Standard
+File dialog - puts a `.D64` on drive 8. `os88_onfile` tells a D64 from a
+`.PRG` by its SIZE (the dialog does not filter by extension, and a PRG over
+64KB is refused anyway): 174,848 bytes (35 tracks) or 196,608 (40), each with
+or without its error bytes. Anything else in that size range is `Not a D64
+image.` The image is held WHOLE, in one claim (683 or 768 sectors, plus 512
+bytes for the last read's sector rounding), read once in 32KB chunks through
+`c64_read_at` - `OSAPI_FILE_READ_AT` into a far buffer, a package-local shim
+in `c64.asm` - and given back when another image is attached. `D64: no heap
+for it.` and `D64: cannot read it.` leave the drive as it was;
+`Disk on drive 8.` says it took.
+
+**IT IS NOT A 1541.** There is no drive CPU, no GCR, no serial bus. The
+KERNAL's own `LOAD` is trapped where its serial half begins: `$F4C4`, the
+`LDA #$60` just after `JSR $F5AF` has printed `SEARCHING FOR`, is patched to
+a JAM byte (`$02`) in the package's copy of the ROM (`os88_main`, never the
+file), and `c64_slice` meets the JAM there and calls `ovl_d64_trap`
+(`c64disk.c`):
+
+- **device 8 with a disk**: the name at `($BB)`, `$B7` long (`0:` and `:`
+  prefixes dropped, `?` one character, `*` the rest) is found among the
+  image's closed or open PRGs, its sector chain followed, and its bytes
+  copied into RAM - at its own load address with a secondary address, at
+  `$C3/$C4` (BASIC's `$0801`) without - or compared, for `VERIFY`. `"$"` is
+  the directory as the BASIC program a 1541 sends (the header reversed, one
+  line a file with its blocks, name, type and `*`/`<` marks, `BLOCKS FREE.`
+  out of the BAM). `$AE/$AF` take the end and `$90` the end-of-file status
+  (`$10` with it on a VERIFY that differed), and the trap returns through the
+  KERNAL's own `LOADING`/`VERIFYING` message at `$F5D2`, off a return
+  address pushed for its exit at `$F5A9` (`CLC / LDX $AE / LDY $AF / RTS`) -
+  so BASIC and any caller see exactly what a load from drive 8 leaves;
+- **a name the disk has not got**: the KERNAL's `$F704`, `?FILE NOT FOUND`;
+- **any other device, or no disk**: the `LDA #$60` the byte replaced, and
+  the KERNAL goes on to its serial bus as it always did.
+
+Typed at this machine, with Edge of Disgrace's side 0 attached:
+
+```
+LOAD"$",8
+
+SEARCHING FOR $
+LOADING
+READY.
+```
+
+**What it cannot run** is anything that talks to the drive rather than
+through `LOAD`: a fast loader (which uploads code into the drive), `OPEN` of
+a drive channel, a program reading its disk by sector. Those see the bus they
+always saw - nothing on it. A program that replaces the `$0330` vector
+bypasses the trap the same way, as it would bypass a real KERNAL's. **The
+JAM byte is visible** to a program that reads the KERNAL at `$F4C4` (a ROM
+checksum, a copy of the KERNAL into RAM): the stated deviation. The
+translation leaves `$F4C4` to the core (`m65aot.py`), so the byte is always
+met. **It costs nothing until a LOAD reaches it.**
+
+`c64uitest` builds a D64 in memory and asserts the four answers - the file
+(its bytes across two sectors, its end, the status, the return through
+`LOADING`), a pattern at `$0801`, the directory's header line, `FILE NOT
+FOUND` - and that device 9 runs the replaced instruction; red with the
+file's chain cut.
 
 ### 11.4 Sound
 
