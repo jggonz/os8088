@@ -28,33 +28,35 @@ eth_fixed:  dw ETH_BASE
 
 %endmacro
 
-; --- NIC_ATTACH_FIND: pin, fixed base or sweep; falls into .found, else .none ---
-%macro NIC_ATTACH_FIND 0
+; --- NIC_ATTACH_FIND found, none: pin, fixed base or sweep. Jumps to `none` when
+; no card answers and FALLS THROUGH to `found`, which must follow it (the labels
+; are arguments so that the includer's own text mentions them) ---
+%macro NIC_ATTACH_FIND 2
     call os88_pin               ; THE PORTS PAGE FIRST (SPEC.md 51.9.2): a
     or  al, al                  ; pinned card is probed at its one address and
     jz  %%auto                   ; the sweep never runs, so nothing else on the
     cmp al, DRVPIN_OFF          ; bus is so much as read. Off - which the page
-    je  .none                   ; does not offer for a card - looks nowhere
+    je  %2                   ; does not offer for a card - looks nowhere
     xor ah, ah
     shl ax, 1
     add ax, DRVPIN_BASE
     mov [eth_base], ax
     call ne_probe
-    jnc .found
-    jmp .none
+    jnc %1
+    jmp %2
 %%auto:
 %ifdef ETH_BASE
     mov ax, [eth_fixed]         ; `make ETHBASE=0x320`: one address and no
     mov [eth_base], ax          ; sweep, for a machine where the sweep would
     call ne_probe               ; poke something that objects
-    jnc .found
-    jmp .none
+    jnc %1
+    jmp %2
 %endif
     mov bx, eth_bases
 %%try:
     mov ax, [bx]
     or  ax, ax
-    jz  .none
+    jz  %2
     mov [eth_base], ax
     add bx, 2
     call ne_probe

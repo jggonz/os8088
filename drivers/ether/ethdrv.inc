@@ -13,7 +13,7 @@
 ;                          the length in eth_rxb; nic_tx: CX bytes of eth_txb)
 ;   NIC_FRAME              the largest frame, bytes
 ;   NIC_DATA               macro: card-specific tables placed after the service
-;   NIC_ATTACH_FIND        macro: find the card (CF=0 falls through to .found)
+;   NIC_ATTACH_FIND f, n   macro: find the card: falls into f, or jumps to n
 ;   NIC_STATE              macro: the backend's state words in ethstate.inc
 ;   NIC_UI_CARD/_STRINGS   macros: the card's row on the Control Panel page
 ;   NIC_RING_CONSTS        macro: NIC_RINGSZ, NIC1_RINGSZ, SK_RINGSLK + proof
@@ -101,7 +101,7 @@ eth_attach:
     push bx
     push cx
     push di
-    NIC_ATTACH_FIND             ; the backend finds its card and FALLS INTO
+    NIC_ATTACH_FIND .found, .none ; the backend finds its card and FALLS INTO
                                 ; .found; no card jumps to .none (nicne2k.inc)
 .found:
     call nic_init                ; NO RINGS YET (SPEC.md 72.13.4): the pool is

@@ -55,9 +55,9 @@ pce_tab:                        ; the backends, in the order they are tried
     dw 0
 %endmacro
 
-%macro NIC_ATTACH_FIND 0
+%macro NIC_ATTACH_FIND 2
     call pce_find               ; CF=1 = no PCI card of ours
-    jc  .none
+    jc  %2
 %endmacro
 
 %macro NIC_STATE 0

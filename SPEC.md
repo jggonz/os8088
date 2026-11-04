@@ -239280,81 +239280,126 @@ driver on purpose: the next PCI NIC is a row in its backend table and a
   kern_emu and kern_small are byte-identical to before; no shipped floppy but
   kern_mega's system disks carries the file.
 
-### 125.2 One stack, shared as SOURCE (pinned)
+### 125.2 One stack, shared as SOURCE (pinned; shipped)
 
-`drivers/pciether/pciether.asm` `%include`s the stack from `drivers/ether/`
-(`inet.inc`, `tcp.inc`, `dns.inc`, `ethsock.inc`, `ethstate.inc`, `etherui.inc`,
-`ethcfg.inc`, …) — never a copy, WEAVE-SPEC §1.2's rule. The stack reaches the
-card only through a **NIC seam**: a fixed set of names (`nic_probe`,
-`nic_init`, `nic_rx`, `nic_tx`, `nic_stop`, and whatever ring/overflow names
-the stack really uses) that the includer defines. In `ETHER.DRV` they are the
-8390's (`ne2000.inc`); in `PCIETHER.DRV` they dispatch to the backend the
-probe chose. **`ETHER.DRV` must assemble byte-identical across the seam**
-(`cmp` of `build/ether.bin` before and after is the check).
+`drivers/pciether/pciether.asm` includes `drivers/ether/ethdrv.inc` - the body
+that was `ether.asm`'s own (service table, attach/ready/detach, the DHCP wait,
+the package door) - and through it the stack: `inet.inc`, `tcp.inc`, `dns.inc`,
+`ethsock.inc`, `ethstate.inc`, `etherui.inc`, `ethcfg.inc`. Never a copy,
+WEAVE-SPEC §1.2's rule. The stack reaches the card only through the **NIC
+seam**, which the includer defines BEFORE including `ethdrv.inc`:
 
-`ETHER.CFG` (§72.7) is shared: the manual address applies to either driver;
-the I/O base field means nothing on PCI and `PCIETHER.DRV` ignores it (the
-Setup window does not offer it there).
+| name | kind | meaning |
+|---|---|---|
+| `nic_init` | proc | bring the card up and start receiving; cannot fail; every register kept |
+| `nic_stop` | proc | silence the card (detach); cannot fail |
+| `nic_rx` | proc | one frame into `eth_rxb`: CF=0 and CX = its length; CF=1 = nothing; every register but CX kept |
+| `nic_tx` | proc | CX bytes of `eth_txb` onto the wire, padded to 60; CF=1 = the card never finished; every register kept |
+| `NIC_FRAME` | equ | the largest frame, 1,514 (checked against `NET_FRAME`) |
+| `NIC_BACKEND` | file | the card's source, included in place of `ne2000.inc` |
+| `NIC_DATA` | macro | card-specific tables, placed after the service table |
+| `NIC_ATTACH_FIND` | macro | find the card inside `eth_attach`: CF=0 falls into `.found`, none jumps to `.none` |
+| `NIC_STATE` | macro | the backend's words in `ethstate.inc` |
+| `NIC_UI_CARD`, `NIC_UI_STRINGS` | macros | the card's row on the Ethernet page (BX = the row's y) |
+| `NIC_RING_CONSTS` | macro | `NIC_RINGSZ`, `NIC1_RINGSZ`, `SK_RINGSLK`, and the build-time proof the socket ladder's rungs fit the ring |
 
-### 125.3 Finding the card: the PCI BIOS, 16-bit, at attach only (pinned)
+In `ETHER.DRV` they are `drivers/ether/nicne2k.inc`: `nic_rx`/`nic_tx`/
+`nic_init`/`nic_stop` are `%define`d to `ne_rx`/`ne_tx`/`ne_init`/`ne_stop`
+(`ethprof.inc` re-aims `ne_tx`), and each macro is the text that stood inline
+before. **`ETHER.DRV` assembles byte-identical across the seam** - the plain
+build, `-DETH_BASE` and `-DETHPROF` all `cmp` clean against the tree before it
+- and so does `OS88NET.COM`, the DOS end of the cable, which includes the same
+`inet.inc`/`tcp.inc`/`ethsock.inc`/`ethstate.inc` and supplies the seam names
+from `pktdrv.inc`'s packet driver (`os88net.asm`). In `PCIETHER.DRV` the four
+procs are one `jmp` each through the vectors of the backend the PCI probe
+chose (`pce_vt`), so the next card is a row in the backend table and a
+`<card>.inc` and not a new driver. `ETHPROF` is refused there: the stage
+timers are the 8390's.
+
+`ETHER.CFG` (§72.7) is shared: the manual address applies to either driver. The
+I/O base is not a field of that file or of the Setup window; the Ethernet page
+shows the 8390's base beside its name and `PCIETHER.DRV` shows the name alone.
+
+### 125.3 Finding the card: the PCI BIOS, 16-bit, at attach only (pinned; shipped)
 
 PCI configuration space is reached through the **PCI BIOS, `int 1Ah`
 AH=B1h**, with 16-bit registers only, so the image stays `cpu 8086` (§1) and
-needs no 32-bit port I/O:
+needs no 32-bit register for the BIOS:
 
 | call | in | out |
 |---|---|---|
 | `B101h` present? | — | CF=0, AH=0, DX=`4350h` ('PC' of EDX=`'PCI '`) |
-| `B102h` find device | CX=device, DX=vendor, SI=index | CF=0: BH=bus, BL=dev/fn |
+| `B102h` find device | CX=device, DX=vendor, SI=index | CF=0, AH=0: BH=bus, BL=dev/fn |
 | `B108h`/`B109h` read byte/word | BX=bus/devfn, DI=register | CL / CX |
 | `B10Bh`/`B10Ch` write byte/word | BX, DI, CL / CX | CF |
 
-The probe runs only when `OSAPI_CPU_INFO` answers a 386 or better: kern_mega
-boots on a 286, and no 286 board carries PCI. The backend table is walked in
-order; for each row `B102h` with SI=0. BAR0 (config `10h`) must be an I/O
-BAR (bit 0 set); the base is the word AND `FFFCh`. The Command register
-(`04h`) gets I/O Space (bit 0) and Bus Master (bit 2) set. Whatever kern_mega
-must do to reach a real-mode BIOS service from a driver is what this call
-does; the implementer records which path (§125.8 item 1).
+The probe (`drivers/pciether/pci.inc`, `pci_probe`) runs only when
+`OSAPI_CPU_INFO` answers a 386 or better: kern_mega boots on a 286, and no 286
+board carries PCI. The backend table (`pce_tab`) is rows of `{vendor, device,
+name, vectors}` ending in a zero vendor; each row is asked `B102h` with SI=0.
+BAR0 (config `10h`) must be an I/O BAR (bit 0 set); the base is the word AND
+`FFFCh`. A row that matches but whose BAR0 is not I/O is skipped with the card
+untouched; only a card we will drive gets the Command register (`04h`) I/O
+Space (bit 0) and Bus Master (bit 2) set. The vectors are `claim, init, rx,
+tx, stop`; the chosen row's are copied to `pce_vt` and the claim runs at
+attach, so a card with no memory for its ring is refused (`DRVE_HW`, as a
+missing card; the Drivers page cannot yet tell the two apart).
 
-### 125.4 RTL8139: polled, one ring, one transmit buffer (pinned)
+### 125.4 RTL8139: polled, one ring, one transmit buffer (pinned; shipped)
 
 It **polls and hooks nothing**, as §72.2.1 — no IRQ, IMR = 0. The receive
 ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
 
-- **Memory.** One pinned heap claim (§66 default) holds the receive ring —
-  8192 + 16 bytes with **WRAP = 1**, plus 1,536 bytes of overrun so a frame
-  that wraps is contiguous and is never split — and one 1,536-byte transmit
-  buffer, 4-byte aligned (a paragraph base is). Claimed at attach only when
-  an RTL8139 was found, freed at detach. Its bus address is the claim's
-  linear base from `OSAPI_SEG` `SEG_LIN`; kern_mega does not page, so linear
-  is physical and the card, a 32-bit bus master, may reach it wherever the
-  heap put it.
-- **Init.** `CONFIG1` = 0 (power on); `CR` = `10h` (RST) and wait, bounded in
-  time, for it to clear; station address from `IDR0..5`; `RBSTART` = ring;
-  `IMR` = 0; `CR` = RE|TE (`0Ch`) **and only then** `RCR` and `TCR` (Linux
-  `8139too`: thresholds are ignored while Rx/Tx are off). `RCR` = APM|AB
-  (ours plus broadcast, §72.8's filter), WRAP, RBLEN = 8K, MXDMA unlimited,
-  RXFTH none. `MAR0..7` = 0.
+- **Memory.** One pinned heap claim (§66 default, `MEMP_CLAIM | MEMP_CPU`,
+  conventional) holds the receive ring - 8192 + 16 bytes with **WRAP = 1**,
+  plus 1,536 bytes of overrun so a frame that wraps is contiguous and is never
+  split - and, at offset 9,744, one 1,536-byte transmit buffer (4-byte aligned:
+  a paragraph base is). 11,280 bytes, 11,776 at the 512-byte granule. Claimed
+  at attach only when an RTL8139 was found, freed at detach. Its bus address is
+  the claim's linear base from `OSAPI_SEG` `SEG_LIN`; kern_mega does not page,
+  so linear is physical and the card, a 32-bit bus master, may reach it
+  wherever the heap put it. The socket ladder's top rung (8 KB) does not fit
+  an 8 KB ring with a frame of slack, so `sk_cardcap` clamps to the 4 KB rung,
+  as for an NE1000: stop-and-wait TCP does not use more.
+- **Init.** `CONFIG1` = 0 (power on); `CR` = `10h` (RST) and wait, bounded, for
+  it to clear; station address from `IDR0..5`; `MAR0..7` = 0; `RBSTART` = ring;
+  `IMR` = 0; `ISR` cleared; `CR` = RE|TE (`0Ch`) **and only then** `RCR` and
+  `TCR` (Linux `8139too`: thresholds are ignored while Rx/Tx are off). `RCR` =
+  `E78Ah`: APM|AB (ours plus broadcast, §72.8's filter), WRAP, RBLEN = 8K,
+  MXDMA unlimited, RXFTH none. `TCR` = `03000700h` (standard IFG, MXDMA
+  unlimited). `CAPR` = `FFF0h`.
 - **Receive.** While `CR` bit 0 (BUFE) is clear: the 4-byte header at the
   read offset is status (ROK = bit 0) and length (frame + 4-byte CRC). The
   frame follows the header. Next offset = (off + len + 4 + 3) AND NOT 3,
   modulo 8192, and `CAPR` is written **next offset − 16** (the chip's
   documented bias). A bad header (ROK clear, length < 64 or > 1,518 + 4) or
   `ISR` RXOVW/FOVW resets the receiver and throws the ring away, §72.2's
-  overflow rule. `ISR` bits are write-one-to-clear.
+  overflow rule (`eth_novw` counts it): `CR` = TE, wait for RE to clear, then
+  the init sequence from `RBSTART` on. A good frame longer than the stack's
+  1,514 is consumed and skipped. `ISR` bits are write-one-to-clear.
 - **Transmit.** The four `TSD`/`TSAD` slots are used in turn (the chip
   requires it), all pointing at the one buffer; a frame shorter than 60 bytes
-  is padded. `TSAD[n]` = buffer, then `TSD[n]` is written **high word first,
-  low word last** — the low word clears OWN and starts the send — with
-  ERTXTH in bits 21:16. Wait, bounded in time (§72.2.2's rule, sized from the
-  slowest machine), for TOK, TUN or TABT before returning; the stack is
-  stop-and-wait, so one frame in flight is the design and not a limit.
-- **Every register access is 8- or 16-bit.** A 32-bit register is written as
-  two `out dx, ax`, low address first unless the item above says otherwise.
-- **Detach stops the DMA before freeing the claim**: `CR` = 0, RST, wait, then
-  free. A card left running writes into whatever the heap gives that memory
-  to next.
+  is padded. `TSAD[n]` = buffer, then `TSD[n]` is written - ERTXTH (8 =
+  256 bytes) in bits 21:16, the size in 12:0, OWN clear, which starts the send.
+  Wait, bounded in time (§72.2.2's rule, sized from the slowest machine:
+  65,535 reads of a PCI register, about 16 ms on a Pentium and 130 ms on a
+  386SX, against 1.2 ms for a full frame at 10 Mbit), for TOK or TUN (the low
+  word) or TABT (bit 30) before returning; the stack is stop-and-wait, so one
+  frame in flight is the design and not a limit. A timeout is CF=1, as the
+  8390's; TUN and TABT are the wire's loss and TCP retransmits.
+- **The 32-bit registers are 32-bit accesses.** `RBSTART`, `RCR`, `TCR`,
+  `TSAD` and `TSD` are written - and `TSD` read - as one dword: `out dx, ax`
+  with a `66h` prefix byte (`db 66h` to the assembler, so the image stays
+  `cpu 8086`), composed from two pushes and a `pop eax`. This replaces the
+  first draft's "every access is 8- or 16-bit, a 32-bit register as two word
+  writes", which is the one reading a real 8139 accepts and a model that
+  implements those registers for a dword access only (QEMU's `rtl8139`, for
+  `RBSTART`, `RCR`, `TCR`) would drop. The prefix executes on the 386+ the PCI
+  gate guarantees; `CR`, `CONFIG1` and `IDR` are byte accesses, `IMR`, `ISR`
+  and `CAPR` word ones.
+- **Detach stops the DMA before freeing the claim**: `IMR` = 0, `CR` = 0, RST,
+  wait, then free. A card left running writes into whatever the heap gives that
+  memory to next.
 
 ### 125.5 The kern_mega row (pinned)
 
@@ -239386,10 +239431,26 @@ PCI machine with its RTL8139C+ is where a person LOOKS.
   (RTL8029 = an NE2000 on PCI, which `ne2000.inc` already drives given a
   base; AMD PCnet; Intel 8255x) are plan items, not contract.
 
-### 125.8 Open until built
+### 125.8 Answered by the build, and what is still open
 
-1. How a kern_mega driver reaches `int 1Ah` B1h, and what it costs on the 286
-   reset route that will never find PCI anyway (the CPU gate means it is not
-   asked there).
-2. The `SYSTEM.CFG` bit number and the row index.
-3. The image and claim sizes, from the build.
+1. **How a kern_mega driver reaches `int 1Ah`: it issues it.** kern_mega
+   points IDT vectors 10h-1Fh at sixteen five-byte stubs (`mega_ss`, kernel/
+   mega.inc) that push the vector and enter `mega_svc`, which reflects the
+   call to real mode with every IRQ the BIOS does not own masked, runs the
+   BIOS's own handler and returns its registers and flags. `HDD.DRV`'s
+   `int 13h`, `VESA.DRV`'s `int 10h`, `XMEM.DRV`'s `int 15h` and the kernel's
+   clock `int 1Ah` use the same door, so no kernel work is needed. DS and ES
+   reach the BIOS as real-mode segments, and `B101h`-`B10Ch` read neither;
+   this is why `PCIETHER.DRV` is not `OS88_DRV_HIGHOK` (an image above 1MB has
+   no real-mode DS) - its socket pool, which is only loaded, is still claimed
+   high. On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
+   CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
+   made. A few hundred microseconds a call, at attach only. *Seen on a
+   machine: no - the first run is the harness's (S8).*
+2. The `SYSTEM.CFG` bit number and the row index: kmega's (S6).
+3. Sizes, from the build of 2026-11-04: image 17,153 bytes unpacked
+   (`ETHER.DRV` 17,397), 10,859 packed (lz4), 256 bytes of trailing zeros;
+   claim at attach 11,280 bytes (11,776 at the granule) plus the socket pool
+   when a package opens one (§72.13).
+4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
+   TSD's TOK/OWN timing has not been run; the harness's row is the first.
