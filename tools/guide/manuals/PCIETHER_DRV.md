@@ -9,10 +9,12 @@ slot.
 
 ## Which machines have it
 
-It ships only on the system disks of the protected-mode build for the 286
-and later. A PCI slot means a 386, a 486 or a Pentium, and the driver looks
-for the card only on a 386 or better. On a 286 it finds nothing and says
-so.
+It ships on the system disks of the standard build, the emulator build and
+the protected-mode build for the 286 and later, except the 360K system disk:
+no XT has a PCI slot. A PCI slot means a 386, a 486 or a Pentium, and the
+driver looks for the card only on a 386 or better. On an older machine it
+finds nothing and says so. Until you tick it, it is never loaded and costs
+nothing.
 
 It finds the card through the machine's PCI BIOS, so there is no address
 or jumper to set. Any card that reports itself as an RTL8139, including the

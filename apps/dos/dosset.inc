@@ -533,11 +533,11 @@ dos_mck_place:
     mov ax, DRVM_CEIL_DISK          ; ...and the ceiling is a CONSTANT and not
     mov di, dos_mhddk               ; a call (SPEC.md 51.12.1): the slot used
     call SPH(dos_mem_num2)               ; to walk a table of build-time figures to
-%ifdef DOS_MEGA
-    mov ax, DRVM_CEIL_NET_MEGA      ; add them up, and the SDK carries the sum
-%else                               ; (kern_mega's own: PCIETHER.DRV is that
-    mov ax, DRVM_CEIL_NET           ; class's larger row there, SPEC.md 125.5)
-%endif
+    mov ax, DRVM_CEIL_NET_PCI       ; add them up, and the SDK carries the sum
+                                    ; (every kernel DOS runs on has
+                                    ; PCIETHER.DRV's row, the class's larger
+                                    ; one: SPEC.md 125.5. kern_small, whose
+                                    ; ceiling is DRVM_CEIL_NET, has no DOS)
     mov di, dos_mnetk               ; that walk was producing
     call SPH(dos_mem_num2)
     mov si, dos_mhdd                ; ...then the three rects, one pitch apart

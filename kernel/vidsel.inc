@@ -639,10 +639,6 @@ ovl_spl_msg_fdd:                ; 'Looking for Drives' - SPEC.md 18.97's TRACK
     pop si
     retf
 
-ovl_spl_msg_drv:                ; AL = ordinal, AH = total, CS:SI = the title
-    call spl_msg_drv            ; ...and near too - see above
-    ret
-
 ovl_spl_redraw:                 ; put the composed line back after a mode set
     call spl_mdraw
     retf
@@ -666,11 +662,14 @@ spl_msg_cs:
     ret
 
 ; -----------------------------------------------------------------------------
-; spl_msg_drv - 'Loading Driver n/N (Title)'
+; ovl_spl_msg_drv - 'Loading Driver n/N (Title)'
 ; in:  AL = the 1-based ordinal, AH = how many are being loaded,
 ;      CS:SI -> the row's title, in the blob's own DRV_TITLES (driver.inc)
+; THE ENTRY IS THE BODY: drv_boot_x is its one caller and is in this section,
+; so the `call spl_msg_drv / ret` stub that stood in front of it was four
+; bytes of the blob spent on a name (SPEC.md 125.1 took them back)
 ; -----------------------------------------------------------------------------
-spl_msg_drv:
+ovl_spl_msg_drv:
     pushf
     push ax
     push bx
