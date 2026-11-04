@@ -239351,14 +239351,25 @@ It **polls and hooks nothing**, as §72.2.1 — no IRQ, IMR = 0. The receive
 ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
 
 - **Memory.** One pinned heap claim (§66 default, `MEMP_CLAIM | MEMP_CPU`,
-  conventional) holds the receive ring - 8192 + 16 bytes with **WRAP = 1**,
+  and `CX` = `MEMP_CONV`: the image is `OS88_DRV_HICLAIM`, and a claim with no
+  head would otherwise be offered the pool above 1MB, whose blocks move)
+  holds the receive ring - 8192 + 16 bytes with **WRAP = 1**,
   plus 1,536 bytes of overrun so a frame that wraps is contiguous and is never
   split - and, at offset 9,744, one 1,536-byte transmit buffer (4-byte aligned:
   a paragraph base is). 11,280 bytes, 11,776 at the 512-byte granule. Claimed
   at attach only when an RTL8139 was found, freed at detach. Its bus address is
   the claim's linear base from `OSAPI_SEG` `SEG_LIN`; kern_mega does not page,
   so linear is physical and the card, a 32-bit bus master, may reach it
-  wherever the heap put it. The socket ladder's top rung (8 KB) does not fit
+  wherever the heap put it. **A boot attach claims in real mode** (SYSTEM.CFG's
+  drivers load before `mega_enter`), so the claim's name is a paragraph that
+  `mem_xlatf` cannot re-point - a pinned record gets the kernel's half only
+  (KERN-MEGA-MEMORY-PLAN MC7.4) - and loading it in protected mode is a #GP.
+  The ring is therefore reached through `rt_es`: `OSAPI_SEG` `SEG_WIN` over
+  its physical paragraph, `EMS.DRV`'s `em_fsel` shape, which a real-mode
+  kernel answers with the paragraph and protected mode with a window kept
+  until detach. Detach's `OSAPI_MEM_FREE` of a paragraph-named claim is
+  refused under protected mode and `drv_release`'s owner sweep frees it, the
+  card being silenced first. The socket ladder's top rung (8 KB) does not fit
   an 8 KB ring with a frame of slack, so `sk_cardcap` clamps to the 4 KB rung,
   as for an NE1000: stop-and-wait TCP does not use more.
 - **Init.** `CONFIG1` = 0 (power on); `CR` = `10h` (RST) and wait, bounded, for
@@ -239372,7 +239383,11 @@ ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
   read offset is status (ROK = bit 0) and length (frame + 4-byte CRC). The
   frame follows the header. Next offset = (off + len + 4 + 3) AND NOT 3,
   modulo 8192, and `CAPR` is written **next offset − 16** (the chip's
-  documented bias). A bad header (ROK clear, length < 64 or > 1,518 + 4) or
+  documented bias). A length of `FFF0h` is a frame the chip is still copying
+  out of its FIFO (Linux `8139too`), so the ring is left as it is until the
+  next call. A bad header (ROK clear, length < 64 or > 1,536 + 4, Linux's
+  bound: the overrun area holds a frame that long from the ring's last dword,
+  checked at build time) or
   `ISR` RXOVW/FOVW resets the receiver and throws the ring away, §72.2's
   overflow rule (`eth_novw` counts it): `CR` = TE, wait for RE to clear, then
   the init sequence from `RBSTART` on. A good frame longer than the stack's
@@ -239440,16 +239455,21 @@ PCI machine with its RTL8139C+ is where a person LOOKS.
    BIOS's own handler and returns its registers and flags. `HDD.DRV`'s
    `int 13h`, `VESA.DRV`'s `int 10h`, `XMEM.DRV`'s `int 15h` and the kernel's
    clock `int 1Ah` use the same door, so no kernel work is needed. DS and ES
-   reach the BIOS as real-mode segments, and `B101h`-`B10Ch` read neither;
-   this is why `PCIETHER.DRV` is not `OS88_DRV_HIGHOK` (an image above 1MB has
-   no real-mode DS) - its socket pool, which is only loaded, is still claimed
-   high. On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
+   reach the BIOS as real-mode segments - a selector above 1MB as `FFFFh`
+   (`mega_s2segc`), given back on the way out - and `B101h`-`B10Ch` take no
+   pointer and read neither, so `PCIETHER.DRV` is `OS88_DRV_HIGHOK` and
+   `OS88_DRV_HICLAIM` as `ETHER.DRV` is: the image runs above 1MB and the
+   socket pool is claimed there, and `HDD.DRV`, also `HIGHOK`, makes its
+   reflected `int 13h` from a high image the same way. (A boot attach runs in
+   real mode before the image is moved, so there the calls are not reflected
+   at all.) On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
    CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
    made. A few hundred microseconds a call, at attach only. *Seen on a
    machine: no - the first run is the harness's (S8).*
 2. The `SYSTEM.CFG` bit number and the row index: kmega's (S6).
-3. Sizes, from the build of 2026-11-04: image 17,153 bytes unpacked
-   (`ETHER.DRV` 17,397), 10,859 packed (lz4), 256 bytes of trailing zeros;
+3. Sizes, from the build of 2026-11-04 (after the verifier's fixes): image
+   17,259 bytes unpacked (`ETHER.DRV` 17,397), 10,950 packed (lz4), 352 bytes
+   of trailing zeros;
    claim at attach 11,280 bytes (11,776 at the granule) plus the socket pool
    when a package opens one (§72.13).
 4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of

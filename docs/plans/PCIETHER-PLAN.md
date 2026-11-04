@@ -54,3 +54,12 @@ working (a boot or a gate row said so, named beside it).
   17,153 bytes unpacked, 10,859 packed, claim 11,280 bytes at attach. Nothing
   has been loaded in an emulator yet. The 32-bit registers are dword accesses
   (66h prefix), a correction to the first draft of 125.4 - see there.
+- 2026-11-04 (verify-drv, Opus): ETHER.DRV (plain, -DETH_BASE, -DETHPROF,
+  -DETH_IP) and os88net.raw re-`cmp`ed clean against `pciether` from a private
+  tree. Fixed: the ring was reached as `mov es, [rt_seg]`, a paragraph from a
+  boot attach in real mode that is a #GP once kern_mega is in protected mode
+  (now `rt_es`, SEG_WIN over the paragraph, EMS.DRV's shape); the image is
+  `OS88_DRV_HIGHOK` after all (the stated reason against it did not hold, and
+  `OS88_DRV_HICLAIM` alone sets no header bit) with the ring `MEMP_CONV`;
+  `pci_present` keeps DI (B101h returns EDI); an `FFF0h` header waits, and the
+  length bound is Linux's 1,536 + 4. Image 17,259 unpacked, 10,950 packed.

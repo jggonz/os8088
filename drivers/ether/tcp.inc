@@ -918,7 +918,7 @@ sk_reclaim:
     NIC_RING_CONSTS             ; the backend's: NIC_RINGSZ, NIC1_RINGSZ and
                                 ; SK_RINGSLK, and the build-time proof that
                                 ; the rungs it offers fit its ring
-                                ; (nicne2k.inc, nicrtl.inc)
+                                ; (nicne2k.inc, pciether.asm)
 
 sk_cardcap:
     mov ax, NIC_RINGSZ

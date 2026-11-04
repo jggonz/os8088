@@ -24,13 +24,18 @@
 ; IMR = 0, no IRQ, no vector. The receive ring is a heap claim the card writes
 ; by bus mastering and the socket verbs drain.
 ;
-; Not OS88_DRV_HIGHOK: a PCI BIOS is called with DS and ES as real-mode
-; segments (mega_svc), and an image above 1MB has none. The socket pool is
-; still claimed high (OS88_DRV_HICLAIM) - it is only ever loaded.
+; OS88_DRV_HIGHOK, as ETHER.DRV and HDD.DRV are: kern_mega may run this image
+; above 1MB. Its BIOS calls are int 1Ah B101h-B10Ch at attach, and none of
+; them takes a pointer; mega_svc hands a DS above 1MB to the BIOS as FFFFh
+; (mega_s2segc) and gives the selector back after, which is HDD.DRV's int 13h
+; from a high image every day. The receive ring is MEMP_CONV (rt_claim): a
+; bus master's memory never goes to the pool. OS88_DRV_HICLAIM, so the socket
+; pool - movable, and only ever loaded - is claimed high too.
 ; =============================================================================
 
 %define NETPKG_DRIVER           ; netpkg.inc's constants, not its client half
-%define OS88_DRV_HICLAIM
+%define OS88_DRV_HICLAIM        ; the socket pool above 1MB (item 83)...
+%define OS88_DRV_HIGHOK         ; ...and the image (KERN-MEGA-PLAN item 82)
 
 %ifdef ETHPROF
   %error "pciether: the stage timers (ethprof.inc) are the 8390's"
@@ -64,8 +69,10 @@ pce_tab:                        ; the backends, in the order they are tried
 pce_bdf:    dw 0                ; the card's bus / device-function
 pce_name:   dw 0                ; its name, for the Control Panel page
 pce_vt:     times 5 dw 0        ; the chosen backend's vectors (PCEV_*)
-rt_seg:     dw 0                ; the ring's claim
-rt_lin:     dw 0, 0             ; ...and its linear (bus) base
+rt_seg:     dw 0                ; the ring's claim, as OSAPI_MEM_P named it
+rt_lin:     dw 0, 0             ; ...its linear (bus) base
+rt_par:     dw 0                ; ...that as a paragraph (below 1MB)
+rt_win:     dw 0                ; ...and rt_es's window over it, 0 = none
 rt_off:     dw 0                ; the read offset in the ring
 rt_txn:     db 0                ; the transmit slot to use next
 %endmacro

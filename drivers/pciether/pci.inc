@@ -43,13 +43,16 @@ pci_gate:
     ret
 
 ; -----------------------------------------------------------------------------
-; pci_present - B101h. out: CF=0 the BIOS is there. Every register kept.
+; pci_present - B101h. out: CF=0 the BIOS is there. Every register kept -
+; DI too: a 2.1 BIOS returns EDI = its protected-mode entry point (SeaBIOS
+; does), so B101h is the one call here that writes a register it was not given
 ; -----------------------------------------------------------------------------
 pci_present:
     push ax
     push bx
     push cx
     push dx
+    push di
     mov ax, 0xB101
     int PCI_INT
     jc  .no
@@ -62,6 +65,7 @@ pci_present:
 .no:
     stc
 .out:
+    pop di
     pop dx
     pop cx
     pop bx

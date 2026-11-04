@@ -52,8 +52,17 @@ RT_RINGMASK     equ 0x1FFC      ; a read offset: modulo the ring, dword-aligned
 RT_TXOFF        equ RT_RING + 16 + 1536     ; the ring, its slack, the overrun
 RT_CLAIM        equ RT_TXOFF + 1536         ; ...and one transmit buffer
 RT_MINFRAME     equ 60          ; a runt is padded to this
-RT_MAXLEN       equ 1518 + 4    ; a header's length (frame + CRC) past this is
-                                ; not a frame: the ring has been corrupted
+RT_MAXLEN       equ 1536 + 4    ; a header's length (frame + CRC) past this is
+                                ; not a frame: the ring has been corrupted.
+                                ; Linux 8139too's bound (MAX_ETH_FRAME_SIZE),
+                                ; not 1518 + 4: a VLAN-tagged full frame is
+                                ; 1522 + 4, a good frame we skip, and throwing
+                                ; the whole ring away for it would lose every
+                                ; frame queued behind it
+RT_EARLY        equ 0xFFF0      ; a header's length while the chip is still
+                                ; copying the frame out of its FIFO (Linux:
+                                ; "should never happen" with early receive
+                                ; off, and handled anyway): not yet a frame
 RT_SPIN         equ 0xFFFF      ; every wait: 65,535 reads of a PCI register -
                                 ; ~16 ms on a Pentium (0.25 us a read) and
                                 ; ~130 ms on a 386SX, against a reset that
@@ -63,6 +72,9 @@ RT_SPIN         equ 0xFFFF      ; every wait: 65,535 reads of a PCI register -
 
 %if RT_TXOFF & 3
  %error "rtl8139: the transmit buffer must be 4-byte aligned"
+%endif
+%if (RT_RING - 4) + 4 + RT_MAXLEN > RT_TXOFF
+ %error "rtl8139: a frame whose header is the ring's last dword must end in the overrun area"
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -116,10 +128,13 @@ rt_rstwait:
 ; rt_claim - the receive ring and the transmit buffer: ONE pinned claim
 ; out: CF=1 = no heap for it. [rt_seg] and the linear base [rt_lin] on success.
 ;
-; Pinned (SPEC.md 66: a claim is born unmovable) and conventional: the card is
-; a bus master and writes the ring behind the CPU's back, so the claim must
-; stay where the address we gave it says. Its bus address is its linear base
-; (OSAPI_SEG SEG_LIN) - kern_mega does not page, so linear is physical.
+; Pinned (SPEC.md 66: a claim is born unmovable) and CONVENTIONAL - MEMP_CONV,
+; because this image is OS88_DRV_HICLAIM and a claim with no head would
+; otherwise be offered the pool above 1MB, whose blocks the pool compactor
+; rebases: the card is a bus master and writes the ring behind the CPU's back,
+; so the claim must stay where the address we gave it says. Its bus address is
+; its linear base (OSAPI_SEG SEG_LIN) - kern_mega does not page, so linear is
+; physical - and [rt_par] is that as a paragraph, for rt_es.
 ; -----------------------------------------------------------------------------
 rt_claim:
     push ax
@@ -127,7 +142,7 @@ rt_claim:
     push cx
     push dx
     mov ax, OS88_BYTES_PARA(RT_CLAIM)
-    xor cx, cx
+    mov cx, MEMP_CONV           ; no head, and below 1MB
     mov bl, MEMP_CLAIM | MEMP_CPU
     call OSAPI_MEM_P            ; DX = the base
     jc  .out
@@ -136,12 +151,67 @@ rt_claim:
     call OSAPI_SEG              ; DX:AX = its linear base
     mov [rt_lin], ax
     mov [rt_lin+2], dx
+    mov cl, 4                   ; ...and as a paragraph: below 1MB, so DX is
+    shr ax, cl                  ; 0..0Fh and lands in the top nibble
+    mov cl, 12
+    shl dx, cl
+    or  ax, dx
+    mov [rt_par], ax
+    mov word [rt_win], 0
     clc
 .out:
     pop dx
     pop cx
     pop bx
     pop ax
+    ret
+
+; -----------------------------------------------------------------------------
+; rt_es - ES = the ring's claim, as the mode we are running in names it
+; out: CF=0 and ES; CF=1 = kern_mega had no window to give (its LDT full) -
+;      the caller treats it as a ring with nothing in it / a send that failed.
+;      Every other register kept.
+;
+; A BOOT ATTACH CLAIMS IN REAL MODE (SYSTEM.CFG's drivers load before
+; mega_enter), so [rt_seg] is a PARAGRAPH - and the claim is pinned, so
+; mem_xlatf tells only the kernel's half that its name became a selector
+; (KERN-MEGA-MEMORY-PLAN MC7.4): a `mov es, [rt_seg]` in protected mode is a
+; #GP. EMS.DRV's em_fsel is the shape: ask OSAPI_SEG's SEG_WIN for the
+; physical paragraph. Every real-mode kernel answers the paragraph itself, and
+; it is asked again next time; under protected mode it answers a window of
+; ours, and the ring never moves, so that window is kept for good (rt_stop
+; gives it back; drv_release would anyway).
+; -----------------------------------------------------------------------------
+rt_es:
+    push dx
+    mov dx, [rt_win]
+    or  dx, dx
+    jnz .have                   ; (CF = 0: the `or`)
+    push ax
+    push bx
+    push cx
+    mov dx, [rt_par]
+    xor ax, ax                  ; a new window
+    mov cx, RT_CLAIM
+    mov bl, SEG_WIN
+    call OSAPI_SEG
+    jc  .no
+    cmp dx, [rt_par]            ; (a window is an LDT selector, bit 2 set,
+    je  .real                   ; and a claim's paragraph is a multiple of
+                                ; 16, so the two can never be equal) real
+                                ; mode: the paragraph is the answer
+    mov [rt_win], dx            ; protected mode: a window, ours for good
+.real:
+    clc
+.no:
+    pop cx
+    pop bx
+    pop ax
+    jc  .out
+.have:
+    mov es, dx
+.out:
+    pop dx
     ret
 
 ; -----------------------------------------------------------------------------
@@ -282,11 +352,25 @@ rt_stop:
     mov al, RTC_RST
     out dx, al                  ; ...and the chip reset
     call rt_rstwait
+    push bx
+    mov dx, [rt_win]            ; rt_es's window, if protected mode made one
+    or  dx, dx
+    jz  .nowin
+    mov word [rt_win], 0
+    mov bl, SEG_FREE
+    call OSAPI_SEG
+.nowin:
+    pop bx
     mov dx, [rt_seg]
     or  dx, dx
     jz  .out
     mov word [rt_seg], 0
-    call OSAPI_MEM_FREE
+    call OSAPI_MEM_FREE         ; a boot claim named by its PARAGRAPH is not
+                                ; found under protected mode (mem_find_own
+                                ; compares selectors there) and is refused:
+                                ; drv_release's sweep of everything this
+                                ; driver owns frees it a moment later, and the
+                                ; card was silenced above, so nothing writes it
 .out:
     pop dx
     pop ax
@@ -319,10 +403,13 @@ rt_rx:
     in  al, dx
     test al, RTC_BUFE
     jnz .empty
-    mov es, [rt_seg]
+    call rt_es
+    jc  .empty                  ; no window to read it through: next call
     mov bx, [rt_off]
     mov ax, [es:bx]             ; the header: status...
     mov dx, [es:bx+2]           ; ...and the length, frame + 4 bytes of CRC
+    cmp dx, RT_EARLY
+    je  .empty                  ; still being written: the next call takes it
     test al, RTS_ROK
     jz  .reset
     cmp dx, 64
@@ -423,7 +510,8 @@ rt_tx:
     loop .pad
     mov cx, RT_MINFRAME
 .len:
-    mov es, [rt_seg]
+    call rt_es
+    jc  .fail                   ; no window to write it through
     mov si, eth_txb
     mov di, RT_TXOFF
     push cx
@@ -465,6 +553,7 @@ rt_tx:
     test bx, RTD_TABT
     jnz .done
     loop .w
+.fail:
     stc
     jmp short .out
 .done:
