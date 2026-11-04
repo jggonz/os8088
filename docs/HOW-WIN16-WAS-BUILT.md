@@ -4852,3 +4852,22 @@ first key only wakes it** - a host script that waits that long before sending
 Esc sends it to the saver and not to the menu. And polling `w16_mtrk` for "the
 menu loop ended and another started" misses the gap: it is shorter than a poll,
 so the test tells popups apart by the x they were placed at (`w16_mnx`).
+
+The review (Opus, the same day) found three things the keyboard test could not
+see, and fixed them for 14 more bytes of the library part and 4 of the image
+(resident 22 bytes on both arms, not 18). **A popup's loop ended on a
+release outside it**: the bar's rule, but a program that calls
+`TrackPopupMenu` from `WM_LBUTTONDOWN` still has the button down, and Wine's
+`TPM_POPUPMENU` keeps the menu up for that release. **The end of the loop drew
+the menu bar again**, which this loop never touched: a whole row of text for
+nothing, on every popup. And **part 11 that could not be fetched ended the
+program** with "WIN16's library part could not be read", as parts 9 and 10
+do; a rare import now answers 0, its failure, which is what Windows does
+with a call it has no memory for - so a part 11 import must fail with 0
+(SPEC.md 124.25.16 says so). The fixture gained a third popup, centred, with a
+grey item and a submenu: Enter on the grey item does nothing, Right opens the
+submenu (a second `WM_INITMENUPOPUP`), Enter there posts its `WM_COMMAND`.
+Looked at on QEMU's VGA desktop and "VBUSER OK". Not looked at: a 1bpp
+adapter (the popup drawing is §124.11's, unchanged) and the mouse fixes,
+which no fixture drives. Still open: whether Windows 3.1 sends `WM_INITMENU`
+for `TrackPopupMenu` (Wine does; this does not).

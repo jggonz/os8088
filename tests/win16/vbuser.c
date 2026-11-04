@@ -28,6 +28,10 @@
  *                     answered Down, Enter (WM_COMMAND 1 reaches the window,
  *                     TRUE comes back, WM_INITMENUPOPUP was sent) and the
  *                     second, right aligned, Esc (no command, TRUE again).
+ *                     The third, centred, has a grey item and a submenu:
+ *                     Down, Enter on the grey item (nothing), Down, Right
+ *                     opens the submenu (a second WM_INITMENUPOPUP), Enter
+ *                     there picks its item (WM_COMMAND 7).
  *                     A handle that is no menu and a window that is none
  *                     answer FALSE
  *
@@ -67,7 +71,7 @@ static const char cls[] = "VBUCLS";
 
 static void check(int ok, const char *tag)
 {
-    if (!ok) {
+    if (!ok && strlen(res) + strlen(tag) + 2 <= sizeof res) {
         strcat(res, " ");
         strcat(res, tag);
     }
@@ -115,7 +119,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     void FAR *gp;
     HMODULE lib, lib2;
     HICON ic;
-    HMENU pop;
+    HMENU pop, pop3, sub;
     UINT pdb, n;
     unsigned char andb[32], xorb[32];
     int i;
@@ -251,8 +255,19 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     pump();
     check(ninit == 2, "track:init2");
     check(lastcmd == 0, "track:nocmd");
+    sub = CreatePopupMenu();
+    AppendMenu(sub, MF_STRING, 7, "seven");
+    pop3 = CreatePopupMenu();
+    AppendMenu(pop3, MF_STRING | MF_GRAYED, 3, "grey");
+    AppendMenu(pop3, MF_POPUP, (UINT)sub, "sub");
+    check(VbuTrack(pop3, TPM_CENTERALIGN, pt.x + 50, pt.y + 10, 0, hwnd,
+                   NULL) == 1, "track:sub");
+    pump();
+    check(ninit == 4, "track:init3");
+    check(lastcmd == 7, "track:subcmd");
     VbuEndmenu();
     DestroyMenu(pop);
+    DestroyMenu(pop3);
 
     DestroyWindow(hwnd);
     if (strcmp(res, "VBUSER FAIL:") == 0)

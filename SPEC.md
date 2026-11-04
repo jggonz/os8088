@@ -236907,17 +236907,28 @@ macro (no handler there is reached from another part of WIN16); from it the
 image is `ICALL` and the library part `SLCALL`, as from part 10.
 
 **The three system parts share one path.** Parts 9, 10 and 11 have their bss
-blocks in a row, 8 bytes apart (`w16_sseg`, `w16_tseg`, `w16_rseg`;
+blocks in a row, 8 bytes apart (`w16_sseg`, `w16_tseg`, `w16_xseg`;
 `win16.asm` asserts it), so the dispatch finds a part's block from its
 number (`block = w16_sseg + (part - 9) * 8`), `w16_ptin` fetches by it and
 `w16_ptdrop` frees all three at a program's end. That replaced a branch each
 for parts 9 and 10 and a drop each, so the third part cost the image fewer
-bytes than the second had.
+bytes than the second had. The handler runs with SI holding the block (the
+dispatch puts the caller's SI back after it), so no part 9 to 11 handler may
+take SI as an input.
+
+**A part that cannot be had.** When the fetch fails (a full heap, or a read
+op_fetch has explained), an import of part 9 or 10 ends the program with
+*WIN16's library part could not be read*, as before. An import of part 11
+answers 0 in DX:AX and the program goes on, which is that import's FAILURE
+answer (Arc, Pie and TrackPopupMenu answer FALSE): a call Windows had no
+memory for fails, it does not end the program, and an import used once per
+program is the last that should. **So a part 11 import's failure answer must
+be 0**; one that is not belongs in part 9 or 10.
 
 | import | where it was | where it is |
 |---|---|---|
 | `Arc`, `Pie` (GDI.23, .26) | part 9 (`w16rgn.inc`) | part 11 (`w16rare.inc`), the code unchanged: they still draw through `Polyline` and `Polygon` (§124.25.14) |
-| `TrackPopupMenu` (USER.416) | refused: FALSE | part 11, with 28 bytes in the library part (the loop's ending and its answer) |
+| `TrackPopupMenu` (USER.416) | refused: FALSE | part 11, with 42 bytes in the library part (the loop's ending and its answer, the release outside, no bar redraw) |
 | `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` | image rows, no code | unchanged (nothing to move) |
 
 **TrackPopupMenu(hMenu, fuFlags, x, y, nReserved, hwnd, lpRect).** `x` and `y`
@@ -236936,13 +236947,20 @@ the call answers TRUE when the menu has ended, whichever way.
   and put back.
 - **`WM_INITMENUPOPUP`** is SENT to `hwnd` with `wParam` = `hMenu` and `lParam`
   = 0 (position 0, not a system menu), so the program can grey and check items
-  before the popup is laid out. `WM_INITMENU` is NOT sent: Windows 3.1's
-  `TrackPopupMenu` did not.
+  before the popup is laid out. `WM_INITMENU` is NOT sent. That is not
+  checked against Windows 3.1: Wine's `TrackPopupMenu` (`MENU_InitTracking`)
+  sends `WM_INITMENU` with `wParam` = `hMenu` first, so a program that sets
+  its items' state there and not in `WM_INITMENUPOPUP` would show them stale
+  here. The reference machine (`/win16-reference`) is where to settle it.
 - **A pick POSTS `WM_COMMAND`** to `hwnd` with the item's ID, as the bar's does
   (`wParam` = the ID, `lParam` = 0); a submenu opens beside its parent; Esc,
   F10, a click outside the menu, or the program ending ends it with nothing
   posted. Up, Down, Left, Right, Enter and a mnemonic letter work as in the
-  bar's popups, and the release after a press on an item picks it.
+  bar's popups, and the release after a press on an item picks it. A release
+  OUTSIDE the menu leaves it up (the press that made the program call
+  `TrackPopupMenu` is often still down), where the bar's loop ends on one;
+  that is Wine's `TPM_POPUPMENU` rule. The menu bar is not drawn again when
+  the menu ends: this loop never selected a title in it.
 - **The flags.** `TPM_LEFTALIGN` (0) puts `x` at the popup's left edge,
   `TPM_CENTERALIGN` (4) at its centre and `TPM_RIGHTALIGN` (8) at its right
   edge; `TPM_LEFTBUTTON` (0) is the only button the loop takes. `TPM_RIGHTBUTTON`
@@ -236953,11 +236971,13 @@ the call answers TRUE when the menu has ended, whichever way.
   is clamped, so a popup asked for at the screen's edge appears at the content's
   edge, not on the desktop.
 
-The resident cost, image plus bss, is **18 bytes on both arms** (10 of code,
+The resident cost, image plus bss, is **22 bytes on both arms** (14 of code,
 8 of bss for the third block) against a limit of 60 for the whole change; part 9
 fell by 775 bytes (Arc and Pie), part 11 is 1,048, and the library part gained
-28: the ending test in `w16_mcloseto` (19) and `w16_mans` (9), the answer TRUE
-where the bar's loop answers 0 (791 of its 64 KB left on the kern_mega arm). `tests/unit/t_w16xsec.py` knows the
+42: the ending test in `w16_mcloseto` (19), `w16_mans` (9), the answer TRUE
+where the bar's loop answers 0, and the release outside and the bar left alone
+at the end (7 each); 4 of the 14 bytes of code are the answer 0 when part 11
+cannot be had. `tests/unit/t_w16xsec.py` knows the
 part: a row naming a `W16RARE` handler must say part 11, and no near call
 crosses between it and another part. Gates: `tests/win16/vbuser.c`
 (TrackPopupMenu shown and dismissed; the owner's `WM_COMMAND`) and
@@ -238338,8 +238358,9 @@ It is part 9's shape in every respect (§124.24.1):
 - a handler is declared `W16TSK`; the image reaches one with `TCALL`, and a
   continuation in the part is `TCONT`;
 - the two parts' bss is one layout - the segment, the vector, the routine -
-  so one fetch body (`w16_pin`) and one drop (`w16_pout`) serve both, and
-  the second part cost the image 35 bytes;
+  so one fetch body (`w16_ptin`) and one drop serve both, and the second
+  part cost the image 35 bytes (since §124.25.16 one drop, `w16_ptdrop`,
+  serves parts 9, 10 and 11);
 - from the part, the image is `ICALL`. The other system part is reached
   through the image: `[w16_sfn]` set, then `ICALL w16_scall` (part 10 to
   part 9, GetHeapSpaces' `w16u_fsr`), or `[w16_tfn]` and `ICALL w16_tcall`

@@ -2845,7 +2845,10 @@ w16_mstop:
     call w16_mcloseto
     mov byte [w16_mbsel], 0xFF
     mov byte [w16_mtrk], 0
+    cmp byte [w16_mkbd], 2          ; TrackPopupMenu's loop never touched
+    je .nobar                       ;   the bar: nothing to draw (124.25.16)
     call w16_mbardraw
+.nobar:
     pop ax
     ret
 
@@ -3352,6 +3355,8 @@ w16_mup:
     je .bar
     cmp al, 2
     je .pop
+    cmp byte [w16_mkbd], 2          ; TrackPopupMenu's menu stays up for a
+    je .post                        ;   release outside it (124.25.16)
     call w16_mstop
     jmp short .post
 .bar:

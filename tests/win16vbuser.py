@@ -16,7 +16,8 @@ TrackPopupMenu, and checks each answer against a value it computes. The two
 TrackPopupMenu calls (SPEC.md 124.25.16) wait for the host: this row sends Down
 and Enter to the first popup (the window must get WM_COMMAND 1) and Esc to the
 second (no command), each time the menu loop shows `w16_mtrk` set with a popup
-open. Its MessageBox, read
+open; the third has a grey item, which Enter does not pick, and a submenu,
+opened with Right, whose item Enter does pick (WM_COMMAND 7). Its MessageBox, read
 off the program's stack, is "VBUSER OK" or names each check that failed.
 """
 import argparse
@@ -55,22 +56,36 @@ def main():
         S = F.pkg_syms()
         dw = F.open_b(d, ui, xmcheck.sym)
         st = {"last": None, "n": 0}
+        # the keys for each popup: Down, Enter (WM_COMMAND 1); Esc; on the
+        # third, Down, Enter on its grey item (nothing), Down, Right (its
+        # submenu opens); and Enter in the submenu (WM_COMMAND 7)
+        seq = (("down", "ret"), ("esc",), ("down", "ret", "down", "right"),
+               ("ret",))
 
         def pump(p):
             # the host half of TrackPopupMenu: answer each popup once it is
             # up. A popup is NEW by the x it was placed at (w16_mnx): the gap
-            # between two menus is too short for a poll to see
-            if p.pb("w16_mtrk") == 1 and p.pb("w16_mkbd") == 2 \
-                    and p.pb("w16_mlev") >= 1 and p.pw("w16_mnx") != st["last"]:
+            # between two menus is too short for a poll to see. The submenu
+            # is ready when the loop is two levels deep
+            if st["n"] >= len(seq) or p.pb("w16_mtrk") != 1 \
+                    or p.pb("w16_mkbd") != 2:
+                return
+            lev = p.pb("w16_mlev")
+            if st["n"] == 3:
+                ready = lev >= 2
+            else:
+                ready = lev >= 1 and p.pw("w16_mnx") != st["last"]
+            if ready:
                 st["last"] = p.pw("w16_mnx")
-                for k in (("down", "ret"), ("esc",))[min(st["n"], 1)]:
+                for k in seq[st["n"]]:
                     d.hmp("sendkey " + k)
                 st["n"] += 1
 
         F.run_prog(d, ui, xmcheck.sym, S, dw, "VBUSER.EXE", bad, "QEMU",
                    want={"VBUSER.EXE": "VBUSER OK"}, pump=pump)
-        if st["n"] != 2:
-            bad.append("TrackPopupMenu was answered %d times, not 2" % st["n"])
+        if st["n"] != len(seq):
+            bad.append("TrackPopupMenu was answered %d times, not %d"
+                       % (st["n"], len(seq)))
         if not a.keep:
             d.p.close()
     finally:

@@ -292,9 +292,11 @@ w16_dispatch:
     call far [si + 2]
     pop si
     ret
-.nopart:
-    pop si
-    jmp short .nolib
+.nopart:                            ; it could not be had: a part 9 or 10
+    pop si                          ;   import ends the program, saying why,
+    cmp al, W16P_RARE               ;   and a rare one answers 0, its FAILURE
+    je .zero                        ;   - FALSE, NULL - as a call Windows had
+    jmp short .nolib                ;   no memory for does (124.25.16)
 .image:
     mov ax, [w16_nargb]
     jmp [bx + W16B_PROC]
@@ -337,6 +339,7 @@ w16_dispatch:
     mov byte [w16_state], W16S_ENDED
     pop di
     pop si
+.zero:
     xor ax, ax
     cwd
     ret
