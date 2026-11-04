@@ -997,7 +997,11 @@ w16k_lockseg:
     mov bx, [w16_psp_]
     mov ax, [es:bx + W16F_DS]
 .out:
+%ifdef PKG_MEGA
+    jmp w16_touch                   ; a discarded code segment loads (124.26.12)
+%else
     ret
+%endif
 
 ; GlobalCompact (KERNEL.25) and GetFreeSpace (KERNEL.169) are the system-library
 ; part's (w16mem.inc's end, SPEC.md 124.25.1, *What GetFreeSpace says*)

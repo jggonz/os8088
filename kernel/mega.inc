@@ -2047,7 +2047,10 @@ section .mega                   ; protected mode only (KERN-MEGA-SEGMENTS-PLAN)
 mega_xs:
 %assign mega_v 0
 %rep 16
- %if mega_v == 8 || (mega_v >= 10 && mega_v <= 14)
+ %if mega_v == 0x0B
+    jmp COLD_SEG:mega_npx           ; #NP: O8's reload route first (14.143);
+    times 2 nop                     ; five bytes, so the stub's seven hold it
+ %elif mega_v == 8 || (mega_v >= 10 && mega_v <= 14)
     push byte mega_v
     jmp near mega_fault
     times 2 nop
@@ -8694,7 +8697,11 @@ mx_tab_end  equ mx_tab + MX_NBLK * MX_BLKSZ ; (KERN-MEGA-PLAN 14.49). Zeroed
 mega_ivts   equ mx_tab_end          ; the IVT cells as the switch found them
                                     ; (KERN-MEGA-PLAN 14.141): {cell, offset,
 mega_ivts_end equ mega_ivts + MEGA_FKVN * 6 ; segment} a row, mega_fkvec's
-MEGA_MXT_SIZE equ (mega_ivts_end + 63) & ~63 ; whole 64-byte lines: the park
+mega_npo    equ mega_ivts_end       ; O8 (14.143): the #NP handler's offset,
+mega_npc    equ mega_npo + 2        ;   its code selector (0 none), and the
+mega_npw    equ mega_npc + 2        ;   registrant's owner byte
+mega_npe    equ mega_npw + 1
+MEGA_MXT_SIZE equ (mega_npe + 63) & ~63 ; whole 64-byte lines: the park
                                     ; sums lines (mega_dsave)
 MEGA_MXT_LINES equ MEGA_MXT_SIZE / 64
 %if mx_tab_end + MX_OWN >= MEGA_MXT_SIZE
@@ -12771,6 +12778,9 @@ mega_segty:
     push ax
     push di
     push es
+    cmp cx, 3                       ; CX = 3 REGISTERS DX:SI as this owner's
+    je .reg                         ; #NP handler (O8, 14.143); DX = 0 takes
+                                    ; it back, by its registrant only
     test dl, 4                      ; AN ALLOCATOR LDT ENTRY OR NOTHING, and
     jz .no                          ; never nobody's (BL = FFh). Unchecked,
     mov di, dx                      ; DX = 0 matched a FREE row of mega_wtab
@@ -12820,13 +12830,108 @@ mega_segty:
     mov al, 0x92
     jcxz .s
     mov al, 0x9A
+    cmp cl, 2                       ; CX = 2: code, NOT PRESENT (1Ah): a far
+    jne .s                          ; transfer to it is a #NP, mega_npx's
+    mov al, 0x1A
 .s:
     mov [es:di+5], al
+.done:
     pop es
     pop di
     pop ax
     clc
     retf
+.reg:
+    cmp bl, 0xFF                    ; somebody's only
+    je .no
+    MXT_ES
+    or dx, dx
+    jnz .rset
+    cmp bl, [es:mega_npw]           ; withdrawn by its registrant alone
+    jne .done
+    mov [es:mega_npc], dx
+    jmp short .done
+.rset:
+    mov [es:mega_npc], dx
+    mov [es:mega_npo], si
+    mov [es:mega_npw], bl
+    jmp short .done
+
+; mega_npx - vector 0Bh (#NP), jumped to from mega_xs's stub (O8, KERN-MEGA-PLAN
+; 14.143). A not-present HANDLE descriptor (SEG_TYPE CX = 2) based in a block
+; of the registrant's (SEG_TYPE CX = 3), faulted on by a package's code (an LDT
+; CS) on the UI task with no rate hook running, goes to the registrant's
+; handler by a far return with the CPU's frame as it was: [selector] [IP] [CS]
+; [FLAGS], every register as at the fault, IF = 0. Anything else is
+; mega_fault's, with the frame it expects. Entered by a jump with the CPU's
+; frame: [error] [IP] [CS] [FLAGS]
+mega_npx:                           ; ovlchk: builds its own far frame
+    ; STKBALANCE-OK: a DISPATCH - the handler's far address is built under the
+    ; CPU's frame (the two slots the first pushes made), and the retf takes
+    ; it with the frame left for the handler to iret; every other path
+    ; unwinds to mega_fault's own entry frame
+    push byte 0x0B                  ; mega_fault's vector, or the handler's CS
+    push ax                         ; (the handler's offset goes here)
+    push bp
+    mov bp, sp                      ; [bp+4] vector, [bp+6] error, [bp+8] IP,
+    push ax                         ; [bp+10] CS
+    push bx
+    push dx
+    push di
+    push ds
+    push es
+    push word MEGA_SEL_KDATA
+    pop ds
+    mov ax, [bp+6]
+    mov dl, al
+    and dl, 7                       ; an LDT selector, and not EXT (an external
+    cmp dl, 4                       ;   event's delivery) or IDT (bit 1: the
+    jne .no                         ;   index is a GATE's, not a descriptor's)
+    lar dx, ax                      ; inside the LDT's limit: a software int 0Bh
+    jnz .no                         ;   pushes no error code, so [bp+6] is an IP
+    test byte [bp+10], 4            ; a package's code faulted, never the
+    jz .no                          ;   kernel's (a GDT CS stays fatal)
+    cmp word [sch_rbusy], 0         ; no rate hook, no scheduler lock
+    jne .no
+    cmp byte [sch_cur], 0           ; the UI task's
+    jne .no
+    mov di, ax
+    and di, 0xFFF8
+    push word MEGA_SEL_LDTD
+    pop es
+    test byte [es:di+6], MEGA_HAVL  ; a handle descriptor (SEG_HND)...
+    jz .no
+    mov ax, [es:di+2]
+    mov dl, [es:di+4]
+    xor dh, dh                      ; DX:AX = its base
+    MXT_ES
+    cmp word [es:mega_npc], 0       ; a handler registered...
+    je .no
+    mov bl, [es:mega_npw]
+    call MEGA_SEL_CODE:mega_bownf   ; ...and the base in a block of the
+    jc .no                          ;   registrant's (keeps all)
+    mov bx, [es:mega_npc]           ; only now the vector's slot becomes the
+    mov [bp+4], bx                  ;   handler's CS: a refusal above still
+    mov bx, [es:mega_npo]           ;   hands mega_fault its 0Bh
+    mov [bp+2], bx
+    pop es
+    pop ds
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    pop bp
+    retf                            ; into the handler
+.no:
+    pop es
+    pop ds
+    pop di
+    pop dx
+    pop bx
+    pop ax
+    pop bp
+    add sp, 2                       ; [SP] = 0Bh, the error: mega_fault's
+    jmp MEGA_SEL_CODE:mega_fault
 section .mega
 
 ; mega_wfind - DX:AX = a base, CX = a limit, BL = an owner -> DI = that

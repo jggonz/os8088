@@ -414,6 +414,13 @@ section .w16dlg
     W16BSS w16_cndrop, 2        ;   program runs, counted (row win16write)
     W16BSS w16_thax, 2          ; AX and DX a thunk was entered with (124.26.2)
     W16BSS w16_thdx, 2
+%ifdef PKG_MEGA
+    W16BSS w16_npsel, 2         ; the not-present selector w16_npent was entered
+                                ;   with, 0 = none (SPEC.md 124.26.12)
+    W16BSS w16_nplod, 1         ; w16l_npload's: bit 0 = a #NP's segment is
+                                ;   being loaded, bit 1 = on WIN16's own
+                                ;   stack, so no code goes (w16l_nplow)
+%endif
 %ifndef PKG_MEGA
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
     W16BSS w16_clast, 2 * W16_MAXSEG    ; ...and its last offset (w16cens.inc)
@@ -1364,15 +1371,24 @@ w16_entry:
 ; w16_lend - the stack a program's BIOS call runs on (SPEC.md 124.31.2): its
 ; own is above 1MB, where real mode cannot reach, so kern_mega is lent 1 KB
 ; below it (SEG_LEND), claimed once and kept until the instance ends, whose
-; teardown takes the loan back. Asked again at every wake, because the last
-; lender's is the one used and another WIN16 may have lent since. Keeps
-; every register
+; teardown takes the loan back. Asked again before every run of the program
+; (w16_dcunpark, which w16_resume and w16_resumecb both call first), because
+; the last lender's is the one used and another WIN16 may have lent since, and
+; a program runs from a key or timer callback as well as from a wake
+; (w16_mkick, w16_after). The #NP handler is registered there for the same
+; reason. Keeps every register
 ; -----------------------------------------------------------------------------
 w16_lend:
     push ax
     push bx
     push cx
     push dx
+    push si
+    mov cx, 3                       ; w16_npent as the #NP handler (SEG_TYPE,
+    mov si, w16_npent               ;   SPEC.md 124.26.12), first and whatever
+    W16ICS dx                       ;   the loan's answer
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
     mov dx, [w16_lseg]
     or dx, dx
     jnz .have
@@ -1390,6 +1406,7 @@ w16_lend:
     mov bl, SEG_LEND
     call OSAPI_SEG
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -1406,9 +1423,6 @@ w16_lend:
 ; =============================================================================
 w16_wake:
     mov byte [w16_locked], 0        ; (no lock: w16_peekwake runs on this)
-%ifdef PKG_MEGA
-    call w16_lend                   ; a BIOS call's stack (SPEC.md 124.31.2)
-%endif
     cmp byte [w16_jreq], 0          ; a desktop launch DOS left us, first
     je .nojn                        ;   (SPEC.md 124.28.12)
     TCALL w16t_join

@@ -99560,7 +99560,7 @@ verb:
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
-| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code | the descriptor's type set in place, 92h / 9Ah; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry) |
+| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, 92h / 9Ah / 1Ah; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99679,6 +99679,37 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   the window's row, as `SEG_FREE`'s, or `mega_bown`'s (SEG_BWIN's) on the
   block a handle descriptor is based in, so another's window or handle descriptor, a SUB, a SUBC pair
   and a tile are refused (CF = 1, AX = 4) and nothing changes.
+  **`CX = 2` and `CX = 3` are O8's, and the only way a package is handed a
+  not-present fault** (KERN-MEGA-PLAN 14.143; WIN16 uses them for discardable
+  code that a program names by its selector, §124.26.12). `CX = 2` writes
+  access 1Ah: code, DPL 0, NOT PRESENT, the base and limit kept. A far
+  transfer to it, or a load of it into a segment register, is a `#NP`.
+  `CX = 3` registers DX:SI (a far address in the caller's own code) as the
+  caller's `#NP` handler; DX = 0 takes it back, and only its registrant's
+  withdrawal counts. There is one registration, in the tables' tail (5
+  bytes), made again by the owner before each run of the code that may fault,
+  as `SEG_LEND`'s is (WIN16: every resume of its program, §124.26.12).
+  **The router** (`mega_npx`, `.cold`; the IDT's 0Bh stub is a five-byte far
+  jump to it, in the same seven bytes) routes a `#NP` to the handler only
+  when ALL hold: the error code names an LDT selector, with neither its EXT
+  bit (an external event's delivery) nor its IDT bit (a gate's index) set,
+  and inside the LDT's limit (`lar`: a software `int 0Bh` pushes no error
+  code, so the word there is an IP); the faulting CS is an
+  LDT selector (a package's code - a GDT CS, the kernel's or a BIOS's, stays
+  fatal); no rate hook is in flight and the scheduler is not locked
+  (`sch_rbusy` = 0); the UI task is current (`sch_cur` = 0); the descriptor is
+  a handle descriptor (`MEGA_HAVL`); a handler is registered; and the
+  descriptor's base lies in a block of the registrant's own (`mega_bown`).
+  The handler is then entered by a far return with the CPU's frame untouched:
+  `[selector] [IP] [CS] [FLAGS]` on the faulting stack, every register as it
+  was at the fault, IF = 0, for it to make the descriptor present and `iret`
+  (the instruction restarts). Anything else is `mega_fault`'s, with the frame
+  it expects: the package is closed as for any other fault (14.140). The
+  kernel itself never loads a not-present selector for a package, so a
+  package must make a selector present before it hands one to an `OSAPI_*`
+  call. `.mega` +0 (the stub's seven bytes), `.cold` +201, which crosses
+  `.cold`'s rung (boot only: `.cold` is above 1MB after the switch), no
+  resident byte; every other kernel nothing.
   A CODE window is never the match for a question about a data one
   (`mega_wfind` skips it), so a later `SEG_WIN` over the same base and reach
   makes a window of its own. A window does not follow a block that moves, code
@@ -238125,6 +238156,130 @@ with discardable code keeps the part as well.
 **A library's end** (its count reaching 0, §124.23.5). Its loaded
 discardable segments and its module block are given back with its other
 blocks.
+
+#### 124.26.12 Code named by its selector is discardable, and reloaded at `#NP` *(O8; WIN16-NEXT; KERN-MEGA-PLAN 14.143)*
+
+**The arm alone.** On `kern_big` there is no descriptor to take away; §124.26.1
+and §124.26.10 stand there. On `kern_mega` Windows' standard-mode scheme is
+reachable, because the kernel hands a package its not-present faults
+(§50.6.11, `SEG_TYPE` `CX` = 2 and 3). It covers exactly the code §124.26.1,
+§124.26.2.1 and §124.26.11 KEPT: a discardable code segment that a relocation
+names by its number, or by segment or offset alone, and every discardable
+segment of a protected-mode-only module (`NEF_PMODE`). VBRUN300's 329 KB,
+Sir Hangman's engine's 395 KB, Mozart's 185 KB of p-code and each Arcade
+game's 55-97 KB are that code.
+
+**A stable selector.** Such a segment (marked `W16CLF_STAB`, 10h, in the live
+entry, where the check pass used to set `W16CLF_KEEP`) has ONE selector for as
+long as its module lives: a handle descriptor (`SEG_HND`) made at the
+module's launch, held in a selector cell after the live table (2 bytes a
+segment; the module block's live-table area is 8 bytes a segment on the
+arm). Every fixup by number, every pointer built from one, `GetProcAddress`'s
+answer and a library's `W16LM_SEGS` row hold that selector, whether or not
+the segment is loaded, and a thunk of the segment (a call through an entry
+that is also reached by number) jumps to it. It is the same value across any
+number of discards and loads.
+
+| the segment is | the descriptor |
+|---|---|
+| not loaded (never loaded, or discarded) | code, **not present** (`SEG_TYPE` 2, access 1Ah), aimed at the module block with a limit of 0, so no free of an arena can take it |
+| loaded | code, present (`SEG_TYPE` 1), re-aimed (`SEG_HND`) at the segment's block, reaching its allocation |
+
+If no LDT entry can be had, the segment is kept as before (`W16CLF_KEEP`), so
+the arm degrades to §124.26.11 and not to a refusal.
+
+**Loading at the fault.** WIN16 registers `w16_npent` as its `#NP` handler
+(`SEG_TYPE` `CX` = 3, in `w16_lend`) before **every run of the program**:
+`w16_dcunpark` calls it, and `w16_resume` and `w16_resumecb` both call that
+first. A wake is not enough, because a program also runs from a key or timer
+callback (`w16_mkick`, `w16_after`), and a second WIN16 instance that woke in
+between holds the registration (and the lent stack, §124.31.2, which is asked
+for in the same place for the same reason). A far transfer or a
+segment-register load through a not-present stable selector arrives there
+with `[selector] [IP] [CS] [FLAGS]` on the faulting stack:
+
+- **On the program's stack** (`SS` = the program's): the handler keeps AX and
+  DX where `w16_thkhit` keeps them (`w16_thax`, `w16_thdx`), drops the
+  selector, and enters the gate as bind slot `W16_SLROW` with a far return to
+  an `iret` of its own. `w16_segld` sees `w16_npsel` set and loads the
+  segment the selector names - the program's or a library's, found by
+  scanning the live tables' selector cells - with discard allowed, exactly
+  as a thunk hit does, and answers AX and DX as they were. The gate restores
+  BX, CX, ES and DS, SI, DI, BP; the `iret` restores FLAGS and the
+  instruction runs again. A segment that cannot be loaded ends the program
+  with *Not enough memory for its code.*, as a thunk's does.
+  WIN16's own `retf` into a callback's callee (§124.2.2: `w16_cbenter`,
+  `w16_resumecb`) is on the program's stack too, so a callee that is not
+  present faults there and takes this arm, discard allowed; nothing is
+  touched ahead of it.
+- **On any other stack** (`SS` is not the program's): a handler of WIN16's
+  read a far pointer into a code segment (`TextOut` of a string constant,
+  §124.26.2.1), or another package's code on the UI task did (the DOS
+  package with a program's buffer). The segment is loaded **in place, with
+  no code discarded** (`w16l_nplow`, part 5): what the interrupted code
+  holds in its registers is not known, a discard could free a segment one
+  of them holds, and a 286 keeps that register's cached base, so it would
+  read freed memory without a fault. No run free is the same refusal,
+  below.
+- **Refused**, by executing an undefined opcode (kern_mega's fault close of a
+  WIN16 program, §124.31.11): a second `#NP` while a segment is loading
+  (`w16_nplod`), and a load WIN16 cannot make from its own stack.
+
+The kernel routes only the UI task's, only from an LDT code selector, never
+from the rate hook (§50.6.11), so a `#NP` in the kernel, a BIOS call or an
+interrupt handler stays fatal. WIN16 installs no program interrupt handler
+that runs program code (§124.31.6, `int 21h` AH = 25h), so no program code
+runs in one; **belt and braces**, `w16l_npload` (part 5, so no resident byte)
+reads the master PIC's in-service register (OCW3 0Bh, then 0Ah so everyone
+else reads the IRR as before, in one `cli` window) and refuses a load while
+it is not 0. A
+refused or failed load is the program's end, *Not enough memory for its
+code.*, as for a thunk (seen on QEMU: the program held the only segment
+loaded in ES and the heap had room for no other, 2026-11-04).
+
+**Discarding.** §124.26.5 and §124.26.11 stand, with these changes for a
+stable segment: it is **parked** (`SEG_TYPE` 2, then re-aimed at the module
+block) before its block is freed, so an arena's free can never take the
+descriptor; the stack scan compares the stable selector; and **a segment that
+the program's banked DS or ES holds counts as in use** (the gate's frame word
+and `w16_res`), because a 286 keeps a segment register's cached base and
+would read the freed block without a fault. **Nor may any segment register
+WIN16's own frames pushed hold it** (`w16l_inuse` scans the host stack, SP up
+to `w16_resume`'s five words above `w16_hsp`, for the selector): `w16_gnew`
+pushes its caller's ES, a handler may be holding a string's segment there,
+and a segment made not present while a register holds it is a `#NP` at the
+next `pop` of that register - in WIN16, or in the kernel when an interrupt
+arrives in between, and that one is fatal. A module's end frees its
+descriptors (`w16l_cfreeall`, `w16t_codefree`).
+
+**Where the program may be faulted by a discard, and is not:**
+
+- `GetCodeHandle` and `LockSegment` of a not-present code selector load it
+  (`w16_touch`: `verr`, which does not ask the present bit, then a load into
+  DS), as Windows' did; so do `AllocCStoDSAlias`, `AllocDStoCSAlias` and
+  `PrestoChangoSelector` of their source (`w16q_touch`), so an alias is made
+  over the segment's code and not over the module block it is parked on. An
+  alias made of a LOADED segment does not follow it to its next load, as
+  Windows' did not;
+- **a `#NP` inside the kernel stays fatal, and none can arise from a program
+  pointer**: on `kern_mega` the kernel reads a package's far pointer only
+  through a segment register the package loaded in its own code (`ES:BX` of
+  `OSAPI_FILE_READ`, `ES:SI` of `OSAPI_GFX_BLIT4`, `DS:SI` of
+  `OSAPI_SND_STREAM` verb 6, `OSAPI_DRV_CALL`'s caller's DS) - no `OSAPI_*`
+  slot takes a pointer's segment in a general register and loads it itself -
+  so a not-present selector faults in WIN16's (or the DOS package's) LDT code
+  first, where it is routed and repaired; and the discard rule above keeps it
+  present while that register still holds it. The audit of WIN16's 40
+  pointer-taking call sites is in the diary.
+
+**Not done.** FS and GS are not banked by the gate. A second WIN16 instance
+registers before each run of its own programs and its descriptors are its
+own. `PrestoChangoSelector(s, s)` of a stable selector flips it to data in
+place, and its next load makes it code again. A discarded
+segment's thunk-only entries keep §124.26.2's mechanism.
+
+**What was and was not built, and what was seen** is in
+`docs/HOW-WIN16-WAS-BUILT.md` (O8); `win16np` (`tests/suite.py`) is the row.
 
 #### 124.26.14 A segment reached only by far calls goes through thunks *(WIN16-NEXT, c3; the real-mode arm)*
 
