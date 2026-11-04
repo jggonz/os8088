@@ -111,6 +111,47 @@ pad() {                             # pad <image> <sectors>
 }
 
 # =============================================================================
+# THE FAST CORE'S LEG (APPLE2-SPEC section 4.6): the generated core, through
+# a2fast.inc's _a2_run, handing back to the accurate core. The same rows bar
+# row 6 (the accurate core's fetch ES, which the plain leg asks), and Dormann,
+# each control made in the core that runs it. The disk is the harness, then
+# Dormann's 64KB at DORMSEC, then the core's part at CORESEC.
+# A2CPU_ONLY=fast runs this leg alone; =plain the original legs alone.
+# =============================================================================
+FASTBIN=$BUILD/apple2/a2fast.bin
+fast_leg() {
+    [ -f "$FASTBIN" ] || { echo "a2cputest: $FASTBIN is missing - make apple2"; exit 1; }
+    [ "$(wc -c < "$FASTBIN")" -eq 65024 ] || { echo "a2cputest: $FASTBIN is not 65,024 bytes"; exit 1; }
+    for MODE in rows real neg; do
+        IMG=$BUILD/a2cputest-fast-$MODE.img
+        case $MODE in
+            rows) FL="-DFAST" ;;
+            real) FL="-DFAST -DDORMANN -DDORMOK=$DORMOK" ;;
+            neg)  FL="-DFAST -DDORMANN -DDORMOK=$DORMOK -DNEG" ;;
+        esac
+        # shellcheck disable=SC2086
+        nasm -f bin -w+error -I apps/apple2/ $FL $DEC -o $IMG apps/apple2/hosttest/a2cputest.asm
+        pad $IMG 64
+        cat "$DORM" >> $IMG
+        cat "$FASTBIN" >> $IMG
+        pad $IMG 2880
+        run $IMG "fast-$MODE" > $BUILD/a2cputest-fast-$MODE.log || true
+        cat $BUILD/a2cputest-fast-$MODE.log
+        case $MODE in
+            rows|real) grep -q "a2cputest: PASS" $BUILD/a2cputest-fast-$MODE.log || {
+                echo "a2cputest: the FAST CORE's $MODE leg FAILED"; exit 1; } ;;
+            neg) grep -q "control fails: ok" $BUILD/a2cputest-fast-$MODE.log || {
+                echo "a2cputest: the fast core's Dormann NEGATIVE CONTROL passed"; exit 1; } ;;
+        esac
+    done
+}
+if [ "${A2CPU_ONLY:-}" = fast ]; then
+    fast_leg
+    echo "a2cputest: PASS - the fast core's leg"
+    exit 0
+fi
+
+# =============================================================================
 # THE ROWS (seconds)
 # =============================================================================
 IMG=$BUILD/a2cputest-rows.img
@@ -146,5 +187,6 @@ for MODE in real neg; do
     fi
 done
 
-echo "a2cputest: PASS - twelve rows, and every negative control failed"
+[ "${A2CPU_ONLY:-}" = plain ] || fast_leg
+echo "a2cputest: PASS - twelve rows, and every negative control failed, on both cores"
 exit 0

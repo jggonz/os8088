@@ -95,6 +95,9 @@ LOCAL_EXEMPT = {
           "gate rather than a program; the packages built WITH it are "
           "cword/, paccman/, runcpm/, c64/, apple2/, weave/ and loom/, and "
           "every one of those is checked below",
+    "m6502": "the fast 6502 core's GENERATOR (APPLE2-SPEC 4.6) - a host tool "
+             "whose output is a part of APPLE2.O88, which is checked below "
+             "as apple2/",
 }
 
 

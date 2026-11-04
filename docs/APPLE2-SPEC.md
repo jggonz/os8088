@@ -517,6 +517,21 @@ controller oscillates inside its deadband by design. **The first thing that
 case asserts is that the budget LEFT `A2_SLICE_MIN`**, which is the rule
 above failing, in one line, without an emulator.
 
+#### 4.3.2 Runs a wake: the budget stops at the cap, the work does not
+
+`A2_SLICE_MAX` is a signed 16-bit countdown's ceiling, and a machine that runs
+16,384 cycles in a small part of a host tick - section 4.6's core on a 286 -
+would spend most of each second between wakes. So **once the budget is at its
+cap and the window still says raise, the controller raises `a2_reps`**, the
+number of runs a wake makes (up to `A2_REPS_MAX` = 16), doubling it on an
+`a2_adx == 0` window and adding one inside the band. On the way down it lowers
+`a2_reps` first (`A2_ADAPT_HI`, and the halve-on-the-spot arm) and only then
+the budget. A run that ends CUT (`cnt > 0`) ends the wake's work too, and a
+JAM ends it at once. One run a wake is what every machine had before, and
+what an 8088 keeps. `hosttest/a2uitest.c`'s one-cell bracket case pins
+`a2_reps` to 1, because its fixture write is "the second run" and its runs
+cost nothing.
+
 ### 4.4 The core's gate - `make a2cputest`
 
 `apps/apple2/hosttest/a2cputest.asm` on `c64cputest.asm`'s boot-sector shape,
@@ -563,6 +578,92 @@ addresses are actually answered, and clears the core's scratch after the load
 because the image lands on top of `$CF00`. And **row 12's vectors are written
 through the ROM part**, not into RAM: `$FFFA-$FFFF` belong to the Autostart
 Monitor on this machine and a write there is dropped.
+
+### 4.6 The fast core (docs/plans/FAST6502-PLAN.md)
+
+**APPLE2.O88's part 1 is a second 6502 core**, written by
+`apps/m6502/m65gen.py` and far-called through `apps/apple2/a2fast.inc`. It
+runs the machine on the same `_a2_m` record and the same scratch page as the
+accurate core above, and hands that core what it does not do itself, so the
+two are one machine and the accurate core stays the oracle. Without the part
+(a refused fetch, or no 128KB for its two claims) the accurate core runs the
+machine alone; nothing is said, because a slower machine is not a broken one.
+
+**Measured, 86Box `286-victory` (16 MHz 286), at the commit that lands this:**
+
+| | accurate core | fast core |
+|---|---|---|
+| idle at the `]` prompt | 10% | 48% |
+| `10 I=I+1 / 20 GOTO 10` | 13.6% | 61% |
+
+A profile of the idle prompt (CS:IP sampled once an emulated millisecond)
+puts 97% of the machine in the core's slots, so what is left is the core's
+own instructions, not the wake.
+
+**The layout.** The handler for opcode X is at X x 256 of one 64KB code
+segment; dispatch is `mov dh,[si] / inc si / jmp dx` with DL = 0, inlined at
+the end of every handler as `sub bp,cycles / jle exit / ...`. The slots of
+opcodes it does not run hold the shared code: the entry at `$0210`, the exits,
+P packing, the I/O call-outs and the damage marker. **A part is at most 65,024
+bytes** (its length is a sector count in a word), so the part is the
+segment's first `$FE00` bytes: `a2_fast_init` claims 64KB, copies the part in
+(`a2f_core`), writes the `$FE` and `$FF` slots as near jumps to the targets
+the part's table at `$0203` names (INC abs,X's body lives in a spare slot),
+and gives the part back. Both 64KB claims are movable; `os88_onmove` follows
+`a2_fseg`.
+
+**The registers.** A = AL; N, Z, C in AH in `lahf`'s layout, as above; X = CL;
+Y = CH; PC = SI; S = DI as `$0100+S`; BX the effective address; DH the data;
+**BP the countdown**. V, B, D and I are the scratch page's `PV` byte at their P
+positions. The run stops before the instruction that finds the budget spent,
+with what was not spent in `cnt`, exactly as section 4.2 says.
+
+**The guest image.** The fast core runs in a 64KB claim that replaces the
+49KB one at the first wake (`a2f_image`): `$0000-$C1FF` from the running
+machine, **`$C000-$C0FF` filled with `$02`**, slot space `$FF`, and
+`$D000-$FFFF` a copy of the main ROM. So a fetch is `[si]` and a RAM or ROM
+read is one compare and one `mov`. The accurate core runs in the same claim
+unchanged: it never reads above `$BFFF` but the scratch page, and fetches and
+reads the ROM out of the part.
+
+**Memory.** Zero page and the stack store and nothing else. Every other write
+drops at `$C000` and up, or calls out at `$C0xx`, and **marks damage only on
+`$0400-$0BFF` and `$2000-$5FFF`**: the page bit, the "wrote" byte and the
+watch-range window of section 7.5, which is all the flush reads. Reads of
+`$C000-$C1FF` go to the call-out (`$C0xx`) or answer `$FF` (`$C1xx`); the
+rest of slot space and the ROM are the image. **The keyboard latch is
+answered in the core**: `a2_kb_mirror` writes `$C000`'s byte to `$C14A` and
+"answer it" to `$C14B` at the top of every run and at the strobe, and while a
+paste is in flight the flag says call out, because then the read is
+`a2_paste_peek`'s.
+
+**What it hands back, and how.** Reason 2 (one instruction): every illegal
+opcode, `BRK`, `ADC`/`SBC` with D set, `CLI`/`SEI`/`PLP`/`RTI` while the
+interrupt byte is non-zero, a read-modify-write at `$C000` and up, `JMP
+($C0xx)`/`($C1xx)`, an interrupt pending at entry, and a fetch of the I/O
+page's `$02`. `a2fast.inc` runs the accurate core with a budget of 1 and
+`CLKB` moved for the step, so `a2_now()` reads the clock the run would have
+had. Reason 3 (the region): a jump, call, return or entry whose PC is in
+`$BFFE-$CFFF` or at `$FFFE` and up. The accurate core runs with `HBK` set
+(`$C13A`) and `a2_rebias_go` ends the run at its first re-bias out of that
+region (`a2_hbk`, `a2_cut`'s own arithmetic). `a2_cut` sets `CUTF` (`$C13B`) so
+a cut ends the wrapper's loop as well.
+
+**THE STATED DEVIATION.** An instruction at `$BFFE` or `$BFFF` takes operand
+bytes from the soft switches. Reached by a jump, a call, a return or a new
+run it is the accurate core's. **Reached by falling through from `$BFFD`, or by
+a branch inside page `$BF`, the fast core reads those bytes from the image's
+`$02` instead of calling out.** The only exact fix is a check on every fetch,
+which is the cost this core exists to remove; no shipped Apple program is
+known to do this.
+
+**The gate** is `make a2cputest`'s fast leg (section 4.4): the same rows bar
+row 6 (the accurate core's fetch ES), and Dormann's functional test, through
+`a2fast.inc`'s `_a2_run`. The four controls that the accurate core's tables
+cannot reach in the fast core are made in the fast core's own code: row 4's
+`STA abs` and Dormann's `ADC #` slots jump to `STA zp`'s and `ORA #`'s, row
+10's `LDA abs,X` charges 3, and row 2's `SED` slot jumps to `CLD`'s.
+`A2CPU_ONLY=fast` runs that leg alone.
 
 ### 4.5 Reset, both kinds
 

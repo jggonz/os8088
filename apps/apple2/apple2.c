@@ -182,6 +182,11 @@ unsigned a2_div32(unsigned hi, unsigned lo, unsigned d);
                                              * 8) */
 
 /* --- a2cpu.inc: the core (section 4) -------------------------------------- */
+/* THE FAST CORE (section 4.6): a2_fseg is its 64KB code segment, 0 = the
+ * accurate core runs the machine alone. a2fast.inc reads it. */
+unsigned a2_fseg;
+void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg);
+void a2f_core(unsigned dstseg, unsigned partseg);
 int  a2_run(unsigned cycles);           /* -> A2_RUN_*, and a2_m.cnt is what
                                          * was NOT spent, so the caller's
                                          * `ran = asked - cnt` is exact */
@@ -299,6 +304,7 @@ unsigned char a2_chr[512];
 
 /* --- the ROM part (section 1.4, 1.5) -------------------------------------- */
 #define A2_ROM_PART   0
+#define A2_FAST_PART  1                     /* the fast 6502 core (4.6) */
 #define A2_ROM_MAIN   0x0000                /* 12,288 bytes: $D000-$FFFF */
 #define A2_ROM_CHRGEN 0x3000                /*  2,048 bytes: the II+ chargen */
 #define A2_ROM_DISK2  0x3800                /*    256 bytes: the P5 boot ROM */
@@ -1251,6 +1257,14 @@ static void a2_spk_service(void)
                                              * still below 32,767 for the
                                              * signed countdown's reason above */
 static int a2_budget = A2_SLICE_MIN;
+/* ...AND HOW MANY RUNS OF IT A WAKE MAKES (section 4.3.2). The budget is a
+ * signed 16-bit countdown and stops at A2_SLICE_MAX; a machine that runs that
+ * many cycles in a small part of a host tick - the fast core on a 286 - would
+ * otherwise spend most of each second between wakes. So once the budget is at
+ * its cap the controller raises THIS instead, and lowers it first on the way
+ * back down. One run is what every machine had before. */
+#define A2_REPS_MAX 16
+static int a2_reps = 1;
 
 /* a2_slice_cap - the ceiling the adaptation may walk the budget up to, which
  * is the one place the warp latch is read. Two call sites in the wake, and
@@ -1498,23 +1512,65 @@ static void a2_jam(void)
                                              * is no machine left to stop */
 }
 
+/* a2_fast_init - THE FAST CORE, ONCE, AT THE FIRST WAKE (section 4.6).
+ *
+ * The core is a 64KB code segment and runs in a 64KB guest image: the 49KB
+ * claim plus the I/O page's trap bytes, slot space and the ROM in one
+ * segment. THE PART IS $FE00 BYTES (a part's length is a sector count in a
+ * word), so the code segment is a claim of our own with the part copied in
+ * and the last two slots written, and the part goes back. Any refusal leaves
+ * the accurate core running the machine alone, which is a slower machine and
+ * not a broken one, so nothing is said. */
+static void a2_fast_init(void)
+{
+    unsigned code, img;
+
+    if (os88_part_fetch(A2_FAST_PART) != 0)
+        return;
+    code = os88_mem_claim(64);
+    img = code ? os88_mem_claim(64) : 0;
+    if (img == 0) {
+        if (code)
+            os88_mem_free(code);
+        os88_part_drop(A2_FAST_PART);
+        return;
+    }
+    a2f_core(code, os88_part_seg(A2_FAST_PART));
+    os88_part_drop(A2_FAST_PART);
+    a2f_image(img, a2_m.ramseg, a2_m.romseg);
+    os88_mem_free(a2_m.ramseg);
+    a2_m.ramseg = img;
+    os88_mem_movable(img, 1);
+    os88_mem_movable(code, 1);              /* os88_onmove follows a2_fseg */
+    a2_fseg = code;
+}
+
 /* a2_slice - one run of the core for the wall budget.
  *
  * `a2_m.cnt` is what was NOT spent and is negative by up to one instruction's
  * cost, so `ran = asked - cnt` is exact (section 4.2). */
 static void a2_slice(void)
 {
-    int r, ran;
+    int r, ran, n;
 
-    a2_clk_set(a2_clk + (unsigned)a2_budget);
-    r = a2_run((unsigned)a2_budget);
-    ran = a2_budget - (int)a2_m.cnt;
-    if (ran < 1)
-        ran = 1;
-    a2_clk = (unsigned)a2_now();
-    a2_cyc_add(ran);
-    if (r == A2_RUN_JAM)
-        a2_jam();
+    for (n = 0; n < a2_reps; n++) {
+        a2_clk_set(a2_clk + (unsigned)a2_budget);
+        a2_kb_mirror();                     /* the latch, for the fast core */
+        r = a2_run((unsigned)a2_budget);
+        ran = a2_budget - (int)a2_m.cnt;
+        if (ran < 1)
+            ran = 1;
+        a2_clk = (unsigned)a2_now();
+        a2_cyc_add(ran);
+        if (r == A2_RUN_JAM) {
+            a2_jam();
+            return;
+        }
+        if ((int)a2_m.cnt > 0)              /* CUT (a2_cut): the run ended
+                                             * early on purpose, and so does
+                                             * the wake's work */
+            return;
+    }
 }
 
 /* a2_reset_service - the reset latches, RUN FROM THE WAKE.
@@ -2076,6 +2132,7 @@ void os88_onwake(void *win)
              * work without it (ovl_a2_cmd's header lists the three). */
             a2_say("Unable to load commands.");
         }
+        a2_fast_init();
     }
 
     /* --- THE LAUNCH DOCUMENT, SPENT HERE (SPEC.md 54.10, section 12) ------
@@ -2210,13 +2267,26 @@ void os88_onwake(void *win)
                  * about a slice that has already overrun. */
                 a2_adn = 0;
                 a2_adx = 0;
-                a2_budget = a2_budget / 2;
+                if (a2_reps > 1)
+                    a2_reps = a2_reps / 2;
+                else
+                    a2_budget = a2_budget / 2;
             } else {
                 a2_adn++;
                 if (el)
                     a2_adx++;
                 if (a2_adn >= A2_ADAPT_N) {
-                    if (a2_adx == 0)
+                    if (a2_budget >= a2_slice_cap() && a2_adx <= A2_ADAPT_LO) {
+                        /* AT THE CAP: more runs a wake, not a bigger one */
+                        if (a2_adx == 0)
+                            a2_reps += a2_reps;
+                        else
+                            a2_reps++;
+                        if (a2_reps > A2_REPS_MAX)
+                            a2_reps = A2_REPS_MAX;
+                    } else if (a2_adx >= A2_ADAPT_HI && a2_reps > 1)
+                        a2_reps--;
+                    else if (a2_adx == 0)
                         a2_budget += a2_budget;      /* nowhere near it yet */
                     else if (a2_adx <= A2_ADAPT_LO)
                         a2_budget += a2_budget / 8;
@@ -2347,6 +2417,8 @@ void os88_onmove(unsigned was, unsigned now)
     a2_m.romseg = os88_part_seg(A2_ROM_PART);
     if (a2_m.ramseg == was)
         a2_m.ramseg = now;
+    else if (a2_fseg == was)                /* the fast core's code (4.6) */
+        a2_fseg = now;
     else if (a2_paste_seg == was)
         a2_paste_seg = now;
 }

@@ -267,6 +267,24 @@ static int a2_paste_up;                     /* THE BYTE IN THE LATCH IS EDIT >
                                              * a keystroke would DROP one
                                              * pasted character per key. */
 
+/* a2_kb_mirror - THE LATCH, WHERE THE FAST CORE CAN READ IT (APPLE2-SPEC
+ * section 4.6). A read of $C000-$C00F is the latch and nothing else while no
+ * paste is in flight, and the ROM's keyboard loop makes one every fifteen
+ * cycles - so the fast core answers it out of the scratch page rather than
+ * through a call out to this file. The byte is written at the top of every
+ * slice (which covers every change made between runs) and by the strobe,
+ * the one change made INSIDE a run. While a paste is in flight the flag says
+ * "ask", because then the read is a2_paste_peek's. */
+#define A2_SCR_KBV   0xC14A                 /* the latch as $C000 reads it */
+#define A2_SCR_KBOK  0xC14B                 /* 1 = answer KBV; 0 = call out */
+static void a2_kb_mirror(void)
+{
+    if (!a2_fseg)
+        return;
+    os88_poke(a2_m.ramseg, A2_SCR_KBV, a2_kb_code | (a2_kb_ready ? 0x80 : 0));
+    os88_poke(a2_m.ramseg, A2_SCR_KBOK, a2_paste_seg ? 0 : 1);
+}
+
 static void a2_kb_put(int b)
 {
     a2_kb_code = b & 0x7F;
@@ -555,6 +573,7 @@ static int a2_io_rd(unsigned a)
                                              * $C000 read presents the next
                                              * byte */
         a2_kb_ready = 0;
+        a2_kb_mirror();
         return A2_FLOAT;
     case 0x3:                               /* $C030-$C03F, the speaker */
         a2_spk_toggle();
@@ -594,6 +613,7 @@ static void a2_io_wr(unsigned a, int v)
                                              * that uses `STA $C010` types the
                                              * first character for ever */
         a2_kb_ready = 0;
+        a2_kb_mirror();
         break;
     case 0x3:
         a2_spk_toggle();

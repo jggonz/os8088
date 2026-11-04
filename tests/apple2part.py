@@ -97,12 +97,15 @@ O88 = "build/apple2.o88"
 ROM = os.path.join("build", "apple2-rom", "APPLE2.ROM")
 OVL = os.path.join("build", "APPLE2.OVL")    # the plain cut, os88ovl.py's
 ROM_PART = 0
-OVL_PART = 1
+FAST_PART = 1                           # the fast 6502 core (APPLE2-SPEC 4.6)
+OVL_PART = 2
+FAST = os.path.join("build", "apple2", "a2fast.bin")
 ROM_LEN = 14848                         # APPLE2-SPEC 1.4's fixed layout
 AM_RAMSEG, AM_ROMSEG, AM_PC = 0, 2, 4   # apps/apple2/a2cpu.inc's record
 A2_ROM_MINSEG = 0x0D00                  # $D000 >> 4 - below it the fetch bias
 A2_ROM_KEEP = 0x3000                    # what of the part os88_main keeps
 A2_RAMKB = 49                           # apple2.c's RAM claim, $0000-$C1FF
+A2_IMGKB = 64                           # ...and the fast core's image (4.6)
 MEM_MAX = os88geom.MEM_MAX
 MC_SIZE = os88geom.MC_SIZE
                                         # underflows (apple2.c)
@@ -141,15 +144,21 @@ def run():
         fails.append("APPLE2.O88's image (%d) is not smaller than the file "
                      "(%d) - the ROM was not appended" % (image, len(blob)))
     E = os88parts.EQU
-    if (len(rows) != 2 or rows[ROM_PART]["len"] != ROM_LEN
+    if (len(rows) != 3 or rows[ROM_PART]["len"] != ROM_LEN
             or rows[ROM_PART]["kind"] != E["OP_ASSET"]
             or rows[ROM_PART]["flags"] & E["OP_LAZY"]):
         fails.append("the part table is %r and part 0 should be an eager "
                      "ASSET of %d bytes - the ROM, CHARGEN, DISK2 and pad of "
                      "APPLE2-SPEC 1.4" % (rows, ROM_LEN))
-    if (len(rows) != 2 or rows[OVL_PART]["kind"] != E["OP_SEG"]
+    if (len(rows) != 3 or rows[FAST_PART]["kind"] != E["OP_SEG"]
+            or not rows[FAST_PART]["flags"] & E["OP_LAZY"]
+            or rows[FAST_PART]["len"] != 0xFE00):
+        fails.append("the part table is %r and part 1 should be the fast "
+                     "core, a LAZY SEGMENT of $FE00 bytes (APPLE2-SPEC 4.6)"
+                     % (rows,))
+    if (len(rows) != 3 or rows[OVL_PART]["kind"] != E["OP_SEG"]
             or not rows[OVL_PART]["flags"] & E["OP_LAZY"]):
-        fails.append("the part table is %r and part 1 should be the overlay, "
+        fails.append("the part table is %r and part 2 should be the overlay, "
                      "a LAZY SEGMENT and the LAST row (SPEC.md 73.14.2, "
                      "APPLE2-SPEC 15.5.1)" % (rows,))
 
@@ -158,11 +167,13 @@ def run():
         raise SystemExit("apple2part: %s is %d bytes and the layout is %d - "
                          "run `make apple2rom`" % (ROM, len(rom), ROM_LEN))
     ovl = open(os.path.join(ROOT, OVL), "rb").read()
-    if len(rows) == 2:
+    if len(rows) == 3:
         if os88parts.part_bytes(blob, ROM_PART) != rom:
             fails.append("part 0 does not unpack to %s byte for byte" % ROM)
+        if os88parts.part_bytes(blob, FAST_PART) != open(os.path.join(ROOT, FAST), "rb").read():
+            fails.append("part 1 does not unpack to %s byte for byte" % FAST)
         if os88parts.part_bytes(blob, OVL_PART) != ovl:
-            fails.append("part 1 does not unpack to %s byte for byte - the "
+            fails.append("part 2 does not unpack to %s byte for byte - the "
                          "package carries a module from another build" % OVL)
 
     with os88marty.launch(SYS_IMG, apps=APPS_IMG, machine=MACHINE, boot=False) as m:
@@ -267,20 +278,29 @@ def run():
                 claims[cs] = cp
         keep = -(-(slack + A2_ROM_KEEP) // 512) * 32    # to the GRANULE:
                                         # os88_mem_regrow_p (SPEC.md 50.3.7)
+        # THE FAST CORE REPLACES THE 49KB CLAIM with its 64KB image at the
+        # first wake (APPLE2-SPEC 4.6): which one is there is read, not assumed
+        fseg = u16(m.read((seg << 4) + A2.sym("_a2_fseg"), 2))
+        ramseg = u16(m.read((seg << 4) + mach + AM_RAMSEG, 2))
+        ramkb = A2_IMGKB if fseg else A2_RAMKB
         say("claims: carve %04X is %s paragraphs (want %d), RAM %04X is %s "
-            "(want %d)" % (pseg, claims.get(pseg), keep, ramseg,
-                           claims.get(ramseg), A2_RAMKB * 64))
+            "(want %d), fast core %04X is %s" % (pseg, claims.get(pseg), keep, ramseg,
+                           claims.get(ramseg), ramkb * 64, fseg, claims.get(fseg)))
+        if fseg and claims.get(fseg) != 64 * 64:
+            fails.append("the fast core's code segment at %04X is %s "
+                         "paragraphs and a2_fast_init claims 64KB (APPLE2-SPEC "
+                         "4.6)" % (fseg, claims.get(fseg)))
         if claims.get(pseg) != keep:
             fails.append(
                 "the parts carve at %04X is %s paragraphs and os88_main "
                 "shrinks it to the head slack plus the main ROM, %d - the "
                 "CHARGEN, the P5 ROM and the pad are dead once a2_chr is "
                 "built (APPLE2-SPEC 1.5)" % (pseg, claims.get(pseg), keep))
-        if claims.get(ramseg) != A2_RAMKB * 64:
+        if claims.get(ramseg) != ramkb * 64:
             fails.append(
                 "the RAM claim at %04X is %s paragraphs and APPLE2-SPEC 3.1 "
-                "makes it %dKB: $0000-$C1FF, the 48K and the scratch page"
-                % (ramseg, claims.get(ramseg), A2_RAMKB))
+                "(4.6 with the fast core) makes it %dKB"
+                % (ramseg, claims.get(ramseg), ramkb))
 
         for off, what in ((0x0000, "Applesoft's first bytes at $D000"),
                           (A2_ROM_KEEP - 16,

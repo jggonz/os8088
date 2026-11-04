@@ -183,9 +183,14 @@
 ; Makefile appends the cut module as the last --part and a lazy row must follow
 ; every eager one. It is OP_SEG|OP_LAZY|OP_COMP, fetched out of this file by
 ; the first wake's probe (a2cmd.c's ovl_a2_init) and never part of the carve.
-    CC_PARTS_BEGIN 2
+    CC_PARTS_BEGIN 3
       OS88_PART OP_ASSET, OP_COMP   ; 0 the ROM, eager, in the carve
-      CC_OVL_ROW                    ; 1 the overlay, lazy, a claim of its own
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 1 THE FAST 6502 CORE (APPLE2-SPEC
+                                    ; 4.6): 64KB that apps/m6502/m65gen.py
+                                    ; writes, fetched at the first wake and
+                                    ; far-called; without it the accurate core
+                                    ; runs the machine alone
+      CC_OVL_ROW                    ; 2 the overlay, lazy, a claim of its own
     CC_PARTS_END
 _a2_opbase equ op_base              ; the carve's CLAIM base, which apple2.c
                                     ; shrinks to the main ROM once the
@@ -223,7 +228,9 @@ section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
 ; The hand-written half (SPEC.md 73.11's rule that the inner loop is
 ; assembly). ORDER MATTERS ONLY IN THAT a2cpu.inc declares the register file
 ; and the scratch layout that a2mem.inc addresses through.
+%define A2_FAST                     ; the accurate core's hand-back hooks
 %include "apple2/a2cpu.inc"         ; the 6502 core - _a2_run(cycles). Wave 1
+%include "apple2/a2fast.inc"        ; ...and the fast core's door (section 4.6)
                                     ; is the register file, the scratch, the
                                     ; memory hooks and the entry/exit shell
 %include "apple2/a2mem.inc"         ; the RAM/ROM claim accessors and movers

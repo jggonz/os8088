@@ -171,6 +171,8 @@ unsigned os88_mem_largest_kb(void);
 int  os88_peek(unsigned seg, unsigned off);
 void os88_poke(unsigned seg, unsigned off, int value);
 unsigned os88_part_seg(int i);
+int os88_part_fetch(int i);
+void os88_part_drop(int i);
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap);
 int  os88_file_write_seg(const char *name, unsigned seg, unsigned count);
 int  os88_ferr(void);                       /* apps/cc/os88.h:882 - the FERR_*

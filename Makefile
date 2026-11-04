@@ -11324,7 +11324,7 @@ xt-c64: $(IMG360) $(BUILD)/c64360.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM,part))
+$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM $(BUILD)/apple2/a2fast.bin,part))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): apple2.c #includes the
 # parts, and the shim %includes the five hand-written pieces and the icon.
@@ -11337,7 +11337,8 @@ APPLE2SRC := apps/apple2/a2io.c apps/apple2/a2kbd.c apps/apple2/a2scr.c \
              apps/apple2/a2disk.c apps/apple2/a2about.c
 APPLE2INC := apps/apple2/a2cpu.inc apps/apple2/a2mem.inc \
              apps/apple2/a2band.inc apps/apple2/a2nib.inc \
-             apps/apple2/a2fsx.inc apps/apple2/a2assoc.inc
+             apps/apple2/a2fsx.inc apps/apple2/a2assoc.inc \
+             apps/apple2/a2fast.inc
 APPLE2HOST := apps/apple2/build.sh apps/apple2/hosttest/os88.h \
               apps/apple2/hosttest/a2uitest.c \
               apps/apple2/hosttest/a2memtest.asm \
@@ -11388,6 +11389,17 @@ $(BUILD)/apple2-rom/APPLE2.ROM: tools/getapple2rom.py | $(BUILD)
 
 #> [Applications] apple2rom :: fetch the Apple II ROMs at pinned hashes (never committed)
 apple2rom: $(BUILD)/apple2-rom/APPLE2.ROM
+
+# THE FAST 6502 CORE (APPLE2-SPEC section 4.6, docs/plans/FAST6502-PLAN.md):
+# apps/m6502/m65gen.py writes it, nasm makes the 64KB segment, and it is part
+# 1 of APPLE2.O88. The generator checks its cycle costs against the accurate
+# core's own table on every build.
+$(BUILD)/apple2/a2fast.asm: apps/m6502/m65gen.py apps/apple2/a2cpu.inc | $(BUILD)
+	@mkdir -p $(BUILD)/apple2
+	python3 apps/m6502/m65gen.py --machine apple2 --check-cycles apps/apple2/a2cpu.inc -o $@
+
+$(BUILD)/apple2/a2fast.bin: $(BUILD)/apple2/a2fast.asm
+	$(NASM) -f bin -w+error -l $(BUILD)/apple2/a2fast.lst -o $@ $<
 
 # THE DISK. APPLE2.O88 is ONE FILE: the ROM is its part 0 and the overlay its
 # part 1 (APPLE2-SPEC 1.5 and 15.5.1, SPEC.md 73.14.2 - `part`, the fifth

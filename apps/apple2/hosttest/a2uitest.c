@@ -899,6 +899,14 @@ static unsigned h_rom_seg = H_ROMSEG;   /* os88_part_seg's answer: moved by
                                          * the carve round trip (APPLE2-SPEC
                                          * 3.1.1, CC_ONMOVE_PARTS) */
 unsigned os88_part_seg(int i) { return i == 0 ? h_rom_seg : 0; }
+/* THE FAST CORE'S PART IS REFUSED HERE (APPLE2-SPEC section 4.6): this host
+ * has no 8086 to run it, and a refused fetch is the path that leaves the
+ * accurate core's stub - the one every case below drives - running alone */
+int os88_part_fetch(int i) { (void)i; return -1; }
+void os88_part_drop(int i) { (void)i; }
+void a2f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
+void a2f_image(unsigned newseg, unsigned oldseg, unsigned romseg)
+{ (void)newseg; (void)oldseg; (void)romseg; }
 /* os88_mem_movable - the record says so; the harness never compacts. What is
  * checked is WHO declares WHAT, and WHEN (APPLE2-SPEC 3.1.1): the RAM once
  * os88_main has made every claim, Paste's queue once it is filled */
@@ -5531,6 +5539,13 @@ int main(void)
             n_fsxcmp_d = 0;
             n_fsxcmp_s = 0;
             cost_mark();
+            /* ONE RUN A WAKE (section 4.3.2): this host's runs cost nothing,
+             * so the controller has raised the runs a wake to its cap, and
+             * the "second slice" below is then a run inside the FIRST
+             * frame. A fresh window, so it does not raise them again. */
+            a2_reps = 1;
+            a2_adn = 0;
+            a2_adx = 0;
             h_run_wr_in = 2;                /* the SECOND slice writes... */
             h_run_wr_a = a2_tbase[5] + 3;   /* ...one cell of row 5, group 0 */
             h_run_wr_v = 0xC1;              /* 'A', normal form */
