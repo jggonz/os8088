@@ -929,10 +929,11 @@ translated `ADC` and `CMP` broken as the control.
 `tests/c64part.py` checks that the three parts unpack to their files and that
 each fetched claim holds its file's first bytes.
 
-### 4.9 The dynamic recompiler — PLANNED (docs/plans/C64-RECOMPILER-PLAN.md)
+### 4.9 The dynamic recompiler — IN PROGRESS (docs/plans/C64-RECOMPILER-PLAN.md)
 
-**Nothing in this section is built.** It is the contract the plan's waves
-build to, written first as this project's process asks.
+**Wave 1 (4.9.1, the templates) is built; the rest of this section is the
+contract the later waves build to**, written first as this project's process
+asks. Nothing runs translated code yet.
 
 - **RAM code only.** The ROMs are translated ahead of time (§4.8); the
   recompiler takes PCs below `$A000`, in `$C000-$CFFF`, and under a ROM only
@@ -950,6 +951,70 @@ build to, written first as this project's process asks.
   invalidated too often is VOLATILE and stays with the fast core.
 - **It is a part**, lazy and compressed; with no memory for it the fast core
   runs alone. The resident glue is all the package's segment pays.
+
+#### 4.9.1 The templates (`apps/m6502/m65tmpl.py`) — BUILT
+
+Every legal opcode is one of three things, and `--check` fails the build
+otherwise:
+
+| kind | opcodes | what the translator does |
+|---|---|---|
+| IN LINE | 137 | copies its template and goes on to the next instruction |
+| ENDS A BLOCK | 11: the eight branches, `JMP abs`, `JSR`, `RTS` | copies its template, which leaves through `xa_go` with SI the 6502's next PC |
+| THE CORE'S | 3: `BRK`, `RTI`, `JMP (ind)` | ends the block before it with `XCORE`, which resumes the core there |
+
+A template is the fast core's handler (§4.7) with three changes, and nothing
+else: an operand the handler fetched through `ES:SI` is an immediate; the
+dispatch is gone, so the next template follows in line; and every hand-back
+is an exit that resumes the core AT THIS INSTRUCTION with its cycles untaken,
+so the core runs it exactly as it always has - the accurate core's
+instruction, the interrupt flag's short run, decimal mode, `$00/$01`. A
+template that may have called a device (`rd_hi`, `wr_hi`) tests the countdown
+after it, as the handler's `next()` does, because `c64_cut()` may have ended
+the run.
+
+**Two variants where the operand decides.** Variant 0 is right for any
+operand; variant 1 is taken only where the operand alone proves the fast
+path, by `variant()`'s rule: an absolute read of RAM (below `$A000`, or
+`$C000-$CFFF`) is `mov al,[nnnn]`; a store below `$D000` and not to
+`$00/$01` is a `mov` and the mark; an indexed access whose whole 256-byte
+reach is such RAM; a zero-page store or read-modify-write not to `$00/$01`;
+`(zp),Y` through a pointer that is not `$FF`, `$00` or `$01`. 62 opcodes
+have both.
+
+**Patch sites are found, never written down.** The templates are assembled
+twice - at origin 0 with one set of sentinel values, at `$1111` with another
+- and every byte that differs is a site: the operand byte or word, this PC,
+the next PC, the target, `JSR`'s return word, a taken branch's cycles (3, or
+4 across a page), the block's worst-case cost, or a near jump or call into
+the prelude (the word moved by exactly `-$1111`, stored as if the template
+began at offset 0, so the translator subtracts where it put it). A
+difference no site explains, or a template whose length moved, fails the
+build. `--selftest` then patches every template for random values at three
+cache offsets and compares the result with nasm's own assembly there.
+
+**Time.** Each template takes its own cycles off BP, at its end - or just
+before the damage mark where it stores - and `HEAD`, the block's first
+bytes, tests the block's worst case (each instruction's cycles, a page
+crossed, a branch taken across one) before it runs. A budget that cannot
+cover it resumes the core at the block's PC, which runs it an instruction
+at a time - so the run ends exactly where the core's would.
+
+**The prelude** is code every block shares, at `JC_PRE` in the cache
+segment: `xa_resume` and `xa_slice` (the far doors back into the core, through
+the frame's word for its segment, F+38 - §4.8's), `xa_go` (a control
+transfer's door: the run's end, or wave 2's lookup), the core's own `rd_hi`
+and `wr_hi`, `getp`/`setp`, and `jm_mark` - the core's damage mark, the same
+bits, plus the CODE test: a store into a page whose bit is set (the CODE map,
+32 bytes at `JC_CODE`) sets `JC_FLUSH` and leaves the block at the next
+instruction, the store and the mark done. Every store template loads SI with
+the next PC before the mark for that reason.
+
+**The part** is `build/c64/c64tmpl.bin`: a header, the prelude, a table of
+256 eight-byte rows (the instruction's length, its kind, its variant rule,
+its worst-case cycles, its two templates) and the template records (bytes,
+then the sites as offset-and-kind pairs). `build/c64/c64tmpl.inc` is the
+translator's equates for all of it. 11,424 bytes; not yet in the package.
 
 ---
 

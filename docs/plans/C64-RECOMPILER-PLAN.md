@@ -1,6 +1,6 @@
 # C64 dynamic recompiler — plan
 
-Status: **PLANNED**. Nothing below is built. C64-SPEC §4.9 pins the contract
+Status: **W1 DONE** (C64-SPEC §4.9.1, `apps/m6502/m65tmpl.py`); W2 next. C64-SPEC §4.9 pins the contract
 the waves build to; this file is the reasoning, the stories and the gates.
 
 ## 1. Why — MEASURED
@@ -16,7 +16,7 @@ the waves build to; this file is the reasoning, the stories and the gates.
 What the fast core (C64-SPEC §4.7) still pays per instruction is the
 dispatch: `sub bp,n / jle / mov dh,[es:si] / inc si / jmp dx`, a taken jump
 that empties the prefetch queue every time, and every operand fetched
-through `ES:SI`. The ROMs escape it through `m65aot.py` (§4.8), which can
+through `ES:SI`. The ROMs escape it through `m65aot.py` (C64-SPEC 4.8), which can
 only translate what is known at build time. **Demo and game code is in RAM,
 loaded at run time, and is the case the AOT cannot reach.**
 
@@ -35,7 +35,7 @@ The precedent is RealDMG's recompiler (REALDMG-SPEC §16): the busy loop from
    meaning with `$01`. The ROMs are translated ahead of time already, so the
    recompiler takes **RAM PCs only**: below `$A000`, `$C000-$CFFF`, and RAM
    under a ROM only while the map shows RAM there.
-3. **A package at its segment's ceiling** (62,712 of 65,024, §13.3). The
+3. **A package at its segment's ceiling** (62,712 of 65,024, C64-SPEC 13.3). The
    recompiler, its templates and its tables live in PARTS and heap claims;
    the resident cost is the glue alone.
 
@@ -75,7 +75,7 @@ once after the last.
 
 | wave | stories | gate |
 |---|---|---|
-| **W1 templates** | `m65tmpl.py`: every fast-core handler as a template with its operand and relocation sites; a table part; `--check` that every legal opcode has one or is listed as handed back | a host test re-assembling each template at two origins |
+| **W1 templates** - DONE | `m65tmpl.py`: every fast-core handler as a template with its operand and relocation sites; a table part; `--check` that every legal opcode has one or is listed as handed back | a host test re-assembling each template at two origins |
 | **W2 translator, straight line** | blocks of RAM code translated and entered from the fast core's control transfers; no chaining; a full flush on ANY write to a code page | `c64cputest`'s rows and Dormann's functional test with the recompiler forced on, on both the plain and translated legs; a new row that rewrites an operand inside a translated loop and sees the new value |
 | **W3 invalidation by page, volatile pages** | the CODE bitmap in `c64_mark`; per-page block lists; the volatile threshold | rows for: a write into the running block, a write into another block's page, a volatile page staying interpreted |
 | **W4 chaining and batching** | patched exits, pure-cycle batching, hot-count tuning | cycle-exact rows (row 9's totals, row 14's loops) unchanged; 86Box measurements |

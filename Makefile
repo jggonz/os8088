@@ -11160,7 +11160,7 @@ $(BUILD)/.c64-hostchecks: apps/c64/c64.c $(C64SRC) $(C64HOST) \
 	@touch $@
 
 #> [Applications] c64 :: C64, VICE's x64 as a windowed Commodore 64 (docs/C64-SPEC.md)
-c64: $(BUILD)/c64.o88
+c64: $(BUILD)/c64.o88 $(BUILD)/c64/c64tmpl.bin
 
 # THE ROM PART (C64-SPEC §1.3, 1.4). tools/c64rom.py checks the
 # SHA-256 of each of the three COMMITTED Commodore ROM images under
@@ -11441,6 +11441,16 @@ $(BUILD)/c64/c64aot.bin: apps/m6502/m65aot.py apps/m6502/m65gen.py \
 	python3 apps/m6502/m65aot.py --machine c64 --rom $(BUILD)/c64-rom/C64.ROM \
 	    --seeds $(BUILD)/c64/c64rom.seeds -o $(BUILD)/c64/c64aot.asm \
 	    --table $(BUILD)/c64/c64aotpc.bin
+
+# ...AND THE RECOMPILER'S TEMPLATES (C64-SPEC section 4.9.1): every legal
+# opcode's fast-core handler as bytes to copy and patch, the patch sites found
+# by assembling twice (apps/m6502/m65tmpl.py). --selftest patches every
+# template for random operands and cache offsets and compares it with nasm's
+# own assembly there, so the translator's arithmetic is proven on each build.
+$(BUILD)/c64/c64tmpl.inc: $(BUILD)/c64/c64tmpl.bin
+$(BUILD)/c64/c64tmpl.bin: apps/m6502/m65tmpl.py apps/m6502/m65gen.py apps/m6502/m65aot.py
+	@mkdir -p $(BUILD)/c64
+	python3 apps/m6502/m65tmpl.py --check --selftest -o $@ --inc $(BUILD)/c64/c64tmpl.inc
 
 # THE DISK. APPLE2.O88 is ONE FILE: the ROM is its part 0 and the overlay its
 # part 1 (APPLE2-SPEC 1.5 and 15.5.1, SPEC.md 73.14.2 - `part`, the fifth
