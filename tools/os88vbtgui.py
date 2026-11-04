@@ -682,6 +682,7 @@ class App(object):
         self.openings_tab = OpeningsTab(self, self.nb)
         self.loops_tab = LoopsTab(self, self.nb)
         self.build_tab = BuildTab(self, self.nb)
+        self.sounds_tab = SoundsTab(self, self.nb)
         self.nb.add(self.battle_tab.f, text="Battle")
         self.nb.add(self.idle_tab.f, text="Idle")
         self.nb.add(self.clips_tab.f, text="Clips")
@@ -690,6 +691,7 @@ class App(object):
         self.nb.add(self.actions_tab.f, text="Actions")
         self.nb.add(self.party_tab.f, text="Characters & menus")
         self.nb.add(self.enemy_tab.f, text="Enemy")
+        self.nb.add(self.sounds_tab.f, text="Sounds")
         self.nb.add(self.build_tab.f, text="Build")
         self.status = ttk.Label(bar, text="Ready")
         self.status.pack(side="left", padx=6)
@@ -714,6 +716,7 @@ class App(object):
         self.openings_tab.refresh()
         self.loops_tab.refresh()
         self.build_tab.refresh()
+        self.sounds_tab.refresh()
 
     def edit(self, fn, *a, **kw):
         """Every edit: the model's method, then the view redrawn"""
@@ -3544,6 +3547,165 @@ class ActionsTab(object):
 
 
 # --- the Characters & menus tab (11.1, 4.4) ---------------------------------------------
+
+def db(level):
+    """A linear level in dB, for the window"""
+    import math
+    return 20 * math.log10(level) if level > 0 else -99.0
+
+
+class SoundsTab(object):
+    """EVERY SOUND'S LEVEL (SPEC.md 125.3): each sound in use, what plays it
+    and how loud it is AS HEARD - the music and an effect at half scale, an
+    opening's or a loop's own sound at full - its level in dB to set, and
+    the AUTO-LEVEL suggestion (vbtana.levels): each as loud as the music,
+    never past its peak"""
+
+    COLS = (("plays", "Plays as", 70), ("uses", "Used by", 260),
+            ("loud", "Loudness", 80), ("peak", "Peak", 72),
+            ("level", "Level", 70), ("suggest", "Suggested", 80))
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        self.app = app
+        self.f = f = ttk.Frame(parent, padding=8)
+        self.res = None             # the last measurement (vbtana levels)
+        ttk.Label(f, text="Every sound the battle plays, as loud as it will "
+                  "be heard. The music and the effects are kept at half "
+                  "scale so that they add without clipping; an opening's or "
+                  "a loop's own sound plays instead of the music at full "
+                  "scale - the same file 6 dB louder there.",
+                  wraplength=900).pack(anchor="w")
+        self.tv = ttk.Treeview(f, columns=[c[0] for c in self.COLS], height=14)
+        self.tv.heading("#0", text="Sound")
+        self.tv.column("#0", width=140)
+        self.tv.column("#0", stretch=False)
+        for k, t, w in self.COLS:
+            self.tv.heading(k, text=t)
+            self.tv.column(k, width=w, anchor="w", stretch=False)
+        self.tv.pack(anchor="w", pady=6)
+        self.tv.bind("<<TreeviewSelect>>", lambda e: self._pick())
+        row = ttk.Frame(f)
+        row.pack(anchor="w")
+        ttk.Label(row, text="Level of the sound chosen (dB):").pack(side="left")
+        self.lv = tk.StringVar()
+        e = ttk.Entry(row, textvariable=self.lv, width=7)
+        e.pack(side="left", padx=4)
+        e.bind("<Return>", lambda ev: self._set())
+        ttk.Button(row, text="Set", command=self._set).pack(side="left")
+        ttk.Button(row, text="-3 dB", command=lambda: self._nudge(-3)
+                   ).pack(side="left", padx=(8, 0))
+        ttk.Button(row, text="+3 dB", command=lambda: self._nudge(3)
+                   ).pack(side="left")
+        ttk.Button(row, text="Listen", command=self._listen
+                   ).pack(side="left", padx=8)
+        row2 = ttk.Frame(f)
+        row2.pack(anchor="w", pady=6)
+        ttk.Button(row2, text="Measure and suggest levels",
+                   command=self._measure).pack(side="left")
+        ttk.Button(row2, text="Apply the suggestions",
+                   command=self._apply).pack(side="left", padx=4)
+        ttk.Button(row2, text="Apply to the chosen sound",
+                   command=lambda: self._apply(one=True)).pack(side="left")
+        self.note = ttk.Label(f, text="", wraplength=900)
+        self.note.pack(anchor="w")
+
+    def sid(self):
+        s = self.tv.selection()
+        return s[0] if s and s[0] in self.app.proj.d["sounds"] else None
+
+    def refresh(self):
+        d = self.app.proj.d
+        keep = self.sid()
+        self.tv.delete(*self.tv.get_children())
+        meas = {r["sound"]: r for r in (self.res or {}).get("sounds", [])}
+        import vbtana as A
+        for sid in sorted(self.app.proj.sounds_used()):
+            lvl = d["sounds"][sid].get("level", 1.0)
+            r = meas.get(sid)
+            fresh = r is not None and abs(r["level"] - lvl) < 1e-9
+            if r is not None and not fresh:     # a level changed since the
+                shift = db(lvl) - db(r["level"])    # measurement: its
+                r = dict(r, loud=None if r["loud"] is None else  # figures
+                         r["loud"] + shift, peak=None if r["peak"] is None
+                         else r["peak"] + shift, level=lvl)   # move with it
+            f1 = lambda v: "-" if v is None else "%.1f dB" % v
+            self.tv.insert("", "end", iid=sid, text=sid, values=(
+                A.plays_as(self.app.proj, sid) or "",
+                ", ".join(self.app.proj.sound_users(sid))[:60],
+                f1(r["loud"]) if r else "", f1(r["peak"]) if r else "",
+                "%+.1f dB" % db(lvl),
+                "%+.1f dB" % db(r["suggest"]) if r and fresh else ""))
+        if keep in d["sounds"] and keep in self.app.proj.sounds_used():
+            self.tv.selection_set(keep)
+        if self.res and self.res.get("target") is not None:
+            self.note.config(text="Matched to %.1f dB, %s. A suggestion never "
+                             "takes a sound past its peak; an effect laid over "
+                             "loud action may still want a little more." % (
+                                 self.res["target"], "the music's loudness"
+                                 if d.get("music") else "the sounds' median"))
+
+    def _pick(self):
+        sid = self.sid()
+        if sid:
+            self.lv.set("%.1f" % db(self.app.proj.d["sounds"][sid]
+                                    .get("level", 1.0)))
+
+    def _level(self, sid, lin):
+        lin = max(0.0, min(8.0, lin))
+        self.app.edit("set", ("sounds", sid, "level"), round(lin, 4))
+
+    def _set(self):
+        sid = self.sid()
+        if not sid:
+            return self.app.say("Choose a sound")
+        try:
+            v = float(self.lv.get())
+        except ValueError:
+            return self.app.say("A level in dB, as -6 or 3.5")
+        self._level(sid, 10 ** (v / 20.0))
+
+    def _nudge(self, by):
+        sid = self.sid()
+        if sid:
+            self._level(sid, self.app.proj.d["sounds"][sid].get("level", 1.0)
+                        * 10 ** (by / 20.0))
+            self._pick()
+
+    def _listen(self):
+        sid = self.sid()
+        if sid:
+            self.app.listen(sid)
+
+    def _measure(self):
+        def got(res):
+            self.res = res
+            self.refresh()
+        self.app.run("vbtana", ["levels", self.app.proj.path], got,
+                     "Measuring every sound...")
+
+    def _apply(self, one=False):
+        if not self.res:
+            return self.app.say("Measure first")
+        d = self.app.proj.d
+        want = {r["sound"]: r["suggest"] for r in self.res["sounds"]
+                if r["sound"] in d["sounds"]
+                and abs(r["level"] - d["sounds"][r["sound"]].get("level", 1.0))
+                < 1e-9}
+        if one:
+            sid = self.sid()
+            want = {sid: want[sid]} if sid in want else {}
+        if not want:
+            return self.app.say("Measure again: the levels have changed")
+
+        def f(d):
+            for sid, v in want.items():
+                d["sounds"][sid]["level"] = v
+        self.app.proj._edit(f)
+        self.res = None             # (measured at the old levels)
+        self.app.refresh()
+        self.app.say("Levels set for %d sound(s)" % len(want))
+
 
 class PartyTab(object):
     """The characters (1 to 4): their stats and their menus - the top menu,

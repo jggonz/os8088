@@ -916,6 +916,89 @@ def clip_report(proj, cid, progress=_nop):
                     anchors=rec["anchors"], exit=rec["exit"]))
 
 
+# --- LEVELS: every sound as loud as the music (SPEC.md 125.3) --------------------
+#
+# What a sound sounds like depends on HOW it plays: the music is stored at half
+# scale (music_bytes, 64..191) and an effect - a cue, a menu sound - at half
+# scale (sfx_bytes, +-64) so that the two add without wrapping; a clip's OWN
+# sound, which plays INSTEAD of the music (an opening's, a loop's), at full
+# scale (own_bytes). So the same file is 6 dB louder as an opening's sound
+# than as the music. Loudness here is AS HEARD: the sound with its level, at
+# its scale.
+
+PLAY_SCALE = {"music": 0.5, "effect": 0.5, "own": 1.0}
+LEVEL_GATE = -50.0          # dB: quieter 100 ms windows are not counted
+
+
+def plays_as(proj, sid):
+    """How sound SID is played: "music", "own" (an opening's or a loop's,
+    instead of the music) or "effect" (a cue, a menu sound); None unused"""
+    users = proj.sound_users(sid)
+    if "the music" in users:
+        return "music"
+    if any(u.startswith("opening") or u == "the title loop" or
+           u.endswith("end loop") for u in users):
+        return "own"
+    return "effect" if users else None
+
+
+def loudness(x, rate):
+    """(the gated loudness in dB, the peak in dB) of floats X: the mean
+    power of its 100 ms windows louder than LEVEL_GATE - so silence and
+    the tail of a hit do not pull a sound's figure down"""
+    x = np.asarray(x, float)
+    if not len(x) or not np.any(x):
+        return None, None
+    peak = 20 * np.log10(max(1e-9, float(np.max(np.abs(x)))))
+    w = max(1, rate // 10)
+    n = len(x) // w
+    if n == 0:
+        p = [float(np.mean(x ** 2))]
+    else:
+        p = list(np.mean(x[:n * w].reshape(n, w) ** 2, axis=1))
+    p = [v for v in p if v > 0 and 10 * np.log10(v) > LEVEL_GATE]
+    if not p:
+        return None, peak
+    return 10 * np.log10(float(np.mean(p))), peak
+
+
+def levels(proj, progress=_nop):
+    """Every sound in use, measured AS HEARD, and the AUTO-LEVEL suggestion:
+    each one's level moved so it is as loud as the music (with no music, as
+    the median of the rest), no further than its peak allows - its loudest
+    sample at full scale and not past it. A list of dicts: sound, plays (as
+    music, own or effect), uses, level (now, linear), loud and peak (dB, as
+    heard, at the level now), suggest (the level suggested, linear)"""
+    rate = proj.d["target"]["rate"]
+    rows = []
+    used = sorted(proj.sounds_used())
+    for i, sid in enumerate(used):
+        progress("measure", i, len(used), sid)
+        how = plays_as(proj, sid)
+        x = sound(proj, sid)            # (its level applied)
+        loud, peak = loudness(x, rate)
+        sc = 20 * np.log10(PLAY_SCALE[how])
+        rows.append(dict(sound=sid, plays=how, uses=proj.sound_users(sid),
+                         level=proj.d["sounds"][sid].get("level", 1.0),
+                         loud=None if loud is None else loud + sc,
+                         peak=None if peak is None else peak + sc,
+                         headroom=None if peak is None else -peak))
+    ref = [r["loud"] for r in rows if r["plays"] == "music" and r["loud"]]
+    if not ref:
+        ref = [float(np.median([r["loud"] for r in rows if r["loud"]
+                                is not None]))] if any(
+            r["loud"] is not None for r in rows) else []
+    target = ref[0] if ref else None
+    for r in rows:
+        if target is None or r["loud"] is None or r["plays"] == "music":
+            r["suggest"] = r["level"]
+            continue
+        gain = min(target - r["loud"], r["headroom"])   # (dB: never clipped)
+        r["suggest"] = round(r["level"] * 10 ** (gain / 20.0), 3)
+    progress("measure", len(used), len(used), "")
+    return dict(target=target, sounds=rows)
+
+
 def clip_sound(proj, cid):
     """Clip CID's sound as the BUILD bakes it: its cues placed at their
     frames and mixed (os88vbt.place, the same call), floats at the battle's
@@ -956,6 +1039,9 @@ def main(argv=None):
     q.add_argument("project")
     q.add_argument("sound")
     q.add_argument("--min-secs", type=float, default=4.0)
+    q = sp.add_parser("levels", help="every sound's loudness as heard, and "
+                      "the level that matches it to the music")
+    q.add_argument("project")
     q = sp.add_parser("wav", help="a WAV to listen to")
     q.add_argument("project")
     q.add_argument("sound")
@@ -1021,6 +1107,8 @@ def main(argv=None):
     elif a.cmd == "joinwav":
         at = join_wav(proj, a.out, a.join, a.after, a.before)
         say(dict(stage="done", out=a.out, music_at=at))
+    elif a.cmd == "levels":
+        say(dict(stage="done", **levels(proj, progress)))
     elif a.cmd == "wav":
         x = sound(proj, a.sound)
         rate = proj.d["target"]["rate"]

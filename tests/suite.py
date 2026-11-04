@@ -16870,6 +16870,16 @@ SOAK = [
         "and to victory. Broken on purpose (the band demanding the endings) "
         "it stops at the band",
         needs=("marty", "ffmpeg")),
+    Row("vbtlevels", "soak", py("tests/vbtlevels.py"), 15.0,
+        "SPEC.md 125.3: the AUTO-LEVEL suggestion, the owner's 'a hard time "
+        "matching the music volume and the clip volumes'. On the demo every "
+        "sound in use measured as heard (the music and effects stored at "
+        "half scale, an opening's own sound at full), each suggested the "
+        "level that matches the music or its peak's limit, and - in the "
+        "built bundle's own bytes - the opening's sound 5 dB over the music "
+        "before and level with it after. Broken on purpose (an opening's "
+        "sound taken as half scale) the bundle's two part again",
+        needs=("ffmpeg",)),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

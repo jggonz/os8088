@@ -237546,7 +237546,16 @@ of silence as the music region, played round as any music is, so the engine
 is the same. A build reads only the sounds something uses
 (`Project.sounds_used`), and `remove_sound` takes one out - the music's own
 leaving the battle with none, any other refused while it is used, naming
-what uses it. The band is let in (`[vb_bandok]`) at the
+what uses it. **Each sound has a LEVEL** (`"level"`, the Sounds tab's dB),
+and the AUTO-LEVEL suggestion (`vbtana.levels`) measures every sound in use
+AS HEARD - a gated loudness over 100 ms windows - knowing how each is
+stored: the music at half scale (64..191) and an effect at half scale
+(+-64), so that they add without wrapping, and a clip's OWN sound (an
+opening's, a loop's), which plays instead of the music, at full scale. It
+suggests each the level that makes it as loud as the music (with none, the
+sounds' median), never past its peak. `vbtlevels` holds it to the BUNDLE'S
+OWN BYTES: the demo's opening sound 5.2 dB over its music region before,
+0.0 after. The band is let in (`[vb_bandok]`) at the
 first frame of the first opening WITHOUT `CF_FULL` - or, where every
 opening has it (a bundle made before the choice, when all did), of the
 scene opening, as it always was. When the scene opening's sound ends, the MUSIC comes in

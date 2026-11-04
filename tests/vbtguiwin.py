@@ -272,6 +272,31 @@ def inner(tmp):
                 and x.level == "ERROR"],
        "C. the music set to none, its sound removed; a menu sound refuses "
        "(%r)" % app.status.cget("text")[:70])
+    # LEVELS (the owner: "a hard time matching the music volume and the clip
+    # volumes"): the Sounds tab measures, a level nudged, the suggestions
+    # applied
+    app.open_path(cv)
+    st = app.sounds_tab
+    app.nb.select(st.f)
+    app.save()
+    st._measure()
+    pump(app, lambda: st.res is not None and not app.job, 120)
+    rows = st.tv.get_children()
+    st.tv.selection_set("tick")
+    st._pick()
+    st._nudge(3)
+    lv = app.proj.d["sounds"]["tick"]["level"]
+    st._measure()
+    pump(app, lambda: st.res is not None and not app.job, 120)
+    riser0 = app.proj.d["sounds"]["riser"].get("level", 1.0)
+    st._apply()
+    riser1 = app.proj.d["sounds"]["riser"]["level"]
+    import math
+    ok(len(rows) >= 10 and abs(20 * math.log10(lv) - 3) < 0.05
+       and riser1 < riser0 * 0.7 and st.res is None,
+       "C. the Sounds tab: %d sounds measured, the tick +3 dB, the "
+       "suggestions applied (the opening's riser %.2f -> %.2f)"
+       % (len(rows), riser0, riser1))
     ok(not errs, "C. nothing raised in a Tk callback (%d)" % len(errs))
     for e in errs[:2]:
         print(e)
