@@ -83,6 +83,15 @@ import os88fixture                                       # noqa: E402
 import os88qemu                                          # noqa: E402
 import os88sym                                           # noqa: E402
 
+# ...AND WHICH DEFINES IT WAS ASSEMBLED WITH: os88sym re-assembles the kernel
+# and refuses the map unless it is build/megak/kernel.bin byte for byte, and
+# kern_mega is `-DKERN_BIG -DKERN_MEGA` (the Makefile's sub-make; the packer's
+# KZ numbers it reads itself from kernel.kz.json). Without them the
+# re-assembly is some other kernel, and on the merged tree nasm stopped on
+# boot2.asm's BLOB_LIFT guard before any address was had. $OS88_MEGA is
+# NOT the way here: it also tells os88qemu the machine is Bochs, and this
+# row's machine is QEMU's
+os88sym.default_defines("KERN_BIG", "KERN_MEGA")
 S = os88sym.linear
 say = eth.say
 u16 = eth.u16
