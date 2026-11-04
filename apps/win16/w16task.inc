@@ -707,7 +707,7 @@ W16TSK w16t_end
     jz .seg
     cmp byte [si + W16K_FL], 0
     jne .blk
-    call OSAPI_MEM_FREE
+    W16VFREE                        ; (a claim: its map row goes too)
     jmp short .seg
 .blk:
     ICALL w16_kfree

@@ -1217,6 +1217,7 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_show, 1          ; nCmdShow XOR SW_SHOWNORMAL (a task's)
     W16BSS w16_task, W16_MAXTASK * W16K_SIZE
     W16BSS w16_cur, 1           ; the current task's index
+    W16BSS w16_pgblk, 1         ; 1: the segments being loaded are a heap block
 %ifdef PKG_MEGA
     W16BSS w16_lseg, 2          ; the stack lent kern_mega (w16_lend), 0 none
 %endif
