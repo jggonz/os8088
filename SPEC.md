@@ -237536,10 +237536,10 @@ while a menu waits on a key**, so that a key waits behind at most about a
 revolution, **and 16 KB while a clip streams with no menu up**: a quarter of
 the calls.
 
-**A clip far bigger than memory streams.** The demo's Limit is 234 KB
-(118 frames, 7.8 s, 29 KB/s with its sound), about five rings. Measured on
+**A clip far bigger than memory streams.** The demo's Limit is 250 KB
+(118 frames, 7.8 s, 31 KB/s with its sound), about five rings. Measured on
 MartyPC's XT (`os8088_xt_hdd_sb`, the bundle on its XT-IDE C:): it played
-in real time, 7.58 s captured for 7.8 s, inside a battle with 0 late
+in real time, 7.67 s captured for 7.8 s, inside a battle with 0 late
 frames, 0 stalls, 0 frames of sound late and 0 music underruns. **The rate
 is what limits it, and the disk's kind decides the rate.** The first Limit,
 at 34.6 KB/s, could not be fed. With the music's 11 KB/s that was 46 KB/s,
@@ -237557,7 +237557,7 @@ The demo battle on a 640 KB machine:
 | its bss | 5,352 (the first 4 KB of the bundle among it) |
 | the resident claim | 208 KB: the block 39,218 (40 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB), two clip rings and their guards (128 KB) |
 | the card's ring | 17 KB |
-| the bundle | 835,584 bytes on the disk: the music 282,240 (25.6 s), the Limit 233,678 |
+| the bundle | 847,872 bytes on the disk: the music 282,240 (25.6 s), the Limit 249,650 |
 
 ### 125.5 The band
 
@@ -237627,7 +237627,7 @@ C:** (2026-11-04).
   correlates with the card's capture at offset 0 at 0.96.
 - **The music comes in at 3.903 s**, exactly where the openings end, at
   0.97. After it, one-second windows correlate with the bundle's music at a
-  median of 0.99 (lowest 0.75, under an effect) over 59 s.
+  median of 0.99 (lowest 0.72, under an effect) over 58 s.
 - **The floppy's battle** (no Limit, 3.2 s of resident music) played its
   eight actions from the 360 KB disk on the 5150 with 0 late frames.
 

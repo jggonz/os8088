@@ -139,13 +139,14 @@ Discoveries:
 - **The disk's kind decides the rate a clip may have.** With the bugs gone,
   the first Limit (34.6 KB/s plus 11 for the music) still could not be fed
   by MartyPC's XT-IDE, whose CPU copies every byte while it also decodes.
-  Its sky flashes, 7 KB a frame, were the weight; without them the clip is
-  29 KB/s and plays in real time. A DMA disk is another matter, and the
+  Its sky flashes, 7 KB a frame, were the weight; without them, and with
+  its rings of light drawn as thin outlines moving every other frame (they
+  were drawn filled, a bug), the clip is 31 KB/s and plays in real time. A DMA disk is another matter, and the
   builder will budget each clip against the profile's disk.
 
 | MartyPC `os8088_xt_hdd_sb`, C: | |
 |---|---|
-| the Limit, 234 KB | 7.58 s captured for 7.8 s |
+| the Limit, 250 KB | 7.67 s captured for 7.8 s |
 | a battle to victory | 0 late frames, 0 stalls, 0 sound frames late, 0 music underruns |
 | the music's join | at 3.903 s, the openings' end, correlation 0.97 |
 

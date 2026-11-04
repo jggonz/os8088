@@ -543,10 +543,13 @@ def clip_reveal():
 
 
 def ring_overlay(cx, cy, r, colour, width=3):
+    """A ring of light: an ellipse's OUTLINE, `width` pixels thick"""
     def ov(c):
-        for k in range(width):
-            c.ellipse((cx - r - k, cy - r * 0.6 - k, cx + r + k, cy + r * 0.6 + k),
-                      colour, None)
+        im = Image.new("1", (W, c.h), 0)
+        ImageDraw.Draw(im).ellipse([int(cx - r), int(cy - r * 0.6),
+                                    int(cx + r), int(cy + r * 0.6)],
+                                   outline=1, width=width)
+        c.a[np.array(im, bool)] = colour
     return ov
 
 
@@ -589,14 +592,14 @@ def clip_ari_limit():
             cues[n_up + i] = "slash"
     for i in range(n_rings):                    # the rings
         def ov(c, i=i):
-            for j in range(4):
-                r = (i * 6 + j * 40) % 180
+            for j in range(2):
+                r = ((i // 2) * 10 + j * 70) % 150   # (on every other frame)
                 if r > 4:
-                    ring_overlay(tx, ty, r, (WHITE, CYAN, RED, WHITE)[j], 2)(c)
+                    ring_overlay(tx, ty, r, (WHITE, CYAN)[j], 2)(c)
             if i < 24:
                 spark(c, tx, ty, 10 + (i % 6) * 5, WHITE)
-        fr.append(scene(i * 0.6, beetle_kw=dict(hurt=(5 if i % 2 else -5),
-                                                flash=i % 3 == 0, y=BEETLE_XY[1] - 10 * math.sin(i * 0.3)),
+        fr.append(scene(i * 0.6, beetle_kw=dict(hurt=(4 if i % 8 < 4 else -4),
+                                                flash=i % 8 == 0, y=BEETLE_XY[1] - 10 * math.sin((i // 4) * 1.2)),
                         ari=dict(x=tx + 40, y=ARI_XY[1] - 40, pose="raise"),
                         overlay=ov))
     cues[n_up + n_cuts] = "limit_burst"

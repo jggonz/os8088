@@ -376,7 +376,7 @@ evidence names the machine.
 - [x] **Clips of any length stream** (format version 3, 2026-11-04): two
   48 KB rings; each record carries its frame's sound; the openings play in
   turn and the music joins after them. *MartyPC `os8088_xt_hdd_sb`: a
-  234 KB clip in real time, a battle with 0 late frames, 0 stalls and the
+  250 KB clip in real time, a battle with 0 late frames, 0 stalls and the
   music in exactly where the openings end.*
 - [ ] **Captured footage.** An importer that takes the DECODED screens of
   lossy V88 clips and makes exact records between them (SPEC.md 125.2.3).
