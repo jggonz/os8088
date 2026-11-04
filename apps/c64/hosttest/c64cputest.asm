@@ -26,7 +26,7 @@
 ; The perturbations reach the ENVIRONMENT or the core's own tables at runtime,
 ; never the source: what is assembled here is byte for byte what ships.
 ;
-;     -DROWS      the eleven rows below (seconds)
+;     -DROWS      the thirteen rows below (seconds)
 ;     -DDORMANN   Klaus Dormann's 6502 functional test, appended by the
 ;                 script at sector DORMSEC and read straight into the C64's
 ;                 RAM; PC starts at $0400 and the run is judged by where the
@@ -537,6 +537,15 @@ rows_main:
     call control
     call unpatch_brk
 
+    mov si, msg_r13
+    call puts
+    call row_rmw
+    call verdict
+    mov byte [neg_rmw], 1
+    call row_rmw
+    call control
+    mov byte [neg_rmw], 0
+
 
     mov ax, [fails]
     or ax, ax
@@ -972,6 +981,73 @@ scr_wr_word:                        ; AX = value, BX = scratch offset
     pop ax
     mov al, ah
     call scr_wr
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 13 - READ-MODIFY-WRITE ABOVE $A000 (m65gen.py's RMW, C64-SPEC 4.7)
+; The fast core runs these itself but for I/O, since the Portland CUG
+; Christmas demo's `DEC $C333 / BNE` delay loop ran at 3% handing each one
+; back. With BASIC and the KERNAL in, INC $A010 reads BASIC's byte and writes
+; the result into the RAM UNDER it; DEC $C333 is plain RAM; ASL $E010 reads
+; the KERNAL and writes the RAM under it; neither ROM changes.
+; -----------------------------------------------------------------------------
+row_rmw:
+    mov al, 7
+    call bank_set
+    push es
+    mov ax, SEG_ROM
+    mov es, ax
+    mov byte [es:0x2010], 0x40      ; BASIC's $A010
+    mov byte [es:0x0010], 0x21      ; the KERNAL's $E010
+    pop es
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov byte [es:0xA010], 0x77      ; what is UNDER them: not what is read
+    mov byte [es:0xE010], 0x77
+    mov byte [es:0xC333], 0x10
+    mov byte [es:0x0400], 0xEE      ; INC $A010
+    mov word [es:0x0401], 0xA010
+    mov byte [es:0x0403], 0xCE      ; DEC $C333
+    mov word [es:0x0404], 0xC333
+    mov byte [es:0x0406], 0x0E      ; ASL $E010
+    mov word [es:0x0407], 0xE010
+    mov byte [es:0x0409], 0x02      ; KIL
+    pop es
+    mov bx, 0x0400
+    mov [_c64_m+CM_PC], bx
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    call rebank
+    cmp byte [neg_rmw], 0           ; THE NEGATIVE CONTROL: the map SAYS
+    je .go                          ; BASIC is out while the ROM is in - an
+    mov bx, C64_SCR_MAPA            ; RMW that reads through the map reads
+    mov al, 0                       ; the RAM under it, $77, and writes $78
+    call scr_wr
+.go:
+    PUSHI 200
+    call _c64_run
+    add sp, 2
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    cmp byte [es:0xA010], 0x41
+    jne .bad_es
+    cmp byte [es:0xC333], 0x0F
+    jne .bad_es
+    cmp byte [es:0xE010], 0x42
+    jne .bad_es
+    mov ax, SEG_ROM
+    mov es, ax
+    cmp byte [es:0x2010], 0x40
+    jne .bad_es
+    cmp byte [es:0x0010], 0x21
+    jne .bad_es
+    pop es
+
+    xor ax, ax
+    ret
+.bad_es:
+    pop es
+    mov ax, 1
     ret
 
 ; -----------------------------------------------------------------------------
@@ -2430,6 +2506,7 @@ neg_port:   db 0
 neg_stale:  db 0
 neg_io:     db 0
 neg_int:    db 0
+neg_rmw:    db 0
 saw0:       db 0
 saw1:       db 0
 saw2:       db 0
@@ -2459,6 +2536,7 @@ msg_r9:     db 'row 9  cycle totals and the penalties ', 0
 msg_r10:    db 'row 10 decimal ADC/SBC, all 262144    ', 0
 msg_r11:    db 'row 11 the four unstable stores       ', 0
 msg_r12:    db 'row 12 the interrupt stack and RTI    ', 0
+msg_r13:    db 'row 13 read-modify-write above $A000  ', 0
 msg_ok:     db 'ok ', 0
 msg_bad:    db 'FAIL ', 0
 msg_nok:    db '(control fails: ok)', 13, 10, 0

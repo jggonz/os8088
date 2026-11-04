@@ -455,15 +455,37 @@ class Gen:
                 self.shift(mn, "dh")
                 L("    mov [bx], dh")
             self.next(cyc)
+        elif mn in RMW and self.c64:
+            # THE C64's READ-MODIFY-WRITE ABOVE $A000 IS THIS CORE'S, BUT FOR
+            # I/O. It handed the whole of $A000-$FFFF back, one instruction at
+            # a time - and $C000-$CFFF is RAM under every bank map, where a
+            # program keeps its counters: a `DEC $C333 / BNE` delay loop ran
+            # at 3% (the Portland CUG Christmas demo). rd_hi reads what the
+            # map shows there - BASIC, the KERNAL, the CHARGEN or RAM - and
+            # the write path puts the result in RAM under a ROM, which is the
+            # 6510's own rule. I/O stays the accurate core's: the dummy write
+            # of the unmodified value is a real access ($D019's ack).
+            self.ea(mode, False, pen, handback)
+            hi, k, rd = self.lab(), self.lab(), self.lab()
+            L("    cmp bh, 0xA0", "    jae %s" % hi,
+              "    cmp bx, 2", "    jb %s" % handback(2),
+              "    mov dh, [bx]", "%s:" % k)
+            self.later.append([
+                "%s: cmp bh, 0xD0" % hi, "    jb %s" % rd,
+                "    cmp bh, 0xE0", "    jae %s" % rd,
+                "    cmp byte [%s], 4" % self.scr(S_MAPD),
+                "    je %s" % handback(2),
+                "%s: mov dl, %d" % (rd, cyc), "    call rd_hi", "    xor dl, dl",
+                "    jmp %s" % k])
+            self.shift(mn, "dh")
+            self.write(mode, "dh", cyc, handback)
+            self.next(cyc)
         elif mn in RMW:
             # a read-modify-write of anything but plain RAM is the accurate
-            # core's: I/O (the dummy write), and on the C64 a ROM read with a
-            # RAM write under it
+            # core's: I/O (the dummy write)
             self.ea(mode, False, pen, handback)
-            top = 0xA0 if self.c64 else self.p["ram_top"]
+            top = self.p["ram_top"]
             L("    cmp bh, 0x%02X" % top, "    jae %s" % handback(2))
-            if self.c64:
-                L("    cmp bx, 2", "    jb %s" % handback(2))
             L("    mov dh, [bx]")
             self.shift(mn, "dh")
             self.write(mode, "dh", cyc, handback)

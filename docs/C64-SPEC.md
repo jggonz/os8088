@@ -703,8 +703,16 @@ Writes below `$D000` store and mark; at `$D000` and up `wr_hi` calls I/O out,
 drops `$FFC0-$FFF9` (the scratch, as the accurate core does) and stores the
 rest. **Every RAM write outside zero page and the stack marks damage** - the
 page bit, the wrote byte and the window of section 9.2 - because the VIC can
-fetch from anywhere. A read-modify-write at `$A000` and up, or of `$00/$01`,
-is handed back.
+fetch from anywhere. **A read-modify-write is the core's own at every
+address but I/O and `$00/$01`**: at `$A000` and up it reads through `rd_hi`,
+so under a ROM it reads the ROM and writes the RAM beneath - the 6510's rule
+- and only `$D000-$DFFF` with I/O mapped, whose unmodified dummy write is a
+real access (`DEC $D019`), is handed back. It handed back the whole of
+`$A000-$FFFF` until a program kept its delay counters at `$C333`: the
+Portland Commodore Users Group's Christmas demo's `DEC $C333 / BNE` loop
+ran one instruction a hand-back, at **3%** on 86Box `286-victory`, and runs
+at **20-26%** in the core. `c64cputest` row 13 pins the three cases on both
+cores, with a control that lies about the BASIC map.
 
 **`$00/$01`.** While the fast core runs, `c64fast.inc` puts the port's
 read-back in RAM `$0000/$0001` - `c64_pp_rb`, which `c64io.c` recomputes
@@ -860,7 +868,7 @@ taken at. CHRGET (`$0073`) runs natively as on the Apple II, and only with
 
 **What it leaves to the core** is APPLE2-SPEC 4.7's list - `BRK`, `SED`,
 any decimal-mode stretch, and `CLI`, `SEI`, `PLP` or `RTI` while the
-interrupt byte is up - and a read-modify-write that might not be RAM, a
+interrupt byte is up - and a read-modify-write of I/O or `$00/$01`, a
 pointer in `$FF/$00/$01`, `JMP (ind)` through a pointer at `$A000` and up.
 
 **ROM tables are read through their bank's segment, inline**, wherever the

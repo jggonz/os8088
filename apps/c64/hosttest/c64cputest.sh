@@ -229,9 +229,9 @@ for MODE in real neg; do
 done
 
 if [ "${C64CPU_ONLY:-}" = plain ]; then
-    echo "c64cputest: PASS - twelve rows, and every negative control failed (the accurate core alone)"
+    echo "c64cputest: PASS - thirteen rows, and every negative control failed (the accurate core alone)"
 else
     fast_leg
-    echo "c64cputest: PASS - twelve rows, and every negative control failed, on both cores"
+    echo "c64cputest: PASS - thirteen rows, and every negative control failed, on both cores"
 fi
 exit 0
