@@ -196,6 +196,63 @@ def inner(tmp):
         print(e)
     app.root.destroy()
 
+    # C: THE BAND - in the previews as the engine draws it, and its
+    # pictures edited after they are added (the owner's ask)
+    import numpy as np
+    import os88vbt as B
+    from PIL import Image
+    cv = os.path.join(tmp, "c.vbp")
+    B.demo_project(cv, bars=2)
+    pic = os.path.join(tmp, "crest.png")
+    Image.fromarray((np.indices((24, 48)).sum(0) % 7 * 40).astype(np.uint8)
+                    ).convert("RGB").save(pic)
+    app, errs = window()
+    app.open_path(cv)
+    it = app.idle_tab
+    app.nb.select(it.f)
+    it._load()
+    pump(app, lambda: it._frames() is not None and not app.job, 60)
+    it._show(0)
+    h_on = it._img.height()
+    rgb = np.array(app.band_rgb()) if app.band_rgb() is not None else None
+    app.show_band.set(False)
+    it._show(0)
+    h_off = it._img.height()
+    app.show_band.set(True)
+    ok(rgb is not None and rgb.shape[:2] == (58, 320) and rgb.any()
+       and h_on == 200 * 2 and h_off == 142 * 2,
+       "C. the Idle preview with THE BAND under it (%d px high, %d without: "
+       "View's switch)" % (h_on, h_off))
+    ot = app.openings_tab
+    ot._load()
+    pump(app, lambda: ot.frames is not None and not app.job, 60)
+    ok(ot.frames is not None and
+       ot._pic(ot.frames[0][0], 0).height() == 400,
+       "C. an opening WITH THE MENU previews with the band")
+    d = app.proj.d
+    app.proj.set_opening(0, full=True) if len(d["openings"]) > 1 else None
+    pt = app.party_tab
+    app.nb.select(pt.f)
+    app.edit("set", ("images",), [{"name": "crest", "path": pic, "col": 2,
+                                   "row": 4, "dither": True}])
+    app.edit("set", ("band_image",), "crest")
+    pt.imlb.selection_set(0)
+    pt._pick_image()
+    b0 = np.array(app.band_rgb())
+    pt._im_set(0, "col", 20)
+    b1 = np.array(app.band_rgb())
+    pt._rename_image(0, "shield")
+    ok(pt.imsel == 0 and not np.array_equal(b0, b1)
+       and app.proj.d["images"][0]["col"] == 20
+       and app.proj.d["images"][0]["name"] == "shield"
+       and app.proj.d.get("band_image") == "shield",
+       "C. a band picture EDITED after it was added: moved (the band "
+       "preview changes with it), renamed (the band's own use with it)")
+    ok(not errs, "C. nothing raised in a Tk callback (%d)" % len(errs))
+    for e in errs[:2]:
+        print(e)
+    app.root.destroy()
+
     # B: the save cancelled, then not
     answer["p"] = None
     app, errs = window()

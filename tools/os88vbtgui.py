@@ -499,6 +499,8 @@ class App(object):
         self.job = None
         self.q = queue.Queue()
         self.frames = {}            # source -> decoded screens, once loaded
+        self._band = (None, None)   # (the project's state, the band's rgb)
+        self.show_band = self.tk.BooleanVar(value=True)
         self.anim = None
         self._menus()
         self._body()
@@ -649,6 +651,10 @@ class App(object):
         e.add_command(label="Undo", command=self.undo, accelerator="Ctrl+Z")
         e.add_command(label="Redo", command=self.redo, accelerator="Ctrl+Y")
         mb.add_cascade(label="Edit", menu=e)
+        v = tk.Menu(mb, tearoff=0)
+        v.add_checkbutton(label="The band in the previews",
+                          variable=self.show_band, command=self.refresh)
+        mb.add_cascade(label="View", menu=v)
         self.root.config(menu=mb)
         for k, fn in (("<Control-n>", self.new), ("<Control-o>", self.open),
                       ("<Control-s>", self.save), ("<Control-z>", self.undo),
@@ -939,11 +945,35 @@ class App(object):
             return False
         return os.path.exists(A.screens_npy(self.proj, sid, full))
 
-    def photo(self, px, pal=None, scale=SCALE):
-        from PIL import ImageTk
-        return ImageTk.PhotoImage(frame_image(px, pal if pal is not None else
-                                              self.proj.d["target"]["palette"],
-                                              scale))
+    def photo(self, px, pal=None, scale=SCALE, band=False):
+        """A frame as a picture. BAND: a canvas frame with THE BAND under it,
+        as the engine draws it (vbtband.render: the first character's top
+        menu) - the screen the battle will show, when View has it on"""
+        from PIL import Image, ImageTk
+        import numpy as np
+        pal = pal if pal is not None else self.proj.d["target"]["palette"]
+        b = self.band_rgb() if band and self.show_band.get() else None
+        if b is None or px.shape[0] + b.shape[0] != 200:
+            return ImageTk.PhotoImage(frame_image(px, pal, scale))
+        import vbtana as A
+        im = Image.fromarray(np.vstack([A.to_rgb(px, pal), b]))
+        return ImageTk.PhotoImage(im.resize((im.width * scale,
+                                             im.height * scale), Image.NEAREST))
+
+    def band_rgb(self):
+        """The band's rows (BY..199) as rgb, as the engine draws them - kept
+        until the project changes; None while the rules do not compile (no
+        character yet, say)"""
+        key = self._state()
+        if self._band[0] != key:
+            import numpy as np
+            import vbtband
+            try:
+                self._band = (key, np.asarray(
+                    vbtband.render(self.proj, 0).convert("RGB")))
+            except Exception:           # noqa: BLE001
+                self._band = (key, None)
+        return self._band[1]
 
     def listen(self, sound, loop=None):
         out = os.path.join(tempfile.gettempdir(), "vbtgui-listen.wav")
@@ -1439,7 +1469,7 @@ class IdleTab(object):
         fr = self._frames()
         if fr is None or not 0 <= n < len(fr):
             return
-        self._img = self.app.photo(fr[n])
+        self._img = self.app.photo(fr[n], band=True)
         self.pic.config(image=self._img, width=self._img.width(),
                         height=self._img.height())
 
@@ -1519,7 +1549,7 @@ class IdleTab(object):
         import numpy as np
         self.whole = whole
         black = self.app.photo(np.zeros_like(fr[0]), pal=0)
-        imgs = [black if n is None else self.app.photo(fr[n])
+        imgs = [black if n is None else self.app.photo(fr[n], band=True)
                 for n in play_order(self.preview_loop(), whole)]
         (self.play_b if whole else self.seam_b).config(text="Stop")
         step = [0]
@@ -1856,7 +1886,7 @@ class ClipsTab(object):
             im = im.resize((im.width * SCALE, im.height * SCALE), Image.NEAREST)
             self._img = ImageTk.PhotoImage(im)
         else:
-            self._img = self.app.photo(px)
+            self._img = self.app.photo(px, band=True)
         self.pic.config(image=self._img)
         self._tl_draw()
 
@@ -2513,6 +2543,24 @@ class OpeningsTab(object):
                 then()
         step(0)
 
+    def _band_from(self):
+        """The preview's frame number the band comes in at, as the engine
+        brings it in: the first frame of the first opening with the menu
+        (the last's, if every one were full screen)"""
+        d, starts = self.app.proj.d, self.frames[1]
+        for k, o in enumerate(d["openings"]):
+            if not o.get("full") and k < len(starts):
+                return starts[k]
+        return starts[-1] if starts else 0
+
+    def _pic(self, px, n):
+        """Preview frame N: the canvas with the band under it from where
+        the engine lets it in, black before; a full-screen frame whole"""
+        if px.shape[0] < 200 and n >= self._band_from() and \
+                self.app.band_rgb() is not None and self.app.show_band.get():
+            return self.app.photo(px, band=True)
+        return self.app.photo(self._whole(px))
+
     def _whole(self, px):
         import numpy as np
         h = 200 - px.shape[0]
@@ -2524,9 +2572,9 @@ class OpeningsTab(object):
             return
         pics, starts, _ = self.frames
         n = max(0, min(n, len(pics) - 1))
-        self._img = self.app.photo(self._whole(pics[n]))
-        self.pic.config(image=self._img)
         k = max(i for i, s0 in enumerate(starts) if s0 <= n)
+        self._img = self._pic(pics[n], n)
+        self.pic.config(image=self._img)
         self.info.config(text="Opening %d (%s), its frame %d" % (
             k + 1, self.app.proj.d["openings"][k]["clip"], n - starts[k]))
 
@@ -2550,7 +2598,7 @@ class OpeningsTab(object):
         e = d["clips"][d["openings"][-1]["clip"]]["exit"]
         n = b - a
         pics += [idle[a + (e + k) % n] for k in range(1, 4 * d["target"]["fps"])]
-        imgs = [self.app.photo(self._whole(p)) for p in pics]
+        imgs = [self._pic(p, i) for i, p in enumerate(pics)]
         op = sum(len(range(d["clips"][o["clip"]]["in"],
                            d["clips"][o["clip"]]["out"] + 1))
                  for o in d["openings"])
@@ -3681,10 +3729,49 @@ class PartyTab(object):
         d = self.app.proj.d
         pf = ttk.LabelFrame(self.side, text="Band pictures", padding=4)
         pf.pack(fill="x")
-        for i, im in enumerate(d.get("images", [])):
-            ttk.Label(pf, text="%s at %d,%d" % (im["name"], im.get("col", 0),
-                                                im.get("row", 0))).pack(anchor="w")
-        ttk.Button(pf, text="Add a picture...", command=self._add_image).pack(anchor="w")
+        ims = d.get("images", [])
+        self.imlb = tk.Listbox(pf, height=4, width=24, exportselection=False)
+        self.imlb.pack(anchor="w")
+        for im in ims:
+            self.imlb.insert("end", "%s at %d,%d" % (
+                im["name"], im.get("col", 0), im.get("row", 0)))
+        sel = getattr(self, "imsel", None)
+        if sel is not None and sel < len(ims):
+            self.imlb.selection_set(sel)
+        self.imlb.bind("<<ListboxSelect>>", lambda e: self._pick_image())
+        ib = ttk.Frame(pf)
+        ib.pack(anchor="w")
+        ttk.Button(ib, text="Add a picture...", command=self._add_image
+                   ).pack(side="left")
+        if sel is not None and sel < len(ims):
+            # THE PICTURE CHOSEN, edited in place: where it sits, how much
+            # of it, how it is made - the band preview follows each change
+            im = ims[sel]
+            ttk.Button(ib, text="Remove", command=self._rm_image
+                       ).pack(side="left")
+            ef = Rows(self.app, pf)
+            ef.f.pack(anchor="w", pady=2)
+            ef.entry("Name", im["name"], lambda v: self._rename_image(sel, v),
+                     width=12)
+            ef.entry("Column (cells, 0-39)", im.get("col", 0),
+                     lambda v: self._im_set(sel, "col", as_int(v)), width=5)
+            ef.entry("Row in the band", im.get("row", 0),
+                     lambda v: self._im_set(sel, "row", as_int(v)), width=5)
+            ef.entry("Width (cells; blank: its own)", im.get("cells") or "",
+                     lambda v: self._im_set(sel, "cells",
+                                            as_int(v) or None), width=5)
+            ef.entry("Height (rows; blank: its own)", im.get("rows") or "",
+                     lambda v: self._im_set(sel, "rows",
+                                            as_int(v) or None), width=5)
+            ef.choice("Dithered", "yes" if im.get("dither", True) else "no",
+                      ("yes", "no"),
+                      lambda v: self._im_set(sel, "dither", v == "yes"),
+                      width=5)
+            ttk.Label(pf, text=os.path.basename(im.get("path", "")),
+                      wraplength=220).pack(anchor="w")
+            ttk.Button(pf, text="Replace its file...",
+                       command=lambda: self._replace_image(sel)
+                       ).pack(anchor="w")
         imgs = ["(none)"] + [im["name"] for im in d.get("images", [])]
         bv = tk.StringVar(value=d.get("band_image") or "(none)")
         ttk.Label(pf, text="Under the whole band:").pack(anchor="w")
@@ -3715,6 +3802,65 @@ class PartyTab(object):
         imgs = list(self.app.proj.d.get("images", [])) + [
             {"name": name, "path": p, "col": col, "row": row, "dither": True}]
         self.app.edit("set", ("images",), imgs)
+
+    def _pick_image(self):
+        s = self.imlb.curselection()
+        self.imsel = s[0] if s else None
+        self.show()
+
+    def _im_set(self, i, field, value):
+        imgs = [dict(x) for x in self.app.proj.d.get("images", [])]
+        if value is None:
+            imgs[i].pop(field, None)
+        else:
+            imgs[i][field] = value
+        self.app.edit("set", ("images",), imgs)
+
+    def _rename_image(self, i, name):
+        """A picture renamed, and every place that names it with it: the
+        band's own and each menu's look"""
+        d = self.app.proj.d
+        name = "".join(ch for ch in name.strip() if ch.isalnum() or
+                       ch in "_-")[:12]
+        old = d["images"][i]["name"]
+        if not name or name == old:
+            return
+        if any(x["name"] == name for x in d["images"]):
+            return self.app.say("There is a picture called %s already" % name)
+
+        def f(d):
+            d["images"][i]["name"] = name
+            if d.get("band_image") == old:
+                d["band_image"] = name
+            for lk in d.get("menu_looks", {}).values():
+                if lk.get("image") == old:
+                    lk["image"] = name
+        self.app.proj._edit(f)
+        self.app.refresh()
+
+    def _rm_image(self):
+        i = self.imsel
+        d = self.app.proj.d
+        if i is None or i >= len(d.get("images", [])):
+            return
+        old = d["images"][i]["name"]
+
+        def f(d):
+            del d["images"][i]
+            if d.get("band_image") == old:
+                d["band_image"] = None
+            for lk in d.get("menu_looks", {}).values():
+                if lk.get("image") == old:
+                    lk.pop("image", None)
+        self.imsel = None
+        self.app.proj._edit(f)
+        self.app.refresh()
+
+    def _replace_image(self, i):
+        from tkinter import filedialog
+        p = filedialog.askopenfilename(title="The picture's new file")
+        if p:
+            self._im_set(i, "path", p)
 
     def _add_item(self):
         from tkinter import simpledialog
