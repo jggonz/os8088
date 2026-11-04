@@ -539,10 +539,8 @@ BRK and an IRQ entry so a double charge cannot come back.
   second of stalled UI task.
 
 **Warp mode is this ceiling raised, and the flush rate capped — and nothing
-else** (Alt+W, §11.1). Nothing in this port paces the machine against a wall
-clock (SPEC.md §74.4's posture, and why §11.2 greys VICE's Emulation speed
-section), so the only throttle between the 6510 and the host is how many
-cycles a wake may run. Warp raises the ceiling from 16,384 to
+else** (Alt+W, §11.1) - and since §4.4.1 it also lifts the throttle that
+holds the machine to a PAL C64's speed. Warp raises the ceiling from 16,384 to
 **`C64_SLICE_WARP` = 30,000** — not 32,767, because `c64_m.cnt` is a signed
 word and the alarm model may round a budget UP by the instruction in
 progress. The other half is VICE's too: `vsync.c` limits rendering to 10 fps
@@ -586,6 +584,21 @@ than 19,656 cycles away, so a counter above `$7FFF` can never be the nearest
 alarm. Neither defect shows on the host (`int` is 32 bits there) or in the
 core's gate; `hosttest/c64uitest.c` models the target's widths with
 `short`/`unsigned short` as the negative control.
+
+#### 4.4.1 The throttle: a PAL C64's 985,248 Hz, unless warp
+
+APPLE2-SPEC 4.3.3's throttle one machine along (`c64_th_allow`,
+`c64_th_spend`): every host tick pays 845.5 units of 64 cycles (13,529
+sixteenths, carried) into what the machine is owed, a wake's budget is never
+more than is owed, the debt stops at three ticks, and warp bypasses it. It
+binds only where the machine can pass 100% - on the 286 the fast core reads
+40-47% and is not held. `hosttest/c64uitest.c` holds 64 ticks to 3,463,354
+cycles within 0.06%, a stall not paid back and warp not held, and then turns
+it off (`c64_th_off`) for every other case. It was decided when the fast core
+(§4.7) made a 386 able to outrun the machine; until then nothing in this
+port paced it against a wall clock, which is why §11.2 greys VICE's Emulation
+speed section - that section still has nothing to offer here but the one
+speed and warp.
 
 ### 4.5 What `_c64_run` answers
 
@@ -1720,8 +1733,8 @@ differing from what is on the glass is a reason to flush, because
 none — the figures froze exactly when somebody was looking at them.
 
 - **cpu %** = emulated 6510 cycles delivered per second ÷ 985,248. 100 % is
-  a real C64. Nothing throttles, so this number is the machine's honest
-  output and the reason Preferences > Emulation speed is greyed (§11.2). On
+  a real C64. The machine is held to 100% (§4.4.1) and below that this number
+  is its honest output - and the reason Preferences > Emulation speed is greyed (§11.2). On
   a 4.77 MHz 8088 (MartyPC, the 360KB disk on a CGA desktop) the row reads
   **`1% cpu`**, and the KERNAL takes about 1.3 billion host cycles — some
   280 s of guest time — to reach `READY.`
@@ -1903,7 +1916,7 @@ Live items:
 | File > Reset drive #8 | no drives |
 | Snapshot > every item (load/save Alt+L/S, quick snapshots Alt+F10/F11, the event section folded onto `Start recording events` including the milestones Alt+E/U, media recording Alt+Shift+R/S, quicksave screenshot on Pause) | no snapshot format: a VSF carries every chip's state and this machine's chips are not VICE's |
 | Preferences > Restore display state (Alt+R), Show menu/status in fullscreen | the window is os8088's: the kernel places it, and the bar is under a fullscreen window (SPEC.md §11.2) |
-| Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | nothing throttles here: the machine delivers what the CPU can and the status bar prints it (§10.2; SPEC.md §74.4) |
+| Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | one speed and warp: the machine is held to 100% (§4.4.1) and below that delivers what the CPU can, which the status bar prints (§10.2) |
 | Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: `*` AND `MENU_DIS` (§11.1 rule 4) |
 | Preferences > Mouse grab (Alt+M) | no 1351 mouse: the pointer is the desktop's |
 | Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here; `*` AND `MENU_DIS` (§8) |

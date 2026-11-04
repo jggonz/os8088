@@ -532,6 +532,28 @@ what an 8088 keeps. `hosttest/a2uitest.c`'s one-cell bracket case pins
 `a2_reps` to 1, because its fixture write is "the second run" and its runs
 cost nothing.
 
+#### 4.3.3 The throttle: 1.02 MHz, unless CPU > Warp
+
+**Every host tick pays a tick of an Apple II into what the machine is OWED**,
+and a run never takes more than is owed (`a2_th_allow`, `a2_th_spend`).
+1,020,484 cycles a second is 875.8 units of 64 cycles a tick at 18.2065 Hz:
+14,013 sixteenths of a unit, the fraction carried. Units of 64 because `int`
+is sixteen bits and a tick of cycles is 56,050. **The debt stops at three
+ticks** (`A2_TH_CAP`), so a wake that stalled - a disk read, a dialog - is
+not paid back as a burst at thousands of per cent. **CPU > Warp bypasses
+it**, which is what Warp now means beyond the slice cap. A machine that
+cannot reach 1.02 MHz is never held back: it is always owed more than it
+runs. While nothing is owed a wake runs no 6502 and re-posts, which is what
+the unthrottled machine's wakes did continuously anyway.
+
+The granularity is the host TICK: inside 55 ms the machine runs what it is
+owed as fast as it can and then waits, so timing a program measures against
+the 6502's own cycles stays exact and only the wall clock is coarse.
+`hosttest/a2uitest.c` holds it: 64 ticks of its clock pay 3,587,236 cycles
+within 0.06%, a 100-tick stall pays back no more than three ticks, warp is
+not held - and then `a2_th_off` (the harness's seam: its runs cost no time)
+turns it off for every other case.
+
 ### 4.4 The core's gate - `make a2cputest`
 
 `apps/apple2/hosttest/a2cputest.asm` on `c64cputest.asm`'s boot-sector shape,
@@ -601,11 +623,10 @@ machine in the core's slots, so what is left is the core's own instructions,
 not the wake: about 80 host clocks an emulated instruction under Applesoft,
 spread across JSR, RTS, the branches and the zero-page loads.
 
-**THIS PORT HAS NO THROTTLE** (section 9), and the KEYIN counter is the first
-thing on a 286 that runs faster than the machine. Nothing a user sees moves
-faster for it - the loop is waiting for a key - but on a 386 the general core
-will pass 100% too, and a game will then run fast. Whether `CPU > Normal:
-1MHz` becomes a throttle is the owner's decision and is not made here.
+**AND THE MACHINE IS THROTTLED TO 1.02 MHz** (section 4.3.3, the owner's
+decision once the fast core could pass 100%): the KEYIN counter's idle reads
+**99.8%** with the throttle, where it read 547% without, and the BASIC loop's
+67% is unchanged because it never reaches the wall.
 
 **The layout.** The handler for opcode X is at X x 256 of one 64KB code
 segment; dispatch is `mov dh,[si] / inc si / jmp dx` with DL = 0, inlined at
@@ -2590,8 +2611,8 @@ Yes button. **Nothing is latched by the PICK**; the ANSWER is what sets
 fill and `os88_oncmd` runs under the desktop's lock.
 
 **`Normal: 1MHz`'s body is WARP OFF.** MII's `mhz1` sets the machine's speed
-back to `MII_SPEED_NTSC` (`mii_mui_menus.c:327-329`); this port has no throttle
-at all, so what "normal" means here is the un-warped machine, and
+back to `MII_SPEED_NTSC` (`mii_mui_menus.c:327-329`), and so does warp off
+here: the un-warped machine is throttled to 1.02 MHz (section 4.3.3), and
 `Normal: 1MHz` / `Fast: 3.5MHz` / `Warp` are the same three radio partners MII
 has with the two reachable ends live. **Its MARK is not its state**: section
 10.1's table ticks it from the MEASURED per cent on MII's own 0.9-1.1 band, so

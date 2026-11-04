@@ -1213,6 +1213,57 @@ static void c64_jam(void)
  * CIAs' timers, the raster compare, the frame end and the TOD tick, so every
  * device phase is retained across slices. Answers what was NOT run, so a
  * caller can tell an exhausted slice from one a JAM cut short. */
+/* THE THROTTLE (section 4.4.1): a PAL C64's 985,248 cycles a second and no
+ * faster, unless warp. APPLE2's a2_th_* one machine along: every host tick
+ * pays a tick of the machine into what it is OWED - 845.5 units of 64 cycles
+ * at 18.2065 Hz, 13,529 sixteenths, the fraction carried - capped at three
+ * ticks so a stall is not paid back as a burst, and a wake runs no more than
+ * is owed. A machine that cannot reach full speed is never held back. */
+#define C64_TH_SIXTEENTHS 13529
+#define C64_TH_CAP        (3 * 846)
+static unsigned c64_th_tick;
+static int c64_th_owed;
+static int c64_th_frac;
+static int c64_th_rem;
+static int c64_th_off;                       /* the host harness's seam: its
+                                             * runs cost no time, so it turns
+                                             * the throttle off for every case
+                                             * but the throttle's own */
+
+static int c64_th_allow(int want)
+{
+    unsigned t = os88_ticks();
+    unsigned d = t - c64_th_tick;
+
+    if (c64_warp | c64_th_off)
+        return want;
+    if (d > 4u)
+        d = 4u;
+    c64_th_tick = t;
+    while (d) {
+        c64_th_frac += C64_TH_SIXTEENTHS;
+        c64_th_owed += c64_th_frac >> 4;
+        c64_th_frac &= 15;
+        d--;
+    }
+    if (c64_th_owed > C64_TH_CAP)
+        c64_th_owed = C64_TH_CAP;
+    if (c64_th_owed <= 0)
+        return 0;
+    if (c64_th_owed < (want >> 6))
+        return c64_th_owed << 6;
+    return want;
+}
+
+static void c64_th_spend(int ran)
+{
+    if (c64_warp | c64_th_off)
+        return;
+    ran += c64_th_rem;
+    c64_th_owed -= ran >> 6;
+    c64_th_rem = ran & 63;
+}
+
 static int c64_slice(int left)
 {
     int n, d, r, ran;
@@ -1229,6 +1280,7 @@ static int c64_slice(int left)
         if (ran < 1)
             ran = 1;
         c64_advance(ran);
+        c64_th_spend(ran);
         left -= ran;
         if (r == C64_RUN_JAM) {
             c64_jam();
@@ -1519,7 +1571,7 @@ void os88_onwake(void *win)
                                              * this OS's clock, and it puts
                                              * nothing in while $C6 is not 0 -
                                              * the KERNAL's own pace (7.7) */
-        n = c64_budget;
+        n = c64_th_allow(c64_budget);       /* the throttle (4.4.1) */
         if (c64_adv) {
             /* Advance frame: never past the frame end, and never more than
              * one wall slice at a time either - the item is one frame of

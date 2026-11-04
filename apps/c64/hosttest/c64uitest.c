@@ -1768,6 +1768,48 @@ static void h_noise(void)
 
 int main(int argc, char **argv)
 {
+    /* THE THROTTLE (C64-SPEC 4.4.1): APPLE2's case one machine along - 64
+     * ticks of this host's clock pay in 64 ticks of a PAL C64, a stall is
+     * not paid back, warp is not held - and then OFF for every other case */
+    {
+        long tot = 0;
+        int k, b;
+
+        c64_th_tick = the_ticks;
+        for (k = 0; k < 64; k++) {
+            the_ticks++;
+            while ((b = c64_th_allow(16384)) > 0) {
+                tot += b;
+                c64_th_spend(b);
+            }
+        }
+        /* 64 / 18.2065 s x 985,248 Hz = 3,463,354 cycles */
+        if (tot < 3463354L - 2048 || tot > 3463354L + 2048) {   /* 0.06% */
+            printf("c64uitest: FAIL - the throttle paid %ld cycles for 64 "
+                   "ticks and a PAL C64 runs 3,463,354 (C64-SPEC 4.4.1)\n", tot);
+            exit(1);
+        }
+        the_ticks += 100;
+        tot = 0;
+        while ((b = c64_th_allow(16384)) > 0) {
+            tot += b;
+            c64_th_spend(b);
+        }
+        if (tot > 3L * 846 * 64) {
+            printf("c64uitest: FAIL - a stall was paid back as %ld cycles\n", tot);
+            exit(1);
+        }
+        c64_warp = 1;
+        if (c64_th_allow(16384) != 16384) {
+            printf("c64uitest: FAIL - warp is throttled\n");
+            exit(1);
+        }
+        c64_warp = 0;
+        printf("c64uitest: the throttle holds 64 ticks to a PAL C64 and does "
+               "not pay a stall back\n");
+        c64_th_off = 1;
+    }
+
     void *win;
     int i, k;
 

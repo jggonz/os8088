@@ -2467,6 +2467,49 @@ int main(void)
 
     memset(glass, GUNK, sizeof(glass));
 
+    /* THE THROTTLE (APPLE2-SPEC 4.3.3), on this host's clock: the_ticks moves
+     * only when a case moves it, so 64 ticks pay in what 64 ticks of a real
+     * Apple II run, and no more - and the debt stops at three ticks. Then it
+     * is OFF for every other case, whose runs cost no time at all and would
+     * otherwise never be owed a cycle. */
+    {
+        long tot = 0;
+        int k, b;
+
+        a2_th_tick = the_ticks;
+        for (k = 0; k < 64; k++) {
+            the_ticks++;
+            while ((b = a2_th_allow(16384)) > 0) {
+                tot += b;
+                a2_th_spend(b);
+            }
+        }
+        /* 64 ticks = 3.515 s of a 1,020,484 Hz machine = 3,587,236 cycles;
+         * the sum is in whole 64-cycle units, so within a unit a tick */
+        if (tot < 3587236L - 2048 || tot > 3587236L + 2048)   /* 0.06% */
+            printf("a2uitest: FAIL - the throttle paid %ld cycles for 64 ticks "
+                   "and a 1.02 MHz Apple II runs 3,587,236 (section 4.3.3)\n",
+                   tot), fails++;
+        the_ticks += 100;                   /* a long stall... */
+        tot = 0;
+        while ((b = a2_th_allow(16384)) > 0) {
+            tot += b;
+            a2_th_spend(b);
+        }
+        if (tot > 3L * 876 * 64)            /* ...is NOT paid back */
+            printf("a2uitest: FAIL - a 100-tick stall was paid back as %ld "
+                   "cycles; the debt stops at three ticks (section 4.3.3)\n",
+                   tot), fails++;
+        a2_warp = 1;
+        if (a2_th_allow(16384) != 16384)
+            printf("a2uitest: FAIL - warp is throttled (section 4.3.3)\n"),
+                fails++;
+        a2_warp = 0;
+        printf("a2uitest: the throttle holds 64 ticks to a 1.02 MHz machine "
+               "and does not pay a stall back\n");
+        a2_th_off = 1;
+    }
+
     /* THE ROM, AT ITS PIN. The package is written against ONE character
      * generator and "it drew something" is not the same claim as "it drew the
      * machine this document describes". */

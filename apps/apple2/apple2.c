@@ -1255,8 +1255,8 @@ static void a2_spk_service(void)
                                              * fetch - a machine stopped dead */
 #define A2_SLICE_WARP 30000                 /* ...and CPU > Warp's, which is
                                              * the WHOLE of what warp is on
-                                             * this port: there is no throttle
-                                             * here to take off - a2_slice
+                                             * this port beside lifting the
+                                             * throttle (4.3.3) - a2_slice
                                              * runs a2_budget cycles a wake and
                                              * the status row reports what that
                                              * came to - so the only thing warp
@@ -1567,19 +1567,81 @@ static void a2_fast_init(void)
  *
  * `a2_m.cnt` is what was NOT spent and is negative by up to one instruction's
  * cost, so `ran = asked - cnt` is exact (section 4.2). */
+/* THE THROTTLE (section 4.3.3): 1.02 MHz and no faster, unless CPU > Warp.
+ *
+ * Every host tick that passes adds a tick's worth of an Apple II to what the
+ * machine is OWED - 1,020,484 cycles a second is 875.8 units of 64 cycles a
+ * tick at 18.2065 Hz, 14,013 sixteenths of a unit, the fraction carried - and
+ * a run never takes more than is owed. The debt is capped at A2_TH_CAP, so a
+ * wake that stalled (a disk, a dialog) is not paid back as a burst at some
+ * thousands of per cent. Units of 64 because `int` is sixteen bits here and a
+ * tick of cycles is 56,070. A machine that cannot reach 1.02 MHz is never
+ * held back: it is simply always owed more than it runs. */
+#define A2_TH_SIXTEENTHS 14013              /* 64-cycle units a tick, x 16 */
+#define A2_TH_CAP        (3 * 876)          /* three ticks of debt at most */
+static unsigned a2_th_tick;                 /* the tick last paid in */
+static int a2_th_owed;                      /* units the machine may run */
+static int a2_th_frac;                      /* sixteenths of a unit, carried */
+static int a2_th_rem;
+static int a2_th_off;                       /* the host harness's seam: its
+                                             * runs cost no time, so it turns
+                                             * the throttle off for every case
+                                             * but the throttle's own */                       /* cycles under a unit, carried */
+
+/* a2_th_allow - cycles the next run may take: the debt paid up to now, and
+ * at most `want`. 0 = the machine is ahead of the wall and waits. */
+static int a2_th_allow(int want)
+{
+    unsigned t = os88_ticks();
+    unsigned d = t - a2_th_tick;
+
+    if (a2_warp | a2_th_off)
+        return want;
+    if (d > 4u)
+        d = 4u;
+    a2_th_tick = t;
+    while (d) {
+        a2_th_frac += A2_TH_SIXTEENTHS;
+        a2_th_owed += a2_th_frac >> 4;
+        a2_th_frac &= 15;
+        d--;
+    }
+    if (a2_th_owed > A2_TH_CAP)
+        a2_th_owed = A2_TH_CAP;
+    if (a2_th_owed <= 0)
+        return 0;
+    if (a2_th_owed < (want >> 6))
+        return a2_th_owed << 6;
+    return want;
+}
+
+/* ...and what a run spent, taken off it */
+static void a2_th_spend(int ran)
+{
+    if (a2_warp | a2_th_off)
+        return;
+    ran += a2_th_rem;
+    a2_th_owed -= ran >> 6;
+    a2_th_rem = ran & 63;
+}
+
 static void a2_slice(void)
 {
-    int r, ran, n;
+    int r, ran, n, b;
 
     for (n = 0; n < a2_reps; n++) {
-        a2_clk_set(a2_clk + (unsigned)a2_budget);
+        b = a2_th_allow(a2_budget);
+        if (b <= 0)
+            return;                         /* ahead of the wall: wait */
+        a2_clk_set(a2_clk + (unsigned)b);
         a2_kb_mirror();                     /* the latch, for the fast core */
-        r = a2_run((unsigned)a2_budget);
-        ran = a2_budget - (int)a2_m.cnt;
+        r = a2_run((unsigned)b);
+        ran = b - (int)a2_m.cnt;
         if (ran < 1)
             ran = 1;
         a2_clk = (unsigned)a2_now();
         a2_cyc_add(ran);
+        a2_th_spend(ran);
         if (r == A2_RUN_JAM) {
             a2_jam();
             return;

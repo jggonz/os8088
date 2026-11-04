@@ -375,10 +375,11 @@ static const char *c64_pref_items[] = {
                                              * accumulator. A greying names a
                                              * FACT (SPEC.md 47) and this one
                                              * stopped being one. */
-    D OFF "Emulation speed",                /* :719. Nothing throttles here:
-                                             * the machine delivers what the
-                                             * 8088 can and the status bar
-                                             * prints it (10.2) */
+    D OFF "Emulation speed",                /* :719. One speed and warp: the
+                                             * machine is held to 100% (4.4.1)
+                                             * and below it delivers what the
+                                             * host can, which the status bar
+                                             * prints (10.2) */
     D OFF "Mouse grab  Alt+M",              /* :757  + hotkeys.vhk <Alt>m.
                                              * No 1351 mouse in this build */
     c64_t_swap,                             /* :771  + hotkeys.vhk <Alt>j.

@@ -193,8 +193,8 @@ static int ovl_a2_cmd(int menu, int item, void *win)
     if (menu == A2_M_CPU) {
         if (item == A2_I_NORMAL) {
             /* CPU > `Normal: 1MHz` - MII's `mhz1`, which sets the machine's
-             * speed back to MII_SPEED_NTSC (mii_mui_menus.c:327-329). This
-             * port has no throttle, so what "normal" means here is WARP OFF:
+             * speed back to MII_SPEED_NTSC (mii_mui_menus.c:327-329), and so
+             * does WARP OFF here - the throttle (section 4.3.3) is back on:
              * `Normal: 1MHz`, `Fast: 3.5MHz` and `Warp` are the same three
              * radio partners MII has, and the two states this machine can be
              * in are the ends of that row.
@@ -257,10 +257,9 @@ static int ovl_a2_cmd(int menu, int item, void *win)
         }
         if (item == A2_I_WARP) {
             /* CPU > Warp - OURS (section 10.1), and on this machine it is the
-             * WALL SLICE'S CAP and nothing else. There is no throttle here to
-             * take off: a2_slice runs a2_budget cycles a wake and the status
-             * row reports what that came to, so the only thing warp can lift
-             * is the ceiling the adaptation walks the budget up to.
+             * WALL SLICE'S CAP and the THROTTLE (section 4.3.3): a2_th_allow
+             * pays out what the wall clock owes unless warp is on, and warp
+             * also lifts the ceiling the adaptation walks the budget up to.
              *
              * AND THE CAP COMES BACK DOWN WITH IT. An adapted budget above
              * A2_SLICE_MAX would otherwise outlive the warp it was granted
