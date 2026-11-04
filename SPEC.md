@@ -237418,6 +237418,106 @@ with discardable code keeps the part as well.
 discardable segments and its module block are given back with its other
 blocks.
 
+#### 124.26.14 A segment reached only by far calls goes through thunks *(WIN16-NEXT, c3; the real-mode arm)*
+
+§124.26.1 keeps a discardable segment that another segment names by its
+number, because a number in a register or a data word cannot be moved to a
+thunk. That keeps a lot of code that is not at risk: InstallShield's
+`_INST16.EXE` (Sir Hangman's engine) has 64 discardable segments, and 24 of
+them (88,610 of 404,621 bytes, 217 distinct targets) are named only as
+`CALL FAR seg:off`; counting a segment's references to itself as no reference,
+36 are (136,100 bytes, 359 distinct targets). Real-mode Windows ran that
+program with them discardable. Measured with `tools/os88ne.py`'s tables,
+2026-11-04. 26 more segments (240,345 bytes) are named from DGROUP too, as far
+pointers in tables of procedures, and stay kept: see *What it leaves*.
+
+**The rule (`kern_big` and `kern_small`, `%ifndef PKG_MEGA`).** A relocation
+is a **far-call reference** when all of these hold: it is an internal
+relocation to a segment by number (`target1` is not 0FFh), of address type 2
+(selector), not additive; the segment named is discardable (§124.26.1) and is
+not the segment holding the site; and the module block has a thunk pool
+(below). Such a reference is **proved, site by site**, when the site's bytes are
+in memory (at the apply pass, §124.26.3 step 2): the segment holding the site
+is a code segment, the byte three before the site is `9Ah` (`CALL FAR`) or
+`0EAh` (`JMP FAR`), and the offset word just before the site is below the
+target segment's size. The linker's record is a selector fixup with the offset
+as a literal in the instruction, so the offset is read there and no relocation
+names it.
+
+**What a proved record does.** The record's sites are all checked first,
+then every site is given a thunk for
+its (segment, offset) pair: the offset word is rewritten to the thunk's offset
+and the selector word to the module block's thunk paragraph. A thunk is
+§124.26.2's, jumping far to the target when its segment is loaded and calling
+`w16_thkhit` when it is not, so the same discard, reload and stack scan apply.
+A pair is given ONE thunk: a record's sites and every other record's that call
+the same offset share it, and an entry-table thunk for the same pair
+(§124.26.2) is not looked for, since a pair of this kind has no ordinal.
+
+**What a record that is not proved does.** If any site of the record fails the
+test above, or the pool is full, the segment is **kept**, as §124.26.1 always
+did, but *when the record is applied* and not at launch: its flag is set,
+a block is taken for it if it has none, and the site is given its own
+paragraph. Its content is read after the segment being loaded is done
+(`w16l_pend`; at a launch, after the apply pass), because reading it uses the
+relocation room that the records being applied are in. A launch's pass 0
+no longer keeps a segment for a reference of this kind: every other reference
+(far pointer, offset only, additive, a data segment's site, a protected-mode-only
+module's) still keeps it at pass 0 as before.
+
+**The pool.** `w16l_cmake` counts the records that could be far-call references
+(by their address type and target only: the bytes are not in memory yet) and, if
+there are any, adds `min(max(2 * count, 16), 512)` thunks and one unused one
+before them to the end of the thunk table (`w16_cnord` counts them; 8 bytes
+each, so 136 bytes to 4 KB in the module block). The word after the live table
+(`nseg * 6` into it) holds the pool's first offset, 0 for none; the unused
+thunk is why a program with no entry-table thunks does not have a pool at
+offset 0. A thunk is added to the first free slot of the
+pool, found by comparing (segment, offset); the table is searched linearly, up
+to 512 entries a site.
+
+**The risk, and how it is bounded.** A segment that is reached only by the
+calls above is discarded while some other place holds its address: a
+`PUSH CS` or `MOV AX,CS` that stores the segment (a procedure's address built
+at run time, a CS-relative table), a far pointer built from a
+selector fixup the test classed as a call, or a byte that is `9Ah` by chance.
+In real mode the stale address does not fault; it runs whatever is in that
+memory now. The bounds:
+
+1. The record is proved site by site, so one non-call site, in code or in
+   data, keeps the whole segment.
+2. A library's or program's segment that names ITSELF is not given a thunk
+   (it is applied again at each load), and §124.26.11's keep of a library's
+   self-naming segment stands.
+3. A protected-mode-only module is refused by the real-mode arm, so
+   the programs that keep `PUSH CS` pointers because Windows' protected modes
+   kept their selectors (VBRUN300, Mozart) never reach this rule. They are
+   the programs for which the proposal's 27 segments (39 KB) would have been
+   found, and they stay on `kern_mega`, where §124.26.10 is O8's.
+4. The §124.26.5 scan still holds a segment while any far return address
+   names it, which covers every call out of it.
+
+Not bounded: a real-mode program that stores its own CS and calls it after the
+segment is discarded. Such a program broke in real-mode Windows too when
+Windows moved or discarded the segment; the check for `9Ah`/`0EAh` is a
+filter and not a proof of the instruction stream.
+
+**What it leaves.** A selector fixup in a DATA segment is a far pointer in a
+table, a procedure's address or a pointer to data in code, and nothing in the
+file says which: it keeps its target (the lead's scoping: far calls only). On
+`_INST16.EXE` that is 26 of the 64 segments and 240 KB, which is why Sir
+Hangman's engine still does not run on a 640 KB machine with this rule alone.
+Taking those pointers through thunks as well (a pointer to a thunk is a
+procedure's address in any program that called it; one that read the segment's
+bytes through it would read the thunk) would make 62 of the 64 discardable. It
+is a decision, not a build fix, and is not taken here.
+
+**Costs.** Resident (image + bss of `WIN16.O88`): 0 bytes. The loader is part 5
+(§124.18.7), so its growth is the part's and the kept copy's. The thunk pool is
+the module block's, and its size is the one above. `kern_mega`'s arm is
+unchanged: its relocations still take §124.26.1's rule (O8 covers the same
+segments there).
+
 ### 124.27 Windows inside a window: File Manager and Program Manager *(S20b, docs/plans/WIN16-ANY-PLAN.md)*
 
 *As a user, File Manager 3.0 opens its drive window, and Program Manager its
