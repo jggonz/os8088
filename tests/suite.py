@@ -16724,6 +16724,16 @@ SOAK = [
         "at a score of 0. A model or build that goes wrong here writes a "
         "bundle that verifies and plays the wrong battle",
         needs=("pil",)),
+    Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 12.0,
+        "`make vbtbundle`: the Video Battle builder's zip for someone with no "
+        "os8088 tree. Unpacked in a temporary folder and run there with "
+        "python -I, demo-project, build and verify must work and give the "
+        "tree's own demo bundle byte for byte, the window's module must "
+        "import, every tool the builder runs as a process must be in it, "
+        "VBATTLE.O88 must be the one built, and the zip must be the same "
+        "bytes made twice. A module the closure missed fails here as an "
+        "ImportError, where the owner would otherwise meet it",
+        needs=("pil",), wants=("build/os8088-battle-builder.zip",)),
     Row("vbtgui", "soak", py("tests/vbtguitest.py"), 14.0,
         "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
         "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
