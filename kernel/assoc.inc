@@ -1244,7 +1244,9 @@ assoc_run_x:
 .doc:
 
     mov di, [assoc_pwin]
-    or di, di
+    inc di                      ; ASSOC_PWBANK: OSAPI_PKG_START's document,
+    jz .banked                  ;   whose locator is banked already
+    dec di
     jz .curvol
     call fmv_here               ; the poster's OWN folder, read straight off
                                 ; its state block. This was a fmv_sync - a
@@ -1256,8 +1258,13 @@ assoc_run_x:
                                 ; assoc_back comes back to what is banked
                                 ; here, and files_refresh paints from the
                                 ; WINDOW's cache (SPEC.md 22.1)
+.banked:                        ; A PROGRAM'S OWN REQUEST (21.5.3.3): the
+    mov [assoc_pwin], di        ;   locator it handed over says where, and
+    mov dx, [assoc_dclus]       ;   no window posted it (DI = 0). A POSTED
+    mov al, [assoc_ddrv]        ;   one (21.5.4) runs after the caller has
+    jmp short .located          ;   unwound, standing anywhere by then
 .curvol:
-    mov dx, [dsk_cwd]           ; no poster - a package's own request - so the
+    mov dx, [dsk_cwd]           ; no poster and no locator, so the
     mov al, [disk_drive]        ; volume the machine is on IS the home
 .located:
     cbw                         ; ...banked once, whichever rung answered,
@@ -1462,6 +1469,9 @@ assoc_ownex:
     nop                         ; PARITY PAD, never executed: dsk_xfer and
                                 ; its hot neighbours behind it in .cold keep
                                 ; their parity (t_hotpar)
+%ifndef KERN_SMALL
+    nop                         ; ...and on kern_big since ASSOC_PWBANK's
+%endif                          ;   .banked arm (SPEC.md 54.9.1)
 
 ; assoc_back - put the user's volume back where the document is. A failed
 ; remount leaves that volume mount-failed at its root with the write gate
@@ -1534,6 +1544,7 @@ assoc_dead:  resb 1             ; volumes whose mount failed in this locate,
 %if assoc_dead - assoc_ddrv != 1
   %error "assoc_run_x stores assoc_ddrv and clears assoc_dead as one word"
 %endif
+ASSOC_PWBANK equ 0xFFFF         ; [assoc_pwin]: no window, the locator banked
 assoc_pwin:  resw 1             ; the posting Disk window's STATE BLOCK, not
                                 ; its window record - FS_DRV/FS_CWD are read
                                 ; off it (SPEC.md 54.9.1), as ld_pwin is

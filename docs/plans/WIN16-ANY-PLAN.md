@@ -1470,10 +1470,13 @@ its table goes in the diary, so the reach is measured, not claimed.
       AX, so the part's vectors were read from the interrupt table and its
       end stub was written into it. `w16_pfetch` already changes folder,
       so the outer change is gone: 29 bytes back.
-- [ ] **S22: The `kern_mega` arm (R3).**
+- [x] **S22: The `kern_mega` arm (R3).**
   - *As a user on a 286, Registry Editor runs, and Write keeps its document
-    in memory above 1 MB.* **Both are seen (batches 8 and 9). Left: the
-    Bochs trap census, and S25's rows on the mega disks.**
+    in memory above 1 MB.* **Both are seen (batches 8 and 9), REGEDIT 3.1
+    on 86Box's 1 MB AMI 286.** The Bochs trap census was taken (Write 3.0,
+    114,952 traps, S24 batch 1). Not done: Phase A's rows have no
+    kern_mega leg. The first WIN16 row on kern_mega is `win16ovr`
+    (S24 batch 7), and the rest is listed under S25.
   - WIN16 gains a `PKG_MEGA` arm (§20.18), as the shipped packages with a
     kern_mega arm have. On it:
     - a program's segments get **LDT selectors** through `OSAPI_SEG`
@@ -1807,6 +1810,61 @@ its table goes in the diary, so the reach is measured, not claimed.
     - **Sir Hangman has no real-mode leg after all.** Its launcher refuses
       when GetFreeSpace is below 700,000 bytes, which a 640 KB machine
       never reaches; Windows 3.0's real mode refused it too.
+  - [x] Batch 6: Arcade and Mozart to their ends on kern_mega
+    (SPEC.md 124.26.11, 124.31.2, 124.31.3; KERN-MEGA-PLAN 14.136,
+    14.137):
+    - A locked moveable block of a protected-mode-only program moves under
+      its selector (*Parser out of memory* gone).
+    - GlobalReAlloc's grow in place keeps a quarter more than was asked
+      (the lead's D1(b)).
+    - A BIOS `int 10h` from a program's own stack runs on a stack WIN16
+      lends (`SEG_LEND`, the lead's D2).
+    - A bound window re-aimed inside a block is re-bound there.
+    - A library's code is discardable, as a program's is (the lead's M1).
+      MSCUISTF's self-reference made Mozart fault with a far return into
+      C000h until it was kept.
+
+    **Seen 2026-11-03 (QEMU, kern_mega, looks):**
+    - Arcade 1.0's setup reaches *Congratulations!*.
+    - Mozart's setup runs from its Welcome through every file to its
+      Program Manager group, MICROSOF, with two links. Nothing faults.
+    - Mozart's last dialog was not seen until batch 8. Its 435x194
+      bitmap needs a second 42 KB block, and the largest free run was
+      33.8 KB, so the dialog ran invisible.
+  - [x] Batch 7: one descriptor per handle (SPEC.md 50.6.11 `SEG_HND`,
+    124.31.3; KERN-MEGA-PLAN 14.138), replacing batch 6's stopgap selector,
+    which reached to the claim's end:
+    - A global block's selector reaches exactly its length.
+    - GlobalReAlloc re-aims it in place, so the program's selector follows
+      the block.
+    - Two walk descriptors replace a SUB per paragraph in WIN16's heap
+      walks.
+
+    **Seen (QEMU, looks):** across Mozart's whole setup the LDT peaks at
+    1,658 of 1,992 entries; before batch 6 it ran out. Arcade still reaches
+    *Congratulations!*. New Bochs row `win16ovr` (fixture `OVRTEST.EXE`):
+    an overrun faults. QEMU checks no data-segment limit, so this cannot be
+    seen there, and the row has not run yet. It is the final pass's.
+
+  - [x] Batch 8: Mozart's setup completes (SPEC.md 124.15.2, 124.31.3;
+    WIN16-NEXT-PLAN Q6, route D):
+    - On the arm, a bitmap whose bits the heap refuses gets a claim of
+      its own.
+    - A block that held a handle descriptor and grew past 64 KB is tiled
+      at its next ask. Without that, Mozart's script engine said
+      *Parsetime error* at `SETUP.MST(45)`.
+
+    **Seen 2026-11-03 (QEMU, kern_mega, looks):**
+    - Mozart's last dialog shows with its picture. Then *Microsoft Mozart
+      Setup is complete*, and *Return to Windows* ends the setup on the
+      desktop, with the group's shortcut there.
+    - Arcade still reaches *Congratulations!*.
+
+  **Left in S24:**
+  - Sir Hangman is a known limit (the lead's call): its engine keeps 404 KB
+    of code.
+  - MSCDEX's `int 2Fh` is not done.
+  - The `win16setup` row is not written.
 
 - [ ] **S25: Acceptance.**
   - *As the owner, I can see a Windows CD-ROM title installed and running

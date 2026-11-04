@@ -9,7 +9,9 @@
 the disk WIN16 is on.*
 
 XVOL.EXE (tests/win16/xvol.c, `make win16fixtures`) is on A:, a copy of the
-shipped system disk, and WIN16 with its DOS is on B:, so the Windows
+shipped 1.44 MB system disk, and WIN16 with its DOS is on B:, a 720 KB disk
+whose 1 KB clusters are not A:'s 512 bytes - the difference 96.11.11 is
+about, and what lets AH=36h's two answers be told apart. The Windows
 directory is on another volume than the program, as it is when a setup runs
 from its floppy and WIN16 lives on the hard disk. XVOL asks AH=36h about the
 Windows directory's drive, then copies itself a kilobyte at a time into
@@ -99,7 +101,7 @@ def main():
         subprocess.run(["mcopy", "-i", aimg, exe, "::" + NAME], env=ENV,
                        check=True, capture_output=True)
         bimg = os.path.join(work, "src.img")
-        F.bdisk(bimg, 1440, [])
+        F.bdisk(bimg, 720, [])          # 1 KB clusters against A:'s 512
         d = XDrive(work, aimg, bimg, a.keep)
         d.key = lambda n: d.hmp("sendkey %s" % {"Enter": "ret"}.get(n, n))
         ui = os88ui.UI(d, mouse=object(), sym=sym, verbose=False)

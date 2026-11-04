@@ -6,7 +6,9 @@
  * hard disk - then reads the copy back and compares it with itself. Twice:
  * into XVOLDIR and into ~XVOL.T, which is the shape of the Setup Toolkit's
  * ~MSSTFQF.T. It asks AH=36h about the Windows directory's drive as well,
- * which must answer for that drive and not for the floppy.
+ * which must answer for that drive and not for the floppy: when the two
+ * are different drives, the two answers must differ. Two volumes of one
+ * geometry answer alike, so the row gives the two different ones.
  *
  * Its MessageBox is "XVOL OK" or names each check that failed.
  */
@@ -88,7 +90,7 @@ static void copy(const char *sub, const char *tag)
 
 int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
-    union REGS r;
+    union REGS r, w;
     unsigned drv;
 
     GetModuleFileName(inst, me, sizeof me);
@@ -98,8 +100,13 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     r.h.dl = (unsigned char)drv;
     intdos(&r, &r);
     check(r.x.ax != 0xFFFF, "dfree");
-    if (me[0] != dir[0])                /* a floppy's 2,847 clusters, if */
-        check(r.x.dx > 2880, "dfdrive");/*   it answered for the wrong one */
+    if (me[0] != dir[0]) {              /* the program's drive's answer, */
+        w.h.ah = 0x36;                  /*   which it must not have given */
+        w.h.dl = (unsigned char)((me[0] | 0x20) - 'a' + 1);
+        intdos(&w, &w);
+        check(w.x.ax != r.x.ax || w.x.cx != r.x.cx || w.x.dx != r.x.dx,
+              "dfdrive");
+    }
     copy("XVOLDIR", "plain");
     copy("~XVOL.T", "tilde");
     MessageBox(0, fails ? res : "XVOL OK", "XVOL", MB_OK);

@@ -6243,6 +6243,7 @@ SEG_AT      equ 8               ; (refused below: protected mode's alone)
 SEG_TILE    equ 9               ; (refused below too: SPEC.md 124.31.2)
 SEG_WINL    equ 10              ; (and refused below: SPEC.md 124.31.3)
 SEG_LEND    equ 11              ; kern_mega's lent stack (124.31.2), refused below too
+SEG_HND     equ 12              ; kern_mega's handle descriptor (124.31.3), and too
 section .cold
 osapi_seg:                      ; (api_rxc's far body: DS = KDATA)
 %ifdef KERN_MEGA

@@ -50225,6 +50225,17 @@ answers `CF = 0, AX = 0`, *posted*. `ui_task`'s `.chk_assoc` spends it on its
 next pass (at most one tick later), exactly as it spends a double-click
 (§54.4): nothing new services it.
 
+**The posted document keeps its own folder and volume.** The post is spent
+a pass later, and by then the machine may stand elsewhere. A link's walk
+(`sc_walk`) to a document on another volume puts the machine back on the
+link's own drive when the launch refuses, so a locator taken from where the
+machine stands would name the wrong volume. The slot therefore marks the
+locator BANKED (`[assoc_pwin]` = `ASSOC_PWBANK`, §54.9.1), and
+`assoc_run_x` takes the folder and volume from the bank. Mozart's setup
+started from an `\AUTOSTRT` link to its CD showed the defect: WIN16 was
+handed `C:\SETUP.EXE` and answered *This is not a Windows program*.
+`win16nedos`'s leg D is the row.
+
 ```
   from an entry proc, DX:CX = 0, ES:DI = a document:
   out  CF = 0, AX = 0: POSTED. The program opens it once this launch unwinds
@@ -99548,6 +99559,7 @@ verb:
 | `SEG_TILE` 9 | DX = a selector of the caller's based in a claim or a pool block, AX = a paragraph offset, CX = a count of 64KB tiles | DX = the first of CX data selectors, each 8 above the last and based 64KB further on, the last cut at the block's end (§124.31.2) |
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
+| `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99561,7 +99573,9 @@ every machine. `SEG_TILE` is refused there too, by the same `ja`: a
 real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 `SEG_WINL` is refused there as well: a real-mode kernel has nothing above
 1MB to window, and below it the caller's paragraph is its own answer. So is
-`SEG_LEND`: real mode has no stack the BIOS cannot use.
+`SEG_LEND`: real mode has no stack the BIOS cannot use, and so is
+`SEG_HND`: a real-mode caller's block is its paragraph, which needs no
+descriptor.
 `.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
@@ -99588,8 +99602,21 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
 - A **BOUND window** (`SEG_BWIN`) is a fresh descriptor - never a match, so
   re-aiming it moves nobody else's - based in a claim or a pool block and
   recorded in `mega_wtab` under the caller, its row's byte 3 marking it
-  bound; `SEG_WIN` and `SEG_AT` never re-aim one (named as the window to
-  re-aim, it is passed over and the caller gets a window of its own). A
+  bound. `SEG_WIN`, `SEG_AT` and `SEG_WINL` naming one of the caller's own
+  as the window to re-aim **re-bind** it when, and only when, the new base
+  lies in a claim or a pool block **of the caller's own** (`mega_bown`: a
+  conventional claim recorded under its slot, a pool block under 0A0h |
+  slot or a driver's 0C0h | row): the reach is clipped at that block's end
+  and a pool block is flagged as `SEG_BWIN` flags it (`mega_wbind`, the one
+  body the two share), so it is a bound window of that block from then on
+  and the old block's free and moves no longer touch it. Aimed outside every
+  block it is passed over and the caller gets a window of its own, because
+  a bound window there would be freed and moved with no block (KERN-MEGA-PLAN
+  14.135, 14.137); so is one aimed into ANOTHER owner's block, or `SEG_AT`
+  would bind a window into another package's memory, which 14.135 closed
+  for `SEG_FREE`. A window is tied to its block by its base alone, so after
+  a re-bind the old block's free and moves no longer touch it and the new
+  block's do. A
   SUB, SUBC pair or bound window left past a claim's end when a regrow or
   a re-home's trim shrinks it is freed with the space (`mega_mpgap`,
   KERN-MEGA-PLAN 14.135). **`SEG_AIM`** re-aims it to a 32-bit byte offset into the block,
@@ -99619,6 +99646,23 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   entries, or CX = 0), 2 (the null selector) and 3 (a tile in no block).
   It is WIN16's (`__AHINCR` = 8, §124.31.6) and costs `.mega` 195 bytes
   and every other kernel nothing.
+- A **HANDLE descriptor** (`SEG_HND`, `mega_segh`) is a Windows handle's
+  selector: one per global block, re-aimed IN PLACE - base and limit, the
+  same selector - when the block grows, shrinks or moves, so the selector a
+  program holds follows its block and an access one byte past the block's
+  length faults, as on Windows. It is a fresh data descriptor based in its
+  block, so the compactor rebases it and the block's free takes it, as a
+  tile's; and it is marked in byte 6's AVL bit (`MEGA_HAVL`, 10h: the 386's
+  bit for software, a reserved byte a 286 never reads), which `mega_dfind`
+  passes by, so a SUB never answers one and re-aiming one moves nobody
+  else's. It is not a window: it has no `mega_wtab` row, so the 32 rows do
+  not bound how many a program holds - Mozart's setup peaks at 15 at once,
+  WIN16's two walk descriptors among them, and a program may hold hundreds. It stays a plain DPL 0 data segment, so a
+  program may load it into SS as Windows allowed. WIN16 also re-aims two of
+  them as its own WALK descriptors over its arenas (§124.31.3). Refusals 1
+  (no free entry), 3 (the base in no block) and 4 (DX not a handle
+  descriptor), DX kept. `.mega` +208 (the body's 191, its dispatch and
+  `mega_dfind`'s test), every other kernel nothing.
 - **Freeing an entry clears any window row naming it** (`mega_ldt_free`), so
   a window that went with its block cannot be freed a second time at its
   owner's end, after the entry is somebody else's.
@@ -99634,7 +99678,8 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   in `vd_n_p3` (MEGA-VIDEO-REALMODE-PLAN W5, KERN-MEGA-PLAN 14.128).
 - Refusals: CF = 1, AX = 1 when no LDT entry or no `mega_wtab` row is free,
   2 for the null selector, 3 not in a block (`SEG_SUBC`, `SEG_BWIN`), 4 not a
-  bound window of the caller's and 5 past its block's end (`SEG_AIM`). Every
+  bound window of the caller's and 5 past its block's end (`SEG_AIM`), 4
+  also not a handle descriptor (`SEG_HND`). Every
   register but AX is kept, so a refused `SEG_SUB` still holds the caller's
   own DX. **A wrapper never turns a refusal into DX = 0 "so a use faults"**:
   it does not - `mega_null0` completes an access through the null selector
@@ -108587,8 +108632,17 @@ folder**, which is the audit rather than the hope:
 - the document is handed over by PULL (§54.5), so nothing has to be standing
   in its directory when the entry proc runs.
 
-**With no poster the current volume IS the home** — that is a package's own
-request rather than a double-click, and there is no window to ask.
+**With no poster the home is the LOCATOR** when a package handed one over:
+`OSAPI_PKG_START`'s document arm banks its 16 bytes and marks `[assoc_pwin]`
+`ASSOC_PWBANK`, and `assoc_run_x` takes the folder and volume from them. The
+current volume answered before, which was right only while the caller still
+stood there. A POSTED launch (§21.5.4) runs on `ui_task`'s next pass, after
+the caller has unwound, by when `assoc_back` or an `\AUTOSTRT` walk has moved
+the volume. DOS's loader posts a Windows program to WIN16 that way
+(§96.44.4), and WIN16 was handed the link's drive root instead of the
+program's folder: *This is not a Windows program* for every setup started
+from a link. With no poster and no locator, the current volume is still the
+home.
 
 **The trap is the pointer's name.** `[assoc_pwin]`, like `[ld_pwin]`, holds
 the poster's **state block** and not its window record; `FS_DRV`/`FS_CWD` are
@@ -221621,10 +221675,12 @@ the name (`np_arg`), so Ctrl+S writes back to the note.
   lock FREE (§21.5) and a press holds it, so the press records the open and
   posts `OSAPI_WM_WAKE`; `sn_wake` (the include's `STIK_WAKE`, which then runs
   the hover edge exactly as `stik_wake` always does) makes the launch.
-- **It stands in NOTES for the call.** `assoc_run_x` takes the document's
-  folder from where the caller STANDS (`.curvol`, no poster), not from the
-  locator's directory word - the first build stood at home, and Note Pad
-  opened an empty `WELCOME.TXT` there and saved it into `STIKAPPS\`.
+- **It stands in NOTES for the call.** `assoc_run_x` took the document's
+  folder from where the caller STANDS, not from the locator's directory
+  word - the first build stood at home, and Note Pad opened an empty
+  `WELCOME.TXT` there and saved it into `STIKAPPS\`. The locator decides now
+  (§54.9.1's `ASSOC_PWBANK`), and `sn_ndir` is NOTES' cluster, so both
+  answers agree; the pad still stands there for its own writes.
 - **THE WATCH.** `OSAPI_SYS_SNAPSHOT` before and after the launch: the
   instance slot that came alive across it is what the association started -
   every launch runs on the UI task and the UI task is inside the call - so no
@@ -233837,7 +233893,34 @@ directory here.
 **How a bitmap is kept.** Its pixels are converted once, when it is made,
 into os8088's sixteen colours, 4 bits a pixel, top row first, in a fixed
 block of the program's global heap (§124.20.2; until S15 a heap claim of its
-own, and an owner's claims are eight). Each palette entry becomes the nearest
+own, and an owner's claims are eight). **When the heap refuses the block,
+the bits get a claim of their own** (`w16_bmnew`, the lead's D4, route D of
+WIN16-NEXT-PLAN Q6):
+- **When:** only after the global heap has refused them, so a bitmap that
+  fits is kept as before.
+- **What it is:** on the `kern_mega` arm, one row of the map (§124.31.3).
+  In real mode, a plain heap claim (`OSAPI_MEM_P`).
+- **Bitmaps only,** never `GlobalAlloc`, so it is not a fifth arena.
+- **How it goes back:**
+  - `DeleteObject` gives the claim back;
+  - so does the program's end (`w16_freeprog`'s `w16_bmend`);
+  - a fault close takes it with every other claim of the instance.
+  - The slot's `w16b_mono` high byte marks it (`w16_bmown`).
+- **Limit:** as many at once as there are free map rows (ten; a program's
+  claim and its arenas hold four to six, and Mozart's setup five) and as
+  the owner's claim limit allows (§50: eight claims, twelve on
+  `kern_mega`). Each is at most `W16_BMMAX`, 64,000 bytes. Past that,
+  `LoadBitmap` and `CreateBitmap` answer NULL as before.
+- **Why:** `LoadBitmap` needs the resource and the bits at once, two blocks
+  of the same size for a large DIB. Mozart's setup's last dialog loads a
+  435x194 4bpp bitmap, 42 KB twice, where the arenas' largest run was
+  33.8 KB.
+- **Seen and rows:** seen 2026-11-03 as a look at Mozart's last dialog.
+  WIN16's map held five rows before it, six while it showed (the sixth
+  the bitmap's 42 KB), and five again at *Setup is complete*. No fixture
+  row makes a bitmap over 32 KB.
+
+Each palette entry becomes the nearest
 of the sixteen, and on a 1bpp display it then goes through §124.8.1's mono
 map, as `SetDIBitsToDevice`'s pixels do. **A 1-bit DIB keeps its palette's
 two colours**, as Windows 3.x's `LoadBitmap` made a bitmap compatible with
@@ -236496,23 +236579,36 @@ import does (§124.12): *Not enough memory for its code.* with its name.
 
 #### 124.26.2.1 When a relocation does not take the thunk *(WIN16 S24)*
 
-A thunk is a place to **call**. Only a far-pointer relocation (source type
-3) to a moveable entry is given the thunk. In two cases the relocation is
-given the segment itself, which the check pass then marks kept
-(§124.26.1), as it marks a discardable segment named by its number:
+A thunk is a place to **call**, and a program that ran in real-mode
+Windows reaches a discardable segment through nothing else: every
+relocation to a moveable entry in one is given the thunk, whatever its
+source type, as real-mode Windows gave it the entry table's. Only **every
+relocation of a protected-mode-only program** (`ne_flags` bit 3,
+`NEF_PMODE`) is given the segment itself, which the check pass then marks
+kept (§124.26.1), as it marks a discardable segment named by its number.
+In Windows' standard and enhanced modes a far pointer into a discardable
+segment stays valid: the selector is kept, and a discarded segment is
+reloaded when it is touched. Such programs keep far pointers to data in
+their code segments, read through a segment relocation as often as through
+a far pointer.
 
-- **A segment or an offset alone** (source types 2 and 5) to a moveable
-  entry is the entry's own segment or offset. A program that builds a
-  pointer from a segment relocation and reads through it reads that
-  segment's bytes, not the thunks'.
-- **Every relocation of a protected-mode-only program** (`ne_flags` bit 3,
-  `NEF_PMODE`). In Windows' standard and enhanced modes a far pointer into
-  a discardable segment stays valid: the selector is kept, and a discarded
-  segment is reloaded when it is touched. Such programs keep far pointers to
-  data in their code segments. A program that also ran in real-mode
-  Windows could not, so WIN16 keeps thunking those.
+**A segment or an offset alone is a call too, in a program that also ran
+in real mode.** Until 2026-11-03 source types 2 and 5 took the segment
+itself in every program. Write 3.1 builds its window, dialog and
+enumeration procedures' addresses from a segment relocation and an offset
+relocation to the same entry (`MMWWNDPROC` in segment 18, `DIALOGPRINT` in
+30, `FONTFACEENUM` in 8: 33 such pairs) and hands them to `RegisterClass`,
+`DialogBox` and `EnumFonts`. Given the segments, it pinned four segments of
+window procedures in a 40 KB code budget, so its code churned half as hard
+again (381 loads for the win16write row's session against 265), and a
+segment that names itself is not kept (§124.26.1), so nothing holds a
+procedure address in one when the segment is discarded. Its title stayed
+*Write - (Untitled)* after Save As and Open, with a 96 KB budget as well as
+40 KB, until types 2 and 5 took the thunk again (win16write, bisected to
+this rule).
 
-Found by Microsoft Arcade's setup. `_MSTEST.EXE` keeps its interpreter's
+Found by Microsoft Arcade's setup. `_MSTEST.EXE` (`ne_flags` 030Ah,
+protected-mode-only, as Mozart's is) keeps its interpreter's
 keyword table and messages in segment 17: 322 moveable entries, reached
 through a segment relocation in DGROUP and through far pointers between
 the segment's own entries. Through the thunks it read the module block,
@@ -236597,10 +236693,13 @@ loaded code segments goes first. A code segment's age is the heap's use
 count when it was loaded, renewed whenever a discard finds it in use. A
 kept segment is never discarded.
 
-**A segment is in use while any word of the program's live stack is its
-paragraph.** Before a code segment is discarded, the program's stack is
-scanned from the waiting call's frame (`[w16_psp_]`) to the top of the
-stack, the SP the program started with. A segment found there is in use:
+**A segment is in use while the program's live stack holds a far return
+address into it.** That is a word equal to its paragraph (its code
+selector on `kern_mega`) with an offset inside the segment below it: from
+1 up to its allocation, the NE segment table's (`w16l_scanw`). Before a
+code segment is discarded, the program's stack is scanned from the waiting
+call's frame (`[w16_psp_]`) to the top of the stack, the SP the program
+started with. A segment found there is in use:
 it is aged as new and passed over, and the next oldest is tried. One not
 found has its thunks pointed back at `w16_thkhit` and its block freed.
 
@@ -236618,8 +236717,17 @@ addresses a walk cannot:
 - the far return a thunk was called with, which sits just above the gate's
   frame while its segment loads.
 
-A word that only looks like a segment's paragraph keeps a segment in
-memory that could have gone. That costs memory, never correctness.
+A pair that only looks like a return address keeps a segment in memory
+that could have gone. That costs memory, never correctness. Until S24, any
+word equal to the paragraph was enough, and the memory that cost was not
+small. At Mozart's last dialog, a saved `BP` of 2CFCh and a stack offset
+of 35FCh each equalled the selector of one of MSCOMSTF's segments, 192 and
+64 bytes. Those two, and two more that really were on the stack, split
+the arena's 107 KB of free memory into four runs of at most 30 KB. The
+42 KB resource of the dialog's bitmap then could not be had. With the
+offset test the resource loads (§124.26.11 says what is still short).
+Every return address the three cases above name is a pair, so the test
+loses none of them.
 
 **A program being launched has no stack yet, and nothing of its code
 goes** *(S21 batch 4)*. Its stack top is 0 until its first frame is built,
@@ -236776,6 +236884,16 @@ now does the same, by the same means: the thunks, the module block and the
 stack scan of §124.26.2-124.26.5. What follows is what a library adds to
 them.
 
+**What it bought, measured (QEMU, `kern_mega`, 2026-11-03).** At Mozart's
+last dialog, 50 of MSCOMSTF's segments had gone. Arena 3 held 65 KB free
+plus the bitmap's 42.8 KB resource, which now loads. The library code
+left beside them is 32 KB that this section keeps, and two MSCOMSTF
+segments the stack names. `LoadBitmap("MAILMAN")`, 435x194 at 4bpp,
+also needs a second 42 KB block for the bitmap's bits (§124.15.2), and
+the largest free run is 33.8 KB. On the arm those bits now get a claim of
+their own (§124.15.2), and the dialog shows, MAILMAN and all, followed by
+*Microsoft Mozart Setup is complete*.
+
 **Which segments.** §124.26.1's rule, applied to each library, on a CPU
 the census does not decide for. On an 8088 the census sweeps all of a
 module's code at once, so every discardable segment would be loaded at
@@ -236790,7 +236908,16 @@ Two kinds of a library's discardable segments never go:
 - **one its own relocations name by number**, or by segment or offset
   alone, is kept, as §124.26.1 and §124.26.2.1 keep a program's: loaded at
   the library's launch and never discarded. A protected-mode-only library
-  (`NEF_PMODE`) thereby keeps all of them.
+  (`NEF_PMODE`) thereby keeps all of them. Unlike a program's, a library's
+  segment that names **itself** by number is kept too. A program's
+  self-reference is applied again at each load. A library's can escape
+  as a value, a procedure's address handed to `CreateDialog` or a hook,
+  and outlive the segment. MSCUISTF's segment 4 names itself at offset
+  2287, and its exported ordinal 12 begins that segment. Without the keep,
+  Mozart's setup faulted after *Install Location* with a far return into
+  selector C000h. With it, the setup runs on. Three of the Setup Toolkit's
+  modules have such a reference: MSCUISTF, ENCCDPRF and MMUTIL, with five
+  small segments between them.
 
 Measured on the targets' trees with `os88ne.py`. The Setup Toolkit's
 libraries (MSCOMSTF, MSINSSTF, MSDETSTF, MSCUISTF, MSSHLSTF, MSUILSTF and
@@ -236825,21 +236952,40 @@ selector on kern_mega). The header grows from 36 bytes to 54:
 | +52 | its thunks' code segment, `W16LM_TCS`; 0 when it has no module block |
 | +54 | each segment's paragraph, `W16LM_SEGS`: 0 for a discardable one |
 
+On `kern_mega`, `W16LM_TCS` and its data half are the SUB pair `SEG_SUBC`
+answers for the module block's base. A SUB is shared by base and limit and
+given back only with its claim (§50.6.11), so the pair is not freed when
+the module block is. It goes when its arena's claim goes, as every SUB
+`W16SEG` makes does.
+
 A library's load saves the importer's six words with the rest of its
 loader state (`w16l_svtab`, §124.23.2.1), together with `w16_cdo`, which
-is 1 during every module's load now, not only the program's.
+is 1 during every module's load now, not only the program's. A module's
+saved state is 104 bytes, not 96.
+
+**A block is not discarded before it is filled.** A launch takes a block
+for each segment it loads, and only then fills them (§124.26.3). A later
+block can make room by discarding an earlier one that is still empty. A
+program's own launch was safe from this, because a task with no stack yet
+holds everything in use. A `LoadLibrary` at run time is not safe that way,
+since its task has a stack. So a new block's live entry is marked
+`W16CLF_NEW` until its segment is filled, and the discard passes it over.
 
 **Binding to a library's code.**
 
-- **A far pointer** (source type 3) to a library's moveable entry in a
-  discardable segment is bound to that library's thunk for the ordinal,
-  and so is `GetProcAddress`'s answer. Thunks are what change when a
+- **A far pointer** (source type 3) to a library's entry in a discardable
+  segment is bound to that library's thunk for the ordinal, and so is
+  `GetProcAddress`'s answer. That holds for a moveable entry and for a
+  FIXED bundle's entry, whose indicator is the segment's number: both
+  get a thunk. MSCUISTF exports all 22 of its entries from fixed bundles
+  in discardable segments. Until the thunks covered them, its thunks were
+  zeros and a call into one faulted. Thunks are what change when a
   segment is loaded or discarded. Every far call into the library, from
   the program, from another library or from WIN16, therefore needs no
   other patching, and none of the bound pointers ever names a block that
   has gone.
 - **A segment or offset alone** (types 2 and 5) to such an entry refuses
-  the importer: *It imports a library's code by its segment.* A segment
+  the importer: *A relocation WIN16 cannot apply.* A segment
   number would be stale once the segment went, and keeping the segment
   would mean loading it while the importer's relocations are applied, one
   load inside another. None of the 26 folders of programs under
@@ -236861,7 +237007,10 @@ or a library's `W16LM_TCS`. A library's segment is loaded like a library:
 
 1. the program's loader state is set aside (`w16l_push`);
 2. the library's six words, file name, DGROUP and module references are
-   put in its place;
+   put in its place. A reference to another library is the record its
+   own load bound it to, in its module record's `W16LM_LIBS`; without it,
+   every import of one library by another in that segment would bind as
+   missing;
 3. the segment is read from the library's own folder, not the current
    task's, since two tasks may run from two folders;
 4. the program's loader state is put back (`w16l_pop`).
@@ -236888,6 +237037,10 @@ code, as Windows' did.
 **What a program is told is free.** `w16_gcan` (§124.26.5) counts a
 library's loaded segment that is not kept. It finds the segment's live
 entry through the high byte of the block's owner.
+
+**The code budget** (`W16_CODEKB`, §124.26.6) counts the program's own
+code only. A library's segments may be loaded under one task and
+discarded under another, and the budget is a task's.
 
 **The loader part stays** (§124.26.3) while any library has a module
 block, as it does for a program with one. `LoadLibrary` of a library
@@ -237900,15 +238053,17 @@ what the numbers mean**:
   the claim in the map and answers `SEG_SUB(claim, vpara - vbase, 0)`, a
   data selector reaching to the claim's end (64 KB at most). The kernel
   answers the same selector for the same base, so a header asked for twice
-  costs one LDT entry; a freed block's two (its header's and its data's)
-  are given back with `SEG_FREE`.
+  costs one LDT entry. A SUB is given back only with its claim (`SEG_FREE`
+  frees windows alone, §50.6.11), so WIN16's walks over an arena use the
+  WALK descriptors below instead.
 - **The program never sees one.** Every value the program is given or
   hands back is a **selector**, converted at the edge:
   - out: `GlobalAlloc` (a `GMEM_FIXED` handle is a selector, as standard
     mode answered), `GlobalLock`, `LockResource`, `GetCodeHandle`, the
-    loader's fixups, DGROUP, the PSP: `w16_psel`, `SEG_SUB` (data) or
-    `SEG_SUBC`'s code half (a code segment), reaching the block's own
-    length so an overrun faults as it did on Windows;
+    loader's fixups, DGROUP, the PSP. A global block under 64 KB is answered
+    its HANDLE descriptor (`w16_pblk`, below); a code segment `SEG_SUBC`'s
+    code half and anything else `SEG_SUB` (`w16_psel`), each reaching the
+    block's own length so an overrun faults as it did on Windows;
   - in: `GlobalHandle`, `GlobalFree`, `GlobalSize`, `GlobalFlags` on a
     fixed handle, `LockSegment`, `FreeSelector`: `w16_pvirt`, `SEG_LIN` and
     the map, back to the virtual paragraph.
@@ -237926,26 +238081,49 @@ what the numbers mean**:
 - The map keeps a claim's 512-byte phase: a virtual base has the low five
   bits of the claim's linear paragraph, so `w16_kclaim`'s alignment of a
   disk-visible block is an alignment in memory too.
-- `SEG_SUB` gives a block's selector back only with its claim, so every
-  distinct paragraph `W16SEG` is handed costs an LDT entry until its arena
-  goes. That is bounded for the first targets and is batch 7's to tighten
-  (a freeable selector per block, over `SEG_TILE`).
-- **STOPGAP, to be replaced before #327 merges** *(S24, the lead's D1)*.
-  The selector a program is given for a global block under 64 KB
-  (`w16_pblk`) reaches to its claim's END, not the block's length. A block
-  then keeps one selector wherever its length goes, and the kernel's
-  base-and-limit dedupe answers the same entry. Before this, the Setup
-  Toolkit's grow-by-a-paragraph loop handed out 395 distinct selectors over
-  25 block positions, and Mozart's setup ran the LDT's 2,016 entries out
-  (`FAULT 0D` in `w16vt_esax`). With this and the GlobalReAlloc rule
-  above, the LDT levels at 1,646. **What it gives up:** an overrun of the
-  block lands in its neighbour instead of faulting, as it did on Windows.
-  **What replaces it:** one descriptor per handle, which `GlobalReAlloc`
-  retargets IN PLACE (a new base and a new limit on the same selector, as
-  Windows' standard mode did), so an overrun faults again and a grow costs
-  no entry. Beside it, a bound walk window (`SEG_BWIN`/`SEG_AIM`) for
-  WIN16's own `W16SEG` touches of headers and zeroing, which the trace
-  build counted at 880 distinct paragraphs.
+- **One descriptor per handle** *(S24, the lead's D1, replacing its
+  stopgap)*. A global block under 64 KB has ONE selector for the program, a
+  handle descriptor (`SEG_HND`, §50.6.11) made at the first time the block
+  is handed out (`w16_pblk`) and kept in its header (`GH_TSEL`, flag
+  `GHF_HND`). It is based at the block's data and reaches exactly its
+  length. `GlobalReAlloc` re-aims it IN PLACE - a new base and a new limit
+  on the same selector, as Windows' standard mode did - when the block grows
+  or shrinks where it is (`w16_phfix`) and when it moves, to another arena
+  or not (`w16s_gwin`, part 9, carries it to the new header). The block's
+  free gives it back (`w16_gfreeblk`), and the compactor rebases it with
+  its arena as it does every descriptor based in a block. So a grow costs no
+  LDT entry, the selector a program holds follows its block, and **an
+  access one byte past the block's length faults** (`tests/win16ovr.py`,
+  with the fixture `OVRTEST.EXE`). No entry to be had, the block is
+  answered a SUB to its claim's end, as before. A block over 64 KB is
+  answered its tiles (§124.31.6).
+- **Two walk descriptors** for WIN16's own touches. Every `W16SEG` of a
+  paragraph nobody asked for before is an LDT entry until its arena goes,
+  and the heap's walks - a fit, a merge, a discard, a zeroing, a split's
+  remainder header - touch a new paragraph each step. Those sites say
+  `W16WALK n, sreg, reg` instead (`w16_vwalk0`/`w16_vwalk1`): one of two
+  handle descriptors WIN16 holds for itself (`w16_wwin`), re-aimed at the
+  paragraph with 64 KB of reach clipped at its claim's end. Two, because a
+  merge reads the next header while holding the current one; a routine that
+  calls another which walks re-aims its own after the call
+  (`w16_gdiscard`'s `.kept`). They are given back before their arena goes
+  (`w16_vwdrop`), since the kernel frees what is based in a claim with it.
+- **Measured, Mozart's setup on kern_mega** (QEMU, 2026-11-03, from its
+  first screen through every file to *Microsoft Mozart Setup is
+  complete*): the LDT's present entries go from 1,367 to a high-water of
+  **1,658 of its 1,992**, 15 of them handle descriptors (WIN16's two walk
+  descriptors among them), reached at the last dialog's bitmap.
+  Before D1 the setup ran the LDT out (`FAULT 0D` in `w16vt_esax`): the
+  Setup Toolkit's grow-by-a-paragraph loop handed out 395 distinct
+  selectors over 25 block positions. With D1's stopgap, a selector to the
+  claim's end, the peak was 1,825 at the last dialog (92%). With the
+  handle descriptors alone the
+  high-water was 1,859; the first walk sites took it to 1,740 and the
+  last four (a new block's header, a split's remainder header twice, a
+  freed block's header) to 1,635 by the copy's end, which the last
+  dialog's bitmap takes to 1,658. What is left is mostly SUBs of interior
+  paragraphs a program's own segments and resources are carved at, which
+  go with their claims.
 - **Above 1 MB** (batch 7). The arm says `OS88_HIGH | OS88_HIGHMEM`:
   - kern_mega loads WIN16's image above 1 MB. It is a code/data pair
     there as below, and nothing in the arm does a sum on its own CS or DS
@@ -237992,24 +238170,27 @@ parser block to 65 and refuses with *Parser out of memory* when the move
 is refused. The arm moves it as follows:
 
 - The loader sets `w16_pmonly` (per task) from the program's `NEF_PMODE`.
-- At such a program's first `GlobalLock` of a moveable block under 64 KB,
-  `w16_plock` makes a **bound window** (`SEG_BWIN`) from the block's own
-  `SEG_SUB`. That aims it at the block. The header keeps it in `GH_TSEL`
-  with `GH_TN` = 0, and later locks answer it. Other programs and other
-  blocks are answered as before, by `w16_pblk`.
-- `GlobalReAlloc` takes such a block down the ordinary move path: any
-  arena, a new arena, discarding. Between the copy and the old block's
-  free, `w16s_gwin` (part 9) moves the window to the new header. It then
-  re-aims the window with `SEG_AT` on the caller's own window, which keeps
-  it bound and puts its base in the new block's claim; that is
-  how it crosses arenas. Then `SEG_AIM` gives the window the block's
-  reach. The kernel finds a bound window's block from where it points, and
-  compaction rebases every descriptor based in a moving block (§50.6.11),
-  so the window follows its new arena from then on.
-- `w16_gfreeblk` frees a moveable block's window with the block.
-- A block grown in place past 64 KB is tiled (`w16_ptile`). Its window is
-  then the arena's until the arena goes: it is one `mega_wtab` row, and
-  only a locked block grown that way costs one.
+- `GlobalLock` answers the block's handle descriptor (above), as for
+  every program.
+- `GlobalReAlloc` takes such a LOCKED block down the ordinary move path
+  when it holds a handle descriptor: any arena, a new arena, discarding.
+  Between the copy and the old block's free, `w16s_gwin` (part 9) moves the
+  descriptor to the new header and re-aims it there with the new length,
+  so the selector the program holds names the new block. A locked block
+  with no handle descriptor (none was to be had) stays put and the realloc
+  is refused, as for any other program.
+- A block over 64 KB is tiled (`w16_ptile`, §124.31.6) when it is handed
+  out, as Windows' would have been. One that had a handle descriptor before
+  it grew keeps it re-aimed at its first 64 KB (`w16_phset`), and at the
+  next ask the flag goes and the block is tiled. The old descriptor is then
+  the arena's until the arena goes: a selector the program still holds
+  reaches the block's first 64 KB, and the huge pointer it is answered
+  reaches all of it. Mozart's script engine grows a block past 64 KB and
+  walks it with `__AHINCR`. Answering it the handle descriptor alone gave
+  *Parsetime error: Syntax error* at `SETUP.MST(45)` (seen 2026-11-03).
+- Until the handle descriptors this was a bound window (`SEG_BWIN`) per
+  locked block, one of `mega_wtab`'s 32 rows each; a descriptor per handle
+  needs no row.
 - Real mode is unchanged: a locked moveable block stays put there, as in
   real-mode Windows. Measured on Arcade's setup: the realloc is handle
   0110h, 33 to 65 paragraphs, in a 32 KB arena whose blocks are all in use

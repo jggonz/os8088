@@ -26,9 +26,20 @@ no Microsoft binary and no Watcom) and DOSHELLO.EXE (a plain MZ):
      the first is up only through the load, and a typed TINY16 that joins the
      instance leg A left running (SPEC.md 124.28.12) shows only the second.
 
+  D  TINY16.EXE opened by a LINK on another volume: a second boot, its A:
+     the 360KB system disk with an \\AUTOSTRT link to B:\\TINY16.EXE. The
+     loader POSTS the document to WIN16 (SPEC.md 21.5.4), and the post is
+     spent a pass later, after the link's walk has put the machine back on
+     A:. WIN16 must be handed B:'s TINY16.EXE - w16_vol 1, w16_name
+     TINY16.EXE, and not "This is not a Windows program."
+
 BROKEN ON PURPOSE: the same probe on c714ec45 (the tree before the loader
 arm) sees DOS's window from frame 257 and a 55,328-byte carve, so leg A goes
-red; dropping $(DOSW16DEF) from the dosload rule does the same.
+red; dropping $(DOSW16DEF) from the dosload rule does the same. Leg D is
+expected red on the parent of 220c98353 (ASSOC_PWBANK, #328's defect, which
+Mozart's setup off its CD showed): the posted launch re-banked the locator
+from where the machine stood, so WIN16 would be handed the boot volume's
+TINY16.EXE, which is not there.
 """
 import os
 import struct
@@ -77,6 +88,71 @@ def claims(ui):
         if para and own < 0xFF00:
             out.append(para * 16)
     return out
+
+
+def win16_vars(ui):
+    """WIN16's (w16_vol, w16_name, w16_l1) out of its instance's bss,
+    through the package's own map (win16fpu.pkg_syms); None when WIN16 is
+    not running. The instance is the package whose w16_name is the NE: its
+    I_NAME is the program's (TINY16), not WIN16's, once it runs"""
+    import win16fpu
+    S = win16fpu.pkg_syms()
+    raw = bytes(ui.m.read(ui.sym("inst_tab"), geom.INST_MAX * geom.I_RECSZ))
+    for i in range(geom.INST_MAX):
+        r = raw[i * geom.I_RECSZ:(i + 1) * geom.I_RECSZ]
+        if r[geom.I_STATE] != 1 or not r[geom.I_KIND] & geom.KIND_PKG:
+            continue
+        base = struct.unpack_from("<H", r, geom.I_SPTR)[0] << 4
+
+        def text(n):
+            return bytes(ui.m.read(base + S[n], 48)).split(b"\0")[0] \
+                .decode("latin-1")
+        if text("w16_name").upper() != NE:
+            continue
+        return (bytes(ui.m.read(base + S["w16_vol"], 1))[0], text("w16_name"),
+                text("w16_l1"))
+    return None
+
+
+def leg_d(work, bimg, bad):
+    """D: an \\AUTOSTRT link on A: to B:\\TINY16.EXE"""
+    aimg = os.path.join(work, "a360.img")
+    shutil.copy(b("os8088-360.img"), aimg)
+    lnk = os.path.join(work, "T16.LNK")
+    subprocess.run([sys.executable, "tools/os88lnk.py", lnk, NE, "--vol", "B",
+                    "--kind", "document"], check=True, capture_output=True)
+    env = dict(os.environ, MTOOLS_SKIP_CHECK="1")
+    subprocess.run(["mmd", "-i", aimg, "::AUTOSTRT"], env=env,
+                   capture_output=True)
+    subprocess.run(["mcopy", "-i", aimg, lnk, "::AUTOSTRT/T16.LNK"], env=env,
+                   check=True, capture_output=True)
+    # quick: launch's own picture settle runs before os88ui turns the saver
+    # off, and with the link's MessageBox up and no input the saver came on
+    # inside it (seen: sea life at 90 guest seconds, and "the desktop never
+    # appeared" in N3's re-run soak); every look below is a guest read
+    with os88ui.boot(aimg, apps=bimg, machine=XT, verbose=False,
+                     quick=True) as ui:
+        got = {}
+
+        def w16():
+            for w in ui.windows():
+                if w.visible and w.title in W16TITLES:
+                    v = win16_vars(ui)
+                    if v:
+                        got["v"] = v
+                        return True
+            return False
+        try:
+            ui._wait(w16, "WIN16's window for the link's %s" % NE, 120)
+        except os88ui.UIError as e:
+            bad.append("D: %s" % e)
+            return
+        vol, name, l1 = got["v"]
+        print("D. a link on A: to B:\\%s: WIN16 has vol %d, %s: %r"
+              % (NE, vol, name, l1))
+        if vol != 1 or name.upper() != NE or "not a Windows" in l1:
+            bad.append("D: WIN16 was handed vol %d %s (%r), not B:'s %s"
+                       % (vol, name, l1, NE))
 
 
 def dblclick(ui, dw, name):
@@ -180,13 +256,16 @@ def main():
                         w_, h_, d_ = ui.m.fbuf(0)
                         os88marty.write_png_rgb(os.environ["W16ND_SHOT"],
                                                 w_, h_, d_)
+        # --- D -------------------------------------------------------------
+        leg_d(work, bimg, bad)
     finally:
         shutil.rmtree(work, ignore_errors=True)
     for f in bad:
         print("FAIL: " + f)
     if not bad:
         print("win16nedos: an NE double-clicked never showed DOS, a plain "
-              ".EXE still opens it, and a typed NE still goes to WIN16")
+              ".EXE still opens it, a typed NE still goes to WIN16, and a "
+              "link to it on another volume hands WIN16 the right file")
     return 1 if bad else 0
 
 

@@ -793,7 +793,7 @@ w16t_gfree:
 .blk:
     cmp bx, [w16_arenae + si]
     jae .nexta
-    W16SEG es, bx
+    W16WALK 0, es, bx
     test byte [es:GH_FLAGS], GHF_USED
     jz .skip
     cmp [es:GH_TASK], dl

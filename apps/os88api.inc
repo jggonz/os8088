@@ -2283,11 +2283,25 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          0 takes yours back, and your end
                                  ;          does. CF=1 on a real-mode kernel
                                  ;          or DX no claim's base
+                                 ; SEG_HND  SI = a selector of yours based
+                                 ;          in a claim or pool block, AX =
+                                 ;          a PARAGRAPH offset, CX = bytes
+                                 ;          (0 = 64KB), DX = a handle
+                                 ;          descriptor of yours to re-aim,
+                                 ;          or 0 for a new one -> DX = it,
+                                 ;          based there, reaching CX cut at
+                                 ;          the block's end; SI = 0 frees
+                                 ;          DX. Never shared, so a re-aim
+                                 ;          moves nobody else's; it moves
+                                 ;          and goes with its block (SPEC.md
+                                 ;          50.6.11, 124.31.3). CF=1 on a
+                                 ;          real-mode kernel
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
                                  ; row, 2 the null selector, 3 in no block,
-                                 ; 4 not a bound window of yours, 5 past the
+                                 ; 4 not a bound window (SEG_HND: not a handle
+                                 ; descriptor) of yours, 5 past the
                                  ; block's end. Every other register kept.
                                  ; UI-task or worker context, and SEG_AIM
                                  ; from a rate hook too; not from an ISR
@@ -2303,6 +2317,7 @@ SEG_AT      equ 8
 SEG_TILE    equ 9
 SEG_WINL    equ 10
 SEG_LEND    equ 11
+SEG_HND     equ 12
 
 ; OSAPI_MEM_P - THE CLAIM HEAP IN PARAGRAPHS (SPEC.md 50.2.1, 50.3.7). Every
 ; claim is rounded to the heap's GRANULE - 512 bytes today, and the door says

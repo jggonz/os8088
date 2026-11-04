@@ -1311,9 +1311,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "e1a8c21f5",
+  "stamped": "dc4aa4f05",
   "strings": "4fe195f6a33d805e",
-  "why": "merge of main (#328) into Phase B/C: WIN16's claims in paragraphs on both arms and the DOS core's cluster routine shortened; below the page's level of detail"
+  "why": "a zero-byte label for the pin registry; WIN16.O88 byte-identical on both arms"
  },
  "WIN16_TXT": {
   "sources": [

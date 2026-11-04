@@ -175,6 +175,27 @@
 %endif
 %endmacro
 
+; W16WALK n, sreg, reg - sreg = the virtual paragraph reg, for an arena walk
+; (SPEC.md 124.31.3): in the arm, WIN16's walk descriptor n (0 the walk's,
+; 1 a touch inside it: the next header, a split's rest, a zeroed chunk) re-aimed
+; there in place, so a header only walked past costs no LDT entry. A walk's
+; ES is never kept past the walk: nothing it calls aims the same one, and a
+; reload after one (a pop) reads where it is aimed now. Real mode: mov. Keeps
+; every other register, and the flags.
+%macro W16WALK 3
+%ifndef PKG_MEGA
+    mov %2, %3
+%else
+    push ax
+  %ifnidni %3, ax
+    mov ax, %3
+  %endif
+    W16IMG w16_vwalk%1
+    mov %2, ax
+    pop ax
+%endif
+%endmacro
+
 ; W16TOVIRT reg - the arm only: reg, a selector W16TOSEL made, becomes its
 ; virtual paragraph again (W16VOF's half after the mov). Nothing in real
 ; mode. Keeps every other register, and the flags.
@@ -238,6 +259,10 @@
   %endif
 %endmacro
 
+; w16_vclaimm - no code: the name tests/pins.txt keys W16VCLAIM's real-mode
+; arm by (t_pins names a claim by the label it sits under, and a macro body
+; has none of its own)
+w16_vclaimm:
 ; W16VCLAIM / W16VFREE - a claim of WIN16's own, entered in the map: AX =
 ; PARAGRAPHS -> CF=0 DX = its virtual base, AX = the paragraphs GRANTED; CF=1
 ; none (OSAPI_MEM_P's MEMP_CLAIM, SPEC.md 50.3.7). Keeps the rest. Freed with
@@ -280,6 +305,7 @@ W16V_NC   equ 8                 ; cache rows, a power of two: a virtual
     W16BSS w16_vmap, W16V_N * W16V_SZ
     W16BSS w16_seg0, 2          ; W16SEG0's window over segment 0 (124.31.10)
     W16BSS w16_vc, W16V_NC * 4
+    W16BSS w16_wwin, 4          ; the two walk descriptors (W16WALK), 0 none yet
 
 ; W16PM_SEL sfx, dsload - a section's core: AX = a virtual paragraph -> AX =
 ; a data selector at it, to its claim's end (64 KB at most); AX in no claim
@@ -972,47 +998,16 @@ w16_pout:
 .out:
     ret
 
-; w16_plock - GlobalLock's: AX = a global block's data paragraph, ES = its
-; header -> AX = the program's selector, w16_pblk's - but a moveable block
-; under 64 KB of a protected-mode-only program (NEF_PMODE) is answered with a
-; BOUND window made at its first lock from that selector, which aims it at
-; the block, and kept in the header (GH_TSEL with GH_TN = 0): GlobalReAlloc
-; can then move the block locked and the selector the program holds follows
-; (w16s_gmovew). No window to be had: the SUB. Keeps every other register.
-; (SPEC.md 124.31.3)
-w16_plock:
-    call w16_pblk
-    cmp byte [w16_pmonly], 0
-    je .out
-    test byte [es:GH_FLAGS], GHF_MOVE
-    jz .out
-    cmp byte [es:GH_TN], 0          ; (a huge block's tiles)
-    jne .out
-    cmp word [es:GH_SIZE], 0x1001
-    ja .out
-    cmp word [es:GH_TSEL], 0
-    jne .have
-    push bx
-    push dx
-    mov dx, ax
-    mov bl, SEG_BWIN
-    call OSAPI_SEG                  ; DX = a bound window, aimed at the block
-    jc .none
-    mov [es:GH_TSEL], dx
-.none:
-    pop dx
-    pop bx
-    jc .out
-.have:
-    mov ax, [es:GH_TSEL]
-.out:
-    ret
-
-; w16_pblk - AX = a global block's data paragraph -> AX = a data selector
-; reaching to its claim's end, so a block that grows keeps its selector - a
-; STOPGAP (SPEC.md 124.31.3) for per-handle descriptors that GlobalReAlloc
-; retargets in place; under 64 KB, the length is only read to choose the
-; tile. Keeps every other register.
+; w16_pblk - AX = a global block's data paragraph -> AX = the program's
+; selector for it. Under 64 KB that is its HANDLE descriptor (SEG_HND), made at
+; the first ask and kept in the header (GH_TSEL, GHF_HND). It is based at the
+; block and reaches its length, GlobalReAlloc re-aims it in place
+; (w16_phfix), and the block's free gives it back. So the selector a program
+; holds follows the block, and an overrun past it faults, as on Windows
+; (SPEC.md 124.31.3). Over 64 KB: its tiles. A block handed out smaller that
+; grew past 64 KB is tiled at its next ask, and its handle descriptor is left
+; reaching its first 64 KB until the arena goes. No entry to be had: a SUB to
+; the claim's end. Keeps every other register.
 w16_pblk:
     push bx
     push cx
@@ -1023,18 +1018,151 @@ w16_pblk:
     inc ax
     dec cx
     cmp cx, 0x1000
-    ja .huge
+    ja .big
+    test byte [es:GH_FLAGS], GHF_HND
+    jnz .have
+    call w16_phset
+    jnc .have
     xor bl, bl
-    xor cx, cx                      ; STOPGAP (SPEC.md 124.31.3): to the
-    call w16_psel                   ;   claim's end, one selector per place
+    xor cx, cx
+    call w16_psel
+    jmp short .out
+.have:
+    mov ax, [es:GH_TSEL]
 .out:
     pop es
     pop cx
     pop bx
     ret
-.huge:
-    call w16_ptile
+.big:
+    and byte [es:GH_FLAGS], ~GHF_HND ; over 64 KB: tiled, and a handle
+    call w16_ptile                  ;   descriptor it had left to the arena
     jmp short .out
+
+; w16_vwalk0 / w16_vwalk1 - W16WALK's: AX = a virtual paragraph in an arena
+; -> AX = walk descriptor 0 or 1 aimed there, 64 KB or to its claim's end
+; (SEG_HND, made at the first walk). None to be had: W16SEG's selector.
+; Keeps every other register, and the flags.
+w16_vwalk1:
+    push di
+    mov di, 2
+    jmp short w16_vwalk
+w16_vwalk0:
+    push di
+    xor di, di
+w16_vwalk:
+    pushf
+    push bx
+    push cx
+    push dx
+    push si
+    push ax
+    call w16_vfind                  ; SI = its claim's row, DX = paragraphs in
+    jc .sub
+    mov ax, dx
+    mov si, [si + W16V_SEL]
+    xor cx, cx
+    mov dx, [w16_wwin + di]
+    mov bl, SEG_HND
+    call OSAPI_SEG
+    jc .sub
+    mov [w16_wwin + di], dx
+    pop ax
+    mov ax, dx
+    jmp short .out
+.sub:
+    pop ax
+    W16TOSEL ax
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    popf
+    pop di
+    ret
+
+; w16_vwdrop - both walk descriptors given back, before an arena goes: the
+; kernel frees what is based in a claim with it, and one of them may be.
+; Keeps every register.
+w16_vwdrop:
+    push bx
+    push dx
+    push si
+    push di
+    xor si, si
+    xor di, di
+.d:
+    xor dx, dx
+    xchg dx, [w16_wwin + di]
+    or dx, dx
+    jz .n
+    mov bl, SEG_HND
+    call OSAPI_SEG
+.n:
+    inc di
+    inc di
+    cmp di, 4
+    jb .d
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; w16_phfix - ES = a global block's header: its handle descriptor, if it has
+; one, re-aimed at it with its length (the block grew, shrank or moved).
+; Keeps every register.
+w16_phfix:
+    test byte [es:GH_FLAGS], GHF_HND
+    jz w16_phret
+    push ax
+    W16VOF ax, es
+    inc ax
+    call w16_phset
+    pop ax
+w16_phret:
+    ret
+
+; w16_phset - AX = a global block's data paragraph under 64 KB, ES = its
+; header: its handle descriptor aimed there and reaching its length - the one
+; it has (GHF_HND), or a new one. CF=1 none to be had. Keeps every register.
+w16_phset:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    call w16_vfind                  ; SI = its claim's row, DX = paragraphs in
+    jc .out
+    mov ax, [es:GH_SIZE]
+    dec ax
+    cmp ax, 0x1000                  ; grown past 64 KB: its first 64 KB
+    jbe .sz
+    mov ax, 0x1000
+.sz:
+    mov cl, 4
+    shl ax, cl
+    xchg ax, cx                     ; CX = its bytes (0: 64 KB)
+    mov ax, dx                      ; AX = the paragraphs into the claim
+    mov si, [si + W16V_SEL]
+    xor dx, dx
+    test byte [es:GH_FLAGS], GHF_HND
+    jz .new
+    mov dx, [es:GH_TSEL]
+.new:
+    mov bl, SEG_HND
+    call OSAPI_SEG
+    jc .out
+    mov [es:GH_TSEL], dx
+    or byte [es:GH_FLAGS], GHF_HND
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
 
 ; w16_ptile - AX = a global block's data paragraph over 64 KB, CX = its
 ; paragraphs, ES = its header -> AX = the first of its SEG_TILE selectors, a

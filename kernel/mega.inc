@@ -12339,8 +12339,12 @@ mega_segf:
     je .winl
     cmp bl, SEG_LEND
     je .lend
+    cmp bl, SEG_HND
+    je .hndj
     stc
     retf
+.hndj:
+    jmp mega_segh
 .lend:                              ; SEG_LEND: DX = the segment of a claim
     push bx                         ; below 1MB, CX = the top of the stack in
     push dx                         ; it, or DX = 0 to take it back (SPEC.md
@@ -12674,11 +12678,17 @@ mega_wset:
     pop ds
     cmp [di+2], bl
     jne .wx
-    cmp byte [di+3], 0              ; ...and UNBOUND: a SEG_BWIN window is
-.wx:                                ; SEG_AIM's to re-aim, inside its block,
-    pop ds                          ; and aimed outside it here it was freed
-    je .own                         ; and moved with no block (14.135)
-.nown:
+    cmp byte [di+3], 0              ; ...and UNBOUND, or BOUND and aimed
+    je .wx                          ; INSIDE a block OF ITS OWNER'S: re-bound
+    call mega_bown                  ; there, reach clipped and the block
+    jc .wn                          ; flagged as SEG_BWIN's. Another's block,
+    call mega_wbind                 ; or outside every block, where it would
+.wn:                                ; be freed and moved with no block
+    sbb bh, bh                      ; (14.135), gets a fresh window
+.wx:
+    pop ds
+    je .own                         ; (14.137: WIN16's GlobalReAlloc carries
+.nown:                              ; a program's window to another arena)
     pop di
 .nm:
     or di, di
@@ -12853,6 +12863,105 @@ mega_bclip:
     pop ax
     ret
 
+; mega_wbind - DX:AX = a BOUND window's base, CX = its reach: CF = 0 when the
+; base lies in a block - a conventional claim or a pool block - with CX clipped
+; at that block's end, and a pool block flagged MX_FWIN, so it moves with the
+; rate hook held off as an OSAPI_XMEM_RUN block does (mx_cpflags). The flag is
+; STICKY for the block's life: SEG_FREE and the owner's end leave it, and the
+; entry's next take clears it (mx_alloc's MX_OWN/MX_FL word). What it costs once
+; the window is gone is a move with the hook held off, the safe side, so no
+; walk is spent on it (14.135). CF = 1 in no block. Keeps all but CX. SEG_BWIN
+; making one and mega_wset re-binding one (14.137) are the two callers
+mega_wbind:
+    call mega_bclip                 ; CX = the reach; CF = 1 in no block
+    jc .o
+    push ax
+    push bx
+    push dx
+    push si
+    push di
+    push es
+    MXT_ES                          ; (mega_blkof reads the tables' tail)
+    call mega_blkof                 ; BX = a pool block's entry, 0 a claim's
+    or bx, bx                       ; (CF = 0 both ways: `or` clears it)
+    jz .c
+    or byte [es:bx+MX_FL], MX_FWIN
+.c:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop ax
+.o:
+    ret
+
+; mega_bown - DX:AX = a base, BL = a window's owner (mega_segown's) -> CF = 0
+; the block it lies in is that owner's: a conventional claim recorded under
+; the slot, a pool block under 0A0h | slot, or a driver's pool block under its
+; 0C0h | row. CF = 1 someone else's, nobody's, or in no block - so mega_wset's
+; re-bind never binds a window into another package's memory (14.137, the
+; rule 14.135 made for SEG_FREE). Keeps all
+mega_bown:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    cmp bl, 0xFF
+    je .no
+    cmp dx, MEGA_XPOOL >> 16
+    jb .conv
+    MXT_ES                          ; (the tables' tail)
+    cmp bl, 0xC0
+    jae .p
+    or bl, 0xA0
+.p:
+    call mx_rel                     ; AX = its KB from the pool's base
+    jc .no
+    call mx_inblk                   ; SI = the block
+    jc .no
+    cmp [es:si+MX_OWN], bl
+    je .yes
+.no:
+    stc
+    jmp short .o
+.conv:
+    cmp bl, 0xC0                    ; (a driver's conventional claim: not
+    jae .no                         ;   matched, so a fresh window)
+    shr ax, 4
+    shl dx, 12
+    or ax, dx                       ; AX = its paragraph
+    mov si, mem_tab
+.l:
+    mov cx, [ss:si+MC_SEG]
+    jcxz .n
+    cmp ax, cx
+    jb .n
+    add cx, [ss:si+MC_PARA]
+    cmp ax, cx
+    jb .f
+.n:
+    add si, MC_SIZE
+    cmp si, mem_tab + MEM_MAX * MC_SIZE
+    jb .l
+    jmp short .no
+.f:
+    xor bh, bh
+    cmp [ss:si+MC_OWN], bx
+    jne .no
+.yes:
+    clc
+.o:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
 ; mega_segbw - SEG_BWIN's body (FAR's tail, mega_segf): DX = a selector of the
 ; caller's -> CF = 0, DX = a NEW data selector over the block its base lies in
 ; - the pool's or a conventional claim - aimed at that base, 64KB long or to
@@ -12872,7 +12981,7 @@ mega_segbw:
     call mega_selbase               ; DX:AX = its base
     jc .null
     mov cx, 0xFFFF
-    call mega_bclip                 ; CX = the reach
+    call mega_wbind                 ; CX = the reach, the block flagged
     jnc .in
     mov ax, 3
     jmp short .no
@@ -12880,23 +12989,6 @@ mega_segbw:
     mov ax, 2
     jmp short .no
 .in:
-    push es                         ; (ES the tables' tail, for mega_blkof
-    MXT_ES                          ; and the flag: the caller's back before
-    push ax                         ; mega_segown reads it)
-    push dx
-    call mega_blkof                 ; BX = a pool block's entry, 0 a claim's
-    pop dx
-    pop ax
-    or bx, bx
-    jz .nofl
-    or byte [es:bx+MX_FL], MX_FWIN  ; STICKY for the block's life: SEG_FREE
-.nofl:                              ; and the owner's end leave it, and the
-                                    ; entry's next take clears it (mx_alloc's
-                                    ; MX_OWN/MX_FL word). What it costs once
-                                    ; the window is gone is a move with the
-                                    ; rate hook held off, which is the safe
-                                    ; side, so no walk is spent on it (14.135)
-    pop es
     call mega_segown                ; BL = the caller's owner
     mov bh, 1                       ; BOUND: a free row and a FRESH entry,
     call mega_wnew                  ; never a match - re-aiming it must move
@@ -13025,6 +13117,121 @@ mega_segtile:
     pop cx
     pop bx
     add sp, 2                       ; the caller's AX: the reason instead
+    stc
+    retf
+
+; mega_segh - SEG_HND's body (mega_segf, SPEC.md 50.6.11, 124.31.3): SI = a
+; selector based in a claim or a pool block, AX = a paragraph offset into it,
+; CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new
+; one -> CF = 0, DX = it, based there and reaching CX clipped at that block's
+; end. SI = 0 frees DX. A handle descriptor is a Windows handle's selector:
+; one per global block, re-aimed in place when the block grows or moves, so
+; the selector a program holds follows it and an overrun past its length
+; faults. It is a SUB's data descriptor with byte 6's AVL bit set (MEGA_HAVL:
+; the 386's bit for software, and a word a 286 never reads), so mega_dfind
+; never answers it for a SUB and re-aiming one moves nobody else's - and it
+; stays a plain DPL 0 data segment, which a program may load into SS as Windows
+; allowed. Based in its block, the compactor rebases it
+; (mx_desc) and the block's free takes it, as a tile's. CF = 1: AX = 1 no free
+; entry, 3 the base in no block, 4 DX not a handle descriptor; DX kept
+MEGA_HAVL   equ 0x10                ; a handle descriptor's mark, in byte 6
+mega_segh:
+    push bx
+    push cx
+    push si
+    push di
+    push ax
+    push dx
+    mov bx, sp                      ; [ss:bx] = DX, [ss:bx+2] = AX
+    or dx, dx
+    jz .base
+    mov di, dx                      ; DX: an LDT entry marked a handle's
+    and di, 0xFFF8
+    test dl, 4
+    jz .not
+    cmp di, MEGA_LDT_FREE0 * 8
+    jb .not
+    cmp di, [ss:mega_ldte]
+    jae .not
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    test byte [es:di+6], MEGA_HAVL
+    pop es
+    jz .not
+    or si, si
+    jnz .base
+    mov ax, dx
+    call mega_ldt_free
+    jmp short .ok
+.base:
+    mov ax, si
+    call mega_selbase               ; DX:AX = SI's base
+    jc .nb
+    mov di, [ss:bx+2]               ; ...+ the paragraphs
+    push di
+    shl di, 4
+    add ax, di
+    pop di
+    adc dl, 0
+    shr di, 12
+    add dx, di
+    dec cx                          ; the limit (0 - 1 = 64KB)
+    call mega_bclip                 ; ...clipped at the block's end
+    jc .nb
+    mov di, [ss:bx]
+    or di, di
+    jnz .re
+    push bx
+    mov bl, 0x92
+    call mega_ldt_alloc             ; AX = a new one...
+    pop bx
+    jc .full
+    mov [ss:bx], ax
+    mov di, ax
+    and di, 0xFFF8
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    mov byte [es:di+6], MEGA_HAVL   ; ...marked a handle's
+    pop es
+    jmp short .ok
+.re:
+    and di, 0xFFF8
+    push es
+    push word MEGA_SEL_LDTD
+    pop es
+    pushf
+    cli
+    mov [es:di], cx
+    mov [es:di+2], ax
+    mov [es:di+4], dl
+    popf
+    pop es
+.ok:
+    pop dx
+    pop ax
+    pop di
+    pop si
+    pop cx
+    pop bx
+    clc
+    retf
+.full:
+    mov ax, 1
+    jmp short .no
+.nb:
+    mov ax, 3
+    jmp short .no
+.not:
+    mov ax, 4
+.no:
+    pop dx
+    add sp, 2                       ; the caller's AX: the reason instead
+    pop di
+    pop si
+    pop cx
+    pop bx
     stc
     retf
 
@@ -13167,6 +13374,8 @@ mega_dfind:
     jne .n
     cmp [es:di], cx
     jne .n
+    test byte [es:di+6], MEGA_HAVL  ; ...no HANDLE descriptor (SEG_HND),
+    jnz .n                          ;   which its holder re-aims, and
     push dx                         ; ...AND NO WINDOW (SPEC.md 50.6.11): a
     push di                         ; window is its owner's to re-aim, and
     lea dx, [di+4]                  ; one left over this very base answered

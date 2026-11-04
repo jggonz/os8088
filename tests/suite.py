@@ -17010,9 +17010,10 @@ SOAK = [
     Row("win16big", "soak", py("tests/win16big.py"), 60.0,
         "SPEC.md 124.20, WIN16-ANY-PLAN S15: BIG.EXE (`make win16fixtures`, "
         "tests/win16/big.c) - 17 code segments and about 155 KB of code, each "
-        "of sixteen functions far-called forward and back, and a 128 KB "
+        "of sixteen functions far-called forward and back, a 96 KB "
         "GlobalAlloc block written through a __huge pointer and read back by "
-        "adding __AHINCR (KERNEL.114) to the segment. Its MessageBox, read "
+        "adding __AHINCR (KERNEL.114) to the segment, and a 40 KB block "
+        "GlobalReAlloc grows to 80 KB, read back the same way. Its MessageBox, read "
         "off the program's stack, must be the sums the row computes itself",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
@@ -17287,11 +17288,32 @@ SOAK = [
         "MZ still opens DOS, and an NE TYPED at its prompt still reaches "
         "WIN16 through the host's own arm. TINY16.EXE is assembled here, so "
         "it needs neither Microsoft's samples nor Watcom. Red on c714ec45 "
-        "(DOS's window at frame 261, a 55,328-byte carve)",
-        needs=("marty", "nasm"), timeout=600,
+        "(DOS's window at frame 261, a 55,328-byte carve). Leg D, a second "
+        "boot: an \\AUTOSTRT link on A: to B:\\TINY16.EXE must hand WIN16 "
+        "B:'s file (w16_vol 1), the posted launch keeping the document's "
+        "locator (ASSOC_PWBANK, SPEC.md 21.5.4)",
+        needs=("marty", "nasm", "mtools"), timeout=900,
         wants=("build/os8088-360.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/win16/TINY16.EXE",
                "build/DOSHELLO.EXE", "build/dosp.bin")),
+    Row("win16ovr", "soak", py("tests/win16ovr.py"), 90.0,
+        "SPEC.md 124.31.3 and 50.6.11 (SEG_HND), WIN16-ANY-PLAN S24: under "
+        "Bochs, kern_mega boots off C: and \\AUTOSTRT opens OVRTEST.EXE "
+        "(tests/win16/ovrtest.c). A 100-byte moveable block's selector is its "
+        "HANDLE descriptor and reaches exactly GlobalSize; a GlobalReAlloc to "
+        "6000 bytes past a fixed block answers the SAME selector with the new "
+        "limit and the old bytes; a block grown past 64 KB reads back through "
+        "__AHINCR; and a write one byte past the block raises #GP(0) inside "
+        "OVRTEST's code, OVRTEST.TXT never saying SURVIVED. kern_mega then "
+        "stops FATAL rather than closing WIN16 (WIN16-NEXT-PLAN Q1), and the "
+        "row fails on a close so it is changed when Q1 lands. Bochs, because "
+        "QEMU checks no data segment's limit and the write completes there. "
+        "Red expected on the parent commit, whose stopgap selector reached "
+        "the claim's end",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/OVRTEST.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

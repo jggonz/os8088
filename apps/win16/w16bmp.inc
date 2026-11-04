@@ -96,7 +96,7 @@ w16_bmnew:
     jb .find
     jmp short .no
 .take:
-    mov byte [w16b_mono + bx], 0
+    mov word [w16b_mono + bx], 0    ; (its high byte: 1 = a claim of its own)
     mov [w16b_w + bx], ax
     mov [w16b_h + bx], dx
     inc ax
@@ -115,6 +115,17 @@ w16_bmnew:
     pop cx                          ;   The handle IS the segment
     or ax, ax
     jnz .got
+    mov ax, cx                      ; the heap is short: the bits get a claim
+    add ax, 15                      ;   of their own (SPEC.md 124.15.2), one
+    rcr ax, 1                       ;   map row on the arm and a plain heap
+    shr ax, 1                       ;   claim in real mode. A large DIB needs
+    shr ax, 1                       ;   its resource and its bits at once,
+    shr ax, 1                       ;   two blocks the arenas' runs cannot
+    W16VCLAIM                       ;   always hold
+    jc .ask
+    mov byte [w16b_mono + bx + 1], 1
+    jmp short .got
+.ask:
     push si                         ; the heap is short: a GlobalNotify
     call w16k_gnask                 ;   procedure is asked to give a block
     pop si                          ;   up, and the call runs again after
@@ -292,7 +303,10 @@ w16_bmdelete:
     cmp byte [w16b_sel + bx], 0
     jne .done
     mov ax, [w16b_seg + bx]         ; the block's handle is its segment
+    call w16_bmown                  ; (or a claim of its own: given back)
+    jnc .freed
     ICALL w16_gfreeh
+.freed:
     mov word [w16b_seg + bx], 0
     mov ax, 1
 .done:
@@ -300,6 +314,22 @@ w16_bmdelete:
 .out:
     pop dx
     pop bx
+    ret
+
+; w16_bmown - AX = bitmap slot BX's bits: CF=0 they were a claim of their own
+; (w16_bmnew's fallback, the slot's w16b_mono high byte), given back; CF=1 a
+; block of the global heap. Keeps every register.
+w16_bmown:
+    cmp byte [w16b_mono + bx + 1], 0
+    stc
+    je .out
+    mov byte [w16b_mono + bx + 1], 0
+    push dx
+    mov dx, ax
+    W16VFREE
+    pop dx
+    clc
+.out:
     ret
 
 ; w16_bmend - the program has ended: its bitmaps freed, its memory DCs gone
@@ -311,6 +341,9 @@ w16_bmend:
     mov dx, [w16b_seg + bx]         ; the global heap's arenas go with the
     or dx, dx                       ;   program, and the bitmaps in them
     jz .n
+    xchg ax, dx                     ; ...but a claim of its own does not
+    call w16_bmown
+    xchg ax, dx
     mov word [w16b_seg + bx], 0
     mov byte [w16b_sel + bx], 0
 .n:
