@@ -1669,9 +1669,8 @@ DRVM_IMG_EMS equ 2              ; ceil(build/ems.drv / 512)
 DRVM_IMG_CD  equ 18              ; ceil(build/cdrom.drv / 512)
 DRVM_IMG_HTTP equ 11             ; ceil(build/httpfs.drv / 512)
 DRVM_IMG_VESA equ 16             ; ceil(build/vesa.drv / 512)
-DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512) - PROVISIONAL:
-                                ; ETHER.DRV's figure until the driver is built
-                                ; (SPEC.md 125.8 item 3); t_drvmem re-measures
+DRVM_IMG_PCIETH equ 34           ; ceil(build/pciether.drv / 512): 17,153 =
+                                ; 16,897 + 256 bss, 255 bytes under the rung
 
 DRVM_SND     equ DRVM_IMG_SND + 16*2      ; SBL_PLAYKB: what it holds PLAYING -
                                 ; a 16KB ring the card reads in place, and no
@@ -1710,9 +1709,20 @@ DRVM_RAM     equ (DRVM_IMG_RAM + 13 + 8*2) | DRVM_PLUS
                                 ; paths are exclusive - conventional takes an
                                 ; arena instead of a bounce - so this is the
                                 ; larger, and the arena is what the '+' is
-%ifdef KERN_MEGA
-DRVM_PCIETH  equ DRVM_IMG_PCIETH + 33 ; the same ring pool as ETHER.DRV's
-%endif
+DRVM_RT_PCIETH equ 23           ; PCIETHER.DRV's rt_claim, held from attach to
+                                ; detach: the RTL8139's 8KB receive ring, its
+                                ; 16 of slack, the 1,536-byte overrun and one
+                                ; transmit buffer - RT_CLAIM, 11,280 bytes,
+                                ; 11,776 at the heap's granule
+DRVM_SK_PCIETH equ 21           ; ...and ETHER.DRV's socket pool, but at the
+                                ; MIDDLE rung: sk_cardcap holds a rung to the
+                                ; ring less SK_RINGSLK (8,192 - 1,536), so
+                                ; SK_RXMAX is never taken on this card -
+                                ; 4,096 + 2,048 + the lean rings' 4,608
+DRVM_PCIETH  equ DRVM_IMG_PCIETH + DRVM_RT_PCIETH + DRVM_SK_PCIETH
+                                ; (SPEC.md 125.5; t_drvmem re-derives all three
+                                ; terms from drivers/pciether/). kern_mega's
+                                ; alone, but an equ costs nothing elsewhere
 DRVM_VMM     equ DRVM_IMG_VMM   ; the absolute mouse claims nothing either: it
                                 ; hooks no vector, owns no port and keeps no
                                 ; buffer. The image IS the whole footprint
@@ -1789,10 +1799,24 @@ section .text
 ; literal safe, and it is the half a package could never have had.
 DRVM_CEIL_DISK equ 4            ; MIRRORED in apps/os88api.inc - t_mirror
 DRVM_CEIL_NET  equ 34           ; ...ditto
+DRVM_CEIL_NET_MEGA equ 39       ; ...and DRVC_NET's on kern_mega (SPEC.md
+                                ; 125.5): ETHER.DRV and PCIETHER.DRV are
+                                ; ALTERNATIVES in one publication slot, so it
+                                ; is the LARGER of the two rows, not their sum.
+                                ; A per-kernel ceiling because the caption is
+                                ; per-kernel: DOS.O88 is assembled -DDOS_MEGA
+                                ; for kern_mega's disks and quotes this one
 %if DRVM_CEIL_DISK != (DRVM_HDD + 1) / 2 || DRVM_CEIL_NET != (DRVM_ETH + 1) / 2
                                 ; (the ceilings are KB, drv_memk half-KB:
                                 ; a ceiling is rounded UP)
   %error "a class ceiling has drifted from drv_memk - apps/os88api.inc too"
+%endif
+%if DRVM_PCIETH > DRVM_ETH
+  %if DRVM_CEIL_NET_MEGA != (DRVM_PCIETH + 1) / 2
+    %error "kern_mega's DRVC_NET ceiling has drifted from PCIETHER.DRV's row - apps/os88api.inc too"
+  %endif
+%elif DRVM_CEIL_NET_MEGA != DRVM_CEIL_NET
+  %error "kern_mega's DRVC_NET ceiling has drifted from ETHER.DRV's row - apps/os88api.inc too"
 %endif
 
 ; The loader's words for each DRVE_* code (drv_errstr) are in CTRL.DRV's

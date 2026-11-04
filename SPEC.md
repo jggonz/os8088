@@ -100545,6 +100545,7 @@ DRVE_HW     it loaded and found no hardware
 DRVE_BUSY   ...or found it and cannot have it: port or IRQ in use
 DRVE_TWICE  it was asked to attach while already attached
 DRVE_NOVOL  it came up and found nothing to do (a READY answer, §51.3.2)
+DRVE_CLASS  kern_mega only: another row already owns this row's class (§125.5)
 ```
 
 **`DRVE_TWICE` is the only one that blames the software**, and that is why it
@@ -100558,7 +100559,13 @@ and before the first port write, so the live ring, the hooked vector and the
 running DSP are all exactly as they were. **The kernel raises it in one place
 too** — a load into a class whose publication slot another row already holds
 (§51.2.1) — and it is the same sentence: the machine is fine, and the
-software is asking for something a class-keyed slot cannot do.
+software is asking for something a class-keyed slot cannot do. **Except on
+kern_mega**, which banks `DRVE_CLASS` (`Class already in use`) for that one
+case instead, because there two rows of one class — `ETHER.DRV` and
+`PCIETHER.DRV` — are alternatives the user chose between (§125.5). It is a
+kernel-only code: `drivers/os88drv.inc` does not carry it, and a driver that
+answered 9 anyway would be banked as it on kern_mega and as `DRVE_HW` on the
+other kernels (`DRVE_NERR` is 10 there and 9 elsewhere).
 
 Two plumbing details make it *arrive*, and without either the refusal is
 correct and silent. `drv_attach` **keeps an attach refusal's `AL`** — it
@@ -183816,6 +183823,18 @@ The literal is what makes the mirror possible: `t_mirror` compares the text
 when a value is not a number, and the SDK cannot see `DRVM_HDD`. So the kernel
 carries `equ 32` and the `%if` is what makes `32` safe.
 
+**One ceiling is per KERNEL: `DRVM_CEIL_NET_MEGA`** (§125.5, the owner's
+decision of 2026-11-04). kern_mega has a second `DRVC_NET` row,
+`PCIETHER.DRV`, and the two are ALTERNATIVES in one publication slot
+(`drv_load_at` refuses whichever attaches second), so kern_mega's ceiling is
+the **larger** of the two rows and not their sum: 39 KB against
+`ETHER.DRV`'s 34. The caption is per kernel because `DOS.O88` already is —
+kern_mega's disks carry a copy assembled `-DDOS_MEGA` (§96, KERN-MEGA-DOS-PLAN
+12.1 item 4), and that copy alone quotes `DRVM_CEIL_NET_MEGA`; every other
+`DOS.O88` quotes `DRVM_CEIL_NET` and is byte-identical to what it was.
+`t_drvmem` holds each to the rows its own kernel has, and the `%if` pins the
+kern_mega one to whichever of the two rows is larger.
+
 **On `kern_small` the caption now says `Up to 32K` where the slot used to make
 it say `Up to  0K`**, and that is the fix arriving on one more machine rather
 than a regression. `Up to` is about the class (§96.36.7.1: the box is a
@@ -239377,10 +239396,24 @@ against the row, ahead of any disk work, and `[drv_owner]` is written only by
 leaves the slot free for `PCIETHER.DRV`). What kern_mega adds is the words:
 `DRVE_CLASS`, `Class already in use`, in place of `DRVE_TWICE`'s
 `Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** (§125.8
-item 2). Its `DRVM_PCIETH` is `DRVM_IMG_PCIETH` plus the ring pool's top rung,
-as `DRVM_ETH`'s; the two are alternatives, so `DRVM_CEIL_NET` is the larger of
-the pair and not their sum (`tests/unit/t_drvmem.py`). Not wanted by default (§51.3). It must cross no
-kern_mega resident rung; `make budget-check` holds `KERN_MEGA_RESIDENT_KB`.
+item 2). Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
+half-KB: 17,153 bytes with its bss) + `DRVM_RT_PCIETH` (23: `rt_claim`'s
+ring, slack, overrun and transmit buffer, `RT_CLAIM` = 11,280 bytes, held
+from attach to detach) + `DRVM_SK_PCIETH` (21: the socket pool at the
+**middle** rung, because `sk_cardcap` holds a rung to the 8KB ring less
+`SK_RINGSLK` and `SK_RXMAX` never fits) = **78 half-KB, 39 KB** — against
+`ETHER.DRV`'s 67. The two are alternatives, so kern_mega's `DRVC_NET` ceiling
+is the larger and not their sum: `DRVM_CEIL_NET_MEGA` = 39, which kern_mega's
+`-DDOS_MEGA` `DOS.O88` quotes, while `DRVM_CEIL_NET` stays 34 everywhere else
+(§51.12.1; `tests/unit/t_drvmem.py` re-derives every term from
+`drivers/pciether/`). Not wanted by default (§51.3). When both rows are
+wanted, `drv_boot` walks the table in row order, so `ETHER.DRV` (row 2) is
+tried first: with an ISA card it owns the class and `PCIETHER.DRV` reads
+`Class already in use`; with none it fails `No hardware found`, the slot
+stays free and `PCIETHER.DRV` attaches. Unticking the owner releases the slot
+(`drv_release` zeroes `[drv_owner]` only for the row that holds it). It must
+cross no kern_mega resident rung; `make budget-check` holds
+`KERN_MEGA_RESIDENT_KB`.
 
 ### 125.6 Disks and machines (pinned)
 
