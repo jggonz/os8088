@@ -339,7 +339,227 @@ W16TSK w16i_atomname
     pop si
     ret
 
+; THE WINDOW PROPERTIES (SPEC.md 124.25.13): a table of W16_NPROP records, a
+; window's HWND (0 = free), the name's atom and the HANDLE, in this part's
+; data beside the atoms. A string name is an atom of the table above, found
+; as GlobalFindAtom finds it (case aside); a name with no segment is its own
+; atom. They go with the window (w16_cargone, in DestroyWindow's path).
+;
+; w16i_pkey - ES:DI = a property's name, AL = 1 to add it to the atoms: AX =
+; its atom, 0 for none. DX = 0. Keeps the rest
+w16i_pkey:
+    mov dx, es
+    or dx, dx
+    jnz w16i_atomat
+    mov ax, di
+    ret
+
+; SetProp (USER.26) - args: +0 hData, +2 lpszString, +6 hWnd. TRUE; FALSE for
+; a window that is not one, a name the atoms have no room for or a full table
+W16TSK w16i_setprop
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov si, [es:bx + 6]
+    les di, [es:bx + 2]
+    mov ax, si
+    ICALL w16_hwnd2rec
+    jc .fail
+    mov al, 1
+    call w16i_pkey
+    or ax, ax
+    jz .fail
+    push ds
+    W16SEG ds, [w16_tseg]
+    mov bx, w16i_props
+    xor di, di                      ; DI = the first free record
+    mov dx, W16_NPROP
+.s:
+    cmp word [bx], 0
+    jne .used
+    or di, di
+    jnz .n
+    mov di, bx
+    jmp short .n
+.used:
+    cmp [bx], si
+    jne .n
+    cmp [bx + 2], ax
+    je .set
+.n:
+    add bx, 6
+    dec dx
+    jnz .s
+    mov bx, di
+    or bx, bx
+    jz .full
+    mov [bx], si
+    mov [bx + 2], ax
+.set:
+    mov [bx + 4], cx
+    mov ax, 1
+    jmp short .out
+.full:
+    xor ax, ax
+.out:
+    pop ds
+    jmp short .ret
+.fail:
+    xor ax, ax
+.ret:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; GetProp (USER.25) - args: +0 lpszString, +4 hWnd: the HANDLE, 0 for none.
+; RemoveProp (USER.24) - the same, and the property is gone
+W16TSK w16i_getprop
+    xor cx, cx
+    jmp short w16i_prop
+W16TSK w16i_remprop
+    mov cx, 1
+w16i_prop:
+    push si
+    push di
+    push cx
+    ICALL w16_args
+    mov si, [es:bx + 4]
+    les di, [es:bx]
+    xor ax, ax
+    call w16i_pkey
+    pop cx
+    or ax, ax
+    jz .none
+    push ds
+    W16SEG ds, [w16_tseg]
+    mov bx, w16i_props
+    mov dx, W16_NPROP
+.s:
+    cmp [bx], si
+    jne .n
+    cmp [bx + 2], ax
+    je .hit
+.n:
+    add bx, 6
+    dec dx
+    jnz .s
+    pop ds
+.none:
+    xor ax, ax
+    jmp short .out
+.hit:
+    mov ax, [bx + 4]
+    jcxz .keep
+    mov word [bx], 0
+    mov word [bx + 2], 0
+.keep:
+    pop ds
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; EnumProps (USER.27) - args: +0 lpEnumFunc, +4 hWnd. The callback for each
+; of the window's properties, (hwnd, name, hData) with the atom in the name's
+; low word and 0 in its high - the form Windows gives an atom-named property,
+; and for a string-named one too - until one answers FALSE. AX = 1
+W16TSK w16i_enumprops
+    xor cx, cx
+w16i_epgo:                          ; CX = the record to try from
+    push si
+    push di
+    ICALL w16_args
+    mov dx, [es:bx + 4]             ; the window
+    push ds
+    W16SEG ds, [w16_tseg]
+.rec:
+    cmp cx, W16_NPROP
+    jae .done
+    mov si, cx
+    shl si, 1
+    add si, cx
+    shl si, 1                       ; * 6
+    add si, w16i_props
+    cmp [si], dx
+    jne .next
+    mov ax, [si + 2]
+    or ax, ax
+    jnz .take
+.next:
+    inc cx
+    jmp short .rec
+.take:
+    mov di, [si + 4]
+    pop ds
+    ICALL w16_args                  ; (before cbopen moves the frame)
+    push word [es:bx + 2]           ; the function
+    push word [es:bx]
+    push ax                         ; its name: the atom
+    push di                         ; the HANDLE
+    push dx                         ; the window
+    mov ax, cx                      ; the next record, the continuation's word
+    inc ax
+    mov si, w16i_epnext_c
+    xor cx, cx
+    ICALL w16_cbopen
+    pop ax
+    ICALL w16_ppush                 ; pascal: hwnd,
+    pop di
+    pop bx
+    xor ax, ax
+    ICALL w16_ppush                 ;   the name's segment, 0,
+    mov ax, bx
+    ICALL w16_ppush                 ;   its offset, the atom,
+    mov ax, di
+    ICALL w16_ppush                 ;   then hData
+    pop ax
+    pop dx
+    ICALL w16_cbcall
+    pop di
+    pop si
+    ret
+.done:
+    pop ds
+    mov ax, 1
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+TCONT w16i_epnext
+    or ax, ax
+    jnz w16i_epgo
+    xor dx, dx
+    ret
+
+; w16i_propgone - AX = a window being destroyed: its properties go with it.
+; Keeps every register
+w16i_propgone:
+    push ds
+    push bx
+    push cx
+    W16SEG ds, [w16_tseg]
+    mov bx, w16i_props
+    mov cx, W16_NPROP
+.l:
+    cmp [bx], ax
+    jne .n
+    mov word [bx], 0
+    mov word [bx + 2], 0
+.n:
+    add bx, 6
+    loop .l
+    pop cx
+    pop bx
+    pop ds
+    ret
+
+
 w16i_atoms: times W16_NATOM * 32 db 0
+w16i_props: times W16_NPROP * 6 db 0
 
 ; w16i_up - AL upper-cased, as AnsiUpper does: a-z, and the accented letters
 ; E0h-FEh but F7h. Keeps the rest

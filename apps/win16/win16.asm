@@ -131,6 +131,8 @@ W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
 W16_STUBSZ   equ 4              ; a stub's bytes: w16_stubs + 4 * slot
 W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
                                 ;   (w16mdi.inc, SPEC.md 124.25.10)
+W16_NPROP    equ 32             ; window properties at once (w16mdi.inc,
+                                ;   SPEC.md 124.25.13)
 W16_NPNMAX   equ 16             ; GetProcAddress's names at most (w16api.inc)
 W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,

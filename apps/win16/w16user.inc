@@ -1911,6 +1911,11 @@ w16u_peekmsg:
 .msg:
     call w16_peekmsg
     jnc .out
+; WaitMessage (USER.112, no arguments): the program waits for one os8088 UI
+; pass as a PeekMessage that found nothing does, and goes on (SPEC.md
+; 124.25.13); w16_peekmsg answers it at once, having no MSG to fill
+w16u_waitmsg equ w16u_peekmsg.park
+.park:
     mov ax, [w16_idx]
     mov [w16_widx], ax
     mov byte [w16_inpeek], 1
@@ -1923,6 +1928,11 @@ w16u_peekmsg:
 ; w16_peekmsg - PeekMessage's answer, from the waiting frame's arguments.
 ; CF=1 nothing: AX = 0. CF=0: the MSG is filled and AX = 1.
 w16_peekmsg:
+    cmp word [w16_nargb], 0         ; WaitMessage's: nothing to fill
+    jne .pm
+    clc
+    ret
+.pm:
     call w16_args
     mov al, [es:bx]
     and al, PM_REMOVE

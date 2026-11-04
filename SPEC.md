@@ -236541,6 +236541,55 @@ copy: black stays black and white stays white, which is what Windows gives
 under the default text and background colours. A DC with other colours
 would get them on Windows and does not here yet.
 
+#### 124.25.13 Window properties, WaitMessage and Arcade's other calls *(props)*
+
+All five of Microsoft Arcade's games (ASTEROID, BZ, CP, MC, TEMPEST) were
+refused *Needs USER.26 (SetProp)* after their setup had finished. The census
+(`tools/os88ne.py` over the games, and their own libraries AMDSPIN.DLL and
+ARCCTL.DLL) names every call WIN16 lacked, and these are all of them:
+
+| call | answer |
+|---|---|
+| `SetProp` (USER.26), `GetProp` (USER.25), `RemoveProp` (USER.24), `EnumProps` (USER.27) | window properties, below |
+| `WaitMessage` (USER.112) | the program waits for one os8088 UI pass, as a `PeekMessage` that found nothing does (§124.12), and goes on. Windows returns when a message is queued; WIN16 may return before, and a program that calls it from a loop which tests the queue (the usual form) behaves the same |
+| `CloseWindow` (USER.43) | 0: there is no icon to go to, as `OpenIcon` (USER.44) answers a constant |
+| `ExcludeUpdateRgn` (USER.238) | 1, `NULLREGION`: nothing is excluded from the DC, so a paint draws what it would have left |
+
+**Properties.** A property is a (name, HANDLE) pair on a window. The table is
+`W16_NPROP` = **32** records of six bytes (the HWND, 0 for a free record, the
+name's atom, the HANDLE) in the task part's data (§124.28.13) beside the
+atoms of §124.25.10, so it costs the image no byte of bss and a program
+that never sets one does not fetch the part for it.
+
+- A name with no segment is its own atom. A string is added to §124.25.10's
+  table of `W16_NATOM` atoms, found as `GlobalFindAtom` finds it, so it is
+  matched case aside; a table that is full makes `SetProp` answer FALSE.
+- `SetProp` answers FALSE for a window that is not one, a table that is
+  full, or a name that cannot be an atom. Setting a property that exists
+  replaces its HANDLE. `GetProp` answers the HANDLE or 0; `RemoveProp`
+  answers it and frees the record.
+- `EnumProps` calls the function `(hwnd, name, hData)` for each of the
+  window's properties, until one answers FALSE, and answers 1. The name is
+  the atom in the low word with 0 in the high word, **the form Windows gives
+  a property set with an atom, and used here for a string-named one as well**:
+  a callback that reads the name as a string is the one case that differs.
+- **They go with the window**: `w16_cargone`, which `w16_wndfree` calls for
+  every window that is freed, drops a window's properties when the task
+  part is loaded (when it is not, none was ever set). Windows leaves the
+  removal to the program; a program that forgets leaks nothing here, and
+  nothing is left behind by one that faults or is closed, whose windows are
+  freed the same way, and the part itself goes with the instance.
+
+**Not done:** the atoms are 16 for the whole instance, clipboard formats
+and DDE among them, and a property name takes one for as long as the
+instance lives. A program that makes a new string name a window would
+exhaust them; Arcade's names are a handful, shared by every window of a kind.
+
+**Checked by** `tests/win16/props16.c` (Open Watcom, `make win16fixtures`),
+which sets, gets, replaces, enumerates and removes string- and atom-named
+properties and checks that a destroyed window's are gone, as a leg of the
+`win16user` row.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one
