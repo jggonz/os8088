@@ -40,19 +40,40 @@ LINE = re.compile(r"^\[(?P<key>[^\]]+)\]\s+\S+\s+STATUS:\s*(?P<st>[A-Z]+)(?P<res
 EST = re.compile(r"~(\d+)\s*m")
 
 
-def last_status(path):
-    """(key, status, text, estimate_minutes) of the log's last STATUS line."""
+def active_agents(path):
+    """[(key, text, estimate_minutes)] for every agent in the log still at work.
+
+    A log can hold several agents (an implementer and then its verifier), so
+    each [key] is followed on its own. DONE and FAILED are STICKY: a later
+    PROGRESS line from the same key (an ACK, a note) does not reopen it; only
+    STARTED or RUNNING does. BLOCKED is terminal until the agent writes
+    anything after it (the ACK of an answer means it is working again)."""
     try:
         with open(path, errors="replace") as f:
             lines = f.read().splitlines()
     except OSError:
-        return None
-    for ln in reversed(lines):
+        return []
+    state = {}                        # key -> (state, text, est)
+    for ln in lines:
         m = LINE.match(ln.strip())
-        if m:
-            est = EST.search(m["rest"]) if m["st"] == "RUNNING" else None
-            return m["key"], m["st"], ln.strip(), int(est[1]) if est else 0
-    return None
+        if not m:
+            continue
+        key, st = m["key"], m["st"]
+        est = EST.search(m["rest"]) if st == "RUNNING" else None
+        est = int(est[1]) if est else 0
+        prev = state.get(key, ("active", "", 0))[0]
+        if st in ("DONE", "FAILED"):
+            new = "done"
+        elif st == "BLOCKED":
+            new = "blocked"
+        elif st in ("STARTED", "RUNNING"):
+            new = "active"
+        else:                         # PROGRESS and anything else
+            new = "done" if prev == "done" else "active"
+        if st != "RUNNING" and new == "active" and prev == "active":
+            est = state.get(key, ("", "", 0))[2]  # PROGRESS keeps the RUNNING estimate
+        state[key] = (new, ln.strip(), est)
+    return [(k, t, e) for k, (s, t, e) in state.items() if s == "active"]
 
 
 def newest_write(tree):
@@ -131,28 +152,26 @@ def main():
                 continue
             stem = name[:-4]
             path = os.path.join(logs, name)
-            st = last_status(path)
-            if st is None or st[1] in TERMINAL:
-                reported.pop(stem, None)
-                continue
-            key, status, text, est = st
             tree = trees.get(stem)
-            if tree and tree in busy:
-                continue
-            last = os.stat(path).st_mtime
-            if tree:
-                last = max(last, newest_write(tree))
-            limit = max(a.stale, est + 5) * 60
-            idle = now - last
-            if idle < limit:
-                reported.pop(stem, None)
-                continue
-            if stem in reported and now - reported[stem] < limit:
-                continue
-            reported[stem] = now
-            where = f"; nothing running or written in {tree}" if tree else ""
-            print(f"STALL {key} ({name}): {idle / 60:.0f} min quiet since "
-                  f"'{text[:160]}'{where}", flush=True)
+            for key, text, est in active_agents(path):
+                tag = f"{stem}:{key}"
+                if tree and tree in busy:
+                    reported.pop(tag, None)
+                    continue
+                last = os.stat(path).st_mtime
+                if tree:
+                    last = max(last, newest_write(tree))
+                limit = max(a.stale, est + 5) * 60
+                idle = now - last
+                if idle < limit:
+                    reported.pop(tag, None)
+                    continue
+                if tag in reported and now - reported[tag] < limit:
+                    continue
+                reported[tag] = now
+                where = f"; nothing running or written in {tree}" if tree else ""
+                print(f"STALL {key} ({name}): {idle / 60:.0f} min quiet since "
+                      f"'{text[:160]}'{where}", flush=True)
         if a.once:
             return 0
         time.sleep(a.interval)

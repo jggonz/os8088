@@ -101,3 +101,14 @@ Nothing was lost only because both agents reported it in their logs.
 
 **Rule:** COMMON.md forbids `git stash` outright. Baselines come from copied
 build outputs or a private `BUILD=` tree; work in progress is committed.
+
+## The watchdog's first version read only a log's last line
+
+**PCIETHER.** A verifier logged `DONE`, then `PROGRESS ACK D4` for a rule
+sent after it had finished, and the watchdog called the finished agent
+stalled. A `[test]` line the lead had appended to check the log Monitor was
+a second false stall.
+
+**Rule:** the watchdog follows each `[key]` on its own; DONE and FAILED stick
+until a STARTED or RUNNING, and BLOCKED reopens on any line. Test it against a
+scratch directory, never by appending to the live logs.

@@ -140,8 +140,11 @@ It prints `STALL <key> ...` once when an agent's last status is not DONE,
 FAILED or BLOCKED and, for ten minutes (or a `RUNNING ~<N>m` estimate plus
 five), its log has had no new line, nothing in its worktree was written or
 committed, and no process is running there. Re-arm it on expiry as you would
-the log Monitor. Run it once by hand with `--once --stale 1` against a log you
-wrote yourself, so you know it fires.
+the log Monitor. Run it once by hand with `--once --stale 1` against a scratch directory of
+logs you wrote yourself (never append test lines to the live logs: an
+unfinished `[test]` key is itself a stall), so you know it fires. Log the
+lead's own long runs to a `lead.log` with no `--worktree`, so they are
+watched too and never charged to an agent.
 
 **On a `STALL` line, nudge at once; do not wait to be asked.** Look once at
 the worktree (`git status --short`, `git log -1`, whether a make or emulator
