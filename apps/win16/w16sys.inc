@@ -377,17 +377,15 @@ W16LIB w16u_getclsname
     jc .zero
     jcxz .zero
     dec cx                          ; room for the NUL
-    mov al, [bx + W16W_KIND]
-    or al, al
-    jnz .ours
-    mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls + W16C_NAME
+    mov al, [bx + W16W_CLS]         ; a class of the program's - also a
+    cmp al, 0xFF                    ;   window of one that became a control
+    je .ours                        ;   (SPEC.md 124.25.18) - else WIN16's
+    ICALL w16_clsget                ; (W16C_NAME is 0)
     mov si, ax
     mov dx, 16
     jmp short .copy
 .ours:
+    mov al, [bx + W16W_KIND]
     xor ah, ah
     dec ax
     shl ax, 1

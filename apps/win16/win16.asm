@@ -71,7 +71,7 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 12             ; classes (SPEC.md 124.8; File Manager 3.0
+W16_MAXCLS   equ 64             ; classes (SPEC.md 124.8; File Manager 3.0
                                 ;   registers 9, SPEC.md 124.27)
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
@@ -80,7 +80,9 @@ W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16Q_NWIN    equ 16             ; selectors a program may make (124.31.6)
 W16Q_NDOS    equ 4              ; GlobalDOSAlloc's blocks at once (124.31.3)
-W16C_SIZE    equ 32             ; a class record
+W16C_SIZE    equ 32             ; a class record...
+W16C_STRIDE  equ 33             ; ...and its task byte: a record in the class
+                                ;   block (SPEC.md 124.25.18.1)
 W16W_SIZE    equ 102            ; a window record
 W16_MAXTASK  equ 4              ; Windows programs in one instance, its
                                 ;   tasks (SPEC.md 124.28.1)
@@ -133,7 +135,7 @@ W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
 W16_NPROP    equ 32             ; window properties at once (w16mdi.inc,
                                 ;   SPEC.md 124.25.13)
 W16_NPNMAX   equ 16             ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
+W16_NFIXED   equ 15             ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
 W16_X87ROW   equ 2              ;   the emulator's missing instruction,
@@ -142,6 +144,8 @@ W16_LMROW    equ 4              ;   the libraries' LibMain (124.23.4),
 W16_SLROW    equ 5              ;   a discarded segment's thunk (124.26.2),
 W16_CWROW    equ 6              ;   and CreateWindow and DestroyWindow, which
 W16_DWROW    equ 7              ;   MDICLIENT calls back through (124.27.2)
+W16_CTLK     equ 7              ; ...and slots 8-14, a control CLASS's entry:
+                                ;   W16_CTLK + its W16Q_ kind (124.25.18)
 W16_NLIB     equ 8              ; a program's own libraries loaded at once
 W16_LDEPTH   equ 4              ; ...and how deep one may import another
 W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its
@@ -498,7 +502,10 @@ section .w16dlg
     W16BSS w16_namebuf, 16      ; a class name, folded
     W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
     W16BSS w16_cwslot, 2
-    W16BSS w16_cls, W16_MAXCLS * W16C_SIZE
+    W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet
+                                ;   (SPEC.md 124.25.18.1), and the one record
+    W16BSS w16_ccb, W16C_STRIDE  ;   copied out of it, w16_clsget's
+    W16BSS w16_cbi, 1           ;   ...and its index
     W16BSS w16_wnd, W16_MAXWND * W16W_SIZE
     W16BSS w16_q, W16_QLEN * MSG_SIZE
     W16BSS w16_qhead, 1
@@ -1250,7 +1257,6 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
                                 ;   to w16t_post, which runs one to it there
                                 ;   (SPEC.md 124.33.2). Next to w16_ntk on purpose
     W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
-    W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -1584,8 +1590,9 @@ w16_freeprog:
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
-    xor ax, ax                      ; the USER heap went with the arenas
+    xor ax, ax                      ; the USER heap went with the arenas,
     mov [w16_mseg], ax
+    mov [w16_clsseg], ax            ;   and the class block (124.25.18.1)
     mov [w16_msys], ax
     mov [w16_mtrk], al
     mov [w16_mlev], al
@@ -2533,6 +2540,8 @@ w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
     db w16f_a_%[k]
   %ifdef w16lib_%[w16f_p_%[k]]
     db W16P_LIB
+  %elifdef w16sys_%[w16f_p_%[k]]
+    db W16P_SYS                 ; (w16_ctlkrow, SPEC.md 124.25.18)
   %else
     db 0
   %endif

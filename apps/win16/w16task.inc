@@ -13,10 +13,6 @@
 
 section .w16tsk
 
-%if W16C_SIZE != 32
-  %error "w16u_regclass's class index is a shift by 5"
-%endif
-
 ; -----------------------------------------------------------------------------
 ; The context list (SPEC.md 124.28.2): the bss ranges that belong to a task,
 ; each as its start and its length. What lives across a wait (w16_tohost)
@@ -657,19 +653,22 @@ W16TSK w16t_end
     inc cx
     cmp cx, W16_MAXWND
     jb .w
-    mov bx, w16_cls                 ; its classes
-    xor si, si
+    mov ax, [w16_clsseg]            ; its classes (none made: no block)
+    or ax, ax
+    jz .cx
+    mov es, ax
+    xor bx, bx
 .c:
     mov al, [cs:w16t_dead]
-    cmp [w16_ctask + si], al
+    cmp [es:bx + W16C_TASK], al
     jne .cn
-    mov byte [w16_ctask + si], 0
-    mov byte [bx + W16C_NAME], 0
+    mov byte [es:bx + W16C_TASK], 0
+    mov byte [es:bx + W16C_NAME], 0
 .cn:
-    add bx, W16C_SIZE
-    inc si
-    cmp si, W16_MAXCLS
+    add bx, W16C_STRIDE
+    cmp bx, W16_MAXCLS * W16C_STRIDE
     jb .c
+.cx:
     mov bx, w16_tmr                 ; its timers with no window
     mov cx, W16_MAXTMR
 .t:
@@ -1298,9 +1297,7 @@ w16t_hfind:
     cmp byte [bx + W16W_KIND], W16Q_PROG
     jne .n
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    ICALL w16_clsget
     mov si, ax                      ; a class's name: upper case, NUL-padded
     mov di, w16t_s_wh               ; XSEC-OK: part 10's, compared through cs:
     push cx
