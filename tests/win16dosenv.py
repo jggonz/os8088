@@ -4,7 +4,7 @@
     python3 tests/win16dosenv.py             (row win16dosenv)
     python3 tests/win16dosenv.py --keep      leave the QEMU for a look
 
-*As a user, Microsoft Mozart (Visual Basic 3.0) loads BMUTILS.DLL instead of
+*As a user, Microsoft Mozart (Visual Basic 3.0) loads SPUSH.VBX instead of
 being closed with a protection fault in the library's C start-up.*
 
 DOSENV.EXE (tests/win16/dosenv.c, `make win16fixtures`) asks for the

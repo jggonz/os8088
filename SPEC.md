@@ -237321,17 +237321,18 @@ bytes on `kern_mega`), so a heap that never fills never fetches it.
 
 #### 124.25.20 `GetDOSEnvironment` answers SELECTOR:0 *(WIN16-NEXT `vbxlib`)*
 
-Microsoft Mozart (Visual Basic 3.0) loads `BMUTILS.DLL` after its custom
-controls, and the library's Microsoft C start-up died there. The start-up
+Microsoft Mozart (Visual Basic 3.0) loads its custom controls, `RTFCC.VBX`
+and then `SPUSH.VBX`, and the second library's Microsoft C start-up died. The start-up
 calls `LocalInit`, `GetVersion`, `int 21h AH=30h` and `GetDOSEnvironment`,
 then reads the answer as `or ax, ax` / `jz .a` / `mov dx, ax`, `mov es, dx`,
 and scans ES:0 for the double NUL that ends the list. WIN16 had answered
 the far pointer of a word in its own part: AX = the word's offset (nonzero),
 DX = the part's code selector. The start-up took AX for the segment, loaded
 ES with 00B7h and took #GP 0D at the `mov es, dx` (278C:13D1 of the
-library, named by reading the library's code selector's base out of the
-LDT and the code at it). Other libraries of the family (`MSGBLAST.VBX`,
-`PICCLIP.VBX`) read the answer the other way round (a nonzero AX means
+library, found by reading the faulting code selector's base out of the LDT
+while the program ran, and matching the code at it with `SPUSH.VBX`'s
+segment 1, function 13C0h, whose `mov es, dx` is at 13D1h). Other libraries
+of the family (`MSGBLAST.VBX`, `PICCLIP.VBX`) read the answer the other way round (a nonzero AX means
 *no environment*), which is why they went through and this one did not.
 
 Windows answers the task's environment as a pointer whose offset is **0** and

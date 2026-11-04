@@ -1,6 +1,6 @@
 /* dosenv.c - WIN16 fixture (SPEC.md 124.25.20, WIN16-NEXT `vbxlib`):
  * GetDOSEnvironment answers a pointer whose OFFSET is 0 and whose selector
- * is readable, as Windows does. Microsoft Mozart's BMUTILS.DLL (a Microsoft C
+ * is readable, as Windows does. Microsoft Mozart's SPUSH.VBX (a Microsoft C
  * start-up) takes a nonzero offset for a segment and loads it into ES, which
  * faults; MSGBLAST.VBX takes a nonzero offset for "no environment".
  *

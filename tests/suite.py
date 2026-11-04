@@ -17182,7 +17182,7 @@ SOAK = [
         "win16fixtures`, tests/win16/dosenv.c) asks GetDOSEnvironment for the "
         "task's environment: the offset must be 0, the selector readable (a C "
         "start-up that loads a nonzero AX into ES faulted Mozart's "
-        "BMUTILS.DLL), the list must end at a double NUL followed by the word "
+        "SPUSH.VBX), the list must end at a double NUL followed by the word "
         "1, and a second call must answer the same block; its MessageBox "
         "must be DOSENV OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
