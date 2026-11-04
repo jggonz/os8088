@@ -232686,10 +232686,16 @@ is KNOWN to start, and follows the control flow:
 A far call or jump (`9A`/`EA`) is followed to the program's own segment it
 names: by a far-pointer relocation on its operand, or by a SELECTOR-ONLY
 relocation (`RA_SEGMENT`) on the segment word, in which case the offset is the
-literal in the code. The machine reads both from the relocated operand and so
-always followed the second; the host did not until Windows 3.1's Media Player
-and Sound Recorder (`9A 70 14 <seg>` in segment 1) disagreed on 1,138 and
-1,108 bytes (WIN16-NEXT-PLAN Q8).
+literal in the code. The segment a selector-only relocation names is the
+loader's: a fixed segment number's, or a MOVABLE entry's own segment (its
+offset is not used), and an ADDITIVE one names it only when the word in the
+file is 0, the one case the loader writes a selector there (`w16_site`,
+Borland's additive selector at zero); any other additive word is left as the
+file has it, names no segment of the program and is not followed. The machine
+reads all of these from the relocated operand and so always followed them; the
+host did not until Windows 3.1's Media Player and Sound Recorder
+(`9A 70 14 <seg>` in segment 1) disagreed on 1,138 and 1,108 bytes
+(WIN16-NEXT-PLAN Q8).
 
 Two instructions end a path besides `ret`/`jmp`: a far call to
 `KERNEL.FatalExit`/`FatalAppExit`, and `int 21h` after `mov ah, 4Ch`.

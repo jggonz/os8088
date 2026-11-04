@@ -227,7 +227,12 @@ def segimage(ne, s, base):
         for k, v in words.get(at, ()):
             if site + k + 2 > len(buf):
                 continue
-            if site in adds:
+            if site in adds and at == os88ne.RA_SEGMENT:
+                # w16_site's `.asel`: Borland's additive selector at zero is
+                # written, any other is left as the file has it
+                if not struct.unpack_from("<H", buf, site + k)[0]:
+                    struct.pack_into("<H", buf, site + k, v)
+            elif site in adds:
                 addw(buf, site + k, v)
             else:
                 struct.pack_into("<H", buf, site + k, v)
