@@ -2816,13 +2816,12 @@ def budget_rows(bud):
     for c in bud["clips"]:
         w = c["with_music"]
         tag = "over" if w > 1.0 else "near" if w > 0.85 else ""
-        if c.get("loop") and not c["fits_ring"]:
-            tag = "over"                # a loop goes round in ONE ring
+
         rows.append(((c.get("id", c["name"]), "%d" % (c["bytes"] // 1024),
                       "%.1f" % c["secs"], "%.1f" % (c["rate"] / 1024),
                       "%.0f%%" % (w * 100), "%.2f" % c["head_secs"],
                       "yes" if c["fits_ring"] else
-                      "TOO BIG" if c.get("loop") else "streams",
+                      "read round" if c.get("loop") else "streams",
                       " ".join(map(str, c["anchors"])) or "-",
                       "-" if c["wait"] is None or not c["anchors"]
                       else "%d" % c["wait"]), tag))

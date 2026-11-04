@@ -87,6 +87,8 @@ VH_TITLE    equ 330             ; the title loop's clip, FFh none
 VH_LEAVE    equ 331             ; FFh: the title is left by a fade
 VH_ENDS     equ 332             ; victory, defeat: (how, end loop) bytes
 VH_FSTEPS   equ 336             ; a fade's steps, 1..16
+VH_IDLE     equ 338             ; dword offset, dword length: the IDLE loop's
+                                ; records, by paragraph (format 7)
 EH_HOLD     equ 0
 EH_FADE     equ 1
 EH_JOIN     equ 2
@@ -159,7 +161,35 @@ RG_POFS     equ 50
 RG_END      equ 52              ; the segment of its end (its guard's start)
 RG_PARA     equ 54              ; its size: paragraphs...
 RG_BYTES    equ 56              ; ...and bytes (a dword)
-RG_SIZE     equ 60
+RG_FOFF     equ 60              ; dword: the next read's place in the stream
+                                ; - the fill's, but for a loop read ROUND,
+                                ; which goes back to its lap (format 7)
+RG_LCSET    equ 64              ; ...the cursor at its lap's start is kept
+RG_LCUR     equ 66              ; ...here: a lap read again is not a seek
+RG_SIZE     equ RG_LCUR + FSEQ_SIZE
+VC_LAP      equ 18              ; a loop's lap: dword offset in its stream,
+VC_LAPK     equ 22              ; ...and its length in 4 KB
+
+; VB_STRM ring, row - ZF=0 (jnz) when clip ROW in ring RING is a loop too big
+; to be held in its ring, which the reader reads round. AX, DX spent
+%macro VB_STRM 2
+    test word [%2+VC_FLAGS], CF_LOOP
+    jz %%out
+    mov ax, [%2+VC_LEN]
+    mov dx, [%2+VC_LEN+2]
+    add ax, VB_PIECE
+    adc dx, 0
+    cmp dx, [%1+RG_BYTES+2]
+    jne %%cmp
+    cmp ax, [%1+RG_BYTES]
+%%cmp:
+    mov ax, 0                       ; (flags kept)
+    jbe %%no
+    inc ax
+%%no:
+    or ax, ax
+%%out:
+%endmacro
 
 ; the hook's modes
 VM_OFF      equ 0
@@ -463,10 +493,12 @@ vb_tmark:
     popf
     ret
 
-; vb_entpara - AX = the entries' paragraphs, rounded to 4 KB. DX spent
+; vb_entpara - AX = the paragraphs of the region whose (offset, length)
+; dwords are at header offset DI (the entries', the idle loop's), rounded
+; to 4 KB. DX spent
 vb_entpara:
-    mov ax, [vb_meta+VH_ENT+4]
-    mov dx, [vb_meta+VH_ENT+6]
+    mov ax, [vb_meta+di+4]
+    mov dx, [vb_meta+di+6]
     add ax, 4095
     adc dx, 0
     and ax, 0xF000
@@ -477,15 +509,15 @@ vb_entpara:
     loop .s
     ret
 
-; vb_entload - the entries into their part of the resident claim, 32 KB a
-; read, each read's segment on by its length. CF=1 a read failed
+; vb_entload - the region at header offset DI (the entries, the idle loop)
+; into its part of the resident claim at segment AX, 32 KB a read, each
+; read's segment on by its length. CF=1 a read failed
 vb_entload:
+    mov [vb_enext], ax
     call vb_entpara
     mov [vb_eleft], ax              ; paragraphs to go
-    mov ax, [vb_eseg]
-    mov [vb_enext], ax
-    mov ax, [vb_meta+VH_ENT]
-    mov dx, [vb_meta+VH_ENT+2]
+    mov ax, [vb_meta+di]
+    mov dx, [vb_meta+di+2]
 .r:
     mov cx, [vb_eleft]
     jcxz .ok
@@ -592,7 +624,7 @@ vb_load:
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    cmp word [vb_meta+VH_VER], 6
+    cmp word [vb_meta+VH_VER], 7
     jne .fail1
     mov ax, [vb_meta+VH_NCLIPS]
     or ax, ax
@@ -644,8 +676,14 @@ vb_load:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
     mov [vb_pent], ax               ; the entries: as many 4 KB as they
-    call vb_entpara                 ; take, in paragraphs
+    mov di, VH_ENT                  ; take, in paragraphs
+    call vb_entpara
     add ax, [vb_pent]
+    jc .fail1
+    mov [vb_pidl], ax               ; the idle loop's records, the same way
+    mov di, VH_IDLE                 ; (format 7)
+    call vb_entpara
+    add ax, [vb_pidl]
     jc .fail1
     mov [vb_pimg], ax               ; the band's pictures (125.5)
     mov cx, [vb_meta+VH_IMG+4]
@@ -669,6 +707,9 @@ vb_load:
     mov ax, dx
     add ax, [vb_pent]
     mov [vb_eseg], ax
+    mov ax, dx
+    add ax, [vb_pidl]
+    mov [vb_idseg], ax
     mov ax, dx
     add ax, [vb_pimg]
     mov [vb_iseg], ax
@@ -701,7 +742,13 @@ vb_load:
     call vb_read
     jc .fail1
 .read:
-    call vb_entload                 ; the entries, 32 KB a read
+    mov di, VH_ENT                  ; the entries, 32 KB a read
+    mov ax, [vb_eseg]
+    call vb_entload
+    jc .fail1
+    mov di, VH_IDLE                 ; the idle loop
+    mov ax, [vb_idseg]
+    call vb_entload
     jc .fail1
     mov cx, [vb_meta+VH_IMG+4]      ; the band's pictures
     jcxz .noimg
@@ -794,6 +841,9 @@ vb_rreset:
     mov [bx+RG_POFF], ax
     mov [bx+RG_POFF+2], ax
     mov [bx+RG_POFS], ax
+    mov [bx+RG_FOFF], ax
+    mov [bx+RG_FOFF+2], ax
+    mov [bx+RG_LCSET], al
     mov [bx+RG_PLAY], al
     mov [bx+RG_VDONE], al
     mov [bx+RG_ADONE], al
@@ -965,6 +1015,8 @@ vb_rpiece:
     xor ah, ah
     mov bx, ax
     call vb_crec
+    VB_STRM ds:bp, si               ; a loop read round is never all read
+    jnz .some
     mov ax, [ds:bp+RG_FILL]         ; all of it read?
     mov dx, [ds:bp+RG_FILL+2]
     cmp dx, [si+VC_LEN+2]
@@ -1009,8 +1061,8 @@ vb_rpiece:
     mov [vb_pn], ax
     mov ax, [si+VC_LEN]             ; and no further than the clip's last
     mov dx, [si+VC_LEN+2]           ; piece: the last clip in the bundle
-    sub ax, [ds:bp+RG_FILL]         ; ends at the file's end, and a read
-    sbb dx, [ds:bp+RG_FILL+2]       ; past that fails - every time, as the
+    sub ax, [ds:bp+RG_FOFF]         ; ends at the file's end, and a read
+    sbb dx, [ds:bp+RG_FOFF+2]       ; past that fails - every time, as the
     jnz .p2                         ; reader asked again (asked before it
     cmp ax, [vb_pn]                 ; is rounded: 61,441 and up laps)
     jae .p2
@@ -1018,8 +1070,27 @@ vb_rpiece:
     and ax, 0 - VB_PIECE
     mov [vb_pn], ax
 .p2:
-    mov ax, [ds:bp+RG_FILL]         ; the file offset
-    mov dx, [ds:bp+RG_FILL+2]
+    VB_STRM ds:bp, si               ; A LOOP READ ROUND, at its lap's start
+    jz .p3                          ; for the first time: its cursor kept,
+    cmp byte [ds:bp+RG_LCSET], 0    ; to go round with and no seek
+    jne .p3
+    mov ax, [ds:bp+RG_FOFF]
+    cmp ax, [si+VC_LAP]
+    jne .p3
+    mov ax, [ds:bp+RG_FOFF+2]
+    cmp ax, [si+VC_LAP+2]
+    jne .p3
+    push si
+    push di
+    lea si, [ds:bp+RG_CUR]
+    lea di, [ds:bp+RG_LCUR]
+    call vb_ccopy
+    pop di
+    pop si
+    mov byte [ds:bp+RG_LCSET], 1
+.p3:
+    mov ax, [ds:bp+RG_FOFF]         ; the file offset
+    mov dx, [ds:bp+RG_FOFF+2]
     add ax, [si+VC_OFF]
     adc dx, [si+VC_OFF+2]
     mov es, [ds:bp+RG_FSEG]
@@ -1101,6 +1172,33 @@ vb_rpiece:
     mov cx, RH_SIZE
     call vb_gcopy
 .pdone:
+    mov ax, [vb_pn]                 ; the next read's place: on, or for a
+    add [ds:bp+RG_FOFF], ax         ; loop read round at its lap's end back
+    adc word [ds:bp+RG_FOFF+2], 0   ; to the lap, its cursor with it
+    mov al, [ds:bp+RG_CLIP]
+    xor ah, ah
+    mov bx, ax
+    call vb_crec
+    VB_STRM ds:bp, si
+    jz .pf
+    mov ax, [ds:bp+RG_FOFF]
+    mov dx, [ds:bp+RG_FOFF+2]
+    cmp dx, [si+VC_LEN+2]
+    jb .pf
+    ja .pw
+    cmp ax, [si+VC_LEN]
+    jb .pf
+.pw:
+    mov ax, [si+VC_LAP]
+    mov [ds:bp+RG_FOFF], ax
+    mov ax, [si+VC_LAP+2]
+    mov [ds:bp+RG_FOFF+2], ax
+    push di
+    lea si, [ds:bp+RG_LCUR]
+    lea di, [ds:bp+RG_CUR]
+    call vb_ccopy
+    pop di
+.pf:
     pushf                           ; the fill on: published last, and whole
     cli                             ; (the hook reads it)
     mov ax, [vb_pn]
@@ -1120,6 +1218,17 @@ vb_rpiece:
     pop bp
     pop di
     pop si
+    ret
+
+; vb_ccopy - a file cursor (FSEQ_SIZE bytes) DS:SI to DS:DI. AX, CX spent
+vb_ccopy:
+    push es
+    push ds
+    pop es
+    mov cx, FSEQ_SIZE / 2
+    cld
+    rep movsw
+    pop es
     ret
 
 ; vb_gcopy - CX bytes from the start of ring DS:BP to past its end: a
@@ -1380,8 +1489,6 @@ vb_main:
     call vb_palette
     call vb_rclaim                  ; the clip rings, all there is (125.4)
     jc .out
-    call vb_lfits                   ; a loop goes round in one (125.3.1)
-    jc .rout
     call vb_rstart                  ; ...and the first opening's head
     jc .rout
     call vb_game_init
@@ -1576,6 +1683,11 @@ vb_start_clip:
     mov [vb_cexit], ax
     test word [vb_cflags], CF_LOOP
     jz .nl
+    VB_STRM bx, si                  ; held in its ring, or read round
+    mov byte [vb_lstream], 0
+    jz .ls
+    mov byte [vb_lstream], 1
+.ls:
     mov ax, [si+VC_NREC]            ; A LOOP: its lap is records 1..n, from
     dec ax                          ; record 0's end in its ring (it fits
     mov [vb_lnrec], ax              ; whole, from the ring's start)
@@ -1593,10 +1705,13 @@ vb_start_clip:
 ; vb_lrewind - the loop in ring BX back to its lap's start: the picture's
 ; cursor at record 1, its frame 0 on the glass (the seam drew it). The hook's
 vb_lrewind:
+    cmp byte [vb_lstream], 0        ; (READ ROUND: the cursor goes on, the
+    jne .on                         ; ring holds the next lap after this)
     push di
     mov di, RG_VOFF
     call vb_lcur
     pop di
+.on:
     mov ax, [vb_lnrec]
     mov [vb_cleft], ax
     mov word [vb_cfr], 1
@@ -1871,8 +1986,9 @@ vb_frame:
     shl si, 1
     add si, [vb_meta+VH_IDLETAB]
     mov es, [vb_vres]
-    mov si, [es:si]
-    mov dx, es
+    mov dx, [es:si]                 ; its record's paragraph (format 7)
+    add dx, [vb_idseg]
+    xor si, si
     call vb_decode
     clc
     ret
@@ -2354,10 +2470,13 @@ vb_anext:
     jz .ao                          ; goes round with it
     cmp byte [bx+RG_VDONE], 0
     jne .ao
+    cmp byte [vb_lstream], 0
+    jne .as
     push di
     mov di, RG_AOFF
     call vb_lcur
     pop di
+.as:
     mov ax, [vb_lnrec]
     mov [vb_aleft], ax
     ret
@@ -2803,6 +2922,8 @@ vb_reader:
     mov bx, ax
     call vb_crec
     pop bx
+    VB_STRM bx, si                  ; (a loop read round: always more)
+    jnz .pyes
     mov ax, [bx+RG_FILL]
     mov dx, [bx+RG_FILL+2]
     cmp dx, [si+VC_LEN+2]
@@ -3092,6 +3213,10 @@ VB_VAR vb_fvol, 1                   ; the sound's shift, 4 silent
 VB_VAR vb_frows, 2
 VB_VAR vb_fticks, 2                 ; the hook's frames since it began
 VB_VAR vb_rsring, 2
+VB_VAR vb_pidl, 2                   ; the idle loop's part of the claim
+VB_VAR vb_idseg, 2                  ; ...and its segment
+VB_VAR vb_lstream, 1                ; the loop playing STREAMS (too big to
+                                    ; hold in its ring: format 7)
 VB_VAR vb_zstart, 0
 VB_VAR vb_rng, 2
 VB_VAR vb_hp, 8

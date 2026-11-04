@@ -308,13 +308,14 @@ with tempfile.TemporaryDirectory() as tdir:
        ["clips", "openings", "battle", "enemy", "party"],
        "a check's place sends the window to its tab")
     # THE MEMORY: the arithmetic against the engine's own rings, MEASURED
-    # on MartyPC's XT for the rules battle (VB_FREE_SRC): 144 KB each
+    # on MartyPC's XT for the rules battle (VB_FREE_SRC): 140 KB each
     import vbtrulesdemo as D
     rdata, _ = D.bundle(D.make_project())
     mem = A.memory(rdata)
-    ok(mem["ring"] == 144 * 1024 and mem["resident"] == 116 * 1024,
-       "the rules battle: a 116 KB resident claim, rings of 144 KB - the "
-       "engine's own on a 640 KB XT (%s, %s)" % (mem["resident"], mem["ring"]))
+    ok(mem["ring"] == 140 * 1024 and mem["resident"] == 120 * 1024,
+       "the rules battle: a 120 KB resident claim, rings of 140 KB - the "
+       "engine's own on a 640 KB XT, measured at format 7 (%s, %s)"
+       % (mem["resident"], mem["ring"]))
     ok(A.memory(rdata, free_kb=250)["ring"] is None,
        "...and with 250 KB free, no ring of 48 KB: Not enough memory")
     pr = P.Project.load(vbp)
@@ -387,7 +388,7 @@ with tempfile.TemporaryDirectory() as tdir:
         B2.verify(bytes(bad), quiet=True)
         ok(False, "a title whose lap is broken is refused")
     except ValueError as e:
-        ok("loop" in str(e) or "title" in str(e) or "join" in str(e),
+        ok(any(w in str(e) for w in ("loop", "title", "join", "lists end")),
            "a title whose lap is broken is refused: %s" % e)
     pr.set_ending("victory", "join", None)
     ok(any(x.where == "endings.victory" for x in pr.errors()),

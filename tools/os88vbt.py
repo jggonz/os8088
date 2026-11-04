@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 6
+VERSION = 7
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
@@ -137,13 +137,27 @@ def rec(a, b, rows, audio=b""):
     return struct.pack("<HH", n, len(audio)) + lists + audio
 
 
+def rec_pad(r, k):
+    """Record R with K zero bytes after its lists, before its sound: a
+    loop's lap padded to whole 4 KB (format 7). The decoder ends at its
+    tenth list and never reads them"""
+    if not k:
+        return r
+    n, alen = struct.unpack_from("<HH", r, 0)
+    if n + k > REC_MAX:
+        raise ValueError("a padded record of %d bytes, over %d" % (n + k, REC_MAX))
+    return struct.pack("<HH", n + k, alen) + r[4:n - alen] + bytes(k) + \
+        r[n - alen:]
+
+
 EMPTY_LISTS = bytes(V.NLISTS)       # ten empty lists: a frame of sound only
 
 
 def decode(surf, r):
     n, alen = struct.unpack_from("<HH", r, 0)
     used = V.decode_lists(surf, r[REC_HDR:n - alen])
-    if used != n - alen - REC_HDR:
+    if used != n - alen - REC_HDR and \
+            any(r[REC_HDR + used:n - alen]):    # (a loop's PADDING: zeros)
         raise ValueError("a record's lists end at %d of %d"
                          % (used, n - alen - REC_HDR))
 
@@ -245,12 +259,17 @@ def build(b):
     n = len(idle_s)
     if n < 2:
         raise ValueError("an idle loop of %d frames" % n)
-    # --- the video resident block: the idle loop's records, the entries
+    # --- the IDLE loop's records, a region of their own named by PARAGRAPH
+    # (format 7, VBATTLE-MEMORY-PLAN 3.4): resident, bounded by memory and
+    # not by the block's 16-bit offsets. The block keeps the tables
     vres = bytearray()
+    idle = bytearray()
     idle_off = []
     for i in range(n):
-        idle_off.append(len(vres))
-        vres += rec(idle_s[i - 1], idle_s[i], rows)
+        idle_off.append(len(idle) >> 4)
+        idle += pad(rec(idle_s[i - 1], idle_s[i], rows), 16)
+        if len(idle) > ENT_MAX:
+            raise ValueError("the idle loop is over %d bytes" % ENT_MAX)
     clip_rows, regions = [], []
     maxrec = [0]
 
@@ -347,11 +366,26 @@ def build(b):
         for i in range(1, len(ss)):
             recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))
         recs.append(rec(ss[-1], ss[0], rw, snd[0]))
+        # ...laid out to be read ROUND (format 7, VBATTLE-MEMORY-PLAN 3.1):
+        # record 0 padded to end on 4 KB, the lap a whole number of 4 KB,
+        # the padding inside records past their lists
+        recs[0] = rec_pad(recs[0], -len(recs[0]) % ALIGN)
+        lap = sum(len(r) for r in recs[1:])
+        need = -lap % ALIGN
+        for i in range(len(recs) - 1, 0, -1):   # the seam first, then back
+            room = REC_MAX - len(recs[i])
+            if need and room > 0:
+                k = min(room, need)
+                recs[i] = rec_pad(recs[i], k)
+                need -= k
+        if need:
+            raise ValueError("loop %s: no room to pad its lap" % lp["name"])
         flags = CF_LOOP | (CF_FULL if full else 0) | \
             (CF_OWNSND if lp.get("sound") is not None else 0)
         regions.append(stream(recs))
         clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
-                              exit=0, anch=[]))
+                              exit=0, anch=[], lap=(len(recs[0]),
+                              sum(len(r) for r in recs[1:]) // ALIGN)))
         loop_ix[key] = len(clip_rows) - 1
         return loop_ix[key]
     title_ix = loop_clip(b.title, True) if b.title else NO_SFX
@@ -369,7 +403,7 @@ def build(b):
         for k, o in c["anch"]:
             vres += struct.pack("<HH", k, o)
     idle_tab = len(vres)
-    vres += struct.pack("<%dH" % n, *idle_off)
+    vres += struct.pack("<%dH" % n, *idle_off)     # (paragraphs in IDLE)
     if len(vres) > REGION_MAX:
         raise ValueError("the video resident block is %d bytes, over %d"
                          % (len(vres), REGION_MAX))
@@ -402,7 +436,8 @@ def build(b):
     mus_at = vres_at + len(pad(vres, ALIGN))
     ui_at = mus_at + len(pad(mus, ALIGN))
     ent_at = ui_at + len(pad(uib, ALIGN))
-    img_at = ent_at + len(pad(ents, ALIGN))
+    idl_at = ent_at + len(pad(ents, ALIGN))
+    img_at = idl_at + len(pad(idle, ALIGN))
     imgs = bytes(b.images)
     pos = img_at + len(pad(imgs, ALIGN))
     offs = []
@@ -433,6 +468,7 @@ def build(b):
     struct.pack_into("<II", h, 88, ent_at, len(ents))
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
+    struct.pack_into("<II", h, 338, idl_at, len(idle))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
         h[192 + 8 * i:200 + 8 * i] = nm.upper().encode()[:8].ljust(8, b" ")
@@ -445,6 +481,8 @@ def build(b):
         struct.pack_into("<IIHHHHH", ct, at, offs[i], len(regions[i]),
                          c["nrec"], c["flags"], c["exit"], c["anchtab"],
                          len(c["anch"]))
+        if c.get("lap"):            # a loop's lap: where, and its 4 KBs
+            struct.pack_into("<IH", ct, at + 18, *c["lap"])
         ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
 
     meta = bytearray(h) + ct + bytes(b.rules)
@@ -452,7 +490,8 @@ def build(b):
     meta = bytes(meta).ljust(meta_len, b"\0")    # (as long as its rules)
     assert len(meta) <= META
     out = pad(meta, ALIGN) + pad(vres, ALIGN) + pad(mus, ALIGN) + \
-        pad(uib, ALIGN) + pad(ents, ALIGN) + pad(imgs, ALIGN)
+        pad(uib, ALIGN) + pad(ents, ALIGN) + pad(idle, ALIGN) + \
+        pad(imgs, ALIGN)
     for r in regions:
         out += pad(r, ALIGN)
     assert len(out) == total
@@ -494,6 +533,8 @@ class Bundle:
         self.endings = {"victory": (data[332], data[333]),
                         "defeat": (data[334], data[335])}
         self.fade_steps = data[336]
+        self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
+        self.idle_r = data[self.idl_at:self.idl_at + ilen2]
         self.rules = vbtrules.Rules(data[SCRIPT_AT:self.meta_len])
         self.ui = [struct.unpack_from("<IH", data, 96 + 6 * i)
                    for i in range(self.nui)]
@@ -505,13 +546,15 @@ class Bundle:
             name = data[at + 24:at + 32].decode().strip()
             anch = [struct.unpack_from("<HH", self.vres, anchtab + 4 * j)
                     for j in range(nanch)]
+            lap = struct.unpack_from("<IH", data, at + 18) \
+                if flags & CF_LOOP else None
             self.clips.append(dict(off=off, len=ln, nrec=nrec, flags=flags,
-                                   exit=ex, anch=anch, name=name))
+                                   exit=ex, anch=anch, name=name, lap=lap))
 
     def idle_rec(self, i):
-        o = struct.unpack_from("<H", self.vres, self.idle_tab + 2 * i)[0]
-        n = struct.unpack_from("<H", self.vres, o)[0]
-        return self.vres[o:o + n]
+        o = struct.unpack_from("<H", self.vres, self.idle_tab + 2 * i)[0] * 16
+        n = struct.unpack_from("<H", self.idle_r, o)[0]
+        return self.idle_r[o:o + n]
 
     def entry(self, para):
         o = para * 16
@@ -914,7 +957,7 @@ def cmd_info(a):
     print("%s: %d bytes, CGA4 palette %02Xh, canvas %s, band %s, %d fps, "
           "%d Hz" % (a.file, len(d), b.cgapal, b.canvas, b.band, b.fps, b.rate))
     print("  idle loop %d frames; video resident %d bytes; entries %d bytes; "
-          "largest record %d" % (b.nidle, len(b.vres), len(b.ents), b.maxrec))
+          "largest record %d" % (b.nidle, len(b.idle_r), len(b.ents), b.maxrec))
     print("  music %d bytes (%.1f s, %s), in at %d; the menu's %d effects in "
           "%d bytes" % (b.mlen, b.mlen / b.rate,
                         "resident" if b.mlen <= MUSIC_RES else "streamed",

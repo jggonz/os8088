@@ -237323,7 +237323,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 6 |
+| 4 | 2 | version, 7 |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows |
@@ -237341,7 +237341,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 48 | 4 | the music's JOIN: the sample it comes in at when the openings end |
 | 52 | 4 | the file's length |
 | 56 | 4+2 | the menu's effects' offset and length |
-| 62 | 2 | the idle table's offset in the resident block: N words |
+| 62 | 2 | the idle table's offset in the resident block: N words, each a record's PARAGRAPH in the idle region (338) |
 | 64 | 1+1+1+1 | the BAND: its first cell, first row, cells and rows |
 | 68 | 2 x 4 | the CANVAS: x, y, width and height in pixels (the build's; the engine does not need it) |
 | 76 | 2 | the largest record, at most 16 KB (VB_CGUARD) |
@@ -237354,6 +237354,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 332 | 1+1 | VICTORY: how it ends (0 HOLD, 1 FADE to its end loop, 2 JOIN its end loop, 3 FADE and play AGAIN) and its end loop's clip, FFh none |
 | 334 | 1+1 | DEFEAT: the same |
 | 336 | 1 | a fade's steps, 1 to 16 (one a frame) |
+| 338 | 4+4 | the IDLE loop's records' offset and length (format 7): each record on a paragraph, which the idle table names |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -237368,6 +237369,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 12 | 2 | EXIT |
 | 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the entries) pairs |
 | 16 | 2 | its anchors, at most 16 |
+| 18 | 4+2 | a LOOP's lap: record 1's offset in its stream (4 KB-aligned) and the lap's length in 4 KB |
 | 24 | 8 | the name |
 
 #### 125.2.3 Records, their sound, and why every join is exact
@@ -237570,10 +237572,17 @@ Both are optional, and a bundle with neither plays as version 5's did.
     frames as an action is at the idle loop's (its anchors are title
     frames, its entries in the ENTRIES, its first record its sound alone),
     then on into the next opening as any opening is.
-- **A loop is played out of one ring, read whole**, and goes round in it:
-  at the lap's end the picture's cursor and the sound's go back to record
-  1. So a loop must fit a ring (125.4): the play refuses with "Not enough
-  memory" when one does not, and the builder's budget says so first.
+- **A loop is HELD in its ring when it fits, and READ ROUND when it does
+  not** (format 7, `VB_STRM`, `[vb_lstream]`). Held: read once, and at the
+  lap's end the picture's cursor and the sound's go back to record 1.
+  Read round: the builder lays the loop out for it - record 0 padded to end
+  on 4 KB, the lap padded to whole 4 KB, the padding inside records after
+  their ten lists, which `vd_native` never reads past - and the reader
+  reads it as the music is read, its next read's place (`RG_FOFF`) going
+  back to the lap at its end, with the file cursor kept at the lap's start
+  (`RG_LCUR`) so that going round is not a seek. The cursors go on through
+  the ring; only `[vb_cleft]` reloads. A 204 KB loop against a 144 KB ring
+  laps with no stall (`vbtloops` C).
 - **An ENDING** - VICTORY or DEFEAT; an escape holds, as before - is one of:
   - **HOLD**: its clip's last frame held, Esc to leave (version 5's);
   - **FADE to its end loop**: the canvas fades, and the END loop plays in
@@ -237604,7 +237613,9 @@ Both are optional, and a bundle with neither plays as version 5's did.
   - the menu's effects;
   - the music's RING, 32 KB (3 s at 11 kHz) with a 4 KB guard; or the
     whole music when it is 60 KB or less;
-  - the ENTRIES (125.2), as many 4 KB as they take.
+  - the ENTRIES (125.2), as many 4 KB as they take;
+  - the IDLE loop's records (format 7), the same way: out of the block, so
+    that a loop of more than 60 KB - VGA's (VBATTLE-MEMORY-PLAN 2) - fits.
 - **the card's ring** (`vb_cardclaim`, in `vb_load`), page-safe from the
   top (`OSAPI_MEM_CLAIM_DMA_HI`), 17 KB, when there is a card. It is
   claimed before the rings are sized, so that they leave nothing it needs.

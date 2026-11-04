@@ -8,45 +8,6 @@
 ; into the play again (vb_again), which starts over inside the bracket.
 ; =============================================================================
 
-; vb_lfits - CF=1 and [vb_err] when a loop is bigger than a ring less a
-; piece: it would lap over its own head
-vb_lfits:
-    mov al, [vb_meta+VH_TITLE]
-    call .one
-    jc .no
-    mov al, [vb_meta+VH_ENDS+1]
-    call .one
-    jc .no
-    mov al, [vb_meta+VH_ENDS+3]
-    call .one
-    jc .no
-    ret
-.no:
-    mov word [vb_err], vb_s_nomem
-    stc
-    ret
-.one:
-    cmp al, 0xFF
-    je .ok
-    xor ah, ah
-    mov bx, ax
-    call vb_crec
-    mov ax, [si+VC_LEN]
-    mov dx, [si+VC_LEN+2]
-    add ax, VB_PIECE
-    adc dx, 0
-    cmp dx, [vb_rg0+RG_BYTES+2]
-    jb .ok
-    ja .bad
-    cmp ax, [vb_rg0+RG_BYTES]
-    jbe .ok
-.bad:
-    stc
-    ret
-.ok:
-    clc
-    ret
-
 ; vb_lanchor - the title is to be left by opening 0: once its head is in
 ; ring 0, the nearest of its anchors (title frames) at least [vb_dmin]
 ; frames on, as vb_anchor takes an action's at the idle loop. Its sound is

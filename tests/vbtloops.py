@@ -8,13 +8,16 @@ Two bundles of the demo battle, its enemy at 1 HP so that one Attack wins:
 
   A. the title goes ROUND (its frame counter laps, and what is on the glass
      is one of its own frames - the host's decode of the bundle - each time
-     it is looked at); Enter FADES it (the screen's lit bytes fall step by
+     it is looked at); Enter FADES it (the screen's lit pixels fall step by
      step, the steps in order) and the openings play; the battle; VICTORY
      fades to its END loop, which goes round in the canvas; Enter fades the
      whole screen and the play starts OVER - the title round again;
   B. the title is left by a CLIP, opening 0 entered at one of the title's
      anchors, and the play reaches the menu through it; VICTORY JOINS its
-     end loop with no fade at all.
+     end loop with no fade at all;
+  C. A's ways, with a title and an end loop far bigger than a ring (the
+     Limit, 204 KB): each is READ ROUND (format 7, `[vb_lstream]`), and
+     still laps with the glass its own frames.
 
 Esc leaves at the end of each. The waits are on the guest's state, never
 on a clock: a fade or a lap that never comes fails by name.
@@ -40,6 +43,7 @@ KEYS = {"return": "Enter", "esc": "Escape"}
 VM_CLIP, VM_FADE = 1, 4
 GS_MENU, GS_END = 1, 3
 fails = []
+LIT = [sum(1 for k in range(4) if (x >> 2 * k) & 3) for x in range(256)]
 
 
 def ok(cond, what):
@@ -48,7 +52,8 @@ def ok(cond, what):
         fails.append(what)
 
 
-def project(tmp, leave):
+def project(tmp, mode):
+    leave = mode == "B"
     vbp = os.path.join(tmp, "loops.vbp")
     B.demo_project(vbp, bars=2)
     p = P.Project.load(vbp)
@@ -57,6 +62,10 @@ def project(tmp, leave):
         p.set(("openings",), [])    # left by REVEAL entered at 0, 8, 16
         p.set_title("title", (10, 34), leave="reveal", anchors=(0, 8, 16))
         p.set_ending("victory", "join", "victory", (0, 20))
+    elif mode == "C":               # C: loops far bigger than a ring - the
+        p.set_title("ari_limit", (0, 110))  # Limit, 240 KB - READ ROUND
+        p.set_ending("victory", "fade", "ari_limit", (0, 110))
+        p.remove_clip("title")      # (the demo's own title, unused here)
     else:
         p.set_title("title", (10, 34))
         p.set_ending("victory", "fade", "victory", (0, 20))
@@ -77,8 +86,9 @@ def screens_of(b, ci):
     return out
 
 
-def run(tmp, leave, syms):
-    data = project(tmp, leave)
+def run(tmp, mode, syms):
+    leave = mode == "B"
+    data = project(tmp, mode)
     b = B.Bundle(data)
     vbt = os.path.join(tmp, "BATTLE.VBT")
     open(vbt, "wb").write(data)
@@ -93,7 +103,7 @@ def run(tmp, leave, syms):
          "--file", "SOUND.DRV=" + os88build.at("build/sound.drv"),
          "--file", "VBATTLE.O88=" + os88build.at("build/vbattle.o88"),
          "--file", "BATTLE.VBT=" + vbt], check=True, capture_output=True)
-    tag = "B" if leave else "A"
+    tag = mode
     title = screens_of(b, b.title)
     m = os88marty.launch(None, machine=MACHINE,
                          extra=["--mount", "hd:0:" + vhd], boot=False)
@@ -135,7 +145,7 @@ def run(tmp, leave, syms):
         # start at least twice, and the glass shows its own frames
         n = rw("vb_lnrec")
         seen, matched, looks, last, laps = set(), 0, 0, 0, 0
-        while laps < 2 and looks < 400:
+        while laps < 2 and looks < 1200:
             f = rw("vb_cfr")
             if f < last:
                 laps += 1
@@ -146,6 +156,10 @@ def run(tmp, leave, syms):
                 matched += 1
                 seen.add(title.index(v))
             until(lambda: True, "a moment", guest=0.05, poll=0.0)
+        if mode == "C":
+            ok(rb("vb_lstream") == 1 and b.clips[b.title]["len"] > 147456,
+               "C: the title (%d KB) is too big for its ring, and READ ROUND"
+               % (b.clips[b.title]["len"] // 1024))
         ok(n == len(title) and laps >= 2,
            "%s: the title goes round (%d frames, %d laps in %d looks)"
            % (tag, n, laps, looks))
@@ -158,17 +172,19 @@ def run(tmp, leave, syms):
             lit = []
             while rb("vb_fon") == 1:
                 st = rb("vb_fstep")
-                lit.append((st, sum(1 for x in vram() if x)))
+                v = vram()      # lit PIXELS, two bits each: a byte with one
+                lit.append((st, sum(LIT[x] for x in v)))    # lit stays lit
                 until(lambda: True, "a moment", guest=0.03, poll=0.0)
             steps = [s for s, _ in lit]
             ok(steps == sorted(steps) and max(steps) >= 10,
-               "A: the fade's steps come in order (%s)" % sorted(set(steps)))
+               "%s: the fade's steps come in order (%s)"
+               % (tag, sorted(set(steps))))
             med = lambda xs: sorted(xs)[len(xs) // 2] if xs else -1
             early = med([c for s, c in lit if s <= 2])
             late = med([c for s, c in lit if s >= 11])
             ok(early > 0 and 0 <= late < early // 3,
-               "A: ...and put the picture out: %d lit bytes in its first "
-               "steps, %d in its last" % (early, late))
+               "%s: ...and put the picture out: %d lit pixels in its first "
+               "steps, %d in its last" % (tag, early, late))
         until(lambda: rb("vb_tplay") == 0, "%s: the title to be left" % tag)
         if leave:
             ok(rb("vb_cc") == 0 and rw("vb_cfr") >= 1,
@@ -191,20 +207,26 @@ def run(tmp, leave, syms):
            "%s: ...%s" % (tag, "JOINED, with no fade" if leave else
                           "after a fade of the canvas"))
         last, laps, looks = 0, 0, 0
-        while laps < 2 and looks < 400:
+        st0 = rw("vb_stall")
+        while laps < 2 and looks < 1200:
             f = rw("vb_cfr")
             laps += f < last
             last = f
             looks += 1
+            if os.environ.get("VBTLOOPS_DBG") and looks % 20 == 0:
+                print("  look %d cfr %d stall %d fill %s" % (
+                    looks, f, rw("vb_stall") - st0, [m.read(base + syms[r] + 4, 4).hex() for r in ("vb_rg0", "vb_rg1")]), flush=True)
             until(lambda: True, "a moment", guest=0.05, poll=0.0)
         ok(laps >= 2, "%s: the end loop goes round (%d laps)" % (tag, laps))
+        if mode == "C":
+            ok(rb("vb_lstream") == 1, "C: ...read round as well")
         if not leave:
             key("return")               # play again
             until(lambda: rb("vb_fon") == 1, "A: the fade before again")
             until(lambda: rb("vb_tplay") == 1 and rb("vb_state") != GS_END,
                   "A: the play to start over at the title", guest=60.0)
             ok(rb("vb_cc") == b.title and rb("vb_over") == 0,
-               "A: Enter on the end loop plays again: the title round")
+               "%s: Enter on the end loop plays again: the title round" % tag)
         key("esc")
         until(lambda: rb("vb_ready") == 0, "%s: Esc to leave" % tag)
         ok(True, "%s: Esc leaves" % tag)
@@ -215,9 +237,9 @@ def run(tmp, leave, syms):
 def main():
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
-    for leave in (False, True):
+    for mode in ("A", "B", "C"):
         with tempfile.TemporaryDirectory() as tmp:
-            run(tmp, leave, syms)
+            run(tmp, mode, syms)
     if fails:
         print("%d FAILED" % len(fails))
         return 1

@@ -1,6 +1,6 @@
 # VBATTLE-MEMORY — streaming the loops, and the memory faster machines have
 
-**Status: PROPOSED (2026-11-04). Nothing here is built.** The owner's
+**Status: M1 BUILT (2026-11-04, format 7); M2 to M4 proposed.** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all
@@ -111,6 +111,13 @@ because an action's EXIT can land on any of its frames and the loop must
 go on from there at once: a streamed idle would need a seek and a head's
 read at every exit. That costs conventional memory at VGA (~120 KB for the
 owner's loop at sixteen colours), which sections 4 and 5 give back.
+
+**DONE 2026-11-04.** A 204 KB title and end loop against a 140 KB ring lap
+with no stall on MartyPC's XT (`vbtloops` C), the ring's fill passing 540
+KB; the idle loop is paragraph-addressed; the rings at 640 KB came to 140
+KB beside a 120 KB claim (the idle loop's own 4 KB rounding), measured,
+and the arithmetic agrees. Whether going round is really seek-free (the
+kept cursor) is not measured: a seek would be slower, not wrong.
 
 **Format 7** carries 3.1 and 3.4. **The gate**: `vbtloops` with a loop
 bigger than its ring (a knob holds the ring small), every lap's glass one of

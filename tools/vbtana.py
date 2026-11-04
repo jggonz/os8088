@@ -287,7 +287,7 @@ def budget(proj, data):
         c["with_music"] = (c["rate"] + mrate) / disk
         c["head_secs"] = min(c["bytes"], VB_HEAD) / disk
         c["fits_ring"] = mem["ring"] is not None and c["bytes"] <= mem["ring"]
-    return dict(clips=clips, idle_bytes=len(b.vres), entries=len(b.ents),
+    return dict(clips=clips, idle_bytes=len(b.idle_r), entries=len(b.ents),
                 music=b.mlen, ui=len(b.uib), file=len(data), disk=disk,
                 memory=mem, music_rate=mrate)
 
@@ -304,7 +304,8 @@ VB_FREE = 461
 VB_FREE_SRC = ("measured on MartyPC's 640 KB XT with a Sound Blaster "
                "(os8088_xt_hdd_sb), 2026-11-04: the rules battle's rings came "
                "to 144 KB each beside a 116 KB resident claim, which is 461 "
-               "to 468 KB free")
+               "to 468 KB free - and at format 7 to 140 KB beside 120, the "
+               "same")
 
 
 def _r4k(n):
@@ -319,7 +320,8 @@ def memory(data, free_kb=VB_FREE):
     import os88vbt as B
     b = B.Bundle(data)
     mres = b.mlen <= VB_MRES
-    parts = [("the idle loop's block", _r4k(len(b.vres))),
+    parts = [("the block (its tables)", _r4k(len(b.vres))),
+             ("the idle loop", (len(b.idle_r) + 4095) & ~4095),
              ("the menu's sounds", _r4k(len(b.uib))),
              ("the music, all of it" if mres else "the music's ring",
               _r4k(b.mlen) if mres else VB_MR + VB_MPIECE),

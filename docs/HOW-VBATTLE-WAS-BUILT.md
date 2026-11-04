@@ -544,6 +544,26 @@ end loop and that laps; Enter plays again from the title. With `vb_fmask`
 drawing nothing the row fails (693 lit bytes before and after). The engine
 grew 1,620 bytes of image (14,645 to 16,265), 1,124 on the disk.
 
+## Every loop streams (2026-11-04)
+
+VGA at sixteen colours is three times CGA4's data (VBATTLE-MEMORY-PLAN 2),
+so a ring holds half a second of it and a loop "held whole in a ring" stops
+being a loop of any use. So a loop too big for its ring is now READ ROUND:
+the builder pads record 0 out to a 4 KB boundary and the lap to whole 4 KB
+- the padding inside records, after their ten lists, where the decoder
+never looks - and the reader's next read goes back to the lap at its end
+as the music's does, with the file cursor kept from the lap's first read
+so going round need not seek. The picture and the sound just go on through
+the ring. A loop that fits is still held, which leaves the disk to the
+heads. The idle loop left the 60 KB block for a region named by paragraph,
+the entries' arrangement, because a VGA idle loop is ~120 KB.
+
+The test that proved it was a 204 KB Limit used as both title and end loop
+on a 140 KB ring. The first run "failed" twice, and neither was the engine:
+the fade check counted lit BYTES, which a busy picture keeps lit with one
+pixel in four (now pixels), and the lap check ran out of looks on a
+110-frame loop before its second lap (now 1,200 looks).
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |
