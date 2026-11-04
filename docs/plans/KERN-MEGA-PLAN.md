@@ -13813,8 +13813,8 @@ footprint reads 62,976 either way.
 registrant's byte is what `mega_bown` is asked about, so only the registrant's
 own not-present handle descriptors route. A registrant's end leaves its
 registration naming a byte that a later package may hold. That is harmless
-today, since WIN16 alone makes a not-present descriptor and registers again at
-every launch and wake (`w16_lend`), and `mx_relinst` (`.mega`, 10 bytes left)
+today, since WIN16 alone makes a not-present descriptor and registers again
+before every run of its program (`w16_lend`, from `w16_dcunpark`), and `mx_relinst` (`.mega`, 10 bytes left)
 is not touched; a second user of `CX = 2` must register as well. `CX = 3`
 with `DX = 0` withdraws, and only for its registrant.
 
@@ -13822,3 +13822,17 @@ with `DX = 0` withdraws, and only for its registrant.
 GDT CS (the kernel, a BIOS call reflected to real mode never reaches a
 descriptor), from the rate hook or a worker, and from a task other than the UI
 task is the old fatal one.
+
+*Review (verify-o8np, 2026-11-04).* Three router fixes, `.cold` +11 (46,102 ->
+46,113, 479 left of its rung), `.mega` and resident still +0. (1) A refusal
+AFTER the handler's CS had been written over the vector's slot (the base not
+in a block of the registrant's) handed `mega_fault` that CS as its vector: the
+slots are now written only once every test has passed, so every refusal
+reaches `mega_fault` with 0Bh. (2) The error code's EXT and IDT bits are
+refused: with IDT set the index is a gate's, not an LDT descriptor's. (3) `lar`
+bounds the index by the LDT's limit before the alias is read, because a
+software `int 0Bh` pushes no error code and the word in its place is an IP;
+read unchecked, a large one would have faulted inside the router. WIN16's
+side registers before every run of its program now (`w16_dcunpark`), not at a
+wake only: a program also runs from a key or timer callback, and a second
+WIN16 instance that woke in between would otherwise hold the registration.

@@ -276,6 +276,16 @@ w16q_retype:
     stc
     ret
 
+; w16q_touch - DX = a selector an alias is about to be made from: a discarded
+; code segment's (SPEC.md 124.26.12) loaded first, so the alias reads its code
+; and not the module block it is parked on. Clobbers AX
+w16q_touch:
+%ifdef PKG_MEGA
+    mov ax, dx
+    ICALL w16_touch
+%endif
+    ret
+
 ; PrestoChangoSelector (KERNEL.177) - args: +0 wDestSel, +2 wSourceSel.
 ; wDestSel, a window, re-aimed at wSourceSel's base and reach and given the
 ; OTHER type, code from data and data from code, as Windows does (SPEC.md
@@ -285,6 +295,7 @@ W16SYS w16q_presto
     push di
     ICALL w16_args
     mov dx, [es:bx + 2]
+    call w16q_touch
     call w16q_ctype
     mov ax, 0
     jc .out
@@ -325,6 +336,7 @@ W16SYS w16q_presto
 W16SYS w16q_csds
     ICALL w16_args
     mov dx, [es:bx]
+    call w16q_touch
     xor ax, ax
     xor cx, cx
     mov bl, SEG_SUB
@@ -345,6 +357,7 @@ W16SYS w16q_dscs
     push di
     ICALL w16_args
     mov dx, [es:bx]
+    call w16q_touch
     push dx
     xor ax, ax
     xor cx, cx

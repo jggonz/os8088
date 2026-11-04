@@ -4936,7 +4936,43 @@ it is not memory, and it was not chased.
 **What was not.** The engine's next wall. A hardware interrupt
 handler of a program is not a case WIN16 has, so the PIC check was not
 exercised by anything but running. FS and GS are not banked by the gate.
-`w16_touch` is wired into `LockSegment`, `GetCodeHandle` and the callback
-pre-check; the other sites that pass a program pointer straight to an
-`OSAPI_*` call are listed in the report, and the rule for a new one is in
-SPEC.md 124.26.12.
+`w16_touch` is wired into `LockSegment` and `GetCodeHandle`.
+
+**The review (verify-o8np).** An Opus reviewer read the kernel half first and
+found the router handing `mega_fault` the wrong vector on one refusal: the
+handler's CS was written over the vector's slot before the last test (the
+descriptor's base in a block of the registrant's), so a refusal there reported
+a selector as the vector. The slots are written last now, and the router also
+refuses an error code with its EXT or IDT bit and bounds the index with `lar`
+(a software `int 0Bh` has no error code). On WIN16's side, `w16_lend` clobbered
+SI against its "keeps every register", which was harmless only because its one
+caller did not need SI; and it ran at a wake only, while a program also runs
+from a key or timer callback, so a second WIN16 instance could hold the
+registration when the first one's program faulted. It is called from
+`w16_dcunpark` now, the one routine both `w16_resume` and `w16_resumecb` call
+first. The callback pre-check went: WIN16's `retf` into a callee is on the
+program's stack, so a callee that is not present faults there and takes the
+program arm, discard allowed, where the pre-check had loaded it on WIN16's
+stack with no discard and closed WIN16 when there was no room. The discard
+rule gained the host stack: a segment register WIN16's own frames pushed
+(`w16_gnew` pushes its caller's ES) holds the selector it would park, and an
+interrupt's `pop es` of a not-present selector is a `#NP` in the kernel. The
+three alias calls touch their source, since a parked selector's base is the
+module block. The resident cost fell from 150 to 123 bytes. PMNP on QEMU
+again: *pmnp: 0 wrong, 36 calls, 222 blocks*, `w16_cnload` 38, `w16_cndrop`
+32, with the window procedure now reloaded through the program arm.
+
+**The touch-before-OSAPI audit.** Of the 40 calls WIN16 makes to a
+pointer-taking `OSAPI_*` slot (`GFX_BLIT4` 6, `GFX_BLIT1`/`_PEN` 4,
+`GFX_POINTS`, `ICON_DRAW`, `FONT_RUN` 2, `CLIP_PUT` 2, `CLIP_GET` 3,
+`FILE_READ`/`_AT` 5, `FILE_WRITE` 2, `SND_STREAM` (verb 6 through
+`w16mm_wput`), `DRV_CALL` 3, `WM_TITLE` 7, `TOAST` 3), every pointer's segment
+is a segment register WIN16 loaded in its own code: its own DS (`push ds` /
+`pop es`), its own claims (`W16SEG`), a global block the program handed over
+(the clipboard's), or a program buffer it loaded itself (`mov ds, bx` before
+`SND_STREAM`'s verb 6, so a `#NP` there is WIN16's and routed). No slot takes
+a pointer's segment in a general register for the kernel to load, so none can
+fault in the kernel; a string `TextOut`, `DrawText` or `lstrcpy` is given in
+a code segment is read by WIN16's own code. What could still reach the
+kernel is a selector made not present while a register holds it, and that is
+the discard rule above.

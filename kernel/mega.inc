@@ -12882,17 +12882,21 @@ mega_npx:                           ; ovlchk: builds its own far frame
     push es
     push word MEGA_SEL_KDATA
     pop ds
-    mov ax, [ss:bp+6]
-    test al, 4                      ; an LDT selector
-    jz .no
-    test byte [ss:bp+10], 4         ; a package's code faulted, never the
+    mov ax, [bp+6]
+    mov dl, al
+    and dl, 7                       ; an LDT selector, and not EXT (an external
+    cmp dl, 4                       ;   event's delivery) or IDT (bit 1: the
+    jne .no                         ;   index is a GATE's, not a descriptor's)
+    lar dx, ax                      ; inside the LDT's limit: a software int 0Bh
+    jnz .no                         ;   pushes no error code, so [bp+6] is an IP
+    test byte [bp+10], 4            ; a package's code faulted, never the
     jz .no                          ;   kernel's (a GDT CS stays fatal)
     cmp word [sch_rbusy], 0         ; no rate hook, no scheduler lock
     jne .no
     cmp byte [sch_cur], 0           ; the UI task's
     jne .no
     mov di, ax
-    and di, 0xFFF8                  ; (the CPU read it: inside the LDT)
+    and di, 0xFFF8
     push word MEGA_SEL_LDTD
     pop es
     test byte [es:di+6], MEGA_HAVL  ; a handle descriptor (SEG_HND)...
@@ -12901,15 +12905,15 @@ mega_npx:                           ; ovlchk: builds its own far frame
     mov dl, [es:di+4]
     xor dh, dh                      ; DX:AX = its base
     MXT_ES
-    mov bx, [es:mega_npc]
-    or bx, bx
-    jz .no
-    mov [ss:bp+4], bx
-    mov bx, [es:mega_npo]
-    mov [ss:bp+2], bx
+    cmp word [es:mega_npc], 0       ; a handler registered...
+    je .no
     mov bl, [es:mega_npw]
-    call MEGA_SEL_CODE:mega_bownf   ; ...in a block of the registrant's
-    jc .no
+    call MEGA_SEL_CODE:mega_bownf   ; ...and the base in a block of the
+    jc .no                          ;   registrant's (keeps all)
+    mov bx, [es:mega_npc]           ; only now the vector's slot becomes the
+    mov [bp+4], bx                  ;   handler's CS: a refusal above still
+    mov bx, [es:mega_npo]           ;   hands mega_fault its 0Bh
+    mov [bp+2], bx
     pop es
     pop ds
     pop di

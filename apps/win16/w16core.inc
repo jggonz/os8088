@@ -369,9 +369,6 @@ w16_lcall:
 w16_cbenter:
     ; STKBALANCE-OK: it leaves on the PROGRAM's stack by retf into the callee;
     ; the host frame stays for w16_tohost, like the gate's own return
-%ifdef PKG_MEGA
-    call w16_cbpre                  ; a discarded callee loaded first (124.26.12)
-%endif
     mov byte [w16_cbgo], 0
     pushf
     pop bx
@@ -402,9 +399,6 @@ w16_resumecb:
     push di
     push es
     push ds
-%ifdef PKG_MEGA
-    call w16_cbpre                  ; a discarded callee loaded first (124.26.12)
-%endif
     mov byte [w16_inprog], 1
     mov [w16_hss], ss
     mov [w16_hsp], sp
@@ -458,13 +452,16 @@ w16_thkhit:
 ; -----------------------------------------------------------------------------
 ; w16_npent - the #NP handler (SPEC.md 124.26.12, KERN-MEGA-PLAN 14.143), far
 ; returned to by the kernel with [selector] [IP] [CS] [FLAGS] on the faulting
-; stack, every register as at the fault and IF = 0. The program's: the
-; selector dropped, AX and DX kept as w16_thkhit keeps them, and the gate
-; entered as W16_SLROW with a far return to the iret below, which restarts the
-; instruction; w16_segld loads the segment. WIN16's own (SS is not the
-; program's): the segment is loaded in place, no code discarded (part 5's
-; w16l_npload). Refused by an undefined opcode (kern_mega closes WIN16): a
-; load already going.
+; stack, every register as at the fault and IF = 0. The program's stack (its
+; code, or WIN16's own retf into a callback's callee, w16_cbenter and
+; w16_resumecb): the selector kept for w16_segld, AX and DX as w16_thkhit
+; keeps them, and the gate entered as W16_SLROW with a far return to the iret
+; below, which restarts the instruction; part 5 loads the segment and may
+; discard others for the room. Any other stack (WIN16's own code reading a
+; program pointer, or another package's on the UI task): the segment is loaded
+; in place and no code discarded (part 5's w16l_nplow), since what the
+; interrupted code holds in its registers is unknown. Refused by an undefined
+; opcode (kern_mega closes WIN16): a load already going, or no room.
 ; -----------------------------------------------------------------------------
 cpu 286
 w16_npent:
@@ -476,16 +473,16 @@ w16_npent:
     push ds
     W16CSDS bp
     mov ds, bp
+    mov bp, ss
+    cmp bp, [w16_pss]
+    jne .low
     mov bp, sp
     mov bp, [bp + 4]
     mov [w16_npsel], bp
     mov [w16_thax], ax
     mov [w16_thdx], dx
-    mov bp, ss
-    cmp bp, [w16_pss]
     pop ds
     pop bp
-    jne .low
     add sp, 2                       ; the selector
     push cs
     call .go
@@ -494,54 +491,43 @@ w16_npent:
     mov ax, W16_SLROW
     jmp w16_gate
 .low:
-    add sp, 2
+    pop ds
+    pop bp
     pusha
     push ds
     push es
+    mov bp, sp
+    mov ax, [bp + 20]               ; the selector, under ES DS and the pusha
     W16CSDS bp
     mov ds, bp
-    mov ax, [w16_npsel]
     mov bx, w16l_nplow              ; XSEC-OK: part 5's, w16_ldcall calls it there
     sti
     call w16_ldcall
-    mov word [w16_npsel], 0
     pop es
     pop ds
     jc .die
     popa
+    add sp, 2
     iret
 .die:
     db 0x0F, 0x0B                   ; #UD: a program's fault closes WIN16
 
-; w16_touch - AX = a selector the program holds: a code segment that is not
-; present is loaded by reading it into DS, here (a #NP in WIN16's own code,
-; w16_npent's second arm); a data selector, or one that is no selector, is
-; left. Keeps every register, the flags not
+; w16_touch - AX = a selector the program holds: one that is not present (a
+; discarded code segment, 124.26.12) is loaded by reading it into DS, here (a
+; #NP in WIN16's own code, w16_npent's second arm). VERR does not ask the
+; present bit, so it passes a not-present code selector and refuses what is
+; no selector at all. Keeps every register, the flags not
 w16_touch:
     test al, 4                      ; an LDT selector (a handle or a GDT value
     jz .ret                         ;   is no code segment of the program's)
-    push cx
     push ds
-    lar cx, ax
+    verr ax
     jnz .no
-    test ch, 8                      ; access byte: executable
-    jz .no
     mov ds, ax
 .no:
     pop ds
-    pop cx
 .ret:
     ret
-
-; w16_cbpre - the callee a callback is about to far-return into (w16_cbenter,
-; w16_resumecb): its CS, at the top of the program's stack, touched, so a
-; discarded segment is loaded here on WIN16's stack and not at the retf.
-; Clobbers AX, BX, ES
-w16_cbpre:
-    mov es, [w16_pss]
-    mov bx, [w16_psp_]
-    mov ax, [es:bx + 2]
-    jmp w16_touch
 cpu 8086
 
 ; w16_dxax / w16_dxth - the arm's [cs:] store of DX:AX, through our data

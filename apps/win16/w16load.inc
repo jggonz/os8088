@@ -5116,12 +5116,15 @@ w16l_npload:
     jnz .bad                        ;   (the owner's loading flag)
     or byte [w16_nplod], 1
     mov dx, ax
+    pushf                           ; (one cli window: an IRQ between the two
+    cli                             ;   OCW3s would read the ISR for its IRR)
     mov al, 0x0B                    ; the PIC's in-service register: a hardware
     out 0x20, al                    ;   interrupt handler is running, and no
     in al, 0x20                     ;   program's code runs in one, so this is
     mov ah, al                      ;   not the program's fault to repair
     mov al, 0x0A                    ; (its IRR again, as everyone else reads it)
     out 0x20, al
+    popf
     or ah, ah
     jnz .bad
     call w16l_npfind                ; AX = its number, BX = whose
@@ -5863,6 +5866,18 @@ w16l_inuse:
     mov di, [w16_psp_]              ;   memory silently (124.26.12)
     cmp ax, [es:di + W16F_DS]
     je .out
+    push ss                         ; ...and every segment register WIN16's own
+    pop es                          ;   frames pushed (w16_gnew's ES, which is
+    mov di, sp                      ;   the caller's): made not present there,
+    mov cx, [w16_hsp]               ;   its pop is a #NP, and an interrupt's
+    add cx, 10                      ;   pop of a register still holding it is
+    sub cx, di                      ;   a #NP in the KERNEL, which is fatal.
+    jbe .host                       ;   SP up to the host frame w16_resume
+    shr cx, 1                       ;   pushed (its five words), exact words
+    cld
+    repne scasw
+    je .out
+.host:
 %endif
     mov es, [w16_pss]
     mov di, [w16_psp_]
