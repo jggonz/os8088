@@ -324,6 +324,8 @@ w16_load:
     mov ax, [w16_dgroup]
     mov [w16_task + bx + W16K_H], ax
     mov byte [w16_task + bx + W16K_ST], W16KS_RUN
+    mov al, [w16_pgblk]              ; a claim (0) or a block (1) (124.28.5)
+    mov [w16_task + bx + W16K_FL], al
     inc byte [w16_ntk]
     clc
     jmp short .out
@@ -359,24 +361,36 @@ w16_load:
     ret
 
 ; w16l_pclaim - AX = PARAGRAPHS: the program's segments' claim (w16_lay1)
-; -> DX, CX = the paragraphs granted; CF=1 none. A later task's is a block of
-; the global heap: the first program's claim is one of WIN16's eight and a
-; second cannot be had (124.28.5). Both in paragraphs (SPEC.md 50.3.7).
+; -> DX, CX = the paragraphs granted; CF=1 none. The first program's and the
+; second task's are claims of WIN16's own; a later one's, or one whose claim is
+; refused, is a block of the global heap (SPEC.md 124.28.5). [w16_pgblk] says
+; which was given (1 = a block). Both in paragraphs (SPEC.md 50.3.7).
 ; Clobbers AX.
 w16l_pclaim:
-    cmp byte [w16_ntk], 0
-    jne .blk
+    mov byte [w16_pgblk], 0
+    cmp byte [w16_ntk], 2           ; two tasks hold a claim at most
+    jae .blk
+    mov cx, ax
     W16VCLAIM                       ; AX = the paragraphs GRANTED (the
-    xchg ax, cx                     ;   arm: entered in the map, 124.31.3)
+    jnc .got                        ;   arm: entered in the map, 124.31.3)
+    cmp byte [w16_ntk], 0
+    jne .try                        ; a later task goes on to a block
+    stc                             ; the first program: refused (the cmp
+    ret                             ;   above cleared CF)
+.got:
+    xchg ax, cx
     ret
+.try:
+    mov ax, cx
 .blk:
+    mov byte [w16_pgblk], 1
     mov cx, ax                      ; a heap block is what it was asked for
     ICALL w16_kclaimp
     ret
 
 ; w16l_pfree - DX = what w16l_pclaim gave: given back
 w16l_pfree:
-    cmp byte [w16_ntk], 0
+    cmp byte [w16_pgblk], 0
     jne .blk
     W16VFREE
     ret

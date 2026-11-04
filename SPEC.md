@@ -236195,7 +236195,7 @@ So WIN16 keeps three kinds of claim and no more:
 
 | claim | how many |
 |---|---|
-| the program (§124.20.2) | one |
+| the program (§124.20.2) | one, and a second task's (§124.28.5) |
 | the library part (§124.19) | one, from its first call |
 | the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21; on the kern_mega arm 3 until 2026-11-02, §124.31.1). They are 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again. Each is the size of a larger request instead. When a size cannot be had, the claim is tried at three quarters of that, and again, down to the request's own size (halves until 2026-11-02: Arcade's setup asked for 408 KB for its fourth arena with 374 KB left in the arm's map, got 204, and its `LoadBitmap` of a 277 x 160 picture then found no 22 KB run; three quarters gets 306) |
 
@@ -237586,11 +237586,37 @@ Windows' own:**
 | 11 | it is not a Windows program WIN16 can run |
 | 16 | `W16_MAXTASK` tasks already run |
 
-**A second program cannot take a claim.** The first program's segments
-are its claim, one of the eight (§124.25.1). Every later program's go in
-one fixed block of the global heap instead, laid out as the claim would
-be. The arenas grow to hold it, within their four (§124.25.1), and it loads
-less at launch than a first program does (§124.26.3).
+**A second program takes a claim when it can** *(L2, 2026-11-04)*. The
+first program's segments are its claim, one of the eight (§124.25.1). A
+program started while only one task runs (`w16_ntk` = 1) asks for a claim
+of its own too, laid out as the first's is, and keeps it as `W16K_FL` = 0.
+It has to, because the arenas are a few claims of fixed size and nothing
+else in the machine can be spent on them: Sir Hangman's engine
+(`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code segments, 404 KB,
+beside the launcher that started it, and the engine's DGROUP, up to 64 KB,
+is room the arenas' code then cannot have. Counted against §124.25.1's
+kinds, two programs, the library part and four arenas are seven claims, and
+the eighth is left to the transient ones (a part read and copied, a large
+bitmap, the next program's NE tables), so **at most two tasks hold a
+claim**: a third program, or a second while two already run, and a program
+whose claim is refused, put their segments in one fixed block of the global
+heap, laid out as the claim would be, as before (`W16K_FL` = 1). The arenas
+grow to hold it, within their four (§124.25.1), and it loads less at launch
+than a first program does (§124.26.3). What that costs on `kern_big`, whose
+owner limit is eight (§50): with two programs holding claims and all four
+arenas made, a third launch has one claim left for its NE tables and, when
+no task has kept the loader part (§124.26.3), the part's own read as well,
+so it can be refused with *Not enough memory* where a block would have
+loaded it. `kern_mega` allows twelve, and its map ten rows (§124.31.3).
+
+**Either is given back on every exit** *(L2)*. `w16t_end` frees a dead
+task's segments by its `W16K_FL`: a claim through `W16VFREE` (which also
+clears a kern_mega map row, §124.31.3), a block through `w16_kfree`.
+Before, it called `OSAPI_MEM_FREE` for both, which leaves a map row behind.
+A program that is refused at launch gives back what it took by the same
+rule (`w16_pgblk`, the loader's note of which it took), and the last task
+left frees a claim in `w16_freeprog` and leaves a block to the arenas.
+Real mode (`kern_big`) is the plain claim: `OSAPI_MEM_P`'s `MEMP_CLAIM`.
 
 **Its first top-level window is an os8088 window of its own** (a "second
 window", `W16_MAXTOP`), titled with its text. The instance's own window

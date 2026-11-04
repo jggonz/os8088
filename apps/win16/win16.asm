@@ -1218,6 +1218,7 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_show, 1          ; nCmdShow XOR SW_SHOWNORMAL (a task's)
     W16BSS w16_task, W16_MAXTASK * W16K_SIZE
     W16BSS w16_cur, 1           ; the current task's index
+    W16BSS w16_pgblk, 1         ; 1: the segments being loaded are a heap block
 %ifdef PKG_MEGA
     W16BSS w16_lseg, 2          ; the stack lent kern_mega (w16_lend), 0 none
 %endif
@@ -1568,10 +1569,21 @@ w16_freeprog:
     mov [w16_mlev], al
     mov [w16_closeq], al
     pop ax
-    mov dx, [w16_pseg]
-    or dx, dx
-    jz .face
+    mov dx, [w16_pseg]              ; its segments: a claim given back, a
+    or dx, dx                       ;   block gone with the arenas above
+    jz .face                        ;   (W16K_FL, SPEC.md 124.28.5)
+    push ax
+    push bx
+    mov al, [w16_cur]
+    mov ah, W16K_SIZE
+    mul ah                          ; (8-bit: DX kept)
+    xchg ax, bx
+    cmp byte [w16_task + bx + W16K_FL], 0
+    pop bx
+    pop ax
+    jne .pblk
     W16VFREE
+.pblk:
     mov word [w16_pseg], 0
 .face:
     cmp byte [w16_fpart], 0         ; its block went with the arenas

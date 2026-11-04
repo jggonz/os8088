@@ -707,7 +707,7 @@ W16TSK w16t_end
     jz .seg
     cmp byte [si + W16K_FL], 0
     jne .blk
-    call OSAPI_MEM_FREE
+    W16VFREE                        ; (a claim: its map row goes too)
     jmp short .seg
 .blk:
     ICALL w16_kfree
@@ -728,14 +728,8 @@ W16TSK w16t_end
     mov word [di + W16K_CTX], 0
     mov [w16_cur], al
     W16VOF ax, es
-    ICALL w16_gfreeh
-    cmp byte [w16_ntk], 1           ; the last left, its segments a block:
-    jne .hand                       ;   they go with the arenas when it ends
-    cmp byte [si + W16K_FL], 0      ;   (w16_freeprog frees only a claim)
-    je .hand
-    mov word [w16_pseg], 0
-.hand:
-    call w16t_hand
+    ICALL w16_gfreeh                ; (the last left keeps its [w16_pseg]:
+    call w16t_hand                  ;   w16_freeprog reads W16K_FL, 124.28.5)
     call w16t_turns                 ; (the count may be one now, and the one
     pop es                          ;   left may never have run)
     pop di
