@@ -38,8 +38,8 @@
 ; either tier the hold's first 16 bytes read in place against
 ; OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and fails it. EMS
 ; when the frame's four quarters are ours. `[vb_noinp]` is the A/B gate.
-; NOT DONE, from 98.3.18.8: timing the board first, so a slow board (8 wait
-; states) is read in place as if it were RAM.
+; EMS only on a board TIMED as fast as RAM (vbhold.inc's vb_espeed, 98.3.18.8):
+; the decode is the hook's time, and a slow board's reads are late frames.
 ; =============================================================================
 
 VB_XYB      equ 2048            ; record bytes between yields (VP_XYB's)
@@ -264,6 +264,8 @@ vb_hipq:
     jne .x
     cmp byte [vb_eq], 0x0F          ; EMS: the four quarters ours
     jne .no
+    cmp byte [vb_eslow], 0          ; ...and the board as fast as RAM: the
+    jne .no                         ; decode is the hook's time (98.3.18.8)
     jmp short .yes
 .x:
     call OSAPI_CPU_INFO             ; AL = the tier, AH = CPU_F_*

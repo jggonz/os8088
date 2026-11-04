@@ -3478,6 +3478,10 @@ VB_VAR vb_eport, 2                  ; ...the recipe (107.4): quarter 0's
 VB_VAR vb_estep, 2                  ; register, the step to the next,
 VB_VAR vb_eor, 1                    ; the bits ORed into a page,
 VB_VAR vb_ebase, 2                  ; and the run's first page
+VB_VAR vb_eslow, 1                  ; the board's speed: 0 RAM's, 1 to 4x, 2
+VB_VAR vb_er10, 2                   ; ...slower; its time in RAM's tenths
+VB_VAR vb_eforce, 1                 ; ...a test's answer, plus one (a poke)
+VB_VAR vb_etseg, 2                  ; ...vb_erate's segment
 VB_VAR vb_hinp, 1                   ; IN PLACE from here (vbinp.inc)
 VB_VAR vb_noinp, 1                  ; ...never: the A/B gate (a test's poke)
 VB_VAR vb_tier, 1                   ; ...XMS's tier: a 286 or a 386

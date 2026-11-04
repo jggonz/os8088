@@ -237802,14 +237802,24 @@ unchanged: one `OSAPI_XMEM_CAPS` at load, and a compare in each read.
   read maps them and copies out with `rep movsb`. So an 8088 with a board
   holds a whole battle (a 2 MB Lo-tech holds the Hercules demo's 700 KB),
   and an action never waits for the disk. Once the hold is whole the
-  rings are read IN PLACE (125.4.2) and nothing is copied at all. NOT
-  done: the board's speed is not timed (98.3.18.8: a PicoMEM v1's eight
-  wait states made the copy slower than the disk there) - a slow board is
-  taken as it is.
+  rings are read IN PLACE (125.4.2) and nothing is copied at all.
+- **THE BOARD IS TIMED FIRST** (`vb_espeed`, Video Player's 98.3.18.8,
+  whose field run found the owner's PicoMEM v1 answering with eight wait
+  states): at the hold's open, 1 KB `rep lodsw` passes over the frame and
+  over the package's own RAM, two ticks each from a tick's edge, the
+  frame's time in tenths of RAM's in `[vb_er10]`. To 1.5x (`VB_EFAST`) the
+  board keeps its place - EMS first below a 386, read in place; to 4x
+  (`VB_ESLOW`) the pool is taken first and, with none, the board is COPIED
+  out of and never read in place (the decode is the hook's time, a slow
+  board's reads late frames); slower, the pool or no hold at all. About
+  four ticks, once, and only where a board answers. `[vb_eforce]` is a
+  test's answer (the tier plus one).
 
 `vbtems` (MartyPC's 5150 with the Lo-tech board) holds the EMS hold to the
-glass and to the disk: the title played again out of the board byte for
-byte the host's decode, and not one disk read from the fill on.
+glass and to the disk: the board timed at RAM's speed (1.0x), the title
+played again out of the board byte for byte the host's decode, and not one
+disk read from the fill on; `vbtemsslow` forces the board slow (copied,
+never in place) and `vbtemsnone` too slow (no hold, the disk's play).
 
 `vbthold` (QEMU) holds it to the file: the hold one range, filled while the
 title goes round, byte for byte the bundle, then B: changed to a BLANK
@@ -237835,7 +237845,8 @@ loaded base) are the precedents and their mechanisms are taken as they are:
   in the hold. `vb_rrec` hands the decode DX:SI, DX a segment or a handle;
   the sound's two reads (`vb_aframe`, `vb_anext`) and a loop's first
   record's length (`vb_start_clip`) go through it too.
-- **EMS**: the frame's FOUR quarters are taken at the hold's open (EMSV_FRAME
+- **EMS**, only on a board timed as fast as RAM (125.4.1): the frame's FOUR
+  quarters are taken at the hold's open (EMSV_FRAME
   0Fh, the two of 125.4.1 when another instance holds the others - and then
   no decode in place), with the driver's recipe (107.4) and the run's first
   page (EMSV_BASE). The hook maps the three pages from the one under a
@@ -237875,9 +237886,12 @@ place and no copy at all from the fill on. `vbthold` (QEMU's 386, the closed
 list's entry 1) holds XMS in place: the check passes, the yield step poked
 to 256 so the demo's small records yield (~130 times), and the title again
 is the host's decode in B8000 byte for byte; `vbtholdcopy` gates it off and
-the copying hold still plays. **The 286's LOADALL arm has run in no
-emulator here** (none has a 286's LOADALL): it is Video Player's borrow,
-called exactly as there, and wants a field run on the Victory 286.
+the copying hold still plays. `vbt286` holds the 286's arm on 86Box's
+mr286, whose 286 executes LOADALL: the check passes on that CPU, the battle
+plays to victory and again in place with ~136 yields - each a `la_restore`
+and a fresh LOADALL - the title again exact in B8000, and no exception
+outside the BIOS. Still for the field: the Victory 286 itself (86Box is not
+cycle-accurate, so what a borrow costs there is not measured here).
 
 ### 125.5 The band
 

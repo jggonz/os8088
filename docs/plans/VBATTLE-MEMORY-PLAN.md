@@ -1,9 +1,9 @@
 # VBATTLE-MEMORY — streaming the loops, and the memory faster machines have
 
-**Status: M1, the renditions (9), M2, M3, M4's EMS hold and M5's decode in
-place (EMS, and XMS on a 386 and a 286) BUILT (2026-11-04, format 7,
-SPEC.md 125.4.1-2); the board's timing remains, and the 286's LOADALL arm
-wants a field run.** The owner's
+**Status: M1, the renditions (9), M2, M3, M4 (the EMS hold, the board
+timed first) and M5's decode in place (EMS, and XMS on a 386 and a 286)
+BUILT (2026-11-04, format 7, SPEC.md 125.4.1-2); the 286 arm checked on
+86Box's 286, the Victory's own run still the field's.** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all
@@ -223,7 +223,7 @@ it reaches into the hook (the decode reads through the frame) where M2 and
 M3 change only the reader; and it has Video Player's rules attached:
 - **time the board first** (98.3.18.8): the owner's PicoMEM v1 answers with
   8 wait states and played worse in place than from the disk. A slow board
-  is used as a copied bank or not at all;
+  is used as a copied bank or not at all (DONE with M5, `vb_espeed`);
 - below a 386, **EMS before XMS** (98.3.18.6): one copy with interrupts on,
   or none, against two with them off.
 
@@ -329,9 +329,15 @@ off the board, no copy); `vbthold` with XMS in place on QEMU's 386 (the
 title again exact in B8000, ~130 yields at a poked 256-byte step);
 `vbtholdcopy` the gate's A/B. Broken on purpose each goes red: a yield
 re-borrowing a byte on stops the guest, a page on in the hook's map never
-reaches victory. NOT run anywhere: the 286's LOADALL arm (no emulator here
-has it) - Video Player's borrow, called as Video Player calls it, for the
-Victory 286. Still to do from 98.3.18.8: time the board before trusting it.
+reaches victory. **The 286's LOADALL arm on 86Box** (the owner's pointer:
+its 286 runs 0F 05, though no row had been written against it): `vbt286`
+on vm/286-hma passes the check on that CPU and plays in place with ~136
+yields, the title exact in B8000, no fault - broken on purpose (a yield a
+byte on) victory never comes. **And the board TIMED first** (98.3.18.8,
+`vb_espeed`): the Lo-tech on MartyPC reads at 1.0x RAM's time; forced slow
+(`vbtemsslow`) it is copied, never in place, and forced too slow with no
+pool (`vbtemsnone`) there is no hold; broken on purpose (the in-place check
+not asking the speed) the slow arm goes in place and fails twice.
 
 ## 11. Not in it
 

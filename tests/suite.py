@@ -16817,6 +16817,28 @@ SOAK = [
         "- and the title again is that; broken on purpose (a page on) the "
         "battle never reaches victory",
         needs=("marty",), wants=("build/emstest.img",)),
+    Row("vbtemsslow", "soak", py("tests/vbtems.py", "--eslow", "1"), 50.0,
+        "SPEC.md 125.4.1, Video Player's 98.3.18.8: vbtems with the board's "
+        "timing forced SLOW ([vb_eforce]): still the EMS hold, but COPIED "
+        "out of, no ring read in place - and still not one disk read from "
+        "the fill on. Broken on purpose (vb_hipq not asking the board's "
+        "speed) it goes in place and fails twice",
+        needs=("marty",), wants=("build/emstest.img",)),
+    Row("vbtemsnone", "soak", py("tests/vbtems.py", "--eslow", "2"), 40.0,
+        "vbtems with the board forced TOO SLOW and no XMS pool (a 5150): "
+        "no hold at all, and the battle to victory off the disk alone",
+        needs=("marty",), wants=("build/emstest.img",)),
+    Row("vbt286", "soak", py("tests/vbt286.py"), 30.0,
+        "SPEC.md 125.4.2 on a REAL 286's LOADALL - 86Box's mr286 (vm/286-hma, "
+        "which runs 0F 05): the XMS hold whole, then the check passes on "
+        "this CPU (la_probe with INT 6 hooked, 16 bytes through a "
+        "LOADALL'd DS against the driver's copy), the battle to victory "
+        "and again with its rings read in place and the decode yielding "
+        "(~136 times at a poked 256-byte step, each a la_restore and a "
+        "fresh LOADALL), the title again exact in B8000, and no exception "
+        "outside the BIOS. Broken on purpose (a yield re-borrowing a byte "
+        "on) victory never comes",
+        needs=("86box",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "

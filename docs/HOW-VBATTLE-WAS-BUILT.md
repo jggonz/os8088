@@ -655,8 +655,22 @@ place at all. So the step became a word a test can poke (256), and the
 title again was checked in B8000 byte for byte: 135 yields and 16 looks of
 16 exact. Broken on purpose, a yield re-borrowing one byte on stops the
 guest outright, and a page on in the hook's map never reaches victory. The
-286's LOADALL arm is Video Player's borrow called as Video Player calls it;
-no emulator here has a 286's LOADALL, so that one waits for the Victory.
+286's LOADALL arm is Video Player's borrow called as Video Player calls it,
+and that first write-up said no emulator here could run it. The owner
+corrected it within the hour - *"I think 86Box models loadall?"* - and it
+does: Video Player's own docs had said so, beside the line that no row had
+been written against it. So `vbt286` is the first: the mr286 profile, the
+battle off B:, hma286's os88ui adapter with two verbs it lacked (a key, and
+a clock that steps the held machine when it is looked at). The check
+passed on that CPU at the first run, 503 records read in place across 136
+yields, each a `la_restore` and a fresh LOADALL, the title exact in B8000
+and nothing in the fault log.
+
+Then the board's speed, the owner's next ask ("Video player has the same I
+think" - it does, 98.3.18.8): the frame timed against the package's own RAM
+at the hold's open, Video Player's table taken whole. MartyPC's Lo-tech
+reads at 1.0x; the two slower tiers are a poke away, and each plays as its
+row of the table says.
 
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 

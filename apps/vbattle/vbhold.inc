@@ -26,20 +26,105 @@ HT_SIZE     equ 8
 ; 386 EXPANDED memory first (Video Player's 98.3.18.6: one copy with
 ; interrupts on, where XMS is int 15h's two with them off), XMS after; from
 ; a 386 XMS first. Nothing on failure: the disk serves
+; THE BOARD IS TIMED FIRST (vb_espeed, Video Player's 98.3.18.8): one as
+; fast as RAM keeps that order and is read in place; a slower one gives way
+; to the pool, and without one is copied out of, never read in place; one
+; slower than VB_ESLOW is not held in at all
 vb_hopen:
     mov byte [vb_hon], 0
     mov byte [vb_htype], 0
+    call vb_espeed
     call OSAPI_CPU_INFO
     cmp al, CPU_386
     jae .x
+    cmp byte [vb_eslow], 0          ; (slower than RAM: the pool first)
+    jne .x
     call vb_eopen
     jnc .ok
     jmp vb_xopen
 .x:
     call vb_xopen
     jnc .ok
+    cmp byte [vb_eslow], 2          ; (too slow to hold in at all)
+    je .no
     jmp vb_eopen
+.no:
+    stc
 .ok:
+    ret
+
+VB_EFAST    equ 15              ; the frame's read time in tenths of RAM's:
+VB_ESLOW    equ 40              ; to 1.5x as RAM, to 4x copied, then none
+
+; vb_espeed - [vb_eslow]: how the EMS frame READS against this package's
+; own RAM (Video Player's vp_espeed) - 1 KB `rep lodsw` passes counted over
+; two ticks each from a tick's edge, [vb_er10] the frame's time in tenths
+; of RAM's: 0 within VB_EFAST, 1 within VB_ESLOW, 2 slower. No board: 0,
+; nothing timed. [vb_eforce] (a test's poke), when not 0, is the answer
+; less one after the measurement. A PicoMEM v1 answers with 8 wait states;
+; a Lo-tech board on an XT is RAM's speed
+vb_espeed:
+    mov byte [vb_eslow], 0
+    mov word [vb_er10], 0
+    mov bl, EMSV_CAPS
+    call vb_ems                     ; DX = the frame
+    jc .f
+    push dx
+    mov ax, ds
+    call vb_erate
+    pop ax
+    push bx                         ; RAM's passes
+    call vb_erate                   ; BX = the frame's
+    pop ax
+    mov dx, 10
+    mul dx                          ; DX:AX = RAM's x 10
+    or bx, bx
+    jz .slow
+    cmp dx, bx
+    jae .slow
+    div bx                          ; AX = the frame's time, RAM's tenths
+    mov [vb_er10], ax
+    cmp ax, VB_EFAST
+    jbe .f
+    mov byte [vb_eslow], 1
+    cmp ax, VB_ESLOW
+    jbe .f
+.slow:
+    mov byte [vb_eslow], 2
+.f:
+    mov al, [vb_eforce]
+    or al, al
+    jz .r
+    dec al
+    mov [vb_eslow], al
+.r:
+    ret
+
+; vb_erate - AX = a segment: BX = the 1 KB reads of it in two ticks, from
+; a tick's edge. AX, CX, DX, SI spent
+vb_erate:
+    mov [vb_etseg], ax
+    call OSAPI_GET_TICKS
+    mov dx, ax
+.w:
+    call OSAPI_GET_TICKS
+    cmp ax, dx
+    je .w
+    mov dx, ax
+    xor bx, bx
+.l:
+    push ds
+    mov ds, [vb_etseg]
+    xor si, si
+    mov cx, 512
+    cld
+    rep lodsw                       ; (one prefix: an interrupt resumes it)
+    pop ds
+    inc bx
+    call OSAPI_GET_TICKS
+    sub ax, dx
+    cmp ax, 2
+    jb .l
     ret
 
 ; vb_hplan - AX = the store's room in 4 KBs: the ranges (vb_htab), the file

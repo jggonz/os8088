@@ -51,6 +51,12 @@ def ok(cond, what):
 
 
 def main():
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--eslow", type=int, choices=(1, 2), default=None,
+                    help="force the board's timing: 1 slow (copied, never "
+                    "in place), 2 too slow (no hold: the disk)")
+    a = ap.parse_args()
     os.chdir(ROOT)
     img0 = os88build.at("build/emstest.img")
     if not os.path.exists(img0):
@@ -113,8 +119,36 @@ def main():
                 m.key(KEYS[k], down=False)
                 os88marty.until(m, lambda mm: True, "a key", poll=0.0,
                                 limit=10.0, guest=0.25)
+            if a.eslow:
+                qp = base + syms["vb_eforce"]
+                m.write(qp, bytes([a.eslow + 1]))
             key("return")
             until(lambda: rb("vb_ready") == 1, "the play to start")
+            er = rw("vb_er10")
+            if a.eslow is None:
+                ok(rb("vb_eslow") == 0 and 5 <= er <= 15,
+                   "the board TIMED first: the Lo-tech reads at %d.%dx RAM's "
+                   "time - as fast as RAM (98.3.18.8)" % (er // 10, er % 10))
+            else:
+                ok(rb("vb_eslow") == a.eslow,
+                   "the board forced %s (measured %d.%dx)"
+                   % ("slow" if a.eslow == 1 else "too slow", er // 10,
+                      er % 10))
+            if a.eslow == 2:
+                ok(rb("vb_hon") == 0, "too slow, and no pool: NO HOLD, the "
+                   "disk serves")
+                until(lambda: rb("vb_tplay") == 1, "the title")
+                key("return")
+                until(lambda: rb("vb_state") == GS_MENU, "the menu",
+                      guest=240.0)
+                key("return")
+                until(lambda: rb("vb_eplay") == 1, "victory's end loop",
+                      guest=240.0)
+                ok(rb("vb_over") == 1 and rw("vb_hcopies") == 0,
+                   "the battle to victory off the disk alone")
+                key("esc")
+                until(lambda: rb("vb_ready") == 0, "Esc to leave")
+                return finish()
             ok(rb("vb_hon") == 1 and rb("vb_htype") == 2,
                "below a 386 the hold is EXPANDED memory (htype %d)"
                % rb("vb_htype"))
@@ -127,9 +161,13 @@ def main():
             rc0, c0 = rw("vb_rcalls"), rw("vb_hcopies")
             ok(True, "the hold filled while the title went round (%d disk "
                "reads so far)" % rc0)
-            ok(rb("vb_hinp") == 1 and rb("vb_eq") == 0x0F,
-               "...and from then on IN PLACE: the frame's four quarters "
-               "(quarters %02Xh)" % rb("vb_eq"))
+            if a.eslow == 1:
+                ok(rb("vb_hinp") == 0, "...a slow board: COPIED out of, "
+                   "never read in place")
+            else:
+                ok(rb("vb_hinp") == 1 and rb("vb_eq") == 0x0F,
+                   "...and from then on IN PLACE: the frame's four quarters "
+                   "(quarters %02Xh)" % rb("vb_eq"))
             ir0, ic0 = rw("vb_irings"), rw("vb_icalls")
             key("return")
             until(lambda: rb("vb_state") == GS_MENU, "the menu", guest=240.0)
@@ -160,9 +198,14 @@ def main():
                "on the glass (%d of 30 looks exact)" % hits)
             rc1, c1 = rw("vb_rcalls"), rw("vb_hcopies")
             ir1, ic1 = rw("vb_irings"), rw("vb_icalls")
-            ok(ir1 - ir0 >= 3 and ic1 != ic0,
-               "rings given their clips in place: %d, records read where "
-               "the board has them: %d" % (ir1 - ir0, (ic1 - ic0) & 0xFFFF))
+            if a.eslow == 1:
+                ok(ir1 == ir0 and c1 > c0, "slow: no ring in place, %d "
+                   "copies out of the board" % (c1 - c0))
+            else:
+                ok(ir1 - ir0 >= 3 and ic1 != ic0,
+                   "rings given their clips in place: %d, records read "
+                   "where the board has them: %d"
+                   % (ir1 - ir0, (ic1 - ic0) & 0xFFFF))
             ok(rc1 == rc0,
                "from the hold's fill on, NOT ONE disk read: %d reads, %d "
                "copies out of the board (in place: none needed)"
@@ -171,6 +214,10 @@ def main():
             until(lambda: rb("vb_ready") == 0, "Esc to leave")
         finally:
             m.quit()
+    return finish()
+
+
+def finish():
     if fails:
         print("%d FAILED" % len(fails))
         return 1
