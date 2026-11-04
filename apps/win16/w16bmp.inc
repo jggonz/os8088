@@ -430,7 +430,7 @@ W16LIB w16u_loadbmp
     pop si
     ret
 .prog:
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_BITMAP

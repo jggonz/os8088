@@ -233614,6 +233614,23 @@ a load from inside a paint is legal.
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
 
+**A string type or name is compared where the program keeps it** *(2026-11-04)*.
+`w16_rkey` keeps a string's far pointer in `w16_rtyp` or `w16_rnam` (four
+bytes each), and `w16_rmatch` and the name table's `w16_rnmcmp` read the
+program's string in place, case blind (a-z, as the resource compiler folds),
+against the table's length-prefixed name. So a name has no length of WIN16's
+own: the table's count byte is the limit, 255, as it is on Windows. It used to
+be copied, upper-cased, into a 16-byte buffer, which kept 15 characters, and a
+longer name was cut and then matched nothing, because the compare reads the
+table's whole name against the cut key: Microsoft Arcade's Asteroids asks for
+dialog `"NUMBEROFPLAYERSDIALOG"` (21 characters) when F2 starts a game,
+`DialogBoxParam` answered -1, and the program reported its own *Error code =
+-1. Continue?*. The pointer is only read inside the call that was handed it;
+a name inside a resource (a dialog's `SS_ICON` text) is in a template the
+dialog holds (`RN_USAGE`) while it reads it, so the name table's own load
+cannot discard it underneath. `W16FIX` `LONGNAME` is the gate: a dialog, a
+menu and a bitmap named in 21, 40 and 255 characters.
+
 **A string name may be in the name table** *(S10; any type at S11)*. A
 Windows 3.0 linker numbered every resource and wrote the names into an
 `RT_NAMETABLE` (type 15) resource: CALC 3.00 asks for dialog `"SC"`, which
@@ -238072,7 +238089,11 @@ being the instance's. TASKS and TASKB hold a conversation from
 **Global atoms are the registered clipboard formats' table**
 (§124.25.10), as Windows' formats were global atoms. `GlobalAddAtom`,
 `GlobalFindAtom` and `GlobalGetAtomName` (USER.271, *S21 batch 5*) use
-it, and names compare without case, as `AnsiUpper` folds them.
+it, and names compare without case, as `AnsiUpper` folds them. A name
+is kept cut to 31 characters, so its first 31 decide: a longer name is
+found again rather than added once a call, which filled the table with
+copies of it and never found it *(2026-11-04)*. Two names the same for 31
+characters are one atom here, where Windows keeps 255.
 
 **The table is the task part's** *(S24 batch 2; part 10 since S21 batch
 6)*: `W16_NATOM` = 16 names of 31 characters, 512 bytes of part 10, read
