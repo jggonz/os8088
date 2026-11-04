@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "0e59be1d87f305c2679158b1cdd5bf47b8d0b1a1009e882bb5eba8360aac04a2",
+  "fingerprint": "c9eb3c2e71af6e5b8a5fe2ad0384fc7e237fbb406499a2b2d98c8c47ba0968f0",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "2d2cafc60f297ddb7f1ce992380f927e6defa4b91e9a6f90e63b7b015dd4e35f",
+  "fingerprint": "96f9c23b13730deb03010bef500010bb44ec962465de220e038ce002a5dcc918",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1694,6 +1694,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "SEG_BWIN comment clarified: caller's own block (14.139)",
+   "to": 12
+  },
+  {
+   "fingerprint": "96f9c23b13730deb03010bef500010bb44ec962465de220e038ce002a5dcc918",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG gains SEG_TYPE (13), additive: a window's code/data retype (KERN-MEGA-PLAN 14.142)",
+   "to": 10
+  },
+  {
+   "fingerprint": "c9eb3c2e71af6e5b8a5fe2ad0384fc7e237fbb406499a2b2d98c8c47ba0968f0",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG gains SEG_TYPE (13), additive: a window's code/data retype (KERN-MEGA-PLAN 14.142)",
    "to": 12
   }
  ]

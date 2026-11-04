@@ -13712,3 +13712,60 @@ rung**: the next `.mega` change of any size beyond that crosses it.
 *Owner bytes.* `mega_fbown`'s nibble test became `test al, 50h`: the owners
 written are a slot, 80h|, A0h| (taken), C0h|, F0h, FEh and FFh (refused),
 and bits 4 and 6 are clear in exactly the taken three.
+
+### 14.142 `OSAPI_SEG` `SEG_TYPE`: a real code selector over a program's own window (2026-11-04)
+
+Found by the props agent: Arcade's ASTEROID, on kern_mega, closed with `0D at
+14CC:01D0`, `call far [es:di+12h]` through selector 15AC, a 256-byte DATA
+window. ASTEROID imports `AllocCStoDSAlias`, `PrestoChangoSelector` and
+`FreeSelector`: it builds code in a block and calls it. WIN16 left the
+code/data switch to kern_mega, which completes a far call only through an
+image's identity selector or a pair's data half (`mega_codesel`), so a lone
+LDT data window was refused and closed.
+
+*The choice* (lead, 2026-11-04): WIN16 makes the real thing, as Windows does;
+kern_mega does not emulate far calls through data selectors. The smallest
+kernel mechanism is a verb that retypes a window in place, because everything
+else - base, limit, owner, the row in `mega_wtab`, the owner's end freeing it,
+re-aim by `SEG_WINL` - a window already has. A verb that made a new code
+window over a base would have repeated `mega_wset`'s re-aim, match and bound
+logic for a second kind. So `SEG_TYPE` (13): DX = a window, CX = 0/1, access
+byte 92h/9Ah. WIN16 composes the rest: `LAR` for the source's type,
+`SEG_WINL` for the destination's base and limit, `SEG_TYPE` last.
+
+*Seen, and the second half* (2026-11-04): the first build (a window's retype
+only) left ASTEROID closed at the very same `14CC:01D0`. Selector 15AC is not a
+window: it is the HANDLE descriptor of a 256-byte `GlobalAlloc` block (159C,
+15A4, 15AC are consecutive entries, and the program's object holds it as the
+function pointer), and the idiom is `PrestoChangoSelector(sel, sel)`, which
+flips a selector in place. So `SEG_TYPE` takes a handle descriptor too, when
+its base lies in a block of the caller's own (`mega_bown`, SEG_BWIN's test, by
+a four-byte door `mega_bownf` in `.mega`), and WIN16 retypes in place when
+source and destination are the same selector. A handle descriptor is
+re-aimed in place by `GlobalReAlloc`, so this alias DOES follow its block,
+which settles the coherence question for the case that matters. On the second
+build ASTEROID starts: Quick Help, the Asteroids window, and the attract
+mode playing; F2 then gives its own "Application Error: Error code = -1.
+Continue?" box (the next thing to chase; not a fault, WIN16 is not closed).
+
+*The owner test* is `SEG_FREE`'s (14.135): the caller's `mega_segown` byte
+against the window's `mega_wtab` row. A selector with no row (a block's, a
+SUB, a pair, a handle descriptor) is not a window and is refused with AX = 4;
+it is shared or tied to a block, and retyping it would change it for
+everyone. `mega_wfind` skips a code window so a data question over the same
+base and reach (`SEG_WIN`, a non-block `SEG_SUB`) does not answer it.
+
+*Coherence* (the question asked): a WINDOW does not follow a block that
+moves, data or code, and `SEG_TYPE` does not change that. The alias is
+documented as valid while the block stays put, which is Windows' rule for
+these calls; a SUBC pair's code half, the block case, still follows. Making a
+BOUND code window (`SEG_BWIN` + retype) would follow the block, but the
+`mega_wset` re-bind path would then treat a re-aimed destination as bound and
+hand back a different selector, so it was not taken. No evidence from a real
+Windows 3.1 run was available here; the statement rests on the documented
+semantics, and the SPEC says so.
+
+*Where it lives.* The body, `mega_segty`, is `.cold` and far-called from a
+dispatch in `.mega` as `mega_fkivt` is (14.141). ABI: a new verb is additive
+(`apps/os88api.inc`), so `tools/abilock.py --update` without a version bump.
+Real-mode kernels refuse it (CF = 1), a segment being code or data by use.
