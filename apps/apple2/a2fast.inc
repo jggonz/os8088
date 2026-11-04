@@ -75,7 +75,12 @@ _a2_run:
     mov ax, [_a2_fseg]
     mov word [a2f_far], A2F_ENTRY
     mov [a2f_far+2], ax
-    ; THE FRAME (m65gen.py's header): the two doors, then the far call
+    ; THE FRAME (m65gen.py's header): this core's own segment, the
+    ; translated ROM's PC table and code (F+28, F+26, F+24; 0 = none), the
+    ; two doors, then the far call
+    push word [_a2_fseg]
+    push word [_a2_ftab]
+    push word [_a2_faot]
     push cs
     mov ax, a2f_iowr
     push ax
@@ -87,7 +92,7 @@ _a2_run:
     mov bx, _a2_m
     push ds
     pop es
-    call far [a2f_far]              ; (its retf takes the doors off)
+    call far [a2f_far]              ; (its retf takes the frame off)
     mov cx, [_a2_m+AM_CNT]
     mov [a2f_left], cx
     cmp ax, A2F_RSN_HB1

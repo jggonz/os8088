@@ -187,6 +187,13 @@ unsigned a2_div32(unsigned hi, unsigned lo, unsigned d);
  * kernel, the claim's code half under kern_mega. a2_fseg 0 = the accurate
  * core runs the machine alone. a2fast.inc reads it. */
 unsigned a2_fseg;
+unsigned a2_faot;                           /* THE ROM TRANSLATED AHEAD OF TIME
+                                             * (4.7): its code's call selector
+                                             * and its PC table's segment, 0
+                                             * = the core runs the ROM itself.
+                                             * a2fast.inc puts both in the
+                                             * frame */
+unsigned a2_ftab;
 static unsigned a2_fcode;
 static int a2_fast_done;                    /* a2_fast_init has run, whatever
                                              * it answered - the moment the
@@ -313,6 +320,8 @@ unsigned char a2_chr[512];
 /* --- the ROM part (section 1.4, 1.5) -------------------------------------- */
 #define A2_ROM_PART   0
 #define A2_FAST_PART  1                     /* the fast 6502 core (4.6) */
+#define A2_AOT_PART   2                     /* the ROM, translated (4.7) */
+#define A2_AOTPC_PART 3                     /* ...and its PC table */
 #define A2_ROM_MAIN   0x0000                /* 12,288 bytes: $D000-$FFFF */
 #define A2_ROM_CHRGEN 0x3000                /*  2,048 bytes: the II+ chargen */
 #define A2_ROM_DISK2  0x3800                /*    256 bytes: the P5 boot ROM */
@@ -1561,6 +1570,19 @@ static void a2_fast_init(void)
     os88_mem_movable(code, 1);              /* os88_onmove follows both */
     a2_fcode = code;
     a2_fseg = a2f_codesel(code);
+    /* ...AND THE ROM TRANSLATED AHEAD OF TIME (section 4.7), both its parts
+     * or neither: they are fetched pinned, and the core enters the code
+     * through the table, so one without the other is no translation */
+    if (os88_part_fetch(A2_AOT_PART) != 0)
+        return;
+    if (os88_part_fetch(A2_AOTPC_PART) != 0) {
+        os88_part_drop(A2_AOT_PART);
+        return;
+    }
+    a2_ftab = os88_part_seg(A2_AOTPC_PART);
+    a2_faot = a2f_codesel(os88_part_seg(A2_AOT_PART));
+    if (a2_faot == 0)
+        a2_ftab = 0;
 }
 
 /* a2_slice - one run of the core for the wall budget.
@@ -1583,7 +1605,7 @@ static unsigned a2_th_tick;                 /* the tick last paid in */
 static int a2_th_owed;                      /* units the machine may run */
 static int a2_th_frac;                      /* sixteenths of a unit, carried */
 static int a2_th_rem;
-static int a2_th_off;                       /* the host harness's seam: its
+static int a2_th_off;                         /* the host harness's seam: its
                                              * runs cost no time, so it turns
                                              * the throttle off for every case
                                              * but the throttle's own */                       /* cycles under a unit, carried */

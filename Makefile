@@ -11325,7 +11325,7 @@ xt-c64: $(IMG360) $(BUILD)/c64360.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM $(BUILD)/apple2/a2fast.bin,part))
+$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM $(BUILD)/apple2/a2fast.bin $(BUILD)/apple2/a2aot.bin $(BUILD)/apple2/a2aotpc.bin,part))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): apple2.c #includes the
 # parts, and the shim %includes the five hand-written pieces and the icon.
@@ -11401,6 +11401,23 @@ $(BUILD)/apple2/a2fast.asm: apps/m6502/m65gen.py apps/apple2/a2cpu.inc | $(BUILD
 
 $(BUILD)/apple2/a2fast.bin: $(BUILD)/apple2/a2fast.asm
 	$(NASM) -f bin -w+error -l $(BUILD)/apple2/a2fast.lst -o $@ $<
+
+# ...AND THE ROM TRANSLATED AHEAD OF TIME (APPLE2-SPEC section 4.7): the
+# seeds are the ROM PCs tools/a2trace.py sees run while it types BASIC at the
+# Autostart ROM on tools/py6502.py; apps/m6502/m65aot.py translates them and
+# what a walk from them reaches, and writes the code (part 2) and the PC
+# table (part 3). Made from the fetched ROM, so never committed.
+$(BUILD)/apple2/a2rom.seeds: tools/a2trace.py tools/py6502.py apps/m6502/m65gen.py \
+                             $(BUILD)/apple2-rom/APPLE2.ROM
+	@mkdir -p $(BUILD)/apple2
+	python3 tools/a2trace.py $(BUILD)/apple2-rom/APPLE2.ROM -o $@
+
+$(BUILD)/apple2/a2aotpc.bin: $(BUILD)/apple2/a2aot.bin
+$(BUILD)/apple2/a2aot.bin: apps/m6502/m65aot.py apps/m6502/m65gen.py \
+                           $(BUILD)/apple2/a2rom.seeds $(BUILD)/apple2-rom/APPLE2.ROM
+	python3 apps/m6502/m65aot.py --machine apple2 --rom $(BUILD)/apple2-rom/APPLE2.ROM \
+	    --seeds $(BUILD)/apple2/a2rom.seeds -o $(BUILD)/apple2/a2aot.asm \
+	    --table $(BUILD)/apple2/a2aotpc.bin
 
 # ...and the C64's (C64-SPEC section 4.7), part 1 of C64.O88
 $(BUILD)/c64/c64fast.asm: apps/m6502/m65gen.py apps/c64/c64cpu.inc | $(BUILD)

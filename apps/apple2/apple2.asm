@@ -183,14 +183,17 @@
 ; Makefile appends the cut module as the last --part and a lazy row must follow
 ; every eager one. It is OP_SEG|OP_LAZY|OP_COMP, fetched out of this file by
 ; the first wake's probe (a2cmd.c's ovl_a2_init) and never part of the carve.
-    CC_PARTS_BEGIN 3
+    CC_PARTS_BEGIN 5
       OS88_PART OP_ASSET, OP_COMP   ; 0 the ROM, eager, in the carve
       OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 1 THE FAST 6502 CORE (APPLE2-SPEC
                                     ; 4.6): 64KB that apps/m6502/m65gen.py
                                     ; writes, fetched at the first wake and
                                     ; far-called; without it the accurate core
                                     ; runs the machine alone
-      CC_OVL_ROW                    ; 2 the overlay, lazy, a claim of its own
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP   ; 2 THE ROM TRANSLATED AHEAD OF
+                                    ; TIME (APPLE2-SPEC 4.7): m65aot.py's code
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP ; 3 ...and its PC table
+      CC_OVL_ROW                    ; 4 the overlay, lazy, a claim of its own
     CC_PARTS_END
 _a2_opbase equ op_base              ; the carve's CLAIM base, which apple2.c
                                     ; shrinks to the main ROM once the

@@ -118,7 +118,9 @@ APPLE2 = dict(
     ct_lo=0xBFFE,
     ct_top=False,               # $FFFE-$FFFF are the ROM's RTI and a hand-back
     kb_latch=True,              # $C000-$C00F answered from KBV (a2io.c)
-    frame_extra=0,
+    aot=(0xD000, 0x10000),      # the main ROM, translated (m65aot.py, 4.7)
+    chrget={0x00B1: "a_chrget", 0x00B7: "a_chrgot"},  # ...and CHRGET native
+    frame_extra=3,              # F+24 its code, F+26 its PC table, F+28 us
 )
 C64 = dict(
     name="c64",
@@ -151,6 +153,7 @@ ENTRY = 0x0210                  # in opcode $02's slot, after its hand-back stub
 # own and writes those two slots as near jumps: $FE (INC abs,X) to its body in
 # a spare slot, $FF (not a legal opcode) to the hand-back. The two targets are
 # a table at FIXUP, which the package reads out of the part.
+XR_RESUME, XR_SLICE = 0x7280, 0x72A0     # the translation's doors back
 PART_LEN = 0xFE00
 FIXUP = 0x0203                  # dw h_FE body, x_hb1 - in $02's slot
 
@@ -200,8 +203,21 @@ class Gen:
         x, hb = self.lab(), self.lab()
         self.L("    sub bp, %d" % cyc, "    jle %s" % x)
         self.ct_check(hb)
-        self.L(*self.fetch_op())
+        self.L(*self.aot_or_fetch())
         self.L("%s: jmp x_hbr" % hb, "%s: jmp x_slice" % x)
+
+    def aot_or_fetch(self):
+        """the next opcode - or, where the profile has a ROM translated ahead
+        of time (m65aot.py) and SI is in it, ct_rom, which enters the
+        translation when the PC table names one"""
+        if not self.p.get("aot"):
+            return self.fetch_op()
+        go = self.lab()
+        lo, hi = self.p["aot"]
+        top = [] if hi >= 0x10000 else ["    cmp si, 0x%04X" % hi, "    jae %s" % go]
+        return ["    cmp si, 0x%04X" % lo, "    jb %s" % go] + top + [
+                "    jmp ct_rom",
+                "%s:" % go] + self.fetch_op()
 
     def ct_check(self, hb):
         if self.c64:
@@ -645,7 +661,7 @@ class Gen:
                            "    cmp bx, 0x%04X" % (hi - lo), "    jb .hbr"]
         if self.p["ct_top"]:
             t["entry"] += ["    cmp si, 0xFFFE", "    jae .hbr"]
-        t["entry"] += self.fetch_op() + [
+        t["entry"] += self.aot_or_fetch() + [
             ".slice: jmp x_slice",
             ".hbi: jmp x_hbi0",
             ".hbr: jmp x_hbr",
@@ -764,6 +780,46 @@ class Gen:
         ]
         t["vid"] = [("c64_mark:" if self.c64 else "vid_mark:")] + mark
         return t
+
+    def aot_tails(self):
+        """THE TRANSLATED ROM's doors (m65aot.py; APPLE2-SPEC 4.7). The frame
+        carries the translation's code segment at F+24 (0: none), its PC
+        table's at F+26 and this core's own at F+28."""
+        lo = self.p["aot"][0]
+        return [
+            # ct_rom - SI is a ROM PC this core was about to fetch: the PC
+            # table's word for it, and a far jump there if it names one
+            "ct_rom:",
+            "    mov bx, sp",
+            "    cmp word [ss:bx+%d], 0" % F_EXTRA, "    je .fetch",
+            # ES = the PC table, and the translation keeps it there for its
+            # own lookups (this core's Apple II path never reads ES)
+            "    mov es, [ss:bx+%d]" % (F_EXTRA + 2),
+            "    mov bx, si", "    shl bx, 1",
+            "    mov bx, [es:bx+0x%04X]" % ((-lo * 2) & 0xFFFF),
+            "    test bx, bx", "    jz .fetch",
+            "    mov si, sp",
+            "    push word [ss:si+%d]" % F_EXTRA,
+            "    push bx",
+            "    retf",
+            ".fetch:",
+        ] + self.fetch_op() + [
+            # xr_resume (fixed: m65aot.py's XR_RESUME) - from the translation,
+            # SI the PC to run next, DL 0: into the interpreter there, after
+            # the check any new PC gets (no ROM lookup: the translation came
+            # here because that PC has none, or is not in the ROM)
+            "    times 0x%04X-($-$$) db 0xCC" % XR_RESUME,
+            "xr_resume:",
+            "    xor dl, dl",
+            "    lea bx, [si+0x%04X]" % ((0x10000 - self.p["ct_lo"]) & 0xFFFF),
+            "    cmp bx, 0x%04X" % ((self.p["io_hi"] << 8) - self.p["ct_lo"]),
+            "    jb .hbr",
+        ] + self.fetch_op() + [
+            ".hbr: jmp x_hbr",
+            "    times 0x%04X-($-$$) db 0xCC" % XR_SLICE,
+            "xr_slice:",                    # ...and the budget spent there
+            "    jmp x_slice",
+        ]
 
     def apple_io(self, door_rd, door_wr):
         S = self.scr
@@ -913,7 +969,9 @@ class Gen:
           "")
         tails = self.tails()
         place = {0x02: "entry", 0x12: "exits", 0x22: "pflags", 0x32: "io",
-                 0x42: "vid", 0x52: "idle", 0x62: "region"}
+                 0x42: "vid", 0x52: "idle", 0x62: "region", 0x72: "aot"}
+        if self.p.get("aot"):
+            tails["aot"] = self.aot_tails()
         if self.c64:
             tails["region"] = ["c64_region:"] + [
                 "    db " + ", ".join(str(v) for v in C64_REGION[i:i + 16])
@@ -966,12 +1024,18 @@ def main():
     ap.add_argument("--machine", default="apple2", choices=["apple2", "c64"])
     ap.add_argument("-o", "--out")
     ap.add_argument("--check-cycles")
+    ap.add_argument("--aot-range", help="LO:HI hex - the translated range, for a "
+                    "test core (a2cputest's translated Dormann)")
     a = ap.parse_args()
     if a.check_cycles:
         check_cycles(a.check_cycles)
     if a.out:
         assert len(OPS) == 151, len(OPS)
-        src = Gen(APPLE2 if a.machine == "apple2" else C64).emit()
+        prof = APPLE2 if a.machine == "apple2" else C64
+        if a.aot_range:
+            lo, hi = (int(v, 16) for v in a.aot_range.split(":"))
+            prof = dict(prof, aot=(lo, hi), chrget=None)
+        src = Gen(prof).emit()
         with open(a.out, "w") as f:
             f.write(src)
 

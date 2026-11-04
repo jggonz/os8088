@@ -733,6 +733,89 @@ cannot reach in the fast core are made in the fast core's own code: row 4's
 10's `LDA abs,X` charges 3, and row 2's `SED` slot jumps to `CLD`'s.
 `A2CPU_ONLY=fast` runs that leg alone.
 
+### 4.7 The ROM translated ahead of time (docs/plans/FAST6502-PLAN.md wave 1c)
+
+**APPLE2.O88's parts 2 and 3 are Applesoft and the Monitor as 8086 code**:
+`apps/m6502/m65aot.py` translates every ROM PC it knows into one code
+segment (part 2, a lazy `OP_SEG`), and a table of words, one per PC from
+`$D000` to `$FFFF`, names each one's translation or 0 (part 3, a lazy
+`OP_ASSET`, 24,576 bytes). The ROM is fixed, so the translation is made once,
+on the host, at build time; programs in RAM stay the fast core's.
+
+**Measured, 86Box `286-victory`, `10 I=I+1 / 20 GOTO 10`: 109% of a 1.02 MHz
+Apple under warp, against the fast core's 67%** (section 4.6) - so with the
+throttle on the machine runs at its own speed under BASIC as well as idle. A
+profile puts 84% of that loop in translated code.
+
+**Which PCs.** A ROM PC is translated when `tools/a2trace.py` saw one start an
+instruction, or when a static walk from those reaches it. The trace boots the
+Autostart ROM on `tools/py6502.py` (an NMOS 6502 in Python, which passes
+Dormann's functional test) with the least of an Apple II+ around it and types
+BASIC programs that reach every statement, function and graphics command that
+needs no disk or cassette. The trace is the walk's input because Applesoft
+dispatches its statements through `RTS` on pushed addresses, which no static
+walk follows. **A PC that is not translated is not wrong, only slower**: the
+table says 0 and the fast core runs it. On the build of this commit: 3,896
+traced, **4,596 translated, 56,002 bytes of code**.
+
+**How it is entered.** A jump, call, return or new run whose target is in
+`$D000-$FFFF` goes through the core's `ct_rom` (its opcode `$72` slot): ES =
+the table, a word load, and a far transfer into the translation when it is
+not 0. The frame grows by three words (`a2fast.inc` pushes `a2_fseg`,
+`a2_ftab`, `a2_faot`); `a2_faot` is the code part's `OSAPI_MEM_CODESEL`, for
+kern_mega's sake as in 4.6. The translation leaves through two fixed offsets
+in the core: `xr_resume` (`$7280`, carry on at SI, which may be translated
+again) and `xr_slice` (`$72A0`, the run's budget is spent).
+
+**The registers and the memory are the core's** (4.6), but **SI is not the
+PC** in translated code: the PC is where the code is, and SI is written only
+on the way out. Reads and writes use the same paths as the core's handlers,
+including the I/O call-outs and the damage marks. Inside ROM, a `JSR` to a translated
+target is a near call into a shared helper that pushes the 6502 return
+address and jumps; an `RTS` looks its target up in the table.
+
+**Time.** Every instruction subtracts its own cycles before its body, so
+every translated PC is a place to enter. The countdown is TESTED only at a
+backward branch, a backward `JMP`, `RTS` and `JMP (ind)` - forward
+transfers and `JSR` cannot loop without passing one of those. **THE STATED
+DEVIATION: a run can finish a straight stretch of ROM after its budget is
+spent.** Every cycle is still counted, so `ran = asked - cnt` stays exact and
+the clock a soft switch reads is exact; the Apple II+ has no interrupt
+source, so nothing in the machine can see the overshoot.
+
+**Flags.** N and Z are computed only where something can read them: a later
+instruction before they are written again, a branch, or an exit. C and V are
+always computed.
+
+**What it leaves to the core**: `BRK`, `CLI`, `SEI`, `PLP`, `RTI` and `SED`
+exit to `xr_resume` at their own PC, and the core runs them under 4.6's rules.
+So does **`KEYIN`'s loop (`$FD1B-$FD24`)**. It stays untranslated so that 4.6's counter, which
+takes whole idle passes at once, still applies; translating it would be
+slower.
+
+**CHRGET runs natively.** Applesoft's `CHRGET`/`CHRGOT` live in zero page at
+`$00B1`/`$00B7` and modify their own operand. The translation has a native
+version of each, entered when the core reaches those PCs. A byte-signature
+check on the routine's RAM copy
+guards it, so a program that rewrites the routine gets the core instead.
+
+**Memory.** Both parts are fetched by `a2_fast_init` after the core, both or
+neither, as claims of their own length: **3,520 + 1,536 paragraphs** (56,320 and 24,576 bytes, to the heap's
+granule), on top of
+4.6's two 64KB claims. They are PINNED (they are fetched parts, not
+`os88_mem_claim`s, and nothing follows them on a move). A refusal of either
+leaves `a2_faot`/`a2_ftab` 0, and the fast core runs the ROM itself.
+
+**The gate** is `make a2cputest`'s AOT leg (`A2CPU_ONLY=aot`). It builds
+test cores and translations of Dormann's functional test itself
+(`--range`), in two halves (`$0400-$1DFF` and `$1E00-$3FFF`), so that every
+instruction the test makes is translated code, and runs each half to `$3469`.
+The test writes its own code at `$04E5`, so in range mode the translator
+leaves every PC that a fixed-address store writes to the core. **The negative
+control** patches the translated `ADC #`'s body (`ctl_adc`) to an `OR`, and the
+run must then fail. `tests/apple2part.py` checks that both parts unpack to
+their build files and are claimed at their own length.
+
 ### 4.5 Reset, both kinds
 
 | | what happens |
