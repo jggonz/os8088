@@ -233492,6 +233492,46 @@ A program with no procedure is unchanged: its data may still discard code,
 as Windows' did. `win16pbrush` is the row. Its code holds near 69 KB
 through the fills and the save, and the bands take what is left.
 
+#### 124.9.2 A program's own DGROUP answers the Global calls *(WIN16-NEXT, `dgroup`)*
+
+Windows made a task's DGROUP a block of the global heap: a program (and the
+Visual Basic 3.0 runtime first of all) may ask `GlobalHandle(SS)` for its
+handle, `GlobalSize` for its size and `GlobalReAlloc` to grow it. WIN16's
+DGROUP is a part of the program's one claim (§124.20.2), no arena block, so
+`GlobalHandle(SS)` used to answer 0 and VBRUN300 ended the program on it
+(§124.25.15). It answers as Windows does now, for the **running program's**
+DGROUP only (`[w16_dgroup]`, which is also its `hInstance`, §124.3; in real
+mode that segment, on `kern_mega` the program's DGROUP selector, §124.31.3):
+
+| call | answer for the DGROUP |
+|---|---|
+| `GlobalHandle(seg)` | `AX` = `DX` = DGROUP: it is a fixed block, whose handle is its segment (§124.9) |
+| `GlobalLock(h)` | `DX:AX` = DGROUP:0 |
+| `GlobalSize(h)` | the size it is laid out at: 64 KB whenever the arena had room (§124.21.4), else the size the NE asked for |
+| `GlobalReAlloc(h, n, f)` | `AX` = the handle when `n` is no more than that size, and the block does not move; 0 when it is more. `GMEM_MODIFY` answers the handle. A grow asked with `GMEM_ZEROINIT` does not zero the added bytes: they are the claim's own, and a runtime that wants them clear (VBRUN300 fills them itself) says so |
+| `GlobalUnlock`, `GlobalFlags` | 0: a fixed block, no lock count |
+| `GlobalFree` | refused (the handle comes back): the DGROUP goes with the program |
+
+**Why a grow never moves it.** Windows moved the DGROUP and patched the saved
+`SS` and `DS` of the task. WIN16 never moves a segment (§124.9), and
+`kern_mega`'s selector for it is a fixed descriptor over the claim, so there
+is nothing to re-aim. Because §124.21.4 lays DGROUP out at the whole 64 KB
+when it can, a `GlobalReAlloc` that fits (VBRUN300's asks `BX + CX + 2298h`,
+33,432 bytes for MOZART) is **answered in place with nothing to copy**, and
+`SS`, `DS` and the local heap are untouched. When the arena had no room for
+64 KB and the program asks for more than it was given, the answer is 0 as
+before: the program is told, and a Visual Basic program ends as it did.
+That limit is the open item of this row. A program may overwrite the
+DGROUP's start with its own data, as VBRUN300 does (its `INSTANCEDATA` and
+`pLocalHeap` at `DS:6` with it); a `Local*` call after that is the program's
+own business, as it is on Windows.
+
+**Cost.** The four failure exits of `GlobalHandle`, `GlobalLock`,
+`GlobalSize` and `GlobalReAlloc` pass a one-byte code to one image stub that
+calls the system-library part (§124.24.1), where the test and the answers
+live: the image grows by the stub (see the row of §124.25.15), the part by
+the routines. Nothing else moves.
+
 ### 124.10 Resources, read from the file when loaded *(shipped in S5)*
 
 **The resource table is kept; the resources are not.** The loader copies the
@@ -236832,14 +236872,13 @@ start registers of §124.3 (BX the stack's size, CX the heap's, DS = SS =
 DGROUP). Its first call is `GlobalHandle(SS)`: the runtime makes the
 program's DGROUP its own data segment, `GlobalReAlloc` to the stack, the heap
 and its own 8,856 bytes of data, copies its data to DGROUP:0 and moves the
-stack to the top. WIN16's DGROUP is no block of the global heap (§124.9), so
-`GlobalHandle` answers 0, and on 0 the runtime ends the program with
+stack to the top. WIN16's DGROUP was no block of the global heap, so
+`GlobalHandle` answered 0 (it answers as Windows does since §124.9.2), and on 0 the runtime ends the program with
 `int 21h` `4CFFh`. A `-DW16_TRACE` build (§124.17.4) shows the three calls
 before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
 `KERNEL.21`. An `AH=4Ch` is not recorded. Answering `GlobalHandle`,
 `GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
-out at 64 KB whenever the arena has room (§124.21.4), is the next step, and
-is not done here.
+out at 64 KB whenever the arena has room (§124.21.4), is §124.9.2.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

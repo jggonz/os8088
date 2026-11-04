@@ -884,9 +884,8 @@ w16k_glock:
     xor ax, ax
     ret
 .null:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov cl, 2                       ; the DGROUP is a block too (124.9.2)
+    jmp w16_dgx
 
 ; GlobalUnlock (KERNEL.19) - args: +0 hMem. AX = the lock count left
 w16k_gunlock:
@@ -922,9 +921,8 @@ w16k_gsize:
     dec ax
     jmp short w16_p2b
 .zero:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov cl, 4
+    jmp w16_dgx
 
 ; w16_p2b - AX paragraphs -> DX:AX bytes. Clobbers CX
 w16_p2b:
@@ -956,9 +954,8 @@ w16k_ghandle:
 %endif
     ret
 .zero:
-    xor ax, ax
-    xor dx, dx
-    ret
+    xor cl, cl
+    jmp w16_dgx
 
 ; GlobalFlags (KERNEL.22) - args: +0 hMem. AX = the lock count, and
 ; GMEM_DISCARDED for a discarded handle
@@ -1301,12 +1298,30 @@ w16k_grealloc:
     mov ax, dx
     jmp short .out
 .fail:
-    xor ax, ax
+    mov cl, 6                       ; the DGROUP is a block too (124.9.2)
+    call w16_dgx
+    jmp short .dx
 .out:
     W16POUT
+.dx:
     xor dx, dx
     pop di
     pop si
+    ret
+
+; w16_dgx - the Global calls' last resort: CL = 0 GlobalHandle, 2 GlobalLock,
+; 4 GlobalSize, 6 GlobalReAlloc (w16s_dgtab). The system-library part says
+; whether the handle is the running program's DGROUP (SPEC.md 124.9.2);
+; 0 when it is not, or when the part could not be had
+w16_dgx:
+    mov word [w16_sfn], w16s_dgtab
+    xor ch, ch
+    add [w16_sfn], cx
+    call w16_scall
+    jnc .o
+    xor ax, ax
+    xor dx, dx
+.o:
     ret
 
 ; w16_gsteal - AX = a fresh moveable handle: its block goes to entry SI, and

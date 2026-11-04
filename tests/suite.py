@@ -17129,6 +17129,15 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16dgroup", "soak", py("tests/win16dgroup.py"), 60.0,
+        "SPEC.md 124.9.2, WIN16-NEXT-PLAN: DGROUP.EXE (`make "
+        "win16fixtures`, tests/win16/dgroup.c) asks GlobalHandle(SS), "
+        "GlobalSize, GlobalLock and GlobalUnlock of its own DGROUP, grows it "
+        "with GlobalReAlloc as VBRUN300 does, writes past the old stack and "
+        "is refused a size past 64 KB; its MessageBox must be DGROUP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
         "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
         "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "

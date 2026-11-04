@@ -282,4 +282,91 @@ w16s_cap:
 .out:
     pop cx
     ret
+; -----------------------------------------------------------------------------
+; The program's own DGROUP as a block of the global heap (SPEC.md 124.9.2).
+; The image's GlobalHandle, GlobalLock, GlobalSize and GlobalReAlloc end here
+; when the handle is no block of an arena (w16_dgx, CL = 0, 2, 4, 6): the
+; routine tests the handle asked against [w16_dgroup], and answers the
+; failure (0) when it is not. Registers: ES, BX, AX, DX, DI are free.
+; -----------------------------------------------------------------------------
+w16s_dgtab:
+    jmp short w16s_dgh              ; 0: GlobalHandle
+w16s_dgt2:
+    jmp short w16s_dgl              ; 2: GlobalLock
+w16s_dgt4:
+    jmp short w16s_dgs              ; 4: GlobalSize
+                                    ; 6: GlobalReAlloc, which follows
+
+; GlobalReAlloc - args: +0 wFlags, +2 dwBytes, +6 hMem. AX = hMem when the
+; DGROUP is that big already, else 0 (it never moves)
+w16s_dgt6:
+    mov di, 6
+    call w16s_dgq
+    jc w16s_dgz
+    test byte [es:bx], GMEM_MODIFY
+    jnz w16s_dgok                   ; the flags alone: the handle
+    mov dx, [es:bx + 4]
+    mov ax, [es:bx + 2]
+    mov bx, [w16_dgsize]            ; 0 = 64 KB
+    or dx, dx
+    jz .low
+    cmp dx, 1                       ; 64 KB exactly, of a 64 KB DGROUP
+    jne w16s_dgz
+    or ax, ax
+    jnz w16s_dgz
+    or bx, bx
+    jnz w16s_dgz
+    jmp short w16s_dgok
+.low:
+    or bx, bx
+    jz w16s_dgok
+    cmp ax, bx
+    ja w16s_dgz
+    jmp short w16s_dgok
+w16s_dgh:                           ; GlobalHandle: AX = DX = DGROUP
+    xor di, di
+    call w16s_dgq
+    jc w16s_dgz
+w16s_dgok:
+    mov ax, [w16_dgroup]
+    mov dx, ax
+    ret
+
+w16s_dgl:                           ; GlobalLock: DX:AX = DGROUP:0
+    xor di, di
+    call w16s_dgq
+    jc w16s_dgz
+    mov dx, [w16_dgroup]
+    xor ax, ax
+    ret
+
+w16s_dgs:                           ; GlobalSize: DX:AX = its bytes
+    xor di, di
+    call w16s_dgq
+    jc w16s_dgz
+    mov ax, [w16_dgsize]
+    xor dx, dx
+    or ax, ax
+    jnz w16s_dgz.r
+    inc dx                          ; 0 = 64 KB
+w16s_dgz:
+    xor ax, ax
+    xor dx, dx
+.r:
+    ret
+
+; w16s_dgq - CF=0 when the handle at args + DI is the running program's
+; DGROUP; ES:BX = the args
+w16s_dgq:
+    mov es, [w16_pss]
+    mov bx, [w16_psp_]
+    add bx, W16F_ARGS
+    mov ax, [es:bx + di]
+    cmp ax, [w16_dgroup]
+    je .y
+    stc
+    ret
+.y:
+    clc
+    ret
 section .text
