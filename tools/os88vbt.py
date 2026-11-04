@@ -20,14 +20,16 @@ Commands:
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
 
-Format version 3 (SPEC.md 125.2), little-endian:
+Format version 4 (SPEC.md 125.2), little-endian:
     0             the header
     512           the clip table, 48 bytes a clip
     2048          the battle script
     then, each on 4 KB: the VIDEO RESIDENT block (the idle loop, every
-                  clip's entries), the MUSIC (streamed), the MENU's effects
-                  (resident), and each clip's STREAM - its records, each
-                  carrying its frame's sound; any length, streamed
+                  clip's anchor table), the MUSIC (streamed), the MENU's
+                  effects (resident), the ENTRIES (resident, any length,
+                  each on a paragraph and named by it), and each clip's
+                  STREAM - its records, each carrying its frame's sound;
+                  any length, streamed
 """
 
 import argparse
@@ -41,12 +43,13 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 3
+VERSION = 4
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
                     # floppy and a FAT16 hard disk to 128 MB
 REGION_MAX = 60 * 1024  # a RESIDENT region is read into one claim's piece
+ENT_MAX = 0x10000 * 16   # the entries: a paragraph number names each
 REC_MAX = 16384     # a record is read contiguously out of a clip's ring, so
                     # it is at most the ring's guard (VB_CGUARD, 125.4)
 MAX_CLIPS = 32
@@ -251,14 +254,19 @@ def build(b):
         regions.append(stream(recs))
         clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=[]))
-    # --- the actions: an entry from each anchor; record 0 is frame 0's
-    # sound alone (the entry drew its picture); the last record the seam
+    # --- the actions: an entry from each anchor, into the ENTRIES (each on
+    # a paragraph, named by it: version 4, so that they are bounded by
+    # memory and not by a 16-bit offset); record 0 is frame 0's sound alone
+    # (the entry drew its picture); the last record the seam
+    ents = bytearray()
     for c in b.clips:
         fs = [surface_of(f, rows) for f in c["frames"]]
         anch = []
         for k in c.get("anchors", b.anchors):
-            anch.append((k, len(vres)))
-            vres += rec(idle_s[k], fs[0], rows)
+            anch.append((k, len(ents) >> 4))
+            ents += pad(rec(idle_s[k], fs[0], rows), 16)
+            if len(ents) > ENT_MAX:
+                raise ValueError("the entries are over %d bytes" % ENT_MAX)
         snd = frame_sound(place(c.get("cues", {}), len(fs), spf, b.sfx),
                           len(fs), spf, False)
         recs = [rec(None, None, rows, snd[0])]
@@ -312,7 +320,8 @@ def build(b):
     vres_at = META
     mus_at = vres_at + len(pad(vres, ALIGN))
     ui_at = mus_at + len(pad(mus, ALIGN))
-    pos = ui_at + len(pad(uib, ALIGN))
+    ent_at = ui_at + len(pad(uib, ALIGN))
+    pos = ent_at + len(pad(ents, ALIGN))
     offs = []
     for r in regions:
         offs.append(pos)
@@ -338,6 +347,7 @@ def build(b):
     if len(opens) > MAX_OPEN:
         raise ValueError("%d openings" % len(opens))
     h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
+    struct.pack_into("<II", h, 88, ent_at, len(ents))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
         h[192 + 8 * i:200 + 8 * i] = nm.upper().encode()[:8].ljust(8, b" ")
@@ -355,7 +365,7 @@ def build(b):
     meta = bytearray(h) + ct + sc
     assert len(meta) <= META
     out = pad(meta, ALIGN) + pad(vres, ALIGN) + pad(mus, ALIGN) + \
-        pad(uib, ALIGN)
+        pad(uib, ALIGN) + pad(ents, ALIGN)
     for r in regions:
         out += pad(r, ALIGN)
     assert len(out) == total
@@ -420,6 +430,8 @@ class Bundle:
         self.canvas = struct.unpack_from("<HHHH", data, 68)
         self.maxrec = struct.unpack_from("<H", data, 76)[0]
         self.openings = [x for x in data[80:88] if x != NO_SFX]
+        self.ent_at, elen = struct.unpack_from("<II", data, 88)
+        self.ents = data[self.ent_at:self.ent_at + elen]
         self.ui = [struct.unpack_from("<IH", data, 96 + 6 * i)
                    for i in range(self.nui)]
         self.clips = []
@@ -438,9 +450,10 @@ class Bundle:
         n = struct.unpack_from("<H", self.vres, o)[0]
         return self.vres[o:o + n]
 
-    def vrec(self, o):
-        n = struct.unpack_from("<H", self.vres, o)[0]
-        return self.vres[o:o + n]
+    def entry(self, para):
+        o = para * 16
+        n = struct.unpack_from("<H", self.ents, o)[0]
+        return self.ents[o:o + n]
 
     def stream(self, c):
         s = self.d[c["off"]:c["off"] + c["len"]]
@@ -496,7 +509,7 @@ def verify(data, quiet=False):
             s = bytearray(65536)
             for y, base in enumerate(g.base):
                 s[base:base + 80] = idle[k][y * 80:(y + 1) * 80]
-            decode(s, b.vrec(o))
+            decode(s, b.entry(o))
             for r in b.stream(c):
                 decode(s, r)
             if c["flags"] & CF_JOINS and canvas(s) != idle[c["exit"]]:
@@ -580,8 +593,8 @@ def cmd_info(a):
     b = Bundle(d)
     print("%s: %d bytes, CGA4 palette %02Xh, canvas %s, band %s, %d fps, "
           "%d Hz" % (a.file, len(d), b.cgapal, b.canvas, b.band, b.fps, b.rate))
-    print("  idle loop %d frames; video resident %d bytes; largest record %d"
-          % (b.nidle, len(b.vres), b.maxrec))
+    print("  idle loop %d frames; video resident %d bytes; entries %d bytes; "
+          "largest record %d" % (b.nidle, len(b.vres), len(b.ents), b.maxrec))
     print("  music %d bytes (%.1f s, %s), in at %d; the menu's %d effects in "
           "%d bytes" % (b.mlen, b.mlen / b.rate,
                         "resident" if b.mlen <= MUSIC_RES else "streamed",

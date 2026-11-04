@@ -237275,24 +237275,33 @@ Little-endian. Every region starts on a 4 KB boundary, because
 `OSAPI_FILE_READ_SEQ` seeks and reads in cluster multiples, and 4 KB covers
 every floppy and a FAT16 disk to 128 MB.
 
-Version 3 (2026-11-04) is the current version:
+Version 4 (2026-11-04) is the current version:
 - a clip is a STREAM of any length;
 - each record carries its frame's sound;
 - the anchors are per clip;
-- the openings are clips of their own kind.
+- the openings are clips of their own kind;
+- **the ENTRIES are a region of their own**, of any length, each entry on
+  a paragraph and named by its paragraph number.
 
-Version 2 cached each clip whole and kept its effects in front of its
-records. Version 1 kept every effect, and the music, resident. The engine
-refuses both.
+Version 3 kept the entries in the resident block beside the idle loop,
+named by a 16-bit offset, so the block's 60 KB bounded the idle loop and
+every clip's entries together. With the owner's footage (a 39 KB idle loop
+and about 3.3 KB an entry) eight clips did not fit. An entry is resident
+either way, so that a chosen action starts on the very next frame; a
+paragraph number lets the entries take as much memory as there is (up to
+1 MB), and fewer anchors a clip simply cost fewer bytes. Version 2 cached
+each clip whole and kept its effects in front of its records. Version 1
+kept every effect, and the music, resident. The engine refuses all three.
 
 | offset | what |
 |---|---|
 | 0 | the header (125.2.1) |
 | 512 | the clip table, 48 bytes a clip, at most 32 clips (125.2.2) |
 | 2048 | the script (125.2.4) |
-| 4096 | the VIDEO RESIDENT block, at most 60 KB: the idle loop's records, every clip's entry records and anchor table, the idle table |
+| 4096 | the VIDEO RESIDENT block, at most 60 KB: the idle loop's records, every clip's anchor table, the idle table |
 | then | the MUSIC: unsigned 8-bit, 64..191, streamed (125.4) |
 | then | the MENU's effects: signed 8-bit, -64..63, back to back, resident |
+| then | the ENTRIES: each clip's entry records, one an anchor, each padded to a paragraph; resident, any length (read 32 KB at a time, `vb_entload`) |
 | then | each clip's STREAM: its records, back to back, any length |
 
 **The ranges are the mix.** The music is held to 64..191 and a clip's
@@ -237305,7 +237314,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 3 |
+| 4 | 2 | version, 4 |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows |
@@ -237328,6 +237337,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 68 | 2 x 4 | the CANVAS: x, y, width and height in pixels (the build's; the engine does not need it) |
 | 76 | 2 | the largest record, at most 16 KB (VB_CGUARD) |
 | 80 | 8 | the openings' clips, in turn; FFh past the last |
+| 88 | 4+4 | the ENTRIES' offset and length |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -237340,7 +237350,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 8 | 2 | its records |
 | 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT); 2 FULL (its records address the whole screen); 4 ENDS (the battle ends on it, and its last frame is held); 8 OWNSND (its sound plays INSTEAD of the music); 16 OPENING |
 | 12 | 2 | EXIT |
-| 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's offset) pairs |
+| 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the entries) pairs |
 | 16 | 2 | its anchors, at most 16 |
 | 24 | 8 | the name |
 
@@ -237494,7 +237504,8 @@ blocks), from the key to the sound in the card's own capture:
   - the idle loop's block, with every clip's entries;
   - the menu's effects;
   - the music's RING, 32 KB (3 s at 11 kHz) with a 4 KB guard; or the
-    whole music when it is 60 KB or less.
+    whole music when it is 60 KB or less;
+  - the ENTRIES (125.2), as many 4 KB as they take.
 - **the card's ring** (`vb_cardclaim`, in `vb_load`), page-safe from the
   top (`OSAPI_MEM_CLAIM_DMA_HI`), 17 KB, when there is a card. It is
   claimed before the rings are sized, so that they leave nothing it needs.
@@ -237589,7 +237600,7 @@ The demo battle on a 640 KB machine:
 |---|---|
 | the package's image | 9,489 (7,306 packed on the disk) |
 | its bss | 5,352 (the first 4 KB of the bundle among it) |
-| the resident claim | 80 KB: the block 39,218 (40 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB) |
+| the resident claim | 80 KB: the block 9,725 (12 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB), the entries 29,696 (32 KB) |
 | the clip rings, per play | all the largest run less 8 KB: on 86Box's 640 KB 5150, 2 x (172 + 16) KB |
 | the card's ring | 17 KB |
 | the bundle | 847,872 bytes on the disk: the music 282,240 (25.6 s), the Limit 249,650 |

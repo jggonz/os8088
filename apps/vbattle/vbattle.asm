@@ -42,7 +42,7 @@
 
 ; --- the bundle's layout (SPEC.md 125.2; tools/os88vbt.py is the writer) ------
 VH_MAGIC    equ 0               ; 'VBT1'
-VH_VER      equ 4               ; 3
+VH_VER      equ 4               ; 4
 VH_PAL      equ 8               ; CGA4 palette byte (98.1.3.3)
 VH_FPS      equ 10
 VH_RATE     equ 12
@@ -61,6 +61,8 @@ VH_IDLETAB  equ 62              ; word: the idle table's offset in the block
 VH_BAND     equ 64              ; bytes: the band's cell, row, cells, rows
 VH_MAXREC   equ 76              ; word: the largest record
 VH_OPENS    equ 80              ; 8 bytes: the openings' clips, in turn
+VH_ENT      equ 88              ; dword offset, dword length: the ENTRIES
+                                ; (125.2), each named by its paragraph
 VH_SFXTAB   equ 96              ; 16 x (dword offset, word length)
 VB_CTAB     equ 512             ; the clip table, 48 bytes a clip
 VC_OFF      equ 0               ; dword: the stream's offset
@@ -462,6 +464,64 @@ vb_tmark:
     popf
     ret
 
+; vb_entpara - AX = the entries' paragraphs, rounded to 4 KB. DX spent
+vb_entpara:
+    mov ax, [vb_meta+VH_ENT+4]
+    mov dx, [vb_meta+VH_ENT+6]
+    add ax, 4095
+    adc dx, 0
+    and ax, 0xF000
+    mov cx, 4
+.s:
+    shr dx, 1
+    rcr ax, 1
+    loop .s
+    ret
+
+; vb_entload - the entries into their part of the resident claim, 32 KB a
+; read, each read's segment on by its length. CF=1 a read failed
+vb_entload:
+    call vb_entpara
+    mov [vb_eleft], ax              ; paragraphs to go
+    mov ax, [vb_eseg]
+    mov [vb_enext], ax
+    mov ax, [vb_meta+VH_ENT]
+    mov dx, [vb_meta+VH_ENT+2]
+.r:
+    mov cx, [vb_eleft]
+    jcxz .ok
+    cmp cx, 32768 / 16
+    jbe .n
+    mov cx, 32768 / 16
+.n:
+    sub [vb_eleft], cx
+    push ax
+    push dx
+    push cx
+    shl cx, 1                       ; paragraphs to bytes (at most 32 KB)
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    mov es, [vb_enext]
+    xor bx, bx
+    call vb_read
+    pop cx
+    pop dx
+    pop ax
+    jc .out
+    add [vb_enext], cx
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    shl cx, 1
+    add ax, cx
+    adc dx, 0
+    jmp short .r
+.ok:
+    clc
+.out:
+    ret
+
 ; vb_round - AX = CX rounded up to 4 KB (a cluster multiple, 125.2)
 vb_round:
     mov ax, cx
@@ -520,7 +580,7 @@ vb_load:
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    cmp word [vb_meta+VH_VER], 3
+    cmp word [vb_meta+VH_VER], 4
     jne .fail1
     mov ax, [vb_meta+VH_NCLIPS]
     or ax, ax
@@ -541,7 +601,8 @@ vb_load:
 .sized:
     ; the resident claim's parts, each rounded to 4 KB, in paragraphs: the
     ; block, the menu's effects, the music (its ring and guard, or all of
-    ; it). The clip rings are claimed per play, in the bracket (vb_rclaim)
+    ; it), the entries. The clip rings are claimed per play, in the bracket
+    ; (vb_rclaim)
     mov cx, [vb_meta+VH_VRES+4]
     call vb_round
     mov cl, 4
@@ -570,6 +631,10 @@ vb_load:
 .ring:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
+    mov [vb_pent], ax               ; the entries, last: as many 4 KB as they
+    call vb_entpara                 ; take, in paragraphs
+    add ax, [vb_pent]
+    jc .fail1
     call vb_p2kb
     mov word [vb_err], vb_s_nomem
     call OSAPI_MEM_CLAIM
@@ -581,6 +646,9 @@ vb_load:
     mov ax, dx
     add ax, [vb_pmus]
     mov [vb_mring], ax
+    mov ax, dx
+    add ax, [vb_pent]
+    mov [vb_eseg], ax
     call vb_cardclaim               ; the card's ring, before the rings are
                                     ; sized out of what is left
     ; the block and the menu's effects
@@ -605,6 +673,8 @@ vb_load:
     call vb_read
     jc .fail1
 .read:
+    call vb_entload                 ; the entries, 32 KB a read
+    jc .fail1
     mov byte [vb_loaded], 1
     call vb_fontload
 .again:
@@ -1620,9 +1690,9 @@ vb_frame:
     mov ax, [vb_ifr]
     cmp ax, [vb_pk]
     jne .loop
-    mov es, [vb_vres]               ; the entry: frame 0's picture
-    mov si, [vb_pentry]
-    mov dx, es
+    mov dx, [vb_eseg]               ; the entry: frame 0's picture, at
+    add dx, [vb_pentry]             ; its paragraph in the entries
+    xor si, si
     call vb_decode
     mov bx, [vb_pring]              ; frame 0's record carries its sound
     call vb_rrec                    ; alone: past it
@@ -1720,7 +1790,8 @@ vb_anchor:
     mov [vb_pring], bx
     ; the nearest anchor at least [vb_dmin] frames on: d = (k - ifr) mod N
     mov word [vb_bestd], 0xFFFF
-    mov di, [si+VC_ANCH]            ; (k, entry) pairs in the resident block
+    mov di, [si+VC_ANCH]            ; (k, entry's paragraph) pairs in the
+                                    ; resident block
     mov cx, [si+VC_NANCH]
     jcxz .out
     mov es, [vb_vres]
@@ -3386,6 +3457,10 @@ VB_VAR vb_snd, 1
 VB_VAR vb_kn, 1
 VB_VAR vb_psfx, 2
 VB_VAR vb_pmus, 2
+VB_VAR vb_pent, 2                   ; the entries' place in the claim
+VB_VAR vb_eseg, 2                   ; ...their segment
+VB_VAR vb_eleft, 2
+VB_VAR vb_enext, 2
 VB_VAR vb_fsi, FSI_SIZE
 VB_VAR vb_vseg, 2
 VB_VAR vb_vid, 1
