@@ -27,7 +27,10 @@ in place):
      CLOSES WIN16 for it (mega_fkill attributes the code selector by its
      base, KERN-MEGA-PLAN 14.140, WIN16-NEXT-PLAN Q1) and does not halt;
   4. the close completes: ui_task's mega_fkdo takes the instance down and
-     the incident ends ([mega_fkslot] = 0), still with no fatal fault.
+     the incident ends ([mega_fkslot] = 0), still with no fatal fault;
+  5. the IVT cells WIN16 held across the run (21h, 2Fh, 31h, 34h-3Dh, 02h)
+     are the machine's again: none names a package's code, and 21h is IVT
+     09h's mirror (KERN-MEGA-PLAN 14.141, mega_fkivt).
 
 Broken on purpose (docs/WRITING-TESTS.md 1): the parent commit, whose
 w16_pblk answered the lead's D1(a) stopgap - a SUB reaching to the claim's
@@ -203,6 +206,30 @@ def main():
         want(done and not box.fault(),
              "4. the close completed: no WIN16 (OVRTEST) instance, the "
              "incident over ([mega_fkslot] = 0), and still no fatal fault")
+        # 5. THE VECTORS ARE THE MACHINE'S AGAIN (KERN-MEGA-PLAN 14.141).
+        # While OVRTEST ran, IVT 21h, 2Fh and 31h (and 34h-3Dh or 3Dh and 02h
+        # with x87 code) named WIN16's code, and a close runs none of WIN16's
+        # w16_i21_off: mega_fkivt puts them back. None may still name an LDT
+        # code selector below A000h (mega_swok's "a package's handler"), and
+        # 21h is IRQ1's mirror of IVT 09h, as mega_ivt_sync keeps it.
+        # Without the fix 21h, 2Fh and 31h hold WIN16's code selector.
+        cells = [0x02, 0x21, 0x2F, 0x31] + list(range(0x34, 0x3E))
+        try:
+            raw = box.reads([(v * 4, 4) for v in cells + [0x09]])
+            iv = {v: (int.from_bytes(b[2:4], "little"),
+                      int.from_bytes(b[0:2], "little"))
+                  for v, b in zip(cells + [0x09], raw)}
+        except RuntimeError as e:
+            iv = {}
+            print("   IVT unreadable: %s" % e, flush=True)
+        print("   IVT " + " ".join("%02X=%04X:%04X" % (v, iv[v][0], iv[v][1])
+                                   for v in sorted(iv)), flush=True)
+        held = [v for v in cells if v in iv and iv[v][0] & 4
+                and iv[v][0] < 0xA000]
+        want(bool(iv) and not held and iv.get(0x21) == iv.get(0x09),
+             "5. the vectors WIN16 held are the machine's again: none names "
+             "a package's code (%s), and 21h is IRQ1's (IVT 09h)"
+             % (" ".join("%02Xh" % v for v in held) or "none does"))
         box.shot(os.path.join(out, "end.png"))
     except RuntimeError as e:
         want(False, "the machine stopped answering or a step missed: %s" % e)
