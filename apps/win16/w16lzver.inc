@@ -1426,8 +1426,10 @@ w16v_sysdir:
     mov cx, w16s_dirlen - 1
     cld
     rep movsb
-    mov si, w16s_sfx                ; \SYSTEM under it, the NUL with it
-    mov cx, w16s_sfxlen
+    mov al, '\'                     ; SYSTEM under it (od_s_system, the
+    stosb                           ;   name the library search dives
+    mov si, od_s_system             ;   into), the NUL with it
+    mov cx, od_s_syslen
     rep movsb
     pop es
     pop di

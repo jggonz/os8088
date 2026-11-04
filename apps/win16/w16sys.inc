@@ -19,8 +19,8 @@ W16LIB w16k_sysdir
     push si
     push di
     ICALL w16_args
-    mov dx, w16s_sfxlen - 1         ; DX = the characters past the Windows dir
-    call w16f_mksys
+    mov dx, od_s_syslen             ; DX = the characters past the Windows
+    call w16f_mksys                 ;   directory: '\' and "SYSTEM"
     jmp short w16k_dircom
 W16LIB w16k_windir
     push si
@@ -39,25 +39,17 @@ w16k_dircom:
     cld
     stosb
     mov si, w16s_dir
-    mov cx, w16s_dirlen - 1
+    mov cx, w16s_dirlen             ; the NUL with it
     rep movsb
-    or dx, dx
-    jz .nul
-    mov si, w16s_sfx
-    mov cx, w16s_sfxlen
-    rep movsb                       ; the NUL with it
-    jmp short .len
-.nul:
-    xor al, al
-    stosb
+    mov cx, dx
+    jcxz .len
+    mov byte [es:di - 1], '\'       ; ...over it, and the system folder's
+    mov si, od_s_system             ;   name, its NUL with it
+    rep movsb
 .len:
     mov ax, w16s_dirlen
     add ax, dx
-    jmp short .done
 .out:
-    mov ax, w16s_dirlen + 1
-    add ax, dx
-.done:
     pop di
     pop si
     ret
@@ -3294,5 +3286,3 @@ section .text
 
 w16s_dir:    db ':\SYSTEM\APPDATA\WIN16', 0
 w16s_dirlen  equ $ - w16s_dir
-w16s_sfx:    db '\SYSTEM', 0         ; ...and under it WIN16's system directory
-w16s_sfxlen  equ $ - w16s_sfx

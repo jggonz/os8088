@@ -234738,15 +234738,32 @@ answers it, and makes the folder if it is not there (a Setup Toolkit copies
 into it without a `CreateDir`); `GetWindowsDirectory` is as before. No
 trailing backslash, as Windows.
 
-**One routine names it**: `w16f_sysdir` (`w16file.inc`) writes the path at DI,
-upper case, ending in `\`, as `w16f_windir` does for the Windows directory.
-`VerFindFile` (§124.24.9) and `OpenFile` (§124.21.3) use it, and the
-loader's library search (§124.23.1.1) walks to the same folder by
-`W16L_SYSDEPTH` (`w16load.inc`: two folders below `SYSTEM\APPDATA`, the
-second being `od_s_system`), which is the same name in directory form. `w16f_mksys` makes the folder. The
-program search of §124.28.5 already looked in `SYSTEM` under the Windows
-directory. The room: 8 resident bytes (`\SYSTEM`, `w16s_sfx`); the code is
-the library part's.
+**The folder is made by the kernel, not by WIN16's DOS** (`w16f_mksys`:
+`od_enter`, `od_dive` into `WIN16`, `OSAPI_FILE_MKDIR`, `od_back`). Through
+the DOS, the first `GetSystemDirectory` of a program that does no file I/O
+fetched the DOS core and host into a claim of their own, and a refusal was
+left as `AH=59h`'s answer, which Windows' call never touches. Every refusal
+changes nothing and the path is answered regardless: the folder already there,
+a read-only volume (WIN16 launched from a CD), a write-protected or full disk,
+a disk without WIN16's folder (§124.14: that folder is never created). A
+program then finds the system directory absent, as it finds the Windows
+directory unwritable. `VerFindFile` answers the path without making it: an
+installer that learns the folder only from `VerFindFile` and never asks
+`GetSystemDirectory` finds it absent on a disk where nothing has asked yet
+(open: part 9 is the one that would pay for making it there).
+
+**One name**: the folder's name is `od_s_system` (`apps/os88data.inc`), the
+same bytes the loader's library search (§124.23.1.1, `w16l_gofold`: two
+folders below `SYSTEM\APPDATA` by `W16L_SYSDEPTH`, the second being
+`od_s_system`) and the program search (§124.28.5, `w16t_where`) dive into.
+`w16f_sysdir` (`w16file.inc`) writes the path at DI from it, upper case,
+ending in `\`, as `w16f_windir` does for the Windows directory, and
+`OpenFile`'s search (§124.21.3) uses it; `GetSystemDirectory` and
+`VerFindFile` (§124.24.9) copy the same `od_s_system` after the Windows
+directory. The Windows directory is two spellings that agree today:
+`w16s_dir` (`:\SYSTEM\APPDATA\WIN16`) for the path and `od_enter` plus
+`w16pf_s_dir` for the walk. The room: no resident byte; 149 bytes of the
+library part (64,680 of it on kern_mega) and 11 of part 9.
 
 #### 124.20.6 The gate rows
 
@@ -234870,7 +234887,7 @@ an `int` does, so the two ways in are one DOS with one handle table.
 | `_lread`, `_lwrite` | `3Fh`, `40h`; the count, or -1. `_lwrite` of 0 bytes truncates, as `40h` does (§96.11.6.2) |
 | `_llseek(h, offset, origin)` | `42h`; the new position as a `LONG` |
 | `_lclose` | `3Eh`; 0, or -1 |
-| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5) and then in the system directory (§124.20.5.1); the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
+| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5) and then in the system directory (§124.20.5.1), and not found there is `nErrCode` 2 even while the system folder is not made yet; the program's own folder (when the program has moved away from it) and `PATH` are not searched, Windows 3.1's last two places; the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
 | `GetTempFileName(drive, prefix, unique, buf)` | `X:\~PPPuuuu.TMP` in the Windows directory (Windows used `TEMP`, and WIN16 has no environment); `TF_FORCEDRIVE` puts it at the root of that drive. With `unique` 0 a number is taken from the clock and stepped until the name is free, and the file is CREATED, as Windows did, so a second call cannot answer the same name. The number |
 | `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5, §124.20.5.1) |
 | `AnsiToOem`, `OemToAnsi`, `AnsiToOemBuff`, `OemToAnsiBuff` | the bytes copied: the two sets agree on every character a file name holds |

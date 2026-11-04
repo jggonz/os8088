@@ -506,7 +506,9 @@ W16LIB w16k_openfile
     call w16f_cat
     mov ax, 0x4300
     call w16f_onpath
-    jc .err
+    jnc .found
+    mov ax, 2                       ; not found, as Windows says: a system
+    jmp short .err                  ;   folder not made yet answers 3
 .found:
     mov ax, [w16f_style]
     test ax, OF_DELETE
@@ -637,16 +639,17 @@ w16f_windir:
     ret
 
 ; w16f_sysdir - WIN16's system directory (SPEC.md 124.20.5.1): the Windows
-; directory's SYSTEM folder, at DI, then '\'; DI past it. THE one place the
-; system folder is named: the loader's library search and OpenFile call it.
-; Clobbers AX, CX, SI
+; directory's SYSTEM folder, at DI, then '\'; DI past it. The folder's NAME is
+; od_s_system, the one the loader's library search (w16l_gofold) and the
+; program search (w16t_where) dive into, so the path and the walk cannot
+; disagree. Clobbers AX, CX, SI
 w16f_sysdir:
     call w16f_windir
     push es
     push ds
     pop es
-    mov si, w16s_sfx + 1
-    mov cx, w16s_sfxlen - 2         ; "SYSTEM"
+    mov si, od_s_system
+    mov cx, od_s_syslen - 1         ; "SYSTEM"
     cld
     rep movsb
     mov al, '\'
@@ -654,21 +657,33 @@ w16f_sysdir:
     pop es
     ret
 
-; w16f_mksys - the system folder made, if it is not there (an existing one
-; is no error). Keeps every register
+; w16f_mksys - the system folder made, if it is not there: SYSTEM\APPDATA\
+; WIN16 on WIN16's volume, then od_s_system made in it by the kernel, as the
+; library search walks to it. Not through WIN16's DOS, which a program that
+; only asks the directory would fetch whole, and which would leave its
+; refusal as AH=59h's answer. An existing folder, a read-only volume (a CD),
+; a write-protected or full disk and a disk without WIN16's folder are all
+; refusals and change nothing: the path is answered regardless, as Windows
+; answers one that is there. The instance stands where it stood. Keeps every
+; register
 w16f_mksys:
     push ax
     push bx
-    push cx
-    push dx
+    push cx                         ; (CX, SI and DI a redirected volume's
+    push dx                         ;   driver's to clobber, as od_qm says)
     push si
     push di
     push es
-    mov di, w16f_path
-    call w16f_sysdir
-    mov byte [di - 1], 0            ; no trailing '\'
-    mov ah, 0x39
-    call w16f_onpath
+    ICALL od_enter                  ; SYSTEM\APPDATA, WIN16's volume
+    jc .out
+    mov si, w16pf_s_dir             ; ...WIN16
+    ICALL od_dive
+    jc .back
+    mov si, od_s_system             ; ...SYSTEM in it
+    call OSAPI_FILE_MKDIR
+.back:
+    ICALL od_back
+.out:
     pop es
     pop di
     pop si
