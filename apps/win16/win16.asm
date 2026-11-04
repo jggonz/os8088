@@ -731,8 +731,8 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16_rtlen, 2
     W16BSS w16_rtk, 2           ; FindResource's keys and strings
     W16BSS w16_rnk, 2
-    W16BSS w16_rtypb, 16
-    W16BSS w16_rnamb, 16
+    W16BSS w16_rtypb, 32
+    W16BSS w16_rnamb, 32
     W16BSS w16_rlen, 2          ; w16_rread's resource and span
     W16BSS w16_rpre, 2
     W16BSS w16_roff, 4

@@ -233532,6 +233532,16 @@ a load from inside a paint is legal.
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
 
+**A string type or name is kept to 31 characters** *(2026-11-04)*. `w16_rkey`
+copies the string into `w16_rtypb` or `w16_rnamb` for the table's compare, and
+both held 15 characters and a NUL. A longer name was cut and then matched
+nothing, because the compare reads the table's whole name against the cut key:
+Microsoft Arcade's Asteroids asks for dialog `"NUMBEROFPLAYERSDIALOG"` (21
+characters) when F2 starts a game, `DialogBoxParam` answered -1, and the
+program reported its own *Error code = -1. Continue?*. Both buffers are 32
+bytes now (+32 bytes of bss); a name of more than 31 characters is still cut,
+and still finds nothing.
+
 **A string name may be in the name table** *(S10; any type at S11)*. A
 Windows 3.0 linker numbered every resource and wrote the names into an
 `RT_NAMETABLE` (type 15) resource: CALC 3.00 asks for dialog `"SC"`, which

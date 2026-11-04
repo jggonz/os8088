@@ -156,7 +156,7 @@ w16_rkey:
     or ah, 0x80
     jmp short .out
 .str:
-    mov cx, 15
+    mov cx, 31                      ; w16_rtypb / w16_rnamb hold 31 + NUL
 .ch:
     mov al, [es:si]
     cmp al, 'a'
