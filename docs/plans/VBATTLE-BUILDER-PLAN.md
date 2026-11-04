@@ -367,7 +367,8 @@ any of the builder's (section 7's order moves). Its contents:
 
 ## 11. What an action does: a small, fixed set of verbs
 
-**The proposal: no action is hardcoded, and no action is a script.** An
+**Agreed by the owner (2026-11-04), with the enemy's stances and responses
+added (11.2.1).** **No action is hardcoded, and no action is a script.** An
 action is DATA made from a short list of verbs that every battle of this
 kind uses. The engine interprets them from the bundle's tables, and the
 builder edits them as forms.
@@ -390,9 +391,48 @@ builder edits them as forms.
 |---|---|
 | **target** | self; one ally (the player chooses); all allies; the enemy |
 | **cost** | MP *n*; an item (the party's count of it, *n* to start); the limit gauge full; none |
-| **effects**, in order | DAMAGE (physical or magical, a power, hits 1 to 4, a variance); HEAL (a power, or a % of the most HP); RESTORE MP; REVIVE (to a % of HP); GUARD (damage taken halved until this character's next turn); CHARGE (the next DAMAGE doubled); BOOST or LOWER a stat (by a step, for *n* turns); PASS (this turn goes to the next character: Change); ESCAPE (the battle ends, a clip of its own) |
+| **effects**, in order | DAMAGE (physical or magical, a power, hits 1 to 4, a variance); HEAL (a power, or a % of the most HP); RESTORE MP; REVIVE (to a % of HP); GUARD (damage taken halved until this character's next turn); CHARGE (the next DAMAGE doubled); BOOST or LOWER a stat (by a step, for *n* turns); PASS (this turn goes to the next character: Change); ESCAPE (the battle ends, a clip of its own); STANCE *s* (the enemy's moves only: it goes into stance *s*, 11.2.1) |
 | **accuracy** | % to hit; a miss plays the MISS pool |
 | **clips** | POOLS of clips, chosen at random: HIT, MISS, CRITICAL, and FINISHING (it brings the enemy to 0). A pool may be keyed by TARGET, so that an attack on character 2 plays character 2's footage. An empty pool falls back: CRITICAL to HIT, a target's pool to the general one |
+
+### 11.2.1 The enemy's STANCES and RESPONSES (the owner, 2026-11-04)
+
+The verbs and target rules above are agreed. The enemy gets two more things:
+
+- **STANCES.** The enemy is always in one stance: normal, defensive, an
+  attack posture, and so on, as many as a battle defines. Each stance has:
+  - its own weighted POOL of moves;
+  - its own idle (an idle loop of its own, with its own clips' anchors
+    against it, since the enemy LOOKS different in it), or it shares the
+    battle's;
+  - optionally, modifiers: DEF/MDEF up in a defensive stance, ATK up in an
+    attack posture.
+
+  A move can CHANGE the stance (a new verb, STANCE *s*). The clip that
+  changes it plays from the old stance's idle and seams onto the new
+  stance's idle, which is an exit like any other, onto another loop. A
+  stance may also change on its own: a rule of the form "when HP falls
+  under *n* %", or "after *n* turns in it".
+- **RESPONSES.** A stance may define a RESPONSE: a move the enemy makes
+  AFTER a player's action, outside its own turn. Each response has:
+  - which actions trigger it: all, physical, magical, or named ones;
+  - a chance;
+  - its own pool of clips, played after the player's clip has seamed back
+    onto the idle loop.
+
+  Responses are optional, and each stance has its own or none. A response
+  can change the stance too: a counter that puts the enemy into its attack
+  posture.
+
+What this costs the engine:
+- a stance byte;
+- per stance, a pool table, a response table and an idle;
+- one more check after each player action.
+
+The bundle grows by a few hundred bytes a stance, plus each stance's idle
+loop if it has one. Several idle loops means the resident block holds
+several loops, so a battle with many stances can be refused by the
+builder's memory budget (4.5) before it is built.
 
 ### 11.3 The arithmetic, one formula each
 
