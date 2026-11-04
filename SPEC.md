@@ -233484,7 +233484,7 @@ neighbours merged. Arenas are freed with the program.
 | `GMEM_FIXED` | **the handle IS the segment** (`DX:0` is the block), as real-mode Windows answered. Programs that skip `GlobalLock` on a fixed block work |
 | `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`02FEh`, `W16_NGH` 256 entries since S19b batch 3, 64 before: Paintbrush's band cache keeps a handle for every band it has discarded, and 64 ran out on the first picture opened). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
 | `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
-| `GlobalReAlloc` | in place when the next block is free. **A grow in place keeps a quarter more than was asked** when the free neighbour has it (`w16k_grealloc`, *S24*), and the rest goes back free. Windows promises at least the size asked for, and a program that grows a block by a paragraph at a time (the Setup Toolkit's `_MSTEST` does) then grows in place again with no new block boundary. `GlobalSize` answers the block as kept. Otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put, except on the protected-mode arm for a protected-mode-only program, whose locked block moves with the selector it holds (§124.31.3). `GMEM_MODIFY` changes the flags alone |
+| `GlobalReAlloc` | in place when the next block is free. **A grow in place keeps a quarter more than was asked** when the free neighbour has it (`w16k_grealloc`, *S24*), and the rest goes back free. Windows promises at least the size asked for, and a program that grows a block by a paragraph at a time (the Setup Toolkit's `_MSTEST` does) then grows in place again with no new block boundary. `GlobalSize` answers the block as kept. Otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put, except on the protected-mode arm for a protected-mode-only program, whose locked block moves with the selector it holds (§124.31.3), and for any program when a full local heap in the block grows (§124.25.19). A block that moves keeps its flags, lock, owner and task. `GMEM_MODIFY` changes the flags alone |
 | `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD`; since S20 a run of an arena counts the code segments it may discard as free (§124.26.5) |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
@@ -237334,6 +237334,106 @@ cut at 16 - so a program comparing it with a long name of its own does not
 match (open; VB calls `GetClassName` then `lstrcmpi` on its MessageBox path,
 operand not read).
 
+#### 124.25.19 A local heap grows when it is full *(WIN16-NEXT `lheap`)*
+
+Windows grew a full local heap: `LocalAlloc` enlarged the data segment and
+extended the heap into it, up to 64 KB (§124.25.2, §124.21.4). WIN16 laid
+DGROUP out at 64 KB and started the program's heap over all of it, so a heap
+nothing re-initialised never ran out. **A program that calls `LocalInit`
+itself does.** Visual Basic 3.0's runtime copies its data segment, asks
+`GlobalReAlloc` for `stack + heap + data` (33,432 bytes for MOZART, whose NE
+asks a 4 KB heap), and makes heaps of its own: one in that DGROUP, and
+2,064-byte ones in `GlobalAlloc`ed moveable blocks it keeps locked, where it
+puts the names of the classes it registers. The `LocalAlloc` that does not
+fit in one of those answered 0, and VB showed *Unexpected error; quitting*.
+
+`LocalAlloc` and `LocalReAlloc` (the image's `w16_lnewg`) therefore try again
+when `w16_lnew` found no room: the system-library part's `w16s_lgrow` extends
+the heap, and the allocation is repeated once. A heap that cannot grow
+answers 0, as before. What grows, by segment:
+
+| the heap is in | it grows into | to |
+|---|---|---|
+| the running program's DGROUP | the tail the load laid out (§124.21.4) | the segment's size: 64 KB (heap end `0FFFCh`) when the arena had room, else the size the NE asked for, which is also where it began, so no growth |
+| a global block (a library's DGROUP, a `GlobalAlloc` segment the program called `LocalInit` on) | the block's own tail first; then `GlobalReAlloc` of the block: in place (§124.9: the free block that follows), or **moved, on the `kern_mega` arm only, when the heap's selector follows the block** (below); by what the request needs and 512 bytes over, at most 64 KB | the block as kept |
+
+**Never over the stack.** A heap whose segment is the program's `SS`, with
+the program's stack above the heap's end, does not grow at all: the room past
+the heap is the stack's. Visual Basic's runtime moves its stack to the top of
+the 33,432 bytes of DGROUP it asked for (§124.25.15), and a heap of its own
+below that stack, extended to the 64 KB WIN16 laid out, would hand the stack
+out as heap blocks. The test is the gate's own record of the program's
+stack (`[w16_pss]`, `[w16_psp_]`) against the heap's segment and end, before
+anything is asked.
+
+**The move (`kern_mega`).** A segment that must move to grow is moved only
+where everything the program holds follows it. On the real-mode arm nothing
+moves (WIN16 cannot patch a saved `DS`, as real-mode Windows did), so a fixed
+block grows only into a free neighbour, a locked moveable one likewise, and
+an unlocked moveable one not at all (`GlobalReAlloc` would move it). On the
+`kern_mega` arm a moveable block whose **handle descriptor** (`GH_TSEL`,
+`GHF_HND`, §124.31.3) **is the very selector the heap is in** may move,
+locked or not, for **any** program, for this one call: `w16s_lgrow` sets the
+protected-mode-only rule (`w16_pmonly`) to 1 around its `GlobalReAlloc` and
+puts it back. That is **wider than §124.9's and §124.31.3's rule**, which
+lets only a protected-mode-only program's locked block move; it is the rule
+of Windows' standard mode, where `GlobalReAlloc` of a locked moveable block
+moved it and kept its selector, and of Wine (`LOCAL_GrowHeap` asks
+`GlobalReAlloc16(hseg, 0x10000, GMEM_FIXED)` of the heap's own segment, and
+moves the linear block whatever its lock count). Mozart is not marked
+protected-mode-only, and its classes are registered only because of it. When
+the heap's selector is anything else (an alias, a selector that is not the
+block's handle descriptor), the rule is set to **0** for the call, so not even
+a protected-mode-only program's block moves out from under that `DS`; a fixed
+block is never moved here.
+
+What makes the move safe, traced from the program's `LocalAlloc` to its
+return: `GlobalReAlloc` copies the block, re-aims the handle descriptor in
+place at the copy (`w16s_gwin`) and only then frees the old block, and nothing
+allocates between that free and the return. A segment register keeps the
+descriptor it was loaded with, so every register that may hold the selector
+is LOADED again before it is used: `w16s_lgrow` reloads `ES` from its saved
+value after each `GlobalReAlloc` and pops it on the way out, and the gate
+gives the program back its `DS` (`pop ds`), its `ES` (`mov es`) and its `SS`
+(`mov ss`). A far pointer the program holds into the block - `LocalLock`'s
+answer, which is that `DS` with an offset, or a fixed local block's offset in
+it - stays good, because the selector follows and the heap's offsets do not
+change. **Open:** `FS` and `GS` are never reloaded, so a 386 program that
+kept the heap's selector in one of them across `LocalAlloc` would read the
+old place; standard mode on a 286 had neither register, and no program here
+does it.
+
+**The calls into the image.** `w16s_lgrow` asks the image's own
+`GlobalHandle` and `GlobalReAlloc` handlers, which read their arguments as a
+gate's (`w16_args`). Their frame is laid on the **program's** stack, just
+below the gate's (a copy of the gate's six words with the arguments over
+them, `[w16_psp_]` pointed at it and put back): a `GlobalReAlloc` that runs
+short discards code (§124.26.5), and the discard scans the program's stack
+from `[w16_psp_]` for the segments it is running, which a frame on WIN16's
+own stack would have hidden. No callback into the program can run inside: a
+`GlobalNotify` procedure is asked only by `GlobalAlloc` and GDI's bitmaps
+(§124.9.1). The move keeps the block's task (`GH_TASK`), as it keeps its
+flags, lock and owner, so a task's end still frees a block that moved; until
+this, a moved block was nobody's and lived until the program ended.
+
+The new room joins the heap at its end: it is added to the heap's last block
+when that one is free, else it is one more free block, so `LocalCompact`
+sees the free tail as one block. The descriptor's end word (`LH_END`) is the
+only header field that changes, and `pLocalHeap` at `DS:0006` is not
+touched. The heap is WIN16's own format (§124.9: an `LH` signature, blocks
+with a size word), not Windows' `LOCALHEAPINFO` and arenas, before and after
+a grow, so a runtime that walked Windows' local heap itself would not find
+one either way. `LocalCompact`, `LocalSize` and `LocalShrink` report the heap
+as it stands and grow nothing.
+
+The code is in the system-library part (the image holds the retry only, 27
+bytes), so a heap that never fills never fetches it. `LHEAP.EXE`
+(`win16lheap`) checks it: a 1 KB heap in DGROUP that takes 10 KB of blocks,
+`LocalReAlloc` of one larger, a `LocalInit` heap in a locked `GlobalAlloc`
+block that grows in place, the same in a block whose neighbour is in use
+(on `kern_mega` it must move and keep its selector; in real mode it stops
+short with its data intact), and 70 window classes, past the class block's first 64 (§124.25.18.1).
+
 #### 124.25.20 Focus and enable reach the window's procedure, sent *(WIN16-NEXT `kindmsg`, DECISIONS 14:00)*
 
 Windows SENDS `WM_KILLFOCUS` and `WM_SETFOCUS` (SetFocus: the focus is the
@@ -239272,6 +239372,9 @@ is refused. The arm moves it as follows:
 - Until the handle descriptors this was a bound window (`SEG_BWIN`) per
   locked block, one of `mega_wtab`'s 32 rows each; a descriptor per handle
   needs no row.
+- A full local heap's grow (§124.25.19) takes this path for ANY program,
+  for that one call, when the heap's selector is the block's handle
+  descriptor: `w16_pmonly` is set around the call and put back.
 - Real mode is unchanged: a locked moveable block stays put there, as in
   real-mode Windows. Measured on Arcade's setup: the realloc is handle
   0110h, 33 to 65 paragraphs, in a 32 KB arena whose blocks are all in use

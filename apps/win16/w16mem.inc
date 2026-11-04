@@ -50,6 +50,9 @@ GMEM_NOTIFY_HI      equ 0x40    ; GMEM_NOTIFY (0x4000), the same
 GH_SIZE   equ 0                 ; paragraphs, the header included
 GH_FLAGS  equ 2                 ; GHF_*
 GH_LOCK   equ 3
+%if GH_LOCK != GH_FLAGS + 1
+  %error "GlobalReAlloc copies GH_FLAGS and GH_LOCK as one word"
+%endif
 GH_HANDLE equ 4                 ; what GlobalAlloc answered for it
 GH_OWNER  equ 6                 ; a resource's entry offset (w16res.inc), or 0
 GH_MAGIC  equ 8
@@ -1274,17 +1277,17 @@ w16k_grealloc:
     mov ax, [w16_gold]
     push es
     W16SEG es, ax
-    mov bl, [es:GH_FLAGS]
-    mov bh, [es:GH_LOCK]
+    mov bx, [es:GH_FLAGS]           ; (and GH_LOCK, the byte after)
     mov cx, [es:GH_OWNER]
-    pop es
+    mov dl, [es:GH_TASK]            ; the task whose end frees it, which
+    pop es                          ;   w16_gnew left as nobody's
     W16VOF ax, es
     dec ax
     push es
     W16SEG es, ax                      ; ES = the new header
-    mov [es:GH_FLAGS], bl
-    mov [es:GH_LOCK], bh
+    mov [es:GH_FLAGS], bx
     mov [es:GH_OWNER], cx
+    mov [es:GH_TASK], dl
     pop es
 %ifdef PKG_MEGA
     SCALL w16s_gwin                 ; ...and its handle descriptor, if any
@@ -1611,6 +1614,23 @@ w16_lnew:
     pop bx
     ret
 
+; w16_lnewg - w16_lnew, and when the heap had no room, the heap grown (the
+; system-library part's w16s_lgrow, SPEC.md 124.25.19) and the request made
+; once more. Same registers; the gates' (LocalAlloc, LocalReAlloc) use.
+w16_lnewg:
+    call w16_lnew
+    or ax, ax
+    jnz .r
+    push cx
+    mov word [w16_sfn], w16s_lgrow  ; XSEC-OK: [w16_sfn]'s value, an SCALL's
+    call w16_scall                  ; CF=1: no part, or no room to grow into
+    pop cx
+    jc .r                           ; (AX is still 0)
+    mov al, [w16_lflg]
+    jmp w16_lnew
+.r:
+    ret
+
 ; w16_lfree - ES = the heap's segment, AX = a data offset: free that block.
 ; Keeps all.
 w16_lfree:
@@ -1748,7 +1768,7 @@ w16k_lalloc:
     mov cx, [es:bx]
     mov al, [es:bx + 2]
     call w16_lds
-    call w16_lnew
+    call w16_lnewg
     or ax, ax
     jz .out
     test byte [w16_lflg], LMEM_MOVEABLE
@@ -1756,7 +1776,7 @@ w16k_lalloc:
     mov si, ax                      ; moveable: an entry pointing at it
     mov cx, 2
     xor al, al
-    call w16_lnew
+    call w16_lnewg
     or ax, ax
     jnz .entry
     mov ax, si
@@ -1904,7 +1924,7 @@ w16k_lrealloc:
     push dx
     mov al, [w16_lflg]
     and al, LMEM_ZEROINIT
-    call w16_lnew                   ; AX = the new data
+    call w16_lnewg                  ; AX = the new data
     pop dx
     or ax, ax
     jz .fail
