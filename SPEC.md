@@ -237569,14 +237569,20 @@ It has to, because the arenas are a few claims of fixed size and nothing
 else in the machine can be spent on them: Sir Hangman's engine
 (`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code segments, 404 KB,
 beside the launcher that started it, and the engine's DGROUP, up to 64 KB,
-is room the arenas' code then cannot have. The claim is the fourth of the
-instance's fixed kinds (program, library part, arenas) plus one, and the
-eighth is left to the transient parts (§124.25.1), so **at most two tasks
-hold a claim**: a third program, or a second while two already run, and a program
+is room the arenas' code then cannot have. Counted against §124.25.1's
+kinds, two programs, the library part and four arenas are seven claims, and
+the eighth is left to the transient ones (a part read and copied, a large
+bitmap, the next program's NE tables), so **at most two tasks hold a
+claim**: a third program, or a second while two already run, and a program
 whose claim is refused, put their segments in one fixed block of the global
 heap, laid out as the claim would be, as before (`W16K_FL` = 1). The arenas
 grow to hold it, within their four (§124.25.1), and it loads less at launch
-than a first program does (§124.26.3).
+than a first program does (§124.26.3). What that costs on `kern_big`, whose
+owner limit is eight (§50): with two programs holding claims and all four
+arenas made, a third launch has one claim left for its NE tables and, when
+no task has kept the loader part (§124.26.3), the part's own read as well,
+so it can be refused with *Not enough memory* where a block would have
+loaded it. `kern_mega` allows twelve, and its map ten rows (§124.31.3).
 
 **Either is given back on every exit** *(L2)*. `w16t_end` frees a dead
 task's segments by its `W16K_FL`: a claim through `W16VFREE` (which also

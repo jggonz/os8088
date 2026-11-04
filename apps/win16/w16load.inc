@@ -375,7 +375,8 @@ w16l_pclaim:
     jnc .got                        ;   arm: entered in the map, 124.31.3)
     cmp byte [w16_ntk], 0
     jne .try                        ; a later task goes on to a block
-    ret
+    stc                             ; the first program: refused (the cmp
+    ret                             ;   above cleared CF)
 .got:
     xchg ax, cx
     ret
