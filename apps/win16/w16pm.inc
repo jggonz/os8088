@@ -38,6 +38,7 @@
   %substr w16v_n7 w16v_ss 10, 8   ;   name, and the character after it
   %substr w16v_n6 w16v_ss 10, 7
   %substr w16v_n5 w16v_ss 10, 6
+  %substr w16v_n8 w16v_ss 10, 9
   %ifidn w16v_n7, '.w16dlg '
     %define w16v_sx d
   %elifidn w16v_n7, '.w16dlg]'
@@ -50,6 +51,10 @@
     %define w16v_sx q
   %elifidn w16v_n7, '.w16tsk]'
     %define w16v_sx q
+  %elifidn w16v_n8, '.w16rare '
+    %define w16v_sx r
+  %elifidn w16v_n8, '.w16rare]'
+    %define w16v_sx r
   %elifidn w16v_n6, '.w16fp '
     %define w16v_sx f
   %elifidn w16v_n6, '.w16fp]'

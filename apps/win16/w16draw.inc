@@ -941,12 +941,12 @@ W16LIB w16g_getpixel
     jl .inv
     cmp dx, [w16b_h + bx]
     jge .inv
-    mov ax, [w16b_str + bx]         ; the nibble: row * stride + x / 2
-    mul dx
+    mov ax, dx                      ; the nibble: row * stride + x / 2
+    call w16_bmrp                   ; (a tiled row: SPEC.md 124.25.17)
     mov si, cx
     shr si, 1
     add si, ax
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, dx
     mov al, [es:si]
     test cl, 1
     jnz .lo

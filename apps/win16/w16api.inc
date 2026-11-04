@@ -400,6 +400,7 @@ W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segp
 W16EXPORT W16M_GDI,        106,     10, w16g_setbmbits      ; SetBitmapBits(word long ptr)
 W16EXPORT W16M_GDI,        440,     18, w16g_setdibits      ; SetDIBits(word word word word ptr ptr word)
 W16EXPORT W16M_GDI,        441,     18, w16g_getdibits      ; GetDIBits(word word word word ptr ptr word)
+W16EXPORT W16M_GDI,        25,      10, w16g_flood          ; FloodFill(word s_word s_word long)
 W16EXPORT W16M_GDI,        372,     12, w16g_xflood         ; ExtFloodFill(word s_word s_word long word)
 W16EXPORT W16M_GDI,        64,      8,  w16g_rectrgn        ; CreateRectRgn(s_word s_word s_word s_word)
 W16EXPORT W16M_GDI,        63,      8,  w16g_polyrgn        ; CreatePolygonRgn(ptr word word)
@@ -491,6 +492,7 @@ W16EXPORT W16M_GDI,        176,     12, w16_ans0            ; PlayMetaFileRecord
 %define w16mdc_w16g_rectvis
 %define w16mdc_w16g_getdcorg
 %define w16mdc_w16g_xflood
+%define w16mdc_w16g_flood
 %define w16mdc_w16g_selclip
 %define w16mdc_w16g_exclclip
 %define w16mdc_w16u_drawtext
@@ -990,7 +992,7 @@ W16EXPORT W16M_USER,       259,     2,  w16_ans1            ; BeginDeferWindowPo
 W16EXPORT W16M_USER,       260,     16, w16u_setwndpos      ; DeferWindowPos(word x2 s_word x4 word): SetWindowPos's, at once
 W16EXPORT W16M_USER,       261,     2,  w16_ans1            ; EndDeferWindowPos(word): TRUE
 W16EXPORT W16M_USER,       407,     18, w16i_createicon     ; CreateIcon(word x5 ptr ptr)
-W16EXPORT W16M_USER,       416,     16, w16_ans0            ; TrackPopupMenu(word word s_word x3 word ptr): refused, FALSE
+W16EXPORT W16M_USER,       416,     16, w16u_trackpop       ; TrackPopupMenu(word word s_word x3 word ptr): part 11 (124.25.16)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 W16EXPORT W16M_KEYBOARD,   6,       8,  w16kb_oem2ansi      ; OemToAnsi(str ptr)
 W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()
@@ -1020,6 +1022,13 @@ W16FIXED 0,  w16_lmgo           ; W16_LMROW: the libraries' LibMain (124.23.4)
 W16FIXED 0,  w16_segld          ; W16_SLROW: a discarded segment's thunk (124.26.2)
 W16FIXED 30, w16u_createwnd     ; W16_CWROW: CreateWindow, for WM_MDICREATE
 W16FIXED 2,  w16u_destroywnd    ; W16_DWROW: DestroyWindow, for WM_MDIDESTROY
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
 %if W16NF != W16_NFIXED
   %error "W16FIXED: one row a fixed slot"
 %endif
@@ -1552,9 +1561,7 @@ w16u_findwnd:
     jne .next
     push cx
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    call w16_clsget
     mov di, ax
     mov si, w16_namebuf
     mov cx, 16
@@ -1599,12 +1606,10 @@ w16u_setclsword:
     mov ax, [es:bx + 4]
     call w16_hwnd2rec
     jc .no
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .no
-    mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    mov al, [bx + W16W_CLS]         ; the program's classes (124.25.18)
+    cmp al, 0xFF
+    je .no
+    call w16_clsget
     mov si, ax
     cmp cx, GCW_STYLE
     je .style
@@ -1612,6 +1617,7 @@ w16u_setclsword:
     jne .no
     mov ax, dx
     xchg ax, [si + W16C_HBR]
+    call w16_clsput
     push ax
     mov al, [bx + W16W_CLS]
     xor cx, cx
@@ -1621,9 +1627,7 @@ w16u_setclsword:
     call w16_slot2rec
     test byte [bx + W16W_FLAGS], W16WF_USED
     jz .wn
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .wn
-    cmp [bx + W16W_CLS], al
+    cmp [bx + W16W_CLS], al         ; (only a class's own windows have it)
     jne .wn
     mov [bx + W16W_HBR], dx
 .wn:
@@ -1635,6 +1639,7 @@ w16u_setclsword:
 .style:
     mov ax, dx
     xchg ax, [si + W16C_STYLE]
+    call w16_clsput
     jmp short .out
 .no:
     xor ax, ax

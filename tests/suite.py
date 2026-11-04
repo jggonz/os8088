@@ -17127,6 +17127,21 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16ctlproc", "soak", py("tests/win16ctlproc.py"), 60.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc: CTLPROC.EXE (`make "
+        "win16fixtures`, tests/win16/ctlproc.c) asks GetClassInfo for Edit "
+        "and Button, SUPERCLASSES both (a class of its own over the copied "
+        "procedure, forwarding with CallWindowProc) and uses them - "
+        "WM_SETTEXT, EM_SETSEL, EM_REPLACESEL, WM_GETTEXT, BM_SETCHECK, "
+        "BM_GETCHECK - checks the superclass keeps its class name and a "
+        "multi-line one its own window word after Edit's 18 bytes, makes one "
+        "that answers WM_CREATE itself (its Edit state made at the first "
+        "message it forwards), and SUBCLASSES a plain Edit with SetWindowLong "
+        "(GWL_WNDPROC), eating one key; its MessageBox must be CTLPROC OK. "
+        "What Visual Basic 3.0's runtime does to every control it makes",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16props", "soak", py("tests/win16props.py"), 60.0,
         "SPEC.md 124.25.13, WIN16-NEXT-PLAN: PROPS.EXE (`make "
         "win16fixtures`, tests/win16/props.c) sets, gets, replaces, "
@@ -17186,6 +17201,21 @@ SOAK = [
         "ExcludeClipRect, copies screen to bitmap and back through a moved "
         "window origin, and flood-fills on the window's DC inside a frame "
         "and across the client; its MessageBox must be MEMDC OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16bigbmp", "soak", py("tests/win16bigbmp.py"), 60.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE (`make "
+        "win16fixtures`, tests/win16/bigbmp.c) makes a 640 x 480 bitmap, "
+        "153,600 bytes in WIN16's 4 bits a pixel, which is three tiles - "
+        "past W16_BMMAX's 64,000 - selects it into a memory DC, draws in "
+        "each tile and across the seam, reads every pixel back, BitBlts the "
+        "last tile's block and a source across the seam onto the window, "
+        "reads a scan through GetDIBits, writes one through SetDIBits, "
+        "StretchBlts the seam, draws a line and an ExtFloodFill across a "
+        "seam, blits from an odd column, makes a pattern brush of it, copies "
+        "both ways with a second tiled bitmap of other tile heights and fills "
+        "a tiled monochrome one; its MessageBox must be BIGBMP OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
@@ -17279,6 +17309,19 @@ SOAK = [
         "sentence, and WIN16's load and discard counters both moved",
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
         wants=("build/os8088.img", "build/win16/DOS.O88")),
+    Row("win16thunk", "soak", py("tests/win16thunk.py"), 120.0,
+        "SPEC.md 124.26.14, WIN16-NEXT c3 (the real-mode arm): THKCALL.EXE "
+        "(tests/win16/thkcall.asm, assembled, with Microsoft's linker's "
+        "`9Ah offset` and a SELECTOR relocation on the segment word) under "
+        "QEMU on kern_big, WIN16 built W16DEFS=-DW16_CODEKB=5 into a private "
+        "tree: two 3,500-byte discardable segments reached by far calls only "
+        "are loaded and discarded in turn through per-target thunks, a third "
+        "that a `mov ax, seg` in the first also names is kept when the first "
+        "loads (not at launch) and stays loaded, and the MessageBox says "
+        "`thkcall: abacxba` with 5 segments loaded and 4 discarded",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img", "build/win16/DOS.O88",
+               "build/win16/THKCALL.EXE")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "
