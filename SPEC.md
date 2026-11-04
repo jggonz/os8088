@@ -235796,7 +235796,7 @@ state went in with S18, in the library part:
 |---|---|
 | `GlobalNotify` (KERNEL.154) | kept by nothing: a block allocated `GMEM_NOTIFY` is never discarded (§124.9, S19b), so there is no discard to be told of |
 | `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle; the block becomes the last, or the first, a shortage discards (§124.9, S19b) |
-| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less. On kern_mega the largest run plus all of the heap's free memory outside the arenas (§124.25.1) |
+| `GetFreeSpace` (KERNEL.169) | what `GlobalAlloc` could obtain, as a SUM, as Windows 3.1's standard mode answered: the free and discardable memory of the arenas plus the room a new arena could take (§124.25.1, *What GetFreeSpace says*). `GlobalCompact(0)` answers the largest block of the same accounting |
 | `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
 | `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
 | `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
@@ -236322,7 +236322,7 @@ So WIN16 keeps three kinds of claim and no more:
 
 | claim | how many |
 |---|---|
-| the program (§124.20.2) | one, and a second task's (§124.28.5) |
+| the program (§124.20.2) | one; on the kern_mega arm also a second task's (§124.28.5) |
 | the library part (§124.19) | one, from its first call |
 | the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21; on the kern_mega arm 3 until 2026-11-02, §124.31.1). They are 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again. Each is the size of a larger request instead. When a size cannot be had, the claim is tried at three quarters of that, and again, down to the request's own size (halves until 2026-11-02: Arcade's setup asked for 408 KB for its fourth arena with 374 KB left in the arm's map, got 204, and its `LoadBitmap` of a 277 x 160 picture then found no 22 KB run; three quarters gets 306) |
 
@@ -236388,20 +236388,62 @@ The count was chosen against the eight, not against the memory:
 the three is free, so they say what `GlobalAlloc` can actually get. Since S20
 they count the code segments `GlobalAlloc` may discard as well (§124.26.5).
 
-**Not done, pinned:** `GetFreeSpace` still answers the largest free run
-(§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
-it, so its bands are smaller here than on Windows, and it keeps more of
-them.
+**What GetFreeSpace says** *(owner decision, 2026-11-04)*. Windows 3.1's
+standard mode answered `GetFreeSpace(0)` with the SUM of the global heap's
+free and discardable memory, and `GlobalCompact(0)` with its largest block.
+WIN16 answers both from one accounting of what `GlobalAlloc` could really
+obtain, per arm, with no special case for any caller:
 
-**On kern_mega, nearer the sum** *(WIN16 S24)*: `GetFreeSpace` answers the
-largest run in an arena **plus all of the heap's free memory** outside the
-arenas, whether or not a slot is free (`OSAPI_MEM_AVAIL`'s BX), at most a
-megabyte. InstallShield 3's launcher (`SETUP.EXE`, *ISSET_SE*) refuses below
-700,000 bytes with an error whose text its own string table lacks, so it
-showed an empty box; on QEMU's 16 MB kern_mega the largest run was 388 KB
-and the heap held 510 KB more. Real mode keeps the largest run: 640 KB never
-reaches 700,000, and on Windows 3.0's real mode that launcher refused too.
-`GlobalCompact` is unchanged on both: it is what one `GlobalAlloc` gets.
+- **the arenas**: the sum over all of them of the free blocks and of the
+  loaded code segments that are not kept (`w16_gcan`, §124.26.5), one
+  paragraph of header less. `GlobalCompact`'s figure is the largest run of
+  these, not the sum;
+- **room for a new arena**, counted only while one of the four arena slots
+  is free (the room is `R`, and `L` is the largest block it could be):
+  - *kern_big*: `OSAPI_MEM_P` `MEMP_AVAIL`'s total `R` and largest claim `L`
+    of the conventional heap;
+  - *kern_mega*: the claims come from the heap above and below 1 MB, and
+    each is entered in the 960 KB map (§124.31.3), so `R` is the smaller of
+    the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
+    the conventional heap's total plus the extended pool's free KB
+    (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
+    and the larger of the conventional largest claim and the pool's KB. The
+    gap is taken less the 31 paragraphs `w16_vnew` may skip to keep a
+    claim's phase, and in whole KB, the unit the pool grants a claim in. No
+    room while the map has no free row;
+  - on both, `R` is at most one `L` for each arena that could still be made
+    (the free arena slots, and on kern_mega no more than its free map
+    rows): a heap of many small holes is not memory four arenas can take.
+
+`GetFreeSpace` is the arenas' sum plus `R`; `GlobalCompact` is the larger of
+the arenas' largest run and `L`. The figure is at most the map's size on
+kern_mega and at most 640 KB on kern_big, so on kern_big it cannot reach
+InstallShield 3's 700,000 (its launcher `SETUP.EXE` refuses below that with
+string 7068, *Error 111*, and on Windows 3.0's real mode refused too); on
+kern_mega it passes while the map is mostly free. Before this the answer was
+the largest run (kern_big) or the largest run plus the conventional heap's
+free memory (kern_mega), which on QEMU was 545,376 bytes while 154 KB of the
+map and the whole extended pool were unused. A program that sizes buffers
+from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
+asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
+bitmap when the answer is at least four times the picture: 614,400 bytes for
+640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
+`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
+for this operation*, both before this change and after it (a look of each,
+2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
+(`win16pbrush`). The one-band bitmap is the likely cause, read from
+`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
+what would cure it, not a smaller figure.
+
+The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
+and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
+that call into it, so a program that cannot have the part is answered 0
+rather than ended as a missing part ends a call: Calculator calls
+`GlobalCompact(-1)` only when a `GlobalReAlloc` was refused, the moment the
+part is least likely to fit, and then shows its own message. 0 is honest
+there: the part is a heap block of 16 KB (37 KB on kern_mega), and when it cannot be
+had no block that large can.
 
 #### 124.25.2 A library's local heap has room *(S19b batch 1)*
 
@@ -236979,9 +237021,9 @@ entry pointed into another segment. Windows Help started by Calculator
   scans from the int's frame.
 
 **What a program is told is free.** `GlobalCompact` and `GetFreeSpace`
-(§124.25.1) answer the largest run of an arena made of free blocks and of
-loaded code segments that are not kept (`w16_gcan`), since `GlobalAlloc`
-discards those to make the room. One that is in use is counted too: the
+(§124.25.1) count the free blocks and the loaded code segments that are not
+kept (`w16_gcan`) of the arenas - the largest run for `GlobalCompact`, the sum
+for `GetFreeSpace` - since `GlobalAlloc` discards those to make the room. One that is in use is counted too: the
 stack is scanned only when a segment is about to go, and Windows counted
 all of its discardable memory. Without this Paintbrush 3.0 stopped at
 *Insufficient memory to edit image* on QEMU's 640 KB: its start-up loads
@@ -237789,28 +237831,30 @@ Windows' own:**
 | 11 | it is not a Windows program WIN16 can run |
 | 16 | `W16_MAXTASK` tasks already run |
 
-**A second program takes a claim when it can** *(L2, 2026-11-04)*. The
-first program's segments are its claim, one of the eight (§124.25.1). A
-program started while only one task runs (`w16_ntk` = 1) asks for a claim
-of its own too, laid out as the first's is, and keeps it as `W16K_FL` = 0.
-It has to, because the arenas are a few claims of fixed size and nothing
-else in the machine can be spent on them: Sir Hangman's engine
-(`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code segments, 404 KB,
-beside the launcher that started it, and the engine's DGROUP, up to 64 KB,
-is room the arenas' code then cannot have. Counted against §124.25.1's
-kinds, two programs, the library part and four arenas are seven claims, and
-the eighth is left to the transient ones (a part read and copied, a large
-bitmap, the next program's NE tables), so **at most two tasks hold a
-claim**: a third program, or a second while two already run, and a program
-whose claim is refused, put their segments in one fixed block of the global
-heap, laid out as the claim would be, as before (`W16K_FL` = 1). The arenas
-grow to hold it, within their four (§124.25.1), and it loads less at launch
-than a first program does (§124.26.3). What that costs on `kern_big`, whose
-owner limit is eight (§50): with two programs holding claims and all four
-arenas made, a third launch has one claim left for its NE tables and, when
-no task has kept the loader part (§124.26.3), the part's own read as well,
-so it can be refused with *Not enough memory* where a block would have
-loaded it. `kern_mega` allows twelve, and its map ten rows (§124.31.3).
+**A second program takes a claim when it can, on kern_mega** *(L2, 2026-11-04)*.
+The first program's segments are its claim, one of the owner's claims
+(§124.25.1). On the kern_mega arm a program started while only one task runs
+(`w16_ntk` = 1) asks for a claim of its own too, laid out as the first's is,
+and keeps it as `W16K_FL` = 0. It has to, because the arenas are a few
+claims of fixed size and nothing else in the machine can be spent on them:
+Sir Hangman's engine (`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code
+segments, 404 KB, beside the launcher that started it, and the engine's
+DGROUP, up to 64 KB, is room the arenas' code then cannot have. So **at most
+two tasks hold a claim** there: a third program, or a second while two
+already run, and a program whose claim is refused, put their segments in one
+fixed block of the global heap, laid out as the claim would be
+(`W16K_FL` = 1). The arenas grow to hold it, within their four (§124.25.1),
+and it loads less at launch than a first program does (§124.26.3).
+`kern_mega` allows twelve claims and its map ten rows (§124.31.3).
+
+**On kern_big the first program's is the only program claim** *(lead
+decision, 2026-11-04)*. Its owner limit is eight (§50): one program claim,
+the library part and four arenas are six, and the NE tables' claim and the
+part's own read are the transient two. A second claim would leave a third
+launch with one, and a launch that loaded as a block before L2 could then be
+refused with *Not enough memory*. So on the real arm every program after
+the first puts its segments in a block of the global heap (`W16K_FL` = 1),
+as before L2, whatever `w16_ntk` is.
 
 **Either is given back on every exit** *(L2)*. `w16t_end` frees a dead
 task's segments by its `W16K_FL`: a claim through `W16VFREE` (which also

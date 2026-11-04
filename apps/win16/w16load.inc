@@ -371,7 +371,11 @@ w16_load:
 ; Clobbers AX.
 w16l_pclaim:
     mov byte [w16_pgblk], 0
+%ifdef PKG_MEGA
     cmp byte [w16_ntk], 2           ; two tasks hold a claim at most
+%else
+    cmp byte [w16_ntk], 1           ; kern_big: the first's alone (124.28.5)
+%endif
     jae .blk
     mov cx, ax
     W16VCLAIM                       ; AX = the paragraphs GRANTED (the
