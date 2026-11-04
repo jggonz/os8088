@@ -219,8 +219,10 @@ LCONT w16k_llback
     cwd
     ret
 
-; FreeLibrary (KERNEL.96) - args: +0 hLibModule. The count lowered; at 0
-; its WEP(WEP_FREE_DLL) called, then its blocks freed (w16k_flback)
+; FreeLibrary (KERNEL.96), FreeModule (KERNEL.46) - args: +0 hLibModule.
+; The count lowered; at 0 its WEP(WEP_FREE_DLL) called, then its blocks
+; freed (w16k_flback). TRUE, FreeModule's answer (FreeLibrary's is void);
+; a handle that is no library of ours is left alone (SPEC.md 124.25.15)
 W16LIB w16k_freelib
     push si
     push di
@@ -229,7 +231,7 @@ W16LIB w16k_freelib
     ICALL w16_libof                 ; SI -> it, BX = its record
     jc .out
     dec byte [si + W16L_COUNT]
-    jnz .out
+    jnz .true
     inc byte [si + W16L_COUNT]      ; alive while its WEP runs
     W16CSEG es
     mov di, w16_s_wep               ; XSEC-OK: ES = CS
@@ -251,6 +253,8 @@ W16LIB w16k_freelib
 .nowep:
     mov ax, bx
     call w16l_drop
+.true:
+    mov ax, 1
 .out:
     pop di
     pop si
@@ -259,7 +263,9 @@ w16_s_wep: db 'WEP'
 
 LCONT w16k_flback
     mov ax, cx
-    jmp w16l_drop
+    call w16l_drop
+    mov ax, 1
+    ret
 
 ; GetModuleUsage (KERNEL.48) - args: +0 hModule: a library's count, else 1
 W16LIB w16k_getmodu

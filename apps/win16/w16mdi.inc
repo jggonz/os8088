@@ -3888,18 +3888,15 @@ W16TSK w16k_curpdb
     xor dx, dx
     ret
 
-; SetHandleCount (KERNEL.199) - args: +0 wNumber. The handles a program may
-; have open at once: what it asks, but no more than WIN16's DOS has (the five
-; devices and DOS_NFH = 8 files, apps/dos/dos.asm), which is the honest
-; answer Windows gave when FILES= was smaller than the ask (SPEC.md 124.25.15)
+; SetHandleCount (KERNEL.199) - args: +0 wNumber, not read. The answer is
+; the size of the handle table, as Windows' is (its PSP's, never below the
+; 20 a PSP starts with, so an ask under it gets more than it asked): here the
+; one table WIN16's DOS has, the five devices and DOS_NFH = 8 files
+; (apps/dos/dos.asm). VBRUN300's own Windows 3.0 path reads the PSP's table
+; size the same way (SPEC.md 124.25.15)
 W16_NHANDLE equ 13
 W16TSK w16k_sethcount
-    ICALL w16_args
-    mov ax, [es:bx]
-    cmp ax, W16_NHANDLE
-    jbe .out
     mov ax, W16_NHANDLE
-.out:
     xor dx, dx
     ret
 

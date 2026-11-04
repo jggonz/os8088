@@ -6,11 +6,12 @@
  * own, so the build needs no header that declares an undocumented call.
  *
  *  GetCurrentPDB      a PSP: its first word is INT 20h (CD 20)
- *  SetHandleCount     10 comes back 10; 500 comes back fewer, but not none
+ *  SetHandleCount     the table's size whatever is asked, as Windows': 10
+ *                     comes back 10 or more, 500 fewer than 500
  *  GetCodeHandle      the window procedure's: nonzero; a locked global
  *                     block's: that block's handle
  *  FreeModule         W16DLL.DLL loaded twice has a count of 2, and one
- *                     FreeModule makes it 1
+ *                     FreeModule makes it 1 and answers TRUE
  *  GetClassWord/Long  style, extra bytes, hModule, icon, background brush
  *                     and window procedure, against what RegisterClass was
  *                     given and what GetClassInfo says; a bad window is 0
@@ -102,7 +103,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(pdb != 0, "pdb");
     if (pdb)
         check(*(unsigned far *)MK_FP(pdb, 0) == 0x20CD, "pdbint20");
-    check(VbuHcnt(10) == 10, "hc10");
+    check(VbuHcnt(10) >= 10, "hc10");
     n = VbuHcnt(500);
     check(n >= 10 && n < 500, "hc500");
     g = GlobalAlloc(GMEM_MOVEABLE, 100);
@@ -119,7 +120,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check((UINT)lib >= 32 && lib2 == lib, "lib");
     if ((UINT)lib >= 32) {
         check(GetModuleUsage(lib) == 2, "usage2");
-        VbuFreemod(lib);
+        check(VbuFreemod(lib) == TRUE, "freemod");
         check(GetModuleUsage(lib) == 1, "usage1");
         FreeLibrary(lib);
     }
