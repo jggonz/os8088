@@ -88,6 +88,13 @@ The owner's decisions taken on the way:
       - its re-entry argument, since a fault can arrive inside a BIOS call or a callback;
       - the arithmetic that says Mozart needs it.
     - Any large Visual Basic 3.0 program will eventually need the same hook, so this is the route the end goal runs through.
+  - **Status 2026-11-04 (measure; QEMU `kern_mega`, `-cpu 486 -m 16`; looks, not rows).** Mozart does not start yet, for two reasons that come before memory, and O8 is not shown to be needed.
+    - **Setup:** the CD's data track was extracted to `C:\SRC` (`win16ref/titles/mozart/x` holds only the setup's own files, so the copy stops at `GLOSSARY.IDX` on it). Setup then reaches *Microsoft Mozart Setup is complete* on the merged tree, with the 42 KB picture, and *Return to Windows* leaves the group's desktop icon.
+    - **First refusal, from the group's link:** *Needs VBRUN300.100 which WIN16 does not provide yet.* SPEC.md 124.23.1 finds a library only in the program's own folder. Mozart's setup puts `VBRUN300.DLL` in the Windows directory (`SYSTEM\APPDATA\WIN16`), and `MOZART.EXE` is in `C:\MOZART`. WIN16-ANY-PLAN O5 chose Windows' order (program folder, system directory, Windows directory) and the loader does not do it. This is a SPEC and loader fix that costs no kernel byte. Not done here.
+    - **Second finding, same install:** `MCI.VBX`, `MSGBLAST.VBX`, `PICCLIP.VBX`, `MVFS2.DLL` and `MCICDA.DRV` are in the INF's lists but were not copied (8 of the 13 shared and system files were). Not investigated.
+    - **With those files copied beside `MOZART.EXE` (outside the setup):** it loads (*Loading...*, 6 to 27 s), WIN16's box says *Running*, and 1 to 2 s later the instance is gone. No dialog, no toast, no *Needs* line. A fault would show kern_mega's *closed* toast, a missing import its *Needs* window, and a memory refusal its own words. `HANGMAN.EXE` (VB 3.0 too, run from `hangman/x` with its own `VBRUN300.DLL` beside it) does the same, so it is VBRUN300's start, not Mozart's. **The cause is not found.** The `-DW16_TRACE` arm does not assemble (word displacements and `APP_MAX_SIZE`), and the `make megadiag` kernel starts none of this tree's WIN16 arms. A trace that fits is the next tool.
+    - **Arithmetic:** fixed code is VBRUN300 329 KB + MOZART 184 KB = 513 KB against the four arenas' about 810 KB (the plan's figures). The load finished with no *Not enough memory*, so that fixed code did fit with the setup's libraries gone. The free space at that moment was not read: the arena table is behind the virtual map and nothing reads it from outside.
+    - **So O8's case is not made by this look.** The program never reached a window, so how much it allocates is unknown. The next walls are not memory: VBRUN300 imports 23 functions WIN16 lacks (`GDI` `OffsetWindowOrg` `CopyMetaFile` `SetRectRgn` `EnumMetaFile` `PlayMetaFileRecord` `Arc` `Pie` `CreateBrushIndirect` `CreatePenIndirect`; `KERNEL` `SetHandleCount` `GetCurrentPDB` `FreeModule` `GetCodeHandle`; `USER` `WaitMessage` `GetClassWord` `GetClassLong` `EndMenu` `GetUpdateRgn` `BeginDeferWindowPos` `DeferWindowPos` `EndDeferWindowPos` `CreateIcon` `TrackPopupMenu`). It was 48 on 2026-11-01.
 
 - [ ] **L2: Sir Hangman's install, a known limit in S25.**
   - Sir Hangman 1.0 is the InstallShield 3 installer, O3.
@@ -97,6 +104,7 @@ The owner's decisions taken on the way:
     - a later program's segment block as a claim of its own, as the first program's is;
     - O8's `#NP` reload (L1), which would cover it too.
   - The program itself, `HANGMAN.EXE`, is VB 3.0 again, so after the install it is L1's question.
+  - **Status 2026-11-04 (measure).** Sir Hangman's `SETUP.EXE` from A: answers InstallShield's own *Insufficient memory available to run Setup ... Error 111* on `kern_mega` (`-m 16`) and on `kern_big`, the same text on both. It is the L2 refusal as InstallShield words it, not WIN16's *Not enough memory to load it*. The engine's 404 KB of kept code is the cause on the arm, as written above; why `kern_big` says the same was not looked at. `HANGMAN.EXE` run directly: see L1.
 
 ## 4. Open items found on the way (not blocking #327)
 
@@ -127,6 +135,21 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - Mozart's Red Book tracks play through S23's `cdaudio`, on 86Box's `286-mega-cdrom` and `386-mega-cdrom`.
   - What of all three runs in real mode, where their CPU tier allows.
   - `tools/w16reach.py` re-run against WIN16-ANY-PLAN §1.
+  - **Status 2026-11-04 (measure; QEMU, looks).**
+    - **Arcade's setup** reaches *Congratulations! Microsoft Arcade Setup successful!* on the merged tree, on `kern_mega` at `-m 16`, and its group has five links.
+    - **All five games refuse the same way**, a second or two after the link, with WIN16's *Needs USER.26 which WIN16 does not provide yet.* USER.26 is `SetProp`; `GetProp` (25) and `RemoveProp` (24) are missing as well, and no game gets past them. So the 386 code does load (nothing refuses the CPU tier on QEMU's 486), and `WAVEMIX` is not yet reached. Across the five games, Mozart's and Hangman's files, the imports most programs call that WIN16 lacks are `USER` 24, 25, 26 and 112 `WaitMessage` (7 programs each), `CloseWindow` (5), `GetClassLong` (3), then the games' own libraries.
+    - **Real mode (`kern_big`, QEMU):** Arcade's and Mozart's `SETUP.EXE` both answer *It needs protected mode.* Sir Hangman's `SETUP.EXE` answers InstallShield's Error 111 (L2). No setup of the three goes further on the XT-class arm than that, as the census said (R3).
+    - **Not done:** Mozart's Red Book tracks (needs 86Box's `286-mega-cdrom`, which this Mac does not run, and Mozart itself does not start, L1).
+    - **w16reach, 2026-11-04 against 2026-11-01** (`tools/w16reach.py` over `win16ref/titles/{arcade,hangman}/x`, the CD's `MOZART`, `MSSTP` and `MSSTP\SHARED`):
+
+      | | 2026-11-01 | 2026-11-04 |
+      |---|---|---|
+      | WIN16's exports | 560 | **720** |
+      | `VBRUN300.DLL`, imports WIN16 lacks (of 300) | 48 | **23** |
+      | `MOZART.EXE`, in the way | R2, R4 | R2, R4 (the one import is `VBRUN300`) |
+      | the five games, in the way | R2, R3, R4 | R2, R3, R4 (R4 names `WAVEMIX`, `ARCADEVF`, `AMDSPIN`, `ARCCTL`); 9 missing imports each |
+      | `_INST16.EXE`, in the way | R2, R4 | R2, R4 (`DDEML`); 10 missing |
+      | Setup Toolkit libraries (`MSCOMSTF` ... `MSUILSTF`) | not listed | 1 to 4 missing each |
 
 - [ ] **Q5: re-verify after main's #328.** #328 ("Elendilon -> Main", d323a9a65) was merged into #327 on 2026-11-02 (e1a8c21f5). It changed:
   - heap claims to paragraphs rounded to 512 bytes, with `OSAPI_MEM_P` (SPEC.md 50.2.1, 50.3.7). WIN16's own claims followed on both arms.

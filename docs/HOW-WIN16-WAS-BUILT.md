@@ -4661,3 +4661,69 @@ nobody looked at.
 - A `win16setup` row.
 - Phase A's rows have no kern_mega leg.
 - The final pass (S25) is still to run.
+
+## 2026-11-04: what Mozart and the Arcade games do when started
+
+This was a measurement and changed no code. Every boot was QEMU, a look at
+the screen, on `kern_mega` with a 486 and 16 MB unless it says `kern_big`.
+The rig was a hard disk built from `mega.img`'s files plus WIN16 and its
+DOS in `C:\WIN16`, an `\AUTOSTRT` link to the setup, and the installer's
+files on A: or in `C:\SRC`.
+
+**Three traps in the rig, each worth one line.**
+- `win16ref/titles/mozart/x` is only the setup's own files. The copy stops
+  at *Could not open the file named C:\SRC\MOZART\GLOSSARY.IDX*, and then at
+  the picture folders. The CD's data track has to be extracted for the files
+  the INF names.
+- `os88disk.py` marks `*.DRV` files hidden or system. A setup that copies
+  `MSACM.DRV` from the hard disk then says it cannot open it. The files were
+  put on the volume with `mcopy` instead.
+- The first double-click after another window had the focus often only
+  selects. Launching a link needed a second one, three seconds on.
+
+**Mozart's setup** went through to *Microsoft Mozart Setup is complete* on
+the merged tree, with its 42 KB picture. It left the group's desktop icon.
+
+**Mozart itself did not start.**
+1. From the group's link: *Needs VBRUN300.100 which WIN16 does not provide
+   yet.* The setup had put `VBRUN300.DLL` in the Windows directory and the
+   loader looks only in the program's folder. WIN16-ANY-PLAN's O5 had
+   chosen Windows' order and this part of it was never built.
+2. With `VBRUN300.DLL` and the VBXs copied beside `MOZART.EXE`: *Loading...*,
+   then WIN16's *Running* box, then, a second or two later, nothing. No
+   window of Mozart's, no dialog, no toast, no *Needs* line.
+3. `HANGMAN.EXE` does exactly the same from its own folder. Two Visual
+   Basic 3.0 programs ending the same way, silently, say the cause is in
+   VBRUN300's start and not in either program.
+
+What was ruled out by looking: a fault (kern_mega's *closed* toast never
+showed, in screenshots taken faster than the toast lasts), a missing import
+(the *Needs* window), and a memory refusal (its own sentence). What was not
+possible: the `-DW16_TRACE` arm does not assemble any more (word
+displacements, and `APP_MAX_SIZE`), and the `make megadiag` kernel did not
+start this tree's WIN16 arms at all. A trace that fits is the next tool.
+
+**The arithmetic stayed an arithmetic.** VBRUN300 and Mozart's fixed code is
+513 KB against about 810 KB of arenas, and the load finished, so it fit. How
+much free space was left was not read, because the arena table sits behind
+the virtual map and nothing reads it from outside. The case for the `#NP`
+reload (owner decision O8) is therefore not made: the program did not get
+far enough to allocate anything we could measure.
+
+**Arcade's five games all stop at the same call.** The setup completes, and
+each game refuses a few seconds after its link with *Needs USER.26 which
+WIN16 does not provide yet.* That is `SetProp`; `GetProp` and `RemoveProp`
+are missing too. It is the cheapest wall in the way of the games and it is
+USER's, not memory.
+
+**Real mode** (`kern_big`): Arcade's and Mozart's `SETUP.EXE` say *It needs
+protected mode.* Sir Hangman's `SETUP.EXE` says InstallShield's *Insufficient
+memory available to run Setup. Error 111*, on both kernels.
+
+**`tools/w16reach.py`**: WIN16 exports 720 functions where it was 560. The
+imports VBRUN300 wants that WIN16 lacks went from 48 to 23. The games miss 9
+each, `_INST16` misses 10 and still needs `DDEML`.
+
+All of it, with the boots and the shots' places, is in
+`docs/plans/WIN16-NEXT-PLAN.md` (L1, L2, Q4) and the lead's measure report.
+The screenshots of Microsoft programs are kept outside the repository.
