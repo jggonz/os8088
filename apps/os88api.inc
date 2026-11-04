@@ -2297,6 +2297,18 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          and goes with its block (SPEC.md
                                  ;          50.6.11, 124.31.3). CF=1 on a
                                  ;          real-mode kernel
+                                 ; SEG_TYPE DX = a WINDOW of yours (SEG_WIN,
+                                 ;          SEG_WINL, SEG_AT) or a HANDLE
+                                 ;          descriptor (SEG_HND) in a block
+                                 ;          of yours, CX = 0 data
+                                 ;          or 1 code -> the descriptor's
+                                 ;          type set in place, base, limit
+                                 ;          and selector kept (SPEC.md
+                                 ;          50.6.11, 124.31.6). A code
+                                 ;          window is never matched as a
+                                 ;          data one. CF=1, AX = 4 for
+                                 ;          anything else; CF=1 on a
+                                 ;          real-mode kernel
                                  ; out CF=0 and the answer; CF=1 refused (no
                                  ; LDT entry free, or SEG_REAL's none),
                                  ; AX = the reason: 1 no LDT entry or window
@@ -2319,6 +2331,7 @@ SEG_TILE    equ 9
 SEG_WINL    equ 10
 SEG_LEND    equ 11
 SEG_HND     equ 12
+SEG_TYPE    equ 13
 
 ; OSAPI_MEM_P - THE CLAIM HEAP IN PARAGRAPHS (SPEC.md 50.2.1, 50.3.7). Every
 ; claim is rounded to the heap's GRANULE - 512 bytes today, and the door says

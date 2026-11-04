@@ -99560,6 +99560,7 @@ verb:
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
+| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code | the descriptor's type set in place, 92h / 9Ah; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99575,7 +99576,8 @@ real-mode caller's next 64KB is its segment + `1000h`, its own sum.
 1MB to window, and below it the caller's paragraph is its own answer. So is
 `SEG_LEND`: real mode has no stack the BIOS cannot use, and so is
 `SEG_HND`: a real-mode caller's block is its paragraph, which needs no
-descriptor.
+descriptor. So is `SEG_TYPE`: a real-mode segment is code or data by how it is used,
+and the caller keeps the segment it has.
 `.mega` alone: 18 bytes, kern_big and kern_small byte-identical.
 
 On kern_mega in protected mode (`mega_segf`, `.mega`):
@@ -99669,6 +99671,22 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   (no free entry), 3 (the base in no block) and 4 (DX not a handle
   descriptor), DX kept. `.mega` +208 (the body's 191, its dispatch and
   `mega_dfind`'s test), every other kernel nothing.
+- **`SEG_TYPE`** (`mega_segty`, KERN-MEGA-PLAN 14.142) sets a window's
+  access byte to 92h (data) or 9Ah (code, readable), DPL 0, in place, so a
+  program that built code in a block can far-call it (WIN16's
+  `AllocDStoCSAlias`, `PrestoChangoSelector`, §124.31.6). It is a window's
+  or a handle descriptor's: the owner test is `mega_segown`'s byte against
+  the window's row, as `SEG_FREE`'s, or `mega_bown`'s (SEG_BWIN's) on the
+  block a handle descriptor is based in, so another's window or handle descriptor, a SUB, a SUBC pair
+  and a tile are refused (CF = 1, AX = 4) and nothing changes.
+  A CODE window is never the match for a question about a data one
+  (`mega_wfind` skips it), so a later `SEG_WIN` over the same base and reach
+  makes a window of its own. A window does not follow a block that moves, code
+  or data; a handle descriptor does, being re-aimed in place (above), and keeps
+  its new type when it is. `.mega` +16 (the dispatch, the `mega_wfind` test
+  and `mega_bownf`'s door), `.cold` +127 (the body, which first refuses a DX
+  that is no allocator LDT entry and a caller that is nobody's, `mega_segh`'s
+  bound), no rung crossed; every other kernel nothing.
 - **Freeing an entry clears any window row naming it** (`mega_ldt_free`), so
   a window that went with its block cannot be freed a second time at its
   owner's end, after the entry is somebody else's.
@@ -238681,9 +238699,12 @@ DOS host's block.
     **window** of WIN16's, so setting its base or limit re-aims it rather
     than rewriting a descriptor. Its base must be on a paragraph below 1 MB,
     its reach is 64 KB at most, and kern_mega frees every one at WIN16's end.
-    `PrestoChangoSelector` re-aims the destination over the source; the
-    code/data flip is kern_mega's to complete, as every far call through a
-    data selector is (§20.18);
+    `PrestoChangoSelector` re-aims the destination over the source and gives
+    it the OTHER type, as Windows does (`LAR` reads the source's; `SEG_TYPE`,
+    §50.6.11, sets the destination's): a data selector in, a real CODE
+    selector out, which a far call takes with no help from kern_mega. Source
+    equal to destination flips it in place, a window or the handle descriptor
+    of a block of the program's alike (`SEG_TYPE`);
   - **such a window is made fresh and recorded** (2026-11-01). `SEG_WIN`
     asked for a new window answers any window of the caller's that already
     has the same base and reach. Two `AllocSelector(0)` calls were one
@@ -238696,7 +238717,19 @@ DOS host's block.
     re-aim answers 0 and the free does nothing;
   - an **alias** of a selector in a claim is that claim's SUB or pair
     (`SEG_SUB`, `SEG_SUBC`'s code half): the same one each time, and
-    `FreeSelector` on it does nothing;
+    `FreeSelector` on it does nothing. `AllocDStoCSAlias` of a selector NOT in
+    a claim is a new window over its base and reach, made code by `SEG_TYPE`
+    and recorded in `w16q_wins`, so `FreeSelector` gives it back (2026-11-04:
+    it was a DATA window, whose far call kern_mega refused and closed
+    Arcade's ASTEROID with a #GP at its first call into code it had built).
+    **Validity:** a window, code or data, is aimed at a base and stays there
+    when the block it was made from moves or is resized (`GlobalReAlloc`), as
+    a `SetSelectorBase` window does. Windows gives the same: an alias made by
+    `AllocDStoCSAlias` or `PrestoChangoSelector` is valid for as long as the
+    block stays where it is, which is why a program builds and calls its code
+    at once (documented behaviour of those calls; not tested against the real
+    3.1 here). A block's pair, a SUB and a handle descriptor DO follow a move;
+    only a window does not;
   - `GetSelectorLimit` is LSL, a 286 instruction: the arm runs on nothing
     older;
   - `GlobalDOSAlloc` is a fixed global block, which is conventional

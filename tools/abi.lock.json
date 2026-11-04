@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "ab9bd4de52d813d4d227abc9db5f6c20bcedac1a2474e197c0f69fd42c09dc2e",
+  "fingerprint": "9ef25b5f2c092866dbd2a23489ede5dda8938176533146153c149a548834c7e5",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "ea48ade03b96bea071fe19dcef24eca06e9edc6ef07f3b6b5b2ecb7c49ab225f",
+  "fingerprint": "c73c313456ef8f24672d3754142305f496f10c717072a6347f0f38d071b4ce46",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1708,6 +1708,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "SEG_BWIN comment clarified: caller's own block (KERN-MEGA-PLAN 14.139), merged with main's DRVM_CEIL_NET_MEGA; comments only, everything built before still runs - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "c73c313456ef8f24672d3754142305f496f10c717072a6347f0f38d071b4ce46",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG SEG_TYPE (13): a code/data retype of the caller's own window or handle descriptor (SPEC 50.6.11, KERN-MEGA-PLAN 14.142), appended after SEG_HND; older kernels refuse it, so everything built before still runs - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "9ef25b5f2c092866dbd2a23489ede5dda8938176533146153c149a548834c7e5",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG SEG_TYPE (13): a code/data retype of the caller's own window or handle descriptor (SPEC 50.6.11, KERN-MEGA-PLAN 14.142), appended after SEG_HND; older kernels refuse it, so everything built before still runs - no bump",
    "to": 12
   }
  ]

@@ -12477,7 +12477,15 @@ mega_segf:
     je .lend
     cmp bl, SEG_HND
     je .hndj
+    cmp bl, SEG_TYPE
+    je .typej
     stc
+    retf
+.typej:                             ; SEG_TYPE: the body is `.cold`'s
+    push bx                         ; (mega_segty), BL = the owner for it
+    call mega_segown
+    call COLD_SEG:mega_segty
+    pop bx
     retf
 .hndj:
     jmp mega_segh
@@ -12747,6 +12755,80 @@ mega_segown:
 .o:
     ret
 
+; mega_segty - FAR, `.cold` (SEG_TYPE's body, mega_segf): DX = a window of
+; the caller's, or a HANDLE descriptor (SEG_HND) based in a block of the
+; caller's own, BL = its owner byte (mega_segown's), CX = 0 data / 1 code ->
+; CF = 0 and the descriptor's type set in place (92h / 9Ah, DPL 0, base and
+; limit untouched, so the selector stays its holder's own and WIN16's
+; GlobalReAlloc keeps re-aiming it); CF = 1, AX = 4 anything else (a SUB, a
+; pair, a tile, another's window or handle), nothing done. Every other
+; register kept. The handle descriptor is the case of a program that builds
+; code in a block of its own and flips the block's selector with
+; PrestoChangoSelector(sel, sel), as Arcade's ASTEROID does (KERN-MEGA-PLAN
+; 14.142)
+section .cold
+mega_segty:
+    push ax
+    push di
+    push es
+    test dl, 4                      ; AN ALLOCATOR LDT ENTRY OR NOTHING, and
+    jz .no                          ; never nobody's (BL = FFh). Unchecked,
+    mov di, dx                      ; DX = 0 matched a FREE row of mega_wtab
+    and di, 0xFFF8                  ; (its selector word 0, its owner byte
+    cmp di, MEGA_LDT_FREE0 * 8      ; left) and retyped entry 0 - the GDT's,
+    jb .no                          ; below the allocator's range - and a DX
+    cmp di, [ss:mega_ldte]          ; past the LDT's end read beyond the
+    jae .no                         ; alias, a #GP in the kernel (mega_segh
+    cmp bl, 0xFF                    ; bounds its DX the same way)
+    je .no
+    MXT_ES
+    mov di, mega_wtab
+.l:
+    cmp [es:di], dx
+    je .f
+    add di, 4
+    cmp di, mega_wtab_end
+    jb .l
+    mov di, dx                      ; not a window: a handle descriptor of
+    and di, 0xFFF8                  ; the caller's block (AVL set, based in
+    mov ax, MEGA_SEL_LDTD           ; a block the caller owns)
+    mov es, ax
+    test byte [es:di+6], MEGA_HAVL
+    jz .no
+    push dx
+    mov ax, [es:di+2]
+    mov dl, [es:di+4]
+    xor dh, dh                      ; DX:AX = its base
+    call MEGA_SEL_CODE:mega_bownf   ; BL = the owner: the caller's block?
+    pop dx
+    jnc .set
+.no:
+    pop es
+    pop di
+    pop ax
+    mov ax, 4
+    stc
+    retf
+.f:
+    cmp [es:di+2], bl
+    jne .no
+.set:
+    mov di, dx
+    and di, 0xFFF8
+    mov ax, MEGA_SEL_LDTD
+    mov es, ax
+    mov al, 0x92
+    jcxz .s
+    mov al, 0x9A
+.s:
+    mov [es:di+5], al
+    pop es
+    pop di
+    pop ax
+    clc
+    retf
+section .mega
+
 ; mega_wfind - DX:AX = a base, CX = a limit, BL = an owner -> DI = that
 ; owner's window already over exactly that, or 0. Clobbers nothing else
 mega_wfind:
@@ -12767,6 +12849,8 @@ mega_wfind:
     cmp byte [si+3], 0              ; a BOUND window (SEG_BWIN) is its
     jne .n                          ; owner's alone to aim
     and di, 0xFFF8
+    test byte [es:di+5], 8          ; a CODE window (SEG_TYPE) is never a
+    jnz .n                          ; match for a data one's question
     cmp [es:di+2], ax
     jne .n
     cmp [es:di+4], dl
@@ -14489,6 +14573,9 @@ mx_relallm:
     retf
 mega_ldt_freef:
     call mega_ldt_free
+    retf
+mega_bownf:                         ; (SEG_TYPE's owner test, 14.142)
+    call mega_bown
     retf
 mega_tellf:
     call mega_tell
