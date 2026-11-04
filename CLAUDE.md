@@ -907,6 +907,13 @@ floppies into the git-ignored `win16ref/`, with the sample programs and
 reference screenshots - is `.claude/skills/win16-reference`
 (`/win16-reference`); its script recreates the lot and its traps are what
 getting Windows to boot here cost.
+Building out a feature's **user stories or open items in parallel** - each
+independent item to a sub-agent of its own in its own worktree on a cheaper
+model, one shared brief, a Monitor armed on every long-running agent, each
+finished branch verified and improved by an Opus reviewer before it is
+integrated into the feature's PR, and the final pass run once - is
+`.claude/skills/story-fanout` (`/story-fanout <plan or PR>`), whose
+`LESSONS.md` is what the WIN16 Phase B/C and WIN16-NEXT rounds learned.
 
 ## Shared agent skills
 

@@ -1,6 +1,6 @@
 # Shared skills in Claude Code and Codex
 
-The eight skills in `.claude/skills/` are the maintained sources, including
+The ten skills in `.claude/skills/` are the maintained sources, including
 their lessons, workflow scripts and release helpers. `.agents/skills/` contains
 relative symlinks to those same directories for Codex discovery. Edit the
 sources; when adding a skill, add its discovery link too.
