@@ -548,8 +548,9 @@ w16s_lgrow:
 ; frame is the program's, and a discard's scan of the program's stack for the
 ; code it is running (w16l_inuse, SPEC.md 124.26.5) still walks that stack,
 ; which a frame on our own stack would have hidden. AX, DX the answer; BX,
-; CX, SI, DI clobbered, [w16_psp_] kept.
+; CX, SI clobbered; DI (the caller's hMem) and [w16_psp_] kept.
 .fake:
+    push di
     push es
     push word [w16_psp_]
     mov es, [w16_pss]
@@ -570,7 +571,7 @@ w16s_lgrow:
     pop cx
     shr cx, 1
     mov bx, sp
-    add bx, 6                       ; past [w16_psp_], ES and the return
+    add bx, 8                       ; past [w16_psp_], ES, DI and the return
 .fa:
     mov ax, [ss:bx]
     stosw
@@ -581,5 +582,6 @@ w16s_lgrow:
     call far [w16_ibv]
     pop word [w16_psp_]
     pop es
+    pop di
     ret
 section .text
