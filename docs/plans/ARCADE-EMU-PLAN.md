@@ -290,7 +290,7 @@ bits on `OUT 3` (UFO, shot, player death, invader death, extra life) and
 recorded samples. **We do not ship anybody's recordings.** Instead:
 
 - **Sound Blaster** (the owner's PicoMEM SB): short PCM clips SYNTHESISED
-  by a committed host generator (`tools/arcsfx.py`) from the circuits'
+  by a committed host generator (`apps/arcade/arcsfx.py`) from the circuits'
   documented behaviour. The clips are built deterministically, on the
   artwork-as-source rule (CLAUDE.md "Building an app in waves", item 5).
   They are mixed through SOUND.DRV's PCM path (`apps/os88pcm.inc`).
@@ -501,7 +501,9 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
       bands), Hercules and CGA.
 - [x] Sound on the speaker, through `OSAPI_SND_TONE`. NOT yet listened to:
       no row captures it.
-- [ ] The Sound Blaster clips (`tools/arcsfx.py`).
+- [x] The Sound Blaster clips (`apps/arcade/arcsfx.py`, synthesised),
+      mixed into a stream; and FM on an AdLib (ARCADE-SPEC 8, row
+      `arcsound`).
 - [x] `OSAPI_ABOUT_SET`, `OS88_REGION_MOVABLE`, Esc restoring the desktop.
 - [x] `arcadedisk` in the four geometries; a `local` line in RETIRED.txt.
 - [x] A game list, once there is a second board: Game > Space Invaders, Pac-Man.
@@ -544,7 +546,7 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
       (the owner's report confirmed Invaders the same way). Not cycle
       accurate; the 5150 is not a Pac-Man target.
 - [x] WSG on the speaker: the loudest voice as a tone. NOT yet listened to.
-- [ ] WSG on the SB.
+- [x] WSG on the SB (every voice mixed at 10,989 Hz) and on FM.
 - [ ] `pengo2u` was not needed: the owner supplied the Pac-Man ROM, and
       `make arcaderom-pacman GETPACFROM=<zip>` checks it against MAME's
       hashes.

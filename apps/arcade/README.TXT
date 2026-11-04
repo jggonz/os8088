@@ -18,6 +18,13 @@ Open ARCADE.O88. Enter, Space or a click plays full screen:
 
 Game > Reset powers the board off and on again.
 
+SOUND. With a Sound Blaster, every sound plays at once, mixed: Space
+Invaders' sounds are synthesised for this disk (no recordings), and
+Pac-Man's three voices are its own sound chip, played sample by sample.
+With an AdLib alone, the voices play on its FM chip. Otherwise the PC
+speaker plays one sound at a time. If the Control Panel sends tones to
+the speaker, so does ARCADE.
+
 VGA shows the cabinet's colour overlay (red at the top, green at the
 bottom); Hercules and CGA show it black and white, as the board drew it.
 

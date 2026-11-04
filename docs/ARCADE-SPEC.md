@@ -41,6 +41,9 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 | `apps/arcade/arcz80rt.inc` | the Pac-Man board's helpers inside its code part: the I/O, LDIR and kin (section 7.4) |
 | `apps/arcade/arcpm.inc` | the Pac-Man board's host half: its interrupt, keys, sound and picture (section 7.7) |
 | `apps/arcade/arcpmgfx.py` | Pac-Man's ROM part: the ROM and what is derived from it (section 7.7) |
+| `apps/arcade/arcsnd.inc` | the sound: the route, the stream, FM, and Space Invaders' half (section 8) |
+| `apps/arcade/arcsfx.py` | Space Invaders' sounds, SYNTHESISED - no recording, no ROM (section 8.3) |
+| `tests/arcsound.py` | the stream and FM routes on the 8088, the sound read back (section 8.5) |
 | `tools/arcz80.py`, `tools/arcpac.py` | the Z80 and the Pac-Man board in Python: the reference (section 7.6) |
 | `apps/arcade/arcrt.inc` | the runtime the translation carries: the code part's header, `arc_enter` and the ways back to the host (section 3.4) |
 | `apps/arcade/arcdefs.inc` | the layout both sides share: the view's cells, the aux segment, the header (section 2) |
@@ -61,6 +64,7 @@ boards share, and three for each board, LZ4-packed on the disk.
 | 1, 2, 3 | Space Invaders: the CODE PART (header, runtime, translation), AUX (the PC table, then room for the write list and the flags), the ROM | 13KB, 48KB, 8KB |
 | 4, 5, 6 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 56KB, 37KB, 48KB |
 | 7 | Pac-Man: the shadow of the glass and the tiles' cached planes, zero-filled | 64KB |
+| last (4, or 8 with Pac-Man) | Space Invaders' sounds (`arcsfx.py`), LAZY: read only for a stream | 34KB |
 
 With both boards it is 89KB on the disk.
 
@@ -111,6 +115,8 @@ section 7.4) - are the cells the core and the host share:
 | `ST_IX` .. `ST_SAVE` (6024-603D) | the Z80's own: IX, IY, the alternate set, I, IM, the vector, the interrupt enable latch, IFF2, and the helpers' ways back (section 7.5) |
 | `V_SIG` 6040h | 'ARCV': where an instrument finds the view in guest memory |
 | `V_NFRAME` .. `V_NCELL` | the host's counters: frames delivered, half frames dropped, runs, the budget, cells drawn |
+| `V_SBTOT`, `V_SBSEG` | the stream's total, written each frame after the mix, and its ring's segment (0 when there is none): enough for a test to read back every byte mixed (section 8.1) |
+| `V_SROUTE`, `V_SWHY` | the sound's route (section 8), and the last step that declined a better one: 1 the Control Panel's speaker route, 2 no stream caps, 3 the board's preparation, 4 the ring's claim, 5 verb 0, 6 no FM, 7 the driver's ident, 8 the FM claim |
 | `V_PROBE` | `arcaot.py --probe`'s counts, in an instrument build only |
 
 ### 2.2 Aux
@@ -296,13 +302,9 @@ and draws them.
 
 ### 4.5 The sound
 
-Once a frame the rising bits of `V_SND3` and `V_SND5` pick a cue by priority
-- the base hit, the saucer hit, an extra base, an invader hit, a shot, the
-fleet's four steps - and a held saucer (OUT 3 bit 0) warbles under them.
-Each cue is a short table of pitches played through `OSAPI_SND_TONE`, the
-tone route a bracket may use (WireBall's), called only when the pitch
-changes. OUT 3 bit 5 is the amplifier: when the attract mode turns it off,
-so does this.
+Section 8: the board's sound bits drive a Sound Blaster stream, the FM chip
+or the speaker, whichever the machine has and the Control Panel sends tones
+to.
 
 ---
 
@@ -475,11 +477,10 @@ board's frame rate holds with no frame dropped in play.
 
 ### 7.8 Sound and keys
 
-The Namco WSG's three voices become one speaker tone: the loudest voice with
-a frequency, at f x 96,000 / 2^20 Hz, through `OSAPI_SND_TONE`; silent when
-5001 bit 0 turns the sound off. The arrows are the joystick (IN0 bits 0-3,
-held, `OSAPI_KEY_DOWN`); a coin (IN0 bit 5) and the starts (IN1 bits 5, 6)
-are typed. All active low.
+The Namco WSG is section 8's: mixed whole on a Sound Blaster, three FM
+voices on an OPL, the loudest voice's pitch on the speaker. The arrows are
+the joystick (IN0 bits 0-3, held, `OSAPI_KEY_DOWN`); a coin (IN0 bit 5) and
+the starts (IN1 bits 5, 6) are typed. All active low.
 
 ### 7.9 The ROM
 
@@ -489,6 +490,142 @@ are typed. All active low.
 chip against SHA-256 pins (CRCs as MAME's `pacman`) and writes
 `build/arcade-rom/PACMAN.ROM`; while it exists, `make arcade` builds the
 Pac-Man board in (`-DARC_PACMAN`), and without it, Space Invaders alone.
+
+## 8. Sound (`arcsnd.inc`)
+
+One ROUTE a bracket, chosen when it opens and given back when it closes:
+`OSAPI_SND_CAPS` answers, and BL = 0 (the Control Panel sends tones to the
+speaker) means the speaker whatever card there is - WireFleet's rule
+(SPEC.md 114.4). Otherwise the first a board offers and the machine has:
+
+| route | needs | what it plays |
+|---|---|---|
+| 2 the STREAM | `SND_CAP_PCM_BG` and `SND_CAP_EXTBLK`, the 5KB ring claimed, verb 0 taking it | the board's own mixer, every sound at once |
+| 1 FM | `SND_CAP_FM`, `SNDV_IDENT` answering `SND_SIG`, `SND_FM_CLAIM` | the board's voices as OPL channels |
+| 0 the speaker | nothing | one tone at a time through `OSAPI_SND_TONE`, as before this section |
+
+A route that fails on the way in falls to the next, so a machine always
+gets the best it can say, and nothing is retried inside the bracket.
+
+### 8.1 The stream
+
+An EXTERNAL RING (SPEC.md 34.5.3) in a claim of the package's own: 4,096
+bytes of unsigned 8-bit mono and the two control words, `OSAPI_MEM_CLAIM_DMA_HI`
+(5KB, the whole head page-safe), born pinned and never declared movable -
+it lives exactly as long as the bracket. The card's block is 256 bytes
+(`SND_OPENF_BLKSH` code 3). The open stages 2,048 bytes of silence (80h):
+verb 0 takes no less than the regime's FULL half, whatever block the ring
+asks for, and the queue falls to the lead within a fifth of a second.
+
+**Once a frame**, after the picture, the host tops the ring up to a LEAD of
+768 bytes past the consumed count - three blocks, 70 ms at 11 kHz - asking
+the board's MIXER for what is missing, in at most two calls where the ring
+wraps, and only then writes the new total. Filling to a lead rather than a
+frame's worth follows the CARD's clock, so the two crystals never drift
+apart: a frame that comes early mixes less. More than 1,024 missing (a slow
+frame, a pause in the window) mixes 1,024. The board's mixer WRITES the
+bytes it is asked for, unsigned around 80h: the sum of its voices' signed
+samples, whose ranges are chosen so that it never wraps a byte.
+
+**An underrun resumes**: verb 3 only once the consumed count has stood still
+for 12 frames (a block is a few frames of sound, so a stall is the card's -
+and asking every frame was a measurable share of an 8088); state 1 and a
+block queued is
+verb 1 with the total, the Video Player's `vp_skeep`. State 2 (the
+watchdog gave up) falls to the speaker for the rest of the bracket.
+
+**The close**, on every way out of the bracket (Esc, a miss): verb 2, then
+the claim freed.
+
+### 8.2 FM
+
+The chip claimed whole in OPL2 mode (SPEC.md 34.12), each channel's patch
+written once, then each frame at most an F-number, a key and a carrier
+level a channel, and only the registers that changed (a shadow of each):
+RealDMG's `rw_fmput` (REALDMG-SPEC 17.1). A pitch is Hz to block and
+F-number, f = fnum x 49,716 / 2^(20 - block); a level is a volume 0-15
+through `rw_fmtl`'s table. Verb 3 gives the chip back at the close.
+
+### 8.3 Space Invaders
+
+**Clips, synthesised.** The real board's sounds are analog circuits, and
+emulators play somebody's recordings of them; this one ships none.
+`apps/arcade/arcsfx.py` SYNTHESISES nine clips, deterministically, from a
+description of what each circuit does - a noise burst through a falling
+filter for the shot, a triangle swept by a slow triangle for the saucer -
+into a lazy part (`OP_LAZY | OP_COMP`, the last part, as every lazy one must
+be) fetched on the desktop before the first bracket whose stream could open -
+`op_fetch` may toast, which a bracket in a foreign mode may not - and kept
+until the package ends. 8,000 Hz, signed 8-bit, peaks within +-42, so the
+three that may sound at once cannot wrap. **An 8086-class machine plays every
+other sample, at 4,000 Hz** (`OSAPI_CPU_INFO`): at 8,000 the clips cost the
+5150 a half frame dropped every second and a half of play.
+
+| bit | clip | how it plays |
+|---|---|---|
+| OUT 3 bit 0 | the saucer | LOOPS while the bit is held, from where it was |
+| OUT 3 bit 1 | a shot | once, from its rise |
+| OUT 3 bit 2 | the base hit | once |
+| OUT 3 bit 3 | an invader hit | once |
+| OUT 3 bit 4 | an extra base | once |
+| OUT 5 bits 0-3 | the fleet's four steps | once each |
+| OUT 5 bit 4 | the saucer hit | once |
+
+A rising bit starts its clip again from the top; up to three clips sound at
+once, and a fourth takes the slot of the one nearest its end. **The mix is one
+pass**: a chunk runs to the first clip's end through a kernel for that many
+clips (0-3) and that step, the clips at DS:SI, DS:BX and DS:BP, the sum
+XOR 80h stored - nothing read back from the ring, no silence laid first. OUT 3 bit 5 is
+the amplifier: off, the mixer adds nothing and FM keys every channel off.
+
+**FM**: channel 0 the fleet (a short decaying bass note on each step's
+rise), channel 1 the saucer (a tone swept 600-1,000 Hz and back each 16
+frames while held), channel 2 the noises (RealDMG's noise patch, a
+modulator at x15 and full feedback, its level falling frame by frame:
+shot, invader hit, base hit), channel 3 the extra base and the saucer hit,
+from the speaker's own note tables.
+
+**The speaker** keeps section 4.5's cues as they were.
+
+### 8.4 Pac-Man: the WSG
+
+The board's three voices (5040-505F, the latches' nibbles): a 20-bit
+accumulator stepped by the frequency at 96 kHz (voice 0's 20 bits, voices
+1 and 2's 16 shifted up by 4), its top five bits indexing one of eight
+32-sample waveforms of 4 bits in the sound PROM (82s126.1m), times a 4-bit
+volume. 5001 bit 0 is the sound's enable.
+
+**On the stream**, at 10,989 Hz (the DSP's time constant 165), each voice
+keeps a 16-bit PHASE, stepped per output sample by f16 x 96,000 / 10,989 =
+(f16 x 2,236) >> 8, f16 being the frequency's top 16 bits. Its high byte
+indexes a 256-byte table, each of the waveform's 32 samples (w - 8) x volume
+x 21 / 64 eight times over - built again only when the voice's waveform or
+volume changes. A voice adds +-40 at most, three +-120. A voice at volume 0
+or frequency 0 adds nothing and keeps its phase. The first sounding voice
+WRITES its samples and the others add theirs in, four samples a pass with the
+pointer moved once; silence is written only when none sounds.
+
+**On FM**, channels 0-2 are the voices: Hz = f16 x 375 / 256 and the level
+from the volume; one patch, near a sine, for every waveform.
+
+**On the speaker**, the loudest voice's pitch, as before.
+
+### 8.5 What it costs, measured
+
+- **Space Invaders on the 5150's stream** (MartyPC, CS:IP sampled in play,
+  fire held): the clips' tick, kernels and the stream's frame together about
+  4% of the 8088 - which was 46 half frames dropped in 30 s at 8,000 Hz with
+  the first mixer (silence laid, each voice added in place, the driver asked
+  for the stream's state every frame), and is **0 or 1 in 20 s of play** now:
+  at 4,000 Hz, one pass, and the driver asked only once the consumed count
+  stands still for 12 frames. `tests/arcsound.py`, row `arcsound`.
+- **Space Invaders on FM** (the Hercules XT with an AdLib): 59.4 frames a
+  second, at most one dropped in 20 s.
+- **Pac-Man on 86Box's 286 with a Sound Blaster**: the stream and FM alike
+  drop a few frames a second in the heaviest chase and death scenes, where
+  the same machine with no card drops none. It is SOUND.DRV loaded at all,
+  not the route (FM with no stream drops the same), and 86Box is not
+  cycle-accurate: the proportion, not the count, is the claim.
 
 ## 6. Verification
 

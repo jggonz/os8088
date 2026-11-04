@@ -4629,6 +4629,18 @@ SOAK = [
         "most one half frame dropped, read off the host's counters in the view; "
         "and Esc ends the bracket. Red with AR_HALF at 1.5x (39.65 frames/s)",
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcsound", "soak", py("tests/arcsound.py"), 34.0,
+        "ARCADE's sound routes (docs/ARCADE-SPEC.md 8) on MartyPC's 4.77 MHz "
+        "8088, Space Invaders with fire held. On the 5150 with a Sound Blaster "
+        "the route is the STREAM, every byte mixed is read back out of the "
+        "ring and must sound (5%+ off silence, within three voices' +-126) at "
+        "the card's 4,000 Hz, the board keeps 59.54 frames/s with at most one "
+        "half frame dropped, and Esc closes the ring. On a Hercules XT with an "
+        "AdLib alone the route is FM, the OPL's own capture must sound in play, "
+        "and Esc gives the chip back. Red with the clip kernels writing silence "
+        "and with the FM batch never sent (both arms fail, each naming it)",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
+                                 "build/arcade720.img", "build/os8088-720.img")),
     Row("redlinehost", "soak", py("tests/redline.py", "--host"), 1.0,
         "REDLINE four FAT12 geometries and actual recorded reference (SPEC.md 103)",
         needs=("nasm",), wants=("build/redline.img", "build/redline720.img",

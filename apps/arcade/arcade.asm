@@ -40,9 +40,9 @@
 %include "os88parts.inc"
 
 %ifdef ARC_PACMAN
-    OS88_PARTS_BEGIN 8
+    OS88_PARTS_BEGIN 9
 %else
-    OS88_PARTS_BEGIN 4
+    OS88_PARTS_BEGIN 5
 %endif
       OS88_PART OP_ASSET, OP_ZERO, ARC_VIEW_KB      ; 0 the view, shared
       OS88_PART OP_ASSET, OP_COMP                   ; 1 Space Invaders: code
@@ -56,7 +56,18 @@
       OS88_PART OP_ASSET, OP_ZERO, 64               ; 7   the shadow of the glass,
                                                     ;     and the tiles' planes
 %endif
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP           ; last: Space Invaders' sounds
+                                                    ;   (arcsfx.py), read for a
+                                                    ;   stream only - a lazy part
+                                                    ;   follows every carve part
     OS88_PARTS_END
+
+%ifdef ARC_PACMAN                   ; the parts named in code
+AR_P_PMSH   equ 7
+AR_P_INVSFX equ 8
+%else
+AR_P_INVSFX equ 4
+%endif
 
 AR_CONT_W   equ 300
 AR_CONT_H   equ 101
@@ -86,7 +97,19 @@ BD_IRQ      equ 12                  ; dw near: an interrupt is due - deliver it
 BD_FRAME    equ 14                  ; dw near: a frame's picture, sound, keys
 BD_PERIOD   equ 16                  ; dw PIT counts between interrupts
 BD_PERFRAME equ 18                  ; db interrupts a frame
-BD_SIZE     equ 20
+                                    ; THE SOUND (ARCADE-SPEC 8), a route each:
+BD_SPK      equ 20                  ; dw near: a frame's speaker tone
+BD_SBTICK   equ 22                  ; dw near: a frame's sound state, before
+                                    ;   the stream is mixed
+BD_MIX      equ 24                  ; dw near: WRITE CX samples at ES:DI (0 =
+                                    ;   the board has no stream)
+BD_SBHZ     equ 26                  ; dw the stream's rate
+BD_SBPREP   equ 28                  ; dw near: before the bracket, what the
+                                    ;   stream needs (0 = nothing). CF=1 none
+BD_FMPAT    equ 30                  ; dw the FM patches: a count, register/value
+                                    ;   pairs (0 = the board has no FM)
+BD_FMF      equ 32                  ; dw near: a frame's FM channels
+BD_SIZE     equ 34
 
 ; =============================================================================
 ; ar_entry - in: DS = ours, ES = KERNEL_SEG. out: BX = window, CF = 0
@@ -116,7 +139,7 @@ ar_entry:
     jmp .check
 .checked:
 %ifdef ARC_PACMAN
-    mov al, 7
+    mov al, AR_P_PMSH
     call op_seg
     mov [pm_shseg], ax
 %endif
@@ -359,6 +382,7 @@ ar_repaint:
 ; =============================================================================
 ar_play:
     mov word [ar_err], 0
+    call ar_snd_prep                ; on the desktop: a part read, a toast
     mov ax, ar_fsx
     mov bx, [ar_win]
     xor cx, cx
@@ -379,7 +403,9 @@ ar_fsx:
     mov bx, [ar_bd]
     call [bx+BD_SETUP]
     jc .out
+    call ar_snd_open
     call ar_loop
+    call ar_snd_close
 .out:
     ret
 
@@ -531,6 +557,7 @@ ar_loop:
     inc word [es:V_NFRAME]
     call ar_typed
     call [bx+BD_FRAME]
+    call ar_snd_frame
     cmp byte [ar_quit], 0
     je .run
     jmp ar_quiet
@@ -571,7 +598,6 @@ inv_irq:
 ; inv_frame - after RST 2: the picture, the sound, the controls
 inv_frame:
     call ar_render
-    call ar_sound
     jmp ar_keys
 
 ; ar_hex4 - AX as four hex digits at DS:DI
@@ -1279,6 +1305,8 @@ ar_n_f4:     dw 82
              dw 0
 
 %include "os88pit.inc"
+%include "sndpkg.inc"                   ; SOUND.DRV's FM door (arcsnd.inc)
+%include "arcsnd.inc"
 %ifdef ARC_PACMAN
 %include "arcpm.inc"
 %endif
@@ -1299,6 +1327,8 @@ ar_bd_inv:
     dw 0x2000, inv_reset, inv_setup, inv_irq, inv_frame
     dw 10020                        ; half of the board's 59.54 Hz (MAME
     db 2, 0                         ;   mw8080bw: 4.992 MHz, 320 x 262)
+    dw ar_sound, inv_sbtick, inv_mix, INV_SBHZ, inv_sbprep
+    dw inv_fmpat, inv_fmframe
 %ifdef ARC_PACMAN
 ar_bd_pm:
     dw ar_s_pm
@@ -1306,6 +1336,8 @@ ar_bd_pm:
     dw 0x4000, pm_reset, pm_setup, pm_irq, pm_frame
     dw 19688                        ; the board's 60.61 Hz (MAME pacman.cpp:
     db 1, 0                         ;   6.144 MHz, 384 x 264), one interrupt
+    dw pm_sound, pm_sbtick, pm_mix, PM_SBHZ, 0
+    dw pm_fmpat, pm_fmframe
 %endif
 
 ar_tpl:
@@ -1397,6 +1429,36 @@ AR_VAR ar_hz, 2                     ; the pitch sounding now
 AR_VAR ar_pbits, 1                  ; typed coin/start bits being held
 AR_VAR ar_pleft, 1                  ;   ...and for how many more frames
 AR_VAR ar_fsi, FSI_SIZE
+AR_VAR ar_sroute, 1                 ; THE SOUND (ARCADE-SPEC 8): its route
+AR_VAR ar_sbok, 1                   ;   the stream's needs are here
+AR_VAR ar_swhy, 1                   ;   ...the last step that declined one
+AR_VAR ar_scaps, 2
+AR_VAR ar_sbseg, 2                  ;   the stream's ring, and its handle
+AR_VAR ar_sbhand, 1
+AR_VAR ar_sbtot, 2                  ;   ...its total, free-running
+AR_VAR ar_sbhz, 2                   ;   ...and its rate
+AR_VAR ar_sbcons, 2                 ;   the consumed count last frame, and
+AR_VAR ar_sbstill, 1                ;     how many frames it has stood still
+AR_VAR ar_sbold, 2                  ;   the board's sound bits last frame
+AR_VAR ar_fmsh, AR_FMCH * 3         ;   FM: each channel's B0h, A0h, carrier TL
+AR_VAR ar_fmn, 2                    ;   ...and the frame's batch
+AR_VAR ar_fmbuf, AR_FMMAX * 2
+AR_VAR inv_v, INV_NV * INV_V_SIZE   ; Space Invaders: the voices
+AR_VAR inv_mn, 2
+AR_VAR inv_md, 2
+AR_VAR inv_mseg, 2
+AR_VAR inv_mstep, 1                 ;   1, or 2: every other sample
+AR_VAR inv_act, 6                   ;   the voices a chunk sums
+AR_VAR inv_frise, 2                 ;   ...on FM
+AR_VAR inv_fout3, 1
+AR_VAR inv_fwarb, 1
+AR_VAR inv_fnz, 1
+AR_VAR inv_fnzr, 1
+AR_VAR inv_fnzc, 1
+AR_VAR inv_fnzs, 1
+AR_VAR inv_fnzhz, 2
+AR_VAR inv_fseq, 2
+AR_VAR inv_fwait, 1
 AR_VAR ar_dbl, 512
 AR_VAR ar_ytab, 1024
 %ifdef ARC_PACMAN
@@ -1439,6 +1501,15 @@ AR_VAR pm_tvalid, 28 * 36           ;   a tile's cached planes are good
 AR_VAR pm_t, 2
 AR_VAR pm_tx, 2
 AR_VAR pm_ty, 2
+AR_VAR pm_vstep, 6                  ;   the WSG: each voice's step, phase,
+AR_VAR pm_vph, 6                    ;     and its table's key
+AR_VAR pm_vkey, 3
+AR_VAR pm_wvol, 1
+AR_VAR pm_first, 1                  ;     the first sounding voice writes
+AR_VAR pm_mn, 2
+AR_VAR pm_md, 2
+AR_VAR pm_wtp, 2                    ;     ...where the tables start
+AR_VAR pm_wtabs, 3 * 256 + 255      ;     three, on a 256-byte page
 %endif
     OS88_BSS OP_BSS + AR_BSS
     OS88_IMAGE_END

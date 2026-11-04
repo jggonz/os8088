@@ -82,6 +82,11 @@ V_NDROP     equ 0x6046          ; half frames dropped to catch up
 V_NRUN      equ 0x6048          ; runs of the translated code
 V_NBUD      equ 0x604A          ; the poll budget now
 V_NCELL     equ 0x604C          ; cells drawn
+V_SROUTE    equ 0x604E          ; the sound's route (ARCADE-SPEC 8): 0 the
+                                ;   speaker, 1 FM, 2 the stream...
+V_SWHY      equ 0x604F          ; ...and the last step that declined one
+V_SBTOT     equ 0x6050          ; the stream: its total, written each frame,
+V_SBSEG     equ 0x6052          ;   and its ring's segment (0: none)
 V_PROBE     equ 0x6060          ; words: arcaot.py --probe's counts
 
 ARC_VIEW_KB equ 25              ; 0000-63FF: the boards' address spaces

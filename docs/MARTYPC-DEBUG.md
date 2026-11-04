@@ -1622,6 +1622,19 @@ assertion — RMS, the Goertzel dominant-frequency scan, `--expect-silence` —
 works against it unchanged. Verified by programming PIT channel 2 for 880 Hz
 through `outb` alone: `sndcheck` reported dominant 891.0 Hz.
 
+**A capture fills only while the machine RUNS.** The server drains each
+source's channel after a free-running batch (`run_loop`), and nothing else
+does - so the time a row spends inside `advance(frames=...)` or
+`advance(cycles=...)`, which runs the machine inside one command, is never
+written: the Sound Blaster's `try_send` drops those samples outright and the
+file comes back with **0 samples**, and an OPL's comes back full length and
+**all zero** while the chip plainly played (the driver's `opl_b0` says keyed
+on). ARCADE's sound lost an hour to it (`tests/arcsound.py`): play under
+`m.run()` and wait with `guest_sleep`, or wait on a guest counter between
+short sleeps, whenever the capture is the assertion. A row that only needs
+the bytes a package mixed can read them out of guest memory instead, which
+no drain can lose (that row's `sb` arm reads ARCADE's ring).
+
 Two differences from QEMU's `-audiodev wav`: the capture is **continuous**
 (QEMU's pcspk stream only runs while the speaker is on, so its file time
 *is* speaker-on time), and **the guest is also driving port 61h**, so a tone

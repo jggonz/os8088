@@ -11503,7 +11503,13 @@ $(BUILD)/arcade/PACMAN.PRT: apps/arcade/arcpmgfx.py $(ARCPMROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcpmgfx.py $(ARCPMROM) $@
 
+# Space Invaders' sounds, SYNTHESISED (ARCADE-SPEC 8.3): no recording, no ROM
+$(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcsfx.py $@
+
 ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc \
+              apps/arcade/arcsnd.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
 ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM)
@@ -11512,8 +11518,9 @@ ifneq ($(ARC_PM),)
 ARCADE_PARTS += $(BUILD)/arcade/paccode.bin $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/PACMAN.PRT
 ARCADE_DEF := -DARC_PACMAN
 endif
+ARCADE_PARTS += $(BUILD)/arcade/INVSFX.PRT      # lazy, so last (SPEC.md 20.12.4)
 $(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) | $(BUILD)
-	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -l $(BUILD)/arcade.lst -o $@ $<
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ $<
 
 $(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4

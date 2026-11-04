@@ -147,3 +147,55 @@ and smeared the lower maze.
 in play (86Box is not cycle accurate; the proportion is the claim). The
 5150 is not a Pac-Man target. Invaders kept its 59.4 frames a second on
 MartyPC's 5150 through the multi-board refactor.
+
+## Sound: a Sound Blaster, an AdLib, and nobody's recordings
+
+**The ask** was Sound Blaster support "and/or AdLib, if it makes more
+sense". It made sense to do both, because the two games ask different
+things of a card. Pac-Man's sound chip, Namco's WSG, is three voices
+reading 32-sample waveforms out of a PROM: that is PCM already, so on a
+Sound Blaster it can be mixed exactly. Space Invaders' sound board is
+analog circuits, so there is nothing to emulate - only something to
+imitate. And an AdLib is the only card many period machines have.
+
+**Space Invaders' sounds were synthesised, not sampled.** Emulators play
+recordings of the real board; we ship none. `apps/arcade/arcsfx.py`
+builds ten clips from a sentence each about what the circuit does - a
+noise burst through a falling filter for the shot, a triangle swept by a
+slower triangle for the saucer, a soft-edged square for each fleet step -
+with a fixed noise seed, so the part is the same bytes on every build.
+
+**One stream, fed to a lead.** The package keeps a 4KB ring the card plays
+in place, and once a frame tops it up to 768 bytes past what the card has
+consumed. Filling to a lead rather than "a frame's worth" follows the
+card's crystal, so the two clocks never drift.
+
+**Three things the driver taught us.** The open must stage a full 2KB
+half, whatever block size the ring asks for. Asking the driver for the
+stream's state every frame was a measurable share of an 8088, so it is
+asked only when the consumed count stands still. And `op_fetch` - the
+lazy read of the clips - may show a toast, which a full-screen bracket in
+a foreign video mode may not, so it happens on the desktop first.
+
+**The 8088 needed two passes.** The first mixer laid silence and then
+added each clip into the ring byte by byte; the 5150 dropped 46 half
+frames in 30 seconds. A CS:IP profile showed sound at about 4% of the
+machine, with the game already near its edge. Now an 8086-class machine
+mixes at 4,000 Hz (every other sample of the clips), every clip is summed
+in registers in one pass and stored once, and at most three play at once.
+The result: 0 or 1 half frames dropped in 20 seconds of play with fire
+held.
+
+**An hour lost to the instrument.** MartyPC's audio capture came back
+empty - zero Sound Blaster samples, a full-length but silent AdLib file -
+while the guest plainly played. The capture is drained only while the
+emulator free-runs, and our scripts stepped it with `advance`. Reading the
+mixed bytes back out of the guest's own ring sidestepped it for the
+stream; for FM the row now plays under `run` and waits on guest time.
+docs/MARTYPC-DEBUG.md carries the warning now.
+
+**Pac-Man on the 286.** The mixer is a four-instruction inner loop per
+voice per sample, four samples a pass. 86Box shows the chase and death
+scenes dropping a few frames a second with a card in the machine whichever
+route plays - the cost of the sound driver being loaded at all, since the
+same scenes drop none on the same machine without a card.

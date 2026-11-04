@@ -103,7 +103,6 @@ pm_irq:
 ; -----------------------------------------------------------------------------
 pm_frame:
     call pm_render
-    call pm_sound
     ; fall through
 
 ; pm_keys - IN0 (the joystick, the coin) and IN1 (the starts), active low
@@ -210,6 +209,267 @@ pm_voices:                          ; the volume's register, the frequency's
     db 0x5F, 0x5B
     dw 0
 
+; =============================================================================
+; the WSG on a stream and on FM (ARCADE-SPEC 8.4)
+; =============================================================================
+PM_SBHZ     equ 10989               ; the DSP's time constant 165
+PM_SBK      equ 2236                ; 96,000 x 256 / 10,989: a sample's step
+PM_PROM     equ 0x6120              ; the sound PROM in the ROM part
+
+; pm_voice - SI = a voice (0-2): AL = its volume (0 when 5001 bit 0 turns
+; the sound off), AH = its waveform, DX = f16, the frequency's top 16 bits.
+; ES = the view. Kept: BX, CX, SI, DI, BP
+pm_voice:
+    push bx
+    push cx
+    mov bx, si
+    shl bx, 1
+    mov bx, [pm_voices+bx]          ; BL = the volume's register, BH = the
+    mov cl, bh                      ;   frequency's lowest kept nibble
+    mov bh, 0
+    mov al, [es:bx+PM_SOUND-0x40]
+    and al, 0x0F
+    test byte [es:PM_LATCH+1], 1
+    jnz .on
+    xor al, al
+.on:
+    mov bl, [pm_wregs+si]
+    mov ah, [es:bx+PM_SOUND-0x40]
+    and ah, 7
+    mov bl, cl
+    push ax
+    mov ax, [es:bx+PM_SOUND-0x40]   ; four nibbles, low first, into a word
+    mov ch, [es:bx+PM_SOUND-0x40+2]
+    and ax, 0x0F0F
+    and ch, 0x0F
+    mov cl, 4
+    shl ah, cl
+    or al, ah
+    mov ah, ch
+    mov ch, [es:bx+PM_SOUND-0x40+3]
+    and ch, 0x0F
+    shl ch, cl
+    or ah, ch
+    mov dx, ax
+    pop ax
+    pop cx
+    pop bx
+    ret
+
+pm_wregs:   db 0x45, 0x4A, 0x4F     ; each voice's waveform register
+
+; pm_sbtick - a frame: each voice's step from its frequency, and its table
+; built again when its waveform or volume changed
+pm_sbtick:
+    mov es, [ar_vseg]
+    xor si, si
+.v:
+    call pm_voice
+    push ax
+    mov ax, dx                      ; the step: (f16 x 2,236) >> 8
+    mov cx, PM_SBK
+    mul cx
+    mov al, ah
+    mov ah, dl
+    or dh, dh
+    jz .st
+    xor ax, ax                      ; past what 16 bits say: silent
+.st:
+    mov bx, si
+    shl bx, 1
+    mov [pm_vstep+bx], ax
+    pop ax
+    or al, al
+    jnz .key
+    mov word [pm_vstep+bx], 0       ; volume 0: adds nothing
+.key:
+    mov cl, 4
+    shl ah, cl
+    or al, ah                       ; AL = waveform << 4 | volume
+    cmp al, [pm_vkey+si]
+    je .n
+    mov [pm_vkey+si], al
+    call pm_wtab
+.n:
+    inc si
+    cmp si, 3
+    jb .v
+    ret
+
+; pm_wtab - SI = a voice, AL = its waveform << 4 | volume: its 256-byte
+; table, each of the waveform's 32 samples (w - 8) x volume x 21 / 64 eight
+; times over (8.4). Kept: SI, ES
+pm_wtab:
+    push es
+    push si
+    mov dl, al
+    and dl, 0x0F
+    mov [pm_wvol], dl               ; the volume
+    mov bl, al
+    and bx, 0x70
+    shl bx, 1                       ; BX = waveform x 32
+    mov ax, si
+    xchg ah, al                     ; a voice's table is 256 bytes on
+    mov di, [pm_wtp]
+    add di, ax
+    push ds
+    pop es                          ; ES:DI = the table
+    mov cx, 32
+    mov si, bx
+    add si, PM_PROM
+.s:
+    push ds
+    mov ds, [ar_rseg]
+    lodsb
+    pop ds
+    and al, 0x0F
+    sub al, 8                       ; -8..7
+    imul byte [pm_wvol]             ; AX = x the volume
+    mov bx, 21
+    imul bx
+    push cx
+    mov cl, 6
+    sar ax, cl
+    mov cx, 8
+    rep stosb
+    pop cx
+    loop .s
+    pop si
+    pop es
+    ret
+
+; pm_mix - WRITE CX samples at ES:DI: the first sounding voice through
+; its table, written; each other added in; silence when none sounds. Four
+; samples a pass, the pointer moved once (8.4, 8.5)
+pm_mix:
+    mov [pm_mn], cx
+    mov [pm_md], di
+    mov byte [pm_first], 1
+    xor si, si
+.v:
+    mov bp, [pm_vstep+si]
+    or bp, bp
+    jz .n
+    mov dx, [pm_vph+si]
+    mov bx, [pm_wtp]
+    mov ax, si
+    shr ax, 1
+    add bh, al                      ; BH = the voice's table's page
+    mov di, [pm_md]
+    mov cx, [pm_mn]
+    cmp byte [pm_first], 0
+    je .add
+    mov byte [pm_first], 0
+    call pm_kset
+    jmp short .ph
+.add:
+    call pm_kadd
+.ph:
+    mov [pm_vph+si], dx
+.n:
+    add si, 2
+    cmp si, 6
+    jb .v
+    cmp byte [pm_first], 0
+    je .r
+    mov di, [pm_md]                 ; nothing sounds: silence
+    mov cx, [pm_mn]
+    mov al, 0x80
+    rep stosb
+.r:
+    ret
+
+%macro PM_K 2                       ; one sample: %1 = mov or add, %2 = where
+    add dx, bp
+    mov bl, dh
+    mov al, [bx]
+  %ifidn %1, mov
+    xor al, 0x80
+  %endif
+    %1 [es:di+%2], al
+%endmacro
+
+; pm_kset / pm_kadd - CX samples of the voice: phase DX, step BP, its table
+; at BH:00. ES:DI out. Kept: SI
+pm_kset:
+    push cx
+    shr cx, 1
+    shr cx, 1
+    jz .rest
+.q:
+    PM_K mov, 0
+    PM_K mov, 1
+    PM_K mov, 2
+    PM_K mov, 3
+    add di, 4
+    loop .q
+.rest:
+    pop cx
+    and cx, 3
+    jz .r
+.o:
+    PM_K mov, 0
+    inc di
+    loop .o
+.r:
+    ret
+
+pm_kadd:
+    push cx
+    shr cx, 1
+    shr cx, 1
+    jz .rest
+.q:
+    PM_K add, 0
+    PM_K add, 1
+    PM_K add, 2
+    PM_K add, 3
+    add di, 4
+    loop .q
+.rest:
+    pop cx
+    and cx, 3
+    jz .r
+.o:
+    PM_K add, 0
+    inc di
+    loop .o
+.r:
+    ret
+
+; pm_fmframe - the three voices on channels 0-2: Hz = f16 x 375 / 256
+pm_fmframe:
+    mov es, [ar_vseg]
+    xor si, si
+.v:
+    call pm_voice
+    mov cl, al                      ; CL = the volume
+    mov ax, dx
+    mov bx, 375
+    mul bx
+    mov al, ah
+    mov ah, dl
+    or dh, dh
+    jz .hz
+    xor ax, ax
+.hz:
+    mov ch, 0
+    mov bx, si
+    push si
+    call ar_fmset
+    pop si
+    inc si
+    cmp si, 3
+    jb .v
+    ret
+
+pm_fmpat:
+    dw (pm_fmpate - pm_fmpat - 2) / 2
+    AR_FMPATCH 0, 0, 0x21, 0x21, 40, 0xF0, 0xF0, 0x0F, 0x0F, 0x00
+    AR_FMPATCH 1, 1, 0x21, 0x21, 40, 0xF0, 0xF0, 0x0F, 0x0F, 0x00
+    AR_FMPATCH 2, 2, 0x21, 0x21, 40, 0xF0, 0xF0, 0x0F, 0x0F, 0x00
+pm_fmpate:
+
 ; -----------------------------------------------------------------------------
 ; pm_setup - in the bracket: VGA's 640x480x16, the colours, the row table,
 ; and the whole screen drawn once. SI = the window. CF=1 refused.
@@ -223,6 +483,11 @@ pm_setup:
     stc
     ret
 .vga:
+    mov ax, pm_wtabs + 255          ; the WSG's tables on a 256-byte page
+    mov al, 0                       ;   (pm_mix indexes them by BL alone),
+    mov [pm_wtp], ax                ;   and every voice's to be built
+    mov word [pm_vkey], 0xFFFF
+    mov byte [pm_vkey+2], 0xFF
     mov al, FSXM_VGA12
     push es
     push ds
@@ -1058,3 +1323,4 @@ pm_put:
     mov ax, 0x0F02
     out dx, ax
     ret
+
