@@ -63,6 +63,7 @@ vb_game_init:
     mov al, [RL+RH_START]
     mov [vb_stance], al
     mov byte [vb_sret], NONE
+    mov byte [vb_efol], NONE        ; (no follow-up owed at the start)
     xor bx, bx                      ; the party's items
 .i:
     cmp bl, [RL+RH_NITEM]

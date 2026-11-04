@@ -64,6 +64,9 @@ A project file (version 1):
             a sound id or null}
     STANCE = {"name", "modifiers": {"atk"|"mag"|"def"|"mdef": %},
               "moves": [{"action", "weight", "rule", "target"}],
+              (the enemy's "follow_ups": [{"after", "then", "target":
+              "same" | a move's rule, "named"?}] - after its turn played
+              AFTER, the next plays THEN, before any move or change),
               "responses": [{"trigger", "named", "chance", "action"}],
               "auto": {"kind", "arg", "to", "via"}, "return": action}
 
@@ -697,6 +700,7 @@ class Project:
         tt = d.get("title") or {}         # (a title's or an end loop's clip
         looped = {tt.get("clip"), tt.get("leave")} | {   # needs no anchor)
             en["loop"]["clip"] for en in d["endings"].values() if en.get("loop")}
+        used_clips = set(self.clips_used())
         for cid, c in d["clips"].items():
             w = "clips." + cid
             if c["source"] not in d["sources"]:
@@ -705,7 +709,9 @@ class Project:
                 err(w, "out before in")
             opening = any(o["clip"] == cid for o in d["openings"]) or \
                 cid in looped
-            if not opening and not c["anchors"]:
+            # (an anchor is where an ACTION's clip joins from the idle loop:
+            # a clip nothing plays needs none, and is said once, below)
+            if not opening and not c["anchors"] and cid in used_clips:
                 err(w, "no anchor: it can never start")
             for k in c["anchors"]:
                 if not 0 <= k < n:
@@ -772,7 +778,18 @@ class Project:
                     if cl not in d["clips"]:
                         err(w, "pool %s: no clip %s" % (pk, cl))
             if not a["pools"].get("hit"):
-                warn(w, "no HIT clip: it happens at once, with no picture")
+                # (a HIT clip per TARGET counts: an enemy's action is often
+                # made a clip per character it can hit)
+                by = a.get("by_target", {})
+                names_ = [ch["name"] for ch in d["characters"]]
+                have = [n_ for n_ in names_ if by.get(n_, {}).get("hit")]
+                if not have:
+                    warn(w, "no HIT clip: it happens at once, with no picture")
+                elif len(have) < len(names_) and \
+                        a.get("target") in ("character", "enemy", "ally"):
+                    warn(w, "no HIT clip at %s: there it happens at once, "
+                         "with no picture" % ", ".join(
+                             n_ for n_ in names_ if n_ not in have))
         for aid in self.actions_used():
             if aid not in d["actions"]:
                 err("menus", "no action %s" % aid)
@@ -791,9 +808,46 @@ class Project:
             for m in st["moves"]:
                 if m.get("rule", "alternate") not in RULES:
                     err("enemy.stances.%d" % si, "no rule %s" % m["rule"])
-        for cid in d["clips"]:
-            if cid not in self.clips_used():
-                warn("clips." + cid, "no action, opening or ending uses it")
+        # THE FOLLOW-UPS (125.6.7): after X, the next turn Y
+        fol = e.get("follow_ups", [])
+        nxt = {}
+        for i, x in enumerate(fol):
+            w = "enemy.follow_ups.%d" % i
+            for k in ("after", "then"):
+                if x.get(k) not in d["actions"]:
+                    err(w, "no action chosen for %s" % ("what it follows"
+                        if k == "after" else "what follows"))
+            tg = x.get("target", "same")
+            if tg != "same" and tg not in RULES:
+                err(w, "no target rule %s" % tg)
+            if tg == "named" and x.get("named") not in [
+                    c["name"] for c in d["characters"]]:
+                err(w, "aims at no character (%s)" % x.get("named"))
+            if x.get("after") in nxt:
+                warn(w, "%s already has a follow-up: the first is played"
+                     % x.get("after"))
+            nxt.setdefault(x.get("after"), x.get("then"))
+        for a in list(nxt):             # a chain that comes back round is
+            seen, k = set(), a          # every turn from then on
+            while k in nxt and k not in seen:
+                seen.add(k)
+                k = nxt[k]
+            if k == a:
+                warn("enemy.follow_ups", "%s leads back to itself: once "
+                     "played, the enemy plays that round for good" % a)
+                break
+        idle_src = (d.get("idle") or {}).get("source")
+        for cid, c in d["clips"].items():
+            if cid in used_clips:
+                continue
+            if c["source"] == idle_src:
+                info("clips." + cid, "this is the idle loop's own video: "
+                     "the idle loop plays the video itself (the Idle tab), "
+                     "so the clip is not needed - it is left out of the "
+                     "build (remove it, or keep it to cut actions from)")
+            else:
+                warn("clips." + cid, "no action, opening or ending uses it: "
+                     "it is left out of the build")
         for it in d.get("items", []):
             if not it.get("name"):
                 err("items", "an item with no name")

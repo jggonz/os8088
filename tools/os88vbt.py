@@ -878,8 +878,11 @@ def battle_of(proj, progress=None, kind="cga4"):
             for pool in per.values():
                 rules_use |= set(pool)
     rules_use |= {d["enemy"].get("victory"), d["enemy"].get("defeat")}
+    used_all = set(proj.clips_used())
     for i, (cid, c) in enumerate(d["clips"].items()):
         if cid in opened or (cid in loops_only and cid not in rules_use):
+            continue
+        if cid not in used_all:     # (a clip nothing plays: not built)
             continue
         pg("clips", i, len(d["clips"]), cid)
         spf = t["rate"] // t["fps"]

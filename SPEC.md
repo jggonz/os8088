@@ -238064,9 +238064,19 @@ alternating rule's pick - before the next turn.
 
 #### 125.6.7 The enemy's turn
 
-Its guard ends and its stat changes age. **A stance whose turns are up
-returns** to the one it came from, and its RETURN action, if it has one, is
-the turn. Else **its automatic change** (HP under a share, or after a number
+Its guard ends and its stat changes age. **A FOLLOW-UP owed is the turn**
+(the enemy's `"follow_ups"`, the Enemy tab's box, in every stance): after
+its own turn played AFTER, its next turn plays THEN - at the SAME character
+while they stand (the next in turn when they do not), or by a move's rule -
+before anything below; a stance's timer still counts, and a return action
+due that turn gives way to it. THEN may have a follow-up of its own; the
+first naming an action is the one it owes. A response (125.6.6) owes none.
+In the rules block: up to 16 entries of four bytes (after, then, the rule -
+FFh the same - and its argument), counted at header byte 52 and named by
+the word at 54, which every block before them left zero. `vbtengine` holds
+the engine to `vbtrules.Sim` across a battle that plays one. **A stance
+whose turns are up returns** to the one it came from, and its RETURN action,
+if it has one, is the turn. Else **its automatic change** (HP under a share, or after a number
 of its turns in it), if it fires and goes somewhere new: the stance changes
 and the change's action, if any, is the turn. Else **a move**, drawn by
 weight from the stance's, at a target by the move's RULE: ALTERNATING (the

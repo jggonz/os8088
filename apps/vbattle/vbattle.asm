@@ -3526,6 +3526,9 @@ VB_VAR vb_emodt, 4
 VB_VAR vb_stance, 1
 VB_VAR vb_sleft, 1
 VB_VAR vb_sret, 1
+VB_VAR vb_efol, 1                   ; a follow-up owed (125.6.7), NONE none
+VB_VAR vb_eftgt, 1                  ; ...the target it keeps
+VB_VAR vb_qfol, 1                   ; ...this turn's, taken at its start
 VB_VAR vb_sturns, 1
 VB_VAR vb_tnext, 1
 VB_VAR vb_last, 1

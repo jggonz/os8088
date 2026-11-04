@@ -66,6 +66,8 @@ def make_project(path=None, seed=SEED):
         hit=["beetle_attack"])
     act("snap", "Snap", target="character", effects=[dmg(28)],
         hit=["beetle_attack"])
+    act("mark", "Mark", target="character", effects=[dmg(4)],
+        hit=["beetle_attack"])
     act("shell", "Shell", target="none",
         effects=[{"verb": "stance", "stance": "shell", "duration": 2}])
     act("roar", "Roar", target="self",
@@ -101,7 +103,11 @@ def make_project(path=None, seed=SEED):
          "moves": [{"action": "lunge", "weight": 1, "rule": "lowest"}]},
         {"name": "enraged", "modifiers": {"atk": 25},
          "moves": [{"action": "lunge", "weight": 3, "rule": "random"},
-                   {"action": "swarm", "weight": 1}]}]
+                   {"action": "swarm", "weight": 1},
+                   {"action": "mark", "weight": 1, "rule": "random"}]}]
+    # A FOLLOW-UP (125.6.7): a Mark is followed, the enemy's next turn,
+    # by a Snap at the same character
+    e["follow_ups"] = [{"after": "mark", "then": "snap", "target": "same"}]
     p.set(("enemy",), e)
     if path:
         p.save(path)

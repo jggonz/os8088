@@ -4199,6 +4199,46 @@ class EnemyTab(object):
             ttk.Button(rf, text="Add a response", command=lambda: self.app.edit(
                 "set", base + ("responses",), st.get("responses", []) + [
                     {"trigger": "any", "chance": 30, "action": acts[0]}])).pack(anchor="w")
+        # FOLLOW-UPS (125.6.7): the enemy's, in every stance - "if it did X
+        # last turn, it must do Y this turn, at the same target"
+        ff = ttk.LabelFrame(self.body, text="Follow-ups (in every stance): "
+                            "after the enemy's turn plays one action, its "
+                            "next turn plays another - before any move, "
+                            "change or return", padding=4)
+        ff.pack(fill="x", pady=4)
+        fol = P_.d["enemy"].get("follow_ups", [])
+        for i, x in enumerate(fol):
+            row = ttk.Frame(ff)
+            row.pack(fill="x")
+            ttk.Label(row, text="after").pack(side="left")
+            self._combo(row, x.get("after") or "", acts,
+                        lambda v, i=i: self._fol(i, after=v))
+            ttk.Label(row, text="next turn").pack(side="left", padx=(6, 2))
+            self._combo(row, x.get("then") or "", acts,
+                        lambda v, i=i: self._fol(i, then=v))
+            ttk.Label(row, text="at").pack(side="left", padx=(6, 2))
+            self._combo(row, x.get("target", "same"),
+                        ("same",) + tuple(P.RULES),
+                        lambda v, i=i: self._fol(i, target=v))
+            if x.get("target") == "named":
+                self._combo(row, x.get("named", chars[0] if chars else ""),
+                            chars, lambda v, i=i: self._fol(i, named=v))
+            ttk.Button(row, text="Remove", command=lambda i=i: self.app.edit(
+                "set", ("enemy", "follow_ups"), fol[:i] + fol[i + 1:])
+                       ).pack(side="right")
+        if acts:
+            ttk.Button(ff, text="Add a follow-up", command=lambda: self.app.edit(
+                "set", ("enemy", "follow_ups"), fol + [
+                    {"after": acts[0], "then": acts[0], "target": "same"}])
+                       ).pack(anchor="w")
+        ttk.Label(ff, text="\"same\": the character the first action was "
+                  "aimed at, while they stand (else the next in turn).",
+                  wraplength=700).pack(anchor="w")
+
+    def _fol(self, i, **kw):
+        fol = [dict(x) for x in self.app.proj.d["enemy"].get("follow_ups", [])]
+        fol[i].update(kw)
+        self.app.edit("set", ("enemy", "follow_ups"), fol)
 
     def _combo(self, parent, value, values, commit):
         tk, ttk = self.app.tk, self.app.ttk

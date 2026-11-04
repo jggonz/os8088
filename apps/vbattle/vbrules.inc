@@ -36,6 +36,9 @@ RH_VICT     equ 47
 RH_DEFT     equ 48
 RH_FLAGS    equ 49
 RH_SEED     equ 50
+RH_NFOL     equ 52              ; the enemy's FOLLOW-UPS (125.6.7): how many,
+RH_OFOL     equ 54              ; and their table - after, then, rule, arg
+FOL_SAME    equ 0xFF            ; ...a follow-up's rule: the same target
 ; a character
 CH_NAME     equ 0
 CH_HP       equ 8
@@ -1551,6 +1554,9 @@ vb_enemy_plan:
     call vb_tick
     mov byte [vb_eact], NONE
     mov word [vb_qrule], 0
+    mov al, NONE                    ; A FOLLOW-UP OWED (125.6.7): this turn,
+    xchg al, [vb_efol]              ; whatever else - the stance's timer
+    mov [vb_qfol], al               ; still counts, its return gives way
     cmp byte [vb_sleft], 0
     je .auto
     dec byte [vb_sleft]
@@ -1564,6 +1570,14 @@ vb_enemy_plan:
     mov byte [vb_sret], NONE
     mov byte [vb_sturns], 0
 .auto:
+    mov al, [vb_qfol]
+    cmp al, NONE
+    je .au0
+    call vb_folrec                  ; SI = the entry
+    mov al, [si+1]
+    mov [vb_eact], al
+    jmp .target
+.au0:
     cmp byte [vb_eact], NONE
     jne .target
     cmp byte [vb_sleft], 0
@@ -1647,14 +1661,67 @@ vb_enemy_plan:
     cmp al, T_CHAR
     jne .go
 .tp:
+    cmp byte [vb_qfol], NONE
+    je .tq
+    call vb_foltgt
+    jmp short .tr
+.tq:
     mov ax, [vb_qrule]
     call vb_pick
+.tr:
     mov bh, al
 .go:
+    mov cl, [RL+RH_NFOL]            ; this turn's action OWES one: the first
+    xor ch, ch                      ; follow-up naming it, at this target
+    jcxz .gf
+    xor al, al
+.gl:
+    push ax
+    call vb_folrec
+    pop ax
+    mov dl, [si]
+    cmp dl, [vb_eact]
+    jne .gn
+    mov [vb_efol], al
+    mov [vb_eftgt], bh
+    jmp short .gf
+.gn:
+    inc al
+    loop .gl
+.gf:
     inc byte [vb_sturns]
     mov al, [vb_eact]
     mov bl, ENEMY
     jmp vb_resolve
+
+; vb_folrec - AL = a follow-up: SI = its entry (after, then, rule, arg) in
+; the rules. AX spent
+vb_folrec:
+    xor ah, ah
+    shl ax, 1
+    shl ax, 1
+    add ax, [RL+RH_OFOL]
+    add ax, RL
+    mov si, ax
+    ret
+
+; vb_foltgt - vbtrules.Sim.fol_target: AL = follow-up [vb_qfol]'s target -
+; the one its first action was played at while that one stands
+; (FOL_SAME), else by its rule, the same falling back to the alternate
+vb_foltgt:
+    mov al, [vb_qfol]
+    call vb_folrec
+    mov ax, [si+2]                  ; its rule, its arg
+    cmp al, FOL_SAME
+    jne .p
+    mov al, [vb_eftgt]
+    call vb_isstanding
+    jz .alt
+    ret
+.alt:
+    xor ax, ax
+.p:
+    jmp vb_pick
 
 ; vb_eguess - [vb_eclip] = the clip the enemy most likely plays next, for
 ; the read-ahead: its stance's heaviest move's HIT pool's first clip

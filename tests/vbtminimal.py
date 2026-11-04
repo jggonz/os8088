@@ -103,12 +103,39 @@ def project(tmp):
         refused = str(e)
     ok(refused and "the menu's move sound" in refused,
        "a sound in use refuses to be removed: %r" % refused)
+    # THE OWNER'S TWO (2026-11-04): a clip of the idle loop's own video,
+    # which nothing plays, and hit clips set PER TARGET only
+    p.add_clip("idleclip", "fight", (0, n - 1), anchors=())
+    p.add_character("BRAM")
+    p.menu_add(1, action="attack")
+    p.add_action("bite", "Bite", target="character",
+                 effects=[{"verb": "damage", "amount": 5}])
+    p.set(("actions", "bite", "by_target"), {"ARI": {"hit": ["hit"]},
+                                             "BRAM": {"hit": ["hit"]}})
+    p.d["enemy"]["stances"][0]["moves"].append(
+        {"action": "bite", "weight": 1, "rule": "alternate"})
+    about = [x for x in p.check() if x.where in ("clips.idleclip",
+                                                  "actions.bite")]
+    ok([x.level for x in about] == ["INFO"]
+       and "idle loop's own video" in about[0].text,
+       "a clip of the idle loop's video nothing plays: one note, no error "
+       "(%s)" % about)
+    p.set(("actions", "bite", "by_target"), {"ARI": {"hit": ["hit"]}})
+    miss = [x.text for x in p.check() if x.where == "actions.bite"]
+    ok(len(miss) == 1 and "at BRAM" in miss[0],
+       "hit clips per target: only the character without one is said "
+       "(%s)" % miss)
+    p.set(("actions", "bite", "by_target"), {"ARI": {"hit": ["hit"]},
+                                             "BRAM": {"hit": ["hit"]}})
     p.save()
     errs = errors(p)
     ok(not errs and p.d["music"] is None,
        "NO MUSIC and a leftover sound whose file is gone: no error (%s)"
        % errs)
     data = B.build_project(p)
+    names_ = [c["name"].strip().lower() for c in B.Bundle(data).clips]
+    ok("hit" in names_ and not any(x.startswith("idleclip") for x in names_),
+       "...and the unused clip is left out of the bundle (%s)" % names_)
     p.remove_sound("old")
     ok("old" not in p.d["sounds"], "...and the leftover removed")
     return p, data

@@ -157,7 +157,17 @@ for pl in sim.log:
         got.add("response")
     got.add(("hit", "miss", "defended", "critical", "finishing")[pl["outcome"]])
 need = {"shell", "roar", "response", "swarm", "miss", "critical", "heal",
-        "potion", "revive", "limit", "guard", "focus", "bolt", "fire"}
+        "potion", "revive", "limit", "guard", "focus", "bolt", "fire", "mark"}
+# THE FOLLOW-UP: every Mark of the enemy's own turn followed, at its next,
+# by a Snap at the same character while that one stands
+own = [pl for pl in sim.log if pl["who"] == V.ENEMY and not pl.get("response")]
+folw = [(own[i], own[i + 1]) for i in range(len(own) - 1)
+        if names[own[i]["action"]] == "mark"]
+ok(folw and all(names[b["action"]] == "snap" and
+                (b["targets"] == a["targets"] or not any(
+                    sim.hp[t] for t in a["targets"]))
+                for a, b in folw),
+   "every Mark is FOLLOWED by a Snap at its target (%d times)" % len(folw))
 ok(need <= got, "the rules battle covers every rule (missing: %s)" %
    sorted(need - got))
 ok(sim.over in ("victory", "defeat"), "...and ends (%s, %d turns)"

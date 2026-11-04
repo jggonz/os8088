@@ -42,6 +42,8 @@ CHAR_SZ, ACT_SZ, MENU_SZ, STANCE_SZ, POOL_SZ, ITEM_SZ, IMG_SZ = \
 MAX_CHARS, MAX_ACTS, MAX_MENUS, MAX_STANCES, MAX_POOLS, MAX_ITEMS, \
     MAX_IMGS = 4, 96, 32, 8, 255, 8, 8
 MAX_ITEMS_MENU, MAX_MOVES, MAX_RESP, MAX_POOL = 8, 6, 2, 7
+MAX_FOLLOW = 16                 # the enemy's FOLLOW-UPS (125.6.7)
+FOLLOW_SAME = 0xFF              # ...a follow-up's target: the same one
 NONE = 0xFF
 
 VERBS = {"damage": 1, "heal": 2, "restore": 3, "revive": 4, "guard": 5,
@@ -338,6 +340,30 @@ def compile_rules(proj, clip_index, images=(), preview=False):
     for col, row, cells, rows, para in images:
         b += struct.pack("<4BH2x", col, row, cells, rows, para)
     table("img", b)
+    # THE ENEMY'S FOLLOW-UPS (125.6.7): after its turn played AFTER, its
+    # next turn plays THEN - at the same target (FOLLOW_SAME), or by a
+    # move's rule. Four bytes each, named from the header's 52..55, which
+    # every rules block before them left zero: none
+    fol = d["enemy"].get("follow_ups", [])
+    if len(fol) > MAX_FOLLOW:
+        raise RulesError("%d follow-ups, at most %d" % (len(fol), MAX_FOLLOW))
+    b = bytearray()
+    for i, x in enumerate(fol):
+        w = "the enemy's follow-up %d" % (i + 1)
+        tg = x.get("target", "same")
+        arg = 0
+        if tg == "same":
+            rule = FOLLOW_SAME
+        else:
+            rule = RULES[tg]
+            if tg == "named":
+                if x.get("named") not in cname:
+                    raise RulesError("%s aims at no character (%s)"
+                                     % (w, x.get("named")))
+                arg = cname.index(x["named"])
+        b += bytes([need(aidx, x.get("after"), w, "action it follows"),
+                    need(aidx, x.get("then"), w, "action"), rule, arg])
+    table("fol", b)
     if len(out) > RULES_MAX:
         raise RulesError("the rules are %d bytes, over %d" % (len(out), RULES_MAX))
 
@@ -363,6 +389,7 @@ def compile_rules(proj, clip_index, images=(), preview=False):
                      [min(100, e.get("evade", 0)),
                      end_clip("victory"), end_clip("defeat"),
                      1 if d.get("seed") else 0, d.get("seed") or 0]))
+    struct.pack_into("<BxH", out, 52, len(fol), tabs["fol"])
     return bytes(out)
 
 
@@ -425,6 +452,8 @@ class Rules:
             r = b[oi + i * ITEM_SZ:]
             self.items.append(dict(name=r[0:8].decode().rstrip(),
                                    count=struct.unpack_from("<H", r, 8)[0]))
+        nf, of = struct.unpack_from("<BxH", b, 52)
+        self.follow = [tuple(b[of + 4 * k:of + 4 * k + 4]) for k in range(nf)]
 
 
 # --- the reference: the battle as the engine plays it ---------------------------------
@@ -482,6 +511,8 @@ class Sim:
         self.sturns = 0
         self.tnext = 0
         self.last = 0
+        self.efol, self.eftgt = NONE, NONE  # a follow-up owed (its entry
+                                            # in R.follow), its target
         self.items = [it["count"] for it in R.items]
         self.log = []
         self.over = None            # "victory", "defeat", "escape"
@@ -773,6 +804,17 @@ class Sim:
                     return plan
         return None
 
+    def fol_target(self, x, ftgt):
+        """Follow-up X's target: the one its first action was played at
+        while that one stands (FOLLOW_SAME), else by its rule - the same
+        falling back to the alternate"""
+        rule, arg = x[2], x[3]
+        if rule == FOLLOW_SAME:
+            if ftgt != NONE and ftgt is not None and self.hp[ftgt] > 0:
+                return ftgt
+            rule = 0
+        return self.pick_target(rule, arg)
+
     def pick_target(self, rule, arg):
         st = self.standing()
         if not st:
@@ -804,6 +846,8 @@ class Sim:
         st = R.stances[self.stance]
         ai = NONE
         rule, arg = 0, 0
+        fol, self.efol = self.efol, NONE    # A FOLLOW-UP OWED (125.6.7): it
+        ftgt = self.eftgt                   # is this turn, whatever else
         if self.sleft:
             self.sleft -= 1
             if not self.sleft:
@@ -814,6 +858,9 @@ class Sim:
                 self.sturns = 0
                 if ai == NONE:
                     st = R.stances[self.stance]
+        if fol != NONE:                 # (the stance's timer has counted;
+            ai = R.follow[fol][1]           # its return action, if this was
+                                            # its turn, gives way)
         if ai == NONE and not self.sleft:
             kind, aarg, to, via = st["auto"]
             fire = (kind == 1 and self.ehp * 100 < R.ehp * aarg) or \
@@ -834,7 +881,14 @@ class Sim:
         a = R.acts[ai]
         tgt = None
         if a["target"] in (TARGETS["enemy"], TARGETS["character"]):
-            tgt = self.pick_target(rule, arg)
+            if fol != NONE:
+                tgt = self.fol_target(R.follow[fol], ftgt)
+            else:
+                tgt = self.pick_target(rule, arg)
+        for k, x in enumerate(R.follow):    # this turn's action OWES one:
+            if x[0] == ai:                  # the first follow-up naming it
+                self.efol, self.eftgt = k, tgt
+                break
         self.sturns += 1
         plan = self.resolve(ai, ENEMY, tgt)
         self.apply(plan)

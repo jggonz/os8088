@@ -297,6 +297,17 @@ def inner(tmp):
        "C. the Sounds tab: %d sounds measured, the tick +3 dB, the "
        "suggestions applied (the opening's riser %.2f -> %.2f)"
        % (len(rows), riser0, riser1))
+    # FOLLOW-UPS (125.6.7): the Enemy tab's box, one added and set
+    et = app.enemy_tab
+    app.nb.select(et.f)
+    acts = list(app.proj.d["actions"])
+    app.edit("set", ("enemy", "follow_ups"), [
+        {"after": acts[0], "then": acts[0], "target": "same"}])
+    et._fol(0, after="lunge", then="swarm")
+    et._fol(0, target="lowest")
+    fu = app.proj.d["enemy"].get("follow_ups")
+    ok(fu == [{"after": "lunge", "then": "swarm", "target": "lowest"}],
+       "C. a FOLLOW-UP set on the Enemy tab: %s" % fu)
     ok(not errs, "C. nothing raised in a Tk callback (%d)" % len(errs))
     for e in errs[:2]:
         print(e)
