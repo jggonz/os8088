@@ -17163,6 +17163,17 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16lheap", "soak", py("tests/win16lheap.py"), 60.0,
+        "SPEC.md 124.25.19, WIN16-NEXT `lheap`: LHEAP.EXE (`make "
+        "win16fixtures`, tests/win16/lheap.c) makes a 1 KB local heap in its "
+        "DGROUP and allocates 100 blocks of 100 bytes (distinct, filled, read "
+        "back), grows a moveable block with LocalReAlloc and calls "
+        "LocalCompact; then a heap of 496 bytes in a locked GlobalAlloc block "
+        "of 2 KB takes 60 blocks, so the block grows in place; its "
+        "MessageBox must be LHEAP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
         "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
         "tests/win16/longname.c) asks for a dialog named in 21 characters "

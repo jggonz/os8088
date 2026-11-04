@@ -1611,6 +1611,23 @@ w16_lnew:
     pop bx
     ret
 
+; w16_lnewg - w16_lnew, and when the heap had no room, the heap grown (the
+; system-library part's w16s_lgrow, SPEC.md 124.25.19) and the request made
+; once more. Same registers; the gates' (LocalAlloc, LocalReAlloc) use.
+w16_lnewg:
+    call w16_lnew
+    or ax, ax
+    jnz .r
+    push cx
+    mov word [w16_sfn], w16s_lgrow  ; XSEC-OK: [w16_sfn]'s value, an SCALL's
+    call w16_scall                  ; CF=1: no part, or no room to grow into
+    pop cx
+    jc .r                           ; (AX is still 0)
+    mov al, [w16_lflg]
+    jmp w16_lnew
+.r:
+    ret
+
 ; w16_lfree - ES = the heap's segment, AX = a data offset: free that block.
 ; Keeps all.
 w16_lfree:
@@ -1748,7 +1765,7 @@ w16k_lalloc:
     mov cx, [es:bx]
     mov al, [es:bx + 2]
     call w16_lds
-    call w16_lnew
+    call w16_lnewg
     or ax, ax
     jz .out
     test byte [w16_lflg], LMEM_MOVEABLE
@@ -1756,7 +1773,7 @@ w16k_lalloc:
     mov si, ax                      ; moveable: an entry pointing at it
     mov cx, 2
     xor al, al
-    call w16_lnew
+    call w16_lnewg
     or ax, ax
     jnz .entry
     mov ax, si
@@ -1904,7 +1921,7 @@ w16k_lrealloc:
     push dx
     mov al, [w16_lflg]
     and al, LMEM_ZEROINIT
-    call w16_lnew                   ; AX = the new data
+    call w16_lnewg                  ; AX = the new data
     pop dx
     or ax, ax
     jz .fail

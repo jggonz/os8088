@@ -237232,6 +237232,54 @@ fixture on kern_big, `win16memdc` and `win16pbrush` are the small-bitmap
 guards. **Not done:** kern_mega has no row for the fixture (no QEMU rig
 loads WIN16 on the arm; `tests/win16ovr.py` does it under Bochs).
 
+#### 124.25.19 A local heap grows when it is full *(WIN16-NEXT `lheap`)*
+
+Windows grew a full local heap: `LocalAlloc` enlarged the data segment and
+extended the heap into it, up to 64 KB (§124.25.2, §124.21.4). WIN16 laid
+DGROUP out at 64 KB and started the program's heap over all of it, so a heap
+nothing re-initialised never ran out. **A program that calls `LocalInit`
+itself does.** Visual Basic 3.0's runtime copies its data segment, asks
+`GlobalReAlloc` for `stack + heap + data` (33,432 bytes for MOZART, whose NE
+asks a 4 KB heap), then makes a heap of its own over just that. It
+registers its classes, allocating a name for each there, and the `LocalAlloc`
+that does not fit answered 0: VB showed *Unexpected error; quitting*.
+
+`LocalAlloc` and `LocalReAlloc` (the image's `w16_lnewg`) therefore try again
+when `w16_lnew` found no room: the system-library part's `w16s_lgrow` extends
+the heap, and the allocation is repeated once. A heap that cannot grow
+answers 0, as before. What grows, by segment:
+
+| the heap is in | it grows into | to |
+|---|---|---|
+| the running program's DGROUP | the tail the load laid out (§124.21.4) | the segment's size: 64 KB (heap end `0FFFCh`) when the arena had room, else the size the NE asked for, which is also where it began, so no growth |
+| a global block (a library's DGROUP, a `GlobalAlloc` segment the program called `LocalInit` on) | the block's own tail first; then `GlobalReAlloc` of the block **in place** (§124.9: the free block that follows), by what the request needs, at most 64 KB | the block as kept |
+
+A block that must MOVE to grow is moved only where the program's `DS` follows
+it. On the real-mode arm nothing moves (WIN16 cannot patch `DS`, as Windows
+did), so a fixed block grows only into a free neighbour, and a locked
+moveable one likewise. **On the `kern_mega` arm a locked moveable block
+moves with its selector (§124.31.3), for any program, for this one call**:
+`w16s_lgrow` sets the protected-mode-only rule (`w16_pmonly`) around its
+`GlobalReAlloc` and restores it. This is wider than §124.9's rule, which
+lets only a protected-mode-only program's locked block move, and it is why
+Visual Basic 3.0 starts: its runtime `LocalInit`s heaps of 2,064 bytes in
+`GlobalAlloc`ed moveable blocks it keeps locked, allocated one after the
+other so that the neighbour is never free, and Mozart is not marked
+protected-mode-only. An unlocked moveable block, and a fixed one that cannot
+grow in place, are left as they are: the program may hold a pointer into
+them.
+The new room joins the heap as one free block at its end, which the first-fit
+walk merges with a free block before it; the descriptor's end word
+(`LH_END`) is the only header field that changes, and `pLocalHeap` at
+`DS:0006` is not touched. `LocalCompact`, `LocalSize` and `LocalShrink` report
+the heap as it stands and grow nothing.
+
+The code is in the system-library part (the image holds the retry only, 27
+bytes on `kern_mega`), so a heap that never fills never fetches it.
+`LHEAP.EXE` (`win16lheap`) checks it: a 1 KB heap that takes 4 KB of blocks,
+`LocalReAlloc` of one larger, and a `LocalInit` heap in a locked
+`GlobalAlloc` block that grows.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one

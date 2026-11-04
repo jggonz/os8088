@@ -344,4 +344,164 @@ w16s_dgz:                           ; more than it holds: refused
     xor ax, ax
     cwd
     ret
+
+; -----------------------------------------------------------------------------
+; A local heap that is full grows (SPEC.md 124.25.19). The image's w16_lnewg
+; calls this when w16_lnew found no room.
+; in:  ES = the heap's segment (the caller's DS), CX = the bytes asked
+; out: CF=0 the heap's end moved out by at least what was needed, ES kept;
+;      CF=1 it cannot grow. Keeps all.
+; The program's own DGROUP grows into the tail it was laid out with; a global
+; block into its own tail, and failing that by GlobalReAlloc, in place only: a
+; block that would have to move is left (no pointer into it could follow).
+; -----------------------------------------------------------------------------
+%macro LFAKE 1                      ; the args are on the stack: run the image's
+    push word [w16_pss]             ;   gate routine %1 on them, as a call from
+    push word [w16_psp_]            ;   the program would
+    mov [w16_pss], ss
+    mov [w16_psp_], sp
+    add word [w16_psp_], 4 - W16F_ARGS
+    ICALL %1
+    pop word [w16_psp_]
+    pop word [w16_pss]
+%endmacro
+
+w16s_lgrow:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    mov bp, sp                      ; [bp] = the heap's segment, [bp+10] = CX
+    mov bx, [es:6]
+    or bx, bx
+    jz .no
+    cmp word [es:bx], LH_SIG
+    jne .no
+    mov dx, [es:bx + LH_END]
+    mov ax, es
+    cmp ax, [w16_dgroup]
+    jne .blk
+    mov ax, [w16_dgsize]            ; the program's DGROUP: its whole size
+    or ax, ax
+    jnz .lim
+    mov ax, 0xFFFC                  ; (0 = 64 KB)
+.lim:
+    and al, 0xFC
+.chk:
+    cmp ax, dx                      ; AX = the new end, if it is past the old
+    ja .ext
+.no:
+    stc
+    jmp short .done
+.ext:                               ; the heap ends at AX: the room is one more
+    mov es, [bp]                    ;   free block, merged by the walk
+    mov bx, [es:6]
+    mov si, [es:bx + LH_END]
+    mov di, ax
+    sub di, si
+    mov [es:si], di
+    mov [es:bx + LH_END], ax
+    clc
+.done:
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.blk:                               ; a global block: its handle, as the program
+    push ax                         ;   would ask GlobalHandle(seg)
+    LFAKE w16k_ghandle
+    add sp, 2
+    or ax, ax
+    jz .no
+    mov di, ax                      ; DI = hMem
+    call .blkcap                    ; AX = the block's room, CF=1 not a block
+    jc .no
+    mov bx, [bp + 10]
+    add bx, 2 + 3 + 3               ; what the request needs: the header, and
+    jc .no                          ;   a block rounded up to 4
+    add bx, dx
+    jc .no                          ; BX = the end it needs
+    cmp ax, bx
+    jae .chk                        ; the block has the room already
+    ; the block is grown in place, with some over for the next request
+    mov si, bx
+    add bx, 512
+    jc .exact
+    cmp bx, 0xFFF0
+    jbe .ask
+.exact:
+    mov bx, si
+.ask:
+    cmp bx, 0xFFF0
+    ja .no
+%ifdef PKG_MEGA
+    mov cl, 1                       ; a locked block moves with its selector
+    xchg cl, [w16_pmonly]           ;   (124.31.3), as a heap that is full
+    push cx                         ;   needs: the program holds DS, which
+%endif                              ;   follows it. GlobalReAlloc's rule is
+    xor ax, ax                      ;   the one for a protected-mode-only
+    push di                         ;   program's, for this call alone.
+    push ax                         ; GlobalReAlloc(hMem, BX bytes, 0)
+    push bx
+    push ax
+    LFAKE w16k_grealloc
+    add sp, 8
+%ifdef PKG_MEGA
+    pop cx
+    mov [w16_pmonly], cl
+%endif
+    or ax, ax
+    jz .no
+    call .blkcap                    ; ...and what it holds now
+    jc .no
+    mov es, [bp]
+    mov bx, [es:6]
+    mov dx, [es:bx + LH_END]
+    jmp .chk
+; .blkcap - DI = hMem -> AX = the block's room in bytes, rounded to 4; CF=1 if
+; it is no block, is discarded, or would MOVE to grow (moveable, unlocked)
+.blkcap:
+    mov ax, di
+%ifdef PKG_MEGA
+    ICALL w16_pin
+%endif
+    ICALL w16_gfind                 ; ES = its header
+    jc .bc
+    cmp byte [w16_gdisc], 0
+    jne .bcn
+    test byte [es:GH_FLAGS], GHF_MOVE
+    jz .bf
+    cmp byte [es:GH_LOCK], 0
+    je .bcn
+.bf:
+    mov ax, [es:GH_SIZE]
+    cmp ax, 0x1000
+    jb .bs
+    mov ax, 0xFFF0
+    jmp short .br
+.bs:
+    dec ax
+    mov cl, 4
+    shl ax, cl
+.br:
+    and al, 0xFC
+    mov dx, [bp]
+    mov es, dx
+    mov bx, [es:6]
+    mov dx, [es:bx + LH_END]
+    clc
+    ret
+.bcn:
+    stc
+.bc:
+    ret
 section .text
