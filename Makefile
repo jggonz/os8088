@@ -20094,6 +20094,12 @@ $(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
 $(BUILD)/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
 	python3 tools/os88vbt.py demo $@
+# ...and the 360KB floppy's: the same battle over two bars of the music
+# (3.2 s, short enough to be RESIDENT, 125.4) rather than sixteen, streamed:
+# a floppy cannot feed the music and the clips at once. A hard disk is the target
+$(BUILD)/vbshort/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
+	@mkdir -p $(BUILD)/vbshort
+	python3 tools/os88vbt.py demo $@ --bars 2
 #> [Applications] vbattledisk :: Video Battle's floppy, package and demo battle, in all four geometries
 vbattledisk: $(BUILD)/vbattle.img $(BUILD)/vbattle720.img $(BUILD)/vbattle120.img $(BUILD)/vbattle360.img
 VBATTLEFILES = $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
@@ -20103,8 +20109,8 @@ $(BUILD)/vbattle720.img: $(VBATTLEFILES) tools/os88disk.py
 	python3 tools/os88disk.py --size 720 -o $@ $(VBATTLEFILES)
 $(BUILD)/vbattle120.img: $(VBATTLEFILES) tools/os88disk.py
 	python3 tools/os88disk.py --size 1200 -o $@ $(VBATTLEFILES)
-$(BUILD)/vbattle360.img: $(VBATTLEFILES) tools/os88disk.py
-	python3 tools/os88disk.py --size 360 -o $@ $(VBATTLEFILES)
+$(BUILD)/vbattle360.img: $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 360 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbshort/BATTLE.VBT
 
 .PHONY: wireball wireballdisk wireballtest wireball-pair
 wireball-pair:

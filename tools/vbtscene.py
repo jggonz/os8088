@@ -558,32 +558,42 @@ def _env(n, a, d):
     return e
 
 
-def music(seconds=6.4):
-    """A loop in A minor at 150 BPM: square bass, a pulse lead, a noise
-    hat. 6.4 s = 4 bars of 4 at 150 BPM, so the loop is exact"""
-    n = int(RATE * seconds)
-    nbars = int(round(seconds * 150 / 60 / 4))
-    out = np.zeros(n)
+def music(bars=16):
+    """A loop in A minor at 150 BPM, `bars` bars of 1.6 s: a square bass, a
+    pulse lead and a noise hat. Sixteen bars are four sections - A, A with
+    the lead an octave up, B over a new bass, A again - so a play hears a
+    piece of music, not a phrase, and the engine streams it (125.4)"""
     beat = RATE * 60 / 150
+    n = int(round(bars * 4 * beat))
+    out = np.zeros(n)
     note = lambda m: 440.0 * 2 ** ((m - 69) / 12)
-    bass = [45, 48, 43, 40, 45, 48, 43, 44]          # A C G E / A C G G#
-    lead = [69, 72, 76, 74, 72, 71, 69, 71, 72, 76, 79, 76, 74, 72, 71, 68]
+    bass_a = [45, 48, 43, 40]                       # A C G E
+    bass_b = [41, 43, 45, 44]                       # F G A G#
+    lead_a = [69, 72, 76, 74, 72, 71, 69, 71, 72, 76, 79, 76, 74, 72, 71, 68]
+    lead_b = [77, 76, 74, 72, 74, 72, 71, 69, 72, 71, 69, 68, 69, 71, 72, 76]
+
+    def section(bar):
+        return (bar // 4) % 4                       # 0 A, 1 A', 2 B, 3 A
 
     def add(s, x):
         x = x[:max(0, n - s)]
         out[s:s + len(x)] += x
 
-    for bar in range(nbars):
+    for bar in range(bars):
+        sec = section(bar)
+        bl = bass_b if sec == 2 else bass_a
         for b in range(4):
             for half in range(2):
                 s = int((bar * 4 + b + half * 0.5) * beat)
                 ln = int(beat * 0.5)
-                f = note(bass[bar % len(bass)] - (12 if half else 0))
+                f = note(bl[bar % 4] - (12 if half else 0))
                 seg = np.arange(ln) / RATE
                 add(s, 0.30 * np.sign(np.sin(2 * np.pi * f * seg)) *
                     _env(ln, 0.002, 0.05))
-    for k in range(nbars * 4):                        # the lead: a note a beat
-        m = lead[k % len(lead)]
+    for k in range(bars * 4):                       # the lead: a note a beat
+        sec = section(k // 4)
+        ld = lead_b if sec == 2 else lead_a
+        m = ld[k % 16] + (12 if sec == 1 else 0)
         s = int(k * beat)
         ln = int(beat * 0.9)
         seg = np.arange(ln) / RATE
@@ -592,9 +602,9 @@ def music(seconds=6.4):
         w = np.where((seg * f * vib) % 1.0 < 0.25, 1.0, -1.0)  # 25% pulse
         add(s, 0.20 * w * _env(ln, 0.005, 0.12))
     rng = np.random.RandomState(5)
-    for k in range(nbars * 8):                        # hats on the eighths
+    for k in range(bars * 8):                       # hats on the eighths
         s = int(k * beat / 2)
-        ln = int(RATE * 0.03)
+        ln = int(RATE * (0.06 if k % 4 == 2 else 0.03))
         add(s, 0.10 * rng.uniform(-1, 1, ln) * np.linspace(1, 0, ln))
     return out
 
@@ -640,10 +650,26 @@ def sfx(name):
         t = np.arange(n) / RATE
         x = x * 0.7 + 0.5 * np.sign(np.sin(2 * np.pi * 90 * t))
         return x * np.exp(-t * 7)
+    if name == "tick":                      # the menu's cursor: a blip
+        n = int(RATE * 0.035)
+        t = np.arange(n) / RATE
+        return np.sign(np.sin(2 * np.pi * 1760 * t)) * np.linspace(1, 0, n) * 0.6
+    if name == "ok":                        # a command chosen: up a fifth
+        n = int(RATE * 0.05)
+        t = np.arange(n) / RATE
+        a = np.sign(np.sin(2 * np.pi * 988 * t))
+        b2 = np.sign(np.sin(2 * np.pi * 1480 * t))
+        return np.concatenate([a, b2]) * np.concatenate(
+            [np.ones(n), np.linspace(1, 0, n)]) * 0.6
+    if name == "deny":                      # not enough MP: a low buzz
+        n = int(RATE * 0.18)
+        t = np.arange(n) / RATE
+        return np.sign(np.sin(2 * np.pi * 110 * t)) * np.linspace(1, 0.2, n) * 0.7
     raise KeyError(name)
 
 
 SFX = ["slash", "zap", "shot", "boom", "chime", "crash"]
+UI_SFX = ["tick", "ok", "deny"]
 
 
 def to_rgb(a):

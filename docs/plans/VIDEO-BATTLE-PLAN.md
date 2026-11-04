@@ -375,10 +375,21 @@ evidence names the machine.
   drawn inverse in the band, so no clip carries a marker.
 - [ ] **Captured footage.** An importer that takes the DECODED screens of
   lossy V88 clips and makes exact records between them (SPEC.md 125.2.3).
-- [ ] **Music streamed from disk**, for a loop longer than memory holds.
-- [ ] **Hercules and VGA renditions.** Their second page would let a camera
+- [x] **Music streamed from disk** (2026-11-04): a 32 KB ring refilled 4 KB
+  a piece, first in the reader's order while under half. *MartyPC
+  `os8088_xt_hdd_sb`, C:: 25.6 s of music over a 50 s battle, 0 underruns,
+  the capture matching the bundle at offset 0 across the loop.*
+- [x] **A clip's own effects stream with it**, first in its region; **the
+  menu's sounds stay resident** (tick, ok, deny) and are mixed into what is
+  already queued. *Heard 69 to 96 ms after the key, or about 240 ms behind
+  a read under way on MartyPC's XT-IDE.*
+- [x] **A floppy, as a bonus**: music of 60 KB or less is held resident, and
+  the 360 KB disk's bundle has 3.2 s of it. *MartyPC 5150, 360 KB: victory,
+  0 late, 0 underruns.*
+- [ ] **kern_mega** (a later wave, the owner, 2026-11-04).
+- [ ] **Hercules and VGA renditions** (a later wave). Their second page would let a camera
   cut flip instead of tear (SPEC.md 125.7).
-- [ ] **The PC speaker tier** (section 3.2).
+- [ ] **The PC speaker tier** (section 3.2; a later wave).
 - [ ] **A suite row**: a battle to victory, `[vb_late]` = 0, and the card
   consuming.
 - [ ] **The owner's 5150 with a card**: one look and one listen.
@@ -386,5 +397,6 @@ evidence names the machine.
 Where the build went another way from the study:
 - **The container is the battle's own (`.VBT`), not V88.** Only the record
   format is shared (SPEC.md 125.1).
-- **The music is resident**, not streamed, for the demo.
+- **The music was resident** in the first build, and streams since the
+  second wave; short music stays resident for a floppy.
 - **Three claims, carved.** An owner may hold eight (SPEC.md 125.4).

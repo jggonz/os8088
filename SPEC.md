@@ -237240,10 +237240,14 @@ docs/plans/VIDEO-BATTLE-PLAN.md is the feasibility study and the story list.
 
 It is an engine, and the battles are data. A `.VBT` bundle holds:
 - the idle loop;
-- the action clips;
-- the music;
-- the effects;
+- the action clips, each carrying the sound effects only it uses;
+- the menu's own sounds;
+- the music, which the engine STREAMS from the disk;
 - a script of who has which command.
+
+**A hard disk is the target and a floppy is a bonus** (the owner,
+2026-11-04). A floppy cannot feed the music and the clips at once, so a
+bundle whose music is short enough is held resident instead (125.4).
 
 `tools/os88vbt.py` builds one. Its `demo` command builds an ORIGINAL
 battle, drawn and scored by `tools/vbtscene.py` with nothing captured, so
@@ -237272,15 +237276,22 @@ Little-endian. Every region starts on a 4 KB boundary, because
 every floppy and a FAT16 disk to 128 MB. A region is at most 60 KB, so it
 is read into one claim with one capacity word.
 
+Version 2 (2026-11-04). Version 1 kept every effect in one resident block
+and the music resident; the engine refuses it.
+
 | offset | what |
 |---|---|
 | 0 | the header (125.2.1) |
-| 512 | the clip table, 32 bytes a clip, at most 32 clips (125.2.2) |
-| 1536 | the script (125.2.4) |
+| 512 | the clip table, 48 bytes a clip, at most 32 clips (125.2.2) |
+| 2048 | the script (125.2.4) |
 | 4096 | the VIDEO RESIDENT block: the idle loop's records, every entry record, the entry tables, the idle table |
-| then | the MUSIC: unsigned 8-bit, 64..191 |
-| then | the EFFECTS: signed 8-bit, -64..63, back to back |
-| then | each clip's stream: its records, back to back |
+| then | the MUSIC: unsigned 8-bit, 64..191, streamed (125.4) |
+| then | the MENU's effects: signed 8-bit, -64..63, back to back, resident |
+| then | each clip's REGION: its own effects first, then its records |
+
+**A clip's effects come first in its region**, so they are in memory before
+any of its records. A clip may start before it is all read, and its effects
+sound from its first frames.
 
 **The ranges are the mix.** The music is held to 64..191 and an effect to
 -64..63, so their sum never leaves 0..255. Mixing in one effect is then one
@@ -237291,7 +237302,7 @@ is read into one claim with one capacity word.
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 1 |
+| 4 | 2 | version, 2 |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows (142 in the demo; the band is the rest) |
@@ -237301,30 +237312,34 @@ is read into one claim with one capacity word.
 | 16 | 2 | clips |
 | 18 | 2 | idle frames, N |
 | 20 | 2 | anchors, at most 16 |
-| 22 | 2 | effects, at most 16 |
+| 22 | 2 | the menu's effects, at most 16 |
+| 24 | 1+1+1 | which of them is the cursor's TICK, a command's OK and a refusal's DENY (FFh none) |
 | 30 | 4+2 | the resident block's offset and length |
 | 36 | 4+4 | the music's offset and its region's length |
 | 44 | 4 | the music's length in samples |
 | 50 | 2 | the idle table's offset in the resident block: N words, record *i*'s offset |
 | 52 | 4 | the file's length |
-| 56 | 4+2 | the effects' offset and length |
+| 56 | 4+2 | the menu's effects' offset and length |
 | 64 | 2 x 16 | the anchors: idle frame numbers |
-| 96 | 6 x 16 | each effect's offset in the effects and its length |
+| 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each effect's name, for a reader |
 
 #### 125.2.2 The clip table
 
 | off | size | field |
 |---|---|---|
-| 0 | 4 | the stream's offset |
-| 4 | 4 | its length (at most 60 KB) |
+| 0 | 4 | the region's offset |
+| 4 | 4 | its length, effects and records (at most 60 KB) |
 | 8 | 2 | its records |
 | 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT), 2 FULL (the whole screen: the intro), 4 ENDS (the battle ends on it, and its last frame is held) |
 | 12 | 2 | EXIT |
 | 14 | 2 | the entry table's offset in the resident block: a word for each anchor |
-| 16 | 1+1 | two effects (FFh none) |
+| 16 | 1+1 | two effects: 1 there, 0 not |
 | 18 | 2+2 | the frames they start on |
+| 22 | 2 | the records' offset in the region: after its effects |
 | 24 | 8 | the name |
+| 32 | 2+2 | the first effect's offset in the region and its length |
+| 36 | 2+2 | the second's |
 
 #### 125.2.3 Records, and why every join is exact
 
@@ -237370,8 +237385,10 @@ Three pieces, the Video Player's own shape (98.3):
 
 - **`vb_hook`, `FSXF_RATE`'s hook at divisor 2,048 (582.6 Hz).** It draws
   the frames that are due, at most two a call, with IF = 1 while it
-  decodes. It keeps the card's ring 4 KB ahead. It starts each action at
-  its anchor. It reads no disk and calls nothing in the kernel.
+  decodes. It keeps the card's ring two to four of the card's blocks ahead,
+  mixing the music out of its own ring with the effect that is due. It
+  starts each action at its anchor. It reads no disk and calls nothing in
+  the kernel.
 - **`vb_main`, the bracket's foreground.** It reads the keys (int 16h),
   runs the battle, draws the band and reads ahead, one piece per pass, then
   waits with `FSXW_FRAME`.
@@ -237380,8 +237397,14 @@ Three pieces, the Video Player's own shape (98.3):
 
 **The clock is the card.** Frame *n* is due at sample *n* × spf. The
 played position is the ring's consumed count, plus the periods since the
-card's last block × 19 samples, capped at 1,892 samples and never moving
-backwards (98.3.1's `vp_adue`). With no card the clock is the PIT's
+card's last block × 19 samples, capped below a block and never moving
+backwards (98.3.1's `vp_adue`).
+
+**The card's block is 512 bytes when the driver offers it**
+(`SND_CAP_EXTBLK`, `SND_OPENF_BLKSH` code 2), and the ring then runs 2 KB
+ahead. Otherwise the block is 2,048 bytes and the ring runs 4 KB ahead. A
+small block makes the consumed count fresh to 46 ms rather than 186. The
+menu's sounds need that (below), and it costs 21 block interrupts a second. With no card the clock is the PIT's
 periods × 18.9246 samples, kept in 16.16, so the same battle runs silent.
 
 A frame whose record is not yet read is **waited for**. The frame is not
@@ -237397,12 +237420,30 @@ When the loop shows that anchor, the next frame is the entry record. The
 demo's anchors are every sixth frame of a 24-frame loop, so a command waits
 0.13 to 0.47 s (two to seven frames) for its clip to begin.
 
-**The effects are booked ahead, not started when seen.** The writer runs
-4 KB (0.37 s) ahead of the card. An effect started when its frame is drawn
-would sound 0.37 s late. One booked at its frame's sample is exact once it
-is at least 4 KB ahead, and is started part-way in otherwise. A queue of
-two holds a clip's two cues; when the second starts it replaces the first,
-so one effect sounds at a time.
+**A clip's effects are booked ahead, not started when seen.** The writer
+runs the ring's lead (2 or 4 KB) ahead of the card. An effect started when
+its frame is drawn would sound that late. One booked at its frame's sample
+is exact once it is a lead ahead, and is started part-way in otherwise. A
+queue of two holds a clip's two cues; when the second starts it replaces
+the first, so one effect sounds at a time. The bytes are in the clip's own
+region, so a slot holding them is not given up while they may sound
+(125.4).
+
+**A menu sound is mixed into what is already queued.** The tick (the cursor
+moved), the ok (a command taken) and the deny (not enough MP) are resident.
+The foreground asks with `[vb_ui]` and the hook, on its next call
+(`vb_uisound`), makes it the effect playing. It adds the sound straight
+into the ring's bytes from a block past the card's last report up to the
+write position, so it is heard about a block from now rather than a whole
+lead from now; the rest of it is mixed as the ring is written. Measured on
+MartyPC's XT (`os8088_xt_hdd_sb`, SB 2.01 with 512-byte blocks), from the
+key to the sound in the card's own capture:
+- **69 to 96 ms** when the foreground was free. The key took 29 to 47 ms to
+  reach the menu, and the mix 39 to 63 ms to be heard.
+- **about 240 ms** when the key landed during a 4 KB read already under way.
+  MartyPC's only hard disk is an XT-IDE, whose transfers the CPU makes, so
+  the key waited about 180 ms for the read. The owner's ST11M moves its
+  sectors by DMA (98.2.15.5); its time here is unmeasured.
 
 ### 125.4 Reading ahead, and memory
 
@@ -237416,46 +237457,76 @@ beetle's 20, and 23 frames ran late in a ten-turn battle. So there are
 three claims, carved:
 
 - **the RESIDENT claim** (`vb_load`), read before the bracket with
-  "Loading..." in the window. It holds the idle loop's block, then the
-  effects, then the music in 32 KB pages. Each part is its own segment,
-  the claim's base plus the part's rounded offset;
+  "Loading..." in the window. It holds:
+  - the idle loop's block;
+  - the menu's effects;
+  - the music's RING, 32 KB (3 s at 11 kHz) with a 4 KB guard past its
+    end; or the whole music, when it is 60 KB or less (below).
+
+  Each part is its own segment, the claim's base plus the part's rounded
+  offset;
 - **the card's ring** (`vb_snd_open`), `OSAPI_MEM_CLAIM_DMA_HI`, 17 KB;
 - **the CLIP CACHE** (`vb_cache`). When every clip fits (the demo's case),
   each clip has a place of its own: the cache's base plus the sizes of the
   clips before it, rounded to 4 KB. Otherwise the cache is three to eight
-  SLOTS, each the size of the largest clip. A clip gets a free slot; an
+  SLOTS, each the size of the largest clip. A clip gets a free slot. An
   asked-for clip takes, round robin, the slot of one that is not playing,
-  pending or under the cursor.
+  pending, under the cursor, or holding an effect that may still sound.
 
 All three are the default, pinned (§66). The package does arithmetic on a
 claim's segment to carve it, so it is real mode's (125.7).
 
+**The music streams** (`vb_mpiece`). The music is read 4 KB a piece at its
+own offset, always a cluster multiple, into its ring at the fill position.
+What a piece puts past the ring's end lands in the guard and is copied to
+the ring's start. The last piece carries less than 4 KB of music, and the
+next read is the music's first: it loops on the disk, not in memory. The
+hook takes from the ring and gives back (`[vb_mtake]`); the reader adds
+(`[vb_mfill]`, published after the bytes). A ring found empty is played as
+silence, the clock still running, and counted (`[vb_munder]`). The ring is
+filled before the bracket, so the intro starts over 3 s of music.
+
+**Short music is resident** (`VB_MRES`, 60 KB, about 5.5 s at 11 kHz). It
+is read once a session and looped out of memory, and the reader never
+reads it again. A floppy needs this. Measured on MartyPC's 5150 from the
+360 KB disk, a streamed 6.4 s loop ran dry 337 times in 150 s, and the
+clip chosen never got past 8 KB: the floppy cannot carry 11 KB/s of music
+and the clips too. The 360 KB disk's bundle therefore has two bars of
+music (3.2 s, resident) and the others sixteen (25.6 s, streamed).
+
 The intro is read whole before the bracket. **In the bracket the reader
-reads one 4 KB piece per pass**, of the first clip in this order that is
-not wholly read:
-1. the action pending;
-2. the clip under the menu's cursor;
-3. the enemy's attack;
-4. then, into free room only, every other clip in order.
+reads one 4 KB piece a pass**, in this order:
+1. the MUSIC, while its ring holds under half (1.5 s of margin for a
+   clip's read to spend);
+2. the action pending;
+3. after a key, nothing more for a third of a second (`VB_KQUIET`): the
+   next key would wait behind the read in the BIOS buffer, and Down then
+   Enter are two keys a fifth of a second apart;
+4. the clip under the menu's cursor;
+5. the enemy's attack;
+6. every other clip, into free room only;
+7. the music again, to fill its ring.
 
 Moving the cursor only changes which clip is first. What was read is kept,
 so a read dropped by a new cursor position resumes where it stopped when
-the cursor comes back.
+the cursor comes back. A clip may start once its effects and its first
+24 KB of records are read (`VB_START`), or all of it.
 
 The piece is 4 KB so that a key waits at most about one revolution of a
-360 KB floppy. Keys wait in the BIOS buffer while a read runs and are not
-lost: on MartyPC's 5150, an Enter was taken 0.4 s after it was pressed,
-behind an 8 KB read (the first build's piece).
+360 KB floppy behind it, and keys wait in the BIOS buffer, never lost: on
+MartyPC's 5150, an Enter was taken 0.4 s after it was pressed, behind an
+8 KB read (the first build's piece).
 
 The demo battle on a 640 KB machine:
 
 | | bytes |
 |---|---|
-| the package's image | 8,283 (6,300 packed on the disk) |
-| its bss | 5,419 (the first 4 KB of the bundle among it) |
-| the resident claim | 144 KB: the block 35,432 (36 KB), the effects 34,176 (36 KB), the music 70,560 (72 KB) |
+| the package's image | 8,847 (6,759 packed on the disk) |
+| its bss | 5,414 (the first 4 KB of the bundle among it) |
+| the resident claim | 76 KB: the block 35,432 (36 KB), the menu's effects 3,471 (4 KB), the music's ring and guard (36 KB) |
 | the card's ring | 17 KB |
-| the clip cache | 168 KB: eight clips, 151,764 bytes, each rounded to 4 KB |
+| the clip cache | 212 KB: eight clips, 198,618 bytes with their 46,854 of effects, each rounded to 4 KB |
+| the bundle | 544,768 bytes, the music 282,240 of it (25.6 s), on the disk only |
 
 ### 125.5 The band
 
@@ -237514,15 +237585,31 @@ an output.
 
 **Not yet built:**
 - the importer for captured V88 clips (125.2.3);
-- streaming the music from disk: it is resident, so a long piece needs
-  memory;
 - a suite row.
+
+**Measured on MartyPC's `os8088_xt_hdd_sb`** (a 4.77 MHz XT, CGA, SB 2.01,
+XT-IDE, 640 KB), with the system and the 25.6 s bundle on C:.
+
+- **The load** before the intro takes 1.7 guest seconds.
+- **A whole battle** to victory used every command over four rounds. It
+  took 50 guest seconds, with **0 frames late** and **0 underruns** of the
+  music's ring (`[vb_munder]` = 0).
+- **The music is the bundle's, byte for byte in time.** In the card's
+  capture, a one-second window every two seconds correlates with the
+  bundle's music at the same offset: median 0.95, lowest 0.69, where an
+  effect is mixed over it. That holds across the loop at 25.6 s, and the
+  best offset never moved from 0, so no piece was dropped or played twice.
+  (The card plays 11,111 Hz: the DSP's time constant rounds 11,025 to it.)
+- **The menu's sounds** were found in the capture at every key, matched
+  0.90 to 0.99 against the effect itself, with the latencies in 125.3.
 
 **Measured on MartyPC's `os8088_5150_sb_gla`** (5150, CGA, SB 2.01,
 640 KB), from the 360 KB disk.
 
-- **The load** before the intro takes 14 guest seconds: 168 KB from the
-  floppy.
+- **The first build** loaded for 14 guest seconds before the intro (168 KB,
+  the music resident). With this one, the music short and resident, the
+  load is 9 seconds and the battle to victory had 0 late frames and 0
+  underruns.
 - **A whole battle** from the intro to victory used every command over
   four rounds. It took 600 captured frames, 49.8 guest seconds, and
   **0 frames ran late** (`[vb_late]` = 0).
