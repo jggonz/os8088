@@ -136,9 +136,12 @@ Discoveries:
 - **An off-by-one in the openings' order** left the second opening unread
   until its sound was due. The stalls it caused looked like disk throughput
   until a frame-by-frame log showed them starting exactly at the join.
-- **The disk's kind decides the rate a clip may have.** With the bugs gone,
-  the first Limit (34.6 KB/s plus 11 for the music) still could not be fed
-  by MartyPC's XT-IDE, whose CPU copies every byte while it also decodes.
+- **The first Limit (34.6 KB/s plus 11 for the music) could not be fed**
+  on MartyPC's XT-IDE, which moved about 35 KB/s. This diary first put that
+  down to the disk's kind. It was wrong, and the owner doubted it: a
+  PicoMEM in a 5150 moves close to 150. It was the reader's 4 KB pieces
+  and its seeks; with per-stream cursors and adaptive pieces the same disk
+  moved 68.6 KB/s while a clip played (see the check, below).
   Its sky flashes, 7 KB a frame, were the weight; without them, and with
   its rings of light drawn as thin outlines moving every other frame (they
   were drawn filled, a bug), the clip is 31 KB/s and plays in real time. A DMA disk is another matter, and the
@@ -149,6 +152,49 @@ Discoveries:
 | the Limit, 250 KB | 7.67 s captured for 7.8 s |
 | a battle to victory | 0 late frames, 0 stalls, 0 sound frames late, 0 music underruns |
 | the music's join | at 3.903 s, the openings' end, correlation 0.97 |
+
+## The check: the owner's footage on the owner's disk (2026-11-04)
+
+The owner asked where the engine stands, with three clips of their own made
+by an image model: an idle and two attacks. The attacks do not share the
+idle's motion, so only their first frame matches it. A prototype of the
+builder's footage path (encode with `os88venc`, decode to the screens the
+engine shows, search by frame difference) made a bundle of them:
+
+| | |
+|---|---|
+| the idle loop | frames 1 to 30 of the idle (2 s), its seam 1.8% of pixels |
+| attack 1 | 77.3 KB/s, in at its frame 0 onto idle 0 (about 4.6% of pixels differ), out onto idle 0 (5.3%) |
+| attack 2 | 53.5 KB/s, the same shape |
+| anchors | idle frame 0 only: the attacks' first frame matches nowhere else |
+
+And 86Box became the instrument for the owner's disk: a 5150 with a CGA,
+an SB 2.0 and an ST-225 on a Seagate ST11M, the image wrapped by
+`os88hdd.py --st11` and the engine started by an `AUTOSTRT` link.
+
+It found three bugs the demo battle could not:
+- **The music fell silent at 22 s and never came back.** Near the track's
+  end the reader rounded what was left up to a piece in 16 bits; 61,441
+  bytes and up lapped to 0, and it read nothing, over and over.
+- **The enemy's attack played as an idle screen.** It used the clip a
+  member had just played, and a ring given back kept its played cursors, so
+  the clip was "played" from its end. A ring given back now rewinds: a clip
+  that fit whole plays again unread, one that did not lets the ring go.
+- **The victory never ended.** The adaptive pieces (up to 32 KB) read past
+  the last clip, which ends at the file's end; the read failed and was
+  asked again forever. A piece is now cut to the clip's last 4 KB.
+
+Then the measurement. The battle plays to victory, but **every clip
+stalls**: while a clip played the reader moved 59 to 77 KB/s, so the
+77 KB/s attack stalled 1.8 to 2.7 s in its 6 and the 53.5 KB/s ones 0.6 to
+0.8 s in their 5. With the music resident, so that no read seeks between
+two streams, it was 52 to 62 KB/s and the same stalls: the seeks are not
+it. The reader's loop does not wait either (its frame wait is the hook's
+1.7 ms period). The disk is being slowed by the hook's decoding, to about
+half of the 119 to 129 KB/s Video Player gets out of the same controller.
+Observed: the numbers above, on 86Box (not cycle-accurate). Not yet done:
+Video Player on the same 86Box machine, to say how much of the gap is the
+engine's.
 
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
@@ -169,5 +215,5 @@ Second wave, MartyPC `os8088_xt_hdd_sb` with C::
 | a menu sound after its key | 69 to 96 ms free, about 240 ms behind a read |
 
 Tested: the boot, the battle, the sound and the read-ahead, all on MartyPC,
-from a floppy and from a hard disk. Not tested: real hardware, 86Box, a
-VGA, kern_mega.
+from a floppy and from a hard disk; the owner's footage on 86Box's ST11M.
+Not tested: real hardware, a VGA, kern_mega.

@@ -237370,7 +237370,10 @@ the decoder will really hold:**
   over the whole screen. A canvas frame is the canvas with the band's rows
   black under it, so the first opening's last frame and the next one's
   first are joined by a seam like any other. The last opening, the SCENE
-  opening, JOINS the loop.
+  opening, JOINS the loop. **A battle given no opening gets one**, START:
+  idle frame 0 alone, from black, joined onto the loop. Without it the
+  engine began the loop over a black screen, and the loop's records, each
+  a difference from the frame before, drew only what changed.
 
 **A clip's sound is the builder's mix.** An action's effects are placed at
 their frames and mixed into its sound once, at build time; the engine has
@@ -237451,7 +237454,10 @@ The demo's anchors are every sixth frame of a 24-frame loop, so with a
 a frame's worth (spf samples) a record. It runs ahead of the picture by the
 card's lead, so the ring keeps everything past the EARLIER of the two
 cursors. A record not yet read when its sound is due plays silent, and the
-sound waits for it (`[vb_alate]`). MIXED sound is added over the music.
+sound waits for it (`[vb_alate]`). The frames it played silent are OWED
+(`[vb_aowe]`): once records are read again, the owed ones are passed over
+without being sounded, so the sound comes back level with the picture
+rather than as far behind it as the disk was. MIXED sound is added over the music.
 OWN sound is written in its place, and the music stands still under it.
 
 **The openings follow each other on the next frame**, picture and sound
@@ -237501,9 +237507,14 @@ What it puts in the ring's first 16 KB is copied past its end, into the
 guard. So a record that starts near the end is whole in the guard, and the
 hook decodes it where it lies. The hook gives back what is behind the
 earlier of its picture's cursor and its sound's. A ring is given back to the
-reader once its clip's picture and sound are both over.
+reader once its clip's picture and sound are both over, with its cursors
+back at the clip's top. A clip that fit the ring whole plays again from it
+unread. One that did not has lost its head to its tail, so its ring is
+nobody's. (With the played cursors left as they were, an enemy attacking
+with the clip a member had just played replayed it from its end: an idle
+screen, nothing read.)
 
-**The music streams the same way** (`vb_mpiece`): 4 KB a piece at its own
+**The music streams the same way** (`vb_mpiece`): a piece at its own
 offset, into its ring, and looped on the disk. A ring found empty plays as
 silence and is counted (`[vb_munder]`). **Short music is resident**
 (`VB_MRES`, 60 KB, about 5.5 s at 11 kHz): read once and looped out of
@@ -237533,21 +237544,26 @@ A ring is given to a clip only if it is not playing and not holding the
 action pending or the next most wanted. Moving the cursor drops the head
 being read for the old position and starts the new one. **A piece is 4 KB
 while a menu waits on a key**, so that a key waits behind at most about a
-revolution, **and 16 KB while a clip streams with no menu up**: a quarter of
-the calls.
+revolution, **and as much as the ring has room for, up to 32 KB
+(`VB_SPIECE`), while no menu is up**: an eighth of the calls. A piece is
+cut to its clip's last 4 KB: the last clip in the bundle ends at the file's
+end, and a read past it fails every time the reader asks again (the
+victory clip hung on it).
 
 **A clip far bigger than memory streams.** The demo's Limit is 250 KB
 (118 frames, 7.8 s, 31 KB/s with its sound), about five rings. Measured on
 MartyPC's XT (`os8088_xt_hdd_sb`, the bundle on its XT-IDE C:): it played
 in real time, 7.67 s captured for 7.8 s, inside a battle with 0 late
 frames, 0 stalls, 0 frames of sound late and 0 music underruns. **The rate
-is what limits it, and the disk's kind decides the rate.** The first Limit,
-at 34.6 KB/s, could not be fed. With the music's 11 KB/s that was 46 KB/s,
-and an XT-IDE, whose transfers the CPU makes while it also decodes, gave
-about 35. Its sound ran ahead into records not yet read (67 frames
-silent). The owner's ST11M moves its sectors by DMA, and the encoder
-models it at 119 KB/s (`5150-st225`). The builder budgets each clip
-against its profile's disk (VBATTLE-BUILDER-PLAN 3).
+is what limits it.** The first Limit, at 34.6 KB/s, could not be fed: with
+the music's 11 KB/s that was 46 KB/s, and the reader, then reading 4 KB a
+piece, moved about 35. That was the reader's small pieces and its seeks,
+not the disk: with per-stream cursors and adaptive pieces the same XT-IDE
+moved 57, then 68.6 KB/s while a clip played. Its sound ran ahead into
+records not yet read (67 frames silent); it now waits (`[vb_aowe]`, 125.3).
+The builder budgets each clip against its profile's disk
+(VBATTLE-BUILDER-PLAN 3), and 125.7 has what a disk delivers while the
+engine plays.
 
 The demo battle on a 640 KB machine:
 
@@ -237618,6 +237634,24 @@ an output.
 - the builder (docs/plans/VBATTLE-BUILDER-PLAN.md), which takes footage;
 - menus as a tree, characters and the action verbs (the plan's 11);
 - a suite row.
+
+**What a disk delivers while the engine plays is about half what it
+delivers alone.** Measured on 86Box (a 5150, CGA, SB 2.0, an ST-225 on a
+Seagate ST11M, the owner's disk; 2026-11-04) with a bundle of the owner's
+own three generated clips: an idle of 30 frames, two attacks at 77.3 and
+53.5 KB/s (CGA4, 320x142, 15 fps, encoded for `5150-st225`) and 25.6 s of
+streamed music. The battle played to victory. While a clip played the
+reader moved 59 to 77 KB/s, and every clip stalled: 1.8 to 2.7 s for the
+77 KB/s attack (6 s long), 0.6 to 0.8 s for the 53.5 KB/s ones (5 s). With
+the music resident, so that no read seeks between two streams, the reader
+moved 52 to 62 KB/s and the stalls were the same. So the second stream's
+seeks are not what limits it, and the reader's loop does not wait (its
+`FSXW_FRAME` is the hook's 1.7 ms period): the disk is slowed by the hook's
+decoding. The owner's ST11M plays Video Player's files up to about
+129 KB/s, and the encoder's `5150-st225` budgets 119, so the engine's
+reading under its own decode load is what to measure next, against Video
+Player's on the same machine. Until then a clip for this engine wants
+about 45 KB/s with the music streamed.
 
 **Measured on MartyPC's `os8088_xt_hdd_sb` with the version 3 bundle on
 C:** (2026-11-04).

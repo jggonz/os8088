@@ -106,8 +106,9 @@ VB_CR       equ 49152           ; a CLIP RING: 48 KB, read 4 KB a piece, and a
 VB_CGUARD   equ 16384           ; 16 KB guard past it holding a copy of its
                                 ; first 16 KB, so a record (at most the guard,
                                 ; VH_MAXREC) is whole at its cursor (125.4)
-VB_SPIECE   equ 16384           ; a STREAMING read, while no menu waits on a
-                                ; key: a quarter of the calls (125.4)
+VB_SPIECE   equ 32768           ; the most a read moves while no menu waits
+                                ; on a key: as much as the ring has room for,
+                                ; up to this (125.4)
 VB_HEAD     equ 40960           ; a clip may START once this much is read
                                 ; (or all of it): the rest streams as it plays
 VB_MR       equ 32768           ; the music's ring (3 s at 11 kHz), read
@@ -348,6 +349,9 @@ vb_read:
     push bp
     mov [vb_rseg], es
     mov [vb_rcap], cx
+    add [vb_rbytes], cx             ; (what was read, and in how many calls:
+    adc word [vb_rbytes+2], 0       ; a reader's own account, 125.4)
+    inc word [vb_rcalls]
     mov di, [vb_rcur]
     cmp ax, [di+FSEQ_OFF]           ; where it is already: no seek
     jne .seek
@@ -719,20 +723,31 @@ vb_rpiece:
     jbe .r1
     mov cx, ax
 .r1:
-    mov ax, VB_PIECE                ; the piece: a streaming one where no
-    cmp byte [ds:bp+RG_PLAY], 0     ; menu waits on a key and the ring has
-    je .pc                          ; the room
-    cmp byte [vb_state], GS_MENU
-    je .pc
-    cmp cx, VB_CR - VB_SPIECE
-    ja .pc
-    mov ax, VB_SPIECE
-.pc:
+    mov ax, VB_CR                   ; the room, in whole pieces
+    sub ax, cx
+    jc .none
+    and ax, 0 - VB_PIECE
+    jz .none
+    call vb_psize                   ; the piece: as much of it as the
+    mov cx, [ds:bp+RG_FIDX]         ; moment allows, and no further than
+    neg cx                          ; the guard's end: 64 KB (the ring and
+    jz .p1                          ; its guard) less the index, 0 none
+    cmp ax, cx
+    jbe .p1
+    mov ax, cx
+.p1:
     mov [vb_pn], ax
-    neg ax
-    add ax, VB_CR
-    cmp cx, ax
-    ja .none
+    mov ax, [si+VC_LEN]             ; and no further than the clip's last
+    mov dx, [si+VC_LEN+2]           ; piece: the last clip in the bundle
+    sub ax, [ds:bp+RG_FILL]         ; ends at the file's end, and a read
+    sbb dx, [ds:bp+RG_FILL+2]       ; past that fails - every time, as the
+    jnz .p2                         ; reader asked again (asked before it
+    cmp ax, [vb_pn]                 ; is rounded: 61,441 and up laps)
+    jae .p2
+    add ax, VB_PIECE - 1
+    and ax, 0 - VB_PIECE
+    mov [vb_pn], ax
+.p2:
     mov ax, [ds:bp+RG_FILL]         ; the file offset
     mov dx, [ds:bp+RG_FILL+2]
     add ax, [si+VC_OFF]
@@ -750,10 +765,11 @@ vb_rpiece:
     mov es, ax
     mov ds, ax
     cld
-    mov cx, bx                      ; past the end: to the start
-    add cx, [cs:vb_pn]              ; (DS is the ring's: CS is ours)
-    sub cx, VB_CR
-    jbe .mirror
+    mov cx, [cs:vb_pn]              ; past the end: to the start. (DS is
+    mov ax, VB_CR                   ; the ring's: CS is ours.) Worked from
+    sub ax, bx                      ; the room before the end, not from the
+    sub cx, ax                      ; end's offset: a piece may end at 64 KB
+    jbe .mirror                     ; exactly, which a word cannot hold
     mov si, VB_CR
     xor di, di
     rep movsb
@@ -772,11 +788,17 @@ vb_rpiece:
     rep movsb
 .mirrored:
     pop ds
-    mov ax, bx                      ; the fill index on, wrapped
-    add ax, [vb_pn]
-    cmp ax, VB_CR
-    jb .w
-    sub ax, VB_CR
+    mov ax, VB_CR                   ; the fill index on, wrapped - from the
+    sub ax, bx                      ; room before the end, for the same
+    mov cx, [vb_pn]                 ; reason
+    cmp cx, ax
+    jb .w0
+    sub cx, ax                      ; past it: the piece's overhang
+    mov ax, cx
+    jmp short .w
+.w0:
+    mov ax, bx
+    add ax, cx
 .w:
     mov [ds:bp+RG_FIDX], ax
     pushf                           ; the fill on: published last, and whole
@@ -796,6 +818,22 @@ vb_rpiece:
     pop bp
     pop di
     pop si
+    ret
+
+; vb_psize - AX = the room (a multiple of VB_PIECE) cut to the piece the
+; moment allows (125.4): VB_PIECE while a menu waits on a key, else up to
+; VB_SPIECE - a read costs the kernel a call's overhead whatever it moves,
+; and four 4 KB reads took 80 ms each where one of 16 KB is far less
+vb_psize:
+    cmp byte [vb_state], GS_MENU
+    jne .big
+    mov ax, VB_PIECE
+    ret
+.big:
+    cmp ax, VB_SPIECE
+    jbe .ok
+    mov ax, VB_SPIECE
+.ok:
     ret
 
 ; vb_ringfor - ring BX for clip AL: the one holding it, or else one given
@@ -861,15 +899,39 @@ vb_mpiece:
 .room:
     push si
     push di
+    neg ax                          ; the room, in whole pieces, cut to the
+    add ax, VB_MR                   ; moment's piece and to the ring's wrap
+    and ax, 0 - VB_MPIECE           ; (the guard takes one piece past it)
+    call vb_psize
+    mov bx, [vb_mfill]
+    and bx, VB_MR - 1
+    mov cx, VB_MR + VB_MPIECE
+    sub cx, bx
+    and cx, 0 - VB_MPIECE
+    cmp ax, cx
+    jbe .rs
+    mov ax, cx
+.rs:
+    mov [vb_mpn], ax
+    mov ax, [vb_mrd]                ; past the music's end: no more than it
+    mov dx, [vb_meta+VH_MLEN]       ; (and the next piece reads its top)
+    mov cx, [vb_meta+VH_MLEN+2]
+    sub dx, ax
+    sbb cx, [vb_mrd+2]
+    jnz .rl
+    cmp dx, [vb_mpn]                ; (asked first: rounding 61,441 and up
+    jae .rl                         ; laps 16 bits to a piece of nothing)
+    add dx, VB_MPIECE - 1
+    and dx, 0 - VB_MPIECE
+    mov [vb_mpn], dx
+.rl:
     mov ax, [vb_mrd]
     mov dx, [vb_mrd+2]
     add ax, [vb_meta+VH_MUSIC]
     adc dx, [vb_meta+VH_MUSIC+2]
     mov es, [vb_mring]
-    mov bx, [vb_mfill]
-    and bx, VB_MR - 1
     push bx
-    mov cx, VB_MPIECE
+    mov cx, [vb_mpn]
     mov word [vb_rcur], vb_curm     ; its own cursor
     call vb_read
     pop bx
@@ -880,10 +942,10 @@ vb_mpiece:
     sbb dx, [vb_mrd+2]
     or dx, dx
     jnz .four
-    cmp ax, VB_MPIECE
+    cmp ax, [vb_mpn]
     jbe .v
 .four:
-    mov ax, VB_MPIECE
+    mov ax, [vb_mpn]
 .v:
     mov cx, bx                      ; past the ring's end: to its start
     add cx, ax
@@ -1693,6 +1755,8 @@ vb_chunk:
 vb_aframe:
     push cx
     push di
+    cmp word [vb_aowe], 0           ; a frame owed: the record at the cursor
+    jne .out                        ; is a missed one, and plays as silence
     mov bx, [vb_aring]
     mov dx, [bx+RG_FILL]            ; this frame's record read?
     sub dx, [bx+RG_AOFF]
@@ -1750,16 +1814,19 @@ vb_aframe:
 ; by the music (125.3)
 vb_anext:
     mov word [vb_afpos], 0
+    inc word [vb_aowe]              ; a frame's time is over: one record owed
+.rec:
     mov bx, [vb_aring]
     mov es, [bx+RG_SEG]
     mov si, [bx+RG_AIDX]
-    mov cx, [es:si+RH_LEN]          ; (read: vb_aframe saw it, or it is late
-    mov dx, [bx+RG_FILL]            ; and the frame is skipped only when
-    sub dx, [bx+RG_AOFF]            ; it is)
-    cmp dx, RH_SIZE
-    jb .stay
+    mov dx, [bx+RG_FILL]            ; the record read? If not, the sound's
+    sub dx, [bx+RG_AOFF]            ; frames go on without it, owed, and the
+    cmp dx, RH_SIZE                 ; sound passes over what it missed once
+    jb .stay                        ; it is: it keeps to the picture's
+    mov cx, [es:si+RH_LEN]          ; timeline and never trails it (125.3)
     cmp cx, dx
     ja .stay
+    dec word [vb_aowe]
     add [bx+RG_AOFF], cx
     mov ax, si
     add ax, cx
@@ -1769,7 +1836,11 @@ vb_anext:
 .in:
     mov [bx+RG_AIDX], ax
     dec word [vb_aleft]
-    jnz .out
+    jz .over
+    cmp word [vb_aowe], 0           ; frames missed: passed over too
+    jne .rec
+    ret
+.over:
     ; its sound is over
     mov byte [bx+RG_ADONE], 1
     mov word [vb_aring], 0
@@ -1792,7 +1863,10 @@ vb_anext:
 .out:
     ret
 .stay:
+    cmp word [vb_aowe], 1           ; (this frame's own wait is not late:
+    jbe .st                         ; only a frame that passed with none)
     inc word [vb_alate]
+.st:
     ret
 
 ; vb_asound - the clip's sound booked at [vb_apat] starts now, from its
@@ -1803,6 +1877,7 @@ vb_asound:
     mov word [vb_apring], 0
     mov [vb_aring], bx
     mov word [vb_afpos], 0
+    mov word [vb_aowe], 0
     push bx
     mov al, [vb_apclip]
     xor ah, ah
@@ -2075,8 +2150,27 @@ vb_reader:
     je .free
     cmp byte [bx+RG_ADONE], 0
     je .dn
-.free:
-    mov byte [bx+RG_PLAY], 0
+.free:                              ; and its cursors back at the clip's
+    pushf                           ; top: a clip that fit the ring whole
+    cli                             ; plays again from it unread; one that
+    mov byte [bx+RG_PLAY], 0        ; did not has lost its head to its tail,
+    cmp word [bx+RG_FILL+2], 0      ; and the ring is nobody's. (Its played
+    jne .drop                       ; cursors left as they were, the enemy's
+    cmp word [bx+RG_FILL], VB_CR    ; turn replayed the knight's clip from
+    ja .drop                        ; its end: an idle screen, no reads)
+    xor ax, ax
+    mov [bx+RG_VOFF], ax
+    mov [bx+RG_VIDX], ax
+    mov [bx+RG_AOFF], ax
+    mov [bx+RG_AIDX], ax
+    mov [bx+RG_VDONE], al
+    mov [bx+RG_ADONE], al
+    popf
+    ret
+.drop:
+    mov al, 0xFF
+    call vb_rreset
+    popf
 .dn:
     ret
 .low:                               ; CF=1 ring BX is playing and under half
@@ -2923,6 +3017,9 @@ VB_VAR vb_cur, FSEQ_SIZE
 VB_VAR vb_curm, FSEQ_SIZE
 VB_VAR vb_rcur, 2
 VB_VAR vb_pn, 2
+VB_VAR vb_mpn, 2
+VB_VAR vb_rbytes, 4
+VB_VAR vb_rcalls, 2
 VB_VAR vb_rseg, 2
 VB_VAR vb_rcap, 2
 VB_VAR vb_loaded, 1
@@ -2948,6 +3045,7 @@ VB_VAR vb_stall, 2
 VB_VAR vb_alate, 2
 VB_VAR vb_aring, 2
 VB_VAR vb_aleft, 2
+VB_VAR vb_aowe, 2
 VB_VAR vb_afpos, 2
 VB_VAR vb_aflags, 2
 VB_VAR vb_aown, 1

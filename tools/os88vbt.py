@@ -223,10 +223,15 @@ def build(b):
         return b"".join(recs)
 
     # --- the openings, in turn from a black screen: every record over the
-    # whole screen, a canvas frame with the band's rows black under it
+    # whole screen, a canvas frame with the band's rows black under it.
+    # A battle with none still needs one: the loop's records are deltas, and
+    # nothing would have drawn its first frame. So it gets a START opening,
+    # one frame, silent: idle frame 0 from black
+    openings = b.openings or [dict(name="start", frames=[b.idle[0]],
+                                   sound=None, exit=0)]
     scr = np.zeros((ROWS_FULL, 320), np.uint8)
-    for k, o in enumerate(b.openings):
-        last = k == len(b.openings) - 1
+    for k, o in enumerate(openings):
+        last = k == len(openings) - 1
         fr = [full_of(f) for f in o["frames"]]
         snd = frame_sound(o.get("sound"), len(fr), spf, True)
         prev = surface_of(scr, ROWS_FULL)
@@ -317,7 +322,7 @@ def build(b):
     h = bytearray(SECTOR)
     struct.pack_into("<4sHHBBHHHHHHH", h, 0, MAGIC, VERSION, SECTOR,
                      b.cgapal, rows, b.fps, b.rate, spf, len(clip_rows), n,
-                     len(b.openings), len(ui_tab))
+                     len(openings), len(ui_tab))
     h[24:29] = bytes(ui_ids)
     struct.pack_into("<IH", h, 30, vres_at, len(vres))
     struct.pack_into("<II", h, 36, mus_at, len(pad(mus, ALIGN)))
@@ -329,7 +334,7 @@ def build(b):
     h[64:68] = bytes(b.band)
     struct.pack_into("<HHHH", h, 68, *b.canvas)
     struct.pack_into("<H", h, 76, maxrec[0])
-    opens = list(range(len(b.openings)))
+    opens = list(range(len(openings)))
     if len(opens) > MAX_OPEN:
         raise ValueError("%d openings" % len(opens))
     h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
