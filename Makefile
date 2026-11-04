@@ -19398,13 +19398,19 @@ $(BUILD)/win16/TINYUNK.EXE: tests/win16/tiny16.asm
 	@mkdir -p $(@D)
 	$(NASM) -f bin -w+error -DT16_UNKNOWN -o $@ $<
 
+# The Open Watcom fixtures go in FIXTURES\, each folder being held to 64
+# entries as the root is: the root carries WIN16.O88, DOS.O88 and the TINY16
+# variants, and FIXTURES\ a DOS.O88 of its own beside the programs, so the
+# association's rung 2 (the program's own folder) finds it there too.
 $(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
                         $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
                         tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/win16.o88 \
 	    $(BUILD)/win16/DOS.O88 \
-	    $(sort $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
-	           $(wildcard $(BUILD)/win16/*.EXE)) \
+	    $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
+	    $(addprefix FIXTURES:,$(BUILD)/win16/DOS.O88 \
+	           $(filter-out $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))), \
+	                        $(sort $(wildcard $(BUILD)/win16/*.EXE)))) \
 	    $(APPDATAFOLDER) --folder SYSTEM/APPDATA/WIN16
 
 win16test: $(BUILD)/win16test.img
