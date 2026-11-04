@@ -19829,9 +19829,10 @@ SOAK = [
         "first run is the lead's final pass; kern_mega's selectors are "
         "decoded through the GDT/LDT in `info registers` (tests/pciether.py "
         "MQemu), which one boot confirmed against CS.",
-        needs=("qemu",), serial=True,
+        needs=("qemu", "nasm"), serial=True,
         wants=("build/pciethertest.img", "build/brtest.img",
                "build/megak/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/mega.img",
                "build/browser.o88", "build/browser.map"),
         locks=("port:8090",)),
     Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,

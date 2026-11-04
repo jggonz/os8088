@@ -158,11 +158,12 @@ PCI board (`p54tp4xe`, 16 MB) with 86Box's Realtek RTL8139C+ (`net_01_card =
 rtl8139c+`, SLiRP) booting kern_mega's `make pciethertest` disk with
 `megaapps.img` in B: - the one profile where PCIETHER.DRV meets a period PCI
 BIOS instead of SeaBIOS's. The card's internal name `rtl8139c+` (UI string
-"Realtek RTL8139C+") was read out of the installed 86Box binary; the pinned
-build in `tools/86box/UPSTREAM` was NOT inspected, so a first launch that drops
-the card without a word is the thing to check. It is a place to LOOK (86Box
-cannot be keyed or asserted against); `tests/pciether.py` is the gate and
-runs under QEMU.
+"Realtek RTL8139C+") is `src/network/net_rtl8139.c`'s `.internal_name` at the
+commit `tools/86box/UPSTREAM` pins, and the installed app's agrees. The link
+key is left out, as `vm/xt-wire`'s is: absent is every speed and the cable
+up, where `net_01_link = 0` is a link with no speed at all. It is a place to
+LOOK (86Box cannot be keyed or asserted against); `tests/pciether.py` is the
+gate and runs under QEMU.
 `vm/286-mega-ems` is `vm/286-mega` with 86Box's Lo-tech EMS board
 (`isamem0_type = lotechems`: registers 260h, frame E000h, 2 MB) added and
 nothing else changed - the one machine here that gives kern_mega expanded

@@ -15412,7 +15412,7 @@ pciethertest: $(BUILD)/pciethertest.img
 # daemonized, and is not `make test`'s, so it is NOT stamped and builds nothing.
 .PHONY: run-pciether
 run-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
-	$(QEMU) -m 16 -machine pc \
+	$(QEMU) -m 16 $(QEMUMACH) \
 		-drive file=$(BUILD)/pciethertest.img,format=raw,if=floppy \
 		-drive file=$(BUILD)/megaapps.img,format=raw,if=floppy,index=1 -boot a $(MOUSE) \
 		-netdev user,id=n0 -device rtl8139,netdev=n0 \

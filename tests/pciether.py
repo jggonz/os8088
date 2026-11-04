@@ -52,7 +52,8 @@ REFUSING the map unless the result is byte-identical to build/pciether.bin
 (tests/ethernet.py's `ether_syms`). A knob or define that the Makefile adds
 to the driver's rule must be named in $PCIETHER_DEFINES (space separated, no
 -D) or every lookup is refused - a map of a different build is worse than none.
-$PCIETHER_ROW names the `drv_tab` row if the one-segment rule is not enough.
+The `drv_tab` row is the one whose file pointer is the kernel's
+`drv_f_pcieth` (kernel/driver.inc, SPEC.md 125.5), found through the map.
 
 THE DRIVER IS ASKED FOR BY A SYSTEM.CFG that `make pciethertest` puts on the
 disk, so nothing here drives the Control Panel: it is attached and DHCP has
@@ -65,10 +66,8 @@ and LDT decode checked against CS=0060 = base 0x600) and has not been run.
 """
 import os
 import re
-import shutil
 import subprocess
 import sys
-import tempfile
 import time
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -92,8 +91,6 @@ dotted = eth.dotted
 PORT = eth.PORT                          # 8090: the shared lease serialises
 PATH = "/pci.htm"
 URL = "http://10.0.2.2:%d%s" % (PORT, PATH)
-DRVR_SZ, DRVR_SEG = eth.DRVR_SZ, eth.DRVR_SEG
-DRV_ROWS = 12                            # rows read when DRV_MAX is not an equate
 DH_BOUND, BN_DONE, BN_ERR = eth.DH_BOUND, eth.BN_DONE, eth.BN_ERR
 TI = 4                                   # a selector's table-indicator bit
 
@@ -118,16 +115,33 @@ class MQemu(eth.Qemu):
         self._ldt = self._gdt = None
 
     def _tables(self):
-        if self._gdt is None:
+        """GDTR and the LDT's cached base and limit, KEPT ONLY ONCE THEY ARE
+        kern_mega's: read before the switch (or mid-boot) they are SeaBIOS's
+        GDT and an empty LDT, and a selector decoded through those reads the
+        interrupt vector table as a descriptor - plausible bytes, wrong
+        answer. So the pair is taken with CR0.PE set and an LDT loaded (the
+        rule os88megabochs' gdt_base keeps under Bochs), and a read that
+        lands in a real-mode BIOS reflection is simply taken again."""
+        tries = 0
+        while self._gdt is None:
             txt = self.hmp("info registers")
             g = re.search(r"^GDT=\s*([0-9a-f]+)\s+([0-9a-f]+)", txt, re.M)
             l = re.search(r"^LDT=([0-9a-f]+)\s+([0-9a-f]+)\s+([0-9a-f]+)",
                           txt, re.M)
-            if not g or not l:
-                raise RuntimeError("no GDT/LDT in `info registers`: %r"
+            c = re.search(r"\bCR0=([0-9a-f]+)", txt)
+            if not g or not l or not c:
+                raise RuntimeError("no GDT/LDT/CR0 in `info registers`: %r"
                                    % txt[:200])
-            self._gdt = (int(g.group(1), 16), int(g.group(2), 16))
-            self._ldt = (int(l.group(2), 16), int(l.group(3), 16))
+            if int(c.group(1), 16) & 1 and int(l.group(1), 16) & 0xFFFC:
+                self._gdt = (int(g.group(1), 16), int(g.group(2), 16))
+                self._ldt = (int(l.group(2), 16), int(l.group(3), 16))
+                break
+            tries += 1
+            if tries > 50:
+                raise RuntimeError("kern_mega never showed protected mode "
+                                   "with an LDT loaded (CR0=%s, LDT=%s)"
+                                   % (c.group(1), l.group(1)))
+            os88qemu.pace(self, 0.1)
         return self._gdt, self._ldt
 
     def sel_base(self, sel):
@@ -149,39 +163,14 @@ class MQemu(eth.Qemu):
         return self.read(self.lin(seg, off), n)
 
 
-def map_syms(path):
-    """label -> address from an nasm [map all] file (browser.map's shape)"""
-    out = {}
-    with open(path, encoding="ascii") as f:
-        for line in f:
-            fl = line.split()
-            if len(fl) >= 3 and re.fullmatch(r"[0-9A-Fa-f]+", fl[0]):
-                out[fl[-1]] = int(fl[0], 16)
-    return out
-
-
 def pciether_syms():
-    """drivers/pciether/pciether.asm's symbols, REFUSED unless the assembly
-    is byte-identical to build/pciether.bin (ether_syms' rule)"""
-    with tempfile.TemporaryDirectory() as d:
-        src = os.path.join(d, "p.asm")
-        mp = os.path.join(d, "p.map")
-        out = os.path.join(d, "p.bin")
-        shutil.copy("drivers/pciether/pciether.asm", src)
-        with open(src, "a") as f:
-            f.write("\n[map all %s]\n" % mp)
-        defs = ["-D" + n for n in os.environ.get("PCIETHER_DEFINES", "").split()]
-        subprocess.run(["nasm", "-f", "bin", "-w+error"] + defs
-                       + ["-I", "drivers/pciether/", "-I", "drivers/ether/",
-                          "-I", "drivers/net/", "-I", "drivers/",
-                          "-I", "apps/", "-o", out, src], check=True)
-        if open(out, "rb").read() != open(
-                eth.os88build.at("build/pciether.bin"), "rb").read():
-            sys.exit("pciether: the mapped build is not build/pciether.bin "
-                     "(a define in the Makefile's rule? name it in "
-                     "$PCIETHER_DEFINES) - every offset it names would be "
-                     "plausible and wrong")
-        return map_syms(mp)
+    """drivers/pciether/pciether.asm's symbols through tests/ethernet.py's own
+    reader - REFUSED unless the assembly is byte-identical to
+    build/pciether.bin. The Makefile's rule passes no -D (ETHER.DRV's knobs
+    do not reach it), so $PCIETHER_DEFINES is empty unless one is added."""
+    return eth.ether_syms("drivers/pciether/pciether.asm", "build/pciether.bin",
+                          incs=("drivers/pciether/",),
+                          defs=os.environ.get("PCIETHER_DEFINES", "").split())
 
 
 def main():
@@ -191,13 +180,25 @@ def main():
     # a Setup-window ETHER.CFG written by a run never reaches the built image
     os88fixture.need("build/pciethertest.img", "build/brtest.img",
                      "build/megak/kernel.map", "build/pciether.bin",
-                     "build/browser.map")
+                     "build/browser.map", "build/pciether.drv",
+                     "build/mega.img", "build/browser.o88")
+    # A DISK OLDER THAN WHAT IT CARRIES tests the previous binary and reports
+    # on this one (tests/ethernet.py's `stale` check, one disk further)
+    for img, src, how in (("build/pciethertest.img", "build/pciether.drv",
+                           "make pciethertest"),
+                          ("build/pciethertest.img", "build/mega.img",
+                           "make pciethertest"),
+                          ("build/brtest.img", "build/browser.o88",
+                           "make browsertest")):
+        if eth.stale(eth.os88build.at(img), eth.os88build.at(src)):
+            sys.exit("pciether: %s is OLDER than %s - run `%s` (this would "
+                     "have tested the wrong binary)" % (img, src, how))
     syms = pciether_syms()
     for n in ("eth_mac", "eth_ip", "eth_gw", "eth_dns", "dhcp_st",
               "eth_nrx", "eth_ntx", "eth_novw"):
         if n not in syms:
             sys.exit("pciether: %s is not in the driver's map" % n)
-    bsyms = map_syms(eth.os88build.at("build/browser.map"))
+    bsyms = os88sym._parse_map(eth.os88build.at("build/browser.map"))[0]
     for n in ("br_nstate", "br_nlines"):
         if n not in bsyms:
             sys.exit("pciether: %s is not in build/browser.map" % n)
@@ -211,36 +212,60 @@ def main():
     m = MQemu()
     try:
         # --- 1: a card, and an address ------------------------------------
-        try:                    # DRV_MAX is an `equ`: the kernel's own count
-            nrows = int(os88sym.equates()["DRV_MAX"])
-        except Exception:       # noqa: BLE001 - not an exported equate
-            nrows = DRV_ROWS
+        # THE ROW IS FOUND BY ITS FILE NAME, not by being the last one live:
+        # kernel/driver.inc's row names `drv_f_pcieth` (SPEC.md 125.5), so a
+        # kernel without the row is refused HERE, in words, rather than some
+        # other driver's segment being read as this one's
+        ksyms = os88sym.syms()
+        if "drv_f_pcieth" not in ksyms:
+            m.quit()
+            sys.exit("pciether: build/megak's kernel has no drv_f_pcieth - "
+                     "kern_mega without PCIETHER.DRV's drv_tab row (SPEC.md "
+                     "125.5)")
+        # the row's layout is the kernel's own (kernel/driver.inc's DRVR_*
+        # equates), never a mirror of it in this file
+        eq = os88sym.equates()
+        nrows = int(eq["DRV_MAX"])
+        DRVR_SZ, DRVR_SEG, DRVR_FILE, DRVR_WANT, DRVR_ERR = (
+            int(eq[n]) for n in ("DRVR_SIZE", "DRVR_SEG", "DRVR_FILE",
+                                 "DRVR_WANT", "DRVR_ERR"))
+        # ...read once the kernel IS in memory: before POST hands over,
+        # drv_tab is zeros and no row would name anything
+        if not os88qemu.kernel_up(m, S, secs=180):
+            m.quit()
+            sys.exit("pciether: kern_mega never reached the desktop")
+        raw = m.read(S("drv_tab"), nrows * DRVR_SZ)
+        hits = [i for i in range(nrows)
+                if u16(raw, i * DRVR_SZ + DRVR_FILE) == ksyms["drv_f_pcieth"]]
+        if len(hits) != 1:
+            m.quit()
+            sys.exit("pciether: %d drv_tab rows name PCIETHER.DRV" % len(hits))
+        row = hits[0]
 
         def rows():
             raw = m.read(S("drv_tab"), nrows * DRVR_SZ)
             return [u16(raw, i * DRVR_SZ + DRVR_SEG) for i in range(nrows)]
 
-        def pci_row():
-            if os.environ.get("PCIETHER_ROW"):
-                return int(os.environ["PCIETHER_ROW"])
-            live = [i for i, s in enumerate(rows()) if s]
-            return live[-1] if live else None
+        def rowbyte(off):
+            return m.read(S("drv_tab") + row * DRVR_SZ + off, 1)[0]
 
-        os88qemu.kernel_up(m, S, secs=180)
-        os88qemu.acted(m, lambda: pci_row() is not None, secs=90,
+        os88qemu.acted(m, lambda: rows()[row] != 0, secs=90,
                        what="PCIETHER.DRV's drv_tab row", poll=0.4)
-        row = pci_row()
-        if row is None:
-            m.quit()
-            sys.exit("pciether: PCIETHER.DRV never attached - no RTL8139 was "
-                     "found by the PCI BIOS, or SYSTEM.CFG's bit is not the "
-                     "kernel's (make pciethertest PCIETHER_CFGBIT=<n>)")
-        live = [i for i, s in enumerate(rows()) if s]
-        if len(live) != 1:
-            fails.append("%d drv_tab rows hold a segment (%s): the gate disk "
-                         "asks for one driver" % (len(live), live))
         seg = os88qemu.quiesce(m, lambda: rows()[row], secs=0.5, stable=3,
                                what="PCIETHER.DRV's segment")
+        if not seg:
+            want, err = rowbyte(DRVR_WANT), rowbyte(DRVR_ERR)
+            m.quit()
+            sys.exit("pciether: PCIETHER.DRV never attached (row %d: wanted "
+                     "%d, DRVE_* %d). Wanted 0 is SYSTEM.CFG's bit not being "
+                     "the kernel's (make pciethertest PCIETHER_CFGBIT=<n>); "
+                     "DRVE_NOHW is no RTL8139 found by the PCI BIOS - or no "
+                     "ring memory, which reads the same (drv-report)"
+                     % (row, want, err))
+        live = [i for i, s in enumerate(rows()) if s]
+        if live != [row]:
+            fails.append("drv_tab rows %s hold a segment: the gate disk asks "
+                         "for PCIETHER.DRV (row %d) alone" % (live, row))
         say("PCIETHER.DRV: row %d, selector/segment %04X, base %06X"
             % (row, seg, m.lin(seg)))
 

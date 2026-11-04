@@ -239378,12 +239378,12 @@ and on no other image. A gate disk with `SYSTEM.CFG` already wanting it
 PCI machine with its RTL8139C+ is where a person LOOKS.
 
 *Shipped (harness, S7-S9, unrun until the lead's final pass):* `MEGADRIVERS`
-(Makefile) names `$(BUILD)/pciether.drv`, so `make mega` stops with make's
-"No rule to make target" until the driver's rule is merged - on purpose, a
-mega disk must not quietly ship without it. `make pciethertest` builds
-`build/pciethertest.img` (`mega.img`'s files plus a `SYSTEM.CFG` whose bit is
-`PCIETHER_CFGBIT`, default 11, the first after HTTPFS.DRV's 10 - the kernel's
-`drv_cfgbit` is the authority and the variable follows it). `make
+(Makefile) names `$(BUILD)/pciether.drv` as a prerequisite of both kern_mega
+system disks, so a tree without the driver's rule stops `make mega` with
+make's "No rule to make target" - a mega disk must not quietly ship without
+it. `make pciethertest` builds `build/pciethertest.img` (`mega.img`'s files
+plus a `SYSTEM.CFG` whose bit is `PCIETHER_CFGBIT`, default 11 - §125.5's bit;
+the kernel's `drv_cfgbit` is the authority and the variable follows it). `make
 run-pciether` is the interactive QEMU machine (`-m 16`, `-device rtl8139` on
 user networking); `os88qemu.make_test("PCIETHER=1", ...)` is the same machine
 for rows, and `tests/pciether.py` (soak row `pciether`) is the gate.
