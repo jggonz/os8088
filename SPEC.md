@@ -233429,6 +233429,27 @@ That method reproduces the VGA card's numbers exactly.
 `SetWindowPos` take `SM_CYCAPTION - 1` off a window's height to find its
 client (§124.8), so the sizing and the answer agree on every display.
 
+#### 124.8.3 A part is not dropped while it runs *(WIN16-NEXT, `astexit`)*
+
+A program that ends inside a callback the **menu code** or the task part
+made, as Game > Exit of Microsoft Arcade's ASTEROID does, ended with its
+parts on the stack: the part called back into the image (ICALL), the image
+saw the program had ended (`w16_after`) and gave the program's memory back,
+parts included (`w16_freeprog`), and `w16_ibgate`'s `retf` then returned into
+a part that was gone. On kern_big and the real-mode arm the freed block was
+still there to return into, so it passed; on kern_mega the part's code alias
+is freed with it and the `retf` is a #GP on a selector that no longer exists,
+which closed the program with `0D at cs:068F`.
+
+So a part never ends the program in its caller's frame. A part reaches
+`w16_after` through **`w16_afterp`**, which for the one case that frees (the
+program ended, one task, nothing to say) only posts the close and sets
+`[w16_defer]`; every other case is `w16_after`. The close arrives from the
+UI task with no part on the stack, and `w16_close` gives the program's
+memory back there. The window stays up for that one UI pass with the
+program's memory still intact, which is a longer life than it had before,
+not a shorter one.
+
 ### 124.9 Memory: the global and local heaps *(shipped in S5)*
 
 **The global heap** is WIN16's, sub-allocated inside ARENAS, at most

@@ -547,7 +547,7 @@ w16t_serve:
 .kick:
     ICALL w16_kick
 .after:
-    ICALL w16_after
+    ICALL w16_afterp
 .out:
     pop di
     pop si

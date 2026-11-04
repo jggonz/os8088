@@ -811,6 +811,7 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16_ahm, 2
     W16BSS w16_kmods, W16_NSCAN ; each scan code's shift state when pressed
     W16BSS w16_closeq, 1        ; 1 = a WM_CLOSE of ours is not taken yet
+    W16BSS w16_defer, 1         ; 1 = w16_close owes w16_freeprog (124.8.3)
     W16BSS w16_ctop, 2          ; w16_ppaint: the client's top, screen
     ; --- S6: the dialog part (w16dlg.inc, SPEC.md 124.13) ---
     W16BSS w16_dseg, 2          ; its segment, 0 = not fetched
@@ -1454,6 +1455,22 @@ w16_after:
     jb .one                         ;   the other tasks take their turns
     TCALL w16t_turns                ;   (SPEC.md 124.28.4)
 .one:
+    ret
+
+; w16_afterp - w16_after for a caller that is a PART (ICALL): a part is not
+; dropped while it runs, and w16_freeprog drops them (SPEC.md 124.8.3). The
+; one case that frees, the last task ended with nothing to say, only posts the
+; close and owes the free to w16_close, where no part is on the stack.
+w16_afterp:
+    cmp byte [w16_state], W16S_ENDED
+    jne w16_after
+    cmp byte [w16_ntk], 2
+    jae w16_after
+    cmp byte [w16_endmsg], 0
+    jne w16_after
+    mov byte [w16_defer], 1
+    mov bx, [w16_win]
+    call OSAPI_WM_CLOSE
     ret
 
 ; w16_cbin - SI = the os8088 window a callback is about: with several tasks,
