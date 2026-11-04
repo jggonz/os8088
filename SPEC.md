@@ -237180,7 +237180,8 @@ the measured targets has a relocation that names a discardable segment by
 its number from elsewhere: not Write, Windows Help, Terminal, File Manager,
 Control Panel, Program Manager or either Paintbrush. Should a program have
 one, that segment is **kept**: loaded at launch and never discarded, since
-the reference holds its paragraph. A reference from the segment to itself
+the reference holds its paragraph. On the real-mode arm a reference that is
+only far calls goes through thunks instead (§124.26.14). A reference from the segment to itself
 is applied again each time it is loaded, so it does not keep it.
 
 #### 124.26.2 One thunk an entry *(S20 batch 1)*
@@ -237686,6 +237687,138 @@ with discardable code keeps the part as well.
 **A library's end** (its count reaching 0, §124.23.5). Its loaded
 discardable segments and its module block are given back with its other
 blocks.
+
+#### 124.26.14 A segment reached only by far calls goes through thunks *(WIN16-NEXT, c3; the real-mode arm)*
+
+§124.26.1 keeps a discardable segment that another segment names by its
+number, because a number in a register or a data word cannot be moved to a
+thunk. That keeps a lot of code that is not at risk: InstallShield's
+`_INST16.EXE` (Sir Hangman's engine) has 64 discardable segments, and 24 of
+them (88,610 of 404,621 bytes, 217 distinct targets) are named only as
+`CALL FAR seg:off`; counting a segment's references to itself as no reference,
+36 are (136,100 bytes, 359 distinct targets). Real-mode Windows ran that
+program with them discardable. Measured with `tools/os88ne.py`'s tables,
+2026-11-04. 26 more segments (240,345 bytes) are named from DGROUP too, as far
+pointers in tables of procedures, and stay kept: see *What it leaves*.
+
+**The rule (`kern_big` and `kern_small`, `%ifndef PKG_MEGA`).** A relocation
+is a **far-call reference** when all of these hold: it is an internal
+relocation to a segment by number (`target1` is not 0FFh), of address type 2
+(selector), not additive; the segment named is discardable (§124.26.1) and is
+not the segment holding the site (`w16l_c3ok`; a module block then has
+thunks added for it, below). Such a reference is **proved, site by site**, when the site's bytes are
+in memory (at the apply pass, §124.26.3 step 2): the segment holding the site
+is a code segment, the byte three before the site is `9Ah` (`CALL FAR`) or
+`0EAh` (`JMP FAR`), and the offset word just before the site is below the
+target segment's size. The linker's record is a selector fixup with the offset
+as a literal in the instruction, so the offset is read there and no relocation
+names it.
+
+**What a proved record does.** The record's chain is walked three times
+(`w16l_c3walk`): every site checked, then a thunk made for each site's
+(segment, offset) pair, then each site written, its offset word to the thunk's
+offset and its selector word to the module block's thunk paragraph. A record
+that fails the check makes no thunk, and one whose thunks were all made cannot
+fail while it is written, so a chain is never left half rewritten (its next
+links are in the selector words). A thunk is §124.26.2's, jumping far to the
+target when its segment is loaded and calling `w16_thkhit` when it is not, so
+the same discard, reload and stack scan apply. A pair is given ONE thunk: a
+record's sites and every other record's that call the same offset share it,
+and so does an entry's thunk for the same pair (§124.26.2), which is the same
+eight bytes. A record whose first site is outside its segment is not proved,
+so the apply pass refuses it as before.
+
+**What a record that is not proved does.** If any site of the record fails the
+test above, or the thunk table is full, the segment is **kept**, as §124.26.1 always
+did, but *when the record is applied* and not at launch: its flag is set,
+a block is taken for it if it has none, and the site is given its own
+paragraph. Its content is read after the segment being loaded is done
+(`w16l_pend`; at a launch, after the apply pass), because reading it uses the
+relocation room that the records being applied are in. A launch's pass 0
+no longer keeps a segment for a reference of this kind: every other reference
+(far pointer, offset only, additive, a data segment's site, a protected-mode-only
+module's) still keeps it at pass 0 as before.
+
+**The thunks it adds.** `w16l_cmake` counts the records that could be
+far-call references (`w16l_c3ok`, by their address type and target only: the
+bytes are not in memory yet) and, if there are any, adds
+`min(max(2 * count, 16), 512)` thunks to the end of the thunk table
+(`w16_cnord` counts them; 8 bytes each, so 128 bytes to 4 KB in the module
+block). A pair's thunk is looked for in the WHOLE table (`w16l_xfind`), and a
+new one takes the first free slot: an added one, or an ordinal's that has no
+thunk because its entry is not in a discardable segment, which no relocation,
+`GetProcAddress` or discard ever reads. The search is linear, `w16_cnord`
+slots a miss. On an 8088 that is about 60 cycles a slot, so a segment with
+200 far-call sites into a module with 600 slots spends of the order of a
+second on it each time it is loaded; it is the price of the memory, and a
+segment whose calls are all kept costs nothing.
+
+**The census follows a thunk** *(the 8088's, §124.4.1)*. It runs after
+relocation and follows a far call to the segment its operand names, so a call
+rewritten to a thunk would end its walk there, and the code reached only
+through it would not be swept: a 186 instruction in it would run as something
+else. `w16c_far` reads a call into the module block's thunk paragraph as the
+(segment, offset) the thunk names, an entry's thunk too, whose code is a seed
+anyway. `t_w16cens` (fast) runs every program a second time with its far calls
+laid out through thunks, and fails without it.
+
+**The segment a thunk loads is held while the segments it kept are read.**
+`w16l_segin1` fills the segment, then `w16l_pend` reads the ones its records
+kept, whose own records may need room. The new segment is no longer
+`W16CLF_NEW` and not yet named by any stack (`w16_segld` jumps to it after),
+so it is marked `W16CLF_HOLD` (8) for that time and the discard
+(`w16l_oldest`) passes it over. A segment found kept with no block (one
+whose read failed under another program, in a shared library) is given one
+again by the next record that names it.
+
+**The risk, and how it is bounded.** A segment that is reached only by the
+calls above is discarded while some other place holds its address: a
+`PUSH CS` or `MOV AX,CS` that stores the segment (a procedure's address built
+at run time, a CS-relative table), a far pointer built from a
+selector fixup the test classed as a call, or a byte that is `9Ah` by chance.
+In real mode the stale address does not fault; it runs whatever is in that
+memory now. The bounds:
+
+1. The record is proved site by site, so one non-call site, in code or in
+   data, keeps the whole segment.
+2. A library's or program's segment that names ITSELF is not given a thunk
+   (it is applied again at each load), and §124.26.11's keep of a library's
+   self-naming segment stands.
+3. A protected-mode-only module is refused by the real-mode arm, so
+   the programs that keep `PUSH CS` pointers because Windows' protected modes
+   kept their selectors (VBRUN300, Mozart) never reach this rule. They are
+   the programs for which the proposal's 27 segments (39 KB) would have been
+   found, and they stay on `kern_mega`, where §124.26.10 is O8's.
+4. The §124.26.5 scan still holds a segment while any far return address
+   names it, which covers every call out of it.
+
+Not bounded: a real-mode program that stores its own CS and calls it after the
+segment is discarded. Such a program broke in real-mode Windows too when
+Windows moved or discarded the segment; the check for `9Ah`/`0EAh` is a
+filter and not a proof of the instruction stream. A selector site in code
+that is no call but has `9Ah` three bytes before it by chance, and a word
+below the target's size just before it, has those two bytes rewritten as an
+offset: `mov ax, seg X` (`B8`) cannot pass the size test against a segment
+under 47,104 bytes, `mov word [bx], seg X` (`C7 07`, 1,991) can, after an
+instruction ending in `9Ah`.
+
+**What it leaves.** A selector fixup in a DATA segment is a far pointer in a
+table, a procedure's address or a pointer to data in code, and nothing in the
+file says which: it keeps its target (the lead's scoping: far calls only). On
+`_INST16.EXE` that is 26 of the 64 segments and 240 KB, which is why Sir
+Hangman's engine still does not run on a 640 KB machine with this rule alone.
+Taking those pointers through thunks as well (a pointer to a thunk is a
+procedure's address in any program that called it; one that read the segment's
+bytes through it would read the thunk) would make 62 of the 64 discardable. It
+is a decision, not a build fix, and is not taken here.
+
+**Costs.** Resident (image + bss of `WIN16.O88`): 0 bytes. The loader and
+the census are part 5 (§124.18.7), so their growth is the part's and the kept
+copy's: 642 bytes (17,667 to 18,309, measured against plan/win16-next's
+9ca188639). The added thunks are the module block's, and their number is the
+one above. `kern_mega`'s arm is
+unchanged: its relocations still take §124.26.1's rule (O8 covers the same
+segments there).
 
 ### 124.27 Windows inside a window: File Manager and Program Manager *(S20b, docs/plans/WIN16-ANY-PLAN.md)*
 
