@@ -4856,6 +4856,7 @@ $(shell mkdir -p $(BUILD); \
 # did nothing; the profiler's own symbol reader is what caught it, because it
 # re-assembles the source and refuses a build/ether.bin that does not match.
 $(BUILD)/ether.bin: drivers/ether/ether.asm drivers/ether/ne2000.inc \
+                    drivers/ether/ethdrv.inc drivers/ether/nicne2k.inc \
                     drivers/ether/inet.inc drivers/ether/tcp.inc \
                     drivers/ether/dns.inc drivers/ether/etherui.inc \
                     drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \
@@ -4873,6 +4874,33 @@ $(BUILD)/ether.bin: $(ETHSTAMP)
 
 $(BUILD)/ether.drv: $(BUILD)/ether.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ether.bin -o $@
+
+# PCIETHER.DRV (SPEC.md 125): the PCI half of the above, kern_mega only. It is
+# ether.asm's body (ethdrv.inc) and the stack's includes SHARED AS SOURCE over
+# a PCI backend, so every file the stack is made of is a prerequisite, and
+# ETHER.DRV's knobs (ETHDEF: a baked-in base or address, the stage timers) are
+# NOT passed - none of them means anything on a PCI bus. It is in `all` so it
+# keeps assembling; it is on NO disk here (kern_mega's recipes add it, 125.6).
+$(BUILD)/pciether.bin: drivers/pciether/pciether.asm drivers/pciether/pcifamily.inc \
+                       drivers/pciether/pci.inc drivers/pciether/rtl8139.inc \
+                       drivers/ether/ethdrv.inc \
+                       drivers/ether/inet.inc drivers/ether/tcp.inc \
+                       drivers/ether/dns.inc drivers/ether/etherui.inc \
+                       drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \
+                       drivers/ether/ethstate.inc drivers/ether/ethsock.inc \
+                       drivers/ether/ethusr.inc \
+                       drivers/net/netpkg.inc drivers/os88drv.inc \
+                       drivers/wirezone.inc \
+                       apps/os88api.inc apps/os88ui.inc apps/os88line.inc \
+                       | $(BUILD)
+	$(NASM) -f bin -w+error -I drivers/pciether/ -I drivers/ether/ \
+	        -I drivers/net/ -I drivers/ -I apps/ -o $@ $<
+	@echo "pciether: $(call FILESIZE,$@) bytes"
+
+$(BUILD)/pciether.drv: $(BUILD)/pciether.bin tools/os88drv.py $(PKGZSTAMP)
+	$(OS88DRV) $(BUILD)/pciether.bin -o $@
+
+all: $(BUILD)/pciether.drv
 
 # IT CARRIES THE WHOLE TCP/IP STACK NOW (SPEC.md 62.11.1): /N serves sockets,
 # and the stack it serves them with is drivers/ether's own, over a packet

@@ -24,10 +24,8 @@ ECM_MAN     equ 1
 eth_base:   dw 0                ; the card's I/O base, 0 = none
 eth_up:     db 0                ; ne_init has run
 eth_word:   db 0                ; 1 = a 16-bit card (NE2000), read 8-bit anyway
-eth_txpg:   db NE_TXPAGE        ; the ring, as ne_init picked it
-eth_pstart: db NE_PSTART
-eth_pstop:  db NE_PSTOP
-eth_next:   db NE_PSTART + 1    ; the page WE will read next
+    NIC_STATE                   ; the backend's own words (nicne2k.inc: the
+                                ; 8390's ring, as ne_init picked it)
 eth_mac:    times 6 db 0
 eth_bcmac:                      ; ...and the one every broadcast goes to,
 ip_bcast:   times 6 db 0xFF     ; whose first four bytes are also the IP
@@ -181,7 +179,7 @@ eth_cslot:  db 0xFF             ; the slot inside the current verb, which
                                 ; sk_alloc stamps on a new socket
 sk_tab:     times NET_SOCKS * SK_SZ db 0
 eth_rxh:    times 4 db 0        ; the card's own four-byte receive header
-eth_rxb:    times NE_FRAME + 4 db 0
-eth_txb:    times NE_FRAME + 4 db 0
+eth_rxb:    times NIC_FRAME + 4 db 0
+eth_txb:    times NIC_FRAME + 4 db 0
 %endif
 
