@@ -121,16 +121,54 @@ W16TSK w16i_dresalloc
     xor dx, dx
     ret
 
-; GetDOSEnvironment (KERNEL.131) - no args. A program WIN16 starts has no
-; environment (its PSP's word 2Ch is 0), so the answer is an empty one: a
-; NUL that ends the list at once, in this part, which is kept until the
-; program ends
+; GetDOSEnvironment (KERNEL.131) - no args. Windows answers the task's
+; environment as SELECTOR:0 (DX the selector, AX = 0): a library's C start-up
+; reads it either way round (`or ax, ax / jz / mov dx, ax` loads AX into ES,
+; which a part's own offset faults), and scans it from offset 0 to the
+; double NUL. A program WIN16 starts has no environment (its PSP's word 2Ch
+; is 0), so the block is an empty one - NUL NUL, a word 1 and the program's
+; path an empty string - in a 32-byte GlobalAlloc block the task owns (freed
+; with it) and is made at the first ask (SPEC.md 124.25.20). [w16_envp] is
+; its data paragraph; a block that is not still the current task's, with the
+; word 1 in it, is made again
 W16TSK w16i_dosenv
-    mov ax, w16i_noenv              ; XSEC-OK: a far pointer into this part
-    mov dx, cs
+    mov ax, [w16_envp]
+    or ax, ax
+    jz .make
+    dec ax
+    W16SEG es, ax
+    inc ax
+    cmp word [es:GH_MAGIC], GH_SIG
+    jne .make
+    mov dl, [w16_cur]
+    inc dl
+    cmp [es:GH_TASK], dl
+    jne .make
+    W16SEG es, ax
+    cmp word [es:2], 1
+    je .have
+.make:
+    xor dx, dx
+    mov ax, 32
+    mov cl, GMEM_ZEROINIT           ; fixed: its handle is its paragraph
+    ICALL w16_gnew                  ; AX = DX = the data, 0 none
+    or ax, ax
+    jz .none
+    mov dx, ax
+    ICALL w16_gmine
+    mov [w16_envp], ax
+    W16SEG es, ax
+    mov word [es:2], 1
+.have:
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; the program's selector for it
+%endif
+    mov dx, ax
+    xor ax, ax
     ret
-w16i_noenv:
-    dw 0
+.none:
+    xor dx, dx                      ; NULL: a start-up that tests for it
+    ret                             ;   (AX is 0)
 
 ; LongPtrAdd (KERNEL.180) - args: +0 dwAdd, +4 lpPtr. Real mode's answer:
 ; the pointer moved on by dwAdd bytes, its offset the low four bits. File

@@ -17177,6 +17177,17 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16dosenv", "soak", py("tests/win16dosenv.py"), 60.0,
+        "SPEC.md 124.25.20, WIN16-NEXT `vbxlib`: DOSENV.EXE (`make "
+        "win16fixtures`, tests/win16/dosenv.c) asks GetDOSEnvironment for the "
+        "task's environment: the offset must be 0, the selector readable (a C "
+        "start-up that loads a nonzero AX into ES faulted Mozart's "
+        "BMUTILS.DLL), the list must end at a double NUL followed by the word "
+        "1, and a second call must answer the same block; its MessageBox "
+        "must be DOSENV OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
         "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
         "tests/win16/longname.c) asks for a dialog named in 21 characters "

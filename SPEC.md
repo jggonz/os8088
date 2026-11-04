@@ -237319,6 +237319,44 @@ bytes on `kern_mega`), so a heap that never fills never fetches it.
 `LocalReAlloc` of one larger, and a `LocalInit` heap in a locked
 `GlobalAlloc` block that grows.
 
+#### 124.25.20 `GetDOSEnvironment` answers SELECTOR:0 *(WIN16-NEXT `vbxlib`)*
+
+Microsoft Mozart (Visual Basic 3.0) loads `BMUTILS.DLL` after its custom
+controls, and the library's Microsoft C start-up died there. The start-up
+calls `LocalInit`, `GetVersion`, `int 21h AH=30h` and `GetDOSEnvironment`,
+then reads the answer as `or ax, ax` / `jz .a` / `mov dx, ax`, `mov es, dx`,
+and scans ES:0 for the double NUL that ends the list. WIN16 had answered
+the far pointer of a word in its own part: AX = the word's offset (nonzero),
+DX = the part's code selector. The start-up took AX for the segment, loaded
+ES with 00B7h and took #GP 0D at the `mov es, dx` (278C:13D1 of the
+library, named by reading the library's code selector's base out of the
+LDT and the code at it). Other libraries of the family (`MSGBLAST.VBX`,
+`PICCLIP.VBX`) read the answer the other way round (a nonzero AX means
+*no environment*), which is why they went through and this one did not.
+
+Windows answers the task's environment as a pointer whose offset is **0** and
+whose selector is DX. That one answer satisfies both readings, so WIN16 now
+gives it:
+
+- the block is a `GlobalAlloc` block of 32 bytes, fixed, zero-filled, made at
+  the task's first ask and owned by it (`w16_gmine`: freed when the task
+  ends); `[w16_envp]` holds its data paragraph, 2 bytes of the image's bss;
+- its contents are the empty environment: NUL NUL (the list ends at once), a
+  word of 1 (the count of strings that follow, as DOS 3 and Windows put it)
+  and an empty program path;
+- the answer is DX = the block's selector (kern_mega: `w16_pblk`, the
+  program's handle descriptor for it; real mode: its paragraph) and AX = 0;
+- a cached block is used again only while it is still a block (its header's
+  magic), the current task's, and still holds the word 1 - the block of a
+  task that ended is made again for the next;
+- no block to be had: DX:AX = NULL, which the same start-up tests for.
+
+**What it costs**, `win16.o88`, kern_mega arm: +2 bytes of bss (`w16_envp`),
+the code is in part 10 (`.w16tsk`) where `w16i_dosenv` already was.
+**Not done:** the Windows environment's real strings (`PATH=`, `TEMP=`) and
+the program's path after the count: a program that asks `GetDOSEnvironment`
+for them finds none; none has so far.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one
@@ -238013,7 +238051,7 @@ Both programs import, besides MDI:
 | `InquireSystem` (SYSTEM.1) | 0: the timer's period, 54,925 µs. 1: the drive's type in both words, as Wine's `system.drv16` answers. File Manager lists the drives whose answer is not 0. SYSTEM joins the modules WIN16 knows by name |
 | `GetHeapSpaces` | DX the heap, 65,500, and AX its free part, scaled from `GetFreeSystemResources(0)`. Program Manager's About box shows the ratio |
 | `DirectResAlloc` | a moveable block of the size asked, as `GlobalAlloc` gives |
-| `GetDOSEnvironment` | an empty environment. A program WIN16 starts has none (its PSP's word 2Ch is 0); the pointer is into part 10, kept until the program ends |
+| `GetDOSEnvironment` | an empty environment as Windows answers it, SELECTOR:0 (DX the selector, AX = 0), in a 32-byte block of global memory the task owns (SPEC.md 124.25.20) |
 | `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
 | `GetNumTasks` | 1, until S21 |
 | `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE. A setup's `EW_RESTARTWINDOWS` (42h) or `EW_REBOOTSYSTEM` (43h) also puts up a toast, *No restart is needed* (§124.33.3) |
