@@ -237224,7 +237224,7 @@ take seven of the 384 slots (the largest import list measured is 270), the
 handler and the `GetClassInfo` arm are in the system-library part, and the
 fixed row table is in the loader part (a fixed row names a `W16P_SYS` handler
 as well as a `W16P_LIB` one). Part bytes, kern_mega arm, against the
-plan branch at 9ca188639: the system-library part 38,506 to 38,937 (+431,
+plan branch at 9ca188639: the system-library part 38,506 to 38,946 (+440,
 with §124.25.18.1's), the loader part 17,072 to 17,100 (+28, seven fixed
 rows), the dialog part 64,845 to 64,843 (-2).
 
