@@ -10,7 +10,7 @@
 ; a bug fixed in one is not fixed in the other - and this file is the answer.
 ;
 ; It needs, from whichever program includes it: the state in ethstate.inc,
-; tcp.inc, inet.inc, dns.inc, and a link layer answering ne_tx/ne_rx.
+; tcp.inc, inet.inc, dns.inc, and a link layer answering nic_tx/nic_rx.
 ; NETV_IDENT and NETV_STATE stay with their HOSTS, because what identifies a
 ; driver and what counts as a link are the one thing the two ends genuinely
 ; disagree about.
@@ -522,7 +522,7 @@ eth_v_accept:
 ; THE RAW VERBS - whole frames, for a consumer that IS a stack (SPEC.md 72.22)
 ; =============================================================================
 ; netpkg.inc carries the contract and the reasoning. These three are short
-; because every hard part of them is already written: ne_tx and ne_rx are the
+; because every hard part of them is already written: nic_tx and nic_rx are the
 ; link layer the socket half sits on, and usr_read/usr_write are the caller's
 ; segment. What is new is only WHO the frames belong to.
 ;
@@ -538,7 +538,7 @@ eth_v_accept:
 ; in AL = 1 claim / 0 release.
 ;
 ; **THE CLAIM STOPS eth_pump, WHICH IS WHY IT IS A CLAIM AND NOT A FLAG.**
-; A second consumer would not corrupt anything - ne_rx is one frame at a time
+; A second consumer would not corrupt anything - nic_rx is one frame at a time
 ; and the card mutex is above us - it would simply make frames vanish, one
 ; stack getting the ones the other was waiting for. That is the failure this
 ; project keeps writing down as the expensive kind: nothing reports an error
@@ -586,14 +586,14 @@ eth_v_rawtx:
     je  .noclaim                    ; own image, and OSAPI_DRV_CALL can only
                                     ; put the CALLER's segment in [eth_useg]
     cmp cx, EH_SIZE             ; shorter than an Ethernet header is not a
-    jb  .bad                    ; short frame, it is a wrong one - ne_tx pads
-    cmp cx, NE_FRAME            ; to the 60-byte minimum itself
+    jb  .bad                    ; short frame, it is a wrong one - nic_tx pads
+    cmp cx, NIC_FRAME            ; to the 60-byte minimum itself
     ja  .bad                    ; ...and too long is REFUSED, never truncated:
                                 ; a silently shortened frame is a checksum
                                 ; failure at the far end and a bug hunt here
     mov di, eth_txb
     call usr_read               ; SI theirs, DI ours, CX bytes
-    call ne_tx
+    call nic_tx
     jc  .gone
     inc word [eth_ntx]          ; the same counter the stack's own frames use:
     inc word [eth_nrawtx]       ; the Control Panel page is about the CARD
@@ -636,14 +636,14 @@ eth_v_rawrx:
     push di
     push word [eth_useg]
     call eth_rawseg             ; DX, as above
-    mov bx, cx                  ; **THE CAPACITY, BANKED BEFORE ne_rx**, which
+    mov bx, cx                  ; **THE CAPACITY, BANKED BEFORE nic_rx**, which
                                 ; returns the frame's length in the same
                                 ; register the caller passed the capacity in
     cmp byte [eth_raw], 0
     je  .none                   ; no claim, no frames - and it reads as an
                                 ; empty ring rather than an error, because a
                                 ; poll loop is the only thing that calls this
-    call ne_rx                  ; CF=1 = empty; CX = the length in eth_rxb
+    call nic_rx                  ; CF=1 = empty; CX = the length in eth_rxb
     jc  .none
     inc word [eth_nrx]
     inc word [eth_nraw]

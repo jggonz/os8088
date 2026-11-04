@@ -4855,6 +4855,7 @@ $(shell mkdir -p $(BUILD); \
 # did nothing; the profiler's own symbol reader is what caught it, because it
 # re-assembles the source and refuses a build/ether.bin that does not match.
 $(BUILD)/ether.bin: drivers/ether/ether.asm drivers/ether/ne2000.inc \
+                    drivers/ether/ethdrv.inc drivers/ether/nicne2k.inc \
                     drivers/ether/inet.inc drivers/ether/tcp.inc \
                     drivers/ether/dns.inc drivers/ether/etherui.inc \
                     drivers/ether/ethcfg.inc drivers/ether/ethprof.inc \

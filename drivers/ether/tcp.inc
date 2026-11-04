@@ -208,11 +208,11 @@ TCP_MSS     equ 1024            ; the largest segment we send. It was SK_TXMAX
 ; --- TCP_RMSS - what we ANNOUNCE, and it is not TCP_MSS (SPEC.md 72.4.1) ----
 ; TCP_MSS above bounds what we SEND. The option in a SYN means the largest
 ; segment we are willing to RECEIVE, which is a different number: one whole
-; Ethernet frame's payload, because eth_rxb is NE_FRAME + 4 wide and really
+; Ethernet frame's payload, because eth_rxb is NIC_FRAME + 4 wide and really
 ; can take one. tcp_out clamps it to [sk_rxcap] as well - at the floor rung
 ; the ring is 1024, and a peer told 1460 would have every segment half-refused
 ; by sk_rxput and retransmitted, which is worse than the 536 it replaces.
-TCP_RMSS    equ NE_FRAME - IP_PAY - TC_HLEN
+TCP_RMSS    equ NIC_FRAME - IP_PAY - TC_HLEN
 
 ; =============================================================================
 ; THE RING POOL (SPEC.md 72.21)
@@ -915,28 +915,16 @@ sk_reclaim:
 ; (ether.asm), so the card is known by the time this is asked. It cannot read
 ; [eth_pstart]/[eth_pstop] - ne_init sets those, and it runs after.
 ; -----------------------------------------------------------------------------
-NE_RINGSZ   equ (NE_PSTOP - NE_PSTART) * 256
-NE1_RINGSZ  equ (NE1_PSTOP - NE1_PSTART) * 256
-SK_RINGSLK  equ 1536            ; one 1514-byte frame, rounded up to 6 pages
-
-; --- and the rungs have to LAND somewhere, which is a build-time fact --------
-; Without these the clamp is silent: a card whose ring stopped fitting even
-; the middle rung would fall to the floor and read as "the network got slow".
-%if SK_RXMAX > NE_RINGSZ - SK_RINGSLK
-    %error "SK_RXMAX no longer fits an NE2000's receive ring"
-%endif
-%if SK_RXMID > NE1_RINGSZ - SK_RINGSLK
-    %error "SK_RXMID no longer fits an NE1000's receive ring"
-%endif
-%if SK_RXCAP0 > NE1_RINGSZ - SK_RINGSLK
-    %error "even the floor rung no longer fits an NE1000's receive ring"
-%endif
+    NIC_RING_CONSTS             ; the backend's: NIC_RINGSZ, NIC1_RINGSZ and
+                                ; SK_RINGSLK, and the build-time proof that
+                                ; the rungs it offers fit its ring
+                                ; (nicne2k.inc, nicrtl.inc)
 
 sk_cardcap:
-    mov ax, NE_RINGSZ
+    mov ax, NIC_RINGSZ
     cmp byte [eth_word], 0
     jne .got
-    mov ax, NE1_RINGSZ
+    mov ax, NIC1_RINGSZ
 .got:
     sub ax, SK_RINGSLK
     ret
