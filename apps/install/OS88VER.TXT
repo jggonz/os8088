@@ -1,5 +1,5 @@
-20261030
-* Windows 3.x programs in a window
-* WaveRack: record and edit WAV files
-* RealDMG faster: banks read on demand
-* Video Player flips narrow screens
+20261103
+* Windows 3.x: Paintbrush, File Manager
+* Windows setup programs and CD titles
+* DOS programs run live in a window
+* System Check defragments and cleans up
