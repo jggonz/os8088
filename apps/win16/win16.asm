@@ -125,16 +125,8 @@ W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
                                 ;   import before the load refuses it
 W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 %ifndef W16_NBIND                  ; bind slots: the distinct imports a program
-%define W16_NB_ 384
-%ifdef W16_TRACE
-%ifdef PKG_MEGA
-%define W16_NB_ 288
-%endif
-%endif
-W16_NBIND    equ W16_NB_        ;   may bind, each a stub (SPEC.md 124.19.1).
-                                ;   Paintbrush 3.1's 270 is the most measured;
-                                ;   the kern_mega TRACE arm takes 288 (its ring
-%endif                          ;   and w16_trow need the room, 124.17.4)
+W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
+%endif                          ;   Paintbrush 3.1's 270 is the most measured
 W16_STUBSZ   equ 4              ; a stub's bytes: w16_stubs + 4 * slot
 W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
                                 ;   (w16mdi.inc, SPEC.md 124.25.10)
@@ -622,19 +614,16 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16m_ink, 1
     W16BSS w16m_pap, 1
 %ifndef W16_TRN                    ; the trace ring's entries, a power of two:
-%ifdef PKG_MEGA                    ;   2048 stopped fitting the trace build at
-W16_TRN equ 256                    ;   S19b, 1024 at S20, 64 at S20b. A bare
-%else                              ;   -DW16_TRACE builds on BOTH arms now: the
-W16_TRN equ 64                     ;   real-mode data segment holds 128 at most
-%endif                             ;   and kern_mega's APP_MAX_SIZE 256 with
-%endif                             ;   W16_NBIND 288 (2026-11-04)
-                                   ;   (W16DEFS='-DW16_TRACE -DW16_TRN=32')
-%ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
-    W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
-    W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)
-    W16BSS w16_trow, 2 * W16_NBIND ; ...each bind slot's export row, FFFFh
-                                ;   for none (a missing import, a fixed slot)
-%endif
+%ifdef PKG_MEGA                    ;   what each arm holds with room to spare
+W16_TRN equ 64                     ;   (SPEC.md 124.17.4): kern_mega's is
+%else                              ;   APP_MAX_SIZE's leftover, the real-mode
+W16_TRN equ 256                    ;   arm's its one data segment. Raise it
+%endif                             ;   with W16DEFS='-DW16_TRACE -DW16_TRN=n'
+%endif                             ;   while the build still packs
+%ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate
+    W16BSS w16_trn, 2           ;   calls, each as its BIND SLOT, and int 21h
+    W16BSS w16_trc, 2 * W16_TRN ;   calls as 80h:AH, which tools/w16trace.py
+%endif                             ;   names from w16_bind (SPEC.md 124.17.4)
     W16BSS w16_ckhm, 2          ; int 21h 2Ch's anchor: the kernel's hour:minute
     W16BSS w16_cks, 1           ; ...second
     W16BSS w16_ckt, 2           ; ...and the BIOS tick it was seen at

@@ -507,7 +507,8 @@ KNOBS = [
 
 
 # WIN16's -DW16_TRACE arm (SPEC.md 124.17.4), BOTH arms, packed. W16DEFS is a
-# test define and not a stamped knob, so it rides in `extra` - which is why
+# test define and not a $(KNOBS) knob (it has a stamp of its own,
+# W16STAMP), so it rides in `extra` - which is why
 # these are not KNOBS rows (t_nasm3 passes its own `extra`). The arm stopped
 # assembling once without a word - its default ring outgrew the real-mode
 # data segment and kern_mega's APP_MAX_SIZE - and the measure run of
@@ -660,23 +661,28 @@ def main():
           got="absent", want="present")
 
     sizes = {}
+    # ONE pool for the knob rows and WIN16's trace rows, so the two package
+    # builds overlap the knob kernels rather than queueing behind them.
+    rows = [(kv, False) for kv in KNOBS] + [(kv, True) for kv in W16ROWS]
     with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
-        for name, ok, size, err in ex.map(lambda kv: build(*kv), KNOBS):
+        for (name, ok, size, err), w16 in ex.map(
+                lambda r: (build(*r[0]), r[1]), rows):
+            if w16:
+                check(ok, "make %s (WIN16 -DW16_TRACE) assembles and packs" % name,
+                      "the trace arm is the only way to see what a Win16 "
+                      "program asked for last; its ring shares the package's "
+                      "one data segment (real mode) / APP_MAX_SIZE (kern_mega) "
+                      "with everything WIN16 grows by, and overflows without a "
+                      "default build noticing - lower W16_TRN's default "
+                      "(SPEC.md 124.17.4)", got=err or "no package produced",
+                      want="a package")
+                continue
             check(ok, "make %s assembles" % name,
                   "a %ifdef arm that no ordinary build compiles has fallen behind "
                   "a rename - and it takes the gate that uses it with it",
                   got=err or "no kernel produced", want="a kernel")
             if ok:
                 sizes[name] = size
-
-    with concurrent.futures.ThreadPoolExecutor(max_workers=a.j) as ex:
-        for name, ok, size, err in ex.map(lambda kv: build(*kv), W16ROWS):
-            check(ok, "make %s (WIN16 -DW16_TRACE) assembles and packs" % name,
-                  "the trace arm is the only way to see what a Win16 program "
-                  "asked for last; its ring and bind-row table share the "
-                  "package's one data segment (real mode) / APP_MAX_SIZE "
-                  "(kern_mega), and either overflows without a default build "
-                  "noticing", got=err or "no package produced", want="a package")
 
     # kern_small is a whole second tree, so it gets the real target - IN A
     # PRIVATE BUILD DIRECTORY, which is what removed the restore build that
