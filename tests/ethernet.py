@@ -160,22 +160,29 @@ def ether_defines(*names):
     _ETHDEF = list(names)
 
 
-def ether_syms():
+def ether_syms(asm="drivers/ether/ether.asm", built="build/ether.bin",
+               incs=(), defs=None):
+    """The driver's labels. PCIETHER.DRV (SPEC.md 125, tests/pciether.py) is
+    the same stack over another card, so it is the same reader with its own
+    source, its own built image and its backend's include directory in front
+    - one copy of the byte-identity rule, not two. `defs` None is ETHER.DRV's
+    knob set (ether_defines)."""
     with tempfile.TemporaryDirectory() as d:
         src = os.path.join(d, "e.asm")
         mp = os.path.join(d, "e.map")
         out = os.path.join(d, "e.bin")
-        shutil.copy("drivers/ether/ether.asm", src)
+        shutil.copy(asm, src)
         with open(src, "a") as f:
             f.write("\n[map all %s]\n" % mp)
         subprocess.run(["nasm", "-f", "bin", "-w+error"]
-                       + ["-D" + n for n in _ETHDEF]
+                       + ["-D" + n for n in (_ETHDEF if defs is None else defs)]
+                       + [a for i in incs for a in ("-I", i)]
                        + ["-I", "drivers/ether/", "-I", "drivers/net/",
                           "-I", "drivers/", "-I", "apps/", "-o", out, src],
                        check=True)
-        if open(out, "rb").read() != open(os88build.at("build/ether.bin"), "rb").read():
-            sys.exit("ethernet: the mapped build is not build/ether.bin - "
-                     "every offset it names would be plausible and wrong")
+        if open(out, "rb").read() != open(os88build.at(built), "rb").read():
+            sys.exit("ethernet: the mapped build is not %s - every offset "
+                     "it names would be plausible and wrong" % built)
         syms = {}
         for line in open(mp):
             m = re.match(r"^\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+(\S+)\s*$",
