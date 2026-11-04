@@ -186,8 +186,22 @@ static void c64_scratch_clear(void)
  * $A000 (c64cpu.inc's MAPA/MAPD/MAPE). They live in the emulated machine's
  * scratch and not in this file's bss because the core reads them DS-relative
  * with no override; this is the one writer. */
+/* THE PORT'S READ-BACK, PUBLISHED: $00 in the low byte and $01's read-back
+ * (c64_pp_read's formula) in the high, for c64fast.inc's .portin, which puts
+ * it in RAM $0000/$0001 at the top of every fast-core run. It was two calls
+ * of c64_io_rd a run, ~290 runs a second, for two bytes that change only
+ * when the port is written - which is the only time this is recomputed. */
+unsigned c64_pp_rb;
+
+static void c64_pp_rbset(void)
+{
+    c64_pp_rb = (unsigned)c64_pp_ddr
+              | (((unsigned)((c64_pp_data & c64_pp_ddr) | (~c64_pp_ddr & 0x17)) & 0xFF) << 8);
+}
+
 static void c64_map_publish(void)
 {
+    c64_pp_rbset();
     c64_scr_wr(C64_SCR_MAPA, c64_maps[c64_bank][0]);
     c64_scr_wr(C64_SCR_MAPD, c64_maps[c64_bank][1]);
     c64_scr_wr(C64_SCR_MAPE, c64_maps[c64_bank][2]);
@@ -251,6 +265,7 @@ static void c64_reset_regs(void)
     c64_cia[1][0x02] = 0x3F;
     c64_pp_ddr = 0x2F;
     c64_pp_data = 0x37;
+    c64_pp_rbset();
     c64_bank = 7;
     c64_frame_cyc = 0;
     c64_tod_acc = 0;
@@ -418,17 +433,33 @@ static int c64_alarm_next(void)
 {
     int d, t, k, line;
 
-    d = C64_PAL_FRAME - c64_frame_cyc;      /* the frame end, always armed */
-    t = C64_TOD_PERIOD - c64_tod_acc;
-    if (t < d)
-        d = t;
+    /* THE DISPLAY LATCH IS ALWAYS ARMED (9.9), once a frame, and it is what
+     * bounds a run to one frame (c64_advance relies on it). The frame END is
+     * not an alarm: nothing a program can see happens there - $D011/$D012
+     * are the beam's line however a run ends, and c64_advance wraps the
+     * frame wherever a run crosses it. It was 50 runs a second for nothing,
+     * on the machine whose every run is the 286's dearest fixed cost. */
+    d = (int)C64_X63(C64_LATCH_LINE) - c64_frame_cyc;
+    if (d <= 0)
+        d += C64_PAL_FRAME;
+    /* ...and the TOD at the tick that CHANGES it: the 50 Hz mains tick only
+     * advances a divider, and the registers move every fifth (the tenths) -
+     * so that is the alarm, not each tick (40 more runs a second) */
+    /* (only the tick that ends a tenth can be the nearest: any other is
+     * more than one period away, 19,705 cycles, and the latch is never
+     * further than 19,656 - and that product would wrap a 16-bit int) */
+    if ((c64_todp[0] == 4) | (c64_todp[1] == 4)) {
+        t = C64_TOD_PERIOD - c64_tod_acc;
+        if (t < d)
+            d = t;
+    }
     /* A COUNTER AT OR ABOVE $7FFF CANNOT BE THE NEAREST ALARM, so it is
      * SKIPPED rather than cast. `(int)(0xFFFF + 1)` is 0 and any counter in
      * the top half of the range casts NEGATIVE - either way `t < d` won, `d`
      * fell to the floor below, and the slice driver then ran the core ONE
      * CYCLE at a time, each with a full c64_alarm_next + c64_run shell +
      * c64_advance over both CIAs, the VIC and the TOD. The nearest real alarm
-     * is never further than the frame end (19,656), so nothing is lost. */
+     * is never further than the display latch (19,656), so nothing is lost. */
     for (k = 0; k < 2; k++) {
         if (C64_TA_RUNS(k))
             if (c64_ta[k] < (unsigned)0x7FFF) {
@@ -449,13 +480,6 @@ static int c64_alarm_next(void)
      * it on the mask meant that a program which polls `LDA $D019 / AND #$01`
      * with interrupts disabled - a common raster wait - never saw the bit at
      * all. It is one extra run boundary a frame. */
-    /* ...and the display latch, so it is taken AT its line and not wherever
-     * the run that crosses it happens to end (9.9) */
-    t = (int)C64_X63(C64_LATCH_LINE) - c64_frame_cyc;
-    if (t <= 0)
-        t += C64_PAL_FRAME;
-    if (t < d)
-        d = t;
     line = c64_rcmp_line();
     if (line < C64_PAL_LINES) {
         t = (int)C64_X63(line) - c64_frame_cyc;
@@ -626,7 +650,7 @@ static void c64_timer_step(int k, int n)
 }
 
 /* c64_advance - move every device phase by the cycles the core actually ran.
- * The `n` passed here is never more than one frame, because the frame end is
+ * The `n` passed here is never more than one frame, because the display latch is
  * always an armed alarm and the slice never runs past its deadline by more
  * than one instruction. */
 /* c64_latch - THE DISPLAY LATCH (C64-SPEC 9.9). The composer draws one

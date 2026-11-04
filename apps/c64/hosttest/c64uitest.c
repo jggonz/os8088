@@ -3019,10 +3019,11 @@ int main(int argc, char **argv)
         int d, fired;
         c64_reset_regs();
         c64_map_publish();
-        /* the frame end is always armed, and it is 19,656 cycles - the PAL
-         * frame - not a jiffy and not a host tick. (From the display latch's
-         * own line, so the latch - the other alarm a frame always has, 9.9
-         * - is a whole frame away and the frame end is the nearest.) */
+        /* the nearest alarm is a frame's own, not a jiffy and not a host
+         * tick: from the display latch's line (9.9, a whole frame away) it
+         * is the raster compare at line 0 - reset's - which is where the
+         * frame begins. (The frame END is not an alarm of its own: c64io.c's
+         * c64_alarm_next says why.) */
         c64_frame_cyc = (int)C64_X63(C64_LATCH_LINE);
         d = c64_alarm_next();
         if (d != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE))
@@ -3129,6 +3130,22 @@ int main(int argc, char **argv)
         c64_reset_regs();
         c64_map_publish();
         c64_scr_wr(C64_SCR_IRQ, 0);
+    }
+
+    /* --- THE PORT'S PUBLISHED READ-BACK (c64_pp_rb): c64fast.inc puts it in
+     * RAM $0000/$0001 at the top of every fast-core run instead of asking
+     * c64_io_rd twice, so it must BE c64_pp_read's answer after any write.
+     * Verified to fail with c64_pp_rbset's call in c64_map_publish removed. */
+    {
+        static const int wr[][2] = { {0, 0x2F}, {1, 0x37}, {1, 0x30}, {0, 0x00},
+                                     {0, 0xFF}, {1, 0x08}, {0, 0x2F}, {1, 0x37} };
+        int i3;
+        for (i3 = 0; i3 < 8; i3++) {
+            c64_io_wr((unsigned)wr[i3][0], wr[i3][1]);
+            if (c64_pp_rb != (unsigned)(c64_pp_read(0) | (c64_pp_read(1) << 8)))
+                fail("the published port read-back is not c64_pp_read's: the "
+                     "fast core's $00/$01 would read a stale port");
+        }
     }
 
     /* --- THE DISPLAY LATCH (9.9). A split screen writes $D011 twice a

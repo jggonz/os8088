@@ -838,6 +838,9 @@ class Gen:
         go = ["    shl bx, 1",
               "    mov bx, [es:bx]",
               "    test bx, bx", "    jz .none",
+              # (the translation's CHRGET is unchecked again: code that ran
+              # here may have patched it - m65aot.py's emit_chrget)
+              "    and byte [%s], 0x7F" % self.PV(),
               "    xor dl, dl",
               "    mov si, sp"]
         if rom:
@@ -905,6 +908,7 @@ class Gen:
             "    mov bx, si", "    shl bx, 1",
             "    mov bx, [es:bx+0x%04X]" % ((-lo * 2) & 0xFFFF),
             "    test bx, bx", "    jz .fetch",
+            "    and byte [%s], 0x7F" % self.PV(),    # (CHRGET unchecked)
         ] + (["    inc word [0xC2FC]"] if self.tracelog(0) else []) + [
             "    mov si, sp",
             "    push word [ss:si+%d]" % self.p["aot_frame"],

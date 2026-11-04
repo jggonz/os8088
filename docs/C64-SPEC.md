@@ -480,9 +480,14 @@ event, service it, compute the next one.** There is no fixed quantum
 anywhere in this machine.
 
 **The alarm.** Before each run, `c64_alarm_next()` (`c64io.c`) computes
-*cycles to the next event* as the minimum of: the end of the frame, the TOD's
-50 Hz tick, CIA1 and CIA2 timer A and timer B underflow, and the VIC raster
-compare. The core runs exactly that far and RETURNS; `c64_advance(ran)` then
+*cycles to the next event* as the minimum of: the display latch's line (9.9,
+always armed, which is what bounds a run to one frame), the TOD's 50 Hz tick
+that ENDS A TENTH (the four between move only a divider nothing can read,
+so they are not alarms), CIA1 and CIA2 timer A and timer B underflow, and
+the VIC raster compare. The frame END is not an alarm: `$D011`/`$D012` are
+the beam's line however a run ends, and `c64_advance` wraps the frame
+wherever a run crosses it (with the reset's raster compare at line 0, a run
+still ends there). The core runs exactly that far and RETURNS; `c64_advance(ran)` then
 moves every device phase by what actually ran, and the loop computes the next
 deadline. `os88_onwake` is that loop (§13.1). Two points that are deliberate:
 
@@ -491,8 +496,8 @@ deadline. `os88_onwake` is that loop (§13.1). Two points that are deliberate:
   every one of them, which is the same work as the entry/exit shell.
 - *The end of a raster LINE is not an alarm.* `$D012` is computed from the
   cycle counter when it is READ; a per-line alarm would end the run 312 times
-  a frame for a register most programs never touch. The raster COMPARE and
-  the frame end are alarms, so a raster interrupt still fires on the line it
+  a frame for a register most programs never touch. The raster COMPARE is
+  an alarm, so a raster interrupt still fires on the line it
   was armed for and in the right order against every CIA interrupt.
 
 **Interrupts are taken between instructions, and the cost of that is zero
@@ -702,8 +707,10 @@ fetch from anywhere. A read-modify-write at `$A000` and up, or of `$00/$01`,
 is handed back.
 
 **`$00/$01`.** While the fast core runs, `c64fast.inc` puts the port's
-read-back (`c64_io_rd`'s own answer) in RAM `$0000/$0001` and keeps the RAM
-bytes aside, so a zero-page read is a `mov`; they go back the moment the
+read-back in RAM `$0000/$0001` - `c64_pp_rb`, which `c64io.c` recomputes
+on every port write with `c64_pp_read`'s own formula, rather than two calls
+of `c64_io_rd` a run - and keeps the RAM bytes aside, so a zero-page read is
+a `mov`; they go back the moment the
 core returns, so the accurate core and the C never see the difference. A
 write there, by any mode, is handed back (the accurate core re-banks), and
 so is an indirect pointer at `$FF`, `$00` or `$01`.
@@ -761,8 +768,9 @@ out of `DEAD`, `c64_cut`'s door:
 The core then makes the read again at the same point of the loop, with the
 clock where those passes would have put it, and ends the run on the same
 instruction as before - so the run's length and the cycle the next alarm
-lands on are unchanged. The demo runs at **114%** under warp, and at 96.6%
-without it once the screen is drawn from section 9.9's display latch. `c64uitest` asserts both loop forms, the value that leaves, and that a
+lands on are unchanged. The demo runs at **114%** under warp (179% with section
+4.8's later work), and at 96.6% without it once the screen is drawn from
+section 9.9's display latch. `c64uitest` asserts both loop forms, the value that leaves, and that a
 caller with no PC is charged nothing.
 
 ### 4.8 BASIC and the KERNAL translated ahead of time (FAST6502-PLAN.md wave 2b)
@@ -780,16 +788,20 @@ fast core's.
 | | fast core (4.7) | translated |
 |---|---|---|
 | idle at `READY.`, throttled | 40% | **99.8%** (104.6% under warp) |
-| `10 I=I+1 / 20 GOTO 10` | 47% | **98.8-99.5%** (81% at the first cut) |
-| a floating-point loop (`A=I*2.5/3`, an array store, `GOSUB`, `STR$`) | - | **97.2%** (76% at the first cut) |
+| `10 I=I+1 / 20 GOTO 10` | 47% | **107.8%** under warp (81% at the first cut) |
+| a floating-point loop (`A=I*2.5/3`, an array store, `GOSUB`, `STR$`) | - | **104.0%** (76% at the first cut) |
 
 The rest of the way from the first cut: `PLP`/`CLI`/`SEI`/`RTI` inline, no
 decimal tests, dead V, inline `JSR` and ROM-table reads (87.5%); one
 subtract a straight run (APPLE2-SPEC 4.7's groups); a return that tests the
 bank map only from the KERNAL into BASIC; the `BIT` skip followed inside the
 translation; and `JMP $0073` - the comma test's tail call - into the native
-CHRGET. Of what is left, about 7% is the fast core and 18% the package's
-devices and run loop.
+CHRGET (98.8% and 97.2%); then CHRGET's signature checked once rather than
+at every call, `PHP`/`PLP` through tables, the TOD's alarm only at a tenth,
+and the port's read-back published rather than asked for each run. Of what
+is left, about 6% is the fast core, 16% the package's devices and run loop,
+and 6.5% the shared `RTS` lookup - which is already about fourteen
+instructions, and inline at each `RTS` would cost ~10KB for the `jmp` into it.
 
 **Two segments, because one does not hold both**: 5,436 PCs come to 49,247
 bytes of BASIC and 30,006 of KERNAL (2,379 entries, APPLE2-SPEC 4.7's
@@ -864,7 +876,7 @@ fetches the three parts after the core, all or none, as pinned claims of
 their own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768).
 
 **The gate** is `make c64cputest`'s AOT leg (`C64CPU_ONLY=aot`), the
-Apple II's leg one machine along: Dormann's functional test in three parts
+Apple II's leg one machine along: Dormann's functional test in four parts
 (`--range`) with a core built for each, slices of 997 cycles, and every
 translated `ADC` and `CMP` broken as the control.
 `tests/c64part.py` checks that the three parts unpack to their files and that

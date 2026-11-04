@@ -614,7 +614,9 @@ class Aot:
                   "    or [%s], dl" % self.PV(), "    xor dl, dl")
         elif mn in STORES:
             self.write(mode, opnd, STORES[mn], cyc)
+            self.chr_guard(mn, mode, opnd)
         elif mn in RMW:
+            self.chr_guard(mn, mode, opnd)
             if mode == "acc":
                 self.shift(mn, "al", live_nz)
             elif mode == "zp" and mn in ("INC", "DEC", "ASL", "LSR"):
@@ -721,7 +723,11 @@ class Aot:
         elif mn == "PHA":
             self.push("al")
         elif mn == "PHP":
-            L("    call getp", "    or dl, 0x10")
+            # P out of AH (N, Z, C) through t_getp, and V, B, D, I out of PV:
+            # the core's getp, without the call and the rotates
+            L("    mov bl, ah", "    xor bh, bh", "    mov dl, [cs:bx+t_getp]",
+              "    mov bh, [%s]" % self.PV(), "    and bh, 0x5C", "    or dl, bh",
+              "    or dl, 0x10")
             self.push("dl")
             L("    xor dl, dl")
         elif mn == "PLA":
@@ -751,13 +757,13 @@ class Aot:
             L("    or byte [%s], 0x04" % self.PV())
         elif mn == "PLP":
             self.pop("dl")
-            L("    call setp", "    xor dl, dl")
+            self.setp_inline()
             x = self.lab()
             L("    test byte [%s], 0x08" % self.PV(), "    jnz %s" % x)
             self.tail.append(["%s: mov si, 0x%04X" % (x, nxt), "    jmp xa_resume"])
         elif mn == "RTI":
             self.pop("dl")
-            L("    call setp", "    xor dl, dl")
+            self.setp_inline()
             self.pop("bl")
             self.pop("bh")
             x = self.lab()
@@ -771,6 +777,29 @@ class Aot:
         else:
             raise ValueError(mn)
         return True                 # falls through to the next PC
+
+    def setp_inline(self):
+        """DL = a pulled P -> AH through t_setp, and PV's V, B, D, I (the
+        core's setp, without the call and the rotates); DL 0 after"""
+        self.L("    mov bl, dl", "    xor bh, bh", "    mov ah, [cs:bx+t_setp]",
+               "    and dl, 0x5C", "    and byte [%s], 0xA3" % self.PV(),
+               "    or [%s], dl" % self.PV(), "    xor dl, dl")
+
+    def chr_guard(self, mn, mode, opnd):
+        """a store that may write the CHRGET routine (other than TXTPTR, which
+        it writes itself) clears PV's "checked" bit (emit_chrget)"""
+        if not self.p.get("chrget") or not (mn in STORES or (mn in RMW and mode != "acc")):
+            return
+        B = min(self.p["chrget"])
+        lo, hi, T = B, B + 23, B + 7
+        if mode in ("zp", "abs"):
+            hit = lo <= opnd <= hi and opnd not in (T, T + 1)
+        elif mode in ("absx", "absy"):
+            hit = opnd <= hi and opnd + 255 >= lo
+        else:
+            hit = True                      # zp,X wraps; a pointer: anywhere
+        if hit:
+            self.L("    and byte [%s], 0x7F" % self.PV())
 
     def static_core(self, mn, mode, opnd):
         """the C64: an instruction whose operand alone says the core runs it
@@ -825,12 +854,24 @@ class Aot:
                (B + 9, 0x3AC9), (B + 11, 0x0AB0), (B + 13, 0x20C9), (B + 15, 0xEFF0),
                (B + 17, 0xE938), (B + 19, 0x3830), (B + 21, 0xD0E9)]
         top = 0xA0 if self.c64 else 0xC0
+        # THE SIGNATURE IS CHECKED ONCE, NOT AT EVERY CALL: PV's bit 7 says
+        # "checked", and it is cleared by every entry from the core (m65gen's
+        # ct_rom - code that ran there may have patched the routine) and by
+        # every translated store that can reach it (chr_guard). It was a
+        # dozen compares a character of program text.
+        L("a_chrsig:")
+        for a, w in sig:
+            L("    cmp word [0x%04X], 0x%04X" % (a, w), "    jne .r")
+        L("    cmp byte [0x%04X], 0xAD" % (B + 6), "    jne .r",
+          "    cmp byte [0x%04X], 0x60" % (B + 23), "    jne .r",
+          "    or byte [%s], 0x80" % PV,
+          "    cmp al, al",                     # (ZF: it is the routine)
+          ".r: ret")
         for entry, lab in ((B, "a_chrget"), (B + 6, "a_chrgot")):
-            L("%s:" % lab)
-            for a, w in sig:
-                L("    cmp word [0x%04X], 0x%04X" % (a, w), "    jne .core")
-            L("    cmp byte [0x%04X], 0xAD" % (B + 6), "    jne .core",
-              "    cmp byte [0x%04X], 0x60" % (B + 23), "    jne .core")
+            L("%s:" % lab,
+              "    test byte [%s], 0x80" % PV, "    jnz .ok",
+              "    call a_chrsig", "    jne .core",
+              ".ok:")
             if self.exact:
                 # the whole routine's worst path is 38 cycles: the core runs
                 # it where that does not fit, so the run ends where it would
@@ -1167,6 +1208,12 @@ class Aot:
                   "    test bx, bx", "    jz .res")
                 self.far(self.frame_of(1 - self.bank))
                 L(".res: jmp xa_resume")
+        # P <-> AH, as tables in this segment (PHP and PLP, inline): AH is
+        # lahf's N (7), Z (6) and C (0); P's are N (7), Z (1) and C (0)
+        L("t_getp:", *["    db " + ", ".join("0x%02X" % ((a & 0x81) | ((a & 0x40) >> 5) | 0x20)
+                                          for a in range(r, r + 16)) for r in range(0, 256, 16)])
+        L("t_setp:", *["    db " + ", ".join("0x%02X" % ((p & 0x81) | ((p & 0x02) << 5))
+                                          for p in range(r, r + 16)) for r in range(0, 256, 16)])
         # V from the 8086's OF, once (ADC, SBC)
         L("a_vof:",
           "    jo .v",
@@ -1185,7 +1232,7 @@ class Aot:
           "a_rts:",
           "    cmp di, 0x01FE", "    jae .slow",
           "    mov bx, [di+1]", "    add di, 2",
-          ".j: inc bx", "    or bp, bp")
+          ".j: inc bx", *([] if self.exact else ["    or bp, bp"]))
         self.rts_to()
         L(".slow:")
         self.pop("bl")

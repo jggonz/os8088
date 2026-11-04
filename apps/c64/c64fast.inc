@@ -198,18 +198,25 @@ _c64_run:
     mov es, [_c64_m+CM_RAMSEG]
     mov ax, [es:0]
     mov [c64f_ram01], ax
+%ifdef C64F_PORT_VIA_IORD
+    ; (c64cputest, whose port is its own bookkeeping: through its io_rd)
     xor ax, ax
     push ax
-    call _c64_io_rd                 ; $00 - no side effect
+    call _c64_io_rd
     add sp, 2
-    mov es, [_c64_m+CM_RAMSEG]
-    mov [es:0], al
+    push ax
     mov ax, 1
     push ax
-    call _c64_io_rd                 ; $01
+    call _c64_io_rd
     add sp, 2
+    mov ah, al
+    pop bx
+    mov al, bl
     mov es, [_c64_m+CM_RAMSEG]
-    mov [es:1], al
+%else
+    mov ax, [_c64_pp_rb]            ; $00 and $01's read-back, as c64io.c
+%endif                              ; publishes them on every port write
+    mov [es:0], ax
     pop es
     pop ax
     ret

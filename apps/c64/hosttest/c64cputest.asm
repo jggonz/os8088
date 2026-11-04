@@ -2223,6 +2223,7 @@ hst_seg:
 
 %ifdef FAST
 %define C64_FAST
+%define C64F_PORT_VIA_IORD          ; (the port here is this file's own)
 %endif
 %include "c64cpu.inc"
 %ifdef FAST

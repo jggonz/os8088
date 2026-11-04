@@ -140,7 +140,7 @@ fast_leg() {
 # =============================================================================
 # THE TRANSLATED LEGS (C64-SPEC section 4.8): APPLE2's a2cputest one machine
 # along - Dormann's code translated ahead of time by apps/m6502/m65aot.py, in
-# three parts, each run with a core built for its part's range (m65gen.py
+# four parts, each run with a core built for its part's range (m65gen.py
 # --aot-range) and the rest on the core (C64AOT_RANGES overrides). Seeds are tools/py6502.py's
 # trace of the same test. The control breaks every translated ADC and CMP
 # in the translation, and must fail. C64CPU_ONLY=aot runs this leg alone.
@@ -148,7 +148,7 @@ fast_leg() {
 aot_leg() {
     mkdir -p $BUILD/c64
     python3 tools/py6502.py --dormann "$DORM" --trace-out $BUILD/c64/dorm.seeds >/dev/null
-    for R in ${C64AOT_RANGES:-0400:1400 1400:2A00 2A00:4000}; do
+    for R in ${C64AOT_RANGES:-0400:1400 1400:2000 2000:2A00 2A00:4000}; do
         N=${R%%:*}
         python3 apps/m6502/m65aot.py --machine c64 --rom "$DORM" --range $R \
             --seeds $BUILD/c64/dorm.seeds \

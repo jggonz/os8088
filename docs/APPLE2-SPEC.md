@@ -746,10 +746,11 @@ segment (part 2, a lazy `OP_SEG`), and a table of words, one per PC from
 `OP_ASSET`, 24,576 bytes). The ROM is fixed, so the translation is made once,
 on the host, at build time; programs in RAM stay the fast core's.
 
-**Measured, 86Box `286-victory`, `10 I=I+1 / 20 GOTO 10`: 141.5% of a 1.02
+**Measured, 86Box `286-victory`, `10 I=I+1 / 20 GOTO 10`: 149% of a 1.02
 MHz Apple under warp, against the fast core's 67%** (section 4.6; 109% at
 the first cut, before the inline `PLP`, the dead-flag work and the groups
-below) - so with the throttle on the machine runs at its own speed under
+below, and 141.5% before CHRGET's once-only check and `PHP`/`PLP`
+through tables) - so with the throttle on the machine runs at its own speed under
 BASIC as well as idle.
 
 **Which PCs.** A ROM PC is translated when `tools/a2trace.py` saw one start an
@@ -824,8 +825,14 @@ slower.
 **CHRGET runs natively.** Applesoft's `CHRGET`/`CHRGOT` live in zero page at
 `$00B1`/`$00B7` and modify their own operand. The translation has a native
 version of each, entered when the core reaches those PCs. A byte-signature
-check on the routine's RAM copy
-guards it, so a program that rewrites the routine gets the core instead.
+check on the routine's RAM copy guards it, so a program that rewrites the
+routine gets the core instead - and it is made ONCE, not at every call: bit
+7 of PV says "checked", and it is cleared by every entry into a translation
+from the core (`ct_rom`; code that ran there may have patched the routine)
+and by every translated store that can reach the routine's bytes other than
+TXTPTR (`chr_guard`). It was a dozen compares a character of program text.
+`PHP` and `PLP` pack and unpack P through two 256-byte tables in the
+translation's own segment, inline, where the core calls `getp`/`setp`.
 
 **Memory.** Both parts are fetched by `a2_fast_init` after the core, both or
 neither, as claims of their own length (53,038 and 24,576 bytes, to the
