@@ -13656,3 +13656,55 @@ across a run (SPEC.md 124.31.11), and `mega_fown`'s `[ld_base]` match,
 which answers a stale `[ld_rec]` (it names a freed record after any load)
 when a SUBC pair reuses the last-loaded OS88_HIGH region's freed selectors;
 the catch test then refuses it, so that case is a halt, never a wrong close.
+
+### 14.141 A fault close puts back the vectors the package held (2026-11-04)
+
+Found verifying 14.140. WIN16 points IVT 21h, 2Fh, 31h and 34h-3Dh (or 3Dh
+and 02h with a native x87) at its own code for the length of a program's run
+and gives the machine's back in `w16_i21_off`. A fault close runs no package
+code, so after 14.140's close those cells named a freed code selector:
+harmless in protected mode while the LDT entry stayed free (`mega_swok`),
+reachable by a real-mode NMI and by a later image reusing the entry, and
+copied by the next WIN16 run as "the machine's", to be put back at its end.
+
+*The choice.* Not WIN16's own saved copy: it is in the bss being given up,
+it is a WIN16 layout the kernel would have to know, and it is precisely the
+value that goes stale. Not a kernel `iret` either, which loses the BIOS's NMI
+handler. The machine's value is knowable without the package: nothing in the
+tree but WIN16 writes those fourteen cells and keeps them, so the switch's
+copy is the machine's. `mega_mxtinit` takes it into the tables' tail
+(`mega_ivts`, 14 x {cell, offset, segment}), which is above 1MB on every
+machine with the room and carried by the park and the hibernate with the
+rest of the tail.
+
+*The restore.* `mega_fkivt`, from `mega_fkill` at an incident's first fault,
+before the unwind: a cell whose segment is a present descriptor (`lar`, so a
+real-mode segment past the LDT's end cannot fault the fault handler) that
+`mega_fattr` - the CS attribution 14.140 made, now one routine for both
+callers - names as the instance being closed gets the switch's value back.
+A cell held by another package, or by real-mode code, is left as it is.
+**21h is not the switch's**: `mega_pmtail` copies IVT 08h-0Fh over 20h-27h
+after `mega_mxtinit` (an IRQ the BIOS takes in real mode lands there, the
+PIC staying at 20h), and `mega_ivt_sync` keeps that mirror, so 21h gets IVT
+09h's value, which is what `w16_i21_on` found there.
+
+*Where it lives.* `mega_fkivt` is `.cold` and far-called (`mega_fattrf` is
+its door back into `.mega`): `.mega` had 74 bytes before its rung, counting
+its 1,510-byte scratch. Measured with `tools/kernsize.py --build
+build/megak` against the merge 46b8d578c: `.mega` 22,992 -> 23,040 (+48:
+`mega_fattr` and its door, `mega_fkvec`, the snapshot loop, less the
+nibble test's 13), 26 left in the 24,576 rung; `.cold` +84, 295 left in its
+46,080; resident 62,976 unchanged, LOW unchanged; the tables' tail 1,216 ->
+1,280 bytes above 1MB. kern_big and kern_small do not assemble `mega.inc`.
+
+*Seen.* The first Bochs run of `tests/win16ovr.py` halted in `mega_fkivt`
+itself (`FAULT 0D at COLD:0ADC`): it walked the tail from 0, `mega_ustab`'s
+rows, instead of from `mega_ivts`, and read a "cell" past LOW0's limit. The
+same run showed the residue the entry is about: after the close IVT 21h,
+2Fh and 31h were `10E4:1038`, `10E4:0FD7` and `10E4:826A`, WIN16's code
+selector, and 02h, 34h-3Dh the BIOS's `F000:FF53` (OVRTEST has no x87
+code). Step 5 of the row is that check.
+
+*Owner bytes.* `mega_fbown`'s nibble test became `test al, 50h`: the owners
+written are a slot, 80h|, A0h| (taken), C0h|, F0h, FEh and FFh (refused),
+and bits 4 and 6 are clear in exactly the taken three.

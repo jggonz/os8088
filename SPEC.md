@@ -238621,20 +238621,36 @@ closes with it. Closing one program of several is open.
 - **The toast names the program**, not WIN16 (`OVRTEST 0D at 11BC:0517`):
   `w16_ownname` puts the first program's stem in WIN16's header, which is
   what the instance and the toast are called by.
-- **What a close does not undo (open).** While program code runs, IVT 21h,
-  2Fh, 31h and 34h-3Dh (or 3Dh and 02h with a native x87) name WIN16's code
-  (`w16_i21_on`), and only `w16_i21_off` puts the machine's back; a close
-  never runs WIN16's code, so they keep naming WIN16's freed code selector.
-  Protected-mode reads of them are refused while that entry is free
-  (`mega_swok`, `mega_idt_gate`'s free-entry test), the DOS core takes 21h,
-  2Fh and 34h-3Eh for its own bracket, and the next WIN16 run installs its
-  own - but saves the stale values as "the machine's" and puts them back. A
-  real-mode NMI after such a close (with a native x87) and a later reuse of
-  that LDT entry are the two ways it could still be reached.
+- **A close puts the machine's vectors back (KERN-MEGA-PLAN 14.141).**
+  While program code runs, IVT 21h, 2Fh, 31h and 34h-3Dh (or 3Dh and 02h
+  with a native x87) name WIN16's code (`w16_i21_on`), and only
+  `w16_i21_off` puts the machine's back; a fault close never runs WIN16's
+  code. So the kernel does it: at the switch `mega_mxtinit` copies those
+  fourteen cells, the software vectors a package may take (124.31.2's (d1)
+  set, 21h, 2Fh, 31h, 34h-3Dh) and the NMI's, into the tables' tail
+  (`mega_ivts`, above 1MB, nothing resident). At a fault close (`mega_fkill`,
+  the incident's first fault, before the unwind) each cell whose segment is a
+  present descriptor of THE CLOSED INSTANCE - its image or a part of it,
+  named by `mega_fkill`'s own attribution - gets the machine's value back:
+  the switch's copy, but for 21h, which in real mode is IRQ1's (the PIC stays
+  at 20h across a reflection) and gets IVT 09h, the mirror `mega_ivt_sync`
+  keeps there. A cell another package holds is left alone, and so is one
+  holding a real-mode address. **Why the switch's copy and not WIN16's saved one**:
+  WIN16's copy is in the instance's own bss, the memory being given up, and
+  it is exactly what goes stale - nothing else in the tree writes those
+  cells and keeps them (the DOS core takes 21h, 2Fh and 34h-3Eh for its own
+  bracket and gives them back; `MEGA_DIAG`'s shim is one floppy call long),
+  so the switch's value IS the machine's. A hibernate carries the copy with
+  the tail and the IVT with the image, so the two stay one machine's. Since
+  every other way out of a run passes `w16_i21_off` (the gate, the exit, the
+  forward to DOS) and a fatal fault halts, the next WIN16 run always finds
+  the machine's vectors and cannot save a stale one as the original.
 - **Test.** `tests/win16ovr.py` steps 3 and 4 (Bochs): OVRTEST's write one
   byte past its block raises #GP(0) inside its code, `kern_mega CLOSED`
   follows, `[mega_infault]` stays 0, and `mega_fkdo` completes the close
-  (`[mega_fkslot]` back to 0, no instance left). Seen 2026-11-04.
+  (`[mega_fkslot]` back to 0, no instance left). Seen 2026-11-04. Step 5:
+  after the close, none of the fourteen cells names an LDT code selector
+  below A000h, which is `mega_swok`'s test for a package's handler.
 
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 
