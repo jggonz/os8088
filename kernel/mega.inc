@@ -12898,9 +12898,11 @@ mega_wbind:
 
 ; mega_bown - DX:AX = a base, BL = a window's owner (mega_segown's) -> CF = 0
 ; the block it lies in is that owner's: a conventional claim recorded under
-; the slot, a pool block under 0A0h | slot, or a driver's pool block under its
-; 0C0h | row. CF = 1 someone else's, nobody's, or in no block - so mega_wset's
-; re-bind never binds a window into another package's memory (14.137, the
+; the slot, a pool block under 0A0h | slot (a claim) or the bare slot (its
+; OSAPI_XMEM_ALLOC block), or a driver's pool block under its 0C0h | row. A
+; REGION (80h | slot) is not a block a window binds into. CF = 1 someone
+; else's, nobody's, or in no block - so neither mega_wset's re-bind nor
+; SEG_BWIN binds a window into another package's memory (14.137, 14.139; the
 ; rule 14.135 made for SEG_FREE). Keeps all
 mega_bown:
     push ax
@@ -12914,15 +12916,17 @@ mega_bown:
     cmp dx, MEGA_XPOOL >> 16
     jb .conv
     MXT_ES                          ; (the tables' tail)
-    cmp bl, 0xC0
-    jae .p
-    or bl, 0xA0
-.p:
     call mx_rel                     ; AX = its KB from the pool's base
     jc .no
     call mx_inblk                   ; SI = the block
     jc .no
-    cmp [es:si+MX_OWN], bl
+    mov al, [es:si+MX_OWN]
+    cmp al, bl                      ; a driver's 0C0h | row, or the slot's
+    je .yes                         ; OWN OSAPI_XMEM_ALLOC block (owner the
+    cmp bl, 0xC0                    ; bare slot: the Video Player's run,
+    jae .no                         ; 14.139)...
+    or bl, 0xA0                     ; ...or a claim it took above 1MB
+    cmp al, bl
     je .yes
 .no:
     stc

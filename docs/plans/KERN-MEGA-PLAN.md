@@ -13602,7 +13602,25 @@ Shipped callers (each binds a block it owns): Video Player's `vp_xrun` window
 over its own `OSAPI_XMEM_RUN` block and its `vp_sel`/`vp_rsel` slot windows
 over its own claims (video.asm); the Browser's `br_bwaim` over its own claim
 (browser.asm); tests/megaxm over its own block. WIN16 uses `SEG_HND` and
-`SEG_AT`, not `SEG_BWIN`. tests/megaown gains a leg: MEGAOWN calls
-`SEG_BWIN` on a selector over MEGAHOLE's block-class memory it does not own
-and must see the refusal.
+`SEG_AT`, not `SEG_BWIN`.
+
+**`mega_bown` did not know an `OSAPI_XMEM_ALLOC` block** (found verifying
+this item). Such a block's `MX_OWN` is the BARE slot (00h-7Fh,
+`osapi_xmem_walk`'s owner list), and `mega_bown` OR'd 0A0h into every
+package's owner byte before it compared, so it recognised a pool CLAIM and
+never an XMEM block. Under 14.137 that was quiet - a `SEG_AT` re-bind over
+one fell to a fresh window - but with the test in front of `SEG_BWIN` it
+refused the Video Player's bound window over its `OSAPI_XMEM_RUN` block
+(BIGSP fell back to its copy, `vp_pmbigq`) and tests/megaxm's step 59h. The
+pool path now compares `MX_OWN` with the owner byte as given first (the
+bare slot, or a driver's 0C0h | row) and then with 0A0h | slot; a REGION
+(80h | slot) still matches neither.
+
+tests/megaown gains a leg (`MEGAOWN: bwin ok`): `SEG_BWIN` over one of
+MEGAOWN's own pool claims (0A0h | slot) is answered, and over its own DS -
+its REGION above 1MB, 80h | slot, not a block a window binds into - is
+refused with AX = 3; red without the test as `bwin no 03`, and on a wrongly
+refused claim as `bwin no 02`. The XMEM case is tests/megaxm's step 59h,
+which goes red at that step on the first version of this item (row
+`megaxmove`).
 

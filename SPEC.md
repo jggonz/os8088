@@ -99602,14 +99602,17 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
 - A **BOUND window** (`SEG_BWIN`) is a fresh descriptor - never a match, so
   re-aiming it moves nobody else's - based in a claim or a pool block **of
   the caller's own** (`mega_bown`, asked before the block is flagged: a
-  conventional claim recorded under the caller's slot, a pool block under
-  0A0h | slot or a driver's 0C0h | row; a caller with no owner byte has
-  none) and recorded in `mega_wtab` under the caller, its row's byte 3 marking it
+  conventional claim recorded under the caller's slot, a pool claim under
+  0A0h | slot, the caller's own `OSAPI_XMEM_ALLOC` block under the bare
+  slot - the Video Player's `OSAPI_XMEM_RUN` block is one - or a driver's
+  0C0h | row; never a package's REGION, 80h | slot; a caller with no owner
+  byte has none) and recorded in `mega_wtab` under the caller, its row's byte 3 marking it
   bound. `SEG_WIN`, `SEG_AT` and `SEG_WINL` naming one of the caller's own
   as the window to re-aim **re-bind** it when, and only when, the new base
   lies in a claim or a pool block **of the caller's own** (`mega_bown`: a
-  conventional claim recorded under its slot, a pool block under 0A0h |
-  slot or a driver's 0C0h | row): the reach is clipped at that block's end
+  conventional claim recorded under its slot, a pool claim under 0A0h |
+  slot, an `OSAPI_XMEM_ALLOC` block under the bare slot or a driver's
+  0C0h | row): the reach is clipped at that block's end
   and a pool block is flagged as `SEG_BWIN` flags it (`mega_wbind`, the one
   body the two share), so it is a bound window of that block from then on
   and the old block's free and moves no longer touch it. Aimed outside every
