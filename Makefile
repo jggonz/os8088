@@ -8429,17 +8429,23 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
-$(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
+# The part's symbols are the browser's OWN tree's (-I $(BUILD)/): a BUILD=
+# tree read build/'s copy until 2026-11-04, a stale map's or none at all
+$(BUILD)/brdownload_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_paint.inc \
+                           apps/browser/brcopyselection.inc tools/brdlsyms.py | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
+	        -o $@
+
+$(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols.inc \
                            apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
                            apps/browser/brdownload_const.inc \
                            apps/browser/brdocmarks.inc \
                            apps/browser/brcopyselection.inc \
                            tools/brdlsyms.py apps/os88api.inc | $(BUILD)
-	python3 tools/brdlsyms.py $(BUILD)/browser.map \
-	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
-	        -o $(BUILD)/brdownload_part_symbols.inc
-	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ \
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ \
 	        -o $@ apps/browser/brdownload_part.asm
 	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
 
@@ -15082,10 +15088,15 @@ megatrap:
 # megatrap's reason: build/mega.img is always the shipped shape. A field run
 # that needs a reading takes build/megadiag/mega.img (or mega120.img), and
 # megarun.o88 and mbr.bin are there so that `tools/os88bochs.py --build
-# build/megadiag` boots it
+# build/megadiag` boots it. It also builds WIN16's kern_mega disks
+# (megawin16.img, megawin16-120.img) in the same tree, so the diagnostic
+# kernel and the package it is used to diagnose are one build: a MEGADIAG
+# kernel with no WIN16 disk of its own was paired with whatever build/ held
+# (2026-11-04, docs: SPEC.md 124.17.4)
 megadiag:
 	@$(MAKE) BUILD=$(BUILD)/megadiag MEGADIAG=1 $(BUILD)/megadiag/mega.img $(BUILD)/megadiag/mega120.img \
-		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin
+		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin \
+		$(BUILD)/megadiag/megawin16.img $(BUILD)/megadiag/megawin16-120.img
 .PHONY: megadiag
 
 # `make megafdmask` - kern_mega with MEGAFDMASK=1 (KERN-MEGA-PLAN 14.125), the
@@ -19172,7 +19183,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX PROPS
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
 # by the import lines in its own .wlk, so it links without them.

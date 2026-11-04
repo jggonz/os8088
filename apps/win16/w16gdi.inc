@@ -1127,7 +1127,8 @@ w16_newobj:
 ; CreateSolidBrush (GDI.66) - args: +0 the COLORREF (red, green; blue)
 w16g_solidbrush:
     call w16_args
-    mov ax, [es:bx]
+.body:                              ; CreateBrushIndirect's way in (w16rgn.inc):
+    mov ax, [es:bx]                 ;   ES:BX -> the COLORREF
     mov dl, [es:bx + 2]
     call w16_rgb2col
     mov ah, W16K_BRUSH
@@ -1139,7 +1140,8 @@ w16g_solidbrush:
 W16_PENMAX  equ 64
 w16g_createpen:
     call w16_args
-    mov ax, [es:bx]
+.body:                              ; CreatePenIndirect's way in (w16rgn.inc):
+    mov ax, [es:bx]                 ;   ES:BX -> {COLORREF, width, style}
     mov dl, [es:bx + 2]
     call w16_rgb2col
     mov cx, [es:bx + 4]

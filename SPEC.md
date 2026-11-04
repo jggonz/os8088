@@ -234186,16 +234186,41 @@ change, they are the new anchor. The date's day of the week is computed
 #### 124.17.4 A debugging knob
 
 `-DW16_TRACE` builds WIN16 with a `W16_TRN`-entry ring of what the program
-asked for last: each export through the gate as its `w16api.inc` row, and
-each `int 21h` as 80h:AH. `tools/w16trace.py SOCK PROGRAM.EXE` reads it out
-of a running QEMU (with `W16_DEFINES=W16_TRACE` for the symbols). `W16_TRN`
-is 1024 unless defined. The ring and the row table beside it (two bytes a
-bind slot) stopped fitting WIN16's 64 KB at that size at S20. From S21 the
-table must shrink too: `W16_NBIND` is 384 unless defined. So a trace build
-is now `make W16DEFS='-DW16_TRACE -DW16_TRN=256 -DW16_NBIND=256' win16`,
-read with `W16_DEFINES='W16_TRACE W16_TRN=256 W16_NBIND=256'`. Such a build
-runs a program that binds at most 256 distinct imports, which every
-fixture does. It is how
+asked for last: each export through the gate as its **bind slot**
+(§124.19.1), and each `int 21h` as 80h:AH. `tools/w16trace.py SOCK
+PROGRAM.EXE` reads it out of a running QEMU and names each slot from the
+slot's own `w16_bind` entry - the part and the handler's offset in it,
+matched against the symbol map, so slots shared by handler name every row
+that shares them, and a missing import is named out of `w16_mtxt`. Until
+2026-11-04 the ring held export rows, which took a row table of two bytes a
+bind slot beside it; that table was what stopped the arm fitting, and a
+trace build had to bind fewer imports than the shipped one (256, then 288
+on kern_mega) - fewer than VBRUN300.DLL's own 286 slots, and than the 310
+that Mozart, VBRUN300 and their VBXs bind together by `tools/os88ne.py`'s
+census. A trace build now binds
+exactly what the shipped one does: `W16_NBIND` is 384 on every build.
+
+`W16_TRN` defaults to what each arm holds with room to spare, so a bare
+`-DW16_TRACE` assembles and packs on both: 256 in real mode (512 is the most
+its one data segment holds) and 64 on kern_mega (`-DPKG_MEGA`), whose
+APP_MAX_SIZE leaves the trace arm 220 bytes at 64 and 92 at 128 on the tree
+of 2026-11-04. That leftover shrinks as WIN16 grows, so the ring is the
+trace's elastic: `W16DEFS='-DW16_TRACE -DW16_TRN=128'` while it still packs,
+and `W16_TRFIRST` keeps the first calls instead of the last. The shipped
+build is unchanged to the byte. The int 21h half writes the ring through
+DS, not `cs:`, which on kern_mega is a #GP and a kernel fixup a call.
+
+`W16DEFS=-DW16_TRACE` builds the real-mode arm into `win16.o88` and, with
+`KERN_MEGA=1`, the kern_mega arm into `megak/apps/win16.o88`;
+`tests/unit/t_buildmatrix.py`'s `w16trace` and `w16tracemega` rows assemble
+and pack both, because the arm stopped assembling once with nothing red
+(2026-11-04, a 1024-entry ring). The reader assembles the map of the arm it
+is told (`--mega`, `--real`) or checks against (`--bin`, the `win16.bin`
+that was booted, byte for byte), with `W16_DEFINES` for the build's other
+defines, and looks for the program in the first 16MB: kern_mega's claims
+are above 1MB, where a reader of conventional memory never finds WIN16.
+`make megadiag` builds `megawin16.img` in its own tree, so a MEGADIAG
+kernel and the WIN16 it diagnoses are one build. It is how
 CLOCK's spin on 2Ch was found: a program that stops drawing and asks for
 nothing new is waiting for something WIN16 never changes.
 
@@ -236616,6 +236641,82 @@ The other direction, a monochrome bitmap into a colour one, is still a plain
 copy: black stays black and white stays white, which is what Windows gives
 under the default text and background colours. A DC with other colours
 would get them on Windows and does not here yet.
+
+#### 124.25.13 Window properties, WaitMessage and Arcade's other calls *(props)*
+
+All five of Microsoft Arcade's games (ASTEROID, BZ, CP, MC, TEMPEST) were
+refused *Needs USER.26 (SetProp)* after their setup had finished. The census
+(`tools/os88ne.py` over the games, and their own libraries AMDSPIN.DLL and
+ARCCTL.DLL) names every call WIN16 lacked, and these are all of them:
+
+| call | answer |
+|---|---|
+| `SetProp` (USER.26), `GetProp` (USER.25), `RemoveProp` (USER.24), `EnumProps` (USER.27) | window properties, below |
+| `WaitMessage` (USER.112) | returns at once when a message is there (it is left there), or an owner-drawn item is owed (§124.22.14), or, on kern_mega, the program has MMSYSTEM's calls' block (§124.32.6), whose calls are made from `GetMessage` and `PeekMessage`; otherwise the program **waits as in `GetMessage`** (`[w16_inget]` = 2), taking no UI pass and no CPU, and the next `w16_kick` (a key, the mouse, a timer, a paint, a post, the close box) resumes it without taking anything. A kick that brings no message is a return Windows would not make; a program calls it from a loop that tests the queue, which then waits again |
+| `CloseWindow` (USER.43) | nothing (it is `void` in Windows 3.1): there is no icon to go to, as `OpenIcon` (USER.44) answers a constant |
+| `ExcludeUpdateRgn` (USER.238) | 2, `SIMPLEREGION`: the DC's clip is left as it was, which is one rectangle and not empty. Nothing is excluded, so a program that draws outside `WM_PAINT` draws into the invalid part as well, and the `WM_PAINT` that follows draws it again: overdraw, never a missing pixel. `NULLREGION` would say the clip is now EMPTY, and a program that tests the answer before drawing would draw nothing. A real one is not one call: a DC's clip here is one rectangle (§124.25.6), so the update rectangle could be taken off it only from an edge, as `ExcludeClipRect` does |
+
+**Properties.** A property is a (name, HANDLE) pair on a window. The table is
+`W16_NPROP` = **32** records of six bytes (the HWND, 0 for a free record, the
+name's atom, the HANDLE) in the task part's data (§124.28.13) beside the
+atoms of §124.25.10, so it costs the image no byte of bss and a program
+that never sets one does not fetch the part for it.
+
+- A name with no segment is its own atom. A string is added to §124.25.10's
+  table of `W16_NATOM` atoms, found as `GlobalFindAtom` finds it, so it is
+  matched case aside; a table that is full makes `SetProp` answer FALSE.
+- `SetProp` answers FALSE for a window that is not one, a table that is
+  full, or a name that cannot be an atom. Setting a property that exists
+  replaces its HANDLE. `GetProp` answers the HANDLE or 0; `RemoveProp`
+  answers it and frees the record.
+- `EnumProps` calls the function `(hwnd, lpszString, hData)`, pascal, for
+  each of the window's properties, until one answers FALSE, and answers the
+  last answer, or -1 for a window with none. As Windows gives it, the name of
+  a property set with a string is a far pointer to the string - a copy, in 32
+  bytes of the call's own room on the program's stack (§124.2.2, the
+  `LOGFONT` of `EnumFontFamilies`' shape), gone when it returns - and one set
+  with an atom is the atom in the low word and 0 in the high. A string atom
+  (C000h and up) given as `MAKEINTATOM` is enumerated as its string.
+- **They go with the window**: `w16_cargone`, which `w16_wndfree` calls for
+  every window that is freed, drops a window's properties when the task
+  part is loaded (when it is not, none was ever set). Windows leaves the
+  removal to the program; a program that forgets leaks nothing here, and
+  nothing is left behind by one that faults or is closed, whose windows are
+  freed the same way, and the part itself goes with the instance.
+
+**Not done:** the atoms are 16 for the whole instance, clipboard formats
+and DDE among them, and a property name takes one for as long as the
+instance lives. A program that makes a new string name a window would
+exhaust them; Arcade's names are a handful, shared by every window of a kind.
+
+**Checked by** `tests/win16/props.c` (`PROPS.EXE`, Open Watcom, `make
+win16fixtures`), which sets, gets, replaces, enumerates and removes string-
+and atom-named properties, reads a string-named one's name in the callback,
+and checks that a destroyed window's are gone; the `win16props` row runs it.
+
+#### 124.25.14 The GDI calls Visual Basic 3.0 imports *(WIN16-NEXT-PLAN L1, vbgdi)*
+
+`VBRUN300.DLL` imports nine GDI functions WIN16 lacked. All nine are exports
+now, and none costs a resident byte: the rows are the loader part's and the
+handlers are the system-library part's (part 9).
+
+**What a missing import does (the question L1 asked).** A program that imports
+a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
+import is bound to a stub, and the program runs until it CALLS it. The stub
+then ends the program, as `exit` does, with a toast naming the call. So a
+library that imports 23 functions it never calls in the program's first
+second is fine, and one that calls a missing function in its start-up ends
+the instance at once, with only that toast to say so.
+
+| call | what WIN16 does |
+|---|---|
+| `OffsetWindowOrg` (GDI.15) | `SetWindowOrg` of the old origin plus the offsets; the old origin is the answer, `DX:AX` = y:x. Exact, with the same limits as `SetWindowOrg` (§124.22.2: the extents do not scale a drawing) |
+| `SetRectRgn` (GDI.172) | the region's rectangle replaced, as `CreateRectRgn` makes one. A handle that is not a region is left alone. Void in Windows; TRUE here |
+| `CreatePenIndirect` (GDI.62) | `CreatePen` from the `LOGPEN` (style, width.x, colour); width.y is ignored, as Windows ignored it |
+| `CreateBrushIndirect` (GDI.50) | `BS_SOLID` is `CreateSolidBrush`. `BS_NULL` is the stock `NULL_BRUSH`. `BS_HATCHED` is `CreateHatchBrush`'s (§124.25.6: solid in the colour) and `BS_PATTERN` and `BS_DIBPATTERN` solid in `lbColor`, because the `lbHatch` bitmap is not read |
+| `Arc`, `Pie` (GDI.23, 26) | the ellipse of the box, drawn counter-clockwise from the ray through the start point to the ray through the end point, as a polyline (`Arc`) or a polygon through the centre (`Pie`) of 64 vertices to the circle at most: the two end points are exact, the ones between are 5.625 degrees apart, which is under half a pixel from the true curve at a 300 pixel radius. `Pie` fills in the brush and draws its edges in the pen, `Arc` draws in the pen alone, and neither moves the current point. Identical start and end points draw the whole ellipse. They draw on every adapter's DC and on a memory DC, through `Polyline` and `Polygon` (§124.25.4), so a wide pen and the clip are theirs. The curve is not `Ellipse`'s pixel for pixel (`Ellipse` is `RoundRect`'s corner table) |
+| `CopyMetaFile` (GDI.151), `EnumMetaFile` (GDI.175), `PlayMetaFileRecord` (GDI.176) | 0. There are no metafiles here (§124.25.10): WIN16 never hands out a metafile handle, so there is none to copy, enumerate or play, and a program has to handle the 0 as it does when memory is short |
+
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
