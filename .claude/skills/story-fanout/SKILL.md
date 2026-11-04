@@ -16,9 +16,11 @@ owner:
 
 1. **Parallelize as much as possible.** Fan the independent items out to
    sub-agents at once, not one after another.
-2. **Monitor every long-running agent.** Arm a Monitor when an agent starts, and
-   relay what it reports as it happens. An idle notification is not a delivered
-   result.
+2. **Monitor every long-running agent: what it says, and its silence.** Arm a
+   Monitor on the logs when agents start and relay what they report as it
+   happens. Arm a second Monitor, the stall watchdog (Step 3), so that an agent
+   that goes quiet is caught and nudged by the lead without anyone asking. An
+   idle notification is not a delivered result.
 3. **Cheaper models build; Opus verifies.** Implementers run on Sonnet, or on
    Haiku for a mechanical chore. Opus reviews each finished branch and improves
    it where that is warranted.
@@ -84,7 +86,19 @@ first. `COMMON.md` carries:
 - **the log protocol**: one line per milestone,
   `[<key>] <HH:MM> STATUS: STARTED|PROGRESS|RUNNING|BLOCKED|DONE|FAILED <text>`,
   where `RUNNING` precedes any command over three minutes and `BLOCKED` names
-  an owner decision with its options and byte costs, then stops;
+  an owner decision with its options and byte costs, then stops. A `RUNNING`
+  line carries an estimate as `~<N>m` (the watchdog waits that long plus five
+  minutes before calling the agent stalled);
+- **the completion rule**: an agent never goes idle waiting for its own
+  command. A long command runs in the foreground with a timeout, or in the
+  background as `(cmd > <logs>/<key>-<what>.out 2>&1; echo "[<key>] $(date
+  +%H:%M) STATUS: PROGRESS <what> finished rc=$?" >> <logs>/<key>.log)`, so
+  that the finish is itself a log line the agent's own Monitor (or the lead's)
+  sees. "Waiting for the build" with no such line is a stall;
+- **no `git stash`, ever**: the stash stack is shared by every worktree of the
+  repo, so one agent's `pop` applies another's work. Take baselines by
+  copying build outputs or by building into a private `BUILD=` tree, and
+  commit work in progress instead of stashing it;
 - the report path, `<logs>/<key>-report.md`. A final message can arrive
   truncated or late, so the report file is what the lead reads;
 - the testing rules: host checks, `make`, kernsize and budget-check, and one
@@ -113,6 +127,34 @@ tail -n0 -F <logs>/*.log | grep -E --line-buffered \
 Use the maximum timeout and re-arm it on every expiry while any agent is still
 running. List the log files by name; a glob is expanded only once.
 
+Arm the **stall watchdog** beside it, also before launching, with one
+`--worktree` per log file (the log's stem, so a verifier logging to its
+implementer's file is covered by the same entry):
+
+```
+python3 .claude/skills/story-fanout/watchdog.py --logs <logs> \
+  --worktree <key>=~/Repos/os8088-<prefix>-<key> ... --stale 10
+```
+
+It prints `STALL <key> ...` once when an agent's last status is not DONE,
+FAILED or BLOCKED and, for ten minutes (or a `RUNNING ~<N>m` estimate plus
+five), its log has had no new line, nothing in its worktree was written or
+committed, and no process is running there. Re-arm it on expiry as you would
+the log Monitor. Run it once by hand with `--once --stale 1` against a scratch directory of
+logs you wrote yourself (never append test lines to the live logs: an
+unfinished `[test]` key is itself a stall), so you know it fires. Log the
+lead's own long runs to a `lead.log` with no `--worktree`, so they are
+watched too and never charged to an agent.
+
+**On a `STALL` line, nudge at once; do not wait to be asked.** Look once at
+the worktree (`git status --short`, `git log -1`, whether a make or emulator
+is running there) and SendMessage the agent what you found and the exact next
+step: "your build finished, read its result; commit the N files you have
+written, staging them by name; then the checks; then the report and DONE".
+Append the nudge to `DECISIONS.md`. A second `STALL` for the same agent after
+a nudge goes to the user with what is uncommitted, so they can choose between
+another nudge, a fresh agent over the same worktree, and the lead finishing it.
+
 Launch every fan-out agent in a single message, in the background, with
 `model: "sonnet"` (or `"haiku"` for a mechanical chore) and a `name` equal to
 its key, so it can be messaged.
@@ -124,6 +166,9 @@ While they run:
   numbers.
 - When an agent reports a background run of its own (a Bochs set, a long
   reproduction), arm a Monitor on that run's log or PID too.
+- An agent's idle notification while its last status is not terminal is a
+  stall candidate: check the worktree then, rather than waiting for the
+  watchdog's threshold.
 - Answer an agent's question by SendMessage **and** by appending the answer to
   a `DECISIONS.md` in the log directory. Messages to a running agent have
   arrived late and in batches; the file is the record that survives.

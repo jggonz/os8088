@@ -74,3 +74,41 @@ with all 43 rows green.
 
 **Rule:** COMMON.md tells agents that a wall-clock-only failure with every row
 green is host load, and to re-run once rather than "fix" anything.
+
+## The log Monitor cannot see an agent that stops talking
+
+**PCIETHER (RTL8139).** An Opus verifier logged `ACK D3`, wrote seven files
+and went idle "waiting for both builds". The builds had already finished. It
+wrote no further log line, so the log Monitor, which reports only lines, said
+nothing for thirty-two minutes, and the stall surfaced only when the user
+asked what the agent was doing. One SendMessage naming the finished builds and
+the uncommitted files got a commit within a minute. Two other agents (the
+`harness` implementer and the same verifier earlier) idled the same way on
+their own `make`.
+
+**Rule:** run `watchdog.py` as a second Monitor from launch, and nudge on its
+`STALL` line without waiting to be asked. The brief's completion rule makes an
+agent's own long command end in a log line, so "waiting for the build" cannot
+be silent.
+
+## One agent's `git stash pop` took another agent's work
+
+**PCIETHER.** `kmega` stashed its `kernel/driver.inc` edits to build a
+baseline. `harness`, in a different worktree, ran `git stash pop`, which takes
+the top of the stack the worktrees share, and applied `kmega`'s kernel work
+to its own tree. It noticed, re-stashed it, and `kmega` recovered it by name.
+Nothing was lost only because both agents reported it in their logs.
+
+**Rule:** COMMON.md forbids `git stash` outright. Baselines come from copied
+build outputs or a private `BUILD=` tree; work in progress is committed.
+
+## The watchdog's first version read only a log's last line
+
+**PCIETHER.** A verifier logged `DONE`, then `PROGRESS ACK D4` for a rule
+sent after it had finished, and the watchdog called the finished agent
+stalled. A `[test]` line the lead had appended to check the log Monitor was
+a second false stall.
+
+**Rule:** the watchdog follows each `[key]` on its own; DONE and FAILED stick
+until a STARTED or RUNNING, and BLOCKED reopens on any line. Test it against a
+scratch directory, never by appending to the live logs.

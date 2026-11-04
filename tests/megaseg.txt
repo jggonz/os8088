@@ -160,4 +160,10 @@
 #             to read) and D2's lent BIOS stack (SPEC.md 50.6.11, 124.31.2),
 #             whose real-mode landing needs the stack's segment and selector
 #             both
-3254
+# 2026-11-04: PCIETHER.DRV's drv_tab row (SPEC.md 125.5), kern_mega's alone:
+#             +29 of driver-layer DATA in the kernel's segment - the 16-byte
+#             drv_tab row and the 13-byte 'PCIETHER.DRV' name, both read
+#             through DS (drv_load_at, dskw_read). The DRVE_CLASS string, its
+#             table word, the title and the drv_memk word are CTRL.DRV's and
+#             the blob's, not resident. Data, so it cannot go in .mega
+3283

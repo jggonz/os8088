@@ -3487,6 +3487,10 @@ PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
 ; the per-driver copy 51.12.1 refuses.
 DRVM_CEIL_DISK equ 4           ; DRVC_DISK's ceiling, in KB
 DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's
+DRVM_CEIL_NET_MEGA equ 39      ; ...and DRVC_NET's on kern_mega, whose
+                                ; PCIETHER.DRV (SPEC.md 125.5) is the class's
+                                ; larger row: a package built FOR kern_mega
+                                ; (DOS.O88's -DDOS_MEGA copy) quotes this one
 DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
                                 ; Its package door reaches TWO verbs and no

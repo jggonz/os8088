@@ -64,6 +64,15 @@ SOURCES = [
     "kernel/memory.inc",            # MEM_GRAN, for a claim in paragraphs
 ]
 
+# ...and PCIETHER.DRV's, which only exist where its driver does: the row is
+# kern_mega's (SPEC.md 125.5) and its claim terms live in its own sources. A
+# tree WITHOUT drivers/pciether/ (the kernel row landed before the driver)
+# skips that one row's claim check and says so; a tree with it must resolve.
+PCIETH_SOURCES = [
+    "drivers/pciether/rtl8139.inc",     # RT_RING, RT_CLAIM: rt_claim's claim
+    "drivers/pciether/pciether.asm",    # NIC_RINGSZ, SK_RINGSLK: sk_cardcap's
+]
+
 # row -> (the DRVM_ constant, the DRVM_IMG_ term, the built image). The ORDER
 # is drv_tab's, and it is checked against drv_tab below rather than trusted.
 ROWS = [
@@ -89,12 +98,16 @@ ROWS = [
     # SPEC.md 120's VESA.DRV: the second DRVC_OVL row, LAST on both big
     # builds, with a SYSTEM.CFG bit (8) and a Drivers-page price like the rest
     ("VESA Display", "DRVM_VESA", "DRVM_IMG_VESA", "vesa.drv"),
+    # SPEC.md 125's PCIETHER.DRV: DRVC_NET like ETHER.DRV, LAST and on
+    # kern_mega ALONE (the rest of this table is kern_big's superset, which the
+    # %ifdef-blind regexes above read whole), SYSTEM.CFG bit 11
+    ("PCI Ethernet", "DRVM_PCIETH", "DRVM_IMG_PCIETH", "pciether.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
 
 
-def symbols():
+def symbols(sources=None, known=None):
     """Every `NAME equ EXPR` in SOURCES, resolved to an int where it is one.
 
     NASM's expressions here are arithmetic over other equs, so they are
@@ -102,11 +115,11 @@ def symbols():
     1024` and reading it as a literal would read it as nothing.
     """
     raw = {}
-    for rel in SOURCES:
+    for rel in SOURCES if sources is None else sources:
         with open(os.path.join(ROOT, rel), errors="replace") as f:
             for name, expr in EQU.findall(f.read()):
                 raw.setdefault(name, expr)          # first spelling wins
-    out, pending = {}, True
+    out, pending = dict(known or {}), True
     while pending:
         pending = False
         for name, expr in raw.items():
@@ -285,7 +298,38 @@ def main():
         # and the arrow's save-under are bss, inside the image
         "DRVM_VESA": s["DRVM_IMG_VESA"],
     }
+    # PCIETHER.DRV (SPEC.md 125.4, 125.5) shares ETHER.DRV's stack as source,
+    # and claims TWO things: rt_claim's ring + transmit buffer, from attach to
+    # detach, and the socket pool - at the largest rung sk_cardcap lets the
+    # card's ring hold (NIC_RINGSZ - SK_RINGSLK), which on the RTL8139's 8KB
+    # ring is NOT the pool's top. Pricing it at SK_RXMAX, as ETHER.DRV's row
+    # is, both counts a rung the card never takes and leaves out the ring.
+    pcieth = os.path.isdir(os.path.join(ROOT, "drivers/pciether"))
+    if pcieth:
+        p = symbols(PCIETH_SOURCES, s)
+        cap = p["NIC_RINGSZ"] - p["SK_RINGSLK"]
+        rung = [rx for rx in (s["SK_RXMAX"], s["SK_RXMID"], s["SK_RXCAP0"])
+                if rx <= cap]
+        check(bool(rung), "PCIETHER.DRV's ring holds at least the floor rung",
+              "sk_cardcap refuses every rung, so the pool is never claimed")
+        rx = rung[0] if rung else s["SK_RXCAP0"]
+        want["DRVM_RT_PCIETH"] = ceil_gran(p["RT_CLAIM"])
+        want["DRVM_SK_PCIETH"] = ceil_gran(rx + rx // 2
+                                           + s["SK_NLEAN"] * (s["SK_LEANRX"]
+                                                              + s["SK_LEANTX"]))
+        want["DRVM_PCIETH"] = (s["DRVM_IMG_PCIETH"] + want["DRVM_RT_PCIETH"]
+                               + want["DRVM_SK_PCIETH"])
+        for n in ("DRVM_RT_PCIETH", "DRVM_SK_PCIETH"):
+            eq(s.get(n), want[n], "PCI Ethernet: %s is the driver's own claim" % n,
+               "kernel/driver.inc copies drivers/pciether/'s arithmetic "
+               "(SPEC.md 31.6.2, 125.5): the ring is RT_CLAIM at the heap's "
+               "granule and the pool is the rung sk_cardcap allows")
+    else:
+        print("t_drvmem: no drivers/pciether/ in this tree - PCI Ethernet's "
+              "claim terms are not re-derived")
     for title, total, _img, _drv in ROWS:
+        if total not in want:
+            continue
         eq(s.get(total), want[total],
            "%s: %s is its image plus the claims it works with" % (title, total),
            "the kernel cannot %include a driver's source - they are separate "
@@ -349,11 +393,24 @@ def main():
        "row silently left out of it")
     api = os.path.join(ROOT, "apps/os88api.inc")
     asrc = open(api, errors="replace").read()
-    for want_cls, width, ceil in (("DRVC_DISK", 2, "DRVM_CEIL_DISK"),
-                                  ("DRVC_NET", 2, "DRVM_CEIL_NET")):
+    # The rows only kern_mega has (SPEC.md 125.5), and a ceiling PER KERNEL
+    # (the owner's decision, 2026-11-04): DOS.O88 is assembled for kern_mega
+    # with -DDOS_MEGA and quotes DRVM_CEIL_NET_MEGA, every other DOS.O88 the
+    # plain DRVM_CEIL_NET - so each is held to the rows ITS kernel has.
+    # ETHER.DRV and PCIETHER.DRV are ALTERNATIVES in one publication slot
+    # (drv_load_at refuses whichever attaches second, DRVE_CLASS), so on
+    # kern_mega DRVC_NET's ceiling is the LARGER of the two, not their sum.
+    mega_only = {"DRVM_PCIETH"}
+    for want_cls, width, ceil, mega in (("DRVC_DISK", 2, "DRVM_CEIL_DISK", False),
+                                        ("DRVC_NET", 2, "DRVM_CEIL_NET", False),
+                                        ("DRVC_NET", 2, "DRVM_CEIL_NET_MEGA", True)):
         total = 0
         for (title, memk, _img, _drv), cls in zip(ROWS, klass):
-            if cls == want_cls:
+            if cls != want_cls or (memk in mega_only and not mega):
+                continue
+            if mega and want_cls == "DRVC_NET":
+                total = max(total, s.get(memk, 0) & ~plus)
+            else:
                 total += s.get(memk, 0) & ~plus
         total = (total + 1) // 2        # drv_memk is half-KB; a ceiling is
                                         # KB, rounded UP
