@@ -393,8 +393,18 @@ vb_play:
 ; at DX:AX goes on from there; any other is SEEKED, which costs the kernel
 ; a walk of the file's chain from its start (FILE_READ_SEQ, 18.4.8) - the
 ; reason each stream keeps its own (125.4). out CF=1 on an error or a
-; short file. Clobbers AX, BX, CX, DX; [vb_rcur] back to vb_cur
+; short file. Clobbers AX, BX, CX, DX; [vb_rcur] back to vb_cur. Out of
+; the HOLD in extended memory when it has all of the bytes (vbhold.inc)
 vb_read:
+    cmp byte [vb_hon], 0
+    je vb_dread
+    cmp byte [vb_hbyp], 0           ; (the hold's own fill: the disk)
+    jne vb_dread
+    call vb_hread
+    jc vb_dread
+    ret
+; vb_dread - vb_read from the disk
+vb_dread:
     push si
     push di
     push bp
@@ -798,6 +808,7 @@ vb_load:
     call vb_read
     jc .fail1
 .noimg:
+    call vb_hopen                   ; the hold, where there is a pool
     mov byte [vb_loaded], 1
     call vb_fontload
 .again:
@@ -2918,12 +2929,22 @@ vb_reader:
     call vb_rhead
     jnc .read
 .quiet:
-    mov bx, vb_rg0                  ; 5. the playing clips, to the top
-    call .play
-    jc .read
+    mov bx, vb_rg0                  ; 5. the playing clips, to the top - a
+    call .play                      ; ring with no room passes the turn on
+    jnc .q1                         ; (a loop read round is never all read,
+    call vb_rpiece                  ; and would keep it from the music and
+    jc .rerr                        ; the hold's fill)
+    or al, al
+    jnz .rok
+.q1:
     mov bx, vb_rg1
     call .play
-    jc .read
+    jnc .q2
+    call vb_rpiece
+    jc .rerr
+    or al, al
+    jnz .rok
+.q2:
     call OSAPI_GET_TICKS            ; A KEY A MOMENT AGO: nothing more yet.
     sub ax, [vb_ktick]              ; The next key would wait behind the
     cmp ax, VB_KQUIET               ; read in the BIOS buffer - Down then
@@ -2950,7 +2971,17 @@ vb_reader:
     call vb_rhead
     jnc .read
 .top:
-    jmp vb_mpiece                   ; 8. the music
+    call vb_mpiece                  ; 8. the music
+    jc .rerr
+    or al, al
+    jnz .rok
+    jmp vb_hstep                    ; 9. the HOLD's fill (VBATTLE-MEMORY 4)
+.rok:
+    clc
+    ret
+.rerr:
+    stc
+    ret
 .read:
     jmp vb_rpiece
 .out:
@@ -3046,6 +3077,7 @@ vb_reader:
 %include "vbattle/vbrules.inc"
 %include "vbattle/vbgame.inc"
 %include "vbattle/vbloop.inc"
+%include "vbattle/vbhold.inc"
 
 ; vb_strncpy - at most CX bytes of DS:SI to DS:DI, trailing blanks dropped
 vb_strncpy:
@@ -3323,6 +3355,20 @@ VB_VAR vb_frows, 2
 VB_VAR vb_fticks, 2                 ; the hook's frames since it began
 VB_VAR vb_rsring, 2
 VB_VAR vb_cgkb, 1
+VB_VAR vb_hon, 1                    ; the HOLD is on (vbhold.inc)
+VB_VAR vb_hbyp, 1                   ; ...its fill reading the disk
+VB_VAR vb_hrn, 1                    ; ...its ranges
+VB_VAR vb_hi, 1                     ; ...the one filling
+VB_VAR vb_hfull, 1                  ; ...all of it there
+VB_VAR vb_hpool, 2                  ; ...the pool, in 4 KBs
+VB_VAR vb_hkb4, 2                   ; ...the block, in 4 KBs
+VB_VAR vb_hk, 2
+VB_VAR vb_hbnc, 2                   ; ...the fill's bounce
+VB_VAR vb_hcopies, 2                ; ...reads it answered
+VB_VAR vb_hcap, 2                   ; ...a gate's cap on the pool, 4 KBs
+VB_VAR vb_htok, 4                   ; ...the block's token
+VB_VAR vb_hcur, FSEQ_SIZE           ; ...the fill's own file cursor
+VB_VAR vb_htab, 28 * 8              ; ...the ranges (HT_*)
 VB_VAR vb_kind, 1                   ; the bundle's adapter (VK_*)
 VB_VAR vb_tcol0, 2                  ; a text's first cell (vb_text)
 VB_VAR vb_bpc0, 2                   ; vb_bpres: the first cell...

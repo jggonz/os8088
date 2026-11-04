@@ -1,7 +1,7 @@
 # VBATTLE-MEMORY — streaming the loops, and the memory faster machines have
 
-**Status: M1 and the renditions (9) BUILT (2026-11-04, format 7); M2 to M4
-proposed.** The owner's
+**Status: M1, the renditions (9), M2 and M3 BUILT (2026-11-04, format 7,
+SPEC.md 125.4.1); M4 proposed.** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all
@@ -163,6 +163,12 @@ in each read.
 - **The window says which**: "Held in XMS: 3,000 KB" on the window's card,
   as Video Player's line 6 does.
 
+**M2 DONE 2026-11-04** (SPEC.md 125.4.1): on QEMU the demo is held whole,
+byte for byte, while the title goes round, and with B: made blank the
+battle plays to victory and starts again from the hold alone. Not on a
+real 286 yet: the copies' cost under its `int 15h` is Video Player's
+measured figure, not this engine's.
+
 ## 5. Wave M3: when the pool is smaller than the bundle
 
 A 286's common pools are 1 and 3 MB (98.3.18.2.1); the owner's H3 battle is
@@ -186,6 +192,10 @@ one key, which the enemy's weights favour, what loops. The order it writes:
 
 The window's Build tab shows, per profile with its pool, where the line
 falls: "1 MB pool: the music, every head, the title - 940 KB".
+
+**M3 DONE 2026-11-04**: the order in the header, the engine's hold its
+ranges while the pool lasts (`vbtholdpart`), the Build tab's lines for a 1
+and a 3 MB pool.
 
 ## 6. The budget learns colours and memory
 

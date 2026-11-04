@@ -3013,7 +3013,14 @@ class BuildTab(object):
                               "is resident" if bud["memory"]["music_resident"]
                               else "streams beside it, %.1f KB/s" %
                               (bud["music_rate"] / 1024)))
-        self.mem_l.config(text="\n".join(memory_lines(bud["memory"]) + [
+        hl = []
+        for pool, hh in sorted(bud.get("hold", {}).items(), key=lambda x: int(x[0])):
+            hl.append("With %d MB of XMS: %s" % (int(pool) // 1024,
+                      "the whole bundle held - every read a copy" if hh["whole"]
+                      else "%d KB held, the hold order's first (the music, the "
+                      "loops, every action's start...) of its %d" % (
+                          hh["kb"], hh["order_kb"])))
+        self.mem_l.config(text="\n".join(memory_lines(bud["memory"]) + hl + [
             "(on a 640 KB machine: %d KB free to the engine, measured on "
             "MartyPC's XT; 86Box's 5150 left about 20 KB more)" %
             (bud["memory"]["free"] // 1024)]))

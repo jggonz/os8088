@@ -503,7 +503,19 @@ def budget(proj, data):
         c["with_music"] = (c["rate"] + mrate) / disk
         c["head_secs"] = min(c["bytes"], VB_HEAD) / disk
         c["fits_ring"] = mem["ring"] is not None and c["bytes"] <= mem["ring"]
+    order = [n * 4 for _, n in getattr(b, "hold", [])]     # KB, in order
+    holds = {}
+    for pool in (1024, 3072):       # a 286's common pools (98.3.18.2.1)
+        whole = len(data) // 1024 <= pool - 4
+        got, left = 0, pool - 4
+        for kb in order:
+            take = min(kb, max(0, left))
+            got += take
+            left -= take
+        holds[pool] = dict(whole=whole, kb=len(data) // 1024 if whole
+                           else got, order_kb=sum(order))
     return dict(clips=clips, idle_bytes=len(b.idle_r), entries=len(b.ents),
+                hold=holds,
                 music=b.mlen, ui=len(b.uib), file=len(data), disk=disk,
                 memory=mem, music_rate=mrate)
 

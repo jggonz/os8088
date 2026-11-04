@@ -548,6 +548,10 @@ def build(b):
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     h[337] = REND.code                  # the adapter (cga4, vga4, herc)
+    hold = hold_order(clip_rows, offs, regions, mus_at, len(mus))
+    struct.pack_into("<H", h, 398, len(hold))
+    for i, (a4, n4) in enumerate(hold):
+        struct.pack_into("<HH", h, 400 + 4 * i, a4, n4)
     if REND.pal:                        # vga4: its sixteen, the DAC's six bits
         h[352:400] = bytes(v for c in REND.pal for v in c)
     struct.pack_into("<II", h, 338, idl_at, len(idle))
@@ -578,6 +582,45 @@ def build(b):
         out += pad(r, ALIGN)
     assert len(out) == total
     return bytes(out)
+
+
+VB_HEAD = 40960         # what a clip's start waits for (vbattle.asm VB_HEAD)
+HOLD_MAX = 28           # the hold order's ranges (header 398..511)
+MUSIC_RES = 61440       # music this short is resident (VB_MRES)
+
+
+def hold_order(clip_rows, offs, regions, mus_at, mlen):
+    """The HOLD ORDER (VBATTLE-MEMORY-PLAN 5): ranges of the file in 4 KBs,
+    most worth holding first, for a pool smaller than the bundle. The music
+    when it streams (it reads all through the play); the loops; every
+    action's HEAD, so no action waits on the disk to start; the openings;
+    then the rest of each action's clip, smallest first"""
+    def r4(at, n):
+        return (at // ALIGN, -(-n // ALIGN))
+    out = []
+    if mlen > MUSIC_RES:
+        out.append(r4(mus_at, mlen))
+    acts = []
+    for i, c in enumerate(clip_rows):
+        if c["flags"] & CF_LOOP:
+            out.append(r4(offs[i], len(regions[i])))
+        elif not c["flags"] & CF_OPENING:
+            acts.append(i)
+    for i in acts:
+        out.append(r4(offs[i], min(len(regions[i]), VB_HEAD)))
+    for i, c in enumerate(clip_rows):
+        if c["flags"] & CF_OPENING:
+            out.append(r4(offs[i], len(regions[i])))
+    for i in sorted(acts, key=lambda i: len(regions[i])):
+        if len(regions[i]) > VB_HEAD:
+            out.append(r4(offs[i] + VB_HEAD, len(regions[i]) - VB_HEAD))
+    merged = []
+    for a, n in out:                # (one after the other in the file: one)
+        if merged and merged[-1][0] + merged[-1][1] == a:
+            merged[-1] = (merged[-1][0], merged[-1][1] + n)
+        else:
+            merged.append((a, n))
+    return merged[:HOLD_MAX]
 
 
 # --- reading one back -------------------------------------------------------------
@@ -622,6 +665,9 @@ class Bundle:
                     if kind == "vga4" else None)
         self.rend = REND
         self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
+        nh = struct.unpack_from("<H", data, 398)[0]
+        self.hold = [struct.unpack_from("<HH", data, 400 + 4 * i)
+                     for i in range(nh)]
         self.idle_r = data[self.idl_at:self.idl_at + ilen2]
         self.rules = vbtrules.Rules(data[SCRIPT_AT:self.meta_len])
         self.ui = [struct.unpack_from("<IH", data, 96 + 6 * i)

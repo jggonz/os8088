@@ -237357,6 +237357,8 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 337 | 1 | the ADAPTER (125.3.2): 0 CGA4, 1 VGA4 (mode 0Dh), 2 Hercules |
 | 338 | 4+4 | the IDLE loop's records' offset and length (format 7): each record on a paragraph, which the idle table names |
 | 352 | 16 x 3 | VGA4: its sixteen colours (r, g, b), the DAC's six bits; slots 0 to 3 the band's CGA colours |
+| 398 | 2 | the HOLD ORDER's ranges, at most 28 (125.4.1) |
+| 400 | 4 x 28 | ...each (its first 4 KB of the file, its 4 KBs), most worth holding first |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -237760,6 +237762,44 @@ The demo battle on a 640 KB machine:
 | the clip rings, per play | all the largest run less 8 KB: on 86Box's 640 KB 5150, 2 x (172 + 16) KB |
 | the card's ring | 17 KB |
 | the bundle | 847,872 bytes on the disk: the music 282,240 (25.6 s), the Limit 249,650 |
+
+#### 125.4.1 The bundle held in extended memory
+
+**On a machine with an XMS pool (SPEC.md 41) the bundle is HELD, and every
+read lying wholly inside what has arrived is a copy instead of a disk
+read** (VBATTLE-MEMORY-PLAN 4 and 5, `apps/vbattle/vbhold.inc`). An 8088 is
+unchanged: one `OSAPI_XMEM_CAPS` at load, and a compare in each read.
+
+- **What is held** (`vb_hopen`, at the first load): the WHOLE file, one
+  range, when the pool can take it - the whole pool, none kept back (Video
+  Player's 98.3.18.2.1); else the builder's HOLD ORDER (header 398), its
+  ranges taken in order while the pool lasts, the last one cut. One block
+  (`OSAPI_XMEM_ALLOC`), subdivided; a 32 KB bounce for the fill.
+- **The order** (`os88vbt.hold_order`): the music when it streams (it reads
+  all through the play), the loops, every action's HEAD - the 40 KB a start
+  waits for, so no action waits on the disk to start - the openings, then
+  the rest of each action's clip, smallest first; ranges that follow each
+  other in the file are one.
+- **It fills while the reader has nothing better to do** (`vb_hstep`, the
+  reader's last turn): a chunk of up to 32 KB off the disk into the bounce
+  and up into the block, on a cursor of its own. The title loop's wait for
+  a key is where most of it happens. A ring with no room now passes the
+  reader's turn on, so a loop read round cannot keep the fill from running.
+- **A read** (`vb_read`, all of them pass there: a ring's piece, a head,
+  the music, a loop's lap, the again path's reload): out of the hold when
+  it has all of the bytes, in copies of 32 KB with a card and 4 KB under
+  the PIT's clock (`int 15h AH=87h` holds interrupts off for a whole copy,
+  and a period lost under the PIT is time lost); the stream's cursor then
+  zeroed but for its offset, so a later disk read seeks from the name
+  (18.4.8). A copy refused, or a fill's read failing, drops the hold.
+- **The UI task alone copies** (41.8): the reader is there.
+
+`vbthold` (QEMU) holds it to the file: the hold one range, filled while the
+title goes round, byte for byte the bundle, then B: changed to a BLANK
+floppy and the battle played to victory, its end loop and the title again
+out of the hold alone; `vbtholdpart` with the pool capped under the bundle
+(`[vb_hcap]`, a gate's) takes the order's ranges; `vbtholdnox` with no
+pool plays the disk's. The Build tab shows what a 1 MB and a 3 MB pool hold.
 
 ### 125.5 The band
 

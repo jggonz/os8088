@@ -16773,6 +16773,25 @@ SOAK = [
         "loop. Broken on purpose (Hercules' odd-row pattern swapped) the band "
         "FAILS at every look",
         needs=("marty",)),
+    Row("vbthold", "soak", py("tests/vbthold.py"), 20.0,
+        "VBATTLE-MEMORY-PLAN 4: the Video Battle's bundle HELD WHOLE in XMS "
+        "(QEMU: the closed list's entry 1). The demo with a 1-HP enemy on "
+        "B:; the hold one range, the whole bundle, filled while the title "
+        "goes round and byte for byte the file; then B: changed to a BLANK "
+        "floppy and the play runs on - the fade, the menu, victory, its end "
+        "loop, Enter and the title again - out of the hold alone. Broken on "
+        "purpose (vb_read skipping the hold) it stalls before victory",
+        needs=("qemu",)),
+    Row("vbtholdpart", "soak", py("tests/vbthold.py", "--arm", "part"), 20.0,
+        "VBATTLE-MEMORY-PLAN 5: the pool held under the bundle (a gate's cap, "
+        "[vb_hcap]): the hold is the builder's HOLD ORDER's ranges in order, "
+        "it fills while the title goes round, and the play runs with the "
+        "disk serving the rest and the hold answering reads",
+        needs=("qemu",)),
+    Row("vbtholdnox", "soak", py("tests/vbthold.py", "--arm", "nox"), 20.0,
+        "The Video Battle with NO pool (`-m 1`): no hold taken, and the play "
+        "the disk's, to victory and again, as on an 8088",
+        needs=("qemu",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "
