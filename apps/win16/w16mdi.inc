@@ -128,7 +128,7 @@ W16TSK w16i_dresalloc
 ; double NUL. A program WIN16 starts has no environment (its PSP's word 2Ch
 ; is 0), so the block is an empty one - NUL NUL, a word 1 and the program's
 ; path an empty string - in a 32-byte GlobalAlloc block the task owns (freed
-; with it) and is made at the first ask (SPEC.md 124.25.20). [w16_envp] is
+; with it) and is made at the first ask (SPEC.md 124.25.21). [w16_envp] is
 ; its data paragraph; a block that is not still the current task's, with the
 ; word 1 in it, is made again
 W16TSK w16i_dosenv

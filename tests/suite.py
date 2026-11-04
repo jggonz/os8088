@@ -17178,7 +17178,7 @@ SOAK = [
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
     Row("win16dosenv", "soak", py("tests/win16dosenv.py"), 60.0,
-        "SPEC.md 124.25.20, WIN16-NEXT `vbxlib`: DOSENV.EXE (`make "
+        "SPEC.md 124.25.21, WIN16-NEXT `vbxlib`: DOSENV.EXE (`make "
         "win16fixtures`, tests/win16/dosenv.c) asks GetDOSEnvironment for the "
         "task's environment: the offset must be 0, the selector readable (a C "
         "start-up that loads a nonzero AX into ES faulted Mozart's "

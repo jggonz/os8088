@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""win16dosenv - GetDOSEnvironment answers SELECTOR:0 (SPEC.md 124.25.20).
+"""win16dosenv - GetDOSEnvironment answers SELECTOR:0 (SPEC.md 124.25.21).
 
     python3 tests/win16dosenv.py             (row win16dosenv)
     python3 tests/win16dosenv.py --keep      leave the QEMU for a look

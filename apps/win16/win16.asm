@@ -745,7 +745,7 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16_gclock, 2        ; ...counted in uses
     W16BSS w16_gnproc, 4        ; GlobalNotify's procedure, or 0 (w16sys.inc)
     W16BSS w16_gflg, 1
-    W16BSS w16_envp, 2          ; GetDOSEnvironment's block: its data paragraph (124.25.20)
+    W16BSS w16_envp, 2          ; GetDOSEnvironment's block: its data paragraph (124.25.21)
     W16BSS w16_gdisc, 1
     W16BSS w16_gnp, 2
     W16BSS w16_gold, 2
