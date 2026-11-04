@@ -357,6 +357,58 @@ Observed: the tab driven under Xvfb on the H3 project - the scorpion's
 hit against the strip, idle frame 3 selected and differenced, an anchor
 toggled and undone, the new victory clip shown as an ending with no exit.
 
+## Wave 4: the rules, and a reference to hold the engine to (2026-11-04)
+
+The owner: "lets build out first, then we can modify. Go for wave 4." Two
+more clips came with the round before (a victory, the scorpion hitting the
+knight), and the owner's five additions to the verbs (misses, defended
+clips, timed stances, untargeted and area moves) were already in the plan.
+
+Decisions:
+- **The reference first, in Python, and the engine held to it number for
+  number.** A battle's arithmetic is the kind of code that is wrong in a
+  way nobody sees: a damage a few points off looks like a design. So
+  `tools/vbtrules.py` defines the rules as the bytes the engine reads and
+  a `Sim` that plays them, with the draws' order written down (SPEC.md
+  125.6.3); the engine is that, routine for routine, and a test reads the
+  engine's whole state at every turn and compares.
+- **Draw at commit, peek at hover.** Rolling an action's outcome while the
+  cursor merely rests on it would tie the battle to how the player moves
+  the cursor. Instead nothing draws until an action is taken, and the
+  read-ahead PEEKS the next draw - the pool's pick - to fetch the clip the
+  action would most likely play.
+- **The outcome before the clip.** Finishing, critical, defended, missed,
+  hit: decided from the numbers, then its pool, so the footage always
+  agrees with the damage on the band.
+- **The first region grows only as far as the rules need** (8 to 16 KB,
+  its length in the header), so a small battle's floppy keeps its room.
+
+Discoveries:
+- **[si+di] is not an 8086 address.** The first assembly said so in one
+  line; an index plus an index needs an add first.
+- **The engine stalled at its first Attack** in the owner's battle and not
+  in the demo's: a project with no opening is given a START opening at
+  clip 0 when the bundle is written, and the rules numbered the clips
+  without it. Every clip was one off; Attack pointed at START, which has no
+  join point. The numbering now counts it.
+- **A rebuilt band flashed.** Putting the ground on the screen and then the
+  letters over it shows the ground alone while the letters are drawn - the
+  double-draw flash this project keeps a rule against. The band is now
+  composed off the screen, text and all, and put up once.
+- **The reference had its own bug**: two HEAL effects on one action added
+  the total twice. Damage was already applied once; heal is now too.
+- **The first engine-against-reference failures were the driver's**: it
+  read whose turn it was before its settling pause and the state after
+  it, and pressed the knight's keys into the gunner's menu after a
+  clipless Defend. Read after the pause, the 4 HP difference went, and so
+  did every other.
+
+Measured: the owner's H3 battle with the full rules on 86Box's ST11M, 27
+turns in lockstep with the reference, every number equal; the rules battle
+on MartyPC's XT, 43 turns, the same; broken on purpose (the engine's
+damage shift 3 for 4) it fails at turn 1. The builder's three new tabs were
+driven under Xvfb on the H3 project; not seen on Windows or macOS.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

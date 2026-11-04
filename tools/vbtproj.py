@@ -362,6 +362,60 @@ class Project:
                 m["top"].append({"label": label, "sub": list(sub)})
         self._edit(f)
 
+    def remove_action(self, aid):
+        """Refused while a menu, a move or a response names it"""
+        if aid in self.actions_used():
+            raise ValueError("%s is in use: take it off what uses it first"
+                             % aid)
+        def f(d):
+            del d["actions"][aid]
+        self._edit(f)
+
+    def add_stance(self, name):
+        def f(d):
+            if any(s["name"] == name for s in d["enemy"]["stances"]):
+                raise ValueError("a stance %s already" % name)
+            d["enemy"]["stances"].append({"name": name, "moves": [],
+                                          "responses": []})
+        self._edit(f)
+
+    def remove_stance(self, i):
+        def f(d):
+            st = d["enemy"]["stances"]
+            if len(st) <= 1:
+                raise ValueError("the enemy has at least one stance")
+            name = st[i]["name"]
+            for a in d["actions"].values():
+                for e in a["effects"]:
+                    if e.get("verb") == "stance" and e.get("stance") == name:
+                        raise ValueError("an action changes to %s" % name)
+            for s2 in st:
+                if (s2.get("auto") or {}).get("to") == name:
+                    raise ValueError("%s's change goes to %s" % (s2["name"], name))
+            del st[i]
+        self._edit(f)
+
+    def menu_remove(self, char, where, i, sub=None):
+        """Item I of character CHAR's "top" or "side" menu, or of the top
+        menu's sub-menu at index SUB"""
+        def f(d):
+            m = d["characters"][char]["menu"]
+            if sub is not None:
+                del m["top"][sub]["sub"][i]
+            else:
+                del m[where][i]
+        self._edit(f)
+
+    def menu_move(self, char, where, i, by, sub=None):
+        def f(d):
+            m = d["characters"][char]["menu"]
+            lst = m["top"][sub]["sub"] if sub is not None else m[where]
+            j = i + by
+            if not 0 <= j < len(lst):
+                raise ValueError("it is at the end already")
+            lst[i], lst[j] = lst[j], lst[i]
+        self._edit(f)
+
     def enemy_move(self, action, weight=1, stance=0, rule="alternate",
                    duration=0):
         def f(d):

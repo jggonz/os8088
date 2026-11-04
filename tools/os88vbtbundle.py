@@ -25,7 +25,7 @@ sys.path.insert(0, HERE)
 import os88vbundle as VB    # noqa: E402
 
 ROOTS = ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
-         "os88venc.py")
+         "vbtrules.py", "vbtband.py", "os88venc.py")
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
 DATA = VB.DATA
 FOLDER = "os8088-battle-builder"
@@ -40,9 +40,10 @@ os8088: put the two side by side on a disk.
 
     python3 os88vbtgui.py [PROJECT.vbp]
 
-The window: the Battle, Idle and Clips tabs (the Menus and Build tabs
-come in later rounds - see docs/plans/VBATTLE-BUILDER-PLAN.md in the
-os8088 tree). Everything it does is also a command:
+The window: the Battle, Idle, Clips, Actions, Characters & menus and Enemy
+tabs (the openings and the Build tab come in the next round - see
+docs/plans/VBATTLE-BUILDER-PLAN.md in the os8088 tree). Build with
+`python3 os88vbt.py build PROJECT.vbp` meanwhile. Everything it does is also a command:
 
     python3 os88vbt.py demo-project demo.vbp     the demo battle, as a
                                                  project (no footage needed)

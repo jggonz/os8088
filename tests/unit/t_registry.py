@@ -44,6 +44,9 @@ BUILDS_WITHOUT_MAKE = {
 
 # Not registered, and why. Keep the reason specific and true.
 UNREGISTERED = {
+    "vbtrulesdemo.py": "not a test: the Video Battle RULES test battle, a "
+                       "module tests/vbtrules.py and tests/vbtengine.py both "
+                       "import (the battle, its plan, the reference's moves)",
     # --- the rows of a RETIRED package (SPEC.md 20.16, apps/RETIRED.txt) ---
     # These two drive PACMAN.O88, which `all` no longer builds (SPEC.md
     # 89.12), so a registered row would need `wants=("build/pacman.o88",)`

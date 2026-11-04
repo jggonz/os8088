@@ -1,8 +1,9 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: waves 1 to 3 BUILT (2026-11-04): the model, the analysis,
-the command line, and the window's shell with its Battle, Idle and Clips
-tabs (10.5).** The Menus and Build tabs are waves 4 and 5. `make
+**Status: waves 1 to 4 BUILT (2026-11-04): the model, the analysis, the
+command line, the window's Battle, Idle, Clips, Actions, Characters &
+menus and Enemy tabs, and the engine playing section 11's rules (10.5).**
+The openings and the Build tab are wave 5. `make
 vbtbundle` zips the builder for a machine with no os8088 tree. It turns a battle's footage into a `.VBT` bundle (SPEC.md
 §125) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an
@@ -427,7 +428,30 @@ any of the builder's (section 7's order moves). Its contents:
      own call, so what is heard is what is baked (`tests/vbtguitest.py`
      holds them equal frame for frame).
 4. **The Menus and Characters tabs**, and the engine's menu tree,
-   backgrounds and rules (11).
+   backgrounds and rules (11). **DONE 2026-11-04**:
+   - [x] the RULES as bundle data (version 5, SPEC.md 125.2.4): characters,
+     actions of up to 4 effects with every verb of 11.2, 11.2.1 and
+     11.2.2, clip pools per outcome and per target, menus (top, sub, side)
+     with their looks, stances (modifiers, weighted moves at five target
+     rules, responses, an automatic change, a timed return), items, band
+     pictures;
+   - [x] `tools/vbtrules.py`: the compiler, the reader and the REFERENCE
+     (`Sim`), and the engine (`apps/vbattle/vbrules.inc`, `vbgame.inc`)
+     routine for routine beside it: the same generator, drawn in the same
+     order (SPEC.md 125.6.3), the same capped arithmetic;
+   - [x] the engine's menu tree and targeting, up to 4 characters, the band
+     laid out from the header, pictures under the band and any menu, the
+     text over them, a rebuilt band composed off the screen;
+   - [x] the Actions tab (the verbs as forms, the pools general and per
+     character, the reference's estimate), the Characters & menus tab (the
+     stats, the menu tree, each menu's look, the band pictures and items,
+     the band as the engine draws it, `tools/vbtband.py`), the Enemy tab
+     (stances, moves, responses, the change and the return);
+   - [x] `tests/vbtrules.py` (the reference by hand) and
+     `tests/vbtengine.py` (the engine against it in lockstep on MartyPC,
+     43 turns), both soak.
+   Not in it: a stance's own idle loop (it shares the battle's; `check`
+   says so); a time gauge, several enemies.
 5. **The openings** in the window (10.3), and **the Build tab**.
 
 ## 11. What an action does: a small, fixed set of verbs

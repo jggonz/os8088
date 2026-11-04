@@ -230,6 +230,190 @@ def clip_flags(c):
         ", ".join(map(str, c["anchors"])) or "nothing", c["exit"])
 
 
+# --- the rules tabs' arithmetic (wave 4) ------------------------------------------
+
+# the fields each verb reads (vbtrules.compile_rules): (key, label, kind,
+# default, choices). "amount" is FIXED: no formula, no variance
+EFFECT_FIELDS = {
+    "damage": [("kind", "Kind", "choice", "physical",
+                ("physical", "magical", "fixed")),
+               ("power", "Power (or the amount, fixed)", "int", 32, None),
+               ("hits", "Hits", "int", 1, None)],
+    "heal": [("kind", "By", "choice", "power", ("power", "percent", "fixed")),
+             ("power", "Power, % or amount", "int", 32, None)],
+    "restore": [("amount", "MP", "int", 10, None)],
+    "revive": [("percent", "HP %", "int", 25, None)],
+    "guard": [], "charge": [], "pass": [], "escape": [],
+    "boost": [("stat", "Stat", "choice", "atk", ("atk", "mag", "def", "mdef")),
+              ("steps", "Steps (1-4)", "int", 1, None),
+              ("turns", "Turns", "int", 3, None)],
+    "lower": [("stat", "Stat", "choice", "def", ("atk", "mag", "def", "mdef")),
+              ("steps", "Steps (1-4)", "int", 1, None),
+              ("turns", "Turns", "int", 3, None)],
+    "stance": [("stance", "Stance", "stance", "", None),
+               ("duration", "Turns (0: until changed)", "int", 0, None)],
+}
+
+
+def effect_form(e):
+    """An effect as the form shows it: {field: value}, the "kind" of a
+    damage or heal spelled out (compile_rules reads amount, percent and
+    power by which is present)"""
+    v = e.get("verb")
+    f = {}
+    if v == "damage":
+        if "amount" in e:
+            f.update(kind="fixed", power=e["amount"])
+        else:
+            f.update(kind=e.get("kind", "physical"), power=e.get("power", 32))
+        f["hits"] = e.get("hits", 1)
+    elif v == "heal":
+        if "amount" in e:
+            f.update(kind="fixed", power=e["amount"])
+        elif "percent" in e:
+            f.update(kind="percent", power=e["percent"])
+        else:
+            f.update(kind="power", power=e.get("power", 32))
+    else:
+        for key, _, _, dflt, _ in EFFECT_FIELDS.get(v, []):
+            f[key] = e.get(key, dflt)
+    return f
+
+
+def effect_from(verb, f):
+    """...and back: the effect the model stores"""
+    e = {"verb": verb}
+    if verb == "damage":
+        if f["kind"] == "fixed":
+            e["amount"] = int(f["power"])
+        else:
+            e.update(kind=f["kind"], power=int(f["power"]))
+        e["hits"] = max(1, min(4, int(f.get("hits", 1))))
+    elif verb == "heal":
+        k = {"fixed": "amount", "percent": "percent"}.get(f["kind"], "power")
+        e[k] = int(f["power"])
+    else:
+        for key, _, kind, _, _ in EFFECT_FIELDS.get(verb, []):
+            e[key] = int(f[key]) if kind == "int" else f[key]
+    return e
+
+
+def effect_text(e):
+    v = e.get("verb", "?")
+    f = effect_form(e)
+    if v == "damage":
+        return "DAMAGE %s %s%s" % (f["kind"], f["power"],
+                                   " x%d" % f["hits"] if f["hits"] > 1 else "")
+    if v == "heal":
+        return "HEAL %s%s" % (f["power"], "%" if f["kind"] == "percent" else
+                              " fixed" if f["kind"] == "fixed" else "")
+    if v in ("boost", "lower"):
+        return "%s %s %d for %d turns" % (v.upper(), f["stat"], f["steps"],
+                                          f["turns"])
+    if v == "stance":
+        return "STANCE %s%s" % (f["stance"], " for %d turns" % f["duration"]
+                                if f["duration"] else "")
+    if v == "restore":
+        return "RESTORE %d MP" % f["amount"]
+    if v == "revive":
+        return "REVIVE to %d%%" % f["percent"]
+    return v.upper()
+
+
+def users_of(proj, aid):
+    """Who takes action AID: the characters whose menus hold it, and the
+    enemy when a move, response or change does"""
+    d = proj.d
+    out = []
+    for i, ch in enumerate(d["characters"]):
+        acts = []
+        for it in ch["menu"]["top"]:
+            acts += [it["action"]] if "action" in it else it["sub"]
+        acts += ch["menu"]["side"]
+        if aid in acts:
+            out.append(i)
+    for st in d["enemy"]["stances"]:
+        names = [m["action"] for m in st["moves"]] + \
+            [r["action"] for r in st.get("responses", [])] + \
+            [x for x in (st.get("return"), (st.get("auto") or {}).get("via")) if x]
+        if aid in names:
+            out.append("enemy")
+            break
+    return out
+
+
+def damage_preview(proj, aid):
+    """Lines saying what action AID does, from the reference's own
+    arithmetic (vbtrules.Sim.damage and heal_amount) at the battle's start:
+    each user against each opponent, the variance's ends, the critical"""
+    import vbtrules as V
+    d = proj.d
+    try:
+        idx = {c: i for i, c in enumerate(d["clips"])}
+        R = V.Rules(V.compile_rules(proj, idx, [(0, 0, 1, 1, 0)] *
+                                    len(d.get("images", []))))
+    except Exception as e:
+        return ["(not until the rules compile: %s)" % e]
+    sim = V.Sim(R)
+    a = d["actions"][aid]
+    ai = list(d["actions"]).index(aid)
+    eff = R.acts[ai]["effects"]
+    out = []
+    for u in users_of(proj, aid):
+        who = V.ENEMY if u == "enemy" else u
+        wname = R.ename if u == "enemy" else R.chars[u]["name"]
+        opps = list(range(R.nchar)) if u == "enemy" else [V.ENEMY]
+        for (v, aa, pw, bb, cc) in eff:
+            if v == V.VERBS["damage"]:
+                for o in opps:
+                    oname = R.ename if o == V.ENEMY else R.chars[o]["name"]
+                    lo = sim.damage(aa, pw, who, o, 90) * bb
+                    hi = sim.damage(aa, pw, who, o, 110) * bb
+                    out.append("%s on %s: %d to %d%s" % (
+                        wname, oname, lo, hi,
+                        ", critical %d" % min(V.CAP, hi * 2)
+                        if aa == V.KIND_PHYS else ""))
+            elif v == V.VERBS["heal"]:
+                lo = sim.heal_amount(aa, pw, who, 0 if who != V.ENEMY else who, 90)
+                hi = sim.heal_amount(aa, pw, who, 0 if who != V.ENEMY else who, 110)
+                out.append("%s heals %d to %d" % (wname, lo, hi))
+    acc = a.get("accuracy", 100)
+    if acc < 100:
+        out.append("Hits %d%% of the time, less the target's evade" % acc)
+    if not out:
+        out.append("(no one takes it yet: put it on a menu or a stance)"
+                   if not users_of(proj, aid) else "(no damage or healing)")
+    return out
+
+
+def menu_rows(proj, ci):
+    """Character CI's menus as rows (where, index, sub index, text) for
+    the tree: the top menu's items (a sub-menu's under it), then the side
+    menu's"""
+    ch = proj.d["characters"][ci]
+    rows = []
+    for i, it in enumerate(ch["menu"]["top"]):
+        if "action" in it:
+            rows.append(("top", i, None, it["action"]))
+        else:
+            rows.append(("top", i, None, "%s >" % it["label"]))
+            for j, a in enumerate(it["sub"]):
+                rows.append(("sub", j, i, a))
+    for i, a in enumerate(ch["menu"]["side"]):
+        rows.append(("side", i, None, a))
+    return rows
+
+
+def look_key(proj, ci, where, sub):
+    """The menu_looks key of a menu: CHAR:top, CHAR:side, CHAR:LABEL"""
+    name = proj.d["characters"][ci]["name"]
+    if where == "side":
+        return name + ":side"
+    if sub is not None:
+        return name + ":" + proj.d["characters"][ci]["menu"]["top"][sub]["label"]
+    return name + ":top"
+
+
 def title_of(proj, dirty):
     nm = proj.d.get("name") or "Untitled"
     f = os.path.basename(proj.path) if proj.path else "not saved"
@@ -314,10 +498,16 @@ class App(object):
         self.battle_tab = BattleTab(self, self.nb)
         self.idle_tab = IdleTab(self, self.nb)
         self.clips_tab = ClipsTab(self, self.nb)
+        self.actions_tab = ActionsTab(self, self.nb)
+        self.party_tab = PartyTab(self, self.nb)
+        self.enemy_tab = EnemyTab(self, self.nb)
         self.nb.add(self.battle_tab.f, text="Battle")
         self.nb.add(self.idle_tab.f, text="Idle")
         self.nb.add(self.clips_tab.f, text="Clips")
-        for name, wave in (("Menus", 4), ("Build", 5)):
+        self.nb.add(self.actions_tab.f, text="Actions")
+        self.nb.add(self.party_tab.f, text="Characters & menus")
+        self.nb.add(self.enemy_tab.f, text="Enemy")
+        for name, wave in (("Build", 5),):
             fr = ttk.Frame(self.nb)
             ttk.Label(fr, text="The %s tab comes in the plan's wave %d. Until "
                       "then, tools/os88vbt.py build PROJECT builds what the "
@@ -343,6 +533,9 @@ class App(object):
         self.battle_tab.refresh()
         self.idle_tab.refresh()
         self.clips_tab.refresh()
+        self.actions_tab.refresh()
+        self.party_tab.refresh()
+        self.enemy_tab.refresh()
 
     def edit(self, fn, *a, **kw):
         """Every edit: the model's method, then the view redrawn"""
@@ -1451,6 +1644,709 @@ class ClipsTab(object):
                 self.app.say("No player here: the WAV is %s" % res["out"])
         self.app.run("vbtana", ["clipwav", self.app.proj.path, cid, out], got,
                      "Mixing the clip's sound...")
+
+
+# --- small form pieces ------------------------------------------------------------------
+
+class Rows(object):
+    """A frame of labelled fields in a grid, each committing on Return or
+    on leaving it"""
+
+    def __init__(self, app, parent):
+        self.app, self.f = app, app.ttk.Frame(parent)
+        self.r = 0
+
+    def entry(self, label, value, commit, width=10):
+        tk, ttk = self.app.tk, self.app.ttk
+        ttk.Label(self.f, text=label).grid(row=self.r, column=0, sticky="w")
+        v = tk.StringVar(value=str(value))
+        e = ttk.Entry(self.f, textvariable=v, width=width)
+        e.grid(row=self.r, column=1, sticky="w", pady=1)
+        def go(ev=None, v=v, last=[str(value)]):
+            if v.get() != last[0]:
+                last[0] = v.get()
+                commit(v.get())
+        e.bind("<Return>", go)
+        e.bind("<FocusOut>", go)
+        self.r += 1
+        return v
+
+    def choice(self, label, value, choices, commit, width=16):
+        tk, ttk = self.app.tk, self.app.ttk
+        ttk.Label(self.f, text=label).grid(row=self.r, column=0, sticky="w")
+        v = tk.StringVar(value=value)
+        cb = ttk.Combobox(self.f, textvariable=v, values=list(choices),
+                          state="readonly", width=width)
+        cb.grid(row=self.r, column=1, sticky="w", pady=1)
+        cb.bind("<<ComboboxSelected>>", lambda ev: commit(v.get()))
+        self.r += 1
+        return v
+
+
+def as_int(text):
+    return int(str(text).strip() or 0)
+
+
+def clear(frame):
+    for w in frame.winfo_children():
+        w.destroy()
+
+
+# --- the Actions tab (11.2, 11.2.2) -------------------------------------------------------
+
+class ActionsTab(object):
+    """An action: its label, target, cost, accuracy, up to four effects, its
+    clip pools (general, or one character's), and what the reference's
+    arithmetic says it does"""
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        self.app = app
+        self.f = f = ttk.Frame(parent, padding=6)
+        left = ttk.Frame(f)
+        left.pack(side="left", fill="y")
+        self.lb = tk.Listbox(left, height=24, width=24, exportselection=False)
+        self.lb.pack(fill="y")
+        self.lb.bind("<<ListboxSelect>>", lambda e: self.show())
+        bb = ttk.Frame(left)
+        bb.pack(fill="x")
+        ttk.Button(bb, text="New...", command=self._new).pack(side="left")
+        ttk.Button(bb, text="Delete", command=self._delete).pack(side="left")
+        self.body = ttk.Frame(f)
+        self.body.pack(side="left", fill="both", expand=True, padx=8)
+        self.who = "(general)"
+
+    def aid(self):
+        s = self.lb.curselection()
+        names = list(self.app.proj.d["actions"])
+        return names[s[0]] if s and s[0] < len(names) else None
+
+    def refresh(self):
+        keep = self.aid()
+        self.lb.delete(0, "end")
+        names = list(self.app.proj.d["actions"])
+        for a in names:
+            self.lb.insert("end", "%s  (%s)" % (a, self.app.proj.d["actions"][a]["label"]))
+        if keep in names:
+            self.lb.selection_set(names.index(keep))
+        self.show()
+
+    def _new(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring(TITLE, "The new action's name:", parent=self.f)
+        if not name:
+            return
+        aid = name.strip().replace(" ", "_")[:16]
+        self.app.edit("add_action", aid, name.strip()[:8],
+                      effects=[{"verb": "damage", "kind": "physical", "power": 32}])
+        names = list(self.app.proj.d["actions"])
+        self.lb.selection_clear(0, "end")
+        self.lb.selection_set(names.index(aid))
+        self.show()
+
+    def _delete(self):
+        if self.aid():
+            self.app.edit("remove_action", self.aid())
+
+    def show(self):
+        tk, ttk = self.app.tk, self.app.ttk
+        clear(self.body)
+        aid = self.aid()
+        if not aid:
+            ttk.Label(self.body, text="Pick an action, or make one").pack(anchor="w")
+            return
+        P_ = self.app.proj
+        a = P_.d["actions"][aid]
+        top = ttk.Frame(self.body)
+        top.pack(fill="x")
+        form = Rows(self.app, top)
+        form.f.pack(side="left", anchor="n")
+        form.entry("Label (8)", a["label"],
+                   lambda v: self.app.edit("set", ("actions", aid, "label"), v[:8]))
+        form.choice("Target", a["target"], P.TARGETS,
+                    lambda v: self.app.edit("set", ("actions", aid, "target"), v))
+        cost = a.get("cost") or {}
+        kind = "MP" if cost.get("mp") else "item" if cost.get("item") else \
+            "limit" if cost.get("limit") else "none"
+        form.choice("Cost", kind, ("none", "MP", "item", "limit"),
+                    lambda v: self._cost(aid, v))
+        if kind == "MP":
+            form.entry("  MP", cost["mp"], lambda v: self.app.edit(
+                "set", ("actions", aid, "cost"), {"mp": as_int(v)}))
+        elif kind == "item":
+            items = [it["name"] for it in P_.d.get("items", [])]
+            form.choice("  Item", cost.get("item", ""), items, lambda v: self.app.edit(
+                "set", ("actions", aid, "cost"), {"item": v, "n": cost.get("n", 1)}))
+        form.entry("Accuracy %", a.get("accuracy", 100), lambda v: self.app.edit(
+            "set", ("actions", aid, "accuracy"), max(0, min(100, as_int(v)))))
+        pv = ttk.LabelFrame(top, text="What it does (the reference's "
+                            "arithmetic, at the battle's start)", padding=4)
+        pv.pack(side="left", fill="both", expand=True, padx=8, anchor="n")
+        for line in damage_preview(P_, aid):
+            ttk.Label(pv, text=line).pack(anchor="w")
+        # effects
+        ef = ttk.LabelFrame(self.body, text="Effects, in order (up to 4)", padding=4)
+        ef.pack(fill="x", pady=4)
+        for i, e in enumerate(a["effects"]):
+            self._effect_row(ef, aid, i, e)
+        if len(a["effects"]) < 4:
+            ttk.Button(ef, text="Add an effect", command=lambda: self._add_effect(aid)
+                       ).pack(anchor="w")
+        # pools
+        pf = ttk.LabelFrame(self.body, text="Clips, by outcome (one chosen at "
+                            "random; empty falls back to HIT)", padding=4)
+        pf.pack(fill="x", pady=4)
+        names = ["(general)"] + [c["name"] for c in P_.d["characters"]]
+        wv = tk.StringVar(value=self.who if self.who in names else "(general)")
+        row = ttk.Frame(pf)
+        row.pack(fill="x")
+        ttk.Label(row, text="For").pack(side="left")
+        cb = ttk.Combobox(row, textvariable=wv, values=names, state="readonly", width=14)
+        cb.pack(side="left", padx=4)
+        cb.bind("<<ComboboxSelected>>", lambda ev: (setattr(self, "who", wv.get()),
+                                                    self.show()))
+        ttk.Label(row, text="(a character's own: when the action is aimed at "
+                  "them alone)").pack(side="left")
+        grid = ttk.Frame(pf)
+        grid.pack(fill="x")
+        pools = a["pools"] if self.who == "(general)" else \
+            a.get("by_target", {}).get(self.who, {})
+        clips = list(P_.d["clips"])
+        for k, pk in enumerate(P.POOLS):
+            col = ttk.Frame(grid)
+            col.grid(row=0, column=k, padx=4, sticky="n")
+            ttk.Label(col, text=pk.upper()).pack(anchor="w")
+            lb = tk.Listbox(col, height=4, width=14, exportselection=False)
+            lb.pack()
+            for c in pools.get(pk, []):
+                lb.insert("end", c)
+            add = tk.StringVar()
+            cb2 = ttk.Combobox(col, textvariable=add, values=clips, state="readonly",
+                               width=12)
+            cb2.pack()
+            cb2.bind("<<ComboboxSelected>>",
+                     lambda ev, pk=pk, add=add: self._pool(aid, pk, add.get(), True))
+            ttk.Button(col, text="Remove", command=lambda pk=pk, lb=lb: self._pool(
+                aid, pk, lb.get(lb.curselection()[0]) if lb.curselection() else None,
+                False)).pack()
+
+    def _cost(self, aid, kind):
+        v = {"none": {}, "MP": {"mp": 5}, "limit": {"limit": True}}.get(kind)
+        if kind == "item":
+            items = self.app.proj.d.get("items", [])
+            if not items:
+                return self.app.say("No items yet: add one on Characters & menus")
+            v = {"item": items[0]["name"], "n": 1}
+        self.app.edit("set", ("actions", self.aid(), "cost"), v)
+
+    def _effect_row(self, parent, aid, i, e):
+        tk, ttk = self.app.tk, self.app.ttk
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=1)
+        verb = tk.StringVar(value=e["verb"])
+        cb = ttk.Combobox(row, textvariable=verb, values=list(EFFECT_FIELDS),
+                          state="readonly", width=9)
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda ev: self._set_effect(
+            aid, i, effect_from(verb.get(), {k: d for k, _, _, d, _ in
+                                             EFFECT_FIELDS[verb.get()]})))
+        f = effect_form(e)
+        vars_ = {}
+        stances = [st["name"] for st in self.app.proj.d["enemy"]["stances"]]
+        for key, label, kind, dflt, choices in EFFECT_FIELDS.get(e["verb"], []):
+            ttk.Label(row, text=label).pack(side="left", padx=(8, 2))
+            v = tk.StringVar(value=str(f.get(key, dflt)))
+            vars_[key] = v
+            if kind in ("choice", "stance"):
+                w = ttk.Combobox(row, textvariable=v, state="readonly", width=9,
+                                 values=list(choices) if choices else stances)
+                w.bind("<<ComboboxSelected>>", lambda ev: commit())
+            else:
+                w = ttk.Entry(row, textvariable=v, width=6)
+                w.bind("<Return>", lambda ev: commit())
+                w.bind("<FocusOut>", lambda ev: commit())
+            w.pack(side="left")
+
+        def commit():
+            try:
+                ne = effect_from(e["verb"], {k: v.get() for k, v in vars_.items()})
+            except ValueError:
+                return self.app.say("A number, please")
+            if ne != e:
+                self._set_effect(aid, i, ne)
+        ttk.Button(row, text="Remove", command=lambda: self._rm_effect(aid, i)
+                   ).pack(side="right")
+
+    def _set_effect(self, aid, i, e):
+        effs = list(self.app.proj.d["actions"][aid]["effects"])
+        effs[i] = e
+        self.app.edit("set", ("actions", aid, "effects"), effs)
+
+    def _add_effect(self, aid):
+        effs = list(self.app.proj.d["actions"][aid]["effects"]) + [{"verb": "guard"}]
+        self.app.edit("set", ("actions", aid, "effects"), effs)
+
+    def _rm_effect(self, aid, i):
+        effs = list(self.app.proj.d["actions"][aid]["effects"])
+        del effs[i]
+        self.app.edit("set", ("actions", aid, "effects"), effs)
+
+    def _pool(self, aid, pk, clip, add):
+        if not clip:
+            return
+        a = self.app.proj.d["actions"][aid]
+        if self.who == "(general)":
+            path, pools = ("actions", aid, "pools"), dict(a["pools"])
+        else:
+            by = dict(a.get("by_target", {}))
+            pools = dict(by.get(self.who, {}))
+            path = ("actions", aid, "by_target")
+        lst = list(pools.get(pk, []))
+        if add:
+            lst.append(clip)
+        elif clip in lst:
+            lst.remove(clip)
+        pools[pk] = lst
+        if self.who == "(general)":
+            self.app.edit("set", path, pools)
+        else:
+            by[self.who] = pools
+            self.app.edit("set", path, by)
+
+
+# --- the Characters & menus tab (11.1, 4.4) ---------------------------------------------
+
+class PartyTab(object):
+    """The characters (1 to 4): their stats and their menus - the top menu,
+    its sub-menus, the side menu - each menu's look; the band's pictures and
+    the party's items; and the band as the engine will draw it"""
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        self.app = app
+        self.f = f = ttk.Frame(parent, padding=6)
+        left = ttk.Frame(f)
+        left.pack(side="left", fill="y")
+        self.lb = tk.Listbox(left, height=5, width=20, exportselection=False)
+        self.lb.pack()
+        self.lb.bind("<<ListboxSelect>>", lambda e: self.show())
+        bb = ttk.Frame(left)
+        bb.pack(fill="x")
+        ttk.Button(bb, text="Add", command=self._add).pack(side="left")
+        ttk.Button(bb, text="Remove", command=self._remove).pack(side="left")
+        self.side = ttk.Frame(left)
+        self.side.pack(fill="x", pady=8)
+        self.body = ttk.Frame(f)
+        self.body.pack(side="left", fill="both", expand=True, padx=8)
+        self.mrow = None
+
+    def ci(self):
+        s = self.lb.curselection()
+        return s[0] if s else (0 if self.app.proj.d["characters"] else None)
+
+    def refresh(self):
+        keep = self.lb.curselection()
+        self.lb.delete(0, "end")
+        for c in self.app.proj.d["characters"]:
+            self.lb.insert("end", c["name"])
+        if keep and keep[0] < self.lb.size():
+            self.lb.selection_set(keep[0])
+        self.show()
+
+    def _add(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring(TITLE, "The character's name:", parent=self.f)
+        if name:
+            self.app.edit("add_character", name.strip().upper()[:8])
+
+    def _remove(self):
+        if self.ci() is not None:
+            self.app.edit("remove_character", self.ci())
+
+    def show(self):
+        tk, ttk = self.app.tk, self.app.ttk
+        clear(self.body)
+        clear(self.side)
+        d = self.app.proj.d
+        self._extras()
+        ci = self.ci()
+        if ci is None or ci >= len(d["characters"]):
+            ttk.Label(self.body, text="Add a character").pack(anchor="w")
+            return
+        c = d["characters"][ci]
+        top = ttk.Frame(self.body)
+        top.pack(fill="x")
+        form = Rows(self.app, top)
+        form.f.pack(side="left", anchor="n")
+        form.entry("Name", c["name"], lambda v: self.app.edit(
+            "set", ("characters", ci, "name"), v.upper()[:8]))
+        for k in ("hp", "mp", "atk", "mag", "def", "mdef", "evade"):
+            form.entry(k.upper(), c.get(k, 0), lambda v, k=k: self.app.edit(
+                "set", ("characters", ci, k), as_int(v)))
+        mf = ttk.LabelFrame(top, text="Menus: the top one, its sub-menus (>), "
+                            "the side one (Left/Right)", padding=4)
+        mf.pack(side="left", fill="both", expand=True, padx=8)
+        self.tree = tk.Listbox(mf, height=10, width=30, exportselection=False)
+        self.tree.grid(row=0, column=0, rowspan=8, sticky="n")
+        self.rows = menu_rows(self.app.proj, ci)
+        for where, i, sub, text in self.rows:
+            ind = "    " if where == "sub" else ""
+            tag = "side: " if where == "side" else ""
+            self.tree.insert("end", ind + tag + text)
+        self.tree.bind("<<ListboxSelect>>", lambda e: self._pick_row())
+        acts = list(d["actions"])
+        self.add = tk.StringVar()
+        ttk.Combobox(mf, textvariable=self.add, values=acts, state="readonly",
+                     width=14).grid(row=0, column=1, sticky="w")
+        ttk.Button(mf, text="Add to the top", command=lambda: self._menu_add("top")
+                   ).grid(row=1, column=1, sticky="w")
+        ttk.Button(mf, text="Add to the side", command=lambda: self._menu_add("side")
+                   ).grid(row=2, column=1, sticky="w")
+        ttk.Button(mf, text="Add to the sub-menu", command=lambda: self._menu_add("sub")
+                   ).grid(row=3, column=1, sticky="w")
+        ttk.Button(mf, text="New sub-menu...", command=self._new_sub
+                   ).grid(row=4, column=1, sticky="w")
+        ttk.Button(mf, text="Up", command=lambda: self._move(-1)).grid(row=5, column=1, sticky="w")
+        ttk.Button(mf, text="Down", command=lambda: self._move(1)).grid(row=6, column=1, sticky="w")
+        ttk.Button(mf, text="Remove", command=self._menu_rm).grid(row=7, column=1, sticky="w")
+        # the look of the menu the selected row is in
+        where, sub = self._menu_of_row()
+        key = look_key(self.app.proj, ci, where, sub)
+        lk = d.get("menu_looks", {}).get(key, {})
+        lf = ttk.LabelFrame(self.body, text="The look of %s" % key, padding=4)
+        lf.pack(fill="x", pady=4)
+        lform = Rows(self.app, lf)
+        lform.f.pack(side="left")
+        imgs = ["(none)"] + [im["name"] for im in d.get("images", [])]
+        lform.choice("Picture", lk.get("image") or "(none)", imgs,
+                     lambda v: self._look(key, "image", None if v == "(none)" else v))
+        lform.entry("Text column (cell)", lk.get("col", 1), lambda v: self._look(key, "col", as_int(v)))
+        lform.entry("Text row (in the band)", lk.get("row", 4), lambda v: self._look(key, "row", as_int(v)))
+        lform.entry("Row pitch", lk.get("pitch", 9), lambda v: self._look(key, "pitch", as_int(v)))
+        lform.choice("Ink", str(lk.get("ink", 3)), ("1", "2", "3"),
+                     lambda v: self._look(key, "ink", int(v)))
+        lform.choice("Cursor", lk.get("cursor", "inverse"), ("inverse", "arrow"),
+                     lambda v: self._look(key, "cursor", v))
+        # the band as the engine draws it
+        pv = ttk.Frame(lf)
+        pv.pack(side="left", padx=8)
+        ttk.Label(pv, text="The band, as the engine draws it (the letters' "
+                  "shapes are the tree's 8x8 face; the machine's are its "
+                  "ROM's):").pack(anchor="w")
+        self.band = tk.Label(pv, bg="black")
+        self.band.pack(anchor="w")
+        self._preview(ci, where, sub)
+
+    def _menu_of_row(self):
+        if self.mrow is None or self.mrow >= len(self.rows):
+            return "top", None
+        where, i, sub, _ = self.rows[self.mrow]
+        if where == "sub":
+            return "top", sub
+        if where == "top" and self.rows[self.mrow][3].endswith(">"):
+            return "top", i
+        return where, None
+
+    def _pick_row(self):
+        s = self.tree.curselection()
+        self.mrow = s[0] if s else None
+        self.show()
+        if self.mrow is not None:
+            self.tree.selection_set(self.mrow)
+
+    def _preview(self, ci, where, sub):
+        from PIL import ImageTk
+        import vbtband
+        menu = "side" if where == "side" else None
+        if sub is not None:
+            menu = self.app.proj.d["characters"][ci]["menu"]["top"][sub]["label"]
+        try:
+            im = vbtband.render(self.app.proj, ci, menu)
+        except Exception as e:
+            self.band.config(text="(not until the rules compile: %s)" % e,
+                             fg="white", image="")
+            return
+        im = im.resize((im.width * 2, im.height * 2))
+        self._bimg = ImageTk.PhotoImage(im)
+        self.band.config(image=self._bimg)
+
+    def _look(self, key, field, value):
+        looks = dict(self.app.proj.d.get("menu_looks", {}))
+        lk = dict(looks.get(key, {}))
+        if value is None:
+            lk.pop(field, None)
+        else:
+            lk[field] = value
+        looks[key] = lk
+        self.app.edit("set", ("menu_looks",), looks)
+
+    def _menu_add(self, where):
+        aid = self.add.get()
+        ci = self.ci()
+        if not aid or ci is None:
+            return self.app.say("Pick an action to add")
+        if where == "sub":
+            w, sub = self._menu_of_row()
+            if sub is None:
+                return self.app.say("Pick a sub-menu (or a row in one) first")
+            def f(d):
+                d["characters"][ci]["menu"]["top"][sub]["sub"].append(aid)
+            self.app.proj._edit(f)
+            return self.app.refresh()
+        self.app.edit("menu_add", ci, action=aid, side=where == "side")
+
+    def _new_sub(self):
+        from tkinter import simpledialog
+        label = simpledialog.askstring(TITLE, "The sub-menu's label:", parent=self.f)
+        if label and self.ci() is not None:
+            self.app.edit("menu_add", self.ci(), label=label.strip()[:8], sub=())
+
+    def _move(self, by):
+        if self.mrow is None:
+            return
+        where, i, sub, _ = self.rows[self.mrow]
+        self.app.edit("menu_move", self.ci(), "top" if where == "sub" else where,
+                      i, by, sub=sub if where == "sub" else None)
+
+    def _menu_rm(self):
+        if self.mrow is None:
+            return
+        where, i, sub, _ = self.rows[self.mrow]
+        self.app.edit("menu_remove", self.ci(), "top" if where == "sub" else where,
+                      i, sub=sub if where == "sub" else None)
+        self.mrow = None
+
+    def _extras(self):
+        """The band's pictures and the party's items, under the list"""
+        tk, ttk = self.app.tk, self.app.ttk
+        d = self.app.proj.d
+        pf = ttk.LabelFrame(self.side, text="Band pictures", padding=4)
+        pf.pack(fill="x")
+        for i, im in enumerate(d.get("images", [])):
+            ttk.Label(pf, text="%s at %d,%d" % (im["name"], im.get("col", 0),
+                                                im.get("row", 0))).pack(anchor="w")
+        ttk.Button(pf, text="Add a picture...", command=self._add_image).pack(anchor="w")
+        imgs = ["(none)"] + [im["name"] for im in d.get("images", [])]
+        bv = tk.StringVar(value=d.get("band_image") or "(none)")
+        ttk.Label(pf, text="Under the whole band:").pack(anchor="w")
+        cb = ttk.Combobox(pf, textvariable=bv, values=imgs, state="readonly", width=14)
+        cb.pack(anchor="w")
+        cb.bind("<<ComboboxSelected>>", lambda e: self.app.edit(
+            "set", ("band_image",), None if bv.get() == "(none)" else bv.get()))
+        it = ttk.LabelFrame(self.side, text="The party's items", padding=4)
+        it.pack(fill="x", pady=4)
+        for i, x in enumerate(d.get("items", [])):
+            r = Rows(self.app, it)
+            r.f.pack(anchor="w")
+            r.entry(x["name"], x.get("count", 1), lambda v, i=i: self.app.edit(
+                "set", ("items", i, "count"), as_int(v)), width=4)
+        ttk.Button(it, text="Add an item...", command=self._add_item).pack(anchor="w")
+
+    def _add_image(self):
+        from tkinter import filedialog, simpledialog
+        p = filedialog.askopenfilename(title="A band picture")
+        if not p:
+            return
+        name = simpledialog.askstring(TITLE, "Its name:", parent=self.f) or \
+            os.path.splitext(os.path.basename(p))[0][:12]
+        col = simpledialog.askinteger(TITLE, "Its column (cells, 0-39):", parent=self.f,
+                                      initialvalue=0) or 0
+        row = simpledialog.askinteger(TITLE, "Its row in the band:", parent=self.f,
+                                      initialvalue=0) or 0
+        imgs = list(self.app.proj.d.get("images", [])) + [
+            {"name": name, "path": p, "col": col, "row": row, "dither": True}]
+        self.app.edit("set", ("images",), imgs)
+
+    def _add_item(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring(TITLE, "The item's name:", parent=self.f)
+        if name:
+            items = list(self.app.proj.d.get("items", [])) + [{"name": name[:8], "count": 1}]
+            self.app.edit("set", ("items",), items)
+
+
+# --- the Enemy tab (11.1, 11.2.1, 11.2.2) -------------------------------------------------
+
+class EnemyTab(object):
+    """The enemy: its stats, its victory and defeat clips, and its STANCES -
+    each with its modifiers, its weighted moves and their target rules, its
+    responses, its automatic change and its return"""
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        self.app = app
+        self.f = f = ttk.Frame(parent, padding=6)
+        self.left = ttk.Frame(f)
+        self.left.pack(side="left", fill="y")
+        self.body = ttk.Frame(f)
+        self.body.pack(side="left", fill="both", expand=True, padx=8)
+        self.si = 0
+
+    def refresh(self):
+        tk, ttk = self.app.tk, self.app.ttk
+        clear(self.left)
+        clear(self.body)
+        P_ = self.app.proj
+        e = P_.d["enemy"]
+        form = Rows(self.app, self.left)
+        form.f.pack(anchor="w")
+        form.entry("Name", e["name"], lambda v: self.app.edit(
+            "set", ("enemy", "name"), v.upper()[:10]))
+        for k in ("hp", "mp", "atk", "mag", "def", "mdef", "evade"):
+            form.entry(k.upper(), e.get(k, 0), lambda v, k=k: self.app.edit(
+                "set", ("enemy", k), as_int(v)))
+        clips = list(P_.d["clips"])
+        form.choice("Victory clip", e.get("victory") or "", clips,
+                    lambda v: self.app.edit("set", ("enemy", "victory"), v))
+        form.choice("Defeat clip", e.get("defeat") or "", clips,
+                    lambda v: self.app.edit("set", ("enemy", "defeat"), v))
+        names = [s["name"] for s in e["stances"]]
+        form.choice("Starts in", e.get("start_stance", names[0]), names,
+                    lambda v: self.app.edit("set", ("enemy", "start_stance"), v))
+        ttk.Label(self.left, text="Stances").pack(anchor="w", pady=(8, 0))
+        self.lb = tk.Listbox(self.left, height=6, width=20, exportselection=False)
+        self.lb.pack(anchor="w")
+        for s_ in names:
+            self.lb.insert("end", s_)
+        self.si = min(self.si, len(names) - 1)
+        self.lb.selection_set(self.si)
+        self.lb.bind("<<ListboxSelect>>", lambda ev: self._pick())
+        bb = ttk.Frame(self.left)
+        bb.pack(anchor="w")
+        ttk.Button(bb, text="New...", command=self._new).pack(side="left")
+        ttk.Button(bb, text="Delete", command=lambda: self.app.edit(
+            "remove_stance", self.si)).pack(side="left")
+        self._stance()
+
+    def _pick(self):
+        s = self.lb.curselection()
+        if s:
+            self.si = s[0]
+            clear(self.body)
+            self._stance()
+
+    def _new(self):
+        from tkinter import simpledialog
+        name = simpledialog.askstring(TITLE, "The stance's name:", parent=self.f)
+        if name:
+            self.app.edit("add_stance", name.strip().lower()[:8])
+
+    def _stance(self):
+        tk, ttk = self.app.tk, self.app.ttk
+        P_ = self.app.proj
+        st = P_.d["enemy"]["stances"][self.si]
+        base = ("enemy", "stances", self.si)
+        acts = list(P_.d["actions"])
+        chars = [c["name"] for c in P_.d["characters"]]
+        names = [s["name"] for s in P_.d["enemy"]["stances"]]
+        top = ttk.Frame(self.body)
+        top.pack(fill="x")
+        mf = ttk.LabelFrame(top, text="Modifiers, %", padding=4)
+        mf.pack(side="left", anchor="n")
+        mods = st.get("modifiers", {})
+        r = Rows(self.app, mf)
+        r.f.pack()
+        for k in ("atk", "mag", "def", "mdef"):
+            r.entry(k.upper(), mods.get(k, 0), lambda v, k=k: self.app.edit(
+                "set", base + ("modifiers",), dict(mods, **{k: as_int(v)})), width=5)
+        af = ttk.LabelFrame(top, text="Its own change, and its return", padding=4)
+        af.pack(side="left", anchor="n", padx=8)
+        au = st.get("auto") or {}
+        r2 = Rows(self.app, af)
+        r2.f.pack()
+        r2.choice("Changes when", au.get("kind", "none"), ("none", "hp_below", "after_turns"),
+                  lambda v: self._auto(base, au, kind=v))
+        r2.entry("...below % / after turns", au.get("arg", 0),
+                 lambda v: self._auto(base, au, arg=as_int(v)), width=5)
+        r2.choice("...to", au.get("to", names[0]), names, lambda v: self._auto(base, au, to=v))
+        r2.choice("...by (an action)", au.get("via") or "(none)", ["(none)"] + acts,
+                  lambda v: self._auto(base, au, via=None if v == "(none)" else v))
+        r2.choice("Returns by", st.get("return") or "(none)", ["(none)"] + acts,
+                  lambda v: self.app.edit("set", base + ("return",),
+                                          None if v == "(none)" else v))
+        mv = ttk.LabelFrame(self.body, text="Moves (up to 6): drawn by weight", padding=4)
+        mv.pack(fill="x", pady=4)
+        for i, m in enumerate(st["moves"]):
+            row = ttk.Frame(mv)
+            row.pack(fill="x")
+            self._combo(row, m["action"], acts, lambda v, i=i: self._move(base, i, action=v))
+            ttk.Label(row, text="weight").pack(side="left", padx=(6, 2))
+            w = tk.StringVar(value=str(m.get("weight", 1)))
+            en = ttk.Entry(row, textvariable=w, width=4)
+            en.pack(side="left")
+            en.bind("<Return>", lambda ev, i=i, w=w: self._move(base, i, weight=as_int(w.get())))
+            en.bind("<FocusOut>", lambda ev, i=i, w=w: self._move(base, i, weight=as_int(w.get())))
+            ttk.Label(row, text="at").pack(side="left", padx=(6, 2))
+            self._combo(row, m.get("rule", "alternate"), P.RULES,
+                        lambda v, i=i: self._move(base, i, rule=v))
+            if m.get("rule") == "named":
+                self._combo(row, m.get("target", chars[0] if chars else ""), chars,
+                            lambda v, i=i: self._move(base, i, target=v))
+            ttk.Button(row, text="Remove", command=lambda i=i: self._rm(base, "moves", i)
+                       ).pack(side="right")
+        if len(st["moves"]) < 6 and acts:
+            ttk.Button(mv, text="Add a move", command=lambda: self.app.edit(
+                "set", base + ("moves",), st["moves"] + [
+                    {"action": acts[0], "weight": 1, "rule": "alternate"}])).pack(anchor="w")
+        rf = ttk.LabelFrame(self.body, text="Responses (up to 2): after a "
+                            "character's action, outside its own turn", padding=4)
+        rf.pack(fill="x", pady=4)
+        for i, x in enumerate(st.get("responses", [])):
+            row = ttk.Frame(rf)
+            row.pack(fill="x")
+            ttk.Label(row, text="after").pack(side="left")
+            self._combo(row, x.get("trigger", "any"), ("any", "physical", "magical", "named"),
+                        lambda v, i=i: self._resp(base, i, trigger=v))
+            if x.get("trigger") == "named":
+                self._combo(row, x.get("named", acts[0]), acts,
+                            lambda v, i=i: self._resp(base, i, named=v))
+            ttk.Label(row, text="chance %").pack(side="left", padx=(6, 2))
+            c = tk.StringVar(value=str(x.get("chance", 100)))
+            en = ttk.Entry(row, textvariable=c, width=4)
+            en.pack(side="left")
+            en.bind("<Return>", lambda ev, i=i, c=c: self._resp(base, i, chance=as_int(c.get())))
+            en.bind("<FocusOut>", lambda ev, i=i, c=c: self._resp(base, i, chance=as_int(c.get())))
+            ttk.Label(row, text="it does").pack(side="left", padx=(6, 2))
+            self._combo(row, x["action"], acts, lambda v, i=i: self._resp(base, i, action=v))
+            ttk.Button(row, text="Remove", command=lambda i=i: self._rm(base, "responses", i)
+                       ).pack(side="right")
+        if len(st.get("responses", [])) < 2 and acts:
+            ttk.Button(rf, text="Add a response", command=lambda: self.app.edit(
+                "set", base + ("responses",), st.get("responses", []) + [
+                    {"trigger": "any", "chance": 30, "action": acts[0]}])).pack(anchor="w")
+
+    def _combo(self, parent, value, values, commit):
+        tk, ttk = self.app.tk, self.app.ttk
+        v = tk.StringVar(value=value)
+        cb = ttk.Combobox(parent, textvariable=v, values=list(values),
+                          state="readonly", width=12)
+        cb.pack(side="left")
+        cb.bind("<<ComboboxSelected>>", lambda ev: commit(v.get()))
+
+    def _auto(self, base, au, **kw):
+        n = dict(au)
+        n.update(kw)
+        if n.get("kind", "none") == "none":
+            n = {}
+        else:
+            n.setdefault("arg", 50)
+            n.setdefault("to", self.app.proj.d["enemy"]["stances"][0]["name"])
+        self.app.edit("set", base + ("auto",), n or None)
+
+    def _move(self, base, i, **kw):
+        moves = [dict(m) for m in self.app.proj.get(*base)["moves"]]
+        moves[i].update(kw)
+        self.app.edit("set", base + ("moves",), moves)
+
+    def _resp(self, base, i, **kw):
+        rs = [dict(r) for r in self.app.proj.get(*base).get("responses", [])]
+        rs[i].update(kw)
+        self.app.edit("set", base + ("responses",), rs)
+
+    def _rm(self, base, key, i):
+        lst = list(self.app.proj.get(*base).get(key, []))
+        del lst[i]
+        self.app.edit("set", base + (key,), lst)
 
 
 def main(argv=None):

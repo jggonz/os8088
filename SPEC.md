@@ -237275,7 +237275,10 @@ Little-endian. Every region starts on a 4 KB boundary, because
 `OSAPI_FILE_READ_SEQ` seeks and reads in cluster multiples, and 4 KB covers
 every floppy and a FAT16 disk to 128 MB.
 
-Version 4 (2026-11-04) is the current version:
+Version 5 (2026-11-04) is the current version. Over version 4 it has the
+RULES (125.6) in its first region, which is 8 to 16 KB as they need, up to
+64 clips, and the band's PICTURES (125.5) as a region of their own.
+Version 4 had:
 - a clip is a STREAM of any length;
 - each record carries its frame's sound;
 - the anchors are per clip;
@@ -237283,7 +237286,8 @@ Version 4 (2026-11-04) is the current version:
 - **the ENTRIES are a region of their own**, of any length, each entry on
   a paragraph and named by its paragraph number.
 
-Version 3 kept the entries in the resident block beside the idle loop,
+Version 4 held a 512-byte script of two members of four commands. Version 3
+kept the entries in the resident block beside the idle loop,
 named by a 16-bit offset, so the block's 60 KB bounded the idle loop and
 every clip's entries together. With the owner's footage (a 39 KB idle loop
 and about 3.3 KB an entry) eight clips did not fit. An entry is resident
@@ -237291,17 +237295,18 @@ either way, so that a chosen action starts on the very next frame; a
 paragraph number lets the entries take as much memory as there is (up to
 1 MB), and fewer anchors a clip simply cost fewer bytes. Version 2 cached
 each clip whole and kept its effects in front of its records. Version 1
-kept every effect, and the music, resident. The engine refuses all three.
+kept every effect, and the music, resident. The engine refuses all four.
 
 | offset | what |
 |---|---|
 | 0 | the header (125.2.1) |
-| 512 | the clip table, 48 bytes a clip, at most 32 clips (125.2.2) |
-| 2048 | the script (125.2.4) |
-| 4096 | the VIDEO RESIDENT block, at most 60 KB: the idle loop's records, every clip's anchor table, the idle table |
+| 512 | the clip table, 48 bytes a clip, at most 64 clips (125.2.2) |
+| 4096 | the RULES (125.2.4, 125.6), the first region's rest: it is 8 to 16 KB, its length at header byte 326 |
+| then | the VIDEO RESIDENT block, at most 60 KB: the idle loop's records, every clip's anchor table, the idle table |
 | then | the MUSIC: unsigned 8-bit, 64..191, streamed (125.4) |
 | then | the MENU's effects: signed 8-bit, -64..63, back to back, resident |
 | then | the ENTRIES: each clip's entry records, one an anchor, each padded to a paragraph; resident, any length (read 32 KB at a time, `vb_entload`) |
+| then | the band's PICTURES: CGA4 bytes, two a cell, a row after a row, each on a paragraph (125.5); resident |
 | then | each clip's STREAM: its records, back to back, any length |
 
 **The ranges are the mix.** The music is held to 64..191 and a clip's
@@ -237314,7 +237319,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 4 |
+| 4 | 2 | version, 5 |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows |
@@ -237338,6 +237343,8 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 76 | 2 | the largest record, at most 16 KB (VB_CGUARD) |
 | 80 | 8 | the openings' clips, in turn; FFh past the last |
 | 88 | 4+4 | the ENTRIES' offset and length |
+| 320 | 4+2 | the PICTURES' offset and length |
+| 326 | 2 | the first region's length: 4096 and the rules rounded to 4 KB |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -237403,16 +237410,53 @@ A captured battle's clips are lossy V88 encodes. Their DECODED screens are
 what the records are made between, so the joins stay exact
 (VBATTLE-BUILDER-PLAN 3).
 
-#### 125.2.4 The script
+#### 125.2.4 The rules block
 
-512 bytes:
-- 0: the party's size, and commands per member (4).
-- 2: the enemy: its name (10), its HP, its attack clip, the damage that
-  attack does, the victory clip and the defeat clip.
-- 24 + 64*m: member *m*: its name (8), its HP and MP (the most, and where
-  it starts), then four commands of 12 bytes: a label (6), the clip (FFh
-  none), the kind (0 damage the enemy, 1 heal the party), the amount, and
-  the MP it costs.
+At 4096, to the first region's end, little-endian; `tools/vbtrules.py` is
+its compiler, its reader and the reference the engine is held to (125.6).
+A 64-byte header gives the counts and each table's offset from the block's
+start, the enemy, and the seed:
+
+| off | size | field |
+|---|---|---|
+| 0 | 1 each | the version (1), then characters (1 to 4), actions (at most 96), menus (32), stances (8), pools (255), items (8), pictures (8) |
+| 8 | 2 each | the offsets of the characters, actions, menus, stances, pools, items and pictures tables |
+| 22 | 1 | the picture under the whole band (FFh none) |
+| 23 | 1 | the stance the enemy starts in |
+| 24 | 10 | the enemy's name |
+| 34 | 2 each | its HP, MP, ATK, MAG, DEF, MDEF |
+| 46 | 1 | its evade, % |
+| 47, 48 | 1 each | the victory clip, the defeat clip |
+| 49, 50 | 1, 2 | bit 0: the seed at 50 is used (a test's battle is the same every time); else the clock's |
+
+The tables, a record after a record:
+- **a character, 32 bytes**: name (8), HP, MP, ATK, MAG, DEF, MDEF (words;
+  the four stats at most 999), evade (%), its top menu, its side menu (FFh
+  none);
+- **an action, 72 bytes**: its label (8), target (0 the enemy, 1 self, 2 an
+  ally the player picks, 3 the allies, 4 none, 5 a character the enemy's
+  rule picks, 6 every character), cost (0 none, 1 MP, 2 an item, 3 a full
+  limit gauge) and its count (a word) and item, accuracy %, flags (1 it
+  does physical damage, 2 magical: what a response sees), then FOUR EFFECTS
+  of 6 bytes (verb, a, power word, b, c: 125.6.1) at 16, the five POOLS at
+  40 (hit, miss, defended, critical, finishing: a pool's index, FFh none)
+  and the same five for each character at 48 (its own, when the action is
+  aimed at it alone);
+- **a menu, 32 bytes**: its label (8), its items' count (at most 8), its
+  picture (FFh none), its text's column (cell), row (in the band) and
+  pitch, its ink, flags (1 an arrow cursor, else inverse), then 8 items of
+  (index, kind: 0 an action, 1 a sub-menu);
+- **a stance, 56 bytes**: name (8), modifiers to ATK MAG DEF MDEF (signed
+  %), its moves' and responses' counts, its RETURN action (FFh none), 6
+  MOVES of (action, weight, target rule, its argument) at 16, 2 RESPONSES
+  of (trigger: 0 any, 1 physical, 2 magical, 3 a named action; that action;
+  chance %; the response) at 40, and its AUTOMATIC CHANGE (kind: 0 none,
+  1 HP under arg %, 2 after arg of its turns; arg; the stance; the action
+  that makes it, FFh none) at 48;
+- **a pool, 8 bytes**: its count (1 to 7) and the clips;
+- **an item, 12 bytes**: name (8), the party's count;
+- **a picture, 8 bytes**: its column and row in the band, its cells and
+  rows, its paragraph in the PICTURES region.
 
 ### 125.3 The engine
 
@@ -237607,41 +237651,158 @@ The demo battle on a 640 KB machine:
 
 ### 125.5 The band
 
-The band is rows 142 to 199 of mode 4, drawn straight into B800h. It is
-outside the canvas, so no record writes there and nothing is saved or
-restored around it. Each cell is its eight rows of two bytes, ground and
-glyph in one store (6.1's rule, by hand: the desktop's slots are not legal
-in the bracket, 53.7). The glyphs are `OSAPI_FONT_GLYPHS`'s, copied before
-the bracket.
+The band is the rows from the header's band row (142 by default) to 199 of
+mode 4. It is outside the canvas, so no record writes there and nothing is
+saved or restored around it (`apps/vbattle/vbband.inc`).
+
+**It is composed in a buffer of its own** (16 KB in the resident claim,
+80 bytes a row): the band's PICTURE (the rules' band picture, at its
+place) or the plain look (black, a cyan rule at the band's second row and
+above the message line, a divider before the party), and over it the open
+menu's own picture. Text is drawn over the buffer's bytes - ground and
+glyph in one store a byte, the glyph's mask taking the ink and the rest
+the buffer's pixels (6.1's rule, by hand: the desktop's slots are not legal
+in the bracket, 53.7) - so a picture shows through around every letter.
+**A band rebuilt** (a turn begins, a menu opens or closes) **is composed
+off the screen** in a second 16 KB buffer, its text and all, **and put on
+the screen once**: the first build put the ground up and then drew the
+letters over it, which shows the ground alone for the time the letters
+take. A cursor's move or a number's change is drawn straight onto the
+screen over the buffer's ground. The glyphs are `OSAPI_FONT_GLYPHS`'s,
+copied before the bracket.
 
 It holds:
-- the menu: four commands, the cursor's inverse;
-- the enemy's name;
-- each member's HP and MP;
-- a message line.
+- **the menu**, at its own column, row and pitch, in its ink: an item an
+  action whose cost cannot be met in red; the cursor an arrow (`>`) or the
+  line inverse; an MP cost beside its label;
+- **the party panel** (column 18): the enemy's name and, when it has more
+  than one, its stance; then each character's name, a `*` when its limit
+  gauge is full, HP of its most, MP. Whose turn it is is drawn inverse, or
+  the character being aimed at while an ally is picked; the fallen red;
+- **the message line** at row 191.
 
-`[vb_dirty]` says which of the menu, the party and the message to redraw,
-and nothing else is drawn. **The selected member is the band's**: whose
-turn it is is drawn inverse there, and the footage carries no marker, so
-no clip is captured twice to show it.
+`[vb_dirty]`: 1 the menu, 2 the party, 4 the line, 8 the band rebuilt.
+**The selected member is the band's**: the footage carries no marker, so no
+clip is captured twice to show it.
 
 The four colours are the bundle's palette byte, set as
 `vp_cgaset .c4` sets it (mode 5's cyan, red and white through 3D8h on a
-CGA, and palette register 2 on an EGA or a VGA).
+CGA, and palette register 2 on an EGA or a VGA). A picture is quantised to
+those four by the builder (`os88vbt.band_picture`: the nearest, after a
+4x4 ordered dither), and `tools/vbtband.py` draws the band from the same
+bytes for the builder's preview.
 
 ### 125.6 The battle
 
-The turns go member 0, member 1, the enemy, and repeat. A member at 0 HP is
-skipped.
-- A command whose MP the member lacks says so and waits.
-- A party command's effect is applied when its clip is over: damage to the
-  enemy, or a heal of every member standing, up to their most.
-- The enemy attacks one standing member, alternating, for its damage.
-- The enemy at 0 HP plays the victory clip and holds it; the party at 0 HP
-  plays the defeat clip and holds it.
+`apps/vbattle/vbrules.inc` and `vbgame.inc` play the RULES block (125.2.4);
+`tools/vbtrules.Sim` is their REFERENCE, routine for routine, and the two
+must agree to the hit point: `tests/vbtengine.py` plays a battle that
+covers every rule on MartyPC and in the reference in lockstep, and reads
+every HP, MP, limit gauge, the enemy's HP and stance and the generator's
+own state at every character's turn. (On the owner's footage, on 86Box's
+ST11M, 27 turns agreed the same way, 2026-11-04.)
 
-Esc leaves at any time. The card is closed, and the kernel puts the desktop
-back. Playing again starts from the intro, with what was read kept.
+**The turns** go the characters in order, then the enemy, and repeat; a
+character at 0 HP is skipped. A character's turn ends its guard and ages
+its stat changes. Its menu is its TOP menu: Up and Down move, Enter takes
+an action or opens a SUB-MENU, Left or Right opens the SIDE menu, and Esc
+(or Left or Right) goes back. An action that cannot be paid for says so
+and waits. An action aimed at an ALLY picks one first: Up and Down among
+the standing (the fallen, for a REVIVE), Enter, or Esc back. The action is
+then PAID, PLANNED (125.6.3) and its clip played; its effects are APPLIED
+when its clip is over (an action with no clip is over at once); then the
+enemy may RESPOND (125.6.6); then the next turn. Esc at the top menu, or
+while a clip plays, leaves.
+
+#### 125.6.1 The effects
+
+| verb | a | power | b | c | what it does to each target |
+|---|---|---|---|---|---|
+| 1 DAMAGE | 0 physical, 1 magical, 2 fixed | power, or the amount | hits 1-4 | | 125.6.2's damage, every hit summed; the actor's CHARGE doubles the first DAMAGE effect; a GUARD halves it |
+| 2 HEAL | 0 by power, 1 % of the most HP (to 100), 2 fixed | | | | the HP up to its most; the fallen are not healed |
+| 3 RESTORE | | MP | | | the MP up to its most |
+| 4 REVIVE | | % of the most HP | | | a fallen character back at that share (at least 1) |
+| 5 GUARD | | | | | halves damage taken until its next turn |
+| 6 CHARGE | | | | | doubles its next DAMAGE |
+| 7 BOOST, 8 LOWER | the stat (ATK MAG DEF MDEF) | | steps 1-4 | turns | the stat's steps up or down (held to -4..4) for c of its turns |
+| 9 PASS | | | | | nothing: the turn passes |
+| 10 ESCAPE | | | | | the battle ends, escaped |
+| 11 STANCE | the stance | | | turns | the enemy into it, for c of its turns (0: until something changes it); its return is 125.6.7's |
+
+A target's damage is applied once, the total; so is its heal.
+
+#### 125.6.2 The arithmetic
+
+All integers; the four stats at most 999, so every product fits the
+8088's 32/16 divide.
+- a stat: its base × (8 + its steps) / 8; the enemy's then × (100 + its
+  stance's modifier) / 100;
+- DAMAGE = min(65535, power × ATK >> 4), then min(9999, that × (256 −
+  min(255, DEF)) >> 8), then min(9999, that × variance / 100); magical
+  uses MAG and MDEF; fixed is the amount, at most 9,999;
+- a CRITICAL (physical only, 1 in 16) doubles a hit; the variance is 90 to
+  110 %;
+- HEAL by power = min(9999, power × MAG >> 4), × variance / 100;
+- a character's LIMIT gauge rises by the damage's share of its most HP
+  (× 100, to 100); a limit cost needs 100 and spends it.
+
+#### 125.6.3 The draws, in order
+
+The generator is a 16-bit xorshift (7, 9, 8); rnd(n) advances it and
+gives (x × n) >> 16. A plan (`vb_resolve`) draws, in this order and only
+these: the POOL's pick; then for each target in turn, its HIT roll -
+rnd(100) < accuracy − the target's evade - when it is an opponent and the
+action can miss (accuracy under 100, or an evade over 0); and for each
+DAMAGE effect's each hit, its CRITICAL roll (physical) and its VARIANCE
+(not fixed); a HEAL by power its variance. The enemy's turn draws its move
+(rnd of the moves' total weight) before its plan, and a RANDOM target rule
+its target; a response its chance. Nothing else draws, so the read-ahead
+may PEEK the next draw to fetch the clip the action under the cursor would
+most likely play (`vb_peekclip`).
+
+#### 125.6.4 The outcome and its clip
+
+Over the results on the OTHER side only: **FINISHING** when a character's
+action leaves the enemy at 0; else **CRITICAL** when any hit was one;
+else **DEFENDED** when every hit landed on a guard; else **MISSED** when
+none hit; else **HIT**. The clip is that outcome's pool's, or HIT's when it
+has none (no pool: no clip); for an action aimed at one character alone,
+that character's own pool before the general one; picked by the plan's
+first draw. The outcome is decided before the clip is chosen, so the
+footage always agrees with the number.
+
+#### 125.6.5 Costs
+
+MP; an item (the party's count, at least one a use); or a full limit gauge
+(spent). An action whose cost cannot be met is drawn red and refused.
+
+#### 125.6.6 Responses
+
+After a character's action, if the battle goes on, the enemy's stance's
+responses are tried in order: each whose trigger the action meets (any, a
+physical one, a magical one, a named action) draws its chance, and the
+first that comes up is played - at the actor, or, fallen, at the
+alternating rule's pick - before the next turn.
+
+#### 125.6.7 The enemy's turn
+
+Its guard ends and its stat changes age. **A stance whose turns are up
+returns** to the one it came from, and its RETURN action, if it has one, is
+the turn. Else **its automatic change** (HP under a share, or after a number
+of its turns in it), if it fires and goes somewhere new: the stance changes
+and the change's action, if any, is the turn. Else **a move**, drawn by
+weight from the stance's, at a target by the move's RULE: ALTERNATING (the
+next standing after the last it went for), RANDOM, the LOWEST HP, the LAST
+to hit it, or a NAMED character - a rule whose character is down falls back
+to alternating. An action aimed at every character rolls each one alone.
+
+#### 125.6.8 The ending
+
+The enemy at 0: the victory clip, held. Every character at 0: the defeat
+clip, held. An ESCAPE: its own clip, which should be an ending. Esc leaves
+at any time; the card is closed, the rings given back, and the kernel puts
+the desktop back. Playing again starts from the intro, with what was read
+kept.
 
 ### 125.7 What is not done
 
@@ -237661,14 +237822,19 @@ is CGA4, and a VGA plays it in mode 4.
 an output.
 
 **Not yet built:**
-- the builder's WINDOW past its Battle and Idle tabs
-  (docs/plans/VBATTLE-BUILDER-PLAN.md). Built: `tools/vbtproj.py` (a
-  project), `tools/vbtana.py` (decoded screens, cached; loop and
-  attachment points; the music's loop), `os88vbt.py build PROJECT`, and
-  `tools/os88vbtgui.py` (the shell, the Battle and Idle tabs). The shipped `BATTLE.VBT` is the demo, and
-  the demo as a project builds it byte for byte (`tests/vbtbuild.py`);
-- menus as a tree, characters and the action verbs (the plan's 11);
-- a suite row.
+- the builder's openings and Build tab (docs/plans/VBATTLE-BUILDER-PLAN.md
+  wave 5). Built: `tools/vbtproj.py` (a project), `tools/vbtana.py`
+  (decoded screens, cached; loop and attachment points; the music's
+  loop), `tools/vbtrules.py` (the rules, 125.6), `tools/vbtband.py` (the
+  band's preview), `os88vbt.py build PROJECT`, and `tools/os88vbtgui.py`
+  (the Battle, Idle, Clips, Actions, Characters & menus and Enemy tabs).
+  The shipped `BATTLE.VBT` is the demo, built through its project;
+- **a stance's own idle loop**: every stance shares the battle's;
+- a time gauge (ATB), several enemies, status ailments past guard and
+  charge.
+
+The rows: `vbtbuild`, `vbtgui`, `vbtbundle`, `vbtrules` (host) and
+`vbtengine` (MartyPC), all `soak`.
 
 **What a disk delivered while the engine played was about half what it
 delivers alone - and it was the engine's copying, not the disk.** Measured on 86Box (a 5150, CGA, SB 2.0, an ST-225 on a

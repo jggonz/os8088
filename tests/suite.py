@@ -16724,6 +16724,29 @@ SOAK = [
         "at a score of 0. A model or build that goes wrong here writes a "
         "bundle that verifies and plays the wrong battle",
         needs=("pil",)),
+    Row("vbtrules", "soak", py("tests/vbtrules.py"), 8.0,
+        "SPEC.md 125.6: the Video Battle RULES' reference (tools/vbtrules.py), "
+        "host-side - the 16-bit xorshift's full period, the damage and heal "
+        "arithmetic by hand (stance and step shares, the caps), the outcome's "
+        "precedence and its clip (a pool's fallback, a character's own pool), "
+        "the compiler's refusals, the rules battle covering every rule and "
+        "the same twice, and the builder's rules tabs' arithmetic (every "
+        "verb's form round-trips, the estimate is the reference's, the band "
+        "preview's arrow where the engine puts it). Broken on purpose (the "
+        "damage shift 3 not 4) it FAILS naming the hand-worked hits",
+        needs=("pil",)),
+    Row("vbtengine", "soak", py("tests/vbtengine.py"), 130.0,
+        "SPEC.md 125.6: the Video Battle ENGINE against its reference, in "
+        "LOCKSTEP. The rules battle (tests/vbtrulesdemo.py: a sub-menu, a "
+        "side menu, an ally aimed at, MP, item and limit costs, heal, revive, "
+        "guard and a boost, three stances with a timed one and an automatic "
+        "change, an area attack, a miss chance, a counter) on MartyPC's XT "
+        "with the bundle on its XT-IDE C:, every HP, MP, limit gauge, the "
+        "enemy's HP and stance and the generator's state read at every "
+        "character's turn and held equal to vbtrules.Sim's, 43 turns to the "
+        "same ending. Broken on purpose (the engine's damage shift 3 not 4) "
+        "it FAILS at turn 1 naming both states",
+        needs=("marty",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 12.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "
