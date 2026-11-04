@@ -2080,6 +2080,17 @@ FAST = [
         "is a landmine for whoever edits the TCP stack next. "
         "SOAK and not fast: every one of those markers is ETHER.DRV's "
         "own, so this is a per-driver row"),
+    Row("stknosave-pciether", "soak",
+        py("tools/stkdepth.py", "drivers/pciether/pciether.asm",
+           "-I", "drivers/pciether/", "-I", "drivers/ether/",
+           "-I", "drivers/net/", "-I", "drivers/", "-I", "apps/", "--check"),
+        0.4,
+        "...and the same markers as PCIETHER.DRV assembles them (SPEC.md "
+        "125.2): the stack is SHARED SOURCE, so a NOSAVE that holds in "
+        "ETHER.DRV's image can still break here, where the NIC seam calls "
+        "the RTL8139 backend and rt_es puts an OSAPI_SEG call on the "
+        "receive and transmit path. Measured 2026-11-04: 12 dropped saves "
+        "across 5 routines, all holding"),
     Row("sheetfmtlib", "fast",
         py("tools/os88sheetfmt.py", "--selfcheck"), 1.5,
         "tools/os88sheetfmt.py parses what it writes - the host-side SYLK, "
@@ -17361,6 +17372,21 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
                "build/win16/OVRTEST.EXE")),
+    Row("win16csalias", "soak", py("tests/win16csalias.py"), 90.0,
+        "SPEC.md 124.31.6, 50.6.11 (SEG_TYPE), KERN-MEGA-PLAN 14.142: under "
+        "Bochs, kern_mega boots off C: and \\AUTOSTRT opens CSALIAS.EXE "
+        "(tests/win16/csalias.c), which copies mov ax,1234h / retf and a LAR "
+        "probe into a global block, far-calls it through AllocDStoCSAlias and "
+        "PrestoChangoSelector's code selectors (1234h back, LAR says code), "
+        "takes AllocDStoCSAlias's new code window over a selector in no claim "
+        "(the ROM) and frees it, flips a window and the block's own handle "
+        "descriptor (ASTEROID's idiom) in place, and is refused when it "
+        "PrestoChangos onto a selector it does not own. No fault line. "
+        "Red expected before 14.142: the far call is a #GP and WIN16 closes",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/CSALIAS.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
@@ -19861,6 +19887,27 @@ SOAK = [
         "find is a row nobody runs.",
         needs=("qemu",), serial=True,
         wants=("build/brtest360.img", "build/ether360.img", "build/browser.o88"),
+        locks=("port:8090",)),
+    Row("pciether", "soak", py("tests/pciether.py"), 20.0,
+        "SPEC.md 125 (docs/plans/PCIETHER-PLAN.md S8): PCIETHER.DRV on "
+        "kern_mega with a PCI RTL8139 (`-device rtl8139` on slirp, "
+        "os88qemu.make_test's PCIETHER=1) - the driver attached off a "
+        "SYSTEM.CFG that already asks for it (`make pciethertest`), the "
+        "station address QEMU's, DHCP bound to 10.0.2.15, the shipped "
+        "Browser fetching a page the row serves itself over TCP, and the "
+        "frame counters moving with no receive-overflow reset. QEMU by name: "
+        "MartyPC has no NIC, Bochs has no RTL8139 and 86Box cannot be "
+        "asserted against (vm/pentium-pciether is where a person LOOKS). "
+        "The machine carries no AdLib (NOCARD=1), so PCIETHER.DRV is the one "
+        "driver up. kern_mega's selectors are decoded through the GDT/LDT "
+        "in `info registers` (tests/pciether.py MQemu). Measured 14.7s on "
+        "2026-11-04, its first run: row 10, the image at FC3000 (above 1MB), "
+        "DHCP bound, the page fetched, rx 7 tx 9, no overflow reset.",
+        needs=("qemu", "nasm"), serial=True,
+        wants=("build/pciethertest.img", "build/brtest.img",
+               "build/megak/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/mega.img",
+               "build/browser.o88", "build/browser.map"),
         locks=("port:8090",)),
     Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,
         "SPEC.md 71.20: Save Link As streams a 32 KiB unknown-length binary "
