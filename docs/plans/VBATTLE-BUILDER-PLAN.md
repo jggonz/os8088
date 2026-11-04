@@ -1,9 +1,10 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: DESIGN, for the owner's feedback (2026-11-04).** Nothing here is
-built. It turns a battle's footage into a `.VBT` bundle (SPEC.md §125)
-through a window. Section 9 lists the questions this design cannot settle
-alone.
+**Status: DESIGN, revised with the owner's answers (2026-11-04).** Nothing
+here is built. It turns a battle's footage into a `.VBT` bundle (SPEC.md
+§125) through a window. Section 9 has the questions and their answers,
+section 10 what the answers changed, and section 11 the proposal for what an
+action DOES.
 
 ## 1. What it is for
 
@@ -258,3 +259,159 @@ demo inside it.
    own soundtrack?
 5. **The band's height**: fixed at 58 rows, or a project setting? Your
    footage is 142 rows high, which leaves 58.
+
+## Answers (the owner, 2026-11-04)
+
+1. **The side menu**: yes. Left and Right open a menu of their own, of the
+   Defend / Charge Limit / Change Character kind.
+2. **Characters**: each has their own menu, since each can be given
+   different abilities. The builder needs a CHARACTER EDITOR, from 1 to 4
+   characters. The rules are in section 11, which is the proposal for this.
+3. **Footage, encoded by the builder itself.** Nobody manages hundreds of
+   `.V88` files outside it.
+4. **Effects come as separate files.** Recognising the music in a captured
+   soundtrack and muting only that would be the easier path if it could be
+   done automatically. It is not attempted.
+5. **The band's size is a project setting**, and so is the video's.
+
+## 10. What the answers changed
+
+### 10.1 Clip STREAMING is a wave of its own, and comes first
+
+It is core to the project, and the builder would otherwise be designed
+against an engine that cannot play its output. It is the next wave, before
+any of the builder's (section 7's order moves). Its contents:
+
+- **The bundle's format version 3**:
+  - every clip's region is a STREAM of records of any length;
+  - each record carries its frame's sound;
+  - the attachment points are per clip;
+  - the canvas and the band are rectangles in the header.
+- **Two clip rings.** A clip plays from one while the next one's head is
+  read into the other, so two clips can follow each other with no idle
+  frame between them (the openings, 10.3).
+- **A clip's SOUND streams with its frames**, as a V88's does: each
+  record's own bytes, for that frame. A clip's sound is either MIXED over
+  the music (an action's effects, placed in time by the builder and baked
+  into its sound) or the clip's OWN, played instead of the music (the
+  openings). The engine then needs no effect queue: where an effect sounds
+  is the builder's decision, made once.
+- **The music JOINS at a chosen offset** when a clip that replaced it ends.
+
+### 10.2 Sound in the builder
+
+- **The music track**, with a LOOP-POINT finder of the idle loop's kind:
+  - candidates from the audio's own similarity (the onset envelope and the
+    spectrum, frame by frame);
+  - each candidate played around its join;
+  - the loop set by start and end.
+
+  All music loops.
+- **A clip's effects**: files placed on the clip's timeline, by frame or
+  dragged, each with a level. They are mixed into the clip's sound at
+  build time.
+- **The menu's sounds**, resident:
+  - the selection moved;
+  - a sub-menu opened;
+  - a sub-menu closed;
+  - an action taken;
+  - refused (not enough MP, and the like).
+- **Listening.** The window plays the music around a loop point, a clip
+  with its effects, and the join from an opening into the music, through
+  the platform's own player: `winsound` on Windows (standard library),
+  `afplay` on macOS, `aplay` or `paplay` on Linux. The window builds the
+  WAV and hands it over; it plays nothing itself.
+
+### 10.3 The openings
+
+- **Opening 1** (optional, full screen or not, any number of them in turn):
+  a clip played whole, with its OWN sound.
+- **The SCENE opening**, the last: the menu is up. It plays with its own
+  sound and then joins the idle loop through an exit, as an action does.
+  The music comes in at a JOIN OFFSET. The builder suggests that offset by
+  comparing the end of the opening's sound with the music (a
+  cross-correlation of their envelopes), so the music continues what the
+  opening's sound was doing. The user can move it. The join is the only
+  timing involved: nothing is waiting on a key.
+
+### 10.4 Sizes are the project's
+
+- **The video's rectangle and the band's** are set by the project, inside
+  the adapter mode's screen, and must not overlap: half and half, a short
+  band, or a canvas less than full width. The records address the screen
+  as the adapter's memory image, so the canvas's position is the build's
+  and costs the engine nothing. The band's rectangle is in the header and
+  the engine draws inside it.
+- **Hercules (720 x 348) and VGA come later, and they are encodings**:
+  another rendition of the same project, with its own rectangles. A 600 x
+  200 video over a 600 x 100 band on Hercules is a project setting, not a
+  new engine.
+
+### 10.5 The waves, again
+
+0. **Clip streaming**, in the engine and the bundle (10.1). The demo grows a
+   clip far larger than memory to prove it.
+1. **The model and the command line**:
+   - `vbtproj`, `vbtana`, `os88vbt build PROJECT`;
+   - the demo re-expressed as a project;
+   - characters, menus and actions in the model (section 11).
+2. **The window's shell; the Battle tab (sizes, palette, music and its
+   loop) and the Idle tab.**
+3. **The Clips tab**: attachments, effects on the timeline, listening.
+4. **The Menus and Characters tabs**, and the engine's menu tree,
+   backgrounds and rules (11).
+5. **The openings** in the window (10.3), and **the Build tab**.
+
+## 11. What an action does: a small, fixed set of verbs
+
+**The proposal: no action is hardcoded, and no action is a script.** An
+action is DATA made from a short list of verbs that every battle of this
+kind uses. The engine interprets them from the bundle's tables, and the
+builder edits them as forms.
+
+### 11.1 Characters (1 to 4) and the enemy
+
+- **A character**:
+  - a name;
+  - HP, MP, ATK, MAG, DEF, MDEF;
+  - a LIMIT gauge (0 to 100), which damage taken fills;
+  - their own menu tree (the top menu, its sub-menus, and the side menu).
+- **The enemy** (one, for now):
+  - a name and the same stats;
+  - its ATTACKS: a weighted list, each an action as below, with a rule
+    for its target.
+
+### 11.2 An action
+
+| part | choices |
+|---|---|
+| **target** | self; one ally (the player chooses); all allies; the enemy |
+| **cost** | MP *n*; an item (the party's count of it, *n* to start); the limit gauge full; none |
+| **effects**, in order | DAMAGE (physical or magical, a power, hits 1 to 4, a variance); HEAL (a power, or a % of the most HP); RESTORE MP; REVIVE (to a % of HP); GUARD (damage taken halved until this character's next turn); CHARGE (the next DAMAGE doubled); BOOST or LOWER a stat (by a step, for *n* turns); PASS (this turn goes to the next character: Change); ESCAPE (the battle ends, a clip of its own) |
+| **accuracy** | % to hit; a miss plays the MISS pool |
+| **clips** | POOLS of clips, chosen at random: HIT, MISS, CRITICAL, and FINISHING (it brings the enemy to 0). A pool may be keyed by TARGET, so that an attack on character 2 plays character 2's footage. An empty pool falls back: CRITICAL to HIT, a target's pool to the general one |
+
+### 11.3 The arithmetic, one formula each
+
+So that the builder can show "about 95 damage" beside an action:
+- physical damage = power × ATK / 16 × (256 − DEF) / 256;
+- magical damage is the same with MAG and MDEF;
+- each times a random 90 to 110 %;
+- a critical (1 in 16, physical only) doubles it;
+- GUARD halves what the guard takes; CHARGE doubles what it gives.
+
+All of it is integer arithmetic on an 8088, at a few hundred cycles an
+action.
+
+### 11.4 What it costs
+
+- the bundle: a few hundred bytes of tables;
+- the engine: an interpreter for nine verbs, perhaps 2 KB of code.
+
+### 11.5 What it does not do
+
+Turn order is round robin: the characters in order, then the enemy. A
+timed gauge (ATB) is a later wave. Status ailments beyond GUARD and CHARGE,
+several enemies, and items as a menu of their own are left until a battle
+needs them. The verbs are numbered in the bundle, so a later verb adds to
+the list and does not change the existing ones.
