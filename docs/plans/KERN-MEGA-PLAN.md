@@ -13581,3 +13581,28 @@ Seen (QEMU, kern_mega, looks, 2026-11-03):
 
 The overrun itself cannot be seen under QEMU, which checks no data
 segment's limit. `tests/win16ovr.py` is Bochs's row for it.
+
+### 14.139 `SEG_BWIN` binds only into the caller's own block (2026-11-04) - FIXED, NOT YET RUN
+
+WIN16-NEXT-PLAN Q7. 14.137 gave `mega_wset`'s re-bind the owner test
+(`mega_bown`) and said `SEG_BWIN` "makes no such test of the selector it is
+handed, and was left as it is". That is 14.135 item 2's hole one verb along:
+a package could hand `SEG_BWIN` a selector based in ANOTHER package's block
+and get a window over it, and `mega_wbind` flagged a pool block `MX_FWIN`
+(sticky) as a side effect.
+
+`mega_segbw` now takes the caller's owner byte (`mega_segown`) and asks
+`mega_bown` of the selector's base BEFORE `mega_wbind`. Another owner's
+block, nobody's block, a caller with no owner byte (FFh) or a base in no
+block answer CF = 1, AX = 3 (not in a block of the caller's own; SPEC.md
+50.6.11), with no window made and no block flagged. Nothing new is added to
+the refusal codes.
+
+Shipped callers (each binds a block it owns): Video Player's `vp_xrun` window
+over its own `OSAPI_XMEM_RUN` block and its `vp_sel`/`vp_rsel` slot windows
+over its own claims (video.asm); the Browser's `br_bwaim` over its own claim
+(browser.asm); tests/megaxm over its own block. WIN16 uses `SEG_HND` and
+`SEG_AT`, not `SEG_BWIN`. tests/megaown gains a leg: MEGAOWN calls
+`SEG_BWIN` on a selector over MEGAHOLE's block-class memory it does not own
+and must see the refusal.
+

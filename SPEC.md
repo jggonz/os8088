@@ -99600,8 +99600,11 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   tiers (docs/plans/completed/KERN-MEGA-MEMORY-PLAN.md 8.1); it is a block's or
   nothing (CF = 1, AX = 3). A block's free takes both halves.
 - A **BOUND window** (`SEG_BWIN`) is a fresh descriptor - never a match, so
-  re-aiming it moves nobody else's - based in a claim or a pool block and
-  recorded in `mega_wtab` under the caller, its row's byte 3 marking it
+  re-aiming it moves nobody else's - based in a claim or a pool block **of
+  the caller's own** (`mega_bown`, asked before the block is flagged: a
+  conventional claim recorded under the caller's slot, a pool block under
+  0A0h | slot or a driver's 0C0h | row; a caller with no owner byte has
+  none) and recorded in `mega_wtab` under the caller, its row's byte 3 marking it
   bound. `SEG_WIN`, `SEG_AT` and `SEG_WINL` naming one of the caller's own
   as the window to re-aim **re-bind** it when, and only when, the new base
   lies in a claim or a pool block **of the caller's own** (`mega_bown`: a
@@ -99677,7 +99680,9 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   on lin320 in one arrangement, and in another the player CLOSED by a #GP
   in `vd_n_p3` (MEGA-VIDEO-REALMODE-PLAN W5, KERN-MEGA-PLAN 14.128).
 - Refusals: CF = 1, AX = 1 when no LDT entry or no `mega_wtab` row is free,
-  2 for the null selector, 3 not in a block (`SEG_SUBC`, `SEG_BWIN`), 4 not a
+  2 for the null selector, 3 not in a block (`SEG_SUBC`; `SEG_BWIN`: not in a
+  block of the caller's own, whether it is another's or nobody's, and nothing is
+  bound or flagged), 4 not a
   bound window of the caller's and 5 past its block's end (`SEG_AIM`), 4
   also not a handle descriptor (`SEG_HND`). Every
   register but AX is kept, so a refused `SEG_SUB` still holds the caller's
