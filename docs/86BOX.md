@@ -163,7 +163,10 @@ commit `tools/86box/UPSTREAM` pins, and the installed app's agrees. The link
 key is left out, as `vm/xt-wire`'s is: absent is every speed and the cable
 up, where `net_01_link = 0` is a link with no speed at all. It is a place to
 LOOK (86Box cannot be keyed or asserted against); `tests/pciether.py` is the
-gate and runs under QEMU.
+gate and runs under QEMU. kern_big carries the same row (SPEC.md 125.1), so
+the shipped `os8088.img` with Control Panel → Drivers → PCI Ethernet ticked
+is the same card on the real-mode kernel; `make pcibigtest` is that disk
+with the tick already made.
 `vm/286-mega-ems` is `vm/286-mega` with 86Box's Lo-tech EMS board
 (`isamem0_type = lotechems`: registers 260h, frame E000h, 2 MB) added and
 nothing else changed - the one machine here that gives kern_mega expanded

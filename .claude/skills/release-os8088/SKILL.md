@@ -39,6 +39,12 @@ also gets a **Spotlight page** (step 4b), which is a page of its own under
 `/spotlight/` with its own screenshots. A line on the releases page does not
 carry a new program.
 
+**Every release checks the Windows applications gallery** (step 4e),
+`/spotlight/windows/`. That page has one real screenshot and one note per
+Windows 3.x program tested on WIN16. A newly tested program, a lifted limit or
+a program that broke goes there and on the WIN16 Spotlight page,
+`/spotlight/win16/`, in the same PR.
+
 **Every release also brings the site's Docs section up to the build** (step
 4d): `/docs/`'s disk guide, memory model and source-checked articles quote one
 source commit, and a release that ships new disks under last release's Docs is
@@ -785,13 +791,6 @@ hardest: the **deck** (`.spot-deck`, one or two sentences that are the whole
 page) and the **three numbers** in the `.specs` block. If you cannot fill those
 three cells with facts, the page is probably a highlight and not a spotlight.
 
-The copy rules above apply, plus one more: **a Spotlight page is written for
-someone who does not know the subject at all**, so explain the domain and not
-only the change. The Frotz page spends three paragraphs on what a Z-machine is
-before it says a word about the implementation. That is the right proportion.
-Still no marketing, still numbers instead of adjectives, and still no `§`
-numbers or symbol names.
-
 **3. Embed the video, if there is one.** Reuse the markup on the Frotz page --
 an `<a class="vid__poster" data-video="<id>">` around an
 `<img src="/videos/thumb/<id>.jpg">`, plus `<script src="/js/videos.js" defer>`
@@ -961,6 +960,105 @@ a file it added, and open `#memory` at 128K and 640K on both kernel builds. An
 inventory that parses and a guide that renders an empty pane read the same in
 `git diff`.
 
+#### 4e. The Windows applications gallery, when WIN16 checked something new
+
+`/spotlight/windows/` (`$WEB_REPO/site/spotlight/windows.html`) gives each
+original Windows 3.x program checked on WIN16 (SPEC.md 124) one card: a real
+screenshot, the file name, what has been checked and what has not. Cards are
+grouped by section (Writing and drawing, Everyday utilities, Games, Desktop and
+system tools, Screen saver settings, the 286+ kernel, Multimedia previews).
+`$WEB_REPO/tools/scenes.windows.json` lists the scenes, and
+`tools/capture_windows.py` takes their screenshots. The page is hand-written
+HTML, not generated, so nothing on it changes unless this step changes it.
+**`/spotlight/win16/` is the gallery's companion page**: it explains how WIN16
+works and links to the gallery. Its counts, programs and "how to run it" steps
+have to match the gallery's.
+
+**Decide first, and check every release.** List what changed in WIN16 since
+the last release:
+
+```bash
+cd "$OS_REPO"
+PREV_TAG=$(git tag --list 'v1.0.*' --sort=-creatordate | head -1)   # last release
+git log --oneline "$PREV_TAG"..HEAD -- apps/win16 tests/win16*.py \
+        docs/plans/WIN16*.md docs/HOW-WIN16-WAS-BUILT.md
+```
+
+Then read the diary entries and plan-status changes those commits make. A
+program belongs in the gallery when it has been **tested and validated**: a
+registered `tests/suite.py` row drives it, or the user drove it on the screen
+and said it works. A program that only reaches its window is not enough, and
+neither is an import census saying it should load. Each of these changes the
+page:
+
+- **A newly validated program** gets a new card in the section it belongs to.
+- **A newly checked feature in a program already on the page** (common
+  dialogs, printing, sound or a second version of the program) changes that
+  card's text.
+- **A lifted limit** moves or edits cards. This includes kern_mega reaching
+  the release disks, which removes every "not on the release disks yet" note
+  and changes the `#protected` section. It also includes audio verified on a
+  preview, which moves the program out of `#previews`, and a CPU requirement
+  that changed. Then update the Requirements and limits section to match.
+- **A regression**, meaning a program on the page that no longer works on
+  this build, comes off the page or gets a note saying what broke. Ask the
+  user which, and do not leave the page claiming that it works.
+
+If nothing changed, leave the page alone and say so in the PR body.
+
+**1. Write the scene.** Add one entry per new program to
+`tools/scenes.windows.json`, copied from a neighbour. Set `program` to the
+**WIN16 test alias** (`W31MINE.EXE`, not `WINMINE.EXE`, when two versions
+share a name, and `.EXE` for a renamed `.SCR`). List every companion DLL or
+help file in `files`. A kern_mega program also needs `"bootImg": "mega.img"`
+and `"package": "megak/apps/win16.o88"`, which means `make mega` has been run
+first. The `steps` are what `capture.py` runs; they should leave the program
+showing what the card says it does.
+
+**2. Capture it from the private program folder.** **No Microsoft binary is
+ever committed to either repository.** The capture tool builds scratch
+floppies outside both trees and publishes only the PNGs. The programs come
+from one flat folder named by the aliases. `build/win16/` is that folder for
+the programs the win16-reference skill's `samples` step puts there (run it
+again after a `make clean`). Ask the user for anything else.
+
+```bash
+cd "$WEB_REPO"
+python3 tools/capture_windows.py --repo "$OS_REPO" --programs <folder> \
+        --only <id>,<id>
+```
+
+**Recapture the whole gallery** (no `--only`) when the release changed how
+WIN16 draws: its fonts, window frame, colours, dialogs or the desktop around
+it. A gallery taken with two different builds shows two different systems.
+Then run `git diff --stat public/img/windows/`. A drawing change that left
+every PNG unchanged means the capture or the build is wrong.
+
+**Look at every captured PNG with the Read tool**, as in 4b. A program that
+crashed shows WIN16's missing-function message, and a lost keystroke shows an
+empty window. Both are plausible 640x480 PNGs.
+
+**3. Write the card.** Copy a neighbouring `<article class="win
+spotlight-card" id="<id>">` into the right section and change the `id`,
+`aria-labelledby`, image paths, `alt`, kicker (`Windows 3.0`, `Windows 3.1`,
+`/ Setup dialog`, `/ Preview`), heading, file name and text. The `<code>`
+shows the program's **real** file name (`WINMINE.EXE`), not the test alias.
+Only the first card on the page keeps `fetchpriority="high"`; the others use
+`loading="lazy"`. The text says what was checked and nothing more, in the
+"Writing the copy" voice. Put each requirement (V20 or later, the 286+ kernel
+or a companion file) in a `class="note"` line. Update the `spot-toc` if you
+add a section. In the closing note, update the capture date and anything that
+it says the page was checked against.
+
+**4. Update the pages around it.** Update the `/spotlight/win16/` sections
+whose claims moved, including its "See it running" band and how-to-run steps.
+Update the Windows card on `site/spotlight.html` when it names programs or
+sections that changed. In `data/releases.json`, link the WIN16 highlight to
+the card, `/spotlight/windows/#<id>`.
+
+**5. Rebuild, link-check and look**, as in 4b step 5. Use 1600px and 390px
+widths, and open each new card's full-size `@2x` link.
+
 ### 5. Commit and open the pull request
 
 ```bash
@@ -992,6 +1090,12 @@ If step 4b produced a Spotlight page, say so in the PR body and give its path,
 list the scenes captured, and name the video it embeds. Mention that the video
 poster only resolves once the Worker is serving the page, so a reviewer reading
 a local build does not file it as a broken image.
+
+Say what step 4e did to the Windows gallery: the programs added and the
+section each went into, the cards whose text changed and why, any limit lifted
+or regression found, and whether the gallery was recaptured whole or only by
+`--only`. If WIN16 changed but the gallery did not need to, say that too, so a
+reviewer can tell that the check was made.
 
 When the session calls for an attribution line, name the host that actually
 performed the release. For Claude Code:
@@ -1093,7 +1197,8 @@ Tell the user: the version, the version-file PR step 1a merged, the PR URL,
 the release URL, the kernel size and its delta, each zip's packed size and
 how many images went into the main one, what step 6a's `--verify` printed
 for each of the three trees, the
-Spotlight page's URL if step 4b ran, the Docs snapshot commit step 4d moved
+Spotlight page's URL if step 4b ran, the Windows gallery cards step 4e
+added or changed (or that WIN16 needed none), the Docs snapshot commit step 4d moved
 to (or that it did not, and why), and anything you skipped or that needs
 their attention -- naming any on-demand disk or companion zip that did not
 get built, since a reader of the README cannot tell a disk that was left out
@@ -1137,7 +1242,14 @@ them in a status line is how they get lost.
 - **Never put a screenshot on a Spotlight page that you have not looked at.**
   Step 4b captures them from a real boot and you read every one. A mockup, a
   crop of an old shot, or a scene whose click was lost are all the same defect
-  to a reader: a picture of something that did not happen.
+  to a reader: a picture of something that did not happen. The same goes for
+  step 4e's Windows gallery.
+- **Never commit a Microsoft binary**, in either repository. Step 4e's
+  programs come from a private folder, and only the screenshots are
+  published.
+- **Never list a Windows program in the gallery that has not been tested
+  and validated.** If it only opens its window or passes the import census,
+  it is not ready, and each card says only what was checked.
 - **Never move a Docs "checked against" commit you did not check.** Step 4d's
   script moves only what it measured or what nothing touched; the rest is a
   person reading the commits it lists.
