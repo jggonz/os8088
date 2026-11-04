@@ -147,6 +147,7 @@ MAXBLK = 120
 # the accurate cores' scratch offsets (a2cpu.inc, c64cpu.inc - the same block)
 S_DIRTY, S_CARRY, S_DEAD, S_IRQ = 0x00, 0x22, 0x24, 0x2A
 S_WLO, S_WHI, S_ANY, S_WATLO, S_WATHI = 0x2C, 0x2E, 0x30, 0x32, 0x34
+S_LASTPG = 0x31                 # the C64's: the page this core last marked
 S_MAPA, S_MAPD, S_MAPE = 0x36, 0x37, 0x38      # the C64's bank map
 # ...and the Apple II's own, beyond them in its page (APPLE2-SPEC 4.6)
 S_KBV, S_KBOK, S_IDLEOK = 0x4A, 0x4B, 0x4C
@@ -231,6 +232,67 @@ class Gen:
         self.L(*self.aot_or_fetch())
         self.L("%s: jmp x_slice" % x)
 
+    def loop_collapse(self, op):
+        """THE C64's SELF-LOOPS, RUN AS ONE STEP (C64-SPEC 4.7.2). `DEC abs`,
+        `DEX` or `DEY` followed by a BNE back onto itself is a delay loop
+        whose whole length is known before it runs: n passes of the counter's
+        value (0 is 256), 9 cycles a pass for DEC abs and 5 for DEX/DEY, less
+        the 1 the last, untaken BNE saves. When the budget holds all of it,
+        the counter becomes 0, Z is set and N clear (C untouched, as DEC
+        leaves it), BP is charged exactly that, and the core goes on past the
+        BNE - the same cycle, the same registers, the same flags as running
+        it. The Portland CUG Christmas demo's `DEC $C333 / BNE` spent a
+        quarter of a 286 a pass at a time. DEC abs only on plain RAM - below
+        $A000 or in $C000-$CFFF - and the page marked once. Not enough
+        budget: the ordinary handler below, a pass at a time."""
+        L = self.L
+        no = self.lab()
+        if op == 0xCE:
+            ram = self.lab()
+            L("    mov bx, [es:si]",
+              "    cmp word [es:si+2], 0xFBD0",      # BNE -5: back to the DEC
+              "    jne %s" % no,
+              "    cmp bh, 0xA0", "    jb %s" % ram,
+              "    cmp bh, 0xC0", "    jb %s" % no,
+              "    cmp bh, 0xD0", "    jae %s" % no,
+              "%s:" % ram,
+              "    cmp bx, 2", "    jb %s" % no,
+              "    mov dl, [bx]")
+            per, skip = 9, 4
+        else:
+            L("    cmp word [es:si], 0xFDD0",          # BNE -3: back to the DEX
+              "    jne %s" % no,
+              "    mov dl, %s" % ("cl" if op == 0xCA else "ch"))
+            per, skip = 5, 2
+        nz = self.lab()
+        L("    xor dh, dh",
+          "    test dl, dl", "    jnz %s" % nz,
+          "    inc dh",                               # 0 is 256 passes
+          "%s:" % nz,
+          "    push bx",
+          "    mov bx, dx")                           # n
+        if per == 9:
+            L("    shl dx, 1", "    shl dx, 1", "    shl dx, 1")   # 8n
+        else:
+            L("    shl dx, 1", "    shl dx, 1")                   # 4n
+        L("    add dx, bx",                           # 9n or 5n
+          "    dec dx",                               # ...less the last BNE's 1
+          "    pop bx",
+          "    cmp bp, dx", "    jg %s" % (no + "_go"),
+          "    xor dx, dx",
+          "    jmp %s" % no,
+          "%s_go:" % no,
+          "    sub bp, dx")
+        if op == 0xCE:
+            L("    mov byte [bx], 0", "    call c64_mark")
+        else:
+            L("    mov %s, 0" % ("cl" if op == 0xCA else "ch"))
+        L("    mov dh, 1", "    sahf", "    dec dh", "    lahf",   # Z=1, N=0
+          "    add si, %d" % skip,
+          "    xor dl, dl")
+        L(*self.fetch_op())
+        L("%s:" % no)
+
     def aot_or_fetch(self):
         """the next opcode - or, where the profile has a ROM translated ahead
         of time (m65aot.py) and SI is in it, ct_rom, which enters the
@@ -240,6 +302,15 @@ class Gen:
         go = self.lab()
         lo, hi = self.p["aot"]
         top = [] if hi >= 0x10000 else ["    cmp si, 0x%04X" % hi, "    jae %s" % go]
+        if self.c64 and (lo, hi) == (0xA000, 0x10000):
+            # ...AND $C000-$CFFF, which is RAM under every C64 bank map and
+            # where a program keeps its own loops: a taken BNE there went to
+            # ct_rom only to find ES = DS, 6.6% of a 286 under the Portland
+            # CUG demo's delay loop (C64-SPEC 4.8)
+            ct = self.lab()
+            top = ["    cmp si, 0xD000", "    jae %s" % ct,
+                   "    cmp si, 0xC000", "    jae %s" % go,
+                   "%s:" % ct]
         return ["    cmp si, 0x%04X" % lo, "    jb %s" % go] + top + [
                 "    jmp ct_rom",
                 "%s:" % go] + self.fetch_op()
@@ -412,6 +483,8 @@ class Gen:
 
         L, F = self.L, self.F
         pen = [self.lab()] if mode in PENALTY and mn in READS else []
+        if self.c64 and op in (0xCE, 0xCA, 0x88):
+            self.loop_collapse(op)
 
         if mn == "BRK":
             L("    jmp x_hb1")
@@ -807,6 +880,19 @@ class Gen:
             # the damage mark - BX was just written: the page's bit, "the core
             # wrote something", and the write window when BX is in the watch
             # range (the accurate cores' write path, section 7.5 / 9.2)
+        ]
+        if self.c64:
+            # THE SAME PAGE AS THIS CORE'S LAST MARK, since the flush took the
+            # set, is already marked: only the window is left to do. A
+            # `DEC $C333 / BNE` delay loop marked one page tens of thousands of
+            # times a second, 15% of a 286 (C64-SPEC 4.7). The proof is ANY =
+            # 2, which only THIS path writes: the accurate core and the
+            # package's writers write 1 and the take writes 0, and either
+            # breaks the chain, so a stale page can never be skipped
+            mark += ["    cmp byte [%s], 2" % S(S_ANY), "    jne .slow",
+                     "    cmp bh, [%s]" % S(S_LASTPG), "    je .win",
+                     ".slow:"]
+        mark += [
             "    push bx", "    push dx",
             "    mov dl, bh", "    and dl, 7",
             "    mov dh, 0x80",                  # the mask: 0x80 >> (page & 7)
@@ -815,7 +901,10 @@ class Gen:
             "    shr bl, 1", "    shr bl, 1", "    shr bl, 1",
             "    or [bx + SCRD + 0x%02X], dh" % S_DIRTY,
             "    pop dx", "    pop bx",
-            "    mov byte [%s], 1" % S(S_ANY),
+            "    mov byte [%s], %d" % (S(S_ANY), 2 if self.c64 else 1)]
+        if self.c64:
+            mark += ["    mov [%s], bh" % S(S_LASTPG), ".win:"]
+        mark += [
             "    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
             "    cmp bx, [%s]" % S(S_WATHI), "    ja .out",
             "    cmp bx, [%s]" % S(S_WLO), "    jae .nolo",

@@ -243,6 +243,8 @@ C64_SCR_WHI   equ 0x2E              ;   highest address written since the last
 C64_SCR_ANY   equ 0x30              ; ...and one byte that says the core wrote
                                     ;   SOMETHING, so a wake can decide to
                                     ;   flush in one read instead of 32
+C64_SCR_LASTPG equ 0x31             ; the fast core's last marked page,
+                                    ; valid while ANY is 2 (m65gen.py's c64_mark)
 C64_SCR_WATLO equ 0x32              ; the WATCH RANGE the window is taken over:
 C64_SCR_WATHI equ 0x34              ;   mbase .. mbase+999, written by the C
                                     ;   from c64_frame_regs (C64-SPEC §9.2)

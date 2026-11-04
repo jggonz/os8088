@@ -26,7 +26,7 @@
 ; The perturbations reach the ENVIRONMENT or the core's own tables at runtime,
 ; never the source: what is assembled here is byte for byte what ships.
 ;
-;     -DROWS      the thirteen rows below (seconds)
+;     -DROWS      the fourteen rows below (seconds)
 ;     -DDORMANN   Klaus Dormann's 6502 functional test, appended by the
 ;                 script at sector DORMSEC and read straight into the C64's
 ;                 RAM; PC starts at $0400 and the run is judged by where the
@@ -537,6 +537,15 @@ rows_main:
     call control
     call unpatch_brk
 
+    mov si, msg_r14
+    call puts
+    call row_loop
+    call verdict
+    mov byte [neg_loop], 1
+    call row_loop
+    call control
+    mov byte [neg_loop], 0
+
     mov si, msg_r13
     call puts
     call row_rmw
@@ -1042,6 +1051,41 @@ row_rmw:
     cmp byte [es:0x0010], 0x21
     jne .bad_es
     pop es
+    ; ...AND EVERY PAGE WRITTEN IS MARKED (9.2): $A0, $C3 and $E0 - then the
+    ; flush's take (the bitmap and ANY cleared) and the same program again:
+    ; $C3 must be marked AFRESH, which a same-page shortcut that outlived the
+    ; take would skip (m65gen.py's c64_mark, ANY = 2)
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xA0 >> 3)], 0x80 >> (0xA0 & 7)
+    jz .bad_es
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xC3 >> 3)], 0x80 >> (0xC3 & 7)
+    jz .bad_es
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xE0 >> 3)], 0x80 >> (0xE0 & 7)
+    jz .bad_es
+    ; a program that writes $C3 and nothing else, so this core's last mark
+    ; IS page $C3 when the take comes
+    mov byte [es:0x0410], 0xCE      ; DEC $C333
+    mov word [es:0x0411], 0xC333
+    mov byte [es:0x0413], 0x02      ; KIL
+    pop es
+    call .r410
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov di, C64_SCR_BASE + C64_SCR_DIRTY
+    mov cx, 32
+.clr:
+    mov byte [es:di], 0
+    inc di
+    loop .clr
+    mov byte [es:C64_SCR_BASE + C64_SCR_ANY], 0     ; THE TAKE
+    pop es
+    call .r410
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    test byte [es:C64_SCR_BASE + C64_SCR_DIRTY + (0xC3 >> 3)], 0x80 >> (0xC3 & 7)
+    jz .bad_es
+    pop es
 
     xor ax, ax
     ret
@@ -1049,6 +1093,98 @@ row_rmw:
     pop es
     mov ax, 1
     ret
+.r410:
+    mov word [_c64_m+CM_PC], 0x0410
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    call rebank
+    PUSHI 200
+    call _c64_run
+    add sp, 2
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 14 - THE SELF-LOOPS (m65gen.py's loop_collapse, C64-SPEC 4.7.2)
+; DEX, DEY and DEC abs with a BNE back onto themselves, which the fast core
+; runs as one step when the budget holds the whole loop. The counters end 0,
+; Z is set, and the run costs EXACTLY what the accurate core says - C64_LOOPC
+; cycles to the KIL, the same on both cores. The control starts X at $11:
+; five cycles more, which must fail the count.
+; -----------------------------------------------------------------------------
+C64_LOOPC equ 1433                  ; (to the KIL, whose 2 are charged)
+row_loop:
+    push es
+    push di
+    mov es, [_c64_m+CM_RAMSEG]
+    mov di, 0x0940
+    xor ax, ax
+    stosw
+    stosw
+    mov si, p_loop
+    mov di, 0x0800
+    mov cx, p_loop_end - p_loop
+.c: mov al, [cs:si]
+    inc si
+    stosb
+    loop .c
+    cmp byte [neg_loop], 0
+    je .go
+    mov byte [es:0x0801], 0x11      ; THE CONTROL: X from $11
+.go:
+    pop di
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call rebank
+    PUSHI 5000
+    call _c64_run
+    add sp, 2
+    mov ax, 5000
+    sub ax, [_c64_m+CM_CNT]         ; the cycles it ran
+    mov [loop_ran], ax
+    cmp ax, C64_LOOPC
+    jne .bad
+    mov bx, 0x0940
+    call ram_rd
+    or al, al                       ; X ended 0
+    jnz .bad
+    mov bx, 0x0941
+    call ram_rd
+    or al, al                       ; Y ended 0
+    jnz .bad
+    mov bx, 0xC333
+    call ram_rd
+    or al, al                       ; the DEC counter ended 0
+    jnz .bad
+    mov bx, 0x0942
+    call ram_rd
+    and al, 0x82                    ; P pushed after it: Z set, N clear
+    cmp al, 0x02
+    jne .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_loop:
+    db 0xA2, 0x10                   ; LDX #$10
+    db 0xCA, 0xD0, 0xFD             ; DEX / BNE back: 16 x 5 - 1
+    db 0x8E, 0x40, 0x09             ; STX $0940
+    db 0xA0, 0x00                   ; LDY #$00
+    db 0x88, 0xD0, 0xFD             ; DEY / BNE back: 256 x 5 - 1
+    db 0x8C, 0x41, 0x09             ; STY $0941
+    db 0xA9, 0x05                   ; LDA #$05
+    db 0x8D, 0x33, 0xC3             ; STA $C333
+    db 0xCE, 0x33, 0xC3, 0xD0, 0xFB ; DEC $C333 / BNE back: 5 x 9 - 1
+    db 0x08, 0x68                   ; PHP / PLA
+    db 0x8D, 0x42, 0x09             ; STA $0942
+    db 0x02                         ; KIL
+p_loop_end:
 
 ; -----------------------------------------------------------------------------
 ; ROW 5 - REAL I/O STUB RETURNS (C64-SPEC §4.6 row 5)
@@ -2507,6 +2643,8 @@ neg_stale:  db 0
 neg_io:     db 0
 neg_int:    db 0
 neg_rmw:    db 0
+neg_loop:   db 0
+loop_ran:   dw 0
 saw0:       db 0
 saw1:       db 0
 saw2:       db 0
@@ -2537,6 +2675,7 @@ msg_r10:    db 'row 10 decimal ADC/SBC, all 262144    ', 0
 msg_r11:    db 'row 11 the four unstable stores       ', 0
 msg_r12:    db 'row 12 the interrupt stack and RTI    ', 0
 msg_r13:    db 'row 13 read-modify-write above $A000  ', 0
+msg_r14:    db 'row 14 the self-loops, cycle-exact    ', 0
 msg_ok:     db 'ok ', 0
 msg_bad:    db 'FAIL ', 0
 msg_nok:    db '(control fails: ok)', 13, 10, 0

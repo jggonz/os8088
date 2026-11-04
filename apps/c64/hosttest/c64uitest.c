@@ -1173,6 +1173,12 @@ void c64_bandbm(unsigned char *dst, const unsigned char *xm,
 
 int c64_rvdiff(const unsigned char *a, const unsigned char *b)
 { return memcmp(a, b, 48) != 0; }
+unsigned c64_scr_left(void)
+{
+    /* (DEAD $24, CARRY $22: c64.c's C64_SCR_* are below this) */
+    return (unsigned)((c64_scr_rd(0x24) | (c64_scr_rd(0x25) << 8))
+                    + (c64_scr_rd(0x22) | (c64_scr_rd(0x23) << 8))) & 0xFFFF;
+}
 
 /* c64sid.inc's c64_osc3, in C with host 32-bit arithmetic (C64-SPEC
  * 11.4.1); c64memtest runs the shipping one on a real x86 */
@@ -4397,6 +4403,38 @@ int main(int argc, char **argv)
         c64_pause = 0;
         c64_msg[0] = 0;
         c64_menu_state();
+    }
+
+    /* --- FRAME SKIP (9.13): a second in which flushing took more than
+     * half the ticks adds one between flushes, a quarter or less takes one
+     * away, never past C64_FS_MAX - and nothing moves inside the second.
+     * Verified red with c64_fs_adapt's two thresholds swapped. */
+    {
+        int j;
+        unsigned t = 5000;
+        c64_fs_extra = 0;
+        c64_fs_t0 = t;
+        c64_fs_cost = 12;
+        c64_fs_adapt(t + 10);
+        if (c64_fs_extra != 0)
+            fail("frame skip moved before its second was up (9.13)");
+        c64_fs_adapt(t + 18);
+        if (c64_fs_extra != 1)
+            fail("a second two-thirds spent flushing did not add a tick "
+                 "between flushes (9.13)");
+        for (j = 0; j < 20; j++) {
+            t = c64_fs_t0;
+            c64_fs_cost = 15;
+            c64_fs_adapt(t + 18);
+        }
+        if (c64_fs_extra != C64_FS_MAX)
+            fail("frame skip is not capped at C64_FS_MAX");
+        c64_fs_cost = 2;
+        c64_fs_adapt(c64_fs_t0 + 18);
+        if (c64_fs_extra != C64_FS_MAX - 1)
+            fail("a quiet second did not take a tick back (9.13)");
+        c64_fs_extra = 0;
+        c64_fs_cost = 0;
     }
 
     /* --- WHICH VOICE THE SPEAKER PLAYS, AND THE FM CHIP (11.4.2, 11.4.3) --

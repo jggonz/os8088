@@ -185,6 +185,18 @@ _c64_scr_rd:
     pop bp
     ret
 
+; unsigned c64_scr_left(void) - DEAD + CARRY, the run's countdown and what
+; c64_cut() moved out of it: what the run in progress has LEFT (c64io.c's
+; c64_run_el, which every live clock read and every logged register write
+; asks - it was four c64_scr_rd calls)
+_c64_scr_left:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov ax, [es:C64_SCR_BASE + C64_SCR_DEAD]
+    add ax, [es:C64_SCR_BASE + C64_SCR_CARRY]
+    pop es
+    ret
+
 _c64_scr_wr:
     push bp
     mov bp, sp

@@ -481,8 +481,7 @@ static unsigned c64_run_el(void)
 
     if (!c64_in_run)
         return 0;
-    dead = c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8);
-    dead += c64_scr_rd(C64_SCR_CARRY) | (c64_scr_rd(C64_SCR_CARRY + 1) << 8);
+    dead = (int)c64_scr_left();             /* DEAD + CARRY, one call */
     el = c64_run_n - (unsigned)dead - c64f_adj;
     return (el < 0x8000u) ? el : 0;
 }

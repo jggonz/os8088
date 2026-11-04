@@ -937,6 +937,24 @@ body:
     dw _c64_osc3
     cmp ax, 0xFC
     jne .f6
+    ; c64_scr_left: DEAD $1234 + CARRY $0011, out of the claim's scratch
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov word [es:C64_SCR_BASE + C64_SCR_DEAD], 0x1234
+    mov word [es:C64_SCR_BASE + C64_SCR_CARRY], 0x0011
+    pop es
+    mov word [pushes], 0
+    call disc_call
+    dw _c64_scr_left
+    cmp ax, 0x1245
+    jne .f6
+    push es
+    mov ax, SEG_RAM
+    mov es, ax
+    mov word [es:C64_SCR_BASE + C64_SCR_DEAD], 0
+    mov word [es:C64_SCR_BASE + C64_SCR_CARRY], 0
+    pop es
     jmp .c8done
 ; compare 8 bytes [si] with [di] (ZF set when equal), and CX bytes
 .c8cmp:

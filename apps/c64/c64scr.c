@@ -2752,10 +2752,15 @@ static void c64_fsx_main(void)
         n = c64_tick();
         if (c64_scr_rd(C64_SCR_ANY))
             c64_dirty_any = 1;
+        c64_fs_adapt(os88_ticks());         /* (9.13's frame skip, here too) */
         if ((c64_dirty_any | (c64_fsx_ok ^ 1)) != 0)
             if ((c64_fsx_ok == 0)
-                    | ((unsigned)(os88_ticks() - c64_fsx_tick) >= 1u))
+                    | ((unsigned)(os88_ticks() - c64_fsx_tick)
+                       >= (unsigned)(1 + c64_fs_extra))) {
+                k = os88_ticks();
                 c64_fsx_frame();
+                c64_fs_cost += (int)(os88_ticks() - k);
+            }
         if (n == 0)
             os88_fsx_wait(OS88_FSXW_TICK);  /* nothing owed this tick */
     }

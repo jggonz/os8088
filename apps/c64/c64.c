@@ -372,6 +372,33 @@ static int c64_snd_tone;                    /* the machine HAS a square voice:
 static unsigned c64_clo = 0xFFFF, c64_chi;
 static int c64_flush_every = 1;             /* host ticks between flushes,
                                              * from the tier and the bench */
+/* --- FRAME SKIP (9.13): the flush's share of the host, held near half ----
+ * A screen that changes everywhere every frame - eight sprites over a
+ * bitmap - can cost more to draw than a host tick, and the machine then gets
+ * what is left: the Bright Pixel card ran its MUSIC at a fifth of its tempo
+ * because the flush took four fifths of a 286. VICE skips frames to keep the
+ * emulation at speed; so does this. Each flush's ticks are summed, and once
+ * a second (18 ticks) a share over half adds a tick between flushes and a
+ * share under a quarter takes one away, between 0 and C64_FS_MAX. */
+#define C64_FS_MAX 8                        /* ~2 flushes a second at worst */
+static int c64_fs_extra;                    /* ticks added between flushes */
+static unsigned c64_fs_t0;                  /* the second being measured... */
+static int c64_fs_cost;                     /* ...and its ticks of flushing */
+
+static void c64_fs_adapt(unsigned t)
+{
+    if ((unsigned)(t - c64_fs_t0) < 18u)
+        return;
+    if (c64_fs_cost > 9) {
+        if (c64_fs_extra < C64_FS_MAX)
+            c64_fs_extra++;
+    } else if (c64_fs_cost < 5) {
+        if (c64_fs_extra > 0)
+            c64_fs_extra--;
+    }
+    c64_fs_t0 = t;
+    c64_fs_cost = 0;
+}
 /* --- the wall slice (4.4) ------------------------------------------------ */
 #define C64_SLICE_MIN 256                   /* ~3 ms of emulated time: the
                                              * floor is never a whole jiffy */
@@ -471,6 +498,7 @@ unsigned c64_fsx_key(void);
 void c64_fsx_dac(void);
 void c64_fsx_border(int c);
 unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw);
+unsigned c64_scr_left(void);              /* DEAD + CARRY (c64mem.inc) */
 int c64_opl_open(void);
 int c64_opl_send(const unsigned char *pairs, int n);
 static void c64_frame_regs(void);
@@ -1815,7 +1843,8 @@ void os88_onwake(void *win)
      * :634-656). It can only slow a flush down - the tier rate stands
      * wherever it is already slower - so the CPU_8086 tier, which flushes
      * every other tick, is unmoved by it (§4.4). */
-    fe = c64_flush_every;
+    c64_fs_adapt(t);
+    fe = c64_flush_every + c64_fs_extra;    /* (frame skip, above) */
     if (c64_warp)
         if (fe < C64_WARP_FLUSH)
             fe = C64_WARP_FLUSH;
@@ -1829,6 +1858,7 @@ void os88_onwake(void *win)
             if (os88_wm_clip_set(win) == 0)
                 c64_flush(win);
             os88_gfx_unlock();
+            c64_fs_cost += (int)(os88_ticks() - t);
         }
     /* ...AND A MESSAGE IS NOT A REASON TO ASK FOR ANOTHER WAKE. A running
      * machine already asks, so its messages expire on the ordinary flush

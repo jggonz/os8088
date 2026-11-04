@@ -790,6 +790,36 @@ lands on are unchanged. The demo runs at **114%** under warp (179% with section
 section 9.9's display latch. `c64uitest` asserts both loop forms, the value that leaves, and that a
 caller with no PC is charged nothing.
 
+#### 4.7.2 Self-loops in one step, and the mark that already marked
+
+**`DEC abs`, `DEX` or `DEY` followed by a `BNE` back onto itself runs as one
+step** when the budget holds the whole loop (`m65gen.py`'s `loop_collapse`):
+n passes of the counter (0 is 256), 9 cycles a pass for `DEC abs` and 5 for
+`DEX`/`DEY`, less the 1 the last, untaken `BNE` saves. The counter becomes
+0, Z set and N clear (C as `DEC` leaves it), and `BP` is charged exactly
+that - the same cycle, registers and flags as running it, which is why it
+is not a deviation. `DEC abs` only on plain RAM (below `$A000`, or
+`$C000-$CFFF`), and its page is marked once. Short of budget, the ordinary
+handler runs it a pass at a time. `c64cputest` row 14 runs all three on both
+cores and asserts the counters, the flags and the run's exact length (1,433
+cycles to the `KIL`); it went red on a fast core charging one cycle a loop
+too many, and its control (X from `$11`) costs five more.
+
+**A write to the page this core marked last is not marked again**
+(`c64_mark`): while `ANY` is 2 - written only by the fast core's mark, the
+accurate core and the package writing 1 and the flush's take 0 - the page in
+`C64_SCR_LASTPG` (`$31`) already has its bit, and only the write window is
+left to do. Row 13 marks a page, takes the set and runs again, and the page
+must be marked afresh (red with the `ANY` test removed).
+
+**A taken branch into `$C000-$CFFF` fetches inline** instead of going to
+`ct_rom` to find `ES = DS`: that range is RAM under every bank map (§4.8).
+
+Measured on 86Box `286-victory`, the Portland CUG Christmas demo's first
+scene (a `DEC $C333 / BNE` delay and a character scroller): 25.5% -> 29.2%
+with the mark, the `DEC` slot from 13% of the host to 3% with the collapse;
+what is left is its scroller and the redraw.
+
 ### 4.8 BASIC and the KERNAL translated ahead of time (FAST6502-PLAN.md wave 2b)
 
 **C64.O88's parts 3, 4 and 5 are the two ROM banks as 8086 code**:
@@ -1933,7 +1963,7 @@ loops; text-mode programs are unchanged):
 |---|---|---|
 | `10 i=i+1:goto 10`, warp | 107.8% | 107.0% |
 | the floating-point loop, warp | 104.0% | 104.0% |
-| the Christmas demo, multicolour bitmap + text scroller + sprites | ~97%, the bitmap a background fill | 91.5–97.8%, drawn |
+| the Christmas demo, multicolour bitmap + text scroller + sprites | ~97%, the bitmap a background fill | 91.5–97.8%, drawn - but with its snow barely moving (§4.7.1); with the snow right, 31-33% (§9.13) |
 | ...in warp | 179% | 125% |
 | BASIC moving two sprites, X and Y expanded, `POKE 53248,X` in a loop | (not drawn) | 45% |
 
@@ -1945,6 +1975,23 @@ once a frame, in an interrupt below the display.
 `c64uitest` composes a hires and a multicolour bitmap byte, a sprite over
 text, a write to its data and switching it off, each read back off the
 shadow; each was verified red by breaking the arm it tests.
+
+### 9.13 Frame skip — the flush's share of the host, held near half
+
+A screen that changes everywhere every frame can cost more to draw than a
+host tick, and the machine gets what is left - the Bright Pixel card, its
+snow moving every frame once §4.7.1's skip was bounded, played its music at
+a fifth of its tempo because the flush took four fifths of a 286. **VICE
+skips frames to hold the emulation at speed, and so does this**
+(`c64_fs_adapt`): each flush's host ticks are summed, and once a second (18
+ticks) a share over half adds a tick between flushes and one under a quarter
+takes one away, between 0 and `C64_FS_MAX` = 8. The colour bracket (§9.12)
+uses the same count. `c64uitest` drives the controller across both
+thresholds and the cap.
+
+Measured on `286-victory`, the card: 19.8% with every frame drawn, 31-33%
+with frame skip holding one tick between flushes (16-18 fps). Its earlier
+91.5-97.8% (§9.11's table) was a demo whose snow barely moved.
 
 ### 9.12 Colour — fullscreen, in a VGA mode of its own (`FSXM_VGA13`)
 
