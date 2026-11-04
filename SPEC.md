@@ -236622,6 +236622,58 @@ copy: black stays black and white stays white, which is what Windows gives
 under the default text and background colours. A DC with other colours
 would get them on Windows and does not here yet.
 
+#### 124.25.13 Window properties, WaitMessage and Arcade's other calls *(props)*
+
+All five of Microsoft Arcade's games (ASTEROID, BZ, CP, MC, TEMPEST) were
+refused *Needs USER.26 (SetProp)* after their setup had finished. The census
+(`tools/os88ne.py` over the games, and their own libraries AMDSPIN.DLL and
+ARCCTL.DLL) names every call WIN16 lacked, and these are all of them:
+
+| call | answer |
+|---|---|
+| `SetProp` (USER.26), `GetProp` (USER.25), `RemoveProp` (USER.24), `EnumProps` (USER.27) | window properties, below |
+| `WaitMessage` (USER.112) | returns at once when a message is there (it is left there), or an owner-drawn item is owed (§124.22.14), or, on kern_mega, the program has MMSYSTEM's calls' block (§124.32.6), whose calls are made from `GetMessage` and `PeekMessage`; otherwise the program **waits as in `GetMessage`** (`[w16_inget]` = 2), taking no UI pass and no CPU, and the next `w16_kick` (a key, the mouse, a timer, a paint, a post, the close box) resumes it without taking anything. A kick that brings no message is a return Windows would not make; a program calls it from a loop that tests the queue, which then waits again |
+| `CloseWindow` (USER.43) | nothing (it is `void` in Windows 3.1): there is no icon to go to, as `OpenIcon` (USER.44) answers a constant |
+| `ExcludeUpdateRgn` (USER.238) | 2, `SIMPLEREGION`: the DC's clip is left as it was, which is one rectangle and not empty. Nothing is excluded, so a program that draws outside `WM_PAINT` draws into the invalid part as well, and the `WM_PAINT` that follows draws it again: overdraw, never a missing pixel. `NULLREGION` would say the clip is now EMPTY, and a program that tests the answer before drawing would draw nothing. A real one is not one call: a DC's clip here is one rectangle (§124.25.6), so the update rectangle could be taken off it only from an edge, as `ExcludeClipRect` does |
+
+**Properties.** A property is a (name, HANDLE) pair on a window. The table is
+`W16_NPROP` = **32** records of six bytes (the HWND, 0 for a free record, the
+name's atom, the HANDLE) in the task part's data (§124.28.13) beside the
+atoms of §124.25.10, so it costs the image no byte of bss and a program
+that never sets one does not fetch the part for it.
+
+- A name with no segment is its own atom. A string is added to §124.25.10's
+  table of `W16_NATOM` atoms, found as `GlobalFindAtom` finds it, so it is
+  matched case aside; a table that is full makes `SetProp` answer FALSE.
+- `SetProp` answers FALSE for a window that is not one, a table that is
+  full, or a name that cannot be an atom. Setting a property that exists
+  replaces its HANDLE. `GetProp` answers the HANDLE or 0; `RemoveProp`
+  answers it and frees the record.
+- `EnumProps` calls the function `(hwnd, lpszString, hData)`, pascal, for
+  each of the window's properties, until one answers FALSE, and answers the
+  last answer, or -1 for a window with none. As Windows gives it, the name of
+  a property set with a string is a far pointer to the string - a copy, in 32
+  bytes of the call's own room on the program's stack (§124.2.2, the
+  `LOGFONT` of `EnumFontFamilies`' shape), gone when it returns - and one set
+  with an atom is the atom in the low word and 0 in the high. A string atom
+  (C000h and up) given as `MAKEINTATOM` is enumerated as its string.
+- **They go with the window**: `w16_cargone`, which `w16_wndfree` calls for
+  every window that is freed, drops a window's properties when the task
+  part is loaded (when it is not, none was ever set). Windows leaves the
+  removal to the program; a program that forgets leaks nothing here, and
+  nothing is left behind by one that faults or is closed, whose windows are
+  freed the same way, and the part itself goes with the instance.
+
+**Not done:** the atoms are 16 for the whole instance, clipboard formats
+and DDE among them, and a property name takes one for as long as the
+instance lives. A program that makes a new string name a window would
+exhaust them; Arcade's names are a handful, shared by every window of a kind.
+
+**Checked by** `tests/win16/props.c` (`PROPS.EXE`, Open Watcom, `make
+win16fixtures`), which sets, gets, replaces, enumerates and removes string-
+and atom-named properties, reads a string-named one's name in the callback,
+and checks that a destroyed window's are gone; the `win16props` row runs it.
+
 #### 124.25.14 The GDI calls Visual Basic 3.0 imports *(WIN16-NEXT-PLAN L1, vbgdi)*
 
 `VBRUN300.DLL` imports nine GDI functions WIN16 lacked. All nine are exports
@@ -236644,6 +236696,7 @@ the instance at once, with only that toast to say so.
 | `CreateBrushIndirect` (GDI.50) | `BS_SOLID` is `CreateSolidBrush`. `BS_NULL` is the stock `NULL_BRUSH`. `BS_HATCHED` is `CreateHatchBrush`'s (§124.25.6: solid in the colour) and `BS_PATTERN` and `BS_DIBPATTERN` solid in `lbColor`, because the `lbHatch` bitmap is not read |
 | `Arc`, `Pie` (GDI.23, 26) | the ellipse of the box, drawn counter-clockwise from the ray through the start point to the ray through the end point, as a polyline (`Arc`) or a polygon through the centre (`Pie`) of 64 vertices to the circle at most: the two end points are exact, the ones between are 5.625 degrees apart, which is under half a pixel from the true curve at a 300 pixel radius. `Pie` fills in the brush and draws its edges in the pen, `Arc` draws in the pen alone, and neither moves the current point. Identical start and end points draw the whole ellipse. They draw on every adapter's DC and on a memory DC, through `Polyline` and `Polygon` (§124.25.4), so a wide pen and the clip are theirs. The curve is not `Ellipse`'s pixel for pixel (`Ellipse` is `RoundRect`'s corner table) |
 | `CopyMetaFile` (GDI.151), `EnumMetaFile` (GDI.175), `PlayMetaFileRecord` (GDI.176) | 0. There are no metafiles here (§124.25.10): WIN16 never hands out a metafile handle, so there is none to copy, enumerate or play, and a program has to handle the 0 as it does when memory is short |
+
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

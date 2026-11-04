@@ -33,6 +33,10 @@ W16LIB w16_ans1
     xor dx, dx
 W16LIB w16u_setcurpos
     ret
+W16LIB w16_ans2                     ; ExcludeUpdateRgn's SIMPLEREGION (124.25.13)
+    mov ax, 2
+    cwd
+    ret
 
 ; CreateFontIndirect (GDI.57) - args: +0 lplf. CreateFont (GDI.56) - args:
 ; +0 lpszFace, +4 fbPitchAndFamily, ... The request mapped onto WIN16's two
