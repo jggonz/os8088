@@ -10,8 +10,10 @@
 DGROUP.EXE (tests/win16/dgroup.c, `make win16fixtures`) asks GlobalHandle(SS),
 GlobalSize, GlobalLock, GlobalUnlock, grows its DGROUP with GlobalReAlloc as
 VBRUN300 does, writes past the old stack and reads it back, and is refused a
-size past 64 KB. Its MessageBox, read off the program's stack, is "DGROUP OK"
-or names each check that failed.
+size past 64 KB. It asks GlobalReAlloc with GMEM_MODIFY, GlobalFlags,
+LockSegment(-1) and GlobalFree of it (refused, the DGROUP intact after), and
+handle 0 of all four calls, which must still answer 0. Its MessageBox, read
+off the program's stack, is "DGROUP OK" or names each check that failed.
 """
 import argparse
 import os

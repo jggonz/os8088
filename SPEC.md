@@ -233551,9 +233551,16 @@ mode that segment, on `kern_mega` the program's DGROUP selector, §124.31.3):
 | `GlobalHandle(seg)` | `AX` = `DX` = DGROUP: it is a fixed block, whose handle is its segment (§124.9) |
 | `GlobalLock(h)` | `DX:AX` = DGROUP:0 |
 | `GlobalSize(h)` | the size it is laid out at: 64 KB whenever the arena had room (§124.21.4), else the size the NE asked for |
-| `GlobalReAlloc(h, n, f)` | `AX` = the handle when `n` is no more than that size, and the block does not move; 0 when it is more. `GMEM_MODIFY` answers the handle. A grow asked with `GMEM_ZEROINIT` does not zero the added bytes: they are the claim's own, and a runtime that wants them clear (VBRUN300 fills them itself) says so |
+| `GlobalReAlloc(h, n, f)` | `AX` = the handle when `n` is no more than that size, and the block does not move; 0 when it is more. `GMEM_MODIFY` answers the handle, as it does for every fixed handle: on `kern_mega` the handle the program passed, since a DGROUP has no block header for `W16POUT` to read. `GMEM_ZEROINIT` zeroes nothing: the size answered is already the laid-out size, so from the program's side `n` never grows the block, and the bytes are the claim's own (VBRUN300 fills them itself) |
 | `GlobalUnlock`, `GlobalFlags` | 0: a fixed block, no lock count |
-| `GlobalFree` | refused (the handle comes back): the DGROUP goes with the program |
+| `GlobalFree` | refused (a nonzero answer): the DGROUP goes with the program |
+| `LockSegment(-1)` | the caller's `DS`, as for every segment (unchanged) |
+
+Only the **running task's** DGROUP answers: §124.28's tasks each have their
+own (`[w16_dgroup]` is swapped with the task's context, §124.28.2), and a
+handle naming another task's DGROUP answers 0. A library's DGROUP needs none
+of this: it is a block of the global heap already (§124.23.2), and answers
+as one.
 
 **Why a grow never moves it.** Windows moved the DGROUP and patched the saved
 `SS` and `DS` of the task. WIN16 never moves a segment (§124.9), and
@@ -233570,10 +233577,19 @@ DGROUP's start with its own data, as VBRUN300 does (its `INSTANCEDATA` and
 own business, as it is on Windows.
 
 **Cost.** The four failure exits of `GlobalHandle`, `GlobalLock`,
-`GlobalSize` and `GlobalReAlloc` pass a one-byte code to one image stub that
-calls the system-library part (§124.24.1), where the test and the answers
-live: the image grows by the stub (see the row of §124.25.15), the part by
-the routines. Nothing else moves.
+`GlobalSize` and `GlobalReAlloc` pass a one-byte code to one image stub,
+`w16_dgx`. The stub compares the handle **as the program passed it** with
+`[w16_dgroup]`; any other handle is answered 0 in the image, so a
+`GlobalLock` of a discarded block, a `GetCodeHandle` of a segment in the
+claim or a `GlobalReAlloc` the heap refused costs what it did and fetches
+nothing (the part is 17 KB in real mode and 39 KB on `kern_mega`, too much to
+take from a heap that has just refused). The DGROUP is answered by the
+system-library part (§124.24.1). If that part cannot be read, the program
+ends with the part's own sentence (*WIN16's library part could not be
+read.*), as any of the part's imports would: a 0 there would end a Visual
+Basic program with no word (`4CFFh`). Resident: **+46 bytes** on `kern_big`
+and **+50** on `kern_mega`, which also carries the `GMEM_MODIFY` answer
+above. Nothing else moves.
 
 ### 124.10 Resources, read from the file when loaded *(shipped in S5)*
 
