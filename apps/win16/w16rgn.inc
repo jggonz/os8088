@@ -2423,7 +2423,11 @@ w16a_tab:
     dw 0, 1606, 3196, 4756, 6270, 7723, 9102, 10394, 11585
     dw 12665, 13623, 14449, 15137, 15679, 16069, 16305, 16384
 
-; w16a_fit - DX:AX fits a signed word: ZF=1. Clobbers BP.
+; w16a_fit - DX:AX fits a signed word other than -32768: ZF=1. Clobbers BP.
+; -32768 is refused because w16a_idx's NEG cannot turn it over (a quarter
+; arc from 180 degrees drew three quarters and a chord), and because two of
+; them make w16a_ray's square 2^31, whose root's first DIV overflows
+; (Arc(0, 0, 257, 257, 64, 192, ...) was a divide error)
 w16a_fit:
     push dx
     push ax
@@ -2432,6 +2436,12 @@ w16a_fit:
     pop ax
     pop dx
     cmp dx, bp
+    jne .r
+    mov bp, ax
+    neg bp                          ; OF=1 for 8000h alone, ZF=0 with it
+    jo .r
+    cmp ax, ax
+.r:
     ret
 
 ; w16a_ray - AX, DX = a point -> AX, DX = where the ray from the box's centre
