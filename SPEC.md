@@ -236923,6 +236923,53 @@ before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
 `GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
 out at 64 KB whenever the arena has room (§124.21.4), is §124.9.2.
 
+#### 124.25.18 Callable window procedures for WIN16's controls *(WIN16-NEXT `ctlproc`, DECISIONS 12:30)*
+
+Visual Basic 3.0's runtime **superclasses** the controls: it asks
+`GetClassInfo` for `Edit`, `Button`, `ListBox`, `ComboBox` and `ScrollBar`
+(`VBRUN300.DLL` holds those names beside `ThunderRTMain`), copies
+`lpfnWndProc` into its own class (`ThunderTextBox` and the rest) and calls
+that procedure for every message it does not handle itself. Many C programs
+**subclass** an edit control instead (`SetWindowLong(GWL_WNDPROC)`, then
+`CallWindowProc` of the old procedure). Both need a control class to have a
+procedure a program can hold and call. WIN16's controls always had one
+(`w16_ctlstub`, §124.13), but `GetClassInfo` did not hand it out.
+
+**One entry a class.** Slots 8-14 of the bind table are fixed rows
+(`W16_CTLK` + *kind*, `W16_NFIXED` 15), one for each `W16Q_*` kind, 1-7 (the
+slot of `W16Q_DIALOG`, 5, is never handed out). Each is a stub like any other
+(§124.19.1), so a program can keep its address and call it with a far call,
+or through `CallWindowProc`. The handler (`w16_ctlkrow`) is the library
+part's (`W16LIB`) and takes the Pascal arguments `hWnd, msg, wParam, lParam`
+as the control's own entry (`w16_ctlrow`, slot 0) does. The two differ in one
+thing only: **a window of the program's class (`W16Q_PROG`) that calls a
+class entry becomes a control of that class**, its `W16W_KIND` set to the
+entry's kind before the message is delivered, so the control's state lives in
+the window record exactly where a dialog's control keeps it (§124.13) and the
+program's procedure stays the window's procedure (`W16W_PROC`). Messages for
+it then go to the program first, which forwards the ones it does not handle:
+the shape of a subclassed control, which §124.13 already runs. A window that
+is already a control of some kind keeps that kind whichever entry was called.
+Slot 0 (what `GetWindowLong(GWL_WNDPROC)` of a control answers, and the
+previous procedure `SetWindowLong` returns) is unchanged and needs the
+window to be a control already.
+
+**`GetClassInfo`** answers a control class's name: `style` the class styles
+Windows 3.1 gave it (`CS_DBLCLKS` for `BUTTON`, `EDIT`, `LISTBOX` and
+`COMBOBOX`, 0 for `STATIC` and `SCROLLBAR`), `lpfnWndProc` the class entry,
+`cbClsExtra` and `cbWndExtra` 0 (WIN16's controls keep their state in the
+record, not in window words), `hInstance` DGROUP's, `hIcon` and `hCursor` 0,
+`hbrBackground` `COLOR_WINDOW + 1`, `lpszMenuName` NULL, `lpszClassName` as
+asked. A superclass that adds `cbWndExtra` words of its own gets them at
+offset 0, which is where Windows gave a program the words after the control's
+own six, so a program that reads its words by `GetClassInfo`'s count is
+right; one that assumed Windows' count is not (open).
+
+**What it costs.** Resident: no byte on either arm. The bind table's fixed rows
+take seven of the 384 slots (the largest import list measured is 270), the
+handler and the `GetClassInfo` arm are in parts, and the fixed row table is in
+the loader part. Part bytes: see the diary.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one
@@ -239588,7 +239635,7 @@ own code.
 | `ScrollDC` (USER.221) | the DC's window's `ScrollWindow` over lprcScroll cut by lprcClip. What it uncovers is made invalid there, so `lprcUpdate` answers empty and `hrgnUpdate` is left as it was. FALSE for a DC that is no window's. A DC whose origins are not 0 scrolls in client coordinates |
 | `GetWindowPlacement` (USER.370) | `length` 22, `flags` 0, `showCmd` from `IsIconic` and `IsZoomed` (an MDI child's, 124.27.5; a top-level window is normal), both points -1, -1, and `rcNormalPosition` = `GetWindowRect` |
 | `SetMessageQueue` (USER.266) | TRUE. The queue's size is fixed |
-| `GetClassInfo` (USER.404) | a class the program registered, found by name or by the atom `RegisterClass` answered, as its `WNDCLASS`. `cbClsExtra` and `hCursor` are 0, `hInstance` is DGROUP's, `lpszClassName` is as asked. FALSE for any other class: WIN16's own controls have no window procedure a program could call |
+| `GetClassInfo` (USER.404) | a class the program registered, found by name or by the atom `RegisterClass` answered, as its `WNDCLASS`. `cbClsExtra` and `hCursor` are 0, `hInstance` is DGROUP's, `lpszClassName` is as asked. A WIN16 control class (`BUTTON`, `EDIT`, `STATIC`, `LISTBOX`, `SCROLLBAR`, `COMBOBOX`) is answered too, with a procedure a program can call (§124.25.18). FALSE for any other class |
 | `SubtractRect` (USER.373) | Src1 less the part Src2 covers, when what is left is one rectangle; Src1 when it is not. FALSE when the answer is empty |
 | `RedrawWindow` (USER.290) | `RDW_INVALIDATE` is `InvalidateRect` with bErase = `RDW_ERASE`. `RDW_VALIDATE` is `ValidateRect`. `RDW_UPDATENOW` or `RDW_ERASENOW` sends `UpdateWindow`'s WM_PAINT. A region alone is the whole window, and the window's children go with it (124.8) |
 | `AnsiLowerBuff` (USER.438) | `AnsiUpperBuff`'s loop, lower-casing: A-Z and C0h-DEh except D7h |

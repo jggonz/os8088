@@ -1890,6 +1890,33 @@ W16LIB w16u_setwtext
     pop si
     ret
 
+; w16_ctlkrow - a CLASS entry of WIN16's controls (slots W16_CTLK + kind,
+; SPEC.md 124.25.18), which GetClassInfo hands out as a class's window
+; procedure: w16_ctlrow's arguments and answer. A window of the program's
+; own class that calls one is a control of that class from this message on:
+; Visual Basic's ThunderTextBox forwards to "Edit"'s, and the window keeps the
+; program's procedure while its state lives in its record, as a subclassed
+; control's does. A window that is a control already keeps its kind.
+W16LIB w16_ctlkrow
+    mov ax, [w16_idx]               ; the slot the gate is serving
+    sub ax, W16_CTLK
+    push ax                         ; = the kind
+    ICALL w16_args
+    ICALL w16_smargs
+    ICALL w16_hwnd2rec
+    pop ax
+    jc .no
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    jne .go
+    mov [bx + W16W_KIND], al
+.go:
+    ICALL w16_intproc
+    ret
+.no:
+    xor ax, ax
+    xor dx, dx
+    ret
+
 ; w16_dptext - DefWindowProc's WM_SETTEXT, WM_GETTEXT and WM_GETTEXTLENGTH:
 ; CX = the message, AX = the HWND, [w16_sm_*] its arguments. The window's own
 ; text kept, copied or measured (SPEC.md 124.8). Answers as a handler.

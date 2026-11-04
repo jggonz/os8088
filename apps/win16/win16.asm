@@ -133,7 +133,7 @@ W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
 W16_NPROP    equ 32             ; window properties at once (w16mdi.inc,
                                 ;   SPEC.md 124.25.13)
 W16_NPNMAX   equ 16             ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
+W16_NFIXED   equ 15             ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
 W16_X87ROW   equ 2              ;   the emulator's missing instruction,
@@ -142,6 +142,8 @@ W16_LMROW    equ 4              ;   the libraries' LibMain (124.23.4),
 W16_SLROW    equ 5              ;   a discarded segment's thunk (124.26.2),
 W16_CWROW    equ 6              ;   and CreateWindow and DestroyWindow, which
 W16_DWROW    equ 7              ;   MDICLIENT calls back through (124.27.2)
+W16_CTLK     equ 7              ; ...and slots 8-14, a control CLASS's entry:
+                                ;   W16_CTLK + its W16Q_ kind (124.25.18)
 W16_NLIB     equ 8              ; a program's own libraries loaded at once
 W16_LDEPTH   equ 4              ; ...and how deep one may import another
 W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its

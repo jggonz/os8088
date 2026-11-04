@@ -345,8 +345,8 @@ W16SYS w16n_getwpl
 
 ; GetClassInfo (USER.404) - args: +0 lpWndClass, +4 lpszClassName,
 ; +8 hInstance. A class the program registered, by name or by the atom
-; RegisterClass answered, as its WNDCLASS; FALSE for any other - WIN16's
-; own controls have no window procedure a program could call
+; RegisterClass answered, as its WNDCLASS, or one of WIN16's control classes
+; with its class entry (w16_ctlkrow, SPEC.md 124.25.18); FALSE for any other
 W16SYS w16n_clsinfo
     push si
     push di
@@ -365,12 +365,56 @@ W16SYS w16n_clsinfo
     mov si, ax
     cmp byte [si + W16C_NAME], 0
     je .no
-    jmp short .have
+    jmp .have
 .name:
     ICALL w16_farname
     jc .no
     ICALL w16_findcls
-    jc .no
+    jnc .reg
+    ICALL w16_builtin               ; WIN16's own: its class entry
+    jc .no                          ;   (SPEC.md 124.25.18); MDICLIENT has
+    cmp al, W16Q_COMBO              ;   none
+    ja .no
+    xor ah, ah
+    mov si, ax
+    ICALL w16_ctlstub               ; DX:AX = slot 0's stub, the kind's is
+    mov cx, si                      ;   W16_CTLK + kind along
+    add cx, W16_CTLK
+    shl cx, 1
+    shl cx, 1
+    add ax, cx
+    push dx
+    push ax
+    ICALL w16_args
+    push word [es:bx + 4]
+    push word [es:bx + 6]
+    les di, [es:bx]
+    pop word [es:di + 24]           ; lpszClassName
+    pop word [es:di + 22]
+    pop word [es:di + 2]            ; lpfnWndProc
+    pop word [es:di + 4]
+    mov ax, 8                       ; CS_DBLCLKS, Windows 3.1's: double clicks, but not
+    cmp si, W16Q_STATIC             ;   a static's or a scroll bar's
+    je .nodbl
+    cmp si, W16Q_SCROLL
+    jne .sty
+.nodbl:
+    xor ax, ax
+.sty:
+    mov [es:di], ax
+    xor ax, ax                      ; no class or window extra words, no icon,
+    mov [es:di + 6], ax             ;   cursor or menu: the state is in the
+    mov [es:di + 8], ax             ;   window's record
+    mov [es:di + 12], ax
+    mov [es:di + 14], ax
+    mov [es:di + 18], ax
+    mov [es:di + 20], ax
+    mov ax, [w16_dgroup]
+    mov [es:di + 10], ax
+    mov word [es:di + 16], COLOR_WINDOW + 1
+    mov ax, 1
+    jmp .out
+.reg:
     mov si, bx
 .have:
     ICALL w16_args

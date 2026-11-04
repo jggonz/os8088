@@ -17127,6 +17127,18 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16ctlproc", "soak", py("tests/win16ctlproc.py"), 60.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc: CTLPROC.EXE (`make "
+        "win16fixtures`, tests/win16/ctlproc.c) asks GetClassInfo for Edit "
+        "and Button, SUPERCLASSES both (a class of its own over the copied "
+        "procedure, forwarding with CallWindowProc) and uses them - "
+        "WM_SETTEXT, EM_SETSEL, EM_REPLACESEL, WM_GETTEXT, BM_SETCHECK, "
+        "BM_GETCHECK - and SUBCLASSES a plain Edit with SetWindowLong "
+        "(GWL_WNDPROC), eating one key; its MessageBox must be CTLPROC OK. "
+        "What Visual Basic 3.0's runtime does to every control it makes",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16props", "soak", py("tests/win16props.py"), 60.0,
         "SPEC.md 124.25.13, WIN16-NEXT-PLAN: PROPS.EXE (`make "
         "win16fixtures`, tests/win16/props.c) sets, gets, replaces, "

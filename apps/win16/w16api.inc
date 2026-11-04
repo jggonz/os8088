@@ -1020,6 +1020,13 @@ W16FIXED 0,  w16_lmgo           ; W16_LMROW: the libraries' LibMain (124.23.4)
 W16FIXED 0,  w16_segld          ; W16_SLROW: a discarded segment's thunk (124.26.2)
 W16FIXED 30, w16u_createwnd     ; W16_CWROW: CreateWindow, for WM_MDICREATE
 W16FIXED 2,  w16u_destroywnd    ; W16_DWROW: DestroyWindow, for WM_MDIDESTROY
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
 %if W16NF != W16_NFIXED
   %error "W16FIXED: one row a fixed slot"
 %endif
