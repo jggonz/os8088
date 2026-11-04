@@ -73,6 +73,9 @@ static int c64_dl_tail;                     /* the last latch left writes
 static unsigned char c64_rsame[C64_ROWS];   /* row r was row r-1's set */
 static void c64_latch(int force);
 static unsigned char c64_sid[32];           /* $D400-$D41C */
+static unsigned char c64_sid_trig;         /* a gate opened since the sound
+                                             * last took the SID (11.4.2) */
+static int c64_sid_last;                    /* ...the voice it opened on */
 
 /* Colour RAM is 1,024 NIBBLES and lives in the package's bss, not in the RAM
  * claim: it is not RAM the 6510 can bank away, and the composer reads it once
@@ -1377,6 +1380,7 @@ static void c64_io_wr(unsigned a, int v)
     unsigned p;
     unsigned r;
     unsigned char old;
+    int k;
 
     if (a < 2) {                            /* the processor port (3.2) */
         c64_pp_write((int)a, v);
@@ -1427,6 +1431,12 @@ static void c64_io_wr(unsigned a, int v)
                                              * the oscillator is brought up to
                                              * NOW at the old ones first */
             c64_osc3_now();
+        if ((r == 0x04) | (r == 0x0B) | (r == 0x12))
+            if (v & ~c64_sid[r] & 1) {      /* a GATE OPENING: a note starts */
+                k = (r == 0x04) ? 0 : ((r == 0x0B) ? 1 : 2);
+                c64_sid_trig |= (unsigned char)(1 << k);
+                c64_sid_last = k;
+            }
         c64_sid[r] = (unsigned char)v;
         c64_sid_dirty = 1;                  /* voice 1 -> the speaker, once a
                                              * slice and only on a change */
@@ -1481,6 +1491,176 @@ static void c64_io_wr(unsigned a, int v)
  * 16,777,216 = freq * 0.058725. Written as (freq >> 4) * 15 >> 4 it is
  * 0.05859 - a fifth of a per cent flat, and 16-bit throughout.
  * ========================================================================*/
+#define C64_X7(v) ((((unsigned)(v)) << 3) - ((unsigned)(v)))   /* a voice's
+                                             * registers: 7 a voice */
+
+/* c64_sid_audible - voice V's gate is open, TEST is off and it sounds a
+ * tonal waveform (11.4.2) */
+static int c64_sid_audible(int v)
+{
+    unsigned c = c64_sid[C64_X7(v) + 4];
+
+    if ((c & 0x09) != 0x01)                 /* gate open, TEST off */
+        return 0;
+    return (c & 0x70) != 0;                 /* triangle, sawtooth or pulse */
+}
+
+/* ==========================================================================
+ * THE THREE VOICES ON AN FM CHIP (C64-SPEC 11.4.3)
+ *
+ * When SOUND.DRV has an OPL, os88_main CLAIMS it (c64_opl_open, the shim in
+ * c64.asm: SNDV_IDENT, SND_FM_INFO, SND_FM_CLAIM - MIDIRack's order) and the
+ * SID's three voices go to channels 0, 1 and 2, RealDMG's shape (rwfm.inc):
+ * a patch per waveform, loaded when a voice changes waveform, and after that
+ * only what changed - an F-number, a key, a level, an envelope - in one
+ * SNDV_OPLW batch a wake. A voice's ADSR is mapped onto the carrier's by
+ * table, a note whose gate opened since the last batch is RE-KEYED (off then
+ * on in the same batch, which restarts the envelope), and the gate closing
+ * is a key-off, which plays the release. The chip goes back with the
+ * instance: SOUND.DRV releases a claim when its owner dies.
+ * ========================================================================*/
+static int c64_snd_fm;                      /* the chip is ours */
+static unsigned char c64_fmsh[3][6];        /* B0h A0h carTL wave car60h car80h
+                                             * as last written; FF unknown */
+static unsigned char c64_fmb[96];           /* one batch: register, value */
+static int c64_fmn;
+
+/* the patch for each waveform: modulator 20h, its level 40h, the channel's
+ * feedback C0h. The carrier is always 21h (sustained, x1). Pulse: the
+ * modulator at twice the carrier, odd harmonics - a square (rwfm.inc).
+ * Sawtooth: x1 with feedback, every harmonic. Triangle: the modulator
+ * silent, near a sine. Noise: x15 at full feedback, as near as two
+ * operators come */
+static const unsigned char c64_fmpat[4][3] = {
+    { 0x22, 30, 0x00 },                     /* pulse */
+    { 0x21, 22, 0x0A },                     /* sawtooth */
+    { 0x21, 63, 0x00 },                     /* triangle */
+    { 0x2F, 0, 0x0E }                       /* noise */
+};
+/* the SID's attack (2 ms .. 8 s) and decay/release (6 ms .. 24 s) indices
+ * as the OPL's rates, whose time halves with each step up */
+static const unsigned char c64_fmar[16] = {
+    15, 12, 11, 10, 10, 9, 9, 9, 8, 7, 6, 6, 5, 4, 3, 3 };
+static const unsigned char c64_fmdr[16] = {
+    12, 10, 9, 9, 8, 8, 7, 7, 7, 6, 5, 4, 4, 3, 2, 2 };
+/* $D418's volume 0-15 as the carrier's attenuation, 0.75 dB a step
+ * (rwfm.inc's table: 20 log10(v/15) / 0.75) */
+static const unsigned char c64_fmtl[16] = {
+    63, 31, 23, 19, 15, 13, 11, 9, 7, 6, 5, 4, 3, 2, 1, 0 };
+
+static void c64_fm_put(int reg, int val)
+{
+    c64_fmb[c64_fmn++] = (unsigned char)reg;
+    c64_fmb[c64_fmn++] = (unsigned char)val;
+}
+
+/* c64_fm_quiet - every voice keyed off: a stop (11.4), its release played */
+static void c64_fm_quiet(void)
+{
+    int v;
+
+    c64_fmn = 0;
+    for (v = 0; v < 3; v++)
+        if (c64_fmsh[v][0] != 0xFF)
+            if (c64_fmsh[v][0] & 0x20) {
+                c64_fmsh[v][0] &= 0x1F;
+                c64_fm_put(0xB0 + v, c64_fmsh[v][0]);
+            }
+    if (c64_fmn)
+        c64_opl_send(c64_fmb, c64_fmn >> 1);
+}
+
+/* ovl_fm_update - the three voices as the SID holds them now, what changed
+ * (in the OVERLAY: at most once a wake, SPEC.md 73.14's frequency split)
+ * in one batch (11.4.3) */
+static void ovl_fm_update(void)
+{
+    int v, w, b, base, on;
+    unsigned f, fn, ctl, x;
+    unsigned char *sh;
+
+    c64_fmn = 0;
+    for (v = 0; v < 3; v++) {
+        sh = c64_fmsh[v];
+        base = C64_X7(v);
+        ctl = c64_sid[base + 4];
+        f = C64_W(c64_sid + base);
+        on = (ctl & 0x09) == 0x01;          /* gate open, TEST off */
+        if (ctl & 0x80)
+            w = 3;
+        else if (ctl & 0x40)
+            w = 0;
+        else if (ctl & 0x20)
+            w = 1;
+        else if (ctl & 0x10)
+            w = 2;
+        else {
+            w = -1;
+            on = 0;                         /* no waveform: silence */
+        }
+        if ((c64_sid[0x18] & 15) == 0)
+            on = 0;
+        if (w >= 0)
+            if ((unsigned)w != sh[3]) {     /* a new waveform: its patch */
+                sh[3] = (unsigned char)w;
+                c64_fm_put(0x20 + v, c64_fmpat[w][0]);
+                c64_fm_put(0x23 + v, 0x21);
+                c64_fm_put(0x40 + v, c64_fmpat[w][1]);
+                c64_fm_put(0x60 + v, 0xF0);
+                c64_fm_put(0x80 + v, 0x0F);
+                c64_fm_put(0xC0 + v, c64_fmpat[w][2]);
+            }
+        x = (unsigned)(c64_fmar[c64_sid[base + 5] >> 4] << 4)
+          | c64_fmdr[c64_sid[base + 5] & 15];       /* attack, decay */
+        if (x != sh[4]) {
+            sh[4] = (unsigned char)x;
+            c64_fm_put(0x63 + v, x);
+        }
+        x = (unsigned)((15 - (c64_sid[base + 6] >> 4)) << 4)
+          | c64_fmdr[c64_sid[base + 6] & 15];       /* sustain, release */
+        if (x != sh[5]) {
+            sh[5] = (unsigned char)x;
+            c64_fm_put(0x83 + v, x);
+        }
+        x = c64_fmtl[c64_sid[0x18] & 15];           /* the master volume */
+        if (x != sh[2]) {
+            sh[2] = (unsigned char)x;
+            c64_fm_put(0x43 + v, x);
+        }
+        /* the F-number: F x 985248 / 2^24 Hz is fnum x 49716 / 2^(20-b),
+         * so fnum = F x 1.23856 / 2^b = (F x 0.61928) >> (b - 1) */
+        fn = c64_muldiv(f, 0x9E89, 0xFFFF);  /* 40,585 (a decimal over 32,767
+                                             * is too big for SmallerC's int) */
+        b = 1;
+        while (fn >= 1024) {
+            fn >>= 1;
+            b++;
+        }
+        if (fn == 0)
+            on = 0;
+        if (fn != 0)
+            if ((fn & 0xFF) != sh[1]) {
+                sh[1] = (unsigned char)fn;
+                c64_fm_put(0xA0 + v, fn & 0xFF);
+            }
+        x = (unsigned)((b << 2) | (fn >> 8));
+        if (c64_sid_trig & (1 << v))
+            if (sh[0] != 0xFF)
+                if (sh[0] & 0x20)           /* a new note on a held key:
+                                             * off first, so it restarts */
+                    c64_fm_put(0xB0 + v, sh[0] & 0x1F);
+        if (on)
+            x |= 0x20;
+        if (x != sh[0] || (on && (c64_sid_trig & (1 << v)))) {
+            sh[0] = (unsigned char)x;
+            c64_fm_put(0xB0 + v, x);
+        }
+    }
+    c64_sid_trig = 0;
+    if (c64_fmn)
+        c64_opl_send(c64_fmb, c64_fmn >> 1);
+}
+
 /* AND IT ANSWERS THE GRANT. os88_snd_tone answers -1 REFUSED - the speaker is
  * stamped to another instance and SPEC.md 34.3 lets it hold it - and every
  * one of the three returns below used to be discarded. The latch that says a
@@ -1494,40 +1674,38 @@ static void c64_io_wr(unsigned a, int v)
 static int c64_sid_voice1(void)
 {
     unsigned f;
-    int hz;
+    int hz, v;
 
-    /* THE TWO SILENCE PATHS ANSWER 0 WHATEVER THE GRANT SAYS, and that is not
-     * sloppiness: the question the caller asks is "did the emulated SID's
-     * audible state reach the speaker?", and a machine with the gate closed
-     * has nothing to play. A refusal here can only mean this instance does
-     * not hold the grant, so nothing of ours is sounding either - retrying
-     * it, and saying the speaker is busy over it, would both be wrong. */
-    if ((c64_sid[0x04] & 0x01) == 0) {      /* the gate is closed */
+    /* THE TWO SILENCE PATHS ANSWER 0 WHATEVER THE GRANT SAYS: the question
+     * the caller asks is "did the emulated SID's audible state reach the
+     * speaker?", and a SID with nothing gated has nothing to play.
+     *
+     * WHICH VOICE (11.4.2). This played voice 1 and nothing else, so a tune
+     * that holds voice 1 as a pad or a bass while the melody moves on 2 and
+     * 3 - both Christmas demos - was one continuous tone. The speaker plays
+     * the voice whose note STARTED most recently (c64_sid_last, a gate
+     * opening in c64_io_wr) while it is still gated, and otherwise any
+     * gated voice, 1 first. A voice is audible when its gate is open, TEST
+     * is off and it has a tonal waveform; noise alone is a drum, which a
+     * square wave cannot say. The master volume $D418 at 0 is silence. */
+    v = -1;
+    if (c64_sid[0x18] & 15) {
+        if (c64_sid_audible(c64_sid_last))
+            v = c64_sid_last;
+        else if (c64_sid_audible(0))
+            v = 0;
+        else if (c64_sid_audible(1))
+            v = 1;
+        else if (c64_sid_audible(2))
+            v = 2;
+    }
+    c64_sid_trig = 0;
+    if (v < 0) {
         os88_snd_tone(0, 0, 0x40);
         return 0;
     }
-    /* THE SID'S OWN ARITHMETIC, AND IT IS ONE ROUNDING AND NOT TWO. A 6581 at
-     * the PAL dot clock sounds `Fn * 985248 / 2^24` Hz - 0.0587257 a step -
-     * and this used to be `(raw >> 4) * 15 / 16`, which is the same factor to
-     * a quarter of a percent but rounds TWICE, once into a 12-bit number and
-     * again on the way out. Near the bottom of the range that is a whole hertz
-     * where a hertz is the unit: middle-of-nowhere F = 341 answered 19 and the
-     * true figure is 20, which is the difference between the 20 Hz floor below
-     * REFUSING the note and playing it.
-     *
-     * c64_muldiv keeps the product in 32 bits (c64mem.inc), which is what a
-     * 16-bit C cannot express: 3848 / 65535 is 0.0587166, within 0.015 % of
-     * the real constant across the whole range, and F = $FFFF answers 3848 Hz
-     * where the ratio says 3848.6. hosttest/c64uitest.c asserts both ends and
-     * the floor.
-     *
-     * AND THE DIVISOR IS SPELLED 0xFFFF: SmallerC's `int` is 16 bits and
-     * SIGNED, so a decimal 65535 in the source is "Constant too big for
-     * 16-bit signed type" and stops the build (docs/C-TOOLCHAIN.md's rule 4's
-     * near neighbour). The hex form is the unsigned bit pattern and reaches
-     * c64_muldiv, whose arithmetic is unsigned, as 65,535. */
 #define C64_SIDDIV 0xFFFF
-    f = C64_W(c64_sid);                     /* $D400 low, $D401 high */
+    f = C64_W(c64_sid + C64_X7(v));         /* the voice's $D400/$D401 */
     hz = (int)c64_muldiv(f, 3848, C64_SIDDIV);
     if ((unsigned)(hz - 20) > (unsigned)(12000 - 20)) {   /* hz < 20, or
                                              * hz > 12000, in one compare */

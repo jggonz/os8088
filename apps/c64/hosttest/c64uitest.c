@@ -1485,6 +1485,20 @@ int os88_key_down(int scan)
  * emulated SID for the rest of the session, because the latch that asks is
  * raised only by a SID REGISTER WRITE. */
 static int n_tone, h_tone_hz, h_tone_refuse;
+/* SOUND.DRV's FM chip (C64-SPEC 11.4.3): c64.asm's two shim calls, a chip
+ * the row says is there, and a register file the batches land in */
+static int h_fm_chip;
+static unsigned char h_opl[256];
+static int h_opl_batches;
+int c64_opl_open(void) { return h_fm_chip; }
+int c64_opl_send(const unsigned char *pairs, int n)
+{
+    int i;
+    h_opl_batches++;
+    for (i = 0; i < n; i++)
+        h_opl[pairs[i * 2]] = pairs[i * 2 + 1];
+    return n;
+}
 int os88_snd_tone(int hz, int ticks, int prio)
 {
     n_tone++;
@@ -4331,6 +4345,8 @@ int main(int argc, char **argv)
         c64_msg[0] = 0;
         c64_sid_said = 0;
         h_tone_refuse = 0;
+        c64_io_wr(0xD418, 15);              /* the master volume up: a SID at
+                                             * volume 0 is silent (11.4.2) */
         c64_io_wr(0xD400, 0xFF);            /* F = $FFFF, the top of the range */
         c64_io_wr(0xD401, 0xFF);
         c64_io_wr(0xD404, 0x11);            /* ...and the gate on */
@@ -4381,6 +4397,62 @@ int main(int argc, char **argv)
         c64_pause = 0;
         c64_msg[0] = 0;
         c64_menu_state();
+    }
+
+    /* --- WHICH VOICE THE SPEAKER PLAYS, AND THE FM CHIP (11.4.2, 11.4.3) --
+     * Voice 1 held as a pad while voice 2 plays the melody: the speaker
+     * follows the note that started LAST, not voice 1. Verified red with
+     * c64_sid_voice1 back on voice 1 alone. Then the same SID on an FM
+     * chip: each voice its own channel, 440 Hz as block 4 / F-number 580,
+     * the key on while the gate is, off when it closes. Verified red with
+     * ovl_fm_update's F-number arithmetic off by one block. */
+    {
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        h_tone_refuse = 0;
+        c64_io_wr(0xD418, 15);
+        c64_io_wr(0xD400, 0x00);            /* voice 1: F = $1000, held */
+        c64_io_wr(0xD401, 0x10);
+        c64_io_wr(0xD404, 0x21);            /* sawtooth, gate */
+        os88_onwake(win);
+        c64_io_wr(0xD407, 0x45);            /* voice 2: F = $1D45, A4 */
+        c64_io_wr(0xD408, 0x1D);
+        c64_io_wr(0xD40B, 0x41);            /* pulse, gate: a NEW note */
+        os88_onwake(win);
+        if (h_tone_hz < 439 || h_tone_hz > 440)     /* (7493 x 3848 / 65535) */
+            fail("with voice 1 held and a new note on voice 2, the speaker "
+                 "did not play the new note (11.4.2)");
+        c64_io_wr(0xD40B, 0x40);            /* its gate closes */
+        os88_onwake(win);
+        if (h_tone_hz != 240)               /* $1000 = 240.5 Hz */
+            fail("when the newest note ends the speaker did not go back to "
+                 "the voice still gated (11.4.2)");
+        c64_io_wr(0xD404, 0x20);
+        os88_onwake(win);
+        if (h_tone_hz != 0)
+            fail("with no gate open the speaker kept a tone");
+
+        h_fm_chip = 1;                      /* ...and on a machine with OPL */
+        memset(h_opl, 0, sizeof(h_opl));
+        c64_snd_fm = c64_opl_open();
+        os88_memset(c64_fmsh, 0xFF, sizeof(c64_fmsh));
+        c64_io_wr(0xD40B, 0x41);            /* voice 2 again: A4, pulse */
+        c64_io_wr(0xD40C, 0x09);            /* attack 0, decay 9 */
+        c64_io_wr(0xD40D, 0xA4);            /* sustain 10, release 4 */
+        os88_onwake(win);
+        if (h_opl[0xA1] != (580 & 0xFF) || h_opl[0xB1] != (0x20 | (4 << 2) | (580 >> 8)))
+            fail("voice 2's 440 Hz did not reach OPL channel 1 as block 4, "
+                 "F-number 580, keyed on (11.4.3)");
+        if (h_opl[0x21] != 0x22 || h_opl[0x64] != ((15 << 4) | 6)
+                || h_opl[0x84] != (((15 - 10) << 4) | 8))
+            fail("voice 2's pulse patch or its ADSR did not reach channel 1");
+        c64_io_wr(0xD40B, 0x40);
+        os88_onwake(win);
+        if (h_opl[0xB1] & 0x20)
+            fail("voice 2's gate closed and channel 1 stayed keyed on");
+        c64_snd_fm = 0;
+        h_fm_chip = 0;
     }
 
     /* --- A REFUSED SPEAKER GRANT IS NOT PERMANENT (11.4, SPEC.md 34.3) ---

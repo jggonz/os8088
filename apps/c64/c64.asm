@@ -195,4 +195,65 @@ _c64_read_at:
     pop bp
     ret
 
+; -----------------------------------------------------------------------------
+; THE FM CHIP (C64-SPEC 11.4.3): SOUND.DRV's two doors, MIDIRack's order
+; (apps/midirack/mrfm.inc) - identify the driver, ask SND_FM_INFO whether it
+; has a chip, and CLAIM it, OPL2 mode. On the UI task only: the claim is
+; stamped with the caller's instance (SPEC.md 34.12), and the driver gives
+; it back when that instance dies.
+; -----------------------------------------------------------------------------
+%include "drivers/sound/sndpkg.inc"
+
+; int c64_opl_open(void) - 1 when the chip is ours, 0 when there is none
+_c64_opl_open:
+    push si
+    push di
+    push es
+    mov bh, DRVC_SOUND
+    mov bl, SNDV_IDENT
+    call OSAPI_DRV_CALL
+    jc .no
+    cmp ax, SND_SIG
+    jne .no
+    mov al, SND_FM_INFO
+    call OSAPI_SND_FM
+    jc .no
+    mov al, SND_FM_CLAIM
+    xor cl, cl                      ; OPL2 mode: channels 0-7
+    call OSAPI_SND_FM
+    jc .no
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    pop es
+    pop di
+    pop si
+    ret
+
+; int c64_opl_send(const unsigned char *pairs, int n) - N register/value
+; pairs to the chip in one SNDV_OPLW call; the pairs written, -1 refused
+_c64_opl_send:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es                          ; the batch is ours: ES:SI
+    mov si, [bp+4]
+    mov cx, [bp+6]
+    mov bh, DRVC_SOUND
+    mov bl, SNDV_OPLW
+    call OSAPI_DRV_CALL
+    jnc .out
+    mov ax, -1
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
     CC_IMAGE_END                    ; cc_bss_end and cc_image_end

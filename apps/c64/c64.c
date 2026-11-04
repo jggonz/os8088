@@ -471,6 +471,8 @@ unsigned c64_fsx_key(void);
 void c64_fsx_dac(void);
 void c64_fsx_border(int c);
 unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw);
+int c64_opl_open(void);
+int c64_opl_send(const unsigned char *pairs, int n);
 static void c64_frame_regs(void);
 static unsigned char c64_rchg[25];          /* a row's register set moved since
                                              * c64_spr_dirty looked (9.11) */
@@ -1265,7 +1267,9 @@ static void c64_speed_fold(void)
  * Keeping a copy of the note to restore would be a second model of the SID. */
 static void c64_sound_stop(void)
 {
-    if (c64_snd_tone)
+    if (c64_snd_fm)
+        c64_fm_quiet();                     /* every key off (11.4.3) */
+    else if (c64_snd_tone)
         os88_snd_tone(0, 0, 0x40);
     c64_sid_dirty = 1;                      /* the resume re-reads the SID */
     c64_sid_tries = 0;
@@ -1646,6 +1650,13 @@ static int c64_tick(void)
                 c64_menu_state();
                 c64_say("Advanced one frame.");
             }
+        if (c64_sid_dirty)
+            if (c64_snd_fm) {               /* THE FM CHIP (11.4.3): a batch,
+                                             * and a claimed chip refuses
+                                             * nobody, so nothing to retry */
+                ovl_fm_update();      /* (the overlay: once a wake) */
+                c64_sid_dirty = 0;
+            }
         if (c64_sid_dirty) {
             /* ONE FAR CALL A WAKE, ON A CHANGE ONLY (11.4) - AND THE LATCH IS
              * CLEARED ONLY WHEN THE GRANT TOOK. os88_snd_tone answers -1
@@ -1937,6 +1948,12 @@ void *os88_main(void)
      * gate and frequency on OSAPI_SND_TONE, and a package that calls a slot
      * without establishing the capability first is guessing. */
     c64_snd_tone = os88_snd_caps() & C64_SND_CAP_TONE;  /* bit 0: 0 or 1 */
+    /* ...AND AN FM CHIP, WHEN SOUND.DRV HAS ONE: all three voices (11.4.3).
+     * Claimed here, on the UI task, so the claim carries this instance */
+    if (c64_opl_open()) {
+        os88_memset(c64_fmsh, 0xFF, sizeof(c64_fmsh));
+        c64_snd_fm = 1;
+    }
     c64_x2init();                           /* the pixel-doubling table, once */
     /* ...AND COPY'S AND PASTE'S TWO CONVERSION TABLES. The code that fills
      * them runs exactly once, so it is in the overlay (SPEC.md 73.14's

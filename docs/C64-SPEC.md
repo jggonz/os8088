@@ -2319,7 +2319,7 @@ Live items:
 | Preferences > Settings... (Alt+O) | no resources file: every setting this port has is on the Preferences menu itself |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
-| SID voices 2–3, waveforms other than the gate, ADSR, filters (voice 3 READS: `$D41B`/`$D41C`, §11.4.1) | the PC speaker is one square wave, and the sound driver's FM path is not wrapped for C (§11.4) |
+| On the SPEAKER: SID voices beyond one, waveforms, ADSR; on an FM chip: the filters, ring modulation and sync (§11.4.2, §11.4.3; voice 3 READS, §11.4.1) | the PC speaker is one square wave; the OPL has no SID filter, and its two operators no ring or sync |
 | Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
 | Sprite priority, collision registers | §5.3 — sprites are drawn in front; `$D01E`/`$D01F` answer 0 |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
@@ -2464,9 +2464,11 @@ file's chain cut.
 
 ### 11.4 Sound
 
-**SID voice 1's frequency and gate** go to `os88_snd_tone` (`OSAPI_SND_TONE`)
-once per wake, and only when they changed (`c64_sid_dirty`, raised by a write
-to `$D400-$D41C`) — one far call.
+**On an FM chip, all three voices** (§11.4.3). **Otherwise one voice on the
+PC speaker** — the one whose note started last (§11.4.2) — whose frequency
+and gate go to `os88_snd_tone` (`OSAPI_SND_TONE`) once per wake, and only
+when the SID changed (`c64_sid_dirty`, raised by a write to `$D400-$D41C`) —
+one far call.
 
 **The hertz is one rounding, not two.** A 6581 at the PAL dot clock sounds
 `Fn × 985248 / 2^24` Hz — 0.0587257 Hz a step. It is
@@ -2500,9 +2502,51 @@ instance holds the speaker (SPEC.md §34.3). The latch is cleared only when the
 grant takes; the retry is **bounded at `C64_SID_TRIES` = 8 wakes** and then
 dropped, and the next SID register write re-arms it. The give-up is said once
 a session, on the row and in a toast: `The speaker is busy - no SID sound.`
-Voices 2 and 3, every waveform beyond the gate, ADSR and the filters are
-greyed with §11.2's fact: `OSAPI_SND_FM` and the streaming path are driver
-verb protocols not wrapped for C.
+On the speaker, the waveforms, the ADSR, the filters and the other two
+voices are §11.2's fact: one square wave. The filters are not modelled on the
+FM chip either (§11.4.3).
+
+### 11.4.2 Which voice the speaker plays
+
+It played voice 1 and nothing else, and a tune that holds voice 1 as a pad or
+a bass while the melody moves on voices 2 and 3 — both Christmas demos — was
+one continuous tone. **The speaker plays the voice whose note STARTED most
+recently** while it is still sounding (`c64_sid_last`, set in `c64_io_wr`
+when a write OPENS a gate), and otherwise any sounding voice, voice 1 first.
+A voice sounds when its gate is open, TEST is off and it has a tonal
+waveform (triangle, sawtooth or pulse): noise alone is a drum, which a
+square wave cannot say. **`$D418`'s volume at 0 is silence**, as it is on the
+chip. `c64uitest` holds voice 1 and starts a note on voice 2, and asserts the
+speaker follows voice 2 and goes back to voice 1 when voice 2's gate closes
+(red with voice 1 alone).
+
+### 11.4.3 All three voices on an FM chip
+
+**When `SOUND.DRV` has an OPL** — it loads when the Control Panel enables
+the sound card (`drv_tab`'s row 0 is off by default) — `os88_main` claims
+the chip, MIDIRack's order (`SNDV_IDENT`, `SND_FM_INFO`, `SND_FM_CLAIM` in
+OPL2 mode; `c64_opl_open` in `c64.asm`), and the three voices go to channels
+0, 1 and 2, RealDMG's shape (`rwfm.inc`). The claim is the instance's and
+`SOUND.DRV` gives it back when the instance dies.
+
+| SID | OPL |
+|---|---|
+| waveform | a patch, loaded when it changes: pulse a modulator at twice the carrier (odd harmonics), sawtooth x1 with feedback 5, triangle the modulator silent (near a sine), noise x15 at full feedback |
+| frequency | block and F-number: `F × 985248 / 2^24` Hz is `fnum × 49716 / 2^(20−b)`, so `fnum = (F × 0.61928) >> (b−1)`, through `c64_muldiv` |
+| gate | the key; a gate that OPENED since the last batch re-keys (off then on in one batch), restarting the envelope |
+| attack, decay, sustain, release | the carrier's AR/DR/SL/RR by table (the SID's 2 ms .. 8 s against the OPL's halving steps) |
+| `$D418` volume | the carrier's attenuation, 0.75 dB a step |
+| filters, ring, sync | not modelled |
+
+**A batch a wake, of what changed** (`ovl_fm_update`, in the overlay: at
+most once a wake), against a shadow of each channel's registers. `c64uitest`
+puts 440 Hz on voice 2 and asserts channel 1's block 4 / F-number 580, the
+pulse patch and the mapped ADSR, and the key off at the gate's close (red
+with the F-number a block out). **Measured on MartyPC's
+`os8088_xt_vga_sb`**: `POKE`d to 440 Hz pulse with full sustain, channel 1
+reads `B0h = $32`, `A0h = $44`, `SOUND.DRV`'s own `opl_b0` agrees, and the
+card's capture peaks at **440.0 Hz** with 1,320 and 2,200 Hz above it — a
+square's odd harmonics.
 
 ### 11.4.1 Voice 3, readable — `$D41B` and `$D41C`
 

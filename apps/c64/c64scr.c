@@ -2508,7 +2508,13 @@ static unsigned c64_fsx_seg;                /* the framebuffer */
 static unsigned c64_fsx_tick;               /* the tick of the last frame */
 static void *c64_fsx_win;
 static char c64_fsi[OS88_FSI_SIZE];
-static unsigned char c64_b8[320 * 8];       /* one 8bpp band (9.12) */
+/* ONE 8bpp BAND (9.12) - AND IT IS THE WINDOW'S FRAME SHADOW'S FIRST 2,560
+ * BYTES, not bss of its own. The bracket throws that shadow away as it
+ * enters (c64_sh_inval, below) and the kernel's repaint on the way out
+ * rebuilds it whole, so for the whole session it holds nothing anyone reads
+ * - and the package is at its 64KB segment (13.1) */
+#define c64_b8 c64_sh
+typedef char c64_b8_fits[(320 * 8 <= C64_SHBYTES) ? 1 : -1];
 static unsigned char c64_k0[C64_COLS], c64_k1[C64_COLS];
 static unsigned char c64_k2[C64_COLS], c64_k3[C64_COLS];
 static unsigned char c64_kmc[C64_COLS];
