@@ -105,6 +105,7 @@ APPLE2 = dict(
     # $BFFE is not caught - APPLE2-SPEC section 4.6's stated deviation.)
     ct_lo=0xBFFE,
     kb_latch=True,              # $C000-$C00F answered from S_KBV (a2io.c)
+    ct_top=False,               # $FFFE-$FFFF are the ROM's RTI and a hand-back
 )
 
 # scratch offsets - the first block is the accurate core's (a2cpu.inc), the
@@ -114,6 +115,7 @@ S_WLO, S_WHI, S_ANY, S_WATLO, S_WATHI = 0x2C, 0x2E, 0x30, 0x32, 0x34
 S_PV, S_RSN, S_HBK, S_CUTF = 0x38, 0x39, 0x3A, 0x3B
 S_PKGDS, S_REC, S_IORD, S_IOWR, S_SPSAVE = 0x3C, 0x3E, 0x40, 0x44, 0x48
 S_KBV, S_KBOK = 0x4A, 0x4B      # the keyboard latch, mirrored by a2io.c
+S_IDLEOK = 0x4C                 # a2f_image: the ROM's KEYIN loop is at $FD1B
 
 # the machine record (a2cpu.inc's _a2_m)
 AM_PC, AM_A, AM_X, AM_Y, AM_S, AM_P, AM_CNT, AM_REASON = 4, 6, 8, 10, 12, 14, 16, 18
@@ -154,15 +156,26 @@ class Gen:
                "    mov dh, [si]", "    inc si", "    jmp dx",
                "%s: jmp x_slice" % x)
 
+    def ct_check(self, hb):
+        """a new PC in [ct_lo, io_hi x 256) jumps to HB: ONE unsigned range
+        test, so neither a RAM nor a ROM target takes a jump. BX is free.
+        (A machine whose top two bytes can hold a 3-byte instruction - RAM
+        there - also needs $FFFE and up: `mov bx,[si]` at $FFFF faults a 286.
+        The Apple II's are the ROM's, RTI and an opcode this core hands
+        back, so its profile says ct_top=False.)"""
+        lo, hi = self.p["ct_lo"], self.p["io_hi"] << 8
+        self.L("    lea bx, [si+0x%04X]" % ((0x10000 - lo) & 0xFFFF),
+               "    cmp bx, 0x%04X" % (hi - lo), "    jb %s" % hb)
+        if self.p.get("ct_top", True):
+            self.L("    cmp si, 0xFFFE", "    jae %s" % hb)
+
     def next_ct(self, cyc):
         """...after a control transfer: SI is a new PC, which may be in the
-        I/O region (or at the segment's end), and that is handed back"""
-        x, tc, go, hb = self.lab(), self.lab(), self.lab(), self.lab()
-        self.L("    sub bp, %d" % cyc, "    jle %s" % x,
-               "    cmp si, 0x%04X" % self.p["ct_lo"], "    jae %s" % tc,
-               "%s: mov dh, [si]" % go, "    inc si", "    jmp dx",
-               "%s: cmp si, 0x%04X" % (tc, self.p["io_hi"] << 8), "    jb %s" % hb,
-               "    cmp si, 0xFFFE", "    jb %s" % go,
+        I/O region, and that is handed back"""
+        x, hb = self.lab(), self.lab()
+        self.L("    sub bp, %d" % cyc, "    jle %s" % x)
+        self.ct_check(hb)
+        self.L("    mov dh, [si]", "    inc si", "    jmp dx",
                "%s: jmp x_hbr" % hb,
                "%s: jmp x_slice" % x)
 
@@ -216,19 +229,38 @@ class Gen:
             self.L("%s: inc bh" % pen_lab[0], "    dec bp", "    jmp short %s" % pen_lab[1])
 
     # --- memory ----------------------------------------------------------
-    def read(self, mode, dst, cyc):
+    def read(self, mode, dst, cyc, idle=False):
         """DST = the byte at BX (zero page and the stack are always RAM)"""
         if mode in ("zp", "zpx", "zpy"):
             self.L("    mov %s, [bx]" % dst)
             return
-        r, k, io = self.lab(), self.lab(), self.lab()
-        self.L("    cmp bh, 0x%02X" % self.p["io_lo"], "    jb %s" % r,
-               "    cmp bh, 0x%02X" % (self.p["io_call"] + 2), "    jb %s" % io,
-               "%s: mov %s, [bx]" % (r, dst), "%s:" % k)
-        self.later.append(["%s: mov dl, %d" % (io, cyc), "    call rd_io",
-                           "    xor dl, dl"]
-                          + (["    mov %s, dh" % dst] if dst != "dh" else [])
-                          + ["    jmp %s" % k])
+        hi, k, io, call = self.lab(), self.lab(), self.lab(), self.lab()
+        # RAM FALLS THROUGH: the one compare, not taken
+        self.L("    cmp bh, 0x%02X" % self.p["io_lo"], "    jae %s" % hi,
+               "    mov %s, [bx]" % dst, "%s:" % k)
+        blk = ["%s: cmp bh, 0x%02X" % (hi, self.p["io_call"] + 2), "    jb %s" % io,
+               "    mov %s, [bx]" % dst, "    jmp %s" % k,         # the ROM
+               "%s:" % io]
+        if self.p.get("kb_latch"):
+            # THE KEYBOARD LATCH, here and not in a call (a2io.c mirrors it)
+            blk += ["    cmp bx, 0x%04X" % ((self.p["io_call"] << 8) + 0x10),
+                    "    jae %s" % call,
+                    "    cmp byte [%s], 0" % self.scr(S_KBOK), "    je %s" % call,
+                    "    mov %s, [%s]" % (dst, self.scr(S_KBV))]
+            if idle:
+                # THE ROM'S KEYIN LOOP WITH NO KEY: this BIT is the one at
+                # $FD21 (SI past it), and the loop can only spin until the
+                # budget ends - kbd_idle runs it as a counter
+                blk += ["    test %s, 0x80" % dst, "    jnz %s" % k,
+                        "    cmp si, 0xFD24", "    jne %s" % k,
+                        "    cmp bp, 19", "    jle %s" % k,   # a pass must fit
+
+                        "    cmp byte [%s], 0" % self.scr(S_IDLEOK), "    je %s" % k,
+                        "    jmp kbd_idle"]
+            blk += ["    jmp %s" % k]
+        blk += ["%s: mov dl, %d" % (call, cyc), "    call rd_io", "    xor dl, dl"]
+        blk += (["    mov %s, dh" % dst] if dst != "dh" else []) + ["    jmp %s" % k]
+        self.later.append(blk)
 
     def write(self, mode, src, cyc):
         """the byte SRC to BX: RAM, the I/O call-out, or dropped; and the
@@ -289,7 +321,8 @@ class Gen:
             else:
                 self.ea(mode, mode in PENALTY, pen)
                 dst = {"LDA": "al", "LDX": "cl", "LDY": "ch"}.get(mn, "dh")
-                self.read(mode, dst, cyc)
+                self.read(mode, dst, cyc,
+                          idle=(mn == "BIT" and mode == "abs" and self.p.get("kb_latch")))
                 src = dst
             self.alu(mn, src)
             self.next(cyc)
@@ -299,6 +332,15 @@ class Gen:
             self.next(cyc)
         elif mn in RMW and mode == "acc":
             self.shift(mn, "al")
+            self.next(cyc)
+        elif mn in RMW and mode in ("zp", "zpx") and mn not in ("ROL", "ROR"):
+            # zero page is RAM and never a display page: the operation on
+            # the byte itself, flags straight out of it
+            self.ea(mode, False, pen)
+            if mn in ("INC", "DEC"):
+                L("    sahf", "    %s byte [bx]" % mn.lower(), "    lahf")
+            else:
+                L("    %s byte [bx], 1" % ("shl" if mn == "ASL" else "shr"), "    lahf")
             self.next(cyc)
         elif mn in RMW:
             self.ea(mode, False, pen)
@@ -402,16 +444,28 @@ class Gen:
               "    mov si, dx", "    xor dl, dl")
             self.next_ct(cyc)
         elif mn == "JSR":
-            L("    mov bx, [si]", "    inc si", "    mov dx, si")
+            # ONE WORD onto the stack while S is not at the page's bottom
+            slow, j = self.lab(), self.lab()
+            L("    mov bx, [si]", "    inc si",
+              "    cmp di, 0x0101", "    jb %s" % slow,
+              "    mov [di-1], si", "    sub di, 2",
+              "%s: mov si, bx" % j)
+            self.next_ct(cyc)
+            L("%s: mov dx, si" % slow)
             self.push("dh")
             self.push("dl")
-            L("    xor dl, dl", "    mov si, bx")
-            self.next_ct(cyc)
+            L("    xor dl, dl", "    jmp %s" % j)
         elif mn == "RTS":
+            # ...and one word off it while S is not at the top
+            slow, j = self.lab(), self.lab()
+            L("    cmp di, 0x01FE", "    jae %s" % slow,
+              "    mov si, [di+1]", "    add di, 2",
+              "%s: inc si" % j)
+            self.next_ct(cyc)
+            L("%s:" % slow)
             self.pop("bl")
             self.pop("bh")
-            L("    inc bx", "    mov si, bx")
-            self.next_ct(cyc)
+            L("    mov si, bx", "    jmp %s" % j)
         elif mn == "RTI":
             self.pop("dl")
             L("    call setp", "    xor dl, dl")
@@ -495,10 +549,10 @@ class Gen:
             "    test byte [%s], 0x01" % S(S_IRQ), "    jz .ok",
             "    test byte [%s], 0x04" % P, "    jz .hb",
             ".ok:",
-            "    cmp si, 0x%04X" % self.p["ct_lo"], "    jb .go",
-            "    cmp si, 0x%04X" % (self.p["io_hi"] << 8), "    jb .hbr",
-            "    cmp si, 0xFFFE", "    jae .hbr",
-            ".go:",
+            "    lea bx, [si+0x%04X]" % ((0x10000 - self.p["ct_lo"]) & 0xFFFF),
+            "    cmp bx, 0x%04X" % ((self.p["io_hi"] << 8) - self.p["ct_lo"]),
+            "    jb .hbr",
+        ] + (["    cmp si, 0xFFFE", "    jae .hbr"] if self.p.get("ct_top", True) else []) + [
             "    cmp bp, 0", "    jle .slice",
             "    mov dh, [si]", "    inc si", "    jmp dx",
             ".slice: jmp x_slice",
@@ -595,6 +649,29 @@ class Gen:
             ".drop:",
             "    ret",
         ]
+        t["idle"] = [
+            # kbd_idle - THE AUTOSTART ROM'S KEYIN LOOP, run as a counter:
+            #   $FD1B INC $4E (5) / BNE $FD21 (3, or 2 and INC $4F (5)) /
+            #   $FD21 BIT $C000 (4) / BPL $FD1B (3)
+            # Entered from the BIT at $FD21 with no key in the latch, which
+            # cannot change inside a run (a2io.c's mirror). Whole passes from
+            # that BIT back to it cost 15 cycles, or 19 when $4E wraps, and
+            # change nothing but $4E/$4F and flags the next BIT overwrites -
+            # so they are taken while one fits with a cycle to spare, and the
+            # BIT is then run for real. a2f_image sets IDLEOK only when the
+            # ROM's bytes are these.
+            "kbd_idle:",
+            ".loop:",
+            "    cmp bp, 19", "    jle .out",
+            "    sub bp, 15",
+            "    inc byte [0x004E]", "    jnz .loop",
+            "    sub bp, 4",
+            "    inc byte [0x004F]",
+            "    jmp short .loop",
+            ".out:",
+            "    mov si, 0xFD21",
+            "    mov dh, [si]", "    inc si", "    jmp dx",
+        ]
         t["vid"] = [
             # vid_mark - BX was just written on a display page: the page's bit,
             # "the core wrote something", and the write window when BX is in
@@ -634,7 +711,7 @@ class Gen:
         # the slots of opcodes this core hands back hold the shared tails
         spare = [op for op in range(256) if op not in OPS]
         place = {0x02: "entry", 0x12: "exits", 0x22: "pflags", 0x32: "io",
-                 0x42: "vid"}
+                 0x42: "vid", 0x52: "idle"}
         for op in range(256):
             if op >= PART_LEN >> 8:
                 break

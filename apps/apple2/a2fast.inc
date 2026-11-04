@@ -295,6 +295,26 @@ _a2f_image:
     mov di, A2_ROM_BASE
     mov cx, (0x10000 - A2_ROM_BASE) / 2
     rep movsw                       ; cc8086:allow - the main ROM
+    ; THE KEYIN LOOP'S SHORTCUT (m65gen.py's kbd_idle) is armed only when the
+    ; ROM holds that loop, byte for byte, at $FD1B
+    push es
+    pop ds
+    xor al, al
+    cmp word [0xFD1B], 0x4EE6       ; INC $4E
+    jne .noidle
+    cmp word [0xFD1D], 0x02D0       ; BNE +2
+    jne .noidle
+    cmp word [0xFD1F], 0x4FE6       ; INC $4F
+    jne .noidle
+    cmp word [0xFD21], 0x002C       ; BIT $C0..
+    jne .noidle
+    cmp word [0xFD23], 0x10C0       ; ..00 / BPL
+    jne .noidle
+    cmp byte [0xFD25], 0xF5         ; ...$FD1B
+    jne .noidle
+    inc al
+.noidle:
+    mov [A2_SCR_BASE + 0x4C], al
     pop es
     pop ds
     pop di

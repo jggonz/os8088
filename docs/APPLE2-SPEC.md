@@ -591,14 +591,21 @@ machine alone; nothing is said, because a slower machine is not a broken one.
 
 **Measured, 86Box `286-victory` (16 MHz 286), at the commit that lands this:**
 
-| | accurate core | fast core |
-|---|---|---|
-| idle at the `]` prompt | 10% | 48% |
-| `10 I=I+1 / 20 GOTO 10` | 13.6% | 61% |
+| | accurate core | fast core, first cut | fast core, tuned |
+|---|---|---|---|
+| idle at the `]` prompt | 10% | 48% | **547%** (the KEYIN counter below) |
+| `10 I=I+1 / 20 GOTO 10` | 13.6% | 61% | **67%** |
 
-A profile of the idle prompt (CS:IP sampled once an emulated millisecond)
-puts 97% of the machine in the core's slots, so what is left is the core's
-own instructions, not the wake.
+A profile (CS:IP sampled once an emulated millisecond) puts 97% of the
+machine in the core's slots, so what is left is the core's own instructions,
+not the wake: about 80 host clocks an emulated instruction under Applesoft,
+spread across JSR, RTS, the branches and the zero-page loads.
+
+**THIS PORT HAS NO THROTTLE** (section 9), and the KEYIN counter is the first
+thing on a 286 that runs faster than the machine. Nothing a user sees moves
+faster for it - the loop is waiting for a key - but on a 386 the general core
+will pass 100% too, and a game will then run fast. Whether `CPU > Normal:
+1MHz` becomes a throttle is the owner's decision and is not made here.
 
 **The layout.** The handler for opcode X is at X x 256 of one 64KB code
 segment; dispatch is `mov dh,[si] / inc si / jmp dx` with DL = 0, inlined at
@@ -636,6 +643,23 @@ answered in the core**: `a2_kb_mirror` writes `$C000`'s byte to `$C14A` and
 "answer it" to `$C14B` at the top of every run and at the strobe, and while a
 paste is in flight the flag says call out, because then the read is
 `a2_paste_peek`'s.
+
+**The ROM's keyboard loop is a counter.** `KEYIN` at `$FD1B` (`INC $4E / BNE
+/ INC $4F / BIT $C000 / BPL`) is where every `INPUT` and `GET` and the
+idle prompt wait. With no key in the latch - which cannot change inside a run
+- a pass from the `BIT` back to it costs 15 cycles (19 when `$4E` wraps) and
+changes nothing but `$4E`/`$4F` and flags the next `BIT` overwrites. So the
+`BIT` at `$FD21` (`kbd_idle`) takes whole passes as a counter while one fits
+with a cycle to spare, then runs for real: the same cycles, the same memory,
+the same PC and flags at the end of the run. `a2f_image` arms it (`IDLEOK`,
+`$C14C`) only when the ROM holds those bytes at `$FD1B`.
+
+**A jump's target is one range test**, `lea bx,[si+$4002] / cmp bx,$1002`,
+which neither a RAM nor a ROM target takes a jump for. `$FFFE` and up need no
+test on this machine: the image's `$FFFE` is the ROM's `RTI` and `$FFFF` an
+opcode this core hands back, so `mov bx,[si]` at `$FFFF` - which faults a 286
+- cannot be reached. **JSR and RTS move the return address as one word** while
+S is not at the stack page's edge.
 
 **What it hands back, and how.** Reason 2 (one instruction): every illegal
 opcode, `BRK`, `ADC`/`SBC` with D set, `CLI`/`SEI`/`PLP`/`RTI` while the
