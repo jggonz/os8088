@@ -236280,8 +236280,13 @@ obtain, per arm, with no special case for any caller:
     the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
     the conventional heap's total plus the extended pool's free KB
     (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
-    and the larger of the conventional largest claim and the pool's KB. No
-    room while the map has no free row.
+    and the larger of the conventional largest claim and the pool's KB. The
+    gap is taken less the 31 paragraphs `w16_vnew` may skip to keep a
+    claim's phase, and in whole KB, the unit the pool grants a claim in. No
+    room while the map has no free row;
+  - on both, `R` is at most one `L` for each arena that could still be made
+    (the free arena slots, and on kern_mega no more than its free map
+    rows): a heap of many small holes is not memory four arenas can take.
 
 `GetFreeSpace` is the arenas' sum plus `R`; `GlobalCompact` is the larger of
 the arenas' largest run and `L`. The figure is at most the map's size on
@@ -236292,9 +236297,26 @@ kern_mega it passes while the map is mostly free. Before this the answer was
 the largest run (kern_big) or the largest run plus the conventional heap's
 free memory (kern_mega), which on QEMU was 545,376 bytes while 154 KB of the
 map and the whole extended pool were unused. A program that sizes buffers
-from it (Paintbrush's band manager, §124.25) is told more than before, and
-what it is told it can now be given. The code is in the system-library
-part (§124.24.1), so the image grows only by `GlobalCompact`'s call into it.
+from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
+asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
+bitmap when the answer is at least four times the picture: 614,400 bytes for
+640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
+`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
+for this operation*, both before this change and after it (a look of each,
+2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
+(`win16pbrush`). The one-band bitmap is the likely cause, read from
+`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
+what would cure it, not a smaller figure.
+
+The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
+and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
+that call into it, so a program that cannot have the part is answered 0
+rather than ended as a missing part ends a call: Calculator calls
+`GlobalCompact(-1)` only when a `GlobalReAlloc` was refused, the moment the
+part is least likely to fit, and then shows its own message. 0 is honest
+there: the part is a heap block of 16 KB (37 KB on kern_mega), and when it cannot be
+had no block that large can.
 
 #### 124.25.2 A library's local heap has room *(S19b batch 1)*
 

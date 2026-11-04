@@ -5,21 +5,39 @@
 ; =============================================================================
 ; GlobalCompact and GetFreeSpace: one accounting of what GlobalAlloc could
 ; obtain (SPEC.md 124.25.1, *What GetFreeSpace says*) - the system-library
-; part's, so the image carries neither
+; part's, so the image carries only the two stubs that reach it
 ; =============================================================================
+; GetFreeSpace (KERNEL.169) and GlobalCompact (KERNEL.25) are the IMAGE's rows:
+; two stubs that call the part, so a program that cannot have the part (a
+; GlobalCompact is how Calculator retries a GlobalReAlloc the heap refused)
+; is answered 0 rather than ended. The part is a heap block of its own size:
+; when it cannot be had, nothing that large is free either
+w16k_gspace:
+    mov word [w16_sfn], w16s_gspace
+    jmp short w16k_gc0
+w16k_gcompact:
+    mov word [w16_sfn], w16s_gcompact
+w16k_gc0:
+    call w16_scall                  ; CF=1: the part could not be had
+    jnc .out
+    xor ax, ax
+    cwd
+.out:
+    ret
+
 section .w16sys
 
-; GetFreeSpace (KERNEL.169) - args: +0 wFlags. DX:AX = the sum of the arenas'
-; free and discardable memory plus the room a new arena could take
-W16SYS w16k_gspace
+; GetFreeSpace - args: +0 wFlags. DX:AX = the sum of the arenas' free and
+; discardable memory plus the room new arenas could take. CF=0
+w16s_gspace:
     push di
     mov di, 1
     jmp short w16s_gc1
 
-; GlobalCompact (KERNEL.25) - args: +0 dwMinFree. DX:AX = the largest block
-; GlobalAlloc could give now: a run in an arena of free blocks and code it
-; may discard (w16_gcan), or the largest claim a new arena could be
-W16SYS w16k_gcompact
+; GlobalCompact - args: +0 dwMinFree. DX:AX = the largest block GlobalAlloc
+; could give now: a run in an arena of free blocks and code it may discard
+; (w16_gcan), or the largest claim a new arena could be. CF=0
+w16s_gcompact:
     push di
     xor di, di                      ; DI = 1: GetFreeSpace's
 w16s_gc1:
@@ -59,18 +77,21 @@ w16s_gc1:
     inc si
     jmp short .arena
 .claims:
-    xor si, si                      ; a new arena only while a slot is free
-.free:                              ;   (SPEC.md 124.25.1)
+    xor si, si                      ; DX = the free arena slots: a new arena
+    xor dx, dx                      ;   only while one is (SPEC.md 124.25.1)
+.free:
     cmp word [w16_arena + si], 0
-    je .room
+    jne .fn
+    inc dx
+.fn:
     inc si
     inc si
     cmp si, 2 * W16_NARENA
     jb .free
     xor ax, ax
     xor bx, bx
-    jmp short .have
-.room:
+    or dx, dx
+    jz .have
     push cx
     call w16s_room                  ; AX = the largest block, BX = all of it
     pop cx
@@ -101,24 +122,30 @@ w16s_gc1:
     pop si
     pop bx
     pop di
+    clc                             ; (the stub reads CF as "no part")
     ret
 
-; w16s_room - what a new arena could take, in paragraphs: AX = the largest
-; block, BX = the most altogether (0, 0 when nothing). Keeps CX, DI.
+; w16s_room - DX = the free arena slots (1 to 4): what new arenas could take,
+; in paragraphs. AX = the largest block, BX = the most altogether (0, 0 when
+; nothing), at most one largest block a slot. Keeps CX, DI.
 ; kern_big: the conventional heap, as OSAPI_MEM_P's MEMP_AVAIL says.
 ; kern_mega: the same, plus the extended pool's free KB, both limited by the
-; map's free paragraphs (all, and the largest gap) and by a free row
+; map's free paragraphs (all, and the largest gap less what w16_vnew may skip
+; to keep a claim's phase, in whole KB, the pool's unit) and by its free rows
 w16s_room:
 %ifndef PKG_MEGA
     push cx
+    push dx
     mov bl, MEMP_AVAIL
     call OSAPI_MEM_P                ; AX = the largest claim, BX = the total
+    pop dx
     pop cx
-    ret
+    jmp short w16s_cap
 %else
     push cx
     push di
     push bp
+    push dx                         ; the free slots
     mov bl, MEMP_AVAIL
     call OSAPI_MEM_P                ; AX = the largest claim, BX = the total
     push ax
@@ -143,7 +170,7 @@ w16s_room:
     mov bx, 0xFFFF
 .t:
     xor bp, bp                      ; BP = the paragraphs the rows hold
-    xor di, di                      ; DI = 1 when a row is free
+    xor di, di                      ; DI = the free rows
     mov si, w16_vmap
     mov cx, W16V_N
 .row:
@@ -157,9 +184,14 @@ w16s_room:
 .rn:
     add si, W16V_SZ
     loop .row
-    xor ax, ax
-    or di, di
+    pop ax                          ; an arena a row: the fewer of the two
+    cmp ax, di
+    jbe .k
+    mov ax, di
+.k:
+    or ax, ax
     jz .none                        ; no free row: nothing
+    push ax
     mov ax, 0x10000 - W16V_LO
     sub ax, bp                      ; AX = the map's free paragraphs
     cmp bx, ax
@@ -183,16 +215,24 @@ w16s_room:
     add di, W16V_SZ
     cmp di, w16_vmap + W16V_N * W16V_SZ
     jb .ro
+    sub bx, 31                      ; the phase w16_vnew may skip, and whole
+    jnc .ph                         ;   KB: the pool grants a claim in KB
+    xor bx, bx
+.ph:
+    and bl, 0xC0
     pop ax
     cmp ax, bx
     jbe .lm
     mov ax, bx                      ; AX = the smaller of the two
 .lm:
     pop bx
-    jmp short .out
+    pop dx                          ; DX = the arenas it could be
+    pop bp
+    pop di
+    pop cx
+    jmp short w16s_cap
 .none:
-    xor bx, bx
-.out:
+    xor bx, bx                      ; (AX = 0)
     pop bp
     pop di
     pop cx
@@ -226,4 +266,20 @@ w16s_room:
 .gr:
     ret
 %endif
+; w16s_cap - AX = the largest block, BX = the room, DX = the arenas (1 to 4)
+; that could hold it: BX = at most DX blocks of AX. Keeps AX, CX
+w16s_cap:
+    push cx
+    mov cx, dx
+    xor dx, dx
+.m:
+    add dx, ax
+    jc .out                         ; past 0xFFFF: the room stands
+    loop .m
+    cmp bx, dx
+    jbe .out
+    mov bx, dx
+.out:
+    pop cx
+    ret
 section .text

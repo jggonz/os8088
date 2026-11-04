@@ -2381,7 +2381,7 @@ w16_cputest:
 %include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
-%include "win16/w16gsp.inc"     ; GlobalCompact, GetFreeSpace: part 9 (124.25.1)
+%include "win16/w16gsp.inc"     ; GlobalCompact, GetFreeSpace: stubs + part 9
 %ifdef PKG_MEGA
 %include "win16/w16sel.inc"     ; the selector functions: part 9 (124.31.6)
 %include "win16/w16i31.inc"     ; DPMI 0.9, a subset: part 9 too (124.31.6)
