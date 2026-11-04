@@ -12898,9 +12898,11 @@ mega_wbind:
 
 ; mega_bown - DX:AX = a base, BL = a window's owner (mega_segown's) -> CF = 0
 ; the block it lies in is that owner's: a conventional claim recorded under
-; the slot, a pool block under 0A0h | slot, or a driver's pool block under its
-; 0C0h | row. CF = 1 someone else's, nobody's, or in no block - so mega_wset's
-; re-bind never binds a window into another package's memory (14.137, the
+; the slot, a pool block under 0A0h | slot (a claim) or the bare slot (its
+; OSAPI_XMEM_ALLOC block), or a driver's pool block under its 0C0h | row. A
+; REGION (80h | slot) is not a block a window binds into. CF = 1 someone
+; else's, nobody's, or in no block - so neither mega_wset's re-bind nor
+; SEG_BWIN binds a window into another package's memory (14.137, 14.139; the
 ; rule 14.135 made for SEG_FREE). Keeps all
 mega_bown:
     push ax
@@ -12914,15 +12916,17 @@ mega_bown:
     cmp dx, MEGA_XPOOL >> 16
     jb .conv
     MXT_ES                          ; (the tables' tail)
-    cmp bl, 0xC0
-    jae .p
-    or bl, 0xA0
-.p:
     call mx_rel                     ; AX = its KB from the pool's base
     jc .no
     call mx_inblk                   ; SI = the block
     jc .no
-    cmp [es:si+MX_OWN], bl
+    mov al, [es:si+MX_OWN]
+    cmp al, bl                      ; a driver's 0C0h | row, or the slot's
+    je .yes                         ; OWN OSAPI_XMEM_ALLOC block (owner the
+    cmp bl, 0xC0                    ; bare slot: the Video Player's run,
+    jae .no                         ; 14.139)...
+    or bl, 0xA0                     ; ...or a claim it took above 1MB
+    cmp al, bl
     je .yes
 .no:
     stc
@@ -12964,13 +12968,14 @@ mega_bown:
 
 ; mega_segbw - SEG_BWIN's body (FAR's tail, mega_segf): DX = a selector of the
 ; caller's -> CF = 0, DX = a NEW data selector over the block its base lies in
-; - the pool's or a conventional claim - aimed at that base, 64KB long or to
+; - the pool's or a conventional claim, THE CALLER'S OWN (mega_bown, 14.139) -
+; aimed at that base, 64KB long or to
 ; the block's end: a WINDOW the caller re-aims with SEG_AIM, recorded in
 ; mega_wtab as BOUND (its row's byte 3) under the caller's owner, so its end
 ; frees it. Based in the block, it moves with it (mx_desc, mega_mpmovef) and
 ; goes with it; a pool block holding one moves with the rate hook held off,
 ; as an OSAPI_XMEM_RUN block does (mx_cpflags, MX_FWIN). CF = 1, AX = 1 no
-; LDT entry or row, 2 the null selector, 3 in no block
+; LDT entry or row, 2 the null selector, 3 in no block of the caller's own
 mega_segbw:
     push ax
     push bx
@@ -12981,15 +12986,18 @@ mega_segbw:
     call mega_selbase               ; DX:AX = its base
     jc .null
     mov cx, 0xFFFF
+    call mega_segown                ; BL = the caller's owner
+    call mega_bown                  ; THE CALLER'S OWN block only (14.139):
+    jc .nb                          ; asked before mega_wbind flags a block
     call mega_wbind                 ; CX = the reach, the block flagged
     jnc .in
+.nb:
     mov ax, 3
     jmp short .no
 .null:
     mov ax, 2
     jmp short .no
 .in:
-    call mega_segown                ; BL = the caller's owner
     mov bh, 1                       ; BOUND: a free row and a FRESH entry,
     call mega_wnew                  ; never a match - re-aiming it must move
     jc .no                          ; nobody else's (AX = 1 none)

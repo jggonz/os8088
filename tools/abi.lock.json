@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "b395855801841c165384d1de40d49211f904236065209360de6bf08d64fae6d6",
+  "fingerprint": "0e59be1d87f305c2679158b1cdd5bf47b8d0b1a1009e882bb5eba8360aac04a2",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "39a274c118888d92511f7330c4e8c6580e37c07f782609cadbd63a8ac79ce2c5",
+  "fingerprint": "2d2cafc60f297ddb7f1ce992380f927e6defa4b91e9a6f90e63b7b015dd4e35f",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1680,6 +1680,20 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "SEG_HND (12): a re-aimable handle descriptor verb for OSAPI_SEG on kern_mega (SPEC.md 50.6.11); a constant added, nothing built before moves",
+   "to": 12
+  },
+  {
+   "fingerprint": "2d2cafc60f297ddb7f1ce992380f927e6defa4b91e9a6f90e63b7b015dd4e35f",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SEG_BWIN comment clarified: caller's own block (14.139)",
+   "to": 10
+  },
+  {
+   "fingerprint": "0e59be1d87f305c2679158b1cdd5bf47b8d0b1a1009e882bb5eba8360aac04a2",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "SEG_BWIN comment clarified: caller's own block (14.139)",
    "to": 12
   }
  ]

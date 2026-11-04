@@ -2235,7 +2235,8 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          Inside a claim or a pool block
                                  ;          only; it moves and goes with it
                                  ; SEG_BWIN DX = a selector of yours based in
-                                 ;          a claim or a pool block -> DX = a
+                                 ;          a claim or a pool block OF YOURS
+                                 ;          (else CF=1, AX=3) -> DX = a
                                  ;          new BOUND WINDOW over that block,
                                  ;          aimed at that base. Yours until
                                  ;          SEG_FREE or your end; it moves
