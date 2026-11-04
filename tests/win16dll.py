@@ -16,7 +16,14 @@ W16DLL's counter - one DGROUP for both users; FreeLibrary runs W16DLL2's WEP;
 LoadLibrary of a file that is not there answers 2. The program's MessageBox,
 read off its stack, is "DLLUSE OK" or names each check that failed. The
 three files sit at B:'s root, the program's folder, which is where WIN16
-looks for a library (124.23.1).
+looks for a library first (124.23.1).
+
+The second and third legs (124.23.1.1) put the two libraries in B:'s
+SYSTEM/APPDATA/WIN16 - the Windows directory - and in SYSTEM/APPDATA/WIN16/SYSTEM
+- the system directory, where a setup installs a shared library - with only
+DLLUSE.EXE at the root: every check must still pass, `filepath` among them:
+the program opens the path GetModuleFileName answers for W16DLL, which is the
+library's own folder and not the program's.
 """
 import argparse
 import os
@@ -33,21 +40,19 @@ import win16fpu as F                                          # noqa: E402
 FILES = ("DLLUSE.EXE", "W16DLL.DLL", "W16DLL2.DLL")
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--keep", action="store_true")
-    a = ap.parse_args()
-    missing = [f for f in FILES if not os.path.exists(b(os.path.join("win16", f)))]
-    if missing:
-        print("win16dll: SKIP - no build/win16/%s (`make win16fixtures`)" % missing[0])
-        return 77
+def run_leg(a, bad, sysdir):
+    """sysdir: None, or the folder the libraries are in instead of the root"""
     import os88ui
     import xmcheck
-    bad = []
     work = tempfile.mkdtemp(prefix="w16d-")     # short: a QMP socket path
     try:
         bimg = os.path.join(work, "src.img")
-        F.bdisk(bimg, 1440, FILES)
+        if sysdir:
+            F.bdisk(bimg, 1440, ("DLLUSE.EXE",), extra=[
+                sysdir + ":" + b(os.path.join("win16", f))
+                for f in FILES[1:]])
+        else:
+            F.bdisk(bimg, 1440, FILES)
         d = QDrive(work, bimg, a.keep)
         d.key = lambda n: d.hmp("sendkey %s" % {"Enter": "ret"}.get(n, n))
         ui = os88ui.UI(d, mouse=object(), sym=xmcheck.sym, verbose=False)
@@ -62,6 +67,24 @@ def main():
             shutil.rmtree(work, ignore_errors=True)
         else:
             print("kept: %s (QMP %s)" % (work, os.path.join(work, "qmp.sock")))
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--keep", action="store_true")
+    a = ap.parse_args()
+    missing = [f for f in FILES if not os.path.exists(b(os.path.join("win16", f)))]
+    if missing:
+        print("win16dll: SKIP - no build/win16/%s (`make win16fixtures`)" % missing[0])
+        return 77
+    bad = []
+    for leg, sysdir in (("beside", None),
+                        ("Windows directory", "SYSTEM/APPDATA/WIN16"),
+                        ("system directory", "SYSTEM/APPDATA/WIN16/SYSTEM")):
+        before = len(bad)
+        run_leg(a, bad, sysdir)
+        print("win16dll: %s leg %s" % (leg, "FAILED" if len(bad) > before
+                                       else "ok"))
     for f in bad:
         print("FAIL: " + f)
     if not bad:
