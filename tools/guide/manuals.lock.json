@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "fae17be3",
-  "strings": "0b5b771a1f9eb9c6",
-  "why": "speed paragraph: the fast core, BASIC/KERNAL translation and the throttle"
+  "stamped": "291000d4",
+  "strings": "14a9e426e1969353",
+  "why": "File menu: Attach disk image is live, drive 8 answers LOAD from a D64"
  },
  "CALC_O88": {
   "sources": [
