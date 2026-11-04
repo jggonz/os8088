@@ -1124,8 +1124,8 @@ w16_profdef:
     mov si, [es:bx + 6]
     mov dx, [es:bx + 8]
     les di, [es:bx + 2]
-    or dx, dx                       ; a NULL default is "" (SPEC.md 124.14)
-    jz .end
+    or dx, dx                       ; a NULL default leaves the buffer as it
+    jz .out                         ;   was and answers 0, as Windows 3.0 did
     mov ds, dx
 .c:
     jcxz .end
