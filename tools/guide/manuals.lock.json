@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "291000d4",
-  "strings": "14a9e426e1969353",
-  "why": "File menu: Attach disk image is live, drive 8 answers LOAD from a D64"
+  "stamped": "7f7b4113",
+  "strings": "f128397972066be6",
+  "why": "Good to know: the modes, sprites and row splits that are drawn, and sprite priority/collisions that are not"
  },
  "CALC_O88": {
   "sources": [
