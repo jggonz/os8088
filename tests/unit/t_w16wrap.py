@@ -87,6 +87,17 @@ def labels(text):
     return out
 
 
+# data tables inside a part: ndisasm reads their bytes as instructions, and an
+# E8/E9 in one is a "call" that does not exist. Each is a label and its _end.
+DATA = ("w16_pnames",)
+
+
+def data_ranges(tab):
+    """[(lo, hi)) of the DATA tables in one section's label list"""
+    d = dict((n, o) for o, n in tab)
+    return [(d[n], d[n + "_end"]) for n in DATA if n in d and n + "_end" in d]
+
+
 def name(tab, at):
     best = None
     for off, n in tab:
@@ -110,11 +121,14 @@ def scan(binf, mapf):
             dis = subprocess.run(["ndisasm", "-b", "16", t.name], capture_output=True,
                                  text=True, check=True).stdout
         wraps, bad = 0, []
+        skip = data_ranges(tabs.get(sec, []))
         for line in dis.splitlines():
             f = line.split(None, 2)
             if len(f) < 3 or f[1][:2] not in ("E8", "E9") or len(f[1]) != 6:
                 continue
             at = int(f[0], 16)
+            if any(lo <= at < hi for lo, hi in skip):
+                continue
             d = int(f[1][4:6] + f[1][2:4], 16)
             d = d - 0x10000 if d & 0x8000 else d
             to = at + 3 + d

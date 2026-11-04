@@ -2487,6 +2487,7 @@ w16_pnames:
 %assign j j + 1
 %endrep
     db 0xFF
+w16_pnames_end:                 ; t_w16wrap skips [w16_pnames, here): data, not code
 section .w16ld
 w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
 %assign k 0
