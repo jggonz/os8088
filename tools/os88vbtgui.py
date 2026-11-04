@@ -3818,6 +3818,16 @@ class PartyTab(object):
                      lambda v: self._look(key, "ink", int(v)))
         lform.choice("Cursor", lk.get("cursor", "inverse"), ("inverse", "arrow"),
                      lambda v: self._look(key, "cursor", v))
+        # THE ITEM CHOSEN, placed of its own (125.5.1): blank, the menu's
+        # rows from its look
+        it = self._item_of_row()
+        if it is not None:
+            pl = (lk.get("places") or [])
+            pl = pl[it] if it < len(pl) else None
+            lform.entry("This item's column", "" if not pl else pl[0],
+                        lambda v, it=it: self._place(key, it, 0, v), width=5)
+            lform.entry("This item's row", "" if not pl else pl[1],
+                        lambda v, it=it: self._place(key, it, 1, v), width=5)
         # the band as the engine draws it
         pv = ttk.Frame(lf)
         pv.pack(side="left", padx=8)
@@ -3827,6 +3837,108 @@ class PartyTab(object):
         self.band = tk.Label(pv, bg="black")
         self.band.pack(anchor="w")
         self._preview(ci, where, sub)
+        self._layout()
+
+    # THE BAND'S LAYOUT (125.5.1): every part placed, and shown or not
+    LAYOUT_ROWS = (("The enemy's name", "enemy_col", "enemy_row", "enemy_show"),
+                   ("The party: first row, pitch", None, "party_row", None),
+                   ("A character's name", "name_col", None, "name_show"),
+                   ("The limit star", "limit_col", None, "limit_show"),
+                   ("HP", "hp_col", None, "hp_show"),
+                   ("MP (and the menus' costs)", "mp_col", None, "mp_show"),
+                   ("The message line", "msg_col", "msg_row", "msg_show"),
+                   ("The plain look's lines; divider", "divider_col", None,
+                    "lines_show"))
+
+    def _layout(self):
+        tk, ttk = self.app.tk, self.app.ttk
+        import vbtrules as V
+        lay = V.layout_of(self.app.proj)
+        own = self.app.proj.d.get("band_layout") or {}
+        lf = ttk.LabelFrame(self.body, text="The band's layout (every battle's "
+                            "band: columns in cells 0-39, rows in pixels from "
+                            "the band's top; blank: as it always was)",
+                            padding=4)
+        lf.pack(fill="x", pady=4)
+        g = ttk.Frame(lf)
+        g.pack(anchor="w")
+        for c, t in enumerate(("", "Column", "Row", "Shown")):
+            ttk.Label(g, text=t).grid(row=0, column=c, sticky="w", padx=4)
+        for r, (label, ck, rk, sk) in enumerate(self.LAYOUT_ROWS, 1):
+            ttk.Label(g, text=label).grid(row=r, column=0, sticky="w")
+            for c, k in ((1, ck), (2, rk)):
+                if label.startswith("The party"):
+                    k = ("party_row", "party_pitch")[c - 1]
+                if not k:
+                    continue
+                v = tk.StringVar(value=str(own[k]) if k in own else "")
+                e = ttk.Entry(g, textvariable=v, width=5)
+                e.grid(row=r, column=c, sticky="w", padx=4)
+                e.bind("<Return>", lambda ev, k=k, v=v: self._lay(k, v.get()))
+                e.bind("<FocusOut>", lambda ev, k=k, v=v: self._lay(k, v.get()))
+                ttk.Label(g, text="(%d)" % lay[k], foreground="grey40"
+                          ).grid(row=r, column=c, sticky="e")
+            if sk:
+                b = tk.IntVar(value=lay[sk])
+                ttk.Checkbutton(g, variable=b, command=lambda sk=sk, b=b:
+                                self._lay(sk, b.get())).grid(row=r, column=3)
+            if ck == "hp_col":
+                b2 = tk.IntVar(value=lay["hpmax_show"])
+                ttk.Checkbutton(g, text="with its most (/max)", variable=b2,
+                                command=lambda b2=b2: self._lay(
+                                    "hpmax_show", b2.get())).grid(
+                                        row=r, column=4, sticky="w")
+
+    def _lay(self, k, v):
+        own = dict(self.app.proj.d.get("band_layout") or {})
+        v = str(v).strip()
+        if v == "":
+            own.pop(k, None)
+        else:
+            try:
+                own[k] = int(v)
+            except ValueError:
+                return self.app.say("A number, or blank for the default")
+        if own != (self.app.proj.d.get("band_layout") or {}):
+            self.app.edit("set", ("band_layout",), own or None)
+
+    def _item_of_row(self):
+        """The selected row's place in its own menu, or None"""
+        if self.mrow is None or self.mrow >= len(self.rows):
+            return None
+        where, i, sub, text = self.rows[self.mrow]
+        if where == "top" and text.endswith(">"):
+            return None             # (a sub-menu's own row: its look's)
+        return i
+
+    def _place(self, key, it, k, v):
+        looks = dict(self.app.proj.d.get("menu_looks", {}))
+        lk = dict(looks.get(key, {}))
+        pl = list(lk.get("places") or [])
+        while len(pl) <= it:
+            pl.append(None)
+        cur = list(pl[it]) if pl[it] else [None, None]
+        v = str(v).strip()
+        try:
+            cur[k] = int(v) if v else None
+        except ValueError:
+            return self.app.say("A number, or blank")
+        if cur[0] is None and cur[1] is None:
+            pl[it] = None
+        else:
+            if cur[0] is None:
+                cur[0] = lk.get("col", 1)
+            if cur[1] is None:
+                cur[1] = lk.get("row", 4) + it * lk.get("pitch", 9)
+            pl[it] = cur
+        while pl and pl[-1] is None:
+            pl.pop()
+        if pl:
+            lk["places"] = pl
+        else:
+            lk.pop("places", None)
+        looks[key] = lk
+        self.app.edit("set", ("menu_looks",), looks)
 
     def _menu_of_row(self):
         if self.mrow is None or self.mrow >= len(self.rows):

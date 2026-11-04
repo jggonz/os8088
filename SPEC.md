@@ -237970,6 +237970,35 @@ those four by the builder (`os88vbt.band_picture`: the nearest, after a
 4x4 ordered dither), and `tools/vbtband.py` draws the band from the same
 bytes for the builder's preview.
 
+#### 125.5.1 The band's layout
+
+**Every part of the band has a place and may be hidden** (the project's
+`band_layout`, the Characters & menus tab's "The band's layout"; absent, the
+band as it always was): the enemy's name (its column, row, shown); the party
+(its first row, its pitch) and, on each character's line, the name, the
+limit star, HP (and its "/most") and MP, each a column and shown or not -
+hiding MP hides the menus' MP costs too; the message line (column, row,
+shown); and the plain look's lines (shown; the divider's column). Rows are
+pixels from the band's top, columns cells 0..39. A character's line is
+composed from its first shown field to its last, spaces between, so the
+turn's highlight is one bar; fields that overlap are warned of. The plain
+look's lower rule and divider are drawn above the message line, wherever it
+is. **A menu item may be placed of its own** (a look's `places`, [col, row]
+or null per item - the item chosen's column and row on the same tab):
+otherwise the menu's column and its row plus the pitch.
+
+In the rules block: the layout's 20 bytes in `vbtrules.LAYOUT`'s order,
+named by the header word at 56 (0 none - every block before it, and the
+engine's own defaults then: `vb_laydef`, the message on screen row 191),
+and the placed items, four bytes each (menu, item, column, row), counted at
+58 and named by the word at 60. The engine copies the layout at the
+battle's start (`vb_lay_init`) and draws every part from it
+(`vbband.inc`); the builder's preview (`vbtband.render`) draws from the
+same. `vbtlayout` holds them to each other PIXEL FOR PIXEL on MartyPC's
+XT - the engine's composed band against the preview drawn for the same
+moment with the engine's own glyphs, for the default layout, a custom one
+with an item placed, and one with MP and the message hidden.
+
 ### 125.6 The battle
 
 `apps/vbattle/vbrules.inc` and `vbgame.inc` play the RULES block (125.2.4);

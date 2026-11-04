@@ -16880,6 +16880,22 @@ SOAK = [
         "before and level with it after. Broken on purpose (an opening's "
         "sound taken as half scale) the bundle's two part again",
         needs=("ffmpeg",)),
+    Row("vbtlayout", "soak", py("tests/vbtlayout.py"), 90.0,
+        "SPEC.md 125.5.1: THE BAND'S LAYOUT, the owner's ask (place each "
+        "menu item and each band part; hide MP, the message). The rules "
+        "battle with the enemy's name, HP, MP, the message and the divider "
+        "moved, the limit star and HP's most hidden and a menu item placed "
+        "of its own - and again with MP and the message hidden - played to "
+        "its first menu on MartyPC's CGA XT: the engine's composed band IS "
+        "the preview's, pixel for pixel, drawn with the engine's own "
+        "glyphs. Broken on purpose (the message at its old fixed row) both "
+        "builds differ",
+        needs=("marty",)),
+    Row("vbtlayoutdef", "soak", py("tests/vbtlayout.py", "--arm",
+                                    "default"), 45.0,
+        "vbtlayout with NO layout: the band as it always was, the engine's "
+        "and the preview's the same pixel for pixel",
+        needs=("marty",)),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

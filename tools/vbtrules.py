@@ -43,6 +43,35 @@ MAX_CHARS, MAX_ACTS, MAX_MENUS, MAX_STANCES, MAX_POOLS, MAX_ITEMS, \
     MAX_IMGS = 4, 96, 32, 8, 255, 8, 8
 MAX_ITEMS_MENU, MAX_MOVES, MAX_RESP, MAX_POOL = 8, 6, 2, 7
 MAX_FOLLOW = 16                 # the enemy's FOLLOW-UPS (125.6.7)
+MAX_PLACES = 64                 # menu items placed one by one (125.5.1)
+# THE BAND'S LAYOUT (125.5.1): every part of the band at a column (cells,
+# 0..39) and a row (pixels from the band's top), each shown or hidden - in
+# this order, a byte each, in the rules block (header 56: its offset, 0
+# none, every older block). The defaults are the band as it always was
+LAYOUT = ("enemy_col", "enemy_row", "enemy_show", "party_row",
+          "party_pitch", "name_col", "name_show", "limit_col", "limit_show",
+          "hp_col", "hp_show", "hpmax_show", "mp_col", "mp_show", "msg_col",
+          "msg_row", "msg_show", "lines_show", "divider_col")
+LAYOUT_SZ = 20
+
+
+def layout_defaults(by):
+    """The band's layout as it always was, for a band from row BY"""
+    return dict(enemy_col=18, enemy_row=3, enemy_show=1, party_row=12,
+                party_pitch=9, name_col=18, name_show=1, limit_col=24,
+                limit_show=1, hp_col=25, hp_show=1, hpmax_show=1, mp_col=36,
+                mp_show=1, msg_col=1, msg_row=191 - by, msg_show=1,
+                lines_show=1, divider_col=16)
+
+
+def layout_of(proj):
+    """The project's band layout, every field (its band_layout over the
+    defaults)"""
+    lay = layout_defaults(proj.d["target"]["band"][1])
+    for k, v in (proj.d.get("band_layout") or {}).items():
+        if k in lay:
+            lay[k] = int(v)
+    return lay
 FOLLOW_SAME = 0xFF              # ...a follow-up's target: the same one
 NONE = 0xFF
 
@@ -364,6 +393,26 @@ def compile_rules(proj, clip_index, images=(), preview=False):
         b += bytes([need(aidx, x.get("after"), w, "action it follows"),
                     need(aidx, x.get("then"), w, "action"), rule, arg])
     table("fol", b)
+    # THE BAND'S LAYOUT (125.5.1), and the menu items placed one by one: a
+    # look's "places" [[col, row] or null per item]
+    lay = layout_of(proj)
+    for k in LAYOUT:
+        hi = 39 if k.endswith("_col") else 255
+        if not 0 <= lay[k] <= hi:
+            raise RulesError("the band's %s is %d, 0 to %d" % (k, lay[k], hi))
+    table("lay", bytes([lay[k] for k in LAYOUT]) + bytes(LAYOUT_SZ -
+                                                         len(LAYOUT)))
+    b = bytearray()
+    for mi, m in enumerate(menus):
+        for ii, pl in enumerate(m["look"].get("places") or []):
+            if pl and ii < len(m["items"]):
+                b += bytes([mi, ii, max(0, min(39, int(pl[0]))),
+                            max(0, min(255, int(pl[1])))])
+    if len(b) // 4 > MAX_PLACES:
+        raise RulesError("%d menu items placed, at most %d"
+                         % (len(b) // 4, MAX_PLACES))
+    nplace = len(b) // 4
+    table("place", b)
     if len(out) > RULES_MAX:
         raise RulesError("the rules are %d bytes, over %d" % (len(out), RULES_MAX))
 
@@ -390,6 +439,7 @@ def compile_rules(proj, clip_index, images=(), preview=False):
                      end_clip("victory"), end_clip("defeat"),
                      1 if d.get("seed") else 0, d.get("seed") or 0]))
     struct.pack_into("<BxH", out, 52, len(fol), tabs["fol"])
+    struct.pack_into("<HBxH", out, 56, tabs["lay"], nplace, tabs["place"])
     return bytes(out)
 
 
@@ -454,6 +504,12 @@ class Rules:
                                    count=struct.unpack_from("<H", r, 8)[0]))
         nf, of = struct.unpack_from("<BxH", b, 52)
         self.follow = [tuple(b[of + 4 * k:of + 4 * k + 4]) for k in range(nf)]
+        ol, npl, opl = struct.unpack_from("<HBxH", b, 56)
+        self.layout = dict(zip(LAYOUT, b[ol:ol + len(LAYOUT)])) if ol \
+            else None               # (None: the defaults, a block before it)
+        self.places = {(b[opl + 4 * k], b[opl + 4 * k + 1]):
+                       (b[opl + 4 * k + 2], b[opl + 4 * k + 3])
+                       for k in range(npl)}
 
 
 # --- the reference: the battle as the engine plays it ---------------------------------

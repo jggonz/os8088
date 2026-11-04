@@ -297,6 +297,26 @@ def inner(tmp):
        "C. the Sounds tab: %d sounds measured, the tick +3 dB, the "
        "suggestions applied (the opening's riser %.2f -> %.2f)"
        % (len(rows), riser0, riser1))
+    # THE BAND'S LAYOUT (125.5.1): MP hidden, the message moved, an item
+    # placed - on the Characters & menus tab, its preview following
+    pt = app.party_tab
+    app.nb.select(pt.f)
+    b0 = np.array(app.band_rgb())
+    pt._lay("mp_show", 0)
+    pt._lay("msg_row", "3")
+    pt.mrow = 1
+    pt._place(app.proj.d["characters"][0]["name"] + ":top", 1, 0, "24")
+    b1 = np.array(app.band_rgb())
+    lk = app.proj.d["menu_looks"][app.proj.d["characters"][0]["name"] + ":top"]
+    ok(app.proj.d["band_layout"] == {"mp_show": 0, "msg_row": 3}
+       and lk["places"][1][0] == 24 and not np.array_equal(b0, b1)
+       and not [x for x in app.proj.check() if x.where == "band_layout"],
+       "C. the band's LAYOUT set: MP hidden, the message moved, an item "
+       "placed (%s), the preview with it" % lk["places"])
+    pt._lay("mp_show", "")
+    pt._lay("msg_row", "")
+    ok(not app.proj.d.get("band_layout"), "C. ...and back to as it was")
+
     # FOLLOW-UPS (125.6.7): the Enemy tab's box, one added and set
     et = app.enemy_tab
     app.nb.select(et.f)

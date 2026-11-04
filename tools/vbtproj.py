@@ -48,6 +48,9 @@ A project file (version 1):
      "enemy":    {"name", stats, "stances": [STANCE], "victory", "defeat",
                   "start_stance"},
      "items":    [{"name", "count"}] - the party's, for an action's cost,
+     "band_layout": {vbtrules.LAYOUT key: value} - the band's parts placed
+                 and shown (125.5.1; absent: as it always was); a menu
+                 look's "places": [[col, row] | null per item],
      "images":   [{"name", "path", "col", "row", "dither"}] - band pictures,
      "band_image": an image's name, under the whole band, or null,
      "menu_looks": {"CHAR:top" | "CHAR:LABEL" | "CHAR:side": {"image",
@@ -808,6 +811,28 @@ class Project:
             for m in st["moves"]:
                 if m.get("rule", "alternate") not in RULES:
                     err("enemy.stances.%d" % si, "no rule %s" % m["rule"])
+        # THE BAND'S LAYOUT (125.5.1)
+        import vbtrules as V_
+        own = d.get("band_layout") or {}
+        for k in own:
+            if k not in V_.LAYOUT:
+                err("band_layout", "no part of the band called %s" % k)
+        lay = V_.layout_of(self)
+        f = []
+        if lay["name_show"]:
+            f.append(("the name", lay["name_col"], 6))
+        if lay["limit_show"]:
+            f.append(("the limit star", lay["limit_col"], 1))
+        if lay["hp_show"]:
+            f.append(("HP", lay["hp_col"], 11 if lay["hpmax_show"] else 4))
+        if lay["mp_show"]:
+            f.append(("MP", lay["mp_col"], 4))
+        for i, (n1, c1, w1) in enumerate(f):
+            for n2, c2, w2 in f[i + 1:]:
+                if c1 < c2 + w2 and c2 < c1 + w1:
+                    warn("band_layout", "%s (columns %d-%d) and %s (%d-%d) "
+                         "overlap" % (n1, c1, c1 + w1 - 1, n2, c2,
+                                      c2 + w2 - 1))
         # THE FOLLOW-UPS (125.6.7): after X, the next turn Y
         fol = e.get("follow_ups", [])
         nxt = {}

@@ -12,6 +12,102 @@
 COL_PARTY   equ 18
 ROW_MSG     equ 191
 BG_TEXT     equ 0xF0            ; a text colour's ground: the buffer's
+; THE BAND'S LAYOUT (125.5.1), [vb_lay]: vbtrules.LAYOUT's bytes, in order -
+; columns in cells, rows from the band's top
+LY_ECOL     equ 0
+LY_EROW     equ 1
+LY_ESHOW    equ 2
+LY_PROW     equ 3
+LY_PPITCH   equ 4
+LY_NCOL     equ 5
+LY_NSHOW    equ 6
+LY_LCOL     equ 7
+LY_LSHOW    equ 8
+LY_HCOL     equ 9
+LY_HSHOW    equ 10
+LY_HMAX     equ 11
+LY_MCOL     equ 12
+LY_MSHOW    equ 13
+LY_SCOL     equ 14
+LY_SROW     equ 15
+LY_SSHOW    equ 16
+LY_LINES    equ 17
+LY_DIV      equ 18
+LY_SZ       equ 20
+
+; vb_lay_init - [vb_lay] from the rules (header 56: its offset), or the
+; band as it always was (vb_laydef, the message on screen row 191), and
+; the party line's first and last column, [vb_plo] and [vb_phi]
+vb_lay_init:
+    push ds
+    pop es
+    mov di, vb_lay
+    mov cx, LY_SZ
+    mov si, [RL+RH_OLAY]
+    cld
+    or si, si
+    jz .def
+    add si, RL
+    rep movsb
+    jmp short .lohi
+.def:
+    mov si, vb_laydef
+    rep movsb
+    mov al, [vb_meta+VH_BAND+1]     ; (the band's first row)
+    mov dl, ROW_MSG & 0xFF
+    sub dl, al
+    mov [vb_lay+LY_SROW], dl
+.lohi:
+    mov byte [vb_plo], 40
+    mov byte [vb_phi], 0
+    cmp byte [vb_lay+LY_NSHOW], 0
+    je .l1
+    mov al, [vb_lay+LY_NCOL]
+    mov ah, 6
+    call .upd
+.l1:
+    cmp byte [vb_lay+LY_LSHOW], 0
+    je .l2
+    mov al, [vb_lay+LY_LCOL]
+    mov ah, 1
+    call .upd
+.l2:
+    cmp byte [vb_lay+LY_HSHOW], 0
+    je .l4
+    mov al, [vb_lay+LY_HCOL]
+    mov ah, 4
+    call .upd
+    cmp byte [vb_lay+LY_HMAX], 0
+    je .l4
+    mov al, [vb_lay+LY_HCOL]
+    add al, 4
+    mov ah, 7
+    call .upd
+.l4:
+    cmp byte [vb_lay+LY_MSHOW], 0
+    je .l5
+    mov al, [vb_lay+LY_MCOL]
+    mov ah, 4
+    call .upd
+.l5:
+    cmp byte [vb_phi], 40
+    jbe .r
+    mov byte [vb_phi], 40
+.r:
+    ret
+.upd:                               ; a field at AL, AH cells wide
+    cmp al, [vb_plo]
+    jae .u1
+    mov [vb_plo], al
+.u1:
+    add al, ah
+    cmp al, [vb_phi]
+    jbe .u2
+    mov [vb_phi], al
+.u2:
+    ret
+
+vb_laydef:  db 18, 3, 1, 12, 9, 18, 1, 24, 1, 25, 1, 1, 36, 1, 1, 0, 1, 1, 16, 0
 
 ; vb_by - AX = the band's first row (the header's)
 %macro VB_BY 0
@@ -35,25 +131,31 @@ vb_band_frame:
     call vb_blit_img
     jmp short .menu
 .plain:
-    VB_BY                           ; the plain look: rules at the band's
-    mov bx, ax                      ; second row and above the line
-    mov dx, 1
+    cmp byte [vb_lay+LY_LINES], 0   ; THE PLAIN LOOK (its lines may be off,
+    je .menu                        ; 125.5.1): rules at the band's second
+    mov dx, 1                       ; row and above the line, the divider
+    call .rule                      ; between
+    mov dl, [vb_lay+LY_SROW]
+    xor dh, dh
+    sub dx, 2
+    jb .menu
     call .rule
-    mov dx, ROW_MSG - 2
-    sub dx, bx
-    call .rule
-    mov dx, 3                       ; the divider, between menu and party
+    mov dx, 3
 .v:
-    mov ax, dx
-    add ax, bx
-    cmp ax, ROW_MSG - 3
-    jae .menu
+    mov al, [vb_lay+LY_SROW]
+    xor ah, ah
+    sub ax, 3
+    cmp dx, ax
+    jge .menu
     push dx
     mov ax, 80
     mul dx
     pop dx
     mov di, ax
-    add di, (COL_PARTY - 2) * 2
+    mov al, [vb_lay+LY_DIV]
+    xor ah, ah
+    shl ax, 1
+    add di, ax
     mov byte [es:di], 0x40
     inc dx
     jmp .v
@@ -270,6 +372,8 @@ vb_draw_menu:
     pop si
     cmp byte [si+AC_COST], C_MP
     jne .afford
+    cmp byte [vb_lay+LY_MSHOW], 0   ; (no MP in this battle: no cost shown)
+    je .afford
     mov ax, [si+AC_COSTN]
     mov di, vb_lbuf + 10
     push si
@@ -305,16 +409,47 @@ vb_draw_menu:
     add al, [si+MN_ROW]
     adc ah, 0
     mov dx, ax
-    VB_BY
-    add dx, ax
     mov cl, [si+MN_COL]
     xor ch, ch
+    call vb_placed                  ; (an item placed of its own, 125.5.1)
+    VB_BY
+    add dx, ax
     mov si, vb_lbuf
     push bp
     call vb_text
     pop bp
     inc bp
     jmp .l
+
+; vb_placed - item BP of menu [vb_menu]: CX = its column, DX = its row in
+; the band, from its own place when the rules give it one (header 58: how
+; many, 60: where). AX, SI spent; BX kept
+vb_placed:
+    push bx
+    mov bl, [RL+RH_NPLACE]
+    or bl, bl
+    jz .out
+    mov si, [RL+RH_OPLACE]
+    add si, RL
+.s:
+    mov al, [si]
+    cmp al, [vb_menu]
+    jne .n
+    mov ax, bp
+    cmp al, [si+1]
+    jne .n
+    mov cl, [si+2]
+    xor ch, ch
+    mov dl, [si+3]
+    xor dh, dh
+    jmp short .out
+.n:
+    add si, 4
+    dec bl
+    jnz .s
+.out:
+    pop bx
+    ret
 
 ; vb_draw_party - the enemy's name (and stance, when it has more than one),
 ; then each character: name, HP/most, MP; whose turn it is, or who is
@@ -343,13 +478,18 @@ vb_draw_party:
     mov byte [di], ' '
 .en:
     mov byte [vb_lbuf+22], 0
+    cmp byte [vb_lay+LY_ESHOW], 0
+    je .ne
     VB_BY
-    add ax, 3
+    add al, [vb_lay+LY_EROW]
+    adc ah, 0
     mov dx, ax
-    mov cx, COL_PARTY
+    mov cl, [vb_lay+LY_ECOL]
+    xor ch, ch
     mov si, vb_lbuf
     mov bh, BG_TEXT + 2             ; red
     call vb_text
+.ne:
     xor bp, bp
 .m:
     mov ax, bp
@@ -357,42 +497,72 @@ vb_draw_party:
     jb .c
     ret
 .c:
+    ; A CHARACTER'S LINE, laid out (125.5.1, vbtband.party_line): each
+    ; field shown at its column, spaces between, from [vb_plo] to [vb_phi]
+    mov al, [vb_phi]
+    sub al, [vb_plo]
+    jbe .skip                       ; (nothing of the party shown)
     push ds
     pop es
-    mov di, vb_lbuf                 ; 22 cells: name 6, *, HP 4/4, MP 4
-    mov cx, 22
+    mov di, vb_lbuf
+    mov cl, al
+    xor ch, ch
     mov al, ' '
+    cld
     rep stosb
-    mov byte [di], 0
     mov bx, bp
     call vb_char
-    push si
-    mov di, vb_lbuf
+    mov [vb_chrec], si
+    cmp byte [vb_lay+LY_NSHOW], 0
+    je .f1
+    mov al, [vb_lay+LY_NCOL]
+    call .at
     mov cx, 6
     call vb_strncpy
     mov byte [di], ' '
+.f1:
+    cmp byte [vb_lay+LY_LSHOW], 0
+    je .f2
     mov bx, bp
     cmp byte [vb_lim+bx], 100
-    jb .nl
-    mov byte [vb_lbuf+6], '*'
-.nl:
+    jb .f2
+    mov al, [vb_lay+LY_LCOL]
+    call .at
+    mov byte [di], '*'
+.f2:
+    cmp byte [vb_lay+LY_HSHOW], 0
+    je .f4
+    mov al, [vb_lay+LY_HCOL]
+    call .at
     mov bx, bp
     shl bx, 1
     mov ax, [vb_hp+bx]
-    mov di, vb_lbuf+7
     call vb_rjust4
-    pop si
-    mov byte [vb_lbuf+11], '/'
+    cmp byte [vb_lay+LY_HMAX], 0
+    je .f4
+    mov al, [vb_lay+LY_HCOL]
+    add al, 4
+    call .at
+    mov byte [di], '/'
+    inc di
+    mov si, [vb_chrec]
     mov ax, [si+CH_HP]
-    mov di, vb_lbuf+12
     call vb_utoa
     mov byte [di], ' '
+.f4:
+    cmp byte [vb_lay+LY_MSHOW], 0
+    je .f5
+    mov al, [vb_lay+LY_MCOL]
+    call .at
     mov bx, bp
     shl bx, 1
     mov ax, [vb_mp+bx]
-    mov di, vb_lbuf+18
     call vb_rjust4
-    mov byte [vb_lbuf+22], 0
+.f5:
+    mov bl, [vb_phi]
+    sub bl, [vb_plo]
+    xor bh, bh
+    mov byte [vb_lbuf+bx], 0
     mov bh, BG_TEXT + 3
     mov bx, bp
     shl bx, 1
@@ -418,20 +588,29 @@ vb_draw_party:
 .put:
     push bx
     mov ax, bp
-    mov cl, 9
+    mov cl, [vb_lay+LY_PPITCH]
     mul cl
-    add ax, 12
+    add al, [vb_lay+LY_PROW]
+    adc ah, 0
     mov dx, ax
     VB_BY
     add dx, ax
     pop bx
-    mov cx, COL_PARTY
+    mov cl, [vb_plo]
+    xor ch, ch
     mov si, vb_lbuf
     push bp
     call vb_text
     pop bp
+.skip:
     inc bp
     jmp .m
+.at:                                ; DI = the line at column AL
+    sub al, [vb_plo]
+    xor ah, ah
+    mov di, vb_lbuf
+    add di, ax
+    ret
 
 ; vb_rjust4 - AX right-justified in four cells at DS:DI
 vb_rjust4:
@@ -477,8 +656,16 @@ vb_draw_msg:
     stosb
     jmp .c
 .d:
-    mov dx, ROW_MSG
-    mov cx, 1
+    cmp byte [vb_lay+LY_SSHOW], 0   ; (no message line in this battle)
+    jne .sh
+    ret
+.sh:
+    VB_BY
+    add al, [vb_lay+LY_SROW]
+    adc ah, 0
+    mov dx, ax
+    mov cl, [vb_lay+LY_SCOL]
+    xor ch, ch
     mov si, vb_lbuf
     mov bh, BG_TEXT + 3
     jmp vb_text

@@ -39,6 +39,9 @@ RH_SEED     equ 50
 RH_NFOL     equ 52              ; the enemy's FOLLOW-UPS (125.6.7): how many,
 RH_OFOL     equ 54              ; and their table - after, then, rule, arg
 FOL_SAME    equ 0xFF            ; ...a follow-up's rule: the same target
+RH_OLAY     equ 56              ; THE BAND'S LAYOUT (125.5.1): its offset, 0
+RH_NPLACE   equ 58              ; none; menu items placed of their own: how
+RH_OPLACE   equ 60              ; many, and where (menu, item, col, row)
 ; a character
 CH_NAME     equ 0
 CH_HP       equ 8

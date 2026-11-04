@@ -3576,6 +3576,10 @@ VB_VAR vb_ddef, 2
 VB_VAR vb_msg, 2
 VB_VAR vb_mbuf, 48
 VB_VAR vb_lbuf, 48
+VB_VAR vb_lay, 20                   ; the band's layout (vbband.inc, 125.5.1)
+VB_VAR vb_plo, 1                    ; ...the party line's first column
+VB_VAR vb_phi, 1                    ; ...and its end
+VB_VAR vb_chrec, 2                  ; ...a character's record, composing
 VB_VAR vb_nbuf, 8
 VB_VAR vb_tcol, 2
 VB_VAR vb_trow, 2

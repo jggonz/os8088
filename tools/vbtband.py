@@ -47,6 +47,7 @@ class Band(object):
         self.img = images
         self.by = by
         self.px = np.zeros((200 - by, 320), np.uint8)
+        self.lay = self.R.layout or V.layout_defaults(by)   # (125.5.1)
 
     def blit(self, k):
         b = self.R.b
@@ -69,11 +70,13 @@ class Band(object):
         self.px[:] = 0
         if self.R.band_img != 0xFF:
             self.blit(self.R.band_img)
-        else:
-            self.px[1, :] = 1
-            self.px[ROW_MSG - 2 - self.by, :] = 1
-            for y in range(3, ROW_MSG - 3 - self.by):
-                self.px[y, (COL_PARTY - 2) * 8] = 1     # (40h: the byte's first pixel)
+        elif self.lay["lines_show"]:    # THE PLAIN LOOK: a rule at its
+            L, h = self.lay, len(self.px)   # second row and above the line,
+            self.px[1, :] = 1               # the divider between
+            if 0 <= L["msg_row"] - 2 < h:
+                self.px[L["msg_row"] - 2, :] = 1
+            for y in range(3, min(h, L["msg_row"] - 3)):
+                self.px[y, L["divider_col"] * 8] = 1    # (40h: its first pixel)
         if menu is not None and self.R.menus[menu]["img"] != 0xFF:
             self.blit(self.R.menus[menu]["img"])
         self.bg = self.px.copy()
@@ -102,8 +105,36 @@ class Band(object):
                             else ground
 
 
+def party_line(L, name, star, hp, most, mp):
+    """A character's line of the party, laid out (125.5.1): (its text, its
+    first column) - its fields at their columns, spaces between, so that a
+    highlight is one bar from its first field to its last. The engine's
+    vb_draw_party composes the same"""
+    f = []
+    if L["name_show"]:
+        f.append((L["name_col"], name[:6].ljust(6)))
+    if L["limit_show"]:
+        f.append((L["limit_col"], "*" if star else " "))
+    if L["hp_show"]:
+        f.append((L["hp_col"], "%4d" % hp))
+        if L["hpmax_show"]:
+            f.append((L["hp_col"] + 4, ("/%d" % most).ljust(7)))
+    if L["mp_show"]:
+        f.append((L["mp_col"], "%4d" % mp))
+    if not f:
+        return "", 0
+    lo = min(c for c, _ in f)
+    hi = min(40, max(c + len(t) for c, t in f))
+    line = [" "] * (hi - lo)
+    for c, t in sorted(f):          # (left to right: a later one wins)
+        for j, ch in enumerate(t):
+            if c + j < hi:
+                line[c - lo + j] = ch
+    return "".join(line), lo
+
+
 def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
-           state=None):
+           state=None, raw=False):
     """A PIL image of the band for character CHAR with MENU open (None: its
     top menu; "side", or a sub-menu's label), its cursor on item CURSOR,
     aiming at TARGET (a character) when not None, MESSAGE on the line"""
@@ -128,6 +159,7 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
     b.ground(mi)
     m = rules.menus[mi]
     st = state or V.Sim(rules)
+    L = b.lay
     for i, (kind, k) in enumerate(m["items"]):
         line = ""
         if m["flags"] & V.MF_ARROW:
@@ -138,32 +170,40 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
         else:
             a = rules.acts[k]
             line += a["label"]
-            if a["cost"] == V.COST_MP:
+            if a["cost"] == V.COST_MP and L["mp_show"]:
                 line = line.ljust(10) + "%dMP" % a["cost_n"]
             if not st.can_pay(k, char):
                 ink = 2
         line = line.ljust(15)[:15]
-        row = by + m["row"] + i * m["pitch"]
+        col, row = m["col"], by + m["row"] + i * m["pitch"]
+        if (mi, i) in rules.places:     # AN ITEM PLACED of its own (125.5.1)
+            col, prow = rules.places[(mi, i)]
+            row = by + prow
         if not (m["flags"] & V.MF_ARROW) and i == cursor:
-            b.text(line, m["col"], row, 0, ground=3)
+            b.text(line, col, row, 0, ground=3)
         else:
-            b.text(line, m["col"], row, ink)
-    top = rules.ename[:10]
-    if rules.nstance > 1:
-        top += " " + rules.stances[st.stance]["name"]
-    b.text(top.ljust(22)[:22], COL_PARTY, by + 3, 2)
+            b.text(line, col, row, ink)
+    if L["enemy_show"]:
+        top = rules.ename[:10]
+        if rules.nstance > 1:
+            top += " " + rules.stances[st.stance]["name"]
+        b.text(top.ljust(22)[:22], L["enemy_col"], by + L["enemy_row"], 2)
     for i, c in enumerate(rules.chars):
-        hp, mx = st.hp[i], c["hp"]
-        line = "%-6s%s%4d/%-6d%4d" % (c["name"][:6], "*" if st.lim[i] >= 100 else " ",
-                                      hp, mx, st.mp[i])
-        row = by + 12 + 9 * i
-        if hp == 0:
-            b.text(line[:22], COL_PARTY, row, 2)
+        line, lo = party_line(L, c["name"], st.lim[i] >= 100, st.hp[i],
+                              c["hp"], st.mp[i])
+        if not line:
+            continue
+        row = by + L["party_row"] + L["party_pitch"] * i
+        if st.hp[i] == 0:
+            b.text(line, lo, row, 2)
         elif (target is not None and i == target) or (target is None and i == char):
-            b.text(line[:22], COL_PARTY, row, 0, ground=3)
+            b.text(line, lo, row, 0, ground=3)
         else:
-            b.text(line[:22], COL_PARTY, row, 3)
-    msg = message if message is not None else "%s appears!" % rules.ename
-    b.text(msg.ljust(38)[:38], 1, ROW_MSG, 3)
+            b.text(line, lo, row, 3)
+    if L["msg_show"]:
+        msg = message if message is not None else "%s appears!" % rules.ename
+        b.text(msg.ljust(38)[:38], L["msg_col"], by + L["msg_row"], 3)
+    if raw:                         # (the pixels' indexes, 0..3: a test's)
+        return b.px
     rgb = np.array(A.palette_rgb(d["target"]["palette"]), np.uint8)[b.px]
     return Image.fromarray(rgb)
