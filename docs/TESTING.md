@@ -1592,7 +1592,7 @@ document here denied until 2026-10-19. The `make <machine>` targets below
 launch the macOS app at `$(BOX)` and are still for a person watching. CLAUDE.md
 carries the target list, one per `vm/` directory (`make xt`, `xt-640`,
 `pc5150`, `xt-cga`, `xt-hercules`, `xt-ega`, `xt-multimon`, `xt-mfm`, `286`,
-`286-525`, `386sx`, `386`, `386-ps2`, `486`, `pentium`, and the application
+`286-525`, `386sx`, `386`, `386-ps2`, `486`, `pentium`, `pentium-pciether` (kern_mega + an RTL8139C+, SPEC.md 125.6), and the application
 machines).
 
 **`pc5150` is not one of those.** It is a copy of the fork owner's own 86Box
