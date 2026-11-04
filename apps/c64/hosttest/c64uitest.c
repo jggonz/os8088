@@ -572,8 +572,10 @@ void os88_task_alive(void *win)
     }
 }
 static char last_toast[64];
+static long n_toast;
 int  os88_toast(const char *t, int ticks)
 {
+    n_toast++;
     strncpy(last_toast, t, sizeof(last_toast) - 1);
     return 0;
 }
@@ -628,9 +630,20 @@ static unsigned h_rom_seg = SEG_ROM;    /* where os88_part_seg says the ROM is:
 #define H_BIGSEG 0xA000u
 static unsigned char h_big[200 * 1024];
 static unsigned h_big_paras;
+/* THE COLOUR BRACKET'S GLASS (C64-SPEC 9.12): a real 320x200 framebuffer at
+ * a fictional segment, so what c64_fsx_put wrote can be read back */
+#define H_FSX_SEG 0xE000u                   /* (not H_BIGSEG's 0xA000) */
+static unsigned char h_fsx_fb[320 * 200];
+static int h_fsx_mask;                       /* no FSXM_VGA13 unless a row says */
+static int h_fsx_in, h_fsx_runs, h_fsx_modes, h_fsx_border = -1;
+static long h_fsx_drawn;                     /* drawing calls INSIDE the entry */
+static int h_fsx_keyq[16];
+static int h_fsx_keyn, h_fsx_keyi;
+
 static unsigned char *segbase(unsigned seg)
 {
     int i;
+    if (seg == H_FSX_SEG) return h_fsx_fb;
     if (h_big_paras && seg >= H_BIGSEG && seg < H_BIGSEG + h_big_paras)
         return h_big + (long)(seg - H_BIGSEG) * 16;
     if (seg == SEG_RAM) return ram;
@@ -640,6 +653,129 @@ static unsigned char *segbase(unsigned seg)
             return scratch[i];
     return 0;
 }
+
+int os88_fsx_caps(void *win, int *kind)
+{
+    (void)win;
+    if (kind)
+        *kind = 0;
+    return h_fsx_mask;
+}
+
+static long h_draws(void)
+{
+    return (long)n_blit + n_fill + n_scroll + n_run + n_str + n_toast;
+}
+int os88_fsx_run(void (*entry)(void), void *win, int flags)
+{
+    long d0;
+
+    (void)flags;
+    if (h_fsx_in)
+        return -1;
+    h_fsx_runs++;
+    h_fsx_in = 1;
+    d0 = h_draws();
+    entry();
+    h_fsx_drawn = h_draws() - d0;
+    h_fsx_in = 0;
+    if (win)
+        os88_paint(win);                /* SPEC.md 53.6 step 4: the desktop
+                                         * repainted, nested, before the
+                                         * return - the lock is the caller's */
+    return 0;
+}
+
+int os88_fsx_mode(int id, void *fsi)
+{
+    unsigned char *b = (unsigned char *)fsi;
+
+    if (!h_fsx_in || !(h_fsx_mask & (1 << id)))
+        return -1;
+    h_fsx_modes++;
+    memset(h_fsx_fb, 0, sizeof(h_fsx_fb));
+    memset(b, 0, OS88_FSI_SIZE);
+    b[OS88_FSI_SEG] = (unsigned char)(H_FSX_SEG & 0xFF);
+    b[OS88_FSI_SEG + 1] = (unsigned char)(H_FSX_SEG >> 8);
+    b[OS88_FSI_STRIDE] = 320 & 0xFF;
+    b[OS88_FSI_STRIDE + 1] = 320 >> 8;
+    b[OS88_FSI_BPP] = 8;
+    b[OS88_FSI_MODE] = (unsigned char)id;
+    return 0;
+}
+
+int os88_fsx_wait(int kind)
+{
+    (void)kind;
+    if (!h_fsx_in)
+        return -1;
+    the_ticks++;                        /* a frame is a tick */
+    return 0;
+}
+
+/* c64fsx.inc's routines, in C (C64-SPEC 9.12); c64memtest runs the shipping
+ * ones on a real x86 */
+void c64_c8glyph(unsigned char *gb, const unsigned char *xm, int n,
+                 unsigned gseg, unsigned goff, int mask)
+{
+    const unsigned char *g = segbase(gseg);
+    int c, y;
+    for (c = 0; c < n; c++)
+        for (y = 0; y < 8; y++)
+            gb[c * 8 + y] = g[(goff + (xm[c] & mask) * 8 + y) & 0xFFFF];
+}
+void c64_c8row(unsigned char *dst, const unsigned char *gb,
+               const unsigned char *k0, const unsigned char *k1,
+               const unsigned char *k2, const unsigned char *k3,
+               const unsigned char *mc, int n)
+{
+    int c, y, x;
+    for (c = 0; c < n; c++)
+        for (y = 0; y < 8; y++) {
+            unsigned b = gb[c * 8 + y];
+            unsigned char *d = dst + y * 320 + c * 8;
+            for (x = 0; x < 8; x++) {
+                if (!mc[c]) {
+                    d[x] = ((b << x) & 0x80) ? k1[c] : k0[c];
+                } else {
+                    unsigned p = (b >> (6 - (x & 6))) & 3;
+                    d[x] = p == 0 ? k0[c] : p == 1 ? k1[c] : p == 2 ? k2[c] : k3[c];
+                }
+            }
+        }
+}
+void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
+               int lo, int hi, const unsigned char *cols, int mc, int xs)
+{
+    int b, k, w = xs ? 2 : 1;
+    for (b = 0; b < 24; b++) {
+        unsigned byte = data[b >> 3];
+        int c = -1;
+        if (!mc) {
+            if ((byte << (b & 7)) & 0x80)
+                c = cols[2];
+        } else {
+            unsigned p = (byte >> (6 - (b & 6))) & 3;
+            if (p)
+                c = cols[p];
+        }
+        for (k = 0; k < w; k++, x++)
+            if (c >= 0 && x >= lo && x < hi)
+                dst[x] = (unsigned char)c;
+    }
+}
+void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n)
+{
+    memcpy(segbase(seg) + off, src, n);
+}
+unsigned c64_fsx_key(void)
+{
+    if (h_fsx_keyi >= h_fsx_keyn)
+        return 0xFFFF;
+    return (unsigned)(h_fsx_keyq[h_fsx_keyi++] & 0xFFFF);
+}
+void c64_fsx_dac(void) { }
+void c64_fsx_border(int c) { h_fsx_border = c & 15; }
 
 static long segcap(unsigned seg)
 {
@@ -2756,6 +2892,117 @@ int main(int argc, char **argv)
     if (fs_on)
         fail("Preferences > Fullscreen did not leave fullscreen");
     audit("after leaving fullscreen");
+
+    /* --- THE COLOUR SCREEN (C64-SPEC 9.12). On a display with FSXM_VGA13,
+     * Alt+D is the bracket: the window does not go WF_FULL, the C64's
+     * 320x200 goes into the framebuffer one byte a pixel, nothing draws
+     * through a desktop slot inside, and Alt+D comes back. Each pixel below
+     * is read off the modelled framebuffer. Verified red with the text arm's
+     * two colours swapped in c64_fsx_compose, with the sprite pass taken out
+     * of c64_fsx_frame, and with c64_say's toast fence removed. c64memtest
+     * runs the shipping c64fsx.inc composers on a real x86. */
+    {
+        int j, x, rt;
+        unsigned g;
+        static unsigned char save_ram[0x2001], save_col0;
+        memcpy(save_ram, ram, sizeof(save_ram));    /* (the rows after this
+                                                     * one read the screen) */
+        save_col0 = c64_col[0];
+        c64_io_wr(0xD021, 6);               /* blue paper */
+        c64_io_wr(0xD020, 14);              /* light blue border */
+        c64_io_wr(0xD018, 0x15);
+        c64_io_wr(0xD011, 0x1B);
+        c64_latch(0);
+        c64_latch(0);
+        c64_wr(0x0400, 0x01);               /* an 'A'... */
+        c64_col[0] = 2;                     /* ...in red */
+        h_fsx_mask = 1 << OS88_FSXM_VGA13;
+        h_fsx_keyq[0] = 0x1E61;             /* 'a', for the machine */
+        h_fsx_keyq[1] = 0x1100;             /* Alt+W, which SAYS "Warp mode
+                                             * on." - a toast the fence must
+                                             * hold back - and again, off */
+        h_fsx_keyq[2] = 0x1100;
+        h_fsx_keyq[3] = 0xFFFF;             /* (a pass with no key: a frame) */
+        h_fsx_keyq[4] = 0x2000;             /* Alt+D */
+        h_fsx_keyn = 5;
+        h_fsx_keyi = 0;
+        rt = c64_ring_t;
+        h_fsx_runs = 0;
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);           /* Alt+D */
+        os88_gfx_unlock();
+        if (h_fsx_runs != 1 || h_fsx_modes < 1 || fs_on)
+            fail("Alt+D on a VGA did not run the colour bracket - or went "
+                 "WF_FULL as well (9.12)");
+        if (c64_warp)
+            fail("Alt+W twice inside the colour bracket did not toggle warp "
+                 "on and off again");
+        if (h_fsx_drawn != 0)
+            fail("something called a desktop drawing slot inside the colour "
+                 "bracket - SPEC.md 53.7 forbids it after the mode set");
+        if (h_fsx_border != 14)
+            fail("the border is not $D020's colour in the overscan register");
+        g = rom[0x4000 + 8];                /* the CHARGEN's 'A', line 0 */
+        for (x = 0; x < 8; x++)
+            if (h_fsx_fb[x] != (((g << x) & 0x80) ? 2 : 6))
+                fail("a text cell is not its glyph in colour RAM's red on "
+                     "$D021's blue (9.12)");
+        if (c64_ring_t == rt)
+            fail("a key typed inside the colour bracket did not reach the "
+                 "machine's key ring");
+        if (c64_fsx_up)
+            fail("the bracket left c64_fsx_up set: no toast would ever be "
+                 "raised again");
+
+        /* ...a multicolour bitmap byte, with sprite 0 over cells 2-4 */
+        c64_io_wr(0xD018, 0x18);
+        c64_io_wr(0xD011, 0x3B);
+        c64_io_wr(0xD016, c64_vic[0x16] | 0x10);
+        c64_wr(0x0400, 0x12);               /* 01 = white, 10 = red */
+        c64_col[0] = 5;                     /* 11 = green */
+        c64_wr(0x2000, 0x1B);               /* pairs 00 01 10 11 */
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0);
+        c64_wr(0x0340, 0xFF);
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 7);               /* yellow */
+        c64_io_wr(0xD000, 24 + 16);
+        c64_io_wr(0xD001, 50);
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        h_fsx_keyq[0] = 0xFFFF;
+        h_fsx_keyq[1] = 0x2000;
+        h_fsx_keyn = 2;
+        h_fsx_keyi = 0;
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);
+        os88_gfx_unlock();
+        {
+            static const unsigned char want[8] = { 6, 6, 1, 1, 2, 2, 5, 5 };
+            for (x = 0; x < 8; x++)
+                if (h_fsx_fb[x] != want[x])
+                    fail("a multicolour bitmap byte is not paper, high nibble, "
+                         "low nibble, colour RAM in colour (9.12)");
+        }
+        for (x = 16; x < 24; x++)
+            if (h_fsx_fb[x] != 7)
+                fail("sprite 0 is not drawn in its colour over the bitmap "
+                     "(9.12)");
+        c64_io_wr(0xD015, 0);
+        c64_io_wr(0xD016, c64_vic[0x16] & ~0x10);
+        c64_io_wr(0xD011, 0x1B);
+        c64_io_wr(0xD018, 0x15);
+        c64_latch(0);
+        c64_latch(0);
+        h_fsx_mask = 0;
+        for (j = 0; j < (int)sizeof(save_ram); j++)
+            if (ram[j] != save_ram[j])
+                c64_wr(j, save_ram[j]);
+        c64_col[0] = save_col0;
+        c64_dirty_all();
+        flush_now();
+    }
     cost_begin();
     flush_now();
     if (n_blit - b_blit || n_band_calls - b_bandc)

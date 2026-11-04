@@ -75,6 +75,12 @@
                                     ; against the lazy arm: 768 image bytes
                                     ; and 1,023 file bytes smaller, and one
                                     ; cluster fewer on every c64disk geometry
+%define CC_HAS_FSX                  ; THE EXCLUSIVE BRACKET (SPEC.md 53): on a
+                                    ; display with FSXM_VGA13, Preferences >
+                                    ; Fullscreen is the C64 in COLOUR, its
+                                    ; 320x200 window one byte a pixel
+                                    ; (C64-SPEC 9.12) - the four os88_fsx_*
+                                    ; thunks, APPLE2's idiom
 %define CC_ICON "c64/icon.inc"      ; the 16x16 breadbin, drawn for this port
 
 %define CC_HAS_PARTS                ; THE ROM IS IN THE PACKAGE (C64-SPEC 1.4,
@@ -157,6 +163,8 @@ section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
                                     ; and the core's scratch (C64-SPEC 3.5/3.6)
 %include "c64/c64band.inc"          ; the 1bpp composers, the span compare and
                                     ; the row signature (C64-SPEC 9.5)
+%include "c64/c64fsx.inc"           ; ...and the colour screen's 8bpp ones,
+                                    ; inside the FSXM_VGA13 bracket (C64-SPEC 9.12)
 
 ; -----------------------------------------------------------------------------
 ; unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,

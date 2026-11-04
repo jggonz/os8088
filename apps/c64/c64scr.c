@@ -2428,3 +2428,291 @@ static void c64_blank_rect(void *win, int x1, int y1, int x2, int y2)
         return;
     c64_force_rows(r0, r1, c0, c1);
 }
+
+/* ==========================================================================
+ * THE COLOUR SCREEN (C64-SPEC 9.12): FSXM_VGA13 inside SPEC.md 53's bracket.
+ *
+ * THE BRACKET'S RULES, obeyed by hand here as APPLE2-SPEC 13.3 obeys them
+ * (nothing in the toolchain enforces them):
+ *  1. c64_fsx_main is a plain RESIDENT function whose address is taken -
+ *     never an ovl_ (tools/cc8086.py refuses that by name).
+ *  2. After os88_fsx_mode no drawing slot is called: c64_say and c64_jam
+ *     test c64_fsx_up and leave the toast out, and nothing else the machine
+ *     can reach draws.
+ *  3. Keys are POLLED (c64_fsx_key, int 16h); no event is dispatched in here.
+ *     The key-up half is os88_key_down's map, which the IRQ1 handler keeps
+ *     whatever the UI task is doing - c64_kbd_poll reads it as in the window.
+ *  4. Idle is os88_fsx_wait, never os88_task_sleep.
+ *  5. Nothing touches PIT channel 0, the sound ports or an int 10h mode set;
+ *     the DAC and the overscan register are the app's in a foreign mode.
+ *  6. The exit is this function returning, on Alt+D or Alt+Enter - the
+ *     fullscreen chords of 9.8, for 9.8's reason: the C64 owns F and Esc.
+ * ========================================================================*/
+static int c64_fsx_id = -1;                 /* FSXM_VGA13, when the display has it */
+static int c64_fsx_ok;                      /* the glass has had a whole frame */
+static int c64_fsx_bord;                    /* the overscan colour last set */
+static unsigned c64_fsx_seg;                /* the framebuffer */
+static unsigned c64_fsx_tick;               /* the tick of the last frame */
+static void *c64_fsx_win;
+static char c64_fsi[OS88_FSI_SIZE];
+static unsigned char c64_b8[320 * 8];       /* one 8bpp band (9.12) */
+static unsigned char c64_k0[C64_COLS], c64_k1[C64_COLS];
+static unsigned char c64_k2[C64_COLS], c64_k3[C64_COLS];
+static unsigned char c64_kmc[C64_COLS];
+static unsigned char c64_scol[4];           /* a sprite's 0, $D025, own, $D026 */
+
+/* c64_fsx_avail - whether the display this window is on offers FSXM_VGA13.
+ * A FACT and not a guess (SPEC.md 47): os88_fsx_caps answers the ids that
+ * are settable THERE, and fsx_mode refuses on the same test */
+static int c64_fsx_avail(void *win)
+{
+    static int kind;
+    int mask;
+
+    c64_fsx_id = -1;
+    mask = os88_fsx_caps(win, &kind);
+    if (mask > 0)
+        if (mask & (1 << OS88_FSXM_VGA13))
+            c64_fsx_id = OS88_FSXM_VGA13;
+    return (c64_fsx_id >= 0) ? 1 : 0;
+}
+
+/* c64_fsx_compose - row ROW's cells F..L into c64_b8 at colour: one
+ * c64_c8row call with the per-cell colours each mode names (9.12's table) */
+static void c64_fsx_compose(int row, int f, int l)
+{
+    unsigned char *rv, *col;
+    int n, c, mode, bg, a, code;
+    unsigned gseg;
+
+    rv = c64_rv[row];
+    mode = c64_rmode[row];
+    bg = rv[0x21] & 15;
+    n = l - f + 1;
+    col = c64_col + C64_X40(row);
+    c64_zcopy_out(c64_xm + f, c64_rmb[row] + C64_X40(row) + f, n);
+    if (mode & 2) {
+        c64_zcopy_out(c64_xb + (f << 3),
+                      c64_rbm[row] + C64_X320(row) + (f << 3), n << 3);
+    } else if (mode < 5) {
+        gseg = c64_rcrom[row] ? c64_m.romseg : c64_m.ramseg;
+        c64_c8glyph(c64_xb + (f << 3), c64_xm + f, n, gseg, c64_rco[row],
+                    (mode == 4) ? 0x3F : 0xFF);
+    }
+    for (c = f; c <= l; c++) {
+        code = c64_xm[c];
+        a = col[c] & 15;
+        c64_kmc[c] = 0;
+        c64_k0[c] = (unsigned char)bg;
+        switch (mode) {
+        case 0:                             /* text: colour RAM on the paper */
+            c64_k1[c] = (unsigned char)a;
+            break;
+        case 4:                             /* ECM: the paper the code picks */
+            c64_k0[c] = (unsigned char)(rv[0x21 + (code >> 6)] & 15);
+            c64_k1[c] = (unsigned char)a;
+            break;
+        case 1:                             /* multicolour text */
+            if (a & 8) {
+                c64_kmc[c] = 1;
+                c64_k1[c] = (unsigned char)(rv[0x22] & 15);
+                c64_k2[c] = (unsigned char)(rv[0x23] & 15);
+                c64_k3[c] = (unsigned char)(a & 7);
+            } else {
+                c64_k1[c] = (unsigned char)(a & 7);
+            }
+            break;
+        case 2:                             /* hires bitmap */
+            c64_k1[c] = (unsigned char)(code >> 4);
+            c64_k0[c] = (unsigned char)(code & 15);
+            break;
+        case 3:                             /* multicolour bitmap */
+            c64_kmc[c] = 1;
+            c64_k1[c] = (unsigned char)(code >> 4);
+            c64_k2[c] = (unsigned char)(code & 15);
+            c64_k3[c] = (unsigned char)a;
+            break;
+        default:                            /* 5, 6, 7: the VIC shows black */
+            c64_k0[c] = 0;
+            c64_k1[c] = 0;
+        }
+    }
+    c64_c8row(c64_b8 + (f << 3), c64_xb + (f << 3), c64_k0 + f, c64_k1 + f,
+              c64_k2 + f, c64_k3 + f, c64_kmc + f, n);
+}
+
+/* c64_fsx_sprites - row ROW's sprites over c64_b8, pixels of cells F..L
+ * only (9.11's geometry, 9.12's colours) */
+static void c64_fsx_sprites(int row, int f, int l)
+{
+    unsigned char *rv;
+    int k, y, y0, y1, sl, j;
+
+    rv = c64_rv[row];
+    if (rv[0x15] == 0)
+        return;
+    c64_scol[1] = (unsigned char)(rv[0x25] & 15);
+    c64_scol[3] = (unsigned char)(rv[0x26] & 15);
+    for (k = 7; k >= 0; k--) {              /* sprite 0 drawn last: on top */
+        if (!c64_spr_geom(rv, row, k))
+            continue;
+        y0 = c64_sp_y - (row << 3);
+        y1 = y0 + c64_sp_h;
+        if (y0 < 0)
+            y0 = 0;
+        if (y1 > 8)
+            y1 = 8;
+        j = (row << 3) + y0 - c64_sp_y;
+        sl = (row << 3) + y1 - 1 - c64_sp_y;
+        if (c64_sp_h == 42) {
+            j >>= 1;
+            sl >>= 1;
+        }
+        j = j + j + j;
+        c64_zcopy_out(c64_spd + j, c64_sp_data + j, sl + sl + sl + 3 - j);
+        c64_scol[2] = (unsigned char)(rv[0x27 + k] & 15);
+        for (y = y0; y < y1; y++) {
+            sl = (row << 3) + y - c64_sp_y;
+            if (c64_sp_h == 42)
+                sl >>= 1;
+            c64_c8spr(c64_b8 + C64_X320(y), c64_spd + sl + sl + sl,
+                      c64_sp_x, f << 3, (l << 3) + 8, c64_scol,
+                      (rv[0x1C] >> k) & 1, (c64_sp_w == 48) ? 1 : 0);
+        }
+    }
+}
+
+/* c64_fsx_frame - ONE colour frame, off the same dirty set the window's
+ * flush uses (9.2, 9.10, 9.11): each dirty row's span composed and copied */
+static void c64_fsx_frame(void)
+{
+    int i, y, f, l, sp, b;
+
+    if (c64_fr_stale)
+        c64_frame_regs();
+    else
+        c64_watch_set();
+    c64_dirty_scan();
+    b = c64_rv[0][0x20] & 15;
+    if (b != c64_fsx_bord) {
+        c64_fsx_border(b);
+        c64_fsx_bord = b;
+    }
+    for (i = 0; i < C64_ROWS; i++) {
+        f = 0;
+        l = C64_COLS - 1;
+        if (c64_fsx_ok) {
+            if (c64_rowd[i] == 0)
+                continue;
+            if (c64_rowd[i] != 2) {
+                sp = 0;
+                if (c64_rowd[i] & 1)
+                    sp = c64_span_of(i);
+                if (c64_rowd[i] & 4) {
+                    if (sp == 0) {
+                        c64_cspf = c64_gf[i];
+                        c64_cspl = c64_gl[i];
+                        sp = 1;
+                    } else {
+                        if ((int)c64_gf[i] < c64_cspf)
+                            c64_cspf = c64_gf[i];
+                        if ((int)c64_gl[i] > c64_cspl)
+                            c64_cspl = c64_gl[i];
+                    }
+                }
+                if (sp == 0) {
+                    c64_rowd[i] = 0;
+                    continue;
+                }
+                f = c64_cspf;
+                l = c64_cspl;
+            }
+        }
+        c64_fsx_compose(i, f, l);
+        if (c64_spsig[i])
+            c64_fsx_sprites(i, f, l);
+        for (y = 0; y < 8; y++)
+            c64_fsx_put(c64_fsx_seg, C64_X320((i << 3) + y) + (f << 3),
+                        c64_b8 + C64_X320(y) + (f << 3), (l - f + 1) << 3);
+        c64_rowd[i] = 0;
+    }
+    c64_dirty_any = 0;
+    c64_fsx_ok = 1;
+    c64_fsx_tick = os88_ticks();
+}
+
+/* c64_fsx_main - THE BRACKET (rules above) */
+static void c64_fsx_main(void)
+{
+    unsigned k, sc;
+    int n;
+
+    if (os88_fsx_mode(c64_fsx_id, c64_fsi) < 0)
+        return;                             /* refused, and nothing changed */
+    c64_fsx_seg = (unsigned)(unsigned char)c64_fsi[OS88_FSI_SEG]
+                | (((unsigned)(unsigned char)c64_fsi[OS88_FSI_SEG + 1]) << 8);
+    c64_fsx_up = 1;
+    c64_fsx_ok = 0;
+    c64_fsx_bord = -1;
+    /* THE WINDOW'S SHADOW IS A LIE FROM HERE ON, said here and not at the
+     * exit: SPEC.md 53.6 repaints the desktop before fsx_run returns, and
+     * that one paint finds the shadow invalid and redraws the window once
+     * (APPLE2-SPEC 13.3's reasoning, the same) */
+    c64_sh_inval();
+    c64_fsx_dac();
+    for (;;) {
+        k = c64_fsx_key();
+        if (k != 0xFFFFu) {                 /* (UNSIGNED: an Alt scan code
+                                             * above $7F is a negative int) */
+            sc = (k >> 8) & 0xFF;
+            if ((k & 0xFF) == 0) {
+                if ((sc == C64_SCAN_ALT_D) | (sc == OS88_SCAN_ENTER)
+                        | (sc == 0xA6))     /* Alt+Enter, enhanced set */
+                    break;
+                /* the three Preferences chords that only flip a latch and
+                 * say so (c64_say is fenced); the rest of the menu chords
+                 * open dialogs and wait for the window */
+                if (sc == 0x11) {
+                    ovl_cmd(C64_M_PREF, C64_I_WARP, c64_fsx_win);
+                    continue;
+                }
+                if (sc == 0x19) {
+                    ovl_cmd(C64_M_PREF, C64_I_PAUSE, c64_fsx_win);
+                    continue;
+                }
+                if (sc == 0x24) {
+                    ovl_cmd(C64_M_PREF, C64_I_SWAPJOY, c64_fsx_win);
+                    continue;
+                }
+                if ((sc == 0x1E) | (sc == 0x70) | (sc == 0x10)
+                        | (sc == 0xA2) | (sc == 0xA3))
+                    continue;
+            }
+            c64_key_push((int)(k & 0xFF), (int)sc);
+        }
+        n = c64_tick();
+        if (c64_scr_rd(C64_SCR_ANY))
+            c64_dirty_any = 1;
+        if ((c64_dirty_any | (c64_fsx_ok ^ 1)) != 0)
+            if ((c64_fsx_ok == 0)
+                    | ((unsigned)(os88_ticks() - c64_fsx_tick) >= 1u))
+                c64_fsx_frame();
+        if (n == 0)
+            os88_fsx_wait(OS88_FSXW_TICK);  /* nothing owed this tick */
+    }
+    c64_fsx_up = 0;
+    c64_dirty_any = 1;
+}
+
+/* c64_fsx_enter - Preferences > Fullscreen on a display with FSXM_VGA13
+ * (9.12). 1 when the bracket ran, 0 when there is none to run, and the
+ * caller then takes 9.8's monochrome fullscreen */
+static int c64_fsx_enter(void *win)
+{
+    if (!c64_fsx_avail(win))
+        return 0;
+    c64_fsx_win = win;
+    if (os88_fsx_run(c64_fsx_main, win, 0) < 0)
+        return 0;                           /* refused (SPEC.md 53.1) */
+    return 1;
+}

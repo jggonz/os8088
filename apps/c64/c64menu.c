@@ -75,32 +75,8 @@
  *     report the feature as unavailable AND make it impossible to turn off.
  * ==========================================================================*/
 
-/* The menu and item indices os88_oncmd is handed. They are positions in the
- * arrays below and the two must not drift: an item inserted above one of
- * these moves every command under it. */
-#define C64_M_FILE  0
-#define C64_M_EDIT  1
-#define C64_M_SNAP  2
-#define C64_M_PREF  3
-#define C64_M_HELP  4
-
-#define C64_I_ATTACH   0                    /* File, 10 items */
-#define C64_I_DISK     1
-#define C64_I_RESETCPU 6
-#define C64_I_POWER    7
-#define C64_I_EXIT     9
-
-#define C64_I_COPY     0                    /* Edit */
-#define C64_I_PASTE    1
-
-#define C64_I_FULLSCR  0                    /* Preferences */
-#define C64_I_STATBAR  2                    /* ...as VICE orders them */
-#define C64_I_WARP     3
-#define C64_I_PAUSE    4
-#define C64_I_ADVANCE  5
-#define C64_I_SWAPJOY  8
-
-#define C64_I_ABOUT    4                    /* Help */
+/* (The menu and item indices are c64.c's, ahead of every include: the
+ * colour bracket in c64scr.c dispatches three of them, C64-SPEC 9.12.) */
 
 #define OS88_MENU_DIS_STR "\001"            /* OS88_MENU_DIS is 1 (SPEC.md 47) */
 #define D OS88_MENU_DIS_STR                 /* the disabled prefix, as text */

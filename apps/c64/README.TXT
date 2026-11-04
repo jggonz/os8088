@@ -49,9 +49,10 @@ serial port answers. Typed at this machine, verbatim:
     ?DEVICE NOT PRESENT  ERROR
     READY.
 
-Programs are loaded with File > Smart attach... from a .PRG file. The screen
-is monochrome on every adapter, VGA included, resolved from the C64's 16
-colours by luminance: text crisply, bitmap and multicolour pictures as a
+Programs are loaded with File > Smart attach... from a .PRG file. On a VGA
+display, Preferences > Fullscreen (Alt+D) is the C64 in colour, 320x200 in
+VGA mode 13h; Alt+D again comes back. The WINDOW is monochrome on every
+adapter, VGA included, resolved from the C64's 16 colours by luminance: text crisply, bitmap and multicolour pictures as a
 dither, sprites lit or dark against the paper. A split screen is drawn split
 by character row. Sprites are always in front and never collide. Every menu item that cannot work in this build is
 present, greyed, and names the fact that greys it.

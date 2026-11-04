@@ -942,9 +942,8 @@ line takes effect from that line.
 - **Cycle-exact raster effects** — mid-line colour changes, bad-line timing,
   FLD, FLI, sprite stretching, opening the border, fine scroll, and a sprite
   multiplexed twice within one row.
-- **Colour.** §9.6. A colour composer is a separate piece of work: §9.6's
-  windowed 4bpp path is priced out per colour RUN, and the answer is a
-  fullscreen mode of its own (the APPLE2's §13 FSX mode is the shape).
+- **Colour in the window.** §9.6: the windowed path is 1bpp on every
+  adapter. Colour is FULLSCREEN, on a VGA-class display (§9.12).
 
 Text, BASIC, the KERNAL and text-mode programs are unaffected. A game or
 demo that splits the screen by character row, draws in bitmap or
@@ -1604,7 +1603,8 @@ composer was priced out before it was written.
 
 The kernel now publishes `OSAPI_GFX_BLIT1_PEN` (SPEC.md §5.4.2.2) — an ink
 and a paper for the next `OSAPI_GFX_BLIT1`, on colour adapters only. This
-port does not use it: colour stays greyed with this section's fact (§11.2),
+port does not use it in the window: colour there stays greyed with this
+section's fact (§11.2) — FULLSCREEN is in colour, in a mode of its own (§9.12) —
 and the EGA-16 map `c64_ega[16]` is kept in `c64scr.c` for the day a colour
 composer is written against that slot (§15.3).
 
@@ -1734,7 +1734,7 @@ says so; a flush has no such answer.
 
 | adapter / tier | fullscreen |
 |---|---|
-| VGA 640×480 | **2× on both axes**, 640×400 centred, all 25 rows — the band composed 16 rows deep |
+| VGA 640×480 | **COLOUR, §9.12** — the `FSXM_VGA13` bracket, whenever the display offers it. The 2× monochrome window (**2× on both axes**, 640×400 centred, all 25 rows — the band composed 16 rows deep) is what a VGA display WITHOUT that mode gets |
 | CGA 640×200 | **2× horizontal only**, 640 wide exactly (a CGA pixel is 2:1, so 1:1 there is half as wide as it should be) — and §9.1's clamp gives **21 of the 25 rows** above the status row |
 | Hercules 720×348 | 2× horizontal, 640×200 centred, all 25 rows, 1× vertical |
 | the `CPU_8086` tier (`c64_can2x` = 0) | **1:1 centred**, whatever the adapter — §9.7's 892 ms against 306 |
@@ -1912,6 +1912,67 @@ once a frame, in an interrupt below the display.
 `c64uitest` composes a hires and a multicolour bitmap byte, a sprite over
 text, a write to its data and switching it off, each read back off the
 shadow; each was verified red by breaking the arm it tests.
+
+### 9.12 Colour — fullscreen, in a VGA mode of its own (`FSXM_VGA13`)
+
+**The C64 is in colour on a VGA-class machine, fullscreen.** SPEC.md §53's
+exclusive bracket in `FSXM_VGA13`, 320×200×256, which is the C64's display
+window EXACTLY: one C64 pixel is one byte of the framebuffer, with no
+scaling, no dithering and no luminance rule. It is APPLE2-SPEC §13's shape,
+one machine along, and §9.6's fact still stands for the window: the
+windowed path is 1bpp on every adapter.
+
+**The door is Preferences > Fullscreen (Alt+D)**, which on a display whose
+`os88_fsx_caps` offers `FSXM_VGA13` enters the bracket rather than §9.8's 2×
+monochrome window. VICE's fullscreen is in colour, and Preferences is at the
+kernel's `MENU_POPMAX` of 11, so a twelfth item could only be had by folding
+one of VICE's away (§11.1). On CGA and Hercules — no `FSXM_VGA13` — Alt+D is
+§9.8's, unchanged. **Alt+D or Alt+Enter leaves**; every other key goes to
+the machine through `c64_key_push`, exactly as `os88_onkey` would hand it.
+The menu chords do not run inside: some open a dialog, and no drawing slot
+is legal after the mode set (SPEC.md §53.7).
+
+**There is no shadow and no compare.** The windowed flush compares against a
+frame shadow because a BLIT is a priced call (§9.7); here the framebuffer is
+plain memory, and the dirty set (§9.2, §9.10's row and cell spans, §9.11's
+sprite cells) is already exact to the cell. A frame composes each dirty
+row's span into an 8bpp band — 8 lines × 320 bytes, `c64_b8` — and copies
+it into the framebuffer with `rep movsw`. The first frame of a session is
+all 25 rows.
+
+| routine (`c64fsx.inc`) | does |
+|---|---|
+| `c64_c8glyph(gb, xm, n, gseg, goff, mask)` | gathers `n` cells' eight glyph bytes, `code & mask` (`$3F` for ECM), from the character generator, into the near layout the bitmap copy already has |
+| `c64_c8row(dst, gb, k0, k1, k2, k3, mc, n)` | `n` cells into the band: a hires cell is `k1` where a bit is set and `k0` where it is not; a multicolour cell takes pairs 00..11 as `k0..k3`. Every mode is this one routine with per-cell colours `c64_fsx_compose` fills: text (paper, colour RAM), ECM (`$D021+code>>6`), multicolour text (`$D022`/`$D023`, a cell hires unless its colour has bit 3), hires bitmap (high nibble, low nibble), multicolour bitmap (paper, high, low, colour RAM), and the three illegal modes black |
+| `c64_c8spr(dst, data, x, lo, hi, cols, mc, xs)` | one sprite line over one band line, clipped to `lo..hi`: hires bits in the sprite's colour, multicolour pairs 01/10/11 in `$D025`/the sprite's/`$D026`, each pixel doubled when X-expanded |
+| `c64_fsx_put(seg, off, src, n)` | `n` bytes to the framebuffer |
+| `c64_fsx_key()` | `int 16h`, polled (SPEC.md §53.1) — `0xFFFF` when nothing waits |
+| `c64_fsx_dac()`, `c64_fsx_border(c)` | the 16 colours into DAC 0..15, and the BORDER into the attribute controller's overscan register (index `$11`, with bit 5 kept so the display stays on) |
+
+**The border is the VGA's overscan colour**, row 0's `$D020` — mode 13h has
+no pixels outside the 320×200 picture, and the overscan register is the
+border a real VGA draws around it. A border split mid-frame shows row 0's.
+
+**The palette is Pepto's PAL palette** (Philip Timmermann's 2001
+measurement), as 6-bit DAC values. It is NOT VICE's generated 6569R5
+palette: VICE builds its colours at run time from the luminance/angle table
+§9.6 transcribes, through its CRT emulation's saturation, contrast and gamma,
+and that generator is not carried. Pepto's is the reference most emulators
+and most C64 graphics tools ship, and it agrees with §9.6's luminance order.
+
+**The machine runs exactly as in the window.** `c64_tick` is the machine
+half of `os88_onwake` — the keyboard poll, Paste, the throttled slice, the
+SID voice — and both call it. The loop slices while the throttle owes cycles
+and calls `os88_fsx_wait(OS88_FSXW_TICK)` only when it owes none (or the
+machine is paused or jammed); a frame is drawn at most once a host tick, and
+only when something is dirty. **`c64_say` and `c64_jam` do not toast inside
+the bracket** (`c64_fsx_up`): a toast draws. The message stays on the
+status row for the frame after the exit.
+
+**The exit owes the window a repaint and the kernel does it**: SPEC.md §53.6
+repaints the desktop before `fsx_run` returns, and the shadow was
+invalidated right after the mode set (`c64_sh_inval`), so that paint
+redraws all 25 rows once.
 
 ## 10. The status bar
 
@@ -2226,8 +2287,8 @@ Live items:
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
 | SID voices 2–3, waveforms other than the gate, ADSR, filters, `$D41B`/`$D41C` | the PC speaker is one square wave, and the sound driver's FM path is not wrapped for C (§11.4) |
-| Colour on the glass, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band |
-| Bitmap and multicolour modes, sprites, collision registers | §5.1, §5.3 — the composer draws standard text; `$D01E`/`$D01F` answer 0 |
+| Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
+| Sprite priority, collision registers | §5.3 — sprites are drawn in front; `$D01E`/`$D01F` answer 0 |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (§10.3) |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |
@@ -2768,8 +2829,6 @@ already publishes.
 **Colour.** The kernel has since published `OSAPI_GFX_BLIT1_PEN` (SPEC.md
 §5.4.2.2), an ink and a paper for a 1bpp band on a colour adapter, so the
 slot this section once said did not exist now does. This port does not use
-it: a colour C64 composer is a per-row colour decision the composer does not
-make yet, and the speed case on the target is unmeasured. The feature stays
-greyed with §9.6's fact, and the EGA-16 map and per-row colour record are
-kept in `c64scr.c` so that a composer against that slot drops in without
-re-planning.
+it in the window: two colours a band is not a C64 cell's four, and colour
+is fullscreen instead, in `FSXM_VGA13` through the existing `OSAPI_FSX_*`
+slots (§9.12) - which needs no slot this section would have to add.

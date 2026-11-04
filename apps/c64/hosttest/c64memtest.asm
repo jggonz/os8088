@@ -763,6 +763,149 @@ body:
     jne .f6
     cmp byte [banda+2], 0xAA
     jne .f6
+
+    ; c64fsx.inc (C64-SPEC 9.12): the colour screen's composers, on the
+    ; shipping text. c64_c8row hires - $A5 in red (2) on blue (6) - then
+    ; multicolour, pairs 00..11 as 6, 1, 2, 5
+    mov cx, 8
+    mov di, bmxb
+.c8f:
+    mov byte [di], 0xA5
+    inc di
+    loop .c8f
+    mov byte [c8k], 6
+    mov byte [c8k+1], 2
+    mov byte [c8k+2], 1
+    mov byte [c8k+3], 5
+    mov byte [c8k+4], 0                     ; mc = 0
+    mov byte [bnd8+8], 0xCC                 ; ...and nothing past cell 0
+    mov word [pushes], 8
+    PUSHI 1                                 ; n
+    PUSHI c8k+4                             ; mc
+    PUSHI c8k+3                             ; k3
+    PUSHI c8k+2                             ; k2
+    PUSHI c8k+1                             ; k1
+    PUSHI c8k                               ; k0
+    PUSHI bmxb                              ; gb
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8row
+    mov si, c8hi
+    mov di, bnd8
+    call .c8cmp
+    jne .f6
+    mov si, c8hi
+    mov di, bnd8 + 7 * 320                  ; line 7, stride 320
+    call .c8cmp
+    jne .f6
+    cmp byte [bnd8+8], 0xCC
+    jne .f6
+    mov cx, 8
+    mov di, bmxb
+.c8m:
+    mov byte [di], 0x1B
+    inc di
+    loop .c8m
+    mov byte [c8k+1], 1
+    mov byte [c8k+2], 2
+    mov byte [c8k+4], 1                     ; mc = 1
+    PUSHI 1
+    PUSHI c8k+4
+    PUSHI c8k+3
+    PUSHI c8k+2
+    PUSHI c8k+1
+    PUSHI c8k
+    PUSHI bmxb
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8row
+    mov si, c8mcw
+    mov di, bnd8 + 3 * 320
+    call .c8cmp
+    jne .f6
+
+    ; c64_c8spr: $FF $00 $81 hires in colour 7 from x = -2, clipped to 0..15
+    mov cx, 32
+    mov di, bnd8
+.c8z:
+    mov byte [di], 0
+    inc di
+    loop .c8z
+    mov byte [c8d], 0xFF
+    mov byte [c8d+1], 0x00
+    mov byte [c8d+2], 0x81
+    mov byte [c8c], 0
+    mov byte [c8c+1], 3
+    mov byte [c8c+2], 7
+    mov byte [c8c+3], 4
+    PUSHI 0                                 ; xs
+    PUSHI 0                                 ; mc
+    PUSHI c8c
+    PUSHI 16                                ; hi
+    PUSHI 0                                 ; lo
+    PUSHI -2                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8sw
+    mov di, bnd8
+    mov cx, 22
+    call .c8cmpn
+    jne .f6
+    ; ...and $1B multicolour, X-expanded: 4 clear, 4 x 3, 4 x 7, 4 x 4
+    mov cx, 32
+    mov di, bnd8
+.c8y:
+    mov byte [di], 0
+    inc di
+    loop .c8y
+    mov byte [c8d], 0x1B
+    mov byte [c8d+2], 0x00
+    PUSHI 1
+    PUSHI 1
+    PUSHI c8c
+    PUSHI 320
+    PUSHI 0
+    PUSHI 0
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8mw
+    mov di, bnd8
+    mov cx, 17
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8glyph: code $41 & $3F = 1 out of the ROM claim, 0x88..0x8F
+    mov byte [bmxm], 0x41
+    mov word [pushes], 6
+    PUSHI 0x3F
+    PUSHI 0
+    PUSHI SEG_ROM
+    PUSHI 1
+    PUSHI bmxm
+    PUSHI bmxb
+    call disc_call
+    dw _c64_c8glyph
+    cmp byte [bmxb], 0x88
+    jne .f6
+    cmp byte [bmxb+7], 0x8F
+    jne .f6
+    jmp .c8done
+; compare 8 bytes [si] with [di] (ZF set when equal), and CX bytes
+.c8cmp:
+    mov cx, 8
+.c8cmpn:
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+    ret
+.c8done:
     mov al, '.'
     call putc
     jmp .x2
@@ -1192,6 +1335,7 @@ hst_seg:
                                     ; claims from
 %include "c64mem.inc"
 %include "c64band.inc"
+%include "c64fsx.inc"
 
 section .text
 
@@ -1308,6 +1452,14 @@ bmxm:        db 0
 bmxb:        times 8 db 0
 bmwant:      db 0xB3, 0x73, 0x33, 0x33, 0xB3, 0x73, 0x33, 0x33
 banda:       times 320 db 0
+bnd8:        times 2560 db 0
+c8k:         times 5 db 0
+c8d:         times 3 db 0
+c8c:         times 4 db 0
+c8hi:        db 2, 6, 2, 6, 6, 2, 6, 2
+c8mcw:       db 6, 6, 1, 1, 2, 2, 5, 5
+c8sw:        db 7, 7, 7, 7, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0
+c8mw:        db 0, 0, 0, 0, 3, 3, 3, 3, 7, 7, 7, 7, 4, 4, 4, 4, 0
              times 4 db 0xCC
 bandb:       times 320 db 0
              times 4 db 0xCC

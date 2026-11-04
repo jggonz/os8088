@@ -455,6 +455,21 @@ static void c64_lum_update(void);
 static void c64_dirty_all(void);
 static void c64_row_dirty(int row);
 static void c64_row_whole(int row);
+static int c64_tick(void);                  /* the machine half of a wake */
+static int c64_fsx_enter(void *win);        /* the colour screen (9.12) */
+static int c64_fsx_up;                      /* ...is up: nothing may draw */
+void c64_c8glyph(unsigned char *gb, const unsigned char *xm, int n,
+                 unsigned gseg, unsigned goff, int mask);
+void c64_c8row(unsigned char *dst, const unsigned char *gb,
+               const unsigned char *k0, const unsigned char *k1,
+               const unsigned char *k2, const unsigned char *k3,
+               const unsigned char *mc, int n);
+void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
+               int lo, int hi, const unsigned char *cols, int mc, int xs);
+void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n);
+unsigned c64_fsx_key(void);
+void c64_fsx_dac(void);
+void c64_fsx_border(int c);
 static void c64_frame_regs(void);
 static unsigned char c64_rchg[25];          /* a row's register set moved since
                                              * c64_spr_dirty looked (9.11) */
@@ -490,6 +505,33 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
  * external symbols, so a C package cannot be several .c files linked - it is
  * one file with the parts #included into it). Every one of them is a written
  * prerequisite in the Makefile, because make cannot see through #include. */
+/* The menu and item indices os88_oncmd is handed. They are positions in the
+ * arrays below and the two must not drift: an item inserted above one of
+ * these moves every command under it. */
+#define C64_M_FILE  0
+#define C64_M_EDIT  1
+#define C64_M_SNAP  2
+#define C64_M_PREF  3
+#define C64_M_HELP  4
+
+#define C64_I_ATTACH   0                    /* File, 10 items */
+#define C64_I_DISK     1
+#define C64_I_RESETCPU 6
+#define C64_I_POWER    7
+#define C64_I_EXIT     9
+
+#define C64_I_COPY     0                    /* Edit */
+#define C64_I_PASTE    1
+
+#define C64_I_FULLSCR  0                    /* Preferences */
+#define C64_I_STATBAR  2                    /* ...as VICE orders them */
+#define C64_I_WARP     3
+#define C64_I_PAUSE    4
+#define C64_I_ADVANCE  5
+#define C64_I_SWAPJOY  8
+
+#define C64_I_ABOUT    4                    /* Help */
+
 #include "c64io.c"                          /* the register files, the alarm
                                              * scheduler, the CIAs and the VIC */
 #include "c64kbd.c"                         /* the gtk3_sym.vkm table */
@@ -605,7 +647,10 @@ static void c64_say(const char *s)
      * exist. RUNCPM's rc_say_now flushes on the spot; here the wake is one
      * tick away, so raising the flag is enough and stays off the lock. */
     c64_dirty_any = 1;
-    os88_toast(s, 0);
+    if (!c64_fsx_up)                        /* a toast DRAWS, and inside the
+                                             * colour bracket nothing may
+                                             * (9.12): the row says it after */
+        os88_toast(s, 0);
 }
 
 /* ==========================================================================
@@ -709,6 +754,13 @@ static void c64_fullscreen_toggle(void *win)
                                              * REFUSED, nothing repaints us:
                                              * the next wake owes those rows */
     }
+    /* ON A DISPLAY WITH FSXM_VGA13, FULLSCREEN IS IN COLOUR (9.12): the
+     * bracket runs until Alt+D and returns here; the window never left */
+    if (!c64_full)
+        if (c64_fsx_enter(win)) {
+            c64_menu_state();
+            return;
+        }
     c64_full = !c64_full;
     if (os88_fullscreen(win, c64_full) < 0) {
         c64_full = !c64_full;               /* refused: the latch rolls back */
@@ -1235,7 +1287,9 @@ static void c64_jam(void)
                                              * short message it leaves the
                                              * widgets right of cell 24 alone
                                              * (c64scr.c) */
-    os88_toast(c64_jamline, 0);             /* §9.8's second route, which is
+    if (!c64_fsx_up)                        /* (9.12: no drawing inside the
+                                             * colour bracket) */
+        os88_toast(c64_jamline, 0);         /* §9.8's second route, which is
                                              * the half c64_say was carrying */
     c64_menu_state();                       /* ...and Preferences > Advance
                                              * frame greys itself: there is no
@@ -1531,64 +1585,18 @@ static int c64_wants_wake(void)
                                              * or not */
 }
 
-/* os88_onwake - THE slice driver (SPEC.md 74.1): on the UI task, with the
- * lock NOT held. One wall slice of the 6510 broken at every device event,
- * then a flush AT MOST ONCE PER HOST TICK (9.3) under the lock, then a
- * re-post only while there is work. */
-void os88_onwake(void *win)
+/* c64_tick - THE MACHINE HALF OF A WAKE: the keyboard poll, Paste's feeder,
+ * the throttled slice, the SID voice and the slice's adaptation. os88_onwake
+ * and the colour bracket (C64-SPEC 9.12) both call it, so the machine runs
+ * the same in either. Answers the cycles it was allowed to run, 0 when it
+ * ran none (paused, jammed, or the throttle owed nothing). */
+static int c64_tick(void)
 {
-    unsigned t;
     unsigned t0;
     unsigned fr0 = 0;
-    int left, n, d, spent, fe;
+    int left, n, d, spent;
 
-    if (c64_state == C64_ST_DEAD)
-        return;
-
-    /* FILE > EXIT EMULATOR (Alt+Q), SPENT HERE AND NOWHERE ELSE (SPEC.md
-     * 75.2). os88_wm_close is the kernel's OWN close path - the same one the
-     * close box takes: the negotiator retired, app_close_win, the dock strip
-     * repainted, the instance and both claims freed.
-     *
-     * WHAT IT REPLACED, AND WHY THAT WAS WRONG. There used to be a worker:
-     * os88_wm_destroy under the lock, then os88_task_alive outside it, which
-     * is cword's File > Close idiom and what every C package here does. It
-     * closes the WINDOW and it does not close the APP: wm_destroy frees the
-     * record and nothing repaints the dock, so Alt+Q left a dead tile on the
-     * strip that answered neither a click nor a double-click, four cycles out
-     * of four, on both adapters - the exact failure the worker's own comment
-     * claimed to have fixed. The close box was always clean because it goes
-     * through app_close_win. There is one door, and this is it.
-     *
-     * IT IS SPENT FROM THE WAKE AND NOT FROM os88_oncmd. The slot RETURNS and
-     * closes on the next UI pass (os88.h) - so it may be called under the
-     * command's lock - but its contract is "call it and RETURN, do not draw
-     * afterwards", and os88_oncmd's own tail draws: it kicks a wake, which
-     * runs a slice and flushes into a window that is going away. Here the
-     * return is the last thing that happens, C64_ST_DEAD stops the next wake
-     * dead, and the kick os88_oncmd posted is what carries us here. */
-    if (c64_exit_req) {
-        c64_exit_req = 0;
-        c64_state = C64_ST_DEAD;            /* nothing flushes into it again */
-        os88_wm_close(win);
-        return;                             /* ...and NOTHING after the call */
-    }
-
-    /* EDIT > COPY AND EDIT > PASTE, ABOVE THE ABT GATE AND ABOVE THE SLICE.
-     * Their bodies are ~103 ms and a heap claim and os88_oncmd holds the
-     * desktop's gfx lock, so the commands only latch (c64kbd.c's
-     * ovl_clip_service carries the argument). Here, no cycle has run since
-     * the pick and no lock is held; above the gate, so a jammed, paused or
-     * panel-up machine still services the copy of the screen in front of it. */
-    if (c64_reset_req)
-        ovl_reset_service();
-    if (c64_copy_req | c64_paste_req)
-        ovl_clip_service(c64_mbase);
-
-    if (c64_abt)
-        return;                             /* the panel is up: the machine is
-                                             * paused and the glass is its */
-
+    n = 0;
     /* --- THE WALL SLICE (4.4). VICE's alarm model: run to the next device
      * event, service it, compute the next one. `n` is never a quantum - it is
      * the smaller of what is left of this wake's budget and the cycles to the
@@ -1715,6 +1723,66 @@ void os88_onwake(void *win)
             }
         }
     c64_speed_fold();
+    return n;
+}
+
+/* os88_onwake - THE slice driver (SPEC.md 74.1): on the UI task, with the
+ * lock NOT held. One wall slice of the 6510 broken at every device event,
+ * then a flush AT MOST ONCE PER HOST TICK (9.3) under the lock, then a
+ * re-post only while there is work. */
+void os88_onwake(void *win)
+{
+    unsigned t;
+    int fe;
+
+    if (c64_state == C64_ST_DEAD)
+        return;
+
+    /* FILE > EXIT EMULATOR (Alt+Q), SPENT HERE AND NOWHERE ELSE (SPEC.md
+     * 75.2). os88_wm_close is the kernel's OWN close path - the same one the
+     * close box takes: the negotiator retired, app_close_win, the dock strip
+     * repainted, the instance and both claims freed.
+     *
+     * WHAT IT REPLACED, AND WHY THAT WAS WRONG. There used to be a worker:
+     * os88_wm_destroy under the lock, then os88_task_alive outside it, which
+     * is cword's File > Close idiom and what every C package here does. It
+     * closes the WINDOW and it does not close the APP: wm_destroy frees the
+     * record and nothing repaints the dock, so Alt+Q left a dead tile on the
+     * strip that answered neither a click nor a double-click, four cycles out
+     * of four, on both adapters - the exact failure the worker's own comment
+     * claimed to have fixed. The close box was always clean because it goes
+     * through app_close_win. There is one door, and this is it.
+     *
+     * IT IS SPENT FROM THE WAKE AND NOT FROM os88_oncmd. The slot RETURNS and
+     * closes on the next UI pass (os88.h) - so it may be called under the
+     * command's lock - but its contract is "call it and RETURN, do not draw
+     * afterwards", and os88_oncmd's own tail draws: it kicks a wake, which
+     * runs a slice and flushes into a window that is going away. Here the
+     * return is the last thing that happens, C64_ST_DEAD stops the next wake
+     * dead, and the kick os88_oncmd posted is what carries us here. */
+    if (c64_exit_req) {
+        c64_exit_req = 0;
+        c64_state = C64_ST_DEAD;            /* nothing flushes into it again */
+        os88_wm_close(win);
+        return;                             /* ...and NOTHING after the call */
+    }
+
+    /* EDIT > COPY AND EDIT > PASTE, ABOVE THE ABT GATE AND ABOVE THE SLICE.
+     * Their bodies are ~103 ms and a heap claim and os88_oncmd holds the
+     * desktop's gfx lock, so the commands only latch (c64kbd.c's
+     * ovl_clip_service carries the argument). Here, no cycle has run since
+     * the pick and no lock is held; above the gate, so a jammed, paused or
+     * panel-up machine still services the copy of the screen in front of it. */
+    if (c64_reset_req)
+        ovl_reset_service();
+    if (c64_copy_req | c64_paste_req)
+        ovl_clip_service(c64_mbase);
+
+    if (c64_abt)
+        return;                             /* the panel is up: the machine is
+                                             * paused and the glass is its */
+
+    c64_tick();
 
     t = os88_ticks();
     if (c64_scr_rd(C64_SCR_ANY))
