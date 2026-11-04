@@ -21,7 +21,9 @@ looks for a library first (124.23.1).
 The second and third legs (124.23.1.1) put the two libraries in B:'s
 SYSTEM/APPDATA/WIN16 - the Windows directory - and in SYSTEM/APPDATA/WIN16/SYSTEM
 - the system directory, where a setup installs a shared library - with only
-DLLUSE.EXE at the root: every check must still pass.
+DLLUSE.EXE at the root: every check must still pass, `filepath` among them:
+the program opens the path GetModuleFileName answers for W16DLL, which is the
+library's own folder and not the program's.
 """
 import argparse
 import os

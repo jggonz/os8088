@@ -235469,7 +235469,8 @@ library alike:
    (`GetWindowsDirectory`, §124.20.5);
 3. **the system directory**, `SYSTEM` under the Windows directory
    (`GetSystemDirectory`), when there is one. A folder that is not there is
-   remembered as absent and costs nothing again.
+   remembered as absent for the rest of that load and costs nothing again in
+   it.
 
 The PATH is not searched: WIN16 has none. The order puts the program's folder
 first although Windows put it fourth, because it is the cheaper miss and the
@@ -235477,22 +235478,34 @@ hot one: the folder is the one the program was just read from. A library found
 there costs nothing the old loader did not; one found in the Windows directory
 costs one failed lookup in the first folder and, the first time only, the walk
 to it (three directory reads); one found in the system directory two failed
-lookups and a second walk. The folders' first clusters are kept, so every
-later miss is one lookup, and each lookup that misses the directory cache is an
-`int 13h` (~400 ms on the target XT): a library nobody has costs three lookups
-and, once, two walks. **The two folders are named in one place**
+lookups and a second walk. The folders' first clusters are kept for the rest of
+the load, so every later miss in it is one lookup, and each lookup that misses
+the directory cache is an `int 13h` (~400 ms on the target XT): a library
+nobody has costs three lookups and, once a load, two walks. **What is kept
+lasts one load** - a program's start with every library it brings in, or one
+`LoadLibrary` - and the next load walks again the first time it misses: a
+setup CREATES the system directory while WIN16 runs (Microsoft's Setup
+Toolkit makes the folders it copies into), so a folder remembered as absent,
+or at a first cluster, from an earlier load would hide what the setup just
+installed, or name a folder that has since been removed. **The two folders are named in one place**
 (`W16L_WINDEPTH`, `W16L_SYSDEPTH` and `w16l_gofold` in `w16load.inc`: how far
 below `SYSTEM\APPDATA` each is), so a change to where the system directory
-is changes there only. A library of a library found in one of those folders is
-looked for in that folder first, and not again beside the program: libraries
-that ship together are installed together.
+is changes there only. A library of a library is looked for first in the
+folder its importer was found in (libraries that ship together are installed
+together), then in the Windows and system directories, and last in the
+program's own folder when its importer was not found there: Windows searched
+the EXE's directory for every library, and a shared library in the system
+directory may import one its program ships beside itself (`CMDIALOG.VBX`
+imports `COMMDLG`, `MCI.VBX` `MMSYSTEM`; those two are WIN16's own, but a
+title's own DLL need not be).
 
 A library loaded from either folder keeps that folder as its own (the module
 block's folder and volume, §124.26.11), so its discardable segments and its
-resources are read from it later, and not from the program's.
-`GetModuleFileName` on its handle still answers the program's folder with the
-library's file name; WIN16 keeps no path of its own for a library. An EXE is
-looked for as before (§124.28.5); this changes libraries only.
+resources are read from it later, and not from the program's, and
+`GetModuleFileName` on its handle answers that folder with the library's file
+name: Visual Basic's runtime and the setup engines find their own files beside
+themselves by it. An EXE is looked for as before (§124.28.5); this changes
+libraries only.
 
 #### 124.23.2 Where it lives
 
@@ -235616,7 +235629,7 @@ line 2 the library's file.
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
-| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's name in that form. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS. It is the library part's (§124.19): a program asks once or twice, at its start, and the 133 bytes it took from the image paid for `RegisterClass`'s local-over-global rule (§124.28.3) |
+| `GetModuleFileName` (KERNEL.49) | `A:\DIR\NAME.EXE`: the program's volume, its folder from the root (`OSAPI_FILE_PATH`, `\` at the root) and its name; on a library's handle the library's volume, folder and name, the folder the library was found in (§124.23.1.1). The instance is put back in the folder it stood in, which until 2026-11-04 it was not: the call left it in the program's. The folder was missing until 2026-11-02, and a setup takes its own files from it: `_MSTEST.EXE`, run from `C:\~MSSTFQF.T\`, looked for `C:\ARCADE.INF`. `OSAPI_FILE_PATH` is an X cell, whose buffer is the caller's DS: the call is made with the program's buffer segment as DS. It is the library part's (§124.19): a program asks once or twice, at its start, and the 133 bytes it took from the image paid for `RegisterClass`'s local-over-global rule (§124.28.3) |
 | `GetModuleUsage` (KERNEL.48) | a library's count; 1 for anything else, as before |
 
 #### 124.23.6 Not done, pinned

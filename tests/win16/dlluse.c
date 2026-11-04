@@ -35,6 +35,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     BUMPPROC bump;
     VOIDPROC count, two;
     char path[80];
+    HFILE f;
     int n;
 
     check(DllStarted() == 0x5A, "libmain");
@@ -51,6 +52,12 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(GetProcAddress(h, "NoSuchProc") == NULL, "procnone");
     n = GetModuleFileName(h, path, sizeof path);
     check(n > 10 && strcmp(path + n - 10, "W16DLL.DLL") == 0, "filename");
+    /* the folder it was found in (124.23.1.1), which is not the program's
+     * when it is in the Windows or system directory */
+    f = _lopen(path, OF_READ);
+    check(f != HFILE_ERROR, "filepath");
+    if (f != HFILE_ERROR)
+        _lclose(f);
     check(GetModuleUsage(h) == 1, "usage1");
 
     h2 = LoadLibrary("W16DLL2.DLL");
