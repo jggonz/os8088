@@ -958,6 +958,25 @@ class BattleTab(object):
                            "engine's)").grid(row=1, column=0, columnspan=3,
                                              sticky="w")
         r += 1
+        # the renditions: the same battle for a VGA and a Hercules as well
+        rf = ttk.LabelFrame(f, text="Also made for (each its own bundle, "
+                            "BATTLEV.VBT and BATTLEH.VBT; the engine takes "
+                            "its adapter's)", padding=6)
+        rf.grid(row=r, column=0, columnspan=5, sticky="we", pady=6)
+        self.rvga, self.rherc = tk.IntVar(), tk.IntVar()
+        ttk.Checkbutton(rf, text="VGA (mode 0Dh), colours:", variable=self.rvga,
+                        command=self._rends).grid(row=0, column=0, sticky="w")
+        self.rcol = tk.StringVar()
+        cb = ttk.Combobox(rf, textvariable=self.rcol, state="readonly",
+                          values=["4", "8", "16"], width=4)
+        cb.grid(row=0, column=1, sticky="w")
+        cb.bind("<<ComboboxSelected>>", lambda e: self._rends())
+        ttk.Checkbutton(rf, text="Hercules (720 x 348)", variable=self.rherc,
+                        command=self._rends).grid(row=0, column=2, sticky="w",
+                                                  padx=12)
+        self.rnote = ttk.Label(rf, text="", wraplength=900)
+        self.rnote.grid(row=1, column=0, columnspan=4, sticky="w")
+        r += 1
         # how it ends: the battle's own last clips, whoever the enemy is
         ef = ttk.LabelFrame(f, text="How it ends (each clip is played to its "
                             "end and held)", padding=6)
@@ -1036,6 +1055,11 @@ class BattleTab(object):
         c.create_rectangle(0, rows * k, 159, 100, fill="#664", outline="")
         c.create_text(80, rows * k / 2, text="video", fill="white")
         c.create_text(80, (rows * k + 100) / 2, text="band", fill="white")
+        rs = t.get("renditions", ["cga4"])
+        self.rvga.set(1 if "vga4" in rs else 0)
+        self.rherc.set(1 if "herc" in rs else 0)
+        self.rcol.set(str(t.get("vga_colours", 8)))
+        self.rnote.config(text=REND_NOTE.get(int(self.rcol.get()), ""))
         for k in ("victory", "defeat"):
             self.endv[k + "_cb"].config(values=list(d["clips"]))
             self.endv[k].set(d["enemy"].get(k) or "")
@@ -1048,6 +1072,16 @@ class BattleTab(object):
         self.lstart.set("%.3f" % secs(lp[0], rate) if lp else "")
         self.lend.set("%.3f" % secs(lp[1], rate) if lp else "")
         self.join.set("%.3f" % secs(m.get("join", 0), rate) if m else "")
+
+    def _rends(self):
+        rs = ["cga4"] + (["vga4"] if self.rvga.get() else []) + \
+            (["herc"] if self.rherc.get() else [])
+        t = self.app.proj.d["target"]
+        if rs != t.get("renditions", ["cga4"]):
+            self.app.edit("set", ("target", "renditions"), rs)
+        n = int(self.rcol.get() or 8)
+        if n != t.get("vga_colours", 8):
+            self.app.edit("set", ("target", "vga_colours"), n)
 
     def _end(self, k):
         v = self.endv[k].get() or None
@@ -2379,6 +2413,14 @@ class OpeningsTab(object):
 
 # --- the Title & endings tab (SPEC.md 125.3.1) ----------------------------------------
 
+# what a VGA rendition's colours cost, measured (VBATTLE-MEMORY-PLAN 2: the
+# owner's Attack1, unbudgeted, against CGA4's 82 KB/s)
+REND_NOTE = {4: "Four colours: the band's own, about what CGA4 costs (x1.2).",
+             8: "Eight: the band's four and four of the footage's - about "
+                "twice CGA4's data (x2.1). Usually the right choice.",
+             16: "Sixteen: the band's four and twelve of the footage's - "
+                 "about three times CGA4's data (x3.1): a fast disk, or "
+                 "memory to hold it."}
 BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 HOW_LABELS = (("hold", "Hold its last frame"),
               ("fade", "Fade to its end loop"),
@@ -2879,8 +2921,17 @@ class BuildTab(object):
         self.chk.bind("<Double-Button-1>", lambda e: self._go())
         bf = ttk.LabelFrame(f, text="The budget (after a build)", padding=4)
         bf.pack(fill="x", pady=4)
+        bh = ttk.Frame(bf)
+        bh.pack(anchor="w", fill="x")
+        ttk.Label(bh, text="Rendition").pack(side="left")
+        self.rendv = tk.StringVar(value="cga4")
+        self.rendcb = ttk.Combobox(bh, textvariable=self.rendv,
+                                   state="readonly", values=["cga4"], width=6)
+        self.rendcb.pack(side="left", padx=4)
+        self.rendcb.bind("<<ComboboxSelected>>", lambda e: self._rend())
         self.bud_l = ttk.Label(bf, text="Build to see it.", wraplength=1100)
         self.bud_l.pack(anchor="w")
+        self.res = None
         self.tv = ttk.Treeview(bf, columns=[c for c, _, _ in self.COLS[1:]],
                                height=9)
         for i, (c, h, w) in enumerate(self.COLS):
@@ -2933,7 +2984,20 @@ class BuildTab(object):
         self.app.run("os88vbt", ["build", self.app.proj.path, "--json"], got,
                      "Building...")
 
+    def _rend(self):
+        if self.res:
+            self.show(self.res)
+
     def show(self, res):
+        self.res = res
+        rs = res.get("renditions") or [dict(kind="cga4", out=res["out"],
+                                            bytes=res["bytes"],
+                                            budget=res["budget"])]
+        self.rendcb.config(values=[r["kind"] for r in rs])
+        pick = [r for r in rs if r["kind"] == self.rendv.get()] or rs[:1]
+        self.rendv.set(pick[0]["kind"])
+        res = dict(res, out=pick[0]["out"], bytes=pick[0]["bytes"],
+                   budget=pick[0]["budget"])
         bud = self.bud = res["budget"]
         self.out_l.config(text="%s - %d KB" % (res["out"], res["bytes"] // 1024))
         self.tv.delete(*self.tv.get_children())
@@ -2962,8 +3026,10 @@ class BuildTab(object):
             self.disk_l.config(text="%s%s" % (res["out"], "\n" + res["note"]
                                               if res.get("note") else ""))
             self.app.say("Made %s" % os.path.basename(res["out"]))
-        self.app.run("os88vbt", ["disk", self.app.proj.path, "--disk", str(n),
-                                 "--json"], got, "Making the disk...")
+        argv = ["disk", self.app.proj.path, "--disk", str(n), "--json"]
+        if self.res:                    # the rendition chosen above
+            argv += ["--rendition", self.rendv.get()]
+        self.app.run("os88vbt", argv, got, "Making the disk...")
 
 
 # --- small form pieces ------------------------------------------------------------------

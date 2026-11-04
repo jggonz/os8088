@@ -149,6 +149,10 @@ vb_fadetick:
     cmp byte [vb_fon], 0
     jne .on
     mov cx, 200                     ; the whole screen...
+    cmp byte [vb_kind], VK_HERC
+    jne .b0
+    mov cx, 348
+.b0:
     cmp al, 2
     jne .b
     mov cl, [vb_meta+9]             ; ...or, before an end loop, the canvas
@@ -162,8 +166,8 @@ vb_fadetick:
     mov word [vb_fticks], 0
     mov byte [vb_fon], 1
     mov byte [vb_mode], VM_FADE
-    cmp cx, 200
-    jne .bk
+    cmp cl, [vb_meta+9]
+    je .bk
     mov byte [vb_banddone], 0       ; (the band fades with it, and stays down)
     mov byte [vb_bandok], 0
 .bk:
@@ -247,6 +251,13 @@ vb_fmask:
     add bx, vb_fmasks
     mov es, [vb_vseg]
     xor si, si
+    cmp byte [vb_kind], VK_VGA4
+    jne .nv
+    jmp vb_fmaskv
+.nv:
+    cmp byte [vb_kind], VK_HERC
+    jne .row
+    jmp vb_fmaskh
 .row:
     cmp si, [vb_frows]
     jae .done
@@ -281,6 +292,101 @@ vb_fmask:
     inc si
     jmp .row
 .done:
+    ret
+
+; vb_fbits - AL = the CGA mask byte at [BX + y & 3] (SI = y) as ONE bit a
+; pixel, eight pixels: the 4 x 4 pattern's row twice over. CX spent
+vb_fbits:
+    push bx
+    mov ax, si
+    and ax, 3
+    add bx, ax
+    mov ah, [bx]
+    pop bx
+    xor al, al
+    mov cx, 4
+.b:
+    shl al, 1
+    test ah, 0x80                   ; (a pixel's two bits are equal)
+    jz .z
+    or al, 1
+.z:
+    shl ah, 1
+    shl ah, 1
+    loop .b
+    mov ah, al
+    mov cl, 4
+    shl al, cl
+    or al, ah
+    ret
+
+; vb_fmaskh - the fade's step on a Hercules screen: [vb_frows] rows of 90
+; bytes in its four banks, each byte ANDed with its row's eight-pixel mask
+vb_fmaskh:
+.row:
+    cmp si, [vb_frows]
+    jae .done
+    call vb_fbits
+    mov ah, al
+    mov di, si
+    and di, 3
+    mov cl, 13
+    shl di, cl
+    mov ax, si
+    shr ax, 1
+    shr ax, 1
+    mov cx, 90
+    mul cx
+    add di, ax
+    call vb_fbits
+    mov ah, al
+    mov cx, 45
+.w:
+    and [es:di], ax
+    inc di
+    inc di
+    loop .w
+    inc si
+    jmp .row
+.done:
+    ret
+
+; vb_fmaskv - the fade's step on a VGA4 screen (mode 0Dh, 40 bytes a row):
+; a byte read loads the latches, and the write puts Set/Reset's colour 0,
+; in every plane, on the bits its Bit Mask names - the pixels this step
+; takes - and the latches' on the rest. The GC put back as the BIOS left it
+vb_fmaskv:
+    mov dx, 0x3CE
+    mov ax, 0x0000                  ; Set/Reset: colour 0
+    out dx, ax
+    mov ax, 0x0F01                  ; Enable Set/Reset: every plane
+    out dx, ax
+.row:
+    cmp si, [vb_frows]
+    jae .done
+    call vb_fbits
+    not al                          ; the Bit Mask: the pixels to put out
+    mov ah, al
+    mov al, 8
+    mov dx, 0x3CE
+    out dx, ax
+    mov ax, 40
+    mul si
+    mov di, ax
+    mov cx, 40
+.w:
+    mov al, [es:di]
+    mov [es:di], al
+    inc di
+    loop .w
+    inc si
+    jmp .row
+.done:
+    mov dx, 0x3CE
+    mov ax, 0xFF08                  ; Bit Mask: every bit
+    out dx, ax
+    mov ax, 0x0001                  ; Enable Set/Reset: none
+    out dx, ax
     ret
 
 ; vb_atten - the chunk at ES:DI, CX samples, quieter by [vb_fvol] shifts

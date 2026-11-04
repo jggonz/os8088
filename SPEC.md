@@ -237354,7 +237354,9 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 332 | 1+1 | VICTORY: how it ends (0 HOLD, 1 FADE to its end loop, 2 JOIN its end loop, 3 FADE and play AGAIN) and its end loop's clip, FFh none |
 | 334 | 1+1 | DEFEAT: the same |
 | 336 | 1 | a fade's steps, 1 to 16 (one a frame) |
+| 337 | 1 | the ADAPTER (125.3.2): 0 CGA4, 1 VGA4 (mode 0Dh), 2 Hercules |
 | 338 | 4+4 | the IDLE loop's records' offset and length (format 7): each record on a paragraph, which the idle table names |
+| 352 | 16 x 3 | VGA4: its sixteen colours (r, g, b), the DAC's six bits; slots 0 to 3 the band's CGA colours |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -237601,6 +237603,50 @@ Both are optional, and a bundle with neither plays as version 5's did.
   stopped, the music's ring is filled from its join again (`vb_load`'s
   second-play path), the rings are emptied, the battle's state is set up
   from the bundle, and the first head is read - all over a black screen.
+
+#### 125.3.2 The renditions: VGA4 and Hercules
+
+**One project, a bundle per adapter** (VBATTLE-MEMORY-PLAN 9): BATTLE.VBT
+(CGA4), BATTLEV.VBT (VGA4) and BATTLEH.VBT (Hercules), `os88vbt.py build`
+making each the project asks for (`target.renditions`). The engine takes
+its adapter's first and the CGA4 one after it (`vb_load`: a VGA without a
+BATTLEV.VBT plays the CGA4 bundle in mode 4, as before); a Hercules has no
+second choice ("Needs BATTLEH.VBT on a Hercules"). The bundle's byte 337
+then sets the mode, the palette and the decode.
+
+- **The same frames.** Loop points, anchors and cues are frame numbers, so
+  every rendition is made of the CGA4 encode's own frames: read with the
+  encoder's `ffmpeg_video` at the same fps, then quantized by the builder -
+  an ordered dither anchored to the canvas and a pixel's value HELD while
+  its source moves less than a threshold (`vbtana.quant_vga`,
+  `quant_herc`), so still footage costs nothing frame to frame.
+- **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows. ONE
+  palette for the battle (`vbtana.battle_palette`): slots 0 to 3 the band's
+  CGA colours, the rest a k-means of every video source, 4, 8 or 16 in all
+  (`target.vga_colours`). A record is sub-records, each its Map Mask and ten
+  lists, a 0 after the last (`os88vid.vga4_subs`, planes wanting the same
+  byte under one mask), which `vb_decode` plays with an OUT a sub-record.
+- **Hercules** is 720 x 348, the canvas 640 wide at byte 5 (`VB_HORG`, the
+  decoder's BP), its rows `348 - 2 x the band's`: the band's every logical
+  pixel two by two, so the band is the same 40 x 8 cells.
+- **The band is the same picture everywhere**: composed in 2 bits a pixel
+  as on CGA, and on VGA4 and Hercules always into the composition buffer,
+  which `vb_bpres` presents - planes 0 and 1 of a cell from a table, 2 and 3
+  cleared, a row's plane at a time with interrupts off (the hook's decode
+  moves the Map Mask); on Hercules each pixel as a 2 x 2 pattern (0 none, 1
+  one, 2 a checker, 3 all - `vbtana.HERC22`).
+- **The fade**: Hercules ANDs one-bit masks; VGA4 writes each byte through
+  the latches with Set/Reset 0 enabled on every plane and the Bit Mask the
+  step's pixels.
+- **A record may be 32 KB** where a whole screen is more than 16 (VGA's
+  planes, Hercules'): the rings' guard is the header's largest record's,
+  16 or 32 KB (`[vb_cgkb]`).
+
+`vbtadapters` holds each on MartyPC: the title byte for byte against the
+host's decode (VGA's planes read off the card), the fade, the band exact
+against the engine's own buffer converted by the host, the idle frames,
+and victory to its end loop. Measured on the owner's H3 battle: CGA4 3.0
+MB, VGA4 at eight colours 4.0 MB, Hercules 4.1 MB.
 
 ### 125.4 Reading, and memory
 
@@ -237881,8 +237927,9 @@ kept.
   (`OS88_MEGA_REFUSE`) wants a kern_mega arm beside it (`t_megapkg`), and
   is for when the package ships.
 
-**Other adapters.** Hercules and VGA renditions are not written: a bundle
-is CGA4, and a VGA plays it in mode 4.
+**Other adapters.** The VGA4 and Hercules renditions (125.3.2) play on one
+page: like CGA's, a cut is drawn where it can be seen. Their second page is
+not used yet. An EGA takes the CGA4 bundle in mode 4.
 
 **Hardware not yet heard.** The PC speaker (VIDEO-BATTLE-PLAN 3.2) is not
 an output.

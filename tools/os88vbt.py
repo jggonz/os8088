@@ -95,45 +95,120 @@ def pad(b, n=SECTOR):
     return bytes(b) + bytes(-len(b) % n)
 
 
+class Rend:
+    """A RENDITION's pixels on its adapter (VBATTLE-MEMORY-PLAN 9): CGA4's
+    two banks of 80 bytes, VGA4's four planes of 40 (mode 0Dh), or
+    Hercules' four banks of 90 with the canvas 640 wide at byte 5. The
+    frames are the project's same frames; only the bytes differ"""
+    KIND = {"cga4": 0, "vga4": 1, "herc": 2}
+
+    def __init__(self, kind="cga4", rows=142, pal=None):
+        self.kind, self.code = kind, self.KIND[kind]
+        self.w = 640 if kind == "herc" else 320
+        self.full = 348 if kind == "herc" else 200
+        self.rows = rows
+        self.pal = pal              # vga4: 16 (r, g, b), the DAC's six bits
+        # a record's most: the rings' guard - 16 KB, or 32 where a whole
+        # screen is more than 16 (VGA's planes, Hercules'), the engine's
+        # [vb_cgkb] from the header's largest record
+        self.recmax = REC_MAX if kind == "cga4" else 2 * REC_MAX
+        self.geoms = {}
+
+    def geom(self, rows):
+        if rows not in self.geoms:
+            if self.kind == "vga4":
+                g = V.Geom(V.LAY_LIN80, 40, rows, bitplanes=True, stride=40)
+            elif self.kind == "herc":
+                g = V.Geom(V.LAY_HERC, 80, rows)
+            else:
+                g = V.Geom(V.LAY_CGA, 80, rows)
+            self.geoms[rows] = g
+        return self.geoms[rows]
+
+    def blank(self):
+        return bytearray(V.PLANE * 4) if self.kind == "vga4" \
+            else bytearray(65536)
+
+    def surface(self, px, rows):
+        if self.kind == "cga4":
+            s = bytearray(65536)
+            p = px.astype(np.uint8)
+            packed = (p[:, 0::4] << 6) | (p[:, 1::4] << 4) | \
+                (p[:, 2::4] << 2) | p[:, 3::4]
+            for y in range(rows):
+                b = (y & 1) * 8192 + (y >> 1) * 80
+                s[b:b + 80] = packed[y].tobytes()
+            return s
+        g = self.geom(rows)
+        s = self.blank()
+        if self.kind == "vga4":
+            g.put(s, px[:rows].astype(np.uint8).tobytes())
+        else:
+            g.put(s, np.packbits(px[:rows].astype(np.uint8), axis=1).tobytes())
+        return s
+
+    def lists(self, a, b, rows):
+        g = self.geom(rows)
+        ops = V.seam_ops(a, b, g)
+        if g.planes == 1:
+            return V.to_lists(ops)[0]
+        body = bytearray()          # VGA4: sub-records, each its Map Mask
+        for mask, sub in ops:       # and ten lists, a 0 after the last
+            if sub:
+                body.append(mask)
+                body += V.to_lists(sub)[0]
+        body.append(0)
+        return bytes(body)
+
+    def empty(self):
+        return b"\0" if self.kind == "vga4" else EMPTY_LISTS
+
+    def decode(self, surf, lists):
+        """The lists onto SURF; their length"""
+        if self.kind != "vga4":
+            return V.decode_lists(surf, lists)
+        at = 0
+        mv = memoryview(surf)
+        while lists[at]:
+            m = lists[at]
+            used = 0
+            for p in range(4):
+                if m >> p & 1:
+                    used = V.decode_lists(mv[p * V.PLANE:(p + 1) * V.PLANE],
+                                          lists[at + 1:])
+            at += 1 + used
+        return at + 1
+
+
+REND = Rend()
+
+
 def surface_of(px, rows):
-    """A 64 KB CGA surface image (layout cga, 2 banks of 80 bytes a row)
-    from pixel indexes 0..3, `rows` x 320"""
-    s = bytearray(65536)
-    p = px.astype(np.uint8)
-    packed = (p[:, 0::4] << 6) | (p[:, 1::4] << 4) | (p[:, 2::4] << 2) | p[:, 3::4]
-    for y in range(rows):
-        b = (y & 1) * 8192 + (y >> 1) * 80
-        s[b:b + 80] = packed[y].tobytes()
-    return s
+    """The rendition's surface image of pixel frame PX, its first ROWS"""
+    return REND.surface(px, rows)
 
 
 def full_of(px):
     """A frame of the canvas's rows as a whole screen: the rows under it
     (the band's) black"""
-    if px.shape[0] == ROWS_FULL:
+    if px.shape[0] == REND.full:
         return px
-    return np.vstack([px, np.zeros((ROWS_FULL - px.shape[0], px.shape[1]),
+    return np.vstack([px, np.zeros((REND.full - px.shape[0], px.shape[1]),
                                    np.uint8)])
 
 
-GEOMS = {}
-
-
 def geom(rows):
-    if rows not in GEOMS:
-        GEOMS[rows] = V.Geom(V.LAY_CGA, 80, rows)
-    return GEOMS[rows]
+    return REND.geom(rows)
 
 
 def rec(a, b, rows, audio=b""):
     """The record that takes surface a to surface b, with its frame's sound:
-    its length (all of it), the sound's length, the ten lists (SPEC.md
-    98.1.3), the sound (125.2.3)"""
-    lists = V.to_lists(V.seam_ops(a, b, geom(rows)))[0] if a is not None \
-        else EMPTY_LISTS
+    its length (all of it), the sound's length, the lists (SPEC.md 98.1.3;
+    VGA4's sub-records), the sound (125.2.3)"""
+    lists = REND.lists(a, b, rows) if a is not None else REND.empty()
     n = REC_HDR + len(lists) + len(audio)
-    if n > REC_MAX:
-        raise ValueError("a record of %d bytes, over %d" % (n, REC_MAX))
+    if n > REND.recmax:
+        raise ValueError("a record of %d bytes, over %d" % (n, REND.recmax))
     return struct.pack("<HH", n, len(audio)) + lists + audio
 
 
@@ -144,8 +219,9 @@ def rec_pad(r, k):
     if not k:
         return r
     n, alen = struct.unpack_from("<HH", r, 0)
-    if n + k > REC_MAX:
-        raise ValueError("a padded record of %d bytes, over %d" % (n + k, REC_MAX))
+    if n + k > REND.recmax:
+        raise ValueError("a padded record of %d bytes, over %d"
+                         % (n + k, REND.recmax))
     return struct.pack("<HH", n + k, alen) + r[4:n - alen] + bytes(k) + \
         r[n - alen:]
 
@@ -155,7 +231,7 @@ EMPTY_LISTS = bytes(V.NLISTS)       # ten empty lists: a frame of sound only
 
 def decode(surf, r):
     n, alen = struct.unpack_from("<HH", r, 0)
-    used = V.decode_lists(surf, r[REC_HDR:n - alen])
+    used = REND.decode(surf, r[REC_HDR:n - alen])
     if used != n - alen - REC_HDR and \
             any(r[REC_HDR + used:n - alen]):    # (a loop's PADDING: zeros)
         raise ValueError("a record's lists end at %d of %d"
@@ -250,9 +326,12 @@ class Battle:
         self.endings = {}       # outcome -> (how, a loop dict or None);
                                 # an end loop is the canvas's
         self.fade_steps = 16
+        self.rend = Rend("cga4", rows)  # the adapter it is for
 
 
 def build(b):
+    global REND
+    REND = b.rend
     rows = b.rows
     spf = b.rate // b.fps
     idle_s = [surface_of(f, rows) for f in b.idle]
@@ -284,37 +363,37 @@ def build(b):
     # one frame, silent: idle frame 0 from black
     openings = b.openings or [dict(name="start", frames=[b.idle[0]],
                                    sound=None, exit=0)]
-    scr = np.zeros((ROWS_FULL, 320), np.uint8)
-    title_s = [surface_of(full_of(f), ROWS_FULL) for f in b.title["frames"]] \
+    scr = np.zeros((REND.full, REND.w), np.uint8)
+    title_s = [surface_of(full_of(f), REND.full) for f in b.title["frames"]] \
         if b.title else []
     ents = bytearray()
     for k, o in enumerate(openings):
         last = k == len(openings) - 1
         fr = [full_of(f) for f in o["frames"]]
         snd = frame_sound(o.get("sound"), len(fr), spf, True)
-        prev = surface_of(scr, ROWS_FULL)
+        prev = surface_of(scr, REND.full)
         recs = []
         anch = []
         flags = CF_OPENING | CF_FULL | CF_OWNSND
         if o.get("enter"):          # ENTERED at the title's frames, as an
             flags |= CF_ENTER       # action is at the idle loop's: an entry
-            cur = surface_of(fr[0], ROWS_FULL)      # from each anchor, and
+            cur = surface_of(fr[0], REND.full)      # from each anchor, and
             for ka in o["anchors"]:                 # its record 0 its sound
                 anch.append((ka, len(ents) >> 4))
-                ents += pad(rec(title_s[ka], cur, ROWS_FULL), 16)
-            recs.append(rec(None, None, ROWS_FULL, snd[0]))
+                ents += pad(rec(title_s[ka], cur, REND.full), 16)
+            recs.append(rec(None, None, REND.full, snd[0]))
             prev = cur
             fr, snd = fr[1:], snd[1:]
         for f, a in zip(fr, snd):
-            cur = surface_of(f, ROWS_FULL)
-            recs.append(rec(prev, cur, ROWS_FULL, a))
+            cur = surface_of(f, REND.full)
+            recs.append(rec(prev, cur, REND.full, a))
             prev = cur
         exit_to = 0
         if last:            # the scene opening seams onto the idle loop
             flags |= CF_JOINS
             exit_to = o.get("exit", 0)
             recs.append(rec(prev, surface_of(full_of(b.idle[exit_to]),
-                                             ROWS_FULL), ROWS_FULL))
+                                             REND.full), REND.full))
         scr = o["frames"][-1] if not fr else fr[-1]
         scr = full_of(scr)
         regions.append(stream(recs))
@@ -358,7 +437,7 @@ def build(b):
         key = lp["name"]
         if key in loop_ix:
             return loop_ix[key]
-        rw = ROWS_FULL if full else rows
+        rw = REND.full if full else rows
         fr = [full_of(f) if full else f for f in lp["frames"]]
         ss = [surface_of(f, rw) for f in fr]
         snd = frame_sound(lp.get("sound"), len(ss), spf, True)
@@ -373,7 +452,7 @@ def build(b):
         lap = sum(len(r) for r in recs[1:])
         need = -lap % ALIGN
         for i in range(len(recs) - 1, 0, -1):   # the seam first, then back
-            room = REC_MAX - len(recs[i])
+            room = REND.recmax - len(recs[i])
             if need and room > 0:
                 k = min(room, need)
                 recs[i] = rec_pad(recs[i], k)
@@ -468,6 +547,9 @@ def build(b):
     struct.pack_into("<II", h, 88, ent_at, len(ents))
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
+    h[337] = REND.code                  # the adapter (cga4, vga4, herc)
+    if REND.pal:                        # vga4: its sixteen, the DAC's six bits
+        h[352:400] = bytes(v for c in REND.pal for v in c)
     struct.pack_into("<II", h, 338, idl_at, len(idle))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
@@ -533,6 +615,12 @@ class Bundle:
         self.endings = {"victory": (data[332], data[333]),
                         "defeat": (data[334], data[335])}
         self.fade_steps = data[336]
+        global REND
+        kind = {0: "cga4", 1: "vga4", 2: "herc"}[data[337]]
+        REND = Rend(kind, self.rows, [tuple(data[352 + 3 * i:355 + 3 * i])
+                                      for i in range(16)]
+                    if kind == "vga4" else None)
+        self.rend = REND
         self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
         self.idle_r = data[self.idl_at:self.idl_at + ilen2]
         self.rules = vbtrules.Rules(data[SCRIPT_AT:self.meta_len])
@@ -583,14 +671,14 @@ def verify(data, quiet=False):
     g = geom(b.rows)
 
     def canvas(s):
-        return bytes(s[x] for base in g.base for x in range(base, base + 80))
+        return g.canvas(s)
 
     def loop_lap(c):
         """Loop clip C from black: the screens after record 0 and after
         each of records 1..n, twice round - lap 2 must be lap 1, and its
         last (the seam) frame 0 again"""
         rs = b.stream(c)
-        s = bytearray(65536)
+        s = REND.blank()
         decode(s, rs[0])
         first = bytes(s)
         laps = []
@@ -621,7 +709,7 @@ def verify(data, quiet=False):
                 decode(scr, r)
             cur = c["exit"]
         return cur
-    scr = bytearray(65536)
+    scr = REND.blank()
     if b.openings and b.clips[b.openings[0]]["flags"] & CF_ENTER:
         lc = b.clips[b.openings[0]]
         if title is None or not lc["anch"]:
@@ -664,9 +752,8 @@ def verify(data, quiet=False):
         if not c["anch"]:
             raise ValueError("clip %s has no anchor" % c["name"])
         for k, o in c["anch"]:
-            s = bytearray(65536)
-            for y, base in enumerate(g.base):
-                s[base:base + 80] = idle[k][y * 80:(y + 1) * 80]
+            s = REND.blank()
+            g.put(s, idle[k])
             decode(s, b.entry(o))
             for r in b.stream(c):
                 decode(s, r)
@@ -690,30 +777,41 @@ def verify(data, quiet=False):
 
 # --- the demo battle --------------------------------------------------------------
 
-def demo(bars=16, floppy=False):
-    """The demo battle: its project (demo_project), as a Battle"""
-    return battle_of(demo_project(None, bars, floppy))
+def demo(bars=16, floppy=False, kind="cga4"):
+    """The demo battle: its project (demo_project), as a Battle - in
+    rendition KIND (its made-up scenes are CGA's, which VGA's slots 0..3 and
+    Hercules' two by two show as they are)"""
+    return battle_of(demo_project(None, bars, floppy), kind=kind)
 
 
 # --- a PROJECT (tools/vbtproj.py) built ----------------------------------------------
 
-def battle_of(proj, progress=None):
+def battle_of(proj, progress=None, kind="cga4"):
     """A project as a Battle: every source's screens (tools/vbtana.py,
     cached), its sounds, and the script the engine of today plays"""
     import vbtana as A
     pg = progress or (lambda *a: None)
     d, t = proj.d, proj.d["target"]
-    b = Battle(t["palette"], t["canvas"][3], t["fps"], t["rate"])
+    import vbtana as A_
+    w_, rows_, full_ = A_.rend_size(proj, kind)
+    b = Battle(t["palette"], rows_, t["fps"], t["rate"])
+    pal = None
+    if kind == "vga4":              # one palette for the battle, six bits,
+        p8 = A_.battle_palette(proj, t.get("vga_colours", 8), progress or
+                               (lambda *a: None))
+        pal = [tuple(v >> 2 for v in c) for c in p8] + \
+            [(0, 0, 0)] * (16 - len(p8))
+    b.rend = Rend(kind, rows_, pal)
     b.band = tuple(t["band"])
     b.canvas = tuple(t["canvas"])
-    b.idle = A.idle_of(proj, pg)
+    b.idle = A.idle_of(proj, pg, kind)
     for sid in d["sounds"]:
         b.sfx[sid] = A.sound(proj, sid)
     opened = [o["clip"] for o in d["openings"]]
     for i, o in enumerate(d["openings"]):
         c = d["clips"][o["clip"]]
         pg("clips", i, len(d["clips"]), o["clip"])
-        b.openings.append(dict(name=o["clip"], frames=A.frames_of(proj, o["clip"], pg),
+        b.openings.append(dict(name=o["clip"], frames=A.frames_of(proj, o["clip"], pg, kind),
                                sound=b.sfx[o["sound"]] if o.get("sound") else None,
                                exit=c["exit"]))
     # a clip only a loop or the title's way out plays is not an action's
@@ -734,7 +832,7 @@ def battle_of(proj, progress=None):
         pg("clips", i, len(d["clips"]), cid)
         spf = t["rate"] // t["fps"]
         cues = [(q["frame"], cue_key(q, b.sfx, spf)) for q in c["cues"]]
-        b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg),
+        b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg, kind),
                             cues=cues, joins=c["joins"], exit=c["exit"],
                             ends=c["ends"], anchors=c["anchors"]))
     b.music = b.sfx[d["music"]["sound"]]   # all music loops (10.2): the
@@ -749,7 +847,7 @@ def battle_of(proj, progress=None):
 
     def loop_of(lp, tag):
         c = d["clips"][lp["clip"]]
-        fr = A.frames_of(proj, lp["clip"], pg)[lp["loop"][0]:lp["loop"][1]]
+        fr = A.frames_of(proj, lp["clip"], pg, kind)[lp["loop"][0]:lp["loop"][1]]
         x = None
         if lp.get("sound"):
             x = b.sfx[lp["sound"]]
@@ -762,7 +860,7 @@ def battle_of(proj, progress=None):
         if t.get("leave"):              # the clip it is left by: opening 0,
             lc = d["clips"][t["leave"]]   # entered at the title's frames
             b.openings.insert(0, dict(      # (its sound: its cues, mixed,
-                name=t["leave"], frames=A.frames_of(proj, t["leave"], pg),
+                name=t["leave"], frames=A.frames_of(proj, t["leave"], pg, kind),
                 sound=A.clip_sound(proj, t["leave"]),   # played as its own)
                 exit=lc["exit"], enter=True, anchors=list(t["anchors"])))
     made = {}
@@ -838,12 +936,26 @@ def band_picture(path, pal, dither=True, cells=None, rows=None):
     return dd.argmin(-1).astype(np.uint8)
 
 
-def build_project(proj, progress=None):
+BUNDLE_NAMES = {"cga4": "BATTLE.VBT", "vga4": "BATTLEV.VBT",
+                "herc": "BATTLEH.VBT"}      # the engine looks for its own first
+
+
+def renditions_of(proj):
+    """The renditions a project builds: CGA4 always, and VGA4 and Hercules
+    as its target asks (target["renditions"])"""
+    r = [k for k in proj.d["target"].get("renditions", ["cga4"])
+         if k in BUNDLE_NAMES]
+    return ["cga4"] + [k for k in r if k != "cga4"]
+
+
+def build_project(proj, progress=None, kind="cga4"):
     errs = proj.errors()
     if errs:
         raise ValueError("the project has errors:\n  " +
                          "\n  ".join(map(repr, errs)))
-    b = battle_of(proj, progress)
+    b = battle_of(proj, progress, kind)
+    if kind == "herc":
+        b.canvas = (0, 0, 640, b.rows)
     data = build(b)
     verify(data, quiet=True)
     return data
@@ -941,7 +1053,7 @@ def preview(b, d):
 
 
 def cmd_demo(a):
-    b = demo(a.bars, a.floppy)
+    b = demo(a.bars, a.floppy, a.rendition)
     data = build(b)
     verify(data)
     with open(a.out, "wb") as f:
@@ -990,7 +1102,8 @@ def engine_path(build=None):
     return None
 
 
-def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None):
+def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None,
+              kinds=None):
     """(argv, image, files, note) making DISKS[disk] - the profile's disk by
     default (os88mkdisk.DISK_OF_PROFILE) - of the built BUNDLE (BATTLE.VBT
     beside the project) and the engine. Raises ValueError for what cannot
@@ -999,13 +1112,19 @@ def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None):
     if disk is None:
         disk = M.DISK_OF_PROFILE.get(proj.d["target"]["profile"], 6)
     here = os.path.dirname(proj.path)
-    bundle = bundle or os.path.join(here, "BATTLE.VBT")
-    if not os.path.exists(bundle):
-        raise ValueError("no %s: build it first" % os.path.basename(bundle))
     eng = engine_path(build)
     if not eng:
         raise ValueError("no VBATTLE.O88 here to put beside it")
-    files = [("VBATTLE.O88", eng), ("BATTLE.VBT", bundle)]
+    files = [("VBATTLE.O88", eng)]
+    if bundle:
+        files.append(("BATTLE.VBT", bundle))
+    else:                           # the renditions asked for, or every one
+        for k in kinds or renditions_of(proj):      # built beside it
+            f = os.path.join(here, BUNDLE_NAMES[k])
+            if os.path.exists(f):
+                files.append((BUNDLE_NAMES[k], f))
+    if len(files) == 1 or not os.path.exists(files[1][1]):
+        raise ValueError("no bundle: build it first")
     big = M.fits(files, disk)
     if big:
         raise ValueError("it needs %d KB and %s holds %d KB" % (
@@ -1033,7 +1152,7 @@ def cmd_disk(a):
     with tempfile.TemporaryDirectory() as stage:
         try:
             argv, img, files, note = disk_plan(proj, a.disk, a.bundle, a.out,
-                                               stage=stage)
+                                               stage=stage, kinds=a.rendition)
         except ValueError as e:
             raise SystemExit("os88vbt disk: %s" % e)
         r = subprocess.run(argv, capture_output=True, text=True)
@@ -1061,20 +1180,27 @@ def cmd_build(a):
             say(dict(stage="check", level=x.level, where=x.where, text=x.text))
         elif x.level != "INFO" or a.verbose:
             print(x)
-    data = build_project(proj, progress)
-    out = a.out or os.path.join(os.path.dirname(proj.path), "BATTLE.VBT")
-    with open(out, "wb") as f:
-        f.write(data)
-    bud = A.budget(proj, data)
+    kinds = [a.rendition] if a.rendition else renditions_of(proj)
+    res = []
+    for kind in kinds:
+        data = build_project(proj, progress, kind)
+        out = a.out if a.out and len(kinds) == 1 else os.path.join(
+            os.path.dirname(proj.path), BUNDLE_NAMES[kind])
+        with open(out, "wb") as f:
+            f.write(data)
+        bud = A.budget(proj, data)
+        res.append(dict(kind=kind, out=out, bytes=len(data), budget=bud))
+        if not a.json:
+            print("%s (%s): %d bytes; idle loop %d bytes, entries %d" % (
+                out, kind, len(data), bud["idle_bytes"], bud["entries"]))
+            for c in bud["clips"]:
+                print("  %-14s %7d bytes %5.1f KB/s (%3.0f%% of the disk) "
+                      "anchors %s" % (c["name"], c["bytes"], c["rate"] / 1024,
+                                      c["of_disk"] * 100, c["anchors"]))
     if a.json:
-        say(dict(stage="done", out=out, bytes=len(data), budget=bud))
-        return
-    print("%s: %d bytes; idle loop %d bytes, entries %d" % (
-        out, len(data), bud["idle_bytes"], bud["entries"]))
-    for c in bud["clips"]:
-        print("  %-14s %7d bytes %5.1f KB/s (%3.0f%% of the disk) anchors %s"
-              % (c["name"], c["bytes"], c["rate"] / 1024, c["of_disk"] * 100,
-                 c["anchors"]))
+        r0 = res[0]
+        say(dict(stage="done", out=r0["out"], bytes=r0["bytes"],
+                 budget=r0["budget"], renditions=res))
 
 
 def cmd_demo_project(a):
@@ -1118,6 +1244,8 @@ def main(argv=None):
                    help="the floppy's battle: no Limit, and 3.2 s of music, "
                         "short enough to be resident (SPEC.md 125.4)")
     q.add_argument("--preview", help="write a contact sheet per clip here")
+    q.add_argument("--rendition", choices=("cga4", "vga4", "herc"),
+                   default="cga4", help="the adapter it is for")
     q.set_defaults(fn=cmd_demo)
     q = sp.add_parser("build", help="build a project to a bundle")
     q.add_argument("project")
@@ -1126,6 +1254,9 @@ def main(argv=None):
                    help="progress and the result as JSON lines")
     q.add_argument("-v", "--verbose", action="store_true",
                    help="also say what the engine does not play yet")
+    q.add_argument("--rendition", choices=sorted(BUNDLE_NAMES),
+                   help="this rendition alone (all the project's by default: "
+                   "BATTLE.VBT, BATTLEV.VBT, BATTLEH.VBT)")
     q.set_defaults(fn=cmd_build)
     q = sp.add_parser("demo-project", help="the demo battle as a project")
     q.add_argument("out")
@@ -1144,6 +1275,9 @@ def main(argv=None):
                    "by default")
     q.add_argument("--bundle", help="the bundle (BATTLE.VBT beside the "
                    "project by default)")
+    q.add_argument("--rendition", action="append",
+                   choices=sorted(BUNDLE_NAMES), help="this rendition's "
+                   "bundle (again for more); every one built by default")
     q.add_argument("-o", "--out")
     q.add_argument("--json", action="store_true")
     q.set_defaults(fn=cmd_disk)

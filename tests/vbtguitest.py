@@ -394,6 +394,38 @@ with tempfile.TemporaryDirectory() as tdir:
     ok(any(x.where == "endings.victory" for x in pr.errors()),
        "joining an end loop that is not there is an ERROR")
 
+    # 9: the RENDITIONS (VBATTLE-MEMORY-PLAN 9): VGA4 and Hercules
+    pr = P.Project.load(vbp)
+    for kind in ("vga4", "herc"):
+        d9 = B2.build_project(pr, kind=kind)    # (verify inside: every path)
+        b9 = B2.Bundle(d9)
+        ok(b9.rend.kind == kind and d9[337] == {"vga4": 1, "herc": 2}[kind],
+           "the demo builds for %s and every path verifies (%d KB)"
+           % (kind, len(d9) // 1024))
+    B2.REND = B2.Rend("cga4")
+    pal = A.battle_palette(pr, 8)
+    ok([tuple(c) for c in pal[:4]] == [tuple(c) for c in
+                                       A.palette_rgb(pr.d["target"]["palette"])],
+       "a VGA palette's slots 0..3 are the band's CGA colours")
+    fr = np.zeros((3, 8, 16, 3), np.uint8)
+    fr[:] = 120
+    fr[2, 0, 0] = (124, 118, 121)       # a pixel that barely moved
+    q = A.quant_vga(fr, [(0, 0, 0), (255, 255, 255), (120, 120, 120),
+                         (60, 60, 60)])
+    ok((q[1] == q[0]).all() and (q[2] == q[1]).all(),
+       "a still picture's colours are HELD frame to frame (no dither crawl)")
+    hq = A.quant_herc(fr)
+    ok((hq[2] == hq[0]).all(), "...and its bits, on Hercules")
+    full = np.zeros((200, 320), np.uint8)
+    full[141, :] = 3
+    full[142, :] = 2
+    hf = np.vstack([A.herc_of_cga(full[:142], 232),
+                    A.herc_of_cga(full[142:], 116)])
+    ok(hf.shape == (348, 640) and hf[231].all() and hf[232].sum() == 320 and
+       hf[233].sum() == 320 and not hf[234:].any(),
+       "a whole CGA screen on Hercules: its canvas onto the canvas, its band "
+       "two for one onto the band")
+
 
 if fails:
     print("%d FAILED" % len(fails))

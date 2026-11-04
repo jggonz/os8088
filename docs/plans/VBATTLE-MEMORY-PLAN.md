@@ -1,6 +1,7 @@
 # VBATTLE-MEMORY — streaming the loops, and the memory faster machines have
 
-**Status: M1 BUILT (2026-11-04, format 7); M2 to M4 proposed.** The owner's
+**Status: M1 and the renditions (9) BUILT (2026-11-04, format 7); M2 to M4
+proposed.** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all
@@ -247,6 +248,16 @@ If a third package needs a hold, that is the time to factor one out
   ring, and its idle loop does not fit the block. So the order after the
   renditions is M1 (format 7), then M2 (the whole hold), then M3 (the
   order), then M4 (EMS in place).
+- **DONE 2026-11-04** (SPEC.md 125.3.2): BATTLEV.VBT and BATTLEH.VBT, made of
+  the CGA encode's own frames, one palette for a VGA battle with the band's
+  colours in slots 0..3, the band presented per adapter, the fade per
+  adapter; `vbtadapters` holds both on MartyPC to the byte. The owner's H3
+  battle: CGA4 3.0 MB, VGA4 at eight colours 4.0 MB, Hercules 4.1 MB.
+  **Measured, and a cost**: on MartyPC's 4.77 MHz XT the band's rebuild
+  takes ~1.2 s of the foreground's time under the hook's load on every
+  adapter (CGA too); VGA4 and Hercules add ~0.6 s to present it, where CGA
+  copies in ~0.2 - the menu up ~2 s after its turn on those. A second page
+  is not used yet: a cut is drawn where it is seen, as on CGA.
 - **Hercules' data** has not been measured here; one bit at 720 x 348 is
   250,560 pixels against CGA4's 45,440 at 320 x 142, so expect it near the
   VGA lines. It is the first measurement of that step.

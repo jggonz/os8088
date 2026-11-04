@@ -83,6 +83,16 @@ vb_band_frame:
 ; vb_band_put - the COMPOSED band ([vb_cseg]) onto the screen, row by row
 ; (CGA's two banks): every pixel of it written once
 vb_band_put:
+    cmp byte [vb_kind], VK_CGA4     ; VGA4, Hercules: the buffer is the
+    je .cga                         ; band's logical picture, presented
+    VB_BY
+    mov dx, ax
+    mov cx, 200
+    sub cx, ax
+    xor bx, bx
+    mov ax, 40
+    jmp vb_bpres
+.cga:
     push ds
     VB_BY
     mov dx, ax
@@ -480,6 +490,7 @@ vb_draw_msg:
 vb_text:
     push bp
     mov [vb_tcol], cx
+    mov [vb_tcol0], cx
     mov [vb_trow], dx
     mov al, bh
     and al, 3
@@ -521,8 +532,11 @@ vb_text:
     cmp bx, 16
     jb .x
     mov es, [vb_vseg]
+    cmp byte [vb_kind], VK_CGA4     ; (VGA4, Hercules: always the buffer,
+    jne .cb                         ; then presented)
     cmp byte [vb_tcomp], 0
     je .ch
+.cb:
     mov es, [vb_cseg]
 .ch:
     lodsb
@@ -547,8 +561,11 @@ vb_text:
     mov cx, 8
 .r:
     push cx
+    cmp byte [vb_kind], VK_CGA4
+    jne .cmp
     cmp byte [vb_tcomp], 0
     je .scr
+.cmp:
     mov al, dl                      ; composing: the buffer's own row
     sub al, [vb_meta+VH_BAND+1]
     mov ah, 80
@@ -583,8 +600,235 @@ vb_text:
     inc word [vb_tcol]
     jmp .ch
 .out:
+    cmp byte [vb_kind], VK_CGA4     ; drawn into the buffer: its cells onto
+    je .o2                          ; the screen, unless the whole band is
+    cmp byte [vb_tcomp], 0          ; about to be
+    jne .o2
+    mov dx, [vb_trow]
+    mov cx, 8
+    mov bx, [vb_tcol0]
+    mov ax, [vb_tcol]
+    call vb_bpres
+.o2:
     pop bp
     ret
+
+; vb_bpres - the band's buffer ([vb_cseg], 2 bits a pixel, 80 bytes a row)
+; onto a VGA4 or a Hercules screen: CX rows from screen row DX (the band's
+; logical rows, as on CGA), cells BX to AX (exclusive), 8 pixels each. VGA4:
+; the band's colours are the palette's slots 0..3 (vbtana.battle_palette),
+; so planes 0 and 1 carry them and 2 and 3 are cleared; a row's plane at a
+; time with interrupts off, since the hook's decode moves the Map Mask.
+; Hercules: each pixel two by two (vbtana.HERC22), the canvas's rows above
+vb_bpres:
+    push si
+    push di
+    push bp
+    cmp ax, bx
+    jbe .out
+    mov [vb_bpc0], bx
+    sub ax, bx
+    mov [vb_bpcn], ax
+    mov es, [vb_vseg]
+.row:
+    jcxz .out
+    push cx
+    push dx
+    mov ax, dx                      ; the buffer's row
+    sub al, [vb_meta+VH_BAND+1]
+    mov ah, 80
+    mul ah
+    mov si, [vb_bpc0]
+    shl si, 1
+    add si, ax
+    cmp byte [vb_kind], VK_VGA4
+    jne .herc
+    mov ax, 40                      ; VGA4: row DX, 40 bytes
+    mul dx
+    add ax, [vb_bpc0]
+    mov di, ax
+    mov bp, 0x0C                    ; planes 2 and 3: none of the band's
+    call .vclr
+    mov bp, 0x0102                  ; plane 0 (the table's low nibbles)
+    call .vpl
+    mov bp, 0x0202                  ; plane 1 (the high)
+    call .vpl
+    jmp short .next
+.herc:
+    mov ax, dx                      ; Hercules: rows 2(y - band) + the
+    sub al, [vb_meta+VH_BAND+1]     ; canvas's, and the one under it
+    xor ah, ah
+    shl ax, 1
+    add al, [vb_meta+9]
+    adc ah, 0
+    xor bp, bp
+    call .hrow
+    inc ax
+    mov bp, 256
+    call .hrow
+.next:
+    pop dx
+    pop cx
+    inc dx
+    dec cx
+    jmp .row
+.out:
+    pop bp
+    pop di
+    pop si
+    ret
+.hrow:                              ; Hercules row AX, table half BP
+    push ax
+    push si
+    mov di, ax
+    and di, 3
+    mov cl, 13
+    shl di, cl                      ; its bank
+    shr ax, 1
+    shr ax, 1
+    mov cx, 90
+    push dx
+    mul cx
+    pop dx
+    add di, ax
+    add di, VB_HORG
+    mov ax, [vb_bpc0]
+    shl ax, 1
+    add di, ax
+    mov cx, [vb_bpcn]
+    shl cx, 1                       ; two buffer bytes a cell, a screen byte
+    push ds                         ; each
+    mov ds, [vb_cseg]
+.hb:
+    lodsb
+    xor bh, bh
+    mov bl, al
+    add bx, bp
+    mov al, [cs:vb_hptab+bx]
+    stosb
+    loop .hb
+    pop ds
+    pop si
+    pop ax
+    ret
+.vclr:                              ; planes BP's low byte: cleared
+    pushf
+    cli
+    push di
+    mov dx, 0x3C4
+    mov ax, bp
+    mov ah, al
+    mov al, 2
+    out dx, ax
+    mov cx, [vb_bpcn]
+    xor al, al
+    rep stosb
+    pop di
+    mov ax, 0x0F02
+    out dx, ax
+    popf
+    ret
+.vpl:                               ; plane BP's high byte, its nibbles out
+    pushf                           ; of the table by BP's low byte's half
+    cli
+    push si
+    push di
+    mov dx, 0x3C4
+    mov ax, bp
+    mov al, 2
+    out dx, ax
+    mov cx, [vb_bpcn]
+    push ds
+    mov ds, [vb_cseg]
+.vb:
+    lodsb                           ; the cell's left four pixels...
+    xor bh, bh
+    mov bl, al
+    mov ah, [cs:vb_vptab+bx]
+    lodsb                           ; ...and its right four
+    mov bl, al
+    mov al, [cs:vb_vptab+bx]
+    test bp, 0x0100
+    jnz .lo
+    and ah, 0xF0                    ; plane 1: the high nibbles
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    jmp short .c
+.lo:
+    shl ah, 1                       ; plane 0: the low nibbles
+    shl ah, 1
+    shl ah, 1
+    shl ah, 1
+    and al, 0x0F
+.c:
+    or al, ah
+    stosb
+    loop .vb
+    pop ds
+    mov ax, 0x0F02
+    out dx, ax
+    pop di
+    pop si
+    popf
+    ret
+
+; vb_bptab - the present's tables, for the bundle's adapter: VGA4's, a byte
+; of four 2-bit pixels as plane 0's four bits (low nibble) and plane 1's
+; (high); Hercules', the same byte as its 8 pixels on an even row and on an
+; odd (vbtana.HERC22: 0 none, 1 one, 2 a checker, 3 all)
+vb_bptab:
+    xor bx, bx
+.b:
+    xor dx, dx                      ; DL: Hercules' even row, DH: its odd
+    xor cx, cx                      ; CL: plane 0's bits, CH: plane 1's
+    mov al, bl
+    mov si, 4
+.p:
+    mov ah, al
+    rol ah, 1
+    rol ah, 1
+    and ah, 3                       ; this pixel's value, 0..3
+    shl al, 1
+    shl al, 1
+    push bx
+    mov bl, ah
+    xor bh, bh
+    shl dl, 1
+    shl dl, 1
+    or dl, [vb_hve+bx]
+    shl dh, 1
+    shl dh, 1
+    or dh, [vb_hvo+bx]
+    pop bx
+    shl cl, 1
+    test ah, 1
+    jz .a
+    or cl, 1
+.a:
+    shl ch, 1
+    test ah, 2
+    jz .c
+    or ch, 1
+.c:
+    dec si
+    jnz .p
+    shl ch, 1
+    shl ch, 1
+    shl ch, 1
+    shl ch, 1
+    or cl, ch
+    mov [vb_vptab+bx], cl
+    mov [vb_hptab+bx], dl
+    mov [vb_hptab+256+bx], dh
+    inc bx
+    cmp bx, 256
+    jb .b
+    ret
+
+vb_hve:       db 0, 2, 2, 3         ; a pixel's two on an even row...
+vb_hvo:       db 0, 0, 1, 3         ; ...and on an odd
 
 ; vb_tground - AX (the glyph's mask, a byte each) as the buffer's bytes
 ; under row DX, column [vb_tcol], with the ink where the mask is

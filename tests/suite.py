@@ -16761,6 +16761,18 @@ SOAK = [
         "Broken on purpose (vb_fmask drawing nothing) it FAILS naming the "
         "lit pixels before and after",
         needs=("marty",)),
+    Row("vbtadapters", "soak", py("tests/vbtadapters.py"), 130.0,
+        "VBATTLE-MEMORY-PLAN 9: the Video Battle's VGA4 and Hercules "
+        "RENDITIONS on MartyPC (os8088_xt_vga_hdd_sb, "
+        "os8088_5150_herc_hdd_sb_gla), the demo with a 1-HP enemy beside its "
+        "CGA4 bundle. Each: the engine takes its adapter's bundle; the title "
+        "on the glass is the host's decode byte for byte (VGA's planes off "
+        "the card); Enter fades it out; at the menu the BAND on the glass is "
+        "the engine's band buffer as the host converts it, exactly (planes 0 "
+        "and 1; two by two); the canvas an idle frame; victory to its end "
+        "loop. Broken on purpose (Hercules' odd-row pattern swapped) the band "
+        "FAILS at every look",
+        needs=("marty",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "
@@ -16772,7 +16784,7 @@ SOAK = [
         "be the same bytes made twice. A module the closure missed fails here as an "
         "ImportError, where the owner would otherwise meet it",
         needs=("pil",), wants=("build/os8088-battle-builder.zip",)),
-    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 27.0,
+    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 38.0,
         "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
         "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
         "over all 96 CGA4 bytes (a swatch showing one set while the encode "

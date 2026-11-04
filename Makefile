@@ -20119,8 +20119,22 @@ $(BUILD)/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUI
 $(BUILD)/vbshort/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
 	@mkdir -p $(BUILD)/vbshort
 	python3 tools/os88vbt.py demo $@ --floppy
-#> [Applications] vbattledisk :: Video Battle's floppy, package and demo battle, in all four geometries
-vbattledisk: $(BUILD)/vbattle.img $(BUILD)/vbattle720.img $(BUILD)/vbattle120.img $(BUILD)/vbattle360.img
+# ...and the demo for a VGA (mode 0Dh) and for a Hercules (VBATTLE-MEMORY-PLAN
+# 9), each a 1.44 MB disk of its own: the engine takes BATTLEV.VBT or
+# BATTLEH.VBT where it finds one for its adapter
+$(BUILD)/vbvga/BATTLEV.VBT: tools/os88vbt.py tools/vbtscene.py tools/vbtana.py tools/os88vid.py | $(BUILD)
+	@mkdir -p $(BUILD)/vbvga
+	python3 tools/os88vbt.py demo $@ --rendition vga4
+$(BUILD)/vbherc/BATTLEH.VBT: tools/os88vbt.py tools/vbtscene.py tools/vbtana.py tools/os88vid.py | $(BUILD)
+	@mkdir -p $(BUILD)/vbherc
+	python3 tools/os88vbt.py demo $@ --rendition herc
+$(BUILD)/vbattlev.img: $(BUILD)/vbattle.o88 $(BUILD)/vbvga/BATTLEV.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbvga/BATTLEV.VBT
+$(BUILD)/vbattleh.img: $(BUILD)/vbattle.o88 $(BUILD)/vbherc/BATTLEH.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbherc/BATTLEH.VBT
+#> [Applications] vbattledisk :: Video Battle's floppy, package and demo battle, in all four geometries, and its VGA and Hercules demos
+vbattledisk: $(BUILD)/vbattle.img $(BUILD)/vbattle720.img $(BUILD)/vbattle120.img $(BUILD)/vbattle360.img \
+	$(BUILD)/vbattlev.img $(BUILD)/vbattleh.img
 VBATTLEFILES = $(BUILD)/vbattle.o88 $(BUILD)/BATTLE.VBT
 $(BUILD)/vbattle.img: $(VBATTLEFILES) tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $(VBATTLEFILES)

@@ -143,16 +143,232 @@ def screens(proj, sid, progress=_nop):
     return fr
 
 
-def frames_of(proj, cid, progress=_nop):
+# --- RENDITIONS (Hercules and VGA): the same frames, another adapter's pixels -
+#
+# A project's frames are numbered once - its loop points, anchors and cues are
+# frame numbers - so every rendition is made of the SAME frames: read through
+# the encoder's own ffmpeg_video with the CGA encode's fps expression, and
+# quantized here. "cga4" is the encoder's own encode (screens above).
+#   vga4: mode 0Dh, 320 x the canvas's rows, K colours of ONE palette for the
+#         whole battle - slots 0..3 the band's CGA colours (the band is the
+#         same picture on every adapter), the rest the footage's own
+#   herc: 640 x (348 - twice the band's rows): every logical band pixel two
+#         by two, so the band is the same 40 x 8 cells; one bit a pixel
+
+REND_KINDS = ("cga4", "vga4", "herc")
+HOLD_RGB = 14           # a pixel keeps its colour while its source moves less
+HOLD_LUM = 10           # ...and its bit, while its brightness does
+
+
+def rend_size(proj, kind):
+    """(width, canvas rows, full-screen rows) of rendition KIND"""
+    rows = proj.d["target"]["canvas"][3]
+    if kind == "herc":
+        return 640, 348 - 2 * (200 - rows), 348
+    return 320, rows, 200
+
+
+def _src_crop(kind, w, h):
+    par = (29, 45) if kind == "herc" else (5, 6)
+    return w * par[0] / par[1] / h
+
+
+def rgb_frames(proj, sid, w, h, kind, progress=_nop):
+    """Source SID's frames as rgb24, w x h, the encoder's frames exactly"""
+    import os88venc as E
+    s = proj.d["sources"][sid]
+    t = proj.d["target"]
+    path = proj.here(s["path"])
+    key = hashlib.sha1(json.dumps(["rgb1", file_hash(path), w, h, kind,
+                                   t["fps"], t["rate"]]).encode()
+                       ).hexdigest()[:20]
+    npy = os.path.join(cache_dir(proj), key + ".rgb.npy")
+    if os.path.exists(npy):
+        return np.load(npy)
+    progress("encode", 0, 0, "%s (%s)" % (sid, kind))
+    spf = t["rate"] // t["fps"]
+    fr = np.stack(list(E.ffmpeg_video(path, w, h, _src_crop(kind, w, h),
+                                      "%d/%d" % (t["rate"], spf), None, None,
+                                      None, pix="rgb24")))
+    tmp = npy + ".part.npy"
+    np.save(tmp, fr)
+    os.replace(tmp, npy)
+    return fr
+
+
+def battle_palette(proj, k, progress=_nop):
+    """The VGA rendition's K colours (8-bit RGB): the band's four CGA colours,
+    then K - 4 of the footage's own, a k-means over every video source"""
+    t = proj.d["target"]
+    band = palette_rgb(t["palette"])
+    if k <= 4:
+        return [tuple(c) for c in band][:k]
+    w, h, _ = rend_size(proj, "vga4")
+    samp = []
+    rng = np.random.RandomState(1)
+    for sid, s in proj.d["sources"].items():
+        if s["kind"] == "scene":
+            continue
+        fr = rgb_frames(proj, sid, w, h, "vga4", progress)
+        px = fr.reshape(-1, 3)
+        samp.append(px[rng.randint(0, len(px), min(len(px), 20000))])
+    if not samp:
+        return [tuple(c) for c in band] + [(0, 0, 0)] * (k - 4)
+    x = np.concatenate(samp).astype(float)
+    fixed = np.array(band, float)
+    c = x[rng.choice(len(x), k - 4, replace=False)]
+    for _ in range(16):
+        allc = np.vstack([fixed, c])
+        d2 = ((x[:, None, :] - allc[None]) ** 2).sum(2)
+        lab = np.argmin(d2, 1)
+        worst = np.argsort(-d2.min(1))      # the pixels served worst
+        w = 0
+        for j in range(k - 4):
+            m = lab == j + 4
+            others = np.delete(allc, j + 4, 0)
+            dup = ((others - c[j]) ** 2).sum(1).min() < 100
+            if m.any() and not dup:
+                c[j] = x[m].mean(0)
+            else:                           # empty, or a copy of another
+                c[j] = x[worst[w]]          # colour: re-seeded where the
+                w += 1                      # palette is furthest off
+    allc = np.vstack([fixed, c])            # (and, last, no near copies:
+    for j in range(k - 4):                  # a mean can pull one back)
+        others = np.delete(allc, j + 4, 0)
+        if ((others - c[j]) ** 2).sum(1).min() < 400:
+            d2 = ((x[:, None, :] - allc[None]) ** 2).sum(2).min(1)
+            c[j] = x[int(np.argmax(d2))]
+            allc = np.vstack([fixed, c])
+    return [tuple(int(v) for v in col) for col in np.vstack([fixed, c])]
+
+
+def _bayer4():
+    m = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9],
+                  [15, 7, 13, 5]], float)
+    return (m + 0.5) / 16
+
+
+def quant_vga(fr, pal):
+    """rgb24 frames to palette indexes: an ordered dither anchored to the
+    canvas, and a pixel's colour HELD while its source has moved less than
+    HOLD_RGB, so still footage costs nothing frame to frame"""
+    pal = np.array(pal, float)
+    n, h, w, _ = fr.shape
+    b = _bayer4()[np.arange(h)[:, None] % 4, np.arange(w)[None, :] % 4]
+    spread = 40.0
+    out = np.zeros((n, h, w), np.uint8)
+    prev, prgb = None, None
+    for i in range(n):
+        x = fr[i].astype(float) + ((b - 0.5) * spread)[..., None]
+        d = ((x[:, :, None, :] - pal[None, None]) ** 2).sum(3)
+        idx = np.argmin(d, 2).astype(np.uint8)
+        if prev is not None:
+            still = np.abs(fr[i].astype(int) - prgb).max(2) < HOLD_RGB
+            idx[still] = prev[still]
+            prgb = np.where(still[..., None], prgb, fr[i].astype(int))
+        else:
+            prgb = fr[i].astype(int)
+        out[i] = idx
+        prev = idx
+    return out
+
+
+def quant_herc(fr):
+    """rgb24 frames to one bit: brightness against the ordered threshold,
+    a pixel HELD while its brightness moves less than HOLD_LUM"""
+    lum = fr[..., 0] * 0.299 + fr[..., 1] * 0.587 + fr[..., 2] * 0.114
+    n, h, w = lum.shape
+    b = _bayer4()[np.arange(h)[:, None] % 4, np.arange(w)[None, :] % 4] * 255
+    out = np.zeros((n, h, w), np.uint8)
+    prev, plum = None, None
+    for i in range(n):
+        bit = (lum[i] > b).astype(np.uint8)
+        if prev is not None:
+            still = np.abs(lum[i] - plum) < HOLD_LUM
+            bit[still] = prev[still]
+            plum = np.where(still, plum, lum[i])
+        else:
+            plum = lum[i].copy()
+        out[i] = bit
+        prev = bit
+    return out
+
+
+# a CGA value as Hercules' two by two: 0 none, 1 one, 2 a checker, 3 all -
+# the band's own rule (vbband.inc's present), so a made-up scene and the band
+# look the same
+HERC22 = np.array([[[0, 0], [0, 0]], [[1, 0], [0, 0]], [[1, 0], [0, 1]],
+                   [[1, 1], [1, 1]]], np.uint8)
+
+
+def herc_of_cga(px, rows):
+    """A CGA4 frame (h x 320) as Hercules pixels, ROWS x 640: each pixel two
+    wide, the rows scaled (a 142-row canvas is 232 there, a 200-row screen
+    348), the 2 x 2 pattern by the Hercules pixel's own place"""
+    h, w = px.shape
+    src = (np.arange(rows) * h) // rows
+    v = px[src]                                     # rows x 320
+    pat = HERC22[v]                                 # rows x 320 x 2 x 2
+    yy = (np.arange(rows) & 1)[:, None]
+    return np.concatenate([pat[np.arange(rows)[:, None], np.arange(w)[None],
+                                yy, 0][..., None],
+                           pat[np.arange(rows)[:, None], np.arange(w)[None],
+                               yy, 1][..., None]], 2).reshape(rows, w * 2)
+
+
+def rend_screens(proj, sid, kind, progress=_nop):
+    """Source SID's frames in rendition KIND, as the adapter will show them:
+    palette indexes for cga4 and vga4, bits for herc"""
+    if kind == "cga4":
+        return screens(proj, sid, progress)
+    s = proj.d["sources"][sid]
+    if s["kind"] == "scene":
+        base = screens(proj, sid, progress)     # (CGA values: the VGA's
+        if kind == "vga4":                      # slots 0..3 are CGA's)
+            return base
+        _, crow, frow = rend_size(proj, "herc")
+        cr = proj.d["target"]["canvas"][3]
+        out = []
+        for f in base:              # a WHOLE screen in two parts: its canvas
+            if f.shape[0] == 200:   # rows onto Hercules' canvas, its band's
+                out.append(np.vstack([herc_of_cga(f[:cr], crow),    # two
+                                      herc_of_cga(f[cr:], frow - crow)]))
+            else:                   # for one onto Hercules' band - scaled
+                out.append(herc_of_cga(f, crow))    # whole, the picture ran
+        return out                                  # into the band's rows
+    w, h, _ = rend_size(proj, kind)
+    t = proj.d["target"]
+    k = t.get("vga_colours", 8)
+    key = hashlib.sha1(json.dumps(
+        ["q1", file_hash(proj.here(s["path"])), kind, w, h, k, t["palette"],
+         HOLD_RGB, HOLD_LUM, battle_palette(proj, k) if kind == "vga4"
+         else None]).encode()).hexdigest()[:20]
+    npy = os.path.join(cache_dir(proj), key + ".q.npy")
+    if os.path.exists(npy):
+        return list(np.load(npy))
+    fr = rgb_frames(proj, sid, w, h, kind, progress)
+    n = len(screens(proj, sid, progress))   # the CGA encode's count rules
+    fr = fr[:n] if len(fr) >= n else np.concatenate(
+        [fr, np.repeat(fr[-1:], n - len(fr), 0)])
+    progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
+    q = quant_vga(fr, battle_palette(proj, k)) if kind == "vga4" \
+        else quant_herc(fr)
+    np.save(npy + ".part.npy", q)
+    os.replace(npy + ".part.npy", npy)
+    return list(q)
+
+
+def frames_of(proj, cid, progress=_nop, kind="cga4"):
     """Clip CID's frames: its source's, in..out"""
     c = proj.d["clips"][cid]
-    return screens(proj, c["source"], progress)[c["in"]:c["out"] + 1]
+    return rend_screens(proj, c["source"], kind, progress)[
+        c["in"]:c["out"] + 1]
 
 
-def idle_of(proj, progress=_nop):
+def idle_of(proj, progress=_nop, kind="cga4"):
     i = proj.d["idle"]
     a, b = i["loop"]
-    return screens(proj, i["source"], progress)[a:b]
+    return rend_screens(proj, i["source"], kind, progress)[a:b]
 
 
 def _ffmpeg(path, rate, start=None, end=None):
@@ -330,7 +546,8 @@ def memory(data, free_kb=VB_FREE):
              ("the band's two buffers", VB_BAND)]
     res = sum(n for _, n in parts)
     left = free_kb - (res + 1023) // 1024 - VB_CARD - VB_RKEEP
-    ring = (left // 2 - VB_CGUARD) // 4 * 4
+    guard = VB_CGUARD if b.maxrec <= 16384 else 2 * VB_CGUARD
+    ring = (left // 2 - guard) // 4 * 4
     return dict(parts=parts, resident=res, card=VB_CARD * 1024,
                 ring=ring * 1024 if ring >= VB_CRMIN else None,
                 free=free_kb * 1024, music_resident=mres)

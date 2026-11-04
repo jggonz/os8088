@@ -87,6 +87,12 @@ VH_TITLE    equ 330             ; the title loop's clip, FFh none
 VH_LEAVE    equ 331             ; FFh: the title is left by a fade
 VH_ENDS     equ 332             ; victory, defeat: (how, end loop) bytes
 VH_FSTEPS   equ 336             ; a fade's steps, 1..16
+VH_KIND     equ 337             ; the adapter: VK_CGA4, VK_VGA4, VK_HERC
+VH_VPAL     equ 352             ; VGA4's sixteen (r, g, b), six bits each
+VK_CGA4     equ 0
+VK_VGA4     equ 1
+VK_HERC     equ 2
+VB_HORG     equ 5               ; Hercules: the 640-wide canvas at byte 5
 VH_IDLE     equ 338             ; dword offset, dword length: the IDLE loop's
                                 ; records, by paragraph (format 7)
 EH_HOLD     equ 0
@@ -433,7 +439,7 @@ vb_read:
     push ds
     pop es
     mov di, [vb_rcur]
-    mov si, vb_name
+    mov si, [vb_namep]
     push cx
     call OSAPI_FILE_READ_SEQ
     pop cx
@@ -597,15 +603,40 @@ vb_load:
     je .first
     jmp .again
 .first:
+    ; WHICH BUNDLE: this adapter's own rendition first (VBATTLE-MEMORY-PLAN
+    ; 9) - BATTLEV.VBT on a VGA, BATTLEH.VBT on a Hercules - and on a VGA
+    ; or anything else the CGA4 one, BATTLE.VBT, in mode 4
+    mov word [vb_namep], vb_name
+    mov bx, [vb_win]
+    call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
+    mov si, vb_namev
+    cmp dl, VID_VGA
+    jne .nh
+    test ax, 1 << FSXM_VGA0D
+    jnz .try
+.nh:
+    mov si, vb_nameh
+    cmp dl, VID_HERC
+    jne .hdr
+.try:
+    mov [vb_namep], si
+    call .head
+    jnc .meta0
+    mov word [vb_namep], vb_name    ; (not there: the CGA4 one)
+.hdr:
+    call .head
+    mov word [vb_err], vb_s_nofile
+    jc .fail1
+    jmp short .meta0
+.head:
     push ds                         ; the first region, into our bss: its
     pop es                          ; first 4 KB (the header and the clip
     mov bx, vb_meta                 ; table), then the rest the header says
     mov cx, 4096                    ; it has (the rules, 125.2)
     xor ax, ax
     xor dx, dx
-    call vb_read
-    mov word [vb_err], vb_s_nofile
-    jc .fail1
+    jmp vb_read
+.meta0:
     mov cx, [vb_meta+VH_METALEN]
     cmp cx, VB_META
     ja .fail1
@@ -633,8 +664,14 @@ vb_load:
     ja .fail1
     cmp word [vb_meta+VH_NOPEN], VB_MAXOPEN
     ja .fail1
-    cmp word [vb_meta+VH_MAXREC], VB_CGUARD
+    mov ax, [vb_meta+VH_MAXREC]     ; the rings' GUARD: 16 KB, or 32 for a
+    mov byte [vb_cgkb], VB_CGUARD / 1024    ; rendition whose whole-screen
+    cmp ax, VB_CGUARD               ; record is more (VGA's planes, Hercules')
+    jbe .g16
+    mov byte [vb_cgkb], 2 * VB_CGUARD / 1024
+    cmp ax, 2 * VB_CGUARD
     ja .fail1                       ; (a record past the guard: not ours)
+.g16:
     mov ax, [vb_meta+VH_MLEN]       ; the music: at least a piece
     or ax, [vb_meta+VH_MLEN+2]
     jz .fail1
@@ -912,13 +949,15 @@ vb_rclaim:
     sub ax, VB_RKEEP
     jc .no
     shr ax, 1
-    sub ax, VB_CGUARD / 1024
+    xor dh, dh
+    mov dl, [vb_cgkb]
+    sub ax, dx
     jc .no
     and ax, 0xFFFC
     cmp ax, VB_CRMIN
     jb .no
     mov [vb_rkb], ax
-    add ax, VB_CGUARD / 1024
+    add ax, dx
     shl ax, 1
     call OSAPI_MEM_CLAIM
     jc .no
@@ -926,7 +965,8 @@ vb_rclaim:
     mov bx, vb_rg0
     call .set
     mov ax, [vb_rkb]
-    add ax, VB_CGUARD / 1024
+    add al, [vb_cgkb]
+    adc ah, 0
     mov cl, 6
     shl ax, cl
     add dx, ax
@@ -1143,9 +1183,9 @@ vb_rpiece:
     jb .pstop                       ; the hook to refuse)
     cmp cx, ax
     jb .pstop                       ; not all of it read yet
-    mov dx, [ds:bp+RG_END]          ; past the end? (A record is 16 KB at
-    sub dx, [ds:bp+RG_PSEG]         ; most: farther off than that, no)
-    cmp dx, 0x402
+    mov dx, [ds:bp+RG_END]          ; past the end? (A record is the guard
+    sub dx, [ds:bp+RG_PSEG]         ; at most: farther off than that, no)
+    cmp dx, 0x802
     jae .pin
     mov cl, 4
     shl dx, cl                      ; the bytes from its segment to the end
@@ -1470,12 +1510,30 @@ vb_main:
     mov bx, [vb_win]
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
     mov [vb_vid], dl
-    test ax, 1 << FSXM_CGA320
+    mov cl, [vb_meta+VH_KIND]       ; the mode is the bundle's adapter's
+    mov [vb_kind], cl
+    mov ch, FSXM_VGA0D
+    cmp cl, VK_VGA4
+    je .mk
+    mov ch, FSXM_HERC
+    cmp cl, VK_HERC
+    je .mk
+    mov ch, FSXM_CGA320
+.mk:
+    mov dx, ax
+    mov cl, ch
+    mov ax, 1
+    shl ax, cl
+    test dx, ax
     jnz .mode
     mov word [vb_err], vb_s_nocga
+    cmp byte [vb_kind], VK_HERC
+    jne .mx
+    mov word [vb_err], vb_s_noherc
+.mx:
     ret
 .mode:
-    mov al, FSXM_CGA320
+    mov al, ch
     push ds
     pop es
     mov di, vb_fsi
@@ -1487,6 +1545,10 @@ vb_main:
     mov ax, [vb_fsi+FSI_SEG]
     mov [vb_vseg], ax
     call vb_palette
+    cmp byte [vb_kind], VK_CGA4     ; the band's present, for this adapter
+    je .bt
+    call vb_bptab
+.bt:
     call vb_rclaim                  ; the clip rings, all there is (125.4)
     jc .out
     call vb_rstart                  ; ...and the first opening's head
@@ -1565,6 +1627,26 @@ vb_rstart:
 ; vp_cgaset .c4, 98.1.3.3): background and intensity, the set, and mode 5's
 ; cyan, red and white
 vb_palette:
+    cmp byte [vb_kind], VK_HERC     ; (one bit: no palette)
+    jne .v
+    ret
+.v:
+    cmp byte [vb_kind], VK_VGA4
+    jne .cga
+    push ds                         ; VGA4's own sixteen: the attribute
+    pop es                          ; controller's sixteen to DAC 0..15 in
+    mov dx, vb_actab                ; order, and those sixteen the bundle's
+    mov ax, 0x1002
+    int 0x10
+    push ds
+    pop es
+    mov dx, vb_meta+VH_VPAL
+    xor bx, bx
+    mov cx, 16
+    mov ax, 0x1012
+    int 0x10
+    ret
+.cga:
     mov ah, 0x0B
     xor bh, bh
     mov bl, [vb_meta+VH_PAL]
@@ -2107,7 +2189,30 @@ vb_decode:
     mov ds, dx
     add si, RH_SIZE
     xor bp, bp
+    cmp byte [cs:vb_kind], VK_VGA4  ; (DS is the record's: CS is ours)
+    je .planar
+    cmp byte [cs:vb_kind], VK_HERC
+    jne .n
+    mov bp, VB_HORG
+.n:
     call vd_native
+    pop ds
+    ret
+.planar:                            ; VGA4: sub-records, each its Map Mask
+    lodsb                           ; and ten lists, a 0 after the last
+    or al, al
+    jz .pd
+    mov ah, al
+    mov al, 2
+    mov dx, 0x3C4
+    out dx, ax
+    xor bp, bp
+    call vd_native
+    jmp short .planar
+.pd:
+    mov ax, 0x0F02                  ; every plane again
+    mov dx, 0x3C4
+    out dx, ax
     pop ds
     ret
 
@@ -3005,7 +3110,11 @@ vb_tpl:
     dw 40, 40, 320, 72
     dw vb_title, vb_paint, vb_onkey, vb_onclick
 vb_title:     db 'Video Battle', 0
+vb_actab:     db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0
 vb_name:      db 'BATTLE.VBT', 0
+vb_namev:     db 'BATTLEV.VBT', 0     ; the VGA rendition's (format 7)
+vb_nameh:     db 'BATTLEH.VBT', 0     ; ...and Hercules'
+vb_s_noherc:  db ' Needs BATTLEH.VBT on a Hercules', 0
 vb_lines:     dw vb_s_t1, vb_s_t2, 0, vb_s_t4
 vb_s_t1:      db ' VIDEO BATTLE', 0
 vb_s_t2:      db ' Enter or click: play (Esc leaves)', 0
@@ -3213,6 +3322,14 @@ VB_VAR vb_fvol, 1                   ; the sound's shift, 4 silent
 VB_VAR vb_frows, 2
 VB_VAR vb_fticks, 2                 ; the hook's frames since it began
 VB_VAR vb_rsring, 2
+VB_VAR vb_cgkb, 1
+VB_VAR vb_kind, 1                   ; the bundle's adapter (VK_*)
+VB_VAR vb_tcol0, 2                  ; a text's first cell (vb_text)
+VB_VAR vb_bpc0, 2                   ; vb_bpres: the first cell...
+VB_VAR vb_bpcn, 2                   ; ...and how many
+VB_VAR vb_vptab, 256                ; VGA4: a band byte's planes 0 and 1
+VB_VAR vb_hptab, 512                ; Hercules: its even and odd rows
+VB_VAR vb_namep, 2                  ; the bundle's name: its own rendition's                   ; the rings' guard, KB: 16 or 32
 VB_VAR vb_pidl, 2                   ; the idle loop's part of the claim
 VB_VAR vb_idseg, 2                  ; ...and its segment
 VB_VAR vb_lstream, 1                ; the loop playing STREAMS (too big to

@@ -564,6 +564,42 @@ the fade check counted lit BYTES, which a busy picture keeps lit with one
 pixel in four (now pixels), and the lap check ran out of looks on a
 110-frame loop before its second lap (now 1,200 looks).
 
+## Hercules and VGA (2026-11-04)
+
+One project now builds a bundle per adapter, and the trick that made it
+small was refusing to let any rendition have its own frames. Loop points,
+anchors and cues are frame NUMBERS, so a VGA frame 40 must be the CGA frame
+40: the VGA and Hercules pictures are read through the encoder's own
+`ffmpeg_video` at the CGA encode's fps and quantized by the builder - an
+ordered dither, and a pixel's value HELD while its source barely moves, so
+still footage costs nothing frame to frame. A VGA battle has ONE palette,
+the band's four CGA colours in slots 0..3 and a k-means of the footage in
+the rest; the first k-means left two blacks and then two near-identical
+greens, which a last pass that re-seeds a near copy at the worst-served
+pixel fixed.
+
+**The band is the same picture on all three.** It is still composed two
+bits a pixel; on VGA and Hercules it always goes into the composition
+buffer, and a present turns rows of it into that adapter's bytes - VGA's
+planes 0 and 1 from a table, Hercules' every pixel two by two. That made
+the band TESTABLE exactly: the row reads the engine's own buffer out of
+guest memory, converts it on the host, and holds the glass to it.
+
+That test then failed in a way that taught two things. On Hercules the
+first failures were real and not the present at all: the demo's made-up
+scenes are whole CGA screens, and scaling all 200 rows to 348 put the
+picture's bottom in Hercules' band rows, which the openings then wrote over
+the band. A whole screen is now scaled in two parts. The later failures
+were the test's: on MartyPC's 4.77 MHz XT the band is rebuilt for ~1.2 s of
+the foreground's time on EVERY adapter - CGA too - and presented in ~0.6 s
+more on VGA and Hercules, so "the menu's state is set" is seconds before
+"the menu is on the glass". The row now waits for the glass to agree.
+
+Measured: the owner's H3 battle is 3.0 MB in CGA4, 4.0 MB in VGA4 at eight
+colours (far better looking - the brick, the copper and the light all
+read), 4.1 MB on Hercules. Tested on MartyPC's VGA XT and Hercules 5150;
+not on a real VGA or Hercules card, and no second page used yet.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |
