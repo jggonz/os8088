@@ -25,7 +25,9 @@ in place):
   3. the write raises #GP(0) at an LDT code selector inside OVRTEST's code
      segment, OVRTEST.TXT never gets "SURVIVED the overrun", and kern_mega
      CLOSES WIN16 for it (mega_fkill attributes the code selector by its
-     base, KERN-MEGA-PLAN 14.139, WIN16-NEXT-PLAN Q1) and does not halt.
+     base, KERN-MEGA-PLAN 14.140, WIN16-NEXT-PLAN Q1) and does not halt;
+  4. the close completes: ui_task's mega_fkdo takes the instance down and
+     the incident ends ([mega_fkslot] = 0), still with no fatal fault.
 
 Broken on purpose (docs/WRITING-TESTS.md 1): the parent commit, whose
 w16_pblk answered the lead's D1(a) stopgap - a SUB reaching to the claim's
@@ -157,10 +159,13 @@ def main():
         box.guest_sleep(5)
         fl = box.faults()
         print("   " + ("\n   ".join(fl) or "(no fault line)"), flush=True)
-        # 3. THE #GP, IN THE PROGRAM, AND WHAT BECOMES OF IT. The write one
+        # 3. THE #GP, IN THE PROGRAM, AND WHAT BECOMES OF IT. (The toast and
+        # the instance are named OVRTEST, not WIN16: w16_ownname puts the
+        # program's stem in WIN16's header, which is what I_NAME and
+        # mega_fkmsg_mk read - seen under Bochs 2026-11-04.) The write one
         # byte past the block faults (N1); the faulting CS is a SUB or tile of
         # WIN16's memory, not an image's pair, so mega_fkill attributes it by
-        # its BASE (KERN-MEGA-PLAN 14.139, WIN16-NEXT-PLAN Q1) and CLOSES
+        # its BASE (KERN-MEGA-PLAN 14.140, WIN16-NEXT-PLAN Q1) and CLOSES
         # WIN16 as a package's own fault is closed: a "kern_mega CLOSED NAME
         # 0D at cccc:iiii" incident, the machine NOT halted ([mega_infault]
         # = 0, so no FATAL line). cccc must be an LDT code selector and iiii
@@ -169,18 +174,35 @@ def main():
              for x in fl]
         m = [x for x in m if x]
         code = ovr_code()
-        ok = bool(m) and m[0].group(2) == "0D" \
+        ok = bool(m) and m[0].group(1) == "OVRTEST" and m[0].group(2) == "0D" \
             and int(m[0].group(3), 16) & 4 != 0 \
             and int(m[0].group(4), 16) < code
         want(ok, "3. the overrun raised #GP(0) at an LDT code selector, inside "
              "OVRTEST's %d-byte code segment, and WIN16 was CLOSED for it "
-             "(14.139)" % code)
+             "(14.140)" % code)
         want(not any(x.startswith("kern_mega FAULT") for x in fl)
              and not box.fault(),
              "3. ...and the machine was NOT halted: no fatal fault, "
              "[mega_infault] = 0")
         want(not any("SURVIVED" in x for x in result(c)),
              "3. ...and the write one byte past the block never completed")
+        # 4. THE CLOSE COMPLETES. mega_fkill only unwinds to WIN16's catch
+        # and queues the close; ui_task's mega_fkdo tears the instance down
+        # and ends the incident ([mega_fkslot] back to 0 once the record is
+        # gone). A machine that names WIN16 and then wedges in the teardown
+        # passes step 3 and fails here.
+        def closed():
+            return box.read("mega_fkslot", 1) == b"\0" and not any(
+                n.upper() in ("WIN16", "OVRTEST")
+                for _, n, _, _ in box.instances())
+        try:
+            box.until(closed, "WIN16's close to complete (mega_fkdo)", 60)
+            done = True
+        except RuntimeError:
+            done = False
+        want(done and not box.fault(),
+             "4. the close completed: no WIN16 (OVRTEST) instance, the "
+             "incident over ([mega_fkslot] = 0), and still no fatal fault")
         box.shot(os.path.join(out, "end.png"))
     except RuntimeError as e:
         want(False, "the machine stopped answering or a step missed: %s" % e)

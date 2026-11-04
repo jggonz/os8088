@@ -2500,7 +2500,7 @@ mega_fkill:
     jnc .own
 .byb:
     mov ax, [ss:bp+26]              ; not an image's pair: whose memory is the
-    call mega_fbown                 ; code selector's BASE in (14.139)? A WIN16
+    call mega_fbown                 ; code selector's BASE in (14.140)? A WIN16
     jc .ret                         ; program's CS is a SUB or tile of WIN16's
 .own:
     ; --- the catch
@@ -2663,69 +2663,44 @@ mega_fkill:
 ; mega_fbown - AX = a CODE selector in the allocator's range that is not an
 ; image's pair (mega_cs2ds / mega_fown found no owner) -> DI = the package
 ; instance whose MEMORY its base lies in, DX = that instance's region; CF = 1
-; none. KERN-MEGA-PLAN 14.139, mega_bown's rule applied to a fault: above 1MB
+; none. KERN-MEGA-PLAN 14.140, mega_bown's rule applied to a fault: above 1MB
 ; the pool block's MX_OWN (slot, 80h | slot a region, A0h | slot a claim);
-; below it mem_tab's MC_OWN (mega_fown's .hit). A driver's (C0h|), the
-; kernel's (FDh-FFh) or no block: nobody's, so the fault stays fatal. It only
-; NAMES the instance: mega_fkill's catch must still call into that very
-; instance, so a program can never get another package closed. ES = .lowbss
-; in and out. Clobbers AX, BX, CX, SI
+; below it mem_tab's MC_OWN. A driver's (C0h|), the kernel's (F0h, FEh, FFh)
+; or no block: nobody's, so the fault stays fatal. It only NAMES the
+; instance: mega_fkill's catch must still call into that very instance, so a
+; program can never get another package closed. Both halves end in
+; mega_fown's own walk and slot test (.para, .slot). ES = .lowbss in and out.
+; Clobbers AX, BX, CX, SI
 mega_fbown:
     cmp ax, MEGA_LDT_FREE0 * 8      ; (the fixed aliases are the GDT's)
-    jb .no
+    jb mega_fown.no
     call mega_selbase               ; DX:AX = its base
-    jc .no
+    jc mega_fown.no
     cmp dx, MEGA_XPOOL >> 16
     jb .conv
     call mx_rel                     ; AX = its KB from the pool's base
-    jc .no
+    jc mega_fown.no
     push es
     MXT_ES
-    call mx_inblk                   ; SI = the block
-    mov bl, [es:si+MX_OWN]          ; (MOV and POP keep CF)
-    pop es
-    jc .no
-    mov al, bl
-    and al, 0xF0
+    call mx_inblk                   ; SI = the block (or mx_tab_end: read
+    mov al, [es:si+MX_OWN]          ;   before the test, inside the tail's
+    pop es                          ;   limit - checked below; MOV and POP
+    jc mega_fown.no                 ;   keep CF)
+    mov ah, al
+    and ah, 0xF0
     jz .slot
-    cmp al, 0x80
+    cmp ah, 0x80
     je .slot
-    cmp al, 0xA0
-    jne .no
+    cmp ah, 0xA0
+    jne mega_fown.no
 .slot:
-    and bl, 0x0F
-    cmp bl, MEGA_FKINST
-    jae .no
-    xor bh, bh
-    shl bx, 5                       ; I_RECSZ = 32
-    lea di, [bx+inst_tab]
-    cmp byte [di+I_STATE], 0
-    je .no
-    test byte [di+I_KIND], KIND_PKG
-    jz .no
-    mov dx, [di+I_SPTR]
-    clc
-    ret
+    and ax, 0x000F                  ; AX = the slot
+    jmp short mega_fown.slot
 .conv:
     shr ax, 4
     shl dx, 12
-    or ax, dx                       ; AX = its paragraph
-    mov bx, mem_tab
-    mov cx, MEM_MAX
-.w:
-    cmp word [es:bx+MC_SEG], 0
-    je .wn
-    mov dx, ax
-    sub dx, [es:bx+MC_SEG]
-    jb .wn
-    cmp dx, [es:bx+MC_PARA]
-    jb mega_fown.hit
-.wn:
-    add bx, MC_SIZE
-    loop .w
-.no:
-    stc
-    ret
+    or ax, dx                       ; AX = its paragraph, any one of a claim
+    jmp short mega_fown.para
 
 ; mega_fown - AX = a data segment -> DI = the package instance it is part of,
 ; DX = that instance's region; CF = 1 none. A PUBLISHED record is asked
@@ -2745,6 +2720,7 @@ mega_fown:
 .scan:
     test al, 7                      ; a paragraph below the ROM: an overlay
     jnz .no                         ; or a part, inside a claim
+.para:                              ; (mega_fbown: a code base's paragraph)
     cmp ax, 0xA000
     jae .no
     mov bx, mem_tab
@@ -2765,7 +2741,8 @@ mega_fown:
     ret
 .hit:
     mov ax, [es:bx+MC_OWN]          ; an instance's slot, or a package's
-    cmp ax, INST_MAX                ; segment
+.slot:                              ; segment (mega_fbown: a pool block's slot)
+    cmp ax, INST_MAX
     jae .seg
     shl ax, 5
     add ax, inst_tab
@@ -8636,6 +8613,9 @@ mx_tab_end  equ mx_tab + MX_NBLK * MX_BLKSZ ; (KERN-MEGA-PLAN 14.49). Zeroed
 MEGA_MXT_SIZE equ (mx_tab_end + 63) & ~63 ; whole 64-byte lines: the park
                                     ; sums lines (mega_dsave)
 MEGA_MXT_LINES equ MEGA_MXT_SIZE / 64
+%if mx_tab_end + MX_OWN >= MEGA_MXT_SIZE
+  %error "mega_fbown reads MX_OWN at mx_tab_end (no block): past the tail's limit"
+%endif
 MEGA_TBL_TAIL equ MEGA_IDT_SIZE + MEGA_MXT_SIZE ; the block past the LDT
 MEGA_SEL_MXT equ (MEGA_GDT_SCR - 3) * 8 ; data, base past the IDT: the tail
 %if MEGA_GDT_SCR - 3 < MEGA_GDT_ID

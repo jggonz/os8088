@@ -238509,7 +238509,7 @@ the program's DS back from its own stack first and stores through it
 not take this path, which is why the census did not list it. S25's pass
 counts again.
 
-#### 124.31.11 A fault in the program's code closes WIN16 *(WIN16-NEXT-PLAN Q1; KERN-MEGA-PLAN 14.139)*
+#### 124.31.11 A fault in the program's code closes WIN16 *(WIN16-NEXT-PLAN Q1; KERN-MEGA-PLAN 14.140)*
 
 A protected-mode fault raised by a Win16 program's own instruction (a write
 past a segment's limit, a load of a bad selector: vectors 0, 3-7, 0Bh-0Dh)
@@ -238543,9 +238543,35 @@ closes with it. Closing one program of several is open.
   attribution. A fault in the program's code inside a callback unwinds to that
   callback's catch; the stack lent by `SEG_LEND` is the instance's own and
   goes with it (`mx_relinst`).
-- **Test.** `tests/win16ovr.py` step 3 (Bochs): OVRTEST's write one byte past
-  its block raises #GP inside its code, `kern_mega CLOSED` follows, and
-  `[mega_infault]` stays 0.
+- **Every path that runs program code is inside WIN16's catch.** The
+  program runs only on the UI task's coroutine (124.2.1), entered from one
+  of WIN16's own callbacks - the tick's first instruction (`w16_go1`,
+  124.31.8), a wake, a kick, a host send, a cross-task run (124.28.6) - each
+  dispatched by `wm_pkgcall`, which pushes the catch. A kernel callback that
+  arrives inside a run waits its turn (`w16_inprog`) and resumes nothing; a
+  file dialog is asynchronous (`w16_ofnback`), and `timeSetEvent`'s and
+  `CALLBACK_FUNCTION`'s calls are made where the program waits for a message
+  (124.32.6). So no other catch ever sits between the program and WIN16's.
+  The fault arrives on the program's own stack; `mega_fkill` skips the
+  stack-order test for a stack that is not `LOW_SEG` and unwinds to the catch
+  on `LOW_SEG`, dropping WIN16's host frames with the program's.
+- **The toast names the program**, not WIN16 (`OVRTEST 0D at 11BC:0517`):
+  `w16_ownname` puts the first program's stem in WIN16's header, which is
+  what the instance and the toast are called by.
+- **What a close does not undo (open).** While program code runs, IVT 21h,
+  2Fh, 31h and 34h-3Dh (or 3Dh and 02h with a native x87) name WIN16's code
+  (`w16_i21_on`), and only `w16_i21_off` puts the machine's back; a close
+  never runs WIN16's code, so they keep naming WIN16's freed code selector.
+  Protected-mode reads of them are refused while that entry is free
+  (`mega_swok`, `mega_idt_gate`'s free-entry test), the DOS core takes 21h,
+  2Fh and 34h-3Eh for its own bracket, and the next WIN16 run installs its
+  own - but saves the stale values as "the machine's" and puts them back. A
+  real-mode NMI after such a close (with a native x87) and a later reuse of
+  that LDT entry are the two ways it could still be reached.
+- **Test.** `tests/win16ovr.py` steps 3 and 4 (Bochs): OVRTEST's write one
+  byte past its block raises #GP(0) inside its code, `kern_mega CLOSED`
+  follows, `[mega_infault]` stays 0, and `mega_fkdo` completes the close
+  (`[mega_fkslot]` back to 0, no instance left). Seen 2026-11-04.
 
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 

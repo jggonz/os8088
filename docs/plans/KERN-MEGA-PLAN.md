@@ -13582,7 +13582,7 @@ Seen (QEMU, kern_mega, looks, 2026-11-03):
 The overrun itself cannot be seen under QEMU, which checks no data
 segment's limit. `tests/win16ovr.py` is Bochs's row for it.
 
-### 14.139 A WIN16 program's fault closes WIN16, attributed by the code selector's base (2026-11-04)
+### 14.140 A WIN16 program's fault closes WIN16, attributed by the code selector's base (2026-11-04)
 
 WIN16-NEXT-PLAN Q1. `mega_fkill` named the faulting package through
 `mega_cs2ds` (the data twin 8 above an image's code half) and `mega_fown`
@@ -13600,3 +13600,17 @@ the same instance.
 by its base: `MX_OWN` of the pool block (slot, `80h | slot`, `A0h | slot`) or
 `mem_tab`'s `MC_OWN` below 1MB, then the normal close. SPEC.md 124.31.11.
 A GDT CS (BIOS on a lent stack) stays fatal.
+
+*Verified (2026-11-04).* `mega_fbown` ends in `mega_fown`'s own claim walk
+(`.para`, the paragraph test skipped) and slot test (`.slot`), so the
+change is `.mega` +64 (22,912 -> 22,976, 90 left in the 24,576 rung), not
+the first draft's +128; resident 62,976 unchanged. Under Bochs
+(`tests/win16ovr.py`, once): `kern_mega CLOSED OVRTEST 0D at 11BC:0517`,
+`[mega_infault]` 0, OVRTEST.TXT without "SURVIVED", and the close completed
+(`[mega_fkslot]` 0, no instance). The fault is on the program's stack, under
+the catch `wm_pkgcall` pushed for WIN16's `W_ONTIMER` (the first
+instruction's run, SPEC.md 124.31.8). Left open: the IVT vectors WIN16 holds
+across a run (SPEC.md 124.31.11), and `mega_fown`'s `[ld_base]` match,
+which answers a stale `[ld_rec]` (it names a freed record after any load)
+when a SUBC pair reuses the last-loaded OS88_HIGH region's freed selectors;
+the catch test then refuses it, so that case is a halt, never a wrong close.
