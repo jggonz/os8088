@@ -893,6 +893,50 @@ body:
     jne .f6
     cmp byte [bmxb+7], 0x8F
     jne .f6
+
+    ; c64_osc3 (C64-SPEC 11.4.1): TEST resets; a sawtooth at $1000 for $80
+    ; cycles is $080000, its top byte $08; noise from the reset LFSR for one
+    ; bit-19 rise and then five more reads $FF and then $FC (zeros shifted
+    ; in past taps 4 and 2)
+    mov word [pushes], 4
+    PUSHI 0
+    PUSHI 0x08
+    PUSHI 0
+    PUSHI 0
+    call disc_call
+    dw _c64_osc3
+    or ax, ax
+    jnz .f6
+    PUSHI 0
+    PUSHI 0x20
+    PUSHI 0x1000
+    PUSHI 0x80
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0x08
+    jne .f6
+    PUSHI 0
+    PUSHI 0x08
+    PUSHI 0
+    PUSHI 0
+    call disc_call
+    dw _c64_osc3
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x100
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xFF
+    jne .f6
+    PUSHI 0
+    PUSHI 0x80
+    PUSHI 0x1000
+    PUSHI 0x500
+    call disc_call
+    dw _c64_osc3
+    cmp ax, 0xFC
+    jne .f6
     jmp .c8done
 ; compare 8 bytes [si] with [di] (ZF set when equal), and CX bytes
 .c8cmp:
@@ -1336,6 +1380,7 @@ hst_seg:
 %include "c64mem.inc"
 %include "c64band.inc"
 %include "c64fsx.inc"
+%include "c64sid.inc"
 
 section .text
 

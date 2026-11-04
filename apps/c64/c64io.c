@@ -68,9 +68,9 @@ static int c64_dln, c64_dl_over;
  * c64_run_n - DEAD - c64f_adj */
 unsigned c64_run_n;
 unsigned c64f_adj;
-static int c64_dl_tail;
-static unsigned char c64_rsame[C64_ROWS];  /* row r was row r-1's set */                     /* the last latch left writes
+static int c64_dl_tail;                     /* the last latch left writes
                                              * below the display for the next */
+static unsigned char c64_rsame[C64_ROWS];   /* row r was row r-1's set */
 static void c64_latch(int force);
 static unsigned char c64_sid[32];           /* $D400-$D41C */
 
@@ -125,6 +125,8 @@ static unsigned char c64_todstop[2];        /* the clock is stopped */
  * Two-word counters folded often, as rc_ticks32 does - "no long" is a C rule,
  * not a no-32-bit rule (Decision 19).                                      */
 static unsigned c64_cyc_lo, c64_cyc_hi;     /* total emulated 6510 cycles */
+static unsigned c64_o3t;                    /* ...when voice 3 was last brought
+                                             * up to date (c64_osc3_now) */
 static int c64_frame_cyc;                   /* 0..19,655 inside the PAL frame */
 static unsigned c64_frames_lo;              /* emulated VIC frames, ONE word.
                                              * The high word used to be kept
@@ -251,6 +253,12 @@ static void c64_reset_regs(void)
         c64_vic[i] = 0;
     for (i = 0; i < 32; i++)
         c64_sid[i] = 0;
+    c64_osc3(0, 0, 0x08, 0);                /* voice 3 through TEST: the
+                                             * accumulator 0 and the noise
+                                             * register ALL ONES - a zero LFSR
+                                             * shifts in zeros for ever, and
+                                             * bss is zero (11.4.1) */
+    c64_o3t = c64_cyc_lo;
     for (k = 0; k < 2; k++) {
         for (i = 0; i < 16; i++)
             c64_cia[k][i] = 0;
@@ -456,19 +464,31 @@ static int c64_rcmp_line(void)
  * it for a line saw the line only at the next run boundary, and its raster
  * split landed wherever that was: the Christmas demo's text-mode write
  * moved between line 242 and line 53 from frame to frame */
-static int c64_line_now(void)
+/* c64_run_el - THE CYCLES THE RUN IN PROGRESS HAS SPENT SO FAR: its budget
+ * less the countdown, less what c64_cut() moved into CARRY, less c64f_adj
+ * while the fast core has handed a short run to the accurate one. 0 outside
+ * a run. Every register that is a CLOCK reads through it - the raster line,
+ * the CIA timers, SID voice 3's oscillator - because the devices are
+ * advanced only between runs (4.4) and a program polling one mid-run must
+ * see it move (9.10, 6.3, 11.4) */
+static unsigned c64_run_el(void)
 {
-    unsigned cyc, el;
+    unsigned el;
     int dead;
 
-    cyc = (unsigned)c64_frame_cyc;
-    if (c64_in_run) {
-        dead = c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8);
-        dead += c64_scr_rd(C64_SCR_CARRY) | (c64_scr_rd(C64_SCR_CARRY + 1) << 8);
-        el = c64_run_n - (unsigned)dead - c64f_adj;
-        if (el < 0x8000u)
-            cyc += el;
-    }
+    if (!c64_in_run)
+        return 0;
+    dead = c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8);
+    dead += c64_scr_rd(C64_SCR_CARRY) | (c64_scr_rd(C64_SCR_CARRY + 1) << 8);
+    el = c64_run_n - (unsigned)dead - c64f_adj;
+    return (el < 0x8000u) ? el : 0;
+}
+
+static int c64_line_now(void)
+{
+    unsigned cyc;
+
+    cyc = (unsigned)c64_frame_cyc + c64_run_el();
     while (cyc >= C64_PAL_FRAME)
         cyc -= C64_PAL_FRAME;
     return (int)(cyc / C64_PAL_LINE);
@@ -921,6 +941,37 @@ static void c64_advance(int n)
  * two from inside the core's handler (3.4), and so is every access to
  * $0000/$0001, which are the processor port and not RAM (3.2).
  * ========================================================================*/
+/* c64_tlive - TIMER A (b = 0) OR B OF CIA K, AS IT READS THIS INSTANT: the
+ * counter c64_advance last left, less what the run in progress has spent
+ * when it counts the clock (6.3). It read the count at the run's START, so a
+ * program reading $DC04 mid-run - `LDA $D012 / EOR $DC04 / SBC $DC05`, the
+ * Bright Pixel card's random number - saw the same value every frame and
+ * every snowflake fell in step. An underflow inside the run reloads from the
+ * latch: a counter at $7FFF or above is not an alarm (c64_alarm_next), so a
+ * run can cross one */
+static unsigned c64_tlive(int k, int b)
+{
+    unsigned c, rem, la;
+
+    if (b == 0) {
+        c = c64_ta[k];
+        if (C64_TA_STOPPED(k))
+            return c;
+        la = c64_la[k];
+    } else {
+        c = c64_tb[k];
+        if (C64_TB_STOPPED(k))
+            return c;
+        la = c64_lb[k];
+    }
+    rem = c64_run_el();
+    while (rem > c) {
+        rem -= c + 1;
+        c = la;
+    }
+    return c - rem;
+}
+
 static int c64_cia_rd(int k, int r)
 {
     int v;
@@ -950,18 +1001,13 @@ static int c64_cia_rd(int k, int r)
     case 0x01:
         return (k == 0) ? c64_kbd_pb() : (int)c64_cia[1][0x01];
     case 0x04:
-        return C64_LOB(c64_ta[k]);         /* a byte of the word, not a
-                                             * mask or a shift (C64_HIB) */
+        return c64_tlive(k, 0) & 0xFF;      /* (live: c64_tlive) */
     case 0x05:
-        return C64_HIB(c64_ta[k]);
+        return c64_tlive(k, 0) >> 8;
     case 0x06:
-        return C64_LOB(c64_tb[k]);
+        return c64_tlive(k, 1) & 0xFF;
     case 0x07:
-        return C64_HIB(c64_tb[k]);
-    /* THE TOD READ LATCH (ciacore.c:1249-1270). Reading HOURS latches all
-     * four registers and reading TENTHS releases them, so a program that
-     * reads $0B..$08 cannot see the clock tick under it and read 10:59:59.9
-     * as 10:00:00.0. The counter itself keeps running either way. */
+        return c64_tlive(k, 1) >> 8;
     case 0x08:
         if (!c64_todlatch[k])
             return c64_todt[k];
@@ -1110,13 +1156,61 @@ static void c64_cia_wr(int k, int r, int v)
  * instruction as before. On a 286 one pass of the call-out costs several
  * times the 11 us a real C64 spends on it. */
 unsigned c64_fpc;
+static unsigned c64_fpc_pc;                 /* (c64_poll_skip's PC, for the
+                                             * limit's CMP operand) */
+
+/* c64_poll_lim - how many cycles from now register A of the VIC keeps the
+ * value V a poll loop read (-1: until the run ends). $D012 waiting for
+ * EQUALITY (`CMP #n` with the loop going on while it differs) is skipped to
+ * the line where its low byte is n; any other $D012 test to the end of the
+ * line it is on; $D011 to the next turn of bit 8 (line 256, or the frame's
+ * end) */
+static int c64_poll_lim(unsigned a, unsigned op, unsigned b0, int cont, int v)
+{
+    unsigned cyc, line, t, target;
+    int n;
+
+    a &= 0x3F;
+    if ((a != 0x11) & (a != 0x12))
+        return -1;
+    cyc = (unsigned)c64_frame_cyc + c64_run_el();
+    while (cyc >= C64_PAL_FRAME)
+        cyc -= C64_PAL_FRAME;
+    line = cyc / C64_PAL_LINE;
+    if (a == 0x11)
+        target = (line < 256) ? 256 : C64_PAL_LINES;
+    else {
+        target = line + 1;
+        if (op == 0xAD)
+            if (b0 == 0xC9)
+                if (cont) {                 /* (a CMP loop going on is either
+                                             * "not equal yet" or a BCC/BCS
+                                             * test; only the first is exact) */
+                    n = c64_rd(c64_fpc_pc + 1);
+                    if (v != n) {
+                        /* the lines whose low byte is n are n and n + 256
+                         * (when < 312): the first after this one, or the
+                         * first of the next frame */
+                        t = (unsigned)n;
+                        if (t <= line) {
+                            t += 256;
+                            if (t <= line || t >= C64_PAL_LINES)
+                                t = (unsigned)n + C64_PAL_LINES;
+                        }
+                        target = t;
+                    }
+                }
+    }
+    return (int)(C64_X63(target) - cyc);
+}
 
 static void c64_poll_skip(unsigned a, int v)
 {
     unsigned pc = c64_fpc, back, op, b0, br, off;
-    int per, cont, z, c, dead, k;
+    int per, cont, z, c, dead, k, lim;
 
     c64_fpc = 0;
+    c64_fpc_pc = pc;
     if (pc < 3 || pc > 0x9FF0)              /* RAM, and the loop with it */
         return;
     back = pc - 3;                          /* the read instruction's PC */
@@ -1175,9 +1269,37 @@ static void c64_poll_skip(unsigned a, int v)
     if (dead <= per)
         return;
     k = (dead - 1) / per;
+    /* ...BUT NEVER PAST THE MOMENT THE VALUE CHANGES. $D011 and $D012 read
+     * the live line since 9.10 (c64_line_now), and a skip to the run's end
+     * jumped clean over the line a loop was waiting for: the Bright Pixel
+     * card's `LDA $D012 / CMP #50 / BEQ` caught line 50 only when a run
+     * boundary happened to fall on it, and its snow fell two pixels a
+     * second. $D019 still moves only between runs. */
+    lim = c64_poll_lim(a, op, b0, cont, v);
+    if (lim >= 0)
+        if (k > lim / per)
+            k = lim / per;
+    if (k <= 0)
+        return;
     dead -= k * per;
     c64_scr_wr(C64_SCR_DEAD, dead & 0xFF);
     c64_scr_wr(C64_SCR_DEAD + 1, (dead >> 8) & 0xFF);
+}
+
+/* c64_osc3_now - SID voice 3's waveform output THIS INSTANT (11.4.1): the
+ * oscillator advanced by the cycles since it was last asked, at the rate and
+ * waveform it has had since then (c64sid.inc). The stamp is the cycle
+ * counter's low word - a gap of more than 65,535 cycles between two reads
+ * wraps, and what it gets wrong is how far a random sequence has run */
+static int c64_osc3_now(void)
+{
+    unsigned now, dt;
+
+    now = c64_cyc_lo + c64_run_el();
+    dt = now - c64_o3t;
+    c64_o3t = now;
+    return (int)c64_osc3(dt, C64_W(c64_sid + 0x0E), c64_sid[0x12],
+                         c64_sid[0x10] | ((c64_sid[0x11] & 15) << 8));
 }
 
 static int c64_io_rd(unsigned a)
@@ -1212,8 +1334,18 @@ static int c64_io_rd(unsigned a)
                                              * 0 and 5.3 says why */
         return c64_vic[p];
     }
-    if (p <= 0x0700)                        /* $D400-$D7FF: the SID */
-        return c64_sid[a & 0x1F];
+    if (p <= 0x0700) {                      /* $D400-$D7FF: the SID */
+        p = a & 0x1F;
+        if (p == 0x1B)                      /* voice 3's oscillator (11.4.1) */
+            return c64_osc3_now();
+        if (p == 0x1C)                      /* ...and its envelope: the
+                                             * sustain level while the gate is
+                                             * open, 0 once it closes - the
+                                             * ADSR's shape is not modelled */
+            return (c64_sid[0x12] & 1) ? ((c64_sid[0x14] & 0xF0)
+                                          | (c64_sid[0x14] >> 4)) : 0;
+        return c64_sid[p];
+    }
     if (p <= 0x0B00)                        /* $D800-$DBFF: colour RAM */
         return c64_col[a & 0x03FF];
     if (p <= 0x0C00)
@@ -1290,7 +1422,12 @@ static void c64_io_wr(unsigned a, int v)
         return;
     }
     if (p <= 0x0700) {
-        c64_sid[a & 0x1F] = (unsigned char)v;
+        r = a & 0x1F;
+        if ((unsigned)(r - 0x0E) <= 4u)     /* voice 3's rate, width or wave:
+                                             * the oscillator is brought up to
+                                             * NOW at the old ones first */
+            c64_osc3_now();
+        c64_sid[r] = (unsigned char)v;
         c64_sid_dirty = 1;                  /* voice 1 -> the speaker, once a
                                              * slice and only on a change */
         c64_sid_tries = 0;                  /* ...and THIS is what re-arms a

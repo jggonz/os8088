@@ -470,6 +470,7 @@ void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n);
 unsigned c64_fsx_key(void);
 void c64_fsx_dac(void);
 void c64_fsx_border(int c);
+unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw);
 static void c64_frame_regs(void);
 static unsigned char c64_rchg[25];          /* a row's register set moved since
                                              * c64_spr_dirty looked (9.11) */

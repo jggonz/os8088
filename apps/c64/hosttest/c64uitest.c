@@ -1174,6 +1174,51 @@ void c64_bandbm(unsigned char *dst, const unsigned char *xm,
 int c64_rvdiff(const unsigned char *a, const unsigned char *b)
 { return memcmp(a, b, 48) != 0; }
 
+/* c64sid.inc's c64_osc3, in C with host 32-bit arithmetic (C64-SPEC
+ * 11.4.1); c64memtest runs the shipping one on a real x86 */
+static unsigned long h_o3acc = 0, h_o3nz = 0;
+unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw)
+{
+    unsigned long add, o, n, r;
+    unsigned out = 0xFF, b;
+    if (ctrl & 8) {
+        h_o3acc = 0;
+        h_o3nz = 0x7FFFFF;
+    } else {
+        add = (unsigned long)(dt & 0xFFFF) * (freq & 0xFFFF);
+        if (add > 0x0FFFFFFFUL) add = 0x0FFFFFFFUL;
+        o = h_o3acc + 0xF80000UL;
+        n = o + add;
+        r = (n >> 20) - (o >> 20);
+        if (r > 256) r = 256;
+        h_o3acc = (n - 0xF80000UL) & 0xFFFFFF;
+        while (r--) {
+            b = ((h_o3nz >> 22) ^ (h_o3nz >> 17)) & 1;
+            h_o3nz = ((h_o3nz << 1) | b) & 0x7FFFFF;
+        }
+    }
+    if ((ctrl & 0xF0) == 0)
+        return 0;
+    if (ctrl & 0x80) {
+        unsigned long z = h_o3nz;
+        b = (unsigned)((((z >> 22) & 1) << 7) | (((z >> 20) & 1) << 6)
+            | (((z >> 16) & 1) << 5) | (((z >> 13) & 1) << 4)
+            | (((z >> 11) & 1) << 3) | (((z >> 7) & 1) << 2)
+            | (((z >> 4) & 1) << 1) | ((z >> 2) & 1));
+        out &= b;
+    }
+    if (ctrl & 0x20)
+        out &= (unsigned)(h_o3acc >> 16) & 0xFF;
+    if (ctrl & 0x10) {
+        b = (unsigned)(h_o3acc >> 15) & 0xFF;
+        if (h_o3acc & 0x800000) b ^= 0xFF;
+        out &= b;
+    }
+    if (ctrl & 0x40)
+        out &= ((unsigned)(h_o3acc >> 12) & 0xFFF) >= (pw & 0xFFF) ? 0xFF : 0;
+    return out;
+}
+
 void c64_sprrow(unsigned char *dst, const unsigned char *on,
                 const unsigned char *lit, int n, int cell, int sh, int f, int l)
 {
@@ -3686,6 +3731,89 @@ int main(int argc, char **argv)
         if (c64_sh[0] != 0x00 || c64_sh[1] != 0x00)
             fail("a sprite switched off stayed on the glass (9.11)");
         c64_io_wr(0xD021, 6);
+    }
+
+    /* --- THE CLOCKS A PROGRAM READS MID-RUN, AND SID VOICE 3 (6.3, 11.4.1).
+     * Both demos' snow is random: the Portland CUG one reads voice 3's noise
+     * at $D41B and the Bright Pixel card mixes $D012 with CIA 1's timer A.
+     * $D41B answered the stored byte (a constant: every flake in column 0)
+     * and $DC04 the count at the run's start (the same value every frame).
+     * Verified red with c64_osc3_now's hook taken out of c64_io_rd, and with
+     * c64_tlive answering c64_ta[k]. */
+    {
+        int j, n, seen[256];
+        unsigned t0, t1;
+        c64_reset_regs();
+        c64_io_wr(0xD40E, 0xFF);            /* voice 3 fast, on noise */
+        c64_io_wr(0xD40F, 0xFF);
+        c64_io_wr(0xD412, 0x80);
+        memset(seen, 0, sizeof(seen));
+        n = 0;
+        for (j = 0; j < 64; j++) {
+            c64_advance(37 + (j & 7));      /* a loop's worth between reads */
+            t0 = (unsigned)c64_io_rd(0xD41B);
+            if (!seen[t0 & 0xFF]) {
+                seen[t0 & 0xFF] = 1;
+                n++;
+            }
+        }
+        if (n < 24)
+            fail("$D41B on the noise waveform is not a spread of values: "
+                 "voice 3's oscillator is not running (11.4.1)");
+        c64_io_wr(0xD412, 0x00);
+        /* timer A running, read twice inside ONE run 100 cycles apart */
+        c64_io_wr(0xDC04, 0xFF);
+        c64_io_wr(0xDC05, 0x7F);
+        c64_io_wr(0xDC0E, 0x11);            /* load and start */
+        c64_in_run = 1;
+        c64_run_n = 1000;
+        c64_scr_wr(C64_SCR_CARRY, 0);       /* (no cut in this run) */
+        c64_scr_wr(C64_SCR_CARRY + 1, 0);
+        c64_scr_wr(C64_SCR_DEAD, 1000 & 0xFF);
+        c64_scr_wr(C64_SCR_DEAD + 1, 1000 >> 8);
+        t0 = (unsigned)c64_io_rd(0xDC04) | ((unsigned)c64_io_rd(0xDC05) << 8);
+        c64_scr_wr(C64_SCR_DEAD, 900 & 0xFF);
+        c64_scr_wr(C64_SCR_DEAD + 1, 900 >> 8);
+        t1 = (unsigned)c64_io_rd(0xDC04) | ((unsigned)c64_io_rd(0xDC05) << 8);
+        c64_in_run = 0;
+        c64_scr_wr(C64_SCR_DEAD, 0);
+        c64_scr_wr(C64_SCR_DEAD + 1, 0);
+        if (t0 - t1 != 100)
+            fail("CIA 1 timer A read twice in one run, 100 cycles apart, did "
+                 "not count down by 100 - a read answers the run's start (6.3)");
+        /* ...AND THE RASTER WAIT'S SKIP STOPS AT THE LINE IT WAITS FOR. The
+         * Bright Pixel card's `LDA $D012 / CMP #50 / BEQ +3 / JMP back` read
+         * at line 40 with 10,000 cycles of budget: the skip may charge whole
+         * passes only up to line 50. Before, it charged them to the run's
+         * end and the loop never saw 50 - verified red with c64_poll_lim's
+         * answer ignored */
+        {
+            static const unsigned char loop[10] = {
+                0xAD, 0x12, 0xD0, 0xC9, 50, 0xF0, 0x03, 0x4C, 0x00, 0x09 };
+            int ln;
+            for (j = 0; j < 10; j++)
+                c64_wr(0x0900 + j, loop[j]);
+            c64_frame_cyc = (int)C64_X63(40);
+            c64_in_run = 1;
+            c64_run_n = 10000;
+            c64_scr_wr(C64_SCR_DEAD, 10000 & 0xFF);
+            c64_scr_wr(C64_SCR_DEAD + 1, 10000 >> 8);
+            c64_scr_wr(C64_SCR_CARRY, 0);
+            c64_scr_wr(C64_SCR_CARRY + 1, 0);
+            c64_fpc = 0x0903;               /* the fast core's PC after the LDA */
+            if (c64_io_rd(0xD012) != 40)
+                fail("the raster-wait row's setup is not at line 40");
+            ln = c64_line_now();
+            if (ln < 49 || ln > 50)
+                fail("the raster wait's skip did not stop at the line the loop "
+                     "waits for - it ran past line 50 (4.7.1, 9.10)");
+            c64_in_run = 0;
+            c64_scr_wr(C64_SCR_DEAD, 0);
+            c64_scr_wr(C64_SCR_DEAD + 1, 0);
+            c64_frame_cyc = 0;
+        }
+        c64_reset_regs();
+        c64_map_publish();
     }
 
     /* --- THE FREE-RUNNING TIMER, WHICH IS WHERE A SIGNED COMPARE HANGS.

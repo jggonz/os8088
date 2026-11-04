@@ -752,27 +752,79 @@ static unsigned c64_spsig[C64_ROWS];
 static unsigned char c64_spd[63];           /* one sprite's data */
 
 /* sprite k in row set RV: its top display line, height, left pixel, width,
- * and data address; 0 when it is off or nowhere on the display */
+ * and data address; 0 when it is off or nowhere on the display.
+ *
+ * THE EIGHT SPRITES' GEOMETRY IS WORKED OUT ONCE A REGISTER SET, not once a
+ * row and a sprite: a program that sets its sprites above the display gives
+ * all 25 rows one set, and the Bright Pixel card spent 16% of a 286 here,
+ * reading each pointer through a call per row. c64_sg* is that set's answer,
+ * keyed on the set's 48 bytes and its matrix, and dropped at the start of
+ * every flush's sprite pass (c64_sg_ok = 0) because the POINTERS are RAM the
+ * machine may have rewritten since - nothing runs during a flush */
 static int c64_sp_y, c64_sp_h, c64_sp_x, c64_sp_w;
 static unsigned c64_sp_data;
+static int c64_sg_ok;
+static int c64_sg_row;                      /* the row it was last asked for */
+static unsigned char c64_sg_key[C64_RVN];
+static unsigned c64_sg_mb;
+static unsigned char c64_sg_on;             /* enabled AND across the window */
+static int c64_sgy[8], c64_sgh[8], c64_sgx[8], c64_sgw[8];
+static unsigned c64_sgd[8];
+static unsigned char c64_sgp[8];            /* the eight pointers */
+
+static void c64_sg_fill(const unsigned char *rv, unsigned mb)
+{
+    unsigned bank, x;
+    int k, m;
+
+    os88_memcpy(c64_sg_key, rv, C64_RVN);
+    c64_sg_mb = mb;
+    c64_sg_ok = 1;
+    c64_sg_on = 0;
+    if (rv[0x15] == 0)
+        return;
+    c64_zcopy_out(c64_sgp, mb + 0x3F8, 8);
+    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+    for (k = 0, m = 1; k < 8; k++, m <<= 1) {
+        if ((rv[0x15] & m) == 0)
+            continue;
+        c64_sgh[k] = (rv[0x17] & m) ? 42 : 21;
+        c64_sgw[k] = (rv[0x1D] & m) ? 48 : 24;
+        c64_sgy[k] = (int)rv[1 + k + k] - 50;   /* Y 50 is the window's top */
+        x = (unsigned)rv[k + k] | ((rv[0x10] & m) ? 0x100 : 0);
+        c64_sgx[k] = (int)x - 24;           /* X 24 is its left edge */
+        if (c64_sgx[k] + c64_sgw[k] <= 0 || c64_sgx[k] >= 320)
+            continue;
+        c64_sgd[k] = bank + ((unsigned)c64_sgp[k] << 6);
+        c64_sg_on |= (unsigned char)m;
+    }
+}
+
 static int c64_spr_geom(const unsigned char *rv, int row, int k)
 {
-    unsigned bank, ptr, x;
+    int r8;
 
     if ((rv[0x15] & (1 << k)) == 0)
         return 0;
-    c64_sp_h = (rv[0x17] & (1 << k)) ? 42 : 21;
-    c64_sp_w = (rv[0x1D] & (1 << k)) ? 48 : 24;
-    c64_sp_y = (int)rv[1 + 2 * k] - 50;     /* Y 50 is the window's top */
-    x = (unsigned)rv[2 * k] | ((rv[0x10] & (1 << k)) ? 0x100 : 0);
-    c64_sp_x = (int)x - 24;                 /* X 24 is its left edge */
-    if (c64_sp_y + c64_sp_h <= row * 8 || c64_sp_y >= row * 8 + 8)
+    /* the same row as the last call, or the next one down when the latch
+     * says it repeats the row above (c64_rsame): a hit with no compare. Any
+     * other row compares the set */
+    if (!c64_sg_ok || (row != c64_sg_row
+                       && !(row == c64_sg_row + 1 && c64_rsame[row])
+                       && (c64_sg_mb != c64_rmb[row]
+                           || c64_rvdiff(rv, c64_sg_key))))
+        c64_sg_fill(rv, c64_rmb[row]);
+    c64_sg_row = row;
+    if ((c64_sg_on & (1 << k)) == 0)
         return 0;
-    if (c64_sp_x + c64_sp_w <= 0 || c64_sp_x >= 320)
+    r8 = row << 3;
+    c64_sp_y = c64_sgy[k];
+    c64_sp_h = c64_sgh[k];
+    if (c64_sp_y + c64_sp_h <= r8 || c64_sp_y >= r8 + 8)
         return 0;
-    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
-    ptr = (unsigned)c64_rd(c64_rmb[row] + 0x3F8 + k);
-    c64_sp_data = bank + (ptr << 6);
+    c64_sp_x = c64_sgx[k];
+    c64_sp_w = c64_sgw[k];
+    c64_sp_data = c64_sgd[k];
     return 1;
 }
 
@@ -787,6 +839,7 @@ static void c64_spr_dirty(void)
     unsigned sig;
     unsigned char *rv;
 
+    c64_sg_ok = 0;                          /* the pointers may have moved */
     any = 0;
     rv = c64_rv[0];
     for (r = 0; r < C64_ROWS; r++, rv += C64_RVN)

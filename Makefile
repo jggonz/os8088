@@ -11136,7 +11136,7 @@ C64SRC := apps/c64/c64io.c apps/c64/c64kbd.c apps/c64/c64scr.c \
           apps/c64/c64menu.c apps/c64/c64cmd.c apps/c64/c64load.c \
           apps/c64/c64about.c apps/c64/c64disk.c
 C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc \
-          apps/c64/c64fast.inc apps/c64/c64fsx.inc
+          apps/c64/c64fast.inc apps/c64/c64fsx.inc apps/c64/c64sid.inc
 C64HOST := apps/c64/build.sh apps/c64/hosttest/os88.h \
            apps/c64/hosttest/c64uitest.c apps/c64/hosttest/c64memtest.asm \
            apps/c64/hosttest/c64memtest.sh tools/c64ref.py $(C64INC)

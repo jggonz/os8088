@@ -750,10 +750,10 @@ samples. A field check on real keys is owed.
 
 #### 4.7.1 The raster wait, in whole passes
 
-**`$D011`, `$D012` and `$D019` are constant for a whole run**: they read
-`c64_frame_cyc`, which moves only in `c64_advance`, between runs (section
-4.4). So a program polling one of them - the commonest loop a game or demo
-has - either leaves at the first read or spins until the budget ends. On a
+**`$D019` is constant for a whole run, and `$D011`/`$D012` were too** until
+section 9.10 made them read the live line (`c64_line_now`). So a program
+polling one of them - the commonest loop a game or demo has - left at the
+first read or spun until the budget ended. On a
 16 MHz 286 one pass costs several times the 9-11 us it takes a real C64,
 nearly all of it the call-out: the Bright Pixel Christmas demo (MIT,
 `celso/c64`), which waits for line `$32` with `LDA $D012 / CMP #$32 / BEQ /
@@ -772,6 +772,15 @@ out of `DEAD`, `c64_cut`'s door:
 | `LDA reg / AND #m / BNE` or `BEQ` back | 9 (+1) |
 | `LDA reg / CMP #n / BEQ +3 / JMP back` | 11 |
 | `LDA reg / BNE`, `BEQ`, `BPL` or `BMI` back; `BIT reg / BPL`, `BMI`, `BVC` or `BVS` back | 7 (+1) |
+
+**The skip stops where the value would change** (`c64_poll_lim`): `$D012`
+waited on for EQUALITY (`CMP #n` going on while it differs) to the line
+whose low byte is n, any other `$D012` test to the end of its line, `$D011`
+to bit 8's next turn, and only `$D019` to the run's end. When `$D012` became
+live and the skip still ran to the end of the run, the Bright Pixel card's
+wait for line 50 saw it only when a run boundary fell there, and its snow
+fell two pixels a second; `c64uitest` now asserts the skip from line 40
+stops at 49 or 50.
 
 The core then makes the read again at the same point of the loop, with the
 clock where those passes would have put it, and ends the run on the same
@@ -1025,6 +1034,15 @@ One clock, three phases, none derived from another:
 | the CIA timers | whatever their latches say (the KERNAL's PAL timer A is 16,421 cycles ≈ 60 Hz) | the jiffy IRQ, `TI$`, every timer interrupt |
 | the VIC raster | 63 cycles a line, 19,656 a frame ≈ 50.123 Hz | `$D012`, raster IRQs, the frame counter the status bar prints (§10.2) |
 | the CIA TOD | `C64_TOD_PERIOD` = 19,705 cycles — a **50 Hz** mains tick off the cycle clock | the TOD registers |
+
+**Every clock READS LIVE** (`c64_run_el`): the devices advance only between
+runs (§4.4), so a register that is a clock adds what the run in progress has
+spent when it is read - `$D011`/`$D012` (§9.10), the CIA timers
+(`c64_tlive`, reloading from the latch across an underflow a run may cross,
+since a counter at `$7FFF` or above is not an alarm), and SID voice 3
+(§11.4.1). The timers answered the run's start until the Bright Pixel card's
+`LDA $D012 / EOR $DC04 / SBC $DC05` came out the same every frame and its
+eight snowflakes fell in step.
 
 ---
 
@@ -1888,6 +1906,13 @@ The data pointer is the row's matrix + `$3F8 + k`, in the row's bank. Each
 pixel is lit or dark against the row's paper by luminance; sprite 0 is
 drawn last, on top.
 
+**The eight sprites' geometry is worked out once a register SET**, not once
+a row and a sprite (`c64_sg_fill`): a program that sets its sprites above
+the display gives every row one set, and a row the latch marks as repeating
+the row above (`c64_rsame`) is a hit with no compare. The cache is dropped at
+each flush's sprite pass, because the pointers are RAM. It was 16% of a 286
+under the Bright Pixel card, a pointer read through a call per row and sprite.
+
 **What a row's sprites look like is a signature**, `c64_spsig[r]`: per
 sprite on the row, its position, size, colours, multicolour bit and data
 pointer, and a nonzero bit for *a sprite is here*. `c64_spr_dirty` takes it
@@ -2294,7 +2319,7 @@ Live items:
 | Preferences > Settings... (Alt+O) | no resources file: every setting this port has is on the Preferences menu itself |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
-| SID voices 2–3, waveforms other than the gate, ADSR, filters, `$D41B`/`$D41C` | the PC speaker is one square wave, and the sound driver's FM path is not wrapped for C (§11.4) |
+| SID voices 2–3, waveforms other than the gate, ADSR, filters (voice 3 READS: `$D41B`/`$D41C`, §11.4.1) | the PC speaker is one square wave, and the sound driver's FM path is not wrapped for C (§11.4) |
 | Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
 | Sprite priority, collision registers | §5.3 — sprites are drawn in front; `$D01E`/`$D01F` answer 0 |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
@@ -2478,6 +2503,29 @@ a session, on the row and in a toast: `The speaker is busy - no SID sound.`
 Voices 2 and 3, every waveform beyond the gate, ADSR and the filters are
 greyed with §11.2's fact: `OSAPI_SND_FM` and the streaming path are driver
 verb protocols not wrapped for C.
+
+### 11.4.1 Voice 3, readable — `$D41B` and `$D41C`
+
+**`$D41B` is voice 3's waveform output, computed when it is read**
+(`c64sid.inc`'s `c64_osc3`, from `c64_osc3_now`): the 24-bit phase
+accumulator advanced by `$D40E/$D40F` × the cycles since the last read, the
+23-bit noise LFSR clocked on each rise of accumulator bit 19 with feedback
+bit 22 ^ bit 17, and the output by `$D412`'s waveform bits - noise through
+its eight taps (22 20 16 13 11 7 4 2), sawtooth as bits 23-16, triangle as
+bits 22-15 folded by bit 23, pulse against `$D410/$D411`'s width; several
+waveforms AND. TEST holds the accumulator at 0 and the LFSR at all ones, and
+a SID reset goes through TEST, because a zero LFSR shifts in zeros for ever.
+A write to `$D40E-$D412` first brings the oscillator up to now at the old
+settings. **This is the C64's random number generator** - voice 3 on noise,
+read at `$D41B` - and the Portland Commodore Users Group's Christmas demo
+places its snow with it: answering the stored byte, every flake fell in
+column 0. **`$D41C`** is the sustain level while voice 3's gate is open and
+0 once it closes; the ADSR's shape is not modelled. Ring modulation and
+sync do not reach the output.
+
+`c64uitest` asserts a spread of values on noise; `c64memtest` runs the
+shipping routine against hand-computed bytes (TEST, a sawtooth's top byte,
+the noise output after one and then six LFSR clocks).
 
 ---
 

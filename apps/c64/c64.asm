@@ -163,6 +163,7 @@ section .text                       ; THE HOT HALF KEEPS ITS PARITY: the
                                     ; and the core's scratch (C64-SPEC 3.5/3.6)
 %include "c64/c64band.inc"          ; the 1bpp composers, the span compare and
                                     ; the row signature (C64-SPEC 9.5)
+%include "c64/c64sid.inc"           ; SID voice 3's oscillator (11.4.1)
 %include "c64/c64fsx.inc"           ; ...and the colour screen's 8bpp ones,
                                     ; inside the FSXM_VGA13 bracket (C64-SPEC 9.12)
 
