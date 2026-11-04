@@ -40,9 +40,9 @@
 %include "os88parts.inc"
 
 %ifdef ARC_PACMAN
-    OS88_PARTS_BEGIN 20
+    OS88_PARTS_BEGIN 23
 %else
-    OS88_PARTS_BEGIN 17
+    OS88_PARTS_BEGIN 20
 %endif
       OS88_PART OP_ASSET, OP_ZERO, ARC_VIEW_KB      ; 0 the view, shared
       ; EVERY BOARD IS LAZY (ARCADE-SPEC 1.2): its code, aux and ROM parts
@@ -63,10 +63,15 @@
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 13 Sea Wolf
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 14
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 15
+      OS88_PART OP_ASSET, OP_LAZY                   ; 16 Q*bert: the N88 core
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 17   its sprites, turned
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 18   the program, patched,
+                                                    ;      and its tiles turned
+                                                    ;      (arcqbgfx.py)
 %ifdef ARC_PACMAN
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 16 Pac-Man: code
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 17   aux
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 18   the ROM, and its tiles
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 19 Pac-Man: code
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 20   aux
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 21   the ROM, and its tiles
                                                     ;      turned (arcpmgfx.py)
 %endif
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; last: the 8080 boards'
@@ -75,9 +80,9 @@
     OS88_PARTS_END
 
 %ifdef ARC_PACMAN                   ; the parts named in code
-AR_P_INVSFX equ 19
+AR_P_INVSFX equ 22
 %else
-AR_P_INVSFX equ 16
+AR_P_INVSFX equ 19
 %endif
 
 AR_CONT_W   equ 300
@@ -108,6 +113,9 @@ BD_IRQ      equ 12                  ; dw near: an interrupt is due - deliver it
 BD_FRAME    equ 14                  ; dw near: a frame's picture, sound, keys
 BD_PERIOD   equ 16                  ; dw PIT counts between interrupts
 BD_PERFRAME equ 18                  ; db interrupts a frame
+BD_LATE     equ 19                  ; db frames behind before one is dropped
+                                    ;   (0: two - the boards whose picture
+                                    ;   always fits a frame)
                                     ; THE SOUND (ARCADE-SPEC 8), a route each:
 BD_SPK      equ 20                  ; dw near: a frame's speaker tone
 BD_SBTICK   equ 22                  ; dw near: a frame's sound state, before
@@ -589,10 +597,18 @@ ar_loop:
     mov ax, [bx+BD_PERIOD]
     mov [ar_period], ax
     mov cl, [bx+BD_PERFRAME]        ; two FRAMES behind: drop, never race
-    shl cl, 1                       ;   (Invaders' period is half a frame)
+    shl cl, 1                       ;   (Invaders' period is half a frame) -
+    cmp byte [bx+BD_LATE], 0        ;   or the board's own allowance, in
+    je .late                        ;   frames (BD_LATE)
+    mov al, [bx+BD_LATE]
+    mul byte [bx+BD_PERFRAME]
+    mov cl, al
+    mov ax, [bx+BD_PERIOD]
+.late:
     mov ch, 0
     mul cx
-    mov [ar_late], ax
+    mov [ar_late], ax               ; (32 bits: Q*bert's is half a second)
+    mov [ar_late+2], dx
     call pit_now
     add ax, [ar_period]
     adc dx, 0
@@ -669,8 +685,9 @@ ar_loop:
     sub ax, [ar_due]
     sbb dx, [ar_due+2]
     js .run
-    or dx, dx                       ; behind: catch up by dropping, never
-    jnz .resync                     ;   by racing
+    cmp dx, [ar_late+2]             ; behind: catch up by dropping, never
+    ja .resync                      ;   by racing
+    jb .deliver
     cmp ax, [ar_late]
     jb .deliver
 .resync:
@@ -1619,10 +1636,43 @@ lr_n_steplo: dw 440
              db 2
              dw 0
 
+; ar_shift - shared by the portrait boards' composers (Pac-Man's, Q*bert's):
+; AX = a row's 16 pixels (bit 15 the left one): DX, AX = the
+; box's left and right words with them at pixel ar_sh, in MEMORY order
+; (the left pixel's byte first). Two shifts by CL, no loop: a count of 16
+; empties a word on every 86 (the 286 and up mask the count to 31)
+ar_shift:
+    mov cx, [ar_sh]
+    or cx, cx
+    js .left
+    cmp cx, 16
+    jae .right
+    mov dx, ax                      ; left = M >> n, right = M << (16 - n)
+    shr dx, cl
+    neg cl
+    add cl, 16
+    shl ax, cl
+    jmp short .done
+.right:
+    sub cx, 16
+    shr ax, cl
+    xor dx, dx
+    jmp short .done
+.left:
+    neg cx
+    shl ax, cl
+    mov dx, ax
+    xor ax, ax
+.done:
+    xchg dh, dl                     ; to memory order
+    xchg ah, al
+    ret
+
 %include "os88pit.inc"
 %include "sndpkg.inc"                   ; SOUND.DRV's FM door (arcsnd.inc)
 %include "arcsnd.inc"
 %include "arcland.inc"
+%include "arcqb.inc"
 %ifdef ARC_PACMAN
 %include "arcpm.inc"
 %endif
@@ -1632,7 +1682,7 @@ lr_n_steplo: dw 440
 ; =============================================================================
 ; --- the boards (ARCADE-SPEC 5.3) ---------------------------------------------
 ar_boards:
-    dw ar_bd_inv, ar_bd_pt2, ar_bd_lr, ar_bd_gf, ar_bd_sw
+    dw ar_bd_inv, ar_bd_pt2, ar_bd_lr, ar_bd_gf, ar_bd_sw, ar_bd_qb
 %ifdef ARC_PACMAN
     dw ar_bd_pm
 %endif
@@ -1657,10 +1707,18 @@ ar_boards:
     dw ar_x_gf
     AR_8080BOARD ar_bd_sw, ar_s_sw, 13, 14, 15, 0x1000
     dw ar_x_sw
+ar_bd_qb:                           ; Gottlieb's Q*bert, its 8088 native
+    dw ar_s_qb                      ;   (ARCADE-SPEC 10)
+    db 16, 17, 18, 0
+    dw 0, qb_reset, qb_setup, qb_irq, qb_frame
+    dw 19427                        ; the board's 61.42 Hz NMI (MAME gottlieb:
+    db 1, QB_LATE                   ;   5 MHz pixels, 318 x 256), one a frame
+    dw ar_nop, ar_nop, 0, 0, 0      ; no sound yet (ARCADE-SPEC 10.6)
+    dw 0, ar_nop, qb_on, qb_off, 0
 %ifdef ARC_PACMAN
 ar_bd_pm:
     dw ar_s_pm
-    db 16, 17, 18, 0
+    db 19, 20, 21, 0
     dw 0x4000, pm_reset, pm_setup, pm_irq, pm_frame
     dw 19688                        ; the board's 60.61 Hz (MAME pacman.cpp:
     db 1, 0                         ;   6.144 MHz, 384 x 264), one interrupt
@@ -1697,12 +1755,12 @@ ar_tpl:
     dw ar_title, ar_paint, ar_onkey, ar_onclick
     OS88_MENUSET ar_menus, ar_title, ar_oncmd
 %ifdef ARC_PACMAN
-        OS88_MENU ar_m_game, ar_i_game, 8
+        OS88_MENU ar_m_game, ar_i_game, 9
 %else
-        OS88_MENU ar_m_game, ar_i_game, 7
+        OS88_MENU ar_m_game, ar_i_game, 8
 %endif
     OS88_MENUSET_END ar_menus
-ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pt2, ar_s_lr, ar_s_gf, ar_s_sw
+ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pt2, ar_s_lr, ar_s_gf, ar_s_sw, ar_s_qb
 %ifdef ARC_PACMAN
             dw ar_s_pm
 %endif
@@ -1711,6 +1769,7 @@ ar_s_pt2:   db 'Space Invaders Part II', 0
 ar_s_lr:    db 'Lunar Rescue', 0
 ar_s_gf:    db 'Gun Fight', 0
 ar_s_sw:    db 'Sea Wolf', 0
+ar_s_qb:    db 'Q*bert', 0
 ar_s_none:  db '(none)', 0
 ar_s_nobd:  db 'Arcade: no game is loaded - pick one from Game', 0
 ar_s_pm:    db 'Pac-Man', 0
@@ -1729,6 +1788,7 @@ ar_l6:      db 'Esc: back here, the game held', 0
 ar_l7:      db 0
 ar_l8:      db 'Game > Reset: power the board off', 0
 ar_s_vgaonly: db 'Arcade: Pac-Man needs a VGA', 0
+ar_s_qbvga: db 'Arcade: Q*bert needs a VGA', 0
 
 ar_ablines: dw ar_ab1, ar_ab2, ar_ab3, ar_ab4, 0
 ar_ab1:     db 'Arcade for os8088', 0
@@ -1755,10 +1815,60 @@ ar_s_miss:  db 'Arcade: no code at ????', 0
 %assign AR_BSS AR_BSS + %2
 %endmacro
 AR_VAR ar_core, 4                   ; dw arc_enter, dw the code part
+AR_VAR ar_sh, 2                     ; ar_shift: pixels into the box
+AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB
+AR_VAR qb_n88, 2                    ;   the N88 core's segment, its yield
+AR_VAR qb_n88y, 2
+AR_VAR qb_palok, 1                  ;   qb_pal holds what the DAC has
+AR_VAR qb_pri, 1                    ;   the background's priority, as drawn
+AR_VAR qb_pal, 32                   ;   the palette as last loaded
+AR_VAR qb_cur, QB_NSPR * QBS_SIZE   ;   the sprites now, and as drawn
+AR_VAR qb_old, QB_NSPR * QBS_SIZE
+AR_VAR qb_vcopy, 960                ;   the tiles as drawn
+AR_VAR qb_nlist, 2                  ;   the tiles changed this frame
+AR_VAR qb_list, 2 * (QB_MANY + 1)
+AR_VAR qb_ox, 2                     ;   a sprite's old box, for the union
+AR_VAR qb_oy, 2
+AR_VAR qb_ox1, 2
+AR_VAR qb_oy1, 2
+AR_VAR qb_ctx, 2                    ;   the box being composed, in tiles
+AR_VAR qb_cty, 2
+AR_VAR qb_ctw, 2
+AR_VAR qb_cth, 2
+AR_VAR qb_bx0, 2                    ;   ...in pixels
+AR_VAR qb_bx1, 2
+AR_VAR qb_by0, 2
+AR_VAR qb_by1, 2
+AR_VAR qb_s, 2                      ;   the sprite being laid over it
+AR_VAR qb_sy, 2
+AR_VAR qb_iy1, 2
+AR_VAR qb_sbase, 2
+AR_VAR qb_o, 4                      ;   NOT its row's opaque mask, placed
+AR_VAR qb_rows, 2
+AR_VAR qb_yp, 2
+AR_VAR qb_shseg, 2                  ;   the shadow of the glass (32KB claim)
+AR_VAR qb_shr0, 2                   ;   ...the box's first byte in it, a plane
+AR_VAR qb_shr, 2                    ;   ...and a row's
+AR_VAR qb_pp, 2                     ;   the plane being put, in qb_pl
+AR_VAR qb_skips, 1                  ;   frames the picture has waited
+AR_VAR qb_yr, 2                     ;   the row's entry in qb_yoff
+AR_VAR qb_act, 2 * QB_NSPR          ;   the active sprites (qb_cur offsets)
+AR_VAR qb_actend, 2
+AR_VAR qb_bx2, 2                    ;   the box's first byte across
+AR_VAR qb_di0, 2                    ;   ...and the row's on the glass
+AR_VAR qb_srok, 1                   ;   qb_srcopy holds the sprite RAM read
+AR_VAR qb_srcopy, QB_NSPR * 4
+AR_VAR qb_chg, 1                    ;   a byte of the row changed
+AR_VAR qb_two, 1                    ;   80: the row is one screen row, 160 two
+AR_VAR qb_rleft, 2                  ;   rows left to put
+AR_VAR qb_yoff, 257 * 2             ;   a portrait row's screen offset
+AR_VAR qb_pl, 4 * 128               ;   the box: 4 planes of 32 rows x 4
+AR_VAR qb_tl, 4 * 128               ;   ...its tiles alone, for the priority
+AR_VAR qb_top, 128                  ;   ...and their opaque bytes
 AR_VAR ar_bd, 2                     ; the board (ar_boards)
 AR_VAR ar_rseg, 2                   ; its ROM part
 AR_VAR ar_period, 2                 ; its PIT counts between interrupts
-AR_VAR ar_late, 2                   ; ...and how far behind is dropped
+AR_VAR ar_late, 4                   ; ...and how far behind is dropped
 AR_VAR ar_irqn, 1                   ; interrupts so far this frame
 AR_VAR ar_vseg, 2
 AR_VAR ar_aseg, 2
@@ -1842,7 +1952,6 @@ AR_VAR pm_opqw, 8                   ;   ...and its opacity
 AR_VAR pm_sm, 16                    ;   its row's masks, shifted into place
 AR_VAR pm_m, 8                      ;   a sprite row's four value masks
 AR_VAR pm_o, 4                      ;   ...NOT its opaque mask, placed
-AR_VAR pm_sh, 2                     ;   ...and where: pixels into the box
 AR_VAR pm_ox, 2                     ;   a sprite's old box, for the union
 AR_VAR pm_oy, 2
 AR_VAR pm_ox1, 2

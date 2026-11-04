@@ -4691,6 +4691,31 @@ SOAK = [
         "a PUSH into VRAM not listing its cells, which left Sea Wolf's "
         "INSERT COIN on the glass in play",
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
+        "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
+        "program with apps/arcade/qbert.patch applied - run under Unicorn as the "
+        "N88 core runs it, 3,000 frames of attract mode, a coin, a start and "
+        "moves: every frame ends at a yield, no store lands on the inputs at "
+        "5800-5807h, the segment registers never move. Red (a store of 00 at "
+        "5803 from B034) with one port line taken out of the patch",
+        needs=("unicorn",),
+        wants=("build/arcade/QBROM.PRT", "build/arcade-rom/QBERT.ROM")),
+    Row("qbglass", "soak", py("tests/qbglass.py"), 28.0,
+        "ARCADE's Q*bert picture IS its board's memory (ARCADE-SPEC section "
+        "10.4): three moments of its attract mode on MartyPC's VGA XT, one with "
+        "the background in front of the sprites, stopped as a frame was DRAWN; "
+        "every screen row read out of the VGA's four planes against MAME's "
+        "picture of the game's own segment: none may differ. Red (4,430 to "
+        "40,102 pixels) without the priority pass and the latch copy",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
+                                 "build/arcade-rom/QBERT.ROM")),
+    Row("arcspeedqb", "soak", py("tests/arcspeed.py", "--game", "Q*bert", "--hz", "61.42",
+                                 "--machine", "os8088_xt_vga"), 18.0,
+        "ARCADE's Q*bert on MartyPC's 4.77 MHz VGA XT (ARCADE-SPEC section 10.5): "
+        "the board's 61.42 frames a second within 3% with none dropped in 10 "
+        "guest seconds of play - the game's own 8088 code at full speed, the "
+        "picture skipping frames instead (20 a second when it drew them all)",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
     Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
         "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "
         "played full screen for 10 guest seconds - a coin, a start, fire and "

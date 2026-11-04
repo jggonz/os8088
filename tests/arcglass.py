@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # =============================================================================
 # os8088 - tests/arcglass.py - the landscape boards' picture IS their VRAM
-# (docs/ARCADE-SPEC.md 4.6)
+# (ARCADE-SPEC 4.6)
 #
 #     python3 tests/arcglass.py ["Gun Fight" "Sea Wolf" ...]
 #

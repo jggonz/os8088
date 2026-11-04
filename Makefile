@@ -11501,8 +11501,23 @@ $(BUILD)/arcade/swcode.bin: apps/arcade/arcaot.py apps/arcade/seawolf.seeds \
 		$(BUILD)/arcade/swcode.asm $@ $(BUILD)/arcade/swaux.bin --aux-kb 50 --board seawolf
 $(BUILD)/arcade/swaux.bin: $(BUILD)/arcade/swcode.bin
 
-#> [Applications] arcaderom :: fetch the 8080 boards' ROMs (Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf) at pinned hashes (never committed)
-arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) $(ARCGFROM) $(ARCSWROM)
+# Gottlieb's Q*bert board is an 8088, and its program RUNS NATIVELY
+# (ARCADE-SPEC 10): no translation, only apps/arcade/qbert.patch's handful
+# of changes - applied and CHECKED by arcqbgfx.py, which also turns the tiles
+# and sprites - and the N88 core, a door of a hundred bytes (arcn88.asm).
+ARCQBROM := $(BUILD)/arcade-rom/QBERT.ROM
+$(ARCQBROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py qbert -o $@
+$(BUILD)/arcade/QBROM.PRT: apps/arcade/arcqbgfx.py apps/arcade/qbert.patch $(ARCQBROM)
+	@mkdir -p $(BUILD)/arcade
+	python3 apps/arcade/arcqbgfx.py $(ARCQBROM) apps/arcade/qbert.patch $@ $(BUILD)/arcade/QBSPR.PRT
+$(BUILD)/arcade/QBSPR.PRT: $(BUILD)/arcade/QBROM.PRT
+$(BUILD)/arcade/qbcode.bin: apps/arcade/arcn88.asm apps/arcade/arcdefs.inc
+	@mkdir -p $(BUILD)/arcade
+	$(NASM) -f bin -w+error -I apps/arcade/ -o $@ $<
+
+#> [Applications] arcaderom :: fetch the public boards' ROMs (Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf, Q*bert) at pinned hashes (never committed)
+arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) $(ARCGFROM) $(ARCSWROM) $(ARCQBROM)
 
 $(BUILD)/arcade/pt2code.bin: apps/arcade/arcaot.py apps/arcade/invadpt2.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCPT2ROM)
@@ -11552,7 +11567,7 @@ $(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcsfx.py $@
 
-ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc \
+ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
               apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
@@ -11560,7 +11575,8 @@ ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM)
                 $(BUILD)/arcade/pt2code.bin $(BUILD)/arcade/pt2aux.bin $(ARCPT2ROM) \
                 $(BUILD)/arcade/lrcode.bin $(BUILD)/arcade/lraux.bin $(ARCLRROM) \
                 $(BUILD)/arcade/gfcode.bin $(BUILD)/arcade/gfaux.bin $(ARCGFROM) \
-                $(BUILD)/arcade/swcode.bin $(BUILD)/arcade/swaux.bin $(ARCSWROM)
+                $(BUILD)/arcade/swcode.bin $(BUILD)/arcade/swaux.bin $(ARCSWROM) \
+                $(BUILD)/arcade/qbcode.bin $(BUILD)/arcade/QBSPR.PRT $(BUILD)/arcade/QBROM.PRT
 ARCADE_DEF :=
 ifneq ($(ARC_PM),)
 ARCADE_PARTS += $(BUILD)/arcade/paccode.bin $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/PACMAN.PRT
@@ -11573,7 +11589,7 @@ $(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) | $(BUILD)
 $(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
 
-#> [Applications] arcade :: ARCADE, arcade boards translated to 8086: three 8080 boards, and Pac-Man with your ROM (docs/ARCADE-SPEC.md)
+#> [Applications] arcade :: ARCADE, arcade boards translated to 8086: five 8080 boards, Q*bert's 8088 native, and Pac-Man with your ROM (docs/ARCADE-SPEC.md)
 arcade: $(BUILD)/arcade.o88
 
 #> [Applications] arclock :: ARCADE's translated code in lockstep with tools/arcsim.py (needs unicorn)

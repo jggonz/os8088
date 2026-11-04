@@ -1073,7 +1073,7 @@ pm_overlay:
     mov [pm_iy1], dx
     mov ax, [pm_cur+bx+PMS_X]       ; its shift into the box's 32 bits
     sub ax, [pm_bx0]
-    mov [pm_sh], ax
+    mov [ar_sh], ax
     mov al, [pm_cur+bx+PMS_PAL]     ; its selectors and opacity, widened
     mov ah, 0                       ;   to words: 16 selectors then 4
     mov cl, 4
@@ -1168,7 +1168,7 @@ pm_sprrow:
 %assign V 0
 %rep 4
     mov ax, [pm_m+V*2]
-    call pm_shift
+    call ar_shift
     mov [pm_sm+V*4], dx
     mov [pm_sm+V*4+2], ax
 %assign V V+1
@@ -1217,37 +1217,6 @@ pm_sprrow:
     mov [bx+PL*128+2], cx
 %assign PL PL+1
 %endrep
-    ret
-
-; pm_shift - AX = a row's 16 pixels (bit 15 the left one): DX, AX = the
-; box's left and right words with them at pixel pm_sh, in MEMORY order
-; (the left pixel's byte first). Two shifts by CL, no loop: a count of 16
-; empties a word on every 86 (the 286 and up mask the count to 31)
-pm_shift:
-    mov cx, [pm_sh]
-    or cx, cx
-    js .left
-    cmp cx, 16
-    jae .right
-    mov dx, ax                      ; left = M >> n, right = M << (16 - n)
-    shr dx, cl
-    neg cl
-    add cl, 16
-    shl ax, cl
-    jmp short .done
-.right:
-    sub cx, 16
-    shr ax, cl
-    xor dx, dx
-    jmp short .done
-.left:
-    neg cx
-    shl ax, cl
-    mov dx, ax
-    xor ax, ax
-.done:
-    xchg dh, dl                     ; to memory order
-    xchg ah, al
     ret
 
 ; pm_put - pm_pl's box onto the screen, a plane at a time - one map-mask

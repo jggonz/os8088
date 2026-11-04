@@ -297,3 +297,59 @@ early measurements of these two came out at 40-44 frames a second; every
 measurement of the tree as committed, alone or two at once, holds the
 board's rate, and the rows `arcspeedgf` and `arcspeedsw` keep asking. The
 slow figures were not reproduced and are not explained.
+
+## Q*bert: the arcade CPU this machine is
+
+**Gottlieb's Q*bert board has an 8088.** Its program is flat in one 64KB
+space, and its reset sets every segment register to 0. So the plan
+proposed a probe rather than a translator: run the ROM as it is, in a
+segment of the PC, and measure.
+
+**The probe came first, off the machine.** A Unicorn harness loaded the
+program at A000h of a segment that was not 0, NOPped the three segment
+loads, and delivered the board's NMI as the hardware does. The attract
+mode came up right away: the logo, the instructions, the pyramid demo. A
+coin and a start played a level, all the way to the high-score table.
+An 8088 cycle table put the game's work at about **7,500 cycles a frame**
+of the 77,700 a 4.77 MHz 8088 has at the board's 61.42 Hz. Gottlieb's own
+5 MHz 8088 was mostly idle.
+
+**Making it a board took 17 patch lines and a 103-byte core.** The game
+writes its watchdog, sound latch and outputs to 5800-5807h, where it also
+reads its inputs. The host fills the inputs there, so those 14 stores were
+moved 8 up. Its two waits for the next frame became far calls into the
+N88 core, which saves the game's registers on the game's own stack and
+returns to the host loop as if the game had halted. The NMI is delivered
+on the next run, through the vector the game itself wrote. The patch file
+holds addresses only, and the build refuses any address whose bytes do
+not have the expected shape. The game runs with interrupts off, so nothing
+of the host's ever lands on its stack.
+
+**On the 286 it simply runs**, at the board's full rate, every frame
+drawn. **On the 8088 it was the picture that did not fit.** A 3 x 3-tile
+box around a moving sprite cost about 70,000 cycles to put on the VGA,
+and turning the VGA writes off changed nothing. It was not the bus: an
+8088 at 4.77 MHz spends that long just comparing 288 bytes with a shadow,
+a few instructions a byte. Three rounds of tightening helped by a quarter
+each:
+- the put row by row, with REPE CMPSB over the unchanged bytes;
+- the second screen row copied through the VGA latches;
+- the board's parked sprites dropped before each box.
+
+What made the 8088 work was conceding the picture's frame rate: draw only
+when not already late, and let the game's own frames, at 8,000 cycles
+each, catch up. Now the GAME keeps all 61.42 frames a second on the 5150
+model, with none dropped, and the picture updates about ten times a
+second when things move.
+
+**The first glass test reported pixels wrong in whole rows.** They were
+not wrong. The emulator's rendered frame is the last one the raster
+FINISHED, so a box put after the beam passed is not in it yet. The test
+now reads the VGA's four planes directly and compares them with MAME's
+picture of the game's memory. 0 pixels differ, including the stretch where
+the background has priority over the sprites. Taking the priority pass
+and the latch copy out turns it red.
+
+**Not done: sound.** Q*bert's sound is a second board with a 6502, a DAC
+and the Votrax chip behind the famous swearing. The game's commands to it
+land where nothing reads them.

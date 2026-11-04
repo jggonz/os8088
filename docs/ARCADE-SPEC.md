@@ -8,14 +8,17 @@ here *before* it goes in the code. The design record is
 docs/plans/ARCADE-EMU-PLAN.md. It is cited from outside as "ARCADE-SPEC
 section N".
 
-**What is built, stated once:** six boards. Midway's 8080 B&W board running
+**What is built, stated once:** seven boards. Midway's 8080 B&W board running
 Space Invaders (Taito, 1978), and Taito's two colour boards on the same
 8080 design - Space Invaders Part II (1979) and Lunar Rescue (1979) - full
 screen on VGA (in colour), Hercules and CGA; Midway's two LANDSCAPE boards
-on it, Gun Fight (1975) and Sea Wolf (1976), on the same three; and Namco's Pac-Man board
-(Midway, 1980), its Z80 translated by section 7's translator, full screen on
-VGA only, built in only when the owner has supplied the ROM. All have sound
-on a Sound Blaster, an AdLib or the speaker (section 8). There is no
+on it, Gun Fight (1975) and Sea Wolf (1976), on the same three; Gottlieb's
+Q\*bert board (1982), whose CPU is an 8088 and whose program therefore RUNS
+NATIVELY, untranslated (section 10), full screen on VGA, silent; and
+Namco's Pac-Man board (Midway, 1980), its Z80 translated by section 7's
+translator, full screen on VGA only, built in only when the owner has
+supplied the ROM. All but Q\*bert have sound on a Sound Blaster, an AdLib
+or the speaker (section 8). There is no
 windowed picture, no save state, and no interpreter for a guest PC the
 translation does not hold (section 3.2 says what happens then).
 
@@ -47,6 +50,12 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 | `apps/arcade/arcsnd.inc` | the sound: the route, the stream, FM, and Space Invaders' half (section 8) |
 | `apps/arcade/arcland.inc` | the landscape boards: their picture, Gun Fight's and Sea Wolf's controls, sound and lamps (sections 4.6, 5.3) |
 | `tests/arcglass.py` | the landscape boards' glass held to their video RAM (section 4.6) |
+| `apps/arcade/arcn88.asm` | the N88 core: the door between the host loop and a board's own 8088 code (section 10.2) |
+| `apps/arcade/arcqb.inc` | the Q\*bert board's host half: its power-on, NMI, keys, palette and picture (section 10) |
+| `apps/arcade/arcqbgfx.py` | Q\*bert's ROM part and sprite part: the program patched, the tiles and sprites turned (section 10.4) |
+| `apps/arcade/qbert.patch` | what Q\*bert's program needs changed to run in a segment of the PC, as ADDRESSES and kinds, each checked against the ROM (section 10.2) |
+| `tests/qbnative.py` | the patched program under Unicorn as the N88 core runs it: the patch's claims checked (section 10.8) |
+| `tests/qbglass.py` | Q\*bert's glass held to MAME's picture of its memory, read out of the VGA's planes (section 10.8) |
 | `apps/arcade/arcsfx.py` | Space Invaders' sounds, SYNTHESISED - no recording, no ROM (section 8.3) |
 | `tests/arcsound.py` | the stream and FM routes on the 8088, the sound read back (section 8.5) |
 | `tools/arcz80.py`, `tools/arcpac.py` | the Z80 and the Pac-Man board in Python: the reference (section 7.6) |
@@ -77,10 +86,13 @@ its drop frees (`BD_OFF`), not a part.
 | 7, 8, 9 | Lunar Rescue: the same | 32KB, 50KB, 22KB |
 | 10, 11, 12 | Gun Fight: the same, its ROM 4KB | 12KB, 50KB, 4KB |
 | 13, 14, 15 | Sea Wolf: the same | 17KB, 50KB, 4KB |
-| 16, 17, 18 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 57KB, 50KB, 48KB |
-| last (16, or 19 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 58KB |
+| 16, 17, 18 | Q\*bert: the N88 core (not packed: LZ4 makes 103 bytes larger), its sprites turned, the ROM part - the program patched and its tiles turned (section 10.4) | 103 bytes, 40KB, 34KB |
+| 19, 20, 21 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 57KB, 50KB, 48KB |
+| last (19, or 22 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 58KB |
 
-With every board it is about 235KB on the disk.
+With every board it is about 255KB on the disk. Q\*bert's pick also claims
+64KB for the game's own segment and 30KB for the shadow of the glass
+(section 10.4), and its drop frees both.
 
 The shipped build refuses to start under kern_mega's protected mode
 (`OS88_MEGA_REFUSE`): the host far-jumps into part 0, which is a data
@@ -101,8 +113,12 @@ four 2KB chips by SHA-256, and writes the 8KB board image
 chips each, a 4KB image - every chip's
 CRC32 MAME's, into a 22KB image: the CPU's 0000-4FFFh as it sees it (RAM's
 2000-3FFFh zero) and the colour maps at 5000h and 5400h (Lunar Rescue has
-one map, loaded twice, as MAME's `ROM_RELOAD`). `make arcaderom` fetches all
-three. `--from <dir-or-zip>` takes a set the
+one map, loaded twice, as MAME's `ROM_RELOAD`). **Q\*bert** is MAME's
+`qbert` (`arcade_qbert/qbert.zip`, SHA-1 `b560f935...`): its three 8KB
+program chips, two 4KB tile chips and four 8KB sprite chips, every CRC32
+MAME's, into a 64KB image - the program as the 8088 sees it at A000-FFFFh
+put at 0000h, the tiles at 6000h, the sprite planes at 8000h, MSB first.
+`make arcaderom` fetches them all. `--from <dir-or-zip>` takes a set the
 owner already has (`make arcaderom GETARCFROM=...`). The code part is built
 from that image, so it too lives only in `build/` and on the floppy, and the
 package is a `local` line in apps/RETIRED.txt: standalone disks, no standard
@@ -140,7 +156,8 @@ section 7.4) - are the cells the core and the host share:
 | `V_NFRAME` .. `V_NCELL` | the host's counters: frames delivered, half frames dropped, runs, the budget, cells drawn |
 | `V_SBTOT`, `V_SBSEG` | the stream's total, written each frame after the mix, and its ring's segment (0 when there is none): enough for a test to read back every byte mixed (section 8.1) |
 | `V_SROUTE`, `V_SWHY` | the sound's route (section 8), and the last step that declined a better one: 1 the Control Panel's speaker route, 2 no stream caps, 3 the board's preparation, 4 the ring's claim, 5 verb 0, 6 no FM, 7 the driver's ident, 8 the FM claim |
-| `V_PROBE` | `arcaot.py --probe`'s counts, in an instrument build only |
+| `V_PROBE` | `arcaot.py --probe`'s counts, in an instrument build only (6060-607F) |
+| `NV_GSEG`, `NV_GSP`, `NV_NMI` (6080-6084) | the N88 core's (section 10.2): the game's own segment G, its SP when it yielded, and the NMI the host has delivered for the next run |
 
 ### 2.2 Aux
 
@@ -163,6 +180,8 @@ its own, left no room for it beside.
 At `ARC_HDR`, its offset 0: `dw ARC_MAGIC` ('A3': the table in aux, the ROM
 a part of its own), `dw arc_enter`, `dw` the end of the translation. The
 package checks every board's magic at its start and refuses a damaged part.
+The N88 core's header (section 10.2) is the same with one word more,
+`AH_YIELD`: the far call a native game makes in place of its wait.
 
 ---
 
@@ -464,9 +483,11 @@ The loop is one loop for every board; a BOARD is the table of what differs
 (`ar_boards`, `BD_*`): its parts, its program's length, a reset proc for its
 own cells, a setup proc for the bracket (the mode, the tables, the first
 picture), its interrupt proc - deliver, or say it is masked - and its frame
-proc (picture, sound, keys), its PIT period and its interrupts a frame, its
-sound procs (section 8), and the hooks its pick and its drop run (`BD_ON`,
-`BD_OFF`). Game > a board's name selects one, which reads its parts and
+proc (picture, sound, keys), its PIT period and its interrupts a frame,
+how many frames behind it may fall before the loop drops one (`BD_LATE`;
+0 is two, the boards whose picture always fits a frame - Q\*bert's is 30,
+section 10.5), its sound procs (section 8), and the hooks its pick and its
+drop run (`BD_ON`, `BD_OFF`). The loop holds that lateness in 32 bits. Game > a board's name selects one, which reads its parts and
 powers it on. A coin, a start and Esc are TYPED for every board
 (`ar_typed`); the held controls are each board's own.
 
@@ -827,3 +848,174 @@ MartyPC, `os8088_xt_vga` and `os8088_5150_cga`, with the counters of section
 2.1 read out of guest memory. In play on the 5150 (a 4.77 MHz 8088):
 **59.4-59.9 frames a second delivered**, the board's 59.54, with 0.4 to 2.2
 main-loop passes a frame against a real 8080's 3.85.
+
+---
+
+## 10. The native 8088 board: Q\*bert (`arcqb.inc`, `arcn88.asm`)
+
+### 10.1 Why it is not translated
+
+Gottlieb's GG-III board is an 8088 at 5 MHz - the one arcade CPU this
+machine IS. Q\*bert's program lives flat in one 64KB space: RAM 0000-2FFFh,
+sprite RAM 3000h, video RAM 3800h, the palette 5000h, the inputs and
+outputs 5800-5807h, the program A000-FFFFh. Its reset sets every segment
+register to 0 and nothing else in it names a segment (`tests/qbnative.py`:
+the segments never move). So it runs AS IT IS, in G, a 64KB claim of the
+host's, with G in CS, DS, ES and SS: the board's addresses are G's offsets.
+MEASURED (`tests/qbnative.py --cycles`, an 8088 cycle table over Unicorn):
+the game's work is a median **7,500 cycles a frame**, 13,000 at the 90th
+percentile and 54,000 at the start of a scene, of the **77,700** a 4.77 MHz
+8088 has at the board's 61.42 Hz - about a tenth. Its own CPU was a 5 MHz
+8088 and it used a fraction of it.
+
+### 10.2 The patch and the N88 core
+
+`apps/arcade/qbert.patch` names what has to change, as addresses and kinds,
+and `arcqbgfx.py` applies it to the ROM part, REFUSING unless the bytes at
+each address have the shape its kind names (an address is not a ROM byte;
+a ROM that is not the one the list was found in fails the build):
+
+- `nop`: the reset's three segment loads (B25E-B263h);
+- `port`: every store to 5800-5807h moved 8 up, to 5808-580Fh - the
+  watchdog, the sound latch (5802h, at 580Ah) and the outputs (5803h, at
+  580Bh: bit 0 the background's priority, 5 the knocker). The board READS
+  its inputs at the same addresses, and the host fills them there before
+  every run (5800h the DIPs at MAME's defaults, 5801h the coin and starts
+  with the service switch off, 5804h the joystick), so a store must not
+  land on them;
+- `yield`: the game's two waits for the frame (`cmp ax,[0080h] / jz $-4`,
+  the main loop's at B36Dh and the service mode's at DB77h) become
+  `call far` + NOP into the N88 core. The host writes the far pointer at
+  power-on, from the core's header (`AH_YIELD`) and its segment.
+
+**The N88 core** (`arcn88.asm`, part 16, 103 bytes) is the door every core
+has: `AH_ENTER`, far-called with AX = the view. It keeps the host's SS:SP
+in the view, puts the game's stack back (`NV_GSP`, SS = G) and resumes the
+game - or, when the host has delivered the NMI (`NV_NMI`), starts in the
+game's own handler, through the vector the game wrote at G:0008h, with an
+interrupt frame that IRETs into the resume. The yield pushes FLAGS and the
+seven general registers onto the GAME's stack, keeps its SP, and returns to
+the host's call with `ST_WHY` = `ARCX_HALT`. The host loop treats that as
+any board's HLT (section 5.1): the next run follows the next NMI. One run
+is one frame of the game; the game is cooperative and cannot be cut short.
+
+### 10.3 The game runs with interrupts OFF
+
+A run starts with CLI and the game has no STI (nor CLI, nor INT, nor IN or
+OUT - `tests/qbnative.py` would see a store at 5800-5807h, and the walk that
+wrote the patch saw none of the rest). So nothing of the host's ever lands
+on the game's stack, below which is its own RAM, and no kernel interrupt
+runs with SS = G: the question the plan asked - how deep os8088's ISRs reach
+below a guest SP - does not arise. The cost is the run's length with the
+PC's interrupts held: 1.6 ms a frame typically, 11 ms at the start of a
+scene, on the 8088. The keyboard and the timer keep what arrives; a serial
+mouse is not read in the bracket. **A game that never reached a yield would
+hang the machine**, which no Esc could reach; Q\*bert's every frame ends at
+one (`tests/qbnative.py`, 3,000 frames of attract mode and play).
+
+### 10.4 The picture
+
+**VGA only**, 640x480x16 (`FSXM_VGA12`): the board has 16 colours and a
+pixel's value is its DAC register, so a palette change - 5000-501Fh, two
+bytes a colour, green and blue in the even, red in the odd, four bits each
+(MAME's resistor weights are taken as linear) - is 16 DAC writes and never
+a redraw. Hercules and CGA refuse with a toast, as Pac-Man's do.
+
+The cabinet's monitor is on its side: MAME rotates the board's 256 x 240
+picture 270 degrees, so the board's (x, y) is the portrait column y, row
+255 - x. `arcqbgfx.py` turns the tiles and sprites once: a tile's portrait
+(c, r) is its own (7 - r, c), a sprite's (15 - r, c). The 240 x 256
+portrait is drawn **twice as wide and 15/8 as tall** - 480 x 480, centred
+from byte 10 - by a row table (`qb_yoff`): 7 rows of 8 are two screen rows.
+
+**What changed is found by comparing**, because a native store is not
+trapped and there is no write list: the board's 960 visible video RAM bytes
+against a copy (REPE CMPSW), its 256 bytes of sprite RAM against another
+(an unchanged sprite RAM skips the sprites altogether), its palette against
+a third. A changed tile is redrawn alone; more than 96, the whole screen.
+A sprite that moved or changed code has the box it left and the box it is
+in redrawn - one box when the two fit 4 x 4 tiles. Tiles from MAME's
+`bgtiles` (Q\*bert's character RAM is unused: `init_romtiles`), sprite code
+= the RAM's byte XOR FFh, at column [n] - 13 and row 244 - [n+1], clipped
+to rows 0-247 (MAME's x >= 8).
+
+**A box is COMPOSED in planes in RAM** - its tiles' four plane bytes a row,
+then each ACTIVE sprite over it in RAM order so that a later one is on top
+(an active sprite has a code with pixels and is on the screen: the board
+parks its unused ones at 0,0 with a blank code), each sprite row's opaque
+mask and four plane words shifted into the box by `ar_shift` (shared with
+Pac-Man) and cut in - and, when 5803h bit 0 gives the BACKGROUND priority,
+the tiles' own non-zero pixels again over the sprites. Then it is put on
+the glass ROW BY ROW: each plane's bytes passed over by REPE CMPSB where
+they equal a 30KB SHADOW of the glass, the others written doubled across,
+and a row the table makes two screen rows copied down through the latches
+(write mode 1, a byte read and a byte written for all four planes) when any
+of it changed. No pixel is written twice (PERFORMANCE.md rule 2).
+
+### 10.5 Time
+
+The board's NMI is MAME's vertical blank: 5 MHz of pixels, 318 x 256, 61.42
+Hz - a PIT period of 19,427. One NMI a frame, delivered by the host loop's
+clock as every board's interrupt is (section 5.1).
+
+**On an 8088 the picture skips frames so that the game does not.** A box
+costs the 8088 about 130,000 cycles (MEASURED, MartyPC's VGA XT, a 3 x 3
+box: some 65,000 to compose, as much again to put), so two moving sprites
+are three frames' time. The frame hook therefore draws only when it is not
+already late for the next frame - at most 20 frames in a row go undrawn -
+and the board may fall 30 frames behind (`BD_LATE`) before the loop drops
+one, while the game's own frames, at 8,000 cycles, catch up. MEASURED,
+`tests/arcspeed.py --hz 61.42`, 10 guest seconds of play:
+
+| machine | frames delivered | dropped | boxes drawn |
+|---|---|---|---|
+| MartyPC, 4.77 MHz 8088, VGA (`os8088_xt_vga`) | **61.44 a second** | 0 | 22 a second |
+| 86Box, the owner's 286 profile (`at286_vga`) | 62.7 a second | 0 | 81 a second, every frame drawn |
+
+86Box is not cycle-accurate: the 286's row says the picture keeps up, not
+by how much.
+
+### 10.6 Sound
+
+None yet. The board's sound is a second board - a 6502, a DAC and, on
+Q\*bert, a Votrax speech chip - driven by the command the game writes to
+5802h, which lands at 580Ah and is not read. The knocker (5803h bit 5) is
+not sounded either. `BD_MIX` and `BD_FMPAT` are 0, so the bracket keeps the
+speaker quiet.
+
+### 10.7 Keys
+
+The joystick is turned 45 degrees on the cabinet. MAME's mapping holds:
+Right is down-right, Left up-left, Up up-right, Down down-left (IN4 bits
+0-3, active high, held, `OSAPI_KEY_DOWN`) - and the keypad's corners are
+the four ways as they look on the screen: 9 up-right, 3 down-right, 1
+down-left, 7 up-left. A coin and the starts are typed (`ar_typed`): IN1
+bits 2, 0, 1.
+
+### 10.8 Verification
+
+- `tests/qbnative.py` (Unicorn, no emulated machine): the shipped ROM part
+  run as the N88 core runs it, 3,000 frames of attract mode, a coin, a
+  start and moves. Every frame ends at a yield, no store lands on
+  5800-5807h, the segments stay G. A patch line taken out fails it (`a
+  store of 00 at 5803, from B034`).
+- `tests/qbglass.py` (MartyPC's VGA XT): three moments of the attract mode
+  - one with the background's priority set - stopped the instant a frame
+  was DRAWN, every screen row of the picture read out of the VGA's four
+  planes and compared with MAME's picture of G's memory. 0 pixels differ.
+  With the priority pass and the latch copy both taken out, every look
+  failed: 4,430 and 9,354 pixels where the priority is clear (the doubled
+  rows) and 40,102 where it is set.
+  (The card's rendered frame cannot be the instrument: it is the last one
+  the raster FINISHED, and a box put after the beam passed is not in it.)
+- `tests/arcspeed.py --game Q*bert --hz 61.42 --machine os8088_xt_vga`:
+  the game's time held on the 8088 (section 10.5).
+
+### 10.9 Why the probe was a probe
+
+The plan (section 8.2) made this conditional: one wave to boot the attract
+mode natively and decide. The decision was the measurement of 10.1 - the
+game a tenth of an 8088 - and the cost of the board is the picture's, which
+section 10.5 meets by skipping frames of it on the 8088 and not at all on a
+286.
+

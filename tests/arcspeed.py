@@ -4,6 +4,7 @@
 # (docs/ARCADE-SPEC.md sections 5 and 6.2)
 #
 #     python3 tests/arcspeed.py [--machine os8088_5150_cga] [--secs 10] [--game NAME]
+#                               [--hz BOARD_HZ]
 #
 # Boots the system disk with build/arcade360.img in B: on MartyPC, opens
 # ARCADE.O88, plays full screen - a coin, a start, fire and move - and reads
@@ -11,7 +12,9 @@
 # ARCADE-SPEC 2.1) across SECS guest seconds of play:
 #
 #   * frames delivered (RST 2s) within 3% of the board's 59.54 a second -
-#     the game keeps its own time however slow the host;
+#     the game keeps its own time however slow the host (--hz for a board
+#     of another rate: Q*bert's NMI is 61.42, and on an 8088 its PICTURE
+#     skips frames so that the game's do not, ARCADE-SPEC 10.5);
 #   * at most one half frame dropped to catch up;
 #   * and Esc ends the bracket: no run of the translated code after it.
 #
@@ -57,6 +60,7 @@ def main():
     ap.add_argument('--system', default='build/os8088-360.img')
     ap.add_argument('--apps', default='build/arcade360.img')
     ap.add_argument('--game', help="a Game menu item: another board than the first")
+    ap.add_argument('--hz', type=float, default=BOARD_HZ, help="the board's frame rate")
     a = ap.parse_args()
     bad = []
     with os88ui.boot(a.system, apps=a.apps, machine=a.machine, quick=True) as ui:
@@ -91,11 +95,11 @@ def main():
         drops = (k['drops'] - k0['drops']) & 0xFFFF
         print('arcspeed: %.1f guest s of play on %s: %.2f frames/s (board %.2f), '
               '%d dropped, %.0f runs/s, %.0f cells/s'
-              % (dt, a.machine, fps, BOARD_HZ, drops,
+              % (dt, a.machine, fps, a.hz, drops,
                  ((k['runs'] - k0['runs']) & 0xFFFF) / dt,
                  ((k['cells'] - k0['cells']) & 0xFFFF) / dt))
-        if abs(fps - BOARD_HZ) > BOARD_HZ * 0.03:
-            bad.append('frames %.2f/s, not within 3%% of %.2f' % (fps, BOARD_HZ))
+        if abs(fps - a.hz) > a.hz * 0.03:
+            bad.append('frames %.2f/s, not within 3%% of %.2f' % (fps, a.hz))
         if drops > 1:
             bad.append('%d half frames dropped' % drops)
         m.key('Escape')

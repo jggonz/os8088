@@ -1,6 +1,6 @@
 ; =============================================================================
 ; os8088 - apps/arcade/arcland.inc - Midway's LANDSCAPE 8080 boards: Gun
-; Fight and Sea Wolf (docs/ARCADE-SPEC.md 4.5, 5.3, 8.3)
+; Fight and Sea Wolf (ARCADE-SPEC 4.5, 5.3, 8.3)
 ;
 ; The same board as Space Invaders with the monitor the right way up: a VRAM
 ; byte is 8 pixels ACROSS one line, bit 0 leftmost, 224 lines of 32 bytes.

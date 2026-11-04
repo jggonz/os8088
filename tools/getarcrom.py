@@ -136,6 +136,35 @@ SETS = {
         ],
         'size': 0x1000,
     },
+    # Gottlieb's GG-III board (MAME gottlieb.cpp, `qbert`): an 8088, run
+    # NATIVELY (ARCADE-SPEC 10). The image is the program as the 8088 sees
+    # it at A000-FFFFh, put at 0000h, then the tiles and the four sprite
+    # planes (MSB first, as MAME's spr_layout takes them).
+    'qbert': {
+        'url': 'https://archive.org/download/arcade_qbert/qbert.zip',
+        'zipsha1': 'b560f935011f5ce58a8be924bdacfc3fc95ab7e4',
+        'members': [
+            ('qb-rom2.bin', 0x0000,                                 # fe434526: A000h
+             '07910cd51a1cab11a74a0b255e2a332b51db973c7a94eab0a52996a5f3db9b05'),
+            ('qb-rom1.bin', 0x2000,                                 # 55635447: C000h
+             '5f002070bbd805ce200f0537077ee91e3cc1475be2924edadb85ddb3d31bfdd5'),
+            ('qb-rom0.bin', 0x4000,                                 # 8e318641: E000h
+             '80df6623ad81f25134b2a0136882a3c3712d7923e882aa6a152fabe897a1e0d8'),
+            ('qb-bg0.bin', 0x6000,                                  # 7a9ba824
+             '6787c563c05b971f899a4777b0a9a02bb00d560d7860ea6540698bb407ac3d22'),
+            ('qb-bg1.bin', 0x7000,                                  # 22e5b891
+             'f45e59d1b14384314de35dec26715f348f0a076e7ad56304bc0f22d97fb7fa74'),
+            ('qb-fg3.bin', 0x8000,                                  # dd436d3a
+             '180a0e19e0b696907c8b4215ed5ad422a1de4b18f376ce3f8815726bb3ce08e6'),
+            ('qb-fg2.bin', 0xA000,                                  # f69b9483
+             '8601cbe76d38a81d2555a160197c808c350abb8ae8a28b85a8455aa2c2d3d83c'),
+            ('qb-fg1.bin', 0xC000,                                  # 224e8356
+             '37b92d594989fe49a000da6c75f621f4bf495bbe2bf12d51990fceea8ab30da4'),
+            ('qb-fg0.bin', 0xE000,                                  # 2f695b85
+             '1b2cc0e5d4f4bd85539a6d4abf52c9f1d5661e9fa224ae1f402d4fb84723900f'),
+        ],
+        'size': 0x10000,
+    },
     # MAME's `pacman` (Midway). NOT fetched: no public archive.org item
     # carries it (arcade_pacman, arcade_puckman and arcade_mspacman are
     # dark), so the owner supplies it with --from and the hashes check it.

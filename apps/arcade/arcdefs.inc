@@ -89,7 +89,13 @@ V_SROUTE    equ 0x604E          ; the sound's route (ARCADE-SPEC 8): 0 the
 V_SWHY      equ 0x604F          ; ...and the last step that declined one
 V_SBTOT     equ 0x6050          ; the stream: its total, written each frame,
 V_SBSEG     equ 0x6052          ;   and its ring's segment (0: none)
-V_PROBE     equ 0x6060          ; words: arcaot.py --probe's counts
+V_PROBE     equ 0x6060          ; words: arcaot.py --probe's counts, to 607F
+
+; --- the N88 core (ARCADE-SPEC 10): a native 8088 board between runs -------
+NV_GSEG     equ 0x6080          ; G, the game's own 64KB segment
+NV_GSP      equ 0x6082          ; its SP when it yielded (SS = G)
+NV_NMI      equ 0x6084          ; the host has delivered the NMI: the next
+                                ;   run starts in the game's handler
 
 ARC_VIEW_KB equ 25              ; 0000-63FF: the boards' address spaces
                                 ;   (Pac-Man's reaches 50FF) and the cells
@@ -104,6 +110,7 @@ ARC_MAGIC   equ 0x3341          ; 'A3': the PC table is in aux, the ROM a part
 AH_MAGIC    equ 0               ; dw ARC_MAGIC
 AH_ENTER    equ 2               ; dw arc_enter: far-call CS:this
 AH_END      equ 4               ; dw the end of the translated code
+AH_YIELD    equ 6               ; dw the N88 core's yield (ARCADE-SPEC 10.2)
 
 ; --- AUX (ARCADE-SPEC 2.2): the PC table, the write list, the flags --------
 ; The PC TABLE is aux's first 32KB, or 40KB - a word for every guest PC,

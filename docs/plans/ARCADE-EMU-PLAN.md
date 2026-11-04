@@ -570,7 +570,13 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
       the board's full rate on the 5150. Their main loops never wait;
       treating their idle returns as a HLT was measured and refused
       (ARCADE-SPEC 3.8).
-- [ ] The native-8088 probe: Q\*bert's attract mode (section 8.2).
+- [x] The native-8088 probe: Q\*bert's attract mode (section 8.2) - and,
+      the measurement saying yes (the game a tenth of a 4.77 MHz 8088),
+      **Q\*bert as a board**: its program run untranslated through the N88
+      core with a patch list of 17 checked lines, VGA only, the board's full
+      61.42 frames/s on the 286 and on the 8088 too, where the PICTURE skips
+      frames instead (ARCADE-SPEC 10). Silent: its sound is a 6502 board of
+      its own, not yet done.
 - [ ] Lady Bug or Berzerk on the Z80 core.
 
 ---
@@ -585,4 +591,4 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
 | The CGA row-drop table hides bullets in portrait | looking at the screen | Sideways is the CGA default. Portrait is offered with the caveat stated |
 | The interrupt timing (RST 1 at mid-screen) drifts against the picture | the UFO and shields tearing in captures | Measure against `arcsim.py`'s frame digests, which pin the T-state of each interrupt |
 | Pac-Man's ROM never arrives | - | Pengo `pengo2u` proves the Namco core. Pac-Man stays a supply question, not a code one |
-| The native-8088 core needs more patching than three segment loads | the static pass's report | It is a probe, so stop there and record why |
+| The native-8088 core needs more patching than three segment loads | the static pass's report | It is a probe, so stop there and record why. (It needed the three loads, 14 port stores moved and two waits made yields: ARCADE-SPEC 10.2) |

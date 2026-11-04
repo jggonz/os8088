@@ -1,0 +1,41 @@
+# =============================================================================
+# os8088 - apps/arcade/qbert.patch - what Q*bert's own 8088 code needs changed
+# to run NATIVELY in a segment of the PC (ARCADE-SPEC 10.2)
+#
+# ADDRESSES ONLY, never a ROM byte: apps/arcade/arcqbgfx.py applies each to
+# the program image and REFUSES unless the instruction there has the shape
+# the kind names (the opcode and the operand it changes), so a ROM that is
+# not the one these were found in fails the build instead of running wrong.
+#
+#   nop ADDR N    N bytes at ADDR become NOP: the reset's segment loads,
+#                 so the program keeps the segment the host gave it
+#   port ADDR     a WRITE to 5800-5807h (the watchdog, the sound latch, the
+#                 video and knocker outputs) moved 8 up, to 5808-580Fh: the
+#                 board reads its inputs at the same addresses, and the host
+#                 fills them, so a write there must not land on them
+#   yield ADDR    the wait for the next NMI (`cmp ax,[0080h] / jz $-4`)
+#                 becomes `call far` into the N88 core, which hands the
+#                 frame back to the host (the far pointer is the host's to
+#                 fill, at power-on)
+#
+# Found by tools/qbnative.py's walk from the reset, the NMI handlers and a
+# linear scan; its run checks that no write reaches 5800-5807h and that the
+# segment registers never change (ARCADE-SPEC 10.2).
+# =============================================================================
+nop   B25E 6        # mov es,ax / mov ds,ax / mov ss,ax
+port  AF70          # the NMI handler's watchdog
+port  B034          # ...and its video outputs (priority, flip, knocker)
+port  C2A8          # the sound latch: reset, then the command
+port  C2AD
+port  DB69          # the service mode's NMI handler: the watchdog
+port  DB94          # ...its outputs and its sound
+port  DB97
+port  DB9C
+port  DD52
+port  DD57
+port  EA53
+port  EA5A
+port  EA6E
+port  EA73
+yield B36D          # the game's wait for the frame
+yield DB77          # the service mode's
