@@ -619,6 +619,7 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_gdseg, 2         ; ...and the segment its row lies in
     W16BSS w16_gdstr, 2         ; ...a scan's bytes
     W16BSS w16_gdbpp, 1         ; ...and bits a pixel
+    W16BSS w16_fsh, 1           ; FloodFill: 2, ExtFloodFill 0 (w16rgn.inc)
     W16BSS w16_fmode, 1         ; ExtFloodFill's: its type, the colour it
     W16BSS w16_fcol, 1          ;   reads, the brush's it paints
     W16BSS w16_ffill, 1
@@ -1589,8 +1590,9 @@ w16_freeprog:
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
-    xor ax, ax                      ; the USER heap went with the arenas
+    xor ax, ax                      ; the USER heap went with the arenas,
     mov [w16_mseg], ax
+    mov [w16_clsseg], ax            ;   and the class block (124.25.18.1)
     mov [w16_msys], ax
     mov [w16_mtrk], al
     mov [w16_mlev], al
@@ -2538,6 +2540,8 @@ w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
     db w16f_a_%[k]
   %ifdef w16lib_%[w16f_p_%[k]]
     db W16P_LIB
+  %elifdef w16sys_%[w16f_p_%[k]]
+    db W16P_SYS                 ; (w16_ctlkrow, SPEC.md 124.25.18)
   %else
     db 0
   %endif

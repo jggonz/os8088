@@ -400,6 +400,7 @@ W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segp
 W16EXPORT W16M_GDI,        106,     10, w16g_setbmbits      ; SetBitmapBits(word long ptr)
 W16EXPORT W16M_GDI,        440,     18, w16g_setdibits      ; SetDIBits(word word word word ptr ptr word)
 W16EXPORT W16M_GDI,        441,     18, w16g_getdibits      ; GetDIBits(word word word word ptr ptr word)
+W16EXPORT W16M_GDI,        25,      10, w16g_flood          ; FloodFill(word s_word s_word long)
 W16EXPORT W16M_GDI,        372,     12, w16g_xflood         ; ExtFloodFill(word s_word s_word long word)
 W16EXPORT W16M_GDI,        64,      8,  w16g_rectrgn        ; CreateRectRgn(s_word s_word s_word s_word)
 W16EXPORT W16M_GDI,        63,      8,  w16g_polyrgn        ; CreatePolygonRgn(ptr word word)
@@ -491,6 +492,7 @@ W16EXPORT W16M_GDI,        176,     12, w16_ans0            ; PlayMetaFileRecord
 %define w16mdc_w16g_rectvis
 %define w16mdc_w16g_getdcorg
 %define w16mdc_w16g_xflood
+%define w16mdc_w16g_flood
 %define w16mdc_w16g_selclip
 %define w16mdc_w16g_exclclip
 %define w16mdc_w16u_drawtext
@@ -1604,9 +1606,9 @@ w16u_setclsword:
     mov ax, [es:bx + 4]
     call w16_hwnd2rec
     jc .no
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .no
-    mov al, [bx + W16W_CLS]
+    mov al, [bx + W16W_CLS]         ; the program's classes (124.25.18)
+    cmp al, 0xFF
+    je .no
     call w16_clsget
     mov si, ax
     cmp cx, GCW_STYLE
@@ -1625,9 +1627,7 @@ w16u_setclsword:
     call w16_slot2rec
     test byte [bx + W16W_FLAGS], W16WF_USED
     jz .wn
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .wn
-    cmp [bx + W16W_CLS], al
+    cmp [bx + W16W_CLS], al         ; (only a class's own windows have it)
     jne .wn
     mov [bx + W16W_HBR], dx
 .wn:

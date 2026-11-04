@@ -236660,6 +236660,7 @@ the window origin, and its base clip (`w16_bcl`..`w16_bcb`, what
 | `SetBitmapBits` (GDI.106) | `GetBitmapBits` backwards: a bitmap made 1bpp takes Windows' monochrome bits (1 white, rows a whole number of words), any other its 4bpp rows, each padded to a word. At most `dwCount` bytes are read; the answer is how many were |
 | `SetDIBits` (GDI.440) | scans `nStartScan` on, counted from the bottom, into the bitmap as `CreateDIBitmap`'s `CBM_INIT` puts a DIB (§124.15.2): 1 or 4 bits a pixel, `DIB_RGB_COLORS`. The answer is `nNumScans` |
 | `GetDIBits` (GDI.441) | the header filled in - its size, one plane, `biBitCount` as asked (1, 4, 8 or 24) or, when 0, 4 (1 for a bitmap made 1bpp), `BI_RGB`, `biSizeImage` - and the colour table, os8088's sixteen (white and black for 1 bit); with `lpBits`, the scans in that format, every row a whole number of dwords, a pixel light grey or brighter a 1 at one bit. A huge `lpBits` is walked across segments. The answer is the scans written, or with no `lpBits` the height |
+| `FloodFill` (GDI.25) | `ExtFloodFill` with `FLOODFILLBORDER`: the same handler, which finds `crColor`, `y` and `x` two bytes nearer on the stack (`w16_fsh`) because there is no type word. One export row and one byte of bss; none of the reference set's programs imports it (they call `ExtFloodFill`), so it is covered by `tests/win16/memdc.c` alone |
 | `ExtFloodFill` (GDI.372) | from the point, every pixel joined to it across its four sides that is not `crColor` (`FLOODFILLBORDER`) or that is (`FLOODFILLSURFACE`), painted in the brush a row at a time; `crColor` is the nearest of the sixteen. In a memory DC its bitmap is read. **On the window's DC** the clip's rectangle of the screen is read back first (`OSAPI_GFX_SAVE`, as `BitBlt` from the window reads it) into a MASK, a bit a pixel set where the fill may go (`w16r_snap`), and each row painted is cleared in it - so how the brush looks on the adapter is never asked, and a canvas costs an eighth of a 4bpp copy. The mask is an os8088 claim of its own, out of the room the global heap leaves (`W16_ARKEEP`, §124.25.1), never a global block: an allocation there could discard a block of the program's (§124.9), which Windows' GDI never did. The seeds wait in `w16_gbuf`; a seed past its room is dropped and that part is not filled. FALSE when the point is not one to fill, the brush is not one colour, or the screen cannot be read (a hidden DC, VESA) or the mask cannot be had |
 | `CreateRectRgn` (GDI.64), `CreatePolygonRgn` (GDI.63) | a region object (`W16K_RGN`), freed by `DeleteObject`, holding ONE rectangle: the polygon's bounding box, not the polygon |
 | `SelectClipRgn` (GDI.44) | the DC's base clip cut to the region, in device coordinates; hRgn 0 is the base clip. `SIMPLEREGION`, `NULLREGION` when nothing is left, `ERROR` for a DC or region that is not one |
@@ -236961,85 +236962,6 @@ before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
 `GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
 out at 64 KB whenever the arena has room (§124.21.4), is §124.9.2.
 
-#### 124.25.18 Callable window procedures for WIN16's controls *(WIN16-NEXT `ctlproc`, DECISIONS 12:30)*
-
-Visual Basic 3.0's runtime **superclasses** the controls: it asks
-`GetClassInfo` for `Edit`, `Button`, `ListBox`, `ComboBox` and `ScrollBar`
-(`VBRUN300.DLL` holds those names beside `ThunderRTMain`), copies
-`lpfnWndProc` into its own class (`ThunderTextBox` and the rest) and calls
-that procedure for every message it does not handle itself. Many C programs
-**subclass** an edit control instead (`SetWindowLong(GWL_WNDPROC)`, then
-`CallWindowProc` of the old procedure). Both need a control class to have a
-procedure a program can hold and call. WIN16's controls always had one
-(`w16_ctlstub`, §124.13), but `GetClassInfo` did not hand it out.
-
-**One entry a class.** Slots 8-14 of the bind table are fixed rows
-(`W16_CTLK` + *kind*, `W16_NFIXED` 15), one for each `W16Q_*` kind, 1-7 (the
-slot of `W16Q_DIALOG`, 5, is never handed out). Each is a stub like any other
-(§124.19.1), so a program can keep its address and call it with a far call,
-or through `CallWindowProc`. The handler (`w16_ctlkrow`) is the library
-part's (`W16LIB`) and takes the Pascal arguments `hWnd, msg, wParam, lParam`
-as the control's own entry (`w16_ctlrow`, slot 0) does. The two differ in one
-thing only: **a window of the program's class (`W16Q_PROG`) that calls a
-class entry becomes a control of that class**, its `W16W_KIND` set to the
-entry's kind before the message is delivered, so the control's state lives in
-the window record exactly where a dialog's control keeps it (§124.13) and the
-program's procedure stays the window's procedure (`W16W_PROC`). Messages for
-it then go to the program first, which forwards the ones it does not handle:
-the shape of a subclassed control, which §124.13 already runs. A window that
-is already a control of some kind keeps that kind whichever entry was called.
-Slot 0 (what `GetWindowLong(GWL_WNDPROC)` of a control answers, and the
-previous procedure `SetWindowLong` returns) is unchanged and needs the
-window to be a control already.
-
-**`GetClassInfo`** answers a control class's name: `style` the class styles
-Windows 3.1 gave it (`CS_DBLCLKS` for `BUTTON`, `EDIT`, `LISTBOX` and
-`COMBOBOX`, 0 for `STATIC` and `SCROLLBAR`), `lpfnWndProc` the class entry,
-`cbClsExtra` and `cbWndExtra` 0 (WIN16's controls keep their state in the
-record, not in window words), `hInstance` DGROUP's, `hIcon` and `hCursor` 0,
-`hbrBackground` `COLOR_WINDOW + 1`, `lpszMenuName` NULL, `lpszClassName` as
-asked. A superclass adds its own `cbWndExtra` words after the base class's, so with
-0 they start at offset 0 and WIN16's controls never touch them; a program that
-assumed Windows' own count for a control is wrong (open, none seen).
-
-**What it costs.** Resident: no byte on either arm. The bind table's fixed rows
-take seven of the 384 slots (the largest import list measured is 270), the
-handler and the `GetClassInfo` arm are in parts, and the fixed row table is in
-the loader part. Part bytes (kern_mega arm): the library part (dialog part) 64,717 to
-64,782 (+65, the handler), the system-library part 39,091 to 39,258 (+167, the
-`GetClassInfo` arm), the loader part 17,072 to 17,100 (+28, seven fixed rows).
-Image + bss of `win16.o88`: 37,887 + 26,706 before and after.
-
-##### 124.25.18.1 The class table is a block of global memory *(ctlproc, DECISIONS 13:05)*
-
-The first thing the superclasses met was the class table. It was `W16_MAXCLS`
-= 12 records of 32 bytes in bss (and `w16_ctask`, a byte each), and VB
-registers `ThunderRTMain`, `PictureBox`, `TextBox`, `Frame`, `CommandButton`,
-`CheckBox`, `OptionButton`, `ComboBox`, `ListBox`, `HScrollBar`, `VScrollBar`
-and `Timer` before its 13th, `ThunderPrinter`, which was refused (seen
-2026-11-04: *Unexpected error; quitting*). VB 3 has about 26 classes.
-
-**The table is now a block of the program's global memory**, `W16_MAXCLS` = 64
-records of `W16C_STRIDE` = 33 bytes (the 32-byte record and its task, now
-`W16C_TASK`, in it), made fixed by `w16_gnew` at the first `RegisterClass` by
-`w16s_clsadd` (system-library part), its segment in `w16_clsseg` (0 = none yet:
-`GetClassInfo` and `CreateWindow` find nothing without asking for memory). It
-is not a map claim, so it costs none of an owner's eight. The block is not
-grown: 64 is the limit, and a failed block or a full table answers
-`RegisterClass` FALSE and the program carries on.
-
-**No record is read in place.** `w16_clsget` (AL = the index) copies a record
-into `w16_ccb`, one 33-byte record in bss with its index in `w16_ccbi`, and
-answers its address; `w16_findcls` answers that copy (BX = `w16_ccb`), so
-every user reads `[bx + W16C_*]` as before. The copy is good until the next
-lookup. `w16_clsput` writes it back (`SetClassWord`). A class's atom is
-`0C000h` + its index, no longer its record's offset. A task's end clears its
-classes in the block (`w16t_end`).
-
-**What it costs**, `win16.o88`, kern_mega arm: image + bss 37,910 + 26,706
-before, 37,970 + 26,346 after: **-300 resident bytes** (the bss falls by 360,
-the lookups and the two helpers add 60). Part bytes: see the diary. 64 records
-is 2,112 bytes of the program's global heap, taken at the first class.
 #### 124.25.16 Part 11: the rare part, and TrackPopupMenu *(WIN16-NEXT `part11`)*
 
 Imports keep arriving on the way to "any Win16 program", and most of them are
@@ -237232,6 +237154,124 @@ fixture on kern_big, `win16memdc` and `win16pbrush` are the small-bitmap
 guards. **Not done:** kern_mega has no row for the fixture (no QEMU rig
 loads WIN16 on the arm; `tests/win16ovr.py` does it under Bochs).
 
+#### 124.25.18 Callable window procedures for WIN16's controls *(WIN16-NEXT `ctlproc`, DECISIONS 12:30)*
+
+Visual Basic 3.0's runtime **superclasses** the controls: it asks
+`GetClassInfo` for `Edit`, `Button`, `ListBox`, `ComboBox` and `ScrollBar`
+(`VBRUN300.DLL` holds those names beside `ThunderRTMain`), copies
+`lpfnWndProc` into its own class (`ThunderTextBox` and the rest) and calls
+that procedure for every message it does not handle itself. Many C programs
+**subclass** an edit control instead (`SetWindowLong(GWL_WNDPROC)`, then
+`CallWindowProc` of the old procedure). Both need a control class to have a
+procedure a program can hold and call. WIN16's controls always had one
+(`w16_ctlstub`, §124.13), but `GetClassInfo` did not hand it out.
+
+**One entry a class.** Slots 8-14 of the bind table are fixed rows
+(`W16_CTLK` + *kind*, `W16_NFIXED` 15), one for each `W16Q_*` kind, 1-7 (the
+slot of `W16Q_DIALOG`, 5, is never handed out). Each is a stub like any other
+(§124.19.1), so a program can keep its address and call it with a far call,
+or through `CallWindowProc`. The handler (`w16_ctlkrow`) is the
+system-library part's (`W16SYS`: part 3 has no room, and a window of the
+program's class never fetched part 3, so the handler fetches it, `w16_dlgin`)
+and takes the Pascal arguments `hWnd, msg, wParam, lParam` as the control's
+own entry (`w16_ctlrow`, slot 0) does. The two differ in one thing only: **a
+window of the program's class (`W16Q_PROG`) that calls a class entry becomes
+a control of that class**, its `W16W_KIND` set to the entry's kind before the
+message is delivered, so the control's state lives in the window record
+exactly where a dialog's control keeps it (§124.13) and the program's
+procedure stays the window's procedure (`W16W_PROC`). Messages for it then go
+to the program first, which forwards the ones it does not handle: the shape of
+a subclassed control, which §124.13 already runs. A window that is already a
+control of some kind keeps that kind whichever entry was called.
+
+**The control's state is made at the window's `WM_CREATE`.** Windows made it
+at `WM_NCCREATE`, which WIN16 never sends, so a superclass could answer
+`WM_CREATE` itself and still have a working control. When the first message a
+`W16Q_PROG` window forwards is not `WM_CREATE`, `w16_ctlkrow` therefore runs
+the control's `WM_CREATE` first (lParam 0, as a dialog's control has it) and
+then the message; a `WM_CREATE` that refuses (no heap for the edit's block)
+leaves the window the program's and answers 0. A `WM_CREATE` forwarded once
+the window is a control (a procedure that sent itself a message before it
+forwarded its own `WM_CREATE`) answers 0 and makes nothing twice: a second
+make would leak the edit's block and give a combo box a second list. Without
+the first make a multi-line edit
+would run with `ME_SEG` 0: drawing from, and typing into, segment 0. The
+window keeps its class: `GetClassName`, `GetClassWord`/`GetClassLong`,
+`SetClassWord` and the own-DC lookup (§124.25.11) go by `W16W_CLS` (0FFh = one
+of WIN16's) rather than by the kind, so `ThunderTextBox` stays
+`ThunderTextBox` after it has become an edit. (A dialog of the program's own
+class, §124.22.12, is answered by its class too, as Windows did; Program
+Manager's DDE window, §124.33.2, is 0FFh now, not class 0.)
+Slot 0 (what `GetWindowLong(GWL_WNDPROC)` of a control answers, and the
+previous procedure `SetWindowLong` returns) is unchanged and needs the
+window to be a control already.
+
+**`GetClassInfo`** answers a control class's name: `style` the class styles
+Windows 3.1 gave it (`CS_DBLCLKS` for `BUTTON`, `EDIT`, `LISTBOX` and
+`COMBOBOX`, 0 for `STATIC` and `SCROLLBAR`), `lpfnWndProc` the class entry,
+`cbClsExtra` 0, `cbWndExtra` 0 (WIN16's controls keep their state in the
+record, not in window words) **except `EDIT`'s, 18** (`ME_XTRA`): the
+multi-line edit keeps its view and undo in the first 18 extra bytes
+(`ME_TOPO`..`ME_FL2`, w16edml.inc, §124.22.3), and a superclass adds its own
+words after the base class's count, so a `ThunderTextBox` with `MultiLine` set
+reads and writes its words at 18 on, past the edit's. It costs the superclass
+18 of `W16_WEXTRA`'s 32 bytes (VB's 6 fit). `hInstance` DGROUP's, `hIcon` and
+`hCursor` 0, `hbrBackground` `COLOR_WINDOW + 1`, `lpszMenuName` NULL,
+`lpszClassName` as asked. A program that assumed Windows' own counts for a
+control is wrong (open, none seen).
+
+**What it costs.** Resident: no byte on either arm. The bind table's fixed rows
+take seven of the 384 slots (the largest import list measured is 270), the
+handler and the `GetClassInfo` arm are in the system-library part, and the
+fixed row table is in the loader part (a fixed row names a `W16P_SYS` handler
+as well as a `W16P_LIB` one). Part bytes, kern_mega arm, against the
+plan branch at 9ca188639: the system-library part 38,506 to 38,946 (+440,
+with §124.25.18.1's), the loader part 17,072 to 17,100 (+28, seven fixed
+rows), the dialog part 64,845 to 64,843 (-2).
+
+##### 124.25.18.1 The class table is a block of global memory *(ctlproc, DECISIONS 13:05)*
+
+The first thing the superclasses met was the class table. It was `W16_MAXCLS`
+= 12 records of 32 bytes in bss (and `w16_ctask`, a byte each), and VB
+registers `ThunderRTMain`, `PictureBox`, `TextBox`, `Frame`, `CommandButton`,
+`CheckBox`, `OptionButton`, `ComboBox`, `ListBox`, `HScrollBar`, `VScrollBar`
+and `Timer` before its 13th, `ThunderPrinter`, which was refused (seen
+2026-11-04: *Unexpected error; quitting*). VB 3 has about 26 classes.
+
+**The table is now a block of the program's global memory**, `W16_MAXCLS` = 64
+records of `W16C_STRIDE` = 33 bytes (the 32-byte record and its task, now
+`W16C_TASK`, in it), made fixed by `w16_gnew` at the first `RegisterClass` by
+`w16s_clsadd` (system-library part), its segment in `w16_clsseg` (0 = none yet:
+`GetClassInfo` and `CreateWindow` find nothing without asking for memory). It
+is asked for zeroed and from the TOP of the heap (`W16G_HIGH`, as a code
+segment is), so it is not the block a `GlobalAlloc` segment's local heap
+grows into in place (WIN16-NEXT `lheap`). It belongs to no task (`GH_TASK` 0), so a
+task's end does not free it under the others; the program's end frees it with
+the arenas, and `w16_clsseg` goes back to 0 there with the USER heap's
+segment. It is not a map claim, so it costs none of an owner's eight. **The
+block is not grown** (DECISIONS 13:05 asked for growth; open): 64 is the
+limit, and a failed block or a full table answers `RegisterClass` FALSE and
+the program carries on. Growing it is a new block, the records copied and the
+old one freed - atoms are indexes and nothing holds a record's address, so
+nothing else changes - but on the kern_mega arm the old block's selector has
+to go with it, which nothing here has needed before; the index is a byte
+(`W16W_CLS`, 0FFh = none), so 255 is the ceiling.
+
+**No record is read in place.** `w16_clsget` (AL = the index) copies a record
+into `w16_ccb`, one 33-byte record in bss with its index in `w16_cbi`, and
+answers its address; `w16_findcls` answers that copy (BX = `w16_ccb`), so
+every user reads `[bx + W16C_*]` as before. The copy is good until the next
+lookup. `w16_clsput` writes it back (`SetClassWord`). A class's atom is
+`0C000h` + its index, no longer its record's offset. A task's end clears its
+classes in the block (`w16t_end`).
+
+**What it costs**, image + bss of `win16.o88` against the plan branch at
+9ca188639 (both sections together): kern_mega arm 37,915 + 26,696 = 64,611
+before, 37,970 + 26,336 = 64,306 after, **-305 resident bytes**; real-mode arm
+36,298 + 27,471 = 63,769 before, 36,353 + 27,111 = 63,464 after, **-305**
+(the bss falls by 360, the lookups and the two helpers add 55). 64 records is
+2,112 bytes of the program's global heap, taken at the first class.
+
 #### 124.25.19 A local heap grows when it is full *(WIN16-NEXT `lheap`)*
 
 Windows grew a full local heap: `LocalAlloc` enlarged the data segment and
@@ -237307,7 +237347,8 @@ the measured targets has a relocation that names a discardable segment by
 its number from elsewhere: not Write, Windows Help, Terminal, File Manager,
 Control Panel, Program Manager or either Paintbrush. Should a program have
 one, that segment is **kept**: loaded at launch and never discarded, since
-the reference holds its paragraph. A reference from the segment to itself
+the reference holds its paragraph. On the real-mode arm a reference that is
+only far calls goes through thunks instead (§124.26.14). A reference from the segment to itself
 is applied again each time it is loaded, so it does not keep it.
 
 #### 124.26.2 One thunk an entry *(S20 batch 1)*
@@ -237813,6 +237854,138 @@ with discardable code keeps the part as well.
 **A library's end** (its count reaching 0, §124.23.5). Its loaded
 discardable segments and its module block are given back with its other
 blocks.
+
+#### 124.26.14 A segment reached only by far calls goes through thunks *(WIN16-NEXT, c3; the real-mode arm)*
+
+§124.26.1 keeps a discardable segment that another segment names by its
+number, because a number in a register or a data word cannot be moved to a
+thunk. That keeps a lot of code that is not at risk: InstallShield's
+`_INST16.EXE` (Sir Hangman's engine) has 64 discardable segments, and 24 of
+them (88,610 of 404,621 bytes, 217 distinct targets) are named only as
+`CALL FAR seg:off`; counting a segment's references to itself as no reference,
+36 are (136,100 bytes, 359 distinct targets). Real-mode Windows ran that
+program with them discardable. Measured with `tools/os88ne.py`'s tables,
+2026-11-04. 26 more segments (240,345 bytes) are named from DGROUP too, as far
+pointers in tables of procedures, and stay kept: see *What it leaves*.
+
+**The rule (`kern_big` and `kern_small`, `%ifndef PKG_MEGA`).** A relocation
+is a **far-call reference** when all of these hold: it is an internal
+relocation to a segment by number (`target1` is not 0FFh), of address type 2
+(selector), not additive; the segment named is discardable (§124.26.1) and is
+not the segment holding the site (`w16l_c3ok`; a module block then has
+thunks added for it, below). Such a reference is **proved, site by site**, when the site's bytes are
+in memory (at the apply pass, §124.26.3 step 2): the segment holding the site
+is a code segment, the byte three before the site is `9Ah` (`CALL FAR`) or
+`0EAh` (`JMP FAR`), and the offset word just before the site is below the
+target segment's size. The linker's record is a selector fixup with the offset
+as a literal in the instruction, so the offset is read there and no relocation
+names it.
+
+**What a proved record does.** The record's chain is walked three times
+(`w16l_c3walk`): every site checked, then a thunk made for each site's
+(segment, offset) pair, then each site written, its offset word to the thunk's
+offset and its selector word to the module block's thunk paragraph. A record
+that fails the check makes no thunk, and one whose thunks were all made cannot
+fail while it is written, so a chain is never left half rewritten (its next
+links are in the selector words). A thunk is §124.26.2's, jumping far to the
+target when its segment is loaded and calling `w16_thkhit` when it is not, so
+the same discard, reload and stack scan apply. A pair is given ONE thunk: a
+record's sites and every other record's that call the same offset share it,
+and so does an entry's thunk for the same pair (§124.26.2), which is the same
+eight bytes. A record whose first site is outside its segment is not proved,
+so the apply pass refuses it as before.
+
+**What a record that is not proved does.** If any site of the record fails the
+test above, or the thunk table is full, the segment is **kept**, as §124.26.1 always
+did, but *when the record is applied* and not at launch: its flag is set,
+a block is taken for it if it has none, and the site is given its own
+paragraph. Its content is read after the segment being loaded is done
+(`w16l_pend`; at a launch, after the apply pass), because reading it uses the
+relocation room that the records being applied are in. A launch's pass 0
+no longer keeps a segment for a reference of this kind: every other reference
+(far pointer, offset only, additive, a data segment's site, a protected-mode-only
+module's) still keeps it at pass 0 as before.
+
+**The thunks it adds.** `w16l_cmake` counts the records that could be
+far-call references (`w16l_c3ok`, by their address type and target only: the
+bytes are not in memory yet) and, if there are any, adds
+`min(max(2 * count, 16), 512)` thunks to the end of the thunk table
+(`w16_cnord` counts them; 8 bytes each, so 128 bytes to 4 KB in the module
+block). A pair's thunk is looked for in the WHOLE table (`w16l_xfind`), and a
+new one takes the first free slot: an added one, or an ordinal's that has no
+thunk because its entry is not in a discardable segment, which no relocation,
+`GetProcAddress` or discard ever reads. The search is linear, `w16_cnord`
+slots a miss. On an 8088 that is about 60 cycles a slot, so a segment with
+200 far-call sites into a module with 600 slots spends of the order of a
+second on it each time it is loaded; it is the price of the memory, and a
+segment whose calls are all kept costs nothing.
+
+**The census follows a thunk** *(the 8088's, §124.4.1)*. It runs after
+relocation and follows a far call to the segment its operand names, so a call
+rewritten to a thunk would end its walk there, and the code reached only
+through it would not be swept: a 186 instruction in it would run as something
+else. `w16c_far` reads a call into the module block's thunk paragraph as the
+(segment, offset) the thunk names, an entry's thunk too, whose code is a seed
+anyway. `t_w16cens` (fast) runs every program a second time with its far calls
+laid out through thunks, and fails without it.
+
+**The segment a thunk loads is held while the segments it kept are read.**
+`w16l_segin1` fills the segment, then `w16l_pend` reads the ones its records
+kept, whose own records may need room. The new segment is no longer
+`W16CLF_NEW` and not yet named by any stack (`w16_segld` jumps to it after),
+so it is marked `W16CLF_HOLD` (8) for that time and the discard
+(`w16l_oldest`) passes it over. A segment found kept with no block (one
+whose read failed under another program, in a shared library) is given one
+again by the next record that names it.
+
+**The risk, and how it is bounded.** A segment that is reached only by the
+calls above is discarded while some other place holds its address: a
+`PUSH CS` or `MOV AX,CS` that stores the segment (a procedure's address built
+at run time, a CS-relative table), a far pointer built from a
+selector fixup the test classed as a call, or a byte that is `9Ah` by chance.
+In real mode the stale address does not fault; it runs whatever is in that
+memory now. The bounds:
+
+1. The record is proved site by site, so one non-call site, in code or in
+   data, keeps the whole segment.
+2. A library's or program's segment that names ITSELF is not given a thunk
+   (it is applied again at each load), and §124.26.11's keep of a library's
+   self-naming segment stands.
+3. A protected-mode-only module is refused by the real-mode arm, so
+   the programs that keep `PUSH CS` pointers because Windows' protected modes
+   kept their selectors (VBRUN300, Mozart) never reach this rule. They are
+   the programs for which the proposal's 27 segments (39 KB) would have been
+   found, and they stay on `kern_mega`, where §124.26.10 is O8's.
+4. The §124.26.5 scan still holds a segment while any far return address
+   names it, which covers every call out of it.
+
+Not bounded: a real-mode program that stores its own CS and calls it after the
+segment is discarded. Such a program broke in real-mode Windows too when
+Windows moved or discarded the segment; the check for `9Ah`/`0EAh` is a
+filter and not a proof of the instruction stream. A selector site in code
+that is no call but has `9Ah` three bytes before it by chance, and a word
+below the target's size just before it, has those two bytes rewritten as an
+offset: `mov ax, seg X` (`B8`) cannot pass the size test against a segment
+under 47,104 bytes, `mov word [bx], seg X` (`C7 07`, 1,991) can, after an
+instruction ending in `9Ah`.
+
+**What it leaves.** A selector fixup in a DATA segment is a far pointer in a
+table, a procedure's address or a pointer to data in code, and nothing in the
+file says which: it keeps its target (the lead's scoping: far calls only). On
+`_INST16.EXE` that is 26 of the 64 segments and 240 KB, which is why Sir
+Hangman's engine still does not run on a 640 KB machine with this rule alone.
+Taking those pointers through thunks as well (a pointer to a thunk is a
+procedure's address in any program that called it; one that read the segment's
+bytes through it would read the thunk) would make 62 of the 64 discardable. It
+is a decision, not a build fix, and is not taken here.
+
+**Costs.** Resident (image + bss of `WIN16.O88`): 0 bytes. The loader and
+the census are part 5 (§124.18.7), so their growth is the part's and the kept
+copy's: 642 bytes (17,667 to 18,309, measured against plan/win16-next's
+9ca188639). The added thunks are the module block's, and their number is the
+one above. `kern_mega`'s arm is
+unchanged: its relocations still take §124.26.1's rule (O8 covers the same
+segments there).
 
 ### 124.27 Windows inside a window: File Manager and Program Manager *(S20b, docs/plans/WIN16-ANY-PLAN.md)*
 

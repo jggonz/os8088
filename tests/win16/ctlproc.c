@@ -7,6 +7,11 @@
  *               procedure that forwards (CallWindowProc), CreateWindow it,
  *               and use it as the control: WM_SETTEXT, EM_SETSEL,
  *               EM_REPLACESEL, WM_GETTEXT; BM_SETCHECK, BM_GETCHECK;
+ *               The superclass window keeps its class's name, and its
+ *               own window words (after cbWndExtra's, which a multi-line
+ *               Edit uses) are its own;
+ *   swallow     a superclass whose procedure answers WM_CREATE itself and
+ *               forwards the rest is still a working multi-line Edit;
  *   subclass    SetWindowLong(GWL_WNDPROC) on a real Edit, eat one key and
  *               pass the rest to the old procedure.
  *
@@ -31,6 +36,13 @@ static void check(int ok, const char *tag)
 LRESULT __export CALLBACK SupEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     supseen++;
+    return CallWindowProc(baseEdit, hwnd, msg, wp, lp);
+}
+
+LRESULT __export CALLBACK SupEat(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
+{
+    if (msg == WM_CREATE)
+        return 0;
     return CallWindowProc(baseEdit, hwnd, msg, wp, lp);
 }
 
@@ -63,8 +75,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     static WNDCLASS wc, ce, cb;
     static char buf[64];
-    HWND top, e, b, s;
-    int n;
+    HWND top, e, b, s, m;
+    int n, base;
 
     (void)prev; (void)cmd; (void)show;
     wc.lpfnWndProc = WndProc;
@@ -86,10 +98,15 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     baseButton = (FARPROC)cb.lpfnWndProc;
 
     /* superclass both: our name, our procedure, their behaviour */
+    base = ce.cbWndExtra;               /* the Edit's own words come first */
+    ce.cbWndExtra += 2;
     ce.lpszClassName = "SupEdit";
     ce.lpfnWndProc = SupEdit;
     ce.hInstance = inst;
     check(RegisterClass(&ce) != 0, "regedit");
+    ce.lpszClassName = "SupEat";
+    ce.lpfnWndProc = SupEat;
+    check(RegisterClass(&ce) != 0, "regeat");
     cb.lpszClassName = "SupButton";
     cb.lpfnWndProc = SupButton;
     cb.hInstance = inst;
@@ -108,6 +125,30 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     SendMessage(e, WM_GETTEXT, sizeof buf, (LPARAM)(LPSTR)buf);
     check(strcmp(buf, "hello world") == 0, "replace");
     check((int)SendMessage(e, WM_GETTEXTLENGTH, 0, 0L) == 11, "length");
+    buf[0] = 0;
+    GetClassName(e, buf, sizeof buf);
+    check(lstrcmpi(buf, "SupEdit") == 0, "clsname");
+
+    /* a multi-line one: our word after the Edit's survives its text */
+    m = CreateWindow("SupEdit", "", WS_CHILD | WS_VISIBLE | WS_BORDER
+                     | ES_MULTILINE, 170, 4, 120, 60, top, (HMENU)4, inst, NULL);
+    check(m != 0, "mkml");
+    SetWindowWord(m, base, 0x5A5A);
+    SendMessage(m, WM_SETTEXT, 0, (LPARAM)(LPSTR)"one\r\ntwo");
+    SendMessage(m, WM_CHAR, 'z', 1L);
+    check(GetWindowWord(m, base) == 0x5A5A, "mlword");
+    buf[0] = 0;
+    SendMessage(m, WM_GETTEXT, sizeof buf, (LPARAM)(LPSTR)buf);
+    check(strcmp(buf, "zone\r\ntwo") == 0, "mltext");
+
+    /* WM_CREATE answered by the superclass, never forwarded */
+    m = CreateWindow("SupEat", "", WS_CHILD | WS_VISIBLE | WS_BORDER
+                     | ES_MULTILINE, 170, 70, 120, 60, top, (HMENU)5, inst, NULL);
+    check(m != 0, "mkeat");
+    SendMessage(m, WM_SETTEXT, 0, (LPARAM)(LPSTR)"ate");
+    buf[0] = 0;
+    SendMessage(m, WM_GETTEXT, sizeof buf, (LPARAM)(LPSTR)buf);
+    check(strcmp(buf, "ate") == 0, "eattext");
 
     b = CreateWindow("SupButton", "Check", WS_CHILD | WS_VISIBLE
                      | BS_CHECKBOX, 4, 30, 100, 20, top, (HMENU)2, inst, NULL);

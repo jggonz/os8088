@@ -751,7 +751,13 @@ w16_gdrow:
 ; asked. TRUE, or FALSE when the point is not one to fill, the brush is not
 ; one colour, or the screen could not be read back.
 ; -----------------------------------------------------------------------------
+W16SYS w16g_flood
+    mov byte [w16_fsh], 2           ; FloodFill (GDI.25): crColor, y, x, hDC -
+    jmp short w16g_xflood.in        ;   ExtFloodFill's, FLOODFILLBORDER, less
+                                    ;   the type word
 W16SYS w16g_xflood
+    mov byte [w16_fsh], 0
+.in:
     push si
     push di
     push bp
@@ -762,8 +768,15 @@ W16SYS w16g_xflood
     mov ax, [w16_mbm]
     mov [w16_fbm], ax
     ICALL w16_args
+    xor al, al
+    cmp byte [w16_fsh], 0
+    jne .fb
     mov al, [es:bx]
+.fb:
     mov [w16_fmode], al
+    mov dl, [w16_fsh]
+    xor dh, dh
+    sub bx, dx                      ; FloodFill's words sit 2 nearer
     mov ax, [es:bx + 2]
     mov dl, [es:bx + 4]
     ICALL w16_rgb2col
@@ -787,6 +800,9 @@ W16SYS w16g_xflood
     mov [w16_fcol], al
 .seed:
     ICALL w16_args
+    mov dl, [w16_fsh]
+    xor dh, dh
+    sub bx, dx
     mov ax, [es:bx + 8]
     add ax, [w16_ox]
     mov dx, [es:bx + 6]

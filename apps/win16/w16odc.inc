@@ -78,8 +78,8 @@ w16od_find:
     push cx
     push di
     push es
-    cmp byte [bx + W16W_KIND], 0    ; WIN16's own classes have none
-    jne .no
+    cmp byte [bx + W16W_CLS], 0xFF  ; WIN16's own classes have none
+    je .no
     mov al, [bx + W16W_CLS]
     ICALL w16_clsget
     mov di, ax
