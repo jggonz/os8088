@@ -236428,13 +236428,12 @@ from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
 asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
 bitmap when the answer is at least four times the picture: 614,400 bytes for
 640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
-`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
-(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
-for this operation*, both before this change and after it (a look of each,
+`W16_BMMAX` (64,000) refuses. **Closed by §124.25.16:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 started to its window and said *Insufficient memory
+for this operation*, before this change and after it (a look of each,
 2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
-(`win16pbrush`). The one-band bitmap is the likely cause, read from
-`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
-what would cure it, not a smaller figure.
+(`win16pbrush`). The one-band bitmap was the cause, and the cure is a
+bitmap past 64,000 bytes, not a smaller figure: §124.25.16.
 
 The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
 and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
@@ -236785,6 +236784,89 @@ the instance at once, with only that toast to say so.
 | `Arc`, `Pie` (GDI.23, 26) | the ellipse of the box, drawn counter-clockwise from the ray through the start point to the ray through the end point, as a polyline (`Arc`) or a polygon through the centre (`Pie`) of 64 vertices to the circle at most: the two end points are exact, the ones between are 5.625 degrees apart, which is under half a pixel from the true curve at a 300 pixel radius. `Pie` fills in the brush and draws its edges in the pen, `Arc` draws in the pen alone, and neither moves the current point. Identical start and end points draw the whole ellipse. They draw on every adapter's DC and on a memory DC, through `Polyline` and `Polygon` (§124.25.4), so a wide pen and the clip are theirs. The curve is not `Ellipse`'s pixel for pixel (`Ellipse` is `RoundRect`'s corner table) |
 | `CopyMetaFile` (GDI.151), `EnumMetaFile` (GDI.175), `PlayMetaFileRecord` (GDI.176) | 0. There are no metafiles here (§124.25.10): WIN16 never hands out a metafile handle, so there is none to copy, enumerate or play, and a program has to handle the 0 as it does when memory is short |
 
+
+#### 124.25.16 A bitmap past 64,000 bytes: tiles *(WIN16-NEXT-PLAN, bigbmp)*
+
+A GDI bitmap used to be one segment, so `W16_BMMAX` (64,000 bytes of
+converted pixels) was its largest and `CreateBitmap`, `CreateCompatibleBitmap`
+and `CreateDIBitmap` answered NULL for more. A program that sizes its pictures
+from `GetFreeSpace` (§124.25.1) hits it: Paintbrush's band manager
+(`PBRUSH.DLL`) keeps the whole picture as one band when the figure is at
+least four times the picture, which for 640 x 480 at 16 colours is a
+153,600-byte `CreateBitmap(640, 480)`; on kern_mega the honest figure is that
+large, so Paintbrush 3.0 always took the path and ended in *Insufficient
+memory for this operation*. **Seen (QEMU kern_mega, 2026-11-04):** the A/B
+fixture `BIGBMP.EXE` (`tests/win16/bigbmp.c`) with the old WIN16 fails every
+check from the first, `CreateCompatibleBitmap(dc, 640, 480)` answering NULL;
+with this change it passes (§ *What was seen*, below).
+
+**A bitmap may now be as large as a global block, tiled.** Windows keeps such
+a bitmap as a huge object and so does WIN16, with the machinery §124.31.6
+already has for `GlobalAlloc` over 64 KB - and without `SEG_TILE`, because
+the bitmap's rows are only ever addressed as *a segment and an offset*:
+- **One block.** A bitmap whose pixels are over `W16_BMMAX` is one **fixed
+  block of the global heap** (`w16_gnew`, up to its 1023 KB), never the claim
+  of its own §124.15.2 falls back to for a small one: a claim is a row of
+  the map and one of eight to twelve. A heap that is short answers the
+  `GlobalNotify` procedures first (`w16k_gnask`) and then NULL, as before.
+- **Tiles.** The rows are cut into tiles of `T = 65535 / stride` rows
+  (`stride` = the bitmap's 4bpp bytes a row), so a row never straddles a
+  tile; tile *k* starts 64 KB (1000h paragraphs) after tile *k-1*, which is
+  `__AHINCR` of real mode. A 640 x 480 bitmap has stride 320, T = 204 and
+  three tiles, the last holding 72 rows; its block is
+  `(tiles - 1) * 64 KB + the last tile's bytes`, 154,112 bytes. The few
+  bytes between a tile's last row and its 64 KB are never used.
+- **The same on both arms.** A tile's segment is `block + k * 1000h`
+  paragraphs on kern_big and on kern_mega alike: on the arm WIN16 computes
+  in *virtual paragraphs* (§124.31.3) and `W16SEG` turns one into a data
+  selector reaching to the claim's end, so a virtual paragraph 1000h on is
+  the next 64 KB of the same arena. No `SEG_TILE`, no selector held, and
+  nothing to give back: a tiled bitmap goes with its block, at
+  `DeleteObject` or the program's end.
+- **How a bitmap says so.** The slot's `w16b_mono` high byte is 1 for the
+  claim of its own (§124.15.2) and **2 for a tiled bitmap** (`w16_bmown`
+  tests bit 0 only). Every other bitmap is the one-segment case and its code
+  is the multiply it was.
+- **One routine finds a row.** `w16_bmrp` (AX = a row, BX = the slot * 2 ->
+  AX = the row's byte offset, DX = the segment to pass to `W16SEG`) is the
+  only place that knows; a part that is not the library part's calls it with
+  `SLCALL`. What addresses a row by it: the pixel and row routines under
+  every drawing call and ROP (`w16_bmaddr`, `w16_bmrow`, `w16_bm2bm`,
+  `w16_roprow`), `SetDIBits`'s fill and `GetDIBits`'s read (`w16_bmfills`,
+  `w16_gdrow`), `GetPixel` on a bitmap and flood fill's read. A BitBlt from
+  a tiled bitmap to the screen is one `OSAPI_GFX_BLIT4` **per tile** the
+  source rows cross.
+- **What stays one segment.** `GetBitmapBits`, `SetBitmapBits` and the
+  initial bits of `CreateBitmap` take a program buffer of at most 64 KB (the
+  call is one segment's: §124.15.2), so they reach the first tile's rows
+  (`w16_bmcap`: `65535 / stride` rows, at most the bitmap's); a program that
+  moves a huge picture through them with a huge pointer gets the first tile.
+  `GetDIBits` and `SetDIBits` reach every row. `CreatePatternBrush` reads
+  the first eight rows, which are in the first tile.
+
+**Cost.** WIN16's resident growth is **6 bytes of bss and no byte of image**
+on both arms (`w16b_ty`, `w16b_tdy`, `w16_gdseg`); the library part grows
+303 bytes on kern_mega and 304 on kern_big (`w16dlg` 64,710 -> 65,013 and
+63,904 -> 64,208) and the system-library part 46. **kern_big keeps the
+limit in effect, not in code:** the code is the same on both arms, so a
+real-mode machine makes a tiled bitmap whenever the heap holds the block,
+and on a 640 KB machine with the figure `GetFreeSpace` gives there
+(under 614,400, §124.25.1) Paintbrush keeps its bands as before
+(`win16pbrush` is unchanged: its bitmaps are below `W16_BMMAX`). A 153,600-byte
+bitmap does not fit a small real-mode heap and answers NULL there, as a
+program on Windows 3.0 in real mode would be told. No kernel byte.
+
+**What was seen (QEMU, kern_mega, -m 16, a hard disk with WIN16, 2026-11-04):**
+`BIGBMP.EXE` with the new WIN16 said *BIGBMP OK*: tile 0, the seam between
+rows 203 and 204, tile 1, tile 2, a BitBlt of tile 2's block onto the window,
+a BitBlt that starts in tile 0 and ends in tile 1, GetDIBits of a tile-2
+scan, SetDIBits of one, and a StretchBlt across the seam; with the old WIN16 it
+named `make select tile0 seam ...` and so on, from the first call. Paintbrush
+3.0 (`PBRUSH.EXE`) then started to its window with no *Insufficient memory*
+box and drew a stroke on the canvas. **Rows:** `win16bigbmp` runs the
+fixture on kern_big, `win16memdc` and `win16pbrush` are the small-bitmap
+guards. **Not done:** kern_mega has no row for the fixture (no QEMU rig
+loads WIN16 on the arm; `tests/win16ovr.py` does it under Bochs).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

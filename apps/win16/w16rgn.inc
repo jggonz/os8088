@@ -42,7 +42,8 @@ W16SYS w16g_setbmbits
     jc .none
     mov [w16_scratch], cx           ; bytes left to take
     mov bp, si                      ; BP = where they began
-    mov dx, [w16b_h + bx]
+    SLCALL w16_bmcap                ; (a tiled bitmap: the first tile's rows,
+    mov dx, ax                      ;   SPEC.md 124.25.16)
     mov [w16_scratch + 2], dx       ; rows to go
     xor di, di                      ; DI = the row in the bitmap
     cmp byte [w16b_mono + bx], 0
@@ -490,9 +491,10 @@ w16_gdrow:
     push bx
     push bp
     mov bx, [w16_gdslot]
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    SLCALL w16_bmrp                 ; (a tiled row: SPEC.md 124.25.16)
     mov si, ax                      ; SI = the row in the bitmap
+    mov [w16_gdseg], dx             ; ...and the segment it is in
     mov bp, di
     add bp, [w16_gdstr]             ; BP = where the row ends
     xor dx, dx                      ; DX = the pixel
@@ -506,7 +508,7 @@ w16_gdrow:
     shr dx, 1
     pushf
     add si, dx
-    W16SEG ds, [w16b_seg + bx]
+    W16SEG ds, [w16_gdseg]
     mov al, [si]
     popf
     pop dx
@@ -746,14 +748,15 @@ w16r_can:
     push es
     mov bx, [w16_fbm]
     push ax
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    SLCALL w16_bmrp                 ; (a tiled row: SPEC.md 124.25.16)
+    mov [w16_gdseg], dx
     mov dx, ax
     pop ax
     shr ax, 1                       ; CF = a low nibble
     pushf
     add ax, dx
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, [w16_gdseg]
     mov bx, ax
     mov al, [es:bx]
     popf

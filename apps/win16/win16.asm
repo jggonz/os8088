@@ -600,6 +600,7 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_gdnum, 2
     W16BSS w16_gdbits, 4        ; ...where they go
     W16BSS w16_gdslot, 2        ; ...the bitmap's slot * 2
+    W16BSS w16_gdseg, 2         ; ...and the segment its row lies in
     W16BSS w16_gdstr, 2         ; ...a scan's bytes
     W16BSS w16_gdbpp, 1         ; ...and bits a pixel
     W16BSS w16_fmode, 1         ; ExtFloodFill's: its type, the colour it
@@ -1166,6 +1167,8 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16b_dy0, 2
     W16BSS w16b_sx, 2           ; ...the source column, the cut corner's
     W16BSS w16b_sy, 2
+    W16BSS w16b_ty, 2                   ; a tiled source's rows (124.25.16):
+    W16BSS w16b_tdy, 2                  ;   the next one, and where it lands
     W16BSS w16b_sx0, 2          ; ...the DDA's first column and error
     W16BSS w16b_err0, 2
     W16BSS w16b_err, 2
