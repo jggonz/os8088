@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <dos.h>
 #include <string.h>
+#include "restxt.h"
 
 extern unsigned getss(void);
 #pragma aux getss = "mov ax,ss" value [ax];
@@ -89,6 +90,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(GlobalFree((HGLOBAL)LOWORD(h)) != 0, "free");
     check(GlobalSize((HGLOBAL)LOWORD(h)) == sz, "freed");
     check(local == 0x5A5A && keepme == 0x1234, "afterfree");
+
+    restxt(inst, "DGROUP.TXT", res[0] ? res : "DGROUP OK");
 
     MessageBox(NULL, res[0] ? res : "DGROUP OK", "DGROUP", MB_OK);
     return 0;

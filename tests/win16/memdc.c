@@ -35,6 +35,7 @@
  */
 #include <windows.h>
 #include <string.h>
+#include "restxt.h"
 
 #define W 64
 #define H 48
@@ -522,6 +523,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     DeleteObject(green);
     DeleteObject(blue);
     ReleaseDC(hwnd, dc);
+
+    restxt(inst, "MEMDC.TXT", res[0] ? res : "MEMDC OK");
 
     MessageBox(hwnd, res[0] ? res : "MEMDC OK", "MEMDC", MB_OK);
     DestroyWindow(hwnd);

@@ -22,6 +22,7 @@
  */
 #include <windows.h>
 #include <string.h>
+#include "restxt.h"
 
 #define BLACK RGB(0, 0, 0)
 #define WHITE RGB(255, 255, 255)
@@ -240,6 +241,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     DeleteObject(blue);
     DeleteObject(green);
     ReleaseDC(hwnd, dc);
+
+    restxt(inst, "BIGBMP.TXT", res[0] ? res : "BIGBMP OK");
 
     MessageBox(hwnd, res[0] ? res : "BIGBMP OK", "BIGBMP", MB_OK);
     DestroyWindow(hwnd);
