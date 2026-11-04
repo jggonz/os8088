@@ -238,9 +238,21 @@ c64f_iord:
     push di
     push bp
     mov ds, [cs:c64_pkgds]
+    ; THE 6502 PC, for c64io.c's raster wait (C64-SPEC 4.7.1) - but only
+    ; from the fast core's own handlers, whose SI is the PC: the caller's CS,
+    ; above eight pushes and the return offset, says whose call this is
+    mov bp, sp
+    xor cx, cx
+    mov ax, [bp+18]
+    cmp ax, [_c64_fseg]
+    jne .nopc
+    mov cx, si
+.nopc:
+    mov [_c64_fpc], cx
     push bx
     call _c64_io_rd
     add sp, 2
+    mov word [_c64_fpc], 0          ; (no other caller may see it)
     mov dh, al
     pop bp
     pop di

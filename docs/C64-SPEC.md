@@ -733,6 +733,41 @@ the accurate one; held 150 ms, both type and answer identically (`PRINT
 once a wake, and the faster core changes how much machine runs between two
 samples. A field check on real keys is owed.
 
+#### 4.7.1 The raster wait, in whole passes
+
+**`$D011`, `$D012` and `$D019` are constant for a whole run**: they read
+`c64_frame_cyc`, which moves only in `c64_advance`, between runs (section
+4.4). So a program polling one of them - the commonest loop a game or demo
+has - either leaves at the first read or spins until the budget ends. On a
+16 MHz 286 one pass costs several times the 9-11 us it takes a real C64,
+nearly all of it the call-out: the Bright Pixel Christmas demo (MIT,
+`celso/c64`), which waits for line `$32` with `LDA $D012 / CMP #$32 / BEQ /
+JMP`, ran at **12%**.
+
+`c64f_iord` hands `c64_io_rd` the fast core's PC (`c64_fpc`) - only when the
+caller's CS is the core's own, since SI is something else in a translation
+and in the accurate core - and when the bytes after the read, in RAM below
+`$A000`, are one of these loops and the value just read keeps it spinning,
+`c64_poll_skip` takes every whole pass that leaves the countdown above zero
+out of `DEAD`, `c64_cut`'s door:
+
+| loop | a pass |
+|---|---|
+| `LDA reg / CMP #n / BNE`, `BEQ`, `BCC` or `BCS` back | 9 cycles (+1 across a page) |
+| `LDA reg / AND #m / BNE` or `BEQ` back | 9 (+1) |
+| `LDA reg / CMP #n / BEQ +3 / JMP back` | 11 |
+| `LDA reg / BNE`, `BEQ`, `BPL` or `BMI` back; `BIT reg / BPL`, `BMI`, `BVC` or `BVS` back | 7 (+1) |
+
+The core then makes the read again at the same point of the loop, with the
+clock where those passes would have put it, and ends the run on the same
+instruction as before - so the run's length and the cycle the next alarm
+lands on are unchanged. The demo runs at **114%** under warp and 61-98%
+without it, where the screen flush is now the cost (section 9: the demo
+splits the screen between bitmap and text with raster interrupts, the flush
+samples the mode at whatever moment it runs, and each flip recomposes every
+row). `c64uitest` asserts both loop forms, the value that leaves, and that a
+caller with no PC is charged nothing.
+
 ### 4.8 BASIC and the KERNAL translated ahead of time (FAST6502-PLAN.md wave 2b)
 
 **C64.O88's parts 3, 4 and 5 are the two ROM banks as 8086 code**:

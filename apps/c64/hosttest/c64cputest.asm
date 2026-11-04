@@ -2345,6 +2345,7 @@ funpatch:
 
 section .data
 _c64_fseg:  dw 0
+_c64_fpc:   dw 0                    ; (c64io.c's; the harness has no raster)
 _c64_faot:  dw 0                    ; the translation (C64-SPEC 4.8): 0 = none
 _c64_fakb:  dw 0
 _c64_ftab:  dw 0

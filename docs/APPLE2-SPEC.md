@@ -756,7 +756,7 @@ needs no disk or cassette. The trace is the walk's input because Applesoft
 dispatches its statements through `RTS` on pushed addresses, which no static
 walk follows. **A PC that is not translated is not wrong, only slower**: the
 table says 0 and the fast core runs it. On the build of this commit: 3,896
-traced, **4,596 translated, 56,002 bytes of code**.
+traced, **4,596 translated, 59,941 bytes of code**.
 
 **How it is entered.** A jump, call, return or new run whose target is in
 `$D000-$FFFF` goes through the core's `ct_rom` (its opcode `$72` slot): ES =
@@ -808,7 +808,7 @@ check on the routine's RAM copy
 guards it, so a program that rewrites the routine gets the core instead.
 
 **Memory.** Both parts are fetched by `a2_fast_init` after the core, both or
-neither, as claims of their own length: **3,520 + 1,536 paragraphs** (56,320 and 24,576 bytes, to the heap's
+neither, as claims of their own length: **3,776 + 1,536 paragraphs** (60,416 and 24,576 bytes, to the heap's
 granule), on top of
 4.6's two 64KB claims. They are PINNED (they are fetched parts, not
 `os88_mem_claim`s, and nothing follows them on a move). A refusal of either

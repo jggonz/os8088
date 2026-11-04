@@ -3073,6 +3073,53 @@ int main(int argc, char **argv)
         c64_frame_cyc = 100 * 63 + 7;
         if (c64_io_rd(0xD012) != 100)
             fail("$D012 is not the raster line the cycle counter reached");
+        /* THE RASTER WAIT IN WHOLE PASSES (C64-SPEC 4.7.1). $0900: LDA $D012
+         * / CMP #$32 / BNE $0900 - 9 cycles a pass, and line 100 keeps it
+         * spinning: with 1,000 cycles of countdown left after the read, 111
+         * passes go at once and 1 cycle is left, so the core still ends the
+         * run on the instruction it would have. Then the value that leaves
+         * the loop, a BEQ/JMP form (11 a pass), and a caller with no PC (the
+         * accurate core, the translations), which must charge nothing.
+         * Verified to fail with c64_poll_skip returning at once. */
+        {
+            static const unsigned char lp[] = { 0xAD, 0x12, 0xD0, 0xC9, 0x32, 0xD0, 0xF9 };
+            static const unsigned char lj[] = { 0xAD, 0x12, 0xD0, 0xC9, 0x32, 0xF0, 0x03,
+                                                0x4C, 0x00, 0x0A };
+            int dead;
+            memcpy(ram + 0x0900, lp, sizeof lp);
+            memcpy(ram + 0x0A00, lj, sizeof lj);
+#define H_DEAD() (c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8))
+#define H_SETDEAD(v) (c64_scr_wr(C64_SCR_DEAD, (v) & 0xFF), c64_scr_wr(C64_SCR_DEAD + 1, ((v) >> 8) & 0xFF))
+            H_SETDEAD(1000);
+            c64_fpc = 0x0903;
+            c64_io_rd(0xD012);
+            if ((dead = H_DEAD()) != 1)
+                fail("a raster wait that spins was not taken in whole passes "
+                     "to one cycle short of the budget (C64-SPEC 4.7.1)");
+            if (c64_fpc != 0)
+                fail("c64_poll_skip left the PC for the next caller");
+            c64_frame_cyc = 0x32 * 63;
+            H_SETDEAD(1000);
+            c64_fpc = 0x0903;
+            c64_io_rd(0xD012);
+            if (H_DEAD() != 1000)
+                fail("a raster read that LEAVES the wait was charged passes");
+            c64_frame_cyc = 100 * 63;
+            H_SETDEAD(1000);
+            c64_fpc = 0x0A03;
+            c64_io_rd(0xD012);
+            if (H_DEAD() != 1000 - 90 * 11)
+                fail("the BEQ / JMP form of the raster wait was not taken in "
+                     "whole 11-cycle passes");
+            H_SETDEAD(1000);
+            c64_fpc = 0;
+            c64_io_rd(0xD012);
+            if (H_DEAD() != 1000)
+                fail("a raster read with no PC (not the fast core's) was "
+                     "charged passes");
+            H_SETDEAD(0);
+            (void)dead;
+        }
         c64_reset_regs();
         c64_map_publish();
         c64_scr_wr(C64_SCR_IRQ, 0);

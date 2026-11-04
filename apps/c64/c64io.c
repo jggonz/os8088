@@ -850,9 +850,95 @@ static void c64_cia_wr(int k, int r, int v)
     }
 }
 
+/* THE RASTER WAIT, TAKEN IN WHOLE PASSES (C64-SPEC 4.7.1).
+ *
+ * $D011, $D012 and $D019 read c64_frame_cyc, which moves only between runs
+ * (c64_advance): inside one run they are constants, so a program polling
+ * one of them - `LDA $D012 / CMP #n / BNE` and its kin, the commonest loop a
+ * game or demo has - either leaves at the first read or spins until the
+ * budget ends. When the fast core makes the read (c64f_iord passes its PC in
+ * c64_fpc, 0 from any other caller) and the bytes after it in RAM are such a
+ * loop that THIS value keeps spinning, every whole pass that still leaves
+ * the countdown above zero is charged at once through DEAD, c64_cut's own
+ * door: the core then reads again, at the same point of the loop with the
+ * clock where those passes would have put it, and ends the run on the same
+ * instruction as before. On a 286 one pass of the call-out costs several
+ * times the 11 us a real C64 spends on it. */
+unsigned c64_fpc;
+
+static void c64_poll_skip(unsigned a, int v)
+{
+    unsigned pc = c64_fpc, back, op, b0, br, off;
+    int per, cont, z, c, dead, k;
+
+    c64_fpc = 0;
+    if (pc < 3 || pc > 0x9FF0)              /* RAM, and the loop with it */
+        return;
+    back = pc - 3;                          /* the read instruction's PC */
+    if ((unsigned)c64_rd16(pc - 2) != a)
+        return;
+    op = (unsigned)c64_rd(back);
+    b0 = (unsigned)c64_rd(pc);
+    cont = 0;
+    per = 0;
+    if (op == 0xAD && (b0 == 0xC9 || b0 == 0x29)) {
+        /* LDA / CMP #n or AND #m / a branch back to the LDA */
+        k = c64_rd(pc + 1);
+        br = (unsigned)c64_rd(pc + 2);
+        off = (unsigned)c64_rd(pc + 3);
+        if (b0 == 0xC9) {
+            z = (v == k);
+            c = (v >= k);
+        } else {
+            z = ((v & k) == 0);
+            c = 2;                          /* (AND leaves C: no BCC/BCS) */
+        }
+        if (off == 0xF9) {
+            per = 9 + (((pc + 4) ^ back) > 0xFF);
+            if (br == 0xD0)
+                cont = !z;
+            else if (br == 0xF0)
+                cont = z;
+            else if (br == 0x90 && c != 2)
+                cont = !c;
+            else if (br == 0xB0 && c != 2)
+                cont = c;
+        } else if (br == 0xF0 && off == 0x03 && c64_rd(pc + 4) == 0x4C
+                   && (unsigned)c64_rd16(pc + 5) == back) {
+            per = 11;                       /* ...BEQ out / JMP back */
+            cont = !z;
+        }
+    } else if ((op == 0xAD || op == 0x2C) && c64_rd(pc + 1) == 0xFB) {
+        /* LDA or BIT / a branch straight back */
+        per = 7 + (((pc + 2) ^ back) > 0xFF);
+        if (b0 == 0x10)
+            cont = !(v & 0x80);
+        else if (b0 == 0x30)
+            cont = (v & 0x80) != 0;
+        else if (op == 0xAD && b0 == 0xD0)
+            cont = (v != 0);
+        else if (op == 0xAD && b0 == 0xF0)
+            cont = (v == 0);
+        else if (op == 0x2C && b0 == 0x50)
+            cont = !(v & 0x40);
+        else if (op == 0x2C && b0 == 0x70)
+            cont = (v & 0x40) != 0;
+    }
+    if (!cont)
+        return;
+    dead = c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8);
+    if (dead <= per)
+        return;
+    k = (dead - 1) / per;
+    dead -= k * per;
+    c64_scr_wr(C64_SCR_DEAD, dead & 0xFF);
+    c64_scr_wr(C64_SCR_DEAD + 1, (dead >> 8) & 0xFF);
+}
+
 static int c64_io_rd(unsigned a)
 {
     unsigned p;
+    int v;
 
     if (a < 2)                              /* $0000/$0001 are the port (3.2) */
         return c64_pp_read((int)a);
@@ -861,12 +947,19 @@ static int c64_io_rd(unsigned a)
     if (p <= 0x0300) {                      /* $D000-$D3FF: the VIC, mirrored */
         p = a & 0x3F;
         if (p == 0x11)
-            return (int)((c64_vic[0x11] & 0x7F)
-                         | ((c64_raster_now() >> 1) & 0x80));  /* bit 8 */
-        if (p == 0x12)
-            return c64_raster_now() & 0xFF;
-        if (p == 0x19)
-            return (int)(c64_vic[0x19] | 0x70);
+            v = (int)((c64_vic[0x11] & 0x7F)
+                      | ((c64_raster_now() >> 1) & 0x80));     /* bit 8 */
+        else if (p == 0x12)
+            v = c64_raster_now() & 0xFF;
+        else if (p == 0x19)
+            v = (int)(c64_vic[0x19] | 0x70);
+        else
+            v = -1;
+        if (v >= 0) {
+            if (c64_fpc)
+                c64_poll_skip(a, v);
+            return v;
+        }
         if (p == 0x1A)
             return (int)(c64_vic[0x1A] | 0xF0);
         if ((p & 0x3E) == 0x1E)             /* $1E or $1F */
