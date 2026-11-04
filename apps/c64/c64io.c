@@ -42,6 +42,12 @@
 /* $D000-$D02E, mirrored every 64 bytes on the real chip; the file is 64 wide
  * and the dispatch masks the address, which is what the mirroring IS. */
 static unsigned char c64_vic[64];
+/* THE DISPLAY LATCH (C64-SPEC 9.9): what the screen is drawn from - the
+ * frame registers as they stood at the top of the display window, taken once
+ * a frame (c64_latch). The live registers above are what the 6510 reads. */
+#define C64_LATCH_LINE 51                   /* the 25-row window's first line */
+static unsigned char c64_vl11, c64_vl16, c64_vl18, c64_vl20, c64_vl21, c64_vldd;
+static void c64_latch(int force);
 static unsigned char c64_sid[32];           /* $D400-$D41C */
 
 /* Colour RAM is 1,024 NIBBLES and lives in the package's bss, not in the RAM
@@ -251,6 +257,8 @@ static void c64_reset_regs(void)
     c64_nmi_state = 0;
     for (i = 0; i < 1024; i++)
         c64_col[i] = 0;
+    c64_latch(1);                           /* (its callers rebuild the screen
+                                             * state from it themselves) */
 }
 
 /* c64_pp_write - a write to $00 or $01 re-evaluates the bank map AT ONCE
@@ -441,6 +449,13 @@ static int c64_alarm_next(void)
      * it on the mask meant that a program which polls `LDA $D019 / AND #$01`
      * with interrupts disabled - a common raster wait - never saw the bit at
      * all. It is one extra run boundary a frame. */
+    /* ...and the display latch, so it is taken AT its line and not wherever
+     * the run that crosses it happens to end (9.9) */
+    t = (int)C64_X63(C64_LATCH_LINE) - c64_frame_cyc;
+    if (t <= 0)
+        t += C64_PAL_FRAME;
+    if (t < d)
+        d = t;
     line = c64_rcmp_line();
     if (line < C64_PAL_LINES) {
         t = (int)C64_X63(line) - c64_frame_cyc;
@@ -614,9 +629,55 @@ static void c64_timer_step(int k, int n)
  * The `n` passed here is never more than one frame, because the frame end is
  * always an armed alarm and the slice never runs past its deadline by more
  * than one instruction. */
+/* c64_latch - THE DISPLAY LATCH (C64-SPEC 9.9). The composer draws one
+ * mode, one matrix and one pair of colours for the whole screen, and it used
+ * to take them from the live registers at every write - so a program that
+ * splits the screen with raster interrupts (a bitmap above a text scroller,
+ * rasterbars in $D020) changed them twice a frame, each change a full
+ * repaint, and the flush showed whichever half it happened to sample:
+ * flicker, and the most expensive flush there is. Taken once a frame at the
+ * top of the display window, the latch is the same every frame for any such
+ * program, and only a real change costs a repaint. FORCE copies without
+ * acting (a reset, whose callers rebuild the screen state themselves). */
+static void c64_latch(int force)
+{
+    int frame, lum, bord;
+
+    frame = c64_vl11 != c64_vic[0x11] || c64_vl16 != c64_vic[0x16]
+         || c64_vl18 != c64_vic[0x18] || ((c64_vldd ^ c64_cia[1][0x00]) & 3);
+    lum = c64_vl21 != c64_vic[0x21];
+    bord = c64_vl20 != c64_vic[0x20];
+    c64_vl11 = c64_vic[0x11];
+    c64_vl16 = c64_vic[0x16];
+    c64_vl18 = c64_vic[0x18];
+    c64_vl20 = c64_vic[0x20];
+    c64_vl21 = c64_vic[0x21];
+    c64_vldd = c64_cia[1][0x00];
+    if (force)
+        return;
+    if (frame) {
+        c64_frame_regs();                   /* the matrix may have moved: the
+                                             * core's write window watches the
+                                             * NEW one from here on (9.2) */
+        c64_dirty_all();
+    }
+    if (lum) {
+        c64_lum_update();                   /* $D021 changes what every colour
+                                             * resolves to in 1bpp (9.6) */
+        c64_dirty_all();
+    } else if (bord) {
+        /* $D020 IS THE BORDER'S OWN LEVEL, AND c64_lum_update DECIDES: it
+         * raises c64_border_dirty only when the mono level FLIPS, so only a
+         * border that will LOOK different is a reason to flush at all */
+        c64_lum_update();
+        if (c64_border_dirty)
+            c64_dirty_any = 1;
+    }
+}
+
 static void c64_advance(int n)
 {
-    int prev, now, tline, k;
+    int prev, now, tline, k, latch;
 
     if (n <= 0)
         return;
@@ -643,6 +704,10 @@ static void c64_advance(int n)
         if (now >= k)
             c64_vic[0x19] |= 0x01;
     }
+    k = (int)C64_X63(C64_LATCH_LINE);       /* ...and the display latch's line */
+    if (k <= prev)
+        k += C64_PAL_FRAME;
+    latch = now >= k;
     while (now >= C64_PAL_FRAME) {
         now -= C64_PAL_FRAME;
         c64_frames_lo = (c64_frames_lo + 1) & 0xFFFFu;
@@ -667,6 +732,8 @@ static void c64_advance(int n)
     }
 
     c64_irq_update();
+    if (latch)
+        c64_latch(0);
 }
 
 /* ==========================================================================
@@ -1023,41 +1090,9 @@ static void c64_io_wr(unsigned a, int v)
             c64_irq_update();
             return;
         }
-        if (old == (unsigned char)v)
-            return;                         /* nothing moved: nothing to draw */
-        /* a FRAME REGISTER changes every row by itself (9.2), and $D021
-         * changes what every colour resolves to in 1bpp (9.6). A SWITCH and
-         * not an `||` chain: SmallerC makes a switch one `cmp`/`je` a case,
-         * and an `||` chain a 0/1 value per operand (apps size pass 1) */
-        switch (r) {
-        case 0x11:
-        case 0x16:
-        case 0x18:
-            c64_frame_regs();               /* the matrix may have moved: the
-                                             * core's write window watches the
-                                             * NEW one from here on (9.2) */
-            c64_dirty_all();
-            break;
-        case 0x21:
-            c64_lum_update();
-            c64_dirty_all();
-            break;
-        case 0x20:
-            /* $D020 IS THE BORDER'S OWN LEVEL, AND c64_lum_update DECIDES.
-             * It raises c64_border_dirty only when the mono level FLIPS -
-             * colour 14 to 15 over background 6 is still `lighter than the
-             * paper` and changes no pixel - and this line used to raise the
-             * flag unconditionally one statement later, which made that guard
-             * dead code and the border four os88_gfx_fill calls (3.0 ms,
-             * §9.7) on the next flush after EVERY $D020 write. Rasterbars,
-             * loader flashes and $D020 cycling are many writes a frame. */
-            c64_lum_update();
-            if (c64_border_dirty)
-                c64_dirty_any = 1;          /* ...and only a border that will
-                                             * LOOK different is a reason to
-                                             * flush at all */
-            break;
-        }
+        (void)old;
+        /* (the frame registers reach the screen through the display latch,
+         * once a frame - c64_latch, 9.9 - and not from here) */
         return;
     }
     if (p <= 0x0700) {
@@ -1095,11 +1130,8 @@ static void c64_io_wr(unsigned a, int v)
          * user port, and the KERNAL bit-bangs CLK and DATA through them for
          * every byte it loads from drive 8 - so dirtying on any write to
          * $DD00 was a full-screen repaint per serial edge. */
-        if (r == 0x00)
-            if ((((unsigned char)v ^ old) & 3) != 0) {
-                c64_frame_regs();           /* the matrix moved with the bank */
-                c64_dirty_all();
-            }
+        (void)old;                          /* (the bank, too, reaches the
+                                             * screen through c64_latch) */
         return;
     }
 }

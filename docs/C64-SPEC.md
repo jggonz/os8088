@@ -761,11 +761,8 @@ out of `DEAD`, `c64_cut`'s door:
 The core then makes the read again at the same point of the loop, with the
 clock where those passes would have put it, and ends the run on the same
 instruction as before - so the run's length and the cycle the next alarm
-lands on are unchanged. The demo runs at **114%** under warp and 61-98%
-without it, where the screen flush is now the cost (section 9: the demo
-splits the screen between bitmap and text with raster interrupts, the flush
-samples the mode at whatever moment it runs, and each flip recomposes every
-row). `c64uitest` asserts both loop forms, the value that leaves, and that a
+lands on are unchanged. The demo runs at **114%** under warp, and at 96.6%
+without it once the screen is drawn from section 9.9's display latch. `c64uitest` asserts both loop forms, the value that leaves, and that a
 caller with no PC is charged nothing.
 
 ### 4.8 BASIC and the KERNAL translated ahead of time (FAST6502-PLAN.md wave 2b)
@@ -1750,6 +1747,40 @@ of the magnified glass asserted uniform, the `k = 3` scroll's `dy` asserted
 refused `blit1` must come down to 1:1.
 
 ---
+
+### 9.9 The display latch — the frame registers once a frame, at line 51
+
+**The screen is drawn from a LATCH, not from the live registers.** `$D011`,
+`$D016`, `$D018`, `$D020`, `$D021` and `$DD00`'s bank bits are copied once a
+frame, at the first line of the 25-row display window (`C64_LATCH_LINE` =
+51), into `c64_vl11` and its five siblings, and `c64_frame_regs`,
+`c64_lum_update` and the composers read those. The 6510 still reads and
+writes the live registers.
+
+Before the latch, each write to those registers re-read the frame and
+dirtied every row from `c64_io_wr`. A program that splits the screen with raster
+interrupts writes them twice a frame: a bitmap above a text scroller, or
+rasterbars in `$D020`. So every frame was a full repaint, and the flush showed
+whichever half of the split it happened to follow. That flickered between the two
+and was the most expensive flush there is. The Bright Pixel Christmas demo (section
+4.7.1) spent 47% of a 286's time in the composer. The latch is the same every frame for any such program, so only a REAL
+change costs a repaint. `c64_latch` does what `c64_io_wr` used to do, and
+only for what moved: `c64_frame_regs` and `c64_dirty_all` for the mode or
+matrix, `c64_lum_update` for the colours, with `$D020`'s border-level rule.
+
+**It is taken AT its line**: `c64_alarm_next` arms line 51 as an alarm,
+like the frame end, so the run that crosses it ends there, and
+`c64_advance` latches when a run crosses it. That is one more run boundary
+a frame. A reset copies the latch without acting (`c64_latch(1)`), because
+its callers rebuild the screen state from it themselves.
+
+**What it costs a program that does not split the screen** is up to one
+frame (20 ms) between a register write and the screen showing it.
+
+**Measured, 86Box `286-victory`**: the demo runs at **96.6%** without warp,
+from 61-80%. `c64uitest` asserts that a write does not reach the screen
+before line 51, that crossing line 51 latches, and that a split which is
+bitmap at line 51 stays bitmap. The row is red without the latch.
 
 ## 10. The status bar
 

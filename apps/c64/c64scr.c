@@ -233,7 +233,7 @@ static void c64_lum_update(void)
     int fg, bg, lb, wasborder;
 
     wasborder = c64_border_lit;
-    bg = c64_vic[0x21] & 15;
+    bg = c64_vl21 & 15;
     lb = c64_lum[bg];
     for (fg = 0; fg < 16; fg++) {
         if (c64_lum[fg] > lb) {
@@ -249,7 +249,7 @@ static void c64_lum_update(void)
         }
     }
     c64_bgfill = (unsigned char)(lb >= 128 ? 0xFF : 0x00);
-    c64_border_lit = c64_lum[c64_vic[0x20] & 15] > lb;
+    c64_border_lit = c64_lum[c64_vl20 & 15] > lb;
     /* THE BORDER IS FOUR FILLS AND IT IS REDRAWN ONLY WHEN IT WOULD LOOK
      * DIFFERENT. c64_border paints the strips c64_border_lit and nothing
      * else, so a $D020 or $D021 write that leaves that ONE BIT alone - colour
@@ -434,9 +434,9 @@ static void c64_frame_regs(void)
 {
     unsigned bank, cb, co;
 
-    bank = (unsigned)((~c64_cia[1][0x00]) & 3) << 14;
-    c64_mbase = bank + ((unsigned)((c64_vic[0x18] >> 4) & 15) << 10);
-    cb = ((unsigned)((c64_vic[0x18] >> 1) & 7) << 11);
+    bank = (unsigned)((~c64_vldd) & 3) << 14;   /* the display latch (9.9) */
+    c64_mbase = bank + ((unsigned)((c64_vl18 >> 4) & 15) << 10);
+    cb = ((unsigned)((c64_vl18 >> 1) & 7) << 11);
     co = cb;
     cb += bank;
     /* the CHARGEN is seen in banks 0 and 2 (bank bit 14 clear) at $1000 and
@@ -459,8 +459,8 @@ static void c64_frame_regs(void)
     /* $D011 bit 5 = BMM, bit 6 = ECM; $D016 bit 4 = MCM. Wave 1 composes
      * mode 0 and c64band.inc fills the rest with the background until wave 4
      * writes them (docs/plans/completed/C64-PORT-PLAN.md wave 4). */
-    c64_mode = ((c64_vic[0x11] >> 4) & 6)  /* ECM, BMM -> bits 2, 1 */
-             | ((c64_vic[0x16] >> 4) & 1);
+    c64_mode = ((c64_vl11 >> 4) & 6)  /* ECM, BMM -> bits 2, 1 */
+             | ((c64_vl16 >> 4) & 1);
     c64_watch_set();
 }
 
@@ -1695,7 +1695,7 @@ static void c64_flush(void *win)
         c64_band1(c64_bnd, f, l, c64_m.ramseg,
                   c64_mbase + C64_X40(i),
                   c64_col + C64_X40(i),
-                  c64_chr_seg, c64_chr_off, c64_mode, c64_vic[0x21] & 15);
+                  c64_chr_seg, c64_chr_off, c64_mode, c64_vl21 & 15);
 #ifdef C64_HOST
         c64_n_cell += (unsigned)(l - f + 1);
         c64_n_rows++;

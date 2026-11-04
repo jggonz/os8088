@@ -1618,6 +1618,10 @@ static void flush_now(void)
     if (h_speed_hold)
         c64_sp_tick = the_ticks;            /* el = 4 < 18: no fold this wake */
     the_ticks += 4;
+    c64_latch(0);                           /* the register writes the script
+                                             * made reach the screen at the
+                                             * display latch's line, once a
+                                             * frame (9.9): one has passed */
     os88_onwake(the_win);                   /* the wake runs with the lock NOT
                                              * held and takes it itself (74.1) */
     if (lock_depth != 0) { fail("a wake left the gfx lock held"); exit(1); }
@@ -3016,10 +3020,12 @@ int main(int argc, char **argv)
         c64_reset_regs();
         c64_map_publish();
         /* the frame end is always armed, and it is 19,656 cycles - the PAL
-         * frame - not a jiffy and not a host tick */
-        c64_frame_cyc = 0;
+         * frame - not a jiffy and not a host tick. (From the display latch's
+         * own line, so the latch - the other alarm a frame always has, 9.9
+         * - is a whole frame away and the frame end is the nearest.) */
+        c64_frame_cyc = (int)C64_X63(C64_LATCH_LINE);
         d = c64_alarm_next();
-        if (d != C64_PAL_FRAME)
+        if (d != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE))
             fail("with no timer running the next alarm is not the PAL frame "
                  "end - something has quantised the clock");
         /* now do what the KERNAL does: $4025 into CIA1 timer A, continuous,
@@ -3055,7 +3061,7 @@ int main(int argc, char **argv)
             fail("the timer did not reload from its latch: its phase was "
                  "lost across the underflow");
         d = c64_alarm_next();
-        if (d != C64_PAL_FRAME - 16422)
+        if (d != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE) - 16422)
             fail("the frame end stopped being an independent accumulator");
         /* an I/O write that raises a line CUTS the run in progress (4.4) */
         n_cut = 0;
@@ -3125,6 +3131,37 @@ int main(int argc, char **argv)
         c64_scr_wr(C64_SCR_IRQ, 0);
     }
 
+    /* --- THE DISPLAY LATCH (9.9). A split screen writes $D011 twice a
+     * frame - bitmap on at the top, off for a scroller below - and the
+     * screen must show what stood at line 51, every frame the same, rather
+     * than whichever write the flush happened to follow. Verified to fail
+     * with c64_advance's c64_latch call removed: the mode never leaves 0. */
+    {
+        c64_reset_regs();
+        c64_map_publish();
+        c64_frame_regs();
+        c64_frame_cyc = 0;
+        c64_io_wr(0xD011, 0x3B);            /* bitmap on, above line 51 */
+        if (c64_mode != 0)
+            fail("a $D011 write reached the screen before the display "
+                 "latch's line (9.9)");
+        c64_advance((int)C64_X63(C64_LATCH_LINE) + 10);
+        if (c64_mode != 2)
+            fail("crossing line 51 did not take the display latch: the "
+                 "bitmap mode set above it is not on the screen");
+        c64_io_wr(0xD011, 0x1B);            /* ...off for the scroller below */
+        c64_advance(5000);
+        c64_io_wr(0xD011, 0x3B);            /* ...and on again before 51 */
+        c64_advance(C64_PAL_FRAME - 5000);
+        if (c64_mode != 2)
+            fail("a split that is bitmap at line 51 every frame flipped the "
+                 "screen to text: the latch read a write below its line");
+        c64_reset_regs();
+        c64_map_publish();
+        c64_frame_regs();
+        c64_scr_wr(C64_SCR_IRQ, 0);
+    }
+
     /* --- THE FREE-RUNNING TIMER, WHICH IS WHERE A SIGNED COMPARE HANGS.
      * `LDA #$FF / STA $DC04 / STA $DC05 / LDA #$11 / STA $DC0E` is the
      * standard C64 free-running-timer / RNG idiom AND the state
@@ -3146,8 +3183,8 @@ int main(int argc, char **argv)
         c64_io_wr(0xDC0E, 0x11);            /* force load, start, continuous */
         if (c64_ta[0] != 0xFFFFu)
             fail("a $FFFF latch did not load into timer A");
-        c64_frame_cyc = 0;
-        if (c64_alarm_next() != C64_PAL_FRAME)
+        c64_frame_cyc = (int)C64_X63(C64_LATCH_LINE);
+        if (c64_alarm_next() != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE))
             fail("a $FFFF timer counter was taken for the nearest alarm - it "
                  "is 65,536 cycles away and the frame end is at most 19,656, "
                  "so the scheduler cast a wrapped value and the slice driver "
