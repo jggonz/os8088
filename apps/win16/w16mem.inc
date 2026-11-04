@@ -994,116 +994,8 @@ w16k_lockseg:
 .out:
     ret
 
-%ifdef PKG_MEGA
-; GetFreeSpace (KERNEL.169) - args: +0 wFlags. DX:AX = the largest run in an
-; arena, as GlobalCompact's, PLUS all of the heap's free memory outside
-; them: Windows answered a sum, not what one GlobalAlloc gets (SPEC.md
-; 124.25.1). InstallShield's launcher wants 700,000 bytes
-w16k_gspace:
-    push di
-    mov di, 1
-    jmp short w16k_gcomp1
-%else
-w16k_gspace equ w16k_gcompact       ; real mode: the largest run (124.25.1)
-%endif
-
-; GlobalCompact (KERNEL.25) - args: +0 dwMinFree. DX:AX = the largest block
-; GlobalAlloc could give now: a run in an arena of free blocks and code it
-; may discard (w16_gcan), or a new claim's
-w16k_gcompact:
-%ifdef PKG_MEGA
-    push di
-    xor di, di                      ; DI = 1: GetFreeSpace's
-w16k_gcomp1:
-%endif
-    push bx
-    push si
-    push es
-    xor cx, cx                      ; CX = the largest run, paragraphs
-    xor si, si
-.arena:
-    cmp si, 2 * W16_NARENA
-    jae .claims
-    mov ax, [w16_arena + si]
-    or ax, ax
-    jz .nexta
-    xor bx, bx                      ; BX = this run so far
-.blk:
-    cmp ax, [w16_arenae + si]
-    jae .nexta
-    W16WALK 0, es, ax
-    mov dx, [es:GH_SIZE]
-    call w16_gcan
-    jc .brk
-    add bx, dx
-    cmp bx, cx
-    jbe .skip
-    mov cx, bx
-    jmp short .skip
-.brk:
-    xor bx, bx
-.skip:
-    add ax, dx
-    jmp short .blk
-.nexta:
-    inc si
-    inc si
-    jmp short .arena
-.claims:
-%ifdef PKG_MEGA
-    or di, di                       ; GetFreeSpace: the heap's free memory,
-    jnz .room                       ;   whether or not a slot is free
-%endif
-    xor si, si                      ; a new arena only while a slot is free
-.free:                              ;   (SPEC.md 124.25.1)
-    cmp word [w16_arena + si], 0
-    je .room
-    inc si
-    inc si
-    cmp si, 2 * W16_NARENA
-    jb .free
-    xor ax, ax
-    jmp short .kb
-.room:
-    push bx
-    push cx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the largest claim, in PARAGRAPHS -
-%ifdef PKG_MEGA                     ;   what w16_garena is given to the
-    or di, di                       ;   paragraph (SPEC.md 50.3.7)
-    jz .cap
-    xchg ax, bx                     ; ...or BX, all of it, for GetFreeSpace
-.cap:
-%endif
-    pop cx
-    pop bx
-.kb:
-%ifdef PKG_MEGA
-    or di, di
-    jz .most
-    add cx, ax                      ; ...added to the largest run, at most
-    jnc .have                       ;   a megabyte
-    mov cx, 0xFFFF
-    jmp short .have
-.most:
-%endif
-    cmp ax, cx
-    jbe .have
-    mov cx, ax
-.have:
-    mov ax, cx
-    or ax, ax
-    jz .none
-    dec ax                          ; less the header
-.none:
-    call w16_p2b
-    pop es
-    pop si
-    pop bx
-%ifdef PKG_MEGA
-    pop di
-%endif
-    ret
+; GlobalCompact (KERNEL.25) and GetFreeSpace (KERNEL.169) are the system-library
+; part's (w16mem.inc's end, SPEC.md 124.25.1, *What GetFreeSpace says*)
 
 ; w16_gcan - ES = a block's header. CF=0 when GlobalAlloc can have its room:
 ; it is free, or a code segment that is not kept (SPEC.md 124.26.5). One in
@@ -2003,3 +1895,4 @@ w16k_lrealloc:
     pop di
     pop si
     ret
+

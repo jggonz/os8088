@@ -234743,7 +234743,7 @@ common half (S17), and end it with the usual toast when it reaches them.
 
 | call | answer |
 |---|---|
-| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; both, since WIN16 has no SYSTEM folder of its own. The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
+| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; and for the system directory the `SYSTEM` folder under it (§124.20.5.1). The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
 | `OpenFile` | every file is absent until WIN16 has files (S16): `HFILE_ERROR`, the `OFSTRUCT`'s `nErrCode` 2 and its path empty. The Control Panel asks `OF_EXIST` for `SETUP.INF` and carries on without it |
 | `_lclose` | `HFILE_ERROR`: nothing is open |
 | `LoadLibrary`, `FreeLibrary` | 2, file not found, until a program's own DLLs load (S18); nothing to free |
@@ -234762,6 +234762,50 @@ itself and names in its dialog templates, and `DialogBox` refuses a template
 with a class it cannot create; S17 is where both land. The Settings menu has
 twelve items and the window's client is two rows of icons high, so its
 popup, which is kept inside the window (§124.11), shows the first eight.
+
+#### 124.20.5.1 The system directory *(2026-11-04, WIN16-NEXT mozcopy)*
+
+Windows 3.1 has two directories, `C:\WINDOWS` and `C:\WINDOWS\SYSTEM`, and
+WIN16 answered the one folder to both questions (O5, §124.14). Microsoft's
+Setup Toolkit showed why that cannot stand: Mozart's setup copies `MCI.VBX`,
+`MSGBLAST.VBX`, `MVFS2.DLL` and `PICCLIP.VBX` into `GetWindowsSysDir()`, and
+its last step is `RemoveFile(GetWindowsDir() + "\mci.vbx")` (and the other
+three), to get rid of copies an older Visual Basic put in the Windows
+directory. With one folder it deleted the files it had just installed. The
+setup reported *complete* and Mozart could not start for want of them.
+
+**WIN16's system directory is `SYSTEM` under its Windows directory**,
+`A:\SYSTEM\APPDATA\WIN16\SYSTEM` on WIN16's own volume. `GetSystemDirectory`
+answers it, and makes the folder if it is not there (a Setup Toolkit copies
+into it without a `CreateDir`); `GetWindowsDirectory` is as before. No
+trailing backslash, as Windows.
+
+**The folder is made by the kernel, not by WIN16's DOS** (`w16f_mksys`:
+`od_enter`, `od_dive` into `WIN16`, `OSAPI_FILE_MKDIR`, `od_back`). Through
+the DOS, the first `GetSystemDirectory` of a program that does no file I/O
+fetched the DOS core and host into a claim of their own, and a refusal was
+left as `AH=59h`'s answer, which Windows' call never touches. Every refusal
+changes nothing and the path is answered regardless: the folder already there,
+a read-only volume (WIN16 launched from a CD), a write-protected or full disk,
+a disk without WIN16's folder (§124.14: that folder is never created). A
+program then finds the system directory absent, as it finds the Windows
+directory unwritable. `VerFindFile` answers the path without making it: an
+installer that learns the folder only from `VerFindFile` and never asks
+`GetSystemDirectory` finds it absent on a disk where nothing has asked yet
+(open: part 9 is the one that would pay for making it there).
+
+**One name**: the folder's name is `od_s_system` (`apps/os88data.inc`), the
+same bytes the loader's library search (§124.23.1.1, `w16l_gofold`: two
+folders below `SYSTEM\APPDATA` by `W16L_SYSDEPTH`, the second being
+`od_s_system`) and the program search (§124.28.5, `w16t_where`) dive into.
+`w16f_sysdir` (`w16file.inc`) writes the path at DI from it, upper case,
+ending in `\`, as `w16f_windir` does for the Windows directory, and
+`OpenFile`'s search (§124.21.3) uses it; `GetSystemDirectory` and
+`VerFindFile` (§124.24.9) copy the same `od_s_system` after the Windows
+directory. The Windows directory is two spellings that agree today:
+`w16s_dir` (`:\SYSTEM\APPDATA\WIN16`) for the path and `od_enter` plus
+`w16pf_s_dir` for the walk. The room: no resident byte; 149 bytes of the
+library part (64,680 of it on kern_mega) and 11 of part 9.
 
 #### 124.20.6 The gate rows
 
@@ -234885,9 +234929,9 @@ an `int` does, so the two ways in are one DOS with one handle table.
 | `_lread`, `_lwrite` | `3Fh`, `40h`; the count, or -1. `_lwrite` of 0 bytes truncates, as `40h` does (§96.11.6.2) |
 | `_llseek(h, offset, origin)` | `42h`; the new position as a `LONG` |
 | `_lclose` | `3Eh`; 0, or -1 |
-| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5); the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
+| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5) and then in the system directory (§124.20.5.1), and not found there is `nErrCode` 2 even while the system folder is not made yet; the program's own folder (when the program has moved away from it) and `PATH` are not searched, Windows 3.1's last two places; the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
 | `GetTempFileName(drive, prefix, unique, buf)` | `X:\~PPPuuuu.TMP` in the Windows directory (Windows used `TEMP`, and WIN16 has no environment); `TF_FORCEDRIVE` puts it at the root of that drive. With `unique` 0 a number is taken from the clock and stepped until the name is free, and the file is CREATED, as Windows did, so a second call cannot answer the same name. The number |
-| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5) |
+| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5, §124.20.5.1) |
 | `AnsiToOem`, `OemToAnsi`, `AnsiToOemBuff`, `OemToAnsiBuff` | the bytes copied: the two sets agree on every character a file name holds |
 | `DOS3Call` | `int 21h`, and so the core for the calls 124.21.2 forwards |
 | `DlgDirList(dlg, spec, list, static, type)` | Windows 3.0's File Open: a folder or drive in the spec is moved to first (`0Eh`, `3Bh`) and the spec left holding its file part; the list box is emptied and given the files the spec finds (`4Eh`/`4Fh`, on a DTA of WIN16's, the program's put back after), then `[folder]` with `DDL_DIRECTORY` and `[-a-]` with `DDL_DRIVES`, in lower case as Windows showed them; the static control gets the current folder, `b:\docs`. FALSE for a folder or drive that is not there. The controls are WIN16's own (§124.13), so their procedures are called directly |
@@ -235769,7 +235813,7 @@ state went in with S18, in the library part:
 |---|---|
 | `GlobalNotify` (KERNEL.154) | kept by nothing: a block allocated `GMEM_NOTIFY` is never discarded (§124.9, S19b), so there is no discard to be told of |
 | `GlobalLRUNewest`, `GlobalLRUOldest` (KERNEL.164, 163) | the handle; the block becomes the last, or the first, a shortage discards (§124.9, S19b) |
-| `GetFreeSpace` (KERNEL.169) | `GlobalCompact(0)`'s answer, the largest free run - not the sum Windows gave, which is never less. On kern_mega the largest run plus all of the heap's free memory outside the arenas (§124.25.1) |
+| `GetFreeSpace` (KERNEL.169) | what `GlobalAlloc` could obtain, as a SUM, as Windows 3.1's standard mode answered: the free and discardable memory of the arenas plus the room a new arena could take (§124.25.1, *What GetFreeSpace says*). `GlobalCompact(0)` answers the largest block of the same accounting |
 | `GetTempDrive` (KERNEL.92) | the Windows directory's drive (§124.21.3): its letter in AL, `:` in AH, DX = 1, as Wine's `GetTempDrive16` |
 | `ClipCursor` (USER.16) | nothing: the pointer is os8088's and is not confined |
 | `SetRectEmpty`, `IsRectEmpty`, `UnionRect` (USER.73, 75, 80) | as Windows': a rectangle with no width or no height is empty, and `UnionRect` ignores an empty one, emptying the destination and answering FALSE when both are |
@@ -236099,9 +236143,10 @@ opens it, so a packed `.DL_` answers its version as its expansion would.
 | `VerFindFile` (VER.8) | where a file goes: a shared one (`VFFF_ISSHAREDFILE`) to the system directory, anything else to `szAppDir`. Where it is now: the destination if it is there, otherwise the other one of those two with `VFF_CURNEDEST`. A buffer too small is filled as far as it holds, with `VFF_BUFFTOOSMALL`, and each length is set to what was needed. Each length's pointer is read before its buffer's `les` (2026-11-02; the same defect as `OemToAnsi`'s, read through the buffer's segment) |
 | `VerInstallFile` (VER.9) | `szSrcDir\szSrcFileName`, expanded if it is SZDD, written to `szDestDir\szDestFileName`. Then, unless `VIFF_DONTDELETEOLD`, the copy in `szCurDir` is deleted when that is another directory. 0, or `VIF_CANNOTREADSRC`, `VIF_CANNOTCREATE`, `VIF_OUTOFSPACE` (a short write: the partial file is deleted) or `VIF_CANNOTDELETECUR` |
 
-WIN16's Windows directory and system directory are one directory (O5,
-§124.14), so a shared file and a program's own file found there are the same
-file.
+WIN16's system directory is `SYSTEM` under its Windows directory
+(§124.20.5.1): a shared file goes there and a program's own file to its
+`szAppDir`, as on Windows. (Until 2026-11-04 the two were one directory; see
+§124.20.5.1 for why that could not stay.)
 
 The language table is the one Windows 3.1's own `VER.DLL` answers, read off
 the reference machine (the win16-reference skill), with its ids. An id not
@@ -236240,8 +236285,9 @@ itself. **LZT.EXE** (`tests/win16/lzt.c`, its `VERSIONINFO` in
   and refuse a source that is not there.
 
 Its message box must be `LZT OK 24000`. When it has ended, `SAMPLE.TXT` at
-B:'s root and `SYSTEM\APPDATA\WIN16\SECOND.DAT` read off the floppy image
-must be the host's expansions, byte for byte.
+B:'s root and `SYSTEM\APPDATA\WIN16\SYSTEM\SECOND.DAT` (the system
+directory, §124.20.5.1) read off the floppy image must be the host's
+expansions, byte for byte.
 
 **`win16shx`** (soak, QEMU; `make win16fixtures`): `ROOT.TXT` at B:'s
 root and `SHX.TXT` in a folder, `DOCS`. **SHX.EXE** (`tests/win16/shx.c`)
@@ -236293,7 +236339,7 @@ So WIN16 keeps three kinds of claim and no more:
 
 | claim | how many |
 |---|---|
-| the program (§124.20.2) | one, and a second task's (§124.28.5) |
+| the program (§124.20.2) | one; on the kern_mega arm also a second task's (§124.28.5) |
 | the library part (§124.19) | one, from its first call |
 | the global heap's arenas (§124.9) | at most `W16_NARENA` = 4 (3 until S21; on the kern_mega arm 3 until 2026-11-02, §124.31.1). They are 32 KB, then 64 KB, then the largest free run less `W16_ARKEEP` = 32 KB (96 KB on the kern_mega arm), then the same again. Each is the size of a larger request instead. When a size cannot be had, the claim is tried at three quarters of that, and again, down to the request's own size (halves until 2026-11-02: Arcade's setup asked for 408 KB for its fourth arena with 374 KB left in the arm's map, got 204, and its `LoadBitmap` of a 277 x 160 picture then found no 22 KB run; three quarters gets 306) |
 
@@ -236359,20 +236405,62 @@ The count was chosen against the eight, not against the memory:
 the three is free, so they say what `GlobalAlloc` can actually get. Since S20
 they count the code segments `GlobalAlloc` may discard as well (§124.26.5).
 
-**Not done, pinned:** `GetFreeSpace` still answers the largest free run
-(§124.23.9), where Windows answered the sum. Paintbrush sizes its bands from
-it, so its bands are smaller here than on Windows, and it keeps more of
-them.
+**What GetFreeSpace says** *(owner decision, 2026-11-04)*. Windows 3.1's
+standard mode answered `GetFreeSpace(0)` with the SUM of the global heap's
+free and discardable memory, and `GlobalCompact(0)` with its largest block.
+WIN16 answers both from one accounting of what `GlobalAlloc` could really
+obtain, per arm, with no special case for any caller:
 
-**On kern_mega, nearer the sum** *(WIN16 S24)*: `GetFreeSpace` answers the
-largest run in an arena **plus all of the heap's free memory** outside the
-arenas, whether or not a slot is free (`OSAPI_MEM_AVAIL`'s BX), at most a
-megabyte. InstallShield 3's launcher (`SETUP.EXE`, *ISSET_SE*) refuses below
-700,000 bytes with an error whose text its own string table lacks, so it
-showed an empty box; on QEMU's 16 MB kern_mega the largest run was 388 KB
-and the heap held 510 KB more. Real mode keeps the largest run: 640 KB never
-reaches 700,000, and on Windows 3.0's real mode that launcher refused too.
-`GlobalCompact` is unchanged on both: it is what one `GlobalAlloc` gets.
+- **the arenas**: the sum over all of them of the free blocks and of the
+  loaded code segments that are not kept (`w16_gcan`, §124.26.5), one
+  paragraph of header less. `GlobalCompact`'s figure is the largest run of
+  these, not the sum;
+- **room for a new arena**, counted only while one of the four arena slots
+  is free (the room is `R`, and `L` is the largest block it could be):
+  - *kern_big*: `OSAPI_MEM_P` `MEMP_AVAIL`'s total `R` and largest claim `L`
+    of the conventional heap;
+  - *kern_mega*: the claims come from the heap above and below 1 MB, and
+    each is entered in the 960 KB map (§124.31.3), so `R` is the smaller of
+    the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
+    the conventional heap's total plus the extended pool's free KB
+    (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
+    and the larger of the conventional largest claim and the pool's KB. The
+    gap is taken less the 31 paragraphs `w16_vnew` may skip to keep a
+    claim's phase, and in whole KB, the unit the pool grants a claim in. No
+    room while the map has no free row;
+  - on both, `R` is at most one `L` for each arena that could still be made
+    (the free arena slots, and on kern_mega no more than its free map
+    rows): a heap of many small holes is not memory four arenas can take.
+
+`GetFreeSpace` is the arenas' sum plus `R`; `GlobalCompact` is the larger of
+the arenas' largest run and `L`. The figure is at most the map's size on
+kern_mega and at most 640 KB on kern_big, so on kern_big it cannot reach
+InstallShield 3's 700,000 (its launcher `SETUP.EXE` refuses below that with
+string 7068, *Error 111*, and on Windows 3.0's real mode refused too); on
+kern_mega it passes while the map is mostly free. Before this the answer was
+the largest run (kern_big) or the largest run plus the conventional heap's
+free memory (kern_mega), which on QEMU was 545,376 bytes while 154 KB of the
+map and the whole extended pool were unused. A program that sizes buffers
+from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
+asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
+bitmap when the answer is at least four times the picture: 614,400 bytes for
+640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
+`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
+for this operation*, both before this change and after it (a look of each,
+2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
+(`win16pbrush`). The one-band bitmap is the likely cause, read from
+`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
+what would cure it, not a smaller figure.
+
+The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
+and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
+that call into it, so a program that cannot have the part is answered 0
+rather than ended as a missing part ends a call: Calculator calls
+`GlobalCompact(-1)` only when a `GlobalReAlloc` was refused, the moment the
+part is least likely to fit, and then shows its own message. 0 is honest
+there: the part is a heap block of 16 KB (37 KB on kern_mega), and when it cannot be
+had no block that large can.
 
 #### 124.25.2 A library's local heap has room *(S19b batch 1)*
 
@@ -236950,9 +237038,9 @@ entry pointed into another segment. Windows Help started by Calculator
   scans from the int's frame.
 
 **What a program is told is free.** `GlobalCompact` and `GetFreeSpace`
-(§124.25.1) answer the largest run of an arena made of free blocks and of
-loaded code segments that are not kept (`w16_gcan`), since `GlobalAlloc`
-discards those to make the room. One that is in use is counted too: the
+(§124.25.1) count the free blocks and the loaded code segments that are not
+kept (`w16_gcan`) of the arenas - the largest run for `GlobalCompact`, the sum
+for `GetFreeSpace` - since `GlobalAlloc` discards those to make the room. One that is in use is counted too: the
 stack is scanned only when a segment is about to go, and Windows counted
 all of its discardable memory. Without this Paintbrush 3.0 stopped at
 *Insufficient memory to edit image* on QEMU's 640 KB: its start-up loads
@@ -237760,28 +237848,30 @@ Windows' own:**
 | 11 | it is not a Windows program WIN16 can run |
 | 16 | `W16_MAXTASK` tasks already run |
 
-**A second program takes a claim when it can** *(L2, 2026-11-04)*. The
-first program's segments are its claim, one of the eight (§124.25.1). A
-program started while only one task runs (`w16_ntk` = 1) asks for a claim
-of its own too, laid out as the first's is, and keeps it as `W16K_FL` = 0.
-It has to, because the arenas are a few claims of fixed size and nothing
-else in the machine can be spent on them: Sir Hangman's engine
-(`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code segments, 404 KB,
-beside the launcher that started it, and the engine's DGROUP, up to 64 KB,
-is room the arenas' code then cannot have. Counted against §124.25.1's
-kinds, two programs, the library part and four arenas are seven claims, and
-the eighth is left to the transient ones (a part read and copied, a large
-bitmap, the next program's NE tables), so **at most two tasks hold a
-claim**: a third program, or a second while two already run, and a program
-whose claim is refused, put their segments in one fixed block of the global
-heap, laid out as the claim would be, as before (`W16K_FL` = 1). The arenas
-grow to hold it, within their four (§124.25.1), and it loads less at launch
-than a first program does (§124.26.3). What that costs on `kern_big`, whose
-owner limit is eight (§50): with two programs holding claims and all four
-arenas made, a third launch has one claim left for its NE tables and, when
-no task has kept the loader part (§124.26.3), the part's own read as well,
-so it can be refused with *Not enough memory* where a block would have
-loaded it. `kern_mega` allows twelve, and its map ten rows (§124.31.3).
+**A second program takes a claim when it can, on kern_mega** *(L2, 2026-11-04)*.
+The first program's segments are its claim, one of the owner's claims
+(§124.25.1). On the kern_mega arm a program started while only one task runs
+(`w16_ntk` = 1) asks for a claim of its own too, laid out as the first's is,
+and keeps it as `W16K_FL` = 0. It has to, because the arenas are a few
+claims of fixed size and nothing else in the machine can be spent on them:
+Sir Hangman's engine (`_INS0433._MP`, 542,720 bytes) keeps all 64 of its code
+segments, 404 KB, beside the launcher that started it, and the engine's
+DGROUP, up to 64 KB, is room the arenas' code then cannot have. So **at most
+two tasks hold a claim** there: a third program, or a second while two
+already run, and a program whose claim is refused, put their segments in one
+fixed block of the global heap, laid out as the claim would be
+(`W16K_FL` = 1). The arenas grow to hold it, within their four (§124.25.1),
+and it loads less at launch than a first program does (§124.26.3).
+`kern_mega` allows twelve claims and its map ten rows (§124.31.3).
+
+**On kern_big the first program's is the only program claim** *(lead
+decision, 2026-11-04)*. Its owner limit is eight (§50): one program claim,
+the library part and four arenas are six, and the NE tables' claim and the
+part's own read are the transient two. A second claim would leave a third
+launch with one, and a launch that loaded as a block before L2 could then be
+refused with *Not enough memory*. So on the real arm every program after
+the first puts its segments in a block of the global heap (`W16K_FL` = 1),
+as before L2, whatever `w16_ntk` is.
 
 **Either is given back on every exit** *(L2)*. `w16t_end` frees a dead
 task's segments by its `W16K_FL`: a claim through `W16VFREE` (which also
