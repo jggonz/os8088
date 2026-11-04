@@ -14,6 +14,16 @@
  *               forwards the rest is still a working multi-line Edit;
  *   subclass    SetWindowLong(GWL_WNDPROC) on a real Edit, eat one key and
  *               pass the rest to the old procedure;
+ *   focus       SetFocus between a superclassed and a subclassed Edit,
+ *               EnableWindow and SetWindowText reach each procedure
+ *               (SPEC.md 124.25.20) SENT, before the call returns and in
+ *               Windows' order: the old window's WM_KILLFOCUS (wParam = the
+ *               new, GetFocus already the new) before the new one's
+ *               WM_SETFOCUS; disabling the focus is WM_KILLFOCUS then
+ *               WM_ENABLE. A WM_KILLFOCUS handler that takes the focus
+ *               back (the validation idiom) leaves it there, and the
+ *               window it was going to is told WM_KILLFOCUS and never
+ *               WM_SETFOCUS, as Windows and Wine do.
  *   many        seventy more classes, past the class block's first 64
  *               records: every one registers, and the first one's atom and
  *               name still find it after the block has grown.
@@ -28,6 +38,39 @@
 static char res[240];
 static FARPROC baseEdit, baseButton, oldEdit;
 static int supseen, subseen, subate;
+static char evlog[32];
+static int evn;
+static HWND killwp, killgf;
+static int bounce;
+
+/* one letter a message, upper case for the superclass, lower for the subclass */
+static void ev(UINT msg, WPARAM wp, int sup)
+{
+    char c = 0;
+
+    if (msg == WM_SETFOCUS) c = 'f';
+    else if (msg == WM_KILLFOCUS) {
+        c = 'k';
+        killwp = (HWND)wp;
+        killgf = GetFocus();
+    }
+    else if (msg == WM_ENABLE) c = 'e';
+    else if (msg == WM_SETTEXT) c = 't';
+    if (c && evn < (int)sizeof evlog - 1) {
+        evlog[evn++] = sup ? (char)(c - 32) : c;
+        evlog[evn] = 0;
+    }
+}
+
+static void pump(void)
+{
+    MSG m;
+
+    while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE)) {
+        TranslateMessage(&m);
+        DispatchMessage(&m);
+    }
+}
 
 static void check(int ok, const char *tag)
 {
@@ -40,6 +83,7 @@ static void check(int ok, const char *tag)
 LRESULT __export CALLBACK SupEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     supseen++;
+    ev(msg, wp, 1);
     return CallWindowProc(baseEdit, hwnd, msg, wp, lp);
 }
 
@@ -59,9 +103,16 @@ LRESULT __export CALLBACK SupButton(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 LRESULT __export CALLBACK SubEdit(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp)
 {
     subseen++;
+    ev(msg, wp, 0);
     if (msg == WM_CHAR && wp == 'x') {
         subate++;
         return 0;
+    }
+    if (msg == WM_KILLFOCUS && bounce) {    /* the validation idiom */
+        LRESULT r = CallWindowProc(oldEdit, hwnd, msg, wp, lp);
+        bounce = 0;
+        SetFocus(hwnd);
+        return r;
     }
     return CallWindowProc(oldEdit, hwnd, msg, wp, lp);
 }
@@ -180,6 +231,47 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(strcmp(buf, "ab") == 0, "subtext");
     check(subate == 1, "subate");
     check(subseen >= 4, "subseen");
+
+    /* focus, enable and text reach the procedures SENT, before each
+     * call returns, in Windows' order: no pump between them */
+    SetFocus(s);
+    pump();
+    evn = 0; evlog[0] = 0;
+    SetFocus(e);                        /* s: kill, e: set */
+    check(strcmp(evlog, "kF") == 0, "fsent");
+    check(killwp == e, "killwp");
+    check(killgf == e, "killgf");
+    SetFocus(s);                        /* e: kill, s: set */
+    EnableWindow(e, FALSE);
+    EnableWindow(e, TRUE);
+    SetWindowText(e, "q");
+    SetWindowText(s, "r");
+    check(strcmp(evlog, "kFKfEETt") == 0, "evorder");
+    if (strcmp(evlog, "kFKfEETt") != 0) {
+        strcat(res, " ev=");
+        strcat(res, evlog);
+    }
+    pump();
+
+    /* a WM_KILLFOCUS handler takes it back: e is killed, never set */
+    evn = 0; evlog[0] = 0;
+    bounce = 1;
+    SetFocus(e);
+    check(GetFocus() == s, "bounce");
+    check(strcmp(evlog, "kKf") == 0, "bounceev");
+    if (strcmp(evlog, "kKf") != 0) {
+        strcat(res, " bv=");
+        strcat(res, evlog);
+    }
+    pump();
+
+    /* disabling the focus: its WM_KILLFOCUS, then its WM_ENABLE */
+    evn = 0; evlog[0] = 0;
+    EnableWindow(s, FALSE);
+    check(GetFocus() == 0, "disfocus");
+    EnableWindow(s, TRUE);
+    check(strcmp(evlog, "kee") == 0, "disev");
+    pump();
 
     /* many: the table grows past its first 64 */
     wc.lpfnWndProc = WndProc;

@@ -117,6 +117,10 @@ W16_NMDC     equ 8              ; memory DCs at once: Paintbrush's text tool
                                 ;   holds five (SPEC.md 124.25.7)
 W16_DCMAX    equ 3              ; window DCs open under the current one
 W16_SVMAX    equ 2              ; SaveDC's states at once (SPEC.md 124.22.11)
+W16_NFMAX    equ 4              ; messages SetFocus/EnableWindow send on return:
+                                ;   two of their own after an outer call's two
+                                ;   (a WM_KILLFOCUS handler's SetFocus, 124.25.20)
+W16_NFSZ     equ 10             ; ...each one [w16_sm_*]: window, message, wParam, lParam
 W16S_QN      equ 32             ; SOUND's queue, in notes (SPEC.md 124.15.1:
 W16S_QE      equ 6              ;   Windows' 192 bytes), and a note's bytes
 W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
@@ -894,11 +898,12 @@ W16_TRN equ 256                    ;   arm's its one data segment. Raise it
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
     W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
-    ; --- S17: focus notifications sent from SetFocus (SPEC.md 124.22.6) ---
-    W16BSS w16_nfdefer, 1       ; 1: inside a program's SetFocus
-    W16BSS w16_nfn, 1           ; the notifications it raised
+    ; --- S17: focus notifications sent from SetFocus (SPEC.md 124.22.6),
+    ; and the focus and enable messages for a program's procedure (124.25.20)
+    W16BSS w16_nfdefer, 1       ; 1: inside a program's SetFocus/EnableWindow
+    W16BSS w16_nfn, 1           ; the messages it raised
     W16BSS w16_nfi, 1           ; ...and the next one to send
-    W16BSS w16_nfq, 8 * 2       ; each its parent, wParam and lParam
+    W16BSS w16_nfq, W16_NFSZ * W16_NFMAX ; each [w16_sm_*] as it was queued
     ; --- S17: SaveDC's states (SPEC.md 124.22.11) ---
     W16BSS w16_svn, 1           ; how many are saved
     W16BSS w16_svdc, W16_SVMAX * W16_DCSZ

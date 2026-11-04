@@ -233212,8 +233212,10 @@ parent's client, and nothing in os8088 knows it exists:
 - A disabled window (`EnableWindow`), or a window inside a disabled
   window, gets no mouse or key input.
 - `SetFocus` and `GetFocus`. `WM_SETFOCUS` and `WM_KILLFOCUS` go to WIN16's
-  own controls (§124.13) at once, and are posted to a program's own
-  windows (§124.22.6, S17).
+  own controls (§124.13) at once while the control's procedure is still
+  WIN16's. A program's procedure - its own window's, or a control's it has
+  replaced - is SENT them before the program's `SetFocus` returns, and
+  posted them when WIN16 moved the focus itself (§124.22.6, §124.25.20).
 - `GetWindowText`, `SetWindowText` (a top-level window's is the os8088
   title), `GetWindowTextLength`, `GetParent`, `IsWindow`, `IsChild`,
   `IsWindowVisible`, `IsWindowEnabled`, `GetWindowRect`, `ScreenToClient`
@@ -237331,6 +237333,92 @@ does cost is `GetClassName`, which answers the stored name - upper case and
 cut at 16 - so a program comparing it with a long name of its own does not
 match (open; VB calls `GetClassName` then `lstrcmpi` on its MessageBox path,
 operand not read).
+
+#### 124.25.20 Focus and enable reach the window's procedure, sent *(WIN16-NEXT `kindmsg`, DECISIONS 14:00)*
+
+Windows SENDS `WM_KILLFOCUS` and `WM_SETFOCUS` (SetFocus: the focus is the
+new window first, then the old window is sent `WM_KILLFOCUS` with wParam =
+the new, then the new `WM_SETFOCUS` with wParam = the old) and `WM_ENABLE`
+(EnableWindow, wParam = the new state; disabling the window with the focus
+is `SetFocus(NULL)` first) to the window's procedure, before the call
+returns, so a superclass (Visual Basic's `ThunderTextBox` over `Edit`) or a
+subclass (`SetWindowLong` `GWL_WNDPROC`) sees them; VB's GotFocus and
+LostFocus events are those messages. WIN16 chose the recipient by the
+window's *kind*, so a control whose procedure a program had replaced was
+still told directly and the program never knew, and a program's own window
+was POSTED them (S17). It now chooses by whether the procedure is still
+WIN16's (`w16_isctl`, as `w16_sendwnd` and the dialog loop already choose),
+and a program's procedure is sent them when the program caused them:
+
+| message | procedure still WIN16's | a program's procedure: from the program's `SetFocus`/`EnableWindow` | ...when WIN16 moved the focus itself |
+|---|---|---|---|
+| `WM_KILLFOCUS`, `WM_SETFOCUS` | at once, in the control | **sent** before the call returns, Windows' order | posted (124.22.6) |
+| `WM_ENABLE` (a control's) | at once, in the control | **sent**, after the `WM_KILLFOCUS` disabling causes | posted |
+| `WM_SETTEXT` (`SetWindowText`) | at once | sent: the program's procedure runs, and its `CallWindowProc`/`DefWindowProc` reaches the control (already so since 124.25.18) | - |
+
+**How it is sent.** It is S17's own mechanism for `EN_KILLFOCUS` and
+`EN_SETFOCUS` (124.13), widened: while the program's `SetFocus` or
+`EnableWindow` runs, every message it raises for a program - those
+notifications, and now a program's `WM_KILLFOCUS`, `WM_SETFOCUS` and
+`WM_ENABLE` - is queued (`w16d_nfq`, up to `W16_NFMAX` = 4 entries, each the
+whole `[w16_sm_*]`), the focus state is made final, and the import's handler
+then sends the queue in order through `w16_sendwnd`, each send's
+continuation the next (`w16_nfsend`). A control's own procedure is still run
+at once inside the call (it never calls the program). Re-entrancy is what
+the queue is shaped by:
+
+- **A handler that calls `SetFocus` or `EnableWindow` again** (the edit
+  validation idiom: a `WM_KILLFOCUS` that finds the field bad and takes the
+  focus back; VB's LostFocus doing the same). The inner call finds the
+  outer queue unfinished and appends to it rather than emptying it
+  (`w16_nfrun`), so nothing the outer call owes is lost, and its own sends
+  run first. A queued `WM_SETFOCUS` is dropped when the focus is no longer
+  its window by the time it is reached, as Wine's `set_focus_window` and
+  Windows 3.1 do: `SetFocus(B)` from A, A's handler `SetFocus(A)` - A is
+  sent `WM_KILLFOCUS`, B is sent `WM_KILLFOCUS` and never `WM_SETFOCUS`,
+  and A `WM_SETFOCUS`; the focus stays on A.
+- **A window destroyed by an earlier handler** is skipped (`w16_hwnd2rec`
+  fails), where a posted message used to reach a dead HWND.
+- **A full queue** (a fifth entry: a nested call inside a nested call)
+  posts that one message, as before.
+
+The **post** is kept, and only, where WIN16 itself moved the focus: a click
+on a control, the dialog manager's Tab and mnemonics, `DefWindowProc`'s
+`WM_ACTIVATE`, a window destroyed or disabled from inside WIN16. Those
+change the focus in the middle of other work (the dialog manager's
+navigation, a click's delivery, a destroy's walk) whose remainder runs on
+after it on the host's stack; a call into the program there would need that
+remainder rewritten as continuations, which only the two imports' handlers
+are. A click's focus messages arrive one message later than Windows', which
+no program here has been seen to tell. And a program that never fetched the dialog part (no
+control, no dialog, no caret, no menu) is posted them too, rather than made
+to fetch 64KB for it. The notification a control raises when a program's
+procedure FORWARDS a sent focus message to it (`CallWindowProc` to the
+Edit) arrives after the send it came from, posted, as every other control
+notification (124.13).
+
+**The dialog part's own messages to a control** (`w16d_cmsg`: the dialog
+manager's `WM_GETDLGCODE`, Tab's `EM_SETSEL` that selects an EDIT's text,
+`CheckDlgButton`, `IsDlgButtonChecked` and `CheckRadioButton`'s
+`BM_SETCHECK`/`BM_GETCHECK`) answered **0** for a replaced procedure, so a
+superclassed checkbox could never be checked through `CheckDlgButton`, and
+read unchecked, and a superclassed EDIT was navigated as a plain control.
+They are now answered by the control under the replaced procedure (its
+kind's procedure, at once); the program's procedure does not see them,
+which is the one difference left from Windows there, and a program's own
+window or a dialog still answers 0.
+
+Cost, kern_mega and real mode alike: **+41 resident bytes** (image +16,
+bss +25: the queue, 16 bytes to 40) against plan/win16-next af096659a, and
+the dialog part (part 3) **+12**: `w16d_tell` and the queue's one copy,
+against what `w16d_cmsg` gave back. A focus change between two of WIN16's
+controls crosses into the dialog part as often as before - once a control
+told, `w16_tellfocus`'s `DCALL` where `w16_intproc`'s was - so a dialog of
+many controls pays nothing per Tab. A program's own window is sent its two
+messages where it was posted them, so it is entered at once rather than
+from the program's next `GetMessage` and `DispatchMessage`: two imports
+fewer a focus change, and one far call into the dialog part more (the
+queue).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
