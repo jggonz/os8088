@@ -30,6 +30,11 @@ W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
 W16_ARKEEP  equ 96              ; ...on kern_mega the library part's 62 KB
 %endif                          ;   too: its fetch is conventional (124.31.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
+%ifdef PKG_MEGA
+  %if W16_GH0 + 2 * W16_NGH != W16V_LO
+    %error "W16V_LO must be the end of the handle range (SPEC.md 124.31.3)"
+  %endif
+%endif
 W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
 W16_GHNOTE  equ 4               ;   ...and GMEM_NOTIFY: discarded only when
                                 ;   GlobalNotify's procedure says so
@@ -378,7 +383,7 @@ w16_garena:
     jnc .got1
     pop cx                          ; the floor would not go: three
     push cx                         ;   quarters of it, and again, down to
-    cmp ax, cx                      ;   the request (the arm's map is 960
+    cmp ax, cx                      ;   the request (the arm's map is 1,012
     jbe .no1                        ;   KB, so a fourth arena is what it
     mov dx, ax                      ;   has left: halving left a third of
     shr dx, 1                       ;   that unused)
@@ -884,9 +889,8 @@ w16k_glock:
     xor ax, ax
     ret
 .null:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov cl, 2                       ; the DGROUP is a block too (124.9.2)
+    jmp w16_dgx
 
 ; GlobalUnlock (KERNEL.19) - args: +0 hMem. AX = the lock count left
 w16k_gunlock:
@@ -922,9 +926,8 @@ w16k_gsize:
     dec ax
     jmp short w16_p2b
 .zero:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov cl, 4
+    jmp w16_dgx
 
 ; w16_p2b - AX paragraphs -> DX:AX bytes. Clobbers CX
 w16_p2b:
@@ -956,9 +959,8 @@ w16k_ghandle:
 %endif
     ret
 .zero:
-    xor ax, ax
-    xor dx, dx
-    ret
+    xor cl, cl
+    jmp w16_dgx
 
 ; GlobalFlags (KERNEL.22) - args: +0 hMem. AX = the lock count, and
 ; GMEM_DISCARDED for a discarded handle
@@ -1067,7 +1069,11 @@ w16k_grealloc:
     cmp ax, W16_GH0                 ;   discarded is all that changes here
     jb .out
     cmp ax, W16_GH0 + 2 * W16_NGH
-    jae .out
+%ifdef PKG_MEGA
+    jae .mfx
+%else
+    jae .out                        ; (a fixed one IS its handle)
+%endif
     mov si, ax
     sub si, W16_GH0
     and byte [w16_ghf + si], ~(W16_GHDISC | W16_GHNOTE)
@@ -1080,6 +1086,11 @@ w16k_grealloc:
 .mk:
     or [w16_ghf + si], cl
     jmp .out
+%ifdef PKG_MEGA
+.mfx:                               ; a fixed one: the handle as the program
+    mov ax, [es:bx + 6]             ;   passed it. W16POUT would read a block
+    jmp .dx                         ;   header before a DGROUP, which has none
+%endif                              ;   (SPEC.md 124.9.2)
 .size:
     add ax, 15
     adc dx, 0
@@ -1301,12 +1312,42 @@ w16k_grealloc:
     mov ax, dx
     jmp short .out
 .fail:
-    xor ax, ax
+    mov cl, 6                       ; the DGROUP is a block too (124.9.2)
+    call w16_dgx
+    jmp short .dx
 .out:
     W16POUT
+.dx:
     xor dx, dx
     pop di
     pop si
+    ret
+
+; w16_dgx - the Global calls' last resort: CL = 0 GlobalHandle, 2 GlobalLock,
+; 4 GlobalSize, 6 GlobalReAlloc (w16s_dgtab). A handle that is the running
+; program's DGROUP, as the program passed it, is answered by the
+; system-library part (SPEC.md 124.9.2), with ES:BX at that argument; any
+; other is 0 here, and nothing is fetched for it. A DGROUP whose part cannot
+; be read ends the program saying so, as any of the part's imports does
+w16_dgx:
+    call w16_args
+    xor ch, ch
+    cmp cl, 6                       ; GlobalReAlloc's handle is at +6
+    jne .h
+    add bx, cx
+.h:
+    mov ax, [es:bx]
+    cmp ax, [w16_dgroup]
+    jne .z
+    add cx, w16s_dgtab              ; XSEC-OK: [w16_sfn]'s value, an SCALL's
+    mov [w16_sfn], cx
+    call w16_scall
+    jnc .o
+    jmp w16_dispatch.nolib          ; (AX = DX = 0, the program ended)
+.z:
+    xor ax, ax
+    cwd
+.o:
     ret
 
 ; w16_gsteal - AX = a fresh moveable handle: its block goes to entry SI, and

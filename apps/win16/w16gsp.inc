@@ -282,4 +282,66 @@ w16s_cap:
 .out:
     pop cx
     ret
+; -----------------------------------------------------------------------------
+; The program's own DGROUP as a block of the global heap (SPEC.md 124.9.2).
+; The image's GlobalHandle, GlobalLock, GlobalSize and GlobalReAlloc end here
+; (w16_dgx, CL = 0, 2, 4, 6) when the handle is no block of an arena and IS
+; the running program's DGROUP: the image has tested it, and ES:BX -> that
+; argument. GlobalReAlloc's GMEM_MODIFY never fails, so never comes here.
+; Registers: ES, BX, AX, DX are free.
+; -----------------------------------------------------------------------------
+w16s_dgtab:
+    jmp short w16s_dgok             ; 0: GlobalHandle: AX = DX = DGROUP
+w16s_dgt2:
+    jmp short w16s_dgl              ; 2: GlobalLock
+w16s_dgt4:
+    jmp short w16s_dgs              ; 4: GlobalSize
+                                    ; 6: GlobalReAlloc, which follows
+
+; GlobalReAlloc - ES:BX -> +6 hMem, so dwBytes is at -4. AX = hMem when the
+; DGROUP is that big already, else 0 (it never moves)
+w16s_dgt6:
+%if w16s_dgt6 - w16s_dgtab != 6
+  %error "w16s_dgtab: GlobalReAlloc's row is not at +6"
+%endif
+    mov dx, [es:bx - 2]
+    mov ax, [es:bx - 4]
+    mov bx, [w16_dgsize]            ; 0 = 64 KB
+    or dx, dx
+    jz .low
+    cmp dx, 1                       ; 64 KB exactly, of a 64 KB DGROUP
+    jne w16s_dgz
+    or ax, ax
+    jnz w16s_dgz
+    or bx, bx
+    jnz w16s_dgz
+    jmp short w16s_dgok
+.low:
+    or bx, bx
+    jz w16s_dgok
+    cmp ax, bx
+    ja w16s_dgz
+w16s_dgok:
+    mov ax, [w16_dgroup]
+    mov dx, ax
+    ret
+
+w16s_dgl:                           ; GlobalLock: DX:AX = DGROUP:0
+    mov dx, [w16_dgroup]
+    xor ax, ax
+    ret
+
+w16s_dgs:                           ; GlobalSize: DX:AX = its bytes
+    xor dx, dx
+    mov ax, [w16_dgsize]
+    or ax, ax
+    jnz .r
+    inc dx                          ; 0 = 64 KB
+.r:
+    ret
+
+w16s_dgz:                           ; more than it holds: refused
+    xor ax, ax
+    cwd
+    ret
 section .text

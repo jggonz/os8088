@@ -42,7 +42,8 @@ W16SYS w16g_setbmbits
     jc .none
     mov [w16_scratch], cx           ; bytes left to take
     mov bp, si                      ; BP = where they began
-    mov dx, [w16b_h + bx]
+    call w16_bmcaps                 ; (a tiled bitmap: the first tile's rows,
+    mov dx, ax                      ;   SPEC.md 124.25.17)
     mov [w16_scratch + 2], dx       ; rows to go
     xor di, di                      ; DI = the row in the bitmap
     cmp byte [w16b_mono + bx], 0
@@ -484,15 +485,157 @@ W16SYS w16g_getdibits
     pop si
     ret
 
+; -----------------------------------------------------------------------------
+; A TILED bitmap (SPEC.md 124.25.17): past W16_BMMAX, one fixed block of the
+; global heap cut into tiles of 65535 / stride rows, each 64KB (1000h
+; paragraphs) after the last, so no row straddles two and the next tile is
+; the block's paragraph + 1000h on both arms. Part 9's, out of the library
+; part's 64KB: w16_bmnew's .huge comes here first, which fetches the part,
+; and the part stays until the program ends, so every later call finds it.
+; -----------------------------------------------------------------------------
+
+; w16_bmtrow - BX = bitmap slot * 2 -> AX = the rows a tile holds. Keeps all
+; but AX
+w16_bmtrow:
+    push dx
+    mov ax, 0xFFFF
+    xor dx, dx
+    div word [w16b_str + bx]
+    pop dx
+    ret
+
+; w16_bmrps - w16_bmrp, here: AX = a row, BX = bitmap slot * 2 -> AX = its
+; byte offset, DX = the segment (the arm: the virtual paragraph) it is in.
+; Keeps all but AX and DX
+w16_bmrps:
+    test byte [w16b_mono + bx + 1], 2
+    jnz .tiled
+    mul word [w16b_str + bx]
+    mov dx, [w16b_seg + bx]
+    ret
+.tiled:
+    push cx
+    xchg ax, cx                     ; CX = the row
+    call w16_bmtrow
+    xchg ax, cx                     ; AX = the row, CX = rows a tile
+    xor dx, dx
+    div cx                          ; AX = its tile, DX = its row in it
+    xchg ax, dx
+    push dx
+    mul word [w16b_str + bx]        ; AX = the offset in the tile
+    pop dx
+    mov cl, 12
+    shl dx, cl                      ; the tile's paragraphs in
+    add dx, [w16b_seg + bx]
+    pop cx
+    ret
+
+; w16_bmcaps - w16_bmcap, here: BX = bitmap slot * 2 -> AX = the rows one
+; tile holds, at most the bitmap's. Keeps all but AX
+w16_bmcaps:
+    call w16_bmtrow
+    test byte [w16b_mono + bx + 1], 2
+    jz .h
+    cmp ax, [w16b_h + bx]
+    jbe .out
+.h:
+    mov ax, [w16b_h + bx]
+.out:
+    ret
+
+; w16_bmhuge - w16_bmnew's .huge: slot BX, its w16b_w, w16b_h and w16b_str
+; written -> CF=0 AX = the handle; CF=1 AX = 1 the heap is short, 0 too large.
+; ONE fixed block, (tiles - 1) x 64KB + the last tile's bytes, zeroed by
+; w16_gnew (black: CBLACK in both halves) through the arm's walk descriptor,
+; which holds no LDT entry past the call. Keeps all but AX
+w16_bmhuge:
+    push cx
+    push dx
+    call w16_bmtrow
+    mov cx, ax
+    mov ax, [w16b_h + bx]
+    xor dx, dx
+    div cx                          ; AX = the whole tiles, DX = rows beyond
+    xchg ax, dx
+    push dx
+    mul word [w16b_str + bx]        ; AX = the last tile's bytes (DX = 0)
+    pop dx                          ; DX:AX = whole tiles x 64KB + that
+    cmp dx, 15                      ; (w16_gnew's arena: under 1023KB)
+    jae .big
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle, DX = the segment
+    or ax, ax
+    mov ax, 1
+    stc
+    jz .out
+    mov byte [w16b_mono + bx + 1], 2
+    mov [w16b_seg + bx], dx
+    lea ax, [bx + W16_BMP0]
+    clc
+    jmp short .out
+.big:
+    xor ax, ax
+    stc
+.out:
+    pop dx
+    pop cx
+    ret
+
+; w16_bmtiles - w16_bmcopy's for a tiled source on a byte: one BLIT4 a tile,
+; the source's rows from [w16b_sy], to the screen rect [w16_rl..rr] x
+; [w16_rt..rb], BX = the slot, BP = the stride. Takes AX, CX, DX, SI, ES
+w16_bmtiles:
+    mov ax, [w16b_sy]
+    mov [w16b_ty], ax               ; the next source row
+    mov ax, [w16_rt]
+    mov [w16b_tdy], ax              ; ...and the screen row it lands on
+.tile:
+    mov ax, [w16b_ty]
+    call w16_bmrps                  ; AX = the offset, DX = the tile's segment
+    mov si, [w16b_sx]
+    shr si, 1
+    add si, ax
+    W16SEG es, dx
+    call w16_bmtrow
+    mov cx, ax
+    mov ax, [w16b_ty]
+    xor dx, dx
+    div cx                          ; DX = its row in the tile
+    sub cx, dx                      ; CX = rows left in the tile
+    mov dx, [w16_rb]
+    sub dx, [w16b_tdy]
+    inc dx                          ; DX = screen rows still to draw
+    cmp dx, cx
+    jbe .tl
+    mov dx, cx
+.tl:
+    push dx
+    mov ax, [w16_rl]
+    mov cx, [w16_rr]
+    sub cx, ax
+    inc cx
+    push bx
+    mov bx, [w16b_tdy]
+    call OSAPI_GFX_BLIT4
+    pop bx
+    pop dx
+    add [w16b_tdy], dx
+    add [w16b_ty], dx
+    mov ax, [w16b_tdy]
+    cmp ax, [w16_rb]
+    jle .tile
+    ret
+
 ; w16_gdrow - bitmap [w16_gdslot]'s row DX at ES:DI in [w16_gdbpp] bits a
 ; pixel, [w16_gdstr] bytes; DI past it. Keeps all but AX, CX, DX, SI.
 w16_gdrow:
     push bx
     push bp
     mov bx, [w16_gdslot]
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.17)
     mov si, ax                      ; SI = the row in the bitmap
+    mov [w16_gdseg], dx             ; ...and the segment it is in
     mov bp, di
     add bp, [w16_gdstr]             ; BP = where the row ends
     xor dx, dx                      ; DX = the pixel
@@ -506,7 +649,7 @@ w16_gdrow:
     shr dx, 1
     pushf
     add si, dx
-    W16SEG ds, [w16b_seg + bx]
+    W16SEG ds, [w16_gdseg]
     mov al, [si]
     popf
     pop dx
@@ -746,14 +889,15 @@ w16r_can:
     push es
     mov bx, [w16_fbm]
     push ax
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.17)
+    mov [w16_gdseg], dx
     mov dx, ax
     pop ax
     shr ax, 1                       ; CF = a low nibble
     pushf
     add ax, dx
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, [w16_gdseg]
     mov bx, ax
     mov al, [es:bx]
     popf
@@ -2275,391 +2419,6 @@ W16SYS w16g_brind
 .out:
     xor dx, dx
     pop si
-    ret
-
-; -----------------------------------------------------------------------------
-; Arc (GDI.23) and Pie (GDI.26) - args: +0 yEnd, +2 xEnd, +4 yStart, +6 xStart,
-; +8 bottom, +10 right, +12 top, +14 left, +16 hDC. A circle of w16a_n = 64
-; steps scaled to the box (a vertex is (cx2 + rx2 * cos) / 2, in half pixels
-; so an even box has a centre between pixels), the two rays' exact ends and the
-; vertices between them, counter-clockwise: Polyline's points for Arc and, with
-; the centre first, Polygon's for Pie. The arguments are the caller's own to
-; overwrite: Polyline's/Polygon's {count, points, hDC} are written over them.
-; Parameters live in w16_gbuf past Polygon's crossings (192 bytes) and the
-; vertices after them.
-; -----------------------------------------------------------------------------
-W16A_P      equ w16_gbuf + 192
-w16a_cx2    equ W16A_P + 0          ; L + R - 1, T + B - 1, R - L - 1, B - T - 1
-w16a_cy2    equ W16A_P + 2
-w16a_rx2    equ W16A_P + 4
-w16a_ry2    equ W16A_P + 6
-w16a_psx    equ W16A_P + 8          ; the start and end points on the curve
-w16a_psy    equ W16A_P + 10
-w16a_pex    equ W16A_P + 12
-w16a_pey    equ W16A_P + 14
-w16a_sx     equ W16A_P + 16         ; the start ray's direction
-w16a_sy     equ W16A_P + 18
-w16a_ex     equ W16A_P + 20
-w16a_ey     equ W16A_P + 22
-w16a_is     equ W16A_P + 24         ; the start's vertex index
-w16a_k      equ W16A_P + 26
-w16a_cnt    equ W16A_P + 28
-w16a_vx     equ W16A_P + 30
-w16a_nl     equ W16A_P + 32         ; Sx^2 + Sy^2
-w16a_nh     equ W16A_P + 34
-w16a_pie    equ W16A_P + 36
-W16A_VTX    equ w16_gbuf + 256
-
-W16SYS w16g_arc
-    mov byte [w16a_pie], 0
-    jmp short w16a_do
-W16SYS w16g_pie
-    mov byte [w16a_pie], 1
-w16a_do:
-    push si
-    push di
-    push bp
-    ICALL w16_args
-    mov si, bx
-    mov ax, [es:si + 14]            ; left, right
-    mov dx, [es:si + 10]
-    mov cx, dx
-    add cx, ax
-    dec cx
-    mov [w16a_cx2], cx
-    sub dx, ax
-    dec dx
-    jle .degen
-    mov [w16a_rx2], dx
-    mov ax, [es:si + 12]            ; top, bottom
-    mov dx, [es:si + 8]
-    mov cx, dx
-    add cx, ax
-    dec cx
-    mov [w16a_cy2], cx
-    sub dx, ax
-    dec dx
-    jle .degen
-    mov [w16a_ry2], dx
-    mov ax, [es:si + 6]             ; the start ray
-    mov dx, [es:si + 4]
-    call w16a_ray
-    mov [w16a_psx], ax
-    mov [w16a_psy], dx
-    mov [w16a_sx], cx
-    mov [w16a_sy], bx
-    call w16a_idx
-    mov [w16a_is], ax
-    mov ax, [es:si + 2]             ; the end ray
-    mov dx, [es:si]
-    call w16a_ray
-    mov [w16a_pex], ax
-    mov [w16a_pey], dx
-    mov [w16a_ex], cx
-    mov [w16a_ey], bx
-    call w16a_idx
-    sub ax, [w16a_is]
-    and ax, 63
-    mov cx, ax                      ; CX = the vertices between the ends
-    jnz .build
-    mov ax, [w16a_sx]               ; the same bucket: cross(S, E) > 0 means
-    imul word [w16a_ey]             ;   E is just ahead of S - no vertex -
-    mov bx, ax                      ;   and anything else is round the whole
-    mov cx, dx                      ;   circle
-    mov ax, [w16a_sy]
-    imul word [w16a_ex]
-    sub bx, ax
-    sbb cx, dx
-    js .whole
-    or cx, bx
-    jnz .build0
-.whole:
-    mov cx, 64
-    jmp short .build
-.build0:
-    xor cx, cx
-.build:
-    mov di, W16A_VTX
-    xor bp, bp                      ; BP = the vertex count
-    cmp byte [w16a_pie], 0
-    je .first
-    mov ax, [w16a_cx2]              ; Pie: the centre first
-    sar ax, 1
-    mov [di], ax
-    mov ax, [w16a_cy2]
-    sar ax, 1
-    mov [di + 2], ax
-    add di, 4
-    inc bp
-.first:
-    mov ax, [w16a_psx]
-    mov [di], ax
-    mov ax, [w16a_psy]
-    mov [di + 2], ax
-    add di, 4
-    inc bp
-    mov word [w16a_k], 1
-    jcxz .last
-.vl:
-    mov ax, [w16a_is]
-    add ax, [w16a_k]
-    and ax, 63
-    call w16a_cs                    ; AX = cos, DX = sin (14 bits)
-    push dx
-    imul word [w16a_rx2]
-    shl ax, 1
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
-    add dx, [w16a_cx2]
-    sar dx, 1
-    mov [di], dx
-    pop ax
-    imul word [w16a_ry2]
-    shl ax, 1
-    rcl dx, 1
-    shl ax, 1
-    rcl dx, 1
-    mov ax, [w16a_cy2]
-    sub ax, dx
-    sar ax, 1
-    mov [di + 2], ax
-    add di, 4
-    inc bp
-    inc word [w16a_k]
-    loop .vl
-.last:
-    mov ax, [w16a_pex]
-    mov [di], ax
-    mov ax, [w16a_pey]
-    mov [di + 2], ax
-    inc bp
-    mov ax, [es:si + 16]            ; the arguments become Polyline's
-    mov [es:si + 6], ax
-    mov [es:si], bp
-    mov word [es:si + 2], W16A_VTX
-    mov [es:si + 4], ds
-    cmp byte [w16a_pie], 0
-    jne .pie
-    SLCALL w16g_polyline
-    jmp short .out
-.pie:
-    SLCALL w16g_polygon
-    jmp short .out
-.degen:
-    xor ax, ax
-.out:
-    xor dx, dx
-    pop bp
-    pop di
-    pop si
-    ret
-
-; w16a_cs - AX = a step of 64 round the circle -> AX = cos, DX = sin, scaled
-; to 16384. Keeps the rest.
-w16a_cs:
-    push bx
-    push cx
-    mov bx, ax
-    and bx, 15
-    shl bx, 1
-    mov dx, [cs:w16a_tab + bx]      ; DX = S, the sine of the step in its
-    neg bx                          ;   quadrant
-    push ax
-    mov ax, [cs:w16a_tab + 32 + bx] ; AX = C, its cosine
-    pop bx
-    mov cl, 4
-    shr bx, cl
-    and bl, 3                       ; BL = the quadrant
-    jz .out
-    cmp bl, 2
-    jb .q1
-    je .q2
-    xchg ax, dx                     ; q3: cos = S, sin = -C
-    neg dx
-    jmp short .out
-.q2:
-    neg ax                          ; q2: cos = -C, sin = -S
-    neg dx
-    jmp short .out
-.q1:
-    xchg ax, dx                     ; q1: cos = -S, sin = C
-    neg ax
-.out:
-    pop cx
-    pop bx
-    ret
-
-; w16a_tab - sin (j * 90 / 16 degrees) * 16384, j = 0 to 16
-w16a_tab:
-    dw 0, 1606, 3196, 4756, 6270, 7723, 9102, 10394, 11585
-    dw 12665, 13623, 14449, 15137, 15679, 16069, 16305, 16384
-
-; w16a_fit - DX:AX fits a signed word other than -32768: ZF=1. Clobbers BP.
-; -32768 is refused because w16a_idx's NEG cannot turn it over (a quarter
-; arc from 180 degrees drew three quarters and a chord), and because two of
-; them make w16a_ray's square 2^31, whose root's first DIV overflows
-; (Arc(0, 0, 257, 257, 64, 192, ...) was a divide error)
-w16a_fit:
-    push dx
-    push ax
-    cwd
-    mov bp, dx
-    pop ax
-    pop dx
-    cmp dx, bp
-    jne .r
-    mov bp, ax
-    neg bp                          ; OF=1 for 8000h alone, ZF=0 with it
-    jo .r
-    cmp ax, ax
-.r:
-    ret
-
-; w16a_ray - AX, DX = a point -> AX, DX = where the ray from the box's centre
-; through it meets the curve; CX, BX = the ray's direction in the circle's
-; frame, scaled to fit a word. Clobbers BP, DI. Keeps SI.
-w16a_ray:
-    shl ax, 1
-    sub ax, [w16a_cx2]              ; AX = 2 x - cx2
-    shl dx, 1
-    sub dx, [w16a_cy2]              ; DX = 2 y - cy2 (down)
-    mov cx, dx
-    imul word [w16a_ry2]            ; DX:AX = Sx = dx * ry2
-    mov bx, dx
-    xchg cx, ax                     ; BX:CX = Sx, AX = dy
-    neg ax
-    imul word [w16a_rx2]            ; DX:AX = Sy = -dy * rx2
-.red:
-    call w16a_fit
-    jne .sh
-    xchg ax, cx
-    xchg dx, bx
-    call w16a_fit
-    xchg ax, cx
-    xchg dx, bx
-    je .fits
-.sh:
-    sar dx, 1
-    rcr ax, 1
-    sar bx, 1
-    rcr cx, 1
-    jmp short .red
-.fits:
-    mov bx, ax                      ; BX = Sy, CX = Sx
-    mov ax, cx
-    or ax, bx
-    jnz .nz
-    mov cx, 1
-.nz:
-    mov ax, cx
-    imul cx
-    push dx
-    push ax
-    mov ax, bx
-    imul bx
-    pop bp
-    add ax, bp
-    pop bp
-    adc dx, bp
-    mov [w16a_nl], ax               ; the square of its length
-    mov [w16a_nh], dx
-    push cx
-    push bx
-    mov ax, cx                      ; DI = the larger of |Sx|, |Sy|, which
-    cwd                             ;   Newton's square root starts from
-    xor ax, dx
-    sub ax, dx
-    mov di, ax
-    mov ax, bx
-    cwd
-    xor ax, dx
-    sub ax, dx
-    cmp ax, di
-    jbe .nw0
-    mov di, ax
-.nw0:
-    mov cx, 4
-.nw:
-    mov dx, [w16a_nh]
-    mov ax, [w16a_nl]
-    div di
-    add ax, di
-    rcr ax, 1
-    mov di, ax                      ; DI = |S|, within a part in 2^20
-    loop .nw
-    pop bx
-    pop cx
-    mov ax, cx                      ; x = (cx2 + rx2 * Sx / |S|) / 2
-    cwd
-    xor ax, dx
-    sub ax, dx
-    mul word [w16a_rx2]
-    div di
-    or cx, cx
-    jns .px
-    neg ax
-.px:
-    add ax, [w16a_cx2]
-    sar ax, 1
-    push ax
-    mov ax, bx                      ; y = (cy2 - ry2 * Sy / |S|) / 2
-    cwd
-    xor ax, dx
-    sub ax, dx
-    mul word [w16a_ry2]
-    div di
-    or bx, bx
-    jns .py
-    neg ax
-.py:
-    mov dx, [w16a_cy2]
-    sub dx, ax
-    sar dx, 1
-    pop ax
-    ret
-
-; w16a_idx - CX, BX = a direction -> AX = the last vertex (of 64, from angle 0
-; counter-clockwise) at or before it. A direction in the lower half is turned
-; over and counted from vertex 32.
-w16a_idx:
-    xor dx, dx
-    or bx, bx
-    jg .up
-    jl .flip
-    or cx, cx
-    jg .up
-.flip:
-    neg cx
-    neg bx
-    mov dx, 32
-.up:
-    push dx
-    mov [w16a_vx], cx
-    mov [w16a_k], bx                ; (the direction's y; w16a_k is free here)
-    mov word [w16a_cnt], 0
-    xor di, di
-.l:
-    mov ax, di
-    call w16a_cs
-    mov bp, dx
-    imul word [w16a_k]              ; Ux * Vy
-    mov bx, ax
-    mov cx, dx
-    mov ax, bp
-    imul word [w16a_vx]             ; Uy * Vx
-    sub bx, ax
-    sbb cx, dx
-    js .no
-    inc word [w16a_cnt]
-.no:
-    inc di
-    cmp di, 32
-    jb .l
-    mov ax, [w16a_cnt]
-    dec ax
-    pop dx
-    add ax, dx
     ret
 
 section .text
