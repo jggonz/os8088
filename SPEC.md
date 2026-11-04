@@ -234726,7 +234726,7 @@ common half (S17), and end it with the usual toast when it reaches them.
 
 | call | answer |
 |---|---|
-| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; both, since WIN16 has no SYSTEM folder of its own. The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
+| `GetWindowsDirectory`, `GetSystemDirectory` | the folder `WIN.INI` is in (§124.14) as a DOS path, `A:\SYSTEM\APPDATA\WIN16` on WIN16's own volume; and for the system directory the `SYSTEM` folder under it (§124.20.5.1). The length; a buffer too small is left alone and the size it needs is answered, NUL included, as Windows did |
 | `OpenFile` | every file is absent until WIN16 has files (S16): `HFILE_ERROR`, the `OFSTRUCT`'s `nErrCode` 2 and its path empty. The Control Panel asks `OF_EXIST` for `SETUP.INF` and carries on without it |
 | `_lclose` | `HFILE_ERROR`: nothing is open |
 | `LoadLibrary`, `FreeLibrary` | 2, file not found, until a program's own DLLs load (S18); nothing to free |
@@ -234745,6 +234745,50 @@ itself and names in its dialog templates, and `DialogBox` refuses a template
 with a class it cannot create; S17 is where both land. The Settings menu has
 twelve items and the window's client is two rows of icons high, so its
 popup, which is kept inside the window (§124.11), shows the first eight.
+
+#### 124.20.5.1 The system directory *(2026-11-04, WIN16-NEXT mozcopy)*
+
+Windows 3.1 has two directories, `C:\WINDOWS` and `C:\WINDOWS\SYSTEM`, and
+WIN16 answered the one folder to both questions (O5, §124.14). Microsoft's
+Setup Toolkit showed why that cannot stand: Mozart's setup copies `MCI.VBX`,
+`MSGBLAST.VBX`, `MVFS2.DLL` and `PICCLIP.VBX` into `GetWindowsSysDir()`, and
+its last step is `RemoveFile(GetWindowsDir() + "\mci.vbx")` (and the other
+three), to get rid of copies an older Visual Basic put in the Windows
+directory. With one folder it deleted the files it had just installed. The
+setup reported *complete* and Mozart could not start for want of them.
+
+**WIN16's system directory is `SYSTEM` under its Windows directory**,
+`A:\SYSTEM\APPDATA\WIN16\SYSTEM` on WIN16's own volume. `GetSystemDirectory`
+answers it, and makes the folder if it is not there (a Setup Toolkit copies
+into it without a `CreateDir`); `GetWindowsDirectory` is as before. No
+trailing backslash, as Windows.
+
+**The folder is made by the kernel, not by WIN16's DOS** (`w16f_mksys`:
+`od_enter`, `od_dive` into `WIN16`, `OSAPI_FILE_MKDIR`, `od_back`). Through
+the DOS, the first `GetSystemDirectory` of a program that does no file I/O
+fetched the DOS core and host into a claim of their own, and a refusal was
+left as `AH=59h`'s answer, which Windows' call never touches. Every refusal
+changes nothing and the path is answered regardless: the folder already there,
+a read-only volume (WIN16 launched from a CD), a write-protected or full disk,
+a disk without WIN16's folder (§124.14: that folder is never created). A
+program then finds the system directory absent, as it finds the Windows
+directory unwritable. `VerFindFile` answers the path without making it: an
+installer that learns the folder only from `VerFindFile` and never asks
+`GetSystemDirectory` finds it absent on a disk where nothing has asked yet
+(open: part 9 is the one that would pay for making it there).
+
+**One name**: the folder's name is `od_s_system` (`apps/os88data.inc`), the
+same bytes the loader's library search (§124.23.1.1, `w16l_gofold`: two
+folders below `SYSTEM\APPDATA` by `W16L_SYSDEPTH`, the second being
+`od_s_system`) and the program search (§124.28.5, `w16t_where`) dive into.
+`w16f_sysdir` (`w16file.inc`) writes the path at DI from it, upper case,
+ending in `\`, as `w16f_windir` does for the Windows directory, and
+`OpenFile`'s search (§124.21.3) uses it; `GetSystemDirectory` and
+`VerFindFile` (§124.24.9) copy the same `od_s_system` after the Windows
+directory. The Windows directory is two spellings that agree today:
+`w16s_dir` (`:\SYSTEM\APPDATA\WIN16`) for the path and `od_enter` plus
+`w16pf_s_dir` for the walk. The room: no resident byte; 149 bytes of the
+library part (64,680 of it on kern_mega) and 11 of part 9.
 
 #### 124.20.6 The gate rows
 
@@ -234868,9 +234912,9 @@ an `int` does, so the two ways in are one DOS with one handle table.
 | `_lread`, `_lwrite` | `3Fh`, `40h`; the count, or -1. `_lwrite` of 0 bytes truncates, as `40h` does (§96.11.6.2) |
 | `_llseek(h, offset, origin)` | `42h`; the new position as a `LONG` |
 | `_lclose` | `3Eh`; 0, or -1 |
-| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5); the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
+| `OpenFile(name, of, style)` | Wine's `OpenFile16` in what it does: `OF_PARSE` fills the `OFSTRUCT` with the full path (drive, `47h`'s folder, the name, upper case) and opens nothing; `OF_DELETE` deletes; `OF_CREATE` creates; otherwise it opens with the mode's access bits (the share bits are not DOS 2's) and `OF_EXIST` closes again. A bare name not in the current folder is looked for in the Windows directory (§124.20.5) and then in the system directory (§124.20.5.1), and not found there is `nErrCode` 2 even while the system folder is not made yet; the program's own folder (when the program has moved away from it) and `PATH` are not searched, Windows 3.1's last two places; the current folder is where the program was started, so that is its own folder until it moves. `OF_REOPEN` opens the `OFSTRUCT`'s path. The `OFSTRUCT` gets `cBytes` 136, `fFixedDisk` 0, `nErrCode` (the DOS error) and the path. The answer is the handle; 1 for `OF_EXIST` and `OF_DELETE`; 0 for `OF_PARSE`; or -1. **`OF_PROMPT` puts up no dialog**: WIN16 never asks for a disk to be inserted, and the call fails as it would after Cancel |
 | `GetTempFileName(drive, prefix, unique, buf)` | `X:\~PPPuuuu.TMP` in the Windows directory (Windows used `TEMP`, and WIN16 has no environment); `TF_FORCEDRIVE` puts it at the root of that drive. With `unique` 0 a number is taken from the clock and stepped until the name is free, and the file is CREATED, as Windows did, so a second call cannot answer the same name. The number |
-| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5) |
+| `GetWindowsDirectory`, `GetSystemDirectory` | unchanged (§124.20.5, §124.20.5.1) |
 | `AnsiToOem`, `OemToAnsi`, `AnsiToOemBuff`, `OemToAnsiBuff` | the bytes copied: the two sets agree on every character a file name holds |
 | `DOS3Call` | `int 21h`, and so the core for the calls 124.21.2 forwards |
 | `DlgDirList(dlg, spec, list, static, type)` | Windows 3.0's File Open: a folder or drive in the spec is moved to first (`0Eh`, `3Bh`) and the spec left holding its file part; the list box is emptied and given the files the spec finds (`4Eh`/`4Fh`, on a DTA of WIN16's, the program's put back after), then `[folder]` with `DDL_DIRECTORY` and `[-a-]` with `DDL_DRIVES`, in lower case as Windows showed them; the static control gets the current folder, `b:\docs`. FALSE for a folder or drive that is not there. The controls are WIN16's own (§124.13), so their procedures are called directly |
@@ -236082,9 +236126,10 @@ opens it, so a packed `.DL_` answers its version as its expansion would.
 | `VerFindFile` (VER.8) | where a file goes: a shared one (`VFFF_ISSHAREDFILE`) to the system directory, anything else to `szAppDir`. Where it is now: the destination if it is there, otherwise the other one of those two with `VFF_CURNEDEST`. A buffer too small is filled as far as it holds, with `VFF_BUFFTOOSMALL`, and each length is set to what was needed. Each length's pointer is read before its buffer's `les` (2026-11-02; the same defect as `OemToAnsi`'s, read through the buffer's segment) |
 | `VerInstallFile` (VER.9) | `szSrcDir\szSrcFileName`, expanded if it is SZDD, written to `szDestDir\szDestFileName`. Then, unless `VIFF_DONTDELETEOLD`, the copy in `szCurDir` is deleted when that is another directory. 0, or `VIF_CANNOTREADSRC`, `VIF_CANNOTCREATE`, `VIF_OUTOFSPACE` (a short write: the partial file is deleted) or `VIF_CANNOTDELETECUR` |
 
-WIN16's Windows directory and system directory are one directory (O5,
-§124.14), so a shared file and a program's own file found there are the same
-file.
+WIN16's system directory is `SYSTEM` under its Windows directory
+(§124.20.5.1): a shared file goes there and a program's own file to its
+`szAppDir`, as on Windows. (Until 2026-11-04 the two were one directory; see
+§124.20.5.1 for why that could not stay.)
 
 The language table is the one Windows 3.1's own `VER.DLL` answers, read off
 the reference machine (the win16-reference skill), with its ids. An id not
@@ -236223,8 +236268,9 @@ itself. **LZT.EXE** (`tests/win16/lzt.c`, its `VERSIONINFO` in
   and refuse a source that is not there.
 
 Its message box must be `LZT OK 24000`. When it has ended, `SAMPLE.TXT` at
-B:'s root and `SYSTEM\APPDATA\WIN16\SECOND.DAT` read off the floppy image
-must be the host's expansions, byte for byte.
+B:'s root and `SYSTEM\APPDATA\WIN16\SYSTEM\SECOND.DAT` (the system
+directory, §124.20.5.1) read off the floppy image must be the host's
+expansions, byte for byte.
 
 **`win16shx`** (soak, QEMU; `make win16fixtures`): `ROOT.TXT` at B:'s
 root and `SHX.TXT` in a folder, `DOCS`. **SHX.EXE** (`tests/win16/shx.c`)
