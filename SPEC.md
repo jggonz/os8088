@@ -238452,6 +238452,18 @@ from the tick, the same run shows no panel and ends *XVOL OK* (looked at).
 It costs real mode 68 bytes of image and 2 of bss; the arm's bytes are
 unchanged.
 
+**Measured 2026-11-04 (WIN16-NEXT-PLAN Q2), on kern_big in QEMU.** Task 0
+filled with CCh below its parked SP, then `tests/win16xvol.py`'s scenario
+(a double-click on XVOL.EXE on A:, the cross-volume copy, the MessageBox):
+the high water is **302 bytes of 512**, sampled all through the copy, with
+the canary intact and no panel. 206 is the launch, and the copy's own
+frames take it to 302. An interrupt on top of the deepest frame costs about
+30 (the gate's 6 and `sch_isr`'s 24; the ROM's chain and the mouse have
+their own stacks), so the margin is about 180 bytes. The panel the row once
+showed is gone with the deferred load and the tick-run first instruction
+above, which real mode shares (`w16_ldq`, `w16_go1` are not under
+`PKG_MEGA`).
+
 #### 124.31.9 Verification
 
 - **Bochs** (docs/BOCHS.md) is the instrument, because QEMU lets code write

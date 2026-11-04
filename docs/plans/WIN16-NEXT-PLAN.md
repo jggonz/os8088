@@ -113,7 +113,7 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - **The proposed fix** is to attribute a CS that is not an image pair by its descriptor's BASE, the way 14.137's `mega_bown` does: a pool block's `MX_OWN`, or `mem_tab`'s `MC_OWN` below 1 MB. It needs its own owner rows.
   - **Check, not yet done:** whether the +8 assumption can blame a fault on whichever package owns the selector 8 above the faulting one. If it can, it would close the WRONG package, which is worse than halting.
 
-- [ ] **Q2: real mode's STACK OVERFLOW TASK 00 (UI task)** during `win16xvol`'s copy across volumes on `kern_big`.
+- [x] **Q2: real mode's STACK OVERFLOW TASK 00 (UI task)** (2026-11-04: not reproducible; 302 of 512 bytes, SPEC.md 124.31.8) during `win16xvol`'s copy across volumes on `kern_big`.
   - The copy still finishes and reports XVOL OK.
   - It is not SPEC.md 96.11.11's doing. It was seen with a core that never asks DFREE, and with the older core.
   - It is undiagnosed, and it matters for the real-mode installers.
