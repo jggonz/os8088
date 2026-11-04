@@ -267,6 +267,7 @@ VM486VD := $(CURDIR)/vm/486-vesa-desk
 # ...and that 486 with the Video Player's measurement disk on IDE (make vid486)
 VM486VID := $(CURDIR)/vm/486-video
 VMPENT := $(CURDIR)/vm/pentium
+VMPENTPCI := $(CURDIR)/vm/pentium-pciether
 # The two Frotz machines (SPEC.md 61.9). Both carry a sound card, because
 # @sound_effect is part of what is being tested, and both have the FULL 640KB:
 # a Z-machine story is RESIDENT (SPEC.md 61.4) and 256KB does not hold the
@@ -2327,7 +2328,7 @@ KERNEL_INC := $(wildcard kernel/*.inc) apps/os88ui.inc boot/boot2.asm \
         xt-hercules xt-ega xt-multimon 286 286-525 386sx 386 386-xms 386-ps2 xt-sound xt-sound-1.44 xt-midirack 386-midirack xt-covox xt-wire \
         286-525-z 286-525-word 286-525-cword 286-525-runcpm 286-525-c64 \
         286-525-weave 286-525-loom 286-525-all \
-        286-sound 286-video viddemo-vga viddemo-cga viddemo-herc viddemozip 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium \
+        286-sound 286-video viddemo-vga viddemo-cga viddemo-herc viddemozip 286-realdmg 286-victory 386-sound 486 486-video 486-vesa 486-vesa-desk pentium pentium-pciether \
         bench field combo combo144 combo720 stackprobe trklog trkscrl npbench clicktest marty \
         comscan lptlink calcref \
         fonts fontsheets fontlist \
@@ -15401,7 +15402,7 @@ pciethertest: $(BUILD)/pciethertest.img
 	@echo "              (SYSTEM.CFG bit $(PCIETHER_CFGBIT)). Pair it with build/megaapps.img."
 	@echo "              Run it with: python3 tests/pciether.py"
 	@echo "              Look at it: make run-pciether (QEMU, an RTL8139 on slirp);"
-	@echo "              86Box: tools/os88box.py launch 486-pciether"
+	@echo "              86Box: tools/os88box.py launch pentium-pciether"
 
 # RUN-PCIETHER - the interactive form of the gate's machine: kern_mega with a
 # PCI RTL8139 (`-device rtl8139`, the 10EC:8139 card PCIETHER.DRV drives) on
@@ -19110,6 +19111,18 @@ marty: $(IMG360)
 pentium: $(IMG) $(APPSIMG)
 	@$(UNPROTECT) $(VMPENT)/86box.cfg
 	$(BOX) -P $(VMPENT) -N
+
+# PCIETHER.DRV's machine (SPEC.md 125.6, docs/plans/PCIETHER-PLAN.md S9): a
+# Pentium on a PCI board (vm/pentium's p54tp4xe) with 86Box's Realtek
+# RTL8139C+ (`rtl8139c+`) on SLiRP, booting kern_mega's `make pciethertest`
+# disk with its apps disk in B: - to LOOK at the driver on a period PCI BIOS
+# rather than SeaBIOS (the Drivers page's PCI Ethernet row, the Ethernet
+# page naming RTL8139, The Wire or the Browser reaching the host's network).
+# 86Box cannot be keyed or asserted against (docs/86BOX.md); tests/pciether.py
+# is the gate and runs under QEMU. Interactive, like every 86Box target.
+pentium-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
+	@$(UNPROTECT) $(VMPENTPCI)/86box.cfg
+	$(BOX) -P $(VMPENTPCI) -N
 
 # NOTHING IN build/ IS TRACKED, and that is a decision rather than an accident.
 #

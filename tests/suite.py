@@ -19824,7 +19824,7 @@ SOAK = [
         "Browser fetching a page the row serves itself over TCP, and the "
         "frame counters moving with no receive-overflow reset. QEMU by name: "
         "MartyPC has no NIC, Bochs has no RTL8139 and 86Box cannot be "
-        "asserted against (vm/486-pciether is where a person LOOKS). "
+        "asserted against (vm/pentium-pciether is where a person LOOKS). "
         "UNRUN when registered - the harness agent may not run a row - so the "
         "first run is the lead's final pass; kern_mega's selectors are "
         "decoded through the GDT/LDT in `info registers` (tests/pciether.py "

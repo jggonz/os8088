@@ -7,7 +7,7 @@
 **THIS ONE IS QEMU'S, AND THE REASONS ARE ETHERNET.PY'S PLUS ONE.** MartyPC
 has no network card of any kind; Bochs has no RTL8139 (tests/brmega.py gives
 kern_mega an NE2000 there, which is ETHER.DRV's card and not this one's); and
-86Box's RTL8139C+ (`vm/486-pciether`) cannot be keyed or asserted against
+86Box's RTL8139C+ (`vm/pentium-pciether`) cannot be keyed or asserted against
 (docs/86BOX.md), so it is where a person LOOKS. QEMU's `rtl8139` is a PCI
 device behind SeaBIOS's PCI BIOS - the `int 1Ah` B1h service SPEC.md 125.3
 reaches - on the same slirp network tests/ethernet.py uses: a gateway at

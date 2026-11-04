@@ -1277,7 +1277,7 @@ def make_test(*knobs, copy=True, extra=()):
                              "it is not an addition - one slirp, one card")
         if SERVED:
             raise ValueError("os88qemu.make_test: PCIETHER= is QEMU's alone "
-                             "(Bochs has no RTL8139; vm/486-pciether is 86Box's)")
+                             "(Bochs has no RTL8139; vm/pentium-pciether is 86Box's)")
         cmd += ["-m", "16", "-netdev", "user,id=n0",
                 "-device", "rtl8139,netdev=n0"]
     if kv.get("ETHER"):
