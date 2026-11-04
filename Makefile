@@ -19380,9 +19380,10 @@ $(BUILD)/megawin16-120.img: $(MEGAAPPDIR)/win16.o88 $(WIN16SHIP) tools/os88disk.
 	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAW16ARGS)
 
 # `make win16test` is S2's gate disk (WIN16-PLAN.md S2): a 1.44MB B: with
-# WIN16.O88, the TINY16 variants, whatever `make win16fixtures` has built,
+# WIN16.O88 and the TINY16 variants in the ROOT, whatever of the Open Watcom
+# fixtures `make win16fixtures` has built in FIXTURES\ (below),
 # SYSTEM/APPDATA/WIN16, the Windows directory a program's profiles are kept
-# in (SPEC.md 124.14), and DOS.O88 in the ROOT beside the programs, so the
+# in (SPEC.md 124.14), and DOS.O88 beside the programs in both, so the
 # association's rung 2 (the document's own folder, SPEC.md 54.4.2) finds it
 # before the system disk's. Since S12 that DOS.O88 is the SHIPPED one
 # (124.18.1), copied here so the rows keep the name they were written with.
@@ -19398,13 +19399,26 @@ $(BUILD)/win16/TINYUNK.EXE: tests/win16/tiny16.asm
 	@mkdir -p $(@D)
 	$(NASM) -f bin -w+error -DT16_UNKNOWN -o $@ $<
 
+# The fixtures are taken BY NAME, $(WIN16FIX) and the libraries DLLUSE
+# imports, $(WIN16DLLFIX), which WIN16 looks for in the program's own folder
+# (SPEC.md 124.23.1) - never every *.EXE in $(BUILD)/win16/: the
+# win16-reference skill's `samples` copies Microsoft's programs there too
+# (66 EXEs), which is 69 root entries against the kernel's listing of 64 and
+# 4,016 clusters against the floppy's 2,847. They go in FIXTURES\, which the
+# same 64 holds, so the root stays the TINY16 variants and the fixtures and
+# their libraries can number 63 before the folder refuses. Recursive `=`, so
+# the list is read when the recipe runs; the fixtures' stamp is a
+# prerequisite when it exists, so a rebuilt fixture rebuilds the disk without
+# making this need Watcom.
+WIN16TESTFIX = $(wildcard $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16FIX)) \
+                                                     $(addsuffix .DLL,$(WIN16DLLFIX))))
 $(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
                         $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
-                        tools/os88disk.py
+                        $(wildcard $(BUILD)/win16/.watcom) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/win16.o88 \
 	    $(BUILD)/win16/DOS.O88 \
-	    $(sort $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
-	           $(wildcard $(BUILD)/win16/*.EXE)) \
+	    $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
+	    $(if $(WIN16TESTFIX),$(addprefix FIXTURES:,$(BUILD)/win16/DOS.O88 $(WIN16TESTFIX))) \
 	    $(APPDATAFOLDER) --folder SYSTEM/APPDATA/WIN16
 
 win16test: $(BUILD)/win16test.img

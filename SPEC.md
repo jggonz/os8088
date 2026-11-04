@@ -232547,9 +232547,12 @@ imported-names tables, `ne_align`, `ne_exetyp` = 2 and `ne_expver`.
   `kern_mega`, whose disks carry no WIN16 (§124.18.1). On a machine without
   WIN16.O88 a forward ends in the association search's `Needs WIN16.O88`
   toast with DOS's window already gone, which names what to get. The test
-  disk's DOS.O88 is a copy of the shipped one, in the ROOT beside the
-  programs, where the association's rung 2 (the document's own folder,
-  §54.4.2) finds it first.
+  disk's DOS.O88 is a copy of the shipped one, beside the programs - in the
+  ROOT with the TINY16 variants and in `FIXTURES\` with the Open Watcom
+  fixtures and their libraries, which `make win16test` takes by name and
+  keeps out of the root's 64 listed entries - where the association's rung 2
+  (the document's own folder, §54.4.2) finds it first. WIN16.O88 stays in
+  the root, which rung 3 reaches from either.
 - **Finding the package:** `WIN16` is a BUILT-IN app stem in
   `kernel/assoc.inc`, beside `DOS` and for DOS's reason: its documents sit on
   somebody else's disk, so a declaration harvested at a full mount could not
@@ -232682,6 +232685,20 @@ is KNOWN to start, and follows the control flow:
    `89 E5` forms). This is the one heuristic. It errs toward refusing, so a
    procedure reached only through a near pointer in data still moves the
    verdict.
+
+A far call or jump (`9A`/`EA`) is followed to the program's own segment it
+names: by a far-pointer relocation on its operand, or by a SELECTOR-ONLY
+relocation (`RA_SEGMENT`) on the segment word, in which case the offset is the
+literal in the code. The segment a selector-only relocation names is the
+loader's: a fixed segment number's, or a MOVABLE entry's own segment (its
+offset is not used), and an ADDITIVE one names it only when the word in the
+file is 0, the one case the loader writes a selector there (`w16_site`,
+Borland's additive selector at zero); any other additive word is left as the
+file has it, names no segment of the program and is not followed. The machine
+reads all of these from the relocated operand and so always followed them; the
+host did not until Windows 3.1's Media Player and Sound Recorder
+(`9A 70 14 <seg>` in segment 1) disagreed on 1,138 and 1,108 bytes
+(WIN16-NEXT-PLAN Q8).
 
 Two instructions end a path besides `ret`/`jmp`: a far call to
 `KERNEL.FatalExit`/`FatalAppExit`, and `int 21h` after `mov ah, 4Ch`.
