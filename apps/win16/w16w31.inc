@@ -344,10 +344,13 @@ W16SYS w16n_getwpl
     ret
 
 ; w16s_clsadd - w16_ccb (a class, its W16C_TASK set) goes into the first free
-; record of the class block, which is claimed from the program's global memory
-; at the first class, W16_MAXCLS records at W16C_STRIDE (SPEC.md 124.25.18.1).
-; AL = its index, CF=0; CF=1 the block is full or memory is not there:
-; RegisterClass answers FALSE. Keeps the rest
+; record of the class block (SPEC.md 124.25.18.1): a block of the program's
+; global memory, W16C_STRIDE a record, [w16_clsend] its records' end. None
+; yet, or every record used: a block W16_MAXCLS records longer is made, the
+; records copied into it at the same indexes (a class's atom is 0C000h + its
+; index, so every atom and every W16W_CLS stays good) and the old one freed,
+; up to W16_CLSCAP records. AL = the index, CF=0; CF=1 at the cap or with no
+; memory: RegisterClass answers FALSE. Keeps the rest
 w16s_clsadd:
     push bx
     push cx
@@ -355,37 +358,64 @@ w16s_clsadd:
     push si
     push di
     push es
-    cmp word [w16_clsseg], 0
-    jne .have
-    mov ax, W16_MAXCLS * W16C_STRIDE
-    xor dx, dx
-    mov cl, W16G_HIGH | GMEM_ZEROINIT   ; fixed, and zeroed: every name NUL. At
-    ICALL w16_gnew                  ;   the top of the heap, so it is not the
-    or ax, ax                       ;   block a GlobalAlloc's local heap grows
-    jz .no                          ;   into (124.25.19). AX = the handle,
-    W16TOSEL dx                     ;   DX = the segment (the arm: a selector,
-    mov [w16_clsseg], dx            ;   124.31.3)
-.have:
     mov es, [w16_clsseg]
     xor bx, bx
-    xor ax, ax                      ; AL = the record's index
 .f:
+    cmp bx, [w16_clsend]
+    jae .grow
     cmp byte [es:bx + W16C_NAME], 0
     je .take
     add bx, W16C_STRIDE
-    inc ax
-    cmp ax, W16_MAXCLS
-    jb .f
-.no:
-    stc
-    jmp short .out
+    jmp short .f
+.grow:                              ; BX = the end, and the first new record
+    mov ax, bx
+    add ax, W16_MAXCLS * W16C_STRIDE
+    cmp ax, W16_CLSCAP * W16C_STRIDE
+    jbe .size
+    mov ax, W16_CLSCAP * W16C_STRIDE
+    cmp ax, bx
+    jbe .no                         ; at the cap
+.size:
+    push ax
+    xor dx, dx
+    mov cl, W16G_HIGH | GMEM_ZEROINIT   ; fixed, and zeroed: every new name
+    ICALL w16_gnew                  ;   NUL. At the top of the heap, so it is
+    pop cx                          ;   not the block a GlobalAlloc's local
+    or ax, ax                       ;   heap grows into (WIN16-NEXT lheap).
+    jz .no                          ;   CX = the new end
+    W16TOSEL dx                     ; DX = its segment (the arm: a selector,
+    mov es, dx                      ;   124.31.3)
+    mov ax, [w16_clsseg]            ; AX = the old block, 0 none
+    mov [w16_clsseg], dx
+    mov [w16_clsend], cx
+    mov cx, bx                      ; the old records, to the same offsets
+    push ds
+    mov ds, ax
+    xor si, si
+    xor di, di
+    cld
+    rep movsb
+    pop ds
+    or ax, ax
+    jz .take
+    push es
+    mov es, ax
+    W16VOF ax, es                   ; its handle: a fixed block's is its
+    pop es                          ;   paragraph
+    ICALL w16_gfreeh
 .take:
+    mov ax, bx                      ; AL = the record's index
+    mov cl, W16C_STRIDE
+    div cl
     mov di, bx
     mov si, w16_ccb
     mov cx, W16C_STRIDE
     cld
     rep movsb
     clc
+    jmp short .out
+.no:
+    stc
 .out:
     pop es
     pop di
@@ -472,10 +502,14 @@ W16SYS w16n_clsinfo
     jnz .name
     sub ax, 0xC000                  ; the atom: its class's index
     jb .no
-    cmp ax, W16_MAXCLS
+    cmp ax, W16_CLSCAP
     jae .no
-    cmp word [w16_clsseg], 0
-    je .no
+    push ax
+    mov cl, W16C_STRIDE             ; inside the block as it is now
+    mul cl
+    cmp ax, [w16_clsend]
+    pop ax
+    jae .no
     ICALL w16_clsget
     mov si, ax
     cmp byte [si + W16C_NAME], 0

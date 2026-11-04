@@ -13,7 +13,10 @@
  *   swallow     a superclass whose procedure answers WM_CREATE itself and
  *               forwards the rest is still a working multi-line Edit;
  *   subclass    SetWindowLong(GWL_WNDPROC) on a real Edit, eat one key and
- *               pass the rest to the old procedure.
+ *               pass the rest to the old procedure;
+ *   many        seventy more classes, past the class block's first 64
+ *               records: every one registers, and the first one's atom and
+ *               name still find it after the block has grown.
  *
  * Every check that fails is named in the message box, which
  * tests/win16ctlproc.py reads; "CTLPROC OK" when none does.
@@ -76,7 +79,9 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     static WNDCLASS wc, ce, cb;
     static char buf[64];
     HWND top, e, b, s, m;
-    int n, base;
+    int n, base, i, bad;
+    ATOM first;
+    static char gname[8] = "Grow00";
 
     (void)prev; (void)cmd; (void)show;
     wc.lpfnWndProc = WndProc;
@@ -174,6 +179,36 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(strcmp(buf, "ab") == 0, "subtext");
     check(subate == 1, "subate");
     check(subseen >= 4, "subseen");
+
+    /* many: the table grows past its first 64 */
+    wc.lpfnWndProc = WndProc;
+    wc.hInstance = inst;
+    wc.lpszClassName = gname;
+    first = 0;
+    bad = 0;
+    for (i = 0; i < 70; i++) {
+        ATOM a;
+        gname[4] = (char)('0' + i / 10);
+        gname[5] = (char)('0' + i % 10);
+        a = RegisterClass(&wc);
+        if (a == 0)
+            bad++;
+        if (i == 0)
+            first = a;
+    }
+    check(bad == 0, "many");
+    check(GetClassInfo(inst, MAKEINTRESOURCE(first), &cb) != 0
+          && cb.lpfnWndProc == (WNDPROC)WndProc, "atom");
+    check(GetClassInfo(inst, "Grow00", &cb) != 0, "grow00");
+    check(GetClassInfo(inst, "Grow69", &cb) != 0, "grow69");
+    m = CreateWindow("Grow00", "", WS_CHILD, 0, 0, 8, 8, top, (HMENU)6,
+                     inst, NULL);
+    check(m != 0, "mkgrow");
+    buf[0] = 0;
+    GetClassName(m, buf, sizeof buf);
+    check(lstrcmpi(buf, "Grow00") == 0, "growname");
+    GetClassName(e, buf, sizeof buf);       /* moved, and still its own */
+    check(lstrcmpi(buf, "SupEdit") == 0, "movedname");
 
     MessageBox(top, res[0] ? res : "CTLPROC OK", "CTLPROC", MB_OK);
     DestroyWindow(top);

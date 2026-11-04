@@ -71,8 +71,12 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 64             ; classes (SPEC.md 124.8; File Manager 3.0
-                                ;   registers 9, SPEC.md 124.27)
+W16_MAXCLS   equ 64             ; classes: the class block's first records,
+                                ;   and what it grows by when they are used
+                                ;   (SPEC.md 124.25.18.1; VB 3.0 registers
+                                ;   ~26, File Manager 3.0 9, SPEC.md 124.27)
+W16_CLSCAP   equ 255            ; ...up to this: an index is W16W_CLS's byte,
+                                ;   0FFh "none"
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
                                 ;   Editor's Advanced 54 beside 23 open)
@@ -503,6 +507,7 @@ section .w16dlg
     W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
     W16BSS w16_cwslot, 2
     W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet
+    W16BSS w16_clsend, 2        ;   ...its records' end, records x W16C_STRIDE
                                 ;   (SPEC.md 124.25.18.1), and the one record
     W16BSS w16_ccb, W16C_STRIDE  ;   copied out of it, w16_clsget's
     W16BSS w16_cbi, 1           ;   ...and its index
@@ -1592,6 +1597,7 @@ w16_freeprog:
     xor ax, ax                      ; the USER heap went with the arenas,
     mov [w16_mseg], ax
     mov [w16_clsseg], ax            ;   and the class block (124.25.18.1)
+    mov [w16_clsend], ax
     mov [w16_msys], ax
     mov [w16_mtrk], al
     mov [w16_mlev], al
