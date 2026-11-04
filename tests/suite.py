@@ -17163,6 +17163,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
+        "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
+        "tests/win16/longname.c) asks for a dialog named in 21 characters "
+        "(Microsoft Arcade's NUMBEROFPLAYERSDIALOG, which a 15-character "
+        "copy of the name never found, so Asteroids said Error code = -1 on "
+        "F2), a menu in 40, a bitmap in 255 and by #300, a resource of a "
+        "28-character type and accelerators in 26, the dialog in lower case, "
+        "and must miss it cut to 15 or one longer, and a 40-character "
+        "global atom added twice is one atom GlobalFindAtom finds; its "
+        "MessageBox must be LONGNAME OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
         "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
         "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "
@@ -17185,6 +17198,21 @@ SOAK = [
         "ExcludeClipRect, copies screen to bitmap and back through a moved "
         "window origin, and flood-fills on the window's DC inside a frame "
         "and across the client; its MessageBox must be MEMDC OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16bigbmp", "soak", py("tests/win16bigbmp.py"), 60.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE (`make "
+        "win16fixtures`, tests/win16/bigbmp.c) makes a 640 x 480 bitmap, "
+        "153,600 bytes in WIN16's 4 bits a pixel, which is three tiles - "
+        "past W16_BMMAX's 64,000 - selects it into a memory DC, draws in "
+        "each tile and across the seam, reads every pixel back, BitBlts the "
+        "last tile's block and a source across the seam onto the window, "
+        "reads a scan through GetDIBits, writes one through SetDIBits, "
+        "StretchBlts the seam, draws a line and an ExtFloodFill across a "
+        "seam, blits from an odd column, makes a pattern brush of it, copies "
+        "both ways with a second tiled bitmap of other tile heights and fills "
+        "a tiled monochrome one; its MessageBox must be BIGBMP OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),

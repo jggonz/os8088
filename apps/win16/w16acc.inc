@@ -661,7 +661,10 @@ W16LIB w16g_crebmp
     mov [w16_scratch + 2], ax       ; the bits' bytes a row
     mov ax, [ds:w16b_str + bp]
     mov [w16_scratch + 4], ax       ; the bitmap's
-    mov ax, [ds:w16b_h + bp]
+    push bx
+    mov bx, bp
+    call w16_bmcap                  ; (a tiled bitmap: the first tile's rows)
+    pop bx
     mov [w16_scratch + 6], ax       ; rows to go
     mov dx, [ds:w16b_seg + bp]
     W16TOSEL dx                     ; the arm: its selector (SPEC.md 124.31.3)

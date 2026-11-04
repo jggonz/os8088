@@ -233614,6 +233614,23 @@ a load from inside a paint is legal.
 A file that cannot be read (its floppy taken out) answers `LoadResource`
 with 0, which every caller already has to handle.
 
+**A string type or name is compared where the program keeps it** *(2026-11-04)*.
+`w16_rkey` keeps a string's far pointer in `w16_rtyp` or `w16_rnam` (four
+bytes each), and `w16_rmatch` and the name table's `w16_rnmcmp` read the
+program's string in place, case blind (a-z, as the resource compiler folds),
+against the table's length-prefixed name. So a name has no length of WIN16's
+own: the table's count byte is the limit, 255, as it is on Windows. It used to
+be copied, upper-cased, into a 16-byte buffer, which kept 15 characters, and a
+longer name was cut and then matched nothing, because the compare reads the
+table's whole name against the cut key: Microsoft Arcade's Asteroids asks for
+dialog `"NUMBEROFPLAYERSDIALOG"` (21 characters) when F2 starts a game,
+`DialogBoxParam` answered -1, and the program reported its own *Error code =
+-1. Continue?*. The pointer is only read inside the call that was handed it;
+a name inside a resource (a dialog's `SS_ICON` text) is in a template the
+dialog holds (`RN_USAGE`) while it reads it, so the name table's own load
+cannot discard it underneath. `W16FIX` `LONGNAME` is the gate: a dialog, a
+menu and a bitmap named in 21, 40 and 255 characters.
+
 **A string name may be in the name table** *(S10; any type at S11)*. A
 Windows 3.0 linker numbered every resource and wrote the names into an
 `RT_NAMETABLE` (type 15) resource: CALC 3.00 asks for dialog `"SC"`, which
@@ -236504,8 +236521,8 @@ obtain, per arm, with no special case for any caller:
   - *kern_big*: `OSAPI_MEM_P` `MEMP_AVAIL`'s total `R` and largest claim `L`
     of the conventional heap;
   - *kern_mega*: the claims come from the heap above and below 1 MB, and
-    each is entered in the 960 KB map (§124.31.3), so `R` is the smaller of
-    the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
+    each is entered in the 1,012 KB map (§124.31.3), so `R` is the smaller of
+    the map's free paragraphs (`W16V_LO` = 0300h to 0FFFFh, less every row's) and
     the conventional heap's total plus the extended pool's free KB
     (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
     and the larger of the conventional largest claim and the pool's KB. The
@@ -236529,13 +236546,12 @@ from it is told more than before. Paintbrush's band manager (`PBRUSH.DLL`)
 asks `GetFreeSpace(GMEM_NOT_BANKED)` and keeps the whole picture as ONE band
 bitmap when the answer is at least four times the picture: 614,400 bytes for
 640 x 480 at 16 colours, a 153,600-byte bitmap that §124.15.2's
-`W16_BMMAX` (64,000) refuses. **Open, pinned:** on kern_mega under QEMU
-(16 MB) Paintbrush 3.0 starts to its window and says *Insufficient memory
-for this operation*, both before this change and after it (a look of each,
+`W16_BMMAX` (64,000) refuses. **Closed by §124.25.17:** on kern_mega under QEMU
+(16 MB) Paintbrush 3.0 started to its window and said *Insufficient memory
+for this operation*, before this change and after it (a look of each,
 2026-11-04); on kern_big the figure stays under 614,400 and it keeps bands
-(`win16pbrush`). The one-band bitmap is the likely cause, read from
-`PBRUSH.DLL`'s code and not traced; if so, a bitmap past 64,000 bytes is
-what would cure it, not a smaller figure.
+(`win16pbrush`). The one-band bitmap was the cause, and the cure is a
+bitmap past 64,000 bytes, not a smaller figure: §124.25.17.
 
 The accounting is in the system-library part (§124.24.1). `GetFreeSpace`
 and `GlobalCompact` are the image's rows all the same, two stubs (23 bytes)
@@ -236867,7 +236883,8 @@ and checks that a destroyed window's are gone; the `win16props` row runs it.
 
 `VBRUN300.DLL` imports nine GDI functions WIN16 lacked. All nine are exports
 now, and none costs a resident byte: the rows are the loader part's and the
-handlers are the system-library part's (part 9).
+handlers are the system-library part's (part 9) - except `Arc` and `Pie`, which
+are part 11's (§124.25.16) since the rare part came.
 
 **What a missing import does (the question L1 asked).** A program that imports
 a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
@@ -236915,11 +236932,16 @@ part's gate), GetUpdateRgn in the system-library part (9). The library part
 | `GetUpdateRgn` (USER.237) | the window's update region into a region; NULLREGION, SIMPLEREGION, COMPLEXREGION or ERROR | **approximate, as every region is**: the invalid rectangle, in the client and cut to it, is the region's bounding rectangle; SIMPLEREGION, or an empty region and NULLREGION; ERROR (0) for a window or region that is not one. `bErase` is not acted on, as `GetUpdateRect`'s is not |
 | `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` (USER.259-.261) | batch window moves, applied at the end | **at once, which Windows allows**: Begin answers the handle 1, Defer **is** `SetWindowPos` (its eight words' last seven are SetWindowPos's, and it answers 1, or 0 for a window that is not one), End answers TRUE. The handle is not a count of anything, so a batch larger than `n` is not refused |
 | `CreateIcon` (USER.407) | an icon from device bits | **CreateCursorIconIndirect's body** (§124.27.7), with the `CURSORICONINFO`'s row bytes worked out as `((nWidth * nBitsPixel + 15) / 16) * 2`: 1 plane of 1 or 4 bits, 4 planes of 1 bit, at most 64 square; any other shape answers the one cursor `LoadCursor` hands out. `DestroyIcon` frees it |
-| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **refused: FALSE**, no popup shown. §124.11's loop is the bar's (`WM_INITMENU`, the bar's title, `w16_mhit` on the bar), and a popup with no bar under it needs its own start, its own hit test and its own dismissal. Estimated at 600-900 bytes of the library part, which has 800 left on the kern_mega arm, and a trampoline of about 8 resident. Not done here |
+| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **done in part 11** (§124.25.16): a popup at a screen point, tracked with the mouse and the keys, `WM_INITMENUPOPUP` sent and the pick POSTED as `WM_COMMAND`; TRUE once the menu has been shown and ended, FALSE when nothing was shown. It was refused here first (FALSE, no popup), because §124.11's loop was the bar's |
 
 Gates: `tests/win16/vbuser.c` (`make win16fixtures`) checks every row above
-that is not a refusal against a value it can compute, and the TrackPopupMenu
-refusal; `tests/win16vbuser.py` (row `win16vbuser`) runs it.
+against a value it can compute, and that `TrackPopupMenu` is no longer a
+refusal (it is shown and ended with Esc; §124.25.16); `tests/win16vbuser.py`
+(row `win16vbuser`) runs it.
+
+The three `DeferWindowPos` rows stayed where they were: they are rows only,
+`SetWindowPos`'s handler under a new count of arguments, with no code of their
+own to move to a part.
 
 **What Mozart and Hangman do now** (looked at on `kern_mega`, QEMU 486 with
 16 MB, 2026-11-04, with `vbgdi`'s, `props`' and `libpath`'s calls merged and
@@ -236938,6 +236960,198 @@ before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
 `KERNEL.21`. An `AH=4Ch` is not recorded. Answering `GlobalHandle`,
 `GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
 out at 64 KB whenever the arena has room (§124.21.4), is §124.9.2.
+
+#### 124.25.16 Part 11: the rare part, and TrackPopupMenu *(WIN16-NEXT `part11`)*
+
+Imports keep arriving on the way to "any Win16 program", and most of them are
+called by one program in ten. Part 9 is fetched whole by 42 of the 85 programs
+WIN16 has been measured against (WIN16-NEXT-PLAN), and the library part
+(part 3) had 819 bytes of its 64 KB left on the kern_mega arm. So **part 11,
+`W16P_RARE`, `section .w16rare`, is the home of a rarely called import from
+now on**: a row says part 11 and the handler is declared `W16RARE`. It is
+part 10's shape (§124.28.13): an 8-byte block of bss (the segment, the
+vector, the routine), a header with the short jump, the cut mark `W16RAREP`
+at +2, WIN16's data selector at `W16S_MYDS` (+10) and the gate `w16r_gate` at
+`W16S_GATE` (+12); the dispatch fetches it at the first call and keeps it
+until the instance's last program ends. The image never calls into it with a
+macro (no handler there is reached from another part of WIN16); from it the
+image is `ICALL` and the library part `SLCALL`, as from part 10.
+
+**The three system parts share one path.** Parts 9, 10 and 11 have their bss
+blocks in a row, 8 bytes apart (`w16_sseg`, `w16_tseg`, `w16_xseg`;
+`win16.asm` asserts it), so the dispatch finds a part's block from its
+number (`block = w16_sseg + (part - 9) * 8`), `w16_ptin` fetches by it and
+`w16_ptdrop` frees all three at a program's end. That replaced a branch each
+for parts 9 and 10 and a drop each, so the third part cost the image fewer
+bytes than the second had. The handler runs with SI holding the block (the
+dispatch puts the caller's SI back after it), so no part 9 to 11 handler may
+take SI as an input.
+
+**A part that cannot be had.** When the fetch fails (a full heap, or a read
+op_fetch has explained), an import of part 9 or 10 ends the program with
+*WIN16's library part could not be read*, as before. An import of part 11
+answers 0 in DX:AX and the program goes on, which is that import's FAILURE
+answer (Arc, Pie and TrackPopupMenu answer FALSE): a call Windows had no
+memory for fails, it does not end the program, and an import used once per
+program is the last that should. **So a part 11 import's failure answer must
+be 0**; one that is not belongs in part 9 or 10.
+
+| import | where it was | where it is |
+|---|---|---|
+| `Arc`, `Pie` (GDI.23, .26) | part 9 (`w16rgn.inc`) | part 11 (`w16rare.inc`), the code unchanged: they still draw through `Polyline` and `Polygon` (§124.25.14) |
+| `TrackPopupMenu` (USER.416) | refused: FALSE | part 11, with 42 bytes in the library part (the loop's ending and its answer, the release outside, no bar redraw) |
+| `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` | image rows, no code | unchanged (nothing to move) |
+
+**TrackPopupMenu(hMenu, fuFlags, x, y, nReserved, hwnd, lpRect).** `x` and `y`
+are SCREEN coordinates. It answers FALSE, with nothing shown, for a handle
+that is not a menu, a window that is not one, or while another menu loop (the
+bar's or an earlier popup) is running; otherwise it shows the popup and the
+program WAITS in the call, as it waits in `DefWindowProc` for the bar, and
+the call answers TRUE when the menu has ended, whichever way.
+
+- **The loop is §124.11's, with no bar.** The same state, hit test, drawing,
+  banking, keys and callbacks; what differs is that level 0 of the loop is the
+  popup itself (`w16_mhbar` = 0, `w16_mkbd` = 2), so a click anywhere but on a
+  popup ends it, and the last popup closing ends it (`w16_mcloseto` says so).
+  The popup's frame sits with its top left at `x`, `y`, moved back inside the
+  window's content as every popup is (§124.11), and what it covers is banked
+  and put back.
+- **`WM_INITMENUPOPUP`** is SENT to `hwnd` with `wParam` = `hMenu` and `lParam`
+  = 0 (position 0, not a system menu), so the program can grey and check items
+  before the popup is laid out. `WM_INITMENU` is NOT sent. That is not
+  checked against Windows 3.1: Wine's `TrackPopupMenu` (`MENU_InitTracking`)
+  sends `WM_INITMENU` with `wParam` = `hMenu` first, so a program that sets
+  its items' state there and not in `WM_INITMENUPOPUP` would show them stale
+  here. The reference machine (`/win16-reference`) is where to settle it.
+- **A pick POSTS `WM_COMMAND`** to `hwnd` with the item's ID, as the bar's does
+  (`wParam` = the ID, `lParam` = 0); a submenu opens beside its parent; Esc,
+  F10, a click outside the menu, or the program ending ends it with nothing
+  posted. Up, Down, Left, Right, Enter and a mnemonic letter work as in the
+  bar's popups, and the release after a press on an item picks it. A release
+  OUTSIDE the menu leaves it up (the press that made the program call
+  `TrackPopupMenu` is often still down), where the bar's loop ends on one;
+  that is Wine's `TPM_POPUPMENU` rule. The menu bar is not drawn again when
+  the menu ends: this loop never selected a title in it.
+- **The flags.** `TPM_LEFTALIGN` (0) puts `x` at the popup's left edge,
+  `TPM_CENTERALIGN` (4) at its centre and `TPM_RIGHTALIGN` (8) at its right
+  edge; `TPM_LEFTBUTTON` (0) is the only button the loop takes. `TPM_RIGHTBUTTON`
+  (2) is ACCEPTED and changes nothing: a right click while a menu is up is
+  swallowed, as the bar's is, and does not choose an item. `lpRect` (the area
+  the popup must not cover) and `nReserved` are ignored.
+- **A popup stays inside the window's content** (§124.11): a point outside it
+  is clamped, so a popup asked for at the screen's edge appears at the content's
+  edge, not on the desktop.
+
+The resident cost, image plus bss, is **22 bytes on both arms** (14 of code,
+8 of bss for the third block) against a limit of 60 for the whole change; part 9
+fell by 775 bytes (Arc and Pie), part 11 is 1,048, and the library part gained
+42: the ending test in `w16_mcloseto` (19), `w16_mans` (9), the answer TRUE
+where the bar's loop answers 0, and the release outside and the bar left alone
+at the end (7 each); 4 of the 14 bytes of code are the answer 0 when part 11
+cannot be had. `tests/unit/t_w16xsec.py` knows the
+part: a row naming a `W16RARE` handler must say part 11, and no near call
+crosses between it and another part. Gates: `tests/win16/vbuser.c`
+(TrackPopupMenu shown and dismissed; the owner's `WM_COMMAND`) and
+`tests/win16/memdc.c` (`vbgdi`: Arc and Pie, unchanged), rows `win16vbuser` and
+`win16memdc`.
+
+#### 124.25.17 A bitmap past 64,000 bytes: tiles *(WIN16-NEXT-PLAN, bigbmp)*
+
+A GDI bitmap used to be one segment, so `W16_BMMAX` (64,000 bytes of
+converted pixels) was its largest and `CreateBitmap`, `CreateCompatibleBitmap`
+and `CreateDIBitmap` answered NULL for more. A program that sizes its pictures
+from `GetFreeSpace` (§124.25.1) hits it: Paintbrush's band manager
+(`PBRUSH.DLL`) keeps the whole picture as one band when the figure is at
+least four times the picture, which for 640 x 480 at 16 colours is a
+153,600-byte `CreateBitmap(640, 480)`; on kern_mega the honest figure is that
+large, so Paintbrush 3.0 always took the path and ended in *Insufficient
+memory for this operation*. **Seen (QEMU kern_mega, 2026-11-04):** the A/B
+fixture `BIGBMP.EXE` (`tests/win16/bigbmp.c`) with the old WIN16 fails every
+check from the first, `CreateCompatibleBitmap(dc, 640, 480)` answering NULL;
+with this change it passes (§ *What was seen*, below).
+
+**A bitmap may now be as large as a global block, tiled.** Windows keeps such
+a bitmap as a huge object and so does WIN16, with the machinery §124.31.6
+already has for `GlobalAlloc` over 64 KB - and without `SEG_TILE`, because
+the bitmap's rows are only ever addressed as *a segment and an offset*:
+- **One block.** A bitmap whose pixels are over `W16_BMMAX` is one **fixed
+  block of the global heap** (`w16_gnew`, up to its 1023 KB), never the claim
+  of its own §124.15.2 falls back to for a small one: a claim is a row of
+  the map and one of eight to twelve. It is asked for with `GMEM_ZEROINIT`
+  (black is 0 in both nibbles), so `w16_gzero` clears it through the arm's
+  walk descriptor and the clearing leaves no selector behind; a `W16SEG` at
+  a paragraph that is not a tile's would hold an LDT entry until the arena
+  goes. A heap that is short answers the `GlobalNotify` procedures first
+  (`w16k_gnask`) and then NULL, as before.
+- **The same on both arms.** A tile's segment is `block + k * 1000h`
+  paragraphs on kern_big and on kern_mega alike: on the arm WIN16 computes
+  in *virtual paragraphs* (§124.31.3) and `W16SEG` turns one into a data
+  selector reaching to the claim's end, so a virtual paragraph 1000h on is
+  the next 64 KB of the same arena. No `SEG_TILE`, no selector held, and
+  nothing to give back: a tiled bitmap goes with its block, at
+  `DeleteObject` or the program's end.
+- **How a bitmap says so.** The slot's `w16b_mono` high byte is 1 for the
+  claim of its own (§124.15.2) and **2 for a tiled bitmap** (`w16_bmown`
+  tests bit 0 only). Every other bitmap is the one-segment case and its code
+  is the multiply it was.
+- **One routine finds a row.** `w16_bmrp` (AX = a row, BX = the slot * 2 ->
+  AX = the row's byte offset, DX = the segment to pass to `W16SEG`) is the
+  only place that knows. What addresses a row by it: the pixel and row
+  routines under every drawing call and ROP (`w16_bmaddr`, `w16_bmrow`,
+  `w16_bm2bm`, `w16_roprow`), `SetDIBits`'s fill and `GetDIBits`'s read
+  (`w16_bmfills`, `w16_gdrow`), `GetPixel` on a bitmap and flood fill's
+  read. A BitBlt from a tiled bitmap to the screen is one
+  `OSAPI_GFX_BLIT4` **per tile** the source rows cross.
+- **The tiles' code is part 9's, not part 3's.** The library part is one
+  64 KB segment and was within a few hundred bytes of it, so it keeps only
+  the one-segment case of each routine and a test of the high byte; a tiled
+  bitmap's arithmetic, its making and its per-tile blit are in the
+  system-library part (§124.24.1), reached from part 3 through the image's
+  `w16_scall` (`w16_bmsys`, the `SLCALL` shape the other way): `w16_bmrps`
+  and `w16_bmcaps`, which part 9's own callers call directly, `w16_bmhuge`
+  and `w16_bmtiles`. **The part is there whenever a tiled bitmap is**:
+  `w16_bmnew` makes one only through part 9 - a part that cannot be fetched
+  is a NULL bitmap, not a later call to nowhere - and part 9 stays until
+  the program ends (§124.24.1), after its bitmaps are gone. Only a tiled
+  bitmap pays the two gates a row.
+- **What stays one segment.** `GetBitmapBits`, `SetBitmapBits` and the
+  initial bits of `CreateBitmap` take a program buffer of at most 64 KB (the
+  call is one segment's: §124.15.2), so they reach the first tile's rows
+  (`w16_bmcap`: `65535 / stride` rows, at most the bitmap's); a program that
+  moves a huge picture through them with a huge pointer gets the first tile.
+  `GetDIBits` and `SetDIBits` reach every row. `CreatePatternBrush` reads
+  the first eight rows, which are in the first tile.
+
+**Cost.** WIN16's resident growth is **6 bytes of bss and no byte of image**
+on both arms (`w16b_ty`, `w16b_tdy`, `w16_gdseg`). The library part grows
+**68 bytes on kern_mega and 75 on kern_big** (`.w16dlg` 64,717 -> 64,785 of
+65,536, and 63,911 -> 63,986), the system-library part 251 and 250. The
+first build kept everything in part 3 (+303, 65,020 bytes: 516 left) and was
+moved out before it merged. **kern_big keeps the limit in effect, not in
+code:** the code is the same on both arms, so a real-mode machine makes a
+tiled bitmap whenever the heap holds the block, and on a 640 KB machine with
+the figure `GetFreeSpace` gives there (under 614,400, §124.25.1) Paintbrush
+keeps its bands as before (`win16pbrush` is unchanged: its bitmaps are below
+`W16_BMMAX`). A 153,600-byte bitmap does not fit a small real-mode heap and
+answers NULL there, as a program on Windows 3.0 in real mode would be told.
+No kernel byte.
+
+**What was seen (QEMU, kern_mega, -m 16, a hard disk with WIN16, 2026-11-04):**
+`BIGBMP.EXE` with the new WIN16 said *BIGBMP OK*: tile 0, the seam between
+rows 203 and 204, tile 1, tile 2, a BitBlt of tile 2's block onto the window,
+a BitBlt that starts in tile 0 and ends in tile 1, GetDIBits of a tile-2
+scan, SetDIBits of one, and a StretchBlt across the seam; with the old WIN16 it
+named `make select tile0 seam ...` and so on, from the first call. Paintbrush
+3.0 (`PBRUSH.EXE`) then started to its window with no *Insufficient memory*
+box and drew a stroke on the canvas. **Seen again after the move to part 9
+(the same rig, 2026-11-04):** the fixture, grown by a line and an
+`ExtFloodFill` across a seam, a BitBlt from an odd column (the band's path),
+a pattern brush made from the bitmap, copies both ways with a second tiled
+bitmap whose tiles are 262 rows (500 x 400), and a monochrome bitmap of
+102,400 bytes, said *BIGBMP OK*; Paintbrush started as before. **Rows:** `win16bigbmp` runs the
+fixture on kern_big, `win16memdc` and `win16pbrush` are the small-bitmap
+guards. **Not done:** kern_mega has no row for the fixture (no QEMU rig
+loads WIN16 on the arm; `tests/win16ovr.py` does it under Bochs).
 
 #### 124.25.18 Callable window procedures for WIN16's controls *(WIN16-NEXT `ctlproc`, DECISIONS 12:30)*
 
@@ -238152,7 +238366,11 @@ being the instance's. TASKS and TASKB hold a conversation from
 **Global atoms are the registered clipboard formats' table**
 (§124.25.10), as Windows' formats were global atoms. `GlobalAddAtom`,
 `GlobalFindAtom` and `GlobalGetAtomName` (USER.271, *S21 batch 5*) use
-it, and names compare without case, as `AnsiUpper` folds them.
+it, and names compare without case, as `AnsiUpper` folds them. A name
+is kept cut to 31 characters, so its first 31 decide: a longer name is
+found again rather than added once a call, which filled the table with
+copies of it and never found it *(2026-11-04)*. Two names the same for 31
+characters are one atom here, where Windows keeps 255.
 
 **The table is the task part's** *(S24 batch 2; part 10 since S21 batch
 6)*: `W16_NATOM` = 16 names of 31 characters, 512 bytes of part 10, read
@@ -238393,8 +238611,9 @@ It is part 9's shape in every respect (§124.24.1):
 - a handler is declared `W16TSK`; the image reaches one with `TCALL`, and a
   continuation in the part is `TCONT`;
 - the two parts' bss is one layout - the segment, the vector, the routine -
-  so one fetch body (`w16_pin`) and one drop (`w16_pout`) serve both, and
-  the second part cost the image 35 bytes;
+  so one fetch body (`w16_ptin`) and one drop serve both, and the second
+  part cost the image 35 bytes (since §124.25.16 one drop, `w16_ptdrop`,
+  serves parts 9, 10 and 11);
 - from the part, the image is `ICALL`. The other system part is reached
   through the image: `[w16_sfn]` set, then `ICALL w16_scall` (part 10 to
   part 9, GetHeapSpaces' `w16u_fsr`), or `[w16_tfn]` and `ICALL w16_tcall`
@@ -238462,7 +238681,7 @@ byte of it.
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
-| the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 960 KB of virtual paragraphs, and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the stepped floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Stepping down by quarters finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
+| the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 1,012 KB of virtual paragraphs (960 KB until 2026-11-04, when `W16V_LO` fell from 1000h to 0300h, §124.31.3), and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the stepped floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Stepping down by quarters finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
 | the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
@@ -238575,9 +238794,20 @@ what the numbers mean**:
   sub-allocates. Every claim WIN16 carves - an arena, a program's claim, a
   module block, a `w16_kclaim` block, the DOS window - is entered in the
   **map**, `w16_vmap`: its claim selector, its size in paragraphs and the
-  virtual base WIN16 gave it, first fit in `1000h`-`FFFFh` (below `1000h`
-  are the moveable handles, `W16_GH0`). So 960 KB of WIN16's own memory at
-  most, wherever the claims are. In real mode there is no map: a virtual
+  virtual base WIN16 gave it, first fit in `0300h`-`FFFFh` (`W16V_LO` = 0300h; below it are the moveable
+  handles, `W16_GH0` = 0100h + 2 x `W16_NGH` = 0300h, so a value under
+  `W16V_LO` is a handle and a value at or above it a virtual paragraph,
+  `w16_pin`/`w16_pout`'s one compare and the fixed-block test of
+  `GlobalHandle`/`GlobalFree`/`GlobalSize` on the same constant). So 1,012 KB
+  of WIN16's own memory at most, wherever the claims are. It was 960 KB
+  (`W16V_LO` = 1000h) until 2026-11-04. The audit that allowed it: no
+  selector the map is asked about is under 1084h except the kernel's identity
+  selectors (0040h, KERNEL_SEG 0060h, FAT_SEG, LOW_SEG, COLD_SEG, all under
+  1000h), which WIN16 never loads through `W16SEG` except KERNEL_SEG, under
+  0300h; every LDT allocator selector, which is everything a claim, part or
+  program holds, is at least `MEGA_LDT_FREE0` x 8 + 4 = 1084h. A row's
+  virtual base only ever comes from the map, so no value in 0300h-0FFFh
+  is looked up unless it was handed out as one. In real mode there is no map: a virtual
   paragraph IS the segment, and every site below assembles to today's bytes.
 - **Loading one** into a segment register is one macro, `W16SEG reg, src`:
   in real mode `mov reg, src`; in the arm a call to `w16_vsel`, which finds
