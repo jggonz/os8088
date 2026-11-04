@@ -406,6 +406,16 @@ W16EXPORT W16M_GDI,        63,      8,  w16g_polyrgn        ; CreatePolygonRgn(p
 W16EXPORT W16M_GDI,        44,      4,  w16g_selclip        ; SelectClipRgn(word word)
 W16EXPORT W16M_GDI,        21,      10, w16g_exclclip       ; ExcludeClipRect(word s_word s_word s_word s_word)
 W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(word long)
+; what Visual Basic 3.0's runtime imports (SPEC.md 124.25.14, w16rgn.inc)
+W16EXPORT W16M_GDI,        15,      6,  w16g_offworg        ; OffsetWindowOrg(word s_word s_word)
+W16EXPORT W16M_GDI,        23,      18, w16g_arc            ; Arc(word s_word x8)
+W16EXPORT W16M_GDI,        26,      18, w16g_pie            ; Pie(word s_word x8)
+W16EXPORT W16M_GDI,        50,      4,  w16g_brind          ; CreateBrushIndirect(ptr)
+W16EXPORT W16M_GDI,        62,      4,  w16g_penind         ; CreatePenIndirect(ptr)
+W16EXPORT W16M_GDI,        151,     6,  w16_ans0            ; CopyMetaFile(word str)
+W16EXPORT W16M_GDI,        172,     10, w16g_setrectrgn     ; SetRectRgn(word s_word x4)
+W16EXPORT W16M_GDI,        175,     12, w16_ans0            ; EnumMetaFile(word word segptr long)
+W16EXPORT W16M_GDI,        176,     12, w16_ans0            ; PlayMetaFileRecord(word ptr ptr word)
 ; the text calls that draw or measure in the face of the DC's font (SPEC.md
 ; 124.24.4): their rows carry W16B_DCF
 %define w16dcf_w16g_textout
@@ -452,6 +462,9 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 %define w16mdc_w16g_rect
 %define w16mdc_w16g_roundrect
 %define w16mdc_w16g_ellipse
+%define w16mdc_w16g_arc
+%define w16mdc_w16g_pie
+%define w16mdc_w16g_offworg
 %define w16mdc_w16g_polygon
 %define w16mdc_w16g_polyline
 %define w16mdc_w16g_setpixel

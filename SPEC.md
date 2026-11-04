@@ -236597,6 +236597,29 @@ copy: black stays black and white stays white, which is what Windows gives
 under the default text and background colours. A DC with other colours
 would get them on Windows and does not here yet.
 
+#### 124.25.14 The GDI calls Visual Basic 3.0 imports *(WIN16-NEXT-PLAN L1, vbgdi)*
+
+`VBRUN300.DLL` imports nine GDI functions WIN16 lacked. All nine are exports
+now, and none costs a resident byte: the rows are the loader part's and the
+handlers are the system-library part's (part 9).
+
+**What a missing import does (the question L1 asked).** A program that imports
+a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
+import is bound to a stub, and the program runs until it CALLS it. The stub
+then ends the program, as `exit` does, with a toast naming the call. So a
+library that imports 23 functions it never calls in the program's first
+second is fine, and one that calls a missing function in its start-up ends
+the instance at once, with only that toast to say so.
+
+| call | what WIN16 does |
+|---|---|
+| `OffsetWindowOrg` (GDI.15) | `SetWindowOrg` of the old origin plus the offsets; the old origin is the answer, `DX:AX` = y:x. Exact, with the same limits as `SetWindowOrg` (§124.22.2: the extents do not scale a drawing) |
+| `SetRectRgn` (GDI.172) | the region's rectangle replaced, as `CreateRectRgn` makes one. A handle that is not a region is left alone. Void in Windows; TRUE here |
+| `CreatePenIndirect` (GDI.62) | `CreatePen` from the `LOGPEN` (style, width.x, colour); width.y is ignored, as Windows ignored it |
+| `CreateBrushIndirect` (GDI.50) | `BS_SOLID` is `CreateSolidBrush`. `BS_NULL` is the stock `NULL_BRUSH`. `BS_HATCHED` is `CreateHatchBrush`'s (§124.25.6: solid in the colour) and `BS_PATTERN` and `BS_DIBPATTERN` solid in `lbColor`, because the `lbHatch` bitmap is not read |
+| `Arc`, `Pie` (GDI.23, 26) | the ellipse of the box, drawn counter-clockwise from the ray through the start point to the ray through the end point, as a polyline (`Arc`) or a polygon through the centre (`Pie`) of 64 vertices to the circle at most: the two end points are exact, the ones between are 5.625 degrees apart, which is under half a pixel from the true curve at a 300 pixel radius. `Pie` fills in the brush and draws its edges in the pen, `Arc` draws in the pen alone, and neither moves the current point. Identical start and end points draw the whole ellipse. They draw on every adapter's DC and on a memory DC, through `Polyline` and `Polygon` (§124.25.4), so a wide pen and the clip are theirs. The curve is not `Ellipse`'s pixel for pixel (`Ellipse` is `RoundRect`'s corner table) |
+| `CopyMetaFile` (GDI.151), `EnumMetaFile` (GDI.175), `PlayMetaFileRecord` (GDI.176) | 0. There are no metafiles here (§124.25.10): WIN16 never hands out a metafile handle, so there is none to copy, enumerate or play, and a program has to handle the 0 as it does when memory is short |
+
 #### 124.25.15 What Visual Basic 3.0's runtime imports of KERNEL and USER *(WIN16-NEXT L1, `vbuser`)*
 
 `VBRUN300.DLL` imports 23 functions WIN16 lacked (WIN16-NEXT-PLAN L1); the
