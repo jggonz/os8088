@@ -1547,16 +1547,6 @@ w16u_isenabled:
     xor ax, ax
     ret
 
-; EnableWindow (USER.34) - args: +0 bEnable, +2 hWnd. Answers whether it was
-; disabled before. A control repaints (its WM_ENABLE), and so does a
-; program's own child window (w16n_enrep); a window that loses the focus it
-; had loses it.
-w16u_enable:
-    call w16_args
-    mov dx, [es:bx]
-    mov ax, [es:bx + 2]
-    ; fall into w16_enable
-
 ; w16_enable - AX = an HWND, DX = 0 disable / else enable -> AX = whether it
 ; was disabled. Clobbers BX, CX, DX.
 w16_enable:
@@ -1613,7 +1603,7 @@ w16_enable:
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
     push cx
-    call w16_tellfocus              ; (a replaced procedure: posted)
+    call w16_tellfocus              ; (a replaced procedure: sent or posted)
     pop cx
 .out:
     mov ax, cx
@@ -1627,50 +1617,83 @@ w16u_getfocus:
     mov ax, [w16_focus]
     ret
 
+; EnableWindow (USER.34) - args: +0 bEnable, +2 hWnd. Answers whether it was
+; disabled before. A control repaints (its WM_ENABLE), and so does a
+; program's own child window (w16n_enrep); a window that loses the focus it
+; had loses it. A procedure the program replaced is SENT its WM_ENABLE, and
+; the WM_KILLFOCUS before it, before this returns (w16_nfrun, 124.25.20).
+w16u_enable:
+    call w16_args
+    mov dx, [es:bx]
+    mov ax, [es:bx + 2]
+    mov bx, w16_enable
+    jmp short w16_nfrun
+
 ; SetFocus (USER.22) - args: +0 hWnd. Answers the window that had it.
 w16u_setfocus:
     call w16_args
     mov ax, [es:bx]
+    mov bx, w16_setfocus
+    ; fall into w16_nfrun
+
+; w16_nfrun - BX = w16_setfocus or w16_enable, AX (and DX) its arguments: run
+; it with what it raises for a program queued (w16d_nfq), then send those
+; (w16_nfsend) and answer its answer. A queue an outer SetFocus has not
+; finished sending is kept, and this one's go after it: a WM_KILLFOCUS
+; handler's own SetFocus or EnableWindow (SPEC.md 124.25.20).
+w16_nfrun:
+    mov cl, [w16_nfi]
+    cmp cl, [w16_nfn]
+    jb .keep
     xor cx, cx
     mov [w16_nfn], cx               ; and w16_nfi
+.keep:
     mov byte [w16_nfdefer], 1
     push si
-    call w16_setfocus
+    call bx
     mov byte [w16_nfdefer], 0
     mov cx, ax
     call w16_nfsend
     pop si
     ret
 
-; w16_nfsend - CX = SetFocus's answer: the notifications its controls raised
-; (EN_KILLFOCUS, EN_SETFOCUS) SENT to their parents one after the other, as
-; Windows sent them inside the call - Calendar stores the line it is leaving
-; on EN_KILLFOCUS and has moved its edit by the time a posted one arrives -
-; and then CX answered. It is its own continuation.
+; w16_nfsend - CX = SetFocus's or EnableWindow's answer: the messages it
+; queued SENT one after the other, as Windows sent them inside the call, and
+; then CX answered: a control's WM_COMMAND (EN_KILLFOCUS, EN_SETFOCUS) to its
+; parent - Calendar stores the line it is leaving on EN_KILLFOCUS and has
+; moved its edit by the time a posted one arrives - and a program's
+; procedure's WM_KILLFOCUS, WM_SETFOCUS or WM_ENABLE (124.25.20). A
+; WM_SETFOCUS is not sent when the focus has moved on since (a WM_KILLFOCUS
+; handler's SetFocus), as Windows did not. It is its own continuation.
 w16_nfsend:
     mov bl, [w16_nfi]
     cmp bl, [w16_nfn]
     jae .done
     inc byte [w16_nfi]
-    xor bh, bh
-    shl bx, 1
-    shl bx, 1
-    shl bx, 1
-    add bx, w16_nfq
+    mov al, W16_NFSZ
+    mul bl
+    xchg ax, bx
+    add bx, w16_nfq                 ; an entry is [w16_sm_*] as it was queued
+    mov ax, [bx + 2]
+    mov [w16_sm_msg], ax
+    mov dx, [bx + 4]
+    mov [w16_sm_wp], dx
+    mov dx, [bx + 6]
+    mov [w16_sm_lp], dx
+    mov dx, [bx + 8]
+    mov [w16_sm_lp + 2], dx
+    cmp ax, WM_SETFOCUS
     mov ax, [bx]
     mov [w16_sm_hwnd], ax
-    mov word [w16_sm_msg], WM_COMMAND
-    mov dx, [bx + 2]
-    mov [w16_sm_wp], dx
-    mov dx, [bx + 4]
-    mov [w16_sm_lp], dx
-    mov dx, [bx + 6]
-    mov [w16_sm_lp + 2], dx
+    jne .send
+    cmp ax, [w16_focus]
+    jne w16_nfsend                  ; the focus moved on: not sent
+.send:
     push cx
     call w16_hwnd2rec
     pop ax                          ; the answer, the continuation's word
     mov cx, ax
-    jc w16_nfsend                   ; its parent is gone
+    jc w16_nfsend                   ; its window is gone
     mov si, w16_nfsend
     jmp w16_sendwnd
 .done:
@@ -1682,9 +1705,11 @@ w16_nfsend:
 ; -----------------------------------------------------------------------------
 ; w16_setfocus - AX = an HWND (0 = none) -> AX = the one that had the focus.
 ; WM_KILLFOCUS and WM_SETFOCUS go to WIN16's own controls (SPEC.md 124.8) at
-; once, and are posted to a program's own window (124.22.6) or a control whose
-; procedure a program replaced (124.25.20). A dialog keeps the control that
-; had its focus. Clobbers BX, CX, DX.
+; once; a program's procedure - its own window's, or a control's it replaced
+; - is sent them when the program's SetFocus returns, and posted them when
+; WIN16 moved the focus itself (w16_tellfocus, 124.22.6, 124.25.20). The
+; focus is already the new window when either is told. A dialog keeps the
+; control that had its focus. Clobbers BX, CX, DX.
 ; -----------------------------------------------------------------------------
 w16_setfocus:
     W16SMKEEP                       ; the message being handled survives the
@@ -1774,35 +1799,27 @@ w16_focfront:
     ret
 
 ; w16_tellfocus - BX = a window, [w16_sm_msg]/[w16_sm_wp] set: tell it - one
-; of WIN16's controls at once, a program's own window posted (SPEC.md
-; 124.22.6), a dialog not at all. Keeps every register.
+; of WIN16's controls at once, a dialog not at all, and a program's
+; procedure (its own window's, or a control's it replaced) SENT as the
+; program's SetFocus or EnableWindow returns, posted when WIN16 itself moved
+; the focus (w16d_tell, SPEC.md 124.22.6, 124.25.20). With no dialog part
+; there is no control and no dialog, and a program's window is posted.
+; Keeps every register.
 w16_tellfocus:
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    je .prog
-    cmp byte [bx + W16W_KIND], W16Q_DIALOG
-    je .out
-    call w16_isctl                  ; a procedure the program replaced:
-    jc .prog                        ;   posted to it (SPEC.md 124.25.20)
-    push ax
-    push cx
-    push dx
-    xor ax, ax
-    mov [w16_sm_lp], ax
-    mov [w16_sm_lp + 2], ax
-    call w16_intproc
-    pop dx
-    pop cx
-    pop ax
-.out:
-    ret
-.prog:                              ; a program's own window: posted (S17)
     push ax
     call w16_rec2hwnd
     mov [w16_sm_hwnd], ax
     xor ax, ax
     mov [w16_sm_lp], ax
     mov [w16_sm_lp + 2], ax
-    call w16_post
+    cmp [w16_dseg], ax
+    je .post
+    call w16_isctl                  ; CF=0 one of WIN16's controls, as is
+    DCALL w16d_tell                 ; CF=1: a program's, to be posted
+    jnc .out
+.post:
+    call w16_post                   ; AL = 0: at the back
+.out:
     pop ax
     ret
 

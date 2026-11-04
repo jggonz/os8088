@@ -16,7 +16,10 @@ BM_SETCHECK, BM_GETCHECK), checks that the superclass window keeps its class's
 name and that a multi-line one's own window word (after the Edit's 18 bytes)
 survives its text, makes a superclass that answers WM_CREATE itself and still
 gets a working multi-line Edit, and subclasses a plain Edit with
-SetWindowLong(GWL_WNDPROC), eating one key. Its MessageBox, read off the
+SetWindowLong(GWL_WNDPROC), eating one key; then checks that SetFocus,
+EnableWindow and SetWindowText reach both procedures SENT, before each call
+returns and in Windows' order, and that a WM_KILLFOCUS handler taking the
+focus back keeps it (SPEC.md 124.25.20). Its MessageBox, read off the
 program's stack, is "CTLPROC OK" or names each check that failed.
 """
 import argparse
