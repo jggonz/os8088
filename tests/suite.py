@@ -17105,6 +17105,17 @@ SOAK = [
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88", "build/cdromtest.img",
                "build/cdfix.iso")),
+    Row("win16vbuser", "soak", py("tests/win16vbuser.py"), 60.0,
+        "SPEC.md 124.25.15, WIN16-NEXT-PLAN L1: VBUSER.EXE (`make "
+        "win16fixtures`, tests/win16/vbuser.c) calls the thirteen KERNEL and "
+        "USER functions VBRUN300 imports that WIN16 lacked - GetCurrentPDB, "
+        "SetHandleCount, GetCodeHandle, FreeModule, GetClassWord/Long, "
+        "GetUpdateRgn, Begin/Defer/EndDeferWindowPos, CreateIcon, EndMenu, "
+        "and TrackPopupMenu's refusal - each against a computed value; its "
+        "MessageBox must be VBUSER OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16shx", "soak", py("tests/win16shx.py"), 60.0,
         "SPEC.md 124.24.10, WIN16-ANY-PLAN S19: SHX.EXE (`make "
         "win16fixtures`, tests/win16/shx.c) asks ShellExecute and "

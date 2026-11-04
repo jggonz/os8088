@@ -4761,3 +4761,34 @@ each, `_INST16` misses 10 and still needs `DDEML`.
 All of it, with the boots and the shots' places, is in
 `docs/plans/WIN16-NEXT-PLAN.md` (L1, L2, Q4) and the lead's measure report.
 The screenshots of Microsoft programs are kept outside the repository.
+
+### VBRUN300's USER and KERNEL imports (WIN16-NEXT L1, `vbuser`, 2026-11-04)
+
+**What "exits silently" was.** A call to an import WIN16 lacks ends the
+program on the spot and leaves WIN16's window with two lines naming it
+(SPEC.md 124.12). So the Visual Basic programs that "ran and left after a
+second or two" had met one of VBRUN300's 23 missing functions; the window
+said which, and nobody had it open. Thirteen of the 23 are USER and KERNEL.
+
+**Nothing resident.** The room on the kern_mega arm was 423 bytes. A row
+lives in the loader part now and every handler in a part, so the thirteen
+cost the image and the bss nothing (36,281 + 27,475 real mode, 37,921 +
+26,700 on the arm, before and after). The library part grew by nothing (it
+has 1,045 left on the arm: 64,491 of 65,536); the task part took +346 /
++353 and the system-library part +159. EndMenu first went into the library
+part, +15, and that tipped `t_w16wrap` (a call from the part's end to its
+start within 4 KB, which fails on the base as well, at `w16_pnames+D8 ->
+w16_mheap+33`), so it went to the task part and calls `w16_mstop` through
+the library gate.
+
+**Two of them were already someone else's.** `DeferWindowPos` is
+`SetWindowPos` with one more word under its arguments, so its row names the
+same handler with 16 argument bytes instead of 14, and the handle it
+answers is 1, which every caller treats as a handle. `CreateIcon` is
+`CreateCursorIconIndirect` with the row bytes worked out by the caller.
+
+**TrackPopupMenu is the one not done.** The menu loop belongs to the bar:
+its start (`WM_INITMENU`), its hit test and its dismissal all assume the
+bar. A popup at a point is a second loop, estimated at 600-900 bytes of the
+library part against 800 left. It answers FALSE and shows nothing. SPEC.md
+124.25.15 has the table.

@@ -236541,6 +236541,42 @@ copy: black stays black and white stays white, which is what Windows gives
 under the default text and background colours. A DC with other colours
 would get them on Windows and does not here yet.
 
+#### 124.25.15 What Visual Basic 3.0's runtime imports of KERNEL and USER *(WIN16-NEXT L1, `vbuser`)*
+
+`VBRUN300.DLL` imports 23 functions WIN16 lacked (WIN16-NEXT-PLAN L1); the
+GDI ones are `vbgdi`'s and `WaitMessage` is `props`'. These thirteen are the
+KERNEL and USER rest. **What a missing import does** is §124.12's: the stub
+ends the program the moment it is *called*, with the window left up and two
+lines naming it (*Needs USER.416 which WIN16 does not provide yet.*); an
+import never called costs nothing. So a program that "runs and exits after a
+second or two" did not exit silently, and WIN16's window says which
+function it was. The wording in §124.12 says toast; the code has used the
+window since a toast went with the window that raised it.
+
+None of the thirteen costs a resident byte. A row is the loader part's
+(§124.19.1) and every handler is in a part: GetCurrentPDB, GetCodeHandle,
+SetHandleCount, GetClassWord/Long, EndMenu and CreateIcon in the task part
+(10; EndMenu reaches the menu loop's `w16_mstop` through the library
+part's gate), GetUpdateRgn in the system-library part (9). The library part
+(3), which has the least room, grew by nothing.
+
+| function | contract on Windows 3.1 | WIN16 |
+|---|---|---|
+| `GetCurrentPDB` (KERNEL.37) | the current task's PSP segment | **exact**: InitTask's own ES, the selector on the kern_mega arm |
+| `SetHandleCount` (KERNEL.199) | the handles a task may have open, up to the system's FILES= limit; the answer is what was granted | **exact for the ask, honest about the limit**: the smaller of the ask and 13, the five devices and the `DOS_NFH` = 8 files WIN16's DOS holds (`apps/dos/dos.asm`) |
+| `FreeModule` (KERNEL.46) | lowers a module's count, frees it at 0 | **FreeLibrary's** handler on the same row shape: a library's count lowered, its WEP called and blocks freed at 0. The answer is **not** Windows' (TRUE when freed): it is whatever FreeLibrary leaves, so a program reads `GetModuleUsage` instead. A module that is not a library (the program, WIN16's own) is left alone |
+| `GetCodeHandle` (KERNEL.93) | the handle of the code segment holding a function, reloading it if discarded | **approximate**: GlobalHandle's answer for the pointer's segment when that is a block of the global heap (a library's loaded code, a module block), else the segment itself, which is what a fixed segment's handle is in real-mode Windows. A discarded segment is not loaded by this call; its thunk is (§124.26.2), and the pointer a program has is a thunk's |
+| `GetClassWord`, `GetClassLong` (USER.129, .131) | a class field by `GCW_`/`GCL_` index | **exact** for `GCW_STYLE`, `GCL_WNDPROC`, `GCW_CBWNDEXTRA`, `GCW_HMODULE`, `GCW_HICON`, `GCW_HBRBACKGROUND`, `GCL_MENUNAME` and `GCW_ATOM` (the atom `GetClassInfo` takes); `GCW_CBCLSEXTRA` and the class extra words are 0 (RegisterClass keeps none, as `GetClassInfo` says), `GCW_HCURSOR` is 0, and a WIN16 control class or a bad window answers 0. One handler: a word's DX is 0 |
+| `EndMenu` (USER.187) | ends the menu loop that is running | **exact** for the loop §124.11 runs (bar, popup, system menu); with none running it does nothing |
+| `GetUpdateRgn` (USER.237) | the window's update region into a region; NULLREGION, SIMPLEREGION, COMPLEXREGION or ERROR | **approximate, as every region is**: the invalid rectangle, in the client and cut to it, is the region's bounding rectangle; SIMPLEREGION, or an empty region and NULLREGION; ERROR (0) for a window or region that is not one. `bErase` is not acted on, as `GetUpdateRect`'s is not |
+| `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` (USER.259-.261) | batch window moves, applied at the end | **at once, which Windows allows**: Begin answers the handle 1, Defer **is** `SetWindowPos` (its eight words' last seven are SetWindowPos's, and it answers 1, or 0 for a window that is not one), End answers TRUE. The handle is not a count of anything, so a batch larger than `n` is not refused |
+| `CreateIcon` (USER.407) | an icon from device bits | **CreateCursorIconIndirect's body** (§124.27.7), with the `CURSORICONINFO`'s row bytes worked out as `((nWidth * nBitsPixel + 15) / 16) * 2`: 1 plane of 1 or 4 bits, 4 planes of 1 bit, at most 64 square; any other shape answers the one cursor `LoadCursor` hands out. `DestroyIcon` frees it |
+| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **refused: FALSE**, no popup shown. §124.11's loop is the bar's (`WM_INITMENU`, the bar's title, `w16_mhit` on the bar), and a popup with no bar under it needs its own start, its own hit test and its own dismissal. Estimated at 600-900 bytes of the library part, which has 800 left on the kern_mega arm, and a trampoline of about 8 resident. Not done here |
+
+Gates: `tests/win16/vbuser.c` (`make win16fixtures`) checks every row above
+that is not a refusal against a value it can compute, and the TrackPopupMenu
+refusal; `tests/win16vbuser.py` (row `win16vbuser`) runs it.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one
