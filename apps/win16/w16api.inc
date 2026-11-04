@@ -400,6 +400,7 @@ W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segp
 W16EXPORT W16M_GDI,        106,     10, w16g_setbmbits      ; SetBitmapBits(word long ptr)
 W16EXPORT W16M_GDI,        440,     18, w16g_setdibits      ; SetDIBits(word word word word ptr ptr word)
 W16EXPORT W16M_GDI,        441,     18, w16g_getdibits      ; GetDIBits(word word word word ptr ptr word)
+W16EXPORT W16M_GDI,        25,      10, w16g_flood          ; FloodFill(word s_word s_word long)
 W16EXPORT W16M_GDI,        372,     12, w16g_xflood         ; ExtFloodFill(word s_word s_word long word)
 W16EXPORT W16M_GDI,        64,      8,  w16g_rectrgn        ; CreateRectRgn(s_word s_word s_word s_word)
 W16EXPORT W16M_GDI,        63,      8,  w16g_polyrgn        ; CreatePolygonRgn(ptr word word)
@@ -491,6 +492,7 @@ W16EXPORT W16M_GDI,        176,     12, w16_ans0            ; PlayMetaFileRecord
 %define w16mdc_w16g_rectvis
 %define w16mdc_w16g_getdcorg
 %define w16mdc_w16g_xflood
+%define w16mdc_w16g_flood
 %define w16mdc_w16g_selclip
 %define w16mdc_w16g_exclclip
 %define w16mdc_w16u_drawtext
