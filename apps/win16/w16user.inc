@@ -3611,7 +3611,7 @@ w16_postact:
 ; CF=1 refuses, with the WM_CLOSE posted. The gfx lock is held.
 w16_close:
     cmp byte [w16_state], W16S_RUN
-    jne .gof
+    jne .notrun
     cmp si, [w16_win]
     je .main
     push si                         ; a second window: the program is asked,
@@ -3665,18 +3665,16 @@ w16_close:
     pop si
     cmp byte [w16_state], W16S_ENDED
     jne .refuse
+.notrun:
+    cmp byte [w16_state], W16S_ENDED ; ended and not yet given back, the wake
+    jne .go                         ;   w16_after posted still queued (SPEC.md
+    cmp si, [w16_win]               ;   124.8.3): given back from the main
+    jne .refuse                     ;   window's close; a second one's waits
     mov byte [w16_locked], 1        ; (w16_mhpost cleared it; the kernel's
     call w16_freeprog               ;   lock is still held, w16_onclose)
 .go:
     clc
     ret
-.gof:                               ; a program a part saw end (w16_afterp,
-    cmp byte [w16_defer], 0         ;   124.8.3): its memory is given back
-    je .go                          ;   here, with no part on the stack
-    mov byte [w16_defer], 0
-    mov byte [w16_locked], 1        ; (the negotiator holds the lock)
-    call w16_freeprog
-    jmp short .go
 .refuse:
     stc
     ret

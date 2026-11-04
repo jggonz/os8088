@@ -3238,7 +3238,7 @@ w16_mhpost:
     call w16_mans
     ICALL w16_resume
 .after:
-    ICALL w16_afterp                  ; (the lock still marked held)
+    ICALL w16_after                  ; (the lock still marked held)
     mov byte [w16_locked], 0
     ret
 .still:

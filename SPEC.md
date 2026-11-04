@@ -233441,14 +233441,31 @@ still there to return into, so it passed; on kern_mega the part's code alias
 is freed with it and the `retf` is a #GP on a selector that no longer exists,
 which closed the program with `0D at cs:068F`.
 
-So a part never ends the program in its caller's frame. A part reaches
-`w16_after` through **`w16_afterp`**, which for the one case that frees (the
-program ended, one task, nothing to say) only posts the close and sets
-`[w16_defer]`; every other case is `w16_after`. The close arrives from the
-UI task with no part on the stack, and `w16_close` gives the program's
-memory back there. The window stays up for that one UI pass with the
-program's memory still intact, which is a longer life than it had before,
-not a shorter one.
+So **the last task's end is finished from the wake, never in its caller's
+frame.** `w16_after`, which every resume's caller runs, only posts a wake
+(`w16_wakeme`) when the one task left has ended; `w16_wake` runs with nothing
+but the UI task's dispatch under it, finds the program ended and comes back to
+`w16_endnow`, which is what `w16_after` was: the memory given back and the
+close posted, or WIN16's window kept with its message (`w16_endshow`). One
+rule at the one routine every caller already calls, rather than a second
+entry point a part must remember: two ICALL sites reach it today
+(`w16_mhpost`, and `w16t_serve` directly and through `w16_peekwake`'s tail),
+and the next one is covered without knowing it is one. Several tasks are
+unchanged: one of them ends where it is (`w16t_end`), which drops no part.
+
+The window stays up for that one UI pass with the program's memory still
+intact, which is a longer life than it had before, not a shorter one; a
+callback in between sees `W16S_ENDED`, as one did before, and its own
+`w16_after` posts the same coalesced wake. Should the user's close arrive
+first, or the wake be lost to a full ring, `w16_close` gives the memory back
+itself on `W16S_ENDED` before it lets the main window's close go ahead, and
+refuses a second window's, which the free destroys with the rest. The free
+cannot be owed to the close instead: `OSAPI_WM_CLOSE` retires the negotiator
+(75.2), so a close posted with the free still owed never reaches it, and the
+program's files, profiles, sound and MMSYSTEM devices would go with the
+instance unclosed. `w16_freeprog` is idempotent, so an end finished twice
+costs nothing. **+26 bytes of image on both arms, no bss** (the first
+version, which owed the free to the close, was +59 and one bss byte).
 
 ### 124.9 Memory: the global and local heaps *(shipped in S5)*
 
