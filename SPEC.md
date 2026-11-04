@@ -238650,7 +238650,9 @@ closes with it. Closing one program of several is open.
   follows, `[mega_infault]` stays 0, and `mega_fkdo` completes the close
   (`[mega_fkslot]` back to 0, no instance left). Seen 2026-11-04. Step 5:
   after the close, none of the fourteen cells names an LDT code selector
-  below A000h, which is `mega_swok`'s test for a package's handler.
+  below A000h, which is `mega_swok`'s test for a package's handler. Seen
+  passing under Bochs: 21h is IVT 09h's `F000:E987` again, 2Fh and 31h the
+  BIOS's `F000:FF53`, where the close used to leave WIN16's `10E4:xxxx`.
 
 ### 124.32 MMSYSTEM *(S23, docs/plans/WIN16-ANY-PLAN.md; the kern_mega arm's)*
 

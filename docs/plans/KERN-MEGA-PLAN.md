@@ -13703,7 +13703,11 @@ rows, instead of from `mega_ivts`, and read a "cell" past LOW0's limit. The
 same run showed the residue the entry is about: after the close IVT 21h,
 2Fh and 31h were `10E4:1038`, `10E4:0FD7` and `10E4:826A`, WIN16's code
 selector, and 02h, 34h-3Dh the BIOS's `F000:FF53` (OVRTEST has no x87
-code). Step 5 of the row is that check.
+code). Step 5 of the row is that check. The second run, after the fix (b40899b02),
+passed all five steps: CLOSED OVRTEST 0D at 11BC:0517, not halted, the close
+completed, and every cell the machine's again - 21h `F000:E987` (= IVT 09h),
+2Fh, 31h, 02h and 34h-3Dh `F000:FF53`. **`.mega` has 26 bytes left in its
+rung**: the next `.mega` change of any size beyond that crosses it.
 
 *Owner bytes.* `mega_fbown`'s nibble test became `test al, 50h`: the owners
 written are a slot, 80h|, A0h| (taken), C0h|, F0h, FEh and FFh (refused),
