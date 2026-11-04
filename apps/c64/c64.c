@@ -512,7 +512,7 @@ static void c64_menu_state(void);
 static void c64_tier_init(void);
 static void c64_fullscreen_toggle(void *win);
 static void c64_ram_pattern(void);
-static void c64_reset_regs(void);
+static void ovl_reset_regs(void);
 static void c64_reset_cpu(void);
 static void c64_irq_update(void);
 static void c64_nmi_raise(void);
@@ -1261,14 +1261,14 @@ static void c64_speed_fold(void)
  *
  * AND THE ROW GOES ON SAYING IT. c64_say expires after five seconds; a jammed
  * machine is a PERMANENT condition, so C64_ST_JAM is a permanent row state in
- * c64_status beside `C64.ROM missing` (§1.4's rule, §10.1). Without that the
+ * ovl_status beside `C64.ROM missing` (§1.4's rule, §10.1). Without that the
  * glass showed a dead machine and an idle one identically
  * (build/port-shots/wave2-05-jam.png).
  *
  * AND IT DOES NOT GO THROUGH c64_say, WHICH DREW IT TWICE. c64_say put the
  * SAME 22 glyphs up as a five-second message (msg == 1); five seconds later
  * the deadline cleared it, msg became 3, `msg != c64_st_shown` forced the
- * `full` path, and c64_status filled the row black and re-lettered the
+ * `full` path, and ovl_status filled the row black and re-lettered the
  * IDENTICAL line at the IDENTICAL place - 1 fill + 1 font_run + 22 cells,
  * ~21 ms that changed not one pixel, and on the glass a row that blanks and
  * re-letters five seconds after the event with nothing having happened
@@ -1531,7 +1531,7 @@ static void ovl_reset_service(void)
      * is the gate that now catches the shape. */
     c64_copy_req = 0;
     c64_paste_req = 0;
-    c64_reset_regs();
+    ovl_reset_regs();
     c64_lum_update();
     c64_frame_regs();
     c64_reset_cpu();                        /* the 6510 out of reset: I set,
@@ -1553,7 +1553,7 @@ static void ovl_reset_service(void)
      * c64_jam() greys Preferences > Advance frame - there is no machine left
      * to advance (SPEC.md 47) - and the FACT that greys it is the permanent
      * `Main CPU: JAM at $XXXX` line on the status row. A reset clears the
-     * state, so c64_status stops drawing that line at once; without this call
+     * state, so ovl_status stops drawing that line at once; without this call
      * the greying outlived the fact by the rest of the session, and then
      * un-greyed itself at random, because the only other callers of
      * c64_menu_state are the Warp/Pause/Swap/Fullscreen latches - so whether
@@ -1830,14 +1830,14 @@ void os88_onwake(void *win)
     /* A MESSAGE ON THE ROW IS A REASON TO FLUSH, because its DEADLINE is
      * examined inside the flush: with nothing else dirty the row would stay
      * up for ever (C64-SPEC §10.1's "the widgets come back"). A flush with
-     * nothing dirty composes no rows and c64_status answers "nothing moved"
+     * nothing dirty composes no rows and ovl_status answers "nothing moved"
      * in zero drawing calls, so this costs the scan and no drawing. */
     /* ...AND THE SPEED WIDGET'S OWN DELTA IS PART OF THE GATE. c64_dirty_any
      * comes from C64_SCR_ANY, which the core sets on a RAM WRITE: a machine
      * that runs without writing RAM (an ML poll loop on $D012, a `WAIT`) left
      * the figures frozen at whatever they were when it last wrote, stating a
      * speed that is not the current one - and that is exactly when a user is
-     * looking at the widget. It costs nothing when nothing moved: c64_status
+     * looking at the widget. It costs nothing when nothing moved: ovl_status
      * answers "nothing on the row moved" in zero drawing calls. */
     /* ...AND WARP CAPS THE RATE AT VICE'S OWN 10 fps (vsync.c:339-340,
      * :634-656). It can only slow a flush down - the tier rate stands
@@ -1994,7 +1994,7 @@ void *os88_main(void)
     ovl_conv_init();
     c64_tier_init();                        /* the flush rate, off os88_cpu()
                                              * and tests/c64band's numbers */
-    c64_reset_regs();                       /* the VIC/CIA/SID register files */
+    ovl_reset_regs();                       /* the VIC/CIA/SID register files */
     c64_lum_update();                       /* the 1bpp masks, off $D021 (9.6) */
     c64_dither_init();                      /* ...and the other modes' (9.10) */
     c64_ram_pattern();                      /* power-on RAM is VICE's factory

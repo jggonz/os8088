@@ -173,7 +173,7 @@ static char c64_st_cpup[14];                /* ...and what is ON THE GLASS, so
 static char c64_st_fpsp[14];
 static int c64_st_ok;                       /* the row on the glass is ours */
 /* ...AND TWO MORE, BECAUSE A MESSAGE DOES NOT NECESSARILY TOUCH THE WHOLE ROW
- * (see c64_status). The row has two halves - the two SPEED fields at cells
+ * (see ovl_status). The row has two halves - the two SPEED fields at cells
  * 0..24, and the JOYSTICK/drive/lamp widgets from cell 25 on - and a message
  * of 25 cells or fewer stands on the first and not the second:
  *
@@ -1252,7 +1252,7 @@ static void c64_tier_init(void)
  * SPEC already said - Recording, Volume, CRT and Mixer. The drive NUMBER
  * stays, because the drive is the one of those a user looks for - drawn
  * PLAIN and never lit, because grey does not survive on a black row (see
- * c64_status).
+ * ovl_status).
  *
  * AND A MESSAGE OWNS THE ROW'S 40 FIELD CELLS - NOT THE ROW. The alternative,
  * measured above, is a seven-character message area, and the messages this
@@ -1359,7 +1359,7 @@ static void c64_st_band(int mask, int x, int y, int nb)
 #endif
 }
 
-/* c64_status - the row, at `y`, delta-drawn. `y` is the LIVE bottom of the
+/* ovl_status - the row, at `y`, delta-drawn. `y` is the LIVE bottom of the
  * content box and not a fixed offset from the top: on a 200-line adapter
  * wm_fit clamps the window and a fixed offset put this row - which carries
  * §1.4's permanent `C64.ROM missing` fact and every refusal - off the glass
@@ -1462,7 +1462,7 @@ static void c64_st_lamps(int ox, int y, int flags)
  *
  * IT IS BOUNDED, AND THAT IS THE POINT RATHER THAN A MICRO-OPTIMISATION. The
  * header used to say it was asked "once per row REBUILD - not per flush", and
- * the code contradicted it: the caller evaluates it at the TOP of c64_status,
+ * the code contradicted it: the caller evaluates it at the TOP of ovl_status,
  * above every early return, so it ran on every flush for as long as a message
  * stood - on the path two lines below advertised as answering "nothing on the
  * row moved" in ZERO drawing calls. SmallerC's `while (s[n] != 0) n++;` is
@@ -1501,7 +1501,7 @@ static int c64_slen(const char *s, int cap)
  * README.TXT` is 32 cells and there is nowhere else for it to go. */
 #define C64_MSGSHORT (C64_ST_JOYX / 8)
 
-static void c64_status(int ox, int y, int w)
+static void ovl_status(int ox, int y, int w)
 {
     const char *t;
     int msg, joy1, joy2, flags, sp, mshort, mlong, lfull, rfull, wchg, x2;
@@ -2063,7 +2063,7 @@ static void c64_flush(void *win)
     if (c64_msg[0] != 0)
         if ((unsigned)(os88_ticks() - c64_msg_until) < 0x8000u)
             c64_msg[0] = 0;                     /* and `msg != c64_st_shown` in
-                                             * c64_status is what redraws the
+                                             * ovl_status is what redraws the
                                              * widgets under it */
 
     /* THE ROM-LESS BANNER WAS HERE, and it is deleted rather than disabled.
@@ -2400,14 +2400,14 @@ static void c64_flush(void *win)
      * joysticks, c64_blank_rect and c64_sh_inval ever raised that flag, and
      * every one of them raises it for a FULL redraw - so the field compare
      * this row was rebuilt around was only ever exercised by the harness
-     * setting the flag by hand. c64_status's own early return answers
+     * setting the flag by hand. ovl_status's own early return answers
      * "nothing on the row moved" in zero drawing calls, which is what the
      * delta was built for; that is the gate. The old `c64_st_dirty` flag is
      * gone with it: every one of its setters either cleared c64_st_ok (a
      * message, an expose, an invalidated shadow) or changed a FIELD the
      * compare below already sees (Swap joysticks, a message expiring), so it
      * only ever said a second time what the row could work out for itself. */
-    c64_status(ox, sty, w);
+    ovl_status(ox, sty, w);
 }
 
 /* c64_blank_rect - a rectangle of the content box whose pixels are no longer
@@ -2536,9 +2536,9 @@ static int c64_fsx_avail(void *win)
     return (c64_fsx_id >= 0) ? 1 : 0;
 }
 
-/* c64_fsx_compose - row ROW's cells F..L into c64_b8 at colour: one
+/* ovl_fsx_compose - row ROW's cells F..L into c64_b8 at colour: one
  * c64_c8row call with the per-cell colours each mode names (9.12's table) */
-static void c64_fsx_compose(int row, int f, int l)
+static void ovl_fsx_compose(int row, int f, int l)
 {
     unsigned char *rv, *col;
     int n, c, mode, bg, a, code;
@@ -2600,9 +2600,9 @@ static void c64_fsx_compose(int row, int f, int l)
               c64_k2 + f, c64_k3 + f, c64_kmc + f, n);
 }
 
-/* c64_fsx_sprites - row ROW's sprites over c64_b8, pixels of cells F..L
+/* ovl_fsx_sprites - row ROW's sprites over c64_b8, pixels of cells F..L
  * only (9.11's geometry, 9.12's colours) */
-static void c64_fsx_sprites(int row, int f, int l)
+static void ovl_fsx_sprites(int row, int f, int l)
 {
     unsigned char *rv;
     int k, y, y0, y1, sl, j;
@@ -2641,9 +2641,9 @@ static void c64_fsx_sprites(int row, int f, int l)
     }
 }
 
-/* c64_fsx_frame - ONE colour frame, off the same dirty set the window's
+/* ovl_fsx_frame - ONE colour frame, off the same dirty set the window's
  * flush uses (9.2, 9.10, 9.11): each dirty row's span composed and copied */
-static void c64_fsx_frame(void)
+static void ovl_fsx_frame(void)
 {
     int i, y, f, l, sp, b;
 
@@ -2687,9 +2687,9 @@ static void c64_fsx_frame(void)
                 l = c64_cspl;
             }
         }
-        c64_fsx_compose(i, f, l);
+        ovl_fsx_compose(i, f, l);
         if (c64_spsig[i])
-            c64_fsx_sprites(i, f, l);
+            ovl_fsx_sprites(i, f, l);
         for (y = 0; y < 8; y++)
             c64_fsx_put(c64_fsx_seg, C64_X320((i << 3) + y) + (f << 3),
                         c64_b8 + C64_X320(y) + (f << 3), (l - f + 1) << 3);
@@ -2758,7 +2758,7 @@ static void c64_fsx_main(void)
                     | ((unsigned)(os88_ticks() - c64_fsx_tick)
                        >= (unsigned)(1 + c64_fs_extra))) {
                 k = os88_ticks();
-                c64_fsx_frame();
+                ovl_fsx_frame();
                 c64_fs_cost += (int)(os88_ticks() - k);
             }
         if (n == 0)

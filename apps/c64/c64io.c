@@ -248,7 +248,7 @@ static void c64_map_publish(void)
  * (the VIC-II's own ladder, vicii-color.c). CIA2 PRA = $17 puts the VIC in
  * bank 0.
  * ========================================================================*/
-static void c64_reset_regs(void)
+static void ovl_reset_regs(void)
 {
     int i, k;
 
@@ -581,7 +581,7 @@ static void c64_tod_alarm(int k)
                 }
 }
 
-/* c64_tod_tick - one tenth of a second on the CIA's own mains accumulator.
+/* ovl_tod_tick - one tenth of a second on the CIA's own mains accumulator.
  * BCD, as the registers are, and the HOURS are 12-hour BCD with an AM/PM bit
  * that toggles at 12 - ciacore.c:1961-1977, transcribed:
  *
@@ -591,7 +591,7 @@ static void c64_tod_alarm(int k)
  *
  * The old code did `if (v > 0x12) v = 1` on a plain BCD increment, so it ran
  * 09, 0A..0F, 10 - six hours that do not exist - and never touched AM/PM. */
-static void c64_tod_tick(int k)
+static void ovl_tod_tick(int k)
 {
     int v, h, pm;
 
@@ -667,7 +667,7 @@ static void c64_timer_step(int k, int n)
         /* THE COMPARE IS UNSIGNED, AND THAT IS NOT A STYLE CHOICE. `c` is a
          * 16-bit CIA counter and the reset default latch is $FFFF - the state
          * `LDA #$FF / STA $DC04 / STA $DC05 / STA $DC0E` leaves, which is the
-         * standard free-running-timer idiom AND what c64_reset_regs leaves
+         * standard free-running-timer idiom AND what ovl_reset_regs leaves
          * behind. `(int)0xFFFF` is -1, so `n > (int)c` was true for every
          * n >= 0 while `n -= (int)c + 1` subtracted NOTHING: an infinite loop
          * inside os88_onwake, on the UI task, minting an underflow flag for
@@ -926,7 +926,7 @@ static void c64_advance(int n)
             c64_todp[k]++;
             if (c64_todp[k] >= 5) {         /* 50 Hz mains -> tenths */
                 c64_todp[k] = 0;
-                c64_tod_tick(k);
+                ovl_tod_tick(k);
             }
         }
     }

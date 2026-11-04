@@ -2780,7 +2780,14 @@ staging in transient claims instead (§7.7).
 ### 13.3 The overlay rules that bind here
 
 - **Split by FREQUENCY, never by size** (SPEC.md §73.14): a keystroke's path
-  stays resident, a menu command's goes out.
+  stays resident, a menu command's goes out. **And at most once a flush or a
+  frame goes out too, once the segment is tight**: at 62,834 of 65,024
+  (image + bss) after FM sound, `ovl_status` (the status row, once a flush),
+  `ovl_fsx_frame`/`ovl_fsx_compose`/`ovl_fsx_sprites` (the colour screen, a
+  frame and its dirty rows), `ovl_reset_regs` and `ovl_tod_tick` (a tenth of
+  a second) moved out: **3,118 image bytes, 59,722 in all**, for one far call
+  each on paths that already cost milliseconds. The per-instruction and
+  per-write paths, the latch and the 1bpp composers stay resident.
 - **Every callback is resident** — `os88_paint`, `os88_onkey`, `os88_onclick`,
   `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
   runtime reaches one by a near offset. A callback that needs overlay code
@@ -2828,7 +2835,14 @@ staging in transient claims instead (§7.7).
   the ROM at the ceiling: one claim fewer against `MEM_OWNER_MAX`, measured
   23.0K for both parts.
 - **Split by FREQUENCY, never by size** (SPEC.md §73.14): a keystroke's path
-  stays resident, a menu command's goes out.
+  stays resident, a menu command's goes out. **And at most once a flush or a
+  frame goes out too, once the segment is tight**: at 62,834 of 65,024
+  (image + bss) after FM sound, `ovl_status` (the status row, once a flush),
+  `ovl_fsx_frame`/`ovl_fsx_compose`/`ovl_fsx_sprites` (the colour screen, a
+  frame and its dirty rows), `ovl_reset_regs` and `ovl_tod_tick` (a tenth of
+  a second) moved out: **3,118 image bytes, 59,722 in all**, for one far call
+  each on paths that already cost milliseconds. The per-instruction and
+  per-write paths, the latch and the 1bpp composers stay resident.
 - **Every callback is resident** — `os88_paint`, `os88_onkey`, `os88_onclick`,
   `os88_onwake`, `os88_onfile`, `os88_oncmd`, `os88_about` — because the
   runtime reaches one by a near offset. A callback that needs overlay code

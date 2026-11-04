@@ -2538,7 +2538,7 @@ int main(int argc, char **argv)
     h_keydown[KSC_UP] = 1;
     h_keydown[KSC_CTRL] = 1;                /* up + fire on control port 2 */
     c64_dirty_any = 1;                      /* ...and nothing else: the
-                                             * flush calls c64_status every
+                                             * flush calls ovl_status every
                                              * time and the FIELD COMPARE is
                                              * the gate, which is the path the
                                              * product takes. Setting the flag
@@ -2963,8 +2963,8 @@ int main(int argc, char **argv)
      * 320x200 goes into the framebuffer one byte a pixel, nothing draws
      * through a desktop slot inside, and Alt+D comes back. Each pixel below
      * is read off the modelled framebuffer. Verified red with the text arm's
-     * two colours swapped in c64_fsx_compose, with the sprite pass taken out
-     * of c64_fsx_frame, and with c64_say's toast fence removed. c64memtest
+     * two colours swapped in ovl_fsx_compose, with the sprite pass taken out
+     * of ovl_fsx_frame, and with c64_say's toast fence removed. c64memtest
      * runs the shipping c64fsx.inc composers on a real x86. */
     {
         int j, x, rt;
@@ -3423,7 +3423,7 @@ int main(int argc, char **argv)
      * EMERGES from the KERNAL programming CIA1 timer A (6.1, 6.3). */
     {
         int d, fired;
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         /* the nearest alarm is a frame's own, not a jiffy and not a host
          * tick: from the display latch's line (9.9, a whole frame away) it
@@ -3533,7 +3533,7 @@ int main(int argc, char **argv)
             H_SETDEAD(0);
             (void)dead;
         }
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_scr_wr(C64_SCR_IRQ, 0);
     }
@@ -3633,7 +3633,7 @@ int main(int argc, char **argv)
      * than whichever write the flush happened to follow. Verified to fail
      * with c64_advance's c64_latch call removed: the mode never leaves 0. */
     {
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_frame_regs();
         c64_frame_cyc = 0;
@@ -3664,7 +3664,7 @@ int main(int argc, char **argv)
         if (c64_mode != 2 || c64_rmode[24] != 2)
             fail("a split that is bitmap at line 51 every frame flipped the "
                  "screen to text: the latch read a write below its line");
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_frame_regs();
         c64_scr_wr(C64_SCR_IRQ, 0);
@@ -3763,7 +3763,7 @@ int main(int argc, char **argv)
     {
         int j, n, seen[256];
         unsigned t0, t1;
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_io_wr(0xD40E, 0xFF);            /* voice 3 fast, on noise */
         c64_io_wr(0xD40F, 0xFF);
         c64_io_wr(0xD412, 0x80);
@@ -3832,14 +3832,14 @@ int main(int argc, char **argv)
             c64_scr_wr(C64_SCR_DEAD + 1, 0);
             c64_frame_cyc = 0;
         }
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
     }
 
     /* --- THE FREE-RUNNING TIMER, WHICH IS WHERE A SIGNED COMPARE HANGS.
      * `LDA #$FF / STA $DC04 / STA $DC05 / LDA #$11 / STA $DC0E` is the
      * standard C64 free-running-timer / RNG idiom AND the state
-     * c64_reset_regs leaves behind, so a $FFFF latch is not an exotic input.
+     * ovl_reset_regs leaves behind, so a $FFFF latch is not an exotic input.
      * `(int)0xFFFF` is -1: the compare was true for every n and the subtract
      * took nothing off, which is an INFINITE LOOP on the UI task, and
      * `(int)(0xFFFF + 1)` is 0, which made the same counter look like the
@@ -3849,7 +3849,7 @@ int main(int argc, char **argv)
         int i2, spun;
         short n2;
         unsigned short c2;
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_scr_wr(C64_SCR_IRQ, 0);
         c64_io_wr(0xDC04, 0xFF);
@@ -3892,7 +3892,7 @@ int main(int argc, char **argv)
         if (spun < 1000)
             fail("the negative control terminated: the signed compare this "
                  "row exists to catch is no longer being modelled");
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
     }
 
@@ -4260,7 +4260,7 @@ int main(int argc, char **argv)
     /* --- what CIA1 answers, which is the only reason the matrix exists --- */
     {
         c64_kbd_init();
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_cia[0][0x02] = 0xFF;            /* PRA all outputs */
         c64_cia[0][0x03] = 0x00;            /* PRB all inputs */
@@ -4276,7 +4276,7 @@ int main(int argc, char **argv)
         h_keydown[0x1E] = 0;
         c64_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
     }
 
@@ -5369,7 +5369,7 @@ int main(int argc, char **argv)
      * somebody happens to trigger that message while looking.
      *
      * So the literals are the subject, not c64_msg. The list is every string
-     * this package passes to c64_say plus the two permanent lines c64_status
+     * this package passes to c64_say plus the two permanent lines ovl_status
      * draws itself; a new message that does not fit fails the BUILD.
      *
      * AND THE LIST CANNOT SILENTLY NARROW. Nothing here ties a hand-typed
@@ -5410,7 +5410,7 @@ int main(int argc, char **argv)
             "Warp mode off.",
             "Warp mode on - no change.",
             "Warp mode on.",
-            "C64.ROM missing - see README.TXT",   /* c64_status, msg == 2 */
+            "C64.ROM missing - see README.TXT",   /* ovl_status, msg == 2 */
             "Main CPU: JAM at $FFFF"              /* ...and msg == 3 (§4.5) */
         };
         int mi;
