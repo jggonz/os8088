@@ -17133,7 +17133,10 @@ SOAK = [
         "and Button, SUPERCLASSES both (a class of its own over the copied "
         "procedure, forwarding with CallWindowProc) and uses them - "
         "WM_SETTEXT, EM_SETSEL, EM_REPLACESEL, WM_GETTEXT, BM_SETCHECK, "
-        "BM_GETCHECK - and SUBCLASSES a plain Edit with SetWindowLong "
+        "BM_GETCHECK - checks the superclass keeps its class name and a "
+        "multi-line one its own window word after Edit's 18 bytes, makes one "
+        "that answers WM_CREATE itself (its Edit state made at the first "
+        "message it forwards), and SUBCLASSES a plain Edit with SetWindowLong "
         "(GWL_WNDPROC), eating one key; its MessageBox must be CTLPROC OK. "
         "What Visual Basic 3.0's runtime does to every control it makes",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,

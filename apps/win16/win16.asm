@@ -1589,8 +1589,9 @@ w16_freeprog:
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
-    xor ax, ax                      ; the USER heap went with the arenas
+    xor ax, ax                      ; the USER heap went with the arenas,
     mov [w16_mseg], ax
+    mov [w16_clsseg], ax            ;   and the class block (124.25.18.1)
     mov [w16_msys], ax
     mov [w16_mtrk], al
     mov [w16_mlev], al
@@ -2538,6 +2539,8 @@ w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
     db w16f_a_%[k]
   %ifdef w16lib_%[w16f_p_%[k]]
     db W16P_LIB
+  %elifdef w16sys_%[w16f_p_%[k]]
+    db W16P_SYS                 ; (w16_ctlkrow, SPEC.md 124.25.18)
   %else
     db 0
   %endif

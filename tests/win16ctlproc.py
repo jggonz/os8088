@@ -12,7 +12,10 @@ superclasses Edit, Button and the rest).
 CTLPROC.EXE (tests/win16/ctlproc.c, `make win16fixtures`) asks GetClassInfo for
 Edit and Button, registers a class of its own over each copied procedure,
 creates them and uses them (WM_SETTEXT, EM_REPLACESEL, WM_GETTEXT,
-BM_SETCHECK, BM_GETCHECK), and subclasses a plain Edit with
+BM_SETCHECK, BM_GETCHECK), checks that the superclass window keeps its class's
+name and that a multi-line one's own window word (after the Edit's 18 bytes)
+survives its text, makes a superclass that answers WM_CREATE itself and still
+gets a working multi-line Edit, and subclasses a plain Edit with
 SetWindowLong(GWL_WNDPROC), eating one key. Its MessageBox, read off the
 program's stack, is "CTLPROC OK" or names each check that failed.
 """

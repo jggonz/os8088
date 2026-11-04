@@ -1604,9 +1604,9 @@ w16u_setclsword:
     mov ax, [es:bx + 4]
     call w16_hwnd2rec
     jc .no
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .no
-    mov al, [bx + W16W_CLS]
+    mov al, [bx + W16W_CLS]         ; the program's classes (124.25.18)
+    cmp al, 0xFF
+    je .no
     call w16_clsget
     mov si, ax
     cmp cx, GCW_STYLE
@@ -1625,9 +1625,7 @@ w16u_setclsword:
     call w16_slot2rec
     test byte [bx + W16W_FLAGS], W16WF_USED
     jz .wn
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .wn
-    cmp [bx + W16W_CLS], al
+    cmp [bx + W16W_CLS], al         ; (only a class's own windows have it)
     jne .wn
     mov [bx + W16W_HBR], dx
 .wn:

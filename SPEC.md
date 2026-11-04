@@ -237169,17 +237169,38 @@ procedure a program can hold and call. WIN16's controls always had one
 (`W16_CTLK` + *kind*, `W16_NFIXED` 15), one for each `W16Q_*` kind, 1-7 (the
 slot of `W16Q_DIALOG`, 5, is never handed out). Each is a stub like any other
 (§124.19.1), so a program can keep its address and call it with a far call,
-or through `CallWindowProc`. The handler (`w16_ctlkrow`) is the library
-part's (`W16LIB`) and takes the Pascal arguments `hWnd, msg, wParam, lParam`
-as the control's own entry (`w16_ctlrow`, slot 0) does. The two differ in one
-thing only: **a window of the program's class (`W16Q_PROG`) that calls a
-class entry becomes a control of that class**, its `W16W_KIND` set to the
-entry's kind before the message is delivered, so the control's state lives in
-the window record exactly where a dialog's control keeps it (§124.13) and the
-program's procedure stays the window's procedure (`W16W_PROC`). Messages for
-it then go to the program first, which forwards the ones it does not handle:
-the shape of a subclassed control, which §124.13 already runs. A window that
-is already a control of some kind keeps that kind whichever entry was called.
+or through `CallWindowProc`. The handler (`w16_ctlkrow`) is the
+system-library part's (`W16SYS`: part 3 has no room, and a window of the
+program's class never fetched part 3, so the handler fetches it, `w16_dlgin`)
+and takes the Pascal arguments `hWnd, msg, wParam, lParam` as the control's
+own entry (`w16_ctlrow`, slot 0) does. The two differ in one thing only: **a
+window of the program's class (`W16Q_PROG`) that calls a class entry becomes
+a control of that class**, its `W16W_KIND` set to the entry's kind before the
+message is delivered, so the control's state lives in the window record
+exactly where a dialog's control keeps it (§124.13) and the program's
+procedure stays the window's procedure (`W16W_PROC`). Messages for it then go
+to the program first, which forwards the ones it does not handle: the shape of
+a subclassed control, which §124.13 already runs. A window that is already a
+control of some kind keeps that kind whichever entry was called.
+
+**The control's state is made at the window's `WM_CREATE`.** Windows made it
+at `WM_NCCREATE`, which WIN16 never sends, so a superclass could answer
+`WM_CREATE` itself and still have a working control. When the first message a
+`W16Q_PROG` window forwards is not `WM_CREATE`, `w16_ctlkrow` therefore runs
+the control's `WM_CREATE` first (lParam 0, as a dialog's control has it) and
+then the message; a `WM_CREATE` that refuses (no heap for the edit's block)
+leaves the window the program's and answers 0. A `WM_CREATE` forwarded once
+the window is a control (a procedure that sent itself a message before it
+forwarded its own `WM_CREATE`) answers 0 and makes nothing twice: a second
+make would leak the edit's block and give a combo box a second list. Without
+the first make a multi-line edit
+would run with `ME_SEG` 0: drawing from, and typing into, segment 0. The
+window keeps its class: `GetClassName`, `GetClassWord`/`GetClassLong`,
+`SetClassWord` and the own-DC lookup (§124.25.11) go by `W16W_CLS` (0FFh = one
+of WIN16's) rather than by the kind, so `ThunderTextBox` stays
+`ThunderTextBox` after it has become an edit. (A dialog of the program's own
+class, §124.22.12, is answered by its class too, as Windows did; Program
+Manager's DDE window, §124.33.2, is 0FFh now, not class 0.)
 Slot 0 (what `GetWindowLong(GWL_WNDPROC)` of a control answers, and the
 previous procedure `SetWindowLong` returns) is unchanged and needs the
 window to be a control already.
@@ -237187,20 +237208,25 @@ window to be a control already.
 **`GetClassInfo`** answers a control class's name: `style` the class styles
 Windows 3.1 gave it (`CS_DBLCLKS` for `BUTTON`, `EDIT`, `LISTBOX` and
 `COMBOBOX`, 0 for `STATIC` and `SCROLLBAR`), `lpfnWndProc` the class entry,
-`cbClsExtra` and `cbWndExtra` 0 (WIN16's controls keep their state in the
-record, not in window words), `hInstance` DGROUP's, `hIcon` and `hCursor` 0,
-`hbrBackground` `COLOR_WINDOW + 1`, `lpszMenuName` NULL, `lpszClassName` as
-asked. A superclass adds its own `cbWndExtra` words after the base class's, so with
-0 they start at offset 0 and WIN16's controls never touch them; a program that
-assumed Windows' own count for a control is wrong (open, none seen).
+`cbClsExtra` 0, `cbWndExtra` 0 (WIN16's controls keep their state in the
+record, not in window words) **except `EDIT`'s, 18** (`ME_XTRA`): the
+multi-line edit keeps its view and undo in the first 18 extra bytes
+(`ME_TOPO`..`ME_FL2`, w16edml.inc, §124.22.3), and a superclass adds its own
+words after the base class's count, so a `ThunderTextBox` with `MultiLine` set
+reads and writes its words at 18 on, past the edit's. It costs the superclass
+18 of `W16_WEXTRA`'s 32 bytes (VB's 6 fit). `hInstance` DGROUP's, `hIcon` and
+`hCursor` 0, `hbrBackground` `COLOR_WINDOW + 1`, `lpszMenuName` NULL,
+`lpszClassName` as asked. A program that assumed Windows' own counts for a
+control is wrong (open, none seen).
 
 **What it costs.** Resident: no byte on either arm. The bind table's fixed rows
 take seven of the 384 slots (the largest import list measured is 270), the
-handler and the `GetClassInfo` arm are in parts, and the fixed row table is in
-the loader part. Part bytes (kern_mega arm): the library part (dialog part) 64,717 to
-64,782 (+65, the handler), the system-library part 39,091 to 39,258 (+167, the
-`GetClassInfo` arm), the loader part 17,072 to 17,100 (+28, seven fixed rows).
-Image + bss of `win16.o88`: 37,887 + 26,706 before and after.
+handler and the `GetClassInfo` arm are in the system-library part, and the
+fixed row table is in the loader part (a fixed row names a `W16P_SYS` handler
+as well as a `W16P_LIB` one). Part bytes, kern_mega arm, against the
+plan branch at 9ca188639: the system-library part 38,506 to 38,937 (+431,
+with §124.25.18.1's), the loader part 17,072 to 17,100 (+28, seven fixed
+rows), the dialog part 64,845 to 64,843 (-2).
 
 ##### 124.25.18.1 The class table is a block of global memory *(ctlproc, DECISIONS 13:05)*
 
@@ -237216,22 +237242,34 @@ records of `W16C_STRIDE` = 33 bytes (the 32-byte record and its task, now
 `W16C_TASK`, in it), made fixed by `w16_gnew` at the first `RegisterClass` by
 `w16s_clsadd` (system-library part), its segment in `w16_clsseg` (0 = none yet:
 `GetClassInfo` and `CreateWindow` find nothing without asking for memory). It
-is not a map claim, so it costs none of an owner's eight. The block is not
-grown: 64 is the limit, and a failed block or a full table answers
-`RegisterClass` FALSE and the program carries on.
+is asked for zeroed and from the TOP of the heap (`W16G_HIGH`, as a code
+segment is), so it is not the block a `GlobalAlloc` segment's local heap
+grows into in place (WIN16-NEXT `lheap`). It belongs to no task (`GH_TASK` 0), so a
+task's end does not free it under the others; the program's end frees it with
+the arenas, and `w16_clsseg` goes back to 0 there with the USER heap's
+segment. It is not a map claim, so it costs none of an owner's eight. **The
+block is not grown** (DECISIONS 13:05 asked for growth; open): 64 is the
+limit, and a failed block or a full table answers `RegisterClass` FALSE and
+the program carries on. Growing it is a new block, the records copied and the
+old one freed - atoms are indexes and nothing holds a record's address, so
+nothing else changes - but on the kern_mega arm the old block's selector has
+to go with it, which nothing here has needed before; the index is a byte
+(`W16W_CLS`, 0FFh = none), so 255 is the ceiling.
 
 **No record is read in place.** `w16_clsget` (AL = the index) copies a record
-into `w16_ccb`, one 33-byte record in bss with its index in `w16_ccbi`, and
+into `w16_ccb`, one 33-byte record in bss with its index in `w16_cbi`, and
 answers its address; `w16_findcls` answers that copy (BX = `w16_ccb`), so
 every user reads `[bx + W16C_*]` as before. The copy is good until the next
 lookup. `w16_clsput` writes it back (`SetClassWord`). A class's atom is
 `0C000h` + its index, no longer its record's offset. A task's end clears its
 classes in the block (`w16t_end`).
 
-**What it costs**, `win16.o88`, kern_mega arm: image + bss 37,910 + 26,706
-before, 37,970 + 26,346 after: **-300 resident bytes** (the bss falls by 360,
-the lookups and the two helpers add 60). Part bytes: see the diary. 64 records
-is 2,112 bytes of the program's global heap, taken at the first class.
+**What it costs**, image + bss of `win16.o88` against the plan branch at
+9ca188639 (both sections together): kern_mega arm 37,915 + 26,696 = 64,611
+before, 37,970 + 26,336 = 64,306 after, **-305 resident bytes**; real-mode arm
+36,298 + 27,471 = 63,769 before, 36,353 + 27,111 = 63,464 after, **-305**
+(the bss falls by 360, the lookups and the two helpers add 55). 64 records is
+2,112 bytes of the program's global heap, taken at the first class.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
