@@ -233592,8 +233592,10 @@ aside for the end goal: it has no nested popup, a one-byte action and os8088's
 - **It exits** (`int 21h` AH = 4Ch): its memory and its window go
   (§124.8).
 - **It calls an import WIN16 does not provide:** the stub (§124.3) ends it in
-  the same way, with a toast naming the call, *Needs USER.182, which WIN16
-  does not provide yet.*
+  the same way, but WIN16's window stays, its two lines naming the call:
+  *Needs USER.182* and *which WIN16 does not provide yet.* A toast would go
+  with the window that raised it (§59). So a program whose window goes with
+  no line at all ended itself (the first case), whatever it was doing.
 - **The user asks it to close:** the close box posts `WM_CLOSE`, and the
   program decides (§124.8).
 - **End Task (the owner, 2026-10-29):** a second click on the close box,
@@ -236771,10 +236773,11 @@ handlers are the system-library part's (part 9).
 **What a missing import does (the question L1 asked).** A program that imports
 a function WIN16 lacks is not refused at load (§124.12, `w16_missbind`): the
 import is bound to a stub, and the program runs until it CALLS it. The stub
-then ends the program, as `exit` does, with a toast naming the call. So a
-library that imports 23 functions it never calls in the program's first
-second is fine, and one that calls a missing function in its start-up ends
-the instance at once, with only that toast to say so.
+then ends the program, as `exit` does, with WIN16's window left up and its
+two lines naming the call (§124.25.15). So a library that imports 23
+functions it never calls in the program's first second is fine, and one that
+calls a missing function in its start-up ends the instance at once, with
+only those lines to say so.
 
 | call | what WIN16 does |
 |---|---|
@@ -236785,6 +236788,58 @@ the instance at once, with only that toast to say so.
 | `Arc`, `Pie` (GDI.23, 26) | the ellipse of the box, drawn counter-clockwise from the ray through the start point to the ray through the end point, as a polyline (`Arc`) or a polygon through the centre (`Pie`) of 64 vertices to the circle at most: the two end points are exact, the ones between are 5.625 degrees apart, which is under half a pixel from the true curve at a 300 pixel radius. `Pie` fills in the brush and draws its edges in the pen, `Arc` draws in the pen alone, and neither moves the current point. Identical start and end points draw the whole ellipse. They draw on every adapter's DC and on a memory DC, through `Polyline` and `Polygon` (§124.25.4), so a wide pen and the clip are theirs. The curve is not `Ellipse`'s pixel for pixel (`Ellipse` is `RoundRect`'s corner table) |
 | `CopyMetaFile` (GDI.151), `EnumMetaFile` (GDI.175), `PlayMetaFileRecord` (GDI.176) | 0. There are no metafiles here (§124.25.10): WIN16 never hands out a metafile handle, so there is none to copy, enumerate or play, and a program has to handle the 0 as it does when memory is short |
 
+#### 124.25.15 What Visual Basic 3.0's runtime imports of KERNEL and USER *(WIN16-NEXT L1, `vbuser`)*
+
+`VBRUN300.DLL` imports 23 functions WIN16 lacked (WIN16-NEXT-PLAN L1); the
+GDI ones are `vbgdi`'s and `WaitMessage` is `props`'. These thirteen are the
+KERNEL and USER rest. **What a missing import does** is §124.12's: the stub
+ends the program the moment it is *called*, with the window left up and two
+lines naming it (*Needs USER.416 which WIN16 does not provide yet.*); an
+import never called costs nothing. A missing import was therefore NOT why Mozart and Hangman left after a second
+or two with WIN16's window gone: that is below.
+
+None of the thirteen costs a resident byte. A row is the loader part's
+(§124.19.1) and every handler is in a part: GetCurrentPDB, GetCodeHandle,
+SetHandleCount, GetClassWord/Long, EndMenu and CreateIcon in the task part
+(10; EndMenu reaches the menu loop's `w16_mstop` through the library
+part's gate), GetUpdateRgn in the system-library part (9). The library part
+(3), which has the least room, grew by nothing.
+
+| function | contract on Windows 3.1 | WIN16 |
+|---|---|---|
+| `GetCurrentPDB` (KERNEL.37) | the current task's PSP segment | **exact**: InitTask's own ES, the selector on the kern_mega arm |
+| `SetHandleCount` (KERNEL.199) | the size of the task's handle table after the call: the ask, but never below the 20 a PSP starts with, nor above 255 | **the table's size, whatever is asked**: 13, the five devices and the `DOS_NFH` = 8 files of the one table WIN16's DOS holds (`apps/dos/dos.asm`). So an ask of 13 or less is met as Windows meets one under 20, with more than was asked, and a larger ask is told 13. VBRUN300's own Windows 3.0 path, which it takes below version 3.10, reads the PSP's table size the same way |
+| `FreeModule` (KERNEL.46) | lowers a module's count, frees it at 0; TRUE, FALSE for a handle that is no module | **FreeLibrary's** handler on the same row shape: a library's count lowered, its WEP called and blocks freed at 0, and TRUE (`FreeLibrary`, which shares it, is void). A module that is not a library (the program, WIN16's own) is left alone, and the answer is then not defined. VBRUN300's one call ignores the answer |
+| `GetCodeHandle` (KERNEL.93) | the handle of the code segment holding a function, reloading it if discarded | **approximate**: GlobalHandle's answer for the pointer's segment when that is a block of the global heap (a library's loaded code, a module block), else the segment itself, which is what a fixed segment's handle is in real-mode Windows. A discarded segment is not loaded by this call; its thunk is (§124.26.2), and the pointer a program has is a thunk's. VBRUN300 copies its own segment 1 with it: `GetCodeHandle`, `GlobalSize`, `GlobalLock`. A library's discardable segment is a block of its own (§124.26.11), so all three answer that segment; a segment in a program's own claim answers itself, and `GlobalSize` of that is 0 |
+| `GetClassWord`, `GetClassLong` (USER.129, .131) | a class field by `GCW_`/`GCL_` index | **exact** for `GCW_STYLE`, `GCL_WNDPROC`, `GCW_CBWNDEXTRA`, `GCW_HICON`, `GCW_HBRBACKGROUND`, `GCL_MENUNAME` and `GCW_ATOM` (the atom `GetClassInfo` takes); `GCW_HMODULE` is the current program's (a class record keeps no module, so a class a library registered answers the program too); `GCW_CBCLSEXTRA` and the class extra words are 0 (RegisterClass keeps none, as `GetClassInfo` says), `GCW_HCURSOR` is 0, and a WIN16 control class or a bad window answers 0. One handler: a word's DX is 0. VBRUN300 asks `GCW_CBWNDEXTRA` (and reads its own words at the end of a window's extra bytes) and `GCL_WNDPROC` (is this window one of its own classes?) |
+| `EndMenu` (USER.187) | ends the menu loop that is running | **exact** for the loop §124.11 runs (bar, popup, system menu); with none running it does nothing |
+| `GetUpdateRgn` (USER.237) | the window's update region into a region; NULLREGION, SIMPLEREGION, COMPLEXREGION or ERROR | **approximate, as every region is**: the invalid rectangle, in the client and cut to it, is the region's bounding rectangle; SIMPLEREGION, or an empty region and NULLREGION; ERROR (0) for a window or region that is not one. `bErase` is not acted on, as `GetUpdateRect`'s is not |
+| `BeginDeferWindowPos`, `DeferWindowPos`, `EndDeferWindowPos` (USER.259-.261) | batch window moves, applied at the end | **at once, which Windows allows**: Begin answers the handle 1, Defer **is** `SetWindowPos` (its eight words' last seven are SetWindowPos's, and it answers 1, or 0 for a window that is not one), End answers TRUE. The handle is not a count of anything, so a batch larger than `n` is not refused |
+| `CreateIcon` (USER.407) | an icon from device bits | **CreateCursorIconIndirect's body** (§124.27.7), with the `CURSORICONINFO`'s row bytes worked out as `((nWidth * nBitsPixel + 15) / 16) * 2`: 1 plane of 1 or 4 bits, 4 planes of 1 bit, at most 64 square; any other shape answers the one cursor `LoadCursor` hands out. `DestroyIcon` frees it |
+| `TrackPopupMenu` (USER.416) | a popup at a point, modal, answering the item or posting it | **refused: FALSE**, no popup shown. §124.11's loop is the bar's (`WM_INITMENU`, the bar's title, `w16_mhit` on the bar), and a popup with no bar under it needs its own start, its own hit test and its own dismissal. Estimated at 600-900 bytes of the library part, which has 800 left on the kern_mega arm, and a trampoline of about 8 resident. Not done here |
+
+Gates: `tests/win16/vbuser.c` (`make win16fixtures`) checks every row above
+that is not a refusal against a value it can compute, and the TrackPopupMenu
+refusal; `tests/win16vbuser.py` (row `win16vbuser`) runs it.
+
+**What Mozart and Hangman do now** (looked at on `kern_mega`, QEMU 486 with
+16 MB, 2026-11-04, with `vbgdi`'s, `props`' and `libpath`'s calls merged and
+VBRUN300 and every VBX in the Windows directory). Both show *Loading...*,
+then *Running* and a file bar, and then WIN16's window closes with no line,
+no toast and no dialog. Neither reaches one of these thirteen. A Visual Basic
+3.0 program's entry is one instruction, a far call to `VBRUN300.100` with the
+start registers of §124.3 (BX the stack's size, CX the heap's, DS = SS =
+DGROUP). Its first call is `GlobalHandle(SS)`: the runtime makes the
+program's DGROUP its own data segment, `GlobalReAlloc` to the stack, the heap
+and its own 8,856 bytes of data, copies its data to DGROUP:0 and moves the
+stack to the top. WIN16's DGROUP is no block of the global heap (§124.9), so
+`GlobalHandle` answers 0, and on 0 the runtime ends the program with
+`int 21h` `4CFFh`. A `-DW16_TRACE` build (§124.17.4) shows the three calls
+before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
+`KERNEL.21`. An `AH=4Ch` is not recorded. Answering `GlobalHandle`,
+`GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
+out at 64 KB whenever the arena has room (§124.21.4), is the next step, and
+is not done here.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
