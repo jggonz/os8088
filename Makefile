@@ -14015,9 +14015,11 @@ $(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py
 #> [Applications] vbtbundle :: zip the Video Battle builder for someone with no os8088 tree
 .PHONY: vbtbundle
 vbtbundle: $(BUILD)/os8088-battle-builder.zip
-$(BUILD)/os8088-battle-builder.zip: $(BUILD)/vbattle.o88 tools/os88vbtbundle.py \
-	tools/os88vbundle.py $(wildcard tools/os88*.py tools/vbt*.py)
-	python3 tools/os88vbtbundle.py $@ --engine $(BUILD)/vbattle.o88
+$(BUILD)/os8088-battle-builder.zip: $(BUILD)/vbattle.o88 $(VENCBOOT) \
+	tools/os88vbtbundle.py tools/os88vbundle.py \
+	$(wildcard tools/os88*.py tools/vbt*.py)
+	python3 tools/os88vbtbundle.py $@ --engine $(BUILD)/vbattle.o88 \
+	    --boot $(BUILD)
 
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the

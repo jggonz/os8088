@@ -16747,17 +16747,18 @@ SOAK = [
         "same ending. Broken on purpose (the engine's damage shift 3 not 4) "
         "it FAILS at turn 1 naming both states",
         needs=("marty",)),
-    Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 12.0,
+    Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "
         "python -I, demo-project, build and verify must work and give the "
         "tree's own demo bundle byte for byte, the window's module must "
         "import, every tool the builder runs as a process must be in it, "
-        "VBATTLE.O88 must be the one built, and the zip must be the same "
-        "bytes made twice. A module the closure missed fails here as an "
+        "VBATTLE.O88 must be the one built, `disk` must make a hard disk "
+        "carrying what it boots from out of the zip's boot/, and the zip must "
+        "be the same bytes made twice. A module the closure missed fails here as an "
         "ImportError, where the owner would otherwise meet it",
         needs=("pil",), wants=("build/os8088-battle-builder.zip",)),
-    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 17.0,
+    Row("vbtgui", "soak", py("tests/vbtguitest.py"), 27.0,
         "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
         "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
         "over all 96 CGA4 bytes (a swatch showing one set while the encode "
@@ -16769,10 +16770,15 @@ SOAK = [
         "short. Wave 3's Clips tab: what Listen plays must be what the "
         "build bakes, frame for frame, and the filmstrip's entry bytes the "
         "bundle's own; a range carries its cues and own soundtrack; an "
-        "ending has no exit. Broken on purpose (Cancel killing the parent "
+        "ending has no exit. Wave 5: the music's join found where a planted "
+        "passage ends (and nothing for openings that end in silence), the "
+        "openings' sound each one's frames long, the engine's memory "
+        "arithmetic equal to the rings MEASURED on MartyPC's XT (144 KB "
+        "beside a 116 KB claim), a clip over a floppy's disk marked, and "
+        "a 1.44 MB disk of the battle made and verified. Broken on purpose (Cancel killing the parent "
         "alone, the set bits swapped, cues placed a frame late) it FAILS "
         "naming it. SKIPS the cancel without ffmpeg",
-        needs=("pil",)),
+        needs=("pil", "mtools")),
     Row("videnc", "soak", py("tests/videnc.py"), 1300.0,
         "SPEC.md 98.2.1: the encoder front end and its budgets, host-side. "
         "ffmpeg makes a 16:9 source with a still tail and tools/os88venc.py "

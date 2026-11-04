@@ -1,9 +1,10 @@
 # VBATTLE-BUILDER — the clip-graph builder, with its window from the start
 
-**Status: waves 1 to 4 BUILT (2026-11-04): the model, the analysis, the
-command line, the window's Battle, Idle, Clips, Actions, Characters &
-menus and Enemy tabs, and the engine playing section 11's rules (10.5).**
-The openings and the Build tab are wave 5. `make
+**Status: all five waves BUILT (2026-11-04): the model, the analysis, the
+command line, the window's Battle, Idle, Clips, Openings, Actions,
+Characters & menus, Enemy and Build tabs, and the engine playing section
+11's rules (10.5). What is left is the owner's next round and the "Not in
+it" of each wave, so the plan stays here until that is decided.** `make
 vbtbundle` zips the builder for a machine with no os8088 tree. It turns a battle's footage into a `.VBT` bundle (SPEC.md
 §125) through a window. Section 9 has the questions and their answers,
 section 10 what the answers changed, and section 11 the proposal for what an
@@ -461,6 +462,29 @@ any of the builder's (section 7's order moves). Its contents:
      reading a video, its own soundtrack over frames x to y and cues that
      stop, the endings on the Battle tab.
 5. **The openings** in the window (10.3), and **the Build tab**.
+   **DONE 2026-11-04**:
+   - [x] the Openings tab: the openings in turn (add, remove, earlier,
+     later; at most 8, the engine's), each one's clip and sound (any sound,
+     its own soundtrack, or silent), the scene opening's join onto the idle
+     loop with a recommended frame (its seam's fewest pixels), the openings
+     scrubbed as whole screens, and PLAY THE START: the openings, then the
+     idle loop from the join, with the sound the engine makes;
+   - [x] the music's JOIN (10.3): suggested by the loudness envelopes
+     (`vbtana.music_joins`, `joins`), listened to (`joinwav`, mixed at the
+     engine's levels), used - the candidate clicked is the one heard;
+   - [x] the Build tab: every check (double-click goes to its tab), BUILD
+     (the bundle, verified), the BUDGET per clip (KB, seconds, KB/s, the
+     clip and the music against the profile's disk, red over it, the
+     head's read, whether it fits a ring whole, anchors, the longest
+     wait) and the engine's MEMORY on a 640 KB machine (125.4's carving,
+     its free figure measured on MartyPC's XT);
+   - [x] "...and make a disk of it": the encoder's seven disks, shared
+     through `tools/os88mkdisk.py`, `os88vbt.py disk`, a floppy too small
+     refused with its sizes; the builder's zip carries the disk makers and
+     boot/, so its hard disks boot;
+   - [x] `tests/vbtguitest.py` and `tests/vbtbundle.py`.
+   Not in it: an opening that is not full screen; the clip cache of 4.5
+   (the engine has two rings and no cache).
 
 ## 11. What an action does: a small, fixed set of verbs
 

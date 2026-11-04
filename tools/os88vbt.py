@@ -20,6 +20,8 @@ Commands:
     os88vbt.py demo-project OUT.vbp [--bars N] [--floppy]   the demo as one
     os88vbt.py recommend PROJECT    the idle loop's and each clip's points
     os88vbt.py demo OUT.VBT [--bars N] [--preview DIR]   the original battle
+    os88vbt.py disk PROJECT [--disk N] [-o IMG]   BATTLE.VBT and VBATTLE.O88
+                                      on a floppy or a hard disk (98.2.12.1)
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
 
@@ -756,6 +758,72 @@ def cmd_verify(a):
     verify(open(a.file, "rb").read())
 
 
+def engine_path(build=None):
+    """VBATTLE.O88 for a disk: build/'s, or one shipped BESIDE this tool
+    (the builder's zip carries it). None when there is neither"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    b = build or os.path.join(os.path.dirname(here), "build")
+    for p in (os.path.join(b, "vbattle.o88"), os.path.join(here, "VBATTLE.O88"),
+              os.path.join(here, "vbattle.o88")):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None):
+    """(argv, image, files, note) making DISKS[disk] - the profile's disk by
+    default (os88mkdisk.DISK_OF_PROFILE) - of the built BUNDLE (BATTLE.VBT
+    beside the project) and the engine. Raises ValueError for what cannot
+    be: no bundle, no engine, a floppy too small"""
+    import os88mkdisk as M
+    if disk is None:
+        disk = M.DISK_OF_PROFILE.get(proj.d["target"]["profile"], 6)
+    here = os.path.dirname(proj.path)
+    bundle = bundle or os.path.join(here, "BATTLE.VBT")
+    if not os.path.exists(bundle):
+        raise ValueError("no %s: build it first" % os.path.basename(bundle))
+    eng = engine_path(build)
+    if not eng:
+        raise ValueError("no VBATTLE.O88 here to put beside it")
+    files = [("VBATTLE.O88", eng), ("BATTLE.VBT", bundle)]
+    big = M.fits(files, disk)
+    if big:
+        raise ValueError("it needs %d KB and %s holds %d KB" % (
+            big[0] // 1024, M.DISKS[disk][0], big[1] // 1024))
+    label, kind, what = M.DISKS[disk]
+    img = out or os.path.join(here, "BATTLE-%s" % (
+        "%d.img" % what if kind == "fd" else "%s.VHD" % what[0]))
+    argv, img = M.disk_of(files, disk, img, build, stage)
+    note = None
+    if kind == "hd" and M.hd_missing(build):
+        note = ("It does not boot (no built os8088 here to put on it): boot "
+                "os8088 from its system floppy, tick the hard-disk driver in "
+                "the Control Panel, and it comes up as C:.")
+    elif kind == "fd":
+        note = "A floppy for B:, beside the system disk in A:."
+    return argv, img, files, note
+
+
+def cmd_disk(a):
+    import json
+    import subprocess
+    import tempfile
+    import vbtproj as P
+    proj = P.Project.load(a.project)
+    with tempfile.TemporaryDirectory() as stage:
+        try:
+            argv, img, files, note = disk_plan(proj, a.disk, a.bundle, a.out,
+                                               stage=stage)
+        except ValueError as e:
+            raise SystemExit("os88vbt disk: %s" % e)
+        r = subprocess.run(argv, capture_output=True, text=True)
+    if r.returncode:
+        raise SystemExit("os88vbt disk: %s" % (r.stdout + r.stderr).strip())
+    o = dict(stage="done", out=img, files=[n for n, _ in files], note=note)
+    print(json.dumps(o) if a.json else "%s: %s%s" % (
+        img, " ".join(o["files"]), "\n" + note if note else ""), flush=True)
+
+
 def cmd_build(a):
     import json
     import vbtproj as P
@@ -848,6 +916,17 @@ def main(argv=None):
     q.add_argument("project")
     q.add_argument("--min-loop", type=int, default=20)
     q.set_defaults(fn=cmd_recommend)
+    q = sp.add_parser("disk", help="the built bundle and the engine on a "
+                      "floppy or a hard disk")
+    q.add_argument("project")
+    q.add_argument("--disk", type=int, help="os88mkdisk.DISKS's number "
+                   "(0-3 the floppies, 4-6 the hard disks); the profile's "
+                   "by default")
+    q.add_argument("--bundle", help="the bundle (BATTLE.VBT beside the "
+                   "project by default)")
+    q.add_argument("-o", "--out")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_disk)
     q = sp.add_parser("info")
     q.add_argument("file")
     q.set_defaults(fn=cmd_info)

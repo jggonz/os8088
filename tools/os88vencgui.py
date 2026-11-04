@@ -1771,40 +1771,12 @@ def thumb(img, w=160, h=120):
     return tk.PhotoImage(data=base64.b64encode(buf.getvalue()))
 
 
-# ...AND MAKE A DISK OF IT (SPEC.md 98.2.12.1): the four floppies os88disk
-# builds, for B: beside a system disk, and three BOOTABLE hard disks
-# os88hdd builds - the geometries of the machines the videos are made for
-# (the ones `make videnchd` cut by hand for the owner's 5150 and 286). A
-# hard disk is (tag, cylinders, heads, sectors, an ST11's layout)
-#   label                                                 kind  what
-DISKS = [
-    ("a 360 KB floppy", "fd", 360),
-    ("a 720 KB floppy", "fd", 720),
-    ("a 1.2 MB floppy", "fd", 1200),
-    ("a 1.44 MB floppy", "fd", 1440),
-    ("a 20 MB hard disk: ST-225 on an ST11M (5150/XT)", "hd",
-     ("ST11M", 615, 4, 17, True)),
-    ("a 32 MB hard disk: ST-238R on an ST11R (XT)", "hd",
-     ("ST11R", 615, 4, 26, True)),
-    ("a 32 MB hard disk: IDE (286 and up)", "hd",
-     ("IDE", 250, 15, 17, False)),
-]
-DISK_LABELS = [d[0] for d in DISKS]
-# the disk a storage profile implies, until the person picks another
-DISK_OF_PROFILE = {"5150-st225": 4, "5150-picomem2": 4, "floppy": 0,
-                   "286-slow": 6, "286-fast": 6, "286-picomem1": 6,
-                   "286-speeddemon": 6,
-                   "486-dx2-66": 6, "lossless": 6}
-# what a hard disk needs out of build/ to BOOT - the kernel, its boot records
-# and HDD.DRV - and what a booting one takes besides when build/ has it.
-# Without HD_BOOT (the encoder shipped to people with no os8088 tree) the disk
-# is made anyway, formatted and NOT bootable: the machine boots its system
-# floppy and HDD.DRV mounts the disk as C: (SPEC.md 98.2.12.1)
-HD_BOOT = (("", "kernel.sys"), ("", "boothd.bin"),       # (os88hdd lays the
-                                                       # kernel down itself)
-           ("", "mbr.bin"), ("HDD.DRV", "hdd.drv"))
-HD_WANT = (("VIDEO.O88", "video.o88"), ("CTRL.DRV", "ctrl.drv"),
-           ("SOUND.DRV", "sound.drv"), ("HIBER.DRV", "hiber.drv"))
+# ...AND MAKE A DISK OF IT (SPEC.md 98.2.12.1): the disks, and how each is
+# made, are tools/os88mkdisk.py's - the Video Battle builder makes its disks
+# there too. This window adds the player and the video's 8.3 name
+from os88mkdisk import (DISKS, DISK_LABELS, DISK_OF_PROFILE,  # noqa: E402,F401
+                        HD_BOOT, HD_DRV, boot_dir, hd_missing, disk_of)
+HD_WANT = (("VIDEO.O88", "video.o88"),) + HD_DRV
 HD_NOBOOT_NOTE = ("It does not boot (no built os8088 here to put on it): boot "
                   "os8088 from its system floppy, tick the hard-disk driver "
                   "in the Control Panel, and it comes up as C:. With no "
@@ -1834,71 +1806,21 @@ def player_path(build=None):
     return None
 
 
-def hd_missing(build=None):
-    """What the boot files' folder (boot_dir) lacks for a hard disk that
-    BOOTS: [] when it can make one. Anything missing makes the disk
-    unbootable, not refused"""
-    b = boot_dir(build)
-    return [f for _, f in HD_BOOT if not os.path.exists(os.path.join(b, f))]
-
-
-def boot_dir(build=None):
-    """Where a hard disk's boot files come from: build/, or the bundle's
-    boot/ BESIDE this tool (tools/os88vbundle.py --boot, SPEC.md 98.2.13) -
-    so the encoder handed to people with no os8088 tree makes a hard disk
-    that boots, as player_path lets its floppies carry the player"""
-    b = build or os.path.join(_ROOT, "build")
-    for d in (b, os.path.join(_HERE, "boot")):
-        if all(os.path.exists(os.path.join(d, f)) for _, f in HD_BOOT):
-            return d
-    return b
-
-
 def disk_argv(v88, disk, out=None, build=None, stage=None):
     """(the command line, the image) for DISKS[disk] holding the video and
-    VIDEO.O88. A floppy takes the player when build/ has one, and the video
-    under its 8.3 name (a copy in STAGE, a directory, when its own is
-    longer); a hard disk BOOTS when build/ has HD_BOOT, and takes HD_WANT
-    too - without HD_BOOT it is formatted, not bootable, and takes the
-    player alone"""
+    VIDEO.O88 (os88mkdisk.disk_of). The player goes on when one is found;
+    the video under its 8.3 name (a copy in STAGE, a directory, when its
+    own is longer); a hard disk BOOTS when the boot files are at hand"""
     label, kind, what = DISKS[disk]
-    b = boot_dir(build)
     base = os.path.splitext(v88)[0]
-    name = short83(v88)
-    if kind == "fd":
-        img = out or base + "-%d.img" % what
-        argv = [sys.executable, os.path.join(_HERE, "os88disk.py"), "-o",
-                img, "--size", str(what)]
-        player = player_path(build)
-        if player:
-            argv.append(player)
-        src = v88
-        if os.path.basename(v88).upper() != name:
-            import shutil
-            src = os.path.join(stage, name)
-            shutil.copyfile(v88, src)
-        return argv + [src], img
-    tag, cyls, heads, spt, st11 = what
-    img = out or base + "-%s.VHD" % tag
-    argv = [sys.executable, os.path.join(_HERE, "os88hdd.py"), "--out", img,
-            "--cyls", str(cyls), "--heads", str(heads), "--spt", str(spt)]
-    if st11:
-        argv.append("--st11")
-    if hd_missing(b):
-        argv.append("--noboot")
-        files = ()                              # (the player, below)
-    else:
-        argv += ["--kernel", os.path.join(b, "kernel.sys"),
-                 "--vbr", os.path.join(b, "boothd.bin"),
-                 "--mbr", os.path.join(b, "mbr.bin")]
-        files = HD_BOOT + HD_WANT[1:]
-    for nm, f in files:
-        if nm and os.path.exists(os.path.join(b, f)):
-            argv += ["--file", "%s=%s" % (nm, os.path.join(b, f))]
+    img = out or base + ("-%d.img" % what if kind == "fd" else
+                         "-%s.VHD" % what[0])
+    files = []
     player = player_path(build)
     if player:
-        argv += ["--file", "VIDEO.O88=%s" % player]
-    return argv + ["--file", "%s=%s" % (name, v88)], img
+        files.append(("VIDEO.O88", player))
+    files.append((short83(v88), v88))
+    return disk_of(files, disk, img, build, stage)
 
 
 def out_for(src, ext=".V88"):

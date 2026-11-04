@@ -75,6 +75,7 @@ POOLS = ("hit", "miss", "defended", "critical", "finishing")
 RULES = ("random", "lowest", "last", "alternate", "named")
 STATS = ("hp", "mp", "atk", "mag", "def", "mdef", "evade")
 MAX_CHARS = 4
+MAX_OPENINGS = 8          # the engine's VB_MAXOPEN
 ACTION_KEYS = ("label", "target", "cost", "effects", "accuracy", "pools",
                "by_target")
 
@@ -337,8 +338,46 @@ class Project:
 
     def add_opening(self, clip, sound=None):
         def f(d):
+            if len(d["openings"]) >= MAX_OPENINGS:
+                raise ValueError("at most %d openings" % MAX_OPENINGS)
             d["openings"].append({"clip": clip, "sound": sound})
         self._edit(f)
+
+    def remove_opening(self, i):
+        def f(d):
+            del d["openings"][i]
+        self._edit(f)
+
+    def move_opening(self, i, by):
+        """Opening I moved BY places in the turn (the last is the scene's)"""
+        def f(d):
+            o = d["openings"]
+            j = max(0, min(len(o) - 1, i + by))
+            o.insert(j, o.pop(i))
+        self._edit(f)
+
+    def set_opening(self, i, clip=None, sound=False):
+        """Opening I's clip, and its sound (None: silent; False: as it is)"""
+        def f(d):
+            o = d["openings"][i]
+            if clip is not None:
+                o["clip"] = clip
+            if sound is not False:
+                o["sound"] = sound
+        self._edit(f)
+
+    def own_sound_of(self, cid, level=1.0):
+        """Clip CID's own soundtrack, all of it, as a sound (an opening's
+        sound, which plays instead of the music); its id"""
+        sid = own_sound(cid)
+
+        def f(d):
+            c = d["clips"][cid]
+            d["sounds"][sid] = {"kind": "source", "source": c["source"],
+                                "in": c["in"], "out": c["out"],
+                                "level": level, "whole": True}
+        self._edit(f)
+        return sid
 
     def set_music(self, sound, join=0, loop=None):
         self.set(("music",), {"sound": sound, "join": join,
@@ -553,6 +592,12 @@ class Project:
                     err(w, "cue: no sound %s" % cue["sound"])
                 if not 0 <= cue["frame"] <= c["out"] - c["in"]:
                     err(w, "cue at frame %d, past the clip" % cue["frame"])
+        if len(d["openings"]) > MAX_OPENINGS:
+            err("openings", "%d openings, at most %d" % (len(d["openings"]),
+                                                         MAX_OPENINGS))
+        if not d["openings"]:
+            info("openings", "no opening: the battle starts on the idle "
+                 "loop's first frame, from black")
         for i, o in enumerate(d["openings"]):
             if o["clip"] not in d["clips"]:
                 err("openings.%d" % i, "no clip %s" % o["clip"])

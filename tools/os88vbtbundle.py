@@ -7,9 +7,11 @@
     python3 tools/os88vbtbundle.py OUT.zip --engine build/vbattle.o88
 
 One folder, `os8088-battle-builder/`: the builder's window, everything it
-imports or runs as a process (the analysis, the bundle builder, and the
-video encoder the analysis runs on footage), VBATTLE.O88 to play what it
-builds, and a README.TXT. The file list is COMPUTED by os88vbundle's own
+imports or runs as a process (the analysis, the bundle builder, the
+video encoder the analysis runs on footage, and the two disk makers),
+VBATTLE.O88 to play what it builds, with `--boot` what a hard disk BOOTS
+from in boot/ (the encoder bundle's own list, SPEC.md 98.2.13), and a
+README.TXT. The file list is COMPUTED by os88vbundle's own
 closure over every `import` from the ROOTS, so a module the builder starts
 to need is in the next zip with nothing to remember; a third-party import
 that is not expected stops the build. The zip is deterministic: sorted
@@ -25,7 +27,8 @@ sys.path.insert(0, HERE)
 import os88vbundle as VB    # noqa: E402
 
 ROOTS = ("os88vbtgui.py", "vbtana.py", "os88vbt.py", "vbtproj.py",
-         "vbtrules.py", "vbtband.py", "os88venc.py")
+         "vbtrules.py", "vbtband.py", "os88venc.py",
+         "os88disk.py", "os88hdd.py")       # (the disks, run as processes)
 THIRD_PARTY = {"numpy", "PIL", "tkinterdnd2"}
 DATA = VB.DATA
 FOLDER = "os8088-battle-builder"
@@ -40,14 +43,19 @@ os8088: put the two side by side on a disk.
 
     python3 os88vbtgui.py [PROJECT.vbp]
 
-The window: the Battle, Idle, Clips, Actions, Characters & menus and Enemy
-tabs (the openings and the Build tab come in the next round - see
-docs/plans/VBATTLE-BUILDER-PLAN.md in the os8088 tree). Build with
-`python3 os88vbt.py build PROJECT.vbp` meanwhile. Everything it does is also a command:
+The window: the Battle, Idle, Clips, Openings, Actions, Characters & menus,
+Enemy and Build tabs. Build writes BATTLE.VBT beside the project, checks
+every join, shows each clip against the disk it is made for and what the
+engine will claim of a 640 KB machine, and makes a disk of it: a floppy, or
+a hard disk image for 86Box or a real disk (it BOOTS os8088: what it boots
+from is in boot/). Everything it does is also a command:
 
     python3 os88vbt.py demo-project demo.vbp     the demo battle, as a
                                                  project (no footage needed)
     python3 os88vbt.py build demo.vbp            -> BATTLE.VBT beside it
+    python3 os88vbt.py disk demo.vbp --disk 3    ...and a 1.44 MB floppy
+                                                 of it (0-3 the floppies,
+                                                 4-6 the hard disks)
     python3 os88vbt.py recommend PROJECT.vbp     the loop's and every clip's
                                                  points, with their scores
     python3 vbtproj.py PROJECT.vbp               what is wrong with it, and
@@ -78,6 +86,10 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
     ap.add_argument("--engine", required=True, help="VBATTLE.O88 to ship")
+    ap.add_argument("--boot", metavar="BUILD",
+                    help="a build folder to take a hard disk's BOOT files "
+                    "from into boot/ (os88mkdisk's HD_BOOT and HD_DRV), so "
+                    "the builder's hard disks boot")
     a = ap.parse_args()
     mods, other = VB.closure(ROOTS)
     stray = other - THIRD_PARTY
@@ -92,6 +104,11 @@ def main():
             files.append((name, open(os.path.join(HERE, src), "rb").read(),
                           0o644))
     files.append(("VBATTLE.O88", open(a.engine, "rb").read(), 0o644))
+    if a.boot:
+        import os88mkdisk as M
+        for _, f in M.HD_BOOT + M.HD_DRV:
+            files.append(("boot/" + f, open(os.path.join(a.boot, f),
+                                            "rb").read(), 0o644))
     files.append(("README.TXT", README.replace("\n", "\r\n").encode(),
                   0o644))
     tmp = a.out + ".part"

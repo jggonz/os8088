@@ -202632,6 +202632,10 @@ The checkbox reads "...and make a disk of it", and its list (`DISKS`) is:
 | a 32 MB hard disk: ST-238R on an ST11R (XT) | 615/4/26, the ST11's layout | `os88hdd.py --st11` |
 | a 32 MB hard disk: IDE (286 and up) | 250/15/17 | `os88hdd.py` |
 
+- **The list and the making are `tools/os88mkdisk.py`'s** (`DISKS`,
+  `disk_of`), shared with the Video Battle builder (125.7), which puts its
+  battle and engine on the same seven disks. This window adds its player
+  and the video's 8.3 name (`disk_argv`).
 - **A hard disk BOOTS.** It is a fixed VHD for 86Box, or for a real disk
   written with an image tool, carrying:
   - the kernel and its boot records;
@@ -237821,14 +237825,38 @@ is CGA4, and a VGA plays it in mode 4.
 **Hardware not yet heard.** The PC speaker (VIDEO-BATTLE-PLAN 3.2) is not
 an output.
 
+**The builder** (docs/plans/VBATTLE-BUILDER-PLAN.md, waves 1 to 5):
+`tools/vbtproj.py` (a project), `tools/vbtana.py` (decoded screens,
+cached; loop and attachment points; the music's loop and its JOIN after
+the openings; the budget and this section's memory), `tools/vbtrules.py`
+(the rules, 125.6), `tools/vbtband.py` (the band's preview), `os88vbt.py
+build PROJECT` and `disk PROJECT`, and `tools/os88vbtgui.py` (the Battle,
+Idle, Clips, Openings, Actions, Characters & menus, Enemy and Build tabs).
+The shipped `BATTLE.VBT` is the demo, built through its project.
+
+- **The join** (`vbtana.music_joins`): the music comes in when the scene
+  opening's sound ends, at `VH_MUSAT`. The builder suggests where by the
+  loudness envelopes: the places in the music's loop whose 2 s BEFORE them
+  are most like the openings' last 2 s, by correlation, so the music goes
+  on with what the opening's sound was doing. A planted passage is found
+  to within a 256-sample hop (`tests/vbtguitest.py`).
+- **The memory** (`vbtana.memory`) is 125.4's carving, part for part:
+  each resident part rounded to 4 KB, the music's 32 + 4 KB ring or all
+  of a music of 60 KB or less, the band's two 16 KB buffers, the card's
+  17 KB, and two rings of `(free - resident - 17 - 8) / 2 - 16` KB cut to
+  4 KB. FREE is MEASURED, 461 KB: on MartyPC's 640 KB XT with a Sound
+  Blaster (`os8088_xt_hdd_sb`) the rules battle's rings were 144 KB each
+  beside a 116 KB resident claim. 86Box's 640 KB 5150 left about 20 KB
+  more (its 172 KB rings beside the demo's 80 KB claim, before the band's
+  buffers). The test holds the arithmetic to the measurement.
+- **A disk** is 98.2.12.1's, through the same module (`tools/os88mkdisk.py`):
+  `VBATTLE.O88` and `BATTLE.VBT` in the root of any of its seven disks, a
+  hard disk booting when the boot files are at hand. A floppy too small is
+  refused with the sizes before anything is written.
+
 **Not yet built:**
-- the builder's openings and Build tab (docs/plans/VBATTLE-BUILDER-PLAN.md
-  wave 5). Built: `tools/vbtproj.py` (a project), `tools/vbtana.py`
-  (decoded screens, cached; loop and attachment points; the music's
-  loop), `tools/vbtrules.py` (the rules, 125.6), `tools/vbtband.py` (the
-  band's preview), `os88vbt.py build PROJECT`, and `tools/os88vbtgui.py`
-  (the Battle, Idle, Clips, Actions, Characters & menus and Enemy tabs).
-  The shipped `BATTLE.VBT` is the demo, built through its project;
+- an opening that is not full screen (the band up under the first one):
+  every opening addresses the whole screen (CF_FULL);
 - **a stance's own idle loop**: every stance shares the battle's;
 - a time gauge (ATB), several enemies, status ailments past guard and
   charge.

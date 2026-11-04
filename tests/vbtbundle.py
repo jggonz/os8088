@@ -6,7 +6,8 @@
 
 Unpacked in a temporary folder and run from THERE, with no path back to
 the tree: `os88vbt.py demo-project`, `build` and `verify` must work and
-give the tree's own demo bundle byte for byte; the window's module must
+give the tree's own demo bundle byte for byte, and `disk` a hard disk
+that boots, from the zip's own boot/; the window's module must
 import (no Tk needed to import it); `vbtana.py --help` must run; the zip
 must hold VBATTLE.O88 as built and a README; and two zips from the same
 tree must be the same bytes.
@@ -67,6 +68,22 @@ with tempfile.TemporaryDirectory() as t:
        "for byte")
     r = run(os.path.join(d, "os88vbt.py"), "verify", "BATTLE.VBT")
     ok(r.returncode == 0 and "joined exactly" in r.stdout, "verify runs")
+    # ...and a DISK of it, from the zip alone: the ST11M hard disk BOOTS,
+    # its boot files out of the zip's boot/, the engine out of the zip
+    r = run(os.path.join(d, "os88vbt.py"), "disk", "demo.vbp", "--bundle",
+            "BATTLE.VBT", "--disk", "4", "--json")
+    vhd = os.path.join(work, "BATTLE-ST11M.VHD")
+    ok(r.returncode == 0 and os.path.exists(vhd), "a hard disk of it runs "
+       "from the zip" + r.stderr[-300:])
+    if os.path.exists(vhd):
+        v = run(os.path.join(d, "os88disk.py"), "--verify-hdd", vhd)
+        raw = open(vhd, "rb").read()
+        have = [n for n in (b"KERNEL  SYS", b"HDD     DRV", b"SOUND   DRV",
+                            b"VBATTLE O88", b"BATTLE  VBT") if n in raw]
+        ok(v.returncode == 0 and len(have) == 5, "...verified, carrying what "
+           "it boots from: "
+           "the kernel, HDD.DRV and SOUND.DRV, beside VBATTLE.O88 and "
+           "BATTLE.VBT (%s)" % b" ".join(have).decode())
     r = run("-c", "import sys; sys.path.insert(0, %r); import os88vbtgui; "
             "print(os88vbtgui.TITLE)" % d)
     ok(r.returncode == 0, "the window's module imports" + r.stderr[-300:])
@@ -75,7 +92,8 @@ with tempfile.TemporaryDirectory() as t:
     again = os.path.join(t, "again.zip")
     subprocess.run([sys.executable, os.path.join(ROOT, "tools",
                                                  "os88vbtbundle.py"), again,
-                    "--engine", os.path.join(ROOT, "build", "vbattle.o88")],
+                    "--engine", os.path.join(ROOT, "build", "vbattle.o88"),
+                    "--boot", os.path.join(ROOT, "build")],
                    check=True, stdout=subprocess.DEVNULL)
     ok(open(again, "rb").read() == open(ZIP, "rb").read(),
        "the zip is the same bytes made twice")

@@ -260,8 +260,62 @@ def budget(proj, data):
                           anchors=[k for k, _ in c["anch"]],
                           wait=wait_frames([k for k, _ in c["anch"]],
                                            b.nidle)))
+    d = proj.d                  # the project's own names, in the bundle's
+    opened = [o["clip"] for o in d["openings"]] or ["(start)"]     # order
+    ids = opened + [c for c in d["clips"] if c not in opened]
+    for c, cid in zip(clips, ids):
+        c["id"] = cid
+    mem = memory(data)
+    mrate = 0 if mem["music_resident"] else b.rate * 1.0   # 8-bit mono
+    for c in clips:
+        c["with_music"] = (c["rate"] + mrate) / disk
+        c["head_secs"] = min(c["bytes"], VB_HEAD) / disk
+        c["fits_ring"] = mem["ring"] is not None and c["bytes"] <= mem["ring"]
     return dict(clips=clips, idle_bytes=len(b.vres), entries=len(b.ents),
-                music=b.mlen, ui=len(b.uib), file=len(data), disk=disk)
+                music=b.mlen, ui=len(b.uib), file=len(data), disk=disk,
+                memory=mem, music_rate=mrate)
+
+
+# THE ENGINE'S MEMORY (SPEC.md 125.4), carved as vb_load and vb_rclaim carve
+# it, so that the Build tab's figures are the engine's own arithmetic
+VB_MR, VB_MPIECE, VB_MRES = 32768, 4096, 61440      # the music's ring, or
+VB_BAND = 2 * 16384                                 # all of a short one; the
+VB_CARD, VB_RKEEP, VB_CGUARD = 17, 8, 16            # band's two buffers; KB
+VB_CRMIN, VB_HEAD = 48, 40960                       # (vbattle.asm's names)
+# The KB free to the engine once it is loaded, on a 640 KB 5150 with a
+# Sound Blaster and os8088's hard disk driver: MEASURED (VB_FREE_SRC)
+VB_FREE = 461
+VB_FREE_SRC = ("measured on MartyPC's 640 KB XT with a Sound Blaster "
+               "(os8088_xt_hdd_sb), 2026-11-04: the rules battle's rings came "
+               "to 144 KB each beside a 116 KB resident claim, which is 461 "
+               "to 468 KB free")
+
+
+def _r4k(n):
+    return min((n + 4095) & ~4095, 0xF000)
+
+
+def memory(data, free_kb=VB_FREE):
+    """What the engine claims for bundle DATA (125.4), in bytes: the
+    resident claim's parts, the card's ring, and the two clip rings a play
+    is given out of FREE_KB (the largest run once it is loaded). "rings" is
+    None when they would be under VB_CRMIN: Play says Not enough memory"""
+    import os88vbt as B
+    b = B.Bundle(data)
+    mres = b.mlen <= VB_MRES
+    parts = [("the idle loop's block", _r4k(len(b.vres))),
+             ("the menu's sounds", _r4k(len(b.uib))),
+             ("the music, all of it" if mres else "the music's ring",
+              _r4k(b.mlen) if mres else VB_MR + VB_MPIECE),
+             ("the entries", (len(b.ents) + 4095) & ~4095),
+             ("the band's pictures", _r4k(len(b.imgs))),
+             ("the band's two buffers", VB_BAND)]
+    res = sum(n for _, n in parts)
+    left = free_kb - (res + 1023) // 1024 - VB_CARD - VB_RKEEP
+    ring = (left // 2 - VB_CGUARD) // 4 * 4
+    return dict(parts=parts, resident=res, card=VB_CARD * 1024,
+                ring=ring * 1024 if ring >= VB_CRMIN else None,
+                free=free_kb * 1024, music_resident=mres)
 
 
 # --- colour, for every picture the builder shows ----------------------------------
@@ -425,6 +479,108 @@ def sound_wav(x, rate, path):
 
 # --- a clip against the loop (4.3), and its sound (10.2) -------------------------------
 
+# --- the openings, and where the music comes in (plan 10.3) ----------------------
+
+def openings_sound(proj):
+    """The openings' sound as the engine plays it (125.3): each one's own,
+    as long as its frames (cut, or silence after it), the next starting at
+    the sample the last ends; then the MUSIC comes in. Floats, and the
+    (first sample, clip) of each opening. The music's place is its end"""
+    d, t = proj.d, proj.d["target"]
+    spf = t["rate"] // t["fps"]
+    parts, at, n0 = [], [], 0
+    for o in d["openings"]:
+        c = d["clips"][o["clip"]]
+        n = (c["out"] - c["in"] + 1) * spf
+        x = np.zeros(n)
+        if o.get("sound"):
+            y = sound(proj, o["sound"])[:n]
+            x[:len(y)] = y
+        at.append((n0, o["clip"]))
+        parts.append(x)
+        n0 += n
+    return (np.concatenate(parts) if parts else np.zeros(0)), at
+
+
+def music_region(proj):
+    """The music as the engine holds it: its LOOP (or all of it), the join's
+    place in it, and the loop's first sample in the sound"""
+    m = proj.d["music"]
+    x = sound(proj, m["sound"])
+    lp = m.get("loop") or [0, len(x)]
+    return x[lp[0]:lp[1]], m["join"] - lp[0], lp[0]
+
+
+def envelope(x, hop=256):
+    """The sound's loudness a HOP samples at a time (its RMS), in decibels -
+    the shape the join is matched by"""
+    n = len(x) // hop
+    if n == 0:
+        return np.zeros(0)
+    r = np.sqrt(np.mean(x[:n * hop].reshape(n, hop) ** 2, axis=1))
+    return 20 * np.log10(r + 1e-4)
+
+
+def music_joins(proj, window=2.0, top=5, hop=256):
+    """Where the music should COME IN after the scene opening (plan 10.3):
+    the joins J whose WINDOW seconds of music BEFORE J are most like the
+    openings' last WINDOW seconds, by their envelopes' correlation - so
+    the music goes on with what the opening's sound was doing. Best first,
+    at least half a second apart: dicts of score (-1..1) and join (the
+    sound's sample, as the project keeps it). [] when the openings end in
+    silence or the music has no shape to match"""
+    op, _ = openings_sound(proj)
+    reg, _, lp0 = music_region(proj)
+    rate = proj.d["target"]["rate"]
+    return [dict(score=sc, join=lp0 + j) for j, sc in
+            join_candidates(op, reg, rate, window, top, hop)]
+
+
+def join_candidates(op, reg, rate, window=2.0, top=5, hop=256):
+    """music_joins' matching, on the sounds themselves: the places J in the
+    music REG (round its loop) whose WINDOW seconds before are most like
+    OP's last WINDOW seconds, as (J in samples, score), best first"""
+    w = int(window * rate / hop)
+    a = envelope(op[-w * hop:], hop)
+    if len(a) < w or np.std(a) < 0.5 or len(reg) < (w + 1) * hop:
+        return []
+    e = envelope(reg, hop)
+    m = len(e)
+    ee = np.concatenate([e, e])                 # round the loop
+    a = (a - a.mean()) / np.std(a)
+    win = np.lib.stride_tricks.sliding_window_view(ee, w)[:m]
+    mu = win.mean(1, keepdims=True)
+    sd = win.std(1, keepdims=True)
+    sc = ((win - mu) / np.maximum(sd, 1e-6) @ a) / w
+    sc[sd[:, 0] < 0.5] = -1
+    out = []                    # window k covers e[k:k+w]: the join is after
+    for k in np.argsort(-sc):
+        j = int((k + w) % m)
+        if all(abs(j - o) * hop > rate // 2 and
+               (m - abs(j - o)) * hop > rate // 2 for o, _ in out):
+            out.append((j, float(sc[k])))
+        if len(out) == top:
+            break
+    return [(j * hop, s) for j, s in out]
+
+
+def join_wav(proj, path, join=None, after=4.0, before=4.0):
+    """A WAV of the openings' last BEFORE seconds and the music's first
+    AFTER seconds from JOIN (the project's own by default), mixed at the
+    engine's levels - an opening's sound is OWN (the whole range), the
+    music half of it (125.2) - so the join is heard as it will be"""
+    op, _ = openings_sound(proj)
+    reg, j, lp0 = music_region(proj)
+    if join is not None:
+        j = join - lp0
+    rate = proj.d["target"]["rate"]
+    n = int(after * rate)
+    idx = (j + np.arange(n)) % max(1, len(reg))
+    y = np.concatenate([op[-int(before * rate):], 0.5 * reg[idx]])
+    sound_wav(np.clip(y, -1, 1), rate, path)
+    return len(op[-int(before * rate):])
+
+
 def clip_report(proj, cid, progress=_nop):
     """Everything the Clips tab shows about clip CID against the idle loop:
     for its IN frame against every idle frame, the score and the ENTRY's
@@ -506,6 +662,17 @@ def main(argv=None):
     q.add_argument("project")
     q.add_argument("clip")
     q.add_argument("out")
+    q = sp.add_parser("joins", help="where the music should come in after "
+                      "the openings")
+    q.add_argument("project")
+    q = sp.add_parser("joinwav", help="the openings' end and the music "
+                      "coming in, as a WAV")
+    q.add_argument("project")
+    q.add_argument("out")
+    q.add_argument("--join", type=int, help="this join, not the project's")
+    q.add_argument("--before", type=float, default=4.0,
+                   help="seconds of the openings before it (default 4)")
+    q.add_argument("--after", type=float, default=4.0)
     a = ap.parse_args(argv)
     proj = P.Project.load(a.project)
 
@@ -540,6 +707,13 @@ def main(argv=None):
         n = (c["out"] - c["in"] + 1) * (t["rate"] // t["fps"])
         sound_wav(x if x is not None else np.zeros(n), t["rate"], a.out)
         say(dict(stage="done", out=a.out, silent=x is None))
+    elif a.cmd == "joins":
+        progress("analyse", 0, 1, "the openings and the music")
+        say(dict(stage="done", rate=proj.d["target"]["rate"],
+                 joins=music_joins(proj)))
+    elif a.cmd == "joinwav":
+        at = join_wav(proj, a.out, a.join, a.after, a.before)
+        say(dict(stage="done", out=a.out, music_at=at))
     elif a.cmd == "wav":
         x = sound(proj, a.sound)
         rate = proj.d["target"]["rate"]

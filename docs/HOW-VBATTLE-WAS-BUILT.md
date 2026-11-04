@@ -450,6 +450,53 @@ the selection event rebuilt it again - a loop that froze the window the
 first time a clip was chosen. `_pick` now ignores a re-selection of the
 clip it already holds.
 
+## Wave 5: the openings, the join, and the Build tab (2026-11-04)
+
+**The join is matched by loudness, not by pitch.** The music comes in when
+the scene opening's sound ends, and the question the plan asked is where in
+the music it should come in so that it goes on with what the opening was
+doing. The answer is a correlation of loudness envelopes (RMS a 256-sample
+hop, in decibels): every place in the music's loop is scored by how much
+the two seconds BEFORE it look like the openings' last two seconds. The
+envelope rather than the spectrum, because an opening's sound is usually
+not music at all - a riser, a fanfare, a crash - and what carries over is
+its shape. Planted (the openings ending on exactly the two seconds before
+a sample of a random-envelope music) it is found within one hop, scored
+0.97 against 0.66 for the next; on the demo, whose riser is like nothing
+in its music, every candidate scores about 9%, and the window says so in
+those words rather than ranking noise as a recommendation. Listen mixes
+the join at the engine's own levels - an opening's sound is OWN, the full
+range; the music half of it - because a join heard louder than it plays is
+judged wrongly.
+
+**The memory figure had to be measured, and the first number was a
+guess.** The Build tab says what the engine will claim on a 640 KB machine
+and how big its two clip rings come out, and the arithmetic is 125.4's
+carving part for part. What it cannot know is how much is free when the
+engine opens. The 172 KB rings measured on 86Box earlier were against a
+resident claim the bundle no longer has (wave 4 added the band's two 16 KB
+buffers), so they could not be worked back. One run on MartyPC's XT read
+`vb_rkb` straight off the engine - 144 KB beside a 116 KB claim - which is
+461 KB free; 86Box's 5150 had left about 20 KB more. The tab uses the lower
+and says whose it is, and the test holds the arithmetic to the measurement:
+the music ring's 4 KB guard dropped on purpose and it fails.
+
+**One list of disks.** The encoder's window already made every disk a
+video could go on - four floppies and three hard disks, booting when the
+boot files are at hand - and the builder wanted the same seven. Its making
+moved into `tools/os88mkdisk.py`, which both windows use; the encoder's own
+command lines were compared before and after for all seven disks, with and
+without boot files, and are the same. The builder's zip now carries the
+disk makers and `boot/`, so a battle's hard disk made on a machine with no
+os8088 tree carries the kernel, the drivers, the engine and the bundle. A
+floppy too small says so with the sizes before anything is written: the
+demo's 848 KB against a 360 KB disk's 354.
+
+**On the owner's footage** the budget reads: a 152 KB resident claim, so
+124 KB rings, and every attack streams (none fits a ring whole) at 47 to
+76% of the ST-225 with the music beside it - inside the disk, which is what
+the 86Box runs with no stalls said.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

@@ -519,9 +519,10 @@ class App(object):
     def drop(self, paths, where=None):
         """Files dropped on the window: a project anywhere is opened; a
         video always becomes a clip - or, dropped on the Idle tab, the idle
-        loop's source; a sound always joins the sounds, and dropped on the
-        music it is the music, on a clip's effects a cue at its frame; a
-        picture joins the band pictures"""
+        loop's source, and on the Openings tab the next opening; a sound
+        always joins the sounds, and dropped on the music it is the music,
+        on a clip's effects a cue at its frame, on the Openings tab the
+        chosen opening's sound; a picture joins the band pictures"""
         tab = self.nb.index(self.nb.select())
         inside = lambda w, frame: w is not None and str(w).startswith(str(frame))
         for p in paths:
@@ -533,6 +534,9 @@ class App(object):
             if k == "video":
                 if inside(where, self.idle_tab.f) or (where is None and tab == 1):
                     self.idle_tab.take(p)
+                elif inside(where, self.openings_tab.f):
+                    self.add_clip_file(p, lambda cid: self.edit(
+                        "add_opening", cid))
                 else:
                     self.add_clip_file(p)
                     self.nb.select(2)
@@ -540,6 +544,9 @@ class App(object):
                 sid = self.add_sound_file(p)
                 if inside(where, self.battle_tab.mf):
                     self.edit("set_music", sid, 0)
+                elif inside(where, self.openings_tab.f) and \
+                        self.openings_tab.i() is not None:
+                    self.edit("set_opening", self.openings_tab.i(), sound=sid)
                 elif inside(where, self.clips_tab.f) and self.clips_tab.cid():
                     self.edit("add_cue", self.clips_tab.cid(),
                               int(self.clips_tab.scrub.get()), sid)
@@ -574,24 +581,28 @@ class App(object):
         self.edit("add_sound", sid, path=path)
         return sid
 
-    def add_clip_file(self, path):
+    def add_clip_file(self, path, then=None):
         """VIDEO at PATH as a new CLIP, all of it to start: queued, since
-        each is read by a job of its own, one after another"""
-        self.pending.append(path)
+        each is read by a job of its own, one after another. THEN(clip id)
+        once it is one"""
+        self.pending.append((path, then))
         if len(self.pending) == 1:
             self._next_clip()
 
     def _next_clip(self):
         if not self.pending or self.job:    # (a job's end starts it)
             return
-        path = self.pending[0]
+        path, then = self.pending[0]
         sid = self.add_video(path)
         cid = unique_id(sid, self.proj.d["clips"])
 
         def got(fr):
             self.edit("add_clip", cid, sid, (0, len(fr) - 1), anchors=())
             self.pending.pop(0)
-            self.clips_tab.select(cid)
+            if then:
+                then(cid)
+            else:
+                self.clips_tab.select(cid)
             if self.pending:
                 self._next_clip()
         self.screens(sid, got)
@@ -636,19 +647,16 @@ class App(object):
         self.actions_tab = ActionsTab(self, self.nb)
         self.party_tab = PartyTab(self, self.nb)
         self.enemy_tab = EnemyTab(self, self.nb)
+        self.openings_tab = OpeningsTab(self, self.nb)
+        self.build_tab = BuildTab(self, self.nb)
         self.nb.add(self.battle_tab.f, text="Battle")
         self.nb.add(self.idle_tab.f, text="Idle")
         self.nb.add(self.clips_tab.f, text="Clips")
+        self.nb.add(self.openings_tab.f, text="Openings")
         self.nb.add(self.actions_tab.f, text="Actions")
         self.nb.add(self.party_tab.f, text="Characters & menus")
         self.nb.add(self.enemy_tab.f, text="Enemy")
-        for name, wave in (("Build", 5),):
-            fr = ttk.Frame(self.nb)
-            ttk.Label(fr, text="The %s tab comes in the plan's wave %d. Until "
-                      "then, tools/os88vbt.py build PROJECT builds what the "
-                      "project says." % (name, wave), wraplength=600
-                      ).pack(padx=20, pady=20, anchor="w")
-            self.nb.add(fr, text=name)
+        self.nb.add(self.build_tab.f, text="Build")
         bar = ttk.Frame(self.root)
         bar.pack(fill="x", side="bottom")
         self.status = ttk.Label(bar, text="Ready")
@@ -671,6 +679,8 @@ class App(object):
         self.actions_tab.refresh()
         self.party_tab.refresh()
         self.enemy_tab.refresh()
+        self.openings_tab.refresh()
+        self.build_tab.refresh()
 
     def edit(self, fn, *a, **kw):
         """Every edit: the model's method, then the view redrawn"""
@@ -1982,6 +1992,559 @@ class ClipsTab(object):
                 self.app.say("No player here: the WAV is %s" % res["out"])
         self.app.run("vbtana", ["clipwav", self.app.proj.path, cid, out], got,
                      "Mixing the clip's sound...")
+
+
+# --- the Openings tab (plan 10.3) ---------------------------------------------------
+
+def opening_lines(proj):
+    """The Openings list's lines: each opening in turn, its sound, and the
+    last one's join onto the idle loop"""
+    d = proj.d
+    out = []
+    for i, o in enumerate(d["openings"]):
+        c = d["clips"].get(o["clip"], {})
+        n = c.get("out", 0) - c.get("in", 0) + 1
+        out.append("%d. %-14s %5.1f s  %s%s" % (
+            i + 1, o["clip"], n / float(d["target"]["fps"]),
+            o.get("sound") or "(silent)",
+            "  - the scene: joins idle frame %d" % c.get("exit", 0)
+            if i == len(d["openings"]) - 1 else ""))
+    return out
+
+
+class OpeningsTab(object):
+    """The openings, in turn from black: each a clip played whole over the
+    whole screen with its own sound; the last, the SCENE opening, joins the
+    idle loop at its exit, and when its sound ends the MUSIC comes in at
+    the join - which is suggested here (vbtana.music_joins), listened to,
+    and used"""
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        self.app = app
+        self.f = f = ttk.Frame(parent, padding=6)
+        self.joins = []
+        self.frames = None          # (pictures, the openings' first frames)
+        left = ttk.Frame(f)
+        left.grid(row=0, column=0, sticky="nw")
+        ttk.Label(left, text="In turn, from a black screen; the last joins "
+                  "the idle loop", wraplength=360).pack(anchor="w")
+        self.lb = tk.Listbox(left, height=9, width=58, exportselection=False,
+                             font=("TkFixedFont", 9))
+        self.lb.pack(anchor="w")
+        self.lb.bind("<<ListboxSelect>>", lambda e: self._pick())
+        bb = ttk.Frame(left)
+        bb.pack(anchor="w", pady=4)
+        self.addv = tk.StringVar()
+        self.addcb = ttk.Combobox(bb, textvariable=self.addv, state="readonly",
+                                  width=16)
+        self.addcb.pack(side="left")
+        ttk.Button(bb, text="Add", command=self._add).pack(side="left")
+        ttk.Button(bb, text="Remove", command=self._remove).pack(side="left")
+        ttk.Button(bb, text="Earlier", command=lambda: self._move(-1)
+                   ).pack(side="left")
+        ttk.Button(bb, text="Later", command=lambda: self._move(1)
+                   ).pack(side="left")
+        of = ttk.LabelFrame(left, text="The opening chosen", padding=6)
+        of.pack(anchor="w", fill="x", pady=4)
+        ttk.Label(of, text="Clip").grid(row=0, column=0, sticky="w")
+        self.clipv = tk.StringVar()
+        self.clipcb = ttk.Combobox(of, textvariable=self.clipv,
+                                   state="readonly", width=18)
+        self.clipcb.grid(row=0, column=1, sticky="w")
+        self.clipcb.bind("<<ComboboxSelected>>", lambda e: self._set_clip())
+        ttk.Label(of, text="Its sound").grid(row=1, column=0, sticky="w")
+        self.sndv = tk.StringVar()
+        self.sndcb = ttk.Combobox(of, textvariable=self.sndv, state="readonly",
+                                  width=18)
+        self.sndcb.grid(row=1, column=1, sticky="w")
+        self.sndcb.bind("<<ComboboxSelected>>", lambda e: self._set_sound())
+        ttk.Button(of, text="Its own soundtrack", command=self._own
+                   ).grid(row=1, column=2, padx=4)
+        ttk.Label(of, text="Joins idle frame").grid(row=2, column=0, sticky="w")
+        self.exitv = tk.IntVar()
+        self.exitsp = ttk.Spinbox(of, from_=0, to=9999, width=6,
+                                  textvariable=self.exitv)
+        self.exitsp.grid(row=2, column=1, sticky="w")
+        ttk.Button(of, text="Set", command=self._set_exit
+                   ).grid(row=2, column=2, sticky="w", padx=4)
+        ttk.Button(of, text="Recommend", command=self._rec_exit
+                   ).grid(row=2, column=3, sticky="w")
+        self.exit_l = ttk.Label(of, text="", wraplength=380)
+        self.exit_l.grid(row=3, column=0, columnspan=4, sticky="w")
+        # the music coming in
+        mf = ttk.LabelFrame(left, text="The music comes in", padding=6)
+        mf.pack(anchor="w", fill="x", pady=4)
+        self.join_l = ttk.Label(mf, text="", wraplength=380)
+        self.join_l.pack(anchor="w")
+        jb = ttk.Frame(mf)
+        jb.pack(anchor="w", pady=2)
+        ttk.Button(jb, text="Suggest the join", command=self._suggest
+                   ).pack(side="left")
+        ttk.Button(jb, text="Listen to the join", command=self._listen_join
+                   ).pack(side="left")
+        ttk.Button(jb, text="Use", command=self._use_join).pack(side="left")
+        self.jl = tk.Listbox(mf, height=5, width=52, exportselection=False)
+        self.jl.pack(anchor="w")
+        self.jl.bind("<<ListboxSelect>>", lambda e: self._join_pick())
+        # the picture: the openings in turn
+        right = ttk.Frame(f)
+        right.grid(row=0, column=1, sticky="n", padx=8)
+        self.pic = tk.Label(right, bg="black")
+        self.pic.pack()
+        self.scrub = tk.Scale(right, from_=0, to=0, orient="horizontal",
+                              length=640, label="The openings' frame",
+                              command=lambda v: self._show(int(v)))
+        self.scrub.pack()
+        pb = ttk.Frame(right)
+        pb.pack(anchor="w")
+        self.play_b = ttk.Button(pb, text="Play the start, with its sound",
+                                 command=self._play)
+        self.play_b.pack(side="left")
+        ttk.Button(pb, text="Load the pictures", command=self._load
+                   ).pack(side="left", padx=4)
+        self.info = ttk.Label(right, text="", wraplength=640)
+        self.info.pack(anchor="w", pady=4)
+        self.pending_join = None        # a candidate clicked, not yet Used
+
+    # --- the list -------------------------------------------------------------
+    def i(self):
+        s = self.lb.curselection()
+        return s[0] if s and s[0] < len(self.app.proj.d["openings"]) else None
+
+    def refresh(self):
+        d = self.app.proj.d
+        keep = self.i()
+        self.lb.delete(0, "end")
+        for line in opening_lines(self.app.proj):
+            self.lb.insert("end", line)
+        if keep is not None and keep < len(d["openings"]):
+            self.lb.selection_set(keep)
+        clips = list(d["clips"])
+        self.addcb.config(values=clips)
+        self.clipcb.config(values=clips)
+        self.sndcb.config(values=["(silent)"] + list(d["sounds"]))
+        i = self.i()
+        if i is not None:
+            o = d["openings"][i]
+            self.clipv.set(o["clip"])
+            self.sndv.set(o.get("sound") or "(silent)")
+            last = i == len(d["openings"]) - 1
+            c = d["clips"].get(o["clip"])
+            self.exitv.set(c["exit"] if c else 0)
+            st = "normal" if last else "disabled"
+            self.exitsp.config(state=st)
+            if not last:
+                self.exit_l.config(text="Only the last opening joins the "
+                                   "idle loop: this one runs into the next.")
+        self._join_text()
+        self.frames = None if self.frames and self.frames[2] != self._key() \
+            else self.frames
+
+    def _key(self):
+        d = self.app.proj.d
+        return json.dumps([d["openings"], [d["clips"].get(o["clip"]) for o in
+                                           d["openings"]]], sort_keys=True)
+
+    def _join_text(self):
+        d = self.app.proj.d
+        t = d["target"]
+        fps, rate = t["fps"], t["rate"]
+        n = sum(d["clips"][o["clip"]]["out"] - d["clips"][o["clip"]]["in"] + 1
+                for o in d["openings"] if o["clip"] in d["clips"])
+        m = d.get("music") or {}
+        j = self.pending_join if self.pending_join is not None else m.get("join")
+        if not m:
+            return self.join_l.config(text="No music yet (the Battle tab)")
+        self.join_l.config(text="After %.2f s of openings, the music comes in "
+                           "at %.3f s into %s%s." % (
+                               n / float(fps), secs(j or 0, rate), m["sound"],
+                               " - not Used yet" if self.pending_join is not None
+                               and self.pending_join != m.get("join") else ""))
+
+    def _pick(self):
+        self.refresh()
+        i = self.i()
+        if i is not None and self.frames:
+            self.scrub.set(self.frames[1][i])
+
+    def _add(self):
+        if self.addv.get():
+            self.app.edit("add_opening", self.addv.get())
+            self.lb.selection_clear(0, "end")
+            self.lb.selection_set(len(self.app.proj.d["openings"]) - 1)
+            self.refresh()
+
+    def _remove(self):
+        if self.i() is not None:
+            self.app.edit("remove_opening", self.i())
+
+    def _move(self, by):
+        i = self.i()
+        if i is not None:
+            self.app.edit("move_opening", i, by)
+            j = max(0, min(len(self.app.proj.d["openings"]) - 1, i + by))
+            self.lb.selection_clear(0, "end")
+            self.lb.selection_set(j)
+            self.refresh()
+
+    def _set_clip(self):
+        if self.i() is not None:
+            self.app.edit("set_opening", self.i(), clip=self.clipv.get())
+
+    def _set_sound(self):
+        if self.i() is not None:
+            v = self.sndv.get()
+            self.app.edit("set_opening", self.i(),
+                          sound=None if v == "(silent)" else v)
+
+    def _own(self):
+        i = self.i()
+        if i is None:
+            return
+        cid = self.app.proj.d["openings"][i]["clip"]
+        src = self.app.proj.d["sources"][self.app.proj.d["clips"][cid]["source"]]
+        if src["kind"] == "scene":
+            return self.app.say("A made-up video has no soundtrack of its own")
+        sid = self.app.proj.own_sound_of(cid)
+        self.app.edit("set_opening", i, sound=sid)
+
+    def _set_exit(self):
+        i = self.i()
+        if i is not None:
+            cid = self.app.proj.d["openings"][i]["clip"]
+            self.app.edit("set_exit", cid, self.exitv.get())
+
+    def _rec_exit(self):
+        """The idle frame the scene opening's last frame is most like: its
+        seam's fewest changed pixels"""
+        import vbtana as A
+        i = self.i()
+        d = self.app.proj.d
+        if i is None or not d.get("idle"):
+            return
+        cid = d["openings"][i]["clip"]
+        c = d["clips"][cid]
+
+        def got(_):
+            fr = self.app.frames[c["source"]]
+            idle = self.app.frames[d["idle"]["source"]]
+            a, b = d["idle"]["loop"]
+            sc = [A.diff(fr[c["out"]], idle[k]) for k in range(a, b)]
+            k = min(range(len(sc)), key=sc.__getitem__)
+            self.exitv.set(k)
+            self.exit_l.config(text="Recommended: idle frame %d, its seam "
+                               "%.2f%% of the pixels (the exit now: %d, "
+                               "%.2f%%). Set takes it." % (
+                                   k, sc[k] * 100, c["exit"],
+                                   sc[min(c["exit"], len(sc) - 1)] * 100))
+        self.app.screens(d["idle"]["source"],
+                         lambda _: self.app.screens(c["source"], got))
+
+    # --- the join ------------------------------------------------------------
+    def _suggest(self):
+        rate = self.app.proj.d["target"]["rate"]
+
+        def got(res):
+            self.joins = res["joins"]
+            self.jl.delete(0, "end")
+            if not self.joins:
+                self.app.say("Nothing to match: the openings end in silence "
+                             "(or there are none) - the join is yours to pick")
+            for j in self.joins:
+                self.jl.insert("end", "at %.3f s: the music before it is "
+                               "%.0f%% like the openings' end" % (
+                                   secs(j["join"], rate),
+                                   max(0, j["score"]) * 100))
+            if self.joins:
+                self.jl.selection_set(0)
+                self._join_pick()
+        self.app.run("vbtana", ["joins", self.app.proj.path], got,
+                     "Matching the openings' end to the music...")
+
+    def _join_pick(self):
+        s = self.jl.curselection()
+        if s and s[0] < len(self.joins):
+            self.pending_join = self.joins[s[0]]["join"]
+            self._join_text()
+
+    def _use_join(self):
+        if self.pending_join is not None:
+            self.app.edit("set", ("music", "join"), self.pending_join)
+            self.pending_join = None
+            self._join_text()
+
+    def _listen_join(self):
+        out = os.path.join(tempfile.gettempdir(), "vbtgui-join.wav")
+        argv = ["joinwav", self.app.proj.path, out]
+        if self.pending_join is not None:
+            argv += ["--join", str(self.pending_join)]
+
+        def got(res):
+            if not play_wav(res["out"]):
+                self.app.say("No player here: the WAV is %s" % res["out"])
+        self.app.run("vbtana", argv, got, "Mixing the join...")
+
+    # --- the picture -----------------------------------------------------------
+    def _load(self, then=None):
+        """Every opening's frames, read (a job each the first time), then
+        the openings in turn as whole screens: the canvas over black"""
+        d = self.app.proj.d
+        srcs = [d["clips"][o["clip"]]["source"] for o in d["openings"]
+                if o["clip"] in d["clips"]]
+        if d.get("idle"):
+            srcs.append(d["idle"]["source"])
+
+        def step(k):
+            if k < len(srcs):
+                return self.app.screens(srcs[k], lambda _: step(k + 1))
+            pics, starts = [], []
+            for o in d["openings"]:
+                c = d["clips"][o["clip"]]
+                starts.append(len(pics))
+                pics += list(self.app.frames[c["source"]][c["in"]:c["out"] + 1])
+            self.frames = (pics, starts, self._key())
+            self.scrub.config(to=max(0, len(pics) - 1))
+            self._show(0)
+            if then:
+                then()
+        step(0)
+
+    def _whole(self, px):
+        import numpy as np
+        h = 200 - px.shape[0]
+        return np.vstack([px, np.zeros((h, px.shape[1]), px.dtype)]) if h > 0 \
+            else px
+
+    def _show(self, n):
+        if not self.frames or not self.frames[0]:
+            return
+        pics, starts, _ = self.frames
+        n = max(0, min(n, len(pics) - 1))
+        self._img = self.app.photo(self._whole(pics[n]))
+        self.pic.config(image=self._img)
+        k = max(i for i, s0 in enumerate(starts) if s0 <= n)
+        self.info.config(text="Opening %d (%s), its frame %d" % (
+            k + 1, self.app.proj.d["openings"][k]["clip"], n - starts[k]))
+
+    def _play(self):
+        """The battle's START: the openings in turn, then the idle loop from
+        the scene's join, for 4 s - with the sound the engine makes (the
+        openings' own, then the music at the join)"""
+        if self.app.anim:
+            self.app.root.after_cancel(self.app.anim)
+            self.app.anim = None
+            self.play_b.config(text="Play the start, with its sound")
+            return
+        d = self.app.proj.d
+        if not d["openings"] or not d.get("idle"):
+            return self.app.say("Needs an opening and the idle loop")
+        if not self.frames or self.frames[2] != self._key():
+            return self._load(self._play)
+        pics = list(self.frames[0])
+        idle = self.app.frames[d["idle"]["source"]]
+        a, b = d["idle"]["loop"]
+        e = d["clips"][d["openings"][-1]["clip"]]["exit"]
+        n = b - a
+        pics += [idle[a + (e + k) % n] for k in range(1, 4 * d["target"]["fps"])]
+        imgs = [self.app.photo(self._whole(p)) for p in pics]
+        op = sum(len(range(d["clips"][o["clip"]]["in"],
+                           d["clips"][o["clip"]]["out"] + 1))
+                 for o in d["openings"])
+        out = os.path.join(tempfile.gettempdir(), "vbtgui-start.wav")
+        step = [0]
+
+        def tick():
+            if step[0] >= len(imgs):
+                self.app.anim = None
+                self.play_b.config(text="Play the start, with its sound")
+                return
+            self._img = imgs[step[0]]
+            self.pic.config(image=self._img)
+            step[0] += 1
+            self.app.anim = self.app.root.after(1000 // d["target"]["fps"], tick)
+
+        def got(res):
+            play_wav(res["out"])
+            self.play_b.config(text="Stop")
+            tick()
+        before = op / float(d["target"]["fps"]) + 0.01
+        self.app.run("vbtana", ["joinwav", self.app.proj.path, out,
+                                "--before", "%.3f" % before], got,
+                     "Mixing the start...")
+
+
+# --- the Build tab (plan 4.5) ------------------------------------------------------
+
+# where a check's WHERE sends the window: its tab (and a clip, selected)
+CHECK_TABS = (("clips.", "clips"), ("openings", "openings"),
+              ("actions", "actions"), ("characters", "party"),
+              ("menu", "party"), ("items", "party"), ("images", "party"),
+              ("enemy", "enemy"), ("idle", "idle"), ("music", "battle"),
+              ("ui_sounds", "battle"), ("target", "battle"), ("sounds", "clips"))
+
+
+def check_tab(where):
+    for pre, tab in CHECK_TABS:
+        if where.startswith(pre):
+            return tab
+    return "battle"
+
+
+def budget_rows(bud):
+    """The Build tab's per-clip lines out of vbtana.budget: (values, tag),
+    tagged "over" when the clip and the music want more than the disk
+    gives, "near" past 85% of it"""
+    rows = []
+    for c in bud["clips"]:
+        w = c["with_music"]
+        tag = "over" if w > 1.0 else "near" if w > 0.85 else ""
+        rows.append(((c.get("id", c["name"]), "%d" % (c["bytes"] // 1024),
+                      "%.1f" % c["secs"], "%.1f" % (c["rate"] / 1024),
+                      "%.0f%%" % (w * 100), "%.2f" % c["head_secs"],
+                      "yes" if c["fits_ring"] else "streams",
+                      " ".join(map(str, c["anchors"])) or "-",
+                      "-" if c["wait"] is None or not c["anchors"]
+                      else "%d" % c["wait"]), tag))
+    return rows
+
+
+def memory_lines(mem):
+    kb = lambda n: (n + 1023) // 1024
+    out = ["The resident claim, held while the window is open: %d KB" %
+           kb(mem["resident"])]
+    out += ["    %-24s %4d KB" % (n, kb(b)) for n, b in mem["parts"]]
+    out.append("The card's ring: %d KB" % kb(mem["card"]))
+    out.append("Two clip rings, a play's, out of what is left: %s" % (
+        "%d KB each" % kb(mem["ring"]) if mem["ring"] else
+        "NOT ENOUGH - Play would say Not enough memory"))
+    return out
+
+
+class BuildTab(object):
+    """What is wrong (every check, double-click to go there), BUILD (the
+    bundle, verified), its BUDGET - each clip against the profile's disk,
+    the music streaming beside it, and the engine's memory - and a DISK of
+    it (os88mkdisk, the encoder's own list)"""
+    COLS = (("clip", "Clip", 150), ("kb", "KB", 55), ("secs", "Seconds", 60),
+            ("rate", "KB/s", 55), ("disk", "Of the disk", 80),
+            ("head", "Head (s)", 65), ("ring", "In a ring", 70),
+            ("anch", "Anchors", 110), ("wait", "Wait", 45))
+
+    def __init__(self, app, parent):
+        tk, ttk = app.tk, app.ttk
+        import os88mkdisk as M
+        self.app, self.M = app, M
+        self.f = f = ttk.Frame(parent, padding=6)
+        self.bud = None
+        top = ttk.Frame(f)
+        top.pack(fill="x")
+        ttk.Button(top, text="Build", command=self._build).pack(side="left")
+        self.out_l = ttk.Label(top, text="")
+        self.out_l.pack(side="left", padx=8)
+        cf = ttk.LabelFrame(f, text="What is wrong (ERROR stops a build; "
+                            "double-click to go there)", padding=4)
+        cf.pack(fill="x", pady=4)
+        self.chk = ttk.Treeview(cf, columns=("where", "text"), height=5,
+                                selectmode="browse")
+        self.chk.heading("#0", text="")
+        self.chk.heading("where", text="Where")
+        self.chk.heading("text", text="What")
+        self.chk.column("#0", width=60, stretch=False)
+        self.chk.column("where", width=170, stretch=False)
+        self.chk.column("text", width=860)
+        self.chk.tag_configure("ERROR", foreground="#b00")
+        self.chk.tag_configure("WARN", foreground="#a60")
+        self.chk.tag_configure("INFO", foreground="#557")
+        self.chk.pack(fill="x")
+        self.chk.bind("<Double-Button-1>", lambda e: self._go())
+        bf = ttk.LabelFrame(f, text="The budget (after a build)", padding=4)
+        bf.pack(fill="x", pady=4)
+        self.bud_l = ttk.Label(bf, text="Build to see it.", wraplength=1100)
+        self.bud_l.pack(anchor="w")
+        self.tv = ttk.Treeview(bf, columns=[c for c, _, _ in self.COLS[1:]],
+                               height=9)
+        for i, (c, h, w) in enumerate(self.COLS):
+            k = "#0" if i == 0 else c
+            self.tv.heading(k, text=h)
+            self.tv.column(k, width=w, stretch=False)
+        self.tv.tag_configure("over", background="#f3c0c0")
+        self.tv.tag_configure("near", background="#f6e2b0")
+        self.tv.pack(fill="x")
+        self.mem_l = ttk.Label(bf, text="", font=("TkFixedFont", 9),
+                               justify="left")
+        self.mem_l.pack(anchor="w", pady=4)
+        df = ttk.LabelFrame(f, text="...and make a disk of it, with "
+                            "VBATTLE.O88 beside it", padding=4)
+        df.pack(fill="x", pady=4)
+        self.diskv = tk.StringVar()
+        ttk.Combobox(df, textvariable=self.diskv, values=M.DISK_LABELS,
+                     state="readonly", width=46).pack(side="left")
+        ttk.Button(df, text="Make the disk", command=self._disk
+                   ).pack(side="left", padx=4)
+        self.disk_l = ttk.Label(df, text="", wraplength=640)
+        self.disk_l.pack(side="left", padx=8)
+        self.disk_picked = False
+
+    def refresh(self):
+        P_ = self.app.proj
+        self.chk.delete(*self.chk.get_children())
+        for k, x in enumerate(P_.check()):
+            self.chk.insert("", "end", iid=str(k), text=x.level,
+                            values=(x.where, x.text), tags=(x.level,))
+        if not self.disk_picked:
+            self.diskv.set(self.M.DISK_LABELS[self.M.DISK_OF_PROFILE.get(
+                P_.d["target"]["profile"], 6)])
+
+    def _go(self):
+        s = self.chk.selection()
+        if not s:
+            return
+        where = self.chk.item(s[0], "values")[0]
+        tab = getattr(self.app, check_tab(where) + "_tab")
+        self.app.nb.select(tab.f)
+        if where.startswith("clips."):
+            self.app.clips_tab.select(where.split(".")[1])
+
+    def _build(self):
+        def got(res):
+            self.show(res)
+            self.app.say("Built %s: %d bytes, verified" % (
+                os.path.basename(res["out"]), res["bytes"]))
+        self.app.run("os88vbt", ["build", self.app.proj.path, "--json"], got,
+                     "Building...")
+
+    def show(self, res):
+        bud = self.bud = res["budget"]
+        self.out_l.config(text="%s - %d KB" % (res["out"], res["bytes"] // 1024))
+        self.tv.delete(*self.tv.get_children())
+        for vals, tag in budget_rows(bud):
+            self.tv.insert("", "end", text=vals[0], values=vals[1:],
+                           tags=(tag,) if tag else ())
+        self.bud_l.config(text="Against %s's disk, %d KB/s. The music %s. "
+                          "\"Of the disk\" is the clip and the music together; "
+                          "red is more than the disk gives, so it will stall. "
+                          "The head is what is read before a clip may start." % (
+                              self.app.proj.d["target"]["profile"],
+                              bud["disk"] // 1024,
+                              "is resident" if bud["memory"]["music_resident"]
+                              else "streams beside it, %.1f KB/s" %
+                              (bud["music_rate"] / 1024)))
+        self.mem_l.config(text="\n".join(memory_lines(bud["memory"]) + [
+            "(on a 640 KB machine: %d KB free to the engine, measured on "
+            "MartyPC's XT; 86Box's 5150 left about 20 KB more)" %
+            (bud["memory"]["free"] // 1024)]))
+
+    def _disk(self):
+        self.disk_picked = True
+        n = self.M.DISK_LABELS.index(self.diskv.get())
+
+        def got(res):
+            self.disk_l.config(text="%s%s" % (res["out"], "\n" + res["note"]
+                                              if res.get("note") else ""))
+            self.app.say("Made %s" % os.path.basename(res["out"]))
+        self.app.run("os88vbt", ["disk", self.app.proj.path, "--disk", str(n),
+                                 "--json"], got, "Making the disk...")
 
 
 # --- small form pieces ------------------------------------------------------------------

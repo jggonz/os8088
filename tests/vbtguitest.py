@@ -43,6 +43,7 @@ import wave
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
+sys.path.insert(0, HERE)
 import numpy as np      # noqa: E402
 import os88vid as V     # noqa: E402
 import os88vbtgui as G  # noqa: E402
@@ -265,6 +266,81 @@ with tempfile.TemporaryDirectory() as tdir:
                 except Exception:
                     bad.append(f)
         ok(not bad, "no cache that loads short (%s)" % bad)
+
+
+    # 7 (wave 5): the openings, the join, the budget, the memory, a disk
+    rate = 11025
+    rng = np.random.RandomState(3)
+    env = np.repeat(rng.uniform(0.02, 0.9, 200), rate // 8)
+    mus = np.sin(np.arange(len(env)) * 0.3) * env
+    J = rate * 9 + 1234
+    op = np.concatenate([np.zeros(rate), mus[J - 3 * rate:J]])
+    js = A.join_candidates(op, mus, rate)
+    ok(abs(js[0][0] - J) <= 256 and js[0][1] > 0.9 and js[1][1] < js[0][1] - 0.2,
+       "the join: openings ending on the music before sample %d are joined "
+       "at %d (score %.2f, the next %.2f)" % (J, js[0][0], js[0][1], js[1][1]))
+    js = A.join_candidates(np.concatenate([op, np.zeros(3 * rate)]), mus, rate)
+    ok(js == [], "...and openings that end in silence suggest nothing")
+    pr = P.Project.load(vbp)
+    x, at = A.openings_sound(pr)
+    spf = pr.d["target"]["rate"] // pr.d["target"]["fps"]
+    nf = [pr.clip_frames(o["clip"]) for o in pr.d["openings"]]
+    ok(len(x) == sum(nf) * spf and [a for a, _ in at] == [0, nf[0] * spf],
+       "the openings' sound is each one's frames long, one after another "
+       "(%d samples)" % len(x))
+    pr.move_opening(1, -1)
+    ok([o["clip"] for o in pr.d["openings"]] == ["reveal", "title"] and
+       G.opening_lines(pr)[1].endswith("joins idle frame %d" %
+                                       pr.d["clips"]["title"]["exit"]),
+       "an opening moved earlier; the last is the scene's, and says where it "
+       "joins")
+    for _ in range(6):
+        pr.add_opening("title")
+    try:
+        pr.add_opening("title")
+        ok(False, "a ninth opening is refused")
+    except ValueError:
+        ok(True, "a ninth opening is refused (the engine's VB_MAXOPEN)")
+    ok([G.check_tab(w) for w in ("clips.x", "openings.1", "music", "enemy",
+                                 "characters.0")] ==
+       ["clips", "openings", "battle", "enemy", "party"],
+       "a check's place sends the window to its tab")
+    # THE MEMORY: the arithmetic against the engine's own rings, MEASURED
+    # on MartyPC's XT for the rules battle (VB_FREE_SRC): 144 KB each
+    import vbtrulesdemo as D
+    rdata, _ = D.bundle(D.make_project())
+    mem = A.memory(rdata)
+    ok(mem["ring"] == 144 * 1024 and mem["resident"] == 116 * 1024,
+       "the rules battle: a 116 KB resident claim, rings of 144 KB - the "
+       "engine's own on a 640 KB XT (%s, %s)" % (mem["resident"], mem["ring"]))
+    ok(A.memory(rdata, free_kb=250)["ring"] is None,
+       "...and with 250 KB free, no ring of 48 KB: Not enough memory")
+    pr = P.Project.load(vbp)
+    data = B2.build_project(pr)
+    pr.set(("target", "profile"), "floppy")
+    rows = G.budget_rows(A.budget(pr, data))
+    tags = dict((v[0], t) for v, t in rows)
+    ok(rows[0][0][0] == "title" and tags["ari_limit"] == "over",
+       "the budget names clips as the project does, and the Limit is over a "
+       "floppy's disk (%s)" % tags["ari_limit"])
+    open(os.path.join(tdir, "BATTLE.VBT"), "wb").write(data)
+    try:
+        B2.disk_plan(pr, 0)
+        ok(False, "a bundle too big for a 360 KB floppy is refused")
+    except ValueError as e:
+        ok("360 KB" in str(e), "a bundle too big for a 360 KB floppy is "
+           "refused before it is tried: %s" % e)
+    r = subprocess.run([sys.executable, os.path.join(ROOT, "tools/os88vbt.py"),
+                        "disk", vbp, "--disk", "3", "--json"],
+                       capture_output=True, text=True)
+    img = os.path.join(tdir, "BATTLE-1440.img")
+    v = subprocess.run([sys.executable, os.path.join(ROOT, "tools/os88disk.py"),
+                        "--verify", img], capture_output=True, text=True)
+    ls = subprocess.run(["mdir", "-b", "-i", img, "::"], capture_output=True,
+                        text=True).stdout.split()
+    ok(r.returncode == 0 and v.returncode == 0 and
+       sorted(os.path.basename(f) for f in ls) == ["BATTLE.VBT", "VBATTLE.O88"],
+       "a 1.44 MB floppy of it: VBATTLE.O88 and BATTLE.VBT, verified (%s)" % ls)
 
 
 if fails:
