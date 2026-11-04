@@ -600,6 +600,37 @@ colours (far better looking - the brick, the copper and the light all
 read), 4.1 MB on Hercules. Tested on MartyPC's VGA XT and Hercules 5150;
 not on a real VGA or Hercules card, and no second page used yet.
 
+## The memory faster machines have, and the board an 8088 can have (2026-11-04)
+
+Every read the engine makes - a ring's piece, a clip's head, the music, a
+loop's lap, the play-again reload - goes through one routine, so the hold
+sits there and nowhere else: a read lying wholly inside what the hold has
+is a copy, and the stream's file cursor is left unseeded so a later disk
+read seeks from the name, Video Player's lesson. The hold fills on the
+reader's last turn, and the title loop's wait for a key turned out to be
+the natural place: most of a battle arrives before the first key.
+
+One change was needed first: a playing clip whose ring had no room still
+ended the reader's pass, so a loop read round - always playing, never all
+read - would have kept the fill from ever running. It passes the turn on
+now.
+
+When the pool is smaller than the bundle, the builder decides what goes
+first and writes it in the header: the streamed music, the loops, every
+action's first 40 KB (what a start waits for), the openings, then the rest
+smallest first.
+
+**The tests are disk swaps and disk counts.** On QEMU (the only XMS here)
+the hold fills, B: is changed to a blank floppy, and the battle plays to
+victory and starts again - nothing left to read but the hold. On MartyPC's
+5150 with the Lo-tech 2 MB board, an 8088 with EMS and the owner's class of
+machine, the engine counts its own disk reads: none, from the fill on,
+through a whole battle - and the title played again out of the board is
+the host's decode on the glass. The first try at breaking it on purpose was
+symmetric (the fill and the read both one page off agree with each other)
+and proved only that the check had to be broken on ONE side; the read alone
+two bytes off stalls the battle.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

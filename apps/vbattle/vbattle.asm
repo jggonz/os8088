@@ -3366,6 +3366,9 @@ VB_VAR vb_hk, 2
 VB_VAR vb_hbnc, 2                   ; ...the fill's bounce
 VB_VAR vb_hcopies, 2                ; ...reads it answered
 VB_VAR vb_hcap, 2                   ; ...a gate's cap on the pool, 4 KBs
+VB_VAR vb_htype, 1                  ; ...its store: 1 XMS, 2 EMS
+VB_VAR vb_ehnd, 2                   ; ...EMS: the handle
+VB_VAR vb_efseg, 2                  ; ...and the frame's segment
 VB_VAR vb_htok, 4                   ; ...the block's token
 VB_VAR vb_hcur, FSEQ_SIZE           ; ...the fill's own file cursor
 VB_VAR vb_htab, 28 * 8              ; ...the ranges (HT_*)

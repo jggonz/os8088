@@ -67,6 +67,12 @@ from is in boot/). Everything it does is also a command:
     python3 vbtana.py --help                     the analysis, one command
                                                  each
 
+It builds BATTLE.VBT for CGA, and BATTLEV.VBT (VGA, 4, 8 or 16 colours)
+and BATTLEH.VBT (Hercules) when the Battle tab asks: put the one for your
+adapter beside VBATTLE.O88, or all three. On a machine with XMS (a 286 and
+up) or an EMS board (an 8088 too), the engine holds the battle in that
+memory while the title waits, and plays from it.
+
 A project keeps its encoded frames in PROJECT.cache/ beside it: the first
 look at a video encodes it (a minute or two), every one after reads it back.
 

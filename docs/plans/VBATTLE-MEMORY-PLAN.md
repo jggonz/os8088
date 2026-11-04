@@ -1,7 +1,8 @@
 # VBATTLE-MEMORY — streaming the loops, and the memory faster machines have
 
-**Status: M1, the renditions (9), M2 and M3 BUILT (2026-11-04, format 7,
-SPEC.md 125.4.1); M4 proposed.** The owner's
+**Status: M1, the renditions (9), M2, M3 and M4's EMS hold BUILT
+(2026-11-04, format 7, SPEC.md 125.4.1); M4's decode in place and the
+board's timing remain.** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all
@@ -224,6 +225,13 @@ M3 change only the reader; and it has Video Player's rules attached:
   is used as a copied bank or not at all;
 - below a 386, **EMS before XMS** (98.3.18.6): one copy with interrupts on,
   or none, against two with them off.
+
+**M4 PART DONE 2026-11-04**: the EMS HOLD, copied (98.3.18.6's hybrid):
+below a 386 EMS first, a fill reading into the frame, a read copying out.
+On MartyPC's 5150 with the Lo-tech board the Hercules demo is held whole
+and the battle reads the disk not once from the fill on (`vbtems`). Not
+done: the decode in place, and timing the board first - so a slow board
+(the PicoMEM v1) is used as if it were fast.
 
 ## 8. What is shared, and what is not
 

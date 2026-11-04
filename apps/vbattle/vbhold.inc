@@ -22,22 +22,32 @@ HT_XOFF     equ 4               ; KBs, and how many have arrived
 HT_HAVE     equ 6
 HT_SIZE     equ 8
 
-; vb_hopen - at the first load: the hold, when there is a pool. The file
-; whole if it fits; else the hold order's ranges while the pool lasts. A
-; bounce of 32 KB for the fill. Nothing on failure: the disk serves
+; vb_hopen - at the first load: the hold, when there is a store. Below a
+; 386 EXPANDED memory first (Video Player's 98.3.18.6: one copy with
+; interrupts on, where XMS is int 15h's two with them off), XMS after; from
+; a 386 XMS first. Nothing on failure: the disk serves
 vb_hopen:
     mov byte [vb_hon], 0
-    call OSAPI_XMEM_CAPS            ; AX = KB the pool can hand out
-    or ax, ax
-    jnz .pool
+    mov byte [vb_htype], 0
+    call OSAPI_CPU_INFO
+    cmp al, CPU_386
+    jae .x
+    call vb_eopen
+    jnc .ok
+    jmp vb_xopen
+.x:
+    call vb_xopen
+    jnc .ok
+    jmp vb_eopen
+.ok:
     ret
-.pool:
-    mov cl, 2                       ; in 4 KBs, one kept for the round-up
-    shr ax, cl
-    dec ax
-    jle .no
+
+; vb_hplan - AX = the store's room in 4 KBs: the ranges (vb_htab), the file
+; whole when it fits, else the hold order's while the room lasts; [vb_hkb4]
+; their 4 KBs. CF=1 none
+vb_hplan:
     mov cx, [vb_hcap]               ; (a gate's cap, in 4 KBs: tests/vbthold
-    jcxz .cap                       ; holds the pool under the bundle with
+    jcxz .cap                       ; holds the store under the bundle with
     cmp ax, cx                      ; it; nothing else writes it)
     jbe .cap
     mov ax, cx
@@ -63,17 +73,16 @@ vb_hopen:
     mov word [si+HT_HAVE], 0
     mov [vb_hkb4], ax
     mov byte [vb_hrn], 1
-    jmp short .alloc
+    clc
+    ret
 .order:
-    mov cx, [vb_meta+VH_HOLDN]      ; THE HOLD ORDER, while the pool lasts
+    mov cx, [vb_meta+VH_HOLDN]      ; THE HOLD ORDER, while the room lasts
     cmp cx, VB_HMAX
     jbe .o0
     mov cx, VB_HMAX
 .o0:
     or cx, cx
-    jnz .o00
-    jmp .no
-.o00:
+    jz .none
     mov bx, VH_HOLD
     mov si, vb_htab
 .o:
@@ -101,23 +110,15 @@ vb_hopen:
     loop .o
 .ofull:
     cmp byte [vb_hrn], 0
-    je .no
-.alloc:
-    mov ax, [vb_hkb4]               ; the block: one, subdivided (41's rule)
-    xor dx, dx
-    mov cx, 12
-.b:
-    shl ax, 1
-    rcl dx, 1
-    loop .b
-    call OSAPI_XMEM_ALLOC
-    jc .no
-    mov [vb_htok], ax
-    mov [vb_htok+2], dx
-    mov ax, 32                      ; the fill's bounce
-    call OSAPI_MEM_CLAIM
-    jc .nob
-    mov [vb_hbnc], dx
+    je .none
+    clc
+    ret
+.none:
+    stc
+    ret
+
+; vb_hon1 - the hold taken: its fill from the start, its own cursor
+vb_hon1:
     mov byte [vb_hi], 0
     mov byte [vb_hfull], 0
     mov word [vb_hcopies], 0
@@ -129,13 +130,109 @@ vb_hopen:
     cld
     rep stosw
     mov byte [vb_hon], 1
+    clc
     ret
+
+; vb_xopen - the hold in the XMS pool: one block, subdivided (41's rule),
+; and a 32 KB bounce for the fill. CF=1 not taken
+vb_xopen:
+    call OSAPI_XMEM_CAPS            ; AX = KB the pool can hand out
+    or ax, ax
+    jz .no
+    mov cl, 2                       ; in 4 KBs, one kept for the round-up
+    shr ax, cl
+    dec ax
+    jz .no
+    call vb_hplan
+    jc .no
+    mov ax, [vb_hkb4]
+    call vb_h4k
+    call OSAPI_XMEM_ALLOC
+    jc .no
+    mov [vb_htok], ax
+    mov [vb_htok+2], dx
+    mov ax, 32                      ; the fill's bounce
+    call OSAPI_MEM_CLAIM
+    jc .nob
+    mov [vb_hbnc], dx
+    mov byte [vb_htype], 1
+    jmp vb_hon1
 .nob:
     mov ax, [vb_htok]
     mov dx, [vb_htok+2]
     call OSAPI_XMEM_FREE
 .no:
-    mov byte [vb_hon], 0
+    stc
+    ret
+
+; vb_eopen - the hold in EXPANDED memory (EMS.DRV, SPEC.md 107): a run of
+; the board's pages, and the frame's quarters 0 and 1 - a 32 KB window the
+; fill reads INTO and a read copies out of. CF=1 not taken
+vb_eopen:
+    mov bl, EMSV_CAPS
+    call vb_ems                     ; AX = pages free, SI = free quarters
+    jc .no
+    and si, 3                       ; (quarters 0 and 1 both free)
+    cmp si, 3
+    jne .no
+    dec ax                          ; (one over, for a window's second page)
+    jle .no
+    shl ax, 1
+    shl ax, 1                       ; 16 KB pages to 4 KBs
+    call vb_hplan
+    jc .no
+    mov ax, [vb_hkb4]
+    add ax, 3
+    shr ax, 1
+    shr ax, 1
+    inc ax
+    mov bl, EMSV_ALLOC
+    call vb_ems                     ; AX = the handle
+    jc .no
+    mov [vb_ehnd], ax
+    mov al, 3
+    mov bl, EMSV_FRAME
+    call vb_ems                     ; DX = the frame's segment
+    jc .nof
+    mov [vb_efseg], dx
+    mov byte [vb_htype], 2
+    jmp vb_hon1
+.nof:
+    mov ax, [vb_ehnd]
+    mov bl, EMSV_FREE
+    call vb_ems
+.no:
+    stc
+    ret
+
+; vb_ems - OSAPI_DRV_CALL to EMS.DRV, BL the verb (Video Player's vp_ems)
+vb_ems:
+    mov bh, DRVC_EMS
+    call OSAPI_DRV_CALL
+    ret
+
+; vb_emap - the hold's 16 KB page AX into quarter 0 and the next into 1:
+; a 32 KB window at [vb_efseg]. Out CF=1 refused. Preserves all but flags
+vb_emap:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, ax
+    mov dx, [vb_ehnd]
+    xor al, al
+    mov bx, (DRVC_EMS << 8) | EMSV_MAP
+    call OSAPI_DRV_CALL
+    jc .out
+    inc cx
+    mov al, 1
+    mov bx, (DRVC_EMS << 8) | EMSV_MAP
+    call OSAPI_DRV_CALL
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; vb_hpiece - CX = the copy's most a call: 32 KB with a card, whose DMA a
@@ -150,7 +247,7 @@ vb_hpiece:
     ret
 
 ; vb_hfind - DX:AX = a file offset, CX = bytes: CF=1 and DX:AX = its
-; linear address in the hold when all of it has arrived there; CF=0 not.
+; offset in the hold's block when all of it has arrived there; CF=0 not.
 ; CX kept; BX, SI spent
 vb_hfind:
     push di
@@ -192,11 +289,9 @@ vb_hfind:
     ja .n
     add ax, [bx+HT_XOFF]            ; FOUND: its 4 KB in the block
     pop bx
-    call vb_h4k                     ; DX:AX = that x 4096 + the offset in
-    add ax, bx                      ; it + the block's token
+    call vb_h4k                     ; DX:AX = that x 4096 + the offset in it
+    add ax, bx
     adc dx, 0
-    add ax, [vb_htok]
-    adc dx, [vb_htok+2]
     pop cx
     pop di
     stc
@@ -229,6 +324,10 @@ vb_hread:
     mov bp, sp
     mov si, [ss:bp+6]
     mov bx, [ss:bp]                 ; what is left
+    cmp byte [vb_htype], 2
+    je .ems
+    add ax, [vb_htok]               ; XMS: the block's token on
+    adc dx, [vb_htok+2]
 .c:
     or bx, bx
     jz .done
@@ -248,10 +347,48 @@ vb_hread:
     pop dx
     pop ax
     jc .disk
+    jmp short .adv
+.ems:                               ; EMS: its page and the next mapped, and
+    or bx, bx                       ; a copy out of the window
+    jz .done
+    push ax
+    push dx
+    mov cx, ax                      ; the offset in the page...
+    and cx, 0x3FFF
+    push cx
+    mov cl, 14                      ; ...and the page
+    shr ax, cl
+    mov cl, 2
+    shl dx, cl
+    or ax, dx
+    call vb_emap
+    pop di                          ; DI: the offset in the window
+    pop dx
+    pop ax
+    jc .disk
+    mov cx, 32768                   ; as much as the window holds past it
+    sub cx, di
+    cmp bx, cx
+    jae .e1
+    mov cx, bx
+.e1:
+    push ds
+    push si
+    push cx
+    xchg si, di                     ; DS:SI the window, ES:DI the caller's
+    mov ds, [vb_efseg]
+    cld
+    rep movsb
+    pop cx
+    pop si
+    pop ds
+.adv:
     sub bx, cx
     add si, cx
     add ax, cx
     adc dx, 0
+    cmp byte [vb_htype], 2
+    je .ems
     jmp .c
 .done:
     inc word [vb_hcopies]
@@ -322,7 +459,22 @@ vb_hstep:
     jbe .k
     mov ax, 8
 .k:
+    cmp byte [vb_htype], 2          ; EMS: no further than its window - the
+    jne .k1                         ; page the chunk starts in and the next
+    mov bx, [si+HT_XOFF]
+    add bx, [si+HT_HAVE]
+    and bx, 3                       ; (its 4 KB in that page)
+    mov cx, 8
+    sub cx, bx
+    cmp ax, cx
+    jbe .k1
+    mov ax, cx
+.k1:
     mov [vb_hk], ax
+    cmp byte [vb_htype], 2
+    jne .x
+    jmp vb_hstepe
+.x:
     mov ax, [si+HT_START]           ; the file offset: (start + have) x 4 KB
     add ax, [si+HT_HAVE]
     call vb_h4k
@@ -395,6 +547,48 @@ vb_hstep:
     pop si
 .fail:
     mov byte [vb_hon], 0            ; the disk serves from here
+    stc
+    ret
+
+; vb_hstepe - vb_hstep's for EXPANDED memory, SI = the range, [vb_hk] its
+; 4 KBs this time: the page it lands in and the next mapped, and the disk
+; read straight INTO the window - no bounce, no copy up (98.3.18.6's fill)
+vb_hstepe:
+    mov ax, [si+HT_XOFF]
+    add ax, [si+HT_HAVE]
+    mov bx, ax
+    and bx, 3                       ; its 4 KB in the page: the window's
+    shr ax, 1                       ; offset
+    shr ax, 1
+    call vb_emap
+    jc .fail
+    mov ax, bx
+    call vb_h4k
+    mov bx, ax                      ; ES:BX = the window at it
+    push si
+    mov ax, [si+HT_START]           ; the file offset
+    add ax, [si+HT_HAVE]
+    call vb_h4k
+    push ax
+    mov ax, [vb_hk]
+    mov cl, 12
+    shl ax, cl
+    mov cx, ax
+    pop ax
+    mov es, [vb_efseg]
+    mov word [vb_rcur], vb_hcur
+    mov byte [vb_hbyp], 1
+    call vb_read
+    mov byte [vb_hbyp], 0
+    pop si
+    jc .fail
+    mov ax, [vb_hk]
+    add [si+HT_HAVE], ax
+    mov al, 1
+    clc
+    ret
+.fail:
+    mov byte [vb_hon], 0
     stc
     ret
 

@@ -221,23 +221,35 @@ def run(tmp, kind, machine, code, syms):
             until(lambda: True, "a moment", guest=0.2, poll=0.0)
             t += 0.2
         tries = round(t, 1)
-        # and the canvas: one of the idle loop's frames
+        # and the canvas: one of the idle loop's frames - at a look that does
+        # not land inside the hook's decode of one (up to ten looks)
         if kind == "vga4":
-            gc = m.planes(offset=0, length=bt.rows * 40)
             ic = [host_vga(s, bt.rows) for s in isurf]
         else:
-            mem = m.read(0xB0000, 32768)
-            gc = b"".join(mem[(y & 3) * 8192 + (y >> 2) * 90 + 5:
-                              (y & 3) * 8192 + (y >> 2) * 90 + 85]
-                          for y in range(bt.rows))
             ic = [b"".join(bytes(s[(y & 3) * 8192 + (y >> 2) * 90:
                                    (y & 3) * 8192 + (y >> 2) * 90 + 80])
                            for y in range(bt.rows)) for s in isurf]
+        canvas_ok = False
+        for _look in range(10):
+            if kind == "vga4":
+                gc = m.planes(offset=0, length=bt.rows * 40)
+            else:
+                mem = m.read(0xB0000, 32768)
+                gc = b"".join(mem[(y & 3) * 8192 + (y >> 2) * 90 + 5:
+                                  (y & 3) * 8192 + (y >> 2) * 90 + 85]
+                              for y in range(bt.rows))
+            if gc in ic:
+                canvas_ok = True
+                break
+            m.run()
+            until(lambda: True, "a moment", guest=0.07, poll=0.0)
+            m.pause()
         m.run()
         ok(okb and any(c for c in cbuf), "%s: the band on the glass is the "
            "engine's band buffer as the host converts it, exactly (%.1f guest "
            "s after the menu)" % (kind, tries))
-        ok(gc in ic, "%s: the canvas is one of the idle loop's frames" % kind)
+        ok(canvas_ok, "%s: the canvas is one of the idle loop's frames"
+           % kind)
         key("return")                   # Attack, at the 1-HP enemy
         until(lambda: rb("vb_eplay") == 1, "%s: victory's end loop" % kind,
               guest=180.0)

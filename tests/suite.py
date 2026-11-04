@@ -16792,6 +16792,18 @@ SOAK = [
         "The Video Battle with NO pool (`-m 1`): no hold taken, and the play "
         "the disk's, to victory and again, as on an 8088",
         needs=("qemu",)),
+    Row("vbtems", "soak", py("tests/vbtems.py"), 150.0,
+        "VBATTLE-MEMORY-PLAN 7: the Video Battle's bundle HELD IN EXPANDED "
+        "MEMORY on an 8088 - MartyPC's 5150 with a Hercules, an SB, an XT-IDE "
+        "and the Lo-tech 2 MB board, booted from build/emstest.img with "
+        "SOUND, HDD and EMS wanted. Below a 386 the hold is EMS, one range, "
+        "the whole Hercules demo; it fills while the title goes round, the "
+        "disk reading into the frame; then the title played again out of the "
+        "board is the host's decode on the glass, and from the fill on NOT "
+        "ONE disk read ([vb_rcalls]) through victory and the play again. "
+        "Broken on purpose (the read two bytes off in the window) the battle "
+        "stalls before victory",
+        needs=("marty",), wants=("build/emstest.img",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "
         "os8088 tree. Unpacked in a temporary folder and run there with "

@@ -237793,6 +237793,23 @@ unchanged: one `OSAPI_XMEM_CAPS` at load, and a compare in each read.
   zeroed but for its offset, so a later disk read seeks from the name
   (18.4.8). A copy refused, or a fill's read failing, drops the hold.
 - **The UI task alone copies** (41.8): the reader is there.
+- **EXPANDED memory too** (EMS.DRV, SPEC.md 107; VBATTLE-MEMORY-PLAN 7):
+  below a 386 the hold is taken in EMS first and XMS after (Video Player's
+  98.3.18.6: one copy with interrupts on against `int 15h`'s two with them
+  off), from a 386 XMS first. A run of the board's pages and the frame's
+  quarters 0 and 1, a 32 KB window: a fill maps the pages it lands in and
+  the disk reads straight INTO the window - no bounce, no copy up - and a
+  read maps them and copies out with `rep movsb`. So an 8088 with a board
+  holds a whole battle (a 2 MB Lo-tech holds the Hercules demo's 700 KB),
+  and an action never waits for the disk. NOT done: the decode IN PLACE
+  (Video Player's 98.3.18.7, the hook reading through the frame), and the
+  board's speed is not timed (98.3.18.8: a PicoMEM v1's eight wait states
+  made the copy slower than the disk there) - a slow board is taken as it
+  is.
+
+`vbtems` (MartyPC's 5150 with the Lo-tech board) holds the EMS hold to the
+glass and to the disk: the title played again out of the board byte for
+byte the host's decode, and not one disk read from the fill on.
 
 `vbthold` (QEMU) holds it to the file: the hold one range, filled while the
 title goes round, byte for byte the bundle, then B: changed to a BLANK
