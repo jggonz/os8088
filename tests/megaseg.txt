@@ -160,4 +160,9 @@
 #             to read) and D2's lent BIOS stack (SPEC.md 50.6.11, 124.31.2),
 #             whose real-mode landing needs the stack's segment and selector
 #             both
-3254
+# 2026-11-04: PCIETHER.DRV's drv_tab row (SPEC.md 125.5), kern_mega's alone:
+#             +29 of driver-layer DATA that must be low because the boot and
+#             the Drivers page read it in real mode - the 16-byte row, the
+#             13-byte file name, the DRVE_CLASS string and its table word.
+#             Not protected-mode code, so it cannot go in .mega
+3283

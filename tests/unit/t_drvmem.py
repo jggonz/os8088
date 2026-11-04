@@ -89,6 +89,10 @@ ROWS = [
     # SPEC.md 120's VESA.DRV: the second DRVC_OVL row, LAST on both big
     # builds, with a SYSTEM.CFG bit (8) and a Drivers-page price like the rest
     ("VESA Display", "DRVM_VESA", "DRVM_IMG_VESA", "vesa.drv"),
+    # SPEC.md 125's PCIETHER.DRV: DRVC_NET like ETHER.DRV, LAST and on
+    # kern_mega ALONE (the rest of this table is kern_big's superset, which the
+    # %ifdef-blind regexes above read whole), SYSTEM.CFG bit 11
+    ("PCI Ethernet", "DRVM_PCIETH", "DRVM_IMG_PCIETH", "pciether.drv"),
 ]
 
 EQU = re.compile(r"^\s*([A-Z][A-Z0-9_]*)\s+equ\s+(.+?)\s*(?:;.*)?$", re.M)
@@ -284,6 +288,12 @@ def main():
         # ...nor does VESA.DRV (SPEC.md 120): its probe buffers, mode table
         # and the arrow's save-under are bss, inside the image
         "DRVM_VESA": s["DRVM_IMG_VESA"],
+        # PCIETHER.DRV (SPEC.md 125.4) shares ETHER.DRV's stack as source, so
+        # it claims the same ring pool: its image plus the pool's top rung
+        "DRVM_PCIETH": s["DRVM_IMG_PCIETH"]
+                       + ceil_gran(s["SK_RXMAX"] + s["SK_TXMAX"]
+                                   + s["SK_NLEAN"] * (s["SK_LEANRX"]
+                                                      + s["SK_LEANTX"])),
     }
     for title, total, _img, _drv in ROWS:
         eq(s.get(total), want[total],
@@ -354,7 +364,14 @@ def main():
         total = 0
         for (title, memk, _img, _drv), cls in zip(ROWS, klass):
             if cls == want_cls:
-                total += s.get(memk, 0) & ~plus
+                if want_cls == "DRVC_NET":
+                    # ETHER.DRV and PCIETHER.DRV are ALTERNATIVES in one
+                    # publication slot (SPEC.md 125.5; drv_load_at refuses
+                    # the second), so the class's ceiling is the larger,
+                    # not the sum
+                    total = max(total, s.get(memk, 0) & ~plus)
+                else:
+                    total += s.get(memk, 0) & ~plus
         total = (total + 1) // 2        # drv_memk is half-KB; a ceiling is
                                         # KB, rounded UP
         for where, src in (("kernel/driver.inc", dsrc),

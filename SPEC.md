@@ -100393,6 +100393,12 @@ or read, and the row reads `Attached twice (bug)` beside its own name on the
 Drivers page. (It sat immediately before the attach until kernel size pass
 11; ahead of the read it costs no disk work, and from there the five
 refusals after it reach their answers with two-byte jumps.)
+**kern_mega words it differently** (§125.5): the same refusal, at the same
+place, banks `DRVE_CLASS` = 9 (kern_mega's alone; `DRVE_NERR` is 10 there)
+and the row reads `Class already in use`, because `ETHER.DRV` and
+`PCIETHER.DRV` are alternatives the user chose between and "bug" is the wrong
+word for it. `drivers/os88drv.inc` does not carry the code: no driver returns
+it. The other kernels keep `Attached twice (bug)` byte for byte.
 Without that test `drv_publish` overwrites the slot unconditionally — the
 first driver's volumes stay mounted and browsable while every verb on them
 dispatches into the SECOND driver, which is this section's own bug one level
@@ -239364,8 +239370,16 @@ so packages, `apps/os88sock.inc`'s `net_find`, the DOS packet layer and The
 Wire need no change. One class has one publication slot (§51.2.1), so the two
 are ALTERNATIVES: when both are wanted the first to attach owns the class and
 the second is refused cleanly, with its reason on the Drivers page and
-nothing of the first disturbed. Its `SYSTEM.CFG` bit is the next free one
-(§125.8 item 2 names it). Not wanted by default (§51.3). It must cross no
+nothing of the first disturbed. That refusal already existed
+(`drv_load_at`, §51.2.1: it compares `[drv_owner]` for the row's class
+against the row, ahead of any disk work, and `[drv_owner]` is written only by
+`drv_publish` after a successful attach, so an `ETHER.DRV` that found no card
+leaves the slot free for `PCIETHER.DRV`). What kern_mega adds is the words:
+`DRVE_CLASS`, `Class already in use`, in place of `DRVE_TWICE`'s
+`Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** (§125.8
+item 2). Its `DRVM_PCIETH` is `DRVM_IMG_PCIETH` plus the ring pool's top rung,
+as `DRVM_ETH`'s; the two are alternatives, so `DRVM_CEIL_NET` is the larger of
+the pair and not their sum (`tests/unit/t_drvmem.py`). Not wanted by default (§51.3). It must cross no
 kern_mega resident rung; `make budget-check` holds `KERN_MEGA_RESIDENT_KB`.
 
 ### 125.6 Disks and machines (pinned)
@@ -239391,5 +239405,8 @@ PCI machine with its RTL8139C+ is where a person LOOKS.
 1. How a kern_mega driver reaches `int 1Ah` B1h, and what it costs on the 286
    reset route that will never find PCI anyway (the CPU gate means it is not
    asked there).
-2. The `SYSTEM.CFG` bit number and the row index.
+2. ~~The `SYSTEM.CFG` bit number and the row index.~~ **Settled:** bit **11**
+   (0-10 are taken on every build; 5 is the absolute mouse's even where a
+   build has no such row), row **10** on kern_mega (after VESA.DRV's row 9),
+   `DRV_MAX` 11 there (`DRV_PX`, `kernel/driver.inc`).
 3. The image and claim sizes, from the build.
