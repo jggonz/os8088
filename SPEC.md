@@ -237801,11 +237801,11 @@ unchanged: one `OSAPI_XMEM_CAPS` at load, and a compare in each read.
   the disk reads straight INTO the window - no bounce, no copy up - and a
   read maps them and copies out with `rep movsb`. So an 8088 with a board
   holds a whole battle (a 2 MB Lo-tech holds the Hercules demo's 700 KB),
-  and an action never waits for the disk. NOT done: the decode IN PLACE
-  (Video Player's 98.3.18.7, the hook reading through the frame), and the
-  board's speed is not timed (98.3.18.8: a PicoMEM v1's eight wait states
-  made the copy slower than the disk there) - a slow board is taken as it
-  is.
+  and an action never waits for the disk. Once the hold is whole the
+  rings are read IN PLACE (125.4.2) and nothing is copied at all. NOT
+  done: the board's speed is not timed (98.3.18.8: a PicoMEM v1's eight
+  wait states made the copy slower than the disk there) - a slow board is
+  taken as it is.
 
 `vbtems` (MartyPC's 5150 with the Lo-tech board) holds the EMS hold to the
 glass and to the disk: the title played again out of the board byte for
@@ -237817,6 +237817,67 @@ floppy and the battle played to victory, its end loop and the title again
 out of the hold alone; `vbtholdpart` with the pool capped under the bundle
 (`[vb_hcap]`, a gate's) takes the order's ranges; `vbtholdnox` with no
 pool plays the disk's. The Build tab shows what a 1 MB and a 3 MB pool hold.
+
+#### 125.4.2 The decode in place
+
+When a hold has the WHOLE bundle (one range from the file's first byte, all
+of it arrived), every ring given a clip from then on reads that clip where
+the hold has it (`apps/vbattle/vbinp.inc`; VBATTLE-MEMORY-PLAN 12). Video
+Player's 98.3.18.7 (EMS), 98.3.18.11 (LOADALL) and 98.3.18.14 (a 386's
+loaded base) are the precedents and their mechanisms are taken as they are:
+
+- **The ring's bookkeeping stays.** A ring in place (`RG_INP`, with
+  `RG_HB` its clip's first byte in the block) is FILLED the moment it is
+  given the clip - `RG_FILL` its whole length - so the reader never reads
+  for it, a loop is always held (VB_STRM answers so), and its picture's and
+  sound's cursors are the stream offsets they always were. What changes is
+  the address: `vb_iat` turns a ring and a cursor's offset into the record
+  in the hold. `vb_rrec` hands the decode DX:SI, DX a segment or a handle;
+  the sound's two reads (`vb_aframe`, `vb_anext`) and a loop's first
+  record's length (`vb_start_clip`) go through it too.
+- **EMS**: the frame's FOUR quarters are taken at the hold's open (EMSV_FRAME
+  0Fh, the two of 125.4.1 when another instance holds the others - and then
+  no decode in place), with the driver's recipe (107.4) and the run's first
+  page (EMSV_BASE). The hook maps the three pages from the one under a
+  record into quarters 0-2 with its own OUTs - it is an ISR and may call
+  nothing - so a record of up to 32 KB from anywhere in a page is whole
+  there, and DX is the frame at it. The UI task's copies (the music, and a
+  ring given its clip before the fill ended) move to QUARTER 3, which the
+  hook never writes; the run is one page longer for the third quarter's
+  page past the end.
+- **XMS, on a 286 or a 386 in real mode**: DX is the handle `VB_XH`
+  (FFFFh) naming `[vb_xpc]`, the record's linear address (the token is the
+  block's linear base, 41.13), and the `mov ds, dx` every read of a record
+  starts with is VB_DSDX - a BORROW of DS's hidden base, LOADALL on a 286
+  (`apps/os88la.inc`) or a moment of protected mode on a 386
+  (`apps/os88ub.inc`), inside its own `pushf`/`cli` ... VB_DSEND/`popf`.
+  The base dies at any segment load and every ISR loads DS, so a borrow
+  runs with interrupts off; the hook's decode, which runs with them on,
+  YIELDS at `vdec.inc`'s VD_YCK sites every `[vb_xyb]` record bytes (2,048,
+  98.3.18.11's VP_XYB): DS ours, a moment with interrupts on, the same base
+  borrowed again at the same SI. The sites are jumps over themselves until
+  the check below patches them live (`vd_ypatch`), which is all an 8088
+  pays. The sound's borrows are in the hook's interrupts-off part and never
+  yield.
+- **The check**, at the fill's end (`vb_hipq`): the whole file held; EMS the
+  four quarters; XMS a 286 or up, NOT under CPU_F_PM (on kern_mega a token
+  is no address, 50.6.10), LOADALL probed with INT 6 hooked on a 286, and on
+  either tier the hold's first 16 bytes read in place against
+  OSAPI_XMEM_COPY's - a gate a BIOS closed reads 1 MB low and fails it.
+  `[vb_noinp]` is the A/B gate (a test's poke): the copying hold plays.
+- **A ring given its clip BEFORE the fill ended keeps copying** until it is
+  given another: the title's, and whatever the reader had read ahead.
+  Counters for the rows: `[vb_irings]`, `[vb_icalls]`, `[vb_iyc]`.
+
+`vbtems` (MartyPC, the Lo-tech board) holds EMS in place to the glass: the
+title played again out of the board's pages exact on the glass, six rings in
+place and no copy at all from the fill on. `vbthold` (QEMU's 386, the closed
+list's entry 1) holds XMS in place: the check passes, the yield step poked
+to 256 so the demo's small records yield (~130 times), and the title again
+is the host's decode in B8000 byte for byte; `vbtholdcopy` gates it off and
+the copying hold still plays. **The 286's LOADALL arm has run in no
+emulator here** (none has a 286's LOADALL): it is Video Player's borrow,
+called exactly as there, and wants a field run on the Victory 286.
 
 ### 125.5 The band
 

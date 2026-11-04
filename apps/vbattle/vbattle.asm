@@ -172,7 +172,10 @@ RG_FOFF     equ 60              ; dword: the next read's place in the stream
                                 ; which goes back to its lap (format 7)
 RG_LCSET    equ 64              ; ...the cursor at its lap's start is kept
 RG_LCUR     equ 66              ; ...here: a lap read again is not a seek
-RG_SIZE     equ RG_LCUR + FSEQ_SIZE
+RG_INP      equ RG_LCUR + FSEQ_SIZE ; IN PLACE (vbinp.inc): its clip is read
+                                ; where the hold has it, nothing copied
+RG_HB       equ RG_INP + 2      ; ...dword: the clip's first byte in the block
+RG_SIZE     equ RG_HB + 4
 VC_LAP      equ 18              ; a loop's lap: dword offset in its stream,
 VC_LAPK     equ 22              ; ...and its length in 4 KB
 
@@ -181,6 +184,9 @@ VC_LAPK     equ 22              ; ...and its length in 4 KB
 %macro VB_STRM 2
     test word [%2+VC_FLAGS], CF_LOOP
     jz %%out
+    mov ax, 0                       ; (IN PLACE: held, the hold its ring)
+    cmp byte [%1+RG_INP], 0
+    jne %%no
     mov ax, [%2+VC_LEN]
     mov dx, [%2+VC_LEN+2]
     add ax, VB_PIECE
@@ -195,6 +201,32 @@ VC_LAPK     equ 22              ; ...and its length in 4 KB
 %%no:
     or ax, ax
 %%out:
+%endmacro
+
+; VB_DSDX - in place of `mov ds, dx` after a `push ds`, where DX may be
+; VB_XH: the record in place in XMS (vbinp.inc), whose borrow loads DS's
+; hidden base - flags pushed, IF = 0, until VB_DSEND. Video Player's VP_DSDX
+; with ONE pending address ([vb_xpc]): the battle names a record and reads
+; it at once, with nothing between
+VB_XH       equ 0xFFFF
+%macro VB_DSDX 0
+    cmp dx, VB_XH
+    jne %%n
+    pushf
+    cli
+    call vb_xbeg
+    jmp short %%d
+%%n:
+    mov ds, dx
+%%d:
+%endmacro
+; VB_DSEND - before the `pop ds` that ends a VB_DSDX. CLOBBERS FLAGS
+%macro VB_DSEND 0
+    cmp byte [cs:vb_xact], 0
+    je %%n
+    call vb_xfin
+    popf
+%%n:
 %endmacro
 
 ; the hook's modes
@@ -900,7 +932,7 @@ vb_rreset:
     mov [bx+RG_VSEG], ax
     mov [bx+RG_ASEG], ax
     mov [bx+RG_PSEG], ax
-    ret
+    jmp vb_iring                    ; (in place, when the hold may be read so)
 
 ; vb_cadv - ring BX's place at [bx+di] (a segment, then an offset 0..15) on
 ; by CX bytes, wrapped at the ring's end: a record that ran past it was
@@ -1723,8 +1755,10 @@ vb_keys:
 ; the clips, from the hook's side (SPEC.md 125.3)
 ; =============================================================================
 
-; vb_rrec - BX = a ring; out: CF=0 and SI = the record at its VIDEO cursor,
-; whole in memory, CX = its length; CF=1 not read that far yet. AX, DX spent
+; vb_rrec - BX = a ring; out: CF=0 and DX:SI = the record at its VIDEO
+; cursor, whole in memory (DX a segment - or, in place on XMS, VB_XH: a
+; handle VB_DSDX borrows, vbinp.inc), CX = its length; CF=1 not read that
+; far yet. AX spent, and ES
 vb_rrec:
     push di
     mov di, RG_VOFF                 ; what is read past the cursor
@@ -1732,11 +1766,21 @@ vb_rrec:
     pop di
     cmp dx, RH_SIZE
     jb .no
+    cmp byte [bx+RG_INP], 0
+    jne .inp
     mov es, [bx+RG_VSEG]
     mov si, [bx+RG_VOFS]
     mov cx, [es:si+RH_LEN]
     cmp cx, dx
     ja .no
+    mov dx, es
+    clc
+    ret
+.inp:                               ; IN PLACE: all of it is there
+    mov ax, [bx+RG_VOFF]
+    mov dx, [bx+RG_VOFF+2]
+    call vb_iat
+    call vb_ilen
     clc
     ret
 .no:
@@ -1785,10 +1829,20 @@ vb_start_clip:
     dec ax                          ; record 0's end in its ring (it fits
     mov [vb_lnrec], ax              ; whole, from the ring's start)
     mov [vb_lring], bx
+    cmp byte [bx+RG_INP], 0
+    jne .lin
     push es
     mov es, [bx+RG_SEG]
     mov ax, [es:RH_LEN]
     pop es
+    jmp short .lb
+.lin:                               ; (in place: record 0's own length)
+    xor ax, ax
+    xor dx, dx
+    call vb_iat
+    call vb_ilen
+    mov ax, cx
+.lb:
     mov [vb_lbase], ax
 .nl:
     mov byte [vb_mode], VM_CLIP
@@ -1963,7 +2017,6 @@ vb_frame:
     call vb_rrec
     jc .wait
     push cx
-    mov dx, es
     call vb_decode
     pop cx
     mov bx, [vb_cring]
@@ -2197,7 +2250,7 @@ vb_anchor:
 vb_decode:
     push ds
     mov es, [vb_vseg]
-    mov ds, dx
+    VB_DSDX                         ; (DX a handle in place on XMS: a borrow)
     add si, RH_SIZE
     xor bp, bp
     cmp byte [cs:vb_kind], VK_VGA4  ; (DS is the record's: CS is ours)
@@ -2207,6 +2260,7 @@ vb_decode:
     mov bp, VB_HORG
 .n:
     call vd_native
+    VB_DSEND
     pop ds
     ret
 .planar:                            ; VGA4: sub-records, each its Map Mask
@@ -2224,6 +2278,7 @@ vb_decode:
     mov ax, 0x0F02                  ; every plane again
     mov dx, 0x3C4
     out dx, ax
+    VB_DSEND
     pop ds
     ret
 
@@ -2500,6 +2555,8 @@ vb_aframe:
 .h:
     cmp dx, RH_SIZE
     jb .late
+    cmp byte [bx+RG_INP], 0
+    jne .inp
     push es
     mov es, [bx+RG_ASEG]
     mov si, [bx+RG_AOFS]
@@ -2545,6 +2602,38 @@ vb_aframe:
     pop di
     pop cx
     ret
+.inp:                               ; IN PLACE: the record where the hold
+    mov ax, [bx+RG_AOFF]            ; has it (all of it is there), DS it
+    mov dx, [bx+RG_AOFF+2]          ; through a borrow on XMS - the hook's
+    call vb_iat                     ; interrupts are off already here
+    push ds
+    VB_DSDX
+    mov ax, [si+RH_LEN]
+    mov dx, [si+RH_ALEN]
+    add si, ax
+    sub si, dx
+    mov ax, [cs:vb_afpos]
+    sub dx, ax
+    jbe .idone
+    add si, ax
+    cmp cx, dx
+    jbe .in
+    mov cx, dx
+.in:
+    cmp byte [cs:vb_aown], 0
+    jne .iown
+.imix:
+    lodsb
+    add [es:di], al
+    inc di
+    loop .imix
+    jmp short .idone
+.iown:
+    rep movsb
+.idone:
+    VB_DSEND
+    pop ds
+    jmp short .out
 
 ; vb_anext - the clip's sound on to its next frame: past this record. Its
 ; last done, the ring is given back once its picture is too; an opening's
@@ -2566,7 +2655,10 @@ vb_anext:
 .h:
     cmp dx, RH_SIZE
     jb .stay                        ; it is: it keeps to the picture's
-    mov cx, [es:si+RH_LEN]          ; timeline and never trails it (125.3)
+    cmp byte [bx+RG_INP], 0         ; timeline and never trails it (125.3)
+    jne .inp
+    mov cx, [es:si+RH_LEN]
+.ilen:
     cmp cx, dx
     ja .stay
     dec word [vb_aowe]
@@ -2624,6 +2716,14 @@ vb_anext:
     inc word [vb_alate]
 .st:
     ret
+.inp:                               ; (in place: its length where the hold
+    push dx                         ; has it)
+    mov ax, [bx+RG_AOFF]
+    mov dx, [bx+RG_AOFF+2]
+    call vb_iat
+    call vb_ilen
+    pop dx
+    jmp .ilen
 
 ; vb_asound - the clip's sound booked at [vb_apat] starts now, from its
 ; ring's AUDIO cursor (its first record). The next opening's is noted for
@@ -2999,6 +3099,8 @@ vb_reader:
     pushf                           ; top: a clip that fit the ring whole
     cli                             ; plays again from it unread; one that
     mov byte [bx+RG_PLAY], 0        ; did not has lost its head to its tail,
+    cmp byte [bx+RG_INP], 0         ; (in place: the hold has it all)
+    jne .keep
     mov ax, [bx+RG_FILL+2]          ; and the ring is nobody's. (Its played
     cmp ax, [bx+RG_BYTES+2]         ; cursors left as they were, the enemy's
     jb .keep                        ; turn replayed the knight's clip from
@@ -3078,6 +3180,7 @@ vb_reader:
 %include "vbattle/vbgame.inc"
 %include "vbattle/vbloop.inc"
 %include "vbattle/vbhold.inc"
+%include "vbattle/vbinp.inc"
 
 ; vb_strncpy - at most CX bytes of DS:SI to DS:DI, trailing blanks dropped
 vb_strncpy:
@@ -3178,6 +3281,7 @@ vb_s_victa:   db 'VICTORY!', 0
 vb_s_defa:    db 'The party has fallen.', 0
 vb_s_head:    db '        HP          MP', 0
 
+%define VD_YIELD                    ; (the yield sites, live in place: vbinp)
 %include "video/vdec.inc"
 
 ; =============================================================================
@@ -3369,6 +3473,20 @@ VB_VAR vb_hcap, 2                   ; ...a gate's cap on the pool, 4 KBs
 VB_VAR vb_htype, 1                  ; ...its store: 1 XMS, 2 EMS
 VB_VAR vb_ehnd, 2                   ; ...EMS: the handle
 VB_VAR vb_efseg, 2                  ; ...and the frame's segment
+VB_VAR vb_eq, 1                     ; ...the quarters it holds: 0Fh or 3
+VB_VAR vb_eport, 2                  ; ...the recipe (107.4): quarter 0's
+VB_VAR vb_estep, 2                  ; register, the step to the next,
+VB_VAR vb_eor, 1                    ; the bits ORed into a page,
+VB_VAR vb_ebase, 2                  ; and the run's first page
+VB_VAR vb_hinp, 1                   ; IN PLACE from here (vbinp.inc)
+VB_VAR vb_noinp, 1                  ; ...never: the A/B gate (a test's poke)
+VB_VAR vb_tier, 1                   ; ...XMS's tier: a 286 or a 386
+VB_VAR vb_xpc, 4                    ; ...VB_XH's linear address
+VB_VAR vb_xact, 1                   ; ...a borrow is on
+VB_VAR vb_xif, 1                    ; ...and its caller had IF (2) or not
+VB_VAR vb_icalls, 2                 ; ...records reached in place (a count)
+VB_VAR vb_iyc, 2                    ; ...yields inside a borrow (a count)
+VB_VAR vb_irings, 2                 ; ...rings given a clip in place
 VB_VAR vb_htok, 4                   ; ...the block's token
 VB_VAR vb_hcur, FSEQ_SIZE           ; ...the fill's own file cursor
 VB_VAR vb_htab, 28 * 8              ; ...the ranges (HT_*)

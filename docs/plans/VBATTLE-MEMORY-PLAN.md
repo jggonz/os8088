@@ -1,8 +1,9 @@
 # VBATTLE-MEMORY — streaming the loops, and the memory faster machines have
 
-**Status: M1, the renditions (9), M2, M3 and M4's EMS hold BUILT
-(2026-11-04, format 7, SPEC.md 125.4.1); M4's decode in place and the
-board's timing remain.** The owner's
+**Status: M1, the renditions (9), M2, M3, M4's EMS hold and M5's decode in
+place (EMS, and XMS on a 386 and a 286) BUILT (2026-11-04, format 7,
+SPEC.md 125.4.1-2); the board's timing remains, and the 286's LOADALL arm
+wants a field run.** The owner's
 questions, ahead of the Hercules and VGA renditions: *"Could the openings
 and endings stream? ... we're about to get to vga and that is always more
 data hungry, even at the 320x200n we have planned (and likely not using all
@@ -289,6 +290,48 @@ If a third package needs a hold, that is the time to factor one out
   BUDGETED for a 286's disk, by eye, against sixteen; the hold's fill rate
   on the owner's 286; what the PIT-clocked hook loses to a 4 KB copy (a
   card-less play on the 286 with a hold).
+
+## 12. Wave M5: the decode in place (EMS, and XMS through a borrow)
+
+The owner, after M4: *"Video player has xms decode in place (including via
+loadall), and ems. You might be able to learn from how they do it."* What
+was learnt, from SPEC.md 98.3.18.7/11/14 and Video Player's code:
+
+- **Keep the ring's bookkeeping; change only the address.** Video Player's
+  fill still "reads" a chunk a slot, noting a file offset instead of
+  copying, and `vp_addr` turns (chunk, offset) into the hold's. The
+  battle's rings have more state than a FIFO (two cursors, a guard, loops
+  read round), so the cheapest form of the same idea is coarser: a ring in
+  place is filled the moment it is given its clip, so every cursor is
+  already a stream offset into a clip that is all there, and one routine
+  (`vb_iat`) turns that into an address.
+- **EMS: the hook maps with its own OUTs** (EMSV_FRAME's recipe), three
+  pages so a 32 KB record from anywhere in a page is whole; the UI task
+  keeps quarter 3. No borrow, no yield: DX is a segment.
+- **XMS: a handle, and every `mov ds, dx` a borrow**; the base dies at a
+  segment load, so a borrow is interrupts-off and the decode yields at
+  `vdec.inc`'s own VD_YCK sites, patched live only in place. The battle
+  needs ONE pending address where Video Player needs sixteen: it names a
+  record and reads it at once.
+- **Take it only after a check**, on the bytes: the hold's first 16 read in
+  place against the driver's copy, LOADALL probed first on a 286.
+
+What it buys: on an 8088 with a board, no copy at all - each frame's record
+was `rep movsb`'d into a ring before (9 + 17 cycles a byte on an 8088: a 4 KB record ~15 ms
+of a 66 ms frame at 15 fps); on a 286 the `int 15h` copies, interrupts off
+for each, are gone. What it does not change: the conventional rings are
+still claimed (a ring given its clip before the fill ended copies into
+them, and the music streams through the hold as before).
+
+**M5 DONE 2026-11-04** (SPEC.md 125.4.2): `vbtems` with EMS in place on
+MartyPC's 5150 (the replayed title exact on the glass, 2,041 records read
+off the board, no copy); `vbthold` with XMS in place on QEMU's 386 (the
+title again exact in B8000, ~130 yields at a poked 256-byte step);
+`vbtholdcopy` the gate's A/B. Broken on purpose each goes red: a yield
+re-borrowing a byte on stops the guest, a page on in the hook's map never
+reaches victory. NOT run anywhere: the 286's LOADALL arm (no emulator here
+has it) - Video Player's borrow, called as Video Player calls it, for the
+Victory 286. Still to do from 98.3.18.8: time the board before trusting it.
 
 ## 11. Not in it
 

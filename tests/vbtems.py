@@ -13,6 +13,8 @@ the hard disk and EMS.DRV; C: holds VBATTLE.O88 and the Hercules demo
   - the hold is EMS (`[vb_htype]` 2), one range, the whole bundle;
   - it fills while the title goes round, the disk reading straight INTO
     the frame's window;
+  - and from then on IN PLACE (SPEC.md 125.4.2): every ring given a clip
+    is read where the board has it, the hook mapping the pages itself;
   - from then on the engine reads THE DISK NOT ONCE (`[vb_rcalls]`, which
     only the disk path counts) through the fade, the openings, the menu,
     victory, its end loop and the play again - every read the hold's
@@ -125,6 +127,10 @@ def main():
             rc0, c0 = rw("vb_rcalls"), rw("vb_hcopies")
             ok(True, "the hold filled while the title went round (%d disk "
                "reads so far)" % rc0)
+            ok(rb("vb_hinp") == 1 and rb("vb_eq") == 0x0F,
+               "...and from then on IN PLACE: the frame's four quarters "
+               "(quarters %02Xh)" % rb("vb_eq"))
+            ir0, ic0 = rw("vb_irings"), rw("vb_icalls")
             key("return")
             until(lambda: rb("vb_state") == GS_MENU, "the menu", guest=240.0)
             key("return")
@@ -153,9 +159,14 @@ def main():
             ok(hits >= 15, "the title out of the board is the host's decode "
                "on the glass (%d of 30 looks exact)" % hits)
             rc1, c1 = rw("vb_rcalls"), rw("vb_hcopies")
-            ok(rc1 == rc0 and c1 > c0,
+            ir1, ic1 = rw("vb_irings"), rw("vb_icalls")
+            ok(ir1 - ir0 >= 3 and ic1 != ic0,
+               "rings given their clips in place: %d, records read where "
+               "the board has them: %d" % (ir1 - ir0, (ic1 - ic0) & 0xFFFF))
+            ok(rc1 == rc0,
                "from the hold's fill on, NOT ONE disk read: %d reads, %d "
-               "copies out of the board" % (rc1 - rc0, c1 - c0))
+               "copies out of the board (in place: none needed)"
+               % (rc1 - rc0, c1 - c0))
             key("esc")
             until(lambda: rb("vb_ready") == 0, "Esc to leave")
         finally:

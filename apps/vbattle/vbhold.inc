@@ -185,19 +185,36 @@ vb_eopen:
     add ax, 3
     shr ax, 1
     shr ax, 1
-    inc ax
+    inc ax                          ; (one over, for a window's second page,
+    inc ax                          ; and one for in place's third)
     mov bl, EMSV_ALLOC
     call vb_ems                     ; AX = the handle
     jc .no
     mov [vb_ehnd], ax
+    mov al, 0x0F                    ; ALL FOUR quarters, for the decode in
+    mov [vb_eq], al                 ; place (vbinp.inc) - else the two the
+    mov bl, EMSV_FRAME              ; copied hold needs
+    call vb_ems
+    jnc .fr
     mov al, 3
+    mov [vb_eq], al
     mov bl, EMSV_FRAME
     call vb_ems                     ; DX = the frame's segment
     jc .nof
+.fr:
     mov [vb_efseg], dx
+    mov [vb_eport], cx              ; THE RECIPE (SPEC.md 107.4): quarter 0's
+    mov [vb_estep], si              ; register, the step to the next, the
+    mov [vb_eor], al                ; bits ORed into a page - the hook maps
+    mov ax, [vb_ehnd]               ; with it, an ISR that may call nothing
+    mov bl, EMSV_BASE
+    call vb_ems                     ; AX = the run's first page on the board
+    jc .nof
+    mov [vb_ebase], ax
     mov byte [vb_htype], 2
     jmp vb_hon1
 .nof:
+    mov byte [vb_eq], 0
     mov ax, [vb_ehnd]
     mov bl, EMSV_FREE
     call vb_ems
@@ -229,6 +246,25 @@ vb_emap:
     mov bx, (DRVC_EMS << 8) | EMSV_MAP
     call OSAPI_DRV_CALL
 .out:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; vb_emap3 - the hold's 16 KB page AX into quarter 3: the UI task's window
+; while rings are read in place (the hook maps 0-2). CF=1 refused. Preserves
+; all but flags
+vb_emap3:
+    push ax
+    push bx
+    push cx
+    push dx
+    mov cx, ax
+    mov dx, [vb_ehnd]
+    mov al, 3
+    mov bx, (DRVC_EMS << 8) | EMSV_MAP
+    call OSAPI_DRV_CALL
     pop dx
     pop cx
     pop bx
@@ -361,13 +397,20 @@ vb_hread:
     mov cl, 2
     shl dx, cl
     or ax, dx
+    mov cx, 32768                   ; (the window: two pages...
+    cmp byte [vb_hinp], 0
+    jne .e3
     call vb_emap
+    jmp short .e4
+.e3:
+    call vb_emap3                   ; ...or quarter 3 alone, in place: the
+    mov cx, EMS_PAGE                ; hook's are 0-2)
+.e4:
     pop di                          ; DI: the offset in the window
     pop dx
     pop ax
     jc .disk
-    mov cx, 32768                   ; as much as the window holds past it
-    sub cx, di
+    sub cx, di                      ; as much as the window holds past it
     cmp bx, cx
     jae .e1
     mov cx, bx
@@ -377,6 +420,14 @@ vb_hread:
     push cx
     xchg si, di                     ; DS:SI the window, ES:DI the caller's
     mov ds, [vb_efseg]
+    cmp byte [cs:vb_hinp], 0
+    je .e5
+    push ax
+    mov ax, ds
+    add ax, EMS_PAGE * 3 / 16       ; (quarter 3's paragraph)
+    mov ds, ax
+    pop ax
+.e5:
     cld
     rep movsb
     pop cx
@@ -438,7 +489,8 @@ vb_hstep:
     mov al, [vb_hi]
     cmp al, [vb_hrn]
     jb .r
-    mov byte [vb_hfull], 1          ; everything has arrived
+    mov byte [vb_hfull], 1          ; everything has arrived: read in place
+    call vb_hipq                    ; from here on, if it may be
 .none:
     xor al, al
     clc

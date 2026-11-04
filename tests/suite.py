@@ -16780,7 +16780,17 @@ SOAK = [
         "goes round and byte for byte the file; then B: changed to a BLANK "
         "floppy and the play runs on - the fade, the menu, victory, its end "
         "loop, Enter and the title again - out of the hold alone. Broken on "
-        "purpose (vb_read skipping the hold) it stalls before victory",
+        "purpose (vb_read skipping the hold) it stalls before victory. "
+        "VBATTLE-MEMORY-PLAN 12 (M5): from the fill on the rings are read IN "
+        "PLACE through a 386's loaded base (vbinp.inc), the yield step poked "
+        "to 256 bytes so the decode yields (~130 times), and the title again "
+        "is the host's decode on the glass, B8000 byte for byte. Broken on "
+        "purpose (a yield re-borrowing a byte on) the guest stops",
+        needs=("qemu",)),
+    Row("vbtholdcopy", "soak", py("tests/vbthold.py", "--arm", "copy"), 20.0,
+        "The whole hold with the decode in place GATED OFF ([vb_noinp], "
+        "M5's A/B): the copying hold M2 built still plays from a blank B: "
+        "to victory and again, every read a copy",
         needs=("qemu",)),
     Row("vbtholdpart", "soak", py("tests/vbthold.py", "--arm", "part"), 20.0,
         "VBATTLE-MEMORY-PLAN 5: the pool held under the bundle (a gate's cap, "
@@ -16802,7 +16812,10 @@ SOAK = [
         "board is the host's decode on the glass, and from the fill on NOT "
         "ONE disk read ([vb_rcalls]) through victory and the play again. "
         "Broken on purpose (the read two bytes off in the window) the battle "
-        "stalls before victory",
+        "stalls before victory. M5: from the fill on the rings are read IN "
+        "PLACE - the hook maps three pages into the frame with its own OUTs "
+        "- and the title again is that; broken on purpose (a page on) the "
+        "battle never reaches victory",
         needs=("marty",), wants=("build/emstest.img",)),
     Row("vbtbundle", "soak", py("tests/vbtbundle.py"), 16.0,
         "`make vbtbundle`: the Video Battle builder's zip for someone with no "

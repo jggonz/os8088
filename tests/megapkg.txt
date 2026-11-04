@@ -32,6 +32,11 @@ apps/os88spk.inc 1              # THE SHIPPED BUILD REFUSING THE TIER:
     # Player); without them the real-mode ISRs would store through CS a
     # sample at a time, a fault each, so the PCM tier refuses and the package
     # plays another way. 15 bytes of image (measured on Audio)
+apps/vbattle/vbinp.inc 1        # THE BATTLE'S DECODE IN PLACE refused
+    # under protected mode (vb_hipq, SPEC.md 125.4.2): a token is no address
+    # there (50.6.10) and both borrows - LOADALL, a 386's loaded base - are
+    # real mode's. The copying hold plays instead. ~4 bytes; no kern_mega
+    # disk carries the package (125.7), so this is the fail-safe alone
 drivers/hdd/hdxms.inc 1         # HDD.DRV's fill straight into XMS refused
     # under protected mode (hd_xa_arm): its loaded-base trick loads DS =
     # FFFFh, which is a #GP there (KERN-MEGA-PLAN 14.16). A correctness

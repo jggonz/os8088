@@ -631,6 +631,33 @@ symmetric (the fill and the read both one page off agree with each other)
 and proved only that the check had to be broken on ONE side; the read alone
 two bytes off stalls the battle.
 
+## Reading the hold in place (2026-11-04)
+
+The owner's pointer was to Video Player, which decodes straight out of XMS
+(through LOADALL on a 286) and out of an EMS board's pages. Reading its
+SPEC sections and code before writing a line said what to take: not its
+code, whose ring is a FIFO of slots, but its three moves - keep the ring's
+bookkeeping and change only where a record's address comes from; on EMS
+let the hook map pages with the driver's own recipe; on XMS make every
+`mov ds, dx` a borrow of DS's hidden base and let the decoder yield at the
+sites `vdec.inc` already has. The battle's own twist is coarser and
+cheaper: a ring given its clip after the hold is whole is simply FULL at
+once, so every cursor it already had is an offset into a clip that is all
+there.
+
+EMS worked on the first run on MartyPC's 5150 with the Lo-tech board: six
+rings in place, two thousand records read off the board, not one copy, the
+title played again exact on the glass. XMS on QEMU's 386 played to victory
+from a blank disk at once, too, but yielded NOT ONCE - the demo's records
+are mostly under the 2 KB step, and the reader had read the openings and
+the attack's head into rings before the fill ended, so few frames were in
+place at all. So the step became a word a test can poke (256), and the
+title again was checked in B8000 byte for byte: 135 yields and 16 looks of
+16 exact. Broken on purpose, a yield re-borrowing one byte on stops the
+guest outright, and a page on in the hook's map never reaches victory. The
+286's LOADALL arm is Video Player's borrow called as Video Player calls it;
+no emulator here has a 286's LOADALL, so that one waits for the Victory.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |
