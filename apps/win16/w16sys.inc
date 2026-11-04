@@ -9,18 +9,29 @@
 section .w16dlg
 
 ; GetWindowsDirectory (KERNEL.134), GetSystemDirectory (KERNEL.135) - the
-; folder WIN.INI is in (SPEC.md 124.14) as a DOS path: "A:\SYSTEM\APPDATA\
-; WIN16" on WIN16's own volume. One folder answers both: WIN16 has no SYSTEM
-; folder of its own. args: +0 nSize, +2 lpBuffer. Answers the length; a
-; buffer too small for it answers the size it needs, NUL included, as Windows
-; did, and is left alone
+; folder WIN.INI is in (SPEC.md 124.14) as a DOS path, "A:\SYSTEM\APPDATA\
+; WIN16" on WIN16's own volume, and SYSTEM under it (SPEC.md 124.20.5.1), as
+; Windows had C:\WINDOWS and C:\WINDOWS\SYSTEM. args: +0 nSize, +2 lpBuffer.
+; Answers the length; a buffer too small for it answers the size it needs,
+; NUL included, as Windows did, and is left alone. The system folder is made
+; on the first ask (a Setup Toolkit copies into it without a CreateDir)
+W16LIB w16k_sysdir
+    push si
+    push di
+    ICALL w16_args
+    mov dx, w16s_sfxlen - 1         ; DX = the characters past the Windows dir
+    call w16f_mksys
+    jmp short w16k_dircom
 W16LIB w16k_windir
     push si
     push di
     ICALL w16_args
+    xor dx, dx
+w16k_dircom:
     mov cx, [es:bx]
     les di, [es:bx + 2]
     mov ax, w16s_dirlen + 1
+    add ax, dx                      ; the length, NUL with it
     cmp cx, ax
     jb .out
     mov al, [w16_homev]
@@ -28,10 +39,25 @@ W16LIB w16k_windir
     cld
     stosb
     mov si, w16s_dir
-    mov cx, w16s_dirlen
+    mov cx, w16s_dirlen - 1
+    rep movsb
+    or dx, dx
+    jz .nul
+    mov si, w16s_sfx
+    mov cx, w16s_sfxlen
     rep movsb                       ; the NUL with it
+    jmp short .len
+.nul:
+    xor al, al
+    stosb
+.len:
     mov ax, w16s_dirlen
+    add ax, dx
+    jmp short .done
 .out:
+    mov ax, w16s_dirlen + 1
+    add ax, dx
+.done:
     pop di
     pop si
     ret
@@ -3268,3 +3294,5 @@ section .text
 
 w16s_dir:    db ':\SYSTEM\APPDATA\WIN16', 0
 w16s_dirlen  equ $ - w16s_dir
+w16s_sfx:    db '\SYSTEM', 0         ; ...and under it WIN16's system directory
+w16s_sfxlen  equ $ - w16s_sfx

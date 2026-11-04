@@ -499,6 +499,13 @@ W16LIB w16k_openfile
     call w16f_cat
     mov ax, 0x4300
     call w16f_onpath
+    jnc .found
+    mov di, w16f_path               ; ...and in the system directory
+    call w16f_sysdir
+    mov si, w16f_name
+    call w16f_cat
+    mov ax, 0x4300
+    call w16f_onpath
     jc .err
 .found:
     mov ax, [w16f_style]
@@ -627,6 +634,48 @@ w16f_windir:
     mov al, '\'
     stosb
     pop es
+    ret
+
+; w16f_sysdir - WIN16's system directory (SPEC.md 124.20.5.1): the Windows
+; directory's SYSTEM folder, at DI, then '\'; DI past it. THE one place the
+; system folder is named: the loader's library search and OpenFile call it.
+; Clobbers AX, CX, SI
+w16f_sysdir:
+    call w16f_windir
+    push es
+    push ds
+    pop es
+    mov si, w16s_sfx + 1
+    mov cx, w16s_sfxlen - 2         ; "SYSTEM"
+    cld
+    rep movsb
+    mov al, '\'
+    stosb
+    pop es
+    ret
+
+; w16f_mksys - the system folder made, if it is not there (an existing one
+; is no error). Keeps every register
+w16f_mksys:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov di, w16f_path
+    call w16f_sysdir
+    mov byte [di - 1], 0            ; no trailing '\'
+    mov ah, 0x39
+    call w16f_onpath
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 ; w16f_cat - DS:SI, NUL-ended, at DI (in DS), upper-cased, '/' made '\'.
