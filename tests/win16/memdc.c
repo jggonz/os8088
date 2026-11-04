@@ -448,6 +448,26 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
                 hit += pix(i, j) == BLACK;
         check(hit > 0, "pieradius");
 
+        /* a ray whose reduced direction is -32768: the quarter from 9
+         * o'clock down to 6 of the circle in 0..129, seen through a window
+         * origin of (0, 60) - its left end, and no chord along logical row
+         * 64, which the arc once drew with three quarters of the circle -
+         * and a 45-degree start that once overflowed a divide */
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        SetWindowOrg(mem, 0, 60);
+        Arc(mem, 0, 0, 129, 129, -64, 64, 64, 200);
+        SetWindowOrg(mem, 0, 0);
+        snap(dc);
+        for (hit = 0, j = 34; j <= 38; j++)     /* (8.6, 96), at 210 degrees */
+            for (i = 7; i <= 10; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit > 0, "arcwide");
+        for (hit = 0, j = 2; j <= 6; j++)
+            for (i = 24; i <= 56; i++)
+                hit += pix(i, j) == BLACK;
+        check(hit == 0, "arcwidechord");
+        check(Arc(mem, 0, 0, 257, 257, 64, 192, 300, 0), "arcdiv");
+
         check(CopyMetaFile(NULL, NULL) == NULL, "copymf");
         check(!EnumMetaFile(mem, NULL, (MFENUMPROC)NULL, 0L), "enummf");
         PlayMetaFileRecord(mem, &ht, &mr, 0);
