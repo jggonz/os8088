@@ -30,6 +30,11 @@ W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
 W16_ARKEEP  equ 96              ; ...on kern_mega the library part's 62 KB
 %endif                          ;   too: its fetch is conventional (124.31.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
+%ifdef PKG_MEGA
+  %if W16_GH0 + 2 * W16_NGH != W16V_LO
+    %error "W16V_LO must be the end of the handle range (SPEC.md 124.31.3)"
+  %endif
+%endif
 W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
 W16_GHNOTE  equ 4               ;   ...and GMEM_NOTIFY: discarded only when
                                 ;   GlobalNotify's procedure says so
@@ -378,7 +383,7 @@ w16_garena:
     jnc .got1
     pop cx                          ; the floor would not go: three
     push cx                         ;   quarters of it, and again, down to
-    cmp ax, cx                      ;   the request (the arm's map is 960
+    cmp ax, cx                      ;   the request (the arm's map is 1,012
     jbe .no1                        ;   KB, so a fourth arena is what it
     mov dx, ax                      ;   has left: halving left a third of
     shr dx, 1                       ;   that unused)
