@@ -236243,8 +236243,9 @@ itself. **LZT.EXE** (`tests/win16/lzt.c`, its `VERSIONINFO` in
   and refuse a source that is not there.
 
 Its message box must be `LZT OK 24000`. When it has ended, `SAMPLE.TXT` at
-B:'s root and `SYSTEM\APPDATA\WIN16\SECOND.DAT` read off the floppy image
-must be the host's expansions, byte for byte.
+B:'s root and `SYSTEM\APPDATA\WIN16\SYSTEM\SECOND.DAT` (the system
+directory, §124.20.5.1) read off the floppy image must be the host's
+expansions, byte for byte.
 
 **`win16shx`** (soak, QEMU; `make win16fixtures`): `ROOT.TXT` at B:'s
 root and `SHX.TXT` in a folder, `DOCS`. **SHX.EXE** (`tests/win16/shx.c`)

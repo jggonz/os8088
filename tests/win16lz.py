@@ -22,7 +22,8 @@ LZT.EXE (tests/win16/lzt.c, `make win16fixtures`) reads, seeks, copies and
 names them, reads its version, and installs SECOND.DAT into WIN16's system
 directory. Its MessageBox, read off the program's stack, must be "LZT OK"
 and SAMPLE.TXT's length. When it has ended, SAMPLE.TXT at B:'s root and
-SYSTEM\\APPDATA\\WIN16\\SECOND.DAT are read off the image and must be the
+SYSTEM\\APPDATA\\WIN16\\SYSTEM\\SECOND.DAT (the system directory,
+SPEC.md 124.20.5.1) are read off the image and must be the
 host's expansions, byte for byte.
 """
 import argparse
@@ -162,7 +163,7 @@ def main():
         d.idle(4.0)
         d.hmp("stop")                   # the image, as the guest left it
         for path, data in (("SAMPLE.TXT", sample()),
-                           ("SYSTEM/APPDATA/WIN16/SECOND.DAT", second())):
+                           ("SYSTEM/APPDATA/WIN16/SYSTEM/SECOND.DAT", second())):
             got = mread(d.p.b, path)
             if got is None:
                 bad.append("%s is not on B:" % path)
