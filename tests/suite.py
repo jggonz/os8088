@@ -17180,6 +17180,19 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16dosenv", "soak", py("tests/win16dosenv.py"), 60.0,
+        "SPEC.md 124.25.21, WIN16-NEXT `vbxlib`: DOSENV.EXE (`make "
+        "win16fixtures`, tests/win16/dosenv.c) asks GetDOSEnvironment for the "
+        "task's environment: the offset must be 0, the selector readable (a C "
+        "start-up that loads a nonzero AX into ES faulted Mozart's "
+        "SPUSH.VBX), the list must end at a double NUL followed by the word "
+        "1 and the program's own path (GetModuleFileName's), getenv() must "
+        "find windir and TEMP equal to GetWindowsDirectory and PATH naming "
+        "it, the PSP's word 2Ch must hold the selector, and a second call "
+        "must answer the same block; its MessageBox must be DOSENV OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
         "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
         "tests/win16/longname.c) asks for a dialog named in 21 characters "

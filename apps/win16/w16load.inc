@@ -1954,7 +1954,8 @@ w16_mkpsp:
     mov word [es:0], 0x20CD         ; int 20h
     mov ax, [w16_ptop]
     mov [es:2], ax                  ; the paragraph past the program
-    mov word [es:0x2C], 0           ; no environment
+    mov word [es:0x2C], 0           ; no environment until GetDOSEnvironment
+                                    ;   makes one (SPEC.md 124.25.21)
     mov byte [es:0x80], 0           ; an empty command tail
     mov byte [es:0x81], 0           ; (lpCmdLine is the text: InitTask)
     pop es

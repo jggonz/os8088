@@ -44,7 +44,7 @@ w16_ctxtab:
     W16CTX w16_odcur, w16_pgn       ; ...an own DC's, BeginPaint's
     W16CTX w16_svn, w16_dtr         ; SaveDC's states
     W16CTX w16_nmiss, w16_arena     ; its missing imports, ne_heap
-    W16CTX w16_gnproc, w16_gflg     ; GlobalNotify's procedure
+    W16CTX w16_gnproc, w16_gflg     ; GlobalNotify's procedure; GetDOSEnvironment
     W16CTX w16_clus, w16_rtk        ; its volume's cluster, its resources
     W16CTX w16_msys, w16_mclip      ; GetSystemMenu's
     W16CTX w16_mpl, w16_ahwnd       ; the menu loop it waits in
