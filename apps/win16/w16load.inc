@@ -2437,11 +2437,120 @@ w16l_need:
     pop cx
     ret
 
-; w16l_ldlib - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
+; w16l_ldlib - [w16_lname]'s library: in the program's folder, else in WIN16's
+; Windows directory, else in its system directory (SPEC.md 124.23.1.1), each
+; by w16l_ldlib1. The folder stood in is put back. out and clobbers as
+; w16l_ldlib1's
+w16l_ldlib:
+    call w16l_ldlib1
+    jc .r
+    cmp al, 0xFF
+    jne .r                          ; found, or refused: the folder decided
+    push cx
+    push bx
+    push dx
+    call OSAPI_FILE_HERE            ; the program's folder, to come back to
+    push dx
+    push bx
+    mov bx, w16_winf
+    mov cx, W16L_WINDEPTH
+    call w16l_gofold
+    jc .sys
+    call w16l_ldlib1
+    jc .rest
+    cmp al, 0xFF
+    jne .rest
+.sys:
+    mov bx, w16_sysf
+    mov cx, W16L_SYSDEPTH
+    call w16l_gofold
+    jc .none
+    call w16l_ldlib1
+    jmp short .rest
+.none:
+    mov al, 0xFF
+    clc
+.rest:
+    pushf                           ; (the answer kept while the folder
+    pop cx                          ;   goes back: AX, the flags in CX)
+    pop bx
+    pop dx
+    push cx
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
+    popf
+    pop dx
+    pop bx
+    pop cx
+.r:
+    ret
+
+; THE TWO FOLDERS' NAMES, in one place: how many folders below
+; SYSTEM\APPDATA on WIN16's volume each is. The Windows directory is WIN16
+; (the first name, w16pf_s_dir); the system directory is SYSTEM under it
+; (the second, od_s_system), as Windows has C:\WINDOWS and C:\WINDOWS\SYSTEM
+W16L_WINDEPTH equ 1
+W16L_SYSDEPTH equ 2
+
+; w16l_gofold - stand in a folder on WIN16's volume: BX = the word that keeps
+; its first cluster (0 not walked to yet, 0FFFFh there is none), CX = its
+; depth (above). Walked the first time (od_enter, od_dive) and kept after, so
+; a second miss is a lookup and not a walk; one that is not there is kept as
+; absent and costs nothing again. CF=1 there is none and the folder stood in
+; is unchanged. Keeps all but the flags
+w16l_gofold:
+    push ax
+    push bx
+    push dx
+    push si
+    mov dx, [bx]
+    cmp dx, 0xFFFF
+    je .none
+    or dx, dx
+    jnz .go
+    push bx
+    ICALL od_enter                  ; SYSTEM\APPDATA, WIN16's volume
+    jc .eout
+    mov si, w16pf_s_dir             ; ...WIN16
+    ICALL od_dive
+    jc .fail
+    cmp cx, 2
+    jb .got
+    mov si, od_s_system             ; ...SYSTEM
+    ICALL od_dive
+    jc .fail
+.got:
+    pop bx
+    mov [bx], dx
+    ICALL od_back
+    jmp short .go
+.fail:
+    pop bx
+    mov word [bx], 0xFFFF
+    ICALL od_back
+.none:
+    stc
+    jmp short .out
+.eout:
+    pop bx
+    stc
+    jmp short .out
+.go:
+    mov bl, [w16_homev]
+    call OSAPI_FILE_GOTO_QM
+.out:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16l_ldlib1 - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
 ; is current and the cluster cache claimed. out: CF=0 AL = its record, or
 ; 0FFh no such file; CF=1 refused with the lines written (line 2 the
 ; library's file). Clobbers AX; keeps the rest.
-w16l_ldlib:
+w16l_ldlib1:
     push bx
     push cx
     push dx

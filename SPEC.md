@@ -235446,10 +235446,53 @@ code.
 | | |
 |---|---|
 | a library | an imported module whose name is not one of WIN16's own (`w16_modnames`: KERNEL, USER, GDI, KEYBOARD, SOUND, WIN87EM, SHELL, and S19's) |
-| its file | `<NAME>.DLL` - the module's name, up to 8 characters - in the **program's own folder**. Windows also searched the current directory, the Windows and system directories and the PATH; os8088 has none of those, and a library beside its program is how every target ships. Paintbrush names its library `PBRUSH` while the library calls itself `SCOOLVM`: the import's name finds the file, and the file's own module name is kept as well, both answering `GetModuleHandle` |
+| its file | `<NAME>.DLL` - the module's name, up to 8 characters - in the **program's own folder**, and if it is not there in **WIN16's Windows and system directories** (below). Paintbrush names its library `PBRUSH` while the library calls itself `SCOOLVM`: the import's name finds the file, and the file's own module name is kept as well, both answering `GetModuleHandle` |
 | not there | its imports bind to missing-import stubs, named, as a module WIN16 lacks did (§124.12). Windows refused such a program at load; WIN16 runs it until it calls into the absent library and then says which function |
 | refused | a library the loader refuses for its own reason (§124.3: self-loading, protected mode only, an iterated segment, tables too large, a CPU the census rules out) refuses the PROGRAM, line 1 the reason and line 2 the library's file name |
 | a library of a library | loaded the same way, while the library that imports it is loading. At most `W16_NLIB` = 8 libraries are loaded at once and `W16_LDEPTH` = 4 deep. **Libraries may import each other in a cycle** (§124.23.2.1) |
+
+##### 124.23.1.1 The search order *(2026-11-04, WIN16-NEXT libpath)*
+
+Windows 3.1 searched the current directory, the Windows directory, the system
+directory, the directory of the program's EXE and then the PATH. A setup
+installs a shared library (Visual Basic's `VBRUN300.DLL` and its `.VBX`s, which
+Microsoft's Setup Toolkit copies into the system directory) where Windows
+would find it, so a program started from its link after its setup was refused
+(*Needs VBRUN300.100*): WIN16 looked beside the program only. WIN16 now
+searches, for an implicit import, for `LoadLibrary` and for the library of a
+library alike:
+
+1. **the program's own folder**: WIN16's current folder while it loads, so
+   Windows' current directory and the EXE's directory are one place here, as
+   `GetModuleFileName` already says;
+2. **the Windows directory**, `SYSTEM\APPDATA\WIN16` on WIN16's volume
+   (`GetWindowsDirectory`, §124.20.5);
+3. **the system directory**, `SYSTEM` under the Windows directory
+   (`GetSystemDirectory`), when there is one. A folder that is not there is
+   remembered as absent and costs nothing again.
+
+The PATH is not searched: WIN16 has none. The order puts the program's folder
+first although Windows put it fourth, because it is the cheaper miss and the
+hot one: the folder is the one the program was just read from. A library found
+there costs nothing the old loader did not; one found in the Windows directory
+costs one failed lookup in the first folder and, the first time only, the walk
+to it (three directory reads); one found in the system directory two failed
+lookups and a second walk. The folders' first clusters are kept, so every
+later miss is one lookup, and each lookup that misses the directory cache is an
+`int 13h` (~400 ms on the target XT): a library nobody has costs three lookups
+and, once, two walks. **The two folders are named in one place**
+(`W16L_WINDEPTH`, `W16L_SYSDEPTH` and `w16l_gofold` in `w16load.inc`: how far
+below `SYSTEM\APPDATA` each is), so a change to where the system directory
+is changes there only. A library of a library found in one of those folders is
+looked for in that folder first, and not again beside the program: libraries
+that ship together are installed together.
+
+A library loaded from either folder keeps that folder as its own (the module
+block's folder and volume, §124.26.11), so its discardable segments and its
+resources are read from it later, and not from the program's.
+`GetModuleFileName` on its handle still answers the program's folder with the
+library's file name; WIN16 keeps no path of its own for a library. An EXE is
+looked for as before (§124.28.5); this changes libraries only.
 
 #### 124.23.2 Where it lives
 
@@ -235569,7 +235612,7 @@ line 2 the library's file.
 
 | call | |
 |---|---|
-| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for in the program's folder, by its 8.3 name. A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
+| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for by its 8.3 name in the program's folder, then in the Windows directory and the system directory (§124.23.1.1). A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |

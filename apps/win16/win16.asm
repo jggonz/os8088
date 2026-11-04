@@ -356,6 +356,9 @@ section .w16dlg
     W16BSS w16_ldep, 1          ;   a library it imports loads, and how deep
     W16BSS w16_lmsv, 6          ; LibMain's chain: the start BX, CX and ES
     W16BSS w16_lmi, 2           ; ...the record it is at
+    W16BSS w16_winf, 2          ; WIN16's Windows directory's cluster and its
+    W16BSS w16_sysf, 2          ;   system directory's: 0 = not yet walked to,
+                                ;   0FFFFh none (w16l_gofold, SPEC.md 124.23.1.1)
     W16BSS w16_rfp, 2           ; the resources' file: 0 the program's, else
     W16BSS w16_rown, 2          ;   a library's, and its blocks' GH_OWNER bits
                                 ;   (w16n_rset, SPEC.md 124.23.6)
