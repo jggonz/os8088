@@ -236541,7 +236541,7 @@ copy: black stays black and white stays white, which is what Windows gives
 under the default text and background colours. A DC with other colours
 would get them on Windows and does not here yet.
 
-#### 124.25.13 The GDI calls Visual Basic 3.0 imports *(WIN16-NEXT-PLAN L1, vbgdi)*
+#### 124.25.14 The GDI calls Visual Basic 3.0 imports *(WIN16-NEXT-PLAN L1, vbgdi)*
 
 `VBRUN300.DLL` imports nine GDI functions WIN16 lacked. All nine are exports
 now, and none costs a resident byte: the rows are the loader part's and the

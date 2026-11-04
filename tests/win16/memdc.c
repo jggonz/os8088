@@ -21,7 +21,7 @@
  * the GlobalNotify procedure says so, as a short heap makes room, which is
  * PBRUSH.DLL's band cache; and two hundred moveable handles at once.
  *
- * Last, what Visual Basic 3.0's runtime imports from GDI (SPEC.md 124.25.13):
+ * Last, what Visual Basic 3.0's runtime imports from GDI (SPEC.md 124.25.14):
  * OffsetWindowOrg, SetRectRgn, CreatePenIndirect, CreateBrushIndirect, Arc
  * (the short way, the long way and a whole ellipse), Pie, and the three
  * metafile calls that answer 0; Arc and Pie are drawn again on the window
@@ -339,7 +339,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
             GlobalFree(hs[k]);
     }
 
-    /* --- what Visual Basic 3.0's runtime imports (SPEC.md 124.25.13): the
+    /* --- what Visual Basic 3.0's runtime imports (SPEC.md 124.25.14): the
      * origin moved by an offset, a region reset, a pen and a brush made from
      * their LOG structures, an Arc and a Pie, and the metafile calls that
      * answer 0 where no metafile exists --- */

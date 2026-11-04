@@ -2118,7 +2118,7 @@ w16u_fsr:
     ret
 
 ; -----------------------------------------------------------------------------
-; The calls Visual Basic 3.0 imports (SPEC.md 124.25.13)
+; The calls Visual Basic 3.0 imports (SPEC.md 124.25.14)
 ; -----------------------------------------------------------------------------
 
 ; OffsetWindowOrg (GDI.15) - args: +0 y, +2 x, +4 hDC: SetWindowOrg of the
