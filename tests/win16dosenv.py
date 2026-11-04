@@ -10,8 +10,10 @@ being closed with a protection fault in the library's C start-up.*
 DOSENV.EXE (tests/win16/dosenv.c, `make win16fixtures`) asks for the
 environment and checks that the answer's offset is 0 and its selector is
 readable (the start-up's own `or ax,ax / jz / mov dx,ax / mov es,dx` loads
-one that exists), that the list ends at a double NUL followed by the word 1,
-and that a second call answers the same block. Its MessageBox, read off the
+one that exists), that the list ends at a double NUL followed by the word 1
+and the program's own path, that the C runtime's getenv() finds windir and
+TEMP (the Windows directory) and a PATH naming it, that the PSP's word 2Ch
+holds the selector, and that a second call answers the same block. Its MessageBox, read off the
 program's stack, is "DOSENV OK" or names each check that failed.
 """
 import argparse

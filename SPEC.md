@@ -237360,26 +237360,53 @@ of the family (`MSGBLAST.VBX`, `PICCLIP.VBX`) read the answer the other way roun
 
 Windows answers the task's environment as a pointer whose offset is **0** and
 whose selector is DX. That one answer satisfies both readings, so WIN16 now
-gives it:
+gives it, and gives it the Windows session's environment rather than an
+empty one, because the C run-times read it: Microsoft C's Windows start-up
+copies it into `environ`, and Open Watcom's `getenv()` calls
+`GetDOSEnvironment` for it (a program whose only use of it is `getenv`
+imports `KERNEL.131`). An installer reads `TEMP` and `PATH` through them.
 
-- the block is a `GlobalAlloc` block of 32 bytes, fixed, zero-filled, made at
-  the task's first ask and owned by it (`w16_gmine`: freed when the task
-  ends); `[w16_envp]` holds its data paragraph, 2 bytes of the image's bss;
-- its contents are the empty environment: NUL NUL (the list ends at once), a
-  word of 1 (the count of strings that follow, as DOS 3 and Windows put it)
-  and an empty program path;
+**There is no DOS environment to copy.** WIN16 is a package: DOS.O88 hands
+it an NE through `OSAPI_PKG_START`'s document arm (§124.3) and a
+double-click never runs DOS at all (§124.3.1), so the rows of DOS's
+environment page (§96.20), which are that window's own, reach no Windows
+program; the PSP WIN16 builds has word 2Ch 0. So the variables are the
+Windows session's, each a fact WIN16 already answers elsewhere:
+
+| variable | value | which is |
+|---|---|---|
+| `windir` | `X:\SYSTEM\APPDATA\WIN16` | `GetWindowsDirectory` (§124.20.5); Windows adds `windir` itself |
+| `TEMP`, `TMP` | the same | where `GetTempFileName` makes its files (§124.21.3) |
+| `PATH` | it, `;`, and its `SYSTEM` folder | where WIN16 looks for a program and a library (§124.20.5.1) |
+
+then the NUL that ends the list, the word 1 (the count of strings after it,
+as DOS 3 and Windows put it) and the program's full path, `GetModuleFileName`'s
+answer for the program (`C:\MOZART\MOZART.EXE`). No `COMSPEC`: there is no
+`COMMAND.COM` on the machine, and os8088's DOS does not set one for its own
+programs either.
+
+- the block is a `GlobalAlloc` block of 288 bytes (151 of variables, room for
+  a 136-character path), fixed, zero-filled, made at the task's first ask
+  and owned by it (`w16_gmine`: freed when the task ends);
+- `[w16_envp]` holds its data paragraph, in a range of `w16_ctxtab`
+  (§124.28.2), so each task has its own: one bss word for every task, where
+  one word for all of them would make a new block at every ask after another
+  task's;
 - the answer is DX = the block's selector (kern_mega: `w16_pblk`, the
-  program's handle descriptor for it; real mode: its paragraph) and AX = 0;
-- a cached block is used again only while it is still a block (its header's
-  magic), the current task's, and still holds the word 1 - the block of a
-  task that ended is made again for the next;
+  program's handle descriptor for it; real mode: its paragraph) and AX = 0,
+  and the same selector goes into the PSP's word 2Ch, where Windows keeps it
+  and a DOS-style start-up looks (from the first ask: a program that reads
+  2Ch before it, or never asks, still finds 0);
+- a cached block is used again only while it is still a used block (its
+  header's magic and flag), the current task's, and begins with `wi`;
 - no block to be had: DX:AX = NULL, which the same start-up tests for.
 
-**What it costs**, `win16.o88`, kern_mega arm: +2 bytes of bss (`w16_envp`),
-the code is in part 10 (`.w16tsk`) where `w16i_dosenv` already was.
-**Not done:** the Windows environment's real strings (`PATH=`, `TEMP=`) and
-the program's path after the count: a program that asks `GetDOSEnvironment`
-for them finds none; none has so far.
+**What it costs**, `win16.o88`: +2 bytes of bss (`w16_envp`), the code and
+the table in part 10 (`.w16tsk`) where `w16i_dosenv` already was, the path
+through the library part's `GetModuleFileName`. Measured with `lheap` under
+it against the plan branch at af096659a, image + bss: kern_mega arm 37,963 +
+26,339 = 64,302 before, 37,990 + 26,341 = 64,331 after (+29: `lheap`'s 27 of
+image, this item's 2 of bss); real-mode arm 63,460 before, 63,489 after.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -238075,7 +238102,7 @@ Both programs import, besides MDI:
 | `InquireSystem` (SYSTEM.1) | 0: the timer's period, 54,925 µs. 1: the drive's type in both words, as Wine's `system.drv16` answers. File Manager lists the drives whose answer is not 0. SYSTEM joins the modules WIN16 knows by name |
 | `GetHeapSpaces` | DX the heap, 65,500, and AX its free part, scaled from `GetFreeSystemResources(0)`. Program Manager's About box shows the ratio |
 | `DirectResAlloc` | a moveable block of the size asked, as `GlobalAlloc` gives |
-| `GetDOSEnvironment` | an empty environment as Windows answers it, SELECTOR:0 (DX the selector, AX = 0), in a 32-byte block of global memory the task owns (SPEC.md 124.25.21) |
+| `GetDOSEnvironment` | the Windows session's environment as Windows answers it, SELECTOR:0 (DX the selector, AX = 0): `windir`, `TEMP`, `TMP` and `PATH`, then the count 1 and the program's path, in a block of global memory the task owns, its selector also in the PSP's word 2Ch (SPEC.md 124.25.21) |
 | `LongPtrAdd` | real mode's answer: the pointer moved on by the count, normalised |
 | `GetNumTasks` | 1, until S21 |
 | `ExitWindows` | the program ends, as `PostQuitMessage(0)` ends it, and the call answers FALSE. A setup's `EW_RESTARTWINDOWS` (42h) or `EW_REBOOTSYSTEM` (43h) also puts up a toast, *No restart is needed* (§124.33.3) |

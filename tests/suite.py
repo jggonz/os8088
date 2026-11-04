@@ -17183,8 +17183,10 @@ SOAK = [
         "task's environment: the offset must be 0, the selector readable (a C "
         "start-up that loads a nonzero AX into ES faulted Mozart's "
         "SPUSH.VBX), the list must end at a double NUL followed by the word "
-        "1, and a second call must answer the same block; its MessageBox "
-        "must be DOSENV OK",
+        "1 and the program's own path (GetModuleFileName's), getenv() must "
+        "find windir and TEMP equal to GetWindowsDirectory and PATH naming "
+        "it, the PSP's word 2Ch must hold the selector, and a second call "
+        "must answer the same block; its MessageBox must be DOSENV OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),

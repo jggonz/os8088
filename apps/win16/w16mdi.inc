@@ -124,13 +124,19 @@ W16TSK w16i_dresalloc
 ; GetDOSEnvironment (KERNEL.131) - no args. Windows answers the task's
 ; environment as SELECTOR:0 (DX the selector, AX = 0): a library's C start-up
 ; reads it either way round (`or ax, ax / jz / mov dx, ax` loads AX into ES,
-; which a part's own offset faults), and scans it from offset 0 to the
-; double NUL. A program WIN16 starts has no environment (its PSP's word 2Ch
-; is 0), so the block is an empty one - NUL NUL, a word 1 and the program's
-; path an empty string - in a 32-byte GlobalAlloc block the task owns (freed
-; with it) and is made at the first ask (SPEC.md 124.25.21). [w16_envp] is
-; its data paragraph; a block that is not still the current task's, with the
-; word 1 in it, is made again
+; which a part's own offset faults), scans it from offset 0 to the double
+; NUL, and Open Watcom's getenv() reads it the same way. A program WIN16
+; starts is given no DOS environment (WIN16 is a package, and DOS's rows are
+; its own window's), so the block holds the Windows session's own: windir,
+; TEMP and TMP (the Windows directory, where GetTempFileName makes its files)
+; and PATH (that directory and SYSTEM in it, where WIN16 looks for programs
+; and libraries), the double NUL, the word 1 and the program's full path,
+; GetModuleFileName's. It is a GlobalAlloc block the task owns (freed with
+; it), made at the first ask (SPEC.md 124.25.21), its selector put in the
+; PSP's word 2Ch as Windows has it. [w16_envp], a task's own (w16_ctxtab), is
+; its data paragraph; a block that is not still the current task's, beginning
+; with "wi", is made again
+W16_ENVSZ   equ 288                 ; 151 of variables, 137 of path
 W16TSK w16i_dosenv
     mov ax, [w16_envp]
     or ax, ax
@@ -140,16 +146,18 @@ W16TSK w16i_dosenv
     inc ax
     cmp word [es:GH_MAGIC], GH_SIG
     jne .make
+    test byte [es:GH_FLAGS], GHF_USED
+    jz .make
     mov dl, [w16_cur]
     inc dl
     cmp [es:GH_TASK], dl
     jne .make
     W16SEG es, ax
-    cmp word [es:2], 1
+    cmp word [es:0], 'wi'
     je .have
 .make:
     xor dx, dx
-    mov ax, 32
+    mov ax, W16_ENVSZ
     mov cl, GMEM_ZEROINIT           ; fixed: its handle is its paragraph
     ICALL w16_gnew                  ; AX = DX = the data, 0 none
     or ax, ax
@@ -157,18 +165,90 @@ W16TSK w16i_dosenv
     mov dx, ax
     ICALL w16_gmine
     mov [w16_envp], ax
+    push si
+    push di
     W16SEG es, ax
-    mov word [es:2], 1
+    xor di, di
+    mov si, w16i_envt               ; XSEC-OK: read through cs:
+    cld
+.t:
+    mov al, [cs:si]
+    inc si
+    cmp al, 3
+    ja .ch
+    je .end
+    push si                         ; 1: the Windows directory, its letter
+    cmp al, 1                       ;   first; 2: '\' and its SYSTEM folder
+    mov al, [w16_homev]
+    mov si, w16s_dir
+    je .dir
+    mov al, '\' - 'A'
+    mov si, od_s_system
+.dir:
+    add al, 'A'
+.cp:
+    stosb                           ; ...then the name, to its NUL
+    lodsb
+    or al, al
+    jnz .cp
+    pop si
+    jmp short .t
+.ch:
+    cmp al, '0'                     ; '0': a string's NUL
+    jne .st
+    xor al, al
+.st:
+    stosb
+    jmp short .t
+.end:
+    mov ax, 1                       ; the count of strings after the list
+    stosw
+    mov ax, [w16_envp]
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; the program's selector for it
+%endif
+    push ax
+    push word [w16_pss]             ; GetModuleFileName(0, its:DI, room),
+    push word [w16_psp_]            ;   as a call from the program would
+    xor cx, cx
+    push cx                         ; hModule 0: the program's
+    push ax
+    push di
+    mov cx, W16_ENVSZ
+    sub cx, di
+    push cx
+    mov [w16_pss], ss
+    mov [w16_psp_], sp
+    sub word [w16_psp_], W16F_ARGS
+    SLCALL w16k_getmodfn
+    add sp, 8
+    pop word [w16_psp_]
+    pop word [w16_pss]
+    W16SEG es, [w16_psp]            ; where a DOS-style start-up looks
+    pop ax
+    mov [es:0x2C], ax
+    pop di
+    pop si
+    jmp short .sel
 .have:
 %ifdef PKG_MEGA
     ICALL w16_pblk                  ; the program's selector for it
 %endif
+.sel:
     mov dx, ax
     xor ax, ax
     ret
 .none:
     xor dx, dx                      ; NULL: a start-up that tests for it
     ret                             ;   (AX is 0)
+; the variables: 1 is the Windows directory, 2 its SYSTEM folder, '0' a
+; string's end, 3 the table's (after the empty string that ends the list)
+w16i_envt:
+    db 'windir=', 1, '0'
+    db 'TEMP=', 1, '0'
+    db 'TMP=', 1, '0'
+    db 'PATH=', 1, ';', 1, 2, '0'
+    db '0', 3
 
 ; LongPtrAdd (KERNEL.180) - args: +0 dwAdd, +4 lpPtr. Real mode's answer:
 ; the pointer moved on by dwAdd bytes, its offset the low four bits. File
