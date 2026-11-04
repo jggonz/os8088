@@ -10,10 +10,13 @@ CSALIAS.EXE (tests/win16/csalias.c) in C:\\WIN16 and an \\AUTOSTRT link that
 opens it. CSALIAS writes CSALIAS.TXT beside itself and the row reads it:
 
   1. "csalias: 0 wrong": AllocDStoCSAlias and PrestoChangoSelector each give a
-     code selector over the block's bytes, a far call through it returns
-     1234h, PrestoChangoSelector(s, s) flips a window back to data in place,
-     and PrestoChangoSelector onto a selector the program does not own (its
-     CS) answers 0;
+     code selector over the block's bytes (LAR says code), a far call through
+     it returns 1234h; AllocDStoCSAlias of a selector in no claim (over the
+     ROM) is a new code window that FreeSelector gives back;
+     PrestoChangoSelector(s, s) flips a window back to data in place, and
+     (blk, blk) the block's own handle descriptor, ASTEROID's idiom; and
+     PrestoChangoSelector onto a selector the program does not own (its CS)
+     answers 0;
   2. the machine took no fault: no "kern_mega CLOSED" or FATAL line.
 
 Broken on purpose: before 14.142 the far call is a #GP at the data selector
@@ -38,13 +41,6 @@ import os88bochs  # noqa: E402
 B = os.path.join(ROOT, "build")
 FIX = os.path.join(B, "win16", "CSALIAS.EXE")
 FAILS = []
-
-
-def want(cond, what):
-    print("   %s  %s" % ("ok  " if cond else "FAIL", what), flush=True)
-    if not cond:
-        FAILS.append(what)
-    return cond
 
 
 def want(cond, what):
