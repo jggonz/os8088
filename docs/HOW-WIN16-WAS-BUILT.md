@@ -4870,7 +4870,19 @@ call, a data read, a bare `mov es`, a pointer handed to `lstrcpy`,
 `LockSegment`, and a window procedure WIN16 calls) ran after a squeeze of the
 heap that discarded every code segment not in use.
 
-**What was not.** Sir Hangman's engine (see the report). A hardware interrupt
+**Sir Hangman's engine, looked at** (QEMU kern_mega, `SETUP.EXE` from its
+own folder on the hard disk, 150 s). The engine's 25 KB `GlobalAlloc` is no
+longer the wall: six allocations of 24 KB or more, the largest 64 KB, all
+succeeded, four of them in arenas made for them, and the heap ended with
+**240 KB free** (largest run 103 KB), 147 KB of code loaded, 292 KB of data,
+`w16_cnload` 23 and `w16_cndrop` 0. Nothing was discarded because nothing
+had to be: its 64 discardable segments are named by number, each has a
+stable selector, and none is loaded until it is touched (22 were, by the end),
+where §124.26.11 kept all 405 KB from the launch. The textless *Setup* box
+is still there, so the engine meets another wall after it; with 240 KB free
+it is not memory, and it was not chased.
+
+**What was not.** The engine's next wall. A hardware interrupt
 handler of a program is not a case WIN16 has, so the PIC check was not
 exercised by anything but running. FS and GS are not banked by the gate.
 `w16_touch` is wired into `LockSegment`, `GetCodeHandle` and the callback

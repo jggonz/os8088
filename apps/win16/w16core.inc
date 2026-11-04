@@ -464,6 +464,10 @@ w16_thkhit:
 ; -----------------------------------------------------------------------------
 cpu 286
 w16_npent:
+    ; STKBALANCE-OK: far-returned to by the kernel with the CPU's frame on the
+    ; faulting stack. Its program arm pushes the gate's far return (CS and the
+    ; call's IP) onto an iret, and the gate's retf lands there; the other arm's
+    ; iret is the CPU frame's own
     push bp
     push ds
     W16CSDS bp

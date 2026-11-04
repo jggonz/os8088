@@ -12866,6 +12866,10 @@ mega_segty:
 ; mega_fault's, with the frame it expects. Entered by a jump with the CPU's
 ; frame: [error] [IP] [CS] [FLAGS]
 mega_npx:                           ; ovlchk: builds its own far frame
+    ; STKBALANCE-OK: a DISPATCH - the handler's far address is built under the
+    ; CPU's frame (the two slots the first pushes made), and the retf takes
+    ; it with the frame left for the handler to iret; every other path
+    ; unwinds to mega_fault's own entry frame
     push byte 0x0B                  ; mega_fault's vector, or the handler's CS
     push ax                         ; (the handler's offset goes here)
     push bp
