@@ -7,7 +7,7 @@
 ; a program's segments are a claim's base plus offsets - and on kern_mega no
 ; such value can be loaded into a segment register. The arm keeps every sum
 ; and changes what the numbers mean: each claim WIN16 carves is entered in
-; the MAP with a virtual base of its own, first fit in W16V_LO-FFFFh, and a
+; the MAP with a virtual base of its own, first fit in W16V_LO(0300h)-FFFFh, and a
 ; virtual paragraph becomes a selector only where it is loaded:
 ;
 ;   W16SEG es, ax           ; real mode: mov es, ax
@@ -38,6 +38,7 @@
   %substr w16v_n7 w16v_ss 10, 8   ;   name, and the character after it
   %substr w16v_n6 w16v_ss 10, 7
   %substr w16v_n5 w16v_ss 10, 6
+  %substr w16v_n8 w16v_ss 10, 9
   %ifidn w16v_n7, '.w16dlg '
     %define w16v_sx d
   %elifidn w16v_n7, '.w16dlg]'
@@ -50,6 +51,10 @@
     %define w16v_sx q
   %elifidn w16v_n7, '.w16tsk]'
     %define w16v_sx q
+  %elifidn w16v_n8, '.w16rare '
+    %define w16v_sx r
+  %elifidn w16v_n8, '.w16rare]'
+    %define w16v_sx r
   %elifidn w16v_n6, '.w16fp '
     %define w16v_sx f
   %elifidn w16v_n6, '.w16fp]'
@@ -290,8 +295,9 @@ w16_vclaimm:
 
 %ifdef PKG_MEGA
 
-W16V_LO   equ 0x1000            ; the first virtual paragraph: below it are
-                                ;   the moveable handles (W16_GH0)
+W16V_LO   equ 0x0300            ; the first virtual paragraph (W16_GH0 0100h + 2 x
+                                ;   W16_NGH = 0300h, checked in w16mem.inc); below
+                                ;   it are the moveable handles (W16_GH0)
 W16V_N    equ 10                ; map rows: an owner holds at most eight
                                 ;   claims (SPEC.md 50), and two to spare
 W16V_SEL  equ 0                 ; a row: the claim's selector (0 = free)

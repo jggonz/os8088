@@ -252,12 +252,13 @@ class Prog(object):
         return raw.split(b"\0")[0].decode("latin-1")
 
 
-def run_prog(d, ui, sym, S, dw, name, bad, tag, shot=None, want=WANT):
+def run_prog(d, ui, sym, S, dw, name, bad, tag, shot=None, want=WANT, pump=None):
     p = Prog(d, ui, sym, S, name)
     t0 = ticks(d)
     p.launch(dw)
     row = msgrow()
-    d.wait(lambda: p.waiting_msgbox(row), 600, "%s's MessageBox" % name)
+    d.wait(lambda: (pump(p) if pump else None) or p.waiting_msgbox(row), 600,
+           "%s's MessageBox" % name)
     t = ticks(d) - t0
     d.idle(4.0)
     st = p.pb("w16_state")

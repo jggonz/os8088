@@ -356,7 +356,7 @@ w16_dlgres:
     push dx
     push si
     push di
-    mov di, w16_rnamb
+    mov di, w16_rnam
     call w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_DIALOG
@@ -665,10 +665,10 @@ w16d_inval:
 
 ; w16d_notify - BX = a control, AX = a notification: WM_COMMAND to its
 ; parent, POSTED (SPEC.md 124.13): wParam its ID, lParam it and the code.
-; Keeps every register.
+; Inside a program's SetFocus or EnableWindow it is queued to be SENT when
+; that returns (w16d_nfq). Keeps every register.
 w16d_notify:
     push ax
-    push cx
     mov [w16_sm_lp + 2], ax
     ICALL w16_rec2hwnd
     mov [w16_sm_lp], ax
@@ -677,36 +677,76 @@ w16d_notify:
     mov word [w16_sm_msg], WM_COMMAND
     mov ax, [bx + W16W_MENU]
     mov [w16_sm_wp], ax
-    cmp byte [w16_nfdefer], 0       ; inside a program's SetFocus: sent when
-    jne .defer                      ;   it returns (SPEC.md 124.22.6)
-.post:
+    call w16d_nfq                   ; inside a program's SetFocus: sent when
+    jnc .out                        ;   it returns (SPEC.md 124.22.6)
     xor al, al
     ICALL w16_post
 .out:
-    pop cx
     pop ax
     ret
-.defer:
-    mov cl, [w16_nfn]
-    cmp cl, 2
-    jae .post
-    inc byte [w16_nfn]
+
+; w16d_tell - w16_tellfocus's (DCALL): BX = a window, [w16_sm_*] a
+; WM_KILLFOCUS, WM_SETFOCUS or WM_ENABLE to it, lParam 0, and CF as
+; w16_isctl answered. One of WIN16's controls whose procedure is still
+; WIN16's (CF=0) is told at once, a dialog not at all; a program's procedure
+; - its own window's, or a control's it replaced (a superclass, a subclass)
+; - is queued to be SENT when the program's SetFocus or EnableWindow returns
+; (w16d_nfq), and anywhere else CF=1: the image posts it (SPEC.md
+; 124.25.20). Keeps every register.
+w16d_tell:
+    jnc .ctl
+    cmp byte [bx + W16W_KIND], W16Q_DIALOG
+    je .out                         ; (CF=0 from the compare)
+    call w16d_nfq
+.out:
+    retf
+.ctl:
+    push ax
+    push cx
+    push dx
+    ; STKBALANCE-OK: push cs and a near call are a far call, and
+    ; w16d_ctlproc ends in retf
+    push cs
+    call w16d_ctlproc
+    pop dx
+    pop cx
+    pop ax
+    clc
+    retf
+
+; w16d_nfq - [w16_sm_*] queued for w16_nfsend, which SENDS each in order
+; when the program's SetFocus or EnableWindow returns (SPEC.md 124.22.6,
+; 124.25.20): CF=1 not inside one, or W16_NFMAX are queued already (post it
+; instead). Keeps every register.
+w16d_nfq:
+    cmp byte [w16_nfdefer], 1
+    jb .ret                         ; CF=1: not inside one
+    push ax
     push di
-    mov di, cx
-    and di, 0xff
-    shl di, 1
-    shl di, 1
-    shl di, 1
+    mov al, [w16_nfn]
+    cmp al, W16_NFMAX
+    cmc
+    jc .out                         ; CF=1: full
+    inc byte [w16_nfn]
+    mov ah, W16_NFSZ
+    mul ah
+    mov di, ax
     mov ax, [w16_sm_hwnd]
     mov [w16_nfq + di], ax
-    mov ax, [w16_sm_wp]
+    mov ax, [w16_sm_msg]
     mov [w16_nfq + di + 2], ax
-    mov ax, [w16_sm_lp]
+    mov ax, [w16_sm_wp]
     mov [w16_nfq + di + 4], ax
-    mov ax, [w16_sm_lp + 2]
+    mov ax, [w16_sm_lp]
     mov [w16_nfq + di + 6], ax
+    mov ax, [w16_sm_lp + 2]
+    mov [w16_nfq + di + 8], ax
+    clc
+.out:
     pop di
-    jmp short .out
+    pop ax
+.ret:
+    ret
 
 ; w16d_popen - BX = a control: BeginPaint's DC on it, its invalid part made
 ; valid - or, for a WM_PAINT whose wParam is a DC the program opened on it
@@ -4731,20 +4771,18 @@ w16d_focusin:
     ret
 
 ; w16d_cmsg - BX = a control, CX = a message, DX = wParam, SI:DI = lParam:
-; sent at once if it is one of WIN16's (it never calls the program) ->
-; DX:AX. 0 for any other window. Keeps BX, SI, DI.
+; WIN16's procedure for its kind, at once (it never calls the program) ->
+; DX:AX; 0 for a program's own window or a dialog. A control whose
+; procedure a program replaced (a superclass, a subclass) is answered by the
+; control under it, so the dialog manager's WM_GETDLGCODE, its Tab's
+; EM_SETSEL and CheckDlgButton/IsDlgButtonChecked/CheckRadioButton reach
+; the control and not 0 (SPEC.md 124.25.20). Keeps BX, SI, DI.
 w16d_cmsg:
-    ICALL w16_isctl
-    jc .no
     mov [w16_sm_msg], cx
     mov [w16_sm_wp], dx
     mov [w16_sm_lp], di
     mov [w16_sm_lp + 2], si
     ICALL w16_intproc
-    ret
-.no:
-    xor ax, ax
-    xor dx, dx
     ret
 
 ; w16d_fcode - BX = a control or 0 -> AX = its WM_GETDLGCODE. Keeps BX.
@@ -5576,10 +5614,7 @@ w16d_mkitem:
     jnc .bi
     ICALL w16_findcls               ; ...or a class the program registered,
     jc .refuse1                     ;   made as CreateWindow makes one
-    mov ax, bx                      ;   (SPEC.md 124.22.12)
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]               ;   (SPEC.md 124.22.12)
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -5736,10 +5771,7 @@ w16d_mkdlg:
     jc .fail
     ICALL w16_findcls               ; BX = the class
     jc .fail
-    mov ax, bx
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -5854,10 +5886,8 @@ w16d_ownwin:
     mov al, [bx + W16W_CLS]         ; the class's, by name
     cmp al, 0xFF
     je .size
-    mov ah, W16C_SIZE
-    mul ah
+    ICALL w16_clsget
     mov di, ax
-    add di, w16_cls
     mov ax, [di + W16C_MENU]
     mov dx, [di + W16C_MENU + 2]
     mov cx, ax

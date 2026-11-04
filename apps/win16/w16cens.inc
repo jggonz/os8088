@@ -795,6 +795,22 @@ w16c_far:
     mov cx, ds                      ; the stubs' segment: the image's
     cmp dx, cx
     je .import
+    cmp dx, [w16_cthk]              ; a thunk (SPEC.md 124.26.14): the
+    jne .segs                       ;   segment and offset it names, which
+    push es                         ;   a far call's site no longer holds
+    mov es, dx
+    mov bx, ax
+    mov ax, [es:bx + W16TK_OFF]
+    mov bl, [es:bx + W16TK_SEG]
+    pop es
+    xor bh, bh
+    dec bx
+    cmp bx, [w16_nseg]              ; (0 or past them: nothing)
+    jae .ret
+    shl bx, 1
+    call w16c_push
+    jmp short .ret
+.segs:
     xor bx, bx
 .seg:
     cmp [w16_sbase + bx], dx

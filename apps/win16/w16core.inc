@@ -268,9 +268,7 @@ w16_dispatch:
     and al, ~W16B_DCF & 0xFF
     jz .image
     cmp al, W16P_SYS
-    je .sys
-    cmp al, W16P_TSK
-    je .tsk
+    jae .part
     mov ax, [bx + W16B_PROC]
     mov [w16_lfn], ax
     call w16_dlgin
@@ -278,22 +276,27 @@ w16_dispatch:
     mov ax, [w16_nargb]
     call far [w16_lbv]
     ret
-.sys:                               ; the system-library part (124.24.1)
-    mov ax, [bx + W16B_PROC]
-    mov [w16_sfn], ax
-    call w16_sysin
-    jc .nolib
+.part:                              ; the system parts, 9 to 11 (124.25.16):
+    push si                         ;   one path by the part's block of bss
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    add si, w16_sseg - W16P_SYS * 8 ; SI = the block, AL = the part
+    push word [bx + W16B_PROC]
+    pop word [si + 6]               ; its routine
+    call w16_ptin
+    jc .nopart
     mov ax, [w16_nargb]
-    call far [w16_sbv]
+    call far [si + 2]
+    pop si
     ret
-.tsk:                               ; the task part (124.28.13)
-    mov ax, [bx + W16B_PROC]
-    mov [w16_tfn], ax
-    call w16_tskin
-    jc .nolib
-    mov ax, [w16_nargb]
-    call far [w16_tbv]
-    ret
+.nopart:                            ; it could not be had: a part 9 or 10
+    pop si                          ;   import ends the program, saying why,
+    cmp al, W16P_RARE               ;   and a rare one answers 0, its FAILURE
+    je .zero                        ;   - FALSE, NULL - as a call Windows had
+    jmp short .nolib                ;   no memory for does (124.25.16)
 .image:
     mov ax, [w16_nargb]
     jmp [bx + W16B_PROC]
@@ -336,6 +339,7 @@ w16_dispatch:
     mov byte [w16_state], W16S_ENDED
     pop di
     pop si
+.zero:
     xor ax, ax
     cwd
     ret

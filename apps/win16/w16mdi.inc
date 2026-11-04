@@ -237,9 +237,10 @@ w16i_atomat:
     push ax
     push si
     push di
-.c:
-    mov al, [es:di]
-    call w16i_up
+    mov cx, 31                      ; a name is kept cut to 31, so 31 the
+.c:                                 ;   same is the same name: a longer one
+    mov al, [es:di]                 ;   found again, not added again (and
+    call w16i_up                    ;   the table filling with copies)
     mov ah, al
     mov al, [si]
     call w16i_up
@@ -248,7 +249,9 @@ w16i_atomat:
     inc si
     inc di
     or al, al
-    jnz .c
+    jz .eq
+    loop .c
+.eq:
     pop di
     pop si
     pop ax
@@ -1238,10 +1241,9 @@ w16i_icon:
     pop cx
     jc .out
     mov al, [bx + W16W_CLS]         ; its class's icon
-    mov ah, W16C_SIZE
-    mul ah
+    ICALL w16_clsget
     mov si, ax
-    mov ax, [si + w16_cls + W16C_ICON]
+    mov ax, [si + W16C_ICON]
     or ax, ax
     jnz .draw
     push ax                         ; none: a program's own child paints
@@ -4197,12 +4199,10 @@ W16TSK w16u_getclsw
     mov ax, [es:bx + 2]
     ICALL w16_hwnd2rec              ; BX = its record; keeps CX
     jc .zero
-    cmp byte [bx + W16W_KIND], 0
-    jne .zero
-    mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    mov al, [bx + W16W_CLS]         ; the program's classes, a superclass's
+    cmp al, 0xFF                    ;   control among them (124.25.18)
+    je .zero
+    ICALL w16_clsget
     mov si, ax
     xor dx, dx
     cmp cx, GCW_STYLE
@@ -4244,8 +4244,8 @@ W16TSK w16u_getclsw
 .n7:
     cmp cx, GCW_ATOM
     jne .zero
-    mov ax, si                      ; the atom GetClassInfo takes: 0C000h
-    sub ax, w16_cls                 ;   and the record's offset
+    mov al, [w16_cbi]               ; the atom GetClassInfo takes: 0C000h
+    xor ah, ah                      ;   and the class's index
     add ax, 0xC000
     jmp short .out
 .zero:

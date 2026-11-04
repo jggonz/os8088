@@ -52,6 +52,9 @@ ME_UINS  equ W16W_EXTRA + 10    ;   what it put in (bytes),
 ME_UBLK  equ W16W_EXTRA + 12    ;   what it took out (a USER heap block,
 ME_UDEL  equ W16W_EXTRA + 14    ;   0 none) and how much
 ME_FL2   equ W16W_EXTRA + 16    ; MEF_*
+ME_XTRA  equ ME_FL2 + 2 - W16W_EXTRA ; ...so "Edit"'s cbWndExtra is 18: a
+                                ;   superclass's own words follow these
+                                ;   (GetClassInfo, SPEC.md 124.25.18)
 MEF_USER   equ 1                ; the text is in WIN16's USER heap
 MEF_NODRAW equ 2                ; WM_SETREDRAW FALSE
 MEF_UNDO   equ 4                ; a step to undo

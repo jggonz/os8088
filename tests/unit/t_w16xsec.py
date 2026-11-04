@@ -55,7 +55,7 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-PARTS = (".w16dlg", ".w16fp", ".w16ld", ".w16sys", ".w16tsk")
+PARTS = (".w16dlg", ".w16fp", ".w16ld", ".w16sys", ".w16tsk", ".w16rare")
 DSELF = (".w16fp",)     # parts that run with DS = their OWN segment: the 8087
                         # emulator (w16fp.inc), so rule 3 does not apply
 MACROS = ("dcall", "lcall", "icall", "scall", "slcall", "tcall",
@@ -279,7 +279,8 @@ def rows(binfile, syms, where):
     for k, h in enumerate(names):
         part, proc = struct.unpack_from("<BH", data, at + 7 * k + 4)
         sec = syms.get(h)
-        want = {".text": 0, ".w16dlg": 3, ".w16sys": 9, ".w16tsk": 10}.get(sec)
+        want = {".text": 0, ".w16dlg": 3, ".w16sys": 9, ".w16tsk": 10,
+                ".w16rare": 11}.get(sec)
         if want is None:
             out.append("row %d (%s): its handler is in %s, which no row can name" % (k, h, sec))
         elif part & 0x0F != want or proc != where[h][1]:
