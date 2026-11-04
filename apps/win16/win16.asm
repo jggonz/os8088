@@ -411,6 +411,7 @@ section .w16dlg
     W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
     W16BSS w16_old2f, 4         ; ...and int 2Fh, the multiplex (124.2.1)
+    W16BSS w16_cdvol, 1         ; the CD's volume + 1, 0 = none: 15xxh (124.33.3)
     W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
     W16BSS w16_ldq, 1           ; 1 = the load's wake was deferred (124.31.8)
 %ifdef PKG_MEGA
@@ -1271,6 +1272,15 @@ w16_entry:
     call OSAPI_WM_ONTIMER
     mov word [w16_titleptr], w16_name
     call w16_cputest                ; [w16_cpu186]: once, before anything runs
+    push es                         ; the CD's volume, for int 2Fh 15xxh (124.33.3)
+    xor di, di
+    mov bx, DRVC_CD * 256 + 1       ; CDV_DRIVE (cdpkg.inc, which real mode has no part to include)
+    call OSAPI_DRV_CALL
+    pop es
+    jc .nocd
+    inc dl
+    mov [w16_cdvol], dl
+.nocd:
     call OSAPI_ARG_FILE             ; CF=1: launched empty
     jc .idle
     mov [w16_dir], dx
