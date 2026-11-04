@@ -84,9 +84,7 @@ with tempfile.TemporaryDirectory() as t:
         ok(False, "a fifth character is refused")
     except ValueError:
         ok(len(pr.d["characters"]) == 4, "a fifth character is refused")
-    ok(any(x.level == "INFO" and x.where == "characters"
-           for x in pr.check()),
-       "3 or 4 characters are said to be not played yet")
+    ok(not pr.errors(), "4 characters are a battle the engine plays")
 
     # 4
     before = P.Project.load(j("full.vbp")).d

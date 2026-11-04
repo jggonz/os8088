@@ -23,14 +23,15 @@ Commands:
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
 
-Format version 4 (SPEC.md 125.2), little-endian:
+Format version 5 (SPEC.md 125.2), little-endian:
     0             the header
-    512           the clip table, 48 bytes a clip
-    2048          the battle script
+    512           the clip table, 48 bytes a clip, at most 64
+    4096          the RULES (tools/vbtrules.py, SPEC.md 125.6), to 16 KB
     then, each on 4 KB: the VIDEO RESIDENT block (the idle loop, every
                   clip's anchor table), the MUSIC (streamed), the MENU's
                   effects (resident), the ENTRIES (resident, any length,
-                  each on a paragraph and named by it), and each clip's
+                  each on a paragraph and named by it), the band's
+                  IMAGES (resident), and each clip's
                   STREAM - its records, each carrying its frame's sound;
                   any length, streamed
 """
@@ -46,7 +47,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 4
+VERSION = 5
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
@@ -55,13 +56,13 @@ REGION_MAX = 60 * 1024  # a RESIDENT region is read into one claim's piece
 ENT_MAX = 0x10000 * 16   # the entries: a paragraph number names each
 REC_MAX = 16384     # a record is read contiguously out of a clip's ring, so
                     # it is at most the ring's guard (VB_CGUARD, 125.4)
-MAX_CLIPS = 32
+MAX_CLIPS = 64
 MAX_OPEN = 8
 MAX_ANCH = 16
 CLIP_TAB = 512
 CLIP_SZ = 48
-SCRIPT_AT = 2048
-META = 4096         # the header, the clip table and the script: one read
+SCRIPT_AT = 4096
+META = 16384        # the header, the clip table and the RULES: one read
 MAX_SFX = 16
 MUSIC_MAX = 512 * 1024 * 1024   # (a 32-bit length; the engine streams it)
 MUSIC_RES = 61440   # music this short the engine holds resident (VB_MRES)
@@ -75,9 +76,6 @@ CF_OPENING = 16     # one of the openings, played in turn before the battle
 
 NO_SFX = 0xFF
 
-# the script's command kinds
-K_HIT = 0           # damage the enemy
-K_HEAL = 1          # heal the whole party
 
 # the menu's sounds, header bytes 24..28 (125.2.1)
 UI_SOUNDS = ("move", "open", "close", "take", "deny")
@@ -207,7 +205,8 @@ class Battle:
         self.ui = {}            # a UI_SOUNDS name -> an effect's name
         self.band = (0, 142, 40, 58)    # cells across, rows down, cells, rows
         self.canvas = (0, 0, 320, 142)  # pixels
-        self.script = None      # dict
+        self.rules = None       # the RULES block (vbtrules.compile_rules)
+        self.images = b""       # the band's pictures, back to back
 
 
 def build(b):
@@ -322,11 +321,14 @@ def build(b):
         raise ValueError("the menu's effects are %d bytes" % len(uib))
 
     # --- lay the file out
-    vres_at = META
+    meta_len = SCRIPT_AT + len(pad(b.rules, ALIGN))   # (8 KB to META)
+    vres_at = meta_len
     mus_at = vres_at + len(pad(vres, ALIGN))
     ui_at = mus_at + len(pad(mus, ALIGN))
     ent_at = ui_at + len(pad(uib, ALIGN))
-    pos = ent_at + len(pad(ents, ALIGN))
+    img_at = ent_at + len(pad(ents, ALIGN))
+    imgs = bytes(b.images)
+    pos = img_at + len(pad(imgs, ALIGN))
     offs = []
     for r in regions:
         offs.append(pos)
@@ -353,11 +355,14 @@ def build(b):
         raise ValueError("%d openings" % len(opens))
     h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
     struct.pack_into("<II", h, 88, ent_at, len(ents))
+    struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
         h[192 + 8 * i:200 + 8 * i] = nm.upper().encode()[:8].ljust(8, b" ")
 
     ct = bytearray(SCRIPT_AT - CLIP_TAB)
+    if len(clip_rows) * CLIP_SZ > len(ct):
+        raise ValueError("%d clips" % len(clip_rows))
     for i, c in enumerate(clip_rows):
         at = i * CLIP_SZ
         struct.pack_into("<IIHHHHH", ct, at, offs[i], len(regions[i]),
@@ -365,49 +370,16 @@ def build(b):
                          len(c["anch"]))
         ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
 
-    names = [c["name"] for c in clip_rows]
-    sc = script_bytes(b, names)
-    meta = bytearray(h) + ct + sc
+    meta = bytearray(h) + ct + bytes(b.rules)
+    assert len(meta) <= META
+    meta = bytes(meta).ljust(meta_len, b"\0")    # (as long as its rules)
     assert len(meta) <= META
     out = pad(meta, ALIGN) + pad(vres, ALIGN) + pad(mus, ALIGN) + \
-        pad(uib, ALIGN) + pad(ents, ALIGN)
+        pad(uib, ALIGN) + pad(ents, ALIGN) + pad(imgs, ALIGN)
     for r in regions:
         out += pad(r, ALIGN)
     assert len(out) == total
     return bytes(out)
-
-
-def script_bytes(b, names):
-    """The battle script (SPEC.md 125.2.4): 512 bytes.
-       0  u8 members (<= 2), u8 commands a member (<= 4)
-       2  the enemy: name 10, hp u16, its attack clip u8, damage u16,
-          victory clip u8, defeat clip u8                       (18 bytes)
-       24 a member each, 64 bytes: name 8, hp u16, mp u16 (the most),
-          then 4 commands of 12: label 6, clip u8, kind u8, amount u16,
-          mp u16"""
-    s = b.script
-    out = bytearray(SECTOR)
-    cl = lambda n: names.index(n)
-    out[0] = len(s["party"])
-    out[1] = 4
-    e = s["enemy"]
-    out[2:12] = e["name"].upper().encode()[:10].ljust(10, b" ")
-    struct.pack_into("<HBHBB", out, 12, e["hp"], cl(e["clip"]), e["damage"],
-                     cl(s["victory"]), cl(s["defeat"]))
-    for i, m in enumerate(s["party"]):
-        at = 24 + 64 * i
-        out[at:at + 8] = m["name"].upper().encode()[:8].ljust(8, b" ")
-        struct.pack_into("<HH", out, at + 8, m["hp"], m["mp"])
-        for j in range(4):
-            ca = at + 12 + 12 * j
-            if j < len(m["commands"]):
-                c = m["commands"][j]
-                out[ca:ca + 6] = c["label"].encode()[:6].ljust(6, b" ")
-                struct.pack_into("<BBHH", out, ca + 6, cl(c["clip"]),
-                                 c["kind"], c["amount"], c.get("mp", 0))
-            else:
-                out[ca + 6] = 0xFF
-    return out
 
 
 # --- reading one back -------------------------------------------------------------
@@ -437,6 +409,11 @@ class Bundle:
         self.openings = [x for x in data[80:88] if x != NO_SFX]
         self.ent_at, elen = struct.unpack_from("<II", data, 88)
         self.ents = data[self.ent_at:self.ent_at + elen]
+        self.img_at, ilen = struct.unpack_from("<IH", data, 320)
+        self.imgs = data[self.img_at:self.img_at + ilen]
+        import vbtrules
+        self.meta_len = struct.unpack_from("<H", data, 326)[0]
+        self.rules = vbtrules.Rules(data[SCRIPT_AT:self.meta_len])
         self.ui = [struct.unpack_from("<IH", data, 96 + 6 * i)
                    for i in range(self.nui)]
         self.clips = []
@@ -531,43 +508,8 @@ def verify(data, quiet=False):
 # --- the demo battle --------------------------------------------------------------
 
 def demo(bars=16, floppy=False):
-    import vbtscene as S
-    b = Battle(0x50, S.H, S.FPS, S.RATE)
-    b.idle = S.clip_idle()
-    b.anchors = [0, 6, 12, 18]
-    b.sfx = {n: S.sfx(n) for n in S.SFX + S.UI_SFX}
-    title, _ = S.clip_title()
-    reveal, _ = S.clip_reveal()
-    b.openings = [dict(name="title", frames=title, sound=b.sfx["fanfare"]),
-                  dict(name="reveal", frames=reveal, sound=b.sfx["riser"],
-                       exit=0)]
-    for name, mk, joins in S.CLIPS:
-        if floppy and name == "ari_limit":
-            continue                # (a floppy's battle has no Limit)
-        fr, cues = mk()
-        b.clips.append(dict(name=name, frames=fr, cues=cues, joins=joins,
-                            exit=0, ends=not joins))
-    b.music = S.music(bars=2 if floppy else bars)
-    b.music_at = 0
-    b.ui = dict(move="tick", take="ok", deny="deny")
-    b.script = dict(
-        enemy=dict(name="BEETLE", hp=1200, clip="beetle_attack",
-                   damage=74, victory="victory", defeat="defeat"),
-        party=[
-            dict(name="ARI", hp=320, mp=40, commands=[
-                dict(label="Attack", clip="ari_attack", kind=K_HIT, amount=95),
-                dict(label="Bolt", clip="ari_bolt", kind=K_HIT, amount=180,
-                     mp=10),
-                dict(label="Limit", clip="ari_limit", kind=K_HIT, amount=420,
-                     mp=20)][:2 if floppy else 3]),
-            dict(name="BRAM", hp=260, mp=60, commands=[
-                dict(label="Fire", clip="bram_attack", kind=K_HIT, amount=130,
-                     mp=8),
-                dict(label="Heal", clip="bram_heal", kind=K_HEAL, amount=90,
-                     mp=12)]),
-        ],
-        victory="victory", defeat="defeat")
-    return b
+    """The demo battle: its project (demo_project), as a Battle"""
+    return battle_of(demo_project(None, bars, floppy))
 
 
 # --- a PROJECT (tools/vbtproj.py) built ----------------------------------------------
@@ -613,8 +555,59 @@ def battle_of(proj, progress=None):
         b.music = b.music[lp[0]:lp[1]]
         b.music_at -= lp[0]
     b.ui = dict(d["ui_sounds"])
-    b.script = proj.engine_script()
+    import vbtrules
+    # the clips as the bundle numbers them: the openings first - and a
+    # battle with none gets START at 0 (build) - then the rest
+    opened = b.openings or [dict(name="start")]
+    idx = {c["name"]: i for i, c in enumerate(opened + b.clips)}
+    b.images, places = images_of(proj)
+    b.rules = vbtrules.compile_rules(proj, idx, places)
     return b
+
+
+def images_of(proj):
+    """The project's band pictures (its "images": name, path, col, row,
+    dither) in its palette: CGA4 bytes, two a cell, a row after a row, each
+    on a paragraph of the IMAGES region. Returns (the region, [(col, row,
+    cells, rows, paragraph)])"""
+    out, places = bytearray(), []
+    pal = proj.d["target"]["palette"]
+    for im in proj.d.get("images", []):
+        px = band_picture(proj.here(im["path"]), pal, im.get("dither", True),
+                          im.get("cells"), im.get("rows"))
+        rows, w = px.shape
+        cells = w // 8
+        packed = (px[:, 0::4] << 6) | (px[:, 1::4] << 4) | \
+            (px[:, 2::4] << 2) | px[:, 3::4]
+        while len(out) % 16:
+            out.append(0)
+        places.append((im.get("col", 0), im.get("row", 0), cells, rows,
+                       len(out) >> 4))
+        out += packed.astype(np.uint8).tobytes()
+    return bytes(out), places
+
+
+BAYER4 = np.array([[0, 8, 2, 10], [12, 4, 14, 6], [3, 11, 1, 9],
+                   [15, 7, 13, 5]]) / 16.0 - 0.5
+
+
+def band_picture(path, pal, dither=True, cells=None, rows=None):
+    """A picture file as pixel indexes 0..3 in CGA4 palette PAL, its width
+    a whole number of 8-pixel cells: the nearest of the four colours, after
+    an ordered dither when DITHER (SPEC.md 125.5)"""
+    from PIL import Image
+    import vbtana as A
+    im = Image.open(path).convert("RGB")
+    w = (cells * 8) if cells else max(8, im.width // 8 * 8)
+    h = rows or im.height
+    im = im.resize((w, h), Image.LANCZOS)
+    x = np.asarray(im, np.float32)
+    cols = np.array(A.palette_rgb(pal), np.float32)
+    if dither:
+        y, xx = np.mgrid[0:h, 0:w]
+        x = x + BAYER4[y % 4, xx % 4][..., None] * 96
+    dd = ((x[:, :, None, :] - cols[None, None]) ** 2).sum(-1)
+    return dd.argmin(-1).astype(np.uint8)
 
 
 def build_project(proj, progress=None):
@@ -658,7 +651,10 @@ def demo_project(path, bars=16, floppy=False):
             continue
         fr, cues = mk()
         p.add_source(name, scene=name)
-        p.add_clip(name, name, (0, len(fr) - 1), anchors=(0, 6, 12, 18),
+        # (the floppy's: two join points a clip, not four - its entries are
+        # half the bytes, and a command waits 0.8 s at most, not 0.4)
+        p.add_clip(name, name, (0, len(fr) - 1),
+                   anchors=(0, 12) if floppy else (0, 6, 12, 18),
                    exit=0, joins=joins, ends=not joins,
                    cues=[{"frame": f, "sound": c, "level": 1.0}
                          for f, c in cues.items()])
@@ -689,7 +685,8 @@ def demo_project(path, bars=16, floppy=False):
     p.enemy_move("lunge")
     p.set(("enemy", "victory"), "victory")
     p.set(("enemy", "defeat"), "defeat")
-    p.save(path)
+    if path:
+        p.save(path)
     return p
 
 

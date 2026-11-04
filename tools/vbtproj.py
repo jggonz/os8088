@@ -30,7 +30,25 @@ A project file (version 1):
                      "evade", "menu": {"top": [ITEM], "side": [action]}}],
                    ITEM = {"action": id} | {"label", "sub": [action ids]},
      "actions":  {id: ACTION} - section 11's verbs (ACTION_KEYS),
-     "enemy":    {"name", stats, "stances": [STANCE], "victory", "defeat"}}
+     "enemy":    {"name", stats, "stances": [STANCE], "victory", "defeat",
+                  "start_stance"},
+     "items":    [{"name", "count"}] - the party's, for an action's cost,
+     "images":   [{"name", "path", "col", "row", "dither"}] - band pictures,
+     "band_image": an image's name, under the whole band, or null,
+     "menu_looks": {"CHAR:top" | "CHAR:LABEL" | "CHAR:side": {"image",
+                  "col", "row", "pitch", "ink", "cursor"}},
+     "seed":     null (the clock's) or a number: the battle the same every
+                 time (a test's)}
+
+    ACTION = {"label", "target" (TARGETS), "cost": {"mp": n} | {"item":
+              name, "n": n} | {"limit": true} | {}, "accuracy" (%),
+              "effects": [{"verb", ...}] (vbtrules.compile_rules says which
+              fields each verb reads), "pools": {POOL: [clips]},
+              "by_target": {character name: {POOL: [clips]}}}
+    STANCE = {"name", "modifiers": {"atk"|"mag"|"def"|"mdef": %},
+              "moves": [{"action", "weight", "rule", "target"}],
+              "responses": [{"trigger", "named", "chance", "action"}],
+              "auto": {"kind", "arg", "to", "via"}, "return": action}
 
 Frames are the battle's frames (fps): a clip's "in" and "out" are its
 first and last, inclusive, counted in the source as the encoder decodes it.
@@ -66,7 +84,8 @@ def blank():
                    "band": [0, 142, 40, 58]},
         "sources": {}, "sounds": {}, "music": None,
         "ui_sounds": {}, "idle": None, "clips": {}, "openings": [],
-        "characters": [], "actions": {},
+        "characters": [], "actions": {}, "items": [], "images": [],
+        "menu_looks": {}, "band_image": None, "seed": None,
         "enemy": {"name": "ENEMY", "hp": 100, "mp": 0, "atk": 16, "mag": 16,
                   "def": 0, "mdef": 0, "evade": 0,
                   "stances": [{"name": "normal", "moves": [],
@@ -370,6 +389,8 @@ class Project:
         for st in self.d["enemy"]["stances"]:
             used += [m["action"] for m in st["moves"]]
             used += [r["action"] for r in st.get("responses", [])]
+            used += [x for x in (st.get("return"),
+                                 (st.get("auto") or {}).get("via")) if x]
         return used
 
     def clips_used(self):
@@ -486,7 +507,7 @@ class Project:
                     if cl not in d["clips"]:
                         err(w, "pool %s: no clip %s" % (pk, cl))
             if not a["pools"].get("hit"):
-                err(w, "no HIT clip")
+                warn(w, "no HIT clip: it happens at once, with no picture")
         for aid in self.actions_used():
             if aid not in d["actions"]:
                 err("menus", "no action %s" % aid)
@@ -508,84 +529,50 @@ class Project:
         for cid in d["clips"]:
             if cid not in self.clips_used():
                 warn("clips." + cid, "no action, opening or ending uses it")
+        for it in d.get("items", []):
+            if not it.get("name"):
+                err("items", "an item with no name")
+        names = [im["name"] for im in d.get("images", [])]
+        for im in d.get("images", []):
+            if self.path and not os.path.exists(self.here(im["path"])):
+                err("images." + im["name"], "%s is missing" % im["path"])
+        if d.get("band_image") and d["band_image"] not in names:
+            err("band_image", "no image %s" % d["band_image"])
+        for k, lk in d.get("menu_looks", {}).items():
+            if lk.get("image") and lk["image"] not in names:
+                err("menu_looks." + k, "no image %s" % lk["image"])
+        if not any(p.level == "ERROR" for p in out):
+            out += self.rules_check()
         out += self.engine_gaps()
         return out
 
     def errors(self):
         return [p for p in self.check() if p.level == "ERROR"]
 
-    # --- what today's engine plays (SPEC.md 125.6) -----------------------------
+    # --- what today's engine does not play yet (SPEC.md 125.7) ------------------
     def engine_gaps(self):
-        """INFO for each thing the project says that the engine of today does
-        not play yet: it plays the subset engine_script() makes"""
-        d, out = self.d, []
-        if len(d["characters"]) > 2:
-            out.append(Problem("INFO", "characters",
-                               "the engine plays the first 2 characters"))
-        for ci, ch in enumerate(d["characters"][:2]):
-            top = ch["menu"]["top"]
-            if any("sub" in it for it in top) or ch["menu"]["side"]:
-                out.append(Problem("INFO", "characters.%d" % ci,
-                                   "sub-menus and the side menu are not "
-                                   "played yet: their actions are listed "
-                                   "flat, up to 4"))
-        for aid, a in d["actions"].items():
-            verbs = {e["verb"] for e in a["effects"]}
-            if verbs - {"damage", "heal"}:
-                out.append(Problem("INFO", "actions." + aid,
-                                   "only DAMAGE and HEAL are played yet"))
-            if any(len(p) > 1 for p in a["pools"].values()) or \
-                    set(a["pools"]) - {"hit"}:
-                out.append(Problem("INFO", "actions." + aid,
-                                   "only the first HIT clip is played yet"))
-        e = d["enemy"]
-        if len(e["stances"]) > 1 or \
-                sum(len(st["moves"]) for st in e["stances"]) > 1:
-            out.append(Problem("INFO", "enemy",
-                               "the enemy plays its first move only"))
+        """INFO for each thing the project says that the engine of today
+        does not play yet"""
+        out = []
+        for st in self.d["enemy"]["stances"]:
+            if st.get("idle"):
+                out.append(Problem("INFO", "enemy.stances." + st["name"],
+                                   "a stance's own idle loop is not played "
+                                   "yet: it shares the battle's"))
         return out
 
-    def engine_script(self, power_of=None):
-        """The battle script the engine of today plays (os88vbt
-        script_bytes): up to 2 members of up to 4 commands, each a clip and
-        DAMAGE (K_HIT) or HEAL (K_HEAL) of an amount; the enemy's first
-        move. POWER_OF(action) -> amount; by default an effect's "amount",
-        else its "power" """
-        d = self.d
-
-        def amount(a):
-            if power_of:
-                return power_of(a)
-            for e in a["effects"]:
-                if e["verb"] in ("damage", "heal"):
-                    return e.get("amount", e.get("power", 0))
-            return 0
-
-        def kind(a):
-            vs = [e["verb"] for e in a["effects"]]
-            return 1 if "heal" in vs and "damage" not in vs else 0
-
-        party = []
-        for ch in d["characters"][:2]:
-            acts = []
-            for it in ch["menu"]["top"]:
-                acts += [it["action"]] if "action" in it else it["sub"]
-            acts += ch["menu"]["side"]
-            cmds = []
-            for aid in acts[:4]:
-                a = d["actions"][aid]
-                cmds.append(dict(label=a["label"], clip=a["pools"]["hit"][0],
-                                 kind=kind(a), amount=amount(a),
-                                 mp=a["cost"].get("mp", 0)))
-            party.append(dict(name=ch["name"], hp=ch["hp"], mp=ch["mp"],
-                              commands=cmds))
-        e = d["enemy"]
-        mv = next(m for st in e["stances"] for m in st["moves"])
-        ea = d["actions"][mv["action"]]
-        return dict(enemy=dict(name=e["name"], hp=e["hp"],
-                               clip=ea["pools"]["hit"][0], damage=amount(ea),
-                               victory=e["victory"], defeat=e["defeat"]),
-                    party=party, victory=e["victory"], defeat=e["defeat"])
+    def rules_check(self):
+        """What compile_rules would refuse, as ERRORs (it is the authority:
+        this asks it)"""
+        import vbtrules
+        idx = {c: i for i, c in enumerate(self.d["clips"])}
+        try:
+            places = [(im.get("col", 0), im.get("row", 0), 1, 1, 0)
+                      for im in self.d.get("images", [])]
+            vbtrules.compile_rules(self, idx, places)
+        except (vbtrules.RulesError, KeyError, ValueError, IndexError) as e:
+            return [Problem("ERROR", "rules", "%s: %s" % (type(e).__name__, e))]
+        return []
 
 
 def main(argv=None):

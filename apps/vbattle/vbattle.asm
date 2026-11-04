@@ -61,6 +61,10 @@ VH_IDLETAB  equ 62              ; word: the idle table's offset in the block
 VH_BAND     equ 64              ; bytes: the band's cell, row, cells, rows
 VH_MAXREC   equ 76              ; word: the largest record
 VH_OPENS    equ 80              ; 8 bytes: the openings' clips, in turn
+VH_METALEN  equ 326             ; word: the first region's length, 8 KB to
+                                ; 16 KB (the rules' 4 KB at a time)
+VH_IMG      equ 320             ; dword offset, word length: the band's
+                                ; pictures (125.5)
 VH_ENT      equ 88              ; dword offset, dword length: the ENTRIES
                                 ; (125.2), each named by its paragraph
 VH_SFXTAB   equ 96              ; 16 x (dword offset, word length)
@@ -80,26 +84,10 @@ CF_OPENING  equ 16
 RH_LEN      equ 0               ; a record: its length, all of it
 RH_ALEN     equ 2               ; ...its frame's sound's, at its end
 RH_SIZE     equ 4
-VB_SCRIPT   equ 2048            ; the script
-VS_ENAME    equ 2
-VS_EHP      equ 12
-VS_ECLIP    equ 14
-VS_EDMG     equ 15
-VS_VICT     equ 17
-VS_DEFT     equ 18
-VS_PARTY    equ 24              ; 64 bytes a member
-VM_HP       equ 8
-VM_MP       equ 10
-VM_CMDS     equ 12              ; 4 x 12 bytes
-VK_CLIP     equ 6
-VK_KIND     equ 7
-VK_AMT      equ 8
-VK_MP       equ 10
-K_HIT       equ 0
-K_HEAL      equ 1
 
-VB_META     equ 4096            ; the first region, read whole into our bss
-VB_MAXCLIP  equ 32
+VB_META     equ 16384           ; the first region, read whole into our bss:
+                                ; the header, the clip table, the RULES
+VB_MAXCLIP  equ 64
 VB_MAXOPEN  equ 8
 VB_PIECE    equ 4096            ; a read: a cluster multiple, and under a
                                 ; 360 KB track (9 sectors), so a key waits at
@@ -566,21 +554,34 @@ vb_load:
     je .first
     jmp .again
 .first:
-    push ds                         ; the first region, into our bss
-    pop es
-    mov bx, vb_meta
-    mov cx, VB_META
+    push ds                         ; the first region, into our bss: its
+    pop es                          ; first 4 KB (the header and the clip
+    mov bx, vb_meta                 ; table), then the rest the header says
+    mov cx, 4096                    ; it has (the rules, 125.2)
     xor ax, ax
     xor dx, dx
     call vb_read
     mov word [vb_err], vb_s_nofile
     jc .fail1
+    mov cx, [vb_meta+VH_METALEN]
+    cmp cx, VB_META
+    ja .fail1
+    sub cx, 4096
+    jbe .meta
+    push ds
+    pop es
+    mov bx, vb_meta+4096
+    mov ax, 4096
+    xor dx, dx
+    call vb_read
+    jc .fail1
+.meta:
     mov word [vb_err], vb_s_notvbt
     cmp word [vb_meta+VH_MAGIC], 'VB'
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    cmp word [vb_meta+VH_VER], 4
+    cmp word [vb_meta+VH_VER], 5
     jne .fail1
     mov ax, [vb_meta+VH_NCLIPS]
     or ax, ax
@@ -631,10 +632,18 @@ vb_load:
 .ring:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
-    mov [vb_pent], ax               ; the entries, last: as many 4 KB as they
+    mov [vb_pent], ax               ; the entries: as many 4 KB as they
     call vb_entpara                 ; take, in paragraphs
     add ax, [vb_pent]
     jc .fail1
+    mov [vb_pimg], ax               ; the band's pictures (125.5)
+    mov cx, [vb_meta+VH_IMG+4]
+    call vb_round
+    mov cl, 4
+    shr ax, cl
+    add ax, [vb_pimg]
+    mov [vb_pbband], ax             ; ...and the band's two buffers, its
+    add ax, 2 * 16384 / 16          ; ground and its composition, 16 KB each
     call vb_p2kb
     mov word [vb_err], vb_s_nomem
     call OSAPI_MEM_CLAIM
@@ -649,6 +658,14 @@ vb_load:
     mov ax, dx
     add ax, [vb_pent]
     mov [vb_eseg], ax
+    mov ax, dx
+    add ax, [vb_pimg]
+    mov [vb_iseg], ax
+    mov ax, dx
+    add ax, [vb_pbband]
+    mov [vb_bseg], ax
+    add ax, 16384 / 16
+    mov [vb_cseg], ax
     call vb_cardclaim               ; the card's ring, before the rings are
                                     ; sized out of what is left
     ; the block and the menu's effects
@@ -675,6 +692,17 @@ vb_load:
 .read:
     call vb_entload                 ; the entries, 32 KB a read
     jc .fail1
+    mov cx, [vb_meta+VH_IMG+4]      ; the band's pictures
+    jcxz .noimg
+    call vb_round
+    mov cx, ax
+    mov es, [vb_iseg]
+    xor bx, bx
+    mov ax, [vb_meta+VH_IMG]
+    mov dx, [vb_meta+VH_IMG+2]
+    call vb_read
+    jc .fail1
+.noimg:
     mov byte [vb_loaded], 1
     call vb_fontload
 .again:
@@ -1113,7 +1141,10 @@ vb_gcopy:
 ; and four 4 KB reads took 80 ms each where one of 16 KB is far less
 vb_psize:
     cmp byte [vb_state], GS_MENU
+    je .small
+    cmp byte [vb_state], GS_TARGET
     jne .big
+.small:
     mov ax, VB_PIECE
     ret
 .big:
@@ -1448,8 +1479,15 @@ vb_keys:
     jz .none
     xor ah, ah
     int 0x16
-    cmp al, 27
+    cmp al, 27                      ; Esc: back out of a sub-menu, the
+    jne .k                          ; side menu or a target; otherwise leave
+    cmp byte [vb_state], GS_TARGET
+    je .k
+    cmp byte [vb_state], GS_MENU
+    jne .quit
+    cmp byte [vb_pmenu], NONE
     jne .k
+.quit:
     mov byte [vb_quit], 1
     ret
 .k:
@@ -2473,7 +2511,7 @@ vb_reader:
     mov al, [vb_want]               ; apart. 6. the clip under the cursor
     cmp al, 0xFF
     je .enemy
-    mov dl, [vb_meta+VB_SCRIPT+VS_ECLIP]
+    mov dl, [vb_eclip]
     call vb_ringfor
     jc .enemy
     call vb_rhead
@@ -2481,7 +2519,9 @@ vb_reader:
 .enemy:
     cmp byte [vb_state], GS_INTRO   ; 7. the enemy's
     je .top
-    mov al, [vb_meta+VB_SCRIPT+VS_ECLIP]
+    mov al, [vb_eclip]
+    cmp al, 0xFF
+    je .top
     mov dl, [vb_want]
     call vb_ringfor
     jc .top
@@ -2579,341 +2619,8 @@ vb_reader:
     stc
     ret
 
-; =============================================================================
-; the battle (the UI task)
-; =============================================================================
-vb_game_init:
-    mov byte [vb_state], GS_INTRO
-    mov byte [vb_turn], 0
-    mov byte [vb_cursor], 0
-    mov byte [vb_pend], 0xFF
-    mov word [vb_pk], 0xFFFF
-    mov byte [vb_want], 0xFF
-    mov byte [vb_cdone], 0xFF
-    mov byte [vb_quit], 0
-    mov word [vb_key], 0
-    mov byte [vb_mode], VM_OFF
-    mov byte [vb_dirty], 0xFF
-    mov ax, [vb_meta+VB_SCRIPT+VS_EHP]
-    mov [vb_ehp], ax
-    xor bx, bx
-.m:
-    mov si, bx
-    mov cl, 6
-    shl si, cl
-    add si, vb_meta+VB_SCRIPT+VS_PARTY
-    mov ax, [si+VM_HP]
-    mov di, bx
-    shl di, 1
-    mov [vb_hp+di], ax
-    mov ax, [si+VM_MP]
-    mov [vb_mp+di], ax
-    inc bx
-    cmp bx, 2
-    jb .m
-    mov word [vb_msg], vb_s_begin
-    ret
-
-; vb_mrec - SI = member [vb_turn]'s script row
-vb_mrec:
-    mov al, [vb_turn]
-    xor ah, ah
-    mov cl, 6
-    shl ax, cl
-    add ax, vb_meta+VB_SCRIPT+VS_PARTY
-    mov si, ax
-    ret
-
-; vb_kcmd - SI = command [vb_cursor] of member [vb_turn]
-vb_kcmd:
-    call vb_mrec
-    mov al, [vb_cursor]
-    mov ah, 12
-    mul ah
-    add si, ax
-    add si, VM_CMDS
-    ret
-
-; vb_ncmds - CX = the member's commands (those with a clip)
-vb_ncmds:
-    call vb_mrec
-    add si, VM_CMDS
-    xor cx, cx
-.c:
-    cmp byte [si+VK_CLIP], 0xFF
-    je .out
-    add si, 12
-    inc cx
-    cmp cx, 4
-    jb .c
-.out:
-    ret
-
-vb_game:
-    mov ax, [vb_key]
-    mov word [vb_key], 0
-    mov bl, [vb_state]
-    cmp bl, GS_INTRO
-    je .intro
-    cmp bl, GS_MENU
-    je .menu
-    cmp bl, GS_WAIT
-    je .wait
-    ret                             ; GS_END: nothing but Esc
-.intro:
-    cmp byte [vb_bandok], 0         ; THE SCENE OPENING'S first frame is up:
-    je .r                           ; the band under it, the menu not yet
-    cmp byte [vb_banddone], 0
-    jne .i2
-    mov byte [vb_banddone], 1
-    call vb_band_frame
-.i2:
-    cmp byte [vb_mode], VM_IDLE     ; ...and it has seamed onto the loop
-    jne .r
-    mov byte [vb_cdone], 0xFF
-    jmp vb_next_turn
-.r:
-    ret
-.menu:
-    or ax, ax
-    jz .hover
-    cmp ah, 0x48                    ; Up
-    je .up
-    cmp ah, 0x50                    ; Down
-    je .down
-    cmp al, 13
-    je .enter
-    cmp al, ' '
-    je .enter
-    jmp short .hover
-.up:
-    cmp byte [vb_cursor], 0
-    je .hover
-    dec byte [vb_cursor]
-    jmp short .moved
-.down:
-    call vb_ncmds
-    mov al, [vb_cursor]
-    inc al
-    xor ah, ah
-    cmp ax, cx
-    jae .hover
-    mov [vb_cursor], al
-.moved:
-    or byte [vb_dirty], 1
-    mov al, [vb_meta+VH_UI]         ; the tick
-    call vb_say
-.hover:
-    call vb_kcmd                    ; read ahead what the cursor is on
-    mov al, [si+VK_CLIP]
-    mov [vb_want], al
-    ret
-.enter:
-    call vb_kcmd
-    mov al, [vb_turn]
-    xor ah, ah
-    mov di, ax
-    shl di, 1
-    mov ax, [si+VK_MP]
-    cmp ax, [vb_mp+di]
-    jbe .afford
-    mov word [vb_msg], vb_s_nomp
-    or byte [vb_dirty], 4
-    mov al, [vb_meta+VH_UI+2]       ; the deny
-    jmp vb_say
-.afford:
-    sub [vb_mp+di], ax
-    push si
-    mov al, [vb_meta+VH_UI+1]       ; the ok
-    call vb_say
-    pop si
-    mov [vb_acmd], si               ; what happens when its clip is over
-    mov byte [vb_actor], 0
-    mov al, [si+VK_CLIP]
-    mov [vb_wclip], al
-    mov byte [vb_state], GS_WAIT
-    mov byte [vb_cdone], 0xFF
-    mov word [vb_msg], vb_mbuf
-    call vb_say_cmd
-    or byte [vb_dirty], 7
-    mov al, [vb_wclip]
-    mov [vb_pend], al               ; the hook takes it at its anchor
-    ret
-.wait:
-    mov al, [vb_cdone]
-    cmp al, [vb_wclip]
-    jne .r
-    mov byte [vb_cdone], 0xFF
-    cmp byte [vb_actor], 0
-    jne .enemy
-    ; the party's action, done: its effect
-    mov si, [vb_acmd]
-    mov ax, [si+VK_AMT]
-    cmp byte [si+VK_KIND], K_HEAL
-    je .heal
-    sub [vb_ehp], ax
-    jae .hit
-    mov word [vb_ehp], 0
-.hit:
-    mov di, vb_mbuf
-    call vb_utoa
-    mov si, vb_s_damage
-    call vb_strcpy
-    jmp short .said
-.heal:
-    xor bx, bx
-.h1:
-    mov si, bx
-    mov cl, 6
-    shl si, cl
-    add si, vb_meta+VB_SCRIPT+VS_PARTY
-    mov di, bx
-    shl di, 1
-    cmp word [vb_hp+di], 0          ; the fallen stay down
-    je .h2
-    mov dx, [vb_hp+di]
-    add dx, ax
-    cmp dx, [si+VM_HP]
-    jbe .h3
-    mov dx, [si+VM_HP]
-.h3:
-    mov [vb_hp+di], dx
-.h2:
-    inc bx
-    cmp bx, 2
-    jb .h1
-    mov di, vb_mbuf
-    mov si, vb_s_healed
-    push ax
-    call vb_strcpy
-    pop ax
-    call vb_utoa
-    mov si, vb_s_hp
-    call vb_strcpy
-.said:
-    mov word [vb_msg], vb_mbuf
-    or byte [vb_dirty], 6
-    cmp word [vb_ehp], 0
-    jne vb_next_turn
-    mov al, [vb_meta+VB_SCRIPT+VS_VICT]
-    mov si, vb_s_victory
-    jmp vb_ending
-.enemy:
-    ; the enemy hit [vb_target]
-    mov bl, [vb_target]
-    xor bh, bh
-    shl bx, 1
-    mov ax, [vb_meta+VB_SCRIPT+VS_EDMG]
-    sub [vb_hp+bx], ax
-    jae .e1
-    mov word [vb_hp+bx], 0
-.e1:
-    mov di, vb_mbuf
-    mov si, vb_meta+VB_SCRIPT+VS_ENAME
-    mov cx, 10
-    call vb_strncpy
-    mov si, vb_s_hits
-    call vb_strcpy
-    mov si, [vb_target]
-    and si, 0xFF
-    mov cl, 6
-    shl si, cl
-    add si, vb_meta+VB_SCRIPT+VS_PARTY
-    mov cx, 8
-    call vb_strncpy
-    mov al, ' '
-    stosb
-    mov ax, [vb_meta+VB_SCRIPT+VS_EDMG]
-    call vb_utoa
-    mov word [vb_msg], vb_mbuf
-    or byte [vb_dirty], 6
-    mov ax, [vb_hp]
-    or ax, [vb_hp+2]
-    jnz vb_next_turn
-    mov al, [vb_meta+VB_SCRIPT+VS_DEFT]
-    mov si, vb_s_defeat
-    jmp vb_ending
-
-; vb_say - menu sound AL (FFh none) for the hook to start: the foreground
-; asks, the hook mixes (vb_uisound)
-vb_say:
-    cmp al, 0xFF
-    je .out
-    cmp al, [vb_meta+VH_NSFX]
-    jae .out
-    inc al
-    mov [vb_ui], al
-.out:
-    ret
-
-; vb_next_turn - the next member standing, or the enemy after the last
-vb_next_turn:
-    cmp byte [vb_state], GS_INTRO
-    jne .on
-    mov byte [vb_turn], 0xFF        ; (the first turn is member 0's)
-.on:
-    inc byte [vb_turn]
-    cmp byte [vb_turn], 2
-    jae .enemy
-    mov bl, [vb_turn]
-    xor bh, bh
-    shl bx, 1
-    cmp word [vb_hp+bx], 0
-    je .on                          ; down: skipped
-    mov byte [vb_state], GS_MENU
-    mov byte [vb_cursor], 0
-    or byte [vb_dirty], 3
-    ret
-.enemy:
-    mov byte [vb_turn], 0xFF        ; the party's turns start again after it
-    mov bl, [vb_tnext]              ; the target: alternate, the standing
-    xor bh, bh
-    and bl, 1
-    mov di, bx
-    shl di, 1
-    cmp word [vb_hp+di], 0
-    jne .t
-    xor bl, 1
-.t:
-    mov [vb_target], bl
-    inc byte [vb_tnext]
-    mov byte [vb_actor], 1
-    mov al, [vb_meta+VB_SCRIPT+VS_ECLIP]
-    mov [vb_wclip], al
-    mov byte [vb_state], GS_WAIT
-    mov byte [vb_cdone], 0xFF
-    or byte [vb_dirty], 3
-    mov [vb_pend], al
-    mov byte [vb_want], 0xFF
-    ret
-
-; vb_ending - AL = the ending's clip, SI = its line
-vb_ending:
-    mov [vb_msg], si
-    mov [vb_wclip], al
-    mov byte [vb_state], GS_END
-    mov byte [vb_turn], 0xFF
-    mov byte [vb_want], 0xFF
-    or byte [vb_dirty], 7
-    mov [vb_pend], al
-    ret
-
-; vb_say_cmd - the message: "ARI: Bolt"
-vb_say_cmd:
-    push si
-    mov di, vb_mbuf
-    call vb_mrec
-    mov cx, 8
-    call vb_strncpy
-    mov al, ':'
-    stosb
-    mov al, ' '
-    stosb
-    pop si
-    mov cx, 6
-    call vb_strncpy
-    mov byte [di], 0
-    ret
+%include "vbattle/vbrules.inc"
+%include "vbattle/vbgame.inc"
 
 ; vb_strncpy - at most CX bytes of DS:SI to DS:DI, trailing blanks dropped
 vb_strncpy:
@@ -2969,366 +2676,7 @@ vb_utoa:
     mov byte [di], 0
     ret
 
-; =============================================================================
-; the band (rows 142-199): drawn straight into the framebuffer, only what
-; changed. [vb_dirty] bit 0 the menu, 1 the party, 2 the message line
-; =============================================================================
-BAND_Y      equ 142
-ROW_MENU    equ 148             ; the menu's first line; 10 apart
-ROW_MSG     equ 189
-COL_MENU    equ 1
-COL_PARTY   equ 18
-
-vb_band_frame:
-    ; the band's ground black, and its rules cyan: a row of 1-1-1-1
-    mov es, [vb_vseg]
-    cld
-    mov dx, BAND_Y
-.clr:
-    call vb_rowaddr
-    mov cx, 40
-    xor ax, ax
-    cmp dx, BAND_Y + 1
-    je .rule
-    cmp dx, ROW_MSG - 4
-    jne .st
-.rule:
-    mov ax, 0x5555
-.st:
-    rep stosw
-    inc dx
-    cmp dx, 200
-    jb .clr
-    ; the divider between the menu and the party: column 16 (pixel 128)
-    mov dx, BAND_Y + 3
-.v:
-    call vb_rowaddr
-    add di, 32
-    mov byte [es:di], 0x40
-    inc dx
-    cmp dx, ROW_MSG - 4
-    jb .v
-    mov byte [vb_dirty], 0xFF
-    ret
-
-; vb_rowaddr - DI = the address of row DX's first byte (CGA's two banks)
-vb_rowaddr:
-    mov di, dx
-    shr di, 1
-    mov ax, 80
-    push dx
-    mul di
-    pop dx
-    mov di, ax
-    test dl, 1
-    jz .e
-    add di, 0x2000
-.e:
-    ret
-
-vb_band:
-    cmp byte [vb_banddone], 0       ; the openings draw the whole screen
-    jne .live
-    ret
-.live:
-    mov al, [vb_dirty]
-    or al, al
-    jnz .go
-    ret
-.go:
-    mov byte [vb_dirty], 0
-    test al, 1
-    jz .p
-    push ax
-    call vb_draw_menu
-    pop ax
-.p:
-    test al, 2
-    jz .m
-    push ax
-    call vb_draw_party
-    pop ax
-.m:
-    test al, 4
-    jz .out
-    call vb_draw_msg
-.out:
-    ret
-
-; vb_draw_menu - the member's commands, the cursor's inverse
-vb_draw_menu:
-    xor bp, bp                      ; the line
-.l:
-    push ds
-    pop es
-    mov di, vb_lbuf
-    mov cx, 14
-    mov al, ' '
-    rep stosb
-    mov byte [di], 0
-    mov byte [vb_tc], 3             ; white on black
-    cmp byte [vb_state], GS_MENU
-    jne .put
-    call vb_mrec
-    mov ax, bp
-    mov ah, 12
-    mul ah
-    add si, ax
-    add si, VM_CMDS
-    cmp byte [si+VK_CLIP], 0xFF
-    je .put
-    push si
-    mov di, vb_lbuf+1
-    mov cx, 6
-    call vb_strncpy
-    mov byte [di], ' '
-    pop si
-    mov ax, [si+VK_MP]
-    or ax, ax
-    jz .nomp
-    mov di, vb_lbuf+9
-    call vb_utoa
-    mov word [di], 'MP'
-.nomp:
-    mov byte [vb_lbuf+14], 0
-    mov ax, bp
-    cmp al, [vb_cursor]
-    jne .put
-    mov byte [vb_tc], 0x30          ; the cursor: black on white
-.put:
-    mov ax, bp
-    mov cl, 10
-    mul cl
-    add ax, ROW_MENU
-    mov dx, ax
-    mov cx, COL_MENU
-    mov si, vb_lbuf
-    mov bh, [vb_tc]
-    call vb_text
-    inc bp
-    cmp bp, 4
-    jb .l
-    ret
-
-; vb_draw_party - the enemy's name, then each member: name, HP/max, MP. The
-; member whose turn it is is drawn inverse: the selection is the band's
-vb_draw_party:
-    mov si, vb_meta+VB_SCRIPT+VS_ENAME
-    mov di, vb_lbuf
-    mov cx, 10
-    call vb_strncpy
-    mov dx, ROW_MENU
-    mov cx, COL_PARTY
-    mov si, vb_lbuf
-    mov bh, 2                       ; red
-    call vb_text
-    mov si, vb_s_head
-    mov dx, ROW_MENU + 10
-    mov cx, COL_PARTY
-    mov bh, 1                       ; cyan
-    call vb_text
-    xor bp, bp
-.m:
-    push ds
-    pop es
-    mov di, vb_lbuf                 ; 22 cells: name 6, HP 4/4, MP 4
-    mov cx, 22
-    mov al, ' '
-    rep stosb
-    mov byte [di], 0
-    mov si, bp
-    mov cl, 6
-    shl si, cl
-    add si, vb_meta+VB_SCRIPT+VS_PARTY
-    push si
-    mov di, vb_lbuf
-    mov cx, 6
-    call vb_strncpy
-    mov byte [di], ' '
-    pop si
-    mov bx, bp
-    shl bx, 1
-    mov ax, [vb_hp+bx]
-    mov di, vb_lbuf+7
-    push si
-    call vb_rjust4
-    pop si
-    mov byte [vb_lbuf+11], '/'
-    mov ax, [si+VM_HP]
-    mov di, vb_lbuf+12
-    call vb_utoa                    ; (the most, left-justified)
-    mov byte [di], ' '
-
-    mov bx, bp
-    shl bx, 1
-    mov ax, [vb_mp+bx]
-    mov di, vb_lbuf+18
-    call vb_rjust4
-    mov byte [vb_lbuf+22], 0
-    mov byte [vb_tc], 3
-    mov bx, bp
-    shl bx, 1
-    cmp word [vb_hp+bx], 0
-    jne .up
-    mov byte [vb_tc], 2             ; down: red
-    jmp short .put
-.up:
-    mov ax, bp
-    cmp al, [vb_turn]
-    jne .put
-    cmp byte [vb_state], GS_MENU
-    jne .put
-    mov byte [vb_tc], 0x30
-.put:
-    mov ax, bp
-    mov cl, 10
-    mul cl
-    add ax, ROW_MENU + 20
-    mov dx, ax
-    mov cx, COL_PARTY
-    mov si, vb_lbuf
-    mov bh, [vb_tc]
-    call vb_text
-    inc bp
-    cmp bp, 2
-    jb .m
-    ret
-
-; vb_rjust4 - AX right-justified in four cells at DS:DI
-vb_rjust4:
-    push di
-    mov di, vb_nbuf
-    call vb_utoa
-    mov cx, di
-    sub cx, vb_nbuf                 ; its digits
-    pop di
-    mov ax, 4
-    sub ax, cx
-    jbe .cp
-    add di, ax
-.cp:
-    mov si, vb_nbuf
-.c:
-    lodsb
-    or al, al
-    jz .out
-    mov [di], al
-    inc di
-    jmp .c
-.out:
-    ret
-
-vb_draw_msg:
-    push ds
-    pop es
-    mov di, vb_lbuf
-    mov cx, 38
-    mov al, ' '
-    rep stosb
-    mov byte [di], 0
-    mov si, [vb_msg]
-    mov di, vb_lbuf
-.c:
-    lodsb
-    or al, al
-    jz .d
-    cmp di, vb_lbuf+38
-    jae .d
-    stosb
-    jmp .c
-.d:
-    mov dx, ROW_MSG
-    mov cx, 1
-    mov si, vb_lbuf
-    mov bh, 3
-    call vb_text
-    ret
-
-; vb_text - DS:SI (NUL) at cell column CX, pixel row DX; BH = colours:
-; the low nibble the ink (1..3), the high the ground (0..3). Each cell is
-; its 8 rows of 2 bytes, ground and glyph in one store (6.1's rule)
-vb_text:
-    push bp
-    mov [vb_tcol], cx
-    mov [vb_trow], dx
-    ; the expansion: a nibble of glyph bits -> a byte of four pixels
-    mov al, bh
-    and al, 3
-    mov [vb_tink], al
-    mov al, bh
-    mov cl, 4
-    shr al, cl
-    and al, 3
-    mov [vb_tgnd], al
-    xor bx, bx
-.x:
-    mov cx, 4
-    xor ah, ah
-    mov dl, bl
-.x1:
-    shl ah, 1
-    shl ah, 1
-    test dl, 8
-    jz .g
-    or ah, [vb_tink]
-    jmp short .x2
-.g:
-    or ah, [vb_tgnd]
-.x2:
-    shl dl, 1
-    loop .x1
-    mov [vb_texp+bx], ah
-    inc bx
-    cmp bx, 16
-    jb .x
-    mov es, [vb_vseg]
-.ch:
-    lodsb
-    or al, al
-    jz .out
-    cmp [vb_tcol], word 40
-    jae .out
-    sub al, 32
-    jae .ok
-    xor al, al
-.ok:
-    cmp al, 94
-    jbe .ok2
-    xor al, al
-.ok2:
-    xor ah, ah
-    mov cl, 3
-    shl ax, cl
-    add ax, vb_font
-    mov bp, ax                      ; the glyph's 8 rows
-    mov dx, [vb_trow]
-    mov cx, 8
-.r:
-    push cx
-    call vb_rowaddr
-    mov ax, [vb_tcol]
-    shl ax, 1
-    add di, ax
-    mov al, [ds:bp]
-    mov ah, al
-    mov cl, 4
-    shr al, cl                      ; the left four pixels' bits
-    and ah, 0x0F                    ; ...and the right four's
-    xor bh, bh
-    mov bl, al
-    mov al, [vb_texp+bx]
-    mov bl, ah
-    mov ah, [vb_texp+bx]
-    stosw
-    inc bp
-    inc dx
-    pop cx
-    loop .r
-    inc word [vb_tcol]
-    jmp .ch
-.out:
-    pop bp
-    ret
+%include "vbattle/vbband.inc"
 
 ; =============================================================================
 ; text
@@ -3351,7 +2699,11 @@ vb_s_nomem:   db ' Not enough memory', 0
 vb_s_badread: db ' BATTLE.VBT: a read failed', 0
 vb_s_norate:  db ' Needs the full kernel (FSXF_RATE)', 0
 vb_s_nocga:   db ' Needs CGA, EGA or VGA', 0
-vb_s_begin:   db 'The IRON BEETLE attacks!', 0
+vb_s_appears: db ' appears!', 0
+vb_s_who:     db 'Who?', 0
+vb_s_cannot:  db 'Cannot now', 0
+vb_s_miss:    db 'MISS', 0
+vb_s_escaped: db 'Escaped!   Esc to leave', 0
 vb_s_nomp:    db 'Not enough MP', 0
 vb_s_damage:  db ' damage', 0
 vb_s_healed:  db 'The party heals ', 0
@@ -3497,14 +2849,86 @@ VB_VAR vb_turn, 1
 VB_VAR vb_cursor, 1
 VB_VAR vb_want, 1
 VB_VAR vb_wclip, 1
-VB_VAR vb_actor, 1
-VB_VAR vb_target, 1
-VB_VAR vb_tnext, 1
 VB_VAR vb_dirty, 1
-VB_VAR vb_acmd, 2
+VB_VAR vb_menu, 1                   ; the open menu
+VB_VAR vb_pmenu, 1                  ; ...the one it was opened from (FFh none)
+VB_VAR vb_pcur, 1                   ; ...and its cursor there
+VB_VAR vb_mact, 1                   ; the action being aimed
+VB_VAR vb_tcur, 1                   ; ...at which character
+VB_VAR vb_mrec, 2
+VB_VAR vb_eclip, 1                  ; the enemy's likely clip (the read-ahead)
+VB_VAR vb_eact, 1
+VB_VAR vb_tinkp, 1
+VB_VAR vb_tbg, 1
+VB_VAR vb_iseg, 2                   ; the band's pictures
+VB_VAR vb_bseg, 2                   ; the band's ground
+VB_VAR vb_cseg, 2                   ; ...and its composition
+VB_VAR vb_tcomp, 1                  ; text into the composition
+VB_VAR vb_pimg, 2
+VB_VAR vb_pbband, 2
+; the battle's state, zeroed at its start (vb_game_init)
+VB_VAR vb_zstart, 0
+VB_VAR vb_rng, 2
+VB_VAR vb_hp, 8
+VB_VAR vb_mp, 8
+VB_VAR vb_lim, 4
+VB_VAR vb_guard, 4
+VB_VAR vb_charge, 4
+VB_VAR vb_mods, 16
+VB_VAR vb_modt, 16
 VB_VAR vb_ehp, 2
-VB_VAR vb_hp, 4
-VB_VAR vb_mp, 4
+VB_VAR vb_emp, 2
+VB_VAR vb_eguard, 1
+VB_VAR vb_echarge, 1
+VB_VAR vb_emods, 4
+VB_VAR vb_emodt, 4
+VB_VAR vb_stance, 1
+VB_VAR vb_sleft, 1
+VB_VAR vb_sret, 1
+VB_VAR vb_sturns, 1
+VB_VAR vb_tnext, 1
+VB_VAR vb_last, 1
+VB_VAR vb_items, 16
+VB_VAR vb_over, 1
+VB_VAR vb_zend, 0
+; the plan (vbrules.inc's vb_resolve)
+VB_VAR vb_qa, 1
+VB_VAR vb_qw, 1
+VB_VAR vb_qchosen, 1
+VB_VAR vb_qresp, 1
+VB_VAR vb_qpick, 2
+VB_VAR vb_qact, 2
+VB_VAR vb_qn, 1
+VB_VAR vb_qt, 4
+VB_VAR vb_qhit, 4
+VB_VAR vb_qcrit, 4
+VB_VAR vb_qdmg, 8
+VB_VAR vb_qheal, 8
+VB_VAR vb_qfirst, 1
+VB_VAR vb_qeff, 2
+VB_VAR vb_qtot, 2
+VB_VAR vb_qc1, 1
+VB_VAR vb_qchg, 1
+VB_VAR vb_qsum, 2
+VB_VAR vb_qnopp, 1
+VB_VAR vb_qnhit, 1
+VB_VAR vb_qanycrit, 1
+VB_VAR vb_qallg, 1
+VB_VAR vb_qout, 1
+VB_VAR vb_qsingle, 2
+VB_VAR vb_qclip, 1
+VB_VAR vb_qpk, 2
+VB_VAR vb_qcur, 1
+VB_VAR vb_qhealed, 1
+VB_VAR vb_qrule, 2
+VB_VAR vb_q32, 4
+VB_VAR vb_racted, 1
+VB_VAR vb_ractor, 1
+VB_VAR vb_rflags, 1
+VB_VAR vb_dvar, 2
+VB_VAR vb_dpow, 2
+VB_VAR vb_datk, 2
+VB_VAR vb_ddef, 2
 VB_VAR vb_msg, 2
 VB_VAR vb_mbuf, 48
 VB_VAR vb_lbuf, 48
