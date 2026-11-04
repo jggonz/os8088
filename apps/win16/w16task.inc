@@ -746,6 +746,12 @@ W16TSK w16t_end
 w16t_codefree:
     cmp word [w16_cmb], 0
     je .out
+%ifdef PKG_MEGA
+    push bx                         ; its stable selectors given back first
+    mov bx, w16l_stabfree           ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall
+    pop bx
+%endif
     W16SEG es, [w16_clive]
     xor bx, bx
     mov cx, [w16_cnseg]

@@ -2301,12 +2301,22 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          SEG_WINL, SEG_AT) or a HANDLE
                                  ;          descriptor (SEG_HND) in a block
                                  ;          of yours, CX = 0 data
-                                 ;          or 1 code -> the descriptor's
+                                 ;          or 1 code or 2 code NOT
+                                 ;          PRESENT -> the descriptor's
                                  ;          type set in place, base, limit
                                  ;          and selector kept (SPEC.md
                                  ;          50.6.11, 124.31.6). A code
                                  ;          window is never matched as a
-                                 ;          data one. CF=1, AX = 4 for
+                                 ;          data one. CX = 3: SI = the
+                                 ;          offset and DX the code
+                                 ;          selector of your #NP handler
+                                 ;          (DX = 0 withdraws it): a far
+                                 ;          transfer to a not-present
+                                 ;          handle descriptor of yours
+                                 ;          arrives there with [selector]
+                                 ;          [IP] [CS] [FLAGS] on the
+                                 ;          stack (SPEC.md 50.6.11,
+                                 ;          124.26.12). CF=1, AX = 4 for
                                  ;          anything else; CF=1 on a
                                  ;          real-mode kernel
                                  ; out CF=0 and the answer; CF=1 refused (no

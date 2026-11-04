@@ -17378,6 +17378,22 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
                "build/win16/CSALIAS.EXE")),
+    Row("win16np", "soak", py("tests/win16np.py"), 120.0,
+        "SPEC.md 124.26.12, 50.6.11 (SEG_TYPE CX = 2 and 3), KERN-MEGA-PLAN "
+        "14.143 (O8): under Bochs, kern_mega boots off C: and \\AUTOSTRT opens "
+        "PMNP.EXE (tests/win16/pmnp.c), a protected-mode-only program whose six "
+        "discardable code segments are named by their number. It squeezes the "
+        "global heap (GlobalAlloc until it refuses) before each way of touching "
+        "a segment that is not present: a far call, a data read, a bare mov es, "
+        "a pointer handed to lstrcpy (WIN16's own stack faults), LockSegment "
+        "and a window procedure WIN16 calls; PMNP.TXT says 0 wrong, WIN16's "
+        "w16_cnload and w16_cndrop both moved, and there is no fault line. Red "
+        "expected without the router: the first far call into a segment that is "
+        "not present closes WIN16. The fixture is built by `make win16fixtures`",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/PMNP.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "

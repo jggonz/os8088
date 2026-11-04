@@ -13776,3 +13776,49 @@ semantics, and the SPEC says so.
 dispatch in `.mega` as `mega_fkivt` is (14.141). ABI: a new verb is additive
 (`apps/os88api.inc`), so `tools/abilock.py --update` without a version bump.
 Real-mode kernels refuse it (CF = 1), a segment being code or data by use.
+
+### 14.143 `#NP` routed to a package: discardable code named by its selector (O8, 2026-11-04)
+
+The owner approved O8 (docs/plans/WIN16-NEXT-PLAN.md, `o8-proposal.md`) in its
+narrow form: the kernel only ROUTES a `#NP`; WIN16 does the reloading, the LRU
+and every re-entry guard (SPEC.md 124.26.12). Windows' standard mode marked a
+discardable segment's selector not present and loaded the segment again at the
+fault. A program that names such code by its selector - VBRUN300, Sir
+Hangman's engine, every protected-mode-only program - could not be given that
+before, because only the kernel sees a fault. Until now WIN16 therefore kept
+all of it, 329 KB of VBRUN300 and 395 KB of the Hangman engine.
+
+*What is built.* `SEG_TYPE` (14.142) gains `CX = 2` (access 1Ah: code, not
+present) and `CX = 3` (register DX:SI as the caller's `#NP` handler; one
+registration, five bytes in the tables' tail: `mega_npo`, `mega_npc`,
+`mega_npw`). The IDT's 0Bh stub, `push byte 0Bh` / `jmp near mega_fault` / two
+`nop`, becomes `jmp COLD_SEG:mega_npx` / two `nop` in the same seven bytes, so
+`.mega` is +0 and needed no size pass. `mega_npx` (`.cold`) routes only when
+the error code is an LDT selector, the faulting CS is an LDT selector,
+`sch_rbusy` = 0, `sch_cur` = 0, the descriptor is a handle descriptor, a
+handler is registered and the descriptor's base lies in a block of the
+registrant's (`mega_bownf`). It leaves by a far return whose CS:IP are two
+slots it put under the CPU's frame, so the handler sees `[selector] [IP] [CS]
+[FLAGS]` and the registers as they were. Anything else pushes the vector back
+and enters `mega_fault`, so a `#NP` that was fatal stays fatal, with the frame
+the reporter expects.
+
+*Measured* (`tools/kernsize.py --build build/megak`, before -> after):
+`.text` 45,853 -> 45,853, `.mega` 23,056 -> 23,056 (10 left), `.cold` 45,912 ->
+46,102, which crosses its 46,080 rung to 46,592 (490 left): KERN_SIZE at BOOT
++512, nothing resident (`.cold` is above 1MB after the switch). The resident
+footprint reads 62,976 either way.
+
+*Owner of the registration.* The router names no owner of its own: the
+registrant's byte is what `mega_bown` is asked about, so only the registrant's
+own not-present handle descriptors route. A registrant's end leaves its
+registration naming a byte that a later package may hold. That is harmless
+today, since WIN16 alone makes a not-present descriptor and registers again at
+every launch and wake (`w16_lend`), and `mx_relinst` (`.mega`, 10 bytes left)
+is not touched; a second user of `CX = 2` must register as well. `CX = 3`
+with `DX = 0` withdraws, and only for its registrant.
+
+*Not routed, on purpose.* FS and GS are not banked by anyone. A `#NP` from a
+GDT CS (the kernel, a BIOS call reflected to real mode never reaches a
+descriptor), from the rate hook or a worker, and from a task other than the UI
+task is the old fatal one.

@@ -4159,6 +4159,9 @@ W16TSK w16k_sethcount
 W16TSK w16k_codehandle
     ICALL w16_args
     mov ax, [es:bx + 2]
+%ifdef PKG_MEGA
+    ICALL w16_touch                 ; a discarded code segment loads (124.26.12)
+%endif
     mov [es:bx], ax
     ICALL w16k_ghandle              ; AX = the handle, 0 not a block of ours
     or ax, ax

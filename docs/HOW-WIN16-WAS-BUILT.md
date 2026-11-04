@@ -4820,3 +4820,60 @@ Its one `FreeModule` ignores the answer, which is TRUE now anyway. Its one
 `TrackPopupMenu` is the `PopupMenu` method (the flags it builds are the
 method's argument), so a refusal there costs a program's right-click menu
 and nothing at start-up.
+
+## 2026-11-04: a not-present selector is a fault WIN16 can repair (O8)
+
+*As a user, I run a Windows program whose code Windows' standard mode would
+have discarded and reloaded, on a machine that cannot hold all of it.* That
+is VBRUN300's 329 KB, Sir Hangman's engine's 395 KB, Mozart's 185 KB of
+p-code and every Arcade game's 55-97 KB: code that something names by its
+selector, so a thunk cannot stand in front of it. Until O8 WIN16 kept it all.
+The owner decided yes, in the narrow form `o8design` had priced: the kernel
+only routes a `#NP`, and WIN16 does the reloading (SPEC.md 124.26.12,
+KERN-MEGA-PLAN 14.143).
+
+**What was built.** The kernel half is two verbs and a router: `SEG_TYPE`
+`CX` = 2 makes a handle descriptor code-not-present, `CX` = 3 registers the
+caller's `#NP` handler, and the IDT's 0Bh stub is a five-byte far jump to
+`mega_npx` in `.cold`, so `.mega` stayed at +0 bytes. The router routes only
+the UI task's fault from an LDT code selector, on a handle descriptor based in
+a block of the registrant's, and gives the handler the CPU's frame as it was.
+WIN16 makes one handle descriptor per segment that a relocation names by
+number (where §124.26.11 kept it), so every fixup, every pointer built from
+one and every thunk holds the same selector for the module's life. The
+segment is loaded when the selector is touched and parked, not present and
+off its block, when it is discarded. The handler enters the gate as the
+thunk's slot with a far return to an `iret`, so the loader, the discard and
+the answer's AX/DX are the thunk path's.
+
+**What the first draft got wrong, found on the glass** (QEMU, kern_mega, 486,
+16 MB; PMNP.EXE, `tests/win16/pmnp.c`). The prototype of the router had never
+run. It read the error code's selector with its RPL/TI bits in the descriptor
+index; the build masks them. And the first run that left WIN16 with room for
+one segment, while the program's ES held the only loaded one, spun for five
+minutes at 100% CPU with no segment loaded and no message. Counters said the
+`#NP` handler had entered 1,269 times and the discard had failed 1,908 times
+with the failure never reaching the program's end. The loader's refusal
+ended in `and byte [w16_nplod], ~1`, and an `and` clears the carry: a load that
+failed was handed back as a load that worked, the instruction ran again, and
+it faulted again, forever. A `pushf` / `popf` around the one instruction ended
+the loop, and the same run now closes with *Not enough memory for its code.*
+in the program's window, as a thunk's failure does. It is also the proof that
+a segment the banked ES holds is never discarded (SPEC.md 124.26.12): with
+room for two segments the run passes, with room for one it ends cleanly.
+
+**What was seen.** PMNP: six 9 KB segments, protected-mode-only, discardable,
+named by number from a far-pointer table and by direct far calls. A pass in
+28-38 s on QEMU: *pmnp: 0 wrong, 36 calls*, `w16_cnload` 38 and `w16_cndrop`
+32. Each of the six ways of touching a segment that is not present (a far
+call, a data read, a bare `mov es`, a pointer handed to `lstrcpy`,
+`LockSegment`, and a window procedure WIN16 calls) ran after a squeeze of the
+heap that discarded every code segment not in use.
+
+**What was not.** Sir Hangman's engine (see the report). A hardware interrupt
+handler of a program is not a case WIN16 has, so the PIC check was not
+exercised by anything but running. FS and GS are not banked by the gate.
+`w16_touch` is wired into `LockSegment`, `GetCodeHandle` and the callback
+pre-check; the other sites that pass a program pointer straight to an
+`OSAPI_*` call are listed in the report, and the rule for a new one is in
+SPEC.md 124.26.12.

@@ -393,6 +393,13 @@ section .w16dlg
     W16BSS w16_cndrop, 2        ;   program runs, counted (row win16write)
     W16BSS w16_thax, 2          ; AX and DX a thunk was entered with (124.26.2)
     W16BSS w16_thdx, 2
+%ifdef PKG_MEGA
+    W16BSS w16_npsel, 2         ; the not-present selector w16_npent was entered
+                                ;   with, 0 = none (SPEC.md 124.26.12)
+    W16BSS w16_nplod, 1         ; w16l_npload's: bit 0 = a #NP's segment is
+                                ;   being loaded, bit 1 = on WIN16's own
+                                ;   stack, so no code goes (w16l_nplow)
+%endif
 %ifndef PKG_MEGA
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
     W16BSS w16_clast, 2 * W16_MAXSEG    ; ...and its last offset (w16cens.inc)
@@ -1354,6 +1361,11 @@ w16_lend:
 .have:
     mov cx, 1024                    ; the top: the whole KB
     mov bl, SEG_LEND
+    call OSAPI_SEG
+    mov cx, 3                       ; and w16_npent as the #NP handler, asked
+    mov si, w16_npent               ;   again at every wake for the same
+    W16ICS dx                       ;   reason (SEG_TYPE, SPEC.md 124.26.12)
+    mov bl, SEG_TYPE
     call OSAPI_SEG
 .out:
     pop dx
