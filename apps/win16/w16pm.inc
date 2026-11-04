@@ -7,7 +7,7 @@
 ; a program's segments are a claim's base plus offsets - and on kern_mega no
 ; such value can be loaded into a segment register. The arm keeps every sum
 ; and changes what the numbers mean: each claim WIN16 carves is entered in
-; the MAP with a virtual base of its own, first fit in W16V_LO-FFFFh, and a
+; the MAP with a virtual base of its own, first fit in W16V_LO(0300h)-FFFFh, and a
 ; virtual paragraph becomes a selector only where it is loaded:
 ;
 ;   W16SEG es, ax           ; real mode: mov es, ax
@@ -290,8 +290,9 @@ w16_vclaimm:
 
 %ifdef PKG_MEGA
 
-W16V_LO   equ 0x1000            ; the first virtual paragraph: below it are
-                                ;   the moveable handles (W16_GH0)
+W16V_LO   equ 0x0300            ; the first virtual paragraph (W16_GH0 0100h + 2 x
+                                ;   W16_NGH = 0300h, checked in w16mem.inc); below
+                                ;   it are the moveable handles (W16_GH0)
 W16V_N    equ 10                ; map rows: an owner holds at most eight
                                 ;   claims (SPEC.md 50), and two to spare
 W16V_SEL  equ 0                 ; a row: the claim's selector (0 = free)

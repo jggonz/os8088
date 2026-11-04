@@ -236504,8 +236504,8 @@ obtain, per arm, with no special case for any caller:
   - *kern_big*: `OSAPI_MEM_P` `MEMP_AVAIL`'s total `R` and largest claim `L`
     of the conventional heap;
   - *kern_mega*: the claims come from the heap above and below 1 MB, and
-    each is entered in the 960 KB map (§124.31.3), so `R` is the smaller of
-    the map's free paragraphs (`W16V_LO` to 0FFFFh, less every row's) and
+    each is entered in the 1,012 KB map (§124.31.3), so `R` is the smaller of
+    the map's free paragraphs (`W16V_LO` = 0300h to 0FFFFh, less every row's) and
     the conventional heap's total plus the extended pool's free KB
     (`OSAPI_XMEM_CAPS`), and `L` the smaller of the map's largest free gap
     and the larger of the conventional largest claim and the pool's KB. The
@@ -238382,7 +238382,7 @@ byte of it.
 | `DOS.O88` | kern_mega's `DOS.O88` hands an NE to `WIN16.O88` as kern_big's does (§124.1's launch row): `-DDOS_WIN16` joins `-DDOS_MEGA`, and `apps/dos/dosw16.inc`'s refusal of the pair goes |
 | the shipped build on kern_mega | refuses at entry, as today, but in `OS88_MEGA_REFUSE`'s words (*Use the MEGA apps disk*, §20.18), now that there is a disk to send the user to |
 | class byte | `OS88_HIGH | OS88_HIGHMEM` in the arm, nothing in the shipped build (124.31.3's last step): the image and WIN16's own plain claims may go above 1 MB, the program's memory stays below it. `tests/megahigh.txt`'s two WIN16 lines are retired |
-| the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 960 KB of virtual paragraphs, and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the stepped floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Stepping down by quarters finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
+| the arenas | at most `W16_NARENA` = **4**, as in real mode (§124.25.1). It was 3 until 2026-11-02, because each arena is four bytes of bss; S24 batch 6 freed the bytes. The fourth is limited by the **map** rather than by RAM: the map holds 1,012 KB of virtual paragraphs (960 KB until 2026-11-04, when `W16V_LO` fell from 1000h to 0300h, §124.31.3), and the third arena takes the largest free run less 96 KB. Arcade's setup asked for 408 KB for its fourth, got it from the kernel, and the map refused it. Before the stepped floor (§124.25.1), the fall back was the request's own 52 KB: MSCOMSTF's code went into it, and its DGROUP then had nowhere to go. Stepping down by quarters finds what the map still holds. The claim count: the program, the library part and four arenas are six. A running `LoadLibrary` holds the loader part, its read cache and one table claim for each library still loading. Arcade's setup loads its six DLLs this way with no claim refused (seen 2026-11-02; the peak was not counted) |
 | the third arena | leaves `W16_ARKEEP` = **96 KB** of the largest free run, not 32 (§124.25.1): a part's fetch is a conventional claim on kern_mega whatever the class byte says (`op_fetch`'s DMA door), and the library part's is 62 KB. With 32 a program that made its third arena before its first library call could not fetch the part at all: MMTEST did, once S23 batch 2 took the system-library part from 33 to 34 KB, and its closing `MessageBox` ended it with *WIN16's library part could not be read* (seen 2026-11-01; 96 cured it). A constant, so no byte of either image |
 | the census | not in the arm: it decides whether an 8088 can run a program (§124.3), and kern_mega runs on a 286 or better. `w16cens.inc`, `w16optab.inc` and their 1,012 bytes of bss are what pay for the arm's own code |
 
@@ -238495,9 +238495,20 @@ what the numbers mean**:
   sub-allocates. Every claim WIN16 carves - an arena, a program's claim, a
   module block, a `w16_kclaim` block, the DOS window - is entered in the
   **map**, `w16_vmap`: its claim selector, its size in paragraphs and the
-  virtual base WIN16 gave it, first fit in `1000h`-`FFFFh` (below `1000h`
-  are the moveable handles, `W16_GH0`). So 960 KB of WIN16's own memory at
-  most, wherever the claims are. In real mode there is no map: a virtual
+  virtual base WIN16 gave it, first fit in `0300h`-`FFFFh` (`W16V_LO` = 0300h; below it are the moveable
+  handles, `W16_GH0` = 0100h + 2 x `W16_NGH` = 0300h, so a value under
+  `W16V_LO` is a handle and a value at or above it a virtual paragraph,
+  `w16_pin`/`w16_pout`'s one compare and the fixed-block test of
+  `GlobalHandle`/`GlobalFree`/`GlobalSize` on the same constant). So 1,012 KB
+  of WIN16's own memory at most, wherever the claims are. It was 960 KB
+  (`W16V_LO` = 1000h) until 2026-11-04. The audit that allowed it: no
+  selector the map is asked about is under 1084h except the kernel's identity
+  selectors (0040h, KERNEL_SEG 0060h, FAT_SEG, LOW_SEG, COLD_SEG, all under
+  1000h), which WIN16 never loads through `W16SEG` except KERNEL_SEG, under
+  0300h; every LDT allocator selector, which is everything a claim, part or
+  program holds, is at least `MEGA_LDT_FREE0` x 8 + 4 = 1084h. A row's
+  virtual base only ever comes from the map, so no value in 0300h-0FFFh
+  is looked up unless it was handed out as one. In real mode there is no map: a virtual
   paragraph IS the segment, and every site below assembles to today's bytes.
 - **Loading one** into a segment register is one macro, `W16SEG reg, src`:
   in real mode `mov reg, src`; in the arm a call to `w16_vsel`, which finds
