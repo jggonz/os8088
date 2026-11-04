@@ -1064,7 +1064,11 @@ w16k_grealloc:
     cmp ax, W16_GH0                 ;   discarded is all that changes here
     jb .out
     cmp ax, W16_GH0 + 2 * W16_NGH
-    jae .out
+%ifdef PKG_MEGA
+    jae .mfx
+%else
+    jae .out                        ; (a fixed one IS its handle)
+%endif
     mov si, ax
     sub si, W16_GH0
     and byte [w16_ghf + si], ~(W16_GHDISC | W16_GHNOTE)
@@ -1077,6 +1081,11 @@ w16k_grealloc:
 .mk:
     or [w16_ghf + si], cl
     jmp .out
+%ifdef PKG_MEGA
+.mfx:                               ; a fixed one: the handle as the program
+    mov ax, [es:bx + 6]             ;   passed it. W16POUT would read a block
+    jmp .dx                         ;   header before a DGROUP, which has none
+%endif                              ;   (SPEC.md 124.9.2)
 .size:
     add ax, 15
     adc dx, 0
@@ -1310,17 +1319,29 @@ w16k_grealloc:
     ret
 
 ; w16_dgx - the Global calls' last resort: CL = 0 GlobalHandle, 2 GlobalLock,
-; 4 GlobalSize, 6 GlobalReAlloc (w16s_dgtab). The system-library part says
-; whether the handle is the running program's DGROUP (SPEC.md 124.9.2);
-; 0 when it is not, or when the part could not be had
+; 4 GlobalSize, 6 GlobalReAlloc (w16s_dgtab). A handle that is the running
+; program's DGROUP, as the program passed it, is answered by the
+; system-library part (SPEC.md 124.9.2), with ES:BX at that argument; any
+; other is 0 here, and nothing is fetched for it. A DGROUP whose part cannot
+; be read ends the program saying so, as any of the part's imports does
 w16_dgx:
-    mov word [w16_sfn], w16s_dgtab
+    call w16_args
     xor ch, ch
-    add [w16_sfn], cx
+    cmp cl, 6                       ; GlobalReAlloc's handle is at +6
+    jne .h
+    add bx, cx
+.h:
+    mov ax, [es:bx]
+    cmp ax, [w16_dgroup]
+    jne .z
+    add cx, w16s_dgtab              ; XSEC-OK: [w16_sfn]'s value, an SCALL's
+    mov [w16_sfn], cx
     call w16_scall
     jnc .o
+    jmp w16_dispatch.nolib          ; (AX = DX = 0, the program ended)
+.z:
     xor ax, ax
-    xor dx, dx
+    cwd
 .o:
     ret
 
