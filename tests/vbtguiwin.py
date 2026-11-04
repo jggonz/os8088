@@ -155,6 +155,27 @@ def inner(tmp):
        and str(ot.full_rb.cget("state")) == "disabled",
        "A. opening 1 set FULL SCREEN by its button (%r); the last's button "
        "greyed" % line0.strip())
+    # THE PREVIEW of a full-screen opening is its own encode, over the
+    # whole screen (the owner: "selectable, but the preview is still
+    # showing it not fullscreen"); set back, the preview follows by itself
+    ot._load()
+    pump(app, lambda: ot.frames is not None and not app.job, 120)
+    sh = [ot.frames[0][ot.frames[1][k]].shape[0] for k in (0, 1)] \
+        if ot.frames else None
+    ot.lb.selection_clear(0, "end")
+    ot.lb.selection_set(0)
+    ot._pick()
+    ot.fullv.set(0)
+    ot._set_full()
+    pump(app, lambda: ot.frames is not None and not app.job, 60)
+    sh2 = ot.frames[0][0].shape[0] if ot.frames else None
+    ok(sh == [200, 142] and sh2 == 142,
+       "A. the preview: the full-screen opening 200 rows, the menu one 142 "
+       "(%s); set back to the menu, reloaded at %s" % (sh, sh2))
+    ot.fullv.set(1)
+    ot._set_full()
+    pump(app, lambda: ot.frames is not None and not app.job, 60)
+
     # THE PICTURE'S SIZE (125.3.2): Hercules set down to half on the
     # Battle tab, then back
     bt = app.battle_tab

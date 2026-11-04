@@ -911,35 +911,33 @@ class App(object):
         if self.job:
             self.job.cancel()
 
-    def screens(self, sid, then):
+    def screens(self, sid, then, full=False):
         """Source SID's decoded screens, encoding it first if it is not in
-        the cache yet (a job), then THEN(frames)"""
+        the cache yet (a job), then THEN(frames). FULL: over the WHOLE
+        screen, as a full-screen opening is built - its own encode, kept
+        apart (self.frames[(sid, "full")]) from the canvas's"""
         import vbtana as A
-        if sid in self.frames:
-            return then(self.frames[sid])
+        k = (sid, "full") if full else sid
+        if k in self.frames:
+            return then(self.frames[k])
         s = self.proj.d["sources"][sid]
-        if s["kind"] == "scene" or self._cached(sid):
-            self.frames[sid] = A.screens(self.proj, sid)
-            return then(self.frames[sid])
+        if s["kind"] == "scene" or self._cached(sid, full):
+            self.frames[k] = A.screens(self.proj, sid, full=full)
+            return then(self.frames[k])
 
         def got(res):
-            self.frames[sid] = A.screens(self.proj, sid)
-            then(self.frames[sid])
-        self.run("vbtana", ["screens", self.proj.path, sid], got,
-                 "Reading %s (the first look encodes it; after that it is "
-                 "kept)..." % sid)
+            self.frames[k] = A.screens(self.proj, sid, full=full)
+            then(self.frames[k])
+        self.run("vbtana", ["screens", self.proj.path, sid] +
+                 (["--full"] if full else []), got,
+                 "Reading %s%s (the first look encodes it; after that it is "
+                 "kept)..." % (sid, " full screen" if full else ""))
 
-    def _cached(self, sid):
-        import hashlib
+    def _cached(self, sid, full=False):
         import vbtana as A
-        s, t = self.proj.d["sources"][sid], self.proj.d["target"]
         if not self.proj.path:
             return False
-        key = hashlib.sha1(json.dumps(
-            [A.ENC_KEY, A.file_hash(self.proj.here(s["path"])),
-             t["canvas"][3], t["fps"], t["profile"], t["palette"]]).encode()
-                           ).hexdigest()[:20]
-        return os.path.exists(os.path.join(A.cache_dir(self.proj), key + ".npy"))
+        return os.path.exists(A.screens_npy(self.proj, sid, full))
 
     def photo(self, px, pal=None, scale=SCALE):
         from PIL import ImageTk
@@ -1193,6 +1191,7 @@ class BattleTab(object):
             else:
                 sc[kind] = pct
         if sc != (t.get("scale") or {}):
+            self.app.frames.clear()     # (another size: other screens)
             self.app.edit("set", ("target", "scale"), sc or None)
 
     def _end(self, k):
@@ -2353,6 +2352,8 @@ class OpeningsTab(object):
         if i is None:
             return
         self.app.edit("set_opening", i, full=bool(self.fullv.get()))
+        if getattr(self, "loaded", False):  # the preview as it now is (a
+            self._load()                    # first full look encodes)
         bad = [p for p in self.app.proj.check()
                if p.where.startswith("openings.") and "full screen" in p.text]
         if bad:
@@ -2487,19 +2488,24 @@ class OpeningsTab(object):
         """Every opening's frames, read (a job each the first time), then
         the openings in turn as whole screens: the canvas over black"""
         d = self.app.proj.d
-        srcs = [d["clips"][o["clip"]]["source"] for o in d["openings"]
-                if o["clip"] in d["clips"]]
+        # a FULL-SCREEN opening's own encode, over the whole screen, as the
+        # build makes it - the canvas's for one with the menu
+        srcs = [(d["clips"][o["clip"]]["source"], bool(o.get("full")))
+                for o in d["openings"] if o["clip"] in d["clips"]]
         if d.get("idle"):
-            srcs.append(d["idle"]["source"])
+            srcs.append((d["idle"]["source"], False))
 
         def step(k):
             if k < len(srcs):
-                return self.app.screens(srcs[k], lambda _: step(k + 1))
+                sid, full = srcs[k]
+                return self.app.screens(sid, lambda _: step(k + 1), full=full)
             pics, starts = [], []
             for o in d["openings"]:
                 c = d["clips"][o["clip"]]
+                fk = (c["source"], "full") if o.get("full") else c["source"]
                 starts.append(len(pics))
-                pics += list(self.app.frames[c["source"]][c["in"]:c["out"] + 1])
+                pics += list(self.app.frames[fk][c["in"]:c["out"] + 1])
+            self.loaded = True
             self.frames = (pics, starts, self._key())
             self.scrub.config(to=max(0, len(pics) - 1))
             self._show(0)

@@ -121,6 +121,20 @@ def pad_into(fr, w, h, x0, y0):
     return out
 
 
+def screens_npy(proj, sid, full=False):
+    """Where source SID's encode (screens()) is cached: one key for every
+    setting the encode depends on, so the builder's window asks here and
+    cannot drift from it"""
+    s, t = proj.d["sources"][sid], proj.d["target"]
+    rows = 200 if full else t["canvas"][3]
+    pct = scale_of(proj, "cga4")
+    key = hashlib.sha1(json.dumps(
+        [ENC_KEY, file_hash(proj.here(s["path"])), rows, t["fps"],
+         t["profile"], t["palette"]] + ([pct] if pct < 100 else [])).encode()
+                       ).hexdigest()[:20]
+    return os.path.join(cache_dir(proj), key + ".npy")
+
+
 def screens(proj, sid, progress=_nop, full=False):
     """Source SID's frames, as the decoder will show them - the canvas's
     rows, or FULL: the whole 200 (a full-screen opening, 125.3)"""
@@ -132,11 +146,8 @@ def screens(proj, sid, progress=_nop, full=False):
     pct = scale_of(proj, "cga4")
     pw, ph, x0, y0 = boxed(320, rows, pct)
     path = proj.here(s["path"])
-    key = hashlib.sha1(json.dumps(
-        [ENC_KEY, file_hash(path), rows, t["fps"], t["profile"],
-         t["palette"]] + ([pct] if pct < 100 else [])).encode()
-                       ).hexdigest()[:20]
-    npy = os.path.join(cache_dir(proj), key + ".npy")
+    npy = screens_npy(proj, sid, full)
+    key = os.path.basename(npy)[:-4]
     if os.path.exists(npy):
         return list(np.load(npy))
     progress("encode", 0, 0, sid)
@@ -930,6 +941,8 @@ def main(argv=None):
     q = sp.add_parser("screens", help="encode and cache a source")
     q.add_argument("project")
     q.add_argument("source")
+    q.add_argument("--full", action="store_true",
+                   help="over the whole screen (a full-screen opening)")
     q = sp.add_parser("loops", help="the idle loop's candidates")
     q.add_argument("project")
     q.add_argument("source")
@@ -974,7 +987,7 @@ def main(argv=None):
     def progress(stage, done, of, what):
         say(dict(stage=stage, done=done, of=of, what=what))
     if a.cmd == "screens":
-        fr = screens(proj, a.source, progress)
+        fr = screens(proj, a.source, progress, a.full)
         say(dict(stage="done", frames=len(fr)))
     elif a.cmd == "loops":
         fr = screens(proj, a.source, progress)
