@@ -929,6 +929,28 @@ translated `ADC` and `CMP` broken as the control.
 `tests/c64part.py` checks that the three parts unpack to their files and that
 each fetched claim holds its file's first bytes.
 
+### 4.9 The dynamic recompiler — PLANNED (docs/plans/C64-RECOMPILER-PLAN.md)
+
+**Nothing in this section is built.** It is the contract the plan's waves
+build to, written first as this project's process asks.
+
+- **RAM code only.** The ROMs are translated ahead of time (§4.8); the
+  recompiler takes PCs below `$A000`, in `$C000-$CFFF`, and under a ROM only
+  while the bank map shows RAM there.
+- **Templates are the fast core's handlers** (§4.7), the dispatch removed
+  and operands made immediates, so a translated block computes exactly what
+  the fast core would. Every gate the fast core passes, the recompiler passes
+  with it forced on.
+- **Blocks** are straight-line code to the first control transfer, at most
+  32 instructions, translated on their 64th entry into a heap code cache,
+  found by a direct-mapped table keyed by PC. Cycles stay `BP`.
+- **A write to a page holding code invalidates that page's blocks** before
+  the store completes (the fast core's `c64_mark` tests a 256-bit CODE map);
+  a write into the running block leaves it at the next instruction. A page
+  invalidated too often is VOLATILE and stays with the fast core.
+- **It is a part**, lazy and compressed; with no memory for it the fast core
+  runs alone. The resident glue is all the package's segment pays.
+
 ---
 
 ## 5. The VIC-II
