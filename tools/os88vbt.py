@@ -25,14 +25,14 @@ Commands:
     os88vbt.py info FILE.VBT
     os88vbt.py verify FILE.VBT        decode every path, check every join
 
-Format version 5 (SPEC.md 125.2), little-endian:
+Format version 8 (SPEC.md 125.2), little-endian:
     0             the header
     512           the clip table, 48 bytes a clip, at most 64
     4096          the RULES (tools/vbtrules.py, SPEC.md 125.6), to 16 KB
     then, each on 4 KB: the VIDEO RESIDENT block (the idle loop, every
                   clip's anchor table), the MUSIC (streamed), the MENU's
-                  effects (resident), the ENTRIES (resident, any length,
-                  each on a paragraph and named by it), the band's
+                  effects (resident), the IDLE loop's records (resident),
+                  the band's
                   IMAGES (resident), and each clip's
                   STREAM - its records, each carrying its frame's sound;
                   any length, streamed
@@ -50,13 +50,17 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 7
+VERSION = 8
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
                     # floppy and a FAT16 hard disk to 128 MB
 REGION_MAX = 60 * 1024  # a RESIDENT region is read into one claim's piece
-ENT_MAX = 0x10000 * 16   # the entries: a paragraph number names each
+ENT_MAX = 0x10000 * 16   # the idle loop: a paragraph number names each record
+ENT_CLIP = 32 * 1024    # a clip's ENTRIES, in front of its records (format 8):
+                        # read into its ring with its head, so they must sit
+                        # in the smallest ring (VB_CRMIN 48 KB) with a piece
+                        # of its records after them
 REC_MAX = 16384     # a record is read contiguously out of a clip's ring, so
                     # it is at most the ring's guard (VB_CGUARD, 125.4)
 MAX_CLIPS = 64
@@ -207,7 +211,9 @@ def geom(rows):
 
 
 CAP_SHARE = 0.75    # (125.4.1) of the profile's disk, a streamed clip's
-CAP_HOLD = 57344    # ...what a ring holds ahead of the sound, at most
+CAP_HOLD = 57344    # ...what a ring holds ahead of the sound, at most:
+                    # the bundle's own ring now (build(), VBATTLE-RAM-PLAN
+                    # R4), this the floor's when nothing is known of it
 
 
 def rows_into(dst, src, g, y0, n):
@@ -398,6 +404,7 @@ class Battle:
                                 # clip is held to: dict(rate, hold, head),
                                 # bytes; None: no cap
         self.capped = {}        # ...and what it did: clip -> frames capped
+        self.cap_ring = None    # ...and the ring it took the engine to have
         self.rend = Rend("cga4", rows)  # the adapter it is for
 
 
@@ -428,6 +435,19 @@ def build(b):
         maxrec[0] = max([maxrec[0]] + [len(r) for r in recs])
         return b"".join(recs)
 
+    def entry_rec(r):
+        """An entry: a record padded inside to a whole paragraph, so that
+        the next starts on one and the ring's walk steps over it (125.4)"""
+        maxrec[0] = max(maxrec[0], len(r))
+        return rec_pad(r, -len(r) % 16)
+
+    def with_entries(ents, recs, name):
+        if len(ents) > ENT_CLIP:
+            raise ValueError("clip %s: its entries are %d bytes, over %d - "
+                             "give it fewer anchors" % (name, len(ents),
+                                                         ENT_CLIP))
+        return bytes(ents) + stream(recs)
+
     # --- the openings, in turn from a black screen: every record over the
     # whole screen, a canvas frame with the band's rows black under it.
     # A battle with none still needs one: the loop's records are deltas, and
@@ -438,7 +458,6 @@ def build(b):
     scr = np.zeros((REND.full, REND.w), np.uint8)
     title_s = [surface_of(full_of(f), REND.full) for f in b.title["frames"]] \
         if b.title else []
-    ents = bytearray()
     wasfull = True                  # (black, or a full opening's last frame)
     for k, o in enumerate(openings):
         last = k == len(openings) - 1
@@ -447,6 +466,7 @@ def build(b):
         prev = surface_of(scr, REND.full)
         recs = []
         anch = []
+        ents = bytearray()
         # FULL SCREEN, or with the menu (125.3): only a full one's flag
         # says so, and the engine brings the band in at the first opening
         # without it - or, every opening full, once the last is over
@@ -456,7 +476,7 @@ def build(b):
             cur = surface_of(fr[0], REND.full)      # from each anchor, and
             for ka in o["anchors"]:                 # its record 0 its sound
                 anch.append((ka, len(ents) >> 4))
-                ents += pad(rec(title_s[ka], cur, REND.full), 16)
+                ents += entry_rec(rec(title_s[ka], cur, REND.full))
             recs.append(rec(None, None, REND.full, snd[0]))
             prev = cur
             fr, snd = fr[1:], snd[1:]
@@ -483,21 +503,37 @@ def build(b):
         scr = o["frames"][-1] if not fr else fr[-1]
         scr = full_of(scr)
         wasfull = bool(o.get("full"))
-        regions.append(stream(recs))
+        regions.append(with_entries(ents, recs, o["name"]))
         clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
-                              exit=exit_to, anch=anch))
-    # --- the actions: an entry from each anchor, into the ENTRIES (each on
-    # a paragraph, named by it: version 4, so that they are bounded by
-    # memory and not by a 16-bit offset); record 0 is frame 0's sound alone
-    # (the entry drew its picture); the last record the seam
+                              exit=exit_to, anch=anch, esz=len(ents) >> 4))
+        ents = bytearray()
+    # --- the actions: an entry from each anchor, IN FRONT OF THE CLIP'S
+    # RECORDS (format 8, VBATTLE-RAM-PLAN R2: they were a resident region
+    # of their own, every clip's held for the whole play), each on a
+    # paragraph of the clip's region and named by it; record 0 is frame
+    # 0's sound alone (the entry drew its picture); the last record the seam
+    if b.cap is not None:           # THE BUNDLE'S OWN RING (VBATTLE-RAM-PLAN
+        import vbtana as A_         # R4): what the engine will be given
+        nanch = sum(len(c.get("anchors", b.anchors)) for c in b.clips) + \
+            sum(len(o.get("anchors", ())) for o in openings)  # beside this
+        parts = A_.resident_parts(  # bundle's resident claim, on the 640 KB
+            4 * nanch + 2 * n, len(idle),       # machine vbtana measured -
+            sum(len(sfx_bytes(b.sfx[nm])) for nm in set(  # the cap holds a
+                v for v in b.ui.values() if v is not None)),  # clip to that
+            len(music_bytes(b.music)), len(bytes(b.images)),  # ring, less
+            b.band[1])                          # the lead's share. It was
+        b.cap_ring = A_.ring_of(sum(x for _, x in parts),   # 56 KB for
+                                REND.recmax)    # every bundle (CAP_HOLD)
+        b.cap = dict(b.cap, hold=A_.cap_hold(
+            b.cap_ring or A_.VB_CRMIN * 1024, b.cap["rate"], b.cap["fps"],
+            b.rate))
     for c in b.clips:
         fs = [surface_of(f, rows) for f in c["frames"]]
         anch = []
+        ents = bytearray()
         for k in c.get("anchors", b.anchors):
             anch.append((k, len(ents) >> 4))
-            ents += pad(rec(idle_s[k], fs[0], rows), 16)
-            if len(ents) > ENT_MAX:
-                raise ValueError("the entries are over %d bytes" % ENT_MAX)
+            ents += entry_rec(rec(idle_s[k], fs[0], rows))
         snd = frame_sound(place(c.get("cues", {}), len(fs), spf, b.sfx),
                           len(fs), spf, False)
         recs = [rec(None, None, rows, snd[0])]
@@ -519,9 +555,9 @@ def build(b):
             else:                                   # the whole screen when
                 recs.append(rec(last, surface_of(    # it is full screen
                     c["join_loop"], rows), rows))
-        regions.append(stream(recs))
+        regions.append(with_entries(ents, recs, c["name"]))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
-                              exit=exit_to, anch=anch))
+                              exit=exit_to, anch=anch, esz=len(ents) >> 4))
     # --- the LOOPS (125.3.1): the title over the whole screen, an end loop
     # in the canvas. Record 0 from black, records 1..n-1, and record n the
     # seam back onto frame 0; each carries its frame's sound (frame 0's
@@ -649,8 +685,7 @@ def build(b):
     vres_at = meta_len
     mus_at = vres_at + len(pad(vres, ALIGN))
     ui_at = mus_at + len(pad(mus, ALIGN))
-    ent_at = ui_at + len(pad(uib, ALIGN))
-    idl_at = ent_at + len(pad(ents, ALIGN))
+    idl_at = ui_at + len(pad(uib, ALIGN))
     img_at = idl_at + len(pad(idle, ALIGN))
     imgs = bytes(b.images)
     pos = img_at + len(pad(imgs, ALIGN))
@@ -679,7 +714,7 @@ def build(b):
     if len(opens) > MAX_OPEN:
         raise ValueError("%d openings" % len(opens))
     h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
-    struct.pack_into("<II", h, 88, ent_at, len(ents))
+    struct.pack_into("<II", h, 88, 0, 0)   # (the entries: in the clips now)
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     h[337] = REND.code                  # the adapter (cga4, vga4, herc)
@@ -705,6 +740,7 @@ def build(b):
                          len(c["anch"]))
         if c.get("lap"):            # a loop's lap: where, and its 4 KBs
             struct.pack_into("<IH", ct, at + 18, *c["lap"])
+        struct.pack_into("<H", ct, at + 32, c.get("esz", 0))  # its entries
         ct[at + 24:at + 32] = c["name"].upper().encode()[:8].ljust(8, b" ")
 
     meta = bytearray(h) + ct + bytes(b.rules)
@@ -712,7 +748,7 @@ def build(b):
     meta = bytes(meta).ljust(meta_len, b"\0")    # (as long as its rules)
     assert len(meta) <= META
     out = pad(meta, ALIGN) + pad(vres, ALIGN) + pad(mus, ALIGN) + \
-        pad(uib, ALIGN) + pad(ents, ALIGN) + pad(idle, ALIGN) + \
+        pad(uib, ALIGN) + pad(idle, ALIGN) + \
         pad(imgs, ALIGN)
     for r in regions:
         out += pad(r, ALIGN)
@@ -784,8 +820,6 @@ class Bundle:
         self.canvas = struct.unpack_from("<HHHH", data, 68)
         self.maxrec = struct.unpack_from("<H", data, 76)[0]
         self.openings = [x for x in data[80:88] if x != NO_SFX]
-        self.ent_at, elen = struct.unpack_from("<II", data, 88)
-        self.ents = data[self.ent_at:self.ent_at + elen]
         self.img_at, ilen = struct.unpack_from("<IH", data, 320)
         self.imgs = data[self.img_at:self.img_at + ilen]
         import vbtrules
@@ -819,22 +853,29 @@ class Bundle:
                     for j in range(nanch)]
             lap = struct.unpack_from("<IH", data, at + 18) \
                 if flags & CF_LOOP else None
+            esz = struct.unpack_from("<H", data, at + 32)[0] * 16
             self.clips.append(dict(off=off, len=ln, nrec=nrec, flags=flags,
-                                   exit=ex, anch=anch, name=name, lap=lap))
+                                   exit=ex, anch=anch, name=name, lap=lap,
+                                   esz=esz))
+        self.ents_len = sum(c["esz"] for c in self.clips)
 
     def idle_rec(self, i):
         o = struct.unpack_from("<H", self.vres, self.idle_tab + 2 * i)[0] * 16
         n = struct.unpack_from("<H", self.idle_r, o)[0]
         return self.idle_r[o:o + n]
 
-    def entry(self, para):
-        o = para * 16
-        n = struct.unpack_from("<H", self.ents, o)[0]
-        return self.ents[o:o + n]
+    def entry(self, c, para):
+        """Clip C's entry at paragraph PARA of its region (format 8)"""
+        o = c["off"] + para * 16
+        if para * 16 >= c["esz"]:
+            raise ValueError("clip %s: an anchor's entry past its entries"
+                             % c["name"])
+        n = struct.unpack_from("<H", self.d, o)[0]
+        return self.d[o:o + n]
 
     def stream(self, c):
         s = self.d[c["off"]:c["off"] + c["len"]]
-        out, at = [], 0
+        out, at = [], c.get("esz", 0)
         while at < len(s):
             n = struct.unpack_from("<H", s, at)[0]
             out.append(s[at:at + n])
@@ -910,7 +951,7 @@ def verify(data, quiet=False):
         ends = set()
         for k, o in lc["anch"]:     # left from each of the title's frames
             s2 = bytearray(title[k])
-            decode(s2, b.entry(o))
+            decode(s2, b.entry(lc, o))
             for r in b.stream(lc):
                 decode(s2, r)
             cur = openings_from(s2)
@@ -948,7 +989,7 @@ def verify(data, quiet=False):
         for k, o in c["anch"]:
             s = REND.blank()
             g.put(s, idle[k])
-            decode(s, b.entry(o))
+            decode(s, b.entry(c, o))
             for r in b.stream(c):
                 decode(s, r)
             if c["flags"] & CF_JOINS and canvas(s) != idle[c["exit"]]:
@@ -1188,10 +1229,14 @@ def build_project(proj, progress=None, kind="cga4"):
     verify(data, quiet=True)
     LAST_CAPPED.clear()             # (what the reader's model held back,
     LAST_CAPPED.update(b.capped)    # for the build's report: 125.4.1)
+    LAST_CAP.clear()                # (and the ring it was held to: R4)
+    if b.cap is not None:
+        LAST_CAP.update(ring=b.cap_ring, hold=b.cap["hold"])
     return data
 
 
 LAST_CAPPED = {}
+LAST_CAP = {}
 
 
 def demo_project(path, bars=16, floppy=False):
@@ -1301,8 +1346,8 @@ def cmd_info(a):
     b = Bundle(d)
     print("%s: %d bytes, CGA4 palette %02Xh, canvas %s, band %s, %d fps, "
           "%d Hz" % (a.file, len(d), b.cgapal, b.canvas, b.band, b.fps, b.rate))
-    print("  idle loop %d frames; video resident %d bytes; entries %d bytes; "
-          "largest record %d" % (b.nidle, len(b.idle_r), len(b.ents), b.maxrec))
+    print("  idle loop %d frames; video resident %d bytes; entries (in their clips) %d bytes; "
+          "largest record %d" % (b.nidle, len(b.idle_r), b.ents_len, b.maxrec))
     print("  music %d bytes (%.1f s, %s), in at %d; the menu's %d effects in "
           "%d bytes" % (b.mlen, b.mlen / b.rate,
                         "resident" if b.mlen <= MUSIC_RES else "streamed",

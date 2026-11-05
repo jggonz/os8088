@@ -67,6 +67,8 @@ vb_lanchor:
     mov [vb_apring], bx
     mov al, [vb_meta+VH_OPENS]
     mov [vb_apclip], al
+    mov di, RG_AOFF                 ; its sound from its record 0
+    call vb_entcur
 .out:
     ret
 
@@ -75,10 +77,16 @@ vb_lanchor:
 ; (record 0 is its sound alone), the openings after it in turn. The title's
 ; ring is the reader's once its sound has given way. The hook's; CF=0
 vb_leave_go:
-    mov dx, [vb_eseg]
-    add dx, [vb_lent]
-    xor si, si
+    mov bx, vb_rg0                  ; (in front of its records, format 8)
+    mov ax, [vb_lent]
+    call vb_entat
     call vb_decode
+    mov bl, [vb_meta+VH_OPENS]
+    xor bh, bh
+    call vb_crec
+    mov bx, vb_rg0
+    mov di, RG_VOFF
+    call vb_entcur
     mov bx, [vb_lring]              ; the title is over
     mov byte [bx+RG_VDONE], 1
     mov byte [vb_tplay], 0

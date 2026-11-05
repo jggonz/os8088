@@ -1,8 +1,9 @@
 # VBATTLE-RAM — what a battle holds in 640 KB, and when it reads
 
-**Status: R1 BUILT (2026-11-05: 88 -> 128 KB a ring on the owner's 100%
+**Status: COMPLETED - R1 BUILT (2026-11-05: 88 -> 128 KB a ring on the owner's 100%
 battle, 108 -> 144/148 on the 75%, a used machine the same as a fresh boot -
-SPEC.md 125.4.4, `vbtram`); R3 BUILT (`vbtmenu`); R2, R4 planned. Section 2 is the memory as
+SPEC.md 125.4.4, `vbtram`); R3 BUILT (`vbtmenu`); R2 BUILT
+(format 8, the owner's rings 168 + 172 KB); R4 BUILT (`vbtcap`). Section 2 is the memory as
 it stood before R1, measured.** The owner, after the Hercules rounds:
 *"We should probably take a close look at the entire ram layout, and when we
 decide to both load and preload. For example, we never need to preload a

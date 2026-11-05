@@ -12,13 +12,18 @@ seconds of a picture changing all over (~140 KB/s at 100% Hercules):
   - capped (the default): the build says it held that clip, and the
     reader's model run over the BUILT records - the head in at the start,
     the profile's disk at three quarters less the music each frame, no
-    more than CAP_HOLD ahead - never overdraws by more than half a frame's
+    more than the bundle's own ring holds ahead of the sound (vbtana's
+    estimate, VBATTLE-RAM-PLAN R4) - never overdraws by more than half a frame's
     income; every path still verifies (each seam lands on the loop);
   - uncapped (target.burst_cap false): the same clip overdraws by tens of
     KB - which is the cut the owner heard.
 
-Broken on purpose (CAP_HOLD set to 1 MB, so the model never holds a frame
-back) the capped build overdraws like the uncapped one and this goes red.
+  - R4: the hold is the bundle's own ring, not the old constant 56 KB, and
+    a smaller ring (less free memory) holds the clip harder.
+
+Broken on purpose (cap_hold answering 1 MB, so the model never holds a
+frame back) the capped build overdraws like the uncapped one and this goes
+red; answering a constant 56 KB, the R4 checks go red.
 """
 import os
 import struct
@@ -46,7 +51,7 @@ def worst(data, name, cap):
     """The deepest overdraw of the reader's model over clip NAME's records"""
     b = B.Bundle(data)
     c = [x for x in b.clips if x["name"].strip().lower() == name[:8]][0]
-    o, sizes = c["off"], []
+    o, sizes = c["off"] + c["esz"], []     # (past its entries, format 8)
     for _ in range(c["nrec"]):
         n = struct.unpack_from("<H", data, o)[0]
         sizes.append(n)
@@ -74,19 +79,44 @@ def main():
         c.update(source="burst", **{"in": 0, "out": n - 1})
         c["cues"] = [q for q in c.get("cues", []) if q["frame"] < n]
         p.save()
-        # the ENGINE's figures, not the builder's constants: what a ring
-        # holds ahead of the sound (88 KB less the lead's ~27 KB, rounded
-        # down) and the 5150-st225 disk at three quarters less the music
-        cap = dict(rate=int(119000 * 0.75) - p.d["target"]["rate"],
-                   hold=57344, head=40960, fps=p.d["target"]["fps"])
+        # the ENGINE's figures, not the builder's constants: the ring the
+        # engine gives this bundle (vbtana.memory, off the BUILT bundle)
+        # less the lead's share, and the 5150-st225 disk at three quarters
+        # less the music
         on = B.build_project(p, kind="herc")      # (build_project verifies)
-        held = dict(B.LAST_CAPPED)
+        held, used = dict(B.LAST_CAPPED), dict(B.LAST_CAP)
+        rate, fps = int(119000 * 0.75) - p.d["target"]["rate"], \
+            p.d["target"]["fps"]
+        ring = A.memory(on)["ring"]
+        cap = dict(rate=rate, hold=A.cap_hold(ring, rate, fps,
+                                              p.d["target"]["rate"]),
+                   head=40960, fps=fps)
+        ok(used.get("ring") and ring - 32768 <= used["ring"] <= ring and
+           used["hold"] > 57344,
+           "R4: the cap held to the bundle's own ring (%d KB, the engine's "
+           "%d; %d KB ahead of the sound, against a constant 56)" % (
+               used.get("ring", 0) // 1024, ring // 1024,
+               used.get("hold", 0) // 1024))
         low_on, per, big_on = worst(on, "ari_attack", cap)
         ok(held.get("ari_attack", 0) > 5 and low_on >= -per / 2,
            "capped: ARI's attack held to the disk (%s), the reader's model "
            "never overdrawn past half a frame's income (deepest %.1f KB, "
            "income %.1f KB a frame), every path verified" % (
                held, low_on / 1024, per / 1024))
+        free = A.VB_FREE                # a bundle whose ring comes out
+        A.VB_FREE = 330                 # SMALLER (a machine with less
+        try:                            # free): held harder
+            B.build_project(p, kind="herc")
+            small = dict(B.LAST_CAP)
+            held_s = dict(B.LAST_CAPPED)
+        finally:
+            A.VB_FREE = free
+        ok(small["hold"] < used["hold"] and
+           held_s.get("ari_attack", 0) > held.get("ari_attack", 0),
+           "R4: a smaller ring (%s KB) holds ARI's attack harder (%d frames "
+           "against %d)" % (small["ring"] and small["ring"] // 1024,
+                            held_s.get("ari_attack", 0),
+                            held.get("ari_attack", 0)))
         p.d["target"]["burst_cap"] = False
         off = B.build_project(p, kind="herc")
         low_off, _, big_off = worst(off, "ari_attack", cap)

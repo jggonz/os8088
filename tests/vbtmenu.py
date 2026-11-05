@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """THE MENU READS NOTHING IT CANNOT USE, AND NOTHING A KEY WAITS ON
-(docs/plans/VBATTLE-RAM-PLAN.md R3), on MartyPC's XT with a CGA and an SB.
+(docs/plans/completed/VBATTLE-RAM-PLAN.md R3), on MartyPC's XT with a CGA and an SB.
 
     make vbattle && python3 tests/vbtmenu.py
 

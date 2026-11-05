@@ -570,7 +570,7 @@ def budget(proj, data):
             left -= take
         holds[pool] = dict(whole=whole, kb=len(data) // 1024 if whole
                            else got, order_kb=sum(order))
-    return dict(clips=clips, idle_bytes=len(b.idle_r), entries=len(b.ents),
+    return dict(clips=clips, idle_bytes=len(b.idle_r), entries=b.ents_len,
                 hold=holds,
                 music=b.mlen, ui=len(b.uib), file=len(data), disk=disk,
                 memory=mem, music_rate=mrate)
@@ -579,46 +579,74 @@ def budget(proj, data):
 # THE ENGINE'S MEMORY (SPEC.md 125.4), carved as vb_load and vb_rclaim carve
 # it, so that the Build tab's figures are the engine's own arithmetic
 VB_MR, VB_MPIECE, VB_MRES = 32768, 4096, 61440      # the music's ring, or
-VB_BAND = 2 * 16384                                 # all of a short one; the
-VB_CARD, VB_RKEEP, VB_CGUARD = 17, 8, 16            # band's two buffers; KB
-VB_CRMIN, VB_HEAD = 48, 40960                       # (vbattle.asm's names)
+                                                    # all of a short one;
+VB_CARD, VB_RKEEP, VB_CGUARD = 17, 8, 16            # KB
+VB_CRMIN, VB_HEAD, VB_LEAD = 48, 40960, 4096        # (vbattle.asm's names)
 # The KB free to the engine once it is loaded, on a 640 KB 5150 with a
 # Sound Blaster and os8088's hard disk driver: MEASURED (VB_FREE_SRC)
-VB_FREE = 461
-VB_FREE_SRC = ("measured on MartyPC's 640 KB XT with a Sound Blaster "
-               "(os8088_xt_hdd_sb), 2026-11-04: the rules battle's rings came "
-               "to 144 KB each beside a 116 KB resident claim, which is 461 "
-               "to 468 KB free - and at format 7 to 140 KB beside 120, the "
-               "same")
+VB_FREE = 495
+VB_FREE_SRC = ("measured on MartyPC's Hercules 5150, 640 KB, with a Sound "
+               "Blaster and os8088's hard disk driver "
+               "(os8088_5150_herc_hdd_sb_gla), 2026-11-05, the owner's 100% "
+               "Hercules battle at format 8: rings 168 + 172 KB (each with "
+               "its 16 KB guard) beside a 96 KB resident claim and the "
+               "card's 17, 10 KB left free - the desktop's caches shed for "
+               "the play (VBATTLE-RAM-PLAN R1, R2)")
 
 
 def _r4k(n):
     return min((n + 4095) & ~4095, 0xF000)
 
 
-def memory(data, free_kb=VB_FREE):
+def memory(data, free_kb=None):
     """What the engine claims for bundle DATA (125.4), in bytes: the
     resident claim's parts, the card's ring, and the two clip rings a play
     is given out of FREE_KB (the largest run once it is loaded). "rings" is
     None when they would be under VB_CRMIN: Play says Not enough memory"""
     import os88vbt as B
     b = B.Bundle(data)
-    mres = b.mlen <= VB_MRES
-    parts = [("the block (its tables)", _r4k(len(b.vres))),
-             ("the idle loop", (len(b.idle_r) + 4095) & ~4095),
-             ("the menu's sounds", _r4k(len(b.uib))),
-             ("the music, all of it" if mres else "the music's ring",
-              _r4k(b.mlen) if mres else VB_MR + VB_MPIECE),
-             ("the entries", (len(b.ents) + 4095) & ~4095),
-             ("the band's pictures", _r4k(len(b.imgs))),
-             ("the band's two buffers", VB_BAND)]
+    parts = resident_parts(len(b.vres), len(b.idle_r), len(b.uib), b.mlen,
+                           len(b.imgs), b.band[1])
     res = sum(n for _, n in parts)
-    left = free_kb - (res + 1023) // 1024 - VB_CARD - VB_RKEEP
-    guard = VB_CGUARD if b.maxrec <= 16384 else 2 * VB_CGUARD
-    ring = (left // 2 - guard) // 4 * 4
+    ring = ring_of(res, b.maxrec, free_kb)
     return dict(parts=parts, resident=res, card=VB_CARD * 1024,
-                ring=ring * 1024 if ring >= VB_CRMIN else None,
-                free=free_kb * 1024, music_resident=mres)
+                ring=ring, free=(free_kb or VB_FREE) * 1024, music_resident=b.mlen <=
+                VB_MRES)
+
+
+def resident_parts(vres, idle, ui, mlen, imgs, band_row):
+    """The resident claim's parts (vb_load), each its 4 KBs: from the
+    sizes alone, so that the builder can ask before its clips are made"""
+    mres = mlen <= VB_MRES
+    return [("the block (its tables)", _r4k(vres)),
+            ("the idle loop", (idle + 4095) & ~4095),
+            ("the menu's sounds", _r4k(ui)),
+            ("the music, all of it" if mres else "the music's ring",
+             _r4k(mlen) if mres else VB_MR + VB_MPIECE),
+            ("the band's pictures", _r4k(imgs)),
+            ("the band's two buffers",      # (vb_bpara: the band's rows at
+             2 * _r4k((200 - band_row) * 80))]  # 80 bytes, VBATTLE-RAM R1)
+
+
+def ring_of(res, maxrec, free_kb=None):
+    """A clip ring's bytes (the smaller of the two, its guard out) beside
+    a resident claim of RES bytes, out of FREE_KB - or None under VB_CRMIN,
+    when Play says Not enough memory (vb_rclaim)"""
+    if free_kb is None:
+        free_kb = VB_FREE
+    left = free_kb - (res + 1023) // 1024 - VB_CARD - VB_RKEEP
+    guard = VB_CGUARD if maxrec <= 16384 else 2 * VB_CGUARD
+    ring = (left // 2 - guard) // 4 * 4
+    return ring * 1024 if ring >= VB_CRMIN else None
+
+
+def cap_hold(ring, income, fps, srate):
+    """What a ring of RING bytes holds ahead of a clip's SOUND, for the
+    builder's reader's model (125.4.3, VBATTLE-RAM-PLAN R4): the ring less
+    the lead's share - the card's lead (VB_LEAD samples at SRATE) and a
+    frame, at the clip's INCOME of bytes a second - and a piece"""
+    lead_frames = -(-VB_LEAD * fps // srate) + 1
+    return max(0, ring - int(lead_frames * income / float(fps)) - VB_MPIECE)
 
 
 # --- colour, for every picture the builder shows ----------------------------------

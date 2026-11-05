@@ -3198,6 +3198,11 @@ def memory_lines(mem):
     out.append("Two clip rings, a play's, out of what is left: %s" % (
         "%d KB each" % kb(mem["ring"]) if mem["ring"] else
         "NOT ENOUGH - Play would say Not enough memory"))
+    if mem["ring"] and mem["ring"] < 96 * 1024:     # (VBATTLE-RAM-PLAN R4:
+        out.append("    SMALL: a ring is what rides out a clip faster "
+                   "than the disk, and the build holds clips to it - "
+                   "a smaller resident claim (the idle loop, the music, "
+                   "the band's pictures) is a larger ring")   # told so)
     return out
 
 

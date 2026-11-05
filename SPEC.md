@@ -237279,7 +237279,23 @@ Little-endian. Every region starts on a 4 KB boundary, because
 `OSAPI_FILE_READ_SEQ` seeks and reads in cluster multiples, and 4 KB covers
 every floppy and a FAT16 disk to 128 MB.
 
-Version 5 (2026-11-04) is the current version. Over version 4 it has the
+Version 8 (2026-11-05) is the current version. Over version 7 it moves
+**each clip's ENTRIES in front of its own records** (docs/plans/completed/
+VBATTLE-RAM-PLAN.md R2): an anchor names a paragraph of its clip's region, the clip
+table's word at 32 says how many paragraphs the entries take, and the
+ENTRIES region and its header field (88, now zero) are gone. They were
+resident, every action's held for the whole play - 82 KB of the owner's
+100% Hercules battle - so that a chosen action could start on the next
+frame. A clip's head is read before it may start anyway (125.4), so its
+entries are read WITH it: they are the first bytes of its ring, the
+picture's cursor stays on them until the entry is drawn (which keeps the
+reader off them), and the sound's goes past them to record 0 as the clip
+is anchored. A clip's entries are at most 32 KB (`ENT_CLIP`), so the
+smallest ring (48 KB) holds them and a piece of the clip after them. The
+engine refuses version 7 with *BATTLE.VBT is an older build: rebuild it*.
+Versions 6 and 7 brought the loops (125.3.1) and streamed them, and took
+the idle loop's records out of the block into a region of their own.
+Version 5 (2026-11-04), over version 4, has the
 RULES (125.6) in its first region, which is 8 to 16 KB as they need, up to
 64 clips, and the band's PICTURES (125.5) as a region of their own.
 Version 4 had:
@@ -237309,9 +237325,9 @@ kept every effect, and the music, resident. The engine refuses all four.
 | then | the VIDEO RESIDENT block, at most 60 KB: the idle loop's records, every clip's anchor table, the idle table |
 | then | the MUSIC: unsigned 8-bit, 64..191, streamed (125.4) |
 | then | the MENU's effects: signed 8-bit, -64..63, back to back, resident |
-| then | the ENTRIES: each clip's entry records, one an anchor, each padded to a paragraph; resident, any length (read 32 KB at a time, `vb_entload`) |
+| then | the IDLE loop's records, each on a paragraph; resident (read 32 KB at a time, `vb_entload`) |
 | then | the band's PICTURES: CGA4 bytes, two a cell, a row after a row, each on a paragraph (125.5); resident |
-| then | each clip's STREAM: its records, back to back, any length |
+| then | each clip's STREAM: its ENTRIES first (version 8: one an anchor, each a record padded inside to a whole paragraph, so the ring's walk steps over them; at most 32 KB), then its records, back to back, any length |
 
 **The ranges are the mix.** The music is held to 64..191 and a clip's
 mixed sound to -64..63, so their sum never leaves 0..255. Mixing is then
@@ -237323,7 +237339,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 7 |
+| 4 | 2 | version, 8 |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows |
@@ -237346,7 +237362,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 68 | 2 x 4 | the CANVAS: x, y, width and height in pixels (the build's; the engine does not need it) |
 | 76 | 2 | the largest record, at most 16 KB (VB_CGUARD) |
 | 80 | 8 | the openings' clips, in turn; FFh past the last |
-| 88 | 4+4 | the ENTRIES' offset and length |
+| 88 | 4+4 | zero (version 7's ENTRIES region: the entries are in their clips, 125.2.2) |
 | 320 | 4+2 | the PICTURES' offset and length |
 | 326 | 2 | the first region's length: 4096 and the rules rounded to 4 KB |
 | 330 | 1 | the TITLE loop's clip (125.3.1), FFh none |
@@ -237371,10 +237387,11 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 8 | 2 | its records |
 | 10 | 2 | flags: 1 JOINS (the last record is a seam onto idle frame EXIT); 2 FULL (its records address the whole screen); 4 ENDS (the battle ends on it, and its last frame is held); 8 OWNSND (its sound plays INSTEAD of the music); 16 OPENING; 32 LOOP (a title or end loop, 125.3.1: record 0 draws its frame 0 from black, the last is the seam back onto frame 0, and records 1 to the last play round until a key); 64 ENTER (left into from the title loop's frames, at its anchors: its first record is its sound alone) |
 | 12 | 2 | EXIT |
-| 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the entries) pairs |
+| 14 | 2 | its anchor table's offset in the resident block: (idle frame, entry record's PARAGRAPH in the clip's own region) pairs |
 | 16 | 2 | its anchors, at most 16 |
 | 18 | 4+2 | a LOOP's lap: record 1's offset in its stream (4 KB-aligned) and the lap's length in 4 KB |
 | 24 | 8 | the name |
+| 32 | 2 | its ENTRIES' paragraphs, in front of its records (version 8); 0 for a clip with no anchors |
 
 #### 125.2.3 Records, their sound, and why every join is exact
 
@@ -238049,8 +238066,9 @@ Two things now meet it:
   action's records are made against a model of the reader - the clip
   starts with its head (40 KB) in; each frame the disk adds the profile's
   disk at three quarters less the music's rate (`CAP_SHARE`; 76 KB/s on
-  5150-st225); no more than 56 KB is held ahead of the sound
-  (`CAP_HOLD`). A frame that would overdraw it is drawn **in part**: as
+  5150-st225); no more than the bundle's OWN RING holds ahead of the
+  sound (VBATTLE-RAM-PLAN R4, below; it was a constant 56 KB, `CAP_HOLD`).
+  A frame that would overdraw it is drawn **in part**: as
   many of its rows as fit, taken on round from where the last such frame
   stopped (`capped_run`), the rest left for the frames after - each record
   being a change from what is ON the screen, they catch up by themselves,
@@ -238062,6 +238080,22 @@ Two things now meet it:
   picture changing all over (~140 KB/s at 100% Hercules), on the same
   86Box machine: the actions' sound late 51, 35 and 38 frames uncapped,
   **0, 0 and 0 capped**.
+
+**R4: the cap is held to the bundle's own ring.** The rings a play is
+given are a function of the bundle - of its resident claim, out of what a
+640 KB machine has free once the battle is loaded - and the builder knows
+both before it makes a clip's records: `vbtana.resident_parts` sizes the
+claim from the idle loop, the menu's sounds, the music and the band (as
+`vb_load` does), `vbtana.ring_of` the smaller ring beside it (as
+`vb_rclaim` does, out of `VB_FREE`, measured: 495 KB on MartyPC's
+Hercules 5150 with a Sound Blaster and the hard disk), and `cap_hold` that
+ring less the lead's share - the card's lead and a frame, at the clip's
+income - and a piece. The owner's 100% battle: 168 KB a ring, so about 140
+held ahead of the sound, against the 56 every bundle had. The same function
+gives the Build tab's ring (its memory lines), which says SMALL under 96
+KB: a smaller resident claim is a larger ring, and a clip held to it
+harder otherwise. `vbtcap`: the hold is the bundle's own ring, and a
+machine with less free (a smaller ring) holds the same clip harder.
 
 #### 125.4.4 What a battle holds in 640 KB
 
@@ -238087,7 +238121,8 @@ programs leave can be anywhere. On the fresh boot the block is claimed
 first and PINNED, so it lands just above the caches and they are a pocket
 no ring can use; the band's buffers are 16 KB where
 the band is 4.6; the entries are held from the play's start to its end.
-docs/plans/VBATTLE-RAM-PLAN.md is the plan to give the rings the ~90 KB
+(R1 and R2, below, are what became of each.)
+docs/plans/completed/VBATTLE-RAM-PLAN.md is the plan to give the rings the ~90 KB
 that is, and to read nothing at a menu that a key has to wait for.
 
 **R1, built**: the band's buffers are the band's rows (`vb_bpara`: 2 x 5
@@ -238110,6 +238145,17 @@ kernel's FAT window, which the sequential reads step clusters through. The
 owner's battles: **128 + 128 KB** of ring (100%, was 88 + 88), **144 + 148**
 (75%, was 108 + 108). `vbtram` holds a fresh boot and a used machine (Skies
 and Paint opened, the battle, the two closed) to the same rings.
+
+**R2, built - the entries ride in their clips** (format 8, 125.2): an
+action's entries are the first bytes of its own region, read into its
+ring with its head (`vb_headof`: the entries and `VB_HEAD` of records, or
+all of it, or all the ring holds), drawn from there (`vb_entat`), and the
+ring's cursors put past them (`vb_entcur`) - the sound's as the clip is
+anchored, the picture's once the entry is up, so that the reader, which
+counts its room from the earlier cursor, never overwrites an entry before
+it is drawn. The resident claim loses the whole of them: **the owner's
+battles' rings 168 + 172 KB (100%, the resident claim 96 KB) and 172 + 172
+(75%, 92 KB)**, measured as above at the first menu, 10 KB left free.
 
 **R3, built - the menu reads nothing a key waits on, nothing it cannot
 use.** The music is read WHOLE at a menu only when its ring is under half

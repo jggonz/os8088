@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """WHAT A BATTLE HOLDS, on a machine that has been USED (SPEC.md 125.4.4,
-docs/plans/VBATTLE-RAM-PLAN.md R1), on MartyPC's Hercules 5150, 640 KB.
+docs/plans/completed/VBATTLE-RAM-PLAN.md R1), on MartyPC's Hercules 5150, 640 KB.
 
     make vbattle && python3 tests/vbtram.py [--arm fresh|used]
 

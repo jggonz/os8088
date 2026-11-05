@@ -76,6 +76,9 @@ VC_FLAGS    equ 10
 VC_EXIT     equ 12
 VC_ANCH     equ 14              ; its anchors in the block: (frame, entry)
 VC_NANCH    equ 16
+VC_ESZ      equ 32              ; word: its ENTRIES' paragraphs, in front of
+                                ; its records (format 8, VBATTLE-RAM-PLAN R2):
+                                ; an anchor's entry is a paragraph of them
 CF_JOINS    equ 1
 CF_FULL     equ 2
 CF_ENDS     equ 4
@@ -801,8 +804,10 @@ vb_load:
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    cmp word [vb_meta+VH_VER], 7
+    mov word [vb_err], vb_s_oldvbt  ; (format 7: the entries resident -
+    cmp word [vb_meta+VH_VER], 8    ; rebuilt, they ride in their clips)
     jne .fail1
+    mov word [vb_err], vb_s_notvbt
     mov ax, [vb_meta+VH_NCLIPS]
     or ax, ax
     jz .fail1
@@ -828,7 +833,8 @@ vb_load:
 .sized:
     ; the resident claim's parts, each rounded to 4 KB, in paragraphs: the
     ; block, the menu's effects, the music (its ring and guard, or all of
-    ; it), the entries. The clip rings are claimed per play, in the bracket
+    ; it), the idle loop. (The entries were a part, every action's held for
+    ; the whole play: format 8 reads them with their clip.) The clip rings are claimed per play, in the bracket
     ; (vb_rclaim)
     mov cx, [vb_meta+VH_VRES+4]
     call vb_round
@@ -858,11 +864,6 @@ vb_load:
 .ring:
     add ax, (VB_MR + VB_MPIECE) / 16
 .rings:
-    mov [vb_pent], ax               ; the entries: as many 4 KB as they
-    mov di, VH_ENT                  ; take, in paragraphs
-    call vb_entpara
-    add ax, [vb_pent]
-    jc .fail1
     mov [vb_pidl], ax               ; the idle loop's records, the same way
     mov di, VH_IDLE                 ; (format 7)
     call vb_entpara
@@ -893,9 +894,6 @@ vb_load:
     mov ax, dx
     add ax, [vb_pmus]
     mov [vb_mring], ax
-    mov ax, dx
-    add ax, [vb_pent]
-    mov [vb_eseg], ax
     mov ax, dx
     add ax, [vb_pidl]
     mov [vb_idseg], ax
@@ -932,10 +930,6 @@ vb_load:
     call vb_read
     jc .fail1
 .read:
-    mov di, VH_ENT                  ; the entries, 32 KB a read
-    mov ax, [vb_eseg]
-    call vb_entload
-    jc .fail1
     mov di, VH_IDLE                 ; the idle loop
     mov ax, [vb_idseg]
     call vb_entload
@@ -1240,22 +1234,83 @@ vb_rhead:
     mov bx, ax
     call vb_crec
     pop bx
-    cmp word [bx+RG_FILL+2], 0
-    jne .yes
-    mov ax, VB_HEAD
-    cmp word [si+VC_LEN+2], 0
-    jne .h
-    cmp ax, [si+VC_LEN]
-    jbe .h
-    mov ax, [si+VC_LEN]
-.h:
+    call vb_headof
+    cmp [bx+RG_FILL+2], dx
+    ja .yes
+    jb .no
     cmp [bx+RG_FILL], ax
     jae .yes
+.no:
     clc
     ret
 .yes:
     stc
     ret
+
+; vb_headof - DX:AX = what ring BX must hold of clip row SI before it may
+; start: its entries and VB_HEAD of its records (format 8), or all of it,
+; or all the ring holds. CX spent
+vb_headof:
+    mov ax, [si+VC_ESZ]
+    xor dx, dx
+    mov cx, 4
+.p:
+    shl ax, 1
+    rcl dx, 1
+    loop .p
+    add ax, VB_HEAD
+    adc dx, 0
+    cmp dx, [si+VC_LEN+2]
+    jb .l
+    ja .len
+    cmp ax, [si+VC_LEN]
+    jbe .l
+.len:
+    mov ax, [si+VC_LEN]
+    mov dx, [si+VC_LEN+2]
+.l:
+    cmp dx, [bx+RG_BYTES+2]
+    jb .r
+    ja .b
+    cmp ax, [bx+RG_BYTES]
+    jbe .r
+.b:
+    mov ax, [bx+RG_BYTES]
+    mov dx, [bx+RG_BYTES+2]
+.r:
+    ret
+
+; vb_entat - DX:SI = ring BX's entry at paragraph AX of its clip's region,
+; the region read from its start into the ring (its cursors at 0 until the
+; entry is drawn: vb_entdone): its segment, or in place, its borrow. AX spent
+vb_entat:
+    cmp byte [bx+RG_INP], 0
+    jne .inp
+    add ax, [bx+RG_SEG]
+    mov dx, ax
+    xor si, si
+    ret
+.inp:
+    push cx
+    xor dx, dx
+    mov cx, 4
+.p:
+    shl ax, 1
+    rcl dx, 1
+    loop .p
+    pop cx
+    jmp vb_iat
+
+; vb_entcur - ring BX's cursor at DI (RG_VOFF, RG_AOFF) past the entries
+; of clip row SI, at its record 0 - which carries frame 0's sound. The
+; SOUND's is put there as the clip is anchored, the PICTURE's once the
+; entry is drawn: until then it stays on the entries, and keeps the reader
+; off them. AX, CX, DX spent. The hook's (no deeper than vb_crec)
+vb_entcur:
+    mov ax, [si+VC_ESZ]
+    mov cl, 4
+    shl ax, cl                      ; (at most 32 KB, os88vbt.ENT_CLIP)
+    jmp vb_ccur
 
 ; vb_rpiece - one piece of ring BX's clip, at the stream's fill position,
 ; when it is not all read and the ring has room past what the hook still
@@ -2091,6 +2146,8 @@ vb_lrewind:
 ; offset) put at record 1 of the loop it holds. AX, CX, DX spent
 vb_lcur:
     mov ax, [vb_lbase]
+; vb_ccur - the same, at byte AX of the stream (in the ring from its start)
+vb_ccur:
     mov [bx+di], ax
     mov word [bx+di+2], 0
     mov dx, ax
@@ -2346,12 +2403,18 @@ vb_frame:
     mov ax, [vb_ifr]
     cmp ax, [vb_pk]
     jne .loop
-    mov dx, [vb_eseg]               ; the entry: frame 0's picture, at
-    add dx, [vb_pentry]             ; its paragraph in the entries
-    xor si, si
+    mov bx, [vb_pring]              ; the entry: frame 0's picture, at
+    mov ax, [vb_pentry]             ; its paragraph in the clip's region,
+    call vb_entat                   ; in front of its records (format 8)
     call vb_decode
-    mov bx, [vb_pring]              ; frame 0's record carries its sound
-    call vb_rrec                    ; alone: past it
+    mov bl, [vb_pend]
+    xor bh, bh
+    call vb_crec
+    mov bx, [vb_pring]
+    mov di, RG_VOFF
+    call vb_entcur
+    call vb_rrec                    ; frame 0's record carries its sound
+                                    ; alone: past it
     call vb_radv
     mov al, [vb_pend]
     mov bx, [vb_pring]
@@ -2465,17 +2528,13 @@ vb_anchor:
     je .free
     ret
 .free:
-    mov cx, VB_HEAD                 ; its head, or all of it
-    cmp word [si+VC_LEN+2], 0
-    jne .h
-    cmp cx, [si+VC_LEN]
-    jbe .h
-    mov cx, [si+VC_LEN]
-.h:
-    cmp word [bx+RG_FILL+2], 0
-    jne .read
-    cmp [bx+RG_FILL], cx
+    call vb_headof                  ; its entries and head, or all of it
+    cmp [bx+RG_FILL+2], dx
+    ja .read
+    jb .nr
+    cmp [bx+RG_FILL], ax
     jae .read
+.nr:
     ret                             ; not read that far yet
 .read:
     mov [vb_pring], bx
@@ -2519,6 +2578,8 @@ vb_anchor:
     mov [vb_apring], bx
     mov al, [vb_pend]
     mov [vb_apclip], al
+    mov di, RG_AOFF                 ; its sound from its record 0
+    call vb_entcur
 .out:
     ret
 
@@ -3614,6 +3675,7 @@ vb_s_room:    db ' Making room...', 0
 vb_s_again:   db ' Enter or click to play again', 0
 vb_s_nofile:  db ' BATTLE.VBT not found', 0
 vb_s_notvbt:  db ' BATTLE.VBT is not a VBT1 file', 0
+vb_s_oldvbt:  db ' BATTLE.VBT is an older build: rebuild it', 0
 vb_s_nomem:   db ' Not enough memory', 0
 vb_s_badread: db ' BATTLE.VBT: a read failed', 0
 vb_s_norate:  db ' Needs the full kernel (FSXF_RATE)', 0
@@ -3743,8 +3805,6 @@ VB_VAR vb_hand, 1
 VB_VAR vb_snd, 1
 VB_VAR vb_psfx, 2
 VB_VAR vb_pmus, 2
-VB_VAR vb_pent, 2                   ; the entries' place in the claim
-VB_VAR vb_eseg, 2                   ; ...their segment
 VB_VAR vb_eleft, 2
 VB_VAR vb_enext, 2
 VB_VAR vb_fsi, FSI_SIZE

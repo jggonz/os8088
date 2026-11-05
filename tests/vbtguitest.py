@@ -143,9 +143,9 @@ with tempfile.TemporaryDirectory() as tdir:
         ok(baked[:len(snd)] == snd, "%s: Listen is the baked sound, frame "
            "for frame" % cid)
         rp = A.clip_report(pr, cid)
-        ents = {k: struct.unpack_from("<H", bd.ents, o * 16)[0]
-                for k, o in bc["anch"]}
-        ok(all(rp["entry_bytes"][k] == n for k, n in ents.items()),
+        ents = {k: len(bd.entry(bc, o)) for k, o in bc["anch"]}
+        ok(all((rp["entry_bytes"][k] + 15) & ~15 == n    # (each on a
+               for k, n in ents.items()),                # paragraph)
            "%s: the filmstrip's entry bytes are the bundle's (%s)" %
            (cid, sorted(ents.items())[:2]))
     ok(rp["wait"] == 6, "four anchors 6 apart wait 6 frames (%s)" % rp["wait"])
