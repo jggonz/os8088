@@ -4708,6 +4708,29 @@ SOAK = [
         "with qbb_tiles taking each tile's nibbles the wrong way round",
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
                                  "build/arcade/QBROM.PRT")),
+    Row("inflate86", "soak", py("tests/inflate86.py", "build/arcade-rom/qbert.zip",
+                                "build/arcade-rom/invaders.zip"), 3.0,
+        "apps/os88inflate.inc, the 8086 DEFLATE decoder ARCADE's import uses "
+        "(ARCADE-SPEC 1.5): run under Unicorn on 345 streams - stored, fixed and "
+        "dynamic blocks, zlib at every level, every member of the pinned MAME "
+        "zips - each output held byte for byte to zlib's, and truncated or "
+        "corrupt streams refused with carry set and the stack restored. Host-only",
+        needs=("unicorn",),
+        wants=("build/arcade-rom/qbert.zip", "build/arcade-rom/invaders.zip")),
+    Row("arcimport", "soak", py("tests/arcimport.py"), 70.0,
+        "ARCADE imports a MAME .ZIP on the machine itself (ARCADE-SPEC 1.5, "
+        "docs/plans/ARCADE-RELEASE-PLAN.md 2.2): Game > Add ROM sets... and the "
+        "file chooser on MartyPC's VGA XT, a 720KB disk with the zips in ROMS\\ "
+        "and no .ROM. A zip with one chip one bit wrong writes nothing; "
+        "invaders.zip (forty clone folders, a TorrentZip comment) and qbert.zip "
+        "each write a .ROM byte for byte the one make arcaderoms writes; both "
+        "games then run, and after ARCADE is closed and reopened from B:\\ the "
+        "game is found again through ARCADE.DAT's places",
+        needs=("marty",), wants=("build/arcade.o88", "build/os8088-360.img",
+                                 "build/arcade-rom/invaders.zip",
+                                 "build/arcade-rom/qbert.zip",
+                                 "build/arcade/roms/INVADERS.ROM",
+                                 "build/arcade/roms/QBERT.ROM")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "

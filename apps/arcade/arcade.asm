@@ -176,7 +176,14 @@ ar_entry:
     mov [ar_vseg], ax
     mov word [ar_bd], 0
     mov word [ar_rimgc], 0
+    mov word [ar_zclaim], 0
+    mov word [ar_iclaim], 0
+    mov byte [ar_datst], 0
+    call OSAPI_FILE_HERE            ; ARCADE's own folder and disk: for
+    mov [ar_homedrv], bl            ;   ARCADE.DAT, and to come back to
+    mov [ar_homecl], dx             ;   after the chooser has moved us
     call ar_crcinit
+    call ar_placesload
     mov byte [ar_qsel], 1           ; the first board whose ROM is here,
     mov si, ar_boards               ;   quietly: none is a window that says
 .first:                             ;   so, not a refusal to open
@@ -356,6 +363,91 @@ ar_freeimg:
 ar_romload:
     push bx
     mov [ar_lbd], bx
+    call OSAPI_FILE_HERE            ; where ARCADE stands: tried first, and
+    mov [ar_rhome], dx              ;   come back to after every place
+    mov [ar_rhomed], bl
+    call ar_romtry
+    jnc .got
+    or al, al                       ; wrong, or no memory: said at once
+    jnz .say
+    mov si, ar_places + 1           ; not here: each place an import wrote to
+    mov cl, [ar_places]             ;   (ARCADE.DAT), in turn
+    xor ch, ch
+.place:
+    jcxz .none
+    push cx
+    push si
+    mov bl, [si]
+    mov dx, [si+1]
+    call OSAPI_FILE_GOTO_QM
+    jc .next
+    call ar_romtry
+    pushf
+    push ax
+    mov dx, [ar_rhome]
+    mov bl, [ar_rhomed]
+    call OSAPI_FILE_GOTO_QM
+    pop ax
+    popf
+    pop si
+    pop cx
+    jnc .got
+    or al, al
+    jnz .say
+    add si, 3
+    loop .place
+    jmp short .none
+.next:
+    pop si
+    pop cx
+    add si, 3
+    loop .place
+.none:
+    xor al, al
+.say:
+    cmp byte [ar_qsel], 0
+    jne .quiet
+    mov si, ar_s_romno
+    cmp al, 1
+    jb .tell
+    mov si, ar_s_romis
+    je .tell
+    mov si, ar_s_romram
+.tell:
+    push si                         ; the file's name, then why
+    mov di, ar_msg
+    push ds
+    pop es
+    mov si, [ar_lbd]
+    mov si, [si+BD_ROMF]
+.cpn:
+    lodsb
+    stosb
+    or al, al
+    jnz .cpn
+    dec di
+    pop si
+.cp:
+    lodsb
+    stosb
+    or al, al
+    jnz .cp
+    mov si, ar_msg
+    call ar_toast
+.quiet:
+    pop bx
+    stc
+    ret
+.got:
+    pop bx
+    clc
+    ret
+
+; ar_romtry - ar_romload's read, in the folder the instance stands in: out
+; CF=0 the image is in (ar_rimg, ar_rimgc); CF=1 AL = 0 not here, 1 not the
+; set it says, 2 no memory - nothing kept, nothing said
+ar_romtry:
+    mov bx, [ar_lbd]
     mov si, [bx+BD_ROMF]
     push ds
     pop es
@@ -444,7 +536,7 @@ ar_romload:
     jne .wrongf
     cmp dx, bx
     jne .wrongf
-    pop bx
+    ; (the image is in)
     clc
     ret
 .wrongn:
@@ -452,38 +544,15 @@ ar_romload:
 .wrongf:
     call ar_freeimg
 .wrong:
-    mov si, ar_s_romis
-    jmp short .say
+    mov al, 1
+    stc
+    ret
 .nomem:
-    mov si, ar_s_romram
-    jmp short .say
+    mov al, 2
+    stc
+    ret
 .missing:
-    mov si, ar_s_romno
-.say:
-    cmp byte [ar_qsel], 0
-    jne .quiet
-    push si                         ; the file's name, then why
-    mov di, ar_msg
-    push ds
-    pop es
-    mov si, [ar_lbd]
-    mov si, [si+BD_ROMF]
-.cpn:
-    lodsb
-    stosb
-    or al, al
-    jnz .cpn
-    dec di
-    pop si
-.cp:
-    lodsb
-    stosb
-    or al, al
-    jnz .cp
-    mov si, ar_msg
-    call ar_toast
-.quiet:
-    pop bx
+    xor al, al
     stc
     ret
 
@@ -727,17 +796,21 @@ ar_onclick:
 .out:
     ret
 
-ar_oncmd:                           ; Game: Play (0), Reset (1), and
-    push ax                         ;   a board each after them
+ar_oncmd:                           ; Game: Play (0), Reset (1), Add ROM
+    push ax                         ;   sets... (2), and a board each after
     call ar_abdismiss
     pop ax
     cmp al, 1
     jb ar_play
-    jne .board
+    jne .more
     call ar_reset
     ret
+.more:
+    cmp al, 2
+    jne .board
+    jmp ar_import
 .board:
-    sub al, 2
+    sub al, 3
     cbw
     shl ax, 1
     mov bx, ax
@@ -1968,6 +2041,11 @@ ar_shift:
 %include "arcsnd.inc"
 %include "arcland.inc"
 %include "arcqb.inc"
+%include "arcimp.inc"
+%include "arcsets.inc"                 ; (generated: getarcrom.py --asm-sets)
+%include "os88inflate.inc"
+%define OD_TVOL ar_homedrv            ; ARCADE.DAT on ARCADE's own disk
+%include "os88data.inc"
 %include "qbpatch.inc"                ; (generated: arcqbgfx.py)
 %ifdef ARC_PACMAN
 %include "arcpm.inc"
@@ -2056,12 +2134,12 @@ ar_tpl:
     dw ar_title, ar_paint, ar_onkey, ar_onclick
     OS88_MENUSET ar_menus, ar_title, ar_oncmd
 %ifdef ARC_PACMAN
-        OS88_MENU ar_m_game, ar_i_game, 9
+        OS88_MENU ar_m_game, ar_i_game, 10
 %else
-        OS88_MENU ar_m_game, ar_i_game, 8
+        OS88_MENU ar_m_game, ar_i_game, 9
 %endif
     OS88_MENUSET_END ar_menus
-ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_inv, ar_s_pt2, ar_s_lr, ar_s_gf, ar_s_sw, ar_s_qb
+ar_i_game:  dw ar_s_play, ar_s_reset, ar_s_addrom, ar_s_inv, ar_s_pt2, ar_s_lr, ar_s_gf, ar_s_sw, ar_s_qb
 %ifdef ARC_PACMAN
             dw ar_s_pm
 %endif
@@ -2077,6 +2155,7 @@ ar_s_pm:    db 'Pac-Man', 0
 ar_m_game:  db 'Game', 0
 ar_s_play:  db 'Play', 0
 ar_s_reset: db 'Reset', 0
+ar_s_addrom: db 'Add ROM sets...', 0
 ar_title:   db 'Arcade', 0
 
 ar_lines:   dw ar_l1, ar_l2, ar_l3, ar_l4, ar_l5, ar_l6, ar_l7, ar_l8, 0
@@ -2127,6 +2206,29 @@ AR_VAR ar_lbd, 2                    ;   the board it is read for
 AR_VAR ar_qsel, 1                   ; 1: ar_select toasts nothing (at entry)
 AR_VAR ar_msg, 48                   ; a toast's line, made
 AR_VAR ar_crctab, 1024              ; CRC-32's table (ar_crcinit)
+AR_VAR INF_WS, INF_WS_SZ            ; os88inflate.inc's work space
+AR_VAR ar_homedrv, 1                ; the drive ARCADE started from
+AR_VAR ar_homecl, 2                 ;   ...and the folder
+AR_VAR ar_rhome, 2                  ; ar_romload: where it stood
+AR_VAR ar_rhomed, 1
+AR_VAR ar_places, 1 + AR_NPLACE * 3 ; ARCADE.DAT: places a .ROM was made
+AR_VAR ar_datst, 1                  ;   ...and os88data's state byte for it
+AR_VAR ar_impname, 13               ; the import (arcimp.inc): the zip,
+AR_VAR ar_zsize, 4                  ;   its size,
+AR_VAR ar_zkb, 2                    ;   its claim's KB, its claim,
+AR_VAR ar_zclaim, 2
+AR_VAR ar_cdseg, 2                  ;   its central directory: where,
+AR_VAR ar_cdoff, 2
+AR_VAR ar_cdend, 2                  ;   where it ends, how many entries
+AR_VAR ar_cdn, 2
+AR_VAR ar_impbd, 2                  ;   the board to pick again after
+AR_VAR ar_nimp, 1                   ;   sets made, and sets refused
+AR_VAR ar_nwrong, 1
+AR_VAR ar_iset, 2                   ;   the set being made, its claim,
+AR_VAR ar_iclaim, 2
+AR_VAR ar_ifound, 1                 ;   chips found, and each one's method
+AR_VAR ar_imeth, 2                  ;   and packed size
+AR_VAR ar_ipack, 2
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB
 AR_VAR qb_rclaim, 2                 ;   the parts qb_build made
 AR_VAR qb_sclaim, 2

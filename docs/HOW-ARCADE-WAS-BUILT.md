@@ -424,3 +424,44 @@ seven `.ROM` files beside it on 360KB.
 
 **Open:** a Q*bert pick from floppy on the 8088 takes about 15 s: the 64KB
 read, the CRC, the build. That is R2's to shorten.
+
+## R2: from a MAME zip to a `.ROM`, on the machine
+
+**The question the owner asked** was the right one: how does a user get from
+a `.zip` of chips to a `.ROM`? Through **Game > Add ROM sets...**, the
+system's own file chooser, and a pick of the zip. ARCADE reads the whole zip
+(up to 448KB), finds its directory from the end, past a comment, matches the
+members it needs by name against the pins `tools/getarcrom.py` already held,
+and refuses on the directory's CRC before inflating anything. Each chip is
+inflated or copied, and its CRC is checked again on the bytes. Then
+`<SET>.ROM` is written beside the zip, and the folder goes in `ARCADE.DAT`.
+
+**A second inflater, on purpose.** The plan said to move PIXEL's out to a
+shared include. Reading it changed that: PIXEL's decoder is table-driven
+and streams a PNG through a 32KB ring on a worker, with its state in the
+part's own variables. A ZIP member is small and decoded once, straight into
+its destination. `apps/os88inflate.inc` is zlib's `puff` in 8086: the
+Huffman codes decoded a bit at a time against each length's count, about
+1KB of work space, the output its own window. Row `inflate86` holds it to
+zlib on 345 streams under Unicorn.
+
+**invaders.zip is the hard one**, which is why the test uses it: forty clone
+sets in folders, the parent's four chips at the root, and a TorrentZip
+comment after the directory.
+
+**Three things the run caught.**
+- *The chooser moves you.* After a pick in `ROMS\`, ARCADE was standing in
+  `ROMS\`, and its next part fetch read `ARCADE.O88` there: "Cannot read my
+  parts". It now goes home after every chooser.
+- *A remembered folder that was not.* `ARCADE.DAT` never persisted, because
+  the disk had no `SYSTEM\APPDATA` and `os88data` refuses without one. The
+  arcade disks carry the folder now, as every application disk does.
+- *A far call cannot be a tail jump.* `jmp OSAPI_FILE_GOTO_QM` returned
+  into nothing. It is `call`, then `ret`, twice over before it stuck.
+
+**Tested** (row `arcimport`, MartyPC VGA XT, 720KB B:): a zip with one bit
+wrong in one chip writes nothing. invaders.zip and qbert.zip each write a
+`.ROM` byte for byte the one `make arcaderoms` writes. Both games run. After
+ARCADE is closed and reopened from `B:\`, Q*bert is found in `ROMS\` through
+`ARCADE.DAT`. **Not done:** sets as loose files in a folder, and an import
+timed on the 5150.

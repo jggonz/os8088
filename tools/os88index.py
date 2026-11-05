@@ -317,6 +317,12 @@ INCLUDES = [
      "the folder if need be, so the program it names is opened at every boot "
      "(Shift held skips it). Over os88data.inc's walk, so it needs "
      "`OD_BOOTVOL`; REDLINE's Apply on boot is the worked example."),
+    ("os88inflate.inc", "106.18",
+     "INFLATE for a raw DEFLATE stream held WHOLE: `inflate` takes DS:SI, "
+     "writes exactly CX bytes at ES:DI and sets carry on a bad stream. zlib's "
+     "`puff` in 8086, ~1KB of work space (`INF_WS`) and no window of its own. "
+     "ARCADE's zip import is the user (ARCADE-SPEC, its section on import); a stream too "
+     "big to hold wants PIXEL's table-driven ring decoder, 106.18's."),
     ("os88pit.inc", "72.15.1",
      "`pit_now`: a 32-bit clock in 838ns units off the 8253 and the BIOS tick, "
      "good for an hour before it wraps. Sub-tick timing for a profiler."),

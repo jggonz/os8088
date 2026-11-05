@@ -11575,6 +11575,7 @@ $(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
 	python3 apps/arcade/arcsfx.py $@
 
 ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
+              apps/arcade/arcimp.inc apps/os88inflate.inc apps/os88data.inc \
               apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
@@ -11600,7 +11601,11 @@ ARCADE_DEF := -DARC_PACMAN
 ARCROMS += $(BUILD)/arcade/roms/PACMAN.ROM
 endif
 ARCADE_PARTS += $(BUILD)/arcade/INVSFX.PRT      # lazy, so last (SPEC.md 20.12.4)
-$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) $(BUILD)/arcade/qbpatch.inc | $(BUILD)
+# The sets ARCADE imports (arcimp.inc): MAME's names and CRC-32s, from the pins
+$(BUILD)/arcade/arcsets.inc: tools/getarcrom.py $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) \
+                             $(ARCGFROM) $(ARCSWROM) $(ARCQBROM) $(ARC_PM)
+	python3 tools/getarcrom.py invaders --asm-sets $@
+$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) $(BUILD)/arcade/qbpatch.inc $(BUILD)/arcade/arcsets.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I $(BUILD)/arcade/ \
 		-I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ $<
 
@@ -11621,7 +11626,7 @@ arclock: $(BUILD)/arcade/invcode.bin
 	python3 tests/arclock.py $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) --frames 600
 
 ARCADEDISK := $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py $(ARCROMS)
-ARCADEIMG = python3 tools/os88disk.py -o $(1) --size $(2) \
+ARCADEIMG = python3 tools/os88disk.py -o $(1) --size $(2) $(APPDATAFOLDER) \
 	    $(BUILD)/arcade.o88 apps/arcade/README.TXT $(ARCROMS)
 #> [Applications] arcadedisk :: the ARCADE DEVELOPMENT floppies in four geometries: the package and every set's .ROM beside it (fetches the ROMs)
 arcadedisk: $(BUILD)/arcade.img $(BUILD)/arcade720.img \

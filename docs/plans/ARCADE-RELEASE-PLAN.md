@@ -266,13 +266,27 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
       about 15 s - the 64KB read 4.6 s, the CRC 2.4 s, the build 4.2 s.
 
 ### R2: import on the guest
-- [ ] `apps/os88inflate.inc` out of PIXEL, PIXEL on it, PIXEL's rows green.
-- [ ] ZIP central directory, STORED and DEFLATE, CRC32, loose-file folders.
-- [ ] The `.ROM` writer, the `ROMS` listing, "ROM needed" and its toasts.
-- [ ] Rows: import from a zip on B: on MartyPC, then play (the existing
-      `arcspeed`/`arcglass`/`qbglass` rows run from imported sets); a
-      wrong CRC refused naming the chip; a truncated zip refused; import
-      timed on the 5150.
+- [x] `apps/os88inflate.inc`: a DEFLATE decoder for a stream held whole
+      (puff's bit-at-a-time Huffman, ~1KB of work space, the output its own
+      window). DECIDED against moving PIXEL's: that one is table-driven and
+      streams through a 32KB ring on a worker, bound to PIXEL's part
+      variables; a ZIP member fits its destination whole and is decoded
+      once. Two decoders of different shape, not a copy (row `inflate86`:
+      345 streams held to zlib).
+- [x] ZIP central directory (EOCD found backwards past a comment, root
+      members only, names matched without case), STORED and DEFLATE, CRC32
+      checked twice - the directory's against the pin, and the inflated
+      bytes against it again.
+- [x] The `.ROM` writer: `<SET>.ROM` beside its zip, the place remembered
+      in `ARCADE.DAT` so a pick finds it from anywhere; toasts within
+      TOAST_MAX.
+- [ ] Loose-file folders (a set as separate chips): not done; a zip is
+      what MAME users have.
+- [x] Row `arcimport`: a one-bit-wrong chip writes nothing; invaders.zip
+      and qbert.zip each make a `.ROM` byte-identical to the host's, both
+      games run, and are found again after a restart.
+- [ ] A truncated zip refused on the guest (the decoder's refusals are
+      `inflate86`'s); import timed on the 5150.
 
 ### R3: the frontend
 - [ ] retro-face mockups first, for the owner to pick.

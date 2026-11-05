@@ -20,9 +20,20 @@ as it is. Choose the game from the Game menu:
 
 YOUR ROMS. ARCADE carries no game: each one needs its set's .ROM file
 (INVADERS.ROM, INVADPT2.ROM, LRESCUE.ROM, GUNFIGHT.ROM, SEAWOLF.ROM,
-QBERT.ROM, PACMAN.ROM) in the same folder as ARCADE.O88. A game whose
-file is not there says so when you pick it ("QBERT.ROM: not found");
-one whose file is not the set it names says "wrong set".
+QBERT.ROM, PACMAN.ROM). You make one from the MAME set you already have:
+
+    Game > Add ROM sets...   then choose the set's .ZIP
+
+(invaders.zip, invadpt2.zip, lrescue.zip, gunfight.zip, seawolf.zip,
+qbert.zip, pacman.zip). ARCADE reads the zip, checks every chip it needs
+against the one it was made for, and writes <SET>.ROM in the zip's own
+folder. It remembers that folder, so the game is found from there on,
+wherever ARCADE itself is. The .zip is not needed again. A zip whose chips
+are not the set's writes nothing and says so. A .ROM is the chips alone:
+Space Invaders' is 8KB, Q*bert's 64KB, so a disk of ROMs holds several.
+
+A game whose file cannot be found says so when you pick it ("QBERT.ROM:
+not found"); one whose file is not the set it names says "wrong set".
 
 The five 8080 games run at full speed on an IBM PC/XT on any adapter;
 on VGA the two Taito games are in colour. A game is read from this disk

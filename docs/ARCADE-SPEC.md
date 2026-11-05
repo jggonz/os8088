@@ -130,6 +130,43 @@ arcaderoms` writes the files from the pinned sets (`getarcrom.py
 the package. A release disk carries none: the guest's import writes them
 (the release plan's R2).
 
+### 1.5 Importing a set: from MAME's zip to `<SET>.ROM`, on the machine
+
+**Game > Add ROM sets...** opens the system file chooser (`OSAPI_FILE_DLG`)
+on a `.ZIP` (`arcimp.inc`). The board picked is let go for the memory, the
+zip is read whole (at most 448KB: MAME's `invaders.zip`, forty clones in
+folders, is 220KB), its End Of Central Directory found back from its end
+over any comment (TorrentZip leaves one), and every set ARCADE knows is
+looked for at the zip's ROOT by its chips' names, case ignored. The table
+of sets is `arcsets.inc`, which `tools/getarcrom.py --asm-sets` generates from
+its pins: each chip's MAME name, its place and size in the image and its
+CRC-32 - names and checksums, no ROM byte.
+
+A set is made only when the directory alone says it can be: every chip
+there, at its size, with the pinned CRC-32, stored or deflated. Then each
+chip is copied or INFLATED (`apps/os88inflate.inc`: zlib's `puff` in 8086,
+the output its own window, 1KB of work space) into the image, its CRC-32
+taken again as it comes out, and the image written with its header as
+`<SET>.ROM` **in the folder the zip is in**. Every offset and length the zip
+gives is checked against the file before it is used. A set whose chips are
+there but not right says so ("not a set I know"); a zip with none, "no set
+in it".
+
+**Where a pick looks** (`ar_romload`): the folder ARCADE stands in, then
+each folder an import wrote to, newest first - up to eight, kept in
+`ARCADE.DAT` in `SYSTEM\APPDATA` on ARCADE's own disk (`os88data.inc`), the
+program's own information, so a disk of ROMs works wherever it is put. A
+pick that finds none says `<SET>.ROM: not found`.
+
+`tests/arcimport.py` (row `arcimport`) is the import on MartyPC's VGA XT:
+the zips in a `ROMS` folder, each `.ROM` written there read back off the
+floppy and held byte for byte to `make arcaderoms`'s, each game run from it,
+and after a restart from ARCADE's own folder found through `ARCADE.DAT`. A
+zip with Space Invaders' four chips, one bit of one flipped, makes nothing.
+`tests/inflate86.py` holds the inflater to zlib under Unicorn: stored, fixed
+and dynamic blocks to 64KB, every member of the sets' zips, and the streams
+it must refuse.
+
 ### 1.3 The ROM
 
 **No ROM, and nothing derived from one, is committed or shipped.** `tools/getarcrom.py`
