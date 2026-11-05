@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "cb00097a",
+  "stamped": "f87bdb18",
   "strings": "c76d87430df46fe3",
-  "why": "mono cell runs, shift test backoff"
+  "why": "sprite rows by cells, c8spr whole bytes"
  },
  "CALC_O88": {
   "sources": [
