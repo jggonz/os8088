@@ -187,6 +187,11 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     unsigned paras, seg, i, trks, got;
     int gave;
 
+    if (ovl_is_t64(name)) {                 /* (a tape image of a D64's size:
+                                             * its name says which, 11.3.1) */
+        ovl_load_t64(name, size_lo, size_hi);
+        return;
+    }
     trks = 0;
     if (size_hi == 2)
         if ((size_lo == 0xAB00) | (size_lo == 0xADAB))

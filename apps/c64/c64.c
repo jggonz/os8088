@@ -1222,15 +1222,9 @@ void os88_onfile(int mode, const char *name,
         os88_wm_wake(win);
         return;
     }
-    if (size_hi != 0)
-        size_lo = 0xFFFFu;                  /* ...so the one test below
-                                             * refuses it too */
-    if (size_lo > 0xFFFDu) {
-        c64_say("PRG over 65533 bytes.");
-        return;
-    }
-    ovl_load_prg(name, size_lo);            /* every refusal it has is its
-                                             * own, and said on the row */
+    ovl_attach(name, size_lo, size_hi);     /* a tape image or a .PRG, and
+                                             * every refusal said on the row
+                                             * (c64load.c) */
     c64_kick = 1;
     os88_wm_wake(win);
 }
