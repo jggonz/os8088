@@ -92,7 +92,21 @@ static void ovl_load_prg(const char *name, unsigned size_lo)
             c64_say("PRG runs past $FFFF.");
             return;
         }
-    c64_zzcopy_in(load, seg, 2, n);
+    /* $FFC0-$FFF9 IS THE SCRATCH (C64-SPEC 3.5): the move stops short of
+     * it, and what lies there or past it goes a byte at a time through
+     * c64_wr, which keeps the program's own copy and writes $FFFA-$FFFF */
+    if (load < 0xFFC0u && (unsigned)(n - 1) >= (unsigned)(0xFFC0u - load)) {
+        unsigned k, m = 0xFFC0u - load;
+        c64_zzcopy_in(load, seg, 2, m);
+        for (k = m; k < n; k++)
+            c64_wr(load + k, os88_peek(seg, 2 + k));
+    } else if (load >= 0xFFC0u) {
+        unsigned k;
+        for (k = 0; k < n; k++)
+            c64_wr(load + k, os88_peek(seg, 2 + k));
+    } else {
+        c64_zzcopy_in(load, seg, 2, n);
+    }
     os88_mem_free(seg);
     /* every page the move touched (9.2). The core's own write path sets these
      * one at a time; a block move sets them by hand. */

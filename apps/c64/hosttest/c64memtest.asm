@@ -1608,6 +1608,9 @@ hst_seg:
 
 %include "c64cpu.inc"               ; for _c64_m, which c64mem.inc reads the
                                     ; claims from
+section .data
+_c64_hiram: times 0x3A db 0             ; (c64io.c's: the program's $FFC0-$FFF9)
+section .text
 %include "c64mem.inc"
 %include "c64band.inc"
 %include "c64fsx.inc"

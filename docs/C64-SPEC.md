@@ -328,13 +328,22 @@ call, and not hot.
 
 That address is chosen because the KERNAL's vectors sit there **in ROM** in
 every map that runs KERNAL code, and nothing in the KERNAL or BASIC uses the
-RAM under them. Two stated deviations follow, and the CPU harness (§4.6)
-holds a case for each:
-
-- **A read of `$FFC0-$FFF9` in an all-RAM map reads the scratch**, not the
-  RAM the emulated machine wrote.
-- **A write to `$FFC0-$FFF9` is dropped.** The write path already tests the
-  high byte; only the `$E0-$FF` branch pays the extra compare.
+RAM under them. **But a program that banks the KERNAL out may use it, and
+those 58 bytes are the program's** (2026-11): the cores' scratch stays where
+it is, and the program's own `$FFC0-$FFF9` is `c64_hiram` in `c64io.c`.
+A read there with the KERNAL banked out, and every write there, goes through
+the I/O door (`c64_io_rd`/`c64_io_wr`) - in the accurate core (`c64_rd_bx`,
+`c64_wr_bx`), the fast core's `rd_hi`/`wr_hi`, and so the recompiler's
+prelude and the translated ROM, which are built from the same handlers; the
+host's own `c64_rd`/`c64_wr` and the `.PRG` loader keep to it as well, and
+the power-on pattern fills it. Only reads at `$E000` and up with the KERNAL
+out, and writes at `$E000` and up, pay a compare. CHRISTMAS DEMO's unpacker
+(FNS, 1989) keeps a table at `$FF00`: it jammed on the fast core, whose
+scratch fills more of those bytes than the accurate core's, and runs to its
+title screen now. The CPU harness's **row 21** writes the 58 bytes with
+`STA abs,X` in an all-RAM map and reads them back with `CMP abs,X`, on every
+leg; red with the write dropped again, and its control drops it. What
+remains is code EXECUTED from `$FFC0-$FFF9`, which fetches the scratch.
 
 **Anything that loads a whole 64KB image into the claim lands ON TOP of the
 scratch** and has to clear it afterwards: `os88_main` does

@@ -405,6 +405,11 @@ _c64_io_rd:
     or al, ah
     jmp short .out
 .plain:
+    cmp bx, 0xFFC0                  ; the program's $FFC0-$FFF9 (C64-SPEC
+    jb .notop                       ; 3.5): c64io.c's c64_hiram, here too
+    mov al, [bx + _c64_hiram - 0xFFC0]
+    jmp short .out
+.notop:
     mov al, bl
     xor al, 0x5A                    ; a byte no bank and no zero can be
     cmp byte [neg_io], 0            ; the negative control for row 5:
@@ -432,6 +437,13 @@ _c64_io_wr:
     mov al, [bp+6]
     mov [io_last_v], al
     inc word [io_writes]
+    cmp bx, 0xFFC0                  ; the program's $FFC0-$FFF9 (row 21)
+    jb .nottop
+    cmp byte [neg_hi], 0            ; (row 21's control: the old drop)
+    jne .out
+    mov [bx + _c64_hiram - 0xFFC0], al
+    jmp short .out
+.nottop:
     cmp bx, 2
     jae .out
     or bx, bx
@@ -616,6 +628,15 @@ rows_main:
     call row_rmw
     call control
     mov byte [neg_rmw], 0
+
+    mov si, msg_r21
+    call puts
+    call row_hiram
+    call verdict
+    mov byte [neg_hi], 1
+    call row_hiram
+    call control
+    mov byte [neg_hi], 0
 
 
 %ifdef JIT
@@ -1279,6 +1300,81 @@ row_loop:
 .bad:
     mov ax, 1
     ret
+
+; -----------------------------------------------------------------------------
+; ROW 21 - $FFC0-$FFF9 IS THE PROGRAM'S (C64-SPEC 3.5)
+; With the KERNAL banked out, a program writes 58 bytes to $FFC0-$FFF9 with
+; STA abs,X and reads them back with CMP abs,X: the cores' scratch lives in
+; those guest bytes, and the program's own go through the I/O door to the
+; package's copy. A packed demo's unpacker kept a table there and hung. The
+; control drops those writes, as the cores used to.
+; -----------------------------------------------------------------------------
+row_hiram:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov si, p_hiram
+    mov di, 0x0800
+    mov cx, p_hiram_end - p_hiram
+.c: mov al, [cs:si]
+    inc si
+    mov [es:di], al
+    inc di
+    loop .c
+    mov byte [es:0x0010], 0
+    pop es
+    mov di, _c64_hiram
+    mov cx, 0x3A
+    xor al, al
+.z: mov [di], al
+    inc di
+    loop .z
+    mov al, 0                       ; all RAM: the KERNAL out
+    call bank_set
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    PUSHI 6000
+    call _c64_run
+    add sp, 2
+    mov bx, 0x0010
+    call ram_rd                     ; (-> AL)
+    cmp al, 1
+    jne .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_hiram:
+    db 0xA2, 0x00                   ; $0800 LDX #0
+    db 0x8A                         ; $0802 TXA
+    db 0x49, 0xA5                   ;       EOR #$A5
+    db 0x9D, 0xC0, 0xFF             ;       STA $FFC0,X
+    db 0xE8                         ;       INX
+    db 0xE0, 0x3A                   ;       CPX #$3A
+    db 0xD0, 0xF5                   ;       BNE $0802
+    db 0xA2, 0x00                   ; $080D LDX #0
+    db 0x8A                         ; $080F TXA
+    db 0x49, 0xA5                   ;       EOR #$A5
+    db 0xDD, 0xC0, 0xFF             ;       CMP $FFC0,X
+    db 0xD0, 0x0B                   ;       BNE fail ($0822)
+    db 0xE8                         ;       INX
+    db 0xE0, 0x3A                   ;       CPX #$3A
+    db 0xD0, 0xF3                   ;       BNE $080F
+    db 0xA9, 0x01                   ;       LDA #1
+    db 0x85, 0x10                   ;       STA $10
+    db 0x02                         ;       KIL
+    db 0xEA                         ; (pad)
+    db 0xA9, 0xFF                   ; $0822 LDA #$FF  (fail)
+    db 0x85, 0x10                   ;       STA $10
+    db 0x02                         ;       KIL
+p_hiram_end:
 
 ; -----------------------------------------------------------------------------
 ; ROW 18 - THE SAME LOOPS IN SHORT RUNS (C64-SPEC 4.7.2)
@@ -3464,6 +3560,9 @@ section .data
 _c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): 0 = none
 _c64_xnew:  dw 0, 0                 ; (c64fast.inc's extended-memory token)
 section .text
+section .data
+_c64_hiram: times 0x3A db 0             ; (c64io.c's: the program's $FFC0-$FFF9)
+section .text
 %include "c64mem.inc"
 
 section .text
@@ -3537,6 +3636,7 @@ neg_stale:  db 0
 neg_io:     db 0
 neg_int:    db 0
 neg_rmw:    db 0
+neg_hi:     db 0
 neg_loop:   db 0
 loop_ran:   dw 0
 loop_n:     dw 0
@@ -3576,6 +3676,7 @@ msg_r19:    db 'row 19 a code page short cut, tested  ', 0
 msg_r15:    db 'row 15 a running block rewritten       ', 0
 msg_r16:    db 'row 16 a chained loop to the budget    ', 0
 msg_r20:    db 'row 20 exits linked to later blocks    ', 0
+msg_r21:    db "row 21 $FFC0-$FFF9 is the program's     ", 0
 msg_r17:    db 'row 17 a patched operand read in place ', 0
 msg_ok:     db 'ok ', 0
 msg_bad:    db 'FAIL ', 0

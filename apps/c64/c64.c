@@ -809,6 +809,9 @@ static void c64_ram_pattern(void)
         n = (p == 255) ? (0xFFC0 - 0xFF00) : 256;
         c64_zcopy_in(a, c64_rampat, (unsigned)n);
     }
+    /* ...and the program's $FFC0-$FFF9, which the scratch sits on (3.5):
+     * the same pattern, page 255's (inverted - bit 14 is set) */
+    os88_memcpy(c64_hiram, c64_rampat + 0xC0, 0x3A);
 }
 
 /* c64_fullscreen_toggle - SPEC.md 11.2's latch, RESIDENT, because both routes
