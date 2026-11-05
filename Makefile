@@ -11492,14 +11492,16 @@ $(BUILD)/arcade/gfcode.bin: apps/arcade/arcaot.py apps/arcade/gunfight.seeds \
                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCGFROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcaot.py $(ARCGFROM) apps/arcade/gunfight.seeds \
-		$(BUILD)/arcade/gfcode.asm $@ $(BUILD)/arcade/gfaux.bin --aux-kb 50 --board gunfight
-$(BUILD)/arcade/gfaux.bin: $(BUILD)/arcade/gfcode.bin
+		$(BUILD)/arcade/gfcode.asm $@ $(BUILD)/arcade/gfaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/gfcode.rcp --board gunfight
+$(BUILD)/arcade/gfaux.bin $(BUILD)/arcade/gfcode.rcp: $(BUILD)/arcade/gfcode.bin
 $(BUILD)/arcade/swcode.bin: apps/arcade/arcaot.py apps/arcade/seawolf.seeds \
                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCSWROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcaot.py $(ARCSWROM) apps/arcade/seawolf.seeds \
-		$(BUILD)/arcade/swcode.asm $@ $(BUILD)/arcade/swaux.bin --aux-kb 50 --board seawolf
-$(BUILD)/arcade/swaux.bin: $(BUILD)/arcade/swcode.bin
+		$(BUILD)/arcade/swcode.asm $@ $(BUILD)/arcade/swaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/swcode.rcp --board seawolf
+$(BUILD)/arcade/swaux.bin $(BUILD)/arcade/swcode.rcp: $(BUILD)/arcade/swcode.bin
 
 # Gottlieb's Q*bert board is an 8088, and its program RUNS NATIVELY
 # (ARCADE-SPEC 10): no translation, only apps/arcade/qbert.patch's handful
@@ -11523,21 +11525,24 @@ $(BUILD)/arcade/pt2code.bin: apps/arcade/arcaot.py apps/arcade/invadpt2.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCPT2ROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcaot.py $(ARCPT2ROM) apps/arcade/invadpt2.seeds \
-		$(BUILD)/arcade/pt2code.asm $@ $(BUILD)/arcade/pt2aux.bin --aux-kb 50
-$(BUILD)/arcade/pt2aux.bin: $(BUILD)/arcade/pt2code.bin
+		$(BUILD)/arcade/pt2code.asm $@ $(BUILD)/arcade/pt2aux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/pt2code.rcp
+$(BUILD)/arcade/pt2aux.bin $(BUILD)/arcade/pt2code.rcp: $(BUILD)/arcade/pt2code.bin
 $(BUILD)/arcade/lrcode.bin: apps/arcade/arcaot.py apps/arcade/lrescue.seeds \
                             apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCLRROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcaot.py $(ARCLRROM) apps/arcade/lrescue.seeds \
-		$(BUILD)/arcade/lrcode.asm $@ $(BUILD)/arcade/lraux.bin --aux-kb 50
-$(BUILD)/arcade/lraux.bin: $(BUILD)/arcade/lrcode.bin
+		$(BUILD)/arcade/lrcode.asm $@ $(BUILD)/arcade/lraux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/lrcode.rcp
+$(BUILD)/arcade/lraux.bin $(BUILD)/arcade/lrcode.rcp: $(BUILD)/arcade/lrcode.bin
 
 $(BUILD)/arcade/invcode.bin: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcaot.py $(ARCROM) apps/arcade/invaders.seeds \
-		$(BUILD)/arcade/invcode.asm $@ $(BUILD)/arcade/invaux.bin --aux-kb 50
-$(BUILD)/arcade/invaux.bin: $(BUILD)/arcade/invcode.bin
+		$(BUILD)/arcade/invcode.asm $@ $(BUILD)/arcade/invaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/invcode.rcp
+$(BUILD)/arcade/invaux.bin $(BUILD)/arcade/invcode.rcp: $(BUILD)/arcade/invcode.bin
 
 # PAC-MAN IS THE OWNER'S ROM, NEVER FETCHED (ARCADE-SPEC 7): no public
 # archive.org item carries it. `make arcaderom-pacman GETPACFROM=<zip>` checks
@@ -11556,8 +11561,9 @@ $(BUILD)/arcade/paccode.bin: apps/arcade/arcz80t.py apps/arcade/z80dec.py apps/a
                              apps/arcade/arcdefs.inc $(ARCPMROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcz80t.py $(ARCPMROM) apps/arcade/pacman.seeds \
-		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 50
-$(BUILD)/arcade/pacaux.bin: $(BUILD)/arcade/paccode.bin
+		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 50 \
+		--recipe $(BUILD)/arcade/paccode.rcp
+$(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/paccode.rcp: $(BUILD)/arcade/paccode.bin
 $(BUILD)/arcade/PACMAN.PRT: apps/arcade/arcpmgfx.py $(ARCPMROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcpmgfx.py $(ARCPMROM) $@

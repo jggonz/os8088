@@ -4691,6 +4691,14 @@ SOAK = [
         "a PUSH into VRAM not listing its cells, which left Sea Wolf's "
         "INSERT COIN on the glass in play",
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+    Row("arcrecipe", "soak", py("tests/arcrecipe.py"), 2.0,
+        "ARCADE's RECIPES (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): every translated "
+        "board's code part as it will ship, its ROM bytes left as holes - filled "
+        "from the pinned ROM it is byte for byte the translation the lockstep rows "
+        "test, and it carries no run of 8 ROM bytes. Red with one fill entry taken "
+        "out. Host-only",
+        wants=("build/arcade/invcode.rcp", "build/arcade/invcode.bin",
+               "build/arcade-rom/INVADERS.ROM")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "

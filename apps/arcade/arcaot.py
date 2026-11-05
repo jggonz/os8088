@@ -28,6 +28,7 @@
 import argparse
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
@@ -858,6 +859,108 @@ def finish(binary, syms, code_pcs, out_bin, out_aux, name, aux_size=0x8000,
     return len(binary)
 
 
+# =============================================================================
+# THE RECIPE (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): the code part with every
+# byte that came from the ROM left as a hole (zero), and a FILL LIST after the
+# code (at AH_END) that says, for each hole, the ROM address it is filled
+# from. What ships is the recipe; the user's own ROM set fills it. The ROM's
+# bytes reach the translation only as the DATA IMMEDIATES of three kinds of
+# instruction - MVI r,n / LD r,n; LXI rp,nn / LD rp,nn; ADI..CPI n / ADD..CP n -
+# the same encodings on the 8080 and the Z80; addresses, jump targets and
+# ports are the program's structure, as the seeds and qbert.patch are.
+# The holes are found by DIFFERENCE: the translation emitted again with
+# every data immediate inverted, nothing else, must assemble to the same
+# shape; the bytes that differ are the holes, and each is tied to the ROM
+# byte of its own instruction it equals.
+# =============================================================================
+def data_imm(i):
+    o = i.op
+    return o < 0x100 and ((o & 0xC7) == 0x06 or (o & 0xCF) == 0x01 or (o & 0xC7) == 0xC6)
+
+
+def make_recipe(code, emit_fn, longjcc, binary, syms, rom, nasm, incdirs, name):
+    """The fill list [(code offset, ROM address)] for binary, emitted by
+    emit_fn(longjcc) from code."""
+    flip = [i for i in code.values() if data_imm(i) and i.imm is not None]
+    for i in flip:
+        i.imm ^= 0xFF if i.imm < 0x100 and (i.op & 0xCF) != 0x01 else 0xFFFF
+    try:
+        rc, err, other, syms2 = assemble(emit_fn(longjcc), nasm, incdirs, keep=True)
+    finally:
+        for i in flip:
+            i.imm ^= 0xFF if (i.op & 0xCF) != 0x01 else 0xFFFF
+    if rc or len(other) != len(binary) or syms2 != syms:
+        raise SystemExit('%s: the recipe\'s second translation changed shape' % name)
+    labels = sorted((off, int(k[1:], 16)) for k, off in syms.items()
+                    if re.match(r'^L[0-9A-F]{4}$', k))
+    offs = [o for o, _ in labels]
+    import bisect
+    fills = []
+    for o in range(len(binary)):
+        if binary[o] == other[o]:
+            continue
+        k = bisect.bisect_right(offs, o) - 1
+        pc = labels[k][1] if k >= 0 else None
+        i = code.get(pc)
+        if i is None or not data_imm(i):
+            raise SystemExit('%s: code byte %04X differs, and no data immediate is '
+                             'there (%s)' % (name, o, 'L%04X' % pc if pc is not None else '-'))
+        at = [a for a in range(pc + 1, pc + i.n) if rom[a] == binary[o]]
+        if not at:
+            raise SystemExit('%s: code byte %04X (L%04X) is no byte of its instruction'
+                             % (name, o, pc))
+        fills.append((o, at[-1]))
+    return fills
+
+
+def encode_fill(fills):
+    """The fill list: a word count, then each entry as the step from the one
+    before - offset +1..255 and address -128..127 in two bytes, else 0 and
+    both as words."""
+    out = bytearray(struct.pack('<H', len(fills)))
+    po = pa = 0
+    for o, a in fills:
+        do, da = o - po, a - pa
+        if 1 <= do <= 255 and -128 <= da <= 127:
+            out += bytes([do, da & 0xFF])
+        else:
+            out += bytes([0]) + struct.pack('<HH', o, a)
+        po, pa = o, a
+    return bytes(out)
+
+
+def write_recipe(path, binary, fills):
+    """The recipe file: the code, holes zeroed, then the fill list (AH_END)."""
+    end = struct.unpack_from('<H', binary, 4)[0]
+    if end != len(binary):
+        raise SystemExit('recipe: AH_END %04X is not the code\'s end %04X' % (end, len(binary)))
+    holed = bytearray(binary)
+    for o, _ in fills:
+        holed[o] = 0
+    open(path, 'wb').write(bytes(holed) + encode_fill(fills))
+    return len(fills)
+
+
+def fill_recipe(recipe, rom):
+    """The inverse, as the package does it: the code part out of a recipe
+    and the ROM image (tests/arcrecipe.py's half)."""
+    end = struct.unpack_from('<H', recipe, 4)[0]
+    code = bytearray(recipe[:end])
+    n = struct.unpack_from('<H', recipe, end)[0]
+    k = end + 2
+    o = a = 0
+    for _ in range(n):
+        if recipe[k] == 0:
+            o, a = struct.unpack_from('<HH', recipe, k + 1)
+            k += 5
+        else:
+            o += recipe[k]
+            a += recipe[k + 1] - 256 if recipe[k + 1] & 0x80 else recipe[k + 1]
+            k += 2
+        code[o] = rom[a]
+    return bytes(code)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('rom')
@@ -866,6 +969,8 @@ def main():
     ap.add_argument('bin', help='the code part')
     ap.add_argument('aux', help="aux's PC table, 32KB")
     ap.add_argument('--nasm', default='nasm')
+    ap.add_argument('--recipe', help='also write the recipe: the code with the ROM '
+                    "left as holes, and its fill list (what ships)")
     ap.add_argument('--aux-kb', type=int, default=48,
                     help="aux's size: the table, then the list and the flags")
     ap.add_argument('--no-speculate', action='store_true',
@@ -908,6 +1013,11 @@ def main():
     open(a.out, 'w').write(asm)
     size = finish(binary, syms, code, a.bin, a.aux, 'arcaot', a.aux_kb * 1024,
                   TABLE_PCS)
+    if a.recipe:
+        n = write_recipe(a.recipe, binary, make_recipe(
+            code, lambda lj: emit(code, lj, romname), longjcc, binary, syms, rom,
+            a.nasm, [HERE], 'arcaot'))
+        print('arcaot: recipe %s, %d holes' % (a.recipe, n))
     polls = sum(1 for i in code.values() if i.poll)
     print('arcaot: %d instructions (%d of them speculative), %d poll points, '
           '%d long branches, %d bytes of code, spins %s, idioms %s -> %s'

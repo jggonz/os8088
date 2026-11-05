@@ -654,6 +654,7 @@ def main():
     ap.add_argument("--aux-kb", type=int, default=50,
                     help="aux's size: the table, the list and the tile flags (9400h)")
     ap.add_argument('--no-speculate', action='store_true')
+    ap.add_argument('--recipe', help='also write the recipe (arcaot.make_recipe)')
     a = ap.parse_args()
     img = open(a.rom, 'rb').read()
     rom = img[:0x4000]
@@ -681,6 +682,11 @@ def main():
                                                a.nasm, [HERE], 'arcz80t')
     open(a.out, 'w').write(asm)
     size = arcaot.finish(binary, syms, code, a.bin, a.aux, 'arcz80t', a.aux_kb * 1024)
+    if a.recipe:
+        n = arcaot.write_recipe(a.recipe, binary, arcaot.make_recipe(
+            code, lambda lj: emit(code, lj, daa, romname), longjcc, binary, syms, rom,
+            a.nasm, [HERE], 'arcz80t'))
+        print('arcz80t: recipe %s, %d holes' % (a.recipe, n))
     print('arcz80t: %d instructions (%d of them speculative), %d poll points, '
           '%d long branches, %d bytes of code, DAA %s -> %s'
           % (len(code), spec, sum(1 for o in code.values() if o.poll), len(longjcc), size,

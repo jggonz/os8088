@@ -70,10 +70,11 @@ chips.
    chips of a set go into one file, `<SET>.ROM` (the board image in the
    layout `getarcrom.py` writes today, plus Q\*bert's two sound chips). It
    goes in the folder the set was imported FROM, or a folder the user picks
-   in the save dialog, which defaults there. **Never where `ARCADE.O88`
-   is**, unless the user picks it: the program may ride a disk that is full
-   or write-protected (the emulators' disk, section 7), and a ROM disk that
-   carries its own `.ROM` files works in any machine that has ARCADE. That
+   in the save dialog, which defaults there. The reason is the constrained
+   machine: on the emulators' disk only the program fits (section 7), so a
+   360KB user keeps ROMs and their `.ROM` files on a disk of their own. On a
+   286 with a hard disk the ROMs and the program will usually sit in the
+   same folder anyway, and then this rule changes nothing. That
    one file is the whole cache: everything else is REBUILT each time the
    game is picked, from the recipe in the package (section 2.4).
 4. **Find them by looking, in known places.** A game with no `.ROM` found is
@@ -84,10 +85,9 @@ chips.
    - `\ARCADE\` on every floppy and hard disk the frontend can see, read
      when it opens and again on **Look for ROMs** (a floppy is not scanned
      behind the user's back: each read is a disk call, about 400 ms);
-   - every folder an import wrote to, remembered on the SYSTEM disk's
-     `SYSTEM\APPDATA`, the volume that is there whichever disk ARCADE came
-     from (SPEC.md 19.9). R2 checks that `os88data.inc` can reach the boot
-     volume from a package started elsewhere, and adds that if it cannot.
+   - every folder an import wrote to, remembered in `SYSTEM\APPDATA` on
+     ARCADE's OWN disk (`os88data.inc`, SPEC.md 19.9): it is the program's
+     information, so it lives with the program, not with the boot disk.
 
    A remembered place on a floppy that is not in the drive is a normal
    case: picking its game asks for the disk by its label and drive ("Insert
