@@ -861,6 +861,34 @@ is left, about 6% is the fast core, 16% the package's devices and run loop,
 and 6.5% the shared `RTS` lookup - which is already about fourteen
 instructions, and inline at each `RTS` would cost ~10KB for the `jmp` into it.
 
+**The second pass (2026-11), from a profile by instruction class.** Under
+warp, with BASIC's floating point dominating (`A=I*2.5/3`), the translation
+was 75% of the machine and its own work 26% of it: the countdown 16%, the
+flags 13%, jumps 12%. Five changes, each held by the AOT leg below:
+- **an immediate load's N and Z are constants** (`nz_const`): one or two ALU
+  ops into AH's SF/ZF for `sahf/inc/dec/lahf`;
+- **a `zp`/`zp,X` read-modify-write takes its N and Z by liveness** - they
+  were computed always - and a `ROL`/`ROR zp` whose N and Z are dead rotates
+  the byte where it lies;
+- **`PHP`, `PLP` and `RTI` work in DH**, not DL (which is 0 between
+  instructions, so using it owed an `xor dl, dl`), and `PLP` merges V/B/D/I
+  into PV in a register: one read and one write for two read-modify-writes,
+  and the decimal test on the register;
+- **the CHRGET guard is once a group**: the first store that may hit the
+  routine clears PV's "checked" bit for the rest of the straight run, which
+  is entered only at its top - clearing it early only makes the next
+  CHRGET check again;
+- **N and Z DEFERRED to the next instruction's bail** (`liveness()`'s "D",
+  `nz_reg`): before a `zp,X` read-modify-write, whose only way out is its
+  address test - before it writes N and Z or touches the register the one
+  before left its result in - that one need not work them out; the bail
+  stub does, from that register. Only an interrupt taken at that bail could
+  see them, and Dormann's test never sends a `zp,X` address to `$00/$01`, so
+  that stub is correct by construction rather than by a row.
+Measured under warp on `286-victory`, three loops: floating point 106.6% ->
+110.2%, strings (`STR$`, `LEN`, `MID$`) 100.6% -> 102.2%, `PEEK`/`POKE`
+106.0% -> 109.4%.
+
 **Two segments, because one does not hold both**: 5,436 PCs come to 49,247
 bytes of BASIC and 30,006 of KERNAL (2,379 entries, APPLE2-SPEC 4.7's
 groups), and a part stops at 65,024. Within a

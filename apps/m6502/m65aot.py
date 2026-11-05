@@ -132,6 +132,9 @@ class Aot:
         self.mine = pcs if mine is None else mine
         self.dyn = set(dyn)             # (the trace's RTS / JMP (ind) landings)
         self.bank = bank
+        self.guard_done = False         # chr_guard's bit cleared this group
+        self.defer_cur = None           # (next PC, register): N and Z owed
+        self.defer_prev = None          # ...to this instruction's bail
         self.out = []
         self.n = 0
         self.ctl = False
@@ -195,7 +198,11 @@ class Aot:
         """a label that leaves to the core at THIS instruction, its cycles
         given back: what the core hands back is decided after the address"""
         b = self.lab()
-        self.tail.append(["%s: add bp, %d" % (b, self.pre[self.cur]),
+        fix = []
+        if self.defer_prev:
+            r = self.defer_prev
+            fix = ["    sahf", "    inc %s" % r, "    dec %s" % r, "    lahf"]
+        self.tail.append(["%s:" % b] + fix + ["    add bp, %d" % self.pre[self.cur],
                           "    mov si, 0x%04X" % self.cur, "    jmp xa_resume"])
         return b
 
@@ -214,6 +221,17 @@ class Aot:
     def nz(self, r, live):
         if live:
             self.L("    sahf", "    inc %s" % r, "    dec %s" % r, "    lahf")
+
+    def nz_const(self, v, live):
+        """N and Z of a value known when the code is translated - an
+        immediate load - written straight into AH's SF and ZF (lahf's
+        layout), C untouched: one or two ALU ops for sahf/inc/dec/lahf"""
+        if live:
+            self.L("    and ah, 0x3F")
+            if v == 0:
+                self.L("    or ah, 0x40")
+            elif v & 0x80:
+                self.L("    or ah, 0x80")
 
     def v_from_of(self):
         # V from the 8086's OF, inline (where it is live: vliveness())
@@ -541,6 +559,15 @@ class Aot:
         mn, mode, cyc, opnd, n = decode(self.rom, pc)
         L = self.L
         nxt = pc + n
+        # (the instruction before left N and Z to this one's bail, in a
+        # register: liveness()'s "D")
+        self.defer_prev = None
+        if self.defer_cur is not None and self.defer_cur[0] == pc:
+            self.defer_prev = self.defer_cur[1]
+        self.defer_cur = None
+        if live_nz == "D":
+            live_nz = False
+            self.defer_cur = (nxt, self.nz_reg(pc))
         self.cur, self.nxt = pc, nxt
         self.L("p_%04X:" % pc)
         if os.environ.get("M65AOT_TRACE") == "all":
@@ -573,6 +600,8 @@ class Aot:
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")   # I/O or ROM
             return False
         if pc in self.gstart:
+            self.guard_done = False         # (chr_guard: once a group)
+        if pc in self.gstart:
             # ONE SUBTRACT A GROUP (blocks()'s neighbour, groups()): the whole
             # straight run's cycles, which an exit inside it gives back
             L("    sub bp, %d" % self.pre[pc])
@@ -581,7 +610,10 @@ class Aot:
             self.read(mode, opnd, dst, mode in PENALTY, cyc)
             src = dst
             if mn in ("LDA", "LDX", "LDY"):
-                self.nz(dst, live_nz)
+                if mode == "imm":
+                    self.nz_const(opnd, live_nz)
+                else:
+                    self.nz(dst, live_nz)
             elif mn in ("ORA", "AND", "EOR"):
                 L("    %s al, %s" % ({"ORA": "or", "AND": "and", "EOR": "xor"}[mn], src))
                 self.nz("al", live_nz)
@@ -630,6 +662,10 @@ class Aot:
                     L("    sahf", "    %s %s" % (mn.lower(), m), "    lahf")
                 else:
                     L("    %s %s, 1" % ("shl" if mn == "ASL" else "shr", m), "    lahf")
+            elif mode == "zp" and mn in ("ROL", "ROR") and not live_nz:
+                # N and Z dead: the rotate on the byte where it lies
+                L("    sahf", "    %s byte [0x%04X], 1" % ("rcl" if mn == "ROL" else "rcr", opnd),
+                  "    lahf")
             else:
                 if mode == "zp":
                     L("    mov bx, 0x%04X" % opnd)
@@ -643,7 +679,11 @@ class Aot:
                     b = self.bail(cyc)
                     L("    cmp bh, 0xA0", "    jae %s" % b, "    cmp bx, 2", "    jb %s" % b)
                 L("    mov dh, [bx]")
-                self.shift(mn, "dh", True)
+                # (N and Z by their LIVENESS where nothing can leave after
+                # the write - zero page marks nothing and calls nothing; an
+                # absolute address may call the mark, and an exit there owes
+                # this instruction's flags)
+                self.shift(mn, "dh", live_nz or mode not in ("zp", "zpx"))
                 L("    mov [bx], dh")
                 if self.c64:
                     if mode == "abs":
@@ -730,11 +770,12 @@ class Aot:
         elif mn == "PHP":
             # P out of AH (N, Z, C) through t_getp, and V, B, D, I out of PV:
             # the core's getp, without the call and the rotates
-            L("    mov bl, ah", "    xor bh, bh", "    mov dl, [cs:bx+t_getp]",
-              "    mov bh, [%s]" % self.PV(), "    and bh, 0x5C", "    or dl, bh",
-              "    or dl, 0x10")
-            self.push("dl")
-            L("    xor dl, dl")
+            # (in DH: DL is the cycles not yet taken, 0 between instructions,
+            # and a DL used here owed an `xor dl, dl` after)
+            L("    mov bl, ah", "    xor bh, bh", "    mov dh, [cs:bx+t_getp]",
+              "    mov bh, [%s]" % self.PV(), "    and bh, 0x5C", "    or dh, bh",
+              "    or dh, 0x10")
+            self.push("dh")
         elif mn == "PLA":
             self.pop("al")
             self.nz("al", live_nz)
@@ -761,13 +802,13 @@ class Aot:
         elif mn == "SEI":
             L("    or byte [%s], 0x04" % self.PV())
         elif mn == "PLP":
-            self.pop("dl")
+            self.pop("dh")
             self.setp_inline()
             x = self.lab()
-            L("    test byte [%s], 0x08" % self.PV(), "    jnz %s" % x)
+            L("    test dh, 0x08", "    jnz %s" % x)     # (DH: the pulled D)
             self.tail.append(["%s: mov si, 0x%04X" % (x, nxt), "    jmp xa_resume"])
         elif mn == "RTI":
-            self.pop("dl")
+            self.pop("dh")
             self.setp_inline()
             self.pop("bl")
             self.pop("bh")
@@ -784,11 +825,13 @@ class Aot:
         return True                 # falls through to the next PC
 
     def setp_inline(self):
-        """DL = a pulled P -> AH through t_setp, and PV's V, B, D, I (the
-        core's setp, without the call and the rotates); DL 0 after"""
-        self.L("    mov bl, dl", "    xor bh, bh", "    mov ah, [cs:bx+t_setp]",
-               "    and dl, 0x5C", "    and byte [%s], 0xA3" % self.PV(),
-               "    or [%s], dl" % self.PV(), "    xor dl, dl")
+        """DH = a pulled P -> AH through t_setp, and PV's V, B, D, I (the
+        core's setp, without the call and the rotates), merged in a
+        register: one read and one write of PV rather than two
+        read-modify-writes. DH is left the pulled V, B, D, I"""
+        self.L("    mov bl, dh", "    xor bh, bh", "    mov ah, [cs:bx+t_setp]",
+               "    and dh, 0x5C", "    mov bl, [%s]" % self.PV(), "    and bl, 0xA3",
+               "    or bl, dh", "    mov [%s], bl" % self.PV())
 
     def chr_guard(self, mn, mode, opnd):
         """a store that may write the CHRGET routine (other than TXTPTR, which
@@ -803,8 +846,14 @@ class Aot:
             hit = opnd <= hi and opnd + 255 >= lo
         else:
             hit = True                      # zp,X wraps; a pointer: anywhere
-        if hit:
+        # ONCE A GROUP (groups()): a group is entered only at its top, and
+        # clearing the bit early is always safe - it only makes the next
+        # CHRGET check the routine again - so the first store that may hit
+        # it clears it for the stores after (PCUG's FMULT shifts: four
+        # ROR zp,X in a row, a read-modify-write of PV each)
+        if hit and not self.guard_done:
             self.L("    and byte [%s], 0x7F" % self.PV())
+            self.guard_done = True
 
     def static_core(self, mn, mode, opnd):
         """the C64: an instruction whose operand alone says the core runs it
@@ -939,7 +988,17 @@ class Aot:
                 continue
             nmn, nmode, _, nopnd = decode(self.rom, nxt)[:4]
             if self.c64 and self.may_exit(nmn, nmode, nopnd):
-                live[pc] = True
+                # DEFERRED: a zp,X read-modify-write next can leave only at
+                # its address test, before it writes N and Z and before it
+                # touches any register this one left its result in - so its
+                # bail works N and Z out from that register, and this one
+                # need not (bail(); FMULT's chains of ROR zp,X)
+                if nmn in RMW and nmode == "zpx" and nxt not in self.gstart \
+                        and not self.static_core(nmn, nmode, nopnd) \
+                        and self.nz_reg(pc) is not None:
+                    live[pc] = "D"
+                else:
+                    live[pc] = True
                 continue
             if nmode == "rel" or nmn == "PHP" or nmn in LEAVE \
                     or nmn in IRQ_GATED \
@@ -956,6 +1015,18 @@ class Aot:
             else:
                 live[pc] = live.get(nxt, True)
         return live
+
+    def nz_reg(self, pc):
+        """the register an instruction leaves the value N and Z come from in,
+        when it is one the next instruction's address test leaves alone"""
+        mn, mode = decode(self.rom, pc)[:2]
+        if mn in ("LDA", "LDX", "LDY"):
+            return {"LDA": "al", "LDX": "cl", "LDY": "ch"}[mn]
+        if mn in ("ORA", "AND", "EOR"):
+            return "al"
+        if mn in RMW and mode == "zpx" and not self.static_core(mn, mode, decode(self.rom, pc)[3]):
+            return "dh"
+        return None
 
     def vliveness(self):
         """V live-out per PC, NZ's rule for the overflow flag: read by BVC,
