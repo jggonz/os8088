@@ -1128,7 +1128,14 @@ vb_rpiece:
     jae .none
 .some:
     mov ax, [ds:bp+RG_VOFF]         ; room: the ring less what is still
-    mov dx, [ds:bp+RG_VOFF+2]       ; wanted past the EARLIER cursor
+    mov dx, [ds:bp+RG_VOFF+2]       ; wanted past the EARLIER cursor - the
+    cmp byte [vb_snd], 0            ; sound's only while a card plays it
+    je .e1                          ; and the ring sounds (or is booked to):
+    cmp bp, [vb_aring]              ; a sound cursor that never moves (no
+    je .es                          ; card, or a stream ended) held a ring's
+    cmp bp, [vb_apring]             ; room at its start for good, and the
+    jne .e1                         ; picture froze when it had played what
+.es:                                ; the ring held
     cmp dx, [ds:bp+RG_AOFF+2]
     jb .e1
     ja .e2
@@ -2435,6 +2442,7 @@ vb_uisound:
     jbe .out                        ; (nothing queued past it)
     cmp cx, VB_LEAD
     ja .out
+    sub di, [vb_rbase]              ; (in the card's ring)
 .piece:
     jcxz .out
     push cx
@@ -2478,7 +2486,8 @@ vb_uisound:
 ; frame of the clip's sound, and the start of a clip's sound to come
 vb_chunk:
     mov di, [vb_wpos]
-    and di, VB_RL - 1
+    sub di, [vb_rbase]              ; (the card's ring from where its stream
+    and di, VB_RL - 1               ; began: vb_snd_keep's reopen)
     mov ax, VB_RL
     sub ax, di
     cmp cx, ax
@@ -2628,6 +2637,7 @@ vb_chunk:
 .tot:
     mov es, [vb_ring]
     mov ax, [vb_wpos]
+    sub ax, [vb_rbase]
     mov [es:VB_RL+SND_EXT_TOTAL], ax
     ret
 
@@ -2912,7 +2922,7 @@ vb_snd_open:
     mov word [vb_dmin], 2           ; (no card: two frames on)
     call OSAPI_SND_CAPS
     test ax, SND_CAP_PCM_BG
-    jz .out
+    jz vb_snd_start.out
     mov word [vb_blk], 2048         ; the card's block, and what follows
     mov word [vb_lead], VB_LEAD     ; from it: the lead, and the clock's cap
     mov word [vb_pcap], 12
@@ -2937,13 +2947,18 @@ vb_snd_open:
     mov ax, VB_RL / 1024 + 1
     mov cx, ax
     call OSAPI_MEM_CLAIM_DMA_HI
-    jc .out
+    jc vb_snd_start.out
     mov [vb_ring], dx
 .have:
     mov es, [vb_ring]
     xor ax, ax
+    mov [vb_rbase], ax
     mov [es:VB_RL+SND_EXT_TOTAL], ax
     mov [es:VB_RL+SND_EXT_CONS], ax
+; vb_snd_start - the stream opened over the card's ring from [vb_rbase] on:
+; its first VB_LEAD bytes queued, verb 0. (vb_snd_open's tail, and
+; vb_snd_keep's reopen.) [vb_snd] 1 when it opened
+vb_snd_start:
     mov byte [vb_snd], 1            ; (vb_feed's own test)
     call vb_feed                    ; the first VB_LEAD bytes
     mov byte [vb_snd], 0
@@ -2952,6 +2967,7 @@ vb_snd_open:
     xor si, si
     mov di, [vb_ring]
     mov cx, [vb_wpos]
+    sub cx, [vb_rbase]
     mov dx, [vb_meta+VH_RATE]
     call OSAPI_SND_STREAM
     jc .out
@@ -3048,12 +3064,38 @@ vb_snd_keep:
     mov al, 1
     mov ah, [vb_hand]
     mov cx, [vb_wpos]
+    sub cx, [vb_rbase]
     call OSAPI_SND_STREAM
 .out:
     ret
 .dead:
+    ; ENDED - the driver's watchdog stopped it (a block IRQ ~165 ms late,
+    ; SPEC.md 34.5). It was the play gone SILENT for good, and a clip's
+    ; sound cursor then never moved, so its ring was never read again and
+    ; its picture froze (the owner's "no sound causes a permanent
+    ; freeze"). It is OPENED AGAIN on the same timeline: the new stream's
+    ; ring starts where the clock stands ([vb_rbase]), the lead queued in
+    ; the old one dropped (0.37 s at most), the clock going on
+    inc word [vb_nended]
+    mov al, 2                       ; (closed: its grants and IRQ given back)
+    mov ah, [vb_hand]
+    call OSAPI_SND_STREAM
+    pushf
+    cli
     mov byte [vb_snd], 0
-    ret
+    mov ax, [vb_cons32]
+    mov dx, [vb_cons32+2]
+    mov [vb_rbase], ax
+    mov [vb_wpos], ax
+    mov [vb_wpos+2], dx
+    mov word [vb_cons], 0
+    mov word [vb_pers], 0
+    mov es, [vb_ring]
+    xor ax, ax
+    mov [es:VB_RL+SND_EXT_TOTAL], ax
+    mov [es:VB_RL+SND_EXT_CONS], ax
+    popf
+    jmp vb_snd_start
 
 vb_snd_close:
     cmp byte [vb_snd], 0
@@ -3256,6 +3298,8 @@ vb_reader:
     jnc .lno                        ; cursor: the clip's SOUND runs the
     mov cx, [bx+RG_VOFF]            ; card's lead (0.37 s) ahead of its
     mov si, [bx+RG_VOFF+2]          ; picture, and measured from the picture
+    cmp byte [vb_snd], 0
+    je .lv
     cmp bx, [vb_aring]              ; a ring kept the picture fed and let
     jne .lv                         ; the sound reach records not yet read:
     cmp si, [bx+RG_AOFF+2]          ; a heavy clip's sound cut out and came
@@ -3596,6 +3640,8 @@ VB_VAR vb_askipn, 2                 ; ...past record 0's this many bytes
 VB_VAR vb_owsnd, 1                  ; the next opening's sound waits on it
 VB_VAR vb_pbig, 1                   ; a read for a stream running low: whole
 VB_VAR vb_nunder, 2                 ; the card found halted, resumed
+VB_VAR vb_nended, 2                 ; ...found ENDED, and opened again
+VB_VAR vb_rbase, 2                  ; the timeline's sample at the ring's 0
 VB_VAR vb_fwant, 1                  ; a fade wanted: what follows it
 VB_VAR vb_fon, 1                    ; a fade under way
 VB_VAR vb_fnext, 1                  ; 1 opening 0, 2 the end loop, 3 again

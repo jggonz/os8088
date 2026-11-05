@@ -237529,6 +237529,26 @@ card's last block × 151 samples, capped below a block and never moving
 backwards (98.3.1's `vp_adue`). With no card the clock is the PIT's
 periods × 151.388 samples, kept in 16.16, so the same battle runs silent.
 
+**A stream the driver ENDED is opened again** (`vb_snd_keep`): SOUND.DRV's
+watchdog ends a stream whose block interrupt is ~165 ms late (34.5). The
+engine took that as the play gone silent for good and did not even CLOSE
+it, so the driver held it as the battle's and every open after - the play
+again included - was refused: the owner's "esc to desktop, then enter to
+restart does not bring sound back". With no card a clip's sound cursor
+never moved, and the ring's room was counted from it, so a clip larger than
+its ring froze once it had played what the ring held ("the video played ...
+up to the point it was supposed to play a sound, and then froze,
+permanently"). Now the ended stream is CLOSED and opened again on the same
+timeline - the card's ring numbered from where the clock stands
+(`[vb_rbase]`: every place that turns the timeline into the card's ring,
+`vb_chunk`, `vb_uisound`, the TOTAL word and verb 1, subtracts it), the
+lead queued in the old one dropped, the clock going on - and a sound
+cursor counts in a ring's room only while a card plays it and the ring
+sounds (`vb_rpiece`, the reader's step 2). `vbtsndend` fires the driver's
+own watchdog under the battle ([sbl_wd] and its reload poked to 1): the
+stream opened again, the music on, a streamed action played to its end;
+the old way, no card and the action frozen.
+
 **The card's block is 512 bytes when the driver offers it**
 (`SND_CAP_EXTBLK`, `SND_OPENF_BLKSH` code 2), otherwise 2,048, and the
 ring runs **4 KB (0.37 s) ahead either way**. It ran 2 KB ahead with the

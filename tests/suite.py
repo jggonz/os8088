@@ -16950,6 +16950,14 @@ SOAK = [
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
+    Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 60.0,
+        "SPEC.md 125.3: the card's stream ENDED under the battle (SOUND.DRV's "
+        "watchdog made to fire) - the owner's 'no sound causes a permanent "
+        "freeze'. The stream closed and opened again on the same timeline, "
+        "the music on, and the next action (streamed, more than its ring) "
+        "played to its end. Broken (ENDED as silence, the ring's room by a "
+        "sound cursor that never moves): no card, and the action froze",
+        needs=("marty", "ffmpeg")),
     Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
         "SPEC.md 125.5: the music under the band, the owner's 'when the "
         "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "
