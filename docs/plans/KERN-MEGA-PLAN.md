@@ -13776,3 +13776,68 @@ semantics, and the SPEC says so.
 dispatch in `.mega` as `mega_fkivt` is (14.141). ABI: a new verb is additive
 (`apps/os88api.inc`), so `tools/abilock.py --update` without a version bump.
 Real-mode kernels refuse it (CF = 1), a segment being code or data by use.
+
+### 14.144 A Windows program's global selectors are odd: DPL 3 data, conforming code (2026-11-04) - PROTOTYPE, NOT YET MERGED
+
+Found by `verify-lheap` (WIN16-NEXT): Microsoft Mozart, a Visual Basic 3.0
+program, shows *Out of memory* on kern_mega. The cause is VBRUN300's
+`GlobalReAlloc` wrapper, which begins `test cl, 1` / `jz` *fail*. On Windows
+3.x every selector a program held for its global memory had RPL 3 and ended
+in 7 or F, and a moveable handle was the selector with bit 0 clear. VB
+refuses an even value as "a handle, not a selector". Every selector WIN16
+handed out here had RPL 0, because its descriptor was DPL 0: a data
+selector loads only when DPL >= max(CPL, RPL).
+
+*The kernel's part is three access bytes, as immediates, so no section
+grows:*
+
+- `SEG_HND` (`mega_segh`) makes a new handle descriptor with access F2h:
+  data, writable, **DPL 3**. Re-aiming one writes bytes 0-4 only, so the DPL
+  stays.
+- `SEG_TILE` (`mega_segtile`) makes its tiles F2h too.
+- `SEG_TYPE` (`mega_segty`) sets data to F2h, and sets code to **9Eh**:
+  code, readable, **conforming**, DPL 0. ASTEROID (14.142) flips a
+  `GlobalAlloc` block's selector in place and far-calls through the value
+  it holds, which is odd now. A far call to non-conforming code with RPL 3
+  is #GP at CPL 0, and a conforming segment's far call does not check RPL.
+  `LAR` and `LSL` on a conforming segment do not check privilege either,
+  and WIN16's flip back to data reads the type with `LAR`.
+
+*What nothing else noticed.* At CPL 0 a DPL 3 data segment loads with any
+RPL, so WIN16's own loads of these descriptors, its two walk descriptors
+among them, do not change. `mega_dfind` asks for 92h, so it now passes a
+tile by, as it already passed a handle descriptor (by `MEGA_HAVL`). Tiles
+were never meant to be a match. The kernel's other checks on an access
+byte do not look at the DPL: `mega_ldt2ds` checks a pair's data half (92h,
+which pairs keep), and `mega_dacc` masks with 91h. Every kernel lookup of
+a program's selector already drops the RPL: `mega_selbase` (`and al,
+0F8h`), `mega_segh`, `mega_segty`'s handle arm, `mega_ldt_free`, and
+`mega_npx` (14.143). The exact compares are the WINDOW verbs
+(`mega_wslot`, `mega_wset`, `mega_segty`'s window walk) and
+`mega_codesel`'s refusal of an RPL. WIN16 never hands a program an odd
+window, and never asks `OSAPI_MEM_CODESEL` about a program's value.
+
+*What it costs a program:* a handle descriptor can no longer be loaded into
+`SS`, because `SS` needs DPL = CPL = 0. The old comment said "a program may
+load it into SS as Windows allowed". Windows allowed it at CPL 3, where the
+descriptor was DPL 3. A `retf` or `iret` to an RPL 3 `CS` is an outer-ring
+return, so the conforming flip covers far calls and far jumps only. Neither
+case is known in any target.
+
+*Why not run the program at CPL 3, which would cure SS and `retf` too:*
+every import is a far call from the program into WIN16's DPL 0 code. At CPL
+3 that needs a call gate, and a gate names one entry, so every import stub
+would need a gate of its own. The privilege change also switches
+stacks, and WIN16's gate reads its arguments off the program's stack
+through `SS`. Every exception and IRQ that arrives at CPL 3 switches to the
+TSS's ring-0 stack, which would have to be re-aimed below `w16_hsp` at every
+resume. Every fault-completion arm (`mega_gpfix`, `mega_gpw`, `mega_null0`,
+`mega_npx`, the fault close) assumes the three-word same-ring frame, and an
+inter-ring frame is five words. `int 21h`, `2Fh`, `31h` and `34h`-`3Dh`
+gates would need DPL 3. That is a change to kern_mega's entry and exit
+paths, which the 10 bytes left in the `.mega` rung cannot hold, and the
+owner's rule allows no rung to be crossed for it.
+
+Cost: `.text`, `.cold`, `.mega`, `.bss` +0 on kern_mega, and kern_big and
+kern_small are byte-identical (`tools/kernsize.py`). WIN16 is SPEC.md
+124.25.23.
