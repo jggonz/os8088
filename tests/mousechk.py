@@ -78,9 +78,9 @@ sys.path.insert(0, os.path.join(ROOT, "tests"))
 #
 # The sources: summary.inc (owner `other`, ~/Repos/mousechk-logs/
 # other-report.md), serial.inc (owner `serial`, serial-report.md), and for the
-# PS/2 keys ps2.inc/probe.inc (owner `ps2`). **THE ps2/probe ENTRIES ARE
-# PROVISIONAL (TODO-LEAD)**: copied from ps2's UNCOMMITTED draft at 08:55,
-# before ps2-report.md existed. Check each against the merged probe.inc.
+# PS/2 keys ps2.inc/probe.inc (owner `ps2`). Every entry was checked against
+# the merged sources at integration (each text is present in its .inc), and
+# the ps2/probe strings against the QEMU trace in SPEC.md 126.8.
 EXPECT = {
     "window_title": "Mouse Check",
     # the foundation's stub: its presence after integration is a FAILURE, not a
@@ -115,7 +115,7 @@ EXPECT = {
     # SPEC.md 9.5.2.1, the Compaq Portable III: data on COM2, interrupt on
     # IRQ4 - the section's WARN verdict (ser_s_vcx) and lamp
     "ser_cx": r"^Cross-wired: data here, interrupt on the other IRQ\.$",
-    # --- ps2.inc / probe.inc (126.7, 126.8) - TODO-LEAD, provisional -------
+    # --- ps2.inc / probe.inc (126.7, 126.8) ------------------------------
     # Probe refused, and why: kern_big owns a live PS/2 mouse (p2_r_live)
     "p2_refused_live": r"^Probe PS/2 is off: Kernel's PS/2 mouse live$",
     # Probe offered (p2x_s_offer): the NOPS2 kernel never took the aux port
