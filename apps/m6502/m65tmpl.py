@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """apps/m6502/m65tmpl.py - the C64 recompiler's TEMPLATES (C64-SPEC 4.9;
-docs/plans/C64-RECOMPILER-PLAN.md wave 1)
+docs/plans/completed/C64-RECOMPILER-PLAN.md wave 1)
 
     python3 apps/m6502/m65tmpl.py --check --selftest -o build/c64/c64tmpl.bin
 
