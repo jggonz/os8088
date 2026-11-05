@@ -39,7 +39,11 @@ A project file (version 1):
                  - SPEC.md 125.3.1: before the openings, round until a key,
      "endings":  {"victory"|"defeat": {"how": "hold" | "fade" (to its loop)
                  | "join" (its clip seams onto its loop's frame 0) |
-                 "again" (fade, and play again), "loop": LOOP | null}},
+                 "again" (fade, and play again), "loop": LOOP | null,
+                 "full"?: true (the end clip over the whole screen),
+                 "plays"?: "once" (not round), "then"?: "fade" | "join"
+                 (after one that plays once: to the title, the play
+                 again; absent: hold)}},
      "fade_steps": 1..16, a fade's steps, one a frame,
      "characters": [{"name", "hp", "mp", "atk", "mag", "def", "mdef",
                      "evade", "menu": {"top": [ITEM], "side": [action]}}],
@@ -623,19 +627,34 @@ class Project:
                           "leave": leave, "anchors": sorted(set(anchors))}
         self._edit(f)
 
-    def set_ending(self, outcome, how, clip=None, loop=None, sound=None):
-        """How OUTCOME ("victory"/"defeat") ends: HOW, and its END loop -
-        clip CLIP's frames LOOP - for "fade" and "join" """
+    def set_ending(self, outcome, how, clip=None, loop=None, sound=None,
+                   full=None, plays=None, then=None):
+        """How OUTCOME ("victory"/"defeat") ends: HOW, and its END clip -
+        clip CLIP's frames LOOP - for "fade" and "join": FULL screen or the
+        canvas, it PLAYS "loop" (round until a key) or "once", and THEN -
+        after one that plays once - "hold", "fade" (to the title, the play
+        again) or "join" (the title). None keeps what is there"""
         if how not in ENDING_HOWS:
             raise ValueError("an ending is %s" % ", ".join(ENDING_HOWS))
+        if plays not in (None, "loop", "once"):
+            raise ValueError("an end clip plays loop or once")
+        if then not in (None, "hold", "fade", "join"):
+            raise ValueError("after a clip that plays once: hold, fade or "
+                             "join")
 
         def f(d):
+            old = d["endings"].get(outcome) or {}
             lp = None
             if clip:
                 c = d["clips"][clip]
                 lp = {"clip": clip, "sound": sound, "loop": list(loop) if loop
                       else [0, c["out"] - c["in"] + 1]}
-            d["endings"][outcome] = {"how": how, "loop": lp}
+            en = {"how": how, "loop": lp}
+            for k, v in (("full", full), ("plays", plays), ("then", then)):
+                v = old.get(k) if v is None else v
+                if v not in (None, False, "loop", "hold"):
+                    en[k] = v
+            d["endings"][outcome] = en
         self._edit(f)
 
     def loop_sound(self, clip, loop):
@@ -933,6 +952,10 @@ class Project:
                 loop(w, en.get("loop"))
                 if en["how"] == "join" and not e.get(k):
                     err(w, "joins its end loop, and there is no %s clip" % k)
+                if en.get("plays") == "once" and en.get("then") == "join" \
+                        and not d.get("title"):
+                    warn(w, "joins the title, and there is none: the play "
+                         "again comes by a fade")
             elif en["how"] == "again" and en.get("loop"):
                 warn(w, "plays again: its end loop is not played")
 

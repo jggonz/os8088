@@ -16896,6 +16896,23 @@ SOAK = [
         "vbtlayout with NO layout: the band as it always was, the engine's "
         "and the preview's the same pixel for pixel",
         needs=("marty",)),
+    Row("vbtending", "soak", py("tests/vbtending.py"), 50.0,
+        "SPEC.md 125.3.1: victory JOINS a full-screen END CLIP with its own "
+        "sound that PLAYS ONCE and JOINS the title - on MartyPC's CGA XT "
+        "the band down and its rows the clip's, and the play again at the "
+        "title with no fade anywhere. Broken on purpose (the once-clip's "
+        "'then' not taken) it never reaches the title",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingfade", "soak", py("tests/vbtending.py", "--arm", "fade"),
+        50.0,
+        "vbtending: victory FADES (the canvas) to a canvas once-clip, which "
+        "FADES (the whole screen) to the title",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingloop", "soak", py("tests/vbtending.py", "--arm",
+                                    "fullloop"), 50.0,
+        "vbtending: victory FADES to a FULL-SCREEN end LOOP - the fade over "
+        "the whole screen, the band down while it goes round",
+        needs=("marty", "ffmpeg")),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

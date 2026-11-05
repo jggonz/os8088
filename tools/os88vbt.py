@@ -80,6 +80,10 @@ CF_LOOP = 32        # a title or end loop: record 0 from black, the last the
                     # seam onto frame 0, records 1.. round until a key
 CF_ENTER = 64       # opening 0, entered at the title loop's frames (anchors)
 ENDING_HOW = {"hold": 0, "fade": 1, "join": 2, "again": 3}
+# AFTER AN ENDING'S CLIP THAT PLAYS ONCE (125.3.1, header 346/347): hold its
+# last frame, fade and play again from the title, or JOIN the title - its
+# last record the seam onto the title's frame 0, the play again no fade
+ENDING_THEN = {"hold": 0, "fade": 3, "join": 4}
 
 NO_SFX = 0xFF
 
@@ -426,8 +430,14 @@ def build(b):
             flags |= CF_JOINS
             recs.append(rec(fs[-1], idle_s[exit_to], rows))
         elif c.get("join_loop") is not None:    # an ending that JOINS its
-            recs.append(rec(fs[-1], surface_of(     # end loop: the seam onto
-                c["join_loop"], rows), rows))       # its frame 0
+            if c.get("join_full"):                  # end clip: the seam onto
+                recs.append(rec(surface_of(full_of(c["frames"][-1]),  # its
+                                           REND.full),                # frame
+                                surface_of(full_of(c["join_loop"]),   # 0 -
+                                           REND.full), REND.full))    # over
+            else:                                   # the whole screen when
+                recs.append(rec(fs[-1], surface_of(  # it is full screen
+                    c["join_loop"], rows), rows))
         regions.append(stream(recs))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=anch))
@@ -471,12 +481,50 @@ def build(b):
                               sum(len(r) for r in recs[1:]) // ALIGN)))
         loop_ix[key] = len(clip_rows) - 1
         return loop_ix[key]
+    def once_clip(lp, then):
+        """An ending's clip that PLAYS ONCE (125.3.1): record 0 from black,
+        then its frames in turn, and - when it JOINS the title - the seam
+        onto the title's frame 0, over the whole screen; CF_ENDS, so the
+        engine goes on as its "then" says"""
+        key = lp["name"]
+        if key in loop_ix:
+            return loop_ix[key]
+        full = lp.get("full")
+        rw = REND.full if full else rows
+        fr = [full_of(f) if full else f for f in lp["frames"]]
+        ss = [surface_of(f, rw) for f in fr]
+        snd = frame_sound(lp.get("sound"), len(ss), spf, True)
+        recs = [rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw, snd[0])]
+        for i in range(1, len(ss)):
+            recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))
+        if then == "join" and b.title:
+            recs.append(rec(surface_of(full_of(fr[-1]), REND.full),
+                            surface_of(full_of(b.title["frames"][0]),
+                                       REND.full), REND.full))
+        flags = CF_ENDS | (CF_FULL if full else 0) | \
+            (CF_OWNSND if lp.get("sound") is not None else 0)
+        regions.append(stream(recs))
+        clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
+                              exit=0, anch=[]))
+        loop_ix[key] = len(clip_rows) - 1
+        return loop_ix[key]
     title_ix = loop_clip(b.title, True) if b.title else NO_SFX
     leave_ix = 0 if openings[0].get("enter") else NO_SFX
-    ends = []
+    ends, thens = [], []
     for k in ("victory", "defeat"):
-        how, lp = b.endings.get(k, ("hold", None))
-        ends += [ENDING_HOW[how], loop_clip(lp, False) if lp else NO_SFX]
+        how, lp, then = (tuple(b.endings.get(k, ("hold", None))) +
+                         ("hold",))[:3]
+        if lp is None:
+            ix = NO_SFX
+        elif lp.get("once"):
+            ix = once_clip(lp, then)
+        else:
+            ix = loop_clip(lp, bool(lp.get("full")))
+        ends += [ENDING_HOW[how], ix]
+        th = ENDING_THEN[then] if lp is not None and lp.get("once") else 0
+        if th == ENDING_THEN["join"] and not b.title:
+            th = ENDING_THEN["fade"]    # (no title to join: the play again
+        thens.append(th)                # from black, by a fade)
     if len(clip_rows) > MAX_CLIPS:
         raise ValueError("%d clips" % len(clip_rows))
     for c in clip_rows:
@@ -552,6 +600,7 @@ def build(b):
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     h[337] = REND.code                  # the adapter (cga4, vga4, herc)
+    h[346:348] = bytes(thens)           # what follows a once-clip (125.3.1)
     hold = hold_order(clip_rows, offs, regions, mus_at, len(mus))
     struct.pack_into("<H", h, 398, len(hold))
     for i, (a4, n4) in enumerate(hold):
@@ -661,6 +710,7 @@ class Bundle:
         self.title, self.leave = data[330], data[331]
         self.endings = {"victory": (data[332], data[333]),
                         "defeat": (data[334], data[335])}
+        self.ends_then = {"victory": data[346], "defeat": data[347]}
         self.fade_steps = data[336]
         global REND
         kind = {0: "cga4", 1: "vga4", 2: "herc"}[data[337]]
@@ -746,8 +796,18 @@ def verify(data, quiet=False):
     if b.title != NO_SFX:
         title = loop_lap(b.clips[b.title])
     for k, (how, li) in b.endings.items():
-        if li != NO_SFX:
+        if li != NO_SFX and b.clips[li]["flags"] & CF_LOOP:
             loop_lap(b.clips[li])
+
+    def first_of(ci):
+        """An end clip's frame 0: its lap's first (a loop), or its record 0
+        decoded from black (one that plays once)"""
+        c = b.clips[ci]
+        if c["flags"] & CF_LOOP:
+            return loop_lap(c)[0]
+        s = REND.blank()
+        decode(s, b.stream(c)[0])
+        return s
 
     def openings_from(scr):
         cur = 0
@@ -796,8 +856,9 @@ def verify(data, quiet=False):
                    else None,
                    "defeat": b.clips[dft]["name"] if dft not in (None, NO_SFX)
                    else None}
-    for c in b.clips:
-        if c["flags"] & (CF_OPENING | CF_LOOP):
+    end_clips = {li for _, li in b.endings.values() if li != NO_SFX}
+    for ci, c in enumerate(b.clips):
+        if c["flags"] & (CF_OPENING | CF_LOOP) or ci in end_clips:
             continue
         if not c["anch"]:
             raise ValueError("clip %s has no anchor" % c["name"])
@@ -813,8 +874,8 @@ def verify(data, quiet=False):
             for out_, (how, li) in b.endings.items():   # an ending that
                 if how == ENDING_HOW["join"] and li != NO_SFX and \
                         c["name"] == ending_name.get(out_):
-                    lp = loop_lap(b.clips[li])               # JOINS its loop
-                    if canvas(s) != canvas(lp[0]):
+                    f0 = first_of(li)                        # JOINS its clip
+                    if canvas(s) != canvas(f0):
                         raise ValueError("ending %s misses its loop's frame 0"
                                          % c["name"])
             paths += 1
@@ -905,9 +966,10 @@ def battle_of(proj, progress=None, kind="cga4"):
     # --- the title loop and the endings (125.3.1)
     b.fade_steps = d.get("fade_steps", 16)
 
-    def loop_of(lp, tag):
+    def loop_of(lp, tag, full=False):
         c = d["clips"][lp["clip"]]
-        fr = A.frames_of(proj, lp["clip"], pg, kind)[lp["loop"][0]:lp["loop"][1]]
+        fr = A.frames_of(proj, lp["clip"], pg, kind, full=full)[
+            lp["loop"][0]:lp["loop"][1]]
         x = None
         if lp.get("sound"):
             x = b.sfx[lp["sound"]]
@@ -930,19 +992,23 @@ def battle_of(proj, progress=None, kind="cga4"):
         en = d["endings"][k]
         lp = None
         if en.get("loop") and en["how"] in ("fade", "join"):
-            key = json.dumps(en["loop"], sort_keys=True)
+            full, once = bool(en.get("full")), en.get("plays") == "once"
+            key = json.dumps([en["loop"], full, once, en.get("then")],
+                             sort_keys=True)
             if key not in made:
-                made[key] = loop_of(en["loop"], "E")
+                made[key] = loop_of(en["loop"], "E", full)
                 made[key]["name"] = ("E%d%s" % (len(made), en["loop"]["clip"])
                                      )[:8]
+                made[key].update(full=full, once=once)
             lp = made[key]
         b.endings[k] = (en["how"] if lp or en["how"] in ("hold", "again")
-                        else "hold", lp)
+                        else "hold", lp, en.get("then") or "hold")
         clip = d["enemy"].get(k)
         if en["how"] == "join" and lp and clip:
             for c in b.clips:
                 if c["name"] == clip:
                     c["join_loop"] = lp["frames"][0]
+                    c["join_full"] = lp.get("full")
     import vbtrules
     # the clips as the bundle numbers them: the openings first - and a
     # battle with none gets START at 0 (build) - then the rest

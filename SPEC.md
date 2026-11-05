@@ -237625,6 +237625,26 @@ Both are optional, and a bundle with neither plays as version 5's did.
   says Enter to play again. Its sound is its own (OWNSND), or, with none,
   the music goes on under it. Enter or Space: the whole screen fades and
   the play starts over. Esc leaves from anywhere, as always.
+- **An END CLIP may be FULL SCREEN, and may PLAY ONCE** (the ending's
+  `"full"`, `"plays"` and `"then"`; the Title & endings tab's Victory and
+  Defeat panels). Full screen: its frames are encoded over the whole
+  screen and it carries CF_FULL; the engine takes the band down as it
+  starts and draws it no more (`vb_eloop_go`), a FADE to it is over the
+  whole screen (`[vb_fwant]` 4), and a JOIN's seam is written over the
+  whole screen. Once: it carries CF_ENDS and not CF_LOOP - record 0 from
+  black, its frames in turn and no lap - and when it starts, what follows
+  it, header byte 346 (victory) or 347 (defeat), becomes the ending's
+  `[vb_ehow]`, so that its end goes on as an ending's does: EH_HOLD (its
+  last frame stays; Enter plays again), EH_AGAIN (the screen fades and the
+  play starts again at the title), or EH_AGAINJ (4): its last record is a
+  seam onto the title's frame 0, and the play starts again at once, with
+  no fade (`[vb_awant]`, the UI task's) - the title's record 0, drawn from
+  black, puts down what the seam already shows. With no title a join is a
+  fade. `vbtending` holds the three shapes on MartyPC's CGA XT: a
+  full-screen once-clip joined from victory and joining the title (the
+  band down, its rows the clip's, no fade anywhere), a canvas once-clip
+  faded to and fading to the title, and a full-screen end loop faded to
+  over the whole screen.
 - **The play starts over inside the bracket** (`vb_again`): the hook is
   stopped, the music's ring is filled from its join again (`vb_load`'s
   second-play path), the rings are emptied, the battle's state is set up

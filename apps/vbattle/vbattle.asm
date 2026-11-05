@@ -99,6 +99,10 @@ EH_HOLD     equ 0
 EH_FADE     equ 1
 EH_JOIN     equ 2
 EH_AGAIN    equ 3
+EH_AGAINJ   equ 4               ; (after a once-clip: JOIN the title, the
+                                ; play again with no fade - 125.3.1)
+VH_ETHEN    equ 346             ; victory, defeat: what follows an end clip
+                                ; that plays ONCE (EH_HOLD/AGAIN/AGAINJ)
 RH_LEN      equ 0               ; a record: its length, all of it
 RH_ALEN     equ 2               ; ...its frame's sound's, at its end
 RH_SIZE     equ 4
@@ -1606,6 +1610,11 @@ vb_main:
     jne .leave
     call vb_game
     call vb_fadetick                ; a fade's next step, and what follows it
+    cmp byte [vb_awant], 0          ; the play again with no fade: a
+    je .naw                         ; once-clip joined the title (125.3.1)
+    mov byte [vb_awant], 0
+    call vb_again
+.naw:
     mov si, vb_tg
     call vb_tmark
     mov ax, [vb_rcalls]
@@ -2081,12 +2090,23 @@ vb_frame:
 .h1:
     cmp al, EH_FADE
     jne .h2
-    mov byte [vb_fwant], 2          ; the canvas fades, then its end loop
+    mov bl, [vb_eloop]              ; the canvas fades, then its end clip -
+    xor bh, bh                      ; or the WHOLE SCREEN, before one that
+    call vb_crec                    ; is full screen (125.3.1)
+    mov byte [vb_fwant], 2
+    test word [si+VC_FLAGS], CF_FULL
+    jz .hx
+    mov byte [vb_fwant], 4
     jmp short .hx
 .h2:
     cmp al, EH_AGAIN
-    jne .hx
+    jne .h3
     mov byte [vb_fwant], 3          ; the screen fades, and the play again
+    jmp short .hx
+.h3:
+    cmp al, EH_AGAINJ               ; a once-clip that JOINED the title: the
+    jne .hx                         ; play again at once, over its seam (the
+    mov byte [vb_awant], 1          ; UI task's)
 .hx:
     clc
     ret
@@ -3448,6 +3468,8 @@ VB_VAR vb_lnrec, 2                  ; a loop's lap: records 1..n
 VB_VAR vb_lbase, 2                  ; ...from record 0's end in its ring
 VB_VAR vb_lring, 2                  ; ...which ring
 VB_VAR vb_eloop, 1                  ; the ending's end loop, FFh
+VB_VAR vb_ethen, 1                  ; ...what follows a once-clip (EH_*)
+VB_VAR vb_awant, 1                  ; ...the play again, no fade, wanted
 VB_VAR vb_ehow, 1                   ; ...how the ending goes on (EH_*)
 VB_VAR vb_estart, 1                 ; 1: start it from 0, 2: from 1 (joined)
 VB_VAR vb_eplay, 1                  ; it goes round

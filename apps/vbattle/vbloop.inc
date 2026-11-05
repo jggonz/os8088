@@ -121,6 +121,18 @@ vb_eloop_go:
     mov al, [vb_eloop]
     call vb_start_clip              ; (RG_PLAY, the lap's bookkeeping)
     mov byte [vb_eplay], 1
+    test word [vb_cflags], CF_LOOP  ; ONE THAT PLAYS ONCE (125.3.1): its end
+    jnz .lp                         ; goes on as its "then" says
+    push ax
+    mov al, [vb_ethen]
+    mov [vb_ehow], al
+    pop ax
+.lp:
+    test word [vb_cflags], CF_FULL  ; FULL SCREEN: the band down, and not
+    jz .bd                          ; drawn again over it
+    mov byte [vb_banddone], 0
+    mov byte [vb_bandok], 0
+.bd:
     mov word [vb_cfr], 0
     mov [vb_apring], bx             ; its sound from the next frame
     mov [vb_apclip], al
@@ -156,6 +168,11 @@ vb_fadetick:
     jne .b0
     mov cx, 348
 .b0:
+    cmp al, 4                       ; (4: the whole screen, before an end
+    jne .b1                         ; clip that is full screen - then as 2)
+    mov al, 2
+    jmp short .b
+.b1:
     cmp al, 2
     jne .b
     mov cl, [vb_meta+9]             ; ...or, before an end loop, the canvas

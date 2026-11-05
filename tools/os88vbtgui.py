@@ -2662,9 +2662,13 @@ REND_NOTE = {4: "Four colours: the band's own, about what CGA4 costs (x1.2).",
                  "memory to hold it."}
 BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 HOW_LABELS = (("hold", "Hold its last frame"),
-              ("fade", "Fade to its end loop"),
-              ("join", "Join its end loop"),
+              ("fade", "Fade to its end clip"),
+              ("join", "Join its end clip"),
               ("again", "Fade, and play again"))
+PLAYS_LABELS = (("loop", "round, until a key"), ("once", "once"))
+THEN_LABELS = (("hold", "hold its last frame"),
+               ("fade", "fade to the title"),
+               ("join", "join the title"))
 
 
 def fade_masks():
@@ -2749,7 +2753,32 @@ class LoopPanel(object):
             cb.grid(row=r, column=1, columnspan=3, sticky="w")
             cb.bind("<<ComboboxSelected>>", lambda e: self._commit())
             r += 1
-        ttk.Label(f, text="Loop clip").grid(row=r, column=0, sticky="w")
+            # THE END CLIP (125.3.1): full screen or the canvas, round or
+            # once, and after one that plays once - the title, or a hold
+            ef = ttk.Frame(f)
+            ef.grid(row=r, column=0, columnspan=4, sticky="w")
+            self.fullv = tk.IntVar()
+            ttk.Checkbutton(ef, text="Full screen", variable=self.fullv,
+                            command=self._commit).pack(side="left")
+            ttk.Label(ef, text="  It plays").pack(side="left")
+            self.plays = tk.StringVar()
+            pc = ttk.Combobox(ef, textvariable=self.plays, state="readonly",
+                              width=16, values=[l for _, l in PLAYS_LABELS])
+            pc.pack(side="left", padx=2)
+            pc.bind("<<ComboboxSelected>>", lambda e: self._commit())
+            r += 1
+            tf = ttk.Frame(f)
+            tf.grid(row=r, column=0, columnspan=4, sticky="w")
+            ttk.Label(tf, text="After it (when once)").pack(side="left")
+            self.then = tk.StringVar()
+            self.thencb = ttk.Combobox(tf, textvariable=self.then,
+                                       state="readonly", width=18,
+                                       values=[l for _, l in THEN_LABELS])
+            self.thencb.pack(side="left", padx=2)
+            self.thencb.bind("<<ComboboxSelected>>", lambda e: self._commit())
+            r += 1
+        ttk.Label(f, text="Loop clip" if kind == "title" else "End clip"
+                  ).grid(row=r, column=0, sticky="w")
         self.clip = tk.StringVar()
         self.clipcb = ttk.Combobox(f, textvariable=self.clip, state="readonly",
                                    width=16)
@@ -2840,13 +2869,29 @@ class LoopPanel(object):
         else:
             en = d["endings"][self.kind]
             self.how.set(dict(HOW_LABELS)[en["how"]])
+            self.fullv.set(1 if en.get("full") else 0)
+            once = en.get("plays") == "once"
+            self.plays.set(dict(PLAYS_LABELS)["once" if once else "loop"])
+            self.then.set(dict(THEN_LABELS)[en.get("then") or "hold"])
+            self.thencb.config(state="readonly" if once else "disabled")
             ex = d["enemy"].get(self.kind)
+            where = "over the whole screen (the band down)" if \
+                en.get("full") else "in the canvas, under the band"
+            after = {"hold": "its last frame stays; Enter plays again",
+                     "fade": "the screen fades and the play starts again "
+                             "at the title",
+                     "join": "its last frame joins the title's first and "
+                             "the play starts again there"}[
+                en.get("then") or "hold"]
+            clip_ = ("it plays once %s, then %s." % (where, after)) if once \
+                else ("it goes round %s; Enter plays again." % where)
             self.note.config(text={
                 "hold": "Its clip's last frame stays up; Esc leaves.",
-                "fade": "The canvas fades, and the end loop goes round in it "
-                        "under the band; Enter plays again.",
-                "join": "%s's last frame joins the loop's first, exactly; "
-                        "Enter plays again." % (ex or "(no %s clip)" % self.kind),
+                "fade": "The %s fades to the end clip: %s" % (
+                    "screen" if en.get("full") else "canvas", clip_),
+                "join": "%s's last frame joins the end clip's first, "
+                        "exactly: %s" % (ex or "(no %s clip)" % self.kind,
+                                         clip_),
                 "again": "The screen fades, and the play starts over."}[
                             en["how"]])
 
@@ -2874,7 +2919,12 @@ class LoopPanel(object):
                           None if lv in ("", "a fade") else lv, anchors)
         else:
             how = dict((l, k) for k, l in HOW_LABELS).get(self.how.get(), "hold")
-            self.app.edit("set_ending", self.kind, how, cid, loop, snd)
+            plays = dict((l, k) for k, l in PLAYS_LABELS).get(
+                self.plays.get(), "loop")
+            then = dict((l, k) for k, l in THEN_LABELS).get(
+                self.then.get(), "hold")
+            self.app.edit("set_ending", self.kind, how, cid, loop, snd,
+                          full=bool(self.fullv.get()), plays=plays, then=then)
 
     def _clip(self):
         cid = self.clip.get()

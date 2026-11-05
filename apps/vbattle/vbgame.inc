@@ -491,6 +491,12 @@ vb_end_battle:
     mov ax, [vb_meta+di]            ; how it goes on, and its end loop
     mov [vb_ehow], al               ; (125.3.1): the line says what a key
     mov [vb_eloop], ah              ; does
+    push di
+    sub di, VH_ENDS
+    shr di, 1
+    mov ah, [vb_meta+VH_ETHEN+di]   ; ...and what follows it, when it plays
+    mov [vb_ethen], ah              ; once
+    pop di
     cmp al, EH_HOLD
     je .e
     cmp di, VH_ENDS

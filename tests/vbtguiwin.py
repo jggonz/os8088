@@ -317,6 +317,23 @@ def inner(tmp):
     pt._lay("msg_row", "")
     ok(not app.proj.d.get("band_layout"), "C. ...and back to as it was")
 
+    # THE END CLIP (125.3.1): full screen, played once, then the title
+    lt = app.loops_tab
+    app.nb.select(lt.f)
+    vp = [x for x in lt.panels if x.kind == "victory"][0]
+    vp.refresh()
+    vp.fullv.set(1)
+    vp.plays.set("once")
+    vp.then.set("join the title")
+    vp._commit()
+    en = app.proj.d["endings"]["victory"]
+    ok(en.get("full") is True and en.get("plays") == "once"
+       and en.get("then") == "join" and "joins the title's first" in
+       vp.note.cget("text"),
+       "C. victory's END CLIP set full screen, played once, then joining "
+       "the title (%s)" % {k: en.get(k) for k in ("how", "full", "plays",
+                                                   "then")})
+
     # FOLLOW-UPS (125.6.7): the Enemy tab's box, one added and set
     et = app.enemy_tab
     app.nb.select(et.f)
