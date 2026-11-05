@@ -241789,7 +241789,7 @@ too: `sum_rows` runs first, so the two cannot disagree.
 
 | row | value |
 |---|---|
-| Pointer in use | by `[mou_port]` when `[mou_seen]`: 0 `COM1 serial mouse`, 2 `COM2 serial mouse`, 4 `PS/2 mouse`, 6 `VMware absolute pointer`, 8 `USB mouse (USBMOUSE.DRV)` (§9.12: `MOU_FEEDROW`, the row a `DRVC_POINT` driver's `OSAPI_MOUSE_FEED` settles); any other row `unknown source (row not recognised)`; not seen, a live PS/2 mouse (`[mou_p2]` with `[mou_p2st]` = 9) `PS/2 mouse found; no movement seen yet`, else `none yet - the keyboard mouse is on` |
+| Pointer in use | by `[mou_port]` when `[mou_seen]`: 0 `COM1 serial mouse`, 2 `COM2 serial mouse`, 4 `PS/2 mouse`, 6 `VMware absolute pointer`, 8 `USB mouse (USBMOUSE.DRV)` (§9.12: `MOU_FEEDROW`, the row a `DRVC_POINT` driver's `OSAPI_MOUSE_FEED` settles); any other row `unknown source (row not recognised)`; not seen, a live PS/2 mouse (`[mou_p2]` with `[mou_p2st]` = 9) `PS/2 mouse found; no movement seen yet`, else a serial port that answered `mouse_init`'s identify window like a mouse (`[mou_ident]`, per port, §9.4.1; COM1 named first) `COM1 mouse found; no movement seen yet` (or `COM2`), else `none yet - the keyboard mouse is on` |
 | Position | the cursor words (§9.4.3), `x N  y N  buttons LR` with `-` for a button up. **It is the live row**: moving the mouse changes this row and no other, which is how §126.2.3's diff redraw is seen working |
 | Kernel | `kern_mega` when `OSAPI_CPU_INFO` says `CPU_F_PM`; else `kern_big` when the `'ID'` words match ([mc_kok], §126.4), because the shipped recipe makes this package against kern_big's own map and kern_mega's copy against kern_mega's; else `another real-mode build (not decoded)`. **No slot and no registry block names the kernel**: the `'ID'` match is the only discriminator, so kern_emu, kern_small, a knob build and another release all read the same. The `CPU_F_PM` test is display only and is registered in `tests/megapkg.txt` |
 | Kernel id | the three `'ID'` words (§57.6) and `matches this package` or `differs: raw` ([mc_kok], §126.4) |
@@ -241808,7 +241808,8 @@ gate asserts on them), with the lamp it raises:
 |---|---|---|
 | a pointer has spoken (`[mou_seen]`, which nothing clears: it has worked THIS SESSION, and a mouse unplugged since still reads so) | `Your mouse is working: ` + the pointer's name from the table above (e.g. `Your mouse is working: PS/2 mouse`) | OK |
 | PS/2 answered, no packet yet | `A PS/2 mouse answered. Move it to confirm.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.` | Warning |
-| nothing | `No mouse found. See the sections below for why.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.`, and, when the PS/2 handshake got somewhere between steps 1 and 8, `The PS/2 handshake stopped at step N` (§9.4.4's number) | Problem |
+| a serial port answered the identify (`[mou_ident]`), no packet yet, no live PS/2 mouse | `A serial mouse answered on COM1. Move it to confirm.` (or `COM2`) then `The keyboard mouse is on: arrows move, keypad 5 clicks.` | Warning |
+| nothing answered anywhere | `No mouse found. See the sections below for why.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.`, and, when the PS/2 handshake got somewhere between steps 1 and 8, `The PS/2 handshake stopped at step N` (§9.4.4's number) | Problem |
 | [mc_kok] = 0 | `Cannot decode the mouse record: a different kernel build.` | Warning |
 | no `'MO'` block | `This kernel publishes no mouse record to read.` | Warning |
 
