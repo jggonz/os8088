@@ -16971,6 +16971,14 @@ SOAK = [
         "document - and this machine's own rendition beside it (MYFIGHT.VBT "
         "on CGA, MYFIGHTH.VBT on Hercules). Broken (vb_docnames not "
         "called) both arms red"),
+    Row("vbtownsnd", "soak", py("tests/vbtownsnd.py"), 75.0,
+        "SPEC.md 125.3: a clip with its OWN sound - the first opening after "
+        "the title's fade, an end clip victory joins - has its sound WITH "
+        "its picture: the record on the glass against the record heard "
+        "(fed, less what the card has queued) within a frame and a half. "
+        "It was booked at the frame's own time, which the ring had already "
+        "passed: heard a lead late (the owner's '~0.3-0.5 s late'). Broken "
+        "(the old booking) the picture 3-4.5 frames ahead, red"),
     Row("vbtanchor", "soak", py("tests/vbtanchor.py"), 40.0,
         "SPEC.md 125.3: an action whose only anchor is nearer than the "
         "lead's frames is booked a LAP on - and its picture went in on the "

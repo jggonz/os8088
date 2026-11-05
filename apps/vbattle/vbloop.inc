@@ -143,12 +143,7 @@ vb_eloop_go:
     mov byte [vb_bandok], 0
 .bd:
     mov word [vb_cfr], 0
-    mov [vb_apring], bx             ; its sound from the next frame
-    mov [vb_apclip], al
-    mov ax, [vb_due]
-    mov dx, [vb_due+2]
-    mov [vb_apat], ax
-    mov [vb_apat+2], dx
+    call vb_abook                   ; its sound from the next frame
     mov al, [vb_estart]
     mov byte [vb_estart], 0
     cmp al, 2
@@ -260,9 +255,10 @@ vb_ftitle:
     mov word [vb_aring], 0
     mov byte [vb_tplay], 0
     mov byte [vb_owsnd], 1          ; (its sound with its frame 0)
-    mov byte [vb_mode], VM_OWAIT    ; once its head is in its ring (vb_ogo:
-    call vb_ogo                     ; it is not always, as the fade ends)
-    popf
+    mov byte [vb_mode], VM_OWAIT    ; once its head is in its ring - the
+    popf                            ; HOOK's vb_ogo, a frame on: from here
+                                    ; its frame 0 came a frame sooner than
+                                    ; vb_abook books its sound for
     ret
 
 ; vb_fmask - the fade's step [vb_fstep]: the first [vb_frows] rows of the

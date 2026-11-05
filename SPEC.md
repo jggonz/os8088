@@ -237649,6 +237649,19 @@ title's way out is counted the same way (`[vb_lleft]`).
 The demo's anchors are every sixth frame of a 24-frame loop, so with a
 512-byte block a command waits 0.27 to 0.6 s for its clip to begin.
 
+**A clip with its OWN sound that starts on the next frame** - the first
+opening after the title's fade, an opening whose sound the sound's side found
+not there, an end clip - has its sound booked AT THE WRITE POSITION and its
+picture HELD until the clock comes to it (`vb_abook`): booked at the frame's
+own time, which the ring - written the card's lead ahead - had passed, the
+sound started at once and was heard a lead (0.37 s) after its picture, and
+every opening after it joined on just as late (the owner's "~0.3-0.5 s late
+... the opening perfectly joins to the second"). The hold is over a black
+screen or a frame already up. The hook calls it inside `vb_frame`, after
+which it adds a frame to `[vb_due]`, so the time booked is the next frame's
+or the write position, whichever is later (`vb_ftitle` leaves the opening to
+the hook's `vb_ogo` for that, a frame on). `vbtownsnd`.
+
 **A clip's sound is read from the clip's own ring by a cursor of its own**,
 a frame's worth (spf samples) a record. It runs ahead of the picture by the
 card's lead, so the ring keeps everything past the EARLIER of the two

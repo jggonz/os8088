@@ -3133,15 +3133,46 @@ vb_ogo:
     cmp byte [vb_owsnd], 0
     je .ns
     mov byte [vb_owsnd], 0
-    mov [vb_apring], bx             ; its sound with its frame 0
-    mov [vb_apclip], al
-    mov ax, [vb_due]
-    mov dx, [vb_due+2]
-    mov [vb_apat], ax
-    mov [vb_apat+2], dx
+    call vb_abook                   ; its sound with its frame 0
 .ns:
     call vb_onextset                ; ...and the one after it, if any
 .no:
+    ret
+
+; vb_abook - clip AL's sound, out of ring BX, booked to start WITH its
+; picture's frame 0 when that frame is the next one up: AT THE WRITE
+; POSITION, and the picture HELD until the clock comes to it. Booked at
+; [vb_due], the frame's own time, it was already past - the ring is written
+; the card's lead (0.37 s) ahead of what the card plays - so the sound
+; started at once and was heard a lead after its picture: the owner's "the
+; sound in the opening, and ending video is ~0.3-0.5 s late ... plays fine,
+; just late", and every opening after it joined on just as late. The hold is
+; over a black screen (a fade's end) or a frame already up. With no card,
+; [vb_due] (the clock is the PIT's). AX, DX spent
+vb_abook:
+    mov [vb_apring], bx
+    mov [vb_apclip], al
+    mov ax, [vb_due]                ; T: the frame AFTER this call's - the
+    mov dx, [vb_due+2]              ; hook adds a frame to [vb_due] once
+    add ax, [vb_meta+VH_SPF]        ; vb_frame returns, and frame 0 is the
+    adc dx, 0                       ; next one drawn
+    cmp byte [vb_snd], 0
+    je .at
+    cmp dx, [vb_wpos+2]             ; ...or the write position, when that is
+    jb .w                           ; later: there, and the frame waits for
+    ja .at                          ; it
+    cmp ax, [vb_wpos]
+    jae .at
+.w:
+    mov ax, [vb_wpos]
+    mov dx, [vb_wpos+2]
+.at:
+    mov [vb_apat], ax
+    mov [vb_apat+2], dx
+    sub ax, [vb_meta+VH_SPF]        ; (less the frame the hook adds)
+    sbb dx, 0
+    mov [vb_due], ax
+    mov [vb_due+2], dx
     ret
 
 vb_onextset:
