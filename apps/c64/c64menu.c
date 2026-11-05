@@ -277,6 +277,11 @@ static const char c64_mark[2] = { ' ', '*' };   /* OFF[0], ON[0] */
  * always drawn. (A disk with no C64.ROM used to be the other state; the ROM
  * is a part of the package now, §1.4.) */
 static char c64_t_adv[] = D OFF "Advance frame";   /* live at + 1 (Paste's) */
+/* ...and THE RECOMPILER (C64-SPEC 4.9.5): a CHECK while there is one, and
+ * greyed when there is none - no 48KB the heap could give it, a D64 that
+ * took its memory (which says so on the status row as it happens), or
+ * kern_mega - live at + 1, its mark the byte after the MENU_DIS one */
+static char c64_t_jit[] = D OFF "Recompiler";
 
 /* NOT const: c64_menu_state() writes these entries. The kernel keeps a COPY
  * of the SET (SPEC.md 12.2) but reads the ITEM STRINGS through the `items`
@@ -344,11 +349,15 @@ static const char *c64_pref_items[] = {
                                              * accumulator. A greying names a
                                              * FACT (SPEC.md 47) and this one
                                              * stopped being one. */
-    D OFF "Emulation speed",                /* :719. One speed and warp: the
-                                             * machine is held to 100% (4.4.1)
-                                             * and below it delivers what the
-                                             * host can, which the status bar
-                                             * prints (10.2) */
+    c64_t_jit,                              /* :719's place - VICE's
+                                             * "Emulation speed", which was
+                                             * greyed here for good (one speed
+                                             * and warp: the machine is held to
+                                             * 100%, 4.4.1) - and the kernel's
+                                             * eleven items a pull-down
+                                             * (MENU_POPMAX) leave no other: the
+                                             * RECOMPILER (C64-SPEC 4.9.5),
+                                             * the speed setting this port has */
     D OFF "Mouse grab  Alt+M",              /* :757  + hotkeys.vhk <Alt>m.
                                              * No 1351 mouse in this build */
     c64_t_swap,                             /* :771  + hotkeys.vhk <Alt>j.
@@ -413,6 +422,8 @@ static void c64_menu_state(void)
      * running there is nothing to advance, and the reason is already the
      * permanent line on the status row. c64_jam() and os88_main both call
      * this, which is what makes the two states reachable here. */
+    c64_t_jit[1] = c64_mark[c64_jit_on];
+    c64_pref_items[C64_I_JIT] = c64_fjit ? c64_t_jit + 1 : c64_t_jit;
     c64_pref_items[C64_I_ADVANCE] = c64_t_adv;      /* greyed... */
     if (c64_state != C64_ST_JAM)
         c64_pref_items[C64_I_ADVANCE] = c64_t_adv + 1;  /* ...or live */

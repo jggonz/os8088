@@ -133,11 +133,15 @@ static unsigned c64_fcode;
  * none - the fast core runs alone. c64fast.inc puts it in the frame (F+42)
  * and every write path tests the CODE map at its offset 0 */
 unsigned c64_fjit;
+static int c64_jit_on;                      /* the menu's check: its page map
+                                             * written (1) or zeroed (0) */
+static int c64_jit_kb;                      /* ...and its claim's size */
 void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
                 int force, int kb);
 void c64j_off(unsigned core);              /* the core's page map zeroed */
 static void c64_jit_drop(void);
 static void c64_jit_init(void);
+void c64_jit_toggle(void);
 void c64f_core(unsigned dstseg, unsigned partseg);
 unsigned c64f_codesel(unsigned seg);
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
@@ -574,6 +578,7 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
 #define C64_I_PAUSE    4
 #define C64_I_ADVANCE  5
 #define C64_I_SWAPJOY  8
+#define C64_I_JIT      6                    /* (Emulation speed's: 4.9.5) */
 
 #define C64_I_ABOUT    4                    /* Help */
 
@@ -1929,6 +1934,9 @@ static void c64_jit_init(void)
         c64j_setup(seg, os88_part_seg(C64_JIT_PART), C64_JIT_LEN, c64_fseg, 0, kb);
         os88_mem_movable(seg, 1);
         c64_fjit = seg;
+        c64_jit_kb = kb;
+        c64_jit_on = 1;
+        c64_menu_state();                   /* (Preferences > Recompiler) */
     } else if (seg != 0) {
         os88_mem_free(seg);
     }
@@ -1946,6 +1954,24 @@ static void c64_jit_drop(void)
     c64j_off(c64_fcode);
     os88_mem_free(c64_fjit);
     c64_fjit = 0;
+    c64_jit_on = 0;
+    c64_menu_state();
+}
+
+/* c64_jit_toggle - Preferences > Recompiler (C64-SPEC 4.9.5): off zeroes the
+ * core's page map, so no transfer looks for a block; on sets the recompiler
+ * up afresh in the claim it kept, every block made again as it is reached */
+void c64_jit_toggle(void)
+{
+    if (c64_fjit == 0)
+        return;
+    c64_jit_on = !c64_jit_on;
+    if (c64_jit_on)
+        c64j_setup(c64_fjit, c64_fjit, 0, c64_fseg, 0, c64_jit_kb);
+    else
+        c64j_off(c64_fcode);
+    c64_menu_state();
+    c64_say(c64_jit_on ? "Recompiler on." : "Recompiler off.");
 }
 
 /* c64_fast_init - THE FAST CORE (section 4.7). The part is $FE00 bytes (a

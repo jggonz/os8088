@@ -61,6 +61,7 @@ static unsigned ovl_d64_para(unsigned t, unsigned s)
 static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
 {
     unsigned paras, seg, i, trks, got;
+    int gave;
 
     trks = 0;
     if (size_hi == 2)
@@ -76,9 +77,11 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     /* the sectors, and 512 bytes over: the last READ_AT moves whole sectors
      * and the image does not end on one */
     paras = (trks == 35 ? 683 : 768) * 16 + 32;
+    gave = 0;
     seg = os88_mem_claim_p(paras);
     if (seg == 0 && c64_fjit != 0) {
         c64_jit_drop();                     /* (the recompiler is optional) */
+        gave = 1;
         seg = os88_mem_claim_p(paras);
     }
     if (seg == 0) {
@@ -98,6 +101,11 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     c64_d64_seg = seg;
     c64_d64_trks = trks;
     c64_jit_init();                         /* (back, smaller, if it gave way) */
+    c64_menu_state();
+    if (gave && c64_fjit == 0) {
+        c64_say("Disk on drive 8; no room for recompiler.");
+        return;
+    }
     c64_say("Disk on drive 8.");
 }
 

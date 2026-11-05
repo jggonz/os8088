@@ -5523,6 +5523,8 @@ int main(int argc, char **argv)
             "D64: no heap for it.",
             "D64: cannot read it.",
             "Disk on drive 8.",
+            "Disk on drive 8; no room for recompiler.",
+            "Recompiler on.", "Recompiler off.",
             "No memory for the copy.",
             "No memory for the paste.",
             "Advanced one frame.",

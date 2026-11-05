@@ -929,11 +929,12 @@ translated `ADC` and `CMP` broken as the control.
 `tests/c64part.py` checks that the three parts unpack to their files and that
 each fetched claim holds its file's first bytes.
 
-### 4.9 The dynamic recompiler — IN PROGRESS (docs/plans/C64-RECOMPILER-PLAN.md)
+### 4.9 The dynamic recompiler — IN PROGRESS (docs/plans/completed/C64-RECOMPILER-PLAN.md)
 
-**Waves 1 to 4 are built** - the templates (4.9.1), the translator and its
-door (4.9.2), invalidation with volatile pages (4.9.3), and chaining and
-batching (4.9.4). Wave 5, the menu row and the measurements, is the rest.
+**Built, all five waves** - the templates (4.9.1), the translator and its
+door (4.9.2), invalidation (4.9.3), chaining, batching and the claim (4.9.4),
+and the menu and the measurements (4.9.5). The kern_mega arm is the work
+still open (SPEC.md 20.18).
 
 - **RAM code only.** The ROMs are translated ahead of time (§4.8); the
   recompiler takes PCs below `$A000`, in `$C000-$CFFF`, and under a ROM only
@@ -1165,6 +1166,32 @@ L, nothing left) and 201 (the 41st INX takes the budget past 0: X = 41, PC
 the JMP). Both last passes are HEAD's to hand to the core; a HEAD that ended
 the run there instead stops 201 an INX short, which was checked. Rows 9 and
 14 keep every cycle total with chaining and batching on.
+
+#### 4.9.5 Preferences > Recompiler, and what it measured — BUILT
+
+**The menu item is VICE's `Emulation speed` slot**, item 6 of Preferences:
+that item was greyed in this port for good, and the kernel's eleven items a
+pull-down (`MENU_POPMAX`, SPEC.md 12.4) leave no other. It is a CHECK (§11.1
+rule 4), ON from launch whenever there is a recompiler; OFF zeroes the core's
+page map (`c64j_off`) so no transfer looks for a block, and ON again sets
+the recompiler up afresh in the claim it kept (`c64j_setup` with nothing to
+copy). It is GREYED when there is no recompiler - no 48KB for it, a D64 that
+took its memory (the status row said `Disk on drive 8; no room for
+recompiler.` as it happened), or kern_mega - and it is a fact, not a guess,
+that greys it (SPEC.md 47).
+
+**Measured** on 86Box's `286-victory`, second half of a 50-second window:
+
+| program | fast core alone | with the recompiler |
+|---|---|---|
+| BASIC `10 i=i+1:goto 10` (warp) | 107.0% | 107.0% - the ROMs are §4.8's, untouched |
+| Portland CUG Christmas, first scene (its three parts poked in, run) | 23.1% | 25.8% |
+| Bright Pixel's Christmas card (`card.prg`, run) | 45.2% | 47.0% - its time is the drawing (§9.13) |
+
+The first scene's gain is the byte map and the read-in-place operands
+together: per page alone, its two code pages went volatile on stores to
+its inline variables and to its own operands, and it ran at the fast
+core's speed. docs/plans/completed/C64-RECOMPILER-PLAN.md section 4.1 is the account.
 
 ---
 
@@ -2457,7 +2484,7 @@ none — the figures froze exactly when somebody was looking at them.
 
 - **cpu %** = emulated 6510 cycles delivered per second ÷ 985,248. 100 % is
   a real C64. The machine is held to 100% (§4.4.1) and below that this number
-  is its honest output - and the reason Preferences > Emulation speed is greyed (§11.2). On
+  is its honest output - and the reason VICE's Preferences > Emulation speed is not carried (§11.2). On
   a 4.77 MHz 8088 (MartyPC, the 360KB disk on a CGA desktop) the row reads
   **`1% cpu`**, and the KERNAL takes about 1.3 billion host cycles — some
   280 s of guest time — to reach `READY.`
@@ -2595,17 +2622,17 @@ gives). Four rules follow:
    the same width; the longest, `* Pause emulation  Alt+P`, is exactly 24.
    **Every other item on a menu that carries check items starts with the OFF
    marker's two blanks as well**, so the labels form one column - Preferences'
-   `Restore display state`, `Advance frame`, `Emulation speed`, `Mouse grab`
-   and `Settings...` once started two cells left of the rest.
+   `Restore display state`, `Advance frame`, `Mouse grab` and `Settings...`
+   once started two cells left of the rest.
    The kernel reads the item strings through the set's `items` pointer at
    draw time, so swapping a pointer is enough and `os88_menu_set` is not
    called again.
 
 **The order inside a menu is `ui_machine_menu_bar_create`'s.** Preferences is
 `Fullscreen`, `Restore display state`, `Show status bar`, `Warp mode`,
-`Pause emulation`, `Advance frame`, `Emulation speed`, `Mouse grab`, `Swap
-joysticks`, `Allow keyset joysticks`, `Settings...` — 11, which is
-`MENU_POPMAX` exactly, and why `Show menu/status in fullscreen` is folded onto
+`Pause emulation`, `Advance frame`, `Emulation speed` - here `Recompiler`
+(§4.9.5) - `Mouse grab`, `Swap joysticks`, `Allow keyset joysticks`,
+`Settings...` — 11, which is `MENU_POPMAX` exactly, and why `Show menu/status in fullscreen` is folded onto
 `Restore display state` even though that section has a live item in it: both
 are greyed display-state items the kernel owns, and carrying it would make
 12.
@@ -2639,7 +2666,7 @@ Live items:
 | File > Reset drive #8 | no drives |
 | Snapshot > every item (load/save Alt+L/S, quick snapshots Alt+F10/F11, the event section folded onto `Start recording events` including the milestones Alt+E/U, media recording Alt+Shift+R/S, quicksave screenshot on Pause) | no snapshot format: a VSF carries every chip's state and this machine's chips are not VICE's |
 | Preferences > Restore display state (Alt+R), Show menu/status in fullscreen | the window is os8088's: the kernel places it, and the bar is under a fullscreen window (SPEC.md §11.2) |
-| Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | one speed and warp: the machine is held to 100% (§4.4.1) and below that delivers what the CPU can, which the status bar prints (§10.2) |
+| Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | one speed and warp: the machine is held to 100% (§4.4.1) and below that delivers what the CPU can, which the status bar prints (§10.2). Its place on the menu is the Recompiler's (§4.9.5) |
 | Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: `*` AND `MENU_DIS` (§11.1 rule 4) |
 | Preferences > Mouse grab (Alt+M) | no 1351 mouse: the pointer is the desktop's |
 | Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here; `*` AND `MENU_DIS` (§8) |

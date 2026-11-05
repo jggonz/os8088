@@ -423,6 +423,10 @@ static void ovl_cmd(int menu, int item, void *win)
             ovl_advance_frame();
             return;
         }
+        if (item == C64_I_JIT) {
+            c64_jit_toggle();
+            return;
+        }
         if (item == C64_I_SWAPJOY) {
             c64_joyswap = !c64_joyswap;  /* the row's two indicators swap,
                                           * which its own field compare sees */

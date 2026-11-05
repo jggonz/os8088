@@ -1,6 +1,6 @@
 # C64 dynamic recompiler — plan
 
-Status: **W1-W4 DONE** (C64-SPEC §4.9.1-4.9.4: `apps/m6502/m65tmpl.py`, `apps/c64/c64jit.asm`). W3 shipped as whole-cache flushes, a byte map, operands read in place, and volatile pages - per-page invalidation is declined because W4's chains need blocks to die together (C64-SPEC 4.9.3). W5 next. C64-SPEC §4.9 pins the contract
+Status: **DONE** - all five waves (C64-SPEC §4.9.1-4.9.5: `apps/m6502/m65tmpl.py`, `apps/c64/c64jit.asm`). W3 shipped as whole-cache flushes, a byte map, operands read in place, and volatile pages - per-page invalidation is declined because W4's chains need blocks to die together (C64-SPEC 4.9.3). The kern_mega arm (section 5) stays open. C64-SPEC §4.9 pins the contract
 the waves build to; this file is the reasoning, the stories and the gates.
 
 ## 1. Why — MEASURED
@@ -79,7 +79,7 @@ once after the last.
 | **W2 translator, straight line** - DONE | blocks of RAM code translated and entered from the fast core's control transfers; no chaining; a full flush on ANY write to a code page | `c64cputest`'s rows and Dormann's functional test with the recompiler forced on, on both the plain and translated legs; a new row that rewrites an operand inside a translated loop and sees the new value |
 | **W3 invalidation by page, volatile pages** - DONE as whole-cache + volatile | the CODE bitmap in `c64_mark`; per-page block lists; the volatile threshold | rows for: a write into the running block, a write into another block's page, a volatile page staying interpreted |
 | **W4 chaining and batching** - DONE | patched exits, pure-cycle batching, hot-count tuning | cycle-exact rows (row 9's totals, row 14's loops) unchanged; 86Box measurements |
-| **W5 integration** | Preferences or a menu row to force it off (greyed with its fact when there is no memory), the status of the cache on the row, C64-SPEC and the manual | the CUG scene and the card measured; BASIC unchanged |
+| **W5 integration** - DONE | Preferences or a menu row to force it off (greyed with its fact when there is no memory), the status of the cache on the row, C64-SPEC and the manual | the CUG scene and the card measured; BASIC unchanged |
 
 ## 4.1 Measured after W4 — 86Box `286-victory`
 
