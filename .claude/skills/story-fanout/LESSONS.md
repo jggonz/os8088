@@ -232,3 +232,16 @@ because the file belonged to someone else.
 anyone's to regenerate and commit. The lead resolves its merge conflicts by
 regenerating, never by hand, and checks the base with a clean `make` after
 the foundation merges, not only before.
+
+## The lead committed docs during the soak, and the new row failed on its own map
+
+**MOUSECHK.** While the soak union ran, the lead committed the diary and the
+lessons. The About box's build number is the commit count, and it is
+assembled into every package. So the private NOPS2 tree, built after the
+commit, carried `BUILD_NUM 328` while `build/` carried 326, and the row's
+map check refused the package as "a DIFFERENT build". Six legs passed, one
+failed, and the package was fine. A re-run after a plain `make` passed.
+
+**Rule:** the lead commits nothing between the final `make` and the end of
+`test-full`. Plan, diary and lesson edits are written during the run and
+committed after it.
