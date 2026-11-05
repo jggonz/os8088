@@ -33,6 +33,7 @@ P2X_STN     equ 20              ; bytes of per-probe state (p2x_st)
 P2X_TMO     equ 2               ; ticks a step may take (MOU_P2TMO)
 P2X_BAT     equ 5               ; ...retried for the self-test (MOU_P2BAT)
 P2X_AGAIN   equ 182             ; ticks the BIOS leg stays on offer (~10 s)
+P2X_KEYW    equ 5               ; ticks the keyboard stays live first (~275 ms)
 
 P2E_OP      equ 0               ; P2O_*
 P2E_ARG     equ 1               ; the byte written, or the leg
@@ -526,6 +527,20 @@ p2x_run:
     cld
     rep stosb
     pop es
+    ; THE KEY THAT PRESSED PROBE IS STILL DOWN. Its release is a byte the
+    ; 8042 will deliver in a moment, and from the mask on it would land in
+    ; 0xAD's flush instead of int 09h - a lost break code, and a key the
+    ; system thinks is held (seen on QEMU: `99`, P's release, in the flush).
+    ; So IRQ1 stays live for P2X_KEYW ticks first. A key held longer than
+    ; that releases into the keyboard's own buffer behind 0xAD, which hands it
+    ; over at the 0xAE (leg 3 drains it, and says so)
+    call OSAPI_GET_TICKS
+    xchg ax, dx
+.kw:
+    call OSAPI_GET_TICKS
+    sub ax, dx
+    cmp ax, P2X_KEYW
+    jb .kw
     call p2x_mask
 
     ; --- leg 1: SPEC.md 9.9.1, unchanged, up to the commitment --------------
@@ -740,6 +755,7 @@ p2x_bios:
     call p2x_beg
     mov al, ah
     mov ah, 0xC2
+    xor bl, bl                      ; BL out is the BIOS's (C201: the BAT)
     push es
     push ds
     push bp
@@ -1055,8 +1071,8 @@ p2x_hexdi:
 
 ; --- strings ------------------------------------------------------------------
 p2x_s_off:   db 'Probe PS/2 is off: ', 0
-p2x_s_offer: db 'Probe PS/2 (P) re-runs it live, traced.', 0
-p2x_s_thead: db 'step         64h   replies  ticks', 0
+p2x_s_offer: db 'Probe PS/2 (P) re-runs this live and traces it.', 0
+p2x_s_thead: db 'Trace: step, 64h before>after, replies, ticks', 0
 p2x_s_silent: db ', then deaf', 0
 p2x_s_more:  db ' +', 0
 p2x_s_stall: db ' STALL', 0

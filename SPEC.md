@@ -241918,6 +241918,14 @@ The discipline is the kernel's, step for step:
   (`MOU_P2TMO`), the reset's self-test the same short wait retried 5 times
   (`MOU_P2BAT`). IRQ0 is never masked, so `[ticks]` advances while the UI task
   sits in the callback, and no wait can hang.
+- **The keyboard stays live for 5 ticks first** (`P2X_KEYW`, about 275 ms).
+  The key that pressed *Probe* (P) is still down, and its release is a byte
+  the 8042 delivers a moment later. From the mask on, that byte would land in
+  `0xAD`'s flush instead of int 09h: a lost break code and a key the system
+  believes is held. It was seen on QEMU as `99` (P's set-1 release) on the
+  `AD` line before the pause went in, and not since. A key held longer
+  releases into the keyboard's own buffer behind `0xAD` and arrives at an
+  `0xAE` - leg 3 drains it, on its `AE` or `drain` line.
 - Flushes after `0xAD` and after `0xA8` (§9.9.6: a mouse's queued power-on
   BAT lands the instant the port is enabled), and **before** `0xAE` so a
   keystroke arriving as the keyboard comes back is not drained away.
@@ -241953,7 +241961,75 @@ mouse.
 
 #### 126.8.3 What the trace looks like, and how to read a field report
 
-TRACE_EXAMPLE
+QEMU's i8042 on a private `NOPS2=1` tree, so the kernel never touched the
+controller, after a probe and then the BIOS leg, as the report writes the
+section (2026-11-05):
+
+```
+[PROBLEM] PS/2 mouse
+  Kernel probe          step 0/9 not run
+    Probe not in this kernel, or 0xAD refused.
+    Yet the BIOS saw one at POST: report it.
+  int 11h bit 2         1: a mouse at POST
+  EBDA, 26h 27h 22h     9FC0 00 03 0000:0000
+  int 74h               F000:D433 BIOS ROM
+  IRQ 1, 2, 12          open open open
+  Port 64h              1C idle
+    Trace: step, 64h before>after, replies, ticks
+    1 kernel: a device, ID 00
+    AD kbd off   1C>1C
+    20 read      1C>1C 71
+    A8 aux on    1C>1C
+    20 read      1C>1C 51
+    A8 aux on    1C>1C
+    60 cmd 51    1C>1C
+    D4 FF reset  1C>1C FA AA 00
+    D4 F2 ID     1C>1C FA 00
+    restore 71   1C>1C
+    2 reset, kbd off: skipped
+    3 reset, kbd on: a device, ID 00
+    60 cmd 51    1C>1C
+    AE kbd on    1C>1C
+    A8 aux on    1C>1C
+    drain        1C>1C 2t
+    D4 FF reset  1C>1C FA AA 00
+    D4 F2 ID     1C>1C FA 00
+    AD kbd off   1C>1C
+    restore 71   1C>1C
+    4 A8, reread: bit 5 cleared: a port
+    A8 aux on    1C>1C
+    20 read      1C>1C 51
+    restore 71   1C>1C
+    5 A9 test: 00, lines good
+    A9 test      1C>1C 00
+    20 read      1C>1C 71
+    restore 71   1C>1C
+    20 read      1C>1C 71
+    60 cmd 61    1C>1C
+    AE kbd on    1C>1C
+    6 int 15h, AH BH BL: done
+    int15 C205   1C>1C 00 00 AA
+    int15 C201   1C>1C 00 00 AA
+    int15 C204   1C>1C 00 00 00
+    int15 C200   1C>1C 00 00 00
+    AD kbd off   1C>1C
+    20 read      1C>1C 71
+    restore 71   1C>1C
+    60 cmd 61    1C>1C
+    AE kbd on    1C>1C
+    Command byte 71>71: restored
+    Verdict: kernel's road works now, ID 00
+    So only the boot failed: report it.
+```
+
+SeaBIOS left the command byte at `61`: IRQ1 on, translate on, bit 5 set and
+bit 1 clear. That is §9.9.1's *no evidence* case, so leg 1 took the fallback
+road - `A8`, read again, `51`, bit 5 cleared - and the reset found a plain
+mouse. Leg 2 is skipped because leg 1 reached its own reset. On this machine
+the kernel's road works, so the verdict says the boot was the problem - true
+here, the boot having been `NOPS2=1`'s. The `03` in the EBDA's 27h is the BIOS
+leg's own doing (`C205`'s three-byte packet size, read back on the next
+rebuild): the BIOS's state, which the probe does not write.
 
 Each step line is `name[arg]  64h-before>64h-after  replies  ticks`: `none`
 means a reply was waited for and never came, `STALL` that the 8042 never took
@@ -242005,6 +242081,15 @@ reflected, on a 286 through a CPU reset, and the BIOS's IRQ12 handler would run
 reflected too, so the answer would not be about the same machine.
 
 #### 126.8.5 Cost and limits
+
+**Measured on the build of 2026-11-05** (`ps2.inc` and `probe.inc` against the
+foundation's stubs): **4,769 bytes of image** in the two files (code 2,612,
+strings and tables 2,157) and **449 bytes of bss** (the trace store 378, the
+per-probe state 20, the span copy, the windows and a line buffer), so **5,218
+bytes** against the plan's 4.5 KB (4,608) section budget, which it is over by
+610. What could go if the
+package ceiling needs it, cheapest first: the BIOS leg (about 300 bytes),
+leg 4 (about 120), the EBDA row (about 100). Zero kernel bytes.
 
 The trace store is 42 entries of 9 bytes (op, arg, status before, status
 after, flags, three replies, ticks) - 378 bytes of bss, enough for every leg
