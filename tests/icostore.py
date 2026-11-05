@@ -106,7 +106,7 @@ def main():
                 n = int.from_bytes(m.read((kseg << 4) + vp + V("FS_N"), 2),
                                    "little")
                 iofh = m.read((kseg << 4) + vp + V("FS_IOFH"), 1)[0]
-                return list(m.read(lin(vseg, iofh << 8), n))
+                return list(m.read(lin(vseg, iofh << V("FV_IOSH")), n))
 
             # **AND THERE IS NO FLOOR TO FALL BACK TO** (SPEC.md 22.6.3).
             # This arm read `LOW_SEG:dsk_icoix`, and that symbol no longer

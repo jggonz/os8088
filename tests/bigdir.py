@@ -51,6 +51,7 @@ _EQ = os88sym.equates()
 FV_DOFF = _EQ["FV_DOFF"]
 FS_VKB = _EQ["FS_VKB"]
 FS_IOFH = _EQ["FS_IOFH"]
+FV_IOSH = _EQ["FV_IOSH"]          # 128-byte units (SPEC.md 22.6.4)
 HARV = _EQ["DSK_HARV_MAX"]
 VIEW_KB = _EQ["VIEW_KB"]
 ICO_R_NONE = _EQ["ICO_R_NONE"]
@@ -122,7 +123,7 @@ def run(tmp):
         def iconned(blk, names):
             vseg = word(blk, geom.FS_VSEG)
             n = word(blk, geom.FS_N)
-            refs = m.read(lin(vseg, byte(blk, FS_IOFH) << 8), n)
+            refs = m.read(lin(vseg, byte(blk, FS_IOFH) << FV_IOSH), n)
             return [nm for nm, r in zip(names, refs)
                     if nm.endswith(".O88") and r != ICO_R_NONE]
 

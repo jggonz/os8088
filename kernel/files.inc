@@ -405,10 +405,13 @@ FV_DOFF     equ 128             ; ceiling allows, 128 bytes at 1,024 - a
  %else
 FV_DOFF     equ 0
  %endif
-FV_FIX      equ FV_DOFF + 256   ; a claim's bytes beyond 25 an entry: the
+FV_FIX      equ FV_DOFF + 127   ; a claim's bytes beyond 25 an entry: the
                                 ; bitmap and the most the boundary can pad
+FV_IOSH     equ 7               ; FS_IOFH x 128 is the index's base: the
+                                ; shift a HOST reader applies (os88geom)
 %else
 FV_DOFF     equ 0
+FV_IOSH     equ 8               ; ...and x 256 on kern_small (22.6.1)
 %endif
 
 FM_MAXWIN   equ VIEW_SLOTS      ; the USER's Disk windows: fm_count's cap
@@ -449,8 +452,8 @@ FV_ICOBODY  equ DSK_ICOIX_N     ; ...so the bodies start after it
  %if (DSK_NENT*25 + FV_FIX + 1023) / 1024 > 255
   %error "FS_VKB is a byte: the ceiling's claim must be under 256KB"
  %endif
- %if (FV_DOFF + DSK_NENT*DSK_DE_STRIDE + 256) > 65535
-  %error "the reference index's base is a 16-bit offset (FS_IOFH x 256)"
+ %if (FV_DOFF + DSK_NENT*DSK_DE_STRIDE + 127) / 128 > 255
+  %error "FS_IOFH carries the reference index's base in 128-byte units, in a byte"
  %endif
 %elif DSK_NENT*DSK_DE_STRIDE + DSK_ICOIX_N > VIEW_KB*1024
   %error "the view cache no longer fits VIEW_KB: entries, then one REFERENCE byte per entry (DSK_ICOIX_N). fm_kinit claims VIEW_KB and fmv_store then writes this much into it, so the overflow lands on whatever the heap handed out next"
@@ -805,7 +808,7 @@ fmv_copy_in:
 ; -----------------------------------------------------------------------------
 %ifdef DSK_BIGDIR
 ; ...and ON THIS BUILD it is the shape of DI's OWN listing (SPEC.md 22.6.4):
-; the 256-byte boundary past its FS_N entries, which is what dsk_ioffx puts
+; the 128-byte boundary at or past its FS_N entries, which is what dsk_ioffx puts
 ; the index at when a mount fills the claim. In: DI = the state block
 fmv_iofs:
     push ax
@@ -816,8 +819,8 @@ fmv_iofs:
  %if FV_DOFF
     add ax, FV_DOFF
  %endif
-    inc ah
-    mov al, 0
+    add ax, 127                 ; dsk_ioffx's boundary, the same arithmetic
+    and al, 80h
     xchg ax, bx
     pop dx
     pop ax
@@ -972,7 +975,11 @@ fmv_get_icon:
     mov si, [fm_vp]
     mov bh, [si+FS_IOFH]
     xor bl, bl
+%ifdef DSK_BIGDIR
+    shr bx, 1                   ; 128-byte units (SPEC.md 22.6.4); ZF = none
+%else
     or bh, bh
+%endif
     jnz .viofs
     call fmv_iofs               ; no cache: the global's, for the reason above
 .viofs:
@@ -1230,6 +1237,9 @@ fmv_store:
     call fmv_copy_out           ; than 64. IT IS fmv_copy_out NOW and not a
 .shape:                         ; hand-rolled LOW_SEG copy: the index follows
     pop di                      ; the entries into whatever store the mount
+%ifdef DSK_BIGDIR
+    shl bx, 1                   ; (in 128-byte units on this build, 22.6.4)
+%endif
     mov [di+FS_IOFH], bh        ; was given, so the two halves can no longer
                                 ; name different segments
                                 ; ...AND THE SHAPE IT WAS FILLED WITH, which
@@ -1309,9 +1319,10 @@ fmv_fit:
 ;      the flags clobbered
 ; THIRTY-TWO AN KB, because it is a shift both ways and it is safe: an entry
 ; is 25 bytes - DSK_DE_STRIDE and its reference byte - so 32 of them are 800
-; and the 224 left over is FV_FIX's bitmap and boundary pad once the claim is
-; 2KB or more, which VIEW_KB makes it. 2KB holds 64, exactly what it held
-; before; the ceiling's 1,024 is 32KB
+; and the 224 left over is FV_FIX's bitmap and boundary pad from 2KB up; at
+; VIEW_KB's 1KB the 32 fit exactly (the guard below). 1KB for every folder of
+; 32 or fewer - every one the shipped disks have - and the ceiling's 1,024 is
+; 32KB
 ; -----------------------------------------------------------------------------
 fmv_cap:
     mov ah, [di+FS_VKB]         ; KB x 256...
@@ -1336,8 +1347,14 @@ fmv_need:
     mov al, VIEW_KB
 .k:
     ret
-%if (DSK_NENT + 31) / 32 > 255 || 25*64 + FV_FIX > VIEW_KB*1024 || VIEW_KB < 2
-  %error "fmv_cap's 32 an KB holds only from 2KB up, and FS_VKB is a byte"
+; ...and 1KB, the floor, holds its 32 EXACTLY rather than by that margin: the
+; bitmap and 32 entries end on a 128-byte boundary (128 + 768 = 896), so the
+; index starts there and the whole is 928 bytes
+%if (DSK_NENT + 31) / 32 > 255 || 25*64 + FV_FIX > 2048 || VIEW_KB != 1
+  %error "fmv_cap's 32 an KB holds from 2KB up by the margin, and FS_VKB is a byte"
+%endif
+%if ((FV_DOFF + 32*DSK_DE_STRIDE + 127) & ~127) + 32 > 1024
+  %error "a 1KB claim no longer holds the 32 entries fmv_cap says it does"
 %endif
 
 ; -----------------------------------------------------------------------------
@@ -1577,6 +1594,9 @@ fmv_icorefs:
     cmp word [di+FS_VSEG], 0
     je .no                      ; no cache of its own: it holds no reference
     call fmv_iofs               ; ...AND IT WAS FILLED AT TODAY'S SHAPE
+%ifdef DSK_BIGDIR
+    shl bx, 1                   ; (FS_IOFH counts 128-byte units: 22.6.4)
+%endif
     cmp bh, [di+FS_IOFH]        ; (SPEC.md 22.6.1). A slot filled at another
     jne .no                     ; one puts its reference bytes somewhere this
                                 ; walk would not write them, and the two

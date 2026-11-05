@@ -134,7 +134,7 @@ def main():
             n = live = rd(vp + V("FS_N"), 2)    # the window's own shape
             st = V("DSK_DE_STRIDE")             # (SPEC.md 22.6.4)
             raw = m.read(lin(vs, V("FV_DOFF")), n * st)
-            ix = m.read(lin(vs, rd(vp + V("FS_IOFH"), 1) << 8), n)
+            ix = m.read(lin(vs, rd(vp + V("FS_IOFH"), 1) << V("FV_IOSH")), n)
             names = [raw[i * st:i * st + 16].split(b"\0")[0].decode("latin-1")
                      for i in range(min(live, n))]
             gen = [nm for nm, r in zip(names, ix) if r == 0xFF and nm != ".."]

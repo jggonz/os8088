@@ -61,6 +61,13 @@ ICO_R_NONE = 0xFF
 bad = []
 
 
+
+try:                            # FS_IOFH's unit: 128 bytes on kern_big
+    import os88geom as _g       # (SPEC.md 22.6.4), 256 on kern_small
+    _IOSH = _g.FV_IOSH
+except Exception:
+    _IOSH = 8
+
 def fail(msg):
     print("icoshed: FAIL: %s" % msg)
     sys.exit(1)
@@ -83,7 +90,7 @@ def refbyte(m, row=0):
     n, vseg, iofh, _ = slot0(m)
     if not vseg or not iofh:
         return None
-    off = (iofh << 8) + FV_ICOIX + row
+    off = (iofh << _IOSH) + FV_ICOIX + row
     return m.readseg(vseg, off, 1)[0]
 
 

@@ -16,8 +16,8 @@ entirely, and **at most 16 icon reads a listing**.
 | | proposed | built |
 |---|---|---|
 | ceiling | 1,024 big / 256 small | **1,024 on `kern_big` and `kern_mega`; `kern_small` untouched** (32, `DSK_BIGDIR` undefined) and `kern_dos` untouched (64) |
-| claim size | 25 bytes an entry + 384, KB-rounded | **32 entries a KB** (`fmv_cap` / `fmv_need` are shifts): 2KB holds 64 exactly as before, 32KB the ceiling. The 25-an-entry version cost a 16-bit divide each way, ~30 bytes more |
-| never under | - | `VIEW_KB` (2KB): a folder of 64 or fewer never grows, never re-lists, never shrinks - the common case is byte-for-byte today's |
+| claim size | 25 bytes an entry + 384, KB-rounded | **32 entries a KB** (`fmv_cap` / `fmv_need` are shifts), 32KB the ceiling. The 25-an-entry version cost a 16-bit divide each way, ~30 bytes more |
+| never under | - | `VIEW_KB`, **1KB** - asked for after the first build: it holds 32 entries exactly once `FS_IOFH` counts 128-byte units rather than 256 (+6 bytes), and every folder on every shipped disk is 32 or fewer (the busiest, `apps.img`'s APPS, is 24). A 512-byte floor holds 10 and was refused: folders of 11-32 would grow and re-read on every visit. **A folder over 32 pays a second directory read on EVERY visit**, because leaving it cuts the claim back |
 | redirected volumes | not considered | drivers stop at their first `OSAPI_FS_ENT` refusal, so the overflow count is 1 there; the grow is to `2 x FS_N + over`, a doubling, which is exact on FAT and bounded on a driver |
 | icon budget | 64 reads | **16** (`DSK_HARV_MAX`), a word counted down per `fmv_load`, not per mount |
 | status line `N of M shown` | wave 1 | **not done**: a per-window word and a format, and the bar was resident bytes. A truncated listing (ceiling, refused grow) shows the count it lists |
@@ -25,9 +25,9 @@ entirely, and **at most 16 icon reads a listing**.
 | sibling adoption (`fmv_take`) | not in the study | a sibling whose claim is smaller than the source keeps its `FSD_CACHE` debt and re-lists on focus rather than being grown inside a broadcast |
 
 **Measured cost** (`tools/kernsize.py` sections, against the commit before):
-`kern_big` **+218 resident bytes** - `.cold` +252, `.bss` -34 (the 40 of the
+`kern_big` **+224 resident bytes** - `.cold` +258, `.bss` -34 (the 40 of the
 pool's bitmap back, less six of new words), `.text` +0. `kern_small` +0.
-`kern_mega` +218. Along the way: two `t_hotpar` parity hits (fixed by making
+`kern_mega` the same work. Along the way: two `t_hotpar` parity hits (fixed by making
 the harvest budget a word, `dec`/`js`, which is 5 bytes shorter, and a 2-byte
 shorter bound in the sort - an odd net that put `dsk_next_clus_x` back on an
 even shift with no pad), a `stkbalance` false path (the old and new sorts
@@ -38,7 +38,7 @@ shared local label names across an `%ifdef`; the walker reads both arms), and
 with no `ASSOC.DAT` - every check green, and nine of eleven red with the grow
 refused. The harness readers that assumed entries at offset 0 of a window's
 claim, or an index `[dsk_nmax]` wide, were moved to `FV_DOFF` and
-`FS_IOFH x 256`: `tools/os88ui.py`, `tests/dispcp.py`, `msel`, `ascabsorb`,
+`FS_IOFH << FV_IOSH`: `tools/os88ui.py`, `tests/dispcp.py`, `msel`, `ascabsorb`,
 `icogrow`, `icohd`, `icostore`, `hdnoclaim`, `megacdrom`;
 `tools/os88geom.py` mirrors `FV_DOFF`.
 

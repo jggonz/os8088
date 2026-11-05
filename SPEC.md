@@ -52964,18 +52964,30 @@ sort chosen for 32 entries.
 [0, FV_DOFF)        the multi-selection bitmap (§22.27): FM_MSELB =
                     DSK_NENT/8 = 128 bytes, one bit per entry
 FV_DOFF ...         FS_N entries of DSK_DE_STRIDE (24)
-FS_IOFH x 256 ...   FS_N icon-reference bytes (§25.9), on the first
-                    256-byte boundary PAST the entries
+FS_IOFH x 128 ...   FS_N icon-reference bytes (§25.9), on the first
+                    128-byte boundary at or past the entries
 ```
 
+`FS_IOFH` counts 128-byte units on these kernels (256 on `kern_small`): a
+byte of them reaches 32KB, which the ceiling needs, and the finer boundary
+is what lets the floor be 1KB - at 256 the pad alone pushed 32 entries to
+1,056 bytes. The bitmap ahead of entry 0 keeps even an empty listing's
+index off offset 0, which `FS_IOFH` spends on "none".
+
 **Thirty-two entries a KB**: `fmv_cap` = `FS_VKB` x 32 and `fmv_need(n)` =
-⌈n/32⌉ KB, never under `VIEW_KB` (2KB) and never past the ceiling's 32 -
-both a shift, no divide. It is safe because an entry costs 25 bytes (its
-record and its reference byte), so 32 of them are 800 and the 224 a KB left
-over covers `FV_FIX` - the 128-byte bitmap plus the most the index's boundary
-can pad, 384 - from 2KB up. So a window holds **2KB for a folder of up to 64
-entries, exactly what it held before**, 10KB at 301, 8KB at 256 and **32KB at
-the ceiling**, and only while it shows that folder. A tighter packing (25 an
+⌈n/32⌉ KB, never under `VIEW_KB` (**1KB** on these kernels) and never past
+the ceiling's 32 - both a shift, no divide. It is safe because an entry costs
+25 bytes (its record and its reference byte), so 32 of them are 800 and the
+224 a KB left over covers `FV_FIX` - the 128-byte bitmap plus the most the
+index's boundary can pad, 255 - from 2KB up; at 1KB the 32 fit EXACTLY,
+because 128 + 32 x 24 = 896 is itself a boundary, so the whole is 928 bytes
+(an `%error` holds it). So a window holds **1KB for a folder of up to 32
+entries - every folder on every shipped disk, measured: the busiest is
+`apps.img`'s APPS at 24** - where it held 2KB before; 10KB at 301, 8KB at 256
+and **32KB at the ceiling**, and only while it shows that folder. A 512-byte
+floor was weighed and refused: it holds 10, so every folder of 11 to 32 -
+most of the shipped ones - would pay the grow below on every visit, for 512
+bytes a window. A tighter packing (25 an
 entry) was the first version and cost a 16-bit divide each way; the shift
 saved about 30 resident bytes for at most a KB or two of transient heap.
 
@@ -52991,18 +53003,22 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
   first `OSAPI_FS_ENT` refusal, so it counts 1, and the doubling is what
   bounds that case to a handful of re-lists. The second mount re-reads the
   directory (§18.95's cache is dropped by every loud mount) - which is the
-  price of a folder over 66 entries, on its first visit only.
+  price of a folder over 32 entries, and it is paid on EVERY visit, because
+  leaving the folder cuts the claim back. That is the trade the floor makes:
+  a big folder costs a second directory read each time it is opened, and no
+  window holds memory for a folder it is not showing.
 - `[dsk_nover]` = 0: `mem_regrow` it DOWN to `fmv_need(FS_N)`. A shrink
-  keeps the base and cannot fail. So a folder of 64 or fewer entries comes
+  keeps the base and cannot fail. So a folder of 32 or fewer entries comes
   and goes with no grow and no second mount at all.
 - **A grow refused keeps the listing that fit** (§50.3: memory is a
   performance input). `mem_regrow` does not call the relocation proc
   (§66.7), so `fmv_rsz` writes `FS_VSEG` and the `[fm_vseg]` mirror itself.
 
 `dsk_ioff` follows the entries STORED, not the room: the scan calls
-`dsk_ioffx` with its count at `.scan_done`, so the index starts just past
-them and a claim cut back to fit keeps every byte it still owes. "Past" and
-not "at" keeps an empty listing's index off offset 0, which `FS_IOFH` spends
+`dsk_ioffx` with its count at `.scan_done`, so the index starts on the
+boundary at or past them and a claim cut back to fit keeps every byte it
+still owes. The bitmap ahead of them keeps an empty listing's index off
+offset 0, which `FS_IOFH` spends
 on "none".
 
 **A sibling adopts a listing only if it fits.** `fmv_take` (§22.1's
@@ -53039,8 +53055,9 @@ and lists nothing - and `fm_many`/`fm_mzero` answer "empty" for a window
 with no claim.
 
 **What it cost**: measured by `tools/kernsize.py`'s sections against the
-commit before, **`kern_big` +218 resident bytes** (`.cold` +252, `.bss` -34,
-`.text` +0) - inside the owner's 250 for the work, which asked that it
+commit before, **`kern_big` +224 resident bytes** (`.cold` +258, `.bss` -34,
+`.text` +0; the 1KB floor's 128-byte units are six of them) - inside the
+owner's 250 for the work, which asked that it
 not eat the slack kept for drivers and fixes. `kern_small` and `kern_dos`:
 **0**, byte for byte. The row is `tests/bigdir.py`.
 

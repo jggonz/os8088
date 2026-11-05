@@ -8348,9 +8348,10 @@ dsk_goto:
 ; ON THIS BUILD THE SHAPE IS THE CALLER'S TOO (SPEC.md 22.6.4): a store is as
 ; big as the folder it was sized for, so AX = how many entries it holds -
 ; [dsk_nmax], the scan's cap - and the reference index starts on the first
-; 256-byte boundary PAST the entries, wherever that falls. The boundary is
-; what FS_IOFH's one byte can carry, and "past" rather than "at" is what keeps
-; an empty listing's index off offset 0, which FS_IOFH spends on "none".
+; 128-byte boundary at or past the entries, wherever that falls. The boundary
+; is what FS_IOFH's one byte can carry (in 128-byte units, so 32KB of claim);
+; the bitmap ahead of entry 0 keeps an empty listing's index off offset 0,
+; which FS_IOFH spends on "none".
 ; dsk_ioffx is the second half alone: the scan calls it with its own count
 ; once the entries are in, so the index follows THEM rather than the room.
 ; [dsk_nover] starts again at every aim, because every loud mount is aimed.
@@ -8367,9 +8368,9 @@ dsk_ioffx:
     mov dx, DSK_DE_STRIDE
     mul dx                      ; DX:AX, DX 0: the count is <= DSK_NENT
     add ax, [dsk_doff]
-    inc ah                      ; the boundary past the entries...
-    mov al, 0                   ; ...(a mov: `xor` would write the flags,
-    mov [dsk_ioff], ax          ; and nothing here may be asked of them)
+    add ax, 127                 ; the 128-byte boundary at or past the
+    and al, 80h                 ; entries (flags are nobody's here)
+    mov [dsk_ioff], ax
     pop dx
     pop ax
     ret

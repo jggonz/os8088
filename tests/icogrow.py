@@ -89,13 +89,13 @@ def main():
             if not vseg:
                 fail("the acting Disk window holds no FS_VSEG claim")
             # the window's own shape (SPEC.md 22.6.4): FS_N entries past the
-            # bitmap, the index at FS_IOFH x 256
+            # bitmap, the index at FS_IOFH << FV_IOSH
             n = int.from_bytes(m.read((kseg << 4) + vp + V("FS_N"), 2),
                                "little")
             iofh = m.read((kseg << 4) + vp + V("FS_IOFH"), 1)[0]
             st = V("DSK_DE_STRIDE")
             raw = m.read(lin(vseg, V("FV_DOFF")), n * st)
-            ix = m.read(lin(vseg, iofh << 8), n)
+            ix = m.read(lin(vseg, iofh << V("FV_IOSH")), n)
             # FS_N, NOT dsk_nmax: the claim is dsk_nmax slots wide and a
             # short listing leaves the previous one's names and references
             # behind it - read past FS_N, A:/APPS "had" INSTALL.O88 on the
