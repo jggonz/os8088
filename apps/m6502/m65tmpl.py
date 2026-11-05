@@ -556,8 +556,9 @@ class T(Gen):
         # whose CODE bit is set asks for the flush and leaves the block at SI
         # - the store done, the window kept - after the mark's whole work.
         L("jm_mark:",
-          "    cmp byte [%s], 2" % S(S_ANY), "    jne .slow",
-          "    cmp bh, [%s]" % S(S_LASTPG), "    je .win",
+          "    cmp bh, [%s]" % S(S_LASTPG), "    jne .slow",
+          "    cmp byte [%s], 2" % S(S_ANY), "    je .win",
+          "    cmp byte [%s], 3" % S(S_ANY), "    je .fine",
           ".slow:",
           "    push bx", "    push dx",
           "    mov dl, bh", "    and dl, 7",
@@ -581,10 +582,12 @@ class T(Gen):
                "    mov [%s], bx" % S(S_WHI),
                ".out:"]
         L(*win, "    ret")
-        # A CODE PAGE: the byte's own bit decides, and the same-page short
-        # cut stays broken (ANY 1) so the next write here is tested too
+        # A CODE PAGE: the byte's own bit decides, and the same page again
+        # comes straight here (ANY 3) rather than through the slow path
         L(".code:",
-          "    mov byte [%s], 1" % S(S_ANY),
+          "    mov byte [%s], 3" % S(S_ANY),       # (a code page's short cut,
+          "    mov [%s], bh" % S(S_LASTPG),        #  which still tests the byte)
+          ".fine:",
           "    push bx", "    push cx",
           "    mov cl, bl", "    and cl, 7",
           "    mov ch, 0x80", "    shr ch, cl",

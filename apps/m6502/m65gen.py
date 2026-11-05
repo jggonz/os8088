@@ -295,6 +295,28 @@ class Gen:
           "    dec dx",                               # ...less the last BNE's 1
           "    pop bx",
           "    cmp bp, dx", "    jg %s" % (no + "_go"),
+          # NOT ALL OF IT FITS: AS MANY WHOLE PASSES AS DO (C64-SPEC
+          # 4.7.2). k = (BP - 1) / per leaves the countdown above 0 after
+          # each, as running them would, and k < n because the whole did
+          # not fit; the counter goes down by k and the next pass is the
+          # ordinary handler's, which recomputes N and Z. A run's budget is
+          # often a raster line or two, far less than a 256-pass loop
+          "    push ax", "    push cx",
+          "    mov ax, bp", "    dec ax", "    xor dx, dx",
+          "    mov cx, %d" % per, "    div cx",
+          "    pop cx",
+          "    or ax, ax", "    jz %s" % (no + "_p0"),
+          "    mov dx, ax")
+        if op == 0xCE:
+            L("    sub [bx], dl", "    call c64_mark")
+        else:
+            L("    sub %s, dl" % ("cl" if op == 0xCA else "ch"))
+        L("    shl ax, 1", "    shl ax, 1")
+        if per == 9:
+            L("    shl ax, 1")
+        L("    add ax, dx",                           # k x per
+          "    sub bp, ax",
+          "%s_p0: pop ax" % no,
           "    xor dx, dx",
           "    jmp %s" % no,
           "%s_go:" % no,
@@ -918,9 +940,26 @@ class Gen:
             # 2, which only THIS path writes: the accurate core and the
             # package's writers write 1 and the take writes 0, and either
             # breaks the chain, so a stale page can never be skipped
-            mark += ["    cmp byte [%s], 2" % S(S_ANY), "    jne .slow",
-                     "    cmp bh, [%s]" % S(S_LASTPG), "    je .win",
-                     ".slow:"]
+            if not self.p.get("jit"):
+                mark += ["    cmp byte [%s], 2" % S(S_ANY), "    jne .slow",
+                         "    cmp bh, [%s]" % S(S_LASTPG), "    je .win",
+                         ".slow:"]
+            else:
+                # ...AND ON A PAGE HOLDING TRANSLATED CODE, ANY = 3: the same
+                # page again needs only the byte test (C64-SPEC 4.9.3) - a
+                # delay loop's counter kept between a demo's instructions
+                # cost this mark's whole slow path every pass
+                mark += ["    cmp bh, [%s]" % S(S_LASTPG), "    jne .slow",
+                         "    cmp byte [%s], 2" % S(S_ANY), "    je .win",
+                         "    cmp byte [%s], 3" % S(S_ANY), "    jne .slow",
+                         "    push bx", "    push dx",
+                         "    push bp", "    mov bp, sp",
+                         "    mov dl, [bp+5]",
+                         "    mov bp, [bp+%d]" % (8 + F_JIT),
+                         "    or bp, bp", "    jz .nj",
+                         "    push es", "    mov es, bp",
+                         "    jmp .fine",
+                         ".slow:"]
         mark += [
             "    push bx", "    push dx",
             "    mov dl, bh", "    and dl, 7",
@@ -936,14 +975,15 @@ class Gen:
             # caller's BH, at [bp+5]
             # A CODE PAGE IS NOT A HIT BY ITSELF: the byte's own bit in the
             # byte map decides (4.9.3) - demos keep their variables between
-            # their instructions - and a code page keeps the same-page short
-            # cut broken (ANY 1), so every write to it is tested
+            # their instructions - and a code page keeps its own same-page
+            # short cut (ANY 3), which still makes the byte test
             mark += ["    push bp", "    mov bp, sp",
                      "    mov dl, [bp+5]",
                      "    mov bp, [bp+%d]" % (8 + F_JIT),
                      "    or bp, bp", "    jz .nj",
                      "    push es", "    mov es, bp",
                      "    test [es:bx+0x%04X], dh" % JC_CODE, "    jz .nc",
+                     ".fine:",
                      "    mov bp, sp",
                      "    mov bx, [bp+6]",              # the address
                      "    push cx",
@@ -958,7 +998,8 @@ class Gen:
                      "    mov [es:0x%04X], dl" % JC_FLUSH,
                      "    mov byte [es:0x%04X], 1" % (JC_FLUSH + 1),
                      ".cp: pop es", "    pop bp", "    pop dx", "    pop bx",
-                     "    mov byte [%s], 1" % S(S_ANY),
+                     "    mov byte [%s], 3" % S(S_ANY),
+                     "    mov [%s], bh" % S(S_LASTPG),
                      "    jmp .win",
                      ".nc: pop es",
                      ".nj: pop bp"]

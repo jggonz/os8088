@@ -599,6 +599,15 @@ rows_main:
     call control
     mov byte [neg_loop], 0
 
+    mov si, msg_r18
+    call puts
+    call row_loop97
+    call verdict
+    mov byte [neg_loop], 1
+    call row_loop97
+    call control
+    mov byte [neg_loop], 0
+
     mov si, msg_r13
     call puts
     call row_rmw
@@ -610,6 +619,14 @@ rows_main:
 
 
 %ifdef JIT
+    mov si, msg_r19
+    call puts
+    call row_samepg
+    call verdict
+    call patch_any                  ; a code page's short cut skips the byte
+    call row_samepg
+    call control
+    call unpatch_any
     mov si, msg_r17
     call puts
     call row_patched
@@ -1255,6 +1272,81 @@ row_loop:
     mov ax, 1
     ret
 
+; -----------------------------------------------------------------------------
+; ROW 18 - THE SAME LOOPS IN SHORT RUNS (C64-SPEC 4.7.2)
+; Row 14's program again, in runs of 97 cycles - less than any of its loops -
+; to its KIL: the fast core takes as many whole passes as each run's budget
+; holds, and the sum of the runs is the same C64_LOOPC, with the same three
+; counters. A run of a raster line or two is what a C64 program actually
+; gets. The control is row 14's: X from $11, five cycles more.
+; -----------------------------------------------------------------------------
+row_loop97:
+    push es
+    push di
+    mov es, [_c64_m+CM_RAMSEG]
+    mov di, 0x0940
+    xor ax, ax
+    stosw
+    stosw
+    mov si, p_loop
+    mov di, 0x0800
+    mov cx, p_loop_end - p_loop
+.c: mov al, [cs:si]
+    inc si
+    stosb
+    loop .c
+    cmp byte [neg_loop], 0
+    je .go
+    mov byte [es:0x0801], 0x11
+.go:
+    pop di
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    mov word [loop_ran], 0
+    mov word [loop_n], 0
+.run:                               ; (to the KIL, whose run answers JAM)
+    PUSHI 97
+    call _c64_run
+    add sp, 2
+    push ax
+    mov ax, 97
+    sub ax, [_c64_m+CM_CNT]
+    add [loop_ran], ax
+    pop ax
+    cmp ax, C64_RUN_JAM
+    je .done
+    inc word [loop_n]
+    cmp word [loop_n], 200
+    jb .run
+    jmp short .bad
+.done:
+    cmp word [loop_ran], C64_LOOPC
+    jne .bad
+    mov bx, 0x0940
+    call ram_rd
+    or al, al
+    jnz .bad
+    mov bx, 0x0941
+    call ram_rd
+    or al, al
+    jnz .bad
+    mov bx, 0xC333
+    call ram_rd
+    or al, al
+    jnz .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
 p_loop:
     db 0xA2, 0x10                   ; LDX #$10
     db 0xCA, 0xD0, 0xFD             ; DEX / BNE back: 16 x 5 - 1
@@ -1480,6 +1572,77 @@ jcyc_jmp:
     call jcyc
     pop di
     pop es
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 19 - A CODE PAGE'S SHORT CUT STILL TESTS THE BYTE (C64-SPEC 4.9.3)
+; Row 15's loop with a store to a DATA byte on its own code page just before
+; the INC of its operand: the data store takes the code page's slow path and
+; leaves ANY 3, so the INC comes through the short cut - which must still
+; make the byte test and leave the block, or the loop stores $11 four times.
+; The control makes the short cut skip it (ANY 3 taken as ANY 2).
+; -----------------------------------------------------------------------------
+row_samepg:
+    mov si, p_samepg
+    call runprog
+    mov bx, 0x0900
+.c: call ram_rd
+    mov ah, bl
+    add ah, 0x11
+    cmp al, ah
+    jne .bad
+    inc bx
+    cmp bx, 0x0904
+    jb .c
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_samepg:
+    db p_samepg_end - p_samepg - 1
+    db 0xA2, 0x00                   ; LDX #$00
+    db 0xA9, 0x11                   ; LDA #$11       ($0802)
+    db 0x9D, 0x00, 0x09             ; STA $0900,X
+    db 0x8D, 0xF0, 0x08             ; STA $08F0 - data, on the code page
+    db 0xEE, 0x03, 0x08             ; INC $0803 - the LDA's operand
+    db 0xE8                         ; INX
+    db 0xE0, 0x04                   ; CPX #$04
+    db 0xD0, 0xF0                   ; BNE $0802
+    db 0x02                         ; KIL
+p_samepg_end:
+
+; patch_any / unpatch_any - jm_mark's `cmp byte [ANY], 2` made `3`
+patch_any:
+    mov al, 3
+    jmp short pany
+unpatch_any:
+    mov al, 2
+pany:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, JP_jm_mark
+    mov cx, 32
+    mov ah, al
+    xor ah, 1                       ; (the byte it is now: 2 <-> 3)
+.f: cmp word [es:di], 0x3E80
+    jne .n
+    cmp word [es:di+2], C64SCR + S_ANY
+    jne .n
+    cmp [es:di+4], ah
+    jne .n
+    mov [es:di+4], al
+    jmp short .o
+.n: inc di
+    loop .f
+.o: pop cx
+    pop di
+    pop es
+    call c64_jtouch
     ret
 
 ; patch_hit / unpatch_hit - the JNZ after jm_mark's `test [cs:bx],dh`
@@ -3223,6 +3386,7 @@ neg_int:    db 0
 neg_rmw:    db 0
 neg_loop:   db 0
 loop_ran:   dw 0
+loop_n:     dw 0
 saw0:       db 0
 saw1:       db 0
 saw2:       db 0
@@ -3254,6 +3418,8 @@ msg_r11:    db 'row 11 the four unstable stores       ', 0
 msg_r12:    db 'row 12 the interrupt stack and RTI    ', 0
 msg_r13:    db 'row 13 read-modify-write above $A000  ', 0
 msg_r14:    db 'row 14 the self-loops, cycle-exact    ', 0
+msg_r18:    db 'row 18 the self-loops in 97-cycle runs', 0
+msg_r19:    db 'row 19 a code page short cut, tested  ', 0
 msg_r15:    db 'row 15 a running block rewritten       ', 0
 msg_r16:    db 'row 16 a chained loop to the budget    ', 0
 msg_r17:    db 'row 17 a patched operand read in place ', 0

@@ -799,11 +799,22 @@ n passes of the counter (0 is 256), 9 cycles a pass for `DEC abs` and 5 for
 0, Z set and N clear (C as `DEC` leaves it), and `BP` is charged exactly
 that - the same cycle, registers and flags as running it, which is why it
 is not a deviation. `DEC abs` only on plain RAM (below `$A000`, or
-`$C000-$CFFF`), and its page is marked once. Short of budget, the ordinary
-handler runs it a pass at a time. `c64cputest` row 14 runs all three on both
-cores and asserts the counters, the flags and the run's exact length (1,433
-cycles to the `KIL`); it went red on a fast core charging one cycle a loop
-too many, and its control (X from `$11`) costs five more.
+`$C000-$CFFF`), and its page is marked once. `c64cputest` row 14 runs all
+three on both cores and asserts the counters, the flags and the run's exact
+length (1,433 cycles to the `KIL`); it went red on a fast core charging one
+cycle a loop too many, and its control (X from `$11`) costs five more.
+
+**Short of budget, as many WHOLE passes as fit** run as one step:
+k = (BP - 1) / per - `div` by 5 or 9 - leaves the countdown above 0 after
+each, as running them would, and k < n because the whole did not fit; the
+counter goes down by k, BP by k x per, and the next pass is the ordinary
+handler's, which recomputes N and Z. It was a pass at a time, and a run's
+budget is usually a raster line or two - far less than a 256-pass loop -
+so the collapse almost never fired where it was needed: the Portland CUG
+first scene's nested `DEC $C333 / BNE` delay was 12.6% of a 286 a pass at a
+time and is 0.9% now. Row 18 runs row 14's program in 97-cycle runs to its
+`KIL`: the same 1,433 cycles and counters (red with the partial charge one
+cycle short).
 
 **A write to the page this core marked last is not marked again**
 (`c64_mark`): while `ANY` is 2 - written only by the fast core's mark, the
@@ -1090,8 +1101,14 @@ flush unconditionally (`c64_jtouch`). **A code page is not a hit by
 itself**: the byte map, a bit under every byte a block was made from,
 decides - demos keep their variables between their instructions, and the
 first CUG scene stores into twenty-odd of them on two code pages. Every mark
-keeps the same-page short cut broken while the page holds code (`ANY` 1), so
-each write there is tested. A hit writes the address into `JC_HITA`, its page
+keeps a same-page short cut of its own while the page holds code - `ANY` 3,
+which the slow path leaves for a code page - and that short cut goes
+straight to the byte test rather than skipping it, so each write there is
+still tested but not through the whole slow path (the scene's inline
+counters cost the marks 11% of a 286 through it). Row 19 stores to a data
+byte on its own code page and then rewrites its own operand on that page:
+the second comes through the short cut and must leave the block (red with
+the short cut skipping the test). A hit writes the address into `JC_HITA`, its page
 into `JC_FLUSH` and 1 into `JC_FLUSH+1` (2 when no byte is to blame). **A store from a block
 into a page holding code leaves that block at the next instruction**, the
 store and the mark done: every storing template loads SI with the next PC
@@ -1185,6 +1202,7 @@ that greys it (SPEC.md 47).
 |---|---|---|
 | BASIC `10 i=i+1:goto 10` (warp) | 107.0% | 107.0% - the ROMs are §4.8's, untouched |
 | Portland CUG Christmas, first scene (its three parts poked in, run) | 23.1% | 25.8% |
+| ...after 4.7.2's partial collapse and the code page's short cut | 28.0% | 48.0% |
 | Bright Pixel's Christmas card (`card.prg`, run) | 45.2% | 47.0% - its time is the drawing (§9.13) |
 
 The first scene's gain is the byte map and the read-in-place operands

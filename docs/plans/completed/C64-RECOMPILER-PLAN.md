@@ -101,6 +101,22 @@ variables), then PATCHED operands read in place (the scroller patches its
 own `LDA`/`STA` operands every pass). The recompiler then holds ~160 blocks,
 8 flushes, no volatile page. Where the rest goes is W5's profile.
 
+## 4.2 The profile after, and what it found
+
+The same scene from drive 8 (C64-SPEC 11.5.1), sampled every emulated
+millisecond (3,000 samples): the package's drawing 48.7%, the recompiler
+23.4% (its blocks 11.2%, `jm_mark` 6.4%), the fast core 19.0%, the kernel
+8.5%. The core's 19% was one place - the nested `DEC $C333 / BNE` delay at
+$C328, 12.6% on its own - because its collapse needed the whole loop to fit
+a run's budget and a run is a raster line or two; and the marks were ~11%,
+because a store to a code page took the slow path every time. C64-SPEC
+4.7.2 now takes as many whole passes as fit, and 4.9.3 gives a code page
+its own short cut. The core fell to 5.4%, and the scene went to 28.0% on
+the fast core alone and **48.0% with the recompiler** - against 23.1% and
+25.8% before. What is left is the drawing (`c64_band1` 12.3%, `c64_spr_draw`
+5.2%, `c64_bandfind` 5.0%, `c64_rowspan` 3.9%, the SID noise 4.3%) and the
+recompiler's own marks (`jm_mark` 8.6%).
+
 ## 5. Risks, said now
 
 - **Self-modifying demos may not gain.** A loop that patches its own
