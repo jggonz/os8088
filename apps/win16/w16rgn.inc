@@ -2087,8 +2087,8 @@ w16_palobj:
     call w16_palseg
     jc .stock
     push es
-    mov es, dx
-    mov dx, [es:0]
+    W16SEG es, dx                   ; (a virtual paragraph on the arm: the
+    mov dx, [es:0]                  ;   block w16_gnew made, not a selector)
     pop es
     jmp short .put
 .stock:
@@ -2199,7 +2199,7 @@ W16SYS w16g_getpalent
     mov si, [es:bx + 6]
     les di, [es:bx]
     push ds
-    mov ds, dx
+    W16SEG ds, dx
     mov ax, [0]                     ; the entries it has
     mov dx, es
     or dx, di
@@ -2245,7 +2245,7 @@ W16SYS w16g_nearpal
     ICALL w16_args                  ; (w16_palseg answered in BX)
     mov cx, [es:bx]                 ; CL = red, CH = green, AH = blue
     mov ah, [es:bx + 2]
-    mov es, dx
+    W16SEG es, dx
     mov bx, 0xFFFF                  ; BX = the best distance, DX its entry
     xor dx, dx
     xor di, di

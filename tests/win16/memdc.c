@@ -307,19 +307,26 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     }
 
     /* --- GMEM_NOTIFY blocks, as PBRUSH.DLL's band cache keeps them: the
-     * heap runs short, the procedure is asked, and what it lets go goes --- */
+     * heap runs short, the procedure is asked, and what it lets go goes.
+     * At least 48 of them (768,000 bytes, past a 640 KB machine's heap),
+     * and on until the procedure has been asked: kern_mega's heap is not
+     * short at 48, and runs short at its virtual map's 1 MB (SPEC.md
+     * 124.31.3), so NBMAX - 1.5 MB - is past every machine's --- */
     {
-        static HGLOBAL hb[48];
-        int nb;
+#define NBMAX 96
+        static HGLOBAL hb[NBMAX];
+        int nb, refused = 0;
 
         GlobalNotify((GNOTIFYPROC)NotifyProc);
-        for (nb = 0; nb < 48; nb++) {
+        for (nb = 0; nb < NBMAX && (nb < 48 || notified == 0); nb++) {
             hb[nb] = GlobalAlloc(GMEM_MOVEABLE | GMEM_DISCARDABLE | GMEM_NOTIFY,
                                  16000L);
-            if (hb[nb] == NULL)
+            if (hb[nb] == NULL) {
+                refused = 1;
                 break;
+            }
         }
-        check(nb == 48, "notifyroom");
+        check(!refused && nb >= 48, "notifyroom");
         check(notified > 0 && asked != NULL
               && (GlobalFlags(asked) & GMEM_DISCARDED), "notifyasked");
         check(nb == 0 || GlobalLock(hb[nb - 1]) != NULL, "notifynewest");

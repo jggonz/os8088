@@ -17541,11 +17541,10 @@ SOAK = [
                "build/win16/DGROUP.EXE")),
     Row("win16megamemdc", "soak", py("tests/win16mega.py", "MEMDC"), 120.0,
         "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE on kern_mega, "
-        "under Bochs (tests/win16mega.py). KNOWN TO FAIL: it is a #GP at "
-        "122C:8896 on kern_mega (bigbmp-report.md, bigbmp-verify.md section "
-        "4), unattributed; the registry has no expected-failure mechanism, "
-        "so the row is registered normally and the final pass shows whether "
-        "it still does. MEMDC.TXT must say MEMDC OK, with no fault line",
+        "under Bochs (tests/win16mega.py): the palette calls' blocks "
+        "reached through W16SEG (GetObject's was a raw `mov es` of a "
+        "virtual paragraph, a #GP), and the GMEM_NOTIFY leg past the arm's "
+        "1 MB heap. MEMDC.TXT must say MEMDC OK, with no fault line",
         needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
