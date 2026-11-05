@@ -134,3 +134,9 @@ apps/redline/inspmod.inc 3       # THE SHIPPED BUILD STAYING CORRECT, not a
     # CPU_F_PM`) keeps int 15h C0h - whose answer is a real-mode ES:BX - and
     # the IVT read off kern_mega, and ri_cpuf names the bit on the CPU page
     # (SPEC.md 103.7.1). Three lines, no code that runs only there
+apps/mousechk/probe.inc 1        # THE SHIPPED BUILD REFUSING ONE LEG: the
+    # PS/2 probe's opt-in BIOS leg (SPEC.md 126.8.4) is not offered under
+    # kern_mega - p2x_again's `test byte [p2_cpuf], CPU_F_PM / jnz .no`. A
+    # BIOS int 15h there is reflected (on a 286 through a CPU reset) and so
+    # would the BIOS's IRQ12 handler be, so the answer would not be about the
+    # same machine. A fail-safe refusal of two instructions, not kern_mega work

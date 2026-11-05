@@ -241788,11 +241788,237 @@ fingerprint against the lengths worked out from the map by hand.
 
 ### 126.7 PS/2: the boot record
 
-*(Pending: ps2.)*
+*Shipped in wave 2 (`apps/mousechk/ps2.inc`, owner `ps2`). Seen on QEMU's
+i8042 with the kernel's PS/2 mouse live (`make test MOUSEPORT=ps2`).*
+
+The section *PS/2 mouse* shows what the kernel's own probe (§9.9.1) left in the
+`'MO'` block's PS/2 span (§9.4.4), what the BIOS thinks, and what the machine
+looks like now, and ends with one line from §9.9.6's decision table. **Nothing
+in it writes a port**: the three ports it reads (64h status, the master and the
+slave 8259's mask registers) are reads with no side effect, and **none of them
+is read on `CPU_8086`** (`OSAPI_CPU_INFO`), where there is no 8042 and 64h is
+not decoded (§9.9.2). There the section is one row, *Controller: none on an
+8088*, with the Not-applicable lamp.
+
+#### 126.7.1 The rows
+
+| row | from | what it says |
+|---|---|---|
+| Kernel probe | `[mou_p2st]` | `step N/9` and the step in words: `not run`, `no command byte`, `no aux port`, `command write failed`, `reset not ACKed`, `no self-test AA`, `no device ID`, `enable failed`, `armed` (§9.9.1's numbering, `mou_p2_init`'s stores) |
+| Device ID | `[mou_p2id]` | from step 7 on: the byte and `plain` (00), `wheel` (03) or `5-button` (04) |
+| Last byte 0 | `[mou_p2b0]` | at step 9: the last packet's byte 0. Its bit 3 is always set in a synced stream (§9.9.3), so `00` is *no packet has ever arrived* |
+| Command byte | `[mou_p2cmdr]` | from step 2 on: the byte **as the kernel read it** (bit 4, its own `0xAD`, cleared), in hex, then a line `IRQ1 on/off, IRQ12 on/off, xlate on/off, bit 5 on/off` and, when bit 5 is set, `(bit 5: aux off, or PC mode on an AT)`, §9.9.7's finding |
+| int 11h bit 2 | the BDA's equipment word | `1: a mouse at POST` or `0: none at POST` - the BIOS's own verdict, read from 0040:0010 rather than by calling `int 11h` |
+| EBDA, 26h 27h 22h | the EBDA, at 0040:000E's segment | the segment, the two pointing-device flag bytes at 26h and 27h and the far pointer at 22h, **raw**: that is IBM's PS/2 layout (27h bit 7 is "a handler is installed", the pointer is `int 15h C207`'s), and other BIOSes may keep it differently. Shown only when the segment lies in 4000h-9FFFh and only off `CPU_8086`, where 40:0E is LPT4's port |
+| int 74h | the IVT | IRQ12's vector and whose it is: `the kernel` (segment 0060h), `BIOS ROM` (F000h up), `option ROM` (C000h up), `RAM` |
+| IRQ 1, 2, 12 | ports 21h, A1h | `open` or `shut` for IRQ1, the cascade and IRQ12, read now |
+| Port 64h | port 64h | the status byte now and `IBF`, `OBF`, `aux` (OBF from the aux side), `idle`, or `no 8042` when it reads FFh |
+
+The IVT cell and the BDA are read through **one `OSAPI_SEG SEG_WIN` window**
+(paragraph 1Dh, 330h bytes: 01D0h-04FFh) and the EBDA through a second, both
+asked for once at open. A real-mode kernel answers the paragraph itself; on
+kern_mega the window is a data selector (§50.6.11), so the same code reads the
+same bytes there. Paragraph 0 is deliberately not asked for, being the null
+selector under protected mode.
+
+#### 126.7.2 `[mou_p2cmdr]`, and decoding only a known kernel
+
+The span §9.4.4 publishes ends with `[mou_p2cmd0]`, and that byte is the
+**doctored** one: bit 4 cleared and **bit 5 forced set** for `mou_p2_off`'s
+sake (§9.9.7). Its bit 5 says nothing about the machine. The raw byte is
+`[mou_p2cmdr]`, declared one byte past the span, outside the part §9.4.4 pins.
+MOUSECHK reads it at span + 7 **only when `[mc_kok]` = 1** (§126.4): the
+fingerprint says this is the exact kernel the package was made with, and in
+that kernel `mou_p2cmdr` follows `mou_p2cmd0` (kernel/mouse.inc declares it
+unconditionally on every build). On any other kernel the section is one row,
+*Boot record (raw)*, the seven span bytes in hex, and a Warning lamp: O1's rule.
+When the `'MO'` block is not found at all the row is *Boot record: not
+published*.
+
+Below step 2 the command byte was never read and the row is not shown; below
+step 7 the ID was never banked and its row is not shown either. A row that
+shows a zero the kernel never wrote would be the one thing a diagnostic may not
+do.
+
+#### 126.7.3 The verdict
+
+One line, and the section's lamp, from `[mou_p2st]` and `[mou_p2]`:
+
+| record | lamp | line |
+|---|---|---|
+| step 0 | Warning | `Probe not in this kernel, or 0xAD refused.` - kern_small and `NOPS2=1` never carry the probe (§9.9.2), and a controller that never took `0xAD` leaves the same 0. The shipped kernel cannot tell the two apart; *Probe PS/2* can |
+| 1 | Problem | `No command byte from the 8042.` |
+| 2 | Warning | `No aux port, or it is off in BIOS Setup.` |
+| 3 | Problem | `The 8042 refused a command write.` |
+| 4 | Warning | `No reply to the reset: is a mouse in?` - or §9.9.1's bit 4 rule broken on this controller and int 09h eating the replies (§9.9.6); the probe's leg 3 separates those |
+| 5, 6 | Problem | `Reset ACKed; its self-test failed.` / `Self-test passed; no ID came.` |
+| 7, 8 | Problem | `Reset OK; the IRQ12/0xF4 enable failed.` (7 is never left behind: nothing between it and 8 can fail) |
+| 9, live, byte 0 synced | OK | `The PS/2 mouse is the pointer.` |
+| 9, live, no packet | Warning | `Armed; no packet yet: move it.` - and none at all is §9.9.6's *the line never fires* |
+| 9, not live | Info | `It answered; a serial mouse won.` (§9.9.4) |
+
+**Then the cross-check that matters most for a field report**: when the record
+is below step 9 and the equipment word's bit 2 is set, a second line, `Yet the
+BIOS saw one at POST: report it.`, and the Problem lamp. The BIOS found a
+pointing device and the kernel did not, which is a kernel defect on that
+machine and exactly what the reporter's Advantech SBC looks like from here.
 
 ### 126.8 PS/2: the live probe
 
-*(Pending: ps2.)*
+*Shipped in wave 2 (`apps/mousechk/probe.inc`, owner `ps2`; owner decision O2).
+Seen on QEMU's i8042 on a private `NOPS2=1` tree.*
+
+*Probe PS/2* (P) runs §9.9.1's handshake again, step by step, and then the
+roads §9.9.1 did not take, and records a **trace**: per step, the command, the
+8042's status at 64h before and after it, and each reply byte or the ticks it
+waited for one that never came. The trace appears under the boot record in the
+same section and is in the report and on the clipboard with everything else.
+
+#### 126.8.1 What it refuses, and why
+
+`p2_canprobe` answers CF = 1 with a reason (toasted on a press, and the button
+greyed, §47):
+
+| reason | when | why |
+|---|---|---|
+| `No 8042 on an 8088 PC` | `CPU_8086` | no 8042, and 64h is not decoded (§9.9.2) |
+| `No kernel mouse record` | no `'MO'` block | the kernel's claim on the port cannot be known |
+| `Kernel's PS/2 mouse live` | `[mou_p2]` set | the device is the kernel's pointer: a probe would reset it under the ISR decoding its packets |
+| `Kernel already found it` | `[mou_p2st]` = 9 | the handshake completed. A serial mouse may have won since and `mou_p2_off` retired it, but the device is the kernel's, int 74h is the kernel's, and the boot record already says everything a probe could |
+| `Kernel's IRQ12 is armed` | int 74h's segment is 0060h **and** IRQ12 is open at the slave | read live, whatever the record says: the belt to the record's braces, and the only gate on a kernel whose record cannot be decoded |
+
+**Step 8 is allowed, and that is the exact rule.** `mouse_unhook` treats
+`[mou_p2st]` >= 8 as "int 74h is ours", because step 8 is the store that
+follows the vector's installation. But a step-8 record is a probe that
+installed the vector and then failed to arm or enable the device, and its
+`.fail` left IRQ12 **masked** (§9.9.1). The probe keeps IRQ12 masked for its
+whole length, never writes the vector and never sends `0xF4`, so the kernel's
+ISR cannot be entered - and a step-8 failure is exactly what a trace exists to
+explain. The live check above is what would refuse it if IRQ12 were open.
+
+**kern_mega is allowed.** kern_mega runs every package at ring 0 (docs/plans/KERN-MEGA-PLAN.md 2.5: "it also fixes the ring at 0", and 22 packages already program video ports inside fsx brackets), so a package's `in`/`out`
+is the port itself, untrapped. Its tick watchdog `mega_kwd` (§9.9.9)
+re-delivers a byte only on a line that is **unmasked**, and the probe masks
+both. What kern_mega does not get is the BIOS leg (§126.8.4).
+
+#### 126.8.2 The legs, in order, and why that order
+
+The discipline is the kernel's, step for step:
+
+- **IRQ1 masked at the master and IRQ12 at the slave for the whole probe**,
+  under `pushf`/`cli`, each banked and put back **bit by bit** (no other bit
+  of either byte is the probe's to restore). A BIOS `int 09h` or a BIOS IRQ12
+  handler reading 60h is what took the kernel's replies on real hardware for
+  six rounds (§9.9.1).
+- **`0xAD` first**, and every command byte written inside the window keeps
+  **bit 4 SET**, so the keyboard interface is never handed back mid-probe.
+- The command byte is banked as read with bit 4 cleared - **the raw byte**,
+  never one with bit 5 forced (§9.9.7: on an AT 8042 bit 5 is PC mode).
+- **Waits are ticks**, read through `OSAPI_GET_TICKS`: 2 ticks a step
+  (`MOU_P2TMO`), the reset's self-test the same short wait retried 5 times
+  (`MOU_P2BAT`). IRQ0 is never masked, so `[ticks]` advances while the UI task
+  sits in the callback, and no wait can hang.
+- Flushes after `0xAD` and after `0xA8` (§9.9.6: a mouse's queued power-on
+  BAT lands the instant the port is enabled), and **before** `0xAE` so a
+  keystroke arriving as the keyboard comes back is not drained away.
+- **`0xF4` is never sent and IRQ12 never armed** (command byte bit 1 is
+  cleared in every byte written inside the window): the device is not the
+  package's, and every reset leaves it with reporting off.
+- **A write the 8042 never takes** (IBF still set after 2 ticks) marks the
+  controller wedged: every later leg is skipped (`the 8042 stalled`) and only
+  the restore is attempted.
+
+The legs:
+
+| leg | what | why |
+|---|---|---|
+| 1, *kernel* | §9.9.1 exactly: `AD`, flush, `20` and the bank, the bit 1 / bit 5 evidence test and, with no evidence, `A8` + flush + `20` and bit 5; then `A8` + flush, `60` with the bank's bits 1 and 5 cleared and bit 4 set, `D4 FF` and its `FA`, the `AA` (5 short waits) and the ID. It stops where the kernel would commit (the wheel knock, the vector, `0xF4`); a reset that worked is followed by `D4 F2`, which is not the kernel's step | so the trace shows exactly where the kernel's road stops **on this machine**, in the kernel's terms |
+| 2, *reset, kbd off* | `60` (aux clock on, bit 4 set), `A8`, `D4 FF`, `D4 F2` - whatever the command byte said. **Skipped when leg 1 reached its own reset** (step 4 or later): it would be leg 1's reset again | does a mouse answer if asked anyway? When it does, the kernel's evidence test is what is wrong here |
+| 3, *reset, kbd on* | the same with the keyboard interface **on** (`AE` after the `60`), the keyboard's queued bytes drained first (the Probe key's release), then `AD` again | the one thing different from the kernel is step 1's bracket: does this 8042 pass `D4` only with the keyboard enabled? |
+| 4, *A8, reread* | `A8`, `20`, did bit 5 clear? **Skipped when the bank's bit 5 is already clear**: seeing `A8` work needs the bit set first, and setting it ourselves is PC mode on an AT 8042 (§9.9.7) | §9.9.1's fallback road on its own, and whether `A8` leaves the controller deaf (the Phoenix case) |
+| 5, *A9 test* | `A9` and its answer (`00` the lines test good, `01`-`04` a stuck clock or data line), then `20`: does it still answer? | **last**, because §9.9.1 records `A9` leaving a controller deaf, and a deaf one costs every leg after it |
+
+Every leg ends with **`A7`, the bank with bit 4 set, a flush** (the kernel's
+`.fail`, with the raw byte). The probe ends with one more `20` (the byte as
+it now stands), the bank written back with bit 4 clear, a flush, **`0xAE` on
+every path**, and the two mask bits. A device that answered leg 1's `0xAA` in
+three-byte mode may have been a wheel mouse: no leg knocks, so it is left
+reset, three-byte and silent, and the kernel does not own it.
+
+Inside a leg a reply that came **without 64h's aux bit** (bit 5, which a PS/2
+8042 sets for the aux side's byte) is from the keyboard side. On a `D4 FF` or a
+`D4 F2` that is marked `k`, and it means §9.9.1 step 3's warning came true: the
+controller ignored `0xD4` and the keyboard answered `FA AA` as if it were a
+mouse.
+
+#### 126.8.3 What the trace looks like, and how to read a field report
+
+TRACE_EXAMPLE
+
+Each step line is `name[arg]  64h-before>64h-after  replies  ticks`: `none`
+means a reply was waited for and never came, `STALL` that the 8042 never took
+a write, `+` that more bytes came than three, `k` a device reply from the
+keyboard side, and the ticks are how long the step waited in all (a reset's
+`AA` may take several of its 2-tick waits). Each leg's heading carries its
+result. Under them:
+
+- **`Command byte 55>55: restored`** is the proof the controller came back:
+  the byte read straight after `0xAD` against the byte read at the very end,
+  before the bank is written back. Both have bit 4 set (it is `0xAD`'s), so
+  they are equal exactly when every leg's restore took. `NOT RESTORED` raises
+  the Problem lamp: restart the machine before using its keyboard for anything
+  that matters.
+- **`Verdict:`** names the kernel's step where leg 1 stopped, in the boot
+  record's words, and then the first road that worked: leg 2 (`A plain reset
+  finds it`: the evidence test misreads this controller), leg 3 (`Found only
+  with kbd ON`: step 1's bracket is the difference), an aux port with no
+  device (leg 5's `00` or leg 4's bit 5 clearing: the cable, the mouse, the
+  Setup option), `Deaf after 0xA8` (§9.9.1's Phoenix 8042), or `No aux port,
+  or it is off in BIOS Setup.` When leg 1 succeeds the verdict is that the
+  kernel's road works **now** - so the boot was the problem (not ready yet,
+  or, on a step-8 record, the enable).
+
+Reading one from the field, in order: the boot record's step, then the
+equipment word (did the BIOS see a mouse?), then leg 1's last line (where the
+kernel's road stops here), then the first leg with `a device, ID`, then the
+`k` marks. A kernel fix for that machine is the difference between leg 1 and
+that leg.
+
+#### 126.8.4 The BIOS leg (opt-in)
+
+For ten seconds after a probe finishes, a line offers it and a second press
+of *Probe PS/2* runs **leg 6, the BIOS's own `int 15h` AX=C2xx interface**,
+which §9.9.5 rejects for the kernel and which is exactly the comparison a field
+report needs: `C205` BH=3 (initialise, three-byte packets), `C201` (reset; BH
+the ID), `C204` (device type; BH the ID), `C200` BH=0 (disable). Each line
+shows AH (the status), BH and BL, and `CF` when the BIOS set carry. It runs
+with the machine as the probe left it - as it found it: the keyboard on,
+IRQ12 as the kernel left it - because a BIOS that waits on its own IRQ12 must
+be let. **Never `C207`** (no handler is ours to give it) **and never `C200`
+BH=1** (enable). Then the controller is put back the probe's way: masks, `AD`,
+`20` (what the BIOS left, on the trace), `A7` and the bank, the bank, `AE`,
+and the mask bits to the **probe's** bank, so whatever the BIOS did to them is
+undone.
+
+It is **not offered on kern_mega** (`CPU_F_PM`): a BIOS call there is
+reflected, on a 286 through a CPU reset, and the BIOS's IRQ12 handler would run
+reflected too, so the answer would not be about the same machine.
+
+#### 126.8.5 Cost and limits
+
+The trace store is 42 entries of 9 bytes (op, arg, status before, status
+after, flags, three replies, ticks) - 378 bytes of bss, enough for every leg
+and the BIOS leg in their longest forms (42 entries); a store that fills
+writes into one scratch entry, so nothing overruns. A probe on a machine
+whose every step times out costs about 25 waits of 2 ticks, under three
+seconds, during which the UI task is busy and the pointer still moves (it is
+the ISR's). **What QEMU cannot show**: its i8042 always has an aux port with a
+mouse on it, sets the aux bit on every aux byte and answers `A9` with `00`, so
+legs 2 and 4, the `k` mark, the `STALL` path and every failure verdict are
+read from the source here and need a field machine. And a probe that races a
+second task's `int 15h` block move (`AH=87h` toggling A20 through the same
+8042) would see that task's bytes in its trace; nothing in a shipped system
+does that while the UI task is in a callback, and the restore still runs.
 
 ### 126.9 VMware absolute, USB, the keyboard mouse
 
