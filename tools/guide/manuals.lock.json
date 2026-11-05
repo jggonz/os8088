@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "f87bdb18",
-  "strings": "c76d87430df46fe3",
-  "why": "sprite rows by cells, c8spr whole bytes"
+  "stamped": "25c344bc",
+  "strings": "fb0264ca369dbc30",
+  "why": "menus trimmed, frame skip items"
  },
  "CALC_O88": {
   "sources": [
