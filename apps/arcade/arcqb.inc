@@ -26,15 +26,14 @@
 ; plane at a time. No pixel is written twice (PERFORMANCE.md rule 2).
 ; =============================================================================
 
-QB_TILES    equ 0x6000              ; ROM part (arcqbgfx.py): a tile's planes
-QB_YIELDS   equ 0x8800              ;   the yields: a count, their addresses
+QB_TILES    equ 0x6000              ; ROM part (qb_build): a tile's planes
 QB_FULL     equ 0x8840              ;   a sprite code's byte: 1 = has pixels
+QB_ROMKB    equ 35                  ;   0000-893F
+QB_SPRKB    equ 40                  ; the sprite part: 256 x 160 bytes
 QB_PROGLEN  equ 0x6000              ;   the program, for A000h
 QB_XB       equ 10                  ; the picture's left edge: byte 10 (80 px)
 QB_DSW      equ 0x02                ; the DIPs: MAME's defaults (the kicker on)
 QB_IN1REST  equ 0x40                ; IN1 at rest: the service switch is off
-QB_MANY     equ 96                  ; more tiles than this changed: the whole
-                                    ;   screen in 4 x 4 blocks is cheaper
 QB_SP0      equ 0x1FF0 - 20         ; the game's first stack: the frame that
                                     ;   n88_resume pops (7 registers, FLAGS,
                                     ;   IP, CS)
@@ -44,9 +43,11 @@ QBS_CODE    equ 4
 QBS_SIZE    equ 6
 QB_NSPR     equ 64
 QB_SKIPMAX  equ 20                  ; frames the picture may wait, in a row
-QB_LATE     equ 30                  ; frames the host may fall behind before
+QB_LATE     equ 240                 ; frames the host may fall behind before
                                     ;   it drops one (BD_LATE): on an 8088 a
-                                    ;   picture can take five, and the game's
+                                    ;   box can take two and the whole screen
+                                    ;   (an attract mode's change of scene)
+                                    ;   about 107 (MEASURED), and the game's
                                     ;   own frames catch up at 8k cycles each
 QB_SHPL     equ 256 * 30            ; the shadow of the glass: a byte a plane
                                     ;   for 8 portrait pixels, plane p at
@@ -57,6 +58,8 @@ QB_SHPL     equ 256 * 30            ; the shadow of the glass: a byte a plane
 ; qb_on / qb_off - Q*bert picked, and given back: G, the game's 64KB
 ; -----------------------------------------------------------------------------
 qb_on:
+    mov word [qb_rclaim], 0
+    mov word [qb_sclaim], 0
     mov ax, 64
     call OSAPI_MEM_CLAIM
     jc .r
@@ -79,6 +82,227 @@ qb_off:
     call OSAPI_MEM_FREE
     mov word [qb_gseg], 0
     mov word [qb_shseg], 0
+    mov si, qb_rclaim               ; ...and the parts qb_build made
+    call .free
+    mov si, qb_sclaim
+.free:
+    xor dx, dx
+    xchg dx, [si]
+    or dx, dx
+    jz .r
+    call OSAPI_MEM_FREE
+.r:
+    ret
+
+; -----------------------------------------------------------------------------
+; qb_build - Q*bert's BD_BUILD (docs/plans/ARCADE-RELEASE-PLAN.md 2.4): the
+; user's image (ar_rimg: the program at 0, the tiles at 6000h, the sprite
+; planes at 8000h, MSB first) made into what arcqbgfx.py made on the host
+; before - the ROM part (ar_rseg: the program with qbert.patch applied, the
+; tiles turned to planes and opaque bytes, each sprite code's FULL byte) and
+; the sprite part (ar_aseg: the sprites turned, five words a row). The patch
+; is qbpatch.inc: arcqbgfx.py checked every line against the pinned ROM, and
+; the user's image is that ROM, by its CRC32. BX = the board. CF=1: no
+; memory, a toast. Kept: BX
+; -----------------------------------------------------------------------------
+qb_build:
+    push bx
+    mov ax, QB_ROMKB
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov [qb_rclaim], dx
+    mov [ar_rseg], dx
+    mov ax, QB_SPRKB
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov [qb_sclaim], dx
+    mov [ar_aseg], dx
+    mov es, dx                      ; both made from nothing
+    xor di, di
+    xor ax, ax
+    mov cx, QB_SPRKB * 512
+    cld
+    rep stosw
+    mov es, [ar_rseg]
+    mov di, QB_PROGLEN
+    mov cx, (QB_ROMKB * 1024 - QB_PROGLEN) / 2
+    rep stosw
+    push ds                         ; the program, then the patch
+    mov ds, [ar_rimg]
+    xor si, si
+    xor di, di
+    mov cx, QB_PROGLEN / 2
+    rep movsw
+    pop ds
+    mov si, qb_patches
+.p:
+    lodsb
+    cmp al, 0xFF
+    je .patched
+    mov di, [si]
+    sub di, 0xA000
+    mov cl, [si+2]
+    xor ch, ch
+    add si, 3
+    cmp al, 1
+    jb .nops
+    je .up
+    mov word [es:di], 0x009A        ; call far 0000:0000 / nop - qb_reset
+    mov word [es:di+2], 0           ;   writes the pointer
+    mov word [es:di+4], 0x9000
+    jmp .p
+.nops:
+    mov al, 0x90
+    rep stosb
+    jmp .p
+.up:
+    add byte [es:di], 8             ; 5800-5807h to 5808-580Fh
+    jmp .p
+.patched:
+    push ds
+    mov ds, [ar_rimg]               ; DS = the image, ES = the ROM part
+    call qbb_tiles
+    mov es, [cs:ar_aseg]
+    call qbb_sprites
+    pop ds
+    call ar_freeimg
+    pop bx
+    clc
+    ret
+.nomem:
+    mov si, ar_s_nomem
+    call ar_toast
+    pop bx
+    stc                             ; (qb_off gives back what was made)
+    ret
+
+; qbb_tiles - each tile's portrait (row r, column c) is the board's (x = 7 -
+; r, y = c): the nibble at 6000h + tile x 32 + y x 4 + x / 2, the high one at
+; an even x. To ES:6000h + tile x 40: plane p's 8 rows at p x 8, then the
+; 8 rows' opaque bytes. DS = the image
+qbb_tiles:
+    mov bp, 0x6000                  ; BP = the tile's 32 bytes
+    mov di, QB_TILES                ; DI = its 40
+.tile:
+    xor dx, dx                      ; DL = r
+.row:
+    mov bl, 7                       ; x = 7 - r: its byte across, its nibble
+    sub bl, dl
+    mov cl, bl
+    shr bl, 1
+    xor bh, bh
+    add bx, bp
+    mov ch, 0x80                    ; the column's bit, c = 0 first
+.col:
+    mov al, [bx]
+    test cl, 1
+    jnz .low
+    shr al, 1
+    shr al, 1
+    shr al, 1
+    shr al, 1
+.low:
+    and al, 15
+    jz .z
+    push bx
+    mov bl, dl
+    xor bh, bh
+    or [es:di+bx+32], ch            ; opaque
+    mov ah, al
+%assign P 0
+%rep 4
+    shr ah, 1
+    jnc .p%[P]
+    or [es:di+bx+P*8], ch
+.p%[P]:
+%assign P P+1
+%endrep
+    pop bx
+.z:
+    add bx, 4                       ; y + 1
+    shr ch, 1
+    jnz .col
+    inc dl
+    cmp dl, 8
+    jb .row
+    add bp, 32
+    add di, 40
+    cmp di, QB_TILES + 256 * 40
+    jb .tile
+    ret
+
+; qbb_sprites - each sprite's portrait (row r, column c) is the board's (x =
+; 15 - r, y = c): plane q's bit at 8000h + q x 2000h + code x 32 + y x 2 + x
+; / 8 (q 0 the value's bit 3). To ES:code x 160 + r x 10: the opaque word,
+; then planes 0-3, bit 15 the left pixel; the ROM part's FULL byte for a code
+; with any. DS = the image
+qbb_sprites:
+    xor bp, bp                      ; BP = code x 32
+    xor di, di                      ; DI = code x 160
+.code:
+    xor dx, dx                      ; DH = r
+.row:
+    mov cl, 15                      ; x = 15 - r: its byte across (BX) and
+    sub cl, dh                      ;   its bit (DL)
+    mov bl, cl
+    and cl, 7
+    mov dl, 0x80
+    shr dl, cl
+    shr bl, 1
+    shr bl, 1
+    shr bl, 1
+    xor bh, bh
+    add bx, bp
+    add bx, 0x8000                  ; plane 0's byte for y = 0
+    ; each plane's 16 columns gathered into a word, column 0 the top bit:
+    ; AND the pixel's bit, NEG puts "any" in CF, RCL takes it in - unrolled,
+    ; because this is 262,144 pixels a pick and the loop was most of 7.5 s
+    ; on the 8088 (MEASURED, MartyPC)
+%assign Q 0
+%rep 4
+%assign C 0
+%rep 16
+    mov al, [bx+Q*0x2000+C*2]
+    and al, dl
+    neg al
+    rcl si, 1
+%assign C C+1
+%endrep
+    mov [es:di+(4-Q)*2], si         ; plane 3 - Q is the value's bit 3 - Q
+%assign Q Q+1
+%endrep
+    mov ax, [es:di+2]               ; the opaque word: any plane
+    or ax, [es:di+4]
+    or ax, [es:di+6]
+    or ax, [es:di+8]
+    mov [es:di], ax
+    add di, 10
+    inc dh
+    cmp dh, 16
+    jb .row
+    sub di, 160                     ; any opaque: the FULL byte
+    xor ax, ax
+    mov cx, 16
+.f:
+    or ax, [es:di]
+    add di, 10
+    loop .f
+    or ax, ax
+    jz .empty
+    push es
+    mov es, [cs:ar_rseg]
+    mov si, bp
+    shr si, 1
+    shr si, 1
+    shr si, 1
+    shr si, 1
+    shr si, 1
+    mov byte [es:QB_FULL+si], 1
+    pop es
+.empty:
+    add bp, 32
+    cmp bp, 0x2000
+    jb .code
     ret
 
 ; -----------------------------------------------------------------------------
@@ -116,18 +340,20 @@ qb_reset:
     mov di, 0xA000
     mov cx, QB_PROGLEN / 2
     rep movsw
-    mov si, QB_YIELDS
-    lodsw
-    mov cx, ax
-    jcxz .ydone
-.y:
-    lodsw
-    mov di, ax
+    pop ds
+    mov si, qb_patches              ; each yield (qbpatch.inc, kind 2): its
+.y:                                 ;   far pointer, the N88 core's
+    lodsb
+    cmp al, 0xFF
+    je .ydone
+    mov di, [si]
+    add si, 3
+    cmp al, 2
+    jne .y
     mov [es:di+1], bx               ; call far n88:yield
     mov [es:di+3], dx
-    loop .y
+    jmp .y
 .ydone:
-    pop ds
     mov di, QB_SP0                  ; the first run's frame: no registers,
     xor ax, ax                      ;   FLAGS with IF clear, and A000h - the
     mov cx, 7                       ;   reset's own `jmp B259h`
@@ -215,6 +441,7 @@ qb_setup:
     cld
     rep stosw
     mov byte [qb_skips], 0
+    mov byte [qb_dnext], 0
     mov byte [qb_palok], 0          ; the DAC from the board's palette
     call qb_palette
     mov es, [qb_gseg]               ; the background's priority now
@@ -249,14 +476,16 @@ qb_frame:
     and al, 1
     cmp al, [qb_pri]
     je .tiles
-    mov [qb_pri], al
-    mov byte [qb_srok], 0
-    call qb_sprites
-    jmp qb_whole
+    mov [qb_pri], al                ; all of it again AT ONCE: a few times a
+    call qb_sprites                 ;   minute, and a box left for later
+    jmp qb_whole                    ;   would show the old order exactly where
+                                    ;   a sprite crosses a tile (107 frames on
+                                    ;   the 8088, inside QB_LATE)
 .tiles:
     call qb_sprites                 ; qb_cur from the board
     pushf
-    call qb_tiles
+    call qb_tiles                   ; the boxes whose tiles changed, marked
+    call qb_boxes                   ;   ...and a few of them drawn
     popf
     jc .still
     jmp qb_movers
@@ -444,13 +673,12 @@ qb_sprites:
     clc
     ret
 
-; qb_tiles - every tile whose byte changed since the copy, recomposed; past
-; QB_MANY, the whole screen instead. The board's screen is rows 0-29 of its
-; 32 x 32 map, 960 bytes
+; qb_tiles - every tile whose byte changed since the copy: its 4 x 4 box
+; marked, for qb_boxes. The board's screen is rows 0-29 of its 32 x 32
+; map, 960 bytes
 qb_tiles:
     push ds
     pop es
-    mov word [qb_nlist], 0
     xor bx, bx
 .scan:
     push ds
@@ -477,54 +705,87 @@ qb_tiles:
     mov [qb_vcopy+bx], ax
     cmp al, dl
     je .hi
-    call .list
+    call .mark
 .hi:
     inc bx
     cmp ah, dh
     je .next
-    call .list
+    call .mark
 .next:
     inc bx
     cmp bx, 960
     jb .scan
 .scanned:
-    cmp word [qb_nlist], QB_MANY
-    ja qb_whole
-    xor si, si
-.draw:
-    cmp si, [qb_nlist]
-    jae .out
-    push si
-    shl si, 1
-    mov bx, [qb_list+si]            ; a landscape index: its portrait tile
-    mov ax, bx                      ;   is column index / 32, row 31 - the
-    mov cl, 5                       ;   index's low five bits
-    shr ax, cl
+    ret
+.mark:                              ; BX = a changed landscape index: its
+    push bx                         ;   portrait tile is column index / 32,
+    push cx                         ;   row 31 - (index AND 31), and its box
+    mov ax, bx                      ;   row / 4 x 8 + column / 4
+    mov cl, 7
+    shr ax, cl                      ; column / 4
     and bx, 31
     neg bx
     add bx, 31
-    mov cx, 1
-    mov dx, 1
-    call qb_compose
-    pop si
-    inc si
-    jmp .draw
-.out:
+    shr bx, 1
+    shr bx, 1                       ; row / 4
+    mov cl, 3
+    shl bx, cl
+    add bx, ax
+    mov byte [qb_dirty+bx], 1
+    pop cx
+    pop bx
     ret
-.list:                              ; BX = a changed tile, to the list
-    mov si, [qb_nlist]
-    cmp si, QB_MANY
-    ja .full
-    shl si, 1
-    mov [qb_list+si], bx
-.full:
-    inc word [qb_nlist]
+
+; qb_boxes - the boxes whose tiles changed, composed, taken in turn from
+; where the last frame stopped, UNTIL THE NEXT FRAME IS DUE (one at least).
+; A change of scene marks every box: a 286 draws them all in a frame, and an
+; 8088 over as many frames as it needs instead of in one draw of 1.7 s that
+; the game's own time could not wait for (MEASURED: the board fell behind
+; and dropped, ARCADE-SPEC 10.5)
+qb_boxes:
+    mov cx, 64
+.b:
+    mov bl, [qb_dnext]
+    xor bh, bh
+    inc byte [qb_dnext]
+    and byte [qb_dnext], 63
+    cmp byte [qb_dirty+bx], 0
+    je .next
+    mov byte [qb_dirty+bx], 0
+    push cx
+    mov ax, bx                      ; across: (box AND 7) x 4, 4 wide but
+    and ax, 7                       ;   the last (two tiles: 30 across)
+    shl ax, 1
+    shl ax, 1
+    mov cx, 30
+    sub cx, ax
+    cmp cx, 4
+    jbe .w
+    mov cx, 4
+.w:
+    shr bx, 1                       ; down: (box / 8) x 4
+    and bx, 0x1C
+    mov dx, 4
+    call qb_compose
+    call pit_now                    ; the next frame due: stop there
+    sub ax, [ar_due]
+    sbb dx, [ar_due+2]
+    pop cx
+    jns .out
+.next:
+    loop .b
+.out:
     ret
 
 ; qb_whole - the whole screen, in 4 x 4 tiles, the copy of the tiles first
 qb_whole:
     push ds
     pop es
+    mov di, qb_dirty                ; (nothing left to draw after it)
+    mov cx, 32
+    xor ax, ax
+    cld
+    rep stosw
     push ds
     mov ds, [qb_gseg]
     mov si, 0x3800

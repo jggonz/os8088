@@ -11,6 +11,13 @@
 #     python3 tools/getarcrom.py invaders --check               (cache only)
 #     python3 tools/getarcrom.py pacman --from <dir-or-zip>     (the owner's;
 #                                                                never fetched)
+#     python3 tools/getarcrom.py qbert --rom-file build/arcade/roms/QBERT.ROM
+#
+# --rom-file writes the image as ARCADE's `<SET>.ROM` (ARCADE-SPEC 1.4): a
+# 32-byte header - 'ARCROM', a version, the set's name, the image's length
+# and its CRC32 - then the image. That is the file the package loads at a
+# pick, what the guest's own import will write, and what a release disk
+# never carries.
 #
 # NOTHING THIS SCRIPT DOWNLOADS IS COMMITTED (CONTRIBUTING.md 6), exactly as
 # tools/getapple2rom.py's Apple II ROMs are not. The zip is fetched from ONE
@@ -249,14 +256,47 @@ def members_in_zip(data, want, what):
     return out
 
 
+ROMFILE_VER = 1
+
+
+def rom_file(name, img):
+    """ARCADE's <SET>.ROM: the header, then the image (ARCADE-SPEC 1.4)."""
+    import struct
+    import zlib
+    head = b'ARCROM' + bytes([ROMFILE_VER, 0]) + name.upper().encode().ljust(8, b'\0')
+    head += struct.pack('<II', len(img), zlib.crc32(img) & 0xFFFFFFFF) + bytes(8)
+    return head + img
+
+
+def write_rom_file(path, name, img):
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    tmp = path + '.tmp'
+    open(tmp, 'wb').write(rom_file(name, img))
+    os.replace(tmp, path)
+    print('getarcrom: %s -> %s (%d bytes, ARCADE\'s .ROM)' % (name, path, len(img) + 32))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('set', choices=sorted(SETS))
     ap.add_argument('-o', '--output')
     ap.add_argument('--from', dest='src')
     ap.add_argument('--check', action='store_true')
+    ap.add_argument('--rom-file', help="write ARCADE's <SET>.ROM there as well")
+    ap.add_argument('--from-image', help='a board image this script wrote: every '
+                    'chip checked again where it sits, nothing fetched')
     a = ap.parse_args()
     s = SETS[a.set]
+    if a.from_image:
+        img = open(a.from_image, 'rb').read()
+        if len(img) != s['size']:
+            die('%s: %d bytes, not the %s image' % (a.from_image, len(img), a.set))
+        for n, at, sha in s['members']:       # a chip is 1, 2, 4 or 8KB (or
+            if not any(hashlib.sha256(img[at:at + k]).hexdigest() == sha   # a
+                       for k in (0x20, 0x100, 0x400, 0x800, 0x1000, 0x2000)):  # PROM)
+                die('%s: %s at %04X is not the pinned chip' % (a.from_image, n, at))
+        write_rom_file(a.rom_file or a.output, a.set, img)
+        return
     if a.src:
         got = members_from(a.src, s)
     elif s['url'] is None:
@@ -274,6 +314,10 @@ def main():
         img[at:at + len(d)] = d
     if a.check:
         print('getarcrom: %s is cached and checks' % a.set)
+        return
+    if a.rom_file:
+        write_rom_file(a.rom_file, a.set, bytes(img))
+    if a.rom_file and not a.output:
         return
     out = a.output or os.path.join(CACHE, a.set.upper() + '.ROM')
     os.makedirs(os.path.dirname(os.path.abspath(out)), exist_ok=True)

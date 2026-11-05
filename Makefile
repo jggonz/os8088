@@ -11512,8 +11512,9 @@ $(ARCQBROM): tools/getarcrom.py | $(BUILD)
 	python3 tools/getarcrom.py qbert -o $@
 $(BUILD)/arcade/QBROM.PRT: apps/arcade/arcqbgfx.py apps/arcade/qbert.patch $(ARCQBROM)
 	@mkdir -p $(BUILD)/arcade
-	python3 apps/arcade/arcqbgfx.py $(ARCQBROM) apps/arcade/qbert.patch $@ $(BUILD)/arcade/QBSPR.PRT
-$(BUILD)/arcade/QBSPR.PRT: $(BUILD)/arcade/QBROM.PRT
+	python3 apps/arcade/arcqbgfx.py $(ARCQBROM) apps/arcade/qbert.patch $@ \
+		$(BUILD)/arcade/QBSPR.PRT $(BUILD)/arcade/qbpatch.inc
+$(BUILD)/arcade/QBSPR.PRT $(BUILD)/arcade/qbpatch.inc: $(BUILD)/arcade/QBROM.PRT
 $(BUILD)/arcade/qbcode.bin: apps/arcade/arcn88.asm apps/arcade/arcdefs.inc
 	@mkdir -p $(BUILD)/arcade
 	$(NASM) -f bin -w+error -I apps/arcade/ -o $@ $<
@@ -11577,20 +11578,37 @@ ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.i
               apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc
-ARCADE_PARTS := $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) \
-                $(BUILD)/arcade/pt2code.bin $(BUILD)/arcade/pt2aux.bin $(ARCPT2ROM) \
-                $(BUILD)/arcade/lrcode.bin $(BUILD)/arcade/lraux.bin $(ARCLRROM) \
-                $(BUILD)/arcade/gfcode.bin $(BUILD)/arcade/gfaux.bin $(ARCGFROM) \
-                $(BUILD)/arcade/swcode.bin $(BUILD)/arcade/swaux.bin $(ARCSWROM) \
-                $(BUILD)/arcade/qbcode.bin $(BUILD)/arcade/QBSPR.PRT $(BUILD)/arcade/QBROM.PRT
+# WHAT SHIPS HAS NO ROM IN IT (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): each
+# translated board's RECIPE (.rcp: its code with the ROM's bytes as holes,
+# and the fill list) and its PC table; Q*bert's N88 core. The ROMs are the
+# user's <SET>.ROM files, read at a pick; `make arcaderoms` writes them here
+# from the pinned sets, and only the DEVELOPMENT disk (arcadedisk) carries
+# them, beside ARCADE.O88. The full translations (.bin) stay in build/ for
+# the lockstep rows and for tests/arcrecipe.py's identity check.
+ARCADE_PARTS := $(BUILD)/arcade/invcode.rcp $(BUILD)/arcade/invaux.bin \
+                $(BUILD)/arcade/pt2code.rcp $(BUILD)/arcade/pt2aux.bin \
+                $(BUILD)/arcade/lrcode.rcp $(BUILD)/arcade/lraux.bin \
+                $(BUILD)/arcade/gfcode.rcp $(BUILD)/arcade/gfaux.bin \
+                $(BUILD)/arcade/swcode.rcp $(BUILD)/arcade/swaux.bin \
+                $(BUILD)/arcade/qbcode.bin
 ARCADE_DEF :=
+ARCROMS := $(addprefix $(BUILD)/arcade/roms/,INVADERS.ROM INVADPT2.ROM LRESCUE.ROM \
+                                             GUNFIGHT.ROM SEAWOLF.ROM QBERT.ROM)
 ifneq ($(ARC_PM),)
-ARCADE_PARTS += $(BUILD)/arcade/paccode.bin $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/PACMAN.PRT
+ARCADE_PARTS += $(BUILD)/arcade/paccode.rcp $(BUILD)/arcade/pacaux.bin
 ARCADE_DEF := -DARC_PACMAN
+ARCROMS += $(BUILD)/arcade/roms/PACMAN.ROM
 endif
 ARCADE_PARTS += $(BUILD)/arcade/INVSFX.PRT      # lazy, so last (SPEC.md 20.12.4)
-$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) | $(BUILD)
-	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ $<
+$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) $(BUILD)/arcade/qbpatch.inc | $(BUILD)
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I $(BUILD)/arcade/ \
+		-I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ $<
+
+# A user's <SET>.ROM (ARCADE-SPEC 1.4), from the image each set's rule made
+$(BUILD)/arcade/roms/%.ROM: $(BUILD)/arcade-rom/%.ROM tools/getarcrom.py
+	python3 tools/getarcrom.py $(shell echo $* | tr A-Z a-z) --from-image $< --rom-file $@
+#> [Applications] arcaderoms :: write each set's ARCADE .ROM file (build/arcade/roms/) from the pinned ROMs - never committed, never on a release disk
+arcaderoms: $(ARCROMS)
 
 $(BUILD)/arcade.o88: $(BUILD)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
@@ -11602,10 +11620,10 @@ arcade: $(BUILD)/arcade.o88
 arclock: $(BUILD)/arcade/invcode.bin
 	python3 tests/arclock.py $(BUILD)/arcade/invcode.bin $(BUILD)/arcade/invaux.bin $(ARCROM) --frames 600
 
-ARCADEDISK := $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+ARCADEDISK := $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py $(ARCROMS)
 ARCADEIMG = python3 tools/os88disk.py -o $(1) --size $(2) \
-	    $(BUILD)/arcade.o88 apps/arcade/README.TXT
-#> [Applications] arcadedisk :: the ARCADE floppies in four geometries (fetches the ROM)
+	    $(BUILD)/arcade.o88 apps/arcade/README.TXT $(ARCROMS)
+#> [Applications] arcadedisk :: the ARCADE DEVELOPMENT floppies in four geometries: the package and every set's .ROM beside it (fetches the ROMs)
 arcadedisk: $(BUILD)/arcade.img $(BUILD)/arcade720.img \
             $(BUILD)/arcade120.img $(BUILD)/arcade360.img
 

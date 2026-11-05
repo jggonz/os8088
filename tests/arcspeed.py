@@ -61,6 +61,8 @@ def main():
     ap.add_argument('--apps', default='build/arcade360.img')
     ap.add_argument('--game', help="a Game menu item: another board than the first")
     ap.add_argument('--hz', type=float, default=BOARD_HZ, help="the board's frame rate")
+    ap.add_argument('--boot', type=int, default=300, help="the board's power-on, in "
+                    "frames before the coin (Q*bert ignores a coin for its first seconds)")
     a = ap.parse_args()
     bad = []
     with os88ui.boot(a.system, apps=a.apps, machine=a.machine, quick=True) as ui:
@@ -70,10 +72,19 @@ def main():
             m.run()                         #   play (ar_oncmd)
             os88marty.guest_sleep(m, 1)
             ui.menu_pick('Game', a.game)
+            # the pick reads the user's .ROM from the floppy and builds what
+            # the board needs - Q*bert's, 15 guest seconds on the 8088 - so
+            # the board's power-on is counted from its first frame
+            v = find_view(m)
+            m.write(v + 0x6044, b'\0\0')
+            for _ in range(240):
+                os88marty.guest_sleep(m, 0.25)
+                if struct.unpack('<H', bytes(m.read(v + 0x6044, 2)))[0]:
+                    break
             m.pause()
         else:
             m.key('Enter')
-        m.advance(frames=300)               # the board's power-on
+        m.advance(frames=a.boot)            # the board's power-on
         m.key('Digit5')
         m.advance(frames=300)
         m.key('Digit1')

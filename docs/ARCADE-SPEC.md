@@ -70,37 +70,69 @@ and recompiles hot code (REALDMG-SPEC 16, 20).
 ### 1.2 The package
 
 `ARCADE.O88` is the package image plus its parts (SPEC.md 20.12): a VIEW all
-boards share, and three for each board, LZ4-packed on the disk. **Every
-board's parts are LAZY** (`OP_LAZY`): Game reads the three of the board it
-picks (`op_fetch`, on the desktop, where a refusal may toast) and drops the
-previous board's (`op_drop`), so one board's ~90KB is in memory, never all
-four - and a board that cannot be read leaves the one before it picked.
-Pac-Man's 64KB shadow of the glass is a claim its pick makes (`BD_ON`) and
-its drop frees (`BD_OFF`), not a part.
+boards share and, for each board, what it ships instead of its ROM
+(docs/plans/ARCADE-RELEASE-PLAN.md 2.1). **There is no ROM byte in the
+package**: a translated board's code part is its RECIPE (section 3.10), and
+the ROM is the user's `<SET>.ROM` file (section 1.4), read at the pick.
+**Every part is LAZY** (`OP_LAZY`): Game reads the board's parts and its
+`.ROM` (`ar_select`, on the desktop, where a refusal may toast) and drops
+the previous board's, so one board is in memory, never all of them - and a
+board that cannot be read leaves no board picked. At its start ARCADE picks
+the first board whose `.ROM` is there, quietly; none is a window that says
+so, not a refusal to open.
 
 | part | what | size |
 |---|---|---|
 | 0 | the VIEW: the board's address space and the cells (section 2.1), zero-filled, the one eager part | 25KB |
-| 1, 2, 3 | Space Invaders: the CODE PART (header, runtime, translation), AUX (the PC table, then the flags and the write list), the ROM | 13KB, 50KB, 8KB |
-| 4, 5, 6 | Space Invaders Part II: the same three; its ROM part is the CPU's 0000-4FFFh and the two colour maps (section 4.3) | 23KB, 50KB, 22KB |
-| 7, 8, 9 | Lunar Rescue: the same | 32KB, 50KB, 22KB |
-| 10, 11, 12 | Gun Fight: the same, its ROM 4KB | 12KB, 50KB, 4KB |
-| 13, 14, 15 | Sea Wolf: the same | 17KB, 50KB, 4KB |
-| 16, 17, 18 | Q\*bert: the N88 core (not packed: LZ4 makes 103 bytes larger), its sprites turned, the ROM part - the program patched and its tiles turned (section 10.4) | 103 bytes, 40KB, 34KB |
-| 19, 20, 21 | Pac-Man (only with its ROM): the code part, aux, the ROM part (section 7.7) | 57KB, 50KB, 48KB |
-| last (19, or 22 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 58KB |
+| 1, 2 | Space Invaders: the RECIPE (header, runtime, translation with its ROM bytes as holes, the fill list), AUX (the PC table, then the flags and the write list) | 14KB, 50KB |
+| 3, 4 | Space Invaders Part II: the same | 26KB, 50KB |
+| 5, 6 | Lunar Rescue: the same | 35KB, 50KB |
+| 7, 8 | Gun Fight: the same | 13KB, 50KB |
+| 9, 10 | Sea Wolf: the same | 18KB, 50KB |
+| 11 | Q\*bert: the N88 core (not packed: LZ4 makes 103 bytes larger) | 103 bytes |
+| 12, 13 | Pac-Man (built when the builder has its set): the recipe, aux | 60KB, 50KB |
+| last (12, or 14 with Pac-Man) | the 8080 boards' sounds (`arcsfx.py`), read only for a stream | 58KB |
 
-With every board it is about 255KB on the disk. Q\*bert's pick also claims
-64KB for the game's own segment and 30KB for the shadow of the glass
-(section 10.4), and its drop frees both.
+With every board it is 184KB on the disk (MEASURED), against 261KB when it
+carried the ROMs. What a pick builds from the `.ROM` - Pac-Man's turned
+tables (section 7.7), Q\*bert's patched program and turned tiles and sprites
+(section 10.4) - are claims `BD_BUILD` makes and `BD_OFF` frees, like
+Pac-Man's 64KB and Q\*bert's 94KB of shadow and segment.
 
 The shipped build refuses to start under kern_mega's protected mode
 (`OS88_MEGA_REFUSE`): the host far-jumps into part 0, which is a data
 selector there. kern_small has no room and refuses at `op_load`.
 
+### 1.4 The user's ROM: `<SET>.ROM`
+
+A set the user has given ARCADE is one file, named for MAME's set -
+`INVADERS.ROM`, `INVADPT2.ROM`, `LRESCUE.ROM`, `GUNFIGHT.ROM`, `SEAWOLF.ROM`,
+`QBERT.ROM`, `PACMAN.ROM` - a 32-byte header and the board image of section
+1.3:
+
+| offset | what |
+|---|---|
+| 0 | `ARCROM`, then the version (1) and a zero |
+| 8 | the set's name, upper case, NUL-padded to 8 |
+| 16 | the image's length, a dword (at most 65,536) |
+| 20 | the image's CRC-32 (zlib's), a dword |
+| 24 | zero (reserved: the snapshot, the sound chips) |
+| 32 | the image |
+
+`ar_romload` reads it whole from ARCADE's current folder (`OSAPI_FILE_READ`:
+a probe for its size, a claim, the read; the file may be packed on the
+disk) and refuses it, with a toast naming the file, unless the header is
+right, the name is the board's, and the image's CRC-32 is the header's
+(`ar_crc32`, a table made at start). The recipe is then filled from it
+(`ar_fill`) and the board builds what it needs (`BD_BUILD`). `make
+arcaderoms` writes the files from the pinned sets (`getarcrom.py
+--rom-file`); the development disk (`make arcadedisk`) carries them beside
+the package. A release disk carries none: the guest's import writes them
+(the release plan's R2).
+
 ### 1.3 The ROM
 
-**No ROM, and nothing derived from one, is committed.** `tools/getarcrom.py`
+**No ROM, and nothing derived from one, is committed or shipped.** `tools/getarcrom.py`
 fetches MAME's `invaders` set from ONE archive.org item
 (`arcade_invaders/invaders.zip`, SHA-1 `8d2d4172...`), checks each of its
 four 2KB chips by SHA-256, and writes the 8KB board image
@@ -386,6 +418,29 @@ cell left unlisted - RAM agrees - so `tests/arclock.py --marks` holds the
 write list to the screen (every cell a frame changed is on it), and
 `tests/arcglass.py` the glass to video RAM; without it Sea Wolf's INSERT
 COIN stayed on the glass in play.
+
+### 3.10 The recipe: what ships instead of the translation
+
+`arcaot.py --recipe` (and `arcz80t.py`) writes, beside each code part, the
+code part as it SHIPS: the translation with every byte that came from the
+ROM zeroed, and after the code (at `AH_END`) the FILL LIST that puts them
+back. The ROM reaches a translation only through the DATA IMMEDIATES of
+three kinds of instruction - MVI/LD r,n; LXI/LD rp,nn; the ALU's immediate
+forms - the same encodings on both CPUs. Addresses, jump targets and ports
+are the program's structure, as the seeds and `qbert.patch` are.
+
+The holes are found by DIFFERENCE: the translation is emitted again with
+every data immediate inverted and nothing else. It must assemble to the
+same shape, the bytes that differ are the holes, and each is tied to the
+operand byte of its own instruction it equals. The fill list is a word
+count, then each hole as the step from the one before: offset +1..255 and
+address -128..127 in two bytes, else 0 and both as words.
+
+`ar_fill` (every translated board's `BD_BUILD`) fills the holes from the
+user's image after the pick has read it. MEASURED: 327 to 2,034 holes a
+board, the recipe 0.8 to 4.1KB over its code. `tests/arcrecipe.py` (row
+`arcrecipe`, host-only) holds every recipe, filled from its pinned ROM, to
+the translation byte for byte, and finds no 8-byte run of the ROM in it.
 
 ---
 
@@ -950,7 +1005,13 @@ from byte 10 - by a row table (`qb_yoff`): 7 rows of 8 are two screen rows.
 trapped and there is no write list: the board's 960 visible video RAM bytes
 against a copy (REPE CMPSW), its 256 bytes of sprite RAM against another
 (an unchanged sprite RAM skips the sprites altogether), its palette against
-a third. A changed tile is redrawn alone; more than 96, the whole screen.
+a third. A changed tile marks its 4 x 4 box (`qb_dirty`), and each frame's
+draw composes marked boxes, in turn from where the last stopped, **until
+the next frame is due** (one at least): a 286 draws a change of scene in
+one frame, an 8088 over as many as it takes, while the game keeps its time.
+A change of the background's priority repaints the whole screen at once
+instead: a box left for later would show the old order exactly where a
+sprite crosses a tile, and it happens a few times a minute.
 A sprite that moved or changed code has the box it left and the box it is
 in redrawn - one box when the two fit 4 x 4 tiles. Tiles from MAME's
 `bgtiles` (Q\*bert's character RAM is unused: `init_romtiles`), sprite code
@@ -979,16 +1040,27 @@ clock as every board's interrupt is (section 5.1).
 **On an 8088 the picture skips frames so that the game does not.** A box
 costs the 8088 about 130,000 cycles (MEASURED, MartyPC's VGA XT, a 3 x 3
 box: some 65,000 to compose, as much again to put), so two moving sprites
-are three frames' time. The frame hook therefore draws only when it is not
-already late for the next frame - at most 20 frames in a row go undrawn -
-and the board may fall 30 frames behind (`BD_LATE`) before the loop drops
-one, while the game's own frames, at 8,000 cycles, catch up. MEASURED,
-`tests/arcspeed.py --hz 61.42`, 10 guest seconds of play:
+are three frames' time and a whole screen 107. The frame hook therefore
+draws only when it is not already late for the next frame - at most 20
+frames in a row go undrawn - changed tiles wait in their boxes (section
+10.4), and the board may fall 240 frames behind (`BD_LATE`) before the loop
+drops one, while the game's own frames, at 8,000 cycles, catch up at about
+four times their rate. MEASURED, `tests/arcspeed.py --hz 61.42`:
 
 | machine | frames delivered | dropped | boxes drawn |
 |---|---|---|---|
-| MartyPC, 4.77 MHz 8088, VGA (`os8088_xt_vga`) | **61.44 a second** | 0 | 22 a second |
-| 86Box, the owner's 286 profile (`at286_vga`) | 62.7 a second | 0 | 81 a second, every frame drawn |
+| MartyPC, 4.77 MHz 8088, VGA (`os8088_xt_vga`), 30 s of rough play | **61.5 a second** | 0 | 26-29 a second |
+| 86Box, the owner's 286 profile (`at286_vga`), 10 s | 62.7 a second | 0 | 81 a second, every frame drawn |
+
+Repainting a scene's worth of changed tiles in one draw, as the first
+version did, ran the 8088 at 45 frames a second with 3 dropped over the
+same 30 s.
+
+**A pick costs the 8088 most of 15 seconds** from a floppy (MEASURED):
+4.6 s to read `QBERT.ROM`'s 64KB, 2.4 s for its CRC-32, 4.2 s for
+`qb_build` (its sprite turn unrolled: 7.6 s before), and the first
+picture. The release plan's R2 takes the read and the CRC on; on a 286
+with a hard disk it is a blink.
 
 86Box is not cycle-accurate: the 286's row says the picture keeps up, not
 by how much.

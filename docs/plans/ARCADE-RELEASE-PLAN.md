@@ -247,15 +247,23 @@ Each wave is reviewable on its own and lands on `arcade-emu`. Rows are
 named per wave and run once, after the last (CLAUDE.md, *Testing*).
 
 ### R1: the recipe, and a package with no ROM in it
-- [ ] `arcaot.py`/`arcz80t.py` `--recipe`: holes, fill list, PC pairs.
-- [ ] Set descriptors for the seven sets, from `getarcrom.py`'s pins.
-- [ ] `make arcade` builds the ROM-free package. `make arcaderoms` writes
-      the `.ROM` files on the host.
-- [ ] Each board rebuilt at its pick from recipe and chips (section 2.4).
-- [ ] Row `arcrecipe` (host): every recipe filled from its pinned ROM is
-      byte-identical to the translation. Red with one fill entry removed.
-- [ ] A scan of the package (host) for any 16-byte run of any pinned ROM:
-      none.
+- [x] `arcaot.py`/`arcz80t.py` `--recipe`: holes and the fill list. (The
+      PC table ships as it is: it is addresses.)
+- [x] Set descriptors: the `.ROM` header names the set, its length and its
+      CRC-32 (ARCADE-SPEC 1.4); the chips' pins stay `getarcrom.py`'s.
+- [x] `make arcade` builds the ROM-free package (184KB, MEASURED). `make
+      arcaderoms` writes the `.ROM` files; the development disk carries them.
+- [x] Each board rebuilt at its pick from recipe and chips (section 2.4):
+      `ar_fill`, `pm_build`, `qb_build`. Row `arcbuilt`: what the guest
+      builds is the host tools' output byte for byte.
+- [x] Row `arcrecipe` (host): every recipe filled from its pinned ROM is
+      byte-identical to the translation, and holds no 8-byte ROM run. Red
+      with one fill entry removed.
+- [x] Found on the way, and fixed: Q\*bert's picture repainted a change of
+      scene in one 1.7 s draw on the 8088 and dropped frames; changed tiles
+      now wait in boxes drawn until the next frame is due (ARCADE-SPEC 10.4).
+- [ ] MEASURED and open for R2: a Q\*bert pick on the 8088 from floppy is
+      about 15 s - the 64KB read 4.6 s, the CRC 2.4 s, the build 4.2 s.
 
 ### R2: import on the guest
 - [ ] `apps/os88inflate.inc` out of PIXEL, PIXEL on it, PIXEL's rows green.

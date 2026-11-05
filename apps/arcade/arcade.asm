@@ -40,39 +40,31 @@
 %include "os88parts.inc"
 
 %ifdef ARC_PACMAN
-    OS88_PARTS_BEGIN 23
+    OS88_PARTS_BEGIN 15
 %else
-    OS88_PARTS_BEGIN 20
+    OS88_PARTS_BEGIN 13
 %endif
       OS88_PART OP_ASSET, OP_ZERO, ARC_VIEW_KB      ; 0 the view, shared
-      ; EVERY BOARD IS LAZY (ARCADE-SPEC 1.2): its code, aux and ROM parts
-      ; are read when Game picks it and dropped when another is picked, so
-      ; one board's ~85KB is in memory, never all of them
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 1 Space Invaders: code
+      ; NO ROM IS HERE (docs/plans/ARCADE-RELEASE-PLAN.md 2.1): a translated
+      ; board ships its RECIPE - its code with the ROM's bytes as holes and
+      ; the list that fills them - and its PC table, which is addresses; the
+      ; ROM is the user's <SET>.ROM, read at the pick (ar_romload). EVERY
+      ; part is LAZY (ARCADE-SPEC 1.2): read when Game picks its board and
+      ; dropped when another is picked
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 1 Space Invaders: recipe
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 2   aux: the PC table
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 3   the ROM
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 4 Space Invaders Part II
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 5
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 6   (the ROM and colour maps)
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 7 Lunar Rescue
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 3 Space Invaders Part II
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 4
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 5 Lunar Rescue
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 6
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 7 Gun Fight
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 8
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 9
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 10 Gun Fight
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 11
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 12
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 13 Sea Wolf
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 14
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 15
-      OS88_PART OP_ASSET, OP_LAZY                   ; 16 Q*bert: the N88 core
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 17   its sprites, turned
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 18   the program, patched,
-                                                    ;      and its tiles turned
-                                                    ;      (arcqbgfx.py)
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 9 Sea Wolf
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 10
+      OS88_PART OP_ASSET, OP_LAZY                   ; 11 Q*bert: the N88 core
 %ifdef ARC_PACMAN
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 19 Pac-Man: code
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 20   aux
-      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 21   the ROM, and its tiles
-                                                    ;      turned (arcpmgfx.py)
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 12 Pac-Man: recipe
+      OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; 13   aux
 %endif
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP         ; last: the 8080 boards'
                                                     ;   sounds (arcsfx.py), read
@@ -80,10 +72,11 @@
     OS88_PARTS_END
 
 %ifdef ARC_PACMAN                   ; the parts named in code
-AR_P_INVSFX equ 22
+AR_P_INVSFX equ 14
 %else
-AR_P_INVSFX equ 19
+AR_P_INVSFX equ 12
 %endif
+AR_P_NONE   equ 0xFF                ; BD_AUX: the board builds its own
 
 AR_CONT_W   equ 300
 AR_CONT_H   equ 101
@@ -100,9 +93,9 @@ AR_CELLS    equ 896                 ; 28 x 32 cells of 8 rows x 1 byte
 ; A BOARD (ARCADE-SPEC 5.3): what the host loop asks of each. The loop is the
 ; same for every board; these are the differences.
 BD_TITLE    equ 0                   ; dw its name
-BD_CODE     equ 2                   ; db its code part, aux part, ROM part
-BD_AUX      equ 3
-BD_ROM      equ 4
+BD_CODE     equ 2                   ; db its code part, its aux part (or
+BD_AUX      equ 3                   ;   AR_P_NONE: BD_BUILD makes ar_aseg)
+BD_ROM      equ 4                   ; db (unused: the ROM is a file now)
 BD_FLAGS    equ 5                   ; db BDF_*
 BDF_HOLD    equ 1                   ; a masked interrupt HOLDS the board's
                                     ;   clock until it is taken (Pac-Man);
@@ -136,7 +129,12 @@ BD_ON       equ 34                  ; dw near: its parts just read - what else
                                     ;   it holds while picked. CF=1 refused
 BD_OFF      equ 36                  ; dw near: ...given back before they go
 BD_X        equ 38                  ; dw an 8080 board's wiring (X_*), or 0
-BD_SIZE     equ 40
+BD_ROMF     equ 40                  ; dw its <SET>.ROM's name (8.3, NUL)
+BD_BUILD    equ 42                  ; dw near: the ROM image just read (at
+                                    ;   ar_rimg), what the board makes of it
+                                    ;   - the recipe filled, its tables - and
+                                    ;   ar_rseg/ar_aseg set. CF=1 refused
+BD_SIZE     equ 44
 
 ; AN 8080 BOARD'S WIRING (ARCADE-SPEC 5.3): Space Invaders and Taito's
 ; colour boards are one board with different ports, colours and sounds
@@ -177,9 +175,21 @@ ar_entry:
     call op_seg
     mov [ar_vseg], ax
     mov word [ar_bd], 0
-    mov bx, [ar_boards]             ; Space Invaders until Game says
+    mov word [ar_rimgc], 0
+    call ar_crcinit
+    mov byte [ar_qsel], 1           ; the first board whose ROM is here,
+    mov si, ar_boards               ;   quietly: none is a window that says
+.first:                             ;   so, not a refusal to open
+    lodsw
+    or ax, ax
+    jz .picked
+    push si
+    mov bx, ax
     call ar_select
-    jc .out                         ; (op_fetch or the magic has toasted)
+    pop si
+    jc .first
+.picked:
+    mov byte [ar_qsel], 0
     mov si, ar_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -232,13 +242,11 @@ ar_select:
     pop bx
     push bx
     mov al, [bx+BD_AUX]
+    cmp al, AR_P_NONE
+    je .noaux
     call op_fetch
     jc .no
-    pop bx
-    push bx
-    mov al, [bx+BD_ROM]
-    call op_fetch
-    jc .no
+.noaux:
     pop bx
     push bx
     mov al, [bx+BD_CODE]
@@ -246,10 +254,14 @@ ar_select:
     mov es, ax
     cmp word [es:ARC_HDR+AH_MAGIC], ARC_MAGIC
     jne .bad
+    call ar_romload                 ; the user's <SET>.ROM (it may toast)
+    jc .no
+    pop bx
+    push bx
     call [bx+BD_ON]
     jc .no
     pop bx
-    mov [ar_bd], bx
+    push bx
     mov ax, [bx+BD_X]
     mov [ar_bx], ax
     mov al, [bx+BD_CODE]
@@ -259,11 +271,20 @@ ar_select:
     mov ax, [es:ARC_HDR+AH_ENTER]
     mov [ar_core], ax
     mov al, [bx+BD_AUX]
+    cmp al, AR_P_NONE
+    je .built
     call op_seg
     mov [ar_aseg], ax
-    mov al, [bx+BD_ROM]
-    call op_seg
-    mov [ar_rseg], ax
+.built:
+    mov ax, [ar_rimg]               ; the ROM part IS the image, unless the
+    mov [ar_rseg], ax               ;   board makes one of its own
+    call [bx+BD_BUILD]
+    jnc .made
+    call [bx+BD_OFF]
+    jmp short .no
+.made:
+    pop bx
+    mov [ar_bd], bx
     pop es
     pop di
     pop si
@@ -289,7 +310,7 @@ ar_select:
     ret
 
 ; ar_unselect - the board picked, given back: its own claims (BD_OFF), then
-; its parts. Nothing picked after. Clobbers AX, BX
+; its parts and its ROM. Nothing picked after. Clobbers AX, BX
 ar_unselect:
     mov bx, [ar_bd]
     or bx, bx
@@ -300,15 +321,263 @@ ar_unselect:
 .r:
     ret
 
-; ar_dropparts - board BX's three parts dropped (op_drop: a part not here is
-; a no-op). Kept: BX
+; ar_dropparts - board BX's parts dropped (op_drop: a part not here is a
+; no-op) and the ROM image's claim freed. Kept: BX
 ar_dropparts:
     mov al, [bx+BD_CODE]
     call op_drop
     mov al, [bx+BD_AUX]
+    cmp al, AR_P_NONE
+    je ar_freeimg
     call op_drop
-    mov al, [bx+BD_ROM]
-    jmp op_drop
+    ; fall through
+; ar_freeimg - the ROM image's claim, if there is one, given back. Kept: BX
+ar_freeimg:
+    push dx
+    xor dx, dx
+    xchg dx, [ar_rimgc]
+    or dx, dx
+    jz .r
+    call OSAPI_MEM_FREE
+.r:
+    pop dx
+    ret
+
+; =============================================================================
+; THE USER'S ROM (ARCADE-SPEC 1.4). ar_romload - board BX's <SET>.ROM read
+; whole into a claim of its own, from ARCADE's current folder: probed for its
+; size first (OSAPI_FILE_READ with no room answers FERR_BIG and the KB it
+; needs, unpacked), then read, then held to its header - 'ARCROM', version
+; 1, the set's name, a length - and to the CRC32 the header carries, every
+; byte of the image. out CF=0: ar_rimgc the claim, ar_rimg the image's
+; segment (the claim + 2: the header is 32 bytes); CF=1: nothing kept, and
+; a toast said why unless ar_qsel. Kept: BX
+; =============================================================================
+ar_romload:
+    push bx
+    mov [ar_lbd], bx
+    mov si, [bx+BD_ROMF]
+    push ds
+    pop es
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FILE_READ            ; the size probe
+    jnc .wrong                      ; (an empty file)
+    cmp ax, FERR_BIG
+    jne .missing
+    mov ax, dx                      ; the KB it needs, and one over
+    inc ax
+    push ax
+    call OSAPI_MEM_CLAIM
+    pop cx
+    jc .nomem
+    mov [ar_rimgc], dx
+    mov es, dx
+    mov ax, cx                      ; DX:CX = the claim in bytes
+    mov dx, cx
+    mov cl, 6
+    shr dx, cl
+    mov cl, 10
+    shl ax, cl
+    mov cx, ax
+    xor bx, bx
+    mov si, [ar_lbd]
+    mov si, [si+BD_ROMF]
+    call OSAPI_FILE_READ
+    jc .wrongf
+    sub ax, 32                      ; DX:AX = the image's bytes, as read
+    sbb dx, 0
+    jc .wrongf
+    cmp word [es:0], 'AR'           ; the header
+    jne .wrongf
+    cmp word [es:2], 'CR'
+    jne .wrongf
+    cmp word [es:4], 'OM'
+    jne .wrongf
+    cmp byte [es:6], 1
+    jne .wrongf
+    push ax                         ; (the bytes read, past the name)
+    mov si, [ar_lbd]                ; the set's name: the file's, to its dot
+    mov si, [si+BD_ROMF]
+    mov di, 8
+    mov cx, 8
+.name:
+    lodsb
+    cmp al, '.'
+    jne .ch
+    xor al, al
+    dec si
+.ch:
+    cmp al, [es:di]
+    jne .wrongn
+    inc di
+    loop .name
+    pop ax
+    mov cx, [es:16]                 ; the length: 1..65536, and all read
+    mov bx, [es:18]
+    cmp bx, 1
+    ja .wrongf
+    jb .len
+    or cx, cx
+    jnz .wrongf
+.len:
+    cmp dx, bx
+    jb .wrongf
+    ja .lenok
+    cmp ax, cx
+    jb .wrongf
+.lenok:
+    mov ax, es
+    add ax, 2
+    mov [ar_rimg], ax
+    push word [es:20]               ; the CRC32 the import checked it against
+    push word [es:22]
+    mov si, 0
+    push ds
+    mov ds, ax
+    call ar_crc32                   ; DX:AX over DS:0, CX bytes (0 = 64KB)
+    pop ds
+    pop bx
+    pop cx
+    cmp ax, cx
+    jne .wrongf
+    cmp dx, bx
+    jne .wrongf
+    pop bx
+    clc
+    ret
+.wrongn:
+    pop ax
+.wrongf:
+    call ar_freeimg
+.wrong:
+    mov si, ar_s_romis
+    jmp short .say
+.nomem:
+    mov si, ar_s_romram
+    jmp short .say
+.missing:
+    mov si, ar_s_romno
+.say:
+    cmp byte [ar_qsel], 0
+    jne .quiet
+    push si                         ; the file's name, then why
+    mov di, ar_msg
+    push ds
+    pop es
+    mov si, [ar_lbd]
+    mov si, [si+BD_ROMF]
+.cpn:
+    lodsb
+    stosb
+    or al, al
+    jnz .cpn
+    dec di
+    pop si
+.cp:
+    lodsb
+    stosb
+    or al, al
+    jnz .cp
+    mov si, ar_msg
+    call ar_toast
+.quiet:
+    pop bx
+    stc
+    ret
+
+; ar_crc32 - DX:AX = the CRC-32 (zlib's) of CX bytes at DS:SI, CX = 0 being
+; 65,536. The table is ar_crctab, made once by ar_crcinit. Clobbers BX, CX, SI
+ar_crc32:
+    mov ax, 0xFFFF
+    mov dx, ax
+.b:
+    mov bl, [si]
+    inc si
+    xor bl, al
+    xor bh, bh
+    shl bx, 1
+    shl bx, 1
+    mov al, ah                      ; crc >> 8
+    mov ah, dl
+    mov dl, dh
+    xor dh, dh
+    xor ax, [cs:ar_crctab+bx]
+    xor dx, [cs:ar_crctab+bx+2]
+    loop .b
+    not ax
+    not dx
+    ret
+
+; ar_crcinit - the table: entry n is n run 8 times through the polynomial
+; EDB88320h (reflected)
+ar_crcinit:
+    xor bx, bx
+    mov di, ar_crctab
+.n:
+    mov ax, bx
+    xor dx, dx
+    mov cx, 8
+.k:
+    shr dx, 1
+    rcr ax, 1
+    jnc .z
+    xor ax, 0x8320
+    xor dx, 0xEDB8
+.z:
+    loop .k
+    mov [di], ax
+    mov [di+2], dx
+    add di, 4
+    inc bx
+    cmp bx, 256
+    jb .n
+    ret
+
+; ar_fill - the code part's RECIPE filled (docs/plans/ARCADE-RELEASE-PLAN.md
+; 2.1; arcaot.py's encode_fill): at AH_END a count, then each hole as the step
+; from the one before (offset +1..255, address -128..127), or 0 and both as
+; words; each takes the ROM image's byte at its address. A translated
+; board's BD_BUILD. BX = the board. CF=0. Kept: BX
+ar_fill:
+    push bx
+    mov al, [bx+BD_CODE]
+    call op_seg
+    mov es, ax
+    mov si, [es:ARC_HDR+AH_END]
+    mov cx, [es:si]
+    add si, 2
+    xor di, di                      ; DI = the hole, DX = its ROM address
+    xor dx, dx
+    push ds
+    mov ds, [ar_rimg]
+    jcxz .done
+.e:
+    mov al, [es:si]
+    or al, al
+    jnz .step
+    mov di, [es:si+1]
+    mov dx, [es:si+3]
+    add si, 5
+    jmp short .put
+.step:
+    xor ah, ah
+    add di, ax
+    mov al, [es:si+1]
+    cbw
+    add dx, ax
+    add si, 2
+.put:
+    mov bx, dx
+    mov al, [bx]
+    mov [es:di], al
+    loop .e
+.done:
+    pop ds
+    pop bx
+    clc
+    ret
 
 ; ar_nop - a board hook with nothing to do (CF=0)
 ar_nop:
@@ -1699,6 +1968,7 @@ ar_shift:
 %include "arcsnd.inc"
 %include "arcland.inc"
 %include "arcqb.inc"
+%include "qbpatch.inc"                ; (generated: arcqbgfx.py)
 %ifdef ARC_PACMAN
 %include "arcpm.inc"
 %endif
@@ -1713,44 +1983,49 @@ ar_boards:
     dw ar_bd_pm
 %endif
     dw 0
-%macro AR_8080BOARD 6               ; name, parts, ROM bytes, wiring
-%1:
+%macro AR_8080BOARD 7               ; name, title, code, aux, ROM bytes,
+%1:                                 ;   wiring, the <SET>.ROM's name
     dw %2
-    db %3, %4, %5, 0
-    dw %6, inv_reset, inv_setup, inv_irq, inv_frame
+    db %3, %4, 0xFF, 0
+    dw %5, inv_reset, inv_setup, inv_irq, inv_frame
     dw 10020                        ; half of the board's 59.54 Hz (MAME
     db 2, 0                         ;   mw8080bw: 4.992 MHz, 320 x 262)
     dw ar_sound, inv_sbtick, inv_mix, INV_SBHZ, inv_sbprep
     dw inv_fmpat, inv_fmframe, ar_nop, ar_nop
+    dw %6, %7, ar_fill
 %endmacro
-    AR_8080BOARD ar_bd_inv, ar_s_inv, 1, 2, 3, 0x2000
-    dw ar_x_inv
-    AR_8080BOARD ar_bd_pt2, ar_s_pt2, 4, 5, 6, 0x5000
-    dw ar_x_pt2
-    AR_8080BOARD ar_bd_lr, ar_s_lr, 7, 8, 9, 0x5000
-    dw ar_x_lr
-    AR_8080BOARD ar_bd_gf, ar_s_gf, 10, 11, 12, 0x1000
-    dw ar_x_gf
-    AR_8080BOARD ar_bd_sw, ar_s_sw, 13, 14, 15, 0x1000
-    dw ar_x_sw
+    AR_8080BOARD ar_bd_inv, ar_s_inv, 1, 2, 0x2000, ar_x_inv, ar_f_inv
+    AR_8080BOARD ar_bd_pt2, ar_s_pt2, 3, 4, 0x5000, ar_x_pt2, ar_f_pt2
+    AR_8080BOARD ar_bd_lr, ar_s_lr, 5, 6, 0x5000, ar_x_lr, ar_f_lr
+    AR_8080BOARD ar_bd_gf, ar_s_gf, 7, 8, 0x1000, ar_x_gf, ar_f_gf
+    AR_8080BOARD ar_bd_sw, ar_s_sw, 9, 10, 0x1000, ar_x_sw, ar_f_sw
 ar_bd_qb:                           ; Gottlieb's Q*bert, its 8088 native
     dw ar_s_qb                      ;   (ARCADE-SPEC 10)
-    db 16, 17, 18, 0
+    db 11, AR_P_NONE, 0xFF, 0
     dw 0, qb_reset, qb_setup, qb_irq, qb_frame
     dw 19427                        ; the board's 61.42 Hz NMI (MAME gottlieb:
     db 1, QB_LATE                   ;   5 MHz pixels, 318 x 256), one a frame
     dw ar_nop, ar_nop, 0, 0, 0      ; no sound yet (ARCADE-SPEC 10.6)
     dw 0, ar_nop, qb_on, qb_off, 0
+    dw ar_f_qb, qb_build
 %ifdef ARC_PACMAN
 ar_bd_pm:
     dw ar_s_pm
-    db 19, 20, 21, BDF_HOLD
+    db 12, 13, 0xFF, BDF_HOLD
     dw 0x4000, pm_reset, pm_setup, pm_irq, pm_frame
     dw 19688                        ; the board's 60.61 Hz (MAME pacman.cpp:
     db 1, 0                         ;   6.144 MHz, 384 x 264), one interrupt
     dw pm_sound, pm_sbtick, pm_mix, PM_SBHZ, 0
     dw pm_fmpat, pm_fmframe, pm_on, pm_off, 0
+    dw ar_f_pm, pm_build
 %endif
+ar_f_inv:   db 'INVADERS.ROM', 0    ; each board's <SET>.ROM (ARCADE-SPEC 1.4)
+ar_f_pt2:   db 'INVADPT2.ROM', 0
+ar_f_lr:    db 'LRESCUE.ROM', 0
+ar_f_gf:    db 'GUNFIGHT.ROM', 0
+ar_f_sw:    db 'SEAWOLF.ROM', 0
+ar_f_qb:    db 'QBERT.ROM', 0
+ar_f_pm:    db 'PACMAN.ROM', 0
 
 ; the wiring (X_*): Space Invaders as we have always run it; Taito's two as
 ; MAME 8080bw has them (ARCADE-SPEC 5.3, 8.3)
@@ -1823,6 +2098,10 @@ ar_ab3:     db 'to 8086 ahead of time', 0
 ar_ab4:     db 'Space Invaders (C) Taito', 0
 
 ar_s_bad:   db 'Arcade: code part bad', 0
+ar_s_romno: db ': not found', 0  ; after the <SET>.ROM's name: at most 12
+ar_s_romis: db ': wrong set', 0  ;   and 11, the toast bar's 24 (TOAST_MAX)
+ar_s_romram: db ': no memory', 0
+ar_s_nomem: db 'Arcade: no memory', 0
 ar_s_nofsx: db 'Arcade: no full screen here', 0
 ar_s_nomode: db 'Arcade: no mode for this display', 0
 ar_s_miss:  db 'Arcade: no code at ????', 0
@@ -1842,7 +2121,17 @@ ar_s_miss:  db 'Arcade: no code at ????', 0
 %endmacro
 AR_VAR ar_core, 4                   ; dw arc_enter, dw the code part
 AR_VAR ar_sh, 2                     ; ar_shift: pixels into the box
+AR_VAR ar_rimg, 2                   ; the user's ROM image (ar_romload)
+AR_VAR ar_rimgc, 2                  ;   ...and its claim, 0 when none
+AR_VAR ar_lbd, 2                    ;   the board it is read for
+AR_VAR ar_qsel, 1                   ; 1: ar_select toasts nothing (at entry)
+AR_VAR ar_msg, 48                   ; a toast's line, made
+AR_VAR ar_crctab, 1024              ; CRC-32's table (ar_crcinit)
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB
+AR_VAR qb_rclaim, 2                 ;   the parts qb_build made
+AR_VAR qb_sclaim, 2
+AR_VAR qbb_mask, 1                  ;   ...and its loops' cells
+AR_VAR qbb_bit, 2
 AR_VAR qb_n88, 2                    ;   the N88 core's segment, its yield
 AR_VAR qb_n88y, 2
 AR_VAR qb_palok, 1                  ;   qb_pal holds what the DAC has
@@ -1851,8 +2140,8 @@ AR_VAR qb_pal, 32                   ;   the palette as last loaded
 AR_VAR qb_cur, QB_NSPR * QBS_SIZE   ;   the sprites now, and as drawn
 AR_VAR qb_old, QB_NSPR * QBS_SIZE
 AR_VAR qb_vcopy, 960                ;   the tiles as drawn
-AR_VAR qb_nlist, 2                  ;   the tiles changed this frame
-AR_VAR qb_list, 2 * (QB_MANY + 1)
+AR_VAR qb_dirty, 64                 ;   a box (4 x 4 tiles) to draw again
+AR_VAR qb_dnext, 1                  ;   ...where the next frame looks first
 AR_VAR qb_ox, 2                     ;   a sprite's old box, for the union
 AR_VAR qb_oy, 2
 AR_VAR qb_ox1, 2
@@ -2001,6 +2290,10 @@ AR_VAR pm_sbase, 2
 AR_VAR pm_flip, 1
 AR_VAR pm_rows, 2
 AR_VAR pm_pp, 2
+AR_VAR pm_rclaim, 2                 ;   the ROM part pm_build made
+AR_VAR pmb_code, 2                  ;   ...and its loops' counters
+AR_VAR pmb_flip, 1
+AR_VAR pmb_bit, 2
 AR_VAR pm_shseg, 2                  ;   the shadow of the glass (part 7)
 AR_VAR pm_shp, 2                    ;   ...its plane, and its row, in pm_put
 AR_VAR pm_shr, 2

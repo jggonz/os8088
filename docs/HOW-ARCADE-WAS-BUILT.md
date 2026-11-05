@@ -386,3 +386,41 @@ no seeding run had hit. The translator now tries every constant that is
 loaded and pushed at once as a tentative entry, under the same rules as
 the data words it already tries. Part II gained that one instruction and
 Lunar Rescue 24 more that had the same hole.
+
+## Release wave R1: a package with no ROM in it
+
+**The translation ships as a recipe.** Every byte of a translated board
+that came from its ROM is left as a hole, and a list says which ROM byte
+fills each. Finding the holes took no bookkeeping in the translator. It
+emits the code twice: once as it is, once with every data immediate
+inverted and nothing else changed. The bytes that differ are the holes.
+Six boards have 327 to 2,034 holes each, and a filled recipe is the
+translation byte for byte (row `arcrecipe`).
+
+**The user's ROM is a `.ROM` file**: a 32-byte header, the board image and
+its CRC-32. A pick reads it, checks it, fills the recipe, and builds the
+rest. Pac-Man's turned tiles and Q*bert's turned sprites and patched
+program used to be made by Python on the host. Now 8086 makes them, and
+the result is held byte for byte to the Python tools' (row `arcbuilt`).
+The package went from 261KB to 184KB, and the development disk carries all
+seven `.ROM` files beside it on 360KB.
+
+**Three things the measurements caught.**
+- *A toast that lied.* The `.ROM` check refused Pac-Man as "not the set".
+  The name check's `lodsb` had overwritten the low byte of the bytes-read
+  count. Every other set's length happens to end in 00, so only Pac-Man's
+  6220h noticed.
+- *A build that was too slow.* Turning Q*bert's 65,000 sprite pixels took
+  7.6 s on the 8088. As an unrolled gather (AND, NEG puts "any" in carry,
+  RCL) it takes 4.2 s.
+- *A picture that stalled the game.* With the speed test's coin now timed
+  from the board's first frame, Q*bert ran at 45 frames a second. The
+  culprit was not the new code: a change of scene repainted 64 boxes in
+  one draw, 1.7 s on the 8088. Changed tiles now mark their box, and each
+  draw composes boxes until the next frame is due. A priority change still
+  repaints at once, because a box left for later shows the wrong order
+  exactly where a sprite crosses a tile. The glass test proved that by
+  going green with the priority pass removed, until it did.
+
+**Open:** a Q*bert pick from floppy on the 8088 takes about 15 s: the 64KB
+read, the CRC, the build. That is R2's to shorten.

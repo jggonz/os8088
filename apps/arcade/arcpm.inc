@@ -223,6 +223,313 @@ pm_off:
     mov dx, [pm_shseg]
     call OSAPI_MEM_FREE
     mov word [pm_shseg], 0
+    xor dx, dx
+    xchg dx, [pm_rclaim]
+    or dx, dx
+    jz .r
+    call OSAPI_MEM_FREE
+.r:
+    ret
+
+; =============================================================================
+; pm_build - Pac-Man's BD_BUILD (docs/plans/ARCADE-RELEASE-PLAN.md 2.4): the
+; recipe filled, then its ROM part MADE from the user's image - what
+; apps/arcade/arcpmgfx.py made on the host before, and the layout PM_* names:
+; the image at 0, the tiles' and sprites' value masks turned to the portrait,
+; each palette's plane selectors and opacity, the DAC's 16 colours, and the
+; two tile maps (geometry: no ROM in them). Once a pick, on a 286 a blink.
+; BX = the board. CF=1: no memory, and a toast. Kept: BX
+; =============================================================================
+PM_PRTKB    equ 48                  ; 0000-BEFF
+pm_build:
+    call ar_fill
+    push bx
+    mov ax, PM_PRTKB
+    call OSAPI_MEM_CLAIM
+    jc .nomem
+    mov [pm_rclaim], dx
+    mov [ar_rseg], dx
+    mov es, dx
+    push ds
+    mov ds, [ar_rimg]
+    xor si, si
+    xor di, di
+    mov cx, 0x6220 / 2
+    cld
+    rep movsw
+    xor ax, ax                      ; the derived area from nothing
+    mov cx, (0xBF00 - 0x6220) / 2
+    rep stosw
+    pop ds
+    call ar_freeimg
+    push ds
+    mov ds, [ar_rseg]               ; DS = ES = the part, for all of it
+    call pmb_tiles
+    call pmb_sprites
+    call pmb_pals
+    call pmb_geo
+    pop ds
+    pop bx
+    clc
+    ret
+.nomem:
+    mov si, ar_s_nomem
+    call ar_toast
+    pop bx
+    stc
+    ret
+
+; pmb_value - AL = a byte of a 2bpp chip, BH/BL = the masks of its pixel's
+; high and low bit: out BX kept, AH = the value 0-3
+pmb_value:
+    xor ah, ah
+    test al, bh
+    jz .h
+    mov ah, 2
+.h:
+    test al, bl
+    jz .l
+    inc ah
+.l:
+    ret
+
+; pmb_masks - BH, BL = 80h, 08h shifted right by (CL AND 3): a 2bpp byte's
+; pixel at x AND 3
+pmb_masks:
+    and cl, 3
+    mov bx, 0x8008
+    shr bh, cl
+    shr bl, cl
+    ret
+
+; pmb_tiles - 6400h: each tile's 8 portrait rows as three masks (values 1-3,
+; bit 7 the left pixel); a portrait (row r, column c) is the board's (x = r,
+; y = 7 - c), at 4000h + tile x 16 + (8 when x < 4) + y (arcpmgfx.py)
+pmb_tiles:
+    mov bp, 0x4000                  ; BP = the tile's 16 bytes
+    mov di, 0x6400
+.tile:
+    xor dx, dx                      ; DL = r
+.row:
+    mov si, bp
+    cmp dl, 4
+    jae .hi
+    add si, 8
+.hi:
+    add si, 7                       ; y = 7 - c, c from 0
+    mov cl, dl
+    call pmb_masks
+    mov ch, 0x80                    ; the column's bit
+.col:
+    mov al, [si]
+    dec si
+    call pmb_value
+    or ah, ah
+    jz .z
+    push bx
+    mov bl, ah
+    xor bh, bh
+    or [di+bx-1], ch
+    pop bx
+.z:
+    shr ch, 1
+    jnz .col
+    add di, 3
+    inc dl
+    cmp dl, 8
+    jb .row
+    add bp, 16
+    cmp bp, 0x5000
+    jb .tile
+    ret
+
+; pmb_sprites - 7C00h: each sprite's 16 rows as three WORD masks, as drawn
+; and then flipped; a portrait (row r, column c) is the board's (x = r,
+; y = 15 - c), y = c when flipped, at 5000h + code x 64 + (8, 16, 24, 0)[x
+; / 4] + (y AND 7) + 32 when y >= 8
+pmb_sprites:
+    mov word [cs:pmb_code], 0x5000
+    mov di, 0x7C00
+.code:
+    mov byte [cs:pmb_flip], 0
+.flip:
+    xor dx, dx                      ; DL = r
+.row:
+    mov al, dl                      ; the row's quarter
+    shr al, 1
+    shr al, 1
+    mov bx, pmb_quart
+    cs xlatb
+    xor ah, ah
+    add ax, [cs:pmb_code]
+    mov bp, ax                      ; BP = the row's column of bytes
+    mov cl, dl
+    call pmb_masks
+    mov word [cs:pmb_bit], 0x8000
+    xor dh, dh                      ; DH = c
+.col:
+    mov al, dh                      ; y
+    cmp byte [cs:pmb_flip], 0
+    jne .y
+    mov al, 15
+    sub al, dh
+.y:
+    mov ah, al
+    and al, 7
+    and ah, 8
+    shl ah, 1
+    shl ah, 1
+    add al, ah
+    xor ah, ah
+    mov si, ax
+    mov al, [ds:bp+si]              ; (the part: BP would mean SS)
+    call pmb_value
+    or ah, ah
+    jz .z
+    push bx
+    mov bl, ah
+    xor bh, bh
+    shl bx, 1
+    mov ax, [cs:pmb_bit]
+    or [di+bx-2], ax
+    pop bx
+.z:
+    shr word [cs:pmb_bit], 1
+    inc dh
+    cmp dh, 16
+    jb .col
+    add di, 6
+    inc dl
+    cmp dl, 16
+    jb .row
+    inc byte [cs:pmb_flip]
+    cmp byte [cs:pmb_flip], 2
+    jb .flip
+    add word [cs:pmb_code], 64
+    cmp word [cs:pmb_code], 0x6000
+    jb .code
+    ret
+pmb_quart:  db 8, 16, 24, 0
+
+; pmb_pals - ACxxh: palette p's selectors (value v, plane q: FFh when v's
+; colour has bit q), AE00h its opacity, AE80h the 16 colours as DAC triples
+; (MAME's resistors: 21h 47h 97h; blue 51h AEh), from the PROMs at 6000h and
+; 6020h
+pmb_pals:
+    xor bx, bx                      ; BX = palette x 4 + value
+.pv:
+    mov al, [0x6020+bx]
+    and al, 15
+    mov di, bx
+    shl di, 1
+    shl di, 1                       ; (p x 16 + v x 4 = bx x 4)
+    mov ah, al
+    mov cx, 4
+.q:
+    xor dl, dl
+    shr ah, 1
+    jnc .q0
+    dec dl
+.q0:
+    mov [0xAC00+di], dl
+    inc di
+    loop .q
+    or al, al
+    jz .clear
+    mov byte [0xAE00+bx], 0xFF
+.clear:
+    inc bx
+    cmp bx, 128
+    jb .pv
+    xor si, si                      ; the colours
+    mov di, 0xAE80
+.c:
+    mov ah, [0x6000+si]
+    mov dx, 0x2147                  ; red: bits 0-2
+    mov cl, 0x97
+    call .w3
+    mov dx, 0x2147                  ; green: 3-5
+    mov cl, 0x97
+    call .w3
+    xor al, al                      ; blue: 6-7
+    shr ah, 1
+    jnc .b1
+    add al, 0x51
+.b1:
+    shr ah, 1
+    jnc .b2
+    add al, 0xAE
+.b2:
+    shr al, 1
+    shr al, 1
+    mov [di], al
+    inc di
+    inc si
+    cmp si, 16
+    jb .c
+    ret
+.w3:                                ; AH's next three bits weighted DH, DL, CL
+    xor al, al
+    shr ah, 1
+    jnc .w1
+    add al, dh
+.w1:
+    shr ah, 1
+    jnc .w2
+    add al, dl
+.w2:
+    shr ah, 1
+    jnc .w4
+    add al, cl
+.w4:
+    shr al, 1
+    shr al, 1
+    mov [di], al
+    inc di
+    ret
+
+; pmb_geo - AF00h: the screen tile (ty, tx) -> its video RAM index; B700h
+; the index -> (ty << 8) | tx, FFFFh for the 16 the screen does not show
+; (MAME's landscape tilemap turned: row 27 - tx, column ty)
+pmb_geo:
+    mov di, 0xB700
+    mov cx, 1024
+    mov ax, 0xFFFF
+    rep stosw
+    mov di, 0xAF00
+    xor dx, dx                      ; DH = ty, DL = tx
+.t:
+    mov bl, 29                      ; r = 27 - tx + 2
+    sub bl, dl
+    mov al, dh                      ; c = (ty - 2) AND FFh
+    sub al, 2
+    xor bh, bh
+    test al, 0x20
+    jz .lo
+    and al, 0x1F                    ; r + (c AND 1Fh) x 32
+    xor ah, ah
+    mov cl, 5
+    shl ax, cl
+    add ax, bx
+    jmp short .k
+.lo:
+    xor ah, ah                      ; c + r x 32
+    mov cl, 5
+    shl bx, cl
+    add ax, bx
+.k:
+    mov [di], ax
+    add di, 2
+    mov si, ax
+    shl si, 1
+    mov [0xB700+si], dx
+    inc dl
+    cmp dl, 28
+    jb .t
+    xor dl, dl
+    inc dh
+    cmp dh, 36
+    jb .t
     ret
 
 ; =============================================================================

@@ -10,7 +10,9 @@
 # the BACKGROUND IN FRONT of them (5803h bit 0). At chosen points the machine
 # is stopped the instant ar_loop's frame hook returns having DRAWN (qb_skips
 # 0: an 8088 lets the picture skip frames, ARCADE-SPEC 10.5), and the glass
-# is compared, every portrait pixel, with the picture MAME's gottlieb driver
+# is compared - every portrait pixel but those of a box of changed tiles
+# still waiting its turn (qb_dirty, ARCADE-SPEC 10.4: an 8088 repaints a
+# change of scene over many frames) - with the picture MAME's gottlieb driver
 # makes of the same memory: the game's own segment G (found through the view,
 # NV_GSEG) - video RAM 3800h, sprite RAM 3000h, the palette 5000h, the
 # priority at 580Bh - and the tiles and sprites out of the ROM image. None
@@ -38,7 +40,10 @@ NV_GSEG = 0x6080
 XB = 10                             # the picture's left byte (arcqb.inc QB_XB)
 # frames of the attract mode to look at, and whether the background must be
 # in front there (tools/qbnative.py's run: priority 1 from about 2120 to 2260)
-LOOKS = ((700, None), (1300, None), (2180, 1))
+# (frame, priority, how many drawn frames from there - the priority stretch
+# is looked at across its length, at least three times and up to eight,
+# so that a sprite crosses a tile in front of it in some frame)
+LOOKS = ((700, None, 1), (1300, None, 1), (2130, 1, 8))
 
 
 def skips_addr():
@@ -51,6 +56,17 @@ def skips_addr():
             h = m.group(1)
             return int(h[2:4] + h[0:2], 16)
     raise SystemExit('qbglass: FAIL - qb_skips is not in the listing')
+
+
+def dirty_addr():
+    """qb_dirty's offset, out of `mov byte [qb_dirty+bx], 1` (C6 87 lo hi 01)."""
+    import re
+    for ln in open(os88build.at('build/arcade.lst')):
+        m = re.match(r'\s*\d+\s+[0-9A-F]{8}\s+C687\[([0-9A-F]{4})\]01\s.*\[qb_dirty\+bx\]', ln)
+        if m:
+            h = m.group(1)
+            return int(h[2:4] + h[0:2], 16)
+    raise SystemExit('qbglass: FAIL - qb_dirty is not in the listing')
 
 
 def after_frame():
@@ -101,7 +117,7 @@ def reference(rom, g):
     return [[land[c][255 - r] for c in range(240)] for r in range(256)]
 
 
-def compare(rom, g, planes):
+def compare(rom, g, planes, pending=bytes(64)):
     """Every screen row of the picture - both of a doubled one - read out of
     the card's four planes, against the reference's pixel VALUES (the DAC is
     the palette's, so a value is a colour)."""
@@ -111,6 +127,8 @@ def compare(rom, g, planes):
     for r in range(256):
         for y in range((r * 15) // 8, ((r + 1) * 15) // 8):
             for c in range(240):
+                if pending[(r >> 5) * 8 + (c >> 5)]:
+                    continue                # a box still waiting its turn
                 exp = want[r][c]
                 for x in (XB * 8 + 2 * c, XB * 8 + 2 * c + 1):
                     o = y * 80 + (x >> 3)
@@ -145,6 +163,7 @@ def main():
     rom = open(os88build.at('build/arcade-rom/QBERT.ROM'), 'rb').read()
     hook = after_frame()
     skips = skips_addr()
+    dirty = dirty_addr()
     fails = []
     with os88ui.boot('build/os8088-360.img', apps='build/arcade360.img',
                      machine=a.machine, quick=True) as ui:
@@ -161,34 +180,43 @@ def main():
 
         def word(at):
             return struct.unpack('<H', bytes(m.read(at, 2)))[0]
-        for frame, pri in LOOKS:
+        for frame, pri, count in LOOKS:
             while word(v + V_NFRAME) < frame:
                 m.advance(frames=20)
             gseg = word(v + NV_GSEG)
-            for _ in range(200):            # the next frame that DREW
-                m.bp_exec(base + hook)
-                m.run()
-                if m.wait_stop(20) != 'breakpoint':
-                    raise SystemExit('qbglass: FAIL - the frame hook never returned')
-                m.bp_exec()
-                if bytes(m.read(base + skips, 1))[0] == 0:
-                    g = bytes(m.read(gseg * 16, 0x10000))
-                    if pri is None or (g[0x580B] & 1) == pri:
-                        break
-            else:
-                fails.append('frame %d: no drawn frame with priority %s' % (frame, pri))
-                continue
-            planes = m.planes(0, 38400)
-            bad, first = compare(rom, g, planes)
-            if a.dump:
-                w, h, fb = m.fbuf()
-                dump(a.dump, frame, rom, g, fb, w, h)
-            print('qbglass: frame %d (priority %d): %d pixels differ%s'
-                  % (word(v + V_NFRAME), g[0x580B] & 1, bad,
-                     '' if not first else ', first at column %d row %d: %d, not %d' % first))
-            if bad:
-                fails.append('frame %d: %d pixels are not the board memory\'s picture'
-                             % (frame, bad))
+            done = 0
+            for k in range(count):
+                if k:
+                    m.advance(frames=8)
+                for _ in range(200):        # the next frame that DREW
+                    m.bp_exec(base + hook)
+                    m.run()
+                    if m.wait_stop(20) != 'breakpoint':
+                        raise SystemExit('qbglass: FAIL - the frame hook never returned')
+                    m.bp_exec()
+                    if bytes(m.read(base + skips, 1))[0] == 0 and \
+                            sum(1 for b in m.read(base + dirty, 64) if b) <= 62:
+                        g = bytes(m.read(gseg * 16, 0x10000))
+                        if pri is None or (g[0x580B] & 1) == pri:
+                            break
+                else:
+                    if done < min(count, 3):    # the stretch may end first
+                        fails.append('frame %d: %d drawn frames with priority %s, not %d'
+                                     % (frame, done, pri, min(count, 3)))
+                    break
+                done += 1
+                planes = m.planes(0, 38400)
+                pending = bytes(m.read(base + dirty, 64))
+                bad, first = compare(rom, g, planes, pending)
+                if a.dump:
+                    w, h, fb = m.fbuf()
+                    dump(a.dump, frame, rom, g, fb, w, h)
+                print('qbglass: frame %d (priority %d, %d boxes pending): %d pixels differ%s'
+                      % (word(v + V_NFRAME), g[0x580B] & 1, sum(1 for b in pending if b), bad,
+                         '' if not first else ', first at column %d row %d: %d, not %d' % first))
+                if bad:
+                    fails.append('frame %d: %d pixels are not the board memory\'s picture'
+                                 % (word(v + V_NFRAME), bad))
     for f in fails:
         print('qbglass: FAIL - ' + f)
     if fails:

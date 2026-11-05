@@ -4699,6 +4699,15 @@ SOAK = [
         "out. Host-only",
         wants=("build/arcade/invcode.rcp", "build/arcade/invcode.bin",
                "build/arcade-rom/INVADERS.ROM")),
+    Row("arcbuilt", "soak", py("tests/arcbuilt.py"), 25.0,
+        "ARCADE builds on the guest what the host tools build (docs/plans/"
+        "ARCADE-RELEASE-PLAN.md 2.4): Q*bert and Pac-Man picked on MartyPC's VGA "
+        "XT from their .ROM files, and the parts pm_build and qb_build made - "
+        "turned tiles and sprites, palettes, the patched program - read back and "
+        "held byte for byte to arcpmgfx.py's and arcqbgfx.py's. Red (4,066 bytes) "
+        "with qbb_tiles taking each tile's nibbles the wrong way round",
+        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
+                                 "build/arcade/QBROM.PRT")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "
@@ -4718,11 +4727,16 @@ SOAK = [
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img",
                                  "build/arcade-rom/QBERT.ROM")),
     Row("arcspeedqb", "soak", py("tests/arcspeed.py", "--game", "Q*bert", "--hz", "61.42",
-                                 "--machine", "os8088_xt_vga"), 18.0,
+                                 "--boot", "900", "--secs", "30",
+                                 "--machine", "os8088_xt_vga"), 30.0,
         "ARCADE's Q*bert on MartyPC's 4.77 MHz VGA XT (ARCADE-SPEC section 10.5): "
-        "the board's 61.42 frames a second within 3% with none dropped in 10 "
-        "guest seconds of play - the game's own 8088 code at full speed, the "
-        "picture skipping frames instead (20 a second when it drew them all)",
+        "the board's 61.42 frames a second within 3% with none dropped over 30 "
+        "guest seconds of rough play - the game's own 8088 code at full speed, "
+        "the picture skipping frames and drawing changed boxes a few a frame. "
+        "30 seconds because a priority change repaints the screen at once (107 "
+        "frames on the 8088) and a 10-second window can end before the catch-up; "
+        "red (45 frames/s, 3 dropped) when a screen of changed tiles was repainted "
+        "in one draw",
         needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
     Row("arcspeed", "soak", py("tests/arcspeed.py"), 12.0,
         "ARCADE on MartyPC's 5150 (docs/ARCADE-SPEC.md 5, 6.2): Space Invaders "

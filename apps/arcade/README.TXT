@@ -18,6 +18,12 @@ as it is. Choose the game from the Game menu:
     Pac-Man                 Namco's Z80 board (1980). VGA only, and a
                             286 or faster for the board's full speed.
 
+YOUR ROMS. ARCADE carries no game: each one needs its set's .ROM file
+(INVADERS.ROM, INVADPT2.ROM, LRESCUE.ROM, GUNFIGHT.ROM, SEAWOLF.ROM,
+QBERT.ROM, PACMAN.ROM) in the same folder as ARCADE.O88. A game whose
+file is not there says so when you pick it ("QBERT.ROM: not found");
+one whose file is not the set it names says "wrong set".
+
 The five 8080 games run at full speed on an IBM PC/XT on any adapter;
 on VGA the two Taito games are in colour. A game is read from this disk
 when you pick it, and the one before is put away.
