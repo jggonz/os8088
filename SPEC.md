@@ -241791,7 +241791,7 @@ too: `sum_rows` runs first, so the two cannot disagree.
 |---|---|
 | Pointer in use | by `[mou_port]` when `[mou_seen]`: 0 `COM1 serial mouse`, 2 `COM2 serial mouse`, 4 `PS/2 mouse`, 6 `VMware absolute pointer`, 8 `USB mouse (USBMOUSE.DRV)` (§9.12: `MOU_FEEDROW`, the row a `DRVC_POINT` driver's `OSAPI_MOUSE_FEED` settles); any other row `unknown source (row not recognised)`; not seen, a live PS/2 mouse (`[mou_p2]` with `[mou_p2st]` = 9) `PS/2 mouse found; no movement seen yet`, else `none yet - the keyboard mouse is on` |
 | Position | the cursor words (§9.4.3), `x N  y N  buttons LR` with `-` for a button up. **It is the live row**: moving the mouse changes this row and no other, which is how §126.2.3's diff redraw is seen working |
-| Kernel | `kern_mega` when `OSAPI_CPU_INFO` says `CPU_F_PM`, else `real mode (kern_big or kern_emu)`. **No slot, registry block or file tells a package kern_big from kern_emu**: the `'ID'` words below are the only discriminator and they match or they do not |
+| Kernel | `kern_mega` when `OSAPI_CPU_INFO` says `CPU_F_PM`; else `kern_big` when the `'ID'` words match ([mc_kok], §126.4), because the shipped recipe makes this package against kern_big's own map and kern_mega's copy against kern_mega's; else `another real-mode build (not decoded)`. **No slot and no registry block names the kernel**: the `'ID'` match is the only discriminator, so kern_emu, kern_small, a knob build and another release all read the same. The `CPU_F_PM` test is display only and is registered in `tests/megapkg.txt` |
 | Kernel id | the three `'ID'` words (§57.6) and `matches this package` or `differs: raw` ([mc_kok], §126.4) |
 | CPU | `8086/8088`, `80286` or `80386 or later` (`OSAPI_CPU_INFO`), `, protected mode` on `CPU_F_PM` |
 | Display | `OSAPI_VIDEO`: adapter name, width x height, bits a pixel |
@@ -241806,7 +241806,7 @@ gate asserts on them), with the lamp it raises:
 
 | state | verdict | lamp |
 |---|---|---|
-| a pointer has spoken (`[mou_seen]`) | `Your mouse is working: ` + the pointer's name from the table above (e.g. `Your mouse is working: PS/2 mouse`) | OK |
+| a pointer has spoken (`[mou_seen]`, which nothing clears: it has worked THIS SESSION, and a mouse unplugged since still reads so) | `Your mouse is working: ` + the pointer's name from the table above (e.g. `Your mouse is working: PS/2 mouse`) | OK |
 | PS/2 answered, no packet yet | `A PS/2 mouse answered. Move it to confirm.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.` | Warning |
 | nothing | `No mouse found. See the sections below for why.` then `The keyboard mouse is on: arrows move, keypad 5 clicks.`, and, when the PS/2 handshake got somewhere between steps 1 and 8, `The PS/2 handshake stopped at step N` (§9.4.4's number) | Problem |
 | [mc_kok] = 0 | `Cannot decode the mouse record: a different kernel build.` | Warning |
@@ -241842,18 +241842,31 @@ page's own tick gives by loading the driver. **Decided, and written so it can
 be reversed.**
 
 *VMware absolute pointer* (§9.11, lamp Not applicable, OK when in use). `In
-use` is `[mou_port]` = 6 with `[mou_seen]`. `CPU` says whether the tier is
-`CPU_386` (the attach's gate, §9.11.2). `VMMOUSE.DRV` is `DRVC_OVL` with no
-class, so `OSAPI_DRV_CLASSK` cannot see it, and `SYSTEM.CFG` bit 5 and whether
-the kernel is `kern_emu` are in no slot a package may call: **two lines say so
-rather than guess** (§47) while it is not in use.
+use` is `[mou_port]` = 6 (`MOU_VMROW`, which exists only under `KERN_EMU`)
+with `[mou_seen]`. `CPU` says whether the tier is `CPU_386` (the attach's
+gate, §9.11.2). While it is not in use, two lines: `kern_emu only: Control
+Panel > Drivers > Absolute mouse.` (the row's title, `kernel/driver.inc`), then
+`This kernel is not kern_emu.` when that is a fact - `CPU_F_PM` (kern_mega has
+no `KERN_EMU` arm, `kernel/kernel.asm` refuses the pair) or an `'ID'` match
+(§126.5's Kernel row) - and otherwise `Nothing this package can read names
+this kernel.` `VMMOUSE.DRV` is `DRVC_OVL` with no class, so `OSAPI_DRV_CLASSK`
+cannot see it. **`SYSTEM.CFG` bit 5 is in no slot and no published block**;
+the FILE holds it (its `DW` record, §51.5, which SYSCHECK's `sc_p_cfg` reads),
+and this section does not read the file: `OSAPI_FILE_READ` reads a whole file
+or refuses (`FERR_BIG`), so it would cost a buffer the size of the largest
+`SYSTEM.CFG` (its Sticky Apps trailer grows) and a disk call on the UI task at
+open, for a tick the Drivers page itself shows. Bit 6 (below) is the same
+question. Recorded, reversible: §118's `sc_p_cfg` is the worked reader.
 
 *USB mouse* (§9.12, §9.12.7). `Driver`: `OSAPI_DRV_CLASSK` with `DRVC_POINT`,
 `CF` clear = `USBMOUSE.DRV is loaded` (lamp Info). `In use`: `[mou_port]` = 8,
 `MOU_FEEDROW`, which is what the first report accepted by `OSAPI_MOUSE_FEED`
 settles (OK). Which backend attached (the CH375 at `0x260`/`0x261` or a
-PicoMEM) and `SYSTEM.CFG` bit 6 are not published by the driver (`DRVC_POINT`
-has no package entry point, §9.12), so two lines say so.
+PicoMEM) is not published by the driver (`DRVC_POINT` has no package entry
+point, §9.12), and bit 6 is the file's alone (above), so while it is not in use
+two lines say where it is turned on and what it needs: `Control Panel >
+Drivers > USB Mouse (SYSTEM.CFG bit 6).` and `It needs a CH375 at 260h or a
+PicoMEM; neither is asked.`
 
 *Keyboard mouse* (§9.6, §9.6.1.1). `[mou_ptr]` is not in the `'MO'` block (§9.6.6:
 it sits below the span), so the state is **inferred from `[mou_seen]`**: seen

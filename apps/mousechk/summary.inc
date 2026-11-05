@@ -77,10 +77,11 @@ sum_snap:
 .cpu:
     call OSAPI_CPU_INFO
     mov [sum_cpu], al
-    ; AH bit 4 is the protected-mode flag. It is read as a literal on purpose:
-    ; this package only DISPLAYS the kernel's kind, it has no kern_mega arm,
-    ; and naming the SDK's marker would count here as one (t_megapkg).
-    and ah, 0x10
+    ; CPU_F_PM: kern_mega (SPEC.md 20.18). DISPLAY ONLY - the Kernel row and
+    ; the VMware section's "not kern_emu" - and registered as such in
+    ; tests/megapkg.txt, the marker census's rule: a site is named, never
+    ; hidden behind a literal
+    and ah, CPU_F_PM
     mov [sum_pm], ah
     ret
 
@@ -175,10 +176,13 @@ sum_rows:
 .kern:
     mov si, sum_s_kern
     call mc_row
-    mov si, sum_s_kbig
-    cmp byte [sum_pm], 0
-    je .kp
     mov si, sum_s_kmega
+    cmp byte [sum_pm], 0
+    jne .kp
+    mov si, sum_s_kbig              ; the 'ID' words match and it is real mode:
+    cmp byte [mc_kok], 0            ; the build this package was MADE against,
+    jne .kp                         ; which the shipped recipe takes from
+    mov si, sum_s_kreal             ; kern_big's own map (SPEC.md 126.5)
 .kp:
     call mc_put
     mov si, sum_s_id
@@ -335,7 +339,8 @@ sum_s_x:    db 'x ', 0
 sum_s_y:    db '  y ', 0
 sum_s_btn:  db '  buttons ', 0
 sum_s_na:   db 'unknown', 0
-sum_s_kbig: db 'real mode (kern_big or kern_emu)', 0
+sum_s_kbig: db 'kern_big', 0
+sum_s_kreal: db 'another real-mode build (not decoded)', 0
 sum_s_kmega: db 'kern_mega', 0
 sum_s_idok: db '  matches this package', 0
 sum_s_idbad: db '  differs: raw', 0

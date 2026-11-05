@@ -7,10 +7,12 @@
 ; a driver is loaded comes from OSAPI_DRV_CLASSK, and whether a pointer is in
 ; use from the 'MO' block's [mou_port] (6 = VMware absolute, 8 = a driver's
 ; OSAPI_MOUSE_FEED, SPEC.md 9.4, 9.11.3, 9.12), which sum_snap banked into the
-; sum_* statics (summary.inc) earlier in the same rebuild. What a package
-; cannot ask - whether a driver is WANTED (SYSTEM.CFG bits 5 and 6), which
-; chip USBMOUSE.DRV attached to - the rows SAY so rather than guess (SPEC.md
-; 47). With [mc_kok] = 0 nothing is decoded and every "used" row says unknown.
+; sum_* statics (summary.inc) earlier in the same rebuild. What no slot and no
+; published block answers - whether a driver is WANTED (SYSTEM.CFG's DW bits 5
+; and 6, which only the FILE holds), which chip USBMOUSE.DRV attached to,
+; kern_emu against another real-mode build - the rows SAY so rather than guess
+; (SPEC.md 47). With [mc_kok] = 0 nothing is decoded and every "used" row
+; says unknown.
 ;
 ; ES = KERNEL_SEG, DS = the package, on entry to both procs.
 ; =============================================================================
@@ -39,7 +41,12 @@ oth_rows:
     jc .usb
     mov si, oth_s_vl1
     call mc_line
-    mov si, oth_s_nask
+    mov si, oth_s_vnot              ; kern_mega, or the build this package was
+    mov al, [sum_pm]                ; made against (kern_big): a fact, so say it
+    or al, [mc_kok]
+    jnz .vn
+    mov si, oth_s_nask              ; another real-mode build: nothing says
+.vn:
     call mc_line
     ; --- USB mouse -------------------------------------------------------
 .usb:
@@ -169,10 +176,11 @@ oth_s_loaded: db 'USBMOUSE.DRV is loaded', 0
 oth_s_noload: db 'USBMOUSE.DRV is not loaded', 0
 oth_s_koff:   db 'off: a pointer is in use', 0
 oth_s_kon:    db 'ON: no pointer has been found', 0
-oth_s_vl1:    db 'Needs kern_emu and SYSTEM.CFG bit 5 (VMMOUSE.DRV).', 0
-oth_s_nask:   db 'A package cannot ask whether either is set.', 0
-oth_s_ul1:    db 'Needs SYSTEM.CFG bit 6, and a CH375 chip at 260h/261h', 0
-oth_s_ul2:    db 'or a PicoMEM card. The driver does not say which.', 0
+oth_s_vl1:    db 'kern_emu only: Control Panel > Drivers > Absolute mouse.', 0
+oth_s_vnot:   db 'This kernel is not kern_emu.', 0
+oth_s_nask:   db 'Nothing this package can read names this kernel.', 0
+oth_s_ul1:    db 'Control Panel > Drivers > USB Mouse (SYSTEM.CFG bit 6).', 0
+oth_s_ul2:    db 'It needs a CH375 at 260h or a PicoMEM; neither is asked.', 0
 oth_s_k1:     db 'Arrows move; keypad 5, Space or Ins click; Del right-', 0
 oth_s_k2:     db 'clicks. ScrollLock on gives the keys back to a program.', 0
 oth_s_k3:     db 'It retires for the session once any pointer works.', 0
