@@ -171,6 +171,11 @@ static int ovl_d64_xattach(const char *name, unsigned trks)
     c64_d64_slot[0] = 0;
     c64_d64_slot[1] = 0;
     c64_d64_trks = trks;
+    if (!inj)                               /* THE SLOTS MAY MOVE (SPEC.md 66):
+                                             * held for as long as the disk is,
+                                             * read only through c64_d64_seg,
+                                             * which os88_onmove follows */
+        os88_mem_movable(stage, 1);
     return 1;
 }
 
@@ -214,11 +219,14 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
      * and the image does not end on one */
     paras = (trks == 35 ? 683 : 768) * 16 + 32;
     gave = 0;
-    seg = os88_mem_claim_p(paras);
-    if (seg == 0 && c64_fjit != 0) {
+    for (;;) {                              /* (ONE claim site, which the pin
+                                             * gate follows to its movable
+                                             * declaration below) */
+        seg = os88_mem_claim_p(paras);
+        if (seg != 0 || c64_fjit == 0)
+            break;
         c64_jit_drop();                     /* (the recompiler is optional) */
         gave = 1;
-        seg = os88_mem_claim_p(paras);
     }
     if (seg == 0) {
         c64_say("D64: no heap for it.");
@@ -235,6 +243,9 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     ovl_d64_release();
     c64_d64_seg = seg;
     c64_d64_trks = trks;
+    os88_mem_movable(seg, 1);               /* (the reads into it are done:
+                                             * from here only c64_d64_seg names
+                                             * it, which os88_onmove follows) */
     c64_jit_init();                         /* (back, smaller, if it gave way) */
     c64_menu_state();
     if (gave && c64_fjit == 0) {

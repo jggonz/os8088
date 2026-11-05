@@ -660,6 +660,10 @@ void os88_onmove(unsigned was, unsigned now)
             c64_d64_seg = c64_d64_seg - was + now;
     } else if (c64_paste_seg == was) {
         c64_paste_seg = now;
+    } else if (c64_d64_seg == was) {       /* drive 8's image, or its slots
+                                             * (11.5, 11.5.1) - a claim of its
+                                             * own: c64_d64_inj's are above */
+        c64_d64_seg = now;
     }
 }
 

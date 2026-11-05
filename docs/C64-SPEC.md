@@ -2988,6 +2988,12 @@ extended through claims; extended beside a recompiler segment, asserting the
 slots are its last 512 bytes and its flush was asked for. Red with the BAM's
 slot made the other one's: BLOCKS FREE reads 0.
 
+**Both claims MOVE** (SPEC.md 66): the conventional image and the two
+extended-memory slots are declared movable once the attach's reads are done,
+and `os88_onmove` follows `c64_d64_seg` (slots inside the recompiler's
+segment move with it, as before). The read-through buffer is pinned and
+freed inside the one Attach command (`tests/pins.txt`, bucket C).
+
 ### 11.4 Sound
 
 **On an FM chip, all three voices** (§11.4.3). **Otherwise one voice on the
