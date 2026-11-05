@@ -237409,7 +237409,12 @@ the decoder will really hold:**
   full ones come first and the last is with the menu (it joins the idle
   loop): the check refuses any other order, since the band, once it is
   up, stays. The title's way out (opening 0, ENTER) is flagged full: the
-  band is not up before the openings. **A battle given no opening gets one**, START:
+  band is not up before the openings. **The band comes in at the first
+  frame of an opening with the menu, or when the last opening is over** -
+  never under a full one, which writes the band's rows to its last frame
+  (the engine let it in at the LAST opening's first frame, full or not,
+  and the opening's records then ate into it - unseen while every menu
+  rebuilt the band, 125.5). **A battle given no opening gets one**, START:
   idle frame 0 alone, from black, joined onto the loop. Without it the
   engine began the loop over a black screen, and the loop's records, each
   a difference from the frame before, drew only what changed.
@@ -237961,7 +237966,7 @@ menu's own picture. Text is drawn over the buffer's bytes - ground and
 glyph in one store a byte, the glyph's mask taking the ink and the rest
 the buffer's pixels (6.1's rule, by hand: the desktop's slots are not legal
 in the bracket, 53.7) - so a picture shows through around every letter.
-**A band rebuilt** (a turn begins, a menu opens or closes) **is composed
+**A band rebuilt** (it first appears, or its picture changes, below) **is composed
 off the screen** in a second 16 KB buffer, its text and all, **and put on
 the screen once**: the first build put the ground up and then drew the
 letters over it, which shows the ground alone for the time the letters
@@ -237980,6 +237985,27 @@ It holds:
 - **the message line** at row 191.
 
 `[vb_dirty]`: 1 the menu, 2 the party, 4 the line, 8 the band rebuilt.
+
+**The band is rebuilt only when its GROUND changes** (the owner,
+2026-11-05: "any way to draw the menus faster?"). A rebuild was asked for
+at every turn's menu, every sub-menu opened or closed and every action
+taken - on MartyPC's XT, under the idle loop's hook, ~0.75 s of composing,
+and on Hercules ~0.75 s more to put two by two. But the ground is only the
+band's picture and the open menu's own (`MN_IMG`), and `[vb_gkey]` keeps
+the one the last rebuild composed: when a rebuild is asked for and the
+key is the same (`vb_needrb`), the old menu's lines that no line of the
+new one covers at the same place are put back to the ground - fifteen
+spaces over the buffer's ground, `vb_menu_erase` - and the menu, the party
+and the line are drawn as a cursor's move is. A rebuild is still the
+band's first appearance (`[vb_gkey]` 0FEh) and every change of picture.
+The menu is up 0.1 - 0.3 guest s after its turn begins, on CGA and on
+Hercules, where it was ~0.9 s and ~1.5 s. `vbtlayout` holds the glass to
+the preview pixel for pixel after each kind of partial redraw.
+**Parts that share cells are drawn in the order they change** - a cursor
+moved redraws the menu over a message line placed across it, where the
+whole band draws the message last - so the check WARNS of any two text
+parts that overlap (`vbtband.overlaps`).
+
 **The selected member is the band's**: the footage carries no marker, so no
 clip is captured twice to show it.
 

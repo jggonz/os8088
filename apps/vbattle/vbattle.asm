@@ -2049,15 +2049,11 @@ vb_frame:
     test word [vb_cflags], CF_OPENING
     jz .cnt
     cmp word [vb_cfr], 1            ; an opening WITH THE MENU (not CF_FULL)
-    jne .cnt                        ; has its first frame up, or the LAST
-    test word [vb_cflags], CF_FULL  ; opening has: the band may be drawn
-    jz .bok                         ; under it now (125.3: a full-screen
-    mov al, [vb_cc]                 ; opening owns the band's rows, and
-    cmp al, [vb_olast]              ; every opening was one before format
-    jne .cnt                        ; 7's per-opening choice)
-.bok:
-    mov byte [vb_bandok], 1
-.cnt:
+    jne .cnt                        ; has its first frame up: the band may
+    test word [vb_cflags], CF_FULL  ; be drawn under it now. A FULL-SCREEN
+    jnz .cnt                        ; one owns the band's rows to its last
+    mov byte [vb_bandok], 1         ; frame (125.3) - the band once it is
+.cnt:                               ; over, below
     dec word [vb_cleft]
     jz .over
     clc
@@ -2072,6 +2068,12 @@ vb_frame:
 .ov:
     mov al, [vb_cc]                 ; the clip is over
     mov [vb_cdone], al
+    test word [vb_cflags], CF_OPENING
+    jz .ov1
+    cmp byte [vb_onext], 0xFF       ; THE LAST OPENING over: the band in now,
+    jne .ov1                        ; whatever it was (a full-screen one
+    mov byte [vb_bandok], 1         ; wrote the band's rows to its end)
+.ov1:
     mov bx, [vb_cring]
     mov byte [bx+RG_VDONE], 1       ; (its ring is free once its sound is)
     test word [vb_cflags], CF_JOINS
@@ -2907,7 +2909,6 @@ vb_play_init:
     mov [vb_mon], al
     mov word [vb_cfr], 0
     mov byte [vb_onext], 0xFF
-    mov byte [vb_olast], 0xFF
     mov [vb_tplay], al              ; (125.3.1's: no title, fade, loop yet)
     mov [vb_lwant], al
     mov [vb_estart], al
@@ -2926,9 +2927,6 @@ vb_play_init:
     mov [vb_fsteps], al
     mov cx, [vb_meta+VH_NOPEN]
     jcxz .loop
-    mov bx, cx
-    mov al, [vb_meta+VH_OPENS+bx-1]
-    mov [vb_olast], al
     mov al, [vb_meta+VH_TITLE]      ; A TITLE: it goes round out of ring 1
     cmp al, 0xFF                    ; while opening 0 is read into ring 0
     je .open
@@ -3369,6 +3367,13 @@ VB_VAR vb_vres, 2
 VB_VAR vb_sfxseg, 2
 VB_VAR vb_mring, 2
 VB_VAR vb_mfill, 2
+VB_VAR vb_gkey, 1                   ; the ground last composed (vb_needrb)
+VB_VAR vb_lmenu, 1                  ; ...the menu last drawn, NONE none
+VB_VAR vb_lmn, 1                    ; ...and its items
+VB_VAR vb_qnew, 1                   ; ...vb_menu_erase's: the menu to come
+VB_VAR vb_qecol, 2                  ; ...an old line's column
+VB_VAR vb_qerow, 2                  ; ...and row
+VB_VAR vb_bput, 1                   ; ...the band being put (a test's)
 VB_VAR vb_mlow, 2                   ; ...its lowest as a band rebuild ends
 VB_VAR vb_mtake, 2
 VB_VAR vb_mrd, 4
@@ -3400,7 +3405,6 @@ VB_VAR vb_mon, 1
 VB_VAR vb_onext, 1
 VB_VAR vb_oring, 2
 VB_VAR vb_oidx, 1
-VB_VAR vb_olast, 1
 VB_VAR vb_bandok, 1
 VB_VAR vb_banddone, 1
 VB_VAR vb_uoff, 2

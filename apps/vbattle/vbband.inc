@@ -121,8 +121,8 @@ vb_band_frame:
     pop es
     mov es, [vb_bseg]
     xor di, di
-    mov cx, 8000                    ; (16 KB: every row there can be)
-    xor ax, ax
+    call vb_bwords                  ; (the band's rows alone: 58 of them, a
+    xor ax, ax                      ; quarter of the 16 KB once cleared)
     cld
     rep stosw
     mov al, [RL+RH_BANDIMG]
@@ -181,6 +181,162 @@ vb_band_frame:
     mov ax, 0x5555
     rep stosw
     ret
+
+; vb_bwords - CX = the band buffer's words: 40 a row, its rows from the
+; band's first to 200
+vb_bwords:
+    push ax
+    mov al, [vb_meta+VH_BAND+1]
+    xor ah, ah
+    mov cx, 200
+    sub cx, ax
+    mov ax, 40
+    mul cx
+    mov cx, ax
+    pop ax
+    ret
+
+; --- THE BAND REBUILT ONLY WHEN ITS GROUND CHANGES (the owner, 2026-11-05:
+; "any way to draw the menus faster?"). A rebuild - the ground composed,
+; every line, the whole band put - was asked for at every turn's menu, a
+; sub-menu and an action taken: ~0.75 s of composing under the hook on the
+; XT, and on Hercules ~0.75 s more to put. The ground is the band's picture
+; and the open menu's own; when that is what the last rebuild drew, the
+; old menu's lines no new one covers are erased to the ground and the text
+; is drawn as a partial redraw is - on VGA4 and Hercules only its cells put
+
+; vb_gnow - AL = the ground's key now: the open menu's picture (a menu or
+; a target being chosen), NONE none
+vb_gnow:
+    mov al, NONE
+    cmp byte [vb_state], GS_MENU
+    je .m
+    cmp byte [vb_state], GS_TARGET
+    jne .r
+.m:
+    push si
+    mov al, [vb_menu]
+    call vb_menurec
+    mov al, [si+MN_IMG]
+    pop si
+.r:
+    ret
+
+; vb_needrb - [vb_dirty] has 8: CF=1 the band must be rebuilt (its ground
+; changes, or it never was); CF=0 it need not - the old menu's lines
+; erased and [vb_dirty] the text's (7) instead
+vb_needrb:
+    cmp byte [vb_gkey], 0xFE
+    je .yes
+    call vb_gnow
+    cmp al, [vb_gkey]
+    jne .yes
+    call vb_menu_erase
+    mov al, [vb_dirty]
+    and al, 0xF7
+    or al, 7
+    mov [vb_dirty], al
+    clc
+    ret
+.yes:
+    stc
+    ret
+
+; vb_itempos - item BP of menu AL: CX = its column, DX = its row in the
+; band (the look's, or its own place). AX, SI spent
+vb_itempos:
+    mov ah, [vb_menu]
+    push ax
+    mov [vb_menu], al
+    call vb_menurec
+    mov al, [si+MN_PITCH]
+    mov ah, 0
+    mul bp
+    add al, [si+MN_ROW]
+    adc ah, 0
+    mov dx, ax
+    mov cl, [si+MN_COL]
+    xor ch, ch
+    call vb_placed
+    pop ax
+    mov [vb_menu], ah
+    ret
+
+; vb_menu_erase - the lines of the menu last drawn ([vb_lmenu], [vb_lmn])
+; that the menu to be drawn now does not cover, to the ground: fifteen
+; spaces over the buffer's ground, so no line is drawn twice
+vb_menu_erase:
+    cmp byte [vb_lmenu], NONE
+    je .out
+    push bp
+    call vb_gnow                    ; (the menu to be drawn: NONE when none)
+    mov al, NONE
+    cmp byte [vb_state], GS_MENU
+    je .sh
+    cmp byte [vb_state], GS_TARGET
+    jne .ns
+.sh:
+    mov al, [vb_menu]
+.ns:
+    mov [vb_qnew], al
+    xor bp, bp
+.i:
+    mov ax, bp
+    cmp al, [vb_lmn]
+    jae .done
+    mov al, [vb_lmenu]
+    call vb_itempos
+    mov [vb_qecol], cx
+    mov [vb_qerow], dx
+    cmp byte [vb_qnew], NONE        ; covered by a line of the new menu at
+    je .erase                       ; the same place?
+    mov al, [vb_qnew]
+    push bp
+    push ax
+    call vb_menurec
+    mov bl, [si+MN_N]
+    pop ax
+    xor bp, bp
+.j:
+    mov ax, bp
+    cmp al, bl
+    jae .nj
+    push bx
+    mov al, [vb_qnew]
+    call vb_itempos
+    pop bx
+    cmp cx, [vb_qecol]
+    jne .jn
+    cmp dx, [vb_qerow]
+    je .cov
+.jn:
+    inc bp
+    jmp .j
+.cov:
+    pop bp
+    jmp short .next
+.nj:
+    pop bp
+.erase:
+    VB_BY
+    add ax, [vb_qerow]
+    mov dx, ax
+    mov cx, [vb_qecol]
+    mov si, vb_s15
+    mov bh, BG_TEXT + 3
+    push bp
+    call vb_text
+    pop bp
+.next:
+    inc bp
+    jmp .i
+.done:
+    mov byte [vb_lmenu], NONE
+    pop bp
+.out:
+    ret
+
+vb_s15:     db '               ', 0
 
 ; vb_mkeep - THE MUSIC FED while the band is drawn (the owner, 2026-11-05):
 ; a piece read when its ring holds under half - drawing keeps the reader
@@ -298,6 +454,8 @@ vb_band:
 .go:
     test al, 8
     jz .t
+    call vb_needrb                  ; (the ground the same: no rebuild - the
+    jnc .t                          ; old menu's lines erased, text redrawn)
     ; THE BAND REBUILT is composed off the screen and put on it once, its
     ; text and all (6.1's rule for a whole band: no frame shows the ground
     ; without its letters)
@@ -309,7 +467,7 @@ vb_band:
     mov byte [vb_dirty], 0
     call vb_band_frame              ; the ground, in [vb_bseg]
     push ds
-    mov cx, 8000
+    call vb_bwords                  ; (the band's rows alone)
     xor si, si
     xor di, di
     mov es, [vb_cseg]
@@ -318,11 +476,16 @@ vb_band:
     rep movsw
     pop ds
     mov byte [vb_tcomp], 1          ; the text into [vb_cseg]
+    mov byte [vb_lmenu], NONE       ; (no menu on this fresh ground yet)
+    call vb_gnow
+    mov [vb_gkey], al
     call vb_draw_menu
     call vb_draw_party
     call vb_draw_msg
     mov byte [vb_tcomp], 0
+    mov byte [vb_bput], 1           ; (the band being put: a test's)
     call vb_band_put
+    mov byte [vb_bput], 0
     mov ax, [vb_mfill]              ; (the ring's level as the rebuild ends,
     sub ax, [vb_mtake]              ; the lowest kept: tests/vbtsound.py)
     cmp byte [vb_mres], 0
@@ -363,8 +526,11 @@ vb_draw_menu:
     ret
 .go:
     mov al, [vb_menu]
+    mov [vb_lmenu], al              ; (the menu drawn, for vb_menu_erase)
     call vb_menurec
     mov [vb_mrec], si
+    mov al, [si+MN_N]
+    mov [vb_lmn], al
     xor bp, bp
 .l:
     call vb_mkeep                   ; (the music fed between lines)

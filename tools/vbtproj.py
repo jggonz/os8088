@@ -852,6 +852,10 @@ class Project:
                     warn("band_layout", "%s (columns %d-%d) and %s (%d-%d) "
                          "overlap" % (n1, c1, c1 + w1 - 1, n2, c2,
                                       c2 + w2 - 1))
+        import vbtband as VB_       # parts that share cells: a partial
+        for a, b in VB_.overlaps(self):  # redraw lays them otherwise
+            warn("band_layout", "%s and %s share cells - whichever changed "
+                 "last is drawn over the other" % (a, b))
         # THE FOLLOW-UPS (125.6.7): after X, the next turn Y
         fol = e.get("follow_ups", [])
         nxt = {}

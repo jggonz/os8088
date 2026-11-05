@@ -207,3 +207,57 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
         return b.px
     rgb = np.array(A.palette_rgb(d["target"]["palette"]), np.uint8)[b.px]
     return Image.fromarray(rgb)
+
+
+def overlaps(proj):
+    """The band's text parts that SHARE CELLS (125.5.1): [(what, what)].
+    The engine redraws only what changed, so a cursor moved redraws a menu
+    over the message line it overlaps where the whole band drew the message
+    last - a layout's mistake, said by the check rather than drawn in a
+    fixed order"""
+    import os88vbt as B
+    import vbtrules as V
+    d = proj.d
+    idx = {c: i for i, c in enumerate(d["clips"])}
+    try:
+        rules = V.Rules(V.compile_rules(proj, idx, B.images_of(proj)[1],
+                                        preview=True))
+    except Exception:           # noqa: BLE001 (the rules' own errors say it)
+        return []
+    L = rules.layout or V.layout_defaults(d["target"]["band"][1])
+    parts = []                  # (what, col, row, cells): rows are 8 high
+    if L["msg_show"]:
+        parts.append(("the message line", L["msg_col"], L["msg_row"], 38))
+    if L["enemy_show"]:
+        parts.append(("the enemy's line", L["enemy_col"], L["enemy_row"],
+                      22))
+    for i, c in enumerate(rules.chars):
+        line, lo = party_line(L, c["name"], False, c["hp"], c["hp"], c["mp"])
+        if line:
+            parts.append(("%s's party line" % c["name"], lo,
+                          L["party_row"] + L["party_pitch"] * i, len(line)))
+    menus = []
+    seen = set()
+    for ch in rules.chars:
+        for mi in [ch["top"], ch["side"]] + [
+                k for kind, k in rules.menus[ch["top"]]["items"] if kind == 1]:
+            if mi is None or mi in seen or mi >= len(rules.menus):
+                continue
+            seen.add(mi)
+            m = rules.menus[mi]
+            for i in range(len(m["items"])):
+                col, row = m["col"], m["row"] + i * m["pitch"]
+                if (mi, i) in rules.places:
+                    col, row = rules.places[(mi, i)]
+                menus.append(("the %s menu's item %d" % (m["label"], i + 1),
+                              col, row, 15))
+
+    def hit(a, b):
+        return (a[1] < b[1] + b[3] and b[1] < a[1] + a[3] and
+                a[2] < b[2] + 8 and b[2] < a[2] + 8)
+    out = []
+    for i, a in enumerate(parts):
+        for b in parts[i + 1:] + menus:
+            if hit(a, b):
+                out.append((a[0], b[0]))
+    return out

@@ -303,16 +303,17 @@ def inner(tmp):
     app.nb.select(pt.f)
     b0 = np.array(app.band_rgb())
     pt._lay("mp_show", 0)
-    pt._lay("msg_row", "3")
+    pt._lay("msg_row", "51")            # (clear of the menu: 125.5)
     pt.mrow = 1
-    pt._place(app.proj.d["characters"][0]["name"] + ":top", 1, 0, "24")
+    pt._place(app.proj.d["characters"][0]["name"] + ":top", 1, 0, "1")
     b1 = np.array(app.band_rgb())
     lk = app.proj.d["menu_looks"][app.proj.d["characters"][0]["name"] + ":top"]
-    ok(app.proj.d["band_layout"] == {"mp_show": 0, "msg_row": 3}
-       and lk["places"][1][0] == 24 and not np.array_equal(b0, b1)
-       and not [x for x in app.proj.check() if x.where == "band_layout"],
+    said = [x.text for x in app.proj.check() if x.where == "band_layout"]
+    ok(app.proj.d["band_layout"] == {"mp_show": 0, "msg_row": 51}
+       and lk["places"][1][0] == 1 and not np.array_equal(b0, b1)
+       and not said,
        "C. the band's LAYOUT set: MP hidden, the message moved, an item "
-       "placed (%s), the preview with it" % lk["places"])
+       "placed (%s), the preview with it %s" % (lk["places"], said))
     pt._lay("mp_show", "")
     pt._lay("msg_row", "")
     ok(not app.proj.d.get("band_layout"), "C. ...and back to as it was")

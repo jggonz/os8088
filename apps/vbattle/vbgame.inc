@@ -143,6 +143,7 @@ vb_game:
     cmp byte [vb_banddone], 0
     jne .i2
     mov byte [vb_banddone], 1
+    mov byte [vb_gkey], 0xFE        ; (a ground never drawn: rebuilt)
     or byte [vb_dirty], 8
 .i2:
     cmp byte [vb_mode], VM_IDLE     ; ...and it has seamed onto the loop

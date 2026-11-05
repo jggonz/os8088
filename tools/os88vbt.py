@@ -371,6 +371,7 @@ def build(b):
     title_s = [surface_of(full_of(f), REND.full) for f in b.title["frames"]] \
         if b.title else []
     ents = bytearray()
+    wasfull = True                  # (black, or a full opening's last frame)
     for k, o in enumerate(openings):
         last = k == len(openings) - 1
         fr = [full_of(f) for f in o["frames"]]
@@ -380,8 +381,7 @@ def build(b):
         anch = []
         # FULL SCREEN, or with the menu (125.3): only a full one's flag
         # says so, and the engine brings the band in at the first opening
-        # without it - or, for a bundle where every opening has it (format
-        # 7 before the choice), at the last
+        # without it - or, every opening full, once the last is over
         flags = CF_OPENING | CF_OWNSND | (CF_FULL if o.get("full") else 0)
         if o.get("enter"):          # ENTERED at the title's frames, as an
             flags |= CF_ENTER       # action is at the idle loop's: an entry
@@ -392,18 +392,29 @@ def build(b):
             recs.append(rec(None, None, REND.full, snd[0]))
             prev = cur
             fr, snd = fr[1:], snd[1:]
+        # WITH THE MENU, the band is up from its first frame: every record
+        # writes the CANVAS'S rows alone - but record 0, when the screen
+        # before it was black or a full opening's, whose band rows it
+        # clears. Over the whole screen, a span's gap closed across a band
+        # row put the black under the canvas over the band (the rules'
+        # bytes, eaten while the opening played)
         for f, a in zip(fr, snd):
             cur = surface_of(f, REND.full)
-            recs.append(rec(prev, cur, REND.full, a))
+            rw = REND.full if (o.get("full") or not recs and wasfull) \
+                else rows
+            recs.append(rec(prev, cur, rw, a))
             prev = cur
         exit_to = 0
         if last:            # the scene opening seams onto the idle loop
             flags |= CF_JOINS
             exit_to = o.get("exit", 0)
+            rw = REND.full if (o.get("full") or not recs and wasfull) \
+                else rows
             recs.append(rec(prev, surface_of(full_of(b.idle[exit_to]),
-                                             REND.full), REND.full))
+                                             REND.full), rw))
         scr = o["frames"][-1] if not fr else fr[-1]
         scr = full_of(scr)
+        wasfull = bool(o.get("full"))
         regions.append(stream(recs))
         clip_rows.append(dict(name=o["name"], nrec=len(recs), flags=flags,
                               exit=exit_to, anch=anch))
