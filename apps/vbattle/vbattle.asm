@@ -119,6 +119,9 @@ VB_PIECE    equ 4096            ; a read: a cluster multiple, and under a
 VB_CRMIN    equ 48              ; a CLIP RING: as many KB as the machine has
                                 ; (125.4), split two ways - and at least this
 VB_RKEEP    equ 8               ; KB left free when the rings are sized
+VB_CPGAIN   equ 16              ; KB a compaction must buy to be posted
+VB_RGROW    equ 32              ; ...and ring 0 claimed again over its run
+                                ; when that much is left beside it
 VB_CGUARD   equ 16384           ; 16 KB guard past it: the tail of the record
                                 ; that runs past the end, copied, so a record
                                 ; (at most the guard, VH_MAXREC) is whole at
@@ -271,6 +274,9 @@ vb_entry:
     jc .out
     mov [vb_win], bx
     OS88_REGION_MOVABLE
+    mov bx, [vb_win]                ; (the compaction a play may post wakes
+    mov ax, vb_onwake               ; us: VBATTLE-RAM-PLAN R1)
+    call OSAPI_WM_ONWAKE
     mov word [vb_status], vb_s_ready
     mov bx, [vb_win]
     clc
@@ -404,6 +410,16 @@ vb_onclick:
 ; then the full screen. From a UI callback, the gfx lock held (53.1)
 vb_play:
     push si
+    cmp byte [vb_cpq], 1            ; a compaction posted, its wake to come:
+    je .out                         ; the key is the one already pressed
+    cmp byte [vb_cpq], 2            ; ...and come: play, without asking again
+    je .go
+    call vb_cpask                   ; MORE ROOM IF WE MOVED TOO? posted: the
+    jc .go                          ; play starts on the wake (vb_onwake)
+    mov word [vb_status], vb_s_room
+    jmp short .paint
+.go:
+    mov byte [vb_cpq], 0
     mov word [vb_status], vb_s_load
     mov si, [vb_win]
     call vb_paint
@@ -431,7 +447,54 @@ vb_play:
 .paint:
     mov si, [vb_win]
     call vb_paint
+.out:
     pop si
+    ret
+
+; vb_cpask - THE COMPACTION DOOR (VBATTLE-RAM-PLAN R1, Video Player's
+; vp_cptry, SPEC.md 66.4.3): what the arena would give if OUR OWN region
+; moved too, against what it gives now - on a machine that has been used,
+; the battle's region can be anywhere, a closed program's hole under it -
+; and when that is VB_CPGAIN or more, the compaction POSTED: CF=0, and the
+; play starts on the wake. CF=1 not worth it, or refused. A package cannot
+; compact the region it is standing in, which is why this is a door and not
+; a call. Preserves all but AX
+vb_cpask:
+    push bx
+    push cx
+    call OSAPI_MEM_AVAIL            ; AX = the largest run now, KB
+    mov cx, ax
+    mov ax, MEM_LVL_TOP             ; AH = MEMC_WHATIF: if we moved too (every
+    call OSAPI_MEM_COMPACT          ; cache counted free - the play purges
+    sub ax, cx                      ; them, the owner's choice)
+    jb .no
+    cmp ax, VB_CPGAIN
+    jb .no
+    mov bx, [vb_win]
+    mov ax, (MEMC_POST << 8) | MEM_LVL_TOP
+    call OSAPI_MEM_COMPACT
+    jc .no
+    mov byte [vb_cpq], 1
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop cx
+    pop bx
+    ret
+
+; vb_onwake - EVT_WAKE: the compaction a play posted has run - the play,
+; now, with the room it made
+vb_onwake:
+    cmp byte [vb_cpq], 1
+    jne .out
+    mov byte [vb_cpq], 2
+    inc word [vb_ncomp]             ; (counted: a test's)
+    call OSAPI_GFX_LOCK
+    call vb_play
+    call OSAPI_GFX_UNLOCK
+.out:
     ret
 
 ; =============================================================================
@@ -643,6 +706,26 @@ vb_kb:
     ret
 
 ; vb_p2kb - AX = AX paragraphs in KB, rounded up. CX, DX spent
+; vb_bpara - CX = one band buffer's paragraphs: the band's rows x 80 bytes
+; (2 bits a pixel, 320 across), rounded to 4 KB. AX kept
+vb_bpara:
+    push ax
+    push dx
+    mov al, [vb_meta+VH_BAND+1]     ; (the band's first row)
+    xor ah, ah
+    mov cx, 200
+    sub cx, ax
+    mov ax, 80
+    mul cx
+    mov cx, ax
+    call vb_round
+    mov cl, 4
+    shr ax, cl
+    mov cx, ax
+    pop dx
+    pop ax
+    ret
+
 vb_p2kb:
     xor dx, dx
     mov cx, 4
@@ -790,11 +873,17 @@ vb_load:
     shr ax, cl
     add ax, [vb_pimg]
     mov [vb_pbband], ax             ; ...and the band's two buffers, its
-    add ax, 2 * 16384 / 16          ; ground and its composition, 16 KB each
-    call vb_p2kb
+    call vb_bpara                   ; ground and its composition, each the
+    shl cx, 1                       ; band's rows and no more (they were 16
+    add ax, cx                      ; KB each for a 4.6 KB band: VBATTLE-
+    call vb_p2kb                    ; RAM-PLAN R1)
     mov word [vb_err], vb_s_nomem
-    call OSAPI_MEM_CLAIM
-    jc .fail1
+    call OSAPI_MEM_CLAIM_HI         ; FROM THE TOP: claimed from the bottom it
+    jc .fail1                       ; landed just over the desktop's caches
+                                    ; and left them a pocket no ring could
+                                    ; reach (125.4.4); from the top, they lie
+                                    ; beside the run the rings are sized from,
+                                    ; and the rings' claim sheds them into it
     mov [vb_vres], dx
     mov ax, dx
     add ax, [vb_psfx]
@@ -814,7 +903,8 @@ vb_load:
     mov ax, dx
     add ax, [vb_pbband]
     mov [vb_bseg], ax
-    add ax, 16384 / 16
+    call vb_bpara
+    add ax, cx
     mov [vb_cseg], ax
     call vb_cardclaim               ; the card's ring, before the rings are
                                     ; sized out of what is left
@@ -1001,54 +1091,113 @@ vb_cardclaim:
 .out:
     ret
 
-; vb_rclaim - the two CLIP RINGS, as big as the machine allows: the largest
-; run less VB_RKEEP, split two ways, each less its guard and cut to whole
-; 4 KB (125.4). Nothing else can claim while the bracket runs, and they are
-; given back as it ends (vb_rfree). CF=1 and [vb_err] when there is not
-; room for VB_CRMIN each
+; vb_rclaim - the two CLIP RINGS, EACH ITS OWN CLAIM (VBATTLE-RAM-PLAN R1):
+; ring 0 half of the largest run, ring 1 the largest run left after it - on
+; a machine that has been used, the second-largest hole, where one claim for
+; both could only ever have one - and then, when ring 1 went somewhere else
+; and ring 0's run has room left over, ring 0 claimed again over all of it.
+; Each is cut to whole 4 KB and has its guard past it; VB_RKEEP is left free
+; for the kernel's file reads (a FAT window). OSAPI_MEM_AVAIL counts the
+; desktop's caches as free and the claim sheds them (SPEC.md 50.6.3): the
+; battle reads one file through its own cursors and walks no directory.
+; CF=1 and [vb_err] when there is not room for VB_CRMIN each
 vb_rclaim:
-    call OSAPI_MEM_AVAIL            ; AX = the largest run, KB
+    call OSAPI_MEM_AVAIL            ; THE ARENA PACKED FIRST: the whole of the
+    sub ax, VB_RKEEP                ; largest run claimed and given back. The
+    jc .no                          ; kernel can serve that only by shedding
+    call OSAPI_MEM_CLAIM            ; the caches and packing what moves - a
+    jc .pk                          ; claim that fits a free run as it stands
+    call OSAPI_MEM_FREE             ; does neither, and on a USED machine the
+.pk:                                ; directory read-ahead's 31.5 KB was left
+    call OSAPI_MEM_AVAIL            ; a hole under a 2 KB claim (VBATTLE-RAM-
+    call .pair                      ; PLAN R1). Then THE PAIR, half and half
+    jc .no                          ; of what OSAPI_MEM_AVAIL says - which is
+                                    ; exactly what a claim gets (it was
+                                    ; checked against the heap at the instant:
+                                    ; 298 KB said, 298 KB there)
+.room:
+    call OSAPI_MEM_AVAIL            ; ROOM STILL: ring 1 went to another run
+    cmp ax, VB_RKEEP + VB_RGROW     ; (a used machine's second hole), and ring
+    jb .ok                          ; 0 is claimed again over all of its own
+    mov ax, [vb_rkb]                ; (its size, to claim back if the
+    push ax                         ; bigger one is refused)
+    xor dx, dx
+    xchg dx, [vb_rclm]
+    call OSAPI_MEM_FREE
+    call OSAPI_MEM_AVAIL
     sub ax, VB_RKEEP
-    jc .no
-    shr ax, 1
-    xor dh, dh
-    mov dl, [vb_cgkb]
-    sub ax, dx
-    jc .no
-    and ax, 0xFFFC
-    cmp ax, VB_CRMIN
-    jb .no
-    mov [vb_rkb], ax
-    add ax, dx
-    shl ax, 1
-    call OSAPI_MEM_CLAIM
-    jc .no
-    mov [vb_rclm], dx
     mov bx, vb_rg0
-    call .set
-    mov ax, [vb_rkb]
-    add al, [vb_cgkb]
-    adc ah, 0
-    mov cl, 6
-    shl ax, cl
-    add dx, ax
-    mov bx, vb_rg1
-    call .set
+    call .claim
+    pop ax
+    jnc .ok
+    xor dh, dh                      ; (refused: the size it had)
+    mov dl, [vb_cgkb]
+    add ax, dx
+    mov bx, vb_rg0
+    call .claim
+    jc .no0
+.ok:
     clc
     ret
+.no0:
+    call vb_rfree
 .no:
     mov word [vb_err], vb_s_nomem
     stc
     ret
-.set:                               ; ring BX at segment DX
+.pair:                              ; ring 0 half of AX KB, ring 1 the
+    sub ax, VB_RKEEP                ; largest left. CF=1 none claimed
+    jc .pno
+    shr ax, 1
+    mov bx, vb_rg0
+    call .claim
+    jc .pno
+    call OSAPI_MEM_AVAIL
+    sub ax, VB_RKEEP
+    jc .pfree
+    mov bx, vb_rg1
+    call .claim
+    jnc .pok
+.pfree:
+    call vb_rfree
+.pno:
+    stc
+.pok:
+    ret
+.claim:                             ; ring BX from AX KB (its guard in it):
+    xor dh, dh                      ; CF=1 under VB_CRMIN or refused
+    mov dl, [vb_cgkb]
+    sub ax, dx
+    jc .cno
+    and ax, 0xFFFC
+    cmp ax, VB_CRMIN
+    jb .cno
+    push ax
+    add ax, dx
+    call OSAPI_MEM_CLAIM
+    pop ax
+    jc .cno
+    cmp bx, vb_rg0
+    jne .c1
+    mov [vb_rclm], dx
+    mov [vb_rkb], ax
+    jmp short .set
+.c1:
+    mov [vb_rclm2], dx
+    mov [vb_rkb2], ax
+    jmp short .set
+.cno:
+    stc
+    ret
+.set:                               ; ring BX at segment DX, AX KB
     mov [bx+RG_SEG], dx
-    mov ax, [vb_rkb]
+    push ax
     mov cl, 6
     shl ax, cl
     mov [bx+RG_PARA], ax
     add ax, dx
     mov [bx+RG_END], ax
-    mov ax, [vb_rkb]
+    pop ax
     mov cl, 10
     push dx
     xor dx, dx
@@ -1062,12 +1211,19 @@ vb_rclaim:
     pop dx
     mov al, 0xFF
     call vb_rreset
+    clc                             ; (.claim's: claimed)
     ret
 
 ; vb_rfree - the clip rings given back
 vb_rfree:
     xor dx, dx
     xchg dx, [vb_rclm]
+    or dx, dx
+    jz .r2
+    call OSAPI_MEM_FREE
+.r2:
+    xor dx, dx
+    xchg dx, [vb_rclm2]
     or dx, dx
     jz .out
     call OSAPI_MEM_FREE
@@ -3435,6 +3591,7 @@ vb_s_t2:      db ' Enter or click: play (Esc leaves)', 0
 vb_s_t4:      db ' Needs BATTLE.VBT beside it', 0
 vb_s_ready:   db ' Ready', 0
 vb_s_load:    db ' Loading...', 0
+vb_s_room:    db ' Making room...', 0
 vb_s_again:   db ' Enter or click to play again', 0
 vb_s_nofile:  db ' BATTLE.VBT not found', 0
 vb_s_notvbt:  db ' BATTLE.VBT is not a VBT1 file', 0
@@ -3501,7 +3658,11 @@ VB_VAR vb_tpre, 4
 VB_VAR vb_tcp, 4
 VB_VAR vb_ncopy, 4
 VB_VAR vb_rkb, 2                    ; each clip ring's KB, this play
-VB_VAR vb_rclm, 2                   ; ...their claim
+VB_VAR vb_rclm, 2                   ; ...ring 0's claim
+VB_VAR vb_rclm2, 2                  ; ...ring 1's (each its own: R1)
+VB_VAR vb_rkb2, 2                   ; ...ring 1's KB
+VB_VAR vb_cpq, 1                    ; a compaction: 1 posted, 2 its wake
+VB_VAR vb_ncomp, 2                  ; ...the wakes a play has started on
 VB_VAR vb_hbusy, 4
 VB_VAR vb_rseg, 2
 VB_VAR vb_rcap, 2

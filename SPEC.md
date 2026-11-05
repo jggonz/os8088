@@ -238090,6 +238090,27 @@ the band is 4.6; the entries are held from the play's start to its end.
 docs/plans/VBATTLE-RAM-PLAN.md is the plan to give the rings the ~90 KB
 that is, and to read nothing at a menu that a key has to wait for.
 
+**R1, built**: the band's buffers are the band's rows (`vb_bpara`: 2 x 5
+KB at the default band, not 2 x 16); the block is claimed FROM THE TOP
+(`OSAPI_MEM_CLAIM_HI`), so the caches lie beside the rings' run rather
+than under the block; the play first asks the compaction door (`vb_cpask`,
+Video Player's `vp_cptry`: `OSAPI_MEM_COMPACT`'s what-if at `MEM_LVL_TOP`
+against `OSAPI_MEM_AVAIL`, and when moving the battle's own region would
+buy 16 KB or more, the compaction POSTED and the play started on the wake,
+"Making room..." in the window); and the rings are TWO claims
+(`vb_rclaim`), after the whole largest run is claimed and given back once
+- the kernel can serve that only by shedding the caches and packing what
+moves, and a claim that fits a free run as it stands does neither (on a
+used machine the directory read-ahead's 31.5 KB was left a hole under a 2
+KB claim). Then ring 0 is half of `OSAPI_MEM_AVAIL`'s largest run - exact:
+checked against the heap at the instant, 298 KB said and 298 there - and
+ring 1 the largest left; when ring 1 went to another run, ring 0 is claimed
+again over the whole of its own. `VB_RKEEP` (8 KB) stays free for the
+kernel's FAT window, which the sequential reads step clusters through. The
+owner's battles: **128 + 128 KB** of ring (100%, was 88 + 88), **144 + 148**
+(75%, was 108 + 108). `vbtram` holds a fresh boot and a used machine (Skies
+and Paint opened, the battle, the two closed) to the same rings.
+
 ### 125.5 The band
 
 The band is the rows from the header's band row (142 by default) to 199 of

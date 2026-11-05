@@ -16958,6 +16958,15 @@ SOAK = [
         "played to its end. Broken (ENDED as silence, the ring's room by a "
         "sound cursor that never moves): no card, and the action froze",
         needs=("marty", "ffmpeg")),
+    Row("vbtram", "soak", py("tests/vbtram.py"), 150.0,
+        "SPEC.md 125.4.4, VBATTLE-RAM-PLAN R1: what a battle holds, on "
+        "MartyPC's Hercules 5150 - on a FRESH boot (the desktop's caches gone "
+        "for the play, nothing stranded, both rings over 100 KB) and on a "
+        "USED machine (Skies and Paint opened, the battle opened, the two "
+        "closed: the play posts a compaction, starts on its wake, and its "
+        "rings are the fresh boot's). Broken (no compaction door; the block "
+        "from the bottom) the used rings come out short / the caches stay",
+        needs=("marty",)),
     Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
         "SPEC.md 125.5: the music under the band, the owner's 'when the "
         "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "
