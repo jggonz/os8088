@@ -100,6 +100,10 @@ W16PROCNAME W16M_USER, 111, 'SendMessage'
 W16PROCNAME W16M_USER, 179, 'GetSystemMetrics'
 W16PROCNAME W16M_GDI, 80, 'GetDeviceCaps'
 W16PROCNAME W16M_GDI, 119, 'AddFontResource'
+; CTL3D.DLL's start-up binds the Windows 3.1 hooks by name (SPEC.md 124.25.22)
+W16PROCNAME W16M_USER, 291, 'SetWindowsHookEx'
+W16PROCNAME W16M_USER, 292, 'UnhookWindowsHookEx'
+W16PROCNAME W16M_USER, 293, 'CallNextHookEx'
 
 ;           module         ordinal  args  handler               the .spec line
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
@@ -254,6 +258,9 @@ W16EXPORT W16M_GDI,        370,     6,  w16g_nearpal        ; GetNearestPaletteI
 W16EXPORT W16M_USER,       121,     6,  w16u_sethook        ; SetWindowsHook(s_word segptr)
 W16EXPORT W16M_USER,       234,     6,  w16u_unhook         ; UnhookWindowsHook(s_word segptr)
 W16EXPORT W16M_USER,       235,     12, w16u_defhook        ; DefHookProc(s_word word long ptr)
+W16EXPORT W16M_USER,       291,     10, w16u_sethookex      ; SetWindowsHookEx(s_word segptr word word): kept and answered (124.25.22)
+W16EXPORT W16M_USER,       292,     4,  w16_ans1            ; UnhookWindowsHookEx(long): TRUE
+W16EXPORT W16M_USER,       293,     12, w16_ans0            ; CallNextHookEx(long s_word word long): 0
 W16EXPORT W16M_USER,       236,     0,  w16u_getcapture     ; GetCapture()
 W16EXPORT W16M_USER,       21,      0,  w16u_dblclktime     ; GetDoubleClickTime()
 W16EXPORT W16M_USER,       222,     4,  w16u_getkbstate     ; GetKeyboardState(ptr)

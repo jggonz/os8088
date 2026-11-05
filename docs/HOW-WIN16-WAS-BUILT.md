@@ -4889,3 +4889,30 @@ exercised by anything but running. FS and GS are not banked by the gate.
 pre-check; the other sites that pass a program pointer straight to an
 `OSAPI_*` call are listed in the report, and the rule for a new one is in
 SPEC.md 124.26.12.
+
+### Sir Hangman's engine, the next two walls (`hangman2`, 2026-11-04)
+
+After O8 the textless *Setup* box was still there with 240 KB of heap free,
+so it was not memory. A `-DW16_TRACE` ring (frozen at the first `MessageBox`
+with a scratch flag) ended `LoadLibrary`, `LoadString`, `LoadString`,
+`MessageBox`; a scratch log of the names `LoadLibrary` was given read
+`_SETUP.DLL` 1FE3h (found), then `CTL3D.DLL`, `_ISRES.DLL` and `_ISUSER.DLL`,
+each **2**, no such file. The files were there: `SETUP.EXE` unpacks them into
+`C:\SYSTEM\APPDATA\WIN16\_ISTMP0.DIR\` and the engine names them by full path,
+and WIN16 had ignored the folder since §124.23. The box has no text because
+the engine's strings come from `_ISRES.DLL`, the one library it did not get.
+`LoadLibrary` now tries a drive-and-folder path in that folder first (§124.25.22).
+
+With the libraries found the engine got further and a kernel toast closed it:
+*SETUP 0D at 1D84:0216* (a #GP; read off the screen it looks like 1084, the
+glyph is a D). QEMU's `-d int` log gave the registers and a memory dump gave
+the code: `CTL3D.DLL`'s `call far [DS:0320h]` through a pointer its start-up
+fills with `GetProcAddress(USER, "SETWINDOWSHOOKEX")`, null, because WIN16
+had neither the function nor the name. USER.291-.293 are kept-and-answered
+and their names are in `GetProcAddress`'s list (a row alone changed nothing:
+the first look after adding only rows showed the same fault at the same
+address). The *Setup* window now stays up at 81 % for about 90 seconds and
+closes with no toast and no box. The engine wrote `_ISERR31.INI` and
+`_DELIS43.INI`; it did not reach its welcome dialog. That is the next wall and
+it is not named: the look budget was spent, and it needs a trace read of the
+engine at that moment.

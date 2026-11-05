@@ -235325,7 +235325,7 @@ start without it: `GetModuleHandle("KEYBOARD")`, then
 | call | answer |
 |---|---|
 | `GetModuleHandle(name)` | one of WIN16's modules, by its name to the first dot and case aside: `W16_HMOD` (20h) + its id, KERNEL 20h to SHELL 26h - paragraphs in the interrupt table, which no program's memory can be. The program's own name - its file's stem or its module name - answers its instance, which every call here takes as its module too, and so does a NULL segment (a handle given). Another task's **module name** answers that task's instance while it runs (§124.28.5): the loader keeps each program's module name, the resident names' first, in `w16_mname`, because its NE tables are freed before it runs. Microsoft's Setup Toolkit starts `_MSTEST.EXE`, whose module name is `DSHELL`, and waits while `GetModuleHandle("DSHELL")` answers; a 0 there sent it straight to deleting its own second stage. Anything else is 0 |
-| `GetProcAddress(hModule, name)` | on one of WIN16's modules, a function in `w16api.inc`'s `W16PROCNAME` list, by name (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the bind slot given out on the first ask, as an import's first fixup gives one. The export rows are the loader part's and it is dropped once the program runs (§124.18.7), so the list carries each name's binding into the library part; at most `W16_NPNMAX` (16) names. Today there are fifteen:
+| `GetProcAddress(hModule, name)` | on one of WIN16's modules, a function in `w16api.inc`'s `W16PROCNAME` list, by name (case aside) or by ordinal (a NULL segment): a far pointer to its stub, the bind slot given out on the first ask, as an import's first fixup gives one. The export rows are the loader part's and it is dropped once the program runs (§124.18.7), so the list carries each name's binding into the library part; at most `W16_NPNMAX` (18) names. Today there are eighteen - the fifteen below and `USER.SetWindowsHookEx`, `UnhookWindowsHookEx` and `CallNextHookEx` (§124.25.22):
 `KEYBOARD.MapVirtualKey`, `KERNEL.LocalHandleDelta` (Write 3.1), and the
 thirteen that the scripts of Microsoft's setup engine (`_MSTEST.EXE`,
 Arcade's and Mozart's) `DECLARE` and bind by name: `KERNEL.GetVersion`,
@@ -235766,7 +235766,7 @@ line 2 the library's file.
 
 | call | |
 |---|---|
-| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a folder in it is ignored and the file looked for by its 8.3 name in the program's folder, then in the Windows directory and the system directory (§124.23.1.1). A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
+| `LoadLibrary` (KERNEL.95) | a name with no extension gets `.DLL`; a full path (a drive and a folder) is looked for in that folder first (§124.25.22); a name without a drive has its folder ignored; and the file is then looked for by its 8.3 name in the program's folder, then in the Windows directory and the system directory (§124.23.1.1). A library already loaded (by its file name, or its module name) has its count raised and its hInstance answered. One of WIN16's own modules answers its `W16_HMOD` handle (§124.22.12). Otherwise the loader part is fetched (§124.18.7), the library loaded as at the start (§124.23.1-124.23.3), and each `LibMain` the load owes is called as a call into the program (`w16k_llrun`): first those of the libraries it brought in, the last loaded first, then its own. Until 2026-11-02 only the library asked for was called. Microsoft's setup engine then looped on `LoadString(NULL, ...)`, because MSCOMSTF's `LibMain`, which keeps its hInstance, never ran; the answer is its hInstance, or **2** (no such file), **11** (the loader refused it, for any of its reasons: no memory and `W16_NLIB` taken among them), or **0** (its `LibMain` answered 0, and it is freed again). WIN16's window keeps its own two lines: a refusal's are not shown |
 | `FreeLibrary` (KERNEL.96) | the count lowered; at 0 the library's `WEP` (an export of that name) is called with `WEP_FREE_DLL` (0), as a call into the program, and its three blocks are freed. A library the program imports holds one count for the program, so only a `LoadLibrary`'s own count can bring it to 0. WIN16's own handles have nothing to free |
 | `GetProcAddress` (KERNEL.50) | on a library's handle: the export, by name (case aside) or by ordinal (a NULL segment), as a direct far pointer; NULL if it does not export it. WIN16's own handles as before (§124.22.12) |
 | `GetModuleHandle` (KERNEL.47) | a library's module name or the name its program imported it by, to the first dot: its handle |
@@ -236910,6 +236910,77 @@ before it: the libraries' `LibMain` gate (`w16_lmgo`), its `w16_cbdone`, and
 `GlobalReAlloc` and `GlobalSize` for the program's own DGROUP, which is laid
 out at 64 KB whenever the arena has room (§124.21.4), is the next step, and
 is not done here.
+
+#### 124.25.22 `LoadLibrary` of a full path *(WIN16-NEXT, `hangman2`)*
+
+**The wall.** InstallShield 3's launcher (`SETUP.EXE`) unpacks its files into
+a folder of its own, `C:\SYSTEM\APPDATA\WIN16\_ISTMP0.DIR\` (`_ISRES.DLL`,
+`CTL3D.DLL`, a copy of `_SETUP.LIB`) and the engine it expands next to them
+(`_INS0433._MP`, module `ISINST30`) loads its libraries by FULL path:
+`LoadLibrary("C:\SYSTEM\APPDATA\WIN16\_ISTMP0.DIR\_ISRES.DLL")`. §124.23.4
+said a folder in the name was ignored and the file looked for by its 8.3 name
+in the program's folder, the Windows directory and the system directory, so
+the call answered 2 (no such file) for a file that was there. The engine's
+error path then loads its text from the resource library it never got
+(`LoadString(0, 2923)`, which Windows answers 0 as well), so the
+box it shows has an icon, a button and no words. That box was blamed on
+the global heap (isbox) and the heap was fixed (O8, §124.26.12); the same box
+came back with 240 KB free, and a ring (§124.17.4) with a log of the names
+`LoadLibrary` was given showed the real call: `_ISRES.DLL` answered 2, `_ISUSER.DLL`
+answered 2, and then `LoadString`, `LoadString`, `MessageBox`. `SETUP.EXE` itself
+shows its own, worded, box for the same reason (*Setup requires _SETUP.DLL and
+_ISRES.DLL*), because it loads `_ISRES.DLL` the same way.
+
+**The rule now.** A name with a drive and a folder (`X:\DIR\...\NAME.EXT`; `/` is
+`\`, case does not matter) is looked for IN THAT FOLDER first, on volume `X`
+(drive A is volume 0, §124.21), walked from the root a name at a time. Where
+it is not found - no such folder, no such file - the search of §124.23.1.1 goes
+on as it did, so a path that named the program's own folder, or a folder that
+is not there on this machine, loads what it loaded before. A name with no
+drive (`DIR\X.DLL`, `\X.DLL`, `X.DLL`) is as it was: the folder is ignored. A path that
+does not fit in `w16f_path` (142 characters) is as it was too. The library's
+own imports are looked for from the folder it was found in, as for any library
+that is not in the program's (§124.23.1.1).
+
+**What it costs.** No resident byte beyond the name's copy: `LoadLibrary`'s
+scan (library part, 3) copies the name it is scanning into `w16f_path`, which
+is scratch for the file calls and rewritten by every `LoadLibrary`, so it is
+never stale; the walk is `w16l_pathlib`, in the loader part (5), called by
+`w16l_rtlib` before the search. Only a run-time `LoadLibrary` is affected: a
+program's and a library's imports, loaded at the start, name no folder.
+
+**The next wall: `CTL3D.DLL` and the Windows 3.1 hooks.** With the libraries
+found, `SETUP.EXE`'s "preparing the InstallShield Wizard" window ran to 81 %
+and the engine's `LibMain`-time work went on until the kernel closed it:
+*SETUP 0D at 1D84:0216*, a #GP with error code 0 (QEMU's `-d int` log: the
+fault, with `EAX` = the task handle `GetCurrentTask` had answered). The code at
+that address is `CTL3D.DLL`'s (Microsoft's 3-D controls, which the engine
+loads from its temp folder): `Ctl3dRegister`'s `call far [DS:0320h]`, a far
+pointer `CTL3D`'s start-up fills with `GetProcAddress(GetModuleHandle("USER.EXE"),
+"SETWINDOWSHOOKEX")` and with `UNHOOKWINDOWSHOOKEX` and `CALLNEXTHOOKEX` when
+`GetVersion` says 3.10 or later. WIN16 had none of the three, so
+`GetProcAddress` answered 0, the pointer stayed 0:0 and the call went to
+selector 0. (The ring shows it: six `GetClassInfo`s, `GetCurrentTask`, then the
+fault.) The three are USER's, new in Windows 3.1 and kept in `USER.EXE`'s
+export table as numbers 291, 292 and 293:
+
+| function | contract | WIN16 |
+|---|---|---|
+| `SetWindowsHookEx(idHook, lpfn, hInstance, hTask)` (USER.291) | a hook of one task, a `HHOOK` | **kept and answered, not called**, as §124.22.16 does for every type but `WH_MSGFILTER`: the answer is `lpfn` (non-NULL: a handle; NULL: 0, refused). The hook never fires, so `CTL3D` subclasses nothing and the controls it would have drawn in 3-D are the plain ones |
+| `UnhookWindowsHookEx(hhook)` (USER.292) | takes it out | **TRUE** |
+| `CallNextHookEx(hhook, code, wParam, lParam)` (USER.293) | the next hook's answer | **0**, there being no chain to call on |
+
+They cost four resident bytes: three rows in the loader part's table, two of
+them the shared `w16_ans1` and `w16_ans0` and one eight-byte handler in the
+library part, and the three names `GetProcAddress` binds by name (the list
+that `CTL3D` reads them through, §124.22.12), which raised `W16_NPNMAX` from
+16 to 18: two bytes of `w16_pnslot` a name, and the name data in the library
+part. The first build of the three rows alone changed nothing in the look:
+`GetProcAddress` takes a name only from that list, so the pointer stayed 0:0
+and the fault was the same one, at the same address.
+
+Gate: `tests/win16/` has no fixture for either yet; the look is Sir Hangman's setup
+(below, and the diary).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 

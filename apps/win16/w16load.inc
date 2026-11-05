@@ -2833,7 +2833,15 @@ w16l_rtlib:
     xor ax, ax                      ; a load of its own: the two folders
     mov [w16_winf], ax              ;   walked to afresh (SPEC.md 124.23.1.1)
     mov [w16_sysf], ax
+    call w16l_pathlib               ; a full path: its folder first
+    jc .ld
+    cmp al, 0xFF
+    jne .okp
     call w16l_ldlib
+    jmp short .ld
+.okp:
+    clc
+.ld:
     pushf
     jc .nokeep
     push si                         ; its discardable code loads through
@@ -2855,6 +2863,105 @@ w16l_rtlib:
     popf
     pop es
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16l_pathlib - a LoadLibrary's FULL PATH tried first (SPEC.md 124.25.22):
+; [w16f_path] is the name as the program gave it (LoadLibrary's scan keeps
+; it). Only "X:\DIR\...\NAME" - a drive, then a folder from the root - is a
+; path; anything else answers none. The folder is walked from the root of
+; volume X (A = 0) a name at a time, as the libraries' own folders are
+; (od_dive), and [w16_lname]'s library looked for there by w16l_ldlib1. The
+; folder stood in is put back. out: as w16l_ldlib1's: CF=0 AL = its record or
+; 0FFh (none, for any reason); CF=1 refused
+w16l_pathlib:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, w16f_path
+.up:                                ; upper case, / as \ (the cut is by
+    mov al, [si]                    ;   name and the folders are FAT's)
+    or al, al
+    jz .upd
+    cmp al, '/'
+    jne .nsl
+    mov al, '\'
+.nsl:
+    cmp al, 'a'
+    jb .st
+    cmp al, 'z'
+    ja .st
+    sub al, 'a' - 'A'
+.st:
+    mov [si], al
+    inc si
+    jmp short .up
+.upd:
+    mov si, w16f_path
+    mov al, [si]
+    sub al, 'A'
+    cmp al, 26
+    jae .nopath
+    cmp byte [si + 1], ':'
+    jne .nopath
+    cmp byte [si + 2], '\'
+    jne .nopath
+    mov [od_tdrv], al               ; od_dive's volume
+    call OSAPI_FILE_HERE            ; the folder to come back to
+    push dx
+    push bx
+    mov bl, [od_tdrv]
+    xor dx, dx                      ; the root
+    ICALL od_qm
+    jc .gone
+    add si, 3
+.next:
+    mov di, si
+.sc:
+    mov al, [di]
+    or al, al
+    jz .leaf
+    cmp al, '\'
+    je .comp
+    inc di
+    jmp short .sc
+.comp:
+    mov byte [di], 0
+    push di
+    ICALL od_dive
+    pop di
+    mov byte [di], '\'
+    jc .gone
+    inc di
+    mov si, di
+    jmp short .next
+.leaf:
+    call w16l_ldlib1
+    jmp short .back
+.gone:
+    mov al, 0xFF
+    clc
+.back:
+    pushf
+    pop cx                          ; (the answer kept while the folder
+    pop bx                          ;   goes back: AX, the flags in CX)
+    pop dx
+    push cx
+    push ax
+    ICALL od_qm
+    pop ax
+    popf
+    jmp short .ret
+.nopath:
+    mov al, 0xFF
+    clc
+.ret:
     pop di
     pop si
     pop dx
