@@ -236891,6 +236891,21 @@ armed again, `OSAPI_WM_CLIP_SET`, so a program that alternates between two
 own DCs call by call pays that on every call. Write draws a line of text
 through one DC at a time.
 
+**A record is found from its slot's byte, not a word (`fixqemu`,
+2026-11-04).** Putting the open own DC back (`w16od_out`, and `w16od_in`
+when another own DC was open) reads the slot from the byte `[w16_odcur]`
+into AL and left AH as its caller had it. `w16od_slot` multiplied the whole
+of AX by the record's size, so a call made with `W16_HDC` (3002h), or any
+other word with a high byte in AX, wrote the open DC's state into a
+"record" kilobytes past the block. Measured in `win16write`: record 2's 82
+bytes at the block + 2000h, over the middle of Write 3.0's code segment 18,
+which had been loaded there. The next call into it ran the record as code
+and stopped on an undefined opcode, with the title still the one before.
+The multiply takes AL alone now (`mov dl, W16OD_SZ` / `mul dl`, a byte
+shorter). Where the wild write lands depends on the heap's layout, so the
+bug looked like a regression of the merge that last moved the layout,
+`w16next/props`. That merge does not touch an own DC.
+
 #### 124.25.12 A colour bitmap copied into a monochrome one *(S20 batch 6)*
 
 On Windows a `BitBlt` or `StretchBlt` with `SRCCOPY` from a colour bitmap

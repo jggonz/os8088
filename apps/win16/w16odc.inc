@@ -19,12 +19,18 @@ W16OD_SZ    equ 2 + W16_DCSZ        ; a record: its window, then its state
 
 section .w16dlg
 
-; w16od_slot - AX = a slot -> ES:DI = its record. Keeps the rest.
+; w16od_slot - AL = a slot -> ES:DI = its record. Keeps the rest. AL ALONE:
+; w16od_in and w16od_out load it from the byte [w16_odcur] and leave AH as
+; their caller had it, and a word multiply then aimed the record 8 KB past
+; the block (AH = 10h), over Write 3.0's code segment (SPEC.md 124.25.11)
+%if W16OD_SZ > 255
+  %error "w16od_slot: a record is a byte multiply's"
+%endif
 w16od_slot:
     push ax
     push dx
-    mov dx, W16OD_SZ
-    mul dx
+    mov dl, W16OD_SZ
+    mul dl
     mov di, ax
     W16SEG es, [w16_odseg]
     pop dx
