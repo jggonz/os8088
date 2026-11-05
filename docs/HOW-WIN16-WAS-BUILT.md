@@ -5353,4 +5353,19 @@ left. Part 3 (`.w16dlg`) is 64,977 of 65,536 (559 left).
 - A `kern_mega` row for each fixture that only runs on `kern_big`; the rest
   are listed in the plan.
 
-**Final soak:** TBD.
+**Final soak.** The final pass ran once, at 37641464f, and found six red rows. Each was fixed, and then every WIN16 row was run again:
+
+- **Host:** 46 WIN16 rows, plus `kdos` and `megapkg`, on QEMU and MartyPC.
+- **Bochs container:** the 13 kern_mega rows.
+- **`make test-full`:** run alone.
+
+Everything is green at ee762bd54. The only exception is `ctoolchain`, which is skipped because this machine has no C compiler.
+
+What the six were:
+
+- **`win16write`: a real WIN16 bug.** `w16od_slot` multiplied all of AX by the own-DC record size while two callers loaded only AL. An open DC's state was therefore written kilobytes past its block, into Write's code segment 18, which then ran into an invalid opcode after Save As. A bisect named the props merge, which only moved the heap layout. A/Bs that took out each suspect, and one that padded the image, showed that. The fix is a byte multiply, a byte shorter (SPEC 124.25.11).
+- **`win16megamemdc`: a real kern_mega bug.** Three palette routines in part 9 loaded a virtual paragraph straight into ES or DS. A MEGATRAP census found them, and they are now `W16SEG`. The fixture's GlobalNotify leg is sized for kern_mega's 1 MB map.
+- **`win16props` and `win16bigbmp`: rows that had never run.** The first message after the timer was a real WM_MOUSEMOVE. The 640 KB real-mode heap's largest block was 100,336 bytes, short of the 102,416 the mono bitmap needs. Both fixtures now test what Windows promises.
+- **`win16np` and `megaown`: harness only.** The instance takes the program's name, and a debugger stop split one line of `e9.out`.
+- **`win16tasks`: a race in the row under host load.** Enter was pressed before the MessageBox was up.
+- **`pins` (`test-full`):** the registry key moved to the label O8 added.
