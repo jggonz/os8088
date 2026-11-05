@@ -12,9 +12,9 @@
 ; the stream asks for is the DAC's value after the 6503 has run that
 ; sample's share of its clock. MEASURED first (13.1): the board's 28 sounding
 ; codes are 35.8 s of sound in all, too much to render once and keep beside
-; a .ROM on a 360KB disk; and a 6502 at 0.9 MHz is not affordable beside
-; Q*bert on a 4.77 MHz 8088 - so the board runs on a 286 or better, and an
-; 8088 plays Q*bert silent, as before.
+; a .ROM on a 360KB disk; and the core's ESTIMATED cost, ~82 286-cycles a
+; 6502 instruction, is a 29 MHz 286's worth for the board alone - so it runs
+; on a 386 or better, and a 286 or an 8088 plays Q*bert silent, as before.
 ;
 ; The game's command: Q*bert writes FFh then the command to 5802h, which its
 ; patch moves to 580Ah (ARCADE-SPEC 10.2), never two commands in a frame
@@ -31,13 +31,14 @@ QBS_KB      equ 32                  ; its memory: 0000-7FFFh (A15 not decoded)
 QBS_BOOT    equ 178977              ; its power-on run: 0.2 s, as qbsnd.py's
 
 ; -----------------------------------------------------------------------------
-; qbs_prep - BD_SBPREP, on the desktop: the board can be heard here - a 286
+; qbs_prep - BD_SBPREP, on the desktop: the board can be heard here - a 386
 ; or better, and a QBERT.ROM with the sound chips - and is ready: its memory
 ; claimed, its ROM in, powered on once (kept across entries). CF=1 not here
 ; -----------------------------------------------------------------------------
 qbs_prep:
-    call OSAPI_CPU_INFO             ; AL = the tier: a 286 at least
-    cmp al, CPU_286
+    call OSAPI_CPU_INFO             ; AL = the tier: a 386 at least (13.1:
+    cmp al, CPU_386                 ;   ESTIMATED ~82 286-cycles a 6502
+                                    ;   instruction, a 29 MHz 286's worth)
     jb .no
     cmp word [qbs_on], 1            ; (powered on already: as it was left)
     je .yes

@@ -94,8 +94,8 @@ With a Sound Blaster, every sound plays at once, mixed: Space Invaders'
 sounds are synthesised for this disk (no recordings), Pac-Man's three
 voices are its own sound chip, played sample by sample, and Q*bert's are
 its own sound board - its 6502 and its program, run as the game plays
-(a 286 or faster: on an 8088 Q*bert is silent; its speech is not
-spoken). With an AdLib alone, the voices play on its FM chip. Lunar
+(a 386 or faster: on an 8088 or a 286 Q*bert is silent; its speech is
+not spoken). With an AdLib alone, the voices play on its FM chip. Lunar
 Rescue's end-of-level tunes are not played: the board makes them by
 toggling a single bit in time, which this does not follow. Otherwise the
 PC speaker plays one sound at a time. If the Control Panel sends tones to

@@ -324,10 +324,13 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [x] The 6502 core (`arc6502.inc`) and the board (`arcqbs.inc`): the
       RIOT, the latch, the per-sample stream at 10,989 Hz. `QBERT.ROM`
       carries the two sound chips (68KB). Rows `m6502`, `qbsmix`.
-- [x] The routes: the stream on a 286 or better. An 8088, or a machine
-      with no stream, plays Q\*bert silent: FM and the speaker have nothing
-      to say about a DAC board. The Votrax speech and the knocker: not done.
-- [ ] Field: the sound on the owner's mr286, and its cost there.
+- [x] The routes: the stream on a 386 or better - the core's ESTIMATED
+      cost is a 29 MHz 286's worth, so the owner's 16 MHz 286 is silent
+      too. FM and the speaker have nothing to say about a DAC board. The
+      Votrax speech and the knocker: not done.
+- [ ] Field: the sound on a 386, and the core's real cost. A faster core
+      (lazy flags, S in memory: ~3-4 instructions saved) would not reach a
+      16 MHz 286 by itself.
 
 ### R6: the release
 - [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line: **the owner's call**.

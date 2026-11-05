@@ -1128,7 +1128,7 @@ by how much.
 
 ### 10.6 Sound
 
-Section 13: the board's sound board runs live on a 286 or better, into the
+Section 13: the board's sound board runs live on a 386 or better, into the
 Sound Blaster stream. The game's command at 5802h lands at 580Ah, where
 `qbs_tick` takes it once a frame. The knocker (5803h bit 5) is not sounded,
 nor is the Votrax speech.
@@ -1366,10 +1366,20 @@ Python, after MAME's `gottlieb_a.cpp`, and it measured the choice:
 
 Rendered once and kept, the sounds the game uses would be some 90KB at
 8 kHz - a quarter of a 360KB disk beside the `.ROM` - and minutes of
-rendering on an 8088. Live, the board costs a 286 a fraction of its time
-and an 8088 more than Q\*bert leaves it. So it runs **live, on a 286 or
-better** (`OSAPI_CPU_INFO`), **into the Sound Blaster stream**; an 8088
-plays Q\*bert silent, and so does a machine with no stream route.
+rendering on an 8088. Live, the board runs at its clock: about 350,000
+6502 instructions a second, and the core's cost, ESTIMATED from its
+listing (22 x86 instructions, ~82 286-cycles a 6502 instruction), is a
+29 MHz 286's worth for the board alone. So it runs **live, on a 386 or
+better** (`OSAPI_CPU_INFO`, `CPU_386`), **into the Sound Blaster stream**;
+a 286, an 8088, and a machine with no stream route play Q\*bert silent.
+
+The first measurement, and the first build, counted every 6502 branch as
+2 cycles: `tools/qbsnd.py`'s `self.cyc += f()` read the count before
+`branch()` added its taken and page-cross cycles to it. The core's own
+test found it (its author could not see why silicon's count and the
+reference's differed by exactly those cycles). Mended, a delay loop runs
+at its true speed and the sounds are a quarter longer and lower; the table
+above is re-measured with it.
 
 ### 13.2 The 6503 (`arc6502.inc`)
 
@@ -1414,5 +1424,5 @@ Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
   ARCADE assembles them, powered on and fed 15 of Q\*bert's commands over
   640 frames: all 115,840 samples are the reference's, driven the same way.
   Red at frame 42 with the cycle fraction one 65,536th off.
-- Not measured: the board's cost on a real 286, and the sound itself on
-  the owner's mr286 (a field run).
+- Not measured: the board's cost on a real machine (the 29 MHz figure is an
+  estimate), and the sound itself in a field run on a 386.

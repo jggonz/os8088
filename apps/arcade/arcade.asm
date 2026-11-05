@@ -2368,6 +2368,7 @@ AR_VAR m6_seg, 2                    ;   scratch, and its cycles
 AR_VAR m6_debt, 2
 AR_VAR m6_bad, 2
 AR_VAR m6_tgt, 2
+AR_VAR m6_left, 2
 AR_VAR m6_cyc, 4
 AR_VAR m6_c0, 4
 AR_VAR qbs_on, 2                    ; Q*bert's sound board (arcqbs.inc): on,

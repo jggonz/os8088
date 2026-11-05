@@ -16,6 +16,7 @@
     org 0
 
 CPU_286     equ 1
+CPU_386     equ 2
 %define OSAPI_CPU_INFO  qt_cpu
 %define OSAPI_MEM_CLAIM qt_claim
 %define OSAPI_MEM_FREE  qt_free
@@ -46,7 +47,7 @@ qt_stop:
     hlt
 
 qt_cpu:
-    mov al, CPU_286
+    mov al, CPU_386
     ret
 qt_claim:
     mov dx, [qt_seg]
@@ -75,6 +76,7 @@ m6_seg:     dw 0
 m6_debt:    dw 0
 m6_bad:     dw 0
 m6_tgt:     dw 0
+m6_left:    dw 0
 m6_cyc:     dd 0
 m6_c0:      dd 0
 qbs_on:     dw 0

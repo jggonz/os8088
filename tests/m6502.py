@@ -636,9 +636,9 @@ def main():
     ap.add_argument('--quick', action='store_true', help='part a only (says so: not a pass)')
     a = ap.parse_args()
     codes = [int(c, 16) for c in a.codes.split(',')]
-    # The core as shipped, against qbsnd.CPU6502 as it runs; then the core
-    # -DM6_BRANCH_PENALTY against MendedCPU (a line of M6_BR's comment).
-    variants = (((), qbsnd.CPU6502, ''), (('M6_BRANCH_PENALTY',), MendedCPU, '+'))
+    # The core as shipped, against qbsnd.CPU6502 (whose branch cycles are
+    # silicon's since its step() was mended; MendedCPU is now the same CPU)
+    variants = (((), qbsnd.CPU6502, ''),)
     ok, skipped = True, False
     for defs, CPU, tag in variants:
         with tempfile.TemporaryDirectory() as tmp:

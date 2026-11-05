@@ -395,7 +395,8 @@ class CPU6502:
         f = self.ops.get(op)
         if f is None:
             raise RuntimeError('6502: opcode %02X at %04X' % (op, (self.pc - 1) & 0xFFFF))
-        self.cyc += f()
+        c = f()                         # (branch() adds its own cycles to
+        self.cyc += c                   #   self.cyc: read it AFTER f() runs)
         self.pc &= 0xFFFF
 
 

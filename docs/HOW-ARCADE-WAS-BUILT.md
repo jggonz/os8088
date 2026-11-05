@@ -537,8 +537,15 @@ first step was the board in Python (`tools/qbsnd.py`), to answer one
 question: could each sound be rendered once and kept? It found 28 sounding
 codes, 35.8 seconds of sound in all, and 11.5 seconds for the 13 codes the
 game actually sends. Kept beside the ROM, that would be a quarter of a
-360KB disk. So the board runs **live**, on a 286, into the Sound Blaster
-stream. An 8088 cannot spare the time beside Q*bert and stays silent.
+360KB disk. So the board runs **live**, into the Sound Blaster stream.
+
+**The core was written by a second agent**, against the Python board, and
+its test caught a bug in the reference: Python read the cycle count before
+a branch added its own cycles, so every branch cost 2. The sounds had been
+measured a quarter too short and too high. Its speed estimate also changed
+the plan. At about 82 286-cycles a 6502 instruction, the board alone is a
+29 MHz 286's worth, so live sound needs a 386. The owner's 16 MHz 286
+plays Q*bert silent, like the 8088.
 
 **The first measurement was silence.** The board waits for a rising edge
 on one pin. The model started that pin high, so the game's strobe never
@@ -556,4 +563,4 @@ against the Python board over 640 frames of the game's own commands.
 Moving the cycle fraction by one 65,536th fails it at frame 42.
 
 **Not done:** the speech chip, the knocker, and a measurement on a real
-286 (a field run on the owner's mr286).
+386.

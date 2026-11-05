@@ -458,28 +458,21 @@ m6_x%1:
     M6_NEXT 2
 %endmacro
 
-; A branch costs 2 cycles taken or not, because that is what qbsnd.py RUNS:
-; its branch() adds the taken and page-cross cycles to self.cyc inside the
-; f() of `self.cyc += f()`, and Python had already read self.cyc, so the
-; addition is lost. Silicon (and qbsnd.py's own docstring) say 3, 4 crossed.
-; -DM6_BRANCH_PENALTY builds that; tests/m6502.py holds it against a
-; CPU6502 with the one line mended.
+; A branch costs 2 cycles, 3 taken, 4 taken into another page - silicon's,
+; and tools/qbsnd.py's since its `self.cyc += f()` was mended to keep the
+; cycles branch() adds (it had read self.cyc before f() ran, and every branch
+; cost 2: a DEX/BNE delay loop ran a quarter fast, and the pitch with it).
 %macro M6_BR 3                      ; %2 = the flag (internal bit), %3 = the
 m6_x%1:                             ;   jcc that means NOT taken
     test dh, %2
     %3 %%nt
     M6_FB
     cbw
-%ifdef M6_BRANCH_PENALTY
     mov bx, si
     add si, ax
     xor bx, si
     neg bh                          ; CF = the target is in another page
     sbb di, 3                       ; 2 + 1 taken + 1 crossed
-%else
-    add si, ax
-    sub di, 2
-%endif
     jmp m6_next
 %%nt:
     inc si
