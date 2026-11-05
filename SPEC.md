@@ -237289,6 +237289,22 @@ stem less a trailing V or H, then with V on a VGA, H on a Hercules
 when there is none. Launched with no document it looks for `BATTLE.VBT`,
 `BATTLEV.VBT` and `BATTLEH.VBT` as before (`vbtdoc`).
 
+**A battle may be EMBEDDED in its own copy of the engine** - a GAME, one
+file to copy and double-click, one adapter each (`os88vbt.py game`, the
+Build tab's "Make the games": `NAME.O88`, `NAMEV.O88`, `NAMEH.O88`, NAME
+the battle's name's first seven letters and digits). `os88vbt.embed_o88`
+takes the shipped `VBATTLE.O88` - a packed package (flags bit 3) - sets
+flags bit 2 and puts where its packed image ENDS in the link word, which
+is what makes the loader read the image alone (§20.13.8: the parts rule,
+with no parts table; the kernel parses none of it), then pads to 4 KB and
+appends the bundle; the window's title (the header's name) becomes the
+battle's. With no document the engine reads its own file's header first
+(`vb_embfind`, its name and folder kept from the entry, §20.2): flags bit
+2 and a `VBT1` header of this version at the link word rounded up to 4 KB
+is a battle inside it, and every read is on by that offset (`[vb_embat]`,
+in `vb_dread`) - one read when there is none, two when there is. A game
+for another adapter says so (*Needs CGA, EGA or VGA*). `vbtgame`.
+
 Version 8 (2026-11-05) is the current version. Over version 7 it moves
 **each clip's ENTRIES in front of its own records** (docs/plans/completed/
 VBATTLE-RAM-PLAN.md R2): an anchor names a paragraph of its clip's region, the clip

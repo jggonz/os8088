@@ -281,6 +281,21 @@ GS_END      equ 3
 ; the entry proc and the window
 ; =============================================================================
 vb_entry:
+    mov di, vb_selfname             ; ITS OWN FILE (SPEC.md 20.2: [es:si],
+    mov cx, 12                      ; the kernel's, copied now) and folder:
+.sn:                                ; a battle EMBEDDED in it is read from
+    mov al, [es:si]                 ; there (vb_embfind)
+    mov [di], al
+    or al, al
+    jz .snd
+    inc si
+    inc di
+    loop .sn
+    mov byte [di], 0
+.snd:
+    call OSAPI_FILE_HERE
+    mov [vb_selfdir], dx
+    mov [vb_selfvol], bl
     mov word [vb_rcur], vb_cur
     mov word [vb_np0], vb_name      ; (the names a play looks for: these,
     mov word [vb_npv], vb_namev     ; or a document's own, below)
@@ -302,6 +317,63 @@ vb_entry:
     clc
 .out:
     ret
+
+; vb_embfind - a battle EMBEDDED in our own .O88 (the builder's "a game
+; .O88", os88vbt.embed_o88): our file's header says so - flags bit 2, the
+; packed image's end in the link word (SPEC.md 20.13.8), which is where the
+; loader stops - and the bundle starts at the first 4 KB past it. ONE read
+; of our header when there is none (a floppy's ~0.4 s), two when there is.
+; CF=0 found: [vb_embat] its offset and every read on by it, [vb_namep] our
+; file, its first 4 KB in [vb_meta]. CF=1 none, [vb_embat] 0
+vb_embfind:
+    mov word [vb_namep], vb_selfname
+    xor ax, ax
+    mov [vb_embat], ax
+    mov [vb_embat+2], ax
+    xor dx, dx
+    call .rd                        ; our header
+    jc .no
+    cmp word [vb_meta], 0x384F      ; ('O8': a package's)
+    jne .no
+    test byte [vb_meta+3], 4        ; (parts: past the image, ours)
+    jz .no
+    mov ax, [vb_meta+4]             ; the image's end, up to 4 KB
+    xor dx, dx
+    add ax, 4095
+    adc dx, 0
+    and ax, 0xF000
+    push ax
+    push dx
+    call .rd
+    pop dx
+    pop ax
+    jc .no
+    cmp word [vb_meta+VH_MAGIC], 'VB'
+    jne .no
+    cmp word [vb_meta+VH_MAGIC+2], 'T1'
+    jne .no
+    cmp word [vb_meta+VH_VER], 8
+    jne .no
+    mov [vb_embat], ax              ; ours
+    mov [vb_embat+2], dx
+    clc
+    ret
+.no:
+    xor ax, ax
+    mov [vb_embat], ax
+    mov [vb_embat+2], ax
+    mov word [vb_cur+FSEQ_OFF], 0xFFFF
+    mov word [vb_cur+FSEQ_OFF+2], 0xFFFF
+    stc
+    ret
+.rd:                                ; 4 KB of our file at DX:AX (another
+    mov word [vb_cur+FSEQ_OFF], 0xFFFF  ; file than the cursor's: a seek)
+    mov word [vb_cur+FSEQ_OFF+2], 0xFFFF
+    push ds
+    pop es
+    mov bx, vb_meta
+    mov cx, 4096
+    jmp vb_read
 
 ; vb_docnames - the document at ES:SI (a NUL 8.3 name in the kernel's
 ; segment), DX its folder, BL its volume: kept, and the names a play looks
@@ -625,6 +697,8 @@ vb_read:
     ret
 ; vb_dread - vb_read from the disk
 vb_dread:
+    add ax, [vb_embat]              ; (an EMBEDDED battle: on by where it
+    adc dx, [vb_embat+2]            ; starts in our file, vb_embfind)
     push si
     push di
     push bp
@@ -861,7 +935,14 @@ vb_load:
     mov dx, [vb_docdir]
     mov bl, [vb_docvol]
     call OSAPI_FILE_GOTO_QM
+    jmp short .nd0
 .nd:
+    mov dx, [vb_selfdir]            ; NO document: a battle EMBEDDED in our
+    mov bl, [vb_selfvol]            ; own file first, its 4 KB read already
+    call OSAPI_FILE_GOTO_QM
+    call vb_embfind
+    jnc .meta0
+.nd0:
     mov ax, [vb_np0]
     mov [vb_namep], ax
     mov bx, [vb_win]
@@ -3941,6 +4022,10 @@ VB_VAR vb_np0, 2                    ; the names a play looks for: CGA4's,
 VB_VAR vb_npv, 2                    ; VGA's, Hercules' (vb_name... or a
 VB_VAR vb_nph, 2                    ; document's, vb_docnames)
 VB_VAR vb_doc, 1                    ; a document was double-clicked
+VB_VAR vb_selfname, 14              ; our own file, and its folder: a battle
+VB_VAR vb_selfdir, 2                ; embedded in it (vb_embfind)
+VB_VAR vb_selfvol, 1
+VB_VAR vb_embat, 4                  ; where it starts in the file, 0 none
 VB_VAR vb_docvol, 1
 VB_VAR vb_docdir, 2
 VB_VAR vb_docname, 14

@@ -16950,6 +16950,14 @@ SOAK = [
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
+    Row("vbtgame", "soak", py("tests/vbtgame.py"), 100.0,
+        "SPEC.md 125.2: a battle EMBEDDED in its own copy of the engine "
+        "(os88vbt.py game: flags bit 2, the packed image's end in the link "
+        "word, the bundle at the next 4 KB) - the file ALONE on C:, its "
+        "window titled with the battle's name, plays to its first menu on "
+        "CGA and on Hercules, read out of itself; the CGA4 game on a "
+        "Hercules says Needs CGA. Broken (vb_embfind answering none) the "
+        "play arms red"),
     Row("vbtdoc", "soak", py("tests/vbtdoc.py"), 70.0,
         "SPEC.md 125.2, 54.5-54.6: VBATTLE.O88 declares .VBT, so a battle "
         "under any name double-clicked opens it and the play reads THAT "

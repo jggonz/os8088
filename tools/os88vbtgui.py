@@ -3334,6 +3334,14 @@ class BuildTab(object):
         self.disk_l = ttk.Label(df, text="", wraplength=640)
         self.disk_l.pack(side="left", padx=8)
         self.disk_picked = False
+        gf = ttk.LabelFrame(f, text="...or make it a GAME: one .O88 for each "
+                            "adapter, the battle inside it - copy the file "
+                            "and double-click it", padding=4)
+        gf.pack(fill="x", pady=4)
+        ttk.Button(gf, text="Make the games", command=self._game
+                   ).pack(side="left")
+        self.game_l = ttk.Label(gf, text="", wraplength=700)
+        self.game_l.pack(side="left", padx=8)
 
     def _cap(self):
         """THE READER'S MODEL (125.4.1) on or off: a streamed clip's burst
@@ -3428,6 +3436,20 @@ class BuildTab(object):
         if self.res:                    # the rendition chosen above
             argv += ["--rendition", self.rendv.get()]
         self.app.run("os88vbt", argv, got, "Making the disk...")
+
+
+    def _game(self):
+        """Each rendition built beside the project, inside its own copy of
+        the engine (os88vbt.py game): NAME.O88 for CGA, NAMEV.O88 for VGA,
+        NAMEH.O88 for Hercules - built first if they are not"""
+        def got(res):
+            outs = res.get("out") or []
+            self.game_l.config(text="\n".join(
+                "%s (%d KB)" % (o, os.path.getsize(o) // 1024) for o in outs))
+            self.app.say("Made %s" % ", ".join(os.path.basename(o)
+                                               for o in outs))
+        self.app.run("os88vbt", ["game", self.app.proj.path, "--json"], got,
+                     "Making the games...")
 
 
 # --- small form pieces ------------------------------------------------------------------

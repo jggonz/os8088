@@ -1450,6 +1450,53 @@ def engine_path(build=None):
     return None
 
 
+GAME_SUFFIX = {"cga4": "", "vga4": "V", "herc": "H"}
+
+
+def game_stem(proj):
+    """A battle's game files' 8.3 stem: its name's letters and digits, up to
+    seven (an eighth for the rendition's V or H), BATTLE when it has none"""
+    name = (proj.d.get("name") or "") if proj is not None else ""
+    st = "".join(c for c in name.upper() if c.isalnum())[:7]
+    return st or "BATTLE"
+
+
+def embed_o88(engine, bundle, name=None):
+    """A GAME: VBATTLE.O88 (ENGINE, its bytes) with the battle BUNDLE inside
+    it (SPEC.md 125.2): one file to copy and double-click, for one adapter.
+    The engine is a packed package (flags bit 3); this marks it as one with
+    parts (bit 2) and puts where its packed image ENDS in the link word -
+    which is what makes the loader read the image alone and leave the rest
+    (SPEC.md 20.13.8) - then the bundle at the next 4 KB of the file, where
+    the engine finds it (vb_embfind: its own header, then 4 KB there). NAME,
+    15 characters at most, is the window's title in place of Video Battle"""
+    e = bytearray(engine)
+    if len(e) < 32 or e[0:2] != b"O8":
+        raise ValueError("not a package: %d bytes" % len(e))
+    flags = e[3]
+    if not flags & 8:
+        raise ValueError("the engine is not a packed package (flags %02Xh): "
+                         "build it with PKGZ" % flags)
+    if flags & 4:                   # (already a game: the engine alone)
+        end = struct.unpack_from("<H", e, 4)[0]
+        e = e[:end]
+    else:
+        end = len(e)
+    if end > 0xFFFF:
+        raise ValueError("the engine is %d bytes: the link word is 16 bits"
+                         % end)
+    e[3] = flags | 4
+    struct.pack_into("<H", e, 4, end)
+    if name:
+        nm = "".join(c for c in name if 0x20 <= ord(c) <= 0x7E)[:15]
+        if nm:
+            e[16:32] = nm.encode("ascii").ljust(16, b"\0")
+    e += bytes(-len(e) % ALIGN)
+    if bytes(bundle[:4]) != MAGIC:
+        raise ValueError("not a battle bundle")
+    return bytes(e) + bytes(bundle)
+
+
 def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None,
               kinds=None):
     """(argv, image, files, note) making DISKS[disk] - the profile's disk by
@@ -1555,6 +1602,36 @@ def cmd_build(a):
                  budget=r0["budget"], capped=r0["capped"], renditions=res))
 
 
+def cmd_game(a):
+    """Each rendition built beside the project, EMBEDDED in its own copy of
+    the engine: STEM.O88 (CGA4), STEMV.O88 (VGA), STEMH.O88 (Hercules)"""
+    import json
+    import vbtproj as P
+    proj = P.Project.load(a.project)
+    eng = engine_path()
+    if not eng:
+        raise SystemExit("os88vbt game: no VBATTLE.O88 here to embed into")
+    here = os.path.dirname(proj.path)
+    outdir = a.out or here
+    stem = game_stem(proj)
+    made = []
+    for kind in a.rendition or renditions_of(proj):
+        src = os.path.join(here, BUNDLE_NAMES[kind])
+        if not os.path.exists(src):     # (not built yet: built now)
+            with open(src, "wb") as f:
+                f.write(build_project(proj, kind=kind))
+        out = os.path.join(outdir, stem + GAME_SUFFIX[kind] + ".O88")
+        with open(out, "wb") as f:
+            f.write(embed_o88(open(eng, "rb").read(), open(src, "rb").read(),
+                              proj.d.get("name")))
+        made.append(out)
+    if a.json:
+        print(json.dumps(dict(stage="done", out=made)))
+    else:
+        for m in made:
+            print("%s: %d bytes" % (m, os.path.getsize(m)))
+
+
 def cmd_demo_project(a):
     p = demo_project(a.out, a.bars, a.floppy)
     print("%s: %d clips, %d characters" % (a.out, len(p.d["clips"]),
@@ -1610,6 +1687,14 @@ def main(argv=None):
                    help="this rendition alone (all the project's by default: "
                    "BATTLE.VBT, BATTLEV.VBT, BATTLEH.VBT)")
     q.set_defaults(fn=cmd_build)
+    q = sp.add_parser("game", help="each built rendition inside its own "
+                      "VBATTLE.O88: one file a game, one adapter each")
+    q.add_argument("project")
+    q.add_argument("--rendition", action="append",
+                   choices=sorted(BUNDLE_NAMES))
+    q.add_argument("-o", "--out", help="the folder (the project's)")
+    q.add_argument("--json", action="store_true")
+    q.set_defaults(fn=cmd_game)
     q = sp.add_parser("demo-project", help="the demo battle as a project")
     q.add_argument("out")
     q.add_argument("--bars", type=int, default=16)
