@@ -237724,7 +237724,16 @@ Both are optional, and a bundle with neither plays as version 5's did.
   screen and it carries CF_FULL; the engine takes the band down as it
   starts and draws it no more (`vb_eloop_go`), a FADE to it is over the
   whole screen (`[vb_fwant]` 4), and a JOIN's seam is written over the
-  whole screen. Once: it carries CF_ENDS and not CF_LOOP - record 0 from
+  whole screen - **the band's rows written WHOLE** (`band_unknown`,
+  `seam_full`): the seam is made from a band that differs from the clip's
+  frame 0 at every pixel, since what the glass has there - the menu, its
+  numbers, its cursor - is not the builder's to know, and a seam made as
+  though the band were black left the menu up under the clip until its
+  own records covered those pixels (the owner's, 2026-11-05). The same
+  for a canvas end clip's seam onto the full-screen title. `verify` holds
+  both to it: decoded from a band of random bytes, the seam lands on the
+  whole of the next frame. A seam that would pass the guard so is made as
+  before. Once: it carries CF_ENDS and not CF_LOOP - record 0 from
   black, its frames in turn and no lap - and when it starts, what follows
   it, header byte 346 (victory) or 347 (defeat), becomes the ending's
   `[vb_ehow]`, so that its end goes on as an ending's does: EH_HOLD (its

@@ -225,6 +225,29 @@ def rows_into(dst, src, g, y0, n):
             dst[a:a + g.wb] = src[a:a + g.wb]
 
 
+def band_unknown(fl, target, rows):
+    """Full surface FL with its BAND's rows (below the canvas's ROWS) made
+    to differ from TARGET's at every pixel - each bit inverted - so that a
+    record from it onto TARGET writes the whole band: the band on the glass
+    is the menu, its HP, its cursor, which the builder cannot know, and a
+    seam made as though it were black left the menu up under a full-screen
+    clip (the owner, 2026-11-05)"""
+    inv = bytes(np.bitwise_xor(np.frombuffer(bytes(target), np.uint8), 0xFF))
+    rows_into(fl, inv, geom(REND.full), rows, REND.full - rows)
+    return fl
+
+
+def seam_full(fl, target, rows):
+    """The seam from FL (the band up under it) onto full-screen TARGET:
+    the band's rows written whole - or, a record past the guard, as before
+    (the band left to what the clip's own records cover)"""
+    try:
+        return rec(bytes(band_unknown(bytearray(fl), target, rows)), target,
+                   REND.full)
+    except ValueError:
+        return rec(bytes(fl), target, REND.full)
+
+
 def capped_run(recs, fs, snd, rows, cap, log, name):
     """A streamed clip's records 1.. appended to RECS, each the frame's
     change from the screen before - unless the reader's model CAP says the
@@ -559,11 +582,10 @@ def build(b):
             if c.get("join_full"):                  # end clip: the seam onto
                 fl = bytearray(surface_of(full_of(c["frames"][-1]),
                                           REND.full))    # (the screen the
-                rows_into(fl, last, geom(rows), 0, rows)  # clip ENDED on)
-                recs.append(rec(bytes(fl),                            # its
-                                                                      # frame
-                                surface_of(full_of(c["join_loop"]),   # 0 -
-                                           REND.full), REND.full))    # over
+                rows_into(fl, last, geom(rows), 0, rows)  # clip ENDED on,
+                recs.append(seam_full(fl, surface_of(     # its band up) -
+                    full_of(c["join_loop"]), REND.full),  # its frame 0 -
+                    rows))                                          # over
             else:                                   # the whole screen when
                 recs.append(rec(last, surface_of(    # it is full screen
                     c["join_loop"], rows), rows))
@@ -626,10 +648,11 @@ def build(b):
         recs = [rec(surface_of(np.zeros_like(fr[0]), rw), ss[0], rw, snd[0])]
         for i in range(1, len(ss)):
             recs.append(rec(ss[i - 1], ss[i], rw, snd[i]))
-        if then == "join" and b.title:
-            recs.append(rec(surface_of(full_of(fr[-1]), REND.full),
-                            surface_of(full_of(b.title["frames"][0]),
-                                       REND.full), REND.full))
+        if then == "join" and b.title:      # (from the canvas, the band up
+            t0 = surface_of(full_of(b.title["frames"][0]), REND.full)
+            f1 = surface_of(full_of(fr[-1]), REND.full)
+            recs.append(rec(f1, t0, REND.full) if full else
+                        seam_full(bytearray(f1), t0, rows))   # under it)
         flags = CF_ENDS | (CF_FULL if full else 0) | \
             (CF_OWNSND if lp.get("sound") is not None else 0) | \
             (CF_NOMUS if lp.get("sound") is not None and
@@ -1002,8 +1025,15 @@ def verify(data, quiet=False):
             s = REND.blank()
             g.put(s, idle[k])
             decode(s, b.entry(c, o))
-            for r in b.stream(c):
+            rs = b.stream(c)
+            for r in rs[:-1]:
                 decode(s, r)
+            junk = bytearray(s)         # (the band as the glass has it:
+            rows_into(junk, np.random.RandomState(k).randint(  # anything)
+                0, 256, len(s)).astype(np.uint8).tobytes(),
+                geom(REND.full), b.rows, REND.full - b.rows)
+            decode(s, rs[-1])
+            decode(junk, rs[-1])
             if c["flags"] & CF_JOINS and canvas(s) != idle[c["exit"]]:
                 raise ValueError("clip %s from anchor %d misses idle %d"
                                  % (c["name"], k, c["exit"]))
@@ -1016,7 +1046,29 @@ def verify(data, quiet=False):
                             "the %s clip %s does not end on its end clip's "
                             "first frame: its last record is not the seam "
                             "onto it" % (out_, c["name"]))
+                    if b.clips[li]["flags"] & CF_FULL and \
+                            bytes(junk) != bytes(f0):   # A FULL-SCREEN end
+                        raise ValueError(               # clip: the band is
+                            "the %s clip %s's seam onto its full-screen end "
+                            "clip leaves the band's rows to what was there "
+                            "(the menu)" % (out_, c["name"]))   # written too
             paths += 1
+    for out_, (how, li) in b.endings.items():   # AN END CLIP IN THE CANVAS
+        c = b.clips[li] if li != NO_SFX else None   # that JOINS the title:
+        if c is None or c["flags"] & (CF_FULL | CF_LOOP) or \
+                b.ends_then.get(out_) != ENDING_THEN["join"] or title is None:
+            continue                    # its seam writes the band's rows
+        rs = b.stream(c)                # whole, whatever the menu left
+        s = REND.blank()
+        for r in rs[:-1]:
+            decode(s, r)
+        rows_into(s, np.random.RandomState(7).randint(0, 256, len(s)).astype(
+            np.uint8).tobytes(), geom(REND.full), b.rows, REND.full - b.rows)
+        decode(s, rs[-1])
+        if bytes(s) != title[0]:
+            raise ValueError("the %s end clip %s's seam onto the title leaves "
+                             "the band's rows to what was there (the menu)"
+                             % (out_, c["name"]))
     if not quiet:
         print("verify: %d openings onto an idle loop of %d frames, %d clips, "
               "%d paths joined exactly" % (len(b.openings), b.nidle,
