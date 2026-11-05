@@ -711,6 +711,19 @@ On a kernel without §9.5.2 the two cross-wired rows never find the mouse:
 movement pattern that **nets to zero** returns the cursor to where it
 started and reports a working mouse as broken. Drift in one direction.
 
+`tests/mousechk.py` (soak row `mousechkgate`, SPEC.md §126.10) drives four of
+these wirings (COM1, `com2`, `com2irq4`, `ps2`) and two private knob trees (`NOPS2=1`,
+`VIDEO=cga`) against Mouse Check, whose window it reads out of the package's
+own row list in guest memory. It is the worked example of **reading a
+package's frame instead of its pixels**: the segment through the window
+record's `W_SEG`, offsets from nasm's map of the package (held byte-identical
+to the `.bin` the booted disk was built from), read twice around the access,
+and a list accepted only when two whole passes agree. That last rule matters:
+the package rewrites its list in place twice a second, so a single pass can
+mix two rebuilds, and "some row changed" is then true of a mouse that never
+moved. Assert on a row that can only change by following the device, such as
+Mouse Check's `Position` against the kernel's own `mouse_x`/`mouse_y`.
+
 ### `comscan` — when the mouse is not found on real hardware
 
 `make comscan` builds the field diagnostic (`tests/comscan`): not an os8088

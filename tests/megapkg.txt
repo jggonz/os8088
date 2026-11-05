@@ -140,3 +140,8 @@ apps/mousechk/probe.inc 1        # THE SHIPPED BUILD REFUSING ONE LEG: the
     # BIOS int 15h there is reflected (on a 286 through a CPU reset) and so
     # would the BIOS's IRQ12 handler be, so the answer would not be about the
     # same machine. A fail-safe refusal of two instructions, not kern_mega work
+apps/mousechk/summary.inc 1     # MOUSECHK NAMING ITS KERNEL, display only
+    # (SPEC.md 126.5): sum_snap's `and ah, CPU_F_PM` banks the bit, and the
+    # Kernel row says kern_mega and the VMware section "not kern_emu" off it.
+    # No code runs only there and nothing is refused; two string picks, ~10
+    # bytes. Named rather than written as 0x10, so the census sees it
