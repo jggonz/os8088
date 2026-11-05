@@ -968,6 +968,12 @@ its frame from `c64_faot`, `c64_fakb` and `c64_ftab` at its door, and
 Apple II's leg one machine along: Dormann's functional test in four parts
 (`--range`) with a core built for each, slices of 997 cycles, and every
 translated `ADC` and `CMP` broken as the control.
+**And the gate checks the cycles** (2026-11): the fast core alone runs
+Dormann in the same 997-cycle slices first, hashing where every slice ENDED -
+its PC and the countdown it left - and each translated leg must hash the
+same. A translation that charges one cycle more or less anywhere it runs ends
+some slice on another instruction. Red with every translated instruction
+charged a cycle more (`$39F7` against the reference's `$F7DC`).
 `tests/c64part.py` checks that the three parts unpack to their files and that
 each fetched claim holds its file's first bytes.
 

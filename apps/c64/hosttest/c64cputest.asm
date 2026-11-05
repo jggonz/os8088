@@ -2862,6 +2862,9 @@ unpatch_dec:
 ; SETTLES, which is exactly how the test is documented to be read.
 ; =============================================================================
 %ifdef DORMANN
+%ifdef AOT
+  %define SLICE997                  ; (the translated legs' slices, below)
+%endif
 dormann_main:
     mov si, msg_dorm
     call puts
@@ -2945,12 +2948,12 @@ dormann_main:
     ; will not start. The package's own cap is 16,384, and 30,000 under warp
     ; for the same reason.
     mov cx, 20000                   ; outer passes of 30,000 cycles each
-%ifdef AOT
+%ifdef SLICE997
     mov cx, 0xFFFF                  ; ...or of 997 (see below)
 %endif
 .run:
     push cx
-%ifdef AOT
+%ifdef SLICE997
     ; THE TRANSLATED LEGS RUN SHORT ODD SLICES: the core consults the PC
     ; table only at a jump or a run's start, and Dormann falls through whole
     ; stretches with no jump - a part entered only that way would run on the
@@ -2963,6 +2966,19 @@ dormann_main:
     call _c64_run
     add sp, 2
     pop cx
+%ifdef SLICE997
+    ; THE SLICES' HASH: where every slice ENDED - its PC and the countdown it
+    ; left (C64-SPEC 4.5: negative by the last instruction's overshoot). A
+    ; translation that charged one cycle more or less anywhere ends some slice
+    ; on another instruction, and the shell compares this with the fast
+    ; core's own run in the same slices (C64-SPEC 4.8's exactness)
+    push ax
+    mov ax, [_c64_m+CM_PC]
+    xor ax, [_c64_m+CM_CNT]
+    rol word [cs:slice_h], 1
+    xor [cs:slice_h], ax
+    pop ax
+%endif
     cmp ax, C64_RUN_JAM
     je .stuck
     ; ...has the program counter settled on a `jmp *`?
@@ -2987,7 +3003,7 @@ dormann_main:
     mov word [cs:same_n], 0
 .cont:
     loop .run
-%ifdef AOT
+%ifdef SLICE997
     dec word [cs:aot_outer]         ; 0xFFFF x 32 slices of 997: the same
     jnz .run                        ; ~2 billion cycles of slack as above
 %endif
@@ -3047,6 +3063,12 @@ dormann_main:
     call ram_rd
     xor ah, ah
     call puthex
+%ifdef SLICE997
+    mov si, msg_sliceh
+    call puts
+    mov ax, [cs:slice_h]
+    call puthex
+%endif
     mov si, msg_nl
     call puts
     mov ax, [_c64_m+CM_PC]
@@ -3077,6 +3099,7 @@ dormann_main:
 %endif
 
 aot_outer: dw 32
+slice_h:   dw 0
 last_pc: dw 0xFFFF
 last_ax: dw 0                       ; A | X << 8
 last_ys: dw 0                       ; Y | S << 8, P folded in
@@ -3563,6 +3586,7 @@ msg_fail:   db 13, 10, 'c64cputest: FAIL', 13, 10, 0
 msg_dorm:   db 'Dormann 6502 functional test, 64KB at $0400', 13, 10, 0
 msg_neg:    db 'NEGATIVE CONTROL: ADC # is dispatched to ORA #', 13, 10, 0
 msg_settle: db 'settled at $', 0
+msg_sliceh: db '  slice hash $', 0
 msg_regs:   db '  A X Y S P = ', 0
 msg_stk:    db '  $0100 $0101 $01FF = ', 0
 msg_jam:    db 'JAM at $', 0

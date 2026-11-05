@@ -183,6 +183,25 @@ jit_leg() {
 aot_leg() {
     mkdir -p $BUILD/c64
     python3 tools/py6502.py --dormann "$DORM" --trace-out $BUILD/c64/dorm.seeds >/dev/null
+    # THE REFERENCE: the fast core alone, in the translated legs' 997-cycle
+    # slices. Every slice's end (its PC and what it left of the countdown) is
+    # hashed, and each translated leg must hash the same - a translation that
+    # charges a cycle more or less anywhere ends a slice elsewhere (C64-SPEC
+    # 4.8: the run ends exactly where the core's would)
+    IMG=$BUILD/c64cputest-aotref.img
+    # shellcheck disable=SC2086
+    nasm -f bin -w+error -I apps/c64/ -DFAST -DSLICE997 -DDORMANN -DDORMOK=$DORMOK $DEC \
+        -o $IMG apps/c64/hosttest/c64cputest.asm
+    pad $IMG 64
+    cat "$DORM" >> $IMG
+    cat "$FASTBIN" >> $IMG
+    pad $IMG 2880
+    run $IMG "aotref" > $BUILD/c64cputest-aotref.log || true
+    REFH=$(grep -o 'slice hash \$[0-9A-F]*' $BUILD/c64cputest-aotref.log | head -1)
+    grep -q "c64cputest: PASS" $BUILD/c64cputest-aotref.log && [ -n "$REFH" ] || {
+        cat $BUILD/c64cputest-aotref.log
+        echo "c64cputest: the fast core's reference run in 997-cycle slices FAILED"; exit 1; }
+    echo "c64cputest: the reference's $REFH"
     for R in ${C64AOT_RANGES:-0400:1400 1400:2000 2000:2A00 2A00:4000}; do
         N=${R%%:*}
         python3 apps/m6502/m65aot.py --machine c64 --rom "$DORM" --range $R \
@@ -209,6 +228,8 @@ aot_leg() {
             if [ $MODE = real ]; then
                 grep -q "c64cputest: PASS" $BUILD/c64cputest-aot$N-$MODE.log || {
                     echo "c64cputest: Dormann through the translation of $R FAILED"; exit 1; }
+                grep -q "$REFH" $BUILD/c64cputest-aot$N-$MODE.log || {
+                    echo "c64cputest: the translation of $R ended a slice where the core does not - its cycles differ from the reference's $REFH"; exit 1; }
             else
                 grep -q "control fails: ok" $BUILD/c64cputest-aot$N-$MODE.log || {
                     echo "c64cputest: the translated leg's control passed ($R)"; exit 1; }
