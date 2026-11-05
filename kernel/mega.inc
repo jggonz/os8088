@@ -12765,7 +12765,8 @@ mega_segown:
 ; mega_segty - FAR, `.cold` (SEG_TYPE's body, mega_segf): DX = a window of
 ; the caller's, or a HANDLE descriptor (SEG_HND) based in a block of the
 ; caller's own, BL = its owner byte (mega_segown's), CX = 0 data / 1 code ->
-; CF = 0 and the descriptor's type set in place (92h / 9Ah, DPL 0, base and
+; CF = 0 and the descriptor's type set in place (F2h data at DPL 3 / 9Eh code,
+; conforming, DPL 0: either loads or far-calls with RPL 3, 14.144; base and
 ; limit untouched, so the selector stays its holder's own and WIN16's
 ; GlobalReAlloc keeps re-aiming it); CF = 1, AX = 4 anything else (a SUB, a
 ; pair, a tile, another's window or handle), nothing done. Every other
@@ -12827,12 +12828,12 @@ mega_segty:
     and di, 0xFFF8
     mov ax, MEGA_SEL_LDTD
     mov es, ax
-    mov al, 0x92
-    jcxz .s
-    mov al, 0x9A
-    cmp cl, 2                       ; CX = 2: code, NOT PRESENT (1Ah): a far
-    jne .s                          ; transfer to it is a #NP, mega_npx's
-    mov al, 0x1A
+    mov al, 0xF2                    ; data at DPL 3, code CONFORMING at DPL
+    jcxz .s                         ; 0 (KERN-MEGA-PLAN 14.144): a program
+    mov al, 0x9E                    ; that flips its odd selector in place
+    cmp cl, 2                       ; far-calls it as it is, RPL 3 and all.
+    jne .s                          ; CX = 2: code, NOT PRESENT (1Ah): a far
+    mov al, 0x1A                    ; transfer to it is a #NP, mega_npx's
 .s:
     mov [es:di+5], al
 .done:
@@ -13347,7 +13348,8 @@ mega_segbw:
 ; selector of the caller's based in a claim or a pool block, AX = a paragraph
 ; offset into it, CX = a count of 64KB tiles -> CF = 0, DX = the first of CX
 ; data selectors, each 8 above the last and based 64KB further on, the last
-; cut at the block's end. Fresh entries, never a match; based in the block,
+; cut at the block's end, DPL 3 (14.144). Fresh entries, never a match (a
+; SUB's question is 92h, so mega_dfind passes them by); based in the block,
 ; they move with it (mx_desc, mega_mpmovef) and go with it (mx_dfree,
 ; mega_mpfreef), as a SUB does. It is what a Windows program's huge pointer,
 ; __AHINCR = 8, steps through. CF = 1, AX = 1 no run of CX free entries (or
@@ -13411,7 +13413,7 @@ mega_segtile:
     mov [es:di], cx
     mov [es:di+2], ax
     mov [es:di+4], dl
-    mov byte [es:di+5], 0x92
+    mov byte [es:di+5], 0xF2        ; DPL 3: a handle descriptor's (14.144)
     mov word [es:di+6], 0
     pop cx
     add di, 8
@@ -13462,9 +13464,10 @@ mega_segtile:
 ; the selector a program holds follows it and an overrun past its length
 ; faults. It is a SUB's data descriptor with byte 6's AVL bit set (MEGA_HAVL:
 ; the 386's bit for software, and a word a 286 never reads), so mega_dfind
-; never answers it for a SUB and re-aiming one moves nobody else's - and it
-; stays a plain DPL 0 data segment, which a program may load into SS as Windows
-; allowed. Based in its block, the compactor rebases it
+; never answers it for a SUB and re-aiming one moves nobody else's. It is a
+; DPL 3 data segment (14.144), so the program may hold it with RPL 3 - odd, as
+; a Windows program's global selectors were - and nobody may load it into SS
+; at CPL 0 (SS wants DPL = CPL). Based in its block, the compactor rebases it
 ; (mx_desc) and the block's free takes it, as a tile's. CF = 1: AX = 1 no free
 ; entry, 3 the base in no block, 4 DX not a handle descriptor; DX kept
 MEGA_HAVL   equ 0x10                ; a handle descriptor's mark, in byte 6
@@ -13516,10 +13519,10 @@ mega_segh:
     or di, di
     jnz .re
     push bx
-    mov bl, 0x92
-    call mega_ldt_alloc             ; AX = a new one...
-    pop bx
-    jc .full
+    mov bl, 0xF2                    ; DATA AT DPL 3 (KERN-MEGA-PLAN 14.144):
+    call mega_ldt_alloc             ; AX = a new one... loadable with RPL 3,
+    pop bx                          ; so WIN16 hands it out ODD, as Windows
+    jc .full                        ; did; at CPL 0 any RPL loads it
     mov [ss:bx], ax
     mov di, ax
     and di, 0xFFF8

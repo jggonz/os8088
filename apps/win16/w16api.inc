@@ -733,6 +733,8 @@ W16EXPORT W16M_USER,       404,     10, w16n_clsinfo        ; GetClassInfo(word 
 W16EXPORT W16M_USER,       373,     12, w16n_subrect        ; SubtractRect(ptr ptr ptr)
 W16EXPORT W16M_USER,       290,     10, w16n_redraw         ; RedrawWindow(word ptr word word)
 W16EXPORT W16M_USER,       438,     6,  w16i_lowbuff        ; AnsiLowerBuff(str word)
+W16EXPORT W16M_GDI,        373,     4,  w16_ans0            ; SetSystemPaletteUse(word word): SYSPAL_ERROR,
+                                                                ;   no palette device here (124.25.23)
 W16EXPORT W16M_GDI,        375,     10, w16_ans0            ; GetSystemPaletteEntries(word word word ptr)
 W16EXPORT W16M_GDI,        471,     12, w16n_textpt         ; GetTextExtentPoint(word ptr s_word ptr)
 W16EXPORT W16M_GDI,        483,     10, w16n_movetoex       ; MoveToEx(word s_word s_word ptr)

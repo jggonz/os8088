@@ -99560,7 +99560,7 @@ verb:
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
-| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, 92h / 9Ah / 1Ah; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
+| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, F2h (data, DPL 3) / 9Eh (code, conforming, DPL 0) / 1Ah since KERN-MEGA-PLAN 14.144 (92h / 9Ah / 1Ah before it); base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99653,7 +99653,10 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   the block, so they move and go with it. Refusals 1 (no run of CX free
   entries, or CX = 0), 2 (the null selector) and 3 (a tile in no block).
   It is WIN16's (`__AHINCR` = 8, §124.31.6) and costs `.mega` 195 bytes
-  and every other kernel nothing.
+  and every other kernel nothing. Its tiles are DPL 3 (access F2h,
+  KERN-MEGA-PLAN 14.144), so WIN16 hands them out with RPL 3, odd, as
+  Windows did (§124.25.23), and `mega_dfind`, which asks for 92h, never
+  answers one for a SUB.
 - A **HANDLE descriptor** (`SEG_HND`, `mega_segh`) is a Windows handle's
   selector: one per global block, re-aimed IN PLACE - base and limit, the
   same selector - when the block grows, shrinks or moves, so the selector a
@@ -99665,14 +99668,19 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   passes by, so a SUB never answers one and re-aiming one moves nobody
   else's. It is not a window: it has no `mega_wtab` row, so the 32 rows do
   not bound how many a program holds - Mozart's setup peaks at 15 at once,
-  WIN16's two walk descriptors among them, and a program may hold hundreds. It stays a plain DPL 0 data segment, so a
-  program may load it into SS as Windows allowed. WIN16 also re-aims two of
+  WIN16's two walk descriptors among them, and a program may hold hundreds. It is a
+  DPL 3 data segment (access F2h, KERN-MEGA-PLAN 14.144): WIN16 hands it
+  out with RPL 3, odd, as Windows did (§124.25.23). At CPL 0 it loads into
+  DS and ES with any RPL, and into SS with none, since SS needs DPL = CPL.
+  Before 14.144 it was DPL 0, which a program could load into SS. A re-aim
+  writes base and limit only, so the DPL stays. WIN16 also re-aims two of
   them as its own WALK descriptors over its arenas (§124.31.3). Refusals 1
   (no free entry), 3 (the base in no block) and 4 (DX not a handle
   descriptor), DX kept. `.mega` +208 (the body's 191, its dispatch and
   `mega_dfind`'s test), every other kernel nothing.
 - **`SEG_TYPE`** (`mega_segty`, KERN-MEGA-PLAN 14.142) sets a window's
-  access byte to 92h (data) or 9Ah (code, readable), DPL 0, in place, so a
+  access byte to F2h (data, DPL 3) or 9Eh (code, readable, CONFORMING, DPL
+  0), in place, so a
   program that built code in a block can far-call it (WIN16's
   `AllocDStoCSAlias`, `PrestoChangoSelector`, §124.31.6). It is a window's
   or a handle descriptor's: the owner test is `mega_segown`'s byte against
@@ -233520,7 +233528,7 @@ neighbours merged. Arenas are freed with the program.
 | `GMEM_FIXED` | **the handle IS the segment** (`DX:0` is the block), as real-mode Windows answered. Programs that skip `GlobalLock` on a fixed block work |
 | `GMEM_MOVEABLE` | a handle-table entry, `W16_GH0 + 2i` (`0100h`–`02FEh`, `W16_NGH` 256 entries since S19b batch 3, 64 before: Paintbrush's band cache keeps a handle for every band it has discarded, and 64 ran out on the first picture opened). No RAM segment is ever that low, so `GlobalLock` tells the two apart by value. **Nothing moves yet**, but no caller may rely on that: a protected-mode arm (WIN16-PLAN R3) puts a selector behind the same handle |
 | `GlobalLock` | `DX:AX` = the block, the lock count raised; NULL for a discarded handle |
-| `GlobalReAlloc` | in place when the next block is free. **A grow in place keeps a quarter more than was asked** when the free neighbour has it (`w16k_grealloc`, *S24*), and the rest goes back free. Windows promises at least the size asked for, and a program that grows a block by a paragraph at a time (the Setup Toolkit's `_MSTEST` does) then grows in place again with no new block boundary. `GlobalSize` answers the block as kept. Otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put, except on the protected-mode arm for a protected-mode-only program, whose locked block moves with the selector it holds (§124.31.3), and for any program when a full local heap in the block grows (§124.25.19). A block that moves keeps its flags, lock, owner and task. `GMEM_MODIFY` changes the flags alone |
+| `GlobalReAlloc` | in place when the next block is free. **A grow in place keeps a quarter more than was asked** when the free neighbour has it (`w16k_grealloc`, *S24*), and the rest goes back free. Windows promises at least the size asked for, and a program that grows a block by a paragraph at a time (the Setup Toolkit's `_MSTEST` does) then grows in place again with no new block boundary. `GlobalSize` answers the block as kept. Otherwise a moveable block moves (copied, the old one freed, the handle kept), and a fixed one moves only when `GMEM_MOVEABLE` is passed, answering its new segment, as Windows 3.0 did. A LOCKED moveable block stays put on the real-mode arm. On the protected-mode arm it moves with the selector it holds, for any program (§124.31.3, §124.25.23), unless it was ever tiled, and except under a full local heap's grow whose `DS` is not that selector (§124.25.19). A moveable block named by its selector moves as its handle. A block that moves keeps its flags, lock, owner and task. `GMEM_MODIFY` changes the flags alone |
 | `GlobalCompact` | the largest free block, in an arena or as a new claim, as a `DWORD`; since S20 a run of an arena counts the code segments it may discard as free (§124.26.5) |
 | `LockSegment`, `UnlockSegment` | the segment, unchanged: nothing moves |
 | out of memory | unused resource blocks (§124.10) are discarded and the request is tried again; then `GMEM_DISCARDABLE` blocks, one at a time, the least recently used first (S19b, `w16_gdold`); then the answer is 0 |
@@ -237409,19 +237417,19 @@ block grows only into a free neighbour, a locked moveable one likewise, and
 an unlocked moveable one not at all (`GlobalReAlloc` would move it). On the
 `kern_mega` arm a moveable block whose **handle descriptor** (`GH_TSEL`,
 `GHF_HND`, §124.31.3) **is the very selector the heap is in** may move,
-locked or not, for **any** program, for this one call: `w16s_lgrow` sets the
-protected-mode-only rule (`w16_pmonly`) to 1 around its `GlobalReAlloc` and
-puts it back. That is **wider than §124.9's and §124.31.3's rule**, which
-lets only a protected-mode-only program's locked block move; it is the rule
-of Windows' standard mode, where `GlobalReAlloc` of a locked moveable block
-moved it and kept its selector, and of Wine (`LOCAL_GrowHeap` asks
-`GlobalReAlloc16(hseg, 0x10000, GMEM_FIXED)` of the heap's own segment, and
-moves the linear block whatever its lock count). Mozart is not marked
-protected-mode-only, and its classes are registered only because of it. When
-the heap's selector is anything else (an alias, a selector that is not the
-block's handle descriptor), the rule is set to **0** for the call, so not even
-a protected-mode-only program's block moves out from under that `DS`; a fixed
-block is never moved here.
+locked or not, for **any** program: `w16s_lgrow` sets the locked-move rule
+(`w16_lkmove`) to 1 around its `GlobalReAlloc` and puts it back. Since
+2026-11-04 that is §124.9's and §124.31.3's rule for every `GlobalReAlloc`
+(§124.25.23); it was wider than theirs, which let only a protected-mode-only
+program's locked block move. It is the rule of Windows in protected mode,
+where `GlobalReAlloc` of a locked moveable block moved it and kept its
+selector, and of Wine (`LOCAL_GrowHeap` asks `GlobalReAlloc16(hseg, 0x10000,
+GMEM_FIXED)` of the heap's own segment, and moves the linear block whatever
+its lock count). Mozart is not marked protected-mode-only, and its classes
+are registered only because of it. When the heap's selector is anything
+else (an alias, a selector that is not the block's handle descriptor), the
+rule is set to **0** for the call, so no locked block moves out from under
+that `DS`; a fixed block is never moved here.
 
 What makes the move safe, traced from the program's `LocalAlloc` to its
 return: `GlobalReAlloc` copies the block, re-aims the handle descriptor in
@@ -237757,6 +237765,180 @@ answered 2; it binds `SetWindowsHookEx`, `UnhookWindowsHookEx` and
 `CallNextHookEx` out of `GetModuleHandle("USER")` by name (CTL3D's upper-case
 spelling as well) and runs a set, call-next and unhook round trip through the
 pointers. The look is Sir Hangman's setup (the diary).
+
+#### 124.25.23 A global block's selector is odd *(WIN16-NEXT `oddsel`, verified by `verify-oddsel`)*
+
+**Windows told a selector from a handle by bit 0, and so do its programs.**
+Every selector Windows 3.x gave a program for its global memory had a
+requested privilege level (RPL) of 3, so it ended in 7 or F. On Windows 3.1
+a moveable block's handle is that selector with bit 0 clear. So a program
+may test bit 0 to see which of the two it holds. Visual Basic 3.0's
+`VBRUN300.DLL` does: its wrapper around `GlobalReAlloc` (at `18E4:009A` in
+Mozart's run) begins `test cl, 1` / `jz` *fail*, so it refuses an even
+value without calling Windows. On `kern_mega` every selector WIN16 handed
+out had RPL 0 (22B4h, 2054h, 1C4Ch in that run), so VB could not grow its
+custom-control table past five entries, and the sixth control module gave
+*Out of memory* (error 7). That diagnosis is `lheap`'s
+(`~/Repos/w16next-logs/lheap-verify.md`, finding 3).
+
+**What is odd now.** On `kern_mega`, a global block's selector has RPL 3:
+the HANDLE descriptor of a block under 64 KB (§124.31.3) and the tiles of a
+larger one (§124.31.6). Both are made in `w16_pblk`. The value in the
+header (`GH_TSEL`) is the odd one, and WIN16 hands out the value it
+stored, so the program, WIN16 and the header always agree. That covers
+every answer that goes through `w16_pblk`:
+
+- `GlobalAlloc(GMEM_FIXED)`, `GlobalLock`, `GlobalHandle`'s `DX`,
+  `GlobalReAlloc`'s fixed-block answer and `LockResource`;
+- a library's DGROUP: its `hInstance` (§124.31.4), its exported
+  prologs' `mov ax, DGROUP`, and **the relocations in its own code that
+  name its DGROUP segment** (`w16l_ssel`: one odd value per library, so
+  `DS` and `hInstance` compare equal, as on Windows; and the descriptor
+  follows the block when `LocalAlloc` grows it in place, where a SUB kept
+  the length it was made with). Its module block's handle too, when it has
+  no DGROUP;
+- `GetDOSEnvironment`'s selector, which is also the PSP's word 2Ch
+  (§124.25.21), and the blocks MMSYSTEM and MCI hand out.
+
+A tile is still 8 above the last (`__AHINCR` = 8), so a huge pointer stays
+odd as it steps.
+
+**What stays even, and why.** The program runs at CPL 0 on `kern_mega`, and
+these values cannot have RPL 3 there:
+
+| value | stays | because |
+|---|---|---|
+| the program's DGROUP, `SS` and its `hInstance` | RPL 0 | `SS` must have RPL = DPL = CPL = 0, and Windows code assumes `DS` = `SS` by value in a program |
+| every CODE selector (a segment's, a thunk's, an alias) | RPL 0 | a far call to non-conforming code needs RPL <= CPL, and a `retf` to an RPL 3 `CS` is a return to an outer ring |
+| a SUB: the program's other data segments, its PSP, `AllocCStoDSAlias` | RPL 0 | a SUB is shared: WIN16's own `W16SEG` and the kernel's match (`mega_dfind`) answer the same descriptor at DPL 0 |
+| `AllocSelector` and DPMI `0000h` windows | RPL 0 | no target tests bit 0 of one; making them odd would put a mask before every window verb (decided 2026-11-04) |
+| `GlobalDOSAlloc`'s block | RPL 0 | its own claim's selector |
+| a moveable handle (`0100h`-`02FEh`) | even | as Windows' handles were |
+| a block that could get no LDT entry (the SUB fallback) | RPL 0 | the SUB, as above |
+
+**The descriptors are DPL 3** (KERN-MEGA-PLAN 14.144). A data selector
+loads into `DS` or `ES` only when its descriptor's DPL is at least the
+larger of CPL and RPL. So `SEG_HND` and `SEG_TILE` now make DPL 3 data
+(access F2h), and `SEG_TYPE` sets data to F2h. At CPL 0 a DPL 3 segment
+still loads with any RPL, so WIN16's own loads of these descriptors (its two
+walk descriptors are handle descriptors too) are unchanged.
+
+**A flipped selector is conforming code.** Arcade's ASTEROID calls
+`PrestoChangoSelector(sel, sel)` on a `GlobalAlloc` block and then calls
+through `sel`, the same value it holds (§124.31.6, KERN-MEGA-PLAN 14.142).
+That value is odd now. A far call to a non-conforming code segment with RPL
+3 is #GP at CPL 0, but a conforming segment's far call does not check RPL.
+So `SEG_TYPE`'s code type is 9Eh: code, conforming, readable, DPL 0. `LAR`
+and `LSL` on it with RPL 3 work too, which `PrestoChangoSelector`'s flip back
+to data needs (`w16q_ctype`). At CPL 0, conforming changes nothing else.
+O8's stable code selectors (§124.26.12) are made by `SEG_HND` and are RPL
+0. A loaded one is 9Eh now, and a parked one is still 1Ah (`SEG_TYPE` 2,
+not present). Neither change matters at RPL 0.
+A far `call` or `jmp` to the odd value enters with `CS` = the value with
+RPL 0 (a conforming segment takes the CPL), so whatever that code pushes
+as its own `CS` is even, and its callers' `retf`s are ordinary.
+**The limit is `retf` and `iret` to the ODD value.** A return whose `CS`
+has RPL 3 is a return to an OUTER ring, not a fault at once: the CPU takes
+`SS:SP` from the two words above the return address and checks them as a
+ring 3 stack. When they are anything but an RPL 3 writable data selector
+that is #GP, and WIN16 is closed with the program (§124.31.11). When they happen to BE one
+(a handle descriptor's value is exactly that) the program goes on at CPL 3
+on that stack, and its next `int` faults. So WIN16 never enters a program
+that way itself: a callback (a window procedure, a hook, an enumeration or
+timer procedure, `w16_cbcall`) is entered by a `retf` into the callee's
+address, and on `kern_mega` `w16_cbcall` clears the callee's RPL first
+(`and al, 0FCh`, 2 bytes of image). A program that pushes the odd value
+itself and `retf`s or `iret`s through it fails as above. No target is known
+to do that.
+
+**A stated limit: no global block's selector loads into `SS`.** `mov ss`,
+`lss` and `pop ss` need RPL = CPL and a writable data descriptor with DPL =
+CPL. The program runs at CPL 0, and a handle descriptor and a tile are DPL
+3, so the load is #GP with the selector as the error code, odd value or
+even, and WIN16 is closed with the program (§124.31.11). On Windows, at CPL 3, it was
+legal. It stays a limit (decided 2026-11-04): the cure is a DPL 0 shadow of
+each such descriptor that the kernel would complete the load through, which
+is `.mega` bytes against the 10 it has left, and no target needs it. What
+does load into `SS` is unchanged: the program's DGROUP (a SUB, DPL 0, §124.9.2),
+WIN16's host stack and the UI task's. WIN16 does not bind `SwitchStackTo`
+(KERNEL.108), no target switches stacks by hand, and a LIBRARY'S DGROUP -
+odd now, and in `DS` whenever its code runs - is never a stack: a library
+runs on its caller's.
+
+**What comes back needs no mask.** Every place WIN16 or the kernel takes a
+selector back from a program and finds its block uses its LINEAR BASE:
+`w16_pin` -> `w16_pvirt` -> `OSAPI_SEG SEG_LIN`, and `mega_selbase` drops
+the low three bits before it indexes the table. The same holds for
+`SEG_HND`'s re-aim and free, `SEG_TYPE`'s handle test, `SEG_SUB`,
+`SEG_SUBC`, `SEG_TILE`, `mega_ldt_free`, `mega_ishif` and O8's #NP router.
+The one WIN16 compare against a stored handle descriptor (`w16s_lgrow`'s
+`.blkcap`: is the heap's segment this block's handle descriptor?) compares
+the odd value it handed out with the program's `DS`, which holds the same
+value. The compares that need the exact value are the kernel's WINDOW verbs
+(`mega_wslot`, `mega_segty`'s window walk, `mega_wset`'s re-aim) and
+`w16q_slot`. Windows stay even, so those are unchanged. `mega_codesel`
+refuses RPL 3, and WIN16 never asks it about a program's value. `VERR` at
+the gate's return (§124.31.6) is true for an odd selector over a DPL 3
+descriptor. Over a DPL 0 one it would be false and would zero `ES` without
+a fault: that is what a missed site looks like.
+
+**Cost.** Kernel: nothing. `kern_mega`'s three access bytes are
+immediates (`.mega` +0, `.cold` +0), and `kern_big` and `kern_small` are
+byte-identical. `win16.o88`, the kern_mega arm, against plan/win16-next
+277e221c8 (O8 merged), image + bss: 38,152 + 26,368 = 64,520 before the
+change, **38,174 + 26,368 = 64,542 after (+22, 482 left under 65,024)**:
++6 the odd values (`or dl, 3` in `w16_phset` and `w16_ptile`), +14 the
+call before a move (`SCALL w16s_mvpre`, `jc`), +2 the callback's RPL
+(`and al, 0FCh`). Part 5 (`w16ld`) 17,811 to 17,843 (+32: one
+DGROUP per library, the loader's `w16_lkmove` store, the `SetSystemPaletteUse`
+row), part 9 (`w16sys`) 39,506 to 39,547 (+41: `w16s_mvpre`), parts 3, 4,
+10 and 11 unchanged. The real-mode arm: image + bss 36,415 + 27,140 =
+63,555, unchanged; its part 5 is +9 (the export row). `tools/kernsize.py`
+on kern_mega reads `.mega` 23,056 (10 left), `.cold` 46,113 (479 left),
+resident 62,976, unchanged.
+
+**Seen** (QEMU, kern_mega, `-cpu 486 -m 16`, Mozart installed by its own
+setup, 2026-11-04). With odd selectors alone VBRUN300's table selector at
+`[DS:1F42h]` was 22AFh, access F3h, and VB's wrapper passed `test cl, 1`,
+but the table did not grow: its block is a LOCKED moveable block with a
+used block after it, and the locked-move rule then asked for `NEF_PMODE`.
+With the rule of §124.31.3 as it now stands (any program), VB's *Out of
+memory* (error 7) is gone, with nothing else changed. The next stop is
+MOZART.EXE's own box, *Insufficient resources to continue. Close other
+applications and start again.* It is not a resource count:
+`GetFreeSystemResources` is never called. MOZART.EXE is a Visual Basic
+program, and VB binds each `Declare` on its first call with
+`GetProcAddress(hModule, "Name")`; when that answers NULL the program's
+error handler shows this box. WIN16 answers a system module's function by
+NAME only for the sixteen in w16api.inc's `W16PROCNAME` list, and Mozart
+declares about fifty-five (`GetDC`, `SetSystemPaletteUse`, `ReleaseDC`,
+`GetPrivateProfileInt`, `GetDeviceCaps`, `CreatePalette`, `SelectPalette`,
+`RealizePalette`, `BitBlt`, `mmioOpen` ...). Traced with a scratch build that
+recorded each name asked: the first refused was `SetSystemPaletteUse`, which
+WIN16 did not bind at all (GDI.373 is bound now, answering 0,
+`SYSPAL_ERROR`, Wine's answer on a device without a palette); with it and
+its name added in a scratch build the next refused was
+`GetPrivateProfileInt`. Following that one name at a time is not the cure,
+so the names were not kept: GetProcAddress by name for EVERY bound export
+is a new item. Behind it stands the
+second box in MOZART.EXE, *Unsupported video mode. Please install a
+256-color driver.* Mozart declares `GetDeviceCaps` and nothing else that
+reads the display. WIN16 answers Windows 3.0's VGA.DRV: `BITSPIXEL` 1,
+`PLANES` 4, `NUMCOLORS` 16, `RASTERCAPS` 06D9h (no `RC_PALETTE`),
+`SIZEPALETTE` 0. Every test a 256-colour check could make fails on those,
+as it would on real Windows with that driver, so the box is the right
+answer until WIN16 has a 256-colour display. Which index Mozart reads was
+not seen. Nothing was run under Bochs, which is the instrument that checks
+privilege the way a 286 does. The rows are named in the report, not run.
+
+**Decided** (the lead, 2026-11-04, on the prototype's report;
+`~/Repos/w16next-logs/DECISIONS.md`): odd handle descriptors and tiles over
+DPL 3 descriptors, and conforming flipped code, as built; a global
+selector in `SS` is a stated limit (above); a library has one odd DGROUP
+value (above); a locked moveable block with a handle descriptor moves for
+any program (§124.31.3); the program at CPL 3 is out under the no-rung rule
+(KERN-MEGA-PLAN 14.144); Windows 3.1's handle = selector XOR 1 rule
+is deferred.
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
@@ -239637,7 +239819,8 @@ what the numbers mean**:
   handle descriptor (`SEG_HND`, §50.6.11) made at the first time the block
   is handed out (`w16_pblk`) and kept in its header (`GH_TSEL`, flag
   `GHF_HND`). It is based at the block's data and reaches exactly its
-  length. `GlobalReAlloc` re-aims it IN PLACE - a new base and a new limit
+  length. Its selector is odd, RPL 3 over a DPL 3 descriptor, as Windows'
+  was (§124.25.23). `GlobalReAlloc` re-aims it IN PLACE - a new base and a new limit
   on the same selector, as Windows' standard mode did - when the block grows
   or shrinks where it is (`w16_phfix`) and when it moves, to another arena
   or not (`w16s_gwin`, part 9, carries it to the new header). The block's
@@ -239712,15 +239895,23 @@ what the numbers mean**:
   - The parts are still fetched through the DMA door, as the parts standard
     fetches every part.
 
-**A locked moveable block of a protected-mode-only program moves
-(2026-11-02).** Windows' standard mode moved a locked moveable block on
-`GlobalReAlloc` and kept its selector, because a selector is only a
-descriptor. Microsoft's setup engine (`_MSTEST.EXE`, `NEF_PMODE`, shipped
-with Arcade and Mozart) depends on it: it grows a locked 33-paragraph
-parser block to 65 and refuses with *Parser out of memory* when the move
-is refused. The arm moves it as follows:
+**A locked moveable block moves (2026-11-02 for a protected-mode-only
+program, 2026-11-04 for any, §124.25.23).** Windows 3.1 in protected mode
+moved a locked moveable block on `GlobalReAlloc` and kept its selector,
+because a selector is only a descriptor; and every Windows 3.1 program runs
+in protected mode, marked `NEF_PMODE` or not. Microsoft's setup engine
+(`_MSTEST.EXE`, `NEF_PMODE`, shipped with Arcade and Mozart) depends on it:
+it grows a locked 33-paragraph parser block to 65 and refuses with *Parser
+out of memory* when the move is refused. So does Visual Basic's runtime,
+for the programs it runs, which are not marked: VBRUN300 grows its locked
+custom-control table, and MOZART.EXE said *Out of memory* (VB's error 7)
+until the rule stopped asking whose block it was. The arm moves it as
+follows:
 
-- The loader sets `w16_pmonly` (per task) from the program's `NEF_PMODE`.
+- The loader sets `w16_lkmove` (per task) to 1 for every program: a locked
+  block may move. It was `w16_pmonly`, the program's `NEF_PMODE` bit, until
+  2026-11-04. It stays a flag, not a constant, because §124.25.19's grow
+  sets it to 0 for one call.
 - `GlobalLock` answers the block's handle descriptor (above), as for
   every program.
 - `GlobalReAlloc` takes such a LOCKED block down the ordinary move path
@@ -239730,6 +239921,24 @@ is refused. The arm moves it as follows:
   so the selector the program holds names the new block. A locked block
   with no handle descriptor (none was to be had) stays put and the realloc
   is refused, as for any other program.
+- A MOVEABLE block the program names by its SELECTOR, as Windows let it,
+  moves as its HANDLE: `w16s_mvpre` (part 9, called before the copy) takes
+  the handle out of the header, so the handle's entry follows the block
+  and the answer is the handle, as Windows' was. Treated as the fixed block
+  its selector looks like, the move used to leave the entry naming the old,
+  freed block (the next `GlobalFree` of the handle freed whatever came to
+  stand there).
+- A locked block that was ever TILED (`GH_TN` not 0: it was over 64 KB
+  when handed out, and has shrunk since) does not move: the program may
+  still hold its tiles, which stay with the old place. `w16s_mvpre`
+  refuses it, and `GlobalReAlloc` answers 0. Nor, as a stated limit, does a
+  block whose first answer was the SUB fallback (no LDT entry to be had)
+  get the same care: that SUB stays at the old place.
+- Part 9 is fetched BEFORE the copy (`w16s_mvpre` is its first call), so
+  the re-aim after it cannot fail for want of memory. When the fetch
+  fails, nothing has moved and `GlobalReAlloc` answers 0; it used to go on,
+  free the old block and its handle descriptor with it, and hand the
+  program selector 0 at the next lock.
 - A block over 64 KB is tiled (`w16_ptile`, §124.31.6) when it is handed
   out, as Windows' would have been. One that had a handle descriptor before
   it grew keeps it re-aimed at its first 64 KB (`w16_phset`), and at the
@@ -239742,9 +239951,10 @@ is refused. The arm moves it as follows:
 - Until the handle descriptors this was a bound window (`SEG_BWIN`) per
   locked block, one of `mega_wtab`'s 32 rows each; a descriptor per handle
   needs no row.
-- A full local heap's grow (§124.25.19) takes this path for ANY program,
-  for that one call, when the heap's selector is the block's handle
-  descriptor: `w16_pmonly` is set around the call and put back.
+- A full local heap's grow (§124.25.19) takes this path when the heap's
+  selector is the block's handle descriptor, and for that one call sets
+  `w16_lkmove` to 0 when it is not, so a locked block does not move out
+  from under a `DS` that would not follow it. The flag is put back after.
 - Real mode is unchanged: a locked moveable block stays put there, as in
   real-mode Windows. Measured on Arcade's setup: the realloc is handle
   0110h, 33 to 65 paragraphs, in a 32 KB arena whose blocks are all in use
@@ -239860,7 +240070,9 @@ DOS host's block.
     `PrestoChangoSelector` re-aims the destination over the source and gives
     it the OTHER type, as Windows does (`LAR` reads the source's; `SEG_TYPE`,
     §50.6.11, sets the destination's): a data selector in, a real CODE
-    selector out, which a far call takes with no help from kern_mega. Source
+    selector out, which a far call takes with no help from kern_mega (a
+    CONFORMING one since §124.25.23, so a far call through a selector the
+    program flipped in place is taken with the RPL 3 it holds). Source
     equal to destination flips it in place, a window or the handle descriptor
     of a block of the program's alike (`SEG_TYPE`);
   - **such a window is made fresh and recorded** (2026-11-01). `SEG_WIN`

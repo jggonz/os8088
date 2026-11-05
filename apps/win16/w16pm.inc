@@ -1006,7 +1006,8 @@ w16_pout:
 
 ; w16_pblk - AX = a global block's data paragraph -> AX = the program's
 ; selector for it. Under 64 KB that is its HANDLE descriptor (SEG_HND), made at
-; the first ask and kept in the header (GH_TSEL, GHF_HND). It is based at the
+; the first ask and kept in the header (GH_TSEL, GHF_HND) with RPL 3, odd, as
+; Windows gave it (SPEC.md 124.25.23); its tiles over 64 KB are odd too. It is based at the
 ; block and reaches its length, GlobalReAlloc re-aims it in place
 ; (w16_phfix), and the block's free gives it back. So the selector a program
 ; holds follows the block, and an overrun past it faults, as on Windows
@@ -1160,7 +1161,8 @@ w16_phset:
     mov bl, SEG_HND
     call OSAPI_SEG
     jc .out
-    mov [es:GH_TSEL], dx
+    or dl, 3                        ; ODD, RPL 3, as Windows answered: kept
+    mov [es:GH_TSEL], dx            ;   so, its descriptor DPL 3 (124.25.23)
     or byte [es:GH_FLAGS], GHF_HND
 .out:
     pop si
@@ -1206,6 +1208,7 @@ w16_ptile:
     call OSAPI_SEG                  ; DX = the first tile
     pop bx
     jc .no
+    or dl, 3                        ; odd, + 8 a tile still (124.25.23)
     pop ax
     mov [es:GH_TSEL], dx
     mov [es:GH_TN], bl

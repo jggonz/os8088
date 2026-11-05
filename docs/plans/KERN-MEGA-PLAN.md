@@ -13836,3 +13836,86 @@ read unchecked, a large one would have faulted inside the router. WIN16's
 side registers before every run of its program now (`w16_dcunpark`), not at a
 wake only: a program also runs from a key or timer callback, and a second
 WIN16 instance that woke in between would otherwise hold the registration.
+
+### 14.144 A Windows program's global selectors are odd: DPL 3 data, conforming code (2026-11-04)
+
+Found by `verify-lheap` (WIN16-NEXT): Microsoft Mozart, a Visual Basic 3.0
+program, shows *Out of memory* on kern_mega. The cause is VBRUN300's
+`GlobalReAlloc` wrapper, which begins `test cl, 1` / `jz` *fail*. On Windows
+3.x every selector a program held for its global memory had RPL 3 and ended
+in 7 or F, and a moveable handle was the selector with bit 0 clear. VB
+refuses an even value as "a handle, not a selector". Every selector WIN16
+handed out here had RPL 0, because its descriptor was DPL 0: a data
+selector loads only when DPL >= max(CPL, RPL).
+
+*The kernel's part is three access bytes, as immediates, so no section
+grows:*
+
+- `SEG_HND` (`mega_segh`) makes a new handle descriptor with access F2h:
+  data, writable, **DPL 3**. Re-aiming one writes bytes 0-4 only, so the DPL
+  stays.
+- `SEG_TILE` (`mega_segtile`) makes its tiles F2h too.
+- `SEG_TYPE` (`mega_segty`) sets data to F2h, and sets code to **9Eh**:
+  code, readable, **conforming**, DPL 0. ASTEROID (14.142) flips a
+  `GlobalAlloc` block's selector in place and far-calls through the value
+  it holds, which is odd now. A far call to non-conforming code with RPL 3
+  is #GP at CPL 0, and a conforming segment's far call does not check RPL.
+  `LAR` and `LSL` on a conforming segment do not check privilege either,
+  and WIN16's flip back to data reads the type with `LAR`.
+
+*What nothing else noticed.* At CPL 0 a DPL 3 data segment loads with any
+RPL, so WIN16's own loads of these descriptors, its two walk descriptors
+among them, do not change. `mega_dfind` asks for 92h, so it now passes a
+tile by, as it already passed a handle descriptor (by `MEGA_HAVL`). Tiles
+were never meant to be a match. The kernel's other checks on an access
+byte do not look at the DPL: `mega_ldt2ds` checks a pair's data half (92h,
+which pairs keep), and `mega_dacc` masks with 91h. Every kernel lookup of
+a program's selector already drops the RPL: `mega_selbase` (`and al,
+0F8h`), `mega_segh`, `mega_segty`'s handle arm, `mega_ldt_free`, and
+`mega_npx` (14.143). The exact compares are the WINDOW verbs
+(`mega_wslot`, `mega_wset`, `mega_segty`'s window walk) and
+`mega_codesel`'s refusal of an RPL. WIN16 never hands a program an odd
+window, and never asks `OSAPI_MEM_CODESEL` about a program's value.
+
+*What it costs a program:* a handle descriptor can no longer be loaded into
+`SS`, because `SS` needs DPL = CPL = 0. The old comment said "a program may
+load it into SS as Windows allowed". Windows allowed it at CPL 3, where the
+descriptor was DPL 3. That is a STATED LIMIT (decided 2026-11-04): a DPL 0
+shadow the kernel completed the load through would be `.mega` bytes, and no
+target needs it. A `retf` or `iret` to an RPL 3 `CS` is an outer-ring
+return, so the conforming flip covers far calls and far jumps only. It is
+not a clean #GP either: the CPU takes `SS:SP` from the stack above the
+return address and checks them as ring 3's, and a handle descriptor's value
+passes that check. WIN16's own `retf` into a program - every callback,
+through `w16_cbcall` - therefore clears the callee's RPL first (SPEC.md
+124.25.23). Neither case is known in any target.
+
+*Checked, not changed* (verify-oddsel): the compactor's rebase (`mx_desc`)
+and a block's free (`mx_dfree`, `mega_mpfreef`, `mega_mpmovef`) test only
+that an entry is in use, never its access byte, so F2h, 9Eh and 1Ah move
+and go as 92h and 9Ah did; `mega_dacc` sets the accessed bit on DPL 3
+descriptors as on DPL 0 ones (`and 91h`); a hibernate image's run 0 is the
+LDT, so the access bytes travel; and `mega_ldt_free`'s pair test asks 92h of
+the entry AFTER a code descriptor, which an F2h never matches, so a flipped
+handle descriptor is never freed as a pair. `LAR`, `VERR` and `VERW` agree
+on a 286 and a 386: data needs DPL >= max(CPL, RPL), which DPL 3 meets at
+any RPL; conforming code is not privilege-checked; `VERR` and `LAR` do not
+read the present bit, which O8's `w16_touch` relies on.
+
+*Why not run the program at CPL 3, which would cure SS and `retf` too:*
+every import is a far call from the program into WIN16's DPL 0 code. At CPL
+3 that needs a call gate, and a gate names one entry, so every import stub
+would need a gate of its own. The privilege change also switches
+stacks, and WIN16's gate reads its arguments off the program's stack
+through `SS`. Every exception and IRQ that arrives at CPL 3 switches to the
+TSS's ring-0 stack, which would have to be re-aimed below `w16_hsp` at every
+resume. Every fault-completion arm (`mega_gpfix`, `mega_gpw`, `mega_null0`,
+`mega_npx`, the fault close) assumes the three-word same-ring frame, and an
+inter-ring frame is five words. `int 21h`, `2Fh`, `31h` and `34h`-`3Dh`
+gates would need DPL 3. That is a change to kern_mega's entry and exit
+paths, which the 10 bytes left in the `.mega` rung cannot hold, and the
+owner's rule allows no rung to be crossed for it.
+
+Cost: `.text`, `.cold`, `.mega`, `.bss` +0 on kern_mega, and kern_big and
+kern_small are byte-identical (`tools/kernsize.py`). WIN16 is SPEC.md
+124.25.23.
