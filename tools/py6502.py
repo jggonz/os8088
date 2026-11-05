@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """tools/py6502.py - an NMOS 6502 in Python, for the host side of FAST6502
-(docs/plans/FAST6502-PLAN.md): the trace m65aot.py takes its ROM seeds from,
+(docs/plans/completed/FAST6502-PLAN.md): the trace m65aot.py takes its ROM seeds from,
 and an independent reference for the translator's gate.
 
     python3 tools/py6502.py --dormann build/a2tests/6502_functional_test.bin

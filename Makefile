@@ -11391,7 +11391,7 @@ $(BUILD)/apple2-rom/APPLE2.ROM: tools/getapple2rom.py | $(BUILD)
 #> [Applications] apple2rom :: fetch the Apple II ROMs at pinned hashes (never committed)
 apple2rom: $(BUILD)/apple2-rom/APPLE2.ROM
 
-# THE FAST 6502 CORE (APPLE2-SPEC section 4.6, docs/plans/FAST6502-PLAN.md):
+# THE FAST 6502 CORE (APPLE2-SPEC section 4.6, docs/plans/completed/FAST6502-PLAN.md):
 # apps/m6502/m65gen.py writes it, nasm makes the 64KB segment, and it is part
 # 1 of APPLE2.O88. The generator checks its cycle costs against the accurate
 # core's own table on every build.

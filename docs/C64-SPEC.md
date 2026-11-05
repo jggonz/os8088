@@ -659,7 +659,7 @@ harness CLEARS the bytes a row reads before it runs — a control that read
 the value the positive run had left at the same address passed, which is a
 control proving nothing.
 
-### 4.7 The fast core (docs/plans/FAST6502-PLAN.md)
+### 4.7 The fast core (docs/plans/completed/FAST6502-PLAN.md)
 
 **C64.O88's part 2 is a second 6510 core**, written by `apps/m6502/m65gen.py
 --machine c64` and far-called through `apps/c64/c64fast.inc`. It is
@@ -831,7 +831,7 @@ scene (a `DEC $C333 / BNE` delay and a character scroller): 25.5% -> 29.2%
 with the mark, the `DEC` slot from 13% of the host to 3% with the collapse;
 what is left is its scroller and the redraw.
 
-### 4.8 BASIC and the KERNAL translated ahead of time (FAST6502-PLAN.md wave 2b)
+### 4.8 BASIC and the KERNAL translated ahead of time (docs/plans/completed/FAST6502-PLAN.md wave 2b)
 
 **C64.O88's parts 3, 4 and 5 are the two ROM banks as 8086 code**:
 `apps/m6502/m65aot.py --machine c64` translates BASIC (`$A000-$BFFF`, part

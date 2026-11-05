@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""apps/m6502/m65gen.py - the FAST 6502 core's generator (docs/plans/FAST6502-PLAN.md)
+"""apps/m6502/m65gen.py - the FAST 6502 core's generator (docs/plans/completed/FAST6502-PLAN.md)
 
     python3 apps/m6502/m65gen.py --machine apple2 -o build/apple2/a2fast.asm
     python3 apps/m6502/m65gen.py --machine c64 -o build/c64/c64fast.asm

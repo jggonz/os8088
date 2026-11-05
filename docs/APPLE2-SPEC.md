@@ -601,7 +601,7 @@ because the image lands on top of `$CF00`. And **row 12's vectors are written
 through the ROM part**, not into RAM: `$FFFA-$FFFF` belong to the Autostart
 Monitor on this machine and a write there is dropped.
 
-### 4.6 The fast core (docs/plans/FAST6502-PLAN.md)
+### 4.6 The fast core (docs/plans/completed/FAST6502-PLAN.md)
 
 **APPLE2.O88's part 1 is a second 6502 core**, written by
 `apps/m6502/m65gen.py` and far-called through `apps/apple2/a2fast.inc`. It
@@ -737,7 +737,7 @@ cannot reach in the fast core are made in the fast core's own code: row 4's
 10's `LDA abs,X` charges 3, and row 2's `SED` slot jumps to `CLD`'s.
 `A2CPU_ONLY=fast` runs that leg alone.
 
-### 4.7 The ROM translated ahead of time (docs/plans/FAST6502-PLAN.md wave 1c)
+### 4.7 The ROM translated ahead of time (docs/plans/completed/FAST6502-PLAN.md wave 1c)
 
 **APPLE2.O88's parts 2 and 3 are Applesoft and the Monitor as 8086 code**:
 `apps/m6502/m65aot.py` translates every ROM PC it knows into one code

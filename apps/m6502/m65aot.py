@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """apps/m6502/m65aot.py - a 6502 ROM translated to 8086 ahead of time
-(docs/plans/FAST6502-PLAN.md wave 3; APPLE2-SPEC 4.7)
+(docs/plans/completed/FAST6502-PLAN.md wave 3; APPLE2-SPEC 4.7)
 
     python3 apps/m6502/m65aot.py --machine apple2 --rom APPLE2.ROM \\
         --seeds a2rom.seeds -o build/apple2/a2aot.asm --table build/apple2/a2aotpc.bin

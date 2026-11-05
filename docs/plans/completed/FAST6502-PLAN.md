@@ -1,6 +1,8 @@
-# FAST6502 - a fast 6502 core for APPLE2 and C64 (plan)
+# FAST6502 - a fast 6502 core for APPLE2 and C64 (plan, COMPLETED)
 
-A PLAN (docs/README.md). The survey that led here is
+A COMPLETED PLAN (docs/README.md): how the fast cores got built, not what
+they do now - APPLE2-SPEC 4.6-4.7 and C64-SPEC 4.7-4.9 are that. Merged to
+`elendilon` at `ddba29a3` (2026-11-05). The survey that led here is
 docs/plans/EMU-SURVEY-286.md, recommendation 1. The contracts this changes
 are docs/APPLE2-SPEC.md section 4 and docs/C64-SPEC.md section 4, and each
 gets its section before its wave's code.
@@ -106,4 +108,4 @@ the alarm model through the same `expire`.
 | 2 | C64 on the generated core | **landed** - 40% idle, 47% under BASIC on the 286 (C64-SPEC 4.7); Dormann and every applicable row pass on the fast leg |
 | 2b | BASIC and the KERNAL translated ahead of time, a segment each, the run's end kept exact | **landed** - 99.8% idle (throttled), 81% under BASIC on the 286 (C64-SPEC 4.8); Dormann runs through the translation |
 | 2c | the instruction merge and the rest of the way to 100%: groups, inline `PLP`, dead V, the raster wait, the display latch | **landed** - C64 BASIC 97-99.5%, a raster-split demo 96.6% (C64-SPEC 4.7.1, 4.8, 9.9); APPLE2 141.5% under warp |
-| 3 | the speed pass: 286 and XT measured, the diary, the SPEC sections' measured lines | |
+| 3 | the speed pass: 286 and XT measured, the diary, the SPEC sections' measured lines | **closed** (2026-11-05, the owner's call) - measured throughout on 86Box `286-victory` and the owner's `mr286` profile while it was built, each figure in its SPEC section beside the change it measures (C64-SPEC 4.7-4.9, 9.4.1, 9.12, 9.13; APPLE2-SPEC 4.6-4.7), and the owner testing every disk set on their own 86Box as it was sent. No separate diary was written; the SPEC sections' measured lines and this table are the record |
