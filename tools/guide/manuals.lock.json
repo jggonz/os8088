@@ -45,6 +45,14 @@
   "strings": null,
   "why": "first stamp: every page written and reviewed for the project guide, 2026-10-17"
  },
+ "ARCADE_O88": {
+  "sources": [
+   "apps/arcade"
+  ],
+  "stamped": "8ed115f8",
+  "strings": "65464a52f9a7b2f3",
+  "why": "new page: written from ARCADE's menus, key tables, toasts, states and README as they are"
+ },
  "ARCHIVO_F88": {
   "sources": [],
   "stamped": "e4576a70",

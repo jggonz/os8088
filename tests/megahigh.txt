@@ -65,3 +65,14 @@ highmem apps/win16/win16.asm    # THE SAME REFUSAL, and the claims are the same
     # paragraphs: the program's segments and its global heap are addressed as
     # base + paragraph offsets by the fixups and by GlobalAlloc's arena walk
     # (w16_garena, GH_SIZE in paragraphs). Retired with the line above.
+high apps/arcade/arcade.asm   # IT REFUSES UNDER PROTECTED MODE: OS88_MEGA_REFUSE,
+    # the first line of ar_entry, because the host far-calls code in parts and
+    # claims (call far [ar_core]: a translated board's code part; Q*bert's
+    # program runs natively in qb_gseg) and writes the ROM's bytes into the
+    # code part at a pick (ar_fill). Retired by the PKG_MEGA arm,
+    # docs/plans/ARCADE-MEGA-PLAN.md.
+highmem apps/arcade/arcade.asm   # THE SAME REFUSAL, and its claims are stepped
+    # by paragraph: ar_rimg is ar_rimgc + 2 and the sound chips ar_rimg +
+    # 1000h (arcqbs.inc), af_slot multiplies a game's index into af_pclaim,
+    # arcimp.inc places chips by paragraph in ar_iclaim and walks the zip by
+    # ar_zat's offset >> 4. Retired with the line above (ARCADE-MEGA-PLAN).

@@ -535,3 +535,34 @@ N apps/win16/win16.asm @w16_pfetch       # the loader part (dropped inside the
                                          # w16_pfv while a dialog is up; a proc
                                          # re-stamping w16_pfv, w16_dseg and
                                          # w16_icseg would retire it
+
+# --- ARCADE (ARCADE-SPEC; the N lines are docs/plans/ARCADE-MEGA-PLAN.md's
+# wave M1: one place derives every segment from a claim, so a relocation
+# proc - and on kern_mega a selector - has one place to re-derive) --------------
+C apps/arcade/arcimp.inc @ar_impdone     # the import's set image (ar_iclaim):
+    # claimed, filled and written and freed inside the one chooser callback
+C apps/arcade/arcimp.inc ar_zclaim       # the import's zip, read whole and freed
+    # inside the same chooser callback (and its parent's, ar_z2)
+D apps/arcade/arcsnd.inc ar_sbseg        # the Sound Blaster's ring: the DMA
+    # channel reads it for the whole bracket (SND_EXT, ARCADE-SPEC 8)
+N apps/arcade/arcade.asm ar_core+2       # a translated board's code part,
+    # far-called and filled at a pick; ar_aseg and ar_vseg are derived beside it
+N apps/arcade/arcade.asm ar_rimgc        # the user's .ROM image; ar_rimg = +2
+    # paragraphs, and the sound chips + 1000h from that, are derived by sums
+N apps/arcade/arcade.asm op:carve        # the parts' carve (os88parts.inc), held
+    # from the entry to the end; the view part's segment is kept in ar_vseg
+N apps/arcade/arcface.inc af_pclaim      # the games' pictures, a slot each at a
+    # multiple of AF_PICPAR paragraphs (af_slot)
+N apps/arcade/arcpm.inc pm_rclaim        # Pac-Man's built tiles and sprites,
+    # read by the renderer at fixed paragraph offsets while it is selected
+N apps/arcade/arcpm.inc pm_shseg         # Pac-Man's shadow of the glass
+N apps/arcade/arcqb.inc qb_gseg          # Q*bert's 64KB: its program RUNS here
+    # natively (the N88 core far-calls it), so it moves only between plays
+N apps/arcade/arcqb.inc qb_rclaim        # Q*bert's patched program, built at the
+    # pick and copied into qb_gseg at each reset
+N apps/arcade/arcqb.inc qb_sclaim        # Q*bert's turned sprites
+N apps/arcade/arcqb.inc qb_shseg         # Q*bert's shadow of the glass
+N apps/arcade/arcqbs.inc qbs_seg         # the sound board's 6503 memory
+    # (arc6502.inc's m6_seg), kept between plays
+N apps/arcade/arcsnd.inc op:AR_P_INVSFX  # Space Invaders' synthesised clips, a
+    # lazy part read before the bracket and mixed from inside it
