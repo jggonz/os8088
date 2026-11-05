@@ -968,6 +968,24 @@ its frame from `c64_faot`, `c64_fakb` and `c64_ftab` at its door, and
 Apple II's leg one machine along: Dormann's functional test in four parts
 (`--range`) with a core built for each, slices of 997 cycles, and every
 translated `ADC` and `CMP` broken as the control.
+**Charged ahead** (2026-11, `chains()`): a group a conditional branch falls
+into is paid for with the branch's own group, so the not-taken path runs no
+subtract of its own; the taken path makes the one adjustment it made anyway
+- its penalty, less what was charged ahead for the groups it skips, plus the
+target's own charge when it enters past the target's subtract (`pb_` labels).
+Any other entry into a group charged ahead goes through an out-of-line stub
+at its `p_` label, which the PC table names. A group charged ahead tests no
+countdown and starts with nothing that leaves, so the only readers of the
+countdown inside a chain - an I/O access, which always ends one - see what
+they saw before. A bail gives back its group's rest and what was charged
+ahead after it. +1 point on each BASIC loop under warp (110.2 -> 111.2,
+102.2 -> 103.2, 109.4 -> 110.4); the slice hash below is the reference's.
+**The inexact alternative was measured and not taken**: testing the
+countdown only at loop heads (a backward branch's or JMP's target) gave
+116.0%, 107.8% and 116.8% - five points more - at the price of runs that
+end past the cycle an interrupt is due, by as much as a loop-free stretch
+of ROM takes; that is the owner's decision, not this section's.
+
 **And the gate checks the cycles** (2026-11): the fast core alone runs
 Dormann in the same 997-cycle slices first, hashing where every slice ENDED -
 its PC and the countdown it left - and each translated leg must hash the
