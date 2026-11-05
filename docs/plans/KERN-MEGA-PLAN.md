@@ -13837,7 +13837,7 @@ side registers before every run of its program now (`w16_dcunpark`), not at a
 wake only: a program also runs from a key or timer callback, and a second
 WIN16 instance that woke in between would otherwise hold the registration.
 
-### 14.144 A Windows program's global selectors are odd: DPL 3 data, conforming code (2026-11-04) - PROTOTYPE, NOT YET MERGED
+### 14.144 A Windows program's global selectors are odd: DPL 3 data, conforming code (2026-11-04)
 
 Found by `verify-lheap` (WIN16-NEXT): Microsoft Mozart, a Visual Basic 3.0
 program, shows *Out of memory* on kern_mega. The cause is VBRUN300's
@@ -13880,9 +13880,27 @@ window, and never asks `OSAPI_MEM_CODESEL` about a program's value.
 *What it costs a program:* a handle descriptor can no longer be loaded into
 `SS`, because `SS` needs DPL = CPL = 0. The old comment said "a program may
 load it into SS as Windows allowed". Windows allowed it at CPL 3, where the
-descriptor was DPL 3. A `retf` or `iret` to an RPL 3 `CS` is an outer-ring
-return, so the conforming flip covers far calls and far jumps only. Neither
-case is known in any target.
+descriptor was DPL 3. That is a STATED LIMIT (decided 2026-11-04): a DPL 0
+shadow the kernel completed the load through would be `.mega` bytes, and no
+target needs it. A `retf` or `iret` to an RPL 3 `CS` is an outer-ring
+return, so the conforming flip covers far calls and far jumps only. It is
+not a clean #GP either: the CPU takes `SS:SP` from the stack above the
+return address and checks them as ring 3's, and a handle descriptor's value
+passes that check. WIN16's own `retf` into a program - every callback,
+through `w16_cbcall` - therefore clears the callee's RPL first (SPEC.md
+124.25.23). Neither case is known in any target.
+
+*Checked, not changed* (verify-oddsel): the compactor's rebase (`mx_desc`)
+and a block's free (`mx_dfree`, `mega_mpfreef`, `mega_mpmovef`) test only
+that an entry is in use, never its access byte, so F2h, 9Eh and 1Ah move
+and go as 92h and 9Ah did; `mega_dacc` sets the accessed bit on DPL 3
+descriptors as on DPL 0 ones (`and 91h`); a hibernate image's run 0 is the
+LDT, so the access bytes travel; and `mega_ldt_free`'s pair test asks 92h of
+the entry AFTER a code descriptor, which an F2h never matches, so a flipped
+handle descriptor is never freed as a pair. `LAR`, `VERR` and `VERW` agree
+on a 286 and a 386: data needs DPL >= max(CPL, RPL), which DPL 3 meets at
+any RPL; conforming code is not privilege-checked; `VERR` and `LAR` do not
+read the present bit, which O8's `w16_touch` relies on.
 
 *Why not run the program at CPL 3, which would cure SS and `retf` too:*
 every import is a far call from the program into WIN16's DPL 0 code. At CPL
