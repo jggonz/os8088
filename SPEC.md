@@ -241810,34 +241810,52 @@ so MartyPC) does not have.
 open and in front before the first paint, and reads what the window says out of
 the package's own list in guest memory: `mc_nrows`, `mc_roff` and `mc_buf`
 (126.2), found through the window record's `W_SEG` and nasm's own map of the
-package (`tests/paintheld.py`'s recipe). No OCR and no pixel comparison. The
-segment is read twice around every read, since a heap compaction moves a
-package (66), and a torn rebuild (the list is rewritten twice a second) is
-met by polling for the expected text. Every expected string is one entry of
-the `EXPECT` table at the head of the file.
+package (`tests/paintheld.py`'s recipe). The map is assembled against the
+build directory of the disk being booted, the shared one or a private tree's,
+and must come out **byte-identical** to that directory's `mousechk.bin`, or the
+row refuses it the way `tools/os88sym.py` refuses a kernel map. No OCR and no
+pixel comparison. The segment is read twice around every read, since a heap
+compaction moves a package (66). The list is rewritten in place about twice a
+second while each read is a separate monitor call, so a list is accepted only
+when two whole passes agree: a torn list is otherwise a "changed" row that
+followed nothing. Every expected string is one entry of the `EXPECT` table at
+the head of the file. A `sum_*` entry is matched against the Summary section
+alone, from its heading to the next one.
+
+**Two readings, not one.** Every verdict is checked beside the kernel's own
+`[mou_seen]` and `[mou_port]`, so a failure says whether Mouse Check
+misreported or the machine was not wired as the leg assumed. Where a section
+has a byte of its own, it is checked too: the Serial section's winner comes
+from `MOS_PORT`, like the Summary's verdict, but its winning line comes from
+`MOS_LINE`. The foundation's stub text is a **failure**, not a pass on the
+plumbing. A row run against a tree where the sections did not land comes back
+red.
 
 **The legs**, each its own QEMU:
 
 | leg | machine | what it proves |
 |---|---|---|
-| `serial` | serial mouse on COM1 | the window opens; the Summary names a serial mouse on COM1; some row changes after the mouse crosses the desktop (S2: rows follow the device) |
-| `com2` | silent UART at 3F8, mouse at 2F8 (`MOUSEPORT=com2`) | the Summary names COM2 |
-| `ps2` | `-serial none` (`MOUSEPORT=ps2`) | the Summary names PS/2; `[mc_pgrey]` is FF, so Probe PS/2 is refused; P starts no probe |
-| `nops2` | a PRIVATE `NOPS2=1` kernel tree (`os88build.tree`, never `build/`), PS/2 mouse | Probe PS/2 is offered and runs; the trace shows the device answering; afterwards the keyboard still types (S opens the Save dialog) and the kernel's `mou_p2st`/`mou_p2`/`mou_p2id`, where this build has them, read as before |
-| `save` | default | Save Report through the standard dialog (Enter accepts `MOUSECHK.TXT`); the file read back off the floppy image on the host: head line, date, kernel id and a `[LAMP] Summary` section line. The dialog's default folder is `MEDIA` on the boot floppy, so the row looks on A: and the scratch B: |
-| `mono` | a PRIVATE `VIDEO=cga` kernel tree | `[mc_bpp]` is 1, the window opens and its rows exist; a screenshot is kept (`MOUSECHK_SHOTS=<dir>`) |
+| `serial` | serial mouse on COM1 | the pointer is moved three times, and after each move the Summary's `Position` row reads the kernel's own `mouse_x`/`mouse_y`. That is S2 with a row that can only change by following the device. The verdict is `Your mouse is working: COM1 serial mouse`, the Serial section says `serial COM1` on `IRQ4`, the kernel id matches the package (`[mc_kok]` 1), and the display reads `VGA 640x480, 4 bpp` |
+| `com2` | silent UART at 3F8, mouse at 2F8 (`MOUSEPORT=com2`) | the same verdict, pointer and serial rows, naming COM2 and IRQ3. On both straight wirings the Serial section's lamp is OK and it prints no cross-wired line: the negative control for the next leg |
+| `com2irq4` | the mouse on COM2's UART raising IRQ4 (`MOUSEPORT=com2irq4`, the Compaq Portable III of 9.5.2) | after a move the kernel still finds it and the Summary says working on COM2, while the Serial section prints `Cross-wired: data here, interrupt on the other IRQ.` with a WARN lamp, and its winning line is IRQ4. The lamp is the heading row's own byte, read out of the list |
+| `ps2` | `-serial none` (`MOUSEPORT=ps2`) | before any move the Summary is the WAIT verdict (`A PS/2 mouse answered. Move it to confirm.`), the one state that prints it. `[mc_pgrey]` is FF and the refusal row names the kernel's live PS/2 mouse; P starts no trace. After a move, the verdict names the PS/2 mouse and the kernel's `[mou_port]` is 4 |
+| `nops2` | a PRIVATE `NOPS2=1` kernel tree (`os88build.tree`, never `build/`), PS/2 mouse, no UART | the kernel has no pointer at all, so this is the leg that shows the no-mouse verdict and the keyboard-mouse line. Probe PS/2 is offered (`[mc_pgrey]` 00) and runs. Its trace header appears, its verdict says the device answered (ID 00), the command byte is `restored`, and the list did not overflow. The kernel's `mou_p2st`/`mou_p2`/`mou_p2id` read as before, and the keyboard still opens and closes the Save dialog |
+| `save` | default | after one move, Save Report goes through the standard dialog (Enter accepts `MOUSECHK.TXT`). The file is read back off the floppy image on the host, polled until it is complete: head line, date, kernel id, a `[LAMP] Summary` section line and the verdict row. The dialog's default folder is `MEDIA` on the boot floppy (38.10) |
+| `mono` | a PRIVATE `VIDEO=cga` kernel tree | `[mc_bpp]` is 1, `[mc_kok]` 1, the list begins with a heading, and the display reads `CGA 640x200, 1 bpp`. A screenshot is kept (`MOUSECHK_SHOTS=<dir>`) |
 
 **What it cannot prove.** The lamp *shapes* on 1bpp (118.5) are not asserted
-pixel by pixel: the picture is kept for a human to look at. "Nothing else redrew" is not
-measured, only that rows change. QEMU is exact about work and useless about
-time, so nothing here says the window is quick on an 8088 (MartyPC cannot host
-the PS/2 legs; the serial legs' cost is 126.11's arithmetic, not a
-measurement). And no emulator is the machine this package was written for:
-QEMU's i8042 answers every command, where an STPC with a Winbond W83977's
-controller running AMI MEGAKEY firmware may not, so `nops2` shows the probe
-and its trace work on an 8042 that cooperates, and a real board is the
-only evidence that they report the one that does not. A mouse that is *absent*
-is also not hosted: both emulated PS/2 paths always have a device.
+pixel by pixel: the picture is kept for a human to look at. "Nothing else
+redrew" is not measured, only that the rows' text follows the device. QEMU is
+exact about work and useless about time, so nothing here says the window is
+quick on an 8088 (MartyPC cannot host the PS/2 legs; the serial legs' cost is
+126.11's arithmetic, not a measurement). And no emulator is the machine this
+package was written for: QEMU's i8042 answers every command, where an STPC
+with a Winbond W83977's controller running AMI MEGAKEY firmware may not, so
+`nops2` shows the probe and its trace work on an 8042 that cooperates, and a
+real board is the only evidence that they report the one that does not. A
+kernel with no pointer is hosted (`nops2`), but a machine whose PS/2 DEVICE is
+absent is not: both emulated PS/2 paths always have a mouse on them, so the
+no-device verdicts of the trace are unseen here.
 
 ### 126.11 Cost
 

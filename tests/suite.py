@@ -16992,24 +16992,34 @@ SOAK = [
         needs=("qemu", "mtools"), serial=True, timeout=600,
         wants=("build/os8088.img", "build/apps.img", "build/syscheck.o88",
                "build/fscheck.drv", "build/mbr.bin", "build/boothd.bin")),
-    Row("mousechkgate", "soak", py("tests/mousechk.py"), 30.0,
+    Row("mousechkgate", "soak", py("tests/mousechk.py"), 270.0,
         "SPEC.md 126.10: MOUSE CHECK (SYSTEM\\MOUSECHK.O88) on the glass, read "
-        "out of the package's own row list in guest memory rather than "
-        "pixels. Six legs on QEMU, each booting the system floppy with an "
-        "AUTOSTRT link: a serial mouse on COM1 (the Summary names it, and a "
-        "row changes when the mouse moves - S2); MOUSEPORT=com2's wiring "
-        "(the Summary says COM2); MOUSEPORT=ps2's (the Summary says PS/2 and "
-        "Probe PS/2 is greyed and refused); a private NOPS2=1 kernel tree "
-        "with a PS/2 mouse (Probe runs, the trace shows the device answering, "
-        "the keyboard still opens the Save dialog and the kernel's PS/2 state "
-        "is unchanged); Save Report through the standard dialog, the file "
-        "read back off the floppy image on the host (head, date, kernel id, a "
-        "section line); and a private VIDEO=cga tree ([mc_bpp] 1, the rows "
-        "present, a screenshot kept for the lamp shapes). QEMU by name: the "
-        "PS/2 legs need an 8042 and MartyPC's XT has none. Proves nothing "
-        "about an 8088's speed or a real STPC/W83977 controller.",
+        "out of the package's own row list in guest memory (W_SEG + nasm's "
+        "map, held byte-identical to the leg's mousechk.bin) rather than "
+        "pixels, every verdict beside the KERNEL's own mou_seen/mou_port. Seven "
+        "legs on QEMU, each booting the system floppy with an AUTOSTRT link: "
+        "COM1 (the Summary's Position row reads the kernel's mouse_x/y after "
+        "each move - S2 - and the verdict, the Serial section's winner and "
+        "line, the kernel id and VGA 4 bpp agree); MOUSEPORT=com2's wiring "
+        "(COM2, IRQ3), both with the Serial lamp OK and no cross-wired line; "
+        "MOUSEPORT=com2irq4's, the Compaq Portable III of SPEC.md 9.5.2 "
+        "(working on COM2, but the Serial section's Cross-wired verdict, a "
+        "WARN lamp and the winning line IRQ4); MOUSEPORT=ps2's (the WAIT verdict before a move, Probe "
+        "PS/2 greyed with the kernel's live mouse as its reason and P "
+        "tracing nothing, then the PS/2 verdict); a private NOPS2=1 kernel "
+        "tree (the no-mouse verdict; Probe offered, its trace says the device "
+        "answered and the command byte was restored, the kernel's PS/2 bytes "
+        "unchanged, the keyboard still opens and closes the Save dialog); "
+        "Save Report read back off the floppy image (head, date, kernel id, a "
+        "section line, the verdict); and a private VIDEO=cga tree ([mc_bpp] "
+        "1, Display CGA 640x200 1 bpp, a screenshot kept for the lamp "
+        "shapes). The two trees cost ~5 min each the first time and are "
+        "reused after. QEMU by name: the PS/2 legs need an 8042 and MartyPC's "
+        "XT has none. Proves nothing about an 8088's speed or a real "
+        "STPC/W83977 controller.",
         needs=("qemu", "mtools", "nasm"), serial=True, timeout=1800,
-        wants=("build/os8088.img", "build/mousechk.o88")),
+        wants=("build/os8088.img", "build/mousechk.o88",
+               "build/mousechk.bin")),
     Row("win16mines", "soak", py("tests/win16mines.py"), 60.0,
         "SPEC.md 124.15, WIN16-PLAN S8: Windows 3.1's Minesweeper (W31MINE, "
         "Microsoft's, in build/win16/ only where the win16-reference skill "
