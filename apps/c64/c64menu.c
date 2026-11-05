@@ -191,6 +191,7 @@ static char c64_t_swap[] = OFF "Swap joysticks  Alt+J";
 static char c64_t_fs0[] = OFF "Draw every frame";
 static char c64_t_fs1[] = OFF "Skip frames as needed";
 static char c64_t_fs2[] = OFF "Skip most frames";
+static char c64_t_coll[] = OFF "Sprite collisions";
 static const char c64_mark[2] = { ' ', '*' };   /* OFF[0], ON[0] */
 /* ...and ONE item that is greyed by STATE rather than checked by it. Advance
  * frame is live while there is a machine to advance and greyed when there is
@@ -249,12 +250,18 @@ static const char *c64_pref_items[] = {
                                              * joystick indicators */
     c64_t_fs0,                              /* THE FRAME SKIP, three RADIO */
     c64_t_fs1,                              /* items (C64-SPEC 9.13): VICE's */
-    c64_t_fs2                               /* is a Settings refresh rate, and
+    c64_t_fs2,                              /* is a Settings refresh rate, and
                                              * here a music player and a game
                                              * want opposite answers, so the
                                              * user picks: every frame the
                                              * host can draw, the adaptive
                                              * skip, or the fewest */
+    c64_t_coll                              /* VICE's are always on; here the
+                                             * scan costs a program that reads
+                                             * them milliseconds a frame on a
+                                             * 286 (C64-SPEC 5.3.1), so it is a
+                                             * CHECK, on, that one that only
+                                             * clears them can turn off */
 };
 
 /* --- Help (help_menu) ---------------------------------------------------- */
@@ -276,7 +283,7 @@ static struct os88_menuset c64_menus = {
     {
         { "File",        c64_file_items,  5 },
         { "Edit",        c64_edit_items,  2 },
-        { "Preferences", c64_pref_items,  9 },
+        { "Preferences", c64_pref_items, 10 },
         { "Help",        c64_help_items,  1 }
     }
 };
@@ -295,6 +302,7 @@ static void c64_menu_state(void)
     c64_t_fs0[0] = c64_mark[c64_fs_mode == 0];
     c64_t_fs1[0] = c64_mark[c64_fs_mode == 1];
     c64_t_fs2[0] = c64_mark[c64_fs_mode == 2];
+    c64_t_coll[0] = c64_mark[c64_col_off ^ 1];
     /* ...and the fifth entry is a GREYING, not a check (§47): with no machine
      * running there is nothing to advance, and the reason is already the
      * permanent line on the status row. c64_jam() and os88_main both call

@@ -283,7 +283,7 @@ def run():
                     % (oseg, off, got.hex(), ovl[off:off + 16].hex()))
 
         # --- 5d. ...and BASIC and the KERNAL translated (C64-SPEC 4.8):
-        # os88_main's c64_fast_init fetched all three lazy parts, and each
+        # os88_main's ovl_fast_init fetched all three lazy parts, and each
         # names its own bytes. (On kern_mega the two code words are
         # selectors, read through the linear base os88marty resolves.)
         for sym, (n, kind, f) in zip(("_c64_faot", "_c64_fakb", "_c64_ftab"), AOT_PARTS):
@@ -294,7 +294,7 @@ def run():
             if got != want:
                 fails.append(
                     "%s is %04X and does not hold build/c64/%s's first bytes: "
-                    "c64_fast_init fetches parts 3-5 when the fast core is "
+                    "ovl_fast_init fetches parts 3-5 when the fast core is "
                     "there, and the core enters BASIC and the KERNAL through "
                     "them (C64-SPEC 4.8)" % (sym, sg, f))
 

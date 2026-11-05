@@ -1050,3 +1050,313 @@ _c64_band_x2:
     pop si
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; int c64_colrow(const unsigned char *m, int n, int sh, const unsigned char *g)
+; A SPRITE COLLISION ON ONE LINE (C64-SPEC 5.3.1): N bytes of opaque mask M,
+; whose first pixel is SH (0..7) pixels into G's first byte, against G - the
+; foreground of the cells under it, or another sprite's mask. Nonzero when a
+; set bit of M meets a set bit of G. G is read N + 1 bytes long. Byte i of M
+; covers the last 8 - SH pixels of G[i] and the first SH of G[i + 1]: one
+; 16-bit shift splits it between the two.
+; -----------------------------------------------------------------------------
+_c64_colrow:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov si, [bp+4]
+    mov dx, [bp+6]
+    mov cx, [bp+8]
+    mov di, [bp+10]
+    xor ax, ax
+    test dx, dx
+    jle .out
+.b:
+    mov bh, [si]
+    inc si
+    xor bl, bl
+    shr bx, cl
+    and bh, [di]
+    and bl, [di+1]
+    or bh, bl
+    jnz .hit
+    inc di
+    dec dx
+    jnz .b
+    jmp short .out
+.hit:
+    inc ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colrows(const unsigned char *mk, int n, int sh,
+;                 const unsigned char *g, int lines, int ye)
+; c64_colrow over LINES lines of one sprite in one character row (C64-SPEC
+; 5.3.1): line i's mask at MK (N bytes; a data line's mask 7 bytes after the
+; last, c64_sprmasks' slots), its foreground G + i at a stride of 8 - a cell's eight lines, as
+; c64_xb lays them out. YE bit 0: Y-expanded, the mask advancing every second
+; line; bit 1: the first line is its data line's second. Nonzero at the first
+; line that meets the foreground. One call a row, where the C loop it replaced
+; was most of a scan.
+; -----------------------------------------------------------------------------
+_c64_colrows:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov cx, [bp+8]
+    mov si, [bp+4]
+    mov di, [bp+10]
+.line:
+    cmp word [bp+12], 0
+    jle .none
+    push si
+    push di
+    mov dx, [bp+6]
+.b:
+    mov bh, [si]
+    inc si
+    xor bl, bl
+    shr bx, cl
+    and bh, [di]
+    and bl, [di+8]
+    or bh, bl
+    jnz .hit
+    add di, 8
+    dec dx
+    jnz .b
+    pop di
+    pop si
+    inc di                          ; the cells' next pixel line
+    dec word [bp+12]
+    test byte [bp+14], 1
+    jz .adv
+    xor byte [bp+14], 2             ; Y-expanded: a data line is two lines
+    test byte [bp+14], 2
+    jnz .line                       ; ...and this was its first
+.adv:
+    add si, 7
+    jmp short .line
+.hit:
+    pop di
+    pop si
+    mov ax, 1
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colblank(unsigned seg, unsigned a, int n, int mask,
+;                  const unsigned char *bk)
+; Whether the N character codes at SEG:A (each ANDed with MASK) are all
+; BLANK by BK's 256 answers (C64-SPEC 5.3.1): 1 all blank, 0 one is not, and
+; 2 + i when code i has no answer yet - the caller takes it and asks again
+; from i. SEG is the C64's RAM: the codes are read where they are.
+; -----------------------------------------------------------------------------
+_c64_colblank:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov es, [bp+4]
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    mov dx, [bp+10]
+    mov di, [bp+12]
+    xor bx, bx
+    mov ax, 1
+    jcxz .out
+.c:
+    mov bl, [es:si]
+    inc si
+    and bl, dl
+    cmp byte [di+bx], 1
+    jb .unk
+    ja .not
+    loop .c
+    jmp short .out                  ; (AX is still 1)
+.not:
+    xor ax, ax
+    jmp short .out
+.unk:
+    mov ax, si
+    sub ax, [bp+6]
+    inc ax                          ; SI was one past code i: 2 + i
+.out:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; c64_mline - one sprite data line (3 bytes at SI, SI moved past them) as its
+; OPAQUE mask, 7 bytes at DI (C64-SPEC 5.3.1): DL bit 0 multicolour (a pair is
+; opaque unless 00), bit 1 X-expanded (each byte two, through c64_mlx's
+; doubled words, high byte first). Three or six bytes and zeros to the
+; seventh, so another sprite's line can be read against it one byte past its
+; end. Clobbers AX BX CX.
+; -----------------------------------------------------------------------------
+section .bss
+c64_mlx:    resw 1                          ; c64_xexp, for c64_mline
+section .text
+c64_mline:
+    push di
+    mov cx, 3
+.b:
+    lodsb
+    test dl, 1
+    jz .hi
+    mov ah, al
+    shr ah, 1
+    or al, ah
+    and al, 0x55
+    mov ah, al
+    shl ah, 1
+    or al, ah                       ; a pair: both pixels, unless 00
+.hi:
+    test dl, 2
+    jnz .xe
+    mov [di], al
+    inc di
+    loop .b
+    mov word [di], 0                ; bytes 3-6
+    mov word [di+2], 0
+    jmp short .e
+.xe:
+    xor ah, ah
+    mov bx, ax
+    shl bx, 1
+    add bx, [c64_mlx]
+    mov ax, [bx]
+    mov [di], ah                    ; the left half first
+    mov [di+1], al
+    add di, 2
+    loop .b
+    mov byte [di], 0                ; byte 6
+.e:
+    pop di
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_sprmasks(const unsigned char *sd, unsigned char *mk, int md,
+;                   const unsigned *xexp)
+; A sprite's 21 data lines as their opaque masks, c64_mline's 7 bytes apart
+; at MK (C64-SPEC 5.3.1); MD as c64_mline's DL.
+; -----------------------------------------------------------------------------
+_c64_sprmasks:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+10]
+    mov [c64_mlx], ax
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov dl, [bp+8]
+    mov dh, 21
+.l:
+    call c64_mline
+    add di, 7
+    dec dh
+    jnz .l
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int c64_colpair(const unsigned char *sa, const unsigned char *sb, int nb,
+;                 int d, int lines, int ye, int md, const unsigned *xexp,
+;                 unsigned char *tmp)
+; Two sprites over LINES lines (C64-SPEC 5.3.1), from their RAW data: SA and
+; SB the data line each starts on, B's first pixel D (0..47) pixels right of
+; A's, NB bytes of B that can meet A. YE bit 0 A is Y-expanded and bit 1 its
+; first line is a data line's second; bits 2 and 3 the same for B. MD bits
+; 0-1 A's c64_mline mode, 2-3 B's. TMP is 16 bytes of scratch. Each line is
+; converted as it is reached - a pair usually meets on its first, where the
+; sprites' 21 masks each would be most of the scan. Nonzero at the first
+; line where an opaque pixel of each meets.
+; -----------------------------------------------------------------------------
+_c64_colpair:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+18]
+    mov [c64_mlx], ax
+.line:
+    cmp word [bp+12], 0
+    jle .none
+    mov si, [bp+4]
+    mov di, [bp+20]
+    mov dl, [bp+16]
+    call c64_mline                  ; A's line at TMP
+    mov si, [bp+6]
+    add di, 8
+    mov dl, [bp+16]
+    shr dl, 1
+    shr dl, 1
+    call c64_mline                  ; B's at TMP + 8
+    mov si, di
+    mov cx, [bp+10]
+    mov di, cx
+    and cx, 7
+    shr di, 1
+    shr di, 1
+    shr di, 1
+    add di, [bp+20]                 ; A from D's byte
+    mov dx, [bp+8]
+.b:
+    mov bh, [si]
+    inc si
+    xor bl, bl
+    shr bx, cl
+    and bh, [di]
+    and bl, [di+1]
+    or bh, bl
+    jnz .hit
+    inc di
+    dec dx
+    jg .b
+    dec word [bp+12]
+    mov ax, [bp+14]
+    test al, 1                      ; A Y-expanded:
+    jz .anext
+    xor al, 2
+    test al, 2
+    jnz .bstep                      ; ...a first half: the same line again
+.anext:
+    add word [bp+4], 3
+.bstep:
+    test al, 4
+    jz .bnext
+    xor al, 8
+    test al, 8
+    jnz .stepped
+.bnext:
+    add word [bp+6], 3
+.stepped:
+    mov [bp+14], ax
+    jmp .line
+.hit:
+    mov ax, 1
+    jmp short .out
+.none:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret

@@ -207,7 +207,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     if (!gave && c64_fjit != 0 && c64x_caps() >= 192) {
         c64_jit_drop();
         gave = ovl_d64_xattach(name, trks);
-        c64_jit_init();                     /* back - whole if the image went
+        ovl_jit_init();                     /* back - whole if the image went
                                              * up, and the conventional way
                                              * below asks again if not */
     }
@@ -248,7 +248,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     os88_mem_movable(seg, 1);               /* (the reads into it are done:
                                              * from here only c64_d64_seg names
                                              * it, which os88_onmove follows) */
-    c64_jit_init();                         /* (back, smaller, if it gave way) */
+    ovl_jit_init();                         /* (back, smaller, if it gave way) */
     c64_menu_state();
     if (gave && c64_fjit == 0) {
         c64_ld_ok = 1;

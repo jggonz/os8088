@@ -689,7 +689,7 @@ fallback when the part cannot be had.
 eager, and a lazy row may not precede an eager one (SPEC.md 20.12.4). The
 build puts it there through `CC_PACKAGE`'s sixth argument and the shim says
 so with `CC_PARTS_AFTER_OVL` (apps/cc/Makefile.inc, crt0.asm).
-`c64_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
+`ovl_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
 (`c64f_core`), the part dropped, and the far call through
 `OSAPI_MEM_CODESEL`'s answer (`c64_fseg`; `c64_fcode` is the claim, followed
 by `os88_onmove`). **It runs in the RAM claim the accurate core already has**:
@@ -966,7 +966,7 @@ return address inline.**
 
 **The frame** grows by four words (`c64fast.inc`): BASIC's code selector
 (F+34, 0 = no translation), the table (F+36), the core's own selector for
-the way back (F+38), and the KERNAL's code selector (F+40). `c64_fast_init`
+the way back (F+38), and the KERNAL's code selector (F+40). `ovl_fast_init`
 fetches the three parts after the core, all or none, as claims of their
 own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768), and
 declares each MOVABLE (`os88_part_movable`, SPEC.md 73.14.2.1): a run builds
@@ -1114,7 +1114,7 @@ whole part inside its own (4.9.2).
 **Part 6 of C64.O88** (`OP_SEG | OP_LAZY | OP_COMP`) is `apps/c64/c64jit.asm`:
 the variables, two vectors at `$00F0` (`JIT_HOOK`, the core's door, and
 `jl_init`, the package's far call), the prelude at `$0100`, the lookup and the
-translator, and the templates' part - a 22KB image, 8.6KB packed. `c64_jit_init` fetches it
+translator, and the templates' part - a 22KB image, 8.6KB packed. `ovl_jit_init` fetches it
 after the fast core, copies it into a 64KB claim of its own (`c64j_setup`,
 which far-calls `jl_init` with the core's segment), and gives the part back;
 that claim holds, past the image at `$5800`, the lookup table (1,024 rows of
@@ -1252,7 +1252,7 @@ sum, paid as one `sub bp, n` before the next template that is not pure.
 Nothing between can read the countdown, and HEAD has already proved the
 whole block fits, so the run's end is unchanged.
 
-**The claim, by tier.** `c64_jit_init` claims 64KB, else 48; the cache ends
+**The claim, by tier.** `ovl_jit_init` claims 64KB, else 48; the cache ends
 where the claim does (`jv_end`). It is set up after every other part, beside
 the free heap, so that when it gives way the hole it leaves is one piece. When a D64 will not fit the heap
 the recompiler GIVES WAY: `c64_jit_drop` zeroes the core's page map, frees
@@ -1350,9 +1350,9 @@ line takes effect from that line.
 
 ### 5.3 What does not carry
 
-- **Sprite priority and collision.** Every sprite is drawn in FRONT of
-  the screen whatever `$D01B` says, sprite 0 over sprite 7, and `$D01E` and
-  `$D01F` **answer 0** — a game that tests a collision register sees none.
+- **Sprite priority.** Every sprite is drawn in FRONT of the screen
+  whatever `$D01B` says, sprite 0 over sprite 7. The COLLISION registers do
+  carry: §5.3.1.
 - **Raster splits finer than a character row** (§9.10): a register written
   part-way down a row takes effect from the next row. A rasterbar is a
   border or paper colour per ROW, never per line.
@@ -1366,6 +1366,70 @@ Text, BASIC, the KERNAL and text-mode programs are unaffected. A game or
 demo that splits the screen by character row, draws in bitmap or
 multicolour, or moves sprites is drawn; one that depends on the cycle-exact
 VIC is not.
+
+#### 5.3.1 Sprite collisions — `$D01E` and `$D01F`, scanned when READ
+
+`$D01E` (sprite with sprite) and `$D01F` (sprite with foreground) answer the
+collisions of the sprites as the registers stand, **worked out when the
+program reads one and only then**: once a frame each (`c64_col_frs`,
+`c64_col_frb`), ORed into a latch that the read clears, so a second read in
+the frame finds it clear — on the machine the bits come back only as the
+beam passes the sprites again. With `$D01A` enabling a collision IRQ
+(bits 1 and 2), the frame is scanned at its start (`c64_advance` raises
+`c64_col_irq`; `ovl_col_tick`) and the IRQ source set when the latch was
+empty and is not, as `vicii.c` sets it. **A program that never reads them
+pays nothing**: the cost is one test in the `$D019`-`$D01F` arm of
+`c64_io_rd`.
+
+- **Opaque** is a set bit in hires and a pair other than `00` in
+  multicolour; **foreground** is a set bit, and in multicolour (text cells
+  whose colour has bit 3, or a multicolour bitmap) a pair `10` or `11` —
+  `01` is background, as on the VIC.
+- **From the registers at the read**: positions, expansion, multicolour and
+  the pointers as the program has them — what a game reading in its
+  interrupt has just drawn — and the foreground under them from the display
+  latch's row sets (§9.10), with the fine scroll. A multiplexer's other
+  instances (§9.11) are not seen: only the eight sprites as they stand.
+  Sprites anywhere on the raster collide with each other; the foreground is
+  the 320×200 display.
+- **The scan** (`ovl_col_*`, `c64scr.c`, in the overlay): the sprites'
+  geometry once a frame; for `$D01E`, each pair whose boxes overlap tested
+  line by line from their raw data until one line meets (`c64_colpair`);
+  for `$D01F`, each sprite's character rows in turn — a row whose codes are
+  all **blank glyphs** is skipped by its codes alone (`c64_colblank`, each
+  code's glyph tested once a scan), any other row's foreground fetched
+  (`c64_c8glyph`, or the bitmap) and tested a row at a time
+  (`c64_colrows`), the sprite's 21 masks made once (`c64_sprmasks`). The
+  line tests are `c64band.inc`'s, resident; their scratch is the band
+  buffers `c64_bx2` and `c64_bnd`, which only a flush uses.
+
+**It costs a program that reads them milliseconds a frame on a 286**, so
+**Preferences > Sprite collisions** is a CHECK, on, which a program that
+reads the registers only to clear them can turn off: then both read 0 and
+nothing is scanned. Measured, 86Box `286-victory`, warp, a machine-code loop
+that reads both registers once a frame and polls no I/O, against the same
+loop reading `$D020`/`$D021` (405%, 4.9 ms of host a frame):
+
+| sprites over text | first draft | now | the scans, a frame |
+|---|---|---|---|
+| 4, unexpanded, apart | — | 209.7% | ~4.6 ms |
+| 8, X and Y expanded, neighbours overlapping | 48.7% | 128.7% | ~10.6 ms |
+
+What took it from the first draft: rows skipped by their codes rather than
+their fetched pixels, the masks made by one call a sprite rather than one a
+line, a pair converted only as far as the line where it meets, the
+geometry once a frame for both registers, and the geometry in real arrays —
+SmallerC computes a cast's address at every access. The rest is the C of
+the scan itself, at ~0.4 µs an instruction on that machine; a 20 ms frame is
+~46,000 of them.
+
+`c64uitest` holds the semantics (transparent pixels, a one-pixel overlap at
+a shift of 7, the read clearing, the next frame finding it again, multicolour
+`01` against `10`, a Y-expanded sprite's half-lines inside a row and at its
+first line, a sprite half off the left edge, the IRQ, and the menu item
+off); `c64memtest` runs `c64_colrow`, `c64_colrows`, `c64_colpair`,
+`c64_colblank` and `c64_sprmasks` on x86 against the same cases. Each was
+verified red by breaking it.
 
 ---
 
@@ -2761,9 +2825,10 @@ arithmetic (§10.2).
 ### 11.1 The set, and what is live
 
 **Four menus**, with `AM_NAME` = **`VICE`**: **File (5 items), Edit (2),
-Preferences (9), Help (1)**. Every item string is `uimachinemenu.c`'s and
+Preferences (10), Help (1)**. Every item string is `uimachinemenu.c`'s and
 every hotkey caption a `hotkeys*.vhk` line, transcribed (§2), except the
-three frame-skip items, which are this port's (§9.13); the VICE line each
+three frame-skip items (§9.13) and Sprite collisions (§5.3.1), which are
+this port's; the VICE line each
 string comes from is a comment beside it in `c64menu.c`.
 
 **Two kernel limits shape every line of `c64menu.c`**: a pull-down is at most
@@ -2794,8 +2859,8 @@ gives). Four rules follow:
    item put back).
 4. **A CHECK item's state is a `*` in the label**, written into the label's
    first byte (`c64_menu_state`). Fullscreen, Warp mode, Pause emulation,
-   Swap joysticks, the Recompiler and the three frame-skip RADIO items carry
-   it. This kernel's menu has no check mark and its face has no glyph for
+   Swap joysticks, the Recompiler, Sprite collisions and the three
+   frame-skip RADIO items carry it. This kernel's menu has no check mark and its face has no glyph for
    one; the `*` is `apps/tracker`'s idiom and not `apps/solitaire`'s
    `MENU_DIS` twin, because `MENU_DIS` is §47's *"you cannot have this"*
    and greying the item that is ON would make it impossible to turn off. The
@@ -2809,13 +2874,13 @@ gives). Four rules follow:
 **The order inside a menu is `ui_machine_menu_bar_create`'s**, less what
 rule 1 took: Preferences is `Fullscreen`, `Warp mode`, `Pause emulation`,
 `Advance frame`, `Recompiler` (VICE's `Emulation speed` place, §4.9.5),
-`Swap joysticks`, then the frame skip's three.
+`Swap joysticks`, then the frame skip's three and `Sprite collisions`.
 
 Live items:
 
 | item | caption | note |
 |---|---|---|
-| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3) |
+| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3); what it attached is started (§11.3.2) |
 | File > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
 | File > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
 | File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is a latch and nothing else; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
@@ -2827,6 +2892,7 @@ Live items:
 | Preferences > Advance frame | Alt+Shift+P | **VICE's action, not this port's idea of one** (`src/arch/gtk3/actions-speed.c`): `if (ui_pause_active()) { vsyncarch_advance_frame(); } else { ui_pause_enable(); }` — from a RUNNING machine the item only PAUSES; from a paused one it runs to the next VIC frame end (§6.3) and stops, saying `Advanced one frame.`. The command raises a request; the slice driver serves it in the wall slices it already sizes and re-posts while it is outstanding. Greyed on a JAM (§11.2). **The chord reads the shift level**: the BIOS hands Alt+Shift+P the same ascii/scan pair as Alt+P, so `os88_onkey` asks `os88_key_down(KSC_LSHIFT/KSC_RSHIFT)` — without that the chord RESUMED a paused machine, the opposite of VICE in the only state VICE advances from |
 | Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*` |
 | Preferences > Draw every frame / Skip frames as needed / Skip most frames | | §9.13. RADIO: the `*` is on the policy in force; as needed is the default |
+| Preferences > Sprite collisions | | §5.3.1. CHECK, on: `$D01E`/`$D01F` scanned when read. Off, both read 0 and nothing is scanned; `Sprite collisions off.` / `on.` |
 | Help > About VICE... | | the kernel's name pull-down About opens the same panel (§12) |
 
 ### 11.2 Absent, and greyed — the fact behind each (SPEC.md §47)
@@ -2857,7 +2923,7 @@ owner's rule, and each fact still stands:
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
 | On the SPEAKER: SID voices beyond one, waveforms, ADSR; on an FM chip: the filters, ring modulation and sync (§11.4.2, §11.4.3; voice 3 READS, §11.4.1) | the PC speaker is one square wave; the OPL has no SID filter, and its two operators no ring or sync |
 | Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
-| Sprite priority, collision registers | §5.3 — sprites are drawn in front; `$D01E`/`$D01F` answer 0 |
+| Sprite priority | §5.3 — sprites are drawn in front whatever `$D01B` says |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (§10.3) |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |

@@ -429,6 +429,14 @@ static void ovl_cmd(int menu, int item, void *win)
             c64_jit_toggle();
             return;
         }
+        if (item == C64_I_COLL) {
+            c64_col_off ^= 1;
+            c64_col_ok = 0;                 /* (on again: scanned afresh) */
+            c64_menu_state();
+            c64_say(c64_col_off ? "Sprite collisions off." :
+                    "Sprite collisions on.");
+            return;
+        }
         if (item >= C64_I_FS0) {            /* the frame skip (9.13): the
                                              * three radio items, and the
                                              * check moves */

@@ -1335,6 +1335,116 @@ unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw)
     return out;
 }
 
+/* c64band.inc's c64_colrow, the same arithmetic (c64memtest runs the real
+ * one against this on x86) */
+int c64_colrow(const unsigned char *m, int n, int sh, const unsigned char *g)
+{
+    int i;
+    unsigned w;
+    for (i = 0; i < n; i++) {
+        w = ((unsigned)m[i] << 8) >> sh;
+        if (((w >> 8) & g[i]) | (w & 0xFF & g[i + 1]))
+            return 1;
+    }
+    return 0;
+}
+
+int c64_colblank(unsigned seg, unsigned a, int n, int mask,
+                 const unsigned char *bk)
+{
+    int i;
+    unsigned char *m = segbase(seg);
+    for (i = 0; i < n; i++) {
+        if (bk[m[(unsigned short)(a + i)] & mask] == 0)
+            return 2 + i;
+        if (bk[m[(unsigned short)(a + i)] & mask] == 2)
+            return 0;
+    }
+    return 1;
+}
+
+static void h_mline(const unsigned char *sd, unsigned char *mk, int md,
+                    const unsigned *xexp)
+{
+    int i, n;
+    unsigned b;
+    for (i = 0, n = 0; i < 3; i++) {
+        b = sd[i];
+        if (md & 1) {
+            b = (b | (b >> 1)) & 0x55;
+            b |= b << 1;
+        }
+        if (md & 2) {
+            mk[n++] = (unsigned char)(xexp[b] >> 8);
+            mk[n++] = (unsigned char)xexp[b];
+        } else
+            mk[n++] = (unsigned char)b;
+    }
+    while (n < 7)
+        mk[n++] = 0;
+}
+
+void c64_sprmasks(const unsigned char *sd, unsigned char *mk, int md,
+                  const unsigned *xexp)
+{
+    int l;
+    for (l = 0; l < 21; l++)
+        h_mline(sd + 3 * l, mk + 7 * l, md, xexp);
+}
+
+int c64_colpair(const unsigned char *sa, const unsigned char *sb, int nb,
+                int d, int lines, int ye, int md, const unsigned *xexp,
+                unsigned char *tmp)
+{
+    int i;
+    unsigned w;
+    const unsigned char *a;
+    for (; lines > 0; lines--) {
+        h_mline(sa, tmp, md & 3, xexp);
+        h_mline(sb, tmp + 8, (md >> 2) & 3, xexp);
+        a = tmp + (d >> 3);
+        for (i = 0; i < nb; i++) {
+            w = ((unsigned)tmp[8 + i] << 8) >> (d & 7);
+            if (((w >> 8) & a[i]) | (w & 0xFF & a[i + 1]))
+                return 1;
+        }
+        if (ye & 1) {
+            ye ^= 2;
+            if (!(ye & 2))
+                sa += 3;
+        } else
+            sa += 3;
+        if (ye & 4) {
+            ye ^= 8;
+            if (!(ye & 8))
+                sb += 3;
+        } else
+            sb += 3;
+    }
+    return 0;
+}
+
+int c64_colrows(const unsigned char *mk, int n, int sh,
+                const unsigned char *g, int lines, int ye)
+{
+    int i, j;
+    unsigned w;
+    for (; lines > 0; lines--, g++) {
+        for (i = 0, j = 0; i < n; i++, j += 8) {
+            w = ((unsigned)mk[i] << 8) >> sh;
+            if (((w >> 8) & g[j]) | (w & 0xFF & g[j + 8]))
+                return 1;
+        }
+        if (ye & 1) {
+            ye ^= 2;
+            if (ye & 2)
+                continue;
+        }
+        mk += 7;
+    }
+    return 0;
+}
+
 void c64_sprconv(const unsigned char *sd, unsigned char *on,
                  unsigned char *lit, int mode, const unsigned *xexp)
 {
@@ -3916,6 +4026,179 @@ int main(int argc, char **argv)
         c64_state = st;
         c64_pause = ps;
     }
+
+    /* --- SPRITE COLLISIONS (5.3.1): scanned on a read, once a frame each,
+     *     cleared by the read; transparent pixels collide with nothing, and
+     *     multicolour 01 is background. Red with the shift in c64_colrow
+     *     dropped, or the read not clearing, or MC pairs taken as hires */
+    {
+        int r, i, v;
+        unsigned char vic0[64];
+        memcpy(vic0, c64_vic, 64);
+        memset(c64_vic, 0, 64);
+        c64_cia[1][0] = 3;                  /* bank 0 */
+        c64_vic[0x11] = 0x1B;               /* yscroll 3: graphics line = Y-50 */
+        c64_vic[0x16] = 0x08;
+        c64_vic[0x18] = 0x18;               /* matrix $0400, characters $2000 */
+        for (r = 0; r < 25; r++) {
+            memcpy(c64_rv[r], c64_vic, 0x2F);
+            c64_rv[r][C64_RV_DD] = 3;
+        }
+        for (i = 0; i < 1000; i++)
+            ram[0x0400 + i] = 32;
+        memset(&ram[0x2000], 0, 0x800);
+        memset(&ram[0x3000], 0, 0x100);
+        ram[0x07F8] = 0xC0;                 /* sprite 0's data at $3000 */
+        ram[0x07F9] = 0xC1;                 /* sprite 1's at $3040 */
+        memset(&ram[0x3000], 0xFF, 63);
+        for (i = 0; i < 21; i++)
+            ram[0x3040 + i * 3 + 2] = 0xFF; /* only its right third */
+        c64_vic[0x15] = 3;
+        c64_vic[0] = 100; c64_vic[1] = 100;
+        c64_vic[2] = 110; c64_vic[3] = 105;
+        c64_col_ok = 0;
+        c64_frames_lo++;
+        /* sprite 1's opaque pixels start at 126; sprite 0 ends at 123 */
+        if (ovl_col_read(0) != 0)
+            fail("transparent sprite pixels collided");
+        c64_vic[2] = 100;                   /* now over sprite 0's right side */
+        c64_frames_lo++;
+        v = ovl_col_read(0);
+        if (v != 3)
+            fail("two sprites' opaque pixels did not collide in $D01E");
+        if (ovl_col_read(0) != 0)
+            fail("a second $D01E read in the frame did not find it cleared");
+        c64_frames_lo++;
+        if (ovl_col_read(0) != 3)
+            fail("$D01E did not report the collision again the next frame");
+        c64_vic[2] = 110 - 8;               /* 102: opaque from 118, inside */
+        c64_frames_lo++;
+        if (ovl_col_read(0) != 3)
+            fail("a collision 5 pixels in, through c64_colrow's shift, missed");
+        /* ...ONE PIXEL: sprite 0's last (123), sprite 1's first, at 123 -
+         * found only through a shift of 7, and missed one pixel right */
+        memset(&ram[0x3000], 0, 63);
+        memset(&ram[0x3040], 0, 63);
+        for (i = 0; i < 21; i++) {
+            ram[0x3000 + i * 3 + 2] = 0x01;
+            ram[0x3040 + i * 3] = 0x80;
+        }
+        c64_vic[2] = 123;
+        c64_frames_lo++;
+        if (ovl_col_read(0) != 3)
+            fail("a one-pixel sprite overlap at a shift of 7 was missed");
+        c64_vic[2] = 124;
+        c64_frames_lo++;
+        if (ovl_col_read(0) != 0)
+            fail("sprites one pixel apart collided");
+        memset(&ram[0x3000], 0xFF, 63);
+        /* ...sprite with foreground: an 'A' (code 1) at row 5, cell 10 */
+        c64_vic[0x15] = 1;
+        ram[0x0400 + 5 * 40 + 10] = 1;
+        memset(&ram[0x2008], 0x18, 8);
+        c64_vic[0] = 24 + 80 - 20;          /* sprite 0 over cells 8..10 */
+        c64_vic[1] = 50 + 40 - 10;          /* ...and rows 4..5 */
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 1)
+            fail("a sprite over a character's pixels did not set $D01F");
+        c64_vic[0] = 24 + 200;
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 0)
+            fail("a sprite over blank cells set $D01F");
+        /* ...multicolour text: pairs 01 are background, 10 foreground */
+        c64_vic[0] = 24 + 80 - 20;
+        c64_vic[0x16] = 0x18;
+        for (r = 0; r < 25; r++)
+            c64_rv[r][0x16] = 0x18;
+        c64_col[5 * 40 + 10] = 0x09;
+        memset(&ram[0x2008], 0x55, 8);
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 0)
+            fail("multicolour 01 pixels were taken for foreground");
+        memset(&ram[0x2008], 0x20, 8);
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 1)
+            fail("multicolour 10 pixels were not foreground");
+        /* ...Y-EXPANDED, AT A ROW'S FIRST LINE: only data line 10 is
+         * opaque, as display lines 20 and 21 of the sprite; a glyph whose
+         * only set line is row 5's first (graphics line 40) meets line 21 -
+         * the second half - and not line 20. Red with the half-line phase
+         * lost. Hires text again */
+        c64_vic[0x16] = 0x08;
+        for (r = 0; r < 25; r++)
+            c64_rv[r][0x16] = 0x08;
+        memset(&ram[0x2008], 0, 8);
+        ram[0x2008] = 0xFF;
+        memset(&ram[0x3000], 0, 63);
+        ram[0x3000 + 30] = 0xFF;
+        c64_vic[0x17] = 1;
+        c64_vic[0] = 24 + 80;               /* over cell 10 */
+        c64_vic[1] = 50 + 40 - 21;          /* line 21 lands on graphics 40 */
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 1)
+            fail("a Y-expanded sprite's second half-line missed the foreground");
+        /* ...and INSIDE a row, where c64_colrows steps the masks: the
+         * glyph's line 3 (graphics 43) under display line 21, the row
+         * starting at line 18 - data lines 9, 9, 10, 10 */
+        ram[0x2008] = 0;
+        ram[0x2008 + 3] = 0xFF;
+        c64_vic[1] = 50 + 22;
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 1)
+            fail("a Y-expanded sprite's masks stepped wrong inside a row");
+        c64_vic[1] = 50 + 22 - 2;           /* data line 10 now on lines 41-42 */
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 0)
+            fail("a Y-expanded sprite collided a line away inside a row");
+        ram[0x2008 + 3] = 0;
+        ram[0x2008] = 0xFF;
+        c64_vic[1] = 50 + 40 - 22;          /* lines 20/21 above the glyph */
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 0)
+            fail("a Y-expanded sprite collided a line away from the glyph");
+        c64_vic[0x17] = 0;
+        /* ...AT THE LEFT EDGE: a sprite half off the screen (X 12: its
+         * pixels -12..11) over a glyph in cell 0 */
+        memset(&ram[0x3000], 0xFF, 63);
+        ram[0x0400 + 5 * 40] = 1;
+        ram[0x0400 + 5 * 40 + 10] = 32;
+        memset(&ram[0x2008], 0x01, 8);      /* the glyph's last pixel: x 7 */
+        c64_vic[0] = 12;
+        c64_vic[1] = 50 + 40 - 10;
+        c64_frames_lo++;
+        if (ovl_col_read(1) != 1)
+            fail("a sprite half off the left edge missed cell 0's foreground");
+        ram[0x0400 + 5 * 40] = 32;
+        ram[0x0400 + 5 * 40 + 10] = 1;
+        memset(&ram[0x2008], 0x18, 8);
+        memset(&ram[0x3000], 0xFF, 63);
+        c64_vic[0] = 24 + 80 - 20;
+        /* ...and Preferences > Sprite collisions unchecked: the register
+         * reads 0 and nothing is scanned */
+        ovl_cmd(C64_M_PREF, C64_I_COLL, the_win);
+        c64_frames_lo++;
+        if (c64_io_rd(0xD01F) != 0 || c64_col_ok != 0)
+            fail("Sprite collisions off still scanned $D01F");
+        if (strcmp(last_toast, "Sprite collisions off.") != 0)
+            fail("Sprite collisions off was not said");
+        ovl_cmd(C64_M_PREF, C64_I_COLL, the_win);
+        c64_frames_lo++;
+        if (c64_io_rd(0xD01F) != 1)
+            fail("Sprite collisions on again did not scan $D01F");
+        /* ...and the IRQ: enabled, the frame's scan raises $D019 bit 1 */
+        c64_vic[0x1A] = 2;
+        c64_vic[0x19] = 0;
+        c64_col_sb = 0;
+        c64_frames_lo++;
+        c64_col_irq = 2;
+        ovl_col_tick();
+        if ((c64_vic[0x19] & 2) == 0)
+            fail("a sprite-foreground collision raised no IRQ source");
+        memcpy(c64_vic, vic0, 64);
+        c64_col_ss = c64_col_sb = 0;
+        c64_col_ok = 0;
+        c64_col[5 * 40 + 10] = 0;
+    }
     fx_name[0] = 0;
     c64_msg[0] = 0;
     c64_sh_inval();
@@ -6057,6 +6340,7 @@ int main(int argc, char **argv)
             "Joysticks swapped.",
             "Not a T64 tape image.", "T64: cannot read it.",
             "Autostarting...", "Autostart: no READY. prompt.",
+            "Sprite collisions off.", "Sprite collisions on.",
             "T64: no program in it.", "T64: no heap for it.",
             "No bands here - text only.",
             "No square voice here - no SID sound.",
