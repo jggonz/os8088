@@ -127,7 +127,7 @@ verified. A story is ticked when it is SEEN working, not when it is built.
   writes to a chip the driver owns. Keyboard mouse: on or retired, and why.
   *SEEN* on QEMU kern_big and kern_mega. kern_emu shows raw hex (not shipped there, D5).
 
-- [ ] **S11. The gate (`gate`).** `tests/mousechk.py`, a QEMU row: launch,
+- [x] **S11. The gate (`gate`).** `tests/mousechk.py`, a QEMU row: launch,
   then assert the Summary's verdict and key rows for the default serial
   mouse, `MOUSEPORT=com2` and `MOUSEPORT=ps2`, plus the probe's trace on a
   `NOPS2=1` private build where the kernel never claimed the aux port. Also
@@ -135,8 +135,13 @@ verified. A story is ticked when it is SEEN working, not when it is built.
 
 ### Wave 3 — integration (lead)
 
-- [ ] **S12.** Merge, size, one look per adapter, the deduplicated soak union
+- [x] **S12.** Merge, size, one look per adapter, the deduplicated soak union
   once, `test-full` once, then the PR.
+
+  *Done 2026-11-05*: `mousechkgate` passed all seven legs. The soak union
+  (`syscheck`, `syscheckmono`, `wheelps2`, `p2restore`, `mouerrq`, `install`,
+  `instkeep`) passed, and so did `test-full`, after `pins` and `guidelock-full`
+  were paid (the report's claim registered, and the guide page written).
 
 ## Found while building (2026-11-05)
 
