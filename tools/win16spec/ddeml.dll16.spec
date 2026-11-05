@@ -26,7 +26,7 @@
 22 pascal -ret16 DdeFreeStringHandle(long long) DdeFreeStringHandle16
 23 pascal DdeQueryString(long long ptr long word) DdeQueryString16
 24 pascal -ret16 DdeKeepStringHandle(long long) DdeKeepStringHandle16
-26 pascal DdeEnableCallback(long long word) DdeEnableCallback16
+26 pascal -ret16 DdeEnableCallback(long long word) DdeEnableCallback16
 27 pascal DdeNameService(long long long word) DdeNameService16
 36 pascal -ret16 DdeCmpStringHandles(long long) DdeCmpStringHandles16
 37 pascal DdeReconnect(long) DdeReconnect16

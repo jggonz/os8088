@@ -8,7 +8,9 @@
 instead of being ended for a missing import.*
 
 DDEUSE.EXE (tests/win16/ddeuse.c, `make win16fixtures`) calls DdeInitialize,
-DdeCreateStringHandle, DdeConnect (NULL), DdeGetLastError (400Ah),
+DdeCreateStringHandle (an atom: one handle for one name, case aside),
+DdeQueryString (the name back, its length for a NULL buffer, cut to a short
+one), DdeCmpStringHandles, DdeConnect (NULL), DdeGetLastError (400Ah),
 DdeConnectList, DdeClientTransaction, DdeNameService, DdeKeepStringHandle,
 DdeFreeStringHandle and DdeUninitialize, and checks each answer. Its
 MessageBox, read off the program's stack, is "DDEUSE OK" or names each check

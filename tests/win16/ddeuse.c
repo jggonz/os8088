@@ -4,7 +4,10 @@
  * at the first, because WIN16 had no DDEML.
  *
  * 1. DdeInitialize writes a non-zero instance id and answers 0;
- * 2. DdeCreateStringHandle answers a non-zero HSZ (twice);
+ * 2. DdeCreateStringHandle answers a non-zero HSZ, the same one for the
+ *    same name (case aside) and another for another name; DdeQueryString
+ *    gives the name back, and its length for a NULL buffer;
+ *    DdeCmpStringHandles answers 0 for one handle and not 0 for two;
  * 3. DdeConnect (PROGMAN|PROGMAN) and DdeConnectList answer NULL;
  * 4. DdeGetLastError answers DMLERR_NO_CONV_ESTABLISHED (400Ah);
  * 5. DdeClientTransaction answers NULL;
@@ -20,6 +23,7 @@
 #include <string.h>
 
 static char res[200];
+static char buf[32];
 static int fails;
 
 static void check(int ok, const char *tag)
@@ -40,7 +44,7 @@ HDDEDATA CALLBACK __export ddecb(UINT t, UINT f, HCONV c, HSZ h1, HSZ h2,
 int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     DWORD id = 0;
-    HSZ svc, top;
+    HSZ svc, top, low, oth;
     HCONV conv;
     PFNCALLBACK cb = (PFNCALLBACK)MakeProcInstance((FARPROC)ddecb, inst);
 
@@ -49,8 +53,20 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(id != 0, "id");
     svc = DdeCreateStringHandle(id, "PROGMAN", CP_WINANSI);
     top = DdeCreateStringHandle(id, "PROGMAN", CP_WINANSI);
+    low = DdeCreateStringHandle(id, "progman", CP_WINANSI);
+    oth = DdeCreateStringHandle(id, "os8088 DDE", CP_WINANSI);
     check(svc != 0, "hsz1");
-    check(top != 0, "hsz2");
+    check(top == svc && low == svc, "hsz2");
+    check(oth != 0 && oth != svc, "hsz3");
+    check(DdeQueryString(id, svc, NULL, 0, CP_WINANSI) == 7, "qlen");
+    check(DdeQueryString(id, oth, buf, sizeof buf, CP_WINANSI) == 10
+          && strcmp(buf, "os8088 DDE") == 0, "qstr");
+    check(DdeQueryString(id, svc, buf, 4, CP_WINANSI) == 3
+          && strcmp(buf, "PRO") == 0, "qcut");
+    check(DdeCmpStringHandles(svc, low) == 0, "cmp0");
+    check(DdeCmpStringHandles(svc, oth) != 0
+          && DdeCmpStringHandles(svc, oth) == -DdeCmpStringHandles(oth, svc),
+          "cmp1");
     conv = DdeConnect(id, svc, top, NULL);
     check(conv == 0, "connect");
     check(DdeGetLastError(id) == DMLERR_NO_CONV_ESTABLISHED, "lasterr");
@@ -62,6 +78,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(DdeFreeStringHandle(id, svc) != 0, "free1");
     check(DdeFreeStringHandle(id, svc) != 0, "free2");
     check(DdeFreeStringHandle(id, top) != 0, "free3");
+    check(DdeFreeStringHandle(id, oth) != 0, "free4");
     check(DdeUninitialize(id) != 0, "uninit");
 
     MessageBox(NULL, res[0] ? res : "DDEUSE OK", "DDEUSE", MB_OK);
