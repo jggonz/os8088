@@ -285,8 +285,9 @@ C apps/wirefleet/wfsound.inc op:WF_P_SFX # the samples part, fetched and dropped
 C apps/c64/c64kbd.c ovl_clip_service:seg # Copy's staging, claimed and freed
                                          # inside one wake (Paste's queue in the
                                          # same function declares)
-C apps/c64/c64load.c ovl_load_prg:seg    # a .PRG's read staging, inside one Load
-                                         # command
+C apps/c64/c64load.c c64_ldbuf  # a PRG's or T64's read-through
+                                         # buffer, claimed and freed inside one
+                                         # Smart attach
 C apps/c64/c64disk.c ovl_d64_xattach:tmp # the D64's read-through buffer into
                                          # extended memory, freed inside the
                                          # one Attach command
