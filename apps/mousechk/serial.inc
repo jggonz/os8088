@@ -128,20 +128,23 @@ ser_yn:
     ret
 
 ; -----------------------------------------------------------------------------
-; ser_secs - append "~N s after start" for AX = a [ticks] stamp (18.2 Hz, from boot)
+; ser_secs - append "N ticks (~S s)" and then the NUL string at SI, for AX = a
+; count of [ticks] (18.2 Hz). Keeps every register
 ; -----------------------------------------------------------------------------
 ser_secs:
     push ax
     push cx
     push dx
+    call mc_dec
     push si
-    SPUT ser_s_tl
+    SPUT ser_s_tk
     xor dx, dx
     mov cx, 18
     div cx
     call mc_dec
     SPUT ser_s_tr
     pop si
+    call mc_put
     pop dx
     pop cx
     pop ax
@@ -173,6 +176,10 @@ ser_rows:
     call ser_bios
     cmp byte [ser_have], 0
     je .raw
+    mov al, 1                       ; Close: CF=1 (busy) exactly when another
+    call OSAPI_SERIAL               ; instance holds a SERIAL.DRV lease - this
+    sbb al, al                      ; one never opens one, and with no lease
+    mov [ser_lease], al             ; it is two compares (SPEC.md 115.1)
     xor bx, bx
     call ser_port
     mov bx, 2
@@ -186,8 +193,7 @@ ser_rows:
     call mc_lamp
     jmp .out
 .raw:                               ; O1: never guess a layout
-    SLINE ser_s_raw1
-    SLINE ser_s_raw2
+    SLINE ser_s_raw
     mov al, LP_INFO
     call mc_lamp
     mov di, [ser_sp]
@@ -330,8 +336,9 @@ ser_port:
 .ident:
     cmp byte [es:di+MOS_IDN+bx], 0
     je .noid
-    SROW ser_s_last
-    mov ax, [es:di+MOS_IDLAST+bx]
+    SROW ser_s_last                 ; ABSOLUTE: the window's open tick is
+    mov ax, [es:di+MOS_IDLAST+bx]   ; kept only by a MOUDIAG kernel
+    mov si, ser_s_boot
     call ser_secs
 .noid:
     SROW ser_s_shape
@@ -345,32 +352,18 @@ ser_port:
     mov al, [es:di+MOS_NEED+bx]
     xor ah, ah
     call mc_dec
-    ; --- the UART now: read only, and never the receive register ---
+    ; --- the UART now (SPEC.md 126.6.1): MCR and MSR, which hold nobody's
+    ; evidence, and IIR where no SERIAL.DRV lease can be. NEVER LSR, whose
+    ; read clears the error bits the ISR's 9.5.6 test and a lease's sticky
+    ; byte are built from, and never RBR. Nothing is written ---
     mov dx, [ser_base]
     add dx, 4
     in al, dx                       ; MCR
     mov [ser_mcr], al
     inc dx
-    in al, dx                       ; LSR (the ISR reads it every interrupt)
-    mov [ser_lsr], al
     inc dx
-    in al, dx                       ; MSR: the kernel never reads it, so its
-    mov [ser_msr], al               ; delta bits are nobody's but ours
-    sub dx, 4
-    in al, dx                       ; IIR
-    mov [ser_iir], al
-    mov si, bx
-    shr si, 1
-    mov al, [ser_lsr]
-    and al, 0x1E
-    or [ser_lerr + si], al          ; errors seen since open (sticky)
-    test byte [ser_lsr], 1
-    jz .nodr
-    inc byte [ser_drn + si]
-    jmp short .dr
-.nodr:
-    mov byte [ser_drn + si], 0
-.dr:
+    in al, dx                       ; MSR: no kernel path reads it and no
+    mov [ser_msr], al               ; IER here enables its interrupt
     SROW ser_s_msr
     mov al, [ser_msr]
     call mc_hex8
@@ -391,48 +384,57 @@ ser_port:
     mov cx, 6
     mov si, ser_t_mcr
     call ser_flags
-    SROW ser_s_lsr
-    mov al, [ser_lsr]
-    call mc_hex8
-    mov al, ' '
-    call mc_putc
-    mov si, bx
-    shr si, 1
-    mov dl, [ser_lerr + si]
-    mov cl, 3
-    shl dl, cl
-    mov cx, 4
-    mov si, ser_t_lsr
-    call ser_flags
-    test byte [ser_lsr], 1
-    jz .nd
-    SPUT ser_s_dr
-.nd:
     SROW ser_s_iir
-    mov al, [ser_iir]
-    call mc_hex8
+    mov si, bx
+    shr si, 1                       ; SI = 0 / 1, the per-port statics' index
+    mov cl, 0                       ; CL = "a received byte is waiting"
+    cmp byte [ser_lease], 0
+    je .iir                         ; no lease anywhere
+    cmp byte [es:di+MOS_SEEN], 0
+    je .noiir                       ; a lease can only be on a port that did
+    cmp [es:di+MOS_PORT], bl        ; NOT win (115.1), and before the contest
+    je .iir                         ; settles that is either of them
+.noiir:
+    push si
+    SPUT ser_s_lsd
+    pop si
+    jmp short .drn
+.iir:
+    mov dx, [ser_base]
+    inc dx
+    inc dx
+    in al, dx                       ; IIR: its one side effect is to retire a
+    mov ah, al                      ; TX-empty cause, and IER = RX only on
+    call mc_hex8                    ; every port the kernel owns
     mov al, ' '
     call mc_putc
-    mov si, ser_t_iir
-    mov al, [ser_iir]
-    test al, 1
-    jz .pend
     xor al, al
-    jmp short .nm
-.pend:
+    test ah, 1
+    jnz .nm                         ; bit 0 SET is "nothing pending"
+    mov al, ah
+    and al, 0x0E
     shr al, 1
-    and al, 7
-    cmp al, 6
-    jne .n6
-    mov al, 4
-.n6:
-    inc al
-    cmp al, 5
-    jbe .nm
-    mov al, 6
+    inc al                          ; 1..8, the pending cause's own number + 1
+    cmp al, 3                       ; RX data (2) or its FIFO timeout (6) is
+    je .rx                          ; a byte nobody has collected yet
+    cmp al, 7
+    jne .nm
+.rx:
+    inc cx
 .nm:
+    push si
+    mov si, ser_t_iir
     call ser_nth
     call mc_put
+    pop si
+.drn:
+    or cl, cl
+    jz .nodr
+    inc byte [ser_drn + si]
+    jmp short .dr
+.nodr:
+    mov byte [ser_drn + si], 0
+.dr:
     ; --- the verdict: SPEC.md 9.4.6's table, in words ---
     cmp byte [es:di+MOS_IDENT+bx], 0
     jne .v_id
@@ -475,18 +477,17 @@ ser_port:
     mov si, bx
     shr si, 1
     cmp byte [ser_drn + si], 2
-    jb .v4
+    jb .v5
     SLINE ser_s_vdr1                ; a byte nobody collected, twice running
     SLINE ser_s_vdr2
     mov al, LP_BAD
     call mc_lamp
-.v4:
-    test byte [ser_lerr + si], 0x18
-    jz .v5
-    SLINE ser_s_verr                ; framing error or break (SPEC.md 9.5.6)
-    mov al, LP_WARN
-    call mc_lamp
 .v5:
+    cmp byte [es:di+MOS_SEEN], 0
+    je .v5a
+    cmp [es:di+MOS_PORT], bl
+    jne .v6                         ; another pointer won: reported, not judged
+.v5a:
     mov al, [ser_mcr]
     and al, 3
     cmp al, 3
@@ -544,8 +545,10 @@ ser_glob:
     mov si, ser_t_hp
     call ser_nth
     call mc_put
-    SROW ser_s_hpt
-    mov ax, [es:di+MOS_HPT]
+    SROW ser_s_hpt                  ; its last act, as an AGE: the stamp is
+    call OSAPI_GET_TICKS            ; the desktop's first frame, then each
+    sub ax, [es:di+MOS_HPT]         ; drop and raise (wrap-safe, like [ticks])
+    mov si, ser_s_ago
     call ser_secs
     SROW ser_s_dr_
     mov al, [es:di+MOS_DRAIN]
@@ -560,13 +563,14 @@ ser_glob:
 ; ---------------------------------------------------------------- data -------
 ser_s_head: db 'Serial mice', 0
 ser_s_nomo: db 'The kernel publishes no mouse block.', 0
-ser_s_raw1: db 'This kernel is not the build this package was made', 0
-ser_s_raw2: db 'with, so its mouse block cannot be decoded. Raw bytes:', 0
+ser_s_raw:  db 'Another kernel build: not decoded. Raw block:', 0
 ser_s_nul:  db 0
 ser_s_no:   db 'no', 0
 ser_s_yes:  db 'yes', 0
-ser_s_tl:   db '~', 0
-ser_s_tr:   db ' s after start', 0
+ser_s_tk:   db ' ticks (~', 0
+ser_s_tr:   db ' s)', 0
+ser_s_boot: db ' after boot', 0
+ser_s_ago:  db ' ago', 0
 ser_s_none: db 'none', 0
 ser_s_kern: db '  kernel: ', 0
 ser_s_uart: db ' UART', 0
@@ -585,14 +589,12 @@ ser_s_run:  db '  Clean packets', 0
 ser_s_need: db ' of ', 0
 ser_s_msr:  db '  MSR (pins in)', 0
 ser_s_mcr:  db '  MCR (pins out)', 0
-ser_s_lsr:  db '  LSR (errors seen)', 0
-ser_s_dr:   db ' DR', 0
 ser_s_iir:  db '  IIR', 0
 ser_t_msr:  db 'DCD', 0, 'RI', 0, 'DSR', 0, 'CTS', 0
 ser_t_mcr:  db 'AFE', 0, 'LOOP', 0, 'OUT2', 0, 'OUT1', 0, 'RTS', 0, 'DTR', 0
-ser_t_lsr:  db 'BRK', 0, 'FE', 0, 'PE', 0, 'OE', 0
+ser_s_lsd:  db 'not read: a serial link is open', 0
 ser_t_iir:  db 'none pending', 0, 'modem', 0, 'TX empty', 0, 'RX data', 0
-            db 'line status', 0, 'RX timeout', 0, '?', 0
+            db 'line status', 0, '?', 0, '?', 0, 'RX timeout', 0, '?', 0
 ser_s_v0a:  db 'Nothing answered the reset: no mouse here, or it', 0
 ser_s_v0b:  db 'gets no power (a mouse draws it from DTR/RTS).', 0
 ser_s_vstr: db 'A stream, not one burst: a peer or modem talks.', 0
@@ -603,7 +605,6 @@ ser_s_vwon: db 'This port won: the mouse is here.', 0
 ser_s_vcx:  db 'Cross-wired: data here, interrupt on the other IRQ.', 0
 ser_s_vdr1: db 'A received byte sits unread: no interrupt came.', 0
 ser_s_vdr2: db 'Is the IRQ jumper right, or the line not wired?', 0
-ser_s_verr: db 'Framing errors or break seen: wrong baud rate?', 0
 ser_s_vpw:  db 'DTR/RTS are not both high: a mouse is unpowered.', 0
 ser_s_win:  db 'Contest winner', 0
 ser_s_noone: db 'none yet: no packet seen', 0
@@ -611,8 +612,8 @@ ser_t_win:  db 'serial COM1', 0, 'serial COM2', 0, 'PS/2 aux port', 0
             db 'VMware absolute', 0, 'a pointing driver', 0, '?', 0
 ser_s_ln:   db 'Winning serial line', 0
 ser_s_l0:   db 'not settled / none', 0
-ser_s_l4:   db 'IRQ4 (the 3F8 convention)', 0
-ser_s_l3:   db 'IRQ3 (the 2F8 convention)', 0
+ser_s_l4:   db 'IRQ4', 0
+ser_s_l3:   db 'IRQ3', 0
 ser_s_lx:   db 'not a serial line', 0
 ser_s_any:  db 'Any port mouse-shaped', 0
 ser_s_hp:   db 'Hot-plug poller', 0
@@ -632,8 +633,6 @@ ser_base:   dw 0
 ser_have:   db 0
 ser_exl:    db 0
 ser_mcr:    db 0
-ser_lsr:    db 0
 ser_msr:    db 0
-ser_iir:    db 0
-ser_lerr:   db 0, 0             ; LSR error bits seen since open, per port
-ser_drn:    db 0, 0             ; consecutive refreshes with DR set
+ser_lease:  db 0                ; FF: some instance holds a SERIAL.DRV lease
+ser_drn:    db 0, 0             ; refreshes in a row with an RX cause pending

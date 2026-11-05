@@ -241786,9 +241786,9 @@ fingerprint against the lengths worked out from the map by hand.
 
 `apps/mousechk/serial.inc` (`ser_init`, `ser_rows`). Everything here is read:
 the kernel's `'MO'` block (§9.4.2, offsets in `moblk.inc`, decoded only while
-`[mc_kok]`), the BIOS's COM table, and each probed UART's own registers. It
-owns **no bss** (its state is statics in the image) and costs 2,715 bytes of
-image.
+`[mc_kok]`), the BIOS's COM table, and each probed UART's MCR, MSR and, where
+§126.6.1 allows it, IIR. It owns **no bss** (its state is statics in the
+image) and costs 2,557 bytes of image (§126.6.2).
 
 **Rows.** Four rows, `COM1` to `COM4 (BIOS)`, give the base the BIOS data area
 (0040:0000, reached through an `OSAPI_SEG` `SEG_WIN` window so it is also legal
@@ -241801,11 +241801,12 @@ UART:
 
 | row | source | meaning |
 |---|---|---|
-| Identify burst | `mou_idn`, `mou_idb0` | bytes seen in §9.4.1's window and the first one as hex and, if printable, a character (`4D 'M'`); `stream` beyond `MOU_IDMAX` |
-| Last byte at | `mou_idlast` | `[ticks]` of the last byte, as seconds from boot; the open tick is a MOUDIAG-only fact, so this is absolute |
+| Identify burst | `mou_idn`, `mou_idb0` | bytes seen in §9.4.1's window and the first one as hex and, if printable, a character (`4D 'M'`); `stream` beyond `MOU_IDMAX` (the count saturates at 255) |
+| Last byte at | `mou_idlast` | `[ticks]` of the last byte, `12 ticks (~0 s) after boot`. **Absolute, and it has to be**: the window's open tick is kept only by a MOUDIAG kernel (`mdg_open`, §9.4.6), so the shipped kernel cannot say how far into the window the byte came, and rule 4's "quiet at the close" is given by the verdict line instead |
 | Answered as a mouse | `mou_ident` | §9.4.1's rules 1-4 |
 | Clean packets | `mou_run`, `mou_need` | the contest's run against what a port must manage (§9.5) |
-| MSR, MCR, LSR, IIR | the UART | live; flags named (`DCD RI DSR CTS`; `OUT2 RTS DTR`; errors `BRK FE PE OE`, **sticky since the window opened**; IIR's pending cause) |
+| MSR, MCR | the UART | live, flags named: `DCD RI DSR CTS` (pins in), `AFE LOOP OUT2 OUT1 RTS DTR` (pins out) |
+| IIR | the UART | live: the pending cause, or *not read: a serial link is open* (§126.6.1) |
 
 Then plain-language verdict lines, §9.4.6's table turned into words: nothing
 answered the reset (no mouse, or it is unpowered: a serial mouse takes its
@@ -241813,40 +241814,76 @@ power from DTR/RTS); a stream rather than a burst; answered but not `'M'`
 (the kernel accepts only `'M'`); `'M'` that never went quiet; answered like a
 mouse; **this port won** (`[mou_seen]` and `[mou_port]` agree); **cross-wired**
 (§9.5.2.1: the winning line `[mou_line]` is not the one the base's convention
-says: 0x10 for 3F8, 0x08 for 2F8); **a received byte sits unread** (LSR DR set
-on two refreshes running: the interrupt is not arriving; a bad IRQ jumper or a
-line not wired; one refresh is not enough, a moving mouse is caught between a
-byte and its ISR now and then); **framing errors or break** (§9.5.6); and
-**DTR/RTS not both high** (unless the poller is holding them low on purpose).
-A closing group is the contest as a whole: `Contest winner` (`[mou_port]`: 0/2
-serial, 4 PS/2, 6 VMware, 8 a pointing driver; *none yet* until `[mou_seen]`),
-`Winning serial line`, whether any port was mouse-shaped, the hot-plug poller's
-state and last tick (§9.4, §9.4.8) and the identify drain.
+says: 0x10 for 3F8, 0x08 for 2F8); **a received byte sits unread** (IIR shows
+received data, or its FIFO timeout, on two refreshes running: the interrupt
+is not arriving, a bad IRQ jumper or a line not wired. One refresh is not
+enough: a moving mouse is caught between a byte and its ISR now and then);
+and **DTR/RTS not both high** (unless the poller is holding them low on
+purpose, and not on a port another pointer beat). A closing group is the
+contest as a whole: `Contest winner` (`[mou_port]`: 0/2 serial, 4 PS/2, 6
+VMware, 8 a pointing driver; *none yet* until `[mou_seen]`), `Winning serial
+line` (`IRQ4`, `IRQ3`, *not a serial line* for `MOU_P2LINE`), whether any port
+was mouse-shaped, the hot-plug poller's state and the AGE of its last act
+(`[ticks]` now less `[mou_hpt]`, §9.4, §9.4.8) and the identify drain.
 
 **The lamp** starts NA (a machine with no UART answering shows grey), becomes
 INFO as soon as a UART is found, OK when a serial mouse won, WARN for a
-cross-wired card, sticky framing errors or an unpowered mouse, BAD for the
-unread byte. When another pointer won the section stays INFO: the ports are
-reported, not judged.
-
-**Reads, and what they cost the kernel.** It **never reads RBR** (that would
-take a byte from the ISR) and never writes a UART register. MSR is read freely:
-the kernel's ISR reads only LSR (§9.5.6's scan) and IIR is never read by it,
-so MSR's delta bits are nobody's. **LSR is the one shared read**: it clears
-OE/PE/FE/BI, and the ISR stamps §9.5.6's framing test from the same read. The
-ISR runs per received byte, so the flags are almost always already consumed;
-a flag this window sees survived because no interrupt came, which is why it
-is kept and shown. A reading that slips between a byte and its ISR can in
-principle swallow one framing flag of an unsettled contest; the window is
-under a hundred microseconds and each refresh reads once. IIR's read also
-acknowledges a pending TX-empty cause, which the mouse path (IER = RX only)
-never uses. A port leased to `SERIAL.DRV` is read the same way; MOUSECHK does
-not know about the lease.
+cross-wired card or an unpowered mouse, BAD for the unread byte. When another
+pointer won the section stays INFO: the ports are reported, not judged (a
+loser's IER is 0 after `mou_lockon`, so its IIR can show no unread byte).
 
 **`[mc_kok]` = 0** (§126.4): the layout cannot be decoded, so the section
 shows the BIOS table (no kernel column), says so, and dumps the 34 bytes the
-`MO` block's span pointer names as hex. If the kernel publishes no `MO`
-block at all, it says that.
+`MO` block's span pointer names as hex. It reads no UART and asks no lease.
+If the kernel publishes no `MO` block at all, it says that.
+
+#### 126.6.1 Which UART registers it reads, and why not LSR
+
+It **never reads RBR** (that takes a byte from the ISR) and **never writes**
+a UART register. Of the rest, each read was weighed against who else's
+evidence lives in that register:
+
+- **MCR** has no read side effect. Read always.
+- **MSR**'s read clears its four delta bits and, where IER enables it, the
+  modem-status interrupt. Nothing on this machine uses either: no kernel path
+  reads MSR, the kernel's mouse ports run IER = RX only, and `SERIAL.DRV`
+  runs RX and THRE (§115.2) and reads only MSR's LEVEL bits (§115.1.1
+  rule 4), which a read does not change. Read always.
+- **LSR is not read at all.** Its read clears OE/PE/FE/BI, and two consumers
+  are built from exactly those bits: the ISR's §9.5.6 test, which stamps
+  `[mou_errt]` and keeps a port out of an UNSETTLED contest for `MOU_ERRQ`,
+  and a lease's sticky error byte, which a link's framer uses to drop a
+  partial message (§115.1, §115.2). The ISR consumes a port's flags at the
+  next interrupt on ANY hooked line (every line services every live port,
+  §9.5.2.1), so the bits are there to steal precisely when a port's own line
+  is dead or cross-wired, and the contest is unsettled precisely when a user
+  opens this window because the mouse does not work. A stolen FE lets a
+  wrong-rate peer's bytes count toward that port's run, which can change who
+  wins. What LSR would have shown is either already consumed (so the window
+  would almost never see an error) or stolen; and `[mou_errt]` itself is not
+  in the `'MO'` block. Its one other signal, DR, is IIR's received-data cause
+  below, which takes nobody's evidence.
+- **IIR**'s read retires a pending THRE cause. The kernel's mouse ports never
+  enable THRE (IER = 01h), so there it has no effect. A port leased to
+  `SERIAL.DRV` does enable THRE while it transmits, and a retired cause can
+  turn an IRQ already on its way into a spurious one, leaving the byte to the
+  link's next Read. So IIR is read only where no lease can be: the section
+  asks first with `OSAPI_SERIAL` AL = 1 (Close), which answers busy (CF = 1)
+  exactly when another instance holds a lease and is two compares and no disk
+  when none is held (§115.1: Close by anyone but the holder is refused and
+  changes nothing; MOUSECHK never opens one). With a lease, IIR is read on the
+  settled winner alone, which can never be leased (§115.1), and every other
+  port says *not read: a serial link is open*.
+
+#### 126.6.2 Cost
+
+2,557 bytes of image (1,186 code, 1,371 strings and statics), 0 bss, against
+the 2 KB section budget: 509 over. The verifier took it from 2,717 by removing
+the LSR read and its row, verdict, flags and per-port sticky state, folding
+the two-line `[mc_kok]` = 0 notice into one, and dropping the IRQ rows' "(the
+3F8 convention)" (the port heading already says it), less the lease query and
+its line. The rest is the verdict text, which is what the section is for; 2 KB
+would cost diagnostics rather than repetition, so it stands over budget.
 
 ### 126.7 PS/2: the boot record
 
