@@ -352,7 +352,7 @@ _c64_sprconv:
 .done:
     pop di
     pop si
-    mov sp, bp
+    add sp, 8
     pop bp
     ret
 
