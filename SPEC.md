@@ -237758,6 +237758,56 @@ answered 2; it binds `SetWindowsHookEx`, `UnhookWindowsHookEx` and
 spelling as well) and runs a set, call-next and unhook round trip through the
 pointers. The look is Sir Hangman's setup (the diary).
 
+#### 124.25.26 DDEML answers "no server" *(WIN16-NEXT, `ddeml`)*
+
+Sir Hangman's InstallShield engine imports ten `DDEML` functions and ended
+at the first (§124.25.22, third wall). WIN16's `DDEML` is module id 13 on
+the real-mode arm and 14 on kern_mega's (after `MMSYSTEM`, which only that
+arm has), named `DDEML` in `w16_modnames`. It has a row for every function
+the real Windows 3.1 `DDEML.DLL` exports by name (ordinals 2-24, 26, 27, 36
+and 37, read from that DLL's own name table, not from Wine's numbering;
+`tools/win16spec/ddeml.dll16.spec` is written from it and the SDK's
+`DDEML.H`). `WEP` (1) and the DLL's window procedures (28-35, 38, 39) are
+not imports. Each answers the way Windows 3.1 does when no DDE server is
+running:
+
+| calls | answer |
+|---|---|
+| `DdeInitialize` (2) | `*pidInst` = 1 (a non-zero instance id), and `DMLERR_NO_ERROR` (0). The callback is never called |
+| `DdeUninitialize` (3), `DdeCreateStringHandle` (21), `DdeFreeStringHandle` (22), `DdeKeepStringHandle` (24), `DdeNameService` (27) | 1: TRUE, and for the other two, a non-zero `HSZ` and a non-zero `HDDEDATA`, so a program registering as a server is not refused. Every string has the same handle, 1 |
+| `DdeConnect` (7), `DdeConnectList` (4), `DdeClientTransaction` (11), `DdeQueryNextServer` (5), `DdeReconnect` (37) | 0: NULL. No server answers to any service |
+| `DdeGetLastError` (20) | `DMLERR_NO_CONV_ESTABLISHED` (400Ah), always: the one error this DDEML can have, and the only call after which a program asks. It is not cleared by being read |
+| everything else: the data handles, `DdeQueryString`, `DdeCmpStringHandles`, the transaction and conversation calls | 0. `DdeQueryString` writes nothing and answers a length of 0; `DdeCmpStringHandles` answers "equal", the handles being one value |
+
+"No server" is the honest first form: it is what Windows 3.1 answers on a
+machine where Program Manager is not running, and an installer's
+`DdeConnect(..., "PROGMAN", "PROGMAN")` then gets NULL and takes its own
+route (or its own message). **An owner decision, not built:** a Program
+Manager DDE server, which would turn the installer's group and item commands
+(`CreateGroup`, `AddItem`) into os8088 desktop items. See the report of
+`ddeml` for the options.
+
+The census (`tools/os88ne.py`, which reads `ddeml.dll16.spec`) prints the
+names: of every program in the reference set only InstallShield's two
+(`_INST16.EXE`, `UNINST16.EXE`) import `DDEML`, the same ten functions.
+Note that a message-level Program Manager server already exists
+(§124.33.2: `WM_DDE_INITIATE` for `PROGMAN|PROGMAN` is answered and its
+`[CreateGroup]` and `[AddItem]` commands make desktop items), so a DDEML
+`DdeConnect` that reached it would be a thin layer over what is there.
+
+**What the look showed** *(Sir Hangman's `SETUP.EXE`, kern_mega, QEMU 486, 16
+MB)*: the engine is past `DdeInitialize` (the *Needs DDEML.2* toast is gone).
+The next wall is memory for a code segment: a toast *Not enough memory for
+its code.* (`w16_r_code`) at about 14 s, the engine's ring ending
+`GlobalAlloc, GlobalLock, w16_segld`, after which the launcher's wait loop
+runs on alone for about 100 s and closes as before. It is not `DdeConnect`:
+the engine never reached it.
+
+Cost, both arms: 6 resident bytes (the name). The rows are in the loader
+part and the two handlers (`w16dd_init`, `w16dd_err`) in part 9 beside OLE's;
+the other answers are `w16_ans1` and `w16o_ok`, which exist. Gate:
+`DDEUSE.EXE` (row `win16dde`), see the fixture.
+
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
 Until S20 every segment of a program was loaded at launch into its one
