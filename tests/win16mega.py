@@ -21,10 +21,10 @@ the row reads that file:
   DGROUP   "DGROUP OK": GlobalHandle/Size/ReAlloc/GMEM_MODIFY of the
            program's own DGROUP (SPEC.md 124.9.2), whose kern_mega
            GMEM_MODIFY fix had review only;
-  MEMDC    "MEMDC OK". KNOWN TO FAIL on kern_mega today: a #GP at 122C:8896
-           (~/Repos/w16next-logs/bigbmp-report.md, bigbmp-verify.md section
-           4), unattributed. The row exists so the final pass shows whether
-           it still does; a red here is that known fault, not a regression;
+  MEMDC    "MEMDC OK": drawing into a memory DC, palettes and GMEM_NOTIFY
+           blocks on the arm. It was a #GP in part 9's w16_palobj
+           (GetObject of a palette), whose block was loaded with a raw
+           `mov es` of a virtual paragraph instead of W16SEG;
   MENU     File > Exit (SPEC.md 124, astexit): MENU.EXE writes "menu: up" and,
            when its message loop ends, "menu: ended". The row presses Alt+F,
            X; the program must end, WIN16's instance be gone and the machine
