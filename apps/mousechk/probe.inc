@@ -381,6 +381,7 @@ p2x_reset:
     call p2x_devc
     mov bx, 4 | (RW_NOACK << 8)
     jc .out
+    call p2x_auxq
     cmp al, 0xFA
     jne .out
     mov bx, 5 | (RW_NOBAT << 8)
@@ -410,6 +411,18 @@ p2x_reset:
     je .r
     mov bl, RW_STALL
 .r:
+    ret
+
+; p2x_auxq - a reset's first reply came: from the AUX side, it is the proof
+; p2x_again wants that a ROM waiting for an aux byte would get one. Keeps all
+p2x_auxq:
+    push bx
+    mov bx, [p2x_cur]
+    test byte [bx+P2E_FL], P2F_KBD
+    jnz .k
+    mov byte [p2x_arep], 1
+.k:
+    pop bx
     ret
 
 ; p2x_kchk - did the open entry take a reply from the keyboard side? Keeps all
@@ -467,7 +480,8 @@ p2x_restore:
     jmp p2x_end
 
 ; p2x_leg - a leg's heading entry, AL = the leg. out CF = 1 the leg may not
-; run (the 8042 is wedged, or nothing was banked), BL = RW_STALL then
+; run: the 8042 is wedged (BL = RW_STALL) or nothing was banked (BL =
+; RW_NOCMD). CF = 0: BL = RW_STALL, the result a stalled write leaves
 p2x_leg:
     mov ah, al
     mov al, P2O_LEG
@@ -477,9 +491,24 @@ p2x_leg:
     cmp byte [p2x_wedge], 0
     jne .no
     cmp byte [p2x_hb], 1            ; CF = 1 when 0
-    ret
+    jnc .r
+    mov bl, RW_NOCMD
 .no:
     stc
+.r:
+    ret
+
+; p2x_keyw - P2X_KEYW ticks with IRQ1 as found, so the release of the key
+; that pressed Probe reaches int 09h before anything talks to the 8042.
+; Clobbers AX, DX
+p2x_keyw:
+    call OSAPI_GET_TICKS
+    xchg ax, dx
+.kw:
+    call OSAPI_GET_TICKS
+    sub ax, dx
+    cmp ax, P2X_KEYW
+    jb .kw
     ret
 
 ; p2x_mask - bank both masks, then IRQ1 and IRQ12 off. p2x_mask1 is the second
@@ -534,13 +563,7 @@ p2x_run:
     ; So IRQ1 stays live for P2X_KEYW ticks first. A key held longer than
     ; that releases into the keyboard's own buffer behind 0xAD, which hands it
     ; over at the 0xAE (leg 3 drains it, and says so)
-    call OSAPI_GET_TICKS
-    xchg ax, dx
-.kw:
-    call OSAPI_GET_TICKS
-    sub ax, dx
-    cmp ax, P2X_KEYW
-    jb .kw
+    call p2x_keyw
     call p2x_mask
 
     ; --- leg 1: SPEC.md 9.9.1, unchanged, up to the commitment --------------
@@ -611,7 +634,8 @@ p2x_run:
 
     ; --- leg 3: the same reset with the keyboard interface ON. The one thing
     ; that differs from the kernel is step 1's bracket. IRQ1 stays masked, so
-    ; a keystroke is READ here rather than stolen, and the trace marks it
+    ; a keystroke queued or typed now is READ by the probe - on the trace, and
+    ; lost to the desktop (SPEC.md 126.8.2: do not type during a probe)
     mov al, 3
     call p2x_leg
     jc .l3
@@ -695,7 +719,14 @@ p2x_run:
 .l5:
     mov [p2x_res+4], bl
 
-    ; --- the end: the byte read once more, then put back as found ----------
+    ; --- the end: the byte read once more, then put back as found. The bank
+    ; goes back with bit 4 still SET, the flush runs while the keyboard is
+    ; still off, and 0xAE alone clears bit 4 - so the byte the 8042 is left
+    ; with is the bank exactly, and no flush ever runs with the keyboard on.
+    ; Writing the bank with bit 4 clear and THEN flushing (the first build)
+    ; would drain the keystrokes the keyboard queued during the probe the
+    ; instant its clock came back: lost keys, and a lost break is a key the
+    ; BIOS believes is still held
     cmp byte [p2x_hb], 0
     je .ae
     call p2x_rdcmd
@@ -703,8 +734,7 @@ p2x_run:
     mov [p2x_c2], al
     inc byte [p2x_v]
 .noc2:
-    mov al, [p2x_bank]              ; bit 4 clear: the keyboard's own way
-    call p2x_wcmd                   ; back, and 0xAE says it again
+    call p2x_restore                ; A7, the bank with bit 4 set, a flush
 .ae:
     call p2x_ae
     call p2x_unmask
@@ -713,15 +743,35 @@ p2x_run:
     mov [p2x_t0], ax
     ret
 
-; p2x_again - is the BIOS leg on offer? CF = 0 yes. Keeps every register
+; p2x_again - is the BIOS leg on offer? CF = 0 yes. Keeps every register.
+; The leg runs ROM code this package cannot time out, so it is offered only
+; where the probe has just shown the ROM's likeliest waits will END
+; (SPEC.md 126.8.4): a D4 FF answered from the AUX side (a ROM that polls
+; 64h for an aux byte gets one), the controller took every write and gave
+; the command byte back as found, and int 74h is not the kernel's (a ROM
+; that opens IRQ12 would hand its replies to mou_p2_isr, whose decoder
+; would take FA AA 00 for a packet)
 p2x_again:
     push ax
+    push es
     cmp byte [p2x_bdone], 0
     jne .no
-    cmp byte [p2x_hb], 0
+    cmp byte [p2x_arep], 0
     je .no
+    cmp byte [p2x_wedge], 0
+    jne .no
+    cmp byte [p2x_v], 0
+    je .no
+    mov al, [p2x_c2]
+    cmp al, [p2x_c1]
+    jne .no
     test byte [p2_cpuf], CPU_F_PM   ; kern_mega: not offered (SPEC.md 126.8.4)
     jnz .no
+    cmp byte [p2_lowok], 0
+    je .no
+    mov es, [p2_lowsel]
+    cmp word [es:P2_V74+2], P2_KSEG
+    je .no
     call OSAPI_GET_TICKS
     sub ax, [p2x_t0]
     cmp ax, P2X_AGAIN               ; CF = 1 (on offer) while below
@@ -730,6 +780,7 @@ p2x_again:
 .no:
     stc
 .out:
+    pop es
     pop ax
     ret
 
@@ -741,6 +792,10 @@ p2x_again:
 ; =============================================================================
 p2x_bios:
     inc byte [p2x_bdone]
+    call p2x_keyw                   ; the second press's release, likewise: a
+                                    ; BIOS mid-command may DISCARD a keyboard
+                                    ; byte (SeaBIOS's ps2_recvbyte does), and
+                                    ; a lost break is a key held for good
     mov al, 6
     call p2x_leg
     mov si, p2x_btab
@@ -785,9 +840,7 @@ p2x_bios:
     call p2x_mask1                  ; the masks back to the PROBE's bank below
     call p2x_ad
     call p2x_rdcmd                  ; what the BIOS left: on the trace
-    call p2x_restore
-    mov al, [p2x_bank]
-    call p2x_wcmd
+    call p2x_restore                ; the bank, bit 4 set; 0xAE clears it
     call p2x_ae
     jmp p2x_unmask
 
@@ -849,13 +902,16 @@ p2x_rows:
 .vbad:
     call mc_put
     mov si, p2x_s_nrest
-    mov al, LP_BAD
-    call mc_lamp
-.v0:
-    call mc_put
+.vk:                                ; ...and SAID: the keyboard may be dead
+    call mc_put                     ; (the Problem lamp comes with the line)
+    mov si, p2x_v_kdead
+    call p2_vlist
     jmp short .v1
 .vno:
     mov si, p2x_s_nob
+    cmp byte [p2x_wedge], 0         ; never banked and the 8042 stopped
+    jne .vk                         ; taking writes: 0xAE may not have landed
+.v0:
     call mc_put
 .v1:
 
@@ -883,6 +939,9 @@ p2x_rows:
     mov al, ' '
     call mc_putc
     call p2_stword
+    mov si, p2x_v_dead              ; no command byte: no road was tried
+    cmp byte [p2x_hb], 0
+    je .vl
     mov si, p2x_v_l2
     cmp byte [p2x_res+1], RW_MOUSE
     je .vl
@@ -999,14 +1058,23 @@ p2x_row:
     call mc_putc
     mov al, [di+P2E_R]
     call mc_hex8
+    mov al, [bx+P2E_OP]             ; THE SIDE A BYTE CAME FROM, where it is
+    cmp al, P2O_BIOS                ; not the expected one (the BIOS leg's
+    je .ra                          ; bytes are registers, not replies)
+    mov ah, 'k'                     ; a DEVICE's reply from the keyboard side
+    cmp al, P2O_RST
+    je .rk
+    cmp al, P2O_GID
+    je .rk
+    mov ah, 'a'                     ; any other byte from the AUX side: a
+    test dl, dh                     ; mouse byte read as the controller's
+    jz .mk                          ; answer, or drained by a flush (a
+    jmp short .ra                   ; mouse's queued BAT after A8, 9.9.6)
+.rk:
     test dl, dh
     jz .ra
-    cmp byte [bx+P2E_OP], P2O_RST   ; a DEVICE's reply from the keyboard
-    je .rk                          ; side is marked. The controller's own
-    cmp byte [bx+P2E_OP], P2O_GID   ; answers never carry the aux bit
-    jne .ra
-.rk:
-    mov al, 'k'
+.mk:
+    mov al, ah
     call mc_putc
 .ra:
     shl dh, 1
@@ -1095,6 +1163,8 @@ p2x_v_l3:   db LP_WARN, 'Found only with kbd ON: report it.', 0, 0
 p2x_v_aux:  db LP_WARN, 'Aux port, no device: check the mouse.', 0, 0
 p2x_v_phx:  db LP_WARN, 'Deaf after 0xA8 (Phoenix): report it.', 0, 0
 p2x_v_kbd:  db LP_WARN, 'A reset reached the KEYBOARD (no D4).', 0, 0
+p2x_v_dead: db LP_BAD, 'The 8042 does not answer commands.', 0, 0
+p2x_v_kdead: db LP_BAD, 'The keyboard may be off: restart now.', 0, 0
 
 p2x_ltit:   dw p2x_t1, p2x_t2, p2x_t3, p2x_t4, p2x_t5, p2x_t6
 p2x_t1:     db ' kernel: ', 0
@@ -1155,3 +1225,4 @@ p2x_m1      equ p2x_st + 10         ; the masks as found
 p2x_m2      equ p2x_st + 11
 p2x_bdone   equ p2x_st + 12         ; the BIOS leg has run
 p2x_res     equ p2x_st + 13         ; 6 bytes: a RW_* per leg
+p2x_arep    equ p2x_st + 19         ; a D4 FF answered from the aux side

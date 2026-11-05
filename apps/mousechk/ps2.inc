@@ -95,6 +95,7 @@ p2_win:
 ;
 ; THE RULE (SPEC.md 126.8.1): the kernel's device is never touched.
 ;   - CPU_8086: no 8042, and 64h is not decoded (SPEC.md 9.9.2)
+;   - 64h reads FFh: no controller answers there either
 ;   - no 'MO' record: the kernel's claim on the port cannot be known
 ;   - [mou_p2] set: the PS/2 mouse is LIVE, the kernel's pointer
 ;   - [mou_p2st] = 9: the handshake completed. A serial mouse may have won
@@ -113,7 +114,11 @@ p2_canprobe:
     mov si, p2_r_xt
     cmp byte [p2_tier], CPU_8086
     je .no
-    mov si, p2_r_norec
+    in  al, 0x64                    ; a status read, no side effect: FFh is
+    mov si, p2_r_ff                 ; no controller at all (every bit, IBF
+    cmp al, 0xFF                    ; and the error bits too, is never a
+    je .no                          ; real 8042's answer), and nothing is
+    mov si, p2_r_norec              ; written where nothing is listening
     mov bx, [p2_sp]
     or bx, bx
     jz .no
@@ -516,6 +521,7 @@ p2_s_idle:  db ' idle', 0
 p2_s_none:  db 0
 
 p2_r_xt:    db 'No 8042 on an 8088 PC', 0       ; (24 at most: toasted)
+p2_r_ff:    db 'No 8042: 64h reads FF', 0
 p2_r_norec: db 'No kernel mouse record', 0
 p2_r_live:  db "Kernel's PS/2 mouse live", 0
 p2_r_found: db 'Kernel already found it', 0
