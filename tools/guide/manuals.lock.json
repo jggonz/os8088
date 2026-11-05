@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "f7920ab8",
-  "strings": "04023e02f4e8fcbd",
-  "why": "Good to know: FM sound with a card enabled, the speaker playing the newest note"
+  "stamped": "6ca9e640",
+  "strings": "6d19e3c0f301c2f3",
+  "why": "Preferences > Recompiler in Emulation speed's place, and the D64 message"
  },
  "CALC_O88": {
   "sources": [
