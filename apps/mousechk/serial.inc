@@ -536,9 +536,15 @@ ser_glob:
     mov si, ser_s_lx
 .lp:
     call mc_put
-    SROW ser_s_any
+    SROW ser_s_any                  ; [mou_idany] is ALSO stored by every
+    cmp byte [es:di+MOS_SEEN], 0    ; backend's settle (mouse.inc's
+    je .any                         ; MOU_SETTLE_STORES: PS/2, a driver's
+    SPUT ser_s_anys                 ; feed, VMware), so once a pointer has
+    jmp .anyd                       ; settled it says nothing about a UART
+.any:
     mov al, [es:di+MOS_IDANY]
     call ser_yn
+.anyd:
     SROW ser_s_hp
     mov al, [es:di+MOS_HPST]
     and al, 3
@@ -616,6 +622,7 @@ ser_s_l4:   db 'IRQ4', 0
 ser_s_l3:   db 'IRQ3', 0
 ser_s_lx:   db 'not a serial line', 0
 ser_s_any:  db 'Any port mouse-shaped', 0
+ser_s_anys: db 'set: a pointer settled', 0
 ser_s_hp:   db 'Hot-plug poller', 0
 ser_t_hp:   db 'waiting, never fired', 0, 'DTR/RTS held low', 0
             db 'stood down: settled', 0, 'waiting, has fired', 0

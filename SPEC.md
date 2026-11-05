@@ -241892,7 +241892,10 @@ purpose, and not on a port another pointer beat). A closing group is the
 contest as a whole: `Contest winner` (`[mou_port]`: 0/2 serial, 4 PS/2, 6
 VMware, 8 a pointing driver; *none yet* until `[mou_seen]`), `Winning serial
 line` (`IRQ4`, `IRQ3`, *not a serial line* for `MOU_P2LINE`), whether any port
-was mouse-shaped, the hot-plug poller's state and the AGE of its last act
+was mouse-shaped (`[mou_idany]`, shown as *set: a pointer settled* once
+`[mou_seen]` is 1, because `MOU_SETTLE_STORES` writes it on EVERY backend's
+settle and it then says nothing about a UART; seen on kern_mega with a PS/2
+mouse and no serial port at all), the hot-plug poller's state and the AGE of its last act
 (`[ticks]` now less `[mou_hpt]`, §9.4, §9.4.8) and the identify drain.
 
 **The lamp** starts NA (a machine with no UART answering shows grey), becomes
