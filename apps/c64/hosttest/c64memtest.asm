@@ -594,6 +594,60 @@ body:
     dw _c64_runfind
     cmp ax, -1
     jne .f5
+    ; c64_sprconv (9.11): $1B $E4 $00 multicolour, $D025 and $D026 lit
+    mov byte [scsd], 0x1B
+    mov byte [scsd+1], 0xE4
+    mov byte [scsd+2], 0x00
+    mov word [pushes], 5
+    PUSHI scxx
+    PUSHI 21
+    PUSHI sclit
+    PUSHI scon
+    PUSHI scsd
+    call disc_call
+    dw _c64_sprconv
+    mov word [pushes], 3
+    mov si, scw1
+    mov di, scon
+    mov cx, 12
+    call .sccmp
+    jne .f5
+    ; c64_sprconv (9.11): $81 $00 $F0 hires X-expanded, its own colour lit
+    mov byte [scsd], 0x81
+    mov byte [scsd+1], 0x00
+    mov byte [scsd+2], 0xF0
+    mov word [pushes], 5
+    PUSHI scxx
+    PUSHI 10
+    PUSHI sclit
+    PUSHI scon
+    PUSHI scsd
+    call disc_call
+    dw _c64_sprconv
+    mov word [pushes], 3
+    mov si, scw2
+    mov di, scon
+    mov cx, 12
+    call .sccmp
+    jne .f5
+    ; c64_sprconv (9.11): $6C multicolour X-expanded, its own colour lit
+    mov byte [scsd], 0x6C
+    mov byte [scsd+1], 0x00
+    mov byte [scsd+2], 0x00
+    mov word [pushes], 5
+    PUSHI scxx
+    PUSHI 11
+    PUSHI sclit
+    PUSHI scon
+    PUSHI scsd
+    call disc_call
+    dw _c64_sprconv
+    mov word [pushes], 3
+    mov si, scw3
+    mov di, scon
+    mov cx, 12
+    call .sccmp
+    jne .f5
     mov al, '.'
     call putc
     jmp .band1
@@ -601,6 +655,15 @@ body:
     mov al, '5'
     call putc
     inc bp
+    jmp .band1
+.sccmp:
+    push es
+    push ds
+    pop es
+    cld
+    repe cmpsb
+    pop es
+    ret
 
     ; --- (6) c64band.inc's CROSS-SEGMENT pair: the composer and the
     ;         signature. C64-SPEC §3.6 says every cross-segment entry point is
@@ -1684,6 +1747,27 @@ c8xw:        db 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 7
              times 16 db 0
 c8nw:        db 0, 0, 0, 0, 0, 0, 3, 3, 7, 7, 4, 4, 0, 0, 0, 0
              times 16 db 0
+scsd:        times 3 db 0
+scon:        times 6 db 0               ; ...and sclit right after: compared
+sclit:       times 6 db 0               ; as one 12-byte run
+scw1:        db 0x3F, 0xFC, 0x00, 0, 0, 0, 0x33, 0xCC, 0x00, 0, 0, 0
+scw2:        db 0xC0, 0x03, 0x00, 0x00, 0xFF, 0x00
+             db 0xC0, 0x03, 0x00, 0x00, 0xFF, 0x00
+scw3:        db 0xFF, 0xF0, 0, 0, 0, 0, 0x0F, 0x00, 0, 0, 0, 0
+scxx:                                   ; c64_xexp: each bit doubled
+%assign c 0
+%rep 256
+%assign m 0
+%assign i 0
+%rep 8
+%if (c >> i) & 1
+%assign m m | (3 << (2 * i))
+%endif
+%assign i i + 1
+%endrep
+             dw m
+%assign c c + 1
+%endrep
              times 4 db 0xCC
 bandb:       times 320 db 0
              times 4 db 0xCC

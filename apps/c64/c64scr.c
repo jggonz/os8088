@@ -952,8 +952,7 @@ static unsigned char c64_son[6], c64_slit[6];
 static void c64_spr_draw(int row, int f, int l)
 {
     unsigned char *rv, *dst, *sd;
-    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3;
-    unsigned b, h, lo, s1, s2, s3, on, lit;
+    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3, md;
 
     rv = c64_rv[row];
     if (rv[0x15] == 0)
@@ -982,6 +981,7 @@ static void c64_spr_draw(int row, int f, int l)
         mc = (rv[0x1C] >> k) & 1;
         xs = (c64_sp_w == 48) ? 1 : 0;
         l2 = c64_lum[rv[0x27 + k] & 15] > bg;
+        md = mc | (xs << 1) | (l1 << 2) | (l2 << 3) | (l3 << 4);
         base = c64_sp_x + 32;               /* >= 8: no negative shift */
         cell0 = (base >> 3) - 4;
         sh = base & 7;
@@ -991,35 +991,7 @@ static void c64_spr_draw(int row, int f, int l)
             if (c64_sp_h == 42)
                 sl >>= 1;
             sd = c64_spd + sl + sl + sl;
-            for (j = 0; j < 3; j++) {
-                b = sd[j];
-                if (mc) {
-                    h = (b >> 1) & 0x55;
-                    lo = b & 0x55;
-                    s3 = h & lo;
-                    s2 = h ^ s3;
-                    s1 = lo ^ s3;
-                    s1 |= s1 << 1;
-                    s2 |= s2 << 1;
-                    s3 |= s3 << 1;
-                    on = s1 | s2 | s3;
-                    lit = (l1 ? s1 : 0) | (l2 ? s2 : 0) | (l3 ? s3 : 0);
-                } else {
-                    on = b;
-                    lit = l2 ? b : 0;
-                }
-                if (xs) {
-                    on = c64_xexp[on];
-                    lit = c64_xexp[lit];
-                    c64_son[j + j] = (unsigned char)(on >> 8);
-                    c64_son[j + j + 1] = (unsigned char)on;
-                    c64_slit[j + j] = (unsigned char)(lit >> 8);
-                    c64_slit[j + j + 1] = (unsigned char)lit;
-                } else {
-                    c64_son[j] = (unsigned char)on;
-                    c64_slit[j] = (unsigned char)lit;
-                }
-            }
+            c64_sprconv(sd, c64_son, c64_slit, md, c64_xexp);
             c64_sprrow(dst, c64_son, c64_slit, xs ? 6 : 3, cell0, sh, f, l);
         }
     }

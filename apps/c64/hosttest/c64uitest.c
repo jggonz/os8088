@@ -1324,6 +1324,43 @@ unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw)
     return out;
 }
 
+void c64_sprconv(const unsigned char *sd, unsigned char *on,
+                 unsigned char *lit, int mode, const unsigned *xexp)
+{
+    int j;
+    unsigned b, h, lo, s1, s2, s3, o, l;
+    for (j = 0; j < 3; j++) {
+        b = sd[j];
+        if (mode & 1) {
+            h = (b >> 1) & 0x55;
+            lo = b & 0x55;
+            s3 = h & lo;
+            s2 = h ^ s3;
+            s1 = lo ^ s3;
+            s1 |= s1 << 1;
+            s2 |= s2 << 1;
+            s3 |= s3 << 1;
+            o = (s1 | s2 | s3) & 0xFF;
+            l = (((mode & 4) ? s1 : 0) | ((mode & 8) ? s2 : 0)
+                 | ((mode & 16) ? s3 : 0)) & 0xFF;
+        } else {
+            o = b;
+            l = (mode & 8) ? b : 0;
+        }
+        if (mode & 2) {
+            o = xexp[o];
+            l = xexp[l];
+            on[j + j] = (unsigned char)(o >> 8);
+            on[j + j + 1] = (unsigned char)o;
+            lit[j + j] = (unsigned char)(l >> 8);
+            lit[j + j + 1] = (unsigned char)l;
+        } else {
+            on[j] = (unsigned char)o;
+            lit[j] = (unsigned char)l;
+        }
+    }
+}
+
 void c64_sprrow(unsigned char *dst, const unsigned char *on,
                 const unsigned char *lit, int n, int cell, int sh, int f, int l)
 {

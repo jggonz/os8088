@@ -1166,8 +1166,9 @@ block is made for that PC, every site waiting for it is made the same near
 jump `jt_chain` would have made had the block existed first. Without it a
 loop whose blocks happened to be made in the wrong order went through the
 lookup at every pass for good: PCUG's snow shift, a 40-cell inner loop of
-five blocks, spent **8.2% of a 286 in `jl_go`**, and after it 0.5%; the
-scene runs 75-83% of a C64 where it ran ~70 (`286-victory`). A ring that
+five blocks, spent **8.2% of a 286 in `jl_go`**, and after it 0.5%
+(`286-victory`; a fixed window of a timed demo is not a fixed workload, so
+the speed figures either side are not compared). A ring that
 wraps forgets the oldest wait, which costs that exit the lookup and nothing
 else.
 
@@ -1980,6 +1981,7 @@ constants and the eight rows are unrolled (PERFORMANCE.md Set 64):
 | `c64_band1(dst, first, last, mseg, moff, col, gseg, goff, mode, bg)` | composes cells `first..last` × 8 rows into a 1bpp band: text by glyph through the 16 `{and, xor}` pairs `c64_cmask_for` builds for the row's paper (§9.6). The flush hands it standard-text rows only; `mode != 0` still fills with the background's level, a fallback nothing calls |
 | `c64_bandbm(dst, xm, xb, col, n, mc, bg)` | `n` cells of a BITMAP row (§9.10), hires or multicolour, from near copies of the cells' matrix and bitmap bytes: each colour is its 4×4 Bayer pattern out of `c64_dmask`, and a multicolour byte is split into its four pair-value masks in seven ALU ops — no per-pair loop and no shift by a count. It replaced C that was 73% of a 286 under a bitmap demo |
 | `c64_sprrow(dst, on, lit, n, cell, sh, f, l)` | one line of a sprite onto one band line (§9.11): `n` bytes of set and lit pixels, shifted `sh` right from `cell`, clipped to cells `f..l`; each byte goes into both its cells through one `shr ax, cl` |
+| `c64_sprconv(sd, on, lit, mode, xexp)` | one sprite line's three data bytes as `c64_sprrow`'s ON and LIT masks: `mode` bit 0 multicolour (pairs split as `c64_bandbm` splits a bitmap byte), bit 1 X-expanded through the doubled-word table, bits 2-4 whether `$D025`, the sprite's colour and `$D026` are brighter than the paper. It was `c64_spr_draw`'s C a line at a time - 11.6% of a 286 under PCUG's logo in the window, 2.9% + 5.2% after; `c64memtest` checks three modes against the C model |
 | `c64_rvdiff(a, b)` | whether two 48-byte display-register sets differ (§9.10), `repe cmpsw` |
 | `c64_rowspan(a, b, n)` | compares a composed band against the frame shadow — eight pixel rows of `n` bytes at stride 40, both in the package's own segment — and answers `(first << 8) \| last`, the differing CELL columns, or −1 for "same". Both scans are `repe cmpsb` and the second sets `DF` on purpose, which is why §3.6's harness covers this file |
 | `c64_rowcopy(dst, src, n)` | brings the shadow up to date with what was drawn |

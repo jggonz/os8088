@@ -239,6 +239,124 @@ _c64_band1:
 ; the reverse scan and cleared before the return.
 
 ; -----------------------------------------------------------------------------
+; void c64_sprconv(const unsigned char *sd, unsigned char *on,
+;                  unsigned char *lit, int mode, const unsigned *xexp)
+; One sprite line's three data bytes as c64_sprrow's ON and LIT (C64-SPEC
+; 9.11), all near: MODE bit 0 multicolour, bit 1 X-expanded (each byte is
+; two, through XEXP's 256 doubled words, high byte first), bits 2-4 whether
+; $D025, the sprite's own colour and $D026 are brighter than the paper. A
+; multicolour byte's pairs 01/10/11 are split as c64_bandbm splits a bitmap
+; byte. It was c64_spr_draw's C, a line at a time: 12% of a 286 under PCUG's
+; logo in the window.
+; -----------------------------------------------------------------------------
+_c64_sprconv:
+    push bp
+    mov bp, sp
+    sub sp, 8
+    push si
+    push di
+    cld
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov ax, [bp+8]
+    mov [bp-8], ax                  ; the LIT pointer
+    mov dx, [bp+10]
+    xor ax, ax
+    test dl, 4
+    jz .m1
+    mov al, 0xFF
+.m1:
+    mov [bp-2], al                  ; $D025 lit: all or nothing
+    xor ax, ax
+    test dl, 8
+    jz .m2
+    mov al, 0xFF
+.m2:
+    mov [bp-4], al                  ; the sprite's own colour
+    xor ax, ax
+    test dl, 16
+    jz .m3
+    mov al, 0xFF
+.m3:
+    mov [bp-6], al                  ; $D026
+    mov cx, 3
+.byte:
+    push cx
+    lodsb
+    test byte [bp+10], 1
+    jz .hires
+    mov ah, al                      ; the pairs' high bits...
+    shr ah, 1
+    and ah, 0x55
+    and al, 0x55                    ; ...and their low bits
+    mov cl, ah
+    and cl, al                      ; 11
+    xor ah, cl                      ; 10
+    xor al, cl                      ; 01
+    mov ch, al                      ; each to both pixels of its pair
+    shl ch, 1
+    or al, ch
+    mov ch, ah
+    shl ch, 1
+    or ah, ch
+    mov ch, cl
+    shl ch, 1
+    or cl, ch
+    mov dl, al
+    and dl, [bp-2]
+    mov dh, ah
+    and dh, [bp-4]
+    or dl, dh
+    mov dh, cl
+    and dh, [bp-6]
+    or dl, dh                       ; LIT
+    or al, ah
+    or al, cl                       ; ON
+    jmp short .store
+.hires:
+    mov dl, al
+    and dl, [bp-4]
+.store:
+    test byte [bp+10], 2
+    jnz .xs
+    mov [di], al
+    inc di
+    mov bx, [bp-8]
+    mov [bx], dl
+    inc word [bp-8]
+    jmp short .next
+.xs:
+    mov bx, [bp+12]
+    xor ah, ah
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx]
+    mov [di], ah
+    mov [di+1], al
+    add di, 2
+    mov bx, [bp+12]
+    mov al, dl
+    xor ah, ah
+    shl ax, 1
+    add bx, ax
+    mov ax, [bx]
+    mov bx, [bp-8]
+    mov [bx], ah
+    mov [bx+1], al
+    add word [bp-8], 2
+.next:
+    pop cx
+    dec cx
+    jz .done
+    jmp .byte
+.done:
+    pop di
+    pop si
+    mov sp, bp
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 ; void c64_sprrow(unsigned char *dst, const unsigned char *on,
 ;                 const unsigned char *lit, int n, int cell, int sh,
 ;                 int f, int l)
