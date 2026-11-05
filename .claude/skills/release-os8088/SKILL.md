@@ -209,7 +209,11 @@ cd "$OS_REPO"
 git switch main && git pull --ff-only
 git switch -c "release/$VERSION-version"
 $EDITOR apps/install/OS88VER.TXT        # line 1 = the date, then what is new
-git commit -m "Release YYYYMMDD: version file" apps/install/OS88VER.TXT
+python3 tools/guidelock.py stamp INSTALL_O88 --why "apps/install changed only \
+  in OS88VER.TXT (release YYYYMMDD's date and what-is-new lines); the page \
+  quotes neither, so it stands unchanged"
+git commit -m "Release YYYYMMDD: version file" apps/install/OS88VER.TXT \
+  tools/guide/manuals.lock.json
 git push -u origin "release/$VERSION-version"
 gh pr create --title "Release YYYYMMDD: version file" \
   --body "The release stamp INSTALL checks (SPEC.md 117.10.1)."
@@ -219,6 +223,10 @@ head -n 1 apps/install/OS88VER.TXT      # must print YYYYMMDD
 ```
 
 `--admin` because the ruleset wants a review the sole maintainer cannot give.
+The stamp is there because the guide lock (`guidelock-full`, in `test-full`)
+watches `apps/install/` for the INSTALL manual, and OS88VER.TXT is in it: a
+version file committed without it leaves `main` failing that row until the
+next PR pays it, which #335 and the 20261104 follow-up both had to.
 With `--no-pr`, stop after the commit on the branch, build from it, and say
 in the report that `main` does not carry the release yet. Step 3a refuses to
 pack when line 1 is not this version's date.
