@@ -645,6 +645,14 @@ rows_main:
     call control
     mov ax, 0x0203
     call jcyc_jmp
+    mov si, msg_r20
+    call puts
+    call row_link
+    call verdict
+    call patch_link                 ; jt_link returns at once: nothing links
+    call row_link
+    call control
+    call unpatch_link
     mov si, msg_r15
     call puts
     call row_smc
@@ -1494,6 +1502,126 @@ row_chain:
     push word [chain_b]
     call _c64_run
     add sp, 2
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 20 - AN EXIT IS LINKED TO A BLOCK MADE AFTER IT (C64-SPEC 4.9.4)
+; $0800's block ends at the BNE, whose taken exit ($080A) and fall-through
+; ($0807) have no block yet; $080A's JMP back to $0802 has none either. Each
+; waits in the ring, and each must be linked when its block is made - left
+; waiting, it went through the lookup at every pass for good (PCUG's snow
+; shift). After the loop, NO site may still wait for a PC that has a block.
+; The control makes jt_link return at once.
+; -----------------------------------------------------------------------------
+row_link:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov si, p_link
+    mov di, 0x0800
+    mov cx, p_link_end - p_link
+.c: mov al, [cs:si]
+    inc si
+    mov [es:di], al
+    inc di
+    loop .c
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    PUSHI 2000
+    call _c64_run
+    add sp, 2
+    cmp word [_c64_m+CM_X], 8       ; the loop ran to its end
+    jne .bad
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov si, [es:0x56]               ; c64jit.asm's jv_pendt
+    mov cx, 256
+    xor dx, dx
+.l: cmp word [es:si+2], 0           ; a site still waiting...
+    je .n
+    mov ax, [es:si]
+    mov bx, ax
+    and bx, 0x03FF
+    shl bx, 1
+    shl bx, 1
+    cmp [es:bx+0x5800], ax          ; ...for a PC that HAS a block (LT)
+    jne .n
+    cmp word [es:bx+0x5802], 0x9E00
+    jb .n
+    inc dx
+.n: add si, 4
+    loop .l
+    pop es
+    or dx, dx
+    jnz .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_link:
+    db 0xA2, 0x00                   ; $0800 LDX #$00
+    db 0xE8                         ; $0802 INX
+    db 0xE0, 0x08                   ; $0803 CPX #$08
+    db 0xD0, 0x03                   ; $0805 BNE $080A
+    db 0x4C, 0x0F, 0x08             ; $0807 JMP $080F
+    db 0xEA                         ; $080A NOP
+    db 0x4C, 0x02, 0x08             ; $080B JMP $0802
+    db 0x00                         ; $080E
+    db 0x02                         ; $080F KIL
+p_link_end:
+
+; patch_link / unpatch_link - jt_link's first byte made a RET. Found by its
+; prologue: push ax/cx/dx/si/di, then `mov dx, [cs:jv_bpc]`
+patch_link:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, 0x0100
+    mov cx, 0x1000
+.f: cmp word [es:di], 0x5150
+    jne .n
+    cmp word [es:di+2], 0x5652
+    jne .n
+    cmp word [es:di+4], 0x2E57
+    jne .n
+    cmp word [es:di+6], 0x168B
+    jne .n
+    cmp word [es:di+8], 0x0042
+    je .t
+.n: inc di
+    loop .f
+    jmp short .o
+.t: mov [link_at], di
+    mov al, [es:di]
+    mov [link_was], al
+    mov byte [es:di], 0xC3
+.o: pop cx
+    pop di
+    pop es
+    ret
+unpatch_link:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov di, [link_at]
+    or di, di
+    jz .o
+    mov al, [link_was]
+    mov [es:di], al
+.o: pop di
+    pop es
     ret
 
 ; -----------------------------------------------------------------------------
@@ -3297,6 +3425,8 @@ jp_save:    times 16 db 0            ; (the recompiler's row a control moved)
 jc_op:      db 0
 chain_b:    dw 0
 pat_at:     dw 0
+link_at:    dw 0
+link_was:   db 0
 hit_at:     dw 0
 hit_save:   dw 0
 _c64_fpc:   dw 0                    ; (c64io.c's; the harness has no raster)
@@ -3422,6 +3552,7 @@ msg_r18:    db 'row 18 the self-loops in 97-cycle runs', 0
 msg_r19:    db 'row 19 a code page short cut, tested  ', 0
 msg_r15:    db 'row 15 a running block rewritten       ', 0
 msg_r16:    db 'row 16 a chained loop to the budget    ', 0
+msg_r20:    db 'row 20 exits linked to later blocks    ', 0
 msg_r17:    db 'row 17 a patched operand read in place ', 0
 msg_ok:     db 'ok ', 0
 msg_bad:    db 'FAIL ', 0

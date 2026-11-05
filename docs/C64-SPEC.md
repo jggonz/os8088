@@ -1159,6 +1159,18 @@ nothing is left (`xa_slice`) and otherwise hands the PC to the core. A test
 that passes falls through rather than jumping. A flush clears every block
 and so every chain with them; nothing else unmakes a block.
 
+**An exit whose target has no block yet WAITS for one** (`jt_chain`'s
+`.pend`, `jt_link`). It goes into a ring of 256 `[PC, site]` rows - 1KB
+taken from under `jv_end` at set-up, emptied by every flush - and when a
+block is made for that PC, every site waiting for it is made the same near
+jump `jt_chain` would have made had the block existed first. Without it a
+loop whose blocks happened to be made in the wrong order went through the
+lookup at every pass for good: PCUG's snow shift, a 40-cell inner loop of
+five blocks, spent **8.2% of a 286 in `jl_go`**, and after it 0.5%; the
+scene runs 75-83% of a C64 where it ran ~70 (`286-victory`). A ring that
+wraps forgets the oldest wait, which costs that exit the lookup and nothing
+else.
+
 **Batching.** A template that ends `sub bp, n` and can neither leave, call
 nor branch out is PURE (m65tmpl.py's `pure()`, 79 of 210, bit 7 of its site
 count): the translator copies it without those three bytes and adds `n` to a
@@ -1181,7 +1193,10 @@ chained into itself, run on budgets of 200 (40 passes exactly: X = 40, PC =
 L, nothing left) and 201 (the 41st INX takes the budget past 0: X = 41, PC
 the JMP). Both last passes are HEAD's to hand to the core; a HEAD that ended
 the run there instead stops 201 an INX short, which was checked. Rows 9 and
-14 keep every cycle total with chaining and batching on.
+14 keep every cycle total with chaining and batching on. **Row 20** runs a
+loop whose BNE's taken exit, fall-through and back-jump all point at blocks
+made after it, and asserts that afterwards no site in the ring still waits
+for a PC that has a block; its control makes `jt_link` return at once.
 
 #### 4.9.5 Preferences > Recompiler, and what it measured — BUILT
 

@@ -56,6 +56,8 @@ BLOCK_MAX   equ 34 * JT_MAXT + 16   ; HEAD, 32 instructions, the exit
 BLOCK_LEN   equ 32                  ; instructions a block
 VOLATILE_N  equ 16                  ; flushes a page may cause (4.9.3)
 THRESH      equ 64                  ; a block's entries before it is made
+PEND_N      equ 256                 ; exits waiting for their target's block
+PEND_BYTES  equ PEND_N * 4          ; (4.9.4: [PC, site], under jv_end)
 
 ; --- the variables -----------------------------------------------------------
 jv_ptr      equ 0x22                ; the cache's next free byte
@@ -77,6 +79,8 @@ jv_prevk    equ 0x50
 jv_end      equ 0x52                ; where the cache stops: the claim's size
 jv_dyn      equ 0x54                ; this instruction's PATCHED bytes: 0 none,
                                     ; 1 an operand's, 2 its opcode's
+jv_pendt    equ 0x56                ; the pending exits' table (4.9.4)
+jv_pendi    equ 0x58                ; ...and its next row, a ring
 
     ; (every variable below JIT_HOOK; jv_vals' last word is JK_OPA's)
     times (jv_vals + 2 * JK_OPA + 2 > JIT_HOOK) * -1 db 0
@@ -247,6 +251,10 @@ jt_flush:
     rep stosw
     mov [cs:JC_FLUSH], ax
     mov word [cs:jv_ptr], CACHE
+    mov di, [cs:jv_pendt]           ; ...and every waiting exit with them
+    mov cx, PEND_BYTES / 2
+    rep stosw
+    mov [cs:jv_pendi], ax
     mov bx, [cs:jv_fp]
     mov es, [ss:bx+F_CORE]
     mov si, JPG
@@ -549,6 +557,9 @@ jt_trans:
     mov byte [C64SCR + S_ANY], 1
     mov [cs:jv_ptr], di
     inc word [cs:jv_ntrans]
+%ifndef NOLINK
+    call jt_link                    ; the exits that were waiting for it
+%endif
     mov bx, [cs:jv_start]
     add bx, JT_HENTRY               ; (entered past HEAD's exit)
     jmp short .out
@@ -693,14 +704,64 @@ jt_chain:
     cmp [cs:bx+LT], si
     mov ax, [cs:bx+LT+2]
     pop bx
-    jne .r
+    jne .pend
     cmp ax, CACHE
-    jb .r
+    jb .pend
 .go:
     sub ax, bx
     sub ax, 2
     mov [es:bx], ax
 .r:
+    ret
+    ; NO BLOCK FOR IT YET: the site waits in the ring for one (4.9.4).
+    ; Chaining only to blocks already made left a loop whose blocks were made
+    ; in the wrong order going through the lookup at every branch for good -
+    ; PCUG's snow shift, 8% of a 286 in jl_go
+.pend:
+    push di
+    mov di, [cs:jv_pendi]
+    add di, [cs:jv_pendt]
+    mov [cs:di], si
+    mov [cs:di+2], bx
+    pop di
+    mov ax, [cs:jv_pendi]
+    add ax, 4
+    and ax, PEND_BYTES - 1
+    mov [cs:jv_pendi], ax
+    ret
+
+; jt_link - the block just made (jv_bpc, jv_start): every exit waiting in the
+; ring for its PC jumps straight into it now, as jt_chain would have had it
+; been made first. Preserves everything.
+jt_link:
+    push ax
+    push cx
+    push dx
+    push si
+    push di
+    mov dx, [cs:jv_bpc]
+    mov si, [cs:jv_pendt]
+    mov cx, PEND_N
+.l:
+    cmp [cs:si], dx
+    jne .n
+    mov di, [cs:si+2]
+    or di, di
+    jz .n
+    mov ax, [cs:jv_start]
+    add ax, JT_HENTRY
+    sub ax, di
+    sub ax, 2
+    mov [cs:di], ax
+    mov word [cs:si+2], 0
+.n:
+    add si, 4
+    loop .l
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop ax
     ret
 
 ; -----------------------------------------------------------------------------
@@ -821,6 +882,14 @@ jl_init:
     sub ax, 0x300                   ; (CACHE_END's reserve)
     mov [jv_end], ax
 .big:
+    sub word [jv_end], PEND_BYTES   ; the pending exits' ring, under the end
+    mov ax, [jv_end]
+    mov [jv_pendt], ax
+    mov word [jv_pendi], 0
+    mov di, ax
+    mov cx, PEND_BYTES / 2
+    xor ax, ax
+    rep stosw
     mov [jv_force], dl
     mov byte [jv_thresh], THRESH
     or dl, dl
