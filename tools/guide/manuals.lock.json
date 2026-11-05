@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "6ca9e640",
-  "strings": "6d19e3c0f301c2f3",
-  "why": "Preferences > Recompiler in Emulation speed's place, and the D64 message"
+  "stamped": "d962e6ab",
+  "strings": "c76d87430df46fe3",
+  "why": "the D64 in extended memory beside the recompiler"
  },
  "CALC_O88": {
   "sources": [
