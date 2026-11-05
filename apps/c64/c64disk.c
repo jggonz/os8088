@@ -15,9 +15,13 @@
  * that reads its disk sector by sector. Those see the bus they always saw:
  * nothing on it, `?DEVICE NOT PRESENT`.
  *
- * The image is held whole, in one claim, while it is attached: 171KB for 35
- * tracks (683 sectors), read once, 32KB at a time (c64_read_at), and given
- * back when another is attached.
+ * The image is held whole while it is attached: 171KB for 35 tracks (683
+ * sectors), read once and given back when another is attached. IN EXTENDED
+ * MEMORY where there is room (C64-SPEC 11.5.1) - read 8KB at a time through
+ * a buffer given back after, and a sector at a time copied into one of two
+ * 256-byte slots when it is asked for - so a 640KB machine keeps its
+ * conventional memory for the recompiler. Otherwise in one conventional
+ * claim, 32KB at a time (c64_read_at).
  * ==========================================================================*/
 
 #define C64_D64_TRAP     0xF4C4             /* LDA #$60, the serial LOAD's first
@@ -29,8 +33,20 @@
 #define C64_D64_EXIT     0xF5A9             /* CLC / LDX $AE / LDY $AF / RTS */
 #define C64_D64_NOTFOUND 0xF704             /* LDA #4: ?FILE NOT FOUND */
 
-static unsigned c64_d64_seg;                /* the image's claim; 0 = no disk */
+static unsigned c64_d64_seg;                /* the image's claim, or the
+                                             * slots' when it is extended;
+                                             * 0 = no disk */
 static unsigned c64_d64_trks;               /* 35 or 40 */
+static unsigned c64_d64_xms;                /* 1: the image is in extended
+                                             * memory, its token... */
+static unsigned c64_d64_tok[2];
+static unsigned c64_d64_inj;                /* ...and its slots are in the
+                                             * recompiler's segment, which
+                                             * owns them (11.5.1) */
+static unsigned c64_d64_slot[2];            /* ...and the sector + 1 each
+                                             * slot holds: 0 the others, 1
+                                             * the BAM (18,0), which the
+                                             * directory reads beside them */
 
 /* ovl_d64_para - the paragraph of track t, sector s, inside the claim; 0 for
  * a sector the image has not got (a link off the disk is a broken file) */
@@ -48,11 +64,114 @@ static const unsigned c64_d64_trk0[42] = {
 
 static unsigned ovl_d64_para(unsigned t, unsigned s)
 {
+    unsigned i, k;
+
     if (t < 1 || t > c64_d64_trks)
         return 0;
     if (s >= c64_d64_trk0[t + 1] - c64_d64_trk0[t])
         return 0;
-    return c64_d64_seg + ((c64_d64_trk0[t] + s) << 4);
+    i = c64_d64_trk0[t] + s;
+    if (c64_d64_xms == 0)
+        return c64_d64_seg + (i << 4);
+    k = (t == 18 && s == 0) ? 1 : 0;
+    if (c64_d64_slot[k] != i + 1) {
+        if (!c64x_copy(c64_d64_seg, k << 8, c64_d64_tok[0], c64_d64_tok[1],
+                       (i & 0xFF) << 8, i >> 8, 256, 1))
+            return 0;
+        c64_d64_slot[k] = i + 1;
+    }
+    return c64_d64_seg + (k << 4);
+}
+
+/* ovl_d64_release - the image attached now, given back */
+static void ovl_d64_release(void)
+{
+    if (c64_d64_seg != 0 && !c64_d64_inj)
+        os88_mem_free(c64_d64_seg);
+    c64_d64_inj = 0;
+    if (c64_d64_xms)
+        c64x_free(c64_d64_tok[0], c64_d64_tok[1]);
+    c64_d64_seg = 0;
+    c64_d64_xms = 0;
+}
+
+/* ovl_d64_xattach - the image into extended memory: 1 done, 0 not (no pool,
+ * no room in it, no buffer, or a read that failed - the caller then tries
+ * the conventional way, which says what went wrong) */
+static int ovl_d64_xattach(const char *name, unsigned trks)
+{
+    unsigned nch, k, n, per, ck, stage, tmp, inj;
+    int ok;
+
+    nch = (trks == 35) ? 22 : 24;           /* 8KB chunks: 174,848, 196,608 */
+    if (c64x_caps() < nch * 8)
+        return 0;
+    inj = (c64_fjit != 0);
+    if (inj) {
+        /* IN THE RECOMPILER'S SEGMENT. A package holds at most eight claims
+         * (SPEC.md 50.3, MEM_OWNER_MAX) and with the recompiler the C64
+         * holds all eight, so the two slots are the last 512 bytes of its
+         * claim, which it leaves alone for them (c64jit.asm's jv_end), and
+         * the image is read through its cache, 4KB at a time - every block
+         * is thrown away after, as a flush */
+        stage = c64_fjit + c64_jit_kb * 64 - 32;
+        tmp = c64_fjit + C64J_CACHE_PARA;
+        ck = 0x1000;
+    } else {
+        stage = os88_mem_claim_p(32);       /* the two sector slots */
+        if (stage == 0)
+            return 0;
+        /* A BUFFER TO READ THROUGH, as big as the heap has: 8KB, or down
+         * to one 512-byte sector - a smaller one is only more reads */
+        tmp = 0;
+        for (ck = 0x2000; ck >= 0x200 && tmp == 0; ck >>= 1)
+            tmp = os88_mem_claim_p(ck >> 4);
+        ck <<= 1;
+        if (tmp == 0) {
+            os88_mem_free(stage);
+            return 0;
+        }
+    }
+    if (!c64x_alloc((nch & 7) << 13, nch >> 3)) {
+        if (!inj) {
+            os88_mem_free(tmp);
+            os88_mem_free(stage);
+        }
+        return 0;
+    }
+    ok = 1;
+    /* THE CHUNKS THE SECTORS FILL: a read wholly past the image's end
+     * answers nothing, and the block is whole 8KBs, so stop where the
+     * sectors stop (an error-byte tail after them is not read) */
+    n = ((trks == 35 ? 683 : 768) + (ck >> 8) - 1) / (ck >> 8);
+    per = (0x8000u / ck) * 2;               /* chunks a 64KB holds */
+    for (k = 0; k < n && ok; k++) {
+        if (c64_read_at(name, tmp, ck, (k % per) * ck, k / per) == 0)
+            ok = 0;
+        else if (!c64x_copy(tmp, 0, c64_xnew[0], c64_xnew[1],
+                            (k % per) * ck, k / per, ck, 0))
+            ok = 0;
+    }
+    if (inj)
+        os88_poke(c64_fjit, C64J_FLUSHREQ, 2);  /* (the cache was the read's) */
+    else
+        os88_mem_free(tmp);
+    if (!ok) {
+        c64x_free(c64_xnew[0], c64_xnew[1]);
+        if (!inj)
+            os88_mem_free(stage);
+        return 0;
+    }
+    ovl_d64_release();
+    c64_d64_seg = stage;
+    c64_d64_inj = inj;
+    c64_d64_xms = 1;
+    c64_d64_tok[0] = c64_xnew[0];
+    c64_d64_tok[1] = c64_xnew[1];
+    c64_d64_slot[0] = 0;
+    c64_d64_slot[1] = 0;
+    c64_d64_trks = trks;
+    return 1;
 }
 
 /* ovl_d64_attach - File > Attach disk image / Smart attach on a .D64: the
@@ -72,6 +191,23 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
             trks = 40;                      /* 196,608, or with error bytes */
     if (trks == 0) {
         c64_say("Not a D64 image.");
+        return;
+    }
+    /* EXTENDED FIRST. It wants only a few hundred bytes of conventional
+     * memory, and beside a 64KB recompiler a 640KB machine may not have
+     * those: then the recompiler steps aside for the attach and comes back
+     * whole, the image being above 1MB */
+    gave = ovl_d64_xattach(name, trks);
+    if (!gave && c64_fjit != 0 && c64x_caps() >= 192) {
+        c64_jit_drop();
+        gave = ovl_d64_xattach(name, trks);
+        c64_jit_init();                     /* back - whole if the image went
+                                             * up, and the conventional way
+                                             * below asks again if not */
+    }
+    if (gave) {
+        c64_menu_state();
+        c64_say("Disk on drive 8.");
         return;
     }
     /* the sectors, and 512 bytes over: the last READ_AT moves whole sectors
@@ -96,8 +232,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
             return;
         }
     }
-    if (c64_d64_seg != 0)
-        os88_mem_free(c64_d64_seg);
+    ovl_d64_release();
     c64_d64_seg = seg;
     c64_d64_trks = trks;
     c64_jit_init();                         /* (back, smaller, if it gave way) */

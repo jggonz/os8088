@@ -98,6 +98,13 @@ void c64_dirty_take(unsigned char *dst36);  /* the 32-byte page bitmap and the
                                              * used to do it in ~50 (9.2) */
 int  c64_rom_rd(unsigned off);
 void c64_zcopy_in(unsigned a, const void *src, unsigned n);
+unsigned c64x_caps(void);                  /* (c64mem.inc: the D64 in extended
+                                            * memory, C64-SPEC 11.5.1) */
+int  c64x_alloc(unsigned lo, unsigned hi);
+void c64x_free(unsigned tlo, unsigned thi);
+int  c64x_copy(unsigned seg, unsigned off, unsigned tlo, unsigned thi,
+               unsigned xlo, unsigned xhi, unsigned n, int in);
+unsigned c64_xnew[2];                      /* ...the token c64x_alloc gave */
 void c64_zcopy_out(void *dst, unsigned a, unsigned n);
 int  c64_copy_row(unsigned dseg, unsigned doff, int n);
 void c64_zzcopy_in(unsigned a, unsigned sseg, unsigned soff, unsigned n);
@@ -241,6 +248,8 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
 #define C64_AOTPC_PART  5                   /* ...and their PC table */
 #define C64_JIT_PART    6                   /* the recompiler (4.9) */
 #define C64_JIT_LEN     0x5800              /* ...its image: c64jit.asm's LT */
+#define C64J_CACHE_PARA 0x09E0              /* ...its cache, c64jit.asm's CACHE */
+#define C64J_FLUSHREQ   0x21                /* ...and its flush request */
 #define C64_ROM_KERNAL  0x0000
 #define C64_ROM_BASIC   0x2000
 #define C64_ROM_CHARGEN 0x4000
@@ -633,6 +642,8 @@ void os88_onmove(unsigned was, unsigned now)
         c64_fseg = c64f_codesel(now);
     } else if (c64_fjit == was) {          /* the recompiler's (4.9) */
         c64_fjit = now;
+        if (c64_d64_inj)                    /* ...and the D64's slots in it */
+            c64_d64_seg = c64_d64_seg - was + now;
     } else if (c64_paste_seg == was) {
         c64_paste_seg = now;
     }
@@ -1951,6 +1962,8 @@ static void c64_jit_drop(void)
 {
     if (c64_fjit == 0)
         return;
+    if (c64_d64_inj)                        /* (its slots go with it) */
+        ovl_d64_release();
     c64j_off(c64_fcode);
     os88_mem_free(c64_fjit);
     c64_fjit = 0;

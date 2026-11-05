@@ -651,6 +651,12 @@ static unsigned char *segbase(unsigned seg)
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg)
             return scratch[i];
+    /* ...and a segment INSIDE a claim is an address inside it, as on the
+     * machine (the D64's second sector slot is its claim plus 16) */
+    for (i = 0; i < CLAIM_MAX; i++)
+        if (claim[i].live && seg > claim[i].seg
+                && (long)(seg - claim[i].seg) * 16 < claim[i].cap)
+            return scratch[i] + (long)(seg - claim[i].seg) * 16;
     return 0;
 }
 
@@ -787,6 +793,10 @@ static long segcap(unsigned seg)
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg)
             return claim[i].cap;
+    for (i = 0; i < CLAIM_MAX; i++)
+        if (claim[i].live && seg > claim[i].seg
+                && (long)(seg - claim[i].seg) * 16 < claim[i].cap)
+            return claim[i].cap - (long)(seg - claim[i].seg) * 16;
     return -1;
 }
 
@@ -802,7 +812,8 @@ unsigned os88_mem_claim(int kb)
     for (i = 0; i < CLAIM_MAX; i++)
         if (!claim[i].live) {
             claim[i].live = 1;
-            claim[i].seg = (unsigned)(0x4000 + i * 0x400);
+            claim[i].seg = (unsigned)(0x4000 + i * 0x1000);   /* (64KB apart: a
+                                                     * segment inside one is in no other) */
             claim[i].cap = (long)kb * 1024;
             claims_live++;
             return claim[i].seg;
@@ -828,7 +839,8 @@ unsigned os88_mem_claim_p(unsigned paras)
     for (i = 0; i < CLAIM_MAX; i++)
         if (!claim[i].live) {
             claim[i].live = 1;
-            claim[i].seg = (unsigned)(0x4000 + i * 0x400);
+            claim[i].seg = (unsigned)(0x4000 + i * 0x1000);   /* (64KB apart: a
+                                                     * segment inside one is in no other) */
             claim[i].cap = (long)paras * 16;
             claims_live++;
             return claim[i].seg;
@@ -893,6 +905,51 @@ unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
         n = cap;
     memcpy(segbase(seg), h_d64 + off, (size_t)n);
     return (unsigned)n;
+}
+
+/* EXTENDED MEMORY (C64-SPEC 11.5.1): a pool of h_xms_kb KB, blocks handed
+ * out from its bottom with the token a linear address above 1MB, as on a
+ * real-mode kernel - and COPY's contract checked as the kernel holds it */
+static unsigned char h_xms[512 * 1024];
+static unsigned h_xms_kb, h_xms_used, h_xms_live;
+unsigned c64_xnew[2];
+unsigned c64x_caps(void) { return h_xms_kb - h_xms_used; }
+int c64x_alloc(unsigned lo, unsigned hi)
+{
+    long n = ((long)hi << 16) | lo;
+    n = (n + 1023) / 1024;
+    if (n > (long)(h_xms_kb - h_xms_used))
+        return 0;
+    c64_xnew[0] = (unsigned)(((long)h_xms_used * 1024) & 0xFFFF);
+    c64_xnew[1] = (unsigned)(0x10 + (((long)h_xms_used * 1024) >> 16));
+    h_xms_used += (unsigned)n;
+    h_xms_live++;
+    return 1;
+}
+void c64x_free(unsigned tlo, unsigned thi)
+{
+    (void)tlo; (void)thi;
+    if (h_xms_live == 0)
+        fail("c64x_free with no extended block live");
+    h_xms_live--;
+    if (h_xms_live == 0)
+        h_xms_used = 0;
+}
+int c64x_copy(unsigned seg, unsigned off, unsigned tlo, unsigned thi,
+              unsigned xlo, unsigned xhi, unsigned n, int in)
+{
+    long x = (((long)thi << 16) | tlo) - 0x100000L + (((long)xhi << 16) | xlo);
+    if (n & 1 || n > 32768)
+        fail("c64x_copy of an odd length or over 32KB");
+    if (x < 0 || x + n > (long)h_xms_used * 1024)
+        fail("c64x_copy outside the extended block");
+    if (segcap(seg) < (long)off + n)
+        fail("c64x_copy past its conventional claim");
+    if (in)
+        memcpy(segbase(seg) + off, h_xms + x, n);
+    else
+        memcpy(h_xms + x, segbase(seg) + off, n);
+    return 1;
 }
 
 /* the .PRG fixture the next os88_file_read_seg serves, by name */
@@ -3697,10 +3754,13 @@ int main(int argc, char **argv)
      * return through LOADING), the directory as a BASIC program, FILE NOT
      * FOUND; and a device that is not 8 runs the replaced LDA #$60.
      * Verified to fail with the chain's second sector skipped (the end
-     * address and the tail bytes both go wrong). */
-    {
+     * address and the tail bytes both go wrong). TWICE: the image in one
+     * conventional claim, then in EXTENDED MEMORY (11.5.1) a sector at a
+     * time through two slots - verified to fail with the BAM's slot made
+     * the other one's (BLOCKS FREE reads the BAM after the directory). */
+    for (h_xms_kb = 0; h_xms_kb <= 2048; h_xms_kb += 1024) {
         static const unsigned char nm[] = { 'H', 'E', 'L', 'L', 'O' };
-        unsigned b0, i4, endv;
+        unsigned b0, i4, endv, lp, got712;
         long o18_0 = 357L * 256, o18_1 = 358L * 256, o1_0 = 0, o1_1 = 256;
         memset(h_d64, 0, sizeof(h_d64));
         h_d64_len = 174848;
@@ -3722,9 +3782,26 @@ int main(int argc, char **argv)
         for (i4 = 4; i4 < 256; i4++) h_d64[o1_0 + i4] = (unsigned char)i4;
         h_d64[o1_1 + 0] = 0; h_d64[o1_1 + 1] = 11;           /* last: 2..11 */
         for (i4 = 2; i4 < 12; i4++) h_d64[o1_1 + i4] = (unsigned char)(0xE0 + i4);
+        if (h_xms_kb == 2048) {
+            /* ...AND A THIRD TIME BESIDE THE RECOMPILER, whose segment holds
+             * the slots and the read's buffer (the C64 has no claim left) */
+            c64_fjit = os88_mem_claim(64);
+            if (c64_fjit == 0)
+                fail("the harness had no claim left for a recompiler segment");
+            c64_jit_kb = 64;
+            os88_poke(c64_fjit, C64J_FLUSHREQ, 0);
+        }
         ovl_d64_attach("TEST.D64", 0xAB00, 2);
         if (c64_d64_seg == 0)
             fail("a 174,848-byte D64 was not attached to drive 8");
+        if (h_xms_kb == 2048 && (!c64_d64_inj
+                || c64_d64_seg != c64_fjit + 64 * 64 - 32
+                || os88_peek(c64_fjit, C64J_FLUSHREQ) != 2))
+            fail("beside the recompiler the D64's slots are not its last 512 "
+                 "bytes, or its cache was read through and no flush asked");
+        if (c64_d64_xms != (h_xms_kb != 0) || (h_xms_kb && h_big_paras))
+            fail("the D64 did not go to extended memory when there was room "
+                 "for it, or did when there was none (11.5.1)");
 #define H_LOADCALL(nmp, nl, sa) do { unsigned k_; \
             for (k_ = 0; k_ < (nl); k_++) c64_wr(0x0340 + k_, (nmp)[k_]); \
             c64_wr(0xB7, (nl)); c64_wr(0xBB, 0x40); c64_wr(0xBC, 0x03); \
@@ -3750,6 +3827,14 @@ int main(int argc, char **argv)
         b0 = (unsigned)c64_rd(0x0801) | ((unsigned)c64_rd(0x0802) << 8);
         if (c64_rd(0x0805) != 0x12 || c64_rd(0x0807) != 'T' || b0 <= 0x0801)
             fail("LOAD\"$\",8 did not make the directory's header line");
+        got712 = 0;                         /* 19 + 33 x 21, track 18 apart */
+        for (lp = 0x0801, i4 = 0; i4 < 8 && lp; i4++) {
+            if (((unsigned)c64_rd(lp + 2) | ((unsigned)c64_rd(lp + 3) << 8)) == 712)
+                got712 = 1;
+            lp = (unsigned)c64_rd(lp) | ((unsigned)c64_rd(lp + 1) << 8);
+        }
+        if (!got712)
+            fail("the directory's BLOCKS FREE is not the BAM's 712");
         H_LOADCALL((const unsigned char *)"NOPE", 4, 0);
         if (c64_m.pc != C64_D64_NOTFOUND)
             fail("a name the disk has not got did not go to FILE NOT FOUND");
@@ -3759,9 +3844,15 @@ int main(int argc, char **argv)
         ovl_d64_trap();
         if (c64_m.pc != C64_D64_TRAP + 2 || c64_m.a != 0x60)
             fail("a LOAD from device 9 did not run the LDA #$60 the trap replaced");
-        os88_mem_free(c64_d64_seg);
-        c64_d64_seg = 0;
+        ovl_d64_release();
+        if (h_xms_live != 0 || c64_d64_seg != 0)
+            fail("the D64 given back left its extended block or its claim");
+        if (c64_fjit != 0) {
+            os88_mem_free(c64_fjit);
+            c64_fjit = 0;
+        }
     }
+    h_xms_kb = 0;
 
     /* --- THE DISPLAY LATCH (9.9). A split screen writes $D011 twice a
      * frame - bitmap on at the top, off for a scroller below - and the

@@ -403,6 +403,87 @@ _c64j_off:
     pop bp
     ret
 
+; -----------------------------------------------------------------------------
+; THE D64 IN EXTENDED MEMORY (C64-SPEC 11.5.1): OSAPI_XMEM_* for the C, which
+; has no 32-bit type - a block's token is two words, and one the C keeps in
+; c64_xnew after an alloc
+;   unsigned c64x_caps(void)                 the KB the pool can hand out
+;   int  c64x_alloc(unsigned lo, unsigned hi) 1, and the token in c64_xnew
+;   void c64x_free(unsigned tlo, unsigned thi)
+;   int  c64x_copy(unsigned seg, unsigned off, unsigned tlo, unsigned thi,
+;                  unsigned xlo, unsigned xhi, unsigned n, int in)
+;        n bytes (even, <= 32768) between seg:off and the block's offset
+;        xhi:xlo - in from extended when `in`, out to it otherwise; 1 done
+; -----------------------------------------------------------------------------
+_c64x_caps:
+    push bx
+    push si
+    push di
+    call OSAPI_XMEM_CAPS
+    pop di
+    pop si
+    pop bx
+    ret
+
+_c64x_alloc:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+4]
+    mov dx, [bp+6]
+    call OSAPI_XMEM_ALLOC
+    jc .no
+    mov [_c64_xnew], ax
+    mov [_c64_xnew+2], dx
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+_c64x_free:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+4]
+    mov dx, [bp+6]
+    call OSAPI_XMEM_FREE
+    pop di
+    pop si
+    pop bp
+    ret
+
+_c64x_copy:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    mov ax, [bp+8]
+    mov dx, [bp+10]
+    add ax, [bp+12]                 ; the token, plus the offset inside it
+    adc dx, [bp+14]
+    mov si, [bp+6]
+    mov cx, [bp+16]
+    mov di, [bp+18]
+    mov es, [bp+4]
+    call OSAPI_XMEM_COPY
+    mov ax, 0                       ; (MOV leaves CF alone)
+    jc .e
+    inc ax
+.e:
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret
+
 ; unsigned c64f_codesel(unsigned seg) - OSAPI_MEM_CODESEL's answer, 0 = none
 _c64f_codesel:
     push bp

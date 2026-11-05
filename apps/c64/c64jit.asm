@@ -48,7 +48,10 @@ PATCHED     equ FINE + MAPLEN       ; ...and under every byte a write found
                                     ; there - kept across flushes (4.9.3)
 MAPLEN      equ 0xD000 / 8
 CACHE       equ PATCHED + MAPLEN
-CACHE_END   equ 0xFF00                ; (in a 64KB claim)
+CACHE_END   equ 0xFD00                ; (in a 64KB claim; the last 768 bytes
+                                    ; are the D64's two sector slots, C64-SPEC
+                                    ; 11.5.1, and room - kept out of the cache)
+    times (CACHE != 0x9E00) * -1 db 0   ; (c64.c's C64J_CACHE_PARA)
 BLOCK_MAX   equ 34 * JT_MAXT + 16   ; HEAD, 32 instructions, the exit
 BLOCK_LEN   equ 32                  ; instructions a block
 VOLATILE_N  equ 16                  ; flushes a page may cause (4.9.3)
@@ -815,7 +818,7 @@ jl_init:
     xor ah, ah
     mov cl, 10
     shl ax, cl
-    sub ax, 0x100
+    sub ax, 0x300                   ; (CACHE_END's reserve)
     mov [jv_end], ax
 .big:
     mov [jv_force], dl

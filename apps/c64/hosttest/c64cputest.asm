@@ -2827,6 +2827,14 @@ state_sig:
 SEG_LIN equ 0
 SEG_WIN equ 2
 %define OSAPI_SEG hst_seg
+%define OSAPI_XMEM_CAPS hst_xnone       ; ...and no extended memory: the
+%define OSAPI_XMEM_ALLOC hst_xnone      ; D64 shims (c64fast.inc) assemble and
+%define OSAPI_XMEM_FREE hst_xnone       ; refuse, and no row reaches them
+%define OSAPI_XMEM_COPY hst_xnone
+hst_xnone:
+    xor ax, ax
+    stc
+    ret
 %define OSAPI_MEM_CODESEL hst_codesel   ; ...and OSAPI_MEM_CODESEL's: the
 hst_codesel:                            ; segment itself (c64fast.inc)
     mov ax, dx
@@ -3138,6 +3146,7 @@ fp_save:    db 0, 0, 0
 %endif
 section .data
 _c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): 0 = none
+_c64_xnew:  dw 0, 0                 ; (c64fast.inc's extended-memory token)
 section .text
 %include "c64mem.inc"
 

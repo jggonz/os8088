@@ -85,8 +85,9 @@ once after the last.
 
 The Portland CUG Christmas album's first scene, its three parts poked into
 RAM (CHRISTMASMUSIC at $0D00, CHRISTMASCODE at $C000, CHRISTMASROOT at
-$0801) and RUN - the D64 and the recompiler do not fit the 640KB machine
-together (C64-SPEC 4.9.4). Second half of a 50-second window, both runs
+$0801) and RUN - the D64 and the recompiler did not fit the 640KB machine
+together then; C64-SPEC 11.5.1 put the D64 in extended memory after, and
+loaded from drive 8 the same scene measured 26.4%. Second half of a 50-second window, both runs
 checked on the glass:
 
 | | speed |

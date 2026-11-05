@@ -1155,10 +1155,9 @@ the free heap, so that when it gives way the hole it leaves is one piece. When a
 the recompiler GIVES WAY: `c64_jit_drop` zeroes the core's page map, frees
 the claim, and the attach claims again; after the attach the recompiler is
 set up again in whatever is left. A smaller machine gets a smaller cache,
-never a refused disk. **On 86Box's 640KB `286-victory` a D64 and the
-recompiler do not fit together** - the D64 is a 171KB claim - so a program run
-from drive 8 runs without it; carrying the D64 in extended memory
-(`OSAPI_XMEM_*`) is what would let both in, and is not done.
+never a refused disk. **Where there is extended memory the D64 goes there
+and the two fit together** (§11.5.1); the giving way is for a machine
+without it.
 
 **The gate** adds row 16 to the recompiler leg: `L: INX / JMP L`, one block
 chained into itself, run on budgets of 200 (40 passes exactly: X = 40, PC =
@@ -2815,6 +2814,40 @@ met. **It costs nothing until a LOAD reaches it.**
 `LOADING`), a pattern at `$0801`, the directory's header line, `FILE NOT
 FOUND` - and that device 9 runs the replaced instruction; red with the
 file's chain cut.
+
+#### 11.5.1 The image in extended memory
+
+**A D64 is 171KB, and on a 640KB machine it does not fit beside the
+recompiler** (§4.9.4) - nor, at 8 claims a package (SPEC.md 50.3,
+`MEM_OWNER_MAX`), would any claim at all: with the recompiler the C64 holds
+all eight. So where the extended pool has room (`OSAPI_XMEM_CAPS`: 176KB for
+35 tracks, 192 for 40) the image goes there, and only a sector is ever in
+conventional memory:
+
+- **The block** is whole 8KBs (`OSAPI_XMEM_ALLOC`), read from the file a
+  chunk at a time through a buffer and `OSAPI_XMEM_COPY`, stopping where the
+  sectors do (a read past the file's end answers nothing).
+- **Two 256-byte slots** take a sector on demand (`ovl_d64_para`, copied
+  in when the slot holds another): one for the BAM (18,0), one for every
+  other - the directory listing reads the BAM after its directory sectors,
+  and every other reader holds one sector at a time.
+- **Where the slots and the buffer live**: with a recompiler, in ITS segment
+  - the slots are the claim's last 512 bytes, which the cache stops short of
+  (`CACHE_END` `$FD00`, `jv_end` 768 bytes under the claim's end), and the
+  image is read 4KB at a time through the cache, which is then flushed
+  (`JC_FLUSH+1` = 2). They follow it when it moves (`os88_onmove`) and go with
+  it if it is dropped. Without one, a 512-byte claim for the slots and an 8KB
+  buffer, or down to 512 bytes, given back after.
+- **The four OSAPI_XMEM_* calls** are `c64fast.inc`'s `c64x_*` shims; the
+  token is two words the C never adds to (`c64x_copy` adds the offset), so it
+  is right on kern_mega, where a token is no address.
+
+No pool, or no room in it - an 8088, or a 286 without `XMEM.DRV` - and the
+image takes one conventional claim as before, the recompiler giving way for
+it if it must. `c64uitest` runs §11.5's D64 test three times: conventional;
+extended through claims; extended beside a recompiler segment, asserting the
+slots are its last 512 bytes and its flush was asked for. Red with the BAM's
+slot made the other one's: BLOCKS FREE reads 0.
 
 ### 11.4 Sound
 
