@@ -3620,6 +3620,14 @@ class ActionsTab(object):
 
 # --- the Characters & menus tab (11.1, 4.4) ---------------------------------------------
 
+UI_SOUND_LABELS = (
+    ("move", "The cursor moves (a menu's item, or the target)"),
+    ("open", "A sub-menu opens, or the target is to be chosen"),
+    ("close", "Back out of a sub-menu or a target (Esc)"),
+    ("take", "An action is taken"),
+    ("deny", "Refused: it cannot be paid for, or has no one to aim at"))
+
+
 def db(level):
     """A linear level in dB, for the window"""
     import math
@@ -3681,6 +3689,49 @@ class SoundsTab(object):
                    command=lambda: self._apply(one=True)).pack(side="left")
         self.note = ttk.Label(f, text="", wraplength=900)
         self.note.pack(anchor="w")
+        # THE MENU'S SOUNDS (125.5): the engine plays each at its moment
+        mf = ttk.LabelFrame(f, text="Menu sounds (each an effect over the "
+                            "music; blank: silent)", padding=6)
+        mf.pack(anchor="w", fill="x", pady=8)
+        self.uiv = {}
+        for r, (k, label) in enumerate(UI_SOUND_LABELS):
+            ttk.Label(mf, text=label).grid(row=r, column=0, sticky="w")
+            v = self.uiv[k] = tk.StringVar()
+            cb = ttk.Combobox(mf, textvariable=v, state="readonly", width=20)
+            cb.grid(row=r, column=1, sticky="w", padx=4, pady=1)
+            cb.bind("<<ComboboxSelected>>", lambda e, k=k: self._ui_set(k))
+            ttk.Button(mf, text="Add a file...", command=lambda k=k:
+                       self._ui_file(k)).grid(row=r, column=2, padx=2)
+            ttk.Button(mf, text="Listen", command=lambda k=k:
+                       self._ui_listen(k)).grid(row=r, column=3, padx=2)
+            self.uiv[k + "_cb"] = cb
+
+    def _ui_set(self, k):
+        ui = dict(self.app.proj.d.get("ui_sounds", {}))
+        v = self.uiv[k].get()
+        if v in ("", "(none)"):
+            ui.pop(k, None)
+        else:
+            ui[k] = v
+        if ui != self.app.proj.d.get("ui_sounds", {}):
+            self.app.edit("set", ("ui_sounds",), ui)
+
+    def _ui_file(self, k):
+        from tkinter import filedialog
+        p = filedialog.askopenfilename(title="A menu sound", filetypes=[
+            ("Sound", "*.wav *.mp3 *.ogg *.flac *.aif *.aiff"),
+            ("Everything", "*")])
+        if p:
+            sid = self.app.add_sound_file(p)
+            self.uiv[k].set(sid)
+            self._ui_set(k)
+
+    def _ui_listen(self, k):
+        sid = self.app.proj.d.get("ui_sounds", {}).get(k)
+        if sid:
+            self.app.listen(sid)
+        else:
+            self.app.say("No sound chosen for it")
 
     def sid(self):
         s = self.tv.selection()
@@ -3688,6 +3739,9 @@ class SoundsTab(object):
 
     def refresh(self):
         d = self.app.proj.d
+        for k, _ in UI_SOUND_LABELS:
+            self.uiv[k + "_cb"].config(values=["(none)"] + list(d["sounds"]))
+            self.uiv[k].set(d.get("ui_sounds", {}).get(k) or "(none)")
         keep = self.sid()
         self.tv.delete(*self.tv.get_children())
         meas = {r["sound"]: r for r in (self.res or {}).get("sounds", [])}

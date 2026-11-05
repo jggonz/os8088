@@ -317,6 +317,24 @@ def inner(tmp):
     pt._lay("msg_row", "")
     ok(not app.proj.d.get("band_layout"), "C. ...and back to as it was")
 
+    # THE MENU'S SOUNDS: chosen on the Sounds tab, one from a file
+    st = app.sounds_tab
+    app.nb.select(st.f)
+    st.uiv["open"].set("(none)")
+    st._ui_set("open")
+    from tkinter import filedialog
+    beep = os.path.join(tmp, "beep.wav")
+    subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi", "-i",
+                    "sine=f=990:d=0.1", beep], check=True)
+    filedialog.askopenfilename = lambda **k: beep
+    st._ui_file("take")
+    ui = app.proj.d["ui_sounds"]
+    ok("open" not in ui and ui.get("take") == "beep" and "beep" in
+       app.proj.d["sounds"] and st.uiv["take"].get() == "beep"
+       and "the menu's take sound" in app.proj.sound_users("beep"),
+       "C. MENU SOUNDS on the Sounds tab: one taken off, one added from a "
+       "file (%s)" % ui)
+
     # THE END CLIP (125.3.1): full screen, played once, then the title
     lt = app.loops_tab
     app.nb.select(lt.f)
