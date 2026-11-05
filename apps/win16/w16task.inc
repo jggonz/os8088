@@ -633,6 +633,14 @@ W16TSK w16t_end
     push si
     push di
     push es
+    cmp byte [w16_endmsg], 0        ; it ended with something to say (an
+    je .quiet                       ;   import WIN16 lacks, 124.12): said
+    push ds                         ;   now, as a toast, for its context and
+    pop es                          ;   flag go below and WIN16's window is
+    mov si, w16_l1                  ;   another task's (124.28.7)
+    mov cx, 10 * 18                 ; (ten seconds)
+    call OSAPI_TOAST
+.quiet:
     mov al, [w16_cur]
     inc ax
     mov [cs:w16t_dead], al

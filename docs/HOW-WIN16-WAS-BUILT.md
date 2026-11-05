@@ -5003,3 +5003,32 @@ closes with no toast and no box. The engine wrote `_ISERR31.INI` and
 `_DELIS43.INI`; it did not reach its welcome dialog. That is the next wall and
 it is not named: the look budget was spent, and it needs a trace read of the
 engine at that moment.
+
+**The review, and the third wall (`verify-hangman2`).** An Opus reviewer
+merged the branch onto plan (O8, lheap, vbxlib), checked USER.291-293
+against Windows 3.1's own `USER.EXE` (`SETWINDOWSHOOKEX`,
+`UNHOOKWINDOWSHOOKEX`, `CALLNEXTHOOKEX`, in its export table at those
+numbers) and found one real defect: `LoadLibrary`'s scan cuts a name at 142
+characters and the cut name still began `X:\`, so the walk went to the folder
+above the one named; a cut name is not a path now. `SetWindowsHookEx` had been
+called "kept"; it is answered and not kept, and SPEC says so. `DLLUSE.EXE`
+gained the gates: `W16DLL3.DLL` in a `LIBS\` folder answers 2 by its name and
+loads by its full path, and the three hooks bound by name out of `USER`
+round-trip through their pointers.
+
+Then the wall. The ring was read every few seconds through the whole run, so
+the last picture before the close survived it, and it told the story in one
+line: `[258] MISSING`, eight seconds in. The engine is a second task in the
+instance; its first `DDEML` call, `DdeInitialize`, is an import WIN16 does
+not have, and §124.12 ended the engine as it should. But its *Needs DDEML.2*
+went into WIN16's own two lines, which nobody could see behind the
+launcher's window, and its flag went with its context when the task was
+freed. The launcher sat in its wait loop - `GetMessage`, `IsDialogMessage`,
+`GetTickCount`, seven times a second - until its own timeout, then quit in
+the ordinary way, and an ordinary last end closes the instance. That is the
+"closes with no toast and no box": not a fault the toast path missed, but a
+message with nowhere to go. A task that ends with something to say while
+others run now says it as a toast, and the second look showed it on the menu
+bar, *Needs DDEML.2*, for ten seconds. The `DDEML` module itself is the next
+item (SPEC.md 124.25.22 prices it). The ring also settled which hook CTL3D
+sets: one `SetWindowsHookEx`, type 5, `WH_CBT`.

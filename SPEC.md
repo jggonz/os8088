@@ -237701,6 +237701,45 @@ part. The first build of the three rows alone changed nothing in the look:
 `GetProcAddress` takes a name only from that list, so the pointer stayed 0:0
 and the fault was the same one, at the same address.
 
+**The third wall: DDEML, and an end that said nothing** *(WIN16-NEXT
+`verify-hangman2`)*. With both fixes the launcher's *preparing the
+InstallShield Wizard* window stayed at 81 % for about 100 seconds and WIN16's
+window then closed with no toast and no box. A `-DW16_TRACE` ring (128 entries,
+read every few seconds so the last one survived the close) gave the whole
+story. The engine, a second task in the instance (`WinExec`'d by
+`SETUP.EXE`), called a missing import a few seconds after its start - one of
+its ten `DDEML` imports, all bound to missing slots when its segment 22 was
+loaded, and the first of them, `DDEML.2` (`DdeInitialize`; the engine's
+segment 22 imports 2, 3, 7, 8, 11, 16, 19, 20, 21 and 22, in that order).
+§124.12 ended the engine there, as it should, but its *Needs DDEML.2* went
+into WIN16's two lines, which are not on the glass while the launcher's
+window is WIN16's window, and its flag went with its context
+(§124.28.7). The launcher, which waits for the engine in a
+`GetMessage`/`IsDialogMessage`/`GetTickCount` loop with no call that could
+see it gone, timed out about 100 seconds later, destroyed its dialog, posted
+its quit and ended with `int 21h` 4Ch: the last task's ordinary end, so the
+instance closed in silence. The ring also confirmed `CTL3D`'s hook: one
+`SetWindowsHookEx`, `idHook` 5 (`WH_CBT`), for the engine's task.
+
+The silence is fixed (§124.28.7: a task that ends with something to say
+while others run says it as a toast; part 10, no resident byte, seen as
+*Needs DDEML.2* on the menu bar). The wall is not: WIN16 provides no `DDEML`
+module (`w16reach`'s R4). The cure is a new item, not built here: a `DDEML`
+module that answers as Windows 3.1's does on a machine with no DDE server,
+OLE's shape (§124.24.7) - `DdeInitialize` writes an instance id and answers
+`DMLERR_NO_ERROR`, `DdeUninitialize` TRUE, `DdeConnect` and
+`DdeClientTransaction` NULL with `DdeGetLastError` answering
+`DMLERR_NO_CONV_ESTABLISHED` (400Ah), the handle calls 0. Its price on this
+tree: about 8 resident bytes (the name in `w16_modnames`, and a module id
+after `MMSYSTEM`, which only kern_mega's arm has), ten export rows in the
+loader part, a 20-byte `DdeInitialize` and a `DdeGetLastError` in a part, and
+the host side (`DDEML` named in `tools/os88ne.py`'s modules and a
+`ddeml.dll16.spec` vendored beside the others, which `tools/win16spec/` does
+not have, so the census prints the ordinals without names). Whether an
+installer's `DdeConnect(..., "PROGMAN", ...)` should instead reach a Program
+Manager server that makes os8088 desktop items is the owner's question; "no
+server" is what Windows answers without Program Manager running.
+
 **What CTL3D's 3-D look would need.** `CTL3D` draws its controls by
 subclassing them, and it finds them through a **`WH_CBT`** hook
 (`SetWindowsHookEx(WH_CBT, ...)` per task, `Ctl3dRegister` /
@@ -239138,6 +239177,14 @@ the sixteen are spent once.
 When one task ends (§124.18.2's ways), the rest go on (`w16t_end`, from
 `w16_after` while more than one task runs):
 
+- **if it ended with something to say** (`w16_endmsg`: an import WIN16 does
+  not provide, §124.12), its first line is said as a toast for ten seconds
+  (*Needs DDEML.2*) before anything else goes. WIN16's two lines are not on
+  the glass while another task's window is WIN16's window, and the flag is
+  the dead task's context, which the exchange below drops; until
+  WIN16-NEXT's `verify-hangman2` the end was silent, and when the last task
+  then ended in the ordinary way the instance closed with nothing said
+  (§124.25.22, Sir Hangman's engine);
 - its windows are freed without messages, since the program is gone; a
   second os8088 window of one of them closes;
 - its classes and timers go;
