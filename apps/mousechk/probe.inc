@@ -1071,7 +1071,7 @@ p2x_hexdi:
 
 ; --- strings ------------------------------------------------------------------
 p2x_s_off:   db 'Probe PS/2 is off: ', 0
-p2x_s_offer: db 'Probe PS/2 (P) re-runs this live and traces it.', 0
+p2x_s_offer: db 'Probe PS/2 (P) re-runs this handshake live, traced.', 0
 p2x_s_thead: db 'Trace: step, 64h before>after, replies, ticks', 0
 p2x_s_silent: db ', then deaf', 0
 p2x_s_more:  db ' +', 0
