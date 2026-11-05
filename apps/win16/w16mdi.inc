@@ -316,17 +316,32 @@ w16i_s_norst: db 'No restart is needed', 0       ; (short: a toast's box is)
 ; (KERNEL.70), GlobalAddAtom (USER.268), RegisterClipboardFormat (USER.145)
 ; - the same, given a place when it has none: 0 when the table is full. A
 ; MAKEINTATOM (no segment) is its own atom for all four
+;
+; DdeCreateStringHandle (DDEML.21) - args: +0 iCodePage, +2 psz, +6 idInst:
+; an HSZ is one of these atoms, as DDEML's are global atoms (SPEC.md
+; 124.25.26), and 1 - a handle with no name - when the table is full, so a
+; program is never refused one
+W16TSK w16dd_crhsz
+    mov ax, 0x0201                  ; AH = 2: the name two bytes up
+    call w16i_atom
+    or ax, ax
+    jnz .r
+    inc ax
+.r:
+    ret
 W16TSK w16i_findatom
     xor ax, ax
     jmp short w16i_atom
 W16TSK w16i_addatom
-    mov al, 1
+    mov ax, 1
 w16i_atom:
     push di
     push ax                         ; AL = 1: add a name not there
     ICALL w16_args
-    les di, [es:bx]
     pop ax
+    add bl, ah                      ; AH = where the name is
+    adc bh, 0
+    les di, [es:bx]
     mov dx, es
     or dx, dx
     jz .int
@@ -416,13 +431,26 @@ w16i_atomat:
 ; GetAtomName (KERNEL.72), GlobalGetAtomName (USER.271),
 ; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszBuffer,
 ; +6 the atom: its name, cut to the buffer; the answer is its length, 0 for
-; any other atom
+; any other atom. A NULL buffer is written nothing and answers the length
+;
+; DdeQueryString (DDEML.23) - args: +0 iCodePage, +2 cchMax, +6 psz, +10
+; hsz, +14 idInst: the same three, two bytes up and then two more (the
+; count is a DWORD; its low word is taken), and DX = 0 the answer's high word
+W16TSK w16dd_qstr
+    mov ax, 2
+    jmp short w16i_atomn
 W16TSK w16i_atomname
+    xor ax, ax
+w16i_atomn:
     push si
     push di
     push ds
+    push ax
     ICALL w16_args
+    pop si                          ; SI = 0, or DdeQueryString's 2
+    add bx, si
     mov cx, [es:bx]
+    add bx, si
     mov si, [es:bx + 6]
     les di, [es:bx + 2]
     xor ax, ax                      ; AX = the length
@@ -430,7 +458,6 @@ W16TSK w16i_atomname
     jb .out
     cmp si, W16_NATOM
     jae .out
-    jcxz .out
     push cx
     mov cl, 5
     shl si, cl
@@ -439,6 +466,15 @@ W16TSK w16i_atomname
     W16SEG ds, [w16_tseg]
     cmp byte [si], 0
     je .out
+    mov dx, es
+    or dx, dx
+    jnz .dst
+    push ds                         ; a NULL buffer: the name copied onto
+    pop es                          ;   itself, room for any of them, so
+    mov di, si                      ;   only the length comes of it
+    mov cl, 32
+.dst:
+    jcxz .out
     dec cx                          ; room for the NUL
 .cp:
     jcxz .end
@@ -458,6 +494,19 @@ W16TSK w16i_atomname
     pop ds
     pop di
     pop si
+    ret
+
+; DdeCmpStringHandles (DDEML.36) - args: +0 hsz2, +4 hsz1: -1, 0 or 1 as
+; hsz1's value is below, the same as or above hsz2's, which is how DDEML
+; compares them: one atom is one name, case aside (SPEC.md 124.25.26)
+W16TSK w16dd_cmp
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    sub ax, [es:bx]
+    jz .r
+    sbb ax, ax                      ; below: -1, above: 0 ...
+    or al, 1                        ;   ... then 1
+.r:
     ret
 
 ; THE WINDOW PROPERTIES (SPEC.md 124.25.13): a table of W16_NPROP records, a

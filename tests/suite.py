@@ -17197,6 +17197,20 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16dde", "soak", py("tests/win16dde.py"), 60.0,
+        "SPEC.md 124.25.26, WIN16-NEXT `ddeml`: DDEUSE.EXE (`make "
+        "win16fixtures`, tests/win16/ddeuse.c) runs an installer's DDEML "
+        "calls against a machine with no DDE server: DdeInitialize writes a "
+        "non-zero instance id and answers 0, DdeCreateStringHandle answers "
+        "an atom (one HSZ for one name, case aside) that DdeQueryString "
+        "gives back and DdeCmpStringHandles compares, DdeConnect and DdeConnectList and "
+        "DdeClientTransaction answer NULL, DdeGetLastError answers "
+        "DMLERR_NO_CONV_ESTABLISHED, DdeNameService answers non-zero, the "
+        "keep and free calls and DdeUninitialize answer TRUE; its "
+        "MessageBox must be DDEUSE OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
         "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
         "tests/win16/longname.c) asks for a dialog named in 21 characters "

@@ -27,6 +27,11 @@ W16M_LZEXPAND equ 10            ; an installer's two (124.24.8, 124.24.9)
 W16M_VER      equ 11
 W16M_SYSTEM   equ 12            ; SYSTEM.DRV's InquireSystem (124.27.1)
 W16M_MMSYSTEM equ 13            ; the kern_mega arm's alone (124.32)
+%ifdef PKG_MEGA
+W16M_DDEML    equ 14            ; DDEML (124.25.26): after MMSYSTEM, so 13 on
+%else                           ; the real-mode arm, which has no MMSYSTEM
+W16M_DDEML    equ 13
+%endif
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -45,6 +50,7 @@ w16_modnames:                   ; pascal strings, then 0
 %ifdef PKG_MEGA
     db 8, 'MMSYSTEM'
 %endif
+    db 5, 'DDEML'
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -385,6 +391,34 @@ W16EXPORT W16M_OLESVR,     9,       4,  w16o_ok             ; OleRevertServerDoc
 W16EXPORT W16M_OLESVR,     10,      4,  w16o_ok             ; OleSavedServerDoc(long)
 W16EXPORT W16M_OLESVR,     11,      4,  w16o_ok             ; OleRevokeObject(ptr)
 W16EXPORT W16M_OLESVR,     12,      0,  w16o_ok             ; OleQueryServerVersion()
+; DDEML (SPEC.md 124.25.26): Windows 3.1 with no DDE server running
+W16EXPORT W16M_DDEML,      2,       16, w16dd_init         ; DdeInitialize(ptr segptr long long)
+W16EXPORT W16M_DDEML,      3,       4,  w16_ans1           ; DdeUninitialize(long)
+W16EXPORT W16M_DDEML,      4,       20, w16o_ok            ; DdeConnectList(long long long long ptr)
+W16EXPORT W16M_DDEML,      5,       8,  w16o_ok            ; DdeQueryNextServer(long long)
+W16EXPORT W16M_DDEML,      6,       4,  w16o_ok            ; DdeDisconnectList(long)
+W16EXPORT W16M_DDEML,      7,       16, w16o_ok            ; DdeConnect(long long long ptr)
+W16EXPORT W16M_DDEML,      8,       4,  w16o_ok            ; DdeDisconnect(long)
+W16EXPORT W16M_DDEML,      9,       12, w16o_ok            ; DdeQueryConvInfo(long long ptr)
+W16EXPORT W16M_DDEML,      10,      12, w16o_ok            ; DdeSetUserHandle(long long long)
+W16EXPORT W16M_DDEML,      11,      28, w16o_ok            ; DdeClientTransaction(ptr long long long word word long ptr)
+W16EXPORT W16M_DDEML,      12,      12, w16o_ok            ; DdeAbandonTransaction(long long long)
+W16EXPORT W16M_DDEML,      13,      12, w16o_ok            ; DdePostAdvise(long long long)
+W16EXPORT W16M_DDEML,      14,      24, w16o_ok            ; DdeCreateDataHandle(long ptr long long long word word)
+W16EXPORT W16M_DDEML,      15,      16, w16o_ok            ; DdeAddData(long ptr long long)
+W16EXPORT W16M_DDEML,      16,      16, w16o_ok            ; DdeGetData(long ptr long long)
+W16EXPORT W16M_DDEML,      17,      8,  w16o_ok            ; DdeAccessData(long ptr)
+W16EXPORT W16M_DDEML,      18,      4,  w16o_ok            ; DdeUnaccessData(long)
+W16EXPORT W16M_DDEML,      19,      4,  w16o_ok            ; DdeFreeDataHandle(long)
+W16EXPORT W16M_DDEML,      20,      4,  w16dd_err          ; DdeGetLastError(long)
+W16EXPORT W16M_DDEML,      21,      10, w16dd_crhsz        ; DdeCreateStringHandle(long str word)
+W16EXPORT W16M_DDEML,      22,      8,  w16_ans1           ; DdeFreeStringHandle(long long)
+W16EXPORT W16M_DDEML,      23,      18, w16dd_qstr         ; DdeQueryString(long long ptr long word)
+W16EXPORT W16M_DDEML,      24,      8,  w16_ans1           ; DdeKeepStringHandle(long long)
+W16EXPORT W16M_DDEML,      26,      10, w16o_ok            ; DdeEnableCallback(long long word)
+W16EXPORT W16M_DDEML,      27,      14, w16_ans1           ; DdeNameService(long long long word)
+W16EXPORT W16M_DDEML,      36,      8,  w16dd_cmp          ; DdeCmpStringHandles(long long)
+W16EXPORT W16M_DDEML,      37,      4,  w16o_ok            ; DdeReconnect(long)
 ; LZEXPAND (SPEC.md 124.24.8) and VER (124.24.9), in part 9 (w16lzver.inc)
 W16EXPORT W16M_LZEXPAND,   1,       4,  w16z_lzcopy         ; LZCopy(word word)
 W16EXPORT W16M_LZEXPAND,   2,       10, w16z_lzopen         ; LZOpenFile(str ptr word)
