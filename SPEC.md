@@ -237667,7 +237667,12 @@ Both are optional, and a bundle with neither plays as version 5's did.
 
 - **The TITLE loop** plays before the openings, over the whole screen
   (FULL), with its own sound or none: the music has not come in. It goes
-  round until Enter or Space. Its records: record 0 draws frame 0 from a
+  round until Enter or Space - or, the battle saying so (`"any_key"`, the
+  header's flags byte 348 bit 0, `HF_ANYKEY`), until ANY key, Esc aside
+  (which leaves); an end loop is played again the same way. The key
+  dispatch runs every pass with AX = 0 for no key, so "any" is a key
+  whose AX is not 0 (`vbtloops` D: a letter leaves the title and plays
+  the end loop again; in A a letter leaves nothing). Its records: record 0 draws frame 0 from a
   black screen, records 1 to *n* - 1 frame *i* - 1 to *i*, record *n* the
   seam from frame *n* - 1 back onto frame 0, and the lap is records 1 to
   *n*. Each record carries its frame's sound, so the lap's sound is frames

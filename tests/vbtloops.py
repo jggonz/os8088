@@ -17,7 +17,10 @@ Two bundles of the demo battle, its enemy at 1 HP so that one Attack wins:
      end loop with no fade at all;
   C. A's ways, with a title and an end loop far bigger than a ring (the
      Limit, 204 KB): each is READ ROUND (format 7, `[vb_lstream]`), and
-     still laps with the glass its own frames.
+     still laps with the glass its own frames;
+  D. A's, the battle saying ANY KEY continues (header 348): a letter leaves
+     the title and plays the end loop again - where in A a letter leaves
+     nothing (Enter or Space).
 
 Esc leaves at the end of each. The waits are on the guest's state, never
 on a clock: a fade or a lap that never comes fails by name.
@@ -39,7 +42,7 @@ from cycweb import pkg_syms     # noqa: E402
 
 TEMPLATE = "build/martypc/run/media/hdds/default_xtide.vhd"
 MACHINE = "os8088_xt_hdd_sb"
-KEYS = {"return": "Enter", "esc": "Escape"}
+KEYS = {"return": "Enter", "esc": "Escape", "a": "KeyA"}
 VM_CLIP, VM_FADE = 1, 4
 GS_MENU, GS_END = 1, 3
 fails = []
@@ -69,6 +72,8 @@ def project(tmp, mode):
     else:
         p.set_title("title", (10, 34))
         p.set_ending("victory", "fade", "victory", (0, 20))
+    if mode == "D":                 # D: A's, ANY key continuing (header 348)
+        p.set(("any_key",), True)
     p.set(("fade_steps",), 12)
     p.save()
     data = B.build_project(p)
@@ -141,6 +146,8 @@ def run(tmp, mode, syms):
         until(lambda: rb("vb_ready") == 1, "the play to start")
         until(lambda: rb("vb_tplay") == 1 and rb("vb_cc") == b.title,
               "%s: the title to be up" % tag)
+        if os.environ.get("VBTLOOPS_KEY"):
+            print("   key %04X fon %d fwant %d" % (rw("vb_key"), rb("vb_fon"), rb("vb_fwant")), flush=True)
         # THE TITLE GOES ROUND: its records counter comes back to the lap's
         # start at least twice, and the glass shows its own frames
         n = rw("vb_lnrec")
@@ -166,7 +173,15 @@ def run(tmp, mode, syms):
         ok(matched * 3 >= looks and len(seen) >= 4,
            "%s: ...and the glass shows its own frames (%d of %d looks, %d "
            "frames seen)" % (tag, matched, looks, len(seen)))
-        key("return")
+        if mode == "A":                 # (a letter is not Enter: it stays)
+            key("a")
+            os88marty.until(m, lambda mm: True, "a moment", poll=0.0,
+                            limit=10.0, guest=0.5)
+            ok(rb("vb_tplay") == 1 and rb("vb_fon") == 0,
+               "A: a letter does not leave the title (Enter or Space)")
+        key("a" if mode == "D" else "return")
+        if mode == "D":
+            ok(True, "D: a LETTER left the title (any key, header 348)")
         if not leave:
             until(lambda: rb("vb_fon") == 1, "%s: the fade to begin" % tag)
             lit = []
@@ -221,12 +236,13 @@ def run(tmp, mode, syms):
         if mode == "C":
             ok(rb("vb_lstream") == 1, "C: ...read round as well")
         if not leave:
-            key("return")               # play again
+            key("a" if mode == "D" else "return")   # play again
             until(lambda: rb("vb_fon") == 1, "A: the fade before again")
             until(lambda: rb("vb_tplay") == 1 and rb("vb_state") != GS_END,
                   "A: the play to start over at the title", guest=60.0)
             ok(rb("vb_cc") == b.title and rb("vb_over") == 0,
-               "%s: Enter on the end loop plays again: the title round" % tag)
+               "%s: %s on the end loop plays again: the title round"
+               % (tag, "a letter" if mode == "D" else "Enter"))
         key("esc")
         until(lambda: rb("vb_ready") == 0, "%s: Esc to leave" % tag)
         ok(True, "%s: Esc leaves" % tag)
@@ -237,7 +253,7 @@ def run(tmp, mode, syms):
 def main():
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
-    for mode in ("A", "B", "C"):
+    for mode in (os.environ.get("VBTLOOPS_ONLY") or "ABCD"):
         with tempfile.TemporaryDirectory() as tmp:
             run(tmp, mode, syms)
     if fails:

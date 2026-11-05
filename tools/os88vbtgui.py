@@ -3118,6 +3118,14 @@ class LoopsTab(object):
         sp.bind("<Return>", lambda e: self._steps())
         ttk.Button(ff, text="Show it", command=self._fade
                    ).pack(side="left", padx=4)
+        self.anyk = tk.IntVar()
+        ttk.Checkbutton(right, text="Any key continues - leaves the title, "
+                        "plays an end loop again (not Enter alone; Esc "
+                        "always leaves)", variable=self.anyk,
+                        command=lambda: self.app.edit(
+                            "set", ("any_key",),
+                            True if self.anyk.get() else None)
+                        ).pack(anchor="w")
         self.info = ttk.Label(right, text="", wraplength=640)
         self.info.pack(anchor="w")
         self.px = None
@@ -3126,6 +3134,7 @@ class LoopsTab(object):
         for p in self.panels:
             p.refresh()
         self.steps.set(self.app.proj.d.get("fade_steps", 16))
+        self.anyk.set(1 if self.app.proj.d.get("any_key") else 0)
 
     def _steps(self):
         try:
@@ -3963,6 +3972,12 @@ class PartyTab(object):
         bb.pack(fill="x")
         ttk.Button(bb, text="Add", command=self._add).pack(side="left")
         ttk.Button(bb, text="Remove", command=self._remove).pack(side="left")
+        bm = ttk.Frame(left)
+        bm.pack(fill="x")
+        ttk.Button(bm, text="Up", command=lambda: self._move(-1)
+                   ).pack(side="left")
+        ttk.Button(bm, text="Down", command=lambda: self._move(1)
+                   ).pack(side="left")
         self.side = ttk.Frame(left)
         self.side.pack(fill="x", pady=8)
         self.body = ttk.Frame(f)
@@ -3991,6 +4006,20 @@ class PartyTab(object):
     def _remove(self):
         if self.ci() is not None:
             self.app.edit("remove_character", self.ci())
+
+    def _move(self, by):
+        """The selected character a place up or down the party - the turns'
+        order and the band's lines - and still selected after"""
+        i = self.ci()
+        if i is None:
+            return
+        j = max(0, min(len(self.app.proj.d["characters"]) - 1, i + by))
+        if j == i:
+            return
+        self.app.edit("move_character", i, by)
+        self.lb.selection_clear(0, "end")
+        self.lb.selection_set(j)
+        self.show()
 
     def show(self):
         tk, ttk = self.app.tk, self.app.ttk

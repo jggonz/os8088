@@ -118,6 +118,16 @@ vb_game:
 .go:                                ; ZF=1 AL is Enter or Space, and no
     cmp byte [vb_fon], 0            ; fade is under way
     jne .gx
+    test byte [vb_meta+VH_HFLAGS], HF_ANYKEY
+    jz .g0                          ; (ANY key, the battle says: Esc never
+    or ax, ax                       ; gets here - it leaves. AX = 0 is NO
+    jz .gn                          ; key: the dispatch runs every pass)
+    cmp al, al
+    ret
+.gn:
+    or ax, 1                        ; (ZF=0)
+    ret
+.g0:
     cmp al, 13
     je .gx
     cmp al, ' '

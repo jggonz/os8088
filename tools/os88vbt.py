@@ -91,6 +91,8 @@ ENDING_HOW = {"hold": 0, "fade": 1, "join": 2, "again": 3}
 ENDING_THEN = {"hold": 0, "fade": 3, "join": 4}
 
 NO_SFX = 0xFF
+HF_ANYKEY = 1       # header 348, the battle's flags: ANY key (Esc aside)
+                    # leaves the title and plays an end loop again
 
 
 # the menu's sounds, header bytes 24..28 (125.2.1)
@@ -428,6 +430,7 @@ class Battle:
                                 # bytes; None: no cap
         self.capped = {}        # ...and what it did: clip -> frames capped
         self.cap_ring = None    # ...and the ring it took the engine to have
+        self.any_key = False    # any key leaves the title (header 348)
         self.rend = Rend("cga4", rows)  # the adapter it is for
 
 
@@ -754,6 +757,7 @@ def build(b):
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     h[337] = REND.code                  # the adapter (cga4, vga4, herc)
     h[346:348] = bytes(thens)           # what follows a once-clip (125.3.1)
+    h[348] = HF_ANYKEY if b.any_key else 0  # the battle's flags
     hold = hold_order(clip_rows, offs, regions, mus_at, len(mus))
     struct.pack_into("<H", h, 398, len(hold))
     for i, (a4, n4) in enumerate(hold):
@@ -864,6 +868,7 @@ class Bundle:
                         "defeat": (data[334], data[335])}
         self.ends_then = {"victory": data[346], "defeat": data[347]}
         self.fade_steps = data[336]
+        self.any_key = bool(data[348] & HF_ANYKEY)
         global REND
         kind = {0: "cga4", 1: "vga4", 2: "herc"}[data[337]]
         REND = Rend(kind, self.rows, [tuple(data[352 + 3 * i:355 + 3 * i])
@@ -1168,6 +1173,7 @@ def battle_of(proj, progress=None, kind="cga4"):
     b.ui = dict(d["ui_sounds"])
     # --- the title loop and the endings (125.3.1)
     b.fade_steps = d.get("fade_steps", 16)
+    b.any_key = bool(d.get("any_key"))
 
     def loop_of(lp, tag, full=False):
         c = d["clips"][lp["clip"]]

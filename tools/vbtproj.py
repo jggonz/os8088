@@ -47,6 +47,8 @@ A project file (version 1):
                  (after one that plays once: to the title, the play
                  again; absent: hold)}},
      "fade_steps": 1..16, a fade's steps, one a frame,
+     "any_key":  true: any key (Esc aside) leaves the title and plays an
+                 end loop again, not Enter or Space alone (header 348),
      "characters": [{"name", "hp", "mp", "atk", "mag", "def", "mdef",
                      "evade", "menu": {"top": [ITEM], "side": [action]}}],
                    ITEM = {"action": id} | {"label", "sub": [action ids]},
@@ -548,6 +550,18 @@ class Project:
             c.update(stats)
             d["characters"].append(c)
             return len(d["characters"]) - 1
+        return self._edit(f)
+
+    def move_character(self, i, by):
+        """Character I moved BY places in the party's order (the turns',
+        the band's lines'). Everything else names a character by its NAME
+        (an action's own clips, an enemy move, a menu's look), so nothing
+        else changes"""
+        def f(d):
+            c = d["characters"]
+            j = max(0, min(len(c) - 1, i + by))
+            c.insert(j, c.pop(i))
+            return j
         return self._edit(f)
 
     def remove_character(self, i):

@@ -107,6 +107,9 @@ EH_AGAIN    equ 3
 EH_AGAINJ   equ 4               ; (after a once-clip: JOIN the title, the
                                 ; play again with no fade - 125.3.1)
 VH_ETHEN    equ 346             ; victory, defeat: what follows an end clip
+VH_HFLAGS   equ 348             ; the battle's flags (0 in older bundles):
+HF_ANYKEY   equ 1               ; ANY key (Esc aside) leaves the title and
+                                ; plays an end loop again, not Enter alone
                                 ; that plays ONCE (EH_HOLD/AGAIN/AGAINJ)
 RH_LEN      equ 0               ; a record: its length, all of it
 RH_ALEN     equ 2               ; ...its frame's sound's, at its end
