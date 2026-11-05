@@ -1,9 +1,9 @@
 ARCADE for os8088
 =================
 
-Arcade boards whose ROMs were translated to 8086 code before this disk
-was made - and one whose CPU is an 8088 already, so its program runs
-as it is. Choose the game from the Game menu:
+Seven arcade games, played on the boards' own programs: five 8080
+boards translated to 8086 code, Pac-Man's Z80 board the same way, and
+Q*bert, whose CPU is an 8088 already, so its program runs as it is.
 
     Space Invaders          Midway's 8080 board (Taito, 1978).
     Space Invaders Part II  Taito's colour board (1979).
@@ -14,36 +14,47 @@ as it is. Choose the game from the Game menu:
     Sea Wolf                Midway (1976): sink the ships through the
                             periscope.
     Q*bert                  Gottlieb (1982), its own 8088 program. VGA
-                            only, and silent for now.
+                            only.
     Pac-Man                 Namco's Z80 board (1980). VGA only, and a
                             286 or faster for the board's full speed.
 
-YOUR ROMS. ARCADE carries no game: each one needs its set's .ROM file
-(INVADERS.ROM, INVADPT2.ROM, LRESCUE.ROM, GUNFIGHT.ROM, SEAWOLF.ROM,
-QBERT.ROM, PACMAN.ROM). You make one from the MAME set you already have:
+YOUR ROMS
+---------
+ARCADE carries no game. Its code has the boards' ROM bytes left out, and
+each game needs its set's ROMs, from a board you own or a licensed
+collection, as MAME names them:
 
-    Game > Add ROM sets...   then choose the set's .ZIP
+    invaders.zip  invadpt2.zip  lrescue.zip  gunfight.zip
+    seawolf.zip   qbert.zip     pacman.zip
 
-(invaders.zip, invadpt2.zip, lrescue.zip, gunfight.zip, seawolf.zip,
-qbert.zip, pacman.zip). ARCADE reads the zip, checks every chip it needs
-against the one it was made for, and writes <SET>.ROM in the zip's own
-folder. It remembers that folder, so the game is found from there on,
-wherever ARCADE itself is. The .zip is not needed again. A zip whose chips
-are not the set's writes nothing and says so. A .ROM is the chips alone:
-Space Invaders' is 8KB, Q*bert's 64KB, so a disk of ROMs holds several.
+Add them with Game > Add ROM sets... (or ADD ROMS, or Insert), and choose
+the set's .ZIP in the file chooser. ARCADE checks every chip it needs
+against the one it was made for, and writes one file, <SET>.ROM (for
+instance QBERT.ROM), in the zip's own folder. The .zip is not needed
+again. It also takes:
 
-A game whose file cannot be found says so when you pick it ("QBERT.ROM:
-not found"); one whose file is not the set it names says "wrong set".
+  - a MERGED set, whose clones' chips sit in folders inside the zip;
+  - a SPLIT Pac-Man: pacman.zip holds only the chips that differ, so put
+    MAME's puckman.zip in the same folder and choose pacman.zip;
+  - LOOSE chips: a folder of the set's chips as files - choose any one.
 
-The five 8080 games run at full speed on an IBM PC/XT on any adapter;
-on VGA the two Taito games are in colour. A game is read from this disk
-when you pick it, and the one before is put away.
+A zip whose chips are not the set's writes nothing and says so. The menu
+bar's file bar shows the import going. It is done once: on an 8088 it
+takes some seconds a set.
 
+A .ROM is the chips alone: Space Invaders' is 8KB, Q*bert's 68KB (with
+its sound board's), Pac-Man's 25KB. ARCADE remembers every folder it
+wrote one in, so a disk of ROMs works in any drive. If a game's file is
+not found when you play it, ARCADE says so - "QBERT.ROM: not found", or
+"QBERT.ROM: disk in B:" when it was made on a floppy that is not in.
+
+THE CABINET
+-----------
 Open ARCADE.O88: a cabinet with every game in a list, each marked READY,
 ROM NEEDED or NEEDS VGA. Up and Down (or a click, or a game's first
 letter) choose one; its card says how it is played. The first time you
 leave a game, ARCADE keeps a picture of its screen, and shows it there
-from then on. ADD ROMS (or Insert) is Game > Add ROM sets...
+from then on (as <SET>.PIC beside the .ROM).
 
 Enter, Space, PLAY or a click on the chosen game plays it full screen:
 
@@ -53,20 +64,21 @@ Enter, Space, PLAY or a click on the chosen game plays it full screen:
     Space         fire (Lunar Rescue: thrust)
     P             pause; any key plays on
     F1            the game's card over its picture
-    Esc           back to the window; the game waits where it was
+    Esc           back to the cabinet; the game waits where it was
 
 SETTINGS (or F2) shows the chosen game's switches in words - Space
-Invaders' bases and bonus, Pac-Man's lives, bonus, difficulty - kept for
-next time. A game's best score is kept too, and comes back when it is
-next switched on.
+Invaders' bases and bonus, Pac-Man's lives, bonus, difficulty and the
+ghosts' names - kept for next time. A game's best score is kept too
+(Space Invaders' and Pac-Man's), and comes back when it is next switched
+on. Game > Reset powers the board off and on again.
 
-Q*BERT. The joystick is turned on the cabinet, so the keys are the
-four diagonals: the keypad's corners as they look on the screen - 9 up
-and right, 3 down and right, 1 down and left, 7 up and left - or the
-arrows as MAME has them: Up is up-right, Right down-right, Down
-down-left, Left up-left. On a 286 every frame is drawn. On an 8088 the
-game keeps its full speed and the picture moves in steps: it is drawn
-only as often as the machine can manage.
+Q*BERT. The joystick is turned on the cabinet, so the keys are the four
+diagonals: the keypad's corners as they look on the screen - 9 up and
+right, 3 down and right, 1 down and left, 7 up and left - or the arrows
+as MAME has them: Up is up-right, Right down-right, Down down-left, Left
+up-left. On a 286 every frame is drawn. On an 8088 the game keeps its
+full speed and the picture moves in steps: it is drawn only as often as
+the machine can manage.
 
 GUN FIGHT. The left gunman: W A S D to walk, R and F to raise and lower
 his gun, G to fire. The right gunman: the arrows, Page Up and Page Down,
@@ -76,29 +88,28 @@ SEA WOLF. Left and Right turn the periscope, Space fires. Under the
 picture (VGA and Hercules) are the cabinet's lamps: the four torpedoes,
 then READY, then RELOAD.
 
-Game > Reset powers the board off and on again.
-
-SOUND. With a Sound Blaster, every sound plays at once, mixed: Space
-Invaders' sounds are synthesised for this disk (no recordings), and
-Pac-Man's three voices are its own sound chip, played sample by sample.
-With an AdLib alone, the voices play on its FM chip. Lunar Rescue's
-end-of-level tunes are not played: the board makes them by toggling a
-single bit in time, which this does not follow. Otherwise the PC
-speaker plays one sound at a time. If the Control Panel sends tones to
+SOUND
+-----
+With a Sound Blaster, every sound plays at once, mixed: Space Invaders'
+sounds are synthesised for this disk (no recordings), Pac-Man's three
+voices are its own sound chip, played sample by sample, and Q*bert's are
+its own sound board - its 6502 and its program, run as the game plays
+(a 286 or faster: on an 8088 Q*bert is silent; its speech is not
+spoken). With an AdLib alone, the voices play on its FM chip. Lunar
+Rescue's end-of-level tunes are not played: the board makes them by
+toggling a single bit in time, which this does not follow. Otherwise the
+PC speaker plays one sound at a time. If the Control Panel sends tones to
 the speaker, so does ARCADE.
 
 VGA shows the cabinet's colour overlay (red at the top, green at the
 bottom); Hercules and CGA show it black and white, as the board drew it.
+Pac-Man's tall screen stands upright in the middle of the monitor, twice
+as wide and one and a half times as tall as the board's. Q*bert's fills
+the monitor's height: twice as wide, 15/8 as tall.
 
-Pac-Man's tall screen stands upright in the middle of the monitor,
-twice as wide and one and a half times as tall as the board's.
-Q*bert's fills the monitor's height: twice as wide, 15/8 as tall.
-
-THE ROMS. Space Invaders, Space Invaders Part II and Lunar Rescue are
-copyright Taito Corporation; Gun Fight and Sea Wolf, Midway; Q*bert,
-Gottlieb (now Sony Pictures Entertainment). Their ROMs were fetched from the Internet
-Archive's arcade collection when this disk was built and checked against
-MAME's hashes. Pac-Man is copyright Bandai
-Namco; its ROM comes only from the builder's own copy, checked the same
-way, and the Pac-Man entry is absent when the disk was built without
-it. Neither ROM is part of the os8088 source tree.
+THE GAMES' OWNERS
+-----------------
+Space Invaders, Space Invaders Part II and Lunar Rescue are copyright
+Taito Corporation; Gun Fight and Sea Wolf, Midway; Q*bert, Gottlieb (now
+Sony Pictures Entertainment); Pac-Man, Bandai Namco. No ROM of theirs is
+on this disk or in the os8088 source tree.

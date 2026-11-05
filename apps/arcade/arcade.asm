@@ -2092,6 +2092,8 @@ ar_shift:
 %include "arcimp.inc"
 %include "arcface.inc"
 %include "arcopt.inc"
+%include "arc6502.inc"
+%include "arcqbs.inc"
 %include "arcart.inc"
 %include "arcsets.inc"                 ; (generated: getarcrom.py --asm-sets)
 %include "os88inflate.inc"
@@ -2134,7 +2136,8 @@ ar_bd_qb:                           ; Gottlieb's Q*bert, its 8088 native
     dw 0, qb_reset, qb_setup, qb_irq, qb_frame
     dw 19427                        ; the board's 61.42 Hz NMI (MAME gottlieb:
     db 1, QB_LATE                   ;   5 MHz pixels, 318 x 256), one a frame
-    dw ar_nop, ar_nop, 0, 0, 0      ; no sound yet (ARCADE-SPEC 10.6)
+    dw ar_nop, qbs_tick, qbs_mix, QBS_HZ, qbs_prep  ; its sound board, live on a
+                                    ;   286 into the stream (ARCADE-SPEC 13)
     dw 0, ar_nop, qb_on, qb_off, 0
     dw ar_f_qb, qb_build
 %ifdef ARC_PACMAN
@@ -2354,6 +2357,41 @@ AR_VAR af_dsk, 1
 AR_VAR af_dsdir, 1
 AR_VAR af_dsdirty, 1
 AR_VAR af_dsvals, 8
+AR_VAR m6_a, 1                      ; the 6502 (arc6502.inc): its registers,
+AR_VAR m6_x, 1
+AR_VAR m6_y, 1
+AR_VAR m6_s, 1
+AR_VAR m6_p, 1
+AR_VAR m6_irq, 1                    ;   its IRQ line, PC, memory, the debt of
+AR_VAR m6_pc, 2                     ;   its last run, opcodes it does not know,
+AR_VAR m6_seg, 2                    ;   scratch, and its cycles
+AR_VAR m6_debt, 2
+AR_VAR m6_bad, 2
+AR_VAR m6_tgt, 2
+AR_VAR m6_cyc, 4
+AR_VAR m6_c0, 4
+AR_VAR qbs_on, 2                    ; Q*bert's sound board (arcqbs.inc): on,
+AR_VAR qbs_seg, 2                   ;   its 6503's memory, its power-on's
+AR_VAR qbs_left, 4                  ;   cycles, the cycle fraction, the DAC
+AR_VAR qbs_frac, 2
+AR_VAR qbs_dac, 1
+AR_VAR qr_state, 0                  ;   ...and its RIOT, one block (qr_reset)
+AR_VAR qr_pa, 1
+AR_VAR qr_pb, 1
+AR_VAR qr_ddra, 1
+AR_VAR qr_ora, 1
+AR_VAR qr_ddrb, 1
+AR_VAR qr_orb, 1
+AR_VAR qr_tval, 1
+AR_VAR qr_tsh, 1
+AR_VAR qr_tie, 1
+AR_VAR qr_tflag, 1
+AR_VAR qr_pa7f, 1
+AR_VAR qr_pa7ie, 1
+AR_VAR qr_pa7pos, 1
+AR_VAR qr_tat, 4
+QR_SIZE     equ 17
+AR_VAR qr_sah, 1
 AR_VAR ar_rfdrv, 1                  ; where the .ROM was found (its picture's
 AR_VAR ar_rfcl, 2                   ;   place)
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB

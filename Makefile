@@ -11576,7 +11576,8 @@ $(BUILD)/arcade/INVSFX.PRT: apps/arcade/arcsfx.py
 
 ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.inc apps/arcade/arcqb.inc \
               apps/arcade/arcimp.inc apps/os88inflate.inc apps/os88data.inc \
-              apps/arcade/arcface.inc \
+              apps/arcade/arcface.inc apps/arcade/arcopt.inc \
+              apps/arcade/arc6502.inc apps/arcade/arcqbs.inc \
               apps/arcade/arcsnd.inc apps/arcade/arcland.inc drivers/sound/sndpkg.inc \
               apps/os88api.inc apps/os88parts.inc apps/os88partsbody.inc apps/os88pit.inc \
               apps/os88ui.inc apps/os88mega.inc

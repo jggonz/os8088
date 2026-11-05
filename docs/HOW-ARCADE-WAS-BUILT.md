@@ -528,3 +528,32 @@ the game, switches it on again and finds 0123 back. Without the put-back
 it reads 0000.
 
 **Not done:** key remapping, and Q\*bert's score table.
+
+## R5: Q*bert's sound board
+
+**Measured before building.** Q*bert's sound is a second board: a 6502,
+a timer chip, a DAC and a speech chip, running a program of its own. The
+first step was the board in Python (`tools/qbsnd.py`), to answer one
+question: could each sound be rendered once and kept? It found 28 sounding
+codes, 35.8 seconds of sound in all, and 11.5 seconds for the 13 codes the
+game actually sends. Kept beside the ROM, that would be a quarter of a
+360KB disk. So the board runs **live**, on a 286, into the Sound Blaster
+stream. An 8088 cannot spare the time beside Q*bert and stays silent.
+
+**The first measurement was silence.** The board waits for a rising edge
+on one pin. The model started that pin high, so the game's strobe never
+rose and no command was heard.
+
+**One sample at a time.** Each sample the stream asks for is the DAC after
+the 6502 has run its share of the clock: 81 cycles and 28,490/65,536 of
+one more, so the pitch is the board's exactly. The timer chip's interrupt
+line is refreshed after every access to it. Without that, an interrupt
+handler that finished inside one sample would be taken twice.
+
+**Tested** under Unicorn: the core opcode by opcode against the Python
+6502, and the whole board as ARCADE assembles it, sample for sample,
+against the Python board over 640 frames of the game's own commands.
+Moving the cycle fraction by one 65,536th fails it at frame 42.
+
+**Not done:** the speech chip, the knocker, and a measurement on a real
+286 (a field run on the owner's mr286).

@@ -76,6 +76,7 @@ qb_on:
 .r:
     ret
 qb_off:
+    call qbs_off                    ; (its sound board's memory, ARCADE-SPEC 13)
     mov dx, [qb_gseg]
     call OSAPI_MEM_FREE
     mov dx, [qb_shseg]

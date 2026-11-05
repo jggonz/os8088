@@ -318,20 +318,32 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [x] Input state cleared at every door (`ar_door`).
 
 ### R5: Q\*bert's sound
-- [ ] The 6502 core and the sound board. Measured first: the commands'
-      total length, and a live board's cost on the 286.
-- [ ] Rendered or live, as that decides; the stream, FM and speaker
-      routes.
+- [x] Measured first (`tools/qbsnd.py`): 28 sounding codes, 35.8 s in all;
+      the game's 13 about 11.5 s; ~4,200 6503 instructions a frame. Too
+      much to render and keep beside a `.ROM`, so LIVE (ARCADE-SPEC 13.1).
+- [x] The 6502 core (`arc6502.inc`) and the board (`arcqbs.inc`): the
+      RIOT, the latch, the per-sample stream at 10,989 Hz. `QBERT.ROM`
+      carries the two sound chips (68KB). Rows `m6502`, `qbsmix`.
+- [x] The routes: the stream on a 286 or better. An 8088, or a machine
+      with no stream, plays Q\*bert silent: FM and the speaker have nothing
+      to say about a DAC board. The Votrax speech and the knocker: not done.
+- [ ] Field: the sound on the owner's mr286, and its cost there.
 
 ### R6: the release
-- [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line. Its disk is decided
-      by its ROM-free size (section 7).
-- [ ] The README as a user's guide: the accepted sets, import, the keys.
-- [ ] ARCADE-SPEC brought up to date, the diary, this plan moved to
-      `completed/`.
+- [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line: **the owner's call**.
+      The package carries no ROM byte now, but BUILDING it still needs the
+      ROMs (the recipes are translated from them), fetched at pins, and
+      Pac-Man's only from the owner's copy. The entry says so.
+- [x] Its disk: ARCADE.O88 is 189KB packed; `emu360.img` has 139KB free,
+      so it rides its OWN 360KB disk. `make arcaderel` builds the release
+      floppies in four geometries - the package and its README, no ROM;
+      198 of 354 clusters at 360KB, room for several games' `.ROM`s.
+- [x] The README as a user's guide: the sets, import (merged, split,
+      loose), the cabinet, the keys, settings, sound, the games' owners.
+- [x] ARCADE-SPEC brought up to date (11, 12, 13), the diary.
 - [ ] The final soak union and `test-full`. Field runs: 5150 #1 (Hercules
       and CGA), 5150 #2 (VGA and Sound Blaster), the 286.
-- [ ] The `release-os8088` skill.
+- [ ] The `release-os8088` skill: after the owner's call above.
 
 ## 7. The owner's answers (2026-11-05)
 

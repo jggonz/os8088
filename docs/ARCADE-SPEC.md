@@ -1128,11 +1128,10 @@ by how much.
 
 ### 10.6 Sound
 
-None yet. The board's sound is a second board - a 6502, a DAC and, on
-Q\*bert, a Votrax speech chip - driven by the command the game writes to
-5802h, which lands at 580Ah and is not read. The knocker (5803h bit 5) is
-not sounded either. `BD_MIX` and `BD_FMPAT` are 0, so the bracket keeps the
-speaker quiet.
+Section 13: the board's sound board runs live on a 286 or better, into the
+Sound Blaster stream. The game's command at 5802h lands at 580Ah, where
+`qbs_tick` takes it once a frame. The knocker (5803h bit 5) is not sounded,
+nor is the Votrax speech.
 
 ### 10.7 Keys
 
@@ -1347,3 +1346,73 @@ drive, each game's switches and each game's best.
 at the next power-on; P and F1 each hold the board for two seconds and a key
 plays on; a best put in RAM is kept as the game is left from a hold with
 Esc, and back after Game > Reset. Red (`0000`) without `ar_hsput`.
+
+## 13. Q\*bert's sound board, live (`arcqbs.inc`, `arc6502.inc`)
+
+### 13.1 Measured first: live, not rendered
+
+Gottlieb's rev. 1 sound board is an M6503 at 894,886 Hz, a 6532 RIOT, an
+MC1408 DAC at 1000h and a Votrax SC-01 at 2000h, its program in the two
+2KB chips the set now carries (`QBERT.ROM` is 68KB: the board image, then
+`qb-snd1` and `qb-snd2` at 10000h; 1.4). `tools/qbsnd.py` is the board in
+Python, after MAME's `gottlieb_a.cpp`, and it measured the choice:
+
+| | MEASURED |
+|---|---|
+| codes 1 to 63 that sound | 28 |
+| their length, all together | 35.8 s (one runs to the 8-second limit) |
+| the 13 codes Q\*bert sends in 3,000 frames of attract and a game (`tests/qbnative.py --sndlog`) | about 11.5 s |
+| the 6503's instructions a frame | about 4,200 |
+
+Rendered once and kept, the sounds the game uses would be some 90KB at
+8 kHz - a quarter of a 360KB disk beside the `.ROM` - and minutes of
+rendering on an 8088. Live, the board costs a 286 a fraction of its time
+and an 8088 more than Q\*bert leaves it. So it runs **live, on a 286 or
+better** (`OSAPI_CPU_INFO`), **into the Sound Blaster stream**; an 8088
+plays Q\*bert silent, and so does a machine with no stream route.
+
+### 13.2 The 6503 (`arc6502.inc`)
+
+An NMOS 6502 interpreter, every documented opcode, with
+`tools/qbsnd.py`'s CPU6502 as its reference - decimal mode, JMP (ind)'s
+page wrap, the cycle counts with page-cross and taken-branch penalties.
+Every 6502 register lives in an 8086 register for the whole of `m6_run`,
+and an opcode is one masked fetch and one `jmp [bx+m6_tab]`. The board
+decodes A0-A14 only, so A15 is masked off every access; 0000-01FF and
+6000-7FFF are plain bytes in the board's memory (32KB, claimed at the
+first play), everything else is I/O through the includer's `m6_ior` and
+`m6_iow`. `m6_run` runs a cycle budget and carries its overrun as a debt
+into the next call, so many short runs end where one long one would.
+Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
+
+### 13.3 The board (`arcqbs.inc`)
+
+- **The RIOT** (`qr_*`): port A (the command), port B (the test switches,
+  at rest), the timer (a divider of 1, 8, 64 or 1024, read off the 6503's
+  cycle count), and the PA7 edge detector. Its IRQ line is the 6503's,
+  refreshed at each sample and after every RIOT access, so it drops the
+  moment the handler reads the flags.
+- **The command** (`qbs_tick`, `BD_SBTICK`): Q\*bert writes FFh then the
+  command, never two in a frame. Once a frame a byte at 580Ah that is not
+  FFh is taken, FFh put back, and port A strobed with the code the 6503
+  reads: the byte's low six bits inverted, PA7 up then down (MAME's
+  `gottlieb_sound_r1::write`).
+- **The stream** (`qbs_mix`, `BD_MIX`): at 10,989 Hz (the DSP's time
+  constant 165, as Pac-Man's), each sample is the DAC after the 6503 has
+  run 81 cycles and a fraction of 28,490/65,536 more - 894,886 / 10,989
+  exactly, so the pitch is the board's.
+- **Power-on** (`qbs_prep`, `BD_SBPREP`, on the desktop at the first play):
+  the memory claimed, the chips copied to 7000h, the RIOT and the 6503
+  reset, and 0.2 s of the board's own start-up run. It stays on between
+  plays, and goes with the board (`qb_off`).
+
+### 13.4 Verification
+
+- `tests/m6502.py` (Unicorn): the core opcode by opcode against the
+  reference, and in lockstep with it on the sound program.
+- `tests/qbsmix.py` (Unicorn, row `qbsmix`): `arcqbs.inc` and the core as
+  ARCADE assembles them, powered on and fed 15 of Q\*bert's commands over
+  640 frames: all 115,840 samples are the reference's, driven the same way.
+  Red at frame 42 with the cycle fraction one 65,536th off.
+- Not measured: the board's cost on a real 286, and the sound itself on
+  the owner's mr286 (a field run).

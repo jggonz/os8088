@@ -69,15 +69,19 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # until the maintainer decides it should be (the game is complete).
 local      arcade      # docs/ARCADE-SPEC.md. Its games are Taito's Space Invaders,
                        # Space Invaders Part II and Lunar Rescue, Midway's Gun
-                       # Fight and Sea Wolf and Gottlieb's Q*bert ROMs, commercially
-                       # owned, FETCHED at pins by tools/getarcrom.py, and Namco's
-                       # Pac-Man, which only the owner's own copy supplies (make
-                       # arcaderom-pacman GETPACFROM=<zip>); none is committed, and
-                       # the code parts are translated FROM them at build time - so
-                       # `make arcade` / `make arcadedisk` build it standalone and no
-                       # standard image, allapps floppy or live payload carries
-                       # it until the owner decides whether it rides them the way
-                       # the fetched Apple II ROM does.
+                       # Fight and Sea Wolf, Gottlieb's Q*bert and Namco's Pac-Man,
+                       # commercially owned. ARCADE.O88 itself carries NO ROM byte
+                       # (its translated code ships as recipes with the ROM's
+                       # bytes as holes; the user's own sets come in through Game
+                       # > Add ROM sets..., ARCADE-SPEC 1.4-1.5), and `make
+                       # arcaderel` builds release floppies with no ROM on them.
+                       # But BUILDING it still needs the ROMs - the recipes are
+                       # translated FROM them - which tools/getarcrom.py fetches
+                       # at pins (Pac-Man only from the owner's copy, make
+                       # arcaderom-pacman GETPACFROM=<zip>). So no standard image,
+                       # allapps floppy or live payload carries it until the
+                       # owner decides whether a release build may fetch them,
+                       # the way the Apple II ROM is fetched.
 local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # (2026-10-21, PR #168 merged): its data is the original DOS
                        # Lemmings' 26 files, DMA Design's and still commercially

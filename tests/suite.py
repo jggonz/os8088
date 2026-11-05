@@ -4751,6 +4751,20 @@ SOAK = [
         "is kept as it is left with Esc from a hold, and is back after Game > "
         "Reset. Red (0000) without the put-back",
         needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
+    Row("m6502", "soak", py("tests/m6502.py"), 28.0,
+        "ARCADE's 6502 core (apps/arcade/arc6502.inc, ARCADE-SPEC 13.2) under Unicorn "
+        "against tools/qbsnd.py's CPU6502: every documented opcode from 300 random "
+        "states, one instruction each, to the cycle; then Q*bert's sound program in "
+        "lockstep, every DAC write compared to the cycle. Host-only",
+        needs=("unicorn",), wants=("build/arcade-rom/qbert.zip",)),
+    Row("qbsmix", "soak", py("tests/qbsmix.py"), 5.0,
+        "Q*bert's sound board as ARCADE runs it (ARCADE-SPEC 13): arcqbs.inc's RIOT, "
+        "latch and per-sample mix over arc6502.inc, under Unicorn on the sound "
+        "program from qbert.zip, fed 15 of the game's commands over 640 frames - "
+        "every one of 115,840 samples at 10,989 Hz the same as tools/qbsnd.py's "
+        "board driven the same way. Red at frame 42 with the cycle fraction one "
+        "65,536th off. Host-only",
+        needs=("unicorn",), wants=("build/arcade-rom/qbert.zip",)),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "
