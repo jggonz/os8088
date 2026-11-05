@@ -51,7 +51,7 @@ asserted because IT IS NOT TRUE BEFORE THIS CHANGE EITHER: measured by A/B
 against the unconverted package - the same probe, on a build with the sidecar
 back and this conversion stashed - the 6510 runs (cycles accumulate, `1% cpu`,
 no JAM) and never writes a byte of its own RAM: the matrix holds
-c64_ram_pattern's factory fill, zero page $00/$01 is 0000 where the KERNAL's
+ovl_ram_pattern's factory fill, zero page $00/$01 is 0000 where the KERNAL's
 reset writes $2F/$37 within a few hundred cycles, and $0314 carries no IRQ
 vector. That is the state of apps/c64's 6510 core on this branch and it is not
 this wave's to fix; asserting it here would be a row that fails for a reason

@@ -739,6 +739,19 @@ body:
     dw _c64_colpair
     cmp ax, 0
     jne .f5
+    ; c64_wmove: two words, and the byte after them left alone
+    mov word [pushes], 3
+    PUSHI 2
+    PUSHI wmsrc
+    PUSHI wmdst
+    call disc_call
+    dw _c64_wmove
+    cmp word [wmdst], 0x2211
+    jne .f5
+    cmp word [wmdst+2], 0x4433
+    jne .f5
+    cmp byte [wmdst+4], 0x99
+    jne .f5
     ; c64_sprbehind: $FF over a glyph byte $18 three pixels left of it
     ; ($18 << 3 = $C0 under the sprite's first two pixels): $3F
     mov word [pushes], 4
@@ -1939,6 +1952,8 @@ smmk:        times 147 db 0x55
 cpa:         db 0, 0, 0, 0, 0, 1, 0, 0, 0
 cpb:         db 0x80, 0, 0, 0, 0, 0, 0, 0, 0
 cptmp:       times 16 db 0
+wmsrc:       db 0x11, 0x22, 0x33, 0x44, 0x55
+wmdst:       db 0, 0, 0, 0, 0x99
 sbon:        db 0xFF
 sbg:         db 0x18, 0, 0, 0, 0, 0, 0, 0, 0x00
 cbx1:        db 32, 32

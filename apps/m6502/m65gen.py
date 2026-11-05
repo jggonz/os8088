@@ -1008,12 +1008,21 @@ class Gen:
             "    mov byte [%s], %d" % (S(S_ANY), 2 if self.c64 else 1)]
         if self.c64:
             mark += ["    mov [%s], bh" % S(S_LASTPG), ".win:"]
+        # THE WINDOW (C64-SPEC 9.2): widened to BX when BX is inside the
+        # watch range. A store INSIDE the window already - the common one,
+        # a screen being redrawn - is two compares, not the four of the
+        # watch test first; the answer is the same in every case
         mark += [
+            "    cmp bx, [%s]" % S(S_WLO), "    jb .lo",
+            "    cmp bx, [%s]" % S(S_WHI), "    jbe .out",
+            "    cmp bx, [%s]" % S(S_WATHI), "    ja .out",
+            "    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
+            "    mov [%s], bx" % S(S_WHI),
+            "    ret",
+            ".lo:",
             "    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
             "    cmp bx, [%s]" % S(S_WATHI), "    ja .out",
-            "    cmp bx, [%s]" % S(S_WLO), "    jae .nolo",
             "    mov [%s], bx" % S(S_WLO),
-            ".nolo:",
             "    cmp bx, [%s]" % S(S_WHI), "    jbe .out",
             "    mov [%s], bx" % S(S_WHI),
             ".out:",

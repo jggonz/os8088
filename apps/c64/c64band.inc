@@ -1392,3 +1392,29 @@ _c64_sprbehind:
     pop si
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; void c64_wmove(void *dst, const void *src, int nw)
+; NW words, DS to DS, forward - a scrolled row's shadows (c64_row_slide, 9.4),
+; ~150 rows a second under the PCUG demo's scroll, at half os88_memcpy's
+; byte-at-a-time cost. Blocks that do not overlap.
+; -----------------------------------------------------------------------------
+_c64_wmove:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, [bp+4]
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    rep movsw                       ; cc8086:allow ES = DS, loaded above and
+                                    ; restored below; DF clear
+    pop es
+    pop di
+    pop si
+    pop bp
+    ret

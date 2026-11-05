@@ -281,6 +281,10 @@ static const unsigned char c64_kscan[] = {
 #define C64K_DOWNMAX 16
 
 static unsigned char c64_matrix[8];         /* row -> the eight column bits */
+static unsigned char c64_mat_any;           /* ...any of them set: the KERNAL
+                                             * reads $DC01 eight times a scan,
+                                             * and with no key down the rows
+                                             * need not be walked */
 static unsigned char c64_down[C64K_DOWNMAX];/* the scan codes still held */
 static unsigned char c64_dasc[C64K_DOWNMAX];/* ...and the ascii they arrived
                                              * with, because the map is keyed
@@ -374,13 +378,13 @@ static unsigned char c64_ring_a[C64K_RING];
 static unsigned char c64_ring_s[C64K_RING];
 static int c64_ring_h, c64_ring_t;
 
-/* c64_kbd_init - the HARNESS's reset between its cases, and nothing else's.
+/* ovl_kbd_init - the HARNESS's reset between its cases, and nothing else's.
  * The shipping image does not carry it: every field below is bss, which the
  * loader zeroes once per launch (SPEC.md 20.1), and os88_main used to call
  * this before anything had touched one of them - 113 bytes of code that
  * stored zero over zero (apps size pass 1). */
 #ifdef C64_HOST
-static void c64_kbd_init(void)
+static void ovl_kbd_init(void)
 {
     int i;
     for (i = 0; i < 8; i++)
@@ -629,6 +633,9 @@ static void c64_kbd_build(void)
         c64_matrix[C64K_LSHIFT_R] |= (unsigned char)(1 << C64K_LSHIFT_C);
     if (c64_ctrl_down)
         c64_matrix[C64K_LCTRL_R] |= (unsigned char)(1 << C64K_LCTRL_C);
+    c64_mat_any = 0;
+    for (i = 0; i < 8; i++)
+        c64_mat_any |= c64_matrix[i];
 }
 
 /* ==========================================================================
@@ -810,6 +817,7 @@ static int c64_kbd_pa(void)
     int v, pb, r;
     v = c64_port_out(0, 0);
     pb = c64_port_out(0, 1);
+    if (c64_mat_any)
     for (r = 0; r < 8; r++) {
         if ((c64_matrix[r] & ~pb & 0xFF) != 0)
             v &= ~(1 << r);
@@ -823,6 +831,7 @@ static int c64_kbd_pb(void)
     int v, pa, r;
     v = c64_port_out(0, 1);
     pa = c64_port_out(0, 0);
+    if (c64_mat_any)                        /* (no key down: no row to walk) */
     for (r = 0; r < 8; r++) {
         if ((pa & (1 << r)) == 0)
             v &= ~c64_matrix[r];

@@ -3470,7 +3470,7 @@ the timer step and the flush were allowed to take it. The rest is data:
 one string per menu check item with its mark byte written in place, the
 greyed and live spellings of an item sharing one literal (live = `+ 1`),
 one `Unable to load C64.OVL.` literal (since gone with the file, §13.3),
-`c64_kbd_init` harness-only (it
+`ovl_kbd_init` harness-only (it
 stored zero over loader-zeroed bss), and the RAM-pattern page built in the
 composer's band. `hosttest/c64uitest.c` prints a byte-identical report
 before and after.

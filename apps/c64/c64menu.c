@@ -118,7 +118,7 @@ static const char *c64_file_items[] = {
  *    whole visible effect is nothing at all is the same defect either way.
  *  - COPY greys with no C64.ROM ONLY. The clipboard is kernel-owned and
  *    outlives this app (SPEC.md 55.3), and with no machine the matrix holds
- *    c64_ram_pattern's factory fill, so a Copy there would replace whatever
+ *    ovl_ram_pattern's factory fill, so a Copy there would replace whatever
  *    the user had copied elsewhere with 1,025 characters of noise from a
  *    screen they cannot see. On a JAM it stays LIVE: the frozen screen is
  *    real and VICE's Copy always copies what is displayed.
