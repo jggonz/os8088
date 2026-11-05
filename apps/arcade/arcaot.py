@@ -264,16 +264,27 @@ def speculate(rom, code):
     board's ports; it may run into known code and stop there. An object's
     handler pointer in a table the game copies to RAM (Space Invaders keeps
     six at 1B13 + 16n and 1BC3, and the model's script reached five) is
-    what this finds (ARCADE-SPEC 3.2)."""
+    what this finds (ARCADE-SPEC 3.2).
+
+    And first, the same way, every constant the code loads into a pair and
+    PUSHES at once (LXI rp,nn / PUSH rp): a RETURN ADDRESS made by hand,
+    reached only by the RET of whatever the code jumps to next. Space
+    Invaders Part II's 1F49 pushes 1F52 - a RET right after a PCHL, which
+    no walk reaches - and play hit it ('no code at 1F52', on the owner's
+    286). A pushed data pointer fails the trial and is left alone."""
     owner = {}
     for i in code.values():
         for k in range(i.pc, i.pc + i.n):
             owner[k] = i.pc
+    pushed = sorted({i.imm for i in code.values()
+                     if i.op in (0x01, 0x11, 0x21) and i.pc + 3 in code
+                     and code[i.pc + 3].op == 0xc5 + (i.op & 0x30)})
     added = 0
-    for a in (k for lo, hi in ROM_REGIONS for k in range(lo, hi - 1)):
-        if a in owner or a + 1 in owner:
+    data = ((a, rom[a] | (rom[a + 1] << 8))
+            for lo, hi in ROM_REGIONS for a in range(lo, hi - 1))
+    for a, w in [(None, w) for w in pushed] + list(data):
+        if a is not None and (a in owner or a + 1 in owner):
             continue
-        w = rom[a] | (rom[a + 1] << 8)
         if not in_rom(w) or w in code or w in owner:
             continue
         trial = {}

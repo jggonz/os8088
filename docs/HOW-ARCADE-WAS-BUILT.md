@@ -377,3 +377,12 @@ boards want different things:
   there is what made it crawl.
 
 Both are in the loop now, and every board's row passes.
+
+**And a hole the seeds never had.** The owner's next run stopped Space
+Invaders Part II with "no code at 1F52" a frame or two in. That code loads
+1F52 into HL, pushes it, and jumps away: a return address built by hand.
+The routine it jumps to RETs there, to an instruction no walk reaches and
+no seeding run had hit. The translator now tries every constant that is
+loaded and pushed at once as a tentative entry, under the same rules as
+the data words it already tries. Part II gained that one instruction and
+Lunar Rescue 24 more that had the same hole.

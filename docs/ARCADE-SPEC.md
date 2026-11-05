@@ -221,6 +221,13 @@ site after every call. **Seeds** are what no walk finds:
   found 050E, a sixth object handler in the table at 1BC0 that the model's
   script had not reached. Most of what it adds is runs of zero bytes, which
   translate to nothing.
+- First among those tentative walks, **every constant the code loads into
+  a pair and pushes at once** (`LXI rp,nn / PUSH rp`): a return address
+  made by hand, reached only by the RET of whatever the code jumps to next.
+  Part II's 1F49 pushes 1F52 - a RET right after a PCHL, which no walk
+  reaches - and the owner's play hit it ("no code at 1F52"). The same rule
+  added 24 instructions to Lunar Rescue that had the same hole; a pushed
+  data pointer fails the trial and is left alone.
 
 **The ROM** is 0000-1FFFh on Space Invaders, and 0000-1FFFh and 4000h up to
 the last 2KB chip that is not all zeros on a Taito colour board (`board_rom`:
@@ -228,8 +235,8 @@ the last 2KB chip that is not all zeros on a Taito colour board (`board_rom`:
 walk ran through Part II's empty 4800h-4FFFh and into a jump past 7FFFh.
 
 `--no-speculate` turns the second off. The result for Space Invaders: 4,366
-instructions, 2,086 of them speculative; Part II 4,415 (706); Lunar Rescue
-5,227 (740); Gun Fight 1,426 (178); Sea Wolf 2,078 (473).
+instructions, 2,086 of them speculative; Part II 4,416 (707); Lunar Rescue
+5,251 (764); Gun Fight 1,426 (178); Sea Wolf 2,078 (473).
 
 **An interrupt's return PC is a seed too.** `arcsim.py seeds` once left them
 out, as PCs the walk reaches anyway - until Gun Fight's 03C9, the
