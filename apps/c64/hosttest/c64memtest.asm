@@ -565,6 +565,35 @@ body:
     dw _c64_rowspan
     cmp ax, -1
     jne .f5
+    ; c64_runfind over two equal 80-byte records, then cells 3 (matrix), 6
+    ; (colour) and 20 (matrix) changed: from 0 the run is 3..6 (a gap of two
+    ; folded in), from 7 it is 20..20, from 21 nothing
+    call bandfill
+    mov byte [banda + 3], 0x77
+    mov byte [banda + 40 + 6], 0x77
+    mov byte [banda + 20], 0x77
+    mov word [pushes], 3
+    PUSHI 0
+    PUSHI bandb
+    PUSHI banda
+    call disc_call
+    dw _c64_runfind
+    cmp ax, 0x0306
+    jne .f5
+    PUSHI 7
+    PUSHI bandb
+    PUSHI banda
+    call disc_call
+    dw _c64_runfind
+    cmp ax, 0x1414
+    jne .f5
+    PUSHI 21
+    PUSHI bandb
+    PUSHI banda
+    call disc_call
+    dw _c64_runfind
+    cmp ax, -1
+    jne .f5
     mov al, '.'
     call putc
     jmp .band1
@@ -875,6 +904,84 @@ body:
     mov si, c8mw
     mov di, bnd8
     mov cx, 17
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8spr's WHOLE-BYTE paths (9.12): $A5 $0F $FF hires from x = 8, the third byte at hi = 24 and not drawn
+    mov cx, 40
+    mov di, bnd8
+.c8fz:
+    mov byte [di], 0
+    inc di
+    loop .c8fz
+    mov byte [c8d], 0xA5
+    mov byte [c8d+1], 0x0F
+    mov byte [c8d+2], 0xFF
+    PUSHI 0                                ; xs
+    PUSHI 0                                ; mc
+    PUSHI c8c
+    PUSHI 24                                ; hi
+    PUSHI 0
+    PUSHI 8                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8fw
+    mov di, bnd8
+    mov cx, 32
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8spr's WHOLE-BYTE paths (9.12): $81 hires X-expanded from x = 0, wholly inside
+    mov cx, 40
+    mov di, bnd8
+.c8xz:
+    mov byte [di], 0
+    inc di
+    loop .c8xz
+    mov byte [c8d], 0x81
+    mov byte [c8d+1], 0x00
+    mov byte [c8d+2], 0x00
+    PUSHI 1                                ; xs
+    PUSHI 0                                ; mc
+    PUSHI c8c
+    PUSHI 320                                ; hi
+    PUSHI 0
+    PUSHI 0                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8xw
+    mov di, bnd8
+    mov cx, 32
+    call .c8cmpn
+    jne .f6
+
+    ; c64_c8spr's WHOLE-BYTE paths (9.12): $1B multicolour from x = 4, not expanded
+    mov cx, 40
+    mov di, bnd8
+.c8nz:
+    mov byte [di], 0
+    inc di
+    loop .c8nz
+    mov byte [c8d], 0x1B
+    mov byte [c8d+1], 0x00
+    mov byte [c8d+2], 0x00
+    PUSHI 0                                ; xs
+    PUSHI 1                                ; mc
+    PUSHI c8c
+    PUSHI 320                                ; hi
+    PUSHI 0
+    PUSHI 4                                ; x
+    PUSHI c8d
+    PUSHI bnd8
+    call disc_call
+    dw _c64_c8spr
+    mov si, c8nw
+    mov di, bnd8
+    mov cx, 32
     call .c8cmpn
     jne .f6
 
@@ -1571,6 +1678,12 @@ c8hi:        db 2, 6, 2, 6, 6, 2, 6, 2
 c8mcw:       db 6, 6, 1, 1, 2, 2, 5, 5
 c8sw:        db 7, 7, 7, 7, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 0
 c8mw:        db 0, 0, 0, 0, 3, 3, 3, 3, 7, 7, 7, 7, 4, 4, 4, 4, 0
+c8fw:        db 0, 0, 0, 0, 0, 0, 0, 0, 7, 0, 7, 0, 0, 7, 0, 7
+             db 0, 0, 0, 0, 7, 7, 7, 7, 0, 0, 0, 0, 0, 0, 0, 0
+c8xw:        db 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 7
+             times 16 db 0
+c8nw:        db 0, 0, 0, 0, 0, 0, 3, 3, 7, 7, 4, 4, 0, 0, 0, 0
+             times 16 db 0
              times 4 db 0xCC
 bandb:       times 320 db 0
              times 4 db 0xCC

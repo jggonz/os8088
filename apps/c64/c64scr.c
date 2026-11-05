@@ -2072,35 +2072,14 @@ static unsigned char c64_bf_miss, c64_bf_wait;   /* the shift test's backoff */
 
 static void c64_mono_runs(int i)
 {
-    int c, a, b, gap, pl;
-    unsigned char *sh;
+    int r, a, b, pl;
 
-    sh = c64_srcsh[i];
     pl = -1;
     c64_cspf = -1;
-    c = 0;
-    while (c < C64_COLS) {
-        if (c64_srct[c] == sh[c])
-            if (c64_srct[C64_COLS + c] == sh[C64_COLS + c]) {
-                c++;
-                continue;
-            }
-        a = c;
-        b = c;
-        gap = 0;
-        while (c < C64_COLS) {
-            if (c64_srct[c] != sh[c])
-                gap = -1;
-            else if (c64_srct[C64_COLS + c] != sh[C64_COLS + c])
-                gap = -1;
-            if (gap < 0) {
-                b = c;
-                gap = 0;
-            } else if (++gap > 2) {
-                break;
-            }
-            c++;
-        }
+    b = -1;
+    while ((r = c64_runfind(c64_srct, c64_srcsh[i], b + 1)) >= 0) {
+        a = r >> 8;
+        b = r & 0xFF;
         if (pl >= 0)                        /* the proved cells between */
             c64_rowcopy(c64_bnd + pl + 1, c64_sh + C64_X320(i) + pl + 1,
                         a - pl - 1);
@@ -2343,10 +2322,16 @@ static void c64_flush(void *win)
          * read what it was drawn from - the same pixels, proved and not
          * guessed, so neither the compose nor the compare is owed */
         mr = 0;
+        /* (A ROW UNDER A SPRITE qualifies when only its text moved -
+         * c64_rowd 1: its sprites are the ones on the glass, or
+         * c64_spr_dirty would have marked their cells. The record is of the
+         * TEXT, so the sprites are drawn over whatever is composed.) */
         if ((c64_rowd[i] == 1) | (c64_rowd[i] == 8))
             if (c64_force[i] == 0)
                 if (c64_srcok[i] & c64_sh_ok)
-                    if ((c64_rmode[i] | c64_spsig[i]) == 0) {
+                    if (c64_rmode[i] == 0)
+                    if ((c64_rowd[i] == 1)
+                            | ((c64_spsig[i] | c64_sglass[i]) == 0)) {
                         c64_zcopy_out(c64_srct, c64_rmb[i] + C64_X40(i),
                                       C64_COLS);
                         os88_memcpy(c64_srct + C64_COLS, c64_col + C64_X40(i),
@@ -2360,8 +2345,7 @@ static void c64_flush(void *win)
                         }
                         /* ...and where it is not, the record still
                          * names the cells that moved */
-                        if (c64_sglass[i] == 0)
-                            mr = 1;
+                        mr = 1;
                     }
         if (c64_rowd[i] == 8)
             c64_rowd[i] = 2;                /* slid and not proved: whole */
@@ -2372,6 +2356,12 @@ static void c64_flush(void *win)
             f = c64_cspf;
             l = c64_cspl;
             trust = 1;
+            if (c64_spsig[i])                /* once, over first..last: */
+                c64_spr_draw(i, f, l);      /* the gaps are the glass's own
+                                             * pixels, sprite and all, and a
+                                             * sprite pixel is SET, not
+                                             * toggled */
+            c64_sglass[i] = (c64_spsig[i] != 0);
             goto c64_fl_composed;
         }
 
@@ -2447,8 +2437,10 @@ static void c64_flush(void *win)
             c64_spr_draw(i, f, l);
         c64_sglass[i] = (c64_spsig[i] != 0);
     c64_fl_composed:
-        /* ...and the record of what it was drawn from (9.4.1) */
-        if ((c64_rmode[i] | c64_spsig[i]) == 0) {
+        /* ...and the record of the TEXT it was drawn from (9.4.1), sprites
+         * or not: the proof refuses a row with a sprite on the glass, and
+         * the cell path draws the sprites itself */
+        if (c64_rmode[i] == 0) {
             c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
                           l - f + 1);
             os88_memcpy(c64_srcsh[i] + C64_COLS + f, c64_col + C64_X40(i) + f,
@@ -2828,38 +2820,40 @@ static void ovl_fsx_sprites(int row, int f, int l)
 /* ovl_fsx_cells - text row ROW, cells F..L dirty through its matrix: the
  * cells whose character or colour is not what the row was drawn from, a run
  * at a time, composed and put; the record follows them */
+static unsigned char c64_fra[C64_COLS / 2], c64_frb[C64_COLS / 2];
 static void ovl_fsx_cells(int row, int f, int l)
 {
-    int c, a, b, gap, y;
+    int r, a, b, y, n, j;
     unsigned char *sh;
 
     sh = c64_srcsh[row];
     c64_zcopy_out(c64_srct, c64_rmb[row] + C64_X40(row), C64_COLS);
     os88_memcpy(c64_srct + C64_COLS, c64_col + C64_X40(row), C64_COLS);
-    c = f;
-    while (c <= l) {
-        if (c64_srct[c] == sh[c])
-            if (c64_srct[C64_COLS + c] == sh[C64_COLS + c]) {
-                c++;
-                continue;
-            }
-        a = c;
-        b = c;
-        gap = 0;
-        while (c <= l) {
-            if (c64_srct[c] != sh[c])
-                gap = -1;
-            else if (c64_srct[C64_COLS + c] != sh[C64_COLS + c])
-                gap = -1;
-            if (gap < 0) {
-                b = c;
-                gap = 0;
-            } else if (++gap > 2) {
-                break;
-            }
-            c++;
-        }
+    /* the runs, composed; a run is at least one cell and three apart from
+     * the next, so there are at most fourteen */
+    n = 0;
+    b = f - 1;
+    while ((r = c64_runfind(c64_srct, sh, b + 1)) >= 0) {
+        a = r >> 8;
+        if (a > l)
+            break;
+        b = r & 0xFF;
+        if (b > l)
+            b = l;
         ovl_fsx_compose(row, a, b);
+        c64_fra[n] = (unsigned char)a;
+        c64_frb[n] = (unsigned char)b;
+        n++;
+    }
+    if (n == 0)
+        return;
+    /* the sprites ONCE over the first..last span: what they draw between
+     * the runs lands in the band and is never put */
+    if (c64_spsig[row])
+        ovl_fsx_sprites(row, c64_fra[0], c64_frb[n - 1]);
+    for (j = 0; j < n; j++) {
+        a = c64_fra[j];
+        b = c64_frb[j];
         for (y = 0; y < 8; y++)
             c64_fsx_put(c64_fsx_seg, C64_X320((row << 3) + y) + (a << 3),
                         c64_b8 + C64_X320(y) + (a << 3), (b - a + 1) << 3);
@@ -2916,17 +2910,19 @@ static void ovl_fsx_frame(void)
             }
         }
         /* ONLY THE CELLS THAT CHANGED (9.12): a plain text row dirtied only
-         * through its matrix and colour bytes, with no sprite over it now
-         * or on the glass, and a whole record of what it was drawn from
+         * through its matrix and colour bytes - its sprites, if any, are the
+         * ones on the glass, or c64_spr_dirty would have marked their cells
+         * (c64_rowd 4) - and a whole record of the TEXT it was drawn from
          * (c64_srcsh, 9.4.1's) - each run of changed cells, gaps of two or
-         * fewer folded in, and nothing else. A whole span is 2,560 bytes of
+         * fewer folded in, the sprites drawn over the run, and nothing
+         * else. PCUG's logo rows were whole spans every frame for snow. A whole span is 2,560 bytes of
          * 8bpp a row into an ISA VGA, and falling snow dirties every row
          * from edge to edge: the colour screen wrote ~64KB a frame where
          * the window wrote an eighth of that */
         if (c64_fsx_ok)
             if (c64_rowd[i] == 1)
                 if (c64_srcok[i])
-                    if ((c64_rmode[i] | c64_spsig[i] | c64_sglass[i]) == 0) {
+                    if (c64_rmode[i] == 0) {
                         ovl_fsx_cells(i, f, l);
                         c64_rowd[i] = 0;
                         continue;
@@ -2937,8 +2933,12 @@ static void ovl_fsx_frame(void)
         for (y = 0; y < 8; y++)
             c64_fsx_put(c64_fsx_seg, C64_X320((i << 3) + y) + (f << 3),
                         c64_b8 + C64_X320(y) + (f << 3), (l - f + 1) << 3);
-        /* ...and the record, where it means something */
-        if ((c64_rmode[i] | c64_spsig[i]) == 0) {
+        /* ...and the record of the TEXT, sprites or not: here it is only
+         * ever read by ovl_fsx_cells, which draws the sprites itself, and
+         * the window cannot trust it - the shadow was invalidated at the
+         * mode set, so its first paint is every row whole, which rewrites
+         * the record by the window's rule */
+        if (c64_rmode[i] == 0) {
             c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
                           l - f + 1);
             os88_memcpy(c64_srcsh[i] + C64_COLS + f, c64_col + C64_X40(i) + f,

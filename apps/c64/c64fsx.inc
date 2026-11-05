@@ -173,6 +173,90 @@ _c64_c8spr:
     push cx
     mov ah, [si]
     inc si
+    ; THE BYTE AS A WHOLE FIRST (C64-SPEC 9.12): a transparent byte, or one
+    ; wholly left of lo, only moves the pixel on; one at or past hi ends the
+    ; line; one wholly inside lo..hi-1 is written with no test a pixel. The
+    ; per-pixel clip below is only for a byte across an edge - it was every
+    ; pixel, and 15% of a 286 under PCUG's logo
+    mov dx, 8                       ; DX = the byte's width in pixels
+    cmp word [bp+18], 0
+    je .wid
+    mov dx, 16
+.wid:
+    or ah, ah
+    jz .skipb
+    cmp bx, [bp+12]
+    jge .done
+    mov cx, bx
+    add cx, dx                      ; CX = the pixel after the byte
+    cmp cx, [bp+10]
+    jle .skipb
+    cmp bx, [bp+10]
+    jl .slow
+    cmp cx, [bp+12]
+    jg .slow
+    cmp word [bp+16], 0
+    jne .fmc
+    push bx
+    mov bx, [bp+14]
+    mov al, [bx+2]
+    pop bx
+    mov cx, 8
+    cmp word [bp+18], 0
+    jne .fhx
+.fh:
+    shl ah, 1
+    jnc .fh1
+    mov [di+bx], al
+.fh1:
+    inc bx
+    loop .fh
+    jmp .bnext
+.fhx:
+    shl ah, 1
+    jnc .fhx1
+    mov [di+bx], al
+    mov [di+bx+1], al
+.fhx1:
+    add bx, 2
+    loop .fhx
+    jmp .bnext
+.fmc:
+    mov cx, 4
+.fm:
+    xor dx, dx
+    shl ah, 1
+    rcl dl, 1
+    shl ah, 1
+    rcl dl, 1
+    or dl, dl
+    jz .fm1
+    push bx
+    mov bx, [bp+14]
+    add bx, dx
+    mov al, [bx]
+    pop bx
+    mov [di+bx], al
+    mov [di+bx+1], al
+    cmp word [bp+18], 0
+    je .fm1
+    mov [di+bx+2], al
+    mov [di+bx+3], al
+.fm1:
+    add bx, 2
+    cmp word [bp+18], 0
+    je .fm2
+    add bx, 2
+.fm2:
+    loop .fm
+    jmp .bnext
+.skipb:
+    add bx, dx
+    jmp .bnext
+.done:
+    pop cx
+    jmp .out
+.slow:
     cmp word [bp+16], 0
     jne .mcb
     mov cx, 8
@@ -195,7 +279,7 @@ _c64_c8spr:
     inc bx
 .hn:
     loop .hb
-    jmp short .bnext
+    jmp .bnext
 .mcb:
     mov cx, 4
 .mb:
@@ -227,7 +311,10 @@ _c64_c8spr:
     loop .mb
 .bnext:
     pop cx
-    loop .byte
+    dec cx
+    jz .out
+    jmp .byte
+.out:
     pop di
     pop si
     pop bp

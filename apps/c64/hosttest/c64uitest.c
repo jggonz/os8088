@@ -772,6 +772,7 @@ void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
 }
 static long h_fsx_putn;                     /* bytes put to the framebuffer */
 static int h_fsx_poke_at = -1;              /* the key pass that pokes row 10 */
+static int h_fsx_pokech = 0x02;             /* ...and the screen code it pokes */
 void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n)
 {
     memcpy(segbase(seg) + off, src, n);
@@ -782,8 +783,8 @@ unsigned c64_fsx_key(void)
     if (h_fsx_poke_at >= 0)
         the_ticks += 2;                         /* (a pass is a frame's time) */
     if (h_fsx_keyi == h_fsx_poke_at) {
-        c64_wr(0x0400 + 10 * 40 + 1, 0x02);     /* a 'B' at each end of a */
-        c64_wr(0x0400 + 10 * 40 + 38, 0x02);    /* row: falling snow's shape */
+        c64_wr(0x0400 + 10 * 40 + 1, h_fsx_pokech);  /* a 'B' at each end */
+        c64_wr(0x0400 + 10 * 40 + 38, h_fsx_pokech); /* of a row: snow's shape */
         h_fsx_putn = 0;
     }
     if (h_fsx_keyi >= h_fsx_keyn)
@@ -1336,6 +1337,21 @@ void c64_sprrow(unsigned char *dst, const unsigned char *on,
         if (cell + 1 >= f && cell + 1 <= l)
             dst[cell + 1] = (unsigned char)((dst[cell + 1] & ~o) | t);
     }
+}
+
+int c64_runfind(const unsigned char *a, const unsigned char *b, int from)
+{
+    int c, f, l;
+    for (c = from; c < 40; c++)
+        if (a[c] != b[c] || a[c + 40] != b[c + 40])
+            break;
+    if (c >= 40)
+        return -1;
+    f = l = c;
+    for (c++; c < 40 && c - l <= 3; c++)
+        if (a[c] != b[c] || a[c + 40] != b[c + 40])
+            l = c;
+    return (f << 8) | l;
 }
 
 int c64_rowspan(const unsigned char *a, const unsigned char *b, int n)
@@ -2370,6 +2386,60 @@ int main(int argc, char **argv)
     if (n_blit - b_blit != 1)
         fail("two pokes in one row were not one blit");
 
+    /* --- ...AND UNDER A SPRITE THAT STAYS PUT (9.4.1): sprite 0 over
+     *     cells 36-38 of row 12, PCUG's logo over its snow. The same two
+     *     cells change: two composed cells, one blit, and the row is its
+     *     text with the sprite over it. Verified red with the cell path
+     *     refusing a sprite row (36 cells) and with the sprite not drawn
+     *     over the runs (the whole-row repaint differs) */
+    {
+        int j;
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, (j % 3 == 1) ? 0xF0 : 0x00);  /* cell 37, left half */
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 1);
+        c64_io_wr(0xD010, 1);
+        c64_io_wr(0xD000, (24 + 288) & 0xFF);   /* x 288: cell 36 */
+        c64_io_wr(0xD001, 50 + 96);             /* row 12's top line */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+        cost_begin();
+        h_noise();
+        c64_wr(0x0400 + 12 * 40 + 2, 22);
+        c64_wr(0x0400 + 12 * 40 + 37, 23);
+        flush_now();
+        cost_row("two pokes 35 cells apart, under a sprite");
+        audit("after two pokes in a row under a sprite");
+        if (n_band_cells - b_cells != 2)
+            fail("two pokes in a recorded row under a still sprite composed "
+                 "the span between them (9.4.1)");
+        if (n_blit - b_blit != 1)
+            fail("two pokes in a row under a sprite were not one blit");
+        {
+            static unsigned char snap[8][320];
+            int y, x, bad = 0;
+            for (y = 0; y < 8; y++)
+                for (x = 0; x < 320; x++)
+                    snap[y][x] = (unsigned char)glass[c64_gsy + 96 + y][c64_gsx + x];
+            c64_sh_inval();
+            flush_now();                    /* every row whole, sprites on */
+            for (y = 0; y < 8; y++)
+                for (x = 0; x < 320; x++)
+                    if (snap[y][x] != glass[c64_gsy + 96 + y][c64_gsx + x])
+                        bad++;
+            if (bad)
+                fail("a row composed by cells under a sprite is not what the "
+                     "whole row composes to (9.4.1)");
+        }
+        c64_io_wr(0xD015, 0);
+        c64_io_wr(0xD010, 0);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+    }
+
     /* --- TWO POKES IN DISTANT ROWS: the window INTERSECTED with the pages
      *     (9.2). One lo/hi window over the matrix says "rows 0..24" for a
      *     score written at row 0 and a status line at row 24 inside the same
@@ -3299,6 +3369,48 @@ int main(int argc, char **argv)
             if (h_fsx_fb[C64_X320(80) + 38 * 8 + x] != (((g << x) & 0x80)
                     ? (c64_col[10 * 40 + 38] & 15) : 6))
                 fail("a cell put alone is not its glyph in its colours (9.12)");
+
+        /* ...AND UNDER A SPRITE THAT STAYS PUT (9.12): sprite 0 over cells
+         * 38-39 of row 10, PCUG's logo over its snow. The same two cells
+         * change; still two cells put, and cell 38 is the sprite's yellow
+         * over the new glyph. Verified red with the cell path refusing a
+         * sprite row (the whole span is put) */
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0);
+        c64_wr(0x0340, 0xF0);               /* line 0: 4 pixels lit */
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 7);               /* yellow */
+        c64_io_wr(0xD010, 1);
+        c64_io_wr(0xD000, (24 + 304) & 0xFF);   /* x 304: cell 38 */
+        c64_io_wr(0xD001, 50 + 80);         /* row 10's top line */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        for (k = 0; k < 7; k++)
+            h_fsx_keyq[k] = 0xFFFF;
+        h_fsx_keyq[6] = 0x2000;
+        h_fsx_keyn = 7;
+        h_fsx_keyi = 0;
+        h_fsx_poke_at = 2;
+        h_fsx_pokech = 0x03;                /* 'C' */
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);
+        os88_gfx_unlock();
+        h_fsx_poke_at = -1;
+        h_fsx_pokech = 0x02;
+        if (h_fsx_putn > 6 * 64)
+            fail("two changed cells in a row under a sprite put the span "
+                 "between them into the colour screen (9.12)");
+        g = rom[0x4000 + 3 * 8];            /* the CHARGEN's 'C', line 0 */
+        for (x = 0; x < 8; x++)
+            if (h_fsx_fb[C64_X320(80) + 38 * 8 + x] != (x < 4 ? 7
+                    : (((g << x) & 0x80) ? (c64_col[10 * 40 + 38] & 15) : 6)))
+                fail("a cell put alone under a sprite is not the sprite over "
+                     "its new glyph (9.12)");
+        c64_io_wr(0xD015, 0);
+        c64_io_wr(0xD010, 0);
+        c64_latch(0);
+        c64_latch(0);
 
         /* ...a multicolour bitmap byte, with sprite 0 over cells 2-4 */
         c64_io_wr(0xD018, 0x18);

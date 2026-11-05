@@ -1915,8 +1915,22 @@ folded in, and a gap between runs is filled in the band from the pixel
 shadow, which the record proves is those cells' picture. The compare and the
 one blit over first..last are as before. Falling snow is a cell or two per
 row, far apart, and the composer was the whole first-to-last span.
-`c64uitest`: two pokes 35 cells apart in one recorded row compose 2 cells,
-not 36, in one blit (red with the runs disabled: 36).
+The run search is `c64band.inc`'s `c64_runfind(a, b, from)` - the next run
+in two 80-byte records, `(first << 8) | last` or -1 - because SmallerC's
+byte loop cost the 286 more than the cells it saved (10.8% against 6.9%).
+**A row under a sprite that stayed put qualifies too**: `c64_rowd` 1 says
+only its text moved - a sprite that moved, or whose data or colours did, has
+its cells marked by `c64_spr_dirty` - so the record is of the TEXT, kept for
+any standard-text row composed whole, sprites or not, and the sprites are
+drawn once over first..last after the runs (a sprite pixel is SET, so the
+gaps, which are the glass's own pixels, come out the same). The proof
+refuses a row with a sprite now or on the glass. PCUG's logo rows were
+whole spans every frame for the snow under them. `c64uitest`: two pokes 35
+cells apart in one recorded row compose 2 cells, not 36, in one blit (red
+with the runs disabled: 36); the same under a sprite, and the row equals
+what a whole repaint composes (red with the sprite not drawn over the runs).
+Measured on `286-victory`, PCUG's snow scene windowed: 42-47% -> 50.0% at
+50 s, and still no one-frame reversion in 300 frames.
 
 **THE SOURCE PROOF.** A row composed in standard text with no sprite over it
 records what it was drawn from - its 40 matrix bytes and 40 colour nibbles
@@ -2387,9 +2401,26 @@ few cells changed per row, far apart) was a whole 320-byte line ×8 per row,
 was the whole row and nothing was a sprite), so the next frame can be by
 cells. `c64uitest`: six keys then a poke of two cells 37 apart puts 128
 bytes rather than ≥ 2,368, and cell 38 is the glyph in its colour on its
-paper (red with the cell path bypassed). On `286-victory` the fullscreen
-is not slower than the window; the cost this removes is the card's, which
-86Box does not price.
+paper (red with the cell path bypassed). **A row under a sprite that stayed
+put is put by cells too**, on the same reasoning as §9.4.1's: the runs are
+composed, the sprites drawn ONCE over first..last (what lands between the
+runs is never put), then the runs put. `c64uitest`: the same two cells under
+a sprite are two cells put, and cell 38 is the sprite over its new glyph
+(red with sprite rows refused).
+
+**`c64_c8spr` takes a sprite byte whole**: a transparent byte, or one left
+of the clip, only moves the pixel on; one at the clip's right edge ends the
+line; one wholly inside is written with no test a pixel; only a byte
+across an edge takes the per-pixel clip, which used to be every pixel.
+`c64memtest` covers the three whole-byte paths (hires, hires X-expanded,
+multicolour) beside the edge cases.
+
+Measured on a copy of the owner's machine (`mr286`, OTI-067, SB16) in PCUG's
+snow scene: the frame skip (§9.13) climbed to 4 or 5 ticks in fullscreen -
+a picture every quarter second - where the window sat at 1-3, and the
+logo's rows were most of it: the sprite compositor alone was 15% of the 286.
+After the four changes above, 53% -> 68% of a C64 over the run's second
+half, and the skip settles lower.
 
 | routine (`c64fsx.inc`) | does |
 |---|---|

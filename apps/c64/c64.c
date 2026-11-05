@@ -177,6 +177,7 @@ void c64_sprrow(unsigned char *dst, const unsigned char *on,
                 const unsigned char *lit, int n, int cell, int sh,
                 int f, int l);
 int  c64_rowspan(const unsigned char *a, const unsigned char *b, int n);
+int  c64_runfind(const unsigned char *a, const unsigned char *b, int from);
 void c64_rowcopy(unsigned char *dst, const unsigned char *src, int n);
 unsigned c64_rowsig(unsigned mseg, unsigned moff,
                     const unsigned char *col, int n);

@@ -425,6 +425,66 @@ _c64_neq:
 ; else 0. The latch asks it for every row a write landed on, every frame -
 ; it was a C word loop and 8% of a 286 under a demo that splits every row.
 ; -----------------------------------------------------------------------------
+; int c64_runfind(const unsigned char *a, const unsigned char *b, int from)
+; The next RUN of changed cells in two 80-byte source records (C64-SPEC 9.4.1:
+; 40 matrix bytes, then 40 colour bytes), both near: from cell FROM on, the
+; first cell whose matrix or colour byte differs, extended over every later
+; differing cell until three equal cells in a row (a gap of two or fewer is
+; folded in). Answers (first << 8) | last, or -1 when nothing from FROM on
+; differs. It was c64scr.c's loop, and SmallerC's byte loop cost the 286 more
+; than the cells it saved composing.
+_c64_runfind:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov si, [bp+4]
+    mov di, [bp+6]
+    mov bx, [bp+8]
+.seek:
+    cmp bx, 40
+    jae .none
+    mov al, [si+bx]
+    cmp al, [di+bx]
+    jne .hit
+    mov al, [si+bx+40]
+    cmp al, [di+bx+40]
+    jne .hit
+    inc bx
+    jmp short .seek
+.hit:
+    mov cx, bx                      ; CL = the run's first cell
+    mov dx, bx                      ; DL = its last differing cell
+.ext:
+    inc bx
+    cmp bx, 40
+    jae .done
+    mov ax, bx
+    sub ax, dx
+    cmp ax, 3                       ; three equal cells since the last: ends
+    ja .done
+    mov al, [si+bx]
+    cmp al, [di+bx]
+    jne .more
+    mov al, [si+bx+40]
+    cmp al, [di+bx+40]
+    je .ext
+.more:
+    mov dx, bx
+    jmp short .ext
+.done:
+    mov ah, cl
+    mov al, dl
+    jmp short .out
+.none:
+    mov ax, -1
+.out:
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
 _c64_rvdiff:
     push bp
     mov bp, sp
