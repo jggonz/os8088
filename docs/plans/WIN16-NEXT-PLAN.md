@@ -96,6 +96,8 @@ The owner's decisions taken on the way:
     - **Arithmetic:** fixed code is VBRUN300 329 KB + MOZART 184 KB = 513 KB against the four arenas' about 810 KB (the plan's figures). The load finished with no *Not enough memory*, so that fixed code did fit with the setup's libraries gone. The free space at that moment was not read: the arena table is behind the virtual map and nothing reads it from outside.
     - **So O8's case is not made by this look.** The program never reached a window, so how much it allocates is unknown. The next walls are not memory: VBRUN300 imports 23 functions WIN16 lacks (`GDI` `OffsetWindowOrg` `CopyMetaFile` `SetRectRgn` `EnumMetaFile` `PlayMetaFileRecord` `Arc` `Pie` `CreateBrushIndirect` `CreatePenIndirect`; `KERNEL` `SetHandleCount` `GetCurrentPDB` `FreeModule` `GetCodeHandle`; `USER` `WaitMessage` `GetClassWord` `GetClassLong` `EndMenu` `GetUpdateRgn` `BeginDeferWindowPos` `DeferWindowPos` `EndDeferWindowPos` `CreateIcon` `TrackPopupMenu`). It was 48 on 2026-11-01.
 
+  - **Status 2026-11-04, end of round 2 (SEEN unless marked).** Mozart starts and reaches its own message box, which is further than any earlier look. The walls, in the order they fell: VBRUN300's missing imports (`vbgdi`, `vbuser`, `props`, `part11`); `GlobalReAlloc` of its own DGROUP (`dgroup`, SPEC.md 124.9.2); `GetClassInfo` and a class table that held 12 (`ctlproc`, 124.25.18); a full local heap in a moveable block (`lheap`, 124.25.19); `GetDOSEnvironment` in a library's C start-up (`vbxlib`, 124.25.21); an even data selector where VB tests `test cl,1` (`oddsel`, 124.25.23). Mozart now stops at VB's *Insufficient resources to continue*, because its `Declare`s bind with `GetProcAddress` by name and WIN16 knows 16 to 18 names (see "Found in round 2"). **O8 was built (`o8np`, SPEC.md 124.26.x) and is not what Mozart waits for.** The setup completes and leaves 12 files in the system directory (`mozcopy`, 124.20.5.1). Not seen: Mozart's window, or playing.
+
 - [ ] **L2: Sir Hangman's install, a known limit in S25.**
   - Sir Hangman 1.0 is the InstallShield 3 installer, O3.
   - Its engine, `_INST16.EX_` expanded to `_INS0433._MP` (542,720 bytes, module ISINST30), has 607 selector fixups by segment number into its 64 discardable code segments. So `w16l_keepck` keeps all 64, 404 KB, and a launch from the launcher's task refused with "Not enough memory to load it".
@@ -105,12 +107,15 @@ The owner's decisions taken on the way:
     - O8's `#NP` reload (L1), which would cover it too.
   - The program itself, `HANGMAN.EXE`, is VB 3.0 again, so after the install it is L1's question.
   - **Status 2026-11-04 (measure).** Sir Hangman's `SETUP.EXE` from A: answers InstallShield's own *Insufficient memory available to run Setup ... Error 111* on `kern_mega` (`-m 16`) and on `kern_big`, the same text on both. It is the L2 refusal as InstallShield words it, not WIN16's *Not enough memory to load it*. The engine's 404 KB of kept code is the cause on the arm, as written above; why `kern_big` says the same was not looked at. `HANGMAN.EXE` run directly: see L1.
+  - **Status 2026-11-04, end of round 2.**
+    - **`kern_big`:** `l2diag` showed the Error 111 is the launcher's own `GetFreeSpace(0) >= 700,000` test. Under the owner's honest-`GetFreeSpace` decision it stays there: Sir Hangman installs on `kern_mega` only. `thunk` (124.26.14) is built and seen on its own fixture, and does not change that.
+    - **`kern_mega`, in the order the walls fell (seen):** the launcher's test passes (honest `GetFreeSpace`, 124.25.1); the engine's out-of-memory box with no text (`isbox`: 405 KB of kept code, 17.5 KB free) goes with O8's `#NP` reload (`o8np`); `LoadLibrary` finds the engine's DLLs by full path and `SetWindowsHookEx` exists (`hangman2`, 124.25.22); `DdeInitialize` is answered (`ddeml`, 124.25.26). The engine then stops at *Not enough memory for its code* about 14 s in. Not seen: its welcome dialog, an install.
 
 ## 4. Open items found on the way (not blocking #327)
 
 Each was recorded in the Phase B/C report and not yet closed. Re-check each one against the merged tree before starting it.
 
-- [ ] **Q1: a protected-mode fault in program code takes the machine down.**
+- [x] **Q1: a protected-mode fault in program code takes the machine down.** DONE (2026-11-04, `q1fault`, SPEC.md 124.31.11, KERN-MEGA-PLAN 14.139-14.141): seen once under Bochs (`win16ovr` step 3: `kern_mega CLOSED OVRTEST 0D at 11BC:0517`, no halt); `q1ivt` puts back the IVT cells the package held, 5 of 5 under Bochs. The close names the program's stem, and a multi-program instance closes whole (below).
   - With DS = SS = the program's DGROUP, `mega_fown` does not attribute the fault to WIN16. The result is "FAULT 0D … reboot", where it should close the package.
   - The kernel has to recognise a WIN16 program's selectors as WIN16's: the LDT range WIN16 owns, or a registered owner word in the shape of D2's hook.
   - **Seen under Bochs in N3 (#327, `win16ovr`).** OVRTEST's write one byte past its block raises the #GP that N1 promised. But `[mega_infault]` = 1 and the machine stops, where Windows would close the program.
@@ -131,7 +136,7 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - Mozart's CD-ROM run (L1) is where the question is answered.
   - Done (2026-11-04): `w16_i2f` answers 1500h, 150Bh, 150Ch and 150Dh off `CDROM.DRV`'s volume; other 15xxh are refused. Sir Hangman's installer is the target that asks. +110 bytes of image and bss on each arm. Row `win16mscdex`; the kern_mega arm is not yet run.
 
-- [ ] **Q4: the rest of S25's acceptance.**
+- [ ] **Q4: the rest of S25's acceptance.** (2026-11-04, end of round 2: Asteroids, Battlezone and Missile Command start a game and exit cleanly, Tempest reaches its rate screen, Centipede reaches its dialog and draws a black field; all seen on `kern_mega`, silent. Not done: Mozart's Red Book tracks, a run in real mode, w16reach re-run on the integrated tree.)
   - Arcade's five games are 386 code over `WAVEMIX`, started from their links.
   - Mozart's Red Book tracks play through S23's `cdaudio`, on 86Box's `286-mega-cdrom` and `386-mega-cdrom`.
   - What of all three runs in real mode, where their CPU tier allows.
@@ -171,9 +176,9 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
     - **(A)** stream a large DIB row by row into the bitmap block, so only one block is ever needed (about 150–250 B, in a part);
     - **(C)** a compactor that moves code. It needs N1's per-handle descriptors first, and it is the general answer to fragmentation by segments that cannot move.
 
-- [ ] **Q7: `SEG_BWIN` checks no owner** (SPEC.md 50.6.11). Found while fixing 14.137 on #327. `mega_wset`'s re-bind now asks `mega_bown` (a claim's `MC_OWN`, a pool block's `MX_OWN`), but `SEG_BWIN` itself binds a window into any block it is given. That is 14.135 item 2's class of hole, one verb along. The fix is the same test at `SEG_BWIN`'s entry. Every shipped caller binds its own block, so the fix should refuse none of them. It is a kernel `.mega` change, so it goes in its own PR, with megaown's row.
+- [ ] **Q7: `SEG_BWIN` checks no owner** (SPEC.md 50.6.11). **Built, not seen** (2026-11-04, `q7bwin`, KERN-MEGA-PLAN 14.139): `mega_segbw` asks `mega_segown` and `mega_bown` before binding, refusing with AX = 3; `megaown`'s new `mo_bwin` leg is built and not run. Found while fixing 14.137 on #327. `mega_wset`'s re-bind now asks `mega_bown` (a claim's `MC_OWN`, a pool block's `MX_OWN`), but `SEG_BWIN` itself binds a window into any block it is given. That is 14.135 item 2's class of hole, one verb along. The fix is the same test at `SEG_BWIN`'s entry. Every shipped caller binds its own block, so the fix should refuse none of them. It is a kernel `.mega` change, so it goes in its own PR, with megaown's row.
 
-- [ ] **Q8: `w16censall` fails on main as well as on #327** (`tests/unit/t_w16cens.py`). It fails for Windows 3.1 Media Player's and Sound Recorder's segment 1, which were added to `win16ref/samples/w31mm`. The guest walk reaches 1,138 and 1,108 bytes that the host's does not.
+- [x] **Q8: `w16censall` fails on main as well as on #327** DONE (2026-11-04, `chores`; host-side, `t_w16cens.py --all` 110 checks passed). The cause was not the switch-table bound: the host did not follow a far call whose segment word carries a selector-only relocation, and now does (SPEC.md 124.4.1). (`tests/unit/t_w16cens.py`). It fails for Windows 3.1 Media Player's and Sound Recorder's segment 1, which were added to `win16ref/samples/w31mm`. The guest walk reaches 1,138 and 1,108 bytes that the host's does not.
   - The cause is a divergence on overlapping decodes. `tools/os88ne.py` reads MPLAYER's switch table at 0x87C one word past its end, which seeds 0x16A, inside `sub ax,7` at 0x169. The guest stops before that word, and from there the two walks reach different functions.
   - It reproduces identically on main's d323a9a65, so it is not Phase B/C's doing.
   - The fix is to bound the host's table read the way the guest does, or to decide which walk is right and make the other match. Then re-run the row.
@@ -182,6 +187,64 @@ Each was recorded in the Phase B/C report and not yet closed. Re-check each one 
   - **To let `@w16_vclaim` move:** a relocation proc that re-bases every descriptor and the map row.
   - **To let `w16_lseg` move:** a proc that re-registers the hook word.
   - Both are walls in the arena until then (NO-PINNING-PLAN 0).
+
+### Found in round 2 (next round)
+
+The round's frozen scope ended at the walls below; each was reported by an agent or its reviewer and is open. An estimate is the report's, and "none" means the report gave none. The next round is planned from this list. Section numbers are the SPEC.md section the work would touch.
+
+**Mozart and Visual Basic**
+- [ ] **GetProcAddress by NAME for every bound export** (SPEC.md 124.25 with part 11, 124.25.16). Mozart's `Declare`s bind by name, about 55 of them; WIN16 knows 16 to 18 (`W16PROCNAME`, part 3, full). Names generated from the `W16EXPORT` comments into part 11: about 8 KB (about 600 exports at about 14 bytes), 0 resident, one `w16_nbind` slot per ask. Supersedes the GDI-only item from `vbgdi`. First refused names: `GetPrivateProfileInt` after `SetSystemPaletteUse`.
+- [ ] **A 256-colour display** (SPEC.md 124.25 `GetDeviceCaps`; no section yet). WIN16 answers as Windows 3.0's VGA driver (BITSPIXEL 1, PLANES 4, NUMCOLORS 16, no `RC_PALETTE`), so Mozart's *Unsupported video mode* check is a correct refusal. Which index it reads was not seen. Estimate none.
+- [ ] **A DGROUP laid out under 64 KB still refuses VB's `GlobalReAlloc` grow** (124.9.2, 124.21.4). VB quits with no message. Leave room after DGROUP at load, or move it on grow. Estimate none.
+- [ ] **`GetClassName` answers the cut, upper-cased 16-character name; class names compare on 16 characters and global atoms on 31** (124.25.18.1, 124.10). VB calls `GetClassName` then `lstrcmpi` on its MessageBox path. Windows: 255. Estimate none.
+- [ ] **WIN16 sends no `WM_NCDESTROY`; `GetClassInfo`'s class styles and `hbrBackground` differ from Wine's; `GetWindowLong(GWL_WNDPROC)` of a built-in answers slot 0** (124.25.18). Estimate none.
+- [ ] **Messages WIN16 moves itself still POST to a program's procedure** (focus by Tab, a click, `WM_ACTIVATE`), `w16d_cmsg` answers 0 for `WM_GETDLGCODE` under a replaced procedure, and a program's own window gets no `WM_ENABLE` (124.25.20). Needs the dialog loop's delivery as continuations. Estimate none.
+
+**Memory and selectors (kern_mega)**
+- [ ] **An UNLOCKED `GlobalReAlloc` move can discard its own source** (124.31.3; `oddsel-q4audit.md`, both arms, pre-existing). Mark the block in `gdold`/`gdiscard` while it moves. Estimate none.
+- [ ] **`GlobalWire` is `GlobalLock` and `GlobalFix` a no-op, so a wired block moves on `GlobalReAlloc`** (124.31.3). A pin bit (`.canmove`) refuses if a target needs it. Estimate none.
+- [ ] **`GMEM_MODIFY` with a SELECTOR of a moveable block answers as for a fixed block** (`.mfx`; 124.31.3). Resident bytes, none stated.
+- [ ] **The SUB fallback and an unlocked tiled block's move leave the program a selector that does not follow its block** (124.31.3, stated). Estimate none.
+- [ ] **`AllocCStoDSAlias` of a CODE selector still returns a SUB**, so a program that `PrestoChangoSelector`s that alias in place gets 0 (124.31.6, KERN-MEGA-PLAN 14.142). `.mega` has 10 bytes left in its rung.
+- [ ] **FS/GS are not reloaded after a heap move** (124.25.19, open in the SPEC), and `LocalCompact`/`LocalShrink` grow nothing.
+- [ ] **A compaction can move a block during `SEG_BWIN`/`SEG_AT` before the window is bound** (50.6.11, KERN-MEGA-PLAN 14.139). A few bytes; fits the padding.
+- [ ] **`mx_cpflags` holds the rate hook only for XMEM-owned `MX_FWIN` blocks, not claims** (comment says claims too; decide the intent). 50.6.
+- [ ] **`mega_fbown`'s owner test is `test al,0x50`**, equivalent only while no owner class is `20h|x` (124.31.11, 14.140). Assert the encoding table or restore the explicit compares when one is added.
+- [ ] **A fault close of a multi-program WIN16 instance closes all its programs; Windows closes one task** (124.31.11). Estimate none.
+- [ ] **The `.mega` rung has 10 bytes left** (KERN-MEGA-PLAN 14.142): the next kern_mega change of more than 10 bytes crosses a rung and needs a size pass or a move to `.cold` or a module first.
+
+**The library part and part sizes**
+- [ ] **Split the library part (`.w16dlg`)**: 64,977 of 65,536 on kern_mega (559 left; 64,163 real). Dialog and edit code into a second part is the durable fix; making the `w16e_*` calls to `w16_mheap` indirect also removes the nearest real wrapping transfer (7,108 bytes away). Nothing may be added to part 3 until it is split. Estimate none.
+- [ ] **Part 11 is 1,048 bytes and parts are claimed in whole KB, so it takes 2 KB** (124.25.16): trim 24 bytes or accept.
+- [ ] **Part 5 (the loader) grew 788 bytes with `thunk`** against an estimate of 150 to 250, and its kept copy is paid per program with a discardable segment (124.26.14). Trim candidate.
+
+**Sir Hangman and the installers**
+- [ ] **The engine's `Not enough memory for its code`** (`w16_r_code`, about 14 s in; SPEC.md 124.26.11-12). Capture the segment, its size and the free heap first (one boot with heap counters). Estimate 50 to 150 part bytes and 0 to 20 resident, a guess.
+- [ ] **DDEML's `PROGMAN` conversation routed into 124.33.2's parser** (124.25.26). 300 to 500 part bytes and a conversation table. `DdeConnect` was never reached by the reference set; "no server" ships.
+- [ ] **CTL3D's `WH_CBT` hook firing** (124.25.22). Set by `SetWindowsHookEx` type 5; nothing calls the hook yet. Estimate none.
+- [ ] **`thunk` and the far-pointer data fixups** (124.26.14): 26 of `_INST16.EXE`'s 64 discardable segments (240,345 bytes) are named from DGROUP as far pointers and stay kept; thunking them withdraws the "no data fixups" line and is an owner decision. Only relevant if the installer could run on `kern_big`, where the launcher's own test stops it, so parked.
+- [ ] **`_INST16.EXE` on `kern_big` after 28 kept segments: *Its System font could not be read*** (undiagnosed; probably the heap, about 450 KB of 640 KB). Check free memory at that point or boot `TINY16` on the same disk.
+- [ ] **`OpenFile` does not search the EXE's folder or PATH; `VerFindFile` does not create `WIN16\SYSTEM`; the Windows directory is spelled two ways; `GetSystemDirectory` re-walks every call** (124.20.5.1, 124.21.3). Estimate none.
+- [ ] **`AccessResource` reads the program's file for a library's resource; `LoadModule` of a DLL name starts it as a program** (124.23). Pre-existing. Estimate none.
+- [ ] **A library-of-a-library found in a folder is not re-looked-for beside the program; `GetModuleFileName` on a library handle prints the program's folder** (124.23.1.1). Estimate none.
+
+**Menus, windows and GDI**
+- [ ] **`TrackPopupMenu`: whether Windows 3.1 sends `WM_INITMENU` is unverified (Wine does); no menu loop sends `WM_MENUSELECT`; 1bpp, mouse-release and bar-repaint fixes and the part-fetch failure path were never seen** (124.25.16). Estimate none.
+- [ ] **Paintbrush: the outlined brush stroke did not reproduce** (two boots; every `Polygon` filled). Record `Polygon`'s arguments, `w16_brush` and `w16_rop` when it happens. Options > Brush Shapes draws its six buttons as tiny open-bottomed squares (owner-drawn?). 124.25.14.
+- [ ] **Centipede's black field after *One*** (`bigbmp`'s seam at row 360 crossed by its 270x360 `BitBlt`; `BIGBMP`'s `bltseam` covers it). Look at it on the integrated tree. 124.25.17.
+- [ ] **`Get/SetBitmapBits` and `CreateBitmap`'s initial bits reach a tiled bitmap's first tile only** (124.25.17). A huge-pointer program needs a per-tile loop. Estimate none.
+- [ ] **`MEMDC.EXE` faults on `kern_mega` (`0D` in WIN16's code, `122C:8896`, not on an instruction start in any WIN16 section), with the old WIN16 too** (pre-existing). Needs a MEGATRAP or Bochs read of the selector's base. `win16megamemdc` is registered knowing it.
+- [ ] **`memdc`'s colour legs fail on a 1bpp adapter** (`setdib bm2scr bm2scrdev wflood wfloodbig paldib`; pre-existing). Is `win16memdc` VGA-only by design, or is the 4bpp DIB and flood path wrong on 1bpp? 124.25.14.
+- [ ] **`EnumProps` passes the atom for string-named properties; 16 atoms are shared with clipboard formats; `CloseWindow` is a stub** (124.25.13). Raising `W16_NATOM` costs only part bytes.
+
+**Names, tools and rows**
+- [ ] **A resource or class name past 31 characters still fails** (124.10; Windows allows 255) and `asterr` added no fixture with a long-named dialog. Cheap.
+- [ ] **Sound with a Sound Blaster on the Arcade games is untried**; the rig had no card.
+- [ ] **A program ending from a part by another path** (`w16_endshow`, the `ntk >= 2` `w16t_end` path via the task part) still frees from inside the same `ICALL` (124.8.3). A fixture for "a part's ICALL ends the program" on kern_mega, and a Bochs leg for `astexit`; `win16hiber`'s new Alt+F, X leg has not run.
+- [ ] **The WIN16 trace misses a program's own exit** (`w16_i21` takes `AH=4Ch` before its trace point; record 4Ch with AL), and the kern_mega ring is 64 entries (a bigger one costs `APP_MAX_SIZE`, about 100 bytes of limit). 124.17.4.
+- [ ] **`apps/browser/brdownload_part.asm` includes `build/brdownload_part_symbols.inc` by a hard-coded path**, so a `BUILD=<dir>` tree in a worktree with no `build/` fails. Fix is an `-I $(BUILD)/` include; not WIN16's.
+- [ ] **kern_mega rows for what only `kern_big` runs**: a library's DGROUP relocations (Q3: `win16dll` is real-mode only), `GlobalReAlloc` of a moveable block by its selector (U1), a callback whose CS is an odd conforming selector, `lheap`'s heap move and stack guard, the class table's growth path (`win16ctlproc`), `win16dgroup`'s `GMEM_MODIFY` fix, and a `kern_mega` Bochs run of `BIGBMP` (the five `win16mega*` rows cover some and none had run). `win16megamenu` is the first Bochs row that sends keys; a red may be the key injection (`--keep` leaves `end.png`).
+- [ ] **Built and never run** (for the final pass to name): `win16bigbmp`, `win16csalias`, `win16dgroup`, `win16dosenv`, `win16lheap`, `win16props`, `win16dde`, `win16np` (Bochs, never run), `win16thunk`, `win16mscdex` (re-run with the corrected `150Dh`), `FloodFill`'s `memdc` leg.
 
 ## 5. Sources
 
