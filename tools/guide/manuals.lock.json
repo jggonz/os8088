@@ -1319,9 +1319,9 @@
   "sources": [
    "apps/win16"
   ],
-  "stamped": "dc4aa4f05",
-  "strings": "4fe195f6a33d805e",
-  "why": "a zero-byte label for the pin registry; WIN16.O88 byte-identical on both arms"
+  "stamped": "5b15d6e7f",
+  "strings": "60b62591a5fcb95f",
+  "why": "WIN16-NEXT round 2: libraries are also found in the shared SYSTEM\\APPDATA\\WIN16 folder and in a folder the program names (SPEC 124.23.1.1, 124.25.22); the rest (odd selectors, DDEML with no server, window properties, the locked-move rule, a background task's message as a toast) is below the page's level of detail or kern_mega-only"
  },
  "WIN16_TXT": {
   "sources": [
