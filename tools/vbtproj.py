@@ -49,6 +49,8 @@ A project file (version 1):
      "fade_steps": 1..16, a fade's steps, one a frame,
      "any_key":  true: any key (Esc aside) leaves the title and plays an
                  end loop again, not Enter or Space alone (header 348),
+     "cover":    {"image": a picture's path, "line": the line under it} -
+                 the TITLE PICTURE, in the battle's window on the desktop,
      "characters": [{"name", "hp", "mp", "atk", "mag", "def", "mdef",
                      "evade", "menu": {"top": [ITEM], "side": [action]}}],
                    ITEM = {"action": id} | {"label", "sub": [action ids]},
@@ -185,6 +187,8 @@ class Project:
         out += [(v, "path") for v in d["sounds"].values()
                 if v.get("kind") == "file" and v.get("path")]
         out += [(v, "path") for v in d.get("images") or [] if v.get("path")]
+        if (d.get("cover") or {}).get("image"):
+            out.append((d["cover"], "image"))
         return out
 
     def save(self, path=None):

@@ -431,6 +431,8 @@ class Battle:
         self.capped = {}        # ...and what it did: clip -> frames capped
         self.cap_ring = None    # ...and the ring it took the engine to have
         self.any_key = False    # any key leaves the title (header 348)
+        self.cover = None       # (a PIL image, its line): the window's
+        self.name = None        # the battle's name (the window's title)
         self.rend = Rend("cga4", rows)  # the adapter it is for
 
 
@@ -724,7 +726,10 @@ def build(b):
     mus_at = vres_at + len(pad(vres, ALIGN))
     ui_at = mus_at + len(pad(mus, ALIGN))
     idl_at = ui_at + len(pad(uib, ALIGN))
-    img_at = idl_at + len(pad(idle, ALIGN))
+    cov = cover_region(b.cover[0], b.cover[1], CV_KINDS[REND.kind],
+                       b.name) if b.cover else b""
+    cov_at = idl_at + len(pad(idle, ALIGN))
+    img_at = cov_at + len(pad(cov, ALIGN))
     imgs = bytes(b.images)
     pos = img_at + len(pad(imgs, ALIGN))
     offs = []
@@ -752,7 +757,8 @@ def build(b):
     if len(opens) > MAX_OPEN:
         raise ValueError("%d openings" % len(opens))
     h[80:88] = bytes(opens + [NO_SFX] * (MAX_OPEN - len(opens)))
-    struct.pack_into("<II", h, 88, 0, 0)   # (the entries: in the clips now)
+    struct.pack_into("<II", h, 88, cov_at if cov else 0, len(cov))
+    # (88: the entries' region until format 8; the TITLE PICTURE's now)
     struct.pack_into("<IHH", h, 320, img_at, len(imgs), meta_len)
     h[330:337] = bytes([title_ix, leave_ix] + ends + [b.fade_steps])
     h[337] = REND.code                  # the adapter (cga4, vga4, herc)
@@ -787,7 +793,7 @@ def build(b):
     meta = bytes(meta).ljust(meta_len, b"\0")    # (as long as its rules)
     assert len(meta) <= META
     out = pad(meta, ALIGN) + pad(vres, ALIGN) + pad(mus, ALIGN) + \
-        pad(uib, ALIGN) + pad(idle, ALIGN) + \
+        pad(uib, ALIGN) + pad(idle, ALIGN) + pad(cov, ALIGN) + \
         pad(imgs, ALIGN)
     for r in regions:
         out += pad(r, ALIGN)
@@ -869,6 +875,8 @@ class Bundle:
         self.ends_then = {"victory": data[346], "defeat": data[347]}
         self.fade_steps = data[336]
         self.any_key = bool(data[348] & HF_ANYKEY)
+        cat, clen = struct.unpack_from("<II", data, 88)
+        self.cover = data[cat:cat + clen] if clen else None
         global REND
         kind = {0: "cga4", 1: "vga4", 2: "herc"}[data[337]]
         REND = Rend(kind, self.rows, [tuple(data[352 + 3 * i:355 + 3 * i])
@@ -1174,6 +1182,11 @@ def battle_of(proj, progress=None, kind="cga4"):
     # --- the title loop and the endings (125.3.1)
     b.fade_steps = d.get("fade_steps", 16)
     b.any_key = bool(d.get("any_key"))
+    b.name = d.get("name")
+    cv = d.get("cover") or {}
+    if cv.get("image"):                 # THE TITLE PICTURE (the window's)
+        from PIL import Image
+        b.cover = (Image.open(proj.here(cv["image"])), cv.get("line"))
 
     def loop_of(lp, tag, full=False):
         c = d["clips"][lp["clip"]]
@@ -1451,6 +1464,53 @@ def engine_path(build=None):
 
 
 GAME_SUFFIX = {"cga4": "", "vga4": "V", "herc": "H"}
+
+# THE TITLE PICTURE (header 88, the region the entries left): shown in the
+# battle's WINDOW on the desktop before the play, with one line under it.
+# One 1bpp bitmap for each shape of desktop the bundle can be opened on -
+# the engine takes the one for the screen it finds (OSAPI_VIDEO)
+CV_TALL, CV_SQUARE, CV_HERC = 0, 1, 2       # 640x200, 640x480 (and EGA's
+CV_DESK = {CV_TALL: (640, 200), CV_SQUARE: (640, 480),  # 350: Hercules'
+           CV_HERC: (720, 348)}                         # shape), 720x348
+CV_MAXH = {CV_TALL: 136, CV_SQUARE: 340, CV_HERC: 250}  # (the window fits)
+CV_KINDS = {"cga4": (CV_TALL, CV_SQUARE), "vga4": (CV_SQUARE,),
+            "herc": (CV_HERC,)}
+CV_LINE = 64
+COVER_LINE = "Click or press Enter to begin"
+
+
+def cover_bitmap(img, kind):
+    """IMG (a PIL image) as the 1bpp bitmap for desktop KIND: half the
+    screen wide, as tall as its shape on a 4:3 screen of that many rows,
+    dithered (Floyd-Steinberg). (w, h, stride, bytes), 1 a LIT pixel"""
+    from PIL import Image
+    dw, dh = CV_DESK[kind]
+    w = dw // 2
+    h = int(round(w * img.height / float(img.width) * dh / dw * 4 / 3.0))
+    h = max(8, min(CV_MAXH[kind], h))
+    g = img.convert("L").resize((w, h), Image.LANCZOS).convert("1")
+    stride = (w + 7) // 8
+    return w, h, stride, g.tobytes()
+
+
+def cover_region(img, line, kinds, name=None):
+    """The region: 'CV', the variants' count, the line (64 bytes), the
+    battle's name (16, the window's title), then a row a variant - kind, 0,
+    w, h, stride, its offset in the region - and the bitmaps (SPEC.md
+    125.2)"""
+    vs = [(k,) + cover_bitmap(img, k) for k in kinds]
+    head = bytearray(b"CV" + bytes([len(vs), 0]))
+    t = (line if line is not None else COVER_LINE)
+    t = "".join(c for c in t if 0x20 <= ord(c) <= 0x7E)[:CV_LINE - 1]
+    head += t.encode("ascii").ljust(CV_LINE, b"\0")
+    nm = "".join(c for c in (name or "") if 0x20 <= ord(c) <= 0x7E)[:15]
+    head += nm.encode("ascii").ljust(16, b"\0")
+    at = len(head) + 12 * len(vs)
+    body = bytearray()
+    for k, w, h, st, bm in vs:
+        head += struct.pack("<BBHHHI", k, 0, w, h, st, at + len(body))
+        body += bm
+    return bytes(head + body)
 
 
 def game_stem(proj):

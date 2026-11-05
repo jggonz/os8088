@@ -16950,6 +16950,13 @@ SOAK = [
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
+    Row("vbtcover", "soak", py("tests/vbtcover.py"), 80.0,
+        "SPEC.md 125.2: the TITLE PICTURE (header 88) in the battle's window "
+        "on the desktop - the window titled with the battle's name and sized "
+        "to the picture and its line; on the glass the bundle's own variant "
+        "for the screen's shape bit for bit (CGA 320 x 100, Hercules 360 x "
+        "174) and the line lit under it, again after a play. Broken (the "
+        "blit taken out) red"),
     Row("vbtgame", "soak", py("tests/vbtgame.py"), 100.0,
         "SPEC.md 125.2: a battle EMBEDDED in its own copy of the engine "
         "(os88vbt.py game: flags bit 2, the packed image's end in the link "

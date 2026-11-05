@@ -532,6 +532,24 @@ class App(object):
         self.root.after(50, self._poll)
         self.drop_how = enable_drop(self.root, self._dropped)
 
+    def _cover(self):
+        from tkinter import filedialog
+        f = filedialog.askopenfilename(
+            title="The title picture", filetypes=[
+                ("Pictures", "*.png *.jpg *.jpeg *.bmp *.gif"), ("All", "*")])
+        if f:
+            cv = dict(self.app.proj.d.get("cover") or {})
+            cv["image"] = f
+            self.app.edit("set", ("cover",), cv)
+
+    def _cover_line(self):
+        cv = self.app.proj.d.get("cover")
+        if not cv:
+            return
+        line = self.cvline.get()
+        if line != (cv.get("line") or ""):
+            self.app.edit("set", ("cover",), dict(cv, line=line))
+
     def _fit(self):
         """The window as tall as its tallest tab asks, so nothing is cut off
         below - no taller than the screen less its taskbar's room"""
@@ -1132,6 +1150,23 @@ class BattleTab(object):
         cb.bind("<<ComboboxSelected>>", lambda e: self._fit())
         ttk.Label(ff, text="levels (a fade to black ends black; 16 the "
                   "default)").pack(side="left")
+        # THE TITLE PICTURE: the battle's window on the desktop, before the
+        # play - the picture, and one line under it
+        cf = ttk.Frame(rf)
+        cf.grid(row=5, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(cf, text="Title picture (the window, before the play):"
+                  ).pack(side="left")
+        self.cvl = ttk.Label(cf, text="", width=28)
+        self.cvl.pack(side="left", padx=4)
+        ttk.Button(cf, text="Choose...", command=self._cover).pack(side="left")
+        ttk.Button(cf, text="None", command=lambda: self.app.edit(
+            "set", ("cover",), None)).pack(side="left", padx=(2, 8))
+        ttk.Label(cf, text="Its line:").pack(side="left")
+        self.cvline = tk.StringVar()
+        en = ttk.Entry(cf, textvariable=self.cvline, width=34)
+        en.pack(side="left", padx=4)
+        en.bind("<Return>", lambda e: self._cover_line())
+        en.bind("<FocusOut>", lambda e: self._cover_line())
         r += 1
         # how it ends: the battle's own last clips, whoever the enemy is
         ef = ttk.LabelFrame(f, text="How it ends (each clip is played to its "
@@ -1233,6 +1268,11 @@ class BattleTab(object):
                                round(100.0 * pw * ph / (w * h))))
         import vbtana as A__
         self.fitv.set(FIT_LABELS[A__.fit_of(self.app.proj)])
+        cv = d.get("cover") or {}
+        self.cvl.config(text=os.path.basename(cv.get("image") or "") or
+                        "(none)")
+        import os88vbt as B__
+        self.cvline.set(cv.get("line") or B__.COVER_LINE)
         self.clipv.set(str(A__.clip_of(self.app.proj)))
         self.scnote.config(text=("The picture, centred in black: " +
                                  "; ".join(bits) + ". The band is the same.")
@@ -1272,6 +1312,24 @@ class BattleTab(object):
         if sc != (t.get("scale") or {}):
             self.app.frames.clear()     # (another size: other screens)
             self.app.edit("set", ("target", "scale"), sc or None)
+
+    def _cover(self):
+        from tkinter import filedialog
+        f = filedialog.askopenfilename(
+            title="The title picture", filetypes=[
+                ("Pictures", "*.png *.jpg *.jpeg *.bmp *.gif"), ("All", "*")])
+        if f:
+            cv = dict(self.app.proj.d.get("cover") or {})
+            cv["image"] = f
+            self.app.edit("set", ("cover",), cv)
+
+    def _cover_line(self):
+        cv = self.app.proj.d.get("cover")
+        if not cv:
+            return
+        line = self.cvline.get()
+        if line != (cv.get("line") or ""):
+            self.app.edit("set", ("cover",), dict(cv, line=line))
 
     def _fit(self):
         t = self.app.proj.d["target"]

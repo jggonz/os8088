@@ -112,6 +112,16 @@ EH_AGAIN    equ 3
 EH_AGAINJ   equ 4               ; (after a once-clip: JOIN the title, the
                                 ; play again with no fade - 125.3.1)
 VH_ETHEN    equ 346             ; victory, defeat: what follows an end clip
+VH_COVER    equ 88              ; dword offset, dword length: the TITLE
+                                ; PICTURE (format 8; 0 none) - 'CV', the
+                                ; variants, the line, a 12-byte row each
+CV_NAME     equ 68              ; the battle's name, the window's title
+CV_TAB      equ 84              ; (the rows: kind, 0, w, h, stride, offset)
+CV_LINE     equ 64
+CV_TALL     equ 0               ; 640 x 200
+CV_SQUARE   equ 1               ; 640 x 480 (and 350, EGA's)
+CV_HERC     equ 2               ; 720 x 348
+CV_TEXTH    equ 12              ; the line's rows: 2, a cell, 2
 VH_HFLAGS   equ 348             ; the battle's flags (0 in older bundles):
 HF_ANYKEY   equ 1               ; ANY key (Esc aside) leaves the title and
                                 ; plays an end loop again, not Enter alone
@@ -304,6 +314,19 @@ vb_entry:
     jc .nodoc                       ; double-clicked - ES:SI the kernel's
     call vb_docnames                ; name, DX its folder, BL its volume
 .nodoc:
+    call vb_coverload               ; THE TITLE PICTURE, when the battle has
+    jc .nocv                        ; one: the window made its size - the
+    mov ax, [vb_cvw]                ; picture and its line, and the frame
+    cmp ax, 320                     ; (2 across, the title bar and 1 down,
+    jae .cw                         ; as Video Player sizes its own)
+    mov ax, 320
+.cw:
+    add ax, 2
+    mov [vb_tpl+4], ax
+    mov ax, [vb_cvh]
+    add ax, CV_TEXTH + TITLE_H + 1
+    mov [vb_tpl+6], ax
+.nocv:
     mov si, vb_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -374,6 +397,362 @@ vb_embfind:
     mov bx, vb_meta
     mov cx, 4096
     jmp vb_read
+
+; =============================================================================
+; THE TITLE PICTURE (SPEC.md 125.2: header 88): the battle's own picture in
+; its window on the desktop, and one line under it
+; =============================================================================
+
+; vb_coverload - the picture of the battle this window plays, read into a
+; claim of its own: the bundle found as the play finds it (a document, one
+; embedded in us, the names beside us), its header read when no play has
+; read it, and the variant for this screen's shape taken (OSAPI_VIDEO).
+; CF=0 [vb_cvon] 1; CF=1 none (no picture, no bundle, no room). From the
+; entry, or a UI callback
+vb_coverload:
+    cmp byte [vb_cvon], 0
+    je .go
+    clc
+    ret
+.go:
+    push si
+    push bp
+    cmp byte [vb_loaded], 0         ; (a play read the header: it is ours)
+    jne .have
+    xor ax, ax
+    mov [vb_embat], ax
+    mov [vb_embat+2], ax
+    cmp byte [vb_doc], 0
+    je .self
+    mov dx, [vb_docdir]
+    mov bl, [vb_docvol]
+    call OSAPI_FILE_GOTO_QM
+    jmp short .names
+.self:
+    mov dx, [vb_selfdir]
+    mov bl, [vb_selfvol]
+    call OSAPI_FILE_GOTO_QM
+    call vb_embfind
+    jnc .have
+.names:
+    call OSAPI_VIDEO                ; this screen's rendition's name first
+    mov si, [vb_nph]
+    cmp dl, 1                       ; (Hercules)
+    je .n1
+    mov si, [vb_npv]
+    cmp dh, 1                       ; (a colour VGA or EGA: VGA's)
+    ja .n1
+    mov si, [vb_np0]
+.n1:
+    call .try
+    jnc .have
+    mov si, [vb_np0]
+    call .try
+    jnc .have
+    cmp byte [vb_doc], 0
+    je .no
+    mov si, vb_docname
+    call .try
+    jnc .have
+.no:
+    stc
+    jmp .out
+.try:                               ; SI's header into vb_meta, ours?
+    mov [vb_namep], si
+    mov word [vb_cur+FSEQ_OFF], 0xFFFF
+    mov word [vb_cur+FSEQ_OFF+2], 0xFFFF
+    push ds
+    pop es
+    mov bx, vb_meta
+    mov cx, 4096
+    xor ax, ax
+    xor dx, dx
+    call vb_read
+    jc .tno
+    cmp word [vb_meta+VH_MAGIC], 'VB'
+    jne .tno
+    cmp word [vb_meta+VH_MAGIC+2], 'T1'
+    jne .tno
+    cmp word [vb_meta+VH_VER], 8
+    jne .tno
+    clc
+    ret
+.tno:
+    stc
+    ret
+.have:
+    mov cx, [vb_meta+VH_COVER+4]    ; its length: none, or past a claim's
+    jcxz .no                        ; piece (60 KB)
+    cmp word [vb_meta+VH_COVER+6], 0
+    jne .no
+    call vb_round
+    push ax                         ; (the read, whole 4 KBs)
+    mov cl, 10
+    shr ax, cl
+    or ax, ax
+    jnz .kb
+    mov ax, 64                      ; (60 KB and up: vb_round's 0xF000)
+.kb:
+    call OSAPI_MEM_CLAIM
+    pop cx
+    jc .no
+    mov [vb_cvseg], dx
+    mov es, dx
+    xor bx, bx
+    mov ax, [vb_meta+VH_COVER]
+    mov dx, [vb_meta+VH_COVER+2]
+    call vb_read
+    jc .free
+    mov es, [vb_cvseg]
+    cmp word [es:0], 'CV'
+    jne .free
+    call OSAPI_VIDEO                ; THIS SCREEN'S SHAPE: 200 rows the tall
+    mov cl, CV_TALL                 ; one, 720 across or 348 and 350 rows
+    cmp bx, 200                     ; Hercules' shape, anything else square
+    jbe .k
+    mov cl, CV_HERC
+    cmp ax, 720
+    je .k
+    cmp bx, 350
+    je .k
+    cmp bx, 348
+    je .k
+    mov cl, CV_SQUARE
+.k:
+    mov es, [vb_cvseg]
+    mov ch, [es:2]                  ; the variants
+    or ch, ch
+    jz .free
+    mov si, CV_TAB
+    mov bp, si                      ; (the first, when none is this shape)
+.v:
+    cmp [es:si], cl
+    je .vg
+    add si, 12
+    dec ch
+    jnz .v
+    mov si, bp
+.vg:
+    mov ax, [es:si+2]
+    mov [vb_cvw], ax
+    mov ax, [es:si+4]
+    mov [vb_cvh], ax
+    mov ax, [es:si+6]
+    mov [vb_cvstr], ax
+    mov ax, [es:si+8]
+    mov [vb_cvoff], ax
+    mov si, 4                       ; the line, ours
+    mov di, vb_cvline
+    mov cx, CV_LINE
+.ln:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .ln
+    mov byte [vb_cvline+CV_LINE-1], 0
+    mov si, CV_NAME                 ; the battle's name: the window's title
+    cmp byte [es:si], 0             ; (its own, when it has one)
+    je .nn
+    mov di, vb_cvname
+    mov cx, 16
+.nm:
+    mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .nm
+    mov byte [vb_cvname+15], 0
+    mov word [vb_tpl+8], vb_cvname
+.nn:
+    mov byte [vb_cvon], 1
+    clc
+    jmp short .out
+.free:
+    call vb_cvfree
+    stc
+.out:
+    pop bp
+    pop si
+    ret
+
+; vb_cvfree - the picture's claim given back (the play wants the memory)
+vb_cvfree:
+    mov byte [vb_cvon], 0
+    xor dx, dx
+    xchg dx, [vb_cvseg]
+    or dx, dx
+    jz .out
+    call OSAPI_MEM_FREE
+.out:
+    ret
+
+; vb_cvpaint - vb_paint's, with a picture: it, centred, then the line - the
+; window's status when it says something, else the battle's own line -
+; centred under it in white on black, and every pixel the two leave black,
+; each once. [vb_px].. are set; SI pushed by vb_paint
+vb_cvpaint:
+    mov ax, [vb_pw]                 ; the picture's x: centred
+    sub ax, [vb_cvw]
+    jae .cx
+    xor ax, ax
+.cx:
+    shr ax, 1
+    add ax, [vb_px]
+    mov [vb_cvx], ax
+    mov al, CWHITE
+    mov ah, CBLACK
+    call OSAPI_GFX_BLIT1_PEN
+    mov si, [vb_cvoff]
+    mov bx, [vb_py]
+    mov di, [vb_cvh]                ; rows to go, 255 a call
+.b:
+    or di, di
+    jz .bd
+    mov dx, di
+    cmp dx, 255
+    jbe .b1
+    mov dx, 255
+.b1:
+    sub di, dx
+    push dx
+    push bx
+    push si
+    mov es, [vb_cvseg]
+    mov bp, [vb_cvstr]
+    mov ax, [vb_cvx]
+    mov cx, [vb_cvw]
+    call OSAPI_GFX_BLIT1
+    pop si
+    pop bx
+    pop dx
+    add bx, dx
+    mov ax, [vb_cvstr]
+    mul dx
+    add si, ax
+    jmp short .b
+.bd:
+    mov al, CBLACK                  ; the sides of it, black
+    call OSAPI_SET_COLOR
+    mov ax, [vb_cvx]
+    cmp ax, [vb_px]
+    jbe .rs
+    mov cx, ax
+    dec cx
+    mov ax, [vb_px]
+    mov bx, [vb_py]
+    mov dx, bx
+    add dx, [vb_cvh]
+    dec dx
+    call OSAPI_GFX_FILL
+.rs:
+    mov ax, [vb_cvx]
+    add ax, [vb_cvw]
+    mov cx, [vb_px]
+    add cx, [vb_pw]
+    cmp ax, cx
+    jae .tl
+    dec cx
+    mov bx, [vb_py]
+    mov dx, bx
+    add dx, [vb_cvh]
+    dec dx
+    call OSAPI_GFX_FILL
+.tl:
+    ; THE LINE: the status while it says anything but ready, else ours -
+    ; centred in the window's cells
+    mov si, [vb_status]
+    cmp si, vb_s_ready
+    jne .t0
+    mov si, vb_cvline
+.t0:
+    cmp byte [si], ' '              ; (a status' leading space)
+    jne .t1
+    inc si
+.t1:
+    mov di, si                      ; its length
+    xor cx, cx
+.t2:
+    cmp byte [di], 0
+    je .t3
+    inc di
+    inc cx
+    jmp short .t2
+.t3:
+    mov ax, [vb_pcols]
+    cmp cx, ax
+    jbe .t4
+    mov cx, ax
+.t4:
+    sub ax, cx
+    shr ax, 1                       ; the spaces before it
+    push ds
+    pop es
+    mov di, vb_pbuf
+    push cx
+    mov cx, ax
+    mov al, ' '
+    rep stosb
+    pop cx
+    rep movsb
+    mov ax, di                      ; ...and after it, to the window's cells
+    sub ax, vb_pbuf
+    mov cx, [vb_pcols]
+    sub cx, ax
+    mov al, ' '
+    rep stosb
+    mov byte [di], 0
+    mov cx, [vb_px]
+    mov dx, [vb_py]
+    add dx, [vb_cvh]
+    add dx, 2
+    mov si, vb_pbuf
+    mov ax, CWHITE + CBLACK * 256
+    call OSAPI_FONT_RUN
+    mov al, CBLACK                  ; the rows round the line, black
+    call OSAPI_SET_COLOR
+    mov bx, [vb_py]
+    add bx, [vb_cvh]                ; two above it
+    mov dx, bx
+    inc dx
+    mov ax, [vb_px]
+    mov cx, ax
+    add cx, [vb_pw]
+    dec cx
+    call OSAPI_GFX_FILL
+    mov bx, [vb_py]                 ; below it, to the content's bottom
+    add bx, [vb_cvh]
+    add bx, 10
+    mov dx, [vb_py]
+    add dx, [vb_ph]
+    dec dx
+    cmp dx, bx
+    jl .rr
+    mov ax, [vb_px]
+    mov cx, ax
+    add cx, [vb_pw]
+    dec cx
+    call OSAPI_GFX_FILL
+.rr:
+    mov ax, [vb_pcols]              ; right of the cells, the line's rows
+    mov cl, 3
+    shl ax, cl
+    cmp ax, [vb_pw]
+    jae .done
+    add ax, [vb_px]
+    mov cx, [vb_px]
+    add cx, [vb_pw]
+    dec cx
+    mov bx, [vb_py]
+    add bx, [vb_cvh]
+    add bx, 2
+    mov dx, bx
+    add dx, 7
+    call OSAPI_GFX_FILL
+.done:
+    pop si
+    cld
+    ret
 
 ; vb_docnames - the document at ES:SI (a NUL 8.3 name in the kernel's
 ; segment), DX its folder, BL its volume: kept, and the names a play looks
@@ -479,6 +858,10 @@ vb_paint:
     mov ax, 60
 .c:
     mov [vb_pcols], ax
+    cmp byte [vb_cvon], 0           ; (the title picture, and its line)
+    je .lines
+    jmp vb_cvpaint
+.lines:
     xor bp, bp                      ; the line
 .line:
     mov bx, bp
@@ -601,6 +984,7 @@ vb_play:
     mov word [vb_status], vb_s_load
     mov si, [vb_win]
     call vb_paint
+    call vb_cvfree                  ; (the picture's claim: the play's now)
     call vb_load
     jc .say
     mov ax, vb_main
@@ -614,6 +998,7 @@ vb_play:
 .say:
     mov ax, [vb_err]
     mov [vb_status], ax
+    call vb_coverload               ; (back: the picture again)
     jmp short .paint
 .back:
     mov ax, [vb_err]                ; the play's own word, or ready
@@ -622,6 +1007,7 @@ vb_play:
     mov ax, vb_s_again
 .s2:
     mov [vb_status], ax
+    call vb_coverload
 .paint:
     mov si, [vb_win]
     call vb_paint
@@ -4022,6 +4408,15 @@ VB_VAR vb_np0, 2                    ; the names a play looks for: CGA4's,
 VB_VAR vb_npv, 2                    ; VGA's, Hercules' (vb_name... or a
 VB_VAR vb_nph, 2                    ; document's, vb_docnames)
 VB_VAR vb_doc, 1                    ; a document was double-clicked
+VB_VAR vb_cvon, 1                   ; the title picture is up: its claim,
+VB_VAR vb_cvseg, 2                  ; its place, its shape, and its line
+VB_VAR vb_cvoff, 2
+VB_VAR vb_cvw, 2
+VB_VAR vb_cvh, 2
+VB_VAR vb_cvstr, 2
+VB_VAR vb_cvx, 2
+VB_VAR vb_cvline, CV_LINE
+VB_VAR vb_cvname, 16
 VB_VAR vb_selfname, 14              ; our own file, and its folder: a battle
 VB_VAR vb_selfdir, 2                ; embedded in it (vb_embfind)
 VB_VAR vb_selfvol, 1

@@ -237289,6 +237289,25 @@ stem less a trailing V or H, then with V on a VGA, H on a Hercules
 when there is none. Launched with no document it looks for `BATTLE.VBT`,
 `BATTLEV.VBT` and `BATTLEH.VBT` as before (`vbtdoc`).
 
+**The TITLE PICTURE** (the project's `"cover"`: a picture and a line; the
+Battle tab's "Title picture") is shown in the battle's WINDOW on the desktop
+before the play, with one line under it ("Click or press Enter to begin"
+unless it says otherwise) - the window titled with the battle's name and
+sized to the two (`vb_tpl`, before it is created). Its region, at header
+88: `CV`, the variants' count, the line (64 bytes), the battle's name (16),
+a 12-byte row a variant - its desktop's SHAPE (0: 640 x 200, CGA's; 1: 640
+x 480 and EGA's 350; 2: 720 x 348, Hercules'), 0, width, height, stride,
+its offset in the region - and the 1bpp bitmaps, half the screen wide and
+as tall as the picture's shape on a 4:3 screen of that many rows, dithered
+(Floyd-Steinberg); a CGA4 bundle carries 0 and 1, VGA's 1, Hercules' 2.
+The engine reads the region into a claim at its entry (`vb_coverload`,
+the bundle found as a play finds it, the variant by `OSAPI_VIDEO`'s
+screen), puts it down with `OSAPI_GFX_BLIT1` (`vb_cvpaint`: white on
+black, the line centred, every other pixel black once) and gives the claim
+back as a play starts (`vb_cvfree`: the rings want it), reading it again
+when the play returns. A status (*Loading...*, a refusal) takes the line's
+place while it says anything. `vbtcover`.
+
 **A battle may be EMBEDDED in its own copy of the engine** - a GAME, one
 file to copy and double-click, one adapter each (`os88vbt.py game`, the
 Build tab's "Make the games": `NAME.O88`, `NAMEV.O88`, `NAMEH.O88`, NAME
@@ -237388,7 +237407,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 68 | 2 x 4 | the CANVAS: x, y, width and height in pixels (the build's; the engine does not need it) |
 | 76 | 2 | the largest record, at most 16 KB (VB_CGUARD) |
 | 80 | 8 | the openings' clips, in turn; FFh past the last |
-| 88 | 4+4 | zero (version 7's ENTRIES region: the entries are in their clips, 125.2.2) |
+| 88 | 4+4 | the TITLE PICTURE's offset and length, or zero (version 7's ENTRIES region was here: the entries are in their clips, 125.2.2) |
 | 320 | 4+2 | the PICTURES' offset and length |
 | 326 | 2 | the first region's length: 4096 and the rules rounded to 4 KB |
 | 330 | 1 | the TITLE loop's clip (125.3.1), FFh none |
