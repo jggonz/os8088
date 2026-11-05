@@ -11124,7 +11124,7 @@ rczex: $(BUILD)/runcpm.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part))
+$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/c64/c64fast.bin $(BUILD)/c64/c64aot.bin $(BUILD)/c64/c64aotk.bin $(BUILD)/c64/c64aotpc.bin $(BUILD)/c64/c64jit.bin))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): c64.c #includes the parts,
 # and the shim %includes the three hand-written pieces and the icon. Every one
@@ -11134,8 +11134,9 @@ $(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part))
 # (LESSONS.md 9).
 C64SRC := apps/c64/c64io.c apps/c64/c64kbd.c apps/c64/c64scr.c \
           apps/c64/c64menu.c apps/c64/c64cmd.c apps/c64/c64load.c \
-          apps/c64/c64about.c
-C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc
+          apps/c64/c64about.c apps/c64/c64disk.c
+C64INC := apps/c64/c64cpu.inc apps/c64/c64mem.inc apps/c64/c64band.inc \
+          apps/c64/c64fast.inc apps/c64/c64fsx.inc apps/c64/c64sid.inc
 C64HOST := apps/c64/build.sh apps/c64/hosttest/os88.h \
            apps/c64/hosttest/c64uitest.c apps/c64/hosttest/c64memtest.asm \
            apps/c64/hosttest/c64memtest.sh tools/c64ref.py $(C64INC)
@@ -11324,7 +11325,7 @@ xt-c64: $(IMG360) $(BUILD)/c64360.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM,part))
+$(eval $(call CC_PACKAGE,apple2,apple2,APPLE2.OVL,$(BUILD)/apple2-rom/APPLE2.ROM $(BUILD)/apple2/a2fast.bin $(BUILD)/apple2/a2aot.bin $(BUILD)/apple2/a2aotpc.bin,part))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): apple2.c #includes the
 # parts, and the shim %includes the five hand-written pieces and the icon.
@@ -11337,7 +11338,8 @@ APPLE2SRC := apps/apple2/a2io.c apps/apple2/a2kbd.c apps/apple2/a2scr.c \
              apps/apple2/a2disk.c apps/apple2/a2about.c
 APPLE2INC := apps/apple2/a2cpu.inc apps/apple2/a2mem.inc \
              apps/apple2/a2band.inc apps/apple2/a2nib.inc \
-             apps/apple2/a2fsx.inc apps/apple2/a2assoc.inc
+             apps/apple2/a2fsx.inc apps/apple2/a2assoc.inc \
+             apps/apple2/a2fast.inc
 APPLE2HOST := apps/apple2/build.sh apps/apple2/hosttest/os88.h \
               apps/apple2/hosttest/a2uitest.c \
               apps/apple2/hosttest/a2memtest.asm \
@@ -11388,6 +11390,72 @@ $(BUILD)/apple2-rom/APPLE2.ROM: tools/getapple2rom.py | $(BUILD)
 
 #> [Applications] apple2rom :: fetch the Apple II ROMs at pinned hashes (never committed)
 apple2rom: $(BUILD)/apple2-rom/APPLE2.ROM
+
+# THE FAST 6502 CORE (APPLE2-SPEC section 4.6, docs/plans/FAST6502-PLAN.md):
+# apps/m6502/m65gen.py writes it, nasm makes the 64KB segment, and it is part
+# 1 of APPLE2.O88. The generator checks its cycle costs against the accurate
+# core's own table on every build.
+$(BUILD)/apple2/a2fast.asm: apps/m6502/m65gen.py apps/apple2/a2cpu.inc | $(BUILD)
+	@mkdir -p $(BUILD)/apple2
+	python3 apps/m6502/m65gen.py --machine apple2 --check-cycles apps/apple2/a2cpu.inc -o $@
+
+$(BUILD)/apple2/a2fast.bin: $(BUILD)/apple2/a2fast.asm
+	$(NASM) -f bin -w+error -l $(BUILD)/apple2/a2fast.lst -o $@ $<
+
+# ...AND THE ROM TRANSLATED AHEAD OF TIME (APPLE2-SPEC section 4.7): the
+# seeds are the ROM PCs tools/a2trace.py sees run while it types BASIC at the
+# Autostart ROM on tools/py6502.py; apps/m6502/m65aot.py translates them and
+# what a walk from them reaches, and writes the code (part 2) and the PC
+# table (part 3). Made from the fetched ROM, so never committed.
+$(BUILD)/apple2/a2rom.seeds: tools/a2trace.py tools/py6502.py apps/m6502/m65gen.py \
+                             $(BUILD)/apple2-rom/APPLE2.ROM
+	@mkdir -p $(BUILD)/apple2
+	python3 tools/a2trace.py $(BUILD)/apple2-rom/APPLE2.ROM -o $@
+
+$(BUILD)/apple2/a2aotpc.bin: $(BUILD)/apple2/a2aot.bin
+$(BUILD)/apple2/a2aot.bin: apps/m6502/m65aot.py apps/m6502/m65gen.py \
+                           $(BUILD)/apple2/a2rom.seeds $(BUILD)/apple2-rom/APPLE2.ROM
+	python3 apps/m6502/m65aot.py --machine apple2 --rom $(BUILD)/apple2-rom/APPLE2.ROM \
+	    --seeds $(BUILD)/apple2/a2rom.seeds -o $(BUILD)/apple2/a2aot.asm \
+	    --table $(BUILD)/apple2/a2aotpc.bin
+
+# ...and the C64's (C64-SPEC section 4.7), part 1 of C64.O88
+$(BUILD)/c64/c64fast.asm: apps/m6502/m65gen.py apps/c64/c64cpu.inc | $(BUILD)
+	@mkdir -p $(BUILD)/c64
+	python3 apps/m6502/m65gen.py --machine c64 --check-cycles apps/c64/c64cpu.inc -o $@
+
+$(BUILD)/c64/c64fast.bin: $(BUILD)/c64/c64fast.asm
+	$(NASM) -f bin -w+error -l $(BUILD)/c64/c64fast.lst -o $@ $<
+
+# ...AND BASIC AND THE KERNAL TRANSLATED AHEAD OF TIME (C64-SPEC section 4.8):
+# tools/c64trace.py types BASIC at the KERNAL on tools/py6502.py for the
+# seeds, and apps/m6502/m65aot.py writes a segment per bank (parts 3 and 4)
+# and the PC table (part 5). Made from the fetched ROM, so never committed.
+$(BUILD)/c64/c64rom.seeds: tools/c64trace.py tools/py6502.py $(BUILD)/c64-rom/C64.ROM
+	@mkdir -p $(BUILD)/c64
+	python3 tools/c64trace.py $(BUILD)/c64-rom/C64.ROM -o $@
+
+$(BUILD)/c64/c64aotk.bin $(BUILD)/c64/c64aotpc.bin: $(BUILD)/c64/c64aot.bin
+$(BUILD)/c64/c64aot.bin: apps/m6502/m65aot.py apps/m6502/m65gen.py \
+                         $(BUILD)/c64/c64rom.seeds $(BUILD)/c64-rom/C64.ROM
+	python3 apps/m6502/m65aot.py --machine c64 --rom $(BUILD)/c64-rom/C64.ROM \
+	    --seeds $(BUILD)/c64/c64rom.seeds -o $(BUILD)/c64/c64aot.asm \
+	    --table $(BUILD)/c64/c64aotpc.bin
+
+# ...AND THE RECOMPILER'S TEMPLATES (C64-SPEC section 4.9.1): every legal
+# opcode's fast-core handler as bytes to copy and patch, the patch sites found
+# by assembling twice (apps/m6502/m65tmpl.py). --selftest patches every
+# template for random operands and cache offsets and compares it with nasm's
+# own assembly there, so the translator's arithmetic is proven on each build.
+$(BUILD)/c64/c64tmpl.inc: $(BUILD)/c64/c64tmpl.bin
+$(BUILD)/c64/c64tmpl.bin: apps/m6502/m65tmpl.py apps/m6502/m65gen.py apps/m6502/m65aot.py
+	@mkdir -p $(BUILD)/c64
+	python3 apps/m6502/m65tmpl.py --check --selftest -o $@ --inc $(BUILD)/c64/c64tmpl.inc
+
+# ...and THE RECOMPILER ITSELF, part 6 (C64-SPEC 4.9.2): apps/c64/c64jit.asm
+# with the templates' part inside it, one 16KB image
+$(BUILD)/c64/c64jit.bin: apps/c64/c64jit.asm $(BUILD)/c64/c64tmpl.bin
+	$(NASM) -f bin -w+error -I $(BUILD)/c64/ -l $(BUILD)/c64/c64jit.lst -o $@ $<
 
 # THE DISK. APPLE2.O88 is ONE FILE: the ROM is its part 0 and the overlay its
 # part 1 (APPLE2-SPEC 1.5 and 15.5.1, SPEC.md 73.14.2 - `part`, the fifth

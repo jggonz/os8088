@@ -218,7 +218,8 @@ static void ovl_conv_init(void)
 static void ovl_cmd(int menu, int item, void *win)
 {
     if (menu == C64_M_FILE) {
-        if (item == C64_I_ATTACH) {
+        if (item == C64_I_ATTACH || item == C64_I_DISK) {   /* (a D64 is told
+                                             * by its size in os88_onfile) */
             /* File > Smart attach... (Alt+A) on .PRG, through the Standard
              * File dialog. It does not block: the answer arrives at
              * os88_onfile (11.3).
@@ -420,6 +421,19 @@ static void ovl_cmd(int menu, int item, void *win)
              * machine at all - no C64.ROM, or a JAM - c64_menu_state greys
              * the item rather than let it be a silent no-op (§47). */
             ovl_advance_frame();
+            return;
+        }
+        if (item == C64_I_JIT) {
+            c64_jit_toggle();
+            return;
+        }
+        if (item >= C64_I_FS0) {            /* the frame skip (9.13): the
+                                             * three radio items, and the
+                                             * check moves */
+            c64_fs_mode = item - C64_I_FS0;
+            c64_fs_extra = 0;
+            c64_fs_cost = 0;
+            c64_menu_state();
             return;
         }
         if (item == C64_I_SWAPJOY) {

@@ -146,4 +146,24 @@ unsigned os88_strlen(const char *s);
 void os88_strcpy(char *dst, const char *src, unsigned cap);
 char *os88_utoa(unsigned v, char *dst6);
 
+
+/* THE EXCLUSIVE BRACKET (SPEC.md 53, C64-SPEC 9.12) - the four os88_fsx_*
+ * thunks, behind `%define CC_HAS_FSX` on the target and unconditional here,
+ * as apps/apple2/hosttest/os88.h has them. c64uitest.c models them: caps
+ * answers a mask the test chooses, run CALLS the entry, and mode fills the
+ * block and hands back a framebuffer the test reads. */
+int  os88_fsx_caps(void *win, int *kind);
+int  os88_fsx_run(void (*entry)(void), void *win, int flags);
+int  os88_fsx_mode(int id, void *fsi);
+int  os88_fsx_wait(int kind);
+#define OS88_FSXM_VGA13  6
+#define OS88_FSXW_TICK  0
+#define OS88_FSI_SEG    0
+#define OS88_FSI_W      2
+#define OS88_FSI_H      4
+#define OS88_FSI_STRIDE 6
+#define OS88_FSI_BPP    9
+#define OS88_FSI_MODE   14
+#define OS88_FSI_SIZE   16
+
 #endif

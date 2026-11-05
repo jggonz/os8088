@@ -98,9 +98,18 @@ void c64_dirty_take(unsigned char *dst36);  /* the 32-byte page bitmap and the
                                              * used to do it in ~50 (9.2) */
 int  c64_rom_rd(unsigned off);
 void c64_zcopy_in(unsigned a, const void *src, unsigned n);
+unsigned c64x_caps(void);                  /* (c64mem.inc: the D64 in extended
+                                            * memory, C64-SPEC 11.5.1) */
+int  c64x_alloc(unsigned lo, unsigned hi);
+void c64x_free(unsigned tlo, unsigned thi);
+int  c64x_copy(unsigned seg, unsigned off, unsigned tlo, unsigned thi,
+               unsigned xlo, unsigned xhi, unsigned n, int in);
+unsigned c64_xnew[2];                      /* ...the token c64x_alloc gave */
 void c64_zcopy_out(void *dst, unsigned a, unsigned n);
 int  c64_copy_row(unsigned dseg, unsigned doff, int n);
 void c64_zzcopy_in(unsigned a, unsigned sseg, unsigned soff, unsigned n);
+unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
+                     unsigned off_lo, unsigned off_hi);   /* drive 8 (11.5) */
 void c64_zfill(unsigned a, int v, unsigned n);
 unsigned c64_muldiv(unsigned a, unsigned b, unsigned d);    /* (a*b)/d in 32
                                              * bits - `frames * 182 / elapsed`
@@ -112,6 +121,39 @@ unsigned c64_div32(unsigned hi, unsigned lo, unsigned d);   /* (hi:lo)/d, and
                                              * of 10.2 need one `div` */
 
 /* --- c64cpu.inc: the core (4.5) ----------------------------------------- */
+/* THE FAST CORE (C64-SPEC section 4.7): c64_fcode is its 64KB claim and
+ * c64_fseg the selector a far call reaches it through - the same value on a
+ * real-mode kernel, the claim's code half under kern_mega. c64_fseg 0 = the
+ * accurate core runs the machine alone. c64fast.inc reads it. */
+unsigned c64_fseg;
+unsigned c64_faot;                          /* BASIC'S AND THE KERNAL'S
+                                             * TRANSLATIONS (4.8): BASIC's
+                                             * call selector (0 = the core
+                                             * runs the ROMs itself), the
+                                             * KERNAL's, and the PC table's
+                                             * segment. c64fast.inc puts all
+                                             * three in the frame */
+unsigned c64_fakb;
+unsigned c64_ftab;
+static unsigned c64_absg, c64_aksg;         /* (the translations' parts, as
+                                             * os88_part_seg said: the two
+                                             * selectors are derived from them) */
+static unsigned c64_fcode;
+/* THE RECOMPILER (C64-SPEC section 4.9): c64_fjit is its 64KB claim, 0 =
+ * none - the fast core runs alone. c64fast.inc puts it in the frame (F+42)
+ * and every write path tests the CODE map at its offset 0 */
+unsigned c64_fjit;
+static int c64_jit_on;                      /* the menu's check: its page map
+                                             * written (1) or zeroed (0) */
+static int c64_jit_kb;                      /* ...and its claim's size */
+void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
+                int force, int kb);
+void c64j_off(unsigned core);              /* the core's page map zeroed */
+static void c64_jit_drop(void);
+static void c64_jit_init(void);
+void c64_jit_toggle(void);
+void c64f_core(unsigned dstseg, unsigned partseg);
+unsigned c64f_codesel(unsigned seg);
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
                                          * was NOT spent, so the caller's
                                          * `ran = asked - cnt` is exact */
@@ -127,7 +169,20 @@ void c64_band1(unsigned char *dst, int first, int last,
                const unsigned char *col,
                unsigned gseg, unsigned goff,
                int mode, int bg);
+void c64_bandbm(unsigned char *dst, const unsigned char *xm,
+                const unsigned char *xb, const unsigned char *col,
+                int n, int mc, int bg);
+int  c64_rvdiff(const unsigned char *a, const unsigned char *b);
+int  c64_neq(const unsigned char *a, const unsigned char *b, int nwords);
+int  c64_bandfind(const unsigned *sig, const unsigned *shsig, int n, int kmax);
+extern int c64_bfbest;                  /* (c64band.inc's) */
+void c64_sprrow(unsigned char *dst, const unsigned char *on,
+                const unsigned char *lit, int n, int cell, int sh,
+                int f, int l);
 int  c64_rowspan(const unsigned char *a, const unsigned char *b, int n);
+int  c64_runfind(const unsigned char *a, const unsigned char *b, int from);
+void c64_sprconv(const unsigned char *sd, unsigned char *on,
+                 unsigned char *lit, int mode, const unsigned *xexp);
 void c64_rowcopy(unsigned char *dst, const unsigned char *src, int n);
 unsigned c64_rowsig(unsigned mseg, unsigned moff,
                     const unsigned char *col, int n);
@@ -193,6 +248,14 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
  * useless without, and the whole halted-machine state that existed to say so
  * when it went missing is gone with it. */
 #define C64_ROM_PART    0
+#define C64_FAST_PART   2                   /* the fast 6510 core (4.7) */
+#define C64_AOTB_PART   3                   /* BASIC, translated (4.8) */
+#define C64_AOTK_PART   4                   /* ...the KERNAL */
+#define C64_AOTPC_PART  5                   /* ...and their PC table */
+#define C64_JIT_PART    6                   /* the recompiler (4.9) */
+#define C64_JIT_LEN     0x5800              /* ...its image: c64jit.asm's LT */
+#define C64J_CACHE_PARA 0x09E0              /* ...its cache, c64jit.asm's CACHE */
+#define C64J_FLUSHREQ   0x21                /* ...and its flush request */
 #define C64_ROM_KERNAL  0x0000
 #define C64_ROM_BASIC   0x2000
 #define C64_ROM_CHARGEN 0x4000
@@ -342,6 +405,45 @@ static int c64_snd_tone;                    /* the machine HAS a square voice:
 static unsigned c64_clo = 0xFFFF, c64_chi;
 static int c64_flush_every = 1;             /* host ticks between flushes,
                                              * from the tier and the bench */
+/* --- FRAME SKIP (9.13): the flush's share of the host, held near half ----
+ * A screen that changes everywhere every frame - eight sprites over a
+ * bitmap - can cost more to draw than a host tick, and the machine then gets
+ * what is left: the Bright Pixel card ran its MUSIC at a fifth of its tempo
+ * because the flush took four fifths of a 286. VICE skips frames to keep the
+ * emulation at speed; so does this. Each flush's ticks are summed, and once
+ * a second (18 ticks) a share over half adds a tick between flushes and a
+ * share under a quarter takes one away, between 0 and C64_FS_MAX. */
+#define C64_FS_MAX 8                        /* ~2 flushes a second at worst */
+static int c64_fs_extra;                    /* ticks added between flushes */
+static unsigned c64_fs_t0;                  /* the second being measured... */
+static int c64_fs_cost;                     /* ...and its ticks of flushing */
+
+/* ...AND THE USER CHOOSES THE POLICY (Preferences, 9.13): a music player
+ * can skip almost every frame and a game would rather run slowly than
+ * jerkily, so no one answer is right. 0 draws every host tick that has a
+ * change (the emulation slows instead), 1 is the adaptive skip above, the
+ * default, and 2 holds the skip at C64_FS_MAX - two pictures a second -
+ * and gives the rest to the machine. */
+static int c64_fs_mode = 1;
+
+static void c64_fs_adapt(unsigned t)
+{
+    if (c64_fs_mode != 1) {
+        c64_fs_extra = (c64_fs_mode == 0) ? 0 : C64_FS_MAX;
+        return;
+    }
+    if ((unsigned)(t - c64_fs_t0) < 18u)
+        return;
+    if (c64_fs_cost > 9) {
+        if (c64_fs_extra < C64_FS_MAX)
+            c64_fs_extra++;
+    } else if (c64_fs_cost < 5) {
+        if (c64_fs_extra > 0)
+            c64_fs_extra--;
+    }
+    c64_fs_t0 = t;
+    c64_fs_cost = 0;
+}
 /* --- the wall slice (4.4) ------------------------------------------------ */
 #define C64_SLICE_MIN 256                   /* ~3 ms of emulated time: the
                                              * floor is never a whole jiffy */
@@ -424,14 +526,38 @@ static void c64_force_rows(int r0, int r1, int c0, int c1);
 static void c64_lum_update(void);
 static void c64_dirty_all(void);
 static void c64_row_dirty(int row);
+static void c64_row_whole(int row);
+static int c64_tick(void);                  /* the machine half of a wake */
+static int c64_fsx_enter(void *win);        /* the colour screen (9.12) */
+static int c64_fsx_up;                      /* ...is up: nothing may draw */
+void c64_c8glyph(unsigned char *gb, const unsigned char *xm, int n,
+                 unsigned gseg, unsigned goff, int mask);
+void c64_c8row(unsigned char *dst, const unsigned char *gb,
+               const unsigned char *k0, const unsigned char *k1,
+               const unsigned char *k2, const unsigned char *k3,
+               const unsigned char *mc, int n);
+void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
+               int lo, int hi, const unsigned char *cols, int mc, int xs);
+void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n);
+unsigned c64_fsx_key(void);
+void c64_fsx_dac(void);
+void c64_fsx_border(int c);
+unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw);
+unsigned c64_scr_left(void);              /* DEAD + CARRY (c64mem.inc) */
+int c64_opl_open(void);
+int c64_opl_send(const unsigned char *pairs, int n);
 static void c64_frame_regs(void);
+static unsigned char c64_rchg[25];          /* a row's register set moved since
+                                             * c64_spr_dirty looked (9.11) */
+static int c64_fr_stale = 1;                /* c64_rv moved without c64scr.c's
+                                             * per-row tables following (9.10) */
 static int  c64_geom(void *win);
 static void c64_watch_set(void);
 static void c64_menu_state(void);
 static void c64_tier_init(void);
 static void c64_fullscreen_toggle(void *win);
 static void c64_ram_pattern(void);
-static void c64_reset_regs(void);
+static void ovl_reset_regs(void);
 static void c64_reset_cpu(void);
 static void c64_irq_update(void);
 static void c64_nmi_raise(void);
@@ -455,16 +581,44 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
  * external symbols, so a C package cannot be several .c files linked - it is
  * one file with the parts #included into it). Every one of them is a written
  * prerequisite in the Makefile, because make cannot see through #include. */
+/* The menu and item indices os88_oncmd is handed. They are positions in the
+ * arrays below and the two must not drift: an item inserted above one of
+ * these moves every command under it. */
+#define C64_M_FILE  0
+#define C64_M_EDIT  1
+#define C64_M_PREF  2
+#define C64_M_HELP  3
+
+#define C64_I_ATTACH   0                    /* File, 5 items */
+#define C64_I_DISK     1
+#define C64_I_RESETCPU 2
+#define C64_I_POWER    3
+#define C64_I_EXIT     4
+
+#define C64_I_COPY     0                    /* Edit */
+#define C64_I_PASTE    1
+
+#define C64_I_FULLSCR  0                    /* Preferences */
+#define C64_I_WARP     1
+#define C64_I_PAUSE    2
+#define C64_I_ADVANCE  3
+#define C64_I_JIT      4                    /* (Emulation speed's: 4.9.5) */
+#define C64_I_SWAPJOY  5
+#define C64_I_FS0      6                    /* the frame skip, 9.13: 6..8 */
+
+#define C64_I_ABOUT    0                    /* Help */
+
 #include "c64io.c"                          /* the register files, the alarm
                                              * scheduler, the CIAs and the VIC */
 #include "c64kbd.c"                         /* the gtk3_sym.vkm table */
 #include "c64scr.c"                         /* the composer's C half, the
                                              * shadow, the flush, the status
                                              * row, the tier table */
-#include "c64menu.c"                        /* the five menus, from VICE's
+#include "c64menu.c"                        /* the four menus, from VICE's
                                              * own uimachinemenu.c */
 #include "c64cmd.c"                         /* ovl_*: the command bodies */
 #include "c64load.c"                        /* ovl_*: Smart attach */
+#include "c64disk.c"                        /* ...and drive 8's D64 (11.5) */
 #include "c64about.c"                       /* ovl_*: the About panel */
 
 /* ==========================================================================
@@ -496,12 +650,38 @@ void os88_onmove(unsigned was, unsigned now)
     if (c64_chr_seg == c64_m.romseg)
         c64_chr_seg = rom;
     c64_m.romseg = rom;
+    if (c64_faot != 0) {                    /* the translations' parts (4.8),
+                                             * re-read; a selector only when
+                                             * its part moved */
+        c64_ftab = os88_part_seg(C64_AOTPC_PART);
+        rom = os88_part_seg(C64_AOTB_PART);
+        if (rom != c64_absg) {
+            c64_absg = rom;
+            c64_faot = c64f_codesel(rom);
+        }
+        rom = os88_part_seg(C64_AOTK_PART);
+        if (rom != c64_aksg) {
+            c64_aksg = rom;
+            c64_fakb = c64f_codesel(rom);
+        }
+    }
     if (c64_m.ramseg == was) {
         if (c64_chr_seg == was)
             c64_chr_seg = now;
         c64_m.ramseg = now;
+    } else if (c64_fcode == was) {         /* the fast core's code (4.7) */
+        c64_fcode = now;
+        c64_fseg = c64f_codesel(now);
+    } else if (c64_fjit == was) {          /* the recompiler's (4.9) */
+        c64_fjit = now;
+        if (c64_d64_inj)                    /* ...and the D64's slots in it */
+            c64_d64_seg = c64_d64_seg - was + now;
     } else if (c64_paste_seg == was) {
         c64_paste_seg = now;
+    } else if (c64_d64_seg == was) {       /* drive 8's image, or its slots
+                                             * (11.5, 11.5.1) - a claim of its
+                                             * own: c64_d64_inj's are above */
+        c64_d64_seg = now;
     }
 }
 
@@ -566,7 +746,10 @@ static void c64_say(const char *s)
      * exist. RUNCPM's rc_say_now flushes on the spot; here the wake is one
      * tick away, so raising the flag is enough and stays off the lock. */
     c64_dirty_any = 1;
-    os88_toast(s, 0);
+    if (!c64_fsx_up)                        /* a toast DRAWS, and inside the
+                                             * colour bracket nothing may
+                                             * (9.12): the row says it after */
+        os88_toast(s, 0);
 }
 
 /* ==========================================================================
@@ -670,6 +853,13 @@ static void c64_fullscreen_toggle(void *win)
                                              * REFUSED, nothing repaints us:
                                              * the next wake owes those rows */
     }
+    /* ON A DISPLAY WITH FSXM_VGA13, FULLSCREEN IS IN COLOUR (9.12): the
+     * bracket runs until Alt+D and returns here; the window never left */
+    if (!c64_full)
+        if (c64_fsx_enter(win)) {
+            c64_menu_state();
+            return;
+        }
     c64_full = !c64_full;
     if (os88_fullscreen(win, c64_full) < 0) {
         c64_full = !c64_full;               /* refused: the latch rolls back */
@@ -1021,6 +1211,14 @@ void os88_onfile(int mode, const char *name,
         return;
     if (name[0] == 0)
         return;
+    /* A D64 BY ITS SIZE - the dialog does not filter by extension (SPEC.md
+     * 38.9), and a .PRG of over 64KB is refused anyway - onto drive 8 */
+    if (size_hi == 2 || size_hi == 3) {
+        ovl_d64_attach(name, size_lo, size_hi);
+        c64_kick = 1;
+        os88_wm_wake(win);
+        return;
+    }
     if (size_hi != 0)
         size_lo = 0xFFFFu;                  /* ...so the one test below
                                              * refuses it too */
@@ -1131,14 +1329,14 @@ static void c64_speed_fold(void)
  *
  * AND THE ROW GOES ON SAYING IT. c64_say expires after five seconds; a jammed
  * machine is a PERMANENT condition, so C64_ST_JAM is a permanent row state in
- * c64_status beside `C64.ROM missing` (§1.4's rule, §10.1). Without that the
+ * ovl_status beside `C64.ROM missing` (§1.4's rule, §10.1). Without that the
  * glass showed a dead machine and an idle one identically
  * (build/port-shots/wave2-05-jam.png).
  *
  * AND IT DOES NOT GO THROUGH c64_say, WHICH DREW IT TWICE. c64_say put the
  * SAME 22 glyphs up as a five-second message (msg == 1); five seconds later
  * the deadline cleared it, msg became 3, `msg != c64_st_shown` forced the
- * `full` path, and c64_status filled the row black and re-lettered the
+ * `full` path, and ovl_status filled the row black and re-lettered the
  * IDENTICAL line at the IDENTICAL place - 1 fill + 1 font_run + 22 cells,
  * ~21 ms that changed not one pixel, and on the glass a row that blanks and
  * re-letters five seconds after the event with nothing having happened
@@ -1165,7 +1363,9 @@ static void c64_speed_fold(void)
  * Keeping a copy of the note to restore would be a second model of the SID. */
 static void c64_sound_stop(void)
 {
-    if (c64_snd_tone)
+    if (c64_snd_fm)
+        c64_fm_quiet();                     /* every key off (11.4.3) */
+    else if (c64_snd_tone)
         os88_snd_tone(0, 0, 0x40);
     c64_sid_dirty = 1;                      /* the resume re-reads the SID */
     c64_sid_tries = 0;
@@ -1188,7 +1388,9 @@ static void c64_jam(void)
                                              * short message it leaves the
                                              * widgets right of cell 24 alone
                                              * (c64scr.c) */
-    os88_toast(c64_jamline, 0);             /* §9.8's second route, which is
+    if (!c64_fsx_up)                        /* (9.12: no drawing inside the
+                                             * colour bracket) */
+        os88_toast(c64_jamline, 0);         /* §9.8's second route, which is
                                              * the half c64_say was carrying */
     c64_menu_state();                       /* ...and Preferences > Advance
                                              * frame greys itself: there is no
@@ -1201,6 +1403,57 @@ static void c64_jam(void)
  * CIAs' timers, the raster compare, the frame end and the TOD tick, so every
  * device phase is retained across slices. Answers what was NOT run, so a
  * caller can tell an exhausted slice from one a JAM cut short. */
+/* THE THROTTLE (section 4.4.1): a PAL C64's 985,248 cycles a second and no
+ * faster, unless warp. APPLE2's a2_th_* one machine along: every host tick
+ * pays a tick of the machine into what it is OWED - 845.5 units of 64 cycles
+ * at 18.2065 Hz, 13,529 sixteenths, the fraction carried - capped at three
+ * ticks so a stall is not paid back as a burst, and a wake runs no more than
+ * is owed. A machine that cannot reach full speed is never held back. */
+#define C64_TH_SIXTEENTHS 13529
+#define C64_TH_CAP        (3 * 846)
+static unsigned c64_th_tick;
+static int c64_th_owed;
+static int c64_th_frac;
+static int c64_th_rem;
+static int c64_th_off;                       /* the host harness's seam: its
+                                             * runs cost no time, so it turns
+                                             * the throttle off for every case
+                                             * but the throttle's own */
+
+static int c64_th_allow(int want)
+{
+    unsigned t = os88_ticks();
+    unsigned d = t - c64_th_tick;
+
+    if (c64_warp | c64_th_off)
+        return want;
+    if (d > 4u)
+        d = 4u;
+    c64_th_tick = t;
+    while (d) {
+        c64_th_frac += C64_TH_SIXTEENTHS;
+        c64_th_owed += c64_th_frac >> 4;
+        c64_th_frac &= 15;
+        d--;
+    }
+    if (c64_th_owed > C64_TH_CAP)
+        c64_th_owed = C64_TH_CAP;
+    if (c64_th_owed <= 0)
+        return 0;
+    if (c64_th_owed < (want >> 6))
+        return c64_th_owed << 6;
+    return want;
+}
+
+static void c64_th_spend(int ran)
+{
+    if (c64_warp | c64_th_off)
+        return;
+    ran += c64_th_rem;
+    c64_th_owed -= ran >> 6;
+    c64_th_rem = ran & 63;
+}
+
 static int c64_slice(int left)
 {
     int n, d, r, ran;
@@ -1209,6 +1462,8 @@ static int c64_slice(int left)
         d = c64_alarm_next();
         n = (d < left) ? d : left;
         c64_in_run = 1;
+        c64_run_n = (unsigned)n;            /* (where a logged write lands,
+                                             * c64io.c's c64_line_rel) */
         r = c64_run((unsigned)n);
         c64_in_run = 0;
         ran = n - (int)c64_m.cnt;           /* cnt is what was NOT spent, and
@@ -1217,8 +1472,15 @@ static int c64_slice(int left)
         if (ran < 1)
             ran = 1;
         c64_advance(ran);
+        c64_th_spend(ran);
         left -= ran;
         if (r == C64_RUN_JAM) {
+            if (c64_m.pc == C64_D64_TRAP) {
+                ovl_d64_trap();             /* drive 8 (11.5): the LOAD, or the
+                                             * one instruction the trap's byte
+                                             * replaced - and the machine runs on */
+                continue;
+            }
             c64_jam();
             break;
         }
@@ -1337,7 +1599,7 @@ static void ovl_reset_service(void)
      * is the gate that now catches the shape. */
     c64_copy_req = 0;
     c64_paste_req = 0;
-    c64_reset_regs();
+    ovl_reset_regs();
     c64_lum_update();
     c64_frame_regs();
     c64_reset_cpu();                        /* the 6510 out of reset: I set,
@@ -1359,7 +1621,7 @@ static void ovl_reset_service(void)
      * c64_jam() greys Preferences > Advance frame - there is no machine left
      * to advance (SPEC.md 47) - and the FACT that greys it is the permanent
      * `Main CPU: JAM at $XXXX` line on the status row. A reset clears the
-     * state, so c64_status stops drawing that line at once; without this call
+     * state, so ovl_status stops drawing that line at once; without this call
      * the greying outlived the fact by the rest of the session, and then
      * un-greyed itself at random, because the only other callers of
      * c64_menu_state are the Warp/Pause/Swap/Fullscreen latches - so whether
@@ -1424,64 +1686,18 @@ static int c64_wants_wake(void)
                                              * or not */
 }
 
-/* os88_onwake - THE slice driver (SPEC.md 74.1): on the UI task, with the
- * lock NOT held. One wall slice of the 6510 broken at every device event,
- * then a flush AT MOST ONCE PER HOST TICK (9.3) under the lock, then a
- * re-post only while there is work. */
-void os88_onwake(void *win)
+/* c64_tick - THE MACHINE HALF OF A WAKE: the keyboard poll, Paste's feeder,
+ * the throttled slice, the SID voice and the slice's adaptation. os88_onwake
+ * and the colour bracket (C64-SPEC 9.12) both call it, so the machine runs
+ * the same in either. Answers the cycles it was allowed to run, 0 when it
+ * ran none (paused, jammed, or the throttle owed nothing). */
+static int c64_tick(void)
 {
-    unsigned t;
     unsigned t0;
     unsigned fr0 = 0;
-    int left, n, d, spent, fe;
+    int left, n, d, spent;
 
-    if (c64_state == C64_ST_DEAD)
-        return;
-
-    /* FILE > EXIT EMULATOR (Alt+Q), SPENT HERE AND NOWHERE ELSE (SPEC.md
-     * 75.2). os88_wm_close is the kernel's OWN close path - the same one the
-     * close box takes: the negotiator retired, app_close_win, the dock strip
-     * repainted, the instance and both claims freed.
-     *
-     * WHAT IT REPLACED, AND WHY THAT WAS WRONG. There used to be a worker:
-     * os88_wm_destroy under the lock, then os88_task_alive outside it, which
-     * is cword's File > Close idiom and what every C package here does. It
-     * closes the WINDOW and it does not close the APP: wm_destroy frees the
-     * record and nothing repaints the dock, so Alt+Q left a dead tile on the
-     * strip that answered neither a click nor a double-click, four cycles out
-     * of four, on both adapters - the exact failure the worker's own comment
-     * claimed to have fixed. The close box was always clean because it goes
-     * through app_close_win. There is one door, and this is it.
-     *
-     * IT IS SPENT FROM THE WAKE AND NOT FROM os88_oncmd. The slot RETURNS and
-     * closes on the next UI pass (os88.h) - so it may be called under the
-     * command's lock - but its contract is "call it and RETURN, do not draw
-     * afterwards", and os88_oncmd's own tail draws: it kicks a wake, which
-     * runs a slice and flushes into a window that is going away. Here the
-     * return is the last thing that happens, C64_ST_DEAD stops the next wake
-     * dead, and the kick os88_oncmd posted is what carries us here. */
-    if (c64_exit_req) {
-        c64_exit_req = 0;
-        c64_state = C64_ST_DEAD;            /* nothing flushes into it again */
-        os88_wm_close(win);
-        return;                             /* ...and NOTHING after the call */
-    }
-
-    /* EDIT > COPY AND EDIT > PASTE, ABOVE THE ABT GATE AND ABOVE THE SLICE.
-     * Their bodies are ~103 ms and a heap claim and os88_oncmd holds the
-     * desktop's gfx lock, so the commands only latch (c64kbd.c's
-     * ovl_clip_service carries the argument). Here, no cycle has run since
-     * the pick and no lock is held; above the gate, so a jammed, paused or
-     * panel-up machine still services the copy of the screen in front of it. */
-    if (c64_reset_req)
-        ovl_reset_service();
-    if (c64_copy_req | c64_paste_req)
-        ovl_clip_service(c64_mbase);
-
-    if (c64_abt)
-        return;                             /* the panel is up: the machine is
-                                             * paused and the glass is its */
-
+    n = 0;
     /* --- THE WALL SLICE (4.4). VICE's alarm model: run to the next device
      * event, service it, compute the next one. `n` is never a quantum - it is
      * the smaller of what is left of this wake's budget and the cycles to the
@@ -1507,7 +1723,7 @@ void os88_onwake(void *win)
                                              * this OS's clock, and it puts
                                              * nothing in while $C6 is not 0 -
                                              * the KERNAL's own pace (7.7) */
-        n = c64_budget;
+        n = c64_th_allow(c64_budget);       /* the throttle (4.4.1) */
         if (c64_adv) {
             /* Advance frame: never past the frame end, and never more than
              * one wall slice at a time either - the item is one frame of
@@ -1529,6 +1745,13 @@ void os88_onwake(void *win)
                 c64_sound_stop();
                 c64_menu_state();
                 c64_say("Advanced one frame.");
+            }
+        if (c64_sid_dirty)
+            if (c64_snd_fm) {               /* THE FM CHIP (11.4.3): a batch,
+                                             * and a claimed chip refuses
+                                             * nobody, so nothing to retry */
+                ovl_fm_update();      /* (the overlay: once a wake) */
+                c64_sid_dirty = 0;
             }
         if (c64_sid_dirty) {
             /* ONE FAR CALL A WAKE, ON A CHANGE ONLY (11.4) - AND THE LATCH IS
@@ -1608,6 +1831,66 @@ void os88_onwake(void *win)
             }
         }
     c64_speed_fold();
+    return n;
+}
+
+/* os88_onwake - THE slice driver (SPEC.md 74.1): on the UI task, with the
+ * lock NOT held. One wall slice of the 6510 broken at every device event,
+ * then a flush AT MOST ONCE PER HOST TICK (9.3) under the lock, then a
+ * re-post only while there is work. */
+void os88_onwake(void *win)
+{
+    unsigned t;
+    int fe;
+
+    if (c64_state == C64_ST_DEAD)
+        return;
+
+    /* FILE > EXIT EMULATOR (Alt+Q), SPENT HERE AND NOWHERE ELSE (SPEC.md
+     * 75.2). os88_wm_close is the kernel's OWN close path - the same one the
+     * close box takes: the negotiator retired, app_close_win, the dock strip
+     * repainted, the instance and both claims freed.
+     *
+     * WHAT IT REPLACED, AND WHY THAT WAS WRONG. There used to be a worker:
+     * os88_wm_destroy under the lock, then os88_task_alive outside it, which
+     * is cword's File > Close idiom and what every C package here does. It
+     * closes the WINDOW and it does not close the APP: wm_destroy frees the
+     * record and nothing repaints the dock, so Alt+Q left a dead tile on the
+     * strip that answered neither a click nor a double-click, four cycles out
+     * of four, on both adapters - the exact failure the worker's own comment
+     * claimed to have fixed. The close box was always clean because it goes
+     * through app_close_win. There is one door, and this is it.
+     *
+     * IT IS SPENT FROM THE WAKE AND NOT FROM os88_oncmd. The slot RETURNS and
+     * closes on the next UI pass (os88.h) - so it may be called under the
+     * command's lock - but its contract is "call it and RETURN, do not draw
+     * afterwards", and os88_oncmd's own tail draws: it kicks a wake, which
+     * runs a slice and flushes into a window that is going away. Here the
+     * return is the last thing that happens, C64_ST_DEAD stops the next wake
+     * dead, and the kick os88_oncmd posted is what carries us here. */
+    if (c64_exit_req) {
+        c64_exit_req = 0;
+        c64_state = C64_ST_DEAD;            /* nothing flushes into it again */
+        os88_wm_close(win);
+        return;                             /* ...and NOTHING after the call */
+    }
+
+    /* EDIT > COPY AND EDIT > PASTE, ABOVE THE ABT GATE AND ABOVE THE SLICE.
+     * Their bodies are ~103 ms and a heap claim and os88_oncmd holds the
+     * desktop's gfx lock, so the commands only latch (c64kbd.c's
+     * ovl_clip_service carries the argument). Here, no cycle has run since
+     * the pick and no lock is held; above the gate, so a jammed, paused or
+     * panel-up machine still services the copy of the screen in front of it. */
+    if (c64_reset_req)
+        ovl_reset_service();
+    if (c64_copy_req | c64_paste_req)
+        ovl_clip_service(c64_mbase);
+
+    if (c64_abt)
+        return;                             /* the panel is up: the machine is
+                                             * paused and the glass is its */
+
+    c64_tick();
 
     t = os88_ticks();
     if (c64_scr_rd(C64_SCR_ANY))
@@ -1615,20 +1898,21 @@ void os88_onwake(void *win)
     /* A MESSAGE ON THE ROW IS A REASON TO FLUSH, because its DEADLINE is
      * examined inside the flush: with nothing else dirty the row would stay
      * up for ever (C64-SPEC §10.1's "the widgets come back"). A flush with
-     * nothing dirty composes no rows and c64_status answers "nothing moved"
+     * nothing dirty composes no rows and ovl_status answers "nothing moved"
      * in zero drawing calls, so this costs the scan and no drawing. */
     /* ...AND THE SPEED WIDGET'S OWN DELTA IS PART OF THE GATE. c64_dirty_any
      * comes from C64_SCR_ANY, which the core sets on a RAM WRITE: a machine
      * that runs without writing RAM (an ML poll loop on $D012, a `WAIT`) left
      * the figures frozen at whatever they were when it last wrote, stating a
      * speed that is not the current one - and that is exactly when a user is
-     * looking at the widget. It costs nothing when nothing moved: c64_status
+     * looking at the widget. It costs nothing when nothing moved: ovl_status
      * answers "nothing on the row moved" in zero drawing calls. */
     /* ...AND WARP CAPS THE RATE AT VICE'S OWN 10 fps (vsync.c:339-340,
      * :634-656). It can only slow a flush down - the tier rate stands
      * wherever it is already slower - so the CPU_8086 tier, which flushes
      * every other tick, is unmoved by it (§4.4). */
-    fe = c64_flush_every;
+    c64_fs_adapt(t);
+    fe = c64_flush_every + c64_fs_extra;    /* (frame skip, above) */
     if (c64_warp)
         if (fe < C64_WARP_FLUSH)
             fe = C64_WARP_FLUSH;
@@ -1642,6 +1926,7 @@ void os88_onwake(void *win)
             if (os88_wm_clip_set(win) == 0)
                 c64_flush(win);
             os88_gfx_unlock();
+            c64_fs_cost += (int)(os88_ticks() - t);
         }
     /* ...AND A MESSAGE IS NOT A REASON TO ASK FOR ANOTHER WAKE. A running
      * machine already asks, so its messages expire on the ordinary flush
@@ -1670,6 +1955,130 @@ static void c64_refuse_kb(const char *what)
     os88_strcpy(c64_line + os88_strlen(c64_line), c64_num, 7);
     os88_strcpy(c64_line + os88_strlen(c64_line), " KB", 4);
     os88_toast(c64_line, 0);
+}
+
+/* c64_jit_init - THE RECOMPILER (section 4.9): its part into a 64KB claim
+ * of its own, the part given back, and its tables set up with the fast
+ * core's page map. Its code is written where it runs, so only a kernel
+ * whose code selector IS the segment has one (kern_mega's arm is a wave of
+ * its own); any refusal leaves the fast core alone, as before. */
+static void c64_jit_init(void)
+{
+    unsigned seg;
+    int kb;
+
+    if (c64_fjit != 0 || c64_fseg == 0)
+        return;
+    if (os88_part_fetch(C64_JIT_PART) != 0)
+        return;
+    /* THE LARGEST CACHE THE HEAP HAS ROOM FOR, by tier: 64KB, else 48 - the
+     * image and its tables are 39.5KB of either */
+    seg = 0;
+    for (kb = 64; kb >= 48 && seg == 0; kb -= 16)
+        seg = os88_mem_claim(kb);
+    kb += 16;
+    if (seg != 0 && c64f_codesel(seg) == seg) {
+        c64j_setup(seg, os88_part_seg(C64_JIT_PART), C64_JIT_LEN, c64_fseg, 0, kb);
+        os88_mem_movable(seg, 1);
+        c64_fjit = seg;
+        c64_jit_kb = kb;
+        c64_jit_on = 1;
+        c64_menu_state();                   /* (Preferences > Recompiler) */
+    } else if (seg != 0) {
+        os88_mem_free(seg);
+    }
+    os88_part_drop(C64_JIT_PART);
+}
+
+/* c64_jit_drop - THE RECOMPILER GIVES WAY (section 4.9): its claim back to
+ * the heap for something the user asked for (a D64 that would not fit),
+ * the core's page map zeroed first so no transfer looks for it again. The
+ * fast core runs alone from here, as it did before the recompiler. */
+static void c64_jit_drop(void)
+{
+    if (c64_fjit == 0)
+        return;
+    if (c64_d64_inj)                        /* (its slots go with it) */
+        ovl_d64_release();
+    c64j_off(c64_fcode);
+    os88_mem_free(c64_fjit);
+    c64_fjit = 0;
+    c64_jit_on = 0;
+    c64_menu_state();
+}
+
+/* c64_jit_toggle - Preferences > Recompiler (C64-SPEC 4.9.5): off zeroes the
+ * core's page map, so no transfer looks for a block; on sets the recompiler
+ * up afresh in the claim it kept, every block made again as it is reached */
+void c64_jit_toggle(void)
+{
+    if (c64_fjit == 0)
+        return;
+    c64_jit_on = !c64_jit_on;
+    if (c64_jit_on)
+        c64j_setup(c64_fjit, c64_fjit, 0, c64_fseg, 0, c64_jit_kb);
+    else
+        c64j_off(c64_fcode);
+    c64_menu_state();
+    c64_say(c64_jit_on ? "Recompiler on." : "Recompiler off.");
+}
+
+/* c64_fast_init - THE FAST CORE (section 4.7). The part is $FE00 bytes (a
+ * part's length is a sector count in a word) and the core a 64KB segment, so
+ * the code is a claim of our own with the part copied in and its last two
+ * slots written, and the part goes back. It runs in the RAM claim the
+ * accurate core already has. Any refusal leaves the accurate core running
+ * the machine alone - a slower machine and not a broken one, so nothing is
+ * said. */
+static void c64_fast_init(void)
+{
+    unsigned code;
+
+    if (os88_part_fetch(C64_FAST_PART) != 0)
+        return;
+    code = os88_mem_claim(64);
+    if (code == 0) {
+        os88_part_drop(C64_FAST_PART);
+        return;
+    }
+    c64f_core(code, os88_part_seg(C64_FAST_PART));
+    os88_part_drop(C64_FAST_PART);
+    if (c64f_codesel(code) == 0) {
+        os88_mem_free(code);
+        return;
+    }
+    os88_mem_movable(code, 1);              /* os88_onmove follows it */
+    c64_fcode = code;
+    c64_fseg = c64f_codesel(code);
+    /* ...AND BASIC AND THE KERNAL TRANSLATED AHEAD OF TIME (section 4.8),
+     * all three parts or none: they are fetched pinned, and the core enters
+     * either segment through the table */
+    if (os88_part_fetch(C64_AOTB_PART) != 0)
+        return;
+    if (os88_part_fetch(C64_AOTK_PART) != 0) {
+        os88_part_drop(C64_AOTB_PART);
+        return;
+    }
+    if (os88_part_fetch(C64_AOTPC_PART) != 0) {
+        os88_part_drop(C64_AOTK_PART);
+        os88_part_drop(C64_AOTB_PART);
+        return;
+    }
+    c64_aksg = os88_part_seg(C64_AOTK_PART);
+    c64_fakb = c64f_codesel(c64_aksg);
+    c64_ftab = os88_part_seg(C64_AOTPC_PART);
+    c64_absg = os88_part_seg(C64_AOTB_PART);
+    c64_faot = c64f_codesel(c64_absg);
+    if (c64_faot == 0 || c64_fakb == 0) {
+        c64_faot = 0;
+        return;
+    }
+    /* ALL THREE MAY MOVE (3.1.1): a run builds its frame from c64_faot,
+     * c64_fakb and c64_ftab at its door, and os88_onmove re-reads them -
+     * pinned, they walled the heap the way a2move found the Apple II's do */
+    os88_part_movable(C64_AOTB_PART);
+    os88_part_movable(C64_AOTK_PART);
+    os88_part_movable(C64_AOTPC_PART);
 }
 
 void *os88_main(void)
@@ -1703,11 +2112,22 @@ void *os88_main(void)
         os88_toast("C64: the ROM claim is too low in memory", 0);
         return 0;
     }
+    /* DRIVE 8'S TRAP (11.5): the KERNAL's serial LOAD, just past SEARCHING
+     * FOR, stops on a JAM byte here and c64_slice serves it - from a D64
+     * when one is on drive 8, and otherwise by running the LDA #$60 it
+     * replaced. Patched in THIS copy of the ROM, not the file */
+    os88_poke(c64_m.romseg, C64_D64_TRAPOFF, 0x02);
     /* WHAT CAN THIS MACHINE'S SOUND HARDWARE DO (11.4)? Asked ONCE, here, and
      * tested rather than guessed (SPEC.md 73.11): §11.4 puts SID voice 1's
      * gate and frequency on OSAPI_SND_TONE, and a package that calls a slot
      * without establishing the capability first is guessing. */
     c64_snd_tone = os88_snd_caps() & C64_SND_CAP_TONE;  /* bit 0: 0 or 1 */
+    /* ...AND AN FM CHIP, WHEN SOUND.DRV HAS ONE: all three voices (11.4.3).
+     * Claimed here, on the UI task, so the claim carries this instance */
+    if (c64_opl_open()) {
+        os88_memset(c64_fmsh, 0xFF, sizeof(c64_fmsh));
+        c64_snd_fm = 1;
+    }
     c64_x2init();                           /* the pixel-doubling table, once */
     /* ...AND COPY'S AND PASTE'S TWO CONVERSION TABLES. The code that fills
      * them runs exactly once, so it is in the overlay (SPEC.md 73.14's
@@ -1718,8 +2138,9 @@ void *os88_main(void)
     ovl_conv_init();
     c64_tier_init();                        /* the flush rate, off os88_cpu()
                                              * and tests/c64band's numbers */
-    c64_reset_regs();                       /* the VIC/CIA/SID register files */
+    ovl_reset_regs();                       /* the VIC/CIA/SID register files */
     c64_lum_update();                       /* the 1bpp masks, off $D021 (9.6) */
+    c64_dither_init();                      /* ...and the other modes' (9.10) */
     c64_ram_pattern();                      /* power-on RAM is VICE's factory
                                              * pattern and not zeros
                                              * (src/ram.c:169-177), and the
@@ -1781,6 +2202,11 @@ void *os88_main(void)
      * (build/port-shots/wave2-03-launch.png). RUNCPM posts its first wake
      * from its own paint for the same reason. */
     c64_kick = 1;
+    c64_fast_init();
+    /* THE RECOMPILER LAST (4.9.4): its claim is the one that gives way, so
+     * it sits beside the free heap, not between the pinned parts, and
+     * freeing it gives a D64 one contiguous hole */
+    c64_jit_init();
     /* THE RAM MAY MOVE FROM HERE ON (C64-SPEC 3.1.1): every claim this
      * launch makes is made, every copy of the segment (c64_chr_seg, through
      * c64_frame_regs above) is taken, and os88_onmove keeps them. The parts

@@ -35,9 +35,10 @@ text screen is up two or three seconds after `RUN`, and the lo-res and hi-res
 screens take about a minute and a quarter each. They draw a line at a time,
 so you can watch them arrive.
 
-The program is usable on a 386 and comfortable on a 486. The right end of the
-status row shows the speed as a percentage of a real Apple, measured every
-second; on an XT it reads 0% or 1%.
+On a 16 MHz 286 the Apple runs Applesoft at its real speed. It never runs
+faster than a real Apple unless Warp is on (the Machine menu). The right end
+of the status row shows the speed as a percentage of a real Apple, measured
+every second; on an XT it reads 0% or 1%.
 
 ## Using Applesoft BASIC
 

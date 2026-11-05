@@ -1393,6 +1393,11 @@ unsigned os88_part_seg(int i);       /* base segment; 0 = it is not here */
  * handler. An eager overlay in the carve is re-stamped by crt0 first. */
 int os88_part_fetch(int i);          /* an OP_LAZY part, now. 0 ok, -1 refused */
 void os88_part_drop(int i);          /* ...and give it back */
+/* A FETCHED lazy part can move too, with CC_ONMOVE_PARTS: declare it after
+ * os88_part_fetch, and os88_onmove (with the part's own two bases) must
+ * re-read os88_part_seg(i) for every copy of its segment you keep - as for
+ * the carve. 0 declared, -1 not (not fetched; refused). */
+int os88_part_movable(int i);
 int os88_part_lazyok(int i);         /* would it fit right now? (SPEC.md 47) */
 int os88_part_optok(void);           /* were the OP_OPT scratch parts granted? */
 

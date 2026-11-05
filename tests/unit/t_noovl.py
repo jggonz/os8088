@@ -64,7 +64,8 @@ OVL_ALLOWED = [
     re.compile(r"os88ovl\.py\b.*-o\s+\S+\.OVL\b"),     # the cut itself
     re.compile(r"--part\s+\S+\.OVL\b"),                # appended as a part
     re.compile(r"^\S+\.OVL\s*:.*;\s*$"),               # askable by name
-    re.compile(r"call CC_PACKAGE,[^,]*,[^,]*,\w+\.OVL,.*,part\)\)$"),  # C part
+    re.compile(r"call CC_PACKAGE,[^,]*,[^,]*,\w+\.OVL,.*,part(,[^,]*)?\)\)$"),  # C part
+    # (and its sixth argument: parts that follow the overlay, C64's cores)
 ]
 OVL_RECIPE_EXEMPT = re.compile(r"cfsx", re.I)          # EXEMPT's fixture
 

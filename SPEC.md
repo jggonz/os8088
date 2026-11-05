@@ -131071,6 +131071,19 @@ LEMMINGS, CHELLO, COVL, CCSMOKE all `cmp` equal). `tests/emumove.py` moves
 both kinds on MartyPC: `--pkg c64` through `cc_ovcarve`, `--pkg apple2`
 through `cc_partsmv` proper (C64-SPEC 3.1.1, APPLE2-SPEC 3.1.1).
 
+**A FETCHED lazy part moves too, by `os88_part_movable(i)`** (2026-11): with
+`CC_ONMOVE_PARTS`, crt0 defines the parts standard's `OP_ONMOVE` as
+`cc_onmove`, so `op_movable` (§20.12.12) is assembled and the thunk declares
+part `i`'s claim with the standard's `op_lazymv` - which puts the row's banked
+segment right and then calls `os88_onmove(was, now)` with the part's own two
+bases. Declare it after `os88_part_fetch`, and re-read `os88_part_seg(i)` in
+`os88_onmove` on every call, as for the carve; a code selector derived from
+it (kern_mega) is re-derived only when the part's segment changed. 0
+declared, -1 not. The C64's and the Apple II's ROM translations (C64-SPEC
+4.8, APPLE2-SPEC 4.7) are its users: fetched pinned, they were a 78KB wall
+under the Apple II's RAM that `soak -k a2move` found. A package without
+the define has no `op_movable` and the thunk refuses to assemble.
+
 **And a package can be told of its REGION's move - `CC_ONMOVE_REGION`**
 (docs/plans/NO-PINNING-PLAN.md C3, WEAVE-SPEC 1.2.6). `cc_entry` declares
 every C package's region movable (§66.6.1.1) with `cc_regreloc`, which is a

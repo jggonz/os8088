@@ -287,6 +287,9 @@ C apps/c64/c64kbd.c ovl_clip_service:seg # Copy's staging, claimed and freed
                                          # same function declares)
 C apps/c64/c64load.c ovl_load_prg:seg    # a .PRG's read staging, inside one Load
                                          # command
+C apps/c64/c64disk.c ovl_d64_xattach:tmp # the D64's read-through buffer into
+                                         # extended memory, freed inside the
+                                         # one Attach command
 C apps/apple2/a2kbd.c ovl_a2_clip_service:seg  # Copy's staging, claimed and
                                          # freed inside one wake
 C apps/apple2/a2prog.c ovl_a2_load:seg   # Load Program's staging, inside one

@@ -314,6 +314,8 @@ static unsigned char c64_dasc[C64K_DOWNMAX];/* ...and the ascii they arrived
 static unsigned char c64_dage[C64K_DOWNMAX];
 static unsigned c64_dcyc[C64K_DOWNMAX];     /* c64_cyc_lo when it was pressed */
 static int c64_ndown;
+static unsigned char c64_klast;             /* the tap that last LEFT the list */
+static unsigned c64_klcyc;                  /* ...and c64_cyc_lo when it did */
 #ifdef C64_HOST
 static int c64_ndrop;                       /* presses the 16-entry list had
                                              * to drop - the bounded overflow
@@ -384,6 +386,7 @@ static void c64_kbd_init(void)
     for (i = 0; i < 8; i++)
         c64_matrix[i] = 0;
     c64_ndown = 0;
+    c64_klast = 0;
 #ifdef C64_HOST
     c64_ndrop = 0;
 #endif
@@ -492,8 +495,8 @@ static const unsigned char c64_joysc[5] = {
 
 /* THE KEYSET IS ON, AND ITS KEYS ARE CONSUMED. `KeySetEnable=1` is the
  * shipped state (joystick.c:553) because a keyset is the only joystick source
- * this machine has, and Preferences > Allow keyset joysticks is shown checked
- * and disabled (C64-SPEC §8). This is that resource, so the harness can turn
+ * this machine has, which is why Preferences has no Allow keyset joysticks
+ * item (C64-SPEC §8, §11.2). This is that resource, so the harness can turn
  * it off and show the keys reaching the matrix again - the negative control
  * for the rule below, and `joykeys_enable` is exactly the flag VICE tests
  * first in joystick_check_set (joystick.c:598-601). */
@@ -665,6 +668,25 @@ static void c64_kbd_add(int ascii, int scan)
     c64_ndown++;
 }
 
+/* c64_kbd_busy - must the press of SCAN wait in the ring? TAPS ARE TAKEN ONE
+ * AT A TIME (7.2's rule 5): while an earlier press whose host key is already
+ * up is still inside its fresh window, a second would share the matrix with
+ * it, and the KERNAL's scan reads two keys down as one of them or neither -
+ * which on a machine running below about half a C64's speed is every tap
+ * typed 40 ms apart. And a tap of the key that just left waits until the
+ * matrix has shown it UP for a scan interval, or the scan reads one long
+ * press. A key held on the host never blocks anything: chords and game keys
+ * go in together, as they are. */
+static int c64_kbd_busy(int scan)
+{
+    int i;
+    for (i = 0; i < c64_ndown; i++)
+        if (c64_dage[i] != C64K_AGE_OLD && !os88_key_down(c64_down[i]))
+            return 1;
+    return scan == c64_klast &&
+        (unsigned)(c64_cyc_lo - c64_klcyc) < (unsigned)C64K_FRESH_CYC;
+}
+
 static void c64_kbd_poll(void)
 {
     int i, j, n;
@@ -674,6 +696,8 @@ static void c64_kbd_poll(void)
     while (c64_ring_h != c64_ring_t) {
         i = c64_ring_a[c64_ring_h];
         j = c64_ring_s[c64_ring_h];
+        if (j != KSC_PGUP && c64_kbd_busy(j))
+            break;                          /* the next poll takes it */
         c64_ring_h = (c64_ring_h + 1) & (C64K_RING - 1);
         if (j == KSC_PGUP) {                /* RESTORE is not a matrix key */
             c64_nmi_raise();                /* 7.4: the NMI, and RUN/STOP is
@@ -701,8 +725,11 @@ static void c64_kbd_poll(void)
                                              * key state decides */
         }
         if (c64_dage[i] == C64K_AGE_OLD)
-            if (!os88_key_down(c64_down[i]))
+            if (!os88_key_down(c64_down[i])) {
+                c64_klast = c64_down[i];
+                c64_klcyc = c64_cyc_lo;
                 continue;
+            }
         c64_down[n] = c64_down[i];
         c64_dasc[n] = c64_dasc[i];
         c64_dage[n] = c64_dage[i];

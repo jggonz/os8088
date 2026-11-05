@@ -572,8 +572,10 @@ void os88_task_alive(void *win)
     }
 }
 static char last_toast[64];
+static long n_toast;
 int  os88_toast(const char *t, int ticks)
 {
+    n_toast++;
     strncpy(last_toast, t, sizeof(last_toast) - 1);
     return 0;
 }
@@ -622,25 +624,190 @@ static unsigned h_rom_seg = SEG_ROM;    /* where os88_part_seg says the ROM is:
                                          * moved by the carve round trip below
                                          * (CC_ONMOVE_PARTS, C64-SPEC 3.1.1) */
 
+/* ONE BIG CLAIM - drive 8's D64 (C64-SPEC 11.5) is 171KB, more than any
+ * scratch slot: a claim of over 4,096 paragraphs lands here, and a segment
+ * anywhere inside it is an address inside it, as on the machine */
+#define H_BIGSEG 0xA000u
+static unsigned char h_big[200 * 1024];
+static unsigned h_big_paras;
+/* THE COLOUR BRACKET'S GLASS (C64-SPEC 9.12): a real 320x200 framebuffer at
+ * a fictional segment, so what c64_fsx_put wrote can be read back */
+#define H_FSX_SEG 0xE000u                   /* (not H_BIGSEG's 0xA000) */
+static unsigned char h_fsx_fb[320 * 200];
+static int h_fsx_mask;                       /* no FSXM_VGA13 unless a row says */
+static int h_fsx_in, h_fsx_runs, h_fsx_modes, h_fsx_border = -1;
+static long h_fsx_drawn;                     /* drawing calls INSIDE the entry */
+static int h_fsx_keyq[16];
+static int h_fsx_keyn, h_fsx_keyi;
+
 static unsigned char *segbase(unsigned seg)
 {
     int i;
+    if (seg == H_FSX_SEG) return h_fsx_fb;
+    if (h_big_paras && seg >= H_BIGSEG && seg < H_BIGSEG + h_big_paras)
+        return h_big + (long)(seg - H_BIGSEG) * 16;
     if (seg == SEG_RAM) return ram;
     if (seg == h_rom_seg) return rom;
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg)
             return scratch[i];
+    /* ...and a segment INSIDE a claim is an address inside it, as on the
+     * machine (the D64's second sector slot is its claim plus 16) */
+    for (i = 0; i < CLAIM_MAX; i++)
+        if (claim[i].live && seg > claim[i].seg
+                && (long)(seg - claim[i].seg) * 16 < claim[i].cap)
+            return scratch[i] + (long)(seg - claim[i].seg) * 16;
     return 0;
 }
+
+int os88_fsx_caps(void *win, int *kind)
+{
+    (void)win;
+    if (kind)
+        *kind = 0;
+    return h_fsx_mask;
+}
+
+static long h_draws(void)
+{
+    return (long)n_blit + n_fill + n_scroll + n_run + n_str + n_toast;
+}
+int os88_fsx_run(void (*entry)(void), void *win, int flags)
+{
+    long d0;
+
+    (void)flags;
+    if (h_fsx_in)
+        return -1;
+    h_fsx_runs++;
+    h_fsx_in = 1;
+    d0 = h_draws();
+    entry();
+    h_fsx_drawn = h_draws() - d0;
+    h_fsx_in = 0;
+    if (win)
+        os88_paint(win);                /* SPEC.md 53.6 step 4: the desktop
+                                         * repainted, nested, before the
+                                         * return - the lock is the caller's */
+    return 0;
+}
+
+int os88_fsx_mode(int id, void *fsi)
+{
+    unsigned char *b = (unsigned char *)fsi;
+
+    if (!h_fsx_in || !(h_fsx_mask & (1 << id)))
+        return -1;
+    h_fsx_modes++;
+    memset(h_fsx_fb, 0, sizeof(h_fsx_fb));
+    memset(b, 0, OS88_FSI_SIZE);
+    b[OS88_FSI_SEG] = (unsigned char)(H_FSX_SEG & 0xFF);
+    b[OS88_FSI_SEG + 1] = (unsigned char)(H_FSX_SEG >> 8);
+    b[OS88_FSI_STRIDE] = 320 & 0xFF;
+    b[OS88_FSI_STRIDE + 1] = 320 >> 8;
+    b[OS88_FSI_BPP] = 8;
+    b[OS88_FSI_MODE] = (unsigned char)id;
+    return 0;
+}
+
+int os88_fsx_wait(int kind)
+{
+    (void)kind;
+    if (!h_fsx_in)
+        return -1;
+    the_ticks++;                        /* a frame is a tick */
+    return 0;
+}
+
+/* c64fsx.inc's routines, in C (C64-SPEC 9.12); c64memtest runs the shipping
+ * ones on a real x86 */
+void c64_c8glyph(unsigned char *gb, const unsigned char *xm, int n,
+                 unsigned gseg, unsigned goff, int mask)
+{
+    const unsigned char *g = segbase(gseg);
+    int c, y;
+    for (c = 0; c < n; c++)
+        for (y = 0; y < 8; y++)
+            gb[c * 8 + y] = g[(goff + (xm[c] & mask) * 8 + y) & 0xFFFF];
+}
+void c64_c8row(unsigned char *dst, const unsigned char *gb,
+               const unsigned char *k0, const unsigned char *k1,
+               const unsigned char *k2, const unsigned char *k3,
+               const unsigned char *mc, int n)
+{
+    int c, y, x;
+    for (c = 0; c < n; c++)
+        for (y = 0; y < 8; y++) {
+            unsigned b = gb[c * 8 + y];
+            unsigned char *d = dst + y * 320 + c * 8;
+            for (x = 0; x < 8; x++) {
+                if (!mc[c]) {
+                    d[x] = ((b << x) & 0x80) ? k1[c] : k0[c];
+                } else {
+                    unsigned p = (b >> (6 - (x & 6))) & 3;
+                    d[x] = p == 0 ? k0[c] : p == 1 ? k1[c] : p == 2 ? k2[c] : k3[c];
+                }
+            }
+        }
+}
+void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
+               int lo, int hi, const unsigned char *cols, int mc, int xs)
+{
+    int b, k, w = xs ? 2 : 1;
+    for (b = 0; b < 24; b++) {
+        unsigned byte = data[b >> 3];
+        int c = -1;
+        if (!mc) {
+            if ((byte << (b & 7)) & 0x80)
+                c = cols[2];
+        } else {
+            unsigned p = (byte >> (6 - (b & 6))) & 3;
+            if (p)
+                c = cols[p];
+        }
+        for (k = 0; k < w; k++, x++)
+            if (c >= 0 && x >= lo && x < hi)
+                dst[x] = (unsigned char)c;
+    }
+}
+static long h_fsx_putn;                     /* bytes put to the framebuffer */
+static int h_fsx_poke_at = -1;              /* the key pass that pokes row 10 */
+static int h_fsx_pokech = 0x02;             /* ...and the screen code it pokes */
+void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n)
+{
+    memcpy(segbase(seg) + off, src, n);
+    h_fsx_putn += n;
+}
+unsigned c64_fsx_key(void)
+{
+    if (h_fsx_poke_at >= 0)
+        the_ticks += 2;                         /* (a pass is a frame's time) */
+    if (h_fsx_keyi == h_fsx_poke_at) {
+        c64_wr(0x0400 + 10 * 40 + 1, h_fsx_pokech);  /* a 'B' at each end */
+        c64_wr(0x0400 + 10 * 40 + 38, h_fsx_pokech); /* of a row: snow's shape */
+        h_fsx_putn = 0;
+    }
+    if (h_fsx_keyi >= h_fsx_keyn)
+        return 0xFFFF;
+    return (unsigned)(h_fsx_keyq[h_fsx_keyi++] & 0xFFFF);
+}
+void c64_fsx_dac(void) { }
+void c64_fsx_border(int c) { h_fsx_border = c & 15; }
 
 static long segcap(unsigned seg)
 {
     int i;
+    if (h_big_paras && seg >= H_BIGSEG && seg < H_BIGSEG + h_big_paras)
+        return (long)(H_BIGSEG + h_big_paras - seg) * 16;
     if (seg == SEG_RAM) return 65536;
     if (seg == h_rom_seg) return 20480;
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg)
             return claim[i].cap;
+    for (i = 0; i < CLAIM_MAX; i++)
+        if (claim[i].live && seg > claim[i].seg
+                && (long)(seg - claim[i].seg) * 16 < claim[i].cap)
+            return claim[i].cap - (long)(seg - claim[i].seg) * 16;
     return -1;
 }
 
@@ -656,7 +823,8 @@ unsigned os88_mem_claim(int kb)
     for (i = 0; i < CLAIM_MAX; i++)
         if (!claim[i].live) {
             claim[i].live = 1;
-            claim[i].seg = (unsigned)(0x4000 + i * 0x400);
+            claim[i].seg = (unsigned)(0x4000 + i * 0x1000);   /* (64KB apart: a
+                                                     * segment inside one is in no other) */
             claim[i].cap = (long)kb * 1024;
             claims_live++;
             return claim[i].seg;
@@ -672,10 +840,18 @@ unsigned os88_mem_claim_p(unsigned paras)
     int i;
     if (paras == 0)
         return 0;
+    if (paras > 4096) {
+        if (h_big_paras || (long)paras * 16 > (long)sizeof(h_big))
+            return 0;
+        h_big_paras = paras;
+        claims_live++;
+        return H_BIGSEG;
+    }
     for (i = 0; i < CLAIM_MAX; i++)
         if (!claim[i].live) {
             claim[i].live = 1;
-            claim[i].seg = (unsigned)(0x4000 + i * 0x400);
+            claim[i].seg = (unsigned)(0x4000 + i * 0x1000);   /* (64KB apart: a
+                                                     * segment inside one is in no other) */
             claim[i].cap = (long)paras * 16;
             claims_live++;
             return claim[i].seg;
@@ -688,6 +864,7 @@ int os88_mem_free(unsigned seg)
     int i;
     if (seg == SEG_RAM) { ram_live = 0; return 0; }
     if (seg == SEG_ROM) { rom_live = 0; return 0; }
+    if (h_big_paras && seg == H_BIGSEG) { h_big_paras = 0; claims_live--; return 0; }
     for (i = 0; i < CLAIM_MAX; i++)
         if (claim[i].live && claim[i].seg == seg) {
             claim[i].live = 0;
@@ -718,6 +895,73 @@ int os88_mem_movable(unsigned seg, int on)
 unsigned os88_mem_largest_kb(void) { return 200; }
 int  os88_peek(unsigned seg, unsigned off) { return segbase(seg)[off]; }
 void os88_poke(unsigned seg, unsigned off, int v) { segbase(seg)[off] = (unsigned char)v; }
+
+/* drive 8's image fixture: what c64_read_at serves, by offset, 32KB a call
+ * (C64-SPEC 11.5) - and the call's contract checked as the kernel holds it */
+static unsigned char h_d64[174848];
+static long h_d64_len;
+unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
+                     unsigned off_lo, unsigned off_hi)
+{
+    long off = (long)off_lo | ((long)off_hi << 16), n;
+    (void)name;
+    if (cap % 512 || off % 512)
+        fail("c64_read_at off a cluster boundary");
+    if (segcap(seg) < (long)cap && off + cap < h_d64_len)
+        fail("c64_read_at into a claim smaller than its capacity");
+    if (off >= h_d64_len)
+        return 0;
+    n = h_d64_len - off;
+    if (n > cap)
+        n = cap;
+    memcpy(segbase(seg), h_d64 + off, (size_t)n);
+    return (unsigned)n;
+}
+
+/* EXTENDED MEMORY (C64-SPEC 11.5.1): a pool of h_xms_kb KB, blocks handed
+ * out from its bottom with the token a linear address above 1MB, as on a
+ * real-mode kernel - and COPY's contract checked as the kernel holds it */
+static unsigned char h_xms[512 * 1024];
+static unsigned h_xms_kb, h_xms_used, h_xms_live;
+unsigned c64_xnew[2];
+unsigned c64x_caps(void) { return h_xms_kb - h_xms_used; }
+int c64x_alloc(unsigned lo, unsigned hi)
+{
+    long n = ((long)hi << 16) | lo;
+    n = (n + 1023) / 1024;
+    if (n > (long)(h_xms_kb - h_xms_used))
+        return 0;
+    c64_xnew[0] = (unsigned)(((long)h_xms_used * 1024) & 0xFFFF);
+    c64_xnew[1] = (unsigned)(0x10 + (((long)h_xms_used * 1024) >> 16));
+    h_xms_used += (unsigned)n;
+    h_xms_live++;
+    return 1;
+}
+void c64x_free(unsigned tlo, unsigned thi)
+{
+    (void)tlo; (void)thi;
+    if (h_xms_live == 0)
+        fail("c64x_free with no extended block live");
+    h_xms_live--;
+    if (h_xms_live == 0)
+        h_xms_used = 0;
+}
+int c64x_copy(unsigned seg, unsigned off, unsigned tlo, unsigned thi,
+              unsigned xlo, unsigned xhi, unsigned n, int in)
+{
+    long x = (((long)thi << 16) | tlo) - 0x100000L + (((long)xhi << 16) | xlo);
+    if (n & 1 || n > 32768)
+        fail("c64x_copy of an odd length or over 32KB");
+    if (x < 0 || x + n > (long)h_xms_used * 1024)
+        fail("c64x_copy outside the extended block");
+    if (segcap(seg) < (long)off + n)
+        fail("c64x_copy past its conventional claim");
+    if (in)
+        memcpy(segbase(seg) + off, h_xms + x, n);
+    else
+        memcpy(h_xms + x, segbase(seg) + off, n);
+    return 1;
+}
 
 /* the .PRG fixture the next os88_file_read_seg serves, by name */
 static char fx_name[16];
@@ -764,6 +1008,14 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
  * wave 6 made: a required part is here when os88_main runs or the launch
  * never got that far. `--no-rom`, a whole second process that existed to draw
  * the notice a mis-copied disk showed, went with it. */
+/* THE FAST CORE'S PART IS REFUSED HERE (C64-SPEC section 4.7): this host has
+ * no 8086 to run it, and a refused fetch is the path that leaves the
+ * accurate core's stub - the one every case below drives - running alone */
+void c64f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
+unsigned c64f_codesel(unsigned seg) { return seg; }
+void c64j_off(unsigned core) { (void)core; }
+void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core, int force, int kb) { (void)dst; (void)part; (void)len; (void)core; (void)force; (void)kb; }
+
 unsigned os88_part_seg(int i)
 {
     FILE *f;
@@ -786,7 +1038,8 @@ unsigned os88_part_seg(int i)
     return h_rom_seg;
 }
 
-int os88_part_fetch(int i) { (void)i; return 0; }
+int os88_part_fetch(int i) { return i == 2 ? -1 : 0; }  /* part 2 is the fast
+                                             * core, refused (C64-SPEC 4.7) */
 void os88_part_drop(int i) { (void)i; }
 int os88_part_lazyok(int i) { (void)i; return 1; }
 int os88_part_optok(void) { return 1; }
@@ -955,6 +1208,187 @@ void c64_band1(unsigned char *dst, int first, int last,
                 (unsigned char)((gl & c64_cmask[fg * 2]) ^ c64_cmask[fg * 2 + 1]);
         }
     }
+}
+
+/* c64band.inc's c64_bandbm, in C (C64-SPEC 9.10); c64memtest runs the
+ * shipping one on a real x86 */
+extern unsigned char c64_dmask[16][4];
+static long n_bm_cells;
+void c64_bandbm(unsigned char *dst, const unsigned char *xm,
+                const unsigned char *xb, const unsigned char *col,
+                int n, int mc, int bg)
+{
+    int c, y;
+    for (c = 0; c < n; c++) {
+        const unsigned char *d0 = c64_dmask[bg & 15];
+        const unsigned char *d1 = c64_dmask[xm[c] >> 4];
+        const unsigned char *d2 = c64_dmask[xm[c] & 15];
+        const unsigned char *d3 = c64_dmask[col[c] & 15];
+        n_bm_cells++;
+        for (y = 0; y < 8; y++) {
+            unsigned b = xb[c * 8 + y], o = 0;
+            int k;
+            if (!mc)
+                o = (b & d1[y & 3]) | (~b & d2[y & 3]);
+            else
+                for (k = 0; k < 4; k++) {
+                    unsigned p = (b >> (6 - 2 * k)) & 3;
+                    const unsigned char *d = p == 0 ? d0 : p == 1 ? d1 : p == 2 ? d2 : d3;
+                    o |= d[y & 3] & (0xC0 >> (2 * k));
+                }
+            dst[y * HB_STRIDE + c] = (unsigned char)o;
+        }
+    }
+}
+
+int c64_rvdiff(const unsigned char *a, const unsigned char *b)
+{ return memcmp(a, b, 48) != 0; }
+int c64_neq(const unsigned char *a, const unsigned char *b, int n)
+{ return memcmp(a, b, (size_t)n * 2) != 0; }
+/* c64band.inc's c64_bandfind, in C (C64-SPEC 9.4.1) */
+int c64_bfbest;
+extern int c64_sb0, c64_sb1;
+int c64_bandfind(const unsigned *sig, const unsigned *shsig, int n, int kmax)
+{
+    int k, i, j, run, ch, st = 0, bk = 0;
+    c64_bfbest = 0;
+    for (k = -kmax; k <= kmax; k++) {
+        if (k == 0)
+            continue;
+        run = ch = 0;
+        for (i = 0; i <= n; i++) {
+            j = i + k;
+            if (i < n && j >= 0 && j < n && sig[i] == shsig[j]) {
+                if (!run) st = i;
+                run++;
+                if (sig[i] != shsig[i]) ch++;
+                continue;
+            }
+            if (ch > c64_bfbest) {
+                c64_bfbest = ch; bk = k; c64_sb0 = st; c64_sb1 = st + run - 1;
+            }
+            run = ch = 0;
+        }
+    }
+    return bk;
+}
+unsigned c64_scr_left(void)
+{
+    /* (DEAD $24, CARRY $22: c64.c's C64_SCR_* are below this) */
+    return (unsigned)((c64_scr_rd(0x24) | (c64_scr_rd(0x25) << 8))
+                    + (c64_scr_rd(0x22) | (c64_scr_rd(0x23) << 8))) & 0xFFFF;
+}
+
+/* c64sid.inc's c64_osc3, in C with host 32-bit arithmetic (C64-SPEC
+ * 11.4.1); c64memtest runs the shipping one on a real x86 */
+static unsigned long h_o3acc = 0, h_o3nz = 0;
+unsigned c64_osc3(unsigned dt, unsigned freq, unsigned ctrl, unsigned pw)
+{
+    unsigned long add, o, n, r;
+    unsigned out = 0xFF, b;
+    if (ctrl & 8) {
+        h_o3acc = 0;
+        h_o3nz = 0x7FFFFF;
+    } else {
+        add = (unsigned long)(dt & 0xFFFF) * (freq & 0xFFFF);
+        if (add > 0x0FFFFFFFUL) add = 0x0FFFFFFFUL;
+        o = h_o3acc + 0xF80000UL;
+        n = o + add;
+        r = (n >> 20) - (o >> 20);
+        if (r > 256) r = 256;
+        h_o3acc = (n - 0xF80000UL) & 0xFFFFFF;
+        while (r--) {
+            b = ((h_o3nz >> 22) ^ (h_o3nz >> 17)) & 1;
+            h_o3nz = ((h_o3nz << 1) | b) & 0x7FFFFF;
+        }
+    }
+    if ((ctrl & 0xF0) == 0)
+        return 0;
+    if (ctrl & 0x80) {
+        unsigned long z = h_o3nz;
+        b = (unsigned)((((z >> 22) & 1) << 7) | (((z >> 20) & 1) << 6)
+            | (((z >> 16) & 1) << 5) | (((z >> 13) & 1) << 4)
+            | (((z >> 11) & 1) << 3) | (((z >> 7) & 1) << 2)
+            | (((z >> 4) & 1) << 1) | ((z >> 2) & 1));
+        out &= b;
+    }
+    if (ctrl & 0x20)
+        out &= (unsigned)(h_o3acc >> 16) & 0xFF;
+    if (ctrl & 0x10) {
+        b = (unsigned)(h_o3acc >> 15) & 0xFF;
+        if (h_o3acc & 0x800000) b ^= 0xFF;
+        out &= b;
+    }
+    if (ctrl & 0x40)
+        out &= ((unsigned)(h_o3acc >> 12) & 0xFFF) >= (pw & 0xFFF) ? 0xFF : 0;
+    return out;
+}
+
+void c64_sprconv(const unsigned char *sd, unsigned char *on,
+                 unsigned char *lit, int mode, const unsigned *xexp)
+{
+    int j;
+    unsigned b, h, lo, s1, s2, s3, o, l;
+    for (j = 0; j < 3; j++) {
+        b = sd[j];
+        if (mode & 1) {
+            h = (b >> 1) & 0x55;
+            lo = b & 0x55;
+            s3 = h & lo;
+            s2 = h ^ s3;
+            s1 = lo ^ s3;
+            s1 |= s1 << 1;
+            s2 |= s2 << 1;
+            s3 |= s3 << 1;
+            o = (s1 | s2 | s3) & 0xFF;
+            l = (((mode & 4) ? s1 : 0) | ((mode & 8) ? s2 : 0)
+                 | ((mode & 16) ? s3 : 0)) & 0xFF;
+        } else {
+            o = b;
+            l = (mode & 8) ? b : 0;
+        }
+        if (mode & 2) {
+            o = xexp[o];
+            l = xexp[l];
+            on[j + j] = (unsigned char)(o >> 8);
+            on[j + j + 1] = (unsigned char)o;
+            lit[j + j] = (unsigned char)(l >> 8);
+            lit[j + j + 1] = (unsigned char)l;
+        } else {
+            on[j] = (unsigned char)o;
+            lit[j] = (unsigned char)l;
+        }
+    }
+}
+
+void c64_sprrow(unsigned char *dst, const unsigned char *on,
+                const unsigned char *lit, int n, int cell, int sh, int f, int l)
+{
+    int k;
+    for (k = 0; k < n; k++, cell++) {
+        unsigned o = (unsigned)on[k] << 8, t = (unsigned)lit[k] << 8;
+        o >>= sh;
+        t >>= sh;
+        if (cell >= f && cell <= l)
+            dst[cell] = (unsigned char)((dst[cell] & ~(o >> 8)) | (t >> 8));
+        if (cell + 1 >= f && cell + 1 <= l)
+            dst[cell + 1] = (unsigned char)((dst[cell + 1] & ~o) | t);
+    }
+}
+
+int c64_runfind(const unsigned char *a, const unsigned char *b, int from)
+{
+    int c, f, l;
+    for (c = from; c < 40; c++)
+        if (a[c] != b[c] || a[c + 40] != b[c + 40])
+            break;
+    if (c >= 40)
+        return -1;
+    f = l = c;
+    for (c++; c < 40 && c - l <= 3; c++)
+        if (a[c] != b[c] || a[c + 40] != b[c + 40])
+            l = c;
+    return (f << 8) | l;
 }
 
 int c64_rowspan(const unsigned char *a, const unsigned char *b, int n)
@@ -1208,6 +1642,20 @@ int os88_key_down(int scan)
  * emulated SID for the rest of the session, because the latch that asks is
  * raised only by a SID REGISTER WRITE. */
 static int n_tone, h_tone_hz, h_tone_refuse;
+/* SOUND.DRV's FM chip (C64-SPEC 11.4.3): c64.asm's two shim calls, a chip
+ * the row says is there, and a register file the batches land in */
+static int h_fm_chip;
+static unsigned char h_opl[256];
+static int h_opl_batches;
+int c64_opl_open(void) { return h_fm_chip; }
+int c64_opl_send(const unsigned char *pairs, int n)
+{
+    int i;
+    h_opl_batches++;
+    for (i = 0; i < n; i++)
+        h_opl[pairs[i * 2]] = pairs[i * 2 + 1];
+    return n;
+}
 int os88_snd_tone(int hz, int ticks, int prio)
 {
     n_tone++;
@@ -1471,6 +1919,7 @@ static void glass_moved_up(int k)
  * a MODEL, not a measurement of the whole path - which is exactly what
  * PERFORMANCE.md rule 4 asks for until a counter on the target replaces it.
  * ========================================================================*/
+static unsigned b_proved;
 static int b_blit, b_fill, b_scroll, b_frame, b_run, b_str, b_bandc, b_cells,
            b_span, b_sig;
 static long b_blit_bytes, b_run_cells, b_str_cells, b_scr_acc, b_scr_take;
@@ -1491,6 +1940,7 @@ static long b_cpb, b_cprow, b_cpcell, b_x2;
 static void cost_begin(void)
 {
     b_blit = n_blit; b_fill = n_fill; b_scroll = n_scroll; b_frame = n_frame;
+    b_proved = c64_n_proved;
     b_run = n_run; b_str = n_str;
     b_bandc = n_band_calls; b_cells = n_band_cells;
     b_span = n_span_calls; b_sig = n_sig_calls;
@@ -1611,6 +2061,15 @@ static void flush_now(void)
     if (h_speed_hold)
         c64_sp_tick = the_ticks;            /* el = 4 < 18: no fold this wake */
     the_ticks += 4;
+    c64_latch(0);                           /* the register writes the script
+                                             * made reach the screen at the
+                                             * display latch's line, once a
+                                             * frame (9.9) - and a write in the
+                                             * lines BELOW the display is the
+                                             * next frame's (9.10), so it is
+                                             * TWO latches that put whatever
+                                             * the script wrote on every row */
+    c64_latch(0);
     os88_onwake(the_win);                   /* the wake runs with the lock NOT
                                              * held and takes it itself (74.1) */
     if (lock_depth != 0) { fail("a wake left the gfx lock held"); exit(1); }
@@ -1761,6 +2220,48 @@ static void h_noise(void)
 
 int main(int argc, char **argv)
 {
+    /* THE THROTTLE (C64-SPEC 4.4.1): APPLE2's case one machine along - 64
+     * ticks of this host's clock pay in 64 ticks of a PAL C64, a stall is
+     * not paid back, warp is not held - and then OFF for every other case */
+    {
+        long tot = 0;
+        int k, b;
+
+        c64_th_tick = the_ticks;
+        for (k = 0; k < 64; k++) {
+            the_ticks++;
+            while ((b = c64_th_allow(16384)) > 0) {
+                tot += b;
+                c64_th_spend(b);
+            }
+        }
+        /* 64 / 18.2065 s x 985,248 Hz = 3,463,354 cycles */
+        if (tot < 3463354L - 2048 || tot > 3463354L + 2048) {   /* 0.06% */
+            printf("c64uitest: FAIL - the throttle paid %ld cycles for 64 "
+                   "ticks and a PAL C64 runs 3,463,354 (C64-SPEC 4.4.1)\n", tot);
+            exit(1);
+        }
+        the_ticks += 100;
+        tot = 0;
+        while ((b = c64_th_allow(16384)) > 0) {
+            tot += b;
+            c64_th_spend(b);
+        }
+        if (tot > 3L * 846 * 64) {
+            printf("c64uitest: FAIL - a stall was paid back as %ld cycles\n", tot);
+            exit(1);
+        }
+        c64_warp = 1;
+        if (c64_th_allow(16384) != 16384) {
+            printf("c64uitest: FAIL - warp is throttled\n");
+            exit(1);
+        }
+        c64_warp = 0;
+        printf("c64uitest: the throttle holds 64 ticks to a PAL C64 and does "
+               "not pay a stall back\n");
+        c64_th_off = 1;
+    }
+
     void *win;
     int i, k;
 
@@ -1905,6 +2406,77 @@ int main(int argc, char **argv)
     if (n_band_cells - b_cells != 40)
         fail("one changed row did not compose its 40 cells");
 
+    /* --- TWO POKES 35 CELLS APART IN ONE ROW (9.4.1): the row has a whole
+     *     source record from the row above, so the record names the two
+     *     cells that moved - two composed cells, the 34 between them proved
+     *     and filled from the shadow, and still one blit ---------------- */
+    cost_begin();
+    h_noise();
+    c64_wr(0x0400 + 12 * 40 + 2, 20);
+    c64_wr(0x0400 + 12 * 40 + 37, 21);
+    flush_now();
+    cost_row("two pokes 35 cells apart, one row");
+    audit("after two pokes in one row");
+    if (n_band_cells - b_cells != 2)
+        fail("two pokes in one recorded row composed the span between "
+             "them, not the two cells the record names");
+    if (n_blit - b_blit != 1)
+        fail("two pokes in one row were not one blit");
+
+    /* --- ...AND UNDER A SPRITE THAT STAYS PUT (9.4.1): sprite 0 over
+     *     cells 36-38 of row 12, PCUG's logo over its snow. The same two
+     *     cells change: two composed cells, one blit, and the row is its
+     *     text with the sprite over it. Verified red with the cell path
+     *     refusing a sprite row (36 cells) and with the sprite not drawn
+     *     over the runs (the whole-row repaint differs) */
+    {
+        int j;
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, (j % 3 == 1) ? 0xF0 : 0x00);  /* cell 37, left half */
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 1);
+        c64_io_wr(0xD010, 1);
+        c64_io_wr(0xD000, (24 + 288) & 0xFF);   /* x 288: cell 36 */
+        c64_io_wr(0xD001, 50 + 96);             /* row 12's top line */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+        cost_begin();
+        h_noise();
+        c64_wr(0x0400 + 12 * 40 + 2, 22);
+        c64_wr(0x0400 + 12 * 40 + 37, 23);
+        flush_now();
+        cost_row("two pokes 35 cells apart, under a sprite");
+        audit("after two pokes in a row under a sprite");
+        if (n_band_cells - b_cells != 2)
+            fail("two pokes in a recorded row under a still sprite composed "
+                 "the span between them (9.4.1)");
+        if (n_blit - b_blit != 1)
+            fail("two pokes in a row under a sprite were not one blit");
+        {
+            static unsigned char snap[8][320];
+            int y, x, bad = 0;
+            for (y = 0; y < 8; y++)
+                for (x = 0; x < 320; x++)
+                    snap[y][x] = (unsigned char)glass[c64_gsy + 96 + y][c64_gsx + x];
+            c64_sh_inval();
+            flush_now();                    /* every row whole, sprites on */
+            for (y = 0; y < 8; y++)
+                for (x = 0; x < 320; x++)
+                    if (snap[y][x] != glass[c64_gsy + 96 + y][c64_gsx + x])
+                        bad++;
+            if (bad)
+                fail("a row composed by cells under a sprite is not what the "
+                     "whole row composes to (9.4.1)");
+        }
+        c64_io_wr(0xD015, 0);
+        c64_io_wr(0xD010, 0);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+    }
+
     /* --- TWO POKES IN DISTANT ROWS: the window INTERSECTED with the pages
      *     (9.2). One lo/hi window over the matrix says "rows 0..24" for a
      *     score written at row 0 and a status line at row 24 inside the same
@@ -1961,13 +2533,18 @@ int main(int argc, char **argv)
      * convention. A row that scrolled up is one row HIGHER on the glass than
      * it was, and the VACATED rows are the k at the BOTTOM. */
     glass_moved_up(9);
-    /* ...AND EVERY SHIFTED ROW WAS STILL COMPOSED AND COMPARED. 9.4: the
-     * signature is a HINT and nothing rests on it. Skipping the 16 slid rows
-     * would save 188 ms and buy a wrong screen that never repairs itself
-     * (the collision step below). */
-    if (n_band_calls - b_bandc != C64_ROWS)
-        fail("a k = 9 shift did not compose and compare every row - the "
-             "16-bit signature is a hint, not proof (9.4)");
+    /* ...AND THE 16 SLID ROWS WERE PROVED, NOT GUESSED (9.4.1). The
+     * signature is still a HINT and nothing rests on it: a slid row is
+     * skipped only when its forty matrix bytes and forty colour nibbles read
+     * exactly what the row it came from was drawn from (c64_srcsh), which is
+     * the same picture. So the 9 vacated rows are composed and the 16 slid
+     * ones cost a 40-byte copy and an 80-byte compare each - it was 25
+     * composes and compares. audit() above checked every pixel. The
+     * collision step below is the case the proof exists to catch. Verified
+     * red with c64_neq answering 0 (the collision's row 0 then stays wrong) */
+    if (n_band_calls - b_bandc != 9 || c64_n_proved - b_proved != 16)
+        fail("a k = 9 shift did not compose its 9 vacated rows and PROVE its "
+             "16 slid ones (9.4.1)");
 
     /* ...and the same shift with gfx_scroll REFUSING: the fallback must be
      * spans and the shadow must stay true (9.4) */
@@ -2010,15 +2587,20 @@ int main(int argc, char **argv)
      * against the row's own sources, which is the one thing audit() cannot
      * do here: a package that slides its shadow the same wrong way agrees
      * with itself. */
+    /* (...and rows 2-6 really do move up one, behind it: the band test
+     * wants three CHANGED rows before it believes a scroll, 9.4.1, and a
+     * single collision alone is not one) */
     for (i = 0; i < C64_ROWS; i++)
         for (k = 0; k < 40; k++)
-            c64_wr(0x0400 + i * 40 + k, (i == 1 && k == 5) ? 34 : 32);
+            c64_wr(0x0400 + i * 40 + k, (i == 1 && k == 5) ? 34
+                   : (i >= 2 && i <= 6 && k == 10) ? (1 + i) : 32);
     flush_now();
     audit("before the signature collision");
     cost_begin();
     for (i = 0; i < C64_ROWS; i++)
         for (k = 0; k < 40; k++)
-            c64_wr(0x0400 + i * 40 + k, (i == 0 && k == 6) ? 36 : 32);
+            c64_wr(0x0400 + i * 40 + k, (i == 0 && k == 6) ? 36
+                   : (i >= 1 && i <= 5 && k == 10) ? (2 + i) : 32);
     flush_now();
     cost_row("a k = 1 shift the signature got WRONG");
     if (n_scroll - b_scroll != 1)
@@ -2026,6 +2608,111 @@ int main(int argc, char **argv)
              "it is not testing what it says");
     audit("after the signature collision");
     row_truth(0, "after the signature collision");
+
+    /* --- A PARTIAL SCROLL, DOWN (9.4.1): rows 0-11 move down one into 1-12
+     * and a new row 0 comes in, rows 13-24 standing still - the Portland
+     * CUG demo's falling snow. One gfx_scroll of the band, its 12 slid rows
+     * proved from their bytes, only the new row 0 composed, and every pixel
+     * right (audit). Verified red with the band test kept to whole-screen,
+     * upward shifts: no scroll, 13 composes. */
+    for (i = 0; i < C64_ROWS; i++)
+        for (k = 0; k < 40; k++)
+            c64_wr(0x0400 + i * 40 + k, (unsigned char)(1 + ((i * 11 + k * 3) % 26)));
+    flush_now();
+    audit("before the partial scroll");
+    cost_begin();
+    memmove(ram + 0x0400 + 40, ram + 0x0400, 12 * 40);
+    for (k = 0; k < 40; k++)
+        ram[0x0400 + k] = (unsigned char)(1 + ((k * 5) % 26));
+    for (i = 0x0400; i < 0x0400 + 13 * 40; i++)
+        c64_dirty((unsigned)i);
+    c64_scr_wr(0x2C, 0x00); c64_scr_wr(0x2D, 0x04);
+    c64_scr_wr(0x2E, (0x0400 + 13 * 40 - 1) & 0xFF);
+    c64_scr_wr(0x2F, (0x0400 + 13 * 40 - 1) >> 8);
+    c64_dirty_any = 1;
+    flush_now();
+    cost_row("a partial scroll down, rows 0-12");
+    audit("after the partial scroll");
+    if (n_scroll - b_scroll != 1 || n_band_calls - b_bandc != 1
+            || c64_n_proved - b_proved != 12)
+        fail("a partial downward scroll was not one gfx_scroll, one composed "
+             "row and twelve proved ones (9.4.1)");
+
+    /* --- ...AND A SPRITE OVER THE BAND (9.4.1): NO SCROLL. A scroll moves
+     * the GLASS, sprite pixels and all, and the redraw that puts them back
+     * comes after it - a frame of the picture in the wrong place on a 286
+     * (the CUG logo dropping two rows whenever its snow fell in step). So a
+     * band with a sprite over it now, or on the glass from before - here the
+     * sprite over rows 5-7 is switched off in the same frame - is composed
+     * in place, and every row of it is its text and nothing else. Verified
+     * red with the refusal removed (a scroll is counted). */
+    {
+        int r, j;
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0xFF);
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 1);
+        c64_io_wr(0xD000, 24 + 40);
+        c64_io_wr(0xD001, 50 + 40);         /* rows 5-7 */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+        memmove(ram + 0x0400 + 40, ram + 0x0400, 12 * 40);
+        for (k = 0; k < 40; k++)
+            ram[0x0400 + k] = (unsigned char)(1 + ((k * 7) % 26));
+        for (i = 0x0400; i < 0x0400 + 13 * 40; i++)
+            c64_dirty((unsigned)i);
+        c64_scr_wr(0x2C, 0x00); c64_scr_wr(0x2D, 0x04);
+        c64_scr_wr(0x2E, (0x0400 + 13 * 40 - 1) & 0xFF);
+        c64_scr_wr(0x2F, (0x0400 + 13 * 40 - 1) >> 8);
+        c64_io_wr(0xD015, 0);               /* ...and the sprite goes */
+        c64_latch(0);
+        c64_latch(0);
+        c64_dirty_any = 1;
+        b_scroll = n_scroll;
+        flush_now();
+        if (n_scroll - b_scroll != 0)
+            fail("a band with a sprite on its glass was scrolled - the "
+                 "sprite's pixels moved with it, to be put back a frame later");
+        for (r = 0; r <= 12; r++)
+            row_truth(r, "after a band moved under a sprite");
+
+        /* ...AND THE TEST BACKS OFF (9.4.1): with the sprite left ON over
+         * the band, six shifts in a row are tested twice, refused twice,
+         * skipped three times and tested once more - and every one of them
+         * is still drawn right. Verified red with c64_bf_wait never set
+         * (six tests) */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+        j = (int)c64_n_shtest;
+        for (k = 0; k < 6; k++) {
+            int q;
+            memmove(ram + 0x0400 + 40, ram + 0x0400, 12 * 40);
+            for (q = 0; q < 40; q++)
+                ram[0x0400 + q] = (unsigned char)(1 + ((q * 3 + k) % 26));
+            for (i = 0x0400; i < 0x0400 + 13 * 40; i++)
+                c64_dirty((unsigned)i);
+            c64_scr_wr(0x2C, 0x00); c64_scr_wr(0x2D, 0x04);
+            c64_scr_wr(0x2E, (0x0400 + 13 * 40 - 1) & 0xFF);
+            c64_scr_wr(0x2F, (0x0400 + 13 * 40 - 1) >> 8);
+            c64_dirty_any = 1;
+            b_scroll = n_scroll;
+            flush_now();
+            if (n_scroll - b_scroll != 0)
+                fail("a band under a live sprite was scrolled");
+        }
+        if ((int)c64_n_shtest - j != 3)
+            fail("six shifts under a sprite were not tested exactly three "
+                 "times - the shift test does not back off (9.4.1)");
+        audit("after six shifts under a sprite");
+        c64_io_wr(0xD015, 0);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+    }
 
     /* --- AND gfx_blit1 REFUSING: 9.5's SECOND PATH, ONCE ---------------
      * os88.h:446 - blit1 answers -1 with NOTHING DRAWN, for a broken argument
@@ -2142,19 +2829,41 @@ int main(int argc, char **argv)
         fail("a register write that changed nothing drew something");
     c64_io_wr(0xDD00, 0x17);
 
+    /* --- a FINE-SCROLL write composes NOTHING (5.1, 9.10) ---------------
+     * The fine scroll is not honoured, so it cannot change the picture: a
+     * program smooth-scrolling with $D011/$D016's low bits every frame
+     * recomposed every row every frame until the latch's change test was
+     * masked to the bits the composer draws from. Verified red with the
+     * mask removed. */
+    cost_begin();
+    c64_io_wr(0xD016, (c64_vic[0x16] ^ 0x01));   /* fine scroll x */
+    c64_io_wr(0xD011, (c64_vic[0x11] ^ 0x07));   /* ...and y */
+    flush_now();
+    cost_row("a fine-scroll change, $D011 and $D016");
+    audit("after a fine-scroll change");
+    if (n_band_calls - b_bandc != 0 || n_blit - b_blit != 0)
+        fail("a fine-scroll write recomposed or drew - it cannot change the "
+             "picture here (5.1)");
+    c64_io_wr(0xD016, (c64_vic[0x16] ^ 0x01));
+    c64_io_wr(0xD011, (c64_vic[0x11] ^ 0x07));
+
     /* --- a register write that DOES change: recompose, then COMPARE ----- */
     cost_begin();
-    c64_io_wr(0xD016, (c64_vic[0x16] ^ 0x01));   /* fine scroll x: every row
-                                                  * recomposes, and composes
-                                                  * the SAME pixels */
+    c64_io_wr(0xD021, 9);                   /* brown paper: the same luminance
+                                             * as blue (60, 9.6), so every row
+                                             * recomposes and composes the SAME
+                                             * pixels */
     flush_now();
-    cost_row("a $D016 change that draws the same picture");
-    audit("after a $D016 change");
+    cost_row("a $D021 change that draws the same picture");
+    audit("after a $D021 change");
     if (n_band_calls - b_bandc == 0)
         fail("a frame-register change did not recompose");
     if (n_blit - b_blit != 0)
         fail("a frame-register change that composed the same pixels still "
              "drew - the shadow compare was forced off");
+    c64_io_wr(0xD021, 6);
+    flush_now();                            /* (back: and a flush in THIS tick
+                                             * for the row below) */
 
     /* --- a slice with no tick boundary costs nothing (9.7) -------------- */
     cost_begin();
@@ -2190,7 +2899,7 @@ int main(int argc, char **argv)
     h_keydown[KSC_UP] = 1;
     h_keydown[KSC_CTRL] = 1;                /* up + fire on control port 2 */
     c64_dirty_any = 1;                      /* ...and nothing else: the
-                                             * flush calls c64_status every
+                                             * flush calls ovl_status every
                                              * time and the FIELD COMPARE is
                                              * the gate, which is the path the
                                              * product takes. Setting the flag
@@ -2609,6 +3318,186 @@ int main(int argc, char **argv)
     if (fs_on)
         fail("Preferences > Fullscreen did not leave fullscreen");
     audit("after leaving fullscreen");
+
+    /* --- THE COLOUR SCREEN (C64-SPEC 9.12). On a display with FSXM_VGA13,
+     * Alt+D is the bracket: the window does not go WF_FULL, the C64's
+     * 320x200 goes into the framebuffer one byte a pixel, nothing draws
+     * through a desktop slot inside, and Alt+D comes back. Each pixel below
+     * is read off the modelled framebuffer. Verified red with the text arm's
+     * two colours swapped in ovl_fsx_compose, with the sprite pass taken out
+     * of ovl_fsx_frame, and with c64_say's toast fence removed. c64memtest
+     * runs the shipping c64fsx.inc composers on a real x86. */
+    {
+        int j, x, rt;
+        unsigned g;
+        static unsigned char save_ram[0x2001], save_col0;
+        memcpy(save_ram, ram, sizeof(save_ram));    /* (the rows after this
+                                                     * one read the screen) */
+        save_col0 = c64_col[0];
+        c64_io_wr(0xD021, 6);               /* blue paper */
+        c64_io_wr(0xD020, 14);              /* light blue border */
+        c64_io_wr(0xD018, 0x15);
+        c64_io_wr(0xD011, 0x1B);
+        c64_latch(0);
+        c64_latch(0);
+        c64_wr(0x0400, 0x01);               /* an 'A'... */
+        c64_col[0] = 2;                     /* ...in red */
+        h_fsx_mask = 1 << OS88_FSXM_VGA13;
+        h_fsx_keyq[0] = 0x1E61;             /* 'a', for the machine */
+        h_fsx_keyq[1] = 0x1100;             /* Alt+W, which SAYS "Warp mode
+                                             * on." - a toast the fence must
+                                             * hold back - and again, off */
+        h_fsx_keyq[2] = 0x1100;
+        h_fsx_keyq[3] = 0xFFFF;             /* (a pass with no key: a frame) */
+        h_fsx_keyq[4] = 0x2000;             /* Alt+D */
+        h_fsx_keyn = 5;
+        h_fsx_keyi = 0;
+        rt = c64_ring_t;
+        h_fsx_runs = 0;
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);           /* Alt+D */
+        os88_gfx_unlock();
+        if (h_fsx_runs != 1 || h_fsx_modes < 1 || fs_on)
+            fail("Alt+D on a VGA did not run the colour bracket - or went "
+                 "WF_FULL as well (9.12)");
+        if (c64_warp)
+            fail("Alt+W twice inside the colour bracket did not toggle warp "
+                 "on and off again");
+        if (h_fsx_drawn != 0)
+            fail("something called a desktop drawing slot inside the colour "
+                 "bracket - SPEC.md 53.7 forbids it after the mode set");
+        if (h_fsx_border != 14)
+            fail("the border is not $D020's colour in the overscan register");
+        g = rom[0x4000 + 8];                /* the CHARGEN's 'A', line 0 */
+        for (x = 0; x < 8; x++)
+            if (h_fsx_fb[x] != (((g << x) & 0x80) ? 2 : 6))
+                fail("a text cell is not its glyph in colour RAM's red on "
+                     "$D021's blue (9.12)");
+        if (c64_ring_t == rt)
+            fail("a key typed inside the colour bracket did not reach the "
+                 "machine's key ring");
+        if (c64_fsx_up)
+            fail("the bracket left c64_fsx_up set: no toast would ever be "
+                 "raised again");
+
+        /* ...ONLY THE CELLS THAT CHANGED (9.12): a row dirtied at both ends
+         * through its matrix puts those two cells, not the 38 between them -
+         * the snow scene's shape, and 2,432 bytes of 8bpp where 128 do.
+         * Verified red with ovl_fsx_cells bypassed (the whole span is put) */
+        h_fsx_keyq[0] = 0xFFFF;             /* a frame, drawn whole */
+        h_fsx_keyq[1] = 0xFFFF;             /* ...and one with nothing in it */
+        h_fsx_keyq[2] = 0xFFFF;             /* (row 10 poked before this) */
+        h_fsx_keyq[3] = 0xFFFF;             /* (and passes enough for the */
+        h_fsx_keyq[4] = 0xFFFF;             /*  frame skip to draw one) */
+        h_fsx_keyq[5] = 0xFFFF;
+        h_fsx_keyq[6] = 0x2000;
+        h_fsx_keyn = 7;
+        h_fsx_keyi = 0;
+        h_fsx_poke_at = 2;
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);
+        os88_gfx_unlock();
+        h_fsx_poke_at = -1;
+        if (h_fsx_putn > 6 * 64)
+            fail("two changed cells at a row's ends put the span between them "
+                 "into the colour screen (9.12)");
+        g = rom[0x4000 + 2 * 8];            /* the CHARGEN's 'B', line 0 */
+        for (x = 0; x < 8; x++)
+            if (h_fsx_fb[C64_X320(80) + 38 * 8 + x] != (((g << x) & 0x80)
+                    ? (c64_col[10 * 40 + 38] & 15) : 6))
+                fail("a cell put alone is not its glyph in its colours (9.12)");
+
+        /* ...AND UNDER A SPRITE THAT STAYS PUT (9.12): sprite 0 over cells
+         * 38-39 of row 10, PCUG's logo over its snow. The same two cells
+         * change; still two cells put, and cell 38 is the sprite's yellow
+         * over the new glyph. Verified red with the cell path refusing a
+         * sprite row (the whole span is put) */
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0);
+        c64_wr(0x0340, 0xF0);               /* line 0: 4 pixels lit */
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 7);               /* yellow */
+        c64_io_wr(0xD010, 1);
+        c64_io_wr(0xD000, (24 + 304) & 0xFF);   /* x 304: cell 38 */
+        c64_io_wr(0xD001, 50 + 80);         /* row 10's top line */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        for (k = 0; k < 7; k++)
+            h_fsx_keyq[k] = 0xFFFF;
+        h_fsx_keyq[6] = 0x2000;
+        h_fsx_keyn = 7;
+        h_fsx_keyi = 0;
+        h_fsx_poke_at = 2;
+        h_fsx_pokech = 0x03;                /* 'C' */
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);
+        os88_gfx_unlock();
+        h_fsx_poke_at = -1;
+        h_fsx_pokech = 0x02;
+        if (h_fsx_putn > 6 * 64)
+            fail("two changed cells in a row under a sprite put the span "
+                 "between them into the colour screen (9.12)");
+        g = rom[0x4000 + 3 * 8];            /* the CHARGEN's 'C', line 0 */
+        for (x = 0; x < 8; x++)
+            if (h_fsx_fb[C64_X320(80) + 38 * 8 + x] != (x < 4 ? 7
+                    : (((g << x) & 0x80) ? (c64_col[10 * 40 + 38] & 15) : 6)))
+                fail("a cell put alone under a sprite is not the sprite over "
+                     "its new glyph (9.12)");
+        c64_io_wr(0xD015, 0);
+        c64_io_wr(0xD010, 0);
+        c64_latch(0);
+        c64_latch(0);
+
+        /* ...a multicolour bitmap byte, with sprite 0 over cells 2-4 */
+        c64_io_wr(0xD018, 0x18);
+        c64_io_wr(0xD011, 0x3B);
+        c64_io_wr(0xD016, c64_vic[0x16] | 0x10);
+        c64_wr(0x0400, 0x12);               /* 01 = white, 10 = red */
+        c64_col[0] = 5;                     /* 11 = green */
+        c64_wr(0x2000, 0x1B);               /* pairs 00 01 10 11 */
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0);
+        c64_wr(0x0340, 0xFF);
+        c64_wr(0x07F8, 0x0D);
+        c64_io_wr(0xD027, 7);               /* yellow */
+        c64_io_wr(0xD000, 24 + 16);
+        c64_io_wr(0xD001, 50);
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        h_fsx_keyq[0] = 0xFFFF;
+        h_fsx_keyq[1] = 0x2000;
+        h_fsx_keyn = 2;
+        h_fsx_keyi = 0;
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);
+        os88_gfx_unlock();
+        {
+            static const unsigned char want[8] = { 6, 6, 1, 1, 2, 2, 5, 5 };
+            for (x = 0; x < 8; x++)
+                if (h_fsx_fb[x] != want[x])
+                    fail("a multicolour bitmap byte is not paper, high nibble, "
+                         "low nibble, colour RAM in colour (9.12)");
+        }
+        for (x = 16; x < 24; x++)
+            if (h_fsx_fb[x] != 7)
+                fail("sprite 0 is not drawn in its colour over the bitmap "
+                     "(9.12)");
+        c64_io_wr(0xD015, 0);
+        c64_io_wr(0xD016, c64_vic[0x16] & ~0x10);
+        c64_io_wr(0xD011, 0x1B);
+        c64_io_wr(0xD018, 0x15);
+        c64_latch(0);
+        c64_latch(0);
+        h_fsx_mask = 0;
+        for (j = 0; j < (int)sizeof(save_ram); j++)
+            if (ram[j] != save_ram[j])
+                c64_wr(j, save_ram[j]);
+        c64_col[0] = save_col0;
+        c64_dirty_all();
+        flush_now();
+    }
     cost_begin();
     flush_now();
     if (n_blit - b_blit || n_band_calls - b_bandc)
@@ -2964,13 +3853,16 @@ int main(int argc, char **argv)
      * EMERGES from the KERNAL programming CIA1 timer A (6.1, 6.3). */
     {
         int d, fired;
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
-        /* the frame end is always armed, and it is 19,656 cycles - the PAL
-         * frame - not a jiffy and not a host tick */
-        c64_frame_cyc = 0;
+        /* the nearest alarm is a frame's own, not a jiffy and not a host
+         * tick: from the display latch's line (9.9, a whole frame away) it
+         * is the raster compare at line 0 - reset's - which is where the
+         * frame begins. (The frame END is not an alarm of its own: c64io.c's
+         * c64_alarm_next says why.) */
+        c64_frame_cyc = (int)C64_X63(C64_LATCH_LINE);
         d = c64_alarm_next();
-        if (d != C64_PAL_FRAME)
+        if (d != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE))
             fail("with no timer running the next alarm is not the PAL frame "
                  "end - something has quantised the clock");
         /* now do what the KERNAL does: $4025 into CIA1 timer A, continuous,
@@ -3006,7 +3898,7 @@ int main(int argc, char **argv)
             fail("the timer did not reload from its latch: its phase was "
                  "lost across the underflow");
         d = c64_alarm_next();
-        if (d != C64_PAL_FRAME - 16422)
+        if (d != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE) - 16422)
             fail("the frame end stopped being an independent accumulator");
         /* an I/O write that raises a line CUTS the run in progress (4.4) */
         n_cut = 0;
@@ -3024,15 +3916,394 @@ int main(int argc, char **argv)
         c64_frame_cyc = 100 * 63 + 7;
         if (c64_io_rd(0xD012) != 100)
             fail("$D012 is not the raster line the cycle counter reached");
-        c64_reset_regs();
+        /* THE RASTER WAIT IN WHOLE PASSES (C64-SPEC 4.7.1). $0900: LDA $D012
+         * / CMP #$32 / BNE $0900 - 9 cycles a pass, and line 100 keeps it
+         * spinning: with 1,000 cycles of countdown left after the read, 111
+         * passes go at once and 1 cycle is left, so the core still ends the
+         * run on the instruction it would have. Then the value that leaves
+         * the loop, a BEQ/JMP form (11 a pass), and a caller with no PC (the
+         * accurate core, the translations), which must charge nothing.
+         * Verified to fail with c64_poll_skip returning at once. */
+        {
+            static const unsigned char lp[] = { 0xAD, 0x12, 0xD0, 0xC9, 0x32, 0xD0, 0xF9 };
+            static const unsigned char lj[] = { 0xAD, 0x12, 0xD0, 0xC9, 0x32, 0xF0, 0x03,
+                                                0x4C, 0x00, 0x0A };
+            int dead;
+            memcpy(ram + 0x0900, lp, sizeof lp);
+            memcpy(ram + 0x0A00, lj, sizeof lj);
+#define H_DEAD() (c64_scr_rd(C64_SCR_DEAD) | (c64_scr_rd(C64_SCR_DEAD + 1) << 8))
+#define H_SETDEAD(v) (c64_scr_wr(C64_SCR_DEAD, (v) & 0xFF), c64_scr_wr(C64_SCR_DEAD + 1, ((v) >> 8) & 0xFF))
+            H_SETDEAD(1000);
+            c64_fpc = 0x0903;
+            c64_io_rd(0xD012);
+            if ((dead = H_DEAD()) != 1)
+                fail("a raster wait that spins was not taken in whole passes "
+                     "to one cycle short of the budget (C64-SPEC 4.7.1)");
+            if (c64_fpc != 0)
+                fail("c64_poll_skip left the PC for the next caller");
+            c64_frame_cyc = 0x32 * 63;
+            H_SETDEAD(1000);
+            c64_fpc = 0x0903;
+            c64_io_rd(0xD012);
+            if (H_DEAD() != 1000)
+                fail("a raster read that LEAVES the wait was charged passes");
+            c64_frame_cyc = 100 * 63;
+            H_SETDEAD(1000);
+            c64_fpc = 0x0A03;
+            c64_io_rd(0xD012);
+            if (H_DEAD() != 1000 - 90 * 11)
+                fail("the BEQ / JMP form of the raster wait was not taken in "
+                     "whole 11-cycle passes");
+            H_SETDEAD(1000);
+            c64_fpc = 0;
+            c64_io_rd(0xD012);
+            if (H_DEAD() != 1000)
+                fail("a raster read with no PC (not the fast core's) was "
+                     "charged passes");
+            H_SETDEAD(0);
+            (void)dead;
+        }
+        ovl_reset_regs();
         c64_map_publish();
         c64_scr_wr(C64_SCR_IRQ, 0);
+    }
+
+    /* --- THE PORT'S PUBLISHED READ-BACK (c64_pp_rb): c64fast.inc puts it in
+     * RAM $0000/$0001 at the top of every fast-core run instead of asking
+     * c64_io_rd twice, so it must BE c64_pp_read's answer after any write.
+     * Verified to fail with c64_pp_rbset's call in c64_map_publish removed. */
+    {
+        static const int wr[][2] = { {0, 0x2F}, {1, 0x37}, {1, 0x30}, {0, 0x00},
+                                     {0, 0xFF}, {1, 0x08}, {0, 0x2F}, {1, 0x37} };
+        int i3;
+        for (i3 = 0; i3 < 8; i3++) {
+            c64_io_wr((unsigned)wr[i3][0], wr[i3][1]);
+            if (c64_pp_rb != (unsigned)(c64_pp_read(0) | (c64_pp_read(1) << 8)))
+                fail("the published port read-back is not c64_pp_read's: the "
+                     "fast core's $00/$01 would read a stale port");
+        }
+    }
+
+    /* --- DRIVE 8 (11.5): a D64 built here - the BAM, one directory sector,
+     * a two-sector PRG "HELLO" at $C000 (254 + 10 bytes, the load address
+     * first) - attached, and the KERNAL's LOAD trap served from it. The
+     * trap's three answers: the file (and its bytes, end, status and the
+     * return through LOADING), the directory as a BASIC program, FILE NOT
+     * FOUND; and a device that is not 8 runs the replaced LDA #$60.
+     * Verified to fail with the chain's second sector skipped (the end
+     * address and the tail bytes both go wrong). TWICE: the image in one
+     * conventional claim, then in EXTENDED MEMORY (11.5.1) a sector at a
+     * time through two slots - verified to fail with the BAM's slot made
+     * the other one's (BLOCKS FREE reads the BAM after the directory). */
+    for (h_xms_kb = 0; h_xms_kb <= 2048; h_xms_kb += 1024) {
+        static const unsigned char nm[] = { 'H', 'E', 'L', 'L', 'O' };
+        unsigned b0, i4, endv, lp, got712;
+        long o18_0 = 357L * 256, o18_1 = 358L * 256, o1_0 = 0, o1_1 = 256;
+        memset(h_d64, 0, sizeof(h_d64));
+        h_d64_len = 174848;
+        h_d64[o18_0 + 0] = 18; h_d64[o18_0 + 1] = 1; h_d64[o18_0 + 2] = 0x41;
+        for (i4 = 1; i4 <= 35; i4++)
+            h_d64[o18_0 + 4 * i4] = (i4 == 1) ? 19 : (i4 == 18 ? 17 : 21);
+        memset(h_d64 + o18_0 + 0x90, 0xA0, 27);
+        memcpy(h_d64 + o18_0 + 0x90, "TEST DISK", 9);
+        h_d64[o18_0 + 0xA2] = 'I'; h_d64[o18_0 + 0xA3] = 'D';
+        h_d64[o18_0 + 0xA5] = '2'; h_d64[o18_0 + 0xA6] = 'A';
+        h_d64[o18_1 + 0] = 0; h_d64[o18_1 + 1] = 0xFF;      /* the last dir sector */
+        h_d64[o18_1 + 2] = 0x82;                             /* a closed PRG */
+        h_d64[o18_1 + 3] = 1; h_d64[o18_1 + 4] = 0;          /* starts at 1/0 */
+        memset(h_d64 + o18_1 + 5, 0xA0, 16);
+        memcpy(h_d64 + o18_1 + 5, nm, 5);
+        h_d64[o18_1 + 30] = 2;
+        h_d64[o1_0 + 0] = 1; h_d64[o1_0 + 1] = 1;            /* -> 1/1 */
+        h_d64[o1_0 + 2] = 0x00; h_d64[o1_0 + 3] = 0xC0;      /* load $C000 */
+        for (i4 = 4; i4 < 256; i4++) h_d64[o1_0 + i4] = (unsigned char)i4;
+        h_d64[o1_1 + 0] = 0; h_d64[o1_1 + 1] = 11;           /* last: 2..11 */
+        for (i4 = 2; i4 < 12; i4++) h_d64[o1_1 + i4] = (unsigned char)(0xE0 + i4);
+        if (h_xms_kb == 2048) {
+            /* ...AND A THIRD TIME BESIDE THE RECOMPILER, whose segment holds
+             * the slots and the read's buffer (the C64 has no claim left) */
+            c64_fjit = os88_mem_claim(64);
+            if (c64_fjit == 0)
+                fail("the harness had no claim left for a recompiler segment");
+            c64_jit_kb = 64;
+            os88_poke(c64_fjit, C64J_FLUSHREQ, 0);
+        }
+        ovl_d64_attach("TEST.D64", 0xAB00, 2);
+        if (c64_d64_seg == 0)
+            fail("a 174,848-byte D64 was not attached to drive 8");
+        if (h_xms_kb == 2048 && (!c64_d64_inj
+                || c64_d64_seg != c64_fjit + 64 * 64 - 32
+                || os88_peek(c64_fjit, C64J_FLUSHREQ) != 2))
+            fail("beside the recompiler the D64's slots are not its last 512 "
+                 "bytes, or its cache was read through and no flush asked");
+        if (c64_d64_xms != (h_xms_kb != 0) || (h_xms_kb && h_big_paras))
+            fail("the D64 did not go to extended memory when there was room "
+                 "for it, or did when there was none (11.5.1)");
+#define H_LOADCALL(nmp, nl, sa) do { unsigned k_; \
+            for (k_ = 0; k_ < (nl); k_++) c64_wr(0x0340 + k_, (nmp)[k_]); \
+            c64_wr(0xB7, (nl)); c64_wr(0xBB, 0x40); c64_wr(0xBC, 0x03); \
+            c64_wr(0xB9, (sa)); c64_wr(0xBA, 8); c64_wr(0x93, 0); \
+            c64_wr(0xC3, 0x01); c64_wr(0xC4, 0x08); \
+            c64_m.s = 0xF0; c64_m.pc = C64_D64_TRAP; ovl_d64_trap(); } while (0)
+        H_LOADCALL(nm, 5, 1);
+        endv = (unsigned)c64_rd(0xAE) | ((unsigned)c64_rd(0xAF) << 8);
+        if (c64_m.pc != C64_D64_LOADING || endv != 0xC000 + 252 + 10)
+            fail("LOAD\"HELLO\",8,1 from the D64 did not land at $C000 with "
+                 "its end in $AE/$AF and the KERNAL's LOADING next");
+        if (c64_rd(0xC000) != 4 || c64_rd(0xC000 + 252) != 0xE2 || c64_rd(0xC000 + 261) != 0xEB)
+            fail("the loaded file's bytes are not the image's, across its two sectors");
+        if (c64_rd(0x1EF) != ((C64_D64_EXIT - 1) & 0xFF) || c64_rd(0x1F0) != ((C64_D64_EXIT - 1) >> 8)
+            || c64_m.s != 0xEE)
+            fail("the trap did not push the KERNAL's own exit for LOADING to return into");
+        if (c64_rd(0x90) != 0x40)
+            fail("the status after a load is not the KERNAL's end-of-file");
+        H_LOADCALL((const unsigned char *)"H*", 2, 0);         /* SA 0: to X/Y's $0801 */
+        if (c64_rd(0x0801) != 4)
+            fail("LOAD\"H*\",8 did not match the pattern and load at $0801");
+        H_LOADCALL((const unsigned char *)"$", 1, 0);
+        b0 = (unsigned)c64_rd(0x0801) | ((unsigned)c64_rd(0x0802) << 8);
+        if (c64_rd(0x0805) != 0x12 || c64_rd(0x0807) != 'T' || b0 <= 0x0801)
+            fail("LOAD\"$\",8 did not make the directory's header line");
+        got712 = 0;                         /* 19 + 33 x 21, track 18 apart */
+        for (lp = 0x0801, i4 = 0; i4 < 8 && lp; i4++) {
+            if (((unsigned)c64_rd(lp + 2) | ((unsigned)c64_rd(lp + 3) << 8)) == 712)
+                got712 = 1;
+            lp = (unsigned)c64_rd(lp) | ((unsigned)c64_rd(lp + 1) << 8);
+        }
+        if (!got712)
+            fail("the directory's BLOCKS FREE is not the BAM's 712");
+        H_LOADCALL((const unsigned char *)"NOPE", 4, 0);
+        if (c64_m.pc != C64_D64_NOTFOUND)
+            fail("a name the disk has not got did not go to FILE NOT FOUND");
+        c64_wr(0xBA, 9);
+        c64_m.pc = C64_D64_TRAP;
+        c64_m.a = 0;
+        ovl_d64_trap();
+        if (c64_m.pc != C64_D64_TRAP + 2 || c64_m.a != 0x60)
+            fail("a LOAD from device 9 did not run the LDA #$60 the trap replaced");
+        ovl_d64_release();
+        if (h_xms_live != 0 || c64_d64_seg != 0)
+            fail("the D64 given back left its extended block or its claim");
+        if (c64_fjit != 0) {
+            os88_mem_free(c64_fjit);
+            c64_fjit = 0;
+        }
+    }
+    h_xms_kb = 0;
+
+    /* --- THE DISPLAY LATCH (9.9). A split screen writes $D011 twice a
+     * frame - bitmap on at the top, off for a scroller below - and the
+     * screen must show what stood at line 51, every frame the same, rather
+     * than whichever write the flush happened to follow. Verified to fail
+     * with c64_advance's c64_latch call removed: the mode never leaves 0. */
+    {
+        ovl_reset_regs();
+        c64_map_publish();
+        c64_frame_regs();
+        c64_frame_cyc = 0;
+        c64_io_wr(0xD011, 0x3B);            /* bitmap on, above line 51 */
+        if (c64_mode != 0)
+            fail("a $D011 write reached the screen before the display "
+                 "latch's line (9.9)");
+        c64_advance((int)C64_X63(C64_LATCH_LINE) + 10);
+        /* (that latch composed the frame BEFORE it, 9.10: a write in the
+         * lines above the display is the NEXT frame's, every row of it) */
+        c64_advance((int)C64_X63(8 * 21 + 5));  /* row 21's second half... */
+        c64_io_wr(0xD011, 0x1B);            /* ...text for the scroller below */
+        c64_advance((int)C64_X63(60));      /* ...and below the display, */
+        c64_io_wr(0xD011, 0x3B);            /* bitmap on again for the top */
+        c64_advance((int)C64_X63(C64_PAL_LINES - 8 * 21 - 5 - 60));
+        if (c64_mode != 2)
+            fail("crossing line 51 did not take the display latch: the "
+                 "bitmap mode set above it is not on the screen");
+        /* PER ROW (9.10): rows 0-21 drew bitmap and 22-24 text, which is
+         * what a split screen IS. Verified red with c64_latch applying the
+         * whole log to every row: the screen is one mode */
+        if (c64_rmode[0] != 2 || c64_rmode[21] != 2 || c64_rmode[22] != 0
+                || c64_rmode[24] != 0 || !c64_rsplit)
+            fail("a $D011 split below row 21 did not make rows 0-21 bitmap "
+                 "and 22-24 text (9.10)");
+        c64_advance(C64_PAL_FRAME);         /* the same frame again, NOTHING
+                                             * written: it stays split */
+        if (c64_mode != 2 || c64_rmode[24] != 2)
+            fail("a split that is bitmap at line 51 every frame flipped the "
+                 "screen to text: the latch read a write below its line");
+        ovl_reset_regs();
+        c64_map_publish();
+        c64_frame_regs();
+        c64_scr_wr(C64_SCR_IRQ, 0);
+    }
+
+    /* --- THE OTHER MODES AND THE SPRITES, IN 1BPP (9.10, 9.11). Each case
+     * reads the shadow - what went to the glass - at row 0, line 0, cell 0.
+     * Verified red with c64_bandx's bitmap cases swapped, and with the
+     * c64_spr_draw call taken out of c64_flush. */
+    {
+        int j;
+        c64_io_wr(0xD021, 6);               /* blue paper: luminance 60 */
+        c64_io_wr(0xD018, 0x18);            /* matrix $0400, bitmap $2000 */
+        c64_io_wr(0xD011, 0x3B);            /* BMM */
+        for (j = 0; j < 1000; j++)
+            c64_wr(0x0400 + j, 0x10);       /* 1 = white, 0 = black */
+        for (j = 0; j < 8000; j++)
+            c64_wr(0x2000 + j, 0xAA);
+        for (j = 0; j < 1000; j++)
+            c64_col[j] = 1;
+        flush_now();
+        if (c64_sh[0] != 0xAA || c64_sh[C64_X320(24) + 7 * 40 + 39] != 0xAA)
+            fail("a hires bitmap of white-on-black $AA did not reach the "
+                 "glass as $AA (9.10)");
+        c64_io_wr(0xD016, c64_vic[0x16] | 0x10);    /* ...and MCM */
+        flush_now();                        /* (MCM itself: every row) */
+        j = (int)c64_n_cell;
+        c64_wr(0x2000, 0x1B);               /* pairs 00 01 10 11: paper,
+                                             * white, black, colour RAM's 1 */
+        flush_now();
+        if ((int)c64_n_cell - j > 32)
+            fail("one bitmap byte written recomposed more than its page's 32 "
+                 "cells (9.10)");
+        /* paper 60 on line 0 of the Bayer matrix (8, 136, ...) is `10`, white
+         * `11`, black `00`, white `11` */
+        if (c64_sh[0] != 0xB3)
+            fail("a multicolour bitmap byte did not dither its four colours "
+                 "by luminance (9.10)");
+        c64_io_wr(0xD016, c64_vic[0x16] & ~0x10);
+        c64_io_wr(0xD011, 0x1B);
+        c64_io_wr(0xD018, 0x15);            /* text, the ROM's characters */
+        for (j = 0; j < 1000; j++)
+            c64_wr(0x0400 + j, 0x20);       /* spaces */
+        flush_now();
+        if (c64_sh[0] != 0x00)
+            fail("the screen of spaces is not dark on a dark paper");
+        for (j = 0; j < 63; j++)
+            c64_wr(0x0340 + j, 0);
+        c64_wr(0x0340, 0xFF);
+        c64_wr(0x0341, 0x0F);
+        c64_wr(0x07F8, 0x0D);               /* sprite 0's data at $0340 */
+        c64_io_wr(0xD027, 1);               /* white */
+        c64_io_wr(0xD000, 24);              /* the display's top-left */
+        c64_io_wr(0xD001, 50);
+        c64_io_wr(0xD015, 1);
+        flush_now();
+        if (c64_sh[0] != 0xFF || c64_sh[1] != 0x0F || c64_sh[40] != 0x00)
+            fail("sprite 0 at the display's top-left did not draw its first "
+                 "line over the text (9.11)");
+        c64_wr(0x0340, 0x81);               /* its DATA changes, nothing else */
+        flush_now();
+        if (c64_sh[0] != 0x81)
+            fail("a write to a sprite's data did not redraw it (9.11)");
+        j = (int)c64_n_cell;
+        c64_dirty_any = 0;
+        c64_io_wr(0xD000, 27);              /* three pixels right */
+        c64_latch(0);
+        c64_latch(0);
+        if (!c64_dirty_any)                 /* (a machine that only moves a
+                                             * sprite writes no RAM: the wake
+                                             * flushes on this flag or not at
+                                             * all - found on the glass, a
+                                             * BASIC loop of POKE 53248,X) */
+            fail("a sprite register change did not raise the flush gate (9.11)");
+        flush_now();
+        if (c64_sh[0] != 0x10 || c64_sh[1] != 0x21 || c64_sh[2] != 0xE0)
+            fail("a sprite three pixels off a cell boundary did not shift its "
+                 "bytes across the cells (9.11)");
+        if ((int)c64_n_cell - j > 3 * 4)    /* 21 lines: rows 0-2 */
+            fail("a sprite moving three pixels recomposed more than the four "
+                 "cells a row it was and is over (9.11)");
+        c64_io_wr(0xD015, 0);
+        flush_now();
+        if (c64_sh[0] != 0x00 || c64_sh[1] != 0x00)
+            fail("a sprite switched off stayed on the glass (9.11)");
+        c64_io_wr(0xD021, 6);
+    }
+
+    /* --- THE CLOCKS A PROGRAM READS MID-RUN, AND SID VOICE 3 (6.3, 11.4.1).
+     * Both demos' snow is random: the Portland CUG one reads voice 3's noise
+     * at $D41B and the Bright Pixel card mixes $D012 with CIA 1's timer A.
+     * $D41B answered the stored byte (a constant: every flake in column 0)
+     * and $DC04 the count at the run's start (the same value every frame).
+     * Verified red with c64_osc3_now's hook taken out of c64_io_rd, and with
+     * c64_tlive answering c64_ta[k]. */
+    {
+        int j, n, seen[256];
+        unsigned t0, t1;
+        ovl_reset_regs();
+        c64_io_wr(0xD40E, 0xFF);            /* voice 3 fast, on noise */
+        c64_io_wr(0xD40F, 0xFF);
+        c64_io_wr(0xD412, 0x80);
+        memset(seen, 0, sizeof(seen));
+        n = 0;
+        for (j = 0; j < 64; j++) {
+            c64_advance(37 + (j & 7));      /* a loop's worth between reads */
+            t0 = (unsigned)c64_io_rd(0xD41B);
+            if (!seen[t0 & 0xFF]) {
+                seen[t0 & 0xFF] = 1;
+                n++;
+            }
+        }
+        if (n < 24)
+            fail("$D41B on the noise waveform is not a spread of values: "
+                 "voice 3's oscillator is not running (11.4.1)");
+        c64_io_wr(0xD412, 0x00);
+        /* timer A running, read twice inside ONE run 100 cycles apart */
+        c64_io_wr(0xDC04, 0xFF);
+        c64_io_wr(0xDC05, 0x7F);
+        c64_io_wr(0xDC0E, 0x11);            /* load and start */
+        c64_in_run = 1;
+        c64_run_n = 1000;
+        c64_scr_wr(C64_SCR_CARRY, 0);       /* (no cut in this run) */
+        c64_scr_wr(C64_SCR_CARRY + 1, 0);
+        c64_scr_wr(C64_SCR_DEAD, 1000 & 0xFF);
+        c64_scr_wr(C64_SCR_DEAD + 1, 1000 >> 8);
+        t0 = (unsigned)c64_io_rd(0xDC04) | ((unsigned)c64_io_rd(0xDC05) << 8);
+        c64_scr_wr(C64_SCR_DEAD, 900 & 0xFF);
+        c64_scr_wr(C64_SCR_DEAD + 1, 900 >> 8);
+        t1 = (unsigned)c64_io_rd(0xDC04) | ((unsigned)c64_io_rd(0xDC05) << 8);
+        c64_in_run = 0;
+        c64_scr_wr(C64_SCR_DEAD, 0);
+        c64_scr_wr(C64_SCR_DEAD + 1, 0);
+        if (t0 - t1 != 100)
+            fail("CIA 1 timer A read twice in one run, 100 cycles apart, did "
+                 "not count down by 100 - a read answers the run's start (6.3)");
+        /* ...AND THE RASTER WAIT'S SKIP STOPS AT THE LINE IT WAITS FOR. The
+         * Bright Pixel card's `LDA $D012 / CMP #50 / BEQ +3 / JMP back` read
+         * at line 40 with 10,000 cycles of budget: the skip may charge whole
+         * passes only up to line 50. Before, it charged them to the run's
+         * end and the loop never saw 50 - verified red with c64_poll_lim's
+         * answer ignored */
+        {
+            static const unsigned char loop[10] = {
+                0xAD, 0x12, 0xD0, 0xC9, 50, 0xF0, 0x03, 0x4C, 0x00, 0x09 };
+            int ln;
+            for (j = 0; j < 10; j++)
+                c64_wr(0x0900 + j, loop[j]);
+            c64_frame_cyc = (int)C64_X63(40);
+            c64_in_run = 1;
+            c64_run_n = 10000;
+            c64_scr_wr(C64_SCR_DEAD, 10000 & 0xFF);
+            c64_scr_wr(C64_SCR_DEAD + 1, 10000 >> 8);
+            c64_scr_wr(C64_SCR_CARRY, 0);
+            c64_scr_wr(C64_SCR_CARRY + 1, 0);
+            c64_fpc = 0x0903;               /* the fast core's PC after the LDA */
+            if (c64_io_rd(0xD012) != 40)
+                fail("the raster-wait row's setup is not at line 40");
+            ln = c64_line_now();
+            if (ln < 49 || ln > 50)
+                fail("the raster wait's skip did not stop at the line the loop "
+                     "waits for - it ran past line 50 (4.7.1, 9.10)");
+            c64_in_run = 0;
+            c64_scr_wr(C64_SCR_DEAD, 0);
+            c64_scr_wr(C64_SCR_DEAD + 1, 0);
+            c64_frame_cyc = 0;
+        }
+        ovl_reset_regs();
+        c64_map_publish();
     }
 
     /* --- THE FREE-RUNNING TIMER, WHICH IS WHERE A SIGNED COMPARE HANGS.
      * `LDA #$FF / STA $DC04 / STA $DC05 / LDA #$11 / STA $DC0E` is the
      * standard C64 free-running-timer / RNG idiom AND the state
-     * c64_reset_regs leaves behind, so a $FFFF latch is not an exotic input.
+     * ovl_reset_regs leaves behind, so a $FFFF latch is not an exotic input.
      * `(int)0xFFFF` is -1: the compare was true for every n and the subtract
      * took nothing off, which is an INFINITE LOOP on the UI task, and
      * `(int)(0xFFFF + 1)` is 0, which made the same counter look like the
@@ -3042,7 +4313,7 @@ int main(int argc, char **argv)
         int i2, spun;
         short n2;
         unsigned short c2;
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_scr_wr(C64_SCR_IRQ, 0);
         c64_io_wr(0xDC04, 0xFF);
@@ -3050,8 +4321,8 @@ int main(int argc, char **argv)
         c64_io_wr(0xDC0E, 0x11);            /* force load, start, continuous */
         if (c64_ta[0] != 0xFFFFu)
             fail("a $FFFF latch did not load into timer A");
-        c64_frame_cyc = 0;
-        if (c64_alarm_next() != C64_PAL_FRAME)
+        c64_frame_cyc = (int)C64_X63(C64_LATCH_LINE);
+        if (c64_alarm_next() != C64_PAL_FRAME - (int)C64_X63(C64_LATCH_LINE))
             fail("a $FFFF timer counter was taken for the nearest alarm - it "
                  "is 65,536 cycles away and the frame end is at most 19,656, "
                  "so the scheduler cast a wrapped value and the slice driver "
@@ -3085,7 +4356,7 @@ int main(int argc, char **argv)
         if (spun < 1000)
             fail("the negative control terminated: the signed compare this "
                  "row exists to catch is no longer being modelled");
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
     }
 
@@ -3255,6 +4526,38 @@ int main(int argc, char **argv)
             fail("the released key was left on the down-list");
         c64_cyc_lo = 0;
 
+        /* RULE 5: TAPS ONE AT A TIME. `a` then `s`, both already up on the
+         * host: `s` waits in the ring until `a` has had its scan interval and
+         * left, and never shares the matrix with it. Then `s` again at once:
+         * it waits until `s` has been seen UP for an interval too. Verified
+         * to fail with c64_kbd_busy answering 0: both keys are in the
+         * matrix at the first poll. */
+        c64_kbd_init();
+        os88_onkey('a', 0x1E, win);
+        os88_onkey('s', 0x1F, win);
+        c64_kbd_poll();
+        if (c64_ndown != 1 || c64_down[0] != 0x1E)
+            fail("two taps went into the matrix together (7.2's rule 5): a "
+                 "KERNAL scan reads two keys down as one of them or neither");
+        c64_cyc_lo = (unsigned)C64K_FRESH_CYC + 1;
+        c64_kbd_poll();                     /* `a` leaves */
+        c64_kbd_poll();                     /* ...and `s` goes in */
+        if (c64_ndown != 1 || c64_down[0] != 0x1F)
+            fail("the waiting tap did not follow once the first had left");
+        os88_onkey('s', 0x1F, win);
+        c64_cyc_lo = 2u * C64K_FRESH_CYC + 2;
+        c64_kbd_poll();                     /* the first `s` leaves */
+        c64_kbd_poll();
+        if (c64_ndown != 0)
+            fail("a second tap of the same key followed with no gap: the "
+                 "scan would read one long press (7.2's rule 5)");
+        c64_cyc_lo = 3u * C64K_FRESH_CYC + 3;
+        c64_kbd_poll();
+        if (c64_ndown != 1 || c64_down[0] != 0x1F)
+            fail("the second tap of the same key never went in");
+        c64_kbd_init();
+        c64_cyc_lo = 0;
+
         /* RULE 3: the matrix is REBUILT from the whole down-list. Two keys
          * that both want the synthetic SHIFT, one released: the survivor
          * must still have it. `!` is 7/0 with SHIFT and `"` is 7/3 with
@@ -3421,7 +4724,7 @@ int main(int argc, char **argv)
     /* --- what CIA1 answers, which is the only reason the matrix exists --- */
     {
         c64_kbd_init();
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
         c64_cia[0][0x02] = 0xFF;            /* PRA all outputs */
         c64_cia[0][0x03] = 0x00;            /* PRB all inputs */
@@ -3437,7 +4740,7 @@ int main(int argc, char **argv)
         h_keydown[0x1E] = 0;
         c64_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
-        c64_reset_regs();
+        ovl_reset_regs();
         c64_map_publish();
     }
 
@@ -3512,6 +4815,8 @@ int main(int argc, char **argv)
         c64_msg[0] = 0;
         c64_sid_said = 0;
         h_tone_refuse = 0;
+        c64_io_wr(0xD418, 15);              /* the master volume up: a SID at
+                                             * volume 0 is silent (11.4.2) */
         c64_io_wr(0xD400, 0xFF);            /* F = $FFFF, the top of the range */
         c64_io_wr(0xD401, 0xFF);
         c64_io_wr(0xD404, 0x11);            /* ...and the gate on */
@@ -3562,6 +4867,101 @@ int main(int argc, char **argv)
         c64_pause = 0;
         c64_msg[0] = 0;
         c64_menu_state();
+    }
+
+    /* --- FRAME SKIP (9.13): a second in which flushing took more than
+     * half the ticks adds one between flushes, a quarter or less takes one
+     * away, never past C64_FS_MAX - and nothing moves inside the second.
+     * Verified red with c64_fs_adapt's two thresholds swapped. */
+    {
+        int j;
+        unsigned t = 5000;
+        c64_fs_extra = 0;
+        c64_fs_t0 = t;
+        c64_fs_cost = 12;
+        c64_fs_adapt(t + 10);
+        if (c64_fs_extra != 0)
+            fail("frame skip moved before its second was up (9.13)");
+        c64_fs_adapt(t + 18);
+        if (c64_fs_extra != 1)
+            fail("a second two-thirds spent flushing did not add a tick "
+                 "between flushes (9.13)");
+        for (j = 0; j < 20; j++) {
+            t = c64_fs_t0;
+            c64_fs_cost = 15;
+            c64_fs_adapt(t + 18);
+        }
+        if (c64_fs_extra != C64_FS_MAX)
+            fail("frame skip is not capped at C64_FS_MAX");
+        c64_fs_cost = 2;
+        c64_fs_adapt(c64_fs_t0 + 18);
+        if (c64_fs_extra != C64_FS_MAX - 1)
+            fail("a quiet second did not take a tick back (9.13)");
+        c64_fs_extra = 0;
+        c64_fs_cost = 0;
+    }
+
+    /* --- WHICH VOICE THE SPEAKER PLAYS, AND THE FM CHIP (11.4.2, 11.4.3) --
+     * Voice 1 held as a pad while voice 2 plays the melody: the speaker
+     * follows the note that started LAST, not voice 1. Verified red with
+     * c64_sid_voice1 back on voice 1 alone. Then the same SID on an FM
+     * chip: each voice its own channel, 440 Hz as block 4 / F-number 580,
+     * the key on while the gate is, off when it closes. Verified red with
+     * ovl_fm_update's F-number arithmetic off by one block. */
+    {
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        c64_msg[0] = 0;
+        h_tone_refuse = 0;
+        c64_io_wr(0xD418, 15);
+        c64_io_wr(0xD400, 0x00);            /* voice 1: F = $1000, held */
+        c64_io_wr(0xD401, 0x10);
+        c64_io_wr(0xD404, 0x21);            /* sawtooth, gate */
+        os88_onwake(win);
+        c64_io_wr(0xD407, 0x45);            /* voice 2: F = $1D45, A4 */
+        c64_io_wr(0xD408, 0x1D);
+        c64_io_wr(0xD40B, 0x41);            /* pulse, gate: a NEW note */
+        os88_onwake(win);
+        if (h_tone_hz < 439 || h_tone_hz > 440)     /* (7493 x 3848 / 65535) */
+            fail("with voice 1 held and a new note on voice 2, the speaker "
+                 "did not play the new note (11.4.2)");
+        c64_io_wr(0xD40B, 0x40);            /* its gate closes */
+        os88_onwake(win);
+        if (h_tone_hz != 240)               /* $1000 = 240.5 Hz */
+            fail("when the newest note ends the speaker did not go back to "
+                 "the voice still gated (11.4.2)");
+        c64_io_wr(0xD404, 0x20);
+        os88_onwake(win);
+        if (h_tone_hz != 0)
+            fail("with no gate open the speaker kept a tone");
+
+        h_fm_chip = 1;                      /* ...and on a machine with OPL */
+        memset(h_opl, 0, sizeof(h_opl));
+        c64_snd_fm = c64_opl_open();
+        os88_memset(c64_fmsh, 0xFF, sizeof(c64_fmsh));
+        c64_io_wr(0xD40B, 0x41);            /* voice 2 again: A4, pulse */
+        c64_io_wr(0xD40C, 0x09);            /* attack 0, decay 9 */
+        c64_io_wr(0xD40D, 0xA4);            /* sustain 10, release 4 */
+        os88_onwake(win);
+        if (h_opl[0xA1] != (580 & 0xFF) || h_opl[0xB1] != (0x20 | (4 << 2) | (580 >> 8)))
+            fail("voice 2's 440 Hz did not reach OPL channel 1 as block 4, "
+                 "F-number 580, keyed on (11.4.3)");
+        if (h_opl[0x21] != 0x22 || h_opl[0x64] != ((15 << 4) | 6))
+            fail("voice 2's pulse patch or its ADSR did not reach channel 1");
+        /* SUSTAIN 10 IS -3.5 dB ON THE SID (linear, 10/15), SO SL 1 - the
+         * OPL's steps are 3 dB. The linear map `15 - s` made it SL 5,
+         * -15 dB, and the C64 sounded far softer than everything else on
+         * the machine (11.4.3). Red with that map put back */
+        if (h_opl[0x84] != ((1 << 4) | 8))
+            fail("voice 2's sustain 10 did not reach channel 1 as SL 1 - "
+                 "the SID's sustain is linear and the OPL's SL is 3 dB a "
+                 "step (11.4.3)");
+        c64_io_wr(0xD40B, 0x40);
+        os88_onwake(win);
+        if (h_opl[0xB1] & 0x20)
+            fail("voice 2's gate closed and channel 1 stayed keyed on");
+        c64_snd_fm = 0;
+        h_fm_chip = 0;
     }
 
     /* --- A REFUSED SPEAKER GRANT IS NOT PERMANENT (11.4, SPEC.md 34.3) ---
@@ -4440,7 +5840,7 @@ int main(int argc, char **argv)
      * somebody happens to trigger that message while looking.
      *
      * So the literals are the subject, not c64_msg. The list is every string
-     * this package passes to c64_say plus the two permanent lines c64_status
+     * this package passes to c64_say plus the two permanent lines ovl_status
      * draws itself; a new message that does not fit fails the BUILD.
      *
      * AND THE LIST CANNOT SILENTLY NARROW. Nothing here ties a hand-typed
@@ -4454,6 +5854,12 @@ int main(int argc, char **argv)
     {
         static const char *msgs[] = {
             "A file dialog is already open.",
+            "Not a D64 image.",
+            "D64: no heap for it.",
+            "D64: cannot read it.",
+            "Disk on drive 8.",
+            "Disk on drive 8; no room for recompiler.",
+            "Recompiler on.", "Recompiler off.",
             "No memory for the copy.",
             "No memory for the paste.",
             "Advanced one frame.",
@@ -4477,7 +5883,7 @@ int main(int argc, char **argv)
             "Warp mode off.",
             "Warp mode on - no change.",
             "Warp mode on.",
-            "C64.ROM missing - see README.TXT",   /* c64_status, msg == 2 */
+            "C64.ROM missing - see README.TXT",   /* ovl_status, msg == 2 */
             "Main CPU: JAM at $FFFF"              /* ...and msg == 3 (§4.5) */
         };
         int mi;
@@ -4602,6 +6008,56 @@ int main(int argc, char **argv)
      * returns, and that wake runs a slice and flushes: closing inside the
      * command means drawing after the close, which 75.2 forbids in as many
      * words. So the command latches and the WAKE spends it. */
+    /* --- NO ITEM IS GREYED FOR GOOD (C64-SPEC 11.1 rule 1): on a running,
+     *     unpaused machine every item of every menu is live, but the
+     *     Recompiler with no memory for it - greying is "not now", and an
+     *     item this build can never enable is absent. Verified red with
+     *     VICE's greyed Mouse grab put back on Preferences --------------- */
+    {
+        int m, it;
+        if (c64_state == C64_ST_RUN && !c64_pause)
+            for (m = 0; m < c64_menus.nmenus; m++)
+                for (it = 0; it < c64_menus.menu[m].nitems; it++)
+                    if (c64_menus.menu[m].items[it][0] == OS88_MENU_DIS)
+                        if (!(m == C64_M_PREF && it == C64_I_JIT && !c64_fjit)) {
+                            printf("c64uitest:   menu %d item %d: %s\n", m, it,
+                                   c64_menus.menu[m].items[it] + 1);
+                            fail("an item is greyed on a running machine - "
+                                 "an item that can never be enabled is "
+                                 "absent, not greyed (C64-SPEC 11.1)");
+                        }
+    }
+
+    /* --- THE FRAME SKIP IS THE USER'S (9.13): the three radio items move
+     *     the check and set the policy - none skips nothing however costly
+     *     a frame, most holds C64_FS_MAX, as needed adapts. Verified red
+     *     with the mode ignored by c64_fs_adapt ------------------------- */
+    {
+        int q;
+        do_cmd(C64_I_FS0 + 0, C64_M_PREF, win);
+        if (c64_pref_items[C64_I_FS0][0] != '*'
+                || c64_pref_items[C64_I_FS0 + 1][0] == '*')
+            fail("Draw every frame did not take the frame skip's check");
+        for (q = 0; q < 3; q++) {
+            c64_fs_cost = 18;               /* a second spent drawing */
+            c64_fs_adapt(c64_fs_t0 + 18);
+        }
+        if (c64_fs_extra != 0)
+            fail("Draw every frame skipped frames (9.13)");
+        do_cmd(C64_I_FS0 + 2, C64_M_PREF, win);
+        c64_fs_cost = 0;
+        c64_fs_adapt(c64_fs_t0 + 18);
+        if (c64_fs_extra != C64_FS_MAX || c64_pref_items[C64_I_FS0 + 2][0] != '*')
+            fail("Skip most frames did not hold the skip at its most (9.13)");
+        do_cmd(C64_I_FS0 + 1, C64_M_PREF, win);
+        c64_fs_cost = 18;
+        c64_fs_adapt(c64_fs_t0 + 18);
+        if (c64_fs_extra != 1 || c64_pref_items[C64_I_FS0 + 1][0] != '*')
+            fail("Skip frames as needed did not adapt (9.13)");
+        c64_fs_extra = 0;
+        c64_fs_cost = 0;
+    }
+
     closed = 0;
     close_drew = 0;
     do_cmd(C64_I_EXIT, C64_M_FILE, win);

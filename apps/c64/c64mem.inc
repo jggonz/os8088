@@ -132,6 +132,28 @@ _c64_wr:
     mov al, 0x80
     shr al, cl
     or [es:bx], al
+    ; THE CODE TEST (C64-SPEC 4.9.3), as the cores' marks make it: the drive
+    ; trap's LOAD writes a program here a byte at a time
+    cmp word [_c64_fjit], 0
+    je .out
+    mov es, [_c64_fjit]
+    test [es:bx+(0x10000 - C64_SCR_BASE - C64_SCR_DIRTY)+C64J_CODE], al
+    jz .out
+    mov bx, [bp+4]                  ; a code page: the byte's own bit decides
+    mov cl, bl
+    and cl, 7
+    mov al, 0x80
+    shr al, cl
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    test [es:bx+C64J_FINE], al
+    jz .out
+    mov bx, [bp+4]
+    mov [es:C64J_HITA], bx
+    mov al, [bp+5]                  ; the page
+    mov [es:C64J_FLUSH], al
+    mov byte [es:C64J_FLUSH+1], 1
 .out:
     pop es
     pop bp
@@ -183,6 +205,18 @@ _c64_scr_rd:
     xor ah, ah
     pop es
     pop bp
+    ret
+
+; unsigned c64_scr_left(void) - DEAD + CARRY, the run's countdown and what
+; c64_cut() moved out of it: what the run in progress has LEFT (c64io.c's
+; c64_run_el, which every live clock read and every logged register write
+; asks - it was four c64_scr_rd calls)
+_c64_scr_left:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov ax, [es:C64_SCR_BASE + C64_SCR_DEAD]
+    add ax, [es:C64_SCR_BASE + C64_SCR_CARRY]
+    pop es
     ret
 
 _c64_scr_wr:
@@ -352,10 +386,27 @@ _c64_zcopy_in:
     rep movsb                       ; cc8086:allow ES is the RAM claim, loaded
                                     ; two lines above and restored below; DS
                                     ; is the package's, which is the source
+    call c64_jtouch
     pop es
     pop di
     pop si
     pop bp
+    ret
+
+; c64_jtouch - a bulk write into the guest's RAM (the movers): the
+; recompiler's blocks may be stale, so a flush is asked for, naming no page.
+; Preserves every register.
+c64_jtouch:
+    cmp word [cs:_c64_fjit], 0
+    je .r
+    push es
+    mov es, [cs:_c64_fjit]
+    cmp byte [es:C64J_FLUSH+1], 0
+    jne .p
+    mov byte [es:C64J_FLUSH+1], 2
+.p:
+    pop es
+.r:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -407,6 +458,7 @@ _c64_zzcopy_in:
                                     ; SS-relative, so DS may go now
     rep movsb                       ; cc8086:allow both segments loaded here
                                     ; on purpose and both restored below
+    call c64_jtouch
     pop es
     pop ds
     pop di
@@ -496,3 +548,4 @@ _c64_zfill:
     pop di
     pop bp
     ret
+

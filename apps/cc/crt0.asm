@@ -1620,6 +1620,12 @@ cc_regreloc:
 ; kernel's name pointer and nothing later can recover it (SPEC.md 20.2).
 ; =============================================================================
 %define OP_BSS_AT cc_parts_bss
+%ifdef CC_ONMOVE_PARTS
+%define OP_ONMOVE cc_onmove         ; ...and a FETCHED lazy part may move too,
+                                    ; by os88_part_movable() (SPEC.md 73.14.2.1,
+                                    ; 20.12.12): the standard's op_lazymv puts
+                                    ; the row right, then the C re-reads it
+%endif
 %include "os88parts.inc"
 
 ; CC_PARTS_BEGIN n / OS88_PART ... / CC_PARTS_END - the shim's table.
@@ -1814,8 +1820,14 @@ section .text
   %ifndef CC_OVL_ROWED
     %error "CC_OVL_PART: the parts table has no CC_OVL_ROW - write one as its LAST row"
   %else
-    %if CC_OVL_IDX != OS88_PART_N - 1
-      %error "CC_OVL_ROW must be the LAST row of the table: CC_PACKAGE appends the module as the last --part"
+    %ifndef CC_PARTS_AFTER_OVL
+      %assign CC_PARTS_AFTER_OVL 0
+    %endif
+    ; ...or followed by exactly CC_PARTS_AFTER_OVL rows, which CC_PACKAGE's
+    ; sixth argument appends after the module (apps/cc/Makefile.inc) - a lazy
+    ; part after an EAGER overlay, which may not precede it (C64-SPEC 4.7)
+    %if CC_OVL_IDX != OS88_PART_N - 1 - CC_PARTS_AFTER_OVL
+      %error "CC_OVL_ROW must be the LAST row of the table, or followed by CC_PARTS_AFTER_OVL rows: CC_PACKAGE appends the module after its fourth argument's parts and before its sixth's"
     %endif
   %endif
 

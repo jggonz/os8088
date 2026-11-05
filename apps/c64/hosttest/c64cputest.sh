@@ -105,6 +105,134 @@ pad() {                             # pad <image> <sectors>
 }
 
 # =============================================================================
+# THE FAST CORE'S LEG (C64-SPEC section 4.7): APPLE2's a2cputest one machine
+# along - the same rows bar row 4 (a fetch falling through a region boundary,
+# the fast core's stated deviation) and row 6 (the accurate core's fetch ES),
+# and Dormann. C64CPU_ONLY=fast runs this leg alone; =plain the others alone.
+# =============================================================================
+FASTBIN=$BUILD/c64/c64fast.bin
+fast_leg() {
+    [ -f "$FASTBIN" ] || { echo "c64cputest: $FASTBIN is missing - make c64"; exit 1; }
+    [ "$(wc -c < "$FASTBIN")" -eq 65024 ] || { echo "c64cputest: $FASTBIN is not 65,024 bytes"; exit 1; }
+    for MODE in rows real neg; do
+        IMG=$BUILD/c64cputest-fast-$MODE.img
+        case $MODE in
+            rows) FL="-DFAST" ;;
+            real) FL="-DFAST -DDORMANN -DDORMOK=$DORMOK" ;;
+            neg)  FL="-DFAST -DDORMANN -DDORMOK=$DORMOK -DNEG" ;;
+        esac
+        # shellcheck disable=SC2086
+        nasm -f bin -w+error -I apps/c64/ $FL $DEC -o $IMG apps/c64/hosttest/c64cputest.asm
+        pad $IMG 64
+        cat "$DORM" >> $IMG
+        cat "$FASTBIN" >> $IMG
+        pad $IMG 2880
+        run $IMG "fast-$MODE" > $BUILD/c64cputest-fast-$MODE.log || true
+        cat $BUILD/c64cputest-fast-$MODE.log
+        case $MODE in
+            rows|real) grep -q "c64cputest: PASS" $BUILD/c64cputest-fast-$MODE.log || {
+                echo "c64cputest: the FAST CORE's $MODE leg FAILED"; exit 1; } ;;
+            neg) grep -q "control fails: ok" $BUILD/c64cputest-fast-$MODE.log || {
+                echo "c64cputest: the fast core's Dormann NEGATIVE CONTROL passed"; exit 1; } ;;
+        esac
+    done
+}
+# =============================================================================
+# THE RECOMPILER'S LEG (C64-SPEC section 4.9): the fast core's leg again with
+# the recompiler's part after the core, set up FORCED - every RAM transfer
+# looked up, every block made on its first entry - so the rows and Dormann
+# run translated; the controls that break the core break the recompiler's
+# table too, and row 15 rewrites a running block. C64CPU_ONLY=jit alone.
+# =============================================================================
+JITBIN=$BUILD/c64/c64jit.bin
+jit_leg() {
+    [ -f "$JITBIN" ] || { echo "c64cputest: $JITBIN is missing - make c64"; exit 1; }
+    for MODE in rows real neg; do
+        IMG=$BUILD/c64cputest-jit-$MODE.img
+        case $MODE in
+            rows) FL="-DFAST -DJIT" ;;
+            real) FL="-DFAST -DJIT -DDORMANN -DDORMOK=$DORMOK" ;;
+            neg)  FL="-DFAST -DJIT -DDORMANN -DDORMOK=$DORMOK -DNEG" ;;
+        esac
+        # shellcheck disable=SC2086
+        nasm -f bin -w+error -I apps/c64/ -I $BUILD/c64/ $FL $DEC -o $IMG apps/c64/hosttest/c64cputest.asm
+        pad $IMG 64
+        cat "$DORM" >> $IMG
+        cat "$FASTBIN" >> $IMG
+        pad $IMG $((64 + 128 + 127))
+        cat "$JITBIN" >> $IMG
+        pad $IMG 2880
+        run $IMG "jit-$MODE" > $BUILD/c64cputest-jit-$MODE.log || true
+        cat $BUILD/c64cputest-jit-$MODE.log
+        case $MODE in
+            rows|real) grep -q "c64cputest: PASS" $BUILD/c64cputest-jit-$MODE.log || {
+                echo "c64cputest: the RECOMPILER's $MODE leg FAILED"; exit 1; } ;;
+            neg) grep -q "control fails: ok" $BUILD/c64cputest-jit-$MODE.log || {
+                echo "c64cputest: the recompiler's Dormann NEGATIVE CONTROL passed"; exit 1; } ;;
+        esac
+    done
+}
+# =============================================================================
+# THE TRANSLATED LEGS (C64-SPEC section 4.8): APPLE2's a2cputest one machine
+# along - Dormann's code translated ahead of time by apps/m6502/m65aot.py, in
+# four parts, each run with a core built for its part's range (m65gen.py
+# --aot-range) and the rest on the core (C64AOT_RANGES overrides). Seeds are tools/py6502.py's
+# trace of the same test. The control breaks every translated ADC and CMP
+# in the translation, and must fail. C64CPU_ONLY=aot runs this leg alone.
+# =============================================================================
+aot_leg() {
+    mkdir -p $BUILD/c64
+    python3 tools/py6502.py --dormann "$DORM" --trace-out $BUILD/c64/dorm.seeds >/dev/null
+    for R in ${C64AOT_RANGES:-0400:1400 1400:2000 2000:2A00 2A00:4000}; do
+        N=${R%%:*}
+        python3 apps/m6502/m65aot.py --machine c64 --rom "$DORM" --range $R \
+            --seeds $BUILD/c64/dorm.seeds \
+            -o $BUILD/c64/dormaot_$N.asm --table $BUILD/c64/dormaotpc_$N.bin
+        python3 apps/m6502/m65gen.py --machine c64 --aot-range $R -o $BUILD/c64/c64fast_dt$N.asm
+        nasm -f bin -w+error -o $BUILD/c64/c64fast_dt$N.bin $BUILD/c64/c64fast_dt$N.asm
+        CTL=0x$(awk '$3 == "ctl_list" {print $1}' $BUILD/c64/dormaot_$N.map)
+        for MODE in real neg; do
+            IMG=$BUILD/c64cputest-aot$N-$MODE.img
+            FL="-DFAST -DAOT -DCTL_LIST=$CTL -DDORMANN -DDORMOK=$DORMOK"
+            [ $MODE = neg ] && FL="$FL -DNEG"
+            # shellcheck disable=SC2086
+            nasm -f bin -w+error -I apps/c64/ $FL $DEC -o $IMG apps/c64/hosttest/c64cputest.asm
+            pad $IMG 64
+            cat "$DORM" >> $IMG
+            cat $BUILD/c64/c64fast_dt$N.bin >> $IMG
+            cat $BUILD/c64/dormaot_$N.bin >> $IMG
+            pad $IMG $((64 + 128 + 127 + 127))
+            cat $BUILD/c64/dormaotpc_$N.bin >> $IMG
+            pad $IMG 2880
+            run $IMG "aot$N-$MODE" > $BUILD/c64cputest-aot$N-$MODE.log || true
+            cat $BUILD/c64cputest-aot$N-$MODE.log
+            if [ $MODE = real ]; then
+                grep -q "c64cputest: PASS" $BUILD/c64cputest-aot$N-$MODE.log || {
+                    echo "c64cputest: Dormann through the translation of $R FAILED"; exit 1; }
+            else
+                grep -q "control fails: ok" $BUILD/c64cputest-aot$N-$MODE.log || {
+                    echo "c64cputest: the translated leg's control passed ($R)"; exit 1; }
+            fi
+        done
+    done
+}
+if [ "${C64CPU_ONLY:-}" = aot ]; then
+    aot_leg
+    echo "c64cputest: PASS - the translated legs"
+    exit 0
+fi
+if [ "${C64CPU_ONLY:-}" = jit ]; then
+    jit_leg
+    echo "c64cputest: PASS - the recompiler's leg"
+    exit 0
+fi
+if [ "${C64CPU_ONLY:-}" = fast ]; then
+    fast_leg
+    echo "c64cputest: PASS - the fast core's leg"
+    exit 0
+fi
+
+# =============================================================================
 # THE ROWS (seconds)
 # =============================================================================
 IMG=$BUILD/c64cputest-rows.img
@@ -140,5 +268,11 @@ for MODE in real neg; do
     fi
 done
 
-echo "c64cputest: PASS - twelve rows, and every negative control failed"
+if [ "${C64CPU_ONLY:-}" = plain ]; then
+    echo "c64cputest: PASS - every row passed, and every negative control failed (the accurate core alone)"
+else
+    fast_leg
+    jit_leg
+    echo "c64cputest: PASS - every row passed, and every negative control failed, on both cores and the recompiler"
+fi
 exit 0
