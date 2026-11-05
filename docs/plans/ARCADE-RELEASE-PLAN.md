@@ -66,16 +66,32 @@ chips.
    `pacman`, Q\*bert's `qberta`, when their translation is the same or has a
    recipe of its own. Anything else is refused, naming the chip and the
    CRC32 it wanted. This is `tools/getarcrom.py`'s rule, on the machine.
-3. **Keep the CHIPS, and nothing else.** The verified chips of a set go
-   into one file, `<SET>.ROM` (the board image in the layout
-   `getarcrom.py` writes today, plus Q\*bert's two sound chips), in a
-   `ROMS` folder beside `ARCADE.O88` or on a disk the user names. That is
-   the whole cache: everything else is REBUILT each time the game is
-   picked, from the recipe in the package (section 2.4).
-4. **Know what is there by looking**: at its start ARCADE lists `ROMS` and
-   reads each `.ROM` file's header (the set's name and the CRC32s it was
-   checked against). There is no index to go stale. A game with no file is
-   "ROM needed", never an error.
+3. **Keep the CHIPS, and nothing else, WHERE THE ROMS ARE.** The verified
+   chips of a set go into one file, `<SET>.ROM` (the board image in the
+   layout `getarcrom.py` writes today, plus Q\*bert's two sound chips). It
+   goes in the folder the set was imported FROM, or a folder the user picks
+   in the save dialog, which defaults there. **Never where `ARCADE.O88`
+   is**, unless the user picks it: the program may ride a disk that is full
+   or write-protected (the emulators' disk, section 7), and a ROM disk that
+   carries its own `.ROM` files works in any machine that has ARCADE. That
+   one file is the whole cache: everything else is REBUILT each time the
+   game is picked, from the recipe in the package (section 2.4).
+4. **Find them by looking, in known places.** A game with no `.ROM` found is
+   "ROM needed", never an error. The places, each listed by its directory
+   and each `.ROM`'s header read (the set's name, the CRC32s it was checked
+   against, the snapshot):
+   - the folder `ARCADE.O88` was started from;
+   - `\ARCADE\` on every floppy and hard disk the frontend can see, read
+     when it opens and again on **Look for ROMs** (a floppy is not scanned
+     behind the user's back: each read is a disk call, about 400 ms);
+   - every folder an import wrote to, remembered on the SYSTEM disk's
+     `SYSTEM\APPDATA`, the volume that is there whichever disk ARCADE came
+     from (SPEC.md 19.9). R2 checks that `os88data.inc` can reach the boot
+     volume from a package started elsewhere, and adds that if it cannot.
+
+   A remembered place on a floppy that is not in the drive is a normal
+   case: picking its game asks for the disk by its label and drive ("Insert
+   the disk with QBERT.ROM in B:"), the way any floppy-era program did.
 
 One zip can hold several games (`invaders.zip` carries ~40 clone folders);
 import takes every set it recognises. Import is one-time and may take
@@ -292,7 +308,12 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
    room. MEASURED: `emu360.img` as `all` builds it has 139 of 354 clusters
    free, against ARCADE's predicted 175KB, so it does not, unless R1 comes
    in well under the prediction. R6 decides on R1's number. At 720KB and
-   larger it can ride whichever disk has room.
+   larger it can ride whichever disk has room. **On the emulators' disk only
+   the program fits**, so the ROMs and their `.ROM` files live on another
+   disk or the hard disk: section 2.2's rule (the `.ROM` goes where the
+   ROMs are, never by default where the program is) is what makes that
+   work, and ARCADE's own 360KB disk is just the case where they are the
+   same disk.
 5. **Q\*bert's sound is in the release**: R5 is no longer conditional.
 
 ## 8. Risks
@@ -303,5 +324,6 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 | Inflate on an 8088 is too slow for a 64KB set | R2's timing on the 5150 | Progress and patience: import is once. Loose files are the fast route |
 | A user's set is a clone with a different program | R2's CRC refusal names it | Add the clone with its own recipe (section 5, item 7) |
 | The `.ROM` files do not fit the user's disk | the import's free-space check | Import to the disk the user names; a `.ROM` is 4-68KB |
+| A remembered ROM disk is not in its drive | the pick | Ask for it by label and drive; cancel leaves the game "ROM needed" |
 | A pick on an 8088 is slow (section 2.4) | R2's timing on the 5150 | Keep the derived tables beside the `.ROM`, as an option |
 | The frontend's art costs too much on CGA | R3's measurement | The compact layout; art is a role table, not a requirement |
