@@ -180,26 +180,7 @@ ar_impdone:
 .say:
     call ar_toast
     call ar_gohome                  ; (the chooser left us in the zip's folder)
-    mov bx, [ar_impbd]              ; the board as it was - or, if it was
-    or bx, bx                       ;   none, the first a set now makes
-    jnz .back                       ;   possible
-    mov byte [ar_qsel], 1
-    mov si, ar_boards
-.first:
-    lodsw
-    or ax, ax
-    jz .picked
-    push si
-    mov bx, ax
-    call ar_select
-    pop si
-    jc .first
-.picked:
-    mov byte [ar_qsel], 0
-    jmp short .shown
-.back:
-    call ar_select
-.shown:
+    call af_look                    ; the games, looked for again (11.1)
     mov si, [ar_win]
     jmp ar_repaint
 

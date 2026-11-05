@@ -175,6 +175,7 @@ ar_entry:
     call op_seg
     mov [ar_vseg], ax
     mov word [ar_bd], 0
+    mov word [ar_win], 0            ; (af_look asks: no window yet)
     mov word [ar_rimgc], 0
     mov word [ar_zclaim], 0
     mov word [ar_iclaim], 0
@@ -184,27 +185,21 @@ ar_entry:
     mov [ar_homecl], dx             ;   after the chooser has moved us
     call ar_crcinit
     call ar_placesload
-    mov byte [ar_qsel], 1           ; the first board whose ROM is here,
-    mov si, ar_boards               ;   quietly: none is a window that says
-.first:                             ;   so, not a refusal to open
-    lodsw
-    or ax, ax
-    jz .picked
-    push si
-    mov bx, ax
-    call ar_select
-    pop si
-    jc .first
-.picked:
-    mov byte [ar_qsel], 0
-    mov si, ar_tpl
-    call OSAPI_WM_CREATE
-    jc .out
+    call af_init                    ; the face: its theme, layout and size
+    call af_look                    ;   (ARCADE-SPEC 11) - and no game read:
+    mov si, ar_tpl                  ;   opening is a LOOK (11.1), made BEFORE
+    call OSAPI_WM_CREATE            ;   the region is movable: a file call
+    jc .out                         ;   inside the entry may compact the heap
     OS88_REGION_MOVABLE
     OS88_ALTENTER_ARM               ; arms the key-state map OSAPI_KEY_DOWN reads
     mov [ar_win], bx
     mov si, ar_menus
     call OSAPI_MENU_SET
+    mov bx, [ar_win]
+    mov al, 1                       ; every pixel of the content is ours
+    call OSAPI_WM_OWNBG
+    call af_vgacheck                ; (the display's modes: the window's own)
+    mov bx, [ar_win]
     mov si, ar_about
     call OSAPI_ABOUT_SET
     clc
@@ -549,7 +544,9 @@ ar_romtry:
     jne .wrongf
     cmp dx, bx
     jne .wrongf
-    ; (the image is in)
+    call OSAPI_FILE_HERE            ; (the image is in: where it was, for its
+    mov [ar_rfdrv], bl              ;   picture - ARCADE-SPEC 11.4)
+    mov [ar_rfcl], dx
     clc
     ret
 .wrongn:
@@ -747,39 +744,11 @@ ar_paint:
     push cx
     push dx
     push si
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov bx, ax
-    add dx, 6
-    mov si, ar_lines
-.line:
-    lodsw
-    or ax, ax
-    jz .about
-    push si
-    mov si, ax
-    mov cx, bx
-    add cx, 8
-    mov ax, (CWHITE << 8) | CBLACK
-    call OSAPI_FONT_RUN
-    cmp si, ar_l1                   ; the first line names the board
-    jne .next
-    push bx
-    mov bx, [ar_bd]
-    mov si, ar_s_none
-    or bx, bx
-    jz .named
-    mov si, [bx+BD_TITLE]
-.named:
-    pop bx
-    add cx, 6 * 8
-    mov ax, (CWHITE << 8) | CBLACK
-    call OSAPI_FONT_RUN
-.next:
-    pop si
-    add dx, 11
-    jmp .line
-.about:
+    push di
+    push bp
+    call af_paint                   ; the cabinet (arcface.inc)
+    pop bp
+    pop di
     pop si
     push si
     cmp byte [ar_abon], 0
@@ -795,54 +764,54 @@ ar_paint:
     pop ax
     ret
 
-ar_onkey:                           ; AX = the key
+ar_onkey:                           ; AX = the key, SI = the window
+    push si
     cmp al, 13
-    je ar_play
+    je .play
     cmp al, ' '
-    je ar_play
+    je .play
+    call af_key
+    jmp short .out
+.play:
+    call af_play
+.out:
+    pop si
     ret
 
 ar_onclick:
+    push si
     call ar_abdismiss
     jc .out
-    call ar_play
+    call af_click
 .out:
+    pop si
     ret
 
 ar_oncmd:                           ; Game: Play (0), Reset (1), Add ROM
-    push ax                         ;   sets... (2), and a board each after
+    push si                         ;   sets... (2), and a game each after
+    push ax
     call ar_abdismiss
     pop ax
     cmp al, 1
-    jb ar_play
+    jb .play
     jne .more
     call ar_reset
-    ret
+    jmp short .out
 .more:
     cmp al, 2
     jne .board
-    jmp ar_import
+    call ar_import
+    jmp short .out
 .board:
-    sub al, 3
-    cbw
-    shl ax, 1
-    mov bx, ax
-    mov bx, [ar_boards+bx]
-    mov ax, [ar_bd]
-    cmp ax, bx                      ; the board already picked: just play
-    je .play
-    push ax
-    call ar_select
-    pop bx
-    jnc .play
-    or bx, bx                       ; not to be had: the one before, again
-    jz .shown
-    call ar_select
-.shown:
-    jmp ar_repaint
-.play:
+    sub al, 3                       ; the game: selected in the list, and
+    mov [af_sel], al                ;   played
+    mov si, [ar_win]
     call ar_repaint
-    jmp ar_play
+.play:
+    call af_play
+.out:
+    pop si
+    ret
 
 ar_about:
     mov byte [ar_abon], 1
@@ -855,25 +824,8 @@ ar_abdismiss:
     mov ax, ar_repaint
     jmp os88ui_abdismiss
 
-ar_repaint:
-    push ax
-    push bx
-    push cx
-    push dx
-    mov al, CWHITE
-    call OSAPI_SET_COLOR
-    mov bx, si
-    call OSAPI_WM_CONTENT
-    mov bx, dx
-    mov cx, ax
-    add cx, AR_CONT_W-1
-    add dx, AR_CONT_H-1
-    call OSAPI_GFX_FILL
+ar_repaint:                         ; SI = the window: the whole face
     call ar_paint
-    pop dx
-    pop cx
-    pop bx
-    pop ax
     ret
 
 ; =============================================================================
@@ -890,11 +842,13 @@ ar_play:
     mov ax, ar_fsx
     mov bx, [ar_win]
     xor cx, cx
+    mov byte [af_snapw], 0
     call OSAPI_FSX_RUN
     jnc .ran
     mov si, ar_s_nofsx
     jmp ar_toast
 .ran:
+    call af_snapsave                ; (on the desktop: a file may be written)
     mov si, [ar_err]
     or si, si
     jz .out
@@ -910,6 +864,7 @@ ar_fsx:
     call ar_snd_open
     call ar_loop
     call ar_snd_close
+    call af_snap                    ; the game's picture, if it has none yet
 .out:
     ret
 
@@ -2055,6 +2010,8 @@ ar_shift:
 %include "arcland.inc"
 %include "arcqb.inc"
 %include "arcimp.inc"
+%include "arcface.inc"
+%include "arcart.inc"
 %include "arcsets.inc"                 ; (generated: getarcrom.py --asm-sets)
 %include "os88inflate.inc"
 %define OD_TVOL ar_homedrv            ; ARCADE.DAT on ARCADE's own disk
@@ -2252,6 +2209,52 @@ AR_VAR ar_iloose, 1                 ;   1: loose chips in a folder, no zip
 AR_VAR ar_iok, AR_NSET              ;   each set: whole in the zip(s)
 AR_VAR ar_iop, 1                    ;   1: a file-progress operation is ours
 AR_VAR ar_iidx, 1                   ;   the set's index in ar_sets
+AR_VAR af_theme, 2                  ; the face (arcface.inc): its role table,
+AR_VAR af_lay, 2                    ;   its layout, the pictures' claim,
+AR_VAR af_pclaim, 2
+AR_VAR af_sel, 1                    ;   the selection, the games, how many
+AR_VAR af_n, 1                      ;   are READY, the display's FSX modes,
+AR_VAR af_nready, 1
+AR_VAR af_caps, 2
+AR_VAR af_state, AF_MAXG            ;   each game's state and picture
+AR_VAR af_pics, AF_MAXG
+AR_VAR af_ox, 2                     ;   the content origin
+AR_VAR af_oy, 2
+AR_VAR af_fx1, 2                    ;   a fill's corners
+AR_VAR af_fy1, 2
+AR_VAR af_fx2, 2
+AR_VAR af_fy2, 2
+AR_VAR af_bst, 2                    ;   the band: its stride, rows, bytes
+AR_VAR af_bh, 2
+AR_VAR af_band, AF_BANDSZ
+AR_VAR af_gseg, 2                   ;   the system font
+AR_VAR af_goff, 2
+AR_VAR af_grng, 2
+AR_VAR af_pr, 2                     ;   cells of the drawing routines
+AR_VAR af_ps, 2
+AR_VAR af_pen, 2
+AR_VAR af_ri, 2
+AR_VAR af_rpen, 2
+AR_VAR af_rst, 1
+AR_VAR af_py, 2
+AR_VAR af_px, 2
+AR_VAR af_bi, 2
+AR_VAR af_bw, 2
+AR_VAR af_ch, 1
+AR_VAR af_cy, 2
+AR_VAR af_cg, 2
+AR_VAR af_snapw, 1                  ;   a picture taken, to be written
+AR_VAR af_sgame, 2                  ;   ...of this game
+AR_VAR af_acc, 96                   ;   a screen row, a bit a lit pixel
+AR_VAR af_pl, 4 * 96                ;   ...its four planes
+AR_VAR af_blk, 16                   ;   the colour numbers black on the glass
+AR_VAR af_nblk, 2
+AR_VAR af_lit, 16                   ;   ...and each one: 1 lit
+AR_VAR af_xs, AF_PICW * 2           ;   the columns sampled
+AR_VAR af_x0, 2
+AR_VAR af_xn, 2
+AR_VAR ar_rfdrv, 1                  ; where the .ROM was found (its picture's
+AR_VAR ar_rfcl, 2                   ;   place)
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB
 AR_VAR qb_rclaim, 2                 ;   the parts qb_build made
 AR_VAR qb_sclaim, 2

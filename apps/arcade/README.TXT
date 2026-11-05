@@ -39,7 +39,13 @@ The five 8080 games run at full speed on an IBM PC/XT on any adapter;
 on VGA the two Taito games are in colour. A game is read from this disk
 when you pick it, and the one before is put away.
 
-Open ARCADE.O88. Enter, Space or a click plays full screen:
+Open ARCADE.O88: a cabinet with every game in a list, each marked READY,
+ROM NEEDED or NEEDS VGA. Up and Down (or a click, or a game's first
+letter) choose one; its card says how it is played. The first time you
+leave a game, ARCADE keeps a picture of its screen, and shows it there
+from then on. ADD ROMS (or Insert) is Game > Add ROM sets...
+
+Enter, Space, PLAY or a click on the chosen game plays it full screen:
 
     5 or C        insert a coin
     1, 2          one or two players

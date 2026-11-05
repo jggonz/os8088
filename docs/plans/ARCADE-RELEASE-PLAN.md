@@ -296,12 +296,17 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
       15 s for a pick is fine).
 
 ### R3: the frontend
-- [ ] retro-face mockups first, for the owner to pick.
-- [ ] The list, the card, the screenshot taken from the game, the buttons,
-      the keys.
-- [ ] Mono faces for Hercules and CGA, looked at on each (SPEC.md 39.4).
-- [ ] Flicker and repaint measured (`m.flicker`), against PERFORMANCE.md
-      Part 5's launcher rows.
+- [x] One generic cabinet (the owner: not one per machine), straight to
+      code rather than mockups first: a bulb marquee, the list with each
+      game's state, the screen, the card, a coin door (ARCADE-SPEC 11).
+- [x] The list, the card, the screenshot taken from the game (`.PIC`), the
+      buttons, the keys and the mouse. Opening is a look, not a load.
+- [x] Mono faces for Hercules and CGA (a compact layout on CGA), looked at
+      on each: `docs/arcade/face-*.png`.
+- [x] Flicker and repaint measured (`m.flicker`: no transient pixel on a
+      move) and the identity check (rows `arcface`, `arcfaceherc`,
+      `arcfacecga`).
+- [ ] SETTINGS is drawn unlit until R4 wires it.
 
 ### R4: settings, scores, pause, help
 - [ ] DIP switches in words and keys remapped, both saved.

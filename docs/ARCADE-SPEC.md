@@ -1170,3 +1170,115 @@ game a tenth of an 8088 - and the cost of the board is the picture's, which
 section 10.5 meets by skipping frames of it on the 8088 and not at all on a
 286.
 
+
+## 11. The frontend (`arcface.inc`, `tools/arcart.py`)
+
+ARCADE's window is a GAME BROWSER in ONE generic cabinet: a backlit
+marquee, the list of games, the selected game's screen and card, and a coin
+door of buttons. The owner's rule: one cabinet for every machine, no art
+per game. docs/plans/ARCADE-RELEASE-PLAN.md sections 3 and 4 are the
+design; this is the contract.
+
+### 11.1 Opening is a look, not a load
+
+Opening ARCADE reads no game. It LOOKS for each game's `<SET>.ROM` with
+`OSAPI_FILE_FIND`, in the folder ARCADE stands in and then each place in
+`ARCADE.DAT` (1.5), and reads each found game's `<SET>.PIC` (11.4). Each
+game in the list gets one STATE:
+
+| state | when | the tag |
+|---|---|---|
+| READY | its `.ROM` was found and this display runs it | `READY` |
+| ROM NEEDED | no `.ROM` found | `ROM NEEDED` |
+| NEEDS VGA | Pac-Man and Q\*bert, on a display without `FSXM_VGA12` (`OSAPI_FSX_CAPS`, a fact) | `NEEDS VGA` |
+
+A game is LOADED (read, checked, built: 1.4, 2.4 of the plan) when it is
+played, and stays loaded until another one is. **Play** on a game that is
+not READY says why in a toast and does nothing else. After an import the
+look is taken again.
+
+### 11.2 Layouts
+
+The content box is 8-aligned and every field sits on the byte grid, so
+every band is blitted at a multiple of 8 and no band is shifted (the
+retro-face skill's first lesson).
+
+| layout | content | where | what |
+|---|---|---|---|
+| FULL | 592 x 280 | VGA, EGA, Hercules (a desktop of 300 rows or more) | marquee, list, screen, card, coin door |
+| COMPACT | 592 x 124 | CGA | a short marquee, the list, the card; no screen |
+
+The window is created at its layout's size and centred, from `OSAPI_VIDEO`.
+The faces as built: `docs/arcade/face-vga.png`, `face-herc.png`,
+`face-cga.png`.
+
+**The look happens BEFORE the window**: a file call inside the entry proc
+may compact the heap, and once `OS88_REGION_MOVABLE` is declared the
+package's own region can move under the entry proc's feet (MEASURED: the
+first build looked after `OSAPI_WM_CREATE` and ran on in an emptied
+segment). Only the VGA check, which needs the window and no disk, comes
+after it (`af_vgacheck`).
+
+### 11.3 Drawing
+
+Two themes, as role tables (`af_tcol`, `af_tmono`): colour where
+`OSAPI_VIDEO` answers DH > 1, black and white otherwise - a dark cabinet,
+white on black, the selected row the one inverted field (SPEC.md 39.4: no
+grey, no dither in a 1bpp face). MEASURED (rows `arcface`, `arcfaceherc`,
+`arcfacecga`): a move of the selection is 4 to 6 displayed frames with no
+transient pixel, and the face after moves is pixel for pixel the face after
+a whole repaint. A full paint lays the whole ground once
+(`OSAPI_WM_OWNBG`); everything after it is FIELDS: a list row, the screen,
+the card, a button, the counter. A field is one or a few calls that write
+each pixel once - a text run is `OSAPI_FONT_RUN` at the field's full width,
+small caps and pictures are composed into a band and put down in one
+`OSAPI_GFX_BLIT1`. Moving the selection redraws the two rows that changed,
+the screen and the card, and nothing else.
+
+The art is generated, never drawn by hand (`tools/arcart.py`, the retro-face
+skill's shape): the marquee's letters as rows of `#`, a 5x7 small-caps face,
+the cabinet's coin-door lamps. `--selfcheck` and `--png` as CDRack's. No
+game's logo, title art or character appears anywhere; titles are text.
+
+### 11.4 The screen: a picture the game itself drew
+
+The only picture of a game is one its own ROM drew on this machine. When a
+game is left (Esc) and has no picture yet, ARCADE samples the screen it was
+playing on (`af_snap`, still inside the bracket) into a 120 x 144 1bpp
+picture and writes it as `<SET>.PIC` (4-byte header `'AP'`, width, height,
+then the rows, 15 bytes each: 2,164 bytes) in the folder its `.ROM` was
+found in. A disk that refuses the write leaves the picture in memory for
+the session, and costs nothing else.
+
+LIT means "not black on the glass". On a 16-colour mode a colour number is
+taken plane by plane, and the colour numbers that are black are found by
+reading each one's DAC register through the standard Attribute Controller
+map every board here keeps (`ar_acmap`). It is not "any plane set": Space
+Invaders' colour overlay lives in a plane of its own whose colour numbers
+show black, and sampled that way the shields' band came out solid. The
+Graphics Controller is put in read mode 0 first (a game's latch copies
+leave it comparing colours). On a 1bpp mode a set bit is lit. The lit
+COLUMNS are found from every 16th row, then 120 x 144 points are taken
+across them and the screen's full height. MEASURED on MartyPC: the
+picture is kept within 3 guest seconds of Esc on the VGA XT (VGA's planes),
+1.5 on Hercules and CGA, the bracket's own exit included.
+
+The screen panel shows the picture in the phosphor colour (white on mono),
+or the game's name in small caps when it has none. The pictures are read
+at the look (11.1) into one claim of 17KB, a slot a game, so moving the
+selection reads no disk.
+
+### 11.5 Keys and the mouse
+
+| key | does |
+|---|---|
+| Up, Down | the selection, one row |
+| Home, End | the first, the last |
+| a letter | the next game whose title starts with it |
+| Enter, Space | Play |
+| Insert | Add ROM sets... |
+
+A click on a row selects it; a click on the selected row plays it. The coin
+door's buttons are PLAY, ADD ROMS and SETTINGS (R4; until then greyed).
+The Game menu keeps Play, Reset and Add ROM sets..., and lists the games, a
+pick from it selecting and playing as before.

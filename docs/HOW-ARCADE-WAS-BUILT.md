@@ -465,3 +465,44 @@ wrong in one chip writes nothing. invaders.zip and qbert.zip each write a
 ARCADE is closed and reopened from `B:\`, Q*bert is found in `ROMS\` through
 `ARCADE.DAT`. **Not done:** sets as loose files in a folder, and an import
 timed on the 5150.
+
+## R3: one cabinet
+
+The owner's rule was one generic cabinet, not one per machine, so R3 went
+straight to code instead of a round of mockups. The window became a game
+browser: a marquee of bulbs spelling ARCADE (generated from rows of `#` in
+`tools/arcart.py`, with a 5x7 small-caps face), the list with each game's
+state, a screen in a bezel, the game's card, and a coin door of buttons.
+Every field is one band put down in one blit, so moving the selection
+redraws two rows, the screen and the card, and nothing else.
+
+![VGA](arcade/face-vga.png)
+
+**Opening is a look now, not a load.** ARCADE used to read the first game
+it could find when it opened. Now it only checks where each `.ROM` is, and
+a game is read when it is played.
+
+**The screen shows a picture the game drew itself.** No artwork ships. The
+first time a game is left, ARCADE samples the screen it was on into a
+120 x 144 picture and writes it beside the `.ROM` as `<SET>.PIC`.
+
+**Three things the emulator caught.**
+- *A segment that emptied.* The first build looked for the ROMs after
+  creating the window, which declares the package's region movable. A file
+  call inside the entry proc then let the heap move the package while it
+  was still running. The look now comes before the window.
+- *A window called through a null record.* `OSAPI_ABOUT_SET` takes the
+  window in BX, and a new call before it had used BX. The kernel later
+  called the About handler for window 0.
+- *Solid bands in the picture.* Space Invaders' colour overlay is a plane
+  of its own that shows black. Counting "any plane set" as lit filled the
+  shields' band solid. Lit now means a colour number whose DAC entry is
+  not black, and the VGA is put in read mode 0 first.
+
+**Tested** on MartyPC's VGA XT, Hercules and CGA (rows `arcface`,
+`arcfaceherc`, `arcfacecga`): the states, keys and clicks, no transient
+pixel on a move, the incremental face equal to a whole repaint, and the
+picture written. Breaking the move (not redrawing the row it left) turned
+the identity check red at 120 rows.
+
+![Hercules](arcade/face-herc.png) ![CGA](arcade/face-cga.png)
