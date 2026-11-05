@@ -36,7 +36,7 @@ import sys
 import time
 
 TERMINAL = ("DONE", "FAILED", "BLOCKED")
-LINE = re.compile(r"^\[(?P<key>[^\]]+)\]\s+\S+\s+STATUS:\s*(?P<st>[A-Z]+)(?P<rest>.*)$")
+LINE = re.compile(r"^\[(?P<key>[^\]]+)\]\s+\S+\s+(?:STATUS:\s*)?(?P<st>[A-Z]+)\b:?(?P<rest>.*)$")
 EST = re.compile(r"~(\d+)\s*m")
 
 

@@ -69,6 +69,10 @@ For each agent `<key>`:
 git worktree add -b <feature>/<key> ~/Repos/os8088-<prefix>-<key> origin/<feature-branch>
 ```
 
+First run `make` on the base branch. If it fails, for example because a
+generated file such as `docs/INDEX.md` is stale, fix and commit that before
+creating any worktree. Otherwise every agent starts from a red tree.
+
 Worktrees go under `~/Repos/os8088-<name>`, never `/tmp` (CLAUDE.local.md).
 Git-ignored inputs the agents need, such as `win16ref/`, are symlinked in. A
 symlink is NOT matched by a `dir/` ignore pattern, so add `/<name>` to
@@ -107,7 +111,15 @@ first. `COMMON.md` carries:
   failure, and must write down each run;
 - the shared-host rules: never `pkill`, use its own QMP socket, and a fast-tier
   wall-clock failure with every row green is host load;
-- the kernel rules: budgets, no resident rung crossed, ABI locks;
+- the kernel rules: budgets, no resident rung crossed, ABI locks. Give a budget
+  per PART and per section, not only for the resident image: several agents
+  each fitting in the same on-demand part can together overflow it;
+- **a reserved table of section numbers**: each agent's SPEC and plan section
+  numbers, assigned by the lead. Agents never take "the next free" number,
+  because two agents in flight find the same one;
+- the build rules: a baseline is built in a separate `BUILD=` tree, never in
+  the same `build/` as the real build. A hard-disk rig is rebuilt from the
+  tree being tested, because `TESTHD=` boots the disk's own `KERNEL.SYS`;
 - a table of every agent's key, item and files, so each knows its neighbours.
 
 The per-agent prompt is then short: the key, the worktree, the item quoted from
@@ -121,7 +133,7 @@ is missed:
 
 ```
 tail -n0 -F <logs>/*.log | grep -E --line-buffered \
-  'STATUS: *(STARTED|DONE|BLOCKED|FAILED|RUNNING|PROGRESS)|Error|Traceback'
+  '\] [0-9:]+ (STATUS: *)?(STARTED|DONE|BLOCKED|FAILED|RUNNING|PROGRESS)|Error|Traceback'
 ```
 
 Use the maximum timeout and re-arm it on every expiry while any agent is still
@@ -174,6 +186,11 @@ While they run:
   arrived late and in batches; the file is the record that survives.
 - Do not do an agent's work yourself while it runs, and do not predict its
   result.
+- An item has one owner. To move an item to another agent, tell the current
+  owner first and wait for its ACK before the new owner starts. A redirect
+  that arrives late means the item gets built twice.
+- Each agent launched later gets its section numbers from the reserved table
+  in its brief.
 
 ## Step 4 - verify and improve with Opus
 
@@ -199,8 +216,11 @@ whose failure is "the wrong package closed". Say so when you choose it.
 Merge each verified branch into the feature branch in the order that keeps
 conflicts smallest: docs-only and host-tool branches first, then packages, then
 kernel. Resolve each conflict by reading both sides; never take one side
-wholesale without checking what the other carried. After each merge, run `make`
-and, if the kernel changed, `tools/kernsize.py` and `make budget-check`.
+wholesale without checking what the other carried. Integrate in a worktree
+with a warm `build/`. After EACH merge, run a full `make` and the size checks
+for every budget the agents were given (package parts included). If the kernel
+changed, also run `tools/kernsize.py` and `make budget-check`. Two branches
+can each pass alone and fail together.
 Update the plan: tick what was SEEN, and leave open what was only built. Add
 new findings as new items.
 

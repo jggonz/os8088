@@ -112,3 +112,85 @@ a second false stall.
 **Rule:** the watchdog follows each `[key]` on its own; DONE and FAILED stick
 until a STARTED or RUNNING, and BLOCKED reopens on any line. Test it against a
 scratch directory, never by appending to the live logs.
+
+## Two agents in flight both took "the next free" section number
+
+**WIN16-NEXT (#329)**: four times in one round: KERN-MEGA-PLAN 14.139,
+SPEC 124.25.13, 124.25.16 (part 11 and bigbmp) and 124.25.20 (kindmsg and
+vbxlib). Each agent looked for the next free number on its own base, so each
+was right about its own tree. `checkdocs` catches a duplicate heading only
+after the merge, and then one side renumbers its section and every citation
+of it.
+
+**Rule:** the lead assigns every agent its SPEC and plan numbers in the brief
+at launch, from a reserved table in COMMON.md. Agents take no other number,
+and ask in their log if they need one more.
+
+## Each branch passed alone; together they failed `make`
+
+**WIN16-NEXT.** The lead merged five verified branches while checking only
+`checkdocs`, in a worktree with no `build/`. Two branches each passed the
+fast tier alone. Together they pushed WIN16's `.w16dlg` part past
+`w16wrap`'s 4 KB band, so the feature branch failed `make` and every later
+agent started from a red fast tier.
+
+**Rule:** integrate in a worktree with a warm `build/`, and run a full `make`
+(plus `make mega` and the size checks a kernel or package budget needs) after
+EACH merge, not once at the end.
+
+## Several agents filled the same on-demand part
+
+**WIN16-NEXT.** Three agents put code in WIN16's part 9. Each measured the
+resident image and passed. Together they made every program that calls the
+part pay its whole size in heap.
+
+**Rule:** give each agent a budget per PART (and per section), not only for
+the resident image, and measure the parts after each merge.
+
+## A late redirect built the same thing twice
+
+**WIN16-NEXT.** The lead re-assigned the class table's growth from `lheap` to
+`ctlproc` by SendMessage. The message reached `lheap` after it had built the
+growth anyway, so two branches changed the same structure and conflicted in
+six files. One side then had to drop its version.
+
+**Rule:** an item has ONE owner. When the lead moves an item mid-flight, it
+tells the old owner first and waits for its ACK before the new owner starts.
+Better still, never put the same item in two briefs.
+
+## A hard-disk rig carried its own kernel
+
+**WIN16-NEXT, o8np.** A rig copied from another agent was booted with
+`make test TESTHD=`, which boots the hard disk's OWN `KERNEL.SYS`. That
+kernel was older than the tree's, so a kernel change "tested" on the rig had
+not been tested at all.
+
+**Rule:** a rig is rebuilt from the tree that is being tested, or the tree's
+kernel is booted from A:. The brief says so.
+
+## A baseline build and the real build shared one `build/`
+
+**WIN16-NEXT, kindmsg.** The agent started a "baseline" `make` and then its
+own `make` in the same `build/`. Two makes ran over one tree and their
+outputs collided silently. The agent then went idle "waiting for the build".
+
+**Rule:** a baseline is built in a separate worktree or `BUILD=` tree. Every
+build runs in the foreground as one tool call that waits.
+
+## The base branch failed `make` before any agent started
+
+**WIN16-NEXT.** The feature branch's generated `docs/INDEX.md` was stale, so
+every agent's first `make` stopped at `checkdocs`. Each agent then spent
+turns on a problem that was not its own.
+
+**Rule:** before creating the worktrees, run `make` on the base, regenerate
+what is stale, and commit it.
+
+## A monitor regex that depended on the `STATUS:` word
+
+**WIN16-NEXT.** Two of seven agents wrote `[key] HH:MM DONE: ...` without the
+`STATUS:` word. The monitor matched `STATUS: *(DONE|...)`, so it missed one
+agent's DONE for about ten minutes.
+
+**Rule:** match the word after the time stamp, whether or not `STATUS:` comes
+before it: `\] [0-9:]+ (STATUS: *)?(STARTED|DONE|BLOCKED|FAILED)`.
