@@ -224,6 +224,9 @@ C apps/recorder/recorder.asm @rc_do_play # the speaker play buffer, held for one
                                          # of the call
 C apps/stiknote/stiknote.asm @sn_flip    # the note read whole for a checkbox flip
                                          # and written back, inside one callback
+C apps/mousechk/mousechk.asm mc_rseg   # Save Report's and Copy's text (SPEC.md
+                                         # 126.3), composed, written or put on
+                                         # the clipboard and freed in one callback
 C apps/syscheck/out.inc sc_rseg          # Save Report's text, composed and written
                                          # inside one command
 C apps/syscheck/out.inc @sc_rmone       # a refused driver read whole for

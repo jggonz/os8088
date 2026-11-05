@@ -413,6 +413,12 @@ kind = "program"
 summary = "Puts os8088 on a hard disk, or upgrades the copy already there, one page at a time: switches the hard-disk driver on, finds the drives, lets you pick a partition and keep or erase its files, then copies the system and apps disks."
 short = "Install os8088 on a hard disk"
 
+["MOUSECHK.O88"]
+title = "Mouse Check"
+kind = "program"
+summary = "Shows everything the system detected about each kind of mouse it supports (serial, PS/2, the VMware absolute pointer and USB) and can re-run the PS/2 mouse check step by step, so a mouse that is not found can be diagnosed. Saves or copies a report."
+short = "Mouse connection checker"
+
 ["SYSCHECK.O88"]
 title = "System Check"
 kind = "program"
