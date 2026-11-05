@@ -97,14 +97,16 @@ def main():
             # The index sits immediately past the entries, which is
             # `fmv_iofs`'s arithmetic and `dsk_dest_x`'s, and `[dsk_nmax]` is
             # the width both of them use.
-            n = int.from_bytes(m.read((kseg << 4) + V("dsk_nmax"), 2), "little")
             vp = int.from_bytes(m.read((kseg << 4) + V("fm_vp"), 2), "little")
             vseg = 0
             if vp:
                 vseg = int.from_bytes(
                     m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
-            if vseg:
-                return list(m.read(lin(vseg, n * V("DSK_DE_STRIDE")), n))
+            if vseg:                    # the window's own shape (22.6.4)
+                n = int.from_bytes(m.read((kseg << 4) + vp + V("FS_N"), 2),
+                                   "little")
+                iofh = m.read((kseg << 4) + vp + V("FS_IOFH"), 1)[0]
+                return list(m.read(lin(vseg, iofh << 8), n))
 
             # **AND THERE IS NO FLOOR TO FALL BACK TO** (SPEC.md 22.6.3).
             # This arm read `LOW_SEG:dsk_icoix`, and that symbol no longer
@@ -122,11 +124,11 @@ def main():
             # (name, size) per entry, beside refs() - the store's own key
             # (SPEC.md 25.9), read out of the same claim: names at +0, the
             # size's low word at LD_DE_SIZE
-            n = int.from_bytes(m.read((kseg << 4) + V("dsk_nmax"), 2), "little")
             vp = int.from_bytes(m.read((kseg << 4) + V("fm_vp"), 2), "little")
+            n = int.from_bytes(m.read((kseg << 4) + vp + V("FS_N"), 2), "little")
             vseg = int.from_bytes(m.read((kseg << 4) + vp + V("FS_VSEG"), 2), "little")
             st = V("DSK_DE_STRIDE")
-            raw = m.read(lin(vseg), n * st)
+            raw = m.read(lin(vseg, V("FV_DOFF")), n * st)
             return [(raw[i * st:i * st + 16].split(b"\0")[0],
                      int.from_bytes(raw[i * st + V("LD_DE_SIZE"):i * st + V("LD_DE_SIZE") + 2], "little"))
                     for i in range(n)]

@@ -11802,7 +11802,7 @@ SOAK = [
         "to one row, Ctrl+A takes every entry and a drag select from right of "
         "the name column takes the run from the pressed row to the pointer, "
         "down and up, while a press there that does not move selects that "
-        "row alone - each checked on FS_MSEL "
+        "row alone - each checked on the bitmap "
         "AND on the glass, which catches a band drawn twice or left behind. "
         "Then the set's operations: Copy of two, Up, Paste lands both and "
         "the list is cleared on paste with the purge floor back down; a drag "
@@ -11811,6 +11811,17 @@ SOAK = [
         "against `make MSELOFF=1` (the first Ctrl+click is a plain click), "
         "and with fm_ondrag's FM_BBAND dispatch taken out (the four drag-"
         "select checks, and only those).",
+        needs=("marty",), serial=True),
+    Row("bigdir", "soak", py("tests/bigdir.py"), 40.0,
+        "SPEC.md 22.6.4: a Disk window lists a 300-entry folder (kern_big). "
+        "A scratch 720KB B: with 280 documents and 20 package copies in one "
+        "folder and no ASSOC.DAT: all 301 entries listed in 19.4's order "
+        "(the Shell sort), the claim sized to them (10KB), exactly 16 icon "
+        "peeks on the first visit and the next four on the second, the claim "
+        "cut back to 2KB at the root, Ctrl+A setting all 301 bits of the "
+        "bitmap in the claim, Delete counting '300 items', and a double-click "
+        "on index 300 launching THAT package. VERIFIED RED with fmv_rsz made "
+        "to refuse every grow: the listing stops at 64 and nine checks fail.",
         needs=("marty",), serial=True),
     Row("fdlgchoose", "soak", py("tests/fdlgchoose.py"), 60.0,
         "SPEC.md 38: the Standard File chooser end to end, through Note "

@@ -373,23 +373,42 @@ FS_USEDH    equ FS_FREEH+2      ; FS_USED, which on this build are BYTES in
                                 ; a K or an M need what a KB word threw away.
                                 ; 0xFFFF here is the not-known sentinel - a
                                 ; FAT volume never reaches 4GB
-%ifdef FM_MSEL
-FS_MSEL     equ FS_USEDH+2      ; 8 bytes: the MULTI-SELECTION (SPEC.md 22.27),
-                                ; one bit per directory index - DSK_NENT is 64
-                                ; here. EMPTY while the selection is FS_SEL's
-                                ; alone; once any bit is set it is the WHOLE
-                                ; selection and FS_SEL is only the focus
-FS_SIZE     equ FS_MSEL+8       ; = the Disk kind's KD_SSIZE. The Shift anchor
-                                ; is ONE byte for every window, fm_anch: only
-                                ; the front window takes a gesture
- %if DSK_NENT > 64
-  %error "FS_MSEL is 8 bytes: one bit per entry of a 64-entry listing"
- %endif
-%else
-FS_SIZE     equ FS_USEDH+2      ; = the Disk kind's KD_SSIZE
-%endif
+FS_SIZE     equ FS_USEDH+2      ; = the Disk kind's KD_SSIZE. The MULTI-
+                                ; SELECTION (SPEC.md 22.27) is not in it any
+                                ; more: it was 8 bytes here, one bit per entry
+                                ; of a 64-entry listing, and a listing runs to
+                                ; DSK_NENT = 1,024 now (22.6.4) - so it is
+                                ; FM_MSELB bytes at the head of the window's
+                                ; own listing claim, which is heap and is
+                                ; only there while the window is. The Shift
+                                ; anchor is ONE word for every window,
+                                ; fm_anch: only the front window takes a
+                                ; gesture
 %else
 FS_SIZE     equ 24              ; = the Disk kind's KD_SSIZE
+%endif
+
+; --- THE SHAPE OF A WINDOW'S LISTING CLAIM (SPEC.md 22.6.4) -----------------
+; [0, FV_DOFF)        the multi-selection bitmap, one bit per entry
+; FV_DOFF ...         FS_N entries of DSK_DE_STRIDE
+; FS_IOFH x 256 ...   FS_N icon-reference bytes, on the 256-byte boundary
+;                     PAST the entries (dsk_ioffx)
+; ...sized by fmv_need to the folder it holds, never under VIEW_KB, and cut
+; back to fit after every store.
+%ifdef DSK_BIGDIR
+ %ifdef FM_MSEL
+FM_MSELB    equ DSK_NENT/8      ; the bitmap: a bit for every entry the
+FV_DOFF     equ 128             ; ceiling allows, 128 bytes at 1,024 - a
+  %if FV_DOFF != FM_MSELB       ; LITERAL, because tools/os88geom.py mirrors
+   %error "FV_DOFF is the bitmap's size, DSK_NENT/8"   ; it for the harness
+  %endif
+ %else
+FV_DOFF     equ 0
+ %endif
+FV_FIX      equ FV_DOFF + 256   ; a claim's bytes beyond 25 an entry: the
+                                ; bitmap and the most the boundary can pad
+%else
+FV_DOFF     equ 0
 %endif
 
 FM_MAXWIN   equ VIEW_SLOTS      ; the USER's Disk windows: fm_count's cap
@@ -426,7 +445,14 @@ FV_ICOIX    equ 0               ; SPEC.md 25.8.5's index, and it is the FIRST
                                 ; the reasoning is kept because the FIELD's
                                 ; position is what it bought
 FV_ICOBODY  equ DSK_ICOIX_N     ; ...so the bodies start after it
-%if DSK_NENT*DSK_DE_STRIDE + DSK_ICOIX_N > VIEW_KB*1024
+%ifdef DSK_BIGDIR
+ %if (DSK_NENT*25 + FV_FIX + 1023) / 1024 > 255
+  %error "FS_VKB is a byte: the ceiling's claim must be under 256KB"
+ %endif
+ %if (FV_DOFF + DSK_NENT*DSK_DE_STRIDE + 256) > 65535
+  %error "the reference index's base is a 16-bit offset (FS_IOFH x 256)"
+ %endif
+%elif DSK_NENT*DSK_DE_STRIDE + DSK_ICOIX_N > VIEW_KB*1024
   %error "the view cache no longer fits VIEW_KB: entries, then one REFERENCE byte per entry (DSK_ICOIX_N). fm_kinit claims VIEW_KB and fmv_store then writes this much into it, so the overflow lands on whatever the heap handed out next"
 %endif
 FM_HDRMAX   equ 48              ; fm_hdrbuf's size: the header and the status
@@ -777,6 +803,26 @@ fmv_copy_in:
 ; 4KB on a driver-backed volume (SPEC.md 22.6) - DSK_DE_STRIDE apiece, which
 ; is the listing's width and not DSK_DE_SIZE's.
 ; -----------------------------------------------------------------------------
+%ifdef DSK_BIGDIR
+; ...and ON THIS BUILD it is the shape of DI's OWN listing (SPEC.md 22.6.4):
+; the 256-byte boundary past its FS_N entries, which is what dsk_ioffx puts
+; the index at when a mount fills the claim. In: DI = the state block
+fmv_iofs:
+    push ax
+    push dx
+    mov ax, [di+FS_N]
+    mov dx, DSK_DE_STRIDE
+    mul dx
+ %if FV_DOFF
+    add ax, FV_DOFF
+ %endif
+    inc ah
+    mov al, 0
+    xchg ax, bx
+    pop dx
+    pop ax
+    ret
+%else
 fmv_iofs:
     push ax
     push dx
@@ -787,6 +833,7 @@ fmv_iofs:
     pop dx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fmv_viofs - where they start inside the ACTING WINDOW'S OWN CACHE (22.6.1):
@@ -831,6 +878,9 @@ fmv_get_dir:
     mov cx, DSK_DE_STRIDE       ; the stride is no longer a power of two;
     mul cx                      ; index <= DSK_NENT so DX is 0, and it is
     pop dx                      ; banked because this routine's contract is
+%if FV_DOFF                     ; (past the multi-selection's bitmap, SPEC.md
+    add ax, FV_DOFF             ; 22.6.4)
+%endif
     mov si, ax                  ; "clobbers SI"
     mov di, dsk_ent             ; CX is still DSK_DE_STRIDE: `mul` writes DX:AX
     call fmv_copy_in
@@ -1132,6 +1182,9 @@ fmv_store:
     jz .none                    ; no cache: nothing to write it into, and
                                 ; nothing but the GLOBAL shape to read it
                                 ; back with (SPEC.md 22.6.1)
+%ifdef DSK_BIGDIR
+    mov dx, [di+FS_N]           ; the index bytes to carry (DX is free here:
+%endif                          ; fmv_copy_out banks it, kretc_di restores it)
     push di
     call fmv_iofs               ; BX = where the icons start in a slot
 
@@ -1148,8 +1201,14 @@ fmv_store:
     cmp ax, [dsk_dseg]
     je .shape
     mov si, [dsk_doff]
+%if FV_DOFF
+    mov di, FV_DOFF             ; entries after the bitmap, and the bitmap is
+    mov cx, bx                  ; NOT copied: it is the destination's own
+    sub cx, FV_DOFF             ; selection, which this routine has just
+%else                           ; emptied (SPEC.md 22.6.4)
     xor di, di
     mov cx, bx
+%endif
     call fmv_copy_out
     ; SPEC.md 25.8.5: the cache MIRRORS the listing - one index byte per entry
     ; - so both halves are block copies and the window holds what the listing
@@ -1162,7 +1221,12 @@ fmv_store:
 %if FV_ICOIX                    ; and are in the machine-wide store instead, so
     add di, FV_ICOIX
 %endif
+%ifdef DSK_BIGDIR
+    mov cx, dx                  ; FS_N of them, rounded up to the word
+    inc cx                      ; fmv_copy_out moves (SPEC.md 22.6.4)
+%else
     mov cx, DSK_ICOIX_N         ; a window carries one byte an entry rather
+%endif
     call fmv_copy_out           ; than 64. IT IS fmv_copy_out NOW and not a
 .shape:                         ; hand-rolled LOW_SEG copy: the index follows
     pop di                      ; the entries into whatever store the mount
@@ -1234,6 +1298,79 @@ fmv_fit:
     mov bx, [di+FS_VSEG]        ; fm_vseg is what every reader looks at, and
     mov [fm_vseg], bx           ; this may just have changed it
     jmp kretc_di
+
+%ifdef DSK_BIGDIR
+; -----------------------------------------------------------------------------
+; fmv_cap - how many entries DI's listing claim holds (SPEC.md 22.6.4)
+; in:  DI = state block; out: AX = FS_VKB x 32 (0 with no claim). All other
+;      registers preserved; flags clobbered
+; fmv_need - the other way: AX = entries -> AL = the KB that holds them,
+;      ceil(n / 32) and never under VIEW_KB, never past DSK_NENT's 32. AH and
+;      the flags clobbered
+; THIRTY-TWO AN KB, because it is a shift both ways and it is safe: an entry
+; is 25 bytes - DSK_DE_STRIDE and its reference byte - so 32 of them are 800
+; and the 224 left over is FV_FIX's bitmap and boundary pad once the claim is
+; 2KB or more, which VIEW_KB makes it. 2KB holds 64, exactly what it held
+; before; the ceiling's 1,024 is 32KB
+; -----------------------------------------------------------------------------
+fmv_cap:
+    mov ah, [di+FS_VKB]         ; KB x 256...
+    mov al, 0
+    shr ax, 1                   ; ...x 32
+    shr ax, 1
+    shr ax, 1
+    ret
+
+fmv_need:
+    cmp ax, DSK_NENT
+    jbe .n
+    mov ax, DSK_NENT
+.n:
+    add ax, 31
+    shl ax, 1                   ; AH = AX / 32 (AX <= 1,055, so x 8 fits)
+    shl ax, 1
+    shl ax, 1
+    mov al, ah
+    cmp al, VIEW_KB
+    jae .k
+    mov al, VIEW_KB
+.k:
+    ret
+%if (DSK_NENT + 31) / 32 > 255 || 25*64 + FV_FIX > VIEW_KB*1024 || VIEW_KB < 2
+  %error "fmv_cap's 32 an KB holds only from 2KB up, and FS_VKB is a byte"
+%endif
+
+; -----------------------------------------------------------------------------
+; fmv_rsz - make DI's listing claim AL KB (SPEC.md 22.6.4)
+; out: CF = 0 done; CF = 1 it is that size already, or the grow was refused
+;      and the claim stands as it was. All registers preserved.
+; mem_regrow: a shrink keeps the base and cannot fail; a grow extends in
+; place or MOVES, and does not call the relocation proc - its caller is the
+; one told (SPEC.md 66.7) - so FS_VSEG is written here, and fmv_load's only
+; grow goes straight back to fmv_fit, which republishes the [fm_vseg] mirror.
+; Never with [dsk_dseg] aimed at the claim: fmv_load retires it first
+; -----------------------------------------------------------------------------
+fmv_rsz:
+    cmp al, [di+FS_VKB]
+    stc
+    je .no
+    push ax
+    push bx
+    push dx
+    cbw                         ; AX = KB (AL <= 32)
+    mov dx, [di+FS_VSEG]
+    call fmv_owner              ; BX
+    call mem_regrow             ; DX = its base now
+    jc .out
+    mov [di+FS_VKB], al
+    mov [di+FS_VSEG], dx
+.out:
+    pop dx
+    pop bx
+    pop ax
+.no:
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; fmv_owner - who owns this window's listing cache (internal)
@@ -1476,6 +1613,10 @@ fmv_icorefs:
                                 ; FSD_CACHE is stronger and is left alone
 %endif
     mov dx, [di+FS_VSEG]        ; ...and ONLY NOW, re-read (see the header)
+%ifdef DSK_BIGDIR
+    mov bx, FV_DOFF             ; ...at the shape it was filled with: entries
+    mov ax, [di+FS_N]           ; past the bitmap, the index past FS_N of them
+%endif                          ; (SPEC.md 22.6.4)
     call dsk_dest_x             ; (BX is 0 already, from above)
     mov bp, [di+FS_N]
     call dsk_icopass
@@ -1540,14 +1681,23 @@ fmv_load:
     ; the mount went quiet, and fmv_store then re-claimed an EMPTY cache: the
     ; window read "0 files" until Refresh, measured on the 128KB machine by
     ; launching Gorillas over a GAMES window. Retried here, the listing lands.
+%ifdef DSK_BIGDIR
+    mov word [dsk_hbud], DSK_HARV_MAX   ; the icon peeks THIS LISTING may
+.again:                         ; spend, once and not per mount (22.6.4)
+%endif
     call fmv_fit
     push dx                     ; (AX: dsk_dest_x keeps it - kernel size
     push bx                     ; pass 17)
     mov dx, [di+FS_VSEG]        ; 0 = this window has NO store, and there is
-    call dsk_dest_b0            ; no floor to fall back to any more: the
-                                ; mount goes quiet and the window paints
-                                ; SPEC.md 22's refusal in its row area
-                                ; instead of a listing (13.5 commit 3)
+%ifdef DSK_BIGDIR               ; no floor to fall back to any more: the
+    push ax                     ; mount goes quiet and the window paints
+    call fmv_cap                ; SPEC.md 22's refusal in its row area
+    mov bx, FV_DOFF             ; instead of a listing (13.5 commit 3). AX =
+    call dsk_dest_x             ; as many entries as the claim holds, past
+    pop ax                      ; its bitmap (SPEC.md 22.6.4)
+%else
+    call dsk_dest_b0
+%endif
     pop bx
     pop dx
 
@@ -1603,10 +1753,38 @@ fmv_load:
     ; standing proof that nothing in that span can reach a claim - fmv_fit
     ; above being the one exception, and it claims only for a window that had
     ; none, where this word is naming the floor.
+%ifdef DSK_BIGDIR
+    mov cx, [dsk_nover]         ; (read before the aim below zeroes it)
+%endif
     xor dx, dx                  ; NOWHERE, which is now the default: the
     call dsk_dest_x             ; floor listing is gone and a mount with no
                                 ; store is quiet (13.1); BX/DX come back
-    jmp kretc_di                ; off the ladder
+%ifdef DSK_BIGDIR               ; off the ladder
+    ; --- THE CLAIM FOLLOWS THE FOLDER (SPEC.md 22.6.4) ---------------------
+    ; AFTER the destination is retired, because a grow is a claim and a
+    ; claim may compact (66.5.10.2; tools/dsegaudit.py). Entries that did
+    ; not fit were COUNTED: grow to hold twice what fit plus those - exact on
+    ; a FAT volume, whose scan counts every one, and a doubling on a
+    ; redirected one, whose driver stops at its first refusal - and list
+    ; again. Nothing that fit: cut the claim back to this folder's size,
+    ; never under VIEW_KB, which is what lets a folder of 66 or fewer come
+    ; and go with no grow and no second mount at all. A grow refused keeps
+    ; the listing that fit, which is the refusal SPEC.md 50.3 asks for
+    mov ax, [di+FS_N]
+    jcxz .size
+    add ax, ax
+    add ax, cx
+.size:
+    call fmv_need               ; AL = the KB that holds that many
+    call fmv_rsz
+    jc .done                    ; that size already, or a grow refused
+    jcxz .done                  ; ...a cut, and nothing more to do
+    mov dl, [di+FS_DRV]         ; ...a grow: list again, where the first
+    mov ax, [di+FS_CWD]         ; mount actually landed
+    jmp .again
+.done:
+%endif
+    jmp kretc_di
 
 ; -----------------------------------------------------------------------------
 ; fm_measure - fill one window's FS_FREE / FS_USED (SPEC.md 22.7)
@@ -1991,7 +2169,9 @@ fmv_bcast:
     jne .next
     call fmv_take               ; adopt the acting window's listing: still
                                 ; pure memory, one claim to another
-    mov byte [di+FS_DIRTY], FSD_PIXELS  ; ...AND SAY WHICH DEBT IS LEFT. This
+%ifndef DSK_BIGDIR                      ; (on this build fmv_take says it, and
+    mov byte [di+FS_DIRTY], FSD_PIXELS  ; only when the listing FIT). AND SAY
+%endif                                  ; WHICH DEBT IS LEFT. This
                                 ; sibling's CACHE is now the folder and only
                                 ; its pixels are old, so fm_focus owes it a
                                 ; repaint and not a mount (22.8). It used to
@@ -2034,12 +2214,24 @@ fmv_take:
     or dx, dx
     jz .out                     ; the source has no store, so there is no
                                 ; listing anywhere to hand over
-    mov ax, [si+FS_N]
-    mov [di+FS_N], ax
+%ifdef DSK_BIGDIR
+    mov al, [si+FS_VKB]         ; ...AND IT HAS TO FIT (SPEC.md 22.6.4): a
+    cmp [di+FS_VKB], al         ; listing is sized to its folder, so a sibling
+    jb .out                     ; holding less keeps the RE-LIST fmv_mark put
+                                ; on it when the write changed this folder
+    mov byte [di+FS_DIRTY], FSD_PIXELS  ; ...and with the copy, only a repaint
+%endif
     mov al, [si+FS_MOK]         ; the mount's verdict travels with the listing
     mov [di+FS_MOK], al         ; it describes, and that mount was the
                                 ; source's (SPEC.md 18.4)
+    mov ax, [si+FS_N]
+    mov [di+FS_N], ax
+%ifdef DSK_BIGDIR
+    mov bx, FV_DOFF             ; entry 0 past the source's bitmap, and AX =
+    call dsk_dest_x             ; its count, which places its index
+%else
     call dsk_dest_b0            ; entry 0 at the base of the source's claim
+%endif
     call fmv_store              ; ...which copies it into DI's own
     xor dx, dx                  ; and the destination goes back to NOWHERE,
     call dsk_dest_x             ; for fmv_load's reason: a `.bss` word may not
@@ -3596,7 +3788,7 @@ fm_onclick_x:
     mov di, bx                  ; ...which is the multi-selection's own diff
     call fm_mone                ; from the selection there is - one entry or
                                 ; a set (SPEC.md 22.27) - to the one entry AX,
-    mov [fm_anch], al           ; which is the Shift anchor now (0FFh: none,
+    mov [fm_anch], ax           ; which is the Shift anchor now (0FFFFh: none,
 %else                           ; so a drag select anchors where it starts)
     mov dx, [fm_lsel]           ; the mirror still names the OLD selection
     mov [bx+FS_SEL], ax
@@ -3636,9 +3828,10 @@ fm_onclick_x:
     call fm_menter
     xchg ax, dx                 ; AX = the index
     call fm_mbit                ; (BX is spent: nothing below reads it)
-    xor [bx], ch
+    mov cl, ch
+    call fm_mxor
     call fm_sel_bar
-    mov [fm_anch], al           ; ...and the next Shift run starts here
+    mov [fm_anch], ax           ; ...and the next Shift run starts here
     call fm_mfocus              ; the focus is the row clicked
     jmp .quiet
 
@@ -4337,11 +4530,17 @@ fm_open_sel:
                                 ; through to the package route the same way
 .package:
     inc ax                      ; index + 1: ui.inc runs the loader once the
-    mov [ld_pending], al        ; lock drops (SPEC.md 21) - a BYTE, and
-                                ; AH is 0 anyway: the index came out of a
-                                ; [dsk_nmax]-bounded loop
+%ifdef DSK_BIGDIR               ; lock drops (SPEC.md 21) - a WORD on this
+    mov [ld_pending], ax        ; build (SPEC.md 22.6.4: index 255 + 1 is
+    inc byte [ui_post]          ; 256, whose low byte is the 0 that means
+                                ; "none"), and SAY SO with the shared idiom
+                                ; rather than AL, which is 0 there too
+%else
+    mov [ld_pending], al        ; a BYTE, and AH is 0 anyway: the index came
+                                ; out of a [dsk_nmax]-bounded loop
     mov [ui_post], al           ; ...and SAY SO once (SPEC.md 13.13): AL is
                                 ; the index + 1, so never 0
+%endif
     mov [ld_pwin], di           ; ...resolved against THIS window (22.1)
 .quiet:
     clc                         ; A PACKAGE AND A DOCUMENT BOTH OPEN SOMEBODY
@@ -5047,14 +5246,16 @@ fm_arm_sel:
 %ifdef FM_MSEL
 fm_mdelarm:                     ; (Rename names the focus, as every one-name-
     push ax                     ; box command does)
-    xor dx, dx                  ; DL = the entries it will delete, DH = a
-    mov bx, fm_mw_cnt           ; folder among them
-    call fm_mwalk
-    or dl, dl
-    jz fm_arm_sel.none          ; nothing but '..': a no-op
-    mov [fm_odir], dh           ; ...'+contents' on the line
-    xchg ax, dx                 ; AL = the count, < 64...
-    cbw                         ; ...so AH = 0
+    xor dx, dx                  ; DX = TWICE the entries it will delete,
+    mov bx, fm_mw_cnt           ; bit 0 = a folder among them - a WORD count
+    call fm_mwalk               ; (SPEC.md 22.6.4: a set runs past 255, and
+    cmp dx, 2                   ; the byte this was, under a `cbw`, went
+    jb fm_arm_sel.none          ; negative at 128). Nothing but '..': a no-op
+    mov al, dl
+    and al, 1
+    mov [fm_odir], al           ; ...'+contents' on the line
+    xchg ax, dx
+    shr ax, 1                   ; AX = the count
     mov di, fm_onam             ; fm_onam is what the line SAYS: '5 items'
     call fm_utoa
     mov si, fm_s_items
@@ -5773,7 +5974,7 @@ fm_mw_rec:                      ; Copy's list: the next record, at ES:[fcp_lcnt]
     mov cx, 15
     rep movsb
     pop di
-    add word [fcp_lcnt], 16     ; (CF = 0: 64 records are 1,024 bytes)
+    add word [fcp_lcnt], 16     ; (CF = 0: 1,024 records are 16KB)
     ret
 
 fm_mw_1st:                      ; the walk's FIRST entry, in AX: a stop
@@ -5805,7 +6006,18 @@ fm_armset:
     jc .out
     call fcp_arm
     push es
+%ifdef DSK_BIGDIR
+    mov ax, [di+FS_N]           ; a record of 16 bytes for every entry the
+    mov cl, 6                   ; set COULD hold - 64 a KB, and one over. It
+    shr ax, cl                  ; was a fixed 1KB, which was 64 records and
+    inc ax                      ; the whole of a 64-entry listing; past that, a
+                                ; big set ran fm_mw_rec off the end of the
+                                ; claim (SPEC.md 22.6.4). 16KB at the 1,024
+                                ; ceiling, PURGEABLE and only while a Cut or
+                                ; Copy of a set is on the clipboard
+%else
     mov ax, 1                   ; 64 records of 16 bytes
+%endif
     mov bx, MEM_P_FLIST         ; PURGEABLE at MED: its zero is an empty
     call mem_claim_x            ; clipboard, which Paste already handles
     jc .none
@@ -8189,9 +8401,14 @@ fm_sel_bar:                     ; comes back holding it)
 fm_misin:
     push bx
     call fm_mbit
-    test [bx], ch
+    xor cl, cl
+    call fm_mdiff
     pop bx
     ret
+; THE BITMAP IS IN THE LISTING CLAIM (SPEC.md 22.6.4): FM_MSELB bytes at
+; offset 0 of DI's FS_VSEG, so BX is an offset THERE and every touch is the
+; two routines below, each lending ES for one instruction. An index bounded
+; by FS_N implies the claim: a window with none had a quiet mount and FS_N 0
 fm_mbit:
     mov bx, ax
     mov cl, 3
@@ -8200,32 +8417,65 @@ fm_mbit:
     and cl, al
     mov ch, 1
     shl ch, cl
-    lea bx, [bx+di+FS_MSEL]
+    ret
+; fm_mdiff - CL ^= the bitmap's byte BX, then CL &= CH: ZF = 1 when bit CH
+; of that byte is what CL said it should be
+fm_mdiff:
+    push es
+    mov es, [di+FS_VSEG]
+    xor cl, [es:bx]
+    pop es
+    and cl, ch
+    ret
+; fm_mxor - the bitmap's byte BX ^= CL; every register and flag but those
+; the `xor` writes preserved
+fm_mxor:
+    push es
+    mov es, [di+FS_VSEG]
+    xor [es:bx], cl
+    pop es
     ret
 
-; fm_many - ZF = 1 when DI's bitmap is EMPTY (the single selection rules).
-; fm_manyvp loads DI = [fm_vp] first, for the three callers that had it inline
+; fm_many - ZF = 1 when DI's bitmap is EMPTY (the single selection rules),
+; and when DI has no claim to hold one. fm_manyvp loads DI = [fm_vp] first,
+; for the three callers that had it inline. fm_mzero - DI's bitmap emptied
+; WITHOUT drawing, for a caller whose window is repainted anyway (fmv_store)
+; or whose bands are already right (fm_mone). One body, and BL picks the
+; string op
+fm_mzero:
+    push bx
+    mov bl, 0FFh
+    jmp short fm_many.go
 fm_manyvp:
     mov di, [fm_vp]
 fm_many:
+    push bx
+    mov bl, 0
+.go:
     push ax
-    mov ax, [di+FS_MSEL]
-    or ax, [di+FS_MSEL+2]
-    or ax, [di+FS_MSEL+4]
-    or ax, [di+FS_MSEL+6]
-    pop ax
-    ret
-
-; fm_mzero - DI's bitmap emptied WITHOUT drawing, for a caller whose window
-; is repainted anyway (fmv_store) or whose bands are already right (fm_mone)
-fm_mzero:
-    push ax
+    push cx
+    push di
+    push es
+    mov ax, [di+FS_VSEG]
+    or ax, ax
+    jz .out                     ; no claim: no set (ZF = 1)
+    mov es, ax
+    xor di, di
     xor ax, ax
-    mov [di+FS_MSEL], ax
-    mov [di+FS_MSEL+2], ax
-    mov [di+FS_MSEL+4], ax
-    mov [di+FS_MSEL+6], ax
+    mov cx, FM_MSELB/2
+    cld
+    or bl, bl
+    jnz .zero
+    repe scasw                  ; ZF = 1: all zero
+    jmp short .out
+.zero:
+    rep stosw                   ; (ZF from `or bl, bl`: the caller of
+.out:                           ; fm_mzero reads none)
+    pop es
+    pop di
+    pop cx
     pop ax
+    pop bx
     ret
 
 ; fm_mset - MAKE DI's selection the run of indices AX..DX, AX <= DX (an end
@@ -8261,13 +8511,12 @@ fm_mset:
     ja .t
     mov cl, ch
 .t:
-    xor cl, [bx]                ; ...against its bit in the set
-    and cl, ch
+    call fm_mdiff               ; ...against its bit in the set
     jz .n
     call fm_sel_bar             ; range- and visibility-checked by itself
     cmp si, dx
     ja .n                       ; fm_mdraw's
-    xor [bx], cl
+    call fm_mxor
 .n:
     inc ax
     jmp short .l
@@ -8282,12 +8531,13 @@ fm_menter:
     push bx
     push cx
     mov ax, [di+FS_SEL]
-    mov [fm_anch], al
+    mov [fm_anch], ax
     inc ax                      ; 0FFFFh: nothing selected, no bit
     jz .none
     dec ax
     call fm_mbit
-    or [bx], ch
+    mov cl, ch                  ; (the set is empty: XOR is OR)
+    call fm_mxor
 .none:
     pop cx
     pop bx
@@ -8313,13 +8563,12 @@ fm_mone:
 ; .run takes the run in AX..DX itself, either order (Ctrl+A). AX = the focus
 fm_mto:
     call fm_menter              ; (from one entry: it is the first bit, and
-    mov al, [fm_anch]           ; the anchor)
-    cmp al, [di+FS_N]           ; (FS_N <= 64: its low byte is all of it)
-    jb .a
-    mov al, dl
-    mov [fm_anch], al
+    mov ax, [fm_anch]           ; the anchor). A WORD, both of them: a listing
+    cmp ax, [di+FS_N]           ; runs to 1,024 entries (SPEC.md 22.6.4), and
+    jb .a                       ; the byte this was read past 64 and the `cbw`
+    mov ax, dx                  ; it ended in made every index from 128 up a
+    mov [fm_anch], ax           ; negative one
 .a:
-    cbw                         ; (an index < 64: AH = 0)
 .run:
     push dx                     ; the focus
     cmp ax, dx
@@ -8394,9 +8643,9 @@ fm_mwalk:
 .out:
     ret
 
-fm_mw_cnt:                      ; Delete's count: DL entries, DH = a folder
-    inc dx                      ; among them (the line's '+contents')
-    or dh, [fm_odir]            ; (`or` clears CF)
+fm_mw_cnt:                      ; Delete's count: DX += 2 an entry, bit 0 =
+    add dx, 2                   ; a folder among them (the line's '+contents';
+    or dl, [fm_odir]            ; [fm_odir] is 0 or 1). `or` clears CF
     ret
 
 fm_mw_del:                      ; Delete itself, by NAME
@@ -9359,12 +9608,13 @@ fmv_uy1:    resw 1              ; every Disk window's frame is folded into,
 fmv_ux2:    resw 1              ; spent as ONE wm_paint_dmg so that no window
 fmv_uy2:    resw 1              ; is painted twice; 0 = nothing folded in
 %ifdef FM_MSEL
-fm_pool:    resb 5*69           ; ...and 8 more a block for SPEC.md 22.27
- %if FM_NSLOT*FS_SIZE != 5*69
+fm_pool:    resb 5*61           ; FM_NSLOT x FS_SIZE: SPEC.md 22.27's 8 a
+ %if FM_NSLOT*FS_SIZE != 5*61   ; block went into the listing claim (22.6.4)
   %error "files: fm_pool's literal has drifted from FM_NSLOT x FS_SIZE"
  %endif
-fm_anch:    resb 1              ; the Shift anchor (SPEC.md 22.27), an index
-                                ; into the front window's listing, 0FFh none
+fm_anch:    resw 1              ; the Shift anchor (SPEC.md 22.27), an index
+                                ; into the front window's listing, 0FFFFh none
+                                ; - a WORD since SPEC.md 22.6.4
 %elifdef KERN_BIG
 fm_pool:    resb 5*61           ; FM_NSLOT x FS_SIZE (5 x 61; a literal per
  %if FM_NSLOT*FS_SIZE != 5*61   ; the no-forward-ref-in-bss rule - so the equs

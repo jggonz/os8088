@@ -2069,16 +2069,24 @@ ld_msrc:    resw 2              ; OSAPI_PKG_START's source image, offset then
                                 ; ld_alloc's chain runs mem_compact and a
                                 ; package's relocation procs, and no register
                                 ; survives that by contract
+%ifdef DSK_BIGDIR
+ld_pending: resw 1              ; 0 = none, else directory index + 1
+                                ; (set by files.inc, consumed by ui.inc).
+                                ; A WORD on this build: a listing is sized to
+                                ; its folder up to DSK_NENT = 1,024 entries
+                                ; (SPEC.md 22.6.4), so index + 1 runs past a
+                                ; byte - and at 256 it wrapped to the 0 that
+                                ; means "nothing pending"
+%else
 ld_pending: resb 1              ; 0 = none, else directory index + 1
                                 ; (set by files.inc, consumed by ui.inc).
-                                ; A BYTE: the index is bounded by
-                                ; [dsk_nmax], which is DSK_NENT for every
-                                ; volume on the machine (SPEC.md 22.6 retired
-                                ; the driver-backed DSK_VENT), so the stored
-                                ; value is 1..64
-%if DSK_NENT > 254
+                                ; A BYTE here: kern_small lists DSK_NENT = 32
+                                ; entries (SPEC.md 22.6.2), so the stored
+                                ; value is 1..32
+ %if DSK_NENT > 254
   %error "[ld_pending] is a BYTE holding a directory index + 1, and \
 [dsk_nmax] has outgrown it (kernel/dskwin.inc)"
+ %endif
 %endif
 ld_pwin:    resw 1              ; -> the state block of the file-manager
                                 ; window that posted it, 0 = none. The index

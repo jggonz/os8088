@@ -335,7 +335,7 @@ def listing(b, blk):
     vseg, = struct.unpack("<H", b.memr(blk + G.FS_VSEG, 2))
     if not n or not vseg:
         return []
-    raw = b.memr(seg_lin(b, vseg), n * G.DSK_DE_STRIDE)
+    raw = b.memr(seg_lin(b, vseg) + G.FV_DOFF, n * G.DSK_DE_STRIDE)
     return [(raw[i * G.DSK_DE_STRIDE:i * G.DSK_DE_STRIDE + 16]
              .split(b"\0")[0].decode("latin-1"),
              struct.unpack_from("<H", raw, i * G.DSK_DE_STRIDE

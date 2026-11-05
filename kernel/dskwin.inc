@@ -231,7 +231,28 @@ DSK_ICOIX_N  equ DSK_NENT        ; one REFERENCE byte per entry, and DSK_NENT
 ; DEFAULT that cap wants is kern_big's; `--kern-small` is what selects the
 ; other, and t_mirror is what would notice if the parse stopped working.
 %ifndef KERN_SMALL
-DSK_NENT     equ 64
+%ifndef KD_BUILD
+DSK_NENT     equ 1024           ; a CEILING on this build, not a size: the
+                                 ; listing is a claim sized to the folder it
+                                 ; holds (SPEC.md 22.6.4), and this is where
+                                 ; every index and offset stays a 16-bit
+                                 ; product - and where the multi-selection's
+                                 ; 128-byte bitmap ends
+DSK_HARV_MAX equ 16             ; ...and the most `int 13h` peeks one
+                                 ; LISTING may spend harvesting icons (22.6.4):
+                                 ; a body already in the store costs none, so
+                                 ; a folder of new packages fills in sixteen at
+                                 ; a visit and the rest draw the generic icon
+%define DSK_BIGDIR               ; the listing is SIZED TO ITS FOLDER (SPEC.md
+                                 ; 22.6.4): a claim that grows for a big
+                                 ; folder and shrinks back, word-wide indices.
+                                 ; kern_big and kern_mega; kern_small keeps
+                                 ; the fixed 32-entry listing below, which is
+                                 ; all its disks have ever needed (22.6.2)
+%else
+DSK_NENT     equ 64             ; kern_dos: no Disk window, so no claim to
+                                 ; size - the fixed listing it always had
+%endif
 %else
 DSK_NENT     equ 32
 %endif

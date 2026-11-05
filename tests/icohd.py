@@ -131,10 +131,10 @@ def main():
             vs = rd(vp + V("FS_VSEG"), 2)
             if not vs:
                 fail("%s: the acting Disk window holds no listing" % p)
-            n, live = rd(V("dsk_nmax"), 2), rd(vp + V("FS_N"), 2)
-            st = V("DSK_DE_STRIDE")
-            raw = m.read(lin(vs), n * st)
-            ix = m.read(lin(vs, n * st), n)
+            n = live = rd(vp + V("FS_N"), 2)    # the window's own shape
+            st = V("DSK_DE_STRIDE")             # (SPEC.md 22.6.4)
+            raw = m.read(lin(vs, V("FV_DOFF")), n * st)
+            ix = m.read(lin(vs, rd(vp + V("FS_IOFH"), 1) << 8), n)
             names = [raw[i * st:i * st + 16].split(b"\0")[0].decode("latin-1")
                      for i in range(min(live, n))]
             gen = [nm for nm, r in zip(names, ix) if r == 0xFF and nm != ".."]

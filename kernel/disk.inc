@@ -3734,7 +3734,14 @@ osapi_fs_ent_x:
     je .no
     mov ax, [dsk_fsn]
     cmp ax, [dsk_nmax]
+%ifdef DSK_BIGDIR
+    jb .room                    ; full: SAY there was more (SPEC.md 22.6.4).
+    inc word [dsk_nover]        ; Every shipped driver stops at its first
+    jmp short .no               ; refusal, so this counts 1 and not the rest,
+.room:                          ; and fmv_load grows by DOUBLING for that
+%else
     jae .no                     ; SPEC.md 19's cap for this volume: the extras
+%endif
                                 ; are invisible, exactly as they are on a FAT
                                 ; volume whose folder overruns it
     mov dx, es                  ; the driver's segment...
@@ -4062,7 +4069,11 @@ disk_mount_x:
                                 ; the whole mount: a torn mount leaves it
                                 ; closed, so nothing can write a volume
                                 ; whose layout was never fully validated
+%ifdef DSK_BIGDIR
+    mov [ld_pending], ax        ; a queued click indexes the OLD directory;
+%else
     mov [ld_pending], al        ; a queued click indexes the OLD directory;
+%endif
                                 ; never let it run against the new one
     cmp [dsk_keepcwd], al       ; a remount always lands at the root, and
     jne .cwd_kept               ; dskw_* resolve there until dsk_chdir
@@ -4268,13 +4279,22 @@ disk_mount_x:
                                 ; (SPEC.md 19.2) - listing them would put
                                 ; two undeletable oddities in every folder
     ; accepted: synthesize in kernel scratch, copy out (DS stays kernel)
+%ifdef DSK_BIGDIR
+    cmp bp, [dsk_nmax]          ; THE CAP IS THE CLAIM'S (SPEC.md 22.6.4): an
+    jb .store                   ; entry past it is COUNTED and the walk goes
+    inc word [dsk_nover]        ; on, so fmv_load learns how big the folder
+    jmp short .skip             ; really is and can grow the claim to fit
+.store:
+%endif
     call dsk_synth_x              ; ES:SI raw entry -> dsk_ent (SPEC.md 19)
     mov ax, bp                  ; (AX is dead here: .entry reloads AL and AH,
     call dsk_put_dir            ; and nothing past .scan_done reads it) -> the
                                 ; listing, wherever it lives
     inc bp
+%ifndef DSK_BIGDIR
     cmp bp, [dsk_nmax]
     jae .scan_done              ; the cap: extras are invisible
+%endif
 .skip:
     add si, 32
     loop .entry
@@ -4295,6 +4315,68 @@ disk_mount_x:
 
 
 
+%ifdef DSK_BIGDIR
+    ; A SHELL SORT (SPEC.md 19.4.1), because a listing runs to DSK_NENT =
+    ; 1,024 entries on this build (22.6.4) and the selection sort below is
+    ; n(n-1)/2 compares: 2,016 at 64, 32,640 at 256 and over half a million
+    ; at 1,024, at a few hundred cycles each with the case fold - seconds on a
+    ; 4.77 MHz 8088 by 256. Knuth's gaps h = 3h'+1, kept in BYTES (h x 24):
+    ; each one is found again by climbing the sequence under the last, so
+    ; there is no divide and no table. Insertion within a gap only moves an
+    ; entry past a STRICTLY greater one, so equal keys keep their order
+    cmp cx, 2
+    jb .sd_out                  ; 0 or 1 entries are already in order
+    push bp                     ; BP = the gap, in bytes: disk_mount_x's
+    mov ax, DSK_DE_STRIDE       ; count is banked across the sort
+    mul cx                      ; DX:AX, DX 0: count <= DSK_NENT
+    mov bp, ax                  ; BP = the span, the first gap's bound
+    add ax, bx
+    xchg ax, dx                 ; DX = one past the last entry
+.sh_gap:
+    xor ax, ax                  ; SI = the largest gap below BP
+.sh_seq:
+    mov si, ax
+    shl ax, 1
+    add ax, si
+    add ax, DSK_DE_STRIDE       ; AX = 3 x SI + one entry
+    cmp ax, bp
+    jb .sh_seq
+    mov bp, si
+    or bp, bp
+    jz .sh_done                 ; the 1-gap pass was the last
+    mov cx, bx
+    add cx, bp                  ; CX = i, the entry being inserted
+.sh_i:
+    cmp cx, dx
+    jae .sh_gap
+    mov si, cx                  ; SI = j
+.sh_j:
+    mov di, si
+    sub di, bp                  ; DI = j - gap...
+    jc .sh_next
+    cmp di, bx                  ; ...unless that is before the first entry
+    jb .sh_next
+    call dsk_sdcmp
+    jae .sh_next                ; [j] does not sort before [j - gap]
+    push cx                     ; --- exchange [SI] and [DI] ---
+    push di
+    mov cx, DSK_DE_STRIDE
+.sh_swap:
+    mov al, [es:si]
+    xchg al, [es:di]
+    mov [es:si], al
+    inc si
+    inc di
+    loop .sh_swap
+    pop si                      ; j = j - gap
+    pop cx
+    jmp short .sh_j
+.sh_next:
+    add cx, DSK_DE_STRIDE
+    jmp short .sh_i
+.sh_done:
+    pop bp
+%else
     cmp cx, 2
     jb .sd_out                     ; 0 or 1 entries are already in order
     mov ax, DSK_DE_STRIDE       ; count * DSK_DE_STRIDE. A MULTIPLY, because
@@ -4382,6 +4464,7 @@ disk_mount_x:
 .sd_next:
     add bx, DSK_DE_STRIDE
     jmp short .sd_outer
+%endif
 .sd_out:
 
     ; Blank EVERY icon slot up front so none ever carries a previous mount's
@@ -4406,8 +4489,15 @@ disk_mount_x:
                                 ; had to be forced to SS. The two are one
                                 ; block in one store now (13.1), so forcing it
                                 ; would blank the wrong segment
+%ifdef DSK_BIGDIR
+    mov ax, bp                  ; THE INDEX FOLLOWS THE ENTRIES STORED, not
+    call dsk_ioffx              ; the room (SPEC.md 22.6.4): its base is the
+    mov di, [dsk_ioff]          ; boundary past them, and only they are
+    mov cx, bp                  ; blanked - so a claim that is then cut down
+%else                           ; to fit keeps every byte it still owes
     mov di, [dsk_ioff]
     mov cx, [dsk_nmax]
+%endif
     mov al, 0xFF
     cld
     rep stosb
@@ -4481,6 +4571,14 @@ disk_mount_x:
     call ico_ref_try            ; a folder, or a body the store already has?
     jnc .h_next                 ; then this entry costs no sector read at all
 .h_read:
+%ifdef DSK_BIGDIR
+    dec word [dsk_hbud]         ; THE PEEK IS BUDGETED (SPEC.md 22.6.4): ~400
+    js .h_zero                  ; ms an `int 13h` on the target, so a folder
+%endif                          ; of new packages is sixteen of them a visit
+                                ; and the generic icon for the rest. A WORD,
+                                ; so it cannot count down far enough to wrap:
+                                ; two mounts of 1,024 entries is the most one
+                                ; listing ever asks of it
     mov ax, [si+18]             ; first cluster - or, on a redirected volume,
                                 ; THE DRIVER'S OPAQUE HANDLE, which is what
                                 ; rd_stage puts at @18 and what FSV_READAT
@@ -5333,6 +5431,44 @@ dsk_up_open:
 ; in:  AL = a byte
 ; out: AL = it, with 'a'..'z' folded
 ; clobbers: AL (the output), flags
+%ifdef DSK_BIGDIR
+; -----------------------------------------------------------------------------
+; dsk_sdcmp - the Shell sort's key compare (SPEC.md 19.4.1), disk_mount_x's
+; alone, out of line so the sort's stack shape is one routine's
+dsk_sdcmp:
+    ; CF = 1 exactly when [ES:SI] sorts before [ES:DI]: folders first
+    ; (19.4 - the type word's bit 1, set for type 2 alone; compared REVERSED,
+    ; so a folder at SI reads as below a file at DI), then the 16-byte display
+    ; name, case-folded and NUL-padded, so PAINT.O88 sorts before PAINT2.O88.
+    ; AX and the flags clobbered; `loop` writes no flag, so sixteen equal
+    ; bytes fall out with the last `cmp` - equal - still in them
+    push cx
+    push si
+    push di
+    mov al, [es:di+16]
+    mov ah, [es:si+16]
+    and ax, 0x0202
+    cmp al, ah
+    jne .cdone
+    mov cx, 16
+.ncmp:
+    mov al, [es:di]
+    call dsk_upper
+    mov ah, al                  ; AH = [DI]'s byte, folded
+    mov al, [es:si]
+    call dsk_upper              ; AL = [SI]'s byte, folded
+    inc si
+    inc di
+    cmp al, ah
+    jne .cdone
+    loop .ncmp
+.cdone:
+    pop di
+    pop si
+    pop cx
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 dsk_upper:
     cmp al, 'a'
@@ -8208,6 +8344,36 @@ dsk_goto:
 ; -----------------------------------------------------------------------------
 ; dsk_dest_b0: the same, with the `xor bx, bx` its callers
 ; spelt at the call (kernel size pass 14: it falls into the body)
+%ifdef DSK_BIGDIR
+; ON THIS BUILD THE SHAPE IS THE CALLER'S TOO (SPEC.md 22.6.4): a store is as
+; big as the folder it was sized for, so AX = how many entries it holds -
+; [dsk_nmax], the scan's cap - and the reference index starts on the first
+; 256-byte boundary PAST the entries, wherever that falls. The boundary is
+; what FS_IOFH's one byte can carry, and "past" rather than "at" is what keeps
+; an empty listing's index off offset 0, which FS_IOFH spends on "none".
+; dsk_ioffx is the second half alone: the scan calls it with its own count
+; once the entries are in, so the index follows THEM rather than the room.
+; [dsk_nover] starts again at every aim, because every loud mount is aimed.
+; in:  DX = the store's segment (0 = none), BX = entry 0's offset in it,
+;      AX = the entries it can hold (or holds, for an existing listing)
+dsk_dest_x:
+    mov [dsk_dseg], dx
+    mov [dsk_doff], bx
+    and word [dsk_nover], 0
+dsk_ioffx:
+    push ax
+    push dx
+    mov [dsk_nmax], ax
+    mov dx, DSK_DE_STRIDE
+    mul dx                      ; DX:AX, DX 0: the count is <= DSK_NENT
+    add ax, [dsk_doff]
+    inc ah                      ; the boundary past the entries...
+    mov al, 0                   ; ...(a mov: `xor` would write the flags,
+    mov [dsk_ioff], ax          ; and nothing here may be asked of them)
+    pop dx
+    pop ax
+    ret
+%else
 dsk_dest_b0:
     xor bx, bx
 dsk_dest_x:
@@ -8223,6 +8389,7 @@ dsk_dest_x:
     pop dx
     pop ax
     ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; dsk_relist - make the global snapshot a real mount again (SPEC.md 18.9)
@@ -10850,6 +11017,17 @@ dsk_bpbok:    resb DVOL_MAX     ; 0 = nothing banked, 1 = banked and good
                                 ; same for an image on a floppy (18.101.7)
 dsk_bpbpre:   resb 1            ; dsk_bpb already holds a banked head
 
+%ifdef DSK_BIGDIR
+dsk_nover:  resw 1              ; entries the last loud mount ACCEPTED but had
+                                ; no room for - past [dsk_nmax], counted and not
+                                ; stored (SPEC.md 22.6.4). Zeroed by dsk_dest_x,
+                                ; which every loud mount's caller calls first;
+                                ; fmv_load grows the claim and lists again
+                                ; while it is not 0
+dsk_hbud:   resw 1              ; the icon peeks this LISTING has left
+                                ; (DSK_HARV_MAX), set once per fmv_load so a
+                                ; grow-and-relist does not spend it twice
+%endif
 dsk_ent:    resb DSK_DE_SIZE    ; one staged directory entry (dsk_get_dir);
                                 ; also the mount's synthesis/harvest scratch.
                                 ; DSK_DE_SIZE and NOT DSK_DE_STRIDE, and the

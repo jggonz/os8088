@@ -1,17 +1,46 @@
 # Big directories — uncapping the Disk window's listing
 
-**OPEN, nothing built.** Studied on `elendilon` at `c797894`, branch
-`disk-file-count`. The ask: a Disk window (and the Standard File chooser,
-which is the same `KIND_FILES` instance) shows at most `DSK_NENT` entries -
-**64 on `kern_big`, 32 on `kern_small`** (SPEC.md 22.6.2) - and should show
-**at least 256**, with icons reused or dropped to the stock icon when there are
-too many. No permanent RAM growth: a claim that grows while a big folder is
-being looked at, and gives the memory back afterwards, is acceptable.
-Pagination is the fallback if that proves impossible.
+**BUILT** on branch `disk-file-count` (off `elendilon` at `c797894`). The
+contract is SPEC.md 22.6.4 (and 19.4.1 for the sort); this file is how it got
+there, and sections 1-6 below are the study as it was written BEFORE the
+build, kept as the record. What the build changed from the study is the next
+section, and it is the part to read.
 
-**Verdict: it is possible, and pagination is not needed.** Almost all of the
-machinery already exists; what the cap is made of is one constant, a handful
-of byte-wide index holders, and a sort that was chosen for 32 entries.
+## 0. What was built, against what was proposed
+
+The owner's answers to the study: **1,024 entries if that costs no more
+resident bytes than 256** (it does not - the widening is the same work either
+way), **under 250 resident bytes in all**, `kern_small` may be left out
+entirely, and **at most 16 icon reads a listing**.
+
+| | proposed | built |
+|---|---|---|
+| ceiling | 1,024 big / 256 small | **1,024 on `kern_big` and `kern_mega`; `kern_small` untouched** (32, `DSK_BIGDIR` undefined) and `kern_dos` untouched (64) |
+| claim size | 25 bytes an entry + 384, KB-rounded | **32 entries a KB** (`fmv_cap` / `fmv_need` are shifts): 2KB holds 64 exactly as before, 32KB the ceiling. The 25-an-entry version cost a 16-bit divide each way, ~30 bytes more |
+| never under | - | `VIEW_KB` (2KB): a folder of 64 or fewer never grows, never re-lists, never shrinks - the common case is byte-for-byte today's |
+| redirected volumes | not considered | drivers stop at their first `OSAPI_FS_ENT` refusal, so the overflow count is 1 there; the grow is to `2 x FS_N + over`, a doubling, which is exact on FAT and bounded on a driver |
+| icon budget | 64 reads | **16** (`DSK_HARV_MAX`), a word counted down per `fmv_load`, not per mount |
+| status line `N of M shown` | wave 1 | **not done**: a per-window word and a format, and the bar was resident bytes. A truncated listing (ceiling, refused grow) shows the count it lists |
+| multi-select bitmap | into the claim | as proposed: 128 bytes at the HEAD of the claim, entries at `FV_DOFF` = 128, so a re-list in place (`FM_MKEEP`) can never write over it |
+| sibling adoption (`fmv_take`) | not in the study | a sibling whose claim is smaller than the source keeps its `FSD_CACHE` debt and re-lists on focus rather than being grown inside a broadcast |
+
+**Measured cost** (`tools/kernsize.py` sections, against the commit before):
+`kern_big` **+218 resident bytes** - `.cold` +252, `.bss` -34 (the 40 of the
+pool's bitmap back, less six of new words), `.text` +0. `kern_small` +0.
+`kern_mega` +218. Along the way: two `t_hotpar` parity hits (fixed by making
+the harvest budget a word, `dec`/`js`, which is 5 bytes shorter, and a 2-byte
+shorter bound in the sort - an odd net that put `dsk_next_clus_x` back on an
+even shift with no pad), a `stkbalance` false path (the old and new sorts
+shared local label names across an `%ifdef`; the walker reads both arms), and
+`kern_dos` outgrowing `KD_IMG_KB` the moment `DSK_BIGDIR` reached it.
+
+**Verification**: `tests/bigdir.py` (soak), 300 entries on a scratch 720KB B:
+with no `ASSOC.DAT` - every check green, and nine of eleven red with the grow
+refused. The harness readers that assumed entries at offset 0 of a window's
+claim, or an index `[dsk_nmax]` wide, were moved to `FV_DOFF` and
+`FS_IOFH x 256`: `tools/os88ui.py`, `tests/dispcp.py`, `msel`, `ascabsorb`,
+`icogrow`, `icohd`, `icostore`, `hdnoclaim`, `megacdrom`;
+`tools/os88geom.py` mirrors `FV_DOFF`.
 
 ## 1. What the cap actually is today
 

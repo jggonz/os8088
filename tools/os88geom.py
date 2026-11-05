@@ -283,6 +283,10 @@ _MIRROR = {
     # `(FS_IOFH << 8) + FV_ICOIX + entry`.
     "FS_IOFH": ("kernel/files.inc", 15),
     "FV_ICOIX": ("kernel/files.inc", 0),
+    # ...and where ENTRY 0 is in that cache (SPEC.md 22.6.4): past the
+    # multi-selection's bitmap, which kern_big keeps at the head of the claim.
+    # kern_small has no bitmap and its entries start at 0.
+    "FV_DOFF": ("kernel/files.inc", {"big": 128}),
     # kernel/kernel.asm - the chrome
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),
