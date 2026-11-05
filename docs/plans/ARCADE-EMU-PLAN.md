@@ -581,6 +581,11 @@ the code does now; docs/HOW-ARCADE-WAS-BUILT.md is how it got there.
 
 ---
 
+The road from here to a release - a package with no ROM in it, ROM sets
+the user imports, a frontend - is docs/plans/ARCADE-RELEASE-PLAN.md.
+
+---
+
 ## 11. Risks
 
 | risk | what would show it | what then |
