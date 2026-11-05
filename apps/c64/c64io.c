@@ -1311,6 +1311,12 @@ static int c64_osc3_now(void)
                          c64_sid[0x10] | ((c64_sid[0x11] & 15) << 8));
 }
 
+/* THE PROGRAM'S $FFC0-$FFF9 (C64-SPEC 3.5): the cores keep their scratch in
+ * those guest bytes, so the program's own are here, and the cores reach them
+ * through the I/O door - a read with the KERNAL banked out, every write */
+unsigned char c64_hiram[0x3A];             /* (c64mem.inc's c64_wr/c64_rd
+                                             * reach it too: not static) */
+
 static int c64_io_rd(unsigned a)
 {
     unsigned p;
@@ -1318,6 +1324,8 @@ static int c64_io_rd(unsigned a)
 
     if (a < 2)                              /* $0000/$0001 are the port (3.2) */
         return c64_pp_read((int)a);
+    if (a >= 0xFFC0)                        /* (only $FFC0-$FFF9 come here) */
+        return c64_hiram[a - 0xFFC0];
 
     p = a & 0x0F00;
     if (p <= 0x0300) {                      /* $D000-$D3FF: the VIC, mirrored */
@@ -1390,6 +1398,10 @@ static void c64_io_wr(unsigned a, int v)
 
     if (a < 2) {                            /* the processor port (3.2) */
         c64_pp_write((int)a, v);
+        return;
+    }
+    if (a >= 0xFFC0) {                      /* the program's $FFC0-$FFF9 */
+        c64_hiram[a - 0xFFC0] = (unsigned char)v;
         return;
     }
 

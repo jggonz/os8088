@@ -207,9 +207,12 @@ C64_RUN_JAM   equ 1                 ; a KIL/JAM opcode; the machine stops
 ; (LESSONS.md 13). $FFFA-$FFFF stay real RAM, because a program that banks the
 ; KERNAL out puts its own vectors there.
 ;
-; Two stated deviations follow, and hosttest/c64cputest.asm holds a case for
-; each: a read of $FFC0-$FFF9 in an all-RAM map reads the scratch, and a write
-; there is dropped.
+; THE PROGRAM'S OWN $FFC0-$FFF9 is not lost to it: a read there with the
+; KERNAL banked out, and every write there, goes through the I/O door to 58
+; bytes the package keeps (c64io.c's c64_hiram, C64-SPEC 3.5) - a packed
+; demo's unpacker kept a table at $FF00 and hung on the scratch in its place.
+; hosttest/c64cputest.asm's row 21 holds it. What remains is code EXECUTED
+; from those bytes, which fetches the scratch.
 C64_SCR_BASE  equ 0xFFC0
 ; ...and the SAME address as a SIGNED displacement, for the one access that
 ; reaches it through a base register. NASM 2.16 tightened `number-overflow`:
@@ -590,7 +593,7 @@ c64_rd_bx:
     cmp bh, 0xE0
     jb  .d000
     cmp byte [C64_SCR_BASE + C64_SCR_MAPE], C64_MAP_KERNAL
-    jne .ram
+    jne .eram
     push es
     mov es, [cs:_c64_m+CM_ROMSEG]
     mov dh, [es:bx+C64_ROMB_KERNAL]
@@ -614,6 +617,11 @@ c64_rd_bx:
     mov dh, [es:bx+C64_ROMB_CHARGEN]
     pop es
     ret
+.eram:                              ; RAM under the KERNAL: $FFC0-$FFF9 is
+    cmp bx, C64_SCR_BASE            ; the program's, kept by the package
+    jb  .ram                        ; and reached through the I/O door (3.5)
+    cmp bx, C64_SCR_BASE + C64_SCR_END
+    jb  c64_io_rd_bx
 .ram:
     mov dh, [bx]
     ret
@@ -704,7 +712,7 @@ c64_wr_bx:
     jb  .store
     cmp bx, C64_SCR_BASE + C64_SCR_END
     jae .store
-    ret                             ; the scratch is not writable memory (3.5)
+    jmp c64_io_wr_bx                ; the program's copy, not the scratch (3.5)
 
 ; c64_stkdirty - a stack push is always RAM and always page 1, so its dirty
 ; bit is a constant and its window test needs no scratch register at all.

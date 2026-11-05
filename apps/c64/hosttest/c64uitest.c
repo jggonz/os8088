@@ -835,10 +835,12 @@ unsigned os88_mem_claim(int kb)
 /* ...and the paragraph door (SPEC.md 50.3.7), which the .PRG attach uses:
  * the capacity is EXACTLY what was asked for, no granule over it, so a read
  * past the request fails here even where the kernel's rounding would hide it */
+static int h_claim_block;                   /* 1: every scratch claim refused,
+                                             * as the eighth-claim cap does */
 unsigned os88_mem_claim_p(unsigned paras)
 {
     int i;
-    if (paras == 0)
+    if (paras == 0 || h_claim_block)
         return 0;
     if (paras > 4096) {
         if (h_big_paras || (long)paras * 16 > (long)sizeof(h_big))
@@ -900,21 +902,32 @@ void os88_poke(unsigned seg, unsigned off, int v) { segbase(seg)[off] = (unsigne
  * (C64-SPEC 11.5) - and the call's contract checked as the kernel holds it */
 static unsigned char h_d64[174848];
 static long h_d64_len;
+/* (and the .PRG fixture below, by its name: a Smart attach of a PRG streams
+ * it through c64_read_at too - C64-SPEC 11.3) */
+static char fx_name[16];
+static unsigned char fx_data[65536];
+static long fx_len;
+static unsigned h_reads;                    /* c64_read_at calls, counted */
 unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
                      unsigned off_lo, unsigned off_hi)
 {
-    long off = (long)off_lo | ((long)off_hi << 16), n;
-    (void)name;
+    long off = (long)off_lo | ((long)off_hi << 16), n, len = h_d64_len;
+    const unsigned char *src = h_d64;
+    h_reads++;
+    if (fx_name[0] && strcmp(name, fx_name) == 0) {
+        src = fx_data;
+        len = fx_len;
+    }
     if (cap % 512 || off % 512)
         fail("c64_read_at off a cluster boundary");
-    if (segcap(seg) < (long)cap && off + cap < h_d64_len)
+    if (segcap(seg) < (long)cap && off + cap < len)
         fail("c64_read_at into a claim smaller than its capacity");
-    if (off >= h_d64_len)
+    if (off >= len)
         return 0;
-    n = h_d64_len - off;
+    n = len - off;
     if (n > cap)
         n = cap;
-    memcpy(segbase(seg), h_d64 + off, (size_t)n);
+    memcpy(segbase(seg), src + off, (size_t)n);
     return (unsigned)n;
 }
 
@@ -963,10 +976,8 @@ int c64x_copy(unsigned seg, unsigned off, unsigned tlo, unsigned thi,
     return 1;
 }
 
-/* the .PRG fixture the next os88_file_read_seg serves, by name */
-static char fx_name[16];
-static unsigned char fx_data[65536];
-static long fx_len;
+/* the .PRG fixture the next os88_file_read_seg serves, by name (declared
+ * with c64_read_at above) */
 
 unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
 {
@@ -3726,6 +3737,116 @@ int main(int argc, char **argv)
         fail("Smart attach accepted a PRG that really does run past $FFFF");
     if (strncmp(last_toast, "PRG runs past", 13) != 0)
         fail("a PRG past $FFFF was refused without naming the fact");
+    /* ...AND A PRG LEAVES BASIC'S LOAD POINTERS AT ITS END (11.3): $2D-$32
+     * and $AE/$AF. Without them a BASIC program's variables are written
+     * over its own text. Red with ovl_load_ptrs not called */
+    attach(0x0801, 0x100, 0);
+    if (ram[0x2D] != 0x01 || ram[0x2E] != 0x09 || ram[0x2F] != 0x01
+            || ram[0x32] != 0x09 || ram[0xAE] != 0x01 || ram[0xAF] != 0x09)
+        fail("a PRG at $0801 of 256 bytes left BASIC's pointers off $0901");
+    /* ...STREAMED A CHUNK AT A TIME (11.3), so every byte of a PRG that
+     * spans many chunks lands where it belongs, the first chunk's shift by
+     * the two address bytes included. Red with each chunk landed from the
+     * shift instead of from 0 */
+    {
+        long i;
+        int bad = 0;
+        attach(0x0400, 64512 - 2, 0);
+        for (i = 0; i < 0xFFC0L - 0x0400; i++)
+            if (ram[0x0400 + i] != (unsigned char)((i * 7 + 1) & 0xFF))
+                bad = 1;
+        if (bad)
+            fail("a PRG over several chunks landed with its bytes misplaced");
+    }
+    /* ...AND WITH THE RECOMPILER ON, THROUGH ITS CACHE AND NO CLAIM: the C64
+     * holds all eight of its claims then (SPEC.md 50.3), and every PRG and
+     * T64 attach said "no heap for it" on the machine. The cache is thrown
+     * away after, as a flush. Red with the buffer claimed regardless */
+    {
+        long i;
+        int bad = 0, before = claims_live;
+        c64_fjit = os88_mem_claim(64);
+        if (c64_fjit == 0) {
+            fail("no claim for the recompiler fixture");
+        } else {
+            os88_poke(c64_fjit, C64J_FLUSHREQ, 0);
+            h_claim_block = 1;
+            if (!attach(0x1000, 0x2345, 0))
+                fail("Smart attach of a PRG refused with the recompiler on");
+            h_claim_block = 0;
+            for (i = 0; i < 0x2345; i++)
+                if (ram[0x1000 + i] != (unsigned char)((i * 7 + 1) & 0xFF))
+                    bad = 1;
+            if (bad)
+                fail("a PRG read through the recompiler's cache landed wrong");
+            if (os88_peek(c64_fjit, C64J_FLUSHREQ) != 2)
+                fail("a load through the recompiler's cache did not flush it");
+            os88_mem_free(c64_fjit);
+            c64_fjit = 0;
+        }
+        if (claims_live != before)
+            fail("the recompiler fixture leaked a claim");
+    }
+
+    /* --- A TAPE IMAGE (11.3.1): its first file, where it says, by the
+     *     distance to the next file's data - not by its end field, which
+     *     images in circulation get wrong - read in whole clusters out of an
+     *     image whose data is not cluster-aligned. Red with the length taken
+     *     from the end field */
+    {
+        long i;
+        unsigned off = 0x1234, len = 0x0900;
+        memset(h_d64, 0, sizeof(h_d64));
+        memcpy(h_d64, "C64 tape image file", 19);
+        h_d64[0x24] = 1;                    /* used entries */
+        h_d64[0x40] = 1;                    /* a normal tape file */
+        h_d64[0x41] = 0x82;
+        h_d64[0x42] = 0x01; h_d64[0x43] = 0x08;     /* start $0801 */
+        h_d64[0x44] = 0xC6; h_d64[0x45] = 0xC3;     /* end: WRONG, $C3C6 */
+        h_d64[0x48] = off & 0xFF; h_d64[0x49] = off >> 8;
+        memcpy(h_d64 + 0x50, "XMAS DEMO       ", 16);
+        for (i = 0; i < len; i++)
+            h_d64[off + i] = (unsigned char)((i * 13 + 5) & 0xFF);
+        h_d64_len = off + len;
+        memset(ram + 0x0801, 0xEE, len + 16);
+        last_toast[0] = 0;
+        os88_gfx_lock();
+        os88_onfile(OS88_FDLG_OPEN, "XMAS.T64", (unsigned)h_d64_len, 0, the_win);
+        os88_gfx_unlock();
+        if (strcmp(last_toast, "Loaded XMAS DEMO") != 0)
+            fail("a T64 did not say `Loaded` and its file's name");
+        for (i = 0; i < len; i++)
+            if (ram[0x0801 + i] != (unsigned char)((i * 13 + 5) & 0xFF)) {
+                fail("a T64's file did not land at its start address");
+                break;
+            }
+        if (ram[0x0801 + len] != 0xEE)
+            fail("a T64 loaded past its file's data - the wrong end field "
+                 "was believed");
+        if (ram[0x2D] != ((0x0801 + len) & 0xFF) || ram[0x2E] != ((0x0801 + len) >> 8))
+            fail("a T64 left BASIC's end of program off its file's end");
+        /* ...the SECOND file's data bounds the first's length */
+        h_d64[0x24] = 2;
+        h_d64[0x60] = 1;
+        h_d64[0x62] = 0x00; h_d64[0x63] = 0xC0;
+        h_d64[0x64] = 0x10; h_d64[0x65] = 0xC0;
+        h_d64[0x68] = (off + 0x300) & 0xFF; h_d64[0x69] = (off + 0x300) >> 8;
+        memset(ram + 0x0801, 0xEE, len + 16);
+        os88_gfx_lock();
+        os88_onfile(OS88_FDLG_OPEN, "XMAS.T64", (unsigned)h_d64_len, 0, the_win);
+        os88_gfx_unlock();
+        if (ram[0x0801 + 0x2FF] == 0xEE || ram[0x0801 + 0x300] != 0xEE)
+            fail("a T64's first file did not stop at the second's data");
+        /* ...and a file that is not one */
+        h_d64[0] = 'X';
+        last_toast[0] = 0;
+        os88_gfx_lock();
+        os88_onfile(OS88_FDLG_OPEN, "XMAS.T64", (unsigned)h_d64_len, 0, the_win);
+        os88_gfx_unlock();
+        if (strcmp(last_toast, "Not a T64 tape image.") != 0)
+            fail("a .T64 without the C64 magic was not refused with the fact");
+        h_d64_len = 0;
+    }
     fx_name[0] = 0;
     c64_msg[0] = 0;
     c64_sh_inval();
@@ -5865,6 +5986,8 @@ int main(int argc, char **argv)
             "Advanced one frame.",
             "Joysticks normal.",
             "Joysticks swapped.",
+            "Not a T64 tape image.", "T64: cannot read it.",
+            "T64: no program in it.", "T64: no heap for it.",
             "No bands here - text only.",
             "No square voice here - no SID sound.",
             "PRG over 65533 bytes.",

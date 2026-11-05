@@ -809,6 +809,9 @@ static void c64_ram_pattern(void)
         n = (p == 255) ? (0xFFC0 - 0xFF00) : 256;
         c64_zcopy_in(a, c64_rampat, (unsigned)n);
     }
+    /* ...and the program's $FFC0-$FFF9, which the scratch sits on (3.5):
+     * the same pattern, page 255's (inverted - bit 14 is set) */
+    os88_memcpy(c64_hiram, c64_rampat + 0xC0, 0x3A);
 }
 
 /* c64_fullscreen_toggle - SPEC.md 11.2's latch, RESIDENT, because both routes
@@ -1219,15 +1222,9 @@ void os88_onfile(int mode, const char *name,
         os88_wm_wake(win);
         return;
     }
-    if (size_hi != 0)
-        size_lo = 0xFFFFu;                  /* ...so the one test below
-                                             * refuses it too */
-    if (size_lo > 0xFFFDu) {
-        c64_say("PRG over 65533 bytes.");
-        return;
-    }
-    ovl_load_prg(name, size_lo);            /* every refusal it has is its
-                                             * own, and said on the row */
+    ovl_attach(name, size_lo, size_hi);     /* a tape image or a .PRG, and
+                                             * every refusal said on the row
+                                             * (c64load.c) */
     c64_kick = 1;
     os88_wm_wake(win);
 }

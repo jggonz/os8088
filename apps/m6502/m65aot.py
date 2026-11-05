@@ -202,7 +202,7 @@ class Aot:
         if self.defer_prev:
             r = self.defer_prev
             fix = ["    sahf", "    inc %s" % r, "    dec %s" % r, "    lahf"]
-        self.tail.append(["%s:" % b] + fix + ["    add bp, %d" % self.pre[self.cur],
+        self.tail.append(["%s:" % b] + fix + ["    add bp, %d" % (self.pre[self.cur] + self.ahead(self.cur)),
                           "    mov si, 0x%04X" % self.cur, "    jmp xa_resume"])
         return b
 
@@ -569,7 +569,14 @@ class Aot:
             live_nz = False
             self.defer_cur = (nxt, self.nz_reg(pc))
         self.cur, self.nxt = pc, nxt
-        self.L("p_%04X:" % pc)
+        if pc in self.prech:
+            # charged ahead: the fall-through comes in here, any other entry
+            # through the stub, which charges what the chain's head would have
+            self.L("pb_%04X:" % pc)
+            self.stubs.append(["p_%04X:" % pc, "    sub bp, %d" % self.csum[pc],
+                               "    jmp pb_%04X" % pc])
+        else:
+            self.L("p_%04X:" % pc)
         if os.environ.get("M65AOT_TRACE") == "all":
             # DEBUG ONLY: every translated PC into a 128-word ring at $C300
             # (the Apple II test image's slot space), its index at $C2FE
@@ -580,9 +587,11 @@ class Aot:
         if self.exact and pc in self.leaders:
             # THE BLOCK'S COST, tested before it runs: the core runs a block
             # the budget cannot cover, and ends the run where it would
+            # FALL THROUGH when the budget covers the block - the case that
+            # matters - and the exit out of line, a not-taken jle
             k = self.lab()
-            L("    cmp bp, %d" % self.leaders[pc], "    jg %s" % k,
-              "    mov si, 0x%04X" % pc, "    jmp xa_resume", "%s:" % k)
+            L("    cmp bp, %d" % self.leaders[pc], "    jle %s" % k)
+            self.tail.append(["%s: mov si, 0x%04X" % (k, pc), "    jmp xa_resume"])
         if self.c64 and self.static_core(mn, mode, opnd):
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")
             return False
@@ -604,7 +613,10 @@ class Aot:
         if pc in self.gstart:
             # ONE SUBTRACT A GROUP (blocks()'s neighbour, groups()): the whole
             # straight run's cycles, which an exit inside it gives back
-            L("    sub bp, %d" % self.pre[pc])
+            if pc not in self.prech:
+                L("    sub bp, %d" % self.csum.get(pc, self.pre[pc]))
+                if self.body_ok(pc):
+                    L("pb_%04X:" % pc)         # (a taken branch comes in here)
         if mn in READS:
             dst = {"LDA": "al", "LDX": "cl", "LDY": "ch"}.get(mn, "dh")
             self.read(mode, opnd, dst, mode in PENALTY, cyc)
@@ -714,7 +726,25 @@ class Aot:
             nt = self.lab()
             where = "byte [%s]" % self.PV() if f == "pv" else "ah"
             L("    test %s, 0x%02X" % (where, mask), "    %s %s" % (not_taken, nt))
-            L("    sub bp, %d" % (2 if (target ^ nxt) & 0xFF00 else 1))
+            pen = 2 if (target ^ nxt) & 0xFF00 else 1
+            if self.exact:
+                # TAKEN: the penalty, less what was charged ahead for the
+                # groups it skips, plus the target's own charge when it is
+                # entered past its subtract - one adjustment (chains())
+                adj = pen - self.ahead(pc)
+                if self.body_ok(target):
+                    adj += self.csum[target]
+                if adj > 0:
+                    L("    sub bp, %d" % adj)
+                elif adj < 0:
+                    L("    add bp, %d" % -adj)
+                if self.body_ok(target):
+                    L("    jmp pb_%04X" % target)
+                else:
+                    self.to(target, check=target <= pc)
+                L("%s:" % nt)
+                return True
+            L("    sub bp, %d" % pen)
             # ONLY A BACKWARD BRANCH CAN LOOP, so only it tests the countdown:
             # a forward one makes progress through the ROM and the next
             # transfer tests it
@@ -737,10 +767,10 @@ class Aot:
             ptr = opnd
             hi = (ptr & 0xFF00) | ((ptr + 1) & 0xFF)
             if self.c64 and (ptr >= 0xA000 or hi >= 0xA000 or ptr < 2):
-                L("    add bp, %d" % self.pre[pc], "    mov si, 0x%04X" % pc, "    jmp xa_resume")
+                L("    add bp, %d" % (self.pre[pc] + self.ahead(pc)), "    mov si, 0x%04X" % pc, "    jmp xa_resume")
                 return False
             if not self.c64 and (0xC000 <= ptr < 0xD000 or 0xC000 <= hi < 0xD000):
-                L("    add bp, %d" % self.pre[pc], "    mov si, 0x%04X" % pc, "    jmp xa_resume")
+                L("    add bp, %d" % (self.pre[pc] + self.ahead(pc)), "    mov si, 0x%04X" % pc, "    jmp xa_resume")
                 return False
             L("    mov bl, [0x%04X]" % ptr, "    mov bh, [0x%04X]" % hi,
               "    or bp, bp")
@@ -1150,6 +1180,63 @@ class Aot:
                 pre[pc] = own
         return start, pre
 
+    def body_ok(self, x):
+        """may control enter group X PAST its subtract - a taken branch's
+        jump, or a fall-through into a group charged ahead: X starts a group
+        of this segment, tests no countdown, and does not leave or test the
+        interrupt byte before its subtract"""
+        if not self.exact or x not in self.mine or x not in self.gstart \
+                or x in self.leaders or self.static_exit(x):
+            return False
+        mn = decode(self.rom, x)[0]
+        return mn not in IRQ_GATED and mn not in LEAVE
+
+    def chains(self):
+        """CHARGED AHEAD (C64-SPEC 4.8): a group a conditional branch falls
+        into is paid for with the branch's own group - one `sub bp` for the
+        run of groups the not-taken path goes through, and the taken path
+        gives back what it skipped in the one adjustment it makes anyway.
+        -> self.prech, the groups charged ahead (their p_ label is an
+        out-of-line stub that charges them, for any other entry); self.csum,
+        what a group's start (or stub) charges: its own cycles and every
+        group charged ahead after it; self.grp, each PC's group."""
+        self.prech, self.csum, self.grp = set(), {}, {}
+        g = None
+        order = sorted(self.pcs)
+        for pc in order:
+            if pc in self.gstart or g is None:
+                g = pc
+            self.grp[pc] = g
+        for pc in order:
+            mn, mode, cyc, opnd, n = decode(self.rom, pc)
+            f = pc + n
+            if mode == "rel" and pc in self.mine and self.body_ok(f) \
+                    and self.grp.get(pc) is not None:
+                self.prech.add(f)
+        for pc in sorted(self.pcs, reverse=True):
+            if pc not in self.gstart:
+                continue
+            # the group's last instruction: a branch whose fall-through is
+            # charged ahead extends the chain
+            last = pc
+            q = pc
+            while q in self.pcs and self.grp.get(q) == pc:
+                last = q
+                q = q + decode(self.rom, q)[4]
+            mn, mode, cyc, opnd, n = decode(self.rom, last)
+            f = last + n
+            c = self.pre[pc]
+            if mode == "rel" and f in self.prech:
+                c += self.csum[f]
+            self.csum[pc] = c
+
+    def ahead(self, pc):
+        """cycles charged at PC's group start for the groups after it"""
+        g = self.grp.get(pc)
+        if g is None or g not in self.csum:
+            return 0
+        return self.csum[g] - self.pre[g]
+
     def blocks(self):
         """EXACT PROFILES: the PCs whose translation tests the countdown, ->
         what the code from there to the next block can take at most.
@@ -1200,6 +1287,8 @@ class Aot:
         p = self.p
         self.leaders = self.blocks() if self.exact else {}
         self.gstart, self.pre = self.groups()
+        self.chains()
+        self.stubs = []
         F_CORE = self.fa + 4
         L("; GENERATED by apps/m6502/m65aot.py --machine %s - do not edit" % p["name"],
           "cpu 8086", "bits 16", "org 0",
@@ -1348,6 +1437,8 @@ class Aot:
             self.tail = []
         if prev_falls:
             L("    mov si, 0x%04X" % last, "    jmp xa_resume")
+        for st in self.stubs:               # (chains(): the other entries)
+            L(*st)
         if self.p.get("gate"):
             L("ctl_list:", *["    dw %s" % c for c in self.ctls], "    dw 0")
         return "\n".join(self.out) + "\n"

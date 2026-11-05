@@ -328,13 +328,22 @@ call, and not hot.
 
 That address is chosen because the KERNAL's vectors sit there **in ROM** in
 every map that runs KERNAL code, and nothing in the KERNAL or BASIC uses the
-RAM under them. Two stated deviations follow, and the CPU harness (§4.6)
-holds a case for each:
-
-- **A read of `$FFC0-$FFF9` in an all-RAM map reads the scratch**, not the
-  RAM the emulated machine wrote.
-- **A write to `$FFC0-$FFF9` is dropped.** The write path already tests the
-  high byte; only the `$E0-$FF` branch pays the extra compare.
+RAM under them. **But a program that banks the KERNAL out may use it, and
+those 58 bytes are the program's** (2026-11): the cores' scratch stays where
+it is, and the program's own `$FFC0-$FFF9` is `c64_hiram` in `c64io.c`.
+A read there with the KERNAL banked out, and every write there, goes through
+the I/O door (`c64_io_rd`/`c64_io_wr`) - in the accurate core (`c64_rd_bx`,
+`c64_wr_bx`), the fast core's `rd_hi`/`wr_hi`, and so the recompiler's
+prelude and the translated ROM, which are built from the same handlers; the
+host's own `c64_rd`/`c64_wr` and the `.PRG` loader keep to it as well, and
+the power-on pattern fills it. Only reads at `$E000` and up with the KERNAL
+out, and writes at `$E000` and up, pay a compare. CHRISTMAS DEMO's unpacker
+(FNS, 1989) keeps a table at `$FF00`: it jammed on the fast core, whose
+scratch fills more of those bytes than the accurate core's, and runs to its
+title screen now. The CPU harness's **row 21** writes the 58 bytes with
+`STA abs,X` in an all-RAM map and reads them back with `CMP abs,X`, on every
+leg; red with the write dropped again, and its control drops it. What
+remains is code EXECUTED from `$FFC0-$FFF9`, which fetches the scratch.
 
 **Anything that loads a whole 64KB image into the claim lands ON TOP of the
 scratch** and has to clear it afterwards: `os88_main` does
@@ -968,6 +977,39 @@ its frame from `c64_faot`, `c64_fakb` and `c64_ftab` at its door, and
 Apple II's leg one machine along: Dormann's functional test in four parts
 (`--range`) with a core built for each, slices of 997 cycles, and every
 translated `ADC` and `CMP` broken as the control.
+**Charged ahead** (2026-11, `chains()`): a group a conditional branch falls
+into is paid for with the branch's own group, so the not-taken path runs no
+subtract of its own; the taken path makes the one adjustment it made anyway
+- its penalty, less what was charged ahead for the groups it skips, plus the
+target's own charge when it enters past the target's subtract (`pb_` labels).
+Any other entry into a group charged ahead goes through an out-of-line stub
+at its `p_` label, which the PC table names. A group charged ahead tests no
+countdown and starts with nothing that leaves, so the only readers of the
+countdown inside a chain - an I/O access, which always ends one - see what
+they saw before. A bail gives back its group's rest and what was charged
+ahead after it. +1 point on each BASIC loop under warp (110.2 -> 111.2,
+102.2 -> 103.2, 109.4 -> 110.4); the slice hash below is the reference's.
+**A block test falls through** when the budget covers the block - the
+case that matters - its exit out of line (`cmp bp, W / jle`): a not-taken
+jump where the taken `jg` over the exit was, +1 point again (111.0 -> 112.0,
+103.2 -> 103.6, 110.4 -> 111.4) and the slice hash unchanged.
+**The inexact alternative was measured and not taken**: testing the
+countdown only at loop heads (a backward branch's or JMP's target) gave
+116.0%, 107.8% and 116.8% - five points more - at the price of runs that
+end past the cycle an interrupt is due, by as much as a loop-free stretch
+of ROM takes. **Tried on real programs and dropped** (2026-11-05): on the
+Bright Pixel card and on CHRISTMAS DEMO (FNS, 1989) - which spend their
+time in RAM code, the drawing and the SID - it measured 48.5% against 48.7%
+and 51.7% against 51.8%, nothing a second 85KB translation on the disk
+would buy; the patched variant (block tests jumped over at run time) gained
+about a point over the falling-through tests below and was not kept either.
+
+**And the gate checks the cycles** (2026-11): the fast core alone runs
+Dormann in the same 997-cycle slices first, hashing where every slice ENDED -
+its PC and the countdown it left - and each translated leg must hash the
+same. A translation that charges one cycle more or less anywhere it runs ends
+some slice on another instruction. Red with every translated instruction
+charged a cycle more (`$39F7` against the reference's `$F7DC`).
 `tests/c64part.py` checks that the three parts unpack to their files and that
 each fetched claim holds its file's first bytes.
 
@@ -2795,7 +2837,7 @@ owner's rule, and each fact still stands:
 | VICE's item | the fact |
 |---|---|
 | File > the disk submenu's Create, Detach, Flip list | drive 8 is a LOAD trap serving one D64 (§11.5), not a 1541 |
-| File > the tape section (Attach/Detach datasette image, Datasette controls) | no tape emulation: T64/TAP are not read |
+| File > the tape section (Attach/Detach datasette image, Datasette controls) | no datasette: a `.T64` is read by Smart attach, its first file loaded where it says (§11.3.1); a `.TAP` (a recording of pulses) is not read |
 | File > the cartridge section (Attach/Detach cartridge image, Cartridge freeze) | no cartridge port: the bank maps carry the cartridge-less 7 of VICE's 32 (§3.3) |
 | File > Printer/plotter | no printer path in this OS |
 | File > Activate monitor | no monitor: VICE's is 30,000 lines of host C |
@@ -2847,33 +2889,79 @@ greyed until a row is selected).
 and that is said — `A file dialog is already open.` — rather than swallowed.
 
 `os88_onfile` — **resident**, because the runtime reaches a callback by a
-near offset (§13.1) — refuses by size before touching the disk (`PRG over
-65533 bytes.`; the ceiling is 65,533 because two bytes are the load address
-and the rest must fit `$FFFF`), then calls the already-loaded `ovl_load_prg`
-(`c64load.c`), which:
+near offset (§13.1) — sends a D64 by its size to §11.5 and anything else to
+the overlay's `ovl_attach` (`c64load.c`), which sends a name ending `.T64`
+(either case) to §11.3.1 and refuses any other file by size before touching
+the disk (`PRG over 65533 bytes.`; the ceiling is 65,533 because two bytes
+are the load address and the rest must fit `$FFFF`). `ovl_load_prg`:
 
 1. refuses a file under 3 bytes (`PRG too short.`);
-2. takes a transient claim of `ceil(size / 1KB)` — computed as
-   `(size >> 10) + ((size & 1023) != 0)`, because `(size + 1023) >> 10`
-   wraps in 16 bits for a file over 64,512 bytes — or says
+2. takes **the buffer a load is read through** (below) or says
    `PRG: no heap for it.`;
-3. `os88_file_read_seg` into it (`PRG: cannot read it.` on a short read) —
-   a `.PRG` lands at any address, and `os88_file_read_seg` needs a
-   512-aligned base (SPEC.md §2.1.1), which is why there is a claim;
-4. reads the 2-byte load address and refuses a file whose LAST byte would
-   pass `$FFFF` (`PRG runs past $FFFF.`) — the test is
-   `n − 1 > $FFFF − load`, exact in 16 bits, and a file ending exactly at
-   `$FFFF` is legal;
-5. `c64_zzcopy_in` into the RAM claim at the load address, frees the claim,
-   dirties every page (`c64_dirty_all`), and says `Loaded <name>`.
+3. reads the file's first chunk into it (`PRG: cannot read it.` on a short
+   read, here and at every later chunk) and takes the 2-byte load address;
+4. refuses a file whose LAST byte would pass `$FFFF`
+   (`PRG runs past $FFFF.`) — the test is `n − 1 > $FFFF − load`, exact in
+   16 bits, and a file ending exactly at `$FFFF` is legal;
+5. streams the body into the RAM claim at the load address (`c64_zzcopy_in`
+   a chunk at a time; `$FFC0`–`$FFF9` through `c64_wr`, which keeps the
+   program's own copy of the core's scratch, §3.5), dirties every page
+   (`c64_dirty_all`);
+6. leaves **BASIC's LOAD pointers** where a direct-mode `LOAD` leaves them —
+   the KERNAL's end of load at `$AE/$AF`, and end of program, start of
+   arrays and end of arrays at `$2D`–`$32`, all at the end of the file
+   (`$2B/$2C`, the start of BASIC, is untouched, as `LOAD` leaves it). A BASIC
+   program injected without them has its variables written over its own
+   text;
+7. gives the buffer back and says `Loaded <name>`.
+
+**The buffer a load is read through is not a claim the size of the file.**
+A package holds at most eight claims (SPEC.md 50.3, `MEM_OWNER_MAX`) and with
+the recompiler (§4.9) the C64 holds all eight, so a load that claimed failed
+on exactly the machine that runs programs fastest: every PRG and T64 attach
+said `no heap for it` there. The file is streamed instead, through
+`c64_read_at` (`OSAPI_FILE_READ_AT`, whose offset and length are whole
+clusters) a chunk at a time, each chunk's share landed at once. With the
+recompiler the buffer is its cache, 4KB, and every translation is thrown away
+after by a flush request — §11.5.1's way; without it, a claim of 8KB, or down
+to one 512-byte sector. The chunk last read is remembered, so the header a
+load inspects first is not read again when its data begins in the same
+chunk.
 
 **That is all it does.** There is no autostart: no reset, no `READY.` wait,
 no `mem_set_basic_text`, no `RUN`. The bytes are in the C64's RAM at the
 address the file names, and the user types `RUN` (for a `$0801` BASIC
 program) or `SYS`. The plan's wave 4 specified VICE's RAM-injection autostart
 (`AutostartPrgMode=1`, `autostart-prg.c`) and it was never built.
-(`OSAPI_FILE_READ_AT` exists unwrapped and offers nothing this needs — no new
-slot, §15.2.)
+
+#### 11.3.1 A tape image — `.T64`
+
+There is no datasette (§11.2), so a tape image is not MOUNTED: Smart attach
+loads its **first file** where the file says, as VICE's autostart of a tape
+image loads it, and leaves the same LOAD pointers as a PRG (§11.3 step 6).
+`RUN` or `SYS` is the user's, as for a PRG. The format is the one VICE reads
+in `src/tape/t64.c`:
+
+| offset | what |
+|---|---|
+| `$00` | the magic: `C64` (VICE accepts both `C64 tape image file` and `C64S tape file` by these three bytes) |
+| `$24` | the used-entry count |
+| `$40` + 32·i | entry i: `[0]` entry type (0 = free), `[1]` C64 file type, `[2..3]` start address, `[4..5]` end address, `[8..11]` offset of its data in the image, `[16..31]` its name (PETSCII, `$A0`-padded) |
+
+**The end address is not trusted.** Many images in circulation carry a wrong
+one (VICE's `t64.c` repairs it): the length is the distance from this file's
+data to the NEAREST data after it — another entry's offset, or the image's
+end — and the end field only narrows it, when it is above the start and
+shorter. A length that would pass `$FFFF` is cut at `$FFFF`.
+
+The directory is the load buffer's first chunk (§11.3): 4KB, 126 entries,
+with the recompiler; as few as 14 when the heap gave only a sector, whose
+bound on the length is then the image's end and the end field. Refusals, on
+the status row: `Not a T64 tape image.` (short, or no magic),
+`T64: no program in it.` (no entry in use, or one with no data),
+`T64: no heap for it.`, `T64: cannot read it.`; success says
+`Loaded <the entry's name>`, its trailing padding trimmed and anything
+outside PETSCII's printable half shown as `?`.
 
 **With no disk on drive 8 (§11.5), `LOAD"*",8` answers with the KERNAL's
 `?DEVICE NOT PRESENT  ERROR`** - and so does any device but 8, disk or no

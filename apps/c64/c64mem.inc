@@ -48,6 +48,12 @@ _c64_rd:
     mov bx, [bp+4]
     mov es, [_c64_m+CM_RAMSEG]
     mov al, [es:bx]
+    cmp bx, C64_SCR_BASE            ; (the program's $FFC0-$FFF9, 3.5)
+    jb .have
+    cmp bx, C64_SCR_BASE + C64_SCR_END
+    jae .have
+    mov al, [bx + _c64_hiram - C64_SCR_BASE]
+.have:
     xor ah, ah                      ; a shim that answers in AL must clear AH
     pop es
     pop bp
@@ -86,10 +92,13 @@ _c64_wr:
     push es
     mov bx, [bp+4]
     mov es, [_c64_m+CM_RAMSEG]
-    cmp bx, C64_SCR_BASE            ; the scratch is not writable memory (3.5)
-    jb .store
-    cmp bx, C64_SCR_BASE + C64_SCR_END
-    jb .out
+    cmp bx, C64_SCR_BASE            ; the scratch is the cores', and the
+    jb .store                       ; program's bytes under it are the
+    cmp bx, C64_SCR_BASE + C64_SCR_END  ; package's c64_hiram (C64-SPEC 3.5)
+    jae .store
+    mov al, [bp+6]
+    mov [bx + _c64_hiram - C64_SCR_BASE], al
+    jmp .out
 .store:
     mov al, [bp+6]
     mov [es:bx], al

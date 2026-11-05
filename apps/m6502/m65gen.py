@@ -1238,7 +1238,7 @@ class Gen:
             "    cmp bh, 0xC0", "    jb .a",
             "    cmp bh, 0xD0", "    jb .ram",
             "    cmp bh, 0xE0", "    jb .d",
-            "    cmp byte [%s], 2" % S(S_MAPE), "    jne .ram",       # KERNAL?
+            "    cmp byte [%s], 2" % S(S_MAPE), "    jne .eram",      # KERNAL?
             "    push es",
             "    push bp", "    mov bp, sp",
             "    mov es, [bp+%d]" % (6 + F_EXTRA + 6),                # region 3
@@ -1255,6 +1255,12 @@ class Gen:
             "    mov dh, [es:bx]",
             "    pop es",
             "    ret",
+            # RAM under the KERNAL: $FFC0-$FFF9 is the program's, not the
+            # cores' scratch that lives there - the package keeps those 58
+            # bytes and the I/O door reaches them (C64-SPEC 3.5)
+            ".eram:",
+            "    cmp bx, 0x%04X" % self.p["scr"], "    jb .ram",
+            "    cmp bx, 0x%04X" % (self.p["scr"] + 0x3A), "    jb .io",
             ".ram:",
             "    mov dh, [bx]",
             "    ret",
@@ -1283,7 +1289,8 @@ class Gen:
             "    pop bp",
             "    ret",
             # wr_hi - DH to BX >= $D000: I/O calls out, $FFC0-$FFF9 (the
-            # accurate core's scratch) drops, and the rest is RAM, marked
+            # cores' scratch) goes to the package's copy through the same
+            # door (C64-SPEC 3.5), and the rest is RAM, marked
             "wr_hi:",
             "    cmp bh, 0xE0", "    jae .e",
             "    cmp byte [%s], 4" % S(S_MAPD), "    je .io",
@@ -1293,7 +1300,6 @@ class Gen:
             ".e:",
             "    cmp bx, 0x%04X" % self.p["scr"], "    jb .ram",
             "    cmp bx, 0x%04X" % (self.p["scr"] + 0x3A), "    jae .ram",
-            "    ret",
             ".io:",
             "    push bp", "    mov bp, sp",
             "    push ax",
