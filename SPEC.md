@@ -237918,7 +237918,11 @@ row), part 9 (`w16sys`) 39,506 to 39,547 (+41: `w16s_mvpre`), parts 3, 4,
 10 and 11 unchanged. The real-mode arm: image + bss 36,415 + 27,140 =
 63,555, unchanged; its part 5 is +9 (the export row). `tools/kernsize.py`
 on kern_mega reads `.mega` 23,056 (10 left), `.cold` 46,113 (479 left),
-resident 62,976, unchanged.
+resident 62,976, unchanged. Merged with plan/win16-next 833bd7340
+(124.25.22's names and hooks) before the last build: the kern_mega arm is
+38,174 + 26,372 = 64,546 (478 left), part 3 64,977 of its 65,024 ceiling
+(47 left), part 5 18,054, part 9 39,547; the real-mode arm 36,415 + 27,144
+= 63,559.
 
 **Seen** (QEMU, kern_mega, `-cpu 486 -m 16`, Mozart installed by its own
 setup, 2026-11-04). With odd selectors alone VBRUN300's table selector at
@@ -237933,17 +237937,19 @@ applications and start again.* It is not a resource count:
 program, and VB binds each `Declare` on its first call with
 `GetProcAddress(hModule, "Name")`; when that answers NULL the program's
 error handler shows this box. WIN16 answers a system module's function by
-NAME only for the sixteen in w16api.inc's `W16PROCNAME` list, and Mozart
+NAME only for the eighteen in w16api.inc's `W16PROCNAME` list, and Mozart
 declares about fifty-five (`GetDC`, `SetSystemPaletteUse`, `ReleaseDC`,
 `GetPrivateProfileInt`, `GetDeviceCaps`, `CreatePalette`, `SelectPalette`,
 `RealizePalette`, `BitBlt`, `mmioOpen` ...). Traced with a scratch build that
 recorded each name asked: the first refused was `SetSystemPaletteUse`, which
-WIN16 did not bind at all (GDI.373 is bound now, answering 0,
-`SYSPAL_ERROR`, Wine's answer on a device without a palette); with it and
-its name added in a scratch build the next refused was
-`GetPrivateProfileInt`. Following that one name at a time is not the cure,
-so the names were not kept: GetProcAddress by name for EVERY bound export
-is a new item. Behind it stands the
+WIN16 did not bind at all. GDI.373 is bound now, answering 0
+(`SYSPAL_ERROR`, Wine's answer on a device without a palette). With it and
+`GetFreeSystemResources`, which Mozart also declares, in the name list (a
+scratch build) the next refused is `GetPrivateProfileInt`. The two names
+are NOT in the list: their rows are 57 bytes of part 3, which on kern_mega
+has 47 left after 124.25.22's three, and every name costs 2 bytes of
+resident bss (`w16_pnslot`). Following the names one at a time is not the
+cure: GetProcAddress by name for EVERY bound export is a new item. Behind it stands the
 second box in MOZART.EXE, *Unsupported video mode. Please install a
 256-color driver.* Mozart declares `GetDeviceCaps` and nothing else that
 reads the display. WIN16 answers Windows 3.0's VGA.DRV: `BITSPIXEL` 1,
