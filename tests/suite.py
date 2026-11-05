@@ -16967,6 +16967,13 @@ SOAK = [
         "rings are the fresh boot's). Broken (no compaction door; the block "
         "from the bottom) the used rings come out short / the caches stay",
         needs=("marty",)),
+    Row("vbtmenu", "soak", py("tests/vbtmenu.py"), 60.0,
+        "VBATTLE-RAM-PLAN R3: the menu reads nothing it cannot use and "
+        "nothing a key waits on - the rules battle, ARI's menu: Limit (no "
+        "gauge yet) wants no clip, Bolt wants its own; a dozen cursor moves "
+        "each taken in under 0.3 guest s. Broken (no cost check) Limit's "
+        "clip is wanted",
+        needs=("marty",)),
     Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
         "SPEC.md 125.5: the music under the band, the owner's 'when the "
         "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "

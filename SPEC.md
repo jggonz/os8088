@@ -238111,6 +238111,17 @@ owner's battles: **128 + 128 KB** of ring (100%, was 88 + 88), **144 + 148**
 (75%, was 108 + 108). `vbtram` holds a fresh boot and a used machine (Skies
 and Paint opened, the battle, the two closed) to the same rings.
 
+**R3, built - the menu reads nothing a key waits on, nothing it cannot
+use.** The music is read WHOLE at a menu only when its ring is under half
+(`vb_mbig`; between half and 3/4 a 4 KB piece, a key's worth of wait); the
+clip under the cursor is wanted only when the action CAN be taken
+(`vb_hover` asks `vb_canpay`: its MP, its item, its limit) and only after
+the cursor has rested ~0.5 s (`VB_KQUIET` 9 ticks, was 6). The waits are
+the choice's: the pending action's head is read in the pause between the
+choice and its clip, as before. `vbtmenu`: on Limit with no gauge nothing
+wanted, on Bolt its clip; a key taken in under 0.3 s every time (0.12 at
+most measured; the owner's 100% battle's Ice <-> Bolt 0.05 - 0.35 s).
+
 ### 125.5 The band
 
 The band is the rows from the header's band row (142 by default) to 199 of

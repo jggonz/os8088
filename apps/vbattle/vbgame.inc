@@ -362,6 +362,12 @@ vb_hover:
     call vb_item
     or ah, ah
     jnz .o
+    push ax                         ; AN ACTION THAT CANNOT BE TAKEN - its MP,
+    call vb_act                     ; its item, its limit - has its clip read
+    mov bl, [vb_turn]               ; for nothing: not wanted (VBATTLE-RAM-
+    call vb_canpay                  ; PLAN R3, the owner's "we never need to
+    pop ax                          ; preload a disabled/unreachable
+    jc .o                           ; action's files")
     mov bl, [vb_turn]
     mov bh, NONE
     jmp short .p

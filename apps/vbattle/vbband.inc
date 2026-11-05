@@ -356,7 +356,9 @@ vb_mkeep:
     push di
     push bp
     push es
-    mov byte [vb_pbig], 1           ; (whole: it is running low, vb_reader)
+    mov ax, [vb_mfill]              ; (whole when under half, vb_mbig)
+    sub ax, [vb_mtake]
+    call vb_mbig
     call vb_mpiece
     mov byte [vb_pbig], 0
     pop es

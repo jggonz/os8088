@@ -148,7 +148,9 @@ VB_LEAD     equ 4096            ; how far the ring runs ahead of the card:
                                 ; 512
 VB_BLKCODE  equ 2               ; ...which it does with SND_CAP_EXTBLK: 2,048
                                 ; >> 2 (SND_OPENF_BLKSH, SPEC.md 34.5.3)
-VB_KQUIET   equ 6               ; ticks after a key before a clip is read
+VB_KQUIET   equ 9               ; ticks after a key before a clip is read:
+                                ; ~0.5 s - a cursor passing over an item
+                                ; reads nothing (VBATTLE-RAM-PLAN R3)
 VB_FORGIVE  equ 11025           ; a picture this far behind its sound is let
                                 ; go late (a second at 11 kHz)
 VB_DIV      equ 16384           ; the hook's PIT divisor: 72.8 Hz. It was
@@ -1518,6 +1520,23 @@ vb_gcopy:
     pop ds
     pop di
     pop si
+    ret
+
+; vb_mbig - [vb_pbig] for a read of the MUSIC: whole when its ring is under
+; half, or at no menu; between half and VB_MLOW at a menu, a piece a key can
+; wait behind (VBATTLE-RAM-PLAN R3: a 32 KB read is ~0.3 s on an ST-225,
+; and a key pressed under it waited it out). AX = what the ring holds; AX kept
+vb_mbig:
+    mov byte [vb_pbig], 1
+    cmp ax, VB_MR / 2
+    jb .out
+    cmp byte [vb_state], GS_MENU
+    je .small
+    cmp byte [vb_state], GS_TARGET
+    jne .out
+.small:
+    mov byte [vb_pbig], 0
+.out:
     ret
 
 ; vb_psize - AX = the room (a multiple of VB_PIECE) cut to the piece the
@@ -3289,7 +3308,7 @@ vb_reader:
     sub ax, [vb_mtake]
     cmp ax, VB_MLOW
     jae .clips
-    mov byte [vb_pbig], 1           ; (THE MUSIC AND A PLAYING CLIP RUNNING
+    call vb_mbig                    ; (THE MUSIC AND A PLAYING CLIP RUNNING
     call vb_mpiece                  ; LOW are read whole even at a menu: a
     mov byte [vb_pbig], 0           ; read is a seek and a turn of the disk,
     ret                             ; ~75 ms on the owner's ST-225, and 4 KB
