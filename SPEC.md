@@ -42661,6 +42661,20 @@ a file the user copies on lands wherever the allocator puts it. The
 Makefile's lists now say only *which* packages ship and *which folder* each
 lands in.
 
+#### 19.4.1 …and on `kern_big` it is a Shell sort
+
+A listing runs to 1,024 entries there (§22.6.4), and a selection sort is
+n(n-1)/2 compares - 2,016 at 64, 32,640 at 256, over half a million at the
+ceiling - each a case-folded name compare of a few hundred cycles: seconds
+on a 4.77 MHz 8088 by 256 entries. `kern_big`'s sort is an insertion sort
+over Knuth's gaps (h = 3h' + 1), kept in BYTES (h x 24) and re-found each
+pass by climbing the sequence under the last one, so it needs no divide and
+no table. The key is the one above, unchanged - folders first, then the
+case-folded, NUL-padded name - in a subroutine of its own, and insertion
+moves an entry only past a strictly greater one, so equal keys keep their
+order. `kern_small` keeps the selection sort: at 32 entries it is 496
+compares, and the bytes are that kernel's to keep.
+
 ### 19.5 `..` is an entry in the listing, not a menu command
 
 In a subdirectory the listing **opens with a `..` row** — folder icon, no
@@ -52861,6 +52875,10 @@ window records the shape it was filled with rather than reading a global.) The b
 
 #### 22.6.2 `DSK_NENT` is 64 on `kern_big` and 32 on `kern_small`
 
+*(`kern_big`'s half is superseded by §22.6.4: there `DSK_NENT` is a 1,024
+ceiling and the listing is sized to its folder. `kern_small`'s 32 below
+stands, and so does `kern_dos`'s 64.)*
+
 Sixty-four was taken **for DOS**: DOS directories are busier than this
 OS's ever were — LEMMINGS 68 entries, F15 66, TD1 41 — and a listing that
 stops at 32 stops halfway down a real one. `kern_small` has no DOS. The
@@ -52921,6 +52939,141 @@ instead of restating it. With two arms in that file it now parses **both**,
 defaults to `kern_big`'s, and takes `--kern-small` on exactly the four
 recipes that already pass `--fatcap 2` — one fact about one disk, said about
 its FAT and about its listing.
+
+#### 22.6.4 The listing is SIZED TO ITS FOLDER on `kern_big` (and `kern_mega`)
+
+`DSK_NENT` was a size and is a **ceiling** on these two kernels: **1,024**
+entries, where it was 64. A Disk window's listing claim is sized to the
+folder it holds, grows when the window opens a bigger one, and is cut back
+when it leaves. `kern_small` is untouched (§22.6.2: 32 entries, its disks
+have never needed more) and so is `kern_dos`, which has no Disk window. The
+build switch is `DSK_BIGDIR`, defined in `kernel/dskwin.inc` for exactly
+those two kernels.
+
+**Why it could be done without a resident listing.** §22.6.3 had already made
+the listing a claim of the WINDOW's: the mount writes into the store its
+caller aims it at. What capped it was one compare in the scan
+(`cmp bp, [dsk_nmax]` / `jae .scan_done` - the extras were invisible and not
+even counted), a handful of byte-wide index holders, the multi-selection's
+8-byte bitmap in the resident window block, a 1KB copy list and a selection
+sort chosen for 32 entries.
+
+**The claim's shape** (`files.inc`):
+
+```
+[0, FV_DOFF)        the multi-selection bitmap (§22.27): FM_MSELB =
+                    DSK_NENT/8 = 128 bytes, one bit per entry
+FV_DOFF ...         FS_N entries of DSK_DE_STRIDE (24)
+FS_IOFH x 128 ...   FS_N icon-reference bytes (§25.9), on the first
+                    128-byte boundary at or past the entries
+```
+
+`FS_IOFH` counts 128-byte units on these kernels (256 on `kern_small`): a
+byte of them reaches 32KB, which the ceiling needs, and the finer boundary
+is what lets the floor be 1KB - at 256 the pad alone pushed 32 entries to
+1,056 bytes. The bitmap ahead of entry 0 keeps even an empty listing's
+index off offset 0, which `FS_IOFH` spends on "none".
+
+**Thirty-two entries a KB**: `fmv_cap` = `FS_VKB` x 32 and `fmv_need(n)` =
+⌈n/32⌉ KB, never under `VIEW_KB` (**1KB** on these kernels) and never past
+the ceiling's 32 - both a shift, no divide. It is safe because an entry costs
+25 bytes (its record and its reference byte), so 32 of them are 800 and the
+224 a KB left over covers `FV_FIX` - the 128-byte bitmap plus the most the
+index's boundary can pad, 255 - from 2KB up; at 1KB the 32 fit EXACTLY,
+because 128 + 32 x 24 = 896 is itself a boundary, so the whole is 928 bytes
+(an `%error` holds it). So a window holds **1KB for a folder of up to 32
+entries - every folder on every shipped disk, measured: the busiest is
+`apps.img`'s APPS at 24** - where it held 2KB before; 10KB at 301, 8KB at 256
+and **32KB at the ceiling**, and only while it shows that folder. A 512-byte
+floor was weighed and refused: it holds 10, so every folder of 11 to 32 -
+most of the shipped ones - would pay the grow below on every visit, for 512
+bytes a window. A tighter packing (25 an
+entry) was the first version and cost a 16-bit divide each way; the shift
+saved about 30 resident bytes for at most a KB or two of transient heap.
+
+**How it grows.** `dsk_dest_x` now takes the store's capacity in `AX` and
+zeroes `[dsk_nover]`. The scan stores entries up to `[dsk_nmax]` and COUNTS
+the rest into `[dsk_nover]`, reading the whole directory. After the mount,
+`fmv_load` retires the destination FIRST (a grow is a claim, and a claim may
+compact - §66.5.10.2, `tools/dsegaudit.py`), then:
+
+- `[dsk_nover]` ≠ 0: `mem_regrow` (§50.3.1) the claim to hold
+  `2 x FS_N + [dsk_nover]` and mount again. On a FAT volume the count is
+  exact, so one grow suffices; a redirected volume's driver stops at its
+  first `OSAPI_FS_ENT` refusal, so it counts 1, and the doubling is what
+  bounds that case to a handful of re-lists. The second mount re-reads the
+  directory (§18.95's cache is dropped by every loud mount) - which is the
+  price of a folder over 32 entries, and it is paid on EVERY visit, because
+  navigating away cuts the claim back (working inside it does not - below). That is the trade the floor makes:
+  a big folder costs a second directory read each time it is opened, and no
+  window holds memory for a folder it is not showing.
+- `[dsk_nover]` = 0, and the window NAVIGATED - the drive or folder it was
+  asked for is not the one it already showed: `mem_regrow` it DOWN to
+  `fmv_need(FS_N)`. A shrink keeps the base and cannot fail. So a folder of
+  32 or fewer entries comes and goes with no grow and no second mount at all.
+- `[dsk_nover]` = 0 on a re-list IN PLACE - a delete, a paste, a Refresh, a
+  sync - keeps the claim it has. It was the size this folder needed a moment
+  ago, and cutting it back would only make the next file added to a folder
+  sitting on the boundary pay a grow and a second directory read. The
+  compare is made once, at `fmv_load`'s head, and its `ZF` banked on the
+  stack; a pass that GREW banks "navigated" instead, so the doubling a
+  redirected volume asks for is still cut back to fit. +18 bytes.
+- **A grow refused keeps the listing that fit** (§50.3: memory is a
+  performance input). `mem_regrow` does not call the relocation proc
+  (§66.7), so `fmv_rsz` writes `FS_VSEG` and the `[fm_vseg]` mirror itself.
+
+`dsk_ioff` follows the entries STORED, not the room: the scan calls
+`dsk_ioffx` with its count at `.scan_done`, so the index starts on the
+boundary at or past them and a claim cut back to fit keeps every byte it
+still owes. The bitmap ahead of them keeps an empty listing's index off
+offset 0, which `FS_IOFH` spends
+on "none".
+
+**A sibling adopts a listing only if it fits.** `fmv_take` (§22.1's
+`fmv_bcast`) copies the acting window's listing into every other window on
+the same folder; a sibling whose claim is smaller than the source's keeps
+`FSD_CACHE` and re-lists when it next comes to the front (§22.8), rather
+than being grown from inside a broadcast.
+
+**Icons: sixteen peeks a listing.** The harvest (§18.3 step 4) reads a
+package's first sector for every `.O88` whose body is not already in the
+machine-wide store - ~400 ms an `int 13h` on the target, so a folder of 256
+new packages would be a minute and a half. `[dsk_hbud]` = `DSK_HARV_MAX`
+(16) is set once per `fmv_load`, not per mount, and each peek spends one;
+past it a package draws the generic icon (§25). It is a WORD counted down
+through 0 into the negatives (`dec` / `js`): two mounts of 1,024 entries is
+the most one listing asks of it, so it cannot wrap. A body read is kept in the
+store, so the next visit's sixteen are the NEXT sixteen; a volume with an
+`ASSOC.DAT` (§54.7) costs none of it. Folders and documents never peek.
+
+**The sort is a Shell sort** on these kernels (§19.4.1).
+
+**What became words.** `[ld_pending]` (index + 1 wrapped to "none" at 256)
+and the `[ui_post]` beside it; `fm_anch`, the Shift anchor (a byte read
+through `cbw`, so every index from 128 up was negative); Delete's count of a
+set (`fm_mw_cnt`, now twice the count with the folder flag in bit 0). Cut and
+Copy of a set claim `⌈FS_N/64⌉` KB of list rather than a fixed 1KB, which
+overran past 64 records.
+
+**The multi-selection's bitmap left the resident block** (§22.27): `FS_SIZE`
+61 where it was 69, **-40 bytes of `.bss`**, and it is reached through
+`fm_mdiff` / `fm_mxor`, which lend `ES` for the one instruction. An index
+bounded by `FS_N` implies the claim - a window with none had a quiet mount
+and lists nothing - and `fm_many`/`fm_mzero` answer "empty" for a window
+with no claim.
+
+**What it cost**: measured by `tools/kernsize.py`'s sections against the
+commit before, **`kern_big` +242 resident bytes** (`.cold` +276, `.bss` -34,
+`.text` +0; the 1KB floor's 128-byte units are six of them and keeping the
+claim across a re-list in place eighteen) - inside the
+owner's 250 for the work, which asked that it
+not eat the slack kept for drivers and fixes. `kern_small` and `kern_dos`:
+**0**, byte for byte. The row is `tests/bigdir.py`.
+
+**Not done, and why.** A truncated listing (the ceiling, or a refused grow)
+does not say so on the status line: the count it shows is what is listed.
+Saying `64 of 300` is a per-window word and a format, and the bar for this
+work was resident bytes.
 
 ### 22.7 The status line's resting state — this folder's size, this volume's free space
 
@@ -54751,8 +54904,11 @@ the window's `W_ONDRAG` (SPEC.md 13.8.1) draws each movement, and the release's
 one file (SPEC.md 38), so in its block no modifier is seen and no drag select
 starts.
 
-**The representation.** Each block grows eight bytes, `FS_MSEL`, a bitmap of
-directory indices (`DSK_NENT` is 64). **An EMPTY bitmap means the selection is
+**The representation.** Each block grew eight bytes, `FS_MSEL`, a bitmap of
+directory indices (`DSK_NENT` was 64) - **and gave them back in §22.6.4**:
+the bitmap is `FM_MSELB` = 128 bytes at the head of the window's listing
+claim now, one bit for each of up to 1,024 entries, reached through
+`fm_mdiff` / `fm_mxor`. **An EMPTY bitmap means the selection is
 `FS_SEL` alone.** A gesture that wants more ENTERS the bitmap (`fm_menter`:
 the focus becomes its first bit, whose band is already on the glass), and
 from then on the bitmap is the whole selection and `FS_SEL` only the focus

@@ -268,6 +268,16 @@ def main():
         # same statement against the kernel we have.
         dseg = u16(m.read(S("dsk_dseg"), 2))
         nmax = u16(m.read(S("dsk_nmax"), 2))
+        eq = os88sym.equates()
+        if "FV_FIX" in eq:
+            # SPEC.md 22.6.4: the cap is THE WINDOW'S - its claim's KB x 32
+            # (fmv_cap) - and [dsk_nmax] at rest is whatever the last aim or
+            # retire left there, which is no longer a statement about any
+            # listing
+            vp = u16(m.read(S("fm_vp"), 2))
+            vkb = m.read((os88geom.KERNEL_SEG << 4) + vp + eq["FS_VKB"],
+                         1)[0] if vp else 0
+            nmax = vkb * 32
         doff = u16(m.read(S("dsk_doff"), 2))
         print("opened %s:  [dsk_dseg] = %04x  [dsk_doff] = %04x  "
               "[dsk_nmax] = %d" % (letter, dseg, doff, nmax))
@@ -289,7 +299,7 @@ def main():
               "FS_VSEG. If that store is one of the DRIVER's records the "
               "donation is back under a new name",
               got="%04x" % vseg, want="a claim the driver does not own")
-        check(nmax > 0, "[dsk_nmax] is a real cap",
+        check(nmax > 0, "the listing's cap is a real one",
               "a zero cap lists nothing, which would make check 4 below read "
               "an empty window as a mount failure",
               got=nmax, want="> 0")
@@ -304,9 +314,9 @@ def main():
               "exposed to",
               got=len(rows), want="> 0")
         check(len(rows) <= nmax,
-              "...and no more than [dsk_nmax] of them",
-              "the listing is bounded by the floor's cap now, for every "
-              "volume on the machine",
+              "...and no more than the cap",
+              "the listing is bounded by the window's claim (SPEC.md "
+              "22.6.4), for every volume on the machine",
               got=len(rows), want="<= %d" % nmax)
 
     print()

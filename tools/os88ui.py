@@ -1260,7 +1260,8 @@ class UI:
             # the listing cache is a purgeable claim that MOVES (its reloc
             # rewrites FS_VSEG): its base and its bytes in one snapshot
             vseg, got = (os88marty.seg_snap(
-                self.m, base + geom.FS_VSEG, [(0, n * geom.DSK_DE_STRIDE)],
+                self.m, base + geom.FS_VSEG,
+                [(_fvdoff(), n * geom.DSK_DE_STRIDE)],
                 what="the Disk window's listing", sym=self._S, step=False)
                 if n else (0, None))
             if n and vseg:
@@ -1358,8 +1359,9 @@ class UI:
                 break
         else:
             raise UIError("the list would not scroll to the top")
-        for _ in range(200):                # a selection walks a row a key
-            if self.scroll(win) >= entry:
+        for _ in range(1100):               # a selection walks a row a key,
+            if self.scroll(win) >= entry:   # and a listing runs to DSK_NENT
+                                            # = 1,024 (SPEC.md 22.6.4)
                 break
             if not step("ArrowDown"):       # the END STOP: it clamped, so
                 break                       # `entry` is as visible as it gets
@@ -1966,6 +1968,15 @@ def _assoc_note(name, ty):
 def _sel(ui):
     v = ui._word("menu_sel")
     return -1 if v == 0xFFFF else v
+
+
+def _fvdoff():
+    """Where entry 0 sits in a Disk window's listing claim: past the
+    multi-selection bitmap on kern_big (SPEC.md 22.6.4), at 0 on kern_small."""
+    try:
+        return geom.FV_DOFF
+    except Exception:
+        return 0
 
 
 def _decode(raw, n):

@@ -529,6 +529,15 @@ def open_row(m, mo, S, settle, wx, wy, row=0, card=None, expect=None):
 #
 # So: ask. disk_dir is the global mount snapshot and a navigation is a full
 # mount, so it names the folder just entered.
+def _fvdoff():
+    """Entry 0's offset in a Disk window's listing claim: past the
+    multi-selection bitmap on kern_big (SPEC.md 22.6.4), 0 on kern_small."""
+    try:
+        return os88geom.FV_DOFF
+    except Exception:
+        return 0
+
+
 DSK_DE_STRIDE = 24              # SPEC.md 19.1: name @0 NUL-padded, type @16,
 DSK_DE_TYPE = 16                # first cluster @18, size @20 - and the STAGED
                                 # LISTING's stride is 24, not DSK_DE_SIZE's 32.
@@ -577,7 +586,7 @@ def listing(m, S):
         n = _u16(m.read(base + FS_N, 2))
         if n:                       # the cache claim MOVES (SPEC.md 66): its
             vseg, got = os88marty.seg_snap(     # base and bytes in one read
-                m, base + FS_VSEG, [(0, n * DSK_DE_STRIDE)],
+                m, base + FS_VSEG, [(_fvdoff(), n * DSK_DE_STRIDE)],
                 what="the Disk window's listing", sym=S, step=False)
             if vseg:
                 return _decode(got[0], n)

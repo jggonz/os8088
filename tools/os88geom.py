@@ -279,10 +279,17 @@ _MIRROR = {
     # cache, which is how a host script asks "does this entry name a row in
     # the store, or the 0xFF blank?" without judging pixels. Two rows read it
     # - tests/icoshed.py and tests/rdicon.py - which is the second copy
-    # t_mirror exists to catch. FS_IOFH is a HIGH byte, so the offset is
-    # `(FS_IOFH << 8) + FV_ICOIX + entry`.
+    # t_mirror exists to catch. The offset is
+    # `(FS_IOFH << FV_IOSH) + FV_ICOIX + entry` - FV_IOSH below.
     "FS_IOFH": ("kernel/files.inc", 15),
     "FV_ICOIX": ("kernel/files.inc", 0),
+    # ...and where ENTRY 0 is in that cache (SPEC.md 22.6.4): past the
+    # multi-selection's bitmap, which kern_big keeps at the head of the claim.
+    # kern_small has no bitmap and its entries start at 0.
+    "FV_DOFF": ("kernel/files.inc", {"big": 128}),
+    # ...and the index's base is FS_IOFH << FV_IOSH: 128-byte units on
+    # kern_big (22.6.4), 256 on kern_small (22.6.1), where it is 8
+    "FV_IOSH": ("kernel/files.inc", {"big": 7}),
     # kernel/kernel.asm - the chrome
     "MBAR_H": ("kernel/kernel.asm", 20),
     "TITLE_H": ("kernel/kernel.asm", 18),

@@ -168,9 +168,9 @@ def main():
         # time", kernel/files.inc), so it reads 0 by the time anything has
         # settled. The window is where the listing still is.
         #
-        # The index sits immediately past the entries, which is `fmv_iofs`'s
-        # arithmetic and `dsk_dest_x`'s, and `[dsk_nmax]` is the width both
-        # of them use. tests/icostore.py reads it the same way.
+        # The index sits at FS_IOFH << FV_IOSH, the window's own record of where
+        # its mount put it (SPEC.md 22.6.4). tests/icostore.py reads it the
+        # same way.
         vp = u16("fm_vp")
         if not vp:
             fail("there is no acting Disk window after entering B:/APPS, so "
@@ -182,7 +182,11 @@ def main():
                  "entering B:/APPS - a window with no store gets a QUIET "
                  "mount, which harvests no icons at all, and there is no "
                  "floor listing to fall back to any more (SPEC.md 22.6)")
-        refs = list(m.read((vseg << 4) + n * V("DSK_DE_STRIDE"), n))
+        # ...at the window's OWN index base, FS_IOFH << FV_IOSH (SPEC.md
+        # 22.6.4: a boundary past its entries, no longer [dsk_nmax] wide)
+        iofh = m.read((kseg << 4) + vp + V("FS_IOFH"), 1)[0]
+        n = int.from_bytes(m.read((kseg << 4) + vp + V("FS_N"), 2), "little")
+        refs = list(m.read((vseg << 4) + (iofh << V("FV_IOSH")), n))
         used = [r for r in refs if r not in (ICO_R_FOLDER, ICO_R_NONE)]
         print("ascabsorb: B:/APPS - %d entry/ies iconned, store %d -> %d"
               % (len(used), root_rows, after_rows))

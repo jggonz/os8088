@@ -907,9 +907,13 @@ ui_task:
                                 ; symptom 29.4.1 exists to remove
 .chk_ld:
     xor ax, ax                  ; set by files.inc's click handler, stored as
-    xchg al, [ld_pending]       ; directory index + 1, consumed before running
-    or al, al                   ; - a BYTE now, and the xor above leaves AH 0
-                                ; so `dec ax` and the call below are untouched
+%ifdef DSK_BIGDIR               ; directory index + 1, consumed before running
+    xchg ax, [ld_pending]       ; - a WORD on this build (SPEC.md 22.6.4)
+    or ax, ax
+%else
+    xchg al, [ld_pending]       ; - a BYTE here, and the xor above leaves AH 0
+    or al, al                   ; so `dec ax` and the call below are untouched
+%endif
     jz .chk_assoc               ; ...and NOT .chk_pcmd: a document open posts
                                 ; no package index, so skipping past the step
                                 ; below on "no package pending" is skipping
