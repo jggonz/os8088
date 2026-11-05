@@ -587,9 +587,11 @@ class Aot:
         if self.exact and pc in self.leaders:
             # THE BLOCK'S COST, tested before it runs: the core runs a block
             # the budget cannot cover, and ends the run where it would
+            # FALL THROUGH when the budget covers the block - the case that
+            # matters - and the exit out of line, a not-taken jle
             k = self.lab()
-            L("    cmp bp, %d" % self.leaders[pc], "    jg %s" % k,
-              "    mov si, 0x%04X" % pc, "    jmp xa_resume", "%s:" % k)
+            L("    cmp bp, %d" % self.leaders[pc], "    jle %s" % k)
+            self.tail.append(["%s: mov si, 0x%04X" % (k, pc), "    jmp xa_resume"])
         if self.c64 and self.static_core(mn, mode, opnd):
             L("    mov si, 0x%04X" % pc, "    jmp xa_resume")
             return False

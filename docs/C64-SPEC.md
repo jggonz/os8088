@@ -980,6 +980,10 @@ countdown inside a chain - an I/O access, which always ends one - see what
 they saw before. A bail gives back its group's rest and what was charged
 ahead after it. +1 point on each BASIC loop under warp (110.2 -> 111.2,
 102.2 -> 103.2, 109.4 -> 110.4); the slice hash below is the reference's.
+**A block test falls through** when the budget covers the block - the
+case that matters - its exit out of line (`cmp bp, W / jle`): a not-taken
+jump where the taken `jg` over the exit was, +1 point again (111.0 -> 112.0,
+103.2 -> 103.6, 110.4 -> 111.4) and the slice hash unchanged.
 **The inexact alternative was measured and not taken**: testing the
 countdown only at loop heads (a backward branch's or JMP's target) gave
 116.0%, 107.8% and 116.8% - five points more - at the price of runs that
