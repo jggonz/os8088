@@ -411,8 +411,9 @@ af_slot:
     mov ax, di
     mov dx, AF_PICPAR
     mul dx
-    add ax, [af_pclaim]
-    mov es, ax
+    mov dx, [af_pclaim]             ; (a SUB a slot on kern_mega: ar_sub)
+    call ar_sub
+    mov es, dx
     pop dx
     pop ax
     ret

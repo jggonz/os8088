@@ -530,13 +530,16 @@ ar_romtry:
     cmp ax, cx
     jb .wrongf
 .lenok:
-    mov ax, es
-    add ax, 2
-    mov [ar_rimg], ax
+    mov dx, es                      ; the image: two paragraphs in, past the
+    mov ax, 2                       ;   header (a selector of its own on
+    call ar_sub                     ;   kern_mega: ar_sub)
+    mov [ar_rimg], dx
     push word [es:20]               ; the CRC32 the import checked it against
     push word [es:22]
     mov bx, [es:18]
-    call ar_crcimg                  ; DX:AX over AX:0, BX:CX bytes
+    mov dx, es
+    mov ax, 2
+    call ar_crcimg                  ; DX:AX over the image, BX:CX bytes
     pop bx
     pop cx
     cmp ax, cx
@@ -575,36 +578,110 @@ ar_crc32:
     not dx
     ret
 
-; ar_crcimg - DX:AX = the CRC-32 of an image of BX:CX bytes (at most 128KB)
-; at AX:0, a segment at a time. Clobbers BX, CX, SI
+; ar_crcimg - DX:AX = the CRC-32 (zlib's) of an image of BX:CX bytes (at most
+; 128KB) at paragraph AX of the claim DX, 64KB at a time through ar_sub.
+; Clobbers BX, CX, SI
 ar_crcimg:
     push ds
-    mov ds, ax
+    push dx                         ; (the claim and the image's paragraph,
+    push ax                         ;   for the second 64KB)
+    call ar_sub                     ; DS = the image's first 64KB
+    mov ds, dx
     xor si, si
     mov ax, 0xFFFF
+    mov dx, ax
     or bx, bx
     jz .one
     push cx                         ; the first 64KB, then the rest
-    mov dx, ax
     xor cx, cx
     call ar_crc32r
     pop cx
+    pop bx                          ; (the paragraph)
+    pop si                          ; (the claim)
+    push dx
     push ax
-    mov ax, ds
-    add ax, 0x1000
-    mov ds, ax
+    mov dx, si
+    lea ax, [bx+0x1000]
+    call ar_sub                     ; DS = past its first 64KB
+    mov ds, dx
     pop ax
+    pop dx
     xor si, si
     jcxz .done
     call ar_crc32r
     jmp short .done
 .one:
-    mov dx, ax
+    add sp, 4
     call ar_crc32r
 .done:
     not ax
     not dx
     pop ds
+    ret
+
+; ar_sub - DX = a claim of ours (or our own segment), AX = a paragraph offset
+; into it: DX = a segment based there, for as long as the claim lives
+; (docs/plans/ARCADE-MEGA-PLAN.md M1). The one door every LASTING derived
+; segment goes through: on kern_mega a claim is an LDT selector and the sum
+; names another descriptor, so the arm asks OSAPI_SEG SEG_SUB, whose window
+; moves and goes with its claim (asked again, the same selector; every
+; real-mode kernel answers the sum). Refused (no LDT entry), DX is kept: the
+; damage stays in our own claim, never a sum on a selector (SPEC.md
+; 50.6.11). The shipped build is the sum. Kept: all else
+ar_sub:
+%ifdef PKG_MEGA
+    push ax
+    push bx
+    push cx
+    mov bl, SEG_SUB
+    xor cx, cx                      ; (to its end, 64KB at most)
+    call OSAPI_SEG
+    pop cx
+    pop bx
+    pop ax
+%else
+    add dx, ax
+%endif
+    ret
+
+; ar_at - ar_sub for a WALK: DX = a claim, AX = a paragraph offset, DI = the
+; word holding this walk's window (0 before the first): DX = the window aimed
+; there - on kern_mega OSAPI_SEG SEG_AT, ONE descriptor re-aimed per step
+; however far the walk goes (a 448KB zip a chip at a time); refused there
+; (CF=1) on a real-mode kernel, where the sum is ours. Valid until the next
+; ar_at on the same word, and over a claim that does not move meanwhile.
+; Kept: all else
+ar_at:
+%ifdef PKG_MEGA
+    push ax
+    push bx
+    push cx
+    push dx
+    mov bl, SEG_AT
+    mov cx, [di]
+    call OSAPI_SEG
+    jc .sum
+    or dx, dx                       ; (no LDT entry free: the claim kept)
+    jz .keep
+    mov [di], dx
+    add sp, 2
+    pop cx
+    pop bx
+    pop ax
+    ret
+.keep:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+.sum:
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
+    add dx, ax
     ret
 
 ; ar_crc32r - the CRC's register DX:AX run over CX bytes at DS:SI (0 =

@@ -67,9 +67,10 @@ qbs_prep:
     xor ax, ax
     cld
     rep stosw
-    mov ax, [ar_rimg]
-    add ax, 0x1000
-    mov ds, ax
+    mov dx, [ar_rimgc]              ; (the image's 64KB on: its claim's
+    mov ax, 0x1002                  ;   paragraph past the header)
+    call ar_sub
+    mov ds, dx
     xor si, si
     mov di, 0x7000
     mov cx, 0x800

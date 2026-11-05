@@ -320,7 +320,12 @@ ar_zfree:
 .r:
     ret
 
-; ar_zat - DX:AX = an offset into the zip: ES:BX = it, normalised (BX < 16).
+; ar_zat - DX:AX = an offset into the zip: ES:BX = it, with at least 32KB
+; of the segment past BX (every chip is 8KB at most, a central directory
+; 32KB). The shipped build normalises (BX < 16); the kern_mega arm takes the
+; 32KB granule it lies in through ar_sub, so a 448KB zip holds 14 lasting
+; windows at most, each moving with the claim - a re-aimed SEG_AT window
+; would not, and the pool packs at any task's claim (SPEC.md 50.6.11).
 ; CF=1 when it is at or past the zip's end. Kept: all else
 ar_zat:
     cmp dx, [ar_zsize+2]
@@ -338,9 +343,18 @@ ar_zat:
     shr ax, cl
     mov cl, 12
     shl dx, cl
-    or ax, dx
-    add ax, [ar_zclaim]
-    mov es, ax
+    or ax, dx                       ; AX = its paragraph
+%ifdef PKG_MEGA
+    mov dx, ax                      ; the granule, and BX into it
+    and dx, 0x07FF
+    mov cl, 4
+    shl dx, cl
+    add bx, dx
+    and ax, 0xF800
+%endif
+    mov dx, [ar_zclaim]
+    call ar_sub
+    mov es, dx
     pop cx
     pop dx
     pop ax
@@ -382,7 +396,7 @@ ar_zeocd:
     mov cx, [es:bx+12]              ; its size: within one segment
     cmp word [es:bx+14], 0
     jne .bad
-    cmp cx, 0xFFF0
+    cmp cx, 0x8000                  ; (32KB: ar_zat's reach)
     ja .bad
     mov ax, [es:bx+16]              ; its offset, and its end in the zip
     mov dx, [es:bx+18]
@@ -580,6 +594,18 @@ ar_impfind:
     pop si
     ret
 
+; ar_iplace - DS:SI = a chip (arcsets.inc): DX = its place in the image
+; being made, two paragraphs past the header, through ar_sub (one SUB a
+; chip on kern_mega, moving and going with the claim). Kept: all else
+ar_iplace:
+    push ax
+    mov ax, [si+AC_AT]
+    add ax, 2
+    mov dx, [cs:ar_iclaim]
+    call ar_sub
+    pop ax
+    ret
+
 ; ar_impmake - SI -> a set whose chips are all to hand: each unpacked from
 ; the zip(s) - or, LOOSE ([ar_iloose]), read from its own file here - into
 ; the image, checked against its CRC-32 as it lands, and the image written
@@ -612,9 +638,13 @@ ar_impmake:
     mov cl, 12
     shl bx, cl
     or ax, bx
-    mov bx, dx                      ; BX = the segment to clear from
+    xor bx, bx                      ; BX = the paragraph to clear from
 .zero:
-    mov es, bx
+    mov dx, [ar_iclaim]
+    xchg ax, bx
+    call ar_sub
+    xchg ax, bx
+    mov es, dx
     mov cx, ax
     cmp cx, 0x800
     jbe .zl
@@ -641,11 +671,8 @@ ar_impmake:
     push cx
     cmp byte [ar_iloose], 0
     je .fromzip
-    mov ax, [si+AC_AT]              ; LOOSE: the chip's file, read straight
-    add ax, [ar_iclaim]             ;   into its place (a paragraph, as the
-                                    ;   read wants)
-    add ax, 2
-    mov es, ax
+    call ar_iplace                  ; LOOSE: the chip's file, read straight
+    mov es, dx                      ;   into its place
     xor bx, bx
     mov cx, [si+AC_LEN]
     xor dx, dx
@@ -701,14 +728,12 @@ ar_impmake:
     call ar_zat
     jc .fail
     push si
-    mov ax, [si+AC_AT]              ; ES:0 = its place in the image (in
-    mov cx, [si+AC_LEN]             ;   paragraphs, past the header's two)
+    call ar_iplace                  ; DX:0 = its place in the image
+    mov cx, [si+AC_LEN]
     push es
     pop ds                          ; DS:SI = the data
     mov si, bx
-    add ax, [cs:ar_iclaim]
-    add ax, 2
-    mov es, ax
+    mov es, dx
     xor di, di
     cmp word [cs:ar_imeth], 8
     je .inf
@@ -728,11 +753,9 @@ ar_impmake:
     mov cx, [si+AC_LEN]
     mov di, [si+AC_CRC]
     mov bp, [si+AC_CRC+2]
-    mov ax, [si+AC_AT]
+    call ar_iplace                  ; the chip, in its place
     push ds
-    add ax, [ar_iclaim]             ; the chip: its paragraph past the header
-    add ax, 2
-    mov ds, ax
+    mov ds, dx
     xor si, si
     call ar_crc32
     pop ds
@@ -774,8 +797,8 @@ ar_impmake:
     mov [es:18], ax
     mov cx, [si+AS_LEN]             ; (past 64KB a segment at a time)
     mov bx, [si+AS_LEN+2]
-    mov ax, es
-    add ax, 2
+    mov dx, es
+    mov ax, 2
     push si
     call ar_crcimg
     pop si

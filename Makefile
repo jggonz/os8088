@@ -11634,7 +11634,7 @@ $(BUILD)/arcade/arcart.inc: tools/arcart.py
 $(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARCGEN)/qbpatch.inc $(ARCGEN)/arcsets.inc \
                      $(BUILD)/arcade/arcart.inc | $(BUILD)
 	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I $(ARCGEN)/ -I $(BUILD)/arcade/ \
-		-I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ $<
+		-I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ apps/arcade/arcade.asm
 
 # A user's <SET>.ROM (ARCADE-SPEC 1.4), from the image each set's rule made
 $(BUILD)/arcade/roms/%.ROM: $(BUILD)/arcade-rom/%.ROM tools/getarcrom.py
@@ -15500,7 +15500,8 @@ MEGAAPPDIR := $(MEGADIR)/apps
 MEGAPKGS := $(MEGAAPPDIR)/video.o88 $(MEGAAPPDIR)/audio.o88 \
             $(MEGAAPPDIR)/tracker.o88 $(MEGAAPPDIR)/midirack.o88 \
             $(MEGAAPPDIR)/pixel.o88 $(MEGAAPPDIR)/xtmp3.o88 \
-            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88
+            $(MEGAAPPDIR)/realdmg.o88 $(MEGAAPPDIR)/taskmgr.o88 \
+            $(MEGAAPPDIR)/arcade.o88
 MEGABASE = $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))
 # ...and the substitution, ONE IDIOM for every list a kern_mega disk names
 # (SMALLSUB's): the mega arm of any package that has one, everything else as
@@ -15629,6 +15630,28 @@ $(MEGAAPPDIR)/taskmgr.bin: apps/taskmgr/taskmgr.asm apps/os88api.inc \
 	@echo "taskmgr (PKG_MEGA): $(call FILESIZE,$@) bytes"
 $(MEGAAPPDIR)/taskmgr.o88: $(MEGAAPPDIR)/taskmgr.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(MEGAAPPDIR)/taskmgr.bin -o $@
+
+# ARCADE's arm (docs/plans/ARCADE-MEGA-PLAN.md): protected mode throughout,
+# its region and claims above 1MB, code parts far-called through their CODE
+# selectors and Q*bert's program run in a code/data pair. The parts are the
+# shipped build's. It rides a floppy of its own, the twin of arcrel*.img
+# (the owner, 2026-11-05)
+$(MEGAAPPDIR)/arcade.bin: $(ARCADE_SRC) $(ARCGEN)/qbpatch.inc $(ARCGEN)/arcsets.inc \
+                          $(BUILD)/arcade/arcart.inc | $(BUILD)
+	@mkdir -p $(MEGAAPPDIR)
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -DPKG_MEGA -I apps/ -I apps/arcade/ -I $(ARCGEN)/ \
+	    -I $(BUILD)/arcade/ -I drivers/sound/ -l $(MEGAAPPDIR)/arcade.lst -o $@ apps/arcade/arcade.asm
+	@echo "arcade (PKG_MEGA): $(call FILESIZE,$@) bytes"
+$(MEGAAPPDIR)/arcade.o88: $(MEGAAPPDIR)/arcade.bin $(ARCADE_PARTS) tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $(MEGAAPPDIR)/arcade.bin -o $@ $(foreach p,$(ARCADE_PARTS),--part $(p)) --part-compress lz4
+#> [Kernels] arcrelmega :: ARCADE's kern_mega floppies (1.44MB, 1.2MB): its arm and ARCADE.TXT, no ROM
+arcrelmega: $(BUILD)/arcrelmega.img $(BUILD)/arcrelmega120.img
+$(BUILD)/arcrelmega.img: $(MEGAAPPDIR)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 $(APPDATAFOLDER) $< $(BUILD)/arcade/ARCADE.TXT
+	@python3 tools/os88disk.py --verify $@
+$(BUILD)/arcrelmega120.img: $(MEGAAPPDIR)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1200 $(APPDATAFOLDER) $< $(BUILD)/arcade/ARCADE.TXT
+	@python3 tools/os88disk.py --verify $@
 
 #> [Kernels] megapkgs :: print each kern_mega package arm against its shipped build
 megapkgs: $(MEGAPKGS) $(patsubst $(MEGAAPPDIR)/%,$(BUILD)/%,$(MEGAPKGS))

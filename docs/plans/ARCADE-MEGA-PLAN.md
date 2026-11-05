@@ -74,6 +74,15 @@ another opaque segment. Only what names a kern_mega marker goes under
 `%ifdef PKG_MEGA` (SPEC.md 20.18 rule 1), into an arm built by
 `make mega`.
 
+## 2.1 The owner's decisions (2026-11-05)
+
+- **Protected mode, region and claims high.** It frees conventional memory
+  for larger arcade ports on kern_mega later. The `FSXF_REAL` bracket is not
+  taken.
+- **A kern_mega twin of ARCADE's floppy** (`arcrelmega*.img`), the arm and
+  `ARCADE.TXT`, rather than room on `megaapps.img`. Disk space to be
+  confirmed when the arm is built (M4).
+
 ## 3. Waves
 
 Each wave lands on `arcade-emu` (or its successor) and is verified on the
@@ -82,15 +91,24 @@ host and by looking. The rows run once, after the last wave (CLAUDE.md,
 
 ### M1 - one door for every derived segment (shipped build; retires the pins)
 
-- [ ] `ar_seg`: DX = a claim, AX = a paragraph offset, CX = paragraphs,
-      giving DX = a segment there. On kern_mega it is `OSAPI_SEG SEG_SUB`;
-      on a real-mode kernel, or when refused, it is the sum. Every site in
-      section 1's first row goes through it: `ar_rimg`, the chips,
-      `af_slot`, the import image's places.
-- [ ] Past 64KB, a bound window and never `+1000h`. The `.ROM` image
-      (128KB) and the zip (448KB) are walked by `OSAPI_SEG SEG_AT`,
-      os88partsbody.inc's `op_at` pattern: `ar_crcimg`, `ar_zat`, the
-      sound chips at 10000h, and the import's clear.
+- [x] `ar_sub` (arcade.asm): DX = a claim, AX = a paragraph offset,
+      giving DX = a segment there. In the arm it is `OSAPI_SEG SEG_SUB`
+      (refused, the claim is kept, never a sum on a selector - SPEC.md
+      50.6.11); in the shipped build it is the sum. Every site in section
+      1's first row goes through it: `ar_rimg`, the chips (`ar_iplace`),
+      `af_slot`, the import image's clear, `qbs_seg`'s sound chips at
+      10000h.
+- [x] Past 64KB, never `+1000h`: `ar_crcimg` takes the claim and a
+      paragraph and asks `ar_sub` for each 64KB. AS BUILT, the zip walk is
+      NOT `SEG_AT`: a re-aimed window is not tied to its block, and on
+      kern_mega a pool block moves whenever any task's claim packs the pool
+      (SPEC.md 50.6.11, 50.3.5). So `ar_zat` takes the 32KB GRANULE an
+      offset lies in through `ar_sub` - a SUB that moves with the claim, 14
+      at most over a 448KB zip - with BX up to 32KB into it; every chip is
+      8KB at most and a central directory is now refused past 32KB.
+      `ar_at` (the `SEG_AT` door) is written and has no caller yet.
+      MEASURED on Bochs: the arm opens, reads all seven sets READY, and
+      plays Space Invaders on kern_mega in protected mode.
 - [ ] Every claim made MOVABLE, with a relocation proc that re-derives
       through `ar_seg`: the `.ROM`, the pictures, Pac-Man's and Q*bert's
       built parts and shadows, `qbs_seg`. `qb_gseg` and the code parts move
