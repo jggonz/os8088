@@ -238063,6 +238063,29 @@ Two things now meet it:
   86Box machine: the actions' sound late 51, 35 and 38 frames uncapped,
   **0, 0 and 0 capped**.
 
+#### 125.4.4 What a battle holds in 640 KB
+
+Measured on MartyPC's Hercules 5150 (640 KB, the owner's 86Box profile's
+machine), the owner's battles played to their first menu and the heap read
+off the machine (`tools/heapmap.py`), 2026-11-05:
+
+| | 100% Hercules | 75% |
+|---|---|---|
+| below the arena (kernel, low tables, boot-loaded drivers) | 94 KB | 94 KB |
+| the desktop's caches (directory read-ahead 31.5, raise cache 8, icons 5) | 44.5 | 44.5 |
+| a kernel claim and a driver image | 10.5 | 10.5 |
+| VBATTLE.O88, code and bss | 40.5 | 40.5 |
+| the block: tables 4, menu sounds 12, music ring 36, **entries 84 / 48**, idle loop 20 / 16, band pictures 8, band buffers 32 | 196 | 156 |
+| the two clip rings, each with its 16 KB guard | 2 x 88 | 2 x 108 |
+| the card's ring (page-safe, from the top) | 17 | 17 |
+| free, in two pieces | 30 | 30 |
+
+The block is claimed first and PINNED, so it lands just above the caches
+and they are a pocket no ring can use; the band's buffers are 16 KB where
+the band is 4.6; the entries are held from the play's start to its end.
+docs/plans/VBATTLE-RAM-PLAN.md is the plan to give the rings the ~90 KB
+that is, and to read nothing at a menu that a key has to wait for.
+
 ### 125.5 The band
 
 The band is the rows from the header's band row (142 by default) to 199 of
