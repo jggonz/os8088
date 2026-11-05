@@ -26,7 +26,10 @@ rings gain is a KB of burst the builder no longer has to cut**, on every
 adapter. Today the owner's 100% Hercules battle gets **88 KB a ring**; the
 plan below takes it to **~170**.
 
-## 2. The map today (measured)
+## 2. The map today (measured - on a FRESH BOOT)
+
+Its sizes are the battle's whatever the machine has done; its PLACES are a
+fresh boot's, and R1 below is written for a machine that has been used.
 
 MartyPC's Hercules 5150, 640 KB (`os8088_5150_herc_hdd_sb_gla`; the owner's
 86Box profile is the same machine: 256 KB + an AST SixPakPlus's 384), the
@@ -76,34 +79,58 @@ Three things in it are waste, and one is the size of a ring:
 - **The band's buffers at the band's size**: `(200 - band row) x 80`,
   4 KB-rounded - 2 x 5 KB on every adapter at the default band, where it
   is 2 x 16. **+11 KB a ring.**
-- **One claim for the block and the rings together**, sized from
-  `OSAPI_MEM_AVAIL` at `MEM_LVL_TOP` less the card's ring, made BEFORE the
-  card's: the claim path sheds and packs the caches to serve it (SPEC.md
-  50.6.3, 66.4), so the 44.5 KB pocket and the 30 KB of pieces come back
-  as ring. The directory read-ahead is the dearest cache in the system
-  (SPEC.md 50.6.6), but the battle reads one file through its own cursors
-  (`RG_CUR`, `vb_curm`) and walks no directory while it plays - and the
-  window rebuilds it when the play ends. **+~37 KB a ring.**
-- **Decided (the owner, 2026-11-05): the caches are purged for the play.**
-  *"Unless we are using them (stream doesn't use the read ahead cache
-  right?) we can purge them for the extra ram."* It does not: the battle
-  reads one open file through its own cursors and walks no directory while
-  it plays. So the claim is made at `MEM_LVL_TOP` with NO floor
-  (`OSAPI_MEM_FLOOR` left alone): every cache counts as free and the claim
-  path sheds them (SPEC.md 50.6.3-4). The Video Player gets the same room
-  through the compaction door - `OSAPI_MEM_COMPACT`'s `MEMC_WHATIF` at
-  `MEM_LVL_TOP`, then `MEMC_POST` and a claim on the wake (`vp_cptry`,
-  SPEC.md 98.3.19.1) - because its own region has to move to make it; the
-  battle's region is already at the top (`HI`), and what stood in the way
-  was its own pinned block landing over the caches, which one claim
-  removes. If a measurement shows the arena still split after it (a
-  movable claim of someone else's between), `vp_cptry`'s door is the
-  fallback, not a hand-rolled walk of the claim table.
+- **The caches are purged for the play - decided** (the owner,
+  2026-11-05): *"Unless we are using them (stream doesn't use the read
+  ahead cache right?) we can purge them for the extra ram."* It does not:
+  the battle reads one open file through its own cursors (`RG_CUR`,
+  `vb_curm`) and walks no directory while it plays, and the desktop
+  rebuilds the read-ahead when the play ends. So nothing is protected: the
+  play's claims are made at `MEM_LVL_TOP` with no floor (`OSAPI_MEM_FLOOR`
+  left alone), where every cache counts as free and is shed to serve them
+  (SPEC.md 50.6.3-4).
+- **NOT A FRESH BOOT: the machine the play starts on has been USED** (the
+  owner: *"they opened clear skies, then paint, then opened video battle,
+  then mounted the sound driver, then closed paint and clear skies, then
+  went to play. We can't treat 'straight out of a fresh boot' as a normal
+  situation"*). The 2 section's map is a fresh boot's, and the one thing
+  in it that is not general is WHERE things are: VBATTLE.O88's own region
+  can be anywhere - in the middle, with a closed program's hole under it -
+  a driver mounted later is an image wherever there was room, and other
+  packages may hold pinned claims of their own. So R1 assumes nothing about
+  the layout and asks the kernel for it:
+  1. **The compaction door, Video Player's** (`vp_cptry`, SPEC.md
+     98.3.19.1, 66.4.3): at Play, `OSAPI_MEM_COMPACT` `MEMC_WHATIF` at
+     `MEM_LVL_TOP` says what the arena would give if the battle's own
+     region moved too (it is declared `OS88_REGION_MOVABLE`). If that is
+     more than `OSAPI_MEM_AVAIL` says now, the play POSTS the compaction
+     (`MEMC_POST`), RETURNS, and starts on the `EVT_WAKE` - the window's
+     "Enter: play" becomes "ask, return, play on the wake". A package
+     cannot compact the region it is standing in, which is exactly why
+     the door exists; a hand-rolled walk of the claim table is refused
+     (`OSAPI_MEM_AVAIL`'s own comment).
+  2. **Claims laid out from the runs the kernel leaves, not as one
+     block**: the rings are the one part that wants to be big and
+     contiguous (each ring is contiguous; the two need not be together),
+     the rest of the block - the music ring, the band, the menu's sounds,
+     the idle loop, the tables, and until R2 the entries - are separate
+     claims that can each take a smaller run. Smallest-first into the
+     runs that fit them (best fit), then the two rings into the two
+     largest that remain, each sized to its run less its guard. A pinned
+     claim of someone else's in the middle then costs a ring its share of
+     one run, not the play its block.
+  3. The card's ring stays page-safe and top-down (`CLAIM_DMA_HI`).
+- **What it must be measured on**: a fresh boot AND a used machine - the
+  owner's session, scripted (open Skies and Paint, open the battle, mount
+  SOUND.DRV from the Control Panel, close Skies and Paint, play) - the
+  rings' KB on both, and nothing of the play's own left stranded. A plan
+  that only ever met the fresh boot is the defect this point names.
 - `VB_RKEEP` is re-justified or dropped: what in the play claims after
   the rings? (The stream's records are the driver's own; the bracket claims
   nothing.) Measured, not assumed.
 
-**R1 alone: 88 -> ~136 KB a ring (100%), 108 -> ~156 (75%).**
+**R1 alone, on a fresh boot: 88 -> ~136 KB a ring (100%), 108 -> ~156
+(75%). On a used machine: what the compaction gives - measured, and the
+row's second arm.**
 
 ### R2 - the entries leave the block (format 8: builder and engine)
 
@@ -170,7 +197,7 @@ small is told so on the Build tab (as the budget's red does today).
 
 | wave | row | measures |
 |---|---|---|
-| R1 | `vbtram` (new, MartyPC's Hercules 5150): the owner-shaped battle to its first menu, the heap read | the rings' KB against today's (88 / 108 on the owner's two), the caches gone during the play and back after it, nothing stranded |
+| R1 | `vbtram` (new, MartyPC's Hercules 5150): the owner-shaped battle to its first menu, the heap read - on a FRESH boot and on a USED machine (Skies and Paint opened, the battle opened, SOUND.DRV mounted, Skies and Paint closed) | the rings' KB on both against today's (88 / 108 on the owner's two on a fresh boot), the caches gone during the play and back after it, nothing of the play's stranded; on the used machine, the compaction posted and the play started on its wake |
 | R2 | `vbtbuild`, `vbtengine`, `vbtadapters` (format 8), `vbtram` | the block without entries; an action from every anchor exact (the engine against `vbtrules.Sim`, unchanged) |
 | R3 | `vbtmenu` (new): a key's wait at a menu with a head NOT held and the music under half | under 0.15 s, against today's |
 | R4 | `vbtcap` | the cap at the bundle's own ring |

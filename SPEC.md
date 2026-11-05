@@ -238080,8 +238080,12 @@ off the machine (`tools/heapmap.py`), 2026-11-05:
 | the card's ring (page-safe, from the top) | 17 | 17 |
 | free, in two pieces | 30 | 30 |
 
-The block is claimed first and PINNED, so it lands just above the caches
-and they are a pocket no ring can use; the band's buffers are 16 KB where
+That is a FRESH BOOT's map, and only its sizes are general: on a machine
+that has been used (programs opened and closed, a driver mounted between),
+the battle's own region, a later driver's image and the holes closed
+programs leave can be anywhere. On the fresh boot the block is claimed
+first and PINNED, so it lands just above the caches and they are a pocket
+no ring can use; the band's buffers are 16 KB where
 the band is 4.6; the entries are held from the play's start to its end.
 docs/plans/VBATTLE-RAM-PLAN.md is the plan to give the rings the ~90 KB
 that is, and to read nothing at a menu that a key has to wait for.
