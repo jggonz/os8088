@@ -427,6 +427,15 @@ static void ovl_cmd(int menu, int item, void *win)
             c64_jit_toggle();
             return;
         }
+        if (item >= C64_I_FS0) {            /* the frame skip (9.13): the
+                                             * three radio items, and the
+                                             * check moves */
+            c64_fs_mode = item - C64_I_FS0;
+            c64_fs_extra = 0;
+            c64_fs_cost = 0;
+            c64_menu_state();
+            return;
+        }
         if (item == C64_I_SWAPJOY) {
             c64_joyswap = !c64_joyswap;  /* the row's two indicators swap,
                                           * which its own field compare sees */

@@ -136,7 +136,7 @@ dependency (§1.3).
 
 | surface | source |
 |---|---|
-| menu bar: File / Edit / Snapshot / Preferences / Help (Debug is `#ifdef DEBUG` in VICE and absent here by VICE's own rule) and every item string under them, submenus folded into their head item; Help > About VICE... is the live item and the kernel's name pull-down About opens the same panel; the menu-set `AM_NAME` is `VICE` | `src/arch/gtk3/uimachinemenu.c` (`ui_machine_menu_bar_create`, the `.label` fields) |
+| menu bar: File / Edit / Preferences / Help (Debug is `#ifdef DEBUG` in VICE and absent here by VICE's own rule; Snapshot and every item this build can never enable are absent, §11.1 rule 1) and every item string under them; Help > About VICE... is the live item and the kernel's name pull-down About opens the same panel; the menu-set `AM_NAME` is `VICE` | `src/arch/gtk3/uimachinemenu.c` (`ui_machine_menu_bar_create`, the `.label` fields) |
 | hotkey captions on every item, live or greyed — every binding in `hotkeys.vhk` and its `!include`s, transcribed, so a greyed item is never captioned from memory | `data/hotkeys/hotkeys.vhk` + every `!include`'d `hotkeys-*.vhk` |
 | keyboard map: PC key → (row, col, shiftflag) of the 8×8 matrix, the `!LSHIFT`/`!RSHIFT`/`!LCBM`/`!LCTRL` positions, RESTORE on Page_Up, Tab = C=, Escape = RUN/STOP | `data/C64/gtk3_sym.vkm` (152 entries) |
 | the keyboard's LEVEL model: a key is in the matrix while it is down | `src/keyboard.c` (`keyboard_key_pressed`/`keyboard_key_released`, `keyboard_latch_modifier_states`); os8088 side: SPEC.md §9.7 `OSAPI_KEY_DOWN`, `kbd_track` in `kernel/mouse.inc` |
@@ -1185,9 +1185,9 @@ the run there instead stops 201 an INX short, which was checked. Rows 9 and
 
 #### 4.9.5 Preferences > Recompiler, and what it measured — BUILT
 
-**The menu item is VICE's `Emulation speed` slot**, item 6 of Preferences:
-that item was greyed in this port for good, and the kernel's eleven items a
-pull-down (`MENU_POPMAX`, SPEC.md 12.4) leave no other. It is a CHECK (§11.1
+**The menu item is in VICE's `Emulation speed` place**, item 4 of
+Preferences: that item could never be enabled in this port (§11.2). It is a
+CHECK (§11.1
 rule 4), ON from launch whenever there is a recompiler; OFF zeroes the core's
 page map (`c64j_off`) so no transfer looks for a block, and ON again sets
 the recompiler up afresh in the claim it kept (`c64j_setup` with nothing to
@@ -1661,8 +1661,8 @@ stub casts through `short` so the host's 32-bit `int` cannot hide it.
 - **Port 2** is the cursor/numpad arrows with **Ctrl as fire**. This is
   **this port's choice**, and it is stated: VICE's `JoyDevice2` default is
   `JOYDEV_NONE`, but a keyset is the only joystick source this machine has,
-  so `KeySetEnable=1` is the shipped state and Preferences > Allow keyset
-  joysticks is shown **checked and disabled**.
+  so `KeySetEnable=1` is the shipped state, and Preferences has no Allow
+  keyset joysticks item (§11.2: it could never be switched off).
 - **Port 1** is empty.
 - Read from the once-per-wake cached key state (§7.2) and presented as
   `$DC00`/`$DC01` bits 0–4 **active low** (up, down, left, right, fire).
@@ -2362,6 +2362,16 @@ Measured on `286-victory`, the card: 19.8% with every frame drawn, 31-33%
 with frame skip holding one tick between flushes (16-18 fps). Its earlier
 91.5-97.8% (§9.11's table) was a demo whose snow barely moved.
 
+**The policy is the user's** (Preferences, three radio items, `c64_fs_mode`):
+a music player can skip almost every frame and a game would rather run
+slowly than jerkily, so no one answer is right for every program. **Draw
+every frame** (0) holds the skip at 0 - every host tick with a change is
+drawn and the emulation slows instead; **Skip frames as needed** (1, the
+default) is the controller above; **Skip most frames** (2) holds it at
+`C64_FS_MAX`, two pictures a second, and gives the rest to the machine.
+`c64uitest` picks each and drives the controller past its threshold (red
+with the mode ignored).
+
 ### 9.12 Colour — fullscreen, in a VGA mode of its own (`FSXM_VGA13`)
 
 **The C64 is in colour on a VGA-class machine, fullscreen.** SPEC.md §53's
@@ -2373,9 +2383,8 @@ windowed path is 1bpp on every adapter.
 
 **The door is Preferences > Fullscreen (Alt+D)**, which on a display whose
 `os88_fsx_caps` offers `FSXM_VGA13` enters the bracket rather than §9.8's 2×
-monochrome window. VICE's fullscreen is in colour, and Preferences is at the
-kernel's `MENU_POPMAX` of 11, so a twelfth item could only be had by folding
-one of VICE's away (§11.1). On CGA and Hercules — no `FSXM_VGA13` — Alt+D is
+monochrome window. VICE's fullscreen is in colour, and this is VICE's own
+item rather than a second one. On CGA and Hercules — no `FSXM_VGA13` — Alt+D is
 §9.8's, unchanged. **Alt+D or Alt+Enter leaves**; every other key goes to
 the machine through `c64_key_push`, exactly as `os88_onkey` would hand it.
 The menu chords do not run inside: some open a dialog, and no drawing slot
@@ -2661,84 +2670,64 @@ arithmetic (§10.2).
 
 ### 11.1 The set, and what is live
 
-**Exactly five** — the kernel's `MENU_APPMAX` — with `AM_NAME` = **`VICE`**:
-**File (10 items), Edit (2), Snapshot (8), Preferences (11), Help (5)**.
-VICE's Debug menu is `#ifdef DEBUG` in `uimachinemenu.c` and is **absent here
-by VICE's own rule**, not greyed. Every item string is `uimachinemenu.c`'s
-and every hotkey caption is a `hotkeys*.vhk` line, transcribed (§2); the VICE
-line each string comes from is a comment beside it in `c64menu.c`.
+**Four menus**, with `AM_NAME` = **`VICE`**: **File (5 items), Edit (2),
+Preferences (9), Help (1)**. Every item string is `uimachinemenu.c`'s and
+every hotkey caption a `hotkeys*.vhk` line, transcribed (§2), except the
+three frame-skip items, which are this port's (§9.13); the VICE line each
+string comes from is a comment beside it in `c64menu.c`.
 
 **Two kernel limits shape every line of `c64menu.c`**: a pull-down is at most
 `MENU_POPMAX` = **11 items** and each item is truncated to `MENU_MAXCH` =
 **24 glyphs** (`kernel/menu.inc`; SPEC.md §39.2 — 11 is what a 200-line CGA
 gives). Four rules follow:
 
-1. **A section that is ENTIRELY unavailable folds into ONE item, and that
-   item is the section's FIRST** — its submenu head label where it has one,
-   otherwise the first item of the section, which is the action the section
-   exists for. Never a word invented to summarise it, and never the section's
-   last item (a greyed *Datasette controls* tells a reader looking for tape
-   support nothing). A section with a LIVE item in it is not folded, which is
-   why `reset_submenu` contributes three of File's ten slots. **The fold is
-   per SECTION, taken to its end**: File's disk section (Attach disk image,
-   Create and attach..., Detach disk image, Flip list) is ONE item, and
-   Snapshot's six-item event section is ONE item. **The one exception, taken
-   twice**: where the section's first item does not fit `MENU_MAXCH` the fold
-   lands on the first that does — `Attach datasette image...` and `Attach
-   cartridge image...` are 25 glyphs, so the tape section folds onto `Detach
-   datasette image` and the cartridge section onto `Cartridge freeze`.
+1. **An item this build can never enable is ABSENT, not greyed** (the
+   owner's rule, 2026-11). A greyed item that nothing can ungrey spends a
+   slot telling the user about a feature they cannot have. It replaced a
+   rule that kept every VICE item and folded unavailable sections into one
+   greyed item each; §11.2 lists what went and the fact that removed it.
+   VICE's Snapshot menu went whole, and its Debug menu is absent by VICE's
+   own `#ifdef DEBUG`.
 2. **The label is VICE's and is never shortened.** Where the label plus its
    `.vhk` caption passes 24 glyphs the CAPTION is dropped and the label
-   stands alone; the chord is then in §11.2's table. `Power cycle machine`,
-   `Load`/`Save snapshot image...`, `Quickload`/`Quicksave snapshot`,
-   `Advance frame` and `Datasette controls` are the items this costs a
-   caption. **One exception**: where dropping the caption would take away the
-   only chord a LIVE item has, the SEPARATOR gives instead — `Reset machine
-   CPU Alt+F9` is 24 glyphs with one space and 25 with two. **A caption is
-   only taken from an item that has one**: a `UI_MENU_TYPE_SUBMENU` entry has
-   no `.action`, so VICE prints no chord on it — `Attach disk image`, `Flip
-   list` and `Printer/plotter` carry the label alone, not the Alt+8 / Alt+I /
-   Alt+4 that belong to items inside them.
-3. **A present-but-impossible item wears `OS88_MENU_DIS` and the fact that
-   greys it is in a comment beside the string** (§11.2, SPEC.md §47) — and
-   **nothing is LIVE that only toasts a refusal.** A greying is retired the
-   moment its fact is.
-4. **A CHECK item's state is a `*` in the label**, and the item pointer is
-   swapped between the two spellings (`c64_menu_state`). Eight items are
-   `UI_MENU_TYPE_ITEM_CHECK` in `uimachinemenu.c`: Fullscreen, Show
-   menu/status in fullscreen, Warp mode, Pause emulation, Show status bar,
-   Mouse grab, Swap joysticks, Allow keyset joysticks. This kernel's menu has
-   no check mark and its face has no glyph for one; the `*` is
-   `apps/tracker`'s idiom and not `apps/solitaire`'s `MENU_DIS` twin, because
-   `MENU_DIS` is §47's *"you cannot have this"* and greying the item that is
-   ON would make it impossible to turn off. A CHECK that is ON and cannot be
-   turned off — `Show status bar`, `Allow keyset joysticks` — wears the `*`
-   AND `MENU_DIS` together. The marker is two glyphs so both spellings are
-   the same width; the longest, `* Pause emulation  Alt+P`, is exactly 24.
-   **Every other item on a menu that carries check items starts with the OFF
-   marker's two blanks as well**, so the labels form one column - Preferences'
-   `Restore display state`, `Advance frame`, `Mouse grab` and `Settings...`
-   once started two cells left of the rest.
-   The kernel reads the item strings through the set's `items` pointer at
-   draw time, so swapping a pointer is enough and `os88_menu_set` is not
+   stands alone; the chord is then in the table below. `Power cycle machine`
+   and `Advance frame` are the items this costs a caption. **One
+   exception**: where dropping the caption would take away the only chord an
+   item has, the SEPARATOR gives instead — `Reset machine CPU Alt+F9` is 24
+   glyphs with one space and 25 with two. `Attach disk image` is a
+   `UI_MENU_TYPE_SUBMENU` in VICE, with no `.action`, so it carries no chord.
+3. **Greyed means NOT NOW**: an item greyed by STATE wears `OS88_MENU_DIS`
+   and the fact that greys it is in a comment beside the string (§11.2's
+   second table, SPEC.md §47) — and **nothing is LIVE that only toasts a
+   refusal.** `c64uitest` fails if any item is greyed on a running, unpaused
+   machine, the Recompiler with no memory for it excepted (red with a greyed
+   item put back).
+4. **A CHECK item's state is a `*` in the label**, written into the label's
+   first byte (`c64_menu_state`). Fullscreen, Warp mode, Pause emulation,
+   Swap joysticks, the Recompiler and the three frame-skip RADIO items carry
+   it. This kernel's menu has no check mark and its face has no glyph for
+   one; the `*` is `apps/tracker`'s idiom and not `apps/solitaire`'s
+   `MENU_DIS` twin, because `MENU_DIS` is §47's *"you cannot have this"*
+   and greying the item that is ON would make it impossible to turn off. The
+   marker is two glyphs so both spellings are the same width; the longest,
+   `* Pause emulation  Alt+P`, is exactly 24. **Every other item on a menu
+   that carries check items starts with the OFF marker's two blanks as
+   well**, so the labels form one column. The kernel reads the item strings
+   through the set's `items` pointer at draw time, so `os88_menu_set` is not
    called again.
 
-**The order inside a menu is `ui_machine_menu_bar_create`'s.** Preferences is
-`Fullscreen`, `Restore display state`, `Show status bar`, `Warp mode`,
-`Pause emulation`, `Advance frame`, `Emulation speed` - here `Recompiler`
-(§4.9.5) - `Mouse grab`, `Swap joysticks`, `Allow keyset joysticks`,
-`Settings...` — 11, which is `MENU_POPMAX` exactly, and why `Show menu/status in fullscreen` is folded onto
-`Restore display state` even though that section has a live item in it: both
-are greyed display-state items the kernel owns, and carrying it would make
-12.
+**The order inside a menu is `ui_machine_menu_bar_create`'s**, less what
+rule 1 took: Preferences is `Fullscreen`, `Warp mode`, `Pause emulation`,
+`Advance frame`, `Recompiler` (VICE's `Emulation speed` place, §4.9.5),
+`Swap joysticks`, then the frame skip's three.
 
 Live items:
 
 | item | caption | note |
 |---|---|---|
 | File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3) |
-| File > Reset > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
-| File > Reset > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
+| File > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
+| File > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
 | File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is a latch and nothing else; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
 | Edit > Copy | Alt+Delete | §7.7. Where a BIOS passes the chord, `os88_onkey` dispatches scan `0xA3` — a code no unmodified key produces, so it cannot be confused with the C64's own Del (`0x53`) |
 | Edit > Paste | Alt+Insert | §7.7. The chord is scan `0xA2`, against the C64's own Ins (`0x52`) |
@@ -2747,26 +2736,34 @@ Live items:
 | Preferences > Pause emulation | Alt+P | `c64_pause` toggles, `c64_sound_stop()` both ways, `Paused.` / `Running.`. CHECK: rule 4's `*`, and §10.2's `P` lamp |
 | Preferences > Advance frame | Alt+Shift+P | **VICE's action, not this port's idea of one** (`src/arch/gtk3/actions-speed.c`): `if (ui_pause_active()) { vsyncarch_advance_frame(); } else { ui_pause_enable(); }` — from a RUNNING machine the item only PAUSES; from a paused one it runs to the next VIC frame end (§6.3) and stops, saying `Advanced one frame.`. The command raises a request; the slice driver serves it in the wall slices it already sizes and re-posts while it is outstanding. Greyed on a JAM (§11.2). **The chord reads the shift level**: the BIOS hands Alt+Shift+P the same ascii/scan pair as Alt+P, so `os88_onkey` asks `os88_key_down(KSC_LSHIFT/KSC_RSHIFT)` — without that the chord RESUMED a paused machine, the opposite of VICE in the only state VICE advances from |
 | Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*` |
+| Preferences > Draw every frame / Skip frames as needed / Skip most frames | | §9.13. RADIO: the `*` is on the policy in force; as needed is the default |
 | Help > About VICE... | | the kernel's name pull-down About opens the same panel (§12) |
 
-### 11.2 Present and greyed — the fact that greys it (SPEC.md §47)
+### 11.2 Absent, and greyed — the fact behind each (SPEC.md §47)
 
-| item | the fact |
+**Absent** (rule 1) — each was a greyed item in VICE's place until the
+owner's rule, and each fact still stands:
+
+| VICE's item | the fact |
 |---|---|
-| File > Attach disk image's submenu (Create, Detach, the Flip list - folded into the one live item, §11.1 rule 1; §11.5 is what it does) | drive 8 is a LOAD trap, not a 1541 in this build: a D64 needs the drive's directory walk and the KERNAL serial traps, and this port loads `.PRG` files only |
-| File > Detach datasette image (the tape section; Alt+T captions kept) | no tape emulation: T64/TAP are not read |
-| File > Cartridge freeze (the cartridge section; Alt+C / Alt+Z captions kept) | no cartridge port: the bank maps carry the cartridge-less 7 of VICE's 32 (§3.3) |
-| File > Printer/plotter (no caption; Alt+3/4/5/6 are the `printer-formfeed-*` actions inside it) | no printer path in this OS |
-| File > Activate monitor (Alt+H) | no monitor: VICE's is 30,000 lines of host C |
+| File > the disk submenu's Create, Detach, Flip list | drive 8 is a LOAD trap serving one D64 (§11.5), not a 1541 |
+| File > the tape section (Attach/Detach datasette image, Datasette controls) | no tape emulation: T64/TAP are not read |
+| File > the cartridge section (Attach/Detach cartridge image, Cartridge freeze) | no cartridge port: the bank maps carry the cartridge-less 7 of VICE's 32 (§3.3) |
+| File > Printer/plotter | no printer path in this OS |
+| File > Activate monitor | no monitor: VICE's is 30,000 lines of host C |
 | File > Reset drive #8 | no drives |
-| Snapshot > every item (load/save Alt+L/S, quick snapshots Alt+F10/F11, the event section folded onto `Start recording events` including the milestones Alt+E/U, media recording Alt+Shift+R/S, quicksave screenshot on Pause) | no snapshot format: a VSF carries every chip's state and this machine's chips are not VICE's |
-| Preferences > Restore display state (Alt+R), Show menu/status in fullscreen | the window is os8088's: the kernel places it, and the bar is under a fullscreen window (SPEC.md §11.2) |
-| Preferences > Emulation speed (200%..10%, Custom CPU speed), 50/60/Custom FPS | one speed and warp: the machine is held to 100% (§4.4.1) and below that delivers what the CPU can, which the status bar prints (§10.2). Its place on the menu is the Recompiler's (§4.9.5) |
-| Preferences > Show status bar | the status row is the window's bottom row and is always drawn. A CHECK that is ON and cannot be turned off: `*` AND `MENU_DIS` (§11.1 rule 4) |
-| Preferences > Mouse grab (Alt+M) | no 1351 mouse: the pointer is the desktop's |
-| Preferences > Allow keyset joysticks (Alt+Shift+J) | the keyset **is** the joystick here; `*` AND `MENU_DIS` (§8) |
-| Preferences > Settings... (Alt+O) | no resources file: every setting this port has is on the Preferences menu itself |
+| the Snapshot menu, every item | no snapshot format: a VSF carries every chip's state and this machine's chips are not VICE's |
+| Preferences > Restore display state, Show menu/status in fullscreen, Show status bar | the window is os8088's, and the status row is its bottom row, always drawn |
+| Preferences > Emulation speed's percentages, Custom FPS | one speed and warp: the machine is held to 100% (§4.4.1). Its place is the Recompiler's |
+| Preferences > Mouse grab | no 1351 mouse: the pointer is the desktop's |
+| Preferences > Allow keyset joysticks | the keyset **is** the joystick here (§8): always on |
+| Preferences > Settings... and Load/Save/Restore settings | no resources file: every setting is on the Preferences menu |
 | Help > Browse manual, Command line options, Compile time features, Hotkeys | no manual on this floppy and no command line in this OS; the hotkeys are the menu captions |
+
+**Not a menu item, and not modelled:**
+
+| what | the fact |
+|---|---|
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
 | On the SPEAKER: SID voices beyond one, waveforms, ADSR; on an FM chip: the filters, ring modulation and sync (§11.4.2, §11.4.3; voice 3 READS, §11.4.1) | the PC speaker is one square wave; the OPL has no SID filter, and its two operators no ring or sync |
 | Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
@@ -2775,7 +2772,7 @@ Live items:
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (§10.3) |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |
 
-**Two items are greyed by STATE rather than by the build**: the fact that
+**Three items are greyed by STATE** (rule 3): the fact that
 greys them is on the status row and it can stop being true, so
 `c64_menu_state()` re-runs on every path that changes the state.
 
@@ -2783,6 +2780,7 @@ greys them is on the status row and it can stop being true, so
 |---|---|---|
 | Preferences > Advance frame | `C64_ST_JAM` | §4.5's permanent line: `ovl_advance_frame` answers a jam by doing nothing, and a live item that is a silent no-op is the shape SPEC.md §47 forbids |
 | Edit > Paste | `C64_ST_JAM` **or `c64_pause`** | in either, nothing would ever drain the queue (§7.7). **The paused case is a deliberate departure from VICE**, which queues a paste on a paused machine and delivers it on resume: there the queue is drained by the vsync handler, here `c64_paste_feed` runs only in the RUNNING arm of `os88_onwake`. The pause's fact is not a message (`Paused.` expires) but §10.2's `P` lamp and the check beside Pause emulation |
+| Preferences > Recompiler | no recompiler segment | §4.9.5: no 48KB the heap could give it, or a D64 took its memory without extended memory, which the status row says as it happens |
 | Edit > Copy | *nothing* | the frozen screen of a paused or jammed machine is real, and the body runs from the wake whatever the state |
 
 **The chords are guarded with them.** `os88_onkey` dispatches Alt+Shift+P,

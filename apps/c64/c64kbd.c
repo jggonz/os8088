@@ -495,8 +495,8 @@ static const unsigned char c64_joysc[5] = {
 
 /* THE KEYSET IS ON, AND ITS KEYS ARE CONSUMED. `KeySetEnable=1` is the
  * shipped state (joystick.c:553) because a keyset is the only joystick source
- * this machine has, and Preferences > Allow keyset joysticks is shown checked
- * and disabled (C64-SPEC §8). This is that resource, so the harness can turn
+ * this machine has, which is why Preferences has no Allow keyset joysticks
+ * item (C64-SPEC §8, §11.2). This is that resource, so the harness can turn
  * it off and show the keys reaching the matrix again - the negative control
  * for the rule below, and `joykeys_enable` is exactly the flag VICE tests
  * first in joystick_check_set (joystick.c:598-601). */

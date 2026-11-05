@@ -413,8 +413,20 @@ static int c64_fs_extra;                    /* ticks added between flushes */
 static unsigned c64_fs_t0;                  /* the second being measured... */
 static int c64_fs_cost;                     /* ...and its ticks of flushing */
 
+/* ...AND THE USER CHOOSES THE POLICY (Preferences, 9.13): a music player
+ * can skip almost every frame and a game would rather run slowly than
+ * jerkily, so no one answer is right. 0 draws every host tick that has a
+ * change (the emulation slows instead), 1 is the adaptive skip above, the
+ * default, and 2 holds the skip at C64_FS_MAX - two pictures a second -
+ * and gives the rest to the machine. */
+static int c64_fs_mode = 1;
+
 static void c64_fs_adapt(unsigned t)
 {
+    if (c64_fs_mode != 1) {
+        c64_fs_extra = (c64_fs_mode == 0) ? 0 : C64_FS_MAX;
+        return;
+    }
     if ((unsigned)(t - c64_fs_t0) < 18u)
         return;
     if (c64_fs_cost > 9) {
@@ -569,28 +581,27 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
  * these moves every command under it. */
 #define C64_M_FILE  0
 #define C64_M_EDIT  1
-#define C64_M_SNAP  2
-#define C64_M_PREF  3
-#define C64_M_HELP  4
+#define C64_M_PREF  2
+#define C64_M_HELP  3
 
-#define C64_I_ATTACH   0                    /* File, 10 items */
+#define C64_I_ATTACH   0                    /* File, 5 items */
 #define C64_I_DISK     1
-#define C64_I_RESETCPU 6
-#define C64_I_POWER    7
-#define C64_I_EXIT     9
+#define C64_I_RESETCPU 2
+#define C64_I_POWER    3
+#define C64_I_EXIT     4
 
 #define C64_I_COPY     0                    /* Edit */
 #define C64_I_PASTE    1
 
 #define C64_I_FULLSCR  0                    /* Preferences */
-#define C64_I_STATBAR  2                    /* ...as VICE orders them */
-#define C64_I_WARP     3
-#define C64_I_PAUSE    4
-#define C64_I_ADVANCE  5
-#define C64_I_SWAPJOY  8
-#define C64_I_JIT      6                    /* (Emulation speed's: 4.9.5) */
+#define C64_I_WARP     1
+#define C64_I_PAUSE    2
+#define C64_I_ADVANCE  3
+#define C64_I_JIT      4                    /* (Emulation speed's: 4.9.5) */
+#define C64_I_SWAPJOY  5
+#define C64_I_FS0      6                    /* the frame skip, 9.13: 6..8 */
 
-#define C64_I_ABOUT    4                    /* Help */
+#define C64_I_ABOUT    0                    /* Help */
 
 #include "c64io.c"                          /* the register files, the alarm
                                              * scheduler, the CIAs and the VIC */
@@ -598,7 +609,7 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
 #include "c64scr.c"                         /* the composer's C half, the
                                              * shadow, the flush, the status
                                              * row, the tier table */
-#include "c64menu.c"                        /* the five menus, from VICE's
+#include "c64menu.c"                        /* the four menus, from VICE's
                                              * own uimachinemenu.c */
 #include "c64cmd.c"                         /* ovl_*: the command bodies */
 #include "c64load.c"                        /* ovl_*: Smart attach */

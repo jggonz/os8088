@@ -5964,6 +5964,56 @@ int main(int argc, char **argv)
      * returns, and that wake runs a slice and flushes: closing inside the
      * command means drawing after the close, which 75.2 forbids in as many
      * words. So the command latches and the WAKE spends it. */
+    /* --- NO ITEM IS GREYED FOR GOOD (C64-SPEC 11.1 rule 1): on a running,
+     *     unpaused machine every item of every menu is live, but the
+     *     Recompiler with no memory for it - greying is "not now", and an
+     *     item this build can never enable is absent. Verified red with
+     *     VICE's greyed Mouse grab put back on Preferences --------------- */
+    {
+        int m, it;
+        if (c64_state == C64_ST_RUN && !c64_pause)
+            for (m = 0; m < c64_menus.nmenus; m++)
+                for (it = 0; it < c64_menus.menu[m].nitems; it++)
+                    if (c64_menus.menu[m].items[it][0] == OS88_MENU_DIS)
+                        if (!(m == C64_M_PREF && it == C64_I_JIT && !c64_fjit)) {
+                            printf("c64uitest:   menu %d item %d: %s\n", m, it,
+                                   c64_menus.menu[m].items[it] + 1);
+                            fail("an item is greyed on a running machine - "
+                                 "an item that can never be enabled is "
+                                 "absent, not greyed (C64-SPEC 11.1)");
+                        }
+    }
+
+    /* --- THE FRAME SKIP IS THE USER'S (9.13): the three radio items move
+     *     the check and set the policy - none skips nothing however costly
+     *     a frame, most holds C64_FS_MAX, as needed adapts. Verified red
+     *     with the mode ignored by c64_fs_adapt ------------------------- */
+    {
+        int q;
+        do_cmd(C64_I_FS0 + 0, C64_M_PREF, win);
+        if (c64_pref_items[C64_I_FS0][0] != '*'
+                || c64_pref_items[C64_I_FS0 + 1][0] == '*')
+            fail("Draw every frame did not take the frame skip's check");
+        for (q = 0; q < 3; q++) {
+            c64_fs_cost = 18;               /* a second spent drawing */
+            c64_fs_adapt(c64_fs_t0 + 18);
+        }
+        if (c64_fs_extra != 0)
+            fail("Draw every frame skipped frames (9.13)");
+        do_cmd(C64_I_FS0 + 2, C64_M_PREF, win);
+        c64_fs_cost = 0;
+        c64_fs_adapt(c64_fs_t0 + 18);
+        if (c64_fs_extra != C64_FS_MAX || c64_pref_items[C64_I_FS0 + 2][0] != '*')
+            fail("Skip most frames did not hold the skip at its most (9.13)");
+        do_cmd(C64_I_FS0 + 1, C64_M_PREF, win);
+        c64_fs_cost = 18;
+        c64_fs_adapt(c64_fs_t0 + 18);
+        if (c64_fs_extra != 1 || c64_pref_items[C64_I_FS0 + 1][0] != '*')
+            fail("Skip frames as needed did not adapt (9.13)");
+        c64_fs_extra = 0;
+        c64_fs_cost = 0;
+    }
+
     closed = 0;
     close_drew = 0;
     do_cmd(C64_I_EXIT, C64_M_FILE, win);

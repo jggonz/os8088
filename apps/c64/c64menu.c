@@ -1,5 +1,5 @@
 /* ============================================================================
- * os8088 - apps/c64/c64menu.c        the five menus, from VICE's own source
+ * os8088 - apps/c64/c64menu.c        the four menus, from VICE's own source
  *
  * Part of C64 (C64-SPEC §11). Derived from VICE 3.10, Copyright (C)
  * 1996-2025 the VICE team, GPL-2-or-later - see apps/c64/COPYING. EVERY item
@@ -20,23 +20,13 @@
  * CGA and clamped to 11 above it. Three rules follow, and they are stated in
  * C64-SPEC §11.1 rather than left to be rediscovered:
  *
- *  1. A SECTION THAT IS ENTIRELY UNAVAILABLE IS FOLDED INTO ONE ITEM, AND
- *     THAT ITEM IS THE SECTION'S FIRST - its submenu head label where it has
- *     one, otherwise the first item of the section, which is the action the
- *     section exists for. Never a word invented to summarise it, and never
- *     the section's last item: a user looking for tape support must read a
- *     greyed item that names a DATASETTE IMAGE, not a greyed `Datasette
- *     controls`.
- *     A section with a LIVE item in it is not folded at all - it is inlined,
- *     because folding it would take the working item away; that is why
- *     VICE's reset_submenu (:244, head label "Reset" at :521) contributes
- *     three of File's ten slots rather than one.
- *     THE ONE EXCEPTION, and it is taken twice: where the section's first
- *     item does not FIT MENU_MAXCH the fold lands on the first item of the
- *     section that does, because menu_trunc would otherwise print a
- *     SHORTENED label and rule 2 forbids that. `Attach datasette image...`,
- *     `Attach cartridge image...` and `Detach cartridge image(s)` are all 25
- *     glyphs against 24. Each is named where it is taken.
+ *  1. AN ITEM THIS BUILD CAN NEVER ENABLE IS ABSENT, NOT GREYED (the
+ *     owner's rule, C64-SPEC 11.1): a greyed item nothing can ungrey is a
+ *     slot spent on telling the user about a feature they cannot have.
+ *     VICE's tape, cartridge, printer, monitor and drive-reset items, the
+ *     whole Snapshot menu, and the Preferences and Help items about a
+ *     window, mouse, resources file and manual this OS does not have are
+ *     gone; C64-SPEC 11.2 lists each with the fact that removed it.
  *  2. THE LABEL IS VICE'S AND IS NEVER SHORTENED. Where the label plus its
  *     `.vhk` caption passes 24 glyphs, the CAPTION is dropped and the label
  *     stands alone; the chord is then in C64-SPEC §11.2's table, which lists
@@ -52,13 +42,11 @@
  *     instead - the label is still VICE's, entire, and it is the gap that
  *     gives. `Reset machine CPU Alt+F9` is 24 glyphs that way and 25 with the
  *     two spaces every other captioned item here uses. It is taken once.
- *  3. AN ITEM THAT IS PRESENT BUT CANNOT WORK WEARS OS88_MENU_DIS AND THE
- *     FACT THAT GREYS IT IS IN A COMMENT BESIDE IT (SPEC.md 47). Nothing is
- *     silently missing and nothing is faked, and NOTHING IS LIVE THAT ONLY
- *     TOASTS A REFUSAL - an item the user can pick and that answers "not yet"
- *     is the one thing 47 exists to stop. VICE's own Debug menu is absent
- *     rather than greyed, because it is `#ifdef DEBUG` in uimachinemenu.c and
- *     this is VICE's rule, not ours.
+ *  3. AN ITEM GREYED BY STATE WEARS OS88_MENU_DIS AND THE FACT THAT
+ *     GREYS IT IS IN A COMMENT BESIDE IT (SPEC.md 47), and NOTHING IS LIVE
+ *     THAT ONLY TOASTS A REFUSAL. Greyed means "not now": Paste on a
+ *     paused machine, Advance frame on a jammed one, the Recompiler with
+ *     no memory for it.
  *  4. A CHECK ITEM'S STATE IS A `*` IN THE LABEL, and the item pointer is
  *     swapped between the two spellings (c64_menu_state below). EIGHT of
  *     these menus' items are UI_MENU_TYPE_ITEM_CHECK in uimachinemenu.c -
@@ -106,57 +94,12 @@ static const char *c64_file_items[] = {
                                              * a D64 by its size). Drive 8 is
                                              * not a 1541 but the KERNAL's
                                              * LOAD served from the image
-                                             * (C64-SPEC 11.5): Create, Detach
-                                             * and the Flip list stay folded
-                                             * away, rule 1 */
-    D "Detach datasette image",              /* :319. No tape emulation in this
-                                             * build: T64/TAP are not read.
-                                             * RULE 1'S STATED EXCEPTION, and
-                                             * it was MEASURED ON THE GLASS:
-                                             * the section's first item,
-                                             * `Attach datasette image...`
-                                             * (:313), is 25 glyphs against
-                                             * MENU_MAXCH's 24 and menu_trunc
-                                             * printed it `...image..` - a
-                                             * shortened label, which rule 2
-                                             * forbids. So the fold lands on
-                                             * the first item of the section
-                                             * that FITS, at 22 glyphs, and it
-                                             * still names the medium a reader
-                                             * is looking for; Attach, Create
-                                             * and the Datasette controls
-                                             * submenu (:327) fold into it.
-                                             * <Alt>t's caption is dropped by
-                                             * rule 2 */
-    D "Cartridge freeze  Alt+Z",            /* :402  + hotkeys-cartridge.vhk.
-                                             * No cartridge port: the bank
-                                             * maps carry the cartridge-less
-                                             * seven of VICE's 32.
-                                             * RULE 1'S STATED EXCEPTION, the
-                                             * same one: `Attach cartridge
-                                             * image...` (:393) and `Detach
-                                             * cartridge image(s)` (:398) are
-                                             * BOTH 25 glyphs against
-                                             * MENU_MAXCH's 24, so the fold
-                                             * lands on the first item of the
-                                             * section that fits - 16 glyphs -
-                                             * and the other two fold into
-                                             * it */
-    D "Printer/plotter",                    /* :486. NO CAPTION, the same
-                                             * reason: SUBMENU, no .action.
-                                             * `<Alt>4` is printer-formfeed-4
-                                             * (hotkeys.vhk:52) and `<Alt>3`
-                                             * the userport formfeed (:56) -
-                                             * members of that submenu.
-                                             * No printer path in this OS */
-    D "Activate monitor  Alt+H",            /* :515. No monitor in this build:
-                                             * VICE's is 30,000 lines of C */
+                                             * (C64-SPEC 11.5) */
     "Reset machine CPU Alt+F9",             /* :245  + hotkeys.vhk <Alt>F9 */
     "Power cycle machine",                  /* :249. <Alt>F12's caption does
                                              * not fit 24 glyphs, and an
                                              * 83-key XT has no F12 anyway
                                              * (C64-SPEC §7.5) */
-    D "Reset drive #8",                     /* :255. No drives in this build */
     "Exit emulator  Alt+Q"                  /* :527  + hotkeys.vhk <Alt>q */
 };
 
@@ -228,27 +171,6 @@ static const char *c64_edit_items[] = {
                                              * these same two items */
 };
 
-/* --- Snapshot (snapshot_menu). Every item is greyed by ONE fact: a VSF
- *     carries every chip's state and this machine's chips are not VICE's. -- */
-static const char *c64_snap_items[] = {
-    D "Load snapshot image...",             /* :556  <Alt>l does not fit */
-    D "Save snapshot image...",             /* :560  <Alt>s does not fit */
-    D "Quickload snapshot",                 /* :566  <Alt>F10 does not fit */
-    D "Quicksave snapshot",                 /* :570  <Alt>F11 does not fit */
-    D "Start recording events",             /* :576, AND THE WHOLE EVENT
-                                             * SECTION FOLDS INTO IT: :576 to
-                                             * :598 is ONE section with no
-                                             * separator inside it - Start/Stop
-                                             * recording, Start/Stop playing
-                                             * back, Set recording milestone,
-                                             * Return to milestone - so rule 1
-                                             * makes it one item. Keeping
-                                             * three of the six carved a
-                                             * section VICE does not have */
-    D "Save/Record media...",               /* :602 */
-    D "Stop media recording",               /* :607 */
-    D "Quicksave screenshot"                /* :613  (Pause) */
-};
 
 /* --- Preferences (settings_menu_head / _speed / _mouse / _joy_swap /
  *     _non_vsid / _tail; VICE's top-level label is "Preferences") --------- */
@@ -266,6 +188,9 @@ static char c64_t_full[] = OFF "Fullscreen  Alt+D";
 static char c64_t_warp[] = OFF "Warp mode  Alt+W";
 static char c64_t_paus[] = OFF "Pause emulation  Alt+P";
 static char c64_t_swap[] = OFF "Swap joysticks  Alt+J";
+static char c64_t_fs0[] = OFF "Draw every frame";
+static char c64_t_fs1[] = OFF "Skip frames as needed";
+static char c64_t_fs2[] = OFF "Skip most frames";
 static const char c64_mark[2] = { ' ', '*' };   /* OFF[0], ON[0] */
 /* ...and ONE item that is greyed by STATE rather than checked by it. Advance
  * frame is live while there is a machine to advance and greyed when there is
@@ -296,41 +221,14 @@ static const char *c64_pref_items[] = {
                                              * 11.2.1, the way SPEC.md 74.2
                                              * takes Alt+F: the C64 owns F and
                                              * Esc (C64-SPEC §9.8) */
-    D OFF "Restore display state",            /* :687, and :692's
-                                             * "Show menu/status in
-                                             * fullscreen" folds into it. The
-                                             * window is os8088's: the kernel
-                                             * places it, and the bar is under
-                                             * a fullscreen window */
-    D ON "Show status bar",                 /* :732 (settings_menu_statusbar_
-                                             * primary), AND IT IS HERE
-                                             * BECAUSE THAT IS WHERE VICE PUTS
-                                             * IT: ui_machine_menu_bar_create
-                                             * (:1153-1160) adds
-                                             * settings_menu_head, THEN the
-                                             * statusbar section, THEN
-                                             * settings_menu_speed - so this
-                                             * item sits between "Restore
-                                             * display state" and "Warp mode",
-                                             * not after "Emulation speed"
-                                             * where the first draft had it.
-                                             * CHECK, and the same case as
-                                             * Allow keyset joysticks below:
-                                             * it is ON and it cannot be
-                                             * turned off, so it wears rule
-                                             * 4's marker ON and rule 3's
-                                             * MENU_DIS together. The status
-                                             * row is the window's bottom row
-                                             * and is always drawn. 17 glyphs
-                                             * after the MENU_DIS byte */
     c64_t_warp,                             /* :704  + hotkeys.vhk <Alt>w.
                                              * CHECK, and the warp latch also
-                                             * has a dot on the status row
+                                             * has a lamp on the status row
                                              * (C64-SPEC §10.2) */
     c64_t_paus,                             /* :708  + hotkeys.vhk <Alt>p.
-                                             * CHECK, and the second status
-                                             * dot. `* Pause emulation  Alt+P`
-                                             * is exactly 24 glyphs */
+                                             * CHECK, and the second lamp.
+                                             * `* Pause emulation  Alt+P` is
+                                             * exactly 24 glyphs */
     c64_t_adv + 1,                          /* :712. <Alt><Shift>p is 11
                                              * glyphs and does not fit, so the
                                              * caption is dropped by rule 2 and
@@ -339,57 +237,34 @@ static const char *c64_pref_items[] = {
                                              * dispatches it, reading the
                                              * shift level to tell it from
                                              * Alt+P, which the BIOS delivers
-                                             * identically. LIVE as of wave 2:
-                                             * it was
-                                             * greyed because "there is no
-                                             * raster accumulator until the
-                                             * alarm model lands with the
-                                             * core", and the alarm model
-                                             * landed - c64_frame_cyc IS that
-                                             * accumulator. A greying names a
-                                             * FACT (SPEC.md 47) and this one
-                                             * stopped being one. */
+                                             * identically. Greyed on a JAM */
     c64_t_jit,                              /* :719's place - VICE's
-                                             * "Emulation speed", which was
-                                             * greyed here for good (one speed
-                                             * and warp: the machine is held to
-                                             * 100%, 4.4.1) - and the kernel's
-                                             * eleven items a pull-down
-                                             * (MENU_POPMAX) leave no other: the
+                                             * "Emulation speed" - the
                                              * RECOMPILER (C64-SPEC 4.9.5),
-                                             * the speed setting this port has */
-    D OFF "Mouse grab  Alt+M",              /* :757  + hotkeys.vhk <Alt>m.
-                                             * No 1351 mouse in this build */
+                                             * the speed setting this port
+                                             * has */
     c64_t_swap,                             /* :771  + hotkeys.vhk <Alt>j.
                                              * CHECK, and the swapped state is
                                              * also on the status row's two
                                              * joystick indicators */
-    D ON "Allow keyset joysticks",          /* :786. CHECK. The keyset IS the
-                                             * joystick here - the only
-                                             * joystick source this machine
-                                             * has (C64-SPEC §8) - so it wears
-                                             * rule 4's marker ON and rule 3's
-                                             * MENU_DIS together: it is on, and
-                                             * it cannot be turned off. Exactly
-                                             * 24 glyphs after the MENU_DIS
-                                             * byte */
-    D OFF "Settings...  Alt+O"              /* :800  + hotkeys-settings.vhk,
-                                             * and Load/Save/Restore default
-                                             * settings fold into it. No
-                                             * resources file in this build:
-                                             * every setting this port has is
-                                             * on this menu */
+    c64_t_fs0,                              /* THE FRAME SKIP, three RADIO */
+    c64_t_fs1,                              /* items (C64-SPEC 9.13): VICE's */
+    c64_t_fs2                               /* is a Settings refresh rate, and
+                                             * here a music player and a game
+                                             * want opposite answers, so the
+                                             * user picks: every frame the
+                                             * host can draw, the adaptive
+                                             * skip, or the fewest */
 };
 
 /* --- Help (help_menu) ---------------------------------------------------- */
 static const char *c64_help_items[] = {
-    D "Browse manual...",                   /* :968. No manual on this floppy */
-    D "Command line options...",            /* :973. No command line in this
-                                             * OS */
-    D "Compile time features...",           /* :978 */
-    D "Hotkeys...",                         /* :983. The hotkeys ARE the menu
-                                             * captions here */
-    "About VICE..."                         /* :988 */
+    "About VICE..."                         /* :988. Browse manual, Command
+                                             * line options, Compile time
+                                             * features and Hotkeys are absent
+                                             * (rule 1): no manual on the
+                                             * floppy, no command line, and
+                                             * the hotkeys are the captions */
 };
 
 /* The set. `oncmd` is LEFT ZERO: os88_menu_set() writes the runtime's command
@@ -397,13 +272,12 @@ static const char *c64_help_items[] = {
  * is `VICE` - the product, not the package's 15-character header name, which
  * is `C64` and is what the Disk window and the .OVL stem use. */
 static struct os88_menuset c64_menus = {
-    "VICE", 0, 5,
+    "VICE", 0, 4,
     {
-        { "File",        c64_file_items, 10 },
+        { "File",        c64_file_items,  5 },
         { "Edit",        c64_edit_items,  2 },
-        { "Snapshot",    c64_snap_items,  8 },
-        { "Preferences", c64_pref_items, 11 },
-        { "Help",        c64_help_items,  5 }
+        { "Preferences", c64_pref_items,  9 },
+        { "Help",        c64_help_items,  1 }
     }
 };
 
@@ -418,6 +292,9 @@ static void c64_menu_state(void)
     c64_t_warp[0] = c64_mark[c64_warp];
     c64_t_paus[0] = c64_mark[c64_pause];
     c64_t_swap[0] = c64_mark[c64_joyswap];
+    c64_t_fs0[0] = c64_mark[c64_fs_mode == 0];
+    c64_t_fs1[0] = c64_mark[c64_fs_mode == 1];
+    c64_t_fs2[0] = c64_mark[c64_fs_mode == 2];
     /* ...and the fifth entry is a GREYING, not a check (§47): with no machine
      * running there is nothing to advance, and the reason is already the
      * permanent line on the status row. c64_jam() and os88_main both call
