@@ -16916,6 +16916,27 @@ SOAK = [
         "vbtending: victory FADES to a FULL-SCREEN end LOOP - the fade over "
         "the whole screen, the band down while it goes round",
         needs=("marty", "ffmpeg")),
+    Row("vbtendingjf", "soak", py("tests/vbtending.py", "--arm",
+                                  "joinfade", "--secs", "9", "--herc",
+                                  "--noisy"), 60.0,
+        "vbtending, the owner's ending on HERCULES: victory JOINS a "
+        "once-clip with its own sound, too big for its ring (9 s of a "
+        "picture changing all over), which plays to its end and FADES to "
+        "the title - the fade under 4 guest s. Broken: the joined sound "
+        "skipped by a loop's record 0 (static, frozen at frame 54); a fade "
+        "step a loop pass (23 s)",
+        needs=("marty", "ffmpeg")),
+    Row("vbtendingop", "soak", py("tests/vbtending.py", "--arm",
+                                  "joinfade", "--herc", "--opening",
+                                  "leave", "--delay", "1.2"), 75.0,
+        "vbtending, the owner's 'sometimes the first opening clip is "
+        "freezing' on HERCULES: the title left by Enter into a full-screen "
+        "opening with its own sound, streamed - the next opening starts "
+        "only once its head is in its ring (vb_ogo, VM_OWAIT), and the play "
+        "reaches the menu. Broken (started at once, whatever its ring "
+        "held): about half the Enter moments around 1.2 s froze the second "
+        "opening at frame 17 of 19, its ring the title's",
+        needs=("marty", "ffmpeg")),
     Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
         "SPEC.md 125.5: the music under the band, the owner's 'when the "
         "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "

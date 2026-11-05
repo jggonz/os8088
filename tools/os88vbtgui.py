@@ -3679,6 +3679,10 @@ class SoundsTab(object):
                    ).pack(side="left")
         ttk.Button(row, text="Listen", command=self._listen
                    ).pack(side="left", padx=8)
+        ttk.Button(row, text="Replace file...", command=self._refile
+                   ).pack(side="left")
+        ttk.Button(row, text="Remove", command=self._remove
+                   ).pack(side="left", padx=4)
         row2 = ttk.Frame(f)
         row2.pack(anchor="w", pady=6)
         ttk.Button(row2, text="Measure and suggest levels",
@@ -3746,7 +3750,8 @@ class SoundsTab(object):
         self.tv.delete(*self.tv.get_children())
         meas = {r["sound"]: r for r in (self.res or {}).get("sounds", [])}
         import vbtana as A
-        for sid in sorted(self.app.proj.sounds_used()):
+        used = self.app.proj.sounds_used()
+        for sid in sorted(d["sounds"], key=lambda k: (k not in used, k)):
             lvl = d["sounds"][sid].get("level", 1.0)
             r = meas.get(sid)
             fresh = r is not None and abs(r["level"] - lvl) < 1e-9
@@ -3756,13 +3761,16 @@ class SoundsTab(object):
                          r["loud"] + shift, peak=None if r["peak"] is None
                          else r["peak"] + shift, level=lvl)   # move with it
             f1 = lambda v: "-" if v is None else "%.1f dB" % v
+            gone = self.app.proj.sound_missing(sid)
             self.tv.insert("", "end", iid=sid, text=sid, values=(
+                "FILE MISSING" if gone else
                 A.plays_as(self.app.proj, sid) or "",
-                ", ".join(self.app.proj.sound_users(sid))[:60],
+                ", ".join(self.app.proj.sound_users(sid))[:60] or
+                "nothing (not built)",
                 f1(r["loud"]) if r else "", f1(r["peak"]) if r else "",
                 "%+.1f dB" % db(lvl),
                 "%+.1f dB" % db(r["suggest"]) if r and fresh else ""))
-        if keep in d["sounds"] and keep in self.app.proj.sounds_used():
+        if keep in d["sounds"]:
             self.tv.selection_set(keep)
         if self.res and self.res.get("target") is not None:
             self.note.config(text="Matched to %.1f dB, %s. A suggestion never "
@@ -3770,6 +3778,36 @@ class SoundsTab(object):
                              "loud action may still want a little more." % (
                                  self.res["target"], "the music's loudness"
                                  if d.get("music") else "the sounds' median"))
+
+    def _remove(self):
+        """The chosen sound out of the project - and, when something uses
+        it, out of each of those once that is confirmed (a menu sound goes
+        silent, an opening's or a loop's plays the music)"""
+        from tkinter import messagebox
+        sid = self.sid()
+        if not sid:
+            return self.app.say("Choose the sound to remove")
+        users = self.app.proj.sound_users(sid)
+        if not messagebox.askyesno(TITLE, "Remove the sound %s?%s" % (
+                sid, "\n\nIt is used by %s, and is taken out of those too."
+                % ", ".join(users) if users else "")):
+            return
+        self.app.edit("remove_sound", sid, force=True)
+        self.app.say("%s removed" % sid)
+
+    def _refile(self):
+        """The chosen sound read from another file - its own moved or
+        renamed - everything that uses it kept"""
+        from tkinter import filedialog
+        sid = self.sid()
+        if not sid:
+            return self.app.say("Choose the sound whose file to replace")
+        p = filedialog.askopenfilename(title="The file for %s" % sid,
+                                       filetypes=[("Sound", "*.wav *.mp3 "
+                                                   "*.ogg *.flac *.aif *.aiff"),
+                                                  ("Everything", "*")])
+        if p:
+            self.app.edit("set_sound_file", sid, p)
 
     def _pick(self):
         sid = self.sid()

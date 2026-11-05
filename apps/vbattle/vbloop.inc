@@ -141,7 +141,8 @@ vb_eloop_go:
     cmp al, 2
     jne .no
     call vb_rrec                    ; JOINED: on from its record 1
-    call vb_radv
+    mov [vb_askipn], cx             ; (its sound past the same record: a
+    call vb_radv                    ; once-clip has no [vb_lbase])
     dec word [vb_cleft]
     mov word [vb_cfr], 1
     mov byte [vb_askip], 1
@@ -191,13 +192,17 @@ vb_fadetick:
 .on:
     cmp byte [vb_fon], 0
     je .out
-    mov ax, [vb_fticks]
-    or ah, ah
-    jnz .st
-    cmp al, [vb_fstep]
-    jbe .out
+    mov ax, [vb_fticks]             ; THE STEP THE CLOCK SAYS: a pass of the
+    or ah, ah                       ; loop is the reader's and a frame's
+    jnz .all                        ; wait too - on an XT ~0.5 s, on
+    cmp al, [vb_fstep]              ; Hercules ~1.4 - and a step a pass
+    jbe .out                        ; made a fade of 16 frames 8 and 23 s.
+    cmp al, [vb_fsteps]             ; A step's mask holds every one before
+    jbe .st                         ; it, so the steps skipped are ANDed in
+.all:                               ; with it
+    mov al, [vb_fsteps]
 .st:
-    inc byte [vb_fstep]
+    mov [vb_fstep], al
     call vb_fmask
     mov al, [vb_fstep]              ; the sound: shifts 0..3, then silence
     xor ah, ah
@@ -236,17 +241,9 @@ vb_ftitle:
     mov byte [bx+RG_ADONE], 1
     mov word [vb_aring], 0
     mov byte [vb_tplay], 0
-    mov al, [vb_onext]
-    mov bx, [vb_oring]
-    call vb_start_clip
-    mov word [vb_cfr], 0
-    mov [vb_apring], bx
-    mov [vb_apclip], al
-    mov ax, [vb_wpos]
-    mov dx, [vb_wpos+2]
-    mov [vb_apat], ax
-    mov [vb_apat+2], dx
-    call vb_onextset
+    mov byte [vb_owsnd], 1          ; (its sound with its frame 0)
+    mov byte [vb_mode], VM_OWAIT    ; once its head is in its ring (vb_ogo:
+    call vb_ogo                     ; it is not always, as the fade ends)
     popf
     ret
 
@@ -337,34 +334,42 @@ vb_fbits:
     ret
 
 ; vb_fmaskh - the fade's step on a Hercules screen: [vb_frows] rows of 90
-; bytes in its four banks, each byte ANDed with its row's eight-pixel mask
+; bytes in its four banks. A row's mask is its y & 3's - its BANK's - so
+; each bank is one run of words ANDed with one mask (not 348 rows, each
+; with its own address and mask worked out)
 vb_fmaskh:
-.row:
-    cmp si, [vb_frows]
-    jae .done
+    push bp
+    push dx
+    xor bp, bp                      ; the bank, 0..3
+.bank:
+    mov si, bp                      ; (y & 3 = the bank: its mask)
     call vb_fbits
     mov ah, al
-    mov di, si
-    and di, 3
+    mov di, bp
     mov cl, 13
     shl di, cl
-    mov ax, si
-    shr ax, 1
-    shr ax, 1
-    mov cx, 90
+    mov cx, [vb_frows]              ; its rows: y = bank, bank + 4, ...
+    sub cx, bp
+    jbe .next
+    add cx, 3
+    shr cx, 1
+    shr cx, 1
+    push ax
+    mov ax, 45
     mul cx
-    add di, ax
-    call vb_fbits
-    mov ah, al
-    mov cx, 45
+    mov cx, ax
+    pop ax
 .w:
     and [es:di], ax
     inc di
     inc di
     loop .w
-    inc si
-    jmp .row
-.done:
+.next:
+    inc bp
+    cmp bp, 4
+    jb .bank
+    pop dx
+    pop bp
     ret
 
 ; vb_fmaskv - the fade's step on a VGA4 screen (mode 0Dh, 40 bytes a row):

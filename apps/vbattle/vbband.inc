@@ -339,7 +339,7 @@ vb_menu_erase:
 vb_s15:     db '               ', 0
 
 ; vb_mkeep - THE MUSIC FED while the band is drawn (the owner, 2026-11-05):
-; a piece read when its ring holds under half - drawing keeps the reader
+; a piece read when its ring holds under 3/4 - drawing keeps the reader
 ; away, and on Hercules' XT a whole band is ~2 s of it. Every register kept
 vb_mkeep:
     cmp byte [vb_mres], 0
@@ -347,7 +347,7 @@ vb_mkeep:
     push ax
     mov ax, [vb_mfill]
     sub ax, [vb_mtake]
-    cmp ax, VB_MR / 2
+    cmp ax, VB_MLOW
     jae .p
     push bx
     push cx

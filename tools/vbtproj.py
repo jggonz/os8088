@@ -272,12 +272,14 @@ class Project:
         """Every sound something uses - the ones a build reads"""
         return {sid for sid in self.d["sounds"] if self.sound_users(sid)}
 
-    def remove_sound(self, sid):
+    def remove_sound(self, sid, force=False):
         """Sound SID out of the project. The MUSIC may be it - removing the
         music's sound leaves the battle with none; anything else that uses
-        it refuses, naming what"""
+        it refuses, naming what - unless FORCE, when it is taken out of
+        each of them too (a menu sound silent, an opening's, the title's
+        or an end clip's sound the music, a cue gone)"""
         users = [u for u in self.sound_users(sid) if u != "the music"]
-        if users:
+        if users and not force:
             raise ValueError("%s is used by %s: take it out of those first"
                              % (sid, ", ".join(users)))
 
@@ -285,7 +287,34 @@ class Project:
             del d["sounds"][sid]
             if (d.get("music") or {}).get("sound") == sid:
                 d["music"] = None
+            ui = d.get("ui_sounds", {})
+            for k in [k for k, v in ui.items() if v == sid]:
+                del ui[k]
+            for o in d["openings"]:
+                if o.get("sound") == sid:
+                    o["sound"] = None
+            for c in d["clips"].values():
+                if any(q["sound"] == sid for q in c.get("cues", [])):
+                    c["cues"] = [q for q in c["cues"] if q["sound"] != sid]
+            if (d.get("title") or {}).get("sound") == sid:
+                d["title"]["sound"] = None
+            for en in d.get("endings", {}).values():
+                if (en.get("loop") or {}).get("sound") == sid:
+                    en["loop"]["sound"] = None
         self._edit(f)
+
+    def set_sound_file(self, sid, path):
+        """Sound SID read from the file at PATH from now on - its file moved
+        or renamed, or another wanted - everything that uses it kept"""
+        if self.d["sounds"][sid].get("kind") != "file":
+            raise ValueError("%s is not a file's sound" % sid)
+        self.set(("sounds", sid, "path"), path)
+
+    def sound_missing(self, sid):
+        """True when sound SID is a file's and the file is not there"""
+        s = self.d["sounds"][sid]
+        return s.get("kind") == "file" and not os.path.exists(
+            self.here(s["path"]))
 
     def set_idle(self, source, loop):
         self.set(("idle",), {"source": source, "loop": list(loop)})

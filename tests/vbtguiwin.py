@@ -336,6 +336,30 @@ def inner(tmp):
        "C. MENU SOUNDS on the Sounds tab: one taken off, one added from a "
        "file (%s)" % ui)
 
+    # A SOUND'S FILE RENAMED (the owner, 2026-11-05: "no way to remove a
+    # sound clip; so if I rename one, it just breaks the project"): the
+    # Sounds tab lists it FILE MISSING, Replace file points it at the new
+    # name with its users kept, and Remove takes it out of them too
+    gone = os.path.join(tmp, "beep2.wav")
+    os.rename(beep, gone)
+    st.refresh()
+    said = st.tv.set("beep", "plays")
+    filedialog.askopenfilename = lambda **k: gone
+    st.tv.selection_set("beep")
+    st._refile()
+    st.refresh()
+    re_ok = (not app.proj.sound_missing("beep") and
+             app.proj.d["ui_sounds"].get("take") == "beep")
+    st.tv.selection_set("beep")
+    st._remove()
+    ok(said == "FILE MISSING" and re_ok and "beep" not in
+       app.proj.d["sounds"] and "take" not in app.proj.d["ui_sounds"]
+       and "beep" not in st.tv.get_children(),
+       "C. a sound whose file was RENAMED: listed '%s', its file replaced "
+       "(users kept: %s), then REMOVED from the Sounds tab and from the "
+       "menu sound that used it" % (said, re_ok))
+    st.uiv["take"].set("(none)")
+
     # THE END CLIP (125.3.1): full screen, played once, then the title
     lt = app.loops_tab
     app.nb.select(lt.f)

@@ -126,6 +126,9 @@ VB_SPIECE   equ 32768           ; the most a read moves while no menu waits
                                 ; up to this (125.4)
 VB_HEAD     equ 40960           ; a clip may START once this much is read
                                 ; (or all of it): the rest streams as it plays
+VB_MLOW     equ 24576           ; ...refilled whenever it holds less (3/4:
+                                ; at half, a busy menu on Hercules' XT
+                                ; held it barely over - 1.3 s from dry)
 VB_MR       equ 32768           ; the music's ring (3 s at 11 kHz), read
                                 ; 4 KB a piece into a 4 KB guard past its end
 VB_MPIECE   equ 4096
@@ -239,6 +242,8 @@ VM_CLIP     equ 1               ; a clip's records, in order
 VM_IDLE     equ 2               ; the idle loop
 VM_HOLD     equ 3               ; an ending's last frame, held
 VM_FADE     equ 4               ; the frame on the glass faded (the UI task's)
+VM_OWAIT    equ 5               ; the next opening, its head not yet read:
+                                ; the last frame held until it is (vb_ogo)
 
 ; the battle's states
 GS_INTRO    equ 0
@@ -2011,6 +2016,12 @@ vb_frame:
     clc
     ret
 .nh:
+    cmp al, VM_OWAIT                ; the next opening, once it is there
+    jne .nw
+    call vb_ogo
+    clc
+    ret
+.nw:
     cmp al, VM_HOLD                 ; held: an end loop to start?
     jne .nn
     cmp byte [vb_estart], 0
@@ -2086,13 +2097,10 @@ vb_frame:
 .next:
     test word [vb_cflags], CF_OPENING
     jz .hold
-    mov al, [vb_onext]              ; AN OPENING: the next one follows on the
-    cmp al, 0xFF                    ; very next frame, from its own ring
-    je .hold
-    mov bx, [vb_oring]
-    call vb_start_clip
-    mov word [vb_cfr], 0
-    call vb_onextset                ; ...and the one after it, if any
+    cmp byte [vb_onext], 0xFF       ; AN OPENING: the next one follows on the
+    je .hold                        ; very next frame, from its own ring -
+    mov byte [vb_mode], VM_OWAIT    ; once its head is IN it (vb_ogo)
+    call vb_ogo
     clc
     ret
 .hold:
@@ -2182,6 +2190,40 @@ vb_frame:
 ; vb_onextset - [vb_onext] and [vb_oring]: the opening after the one now
 ; playing, and the ring it is read into (the one not playing). Called from
 ; the hook as an opening starts, and before the bracket
+; vb_ogo - THE NEXT OPENING STARTED, from its own ring, when that ring
+; holds it and its head is read - else the last frame stays and the hook
+; asks again a frame later ([vb_mode] VM_OWAIT). It was started at once,
+; whatever the ring held: an opening streamed on Hercules' XT keeps the
+; reader on it to its end, the next one's head was never read, and the
+; next was played out of the title's records left in its ring - no sound,
+; then a wait for records that never came (the owner's "sometimes the
+; first opening clip is freezing"). Its sound, when the sound's side found
+; it not there ([vb_owsnd]), is booked with its frame 0. The hook's, or the
+; UI task's with interrupts off
+vb_ogo:
+    mov al, [vb_onext]
+    mov bx, [vb_oring]
+    cmp al, [bx+RG_CLIP]
+    jne .no
+    call vb_rhead
+    jnc .no
+    mov al, [vb_onext]
+    call vb_start_clip
+    mov word [vb_cfr], 0
+    cmp byte [vb_owsnd], 0
+    je .ns
+    mov byte [vb_owsnd], 0
+    mov [vb_apring], bx             ; its sound with its frame 0
+    mov [vb_apclip], al
+    mov ax, [vb_due]
+    mov dx, [vb_due+2]
+    mov [vb_apat], ax
+    mov [vb_apat+2], dx
+.ns:
+    call vb_onextset                ; ...and the one after it, if any
+.no:
+    ret
+
 vb_onextset:
     mov byte [vb_onext], 0xFF
     mov al, [vb_oidx]
@@ -2738,6 +2780,12 @@ vb_anext:
     cmp al, 0xFF
     je .music
     mov bx, [vb_aoring]
+    cmp al, [bx+RG_CLIP]            ; (once its ring holds it, its head in:
+    jne .aw                         ; else with its picture's start, vb_ogo)
+    push ax
+    call vb_rhead
+    pop ax
+    jnc .aw
     mov [vb_apring], bx
     mov [vb_apclip], al
     mov ax, [vb_wpos]
@@ -2749,6 +2797,9 @@ vb_anext:
 .music:
     mov byte [vb_mon], 1            ; the last: the music comes in
 .out:
+    ret
+.aw:
+    mov byte [vb_owsnd], 1
     ret
 .stay:
     cmp word [vb_aowe], 1           ; (this frame's own wait is not late:
@@ -2796,8 +2847,11 @@ vb_asound:
     push ax
     push di
     push si
-    mov cx, [vb_lbase]
-    add [bx+RG_AOFF], cx
+    mov cx, [vb_askipn]             ; (record 0's length, as the picture
+    add [bx+RG_AOFF], cx            ; skipped it - [vb_lbase] is a LOOP's,
+                                    ; and a once-clip's sound went to a
+                                    ; stale place: static, then the ring
+                                    ; never freed and the picture froze)
     adc word [bx+RG_AOFF+2], 0
     mov di, RG_ASEG
     call vb_cadv
@@ -2917,6 +2971,7 @@ vb_play_init:
     mov [vb_fwant], al
     mov [vb_fvol], al
     mov [vb_askip], al
+    mov [vb_owsnd], al
     mov word [vb_lk], 0xFFFF
     mov byte [vb_eloop], 0xFF
     mov byte [vb_ehow], EH_HOLD
@@ -3020,7 +3075,7 @@ vb_reader:
     jne .clips
     mov ax, [vb_mfill]
     sub ax, [vb_mtake]
-    cmp ax, VB_MR / 2
+    cmp ax, VB_MLOW
     jae .clips
     jmp vb_mpiece
 .clips:
@@ -3494,6 +3549,8 @@ VB_VAR vb_ehow, 1                   ; ...how the ending goes on (EH_*)
 VB_VAR vb_estart, 1                 ; 1: start it from 0, 2: from 1 (joined)
 VB_VAR vb_eplay, 1                  ; it goes round
 VB_VAR vb_askip, 1                  ; its sound from record 1 (joined)
+VB_VAR vb_askipn, 2                 ; ...past record 0's this many bytes
+VB_VAR vb_owsnd, 1                  ; the next opening's sound waits on it
 VB_VAR vb_fwant, 1                  ; a fade wanted: what follows it
 VB_VAR vb_fon, 1                    ; a fade under way
 VB_VAR vb_fnext, 1                  ; 1 opening 0, 2 the end loop, 3 again

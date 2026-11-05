@@ -237402,7 +237402,15 @@ the decoder will really hold:**
   over the whole screen. A canvas frame is the canvas with the band's rows
   black under it, so the first opening's last frame and the next one's
   first are joined by a seam like any other. The last opening, the SCENE
-  opening, JOINS the loop. **Each opening is FULL SCREEN or WITH THE
+  opening, JOINS the loop. **The next opening starts once its head is IN
+  its ring** (`vb_ogo`; until then `VM_OWAIT`, the last frame held, asked
+  again each frame), and its sound, when the sound's side came to it
+  first and found it not there, with its frame 0 (`[vb_owsnd]`). It was
+  started at once: an opening streamed on Hercules' XT keeps the reader on
+  it to its end, so the next one's head was sometimes never read, and the
+  next was played out of the title's records left in its ring - no sound,
+  then a wait for records that never came (the owner's "sometimes the
+  first opening clip is freezing"; `vbtendingop`). **Each opening is FULL SCREEN or WITH THE
   MENU** (the project's `"full"`, the Openings tab's Screen choice): a
   full one is encoded over the whole screen - 200 rows, Hercules' 348 -
   and carries `CF_FULL`; one with the menu is the canvas over black. The
@@ -237551,7 +237559,13 @@ of silence as the music region, played round as any music is, so the engine
 is the same. A build reads only the sounds something uses
 (`Project.sounds_used`), and `remove_sound` takes one out - the music's own
 leaving the battle with none, any other refused while it is used, naming
-what uses it. **Each sound has a LEVEL** (`"level"`, the Sounds tab's dB),
+what uses it - unless forced, as the Sounds tab's **Remove** does once it
+is confirmed, which takes it out of each user too (a menu sound silent, an
+opening's or a loop's sound the music, a cue gone). The Sounds tab lists
+EVERY sound, the unused ones "nothing (not built)" and one whose file is
+gone FILE MISSING, and **Replace file** points a sound at another file
+(`set_sound_file`) with everything that uses it kept - the owner's "if I
+rename one, it just breaks the project". **Each sound has a LEVEL** (`"level"`, the Sounds tab's dB),
 and the AUTO-LEVEL suggestion (`vbtana.levels`) measures every sound in use
 AS HEARD - a gated loudness over 100 ms windows - knowing how each is
 stored: the music at half scale (64..191) and an effect at half scale
@@ -237600,7 +237614,16 @@ Both are optional, and a bundle with neither plays as version 5's did.
     none of it is left (`vb_fade`, [vb_fsteps] steps, one a frame, the
     UI task's, the thresholds `vb_fmasks`). The sound comes down with it: a shift of one
     more bit every quarter of the fade, then silence. The openings start
-    from black, which a fade leaves, so the join is exact.
+    from black, which a fade leaves, so the join is exact. **The step is
+    the CLOCK'S**: each pass of the UI task's loop puts down the step the
+    hook's frames say (`[vb_fticks]`), not the next one - a pass is also
+    the reader's and a frame's wait, ~0.5 s on the XT and ~1.4 s on
+    Hercules, and a step a pass made a 16-frame fade take 8 s and 23 s
+    (the owner's "the fades are taking like 8-10 seconds"). A step's mask
+    holds every one before it, so the skipped steps are ANDed in with it;
+    a fade now takes its frames and one pass at most (3 s on MartyPC's
+    Hercules 5150). Hercules ANDs each of its four banks as one run, every
+    row of a bank taking the same mask.
   - A **CLIP** is opening 0, flagged ENTER: entered at the title loop's
     frames as an action is at the idle loop's (its anchors are title
     frames, its entries in the ENTRIES, its first record its sound alone),
@@ -237645,7 +237668,14 @@ Both are optional, and a bundle with neither plays as version 5's did.
   seam onto the title's frame 0, and the play starts again at once, with
   no fade (`[vb_awant]`, the UI task's) - the title's record 0, drawn from
   black, puts down what the seam already shows. With no title a join is a
-  fade. `vbtending` holds the three shapes on MartyPC's CGA XT: a
+  fade. **A once-clip JOINED** from its ending starts at record 1, its
+  frame 0 being up, and its sound skips the very record the picture did
+  (`[vb_askipn]`): it skipped a LOOP's record 0 (`[vb_lbase]`), stale for
+  a once-clip, and so played static from the wrong place - and, its cursor
+  never in step, the ring was never given back and the picture froze
+  once it had played what the ring held (the owner's: ~20 frames, then
+  still). `vbtendingjf` holds it on Hercules with a clip too big for its
+  ring. `vbtending` holds the three shapes on MartyPC's CGA XT: a
   full-screen once-clip joined from victory and joining the title (the
   band down, its rows the clip's, no fade anywhere), a canvas once-clip
   faded to and fading to the title, and a full-screen end loop faded to
@@ -238026,7 +238056,12 @@ a piece is read whenever it is under half between the menu's lines, the
 party's, before the message and every eighth row of a present
 (`vb_mkeep`). `[vb_mlow]` keeps the lowest the ring stood at as a rebuild
 ended; `vbtsound` holds it over a second on MartyPC's Hercules 5150, where
-without the top-up it ran dry 23 times in six turns.
+without the top-up it ran dry 23 times in six turns. **The ring is read
+whenever it holds under THREE QUARTERS** (`VB_MLOW`, the reader's and
+`vb_mkeep`'s), not half: under the idle loop's decode a disk read on
+Hercules' XT moves ~16 KB a second against the music's 11, and a busy
+menu (the owner's "three down arrow presses, quickly") held the ring at
+14 - 19 KB, 1.3 s from dry, where it now holds 22 - 26 KB.
 
 #### 125.5.1 The band's layout
 
