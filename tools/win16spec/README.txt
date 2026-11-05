@@ -35,5 +35,10 @@ the GPL-2, which is the footing apps/win16/ takes when it lands
 (GPL-2.0-or-later, WIN16-PLAN.md D7). Nothing else in tools/ is affected:
 the tables are data the tools read, not code they include.
 
+    ddeml.dll16.spec              DDEML (SPEC.md 124.25.26) - NOT from winevdm,
+                                  which has none: written from the name table
+                                  of the real Windows 3.1 DDEML.DLL and the
+                                  SDK's DDEML.H, so GPL-2 does not attach to it
+
 To move the pin, copy the same fifteen files from a newer winevdm checkout,
 change the commit above, and run `python3 tests/unit/t_win16ne.py`.

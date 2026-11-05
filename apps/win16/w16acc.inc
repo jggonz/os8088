@@ -33,6 +33,10 @@ W16LIB w16_ans1
     xor dx, dx
 W16LIB w16u_setcurpos
     ret
+W16LIB w16_ans2                     ; ExcludeUpdateRgn's SIMPLEREGION (124.25.13)
+    mov ax, 2
+    cwd
+    ret
 
 ; CreateFontIndirect (GDI.57) - args: +0 lplf. CreateFont (GDI.56) - args:
 ; +0 lpszFace, +4 fbPitchAndFamily, ... The request mapped onto WIN16's two
@@ -657,7 +661,10 @@ W16LIB w16g_crebmp
     mov [w16_scratch + 2], ax       ; the bits' bytes a row
     mov ax, [ds:w16b_str + bp]
     mov [w16_scratch + 4], ax       ; the bitmap's
-    mov ax, [ds:w16b_h + bp]
+    push bx
+    mov bx, bp
+    call w16_bmcap                  ; (a tiled bitmap: the first tile's rows)
+    pop bx
     mov [w16_scratch + 6], ax       ; rows to go
     mov dx, [ds:w16b_seg + bp]
     W16TOSEL dx                     ; the arm: its selector (SPEC.md 124.31.3)

@@ -122,7 +122,7 @@ w16pg_server:
     cmp cx, W16_MAXWND
     jb .f
     mov byte [w16_cwkind], W16Q_DDE
-    mov byte [w16_cwcls], 0
+    mov byte [w16_cwcls], 0xFF      ; WIN16's: no class of the program's
     ICALL w16_ctlstub               ; the controls' procedure: it answers 0
     mov [w16_cwproc], ax
     mov [w16_cwproc + 2], dx

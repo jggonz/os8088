@@ -60,6 +60,14 @@ W16CL_SIZE equ 6
 W16CLF_DISC equ 1               ; discardable (124.26.1)
 W16CLF_KEEP equ 2               ; ...but named by its number: never discarded
 W16CLF_NEW  equ 4               ; ...its block taken at a launch, not yet filled
+W16CLF_HOLD equ 8               ; ...loaded by a thunk, held while the segments
+                                ;   its records kept are read (124.26.14; the
+                                ;   real-mode arm only)
+W16CLF_STAB equ 16              ; ...named by its number, on the arm: ONE selector
+                                ;   for the module's life, not present while
+                                ;   it is discarded (SPEC.md 124.26.12). Its own
+                                ;   bit, not HOLD's: the arms are disjoint today,
+                                ;   but a shared value is a trap for the next one
 W16TK_SIZE equ 8                ; a thunk (124.26.2): jmp/call far, the segment,
 W16TK_SEG  equ 5                ;   the entry's offset
 W16TK_OFF  equ 6
@@ -205,11 +213,8 @@ w16_load:
     test ax, NEF_PMODE
     jnz .flagref
 %else
-    push ax                         ; ...and its locked blocks may move
-    and al, NEF_PMODE               ;   (SPEC.md 124.31.3)
-    mov [w16_pmonly], al
-    pop ax
-%endif
+    mov byte [w16_lkmove], 1        ; ...and its locked blocks may move, as
+%endif                              ;   any program's (SPEC.md 124.31.3)
     mov al, [es:si + NE_EXETYP]
     cmp al, 2                       ; Windows, or 0 (unknown - early linkers)
     je .exeok
@@ -254,6 +259,9 @@ w16_load:
     call w16_bindinit               ;   every task's (124.28.2)
 .bound:
     call w16_modules                ; which of the imported modules are ours,
+    xor ax, ax                      ;   (a load of its own: the two folders
+    mov [w16_winf], ax              ;   walked to afresh, SPEC.md 124.23.1.1)
+    mov [w16_sysf], ax
     call w16l_libs                  ;   and its own libraries, loaded first
     jc .refused                     ;   (SPEC.md 124.23.1): lines written
     mov es, [w16_fseg]
@@ -278,6 +286,10 @@ w16_load:
     mov al, 1
     call w16_relocs                 ; pass 1: apply, in the claim's segments
     jc .refused
+%ifndef PKG_MEGA
+    call w16l_pend                  ; the segments it kept (124.26.14)
+    jc .refused
+%endif
     call w16_prologs
     call w16l_cfree                 ; the cache's work is done
     call w16_mkpsp
@@ -324,6 +336,8 @@ w16_load:
     mov ax, [w16_dgroup]
     mov [w16_task + bx + W16K_H], ax
     mov byte [w16_task + bx + W16K_ST], W16KS_RUN
+    mov al, [w16_pgblk]              ; a claim (0) or a block (1) (124.28.5)
+    mov [w16_task + bx + W16K_FL], al
     inc byte [w16_ntk]
     clc
     jmp short .out
@@ -359,24 +373,40 @@ w16_load:
     ret
 
 ; w16l_pclaim - AX = PARAGRAPHS: the program's segments' claim (w16_lay1)
-; -> DX, CX = the paragraphs granted; CF=1 none. A later task's is a block of
-; the global heap: the first program's claim is one of WIN16's eight and a
-; second cannot be had (124.28.5). Both in paragraphs (SPEC.md 50.3.7).
+; -> DX, CX = the paragraphs granted; CF=1 none. The first program's and the
+; second task's are claims of WIN16's own; a later one's, or one whose claim is
+; refused, is a block of the global heap (SPEC.md 124.28.5). [w16_pgblk] says
+; which was given (1 = a block). Both in paragraphs (SPEC.md 50.3.7).
 ; Clobbers AX.
 w16l_pclaim:
-    cmp byte [w16_ntk], 0
-    jne .blk
+    mov byte [w16_pgblk], 0
+%ifdef PKG_MEGA
+    cmp byte [w16_ntk], 2           ; two tasks hold a claim at most
+%else
+    cmp byte [w16_ntk], 1           ; kern_big: the first's alone (124.28.5)
+%endif
+    jae .blk
+    mov cx, ax
     W16VCLAIM                       ; AX = the paragraphs GRANTED (the
-    xchg ax, cx                     ;   arm: entered in the map, 124.31.3)
+    jnc .got                        ;   arm: entered in the map, 124.31.3)
+    cmp byte [w16_ntk], 0
+    jne .try                        ; a later task goes on to a block
+    stc                             ; the first program: refused (the cmp
+    ret                             ;   above cleared CF)
+.got:
+    xchg ax, cx
     ret
+.try:
+    mov ax, cx
 .blk:
+    mov byte [w16_pgblk], 1
     mov cx, ax                      ; a heap block is what it was asked for
     ICALL w16_kclaimp
     ret
 
 ; w16l_pfree - DX = what w16l_pclaim gave: given back
 w16l_pfree:
-    cmp byte [w16_ntk], 0
+    cmp byte [w16_pgblk], 0
     jne .blk
     W16VFREE
     ret
@@ -1363,6 +1393,19 @@ w16_reloc1:
     xor ah, ah
     mov dx, ax
     mov ax, [es:si + 6]
+%ifndef PKG_MEGA
+    call w16l_c3                    ; CL = 0 as before, 1 applied through
+    cmp cl, 1                       ;   thunks, 2 no memory (SPEC.md
+    jb .ownseg                      ;   124.26.14)
+    ja .c3mem
+    jmp .ok
+.c3mem:
+    pop di
+    pop si
+    pop bx
+    mov si, w16_r_mem
+    jmp .refusal
+%endif
 .ownseg:
     call w16l_keepck                ; a discardable one named so: kept (124.26.1)
 .seg:
@@ -1557,11 +1600,26 @@ section .w16ld
 ; w16l_ssel - the arm's selector for one of the program's segments (SPEC.md
 ; 124.31.4): AX = its paragraph ([w16_sbase + BX]), BX = its index * 2, ES =
 ; the tables -> AX = SEG_SUBC's code half for a code segment, a data selector
-; for a data one, each reaching [w16_slen + BX]. Keeps every other register.
+; for a data one, each reaching [w16_slen + BX]; a LIBRARY's DGROUP its
+; block's handle descriptor, odd, the value its hInstance and its prologs'
+; DS are (SPEC.md 124.25.23). Keeps every other register.
 w16l_ssel:
+    push dx
+    mov dx, bx                      ; its number: a stable selector first
+    shr dx, 1                       ;   (SPEC.md 124.26.12)
+    inc dx
+    call w16l_stabget               ; CF=0: AX = it
+    jnc .stabp
     push cx
     push si
     mov si, [w16_ne]
+    cmp dx, [es:si + NE_AUTODATA]
+    jne .notdg
+    test byte [es:si + NE_FLAGS + 1], NEF_LIB >> 8
+    jz .notdg
+    ICALL w16_pblk                  ; a library's DGROUP is a global block
+    jmp short .dgp
+.notdg:
     add si, [es:si + NE_SEGTAB]
     shl bx, 1
     shl bx, 1
@@ -1573,8 +1631,11 @@ w16l_ssel:
     shr bx, 1
     shr bx, 1
     ICALL w16_ssel
+.dgp:
     pop si
     pop cx
+.stabp:
+    pop dx
     ret
 
 ; w16l_thkcs - DX = the thunks' paragraph -> DX = the module block's code
@@ -1914,7 +1975,8 @@ w16_mkpsp:
     mov word [es:0], 0x20CD         ; int 20h
     mov ax, [w16_ptop]
     mov [es:2], ax                  ; the paragraph past the program
-    mov word [es:0x2C], 0           ; no environment
+    mov word [es:0x2C], 0           ; no environment until GetDOSEnvironment
+                                    ;   makes one (SPEC.md 124.25.21)
     mov byte [es:0x80], 0           ; an empty command tail
     mov byte [es:0x81], 0           ; (lpCmdLine is the text: InitTask)
     pop es
@@ -2245,12 +2307,6 @@ w16_bindinit:
     stosb
     loop .c
     mov word [w16_nbind], W16_NFIXED
-%ifdef W16_TRACE
-    mov di, w16_trow                ; ES = DS here
-    mov cx, W16_NBIND
-    mov ax, 0xFFFF
-    rep stosw
-%endif
     pop es
     pop di
     pop si
@@ -2309,13 +2365,6 @@ w16_bindrow:
     jae .full
     inc word [w16_nbind]
     mov [cs:w16l_rowslot + bx], dx
-%ifdef W16_TRACE
-    push bx
-    mov bx, dx
-    shl bx, 1
-    mov [w16_trow + bx], ax
-    pop bx
-%endif
     mov bx, [cs:w16l_rowslot + bx]
     shl bx, 1
     shl bx, 1
@@ -2423,11 +2472,150 @@ w16l_need:
     pop cx
     ret
 
-; w16l_ldlib - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
+; w16l_ldlib - [w16_lname]'s library: in the folder that is current (the
+; program's, or the importer's for a library of a library), else in WIN16's
+; Windows directory, else in its system directory, else - a library's library
+; whose importer was found elsewhere - in the program's own folder (SPEC.md
+; 124.23.1.1), each by w16l_ldlib1. The folder stood in is put back. out and
+; clobbers as w16l_ldlib1's (GOTO_QM's CX, SI and DI banked: a program on a
+; redirected volume, a CD-ROM title, is the driver's to clobber them)
+w16l_ldlib:
+    call w16l_ldlib1
+    jc .r                           ; refused: the folder decided
+    cmp al, 0xFF                    ; found: CF=0 and ZF=0 after the CMC (the
+    cmc                             ;   CMP borrows for any record below
+    jne .r                          ;   0FFh, which CF=1 would call refused)
+    push cx
+    push bx
+    push dx
+    push si
+    push di
+    call OSAPI_FILE_HERE            ; the first look's folder, to come back to
+    push dx
+    push bx
+    mov bx, w16_winf
+    mov cx, W16L_WINDEPTH
+    call w16l_gofold
+    jc .sys
+    call w16l_ldlib1
+    jc .rest
+    cmp al, 0xFF
+    cmc
+    jne .rest
+.sys:
+    mov bx, w16_sysf
+    mov cx, W16L_SYSDEPTH
+    call w16l_gofold
+    jc .prog
+    call w16l_ldlib1
+    jc .rest
+    cmp al, 0xFF
+    cmc
+    jne .rest
+.prog:
+    pop bx                          ; the first look's folder: the program's
+    pop dx                          ;   own, unless this is a library's
+    push dx                         ;   library whose importer was elsewhere
+    push bx
+    cmp dx, [w16_dir]
+    jne .there
+    cmp bl, [w16_vol]
+    je .none
+.there:
+    mov dx, [w16_dir]
+    mov bl, [w16_vol]
+    call OSAPI_FILE_GOTO_QM
+    jc .none
+    call w16l_ldlib1
+    jmp short .rest
+.none:
+    mov al, 0xFF
+    clc
+.rest:
+    pushf                           ; (the answer kept while the folder
+    pop cx                          ;   goes back: AX, the flags in CX)
+    pop bx
+    pop dx
+    push cx
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
+    popf
+    pop di
+    pop si
+    pop dx
+    pop bx
+    pop cx
+.r:
+    ret
+
+; THE TWO FOLDERS' NAMES, in one place: how many folders below
+; SYSTEM\APPDATA on WIN16's volume each is. The Windows directory is WIN16
+; (the first name, w16pf_s_dir); the system directory is SYSTEM under it
+; (the second, od_s_system), as Windows has C:\WINDOWS and C:\WINDOWS\SYSTEM
+W16L_WINDEPTH equ 1
+W16L_SYSDEPTH equ 2
+
+; w16l_gofold - stand in a folder on WIN16's volume: BX = the word that keeps
+; its first cluster (0 not walked to yet, 0FFFFh there is none), CX = its
+; depth (above). Walked the first time in a load (od_enter, od_dive) and kept
+; for the rest of it, so a second miss is a lookup and not a walk; one that is
+; not there is kept as absent and costs nothing again in that load. Each load
+; clears both words (w16l_load, w16l_rtlib): a setup creates the folder while
+; WIN16 runs. CF=1 there is none and the folder stood in
+; is unchanged. Keeps all but the flags
+w16l_gofold:
+    push ax
+    push bx
+    push dx
+    push si
+    mov dx, [bx]
+    cmp dx, 0xFFFF
+    je .none
+    or dx, dx
+    jnz .go
+    push bx
+    ICALL od_enter                  ; SYSTEM\APPDATA, WIN16's volume
+    jc .eout
+    mov si, w16pf_s_dir             ; ...WIN16
+    ICALL od_dive
+    jc .fail
+    cmp cx, 2
+    jb .got
+    mov si, od_s_system             ; ...SYSTEM
+    ICALL od_dive
+    jc .fail
+.got:
+    pop bx
+    mov [bx], dx
+    ICALL od_back
+    jmp short .go
+.fail:
+    pop bx
+    mov word [bx], 0xFFFF
+    ICALL od_back
+.none:
+    stc
+    jmp short .out
+.eout:
+    pop bx
+    stc
+    jmp short .out
+.go:
+    mov bl, [w16_homev]
+    call OSAPI_FILE_GOTO_QM
+.out:
+    pop si
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16l_ldlib1 - [w16_lname]'s library, loaded (SPEC.md 124.23). The folder
 ; is current and the cluster cache claimed. out: CF=0 AL = its record, or
 ; 0FFh no such file; CF=1 refused with the lines written (line 2 the
 ; library's file). Clobbers AX; keeps the rest.
-w16l_ldlib:
+w16l_ldlib1:
     push bx
     push cx
     push dx
@@ -2592,6 +2780,10 @@ w16l_ldlib:
     mov al, 1
     call w16_relocs
     jc .refusedr
+%ifndef PKG_MEGA
+    call w16l_pend                  ; the segments it kept (124.26.14)
+    jc .refusedr
+%endif
     call w16_prologs
 %ifndef PKG_MEGA
 %ifndef W16_CENSUS_ALWAYS
@@ -2672,7 +2864,18 @@ w16l_rtlib:
     jc .fail
     mov [w16_cseg], dx
     mov word [w16_clen], 0
+    xor ax, ax                      ; a load of its own: the two folders
+    mov [w16_winf], ax              ;   walked to afresh (SPEC.md 124.23.1.1)
+    mov [w16_sysf], ax
+    call w16l_pathlib               ; a full path: its folder first
+    jc .ld
+    cmp al, 0xFF
+    jne .okp
     call w16l_ldlib
+    jmp short .ld
+.okp:
+    clc
+.ld:
     pushf
     jc .nokeep
     push si                         ; its discardable code loads through
@@ -2694,6 +2897,110 @@ w16l_rtlib:
     popf
     pop es
     pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16l_pathlib - a LoadLibrary's FULL PATH tried first (SPEC.md 124.25.22):
+; [w16f_path] is the name as the program gave it (LoadLibrary's scan keeps
+; it). Only "X:\DIR\...\NAME" - a drive, then a folder from the root - is a
+; path; anything else answers none, and so does a name the scan cut at 142
+; characters (its last folder would be part of a name). The folder is walked
+; from the root of volume X (A = 0) a name at a time, as the libraries' own
+; folders are (od_dive: no "." or ".." - such a path answers none), and
+; [w16_lname]'s library looked for there by w16l_ldlib1. The
+; folder stood in is put back. out: as w16l_ldlib1's: CF=0 AL = its record or
+; 0FFh (none, for any reason); CF=1 refused
+w16l_pathlib:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    mov si, w16f_path
+.up:                                ; upper case, / as \ (the cut is by
+    mov al, [si]                    ;   name and the folders are FAT's)
+    or al, al
+    jz .upd
+    cmp al, '/'
+    jne .nsl
+    mov al, '\'
+.nsl:
+    cmp al, 'a'
+    jb .st
+    cmp al, 'z'
+    ja .st
+    sub al, 'a' - 'A'
+.st:
+    mov [si], al
+    inc si
+    jmp short .up
+.upd:
+    cmp si, w16f_path + 142         ; LoadLibrary's scan cut it: no path,
+    jae .cut                        ;   or a folder above the one it named
+    mov si, w16f_path
+    mov al, [si]
+    sub al, 'A'
+    cmp al, 26
+    jae .nopath
+    cmp byte [si + 1], ':'
+    jne .nopath
+    cmp byte [si + 2], '\'
+    jne .nopath
+    mov [od_tdrv], al               ; od_dive's volume
+    call OSAPI_FILE_HERE            ; the folder to come back to
+    push dx
+    push bx
+    mov bl, [od_tdrv]
+    xor dx, dx                      ; the root
+    ICALL od_qm
+    jc .gone
+    add si, 3
+.next:
+    mov di, si
+.sc:
+    mov al, [di]
+    or al, al
+    jz .leaf
+    cmp al, '\'
+    je .comp
+    inc di
+    jmp short .sc
+.comp:
+    mov byte [di], 0
+    push di
+    ICALL od_dive
+    pop di
+    mov byte [di], '\'
+    jc .gone
+    inc di
+    mov si, di
+    jmp short .next
+.leaf:
+    call w16l_ldlib1
+    jmp short .back
+.gone:
+    mov al, 0xFF
+    clc
+.back:
+    pushf
+    pop cx                          ; (the answer kept while the folder
+    pop bx                          ;   goes back: AX, the flags in CX)
+    pop dx
+    push cx
+    push ax
+    ICALL od_qm
+    pop ax
+    popf
+    jmp short .ret
+.cut:
+.nopath:
+    mov al, 0xFF
+    clc
+.ret:
     pop di
     pop si
     pop dx
@@ -3544,6 +3851,10 @@ w16l_keepck:
     jne .out
     call w16l_isdlive
     jnc .out
+%ifndef PKG_MEGA
+    call w16l_c3ok                  ; a far call's perhaps: decided at the
+    jc .out                         ;   apply pass (SPEC.md 124.26.14)
+%endif
     push ax
     mov ax, [w16_rseg]
     shr ax, 1
@@ -3560,7 +3871,11 @@ w16l_keepck:
     push si
     push es
     call w16l_lent
+%ifdef PKG_MEGA
+    or byte [es:si + W16CL_FL], W16CLF_STAB ; (a stable selector, 124.26.12)
+%else
     or byte [es:si + W16CL_FL], W16CLF_KEEP
+%endif
     pop es
     pop si
 .out:
@@ -3654,6 +3969,12 @@ w16l_cmake:
     jmp .ok                         ; nothing discardable: no block
 .some:
     call w16l_nord
+%ifndef PKG_MEGA
+    push ax                         ; + the far calls' thunks, if the
+    call w16l_cpool                 ;   records could use any (124.26.14)
+    pop cx
+    add ax, cx
+%endif
     mov [w16_cnord], ax
     mov ax, [w16_nseg]
     mov [w16_cnseg], ax
@@ -3676,6 +3997,10 @@ w16l_cmake:
     shl cx, 1
     add cx, dx
     shl cx, 1                       ; * W16CL_SIZE
+%ifdef PKG_MEGA
+    add cx, dx                      ; ...and a selector cell a segment
+    add cx, dx                      ;   (SPEC.md 124.26.12)
+%endif
     add ax, cx
     add ax, 15
     jc .big
@@ -3876,11 +4201,17 @@ w16l_thkset:
     push es
 %ifdef PKG_MEGA
     or dx, dx                       ; the segment's code selector, which each
-    jz .sel                         ;   thunk's jmp far names (124.31.4)
-    push ax
+    jz .sel                         ;   thunk's jmp far names (124.31.4): its
+    push ax                         ;   stable one when it has one (124.26.12)
+    push dx
+    mov dx, ax
+    call w16l_stabget               ; AX = the selector (CF=0)
+    pop dx
+    jnc .have
     mov ax, dx
     mov cl, 1
     ICALL w16_ssel
+.have:
     mov dx, ax
     pop ax
 .sel:
@@ -3920,6 +4251,325 @@ w16l_thkset:
     pop di
     pop cx
     ret
+
+
+%ifndef PKG_MEGA
+; =============================================================================
+; FAR CALLS THROUGH THUNKS (SPEC.md 124.26.14). A record that names a
+; discardable segment by number, whose every site is a CALL FAR / JMP FAR with
+; the offset a literal before it, is given per-target thunks in the module
+; block's thunk table, so the segment stays discardable. Anything else keeps
+; the segment, as 124.26.1 always did, but when the record is applied and not
+; at launch.
+; =============================================================================
+
+; w16l_cpool - ES = the tables: AX = how many thunks to add to the table for
+; far calls (0 none), from the records that could be ones (w16l_c3ok). The
+; sites are not in memory yet: only the records are counted. Keeps the rest.
+w16l_cpool:
+    push bx
+    push cx
+    push dx
+    push si
+    xor ax, ax
+    xor bx, bx                      ; BX = the source's index * 2
+.src:
+    mov [w16_rseg], bx
+    mov si, [w16_rtoff + bx]
+    or si, si
+    jz .nsrc
+    mov cx, [es:si]
+    add si, 2
+    jcxz .nsrc
+.rec:
+    test byte [es:si + 1], 3        ; internal, by number
+    jnz .nrec
+    mov dl, [es:si + 4]
+    cmp dl, 0xFF
+    je .nrec
+    xor dh, dh
+    call w16l_c3ok
+    adc ax, 0
+.nrec:
+    add si, 8
+    loop .rec
+.nsrc:
+    inc bx
+    inc bx
+    mov dx, bx
+    shr dx, 1
+    cmp dx, [w16_nseg]
+    jb .src
+    shl ax, 1                       ; two a record, 16 to 512
+    jz .out
+    cmp ax, 16
+    jae .big
+    mov ax, 16
+.big:
+    cmp ax, 512
+    jbe .out
+    mov ax, 512
+.out:
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16l_c3ok - ES:SI -> an internal record naming segment DX by number, from
+; segment [w16_rseg]; ES = the tables. CF=1 it may be a far call's (SPEC.md
+; 124.26.14): a selector, not additive, to a discardable segment other than
+; the source. Keeps all.
+w16l_c3ok:
+    push ax
+    push bx
+    mov al, [es:si]
+    and al, 0x7F
+    cmp al, 2
+    jne .no
+    test byte [es:si + 1], 4
+    jnz .no
+    mov bx, dx
+    dec bx
+    shl bx, 1
+    cmp bx, [w16_rseg]
+    je .no
+    call w16l_isdisc                ; CF=1 a discardable one
+    jmp short .out
+.no:
+    clc
+.out:
+    pop bx
+    pop ax
+    ret
+
+; w16l_c3 - in w16_reloc1's apply pass, a record naming segment DX by number,
+; ES:SI = the record, ES = the tables. out: CL = 0 as before (DX, AX as in);
+; 1 every site was a far call and has been given its thunk: the record is
+; applied; 2 no memory for the segment it had to keep. A record with a site
+; that is not proved keeps the segment: flagged, and a block taken if it has
+; none, which w16l_pend fills. Keeps the rest.
+w16l_c3:
+    xor cl, cl
+    cmp byte [w16_rpass], 1
+    jne .ret
+    call w16l_c3ok
+    jnc .ret
+    push bx
+    push si
+    push di
+    push bp
+    mov bp, dx                      ; BP = the target
+    push es
+    push si
+    call w16l_lent
+    test byte [es:si + W16CL_FL], W16CLF_KEEP
+    pop si
+    pop es
+    jnz .keep                       ; kept already (a block if it lost one)
+    mov bx, [w16_rseg]
+    call w16l_segtab                ; ES:DI -> the source's row
+    test word [es:di + 4], NSF_DATA ; a data segment's site is no call
+    jnz .keep
+    mov bx, bp
+    dec bx
+    shl bx, 1
+    call w16l_segtab
+    mov bx, ax                      ; BX = the target's size
+    mov di, [es:si + 2]             ; the first site
+    push es                         ; the tables
+    mov si, [w16_rseg]
+    W16SEG es, [w16_sbase + si]     ; the source's bytes
+    ICALL w16_inrange               ; a first site outside it is the apply
+    jc .nope                        ;   pass's refusal, as before
+    xor dl, dl                      ; every site checked, then the thunks
+.walk:                              ;   made, then written: a record that
+    push di                         ;   fails makes none, and one whose
+    call w16l_c3walk                ;   thunks are made cannot fail
+    pop di
+    jc .nope
+    inc dx
+    cmp dl, 3
+    jb .walk
+    pop es
+    mov cl, 1
+    jmp short .pop
+.nope:
+    pop es
+.keep:                              ; ES = the tables
+    mov dx, bp
+    push es
+    call w16l_lent
+    or byte [es:si + W16CL_FL], W16CLF_KEEP
+    cmp word [es:si + W16CL_BASE], 0
+    pop es
+    jne .norm                       ; loaded: its paragraph stands
+    call w16l_segalloc              ; a block now, its content after
+    mov cl, 2
+    jc .pop
+.norm:
+    mov dx, bp
+    xor cl, cl
+.pop:
+    pop bp
+    pop di
+    pop si
+    pop bx
+    mov ax, [es:si + 6]
+.ret:
+    ret
+
+; (w16l_c3's chain walk: ES = the source's bytes, DI = the first site, BX =
+; the target's size, BP = its number, DL = 0 check, 1 make the thunks, 2 write
+; them. CF=1 a site is no far call, or the table is full. Keeps all but SI,
+; DI, CX, AX.)
+w16l_c3walk:
+    mov si, 0x4000                  ; bounds a chain that loops
+.site:
+    ICALL w16_inrange               ; a site outside ends the chain, as the
+    jc .ok                          ;   apply pass's does
+    cmp di, 3
+    jb .bad
+    mov al, [es:di - 3]
+    cmp al, 0x9A                    ; CALL FAR
+    je .call
+    cmp al, 0xEA                    ; JMP FAR
+    jne .bad
+.call:
+    mov cx, [es:di - 2]             ; the offset, a literal: inside the target
+    cmp cx, bx
+    jae .bad
+    mov ax, [es:di]                 ; the chain's next site, read first
+    or dl, dl
+    jz .next
+    push dx
+    push di
+    mov dx, bp
+    call w16l_xfind                 ; the pair's thunk
+    mov cx, di
+    pop di
+    pop dx
+    jc .bad                         ; the table is full
+    cmp dl, 2
+    jne .next
+    mov [es:di - 2], cx             ; the site: the thunk
+    push word [w16_cthk]
+    pop word [es:di]
+.next:
+    cmp ax, di
+    je .ok
+    mov di, ax
+    cmp di, 0xFFFF
+    je .ok
+    dec si
+    jnz .site
+.ok:
+    clc
+    ret
+.bad:
+    stc
+    ret
+
+; w16l_xfind - DX = a segment's number, CX = an offset in it: the thunk for
+; the pair, the first free one made if there is none (calling w16_thkhit, or
+; jumping if the segment is loaded). Any thunk of the pair will do, an
+; entry's among them, and a free one is any an ordinal has no use for.
+; out: CF=0 DI = its offset in the thunks; CF=1 none is free. Keeps the rest.
+w16l_xfind:
+    push ax
+    push bx
+    push es
+    W16SEG es, [w16_cthk]
+    mov bx, [w16_cnord]
+    shl bx, 1
+    shl bx, 1
+    shl bx, 1
+    mov ax, 0xFFFF                  ; AX = the first free one, none yet
+    xor di, di
+.scan:
+    cmp di, bx
+    jae .new
+    cmp byte [es:di], 0
+    je .free
+    cmp [es:di + W16TK_SEG], dl
+    jne .next
+    cmp [es:di + W16TK_OFF], cx
+    je .found
+    jmp short .next
+.free:
+    cmp ax, 0xFFFF
+    jne .next
+    mov ax, di
+.next:
+    add di, W16TK_SIZE
+    jmp short .scan
+.new:
+    mov di, ax
+    inc ax
+    stc
+    jz .out                         ; none free
+    mov ax, cx
+    call w16l_thk1                  ; not loaded: calls w16_thkhit
+    push si
+    push es
+    call w16l_lent                  ; the segment loaded now?
+    mov ax, [es:si + W16CL_BASE]
+    pop es
+    pop si
+    or ax, ax
+    jz .found
+    mov byte [es:di], 0xEA          ; jmp far the entry
+    mov [es:di + 1], cx
+    mov [es:di + 3], ax
+.found:
+    clc
+.out:
+    pop es
+    pop bx
+    pop ax
+    ret
+
+; w16l_pend - the segments a record kept while it was applied (flagged, a block
+; taken, not yet filled: W16CLF_NEW with a paragraph) read now. Their records
+; and the room they use are free, since the segment being applied is done.
+; CF=1 refused, the lines written; every block still unfilled is given back
+; then. Keeps all.
+w16l_pend:
+    push ax
+    push dx
+    push si
+    push es
+    xor al, al                      ; AL = 1 once one has failed
+.again:
+    xor dx, dx
+.seg:
+    inc dx
+    cmp dx, [w16_nseg]
+    ja .done
+    call w16l_isdlive
+    jnc .seg
+    call w16l_lent
+    test byte [es:si + W16CL_FL], W16CLF_NEW
+    jz .seg
+    cmp word [es:si + W16CL_BASE], 0
+    je .seg
+    or al, al
+    jnz .drop
+    W16SEG es, [w16_cmb]
+    call w16l_segfill
+    jnc .again
+    inc ax                          ; refused: this one and the rest go back
+.drop:
+    call w16l_segdrop
+    jmp short .seg
+.done:
+    shr al, 1                       ; CF = refused
+    pop es
+    pop si
+    pop dx
+    pop ax
+    ret
+%endif
 
 ; w16l_segtab - BX = a segment's index * 2: ES:DI -> its row of the segment
 ; table, and AX = its size, the larger of its length and minalloc (both under
@@ -3966,6 +4616,12 @@ w16l_segalloc:
     push dx
     xor dx, dx
     mov cl, W16G_HIGH
+%ifdef PKG_MEGA
+    test byte [w16_nplod], 2        ; WIN16's own stack faulted: no code goes
+    jz .hi                          ;   to make this room (124.26.12)
+    or cl, W16G_NOCODE
+.hi:
+%endif
     ICALL w16_gnew                  ; AX = the handle: its segment, as DX
     pop cx                          ; CX = its number, CH its owner's
     or ax, ax
@@ -4111,6 +4767,19 @@ w16l_segfill:
     mov word [w16_pone], 0
     mov ax, bp                      ; its thunks, at it
     mov dx, [w16_sbase + bx]
+%ifdef PKG_MEGA
+    push dx                         ; its stable selector aimed at it and
+    push cx                         ;   present (124.26.12)
+    mov cx, [w16_slen + bx]
+    mov ax, dx
+    mov dx, bp
+    call w16l_stabaim
+    mov cx, 1
+    call w16l_stabtype
+    pop cx
+    pop dx
+    mov ax, bp
+%endif
     call w16l_thkset
     mov dx, bp                      ; filled: it may go now
     call w16l_lent
@@ -4161,6 +4830,9 @@ w16l_segsup:
     jne .some
     jmp .ok
 .some:
+%ifdef PKG_MEGA
+    call w16l_stabmk                ; their stable selectors (124.26.12)
+%endif
     mov cl, 1                       ; CL = 1: every one (the census)
 %ifndef W16_CENSUS_ALWAYS
     cmp byte [w16_cpu186], 0
@@ -4242,6 +4914,372 @@ w16l_segsup:
     stc
     jmp short .out
 
+%ifdef PKG_MEGA
+; =============================================================================
+; STABLE SELECTORS (SPEC.md 124.26.12). A discardable segment the program or a
+; library names by its number has ONE selector for the module's life, a handle
+; descriptor in a cell after the live table: not present while the segment is
+; discarded, present over its block while it is loaded.
+; =============================================================================
+
+; w16l_scell - DX = a segment's number: ES:SI -> its selector cell; CF=1 none.
+; Keeps the rest.
+w16l_scell:
+    call w16l_lent
+    jc .ret
+    push ax
+    mov si, [w16_cnseg]             ; the cells follow the live table
+    mov ax, si
+    shl si, 1
+    add si, ax
+    shl si, 1                       ; * W16CL_SIZE
+    mov ax, dx
+    dec ax
+    shl ax, 1
+    add si, ax
+    pop ax
+    clc
+.ret:
+    ret
+
+; w16l_stabget - DX = a segment's number: CF=0 AX = its stable selector; CF=1
+; it has none (AX kept). Keeps the rest.
+w16l_stabget:
+    push es
+    push si
+    call w16l_lent
+    jc .no
+    test byte [es:si + W16CL_FL], W16CLF_STAB
+    jz .no
+    call w16l_scell
+    mov si, [es:si]
+    or si, si
+    jz .no
+    mov ax, si
+    pop si
+    pop es
+    clc
+    ret
+.no:
+    pop si
+    pop es
+    stc
+    ret
+
+; w16l_stabmk - every segment the check pass marked STAB: its handle
+; descriptor made over the module block, limit 0, not present. One that cannot
+; be had is KEPT instead, loaded at launch (the arm degrades to 124.26.11).
+; Keeps all.
+w16l_stabmk:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov dx, 1
+.n:
+    call w16l_lent
+    jc .out
+    test byte [es:si + W16CL_FL], W16CLF_STAB
+    jz .next
+    call w16l_scell
+    cmp word [es:si], 0
+    jne .next
+    push es
+    push si
+    push dx
+    mov ax, [w16_cmb]
+    ICALL w16_vfind                 ; SI = the claim's row, DX = paragraphs in
+    jc .bad
+    mov ax, dx
+    mov si, [si + W16V_SEL]
+    xor dx, dx
+    mov cx, 1                       ; limit 0
+    mov bl, SEG_HND
+    call OSAPI_SEG                  ; DX = the handle descriptor
+    jc .bad
+    mov cx, 2                       ; code, not present
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
+    mov ax, dx
+    pop dx
+    pop si
+    pop es
+    mov [es:si], ax
+    jmp short .next
+.bad:
+    pop dx
+    pop si
+    pop es
+    call w16l_lent
+    and byte [es:si + W16CL_FL], ~W16CLF_STAB & 0xFF
+    or byte [es:si + W16CL_FL], W16CLF_KEEP
+.next:
+    inc dx
+    jmp short .n
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_stabaim - DX = a segment's number, AX = a virtual paragraph (0: the
+; module block), CX = bytes (0 = 64 KB): its stable selector re-aimed there.
+; CF=0 also when it has none. Keeps all.
+w16l_stabaim:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov di, ax
+    call w16l_stabget
+    jc .ok
+    mov bx, ax                      ; BX = the selector
+    mov ax, di
+    or ax, ax
+    jnz .blk
+    mov ax, [w16_cmb]
+.blk:
+    ICALL w16_vfind                 ; keeps CX
+    jc .ret
+    mov ax, dx
+    mov si, [si + W16V_SEL]
+    mov dx, bx
+    mov bl, SEG_HND
+    call OSAPI_SEG
+    jmp short .ret
+.ok:
+    clc
+.ret:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_stabtype - DX = a segment's number, CX = 1 present / 2 not: its stable
+; selector's type set (SEG_TYPE). Keeps all.
+w16l_stabtype:
+    push ax
+    push bx
+    push dx
+    call w16l_stabget
+    jc .ok
+    mov dx, ax
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
+    jmp short .ret
+.ok:
+    clc
+.ret:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16l_park - DX = a loaded segment's number: not present first, then off its
+; block onto the module block, so an arena's free cannot take the descriptor.
+; Keeps all.
+w16l_park:
+    push cx
+    push ax
+    mov cx, 2
+    call w16l_stabtype
+    xor ax, ax
+    mov cx, 1
+    call w16l_stabaim
+    pop ax
+    pop cx
+    ret
+
+; w16l_stabfree - the module in place: every descriptor in its cells given
+; back (the module's end). Keeps all.
+w16l_stabfree:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov dx, 1
+.n:
+    call w16l_scell
+    jc .out
+    mov di, dx
+    xor dx, dx
+    xchg dx, [es:si]
+    or dx, dx
+    jz .skip
+    xor si, si
+    mov bl, SEG_HND
+    call OSAPI_SEG
+.skip:
+    mov dx, di
+    inc dx
+    jmp short .n
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_csel - ES:DI = a live entry of the module in place (loaded): AX = the
+; code selector a stack names it by. Keeps the rest.
+w16l_csel:
+    push dx
+    push si
+    mov ax, di
+    xor dx, dx
+    mov si, W16CL_SIZE
+    div si
+    inc ax
+    mov dx, ax                      ; DX = its number
+    call w16l_stabget
+    jnc .out
+    mov ax, [es:di + W16CL_BASE]
+    push cx
+    mov cl, 1
+    ICALL w16_ssel
+    pop cx
+.out:
+    pop si
+    pop dx
+    ret
+
+; w16l_dxsel - w16l_segin1's answer in DX = a paragraph, AX = its number (CF
+; as it left): DX = the code selector. Keeps all else.
+w16l_dxsel:
+    jc .r
+    push ax
+    xchg ax, dx
+    call w16l_stabget
+    jnc .got
+    push cx
+    mov cl, 1
+    ICALL w16_ssel
+    pop cx
+.got:
+    mov dx, ax
+    pop ax
+    clc
+.r:
+    ret
+
+; w16l_npfind - DX = a not-present selector (the error code's): AX = the number
+; of the segment it is the stable selector of, BX = 0 the program's / a
+; library's record; CF=1 none. Keeps the rest.
+w16l_npfind:
+    push cx
+    push si
+    push es
+    and dx, 0xFFFC
+    xor bx, bx
+.mod:
+    call w16l_cdx
+    cmp word [w16_cmb], 0
+    je .next
+    W16SEG es, [w16_clive]
+    mov cx, [w16_cnseg]
+    mov si, cx
+    shl si, 1
+    add si, cx
+    shl si, 1                       ; the first cell
+.c:
+    mov ax, [es:si]
+    and ax, 0xFFFC
+    cmp ax, dx
+    je .found
+    add si, 2
+    loop .c
+.next:
+    call w16l_cdx
+    call w16l_nextmod
+    jnc .mod
+    stc
+    jmp short .out
+.found:
+    mov ax, [w16_cnseg]
+    sub ax, cx
+    inc ax
+    call w16l_cdx
+    clc
+.out:
+    pop es
+    pop si
+    pop cx
+    ret
+
+; w16l_npload - AX = the not-present selector a #NP named: its segment loaded
+; (SPEC.md 124.26.12), the program's or a library's. CF=1 not, the lines
+; written. [w16_nplod] is set for its length. Keeps all but AX.
+w16l_npload:
+    push bx
+    push dx
+    push si
+    push di
+    test byte [w16_nplod], 1        ; one at a time: a second is refused
+    jnz .bad                        ;   (the owner's loading flag)
+    or byte [w16_nplod], 1
+    mov dx, ax
+    pushf                           ; (one cli window: an IRQ between the two
+    cli                             ;   OCW3s would read the ISR for its IRR)
+    mov al, 0x0B                    ; the PIC's in-service register: a hardware
+    out 0x20, al                    ;   interrupt handler is running, and no
+    in al, 0x20                     ;   program's code runs in one, so this is
+    mov ah, al                      ;   not the program's fault to repair
+    mov al, 0x0A                    ; (its IRR again, as everyone else reads it)
+    out 0x20, al
+    popf
+    or ah, ah
+    jnz .bad
+    call w16l_npfind                ; AX = its number, BX = whose
+    jc .bad
+    call w16l_segbx                 ; (DX is spent)
+    jmp short .out
+.bad:
+    mov si, w16_r_code
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    ICALL w16_strcpy
+    stc
+.out:
+    pushf                           ; (the answer's carry: the `and` clears it)
+    and byte [w16_nplod], ~1 & 0xFF
+    popf
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; w16l_nplow - w16l_npload for a #NP on WIN16's own stack (w16_npent's second
+; arm): no code is discarded to make the room. Keeps all but AX.
+w16l_nplow:
+    or byte [w16_nplod], 2
+    call w16l_npload
+    pushf
+    and byte [w16_nplod], ~2 & 0xFF
+    popf
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; w16l_segin - discardable segment AX of the module whose thunks are at code
 ; segment DX loaded while the program runs (SPEC.md 124.26.3), for
@@ -4253,10 +5291,21 @@ w16l_segsup:
 w16l_segin:
     push bx
     call w16l_whose                 ; BX = 0 the program's, else a record
+    call w16l_segbx
+    pop bx
+    ret
+
+; w16l_segbx - w16l_segin's load once the module is known: BX = 0 the
+; program's, else a library's record, AX = the segment's number
+w16l_segbx:
     or bx, bx
     jnz .lib
-    pop bx
+%ifdef PKG_MEGA
+    call w16l_segin1
+    jmp w16l_dxsel                  ; DX = its code selector, not its paragraph
+%else
     jmp w16l_segin1
+%endif
 .lib:
     push cx
     mov cx, [w16_dir]               ; the program's folder: the library's
@@ -4266,6 +5315,9 @@ w16l_segin:
     call w16l_push
     call w16l_libin
     call w16l_segin1
+%ifdef PKG_MEGA
+    call w16l_dxsel                 ; (its six words are in place)
+%endif
     pushf
     call w16l_pop
     popf
@@ -4274,7 +5326,6 @@ w16l_segin:
     pop cx
     mov [w16_dir], cx
     pop cx
-    pop bx
     ret
 
 ; w16l_whose - DX = the code segment a thunk was called through -> BX = 0
@@ -4435,6 +5486,10 @@ w16l_segin1:
     cmp cx, [w16_cbud]
     jbe .fits
 .over:
+%ifdef PKG_MEGA
+    test byte [w16_nplod], 2
+    jnz .fits
+%endif
     mov dx, 0xFFFF
     call w16l_codeold
     jnc .budget
@@ -4472,6 +5527,16 @@ w16l_segin1:
     call w16l_segkeep
     W16SEG es, [w16_cmb]
     call w16l_segfill
+%ifndef PKG_MEGA
+    jc .nopend                      ; what it kept (124.26.14), read with it
+    call w16l_lent                  ;   held: their records may need room,
+    or byte [es:si + W16CL_FL], W16CLF_HOLD ; and it is filled, not yet on
+    call w16l_pend                  ;   any stack, and what w16_segld jumps
+    pushf                           ;   to; CF as the fill's
+    and byte [es:si + W16CL_FL], ~W16CLF_HOLD
+    popf
+.nopend:
+%endif
     pop word [w16_csz]              ; (the flags kept)
     mov si, 1                       ; SI = 1: refused, the lines written
     jc .drop
@@ -4529,6 +5594,12 @@ w16l_segdrop:
     call w16l_thkset
     pop dx
     call w16l_lent
+%ifdef PKG_MEGA
+    cmp word [es:si + W16CL_BASE], 0
+    je .nopark
+    call w16l_park                  ; not present, off its block (124.26.12)
+.nopark:
+%endif
     xor ax, ax
     xchg ax, [es:si + W16CL_BASE]
     or ax, ax
@@ -4576,6 +5647,9 @@ w16l_cfreeall:
 .next:
     dec dx
     jnz .seg
+%ifdef PKG_MEGA
+    call w16l_stabfree              ; and the descriptors (124.26.12)
+%endif
     xor dx, dx
     xchg dx, [w16_cmb]
     ICALL w16_kfree
@@ -4660,11 +5734,8 @@ w16l_codeold:
     call w16l_ulenset               ; what a return offset into it can be
     mov ax, [es:di + W16CL_BASE]
 %ifdef PKG_MEGA
-    push cx                         ; the stack names its code selector
-    mov cl, 1                       ;   (124.31.4)
-    ICALL w16_ssel
-    pop cx
-%endif
+    call w16l_csel                  ; the stack names its code selector
+%endif                              ;   (124.31.4), its stable one (124.26.12)
     call w16l_inuse
     je .used
     or bx, bx                       ; a library's: any task's stack
@@ -4722,7 +5793,11 @@ w16l_oldest:
     mov cx, [w16_cnseg]
 .seg:
     mov al, [es:si + W16CL_FL]
+%ifdef PKG_MEGA
     and al, W16CLF_DISC | W16CLF_KEEP | W16CLF_NEW
+%else
+    and al, W16CLF_DISC | W16CLF_KEEP | W16CLF_NEW | W16CLF_HOLD
+%endif
     cmp al, W16CLF_DISC
     jne .next
     cmp word [es:si + W16CL_BASE], 0
@@ -4904,6 +5979,26 @@ w16l_inuse:
     push es
     cmp word [w16_stop], 0
     je .out
+%ifdef PKG_MEGA
+    cmp ax, [w16_res]               ; the program's ES and DS as the gate
+    je .out                         ;   banked them: a 286 keeps their bases,
+    mov es, [w16_pss]               ;   so a discard under one reads freed
+    mov di, [w16_psp_]              ;   memory silently (124.26.12)
+    cmp ax, [es:di + W16F_DS]
+    je .out
+    push ss                         ; ...and every segment register WIN16's own
+    pop es                          ;   frames pushed (w16_gnew's ES, which is
+    mov di, sp                      ;   the caller's): made not present there,
+    mov cx, [w16_hsp]               ;   its pop is a #NP, and an interrupt's
+    add cx, 10                      ;   pop of a register still holding it is
+    sub cx, di                      ;   a #NP in the KERNEL, which is fatal.
+    jbe .host                       ;   SP up to the host frame w16_resume
+    shr cx, 1                       ;   pushed (its five words), exact words
+    cld
+    repne scasw
+    je .out
+.host:
+%endif
     mov es, [w16_pss]
     mov di, [w16_psp_]
     mov cx, [w16_stop]

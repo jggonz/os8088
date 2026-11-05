@@ -1765,6 +1765,26 @@ w16o_put:
     pop si
     jmp short w16o_ok
 
+; =============================================================================
+; DDEML (SPEC.md 124.25.26): no DDE server is running. w16_ans1 is the TRUE
+; and the non-zero handle, w16o_ok the NULL and the 0
+; =============================================================================
+
+DMLERR_NO_CONV_ESTABLISHED equ 400Ah
+
+; DdeInitialize(pidInst, pfnCallback, afCmd, ulRes): *pidInst = 1, and
+; DMLERR_NO_ERROR. pidInst is the first pascal argument, so at +12
+W16SYS w16dd_init
+    mov ax, 12
+    mov cx, 1
+    jmp w16o_put
+
+; DdeGetLastError: the only error this DDEML can have
+W16SYS w16dd_err
+    mov ax, DMLERR_NO_CONV_ESTABLISHED
+    xor dx, dx
+    ret
+
 ; OleUnblockServer: OLE_OK, and *lpfRequest FALSE - nothing is waiting
 W16SYS w16o_bool0
     ICALL w16_args

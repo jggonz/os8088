@@ -9,18 +9,29 @@
 section .w16dlg
 
 ; GetWindowsDirectory (KERNEL.134), GetSystemDirectory (KERNEL.135) - the
-; folder WIN.INI is in (SPEC.md 124.14) as a DOS path: "A:\SYSTEM\APPDATA\
-; WIN16" on WIN16's own volume. One folder answers both: WIN16 has no SYSTEM
-; folder of its own. args: +0 nSize, +2 lpBuffer. Answers the length; a
-; buffer too small for it answers the size it needs, NUL included, as Windows
-; did, and is left alone
+; folder WIN.INI is in (SPEC.md 124.14) as a DOS path, "A:\SYSTEM\APPDATA\
+; WIN16" on WIN16's own volume, and SYSTEM under it (SPEC.md 124.20.5.1), as
+; Windows had C:\WINDOWS and C:\WINDOWS\SYSTEM. args: +0 nSize, +2 lpBuffer.
+; Answers the length; a buffer too small for it answers the size it needs,
+; NUL included, as Windows did, and is left alone. The system folder is made
+; on the first ask (a Setup Toolkit copies into it without a CreateDir)
+W16LIB w16k_sysdir
+    push si
+    push di
+    ICALL w16_args
+    mov dx, od_s_syslen             ; DX = the characters past the Windows
+    call w16f_mksys                 ;   directory: '\' and "SYSTEM"
+    jmp short w16k_dircom
 W16LIB w16k_windir
     push si
     push di
     ICALL w16_args
+    xor dx, dx
+w16k_dircom:
     mov cx, [es:bx]
     les di, [es:bx + 2]
     mov ax, w16s_dirlen + 1
+    add ax, dx                      ; the length, NUL with it
     cmp cx, ax
     jb .out
     mov al, [w16_homev]
@@ -28,9 +39,16 @@ W16LIB w16k_windir
     cld
     stosb
     mov si, w16s_dir
-    mov cx, w16s_dirlen
-    rep movsb                       ; the NUL with it
+    mov cx, w16s_dirlen             ; the NUL with it
+    rep movsb
+    mov cx, dx
+    jcxz .len
+    mov byte [es:di - 1], '\'       ; ...over it, and the system folder's
+    mov si, od_s_system             ;   name, its NUL with it
+    rep movsb
+.len:
     mov ax, w16s_dirlen
+    add ax, dx
 .out:
     pop di
     pop si
@@ -53,8 +71,14 @@ W16LIB w16k_loadlib
     ICALL w16_args
     les di, [es:bx]
     mov si, di                      ; the file part: past the last \ / or :
-.scan:
+    mov bx, w16f_path               ; the whole name kept as well, for
+.scan:                              ;   w16l_pathlib (SPEC.md 124.25.22)
     mov al, [es:si]
+    cmp bx, w16f_path + 142
+    jae .nocp
+    mov [bx], al
+    inc bx
+.nocp:
     or al, al
     jz .scanned
     inc si
@@ -68,6 +92,7 @@ W16LIB w16k_loadlib
     mov di, si
     jmp short .scan
 .scanned:
+    mov byte [bx], 0                ; (cut at 142: w16l_pathlib refuses it)
     mov si, w16_modnames            ; one of WIN16's own
     xor dx, dx
 .mod:
@@ -219,8 +244,10 @@ LCONT w16k_llback
     cwd
     ret
 
-; FreeLibrary (KERNEL.96) - args: +0 hLibModule. The count lowered; at 0
-; its WEP(WEP_FREE_DLL) called, then its blocks freed (w16k_flback)
+; FreeLibrary (KERNEL.96), FreeModule (KERNEL.46) - args: +0 hLibModule.
+; The count lowered; at 0 its WEP(WEP_FREE_DLL) called, then its blocks
+; freed (w16k_flback). TRUE, FreeModule's answer (FreeLibrary's is void);
+; a handle that is no library of ours is left alone (SPEC.md 124.25.15)
 W16LIB w16k_freelib
     push si
     push di
@@ -229,7 +256,7 @@ W16LIB w16k_freelib
     ICALL w16_libof                 ; SI -> it, BX = its record
     jc .out
     dec byte [si + W16L_COUNT]
-    jnz .out
+    jnz .true
     inc byte [si + W16L_COUNT]      ; alive while its WEP runs
     W16CSEG es
     mov di, w16_s_wep               ; XSEC-OK: ES = CS
@@ -251,6 +278,8 @@ W16LIB w16k_freelib
 .nowep:
     mov ax, bx
     call w16l_drop
+.true:
+    mov ax, 1
 .out:
     pop di
     pop si
@@ -259,7 +288,9 @@ w16_s_wep: db 'WEP'
 
 LCONT w16k_flback
     mov ax, cx
-    jmp w16l_drop
+    call w16l_drop
+    mov ax, 1
+    ret
 
 ; GetModuleUsage (KERNEL.48) - args: +0 hModule: a library's count, else 1
 W16LIB w16k_getmodu
@@ -353,17 +384,15 @@ W16LIB w16u_getclsname
     jc .zero
     jcxz .zero
     dec cx                          ; room for the NUL
-    mov al, [bx + W16W_KIND]
-    or al, al
-    jnz .ours
-    mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls + W16C_NAME
+    mov al, [bx + W16W_CLS]         ; a class of the program's - also a
+    cmp al, 0xFF                    ;   window of one that became a control
+    je .ours                        ;   (SPEC.md 124.25.18) - else WIN16's
+    ICALL w16_clsget                ; (W16C_NAME is 0)
     mov si, ax
     mov dx, 16
     jmp short .copy
 .ours:
+    mov al, [bx + W16W_KIND]
     xor ah, ah
     dec ax
     shl ax, 1
@@ -1112,7 +1141,8 @@ W16LIB w16g_getbmbits
     jc .none
     mov [w16_scratch], cx           ; bytes left to give
     mov bp, di                      ; BP = where they began
-    mov dx, [w16b_h + bx]
+    call w16_bmcap                  ; (a tiled bitmap: the first tile's rows,
+    mov dx, ax                      ;   SPEC.md 124.25.17)
     mov [w16_scratch + 2], dx       ; rows to go
     xor si, si                      ; SI = the row in the bitmap
     cmp byte [w16b_mono + bx], 0
@@ -1225,6 +1255,21 @@ W16LIB w16_segld
     sub bx, W16F_ARGS               ; ES:BX -> the frame
     push es
     push bx
+%ifdef PKG_MEGA
+    xor ax, ax                      ; a #NP (w16_npent): the segment its
+    xchg ax, [w16_npsel]            ;   selector names, and the frame already
+    or ax, ax                       ;   returns to the fault (124.26.12)
+    jz .thunk
+    mov bx, w16l_npload             ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall
+    pop bx
+    pop es
+    jc .fail
+    mov ax, [w16_thax]
+    mov dx, [w16_thdx]
+    ret
+.thunk:
+%endif
     les di, [es:bx + W16F_IP]       ; ES:DI -> the thunk + 5
     mov al, [es:di]                 ; its segment
     xor ah, ah
@@ -1235,16 +1280,8 @@ W16LIB w16_segld
     pop bx
     pop es
     jc .fail
-%ifdef PKG_MEGA
-    push ax                         ; its code selector (SPEC.md 124.31.4)
-    push cx
-    mov ax, dx
-    mov cl, 1
-    ICALL w16_ssel
-    mov dx, ax
-    pop cx
-    pop ax
-%endif
+                                    ; (DX is its code selector on the arm:
+                                    ;   w16l_segin, 124.31.4, 124.26.12)
     mov [es:bx + W16F_IP], si
     mov [es:bx + W16F_CS], dx
     mov ax, [w16_thax]
@@ -2726,6 +2763,18 @@ w16u_hookof:
     pop si
     pop cx
     pop bx
+    ret
+
+; SetWindowsHookEx (USER.291) - args: +0 hTask, +2 hInstance, +4 lpfn, +8
+; idHook: ANSWERED, NOT KEPT, whatever the type (WH_MSGFILTER too, which
+; SetWindowsHook's chain above does call): the hook's procedure is the HHOOK,
+; so a NULL one is refused and any other is a handle that UnhookWindowsHookEx
+; and CallNextHookEx take. Nothing calls it. CTL3D.DLL's WH_CBT hook is the
+; one asked for (SPEC.md 124.25.22)
+W16LIB w16u_sethookex
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    mov dx, [es:bx + 6]
     ret
 
 ; UnhookWindowsHook (USER.234) - args: +0 lpfnHook, +4 nHook: out of the

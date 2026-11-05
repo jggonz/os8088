@@ -726,6 +726,7 @@ class SegCensus:
         self.tables = 0
         self.table_entries = 0
         self.prologue_seeds = 0
+        self.adds = {x for _at, _k, add, sites, _t in seg.relocs if add for x in sites}
 
 
 def census(ne):
@@ -779,6 +780,20 @@ def census(ne):
                         r = ne.resolve(at_tgt[1])
                         if r:
                             seed(*r)
+                    elif at_tgt is None:
+                        # a selector-only relocation (RA_SEGMENT) on the
+                        # segment word: the offset is the literal in the code.
+                        # The guest follows whatever segment the loader wrote
+                        # there: a fixed segment's, a movable entry's own
+                        # segment (its offset unused), and an ADDITIVE one
+                        # only when the word was 0 (w16_site's `.asel`
+                        # writes a selector there and nowhere else)
+                        sel = c.seg.site.get(ins.far + 2)
+                        if sel and sel[0] == RA_SEGMENT and sel[1][0] == "internal":
+                            r = ne.resolve(sel[1])
+                            if r and not (ins.far + 2 in c.adds and
+                                          struct.unpack_from("<H", code, ins.far + 2)[0]):
+                                seed(r[0], struct.unpack_from("<H", code, ins.far)[0])
                     elif at_tgt and at_tgt[1][0] == "import":
                         _, mod, o = at_tgt[1]
                         key = (mod.upper(), o.upper() if isinstance(o, str) else o)

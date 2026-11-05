@@ -13,10 +13,6 @@
 
 section .w16tsk
 
-%if W16C_SIZE != 32
-  %error "w16u_regclass's class index is a shift by 5"
-%endif
-
 ; -----------------------------------------------------------------------------
 ; The context list (SPEC.md 124.28.2): the bss ranges that belong to a task,
 ; each as its start and its length. What lives across a wait (w16_tohost)
@@ -48,7 +44,7 @@ w16_ctxtab:
     W16CTX w16_odcur, w16_pgn       ; ...an own DC's, BeginPaint's
     W16CTX w16_svn, w16_dtr         ; SaveDC's states
     W16CTX w16_nmiss, w16_arena     ; its missing imports, ne_heap
-    W16CTX w16_gnproc, w16_gflg     ; GlobalNotify's procedure
+    W16CTX w16_gnproc, w16_gflg     ; GlobalNotify's procedure; GetDOSEnvironment
     W16CTX w16_clus, w16_rtk        ; its volume's cluster, its resources
     W16CTX w16_msys, w16_mclip      ; GetSystemMenu's
     W16CTX w16_mpl, w16_ahwnd       ; the menu loop it waits in
@@ -637,6 +633,14 @@ W16TSK w16t_end
     push si
     push di
     push es
+    cmp byte [w16_endmsg], 0        ; it ended with something to say (an
+    je .quiet                       ;   import WIN16 lacks, 124.12): said
+    push ds                         ;   now, as a toast, for its context and
+    pop es                          ;   flag go below and WIN16's window is
+    mov si, w16_l1                  ;   another task's (124.28.7)
+    mov cx, 10 * 18                 ; (ten seconds)
+    call OSAPI_TOAST
+.quiet:
     mov al, [w16_cur]
     inc ax
     mov [cs:w16t_dead], al
@@ -657,19 +661,22 @@ W16TSK w16t_end
     inc cx
     cmp cx, W16_MAXWND
     jb .w
-    mov bx, w16_cls                 ; its classes
-    xor si, si
+    mov ax, [w16_clsseg]            ; its classes (none made: no block)
+    or ax, ax
+    jz .cx
+    mov es, ax
+    xor bx, bx
 .c:
     mov al, [cs:w16t_dead]
-    cmp [w16_ctask + si], al
+    cmp [es:bx + W16C_TASK], al
     jne .cn
-    mov byte [w16_ctask + si], 0
-    mov byte [bx + W16C_NAME], 0
+    mov byte [es:bx + W16C_TASK], 0
+    mov byte [es:bx + W16C_NAME], 0
 .cn:
-    add bx, W16C_SIZE
-    inc si
-    cmp si, W16_MAXCLS
+    add bx, W16C_STRIDE
+    cmp bx, [w16_clsend]
     jb .c
+.cx:
     mov bx, w16_tmr                 ; its timers with no window
     mov cx, W16_MAXTMR
 .t:
@@ -707,7 +714,7 @@ W16TSK w16t_end
     jz .seg
     cmp byte [si + W16K_FL], 0
     jne .blk
-    call OSAPI_MEM_FREE
+    W16VFREE                        ; (a claim: its map row goes too)
     jmp short .seg
 .blk:
     ICALL w16_kfree
@@ -728,14 +735,8 @@ W16TSK w16t_end
     mov word [di + W16K_CTX], 0
     mov [w16_cur], al
     W16VOF ax, es
-    ICALL w16_gfreeh
-    cmp byte [w16_ntk], 1           ; the last left, its segments a block:
-    jne .hand                       ;   they go with the arenas when it ends
-    cmp byte [si + W16K_FL], 0      ;   (w16_freeprog frees only a claim)
-    je .hand
-    mov word [w16_pseg], 0
-.hand:
-    call w16t_hand
+    ICALL w16_gfreeh                ; (the last left keeps its [w16_pseg]:
+    call w16t_hand                  ;   w16_freeprog reads W16K_FL, 124.28.5)
     call w16t_turns                 ; (the count may be one now, and the one
     pop es                          ;   left may never have run)
     pop di
@@ -752,6 +753,12 @@ W16TSK w16t_end
 w16t_codefree:
     cmp word [w16_cmb], 0
     je .out
+%ifdef PKG_MEGA
+    push bx                         ; its stable selectors given back first
+    mov bx, w16l_stabfree           ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall
+    pop bx
+%endif
     W16SEG es, [w16_clive]
     xor bx, bx
     mov cx, [w16_cnseg]
@@ -1304,9 +1311,7 @@ w16t_hfind:
     cmp byte [bx + W16W_KIND], W16Q_PROG
     jne .n
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    ICALL w16_clsget
     mov si, ax                      ; a class's name: upper case, NUL-padded
     mov di, w16t_s_wh               ; XSEC-OK: part 10's, compared through cs:
     push cx

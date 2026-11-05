@@ -625,6 +625,31 @@ def dbg(out, cmds):
 
 _PROMPT = re.compile(r"<bochs:(\d+)> ")
 
+# A STOP CAN CUT A GUEST LINE IN TWO: the debugger and E9 share one stdout,
+# so a `session` that lands after the guest wrote 'MEGAOW' and before 'N:
+# bwin ok' leaves 'MEGAOWNext at t=...', the transcript, and 'N: bwin ok'
+# after its `c` - and a row looking for the whole line never sees it
+# (megaown's bwin leg, 2026-11-04). `_unsplit` moves every such COMPLETE
+# stop (its `Next at t=` up to the `<bochs:N> c` that resumed the guest) to
+# before the cut line, so the line reads whole and the transcript is kept.
+_CUT = re.compile(r"[^\n]Next at t=\d+\n")
+_RESUME = re.compile(r"<bochs:\d+> c\n")
+
+
+def _unsplit(t):
+    i = 0
+    while True:
+        m = _CUT.search(t, i)
+        if not m:
+            return t
+        s = m.start() + 1
+        e = _RESUME.search(t, s)
+        if not e:
+            return t                # still stopped: nothing to splice yet
+        ls = t.rfind("\n", 0, s) + 1
+        t = t[:ls] + t[s:e.end()] + t[ls:s] + t[e.end():]
+        i = ls + (e.end() - s)
+
 
 def _tail(path, n):
     with open(path, "rb") as f:
@@ -963,7 +988,7 @@ class Box(object):
         for what it used to say there."""
         with open(self.e9, "rb") as f:
             t = f.read().decode("latin-1")
-        return [l for l in t.splitlines() if l.strip()]
+        return [l for l in _unsplit(t).splitlines() if l.strip()]
 
     def said(self):
         """`lines()` and then `faults()`: everything a row that scans for

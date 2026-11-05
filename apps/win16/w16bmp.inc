@@ -53,6 +53,38 @@ w16_bmslot:
     stc
     ret
 
+; w16_bmrp - AX = a row, BX = bitmap slot * 2 -> AX = the row's byte offset,
+; DX = the segment (the arm: the virtual paragraph) it lies in, for W16SEG.
+; Keeps all but AX and DX. A bitmap of one segment is a multiply; a TILED one
+; (w16b_mono high byte 2, SPEC.md 124.25.17) is part 9's w16_bmrps, which
+; w16_bmnew fetched to make it, so it is here while the bitmap is.
+w16_bmrp:
+    test byte [w16b_mono + bx + 1], 2
+    jnz .t
+    mul word [w16b_str + bx]
+    mov dx, [w16b_seg + bx]
+    ret
+.t:
+    mov word [w16_sfn], w16_bmrps
+; w16_bmsys - part 3 -> part 9 for a tiled bitmap's work (SPEC.md 124.25.17):
+; the image's SCALL half, through ICALL, [w16_sfn] the routine. Every
+; register and the flags pass both ways
+w16_bmsys:
+    ICALL w16_scall
+    ret
+
+; w16_bmcap - BX = bitmap slot * 2 -> AX = the rows a call limited to one 64KB
+; segment (Get/SetBitmapBits, CreateBitmap's bits) may reach: the bitmap's, or
+; a tiled one's first tile's (part 9's w16_bmcaps). Keeps all but AX.
+w16_bmcap:
+    mov ax, [w16b_h + bx]
+    test byte [w16b_mono + bx + 1], 2
+    jz .out
+    mov word [w16_sfn], w16_bmcaps
+    jmp short w16_bmsys
+.out:
+    ret
+
 ; w16_mdcslot - AX = a DC handle -> BX = its memory DC's slot. CF=1 not one.
 ; Keeps the rest.
 w16_mdcslot:
@@ -94,7 +126,7 @@ w16_bmnew:
     add bx, 2
     cmp bx, 2 * W16_NBMP
     jb .find
-    jmp short .no
+    jmp .no
 .take:
     mov word [w16b_mono + bx], 0    ; (its high byte: 1 = a claim of its own)
     mov [w16b_w + bx], ax
@@ -104,9 +136,9 @@ w16_bmnew:
     mov [w16b_str + bx], ax         ; 4bpp bytes a row
     mul dx                          ; DX:AX = its bytes
     or dx, dx
-    jnz .no
+    jnz .huge
     cmp ax, W16_BMMAX
-    ja .no
+    ja .huge
     mov cx, ax
     push cx                         ; a FIXED block of the global heap, not a
     xor dx, dx                      ;   claim of its own: an owner's claims
@@ -130,6 +162,14 @@ w16_bmnew:
     call w16k_gnask                 ;   procedure is asked to give a block
     pop si                          ;   up, and the call runs again after
     jmp short .no                   ;   (SPEC.md 124.9.1)
+.huge:                              ; past W16_BMMAX: a TILED bitmap, part 9's
+    xor ax, ax                      ;   (SPEC.md 124.25.17; AX = 0 stays if
+    mov word [w16_sfn], w16_bmhuge  ;   the part cannot be fetched)
+    call w16_bmsys                  ; CF=0 AX = the handle; CF=1 AX = 1 the
+    jnc .out                        ;   heap is short, 0 too large
+    dec ax
+    jz .ask
+    jmp short .no
 .got:
     mov [w16b_seg + bx], dx
     W16SEG es, dx                      ; black: CBLACK in both halves
@@ -196,12 +236,12 @@ w16_bmfills:
     ICALL w16_dibrow                 ; CF=1: the DIB has not that row
     mov bx, [w16b_bm]               ; (it keeps neither AX nor BX)
     jc .next
-    mov ax, [w16b_str + bx]
     push dx
-    mul dx
-    pop dx
+    mov ax, dx
+    call w16_bmrp                   ; AX = the row's offset, DX its segment
     mov di, ax
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, dx
+    pop dx
     mov si, w16_gbuf
     mov cx, [w16b_n]
     cld
@@ -320,9 +360,9 @@ w16_bmdelete:
 ; (w16_bmnew's fallback, the slot's w16b_mono high byte), given back; CF=1 a
 ; block of the global heap. Keeps every register.
 w16_bmown:
-    cmp byte [w16b_mono + bx + 1], 0
+    test byte [w16b_mono + bx + 1], 1
     stc
-    je .out
+    jz .out                         ; (2: a tiled bitmap, a heap block too)
     mov byte [w16b_mono + bx + 1], 0
     push dx
     mov dx, ax
@@ -430,7 +470,7 @@ W16LIB w16u_loadbmp
     pop si
     ret
 .prog:
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_BITMAP
@@ -870,11 +910,13 @@ w16_bmcopy:
     jnz .odd
     mov ax, [w16b_str + bx]         ; on a byte: straight from the claim
     mov bp, ax
+    push es
+    test byte [w16b_mono + bx + 1], 2
+    jnz .tiles
     mul word [w16b_sy]
     mov si, [w16b_sx]
     shr si, 1
     add si, ax
-    push es
     W16SEG es, [w16b_seg + bx]
     mov ax, [w16_rl]
     mov bx, [w16_rt]
@@ -887,6 +929,11 @@ w16_bmcopy:
     call OSAPI_GFX_BLIT4
     pop es
 .none:
+    ret
+.tiles:                             ; a tiled source: one BLIT4 a tile, in
+    mov word [w16_sfn], w16_bmtiles ;   part 9 (SPEC.md 124.25.17)
+    call w16_bmsys
+    pop es
     ret
 .odd:                               ; through the band: w16_bmscale's frame,
     mov ax, [w16b_sx]               ;   a scale of one, from the cut corner
@@ -985,9 +1032,9 @@ w16_bmrow:
     add ax, [w16b_ys]
     mov bx, [w16b_bm]
     call w16_bmclamp_h
-    mul word [w16b_str + bx]
+    call w16_bmrp
     mov si, ax                      ; SI = the source row's first byte
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, dx
     mov ax, [w16b_sx0]
     mov [w16b_sx], ax
     mov ax, [w16b_err0]
@@ -1440,14 +1487,14 @@ w16_bmcut:
 ; byte, CF = 1 when the pixel is the byte's low nibble. Keeps BX, CX, SI.
 w16_bmaddr:
     push ax
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    call w16_bmrp                   ; AX = the row's offset, DX its segment
     mov di, ax
-    pop ax
-    mov dx, ax
+    W16SEG es, dx
+    pop dx
+    mov ax, dx
     shr ax, 1
     add di, ax
-    W16SEG es, [w16b_seg + bx]
     shr dl, 1                       ; CF = the column's low bit
     ret
 
@@ -1878,12 +1925,12 @@ w16_bm2bm:
     add ax, [w16b_sy]
     push bx
     mov bx, [w16b_bm]
-    mul word [w16b_str + bx]
+    call w16_bmrp
     mov cx, [w16b_sx]
     mov si, cx
     shr si, 1
     add si, ax
-    mov ax, [w16b_seg + bx]
+    mov ax, dx
     pop bx
     mov bh, cl
     and bh, 1                       ; BH = 1: the source starts low
@@ -2477,12 +2524,12 @@ w16_roprow:
     sub ax, [w16b_dy0]
     add ax, [w16_rt]
     mov bx, [w16b_bm]
-    mul word [w16b_str + bx]
+    call w16_bmrp
     mov cx, [w16b_sx]
     mov si, cx
     shr si, 1
     add si, ax
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, dx
     mov dh, cl
     and dh, 1                       ; DH = 1: the source starts low
     xor dl, dl                      ; DL = 1: the row buffer's low half

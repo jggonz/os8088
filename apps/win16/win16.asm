@@ -71,8 +71,12 @@ W16_MAXSEG   equ 253            ; segments a program may have: NE's own limit,
 W16_FCACHE   equ 8              ; the loader's cluster cache, KB (124.20.1)
 
 ; --- sizes the bss below is cut from (w16user.inc, w16gdi.inc) ---------------
-W16_MAXCLS   equ 12             ; classes (SPEC.md 124.8; File Manager 3.0
-                                ;   registers 9, SPEC.md 124.27)
+W16_MAXCLS   equ 64             ; classes: the class block's first records,
+                                ;   and what it grows by when they are used
+                                ;   (SPEC.md 124.25.18.1; VB 3.0 registers
+                                ;   ~26, File Manager 3.0 9, SPEC.md 124.27)
+W16_CLSCAP   equ 255            ; ...up to this: an index is W16W_CLS's byte,
+                                ;   0FFh "none"
 W16_MAXWND   equ 80             ; windows: a dialog's controls are windows
                                 ;   (WinMine's Preferences is 20, the PIF
                                 ;   Editor's Advanced 54 beside 23 open)
@@ -80,7 +84,9 @@ W16_QLEN     equ 32             ; posted messages (a power of two)
 W16_MAXTMR   equ 4              ; timers
 W16Q_NWIN    equ 16             ; selectors a program may make (124.31.6)
 W16Q_NDOS    equ 4              ; GlobalDOSAlloc's blocks at once (124.31.3)
-W16C_SIZE    equ 32             ; a class record
+W16C_SIZE    equ 32             ; a class record...
+W16C_STRIDE  equ 33             ; ...and its task byte: a record in the class
+                                ;   block (SPEC.md 124.25.18.1)
 W16W_SIZE    equ 102            ; a window record
 W16_MAXTASK  equ 4              ; Windows programs in one instance, its
                                 ;   tasks (SPEC.md 124.28.1)
@@ -111,6 +117,10 @@ W16_NMDC     equ 8              ; memory DCs at once: Paintbrush's text tool
                                 ;   holds five (SPEC.md 124.25.7)
 W16_DCMAX    equ 3              ; window DCs open under the current one
 W16_SVMAX    equ 2              ; SaveDC's states at once (SPEC.md 124.22.11)
+W16_NFMAX    equ 4              ; messages SetFocus/EnableWindow send on return:
+                                ;   two of their own after an outer call's two
+                                ;   (a WM_KILLFOCUS handler's SetFocus, 124.25.20)
+W16_NFSZ     equ 10             ; ...each one [w16_sm_*]: window, message, wParam, lParam
 W16S_QN      equ 32             ; SOUND's queue, in notes (SPEC.md 124.15.1:
 W16S_QE      equ 6              ;   Windows' 192 bytes), and a note's bytes
 W16_BS       equ 96             ; the text band's stride: 720 px, the guard,
@@ -126,13 +136,14 @@ W16_NMISS    equ 64             ; different imports WIN16 lacks a program may
 W16_MTXT     equ 24             ; ...and each one's name, "USER.287"
 %ifndef W16_NBIND                  ; bind slots: the distinct imports a program
 W16_NBIND    equ 384            ;   may bind, each a stub (SPEC.md 124.19.1).
-%endif                          ;   Paintbrush 3.1's 270 is the most measured;
-                                ;   a trace build takes fewer (124.17.4)
+%endif                          ;   Paintbrush 3.1's 270 is the most measured
 W16_STUBSZ   equ 4              ; a stub's bytes: w16_stubs + 4 * slot
 W16_NATOM    equ 16             ; atoms at most, clipboard formats among them
                                 ;   (w16mdi.inc, SPEC.md 124.25.10)
-W16_NPNMAX   equ 16             ; GetProcAddress's names at most (w16api.inc)
-W16_NFIXED   equ 8              ; ...slots 0-7 are the image's own:
+W16_NPROP    equ 32             ; window properties at once (w16mdi.inc,
+                                ;   SPEC.md 124.25.13)
+W16_NPNMAX   equ 18             ; GetProcAddress's names at most (w16api.inc)
+W16_NFIXED   equ 15             ; ...slots 0-7 are the image's own:
 W16_CTLROW   equ 0              ;   a control's window procedure,
 W16_CBROW    equ 1              ;   the callee's way back (SPEC.md 124.2.2),
 W16_X87ROW   equ 2              ;   the emulator's missing instruction,
@@ -141,6 +152,8 @@ W16_LMROW    equ 4              ;   the libraries' LibMain (124.23.4),
 W16_SLROW    equ 5              ;   a discarded segment's thunk (124.26.2),
 W16_CWROW    equ 6              ;   and CreateWindow and DestroyWindow, which
 W16_DWROW    equ 7              ;   MDICLIENT calls back through (124.27.2)
+W16_CTLK     equ 7              ; ...and slots 8-14, a control CLASS's entry:
+                                ;   W16_CTLK + its W16Q_ kind (124.25.18)
 W16_NLIB     equ 8              ; a program's own libraries loaded at once
 W16_LDEPTH   equ 4              ; ...and how deep one may import another
 W16L_NAME    equ 0              ; a library's record (SPEC.md 124.23.2): its
@@ -216,6 +229,9 @@ W16P_SYS     equ 9              ; THE SYSTEM-LIBRARY PART (SPEC.md 124.24.1):
 W16P_TSK     equ 10             ; THE TASK PART (SPEC.md 124.28.13): MDI and
                                 ;   tasks, the system-library part's shape,
                                 ;   fetched only by a program that has them
+W16P_RARE    equ 11             ; THE RARE PART (SPEC.md 124.25.16): the home of
+                                ;   an import few programs call, part 10's
+                                ;   shape - Arc, Pie and TrackPopupMenu
 
 ; --- the dialog part's two directions (SPEC.md 124.13). DS = ours on both
 ; sides of either, so a vector is one word written and one far call, and a
@@ -292,6 +308,12 @@ section .w16tsk
 %define w16tsk_%1 1             ;   names, near, ending in ret
 %1:
 %endmacro
+; --- the rare part's (SPEC.md 124.25.16): a handler only; nothing in the image
+; calls into it by macro, so there is no RCALL
+%macro W16RARE 1                ; in the rare part: %1 is a HANDLER a row
+%define w16rare_%1 1            ;   names, near, ending in ret
+%1:
+%endmacro
 %macro DCONT 1                  ; in the part: %1 is a CONTINUATION
 section .text                   ;   (SPEC.md 124.2.2), which the gate enters
 %1_c:                           ;   with a near jump in OUR segment - so SI
@@ -310,6 +332,7 @@ section .w16dlg
 %endmacro
 %include "win16/w16pm.inc"      ; the kern_mega arm's memory (124.31.3)
     W16BSS w16_win, 2           ; our window
+    W16BSS w16_gsum, 2          ; GetFreeSpace's running sum (w16mem.inc)
     W16BSS w16_state, 1         ; W16S_*
     W16BSS w16_locked, 2        ; 1 = the callback that resumed holds the lock
                                 ;   (a word: saved and put back whole)
@@ -347,8 +370,8 @@ section .w16dlg
     W16BSS w16_nmod, 2          ; the program's module-reference count
     W16BSS w16_modid, 2 * 16    ; ...each one's W16M_* (0xFF = not ours)
 %ifdef PKG_MEGA
-    W16BSS w16_pmonly, 1        ; NEF_PMODE: a protected-mode-only program,
-                                ;   whose locked blocks may move (124.31.3)
+    W16BSS w16_lkmove, 1        ; 1: a locked block may move (124.31.3), for
+                                ;   every program; 0 for a heap grow's call
 %endif
     W16BSS w16_cpu186, 1        ; 1 = this CPU runs 186 code (SPEC.md 124.3)
     W16BSS w16_libs, W16_NLIB * W16L_SIZE ; the program's own libraries (124.23)
@@ -356,6 +379,9 @@ section .w16dlg
     W16BSS w16_ldep, 1          ;   a library it imports loads, and how deep
     W16BSS w16_lmsv, 6          ; LibMain's chain: the start BX, CX and ES
     W16BSS w16_lmi, 2           ; ...the record it is at
+    W16BSS w16_winf, 2          ; WIN16's Windows directory's cluster and its
+    W16BSS w16_sysf, 2          ;   system directory's: 0 = not yet walked to,
+                                ;   0FFFFh none (w16l_gofold, SPEC.md 124.23.1.1)
     W16BSS w16_rfp, 2           ; the resources' file: 0 the program's, else
     W16BSS w16_rown, 2          ;   a library's, and its blocks' GH_OWNER bits
                                 ;   (w16n_rset, SPEC.md 124.23.6)
@@ -388,6 +414,13 @@ section .w16dlg
     W16BSS w16_cndrop, 2        ;   program runs, counted (row win16write)
     W16BSS w16_thax, 2          ; AX and DX a thunk was entered with (124.26.2)
     W16BSS w16_thdx, 2
+%ifdef PKG_MEGA
+    W16BSS w16_npsel, 2         ; the not-present selector w16_npent was entered
+                                ;   with, 0 = none (SPEC.md 124.26.12)
+    W16BSS w16_nplod, 1         ; w16l_npload's: bit 0 = a #NP's segment is
+                                ;   being loaded, bit 1 = on WIN16's own
+                                ;   stack, so no code goes (w16l_nplow)
+%endif
 %ifndef PKG_MEGA
     W16BSS w16_cbm, 2 * W16_MAXSEG      ; the census: each code segment's bitmap
     W16BSS w16_clast, 2 * W16_MAXSEG    ; ...and its last offset (w16cens.inc)
@@ -411,6 +444,7 @@ section .w16dlg
     W16BSS w16_idx, 2           ; the bind slot the gate is serving
     W16BSS w16_old21, 4         ; the vector int 21h had before the resume
     W16BSS w16_old2f, 4         ; ...and int 2Fh, the multiplex (124.2.1)
+    W16BSS w16_cdvol, 1         ; the CD's volume + 1, 0 = none: 15xxh (124.33.3)
     W16BSS w16_go1, 1           ; 1 = the first run is the tick's (124.31.8)
     W16BSS w16_ldq, 1           ; 1 = the load's wake was deferred (124.31.8)
 %ifdef PKG_MEGA
@@ -483,7 +517,11 @@ section .w16dlg
     W16BSS w16_namebuf, 16      ; a class name, folded
     W16BSS w16_cwargs, 2        ; CreateWindow's arguments, on its stack
     W16BSS w16_cwslot, 2
-    W16BSS w16_cls, W16_MAXCLS * W16C_SIZE
+    W16BSS w16_clsseg, 2        ; the class block's segment, 0 = none yet
+    W16BSS w16_clsend, 2        ;   ...its records' end, records x W16C_STRIDE
+                                ;   (SPEC.md 124.25.18.1), and the one record
+    W16BSS w16_ccb, W16C_STRIDE  ;   copied out of it, w16_clsget's
+    W16BSS w16_cbi, 1           ;   ...and its index
     W16BSS w16_wnd, W16_MAXWND * W16W_SIZE
     W16BSS w16_q, W16_QLEN * MSG_SIZE
     W16BSS w16_qhead, 1
@@ -594,8 +632,10 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16_gdnum, 2
     W16BSS w16_gdbits, 4        ; ...where they go
     W16BSS w16_gdslot, 2        ; ...the bitmap's slot * 2
+    W16BSS w16_gdseg, 2         ; ...and the segment its row lies in
     W16BSS w16_gdstr, 2         ; ...a scan's bytes
     W16BSS w16_gdbpp, 1         ; ...and bits a pixel
+    W16BSS w16_fsh, 1           ; FloodFill: 2, ExtFloodFill 0 (w16rgn.inc)
     W16BSS w16_fmode, 1         ; ExtFloodFill's: its type, the colour it
     W16BSS w16_fcol, 1          ;   reads, the brush's it paints
     W16BSS w16_ffill, 1
@@ -614,15 +654,16 @@ W16_DCSZ equ os88_image_end + OP_BSS + W16B - w16_dchide
     W16BSS w16m_ink, 1
     W16BSS w16m_pap, 1
 %ifndef W16_TRN                    ; the trace ring's entries, a power of two:
-W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
-%endif                             ;   S19b, 1024 at S20, 64 at S20b
-                                   ;   (W16DEFS='-DW16_TRACE -DW16_TRN=32')
-%ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate rows
-    W16BSS w16_trn, 2           ;   and int 21h calls (80h:AH), which
-    W16BSS w16_trc, 2 * W16_TRN ;   tools/w16trace.py reads (SPEC.md 124.17)
-    W16BSS w16_trow, 2 * W16_NBIND ; ...each bind slot's export row, FFFFh
-                                ;   for none (a missing import, a fixed slot)
-%endif
+%ifdef PKG_MEGA                    ;   what each arm holds with room to spare
+W16_TRN equ 64                     ;   (SPEC.md 124.17.4): kern_mega's is
+%else                              ;   APP_MAX_SIZE's leftover, the real-mode
+W16_TRN equ 256                    ;   arm's its one data segment. Raise it
+%endif                             ;   with W16DEFS='-DW16_TRACE -DW16_TRN=n'
+%endif                             ;   while the build still packs
+%ifdef W16_TRACE                   ; a debugging knob: the last W16_TRN gate
+    W16BSS w16_trn, 2           ;   calls, each as its BIND SLOT, and int 21h
+    W16BSS w16_trc, 2 * W16_TRN ;   calls as 80h:AH, which tools/w16trace.py
+%endif                             ;   names from w16_bind (SPEC.md 124.17.4)
     W16BSS w16_ckhm, 2          ; int 21h 2Ch's anchor: the kernel's hour:minute
     W16BSS w16_cks, 1           ; ...second
     W16BSS w16_ckt, 2           ; ...and the BIOS tick it was seen at
@@ -714,6 +755,8 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_ghage, 2 * W16_NGH ; a moveable handle's last use (w16_gtouch)
     W16BSS w16_gclock, 2        ; ...counted in uses
     W16BSS w16_gnproc, 4        ; GlobalNotify's procedure, or 0 (w16sys.inc)
+    W16BSS w16_envp, 2          ; GetDOSEnvironment's block, the task's own
+                                ;   (w16_ctxtab): its data paragraph (124.25.21)
     W16BSS w16_gflg, 1
     W16BSS w16_gdisc, 1
     W16BSS w16_gnp, 2
@@ -725,8 +768,8 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_rtlen, 2
     W16BSS w16_rtk, 2           ; FindResource's keys and strings
     W16BSS w16_rnk, 2
-    W16BSS w16_rtypb, 16
-    W16BSS w16_rnamb, 16
+    W16BSS w16_rtyp, 4          ; ...the strings', far (w16_rkey)
+    W16BSS w16_rnam, 4
     W16BSS w16_rlen, 2          ; w16_rread's resource and span
     W16BSS w16_rpre, 2
     W16BSS w16_roff, 4
@@ -842,6 +885,9 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_tseg, 2          ; the task part's, in the same layout - the
     W16BSS w16_tbv, 4           ;   segment, TCALL's vector (w16k_gate) and
     W16BSS w16_tfn, 2           ;   the routine (SPEC.md 124.28.13)
+    W16BSS w16_xseg, 2          ; the rare part's, the same layout again: the
+    W16BSS w16_xbv, 4           ;   three blocks are 8 bytes apart, which
+    W16BSS w16_xfn, 2           ;   w16_ptin and the dispatch rely on (124.25.16)
     W16BSS w16_cderr, 2         ; CommDlgExtendedError's answer (124.24.3)
     W16BSS w16_ofnwin, 2        ; the file dialog a GetOpenFileName waits on,
                                 ;   0 = none (SPEC.md 124.24.2)
@@ -861,11 +907,12 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_bind, W16B_SIZE * W16_NBIND
     ; --- S6: the window tree (w16wnd.inc, SPEC.md 124.8) ---
     W16BSS w16_focus, 2         ; the window with the keyboard focus, 0 none
-    ; --- S17: focus notifications sent from SetFocus (SPEC.md 124.22.6) ---
-    W16BSS w16_nfdefer, 1       ; 1: inside a program's SetFocus
-    W16BSS w16_nfn, 1           ; the notifications it raised
+    ; --- S17: focus notifications sent from SetFocus (SPEC.md 124.22.6),
+    ; and the focus and enable messages for a program's procedure (124.25.20)
+    W16BSS w16_nfdefer, 1       ; 1: inside a program's SetFocus/EnableWindow
+    W16BSS w16_nfn, 1           ; the messages it raised
     W16BSS w16_nfi, 1           ; ...and the next one to send
-    W16BSS w16_nfq, 8 * 2       ; each its parent, wParam and lParam
+    W16BSS w16_nfq, W16_NFSZ * W16_NFMAX ; each [w16_sm_*] as it was queued
     ; --- S17: SaveDC's states (SPEC.md 124.22.11) ---
     W16BSS w16_svn, 1           ; how many are saved
     W16BSS w16_svdc, W16_SVMAX * W16_DCSZ
@@ -1159,6 +1206,8 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16b_dy0, 2
     W16BSS w16b_sx, 2           ; ...the source column, the cut corner's
     W16BSS w16b_sy, 2
+    W16BSS w16b_ty, 2                   ; a tiled source's rows (124.25.17):
+    W16BSS w16b_tdy, 2                  ;   the next one, and where it lands
     W16BSS w16b_sx0, 2          ; ...the DDA's first column and error
     W16BSS w16b_err0, 2
     W16BSS w16b_err, 2
@@ -1217,6 +1266,7 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
     W16BSS w16_show, 1          ; nCmdShow XOR SW_SHOWNORMAL (a task's)
     W16BSS w16_task, W16_MAXTASK * W16K_SIZE
     W16BSS w16_cur, 1           ; the current task's index
+    W16BSS w16_pgblk, 1         ; 1: the segments being loaded are a heap block
 %ifdef PKG_MEGA
     W16BSS w16_lseg, 2          ; the stack lent kern_mega (w16_lend), 0 none
 %endif
@@ -1226,7 +1276,6 @@ W16_TRN equ 1024                   ;   2048 stopped fitting the trace build at
                                 ;   to w16t_post, which runs one to it there
                                 ;   (SPEC.md 124.33.2). Next to w16_ntk on purpose
     W16BSS w16_wtask, W16_MAXWND ; each window's task, index + 1 (124.28.3)
-    W16BSS w16_ctask, W16_MAXCLS ; ...and each class's
     OS88_BSS OP_BSS + W16B
 W16_BSS_SIZE equ W16B
 
@@ -1271,6 +1320,15 @@ w16_entry:
     call OSAPI_WM_ONTIMER
     mov word [w16_titleptr], w16_name
     call w16_cputest                ; [w16_cpu186]: once, before anything runs
+    push es                         ; the CD's volume, for int 2Fh 15xxh (124.33.3)
+    xor di, di
+    mov bx, DRVC_CD * 256 + 1       ; CDV_DRIVE (cdpkg.inc, which real mode has no part to include)
+    call OSAPI_DRV_CALL
+    pop es
+    jc .nocd
+    inc dl                          ; DL = FFh, no volume registered (a full
+    mov [w16_cdvol], dl             ;   table, 119.4): 0, none, as no driver
+.nocd:
     call OSAPI_ARG_FILE             ; CF=1: launched empty
     jc .idle
     mov [w16_dir], dx
@@ -1313,15 +1371,24 @@ w16_entry:
 ; w16_lend - the stack a program's BIOS call runs on (SPEC.md 124.31.2): its
 ; own is above 1MB, where real mode cannot reach, so kern_mega is lent 1 KB
 ; below it (SEG_LEND), claimed once and kept until the instance ends, whose
-; teardown takes the loan back. Asked again at every wake, because the last
-; lender's is the one used and another WIN16 may have lent since. Keeps
-; every register
+; teardown takes the loan back. Asked again before every run of the program
+; (w16_dcunpark, which w16_resume and w16_resumecb both call first), because
+; the last lender's is the one used and another WIN16 may have lent since, and
+; a program runs from a key or timer callback as well as from a wake
+; (w16_mkick, w16_after). The #NP handler is registered there for the same
+; reason. Keeps every register
 ; -----------------------------------------------------------------------------
 w16_lend:
     push ax
     push bx
     push cx
     push dx
+    push si
+    mov cx, 3                       ; w16_npent as the #NP handler (SEG_TYPE,
+    mov si, w16_npent               ;   SPEC.md 124.26.12), first and whatever
+    W16ICS dx                       ;   the loan's answer
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
     mov dx, [w16_lseg]
     or dx, dx
     jnz .have
@@ -1339,6 +1406,7 @@ w16_lend:
     mov bl, SEG_LEND
     call OSAPI_SEG
 .out:
+    pop si
     pop dx
     pop cx
     pop bx
@@ -1355,9 +1423,6 @@ w16_lend:
 ; =============================================================================
 w16_wake:
     mov byte [w16_locked], 0        ; (no lock: w16_peekwake runs on this)
-%ifdef PKG_MEGA
-    call w16_lend                   ; a BIOS call's stack (SPEC.md 124.31.2)
-%endif
     cmp byte [w16_jreq], 0          ; a desktop launch DOS left us, first
     je .nojn                        ;   (SPEC.md 124.28.12)
     TCALL w16t_join
@@ -1366,8 +1431,8 @@ w16_wake:
     je .nosh                        ;   where the lock is free (124.24.10)
     TCALL w16t_shrun
 .nosh:
-    cmp byte [w16_state], W16S_ENDED
-    je w16_after                    ; it ended inside a W_PAINT (w16_ppaint)
+    cmp byte [w16_state], W16S_ENDED ; it ended inside a W_PAINT (w16_ppaint)
+    je w16_endnow                   ;   or a w16_after posted this (124.8.3)
     cmp byte [w16_inpeek], 0
     jne w16_peekwake                ; a PeekMessage that found nothing
     cmp byte [w16_state], W16S_RUN
@@ -1417,12 +1482,24 @@ w16_wake:
 ; in:  anything a callback has; out: nothing
 ; The program is waiting (nothing to do) or it has ended, and an ended
 ; program takes its window with it, as a Windows program's did.
+; THE LAST TASK'S END IS FINISHED FROM THE WAKE (SPEC.md 124.8.3): giving the
+; program back drops the parts, and a caller may be one - the menu code
+; (w16_mhpost) and the task part (w16t_serve) reach here by ICALL, and
+; w16_ibgate's retf would return into the dropped part. So it only posts a
+; wake, and w16_wake, with nothing but the UI task's dispatch under it, comes
+; back to w16_endnow. w16_close gives it back too, should the user's close
+; come first. Several tasks: one ends here (w16t_end drops no part).
 ; -----------------------------------------------------------------------------
 w16_after:
     cmp byte [w16_state], W16S_ENDED
-    jne .trim
+    jne w16_endnow.trim
+    cmp byte [w16_ntk], 2
+    jae w16_endnow.many
+    jmp w16_wakeme
+w16_endnow:                         ; the wake's: it has ended, freed now
     cmp byte [w16_ntk], 2           ; one of several: it alone ends, and
     jb .last                        ;   the rest go on (SPEC.md 124.28.7)
+.many:
     TCALL w16t_end
     jmp short .trim
 .last:
@@ -1544,24 +1621,37 @@ w16_freeprog:
     SCALL w16mm_wend
 .nowo:
 %endif
-    call w16_sysout                 ; ...and the system-library part (124.24.1)
-    call w16_tskout                 ; ...and the task part (124.28.13)
+    call w16_ptdrop                 ; ...and the system-library, task and rare
+                                    ;   parts (124.24.1, 124.28.13, 124.25.16)
     call w16x_end                   ; its floating point (SPEC.md 124.5)
     call w16_dosend                 ; its files closed, the DOS freed (124.21)
     call w16_gfreeall
     mov word [w16_rtlen], 0
     push ax
-    xor ax, ax                      ; the USER heap went with the arenas
+    xor ax, ax                      ; the USER heap went with the arenas,
     mov [w16_mseg], ax
+    mov [w16_clsseg], ax            ;   and the class block (124.25.18.1)
+    mov [w16_clsend], ax
     mov [w16_msys], ax
     mov [w16_mtrk], al
     mov [w16_mlev], al
     mov [w16_closeq], al
     pop ax
-    mov dx, [w16_pseg]
-    or dx, dx
-    jz .face
+    mov dx, [w16_pseg]              ; its segments: a claim given back, a
+    or dx, dx                       ;   block gone with the arenas above
+    jz .face                        ;   (W16K_FL, SPEC.md 124.28.5)
+    push ax
+    push bx
+    mov al, [w16_cur]
+    mov ah, W16K_SIZE
+    mul ah                          ; (8-bit: DX kept)
+    xchg ax, bx
+    cmp byte [w16_task + bx + W16K_FL], 0
+    pop bx
+    pop ax
+    jne .pblk
     W16VFREE
+.pblk:
     mov word [w16_pseg], 0
 .face:
     cmp byte [w16_fpart], 0         ; its block went with the arenas
@@ -1930,26 +2020,37 @@ w16_dlgout:
     ret
 
 ; -----------------------------------------------------------------------------
-; w16_sysin - the system-library part (SPEC.md 124.24.1), w16_tskin the task
-; part (124.28.13), fetched from WIN16's own folder if it is not here. CF=1:
-; it could not be, and op_fetch has said why. Keeps every register.
-; w16_sysout and w16_tskout drop them. Both parts' bss is one layout - the
-; segment, the vector, the routine - so one body serves both.
+; The system parts, 9 (system-library, SPEC.md 124.24.1), 10 (task, 124.28.13)
+; and 11 (rare, 124.25.16), fetched from WIN16's own folder if they are not
+; here. Their bss is one layout - the segment, the vector, the routine - three
+; blocks of 8 bytes in a row from w16_sseg, so a part's block is
+; w16_sseg + (part - 9) * 8 and one fetch (w16_ptin) and one drop
+; (w16_ptdrop) serve all three.
+;
+; w16_ptin - AL = the part, SI = its block: fetch it if it is not here. CF=1:
+; it could not be, and op_fetch has said why. Keeps every register but the
+; flags. w16_sysin and w16_tskin are the image's entries, keeping SI too.
 ; -----------------------------------------------------------------------------
 w16_tskin:
     push ax
     mov al, W16P_TSK
     push si
     mov si, w16_tseg
-    jmp short w16_ptin
+    jmp short w16_ptin1
 w16_sysin:
     push ax
     mov al, W16P_SYS
     push si
     mov si, w16_sseg
-w16_ptin:                            ; AL = the part, SI = its segment word
+w16_ptin1:
     ; STKBALANCE-OK: the shared tail of w16_tskin and w16_sysin, entered
     ; with their AX and SI pushed, which it pops
+    call w16_ptin
+    pop si
+    pop ax
+    ret
+w16_ptin:
+    push ax
     cmp word [si], 0                ;   (CF=0 when it is here)
     jne .out
     call w16_pkeep                  ; in the heap, not a claim (124.25.1)
@@ -1959,35 +2060,37 @@ w16_ptin:                            ; AL = the part, SI = its segment word
     push es
     W16SEG es, ax
     W16PMDS s, es                   ; the part told WIN16's data selector,
-    pop es                          ;   at W16S_MYDS in both parts' headers
+    pop es                          ;   at W16S_MYDS in all three parts' headers
     call w16_pcode                  ; the copy's code half (124.31.5)
 %endif
     mov [si + 4], ax                ; the vector's segment...
-    mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in both
+    mov word [si + 2], W16S_GATE    ; ...and its gate, at one offset in all
 .out:
-    pop si
     pop ax
     ret
-%if w16_sbv - w16_sseg != 2 || w16_tbv - w16_tseg != 2
+%if w16_sbv - w16_sseg != 2 || w16_tbv - w16_tseg != 2 || w16_xbv - w16_xseg != 2
   %error "w16_ptin: a part's vector is not after its segment"
 %endif
+%if w16_tseg - w16_sseg != 8 || w16_xseg - w16_tseg != 8
+  %error "w16_ptin: the parts' blocks are not 8 bytes apart"
+%endif
 
-w16_tskout:
-    push si
-    mov si, w16_tseg
-    jmp short w16_ptout
-w16_sysout:
+; w16_ptdrop - give back the three system parts, in order. Keeps every register.
+w16_ptdrop:
     push si
     mov si, w16_sseg
-w16_ptout:
+.l:
     push dx
     xor dx, dx
     xchg dx, [si]
     or dx, dx
-    jz .out
+    jz .n
     call w16_kfree
-.out:
+.n:
     pop dx
+    add si, 8
+    cmp si, w16_sseg + 3 * 8
+    jb .l
     pop si
     ret
 
@@ -2358,6 +2461,7 @@ w16_cputest:
 %include "win16/w16combo.inc"   ; COMBOBOX, owner-drawn items (124.22.14)
 %include "win16/w16x87.inc"     ; floating point, and part 4 (SPEC.md 124.5)
 %include "win16/w16syslib.inc"  ; COMMDLG, SHELL...: part 9 (SPEC.md 124.24)
+%include "win16/w16gsp.inc"     ; GlobalCompact, GetFreeSpace: stubs + part 9
 %ifdef PKG_MEGA
 %include "win16/w16sel.inc"     ; the selector functions: part 9 (124.31.6)
 %include "win16/w16i31.inc"     ; DPMI 0.9, a subset: part 9 too (124.31.6)
@@ -2370,6 +2474,7 @@ w16_cputest:
 %include "win16/w16mdi.inc"     ; MDI, File and Program Manager: part 10 (124.27)
 %include "win16/w16task.inc"    ; several programs in one instance: part 10 (124.28)
 %include "win16/w16progm.inc"   ; Program Manager's DDE server: part 10 (124.33.2)
+%include "win16/w16rare.inc"    ; Arc, Pie, TrackPopupMenu: part 11 (124.25.16)
 
 ; --- the export rows and the fixed slots, in the loader part (SPEC.md
 ; 124.19.1). Emitted HERE, after every handler is defined, because a row's
@@ -2388,6 +2493,8 @@ w16_exports:
     %assign w16pt W16P_SYS
   %elifdef w16tsk_%[w16x_p_%[k]]
     %assign w16pt W16P_TSK
+  %elifdef w16rare_%[w16x_p_%[k]]
+    %assign w16pt W16P_RARE
   %else
     %assign w16pt 0
   %endif
@@ -2442,6 +2549,8 @@ w16_pnames:
     %assign w16pt W16P_SYS
   %elifdef w16tsk_%[w16x_p_%[w16f]]
     %assign w16pt W16P_TSK
+  %elifdef w16rare_%[w16x_p_%[w16f]]
+    %assign w16pt W16P_RARE
   %else
     %assign w16pt 0
   %endif
@@ -2462,6 +2571,7 @@ w16_pnames:
 %assign j j + 1
 %endrep
     db 0xFF
+w16_pnames_end:                 ; t_w16wrap skips [w16_pnames, here): data, not code
 section .w16ld
 w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
 %assign k 0
@@ -2469,6 +2579,8 @@ w16_fixed:                      ; W16_NFIXED slots, in w16_bind's own layout
     db w16f_a_%[k]
   %ifdef w16lib_%[w16f_p_%[k]]
     db W16P_LIB
+  %elifdef w16sys_%[w16f_p_%[k]]
+    db W16P_SYS                 ; (w16_ctlkrow, SPEC.md 124.25.18)
   %else
     db 0
   %endif
@@ -2487,6 +2599,8 @@ section .w16sys
     W16PM_PART s, hdr
 section .w16tsk
     W16PM_PART q, hdr
+section .w16rare
+    W16PM_PART r, hdr
 section .text
     W16PM_IMAGE
     W16PM_PART t, cs
@@ -2523,7 +2637,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
 ; each fetched for the display the program's window is on and dropped when it
 ; ends. tools/w16font.py builds them from apps/win16/fonts/
 %include "os88parts.inc"
-    OS88_PARTS_BEGIN 11
+    OS88_PARTS_BEGIN 12
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS16: sys16.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS12: sys12.txt
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_SYS08: sys08.txt
@@ -2535,6 +2649,7 @@ w16_s_noload:   db 'WIN16.O88 could not be read.', 0
       OS88_PART OP_ASSET, OP_LAZY | OP_COMP   ; W16P_DHOST: w16dosh.asm
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_SYS: section .w16sys
       OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_TSK: section .w16tsk
+      OS88_PART OP_SEG, OP_LAZY | OP_COMP     ; W16P_RARE: section .w16rare
     OS88_PARTS_END
 
     OS88_IMAGE_END

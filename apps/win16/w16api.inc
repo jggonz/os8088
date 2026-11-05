@@ -27,6 +27,11 @@ W16M_LZEXPAND equ 10            ; an installer's two (124.24.8, 124.24.9)
 W16M_VER      equ 11
 W16M_SYSTEM   equ 12            ; SYSTEM.DRV's InquireSystem (124.27.1)
 W16M_MMSYSTEM equ 13            ; the kern_mega arm's alone (124.32)
+%ifdef PKG_MEGA
+W16M_DDEML    equ 14            ; DDEML (124.25.26): after MMSYSTEM, so 13 on
+%else                           ; the real-mode arm, which has no MMSYSTEM
+W16M_DDEML    equ 13
+%endif
 
 w16_modnames:                   ; pascal strings, then 0
     db 6, 'KERNEL'
@@ -45,6 +50,7 @@ w16_modnames:                   ; pascal strings, then 0
 %ifdef PKG_MEGA
     db 8, 'MMSYSTEM'
 %endif
+    db 5, 'DDEML'
     db 0
 
 ; --- the export rows ----------------------------------------------------------
@@ -100,6 +106,10 @@ W16PROCNAME W16M_USER, 111, 'SendMessage'
 W16PROCNAME W16M_USER, 179, 'GetSystemMetrics'
 W16PROCNAME W16M_GDI, 80, 'GetDeviceCaps'
 W16PROCNAME W16M_GDI, 119, 'AddFontResource'
+; CTL3D.DLL's start-up binds the Windows 3.1 hooks by name (SPEC.md 124.25.22)
+W16PROCNAME W16M_USER, 291, 'SetWindowsHookEx'
+W16PROCNAME W16M_USER, 292, 'UnhookWindowsHookEx'
+W16PROCNAME W16M_USER, 293, 'CallNextHookEx'
 
 ;           module         ordinal  args  handler               the .spec line
 W16EXPORT W16M_KERNEL,     3,       0,  w16k_getversion     ; GetVersion()
@@ -149,7 +159,7 @@ W16EXPORT W16M_KERNEL,     1,       2,  w16k_fatalexit      ; FatalExit(word)
 W16EXPORT W16M_KERNEL,     115,     4,  w16k_debugstr       ; OutputDebugString(str)
 W16EXPORT W16M_KERNEL,     137,     6,  w16k_fatalapp       ; FatalAppExit(word str)
 W16EXPORT W16M_KERNEL,     134,     6,  w16k_windir         ; GetWindowsDirectory(ptr word)
-W16EXPORT W16M_KERNEL,     135,     6,  w16k_windir         ; GetSystemDirectory(ptr word)
+W16EXPORT W16M_KERNEL,     135,     6,  w16k_sysdir         ; GetSystemDirectory(ptr word)
 W16EXPORT W16M_KERNEL,     74,      10, w16k_openfile       ; OpenFile(str ptr word)
 W16EXPORT W16M_KERNEL,     81,      2,  w16k_lclose         ; _lclose(word)
 W16EXPORT W16M_KERNEL,     85,      6,  w16k_lopen          ; _lopen(str word)
@@ -165,6 +175,10 @@ W16EXPORT W16M_USER,       100,     12, w16u_dlgdirlist     ; DlgDirList(word pt
 W16EXPORT W16M_USER,       99,      8,  w16u_dlgdirsel      ; DlgDirSelect(word ptr word)
 W16EXPORT W16M_KERNEL,     95,      4,  w16k_loadlib        ; LoadLibrary(str)
 W16EXPORT W16M_KERNEL,     96,      2,  w16k_freelib        ; FreeLibrary(word)
+W16EXPORT W16M_KERNEL,     46,      2,  w16k_freelib        ; FreeModule(word): FreeLibrary's (124.25.15)
+W16EXPORT W16M_KERNEL,     37,      0,  w16k_curpdb         ; GetCurrentPDB()
+W16EXPORT W16M_KERNEL,     93,      4,  w16k_codehandle     ; GetCodeHandle(segptr)
+W16EXPORT W16M_KERNEL,     199,     2,  w16k_sethcount      ; SetHandleCount(word)
 W16EXPORT W16M_USER,       61,      14, w16u_scrollwnd      ; ScrollWindow(word s_word s_word ptr ptr)
 W16EXPORT W16M_USER,       62,      8,  w16u_setscrollpos   ; SetScrollPos(word word s_word word)
 W16EXPORT W16M_USER,       63,      4,  w16u_getscrollpos   ; GetScrollPos(word word)
@@ -250,6 +264,9 @@ W16EXPORT W16M_GDI,        370,     6,  w16g_nearpal        ; GetNearestPaletteI
 W16EXPORT W16M_USER,       121,     6,  w16u_sethook        ; SetWindowsHook(s_word segptr)
 W16EXPORT W16M_USER,       234,     6,  w16u_unhook         ; UnhookWindowsHook(s_word segptr)
 W16EXPORT W16M_USER,       235,     12, w16u_defhook        ; DefHookProc(s_word word long ptr)
+W16EXPORT W16M_USER,       291,     10, w16u_sethookex      ; SetWindowsHookEx(s_word segptr word word): kept and answered (124.25.22)
+W16EXPORT W16M_USER,       292,     4,  w16_ans1            ; UnhookWindowsHookEx(long): TRUE
+W16EXPORT W16M_USER,       293,     12, w16_ans0            ; CallNextHookEx(long s_word word long): 0
 W16EXPORT W16M_USER,       236,     0,  w16u_getcapture     ; GetCapture()
 W16EXPORT W16M_USER,       21,      0,  w16u_dblclktime     ; GetDoubleClickTime()
 W16EXPORT W16M_USER,       222,     4,  w16u_getkbstate     ; GetKeyboardState(ptr)
@@ -374,6 +391,34 @@ W16EXPORT W16M_OLESVR,     9,       4,  w16o_ok             ; OleRevertServerDoc
 W16EXPORT W16M_OLESVR,     10,      4,  w16o_ok             ; OleSavedServerDoc(long)
 W16EXPORT W16M_OLESVR,     11,      4,  w16o_ok             ; OleRevokeObject(ptr)
 W16EXPORT W16M_OLESVR,     12,      0,  w16o_ok             ; OleQueryServerVersion()
+; DDEML (SPEC.md 124.25.26): Windows 3.1 with no DDE server running
+W16EXPORT W16M_DDEML,      2,       16, w16dd_init         ; DdeInitialize(ptr segptr long long)
+W16EXPORT W16M_DDEML,      3,       4,  w16_ans1           ; DdeUninitialize(long)
+W16EXPORT W16M_DDEML,      4,       20, w16o_ok            ; DdeConnectList(long long long long ptr)
+W16EXPORT W16M_DDEML,      5,       8,  w16o_ok            ; DdeQueryNextServer(long long)
+W16EXPORT W16M_DDEML,      6,       4,  w16o_ok            ; DdeDisconnectList(long)
+W16EXPORT W16M_DDEML,      7,       16, w16o_ok            ; DdeConnect(long long long ptr)
+W16EXPORT W16M_DDEML,      8,       4,  w16o_ok            ; DdeDisconnect(long)
+W16EXPORT W16M_DDEML,      9,       12, w16o_ok            ; DdeQueryConvInfo(long long ptr)
+W16EXPORT W16M_DDEML,      10,      12, w16o_ok            ; DdeSetUserHandle(long long long)
+W16EXPORT W16M_DDEML,      11,      28, w16o_ok            ; DdeClientTransaction(ptr long long long word word long ptr)
+W16EXPORT W16M_DDEML,      12,      12, w16o_ok            ; DdeAbandonTransaction(long long long)
+W16EXPORT W16M_DDEML,      13,      12, w16o_ok            ; DdePostAdvise(long long long)
+W16EXPORT W16M_DDEML,      14,      24, w16o_ok            ; DdeCreateDataHandle(long ptr long long long word word)
+W16EXPORT W16M_DDEML,      15,      16, w16o_ok            ; DdeAddData(long ptr long long)
+W16EXPORT W16M_DDEML,      16,      16, w16o_ok            ; DdeGetData(long ptr long long)
+W16EXPORT W16M_DDEML,      17,      8,  w16o_ok            ; DdeAccessData(long ptr)
+W16EXPORT W16M_DDEML,      18,      4,  w16o_ok            ; DdeUnaccessData(long)
+W16EXPORT W16M_DDEML,      19,      4,  w16o_ok            ; DdeFreeDataHandle(long)
+W16EXPORT W16M_DDEML,      20,      4,  w16dd_err          ; DdeGetLastError(long)
+W16EXPORT W16M_DDEML,      21,      10, w16dd_crhsz        ; DdeCreateStringHandle(long str word)
+W16EXPORT W16M_DDEML,      22,      8,  w16_ans1           ; DdeFreeStringHandle(long long)
+W16EXPORT W16M_DDEML,      23,      18, w16dd_qstr         ; DdeQueryString(long long ptr long word)
+W16EXPORT W16M_DDEML,      24,      8,  w16_ans1           ; DdeKeepStringHandle(long long)
+W16EXPORT W16M_DDEML,      26,      10, w16o_ok            ; DdeEnableCallback(long long word)
+W16EXPORT W16M_DDEML,      27,      14, w16_ans1           ; DdeNameService(long long long word)
+W16EXPORT W16M_DDEML,      36,      8,  w16dd_cmp          ; DdeCmpStringHandles(long long)
+W16EXPORT W16M_DDEML,      37,      4,  w16o_ok            ; DdeReconnect(long)
 ; LZEXPAND (SPEC.md 124.24.8) and VER (124.24.9), in part 9 (w16lzver.inc)
 W16EXPORT W16M_LZEXPAND,   1,       4,  w16z_lzcopy         ; LZCopy(word word)
 W16EXPORT W16M_LZEXPAND,   2,       10, w16z_lzopen         ; LZOpenFile(str ptr word)
@@ -396,12 +441,23 @@ W16EXPORT W16M_VER,        11,      16, w16v_query          ; VerQueryValue(segp
 W16EXPORT W16M_GDI,        106,     10, w16g_setbmbits      ; SetBitmapBits(word long ptr)
 W16EXPORT W16M_GDI,        440,     18, w16g_setdibits      ; SetDIBits(word word word word ptr ptr word)
 W16EXPORT W16M_GDI,        441,     18, w16g_getdibits      ; GetDIBits(word word word word ptr ptr word)
+W16EXPORT W16M_GDI,        25,      10, w16g_flood          ; FloodFill(word s_word s_word long)
 W16EXPORT W16M_GDI,        372,     12, w16g_xflood         ; ExtFloodFill(word s_word s_word long word)
 W16EXPORT W16M_GDI,        64,      8,  w16g_rectrgn        ; CreateRectRgn(s_word s_word s_word s_word)
 W16EXPORT W16M_GDI,        63,      8,  w16g_polyrgn        ; CreatePolygonRgn(ptr word word)
 W16EXPORT W16M_GDI,        44,      4,  w16g_selclip        ; SelectClipRgn(word word)
 W16EXPORT W16M_GDI,        21,      10, w16g_exclclip       ; ExcludeClipRect(word s_word s_word s_word s_word)
 W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(word long)
+; what Visual Basic 3.0's runtime imports (SPEC.md 124.25.14, w16rgn.inc)
+W16EXPORT W16M_GDI,        15,      6,  w16g_offworg        ; OffsetWindowOrg(word s_word s_word)
+W16EXPORT W16M_GDI,        23,      18, w16g_arc            ; Arc(word s_word x8)
+W16EXPORT W16M_GDI,        26,      18, w16g_pie            ; Pie(word s_word x8)
+W16EXPORT W16M_GDI,        50,      4,  w16g_brind          ; CreateBrushIndirect(ptr)
+W16EXPORT W16M_GDI,        62,      4,  w16g_penind         ; CreatePenIndirect(ptr)
+W16EXPORT W16M_GDI,        151,     6,  w16_ans0            ; CopyMetaFile(word str)
+W16EXPORT W16M_GDI,        172,     10, w16g_setrectrgn     ; SetRectRgn(word s_word x4)
+W16EXPORT W16M_GDI,        175,     12, w16_ans0            ; EnumMetaFile(word word segptr long)
+W16EXPORT W16M_GDI,        176,     12, w16_ans0            ; PlayMetaFileRecord(word ptr ptr word)
 ; the text calls that draw or measure in the face of the DC's font (SPEC.md
 ; 124.24.4): their rows carry W16B_DCF
 %define w16dcf_w16g_textout
@@ -448,6 +504,9 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 %define w16mdc_w16g_rect
 %define w16mdc_w16g_roundrect
 %define w16mdc_w16g_ellipse
+%define w16mdc_w16g_arc
+%define w16mdc_w16g_pie
+%define w16mdc_w16g_offworg
 %define w16mdc_w16g_polygon
 %define w16mdc_w16g_polyline
 %define w16mdc_w16g_setpixel
@@ -474,6 +533,7 @@ W16EXPORT W16M_GDI,        58,      6,  w16g_solidbrush     ; CreateHatchBrush(w
 %define w16mdc_w16g_rectvis
 %define w16mdc_w16g_getdcorg
 %define w16mdc_w16g_xflood
+%define w16mdc_w16g_flood
 %define w16mdc_w16g_selclip
 %define w16mdc_w16g_exclclip
 %define w16mdc_w16u_drawtext
@@ -518,6 +578,13 @@ W16EXPORT W16M_KERNEL,     36,      0,  w16k_curtask        ; GetCurrentTask()
 W16EXPORT W16M_USER,       225,     10, w16u_enumwnd        ; EnumTaskWindows(word segptr long)
 W16EXPORT W16M_USER,       272,     2,  w16u_iszoomed       ; IsZoomed(word)
 W16EXPORT W16M_USER,       44,      2,  w16_ans1            ; OpenIcon(word)
+W16EXPORT W16M_USER,       43,      2,  w16_ans0            ; CloseWindow(word): no icon to go to (124.25.13)
+W16EXPORT W16M_USER,       238,     4,  w16_ans2            ; ExcludeUpdateRgn(word word): SIMPLEREGION, nothing excluded
+W16EXPORT W16M_USER,       112,     0,  w16u_waitmsg        ; WaitMessage()
+W16EXPORT W16M_USER,       24,      6,  w16i_remprop        ; RemoveProp(word ptr)
+W16EXPORT W16M_USER,       25,      6,  w16i_getprop        ; GetProp(word str)
+W16EXPORT W16M_USER,       26,      8,  w16i_setprop        ; SetProp(word str word)
+W16EXPORT W16M_USER,       27,      6,  w16i_enumprops      ; EnumProps(word segptr)
 W16EXPORT W16M_GDI,        65,      4,  w16g_rectrgni       ; CreateRectRgnIndirect(ptr)
 W16EXPORT W16M_KERNEL,     106,     2,  w16k_swaparea       ; SetSwapAreaSize(word)
 W16EXPORT W16M_KERNEL,     64,      4,  w16k_accres         ; AccessResource(word word)
@@ -700,6 +767,8 @@ W16EXPORT W16M_USER,       404,     10, w16n_clsinfo        ; GetClassInfo(word 
 W16EXPORT W16M_USER,       373,     12, w16n_subrect        ; SubtractRect(ptr ptr ptr)
 W16EXPORT W16M_USER,       290,     10, w16n_redraw         ; RedrawWindow(word ptr word word)
 W16EXPORT W16M_USER,       438,     6,  w16i_lowbuff        ; AnsiLowerBuff(str word)
+W16EXPORT W16M_GDI,        373,     4,  w16_ans0            ; SetSystemPaletteUse(word word): SYSPAL_ERROR,
+                                                                ;   no palette device here (124.25.23)
 W16EXPORT W16M_GDI,        375,     10, w16_ans0            ; GetSystemPaletteEntries(word word word ptr)
 W16EXPORT W16M_GDI,        471,     12, w16n_textpt         ; GetTextExtentPoint(word ptr s_word ptr)
 W16EXPORT W16M_GDI,        483,     10, w16n_movetoex       ; MoveToEx(word s_word s_word ptr)
@@ -958,6 +1027,15 @@ W16EXPORT W16M_GDI,        51,      6,  w16g_cmpbmp         ; CreateCompatibleBi
 W16EXPORT W16M_GDI,        79,      2,  w16g_getdcorg       ; GetDCOrg(word)
 W16EXPORT W16M_GDI,        83,      6,  w16g_getpixel       ; GetPixel(word s_word s_word)
 W16EXPORT W16M_USER,       457,     2,  w16u_destroyicon    ; DestroyIcon(word)
+W16EXPORT W16M_USER,       129,     4,  w16u_getclsw        ; GetClassWord(word s_word)
+W16EXPORT W16M_USER,       131,     4,  w16u_getclsw        ; GetClassLong(word s_word)
+W16EXPORT W16M_USER,       187,     0,  w16u_endmenu        ; EndMenu()
+W16EXPORT W16M_USER,       237,     6,  w16g_getupdrgn      ; GetUpdateRgn(word word word)
+W16EXPORT W16M_USER,       259,     2,  w16_ans1            ; BeginDeferWindowPos(s_word): a handle, 1
+W16EXPORT W16M_USER,       260,     16, w16u_setwndpos      ; DeferWindowPos(word x2 s_word x4 word): SetWindowPos's, at once
+W16EXPORT W16M_USER,       261,     2,  w16_ans1            ; EndDeferWindowPos(word): TRUE
+W16EXPORT W16M_USER,       407,     18, w16i_createicon     ; CreateIcon(word x5 ptr ptr)
+W16EXPORT W16M_USER,       416,     16, w16u_trackpop       ; TrackPopupMenu(word word s_word x3 word ptr): part 11 (124.25.16)
 W16EXPORT W16M_KEYBOARD,   132,     0,  w16kb_codepage      ; GetKBCodePage()
 W16EXPORT W16M_KEYBOARD,   6,       8,  w16kb_oem2ansi      ; OemToAnsi(str ptr)
 W16EXPORT W16M_SOUND,      1,       0,  w16s_open           ; OpenSound()
@@ -987,6 +1065,13 @@ W16FIXED 0,  w16_lmgo           ; W16_LMROW: the libraries' LibMain (124.23.4)
 W16FIXED 0,  w16_segld          ; W16_SLROW: a discarded segment's thunk (124.26.2)
 W16FIXED 30, w16u_createwnd     ; W16_CWROW: CreateWindow, for WM_MDICREATE
 W16FIXED 2,  w16u_destroywnd    ; W16_DWROW: DestroyWindow, for WM_MDIDESTROY
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
+W16FIXED 10, w16_ctlkrow        ; W16_CTLK + W16Q_BUTTON .. W16Q_COMBO
 %if W16NF != W16_NFIXED
   %error "W16FIXED: one row a fixed slot"
 %endif
@@ -1519,9 +1604,7 @@ w16u_findwnd:
     jne .next
     push cx
     mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    call w16_clsget
     mov di, ax
     mov si, w16_namebuf
     mov cx, 16
@@ -1566,12 +1649,10 @@ w16u_setclsword:
     mov ax, [es:bx + 4]
     call w16_hwnd2rec
     jc .no
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .no
-    mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    mov al, [bx + W16W_CLS]         ; the program's classes (124.25.18)
+    cmp al, 0xFF
+    je .no
+    call w16_clsget
     mov si, ax
     cmp cx, GCW_STYLE
     je .style
@@ -1579,6 +1660,7 @@ w16u_setclsword:
     jne .no
     mov ax, dx
     xchg ax, [si + W16C_HBR]
+    call w16_clsput
     push ax
     mov al, [bx + W16W_CLS]
     xor cx, cx
@@ -1588,9 +1670,7 @@ w16u_setclsword:
     call w16_slot2rec
     test byte [bx + W16W_FLAGS], W16WF_USED
     jz .wn
-    cmp byte [bx + W16W_KIND], W16Q_PROG
-    jne .wn
-    cmp [bx + W16W_CLS], al
+    cmp [bx + W16W_CLS], al         ; (only a class's own windows have it)
     jne .wn
     mov [bx + W16W_HBR], dx
 .wn:
@@ -1602,6 +1682,7 @@ w16u_setclsword:
 .style:
     mov ax, dx
     xchg ax, [si + W16C_STYLE]
+    call w16_clsput
     jmp short .out
 .no:
     xor ax, ax
@@ -1703,30 +1784,54 @@ w16k_isdbcs:
     ret
 
 ; GetModuleFileName (KERNEL.49): "A:\DIR\NAME.EXE", the program's folder
-; from the root (OSAPI_FILE_PATH), truncated to the buffer. A setup takes its
-; own files from that folder: _MSTEST's from a temporary one. The library
-; part's (SPEC.md 124.19): a program asks once or twice, at its start.
-; args: +0 nSize, +2 lpBuffer (off, seg), +6 hModule
+; from the root (OSAPI_FILE_PATH), truncated to the buffer; on a library's
+; handle the folder the library was found in (SPEC.md 124.23.1.1), as its
+; module block keeps it. A setup takes its own files from that folder:
+; _MSTEST's from a temporary one. The instance is put back where it stood.
+; The library part's (SPEC.md 124.19): a program asks once or twice, at its
+; start. args: +0 nSize, +2 lpBuffer (off, seg), +6 hModule
 section .w16dlg
 W16LIB w16k_getmodfn
     push si
     push di
+    call OSAPI_FILE_HERE            ; where the instance stands, put back
+    push dx
+    push bx
+    ICALL w16_args
+    mov ax, [es:bx + 6]             ; hModule: a library's (SPEC.md 124.23.5)
+    ICALL w16_libof                 ; SI -> its record
+    mov dx, [w16_dir]               ; ...or the program's
+    mov al, [w16_vol]
+    mov di, w16_name
+    jc .who
+    lea di, [si + W16L_FILE]
+    W16SEG es, [si + W16L_MREC]     ; its own folder and volume (124.26.11)
+    mov dx, [es:W16LM_DIR]
+    mov al, [es:W16LM_VOL]
+.who:
+    push di                         ; the name
+    push ax                         ; AL = the volume
+    push dx                         ; the folder
     ICALL w16_args
     mov cx, [es:bx]                 ; nSize
     les di, [es:bx + 2]
     mov [w16_scratch + 2], di       ; where the name starts, for the length
+    pop dx
+    pop bx                          ; BL = the volume
     xor ax, ax
-    jcxz .out
+    jcxz .none
     dec cx                          ; room for the NUL
-    mov al, [w16_vol]
+    mov al, bl
     add al, 'A'
     call .put
     mov al, ':'
     call .put
     push cx                         ; the folder (SPEC.md 124.23.5): from
-    mov dx, [w16_dir]               ;   the root, "\" at the root itself
-    mov bl, [w16_vol]
-    call OSAPI_FILE_GOTO_QM
+    push di                         ;   the root, "\" at the root itself
+    call OSAPI_FILE_GOTO_QM         ;   (CX and DI the driver's on a
+    pop di                          ;   redirected volume)
+    pop cx
+    push cx
     inc cx                          ; (its NUL takes the room kept for ours)
     push ds                         ; an X cell: the buffer is the caller's
     push es                         ;   DS's, so the program's segment is ours
@@ -1745,17 +1850,7 @@ W16LIB w16k_getmodfn
     mov al, '\'
     call .put
 .sep:
-    push bx
-    push es
-    ICALL w16_args
-    mov ax, [es:bx + 6]             ; hModule: a library's (SPEC.md 124.23.5)
-    pop es
-    ICALL w16_libof                 ; SI -> its record
-    lea si, [si + W16L_FILE]
-    jnc .lib
-    mov si, w16_name
-.lib:
-    pop bx
+    pop si                          ; the name
 .name:
     lodsb
     or al, al
@@ -1766,7 +1861,15 @@ W16LIB w16k_getmodfn
     mov byte [es:di], 0
     mov ax, di
     sub ax, [w16_scratch + 2]
-.out:
+    jmp short .back
+.none:
+    pop si
+.back:
+    pop bx                          ; the instance where it stood
+    pop dx
+    push ax
+    call OSAPI_FILE_GOTO_QM
+    pop ax
     pop di
     pop si
     ret

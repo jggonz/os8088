@@ -8469,17 +8469,23 @@ $(BUILD)/ftpd.bin: apps/ftpd/ftpd.asm apps/os88api.inc apps/os88ui.inc \
 $(BUILD)/ftpd.o88: $(BUILD)/ftpd.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $(BUILD)/ftpd.bin -o $@
 
-$(BUILD)/browser.part.bin: $(BUILD)/browser.bin \
+# The part's symbols are the browser's OWN tree's (-I $(BUILD)/): a BUILD=
+# tree read build/'s copy until 2026-11-04, a stale map's or none at all
+$(BUILD)/brdownload_part_symbols.inc: $(BUILD)/browser.bin \
+                           apps/browser/brdownload_paint.inc \
+                           apps/browser/brcopyselection.inc tools/brdlsyms.py | $(BUILD)
+	python3 tools/brdlsyms.py $(BUILD)/browser.map \
+	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
+	        -o $@
+
+$(BUILD)/browser.part.bin: $(BUILD)/browser.bin $(BUILD)/brdownload_part_symbols.inc \
                            apps/browser/brdownload_part.asm \
                            apps/browser/brdownload_paint.inc \
                            apps/browser/brdownload_const.inc \
                            apps/browser/brdocmarks.inc \
                            apps/browser/brcopyselection.inc \
                            tools/brdlsyms.py apps/os88api.inc | $(BUILD)
-	python3 tools/brdlsyms.py $(BUILD)/browser.map \
-	        apps/browser/brdownload_paint.inc apps/browser/brcopyselection.inc \
-	        -o $(BUILD)/brdownload_part_symbols.inc
-	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ \
+	$(NASM) -f bin -w+error -I apps/ -I apps/browser/ -I $(BUILD)/ \
 	        -o $@ apps/browser/brdownload_part.asm
 	@echo "browser Download Manager part: $(call FILESIZE,$@) bytes"
 
@@ -15122,10 +15128,15 @@ megatrap:
 # megatrap's reason: build/mega.img is always the shipped shape. A field run
 # that needs a reading takes build/megadiag/mega.img (or mega120.img), and
 # megarun.o88 and mbr.bin are there so that `tools/os88bochs.py --build
-# build/megadiag` boots it
+# build/megadiag` boots it. It also builds WIN16's kern_mega disks
+# (megawin16.img, megawin16-120.img) in the same tree, so the diagnostic
+# kernel and the package it is used to diagnose are one build: a MEGADIAG
+# kernel with no WIN16 disk of its own was paired with whatever build/ held
+# (2026-11-04, docs: SPEC.md 124.17.4)
 megadiag:
 	@$(MAKE) BUILD=$(BUILD)/megadiag MEGADIAG=1 $(BUILD)/megadiag/mega.img $(BUILD)/megadiag/mega120.img \
-		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin
+		$(BUILD)/megadiag/megarun.o88 $(BUILD)/megadiag/mbr.bin \
+		$(BUILD)/megadiag/megawin16.img $(BUILD)/megadiag/megawin16-120.img
 .PHONY: megadiag
 
 # `make megafdmask` - kern_mega with MEGAFDMASK=1 (KERN-MEGA-PLAN 14.125), the
@@ -19317,11 +19328,14 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP LHEAP DOSENV PMNP DDEUSE
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
-# by the import lines in its own .wlk, so it links without them.
-WIN16DLLFIX := W16DLL W16DLL2
+# by the import lines in its own .wlk, so it links without them. W16DLL3 it
+# loads by a FULL PATH only (SPEC.md 124.25.22), so it rides in a LIBS\
+# folder below the program's: $(WIN16LIBSFIX).
+WIN16DLLFIX := W16DLL W16DLL2 W16DLL3
+WIN16LIBSFIX := W16DLL3
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
@@ -19329,7 +19343,7 @@ win16census:
 	@test -n "$(WIN3X)" || { echo "win16census: say where the Windows files are: make win16census WIN3X=<dir>"; exit 2; }
 	python3 -I tools/os88ne.py --dir "$(WIN3X)"
 
-win16fixtures: $(BUILD)/win16/TINY16.EXE $(BUILD)/win16/.watcom
+win16fixtures: $(BUILD)/win16/TINY16.EXE $(BUILD)/win16/THKCALL.EXE $(BUILD)/win16/.watcom
 
 $(BUILD)/win16/TINY16.EXE: tests/win16/tiny16.asm
 	@mkdir -p $(@D)
@@ -19450,13 +19464,15 @@ $(BUILD)/win16.o88: $(BUILD)/win16.bin $(W16FACES) $(BUILD)/win16/icons.bin \
 		--second $(BUILD)/win16/w16fp.bin --mark W16X87EM \
 		--second $(BUILD)/win16/w16ld.bin --mark W16LOADR \
 		--second $(BUILD)/win16/w16sys.bin --mark W16SYSLB \
-		--second $(BUILD)/win16/w16tsk.bin --mark W16TSKPT
+		--second $(BUILD)/win16/w16tsk.bin --mark W16TSKPT \
+		--second $(BUILD)/win16/w16rare.bin --mark W16RAREP
 	$(OS88PKG) $(BUILD)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(BUILD)/win16/w16dlg.bin \
 		--part $(BUILD)/win16/w16fp.bin --part $(BUILD)/win16/w16ld.bin \
 		--part $(BUILD)/win16/icons.bin --part $(BUILD)/doscore.bin \
 		--part $(BUILD)/win16/w16dosh.bin --part $(BUILD)/win16/w16sys.bin \
 		--part $(BUILD)/win16/w16tsk.bin \
+		--part $(BUILD)/win16/w16rare.bin \
 		--part-compress lz4
 
 win16: $(BUILD)/win16.o88
@@ -19505,13 +19521,15 @@ $(MEGAAPPDIR)/win16.o88: $(MEGAAPPDIR)/win16.bin $(W16FACES) $(BUILD)/win16/icon
 		--second $(MEGAAPPDIR)/win16/w16fp.bin --mark W16X87EM \
 		--second $(MEGAAPPDIR)/win16/w16ld.bin --mark W16LOADR \
 		--second $(MEGAAPPDIR)/win16/w16sys.bin --mark W16SYSLB \
-		--second $(MEGAAPPDIR)/win16/w16tsk.bin --mark W16TSKPT
+		--second $(MEGAAPPDIR)/win16/w16tsk.bin --mark W16TSKPT \
+		--second $(MEGAAPPDIR)/win16/w16rare.bin --mark W16RAREP
 	$(OS88PKG) $(MEGAAPPDIR)/win16/win16.trim.bin -o $@ \
 		$(addprefix --part ,$(W16FACES)) --part $(MEGAAPPDIR)/win16/w16dlg.bin \
 		--part $(MEGAAPPDIR)/win16/w16fp.bin --part $(MEGAAPPDIR)/win16/w16ld.bin \
 		--part $(BUILD)/win16/icons.bin --part $(MEGAAPPDIR)/doscore.bin \
 		--part $(MEGAAPPDIR)/win16/w16dosh.bin --part $(MEGAAPPDIR)/win16/w16sys.bin \
 		--part $(MEGAAPPDIR)/win16/w16tsk.bin \
+		--part $(MEGAAPPDIR)/win16/w16rare.bin \
 		--part-compress lz4
 
 # ...and kern_mega's WIN16 DISKS: $(WIN16IMG)'s shape - WIN16\,
@@ -19525,9 +19543,10 @@ $(BUILD)/megawin16-120.img: $(MEGAAPPDIR)/win16.o88 $(WIN16SHIP) tools/os88disk.
 	python3 tools/os88disk.py -o $@ --size 1200 $(MEGAW16ARGS)
 
 # `make win16test` is S2's gate disk (WIN16-PLAN.md S2): a 1.44MB B: with
-# WIN16.O88, the TINY16 variants, whatever `make win16fixtures` has built,
+# WIN16.O88 and the TINY16 variants in the ROOT, whatever of the Open Watcom
+# fixtures `make win16fixtures` has built in FIXTURES\ (below),
 # SYSTEM/APPDATA/WIN16, the Windows directory a program's profiles are kept
-# in (SPEC.md 124.14), and DOS.O88 in the ROOT beside the programs, so the
+# in (SPEC.md 124.14), and DOS.O88 beside the programs in both, so the
 # association's rung 2 (the document's own folder, SPEC.md 54.4.2) finds it
 # before the system disk's. Since S12 that DOS.O88 is the SHIPPED one
 # (124.18.1), copied here so the rows keep the name they were written with.
@@ -19535,21 +19554,42 @@ $(BUILD)/win16/DOS.O88: $(BUILD)/kdos/DOS.O88
 	@mkdir -p $(@D)
 	cp $< $@
 
-WIN16TINY := TINY16 TINY186 TINYUNK
+WIN16TINY := TINY16 TINY186 TINYUNK THKCALL
 $(BUILD)/win16/TINY186.EXE: tests/win16/tiny16.asm
 	@mkdir -p $(@D)
 	$(NASM) -f bin -w+error -DT16_186 -o $@ $<
 $(BUILD)/win16/TINYUNK.EXE: tests/win16/tiny16.asm
 	@mkdir -p $(@D)
 	$(NASM) -f bin -w+error -DT16_UNKNOWN -o $@ $<
+# thkcall.asm (SPEC.md 124.26.14): discardable code reached by far calls only,
+# with Microsoft's linker's relocations - assembled, because Open Watcom's wlink
+# writes far-pointer relocations and marks no segment discardable.
+$(BUILD)/win16/THKCALL.EXE: tests/win16/thkcall.asm
+	@mkdir -p $(@D)
+	$(NASM) -f bin -w+error -o $@ $<
 
+# The fixtures are taken BY NAME, $(WIN16FIX) and the libraries DLLUSE
+# imports, $(WIN16DLLFIX), which WIN16 looks for in the program's own folder
+# (SPEC.md 124.23.1) - never every *.EXE in $(BUILD)/win16/: the
+# win16-reference skill's `samples` copies Microsoft's programs there too
+# (66 EXEs), which is 69 root entries against the kernel's listing of 64 and
+# 4,016 clusters against the floppy's 2,847. They go in FIXTURES\, which the
+# same 64 holds, so the root stays the TINY16 variants and the fixtures and
+# their libraries can number 63 before the folder refuses. Recursive `=`, so
+# the list is read when the recipe runs; the fixtures' stamp is a
+# prerequisite when it exists, so a rebuilt fixture rebuilds the disk without
+# making this need Watcom.
+WIN16TESTFIX = $(wildcard $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16FIX)) \
+                                                     $(addsuffix .DLL,$(filter-out $(WIN16LIBSFIX),$(WIN16DLLFIX)))))
+WIN16TESTLIBS = $(wildcard $(addprefix $(BUILD)/win16/,$(addsuffix .DLL,$(WIN16LIBSFIX))))
 $(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
                         $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
-                        tools/os88disk.py
+                        $(wildcard $(BUILD)/win16/.watcom) tools/os88disk.py
 	python3 tools/os88disk.py -o $@ --size 1440 $(BUILD)/win16.o88 \
 	    $(BUILD)/win16/DOS.O88 \
-	    $(sort $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
-	           $(wildcard $(BUILD)/win16/*.EXE)) \
+	    $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
+	    $(if $(WIN16TESTFIX),$(addprefix FIXTURES:,$(BUILD)/win16/DOS.O88 $(WIN16TESTFIX))) \
+	    $(addprefix FIXTURES/LIBS:,$(WIN16TESTLIBS)) \
 	    $(APPDATAFOLDER) --folder SYSTEM/APPDATA/WIN16
 
 win16test: $(BUILD)/win16test.img

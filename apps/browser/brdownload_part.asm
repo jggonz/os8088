@@ -17,7 +17,7 @@ BR_PATHMAX  equ 96
 
 %include "os88api.inc"
 %include "brdownload_const.inc"
-%include "build/brdownload_part_symbols.inc"
+%include "brdownload_part_symbols.inc"  ; $(BUILD)/, by -I
 
     dw br_dl_part_paint
     dw br_dl_part_redraw_doc

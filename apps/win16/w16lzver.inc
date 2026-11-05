@@ -1411,8 +1411,8 @@ w16v_give:
     pop ds
     ret
 
-; w16v_sysdir - w16v_sys: WIN16's system directory, which is its Windows
-; directory (SPEC.md 124.24.9)
+; w16v_sysdir - w16v_sys: WIN16's system directory, SYSTEM under its Windows
+; directory (SPEC.md 124.20.5.1, 124.24.9)
 w16v_sysdir:
     push si
     push di
@@ -1423,9 +1423,14 @@ w16v_sysdir:
     mov si, w16s_dir
     mov di, w16v_sys + 1            ; XSEC-OK: the part's buffer, ES = CS
     W16CSEG es
-    mov cx, w16s_dirlen
+    mov cx, w16s_dirlen - 1
     cld
-    rep movsb                       ; the NUL with it
+    rep movsb
+    mov al, '\'                     ; SYSTEM under it (od_s_system, the
+    stosb                           ;   name the library search dives
+    mov si, od_s_system             ;   into), the NUL with it
+    mov cx, od_s_syslen
+    rep movsb
     pop es
     pop di
     pop si

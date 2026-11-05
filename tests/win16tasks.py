@@ -95,6 +95,15 @@ def main():
         if not d.q.acted(d, ready, secs=600, what="TASKS's MessageBox",
                          poll=0):
             raise RuntimeError("timed out waiting for TASKS's MessageBox")
+        # ...and then for the box itself: serving MessageBox's row is true
+        # from the call, before its dialog is up - the library part may still
+        # be on its way off B: - and on a loaded host the box took longer
+        # than the idle below, so Enter went to the desktop, the box stayed
+        # and the instance never ended. Up is a modal loop the program is in
+        # with its text readable off its stack.
+        d.wait(lambda: p.pb("w16_state") in (F.W16S_REFUSED, F.W16S_ENDED)
+               or (p.pb("w16_inmodal") != 0 and p.msgtext() != ""),
+               120, "TASKS's MessageBox to be up")
         d.idle(3.0)
         st = p.pb("w16_state")
         print("1. state %d, at most %d tasks and %d claims of the instance's "

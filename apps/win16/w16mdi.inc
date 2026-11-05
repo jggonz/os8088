@@ -121,16 +121,134 @@ W16TSK w16i_dresalloc
     xor dx, dx
     ret
 
-; GetDOSEnvironment (KERNEL.131) - no args. A program WIN16 starts has no
-; environment (its PSP's word 2Ch is 0), so the answer is an empty one: a
-; NUL that ends the list at once, in this part, which is kept until the
-; program ends
+; GetDOSEnvironment (KERNEL.131) - no args. Windows answers the task's
+; environment as SELECTOR:0 (DX the selector, AX = 0): a library's C start-up
+; reads it either way round (`or ax, ax / jz / mov dx, ax` loads AX into ES,
+; which a part's own offset faults), scans it from offset 0 to the double
+; NUL, and Open Watcom's getenv() reads it the same way. A program WIN16
+; starts is given no DOS environment (WIN16 is a package, and DOS's rows are
+; its own window's), so the block holds the Windows session's own: windir,
+; TEMP and TMP (the Windows directory, where GetTempFileName makes its files)
+; and PATH (that directory and SYSTEM in it, where WIN16 looks for programs
+; and libraries), the double NUL, the word 1 and the program's full path,
+; GetModuleFileName's. It is a GlobalAlloc block the task owns (freed with
+; it), made at the first ask (SPEC.md 124.25.21), its selector put in the
+; PSP's word 2Ch as Windows has it. [w16_envp], a task's own (w16_ctxtab), is
+; its data paragraph; a block that is not still the current task's, beginning
+; with "wi", is made again
+W16_ENVSZ   equ 288                 ; 151 of variables, 137 of path
 W16TSK w16i_dosenv
-    mov ax, w16i_noenv              ; XSEC-OK: a far pointer into this part
-    mov dx, cs
+    mov ax, [w16_envp]
+    or ax, ax
+    jz .make
+    dec ax
+    W16SEG es, ax
+    inc ax
+    cmp word [es:GH_MAGIC], GH_SIG
+    jne .make
+    test byte [es:GH_FLAGS], GHF_USED
+    jz .make
+    mov dl, [w16_cur]
+    inc dl
+    cmp [es:GH_TASK], dl
+    jne .make
+    W16SEG es, ax
+    cmp word [es:0], 'wi'
+    je .have
+.make:
+    xor dx, dx
+    mov ax, W16_ENVSZ
+    mov cl, GMEM_ZEROINIT           ; fixed: its handle is its paragraph
+    ICALL w16_gnew                  ; AX = DX = the data, 0 none
+    or ax, ax
+    jz .none
+    mov dx, ax
+    ICALL w16_gmine
+    mov [w16_envp], ax
+    push si
+    push di
+    W16SEG es, ax
+    xor di, di
+    mov si, w16i_envt               ; XSEC-OK: read through cs:
+    cld
+.t:
+    mov al, [cs:si]
+    inc si
+    cmp al, 3
+    ja .ch
+    je .end
+    push si                         ; 1: the Windows directory, its letter
+    cmp al, 1                       ;   first; 2: '\' and its SYSTEM folder
+    mov al, [w16_homev]
+    mov si, w16s_dir
+    je .dir
+    mov al, '\' - 'A'
+    mov si, od_s_system
+.dir:
+    add al, 'A'
+.cp:
+    stosb                           ; ...then the name, to its NUL
+    lodsb
+    or al, al
+    jnz .cp
+    pop si
+    jmp short .t
+.ch:
+    cmp al, '0'                     ; '0': a string's NUL
+    jne .st
+    xor al, al
+.st:
+    stosb
+    jmp short .t
+.end:
+    mov ax, 1                       ; the count of strings after the list
+    stosw
+    mov ax, [w16_envp]
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; the program's selector for it
+%endif
+    push ax
+    push word [w16_pss]             ; GetModuleFileName(0, its:DI, room),
+    push word [w16_psp_]            ;   as a call from the program would
+    xor cx, cx
+    push cx                         ; hModule 0: the program's
+    push ax
+    push di
+    mov cx, W16_ENVSZ
+    sub cx, di
+    push cx
+    mov [w16_pss], ss
+    mov [w16_psp_], sp
+    sub word [w16_psp_], W16F_ARGS
+    SLCALL w16k_getmodfn
+    add sp, 8
+    pop word [w16_psp_]
+    pop word [w16_pss]
+    W16SEG es, [w16_psp]            ; where a DOS-style start-up looks
+    pop ax
+    mov [es:0x2C], ax
+    pop di
+    pop si
+    jmp short .sel
+.have:
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; the program's selector for it
+%endif
+.sel:
+    mov dx, ax
+    xor ax, ax
     ret
-w16i_noenv:
-    dw 0
+.none:
+    xor dx, dx                      ; NULL: a start-up that tests for it
+    ret                             ;   (AX is 0)
+; the variables: 1 is the Windows directory, 2 its SYSTEM folder, '0' a
+; string's end, 3 the table's (after the empty string that ends the list)
+w16i_envt:
+    db 'windir=', 1, '0'
+    db 'TEMP=', 1, '0'
+    db 'TMP=', 1, '0'
+    db 'PATH=', 1, ';', 1, 2, '0'
+    db '0', 3
 
 ; LongPtrAdd (KERNEL.180) - args: +0 dwAdd, +4 lpPtr. Real mode's answer:
 ; the pointer moved on by dwAdd bytes, its offset the low four bits. File
@@ -198,17 +316,32 @@ w16i_s_norst: db 'No restart is needed', 0       ; (short: a toast's box is)
 ; (KERNEL.70), GlobalAddAtom (USER.268), RegisterClipboardFormat (USER.145)
 ; - the same, given a place when it has none: 0 when the table is full. A
 ; MAKEINTATOM (no segment) is its own atom for all four
+;
+; DdeCreateStringHandle (DDEML.21) - args: +0 iCodePage, +2 psz, +6 idInst:
+; an HSZ is one of these atoms, as DDEML's are global atoms (SPEC.md
+; 124.25.26), and 1 - a handle with no name - when the table is full, so a
+; program is never refused one
+W16TSK w16dd_crhsz
+    mov ax, 0x0201                  ; AH = 2: the name two bytes up
+    call w16i_atom
+    or ax, ax
+    jnz .r
+    inc ax
+.r:
+    ret
 W16TSK w16i_findatom
     xor ax, ax
     jmp short w16i_atom
 W16TSK w16i_addatom
-    mov al, 1
+    mov ax, 1
 w16i_atom:
     push di
     push ax                         ; AL = 1: add a name not there
     ICALL w16_args
-    les di, [es:bx]
     pop ax
+    add bl, ah                      ; AH = where the name is
+    adc bh, 0
+    les di, [es:bx]
     mov dx, es
     or dx, dx
     jz .int
@@ -237,9 +370,10 @@ w16i_atomat:
     push ax
     push si
     push di
-.c:
-    mov al, [es:di]
-    call w16i_up
+    mov cx, 31                      ; a name is kept cut to 31, so 31 the
+.c:                                 ;   same is the same name: a longer one
+    mov al, [es:di]                 ;   found again, not added again (and
+    call w16i_up                    ;   the table filling with copies)
     mov ah, al
     mov al, [si]
     call w16i_up
@@ -248,7 +382,9 @@ w16i_atomat:
     inc si
     inc di
     or al, al
-    jnz .c
+    jz .eq
+    loop .c
+.eq:
     pop di
     pop si
     pop ax
@@ -295,13 +431,26 @@ w16i_atomat:
 ; GetAtomName (KERNEL.72), GlobalGetAtomName (USER.271),
 ; GetClipboardFormatName (USER.146) - args: +0 nMaxCount, +2 lpszBuffer,
 ; +6 the atom: its name, cut to the buffer; the answer is its length, 0 for
-; any other atom
+; any other atom. A NULL buffer is written nothing and answers the length
+;
+; DdeQueryString (DDEML.23) - args: +0 iCodePage, +2 cchMax, +6 psz, +10
+; hsz, +14 idInst: the same three, two bytes up and then two more (the
+; count is a DWORD; its low word is taken), and DX = 0 the answer's high word
+W16TSK w16dd_qstr
+    mov ax, 2
+    jmp short w16i_atomn
 W16TSK w16i_atomname
+    xor ax, ax
+w16i_atomn:
     push si
     push di
     push ds
+    push ax
     ICALL w16_args
+    pop si                          ; SI = 0, or DdeQueryString's 2
+    add bx, si
     mov cx, [es:bx]
+    add bx, si
     mov si, [es:bx + 6]
     les di, [es:bx + 2]
     xor ax, ax                      ; AX = the length
@@ -309,7 +458,6 @@ W16TSK w16i_atomname
     jb .out
     cmp si, W16_NATOM
     jae .out
-    jcxz .out
     push cx
     mov cl, 5
     shl si, cl
@@ -318,6 +466,15 @@ W16TSK w16i_atomname
     W16SEG ds, [w16_tseg]
     cmp byte [si], 0
     je .out
+    mov dx, es
+    or dx, dx
+    jnz .dst
+    push ds                         ; a NULL buffer: the name copied onto
+    pop es                          ;   itself, room for any of them, so
+    mov di, si                      ;   only the length comes of it
+    mov cl, 32
+.dst:
+    jcxz .out
     dec cx                          ; room for the NUL
 .cp:
     jcxz .end
@@ -339,7 +496,269 @@ W16TSK w16i_atomname
     pop si
     ret
 
+; DdeCmpStringHandles (DDEML.36) - args: +0 hsz2, +4 hsz1: -1, 0 or 1 as
+; hsz1's value is below, the same as or above hsz2's, which is how DDEML
+; compares them: one atom is one name, case aside (SPEC.md 124.25.26)
+W16TSK w16dd_cmp
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    sub ax, [es:bx]
+    jz .r
+    sbb ax, ax                      ; below: -1, above: 0 ...
+    or al, 1                        ;   ... then 1
+.r:
+    ret
+
+; THE WINDOW PROPERTIES (SPEC.md 124.25.13): a table of W16_NPROP records, a
+; window's HWND (0 = free), the name's atom and the HANDLE, in this part's
+; data beside the atoms. A string name is an atom of the table above, found
+; as GlobalFindAtom finds it (case aside); a name with no segment is its own
+; atom. They go with the window (w16_cargone, in DestroyWindow's path).
+;
+; w16i_pkey - ES:DI = a property's name, AL = 1 to add it to the atoms: AX =
+; its atom, 0 for none. DX = 0. Keeps the rest
+w16i_pkey:
+    mov dx, es
+    or dx, dx
+    jnz w16i_atomat
+    mov ax, di
+    ret
+
+; SetProp (USER.26) - args: +0 hData, +2 lpszString, +6 hWnd. TRUE; FALSE for
+; a window that is not one, a name the atoms have no room for or a full table
+W16TSK w16i_setprop
+    push si
+    push di
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov si, [es:bx + 6]
+    les di, [es:bx + 2]
+    mov ax, si
+    ICALL w16_hwnd2rec
+    jc .fail
+    mov al, 1
+    call w16i_pkey
+    or ax, ax
+    jz .fail
+    push ds
+    W16SEG ds, [w16_tseg]
+    mov bx, w16i_props
+    xor di, di                      ; DI = the first free record
+    mov dx, W16_NPROP
+.s:
+    cmp word [bx], 0
+    jne .used
+    or di, di
+    jnz .n
+    mov di, bx
+    jmp short .n
+.used:
+    cmp [bx], si
+    jne .n
+    cmp [bx + 2], ax
+    je .set
+.n:
+    add bx, 6
+    dec dx
+    jnz .s
+    mov bx, di
+    or bx, bx
+    jz .full
+    mov [bx], si
+    mov [bx + 2], ax
+.set:
+    mov [bx + 4], cx
+    mov ax, 1
+    jmp short .out
+.full:
+    xor ax, ax
+.out:
+    pop ds
+    jmp short .ret
+.fail:
+    xor ax, ax
+.ret:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; GetProp (USER.25) - args: +0 lpszString, +4 hWnd: the HANDLE, 0 for none.
+; RemoveProp (USER.24) - the same, and the property is gone
+W16TSK w16i_getprop
+    xor cx, cx
+    jmp short w16i_prop
+W16TSK w16i_remprop
+    mov cx, 1
+w16i_prop:
+    push si
+    push di
+    push cx
+    ICALL w16_args
+    mov si, [es:bx + 4]
+    les di, [es:bx]
+    xor ax, ax
+    call w16i_pkey
+    pop cx
+    or ax, ax
+    jz .none
+    push ds
+    W16SEG ds, [w16_tseg]
+    mov bx, w16i_props
+    mov dx, W16_NPROP
+.s:
+    cmp [bx], si
+    jne .n
+    cmp [bx + 2], ax
+    je .hit
+.n:
+    add bx, 6
+    dec dx
+    jnz .s
+    pop ds
+.none:
+    xor ax, ax
+    jmp short .out
+.hit:
+    mov ax, [bx + 4]
+    jcxz .keep
+    mov word [bx], 0
+    mov word [bx + 2], 0
+.keep:
+    pop ds
+.out:
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+; EnumProps (USER.27) - args: +0 lpEnumFunc, +4 hWnd. The callback for each
+; of the window's properties, (hwnd, lpszString, hData), until one answers
+; FALSE: a string-named property's name is a far pointer to a copy of the
+; string on the program's stack, an atom-named one's the atom in the low
+; word and 0 in the high, as Windows gives them. AX = the callback's last
+; answer, -1 when the window has none
+W16TSK w16i_enumprops
+    xor cx, cx
+    mov ax, -1
+w16i_epgo:                          ; CX = the record to try from, AX = the
+    push si                         ;   answer if no record is left
+    push di
+    push ax
+    ICALL w16_args
+    mov dx, [es:bx + 4]             ; the window
+    push ds
+    W16SEG ds, [w16_tseg]
+.rec:
+    cmp cx, W16_NPROP
+    jae .done
+    mov si, cx
+    shl si, 1
+    add si, cx
+    shl si, 1                       ; * 6
+    add si, w16i_props
+    cmp [si], dx
+    jne .next
+    mov ax, [si + 2]
+    or ax, ax
+    jnz .take
+.next:
+    inc cx
+    jmp short .rec
+.take:
+    mov di, [si + 4]
+    pop ds
+    pop si                          ; (the answer: there is a record)
+    ICALL w16_args                  ; (before cbopen moves the frame)
+    push word [es:bx + 2]           ; the function
+    push word [es:bx]
+    push dx                         ; the window
+    push di                         ; the HANDLE
+    mov si, ax
+    sub si, 0xC000                  ; SI = a string atom's index
+    push ax                         ; the atom
+    mov ax, cx                      ; the next record, the continuation's word
+    inc ax
+    xor cx, cx                      ; an atom's name takes no room...
+    cmp si, W16_NATOM
+    jae .open
+    mov cl, 32                      ; ...a string's, a copy of it
+.open:
+    push si
+    mov si, w16i_epnext_c
+    ICALL w16_cbopen                ; ES:DI = the room (the program's stack)
+    pop si
+    pop bx                          ; BX = the name's offset: the atom...
+    xor ax, ax                      ; ...AX its segment, 0
+    cmp si, W16_NATOM
+    jae .name
+    mov bx, di                      ; ...or the copy, at ES:DI
+    mov cl, 5
+    shl si, cl
+    add si, w16i_atoms
+    push ds
+    W16SEG ds, [w16_tseg]
+    mov cx, 16
+    cld
+    rep movsw
+    pop ds
+    mov ax, es
+.name:
+    pop di                          ; the HANDLE
+    pop cx                          ; the window
+    xchg ax, cx
+    ICALL w16_ppush                 ; pascal: hwnd,
+    mov ax, cx
+    ICALL w16_ppush                 ;   the name's segment,
+    mov ax, bx
+    ICALL w16_ppush                 ;   its offset,
+    mov ax, di
+    ICALL w16_ppush                 ;   then hData
+    pop ax
+    pop dx
+    ICALL w16_cbcall
+    pop di
+    pop si
+    ret
+.done:
+    pop ds
+    pop ax
+    xor dx, dx
+    pop di
+    pop si
+    ret
+
+TCONT w16i_epnext
+    or ax, ax
+    jnz w16i_epgo
+    xor dx, dx
+    ret
+
+; w16i_propgone - AX = a window being destroyed: its properties go with it.
+; Keeps every register
+w16i_propgone:
+    push ds
+    push bx
+    push cx
+    W16SEG ds, [w16_tseg]
+    mov bx, w16i_props
+    mov cx, W16_NPROP
+.l:
+    cmp [bx], ax
+    jne .n
+    mov word [bx], 0
+    mov word [bx + 2], 0
+.n:
+    add bx, 6
+    loop .l
+    pop cx
+    pop bx
+    pop ds
+    ret
+
+
 w16i_atoms: times W16_NATOM * 32 db 0
+w16i_props: times W16_NPROP * 6 db 0
 
 ; w16i_up - AL upper-cased, as AnsiUpper does: a-z, and the accented letters
 ; E0h-FEh but F7h. Keeps the rest
@@ -989,10 +1408,9 @@ w16i_icon:
     pop cx
     jc .out
     mov al, [bx + W16W_CLS]         ; its class's icon
-    mov ah, W16C_SIZE
-    mul ah
+    ICALL w16_clsget
     mov si, ax
-    mov ax, [si + w16_cls + W16C_ICON]
+    mov ax, [si + W16C_ICON]
     or ax, ax
     jnz .draw
     push ax                         ; none: a program's own child paints
@@ -3877,6 +4295,183 @@ W16TSK w16i_dumpicon
     cwd
     ret
 
+; =============================================================================
+; What Visual Basic 3.0's runtime imports of KERNEL and USER (SPEC.md 124.25.15)
+; =============================================================================
+
+; GetCurrentPDB (KERNEL.37) - no args: the program's PSP, as its InitTask
+; was given it (SPEC.md 124.25.15). A word; DX is cleared.
+W16TSK w16k_curpdb
+    W16PSP
+    xor dx, dx
+    ret
+
+; SetHandleCount (KERNEL.199) - args: +0 wNumber, not read. The answer is
+; the size of the handle table, as Windows' is (its PSP's, never below the
+; 20 a PSP starts with, so an ask under it gets more than it asked): here the
+; one table WIN16's DOS has, the five devices and DOS_NFH = 8 files
+; (apps/dos/dos.asm). VBRUN300's own Windows 3.0 path reads the PSP's table
+; size the same way (SPEC.md 124.25.15)
+W16_NHANDLE equ 13
+W16TSK w16k_sethcount
+    mov ax, W16_NHANDLE
+    xor dx, dx
+    ret
+
+; GetCodeHandle (KERNEL.93) - args: +0 lpProc. The handle of the block the
+; function's segment is, GlobalHandle's answer for it; a segment in a
+; program's own claim is no block of the global heap, and there (as in real
+; mode Windows, where a fixed segment's handle IS its segment) the answer is
+; the segment itself (SPEC.md 124.25.15). The frame's offset word is put over
+; with the segment so that GlobalHandle (w16k_ghandle) reads it as its own
+; argument; the gate pops the frame whole afterwards
+W16TSK w16k_codehandle
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+%ifdef PKG_MEGA
+    ICALL w16_touch                 ; a discarded code segment loads (124.26.12)
+%endif
+    mov [es:bx], ax
+    ICALL w16k_ghandle              ; AX = the handle, 0 not a block of ours
+    or ax, ax
+    jnz .out
+    ICALL w16_args
+    mov ax, [es:bx + 2]
+.out:
+    xor dx, dx
+    ret
+
+; =============================================================================
+; A class's words and longs (SPEC.md 124.25.15)
+; =============================================================================
+
+; GetClassWord (USER.129), GetClassLong (USER.131) - args: +0 nIndex, +2
+; hWnd. The class of a window the program registered, by Windows' GCW_ and
+; GCL_ indices; the answer is the same for both, a long's DX being 0 for a
+; word. cbClsExtra is 0 (RegisterClass keeps none, as GetClassInfo says),
+; so a class extra word reads 0, as do the cursor and every index not
+; listed here; a window of WIN16's own control classes has no record, and 0.
+GCW_STYLE      equ -26
+GCL_WNDPROC    equ -24
+GCW_CBWNDEXTRA equ -18
+GCW_HMODULE    equ -16
+GCW_HICON      equ -14
+GCW_HBRBACK    equ -10
+GCL_MENUNAME   equ -8
+GCW_ATOM       equ -32
+W16TSK w16u_getclsw
+    push si
+    ICALL w16_args
+    mov cx, [es:bx]
+    mov ax, [es:bx + 2]
+    ICALL w16_hwnd2rec              ; BX = its record; keeps CX
+    jc .zero
+    mov al, [bx + W16W_CLS]         ; the program's classes, a superclass's
+    cmp al, 0xFF                    ;   control among them (124.25.18)
+    je .zero
+    ICALL w16_clsget
+    mov si, ax
+    xor dx, dx
+    cmp cx, GCW_STYLE
+    jne .n1
+    mov ax, [si + W16C_STYLE]
+    jmp short .out
+.n1:
+    cmp cx, GCL_WNDPROC
+    jne .n2
+    mov ax, [si + W16C_PROC]
+    mov dx, [si + W16C_PROC + 2]
+    jmp short .out
+.n2:
+    cmp cx, GCW_CBWNDEXTRA
+    jne .n3
+    mov ax, [si + W16C_WEXTRA]
+    jmp short .out
+.n3:
+    cmp cx, GCW_HMODULE
+    jne .n4
+    mov ax, [w16_dgroup]
+    jmp short .out
+.n4:
+    cmp cx, GCW_HICON
+    jne .n5
+    mov ax, [si + W16C_ICON]
+    jmp short .out
+.n5:
+    cmp cx, GCW_HBRBACK
+    jne .n6
+    mov ax, [si + W16C_HBR]
+    jmp short .out
+.n6:
+    cmp cx, GCL_MENUNAME
+    jne .n7
+    mov ax, [si + W16C_MENU]
+    mov dx, [si + W16C_MENU + 2]
+    jmp short .out
+.n7:
+    cmp cx, GCW_ATOM
+    jne .zero
+    mov al, [w16_cbi]               ; the atom GetClassInfo takes: 0C000h
+    xor ah, ah                      ;   and the class's index
+    add ax, 0xC000
+    jmp short .out
+.zero:
+    xor ax, ax
+    cwd
+.out:
+    pop si
+    ret
+
+; EndMenu (USER.187) - no args. A menu loop that is running (a bar's, a
+; popup's, the system menu's) is ended as a click outside it ends it; with
+; none running it does nothing. The library part's w16_mstop does it, so it
+; stays out of that part, which has no room to spare (SPEC.md 124.25.15)
+W16TSK w16u_endmenu
+    cmp byte [w16_mtrk], 0
+    je .no
+    push si
+    push di
+    SLCALL w16_mstop
+    pop di
+    pop si
+.no:
+    ret
+
+; CreateIcon (USER.407) - args: +0 lpXORbits, +4 lpANDbits, +8 nBitsPixel,
+; +10 nPlanes, +12 nHeight, +14 nWidth, +16 hInstance. The same icon, made
+; from the same device bits: CreateCursorIconIndirect's own body, entered
+; with the CURSORICONINFO's fields worked out here - a row of one plane is
+; ((nWidth * nBitsPixel + 15) / 16) words (SPEC.md 124.25.15)
+W16TSK w16i_createicon
+    push si
+    push di
+    push es
+    ICALL w16_args
+    mov cx, [es:bx + 14]
+    mov [cs:w16i_iw], cx
+    mov ax, [es:bx + 12]
+    mov [cs:w16i_ih], ax
+    mov ax, [es:bx + 10]            ; AL = planes
+    mov ah, [es:bx + 8]             ; AH = bits a pixel
+    mov [cs:w16i_ipb], ax
+    mov al, ah
+    xor ah, ah
+    mul cx                          ; DX:AX = a plane's row in bits
+    add ax, 15
+    mov cl, 4
+    shr ax, cl
+    shl ax, 1
+    mov [cs:w16i_iwb], ax
+    mov ax, [es:bx]
+    mov [cs:w16i_ixo], ax
+    mov ax, [es:bx + 2]
+    mov [cs:w16i_ixs], ax
+    mov ax, [es:bx + 4]
+    mov [cs:w16i_iao], ax
+    mov ax, [es:bx + 6]
+    mov [cs:w16i_ias], ax
+    jmp w16i_cichk
+
 ; CreateCursorIconIndirect (USER.408) - args: +0 lpXORbits, +4 lpANDbits,
 ; +8 lpCursorInfo, +12 hInst. An icon WIN16 can draw: a global block holding
 ; it as an RT_ICON image - a 40-byte header, sixteen colours, 4 bits a pixel
@@ -3909,6 +4504,7 @@ W16TSK w16i_cursorind
     mov [cs:w16i_iao], ax
     mov ax, [es:bx + 6]
     mov [cs:w16i_ias], ax
+w16i_cichk:                         ; CreateIcon (above) joins here
     mov ax, [cs:w16i_iw]
     dec ax
     cmp ax, 63

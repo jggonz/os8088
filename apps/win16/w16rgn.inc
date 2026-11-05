@@ -42,7 +42,8 @@ W16SYS w16g_setbmbits
     jc .none
     mov [w16_scratch], cx           ; bytes left to take
     mov bp, si                      ; BP = where they began
-    mov dx, [w16b_h + bx]
+    call w16_bmcaps                 ; (a tiled bitmap: the first tile's rows,
+    mov dx, ax                      ;   SPEC.md 124.25.17)
     mov [w16_scratch + 2], dx       ; rows to go
     xor di, di                      ; DI = the row in the bitmap
     cmp byte [w16b_mono + bx], 0
@@ -484,15 +485,157 @@ W16SYS w16g_getdibits
     pop si
     ret
 
+; -----------------------------------------------------------------------------
+; A TILED bitmap (SPEC.md 124.25.17): past W16_BMMAX, one fixed block of the
+; global heap cut into tiles of 65535 / stride rows, each 64KB (1000h
+; paragraphs) after the last, so no row straddles two and the next tile is
+; the block's paragraph + 1000h on both arms. Part 9's, out of the library
+; part's 64KB: w16_bmnew's .huge comes here first, which fetches the part,
+; and the part stays until the program ends, so every later call finds it.
+; -----------------------------------------------------------------------------
+
+; w16_bmtrow - BX = bitmap slot * 2 -> AX = the rows a tile holds. Keeps all
+; but AX
+w16_bmtrow:
+    push dx
+    mov ax, 0xFFFF
+    xor dx, dx
+    div word [w16b_str + bx]
+    pop dx
+    ret
+
+; w16_bmrps - w16_bmrp, here: AX = a row, BX = bitmap slot * 2 -> AX = its
+; byte offset, DX = the segment (the arm: the virtual paragraph) it is in.
+; Keeps all but AX and DX
+w16_bmrps:
+    test byte [w16b_mono + bx + 1], 2
+    jnz .tiled
+    mul word [w16b_str + bx]
+    mov dx, [w16b_seg + bx]
+    ret
+.tiled:
+    push cx
+    xchg ax, cx                     ; CX = the row
+    call w16_bmtrow
+    xchg ax, cx                     ; AX = the row, CX = rows a tile
+    xor dx, dx
+    div cx                          ; AX = its tile, DX = its row in it
+    xchg ax, dx
+    push dx
+    mul word [w16b_str + bx]        ; AX = the offset in the tile
+    pop dx
+    mov cl, 12
+    shl dx, cl                      ; the tile's paragraphs in
+    add dx, [w16b_seg + bx]
+    pop cx
+    ret
+
+; w16_bmcaps - w16_bmcap, here: BX = bitmap slot * 2 -> AX = the rows one
+; tile holds, at most the bitmap's. Keeps all but AX
+w16_bmcaps:
+    call w16_bmtrow
+    test byte [w16b_mono + bx + 1], 2
+    jz .h
+    cmp ax, [w16b_h + bx]
+    jbe .out
+.h:
+    mov ax, [w16b_h + bx]
+.out:
+    ret
+
+; w16_bmhuge - w16_bmnew's .huge: slot BX, its w16b_w, w16b_h and w16b_str
+; written -> CF=0 AX = the handle; CF=1 AX = 1 the heap is short, 0 too large.
+; ONE fixed block, (tiles - 1) x 64KB + the last tile's bytes, zeroed by
+; w16_gnew (black: CBLACK in both halves) through the arm's walk descriptor,
+; which holds no LDT entry past the call. Keeps all but AX
+w16_bmhuge:
+    push cx
+    push dx
+    call w16_bmtrow
+    mov cx, ax
+    mov ax, [w16b_h + bx]
+    xor dx, dx
+    div cx                          ; AX = the whole tiles, DX = rows beyond
+    xchg ax, dx
+    push dx
+    mul word [w16b_str + bx]        ; AX = the last tile's bytes (DX = 0)
+    pop dx                          ; DX:AX = whole tiles x 64KB + that
+    cmp dx, 15                      ; (w16_gnew's arena: under 1023KB)
+    jae .big
+    mov cl, GMEM_ZEROINIT
+    ICALL w16_gnew                  ; AX = the handle, DX = the segment
+    or ax, ax
+    mov ax, 1
+    stc
+    jz .out
+    mov byte [w16b_mono + bx + 1], 2
+    mov [w16b_seg + bx], dx
+    lea ax, [bx + W16_BMP0]
+    clc
+    jmp short .out
+.big:
+    xor ax, ax
+    stc
+.out:
+    pop dx
+    pop cx
+    ret
+
+; w16_bmtiles - w16_bmcopy's for a tiled source on a byte: one BLIT4 a tile,
+; the source's rows from [w16b_sy], to the screen rect [w16_rl..rr] x
+; [w16_rt..rb], BX = the slot, BP = the stride. Takes AX, CX, DX, SI, ES
+w16_bmtiles:
+    mov ax, [w16b_sy]
+    mov [w16b_ty], ax               ; the next source row
+    mov ax, [w16_rt]
+    mov [w16b_tdy], ax              ; ...and the screen row it lands on
+.tile:
+    mov ax, [w16b_ty]
+    call w16_bmrps                  ; AX = the offset, DX = the tile's segment
+    mov si, [w16b_sx]
+    shr si, 1
+    add si, ax
+    W16SEG es, dx
+    call w16_bmtrow
+    mov cx, ax
+    mov ax, [w16b_ty]
+    xor dx, dx
+    div cx                          ; DX = its row in the tile
+    sub cx, dx                      ; CX = rows left in the tile
+    mov dx, [w16_rb]
+    sub dx, [w16b_tdy]
+    inc dx                          ; DX = screen rows still to draw
+    cmp dx, cx
+    jbe .tl
+    mov dx, cx
+.tl:
+    push dx
+    mov ax, [w16_rl]
+    mov cx, [w16_rr]
+    sub cx, ax
+    inc cx
+    push bx
+    mov bx, [w16b_tdy]
+    call OSAPI_GFX_BLIT4
+    pop bx
+    pop dx
+    add [w16b_tdy], dx
+    add [w16b_ty], dx
+    mov ax, [w16b_tdy]
+    cmp ax, [w16_rb]
+    jle .tile
+    ret
+
 ; w16_gdrow - bitmap [w16_gdslot]'s row DX at ES:DI in [w16_gdbpp] bits a
 ; pixel, [w16_gdstr] bytes; DI past it. Keeps all but AX, CX, DX, SI.
 w16_gdrow:
     push bx
     push bp
     mov bx, [w16_gdslot]
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.17)
     mov si, ax                      ; SI = the row in the bitmap
+    mov [w16_gdseg], dx             ; ...and the segment it is in
     mov bp, di
     add bp, [w16_gdstr]             ; BP = where the row ends
     xor dx, dx                      ; DX = the pixel
@@ -506,7 +649,7 @@ w16_gdrow:
     shr dx, 1
     pushf
     add si, dx
-    W16SEG ds, [w16b_seg + bx]
+    W16SEG ds, [w16_gdseg]
     mov al, [si]
     popf
     pop dx
@@ -608,7 +751,13 @@ w16_gdrow:
 ; asked. TRUE, or FALSE when the point is not one to fill, the brush is not
 ; one colour, or the screen could not be read back.
 ; -----------------------------------------------------------------------------
+W16SYS w16g_flood
+    mov byte [w16_fsh], 2           ; FloodFill (GDI.25): crColor, y, x, hDC -
+    jmp short w16g_xflood.in        ;   ExtFloodFill's, FLOODFILLBORDER, less
+                                    ;   the type word
 W16SYS w16g_xflood
+    mov byte [w16_fsh], 0
+.in:
     push si
     push di
     push bp
@@ -619,8 +768,15 @@ W16SYS w16g_xflood
     mov ax, [w16_mbm]
     mov [w16_fbm], ax
     ICALL w16_args
+    xor al, al
+    cmp byte [w16_fsh], 0
+    jne .fb
     mov al, [es:bx]
+.fb:
     mov [w16_fmode], al
+    mov dl, [w16_fsh]
+    xor dh, dh
+    sub bx, dx                      ; FloodFill's words sit 2 nearer
     mov ax, [es:bx + 2]
     mov dl, [es:bx + 4]
     ICALL w16_rgb2col
@@ -644,6 +800,9 @@ W16SYS w16g_xflood
     mov [w16_fcol], al
 .seed:
     ICALL w16_args
+    mov dl, [w16_fsh]
+    xor dh, dh
+    sub bx, dx
     mov ax, [es:bx + 8]
     add ax, [w16_ox]
     mov dx, [es:bx + 6]
@@ -746,14 +905,15 @@ w16r_can:
     push es
     mov bx, [w16_fbm]
     push ax
-    mov ax, [w16b_str + bx]
-    mul dx
+    mov ax, dx
+    call w16_bmrps                  ; (a tiled row: SPEC.md 124.25.17)
+    mov [w16_gdseg], dx
     mov dx, ax
     pop ax
     shr ax, 1                       ; CF = a low nibble
     pushf
     add ax, dx
-    W16SEG es, [w16b_seg + bx]
+    W16SEG es, [w16_gdseg]
     mov bx, ax
     mov al, [es:bx]
     popf
@@ -1106,6 +1266,78 @@ w16_rgnbx:
     ret
 .no:
     stc
+    ret
+
+; GetUpdateRgn (USER.237) - args: +0 bErase, +2 hRgn, +4 hWnd. The window's
+; invalid rectangle, in its client and cut to it, put into the region (a
+; region is its bounding rectangle here): SIMPLEREGION, or NULLREGION and an
+; empty region when nothing is invalid; ERROR (0) for a window or region that
+; is not one. bErase is not acted on, as GetUpdateRect's is not (SPEC.md
+; 124.25.15)
+W16SYS w16g_getupdrgn
+    push si
+    push di
+    ICALL w16_args
+    mov ax, [es:bx + 4]
+    mov di, [es:bx + 2]             ; DI = the region
+    ICALL w16_hwnd2rec              ; BX = the window's record
+    jc .err
+    push bx
+    mov ax, di
+    call w16_rgnbx                  ; BX = its rectangle in w16_orgn
+    pop si                          ; SI = the record
+    jc .err
+    mov di, bx
+    test byte [si + W16W_FLAGS], W16WF_INVAL
+    jz .null
+    mov bx, si
+    ICALL w16_csize                 ; CX, DX = the client
+    mov ax, [si + W16W_UR]
+    cmp ax, cx
+    jle .r
+    mov ax, cx
+.r:
+    mov cx, ax                      ; CX = right
+    mov ax, [si + W16W_UB]
+    cmp ax, dx
+    jle .b
+    mov ax, dx
+.b:
+    mov dx, ax                      ; DX = bottom
+    mov ax, [si + W16W_UL]
+    or ax, ax
+    jge .l
+    xor ax, ax
+.l:
+    mov bx, [si + W16W_UT]
+    or bx, bx
+    jge .t
+    xor bx, bx
+.t:
+    cmp ax, cx
+    jge .null
+    cmp bx, dx
+    jge .null
+    mov [w16_orgn + di], ax
+    mov [w16_orgn + di + 2], bx
+    mov [w16_orgn + di + 4], cx
+    mov [w16_orgn + di + 6], dx
+    mov ax, SIMPLEREGION
+    jmp short .out
+.null:
+    xor ax, ax
+    mov [w16_orgn + di], ax
+    mov [w16_orgn + di + 2], ax
+    mov [w16_orgn + di + 4], ax
+    mov [w16_orgn + di + 6], ax
+    mov ax, NULLREGION
+    jmp short .out
+.err:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop di
+    pop si
     ret
 
 ; w16_rgnnull - BX = a rectangle's offset in w16_orgn: CF=1 it is empty.
@@ -1855,8 +2087,8 @@ w16_palobj:
     call w16_palseg
     jc .stock
     push es
-    mov es, dx
-    mov dx, [es:0]
+    W16SEG es, dx                   ; (a virtual paragraph on the arm: the
+    mov dx, [es:0]                  ;   block w16_gnew made, not a selector)
     pop es
     jmp short .put
 .stock:
@@ -1967,7 +2199,7 @@ W16SYS w16g_getpalent
     mov si, [es:bx + 6]
     les di, [es:bx]
     push ds
-    mov ds, dx
+    W16SEG ds, dx
     mov ax, [0]                     ; the entries it has
     mov dx, es
     or dx, di
@@ -2013,7 +2245,7 @@ W16SYS w16g_nearpal
     ICALL w16_args                  ; (w16_palseg answered in BX)
     mov cx, [es:bx]                 ; CL = red, CH = green, AH = blue
     mov ah, [es:bx + 2]
-    mov es, dx
+    W16SEG es, dx
     mov bx, 0xFFFF                  ; BX = the best distance, DX its entry
     xor dx, dx
     xor di, di
@@ -2115,6 +2347,94 @@ w16u_fsr:
     mov ax, dx
 .out:
     xor dx, dx
+    ret
+
+; -----------------------------------------------------------------------------
+; The calls Visual Basic 3.0 imports (SPEC.md 124.25.14)
+; -----------------------------------------------------------------------------
+
+; OffsetWindowOrg (GDI.15) - args: +0 y, +2 x, +4 hDC: SetWindowOrg of the
+; origin plus the offsets, so the answer is the old one
+W16SYS w16g_offworg
+    ICALL w16_args
+    mov ax, [w16_worg]
+    add [es:bx + 2], ax
+    mov ax, [w16_worg + 2]
+    add [es:bx], ax
+    SLCALL w16g_setworg
+    ret
+
+; SetRectRgn (GDI.172) - args: +0 bottom, +2 right, +4 top, +6 left, +8 hRgn:
+; the region's rectangle replaced. TRUE, FALSE for a handle that is no region
+W16SYS w16g_setrectrgn
+    push si
+    ICALL w16_args
+    mov si, bx
+    mov ax, [es:si + 8]
+    call w16_rgnbx
+    jc .no
+    mov ax, [es:si + 6]
+    mov [w16_orgn + bx], ax
+    mov ax, [es:si + 4]
+    mov [w16_orgn + bx + 2], ax
+    mov ax, [es:si + 2]
+    mov [w16_orgn + bx + 4], ax
+    mov ax, [es:si]
+    mov [w16_orgn + bx + 6], ax
+    mov ax, 1
+    jmp short .out
+.no:
+    xor ax, ax
+.out:
+    xor dx, dx
+    pop si
+    ret
+
+; CreatePenIndirect (GDI.62) - args: +0 lpLogPen {style, width x, width y,
+; colour}: CreatePen's {colour, width, style} built in the band, which nothing
+; else is using between two calls
+W16SYS w16g_penind
+    push si
+    ICALL w16_args
+    les si, [es:bx]
+    mov ax, [es:si + 6]
+    mov [w16_gbuf], ax
+    mov ax, [es:si + 8]
+    mov [w16_gbuf + 2], ax
+    mov ax, [es:si + 2]
+    mov [w16_gbuf + 4], ax
+    mov ax, [es:si]
+    mov [w16_gbuf + 6], ax
+    push ds
+    pop es
+    mov bx, w16_gbuf
+    ICALL w16g_createpen.body
+    xor dx, dx
+    pop si
+    ret
+
+; CreateBrushIndirect (GDI.50) - args: +0 lpLogBrush {style, colour, hatch}
+BS_NULL equ 1
+W16SYS w16g_brind
+    push si
+    ICALL w16_args
+    les si, [es:bx]
+    cmp word [es:si], BS_NULL
+    jne .solid
+    mov ax, W16_STOCK + 5           ; NULL_BRUSH
+    jmp short .out
+.solid:
+    mov ax, [es:si + 2]
+    mov [w16_gbuf], ax
+    mov ax, [es:si + 4]
+    mov [w16_gbuf + 2], ax
+    push ds
+    pop es
+    mov bx, w16_gbuf
+    ICALL w16g_solidbrush.body
+.out:
+    xor dx, dx
+    pop si
     ret
 
 section .text

@@ -2,7 +2,10 @@
  * S18): a program with libraries of its own. It imports W16DLL.DLL by name
  * (DllBump) and by ordinal (DllCount, DllStarted - tests/win16/dlluse.wlk),
  * reaches it again through GetModuleHandle and GetProcAddress, then loads
- * W16DLL2.DLL, which imports W16DLL as well, and frees it.
+ * W16DLL2.DLL, which imports W16DLL as well, and frees it. W16DLL3.DLL is
+ * found only by a full path, in LIBS\ below the program's folder (SPEC.md
+ * 124.25.22), and the Windows 3.1 hooks are bound by name out of USER and
+ * set, called on and unhooked through those pointers, as CTL3D.DLL does.
  *
  * Its MessageBox is "DLLUSE OK" or names each check that failed; the row
  * win16dll reads it off the program's stack.
@@ -16,6 +19,10 @@ int FAR PASCAL DllStarted(void);
 
 typedef int (FAR PASCAL *BUMPPROC)(int);
 typedef int (FAR PASCAL *VOIDPROC)(void);
+typedef HHOOK (FAR PASCAL *SETHOOKEX)(int, HOOKPROC, HINSTANCE, HTASK);
+typedef BOOL (FAR PASCAL *UNHOOKEX)(HHOOK);
+typedef LRESULT (FAR PASCAL *NEXTHOOKEX)(HHOOK, int, WPARAM, LPARAM);
+static HHOOK cbt;
 
 static char res[256];
 static int fails;
@@ -29,12 +36,25 @@ static void check(int ok, const char *tag)
     }
 }
 
+/* never called by WIN16 (124.25.22); Windows would, for each CBT event
+ * while it is set */
+LRESULT FAR PASCAL _export CbtProc(int code, WPARAM wp, LPARAM lp)
+{
+    return CallNextHookEx(cbt, code, wp, lp);
+}
+
 int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
 {
     HINSTANCE h, h2, h3;
+    HMODULE hu;
     BUMPPROC bump;
     VOIDPROC count, two;
+    SETHOOKEX setex;
+    UNHOOKEX unex;
+    NEXTHOOKEX nextex;
+    FARPROC cbtp;
     char path[80];
+    HFILE f;
     int n;
 
     check(DllStarted() == 0x5A, "libmain");
@@ -51,6 +71,12 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(GetProcAddress(h, "NoSuchProc") == NULL, "procnone");
     n = GetModuleFileName(h, path, sizeof path);
     check(n > 10 && strcmp(path + n - 10, "W16DLL.DLL") == 0, "filename");
+    /* the folder it was found in (124.23.1.1), which is not the program's
+     * when it is in the Windows or system directory */
+    f = _lopen(path, OF_READ);
+    check(f != HFILE_ERROR, "filepath");
+    if (f != HFILE_ERROR)
+        _lclose(f);
     check(GetModuleUsage(h) == 1, "usage1");
 
     h2 = LoadLibrary("W16DLL2.DLL");
@@ -69,6 +95,39 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         check(GetModuleUsage(h) == 1, "usagefree");
     }
     check(LoadLibrary("NOSUCH.DLL") == 2, "nofile");
+
+    /* a full path (124.25.22): LIBS\ below the program's own folder is
+     * none of the three a plain name is looked for in */
+    check(LoadLibrary("W16DLL3.DLL") == 2, "nopath");
+    n = GetModuleFileName(inst, path, sizeof path - 20);
+    while (n > 0 && path[n - 1] != '\\')
+        n--;
+    check(n >= 3 && path[1] == ':', "exepath");
+    strcpy(path + n, "libs/w16dll3.dll");   /* case and '/' do not matter */
+    h3 = LoadLibrary(path);
+    check(h3 >= 32, "fullpath");
+    if (h3 >= 32) {
+        count = (VOIDPROC)GetProcAddress(h3, "DLL3MAGIC");
+        check(count != NULL && count() == 0x3D3D, "fullproc");
+        FreeLibrary(h3);
+    }
+
+    /* CTL3D's start-up on 3.10 (124.25.22): the hooks by name, through
+     * GetProcAddress, and a round trip through the pointers */
+    hu = GetModuleHandle("USER");
+    setex = (SETHOOKEX)GetProcAddress(hu, "SetWindowsHookEx");
+    unex = (UNHOOKEX)GetProcAddress(hu, "UnhookWindowsHookEx");
+    nextex = (NEXTHOOKEX)GetProcAddress(hu, "CallNextHookEx");
+    check(setex != NULL && unex != NULL && nextex != NULL, "hookname");
+    check((FARPROC)setex == GetProcAddress(hu, "SETWINDOWSHOOKEX"), "hookcase");
+    if (setex != NULL && unex != NULL && nextex != NULL) {
+        cbtp = MakeProcInstance((FARPROC)CbtProc, inst);
+        cbt = setex(WH_CBT, (HOOKPROC)cbtp, inst, GetCurrentTask());
+        check(cbt != NULL, "sethookex");
+        check(nextex(cbt, 0, 0, 0) == 0, "callnext");
+        check(unex(cbt), "unhookex");
+        FreeProcInstance(cbtp);
+    }
 
     if (fails == 0)
         strcpy(res, "DLLUSE OK");

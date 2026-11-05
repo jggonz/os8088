@@ -321,8 +321,13 @@ w16_dcpark:
 ; a callback holds it) and the clip again, the window's as it is now - it may
 ; have moved, or been covered, while the program waited. A BeginPaint DC's
 ; clip is the whole client then. The rest of its state is kept, an
-; IntersectClipRect's cut excepted. Keeps every register.
+; IntersectClipRect's cut excepted. Keeps every register. On the arm the
+; stack a BIOS call runs on and the #NP handler are asked for again first
+; (w16_lend): this is the one door into every run of the program.
 w16_dcunpark:
+%ifdef PKG_MEGA
+    call w16_lend
+%endif
     cmp byte [w16_dcpkd], 0
     je .ret
     mov byte [w16_dcpkd], 0
@@ -1127,7 +1132,8 @@ w16_newobj:
 ; CreateSolidBrush (GDI.66) - args: +0 the COLORREF (red, green; blue)
 w16g_solidbrush:
     call w16_args
-    mov ax, [es:bx]
+.body:                              ; CreateBrushIndirect's way in (w16rgn.inc):
+    mov ax, [es:bx]                 ;   ES:BX -> the COLORREF
     mov dl, [es:bx + 2]
     call w16_rgb2col
     mov ah, W16K_BRUSH
@@ -1139,7 +1145,8 @@ w16g_solidbrush:
 W16_PENMAX  equ 64
 w16g_createpen:
     call w16_args
-    mov ax, [es:bx]
+.body:                              ; CreatePenIndirect's way in (w16rgn.inc):
+    mov ax, [es:bx]                 ;   ES:BX -> {COLORREF, width, style}
     mov dl, [es:bx + 2]
     call w16_rgb2col
     mov cx, [es:bx + 4]

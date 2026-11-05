@@ -30,6 +30,11 @@ W16_ARKEEP  equ 32              ; ...and the third leaves this much of the
 W16_ARKEEP  equ 96              ; ...on kern_mega the library part's 62 KB
 %endif                          ;   too: its fetch is conventional (124.31.1)
 W16_GH0     equ 0x0100          ; the first moveable global handle; + 2i
+%ifdef PKG_MEGA
+  %if W16_GH0 + 2 * W16_NGH != W16V_LO
+    %error "W16V_LO must be the end of the handle range (SPEC.md 124.31.3)"
+  %endif
+%endif
 W16_GHDISC  equ 2               ; [w16_ghf]: GMEM_DISCARDABLE (1 = in use)
 W16_GHNOTE  equ 4               ;   ...and GMEM_NOTIFY: discarded only when
                                 ;   GlobalNotify's procedure says so
@@ -45,6 +50,9 @@ GMEM_NOTIFY_HI      equ 0x40    ; GMEM_NOTIFY (0x4000), the same
 GH_SIZE   equ 0                 ; paragraphs, the header included
 GH_FLAGS  equ 2                 ; GHF_*
 GH_LOCK   equ 3
+%if GH_LOCK != GH_FLAGS + 1
+  %error "GlobalReAlloc copies GH_FLAGS and GH_LOCK as one word"
+%endif
 GH_HANDLE equ 4                 ; what GlobalAlloc answered for it
 GH_OWNER  equ 6                 ; a resource's entry offset (w16res.inc), or 0
 GH_MAGIC  equ 8
@@ -378,7 +386,7 @@ w16_garena:
     jnc .got1
     pop cx                          ; the floor would not go: three
     push cx                         ;   quarters of it, and again, down to
-    cmp ax, cx                      ;   the request (the arm's map is 960
+    cmp ax, cx                      ;   the request (the arm's map is 1,012
     jbe .no1                        ;   KB, so a fourth arena is what it
     mov dx, ax                      ;   has left: halving left a third of
     shr dx, 1                       ;   that unused)
@@ -884,9 +892,8 @@ w16k_glock:
     xor ax, ax
     ret
 .null:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov cl, 2                       ; the DGROUP is a block too (124.9.2)
+    jmp w16_dgx
 
 ; GlobalUnlock (KERNEL.19) - args: +0 hMem. AX = the lock count left
 w16k_gunlock:
@@ -922,9 +929,8 @@ w16k_gsize:
     dec ax
     jmp short w16_p2b
 .zero:
-    xor ax, ax
-    xor dx, dx
-    ret
+    mov cl, 4
+    jmp w16_dgx
 
 ; w16_p2b - AX paragraphs -> DX:AX bytes. Clobbers CX
 w16_p2b:
@@ -956,9 +962,8 @@ w16k_ghandle:
 %endif
     ret
 .zero:
-    xor ax, ax
-    xor dx, dx
-    ret
+    xor cl, cl
+    jmp w16_dgx
 
 ; GlobalFlags (KERNEL.22) - args: +0 hMem. AX = the lock count, and
 ; GMEM_DISCARDED for a discarded handle
@@ -992,118 +997,14 @@ w16k_lockseg:
     mov bx, [w16_psp_]
     mov ax, [es:bx + W16F_DS]
 .out:
-    ret
-
 %ifdef PKG_MEGA
-; GetFreeSpace (KERNEL.169) - args: +0 wFlags. DX:AX = the largest run in an
-; arena, as GlobalCompact's, PLUS all of the heap's free memory outside
-; them: Windows answered a sum, not what one GlobalAlloc gets (SPEC.md
-; 124.25.1). InstallShield's launcher wants 700,000 bytes
-w16k_gspace:
-    push di
-    mov di, 1
-    jmp short w16k_gcomp1
+    jmp w16_touch                   ; a discarded code segment loads (124.26.12)
 %else
-w16k_gspace equ w16k_gcompact       ; real mode: the largest run (124.25.1)
+    ret
 %endif
 
-; GlobalCompact (KERNEL.25) - args: +0 dwMinFree. DX:AX = the largest block
-; GlobalAlloc could give now: a run in an arena of free blocks and code it
-; may discard (w16_gcan), or a new claim's
-w16k_gcompact:
-%ifdef PKG_MEGA
-    push di
-    xor di, di                      ; DI = 1: GetFreeSpace's
-w16k_gcomp1:
-%endif
-    push bx
-    push si
-    push es
-    xor cx, cx                      ; CX = the largest run, paragraphs
-    xor si, si
-.arena:
-    cmp si, 2 * W16_NARENA
-    jae .claims
-    mov ax, [w16_arena + si]
-    or ax, ax
-    jz .nexta
-    xor bx, bx                      ; BX = this run so far
-.blk:
-    cmp ax, [w16_arenae + si]
-    jae .nexta
-    W16WALK 0, es, ax
-    mov dx, [es:GH_SIZE]
-    call w16_gcan
-    jc .brk
-    add bx, dx
-    cmp bx, cx
-    jbe .skip
-    mov cx, bx
-    jmp short .skip
-.brk:
-    xor bx, bx
-.skip:
-    add ax, dx
-    jmp short .blk
-.nexta:
-    inc si
-    inc si
-    jmp short .arena
-.claims:
-%ifdef PKG_MEGA
-    or di, di                       ; GetFreeSpace: the heap's free memory,
-    jnz .room                       ;   whether or not a slot is free
-%endif
-    xor si, si                      ; a new arena only while a slot is free
-.free:                              ;   (SPEC.md 124.25.1)
-    cmp word [w16_arena + si], 0
-    je .room
-    inc si
-    inc si
-    cmp si, 2 * W16_NARENA
-    jb .free
-    xor ax, ax
-    jmp short .kb
-.room:
-    push bx
-    push cx
-    mov bl, MEMP_AVAIL
-    call OSAPI_MEM_P                ; AX = the largest claim, in PARAGRAPHS -
-%ifdef PKG_MEGA                     ;   what w16_garena is given to the
-    or di, di                       ;   paragraph (SPEC.md 50.3.7)
-    jz .cap
-    xchg ax, bx                     ; ...or BX, all of it, for GetFreeSpace
-.cap:
-%endif
-    pop cx
-    pop bx
-.kb:
-%ifdef PKG_MEGA
-    or di, di
-    jz .most
-    add cx, ax                      ; ...added to the largest run, at most
-    jnc .have                       ;   a megabyte
-    mov cx, 0xFFFF
-    jmp short .have
-.most:
-%endif
-    cmp ax, cx
-    jbe .have
-    mov cx, ax
-.have:
-    mov ax, cx
-    or ax, ax
-    jz .none
-    dec ax                          ; less the header
-.none:
-    call w16_p2b
-    pop es
-    pop si
-    pop bx
-%ifdef PKG_MEGA
-    pop di
-%endif
-    ret
+; GlobalCompact (KERNEL.25) and GetFreeSpace (KERNEL.169) are the system-library
+; part's (w16mem.inc's end, SPEC.md 124.25.1, *What GetFreeSpace says*)
 
 ; w16_gcan - ES = a block's header. CF=0 when GlobalAlloc can have its room:
 ; it is free, or a code segment that is not kept (SPEC.md 124.26.5). One in
@@ -1175,7 +1076,11 @@ w16k_grealloc:
     cmp ax, W16_GH0                 ;   discarded is all that changes here
     jb .out
     cmp ax, W16_GH0 + 2 * W16_NGH
-    jae .out
+%ifdef PKG_MEGA
+    jae .mfx
+%else
+    jae .out                        ; (a fixed one IS its handle)
+%endif
     mov si, ax
     sub si, W16_GH0
     and byte [w16_ghf + si], ~(W16_GHDISC | W16_GHNOTE)
@@ -1188,6 +1093,11 @@ w16k_grealloc:
 .mk:
     or [w16_ghf + si], cl
     jmp .out
+%ifdef PKG_MEGA
+.mfx:                               ; a fixed one: the handle as the program
+    mov ax, [es:bx + 6]             ;   passed it. W16POUT would read a block
+    jmp .dx                         ;   header before a DGROUP, which has none
+%endif                              ;   (SPEC.md 124.9.2)
 .size:
     add ax, 15
     adc dx, 0
@@ -1324,14 +1234,16 @@ w16k_grealloc:
     jnz .fail
 %else
     jz .unlocked
-    cmp byte [w16_pmonly], 0        ; ...or a protected-mode-only program's,
-    je .fail                        ;   whose selector follows it (w16_pblk,
-    test byte [es:GH_FLAGS], GHF_HND ;   w16s_gwin; SPEC.md 124.31.3)
-    jz .fail
+    cmp byte [w16_lkmove], 0        ; ...or with the selector it holds, for
+    je .fail                        ;   any program (w16_pblk, w16s_gwin;
+    test byte [es:GH_FLAGS], GHF_HND ;   SPEC.md 124.31.3), but not under a
+    jz .fail                        ;   heap grow whose DS would stay behind
 %endif
 .unlocked:
 %ifdef PKG_MEGA
-    W16VOF ax, es
+    SCALL w16s_mvpre                ; part 9 in BEFORE the copy, a moveable
+    jc .fail                        ;   block named by its selector moved as
+    W16VOF ax, es                   ;   its handle (124.31.3)
     mov [w16_gold], ax
 %else
     mov [w16_gold], es
@@ -1371,17 +1283,17 @@ w16k_grealloc:
     mov ax, [w16_gold]
     push es
     W16SEG es, ax
-    mov bl, [es:GH_FLAGS]
-    mov bh, [es:GH_LOCK]
+    mov bx, [es:GH_FLAGS]           ; (and GH_LOCK, the byte after)
     mov cx, [es:GH_OWNER]
-    pop es
+    mov dl, [es:GH_TASK]            ; the task whose end frees it, which
+    pop es                          ;   w16_gnew left as nobody's
     W16VOF ax, es
     dec ax
     push es
     W16SEG es, ax                      ; ES = the new header
-    mov [es:GH_FLAGS], bl
-    mov [es:GH_LOCK], bh
+    mov [es:GH_FLAGS], bx
     mov [es:GH_OWNER], cx
+    mov [es:GH_TASK], dl
     pop es
 %ifdef PKG_MEGA
     SCALL w16s_gwin                 ; ...and its handle descriptor, if any
@@ -1409,12 +1321,42 @@ w16k_grealloc:
     mov ax, dx
     jmp short .out
 .fail:
-    xor ax, ax
+    mov cl, 6                       ; the DGROUP is a block too (124.9.2)
+    call w16_dgx
+    jmp short .dx
 .out:
     W16POUT
+.dx:
     xor dx, dx
     pop di
     pop si
+    ret
+
+; w16_dgx - the Global calls' last resort: CL = 0 GlobalHandle, 2 GlobalLock,
+; 4 GlobalSize, 6 GlobalReAlloc (w16s_dgtab). A handle that is the running
+; program's DGROUP, as the program passed it, is answered by the
+; system-library part (SPEC.md 124.9.2), with ES:BX at that argument; any
+; other is 0 here, and nothing is fetched for it. A DGROUP whose part cannot
+; be read ends the program saying so, as any of the part's imports does
+w16_dgx:
+    call w16_args
+    xor ch, ch
+    cmp cl, 6                       ; GlobalReAlloc's handle is at +6
+    jne .h
+    add bx, cx
+.h:
+    mov ax, [es:bx]
+    cmp ax, [w16_dgroup]
+    jne .z
+    add cx, w16s_dgtab              ; XSEC-OK: [w16_sfn]'s value, an SCALL's
+    mov [w16_sfn], cx
+    call w16_scall
+    jnc .o
+    jmp w16_dispatch.nolib          ; (AX = DX = 0, the program ended)
+.z:
+    xor ax, ax
+    cwd
+.o:
     ret
 
 ; w16_gsteal - AX = a fresh moveable handle: its block goes to entry SI, and
@@ -1678,6 +1620,23 @@ w16_lnew:
     pop bx
     ret
 
+; w16_lnewg - w16_lnew, and when the heap had no room, the heap grown (the
+; system-library part's w16s_lgrow, SPEC.md 124.25.19) and the request made
+; once more. Same registers; the gates' (LocalAlloc, LocalReAlloc) use.
+w16_lnewg:
+    call w16_lnew
+    or ax, ax
+    jnz .r
+    push cx
+    mov word [w16_sfn], w16s_lgrow  ; XSEC-OK: [w16_sfn]'s value, an SCALL's
+    call w16_scall                  ; CF=1: no part, or no room to grow into
+    pop cx
+    jc .r                           ; (AX is still 0)
+    mov al, [w16_lflg]
+    jmp w16_lnew
+.r:
+    ret
+
 ; w16_lfree - ES = the heap's segment, AX = a data offset: free that block.
 ; Keeps all.
 w16_lfree:
@@ -1815,7 +1774,7 @@ w16k_lalloc:
     mov cx, [es:bx]
     mov al, [es:bx + 2]
     call w16_lds
-    call w16_lnew
+    call w16_lnewg
     or ax, ax
     jz .out
     test byte [w16_lflg], LMEM_MOVEABLE
@@ -1823,7 +1782,7 @@ w16k_lalloc:
     mov si, ax                      ; moveable: an entry pointing at it
     mov cx, 2
     xor al, al
-    call w16_lnew
+    call w16_lnewg
     or ax, ax
     jnz .entry
     mov ax, si
@@ -1971,7 +1930,7 @@ w16k_lrealloc:
     push dx
     mov al, [w16_lflg]
     and al, LMEM_ZEROINIT
-    call w16_lnew                   ; AX = the new data
+    call w16_lnewg                  ; AX = the new data
     pop dx
     or ax, ax
     jz .fail
@@ -2003,3 +1962,4 @@ w16k_lrealloc:
     pop di
     pop si
     ret
+
