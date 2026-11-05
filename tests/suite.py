@@ -4736,13 +4736,13 @@ SOAK = [
                                  "build/arcade/roms/QBERT.ROM")),
     Row("arcface", "soak", py("tests/arcface.py", "--machine", "os8088_xt_vga"), 21.0,
         "ARCADE's frontend (ARCADE-SPEC 11) on MartyPC's VGA XT: opening is a look - every game's state read out of the package; Down, End, Home, a letter and a click move the selection, ADD ROMS opens the chooser; a move redraws with no pixel changed twice (m.flicker); the incremental face is pixel for pixel a whole repaint; Space Invaders played and left gets its picture, INVADERS.PIC written. Red (120 rows) when a move did not redraw the row it left",
-        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
     Row("arcfaceherc", "soak", py("tests/arcface.py", "--machine", "os8088_5150_herc_gla"), 15.0,
         "ARCADE's frontend (ARCADE-SPEC 11) on MartyPC's Hercules 5150: opening is a look - every game's state read out of the package, Pac-Man and Q*bert NEEDS VGA; Down, End, Home, a letter and a click move the selection, ADD ROMS opens the chooser; a move redraws with no pixel changed twice (m.flicker); the incremental face is pixel for pixel a whole repaint; Space Invaders played and left gets its picture, INVADERS.PIC written. Red (120 rows) when a move did not redraw the row it left",
-        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
     Row("arcfacecga", "soak", py("tests/arcface.py", "--machine", "os8088_5150_cga_gla"), 14.0,
         "ARCADE's frontend (ARCADE-SPEC 11) on MartyPC's CGA 5150 (the compact layout): opening is a look - every game's state read out of the package, Pac-Man and Q*bert NEEDS VGA; Down, End, Home, a letter and a click move the selection, ADD ROMS opens the chooser; a move redraws with no pixel changed twice (m.flicker); the incremental face is pixel for pixel a whole repaint; Space Invaders played and left gets its picture, INVADERS.PIC written. Red (120 rows) when a move did not redraw the row it left",
-        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
     Row("arcopt", "soak", py("tests/arcopt.py"), 22.0,
         "ARCADE's settings, scores, pause and help (ARCADE-SPEC 12) on MartyPC's "
         "VGA XT: SETTINGS turns Space Invaders' BASES to 5, kept in ARCADE.DAT and "
@@ -4750,7 +4750,7 @@ SOAK = [
         "seconds with no frame run, a key plays on; a best put in the game's RAM "
         "is kept as it is left with Esc from a hold, and is back after Game > "
         "Reset. Red (0000) without the put-back",
-        needs=("marty",), wants=("build/arcade360.img", "build/os8088-360.img")),
+        needs=("marty",), wants=("build/arcade720.img", "build/arcade.o88", "build/os8088-360.img")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "

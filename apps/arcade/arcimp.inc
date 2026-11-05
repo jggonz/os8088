@@ -602,17 +602,37 @@ ar_impmake:
     ret
 .claimed:
     mov [ar_iclaim], dx
-    mov es, dx                      ; from nothing
+    mov cx, [si+AS_LEN]             ; from nothing, 32KB at a time (an
+    mov bx, [si+AS_LEN+2]           ;   image may pass 64KB)
+    add cx, 32 + 15
+    adc bx, 0
+    mov ax, cx                      ; BX:CX bytes -> AX paragraphs
+    mov cl, 4
+    shr ax, cl
+    mov cl, 12
+    shl bx, cl
+    or ax, bx
+    mov bx, dx                      ; BX = the segment to clear from
+.zero:
+    mov es, bx
+    mov cx, ax
+    cmp cx, 0x800
+    jbe .zl
+    mov cx, 0x800
+.zl:
+    sub ax, cx
+    push ax
+    shl cx, 1                       ; paragraphs -> words
+    shl cx, 1
+    shl cx, 1
     xor di, di
-    mov cx, [si+AS_LEN]
-    mov ax, [si+AS_LEN+2]
-    add cx, 32
-    adc ax, 0
-    shr ax, 1
-    rcr cx, 1                       ; (words; 64KB + 32 is 32,784)
     xor ax, ax
     cld
     rep stosw
+    pop ax
+    add bx, 0x800
+    or ax, ax
+    jnz .zero
     mov cl, [si+AS_N]
     xor ch, ch
     lea si, [si+AS_CHIPS]
@@ -622,9 +642,8 @@ ar_impmake:
     cmp byte [ar_iloose], 0
     je .fromzip
     mov ax, [si+AC_AT]              ; LOOSE: the chip's file, read straight
-    mov cl, 4                       ;   into its place (every place is a
-    shr ax, cl                      ;   multiple of 16, as the read wants)
-    add ax, [ar_iclaim]
+    add ax, [ar_iclaim]             ;   into its place (a paragraph, as the
+                                    ;   read wants)
     add ax, 2
     mov es, ax
     xor bx, bx
@@ -682,14 +701,15 @@ ar_impmake:
     call ar_zat
     jc .fail
     push si
-    mov di, [si+AC_AT]              ; ES:DI = its place in the image
-    mov cx, [si+AC_LEN]
+    mov ax, [si+AC_AT]              ; ES:0 = its place in the image (in
+    mov cx, [si+AC_LEN]             ;   paragraphs, past the header's two)
     push es
     pop ds                          ; DS:SI = the data
     mov si, bx
-    mov ax, [cs:ar_iclaim]
+    add ax, [cs:ar_iclaim]
     add ax, 2
     mov es, ax
+    xor di, di
     cmp word [cs:ar_imeth], 8
     je .inf
     rep movsb
@@ -708,11 +728,12 @@ ar_impmake:
     mov cx, [si+AC_LEN]
     mov di, [si+AC_CRC]
     mov bp, [si+AC_CRC+2]
-    mov si, [si+AC_AT]
+    mov ax, [si+AC_AT]
     push ds
-    mov ax, [ar_iclaim]             ; the image: the claim past its header
+    add ax, [ar_iclaim]             ; the chip: its paragraph past the header
     add ax, 2
     mov ds, ax
+    xor si, si
     call ar_crc32
     pop ds
     pop si
@@ -751,16 +772,13 @@ ar_impmake:
     mov [es:16], ax
     mov ax, [si+AS_LEN+2]
     mov [es:18], ax
-    mov cx, [si+AS_LEN]             ; (64KB: CX = 0, which ar_crc32 takes)
-    push ds
+    mov cx, [si+AS_LEN]             ; (past 64KB a segment at a time)
+    mov bx, [si+AS_LEN+2]
     mov ax, es
     add ax, 2
-    mov ds, ax
     push si
-    xor si, si
-    call ar_crc32
+    call ar_crcimg
     pop si
-    pop ds
     mov [es:20], ax
     mov [es:22], dx
     mov cx, [si+AS_LEN]             ; the file: here, beside the zip

@@ -105,7 +105,8 @@ def main():
     if len(sys.argv) not in (5, 6):
         die('usage: arcqbgfx.py QBERT.ROM qbert.patch QBROM.PRT QBSPR.PRT [qbpatch.inc]')
     img = open(sys.argv[1], 'rb').read()
-    if len(img) != 0x10000:
+    img = img[:0x10000] if len(img) == 0x11000 else img   # (the sound chips
+    if len(img) != 0x10000:                               #   after: not ours)
         die('%s is not the Q*bert board image' % sys.argv[1])
     prog = bytearray(img[0:0x6000])
     table = []

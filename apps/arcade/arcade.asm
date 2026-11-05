@@ -174,6 +174,11 @@ ar_entry:
     mov al, 0
     call op_seg
     mov [ar_vseg], ax
+    push es                         ; the view's signature from the start (a
+    mov es, ax                      ;   pick's reset writes it again): no game
+    mov word [es:V_SIG], 'AR'       ;   is read at open now (ARCADE-SPEC 11.1),
+    mov word [es:V_SIG+2], 'CV'     ;   and the rows find the view by it
+    pop es
     mov word [ar_bd], 0
     mov word [ar_win], 0            ; (af_look asks: no window yet)
     mov word [ar_rimgc], 0
@@ -514,13 +519,10 @@ ar_romtry:
     inc di
     loop .name
     pop ax
-    mov cx, [es:16]                 ; the length: 1..65536, and all read
-    mov bx, [es:18]
+    mov cx, [es:16]                 ; the length: 1 to 128KB (Q*bert's with
+    mov bx, [es:18]                 ;   its sound chips is 68KB), all read
     cmp bx, 1
     ja .wrongf
-    jb .len
-    or cx, cx
-    jnz .wrongf
 .len:
     cmp dx, bx
     jb .wrongf
@@ -533,11 +535,8 @@ ar_romtry:
     mov [ar_rimg], ax
     push word [es:20]               ; the CRC32 the import checked it against
     push word [es:22]
-    mov si, 0
-    push ds
-    mov ds, ax
-    call ar_crc32                   ; DX:AX over DS:0, CX bytes (0 = 64KB)
-    pop ds
+    mov bx, [es:18]
+    call ar_crcimg                  ; DX:AX over AX:0, BX:CX bytes
     pop bx
     pop cx
     cmp ax, cx
@@ -571,6 +570,46 @@ ar_romtry:
 ar_crc32:
     mov ax, 0xFFFF
     mov dx, ax
+    call ar_crc32r
+    not ax
+    not dx
+    ret
+
+; ar_crcimg - DX:AX = the CRC-32 of an image of BX:CX bytes (at most 128KB)
+; at AX:0, a segment at a time. Clobbers BX, CX, SI
+ar_crcimg:
+    push ds
+    mov ds, ax
+    xor si, si
+    mov ax, 0xFFFF
+    or bx, bx
+    jz .one
+    push cx                         ; the first 64KB, then the rest
+    mov dx, ax
+    xor cx, cx
+    call ar_crc32r
+    pop cx
+    push ax
+    mov ax, ds
+    add ax, 0x1000
+    mov ds, ax
+    pop ax
+    xor si, si
+    jcxz .done
+    call ar_crc32r
+    jmp short .done
+.one:
+    mov dx, ax
+    call ar_crc32r
+.done:
+    not ax
+    not dx
+    pop ds
+    ret
+
+; ar_crc32r - the CRC's register DX:AX run over CX bytes at DS:SI (0 =
+; 65,536): no first or last inversion. Clobbers BX, CX, SI
+ar_crc32r:
 .b:
     mov bl, [si]
     inc si
@@ -585,8 +624,6 @@ ar_crc32:
     xor ax, [cs:ar_crctab+bx]
     xor dx, [cs:ar_crctab+bx+2]
     loop .b
-    not ax
-    not dx
     ret
 
 ; ar_crcinit - the table: entry n is n run 8 times through the polynomial

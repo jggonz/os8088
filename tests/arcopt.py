@@ -23,6 +23,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, 'tools'))
 sys.path.insert(0, HERE)
 os.chdir(ROOT)
+import os88build                    # noqa: E402
 import os88marty                    # noqa: E402
 import os88ui                       # noqa: E402
 from arcimport import fat_cat       # noqa: E402
@@ -36,8 +37,8 @@ DSV, HSV = 1 + 8 * 3 + 8, 1 + 8 * 3 + 16
 def main():
     bad = []
     td = tempfile.mkdtemp(prefix='arcopt-')
-    with os88ui.boot('build/os8088-360.img', apps='build/arcade360.img',
-                     machine='os8088_xt_vga', quick=True) as ui:
+    with os88ui.boot('build/os8088-360.img', apps='build/arcade720.img',
+                     machine='os8088_xt_vga_720b', quick=True) as ui:   # (room)
         m = ui.m
 
         def sleep(s):

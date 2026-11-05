@@ -11649,8 +11649,36 @@ $(BUILD)/arcade120.img: $(ARCADEDISK)
 	$(call ARCADEIMG,$@,1200)
 	@python3 tools/os88disk.py --verify $@
 
+# (360KB: no README - the package and seven sets fill it, Q*bert's with its
+# sound chips; the README is the RELEASE disk's, arcrel360.img)
 $(BUILD)/arcade360.img: $(ARCADEDISK)
-	$(call ARCADEIMG,$@,360)
+	python3 tools/os88disk.py -o $@ --size 360 $(APPDATAFOLDER) $(BUILD)/arcade.o88 $(ARCROMS)
+	@python3 tools/os88disk.py --verify $@
+
+# THE RELEASE FLOPPIES (docs/plans/ARCADE-RELEASE-PLAN.md R6): the package,
+# its README and an empty SYSTEM\APPDATA - NO ROM. The user's sets come in
+# through Game > Add ROM sets... (ARCADE-SPEC 1.5). The build still needs the
+# ROMs, since the code parts are translated from them (apps/RETIRED.txt).
+ARCADERELIMG = python3 tools/os88disk.py -o $(1) --size $(2) $(APPDATAFOLDER) \
+	       $(BUILD)/arcade.o88 apps/arcade/README.TXT
+#> [Applications] arcaderel :: the ARCADE RELEASE floppies in four geometries: the package and its README, no ROM (build/arcrel*.img)
+arcaderel: $(BUILD)/arcrel.img $(BUILD)/arcrel720.img \
+           $(BUILD)/arcrel120.img $(BUILD)/arcrel360.img
+
+$(BUILD)/arcrel.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,1440)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcrel720.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,720)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcrel120.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,1200)
+	@python3 tools/os88disk.py --verify $@
+
+$(BUILD)/arcrel360.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+	$(call ARCADERELIMG,$@,360)
 	@python3 tools/os88disk.py --verify $@
 
 # ...and the Apple II beside HEAPFRAG and NOTEPAD, for tests/emumove.py

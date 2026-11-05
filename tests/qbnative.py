@@ -53,6 +53,8 @@ BUDGET = 3_000_000                  # instructions a run may take
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--frames', type=int, default=3000)
+    ap.add_argument('--sndlog', action='store_true',
+                    help="list the bytes the game writes to its sound latch (5802h, at 580Ah)")
     ap.add_argument('--png')
     ap.add_argument('--at', default='')
     ap.add_argument('--script', nargs='*', default=None,
@@ -98,6 +100,12 @@ def main():
     for y in yields:
         uc.hook_add(UC_HOOK_CODE, at_yield, None, GB + y, GB + y)
     uc.hook_add(UC_HOOK_MEM_WRITE, stray, None, GB + 0x5800, GB + 0x5807)
+    snd = []
+
+    def sound(uc_, access, addr, size, value, _):
+        snd.append((st.get('frame', 0), value & 0xFF))
+    if a.sndlog:
+        uc.hook_add(UC_HOOK_MEM_WRITE, sound, None, GB + 0x580A, GB + 0x580A)
 
     cyc = None
     if a.cycles:
@@ -110,6 +118,7 @@ def main():
     i1 = i4 = 0
     per = []
     for f in range(a.frames):
+        st['frame'] = f
         if f in script:
             i1, i4 = script[f]
         inputs(i1, i4)
@@ -138,6 +147,15 @@ def main():
             picture(uc, rom, os.path.join(a.png, 'qb%04d.png' % f))
         if st['bad']:
             break
+    if a.sndlog:
+        from collections import Counter
+        cpf = Counter(fr for fr, v in snd if v & 0x0F != 0x0F)
+        print('qbnative: %d writes to the sound latch; the commands (low nibble not F): %s'
+              % (len(snd), ' '.join('%02X' % v for v in sorted(set(v for _, v in snd
+                                                              if v & 0x0F != 0x0F)))))
+        print('qbnative: frames with more than one command: %d of %d'
+              % (sum(1 for n in cpf.values() if n > 1), len(cpf)))
+        print('qbnative: the first 40: %s' % ' '.join('%d:%02X' % fv for fv in snd[:40]))
     for b in st['bad'][:10]:
         print('qbnative: FAIL - ' + b)
     if st['bad']:

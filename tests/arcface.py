@@ -64,8 +64,24 @@ def main():
     a = ap.parse_args()
     V = var_offsets(['af_n', 'af_sel', 'af_state', 'af_pics', 'af_nready', 'af_ox', 'af_oy'])
     bad = []
-    with os88ui.boot('build/os8088-360.img', apps='build/arcade360.img',
-                     machine=a.machine, quick=True) as ui:
+    # the disk: room for the picture this writes. VGA: the 720KB development
+    # disk on the XT whose B: is 720KB; a mono 5150's drives are 40-cylinder,
+    # so there a 360KB disk of its own, without the two VGA games' sets
+    # (they say NEEDS VGA there whether their .ROM is found or not)
+    vga = 'vga' in a.machine
+    if vga:
+        machine, apps = 'os8088_xt_vga_720b', os88build.at('build/arcade720.img')
+    else:
+        machine = a.machine
+        apps = os.path.join(tempfile.mkdtemp(prefix='arcface-'), 'mono360.img')
+        roms = [os88build.at('build/arcade/roms/%s.ROM' % n) for n in
+                ('INVADERS', 'INVADPT2', 'LRESCUE', 'GUNFIGHT', 'SEAWOLF')]
+        import subprocess
+        subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'os88disk.py'), '-o', apps,
+                        '--size', '360', '--folder', 'SYSTEM/APPDATA',
+                        os88build.at('build/arcade.o88')] + roms, check=True, capture_output=True)
+    with os88ui.boot('build/os8088-360.img', apps=apps,
+                     machine=machine, quick=True) as ui:
         m = ui.m
 
         def rd(name, n=1):
@@ -82,7 +98,6 @@ def main():
         settle_ui()
         n = rd('af_n')[0]
         st = list(rd('af_state', n))
-        vga = 'vga' in a.machine
         want = [0] * n
         if not vga:
             want[5:7] = [2] * (n - 5)
