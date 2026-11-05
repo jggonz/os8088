@@ -15,7 +15,9 @@ it, build/megak/kernel.map - the same mouse.inc, a different kernel):
 
   1. every MOS_*, MOP_*, MOC_* constant equals the distance between the real
      labels (mou_run, mou_p2, mouse_x) and its member's label;
-  2. MOS_SIZE and MOP_SIZE are the spans' real ends;
+  2. MOS_SIZE and MOP_SIZE are one past the last member moblk.inc names (the
+     kernel may APPEND to either span - SPEC.md 9.4.2's rule - and the package
+     reads only what it names; the kernel's own %errors hold the members);
   3. the descriptor words MOB_* are what mou_dbg_blk's words hold - read from
      the image, since a label cannot say what a `dw` points at;
   4. the 'ID' block (SPEC.md 57.6) MOUSECHK checks itself against: the three

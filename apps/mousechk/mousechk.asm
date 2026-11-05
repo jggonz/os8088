@@ -68,28 +68,49 @@ mc_entry:
     call os88ui_btninit             ; keeps every register
     xchg ax, bx                     ; BX = the window again
     call mc_kinit                   ; the build check, once (kread.inc)
-    call sum_init
+    call mc_kes                     ; a section is promised ES = KERNEL_SEG
+    call sum_init                   ; and keeps NOTHING else for us: each
+    call mc_kes                     ; one is entered as if it were the first
     call ser_init
+    call mc_kes
     call p2_init
+    call mc_kes
     call oth_init
-    push bx
     call mc_rebuild
-    pop bx
-    clc
+    mov bx, [mc_win]                ; BX = the window, whatever the sections
+    clc                             ; did with it
 mc_ret:
     ret
 
 ; -----------------------------------------------------------------------------
 ; mc_rebuild - the whole list again, from the sections, in their order
-; in:  ES = KERNEL_SEG, DS = package; out: nothing; clobbers everything
+; in:  DS = package; out: ES = KERNEL_SEG; clobbers everything else
+; A section proc may leave ES on the BIOS data area, DF set or any register
+; moved (SPEC.md 126.2.1 promises it ES = KERNEL_SEG and asks nothing back),
+; so every one is entered through mc_kes and none is trusted on the way out.
 ; -----------------------------------------------------------------------------
 mc_rebuild:
     call mc_reset
+    call mc_kes
     call sum_rows
+    call mc_kes
     call ser_rows
+    call mc_kes
     call p2_rows
+    call mc_kes
     call oth_rows
+    call mc_kes
     jmp mc_finish
+
+; mc_kes - ES = KERNEL_SEG and DF clear, as every section is promised; keeps
+;          every other register
+mc_kes:
+    push ax
+    mov ax, KERNEL_SEG
+    mov es, ax
+    pop ax
+    cld
+    ret
 
 ; -----------------------------------------------------------------------------
 ; mc_tick - W_ONTIMER (SPEC.md 13.9): re-arm, rebuild, draw what moved
@@ -198,8 +219,10 @@ mc_act_refresh:
 
 ; mc_act_probe - Probe PS/2 (SPEC.md 126.8). A greyed control explains itself
 mc_act_probe:
+    call mc_kes                     ; (a section call: SPEC.md 126.2.1)
     call p2_canprobe                ; CF = 1: SI = the reason
     jc mc_toast
+    call mc_kes
     call p2_probe
     call mc_rebuild
     jmp mc_after
