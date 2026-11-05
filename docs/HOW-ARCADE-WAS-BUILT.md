@@ -353,3 +353,27 @@ and the latch copy out turns it red.
 **Not done: sound.** Q*bert's sound is a second board with a 6502, a DAC
 and the Votrax chip behind the famous swearing. The game's commands to it
 land where nothing reads them.
+
+## A line taken out, and two boards on either side of it
+
+**The owner's test found Pac-Man stuck in its RAM test**, its screen a
+scrolling field of hex digits. Bisecting builds on 86Box's 286 put the
+break in the Gun Fight and Sea Wolf wave, not in Q*bert's. One line had gone
+from the host loop: when a board's interrupt was masked, the loop used to go
+back and run the guest without advancing the frame's clock, so the
+interrupt went in at the guest's EI. Without the line the interrupt was
+simply lost until the next period. Pac-Man masks it through its whole
+start-up, which then crawled at 3 frames a second.
+
+**Putting the line back explained an old mystery.** With it, Gun Fight and
+Sea Wolf ran at 40 frames a second on the 5150, the slow figure the
+previous wave had measured early on and could not reproduce. The line had
+been taken out by accident, which fixed them and broke Pac-Man. The two
+boards want different things:
+- the 8080 boards: the clock goes on, and the masked interrupt waits to go
+  in the moment the EI ends a run;
+- Pac-Man: its clock waits until the interrupt is taken (`BDF_HOLD`),
+  because its RAM test rewrites the screen and a frame drawn every period
+  there is what made it crawl.
+
+Both are in the loop now, and every board's row passes.

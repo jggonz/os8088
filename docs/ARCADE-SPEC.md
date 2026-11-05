@@ -477,6 +477,17 @@ resumes at n x 8. If `ST_INTE` is clear, `ST_PEND` says so, and the EI that
 sets it ends the run at its next poll point (`mov bp,1`, with `ST_EIX` set).
 More than two frames behind, the schedule is dropped to now, never raced.
 
+**A masked interrupt is not lost, and what waits for it is per board.** On
+the 8080 boards the frame's clock goes on - the period advances, the frame
+hook draws - and the interrupt waits (`ar_pend`) until the run its EI ended:
+then it goes in at once, not at the next period. Pac-Man's board is
+`BDF_HOLD` (its line is held until taken): its clock waits instead, as it
+always has, because its start-up masks the interrupt through a RAM test that
+rewrites the whole screen, and a frame drawn each period there crawled at 3
+a second on the 286. Neither is free to swap: holding the 8080 boards' clock
+ran Gun Fight and Sea Wolf at 40 frames a second on the 5150, and losing the
+interrupt (as wave 7b briefly did) left Pac-Man in its RAM test.
+
 ### 5.3 The boards
 
 The loop is one loop for every board; a BOARD is the table of what differs

@@ -104,6 +104,10 @@ BD_CODE     equ 2                   ; db its code part, aux part, ROM part
 BD_AUX      equ 3
 BD_ROM      equ 4
 BD_FLAGS    equ 5                   ; db BDF_*
+BDF_HOLD    equ 1                   ; a masked interrupt HOLDS the board's
+                                    ;   clock until it is taken (Pac-Man);
+                                    ;   else the frames go on and it waits
+                                    ;   (ar_pend) for the guest's EI
 BD_ROMLEN   equ 6                   ; dw the program bytes the view starts with
 BD_RESET    equ 8                   ; dw near: the view's own cells, once copied
 BD_SETUP    equ 10                  ; dw near: in the bracket - the mode, the
@@ -616,6 +620,7 @@ ar_loop:
     mov [ar_due+2], dx
     mov byte [ar_which], 1
     mov byte [ar_irqn], 0
+    mov byte [ar_pend], 0
     mov word [ar_budget], 128
     call pit_now                    ; a run is timed from the end of the one
     mov [ar_t0], ax                 ;   before it: one PIT read a run
@@ -681,6 +686,18 @@ ar_loop:
     mov [ar_t0], ax
     mov [ar_t0+2], dx
 .due:
+    cmp byte [ar_pend], 0           ; an interrupt the guest had masked: in
+    je .nopend                      ;   the moment it can be - its EI ended
+    push ax                         ;   the run (ST_PEND) - and not at the
+    push dx                         ;   next period (ARCADE-SPEC 5.1)
+    mov bx, [ar_bd]
+    call [bx+BD_IRQ]
+    pop dx
+    pop ax
+    jc .nopend
+    mov byte [ar_pend], 0
+    mov byte [ar_halted], 0
+.nopend:
                                     ; now - due, signed
     sub ax, [ar_due]
     sbb dx, [ar_due+2]
@@ -699,7 +716,16 @@ ar_loop:
 .deliver:
     mov bx, [ar_bd]                 ; the board's interrupt: in, or masked
     call [bx+BD_IRQ]                ;   and waiting (the EI that unmasks it
-    mov byte [ar_halted], 0
+    mov byte [ar_halted], 0         ;   ends a run, ST_PEND): then .due
+    jnc .taken                      ;   delivers it, while the frame's clock
+    mov bx, [ar_bd]                 ;   goes on - or, BDF_HOLD, with the
+    test byte [bx+BD_FLAGS], BDF_HOLD   ; clock held till it is taken: Pac-
+    jnz .run                        ;   Man's start-up masks it through a
+    mov byte [ar_pend], 1           ;   RAM test that rewrites the screen,
+.taken:                             ;   and a frame drawn each period there
+                                    ;   crawled at 3 a second. Held for the
+                                    ;   8080 boards, Gun Fight and Sea Wolf
+                                    ;   ran at 40 (ARCADE-SPEC 5.1)
     mov ax, [ar_period]
     add [ar_due], ax
     adc word [ar_due+2], 0
@@ -1718,7 +1744,7 @@ ar_bd_qb:                           ; Gottlieb's Q*bert, its 8088 native
 %ifdef ARC_PACMAN
 ar_bd_pm:
     dw ar_s_pm
-    db 19, 20, 21, 0
+    db 19, 20, 21, BDF_HOLD
     dw 0x4000, pm_reset, pm_setup, pm_irq, pm_frame
     dw 19688                        ; the board's 60.61 Hz (MAME pacman.cpp:
     db 1, 0                         ;   6.144 MHz, 384 x 264), one interrupt
@@ -1868,6 +1894,7 @@ AR_VAR qb_top, 128                  ;   ...and their opaque bytes
 AR_VAR ar_bd, 2                     ; the board (ar_boards)
 AR_VAR ar_rseg, 2                   ; its ROM part
 AR_VAR ar_period, 2                 ; its PIT counts between interrupts
+AR_VAR ar_pend, 1                   ; an interrupt waits on the guest's EI
 AR_VAR ar_late, 4                   ; ...and how far behind is dropped
 AR_VAR ar_irqn, 1                   ; interrupts so far this frame
 AR_VAR ar_vseg, 2
