@@ -16950,6 +16950,12 @@ SOAK = [
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
+    Row("vbtdoc", "soak", py("tests/vbtdoc.py"), 70.0,
+        "SPEC.md 125.2, 54.5-54.6: VBATTLE.O88 declares .VBT, so a battle "
+        "under any name double-clicked opens it and the play reads THAT "
+        "document - and this machine's own rendition beside it (MYFIGHT.VBT "
+        "on CGA, MYFIGHTH.VBT on Hercules). Broken (vb_docnames not "
+        "called) both arms red"),
     Row("vbtanchor", "soak", py("tests/vbtanchor.py"), 40.0,
         "SPEC.md 125.3: an action whose only anchor is nearer than the "
         "lead's frames is booked a LAP on - and its picture went in on the "

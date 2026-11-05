@@ -237279,6 +237279,16 @@ Little-endian. Every region starts on a 4 KB boundary, because
 `OSAPI_FILE_READ_SEQ` seeks and reads in cluster multiples, and 4 KB covers
 every floppy and a FAT16 disk to 128 MB.
 
+**A battle is a DOCUMENT** (§54): `VBATTLE.O88` declares `.VBT` (flags
+bit 1, `OS88_ASSOC16`), so a bundle under any name, double-clicked, opens
+the package with it (`OSAPI_ARG_FILE` at the entry, `vb_docnames`). The
+play goes to the document's folder (`OSAPI_FILE_GOTO_QM`, §74.1) and reads
+this machine's rendition BESIDE it, named as the builder names them - the
+stem less a trailing V or H, then with V on a VGA, H on a Hercules
+(`MYFIGHT.VBT`, `MYFIGHTV.VBT`, `MYFIGHTH.VBT`) - or the document itself
+when there is none. Launched with no document it looks for `BATTLE.VBT`,
+`BATTLEV.VBT` and `BATTLEH.VBT` as before (`vbtdoc`).
+
 Version 8 (2026-11-05) is the current version. Over version 7 it moves
 **each clip's ENTRIES in front of its own records** (docs/plans/completed/
 VBATTLE-RAM-PLAN.md R2): an anchor names a paragraph of its clip's region, the clip

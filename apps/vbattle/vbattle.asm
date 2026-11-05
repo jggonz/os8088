@@ -31,7 +31,7 @@
 ; =============================================================================
 
 %include "os88api.inc"
-    OS88_HEADER 'Video Battle', vb_entry, 1
+    OS88_HEADER 'Video Battle', vb_entry, 3   ; icon, and .VBT (SPEC.md 54.6)
     OS88_ICON16
     ; a sword over a shield: one solid shape on every adapter (SPEC.md 39.4)
     dw 0x0000, 0x0003, 0x0007, 0x000E, 0x001C, 0x3FB8, 0x7FF0, 0x7FE0
@@ -39,6 +39,11 @@
     dw 0x0007, 0x000F, 0x001F, 0x003F, 0x7FFE, 0xFFFC, 0xFFF8, 0xFFF0
     dw 0xFFF0, 0xFFF8, 0xFFFC, 0x7FFE, 0x3FBF, 0x1F1F, 0x0E0F, 0x0407
     OS88_ICON16_END
+
+    OS88_ASSOC16                    ; SPEC.md 54.6: double-click a .VBT
+    db 1
+    OS88_ASSOC_EXT 'VBT'
+    OS88_ASSOC16_END
 
 ; --- the bundle's layout (SPEC.md 125.2; tools/os88vbt.py is the writer) ------
 VH_MAGIC    equ 0               ; 'VBT1'
@@ -277,6 +282,13 @@ GS_END      equ 3
 ; =============================================================================
 vb_entry:
     mov word [vb_rcur], vb_cur
+    mov word [vb_np0], vb_name      ; (the names a play looks for: these,
+    mov word [vb_npv], vb_namev     ; or a document's own, below)
+    mov word [vb_nph], vb_nameh
+    call OSAPI_ARG_FILE             ; A DOCUMENT (SPEC.md 54.5): a .VBT
+    jc .nodoc                       ; double-clicked - ES:SI the kernel's
+    call vb_docnames                ; name, DX its folder, BL its volume
+.nodoc:
     mov si, vb_tpl
     call OSAPI_WM_CREATE
     jc .out
@@ -289,6 +301,92 @@ vb_entry:
     mov bx, [vb_win]
     clc
 .out:
+    ret
+
+; vb_docnames - the document at ES:SI (a NUL 8.3 name in the kernel's
+; segment), DX its folder, BL its volume: kept, and the names a play looks
+; for made from it as the builder names a battle's renditions - its stem
+; (less a trailing V or H) for CGA4, and that with V, with H for VGA and
+; Hercules (BATTLE.VBT, BATTLEV.VBT, BATTLEH.VBT) - so that any of the
+; three double-clicked plays this machine's own. The document itself is
+; the last resort (vb_load)
+vb_docnames:
+    mov [vb_docdir], dx
+    mov [vb_docvol], bl
+    mov byte [vb_doc], 1
+    mov di, vb_docname
+    mov cx, 12
+.cp:
+    mov al, [es:si]
+    mov [di], al
+    or al, al
+    jz .cpd
+    inc si
+    inc di
+    loop .cp
+    mov byte [di], 0
+.cpd:
+    xor bx, bx                      ; the stem's length
+.st:
+    mov al, [vb_docname+bx]
+    or al, al
+    jz .sl
+    cmp al, '.'
+    je .sl
+    inc bx
+    jmp short .st
+.sl:
+    cmp bx, 1                       ; less a trailing V or H
+    jbe .base
+    mov al, [vb_docname+bx-1]
+    and al, 0xDF
+    cmp al, 'V'
+    je .cut
+    cmp al, 'H'
+    jne .base
+.cut:
+    dec bx
+.base:
+    mov si, vb_dname                ; the three names
+    mov al, 0
+    call .mk
+    mov si, vb_dnamev
+    mov al, 'V'
+    call .mk
+    mov si, vb_dnameh
+    mov al, 'H'
+    call .mk
+    mov word [vb_np0], vb_dname
+    mov word [vb_npv], vb_dnamev
+    mov word [vb_nph], vb_dnameh
+    ret
+.mk:                                ; SI <- stem[0..BX) + AL (if any) +
+    push bx                         ; ".VBT" - an 8-letter stem takes no
+    mov di, si                      ; letter (the document's own then)
+    mov cx, bx
+    push si
+    mov si, vb_docname
+.m1:
+    jcxz .m2
+    mov ah, [si]
+    mov [di], ah
+    inc si
+    inc di
+    dec cx
+    jmp short .m1
+.m2:
+    pop si
+    or al, al
+    jz .m3
+    cmp bx, 8
+    jae .m3
+    mov [di], al
+    inc di
+.m3:
+    mov word [di], '.V'
+    mov word [di+2], 'BT'
+    mov byte [di+4], 0
+    pop bx
     ret
 
 ; vb_paint - W_PAINT: four lines of text, the rest of the box filled once
@@ -758,28 +856,42 @@ vb_load:
     ; WHICH BUNDLE: this adapter's own rendition first (VBATTLE-MEMORY-PLAN
     ; 9) - BATTLEV.VBT on a VGA, BATTLEH.VBT on a Hercules - and on a VGA
     ; or anything else the CGA4 one, BATTLE.VBT, in mode 4
-    mov word [vb_namep], vb_name
+    cmp byte [vb_doc], 0            ; (a document: its folder, the
+    je .nd                          ; instance with it - SPEC.md 74.1)
+    mov dx, [vb_docdir]
+    mov bl, [vb_docvol]
+    call OSAPI_FILE_GOTO_QM
+.nd:
+    mov ax, [vb_np0]
+    mov [vb_namep], ax
     mov bx, [vb_win]
     call OSAPI_FSX_CAPS             ; AX = modes, DL = VID_*
-    mov si, vb_namev
+    mov si, [vb_npv]
     cmp dl, VID_VGA
     jne .nh
     test ax, 1 << FSXM_VGA0D
     jnz .try
 .nh:
-    mov si, vb_nameh
+    mov si, [vb_nph]
     cmp dl, VID_HERC
     jne .hdr
 .try:
     mov [vb_namep], si
     call .head
     jnc .meta0
-    mov word [vb_namep], vb_name    ; (not there: the CGA4 one)
+    mov ax, [vb_np0]                ; (not there: the CGA4 one)
+    mov [vb_namep], ax
 .hdr:
     call .head
+    jnc .meta0
+    cmp byte [vb_doc], 0            ; (a document: itself, last)
+    je .nof
+    mov word [vb_namep], vb_docname
+    call .head
+    jnc .meta0
+.nof:
     mov word [vb_err], vb_s_nofile
-    jc .fail1
-    jmp short .meta0
+    jmp .fail1
 .head:
     push ds                         ; the first region, into our bss: its
     pop es                          ; first 4 KB (the header and the clip
@@ -3825,6 +3937,16 @@ VB_VAR vb_rg1, RG_SIZE
 VB_VAR vb_cring, 2
 VB_VAR vb_pring, 2
 VB_VAR vb_pentry, 2
+VB_VAR vb_np0, 2                    ; the names a play looks for: CGA4's,
+VB_VAR vb_npv, 2                    ; VGA's, Hercules' (vb_name... or a
+VB_VAR vb_nph, 2                    ; document's, vb_docnames)
+VB_VAR vb_doc, 1                    ; a document was double-clicked
+VB_VAR vb_docvol, 1
+VB_VAR vb_docdir, 2
+VB_VAR vb_docname, 14
+VB_VAR vb_dname, 14
+VB_VAR vb_dnamev, 14
+VB_VAR vb_dnameh, 14
 VB_VAR vb_rmin, 2
 VB_VAR vb_pleft, 2                  ; an action's anchor: idle frames to go
 VB_VAR vb_lleft, 2                  ; the title's way out: title frames to go                   ; the smallest ring that plays it, KB
