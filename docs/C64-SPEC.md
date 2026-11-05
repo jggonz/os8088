@@ -997,7 +997,12 @@ jump where the taken `jg` over the exit was, +1 point again (111.0 -> 112.0,
 countdown only at loop heads (a backward branch's or JMP's target) gave
 116.0%, 107.8% and 116.8% - five points more - at the price of runs that
 end past the cycle an interrupt is due, by as much as a loop-free stretch
-of ROM takes; that is the owner's decision, not this section's.
+of ROM takes. **Tried on real programs and dropped** (2026-11-05): on the
+Bright Pixel card and on CHRISTMAS DEMO (FNS, 1989) - which spend their
+time in RAM code, the drawing and the SID - it measured 48.5% against 48.7%
+and 51.7% against 51.8%, nothing a second 85KB translation on the disk
+would buy; the patched variant (block tests jumped over at run time) gained
+about a point over the falling-through tests below and was not kept either.
 
 **And the gate checks the cycles** (2026-11): the fast core alone runs
 Dormann in the same 997-cycle slices first, hashing where every slice ENDED -
