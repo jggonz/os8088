@@ -237588,8 +237588,15 @@ its head (VB_HEAD, 40 KB, or all of it). Then it takes the nearest anchor at
 least `[vb_dmin]` frames on: the lead's frames and two more, so that the
 clip's sound starts ahead of the ring's write position (4 frames with a
 2 KB lead, 7 with 4 KB, 2 with no card). The sound is booked at the sample
-frame 0 will be shown at. When the loop shows that anchor, the next frame is
+frame 0 will be shown at. When the loop has shown that many frames
+(`[vb_pleft]`, counted down) and stands on that anchor, the next frame is
 the entry record, and frame 0's record (its sound alone) is passed over.
+**Counted, not matched**: an anchor nearer than `[vb_dmin]` is the one a
+LAP on (d = (k - now) mod N + N), and the picture matched the anchor's frame
+and went in on the first pass - its sound a lap behind it, 1.6 s on a
+24-frame loop: the owner's "audio for a clip often delayed by ~2 s", half
+the time on Bolt (one anchor) and a quarter on the rest (`vbtanchor`). The
+title's way out is counted the same way (`[vb_lleft]`).
 The demo's anchors are every sixth frame of a 24-frame loop, so with a
 512-byte block a command waits 0.27 to 0.6 s for its clip to begin.
 

@@ -16950,6 +16950,15 @@ SOAK = [
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
+    Row("vbtanchor", "soak", py("tests/vbtanchor.py"), 40.0,
+        "SPEC.md 125.3: an action whose only anchor is nearer than the "
+        "lead's frames is booked a LAP on - and its picture went in on the "
+        "first pass, its sound a lap (~1.6 s) behind (the owner's 'audio "
+        "delayed ~2 s ... 50% for bolt, 25% for the others'). MartyPC's XT: "
+        "Attack with one anchor taken at idle frames spread round the loop; "
+        "some turns take the lap, every picture enters within two frames "
+        "of its sound. Broken (the countdown out of .anchored) the lap "
+        "turns 22-23 frames out"),
     Row("vbtreach", "soak", py("tests/vbtreach.py"), 3.0,
         "SPEC.md 125.6's builder checks: a missing per-character HIT clip is "
         "warned of only where the battle can go - the characters who have "

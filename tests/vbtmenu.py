@@ -95,26 +95,34 @@ def main():
                 os88marty.until(m, lambda mm: cond(), what, poll=poll,
                                 limit=900.0, guest=guest)
 
+            def gnow():
+                return int(m.status().get("cycles", 0)) / os88marty.GUEST_HZ
+
+            def rest(secs):             # (the GUEST's seconds: an until on
+                t0 = gnow()             # a condition already true returns
+                until(lambda: gnow() - t0 >= secs, "a rest",  # at once)
+                      guest=secs + 5.0, poll=0.0)
+
             def key(k):
                 m.key(k, up=False)
-                until(lambda: True, "k", guest=0.06, poll=0.0)
+                rest(0.06)
                 m.key(k, down=False)
-                until(lambda: True, "k", guest=0.25, poll=0.0)
+                rest(0.25)
             key("Enter")
             until(lambda: rb("vb_ready") == 1, "the play")
             until(lambda: rb("vb_state") == GS_MENU and rb("vb_dirty") == 0
                   and rb("vb_turn") == 0, "ARI's menu", guest=240.0)
-            until(lambda: True, "rest", guest=2.0, poll=0.0)
+            rest(2.0)
             # 1. Limit (cursor 2), then Bolt (cursor 1)
             key("ArrowDown")
             key("ArrowDown")
             until(lambda: rb("vb_cursor") == 2, "the cursor on Limit")
             r0 = rw("vb_rcalls")
-            until(lambda: True, "rest", guest=1.5, poll=0.0)
+            rest(1.5)
             lim_want, lim_reads = rb("vb_want"), (rw("vb_rcalls") - r0) & 0xFFFF
             key("ArrowUp")
             until(lambda: rb("vb_cursor") == 1, "the cursor on Bolt")
-            until(lambda: True, "rest", guest=1.5, poll=0.0)
+            rest(1.5)
             bolt_want = rb("vb_want")
             want_bolt = clips.index("ari_bolt"[:8]) if "ari_bolt"[:8] in \
                 clips else None
@@ -132,14 +140,14 @@ def main():
                 m.run()
                 moved = None
                 while cyc() - t0 < 3.0:
-                    until(lambda: True, "t", guest=0.01, poll=0.0)
+                    rest(0.01)
                     if rb("vb_cursor") != c0:
                         moved = cyc() - t0
                         break
                 m.key(k, down=False)
                 if moved is not None:
                     waits.append(moved)
-                until(lambda: True, "rest", guest=0.8, poll=0.0)
+                rest(0.8)
             ok(waits and max(waits) < 0.3,
                "2. a key taken in under 0.3 guest s every time (%d moves, "
                "the longest %.2f s)" % (len(waits), max(waits or [9])))

@@ -2325,7 +2325,9 @@ vb_frame:
     call vb_lanchor
     jmp short .c0
 .lk:
-    mov ax, [vb_cfr]
+    cmp word [vb_lleft], 0          ; (counted down, as an action's anchor:
+    jne .c0                         ; one nearer than the lead's frames is a
+    mov ax, [vb_cfr]                ; lap on)
     dec ax
     cmp ax, [vb_lk]
     jne .c0
@@ -2340,6 +2342,12 @@ vb_frame:
     mov bx, [vb_cring]
     call vb_radv
     inc word [vb_cfr]
+    cmp word [vb_lk], 0xFFFF        ; (the title's way out: a frame nearer)
+    je .lkn
+    cmp word [vb_lleft], 0
+    je .lkn
+    dec word [vb_lleft]
+.lkn:
     test word [vb_cflags], CF_OPENING
     jz .cnt
     cmp word [vb_cfr], 1            ; an opening WITH THE MENU (not CF_FULL)
@@ -2432,9 +2440,11 @@ vb_frame:
     call vb_anchor
     jmp short .loop
 .anchored:
-    mov ax, [vb_ifr]
-    cmp ax, [vb_pk]
-    jne .loop
+    cmp word [vb_pleft], 0          ; ITS frames counted down, not its frame
+    jne .loop                       ; matched: an anchor nearer than the
+    mov ax, [vb_ifr]                ; lead's frames is booked a LAP on, and
+    cmp ax, [vb_pk]                 ; the picture went in on the first pass
+    jne .loop                       ; - its sound a lap (~2 s) behind it
     mov bx, [vb_pring]              ; the entry: frame 0's picture, at
     mov ax, [vb_pentry]             ; its paragraph in the clip's region,
     call vb_entat                   ; in front of its records (format 8)
@@ -2458,6 +2468,12 @@ vb_frame:
     clc
     ret
 .loop:
+    cmp word [vb_pk], 0xFFFF        ; (an anchor's countdown, a frame on)
+    je .l0
+    cmp word [vb_pleft], 0
+    je .l0
+    dec word [vb_pleft]
+.l0:
     mov ax, [vb_ifr]                ; the loop's next frame
     inc ax
     cmp ax, [vb_meta+VH_NIDLE]
@@ -2599,6 +2615,8 @@ vb_anchor:
     loop .a
     cmp word [vb_bestd], 0xFFFF
     je .out
+    mov ax, [vb_bestd]              ; (its frames to go: the picture's
+    mov [vb_pleft], ax              ; countdown, .anchored)
     mov byte [bx+RG_PLAY], 1        ; the reader streams it from here
     ; its sound starts with frame 0, due at [vb_due] + d * spf
     mov ax, [vb_bestd]
@@ -3804,7 +3822,9 @@ VB_VAR vb_rg1, RG_SIZE
 VB_VAR vb_cring, 2
 VB_VAR vb_pring, 2
 VB_VAR vb_pentry, 2
-VB_VAR vb_rmin, 2                   ; the smallest ring that plays it, KB
+VB_VAR vb_rmin, 2
+VB_VAR vb_pleft, 2                  ; an action's anchor: idle frames to go
+VB_VAR vb_lleft, 2                  ; the title's way out: title frames to go                   ; the smallest ring that plays it, KB
 VB_VAR vb_dmin, 2
 VB_VAR vb_stall, 2
 VB_VAR vb_alate, 2

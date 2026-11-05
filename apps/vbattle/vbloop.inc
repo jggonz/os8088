@@ -57,6 +57,8 @@ vb_lanchor:
     loop .a
     cmp word [vb_bestd], 0xFFFF
     je .out
+    mov ax, [vb_bestd]              ; (its frames to go, counted down)
+    mov [vb_lleft], ax
     mov byte [bx+RG_PLAY], 1        ; the reader streams it from here
     mov ax, [vb_bestd]              ; its sound with its frame 0
     mul word [vb_meta+VH_SPF]
