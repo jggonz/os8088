@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "5f9fe3c1",
-  "strings": "5f97586491636ed4",
-  "why": "Smart attach autostarts"
+  "stamped": "f381620e",
+  "strings": "01dde7e243ece580",
+  "why": "Sprite collisions item"
  },
  "CALC_O88": {
   "sources": [
