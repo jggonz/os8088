@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "f381620e",
-  "strings": "01dde7e243ece580",
-  "why": "Sprite collisions item"
+  "stamped": "bd6ed742",
+  "strings": "4e85a1fc2ca74b10",
+  "why": "SAVE, the folder, character sets"
  },
  "CALC_O88": {
   "sources": [
