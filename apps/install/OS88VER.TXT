@@ -1,5 +1,5 @@
-20261103
-* Windows 3.x: Paintbrush, File Manager
-* Windows setup programs and CD titles
-* DOS programs run live in a window
-* System Check defragments and cleans up
+20261104
+* New PCI network driver for Realtek
+  RTL8139 cards on 386 and later PCs
+* Turn on PCI Ethernet in Control Panel
+* Same network programs as the ISA card
