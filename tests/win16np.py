@@ -108,8 +108,12 @@ def result(c):
 
 def counters(box):
     """(w16_cnload, w16_cndrop) out of WIN16's image in the guest: the package's
-    base (Box.pkg_base) and the offsets win16.map gives them"""
-    base = box.pkg_base("WIN16")
+    base (Box.pkg_base) and the offsets win16.map gives them. The instance is
+    named for the PROGRAM while one runs (w16_ownname, SPEC.md 124.18.3), so
+    it is PMNP here and WIN16 only before the program loads."""
+    base = box.pkg_base("PMNP")
+    if base is None:
+        base = box.pkg_base("WIN16")
     if base is None:
         return None, None
     mp = open(os.path.join(B, "megak", "apps", "win16.map")).read()
