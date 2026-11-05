@@ -93,7 +93,7 @@ VERSION = 1
 
 UI_SOUNDS = ("move", "open", "close", "take", "deny")
 VERBS = ("damage", "heal", "restore", "revive", "guard", "charge", "boost",
-         "lower", "pass", "escape", "stance")
+         "lower", "pass", "escape", "stance", "limit")
 TARGETS = ("enemy", "self", "ally", "allies", "none", "character",
            "characters")
 POOLS = ("hit", "miss", "defended", "critical", "finishing")

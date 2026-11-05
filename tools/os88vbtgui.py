@@ -298,6 +298,25 @@ EFFECT_FIELDS = {
               ("turns", "Turns", "int", 3, None)],
     "stance": [("stance", "Stance", "stance", "", None),
                ("duration", "Turns (0: until changed)", "int", 0, None)],
+    "limit": [("to", "Whose", "choice", "self", ("self", "target")),
+              ("percent", "Fills %", "int", 25, None)],
+}
+# what each verb does, beside its row (SPEC.md 125.6)
+VERB_HELP = {
+    "damage": "HP off the target(s)",
+    "heal": "HP back to the target(s)",
+    "restore": "MP back to the target(s)",
+    "revive": "a fallen character up again, with a share of HP",
+    "guard": "the target(s) take half damage until their next turn",
+    "charge": "the target(s)' NEXT damaging action deals double (not the "
+              "limit gauge - that is \"limit\")",
+    "boost": "a stat of the target(s) up, for some turns",
+    "lower": "a stat of the target(s) down, for some turns",
+    "pass": "nothing: the turn passes",
+    "escape": "the battle ends, escaped",
+    "stance": "the enemy into another stance",
+    "limit": "a LIMIT GAUGE fuller by a percentage: the doer's (self) or "
+             "the characters it hits (target)",
 }
 
 
@@ -3536,6 +3555,8 @@ class ActionsTab(object):
         f = effect_form(e)
         vars_ = {}
         stances = [st["name"] for st in self.app.proj.d["enemy"]["stances"]]
+        ttk.Label(parent, text="   " + VERB_HELP.get(e["verb"], ""),
+                  foreground="grey35").pack(anchor="w")
         for key, label, kind, dflt, choices in EFFECT_FIELDS.get(e["verb"], []):
             ttk.Label(row, text=label).pack(side="left", padx=(8, 2))
             v = tk.StringVar(value=str(f.get(key, dflt)))

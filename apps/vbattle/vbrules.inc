@@ -102,6 +102,8 @@ V_LOWER     equ 8
 V_PASS      equ 9
 V_ESCAPE    equ 10
 V_STANCE    equ 11
+V_LIMIT     equ 12              ; a limit gauge filled, POWER points: A 0 the
+                                ; targets' (characters hit), 1 the doer's
 T_ENEMY     equ 0
 T_SELF      equ 1
 T_ALLY      equ 2
@@ -1033,8 +1035,23 @@ vb_apply:
     jmp short .gn
 .g1:
     cmp al, V_ESCAPE
-    jne .gn
+    jne .g2
     mov byte [vb_over], OVER_ESC
+    jmp short .gn
+.g2:
+    cmp al, V_LIMIT                 ; THE DOER'S OWN LIMIT GAUGE
+    jne .gn
+    cmp byte [si+AC_EFF+EF_A], 1
+    jne .gn
+    mov bl, [vb_qw]
+    cmp bl, ENEMY
+    je .gn
+    push cx
+    push si
+    mov al, [si+AC_EFF+EF_P]
+    call vb_limadd
+    pop si
+    pop cx
 .gn:
     add si, 6
     loop .g
@@ -1127,6 +1144,20 @@ vb_hurt:
     add al, [vb_lim+bx]
     cmp al, 100
     jbe .st
+    mov al, 100
+.st:
+    mov [vb_lim+bx], al
+    ret
+
+; vb_limadd - character BL's limit gauge AL points fuller, to 100 at most.
+; AX, BX spent
+vb_limadd:
+    xor bh, bh
+    add al, [vb_lim+bx]
+    jc .full
+    cmp al, 100
+    jbe .st
+.full:
     mov al, 100
 .st:
     mov [vb_lim+bx], al
@@ -1257,6 +1288,17 @@ vb_effect:
     mov byte [vb_charge+bx], 1
     ret
 .bs:
+    cmp al, V_LIMIT                 ; THE TARGETS' LIMIT GAUGE (a character
+    jne .bs0                        ; hit): vbtrules.Sim.apply's
+    cmp byte [si+AC_EFF+EF_A], 0
+    jne .o
+    cmp bl, ENEMY
+    je .o
+    cmp byte [vb_qhit+di], 0
+    je .o
+    mov al, [si+AC_EFF+EF_P]
+    jmp vb_limadd                   ; (character BL)
+.bs0:
     cmp al, V_BOOST
     je .mod
     cmp al, V_LOWER

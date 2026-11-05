@@ -177,6 +177,19 @@ ok(states == states2, "...and is the same played twice")
 ok(any(st["stance"] == 1 for st in states) and any(st["stance"] == 2 for st in states),
    "it goes into the shell and comes back, and is enraged below 40%")
 
+# THE LIMIT EFFECT (125.6): ARI's Attack fills ARI's own gauge 10 points
+# (to: self), BRAM's Heal the healed one's 20 (to: target)
+s = V.Sim(R, seed=5)
+l0 = s.lim[0]
+s.apply(s.resolve(names.index("attack"), 0))
+l1 = s.lim[0]
+s.hp[0] = 100
+s.apply(s.resolve(names.index("heal"), 1, 0))
+ok(l1 == min(100, l0 + 10) and s.lim[0] == min(100, l1 + 20)
+   and s.lim[1] == 0,
+   "LIMIT: Attack fills its doer's gauge %d -> %d, Heal the healed one's "
+   "-> %d, the healer's untouched" % (l0, l1, s.lim[0]))
+
 # 6
 import os88vbtgui as G          # noqa: E402
 for verb, fields in G.EFFECT_FIELDS.items():

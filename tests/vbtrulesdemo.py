@@ -18,7 +18,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(os.path.dirname(HERE), "tools"))
 import os88vbt as B     # noqa: E402
 
-SEED = 4421               # (a battle that covers every rule: tests/vbtrules.py)
+SEED = 9433               # (a battle that covers every rule: tests/vbtrules.py)
 PLAN = {0: ["attack", "focus", "bolt", "limit", "attack", "guard"],
         1: ["fire", "heal", "potion", "revive", "fire", "guard"]}
 
@@ -42,7 +42,9 @@ def make_project(path=None, seed=SEED):
     def act(aid, label, target="enemy", effects=(), cost=None, acc=100, **pools):
         p.add_action(aid, label, target=target, effects=list(effects),
                      cost=cost, accuracy=acc, pools=pools)
-    act("attack", "Attack", effects=[dmg(40)], hit=["ari_attack"])
+    act("attack", "Attack", effects=[dmg(40), {"verb": "limit", "to": "self",
+                                               "percent": 10}],
+        hit=["ari_attack"])     # (and its doer's LIMIT gauge 10% fuller)
     act("bolt", "Bolt", effects=[dmg(34, "magical")], cost={"mp": 8},
         hit=["ari_bolt"])
     act("limit", "Limit", effects=[dmg(70, hits=2)], cost={"limit": True},
@@ -52,7 +54,9 @@ def make_project(path=None, seed=SEED):
         effects=[{"verb": "boost", "stat": "atk", "steps": 2, "turns": 3}])
     act("fire", "Fire", effects=[dmg(32, "magical")], cost={"mp": 6},
         hit=["bram_attack"])
-    act("heal", "Heal", target="ally", effects=[{"verb": "heal", "power": 40}],
+    act("heal", "Heal", target="ally", effects=[{"verb": "heal", "power": 40},
+                                                {"verb": "limit", "to":
+                                                 "target", "percent": 20}],
         cost={"mp": 8}, hit=["bram_heal"])
     act("potion", "Potion", target="ally",
         effects=[{"verb": "heal", "amount": 150}],

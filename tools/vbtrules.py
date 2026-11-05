@@ -77,7 +77,8 @@ NONE = 0xFF
 
 VERBS = {"damage": 1, "heal": 2, "restore": 3, "revive": 4, "guard": 5,
          "charge": 6, "boost": 7, "lower": 8, "pass": 9, "escape": 10,
-         "stance": 11}
+         "stance": 11, "limit": 12}
+LIMIT_TO = {"target": 0, "self": 1}     # (the LIMIT effect's "to")
 TARGETS = {"enemy": 0, "self": 1, "ally": 2, "allies": 3, "none": 4,
            "character": 5, "characters": 6}
 RULES = {"alternate": 0, "random": 1, "lowest": 2, "last": 3, "named": 4}
@@ -274,6 +275,13 @@ def compile_rules(proj, clip_index, images=(), preview=False):
                 aa = need(sidx, e["stance"], "action %s's stance effect"
                           % aid, "stance")
                 cc = e.get("duration", 0)
+            elif e["verb"] == "limit":      # a LIMIT GAUGE filled, PERCENT
+                to = e.get("to", "self")    # points - the doer's or the
+                if to not in LIMIT_TO:      # targets'
+                    raise RulesError("action %s's limit effect: to self or "
+                                     "target, not %s" % (aid, to))
+                aa = LIMIT_TO[to]
+                p = max(0, min(100, e.get("percent", 25)))
             r[at] = v
             r[at + 1] = aa
             struct.pack_into("<H", r, at + 2, min(0xFFFF, p))
@@ -800,6 +808,9 @@ class Sim:
                         self.echarge = 1
                     else:
                         self.charge[t] = 1
+                elif v == VERBS["limit"] and aa == LIMIT_TO["target"] and \
+                        t != ENEMY and r["hit"]:
+                    self.lim[t] = min(100, self.lim[t] + p)
                 elif v in (VERBS["boost"], VERBS["lower"]) and r["hit"]:
                     sgn = 1 if v == VERBS["boost"] else -1
                     m, mt = (self.emods, self.emodt) if t == ENEMY else \
@@ -809,6 +820,9 @@ class Sim:
         for (v, aa, p, bb, cc) in a["effects"]:     # not per target
             if v == VERBS["stance"] and who == ENEMY:
                 self.enter_stance(aa, cc)
+            elif v == VERBS["limit"] and aa == LIMIT_TO["self"] and \
+                    who != ENEMY:               # THE DOER'S OWN GAUGE
+                self.lim[who] = min(100, self.lim[who] + p)
             elif v == VERBS["escape"]:
                 self.over = "escape"
         if self.ehp == 0 and not self.over:

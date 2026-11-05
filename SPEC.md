@@ -238050,11 +238050,12 @@ while a clip plays, leaves.
 | 3 RESTORE | | MP | | | the MP up to its most |
 | 4 REVIVE | | % of the most HP | | | a fallen character back at that share (at least 1) |
 | 5 GUARD | | | | | halves damage taken until its next turn |
-| 6 CHARGE | | | | | doubles its next DAMAGE |
+| 6 CHARGE | | | | | doubles its next DAMAGE (the target's; not the limit gauge - 12 LIMIT is) |
 | 7 BOOST, 8 LOWER | the stat (ATK MAG DEF MDEF) | | steps 1-4 | turns | the stat's steps up or down (held to -4..4) for c of its turns |
 | 9 PASS | | | | | nothing: the turn passes |
 | 10 ESCAPE | | | | | the battle ends, escaped |
 | 11 STANCE | the stance | | | turns | the enemy into it, for c of its turns (0: until something changes it); its return is 125.6.7's |
+| 12 LIMIT | 0 the targets, 1 self | percent 0-100 | | | a LIMIT GAUGE that much fuller, to 100: each character it hits (0), or once its DOER's (1) - an Attack that charges its own limit break; the enemy has none |
 
 A target's damage is applied once, the total; so is its heal.
 
