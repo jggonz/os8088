@@ -344,8 +344,12 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [x] The README as a user's guide: the sets, import (merged, split,
       loose), the cabinet, the keys, settings, sound, the games' owners.
 - [x] ARCADE-SPEC brought up to date (11, 12, 13), the diary.
-- [ ] The final soak union and `test-full`. Field runs: 5150 #1 (Hercules
-      and CGA), 5150 #2 (VGA and Sound Blaster), the 286.
+- [x] The final soak union (`arc*`, `qb*`, `m6502`, `inflate86`: 25 rows):
+      22 passed; three opened the menu while a first leave was still
+      writing its picture, and pass with the wait. `test-full` is for the
+      merge onto the integration branch, not this feature branch.
+- [ ] Field runs: 5150 #1 (Hercules and CGA), 5150 #2 (VGA and Sound
+      Blaster), the 286, a 386 for Q*bert's sound.
 - [ ] The `release-os8088` skill: after the owner's call above.
 
 ## 7. The owner's answers (2026-11-05)
