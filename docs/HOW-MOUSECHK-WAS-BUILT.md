@@ -122,3 +122,19 @@ section's proc, and the entry reloads the window from `[mc_win]`: 61 bytes of
 image, and the sum with the bss is unchanged at 10,660 because the 512-byte
 alignment absorbs it. The Save dialog opens on `A:\MEDIA` and not beside the
 package (SPEC.md 38.10's default), which the contract now says.
+
+**The keys the package is FOR could not scroll it.** The ps2 agent found it on a
+mouseless boot: PgDn, Space and End did nothing. The keyboard mouse (SPEC.md 9.6)
+takes Space, keypad 5 and every `AL` = 0 key of scan 47h-53h before a window
+sees it, and the grey pad does not escape, because `ui_task` polls `int 16h`
+with the XT functions and the BIOS folds an E0-prefixed key into `AL` = 0 with
+the keypad's scan. Reproduced with no extra build at all: a copy of the system
+disk with an `\AUTOSTRT` link to `SYSTEM\MOUSECHK.O88` boots straight into the
+window, and as long as nothing sends a mouse packet the kernel's `[mou_ptr]`
+stays 0 and the keyboard mouse stays on - PgDn, keypad 3 and End then moved the
+pointer and the list sat still. The answer was keys that always arrive: `N`/`B`
+a page, `T`/`E` the ends, `+`/`=`/`-` a line, and Ctrl+PgDn/PgUp/Home/End (not in
+`kbm_tab`), with `N/B page  T/E ends  +/-` drawn beside the buttons so the user
+does not have to know any of this. Every one was seen scrolling a 42-row scratch
+list on that boot; P toasted and Q closed under the keyboard mouse too.
+117 bytes of image.

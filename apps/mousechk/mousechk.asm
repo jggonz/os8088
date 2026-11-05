@@ -124,9 +124,16 @@ mc_tick:
     jmp mc_after
 
 ; -----------------------------------------------------------------------------
-; the keyboard (SPEC.md 126.3): every control has a letter, and the list
-; scrolls on PgUp/PgDn/Home/End and Up/Down. A user with only the keyboard
-; mouse has the arrows taken (SPEC.md 9.6), so the letters are the way in.
+; the keyboard (SPEC.md 126.3): every control AND every scroll has a key a
+; package still RECEIVES while the keyboard mouse is on (SPEC.md 9.6) - which
+; is the machine this package is for, the one whose mouse is not found. There
+; kbm_key takes Space, keypad 5 and every AL = 0 key of scan 47h-53h: the
+; arrows, Home, End, PgUp, PgDn, Ins and Del, keypad and grey alike (the grey
+; ones reach int 16h AH = 00h as AL = 0 with the same scan). So the letters are
+; primary - R P S C Q the buttons, N/B a page on/back, T/E top/end - with + and
+; - (either row's) a line, and Ctrl+PgDn/PgUp/Home/End, which kbm_tab does not
+; hold. The cursor keys and Space still scroll when a mouse has spoken or
+; ScrollLock hands the keys back.
 ; in:  AX = the key (AH scan code, AL character), SI = window, lock held
 ; -----------------------------------------------------------------------------
 mc_onkey:
@@ -149,10 +156,30 @@ mc_onkey:
     je mc_act_quit
     cmp al, 0x1B
     je mc_act_quit
-    cmp dl, 'B'                     ; a page back; Space is a page on
+    cmp dl, 'B'                     ; a page back; N and Space a page on
     je .pgup
+    cmp dl, 'N'
+    je .pgdn
+    cmp dl, 'T'                     ; the top and the end
+    je .home
+    cmp dl, 'E'
+    je .end
     cmp al, ' '
     je .pgdn
+    cmp al, '+'                     ; a line: + (and = beside it) down, - up.
+    je .down                        ; AL, not DL: the case fold would make
+    cmp al, '='                     ; '-' a CR
+    je .down
+    cmp al, '-'
+    je .up
+    cmp ah, 0x76                    ; Ctrl+PgDn / PgUp / Home / End: no AL, and
+    je .pgdn                        ; not in kbm_tab, so they reach us with the
+    cmp ah, 0x84                    ; keyboard mouse on
+    je .pgup
+    cmp ah, 0x77
+    je .home
+    cmp ah, 0x75
+    je .end
     cmp ah, 0x48
     je .up
     cmp ah, 0x50

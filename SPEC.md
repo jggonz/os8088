@@ -241720,10 +241720,34 @@ Five buttons, the standard control (§20.5.1.3), in one record:
 | Copy | C | the same text on the clipboard (§55) |
 | Quit | Q or Esc | closes |
 
-The list scrolls on **Up/Down, PgUp/PgDn, Home/End** and the scroll bar; `B`
-and Space are a page back and on. **The letters are the way in for a user with
-only the keyboard mouse**, whose arrows §9.6 takes. About (§12.2, `OSAPI_ABOUT_SET`)
-is the standard card.
+**The keys are chosen for the machine this package is FOR**, the one whose
+mouse is not found, which is the machine where the keyboard mouse (§9.6) is on.
+There `kbm_key` takes, before any window sees them: **Space**, **keypad 5** (by
+its scan, whatever `AL`), and **every `AL` = 0 key of scan 47h-53h** - the
+arrows, Home, End, PgUp, PgDn, Ins and Del, on the keypad AND on the grey
+pad of an enhanced keyboard, because the shell polls `int 16h AH = 00h/01h`
+and the BIOS hands the E0-prefixed keys to that function as `AL` = 0 with the
+keypad's own scan. (With NumLock on the keypad sends digits, which pass; with
+ScrollLock on nothing is taken, §9.6.2.) Reproduced on the glass: with the
+keyboard mouse on, PgDn, keypad 3 and End moved the pointer and the list stayed
+where it was. So the list scrolls on keys that always arrive, and these are
+**primary**:
+
+| key | scrolls |
+|---|---|
+| `N` / `B` | a page on / back |
+| `T` / `E` | to the top / the end |
+| `+` or `=`, `-` (either row's) | a line down / up |
+| Ctrl+PgDn / Ctrl+PgUp / Ctrl+Home / Ctrl+End | a page on / back, the top / the end - scans 76h/84h/77h/75h, which `kbm_tab` does not hold |
+
+The cursor keys - Up/Down, PgUp/PgDn, Home/End - and Space (a page on) still
+scroll whenever they arrive: once a real pointer has spoken (§9.6.1.1) or with
+ScrollLock on. The scroll bar takes a keyboard-mouse click like any other. The
+window says so on its own glass: **`N/B page  T/E ends  +/-`** is drawn once a
+paint in the button row, past Quit, cut to the cells that fit (one opaque
+`OSAPI_FONT_RUN`). Every button's key is its caption's initial (R P S C Q), and
+none of them is a key §9.6 takes. About (§12.2, `OSAPI_ABOUT_SET`) is the
+standard card; any key takes it down.
 
 **The report** is the list as text: a head (`Mouse Check report, os8088
 package build N`, the date from the clock, and the kernel's `'ID'` words with
@@ -242062,10 +242086,10 @@ the build of 2026-11-05:**
 
 | | bytes |
 |---|---|
-| `mousechk.bin` image | 4,823 (shell, rows, ui, kread and the stubs; the sections add to it) |
-| bss | 5,837 (`mc_buf` 5,120 on the first 512 boundary past the image, `OS88_BSS_ALIGNED`, with the row table 256, the shown hashes 96 and the rest of the state packed into the gap in front of it, §77.31 - so the image and the bss trade bytes and only their SUM is the figure) |
-| image + bss | **10,660** of the package's 20 KB (20,480) ceiling, raised from the plan's 16 KB when wave 2 started: 9,820 left for the four sections |
-| `MOUSECHK.O88`, lz4 | 4,279 |
+| `mousechk.bin` image | 4,940 (shell, rows, ui, kread and the stubs; the sections add to it) |
+| bss | 5,816 (`mc_buf` 5,120 on the first 512 boundary past the image, `OS88_BSS_ALIGNED`, with the row table 256, the shown hashes 96 and the rest of the state packed into the gap in front of it, §77.31 - so the image and the bss trade bytes and only their SUM is the figure) |
+| image + bss | **10,756** of the package's 20 KB (20,480) ceiling, raised from the plan's 16 KB when wave 2 started: 9,724 left for the four sections |
+| `MOUSECHK.O88`, lz4 | 4,382 |
 | kernel | **0**: no file under `kernel/`, `boot/`, `drivers/` or `apps/os88api.inc` changes; `kernel-full.bin` is the same size and differs from the previous build in the build number's digits only |
 
 Disk headroom after it landed (free clusters, `tools/os88disk.py --verify`):
