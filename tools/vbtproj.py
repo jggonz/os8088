@@ -974,15 +974,26 @@ class Project:
             if k not in V_.LAYOUT:
                 err("band_layout", "no part of the band called %s" % k)
         lay = V_.layout_of(self)
+        # ...each field as wide as the party's own values make it, not
+        # the widest it could be (the owner, 2026-11-05): a name's letters,
+        # HP's four places (or the number's own, past 9999), "/max" its
+        # digits - its padding past them is drawn over by a field to its
+        # right (vbtband.party_line: a later one wins)
+        chs = d["characters"] or [{"name": "", "hp": 0, "mp": 0}]
+        nw = max(len(str(c.get("name", ""))[:6]) for c in chs)
+        hw = max(max(4, len(str(int(c.get("hp", 0))))) for c in chs)
+        mw = max(max(4, len(str(int(c.get("mp", 0))))) for c in chs)
+        xw = max(1 + len(str(int(c.get("hp", 0)))) for c in chs)
         f = []
-        if lay["name_show"]:
-            f.append(("the name", lay["name_col"], 6))
+        if lay["name_show"] and nw:
+            f.append(("the name", lay["name_col"], nw))
         if lay["limit_show"]:
             f.append(("the limit star", lay["limit_col"], 1))
         if lay["hp_show"]:
-            f.append(("HP", lay["hp_col"], 11 if lay["hpmax_show"] else 4))
+            f.append(("HP", lay["hp_col"], hw if not lay["hpmax_show"]
+                      else max(hw, 4 + xw)))
         if lay["mp_show"]:
-            f.append(("MP", lay["mp_col"], 4))
+            f.append(("MP", lay["mp_col"], mw))
         for i, (n1, c1, w1) in enumerate(f):
             for n2, c2, w2 in f[i + 1:]:
                 if c1 < c2 + w2 and c2 < c1 + w1:

@@ -16954,7 +16954,10 @@ SOAK = [
         "SPEC.md 125.6's builder checks: a missing per-character HIT clip is "
         "warned of only where the battle can go - the characters who have "
         "the action, the ones the enemy can aim it at (a named move, a "
-        "follow-up 'same'). Broken (every character reachable) 3 red"),
+        "follow-up 'same'); and the party line's fields as wide as the "
+        "party's own values, so HP's widest-possible 11 cells do not warn of "
+        "an overlap that is not there. Broken (every character reachable) 3 "
+        "red; the widths at their widest, 1 red"),
     Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 60.0,
         "SPEC.md 125.3: the card's stream ENDED under the battle (SOUND.DRV's "
         "watchdog made to fire) - the owner's 'no sound causes a permanent "

@@ -17,8 +17,13 @@ to it." The demo battle, each action's HIT clips given per character
      warned, naming BRAM; the move "named" ARI: no warning; a follow-up
      "same" after it aims where it did, and one "named" BRAM is warned.
 
+  3. the party line's fields as wide as the party's own values: HP 300
+     with its "/300" at column 26 and MP at 35 do not overlap (the widest
+     HP field, 11 cells, would); MP at 32 does, and is said.
+
 Broken on purpose (vbtproj.clip_chars answering every character, as the
-check did before) 1's first and 2's second go red.
+check did before) 1's first and 2's second go red; the widths back at
+their widest, 3 goes red.
 """
 import os
 import sys
@@ -75,6 +80,20 @@ def main():
     ok(not w1 and len(w2) == 1 and "BRAM" in w2[0],
        "2. a follow-up \"same\" aims where the move did (%s); one named "
        "BRAM is warned (%s)" % (w1, w2))
+    # 3. THE PARTY'S FIELDS as wide as the party's values (the owner: "they
+    # overlap because of the max possible values ... but they don't
+    # actually"): HP with its "/max" at column 26, MP at 35
+    for c in d["characters"]:
+        c["hp"], c["mp"] = 300, 40
+    d["band_layout"] = dict(hp_col=26, hpmax_show=1, mp_col=35)
+    lw = [x.text for x in p.check() if x.where == "band_layout"
+          and "overlap" in x.text]
+    d["band_layout"]["mp_col"] = 32
+    lw2 = [x.text for x in p.check() if x.where == "band_layout"
+           and "overlap" in x.text]
+    ok(not lw and len(lw2) == 1 and "HP" in lw2[0] and "MP" in lw2[0],
+       "3. HP 300 '/300' at 26 and MP at 35: no overlap (%s); MP at 32, "
+       "inside '/300': said (%s)" % (lw, lw2))
     if fails:
         print("%d FAILED" % len(fails))
         return 1
