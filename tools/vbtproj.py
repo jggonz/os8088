@@ -703,9 +703,10 @@ class Project:
         e, out = self.d["enemy"], set()
         for st in e["stances"]:
             for m in st["moves"]:
-                if m["action"] == aid:
-                    out |= {m["target"]} if m.get("rule") == "named" and \
-                        m.get("target") in names else set(names)
+                if m["action"] == aid:          # (named, none chosen: the
+                    tg = m.get("target") or (names[:1] or [None])[0]  # first)
+                    out |= {tg} if m.get("rule") == "named" and \
+                        tg in names else set(names)
             if any(r.get("action") == aid for r in st.get("responses", [])) \
                     or aid in (st.get("return"),
                                (st.get("auto") or {}).get("via")):
@@ -716,8 +717,9 @@ class Project:
             tg = f.get("target", "same")
             if tg == "same":
                 out |= self._enemy_aims(f.get("after"), names, seen)
-            elif tg == "named" and f.get("named") in names:
-                out.add(f["named"])
+            elif tg == "named" and (f.get("named") or
+                                    (names[:1] or [None])[0]) in names:
+                out.add(f.get("named") or names[0])
             else:
                 out |= set(names)
         return out
@@ -937,7 +939,8 @@ class Project:
                 for cl in pool:
                     if cl not in d["clips"]:
                         err(w, "pool %s: no clip %s" % (pk, cl))
-            if not a["pools"].get("hit"):
+            if not a["pools"].get("hit") and a.get("accuracy", 100) != 0:
+                # (0%: it never hits - a miss made a miss, the owner's)
                 # (a HIT clip per TARGET counts: an enemy's action is often
                 # made a clip per character it can hit) - and only where the
                 # battle can GO: a character's own clip for an action only
@@ -1021,8 +1024,10 @@ class Project:
             tg = x.get("target", "same")
             if tg != "same" and tg not in RULES:
                 err(w, "no target rule %s" % tg)
-            if tg == "named" and x.get("named") not in [
-                    c["name"] for c in d["characters"]]:
+            chn = [c["name"] for c in d["characters"]]
+            if tg == "named" and (x.get("named") or
+                                  (chn[0] if chn else None)) not in chn:
+                # (none chosen: the first, as the Enemy tab shows it)
                 err(w, "aims at no character (%s)" % x.get("named"))
             if x.get("after") in nxt:
                 warn(w, "%s already has a follow-up: the first is played"

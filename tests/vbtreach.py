@@ -80,6 +80,28 @@ def main():
     ok(not w1 and len(w2) == 1 and "BRAM" in w2[0],
        "2. a follow-up \"same\" aims where the move did (%s); one named "
        "BRAM is warned (%s)" % (w1, w2))
+    # 4. AN ENEMY MOVE "named" with NO character chosen (the window shows
+    # the first and stored nothing until another was picked - the owner's
+    # "move 2 aims at no char (None)"): it builds, aimed at the first; and
+    # an action at 0% accuracy (a miss made a miss) wants no HIT clip
+    import vbtrules as V
+    mv2 = {"action": "lunge", "weight": 1, "rule": "named"}
+    d["enemy"]["stances"][0]["moves"].append(mv2)
+    try:
+        idx = {c: i for i, c in enumerate(d["clips"])}
+        r = V.Rules(V.compile_rules(p, idx, B.images_of(p)[1], preview=True))
+        got = r.stances[0]["moves"][-1] if hasattr(r, "stances") else None
+        built = True
+    except V.RulesError as e:
+        built, got = False, str(e)
+    ok(built and (got is None or got[3] == 0),
+       "4. a move named with no character chosen builds, aimed at the "
+       "first (%s)" % (got,))
+    d["enemy"]["stances"][0]["moves"].remove(mv2)
+    d["actions"]["bolt"]["accuracy"] = 0
+    d["actions"]["bolt"]["pools"].pop("hit", None)
+    w = hit_warn(p, "bolt")
+    ok(not w, "4. an action at 0%% accuracy wants no HIT clip (%s)" % w)
     # 3. THE PARTY'S FIELDS as wide as the party's values (the owner: "they
     # overlap because of the max possible values ... but they don't
     # actually"): HP with its "/max" at column 26, MP at 35

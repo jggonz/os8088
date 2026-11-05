@@ -4590,6 +4590,8 @@ class EnemyTab(object):
     def _fol(self, i, **kw):
         fol = [dict(x) for x in self.app.proj.d["enemy"].get("follow_ups", [])]
         fol[i].update(kw)
+        if fol[i].get("target") == "named" and not fol[i].get("named"):
+            fol[i]["named"] = self._named_default()
         self.app.edit("set", ("enemy", "follow_ups"), fol)
 
     def _combo(self, parent, value, values, commit):
@@ -4610,14 +4612,24 @@ class EnemyTab(object):
             n.setdefault("to", self.app.proj.d["enemy"]["stances"][0]["name"])
         self.app.edit("set", base + ("auto",), n or None)
 
+    def _named_default(self):
+        ch = [c["name"] for c in self.app.proj.d["characters"]]
+        return ch[0] if ch else None
+
     def _move(self, base, i, **kw):
         moves = [dict(m) for m in self.app.proj.get(*base)["moves"]]
         moves[i].update(kw)
+        if moves[i].get("rule") == "named" and moves[i].get("target") is None:
+            moves[i]["target"] = self._named_default()  # (what the box shows,
+                                                        # stored: it was not)
         self.app.edit("set", base + ("moves",), moves)
 
     def _resp(self, base, i, **kw):
         rs = [dict(r) for r in self.app.proj.get(*base).get("responses", [])]
         rs[i].update(kw)
+        if rs[i].get("trigger") == "named" and not rs[i].get("named"):
+            acts = list(self.app.proj.d["actions"])
+            rs[i]["named"] = acts[0] if acts else None
         self.app.edit("set", base + ("responses",), rs)
 
     def _rm(self, base, key, i):

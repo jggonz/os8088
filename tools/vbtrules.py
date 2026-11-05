@@ -337,17 +337,23 @@ def compile_rules(proj, clip_index, images=(), preview=False):
         r[14] = need(aidx, s["return"], w + " (its return)", "action") \
             if s.get("return") else NONE
         for i, m in enumerate(moves):
-            if m.get("rule") == "named" and m.get("target") not in cname:
-                raise RulesError("%s: move %d aims at no character (%s)"
-                                 % (w, i + 1, m.get("target")))
-            arg = cname.index(m["target"]) if m.get("rule") == "named" else 0
+            tgt = m.get("target")
+            if m.get("rule") == "named" and tgt is None and cname:
+                tgt = cname[0]          # (none chosen: the first, as the
+                                        # Enemy tab shows it)
+            if m.get("rule") == "named" and tgt not in cname:
+                raise RulesError("%s: move %d (%s) aims at no character (%s)"
+                                 % (w, i + 1, m.get("action"), tgt))
+            arg = cname.index(tgt) if m.get("rule") == "named" else 0
             struct.pack_into("<4B", r, 16 + 4 * i, need(
                 aidx, m.get("action"), "%s, move %d" % (w, i + 1), "action"),
                              max(1, min(255, m.get("weight", 1))),
                              RULES[m.get("rule", "alternate")], arg)
         for i, x in enumerate(resp):
             trig = x.get("trigger", "any")
-            arg = need(aidx, x.get("named"), "%s, response %d" % (w, i + 1),
+            arg = need(aidx, x.get("named") or (list(aidx)[0] if aidx
+                                                else None),   # (as shown)
+                       "%s, response %d" % (w, i + 1),
                        "action it answers") if trig == "named" else 0
             struct.pack_into("<4B", r, 40 + 4 * i, TRIG[trig], arg,
                              max(0, min(100, x.get("chance", 100))),
@@ -395,10 +401,11 @@ def compile_rules(proj, clip_index, images=(), preview=False):
         else:
             rule = RULES[tg]
             if tg == "named":
-                if x.get("named") not in cname:
+                nm = x.get("named") or (cname[0] if cname else None)
+                if nm not in cname:
                     raise RulesError("%s aims at no character (%s)"
-                                     % (w, x.get("named")))
-                arg = cname.index(x["named"])
+                                     % (w, nm))
+                arg = cname.index(nm)
         b += bytes([need(aidx, x.get("after"), w, "action it follows"),
                     need(aidx, x.get("then"), w, "action"), rule, arg])
     table("fol", b)
