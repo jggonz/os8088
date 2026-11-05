@@ -19,6 +19,8 @@
 
 AR_ZMAXKB   equ 448                 ; a zip bigger than this is refused
 AR_NPLACE   equ 8                   ; folders remembered
+AR_NSET     equ 8                   ; sets ar_sets may list
+ZC_CLAIM    equ 6                   ; a zip's record (ar_zsize..ar_cdn): its claim
 
 ; ar_import - Game > Add ROM sets...
 ar_import:
@@ -34,11 +36,10 @@ ar_import:
     ret
 
 ; ar_impdone - the chooser's answer (SPEC.md 38.6): ES:DI = the name, DX:CX
-; = its size. The board picked is let go for the memory, and picked again
-; after
+; = its size. A .ZIP is read whole; any other file means LOOSE CHIPS, the
+; folder it is in holding each chip as a file of MAME's name. The board
+; picked is let go for the memory, and picked again after
 ar_impdone:
-    mov [ar_zsize], cx
-    mov [ar_zsize+2], dx
     mov si, di                      ; the name, out of the kernel's buffer
     mov di, ar_impname
     mov cx, 13
@@ -51,74 +52,118 @@ ar_impdone:
     mov byte [ar_impname+12], 0
     push ds
     pop es
-    mov si, ar_impname              ; a .ZIP
+    mov byte [ar_iloose], 1
+    mov si, ar_impname              ; a .ZIP?
 .dot:
     lodsb
     or al, al
-    jz .notzip
+    jz .kind
     cmp al, '.'
     jne .dot
     lodsw
     or ax, 0x2020
     cmp ax, 'zi'
-    jne .notzip
+    jne .kind
     lodsw
     or al, 0x20
     cmp ax, 'p'
-    jne .notzip
-    mov ax, [ar_zsize]              ; the size, in KB, and two over
-    mov dx, [ar_zsize+2]
-    or ax, dx
-    jz .notzip
-    mov ax, [ar_zsize]
-    add ax, 1023
-    adc dx, 0
-    mov cl, 10
-    shr ax, cl
-    mov cl, 6
-    shl dx, cl
-    or ax, dx
-    add ax, 2
-    cmp ax, AR_ZMAXKB
-    ja .big
-    mov [ar_zkb], ax
+    jne .kind
+    mov byte [ar_iloose], 0
+.kind:
     mov bx, [ar_bd]                 ; room: the board picked, let go
     mov [ar_impbd], bx
     call ar_unselect
-    mov ax, [ar_zkb]
-    call OSAPI_MEM_CLAIM
-    jc .nomem
-    mov [ar_zclaim], dx
-    mov es, dx
-    xor bx, bx
-    mov ax, [ar_zkb]
-    mov dx, ax
-    mov cl, 6
-    shr dx, cl
-    mov cl, 10
-    shl ax, cl
-    mov cx, ax
-    mov si, ar_impname
-    call OSAPI_FILE_READ
-    jc .unread
-    mov [ar_zsize], ax              ; what was read
-    mov [ar_zsize+2], dx
-    call ar_zeocd
-    jc .unread
     mov byte [ar_nimp], 0
     mov byte [ar_nwrong], 0
-    mov si, ar_sets
-.set:
+    mov byte [ar_zon], 0
+    mov word [ar_z2+ZC_CLAIM], 0
+    cmp byte [ar_iloose], 0
+    je .zip
+    mov si, ar_sets                 ; LOOSE: each set tried, chip by chip
+    mov byte [ar_iidx], 0
+.lset:
     lodsw
     or ax, ax
-    jz .sets
+    jz .made
     push si
     mov si, ax
-    call ar_impset
+    call ar_impmake
     pop si
-    jmp .set
-.sets:
+    inc byte [ar_iidx]
+    jmp .lset
+.zip:
+    mov si, ar_impname
+    call ar_zread
+    jnc .read
+    mov si, ar_s_badzip
+    cmp al, 1
+    jb .say
+    mov si, ar_s_bigzip
+    je .say
+    mov si, ar_s_nomem
+    jmp .say
+.read:
+    mov si, ar_sets                 ; which sets are whole, in the zip or
+    mov di, ar_iok                  ;   with their parent's
+.find:
+    lodsw
+    or ax, ax
+    jz .found
+    push si
+    push di
+    mov si, ax
+    call ar_impfind
+    pop di
+    pop si
+    mov [di], al
+    inc di
+    jmp .find
+.found:
+    xor cx, cx                      ; what making them moves: each image
+    xor dx, dx                      ;   made (counted as it comes out) and
+    mov si, ar_sets                 ;   written
+    mov di, ar_iok
+.sum:
+    lodsw
+    or ax, ax
+    jz .summed
+    cmp byte [di], 0
+    je .snext
+    mov bx, ax
+    mov ax, [bx+AS_LEN]
+    mov bx, [bx+AS_LEN+2]
+    add ax, 32
+    adc bx, 0
+    shl ax, 1
+    rcl bx, 1
+    add cx, ax
+    adc dx, bx
+.snext:
+    inc di
+    jmp .sum
+.summed:
+    call ar_opbeg
+    mov si, ar_sets
+    mov byte [ar_iidx], 0
+.make:
+    lodsw
+    or ax, ax
+    jz .madez
+    mov bl, [ar_iidx]
+    xor bh, bh
+    cmp byte [ar_iok+bx], 0
+    je .mnext
+    push si
+    mov si, ax
+    call ar_impmake
+    pop si
+.mnext:
+    inc byte [ar_iidx]
+    jmp .make
+.madez:
+    call ar_opend
     call ar_zfree
+.made:
     cmp byte [ar_nimp], 0
     je .none
     call ar_remember                ; this folder, for the picks
@@ -132,20 +177,6 @@ ar_impdone:
     cmp byte [ar_nwrong], 0
     je .say
     mov si, ar_s_wrongz
-    jmp short .say
-.unread:
-    call ar_zfree
-    mov si, ar_s_badzip
-    jmp short .say
-.nomem:
-    mov si, ar_s_nomem
-    jmp short .say
-.big:
-    mov si, ar_s_bigzip
-    jmp short .say2
-.notzip:
-    mov si, ar_s_notzip
-    jmp short .say2
 .say:
     call ar_toast
     call ar_gohome                  ; (the chooser left us in the zip's folder)
@@ -171,11 +202,112 @@ ar_impdone:
 .shown:
     mov si, [ar_win]
     jmp ar_repaint
-.say2:
-    call ar_toast
-    call ar_gohome
-    mov si, [ar_win]
-    jmp ar_repaint
+
+; ar_opbeg - DX:CX = bytes: the menu bar's file progress (SPEC.md 12.8.10)
+; armed for them, if it can be; ar_opend ends only what this began
+ar_opbeg:
+    mov byte [ar_iop], 0
+    call OSAPI_FS_OP
+    jc .r
+    mov byte [ar_iop], 1
+.r:
+    ret
+ar_opend:
+    pushf                           ; (flags kept: a read's answer rides)
+    cmp byte [ar_iop], 0
+    je .r
+    mov byte [ar_iop], 0
+    push cx
+    push dx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FS_OP
+    pop dx
+    pop cx
+.r:
+    popf
+    ret
+
+; ar_zread - SI = a zip's name, here: read whole into a claim of its own and
+; its directory found (ar_zsize..ar_cdn). CF=1 AL = 0 unreadable or not a
+; zip, 1 too big, 2 no memory - with nothing claimed
+ar_zread:
+    push si
+    push ds
+    pop es
+    xor bx, bx
+    xor cx, cx
+    xor dx, dx
+    call OSAPI_FILE_READ            ; the size probe
+    pop si
+    jnc .bad                        ; (empty)
+    cmp ax, FERR_BIG
+    jne .bad
+    mov ax, dx                      ; the KB it needs, and two over
+    cmp ax, AR_ZMAXKB - 2           ;   (64MB and more answers 0xFFFF)
+    ja .big
+    add ax, 2
+    mov [ar_zkb], ax
+    push si
+    call OSAPI_MEM_CLAIM
+    pop si
+    jc .nomem
+    mov [ar_zclaim], dx
+    mov es, dx
+    mov ax, [ar_zkb]
+    mov dx, ax
+    mov cl, 6
+    shr dx, cl
+    mov cl, 10
+    shl ax, cl
+    mov cx, ax
+    call ar_opbeg                   ; what the read moves, on the bar
+    xor bx, bx
+    call OSAPI_FILE_READ
+    call ar_opend
+    jc .unread
+    mov [ar_zsize], ax              ; what was read
+    mov [ar_zsize+2], dx
+    call ar_zeocd
+    jc .unread
+    clc
+    ret
+.unread:
+    xor dx, dx
+    xchg dx, [ar_zclaim]
+    call OSAPI_MEM_FREE
+.bad:
+    mov al, 0
+    stc
+    ret
+.big:
+    mov al, 1
+    stc
+    ret
+.nomem:
+    mov al, 2
+    stc
+    ret
+
+; ar_zswap - the zip in ar_zsize..ar_cdn and the one in ar_z2 change places
+ar_zswap:
+    push ax
+    push cx
+    push si
+    mov si, ar_zsize
+    mov cx, 8
+.w:
+    mov ax, [si]
+    xchg ax, [si + ar_z2 - ar_zsize]
+    mov [si], ax
+    inc si
+    inc si
+    loop .w
+    xor byte [ar_zon], 1
+    pop si
+    pop cx
+    pop ax
+    ret
 
 ; ar_gohome - back to the folder ARCADE started in: the chooser moves the
 ; instance to the file it opens, and ARCADE.O88's parts are read by name in
@@ -187,10 +319,20 @@ ar_gohome:
     call OSAPI_FILE_GOTO_QM
     ret
 
-; ar_zfree - the zip's claim given back
+; ar_zfree - the zips' claims given back, the parent's too
 ar_zfree:
+    cmp byte [ar_zon], 0
+    je .a
+    call ar_zswap
+.a:
     xor dx, dx
     xchg dx, [ar_zclaim]
+    or dx, dx
+    jz .b
+    call OSAPI_MEM_FREE
+.b:
+    xor dx, dx
+    xchg dx, [ar_z2+ZC_CLAIM]
     or dx, dx
     jz .r
     call OSAPI_MEM_FREE
@@ -289,19 +431,41 @@ ar_zeocd:
     stc
     ret
 
-; ar_zfind - DS:SI = a chip's NUL name: ES:BX = its central directory entry
-; (at the zip's root, the name's case ignored). CF=1 none. Kept: SI
+; ar_zfind - DS:SI = a chip (arcsets.inc): ES:BX = the central directory
+; entry holding it, BY ITS CRC-32 AND SIZE, in any folder - a merged set
+; keeps a clone's chips in a folder of the clone's name, and a chip two sets
+; share is the same bytes under either name. The zip, and then the parent's
+; if one is read; the one it was found in is left in ar_zsize..ar_cdn. CF=1
+; none. Kept: SI
 ar_zfind:
+    cmp byte [ar_zon], 0
+    je .a
+    call ar_zswap
+.a:
+    call ar_zscan
+    jnc .r
+    cmp word [ar_z2+ZC_CLAIM], 0
+    je .no
+    call ar_zswap
+    call ar_zscan
+    jnc .r
+    call ar_zswap
+.no:
+    stc
+.r:
+    ret
+
+; ar_zscan - ar_zfind in the zip in ar_zsize..ar_cdn alone
+ar_zscan:
     push cx
     push dx
-    push di
     mov es, [ar_cdseg]
     mov bx, [ar_cdoff]
     mov cx, [ar_cdn]
 .e:
     jcxz .none
-    mov ax, bx                      ; the entry and its name inside the
-    add ax, 46                      ;   directory
+    mov ax, bx                      ; the entry, wholly inside the directory
+    add ax, 46
     jc .none
     cmp ax, [ar_cdend]
     ja .none
@@ -309,104 +473,140 @@ ar_zfind:
     jne .none
     cmp word [es:bx+2], 0x0201
     jne .none
-    mov dx, [es:bx+28]              ; the name's length
-    lea di, [bx+46]
-    push si
-.ch:
-    lodsb
-    or al, al
-    jz .end
-    or dx, dx
-    jz .no
-    mov ah, [es:di]
-    or ax, 0x2020                   ; (letters to lower case; digits and
-    cmp al, ah                      ;   '.', '-' are unmoved by it)
+    mov ax, [es:bx+16]              ; its CRC-32 and size, stored or deflated
+    cmp ax, [si+AC_CRC]
     jne .no
-    inc di
-    dec dx
-    jmp .ch
-.end:
-    or dx, dx                       ; the whole name, and nothing after
-    jnz .no
-    pop si
-    clc
-    jmp short .out
+    mov ax, [es:bx+18]
+    cmp ax, [si+AC_CRC+2]
+    jne .no
+    mov ax, [es:bx+24]
+    cmp ax, [si+AC_LEN]
+    jne .no
+    cmp word [es:bx+26], 0
+    jne .no
+    cmp word [es:bx+22], 0          ; (packed under 64KB, as ar_impmake wants)
+    jne .no
+    mov ax, [es:bx+10]
+    cmp ax, 8
+    je .yes
+    or ax, ax
+    jz .yes
 .no:
-    pop si
     mov ax, [es:bx+28]              ; the next: 46 + name + extra + comment
     add ax, [es:bx+30]
+    jc .none
     add ax, [es:bx+32]
+    jc .none
     add ax, 46
+    jc .none
     add bx, ax
     jc .none
     dec cx
     jmp .e
+.yes:
+    clc
+    jmp short .out
 .none:
     stc
 .out:
-    pop di
     pop dx
     pop cx
     ret
 
-; ar_impset - SI -> a set (arcsets.inc). Every chip found, sized and CRC'd
-; in the directory first; then the image made and written. Counts
-; [ar_nimp], or [ar_nwrong] for a set whose chips are there but not right
+; ar_impset's table (arcsets.inc, tools/getarcrom.py --asm-sets)
 AS_NAME     equ 0                   ; a set: its .ROM's name (13)
 AS_LEN      equ 13                  ;   the image's length (dword)
-AS_N        equ 17                  ;   its chips
-AS_CHIPS    equ 18                  ;   ...each:
+AS_PAR      equ 17                  ;   MAME's parent zip, for a clone (13)
+AS_N        equ 30                  ;   its chips
+AS_CHIPS    equ 31                  ;   ...each:
 AC_NAME     equ 0                   ;   its name (13)
 AC_AT       equ 13                  ;   its place and size in the image
 AC_LEN      equ 15
 AC_CRC      equ 17                  ;   its CRC-32
 AC_SIZE     equ 21
-ar_impset:
-    mov [ar_iset], si
+
+; ar_impfind - SI -> a set: AL = 1 if every chip is in the zip. A set some
+; of whose chips are there and some not is a clone of a SPLIT set, whose
+; other chips are its parent's: the parent's zip is looked for beside this
+; one, read, and the set looked for again. Still short, it counts in
+; [ar_nwrong]. Kept: nothing but DS
+ar_impfind:
+    call .count
+    cmp al, [si+AS_N]
+    je .whole
+    or al, al
+    jz .not                         ; none of it: not this set
+    cmp byte [si+AS_PAR], 0         ; a clone, and no parent read yet
+    je .short
+    cmp word [ar_z2+ZC_CLAIM], 0
+    jne .short
+    push si
+    lea di, [si+AS_PAR]             ; (not the zip picked, again)
+    mov bx, ar_impname
+.same:
+    mov al, [di]
+    mov ah, [bx]
+    or ax, 0x2020
+    cmp al, ah
+    jne .other
+    inc di
+    inc bx
+    cmp byte [di-1], 0
+    jne .same
+    pop si
+    jmp short .short
+.other:
+    pop si
+    push si
+    call ar_zswap                   ; the parent's, into ar_zsize..ar_cdn
+    lea si, [si+AS_PAR]
+    call ar_zread
+    jnc .two
+    mov word [ar_zclaim], 0         ; (nothing claimed: ar_z2 stays empty)
+.two:
+    call ar_zswap
+    pop si
+    call .count
+    cmp al, [si+AS_N]
+    je .whole
+.short:
+    inc byte [ar_nwrong]
+.not:
+    mov al, 0
+    ret
+.whole:
+    mov al, 1
+    ret
+; .count - AL = the chips of set SI found
+.count:
+    push si
     mov cl, [si+AS_N]
     xor ch, ch
     lea si, [si+AS_CHIPS]
-    xor di, di                      ; DI = chips found right
-    mov byte [ar_ifound], 0
-.chip:
+    xor dx, dx
+.c:
     push cx
+    push dx
     call ar_zfind
-    jc .missing
-    inc byte [ar_ifound]
-    mov ax, [es:bx+24]              ; its size and CRC as the directory says
-    cmp ax, [si+AC_LEN]
-    jne .wrong
-    cmp word [es:bx+26], 0
-    jne .wrong
-    mov ax, [es:bx+16]
-    cmp ax, [si+AC_CRC]
-    jne .wrong
-    mov ax, [es:bx+18]
-    cmp ax, [si+AC_CRC+2]
-    jne .wrong
-    mov ax, [es:bx+10]              ; stored or deflated, nothing else
-    cmp ax, 8
-    je .ok
-    or ax, ax
-    jnz .wrong
-.ok:
-    inc di
-.wrong:
-.missing:
+    pop dx
     pop cx
+    jc .cn
+    inc dx
+.cn:
     add si, AC_SIZE
-    loop .chip
-    mov si, [ar_iset]
-    mov al, [si+AS_N]
-    xor ah, ah
-    cmp di, ax
-    je .make
-    cmp byte [ar_ifound], 0         ; some there and not right: wrong; none
-    je .r                           ;   there: just not this set
-    inc byte [ar_nwrong]
-.r:
+    loop .c
+    mov al, dl
+    pop si
     ret
-.make:
+
+; ar_impmake - SI -> a set whose chips are all to hand: each unpacked from
+; the zip(s) - or, LOOSE ([ar_iloose]), read from its own file here - into
+; the image, checked against its CRC-32 as it lands, and the image written
+; as <SET>.ROM here with its header (ARCADE-SPEC 1.4). [ar_nimp] counts it,
+; [ar_nwrong] a chip that comes out wrong. A loose set whose FIRST chip has
+; no file is just not here, and says nothing
+ar_impmake:
+    mov [ar_iset], si
     mov ax, [si+AS_LEN]             ; the image's claim: header + image
     mov dx, [si+AS_LEN+2]
     add ax, 32 + 1023
@@ -417,7 +617,9 @@ ar_impset:
     shl dx, cl
     or ax, dx
     call OSAPI_MEM_CLAIM
-    jc .r
+    jnc .claimed
+    ret
+.claimed:
     mov [ar_iclaim], dx
     mov es, dx                      ; from nothing
     xor di, di
@@ -433,8 +635,36 @@ ar_impset:
     mov cl, [si+AS_N]
     xor ch, ch
     lea si, [si+AS_CHIPS]
+    mov byte [ar_ifound], 0
 .unpack:
     push cx
+    cmp byte [ar_iloose], 0
+    je .fromzip
+    mov ax, [si+AC_AT]              ; LOOSE: the chip's file, read straight
+    mov cl, 4                       ;   into its place (every place is a
+    shr ax, cl                      ;   multiple of 16, as the read wants)
+    add ax, [ar_iclaim]
+    add ax, 2
+    mov es, ax
+    xor bx, bx
+    mov cx, [si+AC_LEN]
+    xor dx, dx
+    push si
+    lea si, [si+AC_NAME]
+    call OSAPI_FILE_READ
+    pop si
+    jc .lmiss
+    or dx, dx
+    jnz .fail
+    cmp ax, [si+AC_LEN]
+    jne .fail
+    jmp .check
+.lmiss:
+    cmp byte [ar_ifound], 0         ; the first chip not here: not this set
+    jne .fail
+    pop cx
+    jmp .free
+.fromzip:
     call ar_zfind                   ; its local header, and its data
     jc .fail
     mov ax, [es:bx+42]
@@ -443,8 +673,6 @@ ar_impset:
     mov [ar_imeth], cx
     mov cx, [es:bx+20]              ; the packed size, for the bounds
     mov [ar_ipack], cx
-    cmp word [es:bx+22], 0
-    jne .fail
     call ar_zat
     jc .fail
     cmp word [es:bx], 'PK'
@@ -453,7 +681,9 @@ ar_impset:
     jne .fail
     mov cx, [es:bx+26]
     add cx, [es:bx+28]
+    jc .fail
     add cx, 30
+    jc .fail
     add ax, cx
     adc dx, 0
     push ax                         ; the data, and its end, in the zip
@@ -491,6 +721,8 @@ ar_impset:
     pop ds
     pop si
     jc .fail
+.check:
+    inc byte [ar_ifound]
     push si                         ; the chip, as it came out
     mov cx, [si+AC_LEN]
     mov di, [si+AC_CRC]
@@ -507,6 +739,8 @@ ar_impset:
     jne .fail
     cmp dx, bp
     jne .fail
+    mov ax, [si+AC_LEN]             ; made: on the bar
+    call OSAPI_FS_PROG
     pop cx
     add si, AC_SIZE
     dec cx
@@ -554,9 +788,15 @@ ar_impset:
     adc dx, 0
     xor bx, bx
     call OSAPI_FILE_WRITE
-    jc .wfail
+    jc .free
     inc byte [ar_nimp]
-.wfail:
+    call OSAPI_FILE_HERE            ; the set's drive, for "disk in B:"
+    mov al, [ar_iidx]
+    cmp al, AR_NSET
+    jae .free
+    cbw
+    xchg ax, bx
+    mov [ar_sdrv+bx], al
     jmp short .free
 .endbad:
     pop dx
@@ -582,7 +822,7 @@ ar_remember:
     cmp [si], bl
     jne .n
     cmp [si+1], dx
-    je .r                           ; known already
+    je .full                        ; known already (the drives still written)
 .n:
     add si, 3
     loop .k
@@ -604,20 +844,19 @@ ar_remember:
 .full:
     mov si, ar_s_dat
     mov bx, ar_places
-    mov cx, 1 + AR_NPLACE * 3
+    mov cx, 1 + AR_NPLACE * 3 + AR_NSET
     mov di, ar_datst
     call od_write
-.r:
     ret
 
-; ar_placesload - ARCADE.DAT read at the start: the places a pick looks in
+; ar_placesload - ARCADE.DAT read at the start: the places a pick looks in,
+; and the drive each set was last imported on
 ar_placesload:
-    mov byte [ar_places], 0
     push ds
     pop es
     mov si, ar_s_dat
     mov bx, ar_places
-    mov cx, 1 + AR_NPLACE * 3
+    mov cx, 1 + AR_NPLACE * 3 + AR_NSET
     xor dx, dx
     call od_read
     jc .none
@@ -625,7 +864,56 @@ ar_placesload:
     jbe .r
 .none:
     mov byte [ar_places], 0
+    mov di, ar_sdrv
+    mov cx, AR_NSET
+    mov al, 0xFF
+    cld
+    rep stosb
 .r:
+    ret
+
+; ar_setdrv - SI = a .ROM's name: AL = the drive its set was last imported
+; on (0 = A:), CF=1 none known. Kept: all else
+ar_setdrv:
+    push bx
+    push cx
+    push di
+    push si
+    mov di, ar_sets
+    xor cx, cx
+.s:
+    mov bx, [di]
+    or bx, bx
+    jz .no
+    pop si
+    push si
+.c:
+    lodsb
+    cmp al, [bx]
+    jne .n
+    inc bx
+    or al, al
+    jnz .c
+    mov bx, cx                      ; this one
+    cmp bx, AR_NSET
+    jae .no
+    mov al, [ar_sdrv+bx]
+    cmp al, 26
+    jae .no
+    clc
+    jmp short .r
+.n:
+    inc di
+    inc di
+    inc cx
+    jmp .s
+.no:
+    stc
+.r:
+    pop si
+    pop di
+    pop cx
+    pop bx
     ret
 
 ar_s_dat:    db 'ARCADE.DAT', 0

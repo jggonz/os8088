@@ -409,10 +409,23 @@ ar_romload:
     jne .quiet
     mov si, ar_s_romno
     cmp al, 1
-    jb .tell
+    jb .where
     mov si, ar_s_romis
     je .tell
     mov si, ar_s_romram
+    jmp short .tell
+.where:
+    push si                         ; not found: on a floppy it was made on,
+    mov si, [ar_lbd]                ;   perhaps - "QBERT.ROM: disk in B:"
+    mov si, [si+BD_ROMF]
+    call ar_setdrv
+    pop si
+    jc .tell
+    cmp al, 2                       ; (a floppy: a hard disk is always in)
+    jae .tell
+    add al, 'A'
+    mov [ar_s_romdl], al
+    mov si, ar_s_romdisk
 .tell:
     push si                         ; the file's name, then why
     mov di, ar_msg
@@ -2177,7 +2190,9 @@ ar_ab3:     db 'to 8086 ahead of time', 0
 ar_ab4:     db 'Space Invaders (C) Taito', 0
 
 ar_s_bad:   db 'Arcade: code part bad', 0
-ar_s_romno: db ': not found', 0  ; after the <SET>.ROM's name: at most 12
+ar_s_romno: db ': not found', 0
+ar_s_romdisk: db ': disk in '
+ar_s_romdl: db 'B:', 0  ; after the <SET>.ROM's name: at most 12
 ar_s_romis: db ': wrong set', 0  ;   and 11, the toast bar's 24 (TOAST_MAX)
 ar_s_romram: db ': no memory', 0
 ar_s_nomem: db 'Arcade: no memory', 0
@@ -2211,7 +2226,9 @@ AR_VAR ar_homedrv, 1                ; the drive ARCADE started from
 AR_VAR ar_homecl, 2                 ;   ...and the folder
 AR_VAR ar_rhome, 2                  ; ar_romload: where it stood
 AR_VAR ar_rhomed, 1
-AR_VAR ar_places, 1 + AR_NPLACE * 3 ; ARCADE.DAT: places a .ROM was made
+AR_VAR ar_places, 1 + AR_NPLACE * 3 ; ARCADE.DAT: places a .ROM was made,
+AR_VAR ar_sdrv, AR_NSET             ;   and each set's drive at its import
+                                    ;   (0xFF none) - one record, so contiguous
 AR_VAR ar_datst, 1                  ;   ...and os88data's state byte for it
 AR_VAR ar_impname, 13               ; the import (arcimp.inc): the zip,
 AR_VAR ar_zsize, 4                  ;   its size,
@@ -2229,6 +2246,12 @@ AR_VAR ar_iclaim, 2
 AR_VAR ar_ifound, 1                 ;   chips found, and each one's method
 AR_VAR ar_imeth, 2                  ;   and packed size
 AR_VAR ar_ipack, 2
+AR_VAR ar_z2, 16                    ;   a PARENT zip (ar_zsize..ar_cdn's shape)
+AR_VAR ar_zon, 1                    ;   1: the parent's is the one in ar_zsize
+AR_VAR ar_iloose, 1                 ;   1: loose chips in a folder, no zip
+AR_VAR ar_iok, AR_NSET              ;   each set: whole in the zip(s)
+AR_VAR ar_iop, 1                    ;   1: a file-progress operation is ours
+AR_VAR ar_iidx, 1                   ;   the set's index in ar_sets
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB
 AR_VAR qb_rclaim, 2                 ;   the parts qb_build made
 AR_VAR qb_sclaim, 2

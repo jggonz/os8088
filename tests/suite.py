@@ -4717,18 +4717,21 @@ SOAK = [
         "corrupt streams refused with carry set and the stack restored. Host-only",
         needs=("unicorn",),
         wants=("build/arcade-rom/qbert.zip", "build/arcade-rom/invaders.zip")),
-    Row("arcimport", "soak", py("tests/arcimport.py"), 70.0,
-        "ARCADE imports a MAME .ZIP on the machine itself (ARCADE-SPEC 1.5, "
-        "docs/plans/ARCADE-RELEASE-PLAN.md 2.2): Game > Add ROM sets... and the "
-        "file chooser on MartyPC's VGA XT, a 720KB disk with the zips in ROMS\\ "
-        "and no .ROM. A zip with one chip one bit wrong writes nothing; "
-        "invaders.zip (forty clone folders, a TorrentZip comment) and qbert.zip "
-        "each write a .ROM byte for byte the one make arcaderoms writes; both "
-        "games then run, and after ARCADE is closed and reopened from B:\\ the "
-        "game is found again through ARCADE.DAT's places",
+    Row("arcimport", "soak", py("tests/arcimport.py"), 128.0,
+        "ARCADE imports ROM sets on the machine itself (ARCADE-SPEC 1.5): Game > "
+        "Add ROM sets... and the file chooser on MartyPC's VGA XT, a 720KB disk "
+        "with the sets in ROMS\\ and no .ROM. A zip with one chip one bit wrong, "
+        "and a zip cut short, write nothing; MAME's invaders.zip (forty clone "
+        "folders, a TorrentZip comment) and qbert.zip, Gun Fight's chips renamed "
+        "in a clone's folder, a split Pac-Man beside its parent and Sea Wolf as "
+        "loose files each write a .ROM byte for byte the one make arcaderoms "
+        "writes, with the menu bar's progress armed; two games run from them, "
+        "and after ARCADE is reopened from B:\\ Q*bert is found again through "
+        "ARCADE.DAT",
         needs=("marty",), wants=("build/arcade.o88", "build/os8088-360.img",
                                  "build/arcade-rom/invaders.zip",
                                  "build/arcade-rom/qbert.zip",
+                                 "build/arcade-rom/gunfight.zip",
                                  "build/arcade/roms/INVADERS.ROM",
                                  "build/arcade/roms/QBERT.ROM")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,

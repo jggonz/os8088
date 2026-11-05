@@ -63,32 +63,79 @@ def fat_cat(img, path):
     return None
 
 
+def chips(name):
+    """{chip name: its bytes} of a set, out of the board image the cache
+    holds (getarcrom.py's layout), or None without one."""
+    import getarcrom
+    st = getarcrom.SETS[name]
+    path = os88build.at('build/arcade-rom/%s.ROM' % name.upper())
+    if not os.path.exists(path):
+        return None
+    img = open(path, 'rb').read()
+    return {n: img[at:at + getarcrom.chip_size(img, at, sha)]
+            for n, at, sha in st['members']}
+
+
+def zipof(path, members):
+    import zipfile
+    with zipfile.ZipFile(path, 'w', zipfile.ZIP_DEFLATED) as z:
+        for n, d in members:
+            z.writestr(n, d)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--machine', default='os8088_xt_vga_720b')
-    ap.add_argument('sets', nargs='*')
     a = ap.parse_args()
-    sets = a.sets or ['invaders', 'qbert']
     td = tempfile.mkdtemp(prefix='arcimport-')
     disk = os.path.join(td, 'imp720.img')
-    # BAD.ZIP: Space Invaders' four chips by their names, one byte of one
+    files = [os88build.at('build/arcade.o88')]
+    # each case: the file the chooser opens, the .ROM files it must make
+    # (each byte for byte make arcaderoms's), or () for one that must make
+    # nothing, and what it shows
+    cases = []
+    # BAD.ZIP: Space Invaders' four chips by their names, one bit of one
     # flipped - the directory's CRC is the flipped chip's, so only the pin
-    # can refuse it, and no INVADERS.ROM may come of it
-    import zipfile
-    good = zipfile.ZipFile(os88build.at('build/arcade-rom/invaders.zip'))
-    badzip = os.path.join(td, 'BAD.ZIP')
-    with zipfile.ZipFile(badzip, 'w', zipfile.ZIP_DEFLATED) as z:
-        for n in ('invaders.h', 'invaders.g', 'invaders.f', 'invaders.e'):
-            d = bytearray(good.read(n))
-            if n == 'invaders.e':
-                d[100] ^= 1
-            z.writestr(n, bytes(d))
-    # the zips in a folder of their own: the .ROM goes beside its zip, the
-    # chooser leaves ARCADE standing there, and a pick must still read
-    # ARCADE.O88's own parts - and, back in its own folder, find the .ROM
-    # through ARCADE.DAT's places
-    files = [os88build.at('build/arcade.o88'), 'ROMS:' + badzip] + \
-        ['ROMS:' + os88build.at('build/arcade-rom/%s.zip' % s) for s in sets]
+    # can refuse it
+    inv = chips('invaders')
+    bad = os.path.join(td, 'BAD.ZIP')
+    zipof(bad, [(n, d if n != 'invaders.e' else d[:100] + bytes([d[100] ^ 1]) + d[101:])
+                for n, d in inv.items()])
+    files.append('ROMS:' + bad)
+    cases.append(('ROMS/BAD.ZIP', (), 'a chip one bit wrong'))
+    # TRUNC.ZIP: gunfight.zip cut short - its directory is gone
+    tr = os.path.join(td, 'TRUNC.ZIP')
+    g = open(os88build.at('build/arcade-rom/gunfight.zip'), 'rb').read()
+    open(tr, 'wb').write(g[:len(g) * 3 // 5])
+    files.append('ROMS:' + tr)
+    cases.append(('ROMS/TRUNC.ZIP', (), 'a zip cut short'))
+    for s in ('invaders', 'qbert'):
+        files.append('ROMS:' + os88build.at('build/arcade-rom/%s.zip' % s))
+        cases.append(('ROMS/%s.ZIP' % s.upper(), (s.upper() + '.ROM',),
+                      'MAME\'s zip'))
+    # MERGED.ZIP: Gun Fight's chips in a clone-named folder under other
+    # names, beside a file of nothing - found by CRC, as a merged set's are
+    mg = os.path.join(td, 'MERGED.ZIP')
+    zipof(mg, [('readme.txt', b'not a chip\n')] +
+          [('gunfigt2/chip%d.bin' % k, d) for k, d in enumerate(chips('gunfight').values())])
+    files.append('ROMS:' + mg)
+    cases.append(('ROMS/MERGED.ZIP', ('GUNFIGHT.ROM',), 'chips by CRC, in a folder'))
+    # a SPLIT Pac-Man: pacman.zip with the four program chips alone, the rest
+    # in puckman.zip beside it (the owner's set: only with it in the cache)
+    pm = chips('pacman')
+    if pm:
+        prog = [n for n in pm if n.startswith('pacman.6')]
+        zipof(os.path.join(td, 'PACMAN.ZIP'), [(n, pm[n]) for n in prog])
+        zipof(os.path.join(td, 'PUCKMAN.ZIP'), [(n, d) for n, d in pm.items() if n not in prog])
+        files += ['ROMS:' + os.path.join(td, 'PACMAN.ZIP'), 'ROMS:' + os.path.join(td, 'PUCKMAN.ZIP')]
+        cases.append(('ROMS/PACMAN.ZIP', ('PACMAN.ROM',), 'a split clone and its parent'))
+    # LOOSE: Sea Wolf's chips as files in a folder, any one of them picked
+    lo = os.path.join(td, 'loose')
+    os.makedirs(lo)
+    for n, d in chips('seawolf').items():
+        open(os.path.join(lo, n.upper()), 'wb').write(d)
+        files.append('ROMS/LOOSE:' + os.path.join(lo, n.upper()))
+    cases.append(('ROMS/LOOSE/SW0043.F', ('LOOSE/SEAWOLF.ROM',), 'loose chips'))
     subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'os88disk.py'), '-o', disk,
                     '--size', '720', '--folder', 'SYSTEM/APPDATA'] + files,
                    check=True, capture_output=True)   # (ARCADE.DAT's, as every
@@ -99,53 +146,55 @@ def main():
         win = ui.path('B:/ARCADE.O88')
         m.run()
         os88marty.guest_sleep(m, 1)
-        ui.menu_pick('Game', 'Add ROM sets...')
-        ui.chooser_open('ROMS/BAD.ZIP')
-        os88marty.guest_sleep(m, 20)
-        m.pause()
+        fpg = m.sym('fpg_total')
         back = os.path.join(td, 'back.img')
-        m.flush(1, back)
-        m.run()
-        made = fat_cat(back, 'ROMS/INVADERS.ROM') is not None
-        print('arcimport: BAD.ZIP (a chip one bit wrong) -> %s'
-              % ('INVADERS.ROM WRITTEN' if made else 'refused, nothing written'))
-        if made:
-            bad.append('BAD.ZIP made an INVADERS.ROM')
-        for s in sets:
+
+        def look():
+            m.pause()
+            m.flush(1, back)
+            m.run()
+        for pick, want, what in cases:
             ui.menu_pick('Game', 'Add ROM sets...')
-            ui.chooser_open('ROMS/' + s.upper() + '.ZIP')   # (ARCADE goes home
-                                                            #   after each)
-            # the import reads the zip and writes the .ROM: wait for the
-            # floppy to have the file (flushed and listed on the host)
-            want = SETS[s][0]
-            got = None
-            for _ in range(240):
-                os88marty.guest_sleep(m, 1)
-                m.pause()
-                back = os.path.join(td, 'back.img')
-                m.flush(1, back)
-                m.run()
+            ui.chooser_open(pick)           # (ARCADE goes home after each)
+            if not want:
+                os88marty.guest_sleep(m, 20)
+                look()
+                made = [w for w in ('INVADERS.ROM', 'GUNFIGHT.ROM')
+                        if fat_cat(back, 'ROMS/' + w) is not None]
+                print('arcimport: %s (%s) -> %s' % (pick, what, 'WROTE ' + ' '.join(made)
+                                                    if made else 'refused, nothing written'))
+                if made:
+                    bad.append('%s made %s' % (pick, ' '.join(made)))
+                continue
+            # the import reads, unpacks and writes: wait for the floppy to
+            # have the file, and see the menu bar's progress armed meanwhile
+            got = barred = False
+            for _ in range(480):
+                os88marty.guest_sleep(m, 0.5)
+                barred = barred or struct.unpack('<H', bytes(m.read(fpg, 2)))[0] != 0
+                look()
                 if all(fat_cat(back, 'ROMS/' + w) is not None for w in want):
-                    got = back
+                    got = True
                     break
             if not got:
-                bad.append('%s.zip: no %s after 240 guest seconds' % (s, ' '.join(want)))
+                bad.append('%s: no %s after 240 guest seconds' % (pick, ' '.join(want)))
                 continue
             os88marty.guest_sleep(m, 2)     # (the last sectors, the FAT)
-            m.pause()
-            m.flush(1, got)
-            m.run()
+            look()
             for w in want:
-                mine = fat_cat(got, 'ROMS/' + w)
-                ref = open(os88build.at('build/arcade/roms/%s' % w), 'rb').read()
+                mine = fat_cat(back, 'ROMS/' + w)
+                ref = open(os88build.at('build/arcade/roms/%s' % w.split('/')[-1]), 'rb').read()
                 same = mine == ref
-                print('arcimport: %s.zip -> %s: %d bytes, %s'
-                      % (s, w, len(mine), 'the same as make arcaderoms\'s' if same else 'DIFFERENT'))
+                print('arcimport: %s (%s) -> %s: %d bytes, %s%s'
+                      % (pick, what, w, len(mine),
+                         'the same as make arcaderoms\'s' if same else 'DIFFERENT',
+                         ', progress shown' if barred else ''))
                 if not same:
                     bad.append('%s: not the file the pins make' % w)
+            if not barred and pick.endswith('QBERT.ZIP'):
+                bad.append('%s: the menu bar\'s progress never armed' % pick)
         v = None
-        for s in sets:                      # and each imported game runs
-            g = SETS[s][1]
+        for g in ('Space Invaders', 'Q*bert'):   # and the imported games run
             m.pause()
             if v is None:
                 v = find_view(m)
@@ -168,7 +217,7 @@ def main():
         ui.path('B:/ARCADE.O88')
         m.run()
         os88marty.guest_sleep(m, 1)
-        g = SETS[sets[-1]][1]
+        g = 'Q*bert'
         m.pause()
         v = find_view(m)
         m.write(v + 0x6044, b'\0\0')

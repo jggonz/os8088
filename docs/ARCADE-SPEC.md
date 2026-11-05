@@ -133,39 +133,63 @@ the package. A release disk carries none: the guest's import writes them
 ### 1.5 Importing a set: from MAME's zip to `<SET>.ROM`, on the machine
 
 **Game > Add ROM sets...** opens the system file chooser (`OSAPI_FILE_DLG`)
-on a `.ZIP` (`arcimp.inc`). The board picked is let go for the memory, the
-zip is read whole (at most 448KB: MAME's `invaders.zip`, forty clones in
-folders, is 220KB), its End Of Central Directory found back from its end
-over any comment (TorrentZip leaves one), and every set ARCADE knows is
-looked for at the zip's ROOT by its chips' names, case ignored. The table
-of sets is `arcsets.inc`, which `tools/getarcrom.py --asm-sets` generates from
-its pins: each chip's MAME name, its place and size in the image and its
-CRC-32 - names and checksums, no ROM byte.
+on a `.ZIP` (`arcimp.inc`), or on any one file of a set kept as LOOSE CHIPS
+in a folder. The board picked is let go for the memory.
 
-A set is made only when the directory alone says it can be: every chip
-there, at its size, with the pinned CRC-32, stored or deflated. Then each
-chip is copied or INFLATED (`apps/os88inflate.inc`: zlib's `puff` in 8086,
-the output its own window, 1KB of work space) into the image, its CRC-32
-taken again as it comes out, and the image written with its header as
-`<SET>.ROM` **in the folder the zip is in**. Every offset and length the zip
-gives is checked against the file before it is used. A set whose chips are
-there but not right says so ("not a set I know"); a zip with none, "no set
-in it".
+**A zip** is read whole (at most 448KB: MAME's `invaders.zip`, forty clones
+in folders, is 220KB), its End Of Central Directory found back from its end
+over any comment (TorrentZip leaves one), and every set ARCADE knows is
+looked for in its directory **by each chip's CRC-32 and size, in any
+folder** - not by name. A MERGED set keeps a clone's chips in a folder of
+the clone's name, and a chip two sets share is the same bytes under either
+name, so the checksum is the identity. The table of sets is `arcsets.inc`,
+which `tools/getarcrom.py --asm-sets` generates from its pins: each chip's
+MAME name, its place and size in the image and its CRC-32, and for a clone
+MAME's parent zip - names and checksums, no ROM byte.
+
+A set some of whose chips are there and some not is a clone from a SPLIT
+set, which keeps only the chips that differ: its parent's zip
+(`PUCKMAN.ZIP` for `pacman`) is read from the same folder and the set looked
+for again across both. A set is made only when the directories alone say
+it can be: every chip found, stored or deflated. Then each chip is copied
+or INFLATED (`apps/os88inflate.inc`: zlib's `puff` in 8086, the output its
+own window, 1KB of work space) into the image, its CRC-32 taken again as it
+comes out, and the image written with its header as `<SET>.ROM` **in the
+folder the zip is in**. Every offset and length a zip gives is checked
+against the file before it is used.
+
+**Loose chips**: each set's chips are read as files of their MAME names from
+the folder the picked file is in, each at its exact size and checked against
+its CRC-32. A set whose first chip has no file there is not there, and says
+nothing.
+
+A set some of whose chips are there but not all, or not right, says so
+("not a set I know"); a file with none, "no set in it". The menu bar's file
+progress (SPEC.md 12.8.10, `OSAPI_FS_OP`) runs through the read and through
+the making - each chip counted as it comes out, each `.ROM` as it is
+written - since an import on an 8088 takes seconds.
 
 **Where a pick looks** (`ar_romload`): the folder ARCADE stands in, then
 each folder an import wrote to, newest first - up to eight, kept in
 `ARCADE.DAT` in `SYSTEM\APPDATA` on ARCADE's own disk (`os88data.inc`), the
-program's own information, so a disk of ROMs works wherever it is put. A
-pick that finds none says `<SET>.ROM: not found`.
+program's own information, so a disk of ROMs works wherever it is put.
+`ARCADE.DAT` also keeps the drive each set was last imported on. A pick that
+finds nothing says `<SET>.ROM: not found` - or, for a set imported on a
+floppy drive, `<SET>.ROM: disk in B:`, since the disk it was made on is
+most likely in a drawer.
 
 `tests/arcimport.py` (row `arcimport`) is the import on MartyPC's VGA XT:
 the zips in a `ROMS` folder, each `.ROM` written there read back off the
-floppy and held byte for byte to `make arcaderoms`'s, each game run from it,
-and after a restart from ARCADE's own folder found through `ARCADE.DAT`. A
-zip with Space Invaders' four chips, one bit of one flipped, makes nothing.
-`tests/inflate86.py` holds the inflater to zlib under Unicorn: stored, fixed
-and dynamic blocks to 64KB, every member of the sets' zips, and the streams
-it must refuse.
+floppy and held byte for byte to `make arcaderoms`'s - MAME's own
+`invaders.zip` and `qbert.zip`, Gun Fight's chips renamed in a clone's
+folder, a split Pac-Man with its parent beside it, Sea Wolf as loose files -
+the menu bar's progress seen armed, two games run from their imported
+files, and after a restart from ARCADE's own folder Q\*bert found through
+`ARCADE.DAT`. A zip with one bit of one chip flipped, and a zip cut short,
+make nothing. `tests/inflate86.py` holds the inflater to zlib under Unicorn:
+stored, fixed and dynamic blocks to 64KB, every member of the sets' zips,
+and the streams it must refuse. The "disk in B:" toast is not driven by a
+row: the harness cannot change a floppy under a running guest.
 
 ### 1.3 The ROM
 

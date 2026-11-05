@@ -280,13 +280,20 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [x] The `.ROM` writer: `<SET>.ROM` beside its zip, the place remembered
       in `ARCADE.DAT` so a pick finds it from anywhere; toasts within
       TOAST_MAX.
-- [ ] Loose-file folders (a set as separate chips): not done; a zip is
-      what MAME users have.
+- [x] Loose-file folders: any one chip of a set picked, every chip read
+      by its MAME name beside it.
+- [x] Chips matched by CRC-32 in any folder (merged sets, renamed chips);
+      a split clone completed from its parent's zip beside it (Pac-Man's
+      `puckman`).
+- [x] The menu bar's file progress through read and making
+      (`OSAPI_FS_OP`, `OSAPI_FS_PROG`).
+- [x] "`<SET>.ROM`: disk in B:" for a set last imported on a floppy.
 - [x] Row `arcimport`: a one-bit-wrong chip writes nothing; invaders.zip
       and qbert.zip each make a `.ROM` byte-identical to the host's, both
       games run, and are found again after a restart.
-- [ ] A truncated zip refused on the guest (the decoder's refusals are
-      `inflate86`'s); import timed on the 5150.
+- [x] A truncated zip refused on the guest (row `arcimport`).
+- [ ] Import timed on the 5150 (field; the owner: a one-time cost, and
+      15 s for a pick is fine).
 
 ### R3: the frontend
 - [ ] retro-face mockups first, for the owner to pick.
