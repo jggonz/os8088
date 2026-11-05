@@ -84,6 +84,21 @@ Three things in it are waste, and one is the size of a ring:
   (SPEC.md 50.6.6), but the battle reads one file through its own cursors
   (`RG_CUR`, `vb_curm`) and walks no directory while it plays - and the
   window rebuilds it when the play ends. **+~37 KB a ring.**
+- **Decided (the owner, 2026-11-05): the caches are purged for the play.**
+  *"Unless we are using them (stream doesn't use the read ahead cache
+  right?) we can purge them for the extra ram."* It does not: the battle
+  reads one open file through its own cursors and walks no directory while
+  it plays. So the claim is made at `MEM_LVL_TOP` with NO floor
+  (`OSAPI_MEM_FLOOR` left alone): every cache counts as free and the claim
+  path sheds them (SPEC.md 50.6.3-4). The Video Player gets the same room
+  through the compaction door - `OSAPI_MEM_COMPACT`'s `MEMC_WHATIF` at
+  `MEM_LVL_TOP`, then `MEMC_POST` and a claim on the wake (`vp_cptry`,
+  SPEC.md 98.3.19.1) - because its own region has to move to make it; the
+  battle's region is already at the top (`HI`), and what stood in the way
+  was its own pinned block landing over the caches, which one claim
+  removes. If a measurement shows the arena still split after it (a
+  movable claim of someone else's between), `vp_cptry`'s door is the
+  fallback, not a hand-rolled walk of the claim table.
 - `VB_RKEEP` is re-justified or dropped: what in the play claims after
   the rings? (The stream's records are the driver's own; the bracket claims
   nothing.) Measured, not assumed.
