@@ -663,6 +663,65 @@ class Project:
                                  (st.get("auto") or {}).get("via")) if x]
         return used
 
+    def clip_chars(self, aid):
+        """The characters whose OWN clips (action AID's "by_target") the
+        battle can look for, as vbtrules.clip_char picks them: the
+        character doing it when it is aimed at the enemy or at oneself;
+        any character when one is chosen (a menu's ally, an enemy move
+        that is not "named"); the named one when the enemy names it. Aimed
+        at more than one, or the enemy's at itself, nobody's: the action's
+        own pools alone (vbtrules.targets)"""
+        d = self.d
+        a = d["actions"].get(aid)
+        if a is None:
+            return set()
+        t = a.get("target")
+        names = [ch["name"] for ch in d["characters"]]
+        out = set()
+        for ch in d["characters"]:              # the party's menus
+            m = ch["menu"]
+            has = aid in m["side"] or any(
+                it.get("action") == aid or aid in it.get("sub", ())
+                for it in m["top"])
+            if not has:
+                continue
+            if t == "ally":                     # (vbtrules.targets: a
+                out.update(names)               # character's "character"
+            elif t in ("enemy", "self", "character"):   # is the enemy)
+                out.add(ch["name"])
+        if t in ("enemy", "character"):         # the enemy's, at whom it
+            out |= self._enemy_aims(aid, names, set())  # chose
+        return out
+
+    def _enemy_aims(self, aid, names, seen):
+        """The characters the enemy can aim action AID at: a "named" move's
+        one, anybody for any other rule; a follow-up "same" as the move it
+        follows"""
+        if aid in seen:
+            return set()
+        seen.add(aid)
+        e, out = self.d["enemy"], set()
+        for st in e["stances"]:
+            for m in st["moves"]:
+                if m["action"] == aid:
+                    out |= {m["target"]} if m.get("rule") == "named" and \
+                        m.get("target") in names else set(names)
+            if any(r.get("action") == aid for r in st.get("responses", [])) \
+                    or aid in (st.get("return"),
+                               (st.get("auto") or {}).get("via")):
+                out |= set(names)
+        for f in e.get("follow_ups", []):
+            if f.get("then") != aid:
+                continue
+            tg = f.get("target", "same")
+            if tg == "same":
+                out |= self._enemy_aims(f.get("after"), names, seen)
+            elif tg == "named" and f.get("named") in names:
+                out.add(f["named"])
+            else:
+                out |= set(names)
+        return out
+
     def clips_used(self):
         used = [o["clip"] for o in self.d["openings"]]
         for a in self.d["actions"].values():
@@ -875,17 +934,21 @@ class Project:
                         err(w, "pool %s: no clip %s" % (pk, cl))
             if not a["pools"].get("hit"):
                 # (a HIT clip per TARGET counts: an enemy's action is often
-                # made a clip per character it can hit)
+                # made a clip per character it can hit) - and only where the
+                # battle can GO: a character's own clip for an action only
+                # another has, or one the enemy aims at somebody else, is a
+                # path nobody takes (the owner, 2026-11-05)
                 by = a.get("by_target", {})
                 names_ = [ch["name"] for ch in d["characters"]]
                 have = [n_ for n_ in names_ if by.get(n_, {}).get("hit")]
+                reach = self.clip_chars(aid)
                 if not have:
                     warn(w, "no HIT clip: it happens at once, with no picture")
-                elif len(have) < len(names_) and \
-                        a.get("target") in ("character", "enemy", "ally"):
+                elif reach - set(have):
                     warn(w, "no HIT clip at %s: there it happens at once, "
                          "with no picture" % ", ".join(
-                             n_ for n_ in names_ if n_ not in have))
+                             n_ for n_ in names_ if n_ in reach and
+                             n_ not in have))
         for aid in self.actions_used():
             if aid not in d["actions"]:
                 err("menus", "no action %s" % aid)
@@ -962,12 +1025,7 @@ class Project:
         for cid, c in d["clips"].items():
             if cid in used_clips:
                 continue
-            if c["source"] == idle_src:
-                info("clips." + cid, "this is the idle loop's own video: "
-                     "the idle loop plays the video itself (the Idle tab), "
-                     "so the clip is not needed - it is left out of the "
-                     "build (remove it, or keep it to cut actions from)")
-            else:
+            if c["source"] != idle_src:     # (one of the idle loop's own
                 warn("clips." + cid, "no action, opening or ending uses it: "
                      "it is left out of the build")
         for it in d.get("items", []):
@@ -1033,10 +1091,6 @@ class Project:
             ec = e.get(k)
             if ec in d["clips"]:
                 c = d["clips"][ec]
-                if c.get("joins") or not c.get("ends"):
-                    info("clips." + ec, "is the %s clip: it is built as an "
-                         "ending (it ends the battle, and does not join the "
-                         "idle loop), whatever its own Joins and Ends say" % k)
                 pools = [aid for aid, a in d["actions"].items()
                          if any(ec in pl for pl in a["pools"].values()) or
                          any(ec in pl for per in a.get("by_target", {}).values()

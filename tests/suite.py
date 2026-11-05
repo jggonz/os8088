@@ -16950,6 +16950,11 @@ SOAK = [
         "found, a Save As into another folder found, and another machine's "
         "D:\\ path found beside the project by name. Broken (paths saved "
         "as given) 1-3 red"),
+    Row("vbtreach", "soak", py("tests/vbtreach.py"), 3.0,
+        "SPEC.md 125.6's builder checks: a missing per-character HIT clip is "
+        "warned of only where the battle can go - the characters who have "
+        "the action, the ones the enemy can aim it at (a named move, a "
+        "follow-up 'same'). Broken (every character reachable) 3 red"),
     Row("vbtsndend", "soak", py("tests/vbtsndend.py"), 60.0,
         "SPEC.md 125.3: the card's stream ENDED under the battle (SOUND.DRV's "
         "watchdog made to fire) - the owner's 'no sound causes a permanent "

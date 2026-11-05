@@ -116,10 +116,9 @@ def project(tmp):
         {"action": "bite", "weight": 1, "rule": "alternate"})
     about = [x for x in p.check() if x.where in ("clips.idleclip",
                                                   "actions.bite")]
-    ok([x.level for x in about] == ["INFO"]
-       and "idle loop's own video" in about[0].text,
-       "a clip of the idle loop's video nothing plays: one note, no error "
-       "(%s)" % about)
+    ok(about == [],
+       "a clip of the idle loop's video nothing plays: nothing said - it is "
+       "left out, and the owner's joins are not the user's (%s)" % about)
     p.set(("actions", "bite", "by_target"), {"ARI": {"hit": ["hit"]}})
     miss = [x.text for x in p.check() if x.where == "actions.bite"]
     ok(len(miss) == 1 and "at BRAM" in miss[0],
