@@ -1,0 +1,186 @@
+# ARCADE on kern_mega - the plan
+
+The owner's rule (2026-11-05): every new application runs on kern_mega, and
+ARCADE is a new application. kern_mega may be assumed to run on a 286 or
+better: below that it is a larger real-mode kernel and nothing more.
+
+Today ARCADE refuses to start there. `OS88_MEGA_REFUSE` is the first line
+of `ar_entry`, and `tests/megahigh.txt` and `tests/pins.txt` carry its
+debts. This plan retires all three.
+
+The facts below come from an audit of the tree (2026-11-05), with file and
+line as of commit `b67ac5c2`. SPEC.md 20.18, KERN-MEGA-PLAN and
+KERN-MEGA-MEMORY-PLAN are the rules.
+
+## 1. What kern_mega gives a package, and what ARCADE does against it
+
+On kern_mega in protected mode:
+
+- **Claims are LDT selectors.** A package's region and every claim is a data
+  selector (a code half 8 below). With `OS88_HIGH` / `OS88_HIGHMEM` they may
+  be above 1MB. A selector is opaque: adding to one names a different LDT
+  entry, not a later paragraph.
+- **Packages run at ring 0 under the identity map.** Port I/O is legal, as
+  are `cli`, `sti` and `hlt`. `int 16h` is reflected. `0040h`, `A000h`,
+  `B000h` and `B800h` are identity selectors. FSX's framebuffer
+  (`FSI_SEG`) is a selector, and ARCADE only ever loads it into a segment
+  register.
+- **Two things work but trap.** A store through CS, and a far transfer
+  through a data selector, are completed by the kernel (`mega_gpw`,
+  `mega_gpfix`). Each costs one fault, about 77 us measured on 86Box.
+  That is fine once per command and ruinous in a loop: RealDMG took
+  2.1 million a minute, and the Video Player 7,048 a play, before each was
+  fixed.
+- **Sound needs no change.** ARCADE reaches it only through the API
+  (`OSAPI_SND_STREAM`, `SND_FM`, `DRV_CALL SNDV_OPLW`, `SND_TONE`). The
+  DMA ring is `OSAPI_MEM_CLAIM_DMA_HI`, which stays conventional.
+  `pit_now` reads ports 40h, 43h and 20h and `es = 40h`, all legal.
+
+ARCADE's real-mode assumptions, by the audit:
+
+| kind | where | count |
+|---|---|---|
+| paragraph SUMS on a claim's segment | `ar_rimg` = ROM claim + 2 (arcade.asm:533); `+1000h` past 64KB (`ar_crcimg` :593, arcqbs.inc:70); `ar_zat`'s offset >> 4 into a 448KB zip (arcimp.inc:330, kept in `ar_cdseg`); chip places `AC_AT + claim + 2` (arcimp.inc:645, 709, 733); the import image cleared by `+800h` steps (:616); `af_slot`'s `index * AF_PICPAR + af_pclaim` (arcface.inc:409) | 9 sites |
+| FAR TRANSFERS into loaded memory | `call far [ar_core]`: a board's code part, by its op_seg DATA segment (arcade.asm:274, :1002); the N88 core's NMI frame `retf`s into Q*bert's program in `qb_gseg`, a plain claim (arcn88.asm:55-64, arcqb.inc:364); the game's patched yields `call far` the N88 part by its DATA segment (arcqb.inc:338-356) | 3 paths, every frame |
+| STORES THROUGH CS | `mov [cs:n88_view], ax` every run (arcn88.asm:43); Pac-Man's shadow pass, per row (arcpm.inc:1565, 1602, 1607, 1608); its build (`pmb_*`, :351-408); `os88inflate.inc`'s work space `[cs:INF_WS]`, 34 sites, several per BIT decoded | per run, per row, per bit |
+| CODE WRITTEN as data | `ar_fill` pokes ROM bytes into the recipe's holes through `op_seg` (arcade.asm:659); Q*bert's program patched and copied into `qb_gseg` (arcqb.inc:131, 339) | legal: through data selectors already |
+| claims over 64KB | the `.ROM` image (up to 128KB), the zip (448KB) | 2 |
+
+What is already right: the translated boards (`arcrt.inc`, `arcz80rt.inc`
+and the generators) load no segment from a value and do no sums. Their
+only segment load is `mov di, ds / mov es, di`, they only READ through CS,
+and they run with DS = SS = the view and ES = the aux part. Q*bert's own
+program loads no segment register (its loads are NOPped), has no `int`,
+`in`, `out`, `cli` or `sti`, and runs with CS = DS = SS = ES = G.
+
+## 2. The approach: protected mode throughout, region and claims high
+
+The alternative is an `FSXF_REAL` bracket: the game loop runs in real
+mode, where every assumption above holds, and only the desktop side is
+made selector-clean. It is cheaper, but it pins the region and every claim
+the loop touches in conventional memory, which is the opposite of
+`OS88_HIGH`. **Rejected**, unless M4's measurement finds protected mode too
+slow on the 286.
+
+So the arm runs in protected mode with `OS88_HIGH | OS88_HIGHMEM`:
+
+- ARCADE derives every segment in ONE place.
+- Code it far-calls has a CODE selector.
+- It never stores through CS on a hot path.
+- Its two claims over 64KB are walked by window, never by sum.
+
+Most of this is the SAME code on every kernel, a selector being just
+another opaque segment. Only what names a kern_mega marker goes under
+`%ifdef PKG_MEGA` (SPEC.md 20.18 rule 1), into an arm built by
+`make mega`.
+
+## 3. Waves
+
+Each wave lands on `arcade-emu` (or its successor) and is verified on the
+host and by looking. The rows run once, after the last wave (CLAUDE.md,
+*Testing*).
+
+### M1 - one door for every derived segment (shipped build; retires the pins)
+
+- [ ] `ar_seg`: DX = a claim, AX = a paragraph offset, CX = paragraphs,
+      giving DX = a segment there. On kern_mega it is `OSAPI_SEG SEG_SUB`;
+      on a real-mode kernel, or when refused, it is the sum. Every site in
+      section 1's first row goes through it: `ar_rimg`, the chips,
+      `af_slot`, the import image's places.
+- [ ] Past 64KB, a bound window and never `+1000h`. The `.ROM` image
+      (128KB) and the zip (448KB) are walked by `OSAPI_SEG SEG_AT`,
+      os88partsbody.inc's `op_at` pattern: `ar_crcimg`, `ar_zat`, the
+      sound chips at 10000h, and the import's clear.
+- [ ] Every claim made MOVABLE, with a relocation proc that re-derives
+      through `ar_seg`: the `.ROM`, the pictures, Pac-Man's and Q*bert's
+      built parts and shadows, `qbs_seg`. `qb_gseg` and the code parts move
+      only between plays, so their procs check that no bracket is up. This
+      retires the twelve N lines in `tests/pins.txt`.
+- **Verified by:** `arcbuilt`, `arcimport`, `arcface*`, `arcopt` and
+      `qbglass` unchanged, plus a compaction forced between two picks (a
+      new row, `arcmove`).
+
+### M2 - no stores through CS (shipped build too)
+
+- [ ] `os88inflate.inc`: the work space reached through a segment register
+      the includer names, not CS. INF_WS is ARCADE's bss, so this is
+      `ds:` with the stream moved to ES:SI, or a dedicated segment.
+      `tests/inflate86.py` holds it to zlib again.
+- [ ] `arcn88.asm`: `n88_view` kept in G (the game's segment) or passed in
+      a register, not stored through CS.
+- [ ] Pac-Man's shadow pass and build (`pm_shr`, `pm_pp`, `pm_shp`,
+      `pmb_*`): through DS, the package's own.
+- **Verified by:** `arcbuilt` (the builds), `inflate86`, `arcspeed`,
+      `qbglass`, `arclock*`. Each is byte-identical where it was.
+
+### M3 - code selectors for code (the arm)
+
+- [ ] Board code parts called through their CODE half: `OP_WANT_CSEG` and
+      `op_cseg` for `ar_core+2`. The recipe is still filled through
+      `op_seg`'s data half.
+- [ ] `qb_gseg` claimed as a code/data PAIR (`OSAPI_SEG SEG_SUBC` over
+      the claim, or `OS88_CODESEL`). The N88 core's NMI frame pushes the
+      CODE half; DS, SS and ES get the data half.
+- [ ] The patched yields far-call the N88 part's CODE half
+      (`arcqb.inc:338-356` takes it from `op_cseg`).
+- [ ] The class byte of the arm: `OS88_HIGH | OS88_HIGHMEM`. Its own
+      region holds no far pointer for real mode and stamps no vector.
+- [ ] Under `%ifdef PKG_MEGA`: whatever names a marker
+      (`OS88_CODESEL`, `CPU_F_PM`). The shipped build keeps
+      `OS88_MEGA_REFUSE`, now TRUE: kern_mega's disk carries the arm.
+- **Verified by:** a trap count. The kernel's fault counters read zero
+      over a minute of each board's play (the Video Player's 7,048 to 0
+      bar, KERN-MEGA-PLAN 14.16).
+
+### M4 - the arm built, shipped on kern_mega's disks, gated
+
+- [ ] `$(MEGAAPPDIR)/arcade.bin` and `.o88`: the shipped rule with
+      `-DPKG_MEGA`, in `$(MEGAPKGS)`. kern_mega's apps disks carry it:
+      `megaapps.img` takes it through `MEGASUB`, or an `arcrel` twin for
+      kern_mega.
+- [ ] `tests/unit/t_megapkg.py` sees ARCADE. Today its `recipes()` skips
+      the rule, because the first prerequisite is `$(ARCADE_SRC)` and not
+      `apps/...asm`. Fix the rule's order (or the gate), so check 3 (a
+      PKG_MEGA user has an arm) applies.
+- [ ] `tests/megahigh.txt`'s two ARCADE lines removed, since the arm
+      declares both bits. The gate turns one way.
+- [ ] MEASURED on the 286 (86Box `vm/286-mega`) and the 386 (Bochs): each
+      board's frame rate in protected mode against kern_big on the same
+      machine. Q*bert's live sound stays gated to a 386 (`CPU_386`), as
+      on kern_big.
+
+### M5 - verification rows
+
+- [ ] `arcmega` (Bochs, VGA, `--sb`): ARCADE from kern_mega's apps disk on
+      a ROM disk. Open, import a zip, play each of the seven games for N
+      frames (counted), P and F1, a picture written, ARCADE.DAT
+      read back. Faults counted: zero in play.
+- [ ] `arcmega286` (86Box `286-mega`): the same at the 286 floor, frame
+      rates reported.
+- [ ] The shipped build on kern_mega still refuses, saying so.
+- [ ] Break each on purpose: a CS store left in `n88_view` (traps
+      counted), a sum left in `af_slot` (a wrong picture or a fault).
+
+## 4. Costs and risks
+
+- **Bytes.** M1 and M2 are shipped code: a few dozen bytes for `ar_seg`,
+      the procs and the window walks. M3's marker code is the arm's alone.
+      Each will be measured, never estimated against a rung.
+- **The import's speed.** A window re-aim per zip read (`SEG_AT`) is an API
+      call. `ar_zat` is called per entry and per chip, not per byte, so
+      this is cheap. M1 measures it on `arcimport`.
+- **Q\*bert's program** runs in protected mode with its segment registers
+      never reloaded, so no trap. Its NMI and yield are the only far
+      transfers, once a frame each.
+- **Translated boards** in protected mode: DS = SS = the view as a
+      writable data selector, the dispatch read through CS. No traps, by
+      the audit. M4's measurement confirms it.
+- **Open:** whether kern_mega's apps disk has room for the arm beside
+      what it carries (189KB). If not, a kern_mega twin of `arcrel`.
+
+## 5. Not in this plan
+
+- Q*bert's sound on a 286: still needs the faster sound path
+  (ARCADE-RELEASE-PLAN, R5's open items).
+- Running ARCADE's region above 1MB on kern_big's XMS: kern_big has no such
+  mode.
