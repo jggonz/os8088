@@ -27,7 +27,10 @@
                                         ;   with a far jump into its segment
 %include "arcdefs.inc"
 
-    OS88_HEADER 'ARCADE', ar_entry, OS88_F_ICON | OS88_F_PARTS
+    OS88_HEADER 'ARCADE', ar_entry, OS88_F_ICON | OS88_F_PARTS, OS88_HIGH | OS88_HIGHMEM
+                                        ; (on kern_mega the arm's region and
+                                        ;   its claims of 64KB or less may be
+                                        ;   above 1MB: ARCADE-MEGA-PLAN)
 
 ; --- embedded 16x16 icon: an invader -----------------------------------------
     OS88_ICON16
@@ -37,6 +40,9 @@
     dw 0x2828, 0x06C0, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000
     OS88_ICON16_END
 
+%ifdef PKG_MEGA
+%define OP_WANT_CSEG                ; op_cseg: a board's code part is far-
+%endif                              ;   called through its CODE selector
 %include "os88parts.inc"
 
 %ifdef ARC_PACMAN
@@ -273,10 +279,16 @@ ar_select:
     mov [ar_bx], ax
     mov al, [bx+BD_CODE]
     call op_seg
-    mov [ar_core+2], ax
     mov es, ax
     mov ax, [es:ARC_HDR+AH_ENTER]
     mov [ar_core], ax
+%ifdef PKG_MEGA
+    mov al, [bx+BD_CODE]            ; the far call's: the part's CODE half,
+    call op_cseg                    ;   never a fault per run through its data
+%else                               ;   one (ARCADE-MEGA-PLAN M3)
+    mov ax, es
+%endif
+    mov [ar_core+2], ax
     mov al, [bx+BD_AUX]
     cmp al, AR_P_NONE
     je .built
@@ -816,8 +828,11 @@ ar_reset1:
                                     ;   on a Z80 it is N, which is not kept)
     mov word [es:V_SIG], 'AR'
     mov word [es:V_SIG+2], 'CV'
-    mov es, [ar_aseg]
-    mov word [es:AUX_LPTR], AUX_LIST
+    cmp byte [bx+BD_AUX], AR_P_NONE ; a translated board's write list, in
+    je .nolist                      ;   its AUX part: Q*bert's ar_aseg is its
+    mov es, [ar_aseg]               ;   40KB sprite part, C000h past its end
+    mov word [es:AUX_LPTR], AUX_LIST ;  (kern_mega's limit faulted the store;
+.nolist:                            ;   real mode wrote the heap beyond)
     pop es
     mov byte [ar_halted], 0
     call [bx+BD_RESET]
@@ -2173,6 +2188,7 @@ ar_shift:
 %include "arcqbs.inc"
 %include "arcart.inc"
 %include "arcsets.inc"                 ; (generated: getarcrom.py --asm-sets)
+%define INF_DSWS                    ; (nothing stored through CS: M2)
 %include "os88inflate.inc"
 %define OD_TVOL ar_homedrv            ; ARCADE.DAT on ARCADE's own disk
 %include "os88data.inc"
@@ -2473,6 +2489,7 @@ AR_VAR qr_sah, 1
 AR_VAR ar_rfdrv, 1                  ; where the .ROM was found (its picture's
 AR_VAR ar_rfcl, 2                   ;   place)
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB
+AR_VAR qb_gcs, 2                    ;   ...and G as CODE (qb_gcode)
 AR_VAR qb_rclaim, 2                 ;   the parts qb_build made
 AR_VAR qb_sclaim, 2
 AR_VAR qbb_mask, 1                  ;   ...and its loops' cells
@@ -2634,14 +2651,8 @@ AR_VAR pm_sy, 2
 AR_VAR pm_sbase, 2
 AR_VAR pm_flip, 1
 AR_VAR pm_rows, 2
-AR_VAR pm_pp, 2
 AR_VAR pm_rclaim, 2                 ;   the ROM part pm_build made
-AR_VAR pmb_code, 2                  ;   ...and its loops' counters
-AR_VAR pmb_flip, 1
-AR_VAR pmb_bit, 2
 AR_VAR pm_shseg, 2                  ;   the shadow of the glass (part 7)
-AR_VAR pm_shp, 2                    ;   ...its plane, and its row, in pm_put
-AR_VAR pm_shr, 2
 AR_VAR pm_tvalid, 28 * 36           ;   a tile's cached planes are good
 AR_VAR pm_t, 2
 AR_VAR pm_tx, 2

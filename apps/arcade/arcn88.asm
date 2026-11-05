@@ -20,7 +20,10 @@
 ;
 ; The game's registers live on its own stack across a yield: FLAGS, AX, BX,
 ; CX, DX, SI, DI, BP pushed there, SS:SP in the view. DS = ES = SS = G
-; throughout the game; this part touches its CS only for the view's segment.
+; throughout the game. The view's segment, for the yield, is kept in G at
+; N88_GVIEW, a word the board does not map - never in CS, which kern_mega
+; runs as a code selector a store through faults on (docs/plans/
+; ARCADE-MEGA-PLAN.md M2): this part writes nothing through CS.
 ; =============================================================================
     cpu 8086
     org 0
@@ -32,7 +35,9 @@
     dw n88_end                      ; AH_END
     dw n88_yield                    ; AH_YIELD: the far call each yield makes
 
-n88_view:   dw 0                    ; the view's segment, for the yield
+N88_GVIEW   equ 0x9FFE              ; G: the view's segment, for the yield -
+                                    ;   Gottlieb's map has nothing at 6000-9FFFh
+                                    ;   (the program is A000h up)
 
 ; n88_enter - far: AX = the view. Runs the game to its next yield; out:
 ; ST_WHY = ARCX_HALT (the game waits for the next NMI), every register but
@@ -40,25 +45,27 @@ n88_view:   dw 0                    ; the view's segment, for the yield
 n88_enter:
     cli
     mov ds, ax
-    mov [cs:n88_view], ax
+    mov dx, ax                      ; (the view, for G)
     mov [ST_HSS], ss
     mov [ST_HSP], sp
     mov cx, [NV_GSEG]
     mov bx, [NV_GSP]
+    mov di, [NV_GCS]                ; (G as code: the NMI frame's CS)
     mov al, 0
     xchg al, [NV_NMI]
     mov ss, cx
     mov sp, bx
     mov ds, cx
     mov es, cx
+    mov [N88_GVIEW], dx
     or al, al
     jz n88_resume
     pushf                           ; the NMI: a frame that IRETs into the
     push cs                         ;   resume below, the handler at the
     mov ax, n88_resume              ;   game's own vector [0008h]
     push ax
-    push ds
-    push word [0x0008]
+    push di                         ; G's CODE half: never a data selector
+    push word [0x0008]              ;   loaded into CS (ARCADE-MEGA-PLAN M3)
     ; STKBALANCE-OK: a far JUMP into the game's NMI handler, on the GAME's
     ;   stack (SS = G): its IRET comes back to n88_resume
     retf
@@ -88,7 +95,7 @@ n88_yield:
     push si
     push di
     push bp
-    mov ds, [cs:n88_view]
+    mov ds, [ss:N88_GVIEW]          ; (SS = G)
     mov [NV_GSP], sp
     mov ss, [ST_HSS]
     mov sp, [ST_HSP]

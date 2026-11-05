@@ -730,21 +730,21 @@ ar_impmake:
     push si
     call ar_iplace                  ; DX:0 = its place in the image
     mov cx, [si+AC_LEN]
-    push es
-    pop ds                          ; DS:SI = the data
-    mov si, bx
-    mov es, dx
+    mov ax, es                      ; AX:SI = the data (DS stays ours: a CS
+    mov si, bx                      ;   reload would be a code selector on
+    mov es, dx                      ;   kern_mega)
     xor di, di
-    cmp word [cs:ar_imeth], 8
+    cmp word [ar_imeth], 8
     je .inf
+    push ds
+    mov ds, ax
     rep movsb
+    pop ds
     clc
     jmp short .made
 .inf:
-    call inflate
+    call inflate                    ; (INF_DSWS: the work space through DS)
 .made:
-    push cs
-    pop ds
     pop si
     jc .fail
 .check:

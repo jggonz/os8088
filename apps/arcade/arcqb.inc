@@ -64,6 +64,10 @@ qb_on:
     call OSAPI_MEM_CLAIM
     jc .r
     mov [qb_gseg], dx
+    mov [qb_gcs], dx                ; G as CODE: itself, but on kern_mega
+%ifdef PKG_MEGA
+    call qb_gcode
+%endif
     mov ax, QB_SHPL * 4 / 1024      ; ...and the shadow of the glass
     call OSAPI_MEM_CLAIM
     jc .noshadow
@@ -75,6 +79,31 @@ qb_on:
     stc
 .r:
     ret
+%ifdef PKG_MEGA
+; qb_gcode - DX = G: [qb_gcs] = the selector to run the game's code through
+; (ARCADE-MEGA-PLAN M3). A conventional claim is a pair already, its code half
+; DX - 8 (OSAPI_MEM_CODESEL); one in the pool above 1MB is a lone data
+; selector, and SEG_SUBC makes a pair over it that moves and goes with it.
+; Refused, G itself stays: each transfer then faults and is completed, slow
+; but right. Kept: all but AX, BX, CX, flags
+qb_gcode:
+    push dx
+    call OSAPI_MEM_CODESEL
+    jnc .have
+    mov bl, SEG_SUBC
+    xor ax, ax
+    xor cx, cx
+    call OSAPI_SEG
+    jc .r
+    mov ax, dx
+    sub ax, 8
+.have:
+    mov [qb_gcs], ax
+.r:
+    pop dx
+    ret
+%endif
+
 qb_off:
     call qbs_off                    ; (its sound board's memory, ARCADE-SPEC 13)
     mov dx, [qb_gseg]
@@ -82,6 +111,7 @@ qb_off:
     mov dx, [qb_shseg]
     call OSAPI_MEM_FREE
     mov word [qb_gseg], 0
+    mov word [qb_gcs], 0
     mov word [qb_shseg], 0
     mov si, qb_rclaim               ; ...and the parts qb_build made
     call .free
@@ -363,13 +393,15 @@ qb_reset:
     stosw
     mov ax, 0xA000
     stosw
-    mov ax, es
+    mov ax, [qb_gcs]                ; (its CS: G's code half on kern_mega)
     stosw
     mov byte [es:0x5800], QB_DSW
     mov byte [es:0x5801], QB_IN1REST
     mov es, [ar_vseg]
     mov ax, [qb_gseg]
     mov [es:NV_GSEG], ax
+    mov ax, [qb_gcs]
+    mov [es:NV_GCS], ax
     mov word [es:NV_GSP], QB_SP0
     mov byte [es:NV_NMI], 0
     pop es

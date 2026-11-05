@@ -11568,7 +11568,7 @@ $(BUILD)/arcade/paccode.bin: apps/arcade/arcz80t.py apps/arcade/z80dec.py apps/a
                              apps/arcade/arcdefs.inc $(ARCPMROM)
 	@mkdir -p $(BUILD)/arcade
 	python3 apps/arcade/arcz80t.py $(ARCPMROM) apps/arcade/pacman.seeds \
-		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 50 \
+		$(BUILD)/arcade/paccode.asm $@ $(BUILD)/arcade/pacaux.bin --aux-kb 51 \
 		--recipe $(BUILD)/arcade/paccode.rcp
 $(BUILD)/arcade/pacaux.bin $(BUILD)/arcade/paccode.rcp: $(BUILD)/arcade/paccode.bin
 $(BUILD)/arcade/PACMAN.PRT: apps/arcade/arcpmgfx.py $(ARCPMROM)

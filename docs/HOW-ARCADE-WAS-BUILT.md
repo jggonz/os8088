@@ -565,3 +565,50 @@ Moving the cycle fraction by one 65,536th fails it at frame 42.
 
 **Not done:** the speech chip, the knocker, and a measurement on a real
 386.
+
+## kern_mega: the same package, in protected mode
+
+The owner's rule is that every new application runs on kern_mega, the
+286-and-up kernel, and ARCADE had shipped refusing to start there. The
+owner chose protected mode over a real-mode bracket around the game loop.
+That way the region and the small claims can live above 1MB, leaving
+conventional memory for larger ports later. The arm rides a floppy of its
+own, the twin of ARCADE's release disk: 399 of 2,847 clusters.
+
+**A selector is not a segment.** On kern_mega every segment ARCADE holds
+is an index into a descriptor table. Adding 2 to the ROM's claim to skip
+its header does not move 32 bytes along. It names a different descriptor,
+and the first try on kern_mega died in the frontend's picture slots before
+the window opened. Every such sum now goes through one door, `ar_sub`. In
+the shipped build it is still the sum; in the arm it asks the kernel for a
+window based there. The zip walk could not take the obvious answer, a
+window re-aimed at each read: on kern_mega a small claim lives in a pool
+that packs whenever any task claims memory, and a re-aimed window does not
+follow its claim. So the walk takes the 32KB granule an offset falls in,
+a window that moves with the claim, at most 14 of them over 448KB.
+
+**Stores through CS.** The kernel completes a write through a code
+selector, at about 77 microseconds a fault. The inflater wrote its work
+space through CS several times a bit, Pac-Man's screen pass once a row,
+and its sprite build 32,768 times a pick. Each now goes through DS, the
+stack or a spare register. The inflater's test now runs both versions
+against zlib, and fails on a single write into the code's segment.
+
+**The limits found three old bugs.** A real-mode segment reaches 64KB
+whatever it was given; a selector reaches exactly its claim. Three
+defects had been shipping silently, and each was fixed in both builds:
+
+- Q\*bert's power-on wrote 2 bytes 8KB past its sprite part. Only the
+  translated boards have the write list it was resetting.
+- Pac-Man started with the Z80's stack pointer at FFFFh, as MAME does. The
+  host runs the core on the game's own stack, so anything pushed before
+  the game set its stack landed 64KB above the board's memory. On
+  kern_mega that was a stack fault and a reboot.
+- Pac-Man's list of changed tiles can hold all 1,024 of them, which a
+  screen clear makes before the first frame is drawn. The last entry fell
+  one word past the 50KB part that holds it. The part is 51KB now.
+
+**Measured** on Bochs with a kernel that logs every protection fault: all
+seven boards, coined and played for 20 seconds each, at their own frame
+rates and with no fault from ARCADE. Bochs is a 386 that keeps no time, so
+the speed on a real 286 is still to be measured.

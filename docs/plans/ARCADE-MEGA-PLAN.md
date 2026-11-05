@@ -120,35 +120,48 @@ host and by looking. The rows run once, after the last wave (CLAUDE.md,
 
 ### M2 - no stores through CS (shipped build too)
 
-- [ ] `os88inflate.inc`: the work space reached through a segment register
-      the includer names, not CS. INF_WS is ARCADE's bss, so this is
-      `ds:` with the stream moved to ES:SI, or a dedicated segment.
-      `tests/inflate86.py` holds it to zlib again.
-- [ ] `arcn88.asm`: `n88_view` kept in G (the game's segment) or passed in
-      a register, not stored through CS.
-- [ ] Pac-Man's shadow pass and build (`pm_shr`, `pm_pp`, `pm_shp`,
-      `pmb_*`): through DS, the package's own.
+- [x] `os88inflate.inc`: `INF_DSWS`, the includer's option - the work
+      space through DS, the stream's segment in AX, loaded at a byte's
+      refill and a stored block's copy. ARCADE takes it in both builds.
+      `tests/inflate86.py` holds BOTH modes to zlib (102 streams each) and
+      puts the DSWS work space in a segment of its own, failing on any
+      write into the code's: red with one `cs:` store put back (166,079).
+- [x] `arcn88.asm`: the view's segment kept in G at 9FFEh (`N88_GVIEW`),
+      read through SS = G at the yield.
+- [x] Pac-Man's shadow pass (`pm_put`: the row in AX, the plane's two
+      words on the stack) and sprite build (`pmb_sprites`: the code on the
+      stack, the flip in CH, the column's bit shifted from DH). `pm_shr`,
+      `pm_pp`, `pm_shp` and `pmb_code/flip/bit` are gone.
 - **Verified by:** `arcbuilt` (the builds), `inflate86`, `arcspeed`,
       `qbglass`, `arclock*`. Each is byte-identical where it was.
 
 ### M3 - code selectors for code (the arm)
 
-- [ ] Board code parts called through their CODE half: `OP_WANT_CSEG` and
-      `op_cseg` for `ar_core+2`. The recipe is still filled through
-      `op_seg`'s data half.
-- [ ] `qb_gseg` claimed as a code/data PAIR (`OSAPI_SEG SEG_SUBC` over
-      the claim, or `OS88_CODESEL`). The N88 core's NMI frame pushes the
-      CODE half; DS, SS and ES get the data half.
-- [ ] The patched yields far-call the N88 part's CODE half
-      (`arcqb.inc:338-356` takes it from `op_cseg`).
-- [ ] The class byte of the arm: `OS88_HIGH | OS88_HIGHMEM`. Its own
-      region holds no far pointer for real mode and stamps no vector.
-- [ ] Under `%ifdef PKG_MEGA`: whatever names a marker
-      (`OS88_CODESEL`, `CPU_F_PM`). The shipped build keeps
-      `OS88_MEGA_REFUSE`, now TRUE: kern_mega's disk carries the arm.
-- **Verified by:** a trap count. The kernel's fault counters read zero
-      over a minute of each board's play (the Video Player's 7,048 to 0
-      bar, KERN-MEGA-PLAN 14.16).
+- [x] Board code parts called through their CODE half: `OP_WANT_CSEG`
+      (the arm's) and `op_cseg` for `ar_core+2`. The recipe is still filled
+      through `op_seg`'s data half.
+- [x] Q\*bert's G run through its code half (`qb_gcode`:
+      `OSAPI_MEM_CODESEL`, or `SEG_SUBC` over a lone pool selector), kept
+      in `qb_gcs` and handed to the N88 core in the view (`NV_GCS`, 6086h):
+      the first run's frame and the NMI frame push it; DS, SS and ES are
+      G's data half.
+- [x] The patched yields far-call the N88 part's CODE half (`qb_n88` is
+      `ar_core+2`, op_cseg's).
+- [x] The class byte: `OS88_HIGH | OS88_HIGHMEM`, in the ONE header line
+      (as Pixel and RealDMG): the bits mean nothing on a real-mode kernel
+      and the shipped build still refuses on kern_mega. `tests/megahigh.txt`'s
+      two ARCADE lines are gone (M4's third box, done here).
+- [x] Under `%ifdef PKG_MEGA`: `OP_WANT_CSEG`, `qb_gcode`, `ar_sub`'s and
+      `ar_at`'s `OSAPI_SEG` calls, `ar_zat`'s granule. The shipped build
+      keeps `OS88_MEGA_REFUSE`, now TRUE: kern_mega's disk carries the arm.
+- **Found on the way, defects of EVERY build**, which a selector's limit
+      caught and a real-mode segment never checks (ARCADE-SPEC 14, rule 4):
+      Q\*bert's power-on wrote 8KB past its sprite part; Pac-Man's reset SP
+      (FFFFh) let a push land 64KB above the view; Pac-Man's write list
+      ended one word past its aux part (now 51KB, prebuilt refreshed).
+- **Verified by:** a trap count. MEASURED (Bochs, `make megatrap`): all
+      seven boards played 20 guest seconds each, 0 #GPs from ARCADE
+      (ARCADE-SPEC 14's table). A row that does this is M5's `arcmega`.
 
 ### M4 - the arm built, shipped on kern_mega's disks, gated
 

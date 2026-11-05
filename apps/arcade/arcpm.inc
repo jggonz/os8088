@@ -60,8 +60,15 @@ pm_reset:
     mov byte [es:PM_DSW2], 0xFF     ;   10000, normal, the ghosts' names
     mov word [es:ST_IX], 0xFFFF
     mov word [es:ST_IY], 0xFFFF
-    mov word [es:ST_SP], 0xFFFF
-    pop es
+    mov word [es:ST_SP], 0x5000     ; the RAM's top, not MAME's FFFFh: the
+    pop es                          ;   core runs on SS:SP = the view at the
+                                    ;   guest's SP, and an interrupt before
+                                    ;   the game's own `ld sp, 4FC0h` pushed
+                                    ;   at FFF9h - past the view's limit on
+                                    ;   kern_mega (a #SS, the machine reset),
+                                    ;   64KB above its base in real mode. Here
+                                    ;   it lands in the sprite registers, which
+                                    ;   the game writes every frame
     pop di
     pop cx
     pop ax
@@ -348,10 +355,11 @@ pmb_tiles:
 ; y = 15 - c), y = c when flipped, at 5000h + code x 64 + (8, 16, 24, 0)[x
 ; / 4] + (y AND 7) + 32 when y >= 8
 pmb_sprites:
-    mov word [cs:pmb_code], 0x5000
-    mov di, 0x7C00
-.code:
-    mov byte [cs:pmb_flip], 0
+    mov ax, 0x5000                  ; the code's bytes, on the stack: no
+    mov di, 0x7C00                  ;   counter is stored through CS (kern_mega
+.code:                              ;   faults it: ARCADE-MEGA-PLAN M2)
+    push ax
+    xor ch, ch                      ; CH = flipped
 .flip:
     xor dx, dx                      ; DL = r
 .row:
@@ -361,15 +369,15 @@ pmb_sprites:
     mov bx, pmb_quart
     cs xlatb
     xor ah, ah
-    add ax, [cs:pmb_code]
+    mov bp, sp
+    add ax, [bp]
     mov bp, ax                      ; BP = the row's column of bytes
     mov cl, dl
     call pmb_masks
-    mov word [cs:pmb_bit], 0x8000
     xor dh, dh                      ; DH = c
 .col:
     mov al, dh                      ; y
-    cmp byte [cs:pmb_flip], 0
+    or ch, ch
     jne .y
     mov al, 15
     sub al, dh
@@ -387,14 +395,17 @@ pmb_sprites:
     or ah, ah
     jz .z
     push bx
+    push cx
     mov bl, ah
     xor bh, bh
     shl bx, 1
-    mov ax, [cs:pmb_bit]
+    mov cl, dh                      ; column c's bit
+    mov ax, 0x8000
+    shr ax, cl
     or [di+bx-2], ax
+    pop cx
     pop bx
 .z:
-    shr word [cs:pmb_bit], 1
     inc dh
     cmp dh, 16
     jb .col
@@ -402,11 +413,12 @@ pmb_sprites:
     inc dl
     cmp dl, 16
     jb .row
-    inc byte [cs:pmb_flip]
-    cmp byte [cs:pmb_flip], 2
+    inc ch
+    cmp ch, 2
     jb .flip
-    add word [cs:pmb_code], 64
-    cmp word [cs:pmb_code], 0x6000
+    pop ax
+    add ax, 64
+    cmp ax, 0x6000
     jb .code
     ret
 pmb_quart:  db 8, 16, 24, 0
@@ -1542,9 +1554,11 @@ pm_put:
     shl ax, cl
     mov [pm_rows], ax
     mov es, [ar_vidseg]
-    mov word [pm_pp], pm_pl
-    mov word [pm_shp], 0
     push ds
+    mov ax, pm_pl                   ; on the stack, never through CS (kern_mega
+    push ax                         ;   faults a store there: ARCADE-MEGA-PLAN
+    xor ax, ax                      ;   M2): the plane's composed bytes, and
+    push ax                         ;   its shadow
     mov ds, [cs:pm_shseg]
     mov cl, 1                       ; CL = the plane's map-mask bit
 .plane:
@@ -1553,7 +1567,8 @@ pm_put:
     mov ah, cl
     out dx, ax
     push cx
-    mov si, [cs:pm_pp]
+    mov bp, sp                      ; [BP+2] the shadow's plane, [BP+4] the
+    mov si, [bp+4]                  ;   composed bytes'
     mov ax, [cs:pm_cty]             ; the shadow's first row: (cty x 8) x
     mov cl, 3                       ;   28 + ctx, in this plane - a 16-bit
     shl ax, cl                      ;   multiply: rows reach 287, and an
@@ -1561,8 +1576,7 @@ pm_put:
     mov cx, 28                      ;   onto the top
     mul cx
     add ax, [cs:pm_ctx]
-    add ax, [cs:pm_shp]
-    mov [cs:pm_shr], ax
+    add ax, [bp+2]                  ; AX = the shadow's row, row to row
     shl bx, 1                       ; the first screen row's table entry
     add bx, pm_yoff
     mov bp, [cs:pm_ctx]             ; the box's byte across: 2 a tile
@@ -1574,7 +1588,7 @@ pm_put:
     mov cx, [cs:pm_ctw]
     push si
     push bx
-    mov bx, [cs:pm_shr]
+    xchg bx, ax                     ; BX = the shadow's row
 .pb:
     mov al, [cs:si]
     inc si
@@ -1595,20 +1609,24 @@ pm_put:
     inc bx
     add di, 2
     loop .pb
+    xchg ax, bx                     ; AX = past the box in the shadow's row
     pop bx
     pop si
     add si, 4
     add bx, 2
-    add word [cs:pm_shr], 28
+    sub ax, [cs:pm_ctw]             ; ...and the next row's
+    add ax, 28
     inc dx
     cmp dx, [cs:pm_rows]
     jb .prow
     pop cx
-    add word [cs:pm_pp], 128
-    add word [cs:pm_shp], PM_SHPL
+    mov bp, sp
+    add word [bp+2], 128
+    add word [bp], PM_SHPL
     shl cl, 1
     cmp cl, 16
     jb .plane
+    add sp, 4
     pop ds
     mov dx, 0x3C4                   ; all planes again, for whoever is next
     mov ax, 0x0F02

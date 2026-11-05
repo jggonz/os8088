@@ -100,8 +100,10 @@ tables (section 7.7), Q\*bert's patched program and turned tiles and sprites
 Pac-Man's 64KB and Q\*bert's 94KB of shadow and segment.
 
 The shipped build refuses to start under kern_mega's protected mode
-(`OS88_MEGA_REFUSE`): the host far-jumps into part 0, which is a data
-selector there. kern_small has no room and refuses at `op_load`.
+(`OS88_MEGA_REFUSE`): kern_mega's disk carries the ARM instead, built with
+`-DPKG_MEGA` (section 14), which runs there in protected mode with its
+region and claims allowed above 1MB. kern_small has no room and refuses at
+`op_load`.
 
 ### 1.4 The user's ROM: `<SET>.ROM`
 
@@ -1450,3 +1452,85 @@ Undocumented opcodes are 2-cycle NOPs, counted in `m6_bad`.
   Red at frame 42 with the cycle fraction one 65,536th off.
 - Not measured: the board's cost on a real machine (the 29 MHz figure is an
   estimate), and the sound itself in a field run on a 386.
+
+## 14. On kern_mega: the arm (`-DPKG_MEGA`, docs/plans/ARCADE-MEGA-PLAN.md)
+
+kern_mega's own disks carry a second build of the package,
+`$(MEGAAPPDIR)/arcade.o88`, on a floppy of its own - `arcrelmega.img`
+(1.44MB) and `arcrelmega120.img` (1.2MB), the twin of `arcrel*.img`: the arm
+and `ARCADE.TXT`, 399 of 2,847 clusters. It runs in PROTECTED MODE (the
+owner, 2026-11-05: it frees conventional memory for larger ports later),
+its header saying `OS88_HIGH | OS88_HIGHMEM`: its region may load above
+1MB, and its claims of 64KB or less may be there too. Claims over 64KB (a
+zip, Q\*bert's 69KB image) are conventional, each named by a selector.
+
+On kern_mega a segment is an LDT SELECTOR: adding to one names another
+descriptor, a far transfer through a data selector and a store through a
+code selector each fault (the kernel completes them, ~77 us each), and a
+selector has a LIMIT. So the package keeps four rules, on every build - a
+selector is just another opaque segment - with the arm's few lines that
+name a kernel marker under `%ifdef PKG_MEGA`:
+
+1. **Every derived segment goes through one door**, `ar_sub` (DX = a claim,
+   AX = a paragraph offset): `OSAPI_SEG SEG_SUB` in the arm, a window that
+   moves and goes with its claim; the sum in the shipped build. The ROM
+   image (its claim + 2), Q\*bert's sound chips at 10000h, the import
+   image's clear and each chip's place (`ar_iplace`), the pictures
+   (`af_slot`). `ar_crcimg` takes a claim and a paragraph, and asks again
+   for the second 64KB. The zip walk (`ar_zat`) takes the 32KB GRANULE an
+   offset lies in, BX up to 32KB into it - at most 14 lasting windows over
+   448KB; a re-aimed `SEG_AT` window would not follow the claim when the
+   pool packs, which any task's claim can make it do. So every chip is 8KB
+   at most and a central directory is refused past 32KB.
+2. **Nothing is stored through CS.** The inflater takes `INF_DSWS`
+   (`apps/os88inflate.inc`): its work space through DS, the stream's
+   segment in AX, loaded at each byte's refill and a stored block's copy.
+   Pac-Man's shadow pass carries its row in AX and its plane on the stack;
+   its sprite build keeps its counters in CH and on the stack. The N88
+   core keeps the view's segment at G:9FFEh (`N88_GVIEW`, a word Gottlieb's
+   map leaves empty), not in its own code.
+3. **Code is reached through a CODE selector.** A board's code part is
+   far-called through `op_cseg` (`OP_WANT_CSEG`, the arm's alone), its
+   recipe still filled through `op_seg`. Q\*bert's G is run through its
+   code half (`qb_gcode`: `OSAPI_MEM_CODESEL`, or `SEG_SUBC` over a lone
+   pool selector), which the first run's frame and the N88 core's NMI frame
+   push (`NV_GCS`, 6086h in the view); its yields far-call the N88 part's
+   code half.
+4. **Nothing reaches past what it was given**, which a real-mode segment
+   never checked and a selector's limit does. Three defects of every build
+   were found this way and fixed in both:
+   - Q\*bert's power-on wrote the write list's pointer (C000h) into its
+     40KB sprite part, 8KB past its end: only a board with an AUX part has
+     a write list (`ar_reset1`).
+   - Pac-Man's reset left the Z80's SP at FFFFh (MAME's), and the core runs
+     on SS:SP = the view at the guest's SP, so a push before the game's own
+     `ld sp, 4FC0h` landed 64KB above the view's base - a stack fault on
+     kern_mega, which reset the machine. It is 5000h now, the RAM's top.
+   - Pac-Man's write list holds 1,024 tile keys - a screen clear before the
+     first render - which end at C802h, one word past its 50KB aux part:
+     51KB now (`--aux-kb 51`).
+
+The class bits are declared by the shipped build's header as well (they
+mean nothing on a real-mode kernel), so `tests/megahigh.txt` carries no
+ARCADE line.
+
+MEASURED on Bochs (a 386, so the counts are the guest's and not a timing)
+with `make megatrap`'s kernel, which logs every #GP: the arm off a 720KB
+floppy, each board picked, coined and started, its counters read out of the
+view over 20 guest seconds of play.
+
+| board | frames in 20 s | dropped | #GPs from ARCADE |
+|---|---|---|---|
+| Space Invaders | 1,170 | 0 | 0 |
+| Space Invaders Part II | 1,077 | 1 | 0 |
+| Lunar Rescue | 1,073 | 1 | 0 |
+| Gun Fight | 1,240 | 0 | 0 |
+| Sea Wolf | 1,208 | 0 | 0 |
+| Q\*bert | 1,035 | 0 | 0 |
+| Pac-Man | 835 | 34 (its start) | 0 |
+
+Every log holds the same two #GPs BEFORE the switch to protected mode
+(`1058:1416`, `1058:142F`, DS = 0010h: the boot, not ARCADE). Not yet
+measured: the 286 (86Box `286-mega`), the import on kern_mega, and the
+frame rates against kern_big on one machine (ARCADE-MEGA-PLAN M4, M5).
+

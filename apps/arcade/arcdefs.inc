@@ -96,6 +96,9 @@ NV_GSEG     equ 0x6080          ; G, the game's own 64KB segment
 NV_GSP      equ 0x6082          ; its SP when it yielded (SS = G)
 NV_NMI      equ 0x6084          ; the host has delivered the NMI: the next
                                 ;   run starts in the game's handler
+NV_GCS      equ 0x6086          ; G as a CODE segment: the NMI frame's CS
+                                ;   (G itself but on kern_mega, where it is
+                                ;   G's code half - ARCADE-MEGA-PLAN M3)
 
 ARC_VIEW_KB equ 25              ; 0000-63FF: the boards' address spaces
                                 ;   (Pac-Man's reaches 50FF) and the cells
@@ -123,5 +126,10 @@ AUX_FLAGS   equ 0x8000          ; the 8080 boards: a cell's flag at 8000h +
 AUX_LPTR    equ 0xC000          ; the write list's next free offset
 AUX_LIST    equ 0xC002          ; ...the list: a CELL's key (a tile's index on
                                 ;   Pac-Man) a word, each at most once until
-                                ;   drawn: at most 0C702h
+                                ;   drawn: at most 0C702h (896 cells), and
+                                ;   on Pac-Man 0C802h - 1,024 tile keys, a
+                                ;   screen clear before the first render -
+                                ;   so its aux is 51KB, not 50: at 50 the last
+                                ;   key went past the part (kern_mega's limit
+                                ;   faulted it; real mode wrote the next one)
 ARC_AUX_KB  equ 50

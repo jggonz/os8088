@@ -22,6 +22,14 @@
 ; THE INCLUDER defines INF_WS, a label of INF_WS_SZ bytes in its own segment
 ; (bss), reached through CS - the stream's segment is DS. Interrupts may come
 ; and go; nothing here holds them off.
+;
+; ...OR it defines INF_DSWS, and nothing is stored through CS: kern_mega runs
+; CS as a code selector that faults a store, ~77 us each, and the work space
+; is written several times a BIT (docs/plans/ARCADE-MEGA-PLAN.md M2). Then
+;   inflate   in   DS = the includer's own segment (INF_WS's), AX:SI = the
+;                  stream, ES:DI and CX as above; out as above, DS kept.
+; The stream's segment is banked and loaded into DS for a byte's refill and
+; a stored block's copy only - a segment load every 8 bits, the price.
 ; =============================================================================
 
 INF_LCNT    equ 0                   ; 16 words: codes of each length, lit/len
@@ -41,14 +49,24 @@ INF_ND      equ 1064
 INF_TMP     equ 1066                ; inf_decode's length, as an offset
 INF_HSYM    equ 1068                ;   ...and the symbols it decodes to
 INF_PREV    equ 1070                ; the last code length, for code 16
-INF_WS_SZ   equ 1072
+INF_SSEG    equ 1072                ; INF_DSWS: the stream's segment
+INF_WS_SZ   equ 1074
 
+%ifdef INF_DSWS
+%define INF(x) ds:INF_WS+(x)
+%define INF_WSEG ds                 ; the work space's segment register
+%else
 %define INF(x) cs:INF_WS+(x)
+%define INF_WSEG cs
+%endif
 
 inflate:
     push si
     push di
     mov [INF(INF_SP)], sp
+%ifdef INF_DSWS
+    mov [INF(INF_SSEG)], ax
+%endif
     mov word [INF(INF_LEFT)], cx
     mov word [INF(INF_LEFTH)], 0
     or cx, cx
@@ -110,7 +128,14 @@ inf_bit:
     jns .have
     mov byte [INF(INF_BITN)], 7
     push ax
+%ifdef INF_DSWS
+    push ds
+    mov ds, [INF(INF_SSEG)]
     lodsb
+    pop ds
+%else
+    lodsb
+%endif
     mov [INF(INF_BITB)], al
     pop ax
 .have:
@@ -149,22 +174,36 @@ inf_out:
 ; inf_stored - a stored block: to the byte, LEN and its complement, LEN bytes
 inf_stored:
     mov byte [INF(INF_BITN)], 0     ; the rest of this byte is padding
+%ifdef INF_DSWS
+    push ds
+    mov ds, [INF(INF_SSEG)]
+%endif
     lodsw
     mov cx, ax
     lodsw
+%ifdef INF_DSWS
+    pop ds                          ; (inf_bad reads INF_SP through DS)
+%endif
     not ax
     cmp ax, cx
     jne inf_bad
     mov ax, cx
     call inf_out
+%ifdef INF_DSWS
+    push ds
+    mov ds, [INF(INF_SSEG)]
     rep movsb
+    pop ds
+%else
+    rep movsb
+%endif
     ret
 
 ; inf_fixed - the fixed codes (RFC 1951 3.2.6)
 inf_fixed:
     push di
     push es
-    push cs
+    push INF_WSEG
     pop es
     mov di, INF_WS + INF_LENS
     mov al, 8
@@ -209,7 +248,7 @@ inf_dynamic:
     mov dx, ax                      ; DX = the code-length code's lengths given
     push di
     push es
-    push cs
+    push INF_WSEG
     pop es
     mov di, INF_WS + INF_LENS       ; all 19 zero first
     xor al, al
