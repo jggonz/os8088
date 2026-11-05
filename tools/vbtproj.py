@@ -12,7 +12,9 @@ A project file (version 1):
 
     {"format": "vbtproj", "version": 1, "name": ...,
      "target":   {"profile", "palette" (the CGA4 byte), "fps", "rate",
-                  "canvas": [x, y, w, h], "band": [cell, row, cells, rows]},
+                  "canvas": [x, y, w, h], "band": [cell, row, cells, rows],
+                  "burst_cap": false to build a streamed clip's bursts
+                  as they are (SPEC.md 125.4.3; true when absent)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -84,7 +86,9 @@ Paths are relative to the project file.
 
 import copy
 import json
+import ntpath
 import os
+import re
 
 FORMAT = "vbtproj"
 NO_ENDING = {"how": "hold", "loop": None}
@@ -172,8 +176,35 @@ class Project:
         with open(path) as f:
             return cls(json.load(f), os.path.abspath(path))
 
+    def file_refs(self):
+        """Every file the project names: (the dict holding it, its key)"""
+        d = self.d
+        out = [(v, "path") for v in d["sources"].values() if v.get("path")]
+        out += [(v, "path") for v in d["sounds"].values()
+                if v.get("kind") == "file" and v.get("path")]
+        out += [(v, "path") for v in d.get("images") or [] if v.get("path")]
+        return out
+
     def save(self, path=None):
+        """...every file it names written RELATIVE to the project when it
+        is in the project's folder or below it (the owner's "so I can copy
+        projects around without needing to relink"), absolute otherwise -
+        each resolved against where the project WAS first, so a Save As to
+        another folder keeps finding them"""
         path = os.path.abspath(path or self.path)
+        here = os.path.dirname(path)
+        for v, k in self.file_refs():
+            a = self.here(v[k])
+            if not os.path.exists(a):   # (not found: left as it was named)
+                continue
+            a = os.path.abspath(a)
+            try:
+                r = os.path.relpath(a, here)
+            except ValueError:          # (Windows: another drive)
+                r = ".."
+            v[k] = r.replace(os.sep, "/") if r != ".." and not \
+                r.startswith(".." + os.sep) and not r.startswith("../") \
+                and not os.path.isabs(r) else a
         tmp = path + ".tmp"
         with open(tmp, "w") as f:
             json.dump(self.d, f, indent=1)   # (order is meaning: clip order)
@@ -182,10 +213,19 @@ class Project:
         self.path = path
 
     def here(self, p):
-        """A project-relative path, absolute"""
-        if os.path.isabs(p) or not self.path:
+        """A project-relative path, absolute. An ABSOLUTE one that is not
+        there (a project copied from another machine, or saved before paths
+        were relative) is looked for beside the project by its name - a
+        Windows one too, on any host"""
+        if not self.path or not p:
             return p
-        return os.path.normpath(os.path.join(os.path.dirname(self.path), p))
+        base = os.path.dirname(self.path)
+        if os.path.isabs(p) or re.match(r"^[A-Za-z]:[\\/]|^\\\\", p):
+            if os.path.exists(p):
+                return p
+            q = os.path.join(base, ntpath.basename(p))
+            return q if os.path.exists(q) else p
+        return os.path.normpath(os.path.join(base, p.replace("\\", "/")))
 
     # --- every edit goes through one door, for undo -------------------------
     def _edit(self, fn):
@@ -726,9 +766,10 @@ class Project:
         if w != 320 or x != 0 or y != 0:
             info("target", "the engine plays a canvas at 0,0, 320 wide")
         for k, v in (t.get("scale") or {}).items():
-            if k not in ("cga4", "vga4", "herc") or v not in (100, 75, 67, 50):
-                err("target.scale", "%s at %s%%: a picture is 100, 75, 67 or "
-                    "50%% of its canvas" % (k, v))
+            if k not in ("cga4", "vga4", "herc") or v not in (100, 90, 75,
+                                                               67, 50):
+                err("target.scale", "%s at %s%%: a picture is 100, 90, 75, 67 "
+                    "or 50%% of its canvas" % (k, v))
         bc, br, bn, bh = t["band"]
         if br < y + h and br + bh > y:
             err("target", "the band overlaps the canvas")

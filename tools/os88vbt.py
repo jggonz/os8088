@@ -206,6 +206,69 @@ def geom(rows):
     return REND.geom(rows)
 
 
+CAP_SHARE = 0.75    # (125.4.1) of the profile's disk, a streamed clip's
+CAP_HOLD = 57344    # ...what a ring holds ahead of the sound, at most
+
+
+def rows_into(dst, src, g, y0, n):
+    """Rows y0.. (n of them, wrapping) of surface SRC copied into DST"""
+    for k in range(n):
+        y = (y0 + k) % g.h
+        for p in range(g.planes):
+            a = p * V.PLANE + g.base[y] if g.planes > 1 else g.base[y]
+            dst[a:a + g.wb] = src[a:a + g.wb]
+
+
+def capped_run(recs, fs, snd, rows, cap, log, name):
+    """A streamed clip's records 1.. appended to RECS, each the frame's
+    change from the screen before - unless the reader's model CAP says the
+    engine will not have it in time (125.4.1): then as many of its ROWS as
+    fit, taken on from where the last capped frame stopped, the rest left
+    for the frames after it (each is a change from what is ON the screen).
+    The sound is never cut. The screen the clip ends on is returned"""
+    cur = fs[0]
+    if cap is None:
+        for i in range(1, len(fs)):
+            recs.append(rec(fs[i - 1], fs[i], rows, snd[i]))
+        return fs[-1]
+    g = geom(rows)
+    per = cap["rate"] / float(cap["fps"])
+    avail = cap["head"] - len(recs[0])
+    ptr, n_cap = 0, 0
+    for i in range(1, len(fs)):
+        avail = min(cap["hold"], avail + per)
+        full = rec(cur, fs[i], rows, snd[i])
+        if len(full) <= avail:
+            recs.append(full)
+            cur = fs[i]
+            avail -= len(full)
+            continue
+        lo, hi, best = 0, g.h, None     # the most rows that fit
+        while lo <= hi:
+            mid = (lo + hi) // 2
+            s = bytearray(cur)
+            rows_into(s, fs[i], g, ptr, mid)
+            r = rec(cur, s, rows, snd[i])
+            if len(r) <= max(avail, per / 2) or mid == 0:
+                best = (mid, s, r)
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        mid, s, r = best
+        if mid == g.h:
+            s, cur_next = fs[i], fs[i]
+        else:
+            cur_next = bytes(s)
+        recs.append(r)
+        avail -= len(r)
+        ptr = (ptr + mid) % g.h
+        cur = cur_next
+        n_cap += 1
+    if n_cap:
+        log[name] = n_cap
+    return cur
+
+
 def rec(a, b, rows, audio=b""):
     """The record that takes surface a to surface b, with its frame's sound:
     its length (all of it), the sound's length, the lists (SPEC.md 98.1.3;
@@ -331,6 +394,10 @@ class Battle:
         self.endings = {}       # outcome -> (how, a loop dict or None);
                                 # an end loop is the canvas's
         self.fade_steps = 16
+        self.cap = None         # (125.4.1) the reader's model a streamed
+                                # clip is held to: dict(rate, hold, head),
+                                # bytes; None: no cap
+        self.capped = {}        # ...and what it did: clip -> frames capped
         self.rend = Rend("cga4", rows)  # the adapter it is for
 
 
@@ -434,21 +501,23 @@ def build(b):
         snd = frame_sound(place(c.get("cues", {}), len(fs), spf, b.sfx),
                           len(fs), spf, False)
         recs = [rec(None, None, rows, snd[0])]
-        for i in range(1, len(fs)):
-            recs.append(rec(fs[i - 1], fs[i], rows, snd[i]))
+        last = capped_run(recs, fs, snd, rows, b.cap, b.capped, c["name"])
         exit_to = c.get("exit", 0)
         flags = CF_ENDS if c.get("ends") else 0
         if c.get("joins"):
             flags |= CF_JOINS
-            recs.append(rec(fs[-1], idle_s[exit_to], rows))
+            recs.append(rec(last, idle_s[exit_to], rows))
         elif c.get("join_loop") is not None:    # an ending that JOINS its
             if c.get("join_full"):                  # end clip: the seam onto
-                recs.append(rec(surface_of(full_of(c["frames"][-1]),  # its
-                                           REND.full),                # frame
+                fl = bytearray(surface_of(full_of(c["frames"][-1]),
+                                          REND.full))    # (the screen the
+                rows_into(fl, last, geom(rows), 0, rows)  # clip ENDED on)
+                recs.append(rec(bytes(fl),                            # its
+                                                                      # frame
                                 surface_of(full_of(c["join_loop"]),   # 0 -
                                            REND.full), REND.full))    # over
             else:                                   # the whole screen when
-                recs.append(rec(fs[-1], surface_of(  # it is full screen
+                recs.append(rec(last, surface_of(    # it is full screen
                     c["join_loop"], rows), rows))
         regions.append(stream(recs))
         clip_rows.append(dict(name=c["name"], nrec=len(recs), flags=flags,
@@ -929,6 +998,11 @@ def battle_of(proj, progress=None, kind="cga4"):
         pal = [tuple(v >> 2 for v in c) for c in p8] + \
             [(0, 0, 0)] * (16 - len(p8))
     b.rend = Rend(kind, rows_, pal)
+    if t.get("burst_cap", True):    # THE READER'S MODEL (125.4.1): the
+        import os88venc as VE_      # profile's disk at three quarters,
+        disk = VE_.PROFILES.get(t.get("profile"), {}).get("disk") or 119000
+        b.cap = dict(rate=int(disk * CAP_SHARE) - t["rate"],  # the music's
+                     hold=CAP_HOLD, head=VB_HEAD, fps=t["fps"])  # out
     b.band = tuple(t["band"])
     b.canvas = tuple(t["canvas"])
     b.idle = A.idle_of(proj, pg, kind)
@@ -1112,7 +1186,12 @@ def build_project(proj, progress=None, kind="cga4"):
         b.canvas = (0, 0, 640, b.rows)
     data = build(b)
     verify(data, quiet=True)
+    LAST_CAPPED.clear()             # (what the reader's model held back,
+    LAST_CAPPED.update(b.capped)    # for the build's report: 125.4.1)
     return data
+
+
+LAST_CAPPED = {}
 
 
 def demo_project(path, bars=16, floppy=False):
@@ -1343,10 +1422,14 @@ def cmd_build(a):
         with open(out, "wb") as f:
             f.write(data)
         bud = A.budget(proj, data)
-        res.append(dict(kind=kind, out=out, bytes=len(data), budget=bud))
+        res.append(dict(kind=kind, out=out, bytes=len(data), budget=bud,
+                        capped=dict(LAST_CAPPED)))
         if not a.json:
             print("%s (%s): %d bytes; idle loop %d bytes, entries %d" % (
                 out, kind, len(data), bud["idle_bytes"], bud["entries"]))
+            if LAST_CAPPED:
+                print("  held to the disk (125.4.1): %s" % ", ".join(
+                    "%s %d frames" % kv for kv in sorted(LAST_CAPPED.items())))
             for c in bud["clips"]:
                 print("  %-14s %7d bytes %5.1f KB/s (%3.0f%% of the disk) "
                       "anchors %s" % (c["name"], c["bytes"], c["rate"] / 1024,
@@ -1354,7 +1437,7 @@ def cmd_build(a):
     if a.json:
         r0 = res[0]
         say(dict(stage="done", out=r0["out"], bytes=r0["bytes"],
-                 budget=r0["budget"], renditions=res))
+                 budget=r0["budget"], capped=r0["capped"], renditions=res))
 
 
 def cmd_demo_project(a):

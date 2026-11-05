@@ -237744,7 +237744,7 @@ then sets the mode, the palette and the decode.
   planes, Hercules'): the rings' guard is the header's largest record's,
   16 or 32 KB (`[vb_cgkb]`).
 - **A rendition's PICTURE can be set down** (`target.scale`, the Battle
-  tab's Picture size: 100, 75, 67 or 50% of the canvas - and of the screen,
+  tab's Picture size: 100, 90, 75, 67 or 50% of the canvas - and of the screen,
   for a full-screen opening): the footage is made at that size - CGA4 by the
   encoder's own `--box`, VGA4 and Hercules by ffmpeg - and centred in black,
   its width and left edge in whole bytes (`vbtana.boxed`, `pad_into`). The
@@ -238002,6 +238002,46 @@ plays to victory and again in place with ~136 yields - each a `la_restore`
 and a fresh LOADALL - the title again exact in B8000, and no exception
 outside the BIOS. Still for the field: the Victory 286 itself (86Box is not
 cycle-accurate, so what a borrow costs there is not measured here).
+
+#### 125.4.3 A streamed clip held to the disk: the reader's model
+
+**The owner's Hercules battle at 100% (75 KB/s clips) played its picture
+clean and cut its clips' own sound** - Scope's and Bolt's - on 86Box's 5150
+with the ST11M (`vm/pc5150`, the owner's own profile's machine): 36 frames
+of Bolt's sound late, 10 of Scope's, 15 of Search's. A clip's averages
+hid it: Bolt is 74 KB/s and its first 1.5 s run at **129 KB/s**, Search's
+seconds 4 - 6 at 131. A ring holds 88 KB beside a 196 KB resident block,
+and the records between the picture's cursor and its sound's - the card's
+lead, 0.37 s, ~27 KB of a heavy clip - are held in it too, so a burst
+the disk cannot match is met with ~60 KB of buffer at most, and on
+Bolt's with its 40 KB head alone. The picture waited little (it runs a
+lead behind); the sound, reaching records not yet read, skipped them.
+
+Two things now meet it:
+
+- **The engine reads by the LEADING cursor.** A ring "running low"
+  (`vb_reader`'s step 2) is measured from the clip's sound when the ring
+  is the one sounding, not from its picture - its room is still counted
+  from the earlier of the two, so nothing still wanted is overwritten.
+  Bolt 36 -> 32 frames late, Scope 10 -> 5, Search 15 -> 7.
+- **The builder holds a streamed clip to the disk** (`target.burst_cap`,
+  on unless set false; the Build tab's "Hold clips to the disk"). An
+  action's records are made against a model of the reader - the clip
+  starts with its head (40 KB) in; each frame the disk adds the profile's
+  disk at three quarters less the music's rate (`CAP_SHARE`; 76 KB/s on
+  5150-st225); no more than 56 KB is held ahead of the sound
+  (`CAP_HOLD`). A frame that would overdraw it is drawn **in part**: as
+  many of its rows as fit, taken on round from where the last such frame
+  stopped (`capped_run`), the rest left for the frames after - each record
+  being a change from what is ON the screen, they catch up by themselves,
+  and the seam after the clip is made from the screen it ended on. The
+  sound is whole: it is in every record whatever its picture. The build
+  says what it held (`os88vbt build`'s "held to the disk", the Build
+  tab's note). The demo, which never overdraws, builds byte for byte as
+  before. A battle of the demo's actions each given two seconds of a
+  picture changing all over (~140 KB/s at 100% Hercules), on the same
+  86Box machine: the actions' sound late 51, 35 and 38 frames uncapped,
+  **0, 0 and 0 capped**.
 
 ### 125.5 The band
 
@@ -238284,6 +238324,15 @@ title's way out entered at anchors spread a quarter of its lap apart, an
 ending that joins shown how its last frame differs from each loop's start,
 and the fade previewed with the engine's own thresholds (the test holds the
 window's table to `vb_fmasks`).
+
+**A project names its files RELATIVE to itself** when they are in its
+folder or below it (the owner's "so I can copy projects around without
+needing to relink"): `Project.save` writes each video, sound file and band
+picture so - forward slashes, on any host - and one elsewhere absolute,
+each resolved first against where the project WAS, so a Save As to another
+folder keeps every file. A path that is absolute and not there - another
+machine's, a Windows `D:\...` on any host - is looked for beside the
+project by its name (`Project.here`). `vbtpaths` holds the four.
 
 - **The join** (`vbtana.music_joins`): the music comes in when the scene
   opening's sound ends, at `VH_MUSAT`. The builder suggests where by the

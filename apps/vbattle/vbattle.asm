@@ -3252,12 +3252,25 @@ vb_reader:
 .dn:
     ret
 .low:                               ; CF=1 ring BX is playing and under half
-    call .play
-    jnc .lno
+    call .play                      ; - what it holds past the LEADING
+    jnc .lno                        ; cursor: the clip's SOUND runs the
+    mov cx, [bx+RG_VOFF]            ; card's lead (0.37 s) ahead of its
+    mov si, [bx+RG_VOFF+2]          ; picture, and measured from the picture
+    cmp bx, [vb_aring]              ; a ring kept the picture fed and let
+    jne .lv                         ; the sound reach records not yet read:
+    cmp si, [bx+RG_AOFF+2]          ; a heavy clip's sound cut out and came
+    jb .la                          ; back (the owner's Scope and Bolt -
+    ja .lv                          ; 36 frames late over Bolt's play on
+    cmp cx, [bx+RG_AOFF]            ; 86Box's ST11M)
+    jae .lv
+.la:
+    mov cx, [bx+RG_AOFF]
+    mov si, [bx+RG_AOFF+2]
+.lv:
     mov ax, [bx+RG_FILL]            ; (twice what it holds, against all
     mov dx, [bx+RG_FILL+2]          ; of the ring)
-    sub ax, [bx+RG_VOFF]
-    sbb dx, [bx+RG_VOFF+2]
+    sub ax, cx
+    sbb dx, si
     shl ax, 1
     rcl dx, 1
     cmp dx, [bx+RG_BYTES+2]

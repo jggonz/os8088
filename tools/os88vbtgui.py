@@ -604,7 +604,8 @@ class App(object):
 
     def add_sound_file(self, path):
         for sid, snd in self.proj.d["sounds"].items():
-            if snd.get("path") == path:
+            if snd.get("path") and os.path.abspath(self.proj.here(
+                    snd["path"])) == os.path.abspath(path):
                 return sid
         sid = unique_id(os.path.splitext(os.path.basename(path))[0],
                         self.proj.d["sounds"])
@@ -1101,12 +1102,13 @@ class BattleTab(object):
         sz.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         ttk.Label(sz, text="Picture size, of the canvas:").pack(side="left")
         self.scv = {}
+        import vbtana as A_
         for kind, lab in (("cga4", "CGA"), ("vga4", "VGA"),
                           ("herc", "Hercules")):
             ttk.Label(sz, text=lab).pack(side="left", padx=(10, 2))
             v = self.scv[kind] = tk.StringVar()
             cb = ttk.Combobox(sz, textvariable=v, state="readonly", width=5,
-                              values=["100%", "75%", "67%", "50%"])
+                              values=["%d%%" % x for x in A_.SCALES])
             cb.pack(side="left")
             cb.bind("<<ComboboxSelected>>", lambda e: self._scale())
         self.scnote = ttk.Label(rf, text="", wraplength=900)
@@ -3218,6 +3220,9 @@ class BuildTab(object):
         top = ttk.Frame(f)
         top.pack(fill="x")
         ttk.Button(top, text="Build", command=self._build).pack(side="left")
+        self.capv = app.tk.IntVar(value=1)      # (125.4.1: on, unless asked)
+        ttk.Checkbutton(top, text="Hold clips to the disk", variable=self.capv,
+                        command=self._cap).pack(side="left", padx=6)
         self.out_l = ttk.Label(top, text="")
         self.out_l.pack(side="left", padx=8)
         cf = ttk.LabelFrame(f, text="What is wrong (ERROR stops a build; "
@@ -3273,8 +3278,16 @@ class BuildTab(object):
         self.disk_l.pack(side="left", padx=8)
         self.disk_picked = False
 
+    def _cap(self):
+        """THE READER'S MODEL (125.4.1) on or off: a streamed clip's burst
+        drawn in part where the disk would not have it in time"""
+        on = bool(self.capv.get())
+        if on != self.app.proj.d["target"].get("burst_cap", True):
+            self.app.edit("set", ("target", "burst_cap"), on)
+
     def refresh(self):
         P_ = self.app.proj
+        self.capv.set(1 if P_.d["target"].get("burst_cap", True) else 0)
         self.chk.delete(*self.chk.get_children())
         for k, x in enumerate(P_.check()):
             self.chk.insert("", "end", iid=str(k), text=x.level,
@@ -3314,7 +3327,7 @@ class BuildTab(object):
         pick = [r for r in rs if r["kind"] == self.rendv.get()] or rs[:1]
         self.rendv.set(pick[0]["kind"])
         res = dict(res, out=pick[0]["out"], bytes=pick[0]["bytes"],
-                   budget=pick[0]["budget"])
+                   budget=pick[0]["budget"], capped=pick[0].get("capped") or {})
         bud = self.bud = res["budget"]
         self.out_l.config(text="%s - %d KB" % (res["out"], res["bytes"] // 1024))
         self.tv.delete(*self.tv.get_children())
@@ -3329,7 +3342,11 @@ class BuildTab(object):
                               bud["disk"] // 1024,
                               "is resident" if bud["memory"]["music_resident"]
                               else "streams beside it, %.1f KB/s" %
-                              (bud["music_rate"] / 1024)))
+                              (bud["music_rate"] / 1024)) + (
+            "\nHeld to the disk where they ran faster than it (a frame drawn "
+            "in part, the rest on the frames after; the sound whole): %s." %
+            ", ".join("%s %d frames" % kv for kv in sorted(
+                res["capped"].items())) if res["capped"] else ""))
         hl = []
         for pool, hh in sorted(bud.get("hold", {}).items(), key=lambda x: int(x[0])):
             hl.append("With %d MB of XMS: %s" % (int(pool) // 1024,

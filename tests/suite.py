@@ -16937,6 +16937,19 @@ SOAK = [
         "held): about half the Enter moments around 1.2 s froze the second "
         "opening at frame 17 of 19, its ring the title's",
         needs=("marty", "ffmpeg")),
+    Row("vbtcap", "soak", py("tests/vbtcap.py"), 15.0,
+        "SPEC.md 125.4.3: a streamed clip HELD TO THE DISK, host side - the "
+        "demo's ARI attack given two seconds changing all over (~140 KB/s, "
+        "100% Hercules): built capped, the reader's model over its records "
+        "never overdrawn and every path verified; uncapped, overdrawn by "
+        "tens of KB (the owner's cut sound). Broken (CAP_HOLD 1 MB) red",
+        needs=("ffmpeg",)),
+    Row("vbtpaths", "soak", py("tests/vbtpaths.py"), 2.0,
+        "SPEC.md 125.2's builder: a project's files RELATIVE to it when in "
+        "its folder or below (absolute elsewhere), the folder copied and "
+        "found, a Save As into another folder found, and another machine's "
+        "D:\\ path found beside the project by name. Broken (paths saved "
+        "as given) 1-3 red"),
     Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
         "SPEC.md 125.5: the music under the band, the owner's 'when the "
         "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "

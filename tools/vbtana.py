@@ -89,7 +89,7 @@ def unpack(cv, h, wb):
     return px
 
 
-SCALES = (100, 75, 67, 50)     # a rendition's picture, % of its canvas
+SCALES = (100, 90, 75, 67, 50)     # a rendition's picture, % of its canvas
 
 
 def scale_of(proj, kind):
