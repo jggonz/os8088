@@ -65,6 +65,7 @@ vb_game_init:
     mov byte [vb_sret], NONE
     mov byte [vb_efol], NONE        ; (no follow-up owed at the start)
     call vb_lay_init                ; (the band's layout, 125.5.1)
+    mov word [vb_mlow], 0xFFFF      ; (the music's lowest, after a rebuild)
     xor bx, bx                      ; the party's items
 .i:
     cmp bl, [RL+RH_NITEM]

@@ -16913,6 +16913,15 @@ SOAK = [
         "vbtending: victory FADES to a FULL-SCREEN end LOOP - the fade over "
         "the whole screen, the band down while it goes round",
         needs=("marty", "ffmpeg")),
+    Row("vbtsound", "soak", py("tests/vbtsound.py"), 60.0,
+        "SPEC.md 125.5: the music under the band, the owner's 'when the "
+        "menus are drawing the sound shuts off' on Hercules. MartyPC's 5150 "
+        "with a Hercules and an SB, the demo's music STREAMING, six turns "
+        "of menus and enemy moves: the music never runs dry and every band "
+        "rebuild ends with over a second of it in the ring (the ring topped "
+        "up first, and fed while the band is drawn). Broken on purpose (no "
+        "top-up) it ran dry 23 times, the ring empty as a rebuild ended",
+        needs=("marty",)),
     Row("vbtguiwin", "soak", py("tests/vbtguiwin.py"), 30.0,
         "The Video Battle builder's WINDOW under Xvfb, its event pump "
         "driven: a NEW project's first video dropped on the Openings tab, "

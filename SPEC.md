@@ -237990,6 +237990,18 @@ those four by the builder (`os88vbt.band_picture`: the nearest, after a
 4x4 ordered dither), and `tools/vbtband.py` draws the band from the same
 bytes for the builder's preview.
 
+**The music is fed while the band is drawn.** A band rebuilt keeps the
+reader - the UI task's - away for its whole length: on Hercules' XT the
+composing and the two-by-two present are ~2 s of the foreground's time
+under the hook, and the music's ring (32 KB, 3 s) is refilled only under
+half - so a rebuild begun near half ran it dry, under the band or a moment
+after. So the ring is topped up FULL before a rebuild (`vb_mtopup`), and
+a piece is read whenever it is under half between the menu's lines, the
+party's, before the message and every eighth row of a present
+(`vb_mkeep`). `[vb_mlow]` keeps the lowest the ring stood at as a rebuild
+ended; `vbtsound` holds it over a second on MartyPC's Hercules 5150, where
+without the top-up it ran dry 23 times in six turns.
+
 #### 125.5.1 The band's layout
 
 **Every part of the band has a place and may be hidden** (the project's

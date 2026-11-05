@@ -182,6 +182,37 @@ vb_band_frame:
     rep stosw
     ret
 
+; vb_mkeep - THE MUSIC FED while the band is drawn (the owner, 2026-11-05):
+; a piece read when its ring holds under half - drawing keeps the reader
+; away, and on Hercules' XT a whole band is ~2 s of it. Every register kept
+vb_mkeep:
+    cmp byte [vb_mres], 0
+    jne .r
+    push ax
+    mov ax, [vb_mfill]
+    sub ax, [vb_mtake]
+    cmp ax, VB_MR / 2
+    jae .p
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call vb_mpiece
+    pop es
+    pop bp
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+.p:
+    pop ax
+.r:
+    ret
+
 ; vb_band_put - the COMPOSED band ([vb_cseg]) onto the screen, row by row
 ; (CGA's two banks): every pixel of it written once
 vb_band_put:
@@ -270,6 +301,11 @@ vb_band:
     ; THE BAND REBUILT is composed off the screen and put on it once, its
     ; text and all (6.1's rule for a whole band: no frame shows the ground
     ; without its letters)
+    ; ...and THE MUSIC'S RING TOPPED UP FIRST: the rebuild keeps the reader
+    ; away for its whole length - ~2 s on Hercules' XT, where the ring
+    ; may stand at half (1.5 s) - so the music ran dry under it, or just
+    ; after (the owner, 2026-11-05)
+    call vb_mtopup
     mov byte [vb_dirty], 0
     call vb_band_frame              ; the ground, in [vb_bseg]
     push ds
@@ -286,7 +322,16 @@ vb_band:
     call vb_draw_party
     call vb_draw_msg
     mov byte [vb_tcomp], 0
-    jmp vb_band_put
+    call vb_band_put
+    mov ax, [vb_mfill]              ; (the ring's level as the rebuild ends,
+    sub ax, [vb_mtake]              ; the lowest kept: tests/vbtsound.py)
+    cmp byte [vb_mres], 0
+    jne .lo
+    cmp ax, [vb_mlow]
+    jae .lo
+    mov [vb_mlow], ax
+.lo:
+    ret
 .t:
     mov al, [vb_dirty]
     mov byte [vb_dirty], 0
@@ -322,6 +367,7 @@ vb_draw_menu:
     mov [vb_mrec], si
     xor bp, bp
 .l:
+    call vb_mkeep                   ; (the music fed between lines)
     mov si, [vb_mrec]
     mov ax, bp
     cmp al, [si+MN_N]
@@ -492,6 +538,7 @@ vb_draw_party:
 .ne:
     xor bp, bp
 .m:
+    call vb_mkeep                   ; (the music fed between lines)
     mov ax, bp
     cmp al, [RL+RH_NCH]
     jb .c
@@ -637,6 +684,7 @@ vb_rjust4:
     ret
 
 vb_draw_msg:
+    call vb_mkeep
     push ds
     pop es
     mov di, vb_lbuf
@@ -819,6 +867,10 @@ vb_bpres:
     mov es, [vb_vseg]
 .row:
     jcxz .out
+    test dl, 7                      ; (every eighth row: the music fed - a
+    jnz .rw                         ; whole band put is ~0.6 s on Hercules)
+    call vb_mkeep
+.rw:
     push cx
     push dx
     mov ax, dx                      ; the buffer's row

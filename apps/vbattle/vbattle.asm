@@ -1407,6 +1407,21 @@ vb_ringfor:
 ; to its start. The last piece of the music carries less than 4 KB of it, and
 ; the music goes on from its first byte: it loops. Out AL = 1 a piece was
 ; read, 0 the ring is full; CF=1 a read failed. AX..DX, ES spent
+; vb_mtopup - the music's ring read FULL (piece after piece, a read that
+; fails ending it), ahead of a long stretch the reader cannot run in
+vb_mtopup:
+    mov cx, VB_MR / VB_MPIECE + 1
+.r:
+    push cx
+    call vb_mpiece
+    pop cx
+    jc .out
+    or al, al
+    jz .out
+    loop .r
+.out:
+    ret
+
 vb_mpiece:
     cmp byte [vb_mres], 0           ; (resident music is never read again)
     je .stream
@@ -3354,6 +3369,7 @@ VB_VAR vb_vres, 2
 VB_VAR vb_sfxseg, 2
 VB_VAR vb_mring, 2
 VB_VAR vb_mfill, 2
+VB_VAR vb_mlow, 2                   ; ...its lowest as a band rebuild ends
 VB_VAR vb_mtake, 2
 VB_VAR vb_mrd, 4
 VB_VAR vb_munder, 2
