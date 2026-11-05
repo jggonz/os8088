@@ -241784,7 +241784,69 @@ fingerprint against the lengths worked out from the map by hand.
 
 ### 126.6 Serial mice
 
-*(Pending: serial.)*
+`apps/mousechk/serial.inc` (`ser_init`, `ser_rows`). Everything here is read:
+the kernel's `'MO'` block (§9.4.2, offsets in `moblk.inc`, decoded only while
+`[mc_kok]`), the BIOS's COM table, and each probed UART's own registers. It
+owns **no bss** (its state is statics in the image) and costs 2,715 bytes of
+image.
+
+**Rows.** Four rows, `COM1` to `COM4 (BIOS)`, give the base the BIOS data area
+(0040:0000, reached through an `OSAPI_SEG` `SEG_WIN` window so it is also legal
+under kern_mega) lists, `none` for a zero, and for COM1/COM2 whether the
+kernel's probe found a UART. **The kernel probes only 3F8 (IRQ4) and 2F8
+(IRQ3), whatever the BIOS says** (§9.5), so COM3/COM4 say *not probed by the
+kernel* and a UART there is invisible to it. Then, per probed row, a heading
+line (`COM1 at 03F8, IRQ4`, or `... no UART answered`) and, when there is a
+UART:
+
+| row | source | meaning |
+|---|---|---|
+| Identify burst | `mou_idn`, `mou_idb0` | bytes seen in §9.4.1's window and the first one as hex and, if printable, a character (`4D 'M'`); `stream` beyond `MOU_IDMAX` |
+| Last byte at | `mou_idlast` | `[ticks]` of the last byte, as seconds from boot; the open tick is a MOUDIAG-only fact, so this is absolute |
+| Answered as a mouse | `mou_ident` | §9.4.1's rules 1-4 |
+| Clean packets | `mou_run`, `mou_need` | the contest's run against what a port must manage (§9.5) |
+| MSR, MCR, LSR, IIR | the UART | live; flags named (`DCD RI DSR CTS`; `OUT2 RTS DTR`; errors `BRK FE PE OE`, **sticky since the window opened**; IIR's pending cause) |
+
+Then plain-language verdict lines, §9.4.6's table turned into words: nothing
+answered the reset (no mouse, or it is unpowered: a serial mouse takes its
+power from DTR/RTS); a stream rather than a burst; answered but not `'M'`
+(the kernel accepts only `'M'`); `'M'` that never went quiet; answered like a
+mouse; **this port won** (`[mou_seen]` and `[mou_port]` agree); **cross-wired**
+(§9.5.2.1: the winning line `[mou_line]` is not the one the base's convention
+says: 0x10 for 3F8, 0x08 for 2F8); **a received byte sits unread** (LSR DR set
+on two refreshes running: the interrupt is not arriving; a bad IRQ jumper or a
+line not wired; one refresh is not enough, a moving mouse is caught between a
+byte and its ISR now and then); **framing errors or break** (§9.5.6); and
+**DTR/RTS not both high** (unless the poller is holding them low on purpose).
+A closing group is the contest as a whole: `Contest winner` (`[mou_port]`: 0/2
+serial, 4 PS/2, 6 VMware, 8 a pointing driver; *none yet* until `[mou_seen]`),
+`Winning serial line`, whether any port was mouse-shaped, the hot-plug poller's
+state and last tick (§9.4, §9.4.8) and the identify drain.
+
+**The lamp** starts NA (a machine with no UART answering shows grey), becomes
+INFO as soon as a UART is found, OK when a serial mouse won, WARN for a
+cross-wired card, sticky framing errors or an unpowered mouse, BAD for the
+unread byte. When another pointer won the section stays INFO: the ports are
+reported, not judged.
+
+**Reads, and what they cost the kernel.** It **never reads RBR** (that would
+take a byte from the ISR) and never writes a UART register. MSR is read freely:
+the kernel's ISR reads only LSR (§9.5.6's scan) and IIR is never read by it,
+so MSR's delta bits are nobody's. **LSR is the one shared read**: it clears
+OE/PE/FE/BI, and the ISR stamps §9.5.6's framing test from the same read. The
+ISR runs per received byte, so the flags are almost always already consumed;
+a flag this window sees survived because no interrupt came, which is why it
+is kept and shown. A reading that slips between a byte and its ISR can in
+principle swallow one framing flag of an unsettled contest; the window is
+under a hundred microseconds and each refresh reads once. IIR's read also
+acknowledges a pending TX-empty cause, which the mouse path (IER = RX only)
+never uses. A port leased to `SERIAL.DRV` is read the same way; MOUSECHK does
+not know about the lease.
+
+**`[mc_kok]` = 0** (§126.4): the layout cannot be decoded, so the section
+shows the BIOS table (no kernel column), says so, and dumps the 34 bytes the
+`MO` block's span pointer names as hex. If the kernel publishes no `MO`
+block at all, it says that.
 
 ### 126.7 PS/2: the boot record
 
