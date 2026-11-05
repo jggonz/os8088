@@ -129,10 +129,27 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     check(PeekMessage(&m, NULL, 0, 0, PM_NOREMOVE), "wait");
     while (PeekMessage(&m, NULL, 0, 0, PM_REMOVE))
         DispatchMessage(&m);
-    SetTimer(a, 1, 100, NULL);      /* none: it waits for the timer's */
-    WaitMessage();
-    check(PeekMessage(&m, NULL, 0, 0, PM_REMOVE)
-          && m.message == WM_TIMER, "waittimer");
+    /* None: it waits, and the timer's comes. NOT necessarily first: on
+     * Windows any message ends the wait, and the window has just opened
+     * under the pointer, so a WM_MOUSEMOVE may be queued before the timer
+     * fires (it was, under QEMU). Wait and take until it is WM_TIMER, a
+     * bounded number of times and inside two seconds; never is a failure. */
+    SetTimer(a, 1, 100, NULL);
+    {
+        DWORD t0 = GetTickCount();
+        int n, got = 0;
+
+        for (n = 0; n < 32 && !got && GetTickCount() - t0 < 2000; n++) {
+            WaitMessage();
+            while (!got && PeekMessage(&m, NULL, 0, 0, PM_REMOVE)) {
+                if (m.message == WM_TIMER && m.wParam == 1)
+                    got = 1;
+                else
+                    DispatchMessage(&m);
+            }
+        }
+        check(got, "waittimer");
+    }
     KillTimer(a, 1);
     CloseWindow(a);
     check(GetProp(a, "PropAtom") == (HANDLE)0x4444, "afterclose");
