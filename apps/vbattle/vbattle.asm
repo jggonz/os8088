@@ -1330,10 +1330,19 @@ vb_entat:
 ; entry is drawn: until then it stays on the entries, and keeps the reader
 ; off them. AX, CX, DX spent. The hook's (no deeper than vb_crec)
 vb_entcur:
-    mov ax, [si+VC_ESZ]
+    mov ax, [si+VC_ESZ]             ; (they end on a paragraph: the cursor's
+    mov dx, ax                      ; segment is the ring's on by them, its
+    add dx, [bx+RG_SEG]             ; offset 0 - and the ring holds them
+    mov [bx+di+4], dx               ; whole, vb_rmin)
+    mov word [bx+di+6], 0
+    mov dx, ax
     mov cl, 4
-    shl ax, cl                      ; (at most 32 KB, os88vbt.ENT_CLIP)
-    jmp vb_ccur
+    shl ax, cl
+    mov [bx+di], ax
+    mov cl, 12
+    shr dx, cl
+    mov [bx+di+2], dx
+    ret
 
 ; vb_rpiece - one piece of ring BX's clip, at the stream's fill position,
 ; when it is not all read and the ring has room past what the hook still
