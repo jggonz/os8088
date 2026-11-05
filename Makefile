@@ -11124,7 +11124,7 @@ rczex: $(BUILD)/runcpm.img
 #
 # THE HOST CHECKS RUN FIRST AND STOP THE BUILD, through the stamp below: a
 # check that fails leaves no stamp, and the compile does not run.
-$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/c64/c64fast.bin $(BUILD)/c64/c64aot.bin $(BUILD)/c64/c64aotk.bin $(BUILD)/c64/c64aotpc.bin))
+$(eval $(call CC_PACKAGE,c64,c64,C64.OVL,$(BUILD)/c64-rom/C64.ROM,part,$(BUILD)/c64/c64fast.bin $(BUILD)/c64/c64aot.bin $(BUILD)/c64/c64aotk.bin $(BUILD)/c64/c64aotpc.bin $(BUILD)/c64/c64jit.bin))
 
 # THE REST OF THE TRANSLATION UNIT (SPEC.md 73.1): c64.c #includes the parts,
 # and the shim %includes the three hand-written pieces and the icon. Every one
@@ -11160,7 +11160,7 @@ $(BUILD)/.c64-hostchecks: apps/c64/c64.c $(C64SRC) $(C64HOST) \
 	@touch $@
 
 #> [Applications] c64 :: C64, VICE's x64 as a windowed Commodore 64 (docs/C64-SPEC.md)
-c64: $(BUILD)/c64.o88 $(BUILD)/c64/c64tmpl.bin
+c64: $(BUILD)/c64.o88
 
 # THE ROM PART (C64-SPEC §1.3, 1.4). tools/c64rom.py checks the
 # SHA-256 of each of the three COMMITTED Commodore ROM images under
@@ -11451,6 +11451,11 @@ $(BUILD)/c64/c64tmpl.inc: $(BUILD)/c64/c64tmpl.bin
 $(BUILD)/c64/c64tmpl.bin: apps/m6502/m65tmpl.py apps/m6502/m65gen.py apps/m6502/m65aot.py
 	@mkdir -p $(BUILD)/c64
 	python3 apps/m6502/m65tmpl.py --check --selftest -o $@ --inc $(BUILD)/c64/c64tmpl.inc
+
+# ...and THE RECOMPILER ITSELF, part 6 (C64-SPEC 4.9.2): apps/c64/c64jit.asm
+# with the templates' part inside it, one 16KB image
+$(BUILD)/c64/c64jit.bin: apps/c64/c64jit.asm $(BUILD)/c64/c64tmpl.bin
+	$(NASM) -f bin -w+error -I $(BUILD)/c64/ -l $(BUILD)/c64/c64jit.lst -o $@ $<
 
 # THE DISK. APPLE2.O88 is ONE FILE: the ROM is its part 0 and the overlay its
 # part 1 (APPLE2-SPEC 1.5 and 15.5.1, SPEC.md 73.14.2 - `part`, the fifth

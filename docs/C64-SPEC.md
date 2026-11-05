@@ -931,9 +931,9 @@ each fetched claim holds its file's first bytes.
 
 ### 4.9 The dynamic recompiler — IN PROGRESS (docs/plans/C64-RECOMPILER-PLAN.md)
 
-**Wave 1 (4.9.1, the templates) is built; the rest of this section is the
-contract the later waves build to**, written first as this project's process
-asks. Nothing runs translated code yet.
+**Waves 1 to 4 are built** - the templates (4.9.1), the translator and its
+door (4.9.2), invalidation with volatile pages (4.9.3), and chaining and
+batching (4.9.4). Wave 5, the menu row and the measurements, is the rest.
 
 - **RAM code only.** The ROMs are translated ahead of time (§4.8); the
   recompiler takes PCs below `$A000`, in `$C000-$CFFF`, and under a ROM only
@@ -945,10 +945,11 @@ asks. Nothing runs translated code yet.
 - **Blocks** are straight-line code to the first control transfer, at most
   32 instructions, translated on their 64th entry into a heap code cache,
   found by a direct-mapped table keyed by PC. Cycles stay `BP`.
-- **A write to a page holding code invalidates that page's blocks** before
-  the store completes (the fast core's `c64_mark` tests a 256-bit CODE map);
-  a write into the running block leaves it at the next instruction. A page
-  invalidated too often is VOLATILE and stays with the fast core.
+- **A write to a page holding code invalidates the blocks** (the fast
+  core's `c64_mark` tests a 256-bit CODE map) - ALL of them, at the next
+  lookup (4.9.3) - and a write into the running block leaves it at the next
+  instruction. A page that asks too often is VOLATILE and stays with the
+  fast core.
 - **It is a part**, lazy and compressed; with no memory for it the fast core
   runs alone. The resident glue is all the package's segment pays.
 
@@ -980,13 +981,18 @@ path, by `variant()`'s rule: an absolute read of RAM (below `$A000`, or
 `$00/$01` is a `mov` and the mark; an indexed access whose whole 256-byte
 reach is such RAM; a zero-page store or read-modify-write not to `$00/$01`;
 `(zp),Y` through a pointer that is not `$FF`, `$00` or `$01`. 62 opcodes
-have both.
+have one. **Variant 2** is variant 0 with its operand READ, from the byte or
+word it was translated from, rather than an immediate: what the translator
+copies for an instruction whose operand the program rewrites (4.9.3). Every
+instruction with an operand has one, but the branches, whose offset stays the
+core's. 326 templates in all, 1,080 sites.
 
 **Patch sites are found, never written down.** The templates are assembled
 twice - at origin 0 with one set of sentinel values, at `$1111` with another
 - and every byte that differs is a site: the operand byte or word, this PC,
 the next PC, the target, `JSR`'s return word, a taken branch's cycles (3, or
-4 across a page), the block's worst-case cost, or a near jump or call into
+4 across a page), the block's worst-case cost, the operand's own address
+(variant 2), or a near jump or call into
 the prelude (the word moved by exactly `-$1111`, stored as if the template
 began at offset 0, so the translator subtracts where it put it). A
 difference no site explains, or a template whose length moved, fails the
@@ -1011,10 +1017,154 @@ instruction, the store and the mark done. Every store template loads SI with
 the next PC before the mark for that reason.
 
 **The part** is `build/c64/c64tmpl.bin`: a header, the prelude, a table of
-256 eight-byte rows (the instruction's length, its kind, its variant rule,
-its worst-case cycles, its two templates) and the template records (bytes,
-then the sites as offset-and-kind pairs). `build/c64/c64tmpl.inc` is the
-translator's equates for all of it. 11,424 bytes; not yet in the package.
+256 sixteen-byte rows (the instruction's length, its kind, its variant rule,
+its worst-case cycles, its three templates) and the template records (bytes,
+then the sites as offset-and-kind pairs; bit 7 of the count marks a pure
+template, 4.9.4). 19,725 bytes. `build/c64/c64tmpl.inc` is the
+translator's equates for all of it, and `apps/c64/c64jit.asm` carries the
+whole part inside its own (4.9.2).
+
+#### 4.9.2 The translator, and the core's door — BUILT
+
+**Part 6 of C64.O88** (`OP_SEG | OP_LAZY | OP_COMP`) is `apps/c64/c64jit.asm`:
+the variables, two vectors at `$00F0` (`JIT_HOOK`, the core's door, and
+`jl_init`, the package's far call), the prelude at `$0100`, the lookup and the
+translator, and the templates' part - a 22KB image, 8.6KB packed. `c64_jit_init` fetches it
+after the fast core, copies it into a 64KB claim of its own (`c64j_setup`,
+which far-calls `jl_init` with the core's segment), and gives the part back;
+that claim holds, past the image at `$5800`, the lookup table (1,024 rows of
+PC and value: a count below `$0100`, `$0100` for "never", else the block),
+`JPG` and `FC` (a byte a page each), the byte map and the PATCHED map (a bit a
+guest byte to `$CFFF`, 6.5KB each, 4.9.3), and the code cache from `$9E00`
+to `$FF00`. It is
+movable - nothing in it names its own segment, and the frame carries it in
+each run. **A refusal anywhere leaves the fast core alone, as before.** On
+kern_mega, where a claim's code selector is not its segment, there is no
+recompiler (the mega arm is its own wave, SPEC.md 20.18).
+
+**The frame gains F+42**, the recompiler's segment (0: none), pushed first by
+`c64fast.inc`; the core's `retf` takes it off with the rest.
+
+**The core's door.** At a control transfer to a RAM PC - `JMP`, `JSR`, `RTS`,
+`RTI`, a backward branch, a branch across a page, and the run's entry, but
+not a forward branch inside its page - the core reads a byte for the page
+from `PGMAP`, at `$FF10` in its OWN segment (past the `$FF` slot; `c64f_core`
+zeroes it, the recompiler writes it): 0, nothing; `$80`, blocks start on this
+page, so look every time; 1, look one transfer in 32, when the countdown's
+low five bits are 0 - a sample, weighted 16, so hot code is found without
+paying the recompiler's far round trip on cold code. The common path costs
+the core 18 bytes a site and six instructions.
+
+**The lookup** (`jl_hook`, and `jl_go` behind the prelude's `xa_go` for a
+block's own transfers): a pending flush first; then the row for PC - its
+block, entered; or its count, raised by the weight, and at 64 (1 when
+forced) the block made and entered; or the core, through `xa_resume`, which
+never looks again before the next transfer.
+
+**A block** (`jt_trans`) is `HEAD` and then a template an instruction, until
+one ends the block (`KD_TERM`), one is the core's (`XCORE`), an instruction
+lies on a page `JPG` refuses, or 32 instructions (`XGO`). Two more stay the
+core's by policy: an absolute read of `$D011`, `$D012` or `$D019` (the raster
+wait it runs in whole passes, 4.7.1) and a `DEX`, `DEY` or `DEC abs` with a
+`BNE` back onto itself (the loop it runs in one step, 4.7.2). A block whose
+first instruction is the core's is "never". When it is made, every page its
+bytes cover goes into the CODE map, its first page's `PGMAP` byte becomes
+`$80`, and the scratch's `ANY` byte becomes 1 so the next mark takes the path
+that tests the CODE map.
+
+**Its pages** (`JPG`) are `$0400-$9FFF` and `$C000-$CFFF`: RAM under every
+bank map. Pages 0 and 1 are the zero page and the stack; pages 2 and 3 are
+where the translated ROM's stores to a CONSTANT address land (§4.8's
+`mark_const`, which marks inline and tests no CODE map - `m65aot.py` refuses
+to emit one into a page of `JPG`'s). RAM under a ROM is a later wave's.
+
+#### 4.9.3 Invalidation — a full flush, and volatile pages — BUILT
+
+**Every path that writes the guest's RAM tests the CODE map**: the fast
+core's `c64_mark` and its copies in the translated ROM (`m65gen.py`, on the
+path a page change takes - the same-page short cut is safe because making a
+block breaks it), the prelude's `jm_mark`, the accurate core's `c64_wr_bx`,
+and `c64_wr`; the bulk movers (`c64_zcopy_in`, `c64_zzcopy_in`) ask for a
+flush unconditionally (`c64_jtouch`). **A code page is not a hit by
+itself**: the byte map, a bit under every byte a block was made from,
+decides - demos keep their variables between their instructions, and the
+first CUG scene stores into twenty-odd of them on two code pages. Every mark
+keeps the same-page short cut broken while the page holds code (`ANY` 1), so
+each write there is tested. A hit writes the address into `JC_HITA`, its page
+into `JC_FLUSH` and 1 into `JC_FLUSH+1` (2 when no byte is to blame). **A store from a block
+into a page holding code leaves that block at the next instruction**, the
+store and the mark done: every storing template loads SI with the next PC
+before its mark, for that reason.
+
+**The flush** comes at the next lookup, before any row is read: the lookup
+table, the CODE map, the byte map (32 bytes for each page that held code) and
+the cache pointer are cleared and `PGMAP` is rebuilt from `JPG`. **The byte
+hit is PATCHED from then on**, in a map no flush clears: an instruction
+whose operand it is gets variant 2, which reads the operand where it lies,
+and those operand bytes stay out of the byte map - so the next write there
+changes nothing translated and flushes nothing. A patched opcode byte keeps
+its instruction the core's. Each patched byte costs one flush, once. The page
+blamed counts one more in `FC`; at 16 it is **VOLATILE** - `JPG` and `PGMAP`
+0, the core's for the rest of the session - so code that keeps rewriting
+itself in ways a read-in-place operand cannot follow runs interpreted, as
+before the recompiler, rather than being translated and flushed forever. A
+full cache flushes too, blaming nothing.
+
+**The gate** is `c64cputest`'s recompiler leg (`C64CPU_ONLY=jit`): the rows
+and Dormann with the recompiler set up FORCED (every RAM page looked at on
+every transfer, every block made on its first entry, and a fresh recompiler
+for every run), every control that breaks a core handler breaking the
+recompiler's table row too, and row 15 - a loop whose `INC` rewrites the
+`LDA #` operand of the block it is running in, which must store $11 $12 $13
+$14; its control NOPs `jm_mark`'s CODE test and the loop stores stale bytes.
+Row 17 runs it again and counts the flushes: two at most - the program's
+own load and the first INC, which marks its operand PATCHED - where the
+control, a flush that marks nothing, flushes on every pass.
+
+**Why the whole cache and not the page** (the plan's wave 3 said "by page"):
+a block's exits jump STRAIGHT into the blocks they reach (4.9.4), and those
+jumps are only safe while every block dies together - invalidating one page
+would leave other blocks' jumps pointing into freed or rewritten cache. The
+volatile rule does what per-page invalidation was for: the page that keeps
+writing its own code is taken out of the recompiler after four flushes, and
+the rest is translated again once and stays.
+
+#### 4.9.4 Chaining, batching, and the claim — BUILT
+
+**Chaining.** When a block ends in a jump, a call or a branch, each of its
+ways out whose target already has a block - or is this block's own start -
+is made a near jump straight to that block's entry, past `xa_go` and the
+lookup. A chained jump arrives without `xa_go`'s test of the countdown, so
+**HEAD's exit comes first and the block is entered after it** (`HENTRY`,
+13 bytes in): `cmp bp, COST / jle` back to an exit that ends the run when
+nothing is left (`xa_slice`) and otherwise hands the PC to the core. A test
+that passes falls through rather than jumping. A flush clears every block
+and so every chain with them; nothing else unmakes a block.
+
+**Batching.** A template that ends `sub bp, n` and can neither leave, call
+nor branch out is PURE (m65tmpl.py's `pure()`, 79 of 210, bit 7 of its site
+count): the translator copies it without those three bytes and adds `n` to a
+sum, paid as one `sub bp, n` before the next template that is not pure.
+Nothing between can read the countdown, and HEAD has already proved the
+whole block fits, so the run's end is unchanged.
+
+**The claim, by tier.** `c64_jit_init` claims 64KB, else 48; the cache ends
+where the claim does (`jv_end`). It is set up after every other part, beside
+the free heap, so that when it gives way the hole it leaves is one piece. When a D64 will not fit the heap
+the recompiler GIVES WAY: `c64_jit_drop` zeroes the core's page map, frees
+the claim, and the attach claims again; after the attach the recompiler is
+set up again in whatever is left. A smaller machine gets a smaller cache,
+never a refused disk. **On 86Box's 640KB `286-victory` a D64 and the
+recompiler do not fit together** - the D64 is a 171KB claim - so a program run
+from drive 8 runs without it; carrying the D64 in extended memory
+(`OSAPI_XMEM_*`) is what would let both in, and is not done.
+
+**The gate** adds row 16 to the recompiler leg: `L: INX / JMP L`, one block
+chained into itself, run on budgets of 200 (40 passes exactly: X = 40, PC =
+L, nothing left) and 201 (the 41st INX takes the budget past 0: X = 41, PC
+the JMP). Both last passes are HEAD's to hand to the core; a HEAD that ended
+the run there instead stops 201 an INX short, which was checked. Rows 9 and
+14 keep every cycle total with chaining and batching on.
 
 ---
 

@@ -945,6 +945,8 @@ unsigned os88_file_read_seg(const char *name, unsigned seg, unsigned cap)
  * accurate core's stub - the one every case below drives - running alone */
 void c64f_core(unsigned dstseg, unsigned partseg) { (void)dstseg; (void)partseg; }
 unsigned c64f_codesel(unsigned seg) { return seg; }
+void c64j_off(unsigned core) { (void)core; }
+void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core, int force, int kb) { (void)dst; (void)part; (void)len; (void)core; (void)force; (void)kb; }
 
 unsigned os88_part_seg(int i)
 {

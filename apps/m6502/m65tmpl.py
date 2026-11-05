@@ -54,28 +54,32 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 from m65gen import (OPS, PENALTY, READS, RMW, STORES, REG, C64, Gen,  # noqa: E402
                     XR_RESUME, XR_SLICE, S_DIRTY, S_ANY, S_LASTPG, S_IRQ,
-                    S_WLO, S_WHI, S_WATLO, S_WATHI)
+                    S_WLO, S_WHI, S_WATLO, S_WATHI)  # noqa: F401
+from m65gen import (JC_CODE, JC_FLUSH, JC_FINE, JC_HITA, JIT_HOOK,       # noqa: E402
+                    PGMAP, F_JIT,
+                    JIT_W_SAMPLE, JIT_W_BLOCK)
 from m65aot import LEN                                                 # noqa: E402
 
 # --- the cache segment (C64-SPEC 4.9.1) -------------------------------------
-JC_CODE = 0x0000        # 32 bytes: the CODE map, a bit a page (DIRTY's layout)
-JC_FLUSH = 0x0020       # nonzero: a write found code - flush before the next lookup
+# JC_CODE: 32 bytes, the CODE map, a bit a page (DIRTY's layout); JC_FLUSH: a
+# byte naming the page a write found code in, and a byte nonzero while a
+# flush is asked for (m65gen.py)
 JC_PRE = 0x0100         # the prelude
 F_CORE = 38             # the frame's word for the core's segment (C64-SPEC 4.8)
 
 # --- the site kinds, as the translator reads them ---------------------------
-K_OPB, K_OPW, K_PC, K_NEXT, K_TARGET, K_RET, K_TCYC, K_COST, K_REL = range(1, 10)
+K_OPB, K_OPW, K_PC, K_NEXT, K_TARGET, K_RET, K_TCYC, K_COST, K_REL, K_OPA = range(1, 11)
 KNAME = {K_OPB: "OPB", K_OPW: "OPW", K_PC: "PC", K_NEXT: "NEXT",
          K_TARGET: "TARGET", K_RET: "RET", K_TCYC: "TCYC", K_COST: "COST",
-         K_REL: "REL"}
-WORD_KINDS = (K_OPW, K_PC, K_NEXT, K_TARGET, K_RET, K_COST, K_REL)
+         K_REL: "REL", K_OPA: "OPA"}
+WORD_KINDS = (K_OPW, K_PC, K_NEXT, K_TARGET, K_RET, K_COST, K_REL, K_OPA)
 # the two sentinel sets: every byte differs between them, and no two values
 # of one set share a byte pattern a site could be mistaken for
 SENT = {
     "A": dict(OPB=0x5A, OPW=0x9A5B, PC=0xA35C, NEXT=0xB45D, TARGET=0xC55E,
-              RET=0xD65F, TCYC=0x13, COST=0x7160),
+              RET=0xD65F, TCYC=0x13, COST=0x7160, OPA=0xE7A1),
     "B": dict(OPB=0x2C, OPW=0x6E1D, PC=0x581E, NEXT=0x4A2F, TARGET=0x3B4D,
-              RET=0x2C6E, TCYC=0x24, COST=0x1E7F),
+              RET=0x2C6E, TCYC=0x24, COST=0x1E7F, OPA=0x15D2),
 }
 ORG = {"A": 0x0000, "B": 0x1111}
 
@@ -147,6 +151,13 @@ def kind(op):
     return KD_LINE
 
 
+def dynamic(op):
+    """has OP a variant 2, reading its operand where it lies (4.9.3): every
+    instruction with one but a branch, whose offset stays the core's"""
+    mn, mode, cyc = OPS[op]
+    return kind(op) != KD_CORE and LEN[mode] > 1 and mode != "rel"
+
+
 def maxcyc(op):
     """the most OP can take, for the block's head: its cycles, a page
     crossed, a branch taken across one"""
@@ -187,18 +198,41 @@ class T(Gen):
         self.L("    sub bp, %d" % cyc, "    jg %s" % x,
                "    mov si, strict word NEXT", "    jmp near xa_slice", "%s:" % x)
 
+    # --- the operand: an immediate, or (variant 2) read where it lies ----
+    def opb(self, reg):
+        if self.dyn:
+            self.L("    mov %s, [OPA]" % reg)
+        else:
+            self.L("    mov %s, strict byte OPB" % reg)
+
+    def opw_bx(self, zp=False):
+        if self.dyn and zp:
+            self.L("    mov bl, [OPA]", "    xor bh, bh")
+        elif self.dyn:
+            self.L("    mov bx, [OPA]")
+        else:
+            self.L("    mov bx, strict word OPW")
+
+    def target_si(self):
+        if self.dyn:
+            self.L("    mov si, [OPA]")
+        else:
+            self.L("    mov si, strict word TARGET")
+
     # --- addressing ------------------------------------------------------
     def ea_t(self, mode, penalty):
         L = self.L
         if mode in ("zpx", "zpy"):
-            L("    mov bl, strict byte OPB", "    add bl, %s" % ("cl" if mode == "zpx" else "ch"),
-              "    xor bh, bh")
+            self.opb("bl")
+            L("    add bl, %s" % ("cl" if mode == "zpx" else "ch"), "    xor bh, bh")
         elif mode in ("absx", "absy"):
-            L("    mov bx, strict word OPW", "    add bl, %s" % ("cl" if mode == "absx" else "ch"))
+            self.opw_bx()
+            L("    add bl, %s" % ("cl" if mode == "absx" else "ch"))
             self.carry(penalty)
         elif mode == "indx":
             b = self.bail()
-            L("    mov bl, strict byte OPB", "    add bl, cl",
+            self.opb("bl")
+            L("    add bl, cl",
               "    cmp bl, 2", "    jb %s" % b, "    cmp bl, 0xFF", "    je %s" % b,
               "    xor bh, bh",
               "    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
@@ -209,8 +243,8 @@ class T(Gen):
                 L("    mov bx, [OPW]")
             else:
                 b = self.bail()
-                L("    mov bx, strict word OPW",
-                  "    cmp bl, 2", "    jb %s" % b, "    cmp bl, 0xFF", "    je %s" % b,
+                self.opw_bx(zp=True)
+                L("    cmp bl, 2", "    jb %s" % b, "    cmp bl, 0xFF", "    je %s" % b,
                   "    mov dl, [bx]", "    inc bl", "    mov bh, [bx]",
                   "    mov bl, dl", "    xor dl, dl")
             L("    add bl, ch")
@@ -230,7 +264,11 @@ class T(Gen):
         """DST = the operand; returns whether a device may have been called"""
         L = self.L
         if mode == "imm":
-            L("    mov %s, strict byte OPB" % dst)
+            self.opb(dst)
+            return False
+        if mode == "zp" and self.dyn:
+            self.opw_bx(zp=True)
+            L("    mov %s, [bx]" % dst)
             return False
         if mode == "zp":
             L("    mov %s, [OPW]" % dst)
@@ -239,7 +277,7 @@ class T(Gen):
             L("    mov %s, [OPW]" % dst)
             return False
         if mode == "abs":
-            L("    mov bx, strict word OPW")
+            self.opw_bx()
         else:
             self.ea_t(mode, mode in PENALTY)
         if mode in ("zpx", "zpy") or (self.var and mode in ("absx", "absy")):
@@ -261,8 +299,8 @@ class T(Gen):
             if self.var:
                 L("    mov [OPW], %s" % src)
             else:
-                L("    mov bx, strict word OPW",
-                  "    cmp bl, 2", "    jb %s" % self.bail(), "    mov [bx], %s" % src)
+                self.opw_bx(zp=True)
+                L("    cmp bl, 2", "    jb %s" % self.bail(), "    mov [bx], %s" % src)
             self.end(cyc)
             return
         if mode in ("zpx", "zpy"):
@@ -277,7 +315,7 @@ class T(Gen):
               "    call near jm_mark")
             return
         if mode == "abs":
-            L("    mov bx, strict word OPW")
+            self.opw_bx()
         else:
             self.ea_t(mode, False)
         if self.var and mode in ("absx", "absy"):
@@ -302,7 +340,10 @@ class T(Gen):
     def template(self, op, var):
         """the lines of OP's template, variant VAR"""
         mn, mode, cyc = OPS[op]
-        self.out, self.cold, self.var = [], [], var
+        # (variant 2 is variant 0 with its operand READ, from the bytes it
+        # was translated from: an instruction whose operand the program
+        # rewrites - 4.9.3's PATCHED map)
+        self.out, self.cold, self.var, self.dyn = [], [], var == 1, var == 2
         L = self.L
         if mn in ("ADC", "SBC"):
             L("    test byte [%s], 0x08" % self.PV(), "    jnz %s" % self.bail())
@@ -320,10 +361,11 @@ class T(Gen):
             self.shift(mn, "al")
             self.end(cyc)
         elif mn in RMW and mode in ("zp", "zpx"):
-            if mode == "zp" and var:
+            if mode == "zp" and self.var:
                 L("    mov bx, strict word OPW")
             elif mode == "zp":
-                L("    mov bx, strict word OPW", "    cmp bl, 2", "    jb %s" % self.bail())
+                self.opw_bx(zp=True)
+                L("    cmp bl, 2", "    jb %s" % self.bail())
             else:
                 self.ea_t(mode, False)
                 L("    cmp bl, 2", "    jb %s" % self.bail())
@@ -341,10 +383,10 @@ class T(Gen):
             # read-modify-write above $A000 reads through the bank map, and
             # I/O is the accurate core's dummy write)
             if mode == "abs":
-                L("    mov bx, strict word OPW")
+                self.opw_bx()
             else:
                 self.ea_t(mode, False)
-            if not var:
+            if not self.var:
                 b, r = self.bail(), self.lab()
                 L("    cmp bx, 2", "    jb %s" % b,
                   "    cmp bh, 0xA0", "    jb %s" % r,
@@ -390,13 +432,16 @@ class T(Gen):
     def misc_t(self, mn, mode, cyc):
         L = self.L
         if mn == "JMP":
-            L("    sub bp, %d" % cyc, "    mov si, strict word TARGET", "    jmp near xa_go")
+            L("    sub bp, %d" % cyc)
+            self.target_si()
+            L("    jmp near xa_go")
         elif mn == "JSR":
             slow, j = self.lab(), self.lab()
             L("    cmp di, 0x0101", "    jb %s" % slow,
               "    mov word [di-1], strict word RET", "    sub di, 2",
-              "%s: sub bp, %d" % (j, cyc), "    mov si, strict word TARGET",
-              "    jmp near xa_go",
+              "%s: sub bp, %d" % (j, cyc))
+            self.target_si()
+            L("    jmp near xa_go",
               "%s: mov dx, strict word RET" % slow)
             self.push("dh")
             self.push("dl")
@@ -459,15 +504,22 @@ class T(Gen):
 
     # --- the specials ----------------------------------------------------
     def special(self, name):
-        self.out, self.cold, self.var = [], [], 0
+        self.out, self.cold, self.var, self.dyn = [], [], 0, False
         L = self.L
         if name == "HEAD":
             # THE BLOCK'S WORST CASE, tested before it runs: a budget that
             # cannot cover it leaves the block to the core, which runs it an
-            # instruction at a time and ends the run where it must
-            k = self.lab()
-            L("    cmp bp, strict word COST", "    jg %s" % k,
-              "    mov si, strict word PC", "    jmp near xa_resume", "%s:" % k)
+            # instruction at a time and ends the run where it must - or, spent
+            # already (a chained jump arrives without xa_go's test: 4.9.4),
+            # ends the run here. The exit comes FIRST and the block is
+            # entered at .entry (HENTRY), so the test that passes falls
+            # through rather than jumping
+            x, sl = self.lab(), self.lab()
+            L("%s: mov si, strict word PC" % x, "    or bp, bp", "    jle %s" % sl,
+              "    jmp near xa_resume",
+              "%s: jmp near xa_slice" % sl,
+              ".entry:",
+              "    cmp bp, strict word COST", "    jle %s" % x)
         elif name == "XCORE":
             # the block ends at an instruction that is the core's
             L("    mov si, strict word PC", "    jmp near xa_resume")
@@ -493,12 +545,7 @@ class T(Gen):
           "    xor dl, dl",
           "    mov bx, sp",
           "    push word [ss:bx+%d]" % F_CORE,
-          "    mov bx, 0x%04X" % XR_SLICE, "    push bx", "    retf",
-          # xa_go - control goes to SI, the countdown's flags just set: the
-          # run's end, or (wave 2) the block there, or the core
-          "xa_go:",
-          "    jle xa_slice",
-          "    jmp short xa_resume")
+          "    mov bx, 0x%04X" % XR_SLICE, "    push bx", "    retf")
         L(*[l.replace("jmp c64_mark", "jmp jm_mark") for l in self.c64_io()])
         # (renamed: SETP is a 386 mnemonic, which an EQU cannot be named)
         L(*[l.replace("getp:", "jgetp:").replace("setp:", "jsetp:")
@@ -521,9 +568,9 @@ class T(Gen):
           "    or [bx + SCRD + 0x%02X], dh" % S_DIRTY,
           "    test [cs:bx + 0x%04X], dh" % JC_CODE,
           "    pop dx", "    pop bx",
+          "    jnz .code",
           "    mov byte [%s], 2" % S(S_ANY),
           "    mov [%s], bh" % S(S_LASTPG),
-          "    jnz .hit",
           ".win:")
         win = ["    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
                "    cmp bx, [%s]" % S(S_WATHI), "    ja .out",
@@ -534,9 +581,22 @@ class T(Gen):
                "    mov [%s], bx" % S(S_WHI),
                ".out:"]
         L(*win, "    ret")
+        # A CODE PAGE: the byte's own bit decides, and the same-page short
+        # cut stays broken (ANY 1) so the next write here is tested too
+        L(".code:",
+          "    mov byte [%s], 1" % S(S_ANY),
+          "    push bx", "    push cx",
+          "    mov cl, bl", "    and cl, 7",
+          "    mov ch, 0x80", "    shr ch, cl",
+          "    shr bx, 1", "    shr bx, 1", "    shr bx, 1",
+          "    test [cs:bx + 0x%04X], ch" % JC_FINE,
+          "    pop cx", "    pop bx",
+          "    jz .win")
         L(".hit:",
           # (the mark's flags were the test's: MOVs keep them)
-          "    mov byte [cs:0x%04X], 1" % JC_FLUSH,
+          "    mov [cs:0x%04X], bx" % JC_HITA,            # the address
+          "    mov [cs:0x%04X], bh" % JC_FLUSH,           # the page to blame
+          "    mov byte [cs:0x%04X], 1" % (JC_FLUSH + 1),  # ...and the request
           *[w.replace(".out", ".hout").replace(".nolo", ".hnolo") for w in win],
           "    add sp, 2",                  # this block is not returned to
           "    push ax", "    mov al, dl", "    xor ah, ah",
@@ -544,7 +604,12 @@ class T(Gen):
           "    xor dl, dl",
           "    or bp, bp",
           "    jle xa_slice",
-          "    jmp near xa_resume")
+          "    jmp near xa_resume",
+          # xa_go - control goes to SI, the countdown's flags just set: the
+          # run's end, or on into the recompiler's lookup, which the part
+          # puts straight after the prelude (apps/c64/c64jit.asm)
+          "xa_go:",
+          "    jle xa_slice")
         return self.out
 
 
@@ -593,9 +658,23 @@ def templates():
         out.append(((op, 0), t.template(op, 0)))
         if selector(op) != SEL_NONE:
             out.append(((op, 1), t.template(op, 1)))
+        if dynamic(op):
+            out.append(((op, 2), t.template(op, 2)))
     for name in ("HEAD", "XCORE", "XGO"):
         out.append((name, t.special(name)))
     return out
+
+
+def pure(lines):
+    """a template that ends `sub bp, N` and can neither leave, call nor
+    branch out: its cycles may be paid later in a sum (4.9.4)"""
+    body = "\n".join(lines)
+    if any(w in body for w in ("call", "jmp", "xa_", "jle", "jg ")):
+        return False
+    return bool(lines) and re.match(r"\s+sub bp, \d+$", lines[-1]) is not None
+
+
+HENTRY = [None]                 # HEAD's entry, found when it is assembled
 
 
 def tname(key):
@@ -617,6 +696,7 @@ def find_sites(tpls, labs):
     """(key, bytes at offset 0 normalised, [(pos, kind)]) for every template"""
     a, sa = assemble(tpls, labs, ORG["A"], SENT["A"])
     b, sb = assemble(tpls, labs, ORG["B"], SENT["B"])
+    HENTRY[0] = sa["tp_HEAD.entry"] - sa["tp_HEAD"]
     rows = []
     for key, _ in tpls:
         n = tname(key)
@@ -636,7 +716,7 @@ def find_sites(tpls, labs):
             found = None
             if i + 1 < la:
                 wa, wb = x[i] | x[i + 1] << 8, y[i] | y[i + 1] << 8
-                for kd in (K_OPW, K_PC, K_NEXT, K_TARGET, K_RET, K_COST):
+                for kd in (K_OPW, K_PC, K_NEXT, K_TARGET, K_RET, K_COST, K_OPA):
                     nm = KNAME[kd]
                     if wa == SENT["A"][nm] and wb == SENT["B"][nm]:
                         found = (kd, 2)
@@ -663,38 +743,47 @@ def find_sites(tpls, labs):
 # --- the part ---------------------------------------------------------------
 # 0  dw "JT", version
 # 4  dw the prelude's offset, its length (copied to JC_PRE in the cache)
-# 8  dw the opcode table: 256 x 8 bytes - db 6502 length, KIND, SEL, the
-#       worst-case cycles; dw variant 0's record, variant 1's (0 = none)
+# 8  dw the opcode table: 256 x ROW bytes - db 6502 length, KIND, SEL, the
+#       worst-case cycles; dw variant 0's record, 1's, 2's (0 = none)
 # 10 dw HEAD's record, XCORE's, XGO's
 # a record: dw its bytes' offset; db their length; db the sites; then a site
 #       a pair, db its offset in the template, db its KIND
-VERSION = 1
+VERSION = 2
+ROW = 16                        # an opcode's row: 4 bytes, 3 template records
 
 
-def pack(prelude, rows):
+def pack(prelude, rows, tpls):
     recs = {}
+    purity = {k: pure(b) for k, b in tpls}
     blob = bytearray(16)
     blob[16:16] = prelude
     pre_off = 16
     optab = len(blob)
-    blob += bytes(256 * 8)
+    blob += bytes(256 * ROW)
     for key, data, sites in rows:
         roff = len(blob)
         boff = roff + 4 + 2 * len(sites)
-        blob += boff.to_bytes(2, "little") + bytes([len(data), len(sites)])
+        flag = 0
+        if isinstance(key, tuple) and purity[key]:
+            # (bit 7 of the site count: the last three bytes are the
+            # `sub bp, cycles` the translator may leave to a sum)
+            assert data[-3:] == bytes([0x83, 0xED, OPS[key[0]][2]]), tname(key)
+            flag = 0x80
+        assert len(sites) < 0x80
+        blob += boff.to_bytes(2, "little") + bytes([len(data), len(sites) | flag])
         for pos, kd in sites:
             blob += bytes([pos, kd])
         blob += data
         recs[key] = roff
     for op in range(256):
-        e = optab + op * 8
+        e = optab + op * ROW
         if op not in OPS:
-            blob[e:e + 8] = bytes([1, KD_CORE, 0, 0, 0, 0, 0, 0])
+            blob[e:e + 2] = bytes([1, KD_CORE])
             continue
         mn, mode, cyc = OPS[op]
-        r0, r1 = recs.get((op, 0), 0), recs.get((op, 1), 0)
-        blob[e:e + 8] = bytes([LEN[mode], kind(op), selector(op), maxcyc(op)]) + \
-            r0.to_bytes(2, "little") + r1.to_bytes(2, "little")
+        r0, r1, r2 = (recs.get((op, v), 0) for v in range(3))
+        blob[e:e + 10] = bytes([LEN[mode], kind(op), selector(op), maxcyc(op)]) + \
+            r0.to_bytes(2, "little") + r1.to_bytes(2, "little") + r2.to_bytes(2, "little")
     hdr = b"JT" + VERSION.to_bytes(2, "little") + pre_off.to_bytes(2, "little") + \
         len(prelude).to_bytes(2, "little") + optab.to_bytes(2, "little") + \
         b"".join(recs[n].to_bytes(2, "little") for n in ("HEAD", "XCORE", "XGO"))
@@ -715,16 +804,21 @@ def check(rows):
             continue
         assert (op, 0) in have, "$%02X has no template" % op
         assert ((op, 1) in have) == (selector(op) != SEL_NONE), "$%02X" % op
+        assert ((op, 2) in have) == dynamic(op), "$%02X" % op
     for key, data, sites in rows:
         kinds = [kd for _, kd in sites]
         if isinstance(key, tuple):
             mn, mode, cyc = OPS[key[0]]
-            ops = kinds.count(K_OPB) + kinds.count(K_OPW)
+            ops = kinds.count(K_OPB) + kinds.count(K_OPW) + kinds.count(K_OPA)
+            if key[1] == 2:
+                assert K_OPB not in kinds and K_OPW not in kinds and K_TARGET not in kinds, \
+                    "%s reads its operand and has an immediate too" % tname(key)
+                assert K_OPA in kinds, tname(key)
             want = 0 if mode in ("imp", "acc") or mn in ("RTS",) else 1
             if mode == "rel":
                 want = 0                       # (the target says it all)
             if mn in ("JMP", "JSR"):
-                want = 0
+                want = key[1] == 2          # (its target, read where it lies)
             assert (ops > 0) == bool(want), "%s: operand sites %s" % (tname(key), kinds)
 
 
@@ -750,7 +844,8 @@ def selftest(tpls, rows, labs, seed=8088):
         vals = dict(OPB=rng.randrange(256), OPW=rng.randrange(0x10000),
                     PC=rng.randrange(0x10000), NEXT=rng.randrange(0x10000),
                     TARGET=rng.randrange(0x10000), RET=rng.randrange(0x10000),
-                    TCYC=rng.choice((3, 4)), COST=rng.randrange(0x8000))
+                    TCYC=rng.choice((3, 4)), COST=rng.randrange(0x8000),
+                    OPA=rng.randrange(0x10000))
         # each template at its own offset AT in a source of its own would be
         # 400 assemblies: instead every template at AT + its place, and the
         # same offsets given to the patcher
@@ -789,15 +884,24 @@ def main():
         print("m65tmpl: self-test - %d templates at 3 offsets each, patched, match "
               "nasm" % (selftest(tpls, rows, labs) // 3))
     if a.out:
-        blob = pack(prelude, rows)
+        blob = pack(prelude, rows, tpls)
         with open(a.out, "wb") as f:
             f.write(blob)
         print("m65tmpl: %s, %d bytes" % (a.out, len(blob)))
     if a.inc:
+        maxt = max(len(d) for _, d, _ in rows)
         with open(a.inc, "w") as f:
             f.write("; GENERATED by apps/m6502/m65tmpl.py - do not edit\n")
             for nm, v in (("JC_CODE", JC_CODE), ("JC_FLUSH", JC_FLUSH), ("JC_PRE", JC_PRE),
-                          ("JT_VERSION", VERSION)):
+                          ("JC_FINE", JC_FINE), ("JC_HITA", JC_HITA),
+                          ("JT_VERSION", VERSION), ("JT_PRE_OFF", 16),
+                          ("JT_PRE_LEN", len(prelude)), ("JT_MAXT", maxt),
+                          ("JT_HEAD", 10), ("JT_HENTRY", HENTRY[0]), ("JT_XCORE", 12), ("JT_XGO", 14),
+                          ("JT_OPTAB", 8), ("JT_ROW", ROW), ("JIT_HOOK", JIT_HOOK), ("PGMAP", PGMAP),
+                          ("F_JIT", F_JIT), ("F_CORE", F_CORE),
+                          ("JIT_W_SAMPLE", JIT_W_SAMPLE), ("JIT_W_BLOCK", JIT_W_BLOCK),
+                          ("C64SCR", C64["scr"]), ("C64PV", C64["pv"]),
+                          ("S_ANY", S_ANY)):
                 f.write("%s equ 0x%04X\n" % (nm, v))
             for kd, nm in KNAME.items():
                 f.write("JK_%s equ %d\n" % (nm, kd))

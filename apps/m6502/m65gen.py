@@ -129,15 +129,17 @@ C64 = dict(
     pv=0xFFF9,                  # its one spare byte: writes there are dropped
     fetch="es:",                # PC through ES: RAM, or a ROM bank's segment
     ct_top=True,                # $FFFE-$FFFF can be RAM holding anything
-    frame_extra=9,              # the fetch segment of each region, F+24..F+31,
+    frame_extra=10,             # the fetch segment of each region, F+24..F+31,
                                 # and the CHARGEN's, F+32 (C64-SPEC 4.7); then
                                 # BASIC's translation F+34, the PC table F+36,
                                 # this core F+38, the KERNAL's translation
-                                # F+40 (4.8)
+                                # F+40 (4.8); the recompiler's segment F+42
+                                # (4.9, 0: none)
     aot=(0xA000, 0x10000),      # BASIC and the KERNAL, translated (m65aot.py)
     aot_frame=34,
     chrget={0x0073: "a_chrget", 0x0079: "a_chrgot"},
     exact=True,                 # the translation keeps the run's end exact
+    jit=True,                   # ...and the recompiler's door (4.9)
 )
 # THE LONGEST BLOCK a translation may run without testing the countdown
 # (m65aot.py, exact profiles): a PC entered from outside its block's start is
@@ -169,6 +171,20 @@ ENTRY = 0x0210                  # in opcode $02's slot, after its hand-back stub
 XR_RESUME, XR_SLICE = 0x7280, 0x72A0     # the translation's doors back
 PART_LEN = 0xFE00
 FIXUP = 0x0203                  # dw h_FE body, x_hb1 - in $02's slot
+
+# THE RECOMPILER (C64-SPEC 4.9): its segment is the frame's F+42; this core
+# reads a byte a page at PGMAP in its OWN segment, which the recompiler
+# writes - 0 the core's alone, 1 sampled for heat, $80 blocks start here -
+# and far-jumps to its hook (JIT_HOOK) with DH a weight; the CODE map and
+# the flush request are the recompiler's, at JC_CODE and JC_FLUSH
+F_JIT = 42
+JIT_HOOK = 0x00F0               # in the recompiler's segment
+PGMAP = 0xFF10                  # in this core's segment, past the $FF slot
+JC_CODE, JC_FLUSH = 0x0000, 0x0020
+JC_FINE = 0x6A00                # ...its byte map, a bit a guest byte to $CFFF
+JC_HITA = 0x0060                # ...and the address a write found code at
+JIT_SAMPLE = 0x1F               # a transfer is a sample when BP & this is 0
+JIT_W_SAMPLE, JIT_W_BLOCK = 16, 1
 
 # the C64's regions, as WORD indices into the frame's fetch segments: what a
 # PC's page is fetched through depends on the bank map only for these
@@ -216,10 +232,10 @@ class Gen:
         x, hb = self.lab(), self.lab()
         self.L("    sub bp, %d" % cyc, "    jle %s" % x)
         self.ct_check(hb)
-        self.L(*self.aot_or_fetch())
+        self.L(*self.aot_or_fetch(hook=True))
         self.L("%s: jmp x_hbr" % hb, "%s: jmp x_slice" % x)
 
-    def next_taken(self, cyc):
+    def next_taken(self, cyc, back=False):
         """...after a branch taken inside its page: on a profile with a
         translation, the target goes through ct_rom as a jump's does - the
         translation's table names only the starts of its straight runs
@@ -229,7 +245,7 @@ class Gen:
             return self.next(cyc)
         x = self.lab()
         self.L("    sub bp, %d" % cyc, "    jle %s" % x)
-        self.L(*self.aot_or_fetch())
+        self.L(*self.aot_or_fetch(hook=back))
         self.L("%s: jmp x_slice" % x)
 
     def loop_collapse(self, op):
@@ -293,10 +309,22 @@ class Gen:
         L(*self.fetch_op())
         L("%s:" % no)
 
-    def aot_or_fetch(self):
+    def jit_hook(self):
+        """THE RECOMPILER'S DOOR (C64-SPEC 4.9.2), at a control transfer to
+        a RAM PC: the page's PGMAP byte says whether to look - always where a
+        block starts on the page, one transfer in 32 (by the countdown's low
+        bits) where it may, never where it is off or the page volatile"""
+        f = self.lab()
+        return ["    mov bx, si", "    mov bl, bh", "    xor bh, bh",
+                "    mov bl, [cs:bx+0x%04X]" % PGMAP,
+                "    or bl, bl", "    jz %s" % f, "    jmp ct_jitq",
+                "%s:" % f]
+
+    def aot_or_fetch(self, hook=False):
         """the next opcode - or, where the profile has a ROM translated ahead
         of time (m65aot.py) and SI is in it, ct_rom, which enters the
-        translation when the PC table names one"""
+        translation when the PC table names one; and with HOOK, a RAM PC
+        through the recompiler's door"""
         if not self.p.get("aot"):
             return self.fetch_op()
         go = self.lab()
@@ -311,9 +339,10 @@ class Gen:
             top = ["    cmp si, 0xD000", "    jae %s" % ct,
                    "    cmp si, 0xC000", "    jae %s" % go,
                    "%s:" % ct]
+        jit = self.jit_hook() if hook and self.p.get("jit") else []
         return ["    cmp si, 0x%04X" % lo, "    jb %s" % go] + top + [
                 "    jmp ct_rom",
-                "%s:" % go] + self.fetch_op()
+                "%s:" % go] + jit + self.fetch_op()
 
     def ct_check(self, hb):
         if self.c64:
@@ -639,7 +668,7 @@ class Gen:
           "    mov si, bx")
         self.next_taken(3)
         L("%s: add bl, dh" % back, "    jnc %s" % xb, "    mov si, bx")
-        self.next_taken(3)
+        self.next_taken(3, back=True)
         L("%s:" % nt)
         self.next(2)
         # ACROSS A PAGE: the extra cycle, and the target checked as a jump's
@@ -782,7 +811,7 @@ class Gen:
                            "    cmp bx, 0x%04X" % (hi - lo), "    jb .hbr"]
         if self.p["ct_top"]:
             t["entry"] += ["    cmp si, 0xFFFE", "    jae .hbr"]
-        t["entry"] += self.aot_or_fetch() + [
+        t["entry"] += self.aot_or_fetch(hook=True) + [
             ".slice: jmp x_slice",
             ".hbi: jmp x_hbi0",
             ".hbr: jmp x_hbr",
@@ -899,7 +928,41 @@ class Gen:
             "    xchg cl, dl", "    shr dh, cl", "    xchg cl, dl",
             "    mov bl, bh", "    xor bh, bh",
             "    shr bl, 1", "    shr bl, 1", "    shr bl, 1",
-            "    or [bx + SCRD + 0x%02X], dh" % S_DIRTY,
+            "    or [bx + SCRD + 0x%02X], dh" % S_DIRTY]
+        if self.p.get("jit"):
+            # THE CODE TEST (C64-SPEC 4.9.3): a page holding translated code
+            # asks the recompiler for its flush, naming the page. The frame
+            # is 8 bytes up (the return, BX, DX, BP); the page is the
+            # caller's BH, at [bp+5]
+            # A CODE PAGE IS NOT A HIT BY ITSELF: the byte's own bit in the
+            # byte map decides (4.9.3) - demos keep their variables between
+            # their instructions - and a code page keeps the same-page short
+            # cut broken (ANY 1), so every write to it is tested
+            mark += ["    push bp", "    mov bp, sp",
+                     "    mov dl, [bp+5]",
+                     "    mov bp, [bp+%d]" % (8 + F_JIT),
+                     "    or bp, bp", "    jz .nj",
+                     "    push es", "    mov es, bp",
+                     "    test [es:bx+0x%04X], dh" % JC_CODE, "    jz .nc",
+                     "    mov bp, sp",
+                     "    mov bx, [bp+6]",              # the address
+                     "    push cx",
+                     "    mov cl, bl", "    and cl, 7",
+                     "    mov ch, 0x80", "    shr ch, cl",
+                     "    shr bx, 1", "    shr bx, 1", "    shr bx, 1",
+                     "    test [es:bx+0x%04X], ch" % JC_FINE,
+                     "    pop cx",
+                     "    jz .cp",
+                     "    mov bx, [bp+6]",
+                     "    mov [es:0x%04X], bx" % JC_HITA,
+                     "    mov [es:0x%04X], dl" % JC_FLUSH,
+                     "    mov byte [es:0x%04X], 1" % (JC_FLUSH + 1),
+                     ".cp: pop es", "    pop bp", "    pop dx", "    pop bx",
+                     "    mov byte [%s], 1" % S(S_ANY),
+                     "    jmp .win",
+                     ".nc: pop es",
+                     ".nj: pop bp"]
+        mark += [
             "    pop dx", "    pop bx",
             "    mov byte [%s], %d" % (S(S_ANY), 2 if self.c64 else 1)]
         if self.c64:
@@ -985,6 +1048,27 @@ class Gen:
             "xr_slice:",
             "    jmp x_slice",
             "xr_resume_body:"] + res
+
+    def jit_tails(self):
+        """the recompiler's door, shared (C64-SPEC 4.9.2)"""
+        lines = [
+                # ct_jitq - BL the page's PGMAP byte, not 0: a page where
+                # blocks start is looked at every time; one that may is
+                # sampled, by the countdown's low bits
+                "ct_jitq:",
+                "    mov dh, %d" % JIT_W_BLOCK,
+                "    or bl, bl", "    js ct_jit",
+                "    test bp, 0x%02X" % JIT_SAMPLE, "    jnz ct_jitf",
+                "    mov dh, %d" % JIT_W_SAMPLE,
+                # ct_jit - to the recompiler's hook, SI the PC, DH its weight
+                "ct_jit:",
+                "    mov bx, sp",
+                "    push word [ss:bx+%d]" % F_JIT,
+                "    mov bx, 0x%04X" % JIT_HOOK,
+                "    push bx",
+                "    retf",
+                "ct_jitf: xor dl, dl"] + self.fetch_op()
+        return lines
 
     def tracelog(self, marker):
         """DEBUG ONLY (M65AOT_TRACE): MARKER and SI into m65aot's ring"""
@@ -1194,9 +1278,12 @@ class Gen:
           "")
         tails = self.tails()
         place = {0x02: "entry", 0x12: "exits", 0x22: "pflags", 0x32: "io",
-                 0x42: "vid", 0x52: "idle", 0x62: "region", 0x72: "aot"}
+                 0x42: "vid", 0x52: "idle", 0x62: "region", 0x72: "aot",
+                 0x92: "jit"}
         if self.p.get("aot"):
             tails["aot"] = self.aot_tails()
+        if self.p.get("jit"):
+            tails["jit"] = self.jit_tails()
         if self.c64:
             tails["region"] = ["c64_region:"] + [
                 "    db " + ", ".join(str(v) for v in C64_REGION[i:i + 16])

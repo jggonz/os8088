@@ -378,6 +378,11 @@ class Aot:
         KERNAL's keyboard wait stores to $0292 on every pass)"""
         from m65gen import S_DIRTY, S_ANY, S_WATLO, S_WATHI
         pg, k = a >> 8, self.lab()
+        if self.p.get("jit") and (0x04 <= pg < 0xA0 or 0xC0 <= pg < 0xD0):
+            # A PAGE THE RECOMPILER MAY TRANSLATE (C64-SPEC 4.9.2): the
+            # whole mark, whose CODE test this inline one does not make
+            self.L("    mov bx, 0x%04X" % a, "    call c64_mark")
+            return
         self.L("    or byte [SCR+0x%02X], 0x%02X" % (S_DIRTY + (pg >> 3), 0x80 >> (pg & 7)),
                "    mov byte [SCR+0x%02X], 1" % S_ANY,
                "    cmp word [SCR+0x%02X], 0x%04X" % (S_WATLO, a), "    ja %s" % k,

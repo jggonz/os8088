@@ -129,6 +129,15 @@ unsigned c64_faot;                          /* BASIC'S AND THE KERNAL'S
 unsigned c64_fakb;
 unsigned c64_ftab;
 static unsigned c64_fcode;
+/* THE RECOMPILER (C64-SPEC section 4.9): c64_fjit is its 64KB claim, 0 =
+ * none - the fast core runs alone. c64fast.inc puts it in the frame (F+42)
+ * and every write path tests the CODE map at its offset 0 */
+unsigned c64_fjit;
+void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
+                int force, int kb);
+void c64j_off(unsigned core);              /* the core's page map zeroed */
+static void c64_jit_drop(void);
+static void c64_jit_init(void);
 void c64f_core(unsigned dstseg, unsigned partseg);
 unsigned c64f_codesel(unsigned seg);
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
@@ -226,6 +235,8 @@ unsigned char c64_bgfill;           /* the uniform level of a mode wave 1 does
 #define C64_AOTB_PART   3                   /* BASIC, translated (4.8) */
 #define C64_AOTK_PART   4                   /* ...the KERNAL */
 #define C64_AOTPC_PART  5                   /* ...and their PC table */
+#define C64_JIT_PART    6                   /* the recompiler (4.9) */
+#define C64_JIT_LEN     0x5800              /* ...its image: c64jit.asm's LT */
 #define C64_ROM_KERNAL  0x0000
 #define C64_ROM_BASIC   0x2000
 #define C64_ROM_CHARGEN 0x4000
@@ -615,6 +626,8 @@ void os88_onmove(unsigned was, unsigned now)
     } else if (c64_fcode == was) {         /* the fast core's code (4.7) */
         c64_fcode = now;
         c64_fseg = c64f_codesel(now);
+    } else if (c64_fjit == was) {          /* the recompiler's (4.9) */
+        c64_fjit = now;
     } else if (c64_paste_seg == was) {
         c64_paste_seg = now;
     }
@@ -1892,6 +1905,49 @@ static void c64_refuse_kb(const char *what)
     os88_toast(c64_line, 0);
 }
 
+/* c64_jit_init - THE RECOMPILER (section 4.9): its part into a 64KB claim
+ * of its own, the part given back, and its tables set up with the fast
+ * core's page map. Its code is written where it runs, so only a kernel
+ * whose code selector IS the segment has one (kern_mega's arm is a wave of
+ * its own); any refusal leaves the fast core alone, as before. */
+static void c64_jit_init(void)
+{
+    unsigned seg;
+    int kb;
+
+    if (c64_fjit != 0 || c64_fseg == 0)
+        return;
+    if (os88_part_fetch(C64_JIT_PART) != 0)
+        return;
+    /* THE LARGEST CACHE THE HEAP HAS ROOM FOR, by tier: 64KB, else 48 - the
+     * image and its tables are 39.5KB of either */
+    seg = 0;
+    for (kb = 64; kb >= 48 && seg == 0; kb -= 16)
+        seg = os88_mem_claim(kb);
+    kb += 16;
+    if (seg != 0 && c64f_codesel(seg) == seg) {
+        c64j_setup(seg, os88_part_seg(C64_JIT_PART), C64_JIT_LEN, c64_fseg, 0, kb);
+        os88_mem_movable(seg, 1);
+        c64_fjit = seg;
+    } else if (seg != 0) {
+        os88_mem_free(seg);
+    }
+    os88_part_drop(C64_JIT_PART);
+}
+
+/* c64_jit_drop - THE RECOMPILER GIVES WAY (section 4.9): its claim back to
+ * the heap for something the user asked for (a D64 that would not fit),
+ * the core's page map zeroed first so no transfer looks for it again. The
+ * fast core runs alone from here, as it did before the recompiler. */
+static void c64_jit_drop(void)
+{
+    if (c64_fjit == 0)
+        return;
+    c64j_off(c64_fcode);
+    os88_mem_free(c64_fjit);
+    c64_fjit = 0;
+}
+
 /* c64_fast_init - THE FAST CORE (section 4.7). The part is $FE00 bytes (a
  * part's length is a sector count in a word) and the core a 64KB segment, so
  * the code is a claim of our own with the part copied in and its last two
@@ -2062,6 +2118,10 @@ void *os88_main(void)
      * from its own paint for the same reason. */
     c64_kick = 1;
     c64_fast_init();
+    /* THE RECOMPILER LAST (4.9.4): its claim is the one that gives way, so
+     * it sits beside the free heap, not between the pinned parts, and
+     * freeing it gives a D64 one contiguous hole */
+    c64_jit_init();
     /* THE RAM MAY MOVE FROM HERE ON (C64-SPEC 3.1.1): every claim this
      * launch makes is made, every copy of the segment (c64_chr_seg, through
      * c64_frame_regs above) is taken, and os88_onmove keeps them. The parts

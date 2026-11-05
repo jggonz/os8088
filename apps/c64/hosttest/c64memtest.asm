@@ -1449,6 +1449,7 @@ section .text
 ; globals there, so nasm can see the label). Here they stand in for it.
 section .data
 _c64_cmask: times 32 db 0xFF
+_c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): none here
 _c64_dmask: times 64 db 0
 _c64_sb0:   dw 0
 _c64_sb1:   dw 0

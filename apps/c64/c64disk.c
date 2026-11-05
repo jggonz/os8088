@@ -77,6 +77,10 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
      * and the image does not end on one */
     paras = (trks == 35 ? 683 : 768) * 16 + 32;
     seg = os88_mem_claim_p(paras);
+    if (seg == 0 && c64_fjit != 0) {
+        c64_jit_drop();                     /* (the recompiler is optional) */
+        seg = os88_mem_claim_p(paras);
+    }
     if (seg == 0) {
         c64_say("D64: no heap for it.");
         return;
@@ -93,6 +97,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
         os88_mem_free(c64_d64_seg);
     c64_d64_seg = seg;
     c64_d64_trks = trks;
+    c64_jit_init();                         /* (back, smaller, if it gave way) */
     c64_say("Disk on drive 8.");
 }
 

@@ -252,6 +252,15 @@ C64_SCR_MAPA  equ 0x36              ; what $A000-$BFFF shows  (C64_MAP_*)
 C64_SCR_MAPD  equ 0x37              ; ...$D000-$DFFF
 C64_SCR_MAPE  equ 0x38              ; ...$E000-$FFFF
 C64_SCR_END   equ 0x3A              ; ...$FFC0 + 0x3A - 1 = $FFF9
+; THE RECOMPILER'S SEGMENT (C64-SPEC 4.9), _c64_fjit when there is one: its
+; CODE map, which every write path tests, and its flush request - the page a
+; write named, then 1 (a page to blame) or 2 (none: a bulk copy, or full)
+C64J_INIT    equ 0x00F3             ; the recompiler's far vector (c64jit.asm)
+C64J_CODE    equ 0x0000             ; ...its CODE map, a bit a page
+C64J_FLUSH   equ 0x0020             ; ...the page a write named, then the request
+C64J_FINE    equ 0x6A00             ; ...its byte map, a bit a guest byte
+C64J_HITA    equ 0x0060             ; ...and the address a write found code at
+C64F_PGMAP   equ 0xFF10             ; the core's page map (m65gen.py's PGMAP)
 
 ; the seven bank maps' cell values - c64io.c's C64_MAP_* and these are ONE
 ; enumeration, and c64io.c writes them into MAPA/MAPD/MAPE on every $00/$01
@@ -628,10 +637,42 @@ c64_wr_bx:
     mov bl, bh                      ; the page
     xor bh, bh
     mov dh, [cs:bx+c64_dmask]
+    mov dl, bl
     shr bl, 1
     shr bl, 1
     shr bl, 1
     or  [bx + C64_SCR_DISP + C64_SCR_DIRTY], dh
+    ; THE CODE TEST (C64-SPEC 4.9.3): a page holding the recompiler's code
+    ; asks for its flush - the illegal opcodes' read-modify-writes are the
+    ; ones that reach here on a program's own code
+    cmp word [cs:_c64_fjit], 0
+    je .nj
+    push es
+    mov es, [cs:_c64_fjit]
+    test [es:bx+C64J_CODE], dh
+    jz .nc
+    push bp                         ; a code page: the byte's own bit decides
+    mov bp, sp
+    mov bx, [bp+6]                  ; (the address: BP, ES, DX, BX on the stack)
+    push cx
+    mov cl, bl
+    and cl, 7
+    mov ch, 0x80
+    shr ch, cl
+    shr bx, 1
+    shr bx, 1
+    shr bx, 1
+    test [es:bx+C64J_FINE], ch
+    pop cx
+    mov bx, [bp+6]
+    pop bp
+    jz .nc
+    mov [es:C64J_HITA], bx
+    mov [es:C64J_FLUSH], dl
+    mov byte [es:C64J_FLUSH+1], 1
+.nc:
+    pop es
+.nj:
     pop dx
     pop bx
     mov byte [C64_SCR_BASE + C64_SCR_ANY], 1
@@ -657,7 +698,7 @@ c64_wr_bx:
     jae .top
     cmp byte [C64_SCR_BASE + C64_SCR_MAPD], C64_MAP_IO
     je  c64_io_wr_bx
-    jmp short .store
+    jmp .store
 .top:
     cmp bx, C64_SCR_BASE
     jb  .store

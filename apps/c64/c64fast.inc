@@ -83,6 +83,7 @@ _c64_run:
     mov [c64f_far+2], ax
     ; THE FRAME (m65gen.py's header): the region words, the doors, the call
     mov es, [_c64_m+CM_RAMSEG]
+    push word [_c64_fjit]           ; F+42 the recompiler (4.9, 0: none)
     push word [_c64_fakb]           ; F+40 the KERNAL's translation (4.8)
     push word [_c64_fseg]           ; F+38 the core, for the translation's way back
     push word [_c64_ftab]           ; F+36 the PC table
@@ -329,10 +330,76 @@ _c64f_core:
     sub ax, 0xFF03
     mov byte [es:0xFF00], 0xE9
     mov [es:0xFF01], ax
+    ; THE PAGE MAP, ZERO: no page goes to the recompiler until it says so
+    ; (4.9.2) - the claim is not cleared, and $FF10 is past the part
+    xor ax, ax
+    mov di, C64F_PGMAP
+    mov cx, 0xD0 / 2
+    rep stosw                       ; cc8086:allow - ES and DF set above
     pop es
     pop ds
     pop di
     pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
+;                 int force, int kb) - THE RECOMPILER (C64-SPEC 4.9): LEN bytes
+; of its part into its KB-sized claim, and its jl_init far-called there with
+; the fast core's segment, whose page map it writes
+; -----------------------------------------------------------------------------
+_c64j_setup:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    push es
+    cld
+    mov es, [bp+4]
+    mov ds, [bp+6]
+    xor si, si
+    xor di, di
+    mov cx, [bp+8]
+    shr cx, 1
+    rep movsw                       ; cc8086:allow - DS, ES and DF set above
+    mov ax, [bp+10]
+    mov dl, [bp+12]
+    mov dh, [bp+14]
+    ; STKBALANCE-OK: a FAR CALL made by hand - CS and .back pushed as its
+    ; return, ES and C64J_INIT as its target, and the retf goes there;
+    ; jl_init's own retf comes back to .back with the four words gone
+    push cs                         ; a far call through ES:C64J_INIT
+    mov bx, .back
+    push bx
+    push es
+    mov bx, C64J_INIT
+    push bx
+    retf
+.back:
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop bp
+    ret
+
+; void c64j_off(unsigned core) - the fast core's page map zeroed: no RAM
+; transfer goes to the recompiler again (C64-SPEC 4.9.2)
+_c64j_off:
+    push bp
+    mov bp, sp
+    push di
+    push es
+    cld
+    mov es, [bp+4]
+    mov di, C64F_PGMAP
+    xor ax, ax
+    mov cx, 0xD0 / 2
+    rep stosw                       ; cc8086:allow - ES and DF set above
+    pop es
+    pop di
     pop bp
     ret
 

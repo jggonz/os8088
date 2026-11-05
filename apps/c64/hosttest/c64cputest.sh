@@ -138,6 +138,41 @@ fast_leg() {
     done
 }
 # =============================================================================
+# THE RECOMPILER'S LEG (C64-SPEC section 4.9): the fast core's leg again with
+# the recompiler's part after the core, set up FORCED - every RAM transfer
+# looked up, every block made on its first entry - so the rows and Dormann
+# run translated; the controls that break the core break the recompiler's
+# table too, and row 15 rewrites a running block. C64CPU_ONLY=jit alone.
+# =============================================================================
+JITBIN=$BUILD/c64/c64jit.bin
+jit_leg() {
+    [ -f "$JITBIN" ] || { echo "c64cputest: $JITBIN is missing - make c64"; exit 1; }
+    for MODE in rows real neg; do
+        IMG=$BUILD/c64cputest-jit-$MODE.img
+        case $MODE in
+            rows) FL="-DFAST -DJIT" ;;
+            real) FL="-DFAST -DJIT -DDORMANN -DDORMOK=$DORMOK" ;;
+            neg)  FL="-DFAST -DJIT -DDORMANN -DDORMOK=$DORMOK -DNEG" ;;
+        esac
+        # shellcheck disable=SC2086
+        nasm -f bin -w+error -I apps/c64/ -I $BUILD/c64/ $FL $DEC -o $IMG apps/c64/hosttest/c64cputest.asm
+        pad $IMG 64
+        cat "$DORM" >> $IMG
+        cat "$FASTBIN" >> $IMG
+        pad $IMG $((64 + 128 + 127))
+        cat "$JITBIN" >> $IMG
+        pad $IMG 2880
+        run $IMG "jit-$MODE" > $BUILD/c64cputest-jit-$MODE.log || true
+        cat $BUILD/c64cputest-jit-$MODE.log
+        case $MODE in
+            rows|real) grep -q "c64cputest: PASS" $BUILD/c64cputest-jit-$MODE.log || {
+                echo "c64cputest: the RECOMPILER's $MODE leg FAILED"; exit 1; } ;;
+            neg) grep -q "control fails: ok" $BUILD/c64cputest-jit-$MODE.log || {
+                echo "c64cputest: the recompiler's Dormann NEGATIVE CONTROL passed"; exit 1; } ;;
+        esac
+    done
+}
+# =============================================================================
 # THE TRANSLATED LEGS (C64-SPEC section 4.8): APPLE2's a2cputest one machine
 # along - Dormann's code translated ahead of time by apps/m6502/m65aot.py, in
 # four parts, each run with a core built for its part's range (m65gen.py
@@ -186,6 +221,11 @@ if [ "${C64CPU_ONLY:-}" = aot ]; then
     echo "c64cputest: PASS - the translated legs"
     exit 0
 fi
+if [ "${C64CPU_ONLY:-}" = jit ]; then
+    jit_leg
+    echo "c64cputest: PASS - the recompiler's leg"
+    exit 0
+fi
 if [ "${C64CPU_ONLY:-}" = fast ]; then
     fast_leg
     echo "c64cputest: PASS - the fast core's leg"
@@ -232,6 +272,7 @@ if [ "${C64CPU_ONLY:-}" = plain ]; then
     echo "c64cputest: PASS - fourteen rows, and every negative control failed (the accurate core alone)"
 else
     fast_leg
-    echo "c64cputest: PASS - fourteen rows, and every negative control failed, on both cores"
+    jit_leg
+    echo "c64cputest: PASS - fourteen rows, and every negative control failed, on both cores and the recompiler"
 fi
 exit 0

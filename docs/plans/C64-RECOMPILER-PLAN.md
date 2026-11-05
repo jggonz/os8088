@@ -1,6 +1,6 @@
 # C64 dynamic recompiler — plan
 
-Status: **W1 DONE** (C64-SPEC §4.9.1, `apps/m6502/m65tmpl.py`); W2 next. C64-SPEC §4.9 pins the contract
+Status: **W1-W4 DONE** (C64-SPEC §4.9.1-4.9.4: `apps/m6502/m65tmpl.py`, `apps/c64/c64jit.asm`). W3 shipped as whole-cache flushes, a byte map, operands read in place, and volatile pages - per-page invalidation is declined because W4's chains need blocks to die together (C64-SPEC 4.9.3). W5 next. C64-SPEC §4.9 pins the contract
 the waves build to; this file is the reasoning, the stories and the gates.
 
 ## 1. Why — MEASURED
@@ -76,10 +76,29 @@ once after the last.
 | wave | stories | gate |
 |---|---|---|
 | **W1 templates** - DONE | `m65tmpl.py`: every fast-core handler as a template with its operand and relocation sites; a table part; `--check` that every legal opcode has one or is listed as handed back | a host test re-assembling each template at two origins |
-| **W2 translator, straight line** | blocks of RAM code translated and entered from the fast core's control transfers; no chaining; a full flush on ANY write to a code page | `c64cputest`'s rows and Dormann's functional test with the recompiler forced on, on both the plain and translated legs; a new row that rewrites an operand inside a translated loop and sees the new value |
-| **W3 invalidation by page, volatile pages** | the CODE bitmap in `c64_mark`; per-page block lists; the volatile threshold | rows for: a write into the running block, a write into another block's page, a volatile page staying interpreted |
-| **W4 chaining and batching** | patched exits, pure-cycle batching, hot-count tuning | cycle-exact rows (row 9's totals, row 14's loops) unchanged; 86Box measurements |
+| **W2 translator, straight line** - DONE | blocks of RAM code translated and entered from the fast core's control transfers; no chaining; a full flush on ANY write to a code page | `c64cputest`'s rows and Dormann's functional test with the recompiler forced on, on both the plain and translated legs; a new row that rewrites an operand inside a translated loop and sees the new value |
+| **W3 invalidation by page, volatile pages** - DONE as whole-cache + volatile | the CODE bitmap in `c64_mark`; per-page block lists; the volatile threshold | rows for: a write into the running block, a write into another block's page, a volatile page staying interpreted |
+| **W4 chaining and batching** - DONE | patched exits, pure-cycle batching, hot-count tuning | cycle-exact rows (row 9's totals, row 14's loops) unchanged; 86Box measurements |
 | **W5 integration** | Preferences or a menu row to force it off (greyed with its fact when there is no memory), the status of the cache on the row, C64-SPEC and the manual | the CUG scene and the card measured; BASIC unchanged |
+
+## 4.1 Measured after W4 — 86Box `286-victory`
+
+The Portland CUG Christmas album's first scene, its three parts poked into
+RAM (CHRISTMASMUSIC at $0D00, CHRISTMASCODE at $C000, CHRISTMASROOT at
+$0801) and RUN - the D64 and the recompiler do not fit the 640KB machine
+together (C64-SPEC 4.9.4). Second half of a 50-second window, both runs
+checked on the glass:
+
+| | speed |
+|---|---|
+| fast core alone (`NOJIT`) | 23.1% |
+| with the recompiler | 25.8% (+12%) |
+
+Short of the ~40% section 1 hoped for. What got it this far, in order: the
+byte map (two code pages went VOLATILE on writes to the demo's own inline
+variables), then PATCHED operands read in place (the scroller patches its
+own `LDA`/`STA` operands every pass). The recompiler then holds ~160 blocks,
+8 flushes, no volatile page. Where the rest goes is W5's profile.
 
 ## 5. Risks, said now
 

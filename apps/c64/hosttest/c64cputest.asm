@@ -54,6 +54,15 @@ DORMSEC     equ 64                  ; ...at this sector, 128 sectors of it
 SEG_CODE    equ 0x7000
 CORESEC     equ 192
 CORESECS    equ 127
+%ifdef JIT
+; ...AND THE RECOMPILER'S LEG (C64-SPEC 4.9): its part after the core, set
+; up FORCED - every RAM page looked at on every transfer, every block made
+; on its first entry - so every row and Dormann run translated
+%include "c64tmpl.inc"              ; (build/c64/: the prelude's labels)
+SEG_JIT     equ 0x8000
+JITSEC      equ CORESEC + CORESECS
+JITSECS     equ 44
+%endif
 %ifdef AOT
 ; ...AND THE TRANSLATED LEGS (C64-SPEC 4.8): Dormann's own code, half of it
 ; translated ahead of time by m65aot.py, the core built for that range
@@ -278,6 +287,50 @@ bank_set:
     ret
 
 rebank:
+%ifdef JDBG
+    push es
+    push ax
+    mov ax, SEG_JIT
+    mov es, ax
+    mov word [es:0x9E], 0
+    mov ax, 0x5555
+    mov [es:0xA0], ax
+    pop ax
+    pop es
+%endif
+    ; (every row writes its program straight into the RAM claim, which is no
+    ; path a package has: the movers and c64_wr ask the recompiler for its
+    ; flush, so this does what they would - and on the recompiler's leg
+    ; every run starts on a recompiler set up afresh, so no row inherits
+    ; another's volatile pages)
+    call c64_jtouch
+    jmp rebank_body
+
+; jit_fresh - on the recompiler's leg a program a row loads starts on a
+; recompiler set up afresh, so no row inherits another's volatile or
+; patched bytes (a flush alone keeps both, as it does in the package)
+jit_fresh:
+%ifdef JIT
+    push ax
+    push bx
+    push cx
+    push dx
+    PUSHI 64
+    PUSHI 1
+    PUSHI SEG_CODE
+    PUSHI 0                         ; (nothing copied: jl_init again)
+    PUSHI SEG_JIT
+    PUSHI SEG_JIT
+    call _c64j_setup
+    add sp, 12
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+%endif
+    ret
+
+rebank_body:
     push ax
     mov bx, C64_SCR_BOUND
     xor al, al
@@ -556,6 +609,35 @@ rows_main:
     mov byte [neg_rmw], 0
 
 
+%ifdef JIT
+    mov si, msg_r17
+    call puts
+    call row_patched
+    call verdict
+    call patch_pat                  ; the flush marks no byte PATCHED
+    call row_patched
+    call control
+    call unpatch_pat
+    mov si, msg_r16
+    call puts
+    call row_chain
+    call verdict
+    mov ax, 0x0302                  ; the chained JMP's `sub bp,3` made 2
+    call jcyc_jmp
+    call row_chain
+    call control
+    mov ax, 0x0203
+    call jcyc_jmp
+    mov si, msg_r15
+    call puts
+    call row_smc
+    call verdict
+    call patch_hit                  ; the CODE test's branch NOPped out
+    call row_smc
+    call control
+    call unpatch_hit
+%endif
+
     mov ax, [fails]
     or ax, ax
     jnz .bad
@@ -638,6 +720,7 @@ runprog_at:
     mov word [_c64_m+CM_A], 0
     mov word [_c64_m+CM_X], 0
     mov word [_c64_m+CM_Y], 0
+    call jit_fresh
     call rebank
     PUSHI 200
     call _c64_run
@@ -977,6 +1060,7 @@ bnd_run:
     mov word [_c64_m+CM_A], 0
     mov word [_c64_m+CM_X], 0
     mov word [_c64_m+CM_Y], 0
+    call jit_fresh
     call rebank
     PUSHI 200
     call _c64_run
@@ -1185,6 +1269,259 @@ p_loop:
     db 0x8D, 0x42, 0x09             ; STA $0942
     db 0x02                         ; KIL
 p_loop_end:
+
+%ifdef JIT
+; -----------------------------------------------------------------------------
+; ROW 15 - A TRANSLATED LOOP THAT REWRITES ITS OWN OPERAND (C64-SPEC 4.9.3)
+; `LDA #` whose immediate the loop INCs every pass: the store lands inside
+; the block that is running, which must leave at the next instruction and be
+; made again, so the four bytes stored are $11 $12 $13 $14. The control NOPs
+; the prelude's CODE test out of jm_mark: the block runs on, stale, and
+; stores $11 four times.
+; -----------------------------------------------------------------------------
+row_smc:
+    mov si, p_smc
+    call runprog
+%ifdef JDBG
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov ax, [es:0x0900]
+    call puthex
+    mov ax, [es:0x0902]
+    call puthex
+    mov ax, [es:0x0802]
+    call puthex
+    mov ax, [_c64_m+CM_PC]
+    call puthex
+    mov ax, SEG_JIT
+    mov es, ax
+    mov al, '|'
+    call putc
+    mov ax, [es:0x44]
+    call puthex
+    mov ax, [es:0x46]
+    call puthex
+    mov al, [es:0x5108]
+    mov ah, [es:0x5008]
+    call puthex
+    mov ax, [es:0]
+    call puthex
+    pop es
+%endif
+    mov bx, 0x0900
+.c: call ram_rd
+    mov ah, bl
+    add ah, 0x11
+    cmp al, ah
+    jne .bad
+    inc bx
+    cmp bx, 0x0904
+    jb .c
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+p_smc:
+    db p_smc_end - p_smc - 1
+    db 0xA2, 0x00                   ; LDX #$00
+    db 0xA9, 0x11                   ; LDA #$11       ($0802)
+    db 0x9D, 0x00, 0x09             ; STA $0900,X
+    db 0xEE, 0x03, 0x08             ; INC $0803 - LDA's own operand
+    db 0xE8                         ; INX
+    db 0xE0, 0x04                   ; CPX #$04
+    db 0xD0, 0xF3                   ; BNE $0802
+    db 0x02                         ; KIL
+p_smc_end:
+
+; -----------------------------------------------------------------------------
+; ROW 16 - A CHAINED LOOP TO THE BUDGET'S END (C64-SPEC 4.9.4)
+; `L: INX / JMP L` is one block jumping straight into itself; it must stop
+; where the core would. 200 cycles are 40 passes exactly: X = 40, PC = L and
+; nothing left. 201 is a cycle more: the 41st pass's INX takes the budget
+; past 0, so X = 41 and PC is the JMP. Both last passes are the HEAD's to
+; hand to the core - entered by the chained jump with no more than the
+; block's worst case left - and a HEAD that ended the run there instead
+; stops 201 an INX short. The control charges the JMP 2: other answers.
+; -----------------------------------------------------------------------------
+row_chain:
+    mov word [chain_b], 200
+    call .one
+%ifdef JDBG
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov ax, [_c64_m+CM_X]
+    call puthex
+    mov ax, [es:0x44]
+    call puthex
+    mov bx, 0x5200
+.cd: mov al, [es:bx]
+    xor ah, ah
+    call puthex
+    inc bx
+    cmp bx, 0x5230
+    jb .cd
+    pop es
+%endif
+    cmp word [_c64_m+CM_X], 40
+    jne .bad
+    cmp word [_c64_m+CM_PC], 0x0800
+    jne .bad
+    cmp word [_c64_m+CM_CNT], 0
+    jne .bad
+    mov word [chain_b], 201
+    call .one
+    cmp word [_c64_m+CM_X], 41
+    jne .bad
+    cmp word [_c64_m+CM_PC], 0x0801
+    jne .bad
+    cmp word [_c64_m+CM_CNT], -1
+    jne .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+.one:
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov byte [es:0x0800], 0xE8      ; INX
+    mov byte [es:0x0801], 0x4C      ; JMP $0800
+    mov word [es:0x0802], 0x0800
+    pop es
+    mov word [_c64_m+CM_PC], 0x0800
+    mov word [_c64_m+CM_S], 0x00FD
+    mov word [_c64_m+CM_P], 0x0024
+    mov word [_c64_m+CM_A], 0
+    mov word [_c64_m+CM_X], 0
+    mov word [_c64_m+CM_Y], 0
+    call jit_fresh
+    call rebank
+    push word [chain_b]
+    call _c64_run
+    add sp, 2
+    ret
+
+; -----------------------------------------------------------------------------
+; ROW 17 - A PATCHED OPERAND IS READ WHERE IT LIES (C64-SPEC 4.9.3)
+; Row 15's loop again: the first INC of the LDA's operand flushes, and marks
+; the byte PATCHED; the block made again reads that operand from memory, so
+; the INCs after it are no change to the code and flush nothing. The right
+; bytes, and no more than two flushes - the run's own (the program was just
+; written) and that one. The control stops the flush marking the byte: every
+; pass flushes again, and the count says so.
+; -----------------------------------------------------------------------------
+row_patched:
+    call row_smc
+    or ax, ax
+    jnz .bad
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov ax, [es:0x46]               ; c64jit.asm's jv_nflush
+    pop es
+    cmp ax, 2
+    ja .bad
+    xor ax, ax
+    ret
+.bad:
+    mov ax, 1
+    ret
+
+; patch_pat / unpatch_pat - the flush's `or [cs:bx+PATCHED], al` NOPped
+patch_pat:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, 0x0100
+    mov cx, 0x0800
+.f: cmp word [es:di], 0x082E
+    jne .n
+    cmp word [es:di+2], 0x0087 + ((JC_FINE + 0xD000 / 8) & 0xFF) * 0x100
+    jne .n
+    cmp byte [es:di+4], (JC_FINE + 0xD000 / 8) >> 8
+    je .t
+.n: inc di
+    loop .f
+    jmp short .o
+.t: mov [pat_at], di
+    mov cx, 5
+.p: mov byte [es:di], 0x90
+    inc di
+    loop .p
+.o: pop cx
+    pop di
+    pop es
+    ret
+unpatch_pat:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov di, [pat_at]
+    mov word [es:di], 0x082E
+    mov byte [es:di+2], 0x87
+    mov word [es:di+3], JC_FINE + 0xD000 / 8
+    pop di
+    pop es
+    ret
+
+; jcyc_jmp - AH -> AL in JMP abs's templates
+jcyc_jmp:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov byte [jc_op], 0x4C
+    call jcyc
+    pop di
+    pop es
+    ret
+
+; patch_hit / unpatch_hit - the JNZ after jm_mark's `test [cs:bx],dh`
+patch_hit:
+    push es
+    push di
+    push cx
+    mov di, SEG_JIT
+    mov es, di
+    mov di, JP_jm_mark
+    mov cx, 64
+.f: cmp word [es:di], 0x3784
+    je .t
+    inc di
+    loop .f
+    jmp short .o
+.t: mov cx, 16
+.j: inc di
+    cmp byte [es:di], 0x75
+    loopne .j
+    mov [hit_at], di
+    mov ax, [es:di]
+    mov [hit_save], ax
+    mov word [es:di], 0x9090
+.o: pop cx
+    pop di
+    pop es
+    call c64_jtouch
+    ret
+unpatch_hit:
+    push es
+    push di
+    mov di, SEG_JIT
+    mov es, di
+    mov di, [hit_at]
+    mov ax, [hit_save]
+    mov [es:di], ax
+    pop di
+    pop es
+    call c64_jtouch
+    ret
+%endif
 
 ; -----------------------------------------------------------------------------
 ; ROW 5 - REAL I/O STUB RETURNS (C64-SPEC §4.6 row 5)
@@ -1800,9 +2137,85 @@ row_cyc:
     neg ax
     add ax, 200                     ; cycles spent
     cmp ax, [cs:di+2]
+%ifdef JDBG
+    je .ok
+    push ax
+    mov ax, di
+    call puthex
+    pop ax
+    call puthex
+    mov al, '/'
+    call putc
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov ax, [es:0x44]
+    call puthex
+    mov ax, [es:0x46]
+    call puthex
+    mov ax, [_c64_m+CM_PC]
+    call puthex
+    mov bx, 0xA0
+.tr: mov al, ':'
+    call putc
+    mov ax, [es:bx]
+    call puthex
+    mov al, ','
+    call putc
+    mov ax, [es:bx+2]
+    call puthex
+    add bx, 4
+    cmp bx, 0xE0
+    jb .tr
+    pop es
+    mov al, '['
+    call putc
+    mov ax, [_c64_m+CM_S]
+    call puthex
+    push es
+    mov es, [_c64_m+CM_RAMSEG]
+    mov bx, 0x1F8
+.st: mov al, [es:bx]
+    xor ah, ah
+    call puthex
+    inc bx
+    cmp bx, 0x200
+    jb .st
+    pop es
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    mov al, '{'
+    call putc
+    mov ax, [es:0x22]
+    call puthex
+    mov ax, [es:0x4000]
+    call puthex
+    mov ax, [es:0x4002]
+    call puthex
+    mov ax, [es:0x4018]
+    call puthex
+    mov ax, [es:0x401A]
+    call puthex
+    mov al, '}'
+    call putc
+    mov bx, 0x5200
+.cd: mov al, [es:bx]
+    xor ah, ah
+    call puthex
+    inc bx
+    cmp bx, 0x5260
+    jb .cd
+    pop es
+    mov al, ' '
+    call putc
+.ok:
+    add di, 4
+    jmp .next
+%endif
     jne .bad
     add di, 4
-    jmp short .next
+    jmp .next
 
 .special:
     ; --- A TAKEN BRANCH THAT REALLY CROSSES A PAGE. Loaded at $08FB, so the
@@ -2460,6 +2873,29 @@ fast_load:
     call _c64f_core
     add sp, 4
     mov word [_c64_fseg], SEG_CODE
+%ifdef JIT
+    push es
+    mov ax, SEG_JIT
+    mov es, ax
+    xor bx, bx
+    mov word [lba], JITSEC
+    mov cx, JITSECS
+.rj:
+    call rdsec
+    add bx, 512
+    inc word [lba]
+    loop .rj
+    pop es
+    PUSHI 64                        ; a 64KB claim
+    PUSHI 1                         ; FORCED
+    PUSHI SEG_CODE
+    PUSHI 0x5800
+    PUSHI SEG_JIT
+    PUSHI SEG_JIT
+    call _c64j_setup
+    add sp, 12
+    mov word [_c64_fjit], SEG_JIT
+%endif
 %ifdef AOT
     push es
     mov ax, SEG_AOT
@@ -2510,9 +2946,109 @@ fpatch:
     sub ax, 3
     mov byte [es:di], 0xE9
     mov [es:di+1], ax
+%ifdef JIT
+    ; ...AND THE RECOMPILER'S ROW FOR THE OPCODE, the other's copied over it,
+    ; so a control breaks the translated code as it breaks the core's
+    mov di, SEG_JIT
+    mov es, di
+    push si
+    push cx
+    mov al, [fp_op]
+    call jrow
+    mov si, di
+    push si
+    mov di, jp_save
+    mov cx, 16
+.sv: mov al, [es:si]
+    mov [di], al
+    inc si
+    inc di
+    loop .sv
+    pop di                          ; the patched row
+    mov al, bl
+    call jrow_si
+    mov cx, 16
+.cp: mov al, [es:si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .cp
+    pop cx
+    pop si
+    call c64_jtouch
+%endif
     pop di
     pop es
     ret
+
+%ifdef JIT
+; jrow - ES = the recompiler: DI = the opcode AL's row of its table;
+; jrow_si the same in SI
+jrow:
+    push si
+    call jrow_si
+    mov di, si
+    pop si
+    ret
+jrow_si:
+    push ax
+    xor ah, ah
+    mov si, ax
+    shl si, 1
+    shl si, 1
+    shl si, 1
+    shl si, 1                       ; (a row is 16 bytes: JT_ROW)
+    mov ax, [es:0x00F6]             ; the templates' part (c64jit.asm)
+    add si, ax
+    add ax, 8
+    push bx
+    mov bx, ax
+    add si, [es:bx]                 ; ...its opcode table
+    pop bx
+    pop ax
+    ret
+
+; jcyc - ES = the recompiler: every `sub bp,AH` in LDA abs,X's templates
+; made `sub bp,AL`
+jcyc:
+    push si
+    push di
+    push cx
+    push bx
+    push dx
+    mov dx, ax
+    mov al, [jc_op]
+    call jrow_si                    ; SI = its row
+    mov bx, 4
+.v: push bx
+    mov di, [es:si+bx]              ; a template record, 0 = none
+    or di, di
+    jz .nv
+    add di, [es:0x00F6]
+    mov cl, [es:di+2]
+    xor ch, ch
+    mov di, [es:di]
+    add di, [es:0x00F6]             ; its bytes
+.f: cmp word [es:di], 0xED83
+    jne .n
+    cmp [es:di+2], dh
+    jne .n
+    mov [es:di+2], dl
+.n: inc di
+    loop .f
+.nv:
+    pop bx
+    add bx, 2
+    cmp bx, 10
+    jb .v
+    pop dx
+    pop bx
+    pop cx
+    pop di
+    pop si
+    call c64_jtouch
+    ret
+%endif
 
 ; fpatch_cyc / funpatch_cyc - LDA abs,X ($BD)'s first `sub bp,4` made 3, and back
 fpatch_cyc:
@@ -2526,6 +3062,12 @@ fcyc:
     push es
     push di
     push cx
+%ifdef JIT
+    mov di, SEG_JIT
+    mov es, di
+    mov byte [jc_op], 0xBD
+    call jcyc
+%endif
     mov di, SEG_CODE
     mov es, di
     mov di, 0xBD00
@@ -2546,6 +3088,24 @@ fcyc:
 funpatch:
     push es
     push di
+%ifdef JIT
+    mov di, SEG_JIT
+    mov es, di
+    push si
+    push cx
+    mov al, [fp_op]
+    call jrow
+    mov si, jp_save
+    mov cx, 16
+.rs: mov al, [si]
+    mov [es:di], al
+    inc si
+    inc di
+    loop .rs
+    pop cx
+    pop si
+    call c64_jtouch
+%endif
     mov di, SEG_CODE
     mov es, di
     mov ax, [fp_op]
@@ -2562,6 +3122,12 @@ funpatch:
 
 section .data
 _c64_fseg:  dw 0
+jp_save:    times 16 db 0            ; (the recompiler's row a control moved)
+jc_op:      db 0
+chain_b:    dw 0
+pat_at:     dw 0
+hit_at:     dw 0
+hit_save:   dw 0
 _c64_fpc:   dw 0                    ; (c64io.c's; the harness has no raster)
 _c64f_adj:  dw 0                    ; (c64io.c's too)
 _c64_faot:  dw 0                    ; the translation (C64-SPEC 4.8): 0 = none
@@ -2570,6 +3136,9 @@ _c64_ftab:  dw 0
 fp_op:      dw 0
 fp_save:    db 0, 0, 0
 %endif
+section .data
+_c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): 0 = none
+section .text
 %include "c64mem.inc"
 
 section .text
@@ -2676,6 +3245,9 @@ msg_r11:    db 'row 11 the four unstable stores       ', 0
 msg_r12:    db 'row 12 the interrupt stack and RTI    ', 0
 msg_r13:    db 'row 13 read-modify-write above $A000  ', 0
 msg_r14:    db 'row 14 the self-loops, cycle-exact    ', 0
+msg_r15:    db 'row 15 a running block rewritten       ', 0
+msg_r16:    db 'row 16 a chained loop to the budget    ', 0
+msg_r17:    db 'row 17 a patched operand read in place ', 0
 msg_ok:     db 'ok ', 0
 msg_bad:    db 'FAIL ', 0
 msg_nok:    db '(control fails: ok)', 13, 10, 0
