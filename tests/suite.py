@@ -17059,11 +17059,15 @@ SOAK = [
         "GetModuleHandle, GetProcAddress, GetModuleFileName and "
         "GetModuleUsage answer for it; LoadLibrary loads W16DLL2.DLL, which "
         "imports W16DLL too and raises its counter - one DGROUP for both - "
-        "and FreeLibrary runs its WEP. The MessageBox, read off the program's "
-        "stack, must be DLLUSE OK",
+        "and FreeLibrary runs its WEP. W16DLL3.DLL, in LIBS/ below the "
+        "program, answers 2 by its plain name and loads by its full path "
+        "(124.25.22), and USER's SetWindowsHookEx, UnhookWindowsHookEx and "
+        "CallNextHookEx, bound by name as CTL3D binds them, round-trip. The "
+        "MessageBox, read off the program's stack, must be DLLUSE OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
-               "build/win16/DOS.O88", "build/win16/W16DLL.DLL")),
+               "build/win16/DOS.O88", "build/win16/W16DLL.DLL",
+               "build/win16/W16DLL3.DLL")),
     Row("win16cdlg", "soak", py("tests/win16cdlg.py"), 120.0,
         "SPEC.md 124.24, WIN16-ANY-PLAN S19: COMMDLG. CDLG.EXE (`make "
         "win16fixtures`, tests/win16/cdlg.c) waits in ChooseFont and in "

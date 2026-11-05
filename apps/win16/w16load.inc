@@ -2900,9 +2900,11 @@ w16l_rtlib:
 ; w16l_pathlib - a LoadLibrary's FULL PATH tried first (SPEC.md 124.25.22):
 ; [w16f_path] is the name as the program gave it (LoadLibrary's scan keeps
 ; it). Only "X:\DIR\...\NAME" - a drive, then a folder from the root - is a
-; path; anything else answers none. The folder is walked from the root of
-; volume X (A = 0) a name at a time, as the libraries' own folders are
-; (od_dive), and [w16_lname]'s library looked for there by w16l_ldlib1. The
+; path; anything else answers none, and so does a name the scan cut at 142
+; characters (its last folder would be part of a name). The folder is walked
+; from the root of volume X (A = 0) a name at a time, as the libraries' own
+; folders are (od_dive: no "." or ".." - such a path answers none), and
+; [w16_lname]'s library looked for there by w16l_ldlib1. The
 ; folder stood in is put back. out: as w16l_ldlib1's: CF=0 AL = its record or
 ; 0FFh (none, for any reason); CF=1 refused
 w16l_pathlib:
@@ -2930,6 +2932,8 @@ w16l_pathlib:
     inc si
     jmp short .up
 .upd:
+    cmp si, w16f_path + 142         ; LoadLibrary's scan cut it: no path,
+    jae .cut                        ;   or a folder above the one it named
     mov si, w16f_path
     mov al, [si]
     sub al, 'A'
@@ -2985,6 +2989,7 @@ w16l_pathlib:
     pop ax
     popf
     jmp short .ret
+.cut:
 .nopath:
     mov al, 0xFF
     clc

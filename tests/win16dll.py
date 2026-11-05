@@ -18,6 +18,13 @@ read off its stack, is "DLLUSE OK" or names each check that failed. The
 three files sit at B:'s root, the program's folder, which is where WIN16
 looks for a library first (124.23.1).
 
+Every leg also puts W16DLL3.DLL in LIBS/ below the program's folder, where
+no plain name is looked for: LoadLibrary("W16DLL3.DLL") must answer 2 and
+LoadLibrary of its full path (lower case, with a '/') load it (124.25.22);
+and USER's SetWindowsHookEx, UnhookWindowsHookEx and CallNextHookEx, bound
+by name through GetProcAddress as CTL3D.DLL binds them, must answer a set,
+call-next and unhook round trip.
+
 The second and third legs (124.23.1.1) put the two libraries in B:'s
 SYSTEM/APPDATA/WIN16 - the Windows directory - and in SYSTEM/APPDATA/WIN16/SYSTEM
 - the system directory, where a setup installs a shared library - with only
@@ -38,6 +45,7 @@ from win16mines import QDrive, b                              # noqa: E402
 import win16fpu as F                                          # noqa: E402
 
 FILES = ("DLLUSE.EXE", "W16DLL.DLL", "W16DLL2.DLL")
+LIBS = ("W16DLL3.DLL",)         # in LIBS/ below the program, by full path only
 
 
 def run_leg(a, bad, sysdir):
@@ -47,12 +55,13 @@ def run_leg(a, bad, sysdir):
     work = tempfile.mkdtemp(prefix="w16d-")     # short: a QMP socket path
     try:
         bimg = os.path.join(work, "src.img")
+        libs = ["LIBS:" + b(os.path.join("win16", f)) for f in LIBS]
         if sysdir:
             F.bdisk(bimg, 1440, ("DLLUSE.EXE",), extra=[
                 sysdir + ":" + b(os.path.join("win16", f))
-                for f in FILES[1:]])
+                for f in FILES[1:]] + libs)
         else:
-            F.bdisk(bimg, 1440, FILES)
+            F.bdisk(bimg, 1440, FILES, extra=libs)
         d = QDrive(work, bimg, a.keep)
         d.key = lambda n: d.hmp("sendkey %s" % {"Enter": "ret"}.get(n, n))
         ui = os88ui.UI(d, mouse=object(), sym=xmcheck.sym, verbose=False)
@@ -73,7 +82,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--keep", action="store_true")
     a = ap.parse_args()
-    missing = [f for f in FILES if not os.path.exists(b(os.path.join("win16", f)))]
+    missing = [f for f in FILES + LIBS if not os.path.exists(b(os.path.join("win16", f)))]
     if missing:
         print("win16dll: SKIP - no build/win16/%s (`make win16fixtures`)" % missing[0])
         return 77

@@ -92,7 +92,7 @@ W16LIB w16k_loadlib
     mov di, si
     jmp short .scan
 .scanned:
-    mov byte [bx], 0                ; (a name too long is cut, not a path)
+    mov byte [bx], 0                ; (cut at 142: w16l_pathlib refuses it)
     mov si, w16_modnames            ; one of WIN16's own
     xor dx, dx
 .mod:
@@ -2766,9 +2766,11 @@ w16u_hookof:
     ret
 
 ; SetWindowsHookEx (USER.291) - args: +0 hTask, +2 hInstance, +4 lpfn, +8
-; idHook: kept and answered as every hook type but WH_MSGFILTER is (above):
-; the hook's procedure is the HHOOK, so a NULL one is refused and any other
-; is a handle. CTL3D.DLL's WH_CBT hook is the one asked for (SPEC.md 124.25.22)
+; idHook: ANSWERED, NOT KEPT, whatever the type (WH_MSGFILTER too, which
+; SetWindowsHook's chain above does call): the hook's procedure is the HHOOK,
+; so a NULL one is refused and any other is a handle that UnhookWindowsHookEx
+; and CallNextHookEx take. Nothing calls it. CTL3D.DLL's WH_CBT hook is the
+; one asked for (SPEC.md 124.25.22)
 W16LIB w16u_sethookex
     ICALL w16_args
     mov ax, [es:bx + 4]

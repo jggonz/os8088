@@ -19331,8 +19331,11 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP LHEAP DOSENV PMNP
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
-# by the import lines in its own .wlk, so it links without them.
-WIN16DLLFIX := W16DLL W16DLL2
+# by the import lines in its own .wlk, so it links without them. W16DLL3 it
+# loads by a FULL PATH only (SPEC.md 124.25.22), so it rides in a LIBS\
+# folder below the program's: $(WIN16LIBSFIX).
+WIN16DLLFIX := W16DLL W16DLL2 W16DLL3
+WIN16LIBSFIX := W16DLL3
 WIN16SRC := $(wildcard tests/win16/*.c tests/win16/*.h tests/win16/*.rc tests/win16/*.wlk tests/win16/*.wcl) \
             tests/win16/mkbmp.py
 
@@ -19577,7 +19580,8 @@ $(BUILD)/win16/THKCALL.EXE: tests/win16/thkcall.asm
 # prerequisite when it exists, so a rebuilt fixture rebuilds the disk without
 # making this need Watcom.
 WIN16TESTFIX = $(wildcard $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16FIX)) \
-                                                     $(addsuffix .DLL,$(WIN16DLLFIX))))
+                                                     $(addsuffix .DLL,$(filter-out $(WIN16LIBSFIX),$(WIN16DLLFIX)))))
+WIN16TESTLIBS = $(wildcard $(addprefix $(BUILD)/win16/,$(addsuffix .DLL,$(WIN16LIBSFIX))))
 $(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
                         $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
                         $(wildcard $(BUILD)/win16/.watcom) tools/os88disk.py
@@ -19585,6 +19589,7 @@ $(BUILD)/win16test.img: $(BUILD)/win16.o88 $(BUILD)/win16/DOS.O88 \
 	    $(BUILD)/win16/DOS.O88 \
 	    $(addprefix $(BUILD)/win16/,$(addsuffix .EXE,$(WIN16TINY))) \
 	    $(if $(WIN16TESTFIX),$(addprefix FIXTURES:,$(BUILD)/win16/DOS.O88 $(WIN16TESTFIX))) \
+	    $(addprefix FIXTURES/LIBS:,$(WIN16TESTLIBS)) \
 	    $(APPDATAFOLDER) --folder SYSTEM/APPDATA/WIN16
 
 win16test: $(BUILD)/win16test.img

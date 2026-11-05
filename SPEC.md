@@ -237649,9 +237649,20 @@ it is not found - no such folder, no such file - the search of §124.23.1.1 goes
 on as it did, so a path that named the program's own folder, or a folder that
 is not there on this machine, loads what it loaded before. A name with no
 drive (`DIR\X.DLL`, `\X.DLL`, `X.DLL`) is as it was: the folder is ignored. A path that
-does not fit in `w16f_path` (142 characters) is as it was too. The library's
+does not fit in `w16f_path` (142 characters, past Windows' own 128) is as it was
+too: `LoadLibrary`'s scan cuts it, and `w16l_pathlib` refuses a cut name rather
+than walk to the folder above the one it named. The walk matches each folder
+by name as the listing spells it, which has no `.` or `..` (§19), so a path
+through either is not found there and the search goes on. The library's
 own imports are looked for from the folder it was found in, as for any library
 that is not in the program's (§124.23.1.1).
+
+Two departures from Windows 3.1, both on the side of loading. Windows does not
+search on when a name carries a path (`OpenFile`'s rule), and WIN16 does: a
+program that names `C:\WINDOWS\SYSTEM\X.DLL` finds it in WIN16's system
+directory, which no os8088 volume has at that path. And Windows resolves a
+relative folder (`DIR\X.DLL`) and `..` against the current directory, which
+WIN16 does not: those are found only where the plain name is.
 
 **What it costs.** No resident byte beyond the name's copy: `LoadLibrary`'s
 scan (library part, 3) copies the name it is scanning into `w16f_path`, which
@@ -237677,7 +237688,7 @@ export table as numbers 291, 292 and 293:
 
 | function | contract | WIN16 |
 |---|---|---|
-| `SetWindowsHookEx(idHook, lpfn, hInstance, hTask)` (USER.291) | a hook of one task, a `HHOOK` | **kept and answered, not called**, as §124.22.16 does for every type but `WH_MSGFILTER`: the answer is `lpfn` (non-NULL: a handle; NULL: 0, refused). The hook never fires, so `CTL3D` subclasses nothing and the controls it would have drawn in 3-D are the plain ones |
+| `SetWindowsHookEx(idHook, lpfn, hInstance, hTask)` (USER.291) | a hook of one task, a `HHOOK` | **answered, not kept, never called**, of every type: the answer is `lpfn` (non-NULL: a handle; NULL: 0, refused). That is one step short of §124.22.16's `SetWindowsHook`, which keeps a chain and calls a `WH_MSGFILTER` one from the dialog loop; an `Ex` `WH_MSGFILTER` hook is not called. The hook never fires, so `CTL3D` subclasses nothing and the controls it would have drawn in 3-D are the plain ones |
 | `UnhookWindowsHookEx(hhook)` (USER.292) | takes it out | **TRUE** |
 | `CallNextHookEx(hhook, code, wParam, lParam)` (USER.293) | the next hook's answer | **0**, there being no chain to call on |
 
@@ -237690,8 +237701,23 @@ part. The first build of the three rows alone changed nothing in the look:
 `GetProcAddress` takes a name only from that list, so the pointer stayed 0:0
 and the fault was the same one, at the same address.
 
-Gate: `tests/win16/` has no fixture for either yet; the look is Sir Hangman's setup
-(below, and the diary).
+**What CTL3D's 3-D look would need.** `CTL3D` draws its controls by
+subclassing them, and it finds them through a **`WH_CBT`** hook
+(`SetWindowsHookEx(WH_CBT, ...)` per task, `Ctl3dRegister` /
+`Ctl3dAutoSubclass`): at `HCBT_CREATEWND` it subclasses a dialog and its
+controls before they are shown. WIN16 would have to call that hook with
+`HCBT_CREATEWND` (`wParam` the window, `lParam` a `CBT_CREATEWND` whose
+`lpcs` is the `CREATESTRUCT`) from `CreateWindow` before `WM_NCCREATE`, keep
+the hook per task, and walk the chain through `CallNextHookEx`. A program
+that calls `Ctl3dSubclassDlg` itself from `WM_INITDIALOG` needs no hook. It
+is a look and not a wall: the controls work, drawn plain, so it is not built.
+
+Gate: `DLLUSE.EXE` (row `win16dll`, all three legs) loads `W16DLL3.DLL` by
+the full path of a `LIBS\` folder below its own, after the plain name has
+answered 2; it binds `SetWindowsHookEx`, `UnhookWindowsHookEx` and
+`CallNextHookEx` out of `GetModuleHandle("USER")` by name (CTL3D's upper-case
+spelling as well) and runs a set, call-next and unhook round trip through the
+pointers. The look is Sir Hangman's setup (the diary).
 
 ### 124.26 Big programs in small memory: discardable code *(S20, docs/plans/WIN16-ANY-PLAN.md)*
 
