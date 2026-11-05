@@ -242229,10 +242229,11 @@ reflected too, so the answer would not be about the same machine.
 foundation's stubs): **4,769 bytes of image** in the two files (code 2,612,
 strings and tables 2,157) and **449 bytes of bss** (the trace store 378, the
 per-probe state 20, the span copy, the windows and a line buffer), so **5,218
-bytes** against the plan's 4.5 KB (4,608) section budget, which it is over by
-610. What could go if the
-package ceiling needs it, cheapest first: the BIOS leg (about 300 bytes),
-leg 4 (about 120), the EBDA row (about 100). Zero kernel bytes.
+bytes**, inside the section's 6.5 KB (6,656) budget of the 24 KB package
+ceiling (plan decision D4, which raised it from 4.5 KB once the probe was
+measured; the first draft was 7.0 KB). If the ceiling ever needs it, the
+cheapest cuts are the BIOS leg (about 300 bytes), leg 4 (about 120) and the
+EBDA row (about 100). Zero kernel bytes.
 
 The trace store is 42 entries of 9 bytes (op, arg, status before, status
 after, flags, three replies, ticks) - 378 bytes of bss, enough for every leg
