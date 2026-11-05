@@ -156,4 +156,5 @@
 1 apps/browser/brdownload.inc     # Cancel/Close control; SDK arm/track/release and action only on button-up
 1 apps/wirefleet/wfvideo.inc      # deployment controls; SDK init installs press/drag/release, shared model predicates refuse disabled actions
 1 apps/wirefleet/wfcolor.inc      # the colour face's controls (SPEC.md 114.10): the same record, OS88UI_OWN painted by os88flat.inc's flat_btn; SDK arm/track/release
+1 apps/mousechk/ui.inc          # Mouse Check's Refresh/Probe PS/2/Save Report/Copy/Quit through one record (SPEC.md 126.3); SDK init installs press/drag/release
 1 apps/syscheck/ui.inc          # System Check's Scan/Details/Save Report/Clean Up/Quit through one record (SPEC.md 118.6); SDK init installs press/drag/release

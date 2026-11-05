@@ -59,28 +59,28 @@ verified. A story is ticked when it is SEEN working, not when it is built.
 
 ### Wave 1 — foundation (`found`)
 
-- [ ] **S1. The window and the row model.** `MOUSECHK.O88` opens *Mouse
+- [x] **S1. The window and the row model.** `MOUSECHK.O88` opens *Mouse
   Check*: a scrolling list of sections, each a heading with a lamp (OK /
   Warning / Problem / Info / Not applicable) and label/value rows. Sections
   are built by `xx_rows` procs in their own `.inc` files through the shell's
   row API (§126.2). The shell redraws only the rows whose text changed.
   *Verify:* boot QEMU, launch from `A:\SYSTEM`, look on VGA and on CGA or
   Hercules.
-- [ ] **S2. Live refresh.** The list rebuilds every ~0.5 s (wake/timer, never
+- [ ] **S2. Live refresh.** (built; the timer is armed and a rebuild runs, but no row changed during the wave-1 look - tick it when the Summary's position row is seen moving.) The list rebuilds every ~0.5 s (wake/timer, never
   a spin), so counters and the cursor position move while the user moves the
   mouse. *Verify:* move the mouse in QEMU and see the position row change
   and nothing else redrawn.
-- [ ] **S3. Controls and the report.** Buttons: *Refresh*, *Probe PS/2*
+- [x] **S3. Controls and the report.** Buttons: *Refresh*, *Probe PS/2*
   (greyed with its reason, §47), *Save Report*, *Copy*, *Quit*. The keyboard
   reaches every one of them. *Save Report* writes `MOUSECHK.TXT`, and *Copy*
   puts the same text on the clipboard (§55). `OSAPI_ABOUT_SET` is answered.
   *Verify:* save on a writable B:, read the file back on the host.
-- [ ] **S4. Reading the kernel (O1).** `mc_dbgfind` finds a registry block,
+- [x] **S4. Reading the kernel (O1).** `mc_dbgfind` finds a registry block,
   and the build check compares `'ID'`. `apps/mousechk/moblk.inc` holds the
   block offsets, and a fast-tier host test checks them against
   `kernel/mouse.inc`. The §57.3 exception is written. *Verify:* the
   fast-tier row is red when an offset is wrong.
-- [ ] **S5. Shipping (O3).** On every kern_big and kern_mega system disk at
+- [x] **S5. Shipping (O3).** On every kern_big and kern_mega system disk at
   720KB, 1.44MB and 1.2MB, on util360, and on the live media. `t_livefull` is
   green and `docs/INDEX.md` is regenerated. *Verify:* `make`, plus
   `tools/os88disk.py --verify` listings.

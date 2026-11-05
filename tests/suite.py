@@ -1593,6 +1593,16 @@ FAST = [
         "odd amount with every row green: passes 12 and 13 each found the "
         "whole list odd part-way through. Reads the kernel.map the build "
         "writes, so it assembles nothing"),
+    Row("mousechk", "fast", py("tests/unit/t_mousechk.py"), 0.1,
+        "SPEC.md 126.4: MOUSECHK reads the kernel's 'MO' debug block by "
+        "offset - the one shipped reader SPEC.md 57.3 names - so "
+        "apps/mousechk/moblk.inc must equal kernel/mouse.inc's real layout "
+        "(every MOS_*, MOP_*, MOC_* member, the descriptor's four words read "
+        "off the image) and the three 'ID' words build/mousechk_kid.inc "
+        "carries must be what the map says they are. A kernel change to the "
+        "block is then a MOUSECHK change in the same commit rather than a "
+        "wrong number on a disk in the field. Reads kernel.map and "
+        "kernel-full.bin, assembles nothing"),
     Row("sysman", "fast", py("tests/unit/t_sysman.py"), 0.3,
         "SPEC.md 118.2.1: System Check's manifest is written from the system "
         "disk's INPUTS (the image depends on SYSCHECK.O88), so every manifest "

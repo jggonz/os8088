@@ -109623,7 +109623,7 @@ now (§45.21.1), so the gate kept its subject class and changed its subject.
 ## 57. The debug registry — how a test package reads kernel state
 
 **`0060:000E` is a word naming a list of published blocks. Nothing shipped may
-read it.** This is the mechanism for a *test* package — `tests/sysbench` and
+read it - but for the one named exception in §57.3 rule 1.** This is the mechanism for a *test* package — `tests/sysbench` and
 its kind — to see kernel internals that are not, and should not become, API
 slots.
 
@@ -109690,10 +109690,20 @@ Everything past that first word belongs to the section owning the block
 
 ### 57.3 The rules
 
-1. **Shipped software may not read a block.** No `.o88` on either floppy does.
-   A block is internals with no compatibility promise; a package that depends
-   on one is a package that breaks when the kernel is tidied. The tags live in
-   `apps/os88api.inc` because a test package needs them, not as an invitation.
+1. **Shipped software may not read a block, with ONE NAMED EXCEPTION.** No
+   `.o88` on either floppy does but MOUSECHK (§126). A block is internals with
+   no compatibility promise; a package that depends on one is a package that
+   breaks when the kernel is tidied. The tags live in `apps/os88api.inc`
+   because a test package needs them, not as an invitation.
+   **The exception (owner decision O1, 2026-11-05): MOUSECHK alone may read
+   `'MO'`, `'ID'` and `'VD'`.** What it was given instead of an API slot is a
+   discipline: it checks the kernel against the build it was MADE with - the
+   `'ID'` words (§57.6) against three the build generates from the kernel's own
+   map - and on a mismatch shows raw hex and says it cannot decode it; and any
+   change to the `'MO'` block changes MOUSECHK in the same commit, which the
+   fast-tier row `mousechk` (`tests/unit/t_mousechk.py`) enforces. It costs the
+   kernel zero bytes. The exception is that package's, not a precedent: a
+   second shipped reader is an owner decision of its own (§126.4).
 2. **A reader that cannot find its block says so and continues.** Never
    assume, never fail the run. `sysbench` prints `This kernel carries no disk
    instrument - build DISKCNT=1.` and skips the block — which is what lets one
@@ -211778,7 +211788,7 @@ ones a read cannot be made without, each named where it is made:
 - **The IVT under kern_mega.** It is not the table the CPU uses there.
 - **Which COM port the mouse is on, the RTC rung, a sound card's port, IRQ
   and DMA.** No slot publishes them, and the debug registry is closed to
-  shipped packages (§57.3).
+  shipped packages (§57.3; MOUSECHK alone is excepted, §126.4).
 
 #### 103.7.2 The module: a part of REDLINE.O88
 
@@ -227552,7 +227562,8 @@ hibernation image of this build, a volume that is not a hard disk.
 #### 118.1.1 What "this release" means, and the one thing it cannot know
 
 **No slot reports the running kernel's build** (§57.3 forbids a shipped
-package the registry, and §57.6 is deliberately not a content hash). So
+package the registry - MOUSECHK alone is excepted, §126.4, and System Check
+does not use that - and §57.6 is deliberately not a content hash). So
 "this release" is the release System Check was **built with**: its manifest
 (§118.2) is that release's file list, and its build number is
 `buildnum.inc`'s (§14.2). On an installed machine those agree with the
@@ -241563,3 +241574,278 @@ pentium-pciether`) is the 86Box profile.
    when a package opens one (§72.13).
 4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
    TSD's TOK/OWN timing has not been run; the harness's row is the first.
+
+
+## 126. MOUSECHK — Mouse Check, a mouse-connection diagnostic (`apps/mousechk/`)
+
+*Design record and story list: docs/plans/MOUSECHK-PLAN.md. Diary:
+docs/HOW-MOUSECHK-WAS-BUILT.md. Status per story is in the plan; this section
+is the contract and says per item whether it is pinned or shipped.*
+
+`MOUSECHK.O88` opens one window, *Mouse Check*, that shows every auto-detected
+value for every pointing device this system supports - COM1 to COM4 serial
+mice, the PS/2 auxiliary port, the VMware absolute pointer, the USB mouse
+driver and the keyboard mouse - with a lamp per section and one plain verdict
+at the top, and on a button **runs the PS/2 handshake again by itself, with a
+trace**. It is §9.4.6's `MOUDIAG=1` as a shipped package: a knob kernel needs
+somebody to build it and send a disk, and the person with a mouse that is not
+found has the disk they have (docs/plans/MOUSECHK-PLAN.md, *Why a package and
+not `MOUDIAG=1`*). Label prefix `mc_` for the shell and `sum_`, `ser_`, `p2_`,
+`oth_` for the sections. It runs on kern_big, kern_emu and kern_mega, from the
+keyboard alone, and **it changes no kernel byte**.
+
+### 126.1 What it shows (the section list)
+
+One scrolling list, in this order, each section a heading with a lamp and then
+label/value rows:
+
+| section | contract | owner | what |
+|---|---|---|---|
+| Summary | §126.5 | other | which pointer the kernel is using, its live position and buttons, the kernel and CPU and adapter, and **one verdict line** |
+| Serial mice | §126.6 | serial | per COM port: the UART, the kernel's identify burst and contest, the hot-plug poller, live line status |
+| PS/2 | §126.7 | ps2 | the boot record: how far §9.9.1's handshake got, the device ID, the 8042 command byte as the BIOS left it, the BIOS's own opinion, §9.9.6's decision table |
+| PS/2 probe | §126.8 | ps2 | after *Probe PS/2*, the handshake's trace, step by step |
+| Other pointers | §126.9 | other | VMware absolute, USB, the keyboard mouse |
+
+A lamp is one of five (`LP_*`): **Info** (a blue arrow), **OK** (a green tick),
+**Warning** (brown checks), **Problem** (red, solid), **Not applicable** (grey,
+hollow) - COLOUR carries it on a 4bpp display and the SHAPE on a 1bpp one,
+SYSCHECK's convention (§118.5), so it reads on Hercules and CGA where grey
+rounds to black. A section's lamp is the worst its rows raise (`mc_lamp`).
+
+*Pinned and shipped (wave 1): the list, the lamps, the order and the stub
+sections. Each section's content is its own subsection's.*
+
+### 126.2 The window, the row model, drawing and refresh
+
+#### 126.2.1 The row API: the contract between the shell and a section
+
+A section is a pair of procs in its own `.inc` - `xx_init`, called once at
+open, and `xx_rows`, called on **every rebuild** (at open, about every half
+second, after a probe and on Refresh) in this order with **ES = KERNEL_SEG and
+DS = the package**:
+
+```
+sum_rows   apps/mousechk/summary.inc   the Summary, the top section
+ser_rows   apps/mousechk/serial.inc
+p2_rows    apps/mousechk/ps2.inc       the boot record and, after a probe, its trace
+oth_rows   apps/mousechk/other.inc
+```
+
+`ps2.inc` additionally has `p2_canprobe` (out CF = 0 may probe, CF = 1 refused
+with SI = a NUL reason in DS, for the greyed button's toast, §47) and
+`p2_probe` (runs the live probe, synchronously on the UI task, then returns;
+its trace appears through `p2_rows`). A section never sees a window, a pixel or
+a segment other than ES. The row procs (`apps/mousechk/rows.inc`) each keep
+every register except their documented outputs:
+
+| proc | in | does |
+|---|---|---|
+| `mc_head` | SI = NUL heading, AL = lamp | starts a **section** and its heading row |
+| `mc_lamp` | AL = lamp | raises the current section's lamp to AL when AL is worse (BAD > WARN > OK > INFO > NA) |
+| `mc_row` | SI = NUL label | starts a row: the label at column 0 (cut at `MC_VCOL` - 1), the cursor at `MC_VCOL` = 22 |
+| `mc_line` | SI = NUL text | starts a row whose text begins at column 2: a verdict, a trace step, an explanation |
+| `mc_put` / `mc_putc` | SI = NUL text / AL | append at the cursor |
+| `mc_hex8` / `mc_hex16` | AL / AX | append 2 / 4 hex digits |
+| `mc_dec` | AX | appends unsigned decimal |
+| `mc_bits` | AL = a byte, SI = eight NUL-free characters, bit 7 first | appends the byte as the letter where the bit is set and `.` where it is clear |
+
+A row holds at most **`MC_RW` = 60** characters; every helper truncates
+silently there. The list holds **`MC_MAXR` = 128** rows in **5,120** bytes of
+records; a section that overflows loses its tail and the last row shown says
+`(list full - more rows not shown)`. Lamp numbers: `LP_INFO` 0, `LP_OK` 1,
+`LP_WARN` 2, `LP_BAD` 3, `LP_NA` 4.
+
+#### 126.2.2 The rows being built
+
+`mc_buf` is a packed run of records, `kind` (0 heading, 1 row, 2 line), `lamp`
+(a heading's), then the NUL-terminated text; `mc_roff[i]` is record *i*'s
+offset. A rebuild writes it from nothing, so a section is a pure function from
+the machine's state to rows with no screen state of its own. Nothing in
+`rows.inc` draws.
+
+#### 126.2.3 The rows shown, and what a refresh redraws
+
+The shell keeps **two frames**: the rows being built, and the rows shown. The
+shown frame is one 16-bit hash per screen line, `mc_shown[k]`, of the kind,
+lamp and text the line last drew. After a rebuild `mc_drawdiff` hashes each
+visible row and draws **only the lines whose hash moved** - so moving the mouse
+changes the position row and nothing else is drawn, and an idle window redraws
+nothing (PERFORMANCE.md Part 5's rule: nothing repaints more than it changed).
+A hash is never 0 (a line that must draw) and never 1 (the blank a line with
+no row hashes to). A scroll, a paint and a rebuild that shortens the list zero
+the table, so every line draws once. A stale hash costs one wrong line until
+the next change; a collision is a 1 in 65,534 chance per change and the
+refresh is twice a second.
+
+Every line is **one opaque `OSAPI_FONT_RUN`** of a fixed number of cells (the
+text, padded with spaces: the padding is the erase, §6.1), at a text x that is
+a multiple of 8 from a snapped content origin (§11.94). A heading is its lamp
+(one opaque 8x8 `OSAPI_GFX_BLIT1`) in the cell before a white-on-black text bar that starts at column 2, where the labels do, so no
+pixel is written twice. The line pitch is 12 on the VGA's content height, 10 on
+Hercules', 9 on CGA's; the layout derives every rect from `OSAPI_WM_CONTENT` and
+`_GEOM` at each paint and again, `mc_regeo`, at the top of every handler,
+because a title-bar drag replays the window and never calls `W_PAINT`
+(§11.96.12.0). The window's preferred size is 626x436 on a VGA, 712x330 on a
+Hercules and 632x300 on a CGA. The scroll bar is the standard one (§13.10).
+
+#### 126.2.4 Refresh
+
+A one-shot window timer (§13.9, `OSAPI_WM_TIMER`, **9 ticks**, about 0.5 s) that
+`mc_tick` re-arms before it does anything else - never a spin, never a worker.
+The tick rebuilds, arms the clip (the timer dispatch does not), and draws the
+diff. With the About card up the list is rebuilt and not drawn: the card is
+opaque over it and its dismissal repaints. `kern_small` answers the timer slot
+CF = 1 and carries no body; **the package is not shipped there** (§126.12), and
+on a build that did have no timer the Refresh button is the only refresh.
+
+### 126.3 Controls, the keyboard, the report and Copy
+
+Five buttons, the standard control (§20.5.1.3), in one record:
+
+| button | key | does |
+|---|---|---|
+| Refresh | R | rebuilds now and draws what moved |
+| Probe PS/2 | P | `p2_probe`, then a rebuild. **Greyed** (§47) when `p2_canprobe` answers CF = 1, and a press or the key then toasts its reason |
+| Save Report | S | the standard **Save dialog** (§38) with `MOUSECHK.TXT` in the name box |
+| Copy | C | the same text on the clipboard (§55) |
+| Quit | Q or Esc | closes |
+
+The list scrolls on **Up/Down, PgUp/PgDn, Home/End** and the scroll bar; `B`
+and Space are a page back and on. **The letters are the way in for a user with
+only the keyboard mouse**, whose arrows §9.6 takes. About (§12.2, `OSAPI_ABOUT_SET`)
+is the standard card.
+
+**The report** is the list as text: a head (`Mouse Check report, os8088
+package build N`, the date from the clock, and the kernel's `'ID'` words with
+whether they matched, §126.4), then for every section a blank line and
+`[INFO|OK|WARN|PROBLEM|N/A] Heading`, then its rows indented two spaces, each
+line ending CR LF. It is composed from a rebuild made at that moment, into a
+transient claim of `nrows * 70 + 512` bytes, rounded up to a KB.
+
+**Where Save Report writes (decided by the foundation).** SYSCHECK writes to the
+root of the volume it checks and asks nothing; here the question is real,
+because the machine that needs this report is one whose boot disk may be
+read-only and whose useful destination is a second floppy. So it uses the
+standard Save dialog (`OSAPI_FILE_DLG`, mode 1), which opens in the folder the
+package was launched from with `MOUSECHK.TXT` already in the name box: Enter
+saves it beside the package, and the dialog's own navigation reaches `B:`. The
+completion proc copies the chosen name, composes the report, writes it with
+`OSAPI_FILE_WRITE` on the folder the dialog left the volume on, toasts
+`Saved <name>` or `Could not save the report`, and repaints. A refusal (a dialog
+already up) is silently nothing. *Copy* needs no destination.
+
+### 126.4 Reading the kernel: the §57.3 exception and the build check
+
+**MOUSECHK is the one shipped package that reads the debug registry** (owner
+decision O1, 2026-11-05; §57.3 rule 1 names it). It reads three tags: `'MO'`
+(§9.4.2-9.4.4: the mouse block), `'ID'` (§57.6: which kernel is this) and
+`'VD'` (§57.4: the display). Zero resident kernel bytes: it is a package
+reading a block the kernel already publishes.
+
+**It decodes only a kernel it was made with.** `apps/mousechk/kread.inc` holds
+`mc_dbgfind` (in AX = a `DBG_TAG_*`, ES = KERNEL_SEG; out CF = 1 absent, else
+BX = the block's offset; it checks the tag twice, §57.2) and `mc_kinit`, which
+at open compares the `'ID'` block's three words with the three the package was
+built with. **`[mc_kok]` = 1** when they all match, and then the offsets in
+`apps/mousechk/moblk.inc` (`MOB_*` the descriptor's words, `MOS_*` the
+34-byte span, `MOP_*` the PS/2 7-byte span, `MOC_*` the cursor) may be decoded.
+**`[mc_kok]` = 0** when they do not - another release's kernel, a knob build, a
+package carried between kernels - and every section shows **raw hex** and says
+it cannot decode it (owner decision O1: never guess). The three words read are
+kept in `[mc_kid]` and printed in the report whether or not they matched.
+
+**The fingerprint is generated, never typed.** `tools/os88mousekid.py` reads
+`kbld_text`'s file offset from the kernel's NASM map and the three words from
+`kernel-full.bin` and writes `$(BUILD)/mousechk_kid.inc` (`MC_KID_A`, `_B`,
+`_C`; no path or date, so a rebuild of the same kernel writes the same bytes).
+`mousechk.bin` depends on it, so the package and the kernel it ships beside
+cannot disagree.
+
+**kern_big and kern_mega are different kernels** with different section
+lengths, so different `'ID'` words, and MOUSECHK ships on both. The simplest
+correct answer is **two builds of one source**: `build/mousechk.o88` against
+kern_big's image (the shipped system disks and the live media) and
+`build/megak/apps/mousechk.o88` against kern_mega's (`mega.img`, `mega120.img`),
+made after the sub-make that cuts kern_mega's kernel, MEGAINST's shape. Nothing
+in it is `-DPKG_MEGA`: only the three words differ. Carried to the other kernel
+the package opens, finds `[mc_kok]` = 0 and says so.
+
+**Any change to the `'MO'` block changes MOUSECHK in the same commit**, and
+`tests/unit/t_mousechk.py` (a fast-tier row, `mousechk`) is what enforces it: it
+holds every constant in `moblk.inc` to the kernel's real label distances from
+`build/kernel.map` (and `build/megak/kernel.map` when `make mega` has built
+it), reads the descriptor's four words off the image, and checks the generated
+fingerprint against the lengths worked out from the map by hand.
+
+### 126.5 The Summary section and its verdict
+
+*(Pending: other.)*
+
+### 126.6 Serial mice
+
+*(Pending: serial.)*
+
+### 126.7 PS/2: the boot record
+
+*(Pending: ps2.)*
+
+### 126.8 PS/2: the live probe
+
+*(Pending: ps2.)*
+
+### 126.9 VMware absolute, USB, the keyboard mouse
+
+*(Pending: other.)*
+
+### 126.10 The gate
+
+*(Pending: gate.)*
+
+### 126.11 Cost
+
+**Wave 1 (the shell, the row model, kread, and four stub sections), measured on
+the build of 2026-11-05:**
+
+| | bytes |
+|---|---|
+| `mousechk.bin` image | 4,762 (shell, rows, ui, kread and the stubs; the sections add to it) |
+| bss | 5,898 (`mc_buf` 5,120, the row table 256, the shown hashes 96, the rest state and scratch) |
+| image + bss | **10,660** of the plan's 16 KB (16,384): 5,724 left for the four sections |
+| `MOUSECHK.O88`, lz4 | 4,246 |
+| kernel | **0**: no file under `kernel/`, `boot/`, `drivers/` or `apps/os88api.inc` changes; `kernel-full.bin` is the same size and differs from the previous build in the build number's digits only |
+
+Disk headroom after it landed (free clusters, `tools/os88disk.py --verify`):
+`os8088.img` 1.44 MB 1,502 of 2,847; `os8088-720.img` 22 of 713 (1 KB
+clusters); `os8088-120.img` 1.2 MB 1,026 of 2,371; `util360.img` 257 of 354;
+`mega.img` 1,726 and `mega120.img` 1,250. The 360 KB system disk does not carry
+it (§24.3.1.7, SYSCHECK's rule: it rides `util360.img`, §24.6). It is on the live
+media through `$(SYSTOOLS)` (`LIVEARGS`), so `tests/unit/t_livefull.py` is green.
+
+The refresh is a rebuild of the whole list and a hash per visible row about
+twice a second; PERFORMANCE.md's price for it on an 8088 is the section procs'
+own port reads plus roughly 28 rows x 40 bytes of hashing, which a measurement
+in wave 3 should replace. *(Not measured on the 4.77 MHz machine in wave 1.)*
+
+### 126.12 Limits, and what it deliberately does not do
+
+- **Not on kern_small's or kern_emu's images.** It rides `$(SYSTOOLS)`, the
+  list SYSCHECK rides (§118.10), which neither of those images carries: kern_small
+  has no `OSAPI_WM_TIMER` body (§13.9) and kern_emu's image ships no tools. The
+  package would run on both - on kern_small without the half-second refresh, the
+  Refresh button being then the only one - but a kern_emu copy would need its own
+  `'ID'` words (§126.4) and nothing builds it.
+- **It reads; it never writes, except in the probe.** Everything but §126.8 is a
+  read of kernel memory, of the BIOS data area or of a port with no side
+  effect. §126.8's rules are the PS/2 owner's.
+- **It cannot decode a kernel it was not made with** (§126.4): raw hex, and it
+  says so.
+- **A stale line is possible and bounded.** The hash that decides whether a line
+  redraws (§126.2.3) can collide, 1 in 65,534 per changed row; the next change
+  or Refresh repaints it.
+- **The list is bounded**: 128 rows, 60 characters a row. A section that needs
+  more shortens its text, it does not grow the buffer.
+- **No saved settings, no log, no network.** It shows the present and writes
+  one file when asked.
+- **It does not fix anything.** Its job is the report that makes a kernel fix
+  possible (docs/plans/MOUSECHK-PLAN.md, *Deferred*).
