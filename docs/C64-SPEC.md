@@ -1883,9 +1883,22 @@ of the rows on the glass are dirty (it was four fifths). **The band's rect
 scrolls** (`os88_gfx_scroll`'s `dy` is signed: up for k > 0, down for k < 0),
 the shadow, the signatures and the source record (below) slide a row at a
 time in the order that never reads an overwritten row (`c64_row_slide`),
-and the vacated rows are forced. **Sprites no longer stop it**: a slid row
-is examined whole (`c64_rowd` 8), so a sprite's pixels that moved with the
-glass are composed over and compared away.
+and the vacated rows are forced. A slid row is examined whole (`c64_rowd`
+8).
+
+**No scroll under a sprite.** A band any of whose rows has a sprite on it
+NOW (`c64_spsig`) or had one on the GLASS at the last draw (`c64_sglass`,
+which slides with the row) is not scrolled: the blit would carry the
+sprite's pixels down with the text, and the redraw that puts them back is a
+later call - on the glass that is a sprite jumping a band's height for one
+frame and back. PCUG's snow scene did exactly that to its Commodore logo:
+the falling snow is a whole-band shift, the logo a sprite in the band.
+Measured on `286-victory` across 300 frames 20 ms apart, `glitch.py`'s
+one-frame reversions over 40 px in the screen: 19 at the logo with the
+recompiler (and the bottom snow rows without it) -> 0. Such a band is
+composed and compared instead, which is what it was before bands existed.
+`c64uitest`: the sprite fixture now expects NO scroll (red with the refusal
+removed).
 
 **THE SOURCE PROOF.** A row composed in standard text with no sprite over it
 records what it was drawn from - its 40 matrix bytes and 40 colour nibbles
@@ -2336,13 +2349,29 @@ the machine through `c64_key_push`, exactly as `os88_onkey` would hand it.
 The menu chords do not run inside: some open a dialog, and no drawing slot
 is legal after the mode set (SPEC.md §53.7).
 
-**There is no shadow and no compare.** The windowed flush compares against a
-frame shadow because a BLIT is a priced call (§9.7); here the framebuffer is
-plain memory, and the dirty set (§9.2, §9.10's row and cell spans, §9.11's
-sprite cells) is already exact to the cell. A frame composes each dirty
-row's span into an 8bpp band — 8 lines × 320 bytes, `c64_b8` — and copies
-it into the framebuffer with `rep movsw`. The first frame of a session is
-all 25 rows.
+**There is no pixel shadow, but there is the source record.** The windowed
+flush compares against a frame shadow because a BLIT is a priced call
+(§9.7); here the framebuffer is plain memory, and the dirty set (§9.2,
+§9.10's row and cell spans, §9.11's sprite cells) is close to exact. A frame
+composes each dirty row's span into an 8bpp band — 8 lines × 320 bytes,
+`c64_b8` — and copies it into the framebuffer with `rep movsw`. The first
+frame of a session is all 25 rows.
+
+**A matrix-only row goes down by CELLS** (`ovl_fsx_cells`). A row dirty only
+through its matrix (`c64_rowd` 1), in standard text, with no sprite on it now
+or on the glass, and a whole §9.4.1 source record, is compared cell by cell
+against that record; each run of changed cells (gaps of two or fewer folded
+in) is composed and put, and the record updated. VRAM is the expensive
+memory on a real VGA - an ISA card's wait states make a write several times
+a RAM write - and a span is first-to-last changed cell, so falling snow (a
+few cells changed per row, far apart) was a whole 320-byte line ×8 per row,
+~64KB a frame. A whole-span put keeps the record (`c64_srcok` when the span
+was the whole row and nothing was a sprite), so the next frame can be by
+cells. `c64uitest`: six keys then a poke of two cells 37 apart puts 128
+bytes rather than ≥ 2,368, and cell 38 is the glyph in its colour on its
+paper (red with the cell path bypassed). On `286-victory` the fullscreen
+is not slower than the window; the cost this removes is the card's, which
+86Box does not price.
 
 | routine (`c64fsx.inc`) | does |
 |---|---|

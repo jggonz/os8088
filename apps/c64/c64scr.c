@@ -80,6 +80,10 @@ static unsigned char c64_bnd[C64_BSTRIDE * 8];  /* one composed band */
 static unsigned char c64_srcsh[C64_ROWS][C64_COLS * 2];
 static unsigned char c64_srcok[C64_ROWS];
 static unsigned char c64_srct[C64_COLS * 2];
+/* ...and whether row r's glass has sprite pixels on it (9.4.1): a scroll
+ * would carry them with the row, and the row's redraw after is a frame of
+ * the picture in the wrong place - the CUG logo dropping a row and back */
+static unsigned char c64_sglass[C64_ROWS];
 
 /* c64_row_slide - row FROM's shadows to row TO: the pixels and the sources */
 static void c64_row_slide(int to, int from)
@@ -87,6 +91,7 @@ static void c64_row_slide(int to, int from)
     os88_memcpy(c64_sh + C64_X320(to), c64_sh + C64_X320(from), 320);
     os88_memcpy(c64_srcsh[to], c64_srcsh[from], C64_COLS * 2);
     c64_srcok[to] = c64_srcok[from];
+    c64_sglass[to] = c64_sglass[from];
 }
 /* ...AND ITS PIXEL-DOUBLED TWIN, WHICH IS THE WHOLE OF FULLSCREEN'S 2x (9.8).
  * The frame shadow stays 320x200 and every compare, signature and span is
@@ -173,7 +178,7 @@ static int c64_border_lit;
  * build fails loudly on any that is missed. */
 #ifdef C64_HOST
 static unsigned c64_n_blit, c64_n_fill, c64_n_scroll, c64_n_cell;
-static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2, c64_n_proved;
+static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2, c64_n_proved, c64_n_fsxrun;
 #endif
 
 /* --- the status row's last state, for the delta draw (10) ---------------- */
@@ -2184,6 +2189,17 @@ static void c64_flush(void *win)
             v0 = r0;
         }
         v1 = v0 + ((k > 0) ? k : -k) - 1;
+        /* NO SCROLL UNDER A SPRITE (9.4.1): a sprite is not in the matrix
+         * the signatures match, so a scroll moves its pixels with the rows
+         * and the redraw that puts them back comes after - visibly, on a
+         * 286: the CUG logo dropped two rows for a frame whenever its snow
+         * fell in step. Rows with a sprite over them now, or on the glass
+         * from before, are composed in place instead */
+        for (i = r0; i <= r1; i++)
+            if (c64_spsig[i] | c64_sglass[i])
+                k = 0;
+    }
+    if (k) {
         if (os88_gfx_scroll(sx, sy + r0 * c64_sch,
                             sx + C64_COLS * c64_scw - 1,
                             sy + (r1 + 1) * c64_sch - 1,
@@ -2331,6 +2347,7 @@ static void c64_flush(void *win)
         }
         if (c64_spsig[i])
             c64_spr_draw(i, f, l);
+        c64_sglass[i] = (c64_spsig[i] != 0);
         /* ...and the record of what it was drawn from (9.4.1) */
         if ((c64_rmode[i] | c64_spsig[i]) == 0) {
             c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
@@ -2709,6 +2726,52 @@ static void ovl_fsx_sprites(int row, int f, int l)
 
 /* ovl_fsx_frame - ONE colour frame, off the same dirty set the window's
  * flush uses (9.2, 9.10, 9.11): each dirty row's span composed and copied */
+/* ovl_fsx_cells - text row ROW, cells F..L dirty through its matrix: the
+ * cells whose character or colour is not what the row was drawn from, a run
+ * at a time, composed and put; the record follows them */
+static void ovl_fsx_cells(int row, int f, int l)
+{
+    int c, a, b, gap, y;
+    unsigned char *sh;
+
+    sh = c64_srcsh[row];
+    c64_zcopy_out(c64_srct, c64_rmb[row] + C64_X40(row), C64_COLS);
+    os88_memcpy(c64_srct + C64_COLS, c64_col + C64_X40(row), C64_COLS);
+    c = f;
+    while (c <= l) {
+        if (c64_srct[c] == sh[c])
+            if (c64_srct[C64_COLS + c] == sh[C64_COLS + c]) {
+                c++;
+                continue;
+            }
+        a = c;
+        b = c;
+        gap = 0;
+        while (c <= l) {
+            if (c64_srct[c] != sh[c])
+                gap = -1;
+            else if (c64_srct[C64_COLS + c] != sh[C64_COLS + c])
+                gap = -1;
+            if (gap < 0) {
+                b = c;
+                gap = 0;
+            } else if (++gap > 2) {
+                break;
+            }
+            c++;
+        }
+        ovl_fsx_compose(row, a, b);
+        for (y = 0; y < 8; y++)
+            c64_fsx_put(c64_fsx_seg, C64_X320((row << 3) + y) + (a << 3),
+                        c64_b8 + C64_X320(y) + (a << 3), (b - a + 1) << 3);
+        os88_memcpy(sh + a, c64_srct + a, b - a + 1);
+        os88_memcpy(sh + C64_COLS + a, c64_srct + C64_COLS + a, b - a + 1);
+#ifdef C64_HOST
+        c64_n_fsxrun++;
+#endif
+    }
+}
+
 static void ovl_fsx_frame(void)
 {
     int i, y, f, l, sp, b;
@@ -2753,12 +2816,40 @@ static void ovl_fsx_frame(void)
                 l = c64_cspl;
             }
         }
+        /* ONLY THE CELLS THAT CHANGED (9.12): a plain text row dirtied only
+         * through its matrix and colour bytes, with no sprite over it now
+         * or on the glass, and a whole record of what it was drawn from
+         * (c64_srcsh, 9.4.1's) - each run of changed cells, gaps of two or
+         * fewer folded in, and nothing else. A whole span is 2,560 bytes of
+         * 8bpp a row into an ISA VGA, and falling snow dirties every row
+         * from edge to edge: the colour screen wrote ~64KB a frame where
+         * the window wrote an eighth of that */
+        if (c64_fsx_ok)
+            if (c64_rowd[i] == 1)
+                if (c64_srcok[i])
+                    if ((c64_rmode[i] | c64_spsig[i] | c64_sglass[i]) == 0) {
+                        ovl_fsx_cells(i, f, l);
+                        c64_rowd[i] = 0;
+                        continue;
+                    }
         ovl_fsx_compose(i, f, l);
         if (c64_spsig[i])
             ovl_fsx_sprites(i, f, l);
         for (y = 0; y < 8; y++)
             c64_fsx_put(c64_fsx_seg, C64_X320((i << 3) + y) + (f << 3),
                         c64_b8 + C64_X320(y) + (f << 3), (l - f + 1) << 3);
+        /* ...and the record, where it means something */
+        if ((c64_rmode[i] | c64_spsig[i]) == 0) {
+            c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,
+                          l - f + 1);
+            os88_memcpy(c64_srcsh[i] + C64_COLS + f, c64_col + C64_X40(i) + f,
+                        l - f + 1);
+            if ((f == 0) & (l == C64_COLS - 1))
+                c64_srcok[i] = 1;
+        } else {
+            c64_srcok[i] = 0;
+        }
+        c64_sglass[i] = (c64_spsig[i] != 0);
         c64_rowd[i] = 0;
     }
     c64_dirty_any = 0;

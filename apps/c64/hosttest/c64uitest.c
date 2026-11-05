@@ -770,12 +770,22 @@ void c64_c8spr(unsigned char *dst, const unsigned char *data, int x,
                 dst[x] = (unsigned char)c;
     }
 }
+static long h_fsx_putn;                     /* bytes put to the framebuffer */
+static int h_fsx_poke_at = -1;              /* the key pass that pokes row 10 */
 void c64_fsx_put(unsigned seg, unsigned off, const unsigned char *src, int n)
 {
     memcpy(segbase(seg) + off, src, n);
+    h_fsx_putn += n;
 }
 unsigned c64_fsx_key(void)
 {
+    if (h_fsx_poke_at >= 0)
+        the_ticks += 2;                         /* (a pass is a frame's time) */
+    if (h_fsx_keyi == h_fsx_poke_at) {
+        c64_wr(0x0400 + 10 * 40 + 1, 0x02);     /* a 'B' at each end of a */
+        c64_wr(0x0400 + 10 * 40 + 38, 0x02);    /* row: falling snow's shape */
+        h_fsx_putn = 0;
+    }
     if (h_fsx_keyi >= h_fsx_keyn)
         return 0xFFFF;
     return (unsigned)(h_fsx_keyq[h_fsx_keyi++] & 0xFFFF);
@@ -2504,15 +2514,14 @@ int main(int argc, char **argv)
         fail("a partial downward scroll was not one gfx_scroll, one composed "
              "row and twelve proved ones (9.4.1)");
 
-    /* --- ...AND A SPRITE OVER THE BAND (9.4.1). The scroll moves the
-     * GLASS, sprite pixels and all, so a sprite drawn over rows 5-7 lands on
-     * rows 6-8 - and in the same frame the sprite is switched off. Every row
-     * of the band must then be its text and nothing else: a slid row is
-     * examined whole, and one that came from under a sprite is never proved
-     * (its record says so). Verified red with the proof trusting a record
-     * made under a sprite: the sprite's pixels survive on rows 6-8. (The
-     * whole-row mark, c64_rowd 8, guards a slid row whose bytes were NOT
-     * rewritten, which a page-granular dirty set cannot produce here.) */
+    /* --- ...AND A SPRITE OVER THE BAND (9.4.1): NO SCROLL. A scroll moves
+     * the GLASS, sprite pixels and all, and the redraw that puts them back
+     * comes after it - a frame of the picture in the wrong place on a 286
+     * (the CUG logo dropping two rows whenever its snow fell in step). So a
+     * band with a sprite over it now, or on the glass from before - here the
+     * sprite over rows 5-7 is switched off in the same frame - is composed
+     * in place, and every row of it is its text and nothing else. Verified
+     * red with the refusal removed (a scroll is counted). */
     {
         int r, j;
         for (j = 0; j < 63; j++)
@@ -2539,11 +2548,11 @@ int main(int argc, char **argv)
         c64_dirty_any = 1;
         b_scroll = n_scroll;
         flush_now();
-        if (n_scroll - b_scroll != 1)
-            fail("the band under a sprite did not scroll - the sprite case "
-                 "is not reaching what it tests");
+        if (n_scroll - b_scroll != 0)
+            fail("a band with a sprite on its glass was scrolled - the "
+                 "sprite's pixels moved with it, to be put back a frame later");
         for (r = 0; r <= 12; r++)
-            row_truth(r, "after a band scroll under a sprite");
+            row_truth(r, "after a band moved under a sprite");
     }
 
     /* --- AND gfx_blit1 REFUSING: 9.5's SECOND PATH, ONCE ---------------
@@ -3211,6 +3220,33 @@ int main(int argc, char **argv)
         if (c64_fsx_up)
             fail("the bracket left c64_fsx_up set: no toast would ever be "
                  "raised again");
+
+        /* ...ONLY THE CELLS THAT CHANGED (9.12): a row dirtied at both ends
+         * through its matrix puts those two cells, not the 38 between them -
+         * the snow scene's shape, and 2,432 bytes of 8bpp where 128 do.
+         * Verified red with ovl_fsx_cells bypassed (the whole span is put) */
+        h_fsx_keyq[0] = 0xFFFF;             /* a frame, drawn whole */
+        h_fsx_keyq[1] = 0xFFFF;             /* ...and one with nothing in it */
+        h_fsx_keyq[2] = 0xFFFF;             /* (row 10 poked before this) */
+        h_fsx_keyq[3] = 0xFFFF;             /* (and passes enough for the */
+        h_fsx_keyq[4] = 0xFFFF;             /*  frame skip to draw one) */
+        h_fsx_keyq[5] = 0xFFFF;
+        h_fsx_keyq[6] = 0x2000;
+        h_fsx_keyn = 7;
+        h_fsx_keyi = 0;
+        h_fsx_poke_at = 2;
+        os88_gfx_lock();
+        os88_onkey(0, 0x20, win);
+        os88_gfx_unlock();
+        h_fsx_poke_at = -1;
+        if (h_fsx_putn > 6 * 64)
+            fail("two changed cells at a row's ends put the span between them "
+                 "into the colour screen (9.12)");
+        g = rom[0x4000 + 2 * 8];            /* the CHARGEN's 'B', line 0 */
+        for (x = 0; x < 8; x++)
+            if (h_fsx_fb[C64_X320(80) + 38 * 8 + x] != (((g << x) & 0x80)
+                    ? (c64_col[10 * 40 + 38] & 15) : 6))
+                fail("a cell put alone is not its glyph in its colours (9.12)");
 
         /* ...a multicolour bitmap byte, with sprite 0 over cells 2-4 */
         c64_io_wr(0xD018, 0x18);
