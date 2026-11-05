@@ -957,7 +957,8 @@ def _frozen_targets(a):
                 "network360.img", "games360.img", "emu360.img", "util360.img",
                 "more720.img", "small360.img", "small720.img",
                 "win16.img", "win16-120.img", "win16-720.img",
-                "win16-360.img")
+                "win16-360.img", "arcrel.img", "arcrel120.img", "arcrel720.img",
+                "arcrel360.img")
     shipped = imgs + ("wire.o88",)
     # THE WIN16 FIXTURES, where this box has opted in. `win16fixtures` is a
     # CAPABILITY and not a `wants=`, because building it fetches a compiler

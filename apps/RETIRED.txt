@@ -67,18 +67,6 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
                        # and committed, so it needs no user-supplied asset, but it is not
                        # on the standard images, the allapps floppy or the live media
                        # until the maintainer decides it should be (the game is complete).
-local      arcade      # docs/ARCADE-SPEC.md. Its games are Taito's Space Invaders,
-                       # Space Invaders Part II and Lunar Rescue, Midway's Gun
-                       # Fight and Sea Wolf, Gottlieb's Q*bert and Namco's Pac-Man,
-                       # commercially owned, and each user brings their own sets
-                       # (Game > Add ROM sets..., ARCADE-SPEC 1.4-1.5). ARCADE.O88
-                       # carries NO ROM byte, and BUILDING it needs none either:
-                       # its translated parts are committed ROM-free in
-                       # apps/arcade/prebuilt/ (ARCADE-SPEC 1.6), so `make
-                       # arcade` / `make arcaderel` need no network. It rides its
-                       # own floppy (arcrel*.img), which no standard image,
-                       # allapps floppy or live payload carries until the owner
-                       # adds it to the shipped set.
 local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # (2026-10-21, PR #168 merged): its data is the original DOS
                        # Lemmings' 26 files, DMA Design's and still commercially

@@ -422,6 +422,14 @@ ITEMS = [
      "included. WIN16 is on the 360KB emulators disk too.",
      [("win16.img", "1.44MB", ""), ("win16-120.img", "1.2MB", ""),
       ("win16-720.img", "720KB", ""), ("win16-360.img", "360KB", "")]),
+    ("progs", "ARCADE", True,
+     "Seven arcade games played on their boards' own programs: Space "
+     "Invaders, Space Invaders Part II, Lunar Rescue, Gun Fight, Sea Wolf, "
+     "Q*bert and Pac-Man, in a cabinet of their own. No game's ROM is "
+     "included: add the MAME sets you own with Game > Add ROM sets..., and "
+     "they are written to the disk you choose.",
+     [("arcrel.img", "1.44MB", ""), ("arcrel120.img", "1.2MB", ""),
+      ("arcrel720.img", "720KB", ""), ("arcrel360.img", "360KB", "")]),
     ("progs", "Weave", False,
      "Web-style programs -- markup, script and formulas -- compiled into one "
      "bundle file and run natively. Carries the runtime, three demo "

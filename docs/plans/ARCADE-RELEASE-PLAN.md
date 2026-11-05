@@ -338,8 +338,10 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
       `make arcaderel` need no ROM and no network, byte-identical to a build
       from the ROMs (ARCADE-SPEC 1.6). Pac-Man fetchable too, at a pin in the
       Namco Classics item, so `ARC_PACMAN` is always on.
-- [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line onto the shipped set:
-      the owner's call, now that nothing in its build needs a ROM.
+- [x] ARCADE leaves `apps/RETIRED.txt` for the shipped set (the owner,
+      2026-11-05): `arcrel*.img` in `$(SHIPIMGS)` in four geometries, its
+      README as `ARCADE.TXT` there; on the everything disks and the live
+      media in `ARCADE\`; in the release skill's catalogue.
 - [x] Its disk: ARCADE.O88 is 189KB packed; `emu360.img` has 139KB free,
       so it rides its OWN 360KB disk. `make arcaderel` builds the release
       floppies in four geometries - the package and its README, no ROM;

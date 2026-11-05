@@ -131,8 +131,15 @@ WIN16IMG      := $(BUILD)/win16.img
 WIN16IMG120   := $(BUILD)/win16-120.img
 WIN16IMG720   := $(BUILD)/win16-720.img
 WIN16IMG360   := $(BUILD)/win16-360.img
+# ...and ARCADE's release floppy in all four (ARCADE-SPEC 1.6; the owner's
+# decision, 2026-11-05): the package and its README, no ROM - built from the
+# committed ROM-free parts, so `all` needs no ROM and no network
+ARCRELIMG     := $(BUILD)/arcrel.img
+ARCRELIMG120  := $(BUILD)/arcrel120.img
+ARCRELIMG720  := $(BUILD)/arcrel720.img
+ARCRELIMG360  := $(BUILD)/arcrel360.img
 
-# ...and all twenty-one in one list, because it appeared in FOUR places (`all`
+# ...and all twenty-five in one list, because it appeared in FOUR places (`all`
 # and the three tiers) and each of those had to be edited by hand the first
 # time a disk was added. A shipped image that is in `all` and in none of the
 # tiers is one no gate ever reads, which is the failure this prevents rather
@@ -142,7 +149,8 @@ SHIPIMGS := $(IMG) $(IMG120) $(IMG720) $(IMG360) \
             $(MEDIAIMG360) $(OFFICEIMG360) $(NETWORKIMG360) $(GAMESIMG360) \
             $(EMUIMG360) $(UTILIMG360) $(MOREIMG720) \
             $(SMALLIMG360) $(SMALLIMG720) \
-            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360)
+            $(WIN16IMG) $(WIN16IMG120) $(WIN16IMG720) $(WIN16IMG360) \
+            $(ARCRELIMG) $(ARCRELIMG120) $(ARCRELIMG720) $(ARCRELIMG360)
 
 # ...and each of them SIGNS IN A SLOT OF ITS OWN (SPEC.md 18.8.2.2): os88disk.py
 # reads this list (tools/os88ship.py) and steers every member's boot-sector
@@ -11674,24 +11682,29 @@ $(BUILD)/arcade360.img: $(ARCADEDISK)
 # through Game > Add ROM sets... (ARCADE-SPEC 1.5). The build still needs the
 # ROMs, since the code parts are translated from them (apps/RETIRED.txt).
 ARCADERELIMG = python3 tools/os88disk.py -o $(1) --size $(2) $(APPDATAFOLDER) \
-	       $(BUILD)/arcade.o88 apps/arcade/README.TXT
+	       $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT
+# (its README as ARCADE.TXT: README.TXT at a shipped disk's root is the
+# system's, and tests/unit/t_pkg.py holds every one to that file)
+$(BUILD)/arcade/ARCADE.TXT: apps/arcade/README.TXT
+	@mkdir -p $(dir $@)
+	cp $< $@
 #> [Applications] arcaderel :: the ARCADE RELEASE floppies in four geometries: the package and its README, no ROM (build/arcrel*.img)
 arcaderel: $(BUILD)/arcrel.img $(BUILD)/arcrel720.img \
            $(BUILD)/arcrel120.img $(BUILD)/arcrel360.img
 
-$(BUILD)/arcrel.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+$(BUILD)/arcrel.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
 	$(call ARCADERELIMG,$@,1440)
 	@python3 tools/os88disk.py --verify $@
 
-$(BUILD)/arcrel720.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+$(BUILD)/arcrel720.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
 	$(call ARCADERELIMG,$@,720)
 	@python3 tools/os88disk.py --verify $@
 
-$(BUILD)/arcrel120.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+$(BUILD)/arcrel120.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
 	$(call ARCADERELIMG,$@,1200)
 	@python3 tools/os88disk.py --verify $@
 
-$(BUILD)/arcrel360.img: $(BUILD)/arcade.o88 apps/arcade/README.TXT tools/os88disk.py
+$(BUILD)/arcrel360.img: $(BUILD)/arcade.o88 $(BUILD)/arcade/ARCADE.TXT tools/os88disk.py
 	$(call ARCADERELIMG,$@,360)
 	@python3 tools/os88disk.py --verify $@
 
@@ -17695,6 +17708,7 @@ ALLAPPSARGS := $(addprefix APPS:,$(APPS_TOOLS) $(CORE_SYSONLY) \
                $(addprefix RUNCPM:,$(RUNCPMDISK)) \
                $(addprefix C64:,$(BUILD)/c64.o88 \
                                 apps/c64/README.TXT apps/c64/COPYING) \
+               $(addprefix ARCADE:,$(BUILD)/arcade.o88 apps/arcade/README.TXT) \
                $(addprefix APPLE2:,$(BUILD)/apple2.o88 \
                                    $(BUILD)/WELCOME.BAS \
                                    apps/apple2/README.TXT \

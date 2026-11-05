@@ -119,7 +119,9 @@ DATA_IMAGES = ["apps.img", "apps120.img", "apps720.img", "apps360.img",
                "more720.img",
                # ...and WIN16's own disk in four geometries (SPEC.md
                # 124.18.1), DATA images too
-               "win16.img", "win16-120.img", "win16-720.img", "win16-360.img"]
+               "win16.img", "win16-120.img", "win16-720.img", "win16-360.img",
+               # ...and ARCADE's release floppy (ARCADE-SPEC 1.6), DATA images
+               "arcrel.img", "arcrel120.img", "arcrel720.img", "arcrel360.img"]
 
 
 class Vol:

@@ -716,7 +716,7 @@ checking all four. This is the rule for the on-demand APPLICATION floppies too
 `apple2disk`, `weavedisk`, `loomdisk`, `allapps` — which were three-geometry until 1.2MB
 reached them.
 
-**Twenty-one images, not nine.** The system and apps disks in four geometries
+**Twenty-five images, not nine.** The system and apps disks in four geometries
 each, plus SIX more that exist at 360KB alone and ONE at 720KB alone -
 `build/more720.img`, the 720KB apps disk's other half (SPEC.md 24.7), carrying
 what that disk had to leave off - and the 128KB machine's two system disks,
@@ -725,7 +725,9 @@ which `all` builds through `make small`'s sub-make. The small 720KB disk is
 NOT the standard format: kern_small's two-sector FAT window refuses a
 standard 720KB FAT, so it takes 2KB clusters, and that machine reads no other
 720KB disk. And WIN16's own disk in four geometries, `win16*.img`
-(§124.18.1), which left the apps disks when it outgrew them.
+(§124.18.1), which left the apps disks when it outgrew them, and ARCADE's
+release floppy in four, `arcrel*.img` (ARCADE-SPEC 1.6): the package and
+`ARCADE.TXT`, no ROM.
 `build/media360.img` —
 `BEVERLY.MOD` is data rather than software and was 114 of a 360KB disk's 354
 clusters before packages were compressed, so at that geometry it rides a disk
