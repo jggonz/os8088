@@ -15,7 +15,8 @@
  * line and a flood fill across the seam, a block from an odd column (the
  * band's path), a pattern brush made from it, and copies into a second
  * tiled bitmap whose tiles are a different height (500 x 400, 262 rows)
- * and into a monochrome one past 64,000 bytes, each read back.
+ * and into a monochrome one past 64,000 bytes, each read back - the last
+ * when GlobalCompact says the heap holds it, and refused NULL when not.
  *
  * Every check that fails is named in the message box, which
  * tests/win16bigbmp.py reads; "BIGBMP OK" when none does.
@@ -29,6 +30,7 @@
 #define RED   RGB(255, 0, 0)
 #define GREEN RGB(0, 255, 0)
 #define BLUE  RGB(0, 0, 255)
+#define MONOBYTES 81920L        /* 1024 x 160 at WIN16's 4 bits a pixel */
 
 static char res[256];
 static struct { BITMAPINFOHEADER h; RGBQUAD c[16]; } bi;
@@ -66,6 +68,7 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     HPEN rpen, open_;
     RECT rc;
     int i;
+    DWORD gc;
 
     if (!prev) {
         memset(&wc, 0, sizeof(wc));
@@ -182,18 +185,33 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     SelectObject(td, tbold);
     check(DeleteObject(two), "delete2");
 
-    /* a monochrome bitmap past 64,000 bytes (WIN16 keeps it 4bpp: 102,400) */
-    mono = CreateBitmap(1024, 200, 1, 1, NULL);
-    check(mono != NULL, "makemono");
-    tbold = SelectObject(td, mono);
-    PatBlt(td, 0, 0, 1024, 200, WHITENESS);
-    SetRect(&rc, 1000, 120, 1010, 140);
-    FillRect(td, &rc, GetStockObject(BLACK_BRUSH));
-    check(GetPixel(td, 1005, 130) == BLACK && GetPixel(td, 1005, 119) == WHITE
-          && GetPixel(td, 1011, 130) == WHITE, "mono");
-    SelectObject(td, tbold);
+    /* a monochrome bitmap past 64,000 bytes (WIN16 keeps it 4bpp: 81,920,
+     * two tiles of 127 rows and 33), with a block across the seam. It is
+     * one block of the global heap, and on kern_big's 640 KB with `big`
+     * still alive the heap may not hold one that size: GlobalCompact says
+     * whether it does (SPEC.md 124.25.17), and a heap that cannot must be
+     * answered NULL, as Windows 3.0 in real mode would answer. */
+    gc = GlobalCompact(0);
+    mono = CreateBitmap(1024, 160, 1, 1, NULL);
+    if (gc >= MONOBYTES + 32)
+        check(mono != NULL, "makemono");
+    else if (gc < MONOBYTES)
+        check(mono == NULL, "monofits");
+    if (mono) {
+        tbold = SelectObject(td, mono);
+        PatBlt(td, 0, 0, 1024, 160, WHITENESS);
+        SetRect(&rc, 1000, 120, 1010, 140);
+        FillRect(td, &rc, GetStockObject(BLACK_BRUSH));
+        check(GetPixel(td, 1005, 126) == BLACK
+              && GetPixel(td, 1005, 127) == BLACK
+              && GetPixel(td, 1005, 139) == BLACK
+              && GetPixel(td, 1005, 140) == WHITE
+              && GetPixel(td, 1005, 119) == WHITE
+              && GetPixel(td, 1011, 130) == WHITE, "mono");
+        SelectObject(td, tbold);
+        check(DeleteObject(mono), "deletemono");
+    }
     DeleteDC(td);
-    check(DeleteObject(mono), "deletemono");
 
     memset(&bi, 0, sizeof(bi));
     bi.h.biSize = sizeof(BITMAPINFOHEADER);

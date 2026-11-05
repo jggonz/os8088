@@ -236963,6 +236963,14 @@ exhaust them; Arcade's names are a handful, shared by every window of a kind.
 win16fixtures`), which sets, gets, replaces, enumerates and removes string-
 and atom-named properties, reads a string-named one's name in the callback,
 and checks that a destroyed window's are gone; the `win16props` row runs it.
+Its `WaitMessage` leg waits for a 100 ms timer and takes messages until the
+`WM_TIMER` (at most 32 waits inside two seconds; no timer is a failure).
+It first took one message and required it to be the timer's; the first
+`win16props` run ever, in the round's final pass, found `WM_MOUSEMOVE`
+(200h) there instead, because the window opened under the pointer and
+`w16_hover` posts the move on the next tick, as Windows posts one for a
+window that appears under the cursor. Windows promises a message, not
+which one.
 
 #### 124.25.14 The GDI calls Visual Basic 3.0 imports *(WIN16-NEXT-PLAN L1, vbgdi)*
 
@@ -237237,6 +237245,21 @@ bitmap whose tiles are 262 rows (500 x 400), and a monochrome bitmap of
 fixture on kern_big, `win16memdc` and `win16pbrush` are the small-bitmap
 guards. **Not done:** kern_mega has no row for the fixture (no QEMU rig
 loads WIN16 on the arm; `tests/win16ovr.py` does it under Bochs).
+
+**The monochrome leg on kern_big (`fixqemu`, 2026-11-04).** `win16bigbmp`
+was never run before the round's final pass, where it failed `makemono`:
+`CreateBitmap(1024, 200, 1, 1)` answered NULL. That is the rule above
+working, not a fault. Measured in the fixture at that call (QEMU, 640 KB,
+the 153,600-byte bitmap still alive and the 100,000-byte one just deleted):
+`GetFreeSpace` 169,312, `GlobalCompact` 100,336, and a plain
+`GlobalAlloc(GMEM_FIXED, 102,416)` NULL as well. The largest block is the
+hole the second bitmap left, and a 640 KB real-mode machine cannot be given
+more. So the leg is now **1024 x 160** (81,920 bytes, still two tiles of 127
+and 33 rows, the block across the seam read on both sides of it), and it is
+**gated on `GlobalCompact(0)`**: a heap that holds the block must make it,
+one that does not must answer NULL, and the few bytes between are not
+asserted. On the row's machine `GlobalCompact` is 100,336 and the leg runs
+and passes; on kern_mega the heap always holds it.
 
 #### 124.25.18 Callable window procedures for WIN16's controls *(WIN16-NEXT `ctlproc`, DECISIONS 12:30)*
 

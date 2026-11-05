@@ -16,7 +16,8 @@ the window and a source that crosses the seam, reads a scan through
 GetDIBits, writes one through SetDIBits, StretchBlts the seam and deletes
 it; and a line and an ExtFloodFill across a seam, a blit from an odd
 column, a pattern brush, copies both ways with a second tiled bitmap whose
-tiles are another height, and a tiled monochrome bitmap. Its MessageBox, read off the program's stack, is "BIGBMP OK" or names
+tiles are another height, and a tiled monochrome bitmap
+(made when GlobalCompact says the heap holds it, refused NULL when not). Its MessageBox, read off the program's stack, is "BIGBMP OK" or names
 each check that failed. This row is kern_big's (QEMU, real mode); the
 kern_mega arm of the same fixture is looked at by hand (KERN-MEGA-PLAN).
 """
