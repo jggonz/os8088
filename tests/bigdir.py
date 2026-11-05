@@ -21,6 +21,10 @@ listing claim, and the kernel's words; nothing is judged off pixels.
   5. Ctrl+A selects all 300 (the bitmap past index 255 included), and Delete
      asks about "300 items" - a word count, where a byte went negative at 128;
      Escape leaves the folder untouched;
+  7. (after 6) the 20 packages deleted IN PLACE - a click, Shift+Down, Delete
+     twice -
+     and the claim keeps its 10KB though 281 entries need 9; Up to B:\\ and
+     navigation cuts it to VIEW_KB;
   6. a double-click on the LAST package, index 300, launches it - index + 1 is
      301, whose low byte was the "nothing pending" 0 when [ld_pending] was a
      byte... and 45, which is what a byte holds of 301; so the check is that
@@ -29,7 +33,9 @@ listing claim, and the kernel's words; nothing is judged off pixels.
 VERIFIED TO FAIL: with fmv_rsz made to refuse every grow (`stc` / `ret` at
 its head) the listing stops at 64 entries in a 2KB claim, and nine of the
 eleven checks are red - Delete counts '63 items' - leaving only the cut back
-to VIEW_KB and the launch, which never got that far.
+to VIEW_KB and the launch, which never got that far. With the re-list in
+place made to cut back like navigation (`test bl, 0` for `test bl, 40h` in
+fmv_load), check 7's kept claim reads 9KB and is red.
 """
 import os
 import shutil
@@ -198,6 +204,42 @@ def run(tmp):
         print("  launched: %r" % (title,))
         check("a double-click on index 300 runs THAT package",
               "MINE" in title.upper(), "(%r)" % title)
+
+        # --- 7: a delete IN PLACE keeps the claim; navigation cuts it -------
+        ui.raise_window(w)
+        ui.still()
+        blk = ui._fsblk(w)
+        first = len(want) - NPKG                # M01's index
+        row = ui.scroll_to(first, win=w)
+        x, y = ui.row_xy(w, row)
+        ui.mo.click(x, y, settle=0)
+        ui.still()
+        m.key("ShiftLeft", down=True, up=False)  # ...and Shift+Down to M20
+        os88marty.pace(m, 0.05)
+        for _ in range(NPKG - 1):
+            os88marty.key_taken(m, "ArrowDown")
+        ui.still()
+        m.key("ShiftLeft", down=False, up=True)
+        os88marty.pace(m, 0.15)
+        os88marty.key_taken(m, "Delete")
+        ui.still()
+        onam = bytes(m.read(S("fm_onam"), 13)).split(b"\0")[0].decode()
+        check("Delete asks about the %d packages" % NPKG,
+              onam == "%d items" % NPKG, "(%r)" % onam)
+        os88marty.pace(m, 0.6)
+        m.key("Delete")
+        ui._wait(lambda: word(blk, geom.FS_N) == len(want) - NPKG,
+                 "the packages deleted", 300.0)
+        need = max(VIEW_KB, (len(want) - NPKG + 31) // 32)
+        check("...and the re-list IN PLACE kept the %dKB claim (it would "
+              "fit %dKB)" % (byte(blk, FS_VKB), need),
+              byte(blk, FS_VKB) == max(VIEW_KB, (len(want) + 31) // 32)
+              and need < byte(blk, FS_VKB), "(%dKB)" % byte(blk, FS_VKB))
+        w = ui.path("B:/")
+        ui.still()
+        blk = ui._fsblk(w)
+        check("...which navigation then cuts back to VIEW_KB",
+              byte(blk, FS_VKB) == VIEW_KB, "(%dKB)" % byte(blk, FS_VKB))
 
     print("bigdir: %s" % ("FAIL: " + ", ".join(fails) if fails else "ok"))
     return 1 if fails else 0

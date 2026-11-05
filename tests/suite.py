@@ -11812,7 +11812,7 @@ SOAK = [
         "and with fm_ondrag's FM_BBAND dispatch taken out (the four drag-"
         "select checks, and only those).",
         needs=("marty",), serial=True),
-    Row("bigdir", "soak", py("tests/bigdir.py"), 40.0,
+    Row("bigdir", "soak", py("tests/bigdir.py"), 80.0,
         "SPEC.md 22.6.4: a Disk window lists a 300-entry folder (kern_big). "
         "A scratch 720KB B: with 280 documents and 20 package copies in one "
         "folder and no ASSOC.DAT: all 301 entries listed in 19.4's order "
@@ -11820,8 +11820,11 @@ SOAK = [
         "peeks on the first visit and the next four on the second, the claim "
         "cut back to 2KB at the root, Ctrl+A setting all 301 bits of the "
         "bitmap in the claim, Delete counting '300 items', and a double-click "
-        "on index 300 launching THAT package. VERIFIED RED with fmv_rsz made "
-        "to refuse every grow: the listing stops at 64 and nine checks fail.",
+        "on index 300 launching THAT package; then the 20 packages deleted IN "
+        "PLACE keep the 10KB claim (281 would fit 9KB) until Up cuts it to "
+        "1KB. VERIFIED RED with fmv_rsz made to refuse every grow (the "
+        "listing stops at 64), and with the in-place keep taken out (the "
+        "claim falls to 9KB).",
         needs=("marty",), serial=True),
     Row("fdlgchoose", "soak", py("tests/fdlgchoose.py"), 60.0,
         "SPEC.md 38: the Standard File chooser end to end, through Note "

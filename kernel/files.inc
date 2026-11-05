@@ -1702,6 +1702,11 @@ fmv_load:
     ; window read "0 files" until Refresh, measured on the 128KB machine by
     ; launching Gorillas over a GAMES window. Retried here, the listing lands.
 %ifdef DSK_BIGDIR
+    cmp dl, [di+FS_DRV]         ; THE FOLDER IT ALREADY SHOWS? A delete, a
+    jne .nav                    ; paste, a Refresh or a sync re-lists in
+    cmp ax, [di+FS_CWD]         ; place, and the claim it has is the size
+.nav:                           ; that folder needed a moment ago - so only
+    pushf                       ; NAVIGATION cuts it back (ZF = 1: in place)
     mov word [dsk_hbud], DSK_HARV_MAX   ; the icon peeks THIS LISTING may
 .again:                         ; spend, once and not per mount (22.6.4)
 %endif
@@ -1786,21 +1791,27 @@ fmv_load:
     ; not fit were COUNTED: grow to hold twice what fit plus those - exact on
     ; a FAT volume, whose scan counts every one, and a doubling on a
     ; redirected one, whose driver stops at its first refusal - and list
-    ; again. Nothing that fit: cut the claim back to this folder's size,
-    ; never under VIEW_KB, which is what lets a folder of 66 or fewer come
+    ; again. Nothing that fit: cut the claim back to this folder's size -
+    ; on NAVIGATION only, a re-list in place keeping what it has - never
+    ; under VIEW_KB, which is what lets a folder of 32 or fewer come
     ; and go with no grow and no second mount at all. A grow refused keeps
     ; the listing that fit, which is the refusal SPEC.md 50.3 asks for
     mov ax, [di+FS_N]
-    jcxz .size
+    pop bx                      ; the flags banked at the top (BX is
+    jcxz .size                  ; kretc_di's to restore)
     add ax, ax
     add ax, cx
+    xor bx, bx                  ; a grow: the cut after its re-list is owed
 .size:
+    test bl, 40h                ; ZF, banked: a re-list IN PLACE keeps the
+    jnz .done                   ; claim it has - growing is never skipped
     call fmv_need               ; AL = the KB that holds that many
     call fmv_rsz
     jc .done                    ; that size already, or a grow refused
     jcxz .done                  ; ...a cut, and nothing more to do
-    mov dl, [di+FS_DRV]         ; ...a grow: list again, where the first
-    mov ax, [di+FS_CWD]         ; mount actually landed
+    push bx                     ; ...a grow: list again, where the first
+    mov dl, [di+FS_DRV]         ; mount actually landed, with BX = 0 banked
+    mov ax, [di+FS_CWD]         ; so that pass may cut the doubling back
     jmp .again
 .done:
 %endif

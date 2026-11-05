@@ -53004,12 +53004,20 @@ compact - §66.5.10.2, `tools/dsegaudit.py`), then:
   bounds that case to a handful of re-lists. The second mount re-reads the
   directory (§18.95's cache is dropped by every loud mount) - which is the
   price of a folder over 32 entries, and it is paid on EVERY visit, because
-  leaving the folder cuts the claim back. That is the trade the floor makes:
+  navigating away cuts the claim back (working inside it does not - below). That is the trade the floor makes:
   a big folder costs a second directory read each time it is opened, and no
   window holds memory for a folder it is not showing.
-- `[dsk_nover]` = 0: `mem_regrow` it DOWN to `fmv_need(FS_N)`. A shrink
-  keeps the base and cannot fail. So a folder of 32 or fewer entries comes
-  and goes with no grow and no second mount at all.
+- `[dsk_nover]` = 0, and the window NAVIGATED - the drive or folder it was
+  asked for is not the one it already showed: `mem_regrow` it DOWN to
+  `fmv_need(FS_N)`. A shrink keeps the base and cannot fail. So a folder of
+  32 or fewer entries comes and goes with no grow and no second mount at all.
+- `[dsk_nover]` = 0 on a re-list IN PLACE - a delete, a paste, a Refresh, a
+  sync - keeps the claim it has. It was the size this folder needed a moment
+  ago, and cutting it back would only make the next file added to a folder
+  sitting on the boundary pay a grow and a second directory read. The
+  compare is made once, at `fmv_load`'s head, and its `ZF` banked on the
+  stack; a pass that GREW banks "navigated" instead, so the doubling a
+  redirected volume asks for is still cut back to fit. +18 bytes.
 - **A grow refused keeps the listing that fit** (§50.3: memory is a
   performance input). `mem_regrow` does not call the relocation proc
   (§66.7), so `fmv_rsz` writes `FS_VSEG` and the `[fm_vseg]` mirror itself.
@@ -53055,8 +53063,9 @@ and lists nothing - and `fm_many`/`fm_mzero` answer "empty" for a window
 with no claim.
 
 **What it cost**: measured by `tools/kernsize.py`'s sections against the
-commit before, **`kern_big` +224 resident bytes** (`.cold` +258, `.bss` -34,
-`.text` +0; the 1KB floor's 128-byte units are six of them) - inside the
+commit before, **`kern_big` +242 resident bytes** (`.cold` +276, `.bss` -34,
+`.text` +0; the 1KB floor's 128-byte units are six of them and keeping the
+claim across a re-list in place eighteen) - inside the
 owner's 250 for the work, which asked that it
 not eat the slack kept for drivers and fixes. `kern_small` and `kern_dos`:
 **0**, byte for byte. The row is `tests/bigdir.py`.
