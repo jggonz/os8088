@@ -1357,6 +1357,93 @@ body:
     jne .f6
     cmp word [_c64_bfbest], 5
     jne .f6
+    ; ...and six random 25-row screens, each a shift of -7..11 with noise,
+    ; their answers out of the C model's arithmetic (the order the runs are
+    ; met in decides a tie, so it is held too)
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh0
+    PUSHI bfr_sig0
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -3
+    jne .f6
+    cmp word [_c64_sb0], 3
+    jne .f6
+    cmp word [_c64_sb1], 16
+    jne .f6
+    cmp word [_c64_bfbest], 13
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh1
+    PUSHI bfr_sig1
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, 5
+    jne .f6
+    cmp word [_c64_sb0], 9
+    jne .f6
+    cmp word [_c64_sb1], 15
+    jne .f6
+    cmp word [_c64_bfbest], 6
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh2
+    PUSHI bfr_sig2
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, 5
+    jne .f6
+    cmp word [_c64_sb0], 11
+    jne .f6
+    cmp word [_c64_sb1], 19
+    jne .f6
+    cmp word [_c64_bfbest], 7
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh3
+    PUSHI bfr_sig3
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, 11
+    jne .f6
+    cmp word [_c64_sb0], 0
+    jne .f6
+    cmp word [_c64_sb1], 13
+    jne .f6
+    cmp word [_c64_bfbest], 13
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh4
+    PUSHI bfr_sig4
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -7
+    jne .f6
+    cmp word [_c64_sb0], 7
+    jne .f6
+    cmp word [_c64_sb1], 18
+    jne .f6
+    cmp word [_c64_bfbest], 9
+    jne .f6
+    PUSHI 12
+    PUSHI 25
+    PUSHI bfr_sh5
+    PUSHI bfr_sig5
+    call disc_call
+    dw _c64_bandfind
+    cmp ax, -1
+    jne .f6
+    cmp word [_c64_sb0], 16
+    jne .f6
+    cmp word [_c64_sb1], 20
+    jne .f6
+    cmp word [_c64_bfbest], 5
+    jne .f6
     jmp .c8done
 ; compare 8 bytes [si] with [di] (ZF set when equal), and CX bytes
 .c8cmp:
@@ -1815,6 +1902,18 @@ _c64_fjit:  dw 0                    ; the recompiler (C64-SPEC 4.9): none here
 _c64_dmask: times 64 db 0
 _c64_sb0:   dw 0
 _c64_sb1:   dw 0
+bfr_sig0: dw 4, 4, 0, 3, 4, 2, 2, 1, 1, 0, 2, 4, 3, 4, 0, 2, 4, 3, 0, 3, 1, 3, 3, 0, 0
+bfr_sh0:  dw 3, 4, 2, 2, 1, 1, 0, 2, 4, 3, 4, 0, 2, 4, 4, 0, 3, 1, 3, 3, 1, 1, 1, 0, 0
+bfr_sig1: dw 0, 0, 1, 2, 0, 4, 0, 3, 1, 4, 1, 3, 0, 3, 1, 0, 0, 4, 1, 4, 1, 4, 0, 3, 4
+bfr_sh1:  dw 0, 4, 1, 1, 2, 0, 0, 1, 4, 0, 4, 0, 4, 3, 4, 1, 3, 0, 3, 1, 0, 4, 1, 1, 4
+bfr_sig2: dw 1, 3, 2, 4, 0, 2, 2, 0, 4, 0, 1, 3, 4, 3, 3, 2, 1, 4, 0, 3, 2, 2, 1, 3, 4
+bfr_sh2:  dw 2, 0, 3, 0, 1, 1, 3, 2, 2, 0, 2, 2, 0, 4, 0, 0, 3, 4, 3, 3, 2, 1, 4, 0, 3
+bfr_sig3: dw 3, 4, 1, 2, 4, 4, 3, 2, 0, 0, 2, 4, 1, 1, 4, 4, 3, 4, 2, 4, 4, 4, 0, 4, 4
+bfr_sh3:  dw 2, 1, 0, 4, 2, 0, 0, 3, 3, 1, 4, 3, 4, 1, 2, 4, 4, 3, 2, 0, 0, 2, 4, 1, 1
+bfr_sig4: dw 4, 0, 3, 3, 4, 0, 0, 2, 0, 1, 1, 0, 0, 3, 3, 0, 3, 0, 4, 4, 2, 1, 3, 1, 1
+bfr_sh4:  dw 2, 0, 1, 1, 0, 0, 3, 3, 0, 3, 0, 4, 0, 2, 1, 3, 1, 2, 4, 4, 3, 1, 0, 4, 4
+bfr_sig5: dw 4, 3, 1, 1, 1, 0, 4, 0, 0, 0, 0, 2, 0, 3, 2, 0, 1, 2, 0, 1, 0, 3, 4, 1, 0
+bfr_sh5:  dw 3, 1, 1, 1, 0, 0, 0, 0, 0, 0, 2, 0, 0, 3, 4, 1, 2, 0, 1, 0, 2, 4, 1, 0, 3
 bf_sig:     dw 10, 30, 11, 22, 23, 24, 25, 17
 bf_sh:      dw 10, 11, 22, 23, 24, 25, 26, 17
 _c64_bgfill: db 0
