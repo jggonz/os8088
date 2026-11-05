@@ -241800,7 +241800,44 @@ fingerprint against the lengths worked out from the map by hand.
 
 ### 126.10 The gate
 
-*(Pending: gate.)*
+`tests/mousechk.py`, registered as the soak row `mousechkgate` (the foundation's
+fast row `mousechk` is `tests/unit/t_mousechk.py`, which holds `moblk.inc` to
+the kernel's map). QEMU by name: the PS/2 legs need an 8042, which an XT (and
+so MartyPC) does not have.
+
+**How it reads the window.** The row boots a COPY of the system floppy with
+`\AUTOSTRT\MOUSECHK.LNK` written into it by mtools (26.10), so Mouse Check is
+open and in front before the first paint, and reads what the window says out of
+the package's own list in guest memory: `mc_nrows`, `mc_roff` and `mc_buf`
+(126.2), found through the window record's `W_SEG` and nasm's own map of the
+package (`tests/paintheld.py`'s recipe). No OCR and no pixel comparison. The
+segment is read twice around every read, since a heap compaction moves a
+package (66), and a torn rebuild (the list is rewritten twice a second) is
+met by polling for the expected text. Every expected string is one entry of
+the `EXPECT` table at the head of the file.
+
+**The legs**, each its own QEMU:
+
+| leg | machine | what it proves |
+|---|---|---|
+| `serial` | serial mouse on COM1 | the window opens; the Summary names a serial mouse on COM1; some row changes after the mouse crosses the desktop (S2: rows follow the device) |
+| `com2` | silent UART at 3F8, mouse at 2F8 (`MOUSEPORT=com2`) | the Summary names COM2 |
+| `ps2` | `-serial none` (`MOUSEPORT=ps2`) | the Summary names PS/2; `[mc_pgrey]` is FF, so Probe PS/2 is refused; P starts no probe |
+| `nops2` | a PRIVATE `NOPS2=1` kernel tree (`os88build.tree`, never `build/`), PS/2 mouse | Probe PS/2 is offered and runs; the trace shows the device answering; afterwards the keyboard still types (S opens the Save dialog) and the kernel's `mou_p2st`/`mou_p2`/`mou_p2id`, where this build has them, read as before |
+| `save` | default | Save Report through the standard dialog (Enter accepts `MOUSECHK.TXT`); the file read back off the floppy image on the host: head line, date, kernel id and a `[LAMP] Summary` section line. The dialog's default folder is `MEDIA` on the boot floppy, so the row looks on A: and the scratch B: |
+| `mono` | a PRIVATE `VIDEO=cga` kernel tree | `[mc_bpp]` is 1, the window opens and its rows exist; a screenshot is kept (`MOUSECHK_SHOTS=<dir>`) |
+
+**What it cannot prove.** The lamp *shapes* on 1bpp (118.5) are not asserted
+pixel by pixel: the picture is kept for a human to look at. "Nothing else redrew" is not
+measured, only that rows change. QEMU is exact about work and useless about
+time, so nothing here says the window is quick on an 8088 (MartyPC cannot host
+the PS/2 legs; the serial legs' cost is 126.11's arithmetic, not a
+measurement). And no emulator is the machine this package was written for:
+QEMU's i8042 answers every command, where an STPC with a Winbond W83977's
+controller running AMI MEGAKEY firmware may not, so `nops2` shows the probe
+and its trace work on an 8042 that cooperates, and a real board is the
+only evidence that they report the one that does not. A mouse that is *absent*
+is also not hosted: both emulated PS/2 paths always have a device.
 
 ### 126.11 Cost
 
