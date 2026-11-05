@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "0bffe893",
+  "stamped": "cb00097a",
   "strings": "c76d87430df46fe3",
-  "why": "sprite scroll refusal, fullscreen cell runs"
+  "why": "mono cell runs, shift test backoff"
  },
  "CALC_O88": {
   "sources": [
