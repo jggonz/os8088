@@ -876,8 +876,10 @@ def verify(data, quiet=False):
                         c["name"] == ending_name.get(out_):
                     f0 = first_of(li)                        # JOINS its clip
                     if canvas(s) != canvas(f0):
-                        raise ValueError("ending %s misses its loop's frame 0"
-                                         % c["name"])
+                        raise ValueError(
+                            "the %s clip %s does not end on its end clip's "
+                            "first frame: its last record is not the seam "
+                            "onto it" % (out_, c["name"]))
             paths += 1
     if not quiet:
         print("verify: %d openings onto an idle loop of %d frames, %d clips, "
@@ -940,6 +942,7 @@ def battle_of(proj, progress=None, kind="cga4"):
                 rules_use |= set(pool)
     rules_use |= {d["enemy"].get("victory"), d["enemy"].get("defeat")}
     used_all = set(proj.clips_used())
+    ending_clips = {d["enemy"].get("victory"), d["enemy"].get("defeat")} - {None}
     for i, (cid, c) in enumerate(d["clips"].items()):
         if cid in opened or (cid in loops_only and cid not in rules_use):
             continue
@@ -949,8 +952,15 @@ def battle_of(proj, progress=None, kind="cga4"):
         spf = t["rate"] // t["fps"]
         cues = [(q["frame"], cue_key(q, b.sfx, spf)) for q in c["cues"]]
         b.clips.append(dict(name=cid, frames=A.frames_of(proj, cid, pg, kind),
-                            cues=cues, joins=c["joins"], exit=c["exit"],
-                            ends=c["ends"], anchors=c["anchors"]))
+                            # (THE ENEMY'S VICTORY AND DEFEAT CLIPS are
+                            # endings, whatever their own flags: they end
+                            # the battle and never go back to the idle
+                            # loop - a dropped video's clip joins it, and
+                            # its seam missed the end clip it joins)
+                            cues=cues, joins=c["joins"] and cid not in
+                            ending_clips, exit=c["exit"],
+                            ends=c["ends"] or cid in ending_clips,
+                            anchors=c["anchors"]))
     if d["music"]:
         b.music = b.sfx[d["music"]["sound"]]   # all music loops (10.2): the
         b.music_at = d["music"]["join"]        # region is the loop, and the

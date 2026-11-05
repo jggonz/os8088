@@ -904,13 +904,13 @@ class Project:
         for k, lk in d.get("menu_looks", {}).items():
             if lk.get("image") and lk["image"] not in names:
                 err("menu_looks." + k, "no image %s" % lk["image"])
-        self._loops_check(err, warn)
+        self._loops_check(err, warn, info)
         if not any(p.level == "ERROR" for p in out):
             out += self.rules_check()
         out += self.engine_gaps()
         return out
 
-    def _loops_check(self, err, warn):
+    def _loops_check(self, err, warn, info):
         d = self.d
 
         def loop(w, lp, need=2):
@@ -952,6 +952,21 @@ class Project:
                 loop(w, en.get("loop"))
                 if en["how"] == "join" and not e.get(k):
                     err(w, "joins its end loop, and there is no %s clip" % k)
+            ec = e.get(k)
+            if ec in d["clips"]:
+                c = d["clips"][ec]
+                if c.get("joins") or not c.get("ends"):
+                    info("clips." + ec, "is the %s clip: it is built as an "
+                         "ending (it ends the battle, and does not join the "
+                         "idle loop), whatever its own Joins and Ends say" % k)
+                pools = [aid for aid, a in d["actions"].items()
+                         if any(ec in pl for pl in a["pools"].values()) or
+                         any(ec in pl for per in a.get("by_target", {}).values()
+                             for pl in per.values())]
+                if pools:
+                    warn("clips." + ec, "is the %s clip and %s's too: played "
+                         "there it would end the battle - give the action a "
+                         "clip of its own" % (k, ", ".join(pools)))
                 if en.get("plays") == "once" and en.get("then") == "join" \
                         and not d.get("title"):
                     warn(w, "joins the title, and there is none: the play "

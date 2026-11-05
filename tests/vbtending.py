@@ -67,6 +67,11 @@ def project(tmp, arm):
     B.demo_project(vbp, bars=2)
     p = P.Project.load(vbp)
     p.set(("enemy", "hp"), 1)
+    # the victory clip as a DROPPED video's is made: joining the idle loop,
+    # not ending - the owner's "ending misses its loop's frame 0" (an
+    # ending's clip is built as one, whatever it says)
+    p.set(("clips", "victory", "joins"), True)
+    p.set(("clips", "victory", "ends"), False)
     p.add_source("outro", path=vid)
     p.save()
     full = arm in ("join", "fullloop")
