@@ -1,6 +1,6 @@
 # ARCADE to a release - the plan
 
-**Status: PROPOSED** (2026-11-05). ARCADE today is `docs/ARCADE-SPEC.md`;
+**Status: AGREED** (2026-11-05; the owner's answers are section 7). ARCADE today is `docs/ARCADE-SPEC.md`;
 how it got here is `docs/HOW-ARCADE-WAS-BUILT.md` and the build plan
 `docs/plans/ARCADE-EMU-PLAN.md`. This document is the work between that and
 a release, and the decisions it needs from the owner (section 7).
@@ -66,15 +66,16 @@ chips.
    `pacman`, Q\*bert's `qberta`, when their translation is the same or has a
    recipe of its own. Anything else is refused, naming the chip and the
    CRC32 it wanted. This is `tools/getarcrom.py`'s rule, on the machine.
-3. **Build the game's CACHE FILE**: the board image, the recipe filled, the
-   PC table expanded, the derived tables (turned tiles and sprites, colour
-   maps, Q\*bert's patch applied). One file a game, `<SET>.ARC`, in
-   `SYSTEM\APPDATA\ARCADE\` on the volume the user picks; the hard disk is
-   offered first when there is one. The board then loads from its cache
-   exactly as it loads its lazy parts today.
-4. **Remember it**: a small index in APPDATA says which games are ready and
-   where their caches are. A game whose cache has vanished is "ROM needed"
-   again, never an error.
+3. **Keep the CHIPS, and nothing else.** The verified chips of a set go
+   into one file, `<SET>.ROM` (the board image in the layout
+   `getarcrom.py` writes today, plus Q\*bert's two sound chips), in a
+   `ROMS` folder beside `ARCADE.O88` or on a disk the user names. That is
+   the whole cache: everything else is REBUILT each time the game is
+   picked, from the recipe in the package (section 2.4).
+4. **Know what is there by looking**: at its start ARCADE lists `ROMS` and
+   reads each `.ROM` file's header (the set's name and the CRC32s it was
+   checked against). There is no index to go stale. A game with no file is
+   "ROM needed", never an error.
 
 One zip can hold several games (`invaders.zip` carries ~40 clone folders);
 import takes every set it recognises. Import is one-time and may take
@@ -82,8 +83,48 @@ minutes on an 8088, so it shows progress per chip. It runs on the desktop,
 not in the full-screen bracket, so a refusal is a toast.
 
 **Memory.** Inflating needs its 32KB window plus a game's largest chip.
-Building the cache needs the largest part (about 57KB for Pac-Man's code).
-Both fit on 640KB. kern_small refuses, as `op_load` already does.
+A pick rebuilds into the claims the board's lazy parts use today. Both fit
+on 640KB. kern_small refuses, as `op_load` already does.
+
+### 2.4 What a pick rebuilds, and what it costs
+
+Filling the recipe's holes is a copy. The PC table is expanded from its
+pairs. Q\*bert's patch is 17 checked stores. The derived tables are loops
+over the chips:
+- Pac-Man's turned tiles, sprites and plane selectors (`arcpmgfx.py`'s);
+- Q\*bert's turned tiles and sprites (`arcqbgfx.py`'s), written once in
+  8086;
+- the Taito boards' colour maps, which are the chips themselves.
+
+The heaviest is Q\*bert's 256 sprites, about 65,000 pixels. PREDICTED (not
+measured): a second or two on a 4.77 MHz 8088, under a tenth of that on a
+286. R2 measures it on the 5150. If a pick is too slow there, the derived
+tables can be kept beside the `.ROM` as an option; they are not the default.
+
+### 2.5 What it weighs on a disk
+
+MEASURED today (`build/arcade.o88`, 261KB, its parts' sizes as packed):
+
+| game | the package's share now | of which ROM or derived from it | the user's `.ROM` file |
+|---|---|---|---|
+| Space Invaders | 20.5KB | 5.6KB | 8KB |
+| Space Invaders Part II | 35.7KB | 9.3KB | 12KB |
+| Lunar Rescue | 40.9KB | 10.3KB | 13KB |
+| Gun Fight | 11.4KB | 3.4KB | 4KB |
+| Sea Wolf | 15.1KB | 3.6KB | 4KB |
+| Q\*bert | 25.9KB | 25.8KB | 68KB (with the sound chips) |
+| Pac-Man | 63.8KB | 24.5KB | 25KB |
+
+Taking the ROM-derived parts out leaves a package of about **175KB**
+(PREDICTED: R1 measures it, and the recipes' PC pairs may weigh a little
+more or less than today's packed tables). The seven sets' files are
+**134KB** together. **ARCADE and every game's ROMs fit on one 360KB disk**
+(354KB usable), with room to spare. The user's zips need not stay on it:
+`invaders.zip` alone is 220KB, almost all of it clones.
+
+The chips are kept as they are, not compressed: the machine has an
+inflater but no compressor, and the disk does not need one.
+
 
 **Where the user gets ROMs** is said plainly in the README: dumps of boards
 they own, or a licensed collection. Each set is named exactly as MAME names
@@ -92,9 +133,10 @@ points at a download.
 
 ### 2.3 For the builder
 
-`make arcade` builds the ROM-free package and the recipes. `make arcadecache
-GETARCFROM=<dir>` builds cache files on the host from the same ROMs, for
-the test rows and for an owner who would rather not import on the guest.
+`make arcade` builds the ROM-free package and the recipes. `make arcaderoms
+GETARCFROM=<dir>` writes the `.ROM` files on the host from the same ROMs,
+for the test rows and for an owner who would rather not import on the
+guest.
 The fetch at pinned hashes stays as the developer's route. It never touches
 what ships.
 
@@ -107,7 +149,7 @@ cabinet's is: pick by looking.
 | part | what it does |
 |---|---|
 | **the list** | every game ARCADE knows: title, maker, year, each with its state - READY, ROM NEEDED, NEEDS VGA, NEEDS A 286 FOR FULL SPEED (`OSAPI_CPU_INFO` and `OSAPI_FSX_CAPS`, a fact rather than a guess, PERFORMANCE.md rule 7) |
-| **the screen** | the selected game's picture. **Taken from the game itself**: the first time it is played, ARCADE keeps a frame of its attract mode in the cache, scaled into the card. No artwork is shipped, so no artwork can be someone else's. Before that it shows the game's name |
+| **the screen** | the selected game's picture. **Taken from the game itself**: the first time it is played, ARCADE keeps a frame of its attract mode, scaled down (about 2KB), at the end of the game's `.ROM` file. No artwork is shipped, so no artwork can be someone else's. Before that it shows the game's name |
 | **the card** | the game's controls, players, and its settings button |
 | **the buttons** | PLAY, ADD ROM SETS, SETTINGS |
 | **keys** | Up and Down move, Enter plays, type-ahead jumps by name, Esc closes. The mouse does the same |
@@ -157,12 +199,19 @@ In order of value:
 4. **Input state cleared on every board change and every entry into a game.**
    The owner's one unexplained Q\*bert run fits a held key surviving from
    Pac-Man. A clean slate at the bracket's door costs nothing.
-5. **Q\*bert's sound.** Its sound is a 6502 board running its own two ROMs.
-   The plan: a small 6502 interpreter (the generated core the survey
-   proposed; ARCADE-EMU-PLAN 8.1) runs at IMPORT, playing every sound
-   command into a PCM clip in the cache. Then the stream and FM routes play
-   clips, as Space Invaders' do. Speech (the Votrax) is a later question.
-   Conditional: in the release if it lands in time, else the first update.
+5. **Q\*bert's sound.** Its sound is a 6502 board running its own two
+   ROMs, writing a DAC. A small 6502 interpreter (the generated core the
+   survey proposed; ARCADE-EMU-PLAN 8.1) runs that board. WHEN it runs is
+   R5's first measurement, because the two choices pull against section
+   2.5:
+   - rendered ONCE, every sound command into a clip, kept beside the
+     `.ROM`: free at play, but PCM costs disk (MEASURE the commands' total
+     length first; 4-bit ADPCM halves it);
+   - run LIVE beside the game: no disk at all, but a 6502 at the board's
+     ~0.9 MHz is affordable on a 286 and not on an 8088. There, the
+     speaker or FM plays the command's pitch instead.
+
+   Speech (the Votrax chip) is a later question. In the release (section 7).
 6. **A safety catch for native boards.** The game runs with interrupts off
    (ARCADE-SPEC 10.3), so a game that never yields would freeze the machine.
    A per-run cap counted by the N88 core is not possible without traps, so
@@ -184,8 +233,9 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 ### R1: the recipe, and a package with no ROM in it
 - [ ] `arcaot.py`/`arcz80t.py` `--recipe`: holes, fill list, PC pairs.
 - [ ] Set descriptors for the seven sets, from `getarcrom.py`'s pins.
-- [ ] `make arcade` builds the ROM-free package. `make arcadecache` builds
-      caches on the host.
+- [ ] `make arcade` builds the ROM-free package. `make arcaderoms` writes
+      the `.ROM` files on the host.
+- [ ] Each board rebuilt at its pick from recipe and chips (section 2.4).
 - [ ] Row `arcrecipe` (host): every recipe filled from its pinned ROM is
       byte-identical to the translation. Red with one fill entry removed.
 - [ ] A scan of the package (host) for any 16-byte run of any pinned ROM:
@@ -194,9 +244,9 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 ### R2: import on the guest
 - [ ] `apps/os88inflate.inc` out of PIXEL, PIXEL on it, PIXEL's rows green.
 - [ ] ZIP central directory, STORED and DEFLATE, CRC32, loose-file folders.
-- [ ] The cache writer, the index, "ROM needed" and its toasts.
+- [ ] The `.ROM` writer, the `ROMS` listing, "ROM needed" and its toasts.
 - [ ] Rows: import from a zip on B: on MartyPC, then play (the existing
-      `arcspeed`/`arcglass`/`qbglass` rows run from imported caches); a
+      `arcspeed`/`arcglass`/`qbglass` rows run from imported sets); a
       wrong CRC refused naming the chip; a truncated zip refused; import
       timed on the 5150.
 
@@ -213,9 +263,11 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [ ] High-score ranges per game, saved and restored.
 - [ ] Pause and the F1 card. Input state cleared at every door.
 
-### R5: Q\*bert's sound (conditional)
-- [ ] The 6502 core and the sound board at import, the clips cached, the
-      stream and FM routes.
+### R5: Q\*bert's sound
+- [ ] The 6502 core and the sound board. Measured first: the commands'
+      total length, and a live board's cost on the 286.
+- [ ] Rendered or live, as that decides; the stream, FM and speaker
+      routes.
 
 ### R6: the release
 - [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line. Its disk is decided
@@ -227,21 +279,21 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
       and CGA), 5150 #2 (VGA and Sound Blaster), the 286.
 - [ ] The `release-os8088` skill.
 
-## 7. For the owner to decide
+## 7. The owner's answers (2026-11-05)
 
-1. **The recipe's standing.** Section 2.1 argues that a recipe of
-   addresses, holes and translator output carries no ROM content. Whether
-   that is enough to ship it is a judgement for the owner, not for the
-   code. If it is not, the alternative is translating ON THE GUEST at
-   import: `arcaot.py` ported to 8086, which would make R1 by far the
-   largest wave.
-2. **Where caches live** when there is no hard disk. A 360KB machine needs a
-   floppy of its own for them: one game's cache is 60-130KB.
-3. **Which games ship.** All seven, Pac-Man included, imported from the
-   user's own set? Or Pac-Man held back as it is today?
-4. **Which disk ARCADE rides**: its own disk in four geometries, the games
-   category disk (SPEC.md 24.6), or both.
-5. **Q\*bert's sound**: in the release, or the first update after it.
+1. **The recipe is fine.** Section 2.1 stands. No ROM byte and no
+   translation ships; holes, fill lists and addresses do.
+2. **Caches** were the question of a disk of their own. Section 2.5's
+   measurement answers it: the cache is only the chips, so a 360KB disk
+   holds ARCADE and all seven games' ROMs.
+3. **Pac-Man is a game like any other**: its set is imported, checked and
+   rebuilt the same way. `ARC_PACMAN` and the build's special case go.
+4. **ARCADE rides its own disk at 360KB**, unless the emulators' disk has
+   room. MEASURED: `emu360.img` as `all` builds it has 139 of 354 clusters
+   free, against ARCADE's predicted 175KB, so it does not, unless R1 comes
+   in well under the prediction. R6 decides on R1's number. At 720KB and
+   larger it can ride whichever disk has room.
+5. **Q\*bert's sound is in the release**: R5 is no longer conditional.
 
 ## 8. Risks
 
@@ -250,5 +302,6 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 | A recipe's fill list misses a ROM-derived byte | R1's byte-identity row | It cannot ship: the row is the gate |
 | Inflate on an 8088 is too slow for a 64KB set | R2's timing on the 5150 | Progress and patience: import is once. Loose files are the fast route |
 | A user's set is a clone with a different program | R2's CRC refusal names it | Add the clone with its own recipe (section 5, item 7) |
-| Caches do not fit the user's disks | the index's free-space check | Import one game at a time, to the disk the user names |
+| The `.ROM` files do not fit the user's disk | the import's free-space check | Import to the disk the user names; a `.ROM` is 4-68KB |
+| A pick on an 8088 is slow (section 2.4) | R2's timing on the 5150 | Keep the derived tables beside the `.ROM`, as an option |
 | The frontend's art costs too much on CGA | R3's measurement | The compact layout; art is a role table, not a requirement |
