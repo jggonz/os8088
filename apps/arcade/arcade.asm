@@ -707,6 +707,8 @@ ar_reset1:
     pop es
     mov byte [ar_halted], 0
     call [bx+BD_RESET]
+    call ar_dsapply                 ; the game's switches (12.3)
+    mov word [ar_hsfr], 0           ; ...and its best to come back (12.4)
     pop di
     pop si
     pop cx
@@ -766,6 +768,13 @@ ar_paint:
 
 ar_onkey:                           ; AX = the key, SI = the window
     push si
+    cmp byte [af_setm], 0           ; the card is SETTINGS: its keys first
+    je .list
+    push ax
+    call af_setkey
+    pop ax
+    jnc .out
+.list:
     cmp al, 13
     je .play
     cmp al, ' '
@@ -839,16 +848,23 @@ ar_play:
     jmp ar_toast
 .board:
     call ar_snd_prep                ; on the desktop: a part read, a toast
+    mov byte [af_snapw], 0
+    mov byte [af_dsdirty], 0
+    call ar_ovinit                  ; (the font, for the box over the game)
     mov ax, ar_fsx
     mov bx, [ar_win]
     xor cx, cx
-    mov byte [af_snapw], 0
     call OSAPI_FSX_RUN
     jnc .ran
     mov si, ar_s_nofsx
     jmp ar_toast
 .ran:
     call af_snapsave                ; (on the desktop: a file may be written)
+    cmp byte [af_dsdirty], 0        ; a best kept: ARCADE.DAT
+    je .kept
+    mov byte [af_dsdirty], 0
+    call ar_datwrite
+.kept:
     mov si, [ar_err]
     or si, si
     jz .out
@@ -864,6 +880,7 @@ ar_fsx:
     call ar_snd_open
     call ar_loop
     call ar_snd_close
+    call ar_hssave                  ; its best, kept (12.4)
     call af_snap                    ; the game's picture, if it has none yet
 .out:
     ret
@@ -907,6 +924,7 @@ inv_setup:
 ; =============================================================================
 ar_loop:
     mov byte [ar_quit], 0
+    call ar_door                    ; nothing held or typed comes in (12.1)
     mov bx, [ar_bd]
     mov ax, [bx+BD_PERIOD]
     mov [ar_period], ax
@@ -1048,6 +1066,17 @@ ar_loop:
     mov es, [ar_vseg]
     inc word [es:V_NFRAME]
     call ar_typed
+    cmp byte [ar_hold], 0           ; P or F1: held (12.2), and the clock
+    je .nohold                      ;   taken up again from now after
+    call ar_holdit
+    call pit_now
+    add ax, [ar_period]
+    adc dx, 0
+    mov [ar_due], ax
+    mov [ar_due+2], dx
+.nohold:
+    call ar_hsput                   ; a kept best put back (12.4)
+    mov bx, [ar_bd]
     call [bx+BD_FRAME]
     call ar_snd_frame
     cmp byte [ar_quit], 0
@@ -1161,7 +1190,21 @@ ar_typed:
     jne .notesc
     mov byte [ar_quit], 1
 .notesc:
+    or al, al                       ; F1: the card over the picture, held
+    jnz .asc                        ;   (ARCADE-SPEC 12.2)
+    cmp ah, 0x3B
+    jne .drain
+    mov byte [ar_hold], 2
+    jmp .drain
+.asc:
     or al, 0x20                     ; (letters to lower case)
+    cmp al, 'p'                     ; P: held
+    jne .notp
+    cmp byte [ar_hold], 0
+    jne .drain
+    mov byte [ar_hold], 1
+    jmp .drain
+.notp:
     mov si, ar_typemap
 .t:
     mov cx, [si]
@@ -2011,6 +2054,7 @@ ar_shift:
 %include "arcqb.inc"
 %include "arcimp.inc"
 %include "arcface.inc"
+%include "arcopt.inc"
 %include "arcart.inc"
 %include "arcsets.inc"                 ; (generated: getarcrom.py --asm-sets)
 %include "os88inflate.inc"
@@ -2186,6 +2230,9 @@ AR_VAR ar_rhomed, 1
 AR_VAR ar_places, 1 + AR_NPLACE * 3 ; ARCADE.DAT: places a .ROM was made,
 AR_VAR ar_sdrv, AR_NSET             ;   and each set's drive at its import
                                     ;   (0xFF none) - one record, so contiguous
+AR_VAR af_dsv, AR_NSET              ;   each game's switches (12.3, 0FFh none)
+AR_VAR ar_hsv, AR_NSET * AR_HSB     ;   each game's best (12.4)
+AR_DATSZ    equ 1 + AR_NPLACE * 3 + AR_NSET * (2 + AR_HSB)
 AR_VAR ar_datst, 1                  ;   ...and os88data's state byte for it
 AR_VAR ar_impname, 13               ; the import (arcimp.inc): the zip,
 AR_VAR ar_zsize, 4                  ;   its size,
@@ -2253,6 +2300,23 @@ AR_VAR af_lit, 16                   ;   ...and each one: 1 lit
 AR_VAR af_xs, AF_PICW * 2           ;   the columns sampled
 AR_VAR af_x0, 2
 AR_VAR af_xn, 2
+AR_VAR ar_hold, 1                   ; 1 paused, 2 the card shown (12.2)
+AR_VAR ar_glyph, 96 * 8             ;   the font, 32..127, for the box
+AR_VAR ar_ovn, 2                    ;   the box's lines, its rows, where
+AR_VAR ar_ovl, 24
+AR_VAR ar_ovh, 2
+AR_VAR ar_ovx, 2
+AR_VAR ar_ovy, 2
+AR_VAR ar_hsfr, 2                   ; frames since a power-on (12.4)
+AR_VAR af_setm, 1                   ; the card is SETTINGS (12.3): which one,
+AR_VAR af_dsi, 1                    ;   the byte, a setting's bits, the
+AR_VAR af_dsb, 1                    ;   choice set, how many, the turn's way
+AR_VAR af_dsm, 1
+AR_VAR af_dsc, 1
+AR_VAR af_dsk, 1
+AR_VAR af_dsdir, 1
+AR_VAR af_dsdirty, 1
+AR_VAR af_dsvals, 8
 AR_VAR ar_rfdrv, 1                  ; where the .ROM was found (its picture's
 AR_VAR ar_rfcl, 2                   ;   place)
 AR_VAR qb_gseg, 2                   ; Q*bert (arcqb.inc): G, the game's 64KB

@@ -506,3 +506,25 @@ picture written. Breaking the move (not redrawing the row it left) turned
 the identity check red at 120 rows.
 
 ![Hercules](arcade/face-herc.png) ![CGA](arcade/face-cga.png)
+
+## R4: settings, scores, pause and help
+
+**Pause and help draw on the game's own screen.** In a game the desktop's
+drawing calls are off limits, so ARCADE copies the system font before
+entering and writes its box straight into the framebuffer: all four VGA
+planes at once, or the Hercules and CGA banks. To put the picture back
+afterwards it calls the board's own setup again, which already knew how to
+draw every cell.
+
+**Settings in words, and only the certain ones.** Space Invaders' bases
+and bonus, and Pac-Man's lives, bonus, difficulty and ghost names, come
+straight from MAME's switch definitions. The other boards get no SETTINGS
+rather than a guess: a wrong bit on Q\*bert would flip the screen of a
+renderer that does not know how.
+
+**A best score is a few bytes of RAM**, put back after the game's power-on
+test has cleared it. The test pokes 0123 into Space Invaders' RAM, leaves
+the game, switches it on again and finds 0123 back. Without the put-back
+it reads 0000.
+
+**Not done:** key remapping, and Q\*bert's score table.

@@ -823,12 +823,7 @@ ar_remember:
     jae .full
     inc byte [ar_places]
 .full:
-    mov si, ar_s_dat
-    mov bx, ar_places
-    mov cx, 1 + AR_NPLACE * 3 + AR_NSET
-    mov di, ar_datst
-    call od_write
-    ret
+    jmp ar_datwrite
 
 ; ar_placesload - ARCADE.DAT read at the start: the places a pick looks in,
 ; and the drive each set was last imported on
@@ -837,7 +832,7 @@ ar_placesload:
     pop es
     mov si, ar_s_dat
     mov bx, ar_places
-    mov cx, 1 + AR_NPLACE * 3 + AR_NSET
+    mov cx, AR_DATSZ
     xor dx, dx
     call od_read
     jc .none
@@ -845,10 +840,13 @@ ar_placesload:
     jbe .r
 .none:
     mov byte [ar_places], 0
-    mov di, ar_sdrv
-    mov cx, AR_NSET
+    mov di, ar_sdrv                 ; no drives, no switches set, no bests
+    mov cx, AR_NSET * 2
     mov al, 0xFF
     cld
+    rep stosb
+    mov cx, AR_NSET * AR_HSB
+    xor al, al
     rep stosb
 .r:
     ret

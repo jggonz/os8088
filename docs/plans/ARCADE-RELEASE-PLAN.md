@@ -309,9 +309,13 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [ ] SETTINGS is drawn unlit until R4 wires it.
 
 ### R4: settings, scores, pause, help
-- [ ] DIP switches in words and keys remapped, both saved.
-- [ ] High-score ranges per game, saved and restored.
-- [ ] Pause and the F1 card. Input state cleared at every door.
+- [x] DIP switches in words, kept: Space Invaders and Pac-Man, the ones
+      MAME defines with certainty (ARCADE-SPEC 12.3).
+- [ ] Keys remapped: not done.
+- [x] High-score ranges per game, saved and restored: Space Invaders and
+      Pac-Man. Q*bert's (battery RAM with the operator's settings): not done.
+- [x] Pause (P) and the F1 card over the picture; Esc from either.
+- [x] Input state cleared at every door (`ar_door`).
 
 ### R5: Q\*bert's sound
 - [ ] The 6502 core and the sound board. Measured first: the commands'

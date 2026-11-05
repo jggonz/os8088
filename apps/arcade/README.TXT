@@ -51,7 +51,14 @@ Enter, Space, PLAY or a click on the chosen game plays it full screen:
     1, 2          one or two players
     Arrows        move (Left, Right; Pac-Man: all four)
     Space         fire (Lunar Rescue: thrust)
+    P             pause; any key plays on
+    F1            the game's card over its picture
     Esc           back to the window; the game waits where it was
+
+SETTINGS (or F2) shows the chosen game's switches in words - Space
+Invaders' bases and bonus, Pac-Man's lives, bonus, difficulty - kept for
+next time. A game's best score is kept too, and comes back when it is
+next switched on.
 
 Q*BERT. The joystick is turned on the cabinet, so the keys are the
 four diagonals: the keypad's corners as they look on the screen - 9 up

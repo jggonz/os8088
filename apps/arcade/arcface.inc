@@ -1030,6 +1030,24 @@ af_card:
     xor bh, bh
     cmp bl, [af_n]
     jae .out
+    cmp byte [af_setm], 0           ; SETTINGS: the switches instead (12.3)
+    je .card
+    xor dx, dx
+    mov si, af_s_sethd
+    xor bx, bx
+    call af_bcaps
+    mov di, [af_lay]
+    add dx, [di+L_CLH]
+    add dx, [di+L_CLH]
+    call af_setcard
+    mov di, [af_lay]
+    mov dx, [di+L_CH]
+    sub dx, 8
+    mov si, af_s_setkeys
+    xor bx, bx
+    call af_bcaps
+    jmp .out
+.card:
     mov al, [af_state+bx]
     mov [af_rst], al
     shl bx, 1
@@ -1152,8 +1170,18 @@ af_cap:
     mov cx, [di+L_BY]
     mov dx, [af_bw]
     mov ax, (R_BTN << 8) | R_BTNT
-    cmp word [af_bi], 2             ; Settings: R4's, a cap not lit yet
+    cmp word [af_bi], 2             ; SETTINGS: unlit for a game with none
     jne .out
+    push bx
+    push si
+    push ax
+    mov bl, [af_sel]
+    xor bh, bh
+    call af_dsw_of
+    pop ax
+    pop si
+    pop bx
+    jnz .out
     mov ax, (R_BTNOFF << 8) | R_TEXT
 .out:
     call af_bout
@@ -1168,6 +1196,9 @@ af_move:
     jae .r
     cmp al, [af_sel]
     je .r
+    push ax
+    call af_setleave                ; (a SETTINGS card is the game's own)
+    pop ax
     mov ah, [af_sel]
     mov [af_sel], al
     push ax
@@ -1181,6 +1212,8 @@ af_move:
     call af_row
     call af_screen
     call af_card
+    mov si, 2                       ; SETTINGS: lit for a game that has them
+    call af_cap
 .r:
     ret
 
@@ -1210,6 +1243,11 @@ af_key:
     dec bl
     jmp short .go
 .ins:
+    cmp ah, 0x3C                    ; F2: SETTINGS (12.3)
+    jne .ins2
+    call af_setenter
+    jmp short .took
+.ins2:
     cmp ah, 0x52                    ; Insert: Add ROM sets...
     jne .letter
     call ar_import
@@ -1279,7 +1317,13 @@ af_click:
 .add:
     cmp bx, 4                       ; (word index: Settings is the third)
     jne .addr
-    jmp short .took                 ; (Settings: R4)
+    cmp byte [af_setm], 0           ; SETTINGS: in, or out again
+    je .setin
+    call af_setleave
+    jmp short .took
+.setin:
+    call af_setenter
+    jmp short .took
 .addr:
     call ar_import
     jmp short .took

@@ -1282,3 +1282,68 @@ A click on a row selects it; a click on the selected row plays it. The coin
 door's buttons are PLAY, ADD ROMS and SETTINGS (R4; until then greyed).
 The Game menu keeps Play, Reset and Add ROM sets..., and lists the games, a
 pick from it selecting and playing as before.
+
+## 12. Settings, scores, pause and help (`arcopt.inc`)
+
+### 12.1 The doors
+
+Every entry into a game (`ar_door`, at the top of `ar_loop`) empties the
+BIOS keyboard buffer and clears the typed coin and start bits and any hold.
+A key typed on the desktop, or a coin pulse left from the last game, cannot
+reach the board: the owner's one unexplained Q\*bert run (a game over the
+moment the intro ended) fits a start left over from the game before.
+
+### 12.2 Pause and help
+
+In a game, **P** holds the board and **F1** holds it with the game's card
+(11.5's) shown. Held, the board runs no instruction and takes no interrupt,
+its sound is closed (`ar_snd_close`), and a box over the picture says so:
+white on black in the system font, whose glyphs (32 to 127) are copied
+before the bracket (`ar_ovinit`), since the desktop's drawing calls are off
+limits in a game's mode. The box is written straight into the framebuffer
+as `ar_fsi` describes it: all four planes at once on VGA, the banks on
+Hercules and CGA. Any key plays on and Esc goes back to the list; either
+way the board's own setup (`BD_SETUP`) draws the picture again, and the
+frame clock starts afresh from that moment, so no frames are owed.
+MEASURED (row `arcopt`): no frame in two held seconds, after both P and F1.
+
+### 12.3 The DIP switches, in words
+
+**SETTINGS** (the coin door's third cap, or F2) turns the card into the
+selected game's switches: one line a setting, its name and its choice, the
+one being changed marked `>`. Up and Down pick the setting; Left, Right,
+Space and Enter change it; Esc, F2 or the cap again leave. The choices are
+kept in `ARCADE.DAT` (a byte a game) and set into the board's switch byte
+at every power-on (`ar_dsapply`, after `BD_RESET`), leaving the bits ARCADE
+does not offer as the board's reset made them. A game in memory is powered
+on again when its switches change.
+
+Only switches whose meaning is certain are offered, from MAME's own
+definitions:
+
+| game | byte | settings |
+|---|---|---|
+| Space Invaders | IN 2 (`V_IN2`) | BASES 3/4/5/6 (bits 0-1), BONUS AT 1500/1000 (bit 3) |
+| Pac-Man | DSW1 (`PM_DSW1`) | LIVES 1/2/3/5 (2-3), BONUS AT 10000/15000/20000/NONE (4-5), DIFFICULTY (6), GHOST NAMES (7); coinage left at one coin a credit |
+
+The other games have none ARCADE offers yet, and their SETTINGS cap is
+drawn unlit. **Not done: key remapping.**
+
+### 12.4 High scores
+
+A game's best is a few bytes of its RAM (MAME's `hiscore.dat` idea, written
+here as addresses alone): Space Invaders' at 20F4h (2 bytes), Pac-Man's at
+4E88h (4). As a game is left, a nonzero best that differs from the kept one
+is kept (`ar_hssave`) and `ARCADE.DAT` written. After a power-on, from frame
+300 to frame 1,200, the kept best is put back whenever the game's own reads
+zero (`ar_hsput`) - its power-on test clears RAM, and may do so after a
+first put. **Not done: Q\*bert's table**, which lives in its battery RAM
+with the operator's settings and wants more than a range of bytes.
+
+`ARCADE.DAT` is now one 73-byte record: the places (1.5), each set's import
+drive, each game's switches and each game's best.
+
+`tests/arcopt.py` (row `arcopt`): BASES 5 kept in `ARCADE.DAT` and in IN 2
+at the next power-on; P and F1 each hold the board for two seconds and a key
+plays on; a best put in RAM is kept as the game is left from a hold with
+Esc, and back after Game > Reset. Red (`0000`) without `ar_hsput`.
