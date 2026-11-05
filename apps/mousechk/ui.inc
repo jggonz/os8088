@@ -430,12 +430,30 @@ MC_NB       equ 5
 
 ; mc_bok - would this button do anything? (SPEC.md 47 rule 2's one predicate)
 ; in:  AL = index; out CF = 1 greyed; every register kept
+; p2_canprobe is a SECTION's proc and promises only CF and SI, so everything
+; mc_buttons' loop keeps live across it (BX, BP) is saved here, and ES is put
+; on the kernel for it as for every section call (SPEC.md 126.2.1)
 mc_bok:
     cmp al, MB_PROBE
     jne .yes
-    push si                         ; p2_canprobe answers its reason in SI
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push bp
+    push es
+    call mc_kes
     call p2_canprobe
+    pop es                          ; (pops keep CF)
+    pop bp
+    pop di
     pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 .yes:
     clc

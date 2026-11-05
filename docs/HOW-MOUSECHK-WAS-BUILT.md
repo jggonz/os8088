@@ -109,3 +109,16 @@ record's declaration in the file that draws the buttons. The toast gate counts
 
 **Sizes:** image 4,762 + bss 5,898 = 10,660 bytes of the 16 KB budget; 4,246
 packed. Kernel: 0 bytes.
+
+**What the foundation's verifier changed.** The row API promises a section
+ES = KERNEL_SEG and asks nothing back, and the shell had been trusting it more
+than that: `mc_buttons` kept its flags pointer and button index in BX and BP
+across `p2_canprobe`, and `mc_entry` kept the window in BX across the four
+`xx_init`s, which is the register the entry proc returns. A serial section that
+pointed ES at the BIOS data area to read COM1's base would have handed the PS/2
+section the wrong segment. So every section call now goes through `mc_kes`
+(ES on the kernel, DF clear), the predicate saves everything around the
+section's proc, and the entry reloads the window from `[mc_win]`: 61 bytes of
+image, and the sum with the bss is unchanged at 10,660 because the 512-byte
+alignment absorbs it. The Save dialog opens on `A:\MEDIA` and not beside the
+package (SPEC.md 38.10's default), which the contract now says.

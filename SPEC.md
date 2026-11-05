@@ -241592,7 +241592,9 @@ somebody to build it and send a disk, and the person with a mouse that is not
 found has the disk they have (docs/plans/MOUSECHK-PLAN.md, *Why a package and
 not `MOUDIAG=1`*). Label prefix `mc_` for the shell and `sum_`, `ser_`, `p2_`,
 `oth_` for the sections. It runs on kern_big, kern_emu and kern_mega, from the
-keyboard alone, and **it changes no kernel byte**.
+keyboard alone, and **it changes no kernel byte**; it DECODES only on the kernel
+it was built against (§126.4), which is kern_big and kern_mega - a copy carried
+to kern_emu runs and shows raw hex (§126.12).
 
 ### 126.1 What it shows (the section list)
 
@@ -241636,7 +241638,11 @@ oth_rows   apps/mousechk/other.inc
 with SI = a NUL reason in DS, for the greyed button's toast, §47) and
 `p2_probe` (runs the live probe, synchronously on the UI task, then returns;
 its trace appears through `p2_rows`). A section never sees a window, a pixel or
-a segment other than ES. The row procs (`apps/mousechk/rows.inc`) each keep
+a segment other than ES. **A section owes the shell nothing back**: the shell
+puts ES on KERNEL_SEG and clears DF before every section call (`mc_kes`, the
+`xx_init`s, the `xx_rows`, `p2_canprobe` and `p2_probe` alike) and keeps nothing
+of its own in a register across one, so a section that leaves ES on the BIOS
+data area or moves BX costs nothing. The row procs (`apps/mousechk/rows.inc`) each keep
 every register except their documented outputs:
 
 | proc | in | does |
@@ -241673,8 +241679,11 @@ visible row and draws **only the lines whose hash moved** - so moving the mouse
 changes the position row and nothing else is drawn, and an idle window redraws
 nothing (PERFORMANCE.md Part 5's rule: nothing repaints more than it changed).
 A hash is never 0 (a line that must draw) and never 1 (the blank a line with
-no row hashes to). A scroll, a paint and a rebuild that shortens the list zero
-the table, so every line draws once. A stale hash costs one wrong line until
+no row hashes to). A scroll - and a rebuild whose shorter list pulls the view
+back up - zeroes the table, so every line draws once; a paint, onto content
+the window manager has just filled white, marks every line that has a row 0
+and every line past the end 1, so only the rows draw. A list that merely
+shortens needs nothing: the lines past its new end hash 1 and draw blank. A stale hash costs one wrong line until
 the next change; a collision is a 1 in 65,534 chance per change and the
 refresh is twice a second.
 
@@ -241727,12 +241736,13 @@ transient claim of `nrows * 70 + 512` bytes, rounded up to a KB.
 root of the volume it checks and asks nothing; here the question is real,
 because the machine that needs this report is one whose boot disk may be
 read-only and whose useful destination is a second floppy. So it uses the
-standard Save dialog (`OSAPI_FILE_DLG`, mode 1), which opens in the folder the
-package was launched from with `MOUSECHK.TXT` already in the name box: Enter
-saves it beside the package, and the dialog's own navigation reaches `B:`. The
-completion proc copies the chosen name, composes the report, writes it with
-`OSAPI_FILE_WRITE` on the folder the dialog left the volume on, toasts
-`Saved <name>` or `Could not save the report`, and repaints. A refusal (a dialog
+standard Save dialog (`OSAPI_FILE_DLG`, mode 1), with `MOUSECHK.TXT` already in
+the name box. It opens where §38.10 says every chooser does: `MEDIA` at the root
+of the drive the package was launched from (the system disks carry one), or that
+root - so Enter saves it in `A:\MEDIA` on a floppy boot, and the dialog's own
+navigation reaches `B:`. The completion proc copies the chosen name, composes the
+report, writes it with `OSAPI_FILE_WRITE` on the folder the dialog left the volume
+on, toasts `Saved <name>`, `Save failed` or `Out of memory`, and repaints. A refusal (a dialog
 already up) is silently nothing. *Copy* needs no destination.
 
 ### 126.4 Reading the kernel: the §57.3 exception and the build check
@@ -241809,10 +241819,10 @@ the build of 2026-11-05:**
 
 | | bytes |
 |---|---|
-| `mousechk.bin` image | 4,762 (shell, rows, ui, kread and the stubs; the sections add to it) |
-| bss | 5,898 (`mc_buf` 5,120, the row table 256, the shown hashes 96, the rest state and scratch) |
-| image + bss | **10,660** of the plan's 16 KB (16,384): 5,724 left for the four sections |
-| `MOUSECHK.O88`, lz4 | 4,246 |
+| `mousechk.bin` image | 4,823 (shell, rows, ui, kread and the stubs; the sections add to it) |
+| bss | 5,837 (`mc_buf` 5,120 on the first 512 boundary past the image, `OS88_BSS_ALIGNED`, with the row table 256, the shown hashes 96 and the rest of the state packed into the gap in front of it, §77.31 - so the image and the bss trade bytes and only their SUM is the figure) |
+| image + bss | **10,660** of the package's 20 KB (20,480) ceiling, raised from the plan's 16 KB when wave 2 started: 9,820 left for the four sections |
+| `MOUSECHK.O88`, lz4 | 4,279 |
 | kernel | **0**: no file under `kernel/`, `boot/`, `drivers/` or `apps/os88api.inc` changes; `kernel-full.bin` is the same size and differs from the previous build in the build number's digits only |
 
 Disk headroom after it landed (free clusters, `tools/os88disk.py --verify`):
