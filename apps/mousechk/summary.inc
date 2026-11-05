@@ -21,6 +21,7 @@ SUM_V_NONE  equ 1               ; the kernel publishes no 'MO' block
 SUM_V_OK    equ 2               ; a pointer has spoken
 SUM_V_WAIT  equ 3               ; a PS/2 mouse answered, nothing moved yet
 SUM_V_NO    equ 4               ; no pointer
+SUM_V_SWAIT equ 5               ; a serial port answered the identify, no packet yet
 
 sum_init:
     ret
@@ -36,6 +37,7 @@ sum_snap:
     mov [sum_port], al
     mov [sum_p2], al
     mov [sum_st], al
+    mov [sum_sid], al
     mov [sum_x], ax
     mov [sum_y], ax
     mov [sum_btn], al
@@ -48,6 +50,17 @@ sum_snap:
     mov [sum_port], al
     mov al, [es:si+MOS_SEEN]
     mov [sum_seen], al
+    ; which serial port answered mouse_init's identify window like a mouse
+    ; ([mou_ident], per port, stride 2: SPEC.md 9.4.1). COM1 first
+    mov al, '1'
+    cmp byte [es:si+MOS_IDENT], 0
+    jne .sid
+    mov al, '2'
+    cmp byte [es:si+MOS_IDENT+2], 0
+    jne .sid
+    xor al, al
+.sid:
+    mov [sum_sid], al
     mov si, [es:bx+MOB_CUR]
     mov ax, [es:si+MOC_X]
     mov [sum_x], ax
@@ -65,7 +78,11 @@ sum_snap:
     je .cpu                         ; raw: never decoded
     mov byte [sum_ok], 1
     mov byte [sum_v], SUM_V_NO
-    cmp byte [sum_p2], 0
+    cmp byte [sum_sid], 0
+    je .p2w
+    mov byte [sum_v], SUM_V_SWAIT   ; a serial mouse answered: not "no mouse"
+.p2w:
+    cmp byte [sum_p2], 0            ; ...and a live PS/2 one is named first
     je .chk
     cmp byte [sum_st], 9            ; 9 = the mouse is live (SPEC.md 9.4.4)
     jne .chk
@@ -100,6 +117,8 @@ sum_rows:
     je .wait
     cmp al, SUM_V_NO
     je .none
+    cmp al, SUM_V_SWAIT
+    je .swait
     cmp al, SUM_V_RAW
     jne .nomo
     mov si, sum_s_raw               ; "raw port 04 seen 01 p2 01 st 09"
@@ -119,6 +138,13 @@ sum_rows:
     mov al, [sum_st]
     call mc_hex8
     jmp short .pos
+.swait:
+    mov si, sum_s_com               ; "COM1 mouse found; no movement seen yet"
+    call mc_put
+    mov al, [sum_sid]
+    call mc_putc
+    mov si, sum_s_swait
+    jmp short .put
 .nomo:
     mov si, sum_s_nomo
     jmp short .put
@@ -261,6 +287,8 @@ sum_rows:
     je .vwait
     cmp al, SUM_V_NO
     je .vno
+    cmp al, SUM_V_SWAIT
+    je .vswait
     mov si, sum_s_vraw
     cmp al, SUM_V_RAW
     je .vl
@@ -288,10 +316,19 @@ sum_rows:
 .vwait:
     mov si, sum_s_vwait
     call mc_line
+.vk:
     mov si, sum_s_kbd
     call mc_line
     mov al, LP_WARN
     jmp mc_lamp
+.vswait:
+    mov si, sum_s_vsw1              ; "A serial mouse answered on COM1. ..."
+    call mc_line
+    mov al, [sum_sid]
+    call mc_putc
+    mov si, sum_s_vsw2
+    call mc_put
+    jmp short .vk
 .vno:
     mov si, sum_s_vno
     call mc_line
@@ -330,6 +367,8 @@ sum_n8: db 'USB mouse (USBMOUSE.DRV)', 0
 sum_s_unk:  db 'unknown source (row not recognised)', 0
 sum_s_none: db 'none yet - the keyboard mouse is on', 0
 sum_s_wait: db 'PS/2 mouse found; no movement seen yet', 0
+sum_s_com:  db 'COM', 0
+sum_s_swait equ sum_s_wait + 4   ; ' mouse found; no movement seen yet' (shared tail)
 sum_s_nomo: db 'unknown (no mouse record)', 0
 sum_s_raw:  db 'raw: port ', 0
 sum_s_rseen: db ' seen ', 0
@@ -359,6 +398,8 @@ sum_s_bpp2: db ' bpp', 0
 ; the verdict lines. The gate asserts on these EXACT strings (SPEC.md 126.5)
 sum_s_vok:   db 'Your mouse is working: ', 0
 sum_s_vwait: db 'A PS/2 mouse answered. Move it to confirm.', 0
+sum_s_vsw1:  db 'A serial mouse answered on COM', 0
+sum_s_vsw2  equ sum_s_vwait + 21 ; '. Move it to confirm.' (shared tail)
 sum_s_vno:   db 'No mouse found. See the sections below for why.', 0
 sum_s_kbd:   db 'The keyboard mouse is on: arrows move, keypad 5 clicks.', 0
 sum_s_vst:   db 'The PS/2 handshake stopped at step ', 0
@@ -372,6 +413,7 @@ sum_seen: db 0
 sum_port: db 0
 sum_p2:   db 0
 sum_st:   db 0
+sum_sid:  db 0                  ; '1'/'2': that COM port answered the identify
 sum_btn:  db 0
 sum_x:    dw 0
 sum_y:    dw 0
