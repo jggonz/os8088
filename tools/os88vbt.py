@@ -79,6 +79,7 @@ CF_OPENING = 16     # one of the openings, played in turn before the battle
 CF_LOOP = 32        # a title or end loop: record 0 from black, the last the
                     # seam onto frame 0, records 1.. round until a key
 CF_ENTER = 64       # opening 0, entered at the title loop's frames (anchors)
+CF_NOMUS = 128      # an end clip played once: no music after its own sound
 ENDING_HOW = {"hold": 0, "fade": 1, "join": 2, "again": 3}
 # AFTER AN ENDING'S CLIP THAT PLAYS ONCE (125.3.1, header 346/347): hold its
 # last frame, fade and play again from the title, or JOIN the title - its
@@ -513,7 +514,9 @@ def build(b):
                             surface_of(full_of(b.title["frames"][0]),
                                        REND.full), REND.full))
         flags = CF_ENDS | (CF_FULL if full else 0) | \
-            (CF_OWNSND if lp.get("sound") is not None else 0)
+            (CF_OWNSND if lp.get("sound") is not None else 0) | \
+            (CF_NOMUS if lp.get("sound") is not None and
+             not lp.get("music_after") else 0)
         regions.append(stream(recs))
         clip_rows.append(dict(name=lp["name"], nrec=len(recs), flags=flags,
                               exit=0, anch=[]))
@@ -1014,13 +1017,15 @@ def battle_of(proj, progress=None, kind="cga4"):
         lp = None
         if en.get("loop") and en["how"] in ("fade", "join"):
             full, once = bool(en.get("full")), en.get("plays") == "once"
-            key = json.dumps([en["loop"], full, once, en.get("then")],
+            key = json.dumps([en["loop"], full, once, en.get("then"),
+                              bool(en.get("music_after"))],
                              sort_keys=True)
             if key not in made:
                 made[key] = loop_of(en["loop"], "E", full)
                 made[key]["name"] = ("E%d%s" % (len(made), en["loop"]["clip"])
                                      )[:8]
-                made[key].update(full=full, once=once)
+                made[key].update(full=full, once=once,
+                                 music_after=bool(en.get("music_after")))
             lp = made[key]
         b.endings[k] = (en["how"] if lp or en["how"] in ("hold", "again")
                         else "hold", lp, en.get("then") or "hold")

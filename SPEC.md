@@ -237410,7 +237410,13 @@ the decoder will really hold:**
   it to its end, so the next one's head was sometimes never read, and the
   next was played out of the title's records left in its ring - no sound,
   then a wait for records that never came (the owner's "sometimes the
-  first opening clip is freezing"; `vbtendingop`). **Each opening is FULL SCREEN or WITH THE
+  first opening clip is freezing"; `vbtendingop`). **A fade's time is the
+  next opening's**: the title faded has its picture over at the fade's
+  first step (its ring no longer read round), and while a fade runs or an
+  opening is waited for, the reader fills that opening's ring rather than
+  reading it to its head alone - what a ring holds is what an opening
+  faster than the disk plays before it waits (the owner's 55 KB/s ones on
+  Hercules). **Each opening is FULL SCREEN or WITH THE
   MENU** (the project's `"full"`, the Openings tab's Screen choice): a
   full one is encoded over the whole screen - 200 rows, Hercules' 348 -
   and carries `CF_FULL`; one with the menu is the canvas over black. The
@@ -237675,7 +237681,11 @@ Both are optional, and a bundle with neither plays as version 5's did.
   never in step, the ring was never given back and the picture froze
   once it had played what the ring held (the owner's: ~20 frames, then
   still). `vbtendingjf` holds it on Hercules with a clip too big for its
-  ring. `vbtending` holds the three shapes on MartyPC's CGA XT: a
+  ring. **After a once-clip's own sound, no music** unless the ending says
+  `"music_after"` (the window's "Battle music after its sound"): the
+  clip carries `CF_NOMUS` (128) and its start puts `[vb_mon]` to 0, so
+  its fade to the title is silent - the battle's loop coming back under
+  it was the owner's "doesn't work well in my current case". `vbtending` holds the three shapes on MartyPC's CGA XT: a
   full-screen once-clip joined from victory and joining the title (the
   band down, its rows the clip's, no fade anywhere), a canvas once-clip
   faded to and fading to the title, and a full-screen end loop faded to
@@ -238061,7 +238071,20 @@ whenever it holds under THREE QUARTERS** (`VB_MLOW`, the reader's and
 `vb_mkeep`'s), not half: under the idle loop's decode a disk read on
 Hercules' XT moves ~16 KB a second against the music's 11, and a busy
 menu (the owner's "three down arrow presses, quickly") held the ring at
-14 - 19 KB, 1.3 s from dry, where it now holds 22 - 26 KB.
+14 - 19 KB, 1.3 s from dry, where it now holds 22 - 26 KB. **A stream
+running low is read WHOLE at a menu too**: a menu keeps 4 KB reads for
+what it may never want (the clip under the cursor, the enemy's, the
+hold), so that a key is answered, but the music under 3/4 and a playing
+clip's ring under half take a whole read (`[vb_pbig]`, `vb_psize`) - on
+the owner's ST-225 a read is a seek and a turn, ~75 ms, and 4 KB a call
+is ~50 KB/s. **The card is asked every pass whether it halted**
+(`vb_snd_keep`, verb 3, and verb 1 to resume): a halted card is a halted
+picture, the hook's clock being the card's, and asked an eighth pass a
+busy Hercules XT stood still seconds - the owner's "the music and video
+pause". `vbtsound --heavy` plays the battle under a 55 KB/s idle loop with
+the cursor moved quickly at every menu; MartyPC's XT-IDE did not halt the
+card there with or without these, so they stand on the owner's machine's
+figures.
 
 #### 125.5.1 The band's layout
 

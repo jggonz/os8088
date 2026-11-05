@@ -82,6 +82,8 @@ CF_ENDS     equ 4
 CF_OWNSND   equ 8               ; its sound is played instead of the music
 CF_OPENING  equ 16
 CF_LOOP     equ 32              ; a title or end loop (125.3.1)
+CF_NOMUS    equ 128             ; an end clip played once: its own sound,
+                                ; and no music after it (125.3.1)
 CF_ENTER    equ 64              ; opening 0, entered at the title's frames
 VH_TITLE    equ 330             ; the title loop's clip, FFh none
 VH_LEAVE    equ 331             ; FFh: the title is left by a fade
@@ -1352,6 +1354,8 @@ vb_gcopy:
 ; VB_SPIECE - a read costs the kernel a call's overhead whatever it moves,
 ; and four 4 KB reads took 80 ms each where one of 16 KB is far less
 vb_psize:
+    cmp byte [vb_pbig], 0           ; A STREAM RUNNING LOW: a whole read,
+    jne .big                        ; menu or not (below)
     cmp byte [vb_state], GS_MENU
     je .small
     cmp byte [vb_state], GS_TARGET
@@ -3019,18 +3023,17 @@ vb_play_init:
 
 ; vb_snd_keep - an underrun resumes the card once a block is queued
 vb_snd_keep:
-    cmp byte [vb_snd], 0
-    je .out
-    inc byte [vb_kn]
-    test byte [vb_kn], 7
-    jnz .out
-    mov al, 3
+    cmp byte [vb_snd], 0            ; (every pass: a card halted is the
+    je .out                         ; picture halted too, its clock - asked
+    mov al, 3                       ; an eighth pass, a busy Hercules XT
+                                    ; stood still 2 s and more)
     mov ah, [vb_hand]
     call OSAPI_SND_STREAM
     cmp ax, 2                       ; ENDED: the play goes on silent
     je .dead
     cmp ax, 1                       ; UNDER
     jne .out
+    inc word [vb_nunder]            ; (counted: a test's)
     mov al, 1
     mov ah, [vb_hand]
     mov cx, [vb_wpos]
@@ -3077,14 +3080,17 @@ vb_reader:
     sub ax, [vb_mtake]
     cmp ax, VB_MLOW
     jae .clips
-    jmp vb_mpiece
-.clips:
-    mov bx, vb_rg0                  ; 2. streaming
-    call .low
-    jc .read
-    mov bx, vb_rg1
-    call .low
-    jc .read
+    mov byte [vb_pbig], 1           ; (THE MUSIC AND A PLAYING CLIP RUNNING
+    call vb_mpiece                  ; LOW are read whole even at a menu: a
+    mov byte [vb_pbig], 0           ; read is a seek and a turn of the disk,
+    ret                             ; ~75 ms on the owner's ST-225, and 4 KB
+.clips:                             ; a call moved ~50 KB/s against a 55 KB/s
+    mov bx, vb_rg0                  ; idle loop and the music's 11 - "the
+    call .low                       ; music and video pause" at a menu, and
+    jc .rbig                        ; only there. A menu keeps its small
+    mov bx, vb_rg1                  ; reads for what it may never want)
+    call .low                       ; 2. streaming
+    jc .rbig
     cmp byte [vb_onext], 0xFF       ; 3. the next opening
     je .pend
     mov bx, [vb_oring]
@@ -3097,6 +3103,15 @@ vb_reader:
 .ohave:
     call vb_rhead
     jnc .read
+    cmp byte [vb_fon], 0            ; A FADE, or the opening waited for:
+    jne .omore                      ; nothing on the glass is fed, and the
+    cmp byte [vb_mode], VM_OWAIT    ; next opening's ring is FILLED, not
+    jne .pend                       ; read to its head alone (the owner's
+.omore:                             ; "that whole fade time should be spent
+    call vb_rpiece                  ; on loading the opening video")
+    jc .rerr
+    or al, al
+    jnz .rok
 .pend:
     mov al, [vb_pend]               ; 4. the action pending
     cmp al, 0xFF
@@ -3175,6 +3190,11 @@ vb_reader:
     ret
 .read:
     jmp vb_rpiece
+.rbig:
+    mov byte [vb_pbig], 1
+    call vb_rpiece
+    mov byte [vb_pbig], 0
+    ret
 .out:
     ret
 .done:                              ; ring BX played and sounded: given back
@@ -3473,7 +3493,6 @@ VB_VAR vb_mread, 1
 VB_VAR vb_ring, 2
 VB_VAR vb_hand, 1
 VB_VAR vb_snd, 1
-VB_VAR vb_kn, 1
 VB_VAR vb_psfx, 2
 VB_VAR vb_pmus, 2
 VB_VAR vb_pent, 2                   ; the entries' place in the claim
@@ -3551,6 +3570,8 @@ VB_VAR vb_eplay, 1                  ; it goes round
 VB_VAR vb_askip, 1                  ; its sound from record 1 (joined)
 VB_VAR vb_askipn, 2                 ; ...past record 0's this many bytes
 VB_VAR vb_owsnd, 1                  ; the next opening's sound waits on it
+VB_VAR vb_pbig, 1                   ; a read for a stream running low: whole
+VB_VAR vb_nunder, 2                 ; the card found halted, resumed
 VB_VAR vb_fwant, 1                  ; a fade wanted: what follows it
 VB_VAR vb_fon, 1                    ; a fade under way
 VB_VAR vb_fnext, 1                  ; 1 opening 0, 2 the end loop, 3 again

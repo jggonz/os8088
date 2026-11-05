@@ -657,12 +657,15 @@ class Project:
         self._edit(f)
 
     def set_ending(self, outcome, how, clip=None, loop=None, sound=None,
-                   full=None, plays=None, then=None):
+                   full=None, plays=None, then=None, music_after=None):
         """How OUTCOME ("victory"/"defeat") ends: HOW, and its END clip -
         clip CLIP's frames LOOP - for "fade" and "join": FULL screen or the
         canvas, it PLAYS "loop" (round until a key) or "once", and THEN -
         after one that plays once - "hold", "fade" (to the title, the play
-        again) or "join" (the title). None keeps what is there"""
+        again) or "join" (the title); MUSIC_AFTER, for one that plays once
+        with its own sound, the battle's music back once that sound is over
+        (False, the default: silence to its end). None keeps what is
+        there"""
         if how not in ENDING_HOWS:
             raise ValueError("an ending is %s" % ", ".join(ENDING_HOWS))
         if plays not in (None, "loop", "once"):
@@ -679,7 +682,8 @@ class Project:
                 lp = {"clip": clip, "sound": sound, "loop": list(loop) if loop
                       else [0, c["out"] - c["in"] + 1]}
             en = {"how": how, "loop": lp}
-            for k, v in (("full", full), ("plays", plays), ("then", then)):
+            for k, v in (("full", full), ("plays", plays), ("then", then),
+                         ("music_after", music_after)):
                 v = old.get(k) if v is None else v
                 if v not in (None, False, "loop", "hold"):
                     en[k] = v

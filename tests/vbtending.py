@@ -176,9 +176,10 @@ def main():
         if a.arm == "fullloop":
             want, wthen = B.CF_LOOP | B.CF_FULL, 0
         else:
-            want = (B.CF_ENDS | (B.CF_FULL | B.CF_OWNSND if a.arm == "join"
-                                 else B.CF_OWNSND if a.arm == "joinfade"
-                                 else 0))
+            want = (B.CF_ENDS | (B.CF_FULL | B.CF_OWNSND | B.CF_NOMUS
+                                 if a.arm == "join" else
+                                 B.CF_OWNSND | B.CF_NOMUS
+                                 if a.arm == "joinfade" else 0))
             wthen = 4 if a.arm == "join" else 3
         ok(fl & ~B.CF_JOINS == want and b.ends_then["victory"] == wthen,
            "%s: the bundle - the end clip's flags %02X (want %02X), then "
@@ -239,6 +240,7 @@ def main():
                 oi = b.openings[0]
                 onrec = b.clips[oi]["nrec"]
                 ofr, osnd = 0, False
+                st0, st1 = None, None
                 key("Enter")
                 last = None
                 for _ in range(3000):
@@ -259,6 +261,9 @@ def main():
                                       os88marty.GUEST_HZ, st), flush=True)
                             last = st
                     if rb("vb_cc") == oi and rb("vb_mode") == 1:
+                        if st0 is None:
+                            st0 = rw("vb_stall")
+                        st1 = rw("vb_stall")
                         ofr = max(ofr, rw("vb_cfr"))
                         osnd = osnd or rb("vb_apclip") == oi and \
                             rw("vb_aring") != 0
@@ -268,6 +273,8 @@ def main():
                    "the FIRST OPENING, full screen with its own sound and "
                    "streamed, played to its end (frame %d of %d records), "
                    "its sound heard (%s)" % (ofr, onrec, osnd))
+                print("     the first opening waited %s frames for its "
+                      "records" % ((st1 or 0) - (st0 or 0)))
             else:
                 key("Enter")
             try:
@@ -300,7 +307,7 @@ def main():
             # over how many rows, and what the band's rows show
             fades, lit, bandon = [], [], []
             seen_clip = False
-            cfrs = []
+            cfrs, mons = [], []
             def cyc():
                 return int(m.status().get("cycles", 0))
             fon, fspans = False, []
@@ -316,6 +323,8 @@ def main():
                 if rb("vb_eplay"):
                     seen_clip = True
                     cfrs.append(rw("vb_cfr"))
+                    if rb("vb_fon"):        # (the fade after it: music?)
+                        mons.append(rb("vb_mon"))
                     lit.append(band_lit(m.read(0xB8000, 16384)))
                     bandon.append(rb("vb_banddone"))
                 back = rb("vb_tplay") == 1 and rb("vb_over") == 0
@@ -355,6 +364,9 @@ def main():
                    "its end (frame %d of %d records) and then the whole "
                    "screen FADED to the title (fades over %s rows)"
                    % (max(cfrs or [0]), nrec, fades))
+                ok(mons and not any(mons),
+                   "joinfade: no battle music after the end clip's own sound "
+                   "- its fade silent (the owner's; [vb_mon] %s)" % mons[:3])
             elif a.arm == "fade":
                 ok(seen_clip and fades[:1] == [142] and 200 in fades,
                    "fade: the canvas faded to the clip, then the whole "

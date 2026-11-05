@@ -2785,6 +2785,11 @@ class LoopPanel(object):
                               width=16, values=[l for _, l in PLAYS_LABELS])
             pc.pack(side="left", padx=2)
             pc.bind("<<ComboboxSelected>>", lambda e: self._commit())
+            self.musv = tk.IntVar()     # (once, its own sound: the music
+            self.muscb = ttk.Checkbutton(   # back after it, or silence)
+                ef, text="Battle music after its sound",
+                variable=self.musv, command=self._commit)
+            self.muscb.pack(side="left", padx=6)
             r += 1
             tf = ttk.Frame(f)
             tf.grid(row=r, column=0, columnspan=4, sticky="w")
@@ -2893,6 +2898,9 @@ class LoopPanel(object):
             self.plays.set(dict(PLAYS_LABELS)["once" if once else "loop"])
             self.then.set(dict(THEN_LABELS)[en.get("then") or "hold"])
             self.thencb.config(state="readonly" if once else "disabled")
+            self.musv.set(1 if en.get("music_after") else 0)
+            self.muscb.config(state="normal" if once and (en.get("loop") or {})
+                              .get("sound") else "disabled")
             ex = d["enemy"].get(self.kind)
             where = "over the whole screen (the band down)" if \
                 en.get("full") else "in the canvas, under the band"
@@ -2943,7 +2951,8 @@ class LoopPanel(object):
             then = dict((l, k) for k, l in THEN_LABELS).get(
                 self.then.get(), "hold")
             self.app.edit("set_ending", self.kind, how, cid, loop, snd,
-                          full=bool(self.fullv.get()), plays=plays, then=then)
+                          full=bool(self.fullv.get()), plays=plays, then=then,
+                          music_after=bool(self.musv.get()))
 
     def _clip(self):
         cid = self.clip.get()

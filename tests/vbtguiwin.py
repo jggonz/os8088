@@ -376,6 +376,16 @@ def inner(tmp):
        "C. victory's END CLIP set full screen, played once, then joining "
        "the title (%s)" % {k: en.get(k) for k in ("how", "full", "plays",
                                                    "then")})
+    off = en.get("music_after")
+    vp.musv.set(1)
+    vp._commit()
+    on = app.proj.d["endings"]["victory"].get("music_after")
+    vp.musv.set(0)
+    vp._commit()
+    ok(not off and on is True and not app.proj.d["endings"]["victory"]
+       .get("music_after"),
+       "C. ...and the battle music after its own sound: off unless asked "
+       "(%s), on (%s), off again" % (off, on))
 
     # FOLLOW-UPS (125.6.7): the Enemy tab's box, one added and set
     et = app.enemy_tab

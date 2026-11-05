@@ -123,6 +123,9 @@ vb_eloop_go:
     mov al, [vb_ethen]
     mov [vb_ehow], al
     pop ax
+    test word [vb_cflags], CF_NOMUS ; (no music after its own sound: its
+    jz .lp                          ; fade is silent - the owner's, 125.3.1)
+    mov byte [vb_mon], 0
 .lp:
     test word [vb_cflags], CF_FULL  ; FULL SCREEN: the band down, and not
     jz .bd                          ; drawn again over it
@@ -183,6 +186,11 @@ vb_fadetick:
     mov word [vb_fticks], 0
     mov byte [vb_fon], 1
     mov byte [vb_mode], VM_FADE
+    cmp al, 1                       ; THE TITLE FADED: its picture is over
+    jne .b2                         ; now (the fade only dims the glass), so
+    mov bx, [vb_lring]              ; the reader no longer reads it round -
+    mov byte [bx+RG_VDONE], 1       ; the fade's time is opening 0's
+.b2:
     cmp cl, [vb_meta+9]
     je .bk
     mov byte [vb_banddone], 0       ; (the band fades with it, and stays down)

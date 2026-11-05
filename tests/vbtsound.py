@@ -22,6 +22,12 @@ too strong to fall: turn after turn of menus and enemy moves, then
 
 Broken on purpose (vb_mtopup returning at once) the lowest falls under a
 second.
+
+--heavy: the idle loop replaced by one changing all over (55 KB/s on
+Hercules, the owner's) and the cursor moved quickly down and back at every
+menu - the card never halted ([vb_nunder]), the music never dry. A
+MEASUREMENT more than a gate: MartyPC's XT-IDE did not halt the card here
+before the every-pass check either (the owner's ST-225 did).
 """
 import argparse
 import os
@@ -55,6 +61,9 @@ def ok(cond, what):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--turns", type=int, default=6)
+    ap.add_argument("--heavy", action="store_true",
+                    help="an idle loop that changes all over (Hercules "
+                    "~50 KB/s), and the cursor moved quickly at each menu")
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
@@ -64,12 +73,32 @@ def main():
         p = P.Project.load(vbp)
         p.set(("enemy", "hp"), 9000)
         p.set(("target", "renditions"), ["cga4", "herc"])
+        if a.heavy:
+            # THE OWNER'S IDLE LOOP, ~55 KB/s on Hercules: a picture moving
+            # all over, every frame
+            iv = os.path.join(tmp, "idle.mp4")
+            subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f",
+                            "lavfi", "-i", "testsrc2=size=320x240:rate=15,"
+                            "noise=alls=18:allf=t", "-t", "3", "-r", "15", iv],
+                           check=True)
+            p.add_source("busy", path=iv)
+            p.set_idle("busy", (0, 12))     # (~40 KB: what the machine
+            for cid, c in list(p.d["clips"].items()):   # holds beside the
+                if c.get("anchors"):                    # rings; the clips
+                    p.set_anchors(cid, [0, 6])          # anchored inside it)
+                    p.set(("clips", cid, "exit"), 0)
         p.save()
         files = []
+        idle_kbs = 0.0
         for k in ("cga4", "herc"):
             f = os.path.join(tmp, B.BUNDLE_NAMES[k])
-            open(f, "wb").write(B.build_project(p, kind=k))
+            data = B.build_project(p, kind=k)
+            open(f, "wb").write(data)
             files.append((B.BUNDLE_NAMES[k], f))
+            if k == "herc":
+                bb = B.Bundle(data)
+                ilen = struct.unpack_from("<I", data, 342)[0]   # (VH_IDLE)
+                idle_kbs = ilen / 1024.0 / (bb.nidle / float(bb.fps))
         vhd = os.path.join(tmp, "c.vhd")
         cmd = [sys.executable, "tools/os88hdd.py", "--template", TEMPLATE,
                "--out", vhd, "--kernel", os88build.at("build/kernel.sys"),
@@ -112,7 +141,16 @@ def main():
                 m.key(k, down=False)
                 until(lambda: True, "a key", guest=0.25, poll=0.0)
             key("Enter")
-            until(lambda: rb("vb_ready") == 1, "the play to start")
+            try:
+                until(lambda: rb("vb_ready") == 1, "the play to start")
+            except os88marty.MartyError:
+                e = rw("vb_err")
+                print("ENGINE SAYS: %r" % (m.read(base + e, 80).split(b"\0")[0]
+                                           if e else None), flush=True)
+                if os.environ.get("VBTS_SHOT"):
+                    w_, h_, d_ = m.fbuf(False)
+                    os88marty.write_png_rgb(os.environ["VBTS_SHOT"], w_, h_, d_)
+                raise
             ok(rb("vb_kind") == 2 and rb("vb_snd") and not rb("vb_mres"),
                "Hercules, a card, and the music STREAMING")
             until(lambda: rb("vb_tplay") == 1, "the title")
@@ -120,12 +158,26 @@ def main():
             for t in range(a.turns):
                 until(lambda: rb("vb_state") == GS_MENU and
                       rb("vb_dirty") == 0, "a menu", guest=240.0)
+                if a.heavy:             # QUICKLY down and back (the
+                    for k in ["ArrowDown"] * 3 + ["ArrowUp"] * 3:   # owner's
+                        m.key(k, up=False)                      # "three down
+                        until(lambda: True, "k", guest=0.04,    # arrow
+                              poll=0.0)                         # presses -
+                        m.key(k, down=False)                    # quickly")
+                        until(lambda: True, "k", guest=0.1, poll=0.0)
+                    until(lambda: True, "settle", guest=3.0, poll=0.0)
                 key("Enter")            # Attack; the enemy's turn after
                 until(lambda: rb("vb_state") != GS_MENU, "the turn",
                       guest=30.0)
             until(lambda: rb("vb_state") == GS_MENU and rb("vb_dirty") == 0,
                   "the last menu", guest=240.0)
             low, under = rw("vb_mlow"), rw("vb_munder")
+            print("     the card halted %d times; the picture waited %d; "
+                  "the idle loop %.1f KB/s" % (
+                      rw("vb_nunder"), rw("vb_stall"), idle_kbs), flush=True)
+            if a.heavy:
+                ok(rw("vb_nunder") == 0, "the card never halted under the "
+                   "busy idle loop (%d)" % rw("vb_nunder"))
             ok(under == 0, "the music never ran dry over %d turns ([vb_munder]"
                " %d)" % (a.turns, under))
             ok(low != 0xFFFF and low > RATE,
