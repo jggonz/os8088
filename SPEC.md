@@ -237503,10 +237503,17 @@ The tables, a record after a record:
 
 Three pieces, the Video Player's own shape (98.3):
 
-- **`vb_hook`, `FSXF_RATE`'s hook at divisor 2,048 (582.6 Hz).** It draws
+- **`vb_hook`, `FSXF_RATE`'s hook at divisor 16,384 (72.8 Hz).** It draws
   the frames that are due out of the clip rings and the resident block, at
-  most two a call, with IF = 1 while it decodes. It keeps the card's ring
-  two to four of the card's blocks ahead, mixing the music (out of its own
+  most two a call, with IF = 1 while it decodes. **The rate was 582.6 Hz
+  (divisor 2,048, the kernel's fastest)**, and on the owner's Hercules
+  battle (75 KB/s clips) the hook's bookkeeping a call - the clock, the
+  frames due, the card fed - and the kernel's IRQ0 under it took as much
+  of the machine as decoding did: on MartyPC's Hercules 5150, 23% and 23%,
+  the music dry 56 times in three turns and the picture waiting 6.9 s. At
+  72.8 Hz, 8% and 30%: the music never dry, the waiting 3 s, all of it in
+  the one clip the XT-IDE cannot feed. A period is 13.7 ms, a fifth of a
+  frame. It keeps the card's ring 4 KB ahead, mixing the music (out of its own
   ring), the clip's sound (out of the clip's ring) and the menu's sound. It
   starts each action at an anchor and each opening on the frame after the
   last. It reads no disk and calls nothing in the kernel.
@@ -237518,15 +237525,19 @@ Three pieces, the Video Player's own shape (98.3):
 
 **The clock is the card.** Frame *n* is due at sample *n* × spf. The
 played position is the ring's consumed count, plus the periods since the
-card's last block × 19 samples, capped below a block and never moving
+card's last block × 151 samples, capped below a block and never moving
 backwards (98.3.1's `vp_adue`). With no card the clock is the PIT's
-periods × 18.9246 samples, kept in 16.16, so the same battle runs silent.
+periods × 151.388 samples, kept in 16.16, so the same battle runs silent.
 
 **The card's block is 512 bytes when the driver offers it**
-(`SND_CAP_EXTBLK`, `SND_OPENF_BLKSH` code 2), and the ring then runs 2 KB
-ahead. Otherwise the block is 2,048 bytes and the ring runs 4 KB ahead. A
-small block makes the consumed count fresh to 46 ms rather than 186, and
-costs 21 block interrupts a second.
+(`SND_CAP_EXTBLK`, `SND_OPENF_BLKSH` code 2), otherwise 2,048, and the
+ring runs **4 KB (0.37 s) ahead either way**. It ran 2 KB ahead with the
+small block, and one hook call's two heavy Hercules frames ran past that:
+the card halted, and the picture with it (its clock), until the UI task
+saw it - the owner's "lose sound, stop playing" (8 halts in eight turns of
+quick keys on the 100% bundle; none at 4 KB). A small block makes the
+consumed count fresh to 46 ms rather than 186, and costs 21 block
+interrupts a second.
 
 **A frame whose record is not yet read is WAITED for** (`[vb_stall]` counts
 the hook's calls that found it so). The frame is not drawn and the clock is

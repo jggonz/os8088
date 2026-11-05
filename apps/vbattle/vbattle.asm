@@ -18,7 +18,7 @@
 ;     mixed into it, and the card is the clock the pictures keep to.
 ;
 ; THREE PIECES, and where each runs (the Video Player's own shape, 98.3):
-;   vb_hook    the FSXF_RATE hook - IRQ0 at 582 Hz, IF=0, 48 bytes of stack.
+;   vb_hook    the FSXF_RATE hook - IRQ0 at 72.8 Hz, IF=0, 48 bytes of stack.
 ;              It draws the frames that are due from memory (the idle loop,
 ;              resident; a clip, as far as it has been read), keeps the
 ;              card's ring topped up, and starts each action at its anchor.
@@ -141,16 +141,24 @@ VB_RMAX     equ 32768           ; vb_read's most in one call
 VB_RL       equ 16384           ; the card's ring, code 2
 VB_RLCODE   equ 2
 VB_LEAD     equ 4096            ; how far the ring runs ahead of the card:
-                                ; four of its blocks, at most - two when the
-                                ; driver gives the stream 512-byte blocks
+                                ; 0.37 s, two blocks of 2,048 or eight of
+                                ; 512
 VB_BLKCODE  equ 2               ; ...which it does with SND_CAP_EXTBLK: 2,048
                                 ; >> 2 (SND_OPENF_BLKSH, SPEC.md 34.5.3)
 VB_KQUIET   equ 6               ; ticks after a key before a clip is read
 VB_FORGIVE  equ 11025           ; a picture this far behind its sound is let
                                 ; go late (a second at 11 kHz)
-VB_DIV      equ 2048            ; the hook's PIT divisor: 582.6 Hz
-VB_SPP_LO   equ 0xECB0          ; 11,025 samples / 582.6 periods in 16.16:
-VB_SPP_HI   equ 0x0012          ; 18.9246 (the clock with no card)
+VB_DIV      equ 16384           ; the hook's PIT divisor: 72.8 Hz. It was
+                                ; 2,048 (582.6 Hz), and on the owner's
+                                ; Hercules battle the hook's own bookkeeping
+                                ; a call - the clock, the frames due, the
+                                ; card fed - and the kernel's IRQ0 under it
+                                ; took as much of the machine as decoding
+                                ; did: 13.7 ms is a fifth of a frame and a
+                                ; fourteenth of the card's lead (125.3)
+VB_SPP_LO   equ 0x635C          ; 11,025 samples / 72.8 periods in 16.16:
+VB_SPP_HI   equ 0x0097          ; 151.388 (the clock with no card)
+VB_SPPI     equ 151             ; ...whole: the clock between card blocks
 
 ; a clip ring (vb_rg0, vb_rg1). A place in it is a SEGMENT and an offset
 ; of 0..15 (vb_cadv): a ring is as big as the machine allows, so a 16-bit
@@ -1944,11 +1952,11 @@ vb_hook:
     add [vb_pers], ax
 .est:
     mov ax, [vb_pers]
-    cmp ax, [vb_pcap]               ; less than a block's periods: 100 for
-    jbe .m                          ; 2,048 bytes, 26 for 512
+    cmp ax, [vb_pcap]               ; less than a block's periods: 12 for
+    jbe .m                          ; 2,048 bytes, 3 for 512
     mov ax, [vb_pcap]
 .m:
-    mov cx, 19
+    mov cx, VB_SPPI
     mul cx
     add ax, [vb_cons32]
     mov dx, [vb_cons32+2]
@@ -2907,13 +2915,16 @@ vb_snd_open:
     jz .out
     mov word [vb_blk], 2048         ; the card's block, and what follows
     mov word [vb_lead], VB_LEAD     ; from it: the lead, and the clock's cap
-    mov word [vb_pcap], 100
+    mov word [vb_pcap], 12
     mov byte [vb_oflag], SND_OPENF_RING + SND_OPENF_EXT + (VB_RLCODE << SND_OPENF_RLSH)
     test ax, SND_CAP_EXTBLK
     jz .blk
     mov word [vb_blk], 2048 >> VB_BLKCODE
-    mov word [vb_lead], VB_LEAD / 2
-    mov word [vb_pcap], 26
+    mov word [vb_pcap], 3           ; (the lead the same 4 KB: two blocks
+                                    ; of 2 KB ahead were 0.19 s, and one
+                                    ; hook call's two heavy Hercules frames
+                                    ; ran past them - the card halted, the
+                                    ; picture with it)
     or byte [vb_oflag], VB_BLKCODE << SND_OPENF_BLKSH
 .blk:
     mov ax, [vb_lead]               ; an action's sound must start ahead of
