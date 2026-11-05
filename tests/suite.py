@@ -4699,7 +4699,7 @@ SOAK = [
         "out. Host-only",
         wants=("build/arcade/invcode.rcp", "build/arcade/invcode.bin",
                "build/arcade-rom/INVADERS.ROM")),
-    Row("arcbuilt", "soak", py("tests/arcbuilt.py"), 25.0,
+    Row("arcbuilt", "soak", py("tests/arcbuilt.py"), 33.0,
         "ARCADE builds on the guest what the host tools build (docs/plans/"
         "ARCADE-RELEASE-PLAN.md 2.4): Q*bert and Pac-Man picked on MartyPC's VGA "
         "XT from their .ROM files, and the parts pm_build and qb_build made - "

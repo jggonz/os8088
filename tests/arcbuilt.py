@@ -98,7 +98,9 @@ def main():
                     bad.append('%s: %s differs from the host\'s' % (g, os.path.basename(host)))
             m.run()
             m.key('Escape')
-            os88marty.guest_sleep(m, 1)
+            os88marty.guest_sleep(m, 20)    # (a first leave takes the game's
+                                            #   picture and writes it: ARCADE-
+                                            #   SPEC 11.4, seconds on an 8088)
     for b in bad:
         print('arcbuilt: FAIL - ' + b)
     if bad:

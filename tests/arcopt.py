@@ -102,9 +102,12 @@ def main():
         m.key('KeyP')
         sleep(1)
         m.key('Escape')                 # (Esc from a hold: back to the list)
-        sleep(6)
-        d = dat()
-        hs = d[HSV:HSV + 2] if d and len(d) == DATSZ else b''
+        for _ in range(30):             # (the picture first, then ARCADE.DAT:
+            sleep(1)                    #   seconds of floppy on an 8088)
+            d = dat()
+            hs = d[HSV:HSV + 2] if d and len(d) == DATSZ else b''
+            if hs == b'\x23\x01':
+                break
         print('arcopt: left from a hold: best kept as %s' % hs.hex())
         if hs != b'\x23\x01':
             bad.append('the best was not kept in ARCADE.DAT (%s)' % hs.hex())

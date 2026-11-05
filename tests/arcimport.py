@@ -210,7 +210,8 @@ def main():
                 continue
             print('arcimport: %s runs' % g)
             m.key('Escape')
-            os88marty.guest_sleep(m, 1)
+            os88marty.guest_sleep(m, 20)    # (a first leave takes the game's
+                                            #   picture and writes it: 11.4)
         # ARCADE again, from its own folder: the .ROM files are in ROMS, so a
         # pick finds them only through ARCADE.DAT's places
         ui.close(win)
