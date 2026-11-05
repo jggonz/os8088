@@ -31,19 +31,52 @@
 ; =============================================================================
 
 %include "os88api.inc"
-    OS88_HEADER 'Video Battle', vb_entry, 3   ; icon, and .VBT (SPEC.md 54.6)
+    OS88_HEADER 'Video Battle', vb_entry, 0x23    ; icon, .VBT (SPEC.md
+                                    ; 54.6) and its glyph (54.3.2)
     OS88_ICON16
-    ; a sword over a shield: one solid shape on every adapter (SPEC.md 39.4)
-    dw 0x0000, 0x0003, 0x0007, 0x000E, 0x001C, 0x3FB8, 0x7FF0, 0x7FE0
-    dw 0x7FC0, 0x7FE0, 0x3FF0, 0x3FB8, 0x1F1C, 0x0E0E, 0x0407, 0x0003
-    dw 0x0007, 0x000F, 0x001F, 0x003F, 0x7FFE, 0xFFFC, 0xFFF8, 0xFFF0
-    dw 0xFFF0, 0xFFF8, 0xFFFC, 0x7FFE, 0x3FBF, 0x1F1F, 0x0E0F, 0x0407
+    ; A SWORD ON A FILM FRAME - the battle and the video, on a white card with
+    ; sprocket holes down both sides (the owner: "I'm not sure what that is
+    ; supposed to be" of the sword over a shield it replaced). 16 mask rows
+    ; (the card), then 16 data rows (the black below)
+    ;   ..############..
+    ;   .#............#.
+    ;   #.#....##....#.#
+    ;   #.....####.....#
+    ;   #.#...#..#...#.#
+    ;   #.....#..#.....#
+    ;   #.#...#..#...#.#
+    ;   #.....#..#.....#
+    ;   #.#...#..#...#.#
+    ;   #..##########..#
+    ;   #.#....##....#.#
+    ;   #......##......#
+    ;   #.#...####...#.#
+    ;   #.....####.....#
+    ;   .#............#.
+    ;   ..############..
+    dw 0x3FFC, 0x7FFE, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF
+    dw 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0xFFFF, 0x7FFE, 0x3FFC
+    dw 0x3FFC, 0x4002, 0xA185, 0x83C1, 0xA245, 0x8241, 0xA245, 0x8241
+    dw 0xA245, 0x9FF9, 0xA185, 0x8181, 0xA3C5, 0x83C1, 0x4002, 0x3FFC
     OS88_ICON16_END
 
     OS88_ASSOC16                    ; SPEC.md 54.6: double-click a .VBT
     db 1
     OS88_ASSOC_EXT 'VBT'
     OS88_ASSOC16_END
+
+; --- what a .VBT wears (SPEC.md 54.3.2): the card reduced by majority would
+; be a grey blob, so a document wears the sword alone, black on its page
+    OS88_DOCGLYPH8
+    db 0x18                         ; ...##...
+    db 0x18                         ; ...##...
+    db 0x18                         ; ...##...
+    db 0x18                         ; ...##...
+    db 0x7E                         ; .######.
+    db 0x18                         ; ...##...
+    db 0x3C                         ; ..####..
+    db 0x00                         ; ........
+    OS88_DOCGLYPH8_END
 
 ; --- the bundle's layout (SPEC.md 125.2; tools/os88vbt.py is the writer) ------
 VH_MAGIC    equ 0               ; 'VBT1'
