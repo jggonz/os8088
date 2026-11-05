@@ -80,23 +80,36 @@ RT_SPIN         equ 0xFFFF      ; every wait: 65,535 reads of a PCI register -
 ; -----------------------------------------------------------------------------
 ; the dword door. DX = the port. Every other register kept.
 ; rt_outd: BX:AX -> the dword.   rt_ind: the dword -> BX:AX.
+;
+; **cli ACROSS THE TOP HALF**, vmmouse.asm's vmm_atom argument: on a real-mode
+; kernel (kern_big, kern_emu, and kern_mega's boot attach) sch_switch saves
+; 16-bit registers only, so a tick between the `pop eax` and the `out` could
+; run a task or a BIOS handler that spends EAX's top half - XMEM.DRV's movers,
+; SeaBIOS's C - and the card would be handed some other dword. Two
+; instructions of latency.
 ; -----------------------------------------------------------------------------
 rt_outd:
+    pushf
+    cli
     push bx
     push ax
     db 0x66
     pop ax                      ; pop eax: AX the low word, BX's the high
     db 0x66
     out dx, ax                  ; out dx, eax
+    popf
     ret
 
 rt_ind:
+    pushf
+    cli
     db 0x66
     in ax, dx                   ; in eax, dx
     db 0x66
     push ax                     ; push eax
     pop ax
     pop bx
+    popf
     ret
 
 ; -----------------------------------------------------------------------------

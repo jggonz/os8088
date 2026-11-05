@@ -393,17 +393,18 @@ def main():
        "row silently left out of it")
     api = os.path.join(ROOT, "apps/os88api.inc")
     asrc = open(api, errors="replace").read()
-    # The rows only kern_mega has (SPEC.md 125.5), and a ceiling PER KERNEL
-    # (the owner's decision, 2026-11-04): DOS.O88 is assembled for kern_mega
-    # with -DDOS_MEGA and quotes DRVM_CEIL_NET_MEGA, every other DOS.O88 the
-    # plain DRVM_CEIL_NET - so each is held to the rows ITS kernel has.
-    # ETHER.DRV and PCIETHER.DRV are ALTERNATIVES in one publication slot
-    # (drv_load_at refuses whichever attaches second, DRVE_CLASS), so on
-    # kern_mega DRVC_NET's ceiling is the LARGER of the two, not their sum.
+    # The row kern_small does not have (SPEC.md 125.5: PCIETHER.DRV is on
+    # every big build - kern_big, kern_emu and kern_mega), and so a ceiling
+    # PER KERNEL: DRVM_CEIL_NET_PCI is what DOS.O88 quotes (every kernel DOS
+    # runs on has the row), DRVM_CEIL_NET is kern_small's, held to the rows
+    # that kernel has. ETHER.DRV and PCIETHER.DRV are ALTERNATIVES in one
+    # publication slot (drv_load_at refuses whichever attaches second,
+    # DRVE_CLASS), so with the row DRVC_NET's ceiling is the LARGER of the
+    # two, not their sum.
     mega_only = {"DRVM_PCIETH"}
     for want_cls, width, ceil, mega in (("DRVC_DISK", 2, "DRVM_CEIL_DISK", False),
                                         ("DRVC_NET", 2, "DRVM_CEIL_NET", False),
-                                        ("DRVC_NET", 2, "DRVM_CEIL_NET_MEGA", True)):
+                                        ("DRVC_NET", 2, "DRVM_CEIL_NET_PCI", True)):
         total = 0
         for (title, memk, _img, _drv), cls in zip(ROWS, klass):
             if cls != want_cls or (memk in mega_only and not mega):

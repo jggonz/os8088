@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-"""PCIETHER.DRV: an RTL8139 on kern_mega, a stack, and the browser over it
-(SPEC.md 125, docs/plans/PCIETHER-PLAN.md S8).
+"""PCIETHER.DRV: an RTL8139 on kern_mega or kern_big, a stack, and the
+browser over it (SPEC.md 125, docs/plans/PCIETHER-PLAN.md S8).
 
     make mega && make pciethertest browsertest && python3 tests/pciether.py
+    make pcibigtest browsertest && python3 tests/pciether.py --big
+
+**--big IS THE SAME ROW ON THE REAL-MODE KERNEL** (SPEC.md 125.1 put the row on
+every big build): build/pcibigtest.img, the shipped kern_big, a segment where
+kern_mega has a selector, and nothing else changed - the five assertions below
+are the same five.
 
 **THIS ONE IS QEMU'S, AND THE REASONS ARE ETHERNET.PY'S PLUS ONE.** MartyPC
 has no network card of any kind; Bochs has no RTL8139 (tests/brmega.py gives
@@ -74,8 +80,12 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.join(_ROOT, "tools"))
 sys.path.insert(0, os.path.join(_ROOT, "tests"))
 # WHICH KERNEL THE SYMBOL MAP DESCRIBES - before os88sym is first imported
-# (tests/brmega.py's line). kern_mega's, not kern_big's: build/megak/
-os.environ["OS88_BUILD"] = os.path.join(_ROOT, "build", "megak")
+# (tests/brmega.py's line). kern_mega's (build/megak/), or with --big the
+# shipped kern_big's (build/)
+BIG = "--big" in sys.argv[1:]
+KNAME = "kern_big" if BIG else "kern_mega"
+if not BIG:
+    os.environ["OS88_BUILD"] = os.path.join(_ROOT, "build", "megak")
 
 import ethernet as eth                                   # noqa: E402
 import dispcp                                            # noqa: E402
@@ -91,7 +101,8 @@ import os88sym                                           # noqa: E402
 # boot2.asm's BLOB_LIFT guard before any address was had. $OS88_MEGA is
 # NOT the way here: it also tells os88qemu the machine is Bochs, and this
 # row's machine is QEMU's
-os88sym.default_defines("KERN_BIG", "KERN_MEGA")
+if not BIG:
+    os88sym.default_defines("KERN_BIG", "KERN_MEGA")
 S = os88sym.linear
 say = eth.say
 u16 = eth.u16
@@ -187,16 +198,18 @@ def main():
     # B: IS THE BROWSER'S SCRATCH DISK (`make browsertest`), 1.44MB because
     # the system disk is. A: is `make pciethertest`'s, copied by make_test so
     # a Setup-window ETHER.CFG written by a run never reaches the built image
-    os88fixture.need("build/pciethertest.img", "build/brtest.img",
-                     "build/megak/kernel.map", "build/pciether.bin",
+    disk, kmap, ksys, how = (
+        ("build/pcibigtest.img", "build/kernel.map", "build/kernel.sys",
+         "make pcibigtest") if BIG else
+        ("build/pciethertest.img", "build/megak/kernel.map", "build/mega.img",
+         "make pciethertest"))
+    os88fixture.need(disk, "build/brtest.img", kmap, "build/pciether.bin",
                      "build/browser.map", "build/pciether.drv",
-                     "build/mega.img", "build/browser.o88")
+                     ksys, "build/browser.o88")
     # A DISK OLDER THAN WHAT IT CARRIES tests the previous binary and reports
     # on this one (tests/ethernet.py's `stale` check, one disk further)
-    for img, src, how in (("build/pciethertest.img", "build/pciether.drv",
-                           "make pciethertest"),
-                          ("build/pciethertest.img", "build/mega.img",
-                           "make pciethertest"),
+    for img, src, how in ((disk, "build/pciether.drv", how),
+                          (disk, ksys, how),
                           ("build/brtest.img", "build/browser.o88",
                            "make browsertest")):
         if eth.stale(eth.os88build.at(img), eth.os88build.at(src)):
@@ -223,9 +236,9 @@ def main():
     # (docs/plans/PCIETHER-PLAN.md, open). The gate's machine is the card and
     # nothing else, so "PCIETHER.DRV is the only driver up" stays an assertion
     os88qemu.make_test("PCIETHER=1", "NOCARD=1",
-                       "TESTIMG=build/pciethertest.img",
+                       "TESTIMG=" + disk,
                        "TESTAPPS=build/brtest.img")
-    m = MQemu()
+    m = eth.Qemu() if BIG else MQemu()
     try:
         # --- 1: a card, and an address ------------------------------------
         # THE ROW IS FOUND BY ITS FILE NAME, not by being the last one live:
@@ -235,9 +248,9 @@ def main():
         ksyms = os88sym.syms()
         if "drv_f_pcieth" not in ksyms:
             m.quit()
-            sys.exit("pciether: build/megak's kernel has no drv_f_pcieth - "
-                     "kern_mega without PCIETHER.DRV's drv_tab row (SPEC.md "
-                     "125.5)")
+            sys.exit("pciether: %s's kernel has no drv_f_pcieth - %s without "
+                     "PCIETHER.DRV's drv_tab row (SPEC.md 125.5)"
+                     % (kmap, KNAME))
         # the row's layout is the kernel's own (kernel/driver.inc's DRVR_*
         # equates), never a mirror of it in this file
         eq = os88sym.equates()
@@ -249,7 +262,7 @@ def main():
         # drv_tab is zeros and no row would name anything
         if not os88qemu.kernel_up(m, S, secs=180):
             m.quit()
-            sys.exit("pciether: kern_mega never reached the desktop")
+            sys.exit("pciether: %s never reached the desktop" % KNAME)
         raw = m.read(S("drv_tab"), nrows * DRVR_SZ)
         hits = [i for i in range(nrows)
                 if u16(raw, i * DRVR_SZ + DRVR_FILE) == ksyms["drv_f_pcieth"]]
@@ -407,7 +420,8 @@ def main():
 
     for f in fails:
         say("FAIL: " + f)
-    say("pciether: %s" % ("FAILED" if fails else "ok"))
+    say("pciether%s: %s" % (" --big" if BIG else "",
+                             "FAILED" if fails else "ok"))
     return 1 if fails else 0
 
 

@@ -1248,6 +1248,21 @@ W16LIB w16_segld
     sub bx, W16F_ARGS               ; ES:BX -> the frame
     push es
     push bx
+%ifdef PKG_MEGA
+    xor ax, ax                      ; a #NP (w16_npent): the segment its
+    xchg ax, [w16_npsel]            ;   selector names, and the frame already
+    or ax, ax                       ;   returns to the fault (124.26.12)
+    jz .thunk
+    mov bx, w16l_npload             ; XSEC-OK: part 5's, w16_ldcall calls it there
+    ICALL w16_ldcall
+    pop bx
+    pop es
+    jc .fail
+    mov ax, [w16_thax]
+    mov dx, [w16_thdx]
+    ret
+.thunk:
+%endif
     les di, [es:bx + W16F_IP]       ; ES:DI -> the thunk + 5
     mov al, [es:di]                 ; its segment
     xor ah, ah
@@ -1258,16 +1273,8 @@ W16LIB w16_segld
     pop bx
     pop es
     jc .fail
-%ifdef PKG_MEGA
-    push ax                         ; its code selector (SPEC.md 124.31.4)
-    push cx
-    mov ax, dx
-    mov cl, 1
-    ICALL w16_ssel
-    mov dx, ax
-    pop cx
-    pop ax
-%endif
+                                    ; (DX is its code selector on the arm:
+                                    ;   w16l_segin, 124.31.4, 124.26.12)
     mov [es:bx + W16F_IP], si
     mov [es:bx + W16F_CS], dx
     mov ax, [w16_thax]

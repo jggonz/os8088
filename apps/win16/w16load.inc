@@ -61,7 +61,13 @@ W16CLF_DISC equ 1               ; discardable (124.26.1)
 W16CLF_KEEP equ 2               ; ...but named by its number: never discarded
 W16CLF_NEW  equ 4               ; ...its block taken at a launch, not yet filled
 W16CLF_HOLD equ 8               ; ...loaded by a thunk, held while the segments
-                                ;   its records kept are read (124.26.14)
+                                ;   its records kept are read (124.26.14; the
+                                ;   real-mode arm only)
+W16CLF_STAB equ 16              ; ...named by its number, on the arm: ONE selector
+                                ;   for the module's life, not present while
+                                ;   it is discarded (SPEC.md 124.26.12). Its own
+                                ;   bit, not HOLD's: the arms are disjoint today,
+                                ;   but a shared value is a trap for the next one
 W16TK_SIZE equ 8                ; a thunk (124.26.2): jmp/call far, the segment,
 W16TK_SEG  equ 5                ;   the entry's offset
 W16TK_OFF  equ 6
@@ -1599,6 +1605,13 @@ section .w16ld
 ; the tables -> AX = SEG_SUBC's code half for a code segment, a data selector
 ; for a data one, each reaching [w16_slen + BX]. Keeps every other register.
 w16l_ssel:
+    push dx
+    mov dx, bx                      ; its number: a stable selector first
+    shr dx, 1                       ;   (SPEC.md 124.26.12)
+    inc dx
+    call w16l_stabget               ; CF=0: AX = it
+    pop dx
+    jnc .stab
     push cx
     push si
     mov si, [w16_ne]
@@ -1615,6 +1628,7 @@ w16l_ssel:
     ICALL w16_ssel
     pop si
     pop cx
+.stab:
     ret
 
 ; w16l_thkcs - DX = the thunks' paragraph -> DX = the module block's code
@@ -3738,7 +3752,11 @@ w16l_keepck:
     push si
     push es
     call w16l_lent
+%ifdef PKG_MEGA
+    or byte [es:si + W16CL_FL], W16CLF_STAB ; (a stable selector, 124.26.12)
+%else
     or byte [es:si + W16CL_FL], W16CLF_KEEP
+%endif
     pop es
     pop si
 .out:
@@ -3860,6 +3878,10 @@ w16l_cmake:
     shl cx, 1
     add cx, dx
     shl cx, 1                       ; * W16CL_SIZE
+%ifdef PKG_MEGA
+    add cx, dx                      ; ...and a selector cell a segment
+    add cx, dx                      ;   (SPEC.md 124.26.12)
+%endif
     add ax, cx
     add ax, 15
     jc .big
@@ -4060,11 +4082,17 @@ w16l_thkset:
     push es
 %ifdef PKG_MEGA
     or dx, dx                       ; the segment's code selector, which each
-    jz .sel                         ;   thunk's jmp far names (124.31.4)
-    push ax
+    jz .sel                         ;   thunk's jmp far names (124.31.4): its
+    push ax                         ;   stable one when it has one (124.26.12)
+    push dx
+    mov dx, ax
+    call w16l_stabget               ; AX = the selector (CF=0)
+    pop dx
+    jnc .have
     mov ax, dx
     mov cl, 1
     ICALL w16_ssel
+.have:
     mov dx, ax
     pop ax
 .sel:
@@ -4469,6 +4497,12 @@ w16l_segalloc:
     push dx
     xor dx, dx
     mov cl, W16G_HIGH
+%ifdef PKG_MEGA
+    test byte [w16_nplod], 2        ; WIN16's own stack faulted: no code goes
+    jz .hi                          ;   to make this room (124.26.12)
+    or cl, W16G_NOCODE
+.hi:
+%endif
     ICALL w16_gnew                  ; AX = the handle: its segment, as DX
     pop cx                          ; CX = its number, CH its owner's
     or ax, ax
@@ -4614,6 +4648,19 @@ w16l_segfill:
     mov word [w16_pone], 0
     mov ax, bp                      ; its thunks, at it
     mov dx, [w16_sbase + bx]
+%ifdef PKG_MEGA
+    push dx                         ; its stable selector aimed at it and
+    push cx                         ;   present (124.26.12)
+    mov cx, [w16_slen + bx]
+    mov ax, dx
+    mov dx, bp
+    call w16l_stabaim
+    mov cx, 1
+    call w16l_stabtype
+    pop cx
+    pop dx
+    mov ax, bp
+%endif
     call w16l_thkset
     mov dx, bp                      ; filled: it may go now
     call w16l_lent
@@ -4664,6 +4711,9 @@ w16l_segsup:
     jne .some
     jmp .ok
 .some:
+%ifdef PKG_MEGA
+    call w16l_stabmk                ; their stable selectors (124.26.12)
+%endif
     mov cl, 1                       ; CL = 1: every one (the census)
 %ifndef W16_CENSUS_ALWAYS
     cmp byte [w16_cpu186], 0
@@ -4745,6 +4795,372 @@ w16l_segsup:
     stc
     jmp short .out
 
+%ifdef PKG_MEGA
+; =============================================================================
+; STABLE SELECTORS (SPEC.md 124.26.12). A discardable segment the program or a
+; library names by its number has ONE selector for the module's life, a handle
+; descriptor in a cell after the live table: not present while the segment is
+; discarded, present over its block while it is loaded.
+; =============================================================================
+
+; w16l_scell - DX = a segment's number: ES:SI -> its selector cell; CF=1 none.
+; Keeps the rest.
+w16l_scell:
+    call w16l_lent
+    jc .ret
+    push ax
+    mov si, [w16_cnseg]             ; the cells follow the live table
+    mov ax, si
+    shl si, 1
+    add si, ax
+    shl si, 1                       ; * W16CL_SIZE
+    mov ax, dx
+    dec ax
+    shl ax, 1
+    add si, ax
+    pop ax
+    clc
+.ret:
+    ret
+
+; w16l_stabget - DX = a segment's number: CF=0 AX = its stable selector; CF=1
+; it has none (AX kept). Keeps the rest.
+w16l_stabget:
+    push es
+    push si
+    call w16l_lent
+    jc .no
+    test byte [es:si + W16CL_FL], W16CLF_STAB
+    jz .no
+    call w16l_scell
+    mov si, [es:si]
+    or si, si
+    jz .no
+    mov ax, si
+    pop si
+    pop es
+    clc
+    ret
+.no:
+    pop si
+    pop es
+    stc
+    ret
+
+; w16l_stabmk - every segment the check pass marked STAB: its handle
+; descriptor made over the module block, limit 0, not present. One that cannot
+; be had is KEPT instead, loaded at launch (the arm degrades to 124.26.11).
+; Keeps all.
+w16l_stabmk:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push es
+    mov dx, 1
+.n:
+    call w16l_lent
+    jc .out
+    test byte [es:si + W16CL_FL], W16CLF_STAB
+    jz .next
+    call w16l_scell
+    cmp word [es:si], 0
+    jne .next
+    push es
+    push si
+    push dx
+    mov ax, [w16_cmb]
+    ICALL w16_vfind                 ; SI = the claim's row, DX = paragraphs in
+    jc .bad
+    mov ax, dx
+    mov si, [si + W16V_SEL]
+    xor dx, dx
+    mov cx, 1                       ; limit 0
+    mov bl, SEG_HND
+    call OSAPI_SEG                  ; DX = the handle descriptor
+    jc .bad
+    mov cx, 2                       ; code, not present
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
+    mov ax, dx
+    pop dx
+    pop si
+    pop es
+    mov [es:si], ax
+    jmp short .next
+.bad:
+    pop dx
+    pop si
+    pop es
+    call w16l_lent
+    and byte [es:si + W16CL_FL], ~W16CLF_STAB & 0xFF
+    or byte [es:si + W16CL_FL], W16CLF_KEEP
+.next:
+    inc dx
+    jmp short .n
+.out:
+    pop es
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_stabaim - DX = a segment's number, AX = a virtual paragraph (0: the
+; module block), CX = bytes (0 = 64 KB): its stable selector re-aimed there.
+; CF=0 also when it has none. Keeps all.
+w16l_stabaim:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov di, ax
+    call w16l_stabget
+    jc .ok
+    mov bx, ax                      ; BX = the selector
+    mov ax, di
+    or ax, ax
+    jnz .blk
+    mov ax, [w16_cmb]
+.blk:
+    ICALL w16_vfind                 ; keeps CX
+    jc .ret
+    mov ax, dx
+    mov si, [si + W16V_SEL]
+    mov dx, bx
+    mov bl, SEG_HND
+    call OSAPI_SEG
+    jmp short .ret
+.ok:
+    clc
+.ret:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_stabtype - DX = a segment's number, CX = 1 present / 2 not: its stable
+; selector's type set (SEG_TYPE). Keeps all.
+w16l_stabtype:
+    push ax
+    push bx
+    push dx
+    call w16l_stabget
+    jc .ok
+    mov dx, ax
+    mov bl, SEG_TYPE
+    call OSAPI_SEG
+    jmp short .ret
+.ok:
+    clc
+.ret:
+    pop dx
+    pop bx
+    pop ax
+    ret
+
+; w16l_park - DX = a loaded segment's number: not present first, then off its
+; block onto the module block, so an arena's free cannot take the descriptor.
+; Keeps all.
+w16l_park:
+    push cx
+    push ax
+    mov cx, 2
+    call w16l_stabtype
+    xor ax, ax
+    mov cx, 1
+    call w16l_stabaim
+    pop ax
+    pop cx
+    ret
+
+; w16l_stabfree - the module in place: every descriptor in its cells given
+; back (the module's end). Keeps all.
+w16l_stabfree:
+    push ax
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov dx, 1
+.n:
+    call w16l_scell
+    jc .out
+    mov di, dx
+    xor dx, dx
+    xchg dx, [es:si]
+    or dx, dx
+    jz .skip
+    xor si, si
+    mov bl, SEG_HND
+    call OSAPI_SEG
+.skip:
+    mov dx, di
+    inc dx
+    jmp short .n
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    pop ax
+    ret
+
+; w16l_csel - ES:DI = a live entry of the module in place (loaded): AX = the
+; code selector a stack names it by. Keeps the rest.
+w16l_csel:
+    push dx
+    push si
+    mov ax, di
+    xor dx, dx
+    mov si, W16CL_SIZE
+    div si
+    inc ax
+    mov dx, ax                      ; DX = its number
+    call w16l_stabget
+    jnc .out
+    mov ax, [es:di + W16CL_BASE]
+    push cx
+    mov cl, 1
+    ICALL w16_ssel
+    pop cx
+.out:
+    pop si
+    pop dx
+    ret
+
+; w16l_dxsel - w16l_segin1's answer in DX = a paragraph, AX = its number (CF
+; as it left): DX = the code selector. Keeps all else.
+w16l_dxsel:
+    jc .r
+    push ax
+    xchg ax, dx
+    call w16l_stabget
+    jnc .got
+    push cx
+    mov cl, 1
+    ICALL w16_ssel
+    pop cx
+.got:
+    mov dx, ax
+    pop ax
+    clc
+.r:
+    ret
+
+; w16l_npfind - DX = a not-present selector (the error code's): AX = the number
+; of the segment it is the stable selector of, BX = 0 the program's / a
+; library's record; CF=1 none. Keeps the rest.
+w16l_npfind:
+    push cx
+    push si
+    push es
+    and dx, 0xFFFC
+    xor bx, bx
+.mod:
+    call w16l_cdx
+    cmp word [w16_cmb], 0
+    je .next
+    W16SEG es, [w16_clive]
+    mov cx, [w16_cnseg]
+    mov si, cx
+    shl si, 1
+    add si, cx
+    shl si, 1                       ; the first cell
+.c:
+    mov ax, [es:si]
+    and ax, 0xFFFC
+    cmp ax, dx
+    je .found
+    add si, 2
+    loop .c
+.next:
+    call w16l_cdx
+    call w16l_nextmod
+    jnc .mod
+    stc
+    jmp short .out
+.found:
+    mov ax, [w16_cnseg]
+    sub ax, cx
+    inc ax
+    call w16l_cdx
+    clc
+.out:
+    pop es
+    pop si
+    pop cx
+    ret
+
+; w16l_npload - AX = the not-present selector a #NP named: its segment loaded
+; (SPEC.md 124.26.12), the program's or a library's. CF=1 not, the lines
+; written. [w16_nplod] is set for its length. Keeps all but AX.
+w16l_npload:
+    push bx
+    push dx
+    push si
+    push di
+    test byte [w16_nplod], 1        ; one at a time: a second is refused
+    jnz .bad                        ;   (the owner's loading flag)
+    or byte [w16_nplod], 1
+    mov dx, ax
+    pushf                           ; (one cli window: an IRQ between the two
+    cli                             ;   OCW3s would read the ISR for its IRR)
+    mov al, 0x0B                    ; the PIC's in-service register: a hardware
+    out 0x20, al                    ;   interrupt handler is running, and no
+    in al, 0x20                     ;   program's code runs in one, so this is
+    mov ah, al                      ;   not the program's fault to repair
+    mov al, 0x0A                    ; (its IRR again, as everyone else reads it)
+    out 0x20, al
+    popf
+    or ah, ah
+    jnz .bad
+    call w16l_npfind                ; AX = its number, BX = whose
+    jc .bad
+    call w16l_segbx                 ; (DX is spent)
+    jmp short .out
+.bad:
+    mov si, w16_r_code
+    mov di, w16_l1
+    ICALL w16_strcpy
+    mov si, w16_name
+    mov di, w16_l2
+    ICALL w16_strcpy
+    stc
+.out:
+    pushf                           ; (the answer's carry: the `and` clears it)
+    and byte [w16_nplod], ~1 & 0xFF
+    popf
+    pop di
+    pop si
+    pop dx
+    pop bx
+    ret
+
+; w16l_nplow - w16l_npload for a #NP on WIN16's own stack (w16_npent's second
+; arm): no code is discarded to make the room. Keeps all but AX.
+w16l_nplow:
+    or byte [w16_nplod], 2
+    call w16l_npload
+    pushf
+    and byte [w16_nplod], ~2 & 0xFF
+    popf
+    ret
+%endif
+
 ; -----------------------------------------------------------------------------
 ; w16l_segin - discardable segment AX of the module whose thunks are at code
 ; segment DX loaded while the program runs (SPEC.md 124.26.3), for
@@ -4756,10 +5172,21 @@ w16l_segsup:
 w16l_segin:
     push bx
     call w16l_whose                 ; BX = 0 the program's, else a record
+    call w16l_segbx
+    pop bx
+    ret
+
+; w16l_segbx - w16l_segin's load once the module is known: BX = 0 the
+; program's, else a library's record, AX = the segment's number
+w16l_segbx:
     or bx, bx
     jnz .lib
-    pop bx
+%ifdef PKG_MEGA
+    call w16l_segin1
+    jmp w16l_dxsel                  ; DX = its code selector, not its paragraph
+%else
     jmp w16l_segin1
+%endif
 .lib:
     push cx
     mov cx, [w16_dir]               ; the program's folder: the library's
@@ -4769,6 +5196,9 @@ w16l_segin:
     call w16l_push
     call w16l_libin
     call w16l_segin1
+%ifdef PKG_MEGA
+    call w16l_dxsel                 ; (its six words are in place)
+%endif
     pushf
     call w16l_pop
     popf
@@ -4777,7 +5207,6 @@ w16l_segin:
     pop cx
     mov [w16_dir], cx
     pop cx
-    pop bx
     ret
 
 ; w16l_whose - DX = the code segment a thunk was called through -> BX = 0
@@ -4938,6 +5367,10 @@ w16l_segin1:
     cmp cx, [w16_cbud]
     jbe .fits
 .over:
+%ifdef PKG_MEGA
+    test byte [w16_nplod], 2
+    jnz .fits
+%endif
     mov dx, 0xFFFF
     call w16l_codeold
     jnc .budget
@@ -5042,6 +5475,12 @@ w16l_segdrop:
     call w16l_thkset
     pop dx
     call w16l_lent
+%ifdef PKG_MEGA
+    cmp word [es:si + W16CL_BASE], 0
+    je .nopark
+    call w16l_park                  ; not present, off its block (124.26.12)
+.nopark:
+%endif
     xor ax, ax
     xchg ax, [es:si + W16CL_BASE]
     or ax, ax
@@ -5089,6 +5528,9 @@ w16l_cfreeall:
 .next:
     dec dx
     jnz .seg
+%ifdef PKG_MEGA
+    call w16l_stabfree              ; and the descriptors (124.26.12)
+%endif
     xor dx, dx
     xchg dx, [w16_cmb]
     ICALL w16_kfree
@@ -5173,11 +5615,8 @@ w16l_codeold:
     call w16l_ulenset               ; what a return offset into it can be
     mov ax, [es:di + W16CL_BASE]
 %ifdef PKG_MEGA
-    push cx                         ; the stack names its code selector
-    mov cl, 1                       ;   (124.31.4)
-    ICALL w16_ssel
-    pop cx
-%endif
+    call w16l_csel                  ; the stack names its code selector
+%endif                              ;   (124.31.4), its stable one (124.26.12)
     call w16l_inuse
     je .used
     or bx, bx                       ; a library's: any task's stack
@@ -5421,6 +5860,26 @@ w16l_inuse:
     push es
     cmp word [w16_stop], 0
     je .out
+%ifdef PKG_MEGA
+    cmp ax, [w16_res]               ; the program's ES and DS as the gate
+    je .out                         ;   banked them: a 286 keeps their bases,
+    mov es, [w16_pss]               ;   so a discard under one reads freed
+    mov di, [w16_psp_]              ;   memory silently (124.26.12)
+    cmp ax, [es:di + W16F_DS]
+    je .out
+    push ss                         ; ...and every segment register WIN16's own
+    pop es                          ;   frames pushed (w16_gnew's ES, which is
+    mov di, sp                      ;   the caller's): made not present there,
+    mov cx, [w16_hsp]               ;   its pop is a #NP, and an interrupt's
+    add cx, 10                      ;   pop of a register still holding it is
+    sub cx, di                      ;   a #NP in the KERNEL, which is fatal.
+    jbe .host                       ;   SP up to the host frame w16_resume
+    shr cx, 1                       ;   pushed (its five words), exact words
+    cld
+    repne scasw
+    je .out
+.host:
+%endif
     mov es, [w16_pss]
     mov di, [w16_psp_]
     mov cx, [w16_stop]

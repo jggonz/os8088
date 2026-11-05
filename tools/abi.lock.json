@@ -1,10 +1,10 @@
 {
  "DRV_VER": {
-  "fingerprint": "9ef25b5f2c092866dbd2a23489ede5dda8938176533146153c149a548834c7e5",
+  "fingerprint": "67a6fc9cb35f8d59c68cb4fed86c1c7e7f855a4bea7e9ab1350d6d8503d664b1",
   "version": 12
  },
  "PKG_FMT": {
-  "fingerprint": "c73c313456ef8f24672d3754142305f496f10c717072a6347f0f38d071b4ce46",
+  "fingerprint": "f8bf4f293edda3d74cab7cdd7fa67086d649321d002910a11c72586e25c1a237",
   "version": 10
  },
  "_": "SPEC.md 20.2.0.1. Written by tools/abilock.py --update; checked by every `make` (tests/unit/t_abilock.py). Each entry in `history` is a decision about whether a change to the package or driver ABI breaks what was built before it.",
@@ -1722,6 +1722,62 @@
    "from": 12,
    "guard": "DRV_VER",
    "reason": "OSAPI_SEG SEG_TYPE (13): a code/data retype of the caller's own window or handle descriptor (SPEC 50.6.11, KERN-MEGA-PLAN 14.142), appended after SEG_HND; older kernels refuse it, so everything built before still runs - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "5e9db0fe543d3c84fd019245cd7f9a628b082f5ebbdf476ac44af92875716261",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "SPEC.md 125.1: PCIETHER.DRV's drv_tab row on every big build (kern_big, kern_emu, kern_mega). DQ_MAXREC 11 -> 12 in the kernel and both SDKs for kern_emu's twelfth row; DRVC_NET is never suspended (96.23.6), so no record reaches an older buffer. DRVM_CEIL_NET_MEGA renamed DRVM_CEIL_NET_PCI (39, the big builds' DRVC_NET ceiling, which every DOS.O88 quotes); DRVM_CEIL_NET 34 stays kern_small's. No cell moved, nothing built before stops running: neither number bumps",
+   "to": 10
+  },
+  {
+   "fingerprint": "13a5c870d85edf613b26648ac05ff66ebb08664f9916217dd2301b77781170c2",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "SPEC.md 125.1: PCIETHER.DRV's drv_tab row on every big build (kern_big, kern_emu, kern_mega). DQ_MAXREC 11 -> 12 in the kernel and both SDKs for kern_emu's twelfth row; DRVC_NET is never suspended (96.23.6), so no record reaches an older buffer. DRVM_CEIL_NET_MEGA renamed DRVM_CEIL_NET_PCI (39, the big builds' DRVC_NET ceiling, which every DOS.O88 quotes); DRVM_CEIL_NET 34 stays kern_small's. No cell moved, nothing built before stops running: neither number bumps",
+   "to": 12
+  },
+  {
+   "fingerprint": "735a44e2cbbf0dca824e02173e5d46b3828e0415b1d8473d89bba3290d91db77",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of main's PCIETHER.DRV round (SPEC 125.1: DQ_MAXREC 12, DRVM_CEIL_NET_PCI) with WIN16-NEXT's SEG_TYPE (13); both additive, everything built before still runs - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "e49d8ae397c867d324a983b07813f97ade5e0270e4b7a490797c63f468ed667f",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of main's PCIETHER.DRV round (SPEC 125.1: DQ_MAXREC 12, DRVM_CEIL_NET_PCI) with WIN16-NEXT's SEG_TYPE (13); both additive, everything built before still runs - no bump",
+   "to": 12
+  },
+  {
+   "fingerprint": "68c5725e5c35155744190166ec649a7b23e0c78e4866f7f69723237ed7856deb",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "OSAPI_SEG SEG_TYPE gains CX=2 (code, not present) and CX=3 (register the caller's #NP handler): additive, KERN-MEGA-PLAN 14.143",
+   "to": 10
+  },
+  {
+   "fingerprint": "5fa72cda5804fc804fdcb1327692d837eaccbafc64be9071a04c8918066331f0",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "OSAPI_SEG SEG_TYPE gains CX=2 (code, not present) and CX=3 (register the caller's #NP handler): additive, KERN-MEGA-PLAN 14.143",
+   "to": 12
+  },
+  {
+   "fingerprint": "f8bf4f293edda3d74cab7cdd7fa67086d649321d002910a11c72586e25c1a237",
+   "from": 10,
+   "guard": "PKG_FMT",
+   "reason": "merge of WIN16-NEXT's O8 (SEG_TYPE CX=2/CX=3, SPEC 50.6.11) with main's PCIETHER.DRV round; additive, everything built before still runs - no bump",
+   "to": 10
+  },
+  {
+   "fingerprint": "67a6fc9cb35f8d59c68cb4fed86c1c7e7f855a4bea7e9ab1350d6d8503d664b1",
+   "from": 12,
+   "guard": "DRV_VER",
+   "reason": "merge of WIN16-NEXT's O8 (SEG_TYPE CX=2/CX=3, SPEC 50.6.11) with main's PCIETHER.DRV round; additive, everything built before still runs - no bump",
    "to": 12
   }
  ]

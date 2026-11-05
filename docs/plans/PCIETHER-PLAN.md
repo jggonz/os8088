@@ -1,4 +1,4 @@
-# PCIETHER-PLAN — PCI network cards for kern_mega, starting with the RTL8139C
+# PCIETHER-PLAN — PCI network cards for the big builds, starting with the RTL8139C
 
 SPEC.md §125 is the contract. This is the story list and the record of how it
 was built. Status: **[ ]** open, **[b]** built (host checks pass), **[x]** SEEN
@@ -16,6 +16,7 @@ working (a boot or a gate row said so, named beside it).
 |---|---|---|---|
 | D1 | separate `PCIETHER.DRV`, a family driver for PCI NICs | owner | later PCI cards are rows in it |
 | D2 | kern_mega only: row, bit, file | owner | — |
+| D2.1 | **superseded the same day**: every big build - kern_big, kern_emu, kern_mega - with the 360KB system disk leaving the file off | owner | "a releasable version of the OS with kern_big that has PCI support", on the condition that a machine without PCI is not affected: the row is unwanted by default and crosses no resident rung (72 bytes, `KERN_SIZE` unchanged), and kern_emu takes it because QEMU has an RTL8139 |
 | D3 | stack shared as SOURCE through a NIC seam; `ETHER.DRV` byte-identical | lead | WEAVE-SPEC §1.2's rule; a copy of 8KB of TCP goes stale |
 | D4 | PCI BIOS `int 1Ah` B1h with 16-bit registers, behind a 386+ CPU test | lead | keeps `cpu 8086` (§1); no 286 has PCI |
 | D5 | polled, IMR = 0, one ring with WRAP, one TX buffer | lead | §72.2.1's reasoning holds; the stack is stop-and-wait |
@@ -105,3 +106,16 @@ tx 9, no overflow reset.
   gate's machine is now `NOCARD=1`. Union: 15 rows + `pciether` +
   `stknosave-pciether` pass on the host, `megainst`, `megahddtick`, `brmega`
   pass under Bochs in Docker.
+- 2026-11-04 (kern_big, D2.1): the row is `%ifdef DRV_PCIETH`, defined
+  wherever `KERN_BIG` is, so kern_emu has it too (row 11, `DRV_MAX` 12, and
+  `DQ_MAXREC` 11 -> 12 in the kernel and both SDKs; DRVC_NET is never
+  suspended, so no older buffer gets a twelfth record). kern_big: `.text`
+  +29, `.cold` +43, boot blob +14, no rung crossed, `KERN_SIZE` 96,768
+  unchanged. The blob was 2 bytes from its 13-sector ceiling, so the title
+  became `'PCI '` in front of `'Ethernet'` (sharing nine bytes) and
+  `ovl_spl_msg_drv`'s `call`/`ret` stub became the body itself (four):
+  6,655 of 6,656. `DRVM_CEIL_NET_MEGA` is `DRVM_CEIL_NET_PCI` and every
+  `DOS.O88` quotes it. `rt_outd`/`rt_ind` now hold `cli` across EAX's top
+  half (a real-mode `sch_switch` saves 16-bit registers only). The file is
+  on every big system disk but the 360KB one. Gate: `make pcibigtest`,
+  `tests/pciether.py --big`, soak row `pcibig`.

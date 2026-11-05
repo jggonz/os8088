@@ -99560,7 +99560,7 @@ verb:
 | `SEG_WINL` 10 | DX:AX = a 32-bit LINEAR base, CX = bytes (0 = 64KB), SI = a window of the caller's to re-aim, or 0 | DX = a data selector over it: `SEG_WIN` in all but the base, so the window may be over memory above 1MB (§124.31.3; owner decision (e1), 2026-11-01) |
 | `SEG_LEND` 11 | DX = the real paragraph of a claim of the caller's below 1MB (`SEG_REAL`'s answer for its base), CX = the top of a stack in it; or DX = 0 | the stack is LENT: a BIOS `int 10h`-`1Fh` made on a stack that is not `LOW_SEG`'s runs on it (§124.31.2), entered through the claim's selector in protected mode and its paragraph in real mode - the GDT's identity map stops at `.cold`, so no selector is both. The last lender's is the one used; DX = 0 takes the caller's back, and its instance's end does. CF = 1 when DX is no live claim's base |
 | `SEG_HND` 12 | SI = a selector based in a claim or a pool block, AX = a paragraph offset into it, CX = bytes (0 = 64KB), DX = a HANDLE descriptor to re-aim, or 0 for a new one; SI = 0 frees DX | DX = a handle descriptor based there, its reach CX clipped at that block's end (§124.31.3) |
-| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code | the descriptor's type set in place, F2h (data, DPL 3) / 9Eh (code, conforming, DPL 0) since KERN-MEGA-PLAN 14.144; base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry) |
+| `SEG_TYPE` 13 | DX = a WINDOW of the caller's (made by `SEG_WIN`, `SEG_WINL` or `SEG_AT`) or a HANDLE descriptor (`SEG_HND`) based in a block of the caller's own, CX = 0 data / 1 code / 2 code NOT PRESENT; **CX = 3: DX:SI = the caller's `#NP` handler** (0 in DX takes it back) | the descriptor's type set in place, F2h (data, DPL 3) / 9Eh (code, conforming, DPL 0) / 1Ah since KERN-MEGA-PLAN 14.144 (92h / 9Ah / 1Ah before it); base, limit and selector kept (§124.31.6). CF = 1, AX = 4 for anything that is not the caller's own window or handle descriptor (a SUB, a pair, a tile, another's window or handle descriptor, a DX that is no allocator LDT entry). CX = 3 needs only a caller that is somebody (CF = 1, AX = 4 otherwise) |
 
 **Every real-mode kernel answers what the caller's own arithmetic was** -
 `DX x 16`, `DX`, `DX`, `DX + AX` (`SEG_SUB` and `SEG_SUBC` alike), `DX` for
@@ -99687,6 +99687,37 @@ On kern_mega in protected mode (`mega_segf`, `.mega`):
   the window's row, as `SEG_FREE`'s, or `mega_bown`'s (SEG_BWIN's) on the
   block a handle descriptor is based in, so another's window or handle descriptor, a SUB, a SUBC pair
   and a tile are refused (CF = 1, AX = 4) and nothing changes.
+  **`CX = 2` and `CX = 3` are O8's, and the only way a package is handed a
+  not-present fault** (KERN-MEGA-PLAN 14.143; WIN16 uses them for discardable
+  code that a program names by its selector, §124.26.12). `CX = 2` writes
+  access 1Ah: code, DPL 0, NOT PRESENT, the base and limit kept. A far
+  transfer to it, or a load of it into a segment register, is a `#NP`.
+  `CX = 3` registers DX:SI (a far address in the caller's own code) as the
+  caller's `#NP` handler; DX = 0 takes it back, and only its registrant's
+  withdrawal counts. There is one registration, in the tables' tail (5
+  bytes), made again by the owner before each run of the code that may fault,
+  as `SEG_LEND`'s is (WIN16: every resume of its program, §124.26.12).
+  **The router** (`mega_npx`, `.cold`; the IDT's 0Bh stub is a five-byte far
+  jump to it, in the same seven bytes) routes a `#NP` to the handler only
+  when ALL hold: the error code names an LDT selector, with neither its EXT
+  bit (an external event's delivery) nor its IDT bit (a gate's index) set,
+  and inside the LDT's limit (`lar`: a software `int 0Bh` pushes no error
+  code, so the word there is an IP); the faulting CS is an
+  LDT selector (a package's code - a GDT CS, the kernel's or a BIOS's, stays
+  fatal); no rate hook is in flight and the scheduler is not locked
+  (`sch_rbusy` = 0); the UI task is current (`sch_cur` = 0); the descriptor is
+  a handle descriptor (`MEGA_HAVL`); a handler is registered; and the
+  descriptor's base lies in a block of the registrant's own (`mega_bown`).
+  The handler is then entered by a far return with the CPU's frame untouched:
+  `[selector] [IP] [CS] [FLAGS]` on the faulting stack, every register as it
+  was at the fault, IF = 0, for it to make the descriptor present and `iret`
+  (the instruction restarts). Anything else is `mega_fault`'s, with the frame
+  it expects: the package is closed as for any other fault (14.140). The
+  kernel itself never loads a not-present selector for a package, so a
+  package must make a selector present before it hands one to an `OSAPI_*`
+  call. `.mega` +0 (the stub's seven bytes), `.cold` +201, which crosses
+  `.cold`'s rung (boot only: `.cold` is above 1MB after the switch), no
+  resident byte; every other kernel nothing.
   A CODE window is never the match for a question about a data one
   (`mega_wfind` skips it), so a later `SEG_WIN` over the same base and reach
   makes a window of its own. A window does not follow a block that moves, code
@@ -100427,12 +100458,13 @@ or read, and the row reads `Attached twice (bug)` beside its own name on the
 Drivers page. (It sat immediately before the attach until kernel size pass
 11; ahead of the read it costs no disk work, and from there the five
 refusals after it reach their answers with two-byte jumps.)
-**kern_mega words it differently** (§125.5): the same refusal, at the same
-place, banks `DRVE_CLASS` = 9 (kern_mega's alone; `DRVE_NERR` is 10 there)
-and the row reads `Class already in use`, because `ETHER.DRV` and
-`PCIETHER.DRV` are alternatives the user chose between and "bug" is the wrong
-word for it. `drivers/os88drv.inc` does not carry the code: no driver returns
-it. The other kernels keep `Attached twice (bug)` byte for byte.
+**The big builds word it differently** (§125.5): the same refusal, at the
+same place, banks `DRVE_CLASS` = 9 (kern_big's, kern_emu's and kern_mega's;
+`DRVE_NERR` is 10 there) and the row reads `Class already in use`, because
+`ETHER.DRV` and `PCIETHER.DRV` are alternatives the user chose between and
+"bug" is the wrong word for it. `drivers/os88drv.inc` does not carry the code:
+no driver returns it. kern_small, which has no second `DRVC_NET` row, keeps
+`Attached twice (bug)` byte for byte.
 Without that test `drv_publish` overwrites the slot unconditionally — the
 first driver's volumes stay mounted and browsable while every verb on them
 dispatches into the SECOND driver, which is this section's own bug one level
@@ -100594,12 +100626,13 @@ running DSP are all exactly as they were. **The kernel raises it in one place
 too** — a load into a class whose publication slot another row already holds
 (§51.2.1) — and it is the same sentence: the machine is fine, and the
 software is asking for something a class-keyed slot cannot do. **Except on
-kern_mega**, which banks `DRVE_CLASS` (`Class already in use`) for that one
-case instead, because there two rows of one class — `ETHER.DRV` and
-`PCIETHER.DRV` — are alternatives the user chose between (§125.5). It is a
-kernel-only code: `drivers/os88drv.inc` does not carry it, and a driver that
-answered 9 anyway would be banked as it on kern_mega and as `DRVE_HW` on the
-other kernels (`DRVE_NERR` is 10 there and 9 elsewhere).
+the big builds** (kern_big, kern_emu, kern_mega), which bank `DRVE_CLASS`
+(`Class already in use`) for that one case instead, because there two rows of
+one class — `ETHER.DRV` and `PCIETHER.DRV` — are alternatives the user chose
+between (§125.5). It is a kernel-only code: `drivers/os88drv.inc` does not
+carry it, and a driver that answered 9 anyway would be banked as it on a big
+build and as `DRVE_HW` on kern_small (`DRVE_NERR` is 10 there and 9 on
+kern_small).
 
 Two plumbing details make it *arrive*, and without either the refusal is
 correct and silent. `drv_attach` **keeps an attach refusal's `AL`** — it
@@ -183591,9 +183624,11 @@ the number of drivers that went — the bitmap of classes the first body also
 answered in `AX` is withdrawn, its one reader having stored it in a word
 nothing read back. `DQ_MAXREC` is published in `os88api.inc` so a
 caller can size that buffer without mirroring the kernel's own `DRV_MAX`.
-It is 10: kern_emu has ten rows with both CD-ROM and VESA enabled, kern_big
-nine and kern_small four. VESA is kept by the suspend sweep (§120.4), so
-this conservative bound adds no record to an older caller's buffer.
+It is 12: kern_emu has twelve rows (CD-ROM, HTTP, VESA and §125's
+`PCIETHER.DRV`), kern_big and kern_mega eleven, and kern_small four. VESA is
+kept by the suspend sweep (§120.4) and `DRVC_NET` is never suspended
+(§96.23.6), so neither of the two rows that widened it adds a record to an
+older caller's buffer.
 The kernel asserts `DRV_MAX <= DQ_MAXREC` at assembly time, because a row
 added here without widening the SDK
 would write past the end of somebody's buffer.
@@ -183857,17 +183892,18 @@ The literal is what makes the mirror possible: `t_mirror` compares the text
 when a value is not a number, and the SDK cannot see `DRVM_HDD`. So the kernel
 carries `equ 32` and the `%if` is what makes `32` safe.
 
-**One ceiling is per KERNEL: `DRVM_CEIL_NET_MEGA`** (§125.5, the owner's
-decision of 2026-11-04). kern_mega has a second `DRVC_NET` row,
+**One ceiling is per KERNEL: `DRVM_CEIL_NET_PCI`** (§125.5; the owner's
+decision of 2026-11-04, widened from kern_mega to every big build the same
+day, §125.1). kern_big, kern_emu and kern_mega have a second `DRVC_NET` row,
 `PCIETHER.DRV`, and the two are ALTERNATIVES in one publication slot
-(`drv_load_at` refuses whichever attaches second), so kern_mega's ceiling is
-the **larger** of the two rows and not their sum: 39 KB against
-`ETHER.DRV`'s 34. The caption is per kernel because `DOS.O88` already is —
-kern_mega's disks carry a copy assembled `-DDOS_MEGA` (§96, KERN-MEGA-DOS-PLAN
-12.1 item 4), and that copy alone quotes `DRVM_CEIL_NET_MEGA`; every other
-`DOS.O88` quotes `DRVM_CEIL_NET` and is byte-identical to what it was.
-`t_drvmem` holds each to the rows its own kernel has, and the `%if` pins the
-kern_mega one to whichever of the two rows is larger.
+(`drv_load_at` refuses whichever attaches second), so their ceiling is the
+**larger** of the two rows and not their sum: 39 KB against `ETHER.DRV`'s 34.
+Every kernel `DOS.O88` runs on has the row, so every `DOS.O88` - the shipped
+one and kern_mega's `-DDOS_MEGA` copy (§96, KERN-MEGA-DOS-PLAN 12.1 item 4)
+alike - quotes `DRVM_CEIL_NET_PCI`; `DRVM_CEIL_NET` is kern_small's, which has
+no PCI row and no `DOS.O88`. `t_drvmem` holds each to the rows its own kernel
+has, and the `%if` pins the big builds' one to whichever of the two rows is
+larger.
 
 **On `kern_small` the caption now says `Up to 32K` where the slot used to make
 it say `Up to  0K`**, and that is the fix arriving on one more machine rather
@@ -237654,6 +237690,9 @@ That value is odd now. A far call to a non-conforming code segment with RPL
 So `SEG_TYPE`'s code type is 9Eh: code, conforming, readable, DPL 0. `LAR`
 and `LSL` on it with RPL 3 work too, which `PrestoChangoSelector`'s flip back
 to data needs (`w16q_ctype`). At CPL 0, conforming changes nothing else.
+O8's stable code selectors (§124.26.12) are made by `SEG_HND` and are RPL
+0. A loaded one is 9Eh now, and a parked one is still 1Ah (`SEG_TYPE` 2,
+not present). Neither change matters at RPL 0.
 **The limit:** a `retf` or `iret` whose `CS` has RPL 3 is a return to an
 outer ring, which loads SS:SP from the stack and faults. A program that
 pushes the odd selector as a return address and `retf`s through it fails.
@@ -237685,13 +237724,15 @@ a fault: that is what a missed site looks like.
 immediates (`.mega` +0, `.cold` +0), and `kern_big` and `kern_small` are
 byte-identical. `win16.o88`, the kern_mega arm: +6 bytes of image (`or dl,
 3` in `w16_phset` and `w16_ptile`). The real-mode arm: +0. Measured
-against plan/win16-next 02b205ebe (image + bss, `os88pkg.image_unwrap`):
-kern_mega arm 38,032 + 26,365 = 64,397 before and 38,038 + 26,365 = 64,403
-after, which leaves 621 bytes under 65,024; the parts are unchanged. The
-real-mode arm is 36,415 + 27,140 = 63,555 both times. `tools/kernsize.py`
-on kern_mega reads the same for every section and rung before and after
-(`.mega` 23,056, 10 left), and kern_big and kern_small assemble
-byte-identical with and without the change.
+(image + bss, `os88pkg.image_unwrap`), first against plan/win16-next
+02b205ebe: the kern_mega arm went from 38,032 + 26,365 = 64,397 to 38,038 +
+26,365 = 64,403, and the parts are unchanged. Then on 277e221c8, with O8
+merged: 64,520 became 38,158 + 26,368 = 64,526, which leaves 498 bytes under
+65,024. The real-mode arm is 36,415 + 27,140 = 63,555 throughout.
+`tools/kernsize.py` on kern_mega reads the same for every section and rung
+before and after (with O8: `.mega` 23,056, 10 left; `.cold` 46,113, 479
+left). kern_big and kern_small assemble byte-identical with and without the
+change.
 
 **Seen** (QEMU, kern_mega, `-cpu 486 -m 16`, Mozart installed by its own
 setup, 2026-11-04): VBRUN300's table selector at `[DS:1F42h]` is now 22AFh,
@@ -238260,6 +238301,130 @@ with discardable code keeps the part as well.
 **A library's end** (its count reaching 0, §124.23.5). Its loaded
 discardable segments and its module block are given back with its other
 blocks.
+
+#### 124.26.12 Code named by its selector is discardable, and reloaded at `#NP` *(O8; WIN16-NEXT; KERN-MEGA-PLAN 14.143)*
+
+**The arm alone.** On `kern_big` there is no descriptor to take away; §124.26.1
+and §124.26.10 stand there. On `kern_mega` Windows' standard-mode scheme is
+reachable, because the kernel hands a package its not-present faults
+(§50.6.11, `SEG_TYPE` `CX` = 2 and 3). It covers exactly the code §124.26.1,
+§124.26.2.1 and §124.26.11 KEPT: a discardable code segment that a relocation
+names by its number, or by segment or offset alone, and every discardable
+segment of a protected-mode-only module (`NEF_PMODE`). VBRUN300's 329 KB,
+Sir Hangman's engine's 395 KB, Mozart's 185 KB of p-code and each Arcade
+game's 55-97 KB are that code.
+
+**A stable selector.** Such a segment (marked `W16CLF_STAB`, 10h, in the live
+entry, where the check pass used to set `W16CLF_KEEP`) has ONE selector for as
+long as its module lives: a handle descriptor (`SEG_HND`) made at the
+module's launch, held in a selector cell after the live table (2 bytes a
+segment; the module block's live-table area is 8 bytes a segment on the
+arm). Every fixup by number, every pointer built from one, `GetProcAddress`'s
+answer and a library's `W16LM_SEGS` row hold that selector, whether or not
+the segment is loaded, and a thunk of the segment (a call through an entry
+that is also reached by number) jumps to it. It is the same value across any
+number of discards and loads.
+
+| the segment is | the descriptor |
+|---|---|
+| not loaded (never loaded, or discarded) | code, **not present** (`SEG_TYPE` 2, access 1Ah), aimed at the module block with a limit of 0, so no free of an arena can take it |
+| loaded | code, present (`SEG_TYPE` 1), re-aimed (`SEG_HND`) at the segment's block, reaching its allocation |
+
+If no LDT entry can be had, the segment is kept as before (`W16CLF_KEEP`), so
+the arm degrades to §124.26.11 and not to a refusal.
+
+**Loading at the fault.** WIN16 registers `w16_npent` as its `#NP` handler
+(`SEG_TYPE` `CX` = 3, in `w16_lend`) before **every run of the program**:
+`w16_dcunpark` calls it, and `w16_resume` and `w16_resumecb` both call that
+first. A wake is not enough, because a program also runs from a key or timer
+callback (`w16_mkick`, `w16_after`), and a second WIN16 instance that woke in
+between holds the registration (and the lent stack, §124.31.2, which is asked
+for in the same place for the same reason). A far transfer or a
+segment-register load through a not-present stable selector arrives there
+with `[selector] [IP] [CS] [FLAGS]` on the faulting stack:
+
+- **On the program's stack** (`SS` = the program's): the handler keeps AX and
+  DX where `w16_thkhit` keeps them (`w16_thax`, `w16_thdx`), drops the
+  selector, and enters the gate as bind slot `W16_SLROW` with a far return to
+  an `iret` of its own. `w16_segld` sees `w16_npsel` set and loads the
+  segment the selector names - the program's or a library's, found by
+  scanning the live tables' selector cells - with discard allowed, exactly
+  as a thunk hit does, and answers AX and DX as they were. The gate restores
+  BX, CX, ES and DS, SI, DI, BP; the `iret` restores FLAGS and the
+  instruction runs again. A segment that cannot be loaded ends the program
+  with *Not enough memory for its code.*, as a thunk's does.
+  WIN16's own `retf` into a callback's callee (§124.2.2: `w16_cbenter`,
+  `w16_resumecb`) is on the program's stack too, so a callee that is not
+  present faults there and takes this arm, discard allowed; nothing is
+  touched ahead of it.
+- **On any other stack** (`SS` is not the program's): a handler of WIN16's
+  read a far pointer into a code segment (`TextOut` of a string constant,
+  §124.26.2.1), or another package's code on the UI task did (the DOS
+  package with a program's buffer). The segment is loaded **in place, with
+  no code discarded** (`w16l_nplow`, part 5): what the interrupted code
+  holds in its registers is not known, a discard could free a segment one
+  of them holds, and a 286 keeps that register's cached base, so it would
+  read freed memory without a fault. No run free is the same refusal,
+  below.
+- **Refused**, by executing an undefined opcode (kern_mega's fault close of a
+  WIN16 program, §124.31.11): a second `#NP` while a segment is loading
+  (`w16_nplod`), and a load WIN16 cannot make from its own stack.
+
+The kernel routes only the UI task's, only from an LDT code selector, never
+from the rate hook (§50.6.11), so a `#NP` in the kernel, a BIOS call or an
+interrupt handler stays fatal. WIN16 installs no program interrupt handler
+that runs program code (§124.31.6, `int 21h` AH = 25h), so no program code
+runs in one; **belt and braces**, `w16l_npload` (part 5, so no resident byte)
+reads the master PIC's in-service register (OCW3 0Bh, then 0Ah so everyone
+else reads the IRR as before, in one `cli` window) and refuses a load while
+it is not 0. A
+refused or failed load is the program's end, *Not enough memory for its
+code.*, as for a thunk (seen on QEMU: the program held the only segment
+loaded in ES and the heap had room for no other, 2026-11-04).
+
+**Discarding.** §124.26.5 and §124.26.11 stand, with these changes for a
+stable segment: it is **parked** (`SEG_TYPE` 2, then re-aimed at the module
+block) before its block is freed, so an arena's free can never take the
+descriptor; the stack scan compares the stable selector; and **a segment that
+the program's banked DS or ES holds counts as in use** (the gate's frame word
+and `w16_res`), because a 286 keeps a segment register's cached base and
+would read the freed block without a fault. **Nor may any segment register
+WIN16's own frames pushed hold it** (`w16l_inuse` scans the host stack, SP up
+to `w16_resume`'s five words above `w16_hsp`, for the selector): `w16_gnew`
+pushes its caller's ES, a handler may be holding a string's segment there,
+and a segment made not present while a register holds it is a `#NP` at the
+next `pop` of that register - in WIN16, or in the kernel when an interrupt
+arrives in between, and that one is fatal. A module's end frees its
+descriptors (`w16l_cfreeall`, `w16t_codefree`).
+
+**Where the program may be faulted by a discard, and is not:**
+
+- `GetCodeHandle` and `LockSegment` of a not-present code selector load it
+  (`w16_touch`: `verr`, which does not ask the present bit, then a load into
+  DS), as Windows' did; so do `AllocCStoDSAlias`, `AllocDStoCSAlias` and
+  `PrestoChangoSelector` of their source (`w16q_touch`), so an alias is made
+  over the segment's code and not over the module block it is parked on. An
+  alias made of a LOADED segment does not follow it to its next load, as
+  Windows' did not;
+- **a `#NP` inside the kernel stays fatal, and none can arise from a program
+  pointer**: on `kern_mega` the kernel reads a package's far pointer only
+  through a segment register the package loaded in its own code (`ES:BX` of
+  `OSAPI_FILE_READ`, `ES:SI` of `OSAPI_GFX_BLIT4`, `DS:SI` of
+  `OSAPI_SND_STREAM` verb 6, `OSAPI_DRV_CALL`'s caller's DS) - no `OSAPI_*`
+  slot takes a pointer's segment in a general register and loads it itself -
+  so a not-present selector faults in WIN16's (or the DOS package's) LDT code
+  first, where it is routed and repaired; and the discard rule above keeps it
+  present while that register still holds it. The audit of WIN16's 40
+  pointer-taking call sites is in the diary.
+
+**Not done.** FS and GS are not banked by the gate. A second WIN16 instance
+registers before each run of its own programs and its descriptors are its
+own. `PrestoChangoSelector(s, s)` of a stable selector flips it to data in
+place, and its next load makes it code again. A discarded
+segment's thunk-only entries keep §124.26.2's mechanism.
+
+**What was and was not built, and what was seen** is in
+`docs/HOW-WIN16-WAS-BUILT.md` (O8); `win16np` (`tests/suite.py`) is the row.
 
 #### 124.26.14 A segment reached only by far calls goes through thunks *(WIN16-NEXT, c3; the real-mode arm)*
 
@@ -240796,7 +240961,7 @@ the ones named in `AddItem`. A desktop already holding 15 shortcuts
   "92" this note gave before was stale: the arm had 533 when it was
   written over.
 
-## 125. PCIETHER.DRV — PCI network cards for kern_mega (`drivers/pciether/`)
+## 125. PCIETHER.DRV — PCI network cards for the big builds (`drivers/pciether/`)
 
 *Design record and story list: docs/plans/PCIETHER-PLAN.md. Status per story
 is in the plan; this section is the contract and says per item whether it is
@@ -240813,10 +240978,17 @@ driver on purpose: the next PCI NIC is a row in its backend table and a
 
 - **A separate driver, `PCIETHER.DRV`**, not a second backend inside
   `ETHER.DRV` — so later PCI NICs land in it.
-- **kern_mega only.** Its `drv_tab` row, its `SYSTEM.CFG` bit and the file
-  itself exist on kern_mega's build and disks and nowhere else. kern_big,
-  kern_emu and kern_small are byte-identical to before; no shipped floppy but
-  kern_mega's system disks carries the file.
+- **Every big build: kern_big, kern_emu and kern_mega** (widened the same
+  day from the first decision's "kern_mega only", for a releasable kern_big
+  with PCI networking). Its `drv_tab` row, its `SYSTEM.CFG` bit and the file
+  exist on those three kernels and their system disks; kern_small is
+  byte-identical to before and its disks never carry the file. **A machine
+  with no PCI bus is not affected beyond the row's bytes**: the row is not
+  wanted by default (§51.3), so the driver is never read, and on kern_big the
+  row, its strings and `DRVE_CLASS` cost 72 bytes (`.text` +29, `.cold` +43;
+  the boot blob +14, given back) and **cross no 512-byte rung** - `KERN_SIZE`
+  and so the heap are unchanged (`tools/kernsize.py`, 2026-11-04). The
+  360KB system disk leaves the file off (§125.6): no XT has a PCI slot.
 
 ### 125.2 One stack, shared as SOURCE (pinned; shipped)
 
@@ -240872,8 +241044,10 @@ needs no 32-bit register for the BIOS:
 | `B10Bh`/`B10Ch` write byte/word | BX, DI, CL / CX | CF |
 
 The probe (`drivers/pciether/pci.inc`, `pci_probe`) runs only when
-`OSAPI_CPU_INFO` answers a 386 or better: kern_mega boots on a 286, and no 286
-board carries PCI. The backend table (`pce_tab`) is rows of `{vendor, device,
+`OSAPI_CPU_INFO` answers a 386 or better: kern_big boots on an 8088 and
+kern_mega on a 286, and no board below a 386 carries PCI. On kern_big and
+kern_emu the image runs in real mode and issues `int 1Ah` straight to the
+BIOS; kern_mega reflects it (§125.8 item 1). The backend table (`pce_tab`) is rows of `{vendor, device,
 name, vectors}` ending in a zero vendor; each row is asked `B102h` with SI=0.
 BAR0 (config `10h`) must be an I/O BAR (bit 0 set); the base is the word AND
 `FFFCh`. A row that matches but whose BAR0 is not I/O is skipped with the card
@@ -240896,9 +241070,12 @@ ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
   split - and, at offset 9,744, one 1,536-byte transmit buffer (4-byte aligned:
   a paragraph base is). 11,280 bytes, 11,776 at the 512-byte granule. Claimed
   at attach only when an RTL8139 was found, freed at detach. Its bus address is
-  the claim's linear base from `OSAPI_SEG` `SEG_LIN`; kern_mega does not page,
-  so linear is physical and the card, a 32-bit bus master, may reach it
-  wherever the heap put it. **A boot attach claims in real mode** (SYSTEM.CFG's
+  the claim's linear base from `OSAPI_SEG` `SEG_LIN` - on a real-mode kernel
+  the paragraph times 16, below 1MB; kern_mega does not page, so linear is
+  physical there too - and the card, a 32-bit bus master, may reach it
+  wherever the heap put it. On kern_big and kern_emu `MEMP_CONV` is masked off
+  (`osapi_mem_p`): every claim there is conventional already, and `SEG_WIN`
+  answers the paragraph itself. **A boot attach claims in real mode** (SYSTEM.CFG's
   drivers load before `mega_enter`), so the claim's name is a paragraph that
   `mem_xlatf` cannot re-point - a pinned record gets the kernel's half only
   (KERN-MEGA-MEMORY-PLAN MC7.4) - and loading it in protected mode is a #GP.
@@ -240947,16 +241124,22 @@ ring is drained from inside the socket verbs, `ETH_BUDGET` frames a call.
   first draft's "every access is 8- or 16-bit, a 32-bit register as two word
   writes", which is the one reading a real 8139 accepts and a model that
   implements those registers for a dword access only (QEMU's `rtl8139`, for
-  `RBSTART`, `RCR`, `TCR`) would drop. The prefix executes on the 386+ the PCI
+  `RBSTART`, `RCR`, `TCR`) would drop. **Both dword doors hold `cli` across
+  the top half** (`pushf`/`cli` ... `popf`, `vmmouse.asm`'s `vmm_atom`
+  argument): a real-mode kernel's `sch_switch` saves 16-bit registers only, so
+  a tick between the `pop eax` and the `out` could run a task or a BIOS
+  handler that spends EAX's top half - `XMEM.DRV`'s movers, SeaBIOS's C - and
+  hand the card some other dword. The prefix executes on the 386+ the PCI
   gate guarantees; `CR`, `CONFIG1` and `IDR` are byte accesses, `IMR`, `ISR`
   and `CAPR` word ones.
 - **Detach stops the DMA before freeing the claim**: `IMR` = 0, `CR` = 0, RST,
   wait, then free. A card left running writes into whatever the heap gives that
   memory to next.
 
-### 125.5 The kern_mega row (pinned)
+### 125.5 The big builds' row (pinned)
 
-One `drv_tab` row on kern_mega only, appended last: file `PCIETHER.DRV`,
+One `drv_tab` row on kern_big, kern_emu and kern_mega (`DRV_PCIETH`,
+`kernel/driver.inc`, defined wherever `KERN_BIG` is), appended last: file `PCIETHER.DRV`,
 title `PCI Ethernet`, class **`DRVC_NET`** — the same class as `ETHER.DRV`'s,
 so packages, `apps/os88sock.inc`'s `net_find`, the DOS packet layer and The
 Wire need no change. One class has one publication slot (§51.2.1), so the two
@@ -240966,18 +241149,20 @@ nothing of the first disturbed. That refusal already existed
 (`drv_load_at`, §51.2.1: it compares `[drv_owner]` for the row's class
 against the row, ahead of any disk work, and `[drv_owner]` is written only by
 `drv_publish` after a successful attach, so an `ETHER.DRV` that found no card
-leaves the slot free for `PCIETHER.DRV`). What kern_mega adds is the words:
+leaves the slot free for `PCIETHER.DRV`). What the row's builds add is the words:
 `DRVE_CLASS`, `Class already in use`, in place of `DRVE_TWICE`'s
-`Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** (§125.8
-item 2). Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
+`Attached twice (bug)` (§51.2.1). Its `SYSTEM.CFG` bit is **11** on every
+build that has the row (§125.8 item 2), so one settings file means the same
+on all three. Its Drivers-page price is `DRVM_PCIETH` = `DRVM_IMG_PCIETH` (34
 half-KB: 17,153 bytes with its bss) + `DRVM_RT_PCIETH` (23: `rt_claim`'s
 ring, slack, overrun and transmit buffer, `RT_CLAIM` = 11,280 bytes, held
 from attach to detach) + `DRVM_SK_PCIETH` (21: the socket pool at the
 **middle** rung, because `sk_cardcap` holds a rung to the 8KB ring less
 `SK_RINGSLK` and `SK_RXMAX` never fits) = **78 half-KB, 39 KB** — against
-`ETHER.DRV`'s 67. The two are alternatives, so kern_mega's `DRVC_NET` ceiling
-is the larger and not their sum: `DRVM_CEIL_NET_MEGA` = 39, which kern_mega's
-`-DDOS_MEGA` `DOS.O88` quotes, while `DRVM_CEIL_NET` stays 34 everywhere else
+`ETHER.DRV`'s 67. The two are alternatives, so the big builds' `DRVC_NET`
+ceiling is the larger and not their sum: `DRVM_CEIL_NET_PCI` = 39, which every
+`DOS.O88` quotes (the shipped one and kern_mega's `-DDOS_MEGA` copy), while
+`DRVM_CEIL_NET` stays 34 for kern_small, which has no PCI row and no DOS
 (§51.12.1; `tests/unit/t_drvmem.py` re-derives every term from
 `drivers/pciether/`). Not wanted by default (§51.3). When both rows are
 wanted, `drv_boot` walks the table in row order, so `ETHER.DRV` (row 2) is
@@ -240985,29 +241170,42 @@ tried first: with an ISA card it owns the class and `PCIETHER.DRV` reads
 `Class already in use`; with none it fails `No hardware found`, the slot
 stays free and `PCIETHER.DRV` attaches. Unticking the owner releases the slot
 (`drv_release` zeroes `[drv_owner]` only for the row that holds it). It must
-cross no kern_mega resident rung; `make budget-check` holds
-`KERN_MEGA_RESIDENT_KB`.
+cross no resident rung on any of the three; `make budget-check` holds
+`KERN_BUDGET` for kern_big and kern_emu and `KERN_MEGA_RESIDENT_KB` for
+kern_mega. The row is LAST on each, so it is row 10 on kern_big and kern_mega
+(after `VESA.DRV`'s row 9) and row 11 on kern_emu, whose absolute mouse is
+its row 5; `DRV_MAX` is 11, 12 and 11, and `DQ_MAXREC` went to 12 for
+kern_emu (§51.11.2).
 
 ### 125.6 Disks and machines (pinned)
 
-`PCIETHER.DRV` ships in `SYSTEM/` on kern_mega's system disks (`make mega`)
-and on no other image. A gate disk with `SYSTEM.CFG` already wanting it
-(ethertest's shape on kern_mega) is built on demand. QEMU is the gate: its
-`rtl8139` is a PCI device behind SeaBIOS's PCI BIOS, on the slirp network
-§72.9 already uses. Bochs has no RTL8139 and MartyPC no NIC at all; an 86Box
-PCI machine with its RTL8139C+ is where a person LOOKS.
+`PCIETHER.DRV` ships beside the other drivers on every big build's system disks: kern_big's
+1.44MB, 1.2MB and 720KB disks (it rides `$(DRIVERS)`), kern_emu's `emu.img`
+(`$(EMUDRIVERS)` is `$(DRIVERS)` plus the mouse), kern_mega's (`make mega`),
+the live media and therefore the INSTALL trees cut from them. **Not the 360KB
+system disk** (`$(SYS360OMITDRV)`, §24.3.1.6's rule one bus along): no XT has
+a PCI slot, the driver refuses below a 386, and at 22 clusters it would take
+two thirds of what that disk has left. System Check's manifest marks it
+optional for that reason, so a hard disk installed from the 360KB disk is not
+reported as missing it. kern_small's disks never carry it. A gate disk with
+`SYSTEM.CFG` already wanting it (ethertest's shape) is built on demand per
+kernel. QEMU is the gate: its `rtl8139` is a PCI device behind SeaBIOS's PCI
+BIOS, on the slirp network §72.9 already uses. Bochs has no RTL8139 and
+MartyPC no NIC at all; an 86Box PCI machine with its RTL8139C+ is where a
+person LOOKS.
 
-*Shipped (harness, S7-S9, unrun until the lead's final pass):* `MEGADRIVERS`
-(Makefile) names `$(BUILD)/pciether.drv` as a prerequisite of both kern_mega
-system disks, so a tree without the driver's rule stops `make mega` with
-make's "No rule to make target" - a mega disk must not quietly ship without
-it. `make pciethertest` builds `build/pciethertest.img` (`mega.img`'s files
-plus a `SYSTEM.CFG` whose bit is `PCIETHER_CFGBIT`, default 11 - §125.5's bit;
-the kernel's `drv_cfgbit` is the authority and the variable follows it). `make
-run-pciether` is the interactive QEMU machine (`-m 16`, `-device rtl8139` on
+*Shipped:* `MEGADRIVERS` (Makefile) refuses to build unless
+`$(BUILD)/pciether.drv` is in `$(DRIVERS)`, so a mega disk cannot quietly ship
+without it. `make pciethertest` builds `build/pciethertest.img` (`mega.img`'s
+files plus a `SYSTEM.CFG` whose bit is `PCIETHER_CFGBIT`, default 11 -
+§125.5's bit; the kernel's `drv_cfgbit` is the authority and the variable
+follows it) and `make pcibigtest` builds `build/pcibigtest.img`, the same
+`SYSTEM.CFG` on kern_big's shipped 1.44MB system disk. `make run-pciether`
+and `make run-pcibig` are the interactive QEMU machines (`-device rtl8139` on
 user networking); `os88qemu.make_test("PCIETHER=1", ...)` is the same machine
-for rows, and `tests/pciether.py` (soak row `pciether`) is the gate.
-`vm/pentium-pciether` (`make pentium-pciether`) is the 86Box profile.
+for rows, and `tests/pciether.py` is the gate - soak row `pciether` on
+kern_mega, `pcibig` (`--big`) on kern_big. `vm/pentium-pciether` (`make
+pentium-pciether`) is the 86Box profile.
 
 ### 125.7 What is not here
 
@@ -241037,11 +241235,15 @@ for rows, and `tests/pciether.py` (soak row `pciether`) is the gate.
    at all.) On a 386 the reflection is a CR0.PE clear and set; on a 286 it is a
    CPU reset through the BIOS, which the CPU gate (`pci_gate`) means is never
    made. A few hundred microseconds a call, at attach only. *Seen on a
-   machine: no - the first run is the harness's (S8).*
+   machine: no - the first run is the harness's (S8).* **On kern_big and
+   kern_emu there is nothing to reflect**: the kernel is real mode
+   throughout, the `int 1Ah` goes to the BIOS's own vector, and
+   `OS88_DRV_HIGHOK` is not a flag those loaders act on.
 2. **The `SYSTEM.CFG` bit and the row: settled.** Bit **11** (0-10 are taken
    on every build; 5 is the absolute mouse's even where a build has no such
-   row), row **10** on kern_mega (after VESA.DRV's row 9), `DRV_MAX` 11 there
-   (`DRV_PX`, `kernel/driver.inc`). Its heap price, 39 KB, and the
+   row), row **10** on kern_mega and kern_big (after VESA.DRV's row 9) and
+   row **11** on kern_emu, `DRV_MAX` 11, 11 and 12 (`DRV_PX`,
+   `kernel/driver.inc`). Its heap price, 39 KB, and the
    per-kernel `DRVC_NET` ceiling are §125.5's.
 3. Sizes, from the build of 2026-11-04 (after the verifier's fixes): image
    17,259 bytes unpacked (`ETHER.DRV` 17,397), 10,950 packed (lz4), 352 bytes

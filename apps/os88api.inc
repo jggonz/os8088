@@ -2301,12 +2301,22 @@ OS88_HUGE_INCR      equ 0x1000
                                  ;          SEG_WINL, SEG_AT) or a HANDLE
                                  ;          descriptor (SEG_HND) in a block
                                  ;          of yours, CX = 0 data
-                                 ;          or 1 code -> the descriptor's
+                                 ;          or 1 code or 2 code NOT
+                                 ;          PRESENT -> the descriptor's
                                  ;          type set in place, base, limit
                                  ;          and selector kept (SPEC.md
                                  ;          50.6.11, 124.31.6). A code
                                  ;          window is never matched as a
-                                 ;          data one. CF=1, AX = 4 for
+                                 ;          data one. CX = 3: SI = the
+                                 ;          offset and DX the code
+                                 ;          selector of your #NP handler
+                                 ;          (DX = 0 withdraws it): a far
+                                 ;          transfer to a not-present
+                                 ;          handle descriptor of yours
+                                 ;          arrives there with [selector]
+                                 ;          [IP] [CS] [FLAGS] on the
+                                 ;          stack (SPEC.md 50.6.11,
+                                 ;          124.26.12). CF=1, AX = 4 for
                                  ;          anything else; CF=1 on a
                                  ;          real-mode kernel
                                  ; out CF=0 and the answer; CF=1 refused (no
@@ -3344,10 +3354,10 @@ DQ_A       equ 2                 ; dw: the class's own three words. For
 DQ_B       equ 4                 ; dw: DRVC_SOUND: the DSP base port, then
 DQ_C       equ 6                 ; dw: (IRQ | DMA<<8), then the DSP version -
 DQ_SIZE    equ 8                 ;     which is what a BLASTER= is made of
-DQ_MAXREC  equ 11                ; the most records one call can write, so
+DQ_MAXREC  equ 12                ; the most records one call can write, so
                                  ; a caller can size a buffer without
                                  ; mirroring the kernel's own DRV_MAX -
-                                 ; which is 11, 10, 9 or 4 depending on the
+                                 ; which is 12, 11 or 4 depending on the
                                  ; build and is asserted against this at
                                  ; assembly time (SPEC.md 51.11.2)
 %define OSAPI_DRV_SUSPEND   KERNEL_SEG:0x0419   ; AL = 1 suspend / 0 resume /
@@ -3500,11 +3510,12 @@ PKGV_IDENT   equ 0              ; **VERB 0 OF EVERY PACKAGE DOOR IS IDENTIFY**
 ; the ANSWER here and derives nothing, which is what makes it different from
 ; the per-driver copy 51.12.1 refuses.
 DRVM_CEIL_DISK equ 4           ; DRVC_DISK's ceiling, in KB
-DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's
-DRVM_CEIL_NET_MEGA equ 39      ; ...and DRVC_NET's on kern_mega, whose
-                                ; PCIETHER.DRV (SPEC.md 125.5) is the class's
-                                ; larger row: a package built FOR kern_mega
-                                ; (DOS.O88's -DDOS_MEGA copy) quotes this one
+DRVM_CEIL_NET  equ 34          ; ...and DRVC_NET's on kern_small, which has
+                                ; no PCIETHER.DRV row
+DRVM_CEIL_NET_PCI equ 39       ; ...and DRVC_NET's on kern_big, kern_emu and
+                                ; kern_mega, whose PCIETHER.DRV (SPEC.md
+                                ; 125.5) is the class's larger row: DOS.O88
+                                ; quotes this one
 DRVC_SOUND   equ 1
 DRVC_DISK    equ 2              ; block volumes: hard disks (SPEC.md 51.8).
                                 ; Its package door reaches TWO verbs and no

@@ -449,6 +449,87 @@ w16_thkhit:
     jmp w16_gate
 
 %ifdef PKG_MEGA
+; -----------------------------------------------------------------------------
+; w16_npent - the #NP handler (SPEC.md 124.26.12, KERN-MEGA-PLAN 14.143), far
+; returned to by the kernel with [selector] [IP] [CS] [FLAGS] on the faulting
+; stack, every register as at the fault and IF = 0. The program's stack (its
+; code, or WIN16's own retf into a callback's callee, w16_cbenter and
+; w16_resumecb): the selector kept for w16_segld, AX and DX as w16_thkhit
+; keeps them, and the gate entered as W16_SLROW with a far return to the iret
+; below, which restarts the instruction; part 5 loads the segment and may
+; discard others for the room. Any other stack (WIN16's own code reading a
+; program pointer, or another package's on the UI task): the segment is loaded
+; in place and no code discarded (part 5's w16l_nplow), since what the
+; interrupted code holds in its registers is unknown. Refused by an undefined
+; opcode (kern_mega closes WIN16): a load already going, or no room.
+; -----------------------------------------------------------------------------
+cpu 286
+w16_npent:
+    ; STKBALANCE-OK: far-returned to by the kernel with the CPU's frame on the
+    ; faulting stack. Its program arm pushes the gate's far return (CS and the
+    ; call's IP) onto an iret, and the gate's retf lands there; the other arm's
+    ; iret is the CPU frame's own
+    push bp
+    push ds
+    W16CSDS bp
+    mov ds, bp
+    mov bp, ss
+    cmp bp, [w16_pss]
+    jne .low
+    mov bp, sp
+    mov bp, [bp + 4]
+    mov [w16_npsel], bp
+    mov [w16_thax], ax
+    mov [w16_thdx], dx
+    pop ds
+    pop bp
+    add sp, 2                       ; the selector
+    push cs
+    call .go
+    iret                            ; the gate returns here, then the fault's
+.go:                                ;   own frame: the instruction runs again
+    mov ax, W16_SLROW
+    jmp w16_gate
+.low:
+    pop ds
+    pop bp
+    pusha
+    push ds
+    push es
+    mov bp, sp
+    mov ax, [bp + 20]               ; the selector, under ES DS and the pusha
+    W16CSDS bp
+    mov ds, bp
+    mov bx, w16l_nplow              ; XSEC-OK: part 5's, w16_ldcall calls it there
+    sti
+    call w16_ldcall
+    pop es
+    pop ds
+    jc .die
+    popa
+    add sp, 2
+    iret
+.die:
+    db 0x0F, 0x0B                   ; #UD: a program's fault closes WIN16
+
+; w16_touch - AX = a selector the program holds: one that is not present (a
+; discarded code segment, 124.26.12) is loaded by reading it into DS, here (a
+; #NP in WIN16's own code, w16_npent's second arm). VERR does not ask the
+; present bit, so it passes a not-present code selector and refuses what is
+; no selector at all. Keeps every register, the flags not
+w16_touch:
+    test al, 4                      ; an LDT selector (a handle or a GDT value
+    jz .ret                         ;   is no code segment of the program's)
+    push ds
+    verr ax
+    jnz .no
+    mov ds, ax
+.no:
+    pop ds
+.ret:
+    ret
+cpu 8086
+
 ; w16_dxax / w16_dxth - the arm's [cs:] store of DX:AX, through our data
 ; selector rather than CS (SPEC.md 124.31.5): to w16_cbax/w16_cbdx, or to
 ; w16_thax/w16_thdx. Keeps all, the flags too.

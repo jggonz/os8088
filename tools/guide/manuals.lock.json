@@ -593,9 +593,9 @@
   "sources": [
    "apps/install"
   ],
-  "stamped": "e88b5c64",
-  "strings": "2b391919e4c9218d",
-  "why": "only OS88VER.TXT changed (20261026 -> 20261030 release notes); the page names no release or its notes, so unchanged"
+  "stamped": "e1bd4f614",
+  "strings": "68610dd3aca61384",
+  "why": "apps/install changed only in OS88VER.TXT (release 20261103's date and four headline lines); the page quotes neither, so it stands unchanged"
  },
  "INTRO_MID": {
   "sources": [],

@@ -3398,6 +3398,14 @@ DRIVERS += $(BUILD)/httppage.drv
 # it is wanted, and the tick needs the file to be there. kern_small filters
 # it back out with the rest ($(SMALLDRIVERS)).
 DRIVERS += $(BUILD)/vesa.drv
+# PCIETHER.DRV - PCI network cards, the RTL8139 first (SPEC.md 125). A drv_tab
+# row with SYSTEM.CFG bit 11 on every big build since 125.1 widened it from
+# kern_mega, not wanted by default: its probe asks the PCI BIOS and is refused
+# below a 386 before that, so a disk that carries it costs a machine with no
+# PCI bus one directory slot and nothing read. Not on the 360KB system disk
+# ($(SYS360OMITDRV)): no XT has a PCI bus. kern_small filters it back out
+# ($(SMALLDRIVERS) is a restatement that never held it)
+DRIVERS += $(BUILD)/pciether.drv
 # ...and SPEC.md 9.11's absolute pointer is NOT HERE, which is the one entry
 # in this list that is an absence. Its code is 386 instructions and the target
 # machine is an 8088, so it is the one file in the tree that MUST NOT BE
@@ -4009,9 +4017,12 @@ COREAPPS360 := $(CORE_TOOLS360) $(CORE_GAMES360)
 # 286 has. 22 of the 706 512-byte clusters, taken off so the disk keeps 10KB
 # free with a 5KB driver still to come. A 286 booting from a 360KB drive is
 # possible and odd; the 720KB, 1.44MB and 1.2MB system disks keep all three.
+# PCIETHER.DRV (SPEC.md 125.6) is the FOURTH for the same reason one bus
+# along: it refuses below a 386 and no XT has a PCI slot, and at 22 clusters
+# it would take two thirds of what the disk has left.
 # System Check's manifest marks them OPTIONAL (118.2.3), so a hard disk
 # installed from this disk is not reported as missing them.
-SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv
+SYS360OMITDRV = $(BUILD)/cdrom.drv $(HMAIMG) $(BUILD)/xmem.drv $(BUILD)/pciether.drv
 DRIVERS360 = $(if $(filter $(BUILD)/cdrom.drv,$(DRIVERS)),,$(error \
     DRIVERS360 filters $(BUILD)/cdrom.drv out of DRIVERS and it is not \
     there - SPEC.md 119.6.7's omission now matches nothing))$(filter-out \
@@ -4875,12 +4886,12 @@ $(BUILD)/ether.bin: $(ETHSTAMP)
 $(BUILD)/ether.drv: $(BUILD)/ether.bin tools/os88drv.py $(PKGZSTAMP)
 	$(OS88DRV) $(BUILD)/ether.bin -o $@
 
-# PCIETHER.DRV (SPEC.md 125): the PCI half of the above, kern_mega only. It is
+# PCIETHER.DRV (SPEC.md 125): the PCI half of the above, every big build's. It is
 # ether.asm's body (ethdrv.inc) and the stack's includes SHARED AS SOURCE over
 # a PCI backend, so every file the stack is made of is a prerequisite, and
 # ETHER.DRV's knobs (ETHDEF: a baked-in base or address, the stage timers) are
-# NOT passed - none of them means anything on a PCI bus. It is in `all` so it
-# keeps assembling; it is on NO disk here (kern_mega's recipes add it, 125.6).
+# NOT passed - none of them means anything on a PCI bus. It rides $(DRIVERS),
+# so every big system disk but the 360KB one carries it (SPEC.md 125.6).
 $(BUILD)/pciether.bin: drivers/pciether/pciether.asm drivers/pciether/pcifamily.inc \
                        drivers/pciether/pci.inc drivers/pciether/rtl8139.inc \
                        drivers/ether/ethdrv.inc \
@@ -15327,14 +15338,13 @@ MEGATOOLSARGS = SYSTEM:$(BUILD)/syscheck.o88 SYSTEM:$(MEGADIR)/fscheck.drv
 # NO COLDHMA.SYS and no XMEM.DRV: the HMA and everything above it are
 # kern_mega's own (kernel/mega.inc), and xm_sniff never asks for either.
 #
-# PCIETHER.DRV (SPEC.md 125.1, 125.6) is kern_mega's alone: it is appended HERE
-# and not to $(DRIVERS), so no other system disk, no apps disk and no live
-# payload ever names it. Its rule ($(BUILD)/pciether.drv) is the driver's own,
-# beside ether.drv's; until that branch is merged `make mega` stops with
-# make's "No rule to make target 'build/pciether.drv'", on purpose - a mega
-# disk that silently shipped without the driver the owner asked for would
-# be a disk that passes every check and has no PCI card in it.
-MEGADRIVERS = $(filter-out %/coldhma.sys %/xmem.drv,$(DRIVERS)) $(BUILD)/pciether.drv
+# PCIETHER.DRV (SPEC.md 125.1, 125.6) rides $(DRIVERS) since 125.1 put its row
+# on every big build, so kern_mega's disks take it from there like the rest.
+# The guard is what this list used to be: a mega disk that silently shipped
+# without the driver would pass every check and have no PCI card in it.
+MEGADRIVERS = $(if $(filter $(BUILD)/pciether.drv,$(DRIVERS)),,$(error \
+    MEGADRIVERS expects $(BUILD)/pciether.drv in DRIVERS - SPEC.md 125.6))$(filter-out \
+    %/coldhma.sys %/xmem.drv,$(DRIVERS))
 $(BUILD)/mega.img: KMODDIR := $(MEGADIR)
 #
 # **ITS DOS.O88 IS kern_mega's OWN** (docs/plans/completed/KERN-MEGA-DOS-PLAN.md 12.1
@@ -15450,6 +15460,24 @@ pciethertest: $(BUILD)/pciethertest.img
 	@echo "              Look at it: make run-pciether (QEMU, an RTL8139 on slirp);"
 	@echo "              86Box: tools/os88box.py launch pentium-pciether"
 
+# PCIBIGTEST - the same gate on kern_big (SPEC.md 125.6): the shipped 1.44MB
+# system disk's files with the same SYSTEM.CFG, so tests/pciether.py --big
+# boots the REAL-MODE kernel with the card already up. Same bit, same file:
+# drv_cfgbit gives PCIETHER.DRV bit 11 on every big build. Pair it with
+# build/brtest.img, as the kern_mega disk is paired.
+$(BUILD)/pcibigtest.img: $(BUILD)/boot.bin $(KERNFILE) $(DRIVERS) $(SYSAPPS) $(SYSROOT) $(COREAPPS) $(SYSDOC) $(SYSLOGO) $(FACES) $(FACELIC) $(BUILD)/pciethercfg/system.cfg tools/os88disk.py
+	python3 tools/os88disk.py -o $@ --size 1440 \
+		--boot $(BUILD)/boot.bin --kernel $(KERNFILE) \
+		$(DRIVERS) $(SYSAPPSARGS) $(SYSROOTARG) $(COREAPPSARGS) $(SYSDOC) $(SYSLOGOARG) $(FACESARG) \
+		$(BUILD)/pciethercfg/system.cfg --folder SYSTEM/APPDATA
+
+.PHONY: pcibigtest
+pcibigtest: $(BUILD)/pcibigtest.img
+	@echo "pcibigtest: build/pcibigtest.img - kern_big, PCIETHER.DRV already wanted"
+	@echo "            (SYSTEM.CFG bit $(PCIETHER_CFGBIT)). Pair it with build/apps.img."
+	@echo "            Run it with: python3 tests/pciether.py --big"
+	@echo "            Look at it: make run-pcibig (QEMU, an RTL8139 on slirp)"
+
 # RUN-PCIETHER - the interactive form of the gate's machine: kern_mega with a
 # PCI RTL8139 (`-device rtl8139`, the 10EC:8139 card PCIETHER.DRV drives) on
 # QEMU's user network instead of the ISA NE2000 that `make run ETHER=1`
@@ -15461,6 +15489,16 @@ run-pciether: $(BUILD)/pciethertest.img $(BUILD)/megaapps.img
 	$(QEMU) -m 16 $(QEMUMACH) \
 		-drive file=$(BUILD)/pciethertest.img,format=raw,if=floppy \
 		-drive file=$(BUILD)/megaapps.img,format=raw,if=floppy,index=1 -boot a $(MOUSE) \
+		-netdev user,id=n0 -device rtl8139,netdev=n0 \
+		-qmp unix:$(QMP_SOCK),server,nowait
+
+# RUN-PCIBIG - the same machine on kern_big (SPEC.md 125.6): the real-mode
+# kernel, the shipped apps disk, and no memory above 1MB to want
+.PHONY: run-pcibig
+run-pcibig: $(BUILD)/pcibigtest.img $(BUILD)/apps.img
+	$(QEMU) $(QEMUMACH) \
+		-drive file=$(BUILD)/pcibigtest.img,format=raw,if=floppy \
+		-drive file=$(BUILD)/apps.img,format=raw,if=floppy,index=1 -boot a $(MOUSE) \
 		-netdev user,id=n0 -device rtl8139,netdev=n0 \
 		-qmp unix:$(QMP_SOCK),server,nowait
 
@@ -19290,7 +19328,7 @@ distclean: clean clean-marty clean-cc clean-nasm3 clean-gb clean-watcom
 # it with the default 1KB - "Not enough memory to allocate file structures").
 # A tests/win16/<name>.wcl adds its options to the compile: BIG is medium
 # model, so its sixteen code_seg functions are far (SPEC.md 124.20).
-WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP LHEAP DOSENV
+WIN16FIX := MSGBOX WINDOW MENU DIALOG MODELESS PROFILE INIFILE BITMAP FPU FPX PUMP GDICARD ICONS WRITER BIG FILES DLLUSE CDLG REGDB LZT SHX MEMDC MDI TASKS TASKB SELTEST MMTEST MCITEST WITEST TMTEST MOTEST PMDDE XVOL OVRTEST MSCDX VBUSER PROPS DGROUP CSALIAS CTLPROC LONGNAME BIGBMP LHEAP DOSENV PMNP
 # ...and the LIBRARIES (SPEC.md 124.23): -bd, linked as windows_dll with
 # their exports and ordinals in tests/win16/<name>.wlk. DLLUSE imports them
 # by the import lines in its own .wlk, so it links without them.
