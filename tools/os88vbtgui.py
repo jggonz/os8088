@@ -3488,7 +3488,8 @@ class ActionsTab(object):
         cb.bind("<<ComboboxSelected>>", lambda ev: (setattr(self, "who", wv.get()),
                                                     self.show()))
         ttk.Label(row, text="(a character's own: when the action is aimed at "
-                  "them alone)").pack(side="left")
+                  "them alone - or, aimed at the enemy, when they are the one "
+                  "doing it; else the general)").pack(side="left")
         grid = ttk.Frame(pf)
         grid.pack(fill="x")
         pools = a["pools"] if self.who == "(general)" else \

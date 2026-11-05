@@ -238094,7 +238094,10 @@ action leaves the enemy at 0; else **CRITICAL** when any hit was one;
 else **DEFENDED** when every hit landed on a guard; else **MISSED** when
 none hit; else **HIT**. The clip is that outcome's pool's, or HIT's when it
 has none (no pool: no clip); for an action aimed at one character alone,
-that character's own pool before the general one; picked by the plan's
+that character's own pool before the general one - and for one aimed at
+the ENEMY, the own pool of the character DOING it (`vbtrules.clip_char`,
+the engine's `[vb_qsingle]`), so two characters' shared Attack plays each
+one's own clip; picked by the plan's
 first draw. The outcome is decided before the clip is chosen, so the
 footage always agrees with the number.
 

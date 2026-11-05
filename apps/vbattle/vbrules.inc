@@ -774,13 +774,20 @@ vb_outcome:
     xor al, al
 .set:
     mov [vb_qout], al
-    ; the single character target, for its own pools
+    ; THE CHARACTER whose own pools are looked in first: the single
+    ; character it is aimed at - or, aimed at the ENEMY, the character
+    ; doing it (each character's own clip of a shared Attack; the owner,
+    ; 2026-11-05: vbtrules.Sim.clip_char)
     mov byte [vb_qsingle], NONE
     cmp byte [vb_qn], 1
     jne .pool
     mov al, [vb_qt]
     cmp al, ENEMY
+    jne .one
+    mov al, [vb_qw]                 ; aimed at the enemy: its doer, when a
+    cmp al, ENEMY                   ; character
     je .pool
+.one:
     mov [vb_qsingle], al
 .pool:
     mov al, [vb_qout]
@@ -864,8 +871,15 @@ vb_peekclip:
     jmp short .p
 .a:
     cmp al, T_ALLY
-    jne .p
+    jne .e
     mov [vb_qsingle], bh
+    jmp short .p
+.e:
+    cmp al, T_ENEMY                 ; aimed at the enemy: the doer's own
+    jne .p                          ; clip (vbtrules.clip_char)
+    cmp bl, ENEMY
+    je .p
+    mov [vb_qsingle], bl
 .p:
     call vb_rpeek
     mov dx, ax

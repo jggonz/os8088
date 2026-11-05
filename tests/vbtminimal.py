@@ -127,6 +127,23 @@ def project(tmp):
        "(%s)" % miss)
     p.set(("actions", "bite", "by_target"), {"ARI": {"hit": ["hit"]},
                                              "BRAM": {"hit": ["hit"]}})
+    # EACH CHARACTER'S OWN CLIP of the shared Attack (the owner,
+    # 2026-11-05): no general hit clip, ARI's and BRAM's own - aimed at the
+    # enemy, an action's per-character clips are the DOER's
+    p.add_clip("hit2", "fight", (0, n // 2), anchors=(0,), exit=0)
+    p.set(("actions", "attack", "pools"), {})
+    p.set(("actions", "attack", "by_target"), {"ARI": {"hit": ["hit"]},
+                                               "BRAM": {"hit": ["hit2"]}})
+    p.set(("enemy", "hp"), 120)
+    import vbtrules as V
+    idx = {c: i for i, c in enumerate(p.d["clips"])}
+    R = V.Rules(V.compile_rules(p, idx))
+    S = V.Sim(R)
+    got = [S.resolve(list(p.d["actions"]).index("attack"), w)["clip"]
+           for w in (0, 1)]
+    ok(got == [idx["hit"], idx["hit2"]],
+       "the reference: ARI's Attack plays ARI's clip, BRAM's BRAM's "
+       "(clips %s)" % got)
     p.save()
     errs = errors(p)
     ok(not errs and p.d["music"] is None,
@@ -195,9 +212,30 @@ def main():
                 + 80] if x)
             ok(lit > 200, "glass: the menu, the band up (%d bytes lit in its "
                "rows)" % lit)
-            key("return")               # Attack, at the 1-HP enemy
-            until(lambda: rb("vb_over") == 1, "victory", guest=120.0)
-            ok(True, "glass: one Attack, and victory")
+            # EACH ONE'S OWN ATTACK, on the glass: at every menu, Attack -
+            # and the clip that plays is the one whose turn it was
+            names = [c["name"].strip().lower() for c in B.Bundle(data).clips]
+            own = {0: names.index("hit"), 1: names.index("hit2")}
+            plays = []
+            for _ in range(8):
+                if rb("vb_over"):
+                    break
+                until(lambda: rb("vb_state") == GS_MENU or rb("vb_over"),
+                      "a menu", guest=120.0)
+                if rb("vb_over"):
+                    break
+                turn = rb("vb_turn")
+                key("return")           # Attack
+                until(lambda: rb("vb_mode") == 1 and rb("vb_cc") in
+                      own.values(), "an Attack's clip", guest=30.0)
+                plays.append((turn, rb("vb_cc")))
+                until(lambda: rb("vb_mode") != 1 or rb("vb_over"),
+                      "the clip over", guest=60.0)
+            ok(rb("vb_over") == 1 and {t for t, _ in plays} == {0, 1} and
+               all(cc == own[t] for t, cc in plays),
+               "glass: each character's Attack plays its OWN clip, to "
+               "victory (turn, clip: %s; ARI's %d, BRAM's %d)"
+               % (plays, own[0], own[1]))
             key("esc")
         finally:
             m.quit()

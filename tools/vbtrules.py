@@ -512,6 +512,19 @@ class Rules:
                        for k in range(npl)}
 
 
+def clip_char(tg, who):
+    """The character whose OWN pools (an action's "by_target") are looked
+    in first: the single character it is aimed at - or, when it is aimed
+    at the ENEMY, the character doing it, so that two characters' shared
+    Attack plays each one's own clip (the owner, 2026-11-05). None: the
+    action's general pools alone"""
+    if len(tg) != 1:
+        return None
+    if tg[0] != ENEMY:
+        return tg[0]
+    return who if who != ENEMY else None
+
+
 # --- the reference: the battle as the engine plays it ---------------------------------
 
 class Rng:
@@ -685,8 +698,7 @@ class Sim:
             outc = 1                        # missed
         else:
             outc = 0                        # hit
-        single = tg[0] if len(tg) == 1 and tg[0] != ENEMY else None
-        clip = self.clip_of(a, outc, single, pick)
+        clip = self.clip_of(a, outc, clip_char(tg, who), pick)
         return dict(action=ai, who=who, targets=tg, res=res, outcome=outc,
                     clip=clip, charged=charged)
 
@@ -716,8 +728,7 @@ class Sim:
         a = self.R.acts[ai]
         tg = self.targets(a, who, chosen) if a["target"] != TARGETS["ally"] \
             or chosen is not None else []
-        single = tg[0] if len(tg) == 1 and tg[0] != ENEMY else None
-        return self.clip_of(a, 0, single, self.rng.peek())
+        return self.clip_of(a, 0, clip_char(tg, who), self.rng.peek())
 
     # --- costs and effects -----------------------------------------------------
     def can_pay(self, ai, who):
