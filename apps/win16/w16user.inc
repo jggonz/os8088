@@ -24,6 +24,7 @@ W16C_HBR    equ 22
 W16C_WEXTRA equ 24
 W16C_MENU   equ 26              ; far: lpszMenuName (SPEC.md 124.11)
 W16C_ICON   equ 30              ; hIcon: a minimized MDI child's (124.27.5)
+W16C_TASK   equ 32              ; its task, index + 1 (SPEC.md 124.28.3), kept with it
 CS_GLOBALCLASS_HI equ 0x40      ; CS_GLOBALCLASS (0x4000), the high byte's
 
 ; --- a window ------------------------------------------------------------------
@@ -347,21 +348,81 @@ w16_farname:
     pop cx
     ret
 
-; w16_findcls - [w16_namebuf] -> BX = the class; CF=1 none
+; w16_clsget - AL = a class's index -> AX = w16_ccb, its record copied there
+; (the class table is a block of the program's global memory, SPEC.md
+; 124.25.18.1, and no record is read in place): [w16_cbi] = the index, and
+; W16C_TASK is its task. Keeps the rest.
+w16_clsget:
+    push cx
+    push si
+    push di
+    push ds
+    push es
+    mov [w16_cbi], al
+    xor ah, ah
+    mov si, ax
+    mov cl, 5
+    shl ax, cl
+    add si, ax                      ; index * W16C_STRIDE
+    push ds
+    pop es
+    mov di, w16_ccb
+    mov ds, [w16_clsseg]
+    mov cx, W16C_STRIDE
+    cld
+    rep movsb
+    pop es
+    pop ds
+    pop di
+    pop si
+    pop cx
+    mov ax, w16_ccb
+    ret
+
+; w16_clsput - w16_ccb is put back as class [w16_cbi] (SetClassWord). Keeps
+; every register.
+w16_clsput:
+    push ax
+    push cx
+    push si
+    push di
+    push es
+    xor ah, ah
+    mov al, [w16_cbi]
+    mov di, ax
+    mov cl, 5
+    shl ax, cl
+    add di, ax
+    mov es, [w16_clsseg]
+    mov si, w16_ccb
+    mov cx, W16C_STRIDE
+    cld
+    rep movsb
+    pop es
+    pop di
+    pop si
+    pop cx
+    pop ax
+    ret
+
+; w16_findcls - [w16_namebuf] -> BX = the class, which is w16_ccb, a copy of
+; its record, with [w16_cbi] its index; CF=1 none
 w16_findcls:
     push cx
     push si
     push di
-    mov bx, w16_cls + (W16_MAXCLS - 1) * W16C_SIZE
-    mov cx, W16_MAXCLS              ; from the last: a task's own class,
-.cls:                               ;   registered over a global one of the
-    cmp byte [bx + W16C_NAME], 0    ;   name, lies after it (SPEC.md 124.28.3)
+    push es
+    mov es, [w16_clsseg]            ; (0 with no block, and then never read:
+    mov bx, [w16_clsend]            ;   [w16_clsend] is 0 too)
+.next:                              ; from the last: a task's own class,
+    sub bx, W16C_STRIDE             ;   registered over a global one of the
+    jb .out                         ;   name, lies after it (SPEC.md 124.28.3);
+                                    ;   CF=1, none
+    cmp byte [es:bx + W16C_NAME], 0
     je .next
-    test byte [bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
+    test byte [es:bx + W16C_STYLE + 1], CS_GLOBALCLASS_HI
     jnz .any                        ; a task's class is its own, unless it
-    mov si, cx                      ;   is global (SPEC.md 124.28.3)
-    dec si
-    mov al, [w16_ctask + si]
+    mov al, [es:bx + W16C_TASK]     ;   is global (SPEC.md 124.28.3)
     or al, al
     jz .any
     dec ax
@@ -370,27 +431,22 @@ w16_findcls:
 .any:
     mov si, w16_namebuf
     lea di, [bx + W16C_NAME]
-    push cx
     mov cx, 16
 .cmp:
     mov al, [si]
-    cmp al, [di]
-    jne .ne
+    cmp al, [es:di]
+    jne .next
     inc si
     inc di
     loop .cmp
-    pop cx                          ; all sixteen equal (not ZF: the incs
-    jmp short .hit                  ;   after the last compare moved it)
-.ne:
-    pop cx
-.next:
-    sub bx, W16C_SIZE
-    loop .cls
-    stc
-    jmp short .out
-.hit:
+    mov ax, bx                      ; all sixteen equal: the record's
+    mov cl, W16C_STRIDE             ;   index
+    div cl
+    call w16_clsget
+    mov bx, ax
     clc
 .out:
+    pop es
     pop di
     pop si
     pop cx
@@ -417,15 +473,7 @@ w16u_regclass:
     test byte [es:si + 1], CS_GLOBALCLASS_HI ; MSINSSTF's: SPEC.md 124.28.3)
     jnz .fail
 .new:
-    mov di, w16_cls
-    mov cx, W16_MAXCLS
-.free:
-    cmp byte [di + W16C_NAME], 0
-    je .take
-    add di, W16C_SIZE
-    loop .free
-    jmp short .fail
-.take:
+    mov di, w16_ccb                 ; made in w16_ccb and put in the block
     push si
     mov si, w16_namebuf
     mov cx, 8
@@ -455,14 +503,12 @@ w16u_regclass:
     mov [di + W16C_MENU], ax
     mov ax, [es:si + 20]
     mov [di + W16C_MENU + 2], ax
-    mov ax, di                      ; an atom-shaped non-zero answer
-    sub ax, w16_cls
-    mov bx, ax                      ; ...and the class is its task's
-    mov cl, 5                       ;   (W16C_SIZE, SPEC.md 124.28.3)
-    shr bx, cl
-    mov cl, [w16_cur]
-    inc cx
-    mov [w16_ctask + bx], cl
+    mov al, [w16_cur]               ; the class is its task's
+    inc al                          ;   (SPEC.md 124.28.3)
+    mov [di + W16C_TASK], al
+    SCALL w16s_clsadd               ; AL = its index, CF=1 no room or memory
+    jc .fail
+    xor ah, ah                      ; an atom-shaped non-zero answer
     or ax, 0xC000
     jmp short .out
 .fail:
@@ -492,10 +538,7 @@ w16u_createwnd:
     call w16_findcls                ; BX = the class
     jc .builtin
     mov byte [w16_cwkind], W16Q_PROG
-    mov ax, bx
-    sub ax, w16_cls
-    mov dl, W16C_SIZE
-    div dl
+    mov al, [w16_cbi]
     mov [w16_cwcls], al
     mov ax, [bx + W16C_PROC]
     mov [w16_cwproc], ax
@@ -578,10 +621,8 @@ w16u_createwnd:
     or ax, ax                       ;   (SPEC.md 124.11)
     jnz .menu
     mov al, [si + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
+    call w16_clsget
     mov di, ax
-    add di, w16_cls
     mov ax, [di + W16C_MENU]
     mov dx, [di + W16C_MENU + 2]
     mov cx, ax
@@ -700,11 +741,10 @@ w16_handover:
     mov al, [w16_cwcls]
     cmp al, 0xFF
     je .no
-    mov ah, W16C_SIZE
-    mul ah
+    call w16_clsget
     mov bx, ax
-    mov ax, [bx + w16_cls + W16C_MENU]
-    or ax, [bx + w16_cls + W16C_MENU + 2]
+    mov ax, [bx + W16C_MENU]
+    or ax, [bx + W16C_MENU + 2]
     jz .no
 .menu:
     mov cl, [w16_top]
@@ -3561,7 +3601,7 @@ w16_postact:
 ; CF=1 refuses, with the WM_CLOSE posted. The gfx lock is held.
 w16_close:
     cmp byte [w16_state], W16S_RUN
-    jne .go
+    jne .notrun
     cmp si, [w16_win]
     je .main
     push si                         ; a second window: the program is asked,
@@ -3615,6 +3655,11 @@ w16_close:
     pop si
     cmp byte [w16_state], W16S_ENDED
     jne .refuse
+.notrun:
+    cmp byte [w16_state], W16S_ENDED ; ended and not yet given back, the wake
+    jne .go                         ;   w16_after posted still queued (SPEC.md
+    cmp si, [w16_win]               ;   124.8.3): given back from the main
+    jne .refuse                     ;   window's close; a second one's waits
     mov byte [w16_locked], 1        ; (w16_mhpost cleared it; the kernel's
     call w16_freeprog               ;   lock is still held, w16_onclose)
 .go:

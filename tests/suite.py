@@ -17127,6 +17127,21 @@ SOAK = [
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
+    Row("win16ctlproc", "soak", py("tests/win16ctlproc.py"), 60.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc: CTLPROC.EXE (`make "
+        "win16fixtures`, tests/win16/ctlproc.c) asks GetClassInfo for Edit "
+        "and Button, SUPERCLASSES both (a class of its own over the copied "
+        "procedure, forwarding with CallWindowProc) and uses them - "
+        "WM_SETTEXT, EM_SETSEL, EM_REPLACESEL, WM_GETTEXT, BM_SETCHECK, "
+        "BM_GETCHECK - checks the superclass keeps its class name and a "
+        "multi-line one its own window word after Edit's 18 bytes, makes one "
+        "that answers WM_CREATE itself (its Edit state made at the first "
+        "message it forwards), and SUBCLASSES a plain Edit with SetWindowLong "
+        "(GWL_WNDPROC), eating one key; its MessageBox must be CTLPROC OK. "
+        "What Visual Basic 3.0's runtime does to every control it makes",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
     Row("win16props", "soak", py("tests/win16props.py"), 60.0,
         "SPEC.md 124.25.13, WIN16-NEXT-PLAN: PROPS.EXE (`make "
         "win16fixtures`, tests/win16/props.c) sets, gets, replaces, "
@@ -17137,6 +17152,57 @@ SOAK = [
         "and calls CloseWindow, the "
         "calls Microsoft Arcade's five games were refused for; its "
         "MessageBox must be PROPS OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16dgroup", "soak", py("tests/win16dgroup.py"), 60.0,
+        "SPEC.md 124.9.2, WIN16-NEXT-PLAN: DGROUP.EXE (`make "
+        "win16fixtures`, tests/win16/dgroup.c) asks GlobalHandle(SS), "
+        "GlobalSize, GlobalLock and GlobalUnlock of its own DGROUP, grows it "
+        "with GlobalReAlloc as VBRUN300 does, writes past the old stack and "
+        "is refused a size past 64 KB; GMEM_MODIFY, GlobalFlags, "
+        "LockSegment(-1) and a refused GlobalFree of it, and handle 0 still "
+        "0 to all four calls; its MessageBox must be DGROUP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16lheap", "soak", py("tests/win16lheap.py"), 60.0,
+        "SPEC.md 124.25.19, WIN16-NEXT `lheap`: LHEAP.EXE (`make "
+        "win16fixtures`, tests/win16/lheap.c) makes a 1 KB local heap in its "
+        "DGROUP and allocates 100 blocks of 100 bytes (distinct, filled, read "
+        "back), grows a moveable block with LocalReAlloc and calls "
+        "LocalCompact; then a heap of 496 bytes in a locked GlobalAlloc block "
+        "of 2 KB takes 60 blocks, so the block grows in place; the same in a "
+        "block whose neighbour is in use (kern_mega: it moves, its selector "
+        "following; real mode: it stops short, data intact); 70 window "
+        "classes, past the class block's first 64 (124.25.18.1); its "
+        "MessageBox must be LHEAP OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16dosenv", "soak", py("tests/win16dosenv.py"), 60.0,
+        "SPEC.md 124.25.21, WIN16-NEXT `vbxlib`: DOSENV.EXE (`make "
+        "win16fixtures`, tests/win16/dosenv.c) asks GetDOSEnvironment for the "
+        "task's environment: the offset must be 0, the selector readable (a C "
+        "start-up that loads a nonzero AX into ES faulted Mozart's "
+        "SPUSH.VBX), the list must end at a double NUL followed by the word "
+        "1 and the program's own path (GetModuleFileName's), getenv() must "
+        "find windir and TEMP equal to GetWindowsDirectory and PATH naming "
+        "it, the PSP's word 2Ch must hold the selector, and a second call "
+        "must answer the same block; its MessageBox must be DOSENV OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16longname", "soak", py("tests/win16longname.py"), 60.0,
+        "SPEC.md 124.10: LONGNAME.EXE (`make win16fixtures`, "
+        "tests/win16/longname.c) asks for a dialog named in 21 characters "
+        "(Microsoft Arcade's NUMBEROFPLAYERSDIALOG, which a 15-character "
+        "copy of the name never found, so Asteroids said Error code = -1 on "
+        "F2), a menu in 40, a bitmap in 255 and by #300, a resource of a "
+        "28-character type and accelerators in 26, the dialog in lower case, "
+        "and must miss it cut to 15 or one longer, and a 40-character "
+        "global atom added twice is one atom GlobalFindAtom finds; its "
+        "MessageBox must be LONGNAME OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
@@ -17162,6 +17228,21 @@ SOAK = [
         "ExcludeClipRect, copies screen to bitmap and back through a moved "
         "window origin, and flood-fills on the window's DC inside a frame "
         "and across the client; its MessageBox must be MEMDC OK",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/os8088.img", "build/win16.o88",
+               "build/win16/DOS.O88")),
+    Row("win16bigbmp", "soak", py("tests/win16bigbmp.py"), 60.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE (`make "
+        "win16fixtures`, tests/win16/bigbmp.c) makes a 640 x 480 bitmap, "
+        "153,600 bytes in WIN16's 4 bits a pixel, which is three tiles - "
+        "past W16_BMMAX's 64,000 - selects it into a memory DC, draws in "
+        "each tile and across the seam, reads every pixel back, BitBlts the "
+        "last tile's block and a source across the seam onto the window, "
+        "reads a scan through GetDIBits, writes one through SetDIBits, "
+        "StretchBlts the seam, draws a line and an ExtFloodFill across a "
+        "seam, blits from an odd column, makes a pattern brush of it, copies "
+        "both ways with a second tiled bitmap of other tile heights and fills "
+        "a tiled monochrome one; its MessageBox must be BIGBMP OK",
         needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=600,
         wants=("build/os8088.img", "build/win16.o88",
                "build/win16/DOS.O88")),
@@ -17255,6 +17336,19 @@ SOAK = [
         "sentence, and WIN16's load and discard counters both moved",
         needs=("qemu", "mtools", "nasm", "win16samples"), timeout=900,
         wants=("build/os8088.img", "build/win16/DOS.O88")),
+    Row("win16thunk", "soak", py("tests/win16thunk.py"), 120.0,
+        "SPEC.md 124.26.14, WIN16-NEXT c3 (the real-mode arm): THKCALL.EXE "
+        "(tests/win16/thkcall.asm, assembled, with Microsoft's linker's "
+        "`9Ah offset` and a SELECTOR relocation on the segment word) under "
+        "QEMU on kern_big, WIN16 built W16DEFS=-DW16_CODEKB=5 into a private "
+        "tree: two 3,500-byte discardable segments reached by far calls only "
+        "are loaded and discarded in turn through per-target thunks, a third "
+        "that a `mov ax, seg` in the first also names is kept when the first "
+        "loads (not at launch) and stays loaded, and the MessageBox says "
+        "`thkcall: abacxba` with 5 segments loaded and 4 discarded",
+        needs=("qemu", "mtools", "nasm", "win16fixtures"), timeout=300,
+        wants=("build/os8088.img", "build/win16/DOS.O88",
+               "build/win16/THKCALL.EXE")),
     Row("win16calc", "soak", py("tests/win16calc.py"), 150.0,
         "SPEC.md 124.16, WIN16-PLAN S10: Windows 3.0's and 3.1's Calculator "
         "(CALC.EXE, W31CALC.EXE - Microsoft's, in build/win16/ only where the "
@@ -17324,7 +17418,9 @@ SOAK = [
         "pass with a Windows program open - MENU.EXE through the shipped "
         "DOS.O88 forward off an XT-IDE disk's root, hibernated from the System "
         "menu, resumed at the same segment still running, then PLAYED ON: F3's "
-        "MessageBox up and answered, and its close box freeing WIN16. MartyPC",
+        "MessageBox up and answered, and File > Exit through the menu (Alt+F, "
+        "X: SPEC.md 124.8.3, an end inside the dialog part) freeing WIN16. "
+        "MartyPC",
         needs=("marty", "nasm", "win16fixtures"), serial=True, timeout=1800,
         wants=("build/kernel.sys", "build/win16.o88", "build/kdos/DOS.O88",
                "build/hiber.drv")),
@@ -17394,6 +17490,61 @@ SOAK = [
         wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
                "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
                "build/win16/PMNP.EXE")),
+    Row("win16megabigbmp", "soak", py("tests/win16mega.py", "BIGBMP"), 120.0,
+        "SPEC.md 124.25.17, WIN16-NEXT-PLAN: BIGBMP.EXE on kern_mega, under "
+        "Bochs (tests/win16mega.py; the kern_big row win16bigbmp is real "
+        "mode). Tiled bitmaps past W16_BMMAX = 64,000 bytes through "
+        "kern_mega's selectors (SEG_SUB, mega_bclip), the arm Paintbrush "
+        "and Centipede need; BIGBMP writes BIGBMP.TXT and it must say "
+        "BIGBMP OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/BIGBMP.EXE")),
+    Row("win16megactlproc", "soak", py("tests/win16mega.py", "CTLPROC"), 120.0,
+        "SPEC.md 124.25.18, WIN16-NEXT ctlproc round 2: CTLPROC.EXE on "
+        "kern_mega, under Bochs (tests/win16mega.py). It registers 75 "
+        "classes, so the class table grows once; on kern_mega the old block "
+        "is freed through W16VOF + w16_gfreeh, which no row had run. "
+        "CTLPROC.TXT must say CTLPROC OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/CTLPROC.EXE")),
+    Row("win16megadgroup", "soak", py("tests/win16mega.py", "DGROUP"), 120.0,
+        "SPEC.md 124.9.2, WIN16-NEXT dgroup: DGROUP.EXE on kern_mega, under "
+        "Bochs (tests/win16mega.py). The program's DGROUP answers "
+        "GlobalHandle/Size/Lock/ReAlloc and GMEM_MODIFY, whose kern_mega "
+        "fix had review only. DGROUP.TXT must say DGROUP OK, with no fault "
+        "line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/DGROUP.EXE")),
+    Row("win16megamemdc", "soak", py("tests/win16mega.py", "MEMDC"), 120.0,
+        "SPEC.md 124.25.3-6, WIN16-ANY-PLAN S19b: MEMDC.EXE on kern_mega, "
+        "under Bochs (tests/win16mega.py). KNOWN TO FAIL: it is a #GP at "
+        "122C:8896 on kern_mega (bigbmp-report.md, bigbmp-verify.md section "
+        "4), unattributed; the registry has no expected-failure mechanism, "
+        "so the row is registered normally and the final pass shows whether "
+        "it still does. MEMDC.TXT must say MEMDC OK, with no fault line",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/MEMDC.EXE")),
+    Row("win16megamenu", "soak", py("tests/win16mega.py", "MENU"), 120.0,
+        "SPEC.md 124, WIN16-NEXT astexit (astexit-verify.md, Open: a "
+        "kern_mega leg): MENU.EXE on kern_mega, under Bochs "
+        "(tests/win16mega.py). File > Exit (Alt+F, X) ends the program from "
+        "a menu command: MENU.TXT says menu: ended, WIN16's instance is "
+        "gone, and there is no fault line or kern_mega CLOSED toast "
+        "(ASTEROID's #GP on Game > Exit). Bochs input is unproven here, so "
+        "a red may be the keys and not the kernel: look at end.png with "
+        "--keep",
+        needs=("bochs", "mtools", "nasm", "win16fixtures"), timeout=600,
+        wants=("build/mega.img", "build/mbr.bin", "build/megak/kernel.sys",
+               "build/megak/apps/win16.o88", "build/megak/kdos/DOS.O88",
+               "build/win16/MENU.EXE")),
     Row("atkey", "soak", py("tests/atkey.py"), 70.0,
         "WHAT ONE ARTFULTYPE KEYSTROKE COSTS on a 4.77MHz 8088, in guest "
         "cycles off at_onkey's entry to its return. Nothing in this tree had "
@@ -19914,6 +20065,21 @@ SOAK = [
         wants=("build/pciethertest.img", "build/brtest.img",
                "build/megak/kernel.map", "build/pciether.bin",
                "build/pciether.drv", "build/mega.img",
+               "build/browser.o88", "build/browser.map"),
+        locks=("port:8090",)),
+    Row("pcibig", "soak", py("tests/pciether.py", "--big"), 20.0,
+        "SPEC.md 125.1, 125.6: the pciether row on kern_big, which carries "
+        "PCIETHER.DRV's drv_tab row since the owner widened it from kern_mega "
+        "(2026-11-04) - the shipped real-mode kernel booting `make "
+        "pcibigtest`'s disk on QEMU with a PCI RTL8139: the driver attached "
+        "off SYSTEM.CFG bit 11, the PCI BIOS reached directly (no "
+        "reflection), the ring a conventional paragraph, DHCP bound, the "
+        "Browser's page fetched and the counters moving with no "
+        "receive-overflow reset. QEMU by name, for the pciether row's reasons.",
+        needs=("qemu", "nasm"), serial=True,
+        wants=("build/pcibigtest.img", "build/brtest.img",
+               "build/kernel.map", "build/pciether.bin",
+               "build/pciether.drv", "build/kernel.sys",
                "build/browser.o88", "build/browser.map"),
         locks=("port:8090",)),
     Row("brdownload", "soak", py("tests/brdownload.py"), 180.0,

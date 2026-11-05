@@ -343,10 +343,155 @@ W16SYS w16n_getwpl
     pop di
     ret
 
+; w16s_clsadd - w16_ccb (a class, its W16C_TASK set) goes into the first free
+; record of the class block (SPEC.md 124.25.18.1): a block of the program's
+; global memory, W16C_STRIDE a record, [w16_clsend] its records' end. None
+; yet, or every record used: a block W16_MAXCLS records longer is made, the
+; records copied into it at the same indexes (a class's atom is 0C000h + its
+; index, so every atom and every W16W_CLS stays good) and the old one freed,
+; up to W16_CLSCAP records. AL = the index, CF=0; CF=1 at the cap or with no
+; memory: RegisterClass answers FALSE. Keeps the rest
+w16s_clsadd:
+    push bx
+    push cx
+    push dx
+    push si
+    push di
+    push es
+    mov es, [w16_clsseg]
+    xor bx, bx
+.f:
+    cmp bx, [w16_clsend]
+    jae .grow
+    cmp byte [es:bx + W16C_NAME], 0
+    je .take
+    add bx, W16C_STRIDE
+    jmp short .f
+.grow:                              ; BX = the end, and the first new record
+    mov ax, bx
+    add ax, W16_MAXCLS * W16C_STRIDE
+    cmp ax, W16_CLSCAP * W16C_STRIDE
+    jbe .size
+    mov ax, W16_CLSCAP * W16C_STRIDE
+    cmp ax, bx
+    jbe .no                         ; at the cap
+.size:
+    push ax
+    xor dx, dx
+    mov cl, W16G_HIGH | GMEM_ZEROINIT   ; fixed, and zeroed: every new name
+    ICALL w16_gnew                  ;   NUL. At the top of the heap, so it is
+    pop cx                          ;   not the block a GlobalAlloc's local
+    or ax, ax                       ;   heap grows into (WIN16-NEXT lheap).
+    jz .no                          ;   CX = the new end
+    W16TOSEL dx                     ; DX = its segment (the arm: a selector,
+    mov es, dx                      ;   124.31.3)
+    mov ax, [w16_clsseg]            ; AX = the old block, 0 none
+    mov [w16_clsseg], dx
+    mov [w16_clsend], cx
+    mov cx, bx                      ; the old records, to the same offsets
+    push ds
+    mov ds, ax
+    xor si, si
+    xor di, di
+    cld
+    rep movsb
+    pop ds
+    or ax, ax
+    jz .take
+    push es
+    mov es, ax
+    W16VOF ax, es                   ; its handle: a fixed block's is its
+    pop es                          ;   paragraph
+    ICALL w16_gfreeh
+.take:
+    mov ax, bx                      ; AL = the record's index
+    mov cl, W16C_STRIDE
+    div cl
+    mov di, bx
+    mov si, w16_ccb
+    mov cx, W16C_STRIDE
+    cld
+    rep movsb
+    clc
+    jmp short .out
+.no:
+    stc
+.out:
+    pop es
+    pop di
+    pop si
+    pop dx
+    pop cx
+    pop bx
+    ret
+
+; w16_ctlkrow - a CLASS entry of WIN16's controls (slots W16_CTLK + kind,
+; SPEC.md 124.25.18), which GetClassInfo hands out as a class's window
+; procedure: w16_ctlrow's arguments and answer. A window of the program's
+; own class that calls one is a control of that class from this message on:
+; Visual Basic's ThunderTextBox forwards to "Edit"'s, and the window keeps the
+; program's procedure while its state lives in its record, as a subclassed
+; control's does. Windows made that state at WM_NCCREATE, which WIN16 does not
+; send, so it is made at the window's WM_CREATE - and, for a procedure that
+; answered WM_CREATE itself, before the first message it does forward (a
+; control with no state would draw from, and type into, segment 0), and a
+; WM_CREATE it forwards after that is answered 0 rather than made twice. A
+; window that is a control already keeps its kind. Here rather than in the dialog
+; part: part 3 is full, and a program's class never fetched it.
+W16SYS w16_ctlkrow
+    push si
+    mov ax, [w16_idx]               ; the slot the gate is serving
+    sub ax, W16_CTLK
+    push ax                         ; = the kind
+    ICALL w16_args
+    ICALL w16_smargs
+    ICALL w16_hwnd2rec
+    pop ax
+    jc .no
+    ICALL w16_dlgin                 ; the controls' part
+    jc .no
+    cmp byte [bx + W16W_KIND], W16Q_PROG
+    je .prog
+    cmp word [w16_sm_msg], WM_CREATE    ; a control already: made once, so a
+    je .no                              ;   WM_CREATE forwarded late is 0
+    jmp short .go
+.prog:
+    mov [bx + W16W_KIND], al
+    cmp word [w16_sm_msg], WM_CREATE
+    je .go
+    mov si, w16_sm_msg              ; its WM_CREATE first, lParam 0 as a
+    push word [si]                  ;   dialog's control has it
+    push word [si + 2]
+    push word [si + 4]
+    push word [si + 6]
+    mov word [si], WM_CREATE
+    xor ax, ax
+    mov [si + 2], ax
+    mov [si + 4], ax
+    mov [si + 6], ax
+    ICALL w16_intproc
+    pop word [si + 6]
+    pop word [si + 4]
+    pop word [si + 2]
+    pop word [si]
+    and ax, dx
+    inc ax
+    jnz .go
+    mov byte [bx + W16W_KIND], W16Q_PROG    ; refused: the program's again
+.no:
+    xor ax, ax
+    xor dx, dx
+    pop si
+    ret
+.go:
+    ICALL w16_intproc
+    pop si
+    ret
+
 ; GetClassInfo (USER.404) - args: +0 lpWndClass, +4 lpszClassName,
 ; +8 hInstance. A class the program registered, by name or by the atom
-; RegisterClass answered, as its WNDCLASS; FALSE for any other - WIN16's
-; own controls have no window procedure a program could call
+; RegisterClass answered, as its WNDCLASS, or one of WIN16's control classes
+; with its class entry (w16_ctlkrow, SPEC.md 124.25.18); FALSE for any other
 W16SYS w16n_clsinfo
     push si
     push di
@@ -355,22 +500,74 @@ W16SYS w16n_clsinfo
     mov dx, [es:bx + 6]
     or dx, dx
     jnz .name
-    sub ax, 0xC000                  ; the atom: its record's offset
+    sub ax, 0xC000                  ; the atom: its class's index
     jb .no
-    cmp ax, W16_MAXCLS * W16C_SIZE
+    cmp ax, W16_CLSCAP
     jae .no
-    test al, W16C_SIZE - 1
-    jnz .no
-    add ax, w16_cls
+    push ax
+    mov cl, W16C_STRIDE             ; inside the block as it is now
+    mul cl
+    cmp ax, [w16_clsend]
+    pop ax
+    jae .no
+    ICALL w16_clsget
     mov si, ax
     cmp byte [si + W16C_NAME], 0
     je .no
-    jmp short .have
+    jmp .have
 .name:
     ICALL w16_farname
     jc .no
     ICALL w16_findcls
-    jc .no
+    jnc .reg
+    ICALL w16_builtin               ; WIN16's own: its class entry
+    jc .no                          ;   (SPEC.md 124.25.18); MDICLIENT has
+    cmp al, W16Q_COMBO              ;   none
+    ja .no
+    xor ah, ah
+    mov si, ax
+    ICALL w16_ctlstub               ; DX:AX = slot 0's stub, the kind's is
+    mov cx, si                      ;   W16_CTLK + kind along
+    add cx, W16_CTLK
+    shl cx, 1
+    shl cx, 1
+    add ax, cx
+    push dx
+    push ax
+    ICALL w16_args
+    push word [es:bx + 4]
+    push word [es:bx + 6]
+    les di, [es:bx]
+    pop word [es:di + 24]           ; lpszClassName
+    pop word [es:di + 22]
+    pop word [es:di + 2]            ; lpfnWndProc
+    pop word [es:di + 4]
+    mov ax, 8                       ; CS_DBLCLKS, Windows 3.1's: double clicks, but not
+    cmp si, W16Q_STATIC             ;   a static's or a scroll bar's
+    je .nodbl
+    cmp si, W16Q_SCROLL
+    jne .sty
+.nodbl:
+    xor ax, ax
+.sty:
+    mov [es:di], ax
+    xor ax, ax                      ; no class or window extra words, no icon,
+    mov [es:di + 6], ax             ;   cursor or menu: the state is in the
+    mov [es:di + 8], ax             ;   window's record...
+    mov [es:di + 12], ax
+    mov [es:di + 14], ax
+    mov [es:di + 18], ax
+    mov [es:di + 20], ax
+    cmp si, W16Q_EDIT               ; ...but a multi-line EDIT keeps its view
+    jne .xw                         ;   and undo in the first 18 extra bytes
+    mov byte [es:di + 8], ME_XTRA   ;   (w16edml.inc): a superclass's own
+.xw:                                ;   words go after them
+    mov ax, [w16_dgroup]
+    mov [es:di + 10], ax
+    mov word [es:di + 16], COLOR_WINDOW + 1
+    mov ax, 1
+    jmp .out
+.reg:
     mov si, bx
 .have:
     ICALL w16_args

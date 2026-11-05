@@ -769,7 +769,7 @@ w16_mload:
     push si
     push di
     push es
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_MENU
@@ -2492,6 +2492,11 @@ w16_mcloseto:
     call w16_mplev
     call w16_mpclose
     pop ax
+    cmp byte [w16_mlev], 0          ; TrackPopupMenu's loop has no bar: its
+    jne .l                          ;   last popup down ends it (124.25.16)
+    cmp byte [w16_mkbd], 2
+    jne .l
+    mov byte [w16_mtrk], 0
     jmp short .l
 .out:
     pop bx
@@ -2733,8 +2738,17 @@ w16_mt_tail:
 .ret:
     ret
 .done:
-    xor ax, ax
+    jmp short w16_mans
+
+; w16_mans - AX:DX = what the loop's import answers once it has ended: 0 for
+; DefWindowProc, TRUE for TrackPopupMenu (w16_mkbd 2, 124.25.16)
+w16_mans:
     xor dx, dx
+    xor ax, ax
+    cmp byte [w16_mkbd], 2
+    jne .r
+    inc ax
+.r:
     ret
 
 ; w16_mtbegin - DefWindowProc enters the loop: BX = the window, AX = its
@@ -2831,7 +2845,10 @@ w16_mstop:
     call w16_mcloseto
     mov byte [w16_mbsel], 0xFF
     mov byte [w16_mtrk], 0
+    cmp byte [w16_mkbd], 2          ; TrackPopupMenu's loop never touched
+    je .nobar                       ;   the bar: nothing to draw (124.25.16)
     call w16_mbardraw
+.nobar:
     pop ax
     ret
 
@@ -3218,8 +3235,7 @@ w16_mhpost:
 .nosend:
     cmp byte [w16_mtrk], 0
     jne .still
-    xor ax, ax
-    xor dx, dx
+    call w16_mans
     ICALL w16_resume
 .after:
     ICALL w16_after                  ; (the lock still marked held)
@@ -3339,6 +3355,8 @@ w16_mup:
     je .bar
     cmp al, 2
     je .pop
+    cmp byte [w16_mkbd], 2          ; TrackPopupMenu's menu stays up for a
+    je .post                        ;   release outside it (124.25.16)
     call w16_mstop
     jmp short .post
 .bar:
@@ -3580,7 +3598,7 @@ W16LIB w16u_loadaccel
     ICALL w16_args
     mov ax, [es:bx]
     mov dx, [es:bx + 2]
-    mov di, w16_rnamb
+    mov di, w16_rnam
     ICALL w16_rkey
     mov [w16_rnk], ax
     mov word [w16_rtk], 0x8000 | RT_ACCEL

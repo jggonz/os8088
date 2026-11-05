@@ -69,6 +69,7 @@ FSEG = 0x2000           # the file, as w16_load reads it
 SEG0 = 0x3000           # the program's segments, one after another
 CLAIM = 0x8000          # what OSAPI_MEM_CLAIM answers
 SSEG = 0x9000
+THK = 0x6000            # a module block's thunks (SPEC.md 124.26.14): w16_cthk
 KSEG = 0x0060           # KERNEL_SEG: every API cell is an `int 0F0h` here
 STOP = 0xFFF0           # w16_census returns here
 
@@ -195,9 +196,14 @@ def layout(ne):
     return base
 
 
-def segimage(ne, s, base):
+def segimage(ne, s, base, thk=None):
     """segment s's bytes as the census sees them: relocated, and its OS
-    fixups patched for the emulator (an 8088 has no coprocessor)"""
+    fixups patched for the emulator (an 8088 has no coprocessor). With `thk`
+    (a dict), a selector relocation on a CALL FAR / JMP FAR into another
+    segment is routed through a thunk, as the real-mode loader routes one
+    into a discardable segment (SPEC.md 124.26.14): the site's offset word
+    becomes the thunk's and its selector THK, and `thk` maps (segment,
+    offset) to the thunk's index"""
     buf = bytearray(s.data or b"")
     stub0 = S["w16_stubs"]
     adds = {x for _at, _k, add, sites, _t in s.relocs if add for x in sites}
@@ -222,6 +228,15 @@ def segimage(ne, s, base):
                 off = stub0 + STUBSZ * NORET[o]
         else:
             continue
+        if thk is not None and kind == "internal" and r[0] != s.n and \
+                at == os88ne.RA_SEGMENT and site not in adds and \
+                3 <= site <= len(buf) - 2 and buf[site - 3] in (0x9A, 0xEA):
+            lit = struct.unpack_from("<H", buf, site - 2)[0]
+            t = ne.segs[r[0] - 1]
+            if lit < max(t.length, t.minalloc or 0):
+                i = thk.setdefault((r[0], lit), len(thk))
+                struct.pack_into("<HH", buf, site - 2, 8 * i, THK)
+                continue
         words = {os88ne.RA_FARPTR: ((0, off), (2, seg)),
                  os88ne.RA_SEGMENT: ((0, seg),), os88ne.RA_OFFSET: ((0, off),)}
         for k, v in words.get(at, ()):
@@ -252,7 +267,7 @@ class Machine:
         self.pend = n
         uc.emu_stop()
 
-    def census(self, data, ne):
+    def census(self, data, ne, thunks=False):
         mu = self.mu
         mu.mem_write(IMG << 4, IMAGE + b"\0" * (0x10000 - len(IMAGE)))
         mu.mem_write(PSEG << 4, PART + b"\0" * (0x10000 - len(PART)))
@@ -260,8 +275,17 @@ class Machine:
         mu.mem_write(FSEG << 4, tab + b"\0" * (0x10000 - len(tab)))
         mu.mem_write(CLAIM << 4, b"\xAA" * 0x10000)       # the census clears it
         base = layout(ne)
+        thk = {} if thunks else None
         for s in ne.segs:
-            mu.mem_write(base[s.n] << 4, segimage(ne, s, base))
+            mu.mem_write(base[s.n] << 4, segimage(ne, s, base, thk))
+        if thunks and not thk:
+            return None                 # no far call to route: nothing new
+        if thk:
+            tab = bytearray(8 * len(thk))
+            for (sn, off), i in thk.items():
+                struct.pack_into("<BHHBH", tab, 8 * i, 0xEA, off, base[sn], sn, off)
+            mu.mem_write(THK << 4, bytes(tab))
+            put(mu, "w16_cthk", THK)
         put(mu, "w16_fseg", FSEG)
         put(mu, "w16_fend", tend)
         put(mu, "w16_ne", 0)
@@ -383,23 +407,31 @@ def main():
             if a.v:
                 print("  %s: not an NE WIN16 loads (%s)" % (name, e))
             continue
-        cf, l1, got = m.census(data, ne)
         ran += 1
-        for n in sorted(want):
-            g, w = got.get(n, set()), want[n]
-            if not check(g == w, "%s segment %d: the guest walk reached the bytes "
-                         "the host's did" % (name, n),
-                         "%d bytes only the guest reached (first %s), %d only the "
-                         "host (first %s)" % (len(g - w), hex(min(g - w)) if g - w else "-",
-                                              len(w - g), hex(min(w - g)) if w - g else "-")):
-                pass
-        verdict = "8086" if not cf else REFUSAL.get(S.get("w16_r_c186"), "?")
-        if cf:
-            verdict = next((t for k, t in REFUSAL.items()
-                            if rd(m.mu, IMG, k, 48).split(b"\0")[0].decode("latin-1") == l1), l1)
-        eq(verdict, cpu, "%s: the guest's verdict is the host's" % name)
-        if a.v:
-            print("  %-48s %-6s %s" % (name, cpu, "run" if not cf else l1))
+        # ...and again with its far calls through thunks, as the real-mode
+        # loader lays them out (SPEC.md 124.26.14), when it has any
+        for how in ("", " (far calls through thunks)"):
+            r = m.census(data, ne, thunks=bool(how))
+            if r is None:
+                continue
+            cf, l1, got = r
+            for n in sorted(want):
+                g, w = got.get(n, set()), want[n]
+                if not check(g == w, "%s%s segment %d: the guest walk reached "
+                             "the bytes the host's did" % (name, how, n),
+                             "%d bytes only the guest reached (first %s), %d only "
+                             "the host (first %s)"
+                             % (len(g - w), hex(min(g - w)) if g - w else "-",
+                                len(w - g), hex(min(w - g)) if w - g else "-")):
+                    pass
+            verdict = "8086" if not cf else REFUSAL.get(S.get("w16_r_c186"), "?")
+            if cf:
+                verdict = next((t for k, t in REFUSAL.items()
+                                if rd(m.mu, IMG, k, 48).split(b"\0")[0]
+                                .decode("latin-1") == l1), l1)
+            eq(verdict, cpu, "%s%s: the guest's verdict is the host's" % (name, how))
+            if a.v:
+                print("  %-48s %-6s %s" % (name + how, cpu, "run" if not cf else l1))
     check(ran > 0, "at least one program was checked")
     done("t_w16cens (%d programs)" % ran)
 

@@ -239,7 +239,7 @@ title = "PCI Ethernet driver"
 kind = "driver"
 summary = "Connects a PCI machine to a network and the internet through a Realtek RTL8139 card, for the same programs the Ethernet driver serves."
 short = "Network and internet on a PCI card"
-needs = "A 386 or better with a Realtek RTL8139 PCI network card, on the protected-mode build"
+needs = "A 386 or better with a Realtek RTL8139 PCI network card"
 
 ["NET.DRV"]
 title = "Parallel link"

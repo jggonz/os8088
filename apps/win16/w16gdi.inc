@@ -321,8 +321,13 @@ w16_dcpark:
 ; a callback holds it) and the clip again, the window's as it is now - it may
 ; have moved, or been covered, while the program waited. A BeginPaint DC's
 ; clip is the whole client then. The rest of its state is kept, an
-; IntersectClipRect's cut excepted. Keeps every register.
+; IntersectClipRect's cut excepted. Keeps every register. On the arm the
+; stack a BIOS call runs on and the #NP handler are asked for again first
+; (w16_lend): this is the one door into every run of the program.
 w16_dcunpark:
+%ifdef PKG_MEGA
+    call w16_lend
+%endif
     cmp byte [w16_dcpkd], 0
     je .ret
     mov byte [w16_dcpkd], 0

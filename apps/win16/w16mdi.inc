@@ -121,16 +121,134 @@ W16TSK w16i_dresalloc
     xor dx, dx
     ret
 
-; GetDOSEnvironment (KERNEL.131) - no args. A program WIN16 starts has no
-; environment (its PSP's word 2Ch is 0), so the answer is an empty one: a
-; NUL that ends the list at once, in this part, which is kept until the
-; program ends
+; GetDOSEnvironment (KERNEL.131) - no args. Windows answers the task's
+; environment as SELECTOR:0 (DX the selector, AX = 0): a library's C start-up
+; reads it either way round (`or ax, ax / jz / mov dx, ax` loads AX into ES,
+; which a part's own offset faults), scans it from offset 0 to the double
+; NUL, and Open Watcom's getenv() reads it the same way. A program WIN16
+; starts is given no DOS environment (WIN16 is a package, and DOS's rows are
+; its own window's), so the block holds the Windows session's own: windir,
+; TEMP and TMP (the Windows directory, where GetTempFileName makes its files)
+; and PATH (that directory and SYSTEM in it, where WIN16 looks for programs
+; and libraries), the double NUL, the word 1 and the program's full path,
+; GetModuleFileName's. It is a GlobalAlloc block the task owns (freed with
+; it), made at the first ask (SPEC.md 124.25.21), its selector put in the
+; PSP's word 2Ch as Windows has it. [w16_envp], a task's own (w16_ctxtab), is
+; its data paragraph; a block that is not still the current task's, beginning
+; with "wi", is made again
+W16_ENVSZ   equ 288                 ; 151 of variables, 137 of path
 W16TSK w16i_dosenv
-    mov ax, w16i_noenv              ; XSEC-OK: a far pointer into this part
-    mov dx, cs
+    mov ax, [w16_envp]
+    or ax, ax
+    jz .make
+    dec ax
+    W16SEG es, ax
+    inc ax
+    cmp word [es:GH_MAGIC], GH_SIG
+    jne .make
+    test byte [es:GH_FLAGS], GHF_USED
+    jz .make
+    mov dl, [w16_cur]
+    inc dl
+    cmp [es:GH_TASK], dl
+    jne .make
+    W16SEG es, ax
+    cmp word [es:0], 'wi'
+    je .have
+.make:
+    xor dx, dx
+    mov ax, W16_ENVSZ
+    mov cl, GMEM_ZEROINIT           ; fixed: its handle is its paragraph
+    ICALL w16_gnew                  ; AX = DX = the data, 0 none
+    or ax, ax
+    jz .none
+    mov dx, ax
+    ICALL w16_gmine
+    mov [w16_envp], ax
+    push si
+    push di
+    W16SEG es, ax
+    xor di, di
+    mov si, w16i_envt               ; XSEC-OK: read through cs:
+    cld
+.t:
+    mov al, [cs:si]
+    inc si
+    cmp al, 3
+    ja .ch
+    je .end
+    push si                         ; 1: the Windows directory, its letter
+    cmp al, 1                       ;   first; 2: '\' and its SYSTEM folder
+    mov al, [w16_homev]
+    mov si, w16s_dir
+    je .dir
+    mov al, '\' - 'A'
+    mov si, od_s_system
+.dir:
+    add al, 'A'
+.cp:
+    stosb                           ; ...then the name, to its NUL
+    lodsb
+    or al, al
+    jnz .cp
+    pop si
+    jmp short .t
+.ch:
+    cmp al, '0'                     ; '0': a string's NUL
+    jne .st
+    xor al, al
+.st:
+    stosb
+    jmp short .t
+.end:
+    mov ax, 1                       ; the count of strings after the list
+    stosw
+    mov ax, [w16_envp]
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; the program's selector for it
+%endif
+    push ax
+    push word [w16_pss]             ; GetModuleFileName(0, its:DI, room),
+    push word [w16_psp_]            ;   as a call from the program would
+    xor cx, cx
+    push cx                         ; hModule 0: the program's
+    push ax
+    push di
+    mov cx, W16_ENVSZ
+    sub cx, di
+    push cx
+    mov [w16_pss], ss
+    mov [w16_psp_], sp
+    sub word [w16_psp_], W16F_ARGS
+    SLCALL w16k_getmodfn
+    add sp, 8
+    pop word [w16_psp_]
+    pop word [w16_pss]
+    W16SEG es, [w16_psp]            ; where a DOS-style start-up looks
+    pop ax
+    mov [es:0x2C], ax
+    pop di
+    pop si
+    jmp short .sel
+.have:
+%ifdef PKG_MEGA
+    ICALL w16_pblk                  ; the program's selector for it
+%endif
+.sel:
+    mov dx, ax
+    xor ax, ax
     ret
-w16i_noenv:
-    dw 0
+.none:
+    xor dx, dx                      ; NULL: a start-up that tests for it
+    ret                             ;   (AX is 0)
+; the variables: 1 is the Windows directory, 2 its SYSTEM folder, '0' a
+; string's end, 3 the table's (after the empty string that ends the list)
+w16i_envt:
+    db 'windir=', 1, '0'
+    db 'TEMP=', 1, '0'
+    db 'TMP=', 1, '0'
+    db 'PATH=', 1, ';', 1, 2, '0'
+    db '0', 3
 
 ; LongPtrAdd (KERNEL.180) - args: +0 dwAdd, +4 lpPtr. Real mode's answer:
 ; the pointer moved on by dwAdd bytes, its offset the low four bits. File
@@ -237,9 +355,10 @@ w16i_atomat:
     push ax
     push si
     push di
-.c:
-    mov al, [es:di]
-    call w16i_up
+    mov cx, 31                      ; a name is kept cut to 31, so 31 the
+.c:                                 ;   same is the same name: a longer one
+    mov al, [es:di]                 ;   found again, not added again (and
+    call w16i_up                    ;   the table filling with copies)
     mov ah, al
     mov al, [si]
     call w16i_up
@@ -248,7 +367,9 @@ w16i_atomat:
     inc si
     inc di
     or al, al
-    jnz .c
+    jz .eq
+    loop .c
+.eq:
     pop di
     pop si
     pop ax
@@ -1238,10 +1359,9 @@ w16i_icon:
     pop cx
     jc .out
     mov al, [bx + W16W_CLS]         ; its class's icon
-    mov ah, W16C_SIZE
-    mul ah
+    ICALL w16_clsget
     mov si, ax
-    mov ax, [si + w16_cls + W16C_ICON]
+    mov ax, [si + W16C_ICON]
     or ax, ax
     jnz .draw
     push ax                         ; none: a program's own child paints
@@ -4197,12 +4317,10 @@ W16TSK w16u_getclsw
     mov ax, [es:bx + 2]
     ICALL w16_hwnd2rec              ; BX = its record; keeps CX
     jc .zero
-    cmp byte [bx + W16W_KIND], 0
-    jne .zero
-    mov al, [bx + W16W_CLS]
-    mov ah, W16C_SIZE
-    mul ah
-    add ax, w16_cls
+    mov al, [bx + W16W_CLS]         ; the program's classes, a superclass's
+    cmp al, 0xFF                    ;   control among them (124.25.18)
+    je .zero
+    ICALL w16_clsget
     mov si, ax
     xor dx, dx
     cmp cx, GCW_STYLE
@@ -4244,8 +4362,8 @@ W16TSK w16u_getclsw
 .n7:
     cmp cx, GCW_ATOM
     jne .zero
-    mov ax, si                      ; the atom GetClassInfo takes: 0C000h
-    sub ax, w16_cls                 ;   and the record's offset
+    mov al, [w16_cbi]               ; the atom GetClassInfo takes: 0C000h
+    xor ah, ah                      ;   and the class's index
     add ax, 0xC000
     jmp short .out
 .zero:

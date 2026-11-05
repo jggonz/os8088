@@ -27,11 +27,15 @@
  * metafile calls that answer 0; Arc and Pie are drawn again on the window
  * itself, along its bottom edge, to be looked at on each adapter.
  *
+ * And FloodFill (GDI.25), and a wide parallelogram Polygon - the shape of a
+ * fast Paintbrush stroke - filled and outlined (pgfill, pgout, pgpen, ffill).
+ *
  * Every check that fails is named in the message box, which
  * tests/win16memdc.py reads; "MEMDC OK" when none does.
  */
 #include <windows.h>
 #include <string.h>
+#include "restxt.h"
 
 #define W 64
 #define H 48
@@ -485,6 +489,30 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
         Arc(dc, 180, 102, 228, 150, 204, 126, 204, 126);
     }
 
+    /* --- FloodFill (GDI.25) and the wide parallelogram a fast Paintbrush
+     * stroke is: a horizontal top and bottom, long sides, filled in the
+     * brush and outlined by the pen (SPEC.md 124.25.4, 124.25.19) --- */
+    {
+        static POINT pg[4] = { {10, 6}, {40, 6}, {58, 40}, {28, 40} };
+
+        PatBlt(mem, 0, 0, W, H, WHITENESS);
+        ob = SelectObject(mem, red);
+        Polygon(mem, pg, 4);
+        snap(dc);
+        check(pix(34, 23) == RED && pix(22, 23) == RED && pix(45, 23) == RED
+              && pix(30, 10) == RED && pix(44, 36) == RED, "pgfill");
+        check(pix(5, 23) == WHITE && pix(55, 23) == WHITE
+              && pix(5, 10) == WHITE && pix(62, 40) == WHITE, "pgout");
+        check(pix(10, 6) == BLACK && pix(28, 40) == BLACK, "pgpen");
+        SelectObject(mem, green);
+        check(FloodFill(mem, 34, 23, BLACK), "ffret");
+        snap(dc);
+        check(pix(34, 23) == GREEN && pix(22, 23) == GREEN
+              && pix(45, 36) == GREEN && pix(5, 23) == WHITE
+              && pix(10, 6) == BLACK, "ffill");
+        SelectObject(mem, ob);
+    }
+
     SelectObject(mem2, old);
     DeleteDC(mem2);
     DeleteObject(bm2);
@@ -495,6 +523,8 @@ int PASCAL WinMain(HINSTANCE inst, HINSTANCE prev, LPSTR cmd, int show)
     DeleteObject(green);
     DeleteObject(blue);
     ReleaseDC(hwnd, dc);
+
+    restxt(inst, "MEMDC.TXT", res[0] ? res : "MEMDC OK");
 
     MessageBox(hwnd, res[0] ? res : "MEMDC OK", "MEMDC", MB_OK);
     DestroyWindow(hwnd);
