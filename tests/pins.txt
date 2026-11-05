@@ -533,7 +533,7 @@ N apps/win16/win16.asm w16_lseg          # the BIOS stack WIN16 lends mega_svc
                                          # segment:top in the kernel's hook word;
                                          # a proc re-registering the hook would
                                          # free it to move between BIOS calls
-X apps/win16/w16sel.inc @w16q_wfree      # GlobalDOSAlloc's block (w16q_dosalloc,
+X apps/win16/w16sel.inc @w16q_touch      # GlobalDOSAlloc's block (w16q_dosalloc,
                                          # a W16SYS body t_pins keys by the label
                                          # above it): the program is handed its
                                          # REAL-MODE PARAGRAPH to give to DOS or a
