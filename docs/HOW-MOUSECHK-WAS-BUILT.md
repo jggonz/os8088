@@ -138,3 +138,65 @@ a page, `T`/`E` the ends, `+`/`=`/`-` a line, and Ctrl+PgDn/PgUp/Home/End (not i
 does not have to know any of this. Every one was seen scrolling a 42-row scratch
 list on that boot; P toasted and Q closed under the keyboard mouse too.
 117 bytes of image.
+
+## 2026-11-05 - Wave 2: four sections at once, and a verifier on each
+
+Four agents started from the foundation's branch together, one per file:
+serial (Sonnet), PS/2 (Opus, because a wrong 8042 sequence can leave a
+user's keyboard dead), Summary plus the other pointers (Sonnet), and the
+regression row (Sonnet). Each finished branch then had an Opus verifier,
+which reviewed it, fixed what it found and wrote its own report.
+
+What the looks and the verifiers caught, none of which a host check could
+see:
+
+- **The PS/2 mouse was named "COM2".** The Summary's pointer-name table was
+  indexed by a register already holding a byte offset (0, 2, 4, 6, 8), so it
+  needed one word per row. The serial default hid the bug, because row 0
+  indexes entry 0. One look with `MOUSEPORT=ps2` found it.
+- **The probe's own key release.** P's break code (`99`) arrived in the
+  flush after `0xAD`. The kernel's identical flush is harmless at boot,
+  because nobody is pressing a key to start it, but a package started by a
+  key always has its release in flight. The fix is 5 ticks with IRQ1 live
+  before the mask. The BIOS leg had the same problem with the second P press:
+  SeaBIOS discards keyboard bytes inside a pointing-device call.
+- **The restore flushed with the keyboard on.** That drained what the
+  keyboard had queued while it was held off, and a lost break leaves a key
+  held down. The keyboard now comes back last, with `0xAE`.
+- **LSR is a shared register.** Reading it clears the line-error bits that
+  the kernel's contest quarantine (§9.5.6) and a SERIAL.DRV lease both read.
+  A diagnostic opened while the contest is unsettled (the case it is opened
+  for) could swallow the evidence. The serial section reads MSR and MCR, and
+  IIR only where no lease can be disturbed, and never LSR.
+- **The keyboard mouse takes the scroll keys.** With no pointer, Space,
+  keypad 5 and every key with AL=0 and scan 47h-53h belong to §9.6's
+  keyboard mouse. That covers the grey PgUp/PgDn/Home/End too, because
+  `int 16h` AH=00h reports them the same way. So a user whose mouse is dead,
+  the user this package is for, could not scroll it. Letters (N/B, T/E, +/-)
+  and Ctrl+PgDn and friends now do, with a hint in the button row.
+- **"No mouse found" beside "Answered like a mouse."** The Summary now has a
+  serial counterpart to the PS/2 "answered, move it" verdict.
+- **`[mou_idany]` is not a serial fact.** `MOU_SETTLE_STORES` writes it at
+  every backend's settle, so on kern_mega with a PS/2 mouse and no UART the
+  Serial section said a port was "mouse-shaped". The lead's kern_mega look
+  found it.
+- **The first test row would have passed on any machine.** `/PS\/2/` matched
+  a section heading on every leg, and the foundation's stub text satisfied
+  every Summary check. The row now matches exact lines against the kernel's
+  own `mou_seen`/`mou_port`, holds the package map byte-identical to the
+  booted build, and treats the stub as a failure.
+
+**Measured.** One full probe is about 31 trace entries and about 1.5 s of
+guest time on QEMU; the opt-in BIOS leg adds 10. The worst case, every wait
+timing out, is under 3 s. SeaBIOS leaves the command byte at `61` (aux off,
+IRQ12 off), which is §9.9.1's "no evidence" case, so on QEMU the kernel's
+probe always takes the `A8`-then-reread fallback, and that road works there.
+The package is 15,434 bytes of image plus 6,241 of bss, against a 24 KB
+ceiling that was raised twice: once when the shell's two frames came in at
+10.6 KB, and once for the PS/2 half, which is why the package exists. No
+kernel byte changed.
+
+**Not seen.** QEMU's 8042 always has an aux port with a mouse on it, so every
+failure verdict, the wedged-controller path, the `k` and `a` marks and the
+8088 single row are read from source only. The Advantech board's saved
+report is the test of those.

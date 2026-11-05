@@ -66,7 +66,7 @@ verified. A story is ticked when it is SEEN working, not when it is built.
   row API (§126.2). The shell redraws only the rows whose text changed.
   *Verify:* boot QEMU, launch from `A:\SYSTEM`, look on VGA and on CGA or
   Hercules.
-- [ ] **S2. Live refresh.** (built; the timer is armed and a rebuild runs, but no row changed during the wave-1 look - tick it when the Summary's position row is seen moving.) The list rebuilds every ~0.5 s (wake/timer, never
+- [x] **S2. Live refresh.** *SEEN*: the Summary's Position row followed the mouse and only that row redrew (QEMU kern_big, `other`'s look; kern_mega, the lead's). The list rebuilds every ~0.5 s (wake/timer, never
   a spin), so counters and the cursor position move while the user moves the
   mouse. *Verify:* move the mouse in QEMU and see the position row change
   and nothing else redrawn.
@@ -87,23 +87,29 @@ verified. A story is ticked when it is SEEN working, not when it is built.
 
 ### Wave 2 — the sections (fan-out)
 
-- [ ] **S6. Summary (`other`).** The top section: which pointer the kernel
+- [x] **S6. Summary (`other`).** The top section: which pointer the kernel
   is using now (COM1 / COM2 / PS/2 / VMware absolute / USB / keyboard mouse
   only), the live x, y and buttons, the kernel kind and build, the CPU tier
   and the adapter. Ends with **one plain-language verdict line** for the
   user.
-- [ ] **S7. Serial mice (`serial`).** COM1 to COM4 from the BIOS data area;
+  *SEEN* on QEMU kern_big (COM1, PS/2) and kern_mega (PS/2); the no-mouse and mismatch verdicts are read from code only.
+
+- [x] **S7. Serial mice (`serial`).** COM1 to COM4 from the BIOS data area;
   per probed UART, the kernel's boot record (identify burst: bytes, first
   byte, last tick, the "mouse-shaped" verdict), the contest (run, need, the
   winning row, the line it pulls, cross-wiring), the hot-plug poller's state,
   and live modem-status and line-status bits. It reads UART registers
   without side effects only, and never RBR.
-- [ ] **S8. PS/2, the boot record (`ps2`).** Tier gate; `mou_p2`/`mou_p2st`
+  *SEEN* on QEMU: COM1, `MOUSEPORT=com2`, and `com2irq4`'s cross-wired verdict. LSR is not read (vserial: it would swallow the kernel's contest evidence).
+
+- [x] **S8. PS/2, the boot record (`ps2`).** Tier gate; `mou_p2`/`mou_p2st`
   decoded into §9.9.1's steps in words; the device ID; `mou_p2cmd0` decoded
   bit by bit; the BIOS's own opinion (`int 11h` bit 2, the EBDA pointing-device
   flags); a live port-64h status read; packet state; and §9.9.6's decision
   table applied to what the shipped kernel can see.
-- [ ] **S9. PS/2, the live probe (`ps2`).** *Probe PS/2* reruns the
+  *SEEN* on QEMU: step 9/9 live on kern_big and kern_mega, step 0 on a `NOPS2` tree; every failure verdict is read from code only.
+
+- [x] **S9. PS/2, the live probe (`ps2`).** *Probe PS/2* reruns the
   handshake with a full trace (each command, each status before and after,
   each reply byte or a timeout, in ticks). It runs the §9.9.1 sequence the
   kernel uses, then the alternatives: `0xA9` aux self-test, `0xA8` then
@@ -112,11 +118,15 @@ verified. A story is ticked when it is SEEN working, not when it is built.
   it. The verdict names the step that differs from the kernel's path. Gated:
   refused while the kernel's PS/2 mouse is live, refused on `CPU_8086`, and
   checked under kern_mega.
-- [ ] **S10. VMware absolute and USB (`other`).** VMware backdoor: whether
+  *SEEN* on a QEMU `NOPS2` tree: the full trace, `Command byte 71>71: restored`, the BIOS leg, and the keyboard typing afterwards. QEMU's 8042 always answers, so the failure paths wait for the field machine.
+
+- [x] **S10. VMware absolute and USB (`other`).** VMware backdoor: whether
   this kernel carries it (kern_emu), the `SYSTEM.CFG` bit, whether it won.
   USB: whether `USBMOUSE.DRV` is wanted and loaded (`OSAPI_DRV_CLASSK
   DRVC_POINT`), and which backend (CH375 or PicoMEM) answered, read with no
   writes to a chip the driver owns. Keyboard mouse: on or retired, and why.
+  *SEEN* on QEMU kern_big and kern_mega. kern_emu shows raw hex (not shipped there, D5).
+
 - [ ] **S11. The gate (`gate`).** `tests/mousechk.py`, a QEMU row: launch,
   then assert the Summary's verdict and key rows for the default serial
   mouse, `MOUSEPORT=com2` and `MOUSEPORT=ps2`, plus the probe's trace on a
@@ -127,6 +137,19 @@ verified. A story is ticked when it is SEEN working, not when it is built.
 
 - [ ] **S12.** Merge, size, one look per adapter, the deduplicated soak union
   once, `test-full` once, then the PR.
+
+## Found while building (2026-11-05)
+
+- [ ] **The BIOS leg's IRQ12** (owner call). On exactly the machines this is for, the kernel's failed probe
+  left IRQ12 masked. A ROM whose `int 15h C2xx` waits on IRQ12 then fails every call, or waits without
+  bound, so the leg is evidence only where the BIOS polls. The option is to open IRQ12 for the four calls
+  when int 74h points into ROM. Kept masked, as O2 says.
+- [ ] **kern_emu decoding.** Accepting kern_emu's 'ID' as a second fingerprint would decode the VMware
+  section on the one kernel where it can be in use. It needs kern_emu built in `all`, a shipping choice.
+- [ ] **USB "wanted but not loaded".** This needs SYSTEM.CFG read from the file (SYSCHECK's `sc_p_cfg`
+  does it) and a buffer in the shell.
+- [ ] **The field trace.** The Advantech SBC's saved `MOUSECHK.TXT` after *Probe PS/2* is the input to the
+  kernel fix deferred below.
 
 ## Deferred
 
