@@ -194,3 +194,41 @@ agent's DONE for about ten minutes.
 
 **Rule:** match the word after the time stamp, whether or not `STATUS:` comes
 before it: `\] [0-9:]+ (STATUS: *)?(STARTED|DONE|BLOCKED|FAILED)`.
+
+## The brief's own completion template logged every failed build as rc=0
+
+**MOUSECHK.** COMMON.md's background wrapper was `...; echo "[key] $(date
++%H:%M) ... rc=$?"`. The `$(date)` substitution ran before `$?` was read, so
+`$?` was date's, and the foundation's first two builds, both red at
+checkdocs, were logged `finished rc=0`. The lead caught it only by reading
+the `.out` file.
+
+**Rule:** the template captures `rc=$?` into a variable before anything else
+runs, and "green" is confirmed by grepping the output for `make: ***` and the
+`os88test: N passed, 0 failed` line, never by the logged rc alone.
+
+## An implementer kept committing in the tree its verifier was working in
+
+**MOUSECHK.** A late decision (D5: "merge feat before your looks") reached
+the PS/2 implementer after it had logged DONE. It merged and changed a
+string in its worktree eleven minutes after its Opus verifier had started
+there. Nothing was lost, but only because the lead saw the report and warned
+the verifier before its next commit.
+
+**Rule:** when a verifier starts in an implementer's worktree, the lead tells
+the implementer to stop first, in words: "your work is complete; make no
+further changes in <tree>". A decision that arrives after DONE goes to the
+verifier, not the implementer.
+
+## Every agent added SPEC headings, and a generated index went stale on each branch
+
+**MOUSECHK.** The foundation committed its diary without regenerating
+`docs/INDEX.md`, so the wave-2 base failed checkdocs. Each section agent
+then added SPEC subsections, which stale the index again on its own branch.
+Four agents each lost a build to it, and two declined to commit the fix
+because the file belonged to someone else.
+
+**Rule:** the brief names every GENERATED file (here `docs/INDEX.md`) as
+anyone's to regenerate and commit. The lead resolves its merge conflicts by
+regenerating, never by hand, and checks the base with a clean `make` after
+the foundation merges, not only before.
