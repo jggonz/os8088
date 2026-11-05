@@ -958,8 +958,11 @@ return address inline.**
 **The frame** grows by four words (`c64fast.inc`): BASIC's code selector
 (F+34, 0 = no translation), the table (F+36), the core's own selector for
 the way back (F+38), and the KERNAL's code selector (F+40). `c64_fast_init`
-fetches the three parts after the core, all or none, as pinned claims of
-their own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768).
+fetches the three parts after the core, all or none, as claims of their
+own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768), and
+declares each MOVABLE (`os88_part_movable`, SPEC.md 73.14.2.1): a run builds
+its frame from `c64_faot`, `c64_fakb` and `c64_ftab` at its door, and
+`os88_onmove` re-reads them, a selector re-derived only when its part moved.
 
 **The gate** is `make c64cputest`'s AOT leg (`C64CPU_ONLY=aot`), the
 Apple II's leg one machine along: Dormann's functional test in four parts

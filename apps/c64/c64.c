@@ -135,6 +135,9 @@ unsigned c64_faot;                          /* BASIC'S AND THE KERNAL'S
                                              * three in the frame */
 unsigned c64_fakb;
 unsigned c64_ftab;
+static unsigned c64_absg, c64_aksg;         /* (the translations' parts, as
+                                             * os88_part_seg said: the two
+                                             * selectors are derived from them) */
 static unsigned c64_fcode;
 /* THE RECOMPILER (C64-SPEC section 4.9): c64_fjit is its 64KB claim, 0 =
  * none - the fast core runs alone. c64fast.inc puts it in the frame (F+42)
@@ -647,6 +650,21 @@ void os88_onmove(unsigned was, unsigned now)
     if (c64_chr_seg == c64_m.romseg)
         c64_chr_seg = rom;
     c64_m.romseg = rom;
+    if (c64_faot != 0) {                    /* the translations' parts (4.8),
+                                             * re-read; a selector only when
+                                             * its part moved */
+        c64_ftab = os88_part_seg(C64_AOTPC_PART);
+        rom = os88_part_seg(C64_AOTB_PART);
+        if (rom != c64_absg) {
+            c64_absg = rom;
+            c64_faot = c64f_codesel(rom);
+        }
+        rom = os88_part_seg(C64_AOTK_PART);
+        if (rom != c64_aksg) {
+            c64_aksg = rom;
+            c64_fakb = c64f_codesel(rom);
+        }
+    }
     if (c64_m.ramseg == was) {
         if (c64_chr_seg == was)
             c64_chr_seg = now;
@@ -2046,11 +2064,21 @@ static void c64_fast_init(void)
         os88_part_drop(C64_AOTB_PART);
         return;
     }
-    c64_fakb = c64f_codesel(os88_part_seg(C64_AOTK_PART));
+    c64_aksg = os88_part_seg(C64_AOTK_PART);
+    c64_fakb = c64f_codesel(c64_aksg);
     c64_ftab = os88_part_seg(C64_AOTPC_PART);
-    c64_faot = c64f_codesel(os88_part_seg(C64_AOTB_PART));
-    if (c64_faot == 0 || c64_fakb == 0)
+    c64_absg = os88_part_seg(C64_AOTB_PART);
+    c64_faot = c64f_codesel(c64_absg);
+    if (c64_faot == 0 || c64_fakb == 0) {
         c64_faot = 0;
+        return;
+    }
+    /* ALL THREE MAY MOVE (3.1.1): a run builds its frame from c64_faot,
+     * c64_fakb and c64_ftab at its door, and os88_onmove re-reads them -
+     * pinned, they walled the heap the way a2move found the Apple II's do */
+    os88_part_movable(C64_AOTB_PART);
+    os88_part_movable(C64_AOTK_PART);
+    os88_part_movable(C64_AOTPC_PART);
 }
 
 void *os88_main(void)

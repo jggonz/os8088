@@ -2666,6 +2666,22 @@ _os88_part_drop:
     ret
 %endif
 
+; int os88_part_movable(int i) - a FETCHED lazy part's claim may move
+; (SPEC.md 73.14.2.1): op_movable with the standard's proc, which puts the
+; row right and then calls os88_onmove. 0 = declared, -1 = not (not fetched,
+; or refused). Only with CC_ONMOVE_PARTS, whose OP_ONMOVE is cc_onmove.
+%ifdef CC_U__os88_part_movable
+  %ifndef OP_ONMOVE
+    %error "os88_part_movable needs CC_ONMOVE_PARTS: os88_onmove is how the program is told the part moved"
+  %endif
+_os88_part_movable:
+    mov bx, sp                      ; no frame: one argument
+    mov ax, [ss:bx+2]
+    call op_movable
+    sbb ax, ax                      ; CF -> 0 / -1
+    ret
+%endif
+
 ; int os88_part_lazyok(int i) - would part i FIT right now? 1 = yes.
 ; A question, asked without claiming, for SPEC.md 47's rule that a package
 ; greys a fact rather than a guess. It is true of THIS INSTANT only.

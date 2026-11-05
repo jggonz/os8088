@@ -194,6 +194,9 @@ unsigned a2_faot;                           /* THE ROM TRANSLATED AHEAD OF TIME
                                              * a2fast.inc puts both in the
                                              * frame */
 unsigned a2_ftab;
+static unsigned a2_aotseg;                  /* (the translation's part, as
+                                             * os88_part_seg said: a2_faot is
+                                             * derived from it) */
 static unsigned a2_fcode;
 static int a2_fast_done;                    /* a2_fast_init has run, whatever
                                              * it answered - the moment the
@@ -1580,9 +1583,17 @@ static void a2_fast_init(void)
         return;
     }
     a2_ftab = os88_part_seg(A2_AOTPC_PART);
-    a2_faot = a2f_codesel(os88_part_seg(A2_AOT_PART));
-    if (a2_faot == 0)
+    a2_aotseg = os88_part_seg(A2_AOT_PART);
+    a2_faot = a2f_codesel(a2_aotseg);
+    if (a2_faot == 0) {
         a2_ftab = 0;
+        return;
+    }
+    /* BOTH MAY MOVE (3.1.1): a run builds its frame from a2_faot and
+     * a2_ftab at its door, and os88_onmove re-reads them - pinned, the two
+     * were a 78KB wall under the RAM that a2move found */
+    os88_part_movable(A2_AOT_PART);
+    os88_part_movable(A2_AOTPC_PART);
 }
 
 /* a2_slice - one run of the core for the wall budget.
@@ -2516,7 +2527,19 @@ void os88_onwake(void *win)
  * ========================================================================*/
 void os88_onmove(unsigned was, unsigned now)
 {
+    unsigned s;
+
     a2_m.romseg = os88_part_seg(A2_ROM_PART);
+    if (a2_faot != 0) {                     /* the translation's two parts
+                                             * (4.7), re-read; the selector
+                                             * only when its part moved */
+        a2_ftab = os88_part_seg(A2_AOTPC_PART);
+        s = os88_part_seg(A2_AOT_PART);
+        if (s != a2_aotseg) {
+            a2_aotseg = s;
+            a2_faot = a2f_codesel(s);
+        }
+    }
     if (a2_m.ramseg == was)
         a2_m.ramseg = now;
     else if (a2_fcode == was) {             /* the fast core's code (4.6) */

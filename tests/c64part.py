@@ -88,8 +88,9 @@ FAST_PART = 2                           # the fast core, LAZY and so after it
                                         # (C64-SPEC 4.7)
 AOT_PARTS = ((3, "OP_SEG", "c64aot.bin"),       # BASIC translated (4.8)
              (4, "OP_SEG", "c64aotk.bin"),      # ...the KERNAL
-             (5, "OP_ASSET", "c64aotpc.bin"))   # ...their PC table
-NPARTS = 6
+             (5, "OP_ASSET", "c64aotpc.bin"),   # ...their PC table
+             (6, "OP_SEG", "c64jit.bin"))       # the recompiler (4.9)
+NPARTS = 7
 CM_RAMSEG, CM_ROMSEG = 0, 2             # apps/c64/c64cpu.inc's machine record
 C64_MATRIX = 0x0400                     # the default screen matrix
 fails = []
@@ -128,7 +129,8 @@ def run():
     if len(rows) != NPARTS or rows[ROM_PART]["len"] != 20480:
         fails.append("the part table is %r and should be an ASSET of 20,480 "
                      "bytes - the KERNAL, BASIC and CHARGEN of C64-SPEC 1.4 - "
-                     "the overlay's row after it, and the fast core's last"
+                     "the overlay's row after it, then the fast core, the "
+                     "translations and the recompiler"
                      % (rows,))
     elif (rows[FAST_PART]["kind"] != os88parts.EQU["OP_SEG"]
             or not rows[FAST_PART]["flags"] & os88parts.EQU["OP_LAZY"]
@@ -145,7 +147,7 @@ def run():
                     or os88parts.part_bytes(blob, n)
                     != open(os.path.join(ROOT, "build", "c64", f), "rb").read()):
                 fails.append("part %d is %r and should be a LAZY %s unpacking "
-                             "to build/c64/%s (C64-SPEC 4.8)" % (n, rows[n], kind, f))
+                             "to build/c64/%s (C64-SPEC 4.8, 4.9)" % (n, rows[n], kind, f))
     ovl = open(os.path.join(ROOT, "build", "C64.OVL"), "rb").read()
     if len(rows) == NPARTS:
         orow = rows[OVL_PART]

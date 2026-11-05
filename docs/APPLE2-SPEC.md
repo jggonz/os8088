@@ -837,8 +837,12 @@ translation's own segment, inline, where the core calls `getp`/`setp`.
 **Memory.** Both parts are fetched by `a2_fast_init` after the core, both or
 neither, as claims of their own length (53,038 and 24,576 bytes, to the
 heap's granule), on top of
-4.6's two 64KB claims. They are PINNED (they are fetched parts, not
-`os88_mem_claim`s, and nothing follows them on a move). A refusal of either
+4.6's two 64KB claims. They are MOVABLE (`os88_part_movable`, SPEC.md
+73.14.2.1): a run builds its frame from `a2_faot` and `a2_ftab` at its door,
+and `os88_onmove` re-reads them, the code selector re-derived only when its
+part moved. They were pinned until `soak -k a2move` found them a 78KB wall
+under the RAM: neither the RAM nor the core could slide down past them
+(section 3.1.1). A refusal of either
 leaves `a2_faot`/`a2_ftab` 0, and the fast core runs the ROM itself.
 
 **The gate** is `make a2cputest`'s AOT leg (`A2CPU_ONLY=aot`). It builds
