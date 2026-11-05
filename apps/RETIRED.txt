@@ -70,18 +70,15 @@ local      excitebike  # SPEC.md 102. A standalone game disk (make excitebikedis
 local      arcade      # docs/ARCADE-SPEC.md. Its games are Taito's Space Invaders,
                        # Space Invaders Part II and Lunar Rescue, Midway's Gun
                        # Fight and Sea Wolf, Gottlieb's Q*bert and Namco's Pac-Man,
-                       # commercially owned. ARCADE.O88 itself carries NO ROM byte
-                       # (its translated code ships as recipes with the ROM's
-                       # bytes as holes; the user's own sets come in through Game
-                       # > Add ROM sets..., ARCADE-SPEC 1.4-1.5), and `make
-                       # arcaderel` builds release floppies with no ROM on them.
-                       # But BUILDING it still needs the ROMs - the recipes are
-                       # translated FROM them - which tools/getarcrom.py fetches
-                       # at pins (Pac-Man only from the owner's copy, make
-                       # arcaderom-pacman GETPACFROM=<zip>). So no standard image,
-                       # allapps floppy or live payload carries it until the
-                       # owner decides whether a release build may fetch them,
-                       # the way the Apple II ROM is fetched.
+                       # commercially owned, and each user brings their own sets
+                       # (Game > Add ROM sets..., ARCADE-SPEC 1.4-1.5). ARCADE.O88
+                       # carries NO ROM byte, and BUILDING it needs none either:
+                       # its translated parts are committed ROM-free in
+                       # apps/arcade/prebuilt/ (ARCADE-SPEC 1.6), so `make
+                       # arcade` / `make arcaderel` need no network. It rides its
+                       # own floppy (arcrel*.img), which no standard image,
+                       # allapps floppy or live payload carries until the owner
+                       # adds it to the shipped set.
 local      lemmings    # SPEC.md 116. DEVELOPERS ONLY, by the owner's decision
                        # (2026-10-21, PR #168 merged): its data is the original DOS
                        # Lemmings' 26 files, DMA Design's and still commercially

@@ -191,6 +191,29 @@ stored, fixed and dynamic blocks to 64KB, every member of the sets' zips,
 and the streams it must refuse. The "disk in B:" toast is not driven by a
 row: the harness cannot change a floppy under a running guest.
 
+### 1.6 The committed build state: no `make` needs a ROM
+
+The package is ROM-free, but it is MADE from the ROMs: the recipes and aux
+parts are the translator's output over each board's program, Q\*bert's
+patch table and the import's set table are checked against the pinned
+chips. The owner's rule (2026-11-05): ROM fetches stay optional - no
+release, and certainly no `make`, may need archive.org. So the last state
+of those 14 parts is committed, gzipped (no timestamps, so the same bytes
+each time), in `apps/arcade/prebuilt/`, 140KB, and:
+
+| | |
+|---|---|
+| `make arcade`, `make arcaderel` | the default `ARCFROM=prebuilt`: the parts unpacked from `apps/arcade/prebuilt/` into `build/arcade/pre/`. No ROM, no network. A fresh tree with no ROM cache builds `ARCADE.O88` byte for byte the one `ARCFROM=rom` builds |
+| `make ARCFROM=rom arcade` | the parts made here from the ROMs, fetched at their pins |
+| `make arcadeprebuilt` | `ARCFROM=rom`'s parts written into `apps/arcade/prebuilt/` with `STAMP`, the SHA-256 of every input that makes them (`tools/arcprebuilt.py`) |
+| fast tier `arcprebuilt-stamp` | `STAMP` against the tree: a translator, seed, patch or pin change without a refresh fails `make`, naming the file - no ROM needed to say so |
+| soak row `arcprebuilt` | where the ROMs are: the parts made again are the committed ones byte for byte, and none holds a run of 8 bytes of any ROM |
+
+Every set, Pac-Man's too, is fetchable at a pin: Pac-Man's from the Internet
+Archive's Namco Classics item, whose `pacman.zip` holds exactly MAME's
+`pacman` chips. The development disks (`arcadedisk`) and the rows that run
+the games still fetch the ROMs; the package and its release disks do not.
+
 ### 1.3 The ROM
 
 **No ROM, and nothing derived from one, is committed or shipped.** `tools/getarcrom.py`

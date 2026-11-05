@@ -286,6 +286,12 @@ FAST = [
         "literal under 0.1 s, or marked `# host: <why>`; a scenario step is "
         "Box.guest_sleep / os88marty.guest_sleep / pace. VERIFIED TO FAIL "
         "on the tree before it (45 sites, 38 of them scenario steps)"),
+    Row("arcprebuilt-stamp", "fast", py("tests/unit/t_arcprebuilt.py"), 0.1,
+        "ARCADE's committed ROM-free parts (apps/arcade/prebuilt/, ARCADE-SPEC 1.6) "
+        "are the state of their inputs: STAMP's hashes of the translator, the "
+        "seeds, Q*bert's patch and the pins match the tree, so `make arcade` "
+        "never ships an old translation under new source. No ROM needed. Red "
+        "with a line added to qbert.patch, naming it"),
     Row("retired", "fast", py("tests/unit/t_retired.py"), 0.3,
         "every package under apps/ ships, or apps/RETIRED.txt says why not "
         "(SPEC.md 20.16). CLAUDE.md's Layout section states the invariant - "
@@ -4765,6 +4771,12 @@ SOAK = [
         "board driven the same way. Red at frame 42 with the cycle fraction one "
         "65,536th off. Host-only",
         needs=("unicorn",), wants=("build/arcade-rom/qbert.zip",)),
+    Row("arcprebuilt", "soak", py("tests/arcprebuilt.py"), 6.0,
+        "ARCADE's committed parts are the ROMs' (ARCADE-SPEC 1.6): made again from "
+        "the pinned ROMs (ARCFROM=rom), all 14 byte for byte the ones in "
+        "apps/arcade/prebuilt/, and none holding a run of 8 of a ROM's bytes. Red "
+        "with one bit of one committed recipe flipped",
+        wants=("build/arcade-rom/INVADERS.ROM", "build/arcade-rom/PACMAN.ROM")),
     Row("qbnative", "soak", py("tests/qbnative.py"), 1.0,
         "ARCADE's Q*bert (ARCADE-SPEC section 10): the shipped ROM part - the "
         "program with apps/arcade/qbert.patch applied - run under Unicorn as the "

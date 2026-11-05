@@ -333,10 +333,13 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
       16 MHz 286 by itself.
 
 ### R6: the release
-- [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line: **the owner's call**.
-      The package carries no ROM byte now, but BUILDING it still needs the
-      ROMs (the recipes are translated from them), fetched at pins, and
-      Pac-Man's only from the owner's copy. The entry says so.
+- [x] ROM fetches optional (the owner, 2026-11-05): the ROM-free parts'
+      last state committed in `apps/arcade/prebuilt/`; `make arcade` and
+      `make arcaderel` need no ROM and no network, byte-identical to a build
+      from the ROMs (ARCADE-SPEC 1.6). Pac-Man fetchable too, at a pin in the
+      Namco Classics item, so `ARC_PACMAN` is always on.
+- [ ] ARCADE leaves `apps/RETIRED.txt`'s `local` line onto the shipped set:
+      the owner's call, now that nothing in its build needs a ROM.
 - [x] Its disk: ARCADE.O88 is 189KB packed; `emu360.img` has 139KB free,
       so it rides its OWN 360KB disk. `make arcaderel` builds the release
       floppies in four geometries - the package and its README, no ROM;

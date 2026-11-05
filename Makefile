@@ -11454,17 +11454,18 @@ $(BUILD)/apple2360.img: $(APPLE2DISK)
 # THE ROM IS FETCHED AT A PIN AND NEVER COMMITTED (ARCADE-SPEC 1.3):
 # tools/getarcrom.py takes MAME's `invaders` set from ONE archive.org item,
 # checks the zip by SHA-1 and each of its four chips by SHA-256, and writes
-# the 8KB board image. Like `make apple2rom`, a build with no network and no
-# build/arcade-rom/ cache cannot build this package; nothing in `all`
-# reaches it, and `make clean` spares the cache. GETARCFROM=<dir-or-zip>
+# the 8KB board image. Only ARCFROM=rom, `make arcadeprebuilt`, the
+# development disks and the rows need it; `make clean` spares the cache. GETARCFROM=<dir-or-zip>
 # takes a set the owner already has instead of the network.
 #
 # THE CODE PART IS GENERATED from that ROM: apps/arcade/arcaot.py walks it
 # from the reset and interrupt vectors plus apps/arcade/invaders.seeds (the
 # PCHL and RET targets tools/arcsim.py saw - addresses, no ROM byte), and
 # writes one NASM file it has already assembled itself, as many times as
-# its short branches needed. It is derived from the ROM, so it lives in
-# build/ and on the floppy, never in git.
+# its short branches needed. The full translation is derived from the ROM,
+# so it lives in build/, never in git; what SHIPS is its ROM-free recipe,
+# whose last state IS committed (apps/arcade/prebuilt/, ARCADE-SPEC 1.6), so
+# the package builds with no ROM and no network (ARCFROM, below).
 # =============================================================================
 ARCROM := $(BUILD)/arcade-rom/INVADERS.ROM
 $(ARCROM): tools/getarcrom.py | $(BUILD)
@@ -11519,8 +11520,8 @@ $(BUILD)/arcade/qbcode.bin: apps/arcade/arcn88.asm apps/arcade/arcdefs.inc
 	@mkdir -p $(BUILD)/arcade
 	$(NASM) -f bin -w+error -I apps/arcade/ -o $@ $<
 
-#> [Applications] arcaderom :: fetch the public boards' ROMs (Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf, Q*bert) at pinned hashes (never committed)
-arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) $(ARCGFROM) $(ARCSWROM) $(ARCQBROM)
+#> [Applications] arcaderom :: fetch every board's ROMs (Space Invaders, Part II, Lunar Rescue, Gun Fight, Sea Wolf, Q*bert, Pac-Man) at pinned hashes (never committed)
+arcaderom: $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) $(ARCGFROM) $(ARCSWROM) $(ARCQBROM) $(ARCPMROM)
 
 $(BUILD)/arcade/pt2code.bin: apps/arcade/arcaot.py apps/arcade/invadpt2.seeds \
                              apps/arcade/arcrt.inc apps/arcade/arcdefs.inc $(ARCPT2ROM)
@@ -11545,18 +11546,15 @@ $(BUILD)/arcade/invcode.bin: apps/arcade/arcaot.py apps/arcade/invaders.seeds \
 		--recipe $(BUILD)/arcade/invcode.rcp
 $(BUILD)/arcade/invaux.bin $(BUILD)/arcade/invcode.rcp: $(BUILD)/arcade/invcode.bin
 
-# PAC-MAN IS THE OWNER'S ROM, NEVER FETCHED (ARCADE-SPEC 7): no public
-# archive.org item carries it. `make arcaderom-pacman GETPACFROM=<zip>` checks
-# the set by hash and writes build/arcade-rom/PACMAN.ROM; while that file
-# exists, ARCADE is built with the Pac-Man board too (-DARC_PACMAN), and
-# without it, with Space Invaders alone.
+# Pac-Man is fetched like the rest (ARCADE-SPEC 7), at its pin in the
+# Namco Classics item; GETPACFROM=<dir-or-zip> takes the owner's set instead.
 ARCPMROM := $(BUILD)/arcade-rom/PACMAN.ROM
-#> [Applications] arcaderom-pacman :: take your Pac-Man set: GETPACFROM=<dir-or-zip> (checked by hash)
+$(ARCPMROM): tools/getarcrom.py | $(BUILD)
+	python3 tools/getarcrom.py pacman -o $@ $(if $(GETPACFROM),--from $(GETPACFROM))
+#> [Applications] arcaderom-pacman :: fetch Pac-Man's set at its pin (GETPACFROM=<dir-or-zip> takes yours instead)
 .PHONY: arcaderom-pacman
-arcaderom-pacman:
-	python3 tools/getarcrom.py pacman -o $(ARCPMROM) --from $(GETPACFROM)
+arcaderom-pacman: $(ARCPMROM)
 
-ARC_PM := $(wildcard $(ARCPMROM))
 $(BUILD)/arcade/paccode.bin: apps/arcade/arcz80t.py apps/arcade/z80dec.py apps/arcade/arcaot.py \
                              apps/arcade/pacman.seeds apps/arcade/arcrt.inc apps/arcade/arcz80rt.inc \
                              apps/arcade/arcdefs.inc $(ARCPMROM)
@@ -11588,31 +11586,46 @@ ARCADE_SRC := apps/arcade/arcade.asm apps/arcade/arcdefs.inc apps/arcade/arcpm.i
 # from the pinned sets, and only the DEVELOPMENT disk (arcadedisk) carries
 # them, beside ARCADE.O88. The full translations (.bin) stay in build/ for
 # the lockstep rows and for tests/arcrecipe.py's identity check.
-ARCADE_PARTS := $(BUILD)/arcade/invcode.rcp $(BUILD)/arcade/invaux.bin \
-                $(BUILD)/arcade/pt2code.rcp $(BUILD)/arcade/pt2aux.bin \
-                $(BUILD)/arcade/lrcode.rcp $(BUILD)/arcade/lraux.bin \
-                $(BUILD)/arcade/gfcode.rcp $(BUILD)/arcade/gfaux.bin \
-                $(BUILD)/arcade/swcode.rcp $(BUILD)/arcade/swaux.bin \
-                $(BUILD)/arcade/qbcode.bin
-ARCADE_DEF :=
-ARCROMS := $(addprefix $(BUILD)/arcade/roms/,INVADERS.ROM INVADPT2.ROM LRESCUE.ROM \
-                                             GUNFIGHT.ROM SEAWOLF.ROM QBERT.ROM)
-ifneq ($(ARC_PM),)
-ARCADE_PARTS += $(BUILD)/arcade/paccode.rcp $(BUILD)/arcade/pacaux.bin
-ARCADE_DEF := -DARC_PACMAN
-ARCROMS += $(BUILD)/arcade/roms/PACMAN.ROM
+# WHERE THOSE PARTS COME FROM (ARCADE-SPEC 1.6): ARCFROM=prebuilt, the
+# default, takes them from apps/arcade/prebuilt/ - the last state of them,
+# committed, made by `make arcadeprebuilt` - so `make arcade` and the release
+# floppies need no ROM and no archive.org. ARCFROM=rom makes them here from
+# the pinned ROMs (fetched); tests/unit/t_arcprebuilt.py fails `make` when
+# their inputs moved and the committed state did not.
+ARCFROM ?= prebuilt
+ARCPRE := apps/arcade/prebuilt
+ARCPREFILES := invcode.rcp invaux.bin pt2code.rcp pt2aux.bin lrcode.rcp lraux.bin \
+               gfcode.rcp gfaux.bin swcode.rcp swaux.bin paccode.rcp pacaux.bin \
+               qbpatch.inc arcsets.inc
+ifeq ($(ARCFROM),rom)
+ARCGEN := $(BUILD)/arcade
+else
+ARCGEN := $(BUILD)/arcade/pre
+$(ARCGEN)/%: $(ARCPRE)/%.gz
+	@mkdir -p $(ARCGEN)
+	python3 -c "import gzip,sys; open(sys.argv[2],'wb').write(gzip.open(sys.argv[1]).read())" $< $@
 endif
+ARCADE_PARTS := $(addprefix $(ARCGEN)/,invcode.rcp invaux.bin pt2code.rcp pt2aux.bin \
+                  lrcode.rcp lraux.bin gfcode.rcp gfaux.bin swcode.rcp swaux.bin) \
+                $(BUILD)/arcade/qbcode.bin $(ARCGEN)/paccode.rcp $(ARCGEN)/pacaux.bin
+ARCADE_DEF := -DARC_PACMAN
+ARCROMS := $(addprefix $(BUILD)/arcade/roms/,INVADERS.ROM INVADPT2.ROM LRESCUE.ROM \
+                                             GUNFIGHT.ROM SEAWOLF.ROM QBERT.ROM PACMAN.ROM)
 ARCADE_PARTS += $(BUILD)/arcade/INVSFX.PRT      # lazy, so last (SPEC.md 20.12.4)
 # The sets ARCADE imports (arcimp.inc): MAME's names and CRC-32s, from the pins
 $(BUILD)/arcade/arcsets.inc: tools/getarcrom.py $(ARCROM) $(ARCPT2ROM) $(ARCLRROM) \
-                             $(ARCGFROM) $(ARCSWROM) $(ARCQBROM) $(ARC_PM)
+                             $(ARCGFROM) $(ARCSWROM) $(ARCQBROM) $(ARCPMROM)
 	python3 tools/getarcrom.py invaders --asm-sets $@
+#> [Applications] arcadeprebuilt :: make ARCADE's ROM-free parts from the pinned ROMs (fetched) and commit-ready in apps/arcade/prebuilt/
+arcadeprebuilt:
+	$(MAKE) ARCFROM=rom $(addprefix $(BUILD)/arcade/,$(ARCPREFILES))
+	python3 tools/arcprebuilt.py write $(BUILD)/arcade $(ARCPRE)
 # The cabinet's art (ARCADE-SPEC 11.3): generated, checked, never drawn by hand
 $(BUILD)/arcade/arcart.inc: tools/arcart.py
 	python3 tools/arcart.py --selfcheck --out $@
-$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARC_PM) $(BUILD)/arcade/qbpatch.inc $(BUILD)/arcade/arcsets.inc \
+$(BUILD)/arcade.bin: $(ARCADE_SRC) $(ARCGEN)/qbpatch.inc $(ARCGEN)/arcsets.inc \
                      $(BUILD)/arcade/arcart.inc | $(BUILD)
-	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I $(BUILD)/arcade/ \
+	$(NASM) -f bin -w+error $(ARCADE_DEF) -I apps/ -I apps/arcade/ -I $(ARCGEN)/ -I $(BUILD)/arcade/ \
 		-I drivers/sound/ -l $(BUILD)/arcade.lst -o $@ $<
 
 # A user's <SET>.ROM (ARCADE-SPEC 1.4), from the image each set's rule made

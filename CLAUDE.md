@@ -216,6 +216,11 @@ What `make help` cannot tell you:
 - **Nothing in `build/` is tracked - never commit a binary.** The toolchain is
   deterministic (`os88disk.py` pins the volume serial and every FAT
   timestamp), so any image can be rebuilt byte for byte.
+  **One sanctioned exception, the owner's (2026-11-05)**: ARCADE's
+  ROM-free translated parts in `apps/arcade/prebuilt/`, so neither `make`
+  nor a release needs the ROMs or archive.org. `make arcadeprebuilt`
+  refreshes them, and the fast-tier `arcprebuilt-stamp` fails `make` when
+  their inputs move without them (ARCADE-SPEC 1.6).
 - **Fetched data is never committed** (Frotz stories, Lemmings, the Apple II
   ROMs, RunCPM's master disk, the soundfont): the targets fetch it at pinned
   hashes, and `make clean` spares what it fetched.

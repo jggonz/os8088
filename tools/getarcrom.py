@@ -177,12 +177,12 @@ SETS = {
         ],
         'size': 0x11000,
     },
-    # MAME's `pacman` (Midway). NOT fetched: no public archive.org item
-    # carries it (arcade_pacman, arcade_puckman and arcade_mspacman are
-    # dark), so the owner supplies it with --from and the hashes check it.
+    # MAME's `pacman` (Midway), from the Namco Classics item, which holds
+    # exactly these chips (and 82s126.3m, the sound PROM's twin, unused).
     # The image is the board's ROMs in the layout ARCADE-SPEC 7.1 pins.
     'pacman': {
-        'url': None,
+        'url': 'https://archive.org/download/Namco-Classics-MAME-Roms/pacman.zip',
+        'zipsha1': 'f3303f79f850f9c74456d96718e1ff3064985cd6',
         'parent': 'puckman',    # MAME's: a SPLIT pacman.zip holds only the
                                 # chips that differ, the rest are puckman.zip's
         'members': [
