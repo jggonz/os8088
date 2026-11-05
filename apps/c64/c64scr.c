@@ -103,7 +103,7 @@ static unsigned char c64_bx2[C64_X2STRIDE * 16];
 /* GLASS pixels per C64 cell: 8 or 16 a side (9.8's tier table). EVERY
  * cell<->pixel conversion in this file and in c64.c reads these two and not
  * the literal 8, which is the whole mechanism. c64_can2x is the TIER's answer
- * (c64_tier_init) and c64_no2x is blit1's. */
+ * (ovl_tier_init) and c64_no2x is blit1's. */
 static int c64_scw = 8, c64_sch = 8;
 static int c64_can2x, c64_no2x;
 static unsigned c64_sig[C64_ROWS];          /* this frame's row signatures */
@@ -776,6 +776,11 @@ static void c64_bandx(int row, int f, int l)
  * ========================================================================*/
 static unsigned c64_spsig[C64_ROWS];
 static unsigned char c64_spd[63];           /* one sprite's data */
+#define c64_pfg  (c64_bx2 + 704)            /* [64] ovl_spr_fg's foreground:
+                                             * spr_draw runs before band_x2 */
+#define c64_pfs  (c64_bx2 + 768)            /* [48] a fullscreen line's
+                                             * pixels under a sprite behind */
+
 
 /* sprite k in row set RV: its top display line, height, left pixel, width,
  * and data address; 0 when it is off or nowhere on the display.
@@ -905,7 +910,8 @@ static void c64_spr_dirty(void)
                     sig = (sig << 3) ^ (sig >> 13) ^ (unsigned)c64_sp_y;
                     sig = (sig << 3) ^ (sig >> 13) ^ c64_sp_data
                         ^ ((unsigned)rv[0x27 + k] << 8) ^ rv[0x25] ^ ((unsigned)rv[0x26] << 4)
-                        ^ (((rv[0x1C] >> k) & 1) << 15) ^ ((unsigned)c64_sp_w << 7);
+                        ^ (((rv[0x1C] >> k) & 1) << 15) ^ ((unsigned)c64_sp_w << 7)
+                        ^ (((rv[0x1B] >> k) & 1) << 14);
                     sig |= 1;               /* a row with a sprite is never 0 */
                     if ((c64_sp_data >> 8) < c64_spg0[r])
                         c64_spg0[r] = (unsigned char)(c64_sp_data >> 8);
@@ -953,7 +959,7 @@ static unsigned char c64_son[6], c64_slit[6];
 static void c64_spr_draw(int row, int f, int l)
 {
     unsigned char *rv, *dst, *sd;
-    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3, md;
+    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3, md, bh;
 
     rv = c64_rv[row];
     if (rv[0x15] == 0)
@@ -986,6 +992,9 @@ static void c64_spr_draw(int row, int f, int l)
         base = c64_sp_x + 32;               /* >= 8: no negative shift */
         cell0 = (base >> 3) - 4;
         sh = base & 7;
+        bh = (rv[0x1B] >> k) & 1;           /* BEHIND the foreground (5.3) */
+        if (bh)
+            ovl_spr_fg(row, cell0);
         dst = c64_bnd + y0 * C64_BSTRIDE;
         for (y = y0; y < y1; y++, dst += C64_BSTRIDE) {
             sl = (row << 3) + y - c64_sp_y;
@@ -993,6 +1002,8 @@ static void c64_spr_draw(int row, int f, int l)
                 sl >>= 1;
             sd = c64_spd + sl + sl + sl;
             c64_sprconv(sd, c64_son, c64_slit, md, c64_xexp);
+            if (bh)
+                c64_sprbehind(c64_son, xs ? 6 : 3, sh, c64_pfg + y);
             c64_sprrow(dst, c64_son, c64_slit, xs ? 6 : 3, cell0, sh, f, l);
         }
     }
@@ -1179,6 +1190,23 @@ static void ovl_col_bgrow(int row, int c0, int c1)
                 g[i] = (unsigned char)(b | (b >> 1));
             }
     }
+}
+
+/* ovl_spr_fg - SPRITE PRIORITY ($D01B, 5.3): the foreground of row ROW's
+ * seven cells from C0, into c64_pfg (8 bytes a cell, zero off the screen),
+ * for c64_sprbehind to take out of a sprite that is behind it. The same
+ * foreground the collision scan reads (ovl_col_bgrow); the composer's own
+ * c64_xb is spent by then. Only a sprite behind pays it, once a row */
+static void ovl_spr_fg(int row, int c0)
+{
+    int d0 = c0 < 0 ? 0 : c0, d1 = c0 + 6 > 39 ? 39 : c0 + 6;
+
+    os88_memset(c64_pfg, 0, 64);
+    if (d0 > d1)
+        return;
+    ovl_col_bgrow(row, d0, d1);
+    os88_memcpy(c64_pfg + ((d0 - c0) << 3), c64_xb + (d0 << 3),
+                (d1 - d0 + 1) << 3);
 }
 
 /* ROW ROW's cells D0..D1 hold only blank glyphs - text, and every code's
@@ -1496,7 +1524,7 @@ static void c64_watch_set(void)
 
 /* c64_flush_every (declared in c64.c) - host ticks between flushes, from the
  * tier and the numbers above. */
-static void c64_tier_init(void)
+static void ovl_tier_init(void)
 {
     int b;
 
@@ -3105,7 +3133,7 @@ static void ovl_fsx_compose(int row, int f, int l)
 static void ovl_fsx_sprites(int row, int f, int l)
 {
     unsigned char *rv;
-    int k, y, y0, y1, sl, j;
+    int k, y, y0, y1, sl, j, bh, c0, p0, p1;
 
     rv = c64_rv[row];
     if (rv[0x15] == 0)
@@ -3130,13 +3158,29 @@ static void ovl_fsx_sprites(int row, int f, int l)
         j = j + j + j;
         c64_zcopy_out(c64_spd + j, c64_sp_data + j, sl + sl + sl + 3 - j);
         c64_scol[2] = (unsigned char)(rv[0x27 + k] & 15);
+        /* BEHIND THE FOREGROUND ($D01B, 5.3): the line's pixels under it are
+         * kept, it is drawn, and those the foreground has are put back */
+        bh = (rv[0x1B] >> k) & 1;
+        c0 = ((c64_sp_x + 64) >> 3) - 8;
+        p0 = c64_sp_x < (f << 3) ? (f << 3) : c64_sp_x;
+        p1 = c64_sp_x + c64_sp_w;
+        if (p1 > (l << 3) + 8)
+            p1 = (l << 3) + 8;
+        if (bh)
+            ovl_spr_fg(row, c0);
         for (y = y0; y < y1; y++) {
             sl = (row << 3) + y - c64_sp_y;
             if (c64_sp_h == 42)
                 sl >>= 1;
+            if (bh && p0 < p1)
+                os88_memcpy(c64_pfs, c64_b8 + C64_X320(y) + p0, p1 - p0);
             c64_c8spr(c64_b8 + C64_X320(y), c64_spd + sl + sl + sl,
                       c64_sp_x, f << 3, (l << 3) + 8, c64_scol,
                       (rv[0x1C] >> k) & 1, (c64_sp_w == 48) ? 1 : 0);
+            if (bh)
+                for (j = p0; j < p1; j++)
+                    if (c64_pfg[(((j >> 3) - c0) << 3) + y] & (0x80 >> (j & 7)))
+                        c64_b8[C64_X320(y) + j] = c64_pfs[j - p0];
         }
     }
 }

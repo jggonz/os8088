@@ -739,6 +739,17 @@ body:
     dw _c64_colpair
     cmp ax, 0
     jne .f5
+    ; c64_sprbehind: $FF over a glyph byte $18 three pixels left of it
+    ; ($18 << 3 = $C0 under the sprite's first two pixels): $3F
+    mov word [pushes], 4
+    PUSHI sbg
+    PUSHI 3
+    PUSHI 1
+    PUSHI sbon
+    call disc_call
+    dw _c64_sprbehind
+    cmp byte [sbon], 0x3F
+    jne .f5
     ; c64_colblank: 32 32 blank (1); 32 1 not (0); 32 5 unknown at 1 (3);
     ; 96 96 under the ECM mask $3F is 32 32 (1)
     mov word [pushes], 5
@@ -1928,6 +1939,8 @@ smmk:        times 147 db 0x55
 cpa:         db 0, 0, 0, 0, 0, 1, 0, 0, 0
 cpb:         db 0x80, 0, 0, 0, 0, 0, 0, 0, 0
 cptmp:       times 16 db 0
+sbon:        db 0xFF
+sbg:         db 0x18, 0, 0, 0, 0, 0, 0, 0, 0x00
 cbx1:        db 32, 32
 cbx2:        db 32, 1
 cbx3:        db 32, 5

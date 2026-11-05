@@ -151,7 +151,7 @@ void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
 void c64j_off(unsigned core);              /* the core's page map zeroed */
 static void c64_jit_drop(void);
 static void ovl_jit_init(void);
-void c64_jit_toggle(void);
+static void ovl_jit_toggle(void);
 void c64f_core(unsigned dstseg, unsigned partseg);
 unsigned c64f_codesel(unsigned seg);
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
@@ -187,6 +187,8 @@ int c64_colrow(const unsigned char *m, int n, int sh,
                const unsigned char *g);          /* a collision's line (5.3.1) */
 int c64_colrows(const unsigned char *mk, int n, int sh,
                 const unsigned char *g, int lines, int ye);   /* ...a row's */
+void c64_sprbehind(unsigned char *on, int n, int sh,
+                   const unsigned char *g);  /* $D01B (5.3) */
 int c64_colblank(unsigned seg, unsigned a, int n, int mask,
                  const unsigned char *bk);  /* ...and blank glyphs' */
 void c64_sprmasks(const unsigned char *sd, unsigned char *mk, int md,
@@ -574,7 +576,7 @@ static int c64_fr_stale = 1;                /* c64_rv moved without c64scr.c's
 static int  c64_geom(void *win);
 static void c64_watch_set(void);
 static void c64_menu_state(void);
-static void c64_tier_init(void);
+static void ovl_tier_init(void);
 static void c64_fullscreen_toggle(void *win);
 static void c64_ram_pattern(void);
 static void ovl_reset_regs(void);
@@ -599,6 +601,7 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
 static void ovl_open(const char *name, unsigned size_lo, unsigned size_hi);
 static void ovl_auto_step(void);
 static int  ovl_col_read(int sb);           /* $D01E/$D01F (C64-SPEC 5.3.1) */
+static void ovl_spr_fg(int row, int c0);    /* $D01B: the foreground (5.3) */
 static void ovl_col_tick(void);
 
 /* The parts of the one translation unit (SPEC.md 73.1: `nasm -f bin` has no
@@ -1490,7 +1493,7 @@ static int c64_slice(int left)
         c64_th_spend(ran);
         left -= ran;
         if (r == C64_RUN_JAM) {
-            if (c64_m.pc == C64_D64_TRAP) {
+            if ((c64_m.pc == C64_D64_TRAP) | (c64_m.pc == C64_SV_TRAP)) {
                 ovl_d64_trap();             /* drive 8 (11.5): the LOAD, or the
                                              * one instruction the trap's byte
                                              * replaced - and the machine runs on */
@@ -2026,10 +2029,10 @@ static void c64_jit_drop(void)
     c64_menu_state();
 }
 
-/* c64_jit_toggle - Preferences > Recompiler (C64-SPEC 4.9.5): off zeroes the
+/* ovl_jit_toggle - Preferences > Recompiler (C64-SPEC 4.9.5): off zeroes the
  * core's page map, so no transfer looks for a block; on sets the recompiler
  * up afresh in the claim it kept, every block made again as it is reached */
-void c64_jit_toggle(void)
+static void ovl_jit_toggle(void)
 {
     if (c64_fjit == 0)
         return;
@@ -2146,6 +2149,7 @@ static void *ovl_main(void)
      * when one is on drive 8, and otherwise by running the LDA #$60 it
      * replaced. Patched in THIS copy of the ROM, not the file */
     os88_poke(c64_m.romseg, C64_D64_TRAPOFF, 0x02);
+    os88_poke(c64_m.romseg, C64_SV_TRAPOFF, 0x02);  /* ...and SAVE's (11.5.2) */
     /* WHAT CAN THIS MACHINE'S SOUND HARDWARE DO (11.4)? Asked ONCE, here, and
      * tested rather than guessed (SPEC.md 73.11): §11.4 puts SID voice 1's
      * gate and frequency on OSAPI_SND_TONE, and a package that calls a slot
@@ -2165,7 +2169,7 @@ static void *ovl_main(void)
      * function ran, so it is called from here and cannot be refused. The
      * TABLES stay resident and DS-relative, which is what makes it legal. */
     ovl_conv_init();
-    c64_tier_init();                        /* the flush rate, off os88_cpu()
+    ovl_tier_init();                        /* the flush rate, off os88_cpu()
                                              * and tests/c64band's numbers */
     ovl_reset_regs();                       /* the VIC/CIA/SID register files */
     c64_lum_update();                       /* the 1bpp masks, off $D021 (9.6) */

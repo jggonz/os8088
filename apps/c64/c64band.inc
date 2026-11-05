@@ -1360,3 +1360,35 @@ _c64_colpair:
     pop si
     pop bp
     ret
+
+; -----------------------------------------------------------------------------
+; void c64_sprbehind(unsigned char *on, int n, int sh, const unsigned char *g)
+; A sprite BEHIND the foreground ($D01B, C64-SPEC 5.3): its N bytes of ON lose
+; every pixel the foreground has. ON's first pixel is SH (0..7) pixels into
+; G's first byte, and G steps 8 bytes a cell (c64_xb's layout: a cell's eight
+; lines). Byte i of ON covers the last 8 - SH pixels of G[8i] and the first
+; SH of G[8i + 8]: one 16-bit shift left joins them.
+; -----------------------------------------------------------------------------
+_c64_sprbehind:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov di, [bp+4]
+    mov dx, [bp+6]
+    mov cx, [bp+8]
+    mov si, [bp+10]
+.b:
+    mov ah, [si]
+    mov al, [si+8]
+    shl ax, cl
+    not ah
+    and [di], ah
+    inc di
+    add si, 8
+    dec dx
+    jg .b
+    pop di
+    pop si
+    pop bp
+    ret

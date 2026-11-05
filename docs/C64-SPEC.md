@@ -538,7 +538,7 @@ BRK and an IRQ entry so a double charge cannot come back.
 (SPEC.md §74.1):
 
 - seeded from `os88_cpu()` (`OSAPI_CPU_INFO`) — `512 << os88_cpu()`, clamped
-  into the range below (`c64_tier_init`, `c64scr.c`);
+  into the range below (`ovl_tier_init`, `c64scr.c`);
 - **`C64_SLICE_MIN` = 256 to `C64_SLICE_MAX` = 16,384 cycles**, doubled when
   four consecutive slices each finish inside one host tick, halved when one
   slice spans two tick boundaries;
@@ -1350,9 +1350,6 @@ line takes effect from that line.
 
 ### 5.3 What does not carry
 
-- **Sprite priority.** Every sprite is drawn in FRONT of the screen
-  whatever `$D01B` says, sprite 0 over sprite 7. The COLLISION registers do
-  carry: §5.3.1.
 - **Raster splits finer than a character row** (§9.10): a register written
   part-way down a row takes effect from the next row. A rasterbar is a
   border or paper colour per ROW, never per line.
@@ -2466,6 +2463,17 @@ the row above (`c64_rsame`) is a hit with no compare. The cache is dropped at
 each flush's sprite pass, because the pointers are RAM. It was 16% of a 286
 under the Bright Pixel card, a pointer read through a call per row and sprite.
 
+**A sprite BEHIND the foreground** (`$D01B`'s bit) keeps its pixels off the
+foreground's: in the window `ovl_spr_fg` fetches the foreground of the seven
+cells under it once a row (the collision scan's `ovl_col_bgrow`, §5.3.1 -
+a set bit, and in multicolour a pair `10` or `11`), and `c64_sprbehind`
+takes those pixels out of each line's ON before `c64_sprrow` draws it; in
+fullscreen colour the line's pixels under it are kept, it is drawn, and the
+foreground's put back. Its scratch is `c64_bx2`'s, free until the
+magnified band is made after the sprites. The bit is in the row's
+signature, so setting it redraws. Only a sprite behind pays any of it;
+sprite against sprite stays sprite 0 over 7, as on the VIC.
+
 **What a row's sprites look like is a signature**, `c64_spsig[r]`: per
 sprite on the row, its position, size, colours, multicolour bit and data
 pointer, and a nonzero bit for *a sprite is here*. `c64_spr_dirty` takes it
@@ -2923,7 +2931,6 @@ owner's rule, and each fact still stands:
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
 | On the SPEAKER: SID voices beyond one, waveforms, ADSR; on an FM chip: the filters, ring modulation and sync (§11.4.2, §11.4.3; voice 3 READS, §11.4.1) | the PC speaker is one square wave; the OPL has no SID filter, and its two operators no ring or sync |
 | Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
-| Sprite priority | §5.3 — sprites are drawn in front whatever `$D01B` says |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (§10.3) |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |
@@ -3076,14 +3083,14 @@ once, `RUN` in the buffer), the reset case (reset requested, warp on,
 nothing loaded until the prompt, the first frames ignored) and a D64's two
 lines; each was verified red by breaking it.
 
-**With no disk on drive 8 (§11.5), `LOAD"*",8` answers with the KERNAL's
-`?DEVICE NOT PRESENT  ERROR`** - and so does any device but 8, disk or no
-disk. That is the honest machine with nothing on the bus, written here so
-nobody files it as a defect. The ROM is the authority; transcribed from the machine, here and in
-`README.TXT`:
+**Any device but 8 answers `LOAD"*",9` with the KERNAL's
+`?DEVICE NOT PRESENT  ERROR`** - the honest machine with nothing on that
+part of the bus, written here so nobody files it as a defect. Drive 8 is
+always answered: by its D64 (§11.5) or, with none, by the folder (§11.5.2).
+The ROM is the authority; transcribed from the machine:
 
 ```
-LOAD"*",8
+LOAD"*",9
 
 SEARCHING FOR *
 ?DEVICE NOT PRESENT  ERROR
@@ -3128,9 +3135,11 @@ file), and `c64_slice` meets the JAM there and calls `ovl_d64_trap`
   KERNAL's own `LOADING`/`VERIFYING` message at `$F5D2`, off a return
   address pushed for its exit at `$F5A9` (`CLC / LDX $AE / LDY $AF / RTS`) -
   so BASIC and any caller see exactly what a load from drive 8 leaves;
-- **a name the disk has not got**: the KERNAL's `$F704`, `?FILE NOT FOUND`;
-- **any other device, or no disk**: the `LDA #$60` the byte replaced, and
-  the KERNAL goes on to its serial bus as it always did.
+- **a name the disk has not got** is looked for in the folder behind it
+  (§11.5.2), where SAVE writes, before `?FILE NOT FOUND`;
+- **no disk**: the folder (§11.5.2);
+- **any other device**: the `LDA #$60` the byte replaced, and the KERNAL
+  goes on to its serial bus as it always did.
 
 Typed at this machine, with Edge of Disgrace's side 0 attached:
 
@@ -3157,6 +3166,48 @@ met. **It costs nothing until a LOAD reaches it.**
 `LOADING`), a pattern at `$0801`, the directory's header line, `FILE NOT
 FOUND` - and that device 9 runs the replaced instruction; red with the
 file's chain cut.
+
+#### 11.5.2 The folder - SAVE, and drive 8 with no disk
+
+**Drive 8 with no D64 is the folder the program stands in** - the one Smart
+attach last picked from, or the one it was started from - as VICE's
+file-system device is a host directory. `ovl_fs_*` (`c64disk.c`):
+
+- **`SAVE"NAME",8`** writes `NAME.PRG`: the two-byte address, then the bytes
+  from `($C1)` up to `($AE)` **as the CPU sees them** - ROM where ROM is in,
+  as the KERNAL's own `LDA ($AC),Y` reads them; RAM below `$A000` is copied
+  as it lies. It goes out through the screen shadow, 8,000 bytes a write
+  (`os88_file_write`, then `os88_file_append`), and the shadow is redrawn
+  after - so it works with the recompiler holding every claim. A name that
+  is there already is refused as a 1541 refuses it (`63, FILE EXISTS`):
+  nothing written, `Exists: NAME.PRG` on the status row; `SAVE"@0:NAME",8`
+  replaces it. `Saved NAME.PRG` or `Not saved: NAME.PRG` says how it went.
+  The KERNAL's SAVE is trapped where its serial half begins: `$F605`, its
+  `JSR $F3D5`, patched to a JAM byte as `$F4C4` is for LOAD, and left to the
+  core by the ROM translation (`m65aot.py`). The trap leaves through the
+  KERNAL's `SAVING NAME` at `$F68F` into the exit at `$F5A9`. Any device but
+  8 runs the `JSR` the byte replaced.
+- **SAVE writes the folder even with a D64 attached**: the image is not
+  written (writing one back is the whole 171KB file), and **LOAD looks in
+  the folder for a name the disk has not got**, so what was saved loads
+  either way. `LOAD"$",8` lists the disk while one is attached.
+- **`LOAD"NAME",8`** reads `NAME.PRG` through Smart attach's buffer (§11.3)
+  - at `$0801`, or its own address with a secondary address - and `*`, `?`
+  match as on a 1541, against the name's stem. `VERIFY` compares and sets
+  `$90`'s `$10` where a byte differs.
+- **`LOAD"$",8`** is the folder's `.PRG` files as a 1541's listing:
+  `"OS8088 FOLDER" 88 2A`, a line a file with its blocks of 254, and
+  `BLOCKS FREE.` from the free kilobytes.
+- **A C64 name becomes an 8.3 name**: letters and digits kept (a shifted
+  letter is its letter), anything else `_`, eight at most, `.PRG` after.
+
+`c64uitest` keeps a folder in memory and holds: a 10,000-byte SAVE across
+the staging's chunks with its address, the exists refusal, `@0:`, LOAD by
+a wildcard at `$0801`, VERIFY of a changed byte, a stem that only starts
+the same not matching, the listing, and device 9's `JSR`; red with the
+chunk offset dropped or the stem test loosened. On 86Box: `10 PRINT"HI"`,
+`SAVE"HELLO",8`, `NEW`, `LOAD"HELLO",8`, `LIST` answers `10 PRINT"HI"`, and
+`LOAD"$",8` lists it.
 
 #### 11.5.1 The image in extended memory
 

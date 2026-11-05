@@ -377,7 +377,7 @@ static void ovl_cmd(int menu, int item, void *win)
              * that announced a speed-up the machine does not deliver is the
              * shape SPEC.md 47 exists to stop, and PERFORMANCE.md's "degrade
              * by tier" gives the port the means to answer: os88_cpu() is a
-             * FACT the code can test, and c64_tier_init has read it before
+             * FACT the code can test, and ovl_tier_init has read it before
              * the menu is first drawn.
              *
              * THE THREE SENTENCES BELOW ARE THIS PORT'S OWN, not VICE's, and
@@ -426,7 +426,7 @@ static void ovl_cmd(int menu, int item, void *win)
             return;
         }
         if (item == C64_I_JIT) {
-            c64_jit_toggle();
+            ovl_jit_toggle();
             return;
         }
         if (item == C64_I_COLL) {

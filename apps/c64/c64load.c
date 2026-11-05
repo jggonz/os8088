@@ -101,6 +101,8 @@ static void ovl_load_ptrs(unsigned end)
  * ========================================================================*/
 static unsigned c64_ldbuf, c64_ldck;        /* the buffer and its size */
 static unsigned c64_ldlo, c64_ldhi, c64_ldgot;  /* what is in it (got 0: none) */
+static int c64_ld_cmp;                      /* 1: VERIFY - compared, not landed;
+                                             * $10 set where a byte differed */
 
 static int ovl_buf_get(void)
 {
@@ -155,7 +157,14 @@ static int ovl_stream(const char *name, unsigned lo, unsigned hi,
             n = len;
         if (ovl_buf_read(name, rlo, hi) < k + n)
             return 0;
-        ovl_land(dest, c64_ldbuf + (k >> 4), k & 15, n);
+        if (c64_ld_cmp) {
+            unsigned j;
+            for (j = 0; j < n; j++)
+                if (os88_peek(c64_ldbuf, k + j) != c64_rd(dest + j))
+                    c64_ld_cmp |= 0x10;
+        } else {
+            ovl_land(dest, c64_ldbuf + (k >> 4), k & 15, n);
+        }
         dest += n;
         len -= n;
         k = 0;

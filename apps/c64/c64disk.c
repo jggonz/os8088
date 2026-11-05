@@ -32,6 +32,11 @@
 #define C64_D64_LOADING  0xF5D2             /* LOADING / VERIFYING, then RTS */
 #define C64_D64_EXIT     0xF5A9             /* CLC / LDX $AE / LDY $AF / RTS */
 #define C64_D64_NOTFOUND 0xF704             /* LDA #4: ?FILE NOT FOUND */
+#define C64_SV_TRAP      0xF605             /* JSR $F3D5, the serial SAVE's
+                                             * first, after its name test */
+#define C64_SV_TRAPOFF   0x1605
+#define C64_SV_OPEN      0xF3D5             /* ...the JSR's target */
+#define C64_SV_SAVING    0xF68F             /* SAVING <name>, then RTS */
 
 static unsigned c64_d64_seg;                /* the image's claim, or the
                                              * slots' when it is extended;
@@ -280,6 +285,8 @@ static int ovl_d64_match(const unsigned char *want, unsigned wn,
     return wn >= 16 || os88_peek(para, off + wn) == 0xA0;
 }
 
+static const char c64_blkfree[] = "BLOCKS FREE.";
+
 /* ovl_d64_put - one byte of a growing listing into RAM at *at */
 static unsigned c64_d64_at;
 static void ovl_d64_put(int v)
@@ -372,7 +379,7 @@ static unsigned ovl_d64_dir(unsigned at)
     ovl_d64_put(free & 0xFF);
     ovl_d64_put(free >> 8);
     for (i = 0; i < 12; i++)
-        ovl_d64_put("BLOCKS FREE."[i]);
+        ovl_d64_put(c64_blkfree[i]);
     for (i = 0; i < 13; i++)
         ovl_d64_put(' ');
     ovl_d64_put(0);
@@ -381,6 +388,306 @@ static unsigned ovl_d64_dir(unsigned at)
     ovl_d64_put(0);
     ovl_d64_put(0);
     return c64_d64_at;
+}
+
+/* ==========================================================================
+ * DRIVE 8 WITH NO DISK: THE FOLDER (C64-SPEC 11.5.2)
+ *
+ * VICE's file-system device: with no D64 attached, drive 8 is the folder the
+ * program stands in - the one Smart attach last picked from, or the one it
+ * was started from. LOAD"NAME",8 reads NAME.PRG there, LOAD"$",8 lists its
+ * .PRG files, and SAVE"NAME",8 writes one (SAVE"@0:NAME",8 replaces it).
+ * A C64 name becomes an 8.3 one: letters and digits kept, anything else `_`,
+ * eight at most, `.PRG` after.
+ * ========================================================================*/
+/* (THEIR SCRATCH IS c64_bx2's, as the collision scan's is (5.3.1): only a
+ * flush's bands use it, and a trap runs inside a slice) */
+#define c64_fs_host ((char *)(c64_bx2 + 600))   /* [13] the 8.3 name */
+#define c64_fs_want (c64_bx2 + 616)             /* [16] the C64's, mapped */
+#define c64_fs_f    ((struct os88_find *)(c64_bx2 + 640))   /* [24] */
+static unsigned c64_fs_wn;
+
+/* two C strings equal (the SDK has no strcmp) */
+static int ovl_streq(const char *a, const char *b)
+{
+    while (*a && *a == *b) {
+        a++;
+        b++;
+    }
+    return *a == *b;
+}
+
+/* the name at ($BB), $B7 long, without its drive prefix: into c64_fs_want
+ * and, wildcards aside, c64_fs_host. Answers 1 for an `@` (replace) */
+static int ovl_fs_name(void)
+{
+    unsigned n, ptr, i, k;
+    int c, at;
+
+    n = (unsigned)c64_rd(0xB7);
+    ptr = (unsigned)c64_rd16(0xBB);
+    if (n > 16)
+        n = 16;
+    for (i = 0; i < n; i++)
+        c64_fs_want[i] = (unsigned char)c64_rd(ptr + i);
+    at = 0;
+    if (n != 0 && c64_fs_want[0] == '@')
+        at = 1;
+    for (i = 0; i < n; i++)
+        if (c64_fs_want[i] == ':') {        /* "0:NAME", "@0:NAME", ":NAME" */
+            os88_memcpy(c64_fs_want, c64_fs_want + i + 1, n - i - 1);
+            n -= i + 1;
+            break;
+        }
+    for (i = 0, k = 0; i < n; i++) {
+        c = c64_fs_want[i];
+        if (c >= 0xC1 && c <= 0xDA)
+            c -= 0x80;                      /* a shifted letter: the letter */
+        if ((c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '*' && c != '?'
+                && c != '$')
+            c = '_';
+        c64_fs_want[i] = (unsigned char)c;
+        if (k < 8)
+            c64_fs_host[k++] = (char)c;
+    }
+    os88_strcpy(c64_fs_host + k, ".PRG", 5);
+    c64_fs_wn = n;
+    return at;
+}
+
+/* the .PRG file the wanted name matches, by its stem: 1 found (its name in
+ * c64_fs_f), 0 not */
+static int ovl_fs_find(void)
+{
+    int ord, i, l;
+    unsigned w;
+    char *nm;
+
+    for (ord = 0; (ord = os88_file_find(ord, c64_fs_f)) >= 0; ) {
+        if (c64_fs_f->type >= OS88_FT_DIR)
+            continue;
+        nm = c64_fs_f->name;
+        l = (int)os88_strlen(nm);
+        if (l < 5 || !ovl_streq(nm + l - 4, ".PRG"))
+            continue;
+        l -= 4;
+        for (i = 0, w = 0; w < c64_fs_wn; w++, i++) {
+            if (c64_fs_want[w] == '*')
+                return 1;
+            if (i >= l)
+                break;
+            if (c64_fs_want[w] != '?' && c64_fs_want[w] != (unsigned char)nm[i])
+                break;
+        }
+        if (w == c64_fs_wn && i == l)
+            return 1;
+        if (w == c64_fs_wn && i == 8 && l == 8)
+            return 1;                       /* (a name cut at eight) */
+    }
+    return 0;
+}
+
+/* LOAD"$",8 of the folder: its .PRG files as a 1541's directory listing */
+static unsigned ovl_fs_dir(unsigned at)
+{
+    int ord, l, i;
+    unsigned start, blk, kb;
+    const char *hd = "\"OS8088 FOLDER   \" 88 2A";
+
+    c64_d64_at = at;
+    start = c64_d64_at;
+    ovl_d64_put(1); ovl_d64_put(1); ovl_d64_put(0); ovl_d64_put(0);
+    ovl_d64_put(0x12);
+    for (i = 0; hd[i]; i++)
+        ovl_d64_put(hd[i]);
+    ovl_d64_put(0);
+    c64_wr(start, c64_d64_at & 0xFF);
+    c64_wr(start + 1, c64_d64_at >> 8);
+    for (ord = 0; (ord = os88_file_find(ord, c64_fs_f)) >= 0; ) {
+        l = (int)os88_strlen(c64_fs_f->name);
+        if (c64_fs_f->type >= OS88_FT_DIR || l < 5
+                || !ovl_streq(c64_fs_f->name + l - 4, ".PRG"))
+            continue;
+        if (c64_d64_at > 0x9F00u)
+            break;                          /* (BASIC's RAM is full) */
+        blk = c64_fs_f->size_hi ? 0xFFFFu
+            : c64_div32(0, c64_fs_f->size_lo + 253u, 254);
+        if (c64_fs_f->size_lo > 0xFF00u)
+            blk = c64_div32(0, c64_fs_f->size_lo, 254) + 1;
+        start = c64_d64_at;
+        ovl_d64_put(1); ovl_d64_put(1);
+        ovl_d64_put(blk & 0xFF); ovl_d64_put(blk >> 8);
+        if (blk < 100) ovl_d64_put(' ');
+        if (blk < 10) ovl_d64_put(' ');
+        ovl_d64_put('"');
+        for (i = 0; i < l - 4; i++)
+            ovl_d64_put(c64_fs_f->name[i]);
+        ovl_d64_put('"');
+        for (; i < 17; i++)
+            ovl_d64_put(' ');
+        ovl_d64_put('P'); ovl_d64_put('R'); ovl_d64_put('G');
+        ovl_d64_put(0);
+        c64_wr(start, c64_d64_at & 0xFF);
+        c64_wr(start + 1, c64_d64_at >> 8);
+    }
+    kb = os88_disk_free_kb();
+    blk = kb > 16383 ? 0xFFFF : (kb << 2);  /* (1KB is ~4 blocks of 254) */
+    start = c64_d64_at;
+    ovl_d64_put(1); ovl_d64_put(1);
+    ovl_d64_put(blk & 0xFF); ovl_d64_put(blk >> 8);
+    for (i = 0; i < 12; i++)
+        ovl_d64_put(c64_blkfree[i]);
+    for (i = 0; i < 13; i++)
+        ovl_d64_put(' ');
+    ovl_d64_put(0);
+    c64_wr(start, c64_d64_at & 0xFF);
+    c64_wr(start + 1, c64_d64_at >> 8);
+    ovl_d64_put(0);
+    ovl_d64_put(0);
+    return c64_d64_at;
+}
+
+/* leave a LOAD or SAVE the way the KERNAL's serial half does: the
+ * message at MSG (LOADING/VERIFYING, or SAVING and the name), returning
+ * into its exit at $F5A9 off a pushed address */
+static void ovl_fs_leave(unsigned msg)
+{
+    unsigned sp = c64_m.s & 0xFF;
+
+    c64_wr(0x100 + sp, (C64_D64_EXIT - 1) >> 8);
+    c64_wr(0x100 + ((sp - 1) & 0xFF), (C64_D64_EXIT - 1) & 0xFF);
+    c64_m.s = (sp - 2) & 0xFF;
+    c64_m.pc = msg;
+}
+
+static void ovl_fs_load(void)
+{
+    unsigned sa, at, end, n, st;
+    char *nm;
+
+    ovl_fs_name();
+    sa = (unsigned)c64_rd(0xB9);
+    st = 0;
+    if (c64_fs_wn == 1 && c64_fs_want[0] == '$') {
+        at = (sa != 0) ? 0x0401 : (unsigned)c64_rd16(0xC3);
+        end = ovl_fs_dir(at);
+    } else {
+        if (c64_fs_wn == 0 || !ovl_fs_find()) {
+            c64_m.pc = C64_D64_NOTFOUND;
+            return;
+        }
+        nm = c64_fs_f->name;
+        if (c64_fs_f->size_hi != 0 || c64_fs_f->size_lo < 3 || !ovl_buf_get()) {
+            ovl_buf_put();
+            c64_m.pc = C64_D64_NOTFOUND;
+            return;
+        }
+        if (ovl_buf_read(nm, 0, 0) < 2) {
+            ovl_buf_put();
+            c64_m.pc = C64_D64_NOTFOUND;
+            return;
+        }
+        at = (sa != 0) ? ((unsigned)os88_peek(c64_ldbuf, 0)
+                          | ((unsigned)os88_peek(c64_ldbuf, 1) << 8))
+                       : (unsigned)c64_rd16(0xC3);
+        n = c64_fs_f->size_lo - 2;
+        if ((unsigned)(n - 1) > (unsigned)(0xFFFFu - at))
+            n = 0u - at;                    /* no further than $FFFF */
+        if (c64_rd(0x93)) {                 /* VERIFY: compared, not landed */
+            c64_ld_cmp = 1;
+            ovl_stream(nm, 2, 0, n, at);
+            st = c64_ld_cmp & 0x10;
+            c64_ld_cmp = 0;
+        } else if (!ovl_stream(nm, 2, 0, n, at)) {
+            st = 0x02;                      /* (a read came up short) */
+        }
+        ovl_buf_put();
+        end = at + n;
+    }
+    c64_dirty_all();
+    c64_wr(0xAE, end & 0xFF);
+    c64_wr(0xAF, end >> 8);
+    c64_wr(0x90, 0x40 | st);
+    ovl_fs_leave(C64_D64_LOADING);
+}
+
+/* SAVE"NAME",8 with no disk: NAME.PRG in the folder, the load address and
+ * then the bytes from ($C1) up to ($AE) as the CPU sees them - ROM where ROM
+ * is in, as the KERNAL's own LDA ($AC),Y reads them. Staged through the
+ * screen shadow, which is redrawn after: 8000 bytes a write */
+static void ovl_fs_save(void)
+{
+    unsigned a, end, n, k, i, first;
+    int at, r;
+
+    at = ovl_fs_name();
+    if (c64_fs_wn == 0)
+        return;
+    if (!at) {                              /* a 1541 says 63, FILE EXISTS */
+        for (r = 0; (r = os88_file_find(r, c64_fs_f)) >= 0; )
+            if (ovl_streq(c64_fs_f->name, c64_fs_host)) {
+                os88_strcpy(c64_msg, "Exists: ", C64_MSGMAX);
+                os88_strcpy(c64_msg + 8, c64_fs_host, 13);
+                c64_say(c64_msg);
+                return;
+            }
+    }
+    a = (unsigned)c64_rd16(0xC1);
+    end = (unsigned)c64_rd16(0xAE);
+    n = end - a;
+    if (end < a)
+        n = 0;
+    first = 1;
+    r = 0;
+    do {
+        k = 0;
+        if (first) {
+            c64_sh[0] = (unsigned char)(a & 0xFF);
+            c64_sh[1] = (unsigned char)(a >> 8);
+            k = 2;
+        }
+        i = 8000 - k;
+        if (i > n)
+            i = n;
+        if (a < 0xA000u && i <= (unsigned)(0xA000u - a) && a >= 2) {
+            c64_zcopy_out(c64_sh + k, a, i);        /* RAM as it lies */
+        } else {
+            unsigned j;
+            for (j = 0; j < i; j++)
+                c64_sh[k + j] = (unsigned char)c64_rd(a + j);
+        }
+        if (first)
+            r = os88_file_write(c64_fs_host, c64_sh, k + i);
+        else
+            r = os88_file_append(c64_fs_host, c64_sh, i);
+        first = 0;
+        a += i;
+        n -= i;
+    } while (r >= 0 && n != 0);
+    c64_sh_inval();                         /* (the shadow was the staging) */
+    os88_strcpy(c64_msg, r < 0 ? "Not saved: " : "Saved ", C64_MSGMAX);
+    os88_strcpy(c64_msg + os88_strlen(c64_msg), c64_fs_host, 13);
+    c64_say(c64_msg);
+}
+
+/* the KERNAL has stopped on the JAM byte at C64_SV_TRAP: drive 8, here;
+ * anything else, the JSR $F3D5 the byte replaced */
+static void ovl_sv_trap(void)
+{
+    unsigned sp;
+
+    if (c64_rd(0xBA) != 8) {
+        sp = c64_m.s & 0xFF;
+        c64_wr(0x100 + sp, (C64_SV_TRAP + 2) >> 8);
+        c64_wr(0x100 + ((sp - 1) & 0xFF), (C64_SV_TRAP + 2) & 0xFF);
+        c64_m.s = (sp - 2) & 0xFF;
+        c64_m.pc = C64_SV_OPEN;
+        return;
+    }
+    ovl_fs_save();                          /* (with a disk too: the image
+                                             * is not written, 11.5.2) */
+    c64_wr(0x90, 0);
+    ovl_fs_leave(C64_SV_SAVING);
 }
 
 /* ovl_d64_trap - the KERNAL has stopped on the JAM byte at C64_D64_TRAP.
@@ -392,6 +699,14 @@ static void ovl_d64_trap(void)
     unsigned wn, ptr, i, sa, verify, at, t, s, para, off, typ, n, st, end, sp;
     int found;
 
+    if (c64_m.pc == C64_SV_TRAP) {
+        ovl_sv_trap();
+        return;
+    }
+    if (c64_rd(0xBA) == 8 && c64_d64_seg == 0) {
+        ovl_fs_load();                      /* no disk: the folder (11.5.2) */
+        return;
+    }
     if (c64_rd(0xBA) != 8 || c64_d64_seg == 0) {
         c64_m.a = 0x60;                     /* LDA #$60: N and Z clear */
         c64_m.p &= ~0x82u;
@@ -442,7 +757,8 @@ static void ovl_d64_trap(void)
             }
         }
         if (!found) {
-            c64_m.pc = C64_D64_NOTFOUND;
+            ovl_fs_load();                  /* not on the disk: the folder
+                                             * behind it, where SAVE writes */
             return;
         }
         /* the file's chain: two link bytes, then 254 of data - the first two

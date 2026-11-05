@@ -908,6 +908,56 @@ static char fx_name[16];
 static unsigned char fx_data[65536];
 static long fx_len;
 static unsigned h_reads;                    /* c64_read_at calls, counted */
+/* THE FOLDER (C64-SPEC 11.5.2): the files drive 8 sees with no disk, what
+ * os88_file_find lists and os88_file_write/append make */
+#define H_FOLD 6
+static struct { char name[13]; unsigned char data[16384]; long len; int live; }
+    h_fold[H_FOLD];
+static int h_fold_find(const char *name)
+{
+    int i;
+    for (i = 0; i < H_FOLD; i++)
+        if (h_fold[i].live && strcmp(h_fold[i].name, name) == 0)
+            return i;
+    return -1;
+}
+int os88_file_find(int ord, struct os88_find *f)
+{
+    for (; ord < H_FOLD; ord++)
+        if (h_fold[ord].live) {
+            memset(f, 0, sizeof(*f));
+            strcpy(f->name, h_fold[ord].name);
+            f->type = OS88_FT_FILE;
+            f->size_lo = (unsigned)(h_fold[ord].len & 0xFFFF);
+            f->size_hi = (unsigned)(h_fold[ord].len >> 16);
+            return ord + 1;
+        }
+    return -1;
+}
+int os88_file_write(const char *name, const void *buf, unsigned count)
+{
+    int i = h_fold_find(name);
+    if (i < 0)
+        for (i = 0; i < H_FOLD && h_fold[i].live; i++)
+            ;
+    if (i >= H_FOLD || count > sizeof(h_fold[0].data))
+        return -1;
+    strcpy(h_fold[i].name, name);
+    memcpy(h_fold[i].data, buf, count);
+    h_fold[i].len = count;
+    h_fold[i].live = 1;
+    return 0;
+}
+int os88_file_append(const char *name, const void *buf, unsigned count)
+{
+    int i = h_fold_find(name);
+    if (i < 0 || h_fold[i].len + count > (long)sizeof(h_fold[0].data))
+        return -1;
+    memcpy(h_fold[i].data + h_fold[i].len, buf, count);
+    h_fold[i].len += count;
+    return 0;
+}
+unsigned os88_disk_free_kb(void) { return 300; }
 unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
                      unsigned off_lo, unsigned off_hi)
 {
@@ -917,6 +967,9 @@ unsigned c64_read_at(const char *name, unsigned seg, unsigned cap,
     if (fx_name[0] && strcmp(name, fx_name) == 0) {
         src = fx_data;
         len = fx_len;
+    } else if (h_fold_find(name) >= 0) {
+        src = h_fold[h_fold_find(name)].data;
+        len = h_fold[h_fold_find(name)].len;
     }
     if (cap % 512 || off % 512)
         fail("c64_read_at off a cluster boundary");
@@ -1347,6 +1400,16 @@ int c64_colrow(const unsigned char *m, int n, int sh, const unsigned char *g)
             return 1;
     }
     return 0;
+}
+
+void c64_sprbehind(unsigned char *on, int n, int sh, const unsigned char *g)
+{
+    int i;
+    unsigned w;
+    for (i = 0; i < n; i++) {
+        w = ((((unsigned)g[8 * i] << 8) | g[8 * i + 8]) << sh) >> 8;
+        on[i] &= (unsigned char)~w;
+    }
 }
 
 int c64_colblank(unsigned seg, unsigned a, int n, int mask,
@@ -3637,7 +3700,7 @@ int main(int argc, char **argv)
      * and nowhere else, which is why none of the compare, signature or span
      * rows above need a second version. */
     h_cpu_tier = OS88_CPU_386;
-    c64_tier_init();
+    ovl_tier_init();
     fs_w = 640; fs_h = 480;                 /* a VGA desktop */
     memset(glass, 0x55, sizeof(glass));
     cost_begin();
@@ -3748,7 +3811,7 @@ int main(int argc, char **argv)
      * draw is the one outcome SPEC.md 47 exists to prevent. */
     do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
     h_cpu_tier = OS88_CPU_8086;
-    c64_tier_init();
+    ovl_tier_init();
     fs_w = 640; fs_h = 480;
     do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
     if (c64_scw != 8 || c64_sch != 8)
@@ -3757,7 +3820,7 @@ int main(int argc, char **argv)
     do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
 
     h_cpu_tier = OS88_CPU_386;
-    c64_tier_init();
+    ovl_tier_init();
     blit_refuse = 1;
     do_cmd(C64_I_FULLSCR, C64_M_PREF, win);
     flush_now();
@@ -3773,7 +3836,7 @@ int main(int argc, char **argv)
                                              * against a package that has given
                                              * up on 2x */
     h_cpu_tier = OS88_CPU_8086;
-    c64_tier_init();
+    ovl_tier_init();
     fs_w = 640; fs_h = 440;
     c64_sh_inval();
     dmg_whole = 1;
@@ -4198,6 +4261,107 @@ int main(int argc, char **argv)
         c64_col_ss = c64_col_sb = 0;
         c64_col_ok = 0;
         c64_col[5 * 40 + 10] = 0;
+    }
+
+    /* --- DRIVE 8 WITH NO DISK IS THE FOLDER (11.5.2): SAVE writes NAME.PRG
+     *     there (the load address, then the bytes), refuses an existing
+     *     name without @, replaces one with it; LOAD reads it back, by name
+     *     or wildcard, at $0801 or its own address; LOAD"$" lists it; VERIFY
+     *     compares; another device runs the JSR the trap replaced. Red with
+     *     the chunked write's offset dropped, or the find's stem test off */
+    {
+        unsigned dseg = c64_d64_seg, i;
+        int f;
+#define H_NAME(str) do { memcpy(&ram[0x0340], str, strlen(str)); \
+        ram[0xB7] = (unsigned char)strlen(str); ram[0xBB] = 0x40; \
+        ram[0xBC] = 0x03; } while (0)
+        c64_d64_seg = 0;
+        memset(h_fold, 0, sizeof(h_fold));
+        ram[0xBA] = 8;
+        for (i = 0; i < 10000; i++)
+            ram[0x1000 + i] = (unsigned char)(i * 7 + 3);
+        ram[0xC1] = 0x00; ram[0xC2] = 0x10;         /* $1000.. */
+        ram[0xAE] = 0x10; ram[0xAF] = 0x37;         /* ..$3710: 10,000 */
+        H_NAME("HELLO");
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_SV_TRAP;
+        ovl_d64_trap();
+        f = h_fold_find("HELLO.PRG");
+        if (f < 0 || h_fold[f].len != 10002 || h_fold[f].data[0] != 0x00
+                || h_fold[f].data[1] != 0x10)
+            fail("SAVE\"HELLO\",8 did not write HELLO.PRG with its address");
+        else {
+            for (i = 0; i < 10000; i++)
+                if (h_fold[f].data[2 + i] != ram[0x1000 + i])
+                    break;
+            if (i != 10000)
+                fail("SAVE wrote HELLO.PRG's bytes wrong past a chunk");
+        }
+        if (c64_m.pc != C64_SV_SAVING || ram[0x1F0] != ((C64_D64_EXIT - 1) >> 8))
+            fail("SAVE did not leave through SAVING and the KERNAL's exit");
+        if (strcmp(last_toast, "Saved HELLO.PRG") != 0)
+            fail("SAVE did not say it saved");
+        /* ...again: FILE EXISTS, then @0: replaces */
+        ram[0xAE] = 0x10; ram[0xAF] = 0x10;         /* 16 bytes now */
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_SV_TRAP;
+        ovl_d64_trap();
+        if (h_fold[f].len != 10002 || strcmp(last_toast, "Exists: HELLO.PRG") != 0)
+            fail("SAVE over an existing name without @ was not refused");
+        H_NAME("@0:HELLO");
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_SV_TRAP;
+        ovl_d64_trap();
+        if (h_fold[f].len != 18)
+            fail("SAVE\"@0:HELLO\" did not replace HELLO.PRG");
+        /* ...LOAD it back at BASIC's start, by a wildcard */
+        memset(&ram[0x0801], 0, 64);
+        H_NAME("HE*");
+        ram[0xB9] = 0;
+        ram[0x93] = 0;
+        ram[0xC3] = 0x01; ram[0xC4] = 0x08;
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_D64_TRAP;
+        ovl_d64_trap();
+        if (c64_m.pc != C64_D64_LOADING || ram[0x0801] != ram[0x1000]
+                || ram[0x0810] != ram[0x100F] || ram[0xAE] != 0x11 || ram[0xAF] != 0x08)
+            fail("LOAD\"HE*\",8 did not load HELLO.PRG at $0801 from the folder");
+        /* ...VERIFY against a changed byte */
+        ram[0x0805] ^= 0xFF;
+        ram[0x93] = 1;
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_D64_TRAP;
+        ovl_d64_trap();
+        if ((ram[0x90] & 0x10) == 0)
+            fail("VERIFY of a changed byte did not set the status");
+        ram[0x93] = 0;
+        /* ...a name it has not got, and a stem that only starts the same */
+        H_NAME("HELL");
+        c64_m.pc = C64_D64_TRAP;
+        ovl_d64_trap();
+        if (c64_m.pc != C64_D64_NOTFOUND)
+            fail("LOAD\"HELL\",8 matched HELLO.PRG");
+        /* ...the listing */
+        H_NAME("$");
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_D64_TRAP;
+        ovl_d64_trap();
+        for (i = 0x0801; i < 0x0880; i++)
+            if (memcmp(&ram[i], "\"HELLO\"", 7) == 0)
+                break;
+        if (i == 0x0880)
+            fail("LOAD\"$\",8 of the folder did not list HELLO");
+        /* ...and device 9: the JSR $F3D5 the byte replaced */
+        ram[0xBA] = 9;
+        c64_m.s = 0xF0;
+        c64_m.pc = C64_SV_TRAP;
+        ovl_d64_trap();
+        if (c64_m.pc != C64_SV_OPEN || ram[0x1F0] != ((C64_SV_TRAP + 2) >> 8)
+                || ram[0x1EF] != ((C64_SV_TRAP + 2) & 0xFF))
+            fail("SAVE to device 9 did not run the replaced JSR $F3D5");
+        ram[0xBA] = 8;
+        c64_d64_seg = dseg;
+#undef H_NAME
     }
     fx_name[0] = 0;
     c64_msg[0] = 0;
@@ -4683,6 +4847,35 @@ int main(int argc, char **argv)
         if ((int)c64_n_cell - j > 3 * 4)    /* 21 lines: rows 0-2 */
             fail("a sprite moving three pixels recomposed more than the four "
                  "cells a row it was and is over (9.11)");
+        /* ...BEHIND THE FOREGROUND ($D01B, 5.3): a black sprite over a white
+         * 'A' (line 0 $18) on black paper. In front it darkens the glyph;
+         * behind, the glyph's pixels stay lit - at X 24 and three pixels
+         * right, where only c64_sprbehind's shift puts the glyph's bits on
+         * the right sprite pixels. Red with the shift dropped, or $D01B
+         * left out of the signature (the change would not redraw) */
+        c64_io_wr(0xD000, 24);
+        c64_wr(0x0340, 0xFF);
+        c64_wr(0x0341, 0xFF);
+        c64_wr(0x0400, 0x01);               /* 'A' at row 0, cell 0 */
+        c64_col[0] = 1;                     /* white */
+        c64_io_wr(0xD021, 0);               /* black paper */
+        c64_io_wr(0xD027, 0);               /* a black sprite */
+        flush_now();
+        if (c64_sh[0] != 0x00)
+            fail("a black sprite in front of a white glyph did not hide it");
+        c64_io_wr(0xD01B, 1);
+        flush_now();
+        if (c64_sh[0] != 0x18)
+            fail("a sprite behind the foreground drew over the glyph "
+                 "($D01B, 5.3)");
+        c64_io_wr(0xD000, 27);
+        flush_now();
+        if (c64_sh[0] != 0x18)
+            fail("a sprite behind, three pixels in, hid the glyph's pixels "
+                 "or the wrong ones ($D01B, 5.3)");
+        c64_io_wr(0xD01B, 0);
+        c64_wr(0x0400, 0x20);
+        c64_io_wr(0xD021, 6);
         c64_io_wr(0xD015, 0);
         flush_now();
         if (c64_sh[0] != 0x00 || c64_sh[1] != 0x00)
@@ -4893,7 +5086,7 @@ int main(int argc, char **argv)
          * apps/runcpm/runcpm.c:1215's `512 << os88_cpu()`, clamped. */
         c64_budget = 0;
         c64_fastn = 3;
-        c64_tier_init();
+        ovl_tier_init();
         if (c64_budget != 512)
             fail("the wall slice was not seeded from os88_cpu() - it is "
                  "`512 << os88_cpu()` clamped into 256..16,384 (§4.4)");
@@ -6341,6 +6534,8 @@ int main(int argc, char **argv)
             "Not a T64 tape image.", "T64: cannot read it.",
             "Autostarting...", "Autostart: no READY. prompt.",
             "Sprite collisions off.", "Sprite collisions on.",
+            "Exists: ABCDEFGH.PRG", "Not saved: ABCDEFGH.PRG",
+            "Saved ABCDEFGH.PRG",
             "T64: no program in it.", "T64: no heap for it.",
             "No bands here - text only.",
             "No square voice here - no SID sound.",
