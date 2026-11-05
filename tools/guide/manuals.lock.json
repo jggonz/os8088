@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "aa80a581",
-  "strings": "ed3a576776586bbc",
-  "why": "Smart attach reads .T64 tape images"
+  "stamped": "bd6ed742",
+  "strings": "4e85a1fc2ca74b10",
+  "why": "SAVE, the folder, character sets"
  },
  "CALC_O88": {
   "sources": [

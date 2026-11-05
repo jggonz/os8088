@@ -42,6 +42,13 @@
 /* $D000-$D02E, mirrored every 64 bytes on the real chip; the file is 64 wide
  * and the dispatch masks the address, which is what the mirroring IS. */
 static unsigned char c64_vic[64];
+static unsigned char c64_col_ss, c64_col_sb; /* the collision registers'
+                                             * latches, $D01E and $D01F (5.3.1),
+                                             * cleared by a read */
+static unsigned c64_col_frs, c64_col_frb;   /* ...the frame each was last
+                                             * scanned in */
+static unsigned char c64_col_ok;            /* bit 0: frs valid, bit 1: frb */
+static unsigned char c64_col_irq;           /* a frame began with $D01A asking */
 /* THE DISPLAY LATCH (C64-SPEC 9.9): what the screen is drawn from - the
  * frame registers as they stood at the top of the display window, taken once
  * a frame (c64_latch). The live registers above are what the 6510 reads. */
@@ -197,7 +204,7 @@ static const unsigned char c64_maps[8][4] = {
 /* ==========================================================================
  * THE CORE'S SCRATCH (3.5)
  * ========================================================================*/
-static void c64_scratch_clear(void)
+static void ovl_scratch_clear(void)
 {
     int i;
     for (i = 0; i < C64_SCR_END; i++)
@@ -254,6 +261,9 @@ static void ovl_reset_regs(void)
 
     for (i = 0; i < 64; i++)
         c64_vic[i] = 0;
+    c64_col_ss = 0;
+    c64_col_sb = 0;
+    c64_col_ok = 0;
     for (i = 0; i < 32; i++)
         c64_sid[i] = 0;
     c64_osc3(0, 0, 0x08, 0);                /* voice 3 through TEST: the
@@ -918,6 +928,8 @@ static void c64_advance(int n)
     while (now >= C64_PAL_FRAME) {
         now -= C64_PAL_FRAME;
         c64_frames_lo = (c64_frames_lo + 1) & 0xFFFFu;
+        c64_col_irq |= c64_vic[0x1A] & 6;   /* a collision IRQ enabled: the
+                                             * frame is scanned (5.3.1) */
     }
     c64_frame_cyc = now;
 
@@ -938,6 +950,8 @@ static void c64_advance(int n)
         }
     }
 
+    if (c64_col_irq)
+        ovl_col_tick();
     c64_irq_update();
     if (latch)
         c64_latch(0);
@@ -1346,9 +1360,10 @@ static int c64_io_rd(unsigned a)
         }
         if (p == 0x1A)
             return (int)(c64_vic[0x1A] | 0xF0);
-        if ((p & 0x3E) == 0x1E)             /* $1E or $1F */
-            return 0;                       /* the collision registers answer
-                                             * 0 and 5.3 says why */
+        if ((p & 0x3E) == 0x1E)             /* $1E or $1F: the collision
+                                             * registers, scanned on a READ
+                                             * and only then (5.3.1) */
+            return c64_col_off ? 0 : ovl_col_read(p & 1);
         return c64_vic[p];
     }
     if (p <= 0x0700) {                      /* $D400-$D7FF: the SID */

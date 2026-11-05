@@ -103,7 +103,7 @@ static unsigned char c64_bx2[C64_X2STRIDE * 16];
 /* GLASS pixels per C64 cell: 8 or 16 a side (9.8's tier table). EVERY
  * cell<->pixel conversion in this file and in c64.c reads these two and not
  * the literal 8, which is the whole mechanism. c64_can2x is the TIER's answer
- * (c64_tier_init) and c64_no2x is blit1's. */
+ * (ovl_tier_init) and c64_no2x is blit1's. */
 static int c64_scw = 8, c64_sch = 8;
 static int c64_can2x, c64_no2x;
 static unsigned c64_sig[C64_ROWS];          /* this frame's row signatures */
@@ -628,7 +628,7 @@ static void c64_frame_regs(void)
  * more colours than two a cell is ORDERED-DITHERED by the VIC's luminance on
  * a 4x4 Bayer matrix, the same at every pixel, so neighbouring cells of
  * different colour pairs agree with one another. c64_dmask[colour][y & 3] is
- * the colour's pattern for an 8-pixel byte on that line (c64_dither_init).
+ * the colour's pattern for an 8-pixel byte on that line (ovl_dither_init).
  * ========================================================================*/
 unsigned char c64_dmask[16][4];            /* (c64band.inc reads it) */
 static unsigned char c64_xm[C64_COLS];      /* a row's matrix bytes */
@@ -636,7 +636,7 @@ static unsigned char c64_xb[320];           /* ...its bitmap bytes */
 
 static unsigned c64_xexp[256];              /* X-expansion (9.11) */
 static unsigned char c64_sxf[C64_ROWS], c64_sxl[C64_ROWS];
-static void c64_dither_init(void)
+static void ovl_dither_init(void)
 {
     static const unsigned char bay[4][4] = {
         { 8, 136, 40, 168 }, { 200, 72, 232, 104 },
@@ -768,13 +768,19 @@ static void c64_bandx(int row, int f, int l)
  * registers (9.10), so a multiplexer that moves its eight down the screen
  * mid-frame shows each instance where it was shown. Each sprite pixel is
  * lit or dark against the row's paper by luminance (9.6); priority behind
- * the foreground ($D01B) and the collision registers are not modelled (5.3).
+ * the foreground ($D01B) is not modelled (5.3) - the collision registers
+ * are, below (5.3.1).
  * c64_spsig[r] is what is over row r - a sum over the sprites that touch it
  * of their position, flags, colours, data pointer and data - and a row whose
  * signature changed is recomposed whole; c64_spr_dirty takes it once a flush.
  * ========================================================================*/
 static unsigned c64_spsig[C64_ROWS];
 static unsigned char c64_spd[63];           /* one sprite's data */
+#define c64_pfg  (c64_bx2 + 704)            /* [64] ovl_spr_fg's foreground:
+                                             * spr_draw runs before band_x2 */
+#define c64_pfs  (c64_bx2 + 768)            /* [48] a fullscreen line's
+                                             * pixels under a sprite behind */
+
 
 /* sprite k in row set RV: its top display line, height, left pixel, width,
  * and data address; 0 when it is off or nowhere on the display.
@@ -855,7 +861,7 @@ static int c64_spr_geom(const unsigned char *rv, int row, int k)
 
 static unsigned char c64_spg0[C64_ROWS], c64_spg1[C64_ROWS];  /* the pages
                                              * a row's sprites' data is on */
-/* (c64_sxf/c64_sxl, beside c64_dither_init: the cells a row's sprites were
+/* (c64_sxf/c64_sxl, beside ovl_dither_init: the cells a row's sprites were
  * over, C64_COLS..0 when none) */
 static int c64_sef, c64_sel;
 static void c64_spr_dirty(void)
@@ -904,7 +910,8 @@ static void c64_spr_dirty(void)
                     sig = (sig << 3) ^ (sig >> 13) ^ (unsigned)c64_sp_y;
                     sig = (sig << 3) ^ (sig >> 13) ^ c64_sp_data
                         ^ ((unsigned)rv[0x27 + k] << 8) ^ rv[0x25] ^ ((unsigned)rv[0x26] << 4)
-                        ^ (((rv[0x1C] >> k) & 1) << 15) ^ ((unsigned)c64_sp_w << 7);
+                        ^ (((rv[0x1C] >> k) & 1) << 15) ^ ((unsigned)c64_sp_w << 7)
+                        ^ (((rv[0x1B] >> k) & 1) << 14);
                     sig |= 1;               /* a row with a sprite is never 0 */
                     if ((c64_sp_data >> 8) < c64_spg0[r])
                         c64_spg0[r] = (unsigned char)(c64_sp_data >> 8);
@@ -952,7 +959,7 @@ static unsigned char c64_son[6], c64_slit[6];
 static void c64_spr_draw(int row, int f, int l)
 {
     unsigned char *rv, *dst, *sd;
-    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3, md;
+    int k, y, y0, y1, sl, j, sh, cell0, base, mc, xs, bg, l1, l2, l3, md, bh;
 
     rv = c64_rv[row];
     if (rv[0x15] == 0)
@@ -985,6 +992,9 @@ static void c64_spr_draw(int row, int f, int l)
         base = c64_sp_x + 32;               /* >= 8: no negative shift */
         cell0 = (base >> 3) - 4;
         sh = base & 7;
+        bh = (rv[0x1B] >> k) & 1;           /* BEHIND the foreground (5.3) */
+        if (bh)
+            ovl_spr_fg(row, cell0);
         dst = c64_bnd + y0 * C64_BSTRIDE;
         for (y = y0; y < y1; y++, dst += C64_BSTRIDE) {
             sl = (row << 3) + y - c64_sp_y;
@@ -992,9 +1002,381 @@ static void c64_spr_draw(int row, int f, int l)
                 sl >>= 1;
             sd = c64_spd + sl + sl + sl;
             c64_sprconv(sd, c64_son, c64_slit, md, c64_xexp);
+            if (bh)
+                c64_sprbehind(c64_son, xs ? 6 : 3, sh, c64_pfg + y);
             c64_sprrow(dst, c64_son, c64_slit, xs ? 6 : 3, cell0, sh, f, l);
         }
     }
+}
+
+/* ==========================================================================
+ * SPRITE COLLISIONS (C64-SPEC 5.3.1): $D01E, sprite with sprite, and $D01F,
+ * sprite with foreground, worked out when the program READS one and only
+ * then - once a frame each, so a second read in the frame finds what the
+ * first cleared, as on the machine, where the bits come back only as the
+ * beam passes the sprites again - or at a frame's start when $D01A enables a
+ * collision IRQ. A program that never reads them pays nothing.
+ *
+ * FROM THE REGISTERS AT THE READ: positions, expansion, multicolour and the
+ * pointers as the program has them then, which is what a game that reads in
+ * its interrupt has just drawn; the foreground under them from the display
+ * latch's row sets (9.10), with the fine scroll the screen has. A
+ * multiplexer's other instances (9.11) are not seen - only the eight
+ * sprites as they stand.
+ *
+ * A pixel is OPAQUE where it is not transparent - hires a set bit, a
+ * multicolour pair anything but 00 - and FOREGROUND where the VIC calls it
+ * so: a set bit, and in multicolour a pair 10 or 11. The line test is
+ * c64_colrow in c64band.inc.
+ * ========================================================================*/
+/* ITS SCRATCH IS c64_bx2's and c64_bnd's, which only a flush's bands use,
+ * and no flush runs inside a slice: ~1,400 bytes the package's 63.5KB
+ * (SPEC.md 20.1.1) would otherwise carry for registers most programs never
+ * read */
+#define c64_cptr (c64_bx2 + 40)             /* [8] the eight pointers */
+#define c64_cff  (c64_bx2 + 184)            /* [57] all ones: c64_colrow
+                                             * against it is "any byte set" */
+#define c64_cmk  (c64_bx2 + 256)            /* [147] a sprite's 21 line
+                                             * masks, 7 bytes apart */
+#define c64_cda  (c64_bx2 + 404)            /* [63] a pair's data, each */
+#define c64_cdb  (c64_bx2 + 468)
+#define c64_ctmp (c64_bx2 + 532)            /* [16] c64_colpair's scratch */
+#define c64_cbk  (c64_bnd)                  /* [256] a glyph's blankness this
+                                             * scan: 0 unknown, 1 blank, 2 not */
+#define c64_c8   (c64_bnd + 256)            /* [8] one glyph */
+#define c64_cbx  (c64_bnd + 264)            /* [56] the cells under a sprite,
+                                             * 8 bytes each, zero off-screen */
+static int c64_cmks;                        /* the sprite c64_cmk holds */
+static int c64_csx[8], c64_csy[8], c64_csw[8], c64_csh[8];  /* the geometry:
+                                             * real arrays, 80 bytes, because
+                                             * SmallerC computes a cast's
+                                             * address at every access and the
+                                             * scan is all accesses */
+static unsigned c64_csd[8];
+static int c64_con;                         /* the sprites on, as geometry */
+static unsigned c64_cgfr;                   /* ...was taken in this frame */
+
+/* sprite K's mode for c64_sprconv: multicolour, X-expanded - its ON is
+ * the opaque mask, 3 bytes or 6 */
+static int ovl_col_md(int k)
+{
+    return ((c64_vic[0x1C] >> k) & 1) | ((c64_csw[k] == 48) << 1);
+}
+
+/* the eight sprites as the registers stand: the mask of those on */
+static int ovl_col_geom(void)
+{
+    unsigned bank, x;
+    int k, m, en;
+
+    en = c64_vic[0x15];
+    if (en == 0)
+        return 0;
+    bank = (unsigned)((~c64_cia[1][0]) & 3) << 14;
+    c64_zcopy_out(c64_cptr, bank + (((unsigned)c64_vic[0x18] >> 4) << 10)
+                  + 0x3F8, 8);
+    for (k = 0, m = 1; k < 8; k++, m <<= 1) {
+        if ((en & m) == 0)
+            continue;
+        c64_csh[k] = (c64_vic[0x17] & m) ? 42 : 21;
+        c64_csw[k] = (c64_vic[0x1D] & m) ? 48 : 24;
+        c64_csy[k] = (int)c64_vic[1 + k + k] - 50;
+        x = (unsigned)c64_vic[k + k] | ((c64_vic[0x10] & m) ? 0x100 : 0);
+        c64_csx[k] = (int)x - 24;
+        c64_csd[k] = bank + ((unsigned)c64_cptr[k] << 6);
+    }
+    return en;
+}
+
+/* sprite K's 21 masks, made once a scan (the $D01F scan's, one sprite at
+ * a time) */
+static unsigned char *ovl_col_mk(int k)
+{
+    if (c64_cmks != k) {
+        c64_cmks = k;
+        c64_zcopy_out(c64_spd, c64_csd[k], 63);
+        c64_sprmasks(c64_spd, c64_cmk, ovl_col_md(k), c64_xexp);
+    }
+    return c64_cmk;
+}
+
+static int ovl_col_ss(int on)
+{
+    int i, j, a, b, y0, y1, d, n, la, lb, ya, yb, ss;
+
+    ss = 0;
+    for (i = 0; i < 7; i++) {
+        if ((on & (1 << i)) == 0)
+            continue;
+        for (j = i + 1; j < 8; j++) {
+            if ((on & (1 << j)) == 0)
+                continue;
+            if ((ss >> i) & (ss >> j) & 1)
+                continue;                   /* both already known */
+            a = i;
+            b = j;
+            if (c64_csx[j] < c64_csx[i]) {
+                a = j;
+                b = i;
+            }
+            d = c64_csx[b] - c64_csx[a];
+            if (d >= c64_csw[a])
+                continue;
+            y0 = c64_csy[a] > c64_csy[b] ? c64_csy[a] : c64_csy[b];
+            y1 = c64_csy[a] + c64_csh[a];
+            if (c64_csy[b] + c64_csh[b] < y1)
+                y1 = c64_csy[b] + c64_csh[b];
+            if (y0 >= y1)
+                continue;
+            c64_zcopy_out(c64_cda, c64_csd[a], 63);
+            c64_zcopy_out(c64_cdb, c64_csd[b], 63);
+            /* B's bytes that can meet A: those starting inside it */
+            n = (c64_csw[a] - (d & ~7)) >> 3;
+            if (n > (c64_csw[b] >> 3))
+                n = c64_csw[b] >> 3;
+            la = y0 - c64_csy[a];
+            lb = y0 - c64_csy[b];
+            ya = c64_csh[a] == 42;
+            yb = c64_csh[b] == 42;
+            if (c64_colpair(c64_cda + (ya ? la >> 1 : la) * 3,
+                            c64_cdb + (yb ? lb >> 1 : lb) * 3, n, d, y1 - y0,
+                            ya | ((ya & la) << 1) | (yb << 2)
+                            | ((yb & lb) << 3),
+                            ovl_col_md(a) | (ovl_col_md(b) << 2), c64_xexp,
+                            c64_ctmp))
+                ss |= (1 << a) | (1 << b);
+        }
+    }
+    return ss;
+}
+
+/* the foreground of graphics row ROW's cells C0..C1 into c64_xb, eight
+ * bytes a cell, as the composer lays them out */
+static void ovl_col_bgrow(int row, int c0, int c1)
+{
+    unsigned char *rv, *g;
+    unsigned bank, v18, co, cb;
+    int mode, n, c, i, mc;
+
+    rv = c64_rv[row];
+    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+    v18 = rv[0x18];
+    mode = ((rv[0x11] >> 4) & 6) | ((rv[0x16] >> 4) & 1);
+    n = c1 - c0 + 1;
+    g = c64_xb + (c0 << 3);
+    if (mode & 2) {
+        c64_zcopy_out(g, bank + ((v18 & 8) << 10) + C64_X320(row) + (c0 << 3),
+                      n << 3);
+    } else {
+        c64_zcopy_out(c64_xm + c0, bank + (((v18 >> 4) & 15) << 10)
+                      + C64_X40(row) + c0, n);
+        co = ((v18 >> 1) & 7) << 11;
+        cb = bank + co;
+        if (((bank & 0x4000) | (co & 0x3000)) == 0x1000)
+            c64_c8glyph(g, c64_xm + c0, n, c64_m.romseg,
+                        C64_ROM_CHARGEN + (co - 0x1000),
+                        (mode == 4) ? 0x3F : 0xFF);
+        else
+            c64_c8glyph(g, c64_xm + c0, n, c64_m.ramseg, cb,
+                        (mode == 4) ? 0x3F : 0xFF);
+    }
+    if ((mode & 1) == 0)
+        return;
+    for (c = c0; c <= c1; c++, g += 8) {    /* multicolour: 10 and 11 */
+        mc = (mode & 2) ? 1 : (c64_col[C64_X40(row) + c] & 8);
+        if (mc)
+            for (i = 0; i < 8; i++) {
+                unsigned b = g[i] & 0xAA;
+                g[i] = (unsigned char)(b | (b >> 1));
+            }
+    }
+}
+
+/* ovl_spr_fg - SPRITE PRIORITY ($D01B, 5.3): the foreground of row ROW's
+ * seven cells from C0, into c64_pfg (8 bytes a cell, zero off the screen),
+ * for c64_sprbehind to take out of a sprite that is behind it. The same
+ * foreground the collision scan reads (ovl_col_bgrow); the composer's own
+ * c64_xb is spent by then. Only a sprite behind pays it, once a row */
+static void ovl_spr_fg(int row, int c0)
+{
+    int d0 = c0 < 0 ? 0 : c0, d1 = c0 + 6 > 39 ? 39 : c0 + 6;
+
+    os88_memset(c64_pfg, 0, 64);
+    if (d0 > d1)
+        return;
+    ovl_col_bgrow(row, d0, d1);
+    os88_memcpy(c64_pfg + ((d0 - c0) << 3), c64_xb + (d0 << 3),
+                (d1 - d0 + 1) << 3);
+}
+
+/* ROW ROW's cells D0..D1 hold only blank glyphs - text, and every code's
+ * eight bytes zero - so no sprite can meet its foreground. Each code's
+ * answer is taken once a scan (c64_cbk), from the character set the row
+ * reads; a bitmap row is never called blank here */
+static unsigned c64_cbk_seg, c64_cbk_off;
+static int ovl_col_blank(int row, int d0, int d1)
+{
+    unsigned char *rv;
+    unsigned bank, co, seg, off, a;
+    int c, code, i, v, mask;
+
+    rv = c64_rv[row];
+    if (rv[0x11] & 0x20)
+        return 0;                           /* a bitmap */
+    bank = (unsigned)((~rv[C64_RV_DD]) & 3) << 14;
+    co = ((rv[0x18] >> 1) & 7) << 11;
+    if (((bank & 0x4000) | (co & 0x3000)) == 0x1000) {
+        seg = c64_m.romseg;
+        off = C64_ROM_CHARGEN + (co - 0x1000);
+    } else {
+        seg = c64_m.ramseg;
+        off = bank + co;
+    }
+    if (seg != c64_cbk_seg || off != c64_cbk_off) {
+        os88_memset(c64_cbk, 0, 256);       /* another character set */
+        c64_cbk_seg = seg;
+        c64_cbk_off = off;
+    }
+    mask = (rv[0x11] & 0x40) ? 0x3F : 0xFF;
+    a = bank + ((((unsigned)rv[0x18] >> 4) & 15) << 10) + C64_X40(row) + d0;
+    c = 0;
+    for (;;) {
+        v = c64_colblank(c64_m.ramseg, a + c, d1 - d0 - c + 1, mask, c64_cbk);
+        if (v < 2)
+            return v;
+        c += v - 2;                         /* code c's answer, taken once */
+        c64_xm[0] = (unsigned char)os88_peek(c64_m.ramseg, a + c);
+        code = c64_xm[0] & mask;
+        c64_c8glyph(c64_c8, c64_xm, 1, seg, off, mask);
+        v = 0;
+        for (i = 0; i < 8; i++)
+            v |= c64_c8[i];
+        c64_cbk[code] = (unsigned char)(v ? 2 : 1);
+    }
+}
+
+static int ovl_col_sb(int on)
+{
+    int k, l, g0, g1, ga, gb, row, a, b, px, c0, c1, d0, d1, sh, n, sb, ye;
+    unsigned char *g;
+
+    sb = 0;
+    c64_cbk_seg = 0xFFFF;                   /* every answer taken afresh: the
+                                             * glyphs are RAM */
+    os88_memset(c64_cff, 0xFF, 57);
+    for (k = 0; k < 8; k++) {
+        if ((on & (1 << k)) == 0)
+            continue;
+        px = c64_csx[k] - (c64_vic[0x16] & 7) + 64;
+        c0 = (px >> 3) - 8;                 /* the cell of its first pixel */
+        sh = px & 7;
+        c1 = c0 + (c64_csw[k] >> 3);        /* ...and of the byte after it */
+        if (c1 < 0 || c0 > 39)
+            continue;
+        d0 = c0 < 0 ? 0 : c0;
+        d1 = c1 > 39 ? 39 : c1;
+        g0 = c64_csy[k] + 3 - (c64_vic[0x11] & 7);  /* its graphics lines */
+        g1 = g0 + c64_csh[k];
+        ga = g0 < 0 ? 0 : g0;
+        gb = g1 > 200 ? 200 : g1;
+        if (ga >= gb)
+            continue;
+        n = c64_csw[k] == 48 ? 6 : 3;
+        ye = c64_csh[k] == 42;
+        for (row = ga >> 3; row <= (gb - 1) >> 3; row++) {
+            /* A ROW WITH NOTHING UNDER IT IS SKIPPED WHOLE: blank glyphs
+             * by their codes, else its foreground fetched and ORed */
+            if (ovl_col_blank(row, d0, d1))
+                continue;
+            ovl_col_bgrow(row, d0, d1);
+            if (c0 == d0 && c1 == d1) {
+                g = c64_xb + (c0 << 3);     /* (on the screen: as it lies) */
+            } else {
+                g = c64_cbx;
+                os88_memset(c64_cbx, 0, 56);
+                os88_memcpy(c64_cbx + ((d0 - c0) << 3), c64_xb + (d0 << 3),
+                            (d1 - d0 + 1) << 3);
+            }
+            if (!c64_colrow(g, (c1 - c0 + 1) << 3, 0, c64_cff))
+                continue;
+            a = row << 3;
+            b = a + 8;
+            if (a < ga)
+                a = ga;
+            if (b > gb)
+                b = gb;
+            l = a - g0;                     /* its display line */
+            if (c64_colrows(ovl_col_mk(k) + (ye ? l >> 1 : l) * 7, n, sh,
+                            g + (a & 7), b - a, ye | ((ye & l) << 1))) {
+                sb |= 1 << k;
+                break;
+            }
+        }
+    }
+    return sb;
+}
+
+/* the frame's scan of one register, once: 0 $D01E, 1 $D01F. The answer is
+ * ORed into the latch; a latch that was empty and is not raises the IRQ
+ * source (vicii.c: only the first collision since the register was read) */
+static void ovl_col_scan(int sb)
+{
+    int on, v;
+
+    if ((c64_col_ok >> sb) & 1)
+        if ((sb ? c64_col_frb : c64_col_frs) == c64_frames_lo)
+            return;
+    c64_col_ok |= (unsigned char)(1 << sb);
+    c64_cmks = -1;
+    if (c64_cgfr != c64_frames_lo || (c64_col_ok & 4) == 0) {
+        c64_con = ovl_col_geom();           /* once a frame for both */
+        c64_cgfr = c64_frames_lo;
+        c64_col_ok |= 4;
+    }
+    on = c64_con;
+    if (sb) {
+        c64_col_frb = c64_frames_lo;
+        v = on ? ovl_col_sb(on) : 0;
+        if (v && !c64_col_sb)
+            c64_vic[0x19] |= 0x02;
+        c64_col_sb |= (unsigned char)v;
+    } else {
+        c64_col_frs = c64_frames_lo;
+        v = on ? ovl_col_ss(on) : 0;
+        if (v && !c64_col_ss)
+            c64_vic[0x19] |= 0x04;
+        c64_col_ss |= (unsigned char)v;
+    }
+}
+
+static int ovl_col_read(int sb)
+{
+    int v;
+
+    ovl_col_scan(sb);
+    if (sb) {
+        v = c64_col_sb;
+        c64_col_sb = 0;
+    } else {
+        v = c64_col_ss;
+        c64_col_ss = 0;
+    }
+    return v;
+}
+
+/* a frame's start with $D01A asking (c64_advance): each source enabled is
+ * scanned, and c64_irq_update after it raises the line */
+static void ovl_col_tick(void)
+{
+    int want = c64_col_irq;
+
+    c64_col_irq = 0;
+    if (c64_col_off)
+        return;
+    if (want & 4)
+        ovl_col_scan(0);
+    if (want & 2)
+        ovl_col_scan(1);
 }
 
 /* c64_watch_set - tell the core WHERE the write window is worth taking (9.2).
@@ -1142,7 +1524,7 @@ static void c64_watch_set(void)
 
 /* c64_flush_every (declared in c64.c) - host ticks between flushes, from the
  * tier and the numbers above. */
-static void c64_tier_init(void)
+static void ovl_tier_init(void)
 {
     int b;
 
@@ -2751,7 +3133,7 @@ static void ovl_fsx_compose(int row, int f, int l)
 static void ovl_fsx_sprites(int row, int f, int l)
 {
     unsigned char *rv;
-    int k, y, y0, y1, sl, j;
+    int k, y, y0, y1, sl, j, bh, c0, p0, p1;
 
     rv = c64_rv[row];
     if (rv[0x15] == 0)
@@ -2776,13 +3158,29 @@ static void ovl_fsx_sprites(int row, int f, int l)
         j = j + j + j;
         c64_zcopy_out(c64_spd + j, c64_sp_data + j, sl + sl + sl + 3 - j);
         c64_scol[2] = (unsigned char)(rv[0x27 + k] & 15);
+        /* BEHIND THE FOREGROUND ($D01B, 5.3): the line's pixels under it are
+         * kept, it is drawn, and those the foreground has are put back */
+        bh = (rv[0x1B] >> k) & 1;
+        c0 = ((c64_sp_x + 64) >> 3) - 8;
+        p0 = c64_sp_x < (f << 3) ? (f << 3) : c64_sp_x;
+        p1 = c64_sp_x + c64_sp_w;
+        if (p1 > (l << 3) + 8)
+            p1 = (l << 3) + 8;
+        if (bh)
+            ovl_spr_fg(row, c0);
         for (y = y0; y < y1; y++) {
             sl = (row << 3) + y - c64_sp_y;
             if (c64_sp_h == 42)
                 sl >>= 1;
+            if (bh && p0 < p1)
+                os88_memcpy(c64_pfs, c64_b8 + C64_X320(y) + p0, p1 - p0);
             c64_c8spr(c64_b8 + C64_X320(y), c64_spd + sl + sl + sl,
                       c64_sp_x, f << 3, (l << 3) + 8, c64_scol,
                       (rv[0x1C] >> k) & 1, (c64_sp_w == 48) ? 1 : 0);
+            if (bh)
+                for (j = p0; j < p1; j++)
+                    if (c64_pfg[(((j >> 3) - c0) << 3) + y] & (0x80 >> (j & 7)))
+                        c64_b8[C64_X320(y) + j] = c64_pfs[j - p0];
         }
     }
 }

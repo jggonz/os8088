@@ -648,6 +648,182 @@ body:
     mov cx, 12
     call .sccmp
     jne .f5
+    ; c64_colrow (C64-SPEC 5.3.1): pixel 0 of M at a shift of 7 meets G's
+    ; bit 0 - a hit; at 6, a miss; and M's second byte, at a shift of 2,
+    ; reaching G[2]
+    mov word [pushes], 4
+    PUSHI crg
+    PUSHI 7
+    PUSHI 1
+    PUSHI crm
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 1
+    jne .f5
+    PUSHI crg
+    PUSHI 6
+    PUSHI 1
+    PUSHI crm
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 0
+    jne .f5
+    PUSHI crg2
+    PUSHI 2
+    PUSHI 2
+    PUSHI crm2
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 1
+    jne .f5
+    PUSHI crg2
+    PUSHI 1
+    PUSHI 2
+    PUSHI crm2
+    call disc_call
+    dw _c64_colrow
+    cmp ax, 0
+    jne .f5
+    ; c64_colrows: the second data line's mask (pixel 0) meets the cell's
+    ; line 2 only when Y-expanded - lines 0,1 the first data line, 2 the
+    ; second; unexpanded, line 2 reads the third, which is clear
+    mov word [pushes], 6
+    PUSHI 1
+    PUSHI 4
+    PUSHI crsg
+    PUSHI 0
+    PUSHI 1
+    PUSHI crsm
+    call disc_call
+    dw _c64_colrows
+    cmp ax, 1
+    jne .f5
+    PUSHI 0
+    PUSHI 4
+    PUSHI crsg
+    PUSHI 0
+    PUSHI 1
+    PUSHI crsm
+    call disc_call
+    dw _c64_colrows
+    cmp ax, 0
+    jne .f5
+    ; c64_colpair, from raw data: A's pixel 23 (byte 2's bit 0) on its data
+    ; line 1 only; B's pixel 0 at D 23 on its line 0 only - they meet only
+    ; if B's line 0 lies over A's line 1: B Y-expanded from its first half
+    ; (ye 4), line 1 is still B's 0 and they meet; unexpanded (ye 0) not
+    mov word [pushes], 9
+    PUSHI cptmp
+    PUSHI scxx
+    PUSHI 0
+    PUSHI 4
+    PUSHI 2
+    PUSHI 23
+    PUSHI 1
+    PUSHI cpb
+    PUSHI cpa
+    call disc_call
+    dw _c64_colpair
+    cmp ax, 1
+    jne .f5
+    PUSHI cptmp
+    PUSHI scxx
+    PUSHI 0
+    PUSHI 0
+    PUSHI 2
+    PUSHI 23
+    PUSHI 1
+    PUSHI cpb
+    PUSHI cpa
+    call disc_call
+    dw _c64_colpair
+    cmp ax, 0
+    jne .f5
+    ; c64_sprbehind: $FF over a glyph byte $18 three pixels left of it
+    ; ($18 << 3 = $C0 under the sprite's first two pixels): $3F
+    mov word [pushes], 4
+    PUSHI sbg
+    PUSHI 3
+    PUSHI 1
+    PUSHI sbon
+    call disc_call
+    dw _c64_sprbehind
+    cmp byte [sbon], 0x3F
+    jne .f5
+    ; c64_colblank: 32 32 blank (1); 32 1 not (0); 32 5 unknown at 1 (3);
+    ; 96 96 under the ECM mask $3F is 32 32 (1)
+    mov word [pushes], 5
+    PUSHI cbbk
+    PUSHI 0xFF
+    PUSHI 2
+    PUSHI cbx1
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 1
+    jne .f5
+    PUSHI cbbk
+    PUSHI 0xFF
+    PUSHI 2
+    PUSHI cbx2
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 0
+    jne .f5
+    PUSHI cbbk
+    PUSHI 0xFF
+    PUSHI 2
+    PUSHI cbx3
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 3
+    jne .f5
+    PUSHI cbbk
+    PUSHI 0x3F
+    PUSHI 2
+    PUSHI cbx4
+    push ds
+    call disc_call
+    dw _c64_colblank
+    cmp ax, 1
+    jne .f5
+    ; c64_sprmasks: lines 0 and 20 are $81 $00 $F0 hires X-expanded (as
+    ; c64_sprconv's ON, scw2), the rest clear; then $1B multicolour, whose
+    ; pairs 00 01 10 11 are opaque but the first: $3F
+    mov word [pushes], 4
+    PUSHI scxx
+    PUSHI 2
+    PUSHI smmk
+    PUSHI smsd
+    call disc_call
+    dw _c64_sprmasks
+    mov si, scw2
+    mov di, smmk
+    mov cx, 6
+    call .sccmp
+    jne .f5
+    mov si, scw2
+    mov di, smmk + 140
+    mov cx, 6
+    call .sccmp
+    jne .f5
+    mov si, smz
+    mov di, smmk + 6
+    mov cx, 7
+    call .sccmp
+    jne .f5
+    mov byte [smsd], 0x1B
+    PUSHI scxx
+    PUSHI 1
+    PUSHI smmk
+    PUSHI smsd
+    call disc_call
+    dw _c64_sprmasks
+    cmp byte [smmk], 0x3F
+    jne .f5
+    mov word [pushes], 3
     mov al, '.'
     call putc
     jmp .band1
@@ -1751,6 +1927,30 @@ c8xw:        db 7, 7, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 7
 c8nw:        db 0, 0, 0, 0, 0, 0, 3, 3, 7, 7, 4, 4, 0, 0, 0, 0
              times 16 db 0
 scsd:        times 3 db 0
+crm:         db 0x80                    ; c64_colrow's cases
+crg:         db 0x01, 0x00
+crm2:        db 0x00, 0x01
+crg2:        db 0x00, 0x00, 0x40
+smsd:        db 0x81, 0x00, 0xF0
+             times 57 db 0
+             db 0x81, 0x00, 0xF0
+smz:         times 7 db 0
+smmk:        times 147 db 0x55
+cpa:         db 0, 0, 0, 0, 0, 1, 0, 0, 0
+cpb:         db 0x80, 0, 0, 0, 0, 0, 0, 0, 0
+cptmp:       times 16 db 0
+sbon:        db 0xFF
+sbg:         db 0x18, 0, 0, 0, 0, 0, 0, 0, 0x00
+cbx1:        db 32, 32
+cbx2:        db 32, 1
+cbx3:        db 32, 5
+cbx4:        db 96, 96
+cbbk:        db 0, 2, 2, 2, 2, 0
+             times 26 db 2
+             db 1                       ; 32: blank
+             times 223 db 2
+crsm:        db 0, 0, 0, 0, 0, 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+crsg:        db 0, 0, 0x80, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
 scon:        times 6 db 0               ; ...and sclit right after: compared
 sclit:       times 6 db 0               ; as one 12-byte run
 scw1:        db 0x3F, 0xFC, 0x00, 0, 0, 0, 0x33, 0xCC, 0x00, 0, 0, 0

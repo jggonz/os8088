@@ -150,8 +150,8 @@ void c64j_setup(unsigned dst, unsigned part, unsigned len, unsigned core,
                 int force, int kb);
 void c64j_off(unsigned core);              /* the core's page map zeroed */
 static void c64_jit_drop(void);
-static void c64_jit_init(void);
-void c64_jit_toggle(void);
+static void ovl_jit_init(void);
+static void ovl_jit_toggle(void);
 void c64f_core(unsigned dstseg, unsigned partseg);
 unsigned c64f_codesel(unsigned seg);
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
@@ -183,6 +183,19 @@ int  c64_rowspan(const unsigned char *a, const unsigned char *b, int n);
 int  c64_runfind(const unsigned char *a, const unsigned char *b, int from);
 void c64_sprconv(const unsigned char *sd, unsigned char *on,
                  unsigned char *lit, int mode, const unsigned *xexp);
+int c64_colrow(const unsigned char *m, int n, int sh,
+               const unsigned char *g);          /* a collision's line (5.3.1) */
+int c64_colrows(const unsigned char *mk, int n, int sh,
+                const unsigned char *g, int lines, int ye);   /* ...a row's */
+void c64_sprbehind(unsigned char *on, int n, int sh,
+                   const unsigned char *g);  /* $D01B (5.3) */
+int c64_colblank(unsigned seg, unsigned a, int n, int mask,
+                 const unsigned char *bk);  /* ...and blank glyphs' */
+void c64_sprmasks(const unsigned char *sd, unsigned char *mk, int md,
+                  const unsigned *xexp);
+int c64_colpair(const unsigned char *sa, const unsigned char *sb, int nb,
+                int d, int lines, int ye, int md, const unsigned *xexp,
+                unsigned char *tmp);
 void c64_rowcopy(unsigned char *dst, const unsigned char *src, int n);
 unsigned c64_rowsig(unsigned mseg, unsigned moff,
                     const unsigned char *col, int n);
@@ -357,6 +370,15 @@ static int c64_reset_req;                   /* ...and File > Reset machine CPU
                                              * (1) / Power cycle machine (2),
                                              * whose RAM fill is 64KB under the
                                              * same lock (ovl_reset_service) */
+static int c64_auto;                        /* Smart attach's AUTOSTART
+                                             * (C64-SPEC 11.3.2): 0 idle, else
+                                             * its stage, stepped each wake */
+static int c64_smart;                       /* the open dialog is Smart
+                                             * attach's, not Attach disk's */
+static int c64_ld_ok;                       /* the last load or attach took */
+static int c64_col_off;                     /* Preferences > Sprite collisions
+                                             * unchecked: $D01E/$D01F read 0
+                                             * and nothing is scanned (5.3.1) */
 
 /* The state the parts share. It is declared HERE, above every #include, so
  * that each part has one definition to read and none of them can quietly
@@ -554,7 +576,7 @@ static int c64_fr_stale = 1;                /* c64_rv moved without c64scr.c's
 static int  c64_geom(void *win);
 static void c64_watch_set(void);
 static void c64_menu_state(void);
-static void c64_tier_init(void);
+static void ovl_tier_init(void);
 static void c64_fullscreen_toggle(void *win);
 static void c64_ram_pattern(void);
 static void ovl_reset_regs(void);
@@ -576,6 +598,11 @@ static int  ovl_about_show(void *win);
 static void ovl_cmd(int menu, int item, void *win);
 static void ovl_conv_init(void);
 static void ovl_load_prg(const char *name, unsigned size_lo);
+static void ovl_open(const char *name, unsigned size_lo, unsigned size_hi);
+static void ovl_auto_step(void);
+static int  ovl_col_read(int sb);           /* $D01E/$D01F (C64-SPEC 5.3.1) */
+static void ovl_spr_fg(int row, int c0);    /* $D01B: the foreground (5.3) */
+static void ovl_col_tick(void);
 
 /* The parts of the one translation unit (SPEC.md 73.1: `nasm -f bin` has no
  * external symbols, so a C package cannot be several .c files linked - it is
@@ -605,6 +632,7 @@ static void ovl_load_prg(const char *name, unsigned size_lo);
 #define C64_I_JIT      4                    /* (Emulation speed's: 4.9.5) */
 #define C64_I_SWAPJOY  5
 #define C64_I_FS0      6                    /* the frame skip, 9.13: 6..8 */
+#define C64_I_COLL     9                    /* Sprite collisions (5.3.1) */
 
 #define C64_I_ABOUT    0                    /* Help */
 
@@ -1214,17 +1242,10 @@ void os88_onfile(int mode, const char *name,
         return;
     if (name[0] == 0)
         return;
-    /* A D64 BY ITS SIZE - the dialog does not filter by extension (SPEC.md
-     * 38.9), and a .PRG of over 64KB is refused anyway - onto drive 8 */
-    if (size_hi == 2 || size_hi == 3) {
-        ovl_d64_attach(name, size_lo, size_hi);
-        c64_kick = 1;
-        os88_wm_wake(win);
-        return;
-    }
-    ovl_attach(name, size_lo, size_hi);     /* a tape image or a .PRG, and
-                                             * every refusal said on the row
-                                             * (c64load.c) */
+    ovl_open(name, size_lo, size_hi);       /* a D64, a tape image or a
+                                             * .PRG, every refusal said on the
+                                             * row, and Smart attach's
+                                             * autostart begun (c64disk.c) */
     c64_kick = 1;
     os88_wm_wake(win);
 }
@@ -1472,7 +1493,7 @@ static int c64_slice(int left)
         c64_th_spend(ran);
         left -= ran;
         if (r == C64_RUN_JAM) {
-            if (c64_m.pc == C64_D64_TRAP) {
+            if ((c64_m.pc == C64_D64_TRAP) | (c64_m.pc == C64_SV_TRAP)) {
                 ovl_d64_trap();             /* drive 8 (11.5): the LOAD, or the
                                              * one instruction the trap's byte
                                              * replaced - and the machine runs on */
@@ -1712,6 +1733,10 @@ static int c64_tick(void)
         c64_kbd_poll();                     /* ONCE PER WAKE (7.2's rule 2),
                                              * and every emulated CIA1 read in
                                              * this wake reads what it leaves */
+        if (c64_auto)
+            ovl_auto_step();                /* Smart attach's autostart: what
+                                             * it types goes in before the
+                                             * slice, as a paste does */
         c64_paste_feed();                   /* ...and Edit > Paste's ten
                                              * characters, BEFORE the slice, so
                                              * the machine drinks them inside
@@ -1945,7 +1970,7 @@ void os88_onwake(void *win)
 static char c64_num[8];
 static char c64_line[C64_MSGMAX];
 
-static void c64_refuse_kb(const char *what)
+static void ovl_refuse_kb(const char *what)
 {
     os88_strcpy(c64_line, what, sizeof(c64_line));
     os88_utoa(os88_mem_largest_kb(), c64_num);
@@ -1954,12 +1979,12 @@ static void c64_refuse_kb(const char *what)
     os88_toast(c64_line, 0);
 }
 
-/* c64_jit_init - THE RECOMPILER (section 4.9): its part into a 64KB claim
+/* ovl_jit_init - THE RECOMPILER (section 4.9): its part into a 64KB claim
  * of its own, the part given back, and its tables set up with the fast
  * core's page map. Its code is written where it runs, so only a kernel
  * whose code selector IS the segment has one (kern_mega's arm is a wave of
  * its own); any refusal leaves the fast core alone, as before. */
-static void c64_jit_init(void)
+static void ovl_jit_init(void)
 {
     unsigned seg;
     int kb;
@@ -2004,10 +2029,10 @@ static void c64_jit_drop(void)
     c64_menu_state();
 }
 
-/* c64_jit_toggle - Preferences > Recompiler (C64-SPEC 4.9.5): off zeroes the
+/* ovl_jit_toggle - Preferences > Recompiler (C64-SPEC 4.9.5): off zeroes the
  * core's page map, so no transfer looks for a block; on sets the recompiler
  * up afresh in the claim it kept, every block made again as it is reached */
-void c64_jit_toggle(void)
+static void ovl_jit_toggle(void)
 {
     if (c64_fjit == 0)
         return;
@@ -2020,14 +2045,14 @@ void c64_jit_toggle(void)
     c64_say(c64_jit_on ? "Recompiler on." : "Recompiler off.");
 }
 
-/* c64_fast_init - THE FAST CORE (section 4.7). The part is $FE00 bytes (a
+/* ovl_fast_init - THE FAST CORE (section 4.7). The part is $FE00 bytes (a
  * part's length is a sector count in a word) and the core a 64KB segment, so
  * the code is a claim of our own with the part copied in and its last two
  * slots written, and the part goes back. It runs in the RAM claim the
  * accurate core already has. Any refusal leaves the accurate core running
  * the machine alone - a slower machine and not a broken one, so nothing is
  * said. */
-static void c64_fast_init(void)
+static void ovl_fast_init(void)
 {
     unsigned code;
 
@@ -2078,7 +2103,17 @@ static void c64_fast_init(void)
     os88_part_movable(C64_AOTPC_PART);
 }
 
+/* os88_main - the entry, and ALL OF IT IN THE OVERLAY but this: it runs
+ * once, and the overlay is an EAGER part bound by crt0 before this is
+ * called (C64-SPEC 13.3), so its ~700 bytes are the overlay's and not the
+ * package's resident 63.5KB (SPEC.md 20.1.1) */
+static void *ovl_main(void);
 void *os88_main(void)
+{
+    return ovl_main();
+}
+
+static void *ovl_main(void)
 {
     static struct os88_video vid;
     void *win;
@@ -2087,7 +2122,7 @@ void *os88_main(void)
     c64_m.ramseg = os88_mem_claim(64);      /* the C64's RAM is its own
                                              * segment (3.1) */
     if (c64_m.ramseg == 0) {
-        c64_refuse_kb("C64: 64KB? ");
+        ovl_refuse_kb("C64: 64KB? ");
         return 0;
     }
     /* THE ROM IS A PART AND IT IS ALREADY HERE (1.4, SPEC.md 20.12). crt0
@@ -2114,6 +2149,7 @@ void *os88_main(void)
      * when one is on drive 8, and otherwise by running the LDA #$60 it
      * replaced. Patched in THIS copy of the ROM, not the file */
     os88_poke(c64_m.romseg, C64_D64_TRAPOFF, 0x02);
+    os88_poke(c64_m.romseg, C64_SV_TRAPOFF, 0x02);  /* ...and SAVE's (11.5.2) */
     /* WHAT CAN THIS MACHINE'S SOUND HARDWARE DO (11.4)? Asked ONCE, here, and
      * tested rather than guessed (SPEC.md 73.11): §11.4 puts SID voice 1's
      * gate and frequency on OSAPI_SND_TONE, and a package that calls a slot
@@ -2133,16 +2169,16 @@ void *os88_main(void)
      * function ran, so it is called from here and cannot be refused. The
      * TABLES stay resident and DS-relative, which is what makes it legal. */
     ovl_conv_init();
-    c64_tier_init();                        /* the flush rate, off os88_cpu()
+    ovl_tier_init();                        /* the flush rate, off os88_cpu()
                                              * and tests/c64band's numbers */
     ovl_reset_regs();                       /* the VIC/CIA/SID register files */
     c64_lum_update();                       /* the 1bpp masks, off $D021 (9.6) */
-    c64_dither_init();                      /* ...and the other modes' (9.10) */
+    ovl_dither_init();                      /* ...and the other modes' (9.10) */
     c64_ram_pattern();                      /* power-on RAM is VICE's factory
                                              * pattern and not zeros
                                              * (src/ram.c:169-177), and the
                                              * scratch is left alone (3.5) */
-    c64_scratch_clear();
+    ovl_scratch_clear();
     /* (no c64_kbd_init: the keyboard state is bss, zeroed by the loader,
      * and nothing above has touched it - c64kbd.c says so at the function) */
     /* THE KEY-STATE MAP IS ARMED HERE AND NOWHERE ELSE (7.2's rule 1).
@@ -2199,11 +2235,11 @@ void *os88_main(void)
      * (build/port-shots/wave2-03-launch.png). RUNCPM posts its first wake
      * from its own paint for the same reason. */
     c64_kick = 1;
-    c64_fast_init();
+    ovl_fast_init();
     /* THE RECOMPILER LAST (4.9.4): its claim is the one that gives way, so
      * it sits beside the free heap, not between the pinned parts, and
      * freeing it gives a D64 one contiguous hole */
-    c64_jit_init();
+    ovl_jit_init();
     /* THE RAM MAY MOVE FROM HERE ON (C64-SPEC 3.1.1): every claim this
      * launch makes is made, every copy of the segment (c64_chr_seg, through
      * c64_frame_regs above) is taken, and os88_onmove keeps them. The parts

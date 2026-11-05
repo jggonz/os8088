@@ -238,6 +238,8 @@ static void ovl_cmd(int menu, int item, void *win)
              * SPEC.md 38.10's last-picked name for this application, and Open
              * stays greyed until a row is selected (38.8) rather than sitting
              * live over nothing. */
+            c64_smart = (item == C64_I_ATTACH);   /* (11.3.2: only
+                                             * Smart attach starts it) */
             if (os88_file_dlg(OS88_FDLG_OPEN, win, 0) < 0)
                 c64_say("A file dialog is already open.");
             return;
@@ -375,7 +377,7 @@ static void ovl_cmd(int menu, int item, void *win)
              * that announced a speed-up the machine does not deliver is the
              * shape SPEC.md 47 exists to stop, and PERFORMANCE.md's "degrade
              * by tier" gives the port the means to answer: os88_cpu() is a
-             * FACT the code can test, and c64_tier_init has read it before
+             * FACT the code can test, and ovl_tier_init has read it before
              * the menu is first drawn.
              *
              * THE THREE SENTENCES BELOW ARE THIS PORT'S OWN, not VICE's, and
@@ -424,7 +426,15 @@ static void ovl_cmd(int menu, int item, void *win)
             return;
         }
         if (item == C64_I_JIT) {
-            c64_jit_toggle();
+            ovl_jit_toggle();
+            return;
+        }
+        if (item == C64_I_COLL) {
+            c64_col_off ^= 1;
+            c64_col_ok = 0;                 /* (on again: scanned afresh) */
+            c64_menu_state();
+            c64_say(c64_col_off ? "Sprite collisions off." :
+                    "Sprite collisions on.");
             return;
         }
         if (item >= C64_I_FS0) {            /* the frame skip (9.13): the

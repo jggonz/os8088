@@ -538,7 +538,7 @@ BRK and an IRQ entry so a double charge cannot come back.
 (SPEC.md §74.1):
 
 - seeded from `os88_cpu()` (`OSAPI_CPU_INFO`) — `512 << os88_cpu()`, clamped
-  into the range below (`c64_tier_init`, `c64scr.c`);
+  into the range below (`ovl_tier_init`, `c64scr.c`);
 - **`C64_SLICE_MIN` = 256 to `C64_SLICE_MAX` = 16,384 cycles**, doubled when
   four consecutive slices each finish inside one host tick, halved when one
   slice spans two tick boundaries;
@@ -689,7 +689,7 @@ fallback when the part cannot be had.
 eager, and a lazy row may not precede an eager one (SPEC.md 20.12.4). The
 build puts it there through `CC_PACKAGE`'s sixth argument and the shim says
 so with `CC_PARTS_AFTER_OVL` (apps/cc/Makefile.inc, crt0.asm).
-`c64_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
+`ovl_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
 (`c64f_core`), the part dropped, and the far call through
 `OSAPI_MEM_CODESEL`'s answer (`c64_fseg`; `c64_fcode` is the claim, followed
 by `os88_onmove`). **It runs in the RAM claim the accurate core already has**:
@@ -966,7 +966,7 @@ return address inline.**
 
 **The frame** grows by four words (`c64fast.inc`): BASIC's code selector
 (F+34, 0 = no translation), the table (F+36), the core's own selector for
-the way back (F+38), and the KERNAL's code selector (F+40). `c64_fast_init`
+the way back (F+38), and the KERNAL's code selector (F+40). `ovl_fast_init`
 fetches the three parts after the core, all or none, as claims of their
 own length (part 3's 49,247 bytes, part 4's 30,006, part 5's 32,768), and
 declares each MOVABLE (`os88_part_movable`, SPEC.md 73.14.2.1): a run builds
@@ -1114,7 +1114,7 @@ whole part inside its own (4.9.2).
 **Part 6 of C64.O88** (`OP_SEG | OP_LAZY | OP_COMP`) is `apps/c64/c64jit.asm`:
 the variables, two vectors at `$00F0` (`JIT_HOOK`, the core's door, and
 `jl_init`, the package's far call), the prelude at `$0100`, the lookup and the
-translator, and the templates' part - a 22KB image, 8.6KB packed. `c64_jit_init` fetches it
+translator, and the templates' part - a 22KB image, 8.6KB packed. `ovl_jit_init` fetches it
 after the fast core, copies it into a 64KB claim of its own (`c64j_setup`,
 which far-calls `jl_init` with the core's segment), and gives the part back;
 that claim holds, past the image at `$5800`, the lookup table (1,024 rows of
@@ -1252,7 +1252,7 @@ sum, paid as one `sub bp, n` before the next template that is not pure.
 Nothing between can read the countdown, and HEAD has already proved the
 whole block fits, so the run's end is unchanged.
 
-**The claim, by tier.** `c64_jit_init` claims 64KB, else 48; the cache ends
+**The claim, by tier.** `ovl_jit_init` claims 64KB, else 48; the cache ends
 where the claim does (`jv_end`). It is set up after every other part, beside
 the free heap, so that when it gives way the hole it leaves is one piece. When a D64 will not fit the heap
 the recompiler GIVES WAY: `c64_jit_drop` zeroes the core's page map, frees
@@ -1350,9 +1350,6 @@ line takes effect from that line.
 
 ### 5.3 What does not carry
 
-- **Sprite priority and collision.** Every sprite is drawn in FRONT of
-  the screen whatever `$D01B` says, sprite 0 over sprite 7, and `$D01E` and
-  `$D01F` **answer 0** — a game that tests a collision register sees none.
 - **Raster splits finer than a character row** (§9.10): a register written
   part-way down a row takes effect from the next row. A rasterbar is a
   border or paper colour per ROW, never per line.
@@ -1366,6 +1363,70 @@ Text, BASIC, the KERNAL and text-mode programs are unaffected. A game or
 demo that splits the screen by character row, draws in bitmap or
 multicolour, or moves sprites is drawn; one that depends on the cycle-exact
 VIC is not.
+
+#### 5.3.1 Sprite collisions — `$D01E` and `$D01F`, scanned when READ
+
+`$D01E` (sprite with sprite) and `$D01F` (sprite with foreground) answer the
+collisions of the sprites as the registers stand, **worked out when the
+program reads one and only then**: once a frame each (`c64_col_frs`,
+`c64_col_frb`), ORed into a latch that the read clears, so a second read in
+the frame finds it clear — on the machine the bits come back only as the
+beam passes the sprites again. With `$D01A` enabling a collision IRQ
+(bits 1 and 2), the frame is scanned at its start (`c64_advance` raises
+`c64_col_irq`; `ovl_col_tick`) and the IRQ source set when the latch was
+empty and is not, as `vicii.c` sets it. **A program that never reads them
+pays nothing**: the cost is one test in the `$D019`-`$D01F` arm of
+`c64_io_rd`.
+
+- **Opaque** is a set bit in hires and a pair other than `00` in
+  multicolour; **foreground** is a set bit, and in multicolour (text cells
+  whose colour has bit 3, or a multicolour bitmap) a pair `10` or `11` —
+  `01` is background, as on the VIC.
+- **From the registers at the read**: positions, expansion, multicolour and
+  the pointers as the program has them — what a game reading in its
+  interrupt has just drawn — and the foreground under them from the display
+  latch's row sets (§9.10), with the fine scroll. A multiplexer's other
+  instances (§9.11) are not seen: only the eight sprites as they stand.
+  Sprites anywhere on the raster collide with each other; the foreground is
+  the 320×200 display.
+- **The scan** (`ovl_col_*`, `c64scr.c`, in the overlay): the sprites'
+  geometry once a frame; for `$D01E`, each pair whose boxes overlap tested
+  line by line from their raw data until one line meets (`c64_colpair`);
+  for `$D01F`, each sprite's character rows in turn — a row whose codes are
+  all **blank glyphs** is skipped by its codes alone (`c64_colblank`, each
+  code's glyph tested once a scan), any other row's foreground fetched
+  (`c64_c8glyph`, or the bitmap) and tested a row at a time
+  (`c64_colrows`), the sprite's 21 masks made once (`c64_sprmasks`). The
+  line tests are `c64band.inc`'s, resident; their scratch is the band
+  buffers `c64_bx2` and `c64_bnd`, which only a flush uses.
+
+**It costs a program that reads them milliseconds a frame on a 286**, so
+**Preferences > Sprite collisions** is a CHECK, on, which a program that
+reads the registers only to clear them can turn off: then both read 0 and
+nothing is scanned. Measured, 86Box `286-victory`, warp, a machine-code loop
+that reads both registers once a frame and polls no I/O, against the same
+loop reading `$D020`/`$D021` (405%, 4.9 ms of host a frame):
+
+| sprites over text | first draft | now | the scans, a frame |
+|---|---|---|---|
+| 4, unexpanded, apart | — | 209.7% | ~4.6 ms |
+| 8, X and Y expanded, neighbours overlapping | 48.7% | 128.7% | ~10.6 ms |
+
+What took it from the first draft: rows skipped by their codes rather than
+their fetched pixels, the masks made by one call a sprite rather than one a
+line, a pair converted only as far as the line where it meets, the
+geometry once a frame for both registers, and the geometry in real arrays —
+SmallerC computes a cast's address at every access. The rest is the C of
+the scan itself, at ~0.4 µs an instruction on that machine; a 20 ms frame is
+~46,000 of them.
+
+`c64uitest` holds the semantics (transparent pixels, a one-pixel overlap at
+a shift of 7, the read clearing, the next frame finding it again, multicolour
+`01` against `10`, a Y-expanded sprite's half-lines inside a row and at its
+first line, a sprite half off the left edge, the IRQ, and the menu item
+off); `c64memtest` runs `c64_colrow`, `c64_colrows`, `c64_colpair`,
+`c64_colblank` and `c64_sprmasks` on x86 against the same cases. Each was
+verified red by breaking it.
 
 ---
 
@@ -2402,6 +2463,17 @@ the row above (`c64_rsame`) is a hit with no compare. The cache is dropped at
 each flush's sprite pass, because the pointers are RAM. It was 16% of a 286
 under the Bright Pixel card, a pointer read through a call per row and sprite.
 
+**A sprite BEHIND the foreground** (`$D01B`'s bit) keeps its pixels off the
+foreground's: in the window `ovl_spr_fg` fetches the foreground of the seven
+cells under it once a row (the collision scan's `ovl_col_bgrow`, §5.3.1 -
+a set bit, and in multicolour a pair `10` or `11`), and `c64_sprbehind`
+takes those pixels out of each line's ON before `c64_sprrow` draws it; in
+fullscreen colour the line's pixels under it are kept, it is drawn, and the
+foreground's put back. Its scratch is `c64_bx2`'s, free until the
+magnified band is made after the sprites. The bit is in the row's
+signature, so setting it redraws. Only a sprite behind pays any of it;
+sprite against sprite stays sprite 0 over 7, as on the VIC.
+
 **What a row's sprites look like is a signature**, `c64_spsig[r]`: per
 sprite on the row, its position, size, colours, multicolour bit and data
 pointer, and a nonzero bit for *a sprite is here*. `c64_spr_dirty` takes it
@@ -2761,9 +2833,10 @@ arithmetic (§10.2).
 ### 11.1 The set, and what is live
 
 **Four menus**, with `AM_NAME` = **`VICE`**: **File (5 items), Edit (2),
-Preferences (9), Help (1)**. Every item string is `uimachinemenu.c`'s and
+Preferences (10), Help (1)**. Every item string is `uimachinemenu.c`'s and
 every hotkey caption a `hotkeys*.vhk` line, transcribed (§2), except the
-three frame-skip items, which are this port's (§9.13); the VICE line each
+three frame-skip items (§9.13) and Sprite collisions (§5.3.1), which are
+this port's; the VICE line each
 string comes from is a comment beside it in `c64menu.c`.
 
 **Two kernel limits shape every line of `c64menu.c`**: a pull-down is at most
@@ -2794,8 +2867,8 @@ gives). Four rules follow:
    item put back).
 4. **A CHECK item's state is a `*` in the label**, written into the label's
    first byte (`c64_menu_state`). Fullscreen, Warp mode, Pause emulation,
-   Swap joysticks, the Recompiler and the three frame-skip RADIO items carry
-   it. This kernel's menu has no check mark and its face has no glyph for
+   Swap joysticks, the Recompiler, Sprite collisions and the three
+   frame-skip RADIO items carry it. This kernel's menu has no check mark and its face has no glyph for
    one; the `*` is `apps/tracker`'s idiom and not `apps/solitaire`'s
    `MENU_DIS` twin, because `MENU_DIS` is §47's *"you cannot have this"*
    and greying the item that is ON would make it impossible to turn off. The
@@ -2809,13 +2882,13 @@ gives). Four rules follow:
 **The order inside a menu is `ui_machine_menu_bar_create`'s**, less what
 rule 1 took: Preferences is `Fullscreen`, `Warp mode`, `Pause emulation`,
 `Advance frame`, `Recompiler` (VICE's `Emulation speed` place, §4.9.5),
-`Swap joysticks`, then the frame skip's three.
+`Swap joysticks`, then the frame skip's three and `Sprite collisions`.
 
 Live items:
 
 | item | caption | note |
 |---|---|---|
-| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3) |
+| File > Smart attach... | Alt+A | the Standard File dialog, Open form (§11.3); what it attached is started (§11.3.2) |
 | File > Reset machine CPU | Alt+F9 | **and it CLEARS THE PAUSE, which is VICE's own order**: `machine_reset_action` calls `ui_pause_disable()` straight after `machine_trigger_reset()`. `c64_adv` is cleared with it and `c64_menu_state` re-runs. The body is a latch (`c64_reset_req` = 1) spent by `ovl_reset_service()` at the top of the next wake, out of the desktop's lock |
 | File > Power cycle machine | Alt+F12 | caption kept; the item is the route (§7.5). **RAM pattern fill: VICE's C64 factory pattern** (`src/ram.c`, `ram_init_with_pattern`) — the eight-byte period `00 00 FF FF FF FF 00 00` with every other 16K block inverted, **not zeros**; `Reset machine CPU` does not touch RAM. The latch is `c64_reset_req` = 2, because `c64_zfill` over 65,536 bytes is about a quarter of a second on the target and `os88_oncmd` runs under the gfx lock |
 | File > Exit emulator | Alt+Q | **`os88_wm_close`, the kernel's own close path** (§15.2). Answered in the RESIDENT `os88_oncmd`, because it is a latch and nothing else; `c64_exit_req` is set there and the top of `os88_onwake` spends it — sets `C64_ST_DEAD`, calls `os88_wm_close`, and returns with nothing after the call |
@@ -2827,6 +2900,7 @@ Live items:
 | Preferences > Advance frame | Alt+Shift+P | **VICE's action, not this port's idea of one** (`src/arch/gtk3/actions-speed.c`): `if (ui_pause_active()) { vsyncarch_advance_frame(); } else { ui_pause_enable(); }` — from a RUNNING machine the item only PAUSES; from a paused one it runs to the next VIC frame end (§6.3) and stops, saying `Advanced one frame.`. The command raises a request; the slice driver serves it in the wall slices it already sizes and re-posts while it is outstanding. Greyed on a JAM (§11.2). **The chord reads the shift level**: the BIOS hands Alt+Shift+P the same ascii/scan pair as Alt+P, so `os88_onkey` asks `os88_key_down(KSC_LSHIFT/KSC_RSHIFT)` — without that the chord RESUMED a paused machine, the opposite of VICE in the only state VICE advances from |
 | Preferences > Swap joysticks | Alt+J | §8. CHECK: rule 4's `*` |
 | Preferences > Draw every frame / Skip frames as needed / Skip most frames | | §9.13. RADIO: the `*` is on the policy in force; as needed is the default |
+| Preferences > Sprite collisions | | §5.3.1. CHECK, on: `$D01E`/`$D01F` scanned when read. Off, both read 0 and nothing is scanned; `Sprite collisions off.` / `on.` |
 | Help > About VICE... | | the kernel's name pull-down About opens the same panel (§12) |
 
 ### 11.2 Absent, and greyed — the fact behind each (SPEC.md §47)
@@ -2857,7 +2931,6 @@ owner's rule, and each fact still stands:
 | Machine model other than C64 PAL | one ROM set and one timing are carried: PAL 985248 Hz, 312 lines, 19,656 cycles a frame |
 | On the SPEAKER: SID voices beyond one, waveforms, ADSR; on an FM chip: the filters, ring modulation and sync (§11.4.2, §11.4.3; voice 3 READS, §11.4.1) | the PC speaker is one square wave; the OPL has no SID filter, and its two operators no ring or sync |
 | Colour in the WINDOW, VGA included | §9.6 — SPEC.md §5.4.1's span writer, ~215 µs a colour run, ~1,000 runs a text band. Fullscreen is in colour on VGA (§9.12) |
-| Sprite priority, collision registers | §5.3 — sprites are drawn in front; `$D01E`/`$D01F` answer 0 |
 | Cycle-exact raster effects (fine scroll, mid-line colour changes, bad-line timing, FLD/FLI) | the VIC is serviced at raster-LINE granularity (§5.2) |
 | Status bar: the `Tape:` field, drive 8's LED and track field | no tape, no drive (§10.3) |
 | Power cycle (Alt+F12), Paste (Alt+Insert), Copy (Alt+Delete) **as chords** | §7.5 — the caption is VICE's and the menu item is the route |
@@ -2928,11 +3001,10 @@ to one 512-byte sector. The chunk last read is remembered, so the header a
 load inspects first is not read again when its data begins in the same
 chunk.
 
-**That is all it does.** There is no autostart: no reset, no `READY.` wait,
-no `mem_set_basic_text`, no `RUN`. The bytes are in the C64's RAM at the
-address the file names, and the user types `RUN` (for a `$0801` BASIC
-program) or `SYS`. The plan's wave 4 specified VICE's RAM-injection autostart
-(`AutostartPrgMode=1`, `autostart-prg.c`) and it was never built.
+**From Smart attach, the load is the autostart's** (§11.3.2), which runs it
+at the `READY.` prompt and types `RUN`. **File > Attach disk image...** is the
+load alone: the same routing and the same loaders, nothing reset and nothing
+typed, and the user types `RUN` or `SYS`.
 
 #### 11.3.1 A tape image — `.T64`
 
@@ -2963,14 +3035,62 @@ the status row: `Not a T64 tape image.` (short, or no magic),
 `Loaded <the entry's name>`, its trailing padding trimmed and anything
 outside PETSCII's printable half shown as `?`.
 
-**With no disk on drive 8 (§11.5), `LOAD"*",8` answers with the KERNAL's
-`?DEVICE NOT PRESENT  ERROR`** - and so does any device but 8, disk or no
-disk. That is the honest machine with nothing on the bus, written here so
-nobody files it as a defect. The ROM is the authority; transcribed from the machine, here and in
-`README.TXT`:
+#### 11.3.2 Autostart
+
+**Smart attach starts what it attached**, as VICE's does in its
+RAM-injection mode (`src/autostart.c`, `AutostartPrgMode` 1): a `.PRG` or a
+tape's first file is loaded at the `READY.` prompt and `RUN` typed; a D64 is
+mounted (§11.5) and `LOAD"*",8,1` typed, then `RUN` once the load has said
+`READY.` again. `RUN` on a program that is not BASIC finds no program text
+and answers `READY.`, as on VICE. `ovl_open` (`c64disk.c`) is the routing and
+`ovl_auto_*` (`c64load.c`) the stages, stepped once a wake before the slice,
+in the running arm only.
+
+| stage | waits for | then |
+|---|---|---|
+| `C64_AU_WAIT` | the prompt | a PRG or tape: the load (§11.3, §11.3.1), and `RUN`; a D64: `LOAD"*",8,1` |
+| `C64_AU_LOAD` | its line typed, then the prompt | `RUN` |
+| `C64_AU_RUN` | its line typed | done |
+
+- **The prompt** is VICE's own test (`autostart.c`'s `check()`): the cursor
+  at column 0 (`$D3`), nothing in the keyboard buffer (`$C6`), and `READY.`
+  in screen codes on the line above the cursor (`$D6`), on the screen the
+  KERNAL writes (`$0288`).
+- **A machine not at the prompt is reset first** — File > Reset machine
+  CPU's reset, RAM kept, as VICE's autostart resets — and the wait runs in
+  **warp**, VICE's `AutostartWarp`, so the KERNAL's RAM test is a moment
+  rather than three seconds; warp is left at the prompt unless the user had
+  it on already. **The load waits for the prompt**, never runs before the
+  reset: BASIC's cold start writes the first program link at `$0801`. The
+  first five frames are not looked at, because until RAMTAS clears it zero
+  page still describes the machine before the reset. A machine at the prompt
+  is not reset, and that is the common case — the machine a user has just
+  opened.
+- **Typing** is the KERNAL's own buffer: up to ten bytes at `$0277` with the
+  count at `$C6`, put only when `$C6` is 0, as VICE's `kbdbuf` feeds it.
+  `LOAD"*",8,1` and its RETURN are twelve, so they go in two wakes. A paste
+  in progress is stopped (the buffer is the autostart's).
+- **It gives up** after 1,000 emulated frames (20 s) at any one stage,
+  saying `Autostart: no READY. prompt.`; a refusal from the load ends it
+  with that refusal on the row. While it waits off the prompt the row says
+  `Autostarting...`. A new attach replaces an autostart in progress.
+- **Refusals by size come first** (`PRG over 65533 bytes.`, `PRG too
+  short.`): a file that cannot load does not reset the machine.
+
+The cost is a wake's step while it runs and nothing otherwise: one test of
+`c64_auto` in the running arm. `c64uitest` holds the prompt case (loaded at
+once, `RUN` in the buffer), the reset case (reset requested, warp on,
+nothing loaded until the prompt, the first frames ignored) and a D64's two
+lines; each was verified red by breaking it.
+
+**Any device but 8 answers `LOAD"*",9` with the KERNAL's
+`?DEVICE NOT PRESENT  ERROR`** - the honest machine with nothing on that
+part of the bus, written here so nobody files it as a defect. Drive 8 is
+always answered: by its D64 (§11.5) or, with none, by the folder (§11.5.2).
+The ROM is the authority; transcribed from the machine:
 
 ```
-LOAD"*",8
+LOAD"*",9
 
 SEARCHING FOR *
 ?DEVICE NOT PRESENT  ERROR
@@ -3015,9 +3135,11 @@ file), and `c64_slice` meets the JAM there and calls `ovl_d64_trap`
   KERNAL's own `LOADING`/`VERIFYING` message at `$F5D2`, off a return
   address pushed for its exit at `$F5A9` (`CLC / LDX $AE / LDY $AF / RTS`) -
   so BASIC and any caller see exactly what a load from drive 8 leaves;
-- **a name the disk has not got**: the KERNAL's `$F704`, `?FILE NOT FOUND`;
-- **any other device, or no disk**: the `LDA #$60` the byte replaced, and
-  the KERNAL goes on to its serial bus as it always did.
+- **a name the disk has not got** is looked for in the folder behind it
+  (§11.5.2), where SAVE writes, before `?FILE NOT FOUND`;
+- **no disk**: the folder (§11.5.2);
+- **any other device**: the `LDA #$60` the byte replaced, and the KERNAL
+  goes on to its serial bus as it always did.
 
 Typed at this machine, with Edge of Disgrace's side 0 attached:
 
@@ -3044,6 +3166,48 @@ met. **It costs nothing until a LOAD reaches it.**
 `LOADING`), a pattern at `$0801`, the directory's header line, `FILE NOT
 FOUND` - and that device 9 runs the replaced instruction; red with the
 file's chain cut.
+
+#### 11.5.2 The folder - SAVE, and drive 8 with no disk
+
+**Drive 8 with no D64 is the folder the program stands in** - the one Smart
+attach last picked from, or the one it was started from - as VICE's
+file-system device is a host directory. `ovl_fs_*` (`c64disk.c`):
+
+- **`SAVE"NAME",8`** writes `NAME.PRG`: the two-byte address, then the bytes
+  from `($C1)` up to `($AE)` **as the CPU sees them** - ROM where ROM is in,
+  as the KERNAL's own `LDA ($AC),Y` reads them; RAM below `$A000` is copied
+  as it lies. It goes out through the screen shadow, 8,000 bytes a write
+  (`os88_file_write`, then `os88_file_append`), and the shadow is redrawn
+  after - so it works with the recompiler holding every claim. A name that
+  is there already is refused as a 1541 refuses it (`63, FILE EXISTS`):
+  nothing written, `Exists: NAME.PRG` on the status row; `SAVE"@0:NAME",8`
+  replaces it. `Saved NAME.PRG` or `Not saved: NAME.PRG` says how it went.
+  The KERNAL's SAVE is trapped where its serial half begins: `$F605`, its
+  `JSR $F3D5`, patched to a JAM byte as `$F4C4` is for LOAD, and left to the
+  core by the ROM translation (`m65aot.py`). The trap leaves through the
+  KERNAL's `SAVING NAME` at `$F68F` into the exit at `$F5A9`. Any device but
+  8 runs the `JSR` the byte replaced.
+- **SAVE writes the folder even with a D64 attached**: the image is not
+  written (writing one back is the whole 171KB file), and **LOAD looks in
+  the folder for a name the disk has not got**, so what was saved loads
+  either way. `LOAD"$",8` lists the disk while one is attached.
+- **`LOAD"NAME",8`** reads `NAME.PRG` through Smart attach's buffer (§11.3)
+  - at `$0801`, or its own address with a secondary address - and `*`, `?`
+  match as on a 1541, against the name's stem. `VERIFY` compares and sets
+  `$90`'s `$10` where a byte differs.
+- **`LOAD"$",8`** is the folder's `.PRG` files as a 1541's listing:
+  `"OS8088 FOLDER" 88 2A`, a line a file with its blocks of 254, and
+  `BLOCKS FREE.` from the free kilobytes.
+- **A C64 name becomes an 8.3 name**: letters and digits kept (a shifted
+  letter is its letter), anything else `_`, eight at most, `.PRG` after.
+
+`c64uitest` keeps a folder in memory and holds: a 10,000-byte SAVE across
+the staging's chunks with its address, the exists refusal, `@0:`, LOAD by
+a wildcard at `$0801`, VERIFY of a changed byte, a stem that only starts
+the same not matching, the listing, and device 9's `JSR`; red with the
+chunk offset dropped or the stem test loosened. On 86Box: `10 PRINT"HI"`,
+`SAVE"HELLO",8`, `NEW`, `LOAD"HELLO",8`, `LIST` answers `10 PRINT"HI"`, and
+`LOAD"$",8` lists it.
 
 #### 11.5.1 The image in extended memory
 

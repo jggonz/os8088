@@ -1485,9 +1485,10 @@ def main():
         pcs -= {0xFD1B, 0xFD1D, 0xFD1F, 0xFD21, 0xFD24}
     # DRIVE 8'S TRAP (C64-SPEC 11.5): the package patches a JAM byte over the
     # KERNAL's LDA #$60 at $F4C4, and the core must meet it - a translation of
-    # the ROM's own bytes there would run straight past
+    # the ROM's own bytes there would run straight past. SAVE's JSR $F3D5 at
+    # $F605 is the second (11.5.2)
     if not a.range and a.machine == "c64":
-        pcs -= {0xF4C4}
+        pcs -= {0xF4C4, 0xF605}             # ...and SAVE's, at $F605
     elif a.range:
         # A RANGE OF RAM CAN BE WRITTEN, which a ROM cannot: an instruction
         # whose bytes a fixed-address store in the program writes (Dormann's
