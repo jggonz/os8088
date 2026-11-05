@@ -92,6 +92,22 @@ def unpack(cv, h, wb):
 SCALES = (100, 90, 75, 67, 50)     # a rendition's picture, % of its canvas
 
 
+FITS = ("fill", "stretch")      # target.fit: crop to the canvas's shape, or
+                                # squeeze the whole picture into it
+CLIP_DEFAULT = 16               # target.clip: levels from black (and from
+                                # white) drawn SOLID and never held
+
+
+def fit_of(proj):
+    f = proj.d["target"].get("fit") or "fill"
+    return f if f in FITS else "fill"
+
+
+def clip_of(proj):
+    c = proj.d["target"].get("clip")
+    return CLIP_DEFAULT if c is None else max(0, min(96, int(c)))
+
+
 def scale_of(proj, kind):
     """Rendition KIND's PICTURE SIZE, % of the canvas (and of the screen,
     for a full-screen opening): target.scale[kind], 100 when not set"""
@@ -130,7 +146,9 @@ def screens_npy(proj, sid, full=False):
     pct = scale_of(proj, "cga4")
     key = hashlib.sha1(json.dumps(
         [ENC_KEY, file_hash(proj.here(s["path"])), rows, t["fps"],
-         t["profile"], t["palette"]] + ([pct] if pct < 100 else [])).encode()
+         t["profile"], t["palette"]] + ([pct] if pct < 100 else []) +
+        ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
+        ([clip_of(proj)] if clip_of(proj) != CLIP_DEFAULT else [])).encode()
                        ).hexdigest()[:20]
     return os.path.join(cache_dir(proj), key + ".npy")
 
@@ -158,7 +176,8 @@ def screens(proj, sid, progress=_nop, full=False):
     pr = subprocess.Popen(
         [sys.executable, "-u", os.path.join(HERE, "os88venc.py"), path, v88,
          "--quiet", "--progress", "--preset", "cga4",
-         "--box", "%dx%d" % (pw, ph), "--fit", "fill", "--fps", str(t["fps"]),
+         "--box", "%dx%d" % (pw, ph), "--fit", fit_of(proj),
+         "--fps", str(t["fps"]), "--clip", str(clip_of(proj)),
          "--audio", "none", "--profile", t["profile"]] +
         palette_args(t["palette"]), stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, encoding="utf-8", errors="replace")
@@ -228,15 +247,18 @@ def rgb_frames(proj, sid, w, h, kind, progress=_nop):
     s = proj.d["sources"][sid]
     t = proj.d["target"]
     path = proj.here(s["path"])
+    fit = fit_of(proj)
     key = hashlib.sha1(json.dumps(["rgb1", file_hash(path), w, h, kind,
-                                   t["fps"], t["rate"]]).encode()
+                                   t["fps"], t["rate"]] +
+                                  ([fit] if fit != "fill" else [])).encode()
                        ).hexdigest()[:20]
     npy = os.path.join(cache_dir(proj), key + ".rgb.npy")
     if os.path.exists(npy):
         return np.load(npy)
     progress("encode", 0, 0, "%s (%s)" % (sid, kind))
     spf = t["rate"] // t["fps"]
-    fr = np.stack(list(E.ffmpeg_video(path, w, h, _src_crop(kind, w, h),
+    fr = np.stack(list(E.ffmpeg_video(path, w, h, _src_crop(kind, w, h)
+                                      if fit == "fill" else None,
                                       "%d/%d" % (t["rate"], spf), None, None,
                                       None, pix="rgb24")))
     tmp = npy + ".part.npy"
@@ -297,7 +319,7 @@ def _bayer4():
     return (m + 0.5) / 16
 
 
-def quant_vga(fr, pal):
+def quant_vga(fr, pal, clip=0):
     """rgb24 frames to palette indexes: an ordered dither anchored to the
     canvas, and a pixel's colour HELD while its source has moved less than
     HOLD_RGB, so still footage costs nothing frame to frame"""
@@ -311,8 +333,17 @@ def quant_vga(fr, pal):
         x = fr[i].astype(float) + ((b - 0.5) * spread)[..., None]
         d = ((x[:, :, None, :] - pal[None, None]) ** 2).sum(3)
         idx = np.argmin(d, 2).astype(np.uint8)
+        solid = None
+        if clip:                    # NEAR A COLOUR: that colour, solid and
+            d0 = ((fr[i].astype(float)[:, :, None, :] - pal[None, None]) **
+                  2).sum(3)         # never held - a fade to black ends
+            n0 = np.argmin(d0, 2)   # black, where a held dot stayed lit
+            solid = np.abs(fr[i].astype(float) - pal[n0]).max(2) < clip
+            idx[solid] = n0[solid]
         if prev is not None:
             still = np.abs(fr[i].astype(int) - prgb).max(2) < HOLD_RGB
+            if solid is not None:
+                still &= ~solid
             idx[still] = prev[still]
             prgb = np.where(still[..., None], prgb, fr[i].astype(int))
         else:
@@ -322,7 +353,7 @@ def quant_vga(fr, pal):
     return out
 
 
-def quant_herc(fr):
+def quant_herc(fr, clip=0):
     """rgb24 frames to one bit: brightness against the ordered threshold,
     a pixel HELD while its brightness moves less than HOLD_LUM"""
     lum = fr[..., 0] * 0.299 + fr[..., 1] * 0.587 + fr[..., 2] * 0.114
@@ -332,8 +363,10 @@ def quant_herc(fr):
     prev, plum = None, None
     for i in range(n):
         bit = (lum[i] > b).astype(np.uint8)
-        if prev is not None:
-            still = np.abs(lum[i] - plum) < HOLD_LUM
+        dark, lit = lum[i] < clip, lum[i] > 255 - clip     # (SOLID: never
+        bit[dark], bit[lit] = 0, 1                          # held - a fade
+        if prev is not None:                                # to black ends
+            still = (np.abs(lum[i] - plum) < HOLD_LUM) & ~dark & ~lit  # black)
             bit[still] = prev[still]
             plum = np.where(still, plum, lum[i])
         else:
@@ -396,7 +429,9 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False):
     key = hashlib.sha1(json.dumps(
         ["q1", file_hash(proj.here(s["path"])), kind, w, h, k, t["palette"],
          HOLD_RGB, HOLD_LUM, battle_palette(proj, k) if kind == "vga4"
-         else None] + ([pct] if pct < 100 else [])).encode()).hexdigest()[:20]
+         else None] + ([pct] if pct < 100 else []) +
+        ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
+        [clip_of(proj)]).encode()).hexdigest()[:20]
     npy = os.path.join(cache_dir(proj), key + ".q.npy")
     if os.path.exists(npy):
         return list(np.load(npy))
@@ -405,8 +440,8 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False):
     fr = fr[:n] if len(fr) >= n else np.concatenate(
         [fr, np.repeat(fr[-1:], n - len(fr), 0)])
     progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
-    q = quant_vga(fr, battle_palette(proj, k)) if kind == "vga4" \
-        else quant_herc(fr)
+    q = quant_vga(fr, battle_palette(proj, k), clip_of(proj)) \
+        if kind == "vga4" else quant_herc(fr, clip_of(proj))
     if pct < 100:
         q = pad_into(q, w, h, x0, y0)
     np.save(npy + ".part.npy", q)

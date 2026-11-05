@@ -1113,6 +1113,25 @@ class BattleTab(object):
             cb.bind("<<ComboboxSelected>>", lambda e: self._scale())
         self.scnote = ttk.Label(rf, text="", wraplength=900)
         self.scnote.grid(row=3, column=0, columnspan=4, sticky="w")
+        # HOW A VIDEO FITS the canvas, and how near black (or white) is
+        # drawn solid: every rendition's, every source's
+        ff = ttk.Frame(rf)
+        ff.grid(row=4, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(ff, text="Fit the video:").pack(side="left")
+        self.fitv = tk.StringVar()
+        cb = ttk.Combobox(ff, textvariable=self.fitv, state="readonly",
+                          width=34, values=list(FIT_LABELS.values()))
+        cb.pack(side="left", padx=(4, 16))
+        cb.bind("<<ComboboxSelected>>", lambda e: self._fit())
+        ttk.Label(ff, text="Clip to black and white within").pack(side="left")
+        self.clipv = tk.StringVar()
+        cb = ttk.Combobox(ff, textvariable=self.clipv, state="readonly",
+                          width=4, values=["0", "8", "16", "24", "32", "48",
+                                           "64"])
+        cb.pack(side="left", padx=4)
+        cb.bind("<<ComboboxSelected>>", lambda e: self._fit())
+        ttk.Label(ff, text="levels (a fade to black ends black; 16 the "
+                  "default)").pack(side="left")
         r += 1
         # how it ends: the battle's own last clips, whoever the enemy is
         ef = ttk.LabelFrame(f, text="How it ends (each clip is played to its "
@@ -1212,6 +1231,9 @@ class BattleTab(object):
                             % ({"cga4": "CGA", "vga4": "VGA",
                                 "herc": "Hercules"}[kind], pw, ph, w, h,
                                round(100.0 * pw * ph / (w * h))))
+        import vbtana as A__
+        self.fitv.set(FIT_LABELS[A__.fit_of(self.app.proj)])
+        self.clipv.set(str(A__.clip_of(self.app.proj)))
         self.scnote.config(text=("The picture, centred in black: " +
                                  "; ".join(bits) + ". The band is the same.")
                            if bits else "")
@@ -1250,6 +1272,23 @@ class BattleTab(object):
         if sc != (t.get("scale") or {}):
             self.app.frames.clear()     # (another size: other screens)
             self.app.edit("set", ("target", "scale"), sc or None)
+
+    def _fit(self):
+        t = self.app.proj.d["target"]
+        fit = [k for k, v in FIT_LABELS.items() if v == self.fitv.get()]
+        fit = fit[0] if fit else "fill"
+        clip = int(self.clipv.get() or 16)
+        changed = False
+        if fit != (t.get("fit") or "fill"):
+            self.app.edit("set", ("target", "fit"),
+                          None if fit == "fill" else fit)
+            changed = True
+        if clip != (16 if t.get("clip") is None else t["clip"]):
+            self.app.edit("set", ("target", "clip"),
+                          None if clip == 16 else clip)
+            changed = True
+        if changed:
+            self.app.frames.clear()     # (other screens: encoded again)
 
     def _end(self, k):
         v = self.endv[k].get() or None
@@ -3189,6 +3228,10 @@ def budget_rows(bud):
     return rows
 
 
+FIT_LABELS = {"fill": "Fill (crop the edges to the shape)",
+              "stretch": "Stretch (the whole picture, squeezed)"}
+
+
 def memory_lines(mem):
     kb = lambda n: (n + 1023) // 1024
     out = ["The resident claim, held while the window is open: %d KB" %
@@ -4043,7 +4086,9 @@ class PartyTab(object):
                    ("MP (and the menus' costs)", "mp_col", None, "mp_show"),
                    ("The message line", "msg_col", "msg_row", "msg_show"),
                    ("The plain look's lines; divider", "divider_col", None,
-                    "lines_show"))
+                    "lines_show"),
+                   ("An item's count beside an action it costs", None, None,
+                    "item_count_show"))
 
     def _layout(self):
         tk, ttk = self.app.tk, self.app.ttk

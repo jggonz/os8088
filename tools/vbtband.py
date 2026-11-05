@@ -172,6 +172,8 @@ def render(proj, char=0, menu=None, cursor=0, target=None, message=None,
             line += a["label"]
             if a["cost"] == V.COST_MP and L["mp_show"]:
                 line = line.ljust(10) + "%dMP" % a["cost_n"]
+            elif a["cost"] == V.COST_ITEM and L.get("item_count_show"):
+                line = line.ljust(10) + "x%d" % st.items[a["cost_item"]]
             if not st.can_pay(k, char):
                 ink = 2
         line = line.ljust(15)[:15]

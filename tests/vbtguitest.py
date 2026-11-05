@@ -417,6 +417,47 @@ with tempfile.TemporaryDirectory() as tdir:
        "a still picture's colours are HELD frame to frame (no dither crawl)")
     hq = A.quant_herc(fr)
     ok((hq[2] == hq[0]).all(), "...and its bits, on Hercules")
+    # A FADE TO BLACK ends black (target.clip, the owner's "videos that fade
+    # completely to black, but are leaving smears"): a slow fade, each step
+    # under the hold, left dots lit for good; within the clip they are
+    # drawn solid and never held
+    fade = np.zeros((40, 8, 16, 3), np.uint8)
+    for i in range(40):                 # (dark, a dot lit in it, fading to
+        fade[i] = max(0, 9 - i // 4)    # black by less than the hold)
+    lit0 = int(A.quant_herc(fade)[-1].sum())
+    lit16 = int(A.quant_herc(fade, 16)[-1].sum())
+    vf = np.zeros((40, 8, 16, 3), np.uint8)
+    for i in range(40):                 # (VGA: a grey slot of 40, fading)
+        vf[i] = max(0, 26 - i)
+    vpal = [(0, 0, 0), (255, 255, 255), (40, 40, 40), (120, 120, 120)]
+    v0 = int(A.quant_vga(vf, vpal)[-1].astype(bool).sum())
+    vq = A.quant_vga(vf, vpal, 16)
+    ok(lit0 > 0 and lit16 == 0 and v0 > 0 and not vq[-1].any(),
+       "a slow fade to black: Hercules %d dots left lit unclipped, %d "
+       "clipped at 16; VGA %d, then all black" % (lit0, lit16, v0))
+    # HOW A VIDEO FITS (target.fit): a 4:3 source with a bar along its top
+    # edge - FILL crops it on every rendition (each canvas is wider than
+    # 4:3 shows), STRETCH keeps it
+    import shutil
+    if shutil.which("ffmpeg"):
+        ev = os.path.join(os.path.dirname(vbp), "edge.mp4")
+        subprocess.run(["ffmpeg", "-loglevel", "error", "-y", "-f", "lavfi",
+                        "-i", "color=black:size=640x480:rate=15,drawbox=x=0:"
+                        "y=0:w=640:h=24:color=white:t=fill", "-t", "1", ev],
+                       check=True)
+        pf = P.Project.load(vbp)
+        pf.add_source("edge", path=ev)
+        tops = {}
+        for fit in ("fill", "stretch"):
+            pf.d["target"]["fit"] = None if fit == "fill" else fit
+            h = A.rend_screens(pf, "edge", "herc")[0]
+            v = A.rend_screens(pf, "edge", "vga4")[0]
+            c = A.screens(pf, "edge")[0]
+            tops[fit] = (int(h[:4].sum()), int((v[:3] != v[-1, 0]).sum()),
+                         int((c[:3] != c[-1, 0]).sum()))
+        ok(tops["fill"] == (0, 0, 0) and min(tops["stretch"]) > 0,
+           "a 4:3 video's top edge: cropped by FILL %s, kept by STRETCH %s "
+           "(Hercules, VGA, CGA)" % (tops["fill"], tops["stretch"]))
     full = np.zeros((200, 320), np.uint8)
     full[141, :] = 3
     full[142, :] = 2

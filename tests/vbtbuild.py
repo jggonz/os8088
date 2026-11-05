@@ -30,6 +30,7 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "tools"))
 import vbtproj as P     # noqa: E402
 import vbtana as A      # noqa: E402
+import os88vbt as B     # noqa: E402
 
 VBT = os.path.join(ROOT, "tools", "os88vbt.py")
 fails = []
@@ -118,6 +119,21 @@ with tempfile.TemporaryDirectory() as t:
        % r["exit"])
     ok(A.wait_frames([0], 30) == 30 and A.wait_frames([0, 15], 30) == 15,
        "one anchor waits a whole loop, two opposite ones half")
+
+    # 6. THE LAST OPENING'S SEAM SOUNDS the music's frame before its join:
+    # it was a frame of silence between the opening's own sound and the
+    # music (the owner's "small but noticeable pause")
+    import struct
+    pr = P.Project.load(j("full.vbp"))
+    pr.d["music"]["join"] = 4 * pr.d["target"]["rate"]
+    data = B.build_project(pr)
+    bd = B.Bundle(data)
+    seam = bd.stream(bd.clips[bd.openings[-1]])[-1]
+    n, alen = struct.unpack_from("<HH", seam)
+    want = bd.mus[bd.music_at - bd.spf:bd.music_at]
+    ok(alen == bd.spf and seam[n - alen:n] == want,
+       "the last opening's seam carries the music's frame before its join "
+       "(%d bytes of %d)" % (alen, bd.spf))
 
 if fails:
     print("%d FAILED" % len(fails))

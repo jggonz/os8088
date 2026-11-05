@@ -237419,7 +237419,11 @@ the decoder will really hold:**
   over the whole screen. A canvas frame is the canvas with the band's rows
   black under it, so the first opening's last frame and the next one's
   first are joined by a seam like any other. The last opening, the SCENE
-  opening, JOINS the loop. **The next opening starts once its head is IN
+  opening, JOINS the loop - and its seam, when it has its own sound, SOUNDS
+  the music's frame before the music's join (the bytes the card plays of
+  the music), so that the music follows the opening's sound with no frame
+  of silence between (the owner's "a small but noticeable pause ... when
+  it joins to the main music"). **The next opening starts once its head is IN
   its ring** (`vb_ogo`; until then `VM_OWAIT`, the last frame held, asked
   again each frame), and its sound, when the sound's side came to it
   first and found it not there, with its frame 0 (`[vb_owsnd]`). It was
@@ -237765,7 +237769,17 @@ then sets the mode, the palette and the decode.
   encoder's `ffmpeg_video` at the same fps, then quantized by the builder -
   an ordered dither anchored to the canvas and a pixel's value HELD while
   its source moves less than a threshold (`vbtana.quant_vga`,
-  `quant_herc`), so still footage costs nothing frame to frame.
+  `quant_herc`), so still footage costs nothing frame to frame. **Within
+  `target.clip` levels of a colour (16 by default; black and white on
+  Hercules) a pixel is that colour SOLID and never held**: a slow fade to
+  black moved each dot less than the hold, so dim dots stayed lit for good
+  (the owner's "videos that fade completely to black, but are leaving
+  smears") - the CGA4 encode's own `--clip`, which it is passed too.
+- **How a video FITS the canvas** (`target.fit`, the Battle tab): `fill`,
+  cropped to the canvas's displayed shape (the default, as it always was),
+  or `stretch`, the whole picture squeezed into it - for footage edited at
+  a shape that is not quite ours (a 640 x 480 source on Hercules' 640 x 348
+  lost its sides to the crop).
 - **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows. ONE
   palette for the battle (`vbtana.battle_palette`): slots 0 to 3 the band's
   CGA colours, the rest a k-means of every video source, 4, 8 or 16 in all
@@ -238276,7 +238290,9 @@ figures.
 band as it always was): the enemy's name (its column, row, shown); the party
 (its first row, its pitch) and, on each character's line, the name, the
 limit star, HP (and its "/most") and MP, each a column and shown or not -
-hiding MP hides the menus' MP costs too; the message line (column, row,
+hiding MP hides the menus' MP costs too; an ITEM's count beside an action
+it costs ("x3", at the cost's column: `item_count_show`, off unless asked,
+the layout's byte 19); the message line (column, row,
 shown); and the plain look's lines (shown; the divider's column). Rows are
 pixels from the band's top, columns cells 0..39. A character's line is
 composed from its first shown field to its last, spaces between, so the

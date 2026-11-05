@@ -51,7 +51,8 @@ MAX_PLACES = 64                 # menu items placed one by one (125.5.1)
 LAYOUT = ("enemy_col", "enemy_row", "enemy_show", "party_row",
           "party_pitch", "name_col", "name_show", "limit_col", "limit_show",
           "hp_col", "hp_show", "hpmax_show", "mp_col", "mp_show", "msg_col",
-          "msg_row", "msg_show", "lines_show", "divider_col")
+          "msg_row", "msg_show", "lines_show", "divider_col",
+          "item_count_show")
 LAYOUT_SZ = 20
 
 
@@ -61,7 +62,7 @@ def layout_defaults(by):
                 party_pitch=9, name_col=18, name_show=1, limit_col=24,
                 limit_show=1, hp_col=25, hp_show=1, hpmax_show=1, mp_col=36,
                 mp_show=1, msg_col=1, msg_row=191 - by, msg_show=1,
-                lines_show=1, divider_col=16)
+                lines_show=1, divider_col=16, item_count_show=0)
 
 
 def layout_of(proj):

@@ -23,7 +23,8 @@ ground changes (125.5: "any way to draw the menus faster?"):
 
   custom:  the enemy's name moved, the limit star and HP's most hidden,
            HP and MP moved, the message moved (clear of the menu), the divider moved, and the
-           top menu's second item placed of its own - and a second build
+           top menu's second item placed of its own, the Potion's count
+           shown beside it in BRAM's Help ("x3") - and a second build
            with MP and the message HIDDEN;
   default: no layout at all - the band as it always was.
 
@@ -59,7 +60,7 @@ fails = []
 
 CUSTOM = dict(enemy_col=2, enemy_row=40, limit_show=0, hpmax_show=0,
               hp_col=28, mp_col=33, name_col=20, msg_col=4, msg_row=50,
-              divider_col=17)
+              divider_col=17, item_count_show=1)
 HIDDEN = dict(CUSTOM, mp_show=0, msg_show=0)
 
 

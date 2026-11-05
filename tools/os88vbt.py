@@ -498,8 +498,20 @@ def build(b):
             exit_to = o.get("exit", 0)
             rw = REND.full if (o.get("full") or not recs and wasfull) \
                 else rows
+            # ...and SOUNDS the music's frame before its join: a seam with
+            # no sound was a frame of silence between the opening's own
+            # sound and the music (the owner's "a small but noticeable
+            # pause ... when it joins to the main music"). The music's
+            # bytes are what the card plays of it, so they play the same
+            # as the clip's own
+            seam_snd = b""
+            if o.get("sound") is not None and b.music is not None:
+                mb = music_bytes(b.music)
+                at = b.music_at
+                seam_snd = (b"\x80" * max(0, spf - at) +
+                            mb[max(0, at - spf):at])[:spf]
             recs.append(rec(prev, surface_of(full_of(b.idle[exit_to]),
-                                             REND.full), rw))
+                                             REND.full), rw, seam_snd))
         scr = o["frames"][-1] if not fr else fr[-1]
         scr = full_of(scr)
         wasfull = bool(o.get("full"))

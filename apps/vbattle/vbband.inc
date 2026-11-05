@@ -33,6 +33,7 @@ LY_SROW     equ 15
 LY_SSHOW    equ 16
 LY_LINES    equ 17
 LY_DIV      equ 18
+LY_ICOUNT   equ 19              ; an item's count beside an action it costs
 LY_SZ       equ 20
 
 ; vb_lay_init - [vb_lay] from the rules (header 56: its offset), or the
@@ -587,7 +588,7 @@ vb_draw_menu:
     mov byte [di], ' '
     pop si
     cmp byte [si+AC_COST], C_MP
-    jne .afford
+    jne .icost
     cmp byte [vb_lay+LY_MSHOW], 0   ; (no MP in this battle: no cost shown)
     je .afford
     mov ax, [si+AC_COSTN]
@@ -596,6 +597,22 @@ vb_draw_menu:
     call vb_utoa
     pop si
     mov word [di], 'MP'
+    jmp short .afford
+.icost:                             ; AN ITEM's: "x3" beside it, when the
+    cmp byte [si+AC_COST], C_ITEM   ; layout asks (125.5.1)
+    jne .afford
+    cmp byte [vb_lay+LY_ICOUNT], 0
+    je .afford
+    mov bl, [si+AC_ITEM]
+    xor bh, bh
+    shl bx, 1
+    mov ax, [vb_items+bx]
+    mov byte [vb_lbuf+10], 'x'
+    mov di, vb_lbuf + 11
+    push si
+    call vb_utoa
+    pop si
+    mov byte [di], ' '              ; (the line stays 15 wide)
 .afford:
     mov bl, [vb_turn]
     push si

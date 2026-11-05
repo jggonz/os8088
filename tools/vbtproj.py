@@ -829,6 +829,11 @@ class Project:
                                                                67, 50):
                 err("target.scale", "%s at %s%%: a picture is 100, 90, 75, 67 "
                     "or 50%% of its canvas" % (k, v))
+        if t.get("fit") not in (None, "fill", "stretch"):
+            err("target.fit", "fit %s: fill or stretch" % t["fit"])
+        if t.get("clip") is not None and not (
+                isinstance(t["clip"], int) and 0 <= t["clip"] <= 96):
+            err("target.clip", "clip %s: 0 to 96 levels" % t["clip"])
         bc, br, bn, bh = t["band"]
         if br < y + h and br + bh > y:
             err("target", "the band overlaps the canvas")
