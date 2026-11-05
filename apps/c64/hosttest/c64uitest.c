@@ -3847,6 +3847,75 @@ int main(int argc, char **argv)
             fail("a .T64 without the C64 magic was not refused with the fact");
         h_d64_len = 0;
     }
+
+    /* --- AUTOSTART (11.3.2): Smart attach at the READY. prompt loads and
+     *     types RUN; away from it, a CPU reset in warp first and nothing
+     *     loaded until the prompt is back - the reset's BASIC cold start
+     *     would write over the program's first link. A D64 types LOAD"*",8,1
+     *     ten bytes at a time, then RUN at the next prompt. Red with the
+     *     prompt test answering yes, or with RUN never typed */
+    {
+        int st = c64_state, ps = c64_pause;
+        c64_state = C64_ST_RUN;
+        c64_pause = 0;
+        memcpy(&ram[0x0400 + 5 * 40], "\x12\x05\x01\x04\x19\x2e", 6);
+        ram[0x288] = 4;
+        ram[0xD6] = 6;
+        ram[0xD3] = 0;
+        ram[0xC6] = 0;
+        c64_smart = 1;
+        if (!attach(0x0801, 0x40, 0x77) || ram[0x0801] != 0x77)
+            fail("Smart attach at the prompt did not load the PRG at once");
+        if (c64_reset_req || c64_auto != C64_AU_RUN)
+            fail("Smart attach at the prompt reset the machine or typed no RUN");
+        ovl_auto_step();
+        if (memcmp(&ram[0x277], "RUN\r", 4) != 0 || ram[0xC6] != 4)
+            fail("autostart did not type RUN into the KERNAL's buffer");
+        ram[0xC6] = 0;
+        ovl_auto_step();
+        if (c64_auto != 0)
+            fail("autostart did not end once RUN was typed");
+        /* ...away from the prompt */
+        ram[0xD6] = 0;
+        ram[0x0801] = 0;
+        attach(0x0801, 0x40, 0x55);
+        if (c64_reset_req != 1 || !c64_warp || ram[0x0801] == 0x55)
+            fail("Smart attach off the prompt did not reset, in warp, first");
+        if (strcmp(last_toast, "Autostarting...") != 0)
+            fail("an autostart's wait was not said on the row");
+        c64_reset_req = 0;
+        ram[0xD6] = 6;
+        ovl_auto_step();
+        if (ram[0x0801] == 0x55)
+            fail("autostart read the prompt in the reset's first frames");
+        c64_frames_lo += 6;
+        ovl_auto_step();
+        if (ram[0x0801] != 0x55 || c64_warp || c64_auto != C64_AU_RUN)
+            fail("autostart did not load and leave warp at the prompt");
+        ovl_au_end();
+        /* ...and a D64's two commands */
+        ovl_auto_begin("GAME.D64", 0xAB00u, 2, 1);
+        ovl_auto_step();
+        if (memcmp(&ram[0x277], "LOAD\"*\",8,", 10) != 0 || ram[0xC6] != 10)
+            fail("a D64's autostart did not type LOAD\"*\",8, first");
+        ram[0xC6] = 0;
+        ovl_auto_step();
+        if (memcmp(&ram[0x277], "1\r", 2) != 0 || ram[0xC6] != 2)
+            fail("a D64's autostart did not finish its LOAD line");
+        ram[0xC6] = 0;
+        ovl_auto_step();
+        if (c64_auto != C64_AU_LOAD)
+            fail("a D64's autostart left its LOAD stage early");
+        c64_frames_lo += 6;
+        ovl_auto_step();
+        ovl_auto_step();
+        if (memcmp(&ram[0x277], "RUN\r", 4) != 0)
+            fail("a D64's autostart typed no RUN after the load");
+        ovl_au_end();
+        c64_smart = 0;
+        c64_state = st;
+        c64_pause = ps;
+    }
     fx_name[0] = 0;
     c64_msg[0] = 0;
     c64_sh_inval();
@@ -5987,6 +6056,7 @@ int main(int argc, char **argv)
             "Joysticks normal.",
             "Joysticks swapped.",
             "Not a T64 tape image.", "T64: cannot read it.",
+            "Autostarting...", "Autostart: no READY. prompt.",
             "T64: no program in it.", "T64: no heap for it.",
             "No bands here - text only.",
             "No square voice here - no SID sound.",

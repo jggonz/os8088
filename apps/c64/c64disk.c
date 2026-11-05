@@ -179,7 +179,8 @@ static int ovl_d64_xattach(const char *name, unsigned trks)
     return 1;
 }
 
-/* ovl_d64_attach - File > Attach disk image / Smart attach on a .D64: the
+/* ovl_d64_attach - File > Attach disk image / Smart attach on a .D64 (a
+ * tape image of a D64's size is told by its name in ovl_open): the
  * image into a claim of its own, the old one given back. Refusals are said on
  * the status row, and the drive keeps what it had until a new image is whole */
 static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
@@ -187,11 +188,6 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     unsigned paras, seg, i, trks, got;
     int gave;
 
-    if (ovl_is_t64(name)) {                 /* (a tape image of a D64's size:
-                                             * its name says which, 11.3.1) */
-        ovl_load_t64(name, size_lo, size_hi);
-        return;
-    }
     trks = 0;
     if (size_hi == 2)
         if ((size_lo == 0xAB00) | (size_lo == 0xADAB))
@@ -217,6 +213,7 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     }
     if (gave) {
         c64_menu_state();
+        c64_ld_ok = 1;
         c64_say("Disk on drive 8.");
         return;
     }
@@ -254,9 +251,11 @@ static void ovl_d64_attach(const char *name, unsigned size_lo, unsigned size_hi)
     c64_jit_init();                         /* (back, smaller, if it gave way) */
     c64_menu_state();
     if (gave && c64_fjit == 0) {
+        c64_ld_ok = 1;
         c64_say("Disk on drive 8; no room for recompiler.");
         return;
     }
+    c64_ld_ok = 1;
     c64_say("Disk on drive 8.");
 }
 
@@ -494,4 +493,32 @@ static void ovl_d64_trap(void)
     c64_wr(0x100 + ((sp - 1) & 0xFF), (C64_D64_EXIT - 1) & 0xFF);
     c64_m.s = (sp - 2) & 0xFF;
     c64_m.pc = C64_D64_LOADING;
+}
+
+/* ovl_open - os88_onfile's whole body (11.3): a D64 by its SIZE - the dialog
+ * does not filter by extension (SPEC.md 38.9), and a .PRG of over 64KB is
+ * refused anyway - onto drive 8, anything else a tape image or a .PRG; and
+ * from Smart attach, the autostart (11.3.2). A .PRG or tape is loaded by the
+ * autostart itself, at the prompt; its refusals by size come first, so a
+ * file that cannot load does not reset the machine */
+static void ovl_open(const char *name, unsigned size_lo, unsigned size_hi)
+{
+    int d64 = (size_hi == 2 || size_hi == 3) && !ovl_is_t64(name);
+
+    if (c64_auto)
+        ovl_au_end();                       /* a new attach replaces it */
+    c64_ld_ok = 0;
+    if (d64) {
+        ovl_d64_attach(name, size_lo, size_hi);
+        if (c64_smart && c64_ld_ok)
+            ovl_auto_begin(name, size_lo, size_hi, 1);
+        return;
+    }
+    if (!c64_smart || (!ovl_is_t64(name)
+            && (size_hi != 0 || size_lo > 0xFFFDu || size_lo < 3))) {
+        ovl_attach(name, size_lo, size_hi); /* (which says why, if it is
+                                             * refused) */
+        return;
+    }
+    ovl_auto_begin(name, size_lo, size_hi, 0);
 }

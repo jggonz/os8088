@@ -238,6 +238,8 @@ static void ovl_cmd(int menu, int item, void *win)
              * SPEC.md 38.10's last-picked name for this application, and Open
              * stays greyed until a row is selected (38.8) rather than sitting
              * live over nothing. */
+            c64_smart = (item == C64_I_ATTACH);   /* (11.3.2: only
+                                             * Smart attach starts it) */
             if (os88_file_dlg(OS88_FDLG_OPEN, win, 0) < 0)
                 c64_say("A file dialog is already open.");
             return;

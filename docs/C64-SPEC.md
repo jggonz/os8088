@@ -2928,11 +2928,10 @@ to one 512-byte sector. The chunk last read is remembered, so the header a
 load inspects first is not read again when its data begins in the same
 chunk.
 
-**That is all it does.** There is no autostart: no reset, no `READY.` wait,
-no `mem_set_basic_text`, no `RUN`. The bytes are in the C64's RAM at the
-address the file names, and the user types `RUN` (for a `$0801` BASIC
-program) or `SYS`. The plan's wave 4 specified VICE's RAM-injection autostart
-(`AutostartPrgMode=1`, `autostart-prg.c`) and it was never built.
+**From Smart attach, the load is the autostart's** (§11.3.2), which runs it
+at the `READY.` prompt and types `RUN`. **File > Attach disk image...** is the
+load alone: the same routing and the same loaders, nothing reset and nothing
+typed, and the user types `RUN` or `SYS`.
 
 #### 11.3.1 A tape image — `.T64`
 
@@ -2962,6 +2961,54 @@ the status row: `Not a T64 tape image.` (short, or no magic),
 `T64: no heap for it.`, `T64: cannot read it.`; success says
 `Loaded <the entry's name>`, its trailing padding trimmed and anything
 outside PETSCII's printable half shown as `?`.
+
+#### 11.3.2 Autostart
+
+**Smart attach starts what it attached**, as VICE's does in its
+RAM-injection mode (`src/autostart.c`, `AutostartPrgMode` 1): a `.PRG` or a
+tape's first file is loaded at the `READY.` prompt and `RUN` typed; a D64 is
+mounted (§11.5) and `LOAD"*",8,1` typed, then `RUN` once the load has said
+`READY.` again. `RUN` on a program that is not BASIC finds no program text
+and answers `READY.`, as on VICE. `ovl_open` (`c64disk.c`) is the routing and
+`ovl_auto_*` (`c64load.c`) the stages, stepped once a wake before the slice,
+in the running arm only.
+
+| stage | waits for | then |
+|---|---|---|
+| `C64_AU_WAIT` | the prompt | a PRG or tape: the load (§11.3, §11.3.1), and `RUN`; a D64: `LOAD"*",8,1` |
+| `C64_AU_LOAD` | its line typed, then the prompt | `RUN` |
+| `C64_AU_RUN` | its line typed | done |
+
+- **The prompt** is VICE's own test (`autostart.c`'s `check()`): the cursor
+  at column 0 (`$D3`), nothing in the keyboard buffer (`$C6`), and `READY.`
+  in screen codes on the line above the cursor (`$D6`), on the screen the
+  KERNAL writes (`$0288`).
+- **A machine not at the prompt is reset first** — File > Reset machine
+  CPU's reset, RAM kept, as VICE's autostart resets — and the wait runs in
+  **warp**, VICE's `AutostartWarp`, so the KERNAL's RAM test is a moment
+  rather than three seconds; warp is left at the prompt unless the user had
+  it on already. **The load waits for the prompt**, never runs before the
+  reset: BASIC's cold start writes the first program link at `$0801`. The
+  first five frames are not looked at, because until RAMTAS clears it zero
+  page still describes the machine before the reset. A machine at the prompt
+  is not reset, and that is the common case — the machine a user has just
+  opened.
+- **Typing** is the KERNAL's own buffer: up to ten bytes at `$0277` with the
+  count at `$C6`, put only when `$C6` is 0, as VICE's `kbdbuf` feeds it.
+  `LOAD"*",8,1` and its RETURN are twelve, so they go in two wakes. A paste
+  in progress is stopped (the buffer is the autostart's).
+- **It gives up** after 1,000 emulated frames (20 s) at any one stage,
+  saying `Autostart: no READY. prompt.`; a refusal from the load ends it
+  with that refusal on the row. While it waits off the prompt the row says
+  `Autostarting...`. A new attach replaces an autostart in progress.
+- **Refusals by size come first** (`PRG over 65533 bytes.`, `PRG too
+  short.`): a file that cannot load does not reset the machine.
+
+The cost is a wake's step while it runs and nothing otherwise: one test of
+`c64_auto` in the running arm. `c64uitest` holds the prompt case (loaded at
+once, `RUN` in the buffer), the reset case (reset requested, warp on,
+nothing loaded until the prompt, the first frames ignored) and a D64's two
+lines; each was verified red by breaking it.
 
 **With no disk on drive 8 (§11.5), `LOAD"*",8` answers with the KERNAL's
 `?DEVICE NOT PRESENT  ERROR`** - and so does any device but 8, disk or no

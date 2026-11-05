@@ -357,6 +357,12 @@ static int c64_reset_req;                   /* ...and File > Reset machine CPU
                                              * (1) / Power cycle machine (2),
                                              * whose RAM fill is 64KB under the
                                              * same lock (ovl_reset_service) */
+static int c64_auto;                        /* Smart attach's AUTOSTART
+                                             * (C64-SPEC 11.3.2): 0 idle, else
+                                             * its stage, stepped each wake */
+static int c64_smart;                       /* the open dialog is Smart
+                                             * attach's, not Attach disk's */
+static int c64_ld_ok;                       /* the last load or attach took */
 
 /* The state the parts share. It is declared HERE, above every #include, so
  * that each part has one definition to read and none of them can quietly
@@ -576,6 +582,8 @@ static int  ovl_about_show(void *win);
 static void ovl_cmd(int menu, int item, void *win);
 static void ovl_conv_init(void);
 static void ovl_load_prg(const char *name, unsigned size_lo);
+static void ovl_open(const char *name, unsigned size_lo, unsigned size_hi);
+static void ovl_auto_step(void);
 
 /* The parts of the one translation unit (SPEC.md 73.1: `nasm -f bin` has no
  * external symbols, so a C package cannot be several .c files linked - it is
@@ -1214,17 +1222,10 @@ void os88_onfile(int mode, const char *name,
         return;
     if (name[0] == 0)
         return;
-    /* A D64 BY ITS SIZE - the dialog does not filter by extension (SPEC.md
-     * 38.9), and a .PRG of over 64KB is refused anyway - onto drive 8 */
-    if (size_hi == 2 || size_hi == 3) {
-        ovl_d64_attach(name, size_lo, size_hi);
-        c64_kick = 1;
-        os88_wm_wake(win);
-        return;
-    }
-    ovl_attach(name, size_lo, size_hi);     /* a tape image or a .PRG, and
-                                             * every refusal said on the row
-                                             * (c64load.c) */
+    ovl_open(name, size_lo, size_hi);       /* a D64, a tape image or a
+                                             * .PRG, every refusal said on the
+                                             * row, and Smart attach's
+                                             * autostart begun (c64disk.c) */
     c64_kick = 1;
     os88_wm_wake(win);
 }
@@ -1712,6 +1713,10 @@ static int c64_tick(void)
         c64_kbd_poll();                     /* ONCE PER WAKE (7.2's rule 2),
                                              * and every emulated CIA1 read in
                                              * this wake reads what it leaves */
+        if (c64_auto)
+            ovl_auto_step();                /* Smart attach's autostart: what
+                                             * it types goes in before the
+                                             * slice, as a paste does */
         c64_paste_feed();                   /* ...and Edit > Paste's ten
                                              * characters, BEFORE the slice, so
                                              * the machine drinks them inside

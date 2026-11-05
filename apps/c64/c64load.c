@@ -206,6 +206,7 @@ static void ovl_load_prg(const char *name, unsigned size_lo)
     os88_strcpy(msg, "Loaded ", C64_MSGMAX);
     os88_strcpy(msg + os88_strlen(msg), name, 14);
     why = msg;
+    c64_ld_ok = 1;
 out:
     ovl_buf_put();
     c64_say(why);
@@ -311,6 +312,7 @@ static void ovl_load_t64(const char *name, unsigned size_lo, unsigned size_hi)
         goto out;
     ovl_load_ptrs(start + len);
     why = msg;
+    c64_ld_ok = 1;
 out:
     ovl_buf_put();
     c64_say(why);
@@ -340,4 +342,156 @@ static void ovl_attach(const char *name, unsigned size_lo, unsigned size_hi)
         return;
     }
     ovl_load_prg(name, size_lo);
+}
+
+/* ==========================================================================
+ * AUTOSTART (C64-SPEC 11.3.2)
+ *
+ * What Smart attach does after the load, as VICE's RAM-injection autostart
+ * does it (src/autostart.c, AutostartPrgMode 1): with the machine at BASIC's
+ * READY. prompt, a .PRG or a tape's first file is injected and RUN typed; a
+ * D64 is mounted and LOAD"*",8,1 typed, then RUN once the load has said
+ * READY. again. A machine NOT at the prompt is given a CPU reset first (RAM
+ * kept, as VICE's autostart resets), and waited for, in warp - VICE's
+ * AutostartWarp - so the KERNAL's RAM test costs a moment, not three
+ * seconds. File > Attach disk image... mounts and starts nothing.
+ *
+ * THE PROMPT is VICE's own test (autostart.c's check()): the cursor at
+ * column 0, nothing in the keyboard buffer, and READY. in the screen codes
+ * of the line above the cursor, on the screen the KERNAL writes ($0288).
+ * The first frames after a reset are not looked at: until RAMTAS clears it,
+ * zero page still describes the machine before the reset.
+ *
+ * THE TYPING goes into the KERNAL's own ten-byte buffer at $0277 with the
+ * count at $C6, as VICE's kbdbuf does, ten bytes a wake while the KERNAL
+ * drains it - LOAD"*",8,1 and its RETURN are twelve.
+ * ========================================================================*/
+#define C64_AU_WAIT 1                       /* for READY., then the load */
+#define C64_AU_LOAD 2                       /* typing LOAD; then READY., RUN */
+#define C64_AU_RUN  3                       /* typing RUN; then done */
+#define C64_AU_LATE 1000                    /* frames: 20 s emulated */
+
+static char c64_au_name[16];                /* the file, for the load after
+                                             * the reset */
+static unsigned c64_au_lo, c64_au_hi, c64_au_fr;
+static int c64_au_d64, c64_au_warp;
+static const char *c64_au_s;                /* what is left to type */
+static unsigned char c64_au_ready[6] = { 18, 5, 1, 4, 25, 46 };  /* READY. */
+
+static int ovl_at_ready(void)
+{
+    unsigned row, a;
+    int i;
+
+    if (c64_rd(0xC6) | c64_rd(0xD3))        /* keys pending, or mid-line */
+        return 0;
+    row = (unsigned)c64_rd(0xD6);
+    if (row == 0 || row > 24)
+        return 0;
+    a = ((unsigned)c64_rd(0x288) << 8) + (row - 1) * 40;
+    for (i = 0; i < 6; i++)
+        if (c64_rd(a + i) != c64_au_ready[i])
+            return 0;
+    return 1;
+}
+
+/* the warp an autostart's wait runs in, entered and left as Alt+W does */
+static void ovl_au_warp(int on)
+{
+    if (on) {
+        c64_au_warp = c64_warp ^ 1;         /* (ours to take back only if it
+                                             * was not the user's already) */
+        if (c64_au_warp) {
+            c64_warp = 1;
+            c64_sound_stop();
+        }
+    } else if (c64_au_warp) {
+        c64_au_warp = 0;
+        c64_warp = 0;
+        if (c64_budget > C64_SLICE_MAX)
+            c64_budget = C64_SLICE_MAX;
+    }
+    c64_menu_state();
+}
+
+static void ovl_au_end(void)
+{
+    c64_auto = 0;
+    c64_au_s = 0;
+    ovl_au_warp(0);
+}
+
+/* the next stage, with the machine at the prompt */
+static void ovl_au_go(void)
+{
+    c64_au_fr = c64_frames_lo;
+    if (c64_auto == C64_AU_WAIT && !c64_au_d64) {
+        c64_ld_ok = 0;
+        ovl_attach(c64_au_name, c64_au_lo, c64_au_hi);
+        if (!c64_ld_ok) {
+            ovl_au_end();                   /* (the refusal is on the row) */
+            return;
+        }
+    }
+    ovl_au_warp(0);                         /* the program runs at its speed */
+    if (c64_auto == C64_AU_WAIT && c64_au_d64) {
+        c64_au_s = "LOAD\"*\",8,1\r";
+        c64_auto = C64_AU_LOAD;
+    } else {
+        c64_au_s = "RUN\r";
+        c64_auto = C64_AU_RUN;
+    }
+}
+
+/* ovl_auto_begin - from Smart attach, the file already refused or (for a
+ * D64) mounted: start it now if the machine is at the prompt, else reset
+ * and wait for it */
+static void ovl_auto_begin(const char *name, unsigned lo, unsigned hi, int d64)
+{
+    os88_strcpy(c64_au_name, name, sizeof(c64_au_name));
+    c64_au_lo = lo;
+    c64_au_hi = hi;
+    c64_au_d64 = d64;
+    c64_au_s = 0;
+    c64_paste_stop();                       /* (the buffer is the autostart's) */
+    c64_auto = C64_AU_WAIT;
+    if (c64_state == C64_ST_RUN && !c64_pause && ovl_at_ready()) {
+        ovl_au_go();
+        return;
+    }
+    c64_reset_req = 1;                      /* File > Reset machine CPU's */
+    c64_au_fr = c64_frames_lo;
+    ovl_au_warp(1);
+    c64_say("Autostarting...");
+}
+
+/* ovl_auto_step - once a wake, before the slice, with the machine running */
+static void ovl_auto_step(void)
+{
+    int n;
+
+    if (c64_au_s != 0) {
+        if (*c64_au_s != 0) {
+            if (c64_rd(0xC6) != 0)
+                return;                     /* the KERNAL has not drained it */
+            for (n = 0; n < 10 && *c64_au_s != 0; n++)
+                c64_wr(0x277 + n, *c64_au_s++);
+            c64_wr(0xC6, n);
+            c64_au_fr = c64_frames_lo;
+            return;
+        }
+        c64_au_s = 0;
+        if (c64_auto == C64_AU_RUN) {
+            ovl_au_end();
+            return;
+        }
+    }
+    n = (int)((c64_frames_lo - c64_au_fr) & 0xFFFFu);
+    if (n > C64_AU_LATE) {
+        ovl_au_end();
+        c64_say("Autostart: no READY. prompt.");
+        return;
+    }
+    if (n >= 5 && ovl_at_ready())
+        ovl_au_go();
 }
