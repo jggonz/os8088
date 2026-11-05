@@ -206,6 +206,23 @@ mc_drawall:
     mov bx, mc_sb
     call os88ui_sbupdw              ; the whole bar, and what it drew
     call mc_buttons
+    ; --- the scroll keys, beside the buttons, once a paint (SPEC.md 126.3) --
+    mov ax, [mc_cw]                 ; the cells from Quit's end + 8 to the
+    sub ax, MC_HINTX + 8            ; content's right edge less 8
+    jbe .nohint
+    mov cl, 3
+    shr ax, cl
+    mov si, mc_s_hint
+    xor bl, bl
+    call mc_runbuild
+    mov cx, [mc_cx]
+    add cx, MC_HINTX
+    mov dx, [mc_bty]
+    add dx, (MC_BTH - 8) / 2 + 1
+    mov ax, MC_INK
+    mov si, mc_run
+    call OSAPI_FONT_RUN
+.nohint:
     ret
 
 ; -----------------------------------------------------------------------------
@@ -663,5 +680,7 @@ mc_s_copy:    db 'Copy', 0
 mc_s_quit:    db 'Quit', 0
 mc_btlbl:   dw mc_s_refresh, mc_s_probe, mc_s_save, mc_s_copy, mc_s_quit
 mc_btw:     dw 64, 96, 104, 48, 48  ; each button's width, left to right
+MC_HINTX    equ 8 + 64 + 96 + 104 + 48 + 48 + 5 * 8   ; past Quit, a cell on
+mc_s_hint:  db 'N/B page  T/E ends  +/-', 0
     OS88UI_BTNREC mc_btrec, mc_rects, mc_btlbl, mc_bflags, MC_NB, mc_place
 
