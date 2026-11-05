@@ -1897,8 +1897,26 @@ Measured on `286-victory` across 300 frames 20 ms apart, `glitch.py`'s
 one-frame reversions over 40 px in the screen: 19 at the logo with the
 recompiler (and the bottom snow rows without it) -> 0. Such a band is
 composed and compared instead, which is what it was before bands existed.
-`c64uitest`: the sprite fixture now expects NO scroll (red with the refusal
-removed).
+**And the test backs off under one** (`c64_bf_miss`, `c64_bf_wait`): two
+tests in a row that FOUND a band and refused it for a sprite, and the next
+three eligible flushes do not ask - the signature pass and the search were
+~9% of a 286 in the snow scene, spent on a refusal. A test that finds no band
+does not count, because typing and scrolling alternate and the scroll is what
+the test is for; a refused band scroll is drawn anyway, so a skip costs time
+and never a picture. `c64uitest`: the sprite fixture now expects NO scroll
+(red with the refusal removed), and six shifts under a live sprite are
+tested three times (red with the backoff never set: six).
+
+**A matrix-only row is composed by CELLS** (`c64_mono_runs`). Where the
+source proof fails - the row's sources differ from a whole record, nothing
+forced, no sprite on it now or on the glass - the record still names WHICH
+cells moved: only those are composed, in runs with gaps of two or fewer
+folded in, and a gap between runs is filled in the band from the pixel
+shadow, which the record proves is those cells' picture. The compare and the
+one blit over first..last are as before. Falling snow is a cell or two per
+row, far apart, and the composer was the whole first-to-last span.
+`c64uitest`: two pokes 35 cells apart in one recorded row compose 2 cells,
+not 36, in one blit (red with the runs disabled: 36).
 
 **THE SOURCE PROOF.** A row composed in standard text with no sprite over it
 records what it was drawn from - its 40 matrix bytes and 40 colour nibbles

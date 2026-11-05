@@ -178,7 +178,7 @@ static int c64_border_lit;
  * build fails loudly on any that is missed. */
 #ifdef C64_HOST
 static unsigned c64_n_blit, c64_n_fill, c64_n_scroll, c64_n_cell;
-static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2, c64_n_proved, c64_n_fsxrun;
+static unsigned c64_n_dirtypg, c64_n_rows, c64_n_x2, c64_n_proved, c64_n_fsxrun, c64_n_mrun, c64_n_shtest;
 #endif
 
 /* --- the status row's last state, for the delta draw (10) ---------------- */
@@ -1989,6 +1989,9 @@ static int c64_shift_test(int nrows)
 {
     int i, k, moved;
 
+#ifdef C64_HOST
+    c64_n_shtest++;
+#endif
     for (i = 0; i < nrows; i++)
         c64_sig[i] = c64_rowsig(c64_m.ramseg, c64_mbase + C64_X40(i),
                                 c64_col + C64_X40(i), C64_COLS);
@@ -2058,9 +2061,67 @@ static int c64_span_of(int i)
     return 1;
 }
 
+/* c64_mono_runs - text row I, its sources already in c64_srct and DIFFERENT
+ * from its whole record (9.4.1): composes into c64_bnd only the cells whose
+ * matrix or colour byte moved, in runs (a gap of two or fewer is folded in),
+ * and fills a gap between runs from the pixel shadow, which the record
+ * PROVES is those cells' picture. Leaves the span in c64_cspf..c64_cspl for
+ * the compare and the blit, which are as before. Falling snow is a cell or
+ * two per row, far apart: the composer was the whole first-to-last span. */
+static unsigned char c64_bf_miss, c64_bf_wait;   /* the shift test's backoff */
+
+static void c64_mono_runs(int i)
+{
+    int c, a, b, gap, pl;
+    unsigned char *sh;
+
+    sh = c64_srcsh[i];
+    pl = -1;
+    c64_cspf = -1;
+    c = 0;
+    while (c < C64_COLS) {
+        if (c64_srct[c] == sh[c])
+            if (c64_srct[C64_COLS + c] == sh[C64_COLS + c]) {
+                c++;
+                continue;
+            }
+        a = c;
+        b = c;
+        gap = 0;
+        while (c < C64_COLS) {
+            if (c64_srct[c] != sh[c])
+                gap = -1;
+            else if (c64_srct[C64_COLS + c] != sh[C64_COLS + c])
+                gap = -1;
+            if (gap < 0) {
+                b = c;
+                gap = 0;
+            } else if (++gap > 2) {
+                break;
+            }
+            c++;
+        }
+        if (pl >= 0)                        /* the proved cells between */
+            c64_rowcopy(c64_bnd + pl + 1, c64_sh + C64_X320(i) + pl + 1,
+                        a - pl - 1);
+        else
+            c64_cspf = a;
+        c64_band1(c64_bnd, a, b, c64_m.ramseg,
+                  c64_rmb[i] + C64_X40(i),
+                  c64_col + C64_X40(i),
+                  c64_rcrom[i] ? c64_m.romseg : c64_m.ramseg,
+                  c64_rco[i], 0, c64_rv[i][0x21] & 15);
+#ifdef C64_HOST
+        c64_n_mrun++;
+#endif
+        pl = b;
+    }
+    c64_cspl = pl;
+}
+
 static void c64_flush(void *win)
 {
-    int i, k, sp, f, l, df, dl, nrows, w, trust, rc;
+    int i, k, sp, f, l, df, dl, nrows, w, trust, rc, mr, bt;
     int ox, oy, sx, sy, sty, r0, r1, v0, v1;
 
     if (c64_geom(win) < 0)
@@ -2073,6 +2134,7 @@ static void c64_flush(void *win)
     sty = c64_gsty;
     nrows = c64_gnrows;
     c64_sig_ok = 0;
+    bt = 0;
 
     /* --- THE MESSAGE DEADLINE, AT THE TOP, BEFORE ANY BRANCH CAN RETURN ---
      * It used to live down beside the status row, AFTER a branch that
@@ -2151,8 +2213,14 @@ static void c64_flush(void *win)
                      * survived that (9.4: the scroll is a hint and the compare is the
                      * truth) and the COST did not, which is the failure mode this
                      * threshold exists to stop. */
-                    if (nd * C64_SHIFT_DEN >= nrows * C64_SHIFT_NUM)
-                        k = c64_shift_test(nrows);
+                    if (nd * C64_SHIFT_DEN >= nrows * C64_SHIFT_NUM) {
+                        if (c64_bf_wait) {
+                            c64_bf_wait--;
+                        } else {
+                            k = c64_shift_test(nrows);
+                            bt = 1;
+                        }
+                    }
                 }
     if (k) {
         /* POSITIVE dy MOVES THE CONTENT UP, and the whole of this block is
@@ -2198,6 +2266,8 @@ static void c64_flush(void *win)
         for (i = r0; i <= r1; i++)
             if (c64_spsig[i] | c64_sglass[i])
                 k = 0;
+        if (k == 0)
+            bt = 2;                         /* found, and refused under one */
     }
     if (k) {
         if (os88_gfx_scroll(sx, sy + r0 * c64_sch,
@@ -2241,6 +2311,20 @@ static void c64_flush(void *win)
                                              * stays true - nothing moved */
         }
     }
+    /* THE SHIFT TEST BACKS OFF UNDER A SPRITE (9.4.1): two tests in a row
+     * that FOUND a band and refused it because a sprite is on it, and the
+     * next three eligible flushes do not ask. PCUG's snow found its band
+     * under the logo every frame and paid the signature pass and the search
+     * for nothing. A test that finds no band does not count - typing and
+     * scrolling alternate, and the scroll is what the test is for */
+    if (bt) {
+        if (bt == 1) {
+            c64_bf_miss = 0;
+        } else if (++c64_bf_miss >= 2) {
+            c64_bf_miss = 0;
+            c64_bf_wait = 3;
+        }
+    }
 
     /* --- compose, compare, draw ----------------------------------------- */
     for (i = 0; i < nrows; i++) {
@@ -2258,6 +2342,7 @@ static void c64_flush(void *win)
          * unknown on the glass, plain text and no sprite, and its sources
          * read what it was drawn from - the same pixels, proved and not
          * guessed, so neither the compose nor the compare is owed */
+        mr = 0;
         if ((c64_rowd[i] == 1) | (c64_rowd[i] == 8))
             if (c64_force[i] == 0)
                 if (c64_srcok[i] & c64_sh_ok)
@@ -2273,9 +2358,22 @@ static void c64_flush(void *win)
                             c64_rowd[i] = 0;
                             continue;
                         }
+                        /* ...and where it is not, the record still
+                         * names the cells that moved */
+                        if (c64_sglass[i] == 0)
+                            mr = 1;
                     }
         if (c64_rowd[i] == 8)
             c64_rowd[i] = 2;                /* slid and not proved: whole */
+        if (mr) {
+            if ((c64_rv[i][0x21] & 15) != c64_cmask_bg)
+                c64_cmask_for(c64_rv[i][0x21] & 15);
+            c64_mono_runs(i);
+            f = c64_cspf;
+            l = c64_cspl;
+            trust = 1;
+            goto c64_fl_composed;
+        }
 
         /* THE COMPOSE SPAN, and whether the shadow may be trusted for it.
          *   the shadow is invalid            -> the whole row, drawn
@@ -2348,6 +2446,7 @@ static void c64_flush(void *win)
         if (c64_spsig[i])
             c64_spr_draw(i, f, l);
         c64_sglass[i] = (c64_spsig[i] != 0);
+    c64_fl_composed:
         /* ...and the record of what it was drawn from (9.4.1) */
         if ((c64_rmode[i] | c64_spsig[i]) == 0) {
             c64_zcopy_out(c64_srcsh[i] + f, c64_rmb[i] + C64_X40(i) + f,

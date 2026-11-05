@@ -2353,6 +2353,23 @@ int main(int argc, char **argv)
     if (n_band_cells - b_cells != 40)
         fail("one changed row did not compose its 40 cells");
 
+    /* --- TWO POKES 35 CELLS APART IN ONE ROW (9.4.1): the row has a whole
+     *     source record from the row above, so the record names the two
+     *     cells that moved - two composed cells, the 34 between them proved
+     *     and filled from the shadow, and still one blit ---------------- */
+    cost_begin();
+    h_noise();
+    c64_wr(0x0400 + 12 * 40 + 2, 20);
+    c64_wr(0x0400 + 12 * 40 + 37, 21);
+    flush_now();
+    cost_row("two pokes 35 cells apart, one row");
+    audit("after two pokes in one row");
+    if (n_band_cells - b_cells != 2)
+        fail("two pokes in one recorded row composed the span between "
+             "them, not the two cells the record names");
+    if (n_blit - b_blit != 1)
+        fail("two pokes in one row were not one blit");
+
     /* --- TWO POKES IN DISTANT ROWS: the window INTERSECTED with the pages
      *     (9.2). One lo/hi window over the matrix says "rows 0..24" for a
      *     score written at row 0 and a status line at row 24 inside the same
@@ -2553,6 +2570,41 @@ int main(int argc, char **argv)
                  "sprite's pixels moved with it, to be put back a frame later");
         for (r = 0; r <= 12; r++)
             row_truth(r, "after a band moved under a sprite");
+
+        /* ...AND THE TEST BACKS OFF (9.4.1): with the sprite left ON over
+         * the band, six shifts in a row are tested twice, refused twice,
+         * skipped three times and tested once more - and every one of them
+         * is still drawn right. Verified red with c64_bf_wait never set
+         * (six tests) */
+        c64_io_wr(0xD015, 1);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
+        j = (int)c64_n_shtest;
+        for (k = 0; k < 6; k++) {
+            int q;
+            memmove(ram + 0x0400 + 40, ram + 0x0400, 12 * 40);
+            for (q = 0; q < 40; q++)
+                ram[0x0400 + q] = (unsigned char)(1 + ((q * 3 + k) % 26));
+            for (i = 0x0400; i < 0x0400 + 13 * 40; i++)
+                c64_dirty((unsigned)i);
+            c64_scr_wr(0x2C, 0x00); c64_scr_wr(0x2D, 0x04);
+            c64_scr_wr(0x2E, (0x0400 + 13 * 40 - 1) & 0xFF);
+            c64_scr_wr(0x2F, (0x0400 + 13 * 40 - 1) >> 8);
+            c64_dirty_any = 1;
+            b_scroll = n_scroll;
+            flush_now();
+            if (n_scroll - b_scroll != 0)
+                fail("a band under a live sprite was scrolled");
+        }
+        if ((int)c64_n_shtest - j != 3)
+            fail("six shifts under a sprite were not tested exactly three "
+                 "times - the shift test does not back off (9.4.1)");
+        audit("after six shifts under a sprite");
+        c64_io_wr(0xD015, 0);
+        c64_latch(0);
+        c64_latch(0);
+        flush_now();
     }
 
     /* --- AND gfx_blit1 REFUSING: 9.5's SECOND PATH, ONCE ---------------
