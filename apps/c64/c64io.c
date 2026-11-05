@@ -1764,7 +1764,7 @@ static int c64_sid_voice1(void)
  * the KERNAL: c64_rd is RAM by construction (c64mem.inc), so the vector is
  * read through the core's own banked reader.
  * ========================================================================*/
-static void c64_reset_cpu(void)
+static void ovl_reset_cpu(void)
 {
     c64_m.a = 0;
     c64_m.x = 0;

@@ -1455,6 +1455,11 @@ void c64_sprmasks(const unsigned char *sd, unsigned char *mk, int md,
         h_mline(sd + 3 * l, mk + 7 * l, md, xexp);
 }
 
+void c64_wmove(void *dst, const void *src, int nw)
+{
+    memmove(dst, src, (size_t)nw * 2);
+}
+
 int c64_colpair(const unsigned char *sa, const unsigned char *sb, int nb,
                 int d, int lines, int ye, int md, const unsigned *xexp,
                 unsigned char *tmp)
@@ -1739,7 +1744,7 @@ int c64_run(unsigned cycles)
 }
 
 /* the banked reader, the cut and the re-bank. The vector table lives in the
- * modelled ROM image, which is what makes c64_reset_cpu's $FFFC read real. */
+ * modelled ROM image, which is what makes ovl_reset_cpu's $FFFC read real. */
 int c64_bread(unsigned a)
 {
     a &= 0xFFFF;
@@ -5146,7 +5151,7 @@ int main(int argc, char **argv)
     /* --- THE KEYBOARD'S FOUR RULES (7.2) ------------------------------- */
     {
         int i2, before;
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
 
         /* RULE 4, AND ITS UNIT IS EMULATED CYCLES. A fresh press survives in
@@ -5198,7 +5203,7 @@ int main(int argc, char **argv)
          * it waits until `s` has been seen UP for an interval too. Verified
          * to fail with c64_kbd_busy answering 0: both keys are in the
          * matrix at the first poll. */
-        c64_kbd_init();
+        ovl_kbd_init();
         os88_onkey('a', 0x1E, win);
         os88_onkey('s', 0x1F, win);
         c64_kbd_poll();
@@ -5221,7 +5226,7 @@ int main(int argc, char **argv)
         c64_kbd_poll();
         if (c64_ndown != 1 || c64_down[0] != 0x1F)
             fail("the second tap of the same key never went in");
-        c64_kbd_init();
+        ovl_kbd_init();
         c64_cyc_lo = 0;
 
         /* RULE 3: the matrix is REBUILT from the whole down-list. Two keys
@@ -5229,7 +5234,7 @@ int main(int argc, char **argv)
          * must still have it. `!` is 7/0 with SHIFT and `"` is 7/3 with
          * SHIFT (gtk3_sym.vkm), and clearing one key's bits incrementally
          * takes the other's shift with it. */
-        c64_kbd_init();
+        ovl_kbd_init();
         h_keydown[0x02] = 1;                /* the `1` key, for `!` */
         h_keydown[0x03] = 1;                /* the `2` key, for `"` */
         os88_onkey('!', 0x02, win);
@@ -5249,7 +5254,7 @@ int main(int argc, char **argv)
 
         /* the bounded overflow: the 17th simultaneous key is DROPPED, not
          * written past the end of a 16-entry list */
-        c64_kbd_init();
+        ovl_kbd_init();
         for (i2 = 0; i2 < 20; i2++) {
             h_keydown[0x10 + i2] = 1;
             os88_onkey('a' + i2, 0x10 + i2, win);
@@ -5267,7 +5272,7 @@ int main(int argc, char **argv)
 
         /* CTRL+digit comes from the POLL and not from a chord (7.3), which
          * is what keeps VICE's Alt+digit captions */
-        c64_kbd_init();
+        ovl_kbd_init();
         h_keydown[KSC_CTRL] = 1;
         h_keydown[0x03] = 1;                /* the `2` key */
         c64_kbd_poll();
@@ -5281,12 +5286,12 @@ int main(int argc, char **argv)
 
         /* Ctrl+H, Ctrl+I and Ctrl+M are told from BS, Tab and CR by their
          * SCAN CODE and by nothing else (7.3) */
-        c64_kbd_init();
+        ovl_kbd_init();
         os88_onkey(9, KSC_TAB, win);        /* Tab = C= */
         c64_kbd_poll();
         if ((c64_matrix[C64K_LCBM_R] & (1 << C64K_LCBM_C)) == 0)
             fail("Tab did not reach the C= key");
-        c64_kbd_init();
+        ovl_kbd_init();
         os88_onkey(9, KSC_CTRLI, win);      /* the same ascii, Ctrl+I */
         c64_kbd_poll();
         if ((c64_matrix[C64K_LCTRL_R] & (1 << C64K_LCTRL_C)) == 0)
@@ -5298,7 +5303,7 @@ int main(int argc, char **argv)
          * key - the second fire button of a thousand of them - used to see
          * nothing at all, because SHIFT went in only when some other key's
          * mapping asked for it. */
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
         h_keydown[KSC_LSHIFT] = 1;
         c64_kbd_poll();
@@ -5317,14 +5322,14 @@ int main(int argc, char **argv)
         /* ...AND DESHIFT STILL WINS. `*` is 6/1 with the .vkm's 0x10, which
          * means SHIFT actively RELEASED, and that is VICE's
          * `!virtual_deshift` in the same expression. */
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
         h_keydown[KSC_LSHIFT] = 1;
         os88_onkey('*', 0x09, win);
         c64_kbd_poll();
         if ((c64_matrix[C64K_LSHIFT_R] & (1 << C64K_LSHIFT_C)) != 0)
             fail("a DESHIFT mapping did not clear the host's own SHIFT");
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
 
         /* THE KEYSET TAKES ITS KEYS, AND THEY DO NOT REACH THE MATRIX.
@@ -5336,7 +5341,7 @@ int main(int argc, char **argv)
          * AND entered the matrix at the same time - a game polling $DC00 got
          * phantom cursor presses out of $DC01, and moving the stick in BASIC
          * walked the cursor. Right is 0/2 in the .vkm and Down is 0/7. */
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
         h_keydown[KSC_RIGHT] = 1;
         os88_onkey(0, KSC_RIGHT, win);
@@ -5361,7 +5366,7 @@ int main(int argc, char **argv)
         c64_keyset = 1;
         /* ...AND CTRL IS THE ONE DEPARTURE §8 STATES: it is both fire and
          * the CTRL key, so it still reaches the matrix. */
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
         h_keydown[KSC_CTRL] = 1;
         h_keydown[0x03] = 1;                /* Ctrl+2, a colour code */
@@ -5372,24 +5377,24 @@ int main(int argc, char **argv)
             || (c64_matrix[7] & (1 << 3)) == 0)
             fail("the keyset consumed CTRL - it is both fire and the CTRL "
                  "key, which is the one departure §8 states");
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
 
         /* RESTORE is not a matrix key: Page_Up raises an NMI EDGE (7.4) */
-        c64_kbd_init();
+        ovl_kbd_init();
         c64_scr_wr(C64_SCR_IRQ, 0);
         os88_onkey(0, KSC_PGUP, win);
         c64_kbd_poll();
         if ((c64_scr_rd(C64_SCR_IRQ) & 0x02) == 0)
             fail("Page_Up did not raise the RESTORE NMI (7.4)");
         c64_scr_wr(C64_SCR_IRQ, 0);
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
     }
 
     /* --- what CIA1 answers, which is the only reason the matrix exists --- */
     {
-        c64_kbd_init();
+        ovl_kbd_init();
         ovl_reset_regs();
         c64_map_publish();
         c64_cia[0][0x02] = 0xFF;            /* PRA all outputs */
@@ -5404,7 +5409,7 @@ int main(int argc, char **argv)
         if ((c64_kbd_pb() & (1 << 2)) == 0)
             fail("CIA1 PRB pulled a column low for a row nothing selected");
         h_keydown[0x1E] = 0;
-        c64_kbd_init();
+        ovl_kbd_init();
         memset(h_keydown, 0, sizeof(h_keydown));
         ovl_reset_regs();
         c64_map_publish();
@@ -5937,7 +5942,7 @@ int main(int argc, char **argv)
         c64_adv = 0;
         c64_msg[0] = 0;
         c64_state = C64_ST_RUN;
-        c64_kbd_init();
+        ovl_kbd_init();
     }
 
     c64_state = C64_ST_RUN;
@@ -6626,7 +6631,7 @@ int main(int argc, char **argv)
     {
         int i3;
 
-        c64_kbd_init();
+        ovl_kbd_init();
         c64_msg[0] = 0;
         memset(h_keydown, 0, sizeof(h_keydown));
         h_keydown[KSC_UP] = 1;              /* the stick is deflected... */
@@ -6646,7 +6651,7 @@ int main(int argc, char **argv)
 
         /* THE NEGATIVE CONTROL: a machine WITH a mouse delivers the arrow to
          * os88_onkey, and then the message must never appear. */
-        c64_kbd_init();
+        ovl_kbd_init();
         c64_msg[0] = 0;
         memset(h_keydown, 0, sizeof(h_keydown));
         os88_onkey(0, KSC_UP, win);         /* the kernel passed it: a mouse
@@ -6659,7 +6664,7 @@ int main(int argc, char **argv)
                  "cursor keys - the hint is wrong there and the control is "
                  "what makes the row above mean anything");
         memset(h_keydown, 0, sizeof(h_keydown));
-        c64_kbd_init();
+        ovl_kbd_init();
         c64_msg[0] = 0;
         c64_state = C64_ST_RUN;
     }

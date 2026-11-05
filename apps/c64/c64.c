@@ -197,6 +197,7 @@ int c64_colpair(const unsigned char *sa, const unsigned char *sb, int nb,
                 int d, int lines, int ye, int md, const unsigned *xexp,
                 unsigned char *tmp);
 void c64_rowcopy(unsigned char *dst, const unsigned char *src, int n);
+void c64_wmove(void *dst, const void *src, int nw);   /* words, DS to DS */
 unsigned c64_rowsig(unsigned mseg, unsigned moff,
                     const unsigned char *col, int n);
 void c64_x2init(void);
@@ -578,9 +579,9 @@ static void c64_watch_set(void);
 static void c64_menu_state(void);
 static void ovl_tier_init(void);
 static void c64_fullscreen_toggle(void *win);
-static void c64_ram_pattern(void);
+static void ovl_ram_pattern(void);
 static void ovl_reset_regs(void);
-static void c64_reset_cpu(void);
+static void ovl_reset_cpu(void);
 static void c64_irq_update(void);
 static void c64_nmi_raise(void);
 static void c64_advance(int n);
@@ -814,7 +815,7 @@ static void c64_say(const char *s)
  * pass 1). */
 #define c64_rampat c64_bnd
 
-static void c64_ram_pattern(void)
+static void ovl_ram_pattern(void)
 {
     unsigned a;
     int i, p, inv, want, n;
@@ -1571,7 +1572,7 @@ static void ovl_advance_frame(void)
  * cycle fills RAM the way a cold machine comes up and the CPU reset does not.
  * AND "THE WAY A COLD MACHINE COMES UP" IS NOT ZEROS - VICE gives the C64 the
  * factory pattern at src/ram.c:169-177, 00 00 00 00 FF FF FF FF offset by two
- * bytes and inverted every 16K, and c64_ram_pattern is that arithmetic. A zero
+ * bytes and inverted every 16K, and ovl_ram_pattern is that arithmetic. A zero
  * fill is harmless while there is no core and wrong the moment there is one:
  * the KERNAL's RAM test and any program that reads uninitialised memory both
  * see it.
@@ -1592,7 +1593,7 @@ static void ovl_reset_service(void)
 
     c64_reset_req = 0;
     if (kind == 2)
-        c64_ram_pattern();
+        ovl_ram_pattern();
     c64_paste_stop();                       /* kbdbuf_abort (src/kbdbuf.c:312-
                                              * 320, from machine_reset at
                                              * src/machine.c:262) empties the
@@ -1620,7 +1621,7 @@ static void ovl_reset_service(void)
     ovl_reset_regs();
     c64_lum_update();
     c64_frame_regs();
-    c64_reset_cpu();                        /* the 6510 out of reset: I set,
+    ovl_reset_cpu();                        /* the 6510 out of reset: I set,
                                              * PC from $FFFC under the KERNAL
                                              * (11.1) - and the KERNAL draws
                                              * its own boot screen from here */
@@ -2174,12 +2175,12 @@ static void *ovl_main(void)
     ovl_reset_regs();                       /* the VIC/CIA/SID register files */
     c64_lum_update();                       /* the 1bpp masks, off $D021 (9.6) */
     ovl_dither_init();                      /* ...and the other modes' (9.10) */
-    c64_ram_pattern();                      /* power-on RAM is VICE's factory
+    ovl_ram_pattern();                      /* power-on RAM is VICE's factory
                                              * pattern and not zeros
                                              * (src/ram.c:169-177), and the
                                              * scratch is left alone (3.5) */
     ovl_scratch_clear();
-    /* (no c64_kbd_init: the keyboard state is bss, zeroed by the loader,
+    /* (no ovl_kbd_init: the keyboard state is bss, zeroed by the loader,
      * and nothing above has touched it - c64kbd.c says so at the function) */
     /* THE KEY-STATE MAP IS ARMED HERE AND NOWHERE ELSE (7.2's rule 1).
      * OSAPI_KEY_DOWN's FIRST call clears and arms the map and always answers
@@ -2191,7 +2192,7 @@ static void *ovl_main(void)
                                              * RANGE, so the write window is
                                              * taken over the matrix from the
                                              * very first poke (9.2) */
-    c64_reset_cpu();                        /* the 6510 out of reset, PC from
+    ovl_reset_cpu();                        /* the 6510 out of reset, PC from
                                              * $FFFC under the KERNAL (11.1) */
     c64_state = C64_ST_RUN;                 /* ...and the KERNAL draws its own
                                              * boot screen from the first wake */

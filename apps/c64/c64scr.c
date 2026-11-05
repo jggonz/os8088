@@ -88,8 +88,8 @@ static unsigned char c64_sglass[C64_ROWS];
 /* c64_row_slide - row FROM's shadows to row TO: the pixels and the sources */
 static void c64_row_slide(int to, int from)
 {
-    os88_memcpy(c64_sh + C64_X320(to), c64_sh + C64_X320(from), 320);
-    os88_memcpy(c64_srcsh[to], c64_srcsh[from], C64_COLS * 2);
+    c64_wmove(c64_sh + C64_X320(to), c64_sh + C64_X320(from), 160);
+    c64_wmove(c64_srcsh[to], c64_srcsh[from], C64_COLS);
     c64_srcok[to] = c64_srcok[from];
     c64_sglass[to] = c64_sglass[from];
 }

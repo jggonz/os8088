@@ -57,6 +57,7 @@ _c64_bfbest: resw 1                  ; c64_bandfind's best score...
 c64_bfk:    resw 1                  ; ...its k...
 c64_bfkk:   resw 1                  ; ...the k being tried...
 c64_bfst:   resw 1                  ; ...and the run's first row
+c64_bfcnt:  resw 1                  ; ...and the rows left of this k
 c64_bmblk:  resb 16
 c64_bmend:  resw 1                  ; ...and where its cell's eight lines end
 
@@ -443,46 +444,65 @@ _c64_bandfind:
     jnz .k1
     jmp .knext
 .k1:
+    ; ONLY THE ROWS WHOSE PARTNER EXISTS: i from max(0, -k) to
+    ; min(n, n - k), walked by pointer - where every i used to be tested
+    ; against both ends and its two words found from the arguments. The same
+    ; runs in the same order, so the same answer
+    xor bx, bx                      ; BX = the first i
+    mov cx, [bp+8]                  ; CX = one past the last
+    or ax, ax
+    jns .kpos
+    neg ax
+    mov bx, ax
+    jmp short .krng
+.kpos:
+    sub cx, ax
+.krng:
+    sub cx, bx
+    jg .kwalk
+    jmp .knext
+.kwalk:
+    mov [c64_bfcnt], cx
+    shl bx, 1
+    mov si, [bp+4]
+    add si, bx                      ; SI = &sig[i]
+    mov di, [bp+6]
+    add di, bx
+    mov ax, [c64_bfkk]
+    shl ax, 1
+    add di, ax                      ; DI = &shsig[i + k]
+    add bx, [bp+6]                  ; BX = &shsig[i]
     xor cx, cx                      ; CX = the run, DX = its changed rows
     xor dx, dx
-    xor bx, bx                      ; BX = i
 .iloop:
-    cmp bx, [bp+8]
-    jge .iend
-    mov ax, bx
-    add ax, [c64_bfkk]              ; j = i + k
-    js .brk
-    cmp ax, [bp+8]
-    jge .brk
-    mov si, bx
-    shl si, 1
-    add si, [bp+4]
-    mov si, [si]                    ; sig[i]
-    mov di, ax
-    shl di, 1
-    add di, [bp+6]
-    cmp si, [di]                    ; shsig[j]
+    mov ax, [si]
+    cmp ax, [di]
     jne .brk
     or cx, cx
     jnz .run
-    mov [c64_bfst], bx
+    push ax
+    mov ax, si
+    sub ax, [bp+4]
+    shr ax, 1
+    mov [c64_bfst], ax              ; the run's first row
+    pop ax
 .run:
     inc cx
-    mov di, bx
-    shl di, 1
-    add di, [bp+6]
-    cmp si, [di]                    ; shsig[i]: did it change?
+    cmp ax, [bx]                    ; shsig[i]: did it change?
     je .inext
     inc dx
     jmp short .inext
 .brk:
+    jcxz .inext
     call .score
     xor cx, cx
     xor dx, dx
 .inext:
-    inc bx
-    jmp .iloop
-.iend:
+    add si, 2
+    add di, 2
+    add bx, 2
+    dec word [c64_bfcnt]
+    jnz .iloop
     call .score
 .knext:
     inc word [c64_bfkk]
@@ -1388,6 +1408,32 @@ _c64_sprbehind:
     add si, 8
     dec dx
     jg .b
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void c64_wmove(void *dst, const void *src, int nw)
+; NW words, DS to DS, forward - a scrolled row's shadows (c64_row_slide, 9.4),
+; ~150 rows a second under the PCUG demo's scroll, at half os88_memcpy's
+; byte-at-a-time cost. Blocks that do not overlap.
+; -----------------------------------------------------------------------------
+_c64_wmove:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push es
+    push ds
+    pop es
+    cld
+    mov di, [bp+4]
+    mov si, [bp+6]
+    mov cx, [bp+8]
+    rep movsw                       ; cc8086:allow ES = DS, loaded above and
+                                    ; restored below; DF clear
+    pop es
     pop di
     pop si
     pop bp

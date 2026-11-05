@@ -573,11 +573,18 @@ class T(Gen):
           "    mov byte [%s], 2" % S(S_ANY),
           "    mov [%s], bh" % S(S_LASTPG),
           ".win:")
-        win = ["    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
+        # (the window inside-first, as m65gen.py's c64_mark: a store already
+        # inside it is two compares)
+        win = ["    cmp bx, [%s]" % S(S_WLO), "    jb .lo",
+               "    cmp bx, [%s]" % S(S_WHI), "    jbe .out",
                "    cmp bx, [%s]" % S(S_WATHI), "    ja .out",
-               "    cmp bx, [%s]" % S(S_WLO), "    jae .nolo",
+               "    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
+               "    mov [%s], bx" % S(S_WHI),
+               "    jmp short .out",
+               ".lo:",
+               "    cmp bx, [%s]" % S(S_WATLO), "    jb .out",
+               "    cmp bx, [%s]" % S(S_WATHI), "    ja .out",
                "    mov [%s], bx" % S(S_WLO),
-               ".nolo:",
                "    cmp bx, [%s]" % S(S_WHI), "    jbe .out",
                "    mov [%s], bx" % S(S_WHI),
                ".out:"]
@@ -600,7 +607,7 @@ class T(Gen):
           "    mov [cs:0x%04X], bx" % JC_HITA,            # the address
           "    mov [cs:0x%04X], bh" % JC_FLUSH,           # the page to blame
           "    mov byte [cs:0x%04X], 1" % (JC_FLUSH + 1),  # ...and the request
-          *[w.replace(".out", ".hout").replace(".nolo", ".hnolo") for w in win],
+          *[w.replace(".out", ".hout").replace(".lo", ".hlo") for w in win],
           "    add sp, 2",                  # this block is not returned to
           "    push ax", "    mov al, dl", "    xor ah, ah",
           "    sub bp, ax", "    pop ax",     # the cycles wr_hi had not taken
