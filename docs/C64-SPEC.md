@@ -2103,6 +2103,25 @@ Measured on `286-victory`: a BASIC loop printing and scrolling, in warp,
 28.0% -> 30.8%. On the 286 the composer is the cost; on an 8088 the blits a
 scroll saves are.
 
+#### 9.4.2 The 2026-11 profile round
+
+A profile of the PCUG demo's snow scene and BASIC's three benchmarks on
+86Box `286-victory`, in warp, each change measured against the commit before
+it rebuilt on the same machine:
+
+| change | where | PCUG snow, warp | BASIC B1 / B2 / B3 |
+|---|---|---|---|
+| (before) | | 59.7% | 111.8% / 103.4% / 111.2% |
+| the damage mark's write window tested inside-first: two compares for a store already inside it, where the watch range was tested first (the same answer in every reachable state, checked exhaustively) | `jm_mark` (`m65tmpl.py`), `c64_mark`/`vid_mark` (`m65gen.py`) | 62.5% | |
+| a scrolled row's shadows moved by words (`c64_wmove`), ~150 rows a second under the demo | `c64_row_slide` | 62.8% | |
+| `$DC00`/`$DC01` reads skip the matrix walk with no key down (`c64_mat_any`) | `c64_kbd_pa`/`pb` | | 112.4% / 104.3% / 112.1% |
+| §9.4.1's band search walks only the rows whose partner exists, by pointer | `c64_bandfind` | 63.0% (warp draws 10 a second); at normal speed 56% -> 58% | |
+
+What the profile left, in order: the recompiler's `jm_mark` itself (~13%
+in the snow, most of it the call and the fast-path tests), the kernel's
+blits, the composers, voice 3's noise (`c64_osc3`, ~2%, already clocked
+eight bits at a time) and `c64_rowsig`.
+
 ### 9.5 The composers
 
 `apps/c64/c64band.inc` — `rcband.inc`'s shape, **1bpp only**, every entry
