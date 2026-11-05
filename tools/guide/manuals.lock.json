@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "d962e6ab",
+  "stamped": "0bffe893",
   "strings": "c76d87430df46fe3",
-  "why": "the D64 in extended memory beside the recompiler"
+  "why": "sprite scroll refusal, fullscreen cell runs"
  },
  "CALC_O88": {
   "sources": [
