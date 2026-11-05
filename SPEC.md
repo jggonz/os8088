@@ -237290,8 +237290,8 @@ frame. A clip's head is read before it may start anyway (125.4), so its
 entries are read WITH it: they are the first bytes of its ring, the
 picture's cursor stays on them until the entry is drawn (which keeps the
 reader off them), and the sound's goes past them to record 0 as the clip
-is anchored. A clip's entries are at most 32 KB (`ENT_CLIP`), so the
-smallest ring (48 KB) holds them and a piece of the clip after them. The
+is anchored. A clip's entries are at most 60 KB (`ENT_CLIP`), and the
+engine wants a ring of the largest clip's entries and 16 KB past them (`vb_rmin`; a title's way out, whole-screen entries, is the big one), so a clip always has its record 0 read with them. The
 engine refuses version 7 with *BATTLE.VBT is an older build: rebuild it*.
 Versions 6 and 7 brought the loops (125.3.1) and streamed them, and took
 the idle loop's records out of the block into a region of their own.

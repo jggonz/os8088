@@ -831,6 +831,27 @@ vb_load:
 .fail1:
     jmp .fail
 .sized:
+    ; THE SMALLEST RING this bundle can play from (format 8): its largest
+    ; clip's entries and 16 KB past them - record 0 and a piece, read with
+    ; the entries before the clip may start (vb_headof)
+    xor ax, ax
+    mov cx, [vb_meta+VH_NCLIPS]
+    xor bx, bx
+.em:
+    push cx
+    call vb_crec                    ; (CL spent)
+    pop cx
+    cmp ax, [si+VC_ESZ]
+    jae .em1
+    mov ax, [si+VC_ESZ]
+.em1:
+    inc bx
+    loop .em
+    add ax, 63                      ; paragraphs to KB, up
+    mov cl, 6
+    shr ax, cl
+    add ax, 16
+    mov [vb_rmin], ax
     ; the resident claim's parts, each rounded to 4 KB, in paragraphs: the
     ; block, the menu's effects, the music (its ring and guard, or all of
     ; it), the idle loop. (The entries were a part, every action's held for
@@ -1168,6 +1189,8 @@ vb_rclaim:
     and ax, 0xFFFC
     cmp ax, VB_CRMIN
     jb .cno
+    cmp ax, [vb_rmin]               ; (and the largest clip's entries with
+    jb .cno                         ; room past them: format 8)
     push ax
     add ax, dx
     call OSAPI_MEM_CLAIM
@@ -3772,6 +3795,7 @@ VB_VAR vb_rg1, RG_SIZE
 VB_VAR vb_cring, 2
 VB_VAR vb_pring, 2
 VB_VAR vb_pentry, 2
+VB_VAR vb_rmin, 2                   ; the smallest ring that plays it, KB
 VB_VAR vb_dmin, 2
 VB_VAR vb_stall, 2
 VB_VAR vb_alate, 2

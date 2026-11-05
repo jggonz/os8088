@@ -57,10 +57,10 @@ ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # floppy and a FAT16 hard disk to 128 MB
 REGION_MAX = 60 * 1024  # a RESIDENT region is read into one claim's piece
 ENT_MAX = 0x10000 * 16   # the idle loop: a paragraph number names each record
-ENT_CLIP = 32 * 1024    # a clip's ENTRIES, in front of its records (format 8):
-                        # read into its ring with its head, so they must sit
-                        # in the smallest ring (VB_CRMIN 48 KB) with a piece
-                        # of its records after them
+ENT_CLIP = 60 * 1024    # a clip's ENTRIES, in front of its records (format 8):
+                        # read into its ring with its head, so the engine
+                        # wants a ring of them and 16 KB more (vb_rmin); a
+                        # title's way out, whole-screen entries, is the big one
 REC_MAX = 16384     # a record is read contiguously out of a clip's ring, so
                     # it is at most the ring's guard (VB_CGUARD, 125.4)
 MAX_CLIPS = 64

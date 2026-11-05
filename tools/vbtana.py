@@ -609,6 +609,9 @@ def memory(data, free_kb=None):
                            len(b.imgs), b.band[1])
     res = sum(n for _, n in parts)
     ring = ring_of(res, b.maxrec, free_kb)
+    emin = (max(c["esz"] for c in b.clips) + 1023) // 1024 + 16
+    if ring is not None and ring < emin * 1024:   # (vb_rmin: the largest
+        ring = None                     # clip's entries and 16 KB past them)
     return dict(parts=parts, resident=res, card=VB_CARD * 1024,
                 ring=ring, free=(free_kb or VB_FREE) * 1024, music_resident=b.mlen <=
                 VB_MRES)

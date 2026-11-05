@@ -307,17 +307,18 @@ with tempfile.TemporaryDirectory() as tdir:
                                  "characters.0")] ==
        ["clips", "openings", "battle", "enemy", "party"],
        "a check's place sends the window to its tab")
-    # THE MEMORY: the arithmetic against the engine's own rings, MEASURED
-    # on MartyPC's XT for the rules battle (VB_FREE_SRC): 140 KB each
+    # THE MEMORY: the engine's own arithmetic (vb_load, vb_rclaim) out of
+    # VB_FREE, MEASURED on MartyPC's Hercules 5150 (VB_FREE_SRC): at format
+    # 8 the entries ride in their clips, the band's buffers are the band's
     import vbtrulesdemo as D
     rdata, _ = D.bundle(D.make_project())
     mem = A.memory(rdata)
-    ok(mem["ring"] == 140 * 1024 and mem["resident"] == 120 * 1024,
-       "the rules battle: a 120 KB resident claim, rings of 140 KB - the "
-       "engine's own on a 640 KB XT, measured at format 7 (%s, %s)"
+    ok(mem["resident"] == 72 * 1024 and mem["ring"] == 180 * 1024,
+       "the rules battle: a 72 KB resident claim, rings of 180 KB (format "
+       "8; it was 120 and 140 at format 7) (%s, %s)"
        % (mem["resident"], mem["ring"]))
-    ok(A.memory(rdata, free_kb=250)["ring"] is None,
-       "...and with 250 KB free, no ring of 48 KB: Not enough memory")
+    ok(A.memory(rdata, free_kb=200)["ring"] is None,
+       "...and with 200 KB free, no ring of 48 KB: Not enough memory")
     pr = P.Project.load(vbp)
     data = B2.build_project(pr)
     pr.set(("target", "profile"), "floppy")
