@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "25c344bc",
-  "strings": "fb0264ca369dbc30",
-  "why": "menus trimmed, frame skip items"
+  "stamped": "aa80a581",
+  "strings": "ed3a576776586bbc",
+  "why": "Smart attach reads .T64 tape images"
  },
  "CALC_O88": {
   "sources": [
