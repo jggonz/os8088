@@ -318,8 +318,8 @@ named per wave and run once, after the last (CLAUDE.md, *Testing*).
 - [x] Input state cleared at every door (`ar_door`).
 
 ### R5: Q\*bert's sound
-- [x] Measured first (`tools/qbsnd.py`): 28 sounding codes, 35.8 s in all;
-      the game's 13 about 11.5 s; ~4,200 6503 instructions a frame. Too
+- [x] Measured first (`tools/qbsnd.py`): 28 sounding codes, 36.4 s in all;
+      the game's 13 about 11.7 s; ~4,200 6503 instructions a frame. Too
       much to render and keep beside a `.ROM`, so LIVE (ARCADE-SPEC 13.1).
 - [x] The 6502 core (`arc6502.inc`) and the board (`arcqbs.inc`): the
       RIOT, the latch, the per-sample stream at 10,989 Hz. `QBERT.ROM`

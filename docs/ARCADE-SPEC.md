@@ -1360,8 +1360,8 @@ Python, after MAME's `gottlieb_a.cpp`, and it measured the choice:
 | | MEASURED |
 |---|---|
 | codes 1 to 63 that sound | 28 |
-| their length, all together | 35.8 s (one runs to the 8-second limit) |
-| the 13 codes Q\*bert sends in 3,000 frames of attract and a game (`tests/qbnative.py --sndlog`) | about 11.5 s |
+| their length, all together | 36.4 s (one runs to the 8-second limit) |
+| the 13 codes Q\*bert sends in 3,000 frames of attract and a game (`tests/qbnative.py --sndlog`) | about 11.7 s |
 | the 6503's instructions a frame | about 4,200 |
 
 Rendered once and kept, the sounds the game uses would be some 90KB at
@@ -1378,8 +1378,9 @@ The first measurement, and the first build, counted every 6502 branch as
 `branch()` added its taken and page-cross cycles to it. The core's own
 test found it (its author could not see why silicon's count and the
 reference's differed by exactly those cycles). Mended, a delay loop runs
-at its true speed and the sounds are a quarter longer and lower; the table
-above is re-measured with it.
+at its true speed - a quarter slower, so a tone made by one is lower - but
+the sounds' LENGTHS moved by under 2% (35.8 s to 36.4 s), since the board
+times them by its RIOT's timer. The table above is re-measured with it.
 
 ### 13.2 The 6503 (`arc6502.inc`)
 

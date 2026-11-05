@@ -11,7 +11,7 @@
 ; It runs LIVE, into the Sound Blaster stream (ARCADE-SPEC 8): each sample
 ; the stream asks for is the DAC's value after the 6503 has run that
 ; sample's share of its clock. MEASURED first (13.1): the board's 28 sounding
-; codes are 35.8 s of sound in all, too much to render once and keep beside
+; codes are 36.4 s of sound in all, too much to render once and keep beside
 ; a .ROM on a 360KB disk; and the core's ESTIMATED cost, ~82 286-cycles a
 ; 6502 instruction, is a 29 MHz 286's worth for the board alone - so it runs
 ; on a 386 or better, and a 286 or an 8088 plays Q*bert silent, as before.
