@@ -151,9 +151,9 @@
   "sources": [
    "apps/c64"
   ],
-  "stamped": "aa80a581",
-  "strings": "ed3a576776586bbc",
-  "why": "Smart attach reads .T64 tape images"
+  "stamped": "5f9fe3c1",
+  "strings": "5f97586491636ed4",
+  "why": "Smart attach autostarts"
  },
  "CALC_O88": {
   "sources": [
