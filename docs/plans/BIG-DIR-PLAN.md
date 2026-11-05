@@ -193,7 +193,11 @@ that, at a cost of up to 255 bytes of padding per claim.
 Expected: + the count-past-cap, + grow/shrink in `fmv_load`, + the status-line
 variant, + the harvest budget, +/- the sort rewrite (a Shell sort is a little
 larger than the selection sort), - 40 `.bss` (`FS_MSEL` moving out), and the
-byte-to-word widenings. A guess is a few hundred bytes of `.cold` on
+byte-to-word widenings. Headroom at `c797894`, from `make`'s own `kernsize` lines: `kern_big`
+KERN_SIZE 96,768 of KERN_BUDGET 100,864 (4,096 spare); `kern_small` 59,392 of
+64,000 (4,608 spare) - stated in bytes as the banner rule asks, and the work
+is priced against the byte, not those steps.
+A guess is a few hundred bytes of `.cold` on
 `kern_big`, resident and billed by `KERN_BUDGET`; to be **measured by span**,
 not by rung, on both kernels before the first commit that spends it. On
 `kern_small` the multi-select half does not exist and the rest is smaller.
