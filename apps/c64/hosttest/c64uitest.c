@@ -4909,9 +4909,16 @@ int main(int argc, char **argv)
         if (h_opl[0xA1] != (580 & 0xFF) || h_opl[0xB1] != (0x20 | (4 << 2) | (580 >> 8)))
             fail("voice 2's 440 Hz did not reach OPL channel 1 as block 4, "
                  "F-number 580, keyed on (11.4.3)");
-        if (h_opl[0x21] != 0x22 || h_opl[0x64] != ((15 << 4) | 6)
-                || h_opl[0x84] != (((15 - 10) << 4) | 8))
+        if (h_opl[0x21] != 0x22 || h_opl[0x64] != ((15 << 4) | 6))
             fail("voice 2's pulse patch or its ADSR did not reach channel 1");
+        /* SUSTAIN 10 IS -3.5 dB ON THE SID (linear, 10/15), SO SL 1 - the
+         * OPL's steps are 3 dB. The linear map `15 - s` made it SL 5,
+         * -15 dB, and the C64 sounded far softer than everything else on
+         * the machine (11.4.3). Red with that map put back */
+        if (h_opl[0x84] != ((1 << 4) | 8))
+            fail("voice 2's sustain 10 did not reach channel 1 as SL 1 - "
+                 "the SID's sustain is linear and the OPL's SL is 3 dB a "
+                 "step (11.4.3)");
         c64_io_wr(0xD40B, 0x40);
         os88_onwake(win);
         if (h_opl[0xB1] & 0x20)

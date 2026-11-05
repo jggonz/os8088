@@ -3015,7 +3015,7 @@ OPL2 mode; `c64_opl_open` in `c64.asm`), and the three voices go to channels
 | waveform | a patch, loaded when it changes: pulse a modulator at twice the carrier (odd harmonics), sawtooth x1 with feedback 5, triangle the modulator silent (near a sine), noise x15 at full feedback |
 | frequency | block and F-number: `F × 985248 / 2^24` Hz is `fnum × 49716 / 2^(20−b)`, so `fnum = (F × 0.61928) >> (b−1)`, through `c64_muldiv` |
 | gate | the key; a gate that OPENED since the last batch re-keys (off then on in one batch), restarting the envelope |
-| attack, decay, sustain, release | the carrier's AR/DR/SL/RR by table (the SID's 2 ms .. 8 s against the OPL's halving steps) |
+| attack, decay, sustain, release | the carrier's AR/DR/SL/RR by table (the SID's 2 ms .. 8 s against the OPL's halving steps). **Sustain is a level, not a time**: the SID's is LINEAR (s/15) and the OPL's SL is 3 dB a step, so `c64_fmsl` is `round(-20 log10(s/15) / 3)`. It was `15 - s`, which played a sustain of 8 at -21 dB where the SID holds -5.5 - the owner heard the C64 as far softer than everything else on the machine |
 | `$D418` volume | the carrier's attenuation, 0.75 dB a step |
 | filters, ring, sync | not modelled |
 

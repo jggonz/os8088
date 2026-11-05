@@ -1553,6 +1553,15 @@ static const unsigned char c64_fmdr[16] = {
  * (rwfm.inc's table: 20 log10(v/15) / 0.75) */
 static const unsigned char c64_fmtl[16] = {
     63, 31, 23, 19, 15, 13, 11, 9, 7, 6, 5, 4, 3, 2, 1, 0 };
+/* ...and the SID's SUSTAIN 0-15, also a LINEAR amplitude (s/15), as the
+ * carrier's SL, whose steps are 3 dB: round(-20 log10(s/15) / 3), and 15
+ * (the OPL's quietest) for 0. It was `15 - s`, a linear map onto a
+ * logarithmic register, so a sustain of 8 sounded at -21 dB where the SID
+ * holds it at -5.5 - a tenth of the amplitude, on the level most notes
+ * spend their time at; the owner heard the C64 as far softer than
+ * everything else on the machine */
+static const unsigned char c64_fmsl[16] = {
+    15, 8, 6, 5, 4, 3, 3, 2, 2, 1, 1, 1, 1, 0, 0, 0 };
 
 static void c64_fm_put(int reg, int val)
 {
@@ -1622,7 +1631,7 @@ static void ovl_fm_update(void)
             sh[4] = (unsigned char)x;
             c64_fm_put(0x63 + v, x);
         }
-        x = (unsigned)((15 - (c64_sid[base + 6] >> 4)) << 4)
+        x = (unsigned)(c64_fmsl[c64_sid[base + 6] >> 4] << 4)
           | c64_fmdr[c64_sid[base + 6] & 15];       /* sustain, release */
         if (x != sh[5]) {
             sh[5] = (unsigned char)x;
