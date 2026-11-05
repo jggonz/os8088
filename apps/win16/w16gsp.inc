@@ -467,7 +467,7 @@ w16s_lgrow:
     ja .no
 %ifdef PKG_MEGA
     mov cl, ch                      ; CH (.blkcap's): 1 when the heap's selector
-    xchg cl, [w16_pmonly]           ;   follows the block, and then a locked
+    xchg cl, [w16_lkmove]           ;   follows the block, and then a locked
     push cx                         ;   block may move (124.31.3) for this call,
 %endif                              ;   as Windows' did: 0, and none moves that
     xor ax, ax                      ;   would leave the program's DS behind,
@@ -481,7 +481,7 @@ w16s_lgrow:
     add sp, 8
 %ifdef PKG_MEGA
     pop cx
-    mov [w16_pmonly], cl
+    mov [w16_lkmove], cl
 %endif
     or ax, ax
     jz .no

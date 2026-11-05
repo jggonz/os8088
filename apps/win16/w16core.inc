@@ -631,6 +631,9 @@ w16_cbcall:
     mov ax, w16_cbret
     call w16_ppush
     mov ax, dx
+%ifdef PKG_MEGA
+    and al, 0xFC                    ; RPL 0: entered by a retf, an odd CS
+%endif                              ;   would be a ring change (124.25.23)
     call w16_ppush
     pop ax
     call w16_ppush

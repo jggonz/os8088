@@ -44,6 +44,32 @@ w16n_tail:
 ; -----------------------------------------------------------------------------
 
 %ifdef PKG_MEGA
+; w16s_mvpre - GlobalReAlloc's move (w16k_grealloc), first, before anything
+; is copied: ES = the block's header, SI = its handle's entry or 0FFFFh, DI =
+; what the program named. CF = 0: it may move, and a MOVEABLE block the
+; program named by its selector is moved as its HANDLE (SI its entry, DI the
+; handle), so the entry follows it. CF = 1: a LOCKED block that was ever
+; tiled (GH_TN), whose tiles the program may hold and which would not follow.
+; Being called is half of it: part 9 is here before the copy, so w16s_gwin
+; after it cannot fail. Keeps the rest. (SPEC.md 124.31.3)
+w16s_mvpre:
+    cmp byte [es:GH_LOCK], 0
+    je .ul
+    cmp byte [es:GH_TN], 0
+    stc
+    jne .out
+.ul:
+    cmp si, 0xFFFF
+    jne .ok
+    test byte [es:GH_FLAGS], GHF_MOVE
+    jz .ok
+    mov di, [es:GH_HANDLE]
+    lea si, [di - W16_GH0]
+.ok:
+    clc
+.out:
+    ret
+
 ; w16s_gwin - GlobalReAlloc's move (w16k_grealloc), between the copy and
 ; the old block's free: [w16_gold] = the old header, ES = the new block's
 ; data, whose header has the old one's flags already. The old block's handle

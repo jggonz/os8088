@@ -213,11 +213,8 @@ w16_load:
     test ax, NEF_PMODE
     jnz .flagref
 %else
-    push ax                         ; ...and its locked blocks may move
-    and al, NEF_PMODE               ;   (SPEC.md 124.31.3)
-    mov [w16_pmonly], al
-    pop ax
-%endif
+    mov byte [w16_lkmove], 1        ; ...and its locked blocks may move, as
+%endif                              ;   any program's (SPEC.md 124.31.3)
     mov al, [es:si + NE_EXETYP]
     cmp al, 2                       ; Windows, or 0 (unknown - early linkers)
     je .exeok
@@ -1603,18 +1600,26 @@ section .w16ld
 ; w16l_ssel - the arm's selector for one of the program's segments (SPEC.md
 ; 124.31.4): AX = its paragraph ([w16_sbase + BX]), BX = its index * 2, ES =
 ; the tables -> AX = SEG_SUBC's code half for a code segment, a data selector
-; for a data one, each reaching [w16_slen + BX]. Keeps every other register.
+; for a data one, each reaching [w16_slen + BX]; a LIBRARY's DGROUP its
+; block's handle descriptor, odd, the value its hInstance and its prologs'
+; DS are (SPEC.md 124.25.23). Keeps every other register.
 w16l_ssel:
     push dx
     mov dx, bx                      ; its number: a stable selector first
     shr dx, 1                       ;   (SPEC.md 124.26.12)
     inc dx
     call w16l_stabget               ; CF=0: AX = it
-    pop dx
-    jnc .stab
+    jnc .stabp
     push cx
     push si
     mov si, [w16_ne]
+    cmp dx, [es:si + NE_AUTODATA]
+    jne .notdg
+    test byte [es:si + NE_FLAGS + 1], NEF_LIB >> 8
+    jz .notdg
+    ICALL w16_pblk                  ; a library's DGROUP is a global block
+    jmp short .dgp
+.notdg:
     add si, [es:si + NE_SEGTAB]
     shl bx, 1
     shl bx, 1
@@ -1626,9 +1631,11 @@ w16l_ssel:
     shr bx, 1
     shr bx, 1
     ICALL w16_ssel
+.dgp:
     pop si
     pop cx
-.stab:
+.stabp:
+    pop dx
     ret
 
 ; w16l_thkcs - DX = the thunks' paragraph -> DX = the module block's code

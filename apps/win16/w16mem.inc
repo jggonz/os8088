@@ -1234,14 +1234,16 @@ w16k_grealloc:
     jnz .fail
 %else
     jz .unlocked
-    cmp byte [w16_pmonly], 0        ; ...or a protected-mode-only program's,
-    je .fail                        ;   whose selector follows it (w16_pblk,
-    test byte [es:GH_FLAGS], GHF_HND ;   w16s_gwin; SPEC.md 124.31.3)
-    jz .fail
+    cmp byte [w16_lkmove], 0        ; ...or with the selector it holds, for
+    je .fail                        ;   any program (w16_pblk, w16s_gwin;
+    test byte [es:GH_FLAGS], GHF_HND ;   SPEC.md 124.31.3), but not under a
+    jz .fail                        ;   heap grow whose DS would stay behind
 %endif
 .unlocked:
 %ifdef PKG_MEGA
-    W16VOF ax, es
+    SCALL w16s_mvpre                ; part 9 in BEFORE the copy, a moveable
+    jc .fail                        ;   block named by its selector moved as
+    W16VOF ax, es                   ;   its handle (124.31.3)
     mov [w16_gold], ax
 %else
     mov [w16_gold], es
