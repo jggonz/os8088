@@ -24,6 +24,11 @@
  * final, MediaBox / CropBox / inherited /Resources materialised (13.8).
  * ==========================================================================*/
 
+#ifdef PDW_TRACE                /* the host harness names the line a refusal came from */
+#include <stdio.h>
+#undef PDE_SYNTAX
+#define PDE_SYNTAX (fprintf(stderr, "PDE_SYNTAX at %s:%d\n", __FILE__, __LINE__), 1)
+#endif
 static pdw gc_popc(pdw v) { pdw c = 0; while (v) { v = (pdw)(v & (pdw)(v - 1)); c++; } return c; }
 static pdw gc_get(pdw base, pdw w) { return pd_fpeekw(g_wseg, (pdw)(base + 2u * w)); }
 

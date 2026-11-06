@@ -16,7 +16,10 @@ enum { PH_IDLE, PH_COPY, PH_PAGES, PH_CAT, PH_ANNOTS, PH_HEAD, PH_NPAGES, PH_XRE
 
 static pdw sv_active, sv_fresh, sv_phase, sv_i, sv_xi, sv_cnt, sv_base, sv_next, sv_v14, sv_v15;
 static pdw sv_catver, sv_xbad, sv_copyw, sv_sub, sv_coff, sv_flushed;
-static pdw sv_ext, sv_nochange, sv_vf, sv_wsize, sv_kind;     /* extract; a byte copy; the PDENG check; the /Size written */
+static pdw sv_ext, sv_nochange, sv_vf, sv_wsize, sv_kind;
+#ifdef PD_HOST
+static pdw sv_lastph, sv_lasti;     /* the harness reads where a job failed */
+#endif     /* extract; a byte copy; the PDENG check; the /Size written */
 static struct pd_u32 sv_srcsize;
 static struct pdxb_save g_sv;
 static struct pdxb_trailer g_tr;
@@ -675,6 +678,9 @@ static pdw job_slice(void)
     pdw units = 0, r, k, e, io0 = g_io;
     while (units < SV_UNITS && g_io == io0) {   /* one disk transfer ends a slice (15.2) */
         units++;
+#ifdef PD_HOST
+        sv_lastph = sv_phase; sv_lasti = (pdw)(sv_phase == PH_PGOPS ? pm_i : sv_i);
+#endif
         switch (sv_phase) {
         case PH_COPY:                            /* read a chunk, then (next slice) write it */
             if (sv_copyw) { sv_copyw = 0; pw_flush(0); break; }
@@ -765,6 +771,7 @@ static pdw job_slice(void)
             if (!sv_xstart) {                    /* "xref", the first subsection */
                 sv_xstart = 1;
                 if (!g_tn) return PDE_RANGE;     /* nothing to save           */
+                if (sv_ext) sv_next = (pdw)(g_tn + 1);
                 pb_flush();
                 u32cp(&sv_xrefpos, &g_pos);
                 pb_s("xref\n");

@@ -14,7 +14,7 @@
  * ==========================================================================*/
 #ifdef PD_HOST
 #include "pdw.h"
-#define PDW_HOST_SCRATCH 0x3000u        /* the harness's raw-copy landing zone */
+#define PDW_HOST_SCRATCH 0xA000u        /* the harness's raw-copy landing zone (neither harness maps anything here) */
 #else
 #include "os88.h"
 #include "pdw.h"

@@ -15,6 +15,11 @@
  * The same dictionary-walking and reference-rewriting is what the graph copy
  * (pdwgc.c) uses to copy objects between documents.
  * ==========================================================================*/
+#ifdef PDW_TRACE                /* the host harness names the line a refusal came from */
+#include <stdio.h>
+#undef PDE_SYNTAX
+#define PDE_SYNTAX (fprintf(stderr, "PDE_SYNTAX at %s:%d\n", __FILE__, __LINE__), 1)
+#endif
 #define PGK_PARENT 1
 #define PGK_ROTATE 2
 #define PGK_ANNOTS 4

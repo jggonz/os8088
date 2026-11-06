@@ -20468,10 +20468,11 @@ ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
 	mkdir -p $(BUILD)/pdw-real
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
 	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
-	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST $(PDW_TRACE) -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
 		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
 	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
 	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
+	python3 apps/pagedesk/hosttest/pdw_pgcheck.py $(abspath $(BUILD)/pdw-real) $(abspath apps/pagedesk/samples)
 else
 	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
 endif
