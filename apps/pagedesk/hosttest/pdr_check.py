@@ -67,7 +67,7 @@ for d, withx in ((bank, True), (bank_nox, False)):
     open(os.path.join(d, 'PAGEDESK.O88'), 'wb').write(b'\x55' * 1536 + data)
     if withx: shutil.copy(resx, os.path.join(d, 'PDFONTX.RES'))
 
-def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=22, bk=None, env=None):
+def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=26, bk=None, env=None):
     out = os.path.join(scratch, name + '.ppm')
     e = dict(os.environ); e.update(env or {})
     r = run(['render', pdf, page, zoom, rot, bpp, asp, W, H, 8, 8, out, bk or bank, dlkb], env=e)
@@ -78,7 +78,7 @@ def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=22, bk=None, env=None):
                 if '=' in kv: k, v = kv.split('=', 1); st[k] = v
     return r, out, st
 
-EXPECT_INC = {0: 0x0001, 1: 0, 2: 0, 3: 0, 4: 0}      # page 0 uses a non-base-14 font on purpose
+EXPECT_INC = {0: 0x0001, 1: 0x0040, 2: 0, 3: 0, 4: 0}      # page 0: a non-base-14 font on purpose; page 1: a dash pattern, which is drawn solid and said so
 # adapter -> (aspect, W, H, band depth): VGA and EGA are 4bpp, Hercules and CGA 1bpp (the band claim
 # is sized for the live depth, 10.3); VGA also runs 1bpp, which is what a mono window of it would be
 ASPECTS = {'vga': ('1/1', 640, 480, 4), 'ega': ('35/48', 640, 350, 4), 'herc': ('29/45', 720, 348, 1), 'cga': ('5/12', 640, 200, 1), 'vga1': ('1/1', 640, 480, 1)}
@@ -107,10 +107,10 @@ for page in (0, 1, 2):
 if not bad: ok('all four user rotations draw (3 pages x 4)')
 
 # ---- 4. display-list overflow: many passes, identical image --------------------
-r1, o1, s1 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_a', 22)
+r1, o1, s1 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_a', 26)
 res = []
 for kb in (8, 12, 16):
-    r2, o2, s2 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_b', kb)
+    r2, o2, s2 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_b', kb + 4)   # +4: the workspace tail
     same = open(o1, 'rb').read() == open(o2, 'rb').read()
     res.append((kb, int(s2.get('passes', 0)), same, int(s2.get('incomplete', '0x0'), 16)))
 if all(s and p > int(s1['passes']) and inc == 0 for kb, p, s, inc in res):
@@ -118,7 +118,7 @@ if all(s and p > int(s1['passes']) and inc == 0 for kb, p, s, inc in res):
 else:
     fail('DL overflow multi-pass', repr(res))
 r5, o5, s5 = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_a', 60)
-r5b, o5b, s5b = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_b', 4)
+r5b, o5b, s5b = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_b', 8)
 if open(o5, 'rb').read() == open(o5b, 'rb').read() and int(s5b.get('passes', 0)) > 30: ok('a 4 KiB list composes one band in sub-passes (%s passes) and draws the identical image' % s5b['passes'])
 else: fail('sub-row passes', repr((s5, s5b)))
 r6, o6, s6 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_c', 1)

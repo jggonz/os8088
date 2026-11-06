@@ -73,6 +73,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_NNAME       32
 #define PDR_NSTR        512
 #define PDR_NPATH       200     /* flattened path vertices                    */
+#define PDR_WSB         4096u   /* workspace at the tail of dl_seg: saved gstates + font cache */
 #define PDR_NEDGE       256     /* staged edges                               */
 #define PDR_NCLIPE      96      /* edges in the clip pool                     */
 #define PDR_NCLIP       8       /* non-rectangular clips in the pool          */

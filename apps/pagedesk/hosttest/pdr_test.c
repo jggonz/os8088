@@ -14,9 +14,9 @@
 
 extern unsigned char pd_host_mem[];
 extern pdw pd_host_ds;
-extern unsigned char pdh_fb[];
-extern int pdh_fbw, pdh_fbh, pdh_blits;
-extern int pdh_open(const char *path);
+extern unsigned char pdrh_fb[];
+extern int pdrh_fbw, pdrh_fbh, pdrh_blits;
+extern int pdrh_open(const char *path);
 pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 
 #define SEG_XB   0x2000
@@ -27,15 +27,15 @@ pdw pdr_verb(pdw verb, pdw bx, pdw cx, pdw dx);
 #define SEG_TXT  0x4800
 #define SEG_CELL 0x4C00
 #define MEM(seg, off) (pd_host_mem + (((unsigned long)(seg) << 4) + (off)))
-pdw pdh_xbseg(void) { return SEG_XB; }
+pdw pdrh_xbseg(void) { return SEG_XB; }
 
 static const unsigned char vga[16][3] = {
     {0,0,0},{0,0,170},{0,170,0},{0,170,170},{170,0,0},{170,0,170},{170,85,0},{170,170,170},
     {85,85,85},{85,85,255},{85,255,85},{85,255,255},{255,85,85},{255,85,255},{255,255,85},{255,255,255} };
 
-extern const char *pdh_fdir;
-extern int pdh_cluster_sectors;
-extern long pdh_reads, pdh_readbytes;
+extern const char *pdrh_fdir;
+extern int pdrh_cluster_sectors;
+extern long pdrh_reads, pdrh_readbytes;
 static int g_glykb = 16;
 /* "bank" is now a DIRECTORY holding PDRES.BIN, PAGEDESK.O88 (a pad, then PDRES.BIN:
  * the part offset is not zero) and optionally PDFONTX.RES - what the shell lays out.
@@ -44,7 +44,7 @@ static int g_glykb = 16;
 static int load_bank(const char *dir)
 {
     char path[600]; FILE *f; unsigned char hdr[200]; long n; unsigned idxlen; struct pdxb_fontbank fb;
-    pdh_fdir = dir;
+    pdrh_fdir = dir;
     snprintf(path, sizeof path, "%s/PDRES.BIN", dir);
     f = fopen(path, "rb"); if (!f) return 0;
     fread(hdr, 1, 200, f);
@@ -67,7 +67,7 @@ static void do_init(int bpp, int bankkb, int dlkb)
     memcpy(keep, MEM(SEG_XB, 0), sizeof keep);
     memset(&in, 0, sizeof in);
     in.xb_seg = SEG_XB; in.dl_seg = SEG_DL; in.dl_kb = (pdw)dlkb;
-    in.band_seg = SEG_BAND; in.band_bytes = 5200;
+    in.band_seg = SEG_BAND; in.band_bytes = 9600;
     in.glyph_seg = SEG_GLY; in.glyph_kb = (pdw)g_glykb;
     in.bank_seg = 0; in.bank_kb = 0; (void)bankkb;
     in.bpp = (pdw)bpp; in.adapter = 0;
@@ -76,11 +76,27 @@ static void do_init(int bpp, int bankkb, int dlkb)
     memcpy(MEM(SEG_XB, 0), keep, sizeof keep);
     if (send_fontbank()) { fprintf(stderr, "fontbank failed\n"); exit(2); }
 }
+/* the claims are laid out with a pad of 0xCD behind each; a renderer that writes past its claim shows up here */
+static const struct { pdw seg; unsigned size; const char *name; } g_cl[4] = {
+    { SEG_XB, 1024, "exchange block" }, { SEG_DL, 0, "display list" }, { SEG_BAND, 9600, "band" }, { SEG_GLY, 0, "glyph claim" } };
+static unsigned g_clsize[4];
+static void canary_set(int dlkb)
+{
+    int i;
+    g_clsize[0] = 1024; g_clsize[1] = dlkb >= 63 ? 0xFC00u : (unsigned)dlkb << 10; g_clsize[2] = 9600; g_clsize[3] = (unsigned)g_glykb << 10;
+    for (i = 0; i < 4; i++) memset(MEM(g_cl[i].seg, g_clsize[i]), 0xCD, 64);
+}
+static int canary_check(void)
+{
+    int i, j, bad = 0;
+    for (i = 0; i < 4; i++) for (j = 0; j < 64; j++) if (MEM(g_cl[i].seg, g_clsize[i])[j] != 0xCD) { fprintf(stderr, "CANARY: %s overrun at +%d\n", g_cl[i].name, j); bad = 1; break; }
+    return bad;
+}
 static void write_ppm(const char *path, int x0, int y0, int w, int h)
 {
     FILE *f = fopen(path, "wb"); int x, y;
     fprintf(f, "P6\n%d %d\n255\n", w, h);
-    for (y = 0; y < h; y++) for (x = 0; x < w; x++) fwrite(vga[pdh_fb[(y0 + y) * pdh_fbw + x0 + x] & 15], 1, 3, f);
+    for (y = 0; y < h; y++) for (x = 0; x < w; x++) fwrite(vga[pdrh_fb[(y0 + y) * pdrh_fbw + x0 + x] & 15], 1, 3, f);
     fclose(f);
 }
 static void report(void)
@@ -88,26 +104,27 @@ static void report(void)
     struct pdxb_rstatus rs;
     pdr_verb(PDV_REND_STATUS, 0, 0, 0);
     memcpy(&rs, MEM(SEG_XB, 0), sizeof rs);
-    printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdh_blits);
+    printf("status incomplete=0x%04x first='%s' ops=%u passes=%u blits=%d\n", rs.incomplete, rs.first, rs.ops, rs.passes, pdrh_blits);
 }
 
 int main(int argc, char **argv)
 {
     if (argc < 2) return 1;
     pd_host_ds = 0x1000;
-    if (getenv("PDR_CLUSTER")) pdh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
+    if (getenv("PDR_CLUSTER")) pdrh_cluster_sectors = atoi(getenv("PDR_CLUSTER"));
     if (getenv("PDR_GLYPHKB")) g_glykb = atoi(getenv("PDR_GLYPHKB"));
     if (!strcmp(argv[1], "render") && argc >= 14) {
         int page = atoi(argv[3]), zoom = atoi(argv[4]), rot = atoi(argv[5]), bpp = atoi(argv[6]);
         int an = 1, ad = 1, W = atoi(argv[8]), H = atoi(argv[9]), ox = atoi(argv[10]), oy = atoi(argv[11]);
-        int dlkb = argc > 14 ? atoi(argv[14]) : 22, kb, steps = 0, np;
+        int dlkb = argc > 14 ? atoi(argv[14]) : 26, kb, steps = 0, np;
         struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e;
         sscanf(argv[7], "%d/%d", &an, &ad);
-        np = pdh_open(argv[2]);
+        np = pdrh_open(argv[2]);
         if (np <= 0) { fprintf(stderr, "cannot open %s\n", argv[2]); return 2; }
         kb = load_bank(argv[13]);
         do_init(bpp, kb, dlkb);
-        memset(pdh_fb, 0, 1024 * 1024);
+        canary_set(dlkb);
+        memset(pdrh_fb, 0, 1024 * 1024);
         /* the engine's page info -> the effective box */
         memset(MEM(SEG_XB, 0), 0, sizeof pi);
         if (pdr_eng(PDV_ENG_PAGEINFO, (pdw)page, 0, 0)) { fprintf(stderr, "no page %d\n", page); return 2; }
@@ -127,8 +144,9 @@ int main(int argc, char **argv)
         if (e) { fprintf(stderr, "begin -> %u\n", e); return 3; }
         do { e = pdr_verb(PDV_REND_STEP, 0, 0, 0); steps++; } while (e == PDE_BUSY && steps < 100000);
         if (e) { fprintf(stderr, "step -> %u\n", e); return 3; }
-        printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdh_reads, pdh_readbytes);
+        printf("steps=%d reads=%ld readbytes=%ld\n", steps, pdrh_reads, pdrh_readbytes);
         report();
+        if (canary_check()) return 5;
         write_ppm(argv[12], 0, 0, W, H);
         return 0;
     }
@@ -161,7 +179,7 @@ int main(int argc, char **argv)
     }
     if (!strcmp(argv[1], "text") && argc >= 5) {
         int page = atoi(argv[3]), kb, np, guard = 0; struct pdxb_textmap tq; pdw e; int total = 0, i;
-        np = pdh_open(argv[2]); if (np <= 0) return 2;
+        np = pdrh_open(argv[2]); if (np <= 0) return 2;
         kb = load_bank(argv[4]); do_init(1, kb, 22);
         memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.dseg = SEG_TXT; tq.doff = 0; tq.dmax = 1200;
         for (;;) {
@@ -185,7 +203,7 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "thumb") && argc >= 8) {
         int page = atoi(argv[3]), w = atoi(argv[4]), h = atoi(argv[5]), kb, np, guard = 0, y, x, bytes;
         struct pdxb_thumb tq; pdw e; FILE *f;
-        np = pdh_open(argv[2]); if (np <= 0) return 2;
+        np = pdrh_open(argv[2]); if (np <= 0) return 2;
         kb = load_bank(argv[7]); do_init(1, kb, 22);
         memset(&tq, 0, sizeof tq); tq.page = (pdw)page; tq.w = (pdw)w; tq.h = (pdw)h; tq.dseg = SEG_CELL; tq.doff = 0;
         memset(MEM(SEG_CELL, 0), 0xAA, 8192);

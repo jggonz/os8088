@@ -12,24 +12,25 @@ struct pdr_gs {
     struct pd_mat ctm;              /* user space -> device qpx              */
     struct pd_fx lw;                /* line width, user units                */
     struct pd_fx miter;
-    struct pd_fx dash[4];           /* user units                            */
-    struct pd_fx dphase;
     struct pd_fx tc, tw, tz, tl, rise, fs;  /* text state                    */
     pdi  cx0, cy0, cx1, cy1;        /* clip rectangle, pixels, inclusive     */
-    pdb  cap, join, ndash;
+    pdb  cap, join, pad_;
     pdb  flum, fc4, slum, sc4;      /* fill / stroke: luminance, VGA index   */
     pdb  fncs, sncs;                /* colour components of the space (1,3,4)*/
     pdb  tr, font;                  /* render mode, font cache index (255=none)*/
     pdb  ncl;                       /* non-rectangular clips active          */
     pdb  pad;
 };
-static struct pdr_gs g_gs[PD_MAXGSTACK + 1];
-static pdw g_gsn;                   /* index of the current state            */
-static struct pdr_gs *gsp;          /* ...and its address: sizeof is no power
-                                     * of two, so a g_gs[g_gsn] costs 20 bytes
-                                     * of shift-and-add at every use          */
-#define GS (*gsp)
-static void gs_set(pdw n) { g_gsn = n; gsp = &g_gs[n]; }
+/* the current state lives here; the SAVED states (q) and the font cache live in
+ * the workspace at the tail of dl_seg (PDR_WSB bytes, PAGEDESK-SPEC 20.3.1) */
+static struct pdr_gs g_gcur;
+static pdw g_gsn;                   /* depth: saved states below the current */
+#define GS g_gcur
+static pdw g_ws;                    /* workspace segment (dl_seg + DL capacity) */
+#define WS_GS   0u                  /* PD_MAXGSTACK x sizeof(struct pdr_gs)    */
+#define WS_FN   1280u               /* PDR_NFONT x sizeof(struct pdr_font)     */
+static void gs_save(pdw n) { pd_fcopy_out(&g_gcur, g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), sizeof(struct pdr_gs)); }
+static void gs_load(pdw n) { pd_fcopy_in(g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), &g_gcur, sizeof(struct pdr_gs)); }
 
 static pdw g_mode;                  /* PDR_*                                 */
 static pdw g_fillrule, g_deskwhite;
@@ -216,7 +217,7 @@ static void path_line(pdi x, pdi y)
 }
 static void path_close(void)
 {
-    if (!g_cur || g_nv == 0) return;
+    if (!g_cur || g_nv == 0 || g_sub >= g_nv) return;
     g_vf[g_sub] |= 2;
     g_cpx = g_vx[g_sub]; g_cpy = g_vy[g_sub];
 }
@@ -431,54 +432,6 @@ static void stroke_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
     }
 }
 
-/* dashing: walk a polyline and hand each dash to stroke_poly */
-static pdi g_dl[4];                 /* dash lengths, qpx                     */
-static pdi g_dtot;
-static pdi g_dxs[32], g_dys[32];
-static pdw g_dn;
-
-static void dash_flush(void)
-{
-    if (g_dn >= 1) stroke_poly(g_dxs, g_dys, g_dn > 1 ? g_dn : 1, 0);
-    g_dn = 0;
-}
-static void dash_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
-{
-    pdw i, j, nseg = closed ? n : n - 1, di = 0, on;
-    pdi rem, seglen, pos, ax, ay, bx, by, step, px, py;
-    if (nseg == 0) return;
-    /* initial position inside the dash pattern from the phase */
-    on = 1; rem = g_dl[0];
-    g_dn = 0;
-    for (i = 0; i < nseg; i++) {
-        j = (i + 1 == n) ? 0 : i + 1;
-        ax = xs[i]; ay = ys[i]; bx = xs[j]; by = ys[j];
-        seglen = pdr_hypot((pdi)(bx - ax), (pdi)(by - ay));
-        if (seglen == 0) continue;
-        pos = 0;
-        if (on && g_dn == 0) { g_dxs[0] = ax; g_dys[0] = ay; g_dn = 1; }
-        while (seglen - pos > rem) {
-            step = rem;
-            pos = (pdi)(pos + step);
-            px = (pdi)(ax + pdr_muldiv((pdi)(bx - ax), pos, seglen));
-            py = (pdi)(ay + pdr_muldiv((pdi)(by - ay), pos, seglen));
-            if (on) {
-                if (g_dn < 32) { g_dxs[g_dn] = px; g_dys[g_dn] = py; g_dn++; }
-                dash_flush();
-            } else {
-                g_dxs[0] = px; g_dys[0] = py; g_dn = 1;
-            }
-            on = !on;
-            di = (di + 1) % GS.ndash;
-            rem = g_dl[di];
-            if (rem < 2) rem = 2;
-        }
-        rem = (pdi)(rem - (seglen - pos));
-        if (on && g_dn < 32) { g_dxs[g_dn] = bx; g_dys[g_dn] = by; g_dn++; }
-    }
-    if (on) dash_flush(); else g_dn = 0;
-}
-
 /* user-space scale of the CTM, qpx per user unit: a hypot of its first row,
  * taken in 1/256 units while the row is small enough for 16 bits, else in
  * whole units */
@@ -510,30 +463,23 @@ static void stroke_path(void)
     if (w->hi > 4000) lw = 4000;
     if (lw < 4) lw = 4;                              /* a hairline is 1 px    */
     g_sw = lw; g_shw = (pdi)((lw + 1) >> 1);
-    if (GS.ndash) {
-        g_dtot = 0;
-        for (i = 0; i < GS.ndash; i++) {
-            pdm_fx_mul(w, &GS.dash[i], sc);
-            g_dl[i] = w->hi < 2 ? 2 : (w->hi > 4000 ? 4000 : w->hi);
-            g_dtot = (pdi)(g_dtot + g_dl[i]);
-        }
-    }
     g_ne = 0;
     for (s = 0; s < g_nv; s = e) {
         for (e = s + 1; e < g_nv && !(g_vf[e] & 1); e++) ;
         closed = (g_vf[s] & 2) != 0;
-        /* drop repeated points */
+        /* drop repeated points, IN PLACE: the vacated tail repeats the last kept
+         * point, so a clip that still wants this path sees the same polygon */
         n = 0;
+        for (i = s; i < e; i++) {
+            if (n && g_vx[s + n - 1] == g_vx[i] && g_vy[s + n - 1] == g_vy[i]) continue;
+            g_vx[s + n] = g_vx[i]; g_vy[s + n] = g_vy[i]; n++;
+        }
+        if (n == 0) continue;
         {
-            static pdi qx[PDR_NPATH], qy[PDR_NPATH];
-            for (i = s; i < e; i++) {
-                if (n && qx[n - 1] == g_vx[i] && qy[n - 1] == g_vy[i]) continue;
-                qx[n] = g_vx[i]; qy[n] = g_vy[i]; n++;
-            }
-            if (closed && n > 1 && qx[0] == qx[n - 1] && qy[0] == qy[n - 1]) n--;
-            if (n == 0) continue;
-            if (GS.ndash && n > 1) dash_poly(qx, qy, n, closed);
-            else stroke_poly(qx, qy, n, closed && n > 1);
+            pdw m = n;
+            if (closed && m > 1 && g_vx[s] == g_vx[s + m - 1] && g_vy[s] == g_vy[s + m - 1]) m--;
+            for (i = s + n; i < e; i++) { g_vx[i] = g_vx[s + n - 1]; g_vy[i] = g_vy[s + n - 1]; }
+            stroke_poly(g_vx + s, g_vy + s, m, closed && m > 1);
         }
     }
     stroke_flush();

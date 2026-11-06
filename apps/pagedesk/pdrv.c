@@ -313,12 +313,11 @@ static pdw verb_textmap(void)
 }
 
 /* ---- thumbnails ------------------------------------------------------------- */
+static struct pd_view g_tv;
 static pdw verb_thumb(void)
 {
-    static struct pd_fx sx, sy, fw, fh, bw, bh;
-    static struct pd_rect bx;
-    pdw rot, err;
-    pdi pw, ph, ox, oy;
+    pdw err, dw, dh, zw, zh;
+    pdi pw, ph;
     pd_fcopy_in(g_xb, 0, &g_thq, sizeof g_thq);
     if (g_thq.state == 0) {
         if (!g_dls || !g_bseg || !g_thq.w || !g_thq.h || g_thq.w > 720) return PDE_NOMEM;
@@ -326,30 +325,31 @@ static pdw verb_thumb(void)
         mode_reset();
         err = eng_call(PDV_ENG_PAGEINFO, &g_pi, sizeof g_pi, g_thq.page, 0, 0);
         if (err) return err;
-        bx.x0 = pdr_max(g_pi.media.x0, g_pi.crop.x0); bx.y0 = pdr_max(g_pi.media.y0, g_pi.crop.y0);
-        bx.x1 = pdr_min(g_pi.media.x1, g_pi.crop.x1); bx.y1 = pdr_min(g_pi.media.y1, g_pi.crop.y1);
-        rot = g_pi.rotate;
-        if (bx.x1 <= bx.x0 || bx.y1 <= bx.y0) return PDE_RANGE;
-        /* scale: the page fits the cell */
-        pdm_fx_int(&bw, (pdi)(bx.x1 - bx.x0)); pdm_fx_int(&bh, (pdi)(bx.y1 - bx.y0));
-        pdm_fx_int(&fw, 16); pdm_fx_div(&bw, &bw, &fw); pdm_fx_div(&bh, &bh, &fw);   /* points */
-        if (rot == 90 || rot == 270) { pdr_cpy(&sx, &bw, 4); pdr_cpy(&bw, &bh, 4); pdr_cpy(&bh, &sx, 4); }
-        pdm_fx_int(&fw, (pdi)g_thq.w); pdm_fx_int(&fh, (pdi)g_thq.h);
-        pdm_fx_div(&sx, &fw, &bw); pdm_fx_div(&sy, &fh, &bh);
-        if (pdm_fx_cmp(&sy, &sx) < 0) pdr_cpy(&sx, &sy, 4);          /* min scale, px per pt */
-        pdr_cpy(&sy, &sx, 4);
-        pdm_fx_mul(&bw, &bw, &sx); pdm_fx_mul(&bh, &bh, &sy);
-        pw = pdm_fx_floor(&bw); ph = pdm_fx_floor(&bh);
+        pdr_zero(&g_tv, sizeof g_tv);
+        g_tv.box.x0 = pdr_max(g_pi.media.x0, g_pi.crop.x0); g_tv.box.y0 = pdr_max(g_pi.media.y0, g_pi.crop.y0);
+        g_tv.box.x1 = pdr_min(g_pi.media.x1, g_pi.crop.x1); g_tv.box.y1 = pdr_min(g_pi.media.y1, g_pi.crop.y1);
+        g_tv.rot = g_pi.rotate;
+        if (g_tv.box.x1 - g_tv.box.x0 < 160 || g_tv.box.y1 - g_tv.box.y0 < 160) return PDE_RANGE;
+        dw = (pdw)(g_tv.box.x1 - g_tv.box.x0); dh = (pdw)(g_tv.box.y1 - g_tv.box.y0);
+        if (g_tv.rot == 90 || g_tv.rot == 270) { zw = dw; dw = dh; dh = zw; }
+        /* the zoom, in percent, at which the page fits the cell: px / (pt16 / 16) * 100 */
+        zw = (pdw)pdr_muldiv((pdi)g_thq.w, 1600, (pdi)dw);
+        zh = (pdw)pdr_muldiv((pdi)g_thq.h, 1600, (pdi)dh);
+        g_tv.zoom = zw < zh ? zw : zh;
+        if (g_tv.zoom < 1) g_tv.zoom = 1;
+        g_tv.asp_num = g_tv.asp_den = 1;
+        pdm_view_size(&vb_w, &vb_h, &g_tv);
+        pw = vb_w; ph = vb_h;
         if (pw < 1) pw = 1;
         if (ph < 1) ph = 1;
-        ox = (pdi)(((pdi)g_thq.w - pw) >> 1); oy = (pdi)(((pdi)g_thq.h - ph) >> 1);
-        /* qpx per point is 4 x the pixel scale */
-        pdm_fx_int(&fw, 4); pdm_fx_mul(&sx, &sx, &fw); pdr_cpy(&sy, &sx, 4);
-        base_build(&bx, rot, &sx, &sy, ox, oy);
+        if (pw > (pdi)g_thq.w) pw = (pdi)g_thq.w;
+        if (ph > (pdi)g_thq.h) ph = (pdi)g_thq.h;
+        g_tv.ox = (pdi)(((pdi)g_thq.w - pw) >> 1); g_tv.oy = (pdi)(((pdi)g_thq.h - ph) >> 1);
+        view_base(&g_tv);
         g_mode = PDR_INTERP; g_thumb = 1; g_bpp = 1; g_deskwhite = 1;
         g_winoff = 0;
         g_vcx0 = 0; g_vcy0 = 0; g_vcx1 = (pdi)(g_thq.w - 1); g_vcy1 = (pdi)(g_thq.h - 1);
-        g_pgx0 = ox; g_pgy0 = oy; g_pgx1 = (pdi)(ox + pw - 1); g_pgy1 = (pdi)(oy + ph - 1);
+        g_pgx0 = g_tv.ox; g_pgy0 = g_tv.oy; g_pgx1 = (pdi)(g_tv.ox + pw - 1); g_pgy1 = (pdi)(g_tv.oy + ph - 1);
         g_tdseg = g_thq.dseg; g_tdoff = g_thq.doff; g_tstride = (pdw)((g_thq.w + 7) >> 3);
         if (!band_geometry()) return PDE_NOMEM;
         g_rq.page = g_thq.page;
@@ -374,7 +374,11 @@ static pdw verb_init(pdw xbseg)
     g_ph = PDR_IDLE; g_mode = PDR_IDLE;
     pd_fcopy_in(g_xb, 0, &g_ini, sizeof g_ini);
     pdr_eng_off = g_ini.eng_off; pdr_eng_seg = g_ini.eng_seg;
-    g_dls = g_ini.dl_seg; g_dlcap = g_ini.dl_kb ? (pdw)(g_ini.dl_kb >= 63 ? 0xFC00u : (pdw)(g_ini.dl_kb << 10)) : 0;
+    g_dls = g_ini.dl_seg;
+    g_dlcap = g_ini.dl_kb ? (pdw)(g_ini.dl_kb >= 63 ? 0xFC00u : (pdw)(g_ini.dl_kb << 10)) : 0;
+    /* the workspace is the last PDR_WSB bytes of the claim: the DL gets the rest */
+    if (g_dlcap > PDR_WSB) { g_dlcap -= PDR_WSB; g_ws = (pdw)(g_dls + (g_dlcap >> 4)); }
+    else { g_dlcap = 0; g_ws = g_dls; }
     g_bseg = g_ini.band_seg; g_bbytes = g_ini.band_bytes;
     g_gseg = g_ini.glyph_seg; g_gkb = g_ini.glyph_kb;
     g_bankok = 0; g_bankseg = 0; g_bk_seg[0] = g_bk_seg[1] = 0; g_pkfam = 0xFF;

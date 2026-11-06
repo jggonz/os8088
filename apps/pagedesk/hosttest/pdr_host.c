@@ -115,51 +115,63 @@ void pdr_imgrow(void)
  * A directory of real files (PAGEDESK.O88 = padding + PDRES.BIN, PDFONTX.RES);
  * the stub REFUSES what the kernel refuses - a seek or a capacity that is not
  * a cluster multiple - so the renderer's alignment arithmetic is tested, and
- * the cluster size is a knob (pdh_cluster_sectors). */
-const char *pdh_fdir = ".";
-int pdh_cluster_sectors = 1;
-long pdh_reads, pdh_readbytes;
+ * the cluster size is a knob (pdrh_cluster_sectors). */
+const char *pdrh_fdir = ".";
+int pdrh_cluster_sectors = 1;
+long pdrh_reads, pdrh_readbytes;
 void os88_file_here(struct os88_place *p) { p->clus = 0; p->vol = 0; }
 int os88_file_goto_q_mark(unsigned clus, int vol) { (void)clus; (void)vol; return 0; }
-int os88_disk_cluster_sectors(void) { return pdh_cluster_sectors; }
-unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off, unsigned cap, unsigned *cursor)
+#ifndef PDR_REAL_ENG
+int os88_disk_cluster_sectors(void) { return pdrh_cluster_sectors; }
+#endif
+unsigned pdr_font_read_seq(const char *name, unsigned seg, unsigned off, unsigned cap, unsigned *cursor)
 {
     char path[512]; FILE *f; unsigned long seek = ((unsigned long)cursor[7] << 16) | cursor[6]; size_t n;
-    unsigned cb = (unsigned)pdh_cluster_sectors * 512;
+    unsigned cb = (unsigned)pdrh_cluster_sectors * 512;
     if (seek % cb || cap % cb || cap == 0) { fprintf(stderr, "READ_SEQ refused: seek %lu cap %u not a multiple of %u\n", seek, cap, cb); return 0; }
-    snprintf(path, sizeof path, "%s/%s", pdh_fdir, name);
+    snprintf(path, sizeof path, "%s/%s", pdrh_fdir, name);
     f = fopen(path, "rb"); if (!f) return 0;
     fseek(f, (long)seek, SEEK_SET);
     n = fread(MEM(seg, off), 1, cap, f); fclose(f);
-    pdh_reads++; pdh_readbytes += (long)n;
+    pdrh_reads++; pdrh_readbytes += (long)n;
     return (unsigned)n;
 }
 
+#ifndef PDR_REAL_ENG
+unsigned os88_file_read_seq(const char *name, unsigned seg, unsigned off, unsigned cap, unsigned *cursor)
+{ return pdr_font_read_seq(name, seg, off, cap, cursor); }
+#endif
+
 /* ---- 2. the framebuffer ------------------------------------------------------ */
-unsigned char pdh_fb[1024 * 1024];          /* one byte a pixel: 0..15 VGA index */
-int pdh_fbw = 1024, pdh_fbh = 1024;
-int pdh_blits;
+unsigned char pdrh_fb[1024 * 1024];          /* one byte a pixel: 0..15 VGA index */
+int pdrh_fbw = 1024, pdrh_fbh = 1024;
+int pdrh_blits;
 void os88_gfx_lock(void) {}
 void os88_gfx_unlock(void) {}
 int  os88_wm_clip_set(void *win) { (void)win; return 0; }
 pdi pdr_blit(pdw kind, pdw seg, pdw stride, pdi x, pdi y, pdw w, pdw rows)
 {
     pdw r; int c;
-    pdh_blits++;
+    pdrh_blits++;
     for (r = 0; r < rows; r++) {
         const unsigned char *s = MEM(seg, r * stride);
-        if (y + (int)r < 0 || y + (int)r >= pdh_fbh) continue;
+        if (y + (int)r < 0 || y + (int)r >= pdrh_fbh) continue;
         for (c = 0; c < (int)w; c++) {
             int px = x + c, v;
-            if (px < 0 || px >= pdh_fbw) continue;
+            if (px < 0 || px >= pdrh_fbw) continue;
             if (kind == 1) v = (s[c >> 3] >> (7 - (c & 7))) & 1 ? 15 : 0;
             else v = (c & 1) ? (s[c >> 1] & 15) : (s[c >> 1] >> 4);
-            pdh_fb[(y + r) * pdh_fbw + px] = (unsigned char)v;
+            pdrh_fb[(y + r) * pdrh_fbw + px] = (unsigned char)v;
         }
     }
     return 0;
 }
 
+struct pdr_gp pdr_gp;
+struct pdr_ip pdr_ip;
+pdw pdr_eng_ax, pdr_eng_dx, pdr_eng_off, pdr_eng_seg;
+
+#ifndef PDR_REAL_ENG
 /* ---- 3. PDENG-lite ----------------------------------------------------------- */
 enum { V_NULL, V_BOOL, V_INT, V_REAL, V_STR, V_NAME, V_ARR, V_DICT, V_REF, V_STRM };
 struct val {
@@ -345,7 +357,7 @@ static void walk(struct val *node, struct val *med, struct val *crp, struct val 
     if (k->t == V_ARR) { for (i = 0; i < k->n; i++) walk(k->kid[i], med, crp, res, rot); return; }
     if (npages < 2048) { pages[npages].d = n; pages[npages].media = med; pages[npages].crop = crp; pages[npages].res = res; pages[npages].rot = rot; npages++; }
 }
-int pdh_open(const char *path)
+int pdrh_open(const char *path)
 {
     struct val *root;
     memset(objoff, 0, sizeof objoff); memset(objv, 0, sizeof objv); nobj = 0; npages = 0;
@@ -445,15 +457,15 @@ static int tok_next(void)
         if (n == 0) { s->cur = p + 1; t->kind = PDT_OP; t->len = 1; t->text[0] = (char)*p; t->text[1] = 0; return 0; }
         tmp[n] = 0; s->cur = q;
         if (isdigit(tmp[0]) || tmp[0] == '-' || tmp[0] == '+' || tmp[0] == '.') {
-            struct pd_fx fx; pdm_fx_parse(&fx, (const char *)tmp, (pdw)n);
-            t->kind = PDT_NUM; t->num = fx; return 0;
+            struct pd_fx fx; pdw pe = pdm_fx_parse(&fx, (const char *)tmp, (pdw)n);
+            t->kind = PDT_NUM; t->num = fx; return pe == PDE_RANGE ? PDE_RANGE : 0;
         }
         if (!strcmp((char *)tmp, "true")) t->kind = PDT_TRUE;
         else if (!strcmp((char *)tmp, "false")) t->kind = PDT_FALSE;
         else if (!strcmp((char *)tmp, "null")) t->kind = PDT_NULL;
         else {
             t->kind = PDT_OP; t->len = (pdw)n; memcpy(t->text, tmp, n); t->text[n] = 0;
-            if (!strcmp((char *)tmp, "ID")) s->inimg = 1;
+            if (!strcmp((char *)tmp, "ID") && s->cur < s->end) s->cur++;      /* exactly one white-space byte (20.2.5) */
         }
         return 0;
     }
@@ -477,12 +489,14 @@ static int do_dict_get(void)
     struct val *cur = q->objnum ? getobj(q->objnum) : trailer;
     int i;
     for (i = 0; i < 3 && q->key[i][0]; i++) {
-        cur = resolve(cur);
-        if (q->key[i][0] == '#') { int idx = atoi(q->key[i] + 1); if (cur->t != V_ARR || idx >= cur->n) { cur = &nullv; break; } cur = cur->kid[idx]; }
+        cur = resolve(cur);                          /* an indirect value MID-path is followed */
+        if (q->key[i][0] == '[') { int idx = atoi(q->key[i] + 1); if (cur->t != V_ARR || idx >= cur->n) { cur = &nullv; break; } cur = cur->kid[idx]; }
         else cur = dget(cur, q->key[i]);
     }
-    cur = resolve(cur);
-    q->kind = PDK_NULL; q->len = 0; q->count = 0; memset(&q->num, 0, 4);
+    /* the FINAL value is NOT followed (PAGEDESK-SPEC 20.2.6): a reference comes back as one */
+    q->kind = PDK_NULL; q->len = 0; q->count = 0; memset(&q->num, 0, 4); q->refnum = q->refgen = 0;
+    if (cur->t == V_REF) { q->kind = PDK_REF; q->refnum = (pdw)cur->rn; q->refgen = (pdw)cur->rg; return 0; }
+    if (cur->t == V_NULL) return PDE_NOTFOUND;
     switch (cur->t) {
     case V_BOOL: q->kind = PDK_BOOL; fx_of(&q->num, cur->d); break;
     case V_INT: q->kind = PDK_INT; fx_of(&q->num, cur->d); break;
@@ -521,14 +535,11 @@ static int do_pageinfo(pdw page)
     return 0;
 }
 
-struct pdr_gp pdr_gp;
-struct pdr_ip pdr_ip;
-pdw pdr_eng_ax, pdr_eng_dx, pdr_eng_off, pdr_eng_seg;
 pdw pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx)
 {
     int e = 0;
-    extern pdw pdh_xbseg(void);
-    xbseg = pdh_xbseg();
+    extern pdw pdrh_xbseg(void);
+    xbseg = pdrh_xbseg();
     pdr_eng_ax = 0;
     switch (verb) {
     case PDV_ENG_STRM_OPEN: e = do_strm_open(); break;
@@ -547,5 +558,6 @@ pdw pdr_eng(pdw verb, pdw bx, pdw cx, pdw dx)
     (void)put16; (void)get16;
     return (pdw)e;
 }
-int pdh_npages(void) { return npages; }
-int pdh_nstreams(void) { return nst; }
+int pdrh_npages(void) { return npages; }
+int pdrh_nstreams(void) { return nst; }
+#endif /* PDR_REAL_ENG */

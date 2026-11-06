@@ -32,27 +32,35 @@ static pdw eng_call(pdw verb, void *st, pdw n, pdw bx, pdw cx, pdw dx)
 }
 
 /* dictionary query: object (0/0 = none) and a key path of up to three names.
- * A path element "#n" (decimal) selects element n of the array reached so
- * far (PAGEDESK-SPEC 20.3.3, agreed with PDENG).                           */
+ * A path element "[n]" selects element n of the array reached so far; a final
+ * reference is followed here (PDENG does not: PAGEDESK-SPEC 20.2.6).      */
 static struct pdxb_dictget g_dg;
 static pdw dict_get(pdw obj, pdw gen, const char *k0, const char *k1, const char *k2)
 {
+    pdw err;
     pdr_zero(&g_dg, sizeof g_dg);
     g_dg.objnum = obj; g_dg.gen = gen;
     pdr_scpy(g_dg.key[0], k0, 32);
     if (k1) pdr_scpy(g_dg.key[1], k1, 32);
     if (k2) pdr_scpy(g_dg.key[2], k2, 32);
-    return eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0);
+    err = eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0);
+    if (!err && g_dg.kind == PDK_REF) {          /* the FINAL value is not followed by PDENG (20.2.6) */
+        obj = g_dg.refnum; gen = g_dg.refgen;
+        pdr_zero(&g_dg, sizeof g_dg);
+        g_dg.objnum = obj; g_dg.gen = gen;       /* no names: the object's own value */
+        err = eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0);
+    }
+    return err;
 }
-/* "#n" with n in 0..9999 */
-static char g_idx[8];
+/* "[n]" with n in 0..9999 */
+static char g_idx[10];
 static const char *idx_key(pdw n)
 {
     static char t[6]; pdw k = 0, i;
-    g_idx[0] = '#';
+    g_idx[0] = '[';
     do { t[k++] = (char)('0' + n % 10); n /= 10; } while (n);
     for (i = 0; i < k; i++) g_idx[1 + i] = t[k - 1 - i];
-    g_idx[1 + k] = 0;
+    g_idx[1 + k] = ']'; g_idx[2 + k] = 0;
     return g_idx;
 }
 
@@ -136,8 +144,26 @@ struct pdr_font {
     pdb enc[224];                   /* code 32..255 -> PD Latin (0 = none)     */
     pdw wid[224];                   /* 1/1000 em, 0xFFFF = not fetched         */
 };
-static struct pdr_font g_fn[PDR_NFONT];
+/* the cache's 4 entries live in the workspace (WS_FN); one is resident at a time */
+static struct pdr_font g_fw;
+static struct { pdw objnum, gen; pdb used; } g_fk[PDR_NFONT];
+static pdw g_fwi = 0xFF, g_fwdirty;
 static pdw g_fnnext;
+static void font_flush(void)
+{
+    if (g_fwi != 0xFF && g_fwdirty)
+        pd_fcopy_out(&g_fw, g_ws, (pdw)(WS_FN + g_fwi * sizeof(struct pdr_font)), sizeof(struct pdr_font));
+    g_fwdirty = 0;
+}
+static struct pdr_font *font_sel(pdw fi)
+{
+    if (g_fwi != fi) {
+        font_flush();
+        pd_fcopy_in(g_ws, (pdw)(WS_FN + fi * sizeof(struct pdr_font)), &g_fw, sizeof(struct pdr_font));
+        g_fwi = fi;
+    }
+    return &g_fw;
+}
 
 static pdw ci_has(const char *s, const char *sub)
 {
@@ -153,20 +179,37 @@ static pdw ci_has(const char *s, const char *sub)
     return 0;
 }
 
+/* word lists for font_classify: NUL separated, a 0x01 byte starts the next
+ * group. Families: 0 mono (courier first), 1 serif (times first), 2 sans.
+ * Styles: 0 bold, 1 italic */
+static const char fam_words[] = "courier\0mono\0consolas\0typewriter\0fixed\0\1times\0serif\0roman\0georgia\0garamond\0palatino\0bookman\0century\0\1helvetica\0arial\0";
+static const char sty_words[] = "bold\0black\0heavy\0demi\0\1italic\0oblique\0slanted\0";
+static pdw words_hit(const char *w, const char *b)        /* 0xFFFF none, else group << 8 | index */
+{
+    pdw g = 0, k = 0;
+    while (*w) {
+        if (*w == 1) { g++; k = 0; w++; continue; }
+        if (ci_has(b, w)) return (pdw)((g << 8) | k);
+        while (*w) w++;
+        w++; k++;
+    }
+    return 0xFFFF;
+}
 static void font_classify(struct pdr_font *f, const char *base)
 {
     const char *b = base;
-    pdw i, known = 0;
+    pdw i, r, known = 0;
     for (i = 0; b[i] && i < 8; i++) if (b[i] == '+') { b += i + 1; break; }
     f->fam = 0; f->sty = 0;
-    if (ci_has(b, "courier") || ci_has(b, "mono") || ci_has(b, "consolas") ||
-        ci_has(b, "typewriter") || ci_has(b, "fixed")) { f->fam = 2; known = ci_has(b, "courier"); }
-    else if (ci_has(b, "times") || ci_has(b, "serif") || ci_has(b, "roman") ||
-             ci_has(b, "georgia") || ci_has(b, "garamond") || ci_has(b, "palatino") ||
-             ci_has(b, "bookman") || ci_has(b, "century")) { f->fam = 1; known = ci_has(b, "times"); }
-    else if (ci_has(b, "helvetica") || ci_has(b, "arial")) known = 1;
-    if (ci_has(b, "bold") || ci_has(b, "black") || ci_has(b, "heavy") || ci_has(b, "demi")) f->sty |= 1;
-    if (ci_has(b, "italic") || ci_has(b, "oblique") || ci_has(b, "slanted")) f->sty |= 2;
+    r = words_hit(fam_words, b);
+    if (r != 0xFFFF) {
+        f->fam = (pdb)((r >> 8) == 0 ? 2 : (r >> 8) == 1 ? 1 : 0);
+        known = (r >> 8) == 2 || (r & 255) == 0;
+    }
+    r = words_hit(sty_words, b);
+    if (r != 0xFFFF) f->sty |= (pdb)((r >> 8) ? 2 : 1);
+    if (ci_has(b, "italic") || ci_has(b, "oblique")) f->sty |= 2;     /* both may be present */
+    if (ci_has(b, "bold")) f->sty |= 1;
     if (!known) inc_note(PDF_INC_FONT, "font substituted");
 }
 
@@ -218,9 +261,12 @@ static pdw font_get(pdw obj, pdw gen)
     pdw i, slot;
     struct pdr_font *f;
     for (i = 0; i < PDR_NFONT; i++)
-        if (g_fn[i].used && g_fn[i].objnum == obj && g_fn[i].gen == gen && obj) return i;
+        if (g_fk[i].used && g_fk[i].objnum == obj && g_fk[i].gen == gen && obj) return i;
     slot = g_fnnext; g_fnnext = (g_fnnext + 1) % PDR_NFONT;
-    f = &g_fn[slot];
+    font_flush();
+    g_fwi = slot; g_fwdirty = 1;
+    g_fk[slot].used = 1; g_fk[slot].objnum = obj; g_fk[slot].gen = gen;
+    f = &g_fw;
     pdr_zero(f, sizeof *f);
     f->used = 1; f->objnum = obj; f->gen = gen; f->ok = 1;
     for (i = 0; i < 224; i++) f->wid[i] = 0xFFFF;
@@ -248,7 +294,7 @@ static pdw font_get(pdw obj, pdw gen)
  * the glyph the code maps to (11.3), else a flat guess */
 static pdw font_width(pdw fi, pdw code)
 {
-    struct pdr_font *f = &g_fn[fi];
+    struct pdr_font *f = font_sel(fi);
     pdw w, face, lat;
     if (code < 32) return 0;
     w = f->wid[code - 32];
@@ -269,6 +315,6 @@ static pdw font_width(pdw fi, pdw code)
         else if (g_wid_off) w = pd_fpeekw(g_bankseg, g_wid_off + 8 + face * 448 + (lat - 32) * 2);
         else w = 556;
     }
-    f->wid[code - 32] = w;
+    f->wid[code - 32] = w; g_fwdirty = 1;
     return w;
 }

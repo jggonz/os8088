@@ -20253,13 +20253,22 @@ $(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(
 		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
 		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
 
-.PHONY: pdrend pdrend-host
+.PHONY: pdrend pdrend-host pdrend-fuzz
 # the asm primitives against their C twins need Unicorn: whichever python has it
 PDR_UPY := $(shell for p in python3 /usr/bin/python3; do $$p -c 'import unicorn' 2>/dev/null && { echo $$p; break; }; done)
 pdrend-host: $(PDR_HOSTBIN) $(PD_RES_BIN) $(PD_FONTX_RES)
 	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN) $(BUILD)/pdrtest $(BUILD)
 	@$(if $(PDR_UPY),$(PDR_UPY) $(PDR_DIR)/hosttest/pdr_primtest.py,echo "pdr_primtest: SKIP - no python with the unicorn package")
 pdrend: $(BUILD)/PDREND.MOD pdrend-host
+# the sanitizer run (SPEC 20.3.6): ASan+UBSan build, hostile streams + random cases
+PDR_FUZZBIN := $(BUILD)/pdr_test_asan
+$(PDR_FUZZBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+	cc -O1 -g -fsanitize=address,undefined -fno-sanitize-recover=undefined -Wno-int-to-void-pointer-cast \
+		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+pdrend-fuzz: $(PDR_FUZZBIN) $(PD_RES_BIN) $(PD_FONTX_RES)
+	python3 $(PDR_DIR)/hosttest/pdr_fuzz.py $(PDR_FUZZBIN) $(BUILD)/pdrfuzz $(BUILD) -n 400
 # ---- end PageDesk: rend ----
 
 # ---- PageDesk: math ----

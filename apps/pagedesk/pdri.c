@@ -52,6 +52,7 @@ static void strm_close(void) { pdr_eng(PDV_ENG_STRM_CLOSE, 0, 0, 0); }
 static pdw tok_next(void)
 {
     pdw err = pdr_eng(PDV_ENG_TOKEN, 0, 0, 0);
+    if (err == PDE_RANGE) { g_inc |= PDF_INC_RANGE; err = 0; }    /* a number saturated: the token is valid */
     if (err) return err;
     pd_fcopy_in(g_xb, 0, &g_tk, 8);
     if (g_tk.len > 255) g_tk.len = 255;
@@ -83,7 +84,9 @@ static void col_set(pdw stroke, pdw r, pdw g, pdw b)
 }
 static void col_apply(pdw stroke, pdw nop)
 {
-    pdw a, b, c, k, base = g_nop - nop;
+    pdw a, b, c, k, base;
+    if (g_nop < nop) return;                 /* too few operands: ignored (10.6 is for features) */
+    base = g_nop - nop;
     if (nop == 1) { a = fx_u8(&g_opn[base]); col_set(stroke, a, a, a); }
     else if (nop == 3) col_set(stroke, fx_u8(&g_opn[base]), fx_u8(&g_opn[base + 1]), fx_u8(&g_opn[base + 2]));
     else if (nop == 4) {
@@ -99,21 +102,20 @@ static pdw g_gsfloor;                /* Q cannot pop below this                 
 static void gs_push(void)
 {
     if (g_gsn + 1 > PD_MAXGSTACK) { inc_note(PDF_INC_LIMIT, "graphics state depth"); return; }
-    pdr_cpy(&g_gs[g_gsn + 1], &g_gs[g_gsn], sizeof(struct pdr_gs));
-    gs_set(g_gsn + 1);
+    gs_save(g_gsn); g_gsn++;
 }
 static void gs_pop(void)
 {
-    if (g_gsn > g_gsfloor) gs_set(g_gsn - 1);
+    if (g_gsn > g_gsfloor) { g_gsn--; gs_load(g_gsn); }
 }
 
 static pdw g_pagex0, g_pagey0, g_pagex1, g_pagey1;
 static void gs_init(void)
 {
     struct pdr_gs *g;
-    pdr_zero(g_gs, sizeof g_gs);
-    gs_set(0); g_gsfloor = 0;
-    g = &g_gs[0];
+    pdr_zero(&g_gcur, sizeof g_gcur);
+    g_gsn = 0; g_gsfloor = 0;
+    g = &g_gcur;
     pdr_cpy(&g->ctm, &g_base, sizeof g_base);
     pdm_fx_int(&g->lw, 1); pdm_fx_int(&g->miter, 10); pdm_fx_int(&g->tz, 100);
     g->font = 255;
@@ -146,12 +148,20 @@ static void text_ident(void)
     g_tdirty = 1;
 }
 static struct pd_fx fk;
+/* fs/1000, Tz/100 and the TJ factor -fs*Tz/100000 are recomputed only when fs or
+ * Tz differ from the values they were last made for (a Q restores them) */
+static struct pd_fx g_tjk, g_cfs, g_ctz;
+static pdw g_cok;
 static void fs_changed(void)
 {
+    if (g_cok && g_cfs.hi == GS.fs.hi && g_cfs.lo == GS.fs.lo && g_ctz.hi == GS.tz.hi && g_ctz.lo == GS.tz.lo) return;
+    pdr_cpy(&g_cfs, &GS.fs, 4); pdr_cpy(&g_ctz, &GS.tz, 4); g_cok = 1;
     pdm_fx_int(&fk, 1000);
     pdm_fx_div(&g_fsk, &GS.fs, &fk);
     pdm_fx_int(&fk, 100);
     pdm_fx_div(&g_thk, &GS.tz, &fk);
+    pdm_fx_mul(&g_tjk, &g_fsk, &g_thk);
+    pdm_fx_neg(&g_tjk, &g_tjk);
     g_tdirty = 1;
 }
 
@@ -228,7 +238,7 @@ static pdw run_begin(void)
     pdw idx, sty;
     if (g_ropen) return 1;
     if (GS.font == 255) return 0;
-    f = &g_fn[GS.font];
+    f = font_sel(GS.font);
     if (!f->ok) return 0;
     sty = f->sty;
     idx = strike_pick(f->fam, sty, g_em, &g_synth);
@@ -270,44 +280,31 @@ static void greek_flush(void)
 static void glyph_emit(pdw code, pdw lat, pdi px, pdi py)
 {
     if (g_mode == PDR_TEXT) {
-        /* a text-map record in page space: the pen is in pt16 (the base is x16) */
+        /* a text-map record in page space (the base is x16: pt16): the glyph's box is
+         * the advance wide, 3/4 em above the baseline and 1/4 below, in text space; its
+         * page-space bounding box is that of the four corners (9.2) */
         static pdb rec[12];
-        static pdi x0, x1, y0, y1, fa, ad, de, ex;
-        pdi ax = (pdi)pdm_fx_round(&g_penx), ay = (pdi)pdm_fx_round(&g_peny);
-        (void)px; (void)py;
-        /* glyph box: the advance wide, ascent .75 em above, descent .25 below,
-         * in text space, then the bounding box of the transformed quad       */
-        {
-            static struct pd_fx wd;
-            pdm_fx_int(&wd, (pdi)font_width(GS.font, code));
-            pdm_fx_mul(&wd, &wd, &g_fsk);
-            pdm_fx_mul(&wd, &wd, &g_thk);
-            /* corners offset by the advance vector (M.a, M.b) and the up vector (M.c, M.d)*0.75 fs */
-            pdm_fx_mul(&ta, &wd, &g_M.a); ex = pdm_fx_round(&ta);
-            fa = ex;
-            pdm_fx_mul(&ta, &wd, &g_M.b); ad = pdm_fx_round(&ta);
-            pdr_cpy(&tb, &GS.fs, 4);
-            pdm_fx_mul(&ta, &tb, &g_M.c); de = pdm_fx_round(&ta);   /* up x */
-            pdm_fx_mul(&ta, &tb, &g_M.d); ex = pdm_fx_round(&ta);   /* up y */
-            x0 = ax; x1 = ax; y0 = ay; y1 = ay;
-            {
-                pdi ux = (pdi)((de * 3) >> 2), uy = (pdi)((ex * 3) >> 2);
-                pdi dx = (pdi)(de >> 2), dy = (pdi)(ex >> 2);
-                pdi p0x = ax, p0y = ay;
-                pdi p1x = (pdi)(ax + fa), p1y = (pdi)(ay + ad);
-                pdi p2x = (pdi)(p1x + ux), p2y = (pdi)(p1y + uy);
-                pdi p3x = (pdi)(p0x + ux), p3y = (pdi)(p0y + uy);
-                pdi p4x = (pdi)(p0x - dx), p4y = (pdi)(p0y - dy);
-                pdi p5x = (pdi)(p1x - dx), p5y = (pdi)(p1y - dy);
-                x0 = pdr_min(pdr_min(pdr_min(p0x, p1x), pdr_min(p2x, p3x)), pdr_min(p4x, p5x));
-                x1 = pdr_max(pdr_max(pdr_max(p0x, p1x), pdr_max(p2x, p3x)), pdr_max(p4x, p5x));
-                y0 = pdr_min(pdr_min(pdr_min(p0y, p1y), pdr_min(p2y, p3y)), pdr_min(p4y, p5y));
-                y1 = pdr_max(pdr_max(pdr_max(p0y, p1y), pdr_max(p2y, p3y)), pdr_max(p4y, p5y));
-            }
+        static pdi mx0, my0, mx1, my1, ax, ay, fa, ad, ux, uy;
+        pdi cxs, cys;
+        pdw k;
+        ax = (pdi)pdm_fx_round(&g_penx); ay = (pdi)pdm_fx_round(&g_peny);
+        pdm_fx_int(&t3, (pdi)font_width(GS.font, code));
+        pdm_fx_mul(&t3, &t3, &g_fsk);
+        pdm_fx_mul(&t3, &t3, &g_thk);
+        pdm_fx_mul(&ta, &t3, &g_M.a); fa = pdm_fx_round(&ta);
+        pdm_fx_mul(&ta, &t3, &g_M.b); ad = pdm_fx_round(&ta);
+        pdm_fx_mul(&ta, &GS.fs, &g_M.c); ux = pdm_fx_round(&ta);
+        pdm_fx_mul(&ta, &GS.fs, &g_M.d); uy = pdm_fx_round(&ta);
+        mx0 = my0 = 32767; mx1 = my1 = -32767;
+        for (k = 0; k < 4; k++) {              /* (0|adv) x (-1/4 | +3/4 up) */
+            cxs = (pdi)(ax + ((k & 1) ? fa : 0) + ((k & 2) ? (pdi)((ux * 3) >> 2) : (pdi)(-(ux >> 2))));
+            cys = (pdi)(ay + ((k & 1) ? ad : 0) + ((k & 2) ? (pdi)((uy * 3) >> 2) : (pdi)(-(uy >> 2))));
+            if (cxs < mx0) mx0 = cxs; if (cxs > mx1) mx1 = cxs;
+            if (cys < my0) my0 = cys; if (cys > my1) my1 = cys;
         }
         if (g_tmoverflow || ((g_tmwr + 1) << 3) + ((g_tmwr + 1) << 2) > g_dlcap) { g_tmoverflow = 1; return; }
         rec[0] = (pdb)lat; rec[1] = g_tmfirst ? 1 : 0;
-        w16(rec + 2, x0); w16(rec + 4, y0); w16(rec + 6, x1); w16(rec + 8, y1);
+        w16(rec + 2, mx0); w16(rec + 4, my0); w16(rec + 6, mx1); w16(rec + 8, my1);
         w16(rec + 10, (pdi)g_tmrun);
         pd_fcopy_out(rec, g_dls, (pdw)((g_tmwr << 3) + (g_tmwr << 2)), 12);
         g_tmwr++; g_tmrun++; g_tmfirst = 0;
@@ -332,7 +329,7 @@ static void text_glyph(pdw code)
     pdi px, py;
     if (GS.font == 255) { w = 556; lat = code; }
     else {
-        f = &g_fn[GS.font];
+        f = font_sel(GS.font);
         lat = code >= 32 ? f->enc[code - 32] : 0;
         w = font_width(GS.font, code);
     }
@@ -379,11 +376,7 @@ static void text_show(const pdb *s, pdw n)
 /* a TJ number: move left by n/1000 em */
 static void text_adjust(const struct pd_fx *n)
 {
-    pdm_fx_int(&fk, 1000);
-    pdm_fx_div(&t0, n, &fk);
-    pdm_fx_mul(&t0, &t0, &GS.fs);
-    pdm_fx_neg(&t0, &t0);
-    pdm_fx_mul(&t0, &t0, &g_thk);
+    pdm_fx_mul(&t0, n, &g_tjk);                      /* one fx_mul: -n*fs*Tz/100000 */
     pdm_fx_add(&g_tadv, &g_tadv, &t0);
     pdm_fx_mul(&t1, &t0, &g_M.a); pdm_fx_add(&g_penx, &g_penx, &t1);
     pdm_fx_mul(&t1, &t0, &g_M.b); pdm_fx_add(&g_peny, &g_peny, &t1);
@@ -545,6 +538,7 @@ static struct pd_fx *opn(pdw back)    /* the operand `back` from the end (1 = la
     return &g_opn[g_nop - back];
 }
 
+static void setfx(struct pd_fx *d, pdw back) { pdr_cpy(d, opn(back), 4); }
 static void paint(pdw fill, pdw rule, pdw stroke, pdw close)
 {
     if (close) path_close();
@@ -579,26 +573,14 @@ static void exec_op(const char *s, pdw n)
     if (n == 1) {
         switch (s[0]) {
         case 'q': gs_push(); break;
-        case 'Q': gs_pop(); break;
-        case 'w': pdr_cpy(&GS.lw, opn(1), 4); break;
+        case 'Q': gs_pop(); fs_changed(); break;
+        case 'w': setfx(&GS.lw, 1); break;
         case 'J': GS.cap = (pdb)pdm_fx_floor(opn(1)); break;
         case 'j': GS.join = (pdb)pdm_fx_floor(opn(1)); break;
-        case 'M': pdr_cpy(&GS.miter, opn(1), 4); break;
-        case 'd': {
-            pdw i, cnt = g_nop > 1 ? g_nop - 1 : 0;      /* operands are the array then phase */
-            if (cnt > 4) cnt = 4;
-            GS.ndash = 0;
-            for (i = 0; i < cnt; i++) {
-                pdr_cpy(&GS.dash[i], &g_opn[g_arr0 + i], 4);
-            }
-            if (cnt) {
-                pdw nz = 0;
-                for (i = 0; i < cnt; i++) if (GS.dash[i].hi || GS.dash[i].lo) nz = 1;
-                GS.ndash = nz ? (pdb)cnt : 0;
-                if (nz && cnt & 1) { pdr_cpy(&GS.dash[cnt], &GS.dash[0], 4); GS.ndash = (pdb)(cnt + 1 > 4 ? 4 : cnt + 1); }
-            }
-            pdr_cpy(&GS.dphase, opn(1), 4);
-            break; }
+        case 'M': setfx(&GS.miter, 1); break;
+        case 'd':                       /* dash patterns are NOT drawn (20.3.7): solid, and said so */
+            if (g_nop > 1 && (g_opn[0].hi || g_opn[0].lo)) inc_note(PDF_INC_OPER, "dash pattern");
+            break;
         case 'i': break;
         case 'm': { to_dev(opn(2), opn(1)); path_move(g_dx, g_dy); break; }
         case 'l': { to_dev(opn(2), opn(1)); path_line(g_dx, g_dy); break; }
@@ -669,16 +651,16 @@ static void exec_op(const char *s, pdw n)
             break; }
         case 'B' | ('T' << 8): text_ident(); g_inbt = 1; break;
         case 'E' | ('T' << 8): g_inbt = 0; break;
-        case 'T' | ('c' << 8): pdr_cpy(&GS.tc, opn(1), 4); break;
-        case 'T' | ('w' << 8): pdr_cpy(&GS.tw, opn(1), 4); break;
-        case 'T' | ('z' << 8): pdr_cpy(&GS.tz, opn(1), 4); fs_changed(); break;
-        case 'T' | ('L' << 8): pdr_cpy(&GS.tl, opn(1), 4); break;
+        case 'T' | ('c' << 8): setfx(&GS.tc, 1); break;
+        case 'T' | ('w' << 8): setfx(&GS.tw, 1); break;
+        case 'T' | ('z' << 8): setfx(&GS.tz, 1); fs_changed(); break;
+        case 'T' | ('L' << 8): setfx(&GS.tl, 1); break;
         case 'T' | ('r' << 8): GS.tr = (pdb)pdm_fx_floor(opn(1));
             if (GS.tr >= 4) inc_note(PDF_INC_OPER, "text clip mode"); break;
-        case 'T' | ('s' << 8): pdr_cpy(&GS.rise, opn(1), 4); g_tdirty = 1; break;
+        case 'T' | ('s' << 8): setfx(&GS.rise, 1); g_tdirty = 1; break;
         case 'T' | ('f' << 8): {
             pdw fi = 0xFF;
-            pdr_cpy(&GS.fs, opn(1), 4);
+            setfx(&GS.fs, 1);
             if (g_havename && res_lookup("Font", g_name) == 0 && g_rl.objnum) fi = font_get(g_rl.objnum, g_rl.gen);
             else inc_note(PDF_INC_FONT, "missing font resource");
             if (fi == 0xFF) fi = font_get(0, 0);
@@ -689,8 +671,8 @@ static void exec_op(const char *s, pdw n)
         case 'T' | ('D' << 8):
             pdm_fx_neg(&GS.tl, opn(1)); text_td(opn(2), opn(1)); break;
         case 'T' | ('m' << 8):
-            pdr_cpy(&g_tm.a, opn(6), 4); pdr_cpy(&g_tm.b, opn(5), 4); pdr_cpy(&g_tm.c, opn(4), 4);
-            pdr_cpy(&g_tm.d, opn(3), 4); pdr_cpy(&g_tm.e, opn(2), 4); pdr_cpy(&g_tm.f, opn(1), 4);
+            setfx(&g_tm.a, 6); setfx(&g_tm.b, 5); setfx(&g_tm.c, 4);
+            setfx(&g_tm.d, 3); setfx(&g_tm.e, 2); setfx(&g_tm.f, 1);
             pdr_cpy(&g_tlm, &g_tm, sizeof g_tm); g_tdirty = 1; break;
         case 'T' | ('*' << 8): {
             static struct pd_fx zero, nl;
@@ -739,7 +721,7 @@ showq:
 showdq:
     {
         static struct pd_fx zero, nl;
-        pdr_cpy(&GS.tw, opn(3), 4); pdr_cpy(&GS.tc, opn(2), 4);
+        setfx(&GS.tw, 3); setfx(&GS.tc, 2);
         pdm_fx_int(&zero, 0); pdm_fx_neg(&nl, &GS.tl); text_td(&zero, &nl);
         text_begin_show(); text_show(g_str, g_slen); text_end_show();
     }
@@ -748,14 +730,69 @@ showdq:
 /* ============================================================================
  * THE MAIN LOOP
  * ==========================================================================*/
-static pdw g_inl;                   /* skipping an inline image to EI */
+static pdw g_inl;                   /* inside an inline image (BI ... ID ... EI) */
+static pdw g_ik, g_iw, g_ih, g_ibpc, g_ics, g_if;
+/* Inline images are CONSUMED, not drawn (PAGEDESK-SPEC 20.3.7): the dictionary
+ * says how many bytes follow ID when it is unfiltered 8-bit grey/RGB or 1-bit
+ * grey - those are read and dropped exactly; anything else is scanned for EI one
+ * byte at a time (PDENG cannot push bytes back). The page is marked Incomplete. */
+static void inl_token(void)
+{
+    pdw k = g_ik;
+    if (g_tk.kind == PDT_NAME) {
+        if (!k) {
+            if (pdr_seq(g_tk.text, "W") || pdr_seq(g_tk.text, "Width")) g_ik = 1;
+            else if (pdr_seq(g_tk.text, "H") || pdr_seq(g_tk.text, "Height")) g_ik = 2;
+            else if (pdr_seq(g_tk.text, "BPC") || pdr_seq(g_tk.text, "BitsPerComponent")) g_ik = 3;
+            else if (pdr_seq(g_tk.text, "CS") || pdr_seq(g_tk.text, "ColorSpace")) g_ik = 4;
+            else if (pdr_seq(g_tk.text, "F") || pdr_seq(g_tk.text, "Filter")) g_ik = 5;
+            else g_ik = 9;
+        } else {
+            if (k == 4) g_ics = (pdr_seq(g_tk.text, "G") || pdr_seq(g_tk.text, "DeviceGray")) ? 1 :
+                                (pdr_seq(g_tk.text, "RGB") || pdr_seq(g_tk.text, "DeviceRGB")) ? 3 : 0;
+            if (k == 5) g_if = 1;
+            g_ik = 0;
+        }
+    } else if (g_tk.kind == PDT_NUM && k >= 1 && k <= 3) {
+        pdw v = (pdw)pdm_fx_floor(&g_tk.num);
+        if (k == 1) g_iw = v; else if (k == 2) g_ih = v; else g_ibpc = v;
+        g_ik = 0;
+    } else if (g_tk.kind == PDT_ARRB || g_tk.kind == PDT_ARRE || g_tk.kind == PDT_NUM) {
+        if (g_tk.kind == PDT_ARRE) g_ik = 0;
+    } else g_ik = 0;
+}
+static void inl_skip(void)
+{
+    pdw want = 0, rb, got, st = 0, c, n;
+    if (!g_if && g_iw && g_ih && g_iw <= 4096 && g_ibpc && g_ics) {
+        rb = (pdw)(((g_iw * g_ics * g_ibpc) + 7) >> 3);
+        if (rb && g_ih <= 8192 / rb + 1) want = (pdw)(rb * g_ih);
+    }
+    if (want && g_gseg) {
+        while (want) {
+            n = want > 1024 ? 1024 : want;
+            if (pdr_eng(PDV_ENG_STRM_READ, g_gseg, 0, n) || !pdr_eng_ax) return;
+            want -= pdr_eng_ax;
+        }
+        return;
+    }
+    /* unknown extent: one byte at a time until whitespace E I */
+    for (n = 0; n < 8192 && g_gseg; n++) {
+        if (pdr_eng(PDV_ENG_STRM_READ, g_gseg, 0, 1) || !pdr_eng_ax) return;
+        c = pd_fpeekb(g_gseg, 0);
+        if (st == 0 && (c == 32 || c == 10 || c == 13 || c == 9)) st = 1;
+        else if (st == 1 && c == 'E') st = 2;
+        else if (st == 2 && c == 'I') return;
+        else st = (c == 32 || c == 10 || c == 13 || c == 9) ? 1 : 0;
+    }
+}
 
 /* a frame ended: pop to its parent, or move to the next /Contents element */
 static pdw frame_end(void)
 {
     strm_close();
     if (g_nfr > 0 && g_fr[g_nfr].isform) {
-        gs_set(g_fr[g_nfr].gsbase);
+        while (g_gsn > g_fr[g_nfr].gsbase) { g_gsn--; gs_load(g_gsn); }
         g_resp = g_fr[g_nfr].resp; g_reso = g_fr[g_nfr].reso; g_resg = g_fr[g_nfr].resg;
         g_nfr--;
         g_gsfloor = g_nfr > 0 && g_fr[g_nfr].isform ? g_fr[g_nfr].gsbase + 1 : 0;
@@ -777,8 +814,11 @@ static pdw interp_run(pdw maxops)
         err = tok_next();
         if (err) { g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error"); g_idone = 1; while (g_nfr) { strm_close(); g_nfr--; } strm_close(); return 1; }
         kind = g_tk.kind;
-        if (g_inl) {                              /* inline image: skip to EI */
-            if (kind == PDT_OP && g_tk.len == 2 && g_tk.text[0] == 'E' && g_tk.text[1] == 'I') g_inl = 0;
+        if (g_inl) {                              /* inline image: read its dictionary, then its bytes */
+            if (kind == PDT_OP) {
+                if (g_tk.len == 2 && g_tk.text[0] == 'I' && g_tk.text[1] == 'D') { inl_skip(); g_inl = 0; }
+                else if (g_tk.len == 2 && g_tk.text[0] == 'E' && g_tk.text[1] == 'I') g_inl = 0;
+            } else inl_token();
             continue;
         }
         if (g_dictd) {
@@ -822,7 +862,7 @@ static pdw interp_run(pdw maxops)
         case PDT_OP:
             if (g_tk.len == 2 && g_tk.text[0] == 'B' && g_tk.text[1] == 'I') {
                 inc_note(PDF_INC_IMAGE, "inline image");
-                g_inl = 1; op_clear(); break;
+                g_inl = 1; g_ik = 0; g_iw = g_ih = g_ibpc = g_ics = g_if = 0; op_clear(); break;
             }
             exec_op(g_tk.text, g_tk.len);
             op_clear();
@@ -850,7 +890,7 @@ static pdw interp_start(pdw page)
     g_fr[0].isform = 0; g_fr[0].cidx = 0;
     g_ops = 0;
     g_rn = 0; g_ropen = 0;
-    g_fnnext = 0; pdr_zero(g_fn, sizeof g_fn);
+    g_cok = 0; g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0;
     g_pkfam = 0xFF;
     text_ident();
     err = strm_open(0, 0, page, 0);

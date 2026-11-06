@@ -896,6 +896,324 @@ usage, 3 SKIP.
 
 ### 20.3 The renderer (`rend`)
 
+`PDREND.MOD` (`apps/pagedesk/pdrend.asm` + `pdrend.c`, which `#include`s `pdrg.c`,
+`pdrd.c`, `pdrf.c`, `pdri.c`, `pdrv.c`; the primitives are `pdrprim.inc`) is the
+rendering segment: content interpreter, display list, band rasteriser, glyph and
+image drawing, the text map and thumbnails. This section is its contract beyond
+3, 5, 10 and 11: numbers, formats, the exact behaviour of its verbs, and the
+places it departs from those sections (20.3.8).
+
+#### 20.3.1 Build, size, checks, claims
+
+`make pdrend` compiles `pdrend.c` with smlrcc, lowers it with `tools/cc8086.py`
+(`&local` refusal, 96-byte frames - the largest is 58), assembles `pdrend.asm`
+with `nasm -f bin -w+error` (`cpu 8086`) and prints the size; it then builds the
+host harness and runs `hosttest/pdr_check.py` and, where a python has Unicorn,
+`hosttest/pdr_primtest.py`. `make pdrend-fuzz` is the sanitizer run (20.3.6).
+
+| item | bytes |
+|---|---|
+| `PDREND.MOD` image (code + data) | 42,418 |
+| bss (zeroed by the door on first entry) | 9,188 |
+| image + bss | 51,606 (target 40,960 and the lead's 44 KiB - NOT met; cap 57,344) |
+| of which `pdmath.inc`'s share (`PDM_SKIP_PARSE`, `PDM_SKIP_CRC`) | about 3,900 |
+
+The target is missed by a third and the reason is stated, not hidden: SmallerC
+emits about 3.4 bytes of 8086 a source token, so the 4,000 lines of C that do the
+work are 33 KB; the near arrays the algorithms need are 9 KB of bss (13 KB before the saved graphics states and the font cache moved to the workspace, below). What was
+cut to stay under the cap: dash patterns (20.3.8), a one-row clip mask instead of
+a band-sized one, four fonts in the cache instead of six, and the
+saved graphics states and the font cache moved into the workspace tail of `dl_seg`
+(3.7 KB of bss). What is left in bss is hot: the edge buffers the rasteriser scans
+every row (`g_ed`, `g_act`, `g_ce`, 3.3 KB), the flattened path (1 KB), the
+operand and run staging the engine and `dl_put` take by near pointer (2 KB). What
+would reach 40 KB is a different division of labour (the shell doing thumbnails,
+the text map moving into PDENG), not further trimming.
+
+Claims it expects from `PDV_REND_INIT` (16.2 revised by this section):
+
+| `pdxb_init` field | size | holds |
+|---|---|---|
+| `dl_seg`, `dl_kb` | **26 KiB** (<= 63): 22 KiB of list + the 4 KiB WORKSPACE (`PDR_WSB`) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds the saved graphics states (16 x 78 bytes) and the four-entry font cache (4 x 684 bytes); one font is resident in bss at a time. A claim of 4 KiB or less leaves no list and BEGIN refuses |
+| `band_seg`, `band_bytes` | `16 x stride`, stride = `ceil(w/8)` (1bpp) or `ceil(w/2)` (4bpp) of the canvas width rounded out to 8 pixels: 1.5 KiB at 720 px 1bpp, 5.1 KiB at 640 px 4bpp | one band |
+| `glyph_seg`, `glyph_kb` | **24 KiB** (16.2 said 12; 20.3.4 carves it) | image row buffer, PDFONTX index, transformed glyphs, the strike cache |
+| `bank_seg`, `bank_kb` | ignored | (D3: the bank arrives through `PDV_REND_FONTBANK`) |
+
+A claim of 0 is "none now" (D2). `BEGIN`, `THUMB` and `TEXTMAP` refuse with
+`PDE_NOMEM` when `dl_seg` or (for drawing) `band_seg` is 0 or the band cannot hold
+16 rows of the canvas. `INIT` resets the font state: **the primary sends
+`PDV_REND_FONTBANK` after every `INIT`.**
+
+#### 20.3.2 Geometry, the display list and the passes
+
+**Device space** inside the renderer is the 1/4-pixel grid ("qpx"): pixel p covers
+`[4p, 4p+4)` and its sample point is `4p+2`; a coordinate is an `int` clamped to
++/-16,000 (+/-4,000 px). The base matrix (page pt -> qpx) is built from the
+`pd_view` by the same four rotation cases as 5.3 and is equal to `pdm_view_fwd`
+within **one pixel** on every point (`pdr_check`: 1,008 points over every rotation,
+zoom 25-400 and the four adapter aspects, on a box with a nonzero origin). A pixel
+is painted when its sample point is inside the shape (nonzero or even-odd);
+axis-aligned rectangles round the same way and a rectangle that would cover no
+sample point but has area is **widened to one pixel**, so a 0.5 pt table rule never
+vanishes. Beziers are flattened by de Casteljau subdivision until both second
+differences of the control polygon sum to <= 1 qpx (chord within 0.19 px of the
+curve), depth 6 (64 pieces) - the operation limit. Arithmetic is `pdmath`
+(16.16) for everything that is user space; a transform that overflows sets
+`PDF_INC_RANGE` and the coordinate clamps, never wraps.
+
+**The display list** is a byte stream of records (all fields little-endian,
+coordinates in device pixels unless marked qpx), appended in content order:
+
+| record | layout after the 8-byte header `type, aux, len(u16), y0(i16), y1(i16)` |
+|---|---|
+| `DLR_STATE` (1) | clip rect `cx0 cy0 cx1 cy1`, `ncl` (non-rectangular clips active), `c4` (VGA colour), `pat[4]` (the 4 rows of the 8-bit dither/solid pattern) - emitted only when it changed |
+| `DLR_RECT` (2) | `x0, x1` - an axis-aligned rectangle, rows `y0..y1` (header) |
+| `DLR_FILL` (3) | `aux` = 0 nonzero / 1 even-odd; `xmin, xmax, nedges`, then edges `x0 y0 x1 y1` (qpx, original direction) |
+| `DLR_GLYPHS` (4) | `family, style, strike size, flags (rot | scale2<<2), nglyphs(u16), strike id(u16)`, then `code(u8) x(i16) y(i16)` per glyph - up to 64 a record |
+| `DLR_IMAGE` (5) | dest rect `xl yt xr yb` (qpx), `W H` (u16), object `num gen`, `bpc, ncomp, flags` (1 stencil, 2 inverted, 4 mirrored) |
+
+`y0..y1` is the record's row range already intersected with the clip and the pass;
+edges wholly outside the pass's rows, and horizontal edges, are never stored. A
+**non-rectangular clip** (W/W* of anything but an axis-aligned rectangle) goes in
+a pool of up to 8 polygons / 96 edges that persists across `q`/`Q` (a state's
+`ncl` says how many are active); a fill or rectangle under one is painted one scan
+line at a time through two 96-byte masks. Text and images under a polygon clip are
+cut to its bounding box only (20.3.8).
+
+**Strokes** become fills of nonzero polygons: a quad per segment, a wedge per
+join (miter inside the limit, else bevel; round = an octagon), square caps by
+extension, round caps by octagon, all wound the same way so overlaps cannot cancel.
+A width under one device pixel is one pixel. Polylines whose segments are all
+horizontal or vertical (the table-rule case) become `DLR_RECT`s directly.
+`dash patterns are not drawn` (20.3.8).
+
+**Passes (rewrites 10.2; DECISIONS D4).** The framebuffer cannot be read back and a
+band is blitted opaque, so a second pass could not paint over a band already
+shown. Instead one **pass** interprets the whole content stream for the rows of a
+*group of bands*, culling at emit time everything outside them. The first group is
+every band of the canvas. When the list fills (`dl_kb`), the group is **halved**
+(bands `[b0, b0+n/2)`), the content is **rescanned from its first byte**, the group
+is drawn and the next group follows; the group width stays halved. When one band
+still overflows, that band is composed in **sub-passes of halving row ranges**
+onto the same band buffer and blitted once. Only when even one *row* overflows is
+the rest of that row dropped, with `PDF_INC_LIMIT`. The result is the identical image
+whatever the list size (`pdr_check`: 4, 8, 12 and 16 KiB lists (claims 4 KiB larger) against 22 KiB,
+byte for byte, 11 to 63 passes). `pdxb_rstatus.passes` counts them.
+
+**A band** is 16 canvas rows, `ceil` over `clip_y0..clip_y1`, as wide as the clip
+rounded out to multiples of 8 pixels (the kernel blit's rule; `OSAPI_WM_CLIP_SET`
+cuts the overhang). It starts as the desk pattern (1bpp: alternating `AA`/`55`
+rows, 4bpp: colour 7), the page rectangle is filled white, the list is walked, and
+the band is presented: `gfx_lock`, `os88_wm_clip_set(win_off)`, one `OSAPI_GFX_BLIT1`
+or `BLIT4`, `gfx_unlock`. **The lock is held for the blit only.** 1bpp: bit 1 =
+lit = white. 4bpp: VGA palette index in a nibble, high nibble leftmost.
+
+**Colour (10.5).** Gray, RGB and CMYK operands (and `sc/scn` by operand count) become a
+luminance `(77r + 150g + 29b) >> 8` and a VGA index: greys -> 0 / 8 / 7 / 15 at
+luminance 48 / 128 / 208; saturated colours -> the nearest of the other twelve by
+channel threshold (`rgb_c4`). A 1bpp **fill** and every image is the 4x4 ordered
+dither `lit when (17 * lum >> 8) > Bayer[y&3][x&3]`; a 1bpp **stroke, text and
+stencil** is solid, black below luminance 128, white above. 4bpp fills use the
+index; 4bpp greys in images are dithered between the four greys.
+
+**Images** are drawn at raster time from the engine's stream: per band the stream
+is reopened and read forward to the first source row the band needs (the source
+row for a destination row is `(2y+1) * H / 2dh` at the pixel centre), each row
+through the assembly row composer. 1-bit, 8-bit grey, 8-bit RGB (to grey), `/ImageMask`
+stencils (painted in the fill colour; `/Decode [1 0]` swaps the sense), mirrored
+left-right. Rows longer than 1,024 bytes are refused (`PDF_INC_LIMIT`), as are
+images drawn rotated by a quarter turn or upside down (`PDF_INC_IMAGE`, 20.3.8).
+
+#### 20.3.3 What PDREND asks of PDENG (verified against `pde_verb`)
+
+PDREND's host build links the real `pdeng.c` (`hosttest/pdr_hosteng.c`) and draws
+the same pixels as against its own mini-engine; these are the calls, as 20.2
+specifies them:
+
+* `STRM_OPEN {objnum=0, page, index}` for `/Contents` element `index` until
+  `PDE_RANGE` (the end); `{objnum, gen}` for a Form or an image; `STRM_CLOSE`
+  pops. Up to 6 streams (a page, 4 forms and one image) are open at once.
+* `TOKEN`: `PDE_RANGE` with CF = 1 means "number saturated, token valid" and sets
+  `PDF_INC_RANGE`; any other error ends the page (`PDF_INC_LIMIT`, "content stream
+  error"). Names and operators are NUL-terminated after `len` here.
+* `DICT_GET` with paths of names and `"[n]"`; a **final reference is followed by
+  PDREND** (a second call with no names). `/Widths` is read element by element, on
+  first use of a code, never as a whole.
+* `RES_LOOKUP {page}` for the page, `{page=0xFFFF, resobj, resgen}` for a Form that
+  has its own `/Resources` (a Form without them keeps its parent's); an inline
+  dictionary (`objnum` 0) is "missing". `PAGEINFO` for thumbnails.
+* **Inline images** (`BI ... ID ... EI`) are consumed and **not drawn**: the
+  dictionary gives the byte count of an unfiltered 8-bit or 1-bit grey/RGB image,
+  which is read with `STRM_READ` and dropped; anything else is scanned for
+  `EI` one byte at a time (PDENG cannot unread). The page is Incomplete (image).
+
+#### 20.3.4 Fonts, text and the text map
+
+**The bank (D3, D5).** `PDV_REND_FONTBANK` takes `pdxb_fontbank`: the PDRES INDEX
+claim (directory `PDRS`, the `PDFB` bank at the directory's kind-1 offset `D`,
+widths `PDWD`, names), the package name, the launch folder's place and the PDRES
+part's file offset. PDREND keeps **no strike bitmap resident**. The glyph claim
+(`glyph_kb`, 24 KiB recommended) is carved:
+
+| offset | size | holds |
+|---|---|---|
+| 0 | 1,024 | the image row buffer |
+| 1,024 | 2,048 | the INDEX of `PDFONTX.RES` (read at `FONTBANK` when the file is beside the package) |
+| 3,072 | 2,016 | 14 slots of 144 bytes: glyph bitmaps turned or doubled (below) |
+| 5,120 | the rest | the **strike cache** |
+
+A strike is read on first use: `file_enter` stands in the launch folder
+(`os88_file_goto_q_mark`, the working folder restored afterwards so PDENG's
+reads by name still find the document), the cluster size of that volume is asked,
+the offset and capacity are rounded OUT to cluster multiples, `READ_SEQ`
+delivers them into the cache and the strike is slid down to the paragraph. The
+cache holds up to 8 strikes, 512-aligned, bump-allocated; when it is full it is
+emptied and the wanted strike read again (so a working set larger than the cache
+thrashes: **24 KiB holds every strike of one page of mixed Helvetica, Times and
+Courier at 8-16 px; 16 KiB cannot hold a 20 px bold (9.9 KiB with its cluster
+slack) beside others** - measured on XTGUIDE). A strike larger than the cache, or
+a failed read, makes the run use the next smaller strike (`PDF_INC_FONT`
+"font strike unavailable" only when none is left).
+
+**Selection.** Family and style from the BaseFont (11.1; subset prefixes ignored;
+a name outside the base-14 families is sans and `PDF_INC_FONT`, "font substituted").
+The device em is `fontsize x |text-space y axis|`; the strike is the **largest size
+at or below it** over both banks, else the smallest. With only the core sizes
+(8, 10, 12), a request of 16 px or more is a core strike of at most half the size
+**pixel-doubled** (D5: 16 from 8, 20 from 10, 24 from 12); a missing
+`PDFONTX.RES` is not an error and not Incomplete. An italic record flagged
+"synthesise" is **sheared** in the compositor, `floor((ascent - row) / 4)` pixels a
+row; sheared text is not turned or doubled. Text under 5 device pixels is
+**greeked**: one hairline per show operator at 0.3 em above the baseline in half
+the ink (thumbnails are made of these).
+
+**Orientation.** The text direction (`Tm x CTM`) picks a quadrant; a quarter-turn
+(a rotated page, a rotated text matrix) draws every glyph's bitmap turned by the
+same quarter, from the 14-slot cache, so a 90-degree page reads correctly. An
+arbitrary angle draws upright bitmaps along the true baseline (a font
+simplification). Horizontal scaling (`Tz`) moves glyphs but does not narrow them.
+
+**Widths and encodings.** A code's advance is `/Widths[code - FirstChar]` (read
+on first use), else the base-14 table of 20.4.3 for the glyph the code maps to
+(`Courier` is 600). Encoding: `WinAnsi` identity; `MacRoman` and `Standard` by the
+tables in `pdrenc.h` (generated by `hosttest/pdr_gen.py`); no `/Encoding` is
+Standard (as the PDF reference says for the base-14); `/Differences` maps glyph names through the
+sorted names table (and `uniXXXX` below 127). A code with no mapping advances
+and draws nothing. Type0 (CID) fonts draw nothing and set `PDF_INC_FONT`; Type3 and
+Symbol/Dingbats draw as the substitute and set it.
+
+**The text map** (`PDV_REND_TEXTMAP`, 9.2) runs the same interpreter with no
+drawing and a base matrix of 16 (user space -> pt16, no flip, MediaBox origin kept),
+writing `pdtm_glyph` records (12 bytes: code, flags bit 0 = first glyph of a show
+operator, the axis-aligned box of the glyph's quad - advance wide, 3/4 em above the
+baseline, 1/4 below - and the running index) into the ring that the list claim is
+when no page is being drawn. Each call interprets one slice (256 operators)
+**only when the ring is empty**, then copies up to `dmax / 12` records to the
+caller; `done` is set when the content is exhausted and the ring drained. Invisible
+text (`Tr 3`) is mapped. `PDF_INC_LIMIT` "text map" if a single operator wrote more
+than the ring holds. Reading order is content order.
+
+**Thumbnails** (`PDV_REND_THUMB`, 10.8): `PAGEINFO` for the box and rotation, the
+zoom (percent) at which the page fits the cell, the page centred in a white cell,
+the same pipeline at 1bpp into `dseg:doff` (stride `ceil(w/8)`), driven by repeated
+calls (`state` 0 -> 1 -> 2; `PDE_BUSY` while stepping). A new `BEGIN`, `THUMB` or
+`TEXTMAP` abandons whatever was running.
+
+#### 20.3.5 Verbs, answers and slices
+
+| verb | answer |
+|---|---|
+| `INIT` | `PDE_OK`; replaces every claim; clears the font state |
+| `FONTBANK` | `PDE_OK`, or `PDE_FONT` when the index is not a PDRES index |
+| `BEGIN` | `PDE_OK` (the first pass is set up; nothing is drawn yet), `PDE_NOMEM`, or the engine's error on the first content stream |
+| `STEP` | `PDE_BUSY` after a slice, `PDE_OK` after the last band; CF is **clear** on `PDE_BUSY` (it is not a failure) |
+| `ABORT` | `PDE_OK`; closes every stream |
+| `STATUS` | `pdxb_rstatus`: the `PDF_INC_*` bits, the first skipped feature's name, operators interpreted, passes |
+| `TEXTMAP`, `THUMB` | as above |
+
+A `STEP` slice is one of: up to `PD_SLICE_OPS` (256) operators of interpretation, or
+**one band** composed and blitted (one gfx lock). On the 8088 a band of dense text
+is the long one: see 20.3.7. Cancel is `ABORT` between slices.
+
+#### 20.3.6 Assembly primitives and host checks
+
+`pdrprim.inc`: `pdr_muldiv` (`a*b/c` with a 32-bit intermediate, saturating - an
+`idiv` overflow would be a #DE), `pdr_fill1`/`pdr_fill4` (a span in a band row),
+`pdr_glyph` (one bitmap into 1bpp - clear or set - or 4bpp, with the shear),
+`pdr_imgrow` (one image row: nearest sample, the dither, a nibble or a bit),
+`pdr_eng` (the far call into PDENG) and `pdr_blit`. Their cdecl convention is
+`pdmath.inc`'s; their **C twins** in `hosttest/pdr_host.c` are the specification.
+`pdr_glyph`'s precondition: the glyph and its shear margin lie inside the band row
+and the bitmap's padding bits are zero (strike rows are).
+
+* `hosttest/pdr_primtest.py` runs the SHIPPING assembly in Unicorn against the
+  twins (muldiv, both fills, every glyph mode with and without shear, every image
+  mode with flip/invert/stencil, random inputs and edges): every byte of every
+  arena equal, the calling convention kept; a mutated image proves it can fail.
+* `hosttest/pdr_check.py`: the view transform; 75 renders (5 pages x 3 zooms x
+  VGA, EGA, Hercules, CGA and 1bpp VGA) with the expected Incomplete bits; all
+  four rotations; multi-pass == single pass; against **mutool** at the same scale
+  (<= 1.4% of 8x8 cells differ by more than 35 points, no ink cell missing beyond
+  the font and four-grey simplification); strikes read identically at 512 B, 1 KiB and
+  4 KiB clusters (the READ_SEQ stub refuses a seek or capacity that is not a cluster
+  multiple); no `PDFONTX.RES`; a small glyph claim; the text map; thumbnails.
+* `hosttest/pdr_fuzz.py` (`make pdrend-fuzz`): 22 hostile streams and 400 random
+  operator streams on an address+undefined-behaviour sanitized build, canaries
+  behind every claim, no crash, no hang, no write past a claim.
+* `hosttest/pdr_hosteng.c`: the same renders against the REAL `pdeng.c`; the shared
+  samples XTGUIDE, MONOIMG, HELLO and LATIN against mutool (0.0-0.3% of cells).
+* Not done on the glass: no QEMU/MartyPC row exists yet for PDREND; the module is
+  built for the target and its primitives are run on an 8086 model, but the whole
+  module has not been executed on an emulated XT (rows proposed in the report).
+
+#### 20.3.7 Cost (ESTIMATES - no emulated XT has timed the module)
+
+Instruction counts of the primitives, from Unicorn (`hosttest/pdr_primtest.py`
+harness, counted not timed): `pdr_fill1` of an 80-pixel span 57; `pdr_glyph` 1bpp
+6x12 724, 10x16 1,052, 14x24 sheared 2,336; 4bpp 6x12 1,156, 10x16 2,428;
+`pdr_imgrow` 64 pixels 3,000-4,900 (47-76 a pixel). At ~14 cycles an instruction
+(the 8088's mix with memory operands) a 1bpp 10x16 glyph is ~15k cycles (3 ms) plus
+~0.8 ms of C setup; a 4bpp one 7 ms. A band of one dense text line (80 glyphs) is
+therefore ~0.3 s on a 1bpp adapter and ~0.6 s at 4bpp, a band of images a few
+hundred milliseconds a 64-pixel row-pair - **longer than the 100 ms slice goal for
+text-heavy bands; the cause is the per-glyph path (the 4bpp nibble loop is the
+obvious next optimisation, 20.3.9)**. The list walk is ~65 us a record a band
+(`pd_fcopy_in` of 8 bytes). Disk time is separate: a strike read is one `READ_SEQ`
+call of 1-2 clusters (~0.4 s on a floppy), once per strike per `FONTBANK`.
+
+#### 20.3.8 Where PDREND departs from the contract, and what it does not do
+
+* 10.2: rescan with narrower groups instead of "resume from the stream position"
+  (D4); a band that still overflows is composed in sub-passes.
+* 10.4: the whole canvas clip is drawn (desk pattern outside the page), not only
+  the page rectangle.
+* 11.2: strike offsets are from the file's first byte (20.4.1); strikes are read
+  on demand (D3), PDFONTX.RES's index is read by PDREND.
+* 16.2: the glyph claim is 24 KiB, not 12 (20.3.4); the list claim is 26 KiB
+  (22 of list + the 4 KiB workspace, 20.3.1); the current graphics state is in bss.
+* Not drawn, and said so (`PDF_INC_*` + the first name): **dash patterns** (`d` is
+  parsed, strokes are solid, `PDF_INC_OPER` "dash pattern" when a non-zero
+  pattern is set); **inline images**; images turned a quarter or upside down;
+  rows over 1,024 bytes; shadings, patterns, non-device colour spaces (a tint of
+  1 component draws as grey), transparency (`/SMask`, `/Mask` noted, the image drawn
+  opaque), text render modes 4-7 (drawn as 0-3, noted), Type0/Type3/Symbol fonts.
+* Text and images under a **polygonal** clip are cut to its bounding box.
+* Glyphs above 24 px without `PDFONTX.RES` are doubled; above 24 px with it are the
+  24 px strike (positions follow the PDF widths either way).
+* Fonts at most 4 distinct per page in the cache (round robin), 14 distinct
+  rotated/doubled glyphs hot; paths of 200 vertices, 256 staged edges, 24
+  operands, 512 bytes of a string per operator (the rest is cut, `PDF_INC_LIMIT`).
+* The page's `q` depth beyond 16 and Form nesting beyond 4 are refused
+  (`PDF_INC_LIMIT`). A Form invoking itself ends at the depth limit.
+
+#### 20.3.9 Open items
+
+The 4bpp glyph compositor writes a nibble a set bit (a byte-table version would be
+~3x faster); the image reader re-reads the stream from the start for every band
+(a one-pass image per group would not); no `PDREND` row on an emulated XT yet; a
+`kern_mega` build would need the glyph claim addressed through selectors (the cache
+uses segment arithmetic, as every claim here does).
+
 ### 20.4 Fonts, widths and art (`fonts`)
 
 Two resource files in one format (DECISIONS D3, D5), built by `tools/os88pdfont.py`
