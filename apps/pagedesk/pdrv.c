@@ -379,7 +379,10 @@ static pdw verb_thumb(void)
 static pdw verb_init(pdw xbseg)
 {
     g_xb = xbseg;
-    close_streams();
+    /* the FIRST INIT has no vector yet (bss: 0000:0000) and g_idone = 0, so
+     * close_streams() would far-call 0:0 - rendfix's hang. Close only through a
+     * vector a previous INIT set; the streams belong to that binding */
+    if (pdr_eng_seg) close_streams();
     g_ph = PDR_IDLE; g_mode = PDR_IDLE;
     pd_fcopy_in(g_xb, 0, &g_ini, sizeof g_ini);
     pdr_eng_off = g_ini.eng_off; pdr_eng_seg = g_ini.eng_seg;
