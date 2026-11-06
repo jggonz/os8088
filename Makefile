@@ -20211,6 +20211,69 @@ wireballtest: wireballdisk $(IMG)
 apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
 	python3 tools/wbfront.py
 
+# ---- PageDesk: wrt ----------------------------------------------------------
+# PDWRT.MOD (PAGEDESK-SPEC 20.5): the writer module - serialiser, appearance
+# streams, incremental save, fresh documents. A SEPARATE compilation and a
+# separate `nasm -f bin` job, open-coded the way LOOM.WPV is (a module has no
+# package header, so CC_PACKAGE does not fit). `make pdwrt` builds it AND runs
+# its host harness; the harness is host-side only and is not in `all`.
+#
+# PDW_SDK is an extra include root searched BEFORE apps/ - a tree holding a
+# newer cc/os88.h, cc/os88thunk.asm and pagedesk/pdmath.inc, pdabi.inc. It
+# exists for verifying before those files land on this branch and is empty in
+# the lead's integration tree.
+PDW_C    := apps/pagedesk/pdwrt.c apps/pagedesk/pdwio.c apps/pagedesk/pdwser.c apps/pagedesk/pdwap.c \
+            apps/pagedesk/pdwscan.c apps/pagedesk/pdwsave.c
+PDW_H    := apps/pagedesk/pdw.h apps/pagedesk/pdwwid.h apps/pagedesk/pdabi.h apps/pagedesk/pdmath.h
+PDW_SDK  ?=
+PDW_OUT  := $(BUILD)/pdw
+PDW_CAP  := 49152
+.PHONY: pdwrt pdwrt-host
+$(BUILD)/pdwrt.raw.asm: $(PDW_C) $(PDW_H) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(if $(PDW_SDK),$(PDW_SDK)/cc,$(CC_DIR)) -I apps/pagedesk \
+		apps/pagedesk/pdwrt.c -o $@
+$(BUILD)/pdwrt.gen.asm: $(BUILD)/pdwrt.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+$(BUILD)/PDWRT.MOD: apps/pagedesk/pdwrt.asm $(BUILD)/pdwrt.gen.asm $(CC_RUNTIME) \
+                    $(wildcard apps/pagedesk/pdmath.inc apps/pagedesk/pdabi.inc) | $(BUILD)
+	$(NASM) -f bin -w+error $(if $(PDW_SDK),-I $(PDW_SDK)/) -I apps/ -I $(BUILD)/ -o $@ apps/pagedesk/pdwrt.asm
+	@python3 -c "import struct,sys; d=open('$@','rb').read(); m,a,i,b=struct.unpack_from('<HHHH',d); \
+	    assert i==len(d), (i,len(d)); t=i+b; print('PDWRT.MOD: image %d + bss %d = %d bytes (%.1f KiB; target 40, cap 48)'%(i,b,t,t/1024)); \
+	    sys.exit(1 if t>$(PDW_CAP) else 0)"
+# the host harness and its independent readers (qpdf, mutool, Poppler); PDW_SHOTS
+# is where the rendered PNGs go ('' = none)
+PDW_SHOTS ?=
+$(PDW_OUT)/.host.stamp: apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/hosttest/pdw_verify.py $(PDW_C) $(PDW_H) \
+                        apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	mkdir -p $(PDW_OUT)
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(PDW_OUT)/pdw_test \
+		apps/pagedesk/hosttest/pdw_test.c apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c
+	PDW_OUT=$(abspath $(PDW_OUT)) $(PDW_OUT)/pdw_test > $(PDW_OUT)/files.txt || { cat $(PDW_OUT)/files.txt; exit 1; }
+	python3 apps/pagedesk/hosttest/pdw_verify.py $(abspath $(PDW_OUT)) $(PDW_SHOTS)
+	touch $@
+pdwrt-host: $(PDW_OUT)/.host.stamp
+pdwrt: $(BUILD)/PDWRT.MOD pdwrt-host
+# PDWRT against the REAL PDENG (hosttest/pdw_real.c): on demand, and a SKIP
+# until pdeng.c is on the branch. PDW_ENG is the directory holding pdeng.c and
+# hosttest/pde_host.c; PDW_REAL_PDF the source it saves over twice.
+PDW_ENG      ?= apps/pagedesk
+PDW_REAL_PDF ?= apps/pagedesk/samples/MARKUP.PDF
+.PHONY: pdwrt-real
+pdwrt-real: | $(BUILD)
+ifneq ($(wildcard $(PDW_ENG)/pdeng.c),)
+	mkdir -p $(BUILD)/pdw-real
+	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/pdeng.c -o $(BUILD)/pdw-real/pdeng.o
+	$(CC) -std=gnu99 -O1 -w -DPD_HOST -I $(PDW_ENG) -c $(PDW_ENG)/hosttest/pde_host.c -o $(BUILD)/pdw-real/pde_host.o
+	$(CC) -std=gnu99 -O1 -Wall -DPD_HOST -I apps/pagedesk -o $(BUILD)/pdw-real/pdw_real apps/pagedesk/hosttest/pdw_real.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c $(BUILD)/pdw-real/pdeng.o $(BUILD)/pdw-real/pde_host.o
+	cd $(BUILD)/pdw-real && ./pdw_real $(abspath $(PDW_REAL_PDF))
+	qpdf --check $(BUILD)/pdw-real/R1.PDF && qpdf --check $(BUILD)/pdw-real/R2.PDF
+else
+	@echo "pdwrt-real: SKIP - PDENG ($(PDW_ENG)/pdeng.c) is not on this branch yet"
+endif
+# ---- end PageDesk: wrt ------------------------------------------------------
+
 # ---- PageDesk: math ----
 # PageDesk's arithmetic contract (PAGEDESK-SPEC 4, 20.7). `pdabi-check` is in
 # `all`: tools/os88pdabi.py --check holds apps/pagedesk/pdabi.h to its generated
