@@ -11,6 +11,8 @@ writes this exact text, and tests/unit/t_pdfix.py checks that it has not drifted
 
 Columns: file | layer | expected | why.
   layer    open   = PDE_* comes back from opening the file
+           stream = PDV_ENG_STRM_OPEN of the page content (open itself succeeds)
+           pageinfo = PDV_ENG_PAGEINFO (inherited boxes resolve on demand)
            render = the file opens (or the page is reached) and the refusal is
                     raised while drawing the page; the page is then shown as
                     Incomplete rendering (PAGEDESK-SPEC 10.6) where the code is
@@ -34,11 +36,11 @@ xref_wrong_offset.pdf      open    PDE_XREF      startxref points inside the xre
 xref_swapped_entries.pdf   open    PDE_XREF      two xref entries swapped: "N 0 obj" is not at the offset
 xref_size_huge.pdf         open    PDE_XREF      /Size claims 99,999,999 objects, the table has a handful
 no_root.pdf                open    PDE_XREF      trailer has no /Root
-stream_length_short.pdf    open    PDE_SYNTAX    /Length 3 is shorter than the data; endstream is not where it says
-stream_length_long.pdf     open    PDE_SYNTAX    /Length overshoots endstream but stays inside the file
-stream_length_past_eof.pdf open    PDE_TRUNC     /Length runs past the end of the file
-stream_length_negative.pdf open    PDE_SYNTAX    negative /Length
-stream_no_endstream.pdf    open    PDE_SYNTAX    endstream keyword corrupted
+stream_length_short.pdf    stream  PDE_SYNTAX    /Length 3 is shorter than the data; endstream is not where it says (file length unchanged)
+stream_length_long.pdf     stream  PDE_SYNTAX    /Length overshoots endstream but stays inside the file
+stream_length_past_eof.pdf stream  PDE_TRUNC     /Length runs past the end of the file
+stream_length_negative.pdf stream  PDE_SYNTAX    negative /Length
+stream_no_endstream.pdf    stream  PDE_SYNTAX    endstream keyword corrupted
 cyclic_pagetree.pdf        open    PDE_CYCLE     /Pages lists itself among its own /Kids
 cyclic_parent.pdf          open    PDE_CYCLE     /Parent chain loops (a page is its own parent)
 deep_pagetree.pdf          open    PDE_DEPTH     page tree nested 120 levels deep
@@ -46,8 +48,8 @@ deep_array.pdf             open    PDE_DEPTH     array nested 5,000 levels in a 
 deep_dict.pdf              open    PDE_DEPTH     dictionary nested 2,000 levels
 cyclic_resources.pdf       render  PDE_CYCLE     a Form XObject draws itself; open succeeds, render refuses
 form_nest_7.pdf            render  PDE_DEPTH     Form XObjects nested 7 deep (limit 4)
-huge_mediabox_number.pdf   open    PDE_RANGE     MediaBox width is a 11-digit integer
-page_5000pt.pdf            open    PDE_RANGE     page box outside +/-2047 pt
+huge_mediabox_number.pdf   pageinfo PDE_RANGE     MediaBox width is a 11-digit integer
+page_5000pt.pdf            pageinfo PDE_RANGE     page box outside +/-2047 pt
 huge_operands.pdf          render  PDE_RANGE     operands beyond 32-bit and a 99,999,999 pt font size in a content stream
 graphics_stack_1000.pdf    render  PDE_LIMIT     1,000 nested q operators (the stack is bounded)
 string_100k.pdf            render  PDE_LIMIT     a 100,000 byte literal string in one operator
@@ -56,7 +58,7 @@ runlength_bomb.pdf         render  PDE_LIMIT     80,000 bytes of RunLength that 
 flate_unsupported.pdf      render  PDE_FLATE     FlateDecode content on the XT build
 lzw_unsupported.pdf        render  PDE_FILTER    LZWDecode content
 filter_chain_5.pdf         render  PDE_FILTER    a five-stage filter pipeline (limit 4)
-prev_loop.pdf              open    PDE_CYCLE     /Prev points at the xref section it is in
+prev_loop.pdf              open    PDE_XREF      /Prev points at the xref section it is in
 prev_broken.pdf            open    PDE_XREF      /Prev points at an offset with no xref section
 prev_past_eof.pdf          open    PDE_XREF      /Prev beyond the end of the file
 prev_chain_10.pdf          open    PDE_LIMIT     ten revisions chained by /Prev (limit 8)

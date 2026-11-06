@@ -1648,6 +1648,37 @@ def mini(name='NEG', content=b'BT /F1 12 Tf 72 700 Td (negative sample) Tj ET\n'
     return pdf, root, pg, pr, cs
 
 
+def refix_xref(data):
+    """Rewrite every xref offset and startxref after a same-structure edit that
+    changed the file length, so the ONLY defect left is the one the case names."""
+    pos = {int(m.group(1)): m.start(1) for m in re.finditer(rb'(?:^|\n)(\d+) 0 obj', data)}
+    for m in re.finditer(rb'(?:^|\n)(\d+) 0 obj', data):
+        pos[int(m.group(1))] = m.start(1)
+    xr = data.rindex(b'\nxref\n') + 1
+    head = data[:xr]
+    tail = data[xr:]
+    lines = tail.split(b'\n')
+    out = []
+    i = 0
+    cur = None
+    for ln in lines:
+        m = re.fullmatch(rb'(\d+) (\d+)', ln)
+        if m and not ln.endswith(b'n '):
+            cur = int(m.group(1))
+            out.append(ln)
+            continue
+        if re.fullmatch(rb'\d{10} \d{5} n ', ln):
+            out.append(b'%010d 00000 n ' % pos[cur])
+            cur += 1
+            continue
+        if re.fullmatch(rb'\d{10} \d{5} f ', ln):
+            cur += 1
+        out.append(ln)
+    t = b'\n'.join(out)
+    t = re.sub(rb'startxref\n\d+', b'startxref\n%d' % xr, t)
+    return head + t
+
+
 def negative_files():
     N = []
 
@@ -1657,7 +1688,7 @@ def negative_files():
     good = pdf.finish(root)
     add('trunc_header.pdf', good[:5], 'open', 'PDE_TRUNC', 'file is only the five bytes "%PDF-"')
     add('bad_header.pdf', b'GIF89a' + good[6:], 'open', 'PDE_SYNTAX', 'no %PDF- header in the first 1024 bytes')
-    xr = good.rindex(b'xref\n')
+    xr = good.rindex(b'\nxref\n') + 1
     add('trunc_xref.pdf', good[:xr + 40], 'open', 'PDE_TRUNC', 'cut in the middle of the xref table; no trailer or startxref')
     add('trunc_startxref.pdf', good[:good.rindex(b'startxref')] + b'startxref\n', 'open', 'PDE_TRUNC', 'startxref has no offset')
     add('xref_wrong_offset.pdf', good.replace(b'startxref\n%d' % xr, b'startxref\n%d' % (xr + 3)), 'open', 'PDE_XREF',
@@ -1672,14 +1703,18 @@ def negative_files():
     # streams
     s = good.index(b'stream\n') + 7
     cut = good.index(b'\nendstream')
-    add('stream_length_short.pdf', good.replace(b'/Length %d' % (cut - s), b'/Length 3'), 'open', 'PDE_SYNTAX',
-        '/Length 3 is shorter than the data; endstream is not where it says')
-    add('stream_length_long.pdf', good.replace(b'/Length %d' % (cut - s), b'/Length %d' % (cut - s + 40)), 'open', 'PDE_SYNTAX',
+    ln = b'/Length %d' % (cut - s)
+
+    def same_width(rep):
+        return refix_xref(good.replace(ln, rep.ljust(len(ln)), 1))
+    add('stream_length_short.pdf', same_width(b'/Length 3'), 'stream', 'PDE_SYNTAX',
+        '/Length 3 is shorter than the data; endstream is not where it says (file length unchanged)')
+    add('stream_length_long.pdf', same_width(b'/Length %d' % (cut - s + 40)) if len(b'/Length %d' % (cut - s + 40)) <= len(ln) else refix_xref(good.replace(ln, b'/Length %d' % (cut - s + 40))), 'stream', 'PDE_SYNTAX',
         '/Length overshoots endstream but stays inside the file')
-    add('stream_length_past_eof.pdf', good.replace(b'/Length %d' % (cut - s), b'/Length 5000000'), 'open', 'PDE_TRUNC',
+    add('stream_length_past_eof.pdf', same_width(b'/Length 5000000'), 'stream', 'PDE_TRUNC',
         '/Length runs past the end of the file')
-    add('stream_length_negative.pdf', good.replace(b'/Length %d' % (cut - s), b'/Length -5'), 'open', 'PDE_SYNTAX', 'negative /Length')
-    add('stream_no_endstream.pdf', good.replace(b'\nendstream', b'\nendstrXX'), 'open', 'PDE_SYNTAX', 'endstream keyword corrupted')
+    add('stream_length_negative.pdf', same_width(b'/Length -5'), 'stream', 'PDE_SYNTAX', 'negative /Length')
+    add('stream_no_endstream.pdf', good.replace(b'\nendstream', b'\nendstrXXX'), 'stream', 'PDE_SYNTAX', 'endstream keyword corrupted')
     # trees
     pdf, root, pg, pr, cs = mini()
     pdf.put(pr, '<< /Type /Pages /Kids [%d 0 R %d 0 R] /Count 2 /MediaBox [0 0 612 792] /Resources << /Font %s >> >>' % (pg, pr, pdf.font_res()))
@@ -1732,10 +1767,10 @@ def negative_files():
     # numbers and limits
     pdf, root, pg, pr, cs = mini(res_extra='')
     pdf.put(pr, '<< /Type /Pages /Kids [%d 0 R] /Count 1 /MediaBox [0 0 99999999999 792] /Resources << /Font %s >> >>' % (pg, pdf.font_res()))
-    add('huge_mediabox_number.pdf', pdf.finish(root), 'open', 'PDE_RANGE', 'MediaBox width is a 11-digit integer')
+    add('huge_mediabox_number.pdf', pdf.finish(root), 'pageinfo', 'PDE_RANGE', 'MediaBox width is a 11-digit integer')
     pdf, root, pg, pr, cs = mini()
     pdf.put(pr, '<< /Type /Pages /Kids [%d 0 R] /Count 1 /MediaBox [0 0 5000 5000] /Resources << /Font %s >> >>' % (pg, pdf.font_res()))
-    add('page_5000pt.pdf', pdf.finish(root), 'open', 'PDE_RANGE', 'page box outside +/-2047 pt')
+    add('page_5000pt.pdf', pdf.finish(root), 'pageinfo', 'PDE_RANGE', 'page box outside +/-2047 pt')
     pdf, root, pg, pr, cs = mini(content=b'99999999999999999999 0 m 0 99999999999999999999 l S\n1e99 0 Td 0.0000000000000000001 w\nBT /F1 99999999 Tf (x) Tj ET\n')
     add('huge_operands.pdf', pdf.finish(root), 'render', 'PDE_RANGE', 'operands beyond 32-bit and a 99,999,999 pt font size in a content stream')
     pdf, root, pg, pr, cs = mini(content=b'q ' * 1000 + b'Q ' * 1000 + b'\n')
@@ -1768,7 +1803,7 @@ def negative_files():
     # incremental chains
     base = good
     prevloop = base.replace(b'trailer\n<<', b'trailer\n<< /Prev %d' % xr)
-    add('prev_loop.pdf', prevloop, 'open', 'PDE_CYCLE', '/Prev points at the xref section it is in')
+    add('prev_loop.pdf', prevloop, 'open', 'PDE_XREF', '/Prev points at the xref section it is in')
     add('prev_broken.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 7'), 'open', 'PDE_XREF', '/Prev points at an offset with no xref section')
     add('prev_past_eof.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 99999999'), 'open', 'PDE_XREF', '/Prev beyond the end of the file')
     chain = base
@@ -1879,6 +1914,8 @@ def negative_readme(files):
          '',
          'Columns: file | layer | expected | why.',
          '  layer    open   = PDE_* comes back from opening the file',
+         '           stream = PDV_ENG_STRM_OPEN of the page content (open itself succeeds)',
+         '           pageinfo = PDV_ENG_PAGEINFO (inherited boxes resolve on demand)',
          '           render = the file opens (or the page is reached) and the refusal is',
          '                    raised while drawing the page; the page is then shown as',
          '                    Incomplete rendering (PAGEDESK-SPEC 10.6) where the code is',
