@@ -2778,9 +2778,8 @@ every engine call, make every frame static - was withdrawn for this one.
    CF = 1, AX = `PDE_STACK` (35), posts ONE wake, and from then on
    `pdu_mcall` refuses every verb `PDE_STACK` except the three that let go
    (`PDV_REND_ABORT`, `PDV_ENG_CLOSE`, `PDV_WRT_ABORT`). The wake's first act
-   (`pdu_stk_wake`, `pdumod.c`) closes the document and puts *A page needed
-   more stack than PageDesk has; the document was closed.* on the status
-   line; giving the claims back re-arms the stack for the next open. The
+   (`pdu_stk_wake`, `pdumod.c`) closes the document and puts *Out of module stack: the document was
+   closed.* on the status line; giving the claims back re-arms the stack for the next open. The
    fill and the canary are left as they were for a debugger. A check after
    the fact cannot undo the overrun: in real mode a stack that passes offset
    0 wraps to the top of its 64 KiB, outside claim B (on kern_mega the row's
@@ -2843,5 +2842,21 @@ and the far return) + the API's own depth, <= 384 (D22 item 1).
 
 #### 20.15.1 Measured
 
-(Filled in from the LOOK below; the final pass re-takes both water marks with
-`tools/stkwater.py` / `tests/stk0water.py` on every adapter.)
+On QEMU (kern_big, 640 KB, the REAL `PDREND`, `XTGUIDE.PDF`), read by dumping
+memory: the deep stack's 0xCC fill from its canary up, and task 0's stack
+filled with 0xCC through QEMU's gdbstub below the UI SP the record banked
+(`pdu_mcall` was 80 bytes into task 0's stack) and read back after paging:
+
+| adapter | pages | deep stack, deepest use | task 0, high-water |
+|---|---|---|---|
+| VGA 640x480 | 1 | 332 of 2,036 | - (filled after page 1) |
+| VGA 640x480 | 1, 2, 3, 12, then 11 back to 1 | **448 of 2,036** | **258 of 512** |
+| CGA 640x200 | 1, 2, 1 | **386 of 2,036** | **252 of 512** |
+
+The menu bar stayed whole on every page (the corruption was on page 3), the
+View menu opened over page 1 afterwards, and the machine ran on. The refusal
+was driven on CGA by zeroing the canary through the gdbstub and paging: the
+document closed with the line above, and *Sample guide* reopened it on a
+re-armed stack. Not run: kern_mega and kern_small, MartyPC (the no-preemption
+window), Hercules and EGA. The final pass re-takes both water marks with
+`tools/stkwater.py` / `tests/stk0water.py` on every adapter.

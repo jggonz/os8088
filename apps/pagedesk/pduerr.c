@@ -25,7 +25,7 @@ static const char *pdu_errtext(int code)
     case PDE_RANGE:    return "A page or number is outside PageDesk's range.";
     case PDE_LIMIT:    return "The file exceeds one of PageDesk's limits.";
     case PDE_NOMEM:    return "Not enough memory. Close a window and try again.";
-    case PDE_STACK:    return "A page needed more stack than PageDesk has; the document was closed."; /* deepstk */
+    case PDE_STACK:    return "Out of module stack: the document was closed."; /* deepstk */
     case PDE_IO:       return "The disk could not be read.";
     case PDE_DISKFULL: return "The disk is full.";
     case PDE_WPROT:    return "The disk is write-protected.";
