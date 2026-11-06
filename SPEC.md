@@ -80810,6 +80810,24 @@ carried), so the step is `add`/`test`/`jz` on registers. Buffer layout,
 sub-rect restore (§5.8), the registers each entry advances and the pixels
 are all unchanged. Both kernels, +16 bytes of `.text` each.
 
+### 39.33 The 1bpp scroll is walked a bank at a time
+
+§5.5.1 already noticed that when `dy` is a whole number of banks (a multiple
+of 2 on CGA, of 4 on Hercules) the source and destination of every row are a
+constant apart. `vgas_bankcopy` then walked the destination with
+`gfx_nextrow` through a `call bp` a row, `rep movsb`, a DS switch and a
+memory countdown.
+
+**Such a copy never leaves a bank**: a destination row and its source are in
+the same one. So it is walked as §39.31's phases — every destination row of
+bank phase `j`, top-down for a scroll up and bottom-up for a scroll down,
+each a direction-safe walk of its own, and two phases touch different banks
+so the order between them cannot matter. Inside a phase the step is one
+register add, DS stays the framebuffer, and the bytes go a word at a time
+(`rep movsw`, the odd byte by §39.32's `adc cx, cx`). The general form (`dy`
+not a whole number of banks) is unchanged. Its two scratch words follow the
+six `VXB_SCROLL` reads in order. Both kernels.
+
 ### 39.27 `kern_small` does not drive a VGA
 
 **A 128KB machine has no business with a VGA card in it, so `kern_small` does
