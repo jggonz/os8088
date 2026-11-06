@@ -20210,3 +20210,50 @@ wireballtest: wireballdisk $(IMG)
 # Native WireBall art is reproducible from the committed imagegen source.
 apps/wireball/art/wbfront.inc: apps/wireball/art/splash-source.png tools/wbfront.py
 	python3 tools/wbfront.py
+
+# ---- PageDesk: rend ----
+# PDREND.MOD - the rendering segment (docs/PAGEDESK-SPEC.md 10, 20.3). One C
+# translation unit (apps/pagedesk/pdrend.c #includes pdr*.c) through the same
+# smlrcc + tools/cc8086.py chain as every C module (apps/loom/lmpvmod.c's
+# rule is the model), assembled with pdrend.asm and the primitives in
+# pdrprim.inc. `make pdrend` builds the module AND runs its host checks;
+# `make` itself does not depend on it until the lead flips PD_REND_MOD.
+PDR_DIR   := apps/pagedesk
+PDR_CSRC  := $(PDR_DIR)/pdrend.c $(PDR_DIR)/pdrg.c $(PDR_DIR)/pdrd.c $(PDR_DIR)/pdrf.c \
+             $(PDR_DIR)/pdri.c $(PDR_DIR)/pdrv.c $(PDR_DIR)/pdrend.h $(PDR_DIR)/pdrenc.h \
+             $(PDR_DIR)/pdabi.h $(PDR_DIR)/pdmath.h
+PDR_MATH  := $(if $(wildcard $(PDR_DIR)/pdmath.inc),,-DPD_MATH_STUB)
+
+$(BUILD)/pdrend.raw.asm: $(PDR_CSRC) $(CC_RUNTIME) | $(BUILD) cc-toolchain
+	PATH="$(abspath $(CC_SC)):$$PATH" $(CC_SMLRCC) -tiny -S \
+		-SI $(CC_SCINC) -I $(CC_SCINC) -I $(CC_DIR) -I $(PDR_DIR) \
+		$(PDR_DIR)/pdrend.c -o $@
+
+$(BUILD)/pdrend.gen.asm: $(BUILD)/pdrend.raw.asm tools/cc8086.py tools/ccpeep.py $(CC_PEEPSTAMP)
+	python3 tools/cc8086.py $< -o $@ --max-frame $(CC_MAXFRAME) $(CC_PEEPARG)
+
+# Until the math agent's pdmath.inc is merged, a stub with the same labels lets
+# the size and the syntax be checked. It is derived from what the C calls, so
+# it cannot drift, and it is never shipped (the module built with it is not run).
+$(BUILD)/pdr_mathstub.inc: $(BUILD)/pdrend.gen.asm
+	@{ echo "; generated: stand-ins for pdmath.inc (see pdrend.asm)"; \
+	   grep -o '_pd[m_][a-z0-9_]*' $< | sort -u | while read n; do echo "$$n: ret"; done; } > $@
+
+$(BUILD)/PDREND.MOD: $(PDR_DIR)/pdrend.asm $(PDR_DIR)/pdrprim.inc $(BUILD)/pdrend.gen.asm \
+                     $(CC_RUNTIME) apps/os88api.inc | $(BUILD)
+	@$(if $(PDR_MATH),$(MAKE) --no-print-directory $(BUILD)/pdr_mathstub.inc,:)
+	$(NASM) -f bin -w+error -I apps/ -I $(BUILD)/ $(PDR_MATH) -o $@ $(PDR_DIR)/pdrend.asm
+	@echo "PDREND.MOD: $(call FILESIZE,$@) bytes image$(if $(PDR_MATH), (math stub: size is a floor),)"
+
+PDR_HOSTBIN := $(BUILD)/pdr_test
+$(PDR_HOSTBIN): $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c $(PDR_DIR)/hosttest/pdhost.c \
+                $(PDR_DIR)/pdmath.c $(PDR_CSRC) | $(BUILD)
+	cc -O1 -Wall -Wno-unused-function -Wno-unused-variable -Wno-parentheses -Wno-int-to-void-pointer-cast \
+		-DPD_HOST -I$(PDR_DIR) -o $@ $(PDR_DIR)/hosttest/pdr_test.c $(PDR_DIR)/hosttest/pdr_host.c \
+		$(PDR_DIR)/hosttest/pdhost.c $(PDR_DIR)/pdmath.c $(PDR_DIR)/pdrend.c
+
+.PHONY: pdrend pdrend-host
+pdrend-host: $(PDR_HOSTBIN)
+	python3 $(PDR_DIR)/hosttest/pdr_check.py $(PDR_HOSTBIN)
+pdrend: $(BUILD)/PDREND.MOD pdrend-host
+# ---- end PageDesk: rend ----
