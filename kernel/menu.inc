@@ -887,33 +887,43 @@ menu_draw_bar:
     mov dx, MBAR_H - 1
     call gfx_hline
 
-    mov di, MENU_SYS_TX         ; the logo: cell 0's title is 0 because it is
-                                ; a bitmap, and this is where it lives now -
-                                ; menu_logo_glyph, written at its one call
-                                ; (kernel size pass 17: kent_di above has
-                                ; every register it spends, -9). The 11x11
-                                ; chip silhouette (the os8088 logo) in
-                                ; [gfx_color], left x DI, top MENU_LOGO_Y
-    mov si, menu_logo_bmp
-    mov dx, MENU_LOGO_Y + 1     ; rows 0 and 10 are blank and are not stored
-    mov bh, 9                   ; rows
-.row:
-    lodsw                       ; bit 15 = leftmost pixel of the row
-    mov cx, di
-.col:
-    shl ax, 1
-    jnc .skip
-    call gfx_pixel              ; CX = x, DX = y
-.skip:
-    inc cx
-    or ax, ax                   ; a row ends at its last LIT pixel: the bits
-    jnz .col                    ; past column 10 are 0, so no column count is
-                                ; needed (kernel size pass 10: 6 bytes with
-                                ; the two blank rows, and the empty right-hand
-                                ; columns stop being walked)
+    ; THE LOGO IS SEVEN RECTS, NOT 78 PIXELS (SPEC.md 12.05.1). The 11x11
+    ; chip silhouette (the os8088 logo, rows 0 and 10 blank) in [gfx_color],
+    ; left x MENU_SYS_TX, top MENU_LOGO_Y, was one gfx_pixel call per lit
+    ; pixel - 78 of them, ~39 ms on the 5150/CGA of every forced bar. Its
+    ; rows are only ever two shapes and a notch, so it is the body, the four
+    ; pin rows across it and the top row's two halves: the same pixels in
+    ; the same pen, the pins re-writing seven body pixels each in the colour
+    ; they already hold. AH = 0, the rule's `xor ax, ax` above (gfx_hline
+    ; preserves every register), so the x loads are byte moves.
+    ;
+    ;   ..###.###..   y+1   the notch row: two hlines
+    ;   ###########   y+2   pin rows y+2, 4, 6, 8: an hline each...
+    ;   ..#######..   y+3   ...over the body, x+2..x+8, y+2..y+9: one fill
+    ;   (the body and pins alternate to y+9)
+    mov al, MENU_SYS_TX + 2
+    mov bx, MENU_LOGO_Y + 2
+    mov cx, MENU_SYS_TX + 8
+    mov dx, MENU_LOGO_Y + 9
+    call gfx_fill               ; the body
+    mov dl, MENU_LOGO_Y + 1     ; (DH = 0: DX was MENU_LOGO_Y + 9)
+    mov bx, MENU_SYS_TX + 4
+    call gfx_hline              ; the notch row's left half...
+    mov al, MENU_SYS_TX + 6
+%ifdef KERN_BIG
+    mov bx, MENU_SYS_TX + 8     ; (a byte longer than `mov bl` ON PURPOSE: the
+%else                           ; shorter bar let a jump in it relax on this
+    mov bl, MENU_SYS_TX + 8     ; build alone, and ui_task's parity is pinned)
+%endif
+    call gfx_hline              ; ...and its right
+    mov al, MENU_SYS_TX
+    mov bl, MENU_SYS_TX + 10
+.pin:
+    inc dx                      ; y+2, y+4, y+6, y+8
+    call gfx_hline
     inc dx
-    dec bh
-    jnz .row
+    cmp dl, MENU_LOGO_Y + 9
+    jb .pin
 
     xor ax, ax                  ; ...and the fill took every glyph with it,
     mov cx, 0x7FFF              ; so nothing that was drawn is still drawn:
@@ -2417,20 +2427,8 @@ menu_widest:
 ; menu data: logo bitmap, strings, item lists, the menu table
 ; -----------------------------------------------------------------------------
 
-; 11x11 DIP-chip silhouette - the os8088 logo: a 7px-wide package body with
-; a notch at the top and four pins down each side. One word per row,
-; bit 15 = x offset 0.
-menu_logo_bmp:                  ; (row 0, ..........., is not stored)
-    dw 0x3B80                   ; ..###.###..   body top, orientation notch
-    dw 0xFFE0                   ; ###########   pins
-    dw 0x3F80                   ; ..#######..
-    dw 0xFFE0                   ; ###########   pins
-    dw 0x3F80                   ; ..#######..
-    dw 0xFFE0                   ; ###########   pins
-    dw 0x3F80                   ; ..#######..
-    dw 0xFFE0                   ; ###########   pins
-    dw 0x3F80                   ; ..#######..   body bottom
-                                ; (nor row 10, ...........)
+; (The logo, an 11x11 DIP-chip silhouette, is drawn as seven rects in
+; menu_draw_bar - SPEC.md 12.05.1 - and has no bitmap here any more.)
 
 menu_loc_name   db 'Locator', 0 ; the kernel's own application (SPEC 12.3)
                                 ; SEVEN of the items below are the SAME BYTES

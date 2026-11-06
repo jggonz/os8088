@@ -3552,6 +3552,7 @@ wm_raise:
     call rect_get               ; the rect -> AX..DX, four adjacent words
     dw wm_cov_x1
     call wm_su_sub
+    inc byte [wm_cvf_on]        ; ...and the CHROME too (SPEC.md 11.96.10.2)
     pop dx
     pop cx
     pop bx
@@ -4926,9 +4927,36 @@ wm_dmg_stale:
     cmp dx, ax
     jge .exposed
     stc                         ; covered again: nothing of it is showing -
-    db 0xB0                     ; and a `pop` writes no flag. mov al, imm8:
-.exposed:                       ; the imm8 is the clc, AL comes back off the
-    clc                         ; stack (kernel size pass 15)
+    jmp short .clr              ; and a `pop` writes no flag
+.exposed:
+    ; ...AND WHAT IT LEFT OF US MAY BE UNDER SOMEBODY ELSE (SPEC.md 11.91.8).
+    ; The part of this window the mover vacated is owed only where nothing
+    ; above this window covers it now: a window cascaded under another that
+    ; is not moving has its vacated strip hidden by that one, which repaints
+    ; it itself (it overlaps the vacated rect too, so it is marked unless it
+    ; is hidden in turn - and the topmost window at any such pixel is not).
+    ; So the vacated rect cut to ours is seeded and every visible window
+    ; above us subtracted BY ITS FRAME (wm_clip_occlf: the shadow's two
+    ; unpainted corners stay ours); an empty list is CF = 1, clean, and an
+    ; overflow is exposed, the answer before this existed.
+    mov bx, sp
+    mov bx, [ss:bx]             ; our window - the SI banked on entry (SS:
+    call wm_win_rect_bx         ; BP and SP address the stack, SPEC.md 1)
+    push si
+    mov si, wm_dmg_st1
+    call gfx_rect_isect         ; AX..DX = ours cut to the vacated rect,
+    mov si, dx                  ; non-empty (gfx_rect_hit said so above)
+    mov dx, bx
+    call wm_clip_seed           ; AX = x1, DX = y1, CX = x2, SI = y2
+    pop bx
+    call wm_clip_occlf          ; CF = 1 overflowed
+    jc .exp
+    cmp word [wm_clip_n], 1     ; CF = 1 exactly when the list is EMPTY
+    db 0xB0                     ; mov al, imm8: the imm8 is the clc, AL
+.exp:                           ; comes back off the stack (kernel size
+    clc                         ; pass 15)
+.clr:
+    call wm_clip_clear          ; (a `mov`: CF survives it)
     jmp kret_si
 .mark:
     CLC_OR_STC .clean           ; (the one caller reads CF alone)
@@ -7743,13 +7771,37 @@ wm_draw_title:                  ; Windows, and this body otherwise
     inc bx
     inc bx
     lea dx, [bx+13]             ; = W_Y + 15
+    cmp di, bp                  ; THE GAP IS THE FRONT BAR'S ALONE (SPEC.md
+    je .gap                     ; 11.92.1): it exists to cut the pinstripes
+    cmp ax, [di+W_X]            ; back, and an inactive bar has none - its
+    jg .nogap                   ; interior fill above laid this rect in this
+.gap:                           ; pen and nothing between wrote it, so the
+                                ; fill was a whole primitive call for no
+                                ; pixel. UNLESS THE CAPTION IS WIDER THAN THE
+                                ; BAR: a gap left of W_X+1 reaches the frame
+                                ; (and, by the centring's symmetry, so does
+                                ; its right end), and there the fill is what
+                                ; the glass has always shown
     call wm_tpen_bg          
     call gfx_fill               ; white gap (covers the stripe rows)
-    call wm_tpen_ink          
+.nogap:
     pop cx
     lea dx, [bx+3]              ; = W_Y + 5: 8px glyphs centered in the
                                 ; 16-row bar (the pens and the fill preserve BX)
+%ifdef KERN_BIG
+    cmp word [wm_clip_n], 0     ; UNCLIPPED, THE CAPTION IS A RUN (SPEC.md
+    jne .xpar                   ; 11.92.2): its eight rows lie wholly inside the
+    call wm_tpen_bg             ; gap - or, inactive, the interior - so every
+    mov ah, [gfx_color]         ; cell's ground is already the paper, and an
+    call wm_tpen_ink            ; opaque cell writes exactly the pixels a
+    mov al, [gfx_color]         ; transparent glyph leaves: one decision a cell
+    call font_run_x             ; where font_str_x made a font_char call of
+    jmp short .tdone            ; each. UNDER A REGION it stays transparent: an
+.xpar:                          ; unaligned run a region cuts goes through
+%endif                          ; font_run_scell, a fill AND a glyph a cell
+    call wm_tpen_ink          
     call font_str_x
+.tdone:
     pop es
 .sep:
     ; The separator under the bar, drawn LAST and by both paths. It is row
@@ -7789,6 +7841,11 @@ wm_draw_title:                  ; Windows, and this body otherwise
 %else
     ret
 %endif
+%ifndef KERN_BIG
+    db 90h                      ; PARITY PAD, never executed: SPEC.md 11.92.1's
+                                ; gap test is 9 bytes, and ui_task (pinned by
+                                ; tests/unit/t_hotpar.py) sits after this file.
+%endif                          ; kern_big's 11.92.2 run is the odd byte there
 
 %ifdef KERN_BIG
 section .cold                   ; the two chrome-box helpers are COLD (SPEC.md
@@ -8766,6 +8823,11 @@ wm_su_pcrp: dw 0                ; SPEC.md 11.96.16.2: a rect laid out like a
                                 ; because a resize has already written the new
                                 ; one where wm_obscured needs the old. 0 = ask
                                 ; about DI, which is every other caller
+wm_cvf_x1: dw 0                 ; ...and the covered box of our FRAME, drop
+wm_cvf_y1: dw 0                 ; shadow included (SPEC.md 11.96.10.2): the
+wm_cvf_x2: dw 0                 ; chrome a partial raise redraws. It outlives
+wm_cvf_y2: dw 0                 ; wm_cov_rect up to the draw, and
+wm_cvf_on: db 0                 ; 1 = the next wm_draw_win is that raise's
 wm_cov_x1: dw 0                 ; the covered box, accumulated
 wm_cov_y1: dw 0
 wm_cov_x2: dw 0
@@ -8994,6 +9056,8 @@ wm_cov_rect:
                                 ; "draw nothing", both correct. AX is dead: it
                                 ; was stored into wm_cov_c1 above; SI is loaded
                                 ; by wm_zabove below
+    mov si, wm_cvf_x1           ; ...and the frame's (SPEC.md 11.96.10.2)
+    call wm_rect_empty
     mov bx, di                  ; the walk takes the window in BX, and BX is
     call wm_zabove              ; scratch here - .scan reloads it per entry
     jc .out
@@ -9015,6 +9079,8 @@ wm_cov_rect:
     push si
     call wm_win_rect_bx
                                 ; AX..DX = its frame, shadow included
+    mov si, wm_cvf_x1           ; the occluders' bounding box, UNCUT - it is
+    call wm_runion              ; cut to our frame once, at .out
     mov si, wm_cov_c1
     call gfx_rect_isectcf       ; ...cut to our content, CF = 1 = nothing left
     jc .none
@@ -9025,6 +9091,12 @@ wm_cov_rect:
     pop cx
     jmp short .scan
 .out:
+    mov bx, di                  ; the occluders' box cut to OUR frame, shadow
+    call wm_win_rect_bx         ; included: bbox(union) AND frame holds every
+    mov si, wm_cvf_x1           ; pixel bbox(union of the cuts) does, and an
+    call gfx_rect_isect         ; empty box stays empty (7FFFh..-1 cut to
+    call rect_put               ; anything is still inverted)
+    dw wm_cvf_x1
     jmp kret_bp
 
 ; -----------------------------------------------------------------------------
@@ -10729,7 +10801,30 @@ wm_draw_win:
 
 .chrome:
 %ifndef REDRAWFULL
+    cmp byte [wm_cvf_on], 0     ; A PARTIAL RAISE (SPEC.md 11.96.10.2): the
+    je .cc                      ; outline and the shadow only inside the box of
+    push ax                     ; the frame something WAS on - the rest is on
+    push bx                     ; the glass already, in the pen a front
+    push cx                     ; window's chrome writes (one pen in both
+    push dx                     ; states). Nothing is above a raised window,
+    call cur_unlazy             ; so there is nothing to subtract; an EMPTY
+    call rect_get               ; box seeds an inverted fragment, which every
+    dw wm_cvf_x1                ; clipped primitive cuts to nothing
+    mov si, dx                  ; (gfx_rect_isectcf). The armed region stops
+    mov dx, bx                  ; the primitives spending the deferred hide,
+    call wm_clip_seed           ; so it is spent here (wm_chrome_clip's
+    pop dx                      ; reason), and the region is disarmed before
+    pop cx                      ; the title bar, which a raise changes whole
+    pop bx
+    pop ax
+%ifdef KERN_BIG
+    jmp short .chromed
+%else
+    jmp near .chromed           ; (a byte longer ON PURPOSE: kern_small's
+%endif                          ; ui_task parity is pinned, t_hotpar)
+.cc:
     call wm_chrome_clip         ; THE OUTLINE AND THE DROP SHADOW, and not where
+.chromed:
 %endif                          ; something above will cover them a moment from
                                 ; now (SPEC.md 11.97). Both are gfx_fill, which
                                 ; clips per PIXEL; the title bar below is not,
@@ -10771,6 +10866,12 @@ wm_draw_win:
                                 ; a window can owe its SHADOW and nothing else
                                 ; (SPEC.md 11.91.4)
 
+%ifndef REDRAWFULL
+    cmp byte [wm_cvf_on], 0     ; the partial raise's region was the chrome's
+    je .cvdone                  ; alone: gone before the title bar, which is
+    call wm_clip_clear          ; drawn whole (SPEC.md 11.96.10.2)
+.cvdone:
+%endif
 %ifndef REDRAWFULL
                                 ; ...BUT A STRIP WHOLLY COVERED IS NOT DRAWN AT
                                 ; ALL (SPEC.md 11.97.4), which saves the bar's
@@ -10814,10 +10915,28 @@ wm_draw_win:
 %ifndef REDRAWFULL
     call wm_su_bget             ; ...UNLESS THE CACHE IS ONLY THE BANDS OF IT
     jnc .paint                  ; (SPEC.md 11.96.11), in which case what came
-%endif                          ; back is the furniture and the app still owes
+                                ; back is the furniture and the app still owes
                                 ; the rest - wm_damage hands it exactly that,
-    jmp .growbox                ; and the white fill is skipped because a band
+                                ; and the white fill is skipped because a band
                                 ; needs WF_OWNBG to have been granted at all
+    inc byte [wm_dw_part]       ; A WHOLE HIT IS NOT RE-BANKED (SPEC.md
+                                ; 11.96.4.1): the content on the glass is the
+                                ; cache, byte for byte, because it was put back
+                                ; from it a moment ago and nothing drew into it
+                                ; since - so wm_su_bank's .take would drop the
+                                ; claim and gfx_save the same pixels into a
+                                ; new one. Marking the draw PARTIAL sends it
+                                ; down 11.96.9's arm, which keeps a cache that
+                                ; exists (wm_su_ck) - and this one does. The
+                                ; front window's .front drop does not read the
+                                ; flag. `inc` and not a store of 1, a byte
+                                ; less and the same answer: the flag is
+                                ; [wm_su_son]'s low byte, 0 or 1, and is only
+                                ; ever tested for nonzero. Measured: a
+                                ; fullscreen exit on CGA re-saved three
+                                ; windows, ~31 ms each
+%endif
+    jmp .growbox
 .content:
     test byte [di+W_FLAGS], WF_OWNBG
     jnz .paint                  ; IT OWNS ITS BACKGROUND (SPEC.md 11.90.1): the
@@ -10884,6 +11003,8 @@ wm_draw_win:
                                 ; 11.96.4)
 %ifndef REDRAWFULL
     xor ax, ax                  ; (AX is banked: kret_di puts it back)
+    mov [wm_cvf_on], al         ; (a one-shot: a chromeless window never
+                                ; reached .chrome to spend it)
     mov [wm_su_son], ax         ; THE ONE-SHOT DIES WITH THE DRAW IT WAS ARMED
                                 ; FOR, at the one site every window in the system
                                 ; is drawn through. wm_su_srect spends it, but

@@ -20290,6 +20290,69 @@ pixels), without the nothing-uncovered stores (the window redrawn, a title
 promoted), and on `kern_small` without the skip (both cells drawn).
 
 
+#### 11.91.8 …and a window whose vacated part is under somebody else draws nothing
+
+§11.91.2 marks a window that overlapped the rect the mover **vacated**, and
+asks only one question about what is left of that overlap: is it inside the
+mover's NEW frame? It never asked about the other windows. On a cascaded
+desktop that is the common case it got wrong: deskbench's Control Panel sits
+under the Disk window, and the strip Paint vacated when it moved crossed the
+Control Panel only where the Disk window already covers it. The panel was
+marked and drew its visible column — frame, shadow, title, a restore —
+**~35 ms on the 5150/CGA for a column whose every pixel was already right.**
+
+So `wm_dmg_stale` asks the question properly: the vacated rect cut to the
+window's rect (drop shadow included) is seeded as a region and every visible
+window ABOVE it subtracted **by its frame** (`wm_clip_occlf`, so the two
+corners a shadow's L never paints stay the window's, §11.96.15.1). An empty
+list means nothing of what it lost is on the glass: clean, CF = 1, and the
+window goes on to the pass's other questions (its shadow, a zone, the strip, a
+marked window below it) exactly as a window the vacated rect never reached. An
+overflow is "exposed", the answer before this existed.
+
+**It loses no pixel.** Take any pixel of the vacated rect inside such a window.
+The topmost visible window over it is either the mover (always drawn) or a
+window above this one whose vacated part contains that pixel, uncovered — so
+that window's own test finds it non-empty and it is marked, and its draw covers
+its visible region. The dither subtracts every visible frame, so it does not
+touch the pixel either. The cost is a region walk per window whose vacated part
+was otherwise exposed — §11.91.3's "several hundred bytes" was for keying the
+marking on REDRAWN regions; this keys it on the vacated rect, which is a rect,
+against occluders that do not move, and is 36 bytes.
+
+#### 11.91.7 A screen given back is the damage pass over the whole band
+
+Leaving an exclusive bracket (§53.6) and waking from the saver (§79.6) owe the
+whole desktop, and both reached `wm_paint_all` through `blk_relit`: the dither
+under the bar, every zone, and then every window back to front **whole**. With
+four overlapping windows a pixel under the top one was written once per layer —
+deskbench's fullscreen exit read **7.03 transient pixels per changed one** on
+CGA, 8.01 on Hercules, 7.65 on VGA (PERFORMANCE.md's deskbench table) — and
+every covered window put its whole content back off its cache for the windows
+above it to paint over.
+
+None of that is needed to answer "what does the screen look like now", because
+the damage pass already answers it for any rect: `blk_relit` hands
+`wm_paint_dmg` the band, `(0, MBAR_H)` to the far corner (clamped onto the live
+screen there). `[wm_dmg_stwin]` is 0 — nothing was vacated — so every window
+the rect touches is marked; each draws its chrome where nothing above covers it
+(§11.97), its cache in the pieces nothing above covers (§11.96.15) and its
+`W_PAINT` under the cull (§11.3.3); the dither lays only the ground no window
+holds (§11.91.1) and keeps to the bands (§39.16.2.1); the bar and the strip are
+forced first and drawn by the pass, and a window over the strip owes it through
+`[wm_dmg_dk]` as on every other pass. The settled screen is the one
+`wm_paint_all` leaves — the incremental-equals-full property every damage path
+rests on (`tests/dispcorner.py`).
+
+**Two cases keep `wm_paint_all`.** A second display (`kern_big`, `[vid_ndisp]`
+above 1): its desktop is `EXT_DESK`'s, drawn whole in that routine and nowhere
+in the damage pass. And a fullscreen window still up (`wm_fs_vis`), whose walk
+starts at the fullscreen window (`.fswins`). Both are tested before anything is
+drawn.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene, Paint's fullscreen bracket
+left with `f`: see docs/plans/khp1/wm.md for the figures on each adapter.
+
 ### 11.92 Retitling costs a strip — `wm_title_set`
 
 A caption changes on an **event** — a folder was entered, a document was
@@ -20342,6 +20405,46 @@ callers are a mixed set: `fm_go`, `fm_mount` and `fm_view` hold the lock,
 folder-vanished path reaches it from `ld_run`, which deliberately holds no
 lock across a mount (§21). A pointer cannot be spent on whichever window
 happened to repaint in between.
+
+#### 11.92.1 An inactive bar has no gap to cut
+
+`wm_draw_title` letters the caption on a **gap** — a `gfx_fill` six pixels
+either side of the text, rows `y+2 .. y+15` — whose whole purpose is to cut the
+active bar's pinstripes back from the glyphs. An inactive bar has no stripes:
+its interior fill (`y+1 .. y+16`, the bar's span) has already laid that rect in
+the same pen (`wm_tpen_bg`), clipped by the same region, and nothing between
+the two writes it. So on an inactive bar the gap is **not drawn** — one
+primitive call fewer per background caption, every raise (the outgoing front),
+every damage pass and every `wm_paint_all`.
+
+**Unless the caption is wider than the bar.** Centring is signed, so a title
+wider than its window puts the gap past the frame; there the fill paints over
+the border and that is what the glass has always shown. The skip therefore
+also requires the gap's left edge to be right of `W_X` — which, by the
+centring's symmetry (the gap is `tw + 11` wide around the text, the bar `w - 2`
+around the same centre), is the right edge's condition as well.
+
+Measured on MartyPC's 5150/CGA, deskbench's scene: the fill was ~2 ms of each
+inactive caption.
+
+#### 11.92.2 …and an unclipped caption is a RUN (`kern_big`)
+
+The caption was `font_str_x` — a transparent `font_char` call per glyph, ~0.8
+ms a cell on the 5150 — over the gap (active) or the interior (inactive). Its
+eight rows, `y+5 .. y+12`, and its width lie wholly inside that ground, which
+is the paper `wm_tpen_bg` names. So an opaque `font_run_x` in the bar's pair —
+paper from `wm_tpen_bg`, ink from `wm_tpen_ink`, both read back off the pen as
+a kernel may (§6.6.5) — writes exactly the pixels the glyphs leave, in one
+call: on an unaligned pen (seven captions in eight, §11.94) §6.1.11's two
+merges and whole stores.
+
+**Only with no region armed.** A run a region cuts goes cell by cell, and an
+unaligned one through `font_run_scell`, which is a fill *and* a glyph per cell
+— dearer than the transparent pass — and draws the same pixels; so a caption
+under a region (a covered window's, on a damage pass) stays `font_str_x`.
+`kern_small` has no unaligned run at all (its `.slow` is fill-and-letter), so
+the change is `kern_big`'s. The site stays in `tests/textsites.txt`: the
+transparent call is still there for the clipped case and the small build.
 
 ### 11.93 `WF_KEEPH` — a fixed layout hangs over the dock rather than be cut
 
@@ -22763,6 +22866,30 @@ about 5.7KB of framebuffer for a mono Disk window against §11.96's measured
 machine with no room declines and behaves exactly as it did before any of
 this existed.
 
+##### 11.96.4.1 …but a window put back WHOLE from its cache is not banked again
+
+"Takes everybody else's" re-took a cache that had just been spent in the same
+draw. A covered window that `wm_su_try` puts back **whole** — every fragment,
+no sub-rect, the bands-only case aside — has on the glass exactly the bytes its
+claim holds: they were copied out of it a moment ago and nothing has drawn into
+the content since (the grow box is the front window's, and the front window's
+cache is dropped, not taken). `wm_su_bank`'s `.take` then dropped the claim,
+claimed a new one and `gfx_save`d the same pixels back into it.
+
+So the whole-hit arm of `wm_draw_win` marks the draw **partial**
+(`[wm_dw_part]`), which sends `wm_su_bank` down §11.96.9's arm: an existing
+cache is kept (`wm_su_ck`), and this one exists by construction. The front
+window's drop does not read the flag. The one difference a reader could find is
+a window restored only in PART because it hangs off its display (§11.96.14):
+the re-take there refused (`wm_su_take` banks only a rect wholly on one
+display) and left the window with no cache, where now it keeps the one it has
+— whose pixels are still its content, which is the promise the cache was taken
+under.
+
+Measured on MartyPC's 5150/CGA, deskbench's four-window scene, leaving Paint's
+fullscreen bracket (`wm_paint_all` entry to return): the three covered windows
+each re-saved their content, **~31 ms apiece**, and do not now.
+
 #### 11.96.5 …including the moment a window is minimized
 
 `wm_hide` **dropped** the cache, on §11.96.1's reasoning that a hidden
@@ -23281,6 +23408,32 @@ instead of 130 and 60.
 copied without its guard**: a rect argument spends four registers, and a
 routine whose contract names two of them is holding the other two for someone
 else.
+
+#### 11.96.10.2 …and its OUTLINE and SHADOW only where they were covered
+
+§11.96.10 cut a partial raise's CONTENT to the covered box and left the chrome
+as §11.90 drew it: the outline and the drop shadow WHOLE. But a window raised
+from behind another was visible, and every pixel of its outline and shadow that
+nothing covered is already on the glass in the colour a front window's chrome
+writes (`thm_ink` in both states — focus changes the title bar alone). On the
+5150 that is not small: a frame side or the shadow's long arm is a 1-px column
+the height of the window, ~5.3 ms on CGA for 158 rows, and a raise drew three
+of them where the occluder had covered one.
+
+So `wm_cov_rect` folds a second box in the same walk: the occluders' frames
+(shadow included) into `wm_cvf_x1..y2` uncut, and at the walk's end that box
+cut once to OUR frame (shadow included). A partial raise arms `[wm_cvf_on]`
+beside its `wm_su_sub`, and `wm_draw_win`'s chrome arm then seeds the region
+with that box instead of `wm_chrome_clip`'s (there is nothing above a raised
+window to subtract), draws the outline and the shadow through it, and disarms
+it before the title bar — which a raise changes whole and draws unclipped, so
+it keeps §11.92.2's run. An empty box (nothing over the frame) is an inverted
+fragment that every clipped primitive cuts to nothing. The flag is spent by
+the draw it was armed for, on every exit, a chromeless window's included.
+
+The box may over-claim — never under: every covered chrome pixel lies in some
+occluder's frame and in ours, so in the union's bounding box cut to our frame.
+What it over-claims is chrome that was visible, rewritten with its own value.
 
 #### 11.96.11 The app keeps a band, and the kernel banks it
 
@@ -25982,6 +26135,21 @@ operation to prove it. The **logo** is on the bar and changes never. And the
 file-activity widget (§12.8) changes an 88px span and used to force all of it.
 Granularity by *cell* is indeed useless here; granularity by **segment** is
 the whole feature.
+
+#### 12.05.1 The logo is seven rects
+
+Segment 1 — the field, the rule and the logo — is drawn only after an overdraw
+(`[menu_bovr]`): every fullscreen exit, every saver wake, the first paint. Its
+logo, the 11×11 DIP-chip silhouette at `MENU_SYS_TX`, was a bitmap walked a bit
+at a time with **one `gfx_pixel` call per lit pixel — 78 calls**, ~0.5 ms each
+on the 5150/CGA, so ~39 ms of every forced bar was the logo. Its rows are only
+two shapes and a notch: a 7-wide body (`x+2 .. x+8`) on rows `y+2 .. y+9`, an
+11-wide pin row across it on `y+2`, `y+4`, `y+6` and `y+8`, and the top row's
+two 3-wide halves either side of the notch. So it is one `gfx_fill` and six
+`gfx_hline`s in the same pen, over the field just filled: the same pixels,
+the pins rewriting seven body pixels each in the colour they already hold, and
+the bitmap's 18 bytes and its decoding loop go — 6 bytes smaller on both
+kernels.
 
 ### 12.1 The menu-bar clock
 
@@ -106812,9 +106980,11 @@ The app's proc returning is the only exit. In order:
    the game must not land in the desktop ladder. The §34.4 click-abort
    drain is the precedent.
 3. Disarm: `[fsx_task]` = `[fsx_worker]` = 0xFF, under `cli`.
-4. Bring the desktop back under the still-held lock: a full
-   `wm_paint_all` with `[menu_bdirty]` forced (the save-under-overdraw
-   precedent, §12.05). With `[bb_dbl]` armed the repaint renders into the
+4. Bring the desktop back under the still-held lock: a full repaint
+   with the bar and the strip forced (the save-under-overdraw precedent,
+   §12.05) — `blk_relit`, which on one display with no fullscreen window
+   up is the damage pass over the whole band (§11.91.7) and otherwise
+   `wm_paint_all`. With `[bb_dbl]` armed the repaint renders into the
    buffer and the callback epilogue's flush carries it to VRAM; without,
    it writes VRAM direct.
 
@@ -140526,10 +140696,12 @@ of them draws.
 
 **The desktop is owed a full repaint and there is no cheaper answer.** A
 session has drawn over the menu bar, the drive column, the dock and every
-window, so there is no damage rect to be clever with — `wm_paint_all` *is* the
+window, so there is no damage rect to be clever with — the whole band *is* the
 damage. It is PERFORMANCE.md rule 1's legitimate exemption, because the whole
 screen really did change, and it is paid once per wake on the far side of a
-period measured in minutes. `[blk_sv]` is cleared **before** the repaint runs,
+period measured in minutes. It is paid through the damage pass rather than
+`wm_paint_all` since §11.91.7, which writes each pixel about once instead of
+once per window layer. `[blk_sv]` is cleared **before** the repaint runs,
 so nothing inside a UI pass's worth of drawing still believes the overlay owns
 the screen.
 
