@@ -5,6 +5,14 @@ Architecture decision record, 2026-11-05. Author: the `host` agent of wave 2.
 word: no code in the package, nothing here is shipped, and a planned edition is
 never listed as shipped.
 
+*Verified 2026-11-05 by verify-host (Opus):* every kern_mega fact below was
+checked against KERN-MEGA-PLAN.md and SPEC.md at the sections cited; one was
+out of date and is corrected (a claim over 64 KB above 1 MB is a run of
+selectors today, not conventional: SPEC.md 50.3.5, plan 14.37); the cache
+and display-list sizes are the wave-2 ones; the licences are read from each
+engine's own file (2.2); and section 5's numbers were re-run and reproduce.
+The recommendation follows from that evidence and is unchanged.
+
 PD-27 asks four things: does os8088 have a *supported* protected-mode
 application contract; what would PageDesk gain from one; what would it cost;
 and, if there is no safe runtime, what are the blockers and the follow-up. The
@@ -30,7 +38,8 @@ release.
    contract's peak is 224 KiB of a 640 KiB XT's ~534 KiB heap, with over
    300 KiB unclaimed (PAGEDESK-SPEC 16.1). What stops a bigger block cache or
    display list today is a constant in the code - the engine's cache is cut at
-   32 blocks, 64 KiB - not the machine. The first, cheapest gain therefore needs
+   32 blocks (20.2.2; 64 KiB at a 2 KiB block, 128 KiB at a 4 KiB cluster) -
+   not the machine. The first, cheapest gain therefore needs
    neither extended memory nor protected mode (section 3).
 4. **What protected mode would uniquely add is memory above 640 KiB used in
    place** (selectors instead of the 32 KiB-a-copy `OSAPI_XMEM_*` window) and
@@ -59,7 +68,7 @@ From KERN-MEGA-PLAN.md (sections cited) and SPEC.md 20.18; not re-measured here.
 | 16-bit protected mode, **ring 0**; the first megabyte is mapped by identity, so every baked segment constant keeps working; code segments and everything above 1 MB live in the LDT | plan 2.5, 3 |
 | **no 32-bit code, no flat model, no FS/GS, no V86, no paging, no ring 3, no task gates** in the first build; a 286 leaves protected mode only by resetting the CPU (412 us a BIOS call on the Victory 286), a 386 by CR0 | plan 1, 4; MEGADIAG toast names the route |
 | the kernel, the BIOS reflection, DOS (run *beside* the kernel for the length of a bracket) and the hibernate are the only places the mode changes, and they are the kernel's | plan 2.2, 2.6, 2.7 |
-| a package opts into the high region with `OS88_HIGH` (its image) and `OS88_HIGHMEM` (its claims); claims up to 64 KB are pool selectors the pool may move; a claim over 64 KB stays conventional, or is a run of windows (`OSAPI_MEM_HUGE`, one selector per 64 KB, 32 KB with BX=8000h) stepped by the package | plan 13.6, 14.41 |
+| a package opts into the high region with `OS88_HIGH` (its image) and `OS88_HIGHMEM` (its claims); a claim is a pool block above 1 MB under its selector(s), and the compactor may MOVE any of them at any instant, rebasing the selectors (no relocation proc; "my segment + N" is `OSAPI_MEM_SUBSEG`). A claim over 64 KB is one pool block under a RUN of LDT selectors, a 64 KB window each, stepped by the CX that `OSAPI_MEM_HUGE` answers (8; a window every 32 KB with BX = 8000h). Plan 13.6's "a claim over 64KB stays conventional" was true when written and was overtaken by 14.37 and the memory round | plan 13.6, 14.37, 14.41; SPEC.md 50.3.5, 50.3.6, 50.6.12 |
 | `OSAPI_MEM_AVAIL` answers for the whole machine; `OSAPI_XMEM_*` and `OSAPI_XMEM_RUN` reach extended memory; `OSAPI_MEM_CODESEL`/`OS88_CODESEL` turns a claim into a callable code selector | SPEC.md 20.18, 50.6.12 |
 | a fault in a package closes the package, not the machine (a #GP names the CS:IP in a toast) | plan 14.42 |
 | a package that is real-mode by design refuses on kern_mega in its own words (`OS88_MEGA_REFUSE`, WIN16, the Video Player's shipped build); kern_mega pairs with its own release's apps disk | SPEC.md 20.18, 124 |
@@ -77,31 +86,46 @@ Short of protected mode, a 286+ gets real-mode extended memory through
   host-testable and 8088-safe. A 32-bit engine is not expressible in it; it
   would need a second compiler, a second runtime (`crt0`) and a 32-bit
   descriptor kernel service that does not exist.
-- A mature PDF engine would be a port with a licence and a size, neither
-  assessed here. From memory and **not verified in this session** (a port
-  assessment must pin a version and read the licence itself): MuPDF is
-  AGPL-3 or commercial, Poppler and Xpdf GPL, PDFium BSD/Apache but a large C++
-  tree with heavy dependencies, qpdf Apache-2 but a writer rather than a
-  renderer, pdfio Apache-2-with-exception and small but not a renderer. The
-  tree already carries GPL-2-or-later packages (`apps/apple2`, `apps/win16`) so
-  copyleft is not automatically a blocker, but AGPL and a commercial option are
-  owner decisions, not defaults. Every one of them assumes `malloc`, `stdio`,
+- A mature PDF engine would be a port with a licence and a size; the size is
+  not assessed here. The licences were read from each project's own
+  published file on 2026-11-05 (default branch, so a port must still pin a
+  release and re-read it; first 16 hex of the SHA-256 of the fetched file):
+
+  | engine | licence, as its own file says | source read |
+  |---|---|---|
+  | MuPDF | GNU **Affero** GPL v3 or later; commercial licence from Artifex | `ArtifexSoftware/mupdf` `COPYING` (57c8ff33c9c0cfc3) and `README` (7c84deefa852ec45) |
+  | Poppler | **GPL** (not LGPL): "programs which call Poppler must be licensed under the GPL as well" | `poppler` `README.md` (3a6d2dfa541596d6) |
+  | Xpdf | GPL v2 and GPL v3, dual: v2 only, v3 only, or either | xpdfreader.com `opensource.html` (af690aa560f88866) |
+  | PDFium | BSD 3-clause (`The PDFium Authors`), the file also carrying the Apache 2.0 text | `pdfium` `LICENSE` (beef23306e826b03, base64 as gitiles serves it) |
+  | qpdf | Apache 2.0 - a rewriter, not a renderer | `qpdf/qpdf` `LICENSE.txt` (cfc7749b96f63bd3) |
+  | PDFio | Apache 2.0 with optional exceptions (embedded object form; GPLv2 linking) - a reader/writer, not a renderer | `michaelrsweet/pdfio` `LICENSE` (cfc7749b96f63bd3, the same Apache text) and `NOTICE` (7f08e9e1433efb26) |
+
+  The tree already carries GPL-2-or-later packages (`apps/apple2`,
+  `apps/win16`) so copyleft is not automatically a blocker, but AGPL (MuPDF)
+  and a commercial option are owner decisions, not defaults; PDFium is the
+  permissive renderer of the set and also the largest C++ tree. Every one of them assumes `malloc`, `stdio`,
   floating point and a flat 32-bit address space, none of which exists on a
   16-bit protected-mode kernel without an FPU requirement.
 
 ### 2.3 What PageDesk already is, on kern_mega
 
 PageDesk's own source was written with the runtime in view (read from
-`apps/pagedesk/pagedesk.asm` and `pdui.inc`, not run): the class byte is
-`OS88_STACK_128 | OS88_HIGH | OS88_HIGHMEM`; the primary does no arithmetic on
-its own segment or on a claim's; every module is reached through a vector
+`apps/pagedesk/pagedesk.asm`, `pdui.inc` and `pdumod.c`, not run): the class
+byte is `OS88_STACK_128 | OS88_HIGH | OS88_HIGHMEM` (`pagedesk.asm` line 42);
+the primary does no arithmetic on its own segment or on a claim's - the
+document claims are carved with `os88_seg_sub` (`OSAPI_MEM_SUBSEG`, SPEC.md
+50.3.6: a selector on kern_mega, segment + paragraphs elsewhere,
+`pdumod.c`); every module is reached through a vector
 whose segment `OS88_CODESEL` turns into a code selector; every claim is handed
 to the modules as an opaque segment; data crosses only through the exchange
 block and claims by far copy (PAGEDESK-SPEC 3.2, 4.3). Two things have **not**
 been checked and are the first spike (section 6): that it runs on a booted
 kern_mega at all, and what the shipped build's `OS88_HIGHMEM` claims cost in
-pool moves (a pool claim "MOVES", plan 14.37; PageDesk's claims are pinned,
-PAGEDESK-SPEC 3.4, which is the safe default).
+pool moves. PAGEDESK-SPEC 3.4 pins every claim, but pinning is a real-mode
+heap property: above 1 MB a claim moves under its selector at any instant the
+compactor runs (plan 14.15, 14.37; SPEC.md 50.3.6), which is safe exactly as
+long as nothing in PageDesk keeps a LINEAR address or a raw `segment + N` -
+the carve above says it does not; spike 1 is what would show it.
 
 ## 3. What PageDesk could gain, against what it already has
 
@@ -111,8 +135,8 @@ PAGEDESK-SPEC 16.2's claims, and the real-mode ways to spend memory first:
 |---|---|---|---|
 | block cache | 16 KiB, 32 blocks max (20.2.3) | raise the block count in the engine and claim 64-128 KiB from the unused conventional heap (the XT has 300 KiB unclaimed at peak) | blocks above 1 MB: only matters beyond the first ~128 KiB, and the cache indexes would need a segment per window |
 | page/object index | a 256-subsection table, 20-byte entry reads (7.3, L4) | a larger resolved-offset cache (512 entries, 20.2.2) | a whole-file object index in RAM for a >1000-object file |
-| display list | 22 KiB list + workspace, overflow re-scans a narrower row range (D4, 10.2) | a bigger list from the same unused heap; fewer re-scans | none that real mode lacks: the list is addressed in one 64 KiB segment either way |
-| glyph and image caches | 12 KiB | same, larger | same |
+| display list | 29 KiB: 22 KiB list + PDREND's 6,912-byte workspace (D13, `pdumod.c`), overflow re-scans a narrower row range (D4, 10.2) | a bigger list from the same unused heap; fewer re-scans | none that real mode lacks: the list is addressed in one 64 KiB segment either way |
+| glyph and image caches | 24 KiB, the image row buffer and strike cache carved in it (20.3.4) | same, larger | same |
 | thumbnails | 4 KiB | same | many pages' thumbnails kept at once |
 | undo / edit store | 16 + 4 KiB (wave 2) | a bigger claim; spill to disk (journal, 14.7) | spill above 1 MB instead of disk (PD-25's `OSAPI_XMEM_*` does this in real mode already) |
 | Flate window | not in the XT build (PD-25) | `OSAPI_XMEM_*` store, 32 KiB window | none |
@@ -144,9 +168,9 @@ is - a second build of the package on the `$(MEGAPKGS)` list, `t_megapkg`'s
 registry, a pairing with kern_mega's own apps disk, and an engine whose cache
 and display list are **no longer one segment** (a block would be a
 (selector, offset) pair and the 20.2.3 arithmetic would grow an indirection on
-the 8088 path or be compiled twice). The reach is limited by the kernel's own
-statement that a claim over 64 KB stays conventional unless the package steps
-windows (plan 13.6). The size of that win over A is **not measured**; do not
+the 8088 path or be compiled twice). Its reach is the stepping: a claim over 64 KB
+is a run of selectors the engine must walk by the CX `OSAPI_MEM_HUGE` answers
+(SPEC.md 50.3.5), which is the indirection above, not a refusal. The size of that win over A is **not measured**; do not
 take it without a number (section 6, spike 2). Minimum CPU declaration if
 built: a 286 (`CPU_F_PM` from `OSAPI_CPU_INFO` at run time, never by probing),
 extended memory of at least the arm's declared cache plus the kernel's; refuses
@@ -201,6 +225,9 @@ the engine cuts the cache at 32 blocks.
 | SPARSE.PDF (10,000 objects) | 580 KB | 107 | 107 | 106 | 106 |
 | ANNOTS256.PDF | 101 KB | 7 | 6 | 6 | 6 |
 | STRESS64.PDF (64 pages) | 19 KB | 14 | 12 | 10 | 10 |
+
+verify-host re-ran BIGFILE, SPARSE and ANNOTS256 at all four sizes and
+STRESS64 at 8 and 64 KiB on the wave-2 tree and got the same numbers.
 
 Reading it honestly: **at open, a larger cache buys almost nothing** (at most
 4 calls of 14, 1 of 107), and the 64 KiB column is the engine's own ceiling, so
