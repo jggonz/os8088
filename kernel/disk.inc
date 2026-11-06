@@ -4152,6 +4152,26 @@ disk_mount_x:
     call dsk_rah_want           ; §18.95's cache, if a shed took it - here
                                 ; rather than in the walker, because it now
                                 ; serves every read and not only a directory's
+%ifndef KD_BUILD                ; (kern_dos keeps it at step 3: its image has
+                                ; twenty bytes left, and its DOS program reads
+                                ; a root once a session - kdlayout.inc)
+    cmp byte [dsk_quiet], 0     ; ...AND A MOUNT THAT WILL LIST DROPS IT HERE,
+    jne .keeprah                ; before the FAT window and not after it
+    cmp word [dsk_dseg], 0      ; (kernel hot-paths pass 1): a full mount is
+    je .keeprah                 ; a navigation or a Refresh and must re-read
+    call dsk_rah_flush          ; the disk (step 3 below), and what that rule
+.keeprah:                       ; asks is that nothing it lists is older than
+                                ; this mount's own swap detector. The FAT
+                                ; window's load is a miss that FILLS to the
+                                ; track's end, so on a 360KB or 720KB disk
+                                ; it brings the root's first sectors in with
+                                ; it - read off the platter in this mount,
+                                ; after LBA 0. Dropped after it, as it was,
+                                ; they were read again by the next call: one
+                                ; int 13h on every open of a root, every
+                                ; Refresh at one, and every Up to one. The
+                                ; test is .listing's own (2b, below)
+%endif
     call dsk_fatw_want          ; ...give a floppy one first, if the machine
                                 ; can spare it (SPEC.md 18.8.2)
     call dsk_fatw_pick          ; this volume's own window, if it has one and
@@ -4224,13 +4244,17 @@ disk_mount_x:
 .listing:
 
     ; --- 3. root-dir scan -> synthesized directory (SPEC.md 19) ---
-    ; §18.95's cache is dropped FIRST, and only on this path. A full mount
+    ; §18.95's cache WAS DROPPED at step 2, and only on this path. A full mount
     ; is a navigation or a Refresh, and Refresh is exactly a request to re-read
     ; the disk - answered out of a cache it would be a no-op, which is the one
     ; thing it must never be (SPEC.md 18.9's rule for the quiet path, from the
-    ; other end). A QUIET mount does not come through here, so a volume switch
-    ; and back keeps the runs, which is the whole win.
-    call dsk_rah_flush
+    ; other end). What the scan may still be served is what step 2's FAT
+    ; window read itself, after the boot sector - re-read, by this mount. A
+    ; QUIET mount does not come through here, so a volume switch and back
+    ; keeps the runs, which is the whole win.
+%ifdef KD_BUILD
+    call dsk_rah_flush          ; (kern_dos: here, as it always was - step 2)
+%endif
     ; A sector at a time out of dsk_secbuf, wherever dsk_dirw_get got it from.
     ; DS never leaves the kernel
     ; segment while parsing: raw fields are read via es:, the staged entry is
