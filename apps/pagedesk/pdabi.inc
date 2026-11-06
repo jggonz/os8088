@@ -104,6 +104,7 @@ PDV_WRT_NEWDOC           equ 0x82
 PDV_WRT_EXTRACT          equ 0x83
 PDV_WRT_ABORT            equ 0x84
 PD_XB_BYTES              equ 1024
+PDXI_FLATE               equ 0x0001
 PDO_READONLY             equ 0x0001
 PDO_OUTLINE              equ 0x0002
 PDO_ACROFORM             equ 0x0004
@@ -222,7 +223,7 @@ PDXB_VIEW_CLIP_X1              equ 24
 PDXB_VIEW_CLIP_Y1              equ 26
 PDXB_VIEW_BYTES                equ 28
 
-; ---- struct pdxb_init (44 bytes) -------------------------------------------
+; ---- struct pdxb_init (48 bytes) -------------------------------------------
 PDXB_INIT_XB_SEG               equ 0
 PDXB_INIT_ENG_OFF              equ 2
 PDXB_INIT_ENG_SEG              equ 4
@@ -245,7 +246,9 @@ PDXB_INIT_WBUF_KB              equ 36
 PDXB_INIT_ADAPTER              equ 38
 PDXB_INIT_BPP                  equ 40
 PDXB_INIT_FLAGS                equ 42
-PDXB_INIT_BYTES                equ 44
+PDXB_INIT_FLATE_SEG            equ 44
+PDXB_INIT_FLATE_KB             equ 46
+PDXB_INIT_BYTES                equ 48
 
 ; ---- struct pdxb_open (32 bytes) -------------------------------------------
 PDXB_OPEN_NAME                 equ 0
