@@ -19,8 +19,8 @@ struct pdr_gs {
     pdb  fncs, sncs;                /* colour components of the space (1,3,4)*/
     pdb  tr, font;                  /* render mode, font cache index (255=none)*/
     pdb  clid;                      /* innermost polygon clip in the pool, 0xFF none */
-    pdb  pad;
-    pdb  dn, dph, dash[4];          /* dash pattern: elements (0 = solid), phase and lengths, quarter points */
+    pdw  dph;                       /* dash phase, quarter points, already reduced modulo the period (< 2,040) */
+    pdb  dn, dash[4];               /* dash pattern: elements (0 = solid) and lengths, quarter points */
 };
 /* the current state lives here; the SAVED states (q) and the font cache live in
  * the workspace at the tail of dl_seg (PDR_WSB bytes, PAGEDESK-SPEC 20.3.1) */
@@ -32,6 +32,8 @@ static pdw g_ws;                    /* workspace segment (dl_seg + DL capacity) 
 #define WS_FN   1344u               /* PDR_NFONT x sizeof(struct pdr_font); the 16 states end at 16 x 84 */
 #define WS_ED   4096u               /* PDR_NEDGE staged edges, 8 bytes each    */
 #define WS_CE   6144u               /* PDR_NCLIPE clip edges, 8 bytes each     */
+/* the 16 saved states end before the font table: held by the compiler on both builds */
+typedef char pdr_ck_gs[PD_MAXGSTACK * sizeof(struct pdr_gs) <= WS_FN ? 1 : -1];
 static void gs_save(pdw n) { pd_fcopy_out(&g_gcur, g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), sizeof(struct pdr_gs)); }
 static void gs_load(pdw n) { pd_fcopy_in(g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), &g_gcur, sizeof(struct pdr_gs)); }
 
@@ -364,9 +366,9 @@ static void stroke_poly(const pdi *xs, const pdi *ys, pdw n, pdw closed)
     pdw i, j, k, nseg = closed ? n : n - 1;
     pdi x0, y0, x1, y1, nx, ny, nx2, ny2, cr, dot, mx, my, s;
     pdi e;
-    if (n == 1 || nseg == 0) {                       /* a dot */
-        if (GS.cap == 1) { octagon(xs[0], ys[0], g_shw); }
-        else if (GS.cap == 2) emit_rect_q((pdi)(xs[0] - g_shw), (pdi)(ys[0] - g_shw),
+    if (n == 1 || nseg == 0) {                       /* a dot; at a hairline's width a round one is a */
+        if (GS.cap == 1 && g_shw > 2) { octagon(xs[0], ys[0], g_shw); }   /* pixel: an octagon of half a pixel can miss every pixel centre */
+        else if (GS.cap) emit_rect_q((pdi)(xs[0] - g_shw), (pdi)(ys[0] - g_shw),
                                          (pdi)(xs[0] + g_shw), (pdi)(ys[0] + g_shw), PK_STROKE);
         return;
     }

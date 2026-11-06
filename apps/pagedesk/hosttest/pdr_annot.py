@@ -186,6 +186,54 @@ nopg = page_pdf(b'', anns[:3], EX, contents=False)
 rcn, imn, stn, errn = render(writepdf('ann0.pdf', nopg), flags=1, H=300)
 check('a page with no /Contents still draws its annotations (rc %d)' % rcn, rcn == 0 and pidx(imn)[300 - 70, 30] == 12 and (pidx(imn)[300 - 100:300 - 20, 20:120] == 12).sum() > 3000, errn[:80])
 
+# verify-annotr: what review found
+EX2 = []
+def apstream2(d, body): EX2.append(strm('/Type /XObject /Subtype /Form ' + d, body)); return len(EX2) + 5
+B1 = apstream2('/BBox [0 0 40 40] /Matrix [0.7071 0.7071 -0.7071 0.7071 0 0]', b'0 0 1 rg 0 0 40 40 re f')    # turned 45 degrees
+B2 = apstream2('/BBox [0 0 40 40]', b'0 0.7 0 rg 0 0 40 40 re f')                                             # "Yes"
+B3 = apstream2('/BBox [0 0 40 40]', b'1 0 0 rg 0 0 40 40 re f')                                               # "Off"
+B4 = apstream2('/BBox [0 0 40 40]', b'1 0 0 rg 0 0 40 40 re f > 0 0 1 rg 0 0 20 20 re f')                    # a syntax error half way
+B5 = apstream2('/BBox [0 0 40 40]', b'0 0 1 rg 0 0 40 40 re f')
+B6 = apstream2('/BBox [0 0 40 40]', b'0 0 1 rg 0 0 40 40 re f BI /W 2 /H 2')                                 # ends inside BI's dictionary
+anns2 = [annot('Stamp', '100 100 160 160', '', '/AP << /N %d 0 R >>' % B1),                                     # 1: 45 degrees
+         annot('Widget', '200 100 240 140', '', '/AS /Yes /AP << /N << /Off %d 0 R /Yes %d 0 R >> >>' % (B3, B2)),   # 2: a DIRECT state dictionary
+         annot('Stamp', '20 200 60 240', '', '/AP << /N %d 0 R >>' % B4),                                       # 3: errs half way
+         annot('Stamp', '80 200 120 240', '', '/AP << /N %d 0 R >>' % B6),                                      # 4: ends inside BI
+         annot('Stamp', '140 200 180 240', '', '/AP << /N %d 0 R >>' % B5)]                                     # 5: after both: drawn
+pdf2 = writepdf('ann2.pdf', page_pdf(b'0 g 0 0 10 10 re f', anns2, EX2))
+ref2 = mutool(writepdf('ann2r.pdf', page_pdf(b'0 g 0 0 10 10 re f', anns2[:2], EX2)))      # mutool refuses the erring streams: its reference is the first two
+rc, im, st, err = render(pdf2, flags=1, H=300)
+check('review cases render (rc %d)' % rc, rc == 0, err[:100])
+if rc == 0:
+    pi = pidx(im)
+    def at2(x, y): return pi[300 - y, x]
+    check('12.5.5 takes ALL FOUR corners: a 45-degree /Matrix fills its /Rect with the diamond (centre blue, corner white)',
+          at2(130, 130) in (1, 9) and at2(103, 103) == 15, 'px %s %s' % (at2(130, 130), at2(103, 103)))
+    rr = np.asarray(ref2, dtype=float)
+    d = np.abs(lum(im)[300 - 160:300 - 100, 100:160] - rr[300 - 160:300 - 100, 100:160])
+    check('  ... and agrees with mutool there (%.1f%% of pixels differ by > 90)' % ((d > 90).mean() * 100), (d > 90).mean() < 0.08)
+    check('/AP /N a DIRECT state dictionary with /AS /Yes draws the green one', at2(220, 120) in (2, 10), 'px %s' % at2(220, 120))
+    check('an appearance that errs half way: what came before it is drawn, the annotations AFTER it still are',
+          at2(40, 220) in (4, 12) and at2(160, 220) in (1, 9), 'px %s %s' % (at2(40, 220), at2(160, 220)))
+    check('an appearance that ends inside BI\'s dictionary does not swallow the next one', at2(100, 220) in (1, 9) and at2(160, 220) in (1, 9))
+# a page whose own content errs still gets its annotations and the edit store's marks
+anns3 = [annot('Stamp', '140 200 180 240', '', '/AP << /N %d 0 R >>' % B5)]
+pdf3 = writepdf('ann3.pdf', page_pdf(b'0 g 0 0 10 10 re f > 1 0 0 rg 300 20 50 50 re f', anns3, EX2))
+rc, im, st, err = render(pdf3, flags=1, H=300)
+check('a page whose content stream errs still draws its annotations (rc %d)' % rc, rc == 0 and pidx(im)[300 - 220, 160] in (1, 9) and pidx(im)[300 - 40, 320] == 15, err[:80])
+# a long run of annotations the walk skips is done a batch a slice, not in one
+hid = [annot('Stamp', '%d 20 %d 30' % (10 + i, 12 + i), '', '/F 2 /AP << /N %d 0 R >>' % B5) for i in range(120)]
+pdf4 = writepdf('ann4.pdf', page_pdf(b'', hid + [annot('Stamp', '140 200 180 240', '', '/AP << /N %d 0 R >>' % B5)], EX2))
+rc, im, st, err = render(pdf4, flags=1, H=300)
+def nsteps(pdf):
+    r = subprocess.run([exe, 'render', pdf, '0', '100', '0', '4', '1/1', '640', '300', '0', '0', os.path.join(scratch, 'o4.ppm'), bank, '29'],
+                       capture_output=True, text=True, env=dict(os.environ, PDR_GLYPHKB='24', PDR_RFLAGS='1'))
+    m = re.search(r'steps=(\d+)', r.stdout); return int(m.group(1)) if m else 0
+s_many = nsteps(pdf4)
+s_one = nsteps(writepdf('ann5.pdf', page_pdf(b'', [annot('Stamp', '140 200 180 240', '', '/AP << /N %d 0 R >>' % B5)], EX2)))
+check('120 hidden annotations and one shown: the shown one is drawn, and the walk is a batch of 8 a slice (%d steps against %d for the page without them)' % (s_many, s_one),
+      rc == 0 and pidx(im)[300 - 220, 160] in (1, 9) and s_many - s_one >= 120 // 8 - 1, err[:80])
+
 # ANNOTS256: 256 appearances of seven kinds
 a256 = os.path.join(stress, 'ANNOTS256.PDF')
 if os.path.exists(a256):
@@ -341,6 +389,37 @@ if r is not None:
         else: check('replace scenario renders', False, err[:100])
 
 # ============================================================================================
+# verify-annotr: an ink stroke longer than the path buffer (PDR_NPATH 200) is stroked in pieces, and
+# each piece goes on FROM the last point - the segment across the cut is not lost
+import struct as _st
+def ink_store(pts):
+    rec = _st.pack('<BBH4hHHHBBBBHHHHHH14x', 5, 0, 0, 0, 0, 400 * 16, 300 * 16, 0, 0, 1, 0, 0, 4, 0, 0, 0, 48, len(pts), 0, 0)
+    return rec + b''.join(_st.pack('<hh', x * 16, y * 16) for x, y in pts)
+pts = [(20 + (i & 1) * 2, 150) for i in range(197)] + [(380, 150), (380, 150)]
+sp = os.path.join(scratch, 'ink.bin'); open(sp, 'wb').write(ink_store(pts))
+rc, im, st, err = render(writepdf('ink.pdf', page_pdf(b'')), flags=2, store=sp, H=300, W=400)
+row = (lum(im)[300 - 150, 100:300] < 128) if rc == 0 else np.zeros(1)
+check('an ink stroke of 199 points: the segment across the path buffer\'s cut (point 196 -> 197) is drawn (%d of 200 px inked)' % row.sum(), rc == 0 and row.all(), err[:80])
+
+# verify-annotr: the store is drawn a budget a turn (about 1,024 points and text bytes), never all of
+# it in one slice: 200 ink records of 60 points (a dot each) take more steps than one, and the last is drawn
+def ink_rec(i, n, pts_off):
+    return _st.pack('<BBH4hHHHBBBBHHHHHH14x', 5, 0, 0, 0, 0, 400 * 16, 300 * 16, 0, 0, i + 1, 1, 0, 2, 0, 0, 0, pts_off, n, 0, 0)
+def ink_many(k, n=60):
+    recs = b''.join(ink_rec(i, n, 48 * k + i * n * 4) for i in range(k))
+    pts = b''.join(_st.pack('<hh', (20 + i) * 16, 40 * 16) if j == 0 else _st.pack('<hh', -32768, 0) for i in range(k) for j in range(n))   # a dot and 59 pen-ups each: heavy in points, light in the list
+    return recs + pts
+sp1 = os.path.join(scratch, 'ink1.bin'); open(sp1, 'wb').write(ink_many(1))
+sp2 = os.path.join(scratch, 'ink200.bin'); open(sp2, 'wb').write(ink_many(200))
+def esteps(store):
+    r = subprocess.run([exe, 'render', writepdf('inkp.pdf', page_pdf(b'')), '0', '100', '0', '4', '1/1', '400', '300', '0', '0', os.path.join(scratch, 'o5.ppm'), bank, '29'],
+                       capture_output=True, text=True, env=dict(os.environ, PDR_GLYPHKB='24', PDR_RFLAGS='2', PDR_EDITS=store))
+    m = re.search(r'steps=(\d+)', r.stdout); return (int(m.group(1)) if m else 0), r.returncode
+(s1, r1), (s2, r2) = esteps(sp1), esteps(sp2)
+im5 = np.asarray(Image.open(os.path.join(scratch, 'o5.ppm')).convert('RGB')).astype(int) if r2 == 0 else None
+check('200 ink records of 60 points (dots) are drawn over several turns (%d steps against %d for one record), the last one too' % (s2, s1),
+      r1 == 0 and r2 == 0 and s2 - s1 >= 8 and im5 is not None and (pidx(im5)[259:262, 215:222] == 1).sum() >= 3)
+
 print('-- dash patterns (d)')
 def draw(content, **kw):
     pdf = writepdf('c.pdf', page_pdf(content))
@@ -377,11 +456,21 @@ check('a dashed rectangle: its left edge alternates (%d runs) and the path close
 rc, im, st, err = draw(b'1 J 4 w [0 8] 0 d 20 100 m 200 100 l S')
 r_ = line_runs(im, 100, 10, 230); dots = [n for k, n in r_ if k]
 check('round caps and a zero-length dash: dots every 8 px (%d dots)' % len(dots), rc == 0 and 21 <= len(dots) <= 24 and all(3 <= n <= 6 for n in dots))
+rc, im, st, err = draw(b'1 J 0 w [0 8] 0 d 20 100 m 200 100 l S')
+dots = [n for k, n in runs(lum(im)[199:202, 10:230].min(axis=0) < 128) if k] if rc == 0 else []      # a pixel dot sits on row 199 or 200
+check('a dotted HAIRLINE (0 w, round caps, [0 8]): every dot is a pixel (%d dots; an octagon of half a pixel drew none)' % len(dots), rc == 0 and 21 <= len(dots) <= 24)
 rc, im, st, err = draw(b'q [10 10] 0 d Q 3 w 20 150 m 380 150 l S')
 r_ = line_runs(im, 150)
 check('Q restores the dash: a stroke after q..Q is solid', rc == 0 and len([1 for k, n in r_ if k]) == 1)
 rc, im, st, err = draw(b'[10 10] 0 d [] 0 d 3 w 20 150 m 380 150 l S')
 check('[] 0 d goes back to solid', rc == 0 and len([1 for k, n in line_runs(im, 150) if k]) == 1)
+# verify-annotr: a phase is taken MODULO the period (twice the sum for an odd count), not clamped
+rc, im, st, err = draw(b'[10 10] 1002 d 3 w 20 150 m 380 150 l S')
+r_ = line_runs(im, 150); first = [n for k, n in r_ if k][0] if rc == 0 else 0
+check('a huge phase: [10 10] 1002 d starts like 2 d (1002 mod 20: a first dash of 8 px, found %d; a clamp to 63.75 would give 6)' % first, rc == 0 and 7 <= first <= 9)
+rc, im, st, err = draw(b'[4] 6 d 3 w 20 150 m 380 150 l S')
+r_ = line_runs(im, 150); lead = r_[0] if rc == 0 else (None, 0)
+check('an odd array\'s phase cycles over twice its sum: [4] 6 d opens with a 2 px gap (the 10 px before the line + 2: %s)' % (lead,), rc == 0 and lead[0] is False and 11 <= lead[1] <= 13)
 rc, im, st, err = draw(b'[3] 0 d 2 w 50 50 m 100 250 150 50 200 250 c S 250 60 m 350 60 l 300 140 l h S')
 check('dashed curves and closed paths draw (no Incomplete)', rc == 0 and inc(st) == 0 and (lum(im) < 128).sum() > 300)
 rc, im, st, err = draw(b'[1 2 3 4 5 6] 0 d 2 w 20 150 m 380 150 l S')

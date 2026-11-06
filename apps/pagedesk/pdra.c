@@ -59,7 +59,7 @@ static void ep(pdi x, pdi y, pdw mv)
 }
 static void ec(pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 {
-    static pdi a, b, c, d;
+    pdi a, b, c, d;
     edev(x1, y1); a = g_dx; b = g_dy;
     edev(x2, y2); c = g_dx; d = g_dy;
     edev(x3, y3);
@@ -85,28 +85,34 @@ static pdw ed_replaced(pdw obj, pdw gen)
 }
 
 /* ---- the source's appearances ------------------------------------------------ */
-/* PDF 1.7 12.5.5: the form's BBox through its Matrix is a rectangle (the matrix is
- * taken as axis-aligned, which a quarter turn also is: two opposite corners give its
- * extent); A maps that to the annotation's /Rect. Sets g_am, 0 = degenerate */
+/* PDF 1.7 12.5.5: the form's BBox through its Matrix, and the smallest upright
+ * rectangle holding the four transformed corners (exact for every matrix - a
+ * quarter turn, a skew, a rotation); A maps that to the annotation's /Rect.
+ * Sets g_am, 0 = degenerate */
 static struct pd_fx fz;
+static struct pd_fx g_fx0, g_fy0, g_fx1, g_fy1;     /* the transformed box */
 static pdw ap_fit(const struct pd_mat *m, const struct pd_fx *bx0, const struct pd_fx *by0,
                   const struct pd_fx *bx1, const struct pd_fx *by1)
 {
-    static struct pd_fx x, y, x2, y2, rx, ry, rw, rh;
-    pdr_cpy(&x, bx0, 4); pdr_cpy(&y, by0, 4); pdm_mat_apply(&x, &y, m);
-    pdr_cpy(&x2, bx1, 4); pdr_cpy(&y2, by1, 4); pdm_mat_apply(&x2, &y2, m);
-    if (pdm_fx_cmp(&x2, &x) < 0) { pdr_cpy(&rx, &x, 4); pdr_cpy(&x, &x2, 4); pdr_cpy(&x2, &rx, 4); }
-    if (pdm_fx_cmp(&y2, &y) < 0) { pdr_cpy(&ry, &y, 4); pdr_cpy(&y, &y2, 4); pdr_cpy(&y2, &ry, 4); }
-    pdm_fx_sub(&x2, &x2, &x); pdm_fx_sub(&y2, &y2, &y);           /* the extent */
+    static struct pd_fx x, y, rx, ry, rw, rh;
+    pdw i;
+    for (i = 0; i < 4; i++) {                       /* the four corners */
+        pdr_cpy(&x, i & 1 ? bx1 : bx0, 4); pdr_cpy(&y, i & 2 ? by1 : by0, 4); pdm_mat_apply(&x, &y, m);
+        if (!i || pdm_fx_cmp(&x, &g_fx0) < 0) pdr_cpy(&g_fx0, &x, 4);
+        if (!i || pdm_fx_cmp(&x, &g_fx1) > 0) pdr_cpy(&g_fx1, &x, 4);
+        if (!i || pdm_fx_cmp(&y, &g_fy0) < 0) pdr_cpy(&g_fy0, &y, 4);
+        if (!i || pdm_fx_cmp(&y, &g_fy1) > 0) pdr_cpy(&g_fy1, &y, 4);
+    }
+    pdm_fx_sub(&x, &g_fx1, &g_fx0); pdm_fx_sub(&y, &g_fy1, &g_fy0);     /* the extent */
     pdm_pt16_to_fx(&rx, g_ar.x0); pdm_pt16_to_fx(&ry, g_ar.y0);
     pdm_pt16_to_fx(&rw, g_ar.x1); pdm_pt16_to_fx(&rh, g_ar.y1);
     pdm_fx_sub(&rw, &rw, &rx); pdm_fx_sub(&rh, &rh, &ry);
-    if (pdm_fx_cmp(&x2, &fz) <= 0 || pdm_fx_cmp(&y2, &fz) <= 0 ||
+    if (pdm_fx_cmp(&x, &fz) <= 0 || pdm_fx_cmp(&y, &fz) <= 0 ||
         pdm_fx_cmp(&rw, &fz) <= 0 || pdm_fx_cmp(&rh, &fz) <= 0) return 0;
     pdm_mat_ident(&g_am);
-    pdm_fx_div(&g_am.a, &rw, &x2); pdm_fx_div(&g_am.d, &rh, &y2);
-    pdm_fx_mul(&x2, &g_am.a, &x); pdm_fx_sub(&g_am.e, &rx, &x2);
-    pdm_fx_mul(&y2, &g_am.d, &y); pdm_fx_sub(&g_am.f, &ry, &y2);
+    pdm_fx_div(&g_am.a, &rw, &x); pdm_fx_div(&g_am.d, &rh, &y);
+    pdm_fx_mul(&x, &g_am.a, &g_fx0); pdm_fx_sub(&g_am.e, &rx, &x);
+    pdm_fx_mul(&y, &g_am.d, &g_fy0); pdm_fx_sub(&g_am.f, &ry, &y);
     return 1;
 }
 
@@ -118,21 +124,33 @@ static pdw ref_get(pdw obj, pdw gen, const char *k0)
     if (k0) pdr_scpy(g_dg.key[0], k0, 32);
     return eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0);
 }
+/* /AS, the annotation's appearance state, into g_name: 1 = there is one */
+static pdw ap_state(void)
+{
+    if (dict_get(g_aob, g_agn, "AS", 0, 0) || g_dg.kind != PDK_NAME) return 0;
+    pdr_scpy(g_name, g_dg.text, PDR_NNAME);
+    return 1;
+}
 /* the annotation's normal appearance stream, /AP /N: a form (an object with a /BBox -
- * DICT_GET answers a stream's dictionary as a dictionary), or a state dictionary by
- * reference that /AS picks the entry of. 1 = g_apobj / g_apgen hold it */
+ * DICT_GET answers a stream's dictionary as a dictionary), or a state dictionary -
+ * DIRECT (/N << /Off 5 0 R /Yes 6 0 R >>, a check box's) or by reference - of which
+ * /AS names the entry. 1 = g_apobj / g_apgen hold it */
 static pdw ap_find(void)
 {
-    pdw o, g;
-    pdr_zero(&g_dg, sizeof g_dg);
-    g_dg.objnum = g_aob; g_dg.gen = g_agn;
-    pdr_scpy(g_dg.key[0], "AP", 32); pdr_scpy(g_dg.key[1], "N", 32);
-    if (eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0) || g_dg.kind != PDK_REF) return 0;
+    pdw o, g, st = 0;
+    for (;;) {
+        pdr_zero(&g_dg, sizeof g_dg);
+        g_dg.objnum = g_aob; g_dg.gen = g_agn;
+        pdr_scpy(g_dg.key[0], "AP", 32); pdr_scpy(g_dg.key[1], "N", 32);
+        if (st) pdr_scpy(g_dg.key[2], g_name, 32);
+        if (eng_call(PDV_ENG_DICT_GET, &g_dg, sizeof g_dg, 0, 0, 0)) return 0;
+        if (g_dg.kind == PDK_REF) break;
+        if (st || g_dg.kind != PDK_DICT || !ap_state()) return 0;
+        st = 1;                                         /* direct states: /AP /N /<AS> */
+    }
     o = g_dg.refnum; g = g_dg.refgen;
-    if (ref_get(o, g, "BBox")) {                          /* not a form: states, /AS names the entry */
-        if (dict_get(g_aob, g_agn, "AS", 0, 0) || g_dg.kind != PDK_NAME) return 0;
-        pdr_scpy(g_name, g_dg.text, PDR_NNAME);
-        if (ref_get(o, g, g_name) || g_dg.kind != PDK_REF) return 0;
+    if (ref_get(o, g, "BBox")) {                        /* not a form: states by reference */
+        if (st || !ap_state() || ref_get(o, g, g_name) || g_dg.kind != PDK_REF) return 0;
         o = g_dg.refnum; g = g_dg.refgen;
         if (ref_get(o, g, "BBox")) return 0;
     }
@@ -161,6 +179,7 @@ static pdw annot_try(void)
     gs_reset();
     g_resp = g_page; g_reso = 0; g_resg = 0;
     path_reset(); op_clear(); g_inbt = 0; g_tjlive = 0;
+    g_inl = 0; g_dictd = 0;               /* a stream that ended inside BI's dictionary or a << >> leaves nothing behind */
     n = g_nfr;
     g_afm = 1; do_form(g_apobj, g_apgen); g_afm = 0;
     return g_nfr > n ? 1 : 0;
@@ -170,19 +189,31 @@ static pdw annot_try(void)
  * 1 = a stream is open, 0 = the page and everything on it is drawn */
 static pdw annot_next(void)
 {
-    pdw r;
+    pdw r, tries = 0;
     if (g_mode != PDR_INTERP || !g_aflags) return 0;
     for (;;) {
-        if (g_aph == 0) { g_aph = (g_aflags & PDRF_ANNOTS) ? 2 : 3; g_aidx = 0; }
-        if (g_aph == 3) { annot_edits(1); g_aph = 4; }
         if (g_aph == 4) return 0;
-        r = annot_try();
-        if (r == 1) return 1;
+        if (g_aph == 5 || g_aph == 3) {                     /* the edit store's records, a budget a turn */
+            if (annot_edits(g_aph == 3)) break;
+            if (g_aph == 3) { g_aph = 4; continue; }
+            g_aidx = 0; g_aph = 1;                          /* then the source's highlights, */
+            if (g_aflags & PDRF_ANNOTS) continue;
+            r = 2;                                          /* or none: straight to the page */
+        } else if (g_aph == 0) {                            /* the page is over: the rest */
+            g_aph = (g_aflags & PDRF_ANNOTS) ? 2 : 3; g_aidx = 0; g_aedi = 0;
+            continue;
+        } else {
+            if (++tries > 8) break;                         /* 8 ANNOTS (and their DICT_GETs) a turn */
+            r = annot_try();
+            if (r == 1) return 1;
+        }
         if (r == 2) {
             if (g_aph == 1) { g_aph = 0; if (page_open() == 0) return 1; }
             else g_aph = 3;
         }
     }
+    g_await = 1;                                            /* a slice stays a slice: on at the next turn */
+    return 1;
 }
 
 /* ---- the edit store's marks (13.3) ------------------------------------------- */
@@ -249,16 +280,17 @@ static void ed_highlight(void)
 static void ed_ink(void)
 {
     pdw i, n = g_ed.pts_n, pen = 0;           /* pen: 0 between strokes, 1 one point so far, 2 more */
-    pdi x, y, lx = 0, ly = 0;
+    pdi x, y, lx = 0, ly = 0, px = 0, py = 0;
     if (n > 4096) n = 4096;
     ed_col(1, g_ed.colour); ed_lw((pdi)((g_ed.size ? g_ed.size : 4) * 8)); GS.cap = 1; GS.join = 1;
     for (i = 0; i <= n && !g_dlfull; i++) {
         x = i < n ? ept(i, 0) : ED_PENUP;
         if (x == ED_PENUP) { if (pen == 1) ep(lx, ly, 0); pen = 0; continue; }
         y = ept(i, 1);
-        if (g_nv >= PDR_NPATH - 3) { paint(0, 0, 1, 0); pen = 0; }
+        if (pen && g_nv >= PDR_NPATH - 3) { paint(0, 0, 1, 0); ep(px, py, 1); }   /* a long stroke: draw what is there and go on FROM its last point */
         ep(x, y, !pen);
         if (!pen) { pen = 1; lx = x; ly = y; } else pen = 2;
+        px = x; py = y;
     }
     paint(0, 0, 1, 0);
 }
@@ -319,13 +351,13 @@ static void ed_textline(pdw st, pdw n, pdi x, pdi y)
 }
 static void ed_text(void)
 {
-    /* static, not on the stack: the 512-byte UI stack carries this under the
-     * whole annotation phase chain (annot_go > annot_next > annot_edits) */
-    static pdw len, size, s16, lead, avail, fam, fi, i, j, st, brk, end, nxt, eop, cw, c, lw, ox;
-    static pdw wh, wl, bh, bl, th, tl, lh, ll;
-    static pdi y;
-    len = g_ed.text_len; size = g_ed.size ? g_ed.size : 12; s16 = (pdw)(size * 16); lead = (pdw)(s16 + s16 / 5);
-    fam = (pdw)(g_ed.style >> 4);
+    /* its 54-byte frame is NOT on the deepest chain (verify-annotr's walker: the
+     * annotation phase reaches a strike read 160+ bytes shallower than the page's
+     * own text does), so the locals stay locals: statics cost image and bss */
+    pdw len = g_ed.text_len, size = g_ed.size ? g_ed.size : 12, s16 = (pdw)(size * 16), lead = (pdw)(s16 + s16 / 5), avail;
+    pdw fam = (pdw)(g_ed.style >> 4), fi, i, j, st, brk, end, nxt, eop, cw, c, lw, ox;
+    pdw wh, wl, bh, bl, th, tl, lh, ll;
+    pdi y;
     if (len > 1024) len = 1024;
     if (!len) return;
     if (fam > 2) fam = 0;
@@ -370,18 +402,23 @@ static void ed_text(void)
     }
 }
 
-/* the store's records for this page: the highlights (post = 0), or everything else (post = 1) */
-static void annot_edits(pdw post)
+/* the store's records for this page: the highlights (post = 0), or everything else (post = 1),
+ * from record g_aedi on. A turn draws records until about 1,024 points and text bytes are
+ * spent (a record is never split), so a big store is a few slices and not one: 1 = more */
+static pdw annot_edits(pdw post)
 {
-    pdw i, k;
+    pdw k, work = 0;
     pdi lw;
-    if (!(g_aflags & PDRF_EDITS) || !g_rq.edits_seg) return;
-    for (i = 0; i < g_rq.edits_count && !g_dlfull; i++) {
-        pd_fcopy_in(g_rq.edits_seg, (pdw)(i * ED_SZ), &g_ed, ED_SZ);
+    if (!(g_aflags & PDRF_EDITS) || !g_rq.edits_seg) return 0;
+    for (; g_aedi < g_rq.edits_count && !g_dlfull; g_aedi++) {
+        if (work >= 1024) return 1;
+        work += 4;
+        pd_fcopy_in(g_rq.edits_seg, (pdw)(g_aedi * ED_SZ), &g_ed, ED_SZ);
         k = g_ed.kind;
         if (g_ed.page != g_page || (g_ed.flags & PDEF_DELETED) || k == 0 || k > PDA_SIGN) continue;
-        if (((g_aflags & PDRF_NOEDITID) && i == g_rq.hide) || (k == PDA_NOTE && g_ed.irt)) continue;
+        if (((g_aflags & PDRF_NOEDITID) && g_aedi == g_rq.hide) || (k == PDA_NOTE && g_ed.irt)) continue;
         if ((k == PDA_HIGHLIGHT) == (post != 0)) continue;
+        work += (pdw)(16 + (g_ed.pts_n > 4096 ? 4096 : g_ed.pts_n) + (g_ed.text_len > 1024 ? 1024 : g_ed.text_len));
         gs_reset(); path_reset(); g_plimit = 0;
         lw = g_ed.style ? g_ed.style : 1; lw = (pdi)(lw << 4);      /* a frame's border, pt16 */
         switch (k) {
@@ -403,4 +440,5 @@ static void annot_edits(pdw post)
         }
     }
     path_reset();
+    return 0;
 }

@@ -124,7 +124,7 @@ static void close_streams(void)
     img_close();
     while (g_nfr) { strm_close(); g_nfr--; }
     if (g_pgopen) strm_close();
-    g_pgopen = 0; g_idone = 1;
+    g_pgopen = 0; g_idone = 1; g_await = 0;
 }
 
 /* a pass interprets the content once for the rows of bands [g_b0, g_b1) */

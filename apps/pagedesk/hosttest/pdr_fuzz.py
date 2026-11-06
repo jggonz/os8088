@@ -195,6 +195,23 @@ def _():
     ctms = (b"q 100 0 0 100 10 10 cm ", b"q 1e5 0 0 1e5 -5e4 -5e4 cm ", b"q 0.001 0 0 0.001 5 5 cm ", b"q 0 100 -100 0 200 10 cm ", b"q -100 0 0 100 300 10 cm ",
             b"q 100 0 0 -100 10 250 cm ", b"q 1 0 0 1 0 0 cm ", b"q 100 20 -20 100 50 50 cm ")
     return pdf(b"".join(c + p + b" Q " for c in ctms for p in parts) + b"BI /W 8 /H 8 /BPC 1 /CS /G /D [1 0] /Foo [1 2 [3] << /A 1 >>] ID " + bytes(8) + b"EI 1 0 0 rg 0 0 9 9 re f BI /W 4 /H 4 /BPC 8 /CS /G ID abc")
+@case("verify-annotr: direct state dictionaries, turned and skewed forms, appearances that err or end mid-BI")
+def _():
+    long_as = "/" + "S" * 200
+    anns = [ann("<< /Yes 11 0 R /Off 5 0 R >>", extra="/AS /Yes"), ann("<< /Yes 11 0 R >>", extra="/AS " + long_as),
+            ann("<< %s 11 0 R >>" % long_as, extra="/AS " + long_as), ann("<< /Yes << /A 1 >> >>", extra="/AS /Yes"),
+            ann("<< /Yes 999 0 R >>", extra="/AS /Yes"), ann("<< >>", extra="/AS /Yes"), ann("<< /Yes 11 0 R >>", extra="/AS (Yes)"),
+            lambda me: ann("<< /Yes %d 0 R >>" % me, extra="/AS /Yes")]
+    forms = list(FORMS) + [stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Matrix [0.7071 0.7071 -0.7071 0.7071 0 0]", b"0 0 1 rg 0 0 40 40 re f"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Matrix [1 0 30000 1 0 0]", b"0 0 1 rg 0 0 40 40 re f"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40] /Matrix [1e-6 1 -1 1e-6 0 0]", b"0 0 1 rg 0 0 40 40 re f"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40]", b"1 0 0 rg 0 0 40 40 re f > ) ] >> 0 0 1 rg"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40]", b"0 0 1 rg BI /W 2 /H 2 /BPC 8 /CS /G"),
+                           stream("/Type /XObject /Subtype /Form /BBox [0 0 40 40]", b"0 0 1 rg << /A [1 2 << /B 3")]
+    n = 5 + len(FORMS)
+    anns += [ann("%d 0 R" % (n + i)) for i in range(6)] * 3
+    return annot_pdf(forms, anns, content=b"0 g 0 0 5 5 re f > BI /W 1")
+
 @case("inline images under a clip, after a dash, in a form")
 def _():
     f = stream("/Type /XObject /Subtype /Form /BBox [0 0 100 100]", b"q 50 0 0 50 0 0 cm BI /W 2 /H 2 /BPC 8 /CS /G ID \x00\xff\xff\x00 EI Q".replace(b"\\x00", b"\x00").replace(b"\\xff", b"\xff"))

@@ -614,6 +614,17 @@ static pdb dash_q(const struct pd_fx *v)
     return (pdb)(k < 0 ? 0 : k > 255 ? 255 : k);
 }
 
+/* the dash phase `v` in quarter points, reduced modulo the period of GS's pattern
+ * (the sum of its lengths, twice it for an odd count) */
+static pdw dash_ph(const struct pd_fx *v)
+{
+    pdw per = 0, q;
+    for (q = 0; q < GS.dn; q++) per += GS.dash[q];
+    if (GS.dn & 1) per <<= 1;
+    if (v->hi < 0 || !per) return 0;
+    q = (pdw)v->hi % per;
+    return (pdw)((q * 4u + (v->lo >> 14)) % per);
+}
 static void exec_op(const char *s, pdw n)
 {
     pdw k = (pdw)((pdb)s[0] | (n > 1 ? ((pdb)s[1] << 8) : 0));
@@ -634,7 +645,7 @@ static void exec_op(const char *s, pdw n)
             if (g_arrseen && g_nop > g_arr0) ne = g_nop - 1 - g_arr0;
             if (ne > 4) { inc_note(PDF_INC_LIMIT, "dash array"); ne = 4; }
             for (j = 0; j < ne; j++) GS.dash[j] = dash_q(&g_opn[g_arr0 + j]);
-            if (ne) { GS.dn = (pdb)ne; GS.dph = dash_q(opn(1)); }
+            if (ne) { GS.dn = (pdb)ne; GS.dph = dash_ph(opn(1)); }     /* the phase MODULO the period */
             break; }
         case 'i': break;
         case 'm': { to_dev(opn(2), opn(1)); path_move(g_dx, g_dy); break; }
@@ -941,12 +952,14 @@ static pdw inl_skip(void)
 }
 
 /* ---- the annotation phases (PAGEDESK-SPEC 20.12.1): pdra.c ---------------- */
-static pdw g_aph;                   /* 0 page content, 1 source highlights, 2 other source annotations, 3 edits, 4 done */
+static pdw g_aph;                   /* 5 edit highlights, 1 source highlights, 0 page content, 2 other source annotations, 3 other edits, 4 done */
 static pdw g_aidx;                  /* the next /Annots index of phase 1 or 2 */
 static pdw g_aflags;                /* PDRF_* in force: 0 for a thumbnail or the text map */
 static pdw g_pgopen;                /* the page's own content stream is open  */
-static pdw annot_next(void);        /* 1 = a stream is open and interpretation goes on */
-static void annot_edits(pdw post);
+static pdw g_await;                 /* the walk yielded with no stream open: annot_go again at the next turn */
+static pdw annot_next(void);        /* 1 = a stream is open and interpretation goes on (or g_await) */
+static pdw g_aedi;                  /* the next edit record of phase 5 or 3 */
+static pdw annot_edits(pdw post);   /* 1 = a turn's budget is spent, more next turn */
 /* the annotations are over, or the next one's stream is open */
 static pdw annot_go(void)
 {
@@ -985,9 +998,22 @@ static pdw interp_run(pdw maxops)
         /* a slice is bounded in TOKENS too: a stream of a million numbers, or an
          * array or dictionary that never closes, has no operator to count */
         if (++toks > (pdw)(maxops << 4)) return 0;
+        if (g_await) {                            /* a long run of skipped annotations: one batch a slice */
+            g_await = 0;
+            if (!annot_go()) return 1;
+            if (g_await) return 0;
+            continue;
+        }
         if (g_inl >= 2) { if (!inl_skip()) return 0; continue; }
         err = tok_next();
-        if (err) { g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error"); g_idone = 1; while (g_nfr) { strm_close(); g_nfr--; } if (g_pgopen) strm_close(); g_pgopen = 0; return 1; }
+        if (err) {                                /* this stream is over; the annotations and the marks after it are not */
+            g_ierr = err; inc_note(PDF_INC_LIMIT, "content stream error");
+            while (g_nfr) { strm_close(); g_nfr--; }
+            if (g_pgopen) strm_close();
+            g_pgopen = 0;                         /* the next stream clears the lexer's state (annot_try, page_open) */
+            if (annot_go()) continue;
+            return 1;
+        }
         kind = g_tk.kind;
         if (g_inl) {                              /* inline image: read its dictionary, then its bytes */
             if (kind == PDT_OP) {
@@ -1063,6 +1089,7 @@ static pdw page_open(void)
     gs_reset();
     g_resp = g_page; g_reso = 0; g_resg = 0;
     g_fr[0].isform = 0; g_fr[0].cidx = 0;
+    g_inl = 0; g_dictd = 0; op_clear();
     err = strm_open(0, 0, g_page, 0);
     if (!err) g_pgopen = 1;
     return err;
@@ -1079,12 +1106,16 @@ static pdw interp_start(pdw page)
     g_rn = 0; g_ropen = 0;
     g_cok = 0; g_fnnext = 0; pdr_zero(g_fk, sizeof g_fk); g_fwi = 0xFF; g_fwdirty = 0;
     g_pkfam = 0xFF;
-    g_pgopen = 0; g_aph = 0; g_aidx = 0;
+    g_pgopen = 0; g_aph = 0; g_aidx = 0; g_await = 0;
     text_ident();
-    if (g_mode == PDR_INTERP) annot_edits(0);       /* the edit highlights go first: the page's own state is made after */
     err = page_open();
     if (err && err != PDE_RANGE) { g_idone = 1; return err; }
-    if (g_mode == PDR_INTERP && (g_aflags & PDRF_ANNOTS)) { if (g_pgopen) strm_close(); g_pgopen = 0; g_aph = 1; }
+    /* the edit store's highlights (5), then the source's (1), go BEFORE the page (20.12.1):
+     * the page is opened above only to answer its error, and is opened again after them */
+    if (g_mode == PDR_INTERP && (g_aflags & (PDRF_ANNOTS | PDRF_EDITS))) {
+        if (g_pgopen) strm_close();
+        g_pgopen = 0; g_aph = (g_aflags & PDRF_EDITS) ? 5 : 1; g_aedi = 0;
+    }
     if (g_aph || !g_pgopen) annot_go();
     return 0;
 }

@@ -2531,7 +2531,19 @@ ANNOTS256 and MARKUP with an 11 KiB list in 19 and 24 passes and compares the im
 byte with the 29 KiB list's. The state machine is `g_aph` (`frame_end` calls `annot_next` when
 the page's contents, or an annotation's form, end with nothing open): the page's stream is
 OPENED once at the start (so a page with no readable content still answers the engine's error)
-and closed again when phase 2 runs first. A page with no `/Contents` still shows its annotations.
+and closed again when phase 1 or 2 runs first. A page with no `/Contents` still shows its annotations.
+
+**Every phase is sliced** (10.7, 15.1 - verify-annotr). The edit store is drawn from a record
+index (`g_aedi`) a budget a turn - records until about 1,024 points and text bytes are spent, a
+record is never split, a record not drawn costs 4 - and the source walk tries at most 8
+`ANNOTS` (with their `DICT_GET`s) a turn; a turn that ends with no stream open sets `g_await`,
+which ends the slice and resumes the walk at the next. So a page of 120 hidden annotations is
+some 15 slices more than without them, not one unbounded slice, and 200 ink records are drawn
+over several. **A stream error ends that stream, not the page**: an appearance that does not
+tokenize (or the page's own content) is closed where it failed, `PDF_INC_LIMIT` "content stream
+error" is noted, and the phases go on - the annotations after it and the user's own marks are
+still drawn. Each annotation stream starts with the lexer's partial state cleared (an appearance
+that ends inside `BI`'s dictionary or a `<< >>` cannot swallow the next one).
 The clip pool of the pass is kept across phases (a state is reset with `gs_reset`, not
 `gs_init`), so an earlier polygon clip is never rewritten under the list that names it.
 
@@ -2544,14 +2556,16 @@ annotation until it has them. An annotation is SKIPPED when it is a hole (`objnu
 `/AP /N`, has `/F` bit 2 (Hidden) or 6 (NoView, value 32), is not of this phase's kind (the
 subtype is `Highlight` or it is not), or when `PDRF_EDITS` is set and a record of the store names
 it in `src_num`/`src_gen` (a deletion, a move or a replacement: the record draws it, or nothing
-does). `/N` is a form XObject by reference (an object with a `/BBox`), or a state dictionary
-(a dictionary by reference) of which `/AS` names the entry; anything else draws nothing. The
+does). `/N` is a form XObject by reference (an object with a `/BBox`), or a state dictionary of which
+`/AS` names the entry - by reference, or DIRECT (`/N << /Off 5 0 R /Yes 6 0 R >>`, every check
+box's shape: `DICT_GET` then walks `/AP /N /<AS>` in one path); anything else draws nothing. The
 form is drawn as a Form XObject (the same `do_form`: its `/Matrix`, a clip to its `/BBox`, its
 `/Resources`, forms nested to the limit of 20.3.8) after the **PDF 1.7 12.5.5** placement: the
-form's `/BBox` through its `/Matrix` is a rectangle (two opposite corners give it - exact for
-every matrix that keeps the axes, which includes quarter turns; a skew is taken by its corners'
-extent), and the matrix A that maps that rectangle onto the annotation's `/Rect` (a scale and a
-translation) is applied BEFORE the form's own `/Matrix`. A degenerate box, rectangle or an
+form's `/BBox` through its `/Matrix` is the smallest upright rectangle holding its FOUR
+transformed corners (exact for every matrix: a quarter turn, a skew, a 45-degree turn - the
+first version took two opposite corners, which collapsed a 45-degree appearance to nothing), and
+the matrix A that maps that rectangle onto the annotation's `/Rect` (a scale and a translation)
+is applied BEFORE the form's own `/Matrix`. A degenerate box, rectangle or an
 unreadable `/BBox` draws nothing and is not Incomplete. `Widget` is drawn like any other: a
 field's appearance is a form. No annotation without an appearance gets a made-up icon.
 
@@ -2573,7 +2587,7 @@ path, stroke, fill, dash and text machinery, so a mark clips, turns and scales w
 | Rect | a solid frame as above | |
 | Ellipse | four Beziers, kappa 0.5523, in the same inset | |
 | Text box | the writer's layout (PDWRT 20.5.6): 2 pt of padding, the first baseline 0.8 size below the top, leading 1.2 size, `/Q` from `align`, lines broken at the last space that fits else inside the word, `\n`, `\r`, `\r\n` paragraphs, no line below the frame, at most 1,024 bytes; the PDRES face of the family (`style >> 4`: 0 sans, 1 serif, 2 mono) and `style & 3` (bold, italic), at `size` points (0 = 12). Widths are kept exactly (whole thousandths of an em) so the breaks are PDWRT's | black |
-| Ink, Sign | each pen-up separated stroke as one polyline, round caps and joins; a one-point stroke is a dot; at most 4,096 points | black |
+| Ink, Sign | each pen-up separated stroke as one polyline, round caps and joins; a one-point stroke is a dot; at most 4,096 points; a stroke longer than the path buffer (200 vertices) is stroked in pieces, each going on FROM the last point (the first version lost the segment across each cut) | black |
 | Line, Arrow | a butt-capped shaft and, for each of `align` bit 0 (start) and bit 1 (end), an open head of two barbs 25 degrees off the line, 8 pt plus two widths long | black |
 
 `mono_mark` is the shell's preference (17.4); the value 0 is what a zero-initialised block asks
@@ -2584,16 +2598,22 @@ unbounded - `pdr_fuzz.py` draws a store of 60,000 points and wrapped offsets und
 
 #### 20.12.4 Dash patterns
 
-`[a b c d] phase d` is kept in the graphics state (so `q`/`Q` restore it): up to four lengths
-and a phase, each in quarter points 0..255 (a longer array keeps four and sets
-`PDF_INC_LIMIT` "dash array"; `[] 0 d` and `0 d` are solid). A path is walked in device qpx,
+`[a b c d] phase d` is kept in the graphics state (so `q`/`Q` restore it): up to four lengths,
+each in quarter points 0..255 (a longer array keeps four and sets `PDF_INC_LIMIT` "dash array";
+`[] 0 d` and `0 d` are solid), and the phase in quarter points REDUCED MODULO THE PERIOD (the
+sum, twice it for an odd count) when `d` runs, so any phase is exact to a quarter point - the
+first version clamped it to 63.75 pt (`dph` took the state's spare pad byte, so the state did not
+grow). A path is walked in device qpx,
 cut where the pattern changes, and every "on" piece is stroked as an open polyline of its
-own, so each carries the line's caps (a zero-length dash with round caps is a dot; with butt
-caps it is nothing). An odd count cycles with on and off swapped, as PDF says; the phase is
+own, so each carries the line's caps (a zero-length dash with round caps is a dot - at a hairline's width a one-pixel square, since an
+octagon half a pixel across can miss every pixel centre and the first version drew no dotted
+hairline at all; with butt caps it is nothing). An odd count cycles with on and off swapped, as PDF says; the phase is
 consumed from the pattern's start; a closed subpath dashes round its closing segment; curves are
 dashed after flattening. A pattern whose lengths sum to under 1.5 device pixels draws solid (it
 cannot be told from it, and the piece count would be the cost), and one subpath cuts at most 3,000
-pieces. The saved graphics states grew to 84 bytes (`WS_FN` 1,344).
+pieces. The saved graphics states grew to 84 bytes (`WS_FN` 1,344; `pdr_ck_gs` holds 16 of them
+under it in both compilers). The walker's state is static and its pieces reach `stroke_poly` in
+one call (20.12.8).
 
 #### 20.12.5 Inline images
 
@@ -2616,7 +2636,7 @@ over 4,096, a stored size over 6 KiB, a row over 1,024 bytes, images turned a qu
 
 | item | bytes |
 |---|---|
-| `PDREND.MOD` image + bss | 52,210 + 6,518 = **58,728** (50,584 before this wave; D20: target 58 KiB, hard cap 60) |
+| `PDREND.MOD` image + bss | 52,822 + 6,562 = **59,384** after verify-annotr (52,210 + 6,518 = 58,728 as annotr left it, +18 of the lead's `verb_init`; 50,584 before this wave; D20: target 58 KiB = 59,392, hard cap 60). verify-annotr's +656: the sliced walk and store (+270), 12.5.5's four corners and direct state dictionaries (+110), the phase modulo (+80), errors that end a stream and not the page, the ink cut, the hairline dot and the dash walker's static state |
 | new code (image, +8,230): the annotation phases and 12.5.5 about 1,100, the edit marks about 2,700, dashes about 500, inline images about 850, the image split and the other edits to the interpreter the rest | |
 | bss (-86 net) | the glyph-run buffer is ONE (the walker and the interpreter never overlap: a group is interpreted before its bands are drawn; -320), the annotation is read out of the exchange block instead of copied (-238 avoided), the dash buffers and fields and the edit record (+470) |
 | claims | none new. Inline images and records live in the display list (the 29 KiB `dl_kb`), the workspace table grew 64 bytes inside its 6,912 |
@@ -2643,6 +2663,31 @@ lengths, refusals, a 5,000-byte image across slices, against mutool. `make pdren
 hostile appearances (zero, singular, huge and short `/BBox` and `/Matrix`, a form that includes
 itself, a lying `/Length`, `/AP` cycles, 300 heavy annotations), arrays of holes, extreme dashes
 and every inline-image size, and runs every case again with both flags and a hostile store.
+
+verify-annotr added eleven checks to `pdr_annot.py` (92 in all), each of which FAILS against the
+first version (2bae9f97d) and passes now: a 45-degree `/Matrix` appearance (12.5.5's four
+corners, and mutool agreeing there), a DIRECT `/N` state dictionary, an appearance that errs half
+way and one that ends inside `BI` (the annotations after both still drawn), a page whose content
+errs (its annotations still drawn), 120 hidden annotations walked a batch a slice, 200 ink
+records drawn over several turns, an ink stroke across the path buffer's cut, and a dash phase of
+1,002 pt taken modulo the period. `pdr_fuzz.py` gained a case of direct state dictionaries with
+hostile `/AS` names, turned, skewed and near-singular forms and erring appearances.
+
+#### 20.12.8 Stack (verify-annotr)
+
+PDREND runs on the UI task's stack, **512 bytes** (`STK0_SIZE`), under the primary's chain (about
+70 bytes from `os88_onwake` to `pdu_mcall`) and the module door (22), and PDENG runs under it in
+turn (its door 26, then up to 236: `DICT_GET` 188, `TOKEN` 158, `STRM_READ` 98, each ending in a
+kernel file read). Measured by a static walk of the compiled C (SP through every push, pop and
+`sub sp` of each function, the worst call chain composed): before this wave PDREND's deepest
+non-recursive chain from `verb_step` was 388 bytes (`do_image > dict_num > dict_get > pdr_eng`)
+and the recursive `bez` 518; the first version of the dash walker made it 470. The walker's state
+is now static and it strokes in one call, so the deepest is **396** (a dashed stroke), the
+deepest call into PDENG **350** (was 380: `image_place` split `do_image`'s frame) and into a file
+read 374 (376). `ed_text`'s 54-byte frame stays on the stack: the annotation phases reach a
+strike read 160 bytes shallower than the page's own text does. **The class is not closed by
+this**: a PDREND chain into a PDENG cache miss is about 350 + 26 + 188 + the kernel's read, which
+is past 512 before `bez`; that is the lead's (DECISIONS, the kernel-.bss corruption of 21:38).
 
 
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
