@@ -172,12 +172,14 @@ def run(arm, tmp, syms):
                        capture_output=True)
         subprocess.run(fat + ["add", sysimg, cfg], check=True,
                        capture_output=True)
-    machine = {"vga": "os8088_xt_vga", "cga": "os8088_xt_cga",
-               "herc": "os8088_5150_herc"}[OPT["adapter"]]
-    if arm == "card":
-        machine += "_sb"
-    if arm == "ems":
-        machine += "_ems"
+    # MACHINES: Bochs's are MartyPC names (os8088_xt_vga[_sb]); 86Box's
+    # mr286 shapes have no MartyPC twin, so they carry no os8088_ prefix
+    # (docs/86BOX.md) - the port reads the tokens (cga, herc, _sb, _ems)
+    if OPT["emu"] == "bochs":
+        machine = "os8088_xt_vga_sb" if arm == "card" else "os8088_xt_vga"
+    else:
+        machine = "at286_" + OPT["adapter"] + \
+            {"card": "_sb", "ems": "_ems"}.get(arm, "")
     with os88ui.boot(sysimg, apps=disk, machine=machine) as ui:
         m = ui.m
         S = ui._S
