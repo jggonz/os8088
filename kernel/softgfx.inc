@@ -1208,18 +1208,21 @@ sw_fill_pat:
     mov bx, [gfx_ry1]
     and bx, 7
     mov bp, [gfx_rrows]
+    mov dx, [vid_rowadd]        ; SPEC.md 39.34: the row step less the run's
+    sub dx, si                  ; own advance, so DI is never banked
 .irow:
     mov al, [gfx_patbuf+bx]
-    mov ah, al                  ; byte uniform across the row: stosw + odd
-    mov cx, si                  ; tail via the shr carry, like sw_plane_op
-    shr cx, 1
-    push di
+    mov ah, al                  ; byte uniform across the row: stosw, and the
+    mov cx, si                  ; odd byte as CX = CF and one more rep (string
+    shr cx, 1                   ; ops leave the shr's CF alone)
     rep stosw
-    jnc .ieven
-    stosb
-.ieven:
-    pop di
-    call gfx_nextrow
+    adc cx, cx
+    rep stosb
+    add di, dx                  ; gfx_nextrow, inlined
+    test di, [vid_wrapbit]
+    jz .inw
+    add di, [vid_wrapfix]
+.inw:
     inc bx
     and bx, 7
     dec bp
@@ -1253,18 +1256,23 @@ sw_patcol:
     mov bx, [gfx_ry1]
     and bx, 7
 .row:
-    mov al, [gfx_patbuf+bx]
-    mov ah, [es:di]
-    xor al, ah
-    and al, cl
-    xor al, ah
-    mov [es:di], al
+    mov al, [gfx_patbuf+bx]     ; dest ^= (pat ^ dest) & mask, ONE store
+    xor al, [es:di]             ; (SPEC.md 39.25.1's idiom: the bits outside
+    and al, cl                  ; the mask are never written back with a
+    xor [es:di], al             ; value read before an interrupt)
     inc bx
     and bx, 7
-    call gfx_nextrow
+    add di, [vid_rowadd]        ; gfx_nextrow, inlined (SPEC.md 39.34)
+    test di, [vid_wrapbit]
+    jz .nw
+    add di, [vid_wrapfix]
+.nw:
     dec bp
     jnz .row
     ret
+    db 0                        ; PARITY, never executed: the hot routines
+                                ; after this file keep their entry parity
+                                ; (tests/unit/t_hotpar.py)
 
 
 ; -----------------------------------------------------------------------------

@@ -80828,6 +80828,18 @@ register add, DS stays the framebuffer, and the bytes go a word at a time
 not a whole number of banks) is unchanged. Its two scratch words follow the
 six `VXB_SCROLL` reads in order. Both kernels.
 
+### 39.34 The 1bpp pattern fill steps its rows inline
+
+`sw_fill_pat` (`gfx_fill_pat` on CGA and Hercules — Word's and Scribe's
+ruler ticks, the Disk window's fold chevrons, Task Manager, several faces)
+paid a near `call gfx_nextrow` a row in both edge columns, and a
+`push di`/`pop di` around the interior run as well. All three now step DI
+inline, the interior by the row step less the run's own advance, and the
+interior's odd byte is §39.32's `adc cx, cx` / `rep movsb`. The edge column's
+masked byte became §39.25.1's one-store `dest ^= (pat ^ dest) & mask`, which
+is also four bytes shorter than the load-modify-store it replaces. Pixels
+unchanged. Both kernels.
+
 ### 39.27 `kern_small` does not drive a VGA
 
 **A 128KB machine has no business with a VGA card in it, so `kern_small` does
