@@ -18,7 +18,7 @@
 #define PDW_TENT     8u      /* object table entry: num, gen, off.lo, off.hi */
 #define PDW_MAXLN    256u    /* a staged line                                */
 #define PDW_TXTMAX   1024u   /* PD_MAXTEXT                                   */
-#define PDW_PGBUF    4096u   /* a page / catalog / array object being patched */
+#define PDW_PGBUF    3072u   /* a page / catalog / array object being patched */
 #define PDW_TEMPNAME "PDSAVE.$$$"
 
 /* the pen-up marker between ink strokes in the point heap (20.5.4) */

@@ -28,7 +28,7 @@
 #define PGK_NM     32
 #define DM_MAX     16
 
-#define IH_MAX 600u
+#define IH_MAX 544u
 #define g_inh g_txt                     /* an inherited /Resources: shares the annotation text buffer (D18) -
                                            pages are done before any annotation text is staged */
 static pdw pf_par, pf_parg, pf_hasres, pf_hasmed, pf_hascrop, ih_a, ih_b;

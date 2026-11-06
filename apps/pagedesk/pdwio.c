@@ -122,9 +122,9 @@ static pdw      g_seq;          /* a stream was started (an append happened)  */
 static unsigned g_cur[8];       /* READ_SEQ's 16-byte cursor                 */
 static char     g_srcname[14];
 
-static pdw pdw_map(int e)
+pdw pdw_ferr(void)
 {
-    switch (e) {
+    switch (os88_ferr()) {
     case OS88_FERR_FULL: case OS88_FERR_DIRFULL: return PDE_DISKFULL;
     case OS88_FERR_PROT: case OS88_FERR_WPROT:   return PDE_WPROT;
     case OS88_FERR_EXIST:                        return PDE_EXISTS;
@@ -132,7 +132,6 @@ static pdw pdw_map(int e)
     default:                                     return PDE_IO;
     }
 }
-pdw pdw_ferr(void) { return pdw_map(os88_ferr()); }
 static struct os88_place g_tpl;         /* the TARGET's folder (D14)                 */
 static pdw      g_cross, g_scl, g_svol;
 void pdw_cross(pdw clus, pdw vol)       /* 20.11.3: src_vol is the volume + 1, 0 = one folder */

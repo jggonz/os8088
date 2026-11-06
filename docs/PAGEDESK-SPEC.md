@@ -701,7 +701,7 @@ that exceeds a row is a change to this table first.
 | edit store + undo | primary | 16 KiB | open |
 | text/search scratch | primary | 2 KiB | search |
 | `PDWRT` image + bss | parts, lazy | <= 40 KiB | save/extract/new, freed after |
-| writer buffers | PDWRT | 12 KiB (4 KiB output + 1,024-object offset table); 36 KiB for an extract of up to 4,096 objects | save/extract, freed after |
+| writer buffers | PDWRT | 18 KiB (4 KiB output + 4.7 KiB of page-op/edit tables at the tail + a ~1,100-object offset table); 40 KiB for an extract (D18, 20.11.4) | save/extract, freed after |
 | overlay | parts, lazy | <= 48 KiB (D19; was 24) | dialog, inspector, menu command; freed when idle |
 
 Failure of an optional claim (thumbnails, a larger cache) degrades quality;
@@ -2163,7 +2163,7 @@ frees whatever it had taken.
 
 **Close** (`pdu_doc_release`): `PDV_REND_ABORT`, `PDV_ENG_CLOSE`, free A and B;
 the INDEX stays for the next open. **Save**: fetch `PDWRT`, check and bind it,
-claim the writer's buffers (12 KiB, D9), INIT it, step `PDV_WRT_SAVE`; on any
+claim the writer's buffers (18 KiB, D9/D18), INIT it, step `PDV_WRT_SAVE`; on any
 outcome free the buffers, unbind and `os88_part_drop` the module.
 **Quit** (`os88_onclose` and every refused launch): close, then free the INDEX
 and the XB and unbind every vector. A freed segment never stays in
@@ -2584,7 +2584,7 @@ buffer 14. Marks not yet saved are not extracted.
 #### 20.11.5 The jobs (primary)
 
 `pdu_save_begin(name, kind)` (kind 0 Save As, 1 New, 2 Extract; the code is the
-overlay's `ovl_save_begin`) claims the writer (12 KiB; 40 for an Extract), fills
+overlay's `ovl_save_begin`) claims the writer (18 KiB; 40 for an Extract), fills
 `pdxb_save` and starts `J_SAVE`; `pdu_save_step` runs the verb of the kind.
 `PDE_EXISTS` with `state` = `PDW_ST_CONFIRM` parks the job and asks in the status
 line (Enter replaces, Esc keeps and aborts). **The writer reads its output back
@@ -2604,18 +2604,21 @@ Extract pages..., Insert from PDF..., Insert blank page; Edit Move earlier, late
 to..., Duplicate, Delete page; Document Rotate left, right (a pull-down holds 11
 items, 12.4); the Pages-mode buttons are the same commands.
 
-#### 20.11.6 THE UI TASK'S STACK IS 384 BYTES
+#### 20.11.6 The UI task's stack (D21)
 
 PDWRT calls PDENG from the bottom of its own call chain, on the UI task's stack
-(`SCH_STACK` = 384, SPEC.md 8): the first page-operation save on the target died
-with `STACK OVERFLOW TASK 00` (the wave-1 writer had never run on one). Every
-frame between `job_slice` and `pdw_engcall` is therefore paid twice: `eng_get` is
-one function (no wrapper, arguments in file-scope words), the page-operation and
-graph-copy functions keep their locals in statics, and a new feature in PDWRT
-must be measured with `tools/stkwater.py` before it is believed. A deeper change
-(Insert from another PDF opens a second document in PDENG from inside the
-writer) needs the engine's requests made from the primary, which is why it is
-not built.
+(512 bytes, the kernel using up to 246; D21): the first page-operation save on the
+target died with `STACK OVERFLOW TASK 00` when the stack was believed to be 384.
+Rules kept: no recursion anywhere (`sc_val`, the value scanner, was recursive in
+wave 1 and is an explicit stack of 16 container kinds now; the graph copy, the
+page-tree rewrite and `rs_walk` are loops over the buffer), `eng_get` is one
+function (arguments in file-scope words), the page-operation and graph-copy
+functions keep their locals in statics, `pdw_ferr` is one function. The writer's
+tail tables are read through `tg`/`ts`, far peeks and pokes in the claim. A new
+feature in PDWRT must be measured with `tools/stkwater.py` (and, when it lands,
+`tools/os88pdstk.py`) before it is believed. Insert from another PDF opens a
+second document in PDENG from inside the writer, which needs the engine's requests
+made from the primary, which is why it is not built.
 
 #### 20.11.7 Not built, and deviations
 
@@ -2629,8 +2632,10 @@ not built.
    `pdu_changes`.
 4. `pdu_side_sel()` (nav) is a commented line in `ovl_pg_tgt`: the command's page
    is the current one until nav lands.
-5. Sizes at this writing: PDWRT 38,394 + 13,054 = 51,448 bytes (50.2 KiB; the
-   wave-2 share was 46 KiB: ASK), the primary 43,070 + 4,085 (+2.5 KiB of the
+5. Sizes at this writing: PDWRT 38,608 + 6,430 = 45,038 bytes (44.0 KiB; D18's
+   cap is 46 KiB, target 44: the page-op, edit and map tables went to the claim's
+   tail, the inherited-resources buffer shares the annotation text buffer and the
+   verify scratch the kept-identity buffer), the primary 43,070 + 4,085 (+2.5 KiB of the
    shell's 44.6 against a 1 KiB share: menu text, the doors and 700 bytes of
    strings that an overlay cannot take), the overlay +4,000.
 6. 14.4's open-time reference is the file's SIZE (free at OPEN); the CRCs would
