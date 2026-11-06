@@ -241676,3 +241676,15 @@ pentium-pciether`) is the 86Box profile.
    when a package opens one (§72.13).
 4. Open: the QEMU `rtl8139` model's handling of the dword accesses and of
    TSD's TOK/OWN timing has not been run; the harness's row is the first.
+
+## 127. PageDesk — a native PDF viewer and editor (`apps/pagedesk/`, `PAGEDESK.O88`)
+
+PageDesk's contract is **docs/PAGEDESK-SPEC.md**, cited as `PAGEDESK-SPEC §N`,
+outside this file on the C64-SPEC/WEAVE-SPEC precedent: a PDF profile, a
+three-module C package and its exchange-block ABI, 16.16 and pt16 numbers, one
+view transform, standard annotation representations and an incremental writer
+are a document's worth of contract on their own. docs/plans/PAGEDESK-PLAN.md
+is the story list (PD-01 to PD-30), the platform record and the capability
+matrix. Nothing in the kernel changes for it: it is a package over the
+published API (`READ_SEQ`, `WRITE_SEQ`, the Standard File dialog, the
+clipboard, the parts standard of §20.12) and §73's C toolchain.
