@@ -310,3 +310,49 @@ RST 30 +4
 2F9B
 2FAD
 3000
+# RST 20h tables (0020h: pop hl, add a,a, ... jp (hl) - the table follows
+# the RST), every entry read statically: a script reaches a state's
+# entry only if it plays into that state, and one it never reached was
+# a "no code" stop in play (11DBh, eating a ghost):
+09D8
+09E8
+09FE
+0A02
+0A04
+0A06
+0A08
+0A0A
+0A0C
+0A0E
+0A2C
+0A7C
+0AA0
+0AA3
+1000
+100B
+10D2
+112A
+116E
+118F
+11C9
+11DB
+11FC
+212B
+21F0
+22B9
+23E8
+2F2B
+2F3C
+2F43
+2F4A
+2F4B
+2F4C
+2F4D
+2F4E
+2F4F
+2F50
+2F51
+2F52
+2F53
+2F54
+2F55
