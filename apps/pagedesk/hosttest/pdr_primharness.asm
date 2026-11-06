@@ -14,7 +14,7 @@ section .bss    follows=.data align=2 nobits
 section .text
         jmp     near ph_start
 ph_table:
-        dw _pdr_muldiv, _pdr_fill1, _pdr_fill4, _pdr_glyph, _pdr_imgrow, _pdr_gp, _pdr_ip
+        dw _pdr_muldiv, _pdr_fill1, _pdr_fill4, _pdr_glyph, _pdr_imgrow, _pdr_gp, _pdr_ip, _pdr_act, _pdr_scan, _pdr_fcopy
 ph_start:
         hlt
 %define OSAPI_GFX_BLIT1 ph_blit

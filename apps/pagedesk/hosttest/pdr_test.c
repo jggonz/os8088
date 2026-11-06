@@ -116,7 +116,7 @@ int main(int argc, char **argv)
     if (!strcmp(argv[1], "render") && argc >= 14) {
         int page = atoi(argv[3]), zoom = atoi(argv[4]), rot = atoi(argv[5]), bpp = atoi(argv[6]);
         int an = 1, ad = 1, W = atoi(argv[8]), H = atoi(argv[9]), ox = atoi(argv[10]), oy = atoi(argv[11]);
-        int dlkb = argc > 14 ? atoi(argv[14]) : 26, kb, steps = 0, np;
+        int dlkb = argc > 14 ? atoi(argv[14]) : 29, kb, steps = 0, np;
         struct pdxb_render rq; struct pdxb_pageinfo pi; pdw e;
         sscanf(argv[7], "%d/%d", &an, &ad);
         np = pdrh_open(argv[2]);

@@ -701,6 +701,169 @@ _pdr_imgrow:
     pop bp
     ret
 
+; -----------------------------------------------------------------------------
+; int pdr_act(eseg, eoff, ne, qlo, qhi, act)   edges at eseg:eoff, 8 bytes each
+; (x0 y0 x1 y1). Writes the index of every edge that can touch rows qlo..qhi
+; (qpx) into the near word array act; returns how many.
+; -----------------------------------------------------------------------------
+_pdr_act:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov es, [bp+4]
+    mov bx, [bp+6]
+    mov di, [bp+14]
+    xor si, si
+.l: cmp si, [bp+8]
+    jae .d
+    mov ax, [es:bx+2]               ; ya
+    mov cx, [es:bx+6]               ; yb
+    cmp ax, cx
+    jge .e
+    cmp cx, [bp+10]                 ; yb < qlo
+    jl .s
+    cmp ax, [bp+12]                 ; ya > qhi
+    jg .s
+    jmp short .a
+.e: cmp ax, [bp+10]                 ; ya < qlo
+    jl .s
+    cmp cx, [bp+12]                 ; yb > qhi
+    jg .s
+.a: mov [di], si
+    add di, 2
+.s: add bx, 8
+    inc si
+    jmp .l
+.d: mov ax, di
+    sub ax, [bp+14]
+    shr ax, 1
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; int pdr_scan(eseg, eoff, act, na, ys, cx, cd, nspan)
+; The crossings of the sample line ys (qpx) with the active edges act[0..na):
+; x (word) into cx[] kept ASCENDING by insertion, the direction (1 = the edge
+; runs down the page) into cd[] beside it. Stops at nspan crossings. Returns n.
+; -----------------------------------------------------------------------------
+_pdr_scan:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    mov ax, [bp+10]
+    shl ax, 1
+    push ax                         ; [bp-6]  limit: na * 2
+    push ax                         ; [bp-8]  direction
+    push ax                         ; [bp-10] this edge's offset
+    xor ax, ax
+    push ax                         ; [bp-12] index into act, in bytes
+    mov es, [bp+4]
+    xor di, di                      ; n
+.loop:
+    mov si, [bp-12]
+    cmp si, [bp-6]
+    jae .done
+    mov bx, [bp+8]
+    mov bx, [bx+si]
+    mov cl, 3
+    shl bx, cl
+    add bx, [bp+6]
+    mov [bp-10], bx
+    mov ax, [es:bx+2]               ; ya
+    mov dx, [es:bx+6]               ; yb
+    mov cx, [bp+12]                 ; ys
+    cmp ax, dx
+    jge .down
+    cmp cx, ax
+    jl .skip
+    cmp cx, dx
+    jge .skip
+    mov word [bp-8], 1
+    jmp short .hit
+.down:
+    cmp cx, dx
+    jl .skip
+    cmp cx, ax
+    jge .skip
+    mov word [bp-8], 0
+.hit:
+    sub dx, ax                      ; yb - ya
+    sub cx, ax                      ; ys - ya
+    mov ax, [es:bx+4]
+    sub ax, [es:bx]                 ; xb - xa
+    push dx
+    push cx
+    push ax
+    call _pdr_muldiv
+    add sp, 6
+    mov bx, [bp-10]
+    add ax, [es:bx]                 ; x
+    cmp di, [bp+18]
+    jae .done
+    mov bx, di
+    shl bx, 1
+    add bx, [bp+14]                 ; &cx[n]
+    mov dx, [bp+16]
+    add dx, di                      ; &cd[n]
+.ins:
+    cmp bx, [bp+14]
+    je .put
+    cmp [bx-2], ax
+    jle .put
+    mov cx, [bx-2]
+    mov [bx], cx
+    mov si, dx
+    mov cl, [si-1]
+    mov [si], cl
+    sub bx, 2
+    dec dx
+    jmp short .ins
+.put:
+    mov [bx], ax
+    mov si, dx
+    mov cl, [bp-8]
+    mov [si], cl
+    inc di
+.skip:
+    add word [bp-12], 2
+    jmp .loop
+.done:
+    mov ax, di
+    add sp, 8
+    pop di
+    pop si
+    pop bp
+    ret
+
+; -----------------------------------------------------------------------------
+; void pdr_fcopy(dseg, doff, sseg, soff, nbytes)   far to far, forward, no overlap
+; -----------------------------------------------------------------------------
+_pdr_fcopy:
+    push bp
+    mov bp, sp
+    push si
+    push di
+    push ds
+    mov es, [bp+4]
+    mov di, [bp+6]
+    mov ds, [bp+8]
+    mov si, [bp+10]
+    mov cx, [bp+12]
+    cld
+    shr cx, 1
+    rep movsw
+    jnc .z
+    movsb
+.z: pop ds
+    pop di
+    pop si
+    pop bp
+    ret
+
 ; ---- tables and the primitives' private state ------------------------------
 gi_bayer: db 0, 8, 2, 10, 12, 4, 14, 6, 3, 11, 1, 9, 15, 7, 13, 5
 gi_pal:   db 0, 8, 7, 15

@@ -47,6 +47,13 @@ struct pdr_gp {
 };
 extern struct pdr_gp pdr_gp;
 void pdr_glyph(void);
+/* the edge scan (pdrprim.inc): edges are 8-byte records (x0 y0 x1 y1) at eseg:eoff.
+ * pdr_act lists the edges that can touch qpx rows qlo..qhi in act[] and returns
+ * the count; pdr_scan fills cx[] (ascending) and cd[] with the crossings of the
+ * line ys, up to nspan of them, and returns how many. pdr_fcopy is far to far. */
+pdw pdr_act(pdw eseg, pdw eoff, pdw ne, pdi qlo, pdi qhi, pdw *act);
+pdw pdr_scan(pdw eseg, pdw eoff, const pdw *act, pdw na, pdi ys, pdi *cx, pdb *cd, pdw nspan);
+void pdr_fcopy(pdw dseg, pdw doff, pdw sseg, pdw soff, pdw n);
 struct pdr_ip {
     pdw bseg, boff;             /* band row start                           */
     pdi x0, x1;                 /* destination pixels, band relative        */
@@ -73,7 +80,7 @@ extern pdw pdr_eng_off, pdr_eng_seg;
 #define PDR_NNAME       32
 #define PDR_NSTR        512
 #define PDR_NPATH       200     /* flattened path vertices                    */
-#define PDR_WSB         4096u   /* workspace at the tail of dl_seg: saved gstates + font cache */
+#define PDR_WSB         6912u   /* workspace at the tail of dl_seg: saved gstates + font cache */
 #define PDR_NEDGE       256     /* staged edges                               */
 #define PDR_NCLIPE      96      /* edges in the clip pool                     */
 #define PDR_NCLIP       8       /* non-rectangular clips in the pool          */

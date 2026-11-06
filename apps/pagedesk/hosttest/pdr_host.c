@@ -30,6 +30,39 @@ pdi pdr_muldiv(pdi a, pdi b, pdi c)
     if (q < -32767) q = -32767;
     return (pdi)q;
 }
+/* the edge scan (pdr_act, pdr_scan) and the far copy: the specification the asm is held to */
+pdw pdr_act(pdw eseg, pdw eoff, pdw ne, pdi qlo, pdi qhi, pdw *act)
+{
+    pdw i, na = 0;
+    for (i = 0; i < ne; i++) {
+        const unsigned char *p = MEM(eseg, (pdw)(eoff + i * 8));
+        pdi ya = (pdi)(p[2] | p[3] << 8), yb = (pdi)(p[6] | p[7] << 8);
+        if (ya < yb ? (yb < qlo || ya > qhi) : (ya < qlo || yb > qhi)) continue;
+        act[na++] = (pdw)i;
+    }
+    return na;
+}
+pdw pdr_scan(pdw eseg, pdw eoff, const pdw *act, pdw na, pdi ys, pdi *cx, unsigned char *cd, pdw nspan)
+{
+    pdw i, nc = 0, j;
+    for (i = 0; i < na; i++) {
+        const unsigned char *p = MEM(eseg, (pdw)(eoff + act[i] * 8));
+        pdi xa = (pdi)(p[0] | p[1] << 8), ya = (pdi)(p[2] | p[3] << 8), xb = (pdi)(p[4] | p[5] << 8), yb = (pdi)(p[6] | p[7] << 8), x;
+        unsigned char dir;
+        if (ya < yb) { if (ys < ya || ys >= yb) continue; dir = 1; }
+        else         { if (ys < yb || ys >= ya) continue; dir = 0; }
+        x = (pdi)(xa + pdr_muldiv((pdi)(xb - xa), (pdi)(ys - ya), (pdi)(yb - ya)));
+        if (nc >= nspan) break;
+        j = nc++;
+        while (j > 0 && cx[j - 1] > x) { cx[j] = cx[j - 1]; cd[j] = cd[j - 1]; j--; }
+        cx[j] = x; cd[j] = dir;
+    }
+    return nc;
+}
+void pdr_fcopy(pdw dseg, pdw doff, pdw sseg, pdw soff, pdw n)
+{
+    memmove(MEM(dseg, doff), MEM(sseg, soff), n);
+}
 void pdr_fill1(pdw seg, pdw rowoff, pdi x0, pdi x1, pdw pat)
 {
     unsigned char *r = MEM(seg, rowoff); int x;

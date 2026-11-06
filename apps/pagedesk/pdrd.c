@@ -121,10 +121,11 @@ static void emit_fill_edges(pdw rule, pdw kind)
     pdi xmin = 32000, xmax = -32000, ymin = 32000, ymax = -32000, v;
     if (!ne || g_mode != PDR_INTERP) { g_ne = 0; return; }
     for (i = 0; i < ne; i++) {
-        v = g_ed[i][0]; if (v < xmin) xmin = v; if (v > xmax) xmax = v;
-        v = g_ed[i][2]; if (v < xmin) xmin = v; if (v > xmax) xmax = v;
-        v = g_ed[i][1]; if (v < ymin) ymin = v; if (v > ymax) ymax = v;
-        v = g_ed[i][3]; if (v < ymin) ymin = v; if (v > ymax) ymax = v;
+        pd_fcopy_in(g_ws, (pdw)(WS_ED + i * 8), g_etmp, 8);
+        v = g_etmp[0]; if (v < xmin) xmin = v; if (v > xmax) xmax = v;
+        v = g_etmp[2]; if (v < xmin) xmin = v; if (v > xmax) xmax = v;
+        v = g_etmp[1]; if (v < ymin) ymin = v; if (v > ymax) ymax = v;
+        v = g_etmp[3]; if (v < ymin) ymin = v; if (v > ymax) ymax = v;
     }
     xmin = q_lo(xmin); xmax = q_hi(xmax);
     ymin = q_lo(ymin); ymax = q_hi(ymax);
@@ -143,7 +144,7 @@ static void emit_fill_edges(pdw rule, pdw kind)
     if (!g_dlfull) {
         g_dllen -= 0;
         if (g_dllen + ne * 8 + DLH > g_dlcap) g_dlfull = 1;
-        else { pd_fcopy_out(g_ed, g_dls, g_dllen, ne * 8); g_dllen += ne * 8; }
+        else { pdr_fcopy(g_dls, g_dllen, g_ws, WS_ED, ne * 8); g_dllen += ne * 8; }
     }
 }
 
@@ -194,7 +195,6 @@ static void fill_path(pdw rule)
 }
 
 /* W / W*: intersect the clip with the path */
-static pdi g_ce[PDR_NCLIPE][4];
 static struct pdr_clip { pdi x0, y0, x1, y1; pdw ne, rule, pad0, pad1; } g_cl[PDR_NCLIP];
 static pdw g_cetop;
 
@@ -221,8 +221,9 @@ static void clip_apply(pdw rule)
             j = (i + 1 == e) ? s : i + 1;
             if (g_vy[i] == g_vy[j]) continue;
             if (ne >= PDR_NCLIPE) { inc_note(PDF_INC_LIMIT, "clip path size"); return; }
-            g_ce[ne][0] = g_vx[i]; g_ce[ne][1] = g_vy[i];
-            g_ce[ne][2] = g_vx[j]; g_ce[ne][3] = g_vy[j];
+            g_etmp[0] = g_vx[i]; g_etmp[1] = g_vy[i];
+            g_etmp[2] = g_vx[j]; g_etmp[3] = g_vy[j];
+            pd_fcopy_out(g_etmp, g_ws, (pdw)(WS_CE + ne * 8), 8);
             ne++;
         }
         for (i = s; i < e; i++) {
@@ -286,36 +287,19 @@ static void span_out(pdi y, pdi xa, pdi xb)
 }
 
 /* scan-convert edges e[0..ne) over pixel rows y0..y1 (absolute) */
+static pdw g_fe;                    /* offset of the current FILL record's edges in dl_seg */
 static pdw g_act[PDR_NEDGE];
 static pdi g_cx[PDR_NSPAN];
 static pdb g_cd[PDR_NSPAN];
-static void rast_edges(const pdi *e, pdw ne, pdw rule, pdi y0, pdi y1)
+static void rast_edges(pdw eseg, pdw eoff, pdw ne, pdw rule, pdi y0, pdi y1)
 {
-    pdw i, na = 0, nc, k, j;
-    pdi y, ys, ya, yb, xa, xb, x, wind, xl, p0, p1;
-    pdb dir;
+    pdw na, nc, j;
+    pdi y, wind, xl, p0, p1;
     pdi qlo = (pdi)(y0 * 4), qhi = (pdi)(y1 * 4 + 3);
-    for (i = 0; i < ne; i++) {
-        ya = e[i * 4 + 1]; yb = e[i * 4 + 3];
-        if (ya < yb ? (yb < qlo || ya > qhi) : (ya < qlo || yb > qhi)) continue;
-        g_act[na++] = i;
-    }
+    na = pdr_act(eseg, eoff, ne, qlo, qhi, g_act);
     if (!na) return;
     for (y = y0; y <= y1; y++) {
-        ys = (pdi)(y * 4 + 2);
-        nc = 0;
-        for (i = 0; i < na; i++) {
-            k = g_act[i] * 4;
-            ya = e[k + 1]; yb = e[k + 3];
-            if (ya < yb) { if (ys < ya || ys >= yb) continue; dir = 1; }
-            else         { if (ys < yb || ys >= ya) continue; dir = 0; }
-            xa = e[k]; xb = e[k + 2];
-            x = (pdi)(xa + pdr_muldiv((pdi)(xb - xa), (pdi)(ys - ya), (pdi)(yb - ya)));
-            if (nc >= PDR_NSPAN) break;
-            j = nc++;
-            while (j > 0 && g_cx[j - 1] > x) { g_cx[j] = g_cx[j - 1]; g_cd[j] = g_cd[j - 1]; j--; }
-            g_cx[j] = x; g_cd[j] = dir;
-        }
+        nc = pdr_scan(eseg, eoff, g_act, na, (pdi)(y * 4 + 2), g_cx, g_cd, PDR_NSPAN);
         wind = 0; xl = 0;
         for (j = 0; j < nc; j++) {
             if (rule) {                                  /* even-odd           */
@@ -362,7 +346,7 @@ static void clips_and(pdi y)
         ne1 = g_cl[ci].ne;
         mask_clear(1);
         g_rmode = 2;
-        rast_edges(&g_ce[ne0][0], ne1 - ne0, (pdw)g_cl[ci].rule, y, y);
+        rast_edges(g_ws, (pdw)(WS_CE + ne0 * 8), ne1 - ne0, (pdw)g_cl[ci].rule, y, y);
         g_rmode = 1;
         for (b = 0; b < g_mstride; b++) g_mk[0][b] &= g_mk[1][b];
         ne0 = ne1;
@@ -375,7 +359,7 @@ static void shape_clipped(pdi y, pdw kind, pdi x0, pdi x1, pdw ne, pdw rule)
     mask_clear(0);
     g_rmode = 1;
     if (kind == 0) span_out(y, x0, x1);
-    else rast_edges(&g_ed[0][0], ne, rule, y, y);
+    else rast_edges(g_dls, g_fe, ne, rule, y, y);
     clips_and(y);
     g_rmode = 0;
     mask_paint(y);
@@ -689,9 +673,9 @@ static void walk_band(pdi ry0, pdi ry1)
                 pd_fcopy_in(g_dls, off + DLH, pl, 6);
                 ne = (pdw)r16(pl + 4);
                 if (ne > PDR_NEDGE) ne = PDR_NEDGE;
-                pd_fcopy_in(g_dls, off + DLH + 6, g_ed, ne * 8);
+                g_fe = (pdw)(off + DLH + 6);       /* the edges are scanned in the list itself */
                 if (g_sncl && g_mkok) { for (a = yy0; a <= yy1; a++) shape_clipped(a, 1, 0, 0, ne, g_hdr[1]); }
-                else rast_edges(&g_ed[0][0], ne, g_hdr[1], yy0, yy1);
+                else rast_edges(g_dls, g_fe, ne, g_hdr[1], yy0, yy1);
             } else if (type == DLR_GLYPHS) {
                 draw_glyphs(off, len, yy0, yy1);
             } else if (type == DLR_IMAGE) {

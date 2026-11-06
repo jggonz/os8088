@@ -133,7 +133,7 @@ def run(name, content_pdf, expect_inc=None, cl="1"):
         env = dict(os.environ); env["PDR_CLUSTER"] = cl; env["PDR_GLYPHKB"] = "24"
         env["ASAN_OPTIONS"] = "detect_leaks=0:abort_on_error=0"
         try:
-            r = subprocess.run([a.exe, "render", p, "0", str(zoom), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, "26"], capture_output=True, text=True, errors="replace", timeout=60, env=env)
+            r = subprocess.run([a.exe, "render", p, "0", str(zoom), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, "29"], capture_output=True, text=True, errors="replace", timeout=60, env=env)
         except subprocess.TimeoutExpired:
             print("  FAIL %s (%dbpp z%d): HANG (>60 s)" % (name, bpp, zoom)); fails += 1; return
         bad = r.returncode not in (0, 3) or "ERROR: AddressSanitizer" in r.stderr or "runtime error" in r.stderr or "CANARY" in r.stderr
@@ -156,7 +156,7 @@ for i in range(a.n):
     out = os.path.join(a.scratch, "o.ppm"); env = dict(os.environ); env["PDR_GLYPHKB"] = "24"; env["ASAN_OPTIONS"] = "detect_leaks=0"
     bpp, asp, W, H, z = R.choice([(4, "1/1", 640, 480, 100), (1, "5/12", 640, 200, 50), (1, "29/45", 720, 348, 150)])
     try:
-        r = subprocess.run([a.exe, "render", p, "0", str(z), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, str(R.choice([6, 8, 26]))], capture_output=True, text=True, errors="replace", timeout=60, env=env)
+        r = subprocess.run([a.exe, "render", p, "0", str(z), "0", str(bpp), asp, str(W), str(H), "8", "8", out, fd, str(R.choice([9, 11, 29]))], capture_output=True, text=True, errors="replace", timeout=60, env=env)
         if r.returncode not in (0, 3) or "AddressSanitizer" in r.stderr or "runtime error" in r.stderr or "CANARY" in r.stderr:
             fails += 1; keep = os.path.join(a.scratch, "crash_%d.pdf" % i); shutil.copy(p, keep)
             print("  FAIL random #%d rc=%d %s (kept %s)" % (i, r.returncode, r.stderr.strip().split("\n")[0][:160], keep))

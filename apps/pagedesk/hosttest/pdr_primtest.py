@@ -33,7 +33,7 @@ image = open(asm_bin, "rb").read()
 DSEG, SSEG, ESEG = 0x2000, 0x1000, 0x3000
 BSEG, GSEG, ISEG = 0x4000, 0x5000, 0x6000          # band / glyph / image-row arenas
 MEM = 0x120000
-names = ["muldiv", "fill1", "fill4", "glyph", "imgrow", "gp", "ip"]
+names = ["muldiv", "fill1", "fill4", "glyph", "imgrow", "gp", "ip", "act", "scan", "fcopy"]
 tab = dict(zip(names, [int.from_bytes(image[3 + 2 * i:5 + 2 * i], "little") for i in range(len(names))]))
 HALT = 3 + 2 * len(names)
 assert image[HALT] == 0xF4
@@ -73,6 +73,10 @@ class GP(ctypes.Structure):
 class IP(ctypes.Structure):
     _fields_ = [(n, ctypes.c_ushort) for n in "bseg boff x0 x1 sseg soff sw xlo xhi slo shi smode inv dmode dyrow col".split()]
 gp = GP.in_dll(lib, "pdr_gp"); ip = IP.in_dll(lib, "pdr_ip")
+U16, S16 = ctypes.c_ushort, ctypes.c_short
+lib.pdr_act.argtypes = [U16, U16, U16, S16, S16, ctypes.c_void_p]; lib.pdr_act.restype = U16
+lib.pdr_scan.argtypes = [U16, U16, ctypes.c_void_p, U16, S16, ctypes.c_void_p, ctypes.c_void_p, U16]; lib.pdr_scan.restype = U16
+lib.pdr_fcopy.argtypes = [U16, U16, U16, U16, U16]
 lib.pdr_muldiv.argtypes = [ctypes.c_short] * 3; lib.pdr_muldiv.restype = ctypes.c_short
 lib.pdr_fill1.argtypes = [ctypes.c_ushort, ctypes.c_ushort, ctypes.c_short, ctypes.c_short, ctypes.c_ushort]
 lib.pdr_fill4.argtypes = [ctypes.c_ushort, ctypes.c_ushort, ctypes.c_short, ctypes.c_short, ctypes.c_ushort]
@@ -88,7 +92,7 @@ def agree(name, desc, a, b, extra=""):
 
 def run(seed, n, img):
     R = random.Random(seed); A = Asm(img)
-    st = {"muldiv": 0, "fill1": 0, "fill4": 0, "glyph": 0, "imgrow": 0}
+    st = {"muldiv": 0, "fill1": 0, "fill4": 0, "glyph": 0, "imgrow": 0, "act": 0, "scan": 0, "fcopy": 0}
     # ---- muldiv ---------------------------------------------------------------
     edge = [0, 1, -1, 2, -2, 100, -100, 16000, -16000, 32767, -32767, -32768]
     def rv(): return R.choice(edge) if R.random() < .35 else R.randint(-32768, 32767)
@@ -175,6 +179,53 @@ def run(seed, n, img):
         if bad: fails.append("imgrow convention %s" % bad)
         agree("imgrow", "smode=%d flip=%d inv=%d dmode=%d sw=%d x=%d..%d step=%x" % (smode, flip, inv, dmode, sw, x0, x1, step),
               A.r((BSEG << 4) + BO, len(band)), bytes(hmem[(BSEG << 4) + BO:(BSEG << 4) + BO + len(band)]))
+    # ---- act / scan / fcopy: edges in a far arena, near arrays in the module's own segment ----
+    ESEG2 = 0x7000; EO = 0x30
+    ACT, CXA, CDA = 0x6000, 0x6200, 0x6400          # near arrays: offsets inside DSEG (past the image)
+    def rq(): return R.choice([0, 1, -1, 2, 3, 4, 5, 6, 7, 8, 100, -100, 16000, -16000, 32767, -32768]) if R.random() < .25 else R.randint(-60, 60) * 4 + R.choice([0, 0, 1, 2, 3])
+    for _ in range(n):
+        ne = R.randint(0, 24)
+        raw = bytearray()
+        for _e in range(ne):
+            x0, y0, x1, y1 = rq(), rq(), rq(), rq()
+            if R.random() < .1: y1 = y0
+            if R.random() < .1: x1 = x0
+            raw += b"".join((v & 0xFFFF).to_bytes(2, "little") for v in (x0, y0, x1, y1))
+        raw = bytes(raw) + bytes(8)
+        A.w((ESEG2 << 4) + EO, raw); hmem[(ESEG2 << 4) + EO:(ESEG2 << 4) + EO + len(raw)] = (ctypes.c_ubyte * len(raw)).from_buffer_copy(raw)
+        qlo = R.randint(-80, 80) * 4; qhi = qlo + R.choice([3, 3, 3, 7, 63, 200])
+        actbuf = (ctypes.c_ushort * 300)()
+        got, bad = A.call(tab["act"], [ESEG2, EO, ne, qlo, qhi, ACT])
+        want = lib.pdr_act(ESEG2, EO, ne, qlo, qhi, ctypes.addressof(actbuf))
+        st["act"] += 1
+        if bad: fails.append("act convention %s" % bad)
+        agree("act", "ne=%d" % ne, got, want)
+        agree("act", "list ne=%d" % ne, A.r((DSEG << 4) + ACT, want * 2), bytes(bytearray(actbuf)[:want * 2]))
+        na = want
+        if na == 0: continue
+        for _row in range(3):
+            ys = R.randint(qlo // 4, qhi // 4) * 4 + 2 if R.random() < .8 else R.randint(-300, 300)
+            nspan = R.choice([64, 64, 3, 1, 0])
+            cxb = (ctypes.c_short * 70)(); cdb = (ctypes.c_ubyte * 70)()
+            A.w((DSEG << 4) + CXA, bytes(140)); A.w((DSEG << 4) + CDA, bytes(70))
+            got, bad = A.call(tab["scan"], [ESEG2, EO, ACT, na, ys, CXA, CDA, nspan])
+            want = lib.pdr_scan(ESEG2, EO, ctypes.addressof(actbuf), na, ys, ctypes.addressof(cxb), ctypes.addressof(cdb), nspan)
+            st["scan"] += 1
+            if bad: fails.append("scan convention %s" % bad)
+            agree("scan", "ne=%d ys=%d nspan=%d" % (ne, ys, nspan), got, want)
+            agree("scan", "x ne=%d ys=%d" % (ne, ys), A.r((DSEG << 4) + CXA, want * 2), bytes(bytearray(cxb)[:want * 2]))
+            agree("scan", "dir ne=%d ys=%d" % (ne, ys), A.r((DSEG << 4) + CDA, want), bytes(bytearray(cdb)[:want]))
+    for _ in range(n):
+        cnt = R.randint(0, 61)
+        src = bytes(R.getrandbits(8) for _ in range(cnt + 2)); dst0 = bytes(R.getrandbits(8) for _ in range(cnt + 4))
+        A.w((ESEG2 << 4) + 0x100, src); A.w((0x7800 << 4) + 0x20, dst0)
+        hmem[(ESEG2 << 4) + 0x100:(ESEG2 << 4) + 0x100 + len(src)] = (ctypes.c_ubyte * len(src)).from_buffer_copy(src)
+        hmem[(0x7800 << 4) + 0x20:(0x7800 << 4) + 0x20 + len(dst0)] = (ctypes.c_ubyte * len(dst0)).from_buffer_copy(dst0)
+        got, bad = A.call(tab["fcopy"], [0x7800, 0x20, ESEG2, 0x100, cnt])
+        lib.pdr_fcopy(0x7800, 0x20, ESEG2, 0x100, cnt)
+        st["fcopy"] += 1
+        if bad: fails.append("fcopy convention %s" % bad)
+        agree("fcopy", "n=%d" % cnt, A.r((0x7800 << 4) + 0x20, len(dst0)), bytes(hmem[(0x7800 << 4) + 0x20:(0x7800 << 4) + 0x20 + len(dst0)]))
     return st
 
 ap = argparse.ArgumentParser(); ap.add_argument("-n", type=int, default=400); ap.add_argument("--seed", type=int, default=7)
@@ -193,6 +244,14 @@ else:
     del fails[before:]
     if not caught: fails.append("negative control: a mutated primitive was NOT caught")
     else: print("pdr_primtest: negative control caught (a mutated glyph OR disagrees)")
+mut = bytearray(image)
+k = mut.find(bytes([0x39, 0x47, 0xFE, 0x7E]))     # cmp [bx-2], ax ; jle .put  (pdr_scan's insertion)
+if k < 0: print("pdr_primtest: scan negative control skipped (pattern not found)")
+else:
+    mut[k + 3] = 0x7D                              # jle -> jge: the crossings come out unsorted
+    before = len(fails); run(args.seed, 120, bytes(mut)); caught = len(fails) > before; del fails[before:]
+    if not caught: fails.append("negative control: a mutated pdr_scan was NOT caught")
+    else: print("pdr_primtest: negative control caught (a mutated scan insertion disagrees)")
 if fails:
     for f in fails[:25]: print("FAIL", f)
     print("pdr_primtest: %d FAILED" % len(fails)); sys.exit(1)

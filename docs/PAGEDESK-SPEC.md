@@ -913,20 +913,23 @@ host harness and runs `hosttest/pdr_check.py` and, where a python has Unicorn,
 
 | item | bytes |
 |---|---|
-| `PDREND.MOD` image (code + data) | 42,418 |
-| bss (zeroed by the door on first entry) | 9,188 |
-| image + bss | 51,606 (target 40,960 and the lead's 44 KiB - NOT met; cap 57,344) |
+| `PDREND.MOD` image (code + data) | 42,256 |
+| bss (zeroed by the door on first entry) | 6,382 |
+| image + bss | 48,638 (target 40,960 and the lead's 44 KiB - NOT met; cap 57,344) |
 | of which `pdmath.inc`'s share (`PDM_SKIP_PARSE`, `PDM_SKIP_CRC`) | about 3,900 |
 
 The target is missed by a third and the reason is stated, not hidden: SmallerC
 emits about 3.4 bytes of 8086 a source token, so the 4,000 lines of C that do the
-work are 33 KB; the near arrays the algorithms need are 9 KB of bss (13 KB before the saved graphics states and the font cache moved to the workspace, below). What was
+work are 33 KB; the near arrays the algorithms need are 6 KB of bss (13 KB before the saved graphics states, the font cache and the edge buffers moved to the workspace, below). What was
 cut to stay under the cap: dash patterns (20.3.8), a one-row clip mask instead of
 a band-sized one, four fonts in the cache instead of six, and the
 saved graphics states and the font cache moved into the workspace tail of `dl_seg`
-(3.7 KB of bss). What is left in bss is hot: the edge buffers the rasteriser scans
-every row (`g_ed`, `g_act`, `g_ce`, 3.3 KB), the flattened path (1 KB), the
-operand and run staging the engine and `dl_put` take by near pointer (2 KB). What
+(3.7 KB of bss), and the staged edges and clip edges followed them once the row
+scan was written in assembly (`pdr_act`, `pdr_scan`, `pdr_fcopy` in `pdrprim.inc`;
+they read 8-byte edge records through ES, and a FILL record is scanned in the list
+itself, with no copy). What is left in bss is hot: the active-edge list and crossing
+arrays (`g_act`, `g_cx`, `g_cd`, 0.7 KB), the flattened path (1 KB), the operand and
+run staging the engine and `dl_put` take by near pointer (2 KB). What
 would reach 40 KB is a different division of labour (the shell doing thumbnails,
 the text map moving into PDENG), not further trimming.
 
@@ -934,7 +937,7 @@ Claims it expects from `PDV_REND_INIT` (16.2 revised by this section):
 
 | `pdxb_init` field | size | holds |
 |---|---|---|
-| `dl_seg`, `dl_kb` | **26 KiB** (<= 63): 22 KiB of list + the 4 KiB WORKSPACE (`PDR_WSB`) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds the saved graphics states (16 x 78 bytes) and the four-entry font cache (4 x 684 bytes); one font is resident in bss at a time. A claim of 4 KiB or less leaves no list and BEGIN refuses |
+| `dl_seg`, `dl_kb` | **29 KiB** (<= 63): 22 KiB of list + the WORKSPACE (`PDR_WSB` = 6,912 bytes) at the tail of the claim | the display list (20.3.2); also the text-map ring (20.3.4). The workspace holds, by offset: saved graphics states 0 (16 x 78), the four-entry font cache 1,280 (4 x 684; one font is resident in bss at a time), staged edges 4,096 (256 x 8) and clip edges 6,144 (96 x 8). A claim of 6,912 bytes or less leaves no list and BEGIN refuses |
 | `band_seg`, `band_bytes` | `16 x stride`, stride = `ceil(w/8)` (1bpp) or `ceil(w/2)` (4bpp) of the canvas width rounded out to 8 pixels: 1.5 KiB at 720 px 1bpp, 5.1 KiB at 640 px 4bpp | one band |
 | `glyph_seg`, `glyph_kb` | **24 KiB** (16.2 said 12; 20.3.4 carves it) | image row buffer, PDFONTX index, transformed glyphs, the strike cache |
 | `bank_seg`, `bank_kb` | ignored | (D3: the bank arrives through `PDV_REND_FONTBANK`) |
@@ -1189,8 +1192,8 @@ call of 1-2 clusters (~0.4 s on a floppy), once per strike per `FONTBANK`.
   the page rectangle.
 * 11.2: strike offsets are from the file's first byte (20.4.1); strikes are read
   on demand (D3), PDFONTX.RES's index is read by PDREND.
-* 16.2: the glyph claim is 24 KiB, not 12 (20.3.4); the list claim is 26 KiB
-  (22 of list + the 4 KiB workspace, 20.3.1); the current graphics state is in bss.
+* 16.2: the glyph claim is 24 KiB, not 12 (20.3.4); the list claim is 29 KiB
+  (22 of list + the 6,912-byte workspace, 20.3.1); the current graphics state is in bss.
 * Not drawn, and said so (`PDF_INC_*` + the first name): **dash patterns** (`d` is
   parsed, strokes are solid, `PDF_INC_OPER` "dash pattern" when a non-zero
   pattern is set); **inline images**; images turned a quarter or upside down;

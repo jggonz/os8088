@@ -67,7 +67,7 @@ for d, withx in ((bank, True), (bank_nox, False)):
     open(os.path.join(d, 'PAGEDESK.O88'), 'wb').write(b'\x55' * 1536 + data)
     if withx: shutil.copy(resx, os.path.join(d, 'PDFONTX.RES'))
 
-def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=26, bk=None, env=None):
+def render(page, zoom, rot, bpp, asp, W, H, name, dlkb=29, bk=None, env=None):
     out = os.path.join(scratch, name + '.ppm')
     e = dict(os.environ); e.update(env or {})
     r = run(['render', pdf, page, zoom, rot, bpp, asp, W, H, 8, 8, out, bk or bank, dlkb], env=e)
@@ -107,10 +107,10 @@ for page in (0, 1, 2):
 if not bad: ok('all four user rotations draw (3 pages x 4)')
 
 # ---- 4. display-list overflow: many passes, identical image --------------------
-r1, o1, s1 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_a', 26)
+r1, o1, s1 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_a', 29)
 res = []
 for kb in (8, 12, 16):
-    r2, o2, s2 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_b', kb + 4)   # +4: the workspace tail
+    r2, o2, s2 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_b', kb + 7)   # +7: the workspace tail (6,912 B)
     same = open(o1, 'rb').read() == open(o2, 'rb').read()
     res.append((kb, int(s2.get('passes', 0)), same, int(s2.get('incomplete', '0x0'), 16)))
 if all(s and p > int(s1['passes']) and inc == 0 for kb, p, s, inc in res):
@@ -118,7 +118,7 @@ if all(s and p > int(s1['passes']) and inc == 0 for kb, p, s, inc in res):
 else:
     fail('DL overflow multi-pass', repr(res))
 r5, o5, s5 = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_a', 60)
-r5b, o5b, s5b = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_b', 8)
+r5b, o5b, s5b = render(4, 100, 0, 1, '5/12', 640, 200, 'sub_b', 11)
 if open(o5, 'rb').read() == open(o5b, 'rb').read() and int(s5b.get('passes', 0)) > 30: ok('a 4 KiB list composes one band in sub-passes (%s passes) and draws the identical image' % s5b['passes'])
 else: fail('sub-row passes', repr((s5, s5b)))
 r6, o6, s6 = render(4, 100, 0, 4, '1/1', 640, 480, 'ovl_c', 1)

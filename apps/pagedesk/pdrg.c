@@ -29,6 +29,8 @@ static pdw g_gsn;                   /* depth: saved states below the current */
 static pdw g_ws;                    /* workspace segment (dl_seg + DL capacity) */
 #define WS_GS   0u                  /* PD_MAXGSTACK x sizeof(struct pdr_gs)    */
 #define WS_FN   1280u               /* PDR_NFONT x sizeof(struct pdr_font)     */
+#define WS_ED   4096u               /* PDR_NEDGE staged edges, 8 bytes each    */
+#define WS_CE   6144u               /* PDR_NCLIPE clip edges, 8 bytes each     */
 static void gs_save(pdw n) { pd_fcopy_out(&g_gcur, g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), sizeof(struct pdr_gs)); }
 static void gs_load(pdw n) { pd_fcopy_in(g_ws, (pdw)(WS_GS + n * sizeof(struct pdr_gs)), &g_gcur, sizeof(struct pdr_gs)); }
 
@@ -252,7 +254,7 @@ static void path_curve(pdi x1, pdi y1, pdi x2, pdi y2, pdi x3, pdi y3)
 }
 
 /* ---- edges: the staging area every filled shape goes through ------------ */
-static pdi g_ed[PDR_NEDGE][4];      /* x0 y0 x1 y1 in qpx, original direction */
+static pdi g_etmp[4];                /* x0 y0 x1 y1 in qpx, original direction: one edge, on its way to the workspace */
 static pdw g_ne;
 static pdi g_eylo, g_eyhi;          /* the group's rows, qpx, for culling    */
 
@@ -264,7 +266,8 @@ static void edge_add(pdi x0, pdi y0, pdi x1, pdi y1)
     if (y0 < y1) { if (y1 < g_eylo || y0 > g_eyhi) return; }
     else         { if (y0 < g_eylo || y1 > g_eyhi) return; }
     if (g_ne >= PDR_NEDGE) return;       /* callers flush before this        */
-    g_ed[g_ne][0] = x0; g_ed[g_ne][1] = y0; g_ed[g_ne][2] = x1; g_ed[g_ne][3] = y1;
+    g_etmp[0] = x0; g_etmp[1] = y0; g_etmp[2] = x1; g_etmp[3] = y1;
+    pd_fcopy_out(g_etmp, g_ws, (pdw)(WS_ED + g_ne * 8), 8);
     g_ne++;
 }
 
