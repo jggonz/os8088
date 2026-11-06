@@ -242985,6 +242985,25 @@ KB: a smaller resident claim is a larger ring, and a clip held to it
 harder otherwise. `vbtcap`: the hold is the bundle's own ring, and a
 machine with less free (a smaller ring) holds the same clip harder.
 
+**The lead's share is priced at the CLIP's rate, not the disk's.** The
+burst `cap_hold` allows is the ring less the frames the sound runs ahead;
+priced at the profile's whole disk budget (286-fast: 317 KB/s), twelve
+frames of lead came to more than a 120 KB ring, the burst was 0, and every
+frame was cut to half a frame's budget - 10.6 KB on 286-fast, 14.7 on
+speeddemon, in every clip of the owner's VGA battles (2026-11-07: "cut too
+much ... it seems to just drop entire frames and stutter", on the mrbios
+286). `capped_run` now prices it at what the clip itself streams (its
+records' mean, at most the disk's budget): on scratch footage at 16
+colours, 57 of 60 frames cut became none, the largest record 10 KB -> 16.
+
+**The reader reads in 32 KB.** A read is a turn of the disk whatever it
+moves: the owner's 286's profile (126.8) priced 4, 8 and 12 KB reads alike
+at ~37 ms - 111, 218 and 310 KB/s, against 409 KB/s in 32 KB - and the
+reader read whatever room a frame had freed, 4 to 12 KB, so a 448 KB/s
+disk gave 262. A ring's read now waits for `VB_RBATCH` (32 KB) of room,
+unless less than `VB_RLOW` (40 KB) is read ahead of the picture or the
+clip's rest is shorter (`vb_rpiece`).
+
 #### 126.4.4 What a battle holds in 640 KB
 
 Measured on MartyPC's Hercules 5150 (640 KB, the owner's 86Box profile's
@@ -243623,6 +243642,11 @@ BATTLEV.VBT] [--frames]` reads it.
   a card plays, the rings' KB, the entry size, +56 the frames' room (the
   reads follow it), +58 the claim's KB, +60 1 when kept in XMS, +62 frames
   the staging had no room for.
+- **Version 2** (a 96-byte header) adds the HOLD: its store (XMS or EMS),
+  whether it filled, its KB and ranges, and how many reads it served -
+  version 1 could not say whether a play used its XMS at all - and +71
+  whether a card played (+51 is read at the end, the card closed: version
+  1 said "no card" of a play with one). `tools/vbtprof.py` reads both.
 - `vbtdiag` plays the demo on MartyPC's VGA XT, reads `VBPROF1.DAT` back
   off B: and holds it to the play; `vbtdiagx` the same on QEMU with XMS,
   500 frames through the staging, none dropped. Measured there: the title's VGA4 records

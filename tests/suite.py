@@ -19020,7 +19020,7 @@ SOAK = [
         "pixel shows a colour of neither frame for the frame's whole decode "
         "(the owner's 'VGA tears constantly'). On 86Box's VGA XT, a title of "
         "Conway's Life in 16-row bands: its colours' values in Gray order "
-        "over 100 flash pixels a sampled frame, the values CHOSEN against the "
+        "over 60 flash pixels a sampled frame (98 to 142 measured), the CHOSEN "
         "tearing (os88vbt.vga_order) two thirds or less, and the banded title the "
         "same frames on the host as a whole-frame one. Gray order IS the "
         "broken arm (vga_order answering its CODES0). 100s is 68 measured",

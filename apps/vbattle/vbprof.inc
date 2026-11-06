@@ -31,10 +31,14 @@
 ;          +22 frames stalled, +24 periods (dword), +28 the reader's
 ;          periods (dword), +32 its bytes (dword), +36 its calls, +38 the
 ;          bundle's name (13), +51 the card (1: a card plays), +52 the
-;          ring's KB, +54 VB_PRE, +56 the frames' room, +58 the claim's KB
+;          ring's KB, +54 VB_PRE, +56 the frames' room, +58 the claim's KB,
+;          +60 1: kept in XMS, +62 frames dropped; version 2: +64 the
+;          HOLD (vb_htype: 0 none, 1 XMS, 2 EMS), +65 it filled, +66 its
+;          KB, +68 the reads it served (vb_hcopies), +70 its ranges, +71 a
+;          card played (+51 is vb_snd at the end, when the card is closed)
 ; =============================================================================
 
-VB_PRH      equ 64
+VB_PRH      equ 96                  ; (version 2: 64 before the hold's line)
 VB_PRE      equ 10
 VB_PRKB     equ 48                  ; the claim tried first, halved to 6
 ; IN XMS (the owner: "a system with plenty of XMS ... so its more accurate
@@ -59,6 +63,7 @@ vb_prtry:
     mov [vb_prhi], ax
     mov [vb_prti], ax
     mov [vb_prdrop], ax
+    mov [vb_prsnd], al
     cmp byte [vb_pmd], 0            ; (kern_mega: none)
     jne .conv
     call OSAPI_XMEM_CAPS            ; THE PROFILE IN XMS, when it is there:
@@ -380,6 +385,7 @@ vb_prmark:
     xor al, al
     cmp byte [vb_snd], 0
     je .s
+    mov byte [vb_prsnd], 1          ; (a card played: the header's +71)
     mov ax, [vb_wpos]               ; the card's lead
     sub ax, [vb_cons32]
     mov al, ah
@@ -509,7 +515,7 @@ vb_prend:
     jc .drop
     mov word [es:0], 'VB'
     mov word [es:2], 'PR'
-    mov word [es:4], 1
+    mov word [es:4], 2
     mov ax, [vb_prn]
     mov [es:6], ax
     mov ax, [vb_prnl]
@@ -566,6 +572,24 @@ vb_prend:
     mov [es:60], al                 ; +60 1: it was kept in XMS
     mov ax, [vb_prdrop]
     mov [es:62], ax                 ; +62 frames the staging had no room for
+    xor al, al                      ; +64.. THE HOLD: was the bundle in XMS
+    cmp byte [vb_hon], 0            ; (or EMS), how much, and how many reads
+    je .nh                          ; it served
+    mov al, [vb_htype]
+.nh:
+    mov [es:64], al
+    mov al, [vb_hfull]
+    mov [es:65], al
+    mov ax, [vb_hkb4]
+    shl ax, 1
+    shl ax, 1
+    mov [es:66], ax
+    mov ax, [vb_hcopies]
+    mov [es:68], ax
+    mov al, [vb_hrn]
+    mov [es:70], al
+    mov al, [vb_prsnd]
+    mov [es:71], al
     mov al, '1'
 .try:
     mov [vb_prfn + 6], al

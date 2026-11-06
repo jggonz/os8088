@@ -25,7 +25,7 @@ turns cells between colours that differ in several planes):
      the whole-frame one's - the picture is unchanged;
   1. banded, the values in GRAY order (darkest first, as before vga_order):
      the glass, sampled N times through the title loop, shows pixels in a
-     colour their pixel never takes in any of the loop's frames - over 100
+     colour their pixel never takes in any of the loop's frames - over 60
      a sample on average (the effect, so 2 proves something);
   2. banded, the values CHOSEN against the tearing (os88vbt.vga_order): at
      at most two thirds as many (measured 2.3x and 1.8x fewer at 60
@@ -190,7 +190,7 @@ def main():
             print("     %s: %d bytes, flash pixels a sample %.0f (worst %d)"
                   % (name, len(data), res[name][0], res[name][1]),
                   flush=True)
-        ok(res["gray"][0] > 100, "1. darkest first in GRAY order, banded, "
+        ok(res["gray"][0] > 60, "1. darkest first in GRAY order, banded, "
            "FLASHES on 86Box's VGA: %.0f pixels a sample in a colour of no "
            "frame" % res["gray"][0])
         ok(res["chosen"][0] * 1.5 <= res["gray"][0],

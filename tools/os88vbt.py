@@ -468,16 +468,33 @@ def capped_run(recs, fs, snd, rows, cap, log, name, last_dac=None):
     per = cap["rate"] / float(cap["fps"])
     avail = cap["head"] - len(recs[0])
     ptr, n_cap = 0, 0
+    # THE BURST THE RING HOLDS, at THIS CLIP'S own rate (126.4.3): the ring
+    # less the frames the sound runs ahead, priced at what the clip itself
+    # streams. Priced at the disk's whole budget (cap["hold"]) a fast
+    # profile's lead outgrew the ring, the burst was 0 and every frame was
+    # cut to half a frame's budget - 10.6 KB on 286-fast, 14.7 on
+    # speeddemon (the owner's "cut too much ... it just drops entire frames
+    # and stutter", 2026-11-07)
+    fulls = [rec(fs[i - 1], fs[i], rows, snd[i]) for i in range(1, len(fs))]
+    hold = cap["hold"]
+    if cap.get("ring") and fulls:
+        import vbtana as A_
+        income = min(cap["rate"], sum(len(r) for r in fulls) /
+                     float(len(fulls)) * cap["fps"])
+        hold = A_.cap_hold(cap["ring"], income, cap["fps"], cap["srate"])
+    clean = True                        # (the screen is frame i - 1's)
     for i in range(1, len(fs)):
-        avail = min(cap["hold"], avail + per)
-        full = rec(cur, fs[i], rows, snd[i])
+        avail = min(hold, avail + per)
+        full = fulls[i - 1] if clean else rec(cur, fs[i], rows, snd[i])
         if last_dac and i == len(fs) - 1:
             full = with_dac(full, last_dac)
         if len(full) <= avail or last_dac and i == len(fs) - 1:
             recs.append(full)
             cur = fs[i]
             avail -= len(full)
+            clean = True
             continue
+        clean = False
         lo, hi, best = 0, g.h, None     # the most rows that fit
         while lo <= hi:
             mid = (lo + hi) // 2
@@ -498,6 +515,7 @@ def capped_run(recs, fs, snd, rows, cap, log, name, last_dac=None):
         avail -= len(r)
         ptr = (ptr + mid) % g.h
         cur = cur_next
+        clean = mid == g.h
         n_cap += 1
     if n_cap:
         log[name] = n_cap
@@ -806,7 +824,7 @@ def build(b):
                                 REND.recmax)    # every bundle (CAP_HOLD)
         b.cap = dict(b.cap, hold=A_.cap_hold(
             b.cap_ring or A_.VB_CRMIN * 1024, b.cap["rate"], b.cap["fps"],
-            b.rate))
+            b.rate), ring=b.cap_ring or A_.VB_CRMIN * 1024, srate=b.rate)
     for c in b.clips:
         fs = [surface_of(f, rows) for f in c["frames"]]
         anch = []

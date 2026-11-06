@@ -202,6 +202,8 @@ VB_CGUARD   equ 16384           ; 16 KB guard past it: the tail of the record
                                 ; (at most the guard, VH_MAXREC) is whole at
                                 ; its cursor (126.4)
 VB_SPIECE   equ 32768           ; the most a read moves while no menu waits
+VB_RBATCH   equ 32768           ; a read waits for this much room in its ring
+VB_RLOW     equ 40960           ; ...unless less than this is read ahead
                                 ; on a key: as much as the ring has room for,
                                 ; up to this (126.4)
 VB_HEAD     equ 40960           ; a clip may START once this much is read
@@ -2578,6 +2580,35 @@ vb_rpiece:
 .r1:
     and ax, 0 - VB_PIECE            ; in whole pieces
     jz .none
+    cmp ax, VB_RBATCH               ; A READ IS A TURN OF THE DISK whatever
+    jae .rb                         ; it moves (the owner's 286: 37 ms for
+    push ax                         ; 4, 8 or 12 KB - 111 KB/s in 4s, 409 in
+    push dx                         ; 32s), so the room waits for VB_RBATCH
+    mov ax, [ds:bp+RG_FILL]         ; unless the ring is LOW ahead of the
+    mov dx, [ds:bp+RG_FILL+2]       ; picture...
+    sub ax, [ds:bp+RG_VOFF]
+    sbb dx, [ds:bp+RG_VOFF+2]
+    jnz .rh
+    cmp ax, VB_RLOW
+    jb .rlow
+.rh:
+    VB_STRM ds:bp, si               ; ...or what is left of the clip fits
+    jnz .rwait                      ; (a loop read round goes on for ever)
+    mov ax, [si+VC_LEN]
+    mov dx, [si+VC_LEN+2]
+    sub ax, [ds:bp+RG_FILL]
+    sbb dx, [ds:bp+RG_FILL+2]
+    jnz .rwait
+    cmp ax, VB_RBATCH
+    jb .rlow
+.rwait:
+    pop dx
+    pop ax
+    jmp .none
+.rlow:
+    pop dx
+    pop ax
+.rb:
     call vb_psize                   ; the piece: as much of it as the
     mov dx, [ds:bp+RG_END]          ; moment allows, and no further than
     sub dx, [ds:bp+RG_FSEG]         ; the ring's end: nothing is read into
@@ -5424,6 +5455,7 @@ VB_VAR vb_prrbuf, 8                 ; ...a read's entry, on its way up
 VB_VAR vb_prfseg, 2                 ; ...the file's claim at the end
 VB_VAR vb_prsz, 4                   ; ...its size
 VB_VAR vb_prroom, 2                 ; ...the frames' room it says
+VB_VAR vb_prsnd, 1                  ; ...a card played
 VB_VAR vb_prro, 4                   ; ...and its offset
 %endif
 VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer

@@ -38,9 +38,16 @@ def read_prof(path):
              rper=rper, rbytes=rbytes, rcalls=rcalls, name=name, card=snd,
              ringkb=rkb, room=prmax, claimkb=ckb, xms=d[60] == 1,
              dropped=struct.unpack_from("<H", d, 62)[0])
+    hlen = 64
+    if ver >= 2:                # THE HOLD (version 2): the bundle in XMS
+        hlen = 96               # or EMS, and what it served
+        h.update(hold=d[64], hfull=d[65],
+                 holdkb=struct.unpack_from("<H", d, 66)[0],
+                 hcopies=struct.unpack_from("<H", d, 68)[0], hranges=d[70],
+                 card=d[71])
     fr = []
     for i in range(nf):
-        o = 64 + pre * i
+        o = hlen + pre * i
         t, gap, fl, clip, ahead, lead, feed = struct.unpack_from(
             "<HHBBBBH", d, o)
         fr.append(dict(t=t * PIT_US / 1000, gap=gap * PIT_US / 1000,
@@ -48,7 +55,7 @@ def read_prof(path):
                        ahead=ahead, lead=lead * 256, feed=feed * PIT_US /
                        1000))
     rd = []
-    base = 64 + pre * prmax
+    base = hlen + pre * prmax
     per_ms = div * PIT_US / 1000
     for i in range(nr):
         p0, dp, n, off = struct.unpack_from("<HHHH", d, base + 8 * i)
@@ -88,6 +95,13 @@ def main():
             if len(fr) >= h["room"] else "")
     print("the play: %.1f s, %d frames profiled (%s), %d stalled, %d late "
           "(forgiven)" % (secs, len(fr), where, h["stall"], h["late"]))
+    if "hold" in h:
+        print("the hold: %s" % (
+            "none - every read the disk's" if not h["hold"] else
+            "%s, %d KB in %d range(s)%s, %d reads served from it" % (
+                {1: "XMS", 2: "EMS"}.get(h["hold"], h["hold"]), h["holdkb"],
+                h["hranges"], " (filled)" if h["hfull"] else
+                " (not yet filled)", h["hcopies"])))
     print("the reader: %d calls, %.0f KB, %.1f s of the hook's periods "
           "(%.0f KB/s while reading)" % (
               h["rcalls"], h["rbytes"] / 1024.0,
