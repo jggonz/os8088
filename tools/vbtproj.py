@@ -16,7 +16,10 @@ A project file (version 1):
                   "burst_cap": false to build a streamed clip's bursts
                   as they are (SPEC.md 126.4.3; true when absent),
                   "vga_bands": VGA4's writes in bands of this many rows,
-                  0 the whole frame (SPEC.md 126.3.2; 16 when absent)},
+                  0 the whole frame (SPEC.md 126.3.2; 16 when absent),
+                  "vga_band_cga": true to keep the band's four CGA colours
+                  among VGA4's (false when absent: the nearest four of the
+                  footage's)},
      "sources":  {id: {"kind": "video", "path"} | {"kind": "scene", "name"}},
      "sounds":   {id: {"kind": "file", "path", "level"}
                     | {"kind": "scene", "name", "level"}
@@ -856,6 +859,8 @@ class Project:
         if t.get("clip") is not None and not (
                 isinstance(t["clip"], int) and 0 <= t["clip"] <= 96):
             err("target.clip", "clip %s: 0 to 96 levels" % t["clip"])
+        if t.get("vga_band_cga") not in (None, True, False):
+            err("target.vga_band_cga", "vga_band_cga: true or false")
         if t.get("vga_bands") is not None and not (
                 isinstance(t["vga_bands"], int) and 0 <= t["vga_bands"] <= 200):
             err("target.vga_bands", "vga_bands %s: rows a band, 0 the whole "

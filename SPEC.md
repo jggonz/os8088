@@ -241992,7 +241992,7 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | off | size | field |
 |---|---|---|
 | 0 | 4 | `VBT1` |
-| 4 | 2 | version, 8 |
+| 4 | 2 | version, 9 (8 had VGA's palette at 352, under the hold order's count, and held 28 ranges) |
 | 6 | 2 | 512 |
 | 8 | 1 | the CGA4 palette byte (98.1.3.3) |
 | 9 | 1 | the canvas's rows |
@@ -242025,9 +242025,10 @@ one `add` per sample, with no clip and no branch. A clip's OWN sound
 | 336 | 1 | a fade's steps, 1 to 16 (one a frame) |
 | 337 | 1 | the ADAPTER (126.3.2): 0 CGA4, 1 VGA4 (mode 0Dh), 2 Hercules |
 | 338 | 4+4 | the IDLE loop's records' offset and length (format 7): each record on a paragraph, which the idle table names |
-| 352 | 16 x 3 | VGA4: its sixteen colours (r, g, b), the DAC's six bits; slots 0 to 3 the band's CGA colours |
-| 398 | 2 | the HOLD ORDER's ranges, at most 28 (126.4.1) |
-| 400 | 4 x 28 | ...each (its first 4 KB of the file, its 4 KBs), most worth holding first |
+| 352 | 4 | VGA4: the BAND'S MAP - the pixel value each of the band's four colours is drawn in (126.3.2) |
+| 398 | 2 | the HOLD ORDER's ranges, at most 16 (126.4.1) |
+| 400 | 4 x 16 | ...each (its first 4 KB of the file, its 4 KBs), most worth holding first |
+| 464 | 16 x 3 | VGA4: its sixteen colours (r, g, b), the DAC's six bits, BY PIXEL VALUE |
 | 96 | 6 x 16 | each menu effect's offset in them and its length |
 | 192 | 8 x 16 | each menu effect's name, for a reader |
 
@@ -242472,9 +242473,28 @@ then sets the mode, the palette and the decode.
   a shape that is not quite ours (a 640 x 480 source on Hercules' 640 x 348
   lost its sides to the crop).
 - **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows. ONE
-  palette for the battle (`vbtana.battle_palette`): slots 0 to 3 the band's
-  CGA colours, the rest a k-means of every video source, 4, 8 or 16 in all
-  (`target.vga_colours`). A record is sub-records, each its Map Mask and ten
+  palette for the battle (`vbtana.battle_palette`), 4, 8 or 16 colours
+  (`target.vga_colours`), **chosen from the footage FOR COLOUR** - Video
+  Encoder's `--palette colourN` (`os88venc.colour_kmeans`: k-means in
+  CIELAB, each pixel weighted by its chroma, black fixed), over a sample of
+  every video source. The pixel-count k-means it replaces put the entries
+  where most pixels are, and four of eight were the band's CGA colours: the
+  owner's "red, teal and shades of grey". **The band takes the nearest four
+  of them** (`vbtana.band_index`: four DIFFERENT entries, the assignment
+  nearest in all, so its text, cursor and ground stay apart), drawn in
+  their pixel values through the header's band map (`vb_bmap`, all four
+  planes from `vb_bptab`'s two tables); `target.vga_band_cga` keeps the
+  band's own CGA four instead, at the cost of four of the K. The demo's
+  made-up scenes are CGA values and are drawn in the band's four. **A
+  colour's index is a pixel value on a GROUP of planes** (Video Player's
+  `os88vid.PLANE_CODES`: 8 colours with planes 0 and 3 together), so planes
+  agree and a changed byte is fewer stores - **taken in GRAY-CODE order**
+  (`os88vbt.vga_codes`): the palette is darkest first, most changes move a
+  pixel to a neighbouring brightness (dither, a gradient, a fade), and in
+  Gray order neighbours differ in ONE plane group, one store that cannot be
+  caught half-written. On the owner's footage the plain codes left 135
+  flash pixels a sampled frame at 16-row bands and Gray order 25, with 8%
+  fewer bytes. A record is sub-records, each its Map Mask and ten
   lists, a 0 after the last (`os88vid.vga4_subs`, planes wanting the same
   byte under one mask), which `vb_decode` plays with an OUT a sub-record.
   **The sub-records are written in BANDS** (`target.vga_bands`, rows; 16
@@ -242486,10 +242506,13 @@ then sets the mode, the palette and the decode.
   frame's whole decode and the beam shows it - the owner's "VGA tears
   constantly ... things shimmer and flicker where they change". In bands
   it lasts a band's. The engine is unchanged (it plays any sequence of
-  sub-records). Measured on 86Box's VGA XT, flash pixels a sampled frame:
-  the owner's footage (debug only) 308 whole, 71 at 32 rows, 30 at 16, 22
-  at 8, for +6%, +12% and +24% record bytes (each extra sub-record ~17
-  bytes and an OUT); `vbtvgaflash`'s Life title 594 -> 114 at 16 rows. The
+  sub-records). Measured on 86Box's VGA XT, flash pixels a sampled frame,
+  the owner's footage (debug only) at eight colours: 308 whole, 71 at 32
+  rows, 30 at 16, 22 at 8, for +6%, +12% and +24% record bytes (each extra
+  sub-record ~17 bytes and an OUT), with the palette before this section's
+  colour choice; with it and its Gray-ordered values, 317 whole and 25 at
+  16 rows, and the records SMALLER - 495 KB whole and 540 KB banded against
+  528 and 589. `vbtvgaflash`'s Life title 594 -> 114 at 16 rows. The
   Video Player's flipped files never show it - its Ikaruga is page
   flipped, each frame drawn on the hidden page; a flipped VGA4 rendition,
   no flash at all at a frame's two-frame delta and the band drawn twice,

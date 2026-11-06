@@ -861,6 +861,29 @@ The default is 16 rows, and the Battle tab offers the others. Page
 flipping, which would remove them entirely, is the option left: a
 two-frame delta, the band drawn on both pages, and engine work.
 
+The palette was the second VGA problem: "red, teal and shades of grey".
+Four of the eight colours were the band's CGA ones, and the other four came
+from a k-means weighted by pixel count, which spends its colours on the
+greys that most pixels are. The choice is now Video Encoder's
+`colour_kmeans` (CIELAB, chroma-weighted) over all eight. The band no
+longer reserves colours: it takes the nearest four different entries
+through a map the engine applies on all four planes, and keeping the CGA
+four is a checkbox.
+
+Borrowing Video Player's plane codes, which put a colour's bits on groups
+of planes, raised the flash count at first (30 to 135 pixels a frame),
+because the footage finally had eight colours to change between. Taking
+the codes in GRAY order fixed it: the palette runs darkest first, most
+changes move a pixel to a neighbouring brightness, and Gray neighbours
+differ in one plane group, so that change is a single store and can't be
+caught half-written. With the bands, 25 flash pixels a frame, and the
+records 8% smaller than with the old palette.
+
+Moving the palette also found a latent bug. At 352, its sixteenth colour
+overlapped the hold order's count at 398, so a 16-colour rendition's hold
+order was garbage. Format 9 puts the colours at 464 and holds 16 ranges.
+Nothing had shipped, so there is no legacy reader.
+
 ## Measured (MartyPC `os8088_5150_sb_gla`, 360 KB disk)
 
 | | |

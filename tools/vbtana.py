@@ -218,8 +218,9 @@ def screens(proj, sid, progress=_nop, full=False):
 # the encoder's own ffmpeg_video with the CGA encode's fps expression, and
 # quantized here. "cga4" is the encoder's own encode (screens above).
 #   vga4: mode 0Dh, 320 x the canvas's rows, K colours of ONE palette for the
-#         whole battle - slots 0..3 the band's CGA colours (the band is the
-#         same picture on every adapter), the rest the footage's own
+#         whole battle, chosen from the footage for colour (battle_palette);
+#         the band takes the nearest four (band_index) unless it keeps its
+#         CGA colours (target.vga_band_cga)
 #   herc: 640 x (348 - twice the band's rows): every logical band pixel two
 #         by two, so the band is the same 40 x 8 cells; one bit a pixel
 
@@ -268,49 +269,66 @@ def rgb_frames(proj, sid, w, h, kind, progress=_nop):
 
 
 def battle_palette(proj, k, progress=_nop):
-    """The VGA rendition's K colours (8-bit RGB): the band's four CGA colours,
-    then K - 4 of the footage's own, a k-means over every video source"""
+    """The VGA rendition's K colours (8-bit RGB), in index order, black first
+    and the rest darkest first (SPEC.md 126.3.2) - chosen FOR COLOUR, as
+    Video Encoder's `--palette colourN` chooses them (os88venc.colour_kmeans:
+    k-means in CIELAB, each pixel weighted by its chroma, black fixed), over
+    a sample of every video source. A pixel-count k-means put the entries
+    where the most pixels are, so a dark battle's colours were greys, and its
+    reds and blues went grey too (the owner's "red, teal and shades of
+    grey"). The band's four CGA colours are NOT kept unless
+    target.vga_band_cga asks: the band takes the nearest of the K
+    (band_index). A battle with no video source: the band's four, padded"""
     t = proj.d["target"]
-    band = palette_rgb(t["palette"])
-    if k <= 4:
-        return [tuple(c) for c in band][:k]
+    band = [tuple(c) for c in palette_rgb(t["palette"])]
+    keep = bool(t.get("vga_band_cga"))
+    srcs = sorted((sid, s["path"]) for sid, s in proj.d["sources"].items()
+                  if s["kind"] != "scene")
+    if not srcs:
+        return band[:k] + [(0, 0, 0)] * max(0, k - 4)
+    if keep and k <= 4:
+        return band[:k]
+    key = (json.dumps([t["palette"], srcs, k, keep, rend_size(proj, "vga4"),
+                       fit_of(proj), scale_of(proj, "vga4")]))
+    if key in _PALS:
+        return _PALS[key]
     w, h, _ = rend_size(proj, "vga4")
     samp = []
     rng = np.random.RandomState(1)
-    for sid, s in proj.d["sources"].items():
-        if s["kind"] == "scene":
-            continue
+    for sid, _ in srcs:
         fr = rgb_frames(proj, sid, w, h, "vga4", progress)
         px = fr.reshape(-1, 3)
         samp.append(px[rng.randint(0, len(px), min(len(px), 20000))])
-    if not samp:
-        return [tuple(c) for c in band] + [(0, 0, 0)] * (k - 4)
-    x = np.concatenate(samp).astype(float)
-    fixed = np.array(band, float)
-    c = x[rng.choice(len(x), k - 4, replace=False)]
-    for _ in range(16):
-        allc = np.vstack([fixed, c])
-        d2 = ((x[:, None, :] - allc[None]) ** 2).sum(2)
-        lab = np.argmin(d2, 1)
-        worst = np.argsort(-d2.min(1))      # the pixels served worst
-        w = 0
-        for j in range(k - 4):
-            m = lab == j + 4
-            others = np.delete(allc, j + 4, 0)
-            dup = ((others - c[j]) ** 2).sum(1).min() < 100
-            if m.any() and not dup:
-                c[j] = x[m].mean(0)
-            else:                           # empty, or a copy of another
-                c[j] = x[worst[w]]          # colour: re-seeded where the
-                w += 1                      # palette is furthest off
-    allc = np.vstack([fixed, c])            # (and, last, no near copies:
-    for j in range(k - 4):                  # a mean can pull one back)
-        others = np.delete(allc, j + 4, 0)
-        if ((others - c[j]) ** 2).sum(1).min() < 400:
-            d2 = ((x[:, None, :] - allc[None]) ** 2).sum(2).min(1)
-            c[j] = x[int(np.argmax(d2))]
-            allc = np.vstack([fixed, c])
-    return [tuple(int(v) for v in col) for col in np.vstack([fixed, c])]
+    import os88venc as VE
+    n = k - 4 if keep else k
+    dac = VE.colour_kmeans(np.concatenate(samp), n)
+    cols = [tuple((dac[3 * i + c] << 2) | (dac[3 * i + c] >> 4)
+                  for c in range(3)) for i in range(n)]
+    if keep:                        # the band's own four, then all of them
+        cols = sorted(set(cols) | set(band), key=lambda c: (
+            c != (0, 0, 0), 77 * c[0] + 150 * c[1] + 29 * c[2], c))
+        cols = (cols + [cols[-1]] * k)[:k]
+    _PALS[key] = cols
+    return cols
+
+
+_PALS = {}
+
+
+def band_index(proj, k):
+    """The band's four CGA colours as indexes of battle_palette's K: FOUR
+    DIFFERENT entries (the band's text, cursor and ground must stay apart),
+    the assignment nearest in all (exact when target.vga_band_cga kept
+    them). Fewer than four entries: the nearest each"""
+    import itertools
+    pal = np.array(battle_palette(proj, k), float)
+    band = np.array(palette_rgb(proj.d["target"]["palette"]), float)
+    d = ((band[:, None, :] - pal[None]) ** 2).sum(2)        # 4 x K
+    if len(pal) < 4:
+        return [int(x) for x in d.argmin(1)]
+    best = min(itertools.permutations(range(len(pal)), 4),
+               key=lambda p: sum(d[i, p[i]] for i in range(4)))
+    return list(best)
 
 
 def _bayer4():
@@ -406,9 +424,11 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False):
         return screens(proj, sid, progress, full)
     s = proj.d["sources"][sid]
     if s["kind"] == "scene":
-        base = screens(proj, sid, progress)     # (CGA values: the VGA's
-        if kind == "vga4":                      # slots 0..3 are CGA's)
-            return base
+        base = screens(proj, sid, progress)     # (CGA values: on VGA, each
+        if kind == "vga4":                      # the nearest of the K)
+            lut = np.array(band_index(proj, proj.d["target"].get(
+                "vga_colours", 8)), np.uint8)
+            return [lut[f] for f in base]
         _, crow, frow = rend_size(proj, "herc")
         cr = proj.d["target"]["canvas"][3]
         out = []

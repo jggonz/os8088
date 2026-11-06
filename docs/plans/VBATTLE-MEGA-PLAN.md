@@ -174,9 +174,22 @@ kern_big and kern_small keep the load on the desktop, where the window says
       is the row. Page flipping - none at all, for a two-frame delta and
       the band drawn on both pages, and engine work - is the option left
       if bands are not enough.
-- [ ] **VGA's colours.** The VGA rendition keeps to red, teal and greys. It
-      should choose its palette the way Video Encoder's `colorX` does, and
-      the CGA focus should stop being forced: one option among the rest.
+- [x] **VGA's colours** (2026-11-06, SPEC.md 126.3.2, bundle format 9).
+      Two causes: four of eight colours were the band's CGA ones (cyan,
+      magenta: the "red, teal"), and the rest a pixel-count k-means that
+      puts colours where most pixels are (the greys). Now all K are chosen
+      from the footage by Video Encoder's `colour_kmeans` (`--palette
+      colourN`: CIELAB, chroma-weighted, black fixed); the band takes the
+      nearest four DIFFERENT entries through a band map the engine applies
+      on all four planes; keeping the band's CGA colours is an option (the
+      Battle tab). Each colour's pixel value is Video Player's
+      `PLANE_CODES` in Gray order, so a change to a neighbouring brightness
+      is one store: with the 16-row bands, 25 flash pixels a sampled frame
+      where the plain codes left 135, and 8% fewer bytes than the old
+      palette's. Format 9 also moves the sixteen colours to 464 by pixel
+      value: at 352 their sixteenth overlapped the hold order's count, and
+      a 16-colour rendition's hold was garbage (the hold order now holds 16
+      ranges). No legacy reader: nothing has shipped (the owner).
 
 ## What it costs
 

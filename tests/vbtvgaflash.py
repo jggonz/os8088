@@ -97,7 +97,7 @@ def title_frames(data):
 def glass_flashes(tmp, data, syms, n):
     """The mean flash pixels a sample over N samples of the title loop"""
     frames, rows = title_frames(data)
-    pal = [tuple(data[352 + 3 * i:355 + 3 * i]) for i in range(16)]
+    pal = [tuple(data[464 + 3 * i:467 + 3 * i]) for i in range(16)]
     rgb = np.array([[(c << 2) | (c >> 4) for c in v] for v in pal], np.int16)
     allowed = np.zeros((rows, 320, 16), bool)
     yy, xx = np.arange(rows)[:, None], np.arange(320)[None, :]

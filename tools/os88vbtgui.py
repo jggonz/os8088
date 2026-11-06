@@ -1136,6 +1136,15 @@ class BattleTab(object):
         cbb.bind("<<ComboboxSelected>>", lambda e: self._rends())
         self.rbnote = ttk.Label(vb, text="", wraplength=640)
         self.rbnote.pack(side="left", padx=6)
+        # THE BAND'S COLOURS on VGA (126.3.2): the nearest four of the
+        # footage's by default; kept as CGA's own only when asked, at the
+        # cost of four of the VGA's colours
+        self.rbcga = tk.IntVar()
+        ttk.Checkbutton(rf, text="Keep the band's CGA colours on VGA (they "
+                        "take four of its colours; otherwise the band uses "
+                        "the nearest four of the footage's)",
+                        variable=self.rbcga, command=self._rends).grid(
+                            row=4, column=0, columnspan=4, sticky="w")
         # THE PICTURE'S SIZE, each rendition's: a smaller picture centred in
         # black is fewer bytes a frame - the black never changes - so a
         # heavy adapter (Hercules' 640 x 232) can be set down
@@ -1276,6 +1285,7 @@ class BattleTab(object):
         self.rherc.set(1 if "herc" in rs else 0)
         self.rcol.set(str(t.get("vga_colours", 8)))
         self.rnote.config(text=REND_NOTE.get(int(self.rcol.get()), ""))
+        self.rbcga.set(1 if t.get("vga_band_cga") else 0)
         vbn = t.get("vga_bands", VGA_BANDS_DEFAULT)
         self.rband.set(dict(VGA_BANDS).get(vbn, str(vbn)))
         self.rbnote.config(text=VGA_BAND_NOTE.get(vbn, ""))
@@ -1325,6 +1335,9 @@ class BattleTab(object):
         n = int(self.rcol.get() or 8)
         if n != t.get("vga_colours", 8):
             self.app.edit("set", ("target", "vga_colours"), n)
+        if bool(self.rbcga.get()) != bool(t.get("vga_band_cga")):
+            self.app.edit("set", ("target", "vga_band_cga"),
+                          bool(self.rbcga.get()))
         lab = self.rband.get()
         for v, l in VGA_BANDS:
             if l == lab and v != t.get("vga_bands", VGA_BANDS_DEFAULT):
@@ -2802,12 +2815,12 @@ class OpeningsTab(object):
 
 # what a VGA rendition's colours cost, measured (VBATTLE-MEMORY-PLAN 2: the
 # owner's Attack1, unbudgeted, against CGA4's 82 KB/s)
-REND_NOTE = {4: "Four colours: the band's own, about what CGA4 costs (x1.2).",
-             8: "Eight: the band's four and four of the footage's - about "
-                "twice CGA4's data (x2.1). Usually the right choice.",
-             16: "Sixteen: the band's four and twelve of the footage's - "
-                 "about three times CGA4's data (x3.1): a fast disk, or "
-                 "memory to hold it."}
+REND_NOTE = {4: "Four colours, chosen from the footage: about what CGA4 "
+                "costs (x1.2).",
+             8: "Eight, chosen from the footage for colour - about twice "
+                "CGA4's data (x2.1). Usually the right choice.",
+             16: "Sixteen - about three times CGA4's data (x3.1): a fast "
+                 "disk, or memory to hold it."}
 # VGA's write bands (target.vga_bands, rows; 0 the whole frame): measured on
 # 86Box's VGA XT with real footage - the flash pixels a sampled frame and
 # the records' bytes against the whole frame (SPEC.md 126.3.2)
@@ -2818,7 +2831,7 @@ VGA_BAND_NOTE = {
     0: "Smallest and fastest; a changing pixel shows a wrong colour while "
        "the frame is written (~300 flash pixels a frame on real footage).",
     32: "~4x fewer flashes for ~6% more data.",
-    16: "~10x fewer flashes for ~12% more data. The default.",
+    16: "~12x fewer flashes for ~9% more data. The default.",
     8: "~14x fewer flashes for ~24% more data: a fast disk or a hold."}
 BAYER4 = ((0, 8, 2, 10), (12, 4, 14, 6), (3, 11, 1, 9), (15, 7, 13, 5))
 HOW_LABELS = (("hold", "Hold its last frame"),

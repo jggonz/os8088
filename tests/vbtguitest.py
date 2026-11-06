@@ -405,9 +405,24 @@ with tempfile.TemporaryDirectory() as tdir:
            % (kind, len(d9) // 1024))
     B2.REND = B2.Rend("cga4")
     pal = A.battle_palette(pr, 8)
-    ok([tuple(c) for c in pal[:4]] == [tuple(c) for c in
-                                       A.palette_rgb(pr.d["target"]["palette"])],
-       "a VGA palette's slots 0..3 are the band's CGA colours")
+    band4 = [tuple(c) for c in A.palette_rgb(pr.d["target"]["palette"])]
+    bi = A.band_index(pr, 8)
+    pr.set(("target", "vga_band_cga"), True)
+    kept = [tuple(c) for c in A.battle_palette(pr, 8)]
+    pr.set(("target", "vga_band_cga"), False)
+    ok(len(pal) == 8 and len(set(bi)) == 4 and all(c in kept for c in band4),
+       "VGA's eight chosen from the footage, the band mapped to four DIFFERENT "
+       "of them; target.vga_band_cga keeps the band's CGA four exactly")
+    dv = B2.build_project(pr, kind="vga4")      # FORMAT 9 (126.3.2): the
+    codes = B2.vga_codes(len(pal))              # sixteen at 464 by pixel
+    p16 = [tuple(dv[464 + 3 * i:467 + 3 * i]) for i in range(16)]  # value,
+    ok(dv[4] == 9 and all(p16[codes[i]] == tuple(v >> 2 for v in c)   # the
+                          for i, c in enumerate(pal)) and          # band map
+       list(dv[352:356]) == [codes[j] for j in A.band_index(pr, 8)] and
+       len(set(dv[352:356])) == 4,
+       "format 9: VGA's palette at 464 by plane code, the band's map at 352 "
+       "- four DIFFERENT values")
+    B2.REND = B2.Rend("cga4")
     fr = np.zeros((3, 8, 16, 3), np.uint8)
     fr[:] = 120
     fr[2, 0, 0] = (124, 118, 121)       # a pixel that barely moved

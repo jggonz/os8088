@@ -50,7 +50,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import os88vid as V  # noqa: E402
 
 MAGIC = b"VBT1"
-VERSION = 8
+VERSION = 9
 SECTOR = 512
 ALIGN = 4096        # every region starts on 4 KB: OSAPI_FILE_READ_SEQ seeks
                     # and reads in CLUSTER multiples, and 4 KB covers every
@@ -113,8 +113,15 @@ class Rend:
     frames are the project's same frames; only the bytes differ"""
     KIND = {"cga4": 0, "vga4": 1, "herc": 2}
 
-    def __init__(self, kind="cga4", rows=142, pal=None, vband=0):
+    def __init__(self, kind="cga4", rows=142, pal=None, vband=0, codes=None,
+                 bmap=(0, 1, 2, 3)):
         self.kind, self.code = kind, self.KIND[kind]
+        # vga4: palette index -> pixel VALUE (os88vid.plane_code: a colour's
+        # bits on a GROUP of planes, so planes agree and a byte is fewer
+        # stores), and the band's four colours' values (126.3.2)
+        self.codes = np.array(codes if codes is not None else range(16),
+                              np.uint8)
+        self.bmap = tuple(bmap)
         self.vband = vband          # vga4: rows a BAND (0: the whole frame)
         self.w = 640 if kind == "herc" else 320
         self.full = 348 if kind == "herc" else 200
@@ -154,7 +161,7 @@ class Rend:
         g = self.geom(rows)
         s = self.blank()
         if self.kind == "vga4":
-            g.put(s, px[:rows].astype(np.uint8).tobytes())
+            g.put(s, self.codes[px[:rows].astype(np.uint8)].tobytes())
         else:
             g.put(s, np.packbits(px[:rows].astype(np.uint8), axis=1).tobytes())
         return s
@@ -194,6 +201,18 @@ class Rend:
 
 REND = Rend()
 VGA_BANDS = 16                  # target.vga_bands' default (126.3.2)
+
+
+def vga_codes(n):
+    """Palette index -> pixel VALUE for N VGA colours (126.3.2): Video
+    Player's PLANE_CODES (a colour's bits on a GROUP of planes, so planes
+    agree), taken in GRAY-CODE order. The palette is darkest first, and most
+    of a frame's changes - dither, a gradient, a fade - move a pixel to a
+    NEIGHBOURING brightness; in Gray order neighbours differ in ONE plane
+    group, so such a change is one store, which cannot be caught
+    half-written, and fewer bytes"""
+    pc = V.plane_code(n)
+    return [pc[i ^ (i >> 1)] for i in range(n)]
 
 
 def vga_banded(ops, rows, wb):
@@ -802,8 +821,9 @@ def build(b):
     struct.pack_into("<H", h, 398, len(hold))
     for i, (a4, n4) in enumerate(hold):
         struct.pack_into("<HH", h, 400 + 4 * i, a4, n4)
-    if REND.pal:                        # vga4: its sixteen, the DAC's six bits
-        h[352:400] = bytes(v for c in REND.pal for v in c)
+    if REND.pal:                        # vga4: the band's map (its four
+        h[352:356] = bytes(REND.bmap)   # colours' values), and the sixteen
+        h[464:512] = bytes(v for c in REND.pal for v in c)  # by value
     struct.pack_into("<II", h, 338, idl_at, len(idle))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
@@ -836,7 +856,8 @@ def build(b):
 
 
 VB_HEAD = 40960         # what a clip's start waits for (vbattle.asm VB_HEAD)
-HOLD_MAX = 28           # the hold order's ranges (header 398..511)
+HOLD_MAX = 16           # the hold order's ranges (header 398..463; format 9:
+                        # VGA's palette is 464..511)
 MUSIC_RES = 61440       # music this short is resident (VB_MRES)
 
 
@@ -913,9 +934,11 @@ class Bundle:
         self.cover = data[cat:cat + clen] if clen else None
         global REND
         kind = {0: "cga4", 1: "vga4", 2: "herc"}[data[337]]
-        REND = Rend(kind, self.rows, [tuple(data[352 + 3 * i:355 + 3 * i])
+        REND = Rend(kind, self.rows, [tuple(data[464 + 3 * i:467 + 3 * i])
                                       for i in range(16)]
-                    if kind == "vga4" else None)
+                    if kind == "vga4" else None,
+                    bmap=tuple(data[352:356]) if kind == "vga4"
+                    else (0, 1, 2, 3))
         self.rend = REND
         self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
         nh = struct.unpack_from("<H", data, 398)[0]
@@ -1127,8 +1150,8 @@ def verify(data, quiet=False):
 
 def demo(bars=16, floppy=False, kind="cga4"):
     """The demo battle: its project (demo_project), as a Battle - in
-    rendition KIND (its made-up scenes are CGA's, which VGA's slots 0..3 and
-    Hercules' two by two show as they are)"""
+    rendition KIND (its made-up scenes are CGA's, which VGA shows in the
+    band's four colours and Hercules two by two)"""
     return battle_of(demo_project(None, bars, floppy), kind=kind)
 
 
@@ -1144,12 +1167,17 @@ def battle_of(proj, progress=None, kind="cga4"):
     w_, rows_, full_ = A_.rend_size(proj, kind)
     b = Battle(t["palette"], rows_, t["fps"], t["rate"])
     pal = None
-    if kind == "vga4":              # one palette for the battle, six bits,
-        p8 = A_.battle_palette(proj, t.get("vga_colours", 8), progress or
-                               (lambda *a: None))
-        pal = [tuple(v >> 2 for v in c) for c in p8] + \
-            [(0, 0, 0)] * (16 - len(p8))
-    b.rend = Rend(kind, rows_, pal, t.get("vga_bands", VGA_BANDS))
+    codes, bmap = None, (0, 1, 2, 3)
+    if kind == "vga4":              # ONE PALETTE for the battle (126.3.2):
+        k = t.get("vga_colours", 8)     # K colours chosen for colour, each
+        p8 = A_.battle_palette(proj, k, progress or (lambda *a: None))
+        codes = vga_codes(len(p8))      # on a group of planes by its index
+        pal = [(0, 0, 0)] * 16          # (the DAC's six bits, by VALUE)
+        for i, c in enumerate(p8):
+            pal[codes[i]] = tuple(v >> 2 for v in c)
+        bmap = [codes[j] for j in A_.band_index(proj, k)]
+    b.rend = Rend(kind, rows_, pal, t.get("vga_bands", VGA_BANDS), codes,
+                  bmap)
     if t.get("burst_cap", True):    # THE READER'S MODEL (126.4.1): the
         import os88venc as VE_      # profile's disk at three quarters,
         disk = VE_.PROFILES.get(t.get("profile"), {}).get("disk") or 119000

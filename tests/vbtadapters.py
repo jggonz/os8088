@@ -14,8 +14,9 @@ For each adapter:
     Hercules' memory as it is, the canvas at its byte 5;
   - Enter FADES it: the lit pixels fall to under a third;
   - at the menu, the BAND on the glass is the engine's own band buffer
-    ([vb_cseg], two bits a pixel) as the host converts it - planes 0 and 1
-    and nothing in 2 and 3 on VGA, every pixel two by two on Hercules - so
+    ([vb_cseg], two bits a pixel) as the host converts it - on VGA each
+    colour its pixel value through the band map on all four planes (126.3.2),
+    every pixel two by two on Hercules - so
     the present (vbband.inc's vb_bpres) is held exact;
   - the canvas shows the idle loop's own frames;
   - one Attack, and victory fades to its end loop, which plays.
@@ -61,13 +62,15 @@ def host_vga(surf, rows):
     return [bytes(surf[p * V.PLANE:p * V.PLANE + rows * 40]) for p in range(4)]
 
 
-def band_vga(cbuf, by, rows):
+def band_vga(cbuf, by, rows, bmap=(0, 1, 2, 3)):
     """The band's buffer (80 bytes a row, 2 bits a pixel) as mode 0Dh's
-    planes over rows BY..199"""
+    planes over rows BY..199, each colour its pixel VALUE through the
+    bundle's band map (header 352, SPEC.md 126.3.2)"""
     a = np.frombuffer(cbuf, np.uint8)[:80 * (200 - by)].reshape(200 - by, 80)
     px = np.zeros((200 - by, 320), np.uint8)
     for k in range(4):
         px[:, k::4] = (a >> (6 - 2 * k)) & 3
+    px = np.array(bmap, np.uint8)[px]
     out = []
     for p in range(4):
         out.append(np.packbits((px >> p) & 1, axis=1).tobytes())
@@ -211,7 +214,7 @@ def run(tmp, kind, machine, code, syms):
             quiet = rb("vb_tcomp") == 0 and rb("vb_dirty") == 0
             if kind == "vga4":
                 okb = m.planes(offset=by * 40, length=(200 - by) * 40) == \
-                    band_vga(cbuf, by, 200 - by)
+                    band_vga(cbuf, by, 200 - by, R.bmap)
             else:
                 mem = m.read(0xB0000, 32768)
                 okb = all(mem[o:o + 80] == r for o, r in

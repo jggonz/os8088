@@ -1038,9 +1038,10 @@ vb_text:
 ; vb_bpres - the band's buffer ([vb_cseg], 2 bits a pixel, 80 bytes a row)
 ; onto a VGA4 or a Hercules screen: CX rows from screen row DX (the band's
 ; logical rows, as on CGA), cells BX to AX (exclusive), 8 pixels each. VGA4:
-; the band's colours are the palette's slots 0..3 (vbtana.battle_palette),
-; so planes 0 and 1 carry them and 2 and 3 are cleared; a row's plane at a
-; time with interrupts off, since the hook's decode moves the Map Mask.
+; the band's four colours are the pixel values of the header's band map
+; (vb_bmap, SPEC.md 126.3.2), all four planes from vb_bptab's two tables; a
+; row's plane at a time with interrupts off, since the hook's decode moves
+; the Map Mask.
 ; Hercules: each pixel two by two (vbtana.HERC22), the canvas's rows above
 vb_bpres:
     push si
@@ -1073,11 +1074,13 @@ vb_bpres:
     mul dx
     add ax, [vb_bpc0]
     mov di, ax
-    mov bp, 0x0C                    ; planes 2 and 3: none of the band's
-    call .vclr
-    mov bp, 0x0102                  ; plane 0 (the table's low nibbles)
+    mov bp, 0x0102                  ; plane 0 (vb_vptab's low nibbles)
     call .vpl
     mov bp, 0x0202                  ; plane 1 (the high)
+    call .vpl
+    mov bp, 0x0402                  ; planes 2 and 3: vb_vptab2's (the
+    call .vpl                       ; band's map, 126.3.2)
+    mov bp, 0x0802
     call .vpl
     jmp short .next
 .herc:
@@ -1137,23 +1140,6 @@ vb_bpres:
     pop si
     pop ax
     ret
-.vclr:                              ; planes BP's low byte: cleared
-    pushf
-    cli
-    push di
-    mov dx, 0x3C4
-    mov ax, bp
-    mov ah, al
-    mov al, 2
-    out dx, ax
-    mov cx, [vb_bpcn]
-    xor al, al
-    rep stosb
-    pop di
-    mov ax, 0x0F02
-    out dx, ax
-    popf
-    ret
 .vpl:                               ; plane BP's high byte, its nibbles out
     pushf                           ; of the table by BP's low byte's half
     cli
@@ -1164,17 +1150,25 @@ vb_bpres:
     mov al, 2
     out dx, ax
     mov cx, [vb_bpcn]
+    mov dx, vb_vptab                ; (planes 2 and 3: the second table)
+    test bp, 0x0C00
+    jz .vt
+    mov dx, vb_vptab2
+.vt:
     push ds
     mov ds, [vb_cseg]
 .vb:
     lodsb                           ; the cell's left four pixels...
     xor bh, bh
     mov bl, al
-    mov ah, [cs:vb_vptab+bx]
+    add bx, dx
+    mov ah, [cs:bx]
     lodsb                           ; ...and its right four
+    xor bh, bh
     mov bl, al
-    mov al, [cs:vb_vptab+bx]
-    test bp, 0x0100
+    add bx, dx
+    mov al, [cs:bx]
+    test bp, 0x0500                 ; (planes 0 and 2: the low nibbles)
     jnz .lo
     and ah, 0xF0                    ; plane 1: the high nibbles
     shr al, 1
@@ -1193,6 +1187,7 @@ vb_bpres:
     stosb
     loop .vb
     pop ds
+    mov dx, 0x3C4
     mov ax, 0x0F02
     out dx, ax
     pop di
@@ -1205,17 +1200,23 @@ vb_bpres:
 ; (high); Hercules', the same byte as its 8 pixels on an even row and on an
 ; odd (vbtana.HERC22: 0 none, 1 one, 2 a checker, 3 all)
 vb_bptab:
+    mov ax, [vb_meta+VH_BMAP]       ; THE BAND'S MAP (126.3.2): its four
+    mov [vb_bmap], ax               ; colours' pixel values on VGA4 (a
+    mov ax, [vb_meta+VH_BMAP+2]     ; Hercules' tables ignore it)
+    mov [vb_bmap+2], ax
     xor bx, bx
 .b:
     xor dx, dx                      ; DL: Hercules' even row, DH: its odd
     xor cx, cx                      ; CL: plane 0's bits, CH: plane 1's
+    mov [vb_bp2], cl                ; (and 2's and 3's)
+    mov [vb_bp3], cl
     mov al, bl
     mov si, 4
 .p:
     mov ah, al
     rol ah, 1
     rol ah, 1
-    and ah, 3                       ; this pixel's value, 0..3
+    and ah, 3                       ; this pixel's band colour, 0..3
     shl al, 1
     shl al, 1
     push bx
@@ -1227,6 +1228,7 @@ vb_bptab:
     shl dh, 1
     shl dh, 1
     or dh, [vb_hvo+bx]
+    mov ah, [vb_bmap+bx]            ; ...and its pixel VALUE on VGA4
     pop bx
     shl cl, 1
     test ah, 1
@@ -1238,6 +1240,16 @@ vb_bptab:
     jz .c
     or ch, 1
 .c:
+    shl byte [vb_bp2], 1
+    test ah, 4
+    jz .d
+    or byte [vb_bp2], 1
+.d:
+    shl byte [vb_bp3], 1
+    test ah, 8
+    jz .e
+    or byte [vb_bp3], 1
+.e:
     dec si
     jnz .p
     shl ch, 1
@@ -1246,6 +1258,13 @@ vb_bptab:
     shl ch, 1
     or cl, ch
     mov [vb_vptab+bx], cl
+    mov al, [vb_bp3]
+    mov cl, 4
+    shl al, cl
+    mov ah, [vb_bp2]
+    and ah, 0x0F
+    or al, ah
+    mov [vb_vptab2+bx], al
     mov [vb_hptab+bx], dl
     mov [vb_hptab+256+bx], dh
     inc bx

@@ -12,7 +12,8 @@
 ; from the name (the SDK's own seek, 18.4.8).
 ; =============================================================================
 
-VB_HMAX     equ 28              ; ranges in the hold order (header 398..511)
+VB_HMAX     equ 16              ; ranges in the hold order (header 398..463;
+                                ; format 9: VGA's palette is 464..511)
 VH_HOLDN    equ 398             ; word: the hold order's ranges
 VH_HOLD     equ 400             ; ...each (first 4 KB, 4 KBs), most worth first
 VH_TOTAL    equ 52              ; dword: the file's length

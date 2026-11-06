@@ -131,7 +131,11 @@ VH_LEAVE    equ 331             ; FFh: the title is left by a fade
 VH_ENDS     equ 332             ; victory, defeat: (how, end loop) bytes
 VH_FSTEPS   equ 336             ; a fade's steps, 1..16
 VH_KIND     equ 337             ; the adapter: VK_CGA4, VK_VGA4, VK_HERC
-VH_VPAL     equ 352             ; VGA4's sixteen (r, g, b), six bits each
+VH_BMAP     equ 352             ; VGA4: the band's four colours' pixel
+                                ; VALUES (126.3.2, format 9)
+VH_VPAL     equ 464             ; VGA4's sixteen (r, g, b), six bits each, by
+                                ; pixel value (format 9: was 352, under the
+                                ; hold order's count at 398)
 VK_CGA4     equ 0
 VK_VGA4     equ 1
 VK_HERC     equ 2
@@ -417,7 +421,7 @@ vb_embfind:
     jne .no
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .no
-    cmp word [vb_meta+VH_VER], 8
+    cmp word [vb_meta+VH_VER], 9
     jne .no
     mov [vb_embat], ax              ; ours
     mov [vb_embat+2], dx
@@ -515,7 +519,7 @@ vb_coverload:
     jne .tno
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .tno
-    cmp word [vb_meta+VH_VER], 8
+    cmp word [vb_meta+VH_VER], 9
     jne .tno
     clc
     ret
@@ -1683,8 +1687,9 @@ vb_load:
     jne .fail1
     cmp word [vb_meta+VH_MAGIC+2], 'T1'
     jne .fail1
-    mov word [vb_err], vb_s_oldvbt  ; (format 7: the entries resident -
-    cmp word [vb_meta+VH_VER], 8    ; rebuilt, they ride in their clips)
+    mov word [vb_err], vb_s_oldvbt  ; (format 8: VGA's palette at 352, 7: the
+                                    ; entries resident -
+    cmp word [vb_meta+VH_VER], 9    ; rebuilt, they ride in their clips)
     jne .fail1
     mov word [vb_err], vb_s_notvbt
     mov ax, [vb_meta+VH_NCLIPS]
@@ -2955,7 +2960,7 @@ vb_palette:
     int 0x10
     push ds
     pop es
-    mov dx, vb_meta+VH_VPAL
+    mov dx, vb_meta+VH_VPAL         ; (its sixteen at 464, format 9)
     xor bx, bx
     mov cx, 16
     mov ax, 0x1012
@@ -5035,6 +5040,10 @@ VB_VAR vb_tcol0, 2                  ; a text's first cell (vb_text)
 VB_VAR vb_bpc0, 2                   ; vb_bpres: the first cell...
 VB_VAR vb_bpcn, 2                   ; ...and how many
 VB_VAR vb_vptab, 256                ; VGA4: a band byte's planes 0 and 1
+VB_VAR vb_vptab2, 256               ; ...and 2 and 3 (126.3.2's band map)
+VB_VAR vb_bmap, 4                   ; the band's four colours' pixel values
+VB_VAR vb_bp2, 1                    ; (vb_bptab's: planes 2 and 3 a pixel
+VB_VAR vb_bp3, 1                    ; at a time)
 VB_VAR vb_hptab, 512                ; Hercules: its even and odd rows
 VB_VAR vb_namep, 2                  ; the bundle's name: its own rendition's                   ; the rings' guard, KB: 16 or 32
 VB_VAR vb_pidl, 2                   ; the idle loop's part of the claim
