@@ -2944,16 +2944,17 @@ class OpeningsTab(object):
 REND_NOTE = {4: "Four: black and three chosen from the footage, none a "
                 "clip's own - about what CGA4 costs (x1.2). \"Keep the "
                 "band's CGA colours\" makes them CGA's own four.",
-             8: "Eight: black, white and five shared, chosen from every "
-                "clip for colour, and one more each clip's own - about "
-                "twice CGA4's data (x2.1). Usually the right choice.",
-             16: "Sixteen: black, white and ten shared, and four each "
-                 "clip's own - about three times CGA4's data (x3.1): a "
-                 "fast disk, or memory to hold it."}
+             8: "Eight: black, white and six chosen from the idle loop "
+                "and every clip for colour - about twice CGA4's data "
+                "(x2.1). Usually the right choice.",
+             16: "Sixteen: black, white and fourteen chosen from the idle "
+                 "loop and every clip - about three times CGA4's data "
+                 "(x3.1): a fast disk, or memory to hold it."}
 # each clip's own VGA colours (target.vga_clip_colours; SPEC.md 126.3.2)
 OWN_NOTE = ("%d of the %d are each clip's own, loaded as it starts (auto: "
-            "4 of 16, 1 of 8, none of 4); a clip's first and last frames "
-            "use the shared alone, so the swap never shows")
+            "none - every colour shared, chosen over the idle loop and every "
+            "clip, so a join keeps one dither; a clip's own may suit footage "
+            "whose clips have colours of their own)")
 # VGA's write bands (target.vga_bands, rows; 0 the whole frame): measured on
 # 86Box's VGA XT with real footage - the flash pixels a sampled frame and
 # the records' bytes against the whole frame (SPEC.md 126.3.2)
@@ -3506,7 +3507,7 @@ def vga_colours(path, k=None, clip=None):
     data = open(path, "rb").read()
     bd = B.Bundle(data)
     k, slots = bd.vga or (k or 8, 0)
-    codes = B.vga_codes(k)
+    codes = bd.codes or B.vga_codes(k)     # (the bundle's own values)
     bmap = list(data[352:356])
     pal = [tuple(data[464 + 3 * c:467 + 3 * c]) for c in codes]
     c = bd.clips[clip] if clip is not None and 0 <= clip < len(bd.clips) \

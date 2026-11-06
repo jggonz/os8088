@@ -251,6 +251,116 @@ def vga_codes(n):
     return [pc[i ^ (i >> 1)] for i in range(n)]
 
 
+ORDER_PLANE = 1.0       # vga_order: a plane store's cost, in dE (so like
+#                         stays near like when no intermediate is seen)
+ORDER_FAR = 60.0        # ...an intermediate whose colour is not known (an
+#                         own slot under a stream with none loaded)
+
+
+def plane_groups(codes):
+    """The PLANE GROUPS of a set of values: planes whose bits agree in every
+    value are written together, one store (os88vid.vga4_subs puts planes
+    wanting the same byte under one mask) - masks, e.g. 3 and 12 for four
+    colours"""
+    out = []
+    for p in range(4):
+        for i, g in enumerate(out):
+            q = (g & -g).bit_length() - 1
+            if all((v >> p & 1) == (v >> q & 1) for v in codes):
+                out[i] |= 1 << p
+                break
+        else:
+            out.append(1 << p)
+    return out
+
+
+def vga_order(streams, codes0, fixed=(0,)):
+    """VGA4's colours' PIXEL VALUES chosen against the TEARING (126.3.2): a
+    change of a pixel from colour i to j is written plane group by plane
+    group, and between the first store and the last the pixel shows the
+    colour of a value that is neither - the owner's "swaths of the screen
+    changing from brown into bright red and teal". STREAMS: [(frames as
+    colour indexes, the stream's colours, 8-bit)]. The cost of an order is,
+    over every change in every stream, the worst colour a half-written pixel
+    can show - each intermediate value's nearer distance (CIELAB) to the
+    old colour or the new, 0 when one plane flips - and ORDER_PLANE a plane
+    written. A local search swaps two colours' values while the cost falls;
+    the values stay CODES0's set (a group of planes per colour, 8 and 4) and
+    FIXED keeps index 0 (black) at value 0, which a fade's masks reach.
+    Returns the values, index order"""
+    import os88cgacomp as cc
+    k = len(codes0)
+    vals = sorted(codes0)
+    pos = {v: i for i, v in enumerate(vals)}
+    nv = len(vals)
+    grp = plane_groups(codes0)
+    inter = np.zeros((nv, nv, 16), bool)       # [a, b, m]: m between them
+    pop = np.zeros((nv, nv))
+    for a in vals:
+        for b in vals:
+            fl = [g for g in grp if (a ^ b) & g]    # the groups it writes:
+            pop[pos[a], pos[b]] = len(fl)           # a store each
+            for sel in range(1, (1 << len(fl)) - 1):
+                sub = 0
+                for x, g in enumerate(fl):
+                    if sel >> x & 1:
+                        sub |= g
+                inter[pos[a], pos[b], a ^ sub] = True
+    data = []
+    for frames, pal in streams:
+        if len(frames) < 2:
+            continue
+        t = np.zeros((k, k), np.float64)
+        for f0, f1 in zip(frames[:-1:2], frames[1::2]):
+            a = np.asarray(f0)[::2].ravel().astype(np.int64)
+            b = np.asarray(f1)[::2].ravel().astype(np.int64)
+            ch = a != b
+            np.add.at(t, (a[ch], b[ch]), 1)
+        if t.sum():
+            lab = cc.srgb2lab(np.array(list(pal) + [(0, 0, 0)] * (k - len(pal)),
+                                       np.float64))
+            data.append((t, lab, len(pal)))
+
+    def cost(c):
+        tot = 0.0
+        inv = {v: i for i, v in enumerate(c)}
+        for t, lab, n in data:
+            colv = np.full((16, 3), np.nan)
+            for v in range(16):
+                i = inv.get(v)
+                if i is not None and i < n:
+                    colv[v] = lab[i]
+                elif v not in inv:
+                    colv[v] = (0, 0, 0)     # (a value no colour has: black)
+            d = np.sqrt(((colv[:, None] - colv[None]) ** 2).sum(-1))
+            d = np.where(np.isnan(d), ORDER_FAR, d)
+            ci = np.array(c)
+            # [i, j]: the worst intermediate of value c_i -> c_j
+            ii = np.array([pos[v] for v in c])
+            im = inter[ii[:, None], ii[None, :]]            # k x k x 16
+            near = np.minimum(d[:, ci].T[:, None, :], d[:, ci].T[None, :, :])
+            worst = np.where(im, near, 0).max(-1)
+            tot += (t * (worst + ORDER_PLANE * pop[ii[:, None], ii[None, :]])
+                    ).sum()
+        return tot
+    c = list(codes0)
+    best = cost(c)
+    free = [i for i in range(k) if i not in fixed]
+    better = True
+    while better:
+        better = False
+        for x in range(len(free)):
+            for y in range(x + 1, len(free)):
+                i, j = free[x], free[y]
+                c[i], c[j] = c[j], c[i]
+                v = cost(c)
+                if v < best - 1e-9:
+                    best, better = v, True
+                else:
+                    c[i], c[j] = c[j], c[i]
+    return c
+
+
 def vga_banded(ops, rows, wb):
     """VGA4's sub-records [(mask, spans)] in BANDS of ROWS rows (SPEC.md
     126.3.2): every mask's writes to one band, then the next band's. The
@@ -910,6 +1020,8 @@ def build(b):
         h[464:512] = bytes(v for c in REND.pal for v in c)  # by value
         h[349:351] = bytes(b.vga or (len(REND.codes), 0))   # K, a clip's own
         h[351] = 1 if b.vlayer else 0   # the band's pictures in its colours
+        h[360:360 + len(REND.codes)] = bytes(int(v) for v in REND.codes)  # a
+        #                                 colour's VALUE, index order (vga_order)
     struct.pack_into("<II", h, 338, idl_at, len(idle))
     for i, (nm, o, ln) in enumerate(ui_tab):    # 96: the menu's effects
         struct.pack_into("<IH", h, 96 + 6 * i, o, ln)
@@ -1041,6 +1153,8 @@ class Bundle:
                     else (0, 1, 2, 3))
         self.rend = REND
         self.vga = (data[349], data[350]) if kind == "vga4" else None
+        self.codes = list(data[360:360 + data[349]]) if kind == "vga4" \
+            else None
         self.vlayer = bool(data[351]) if kind == "vga4" else False
         self.idl_at, ilen2 = struct.unpack_from("<II", data, 338)
         nh = struct.unpack_from("<H", data, 398)[0]
@@ -1109,7 +1223,7 @@ def verify(data, quiet=False):
 
     own_v = []                  # vga4: the own slots' pixel values (126.3.2)
     if b.vga and b.vga[1]:
-        own_v = vga_codes(b.vga[0])[b.vga[0] - b.vga[1]:]
+        own_v = (b.codes or vga_codes(b.vga[0]))[b.vga[0] - b.vga[1]:]
 
     def owned(s, c):
         """Screen S after a record of clip C (None: the idle loop): a pixel
@@ -1379,7 +1493,7 @@ def battle_of(proj, progress=None, kind="cga4"):
         spf = t["rate"] // t["fps"]
         cues = [(q["frame"], cue_key(q, b.sfx, spf)) for q in c["cues"]]
         joins = c["joins"] and cid not in ending_clips
-        fr = A.frames_of(proj, cid, pg, kind)
+        fr = A.frames_of(proj, cid, pg, kind, seed=True)
         b.clips.append(dict(name=cid, frames=fr, dac=dac_of(cid),
                             # (THE ENEMY'S VICTORY AND DEFEAT CLIPS are
                             # endings, whatever their own flags: they end
@@ -1463,6 +1577,36 @@ def battle_of(proj, progress=None, kind="cga4"):
     # battle with none gets START at 0 (build) - then the rest
     opened = b.openings or [dict(name="start")]
     idx = {c["name"]: i for i, c in enumerate(opened + b.clips)}
+    if kind == "vga4":              # THE VALUES, against the tearing
+        sts = [(b.idle, A_.clip_palette(proj, "idle"))]     # (vga_order):
+        for o in b.openings:                    # every stream's changes, in
+            sts.append((o["frames"], A_.clip_palette(proj, o["name"])))
+        for c in b.clips:                       # its own colours
+            sts.append((c["frames"], A_.clip_palette(proj, c["name"])))
+        for lp in [b.title] + [e[1] for e in b.endings.values()]:
+            if lp and lp.get("src"):
+                sts.append((lp["frames"], A_.clip_palette(proj,
+                                                          lp["src"][0])))
+        new = vga_order(sts, codes)
+        remap = dict(zip(codes, new))   # (an old value -> the new)
+        codes = new
+        pal = [(0, 0, 0)] * 16
+        for i, c in enumerate(p8):
+            pal[codes[i]] = tuple(v >> 2 for v in c)
+        bmap = [codes[j] for j in A_.band_index(proj)]
+        b.rend = Rend(kind, rows_, pal, t.get("vga_bands", VGA_BANDS), codes,
+                      bmap)
+
+        def re(ld):
+            return [(remap[e[0]],) + tuple(e[1:]) for e in ld] if ld else ld
+        seen_ = set()
+        for x in b.openings + b.clips + [b.title] + \
+                [e[1] for e in b.endings.values()]:
+            if x and id(x) not in seen_:
+                seen_.add(id(x))
+                for kk in ("dac", "join_dac"):
+                    if x.get(kk):
+                        x[kk] = re(x[kk])
     b.images, places = images_of(proj, (
         list(A_.vga_plan(proj)["shared"]), codes[:len(codes) - slots])
         if kind == "vga4" else None)
@@ -1723,6 +1867,18 @@ def engine_path(build=None):
     return None
 
 
+def diag_path(build=None):
+    """VBATTLED.O88 - the engine that writes VBPROFn.DAT (SPEC.md 126.8) -
+    build/'s or one beside this tool; None when there is neither"""
+    here = os.path.dirname(os.path.abspath(__file__))
+    b = build or os.path.join(os.path.dirname(here), "build")
+    for p in (os.path.join(b, "vbattled.o88"),
+              os.path.join(here, "VBATTLED.O88")):
+        if os.path.exists(p):
+            return p
+    return None
+
+
 GAME_SUFFIX = {"cga4": "", "vga4": "V", "herc": "H"}
 
 # THE TITLE PICTURE (header 88, the region the entries left): shown in the
@@ -1855,6 +2011,9 @@ def disk_plan(proj, disk=None, bundle=None, out=None, build=None, stage=None,
                 files.append((BUNDLE_NAMES[k], f))
     if len(files) == 1 or not os.path.exists(files[1][1]):
         raise ValueError("no bundle: build it first")
+    dg = diag_path(build)               # A HARD DISK takes the profiling
+    if dg and M.DISKS[disk][1] == "hd":  # engine too (126.8): a play's
+        files.insert(1, ("VBATTLED.O88", dg))   # times, on the owner's 286
     big = M.fits(files, disk)
     if big:
         raise ValueError("it needs %d KB and %s holds %d KB" % (

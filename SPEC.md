@@ -242519,10 +242519,15 @@ then sets the mode, the palette and the decode.
   a shape that is not quite ours (a 640 x 480 source on Hercules' 640 x 348
   lost its sides to the crop).
 - **VGA4** is mode 0Dh, 320 x 200 in four planes of 40-byte rows, with K
-  colours (`target.vga_colours`: 4, 8 or 16). **SLOTS of them are each
-  clip's OWN** (`target.vga_clip_colours`; by default 4 of 16, 1 of 8,
-  none of 4 - the owner's plan) and the rest SHARED by every frame
-  (`vbtana.vga_plan`, format 10). The choice is BY ERROR
+  colours (`target.vga_colours`: 4, 8 or 16), **all SHARED by default**,
+  chosen over the idle loop and every clip together, so a colour that
+  recurs or stands out across the clips can take an entry the idle loop
+  alone would never give it. **SLOTS of them may be each clip's OWN**
+  (`target.vga_clip_colours`, 0 to 4; `vbtana.vga_plan`, format 10) - the
+  owner's first plan, 4 of 16 and 1 of 8, which proved worse: a clip's own
+  browns dithered its background another way than the idle loop's, so every
+  join redrew the whole background, and footage that turns round its
+  characters moves everywhere (2026-11-06). The choice is BY ERROR
   (`vbtana.plan_colours`): every stream - the idle loop and each video
   clip a build plays, keyed by clip id wherever it plays - is sampled, and
   a pixel's error is its squared CIELAB distance to the nearest colour it
@@ -242571,6 +242576,31 @@ then sets the mode, the palette and the decode.
   engine takes them from the records. Each clip is quantized on its own in
   its own colours (`vbtana.rend_screens`' STREAM), the idle loop and the
   scenes in the shared alone.
+- **An action's dither starts from the idle loop's screen** at its first
+  anchor (`vbtana.idle_seed`, Video Encoder's `--scene-hold`): its Knoll
+  ditherer is given the loop's indexes and their source as its last frame,
+  so the hold keeps every pixel still near its source as the loop drew it,
+  and the join redraws what changed rather than the same background in
+  another pattern. With own colours an action's own come from the pixels
+  that MOVED from that screen, and only those pixels may use them
+  (`vbtana.quant_split`). On test footage of a still background the entry
+  changed 0.0% of the canvas, against 8.5% from a fresh dither.
+- **The colours' VALUES are chosen against the TEARING** (`os88vbt.
+  vga_order`): a pixel's change is written plane group by plane group, and
+  until the last store it shows the colour of a value that is neither old
+  nor new - the owner's "swaths of the screen changing from brown into
+  bright red and teal". Over every change in every stream's dithered frames,
+  an order's cost is the worst colour a half-written pixel can show (each
+  intermediate value's nearer CIELAB distance to the old colour or the new;
+  0 when one group flips - one store cannot be caught half done), plus a
+  plane store each; a local search swaps two colours' values while it
+  falls, within the plane groups' values (`plane_groups`: 3 and 12 for four
+  colours, 9, 2 and 4 for eight) and with black kept at 0 for the fades.
+  Darkest first in Gray order, on test footage at 16 colours all shared,
+  35.9% of the changes could show a colour more than 20 dE from both, the
+  mean worst 21.2 dE; chosen, 17.4% and 7.4 dE (with 4 a clip's own: 83%
+  and 55 dE, chosen 20% and 10). The values are the header's at 360 (K
+  bytes, a colour's value in index order); `vbtgui` holds the search.
 - **The dither HOLDS** (`vbtana.KNOLL_HOLD`, Video Encoder's `--vga4-hold`
   24 with its score of 60, the pair it measured): a pixel keeps its colour
   while that colour is within 24 of the source, scored so a colour that
@@ -243173,6 +243203,14 @@ those four by the builder (`os88vbt.band_picture`: the nearest, after a
 4x4 ordered dither), and `tools/vbtband.py` draws the band from the same
 bytes for the builder's preview.
 
+**On VGA the band draws in two colours**: red (an action its cost cannot
+pay, the fallen, a fall in HP) is a GREY-OUT - the glyph in white on
+alternate pixels, its ground between (`vb_text`, `[vb_tgrey]`) - so the
+band's text is white on its ground and the shared colours keep only those
+two of its four, and the plain look's rule colour when it has no picture
+(the owner: red and teal held as "menu" that nothing on a pictured band
+drew).
+
 **On VGA a picture is in VGA's own colours** (format 10, header 351): the
 builder makes each picture a second time, dithered to the SHARED colours
 (126.3.2) as the video is (`os88vbt.band_picture_vga`), four planes of a
@@ -243540,3 +243578,38 @@ XT-IDE, 640 KB), with the system and the 25.6 s bundle on C:.
   cuts will do the same. A cut that must not tear wants Hercules's or a
   VGA's second page, and those renditions are not written. The demo now
   flashes the beetle alone.
+
+### 126.8 The play's profile: VBATTLED.O88
+
+**The engine built `VB_DIAG` times every frame it draws and logs every
+read, and writes them as `VBPROFn.DAT` beside itself when the play ends** -
+Video Player's VIDEOD (98.3.22) for the battle, for the owner's machines:
+"so we can track where we are losing performance, and have it log when
+done". `make` builds it as `build/vbattled.o88`; it rides on `vbattlev.img`,
+in the builder's zip, and on every hard disk the builder makes (the
+floppies have no room to spare). `tools/vbtprof.py VBPROFn.DAT [--bundle
+BATTLEV.VBT] [--frames]` reads it.
+
+- **The clock** is PIT channel 2 run free for the play (mode 2, 65,536
+  counts of 0.838 us, the speaker's data line off - the battle never sounds
+  the speaker), latched at a frame's start and end in the hook; a frame of
+  55 ms or more wraps.
+- **The claim** (`vbprof.inc`, ~62 KB) is made before the rings are sized,
+  so a profiled play's rings are that much smaller - as VIDEOD's are. On
+  kern_mega's real-mode bracket a claim is a selector the hook cannot write
+  through, and there the play is not profiled.
+- **A frame** (10 bytes, 5,000 at most): its time in `vb_frame` (the
+  decode), the time since the last frame's start, whether it STALLED (its
+  record not in its ring yet), the mode, the clip, KB of the clip read
+  ahead in its ring, the card's sound lead, and the hook's sound feed's
+  time since the last frame. **A read** (8 bytes, 1,536 at most): the hook's
+  period count as it began, the periods it took, its bytes and its file
+  offset in 4 KBs.
+- **The header** (64 bytes): `VBPR`, version 1, the counts, `VB_DIV`, the
+  frame rate, the sound rate and samples a frame, the adapter and VGA's K,
+  the frames late (forgiven) and stalled, the hook's periods, the reader's
+  periods, bytes and calls (126.4's own account), the bundle's name, whether
+  a card plays, the rings' KB, the entry sizes.
+- `vbtdiag` plays the demo on MartyPC's VGA XT, reads `VBPROF1.DAT` back
+  off B: and holds it to the play. Measured there: the title's VGA4 records
+  (8 colours) decode in 6.4 ms a frame against a 66.7 ms frame.

@@ -448,14 +448,33 @@ with tempfile.TemporaryDirectory() as tdir:
        "VGA's eight chosen from the footage, the band mapped to four DIFFERENT "
        "of them; target.vga_band_cga keeps the band's CGA four exactly")
     dv = B2.build_project(pr, kind="vga4")      # FORMAT 9 (126.3.2): the
-    codes = B2.vga_codes(len(pal))              # sixteen at 464 by pixel
+    codes = B2.Bundle(dv).codes                 # sixteen at 464 by pixel
     p16 = [tuple(dv[464 + 3 * i:467 + 3 * i]) for i in range(16)]  # value,
     ok(dv[4] == 10 and all(p16[codes[i]] == tuple(v >> 2 for v in c)  # the
                            for i, c in enumerate(pal)) and         # band map
        list(dv[352:356]) == [codes[j] for j in A.band_index(pr, 8)] and
-       len(set(dv[352:356])) == 4 and tuple(dv[349:351]) == (8, 1),
+       len(set(dv[352:356])) == 4 and tuple(dv[349:351]) == (8, 0),
        "format 10: VGA's palette at 464 by plane code, the band's map at 352 "
-       "- four DIFFERENT values - and K and a clip's own at 349 (8, 1)")
+       "- four DIFFERENT values - and K and a clip's own at 349 (8, none by "
+       "default)")
+    # THE VALUES AGAINST THE TEARING (vga_order): two browns a pixel moves
+    # between, a cyan and black - in Gray order the browns are two planes
+    # apart, and a half-written pixel is black or cyan; chosen, one plane
+    fr = [np.full((4, 8), 1 + 2 * (i % 2), np.uint8) for i in range(8)]
+    po4 = [(0, 0, 0), (120, 80, 40), (0, 255, 255), (130, 85, 45)]
+    g4 = B2.vga_codes(4)
+    c4 = B2.vga_order([(fr, po4)], g4)
+    gp = B2.plane_groups(g4)
+
+    def stores(a, b):
+        return sum(1 for g in gp if (a ^ b) & g)
+    ok(gp == [3, 12] and stores(g4[1], g4[3]) == 2 and
+       stores(c4[1], c4[3]) == 1 and c4[0] == 0 and
+       sorted(c4) == sorted(g4) and sorted(codes) == sorted(
+           B2.vga_codes(8)) and codes[0] == 0,
+       "VGA's values against the tearing: two browns a pixel moves between "
+       "one store apart (%s; Gray order %s, two), black at 0, the values a "
+       "permutation" % (c4, g4))
     # THE BUILD TAB'S PALETTE VIEWER (126.3.2): the K colours in index
     # order, the band's four marked, and a clip's share of each - read by
     # decoding the clip as the engine does, so a clip drawn with several
@@ -553,13 +572,14 @@ with tempfile.TemporaryDirectory() as tdir:
         cl = po.d["clips"]["ari_attack"]
         cl["source"], cl["in"], cl["out"] = "tsrc", 0, 20
         po.set(("target", "vga_colours"), 16)
+        po.set(("target", "vga_clip_colours"), 4)   # (asked for: 126.3.2)
         po.save()
         B2.REND = B2.Rend("cga4")
         d16 = B2.build_project(po, kind="vga4")     # (verify inside)
         b16 = B2.Bundle(d16)
         ci = [c["name"] for c in b16.clips].index("ARI_ATTA")
         cc_ = b16.clips[ci]
-        codes = B2.vga_codes(16)
+        codes = b16.codes
         rs2 = b16.stream(cc_)
 
         def loaded(r):

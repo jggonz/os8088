@@ -1288,6 +1288,9 @@ vb_play:
     call OSAPI_MEM_MOVABLE
 .ld:
     call vb_door                    ; kern_mega's facts, and the room kept
+%ifdef VB_DIAG
+    call vb_prbeg                   ; (THE PROFILE's claim, before the rings)
+%endif
     call vb_load
     jc .say
     call vb_rclaim                  ; THE CLIP RINGS, at the door on every
@@ -1303,6 +1306,9 @@ vb_play:
     mov bp, vb_fsxl                 ; claims' real segments banked
     mov cx, FSXF_RATE | FSXF_REAL
 .run:
+%ifdef VB_DIAG
+    call vb_prgo                    ; (the profile's clock)
+%endif
     mov ax, vb_main
     mov bx, [vb_win]
     mov dx, VB_DIV
@@ -1311,6 +1317,9 @@ vb_play:
     call OSAPI_FSX_RUN
     pop bp
     pushf
+%ifdef VB_DIAG
+    call vb_prend                   ; (VBPROFn.DAT written)
+%endif
     jc .ran
     or si, si                       ; kern_mega ran it in PROTECTED mode
     jz .ran                         ; instead: vb_main did nothing, and the
@@ -1428,6 +1437,11 @@ vb_dread:
     push bp
     mov [vb_rseg], es
     mov [vb_rcap], cx
+%ifdef VB_DIAG
+    mov [vb_prrc], cx               ; (the profile's read log: what, where)
+    mov [vb_prro], ax
+    mov [vb_prro+2], dx
+%endif
     add [vb_rbytes], cx             ; (what was read, and in how many calls:
     adc word [vb_rbytes+2], 0       ; a reader's own account, 126.4)
     inc word [vb_rcalls]
@@ -1494,6 +1508,18 @@ vb_dread:
 .ok:
     clc
 .out:
+%ifdef VB_DIAG
+    push ax
+    push cx
+    push dx
+    mov cx, [vb_prrc]
+    mov ax, [vb_prro]
+    mov dx, [vb_prro+2]
+    call vb_prread
+    pop dx
+    pop cx
+    pop ax
+%endif
     pushf
     cli
     mov ax, [vb_hper]
@@ -3459,9 +3485,19 @@ vb_hook:
     mov [vb_due], ax
     mov [vb_due+2], dx
 .one:
+%ifdef VB_DIAG
+    call vb_prf0
+%endif
     sti                             ; a disk's or the card's interrupt is not
     call vb_frame                   ; held behind a frame (53.2.2)
     cli
+%ifdef VB_DIAG
+    pushf
+    mov al, 0
+    adc al, 0                       ; (CF: stalled)
+    call vb_prmark
+    popf
+%endif
     jc .stall                       ; a clip not read that far: wait
     mov ax, [vb_meta+VH_SPF]
     add [vb_due], ax
@@ -3472,8 +3508,14 @@ vb_hook:
 .stall:
     inc word [vb_stall]
 .fed:
+%ifdef VB_DIAG
+    call vb_prfa
+    call vb_feed
+    jmp vb_prfb
+%else
     call vb_feed
     ret
+%endif
 
 ; vb_frame - draw the next frame of whatever is playing. CF=1: the clip's
 ; next record is not in memory yet (nothing drawn)
@@ -4888,6 +4930,9 @@ vb_reader:
 %include "vbattle/vbloop.inc"
 %include "vbattle/vbhold.inc"
 %include "vbattle/vbinp.inc"
+%ifdef VB_DIAG
+%include "vbattle/vbprof.inc"
+%endif
 
 ; vb_errname - [vb_err], when it is a refusal about a FILE (vb_errtab),
 ; written out with that file's name - the one sought or opened, not the
@@ -5348,6 +5393,19 @@ VB_VAR vb_vptab, 256                ; VGA4: a band byte's planes 0 and 1
 VB_VAR vb_vptab2, 256               ; ...and 2 and 3 (126.3.2's band map)
 VB_VAR vb_bmap, 4                   ; the band's four colours' pixel values
 VB_VAR vb_vlay, 1                   ; VGA4: the band's picture LAYER is on
+VB_VAR vb_tgrey, 1                  ; vb_text: VGA4's red, greyed out
+%ifdef VB_DIAG
+VB_VAR vb_prseg, 2                  ; THE PROFILE (vbprof.inc): its claim
+VB_VAR vb_prn, 2                    ; ...frames logged
+VB_VAR vb_prnl, 2                   ; ...reads logged
+VB_VAR vb_prta, 2                   ; ...the last frame's start (PIT 2)
+VB_VAR vb_prtf, 2                   ; ...this frame's
+VB_VAR vb_prtg, 2                   ; ...the feed's
+VB_VAR vb_prfs, 2                   ; ...the feeds' time since the last frame
+VB_VAR vb_pr61, 1                   ; ...port 61h as it was
+VB_VAR vb_prrc, 2                   ; ...a read's bytes
+VB_VAR vb_prro, 4                   ; ...and its offset
+%endif
 VB_VAR vb_loff, 2                   ; ...its offset in the ground's buffer
 VB_VAR vb_lstr, 2                   ; ...a plane's bytes (the band's rows x 40)
 VB_VAR vb_lpos, 2                   ; ...the row being presented's, plane 0

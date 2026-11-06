@@ -294,7 +294,7 @@ def run(tmp, kind, machine, code, syms):
             Image.frombytes("RGB", (fw, fh), fb).save(os.environ["VBT_SHOT"])
         if win:                         # ...its picture the host's, and BLUE
             pal = [tuple(data_v[464 + 3 * i:467 + 3 * i]) for i in range(16)]
-            want = np.array(B.vga_codes(len(R.codes)), np.uint8)[
+            want = np.array(R.codes, np.uint8)[
                 B.band_picture_vga(win, list(A.vga_plan(p)["shared"]), 40, nr)]
             gp = planes_px(glass, nr)
             rgb = np.array(pal, float)[gp[2:nr - 2, 2:318]].mean((0, 1))

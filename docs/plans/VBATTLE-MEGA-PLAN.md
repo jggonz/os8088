@@ -230,6 +230,16 @@ kern_big and kern_small keep the load on the desktop, where the window says
 - [x] **The tearing back**: the dither now HOLDS (Video Encoder's
       `--vga4-hold` 24, score 60): a noisy still picture's changed pixels
       a frame 21.9% -> 1.1%, a moving clip's error 2.3 -> 2.5.
+- [x] **The owner's next round** (2026-11-06): per-clip colours OFF by
+      default (`target.vga_clip_colours`; a clip's own browns dithered its
+      background another way than the idle loop's, and turning footage
+      moves everywhere) - every colour shared, chosen over the loop and
+      every clip; an action's dither STARTS from the idle loop's screen
+      (the join 8.5% -> 0.0% of the canvas on test footage); the colours'
+      VALUES chosen against the tearing (half-written pixels > 20 dE off
+      35.9% -> 17.4% of changes); VGA's red a grey-out, so the band keeps
+      only ground and white; and VBATTLED.O88, the profiling engine
+      (SPEC.md 126.8, `tools/vbtprof.py`, the `vbtdiag` row).
 - [x] **Step 4: 8 and 4 colours** - 1 of 8 a clip's own and 4 of 16
       (`target.vga_clip_colours`, the Battle tab, "auto" the default); at 4
       none, black and three from the footage, white not kept; "Keep the

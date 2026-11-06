@@ -17046,6 +17046,16 @@ SOAK = [
         "lit pixels before and after",
         needs=("marty",),
         wants=("build/vbattle.o88",)),
+    Row("vbtdiag", "soak", py("tests/vbtdiag.py"), 60.0,
+        "SPEC.md 126.8: VBATTLED.O88, the engine built VB_DIAG, on "
+        "MartyPC's VGA XT with 1.44 MB drives (os8088_xt_vga_144), "
+        "vbattlev.img in B:: played, 40 frames of the title, Esc - and "
+        "B:VBPROF1.DAT read back: 'VBPR' version 1, VGA4, the bundle's name; "
+        "every frame the hook drew, each a decode time; tools/vbtprof.py "
+        "reads it. Broken on purpose (the hook's vb_prmark out) no frame is "
+        "logged and the row fails",
+        needs=("marty",),
+        wants=("build/vbattlev.img", "build/os8088.img")),
     Row("vbtadapters", "soak", py("tests/vbtadapters.py"), 130.0,
         "VBATTLE-MEMORY-PLAN 9: the Video Battle's VGA4 and Hercules "
         "RENDITIONS on MartyPC (os8088_xt_vga_hdd_sb, "
@@ -17362,7 +17372,8 @@ SOAK = [
         "carrying what it boots from out of the zip's boot/, and the zip must "
         "be the same bytes made twice. A module the closure missed fails here as an "
         "ImportError, where the owner would otherwise meet it",
-        needs=("pil",), wants=("build/os8088-battle-builder.zip", "build/vbattle.o88",)),
+        needs=("pil",), wants=("build/os8088-battle-builder.zip", "build/vbattle.o88",
+                               "build/vbattled.o88")),
     Row("vbtgui", "soak", py("tests/vbtguitest.py"), 38.0,
         "VBATTLE-BUILDER-PLAN wave 2: the builder's WINDOW without a window "
         "(tools/os88vbtgui.py). The palette's parts must be cga4_colours' own "
@@ -18992,15 +19003,16 @@ SOAK = [
         needs=("86box",),
         wants=("build/mega.img", "build/megarmbe.o88", "build/megarmbe.bin",
                "build/ems.bin")),
-    Row("vbtvgaflash", "soak", py("tests/vbtvgaflash.py"), 60.0,
+    Row("vbtvgaflash", "soak", py("tests/vbtvgaflash.py"), 100.0,
         "SPEC.md 126.3.2: VGA4's FLASHES - a pixel's planes are separate "
         "stores, and written mask by mask over the whole frame a changing "
         "pixel shows a colour of neither frame for the frame's whole decode "
         "(the owner's 'VGA tears constantly'). On 86Box's VGA XT, a title of "
-        "Conway's Life: whole-frame writes over 100 flash pixels a sampled "
-        "frame, the builder's 16-row bands (target.vga_bands) a third or "
-        "less, and the banded title the same frames on the host. Red with "
-        "vga_banded answering the frame unbanded. 60s is 49 measured",
+        "Conway's Life in 16-row bands: its colours' values in Gray order "
+        "over 100 flash pixels a sampled frame, the values CHOSEN against the "
+        "tearing (os88vbt.vga_order) two thirds or less, and the banded title the "
+        "same frames on the host as a whole-frame one. Gray order IS the "
+        "broken arm (vga_order answering its CODES0). 100s is 68 measured",
         needs=("86box", "ffmpeg", "numpy"),
         wants=("build/vbattle.o88",)),
     Row("vbtmega", "soak", py("tests/vbtmega.py"), 240.0,

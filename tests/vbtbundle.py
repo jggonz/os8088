@@ -93,10 +93,15 @@ with tempfile.TemporaryDirectory() as t:
     subprocess.run([sys.executable, os.path.join(ROOT, "tools",
                                                  "os88vbtbundle.py"), again,
                     "--engine", os.path.join(ROOT, "build", "vbattle.o88"),
+                    "--diag", os.path.join(ROOT, "build", "vbattled.o88"),
                     "--boot", os.path.join(ROOT, "build")],
                    check=True, stdout=subprocess.DEVNULL)
     ok(open(again, "rb").read() == open(ZIP, "rb").read(),
        "the zip is the same bytes made twice")
+    import zipfile
+    names = zipfile.ZipFile(ZIP).namelist()
+    ok(any(x.endswith("/VBATTLED.O88") for x in names),
+       "VBATTLED.O88, the profiling engine (SPEC.md 126.8), is in it")
 
 if fails:
     print("%d FAILED" % len(fails))

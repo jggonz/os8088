@@ -95,6 +95,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("out")
     ap.add_argument("--engine", required=True, help="VBATTLE.O88 to ship")
+    ap.add_argument("--diag", help="VBATTLED.O88 to ship beside it (the "
+                    "engine that writes a play's profile, SPEC.md 126.8)")
     ap.add_argument("--boot", metavar="BUILD",
                     help="a build folder to take a hard disk's BOOT files "
                     "from into boot/ (os88mkdisk's HD_BOOT and HD_DRV), so "
@@ -113,6 +115,8 @@ def main():
             files.append((name, open(os.path.join(HERE, src), "rb").read(),
                           0o644))
     files.append(("VBATTLE.O88", open(a.engine, "rb").read(), 0o644))
+    if a.diag:
+        files.append(("VBATTLED.O88", open(a.diag, "rb").read(), 0o644))
     if a.boot:
         import os88mkdisk as M
         for _, f in M.HD_BOOT + M.HD_DRV:

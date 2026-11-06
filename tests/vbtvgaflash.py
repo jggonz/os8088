@@ -23,15 +23,20 @@ turns cells between colours that differ in several planes):
 
   0. on the host, the banded bundle's title decodes to the same frames as
      the whole-frame one's - the picture is unchanged;
-  1. whole-frame writes: the glass, sampled N times through the title loop,
-     shows pixels in a colour their pixel never takes in any of the loop's
-     frames - over 100 a sample on average (the effect, so 2 proves
-     something);
-  2. bands of 16 rows: at most a third as many.
+  1. banded, the values in GRAY order (darkest first, as before vga_order):
+     the glass, sampled N times through the title loop, shows pixels in a
+     colour their pixel never takes in any of the loop's frames - over 100
+     a sample on average (the effect, so 2 proves something);
+  2. banded, the values CHOSEN against the tearing (os88vbt.vga_order): at
+     at most two thirds as many (measured 2.3x and 1.8x fewer at 60
+     samples: the glass is sampled, so a bar at 1.5x over 120)
 
-Measured when written: 639 -> 88 a sample (bands of 16), and on the owner's
-own VGA footage (debug only) 308 -> 30 for 11.6% more record bytes.
-BROKEN ON PURPOSE (vga_banded answering ops unbanded) 2 goes red. The
+Measured when written: whole frames against bands of 16, 639 -> 88 a
+sample, and on the owner's own VGA footage (debug only) 308 -> 30 for
+11.6% more record bytes; then, once the dither held (KNOLL_HOLD), whole
+frames flashed 50 a sample and this row's first premise went, so it holds
+the values instead: Gray order 142, chosen 62, and 6% fewer bytes.
+BROKEN ON PURPOSE (vga_order answering its CODES0) 2 goes red - it IS arm 1. The
 Life grid is SEEDED (seed=1): unseeded, each run was other footage, and a
 run that once failed (one sample of 44,546, the whole canvas) could not be
 had again.
@@ -70,8 +75,8 @@ def ok(cond, what):
         fails.append(what)
 
 
-def bundle(tmp, bands, mp4):
-    vbp = os.path.join(tmp, "f%d.vbp" % bands)
+def bundle(tmp, bands, mp4, gray=False):
+    vbp = os.path.join(tmp, "f%d%s.vbp" % (bands, "g" if gray else ""))
     B.demo_project(vbp, bars=2)
     p = P.Project.load(vbp)
     p.set(("target", "vga_bands"), bands)
@@ -80,7 +85,13 @@ def bundle(tmp, bands, mp4):
     c["source"], c["in"], c["out"] = "life", 0, 47
     p.d["title"]["loop"] = [0, 47]
     p.save()
-    return B.build_project(p, kind="vga4")
+    keep = B.vga_order
+    if gray:                            # (darkest first in Gray order, as
+        B.vga_order = lambda st, c, fixed=(0,): list(c)     # before)
+    try:
+        return B.build_project(p, kind="vga4")
+    finally:
+        B.vga_order = keep
 
 
 def title_frames(data):
@@ -154,7 +165,7 @@ def glass_flashes(tmp, data, syms, n):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--samples", type=int, default=60)
+    ap.add_argument("--samples", type=int, default=120)
     a = ap.parse_args()
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
@@ -165,25 +176,27 @@ def main():
                         LIFE, "-t", "4", "-pix_fmt", "yuv420p", mp4],
                        check=True)
         whole, banded = bundle(tmp, 0, mp4), bundle(tmp, 16, mp4)
+        gray = bundle(tmp, 16, mp4, gray=True)
         fw = title_frames(whole)[0]
         fb = title_frames(banded)[0]
         ok(len(fw) == len(fb) and all((x == y).all() for x, y in zip(fw, fb)),
            "0. the banded title decodes to the whole-frame one's %d frames"
            % len(fw))
         res = {}
-        for name, data in (("whole", whole), ("bands", banded)):
+        for name, data in (("gray", gray), ("chosen", banded)):
             d = os.path.join(tmp, name)
             os.makedirs(d)
             res[name] = glass_flashes(d, data, syms, a.samples)
             print("     %s: %d bytes, flash pixels a sample %.0f (worst %d)"
                   % (name, len(data), res[name][0], res[name][1]),
                   flush=True)
-        ok(res["whole"][0] > 100, "1. whole-frame writes FLASH on 86Box's "
-           "VGA: %.0f pixels a sample in a colour of no frame"
-           % res["whole"][0])
-        ok(res["bands"][0] * 3 <= res["whole"][0],
-           "2. bands of 16 rows: %.0f a sample, %.1fx fewer"
-           % (res["bands"][0], res["whole"][0] / max(res["bands"][0], 0.5)))
+        ok(res["gray"][0] > 100, "1. darkest first in GRAY order, banded, "
+           "FLASHES on 86Box's VGA: %.0f pixels a sample in a colour of no "
+           "frame" % res["gray"][0])
+        ok(res["chosen"][0] * 1.5 <= res["gray"][0],
+           "2. the values CHOSEN against the tearing (vga_order): %.0f a "
+           "sample, %.1fx fewer" % (res["chosen"][0], res["gray"][0] /
+                                    max(res["chosen"][0], 0.5)))
     finally:
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)

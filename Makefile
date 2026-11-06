@@ -14397,11 +14397,11 @@ $(BUILD)/os8088-encoder.zip: $(BUILD)/video.o88 $(VENCBOOT) tools/os88vbundle.py
 #> [Applications] vbtbundle :: zip the Video Battle builder for someone with no os8088 tree
 .PHONY: vbtbundle
 vbtbundle: $(BUILD)/os8088-battle-builder.zip
-$(BUILD)/os8088-battle-builder.zip: $(BUILD)/vbattle.o88 $(VENCBOOT) \
+$(BUILD)/os8088-battle-builder.zip: $(BUILD)/vbattle.o88 $(BUILD)/vbattled.o88 $(VENCBOOT) \
 	tools/os88vbtbundle.py tools/os88vbundle.py \
 	$(wildcard tools/os88*.py tools/vbt*.py)
 	python3 tools/os88vbtbundle.py $@ --engine $(BUILD)/vbattle.o88 \
-	    --boot $(BUILD)
+	    --diag $(BUILD)/vbattled.o88 --boot $(BUILD)
 
 # ...and the one that shows a FACE rather than timing one: it draws the same
 # sentence through the kernel, through face 0, and through both of the
@@ -20719,6 +20719,16 @@ $(BUILD)/vbattle.bin: apps/vbattle/vbattle.asm apps/vbattle/vbrules.inc apps/vba
 	$(NASM) -f bin -w+error -I apps/ -l $(BUILD)/vbattle.lst -o $@ $<
 $(BUILD)/vbattle.o88: $(BUILD)/vbattle.bin tools/os88pkg.py $(PKGZSTAMP)
 	$(OS88PKG) $< -o $@
+# VBATTLED.O88: the engine built VB_DIAG, which writes a play's PROFILE as
+# VBPROFn.DAT beside it (SPEC.md 126.8; tools/vbtprof.py reads it) -
+# Video Player's VIDEOD for the battle. On vbattlev.img and in the zip
+$(BUILD)/vbattled.bin: apps/vbattle/vbattle.asm apps/vbattle/vbprof.inc apps/vbattle/vbrules.inc \
+                       apps/vbattle/vbgame.inc apps/vbattle/vbloop.inc apps/vbattle/vbhold.inc \
+                       apps/vbattle/vbinp.inc apps/vbattle/vbband.inc apps/video/vdec.inc \
+                       apps/os88la.inc apps/os88ub.inc apps/os88api.inc apps/os88real.inc | $(BUILD)
+	$(NASM) -f bin -w+error -I apps/ -DVB_DIAG -o $@ apps/vbattle/vbattle.asm
+$(BUILD)/vbattled.o88: $(BUILD)/vbattled.bin tools/os88pkg.py $(PKGZSTAMP)
+	$(OS88PKG) $< -o $@
 $(BUILD)/BATTLE.VBT: tools/os88vbt.py tools/vbtscene.py tools/os88vid.py | $(BUILD)
 	python3 tools/os88vbt.py demo $@
 # ...and the FLOPPY's (the 360KB and 720KB disks): the same battle less its
@@ -20738,8 +20748,8 @@ $(BUILD)/vbvga/BATTLEV.VBT: tools/os88vbt.py tools/vbtscene.py tools/vbtana.py t
 $(BUILD)/vbherc/BATTLEH.VBT: tools/os88vbt.py tools/vbtscene.py tools/vbtana.py tools/os88vid.py | $(BUILD)
 	@mkdir -p $(BUILD)/vbherc
 	python3 tools/os88vbt.py demo $@ --rendition herc
-$(BUILD)/vbattlev.img: $(BUILD)/vbattle.o88 $(BUILD)/vbvga/BATTLEV.VBT tools/os88disk.py
-	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbvga/BATTLEV.VBT
+$(BUILD)/vbattlev.img: $(BUILD)/vbattle.o88 $(BUILD)/vbattled.o88 $(BUILD)/vbvga/BATTLEV.VBT tools/os88disk.py
+	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbattled.o88 $(BUILD)/vbvga/BATTLEV.VBT
 $(BUILD)/vbattleh.img: $(BUILD)/vbattle.o88 $(BUILD)/vbherc/BATTLEH.VBT tools/os88disk.py
 	python3 tools/os88disk.py --size 1440 -o $@ $(BUILD)/vbattle.o88 $(BUILD)/vbherc/BATTLEH.VBT
 #> [Applications] vbattledisk :: Video Battle's floppy, package and demo battle, in all four geometries, and its VGA and Hercules demos

@@ -986,3 +986,32 @@ Hercules 5150 and VGA XT; the hold on QEMU (XMS), MartyPC's Lo-tech EMS and
 86Box's 286 (LOADALL); the owner's footage on 86Box's `pc5150` (ST11M).
 Not tested: real hardware, a real VGA or Hercules card, kern_mega (the next
 round).
+
+The next test brought four reports at once. The menu band's palette was
+still reserving red and teal, although only white and the red of an
+unaffordable action were drawn there; the owner suggested greying out
+instead of red, and on VGA the band now draws in its ground and white
+alone. The joins no longer flashed, but they still redrew the whole
+background, because the action clip's own browns let it dither the same
+floor solid where the idle loop dithered it brown and black. The first
+answer, own colours only for what moves, did not survive the owner's
+point that this footage turns round its characters and moves everywhere.
+So per-clip colours became an option, off by default: every colour is
+shared, chosen over the idle loop and all the clips. An action's dither
+also now starts from the idle loop's screen, which took a join on test
+footage from 8.5% of the canvas changed to none.
+
+The tearing was the colours of half-written pixels: brown going to brown
+through bright red or teal, because darkest-first Gray order put
+neighbouring browns several planes apart. The builder now chooses which
+pixel value each colour gets, by measuring every change the dithered
+footage actually makes and minimising the worst colour a pixel can show
+between its first plane store and its last. On test footage that halved
+the changes that can show a wrong colour, and cut the worst case from 21
+to 7 dE.
+
+For the 286's stutter there was nothing to measure with, so the engine got
+Video Player's diagnostic twin: VBATTLED.O88 times every frame's decode
+and the sound feed, records stalls and the sound card's lead, logs every
+disk read, and writes VBPROFn.DAT when the play ends. tools/vbtprof.py
+reads it.

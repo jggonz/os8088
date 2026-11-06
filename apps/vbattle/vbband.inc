@@ -1012,6 +1012,14 @@ vb_text:
     mov [vb_trow], dx
     mov al, bh
     and al, 3
+    mov byte [vb_tgrey], 0          ; VGA4: RED IS A GREY-OUT (126.5) - the
+    cmp byte [vb_kind], VK_VGA4     ; glyph in white on alternate pixels,
+    jne .rd                         ; the ground between: the band draws in
+    cmp al, 2                       ; black and white alone, and VGA's
+    jne .rd                         ; colours go to the picture (the owner)
+    mov byte [vb_tgrey], 1
+    mov al, 3
+.rd:
     mov [vb_tink], al
     mov ah, 0x55                    ; the ink in every pixel of a byte
     mul ah
@@ -1097,6 +1105,15 @@ vb_text:
     shl ax, 1
     add di, ax
     mov al, [ds:bp]
+    cmp byte [vb_tgrey], 0          ; (greyed: a checker of its pixels)
+    je .ng
+    mov ah, 0xAA
+    test dl, 1
+    jz .ge
+    mov ah, 0x55
+.ge:
+    and al, ah
+.ng:
     mov ah, al
     mov cl, 4
     shr al, cl                      ; the left four pixels' bits

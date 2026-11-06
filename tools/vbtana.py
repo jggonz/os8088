@@ -268,7 +268,13 @@ def rgb_frames(proj, sid, w, h, kind, progress=_nop):
     return fr
 
 
-VGA_SLOTS = {16: 4, 8: 1, 4: 0}    # a clip's own colours, by K (126.3.2)
+VGA_SLOTS = {16: 0, 8: 0, 4: 0}    # a clip's own colours, by K (126.3.2):
+#                         NONE unless asked (target.vga_clip_colours) - the
+#                         owner, 2026-11-06: a clip's own browns dithered its
+#                         background another way than the idle loop's, and
+#                         footage that turns round its characters moves
+#                         everywhere; every colour shared, chosen over the
+#                         loop and every clip, keeps the joins one dither
 PLAN_SAMPLES = 4000     # pixels a stream, for the choice
 PLAN_IDLE_W = 3.0       # the idle loop is on the glass most of the play
 PLAN_CANDS = 96
@@ -276,8 +282,9 @@ PLAN_CANDS = 96
 
 def vga_slots(proj, k=None):
     """How many of VGA's K colours are each clip's OWN (126.3.2): swapped in
-    as the clip starts, the rest shared. target.vga_clip_colours, or 4 of
-    16, 1 of 8 and none of 4 - the owner's plan"""
+    as the clip starts, the rest shared. target.vga_clip_colours, or none
+    (VGA_SLOTS: the first plan's 4 of 16 and 1 of 8 redrew a join's whole
+    background in another dither)"""
     t = proj.d["target"]
     k = k or t.get("vga_colours", 8)
     n = t.get("vga_clip_colours")
@@ -470,7 +477,7 @@ def vga_plan(proj, progress=_nop):
     if keep and k <= 4:
         return dict(k=k, slots=0, shared=band[:k], own={})
     w, h, _ = rend_size(proj, "vga4")
-    key = json.dumps(["p4", t["palette"], k, slots, keep, w, h,
+    key = json.dumps(["p5", t["palette"], k, slots, keep, w, h,
                       [(im.get("path"), os.path.exists(proj.here(im["path"]))
                         and file_hash(proj.here(im["path"])))
                        for im in proj.d.get("images", [])],
@@ -482,6 +489,11 @@ def vga_plan(proj, progress=_nop):
         return _PALS[key]
     rng = np.random.RandomState(1)
     samp = {}
+    no_own = ["idle"]
+    ref = None
+    i_ = proj.d["idle"]
+    if any(x == "idle" for x, _, _, _, _ in streams):
+        ifr = rgb_frames(proj, i_["source"], w, h, "vga4", progress)
     for x, sid, a, b, wt in streams:
         fr = rgb_frames(proj, sid, w, h, "vga4", progress)[a:b]
         if not len(fr):
@@ -489,6 +501,20 @@ def vga_plan(proj, progress=_nop):
         px = fr.reshape(-1, 3)
         samp[x] = (px[rng.randint(0, len(px), min(len(px), PLAN_SAMPLES))],
                    wt)
+        an = (proj.d["clips"].get(x) or {}).get("anchors") or []
+        if x != "idle" and an and "idle" in samp and \
+                0 <= an[0] < i_["loop"][1] - i_["loop"][0]:
+            # AN ACTION'S OWN come from what MOVED from the idle loop's
+            # screen at its anchor - its background is the loop's, drawn
+            # in the shared colours (quant_split): own colours spent on it
+            # redrew the whole background at every join (the owner)
+            ref = ifr[i_["loop"][0] + an[0]]
+            mv = moved_from(fr, ref).reshape(-1)
+            no_own.append(x)
+            if mv.any():
+                mp = px[mv]
+                samp[x + "*"] = (mp[rng.randint(0, len(mp), min(
+                    len(mp), PLAN_SAMPLES))], wt * float(mv.mean()))
     fixed = [(0, 0, 0)] + ([(255, 255, 255)] if k > 4 else [])
     if keep:
         fixed = sorted(set(fixed) | set(band), key=lambda c: (
@@ -498,11 +524,19 @@ def vga_plan(proj, progress=_nop):
         (max(0, k - 4) / 12.0) ** 2     # (the menu's own colours: two of
     #       16, about one of 8, none of 4 - the owner's plan. At 8 the full
     #       pull cost the footage: a title's error 11.1 -> 13.1)
-    bpx = list(band) * 64 if not keep else []   # THE BAND'S STREAM: its
-    for im in proj.d.get("images", []):         # four, and its PICTURES'
-        try:                                    # pixels - on VGA they are
-            from PIL import Image               # drawn in the shared colours
-            pim = Image.open(proj.here(im["path"])).convert("RGB")  # (126.5)
+    # THE BAND'S STREAM: on VGA its text is white on its ground and red is
+    # a grey-out (126.5), so of its four only the ground (0) and white (3)
+    # are drawn - and the plain look's rules (1) when it has no picture -
+    # and its PICTURES' pixels, drawn in the shared colours. Every one of
+    # the four took an entry, and the owner saw red and teal kept as "menu"
+    # that nothing drew
+    imgs = proj.d.get("images", [])
+    bpx = ([band[0], band[3]] + ([] if imgs else [band[1]])) * 64 \
+        if not keep else []
+    for im in imgs:
+        try:
+            from PIL import Image
+            pim = Image.open(proj.here(im["path"])).convert("RGB")
             pim.thumbnail((96, 48))
             bpx += [tuple(c) for c in np.asarray(pim).reshape(-1, 3)]
         except OSError:
@@ -511,7 +545,10 @@ def vga_plan(proj, progress=_nop):
         bw = PLAN_IDLE_W * max(0, 200 - cr) / float(cr) * \
             (max(1, k - 4) / 12.0) ** 2
     sh, own = plan_colours(samp, k, slots, fixed[:k - slots],
-                           bpx or None, bw, no_own=("idle",))
+                           bpx or None, bw, no_own=tuple(no_own))
+    for x in list(own):         # (an action's own, from its moved pixels)
+        if x.endswith("*"):
+            own[x[:-1]] = own.pop(x)
     sh = (sh + [sh[-1]] * k)[:k - slots]
     out = dict(k=k, slots=slots, shared=sh, own=own)
     _PALS[key] = out
@@ -565,7 +602,7 @@ def _bayer4():
     return (m + 0.5) / 16
 
 
-def quant_vga(fr, pal, clip=0):
+def quant_vga(fr, pal, clip=0, seed=None):
     """rgb24 frames to palette indexes - VIDEO PLAYER'S PATTERN DITHER
     (os88venc.KnollDitherer, SPEC.md 98.2.5), with its defaults: each
     pixel's plan is sixteen palette colours whose mean is the target, the
@@ -585,10 +622,44 @@ def quant_vga(fr, pal, clip=0):
     n, h, w, _ = fr.shape
     d = VE.KnollDitherer(w, h, pal6, KNOLL_STABLE, float(clip), KNOLL_HOLD,
                          KNOLL_SCORE, KNOLL_CAP, 0)
+    if seed is not None:        # THE SCREEN BEFORE IT (Video Encoder's
+        d.prev = np.asarray(seed[0]).astype(np.int64)  # --scene-hold): its
+        d.at = np.asarray(seed[1], np.float32)  # indexes and their source,
+        #                         so the hold keeps what is still near
     out = np.zeros((n, h, w), np.uint8)
     for i in range(n):
         out[i] = d(np.ascontiguousarray(fr[i]))
     return out
+
+
+MOVED_RGB = 24          # a clip's pixel is MOVED from the idle loop's screen
+#                         when a channel of its source differs by more
+
+
+def moved_from(fr, ref):
+    """Frames FR's pixels MOVED from REF (the idle loop's source at the
+    clip's anchor): a channel more than MOVED_RGB from it, grown a pixel
+    each way so an edge is not left in another dither (126.3.2)"""
+    m = (np.abs(np.asarray(fr, np.int16) - np.asarray(ref, np.int16)[None])
+         .max(-1) > MOVED_RGB)
+    g = m.copy()
+    g[:, 1:] |= m[:, :-1]
+    g[:, :-1] |= m[:, 1:]
+    g[:, :, 1:] |= m[:, :, :-1]
+    g[:, :, :-1] |= m[:, :, 1:]
+    return g
+
+
+def quant_split(fr, pal, nshared, clip, seed):
+    """An ACTION's frames (126.3.2): the idle loop's dither where its
+    picture is the loop's, its own colours only where it MOVED. Two Knoll
+    ditherers, both started from the loop's screen at the anchor: one in
+    the shared colours alone - the loop's own, so a still background stays
+    the loop's pattern and the join redraws what changed - and one in all
+    its colours, taken where the source moved from the loop's"""
+    a = quant_vga(fr, pal[:nshared], clip, seed)
+    b = quant_vga(fr, pal, clip, seed)
+    return np.where(moved_from(fr, seed[1]), b, a).astype(np.uint8)
 
 
 KNOLL_STABLE = 24.0     # os88venc's --vga4-stable default
@@ -648,7 +719,7 @@ def herc_of_cga(px, rows):
 
 
 def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
-                 rng=None):
+                 rng=None, seed=None):
     """Source SID's frames in rendition KIND, as the adapter will show them:
     palette indexes for cga4 and vga4, bits for herc. FULL: over the whole
     screen (a full-screen opening), not the canvas. RNG (first, end): those
@@ -682,9 +753,10 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
     t = proj.d["target"]
     pal = clip_palette(proj, stream or "idle") if kind == "vga4" else None
     key = hashlib.sha1(json.dumps(
-        ["q4", file_hash(proj.here(s["path"])), kind, w, h, t["palette"],
+        ["q5", file_hash(proj.here(s["path"])), kind, w, h, t["palette"],
          KNOLL_STABLE, KNOLL_HOLD, KNOLL_SCORE, KNOLL_CAP, HOLD_LUM, pal,
-         list(rng) if rng and kind == "vga4" else None] +
+         list(rng) if rng and kind == "vga4" else None,
+         seed[2] if seed is not None else None] +
         ([pct] if pct < 100 else []) +
         ([fit_of(proj)] if fit_of(proj) != "fill" else []) +
         [clip_of(proj)]).encode()).hexdigest()[:20]
@@ -696,8 +768,13 @@ def rend_screens(proj, sid, kind, progress=_nop, full=False, stream=None,
     if kind == "vga4" and rng:  # VGA: a STREAM's frames with its colours
         fr = fr[rng[0]:rng[1]]  # (126.3.2), quantized on their own
     progress("analyse", 0, 1, "%s (%s)" % (sid, kind))
-    q = quant_vga(fr, pal, clip_of(proj)) \
-        if kind == "vga4" else quant_herc(fr, clip_of(proj))
+    nsh = len(vga_plan(proj)["shared"]) if kind == "vga4" else 0
+    if kind != "vga4":
+        q = quant_herc(fr, clip_of(proj))
+    elif seed is not None and len(pal) > nsh:
+        q = quant_split(fr, pal, nsh, clip_of(proj), seed)
+    else:
+        q = quant_vga(fr, pal, clip_of(proj), seed)
     if pct < 100:
         q = pad_into(q, w, h, x0, y0)
     np.save(npy + ".part.npy", q)
@@ -736,12 +813,44 @@ def vga_alone(proj, cid, i, full=False, progress=_nop):
     return q[0]
 
 
-def frames_of(proj, cid, progress=_nop, kind="cga4", full=False):
+def frames_of(proj, cid, progress=_nop, kind="cga4", full=False,
+              seed=False):
     """Clip CID's frames: its source's, in..out (FULL: the whole screen's) -
-    on VGA quantized in the clip's own colours (126.3.2)"""
+    on VGA quantized in the clip's own colours (126.3.2), and with SEED (an
+    action's, entered from the idle loop) its dither STARTED FROM the idle
+    loop's screen at its first anchor: the hold keeps every pixel still near
+    its source as the loop had it, so the join redraws what changed and not
+    a whole other dither of the same background (the owner, 2026-11-06:
+    "they choose a completely different way of dithering")"""
     c = proj.d["clips"][cid]
+    sd = idle_seed(proj, cid, progress) if seed and kind == "vga4" and \
+        not full else None
     return rend_screens(proj, c["source"], kind, progress, full, cid,
-                        (c["in"], c["out"] + 1))
+                        (c["in"], c["out"] + 1), sd)
+
+
+def idle_seed(proj, cid, progress=_nop):
+    """The idle loop's screen at clip CID's first anchor, as quant_vga's
+    SEED: (its indexes, its source's pixels, a tag for the cache) in the
+    picture's box - or None (no anchor, no video idle loop)"""
+    c = proj.d["clips"][cid]
+    i = proj.d["idle"]
+    an = c.get("anchors") or []
+    if not an or proj.d["sources"][i["source"]]["kind"] == "scene":
+        return None
+    k = an[0]
+    a, b = i["loop"]
+    if not 0 <= k < b - a:
+        return None
+    w, h, _ = rend_size(proj, "vga4")
+    pct = scale_of(proj, "vga4")
+    pw, ph, x0, y0 = boxed(w, h, pct)
+    q = idle_of(proj, progress, "vga4")[k]
+    rgb = _rgb_n(proj, i["source"], pw, ph, "vga4", progress, False)[a + k]
+    return (np.asarray(q)[y0:y0 + ph, x0:x0 + pw], rgb,
+            ["idle", file_hash(proj.here(proj.d["sources"][i["source"]]
+                                         ["path"])), a + k,
+             clip_palette(proj, "idle")])
 
 
 def idle_of(proj, progress=_nop, kind="cga4"):
