@@ -92,6 +92,11 @@ static char pdu_needle[40];             /* Find */
 static int pdu_nlen;
 
 static int pdu_sb[7];                   /* os88ui's scroll-bar block */
+static struct pdxb_open pdu_xopen;      /* (moved up from pdujob.c: nav reads it) */
+static struct pdxb_outline pdu_xout;    /* ...and so does the overlay's outline */
+static int pdu_gs;                      /* nav: a press is being tracked (the
+                                         * thumb 1, a selection 2); no page
+                                         * render runs while it is up */
 
 /* the job (PAGEDESK-SPEC 15) */
 static int pdu_job;                     /* J_* */
@@ -145,6 +150,10 @@ static const char *pdu_abtext[] = {
 #include "pdumod.c"             /* 3.1-3.4, 16.2: modules and claims */
 #include "pdudraw.c"            /* every pixel of the chrome */
 #include "pduview.c"            /* the page view: zoom, scroll, pages */
+#include "pdusel.c"             /* nav: selection and Copy (20.10.3) */
+#include "pdufind.c"            /* nav: Find, a job (20.10.1) */
+#include "pduside.c"            /* nav: the Pages / Outline sidebar (20.10.4) */
+#include "pdunav.c"             /* nav: history, gestures, links (20.10) */
 #include "pdujob.c"             /* 15: the scheduler and its three jobs */
 #include "pducmd.c"             /* commands, menus, keys, clicks */
 #include "pdovl.c"              /* the overlay's tenants (ovl_*) */
@@ -198,6 +207,8 @@ void *os88_main(void)
     os88_wm_onwake(win);
     os88_wm_onclose(win);               /* a save is told to abort first */
     os88_wm_onwheel(win);
+    os88_wm_onmouseup(win);             /* nav: the gestures' release... */
+    os88_wm_ontimer(win);               /* ...and the poll that tracks them */
     os88_wm_cursor(win, OS88_CUR_ARROW);
     os88_about_set(win);
     os88_assoc_set("PDF", "PAGEDESK");

@@ -215,6 +215,7 @@ static void pdu_goto(int n)
 {
     if (pdu_doc != D_OPEN || n < 0 || n >= (int)pdu_npages)
         return;
+    pdu_nav_noted(n);                   /* nav: a jump is history */
     pdu_pgwant = n + 1;
     pdu_kick();
 }

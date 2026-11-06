@@ -415,6 +415,10 @@ static pdw dest_page(void)
     return pg_index_of(ov.rnum);
 }
 
+/* nav (wave 2): links (PAGEDESK-SPEC 20.10.2) */
+static void os_cpy(char *d, const char *s) { while ((*d++ = *s++) != 0) ; }
+#include "pdelink.c"
+
 static pdw v_outline(void)
 {
     static struct pdxb_outline ol;
@@ -525,6 +529,7 @@ static pdw v_annots(pdw page, pdw index)
         if (ov.kind == PDK_REF) rc = ob_follow();
         if (!rc && ov.kind == PDK_DICT && ob_dict_find("N") == PDE_OK) an.has_ap = 1;
     }
+    if (str_eq((pdb *)an.subtype, "Link")) lk_fill(&an);        /* nav: 20.10.2 */
     pd_fcopy_out(&an, g_xb, 0, sizeof(struct pdxb_annot));
     return PDE_OK;
 }
@@ -569,7 +574,7 @@ unsigned pde_verb(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
             case PDV_ENG_TRAILER:    rc = v_trailer(); break;
             case PDV_ENG_OUTLINE:    rc = v_outline(); break;
             case PDV_ENG_ANNOTS:     rc = v_annots((pdw)bx, (pdw)cx); break;
-            case PDV_ENG_SEARCH:     rc = PDE_NOTFOUND; break;   /* wave 1: needs the renderer's text map */
+            case PDV_ENG_SEARCH:     rc = v_search(); break;     /* nav: 20.10.1 */
             default:                 rc = PDE_RANGE; break;
             }
         }

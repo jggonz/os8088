@@ -34,6 +34,7 @@
 
 ; --- os88ui.inc's FEATURE DEFINES, at the TOP (apps/loom/loom.asm says why) --
 %define OS88UI_SCROLL               ; the canvas's vertical bar
+%define OS88UI_SBDRAG               ; nav: its thumb drags (SPEC.md 13.10.5)
 %define OS88UI_ABOUT                ; the standard About card (SPEC.md 20.5.1.1)
 %define OS88UI_NOGEST               ; no button gesture install: PageDesk's
                                     ; bars hit-test their own rects
@@ -57,6 +58,8 @@
 %define CC_HAS_ONWAKE               ; THE JOB SCHEDULER (PAGEDESK-SPEC 15.1):
                                     ; one slice a wake, re-posted
 %define CC_HAS_ONWHEEL              ; the wheel scrolls the canvas
+%define CC_HAS_ONMOUSEUP            ; nav: the release that ends a drag...
+%define CC_HAS_ONTIMER              ; ...and the poll that tracks one (pdunav.c)
 %define CC_HAS_ONCLOSE              ; a save in flight deletes its temp file
 %define CC_HAS_OVL                  ; pdovl.c's ovl_* (PAGEDESK-SPEC 2.2)
 %define CC_OVL_PART                 ; ...a PART of PAGEDESK.O88

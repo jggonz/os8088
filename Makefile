@@ -20538,3 +20538,28 @@ all: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
 pdfonts: $(PD_RES_BIN) $(PD_FONTX_RES) $(PD_FONT_TXT) $(PD_ART_INC)
 	python3 tools/os88pdart.py check
 # ---- end PageDesk: fonts ----
+
+# ---- PageDesk: nav ----
+# Navigation, selection, Find, thumbnails, outline and links (PAGEDESK-SPEC
+# 20.10). `make pdnav` builds PDENG's host harnesses for SEARCH and the link
+# records and runs them: pde_srch.py is a differential test of the matcher
+# against a reference over random pages and piece sizes, pde_link reads the
+# sample guide's links. The primary's own files (pdunav.c, pdusel.c,
+# pdufind.c, pduside.c) are matched by PDCSRC's pdu*.c wildcard; the
+# overlay's tenant is not, so it is named here.
+$(BUILD)/pagedesk.raw.asm: $(PDDIR)/pdovlnav.c
+$(BUILD)/pde_srch: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pde_srch.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_srch.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+$(BUILD)/pde_link: $(PDE_SRC) apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pde_link.c \
+                   apps/pagedesk/hosttest/pde_host.c apps/pagedesk/hosttest/pdhost.c | $(BUILD)
+	$(HOSTCC) -g -Wall -Wextra -Wno-unused-parameter -DPD_HOST -Iapps/pagedesk -Iapps/pagedesk/hosttest \
+		apps/pagedesk/pdeng.c apps/pagedesk/hosttest/pde_link.c apps/pagedesk/hosttest/pde_host.c \
+		apps/pagedesk/pdmath.c apps/pagedesk/hosttest/pdhost.c -o $@
+pdnav: $(BUILD)/pde_srch $(BUILD)/pde_link
+	python3 apps/pagedesk/hosttest/pde_srch.py $(BUILD)/pde_srch apps/pagedesk/samples/HELLO.PDF 400
+	$(BUILD)/pde_link apps/pagedesk/samples/XTGUIDE.PDF | grep -c '^L ' | grep -qx 7
+.PHONY: pdnav
+# ---- end PageDesk: nav ----

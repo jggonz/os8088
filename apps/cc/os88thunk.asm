@@ -399,6 +399,27 @@ _os88_gfx_blit1:
     ret
 %endif
 
+; int os88_gfx_blit1_seg(unsigned seg,unsigned off,int stride,int x,int y,int w,int rows)
+; os88_gfx_blit1 with the band in a claim: ES:SI = seg:off, the rest as above.
+CC_GATE _os88_gfx_blit1_seg
+%ifdef CC_U__os88_gfx_blit1_seg
+_os88_gfx_blit1_seg:
+    push bp
+    mov bp, sp
+    mov es, [bp+4]                  ; ES:SI - THEIR segment
+    mov si, [bp+6]
+    mov di, [bp+8]                  ; the stride, parked until BP is free
+    mov ax, [bp+10]
+    mov bx, [bp+12]
+    mov cx, [bp+14]
+    mov dx, [bp+16]
+    mov bp, di                      ; BP = stride, as the slot wants
+    call OSAPI_GFX_BLIT1
+    sbb ax, ax                      ; CF -> 0 / -1
+    pop bp                          ; the CALLER's BP
+    ret
+%endif
+
 ; void os88_gfx_blit4(const void *pix,int stride,int x,int y,int w,int h)
 ; ES:SI = packed 4bpp pixels (two per byte, high nibble leftmost), BP =
 ; stride, AX/BX = x/y, CX/DX = w/h. Same BP dance as above.

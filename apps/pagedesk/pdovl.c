@@ -189,3 +189,5 @@ static int ovl_card_more(int which)
     ovl_card(which, r, pdu_mono);
     return 2;
 }
+
+#include "pdovlnav.c"             /* nav: the outline (20.10.4) */

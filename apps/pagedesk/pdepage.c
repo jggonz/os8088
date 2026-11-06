@@ -220,6 +220,7 @@ static pdw pg_box(pdw num, pdw gen, const char *key, struct pd_rect *r)
     return rc;
 }
 
+static pdw lk_page_has(pdw num, pdw gen);     /* pdelink.c (nav) */
 static pdw v_pageinfo(pdw page)
 {
     static struct pdxb_pageinfo pi;
@@ -279,6 +280,7 @@ static pdw v_pageinfo(pdw page)
             }
         }
     } else if (rc != PDE_NOTFOUND) return rc;
+    if (pi.nannots && lk_page_has(num, gen)) pi.flags |= PDP_HASLINKS;     /* nav: 20.10.2 */
     pd_fcopy_out(&pi, g_xb, 0, sizeof(struct pdxb_pageinfo));
     return PDE_OK;
 }

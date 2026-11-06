@@ -249,6 +249,60 @@ _pdu_sbhit:
     pop bp
     ret
 
+; nav: the thumb's drag (os88ui.inc's OS88UI_SBDRAG, SPEC.md 13.10.5). Rate 0 on
+; an 8086 - the view follows only at the release, because one commit is a
+; third of a second there and a thumb that waits is better than a page that
+; lags - and every 2 ticks on a 286 or better.
+_pdu_sbgrab:                    ; int pdu_sbgrab(int *blk, int y): 1 = live
+    push bp
+    mov bp, sp
+    push bx
+    push dx
+    mov bx, [bp+4]
+    mov dx, [bp+6]
+    mov ax, 0200h
+    call os88ui_sbrate
+    call os88ui_sbgrab
+    mov ax, 0
+    jc .out
+    inc ax
+.out:
+    pop dx
+    pop bx
+    pop bp
+    ret
+
+_pdu_sbtrack:                   ; int pdu_sbtrack(int *blk, int y): the pos owed, or -1
+    push bp
+    mov bp, sp
+    push bx
+    push cx
+    push dx
+    mov bx, [bp+4]
+    mov dx, [bp+6]
+    call os88ui_sbtrack
+    jnc .out
+    mov ax, -1
+.out:
+    pop dx
+    pop cx
+    pop bx
+    pop bp
+    ret
+
+_pdu_sbdrop:                    ; int pdu_sbdrop(int *blk): the final pos, or -1
+    push bp
+    mov bp, sp
+    push bx
+    mov bx, [bp+4]
+    call os88ui_sbdrop
+    jnc .out
+    mov ax, -1
+.out:
+    pop bx
+    pop bp
+    ret
+
 section .data
 pdu_vec:    times 4 dw 0, 0         ; (offset, segment) per module: PDENG,
                                     ; PDREND, PDWRT, and a spare. Segment 0 =
