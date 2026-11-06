@@ -694,10 +694,17 @@ mod_cfix:
     jne .ret                    ; (ZF from the last compare: no more)
     cmp byte [es:di], COLD_HOME >> 8
     jne .next
-    mov al, [es:di-4]           ; the opcode: 9A (call far) or EA (jmp far)
-    or al, 0x70                 ; differ in bits 4-6 alone, so both - and six
-    cmp al, 0xFA                ; opcodes no module puts there, which the
-    jne .next                   ; build's proof models exactly - read FA
+    mov al, [es:di-4]           ; the opcode: 9A (call far) or EA (jmp far),
+    xor al, 0x9A                ; EXACTLY those two - 9A ^ EA is 70h. It was
+    je .hit                     ; `or al, 70h / cmp al, FAh`, which reads EIGHT
+    cmp al, 0x9A ^ 0xEA         ; opcodes as a far one, and two of the other
+    jne .next                   ; six are 8A (mov r8, r/m8) and BA (mov dx,
+.hit:                           ; imm16): every module is full of both, so a
+                                ; `.cold` home whose two bytes followed one
+                                ; was re-pointed - the build's proof (os88rom
+                                ; cfix, which models this predicate byte for
+                                ; byte) refused CTRL.DRV's `8A 0E ..` the day
+                                ; a +69 `.vga` moved COLD_HOME to 08B3h
     mov [es:di-1], dx
     jcxz .ret
     inc di                      ; ...past the high byte just written
