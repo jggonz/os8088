@@ -75,10 +75,11 @@ static void pdu_nd_seed(void)
 {
     if (pdu_nd_n)
         return;
-    pdu_nd_add(PDA_NOTE, 2, 1, 0, 0, 4000, 5000, "Check the serial port.");
-    pdu_nd_add(PDA_HIGHLIGHT, 2, 2, 0, 0, 3000, 4000, "");
-    pdu_nd_add(PDA_TEXT, 2, 3, 0, 0, 2000, 3000, "Tested on two IBM XTs.");
-    pdu_nd_add(PDA_NOTE, 0, 4, 0, 0, 2000, 3000, "A note on page one");
+    /* pages 0 and 1, so a two-page sample (MARKUP.PDF) shows all four */
+    pdu_nd_add(PDA_NOTE, 0, 1, 0, 0, 4000, 5000, "Check the serial port.");
+    pdu_nd_add(PDA_HIGHLIGHT, 0, 2, 0, 0, 3000, 4000, "");
+    pdu_nd_add(PDA_TEXT, 0, 3, 0, 0, 2000, 3000, "Tested on two IBM XTs.");
+    pdu_nd_add(PDA_NOTE, 1, 4, 0, 0, 2000, 3000, "A note on page two");
     pdu_nd_id = 5;
 }
 int  pdu_ed_count(void) { pdu_nd_seed(); return pdu_nd_n; }
@@ -98,7 +99,7 @@ int  pdu_ed_new(struct pd_edit *e, const char *text, unsigned tlen,
     n = pdu_nd_n++;
     os88_memcpy(&pdu_nd_r[n], e, sizeof(*e));
     pdu_nd_r[n].id = pdu_nd_id++;
-    pdu_nd_r[n].flags = PDEF_DIRTY;
+    pdu_nd_r[n].flags |= PDEF_DIRTY;   /* as edit does: PDEF_IRTSRC kept */
     pdu_nd_gen++;
     if (tlen > 39) tlen = 39;
     os88_memcpy(pdu_nd_t[n], text, tlen);

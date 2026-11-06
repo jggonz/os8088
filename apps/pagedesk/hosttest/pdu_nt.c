@@ -212,6 +212,12 @@ int main(void)
     CHECK(ovl_nt_kind("Popup") == 0, "Popup is not listed");
     CHECK(ovl_nt_kind("Stamp") == 0, "Stamp is not listed");
     CHECK(ovl_nt_kind("Widget") == 0, "Widget is not listed");
+    CHECK(ovl_nt_kind("Caret") == 0, "Caret is not an ellipse");
+    CHECK(ovl_nt_kind("FileAttachment") == 0, "FileAttachment is not a text box");
+    CHECK(ovl_nt_kind("TrapNet") == 0, "TrapNet is not a note");
+    CHECK(ovl_nt_kind("StrikeOut") == PDA_HIGHLIGHT && ovl_nt_kind("Sound") == 0
+          && ovl_nt_kind("Screen") == 0 && ovl_nt_kind("Polygon") == 0,
+          "Sound, Screen, Polygon are not listed");
     {
         struct pd_edit e;
         memset(&e, 0, sizeof(e));

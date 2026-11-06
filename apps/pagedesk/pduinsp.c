@@ -113,12 +113,13 @@ static void ovl_nt_ictl(int k)
         lab = k == PDU_NI_BOLD ? "Bold" : "Italic";
         act = (pdu_nt_e2.style >> (k - PDU_NI_BOLD)) & 1;
     } else if (k == PDU_NI_COL) {
-        for (i = 0; i < 6 && pdu_ni_cols[i] != pdu_nt_e2.colour; i++)
+        for (i = 0; i < 7 && pdu_ni_cols[i] != pdu_nt_e2.colour; i++)
             ;
-        lab = pdu_ni_cname[i];
+        lab = i < 7 ? pdu_ni_cname[i] : "Other";  /* a colour C does not cycle to */
         if (!pdu_mono) {
-            paper = pdu_ni_cols[i];
-            ink = OS88_WHITE;
+            paper = pdu_nt_e2.colour & 15;
+            ink = paper <= PDC_BROWN || paper == PDC_DGRAY
+                  ? OS88_WHITE : OS88_BLACK;     /* the dark half: white */
         }
     } else if (k == PDU_NI_DEL)
         lab = "Delete";

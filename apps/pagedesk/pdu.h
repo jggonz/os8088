@@ -196,11 +196,14 @@ static void ovl_nt_srcload(void);
 static void ovl_nt_new(unsigned page, const struct pd_rect *r);
 static void ovl_nt_open(int id);
 static void ovl_nt_inspect(int id);
-/* WHAT EDIT AND PAGES CALL, after any change to the store or a selection */
-#define pdu_notes_dirty()      ovl_nt_dirty()
-#define pdu_nt_new(pg, r)      ovl_nt_new(pg, r)   /* the Note tool: a pending note */
-#define pdu_nt_open(id)        ovl_nt_open(id)     /* a note's popover */
-#define pdu_nt_inspect(id)     ovl_nt_inspect(id)  /* Text properties */
+/* WHAT EDIT CALLS (D19, 20.9.5) - real resident functions with exactly the
+ * prototypes edit's block declares, so the two blocks may sit in either
+ * order; PDU_NOTES switches off edit's own stand-ins (pduedit.c). Nobody
+ * calls notes to report a change: the panel polls pdu_ed_gen(). */
+#define PDU_NOTES 1
+void     pdu_nt_new(unsigned page_id, const struct pd_rect *r); /* the Note tool */
+void     pdu_nt_open(int i);                                    /* a note's popover */
+void     pdu_nt_inspect(int i);                                 /* Text properties */
 #endif
 /* ---- end notes ---- */
 

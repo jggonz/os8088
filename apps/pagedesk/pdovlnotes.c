@@ -13,13 +13,10 @@
  * button's. On COMPACT a row is one line of text.
  * ==========================================================================*/
 
-static const char *pdu_nt_dflt[10] = { "", "", "highlighted text", "area mark",
-                                       "text box", "ink drawing", "line",
-                                       "rectangle", "ellipse",
-                                       "drawn signature" };
 static char pdu_nt_w[48];               /* a card's title, a line's text */
 
 static void ovl_nt_pbtn(int k, struct os88_rect *r);
+static void ovl_nt_plistp(void);
 static void ovl_nt_pact(int k);
 static int  ovl_nt_pnote(void);
 static int  ovl_nt_ipaint(struct os88_rect *o, int rh);
@@ -38,14 +35,26 @@ static void ovl_nt_pad(const char *s, int cols)
     pdu_line[cols] = 0;
 }
 
-/* a labelled button: ground, frame, centred label */
+/* a labelled button: the frame, the slabs round the label and the label in
+ * one font_run - every pixel once, so a toggled state does not flash the
+ * caption (20.6.4's rule, PERFORMANCE.md rule 2) */
 static void ovl_nt_box(struct os88_rect *r, int paper, int ink, const char *s)
 {
-    pdu_fill(r->x1, r->y1, r->x2, r->y2, paper);
+    int lx, ly, lx2;
+    lx = r->x1 + (r->x2 - r->x1 + 1 - os88_strlen(s) * PDU_CW) / 2;
+    ly = r->y1 + (r->y2 - r->y1 + 1 - 8) / 2;
+    lx2 = lx + os88_strlen(s) * PDU_CW;
     os88_set_color(OS88_BLACK);
     os88_gfx_frame(r->x1, r->y1, r->x2, r->y2);
-    os88_font_run(r->x1 + (r->x2 - r->x1 + 1 - os88_strlen(s) * PDU_CW) / 2,
-                  r->y1 + (r->y2 - r->y1 + 1 - 8) / 2, s, ink, paper);
+    if (ly > r->y1 + 1)
+        pdu_fill(r->x1 + 1, r->y1 + 1, r->x2 - 1, ly - 1, paper);
+    if (ly + 8 < r->y2)
+        pdu_fill(r->x1 + 1, ly + 8, r->x2 - 1, r->y2 - 1, paper);
+    if (lx > r->x1 + 1)
+        pdu_fill(r->x1 + 1, ly, lx - 1, ly + 7, paper);
+    if (lx2 < r->x2)
+        pdu_fill(lx2, ly, r->x2 - 1, ly + 7, paper);
+    os88_font_run(lx, ly, s, ink, paper);
 }
 
 /* the list's rect in the panel: under the header */
@@ -77,6 +86,25 @@ static void ovl_nt_geom(int card)
         pdu_nt_top = pdu_nt_cnt - pdu_nt_vis;
     if (pdu_nt_top < 0)
         pdu_nt_top = 0;
+    h = pdu_nt_y0 * 4 + pdu_nt_vis * 2 + card + pdu_nt_tx * 64;
+    if (h != pdu_nt_gkey) {
+        pdu_nt_gkey = h;
+        pdu_nt_rok = 0;
+    }
+    if (!pdu_nt_rok) {                  /* nothing on show is known */
+        os88_memset(pdu_nt_rsig, 0, sizeof(pdu_nt_rsig));
+        pdu_nt_ssig = 0;
+        pdu_nt_rok = 1;
+    }
+}
+
+/* a row's picture as one word: what it says and how (a changed word is a
+ * repaint; an unchanged one is no call at all) */
+static unsigned ovl_nt_sig(unsigned h, const char *s)
+{
+    while (*s)
+        h = (h << 5) - h + (unsigned char)*s++;
+    return h;
 }
 
 /* the strip under the list: "<   1-4/9   >" or blanks, one font_run */
@@ -98,7 +126,7 @@ static void ovl_nt_strip(void)
         pdu_cat(m, pdu_num, 20);
     } else
         m[0] = 0;
-    ovl_nt_pad(m, pdu_nt_cols);
+    ovl_nt_pad("", pdu_nt_cols);       /* blanks, then the count centred */
     n = (pdu_nt_cols - os88_strlen(m)) / 2;
     os88_memcpy(pdu_line + n, m, os88_strlen(m));
     if (pdu_nt_cnt > pdu_nt_vis) {
@@ -107,6 +135,10 @@ static void ovl_nt_strip(void)
         if (pdu_nt_top + pdu_nt_vis < pdu_nt_cnt)
             pdu_line[pdu_nt_cols - 1] = '>';
     }
+    b = ovl_nt_sig(7, pdu_line) | 1;
+    if (b == pdu_nt_ssig)
+        return;
+    pdu_nt_ssig = b;
     os88_font_run(pdu_nt_tx, pdu_nt_ny + 2, pdu_line, OS88_BLACK,
                   pdu_nt_cardst ? pdu_cbar : OS88_WHITE);
 }
@@ -115,7 +147,7 @@ static void ovl_nt_strip(void)
 static void ovl_nt_row(int r, int id, int sel)
 {
     struct os88_rect *o;
-    int x1, y1, ink, paper, kind, page, rep, done, n;
+    int x1, y1, ink, paper, kind, page, rep, done, n, btn;
     const char *word;
     char *t;
 
@@ -123,6 +155,11 @@ static void ovl_nt_row(int r, int id, int sel)
     x1 = o->x1 + 3;
     y1 = pdu_nt_y0 + r * (pdu_nt_cardst ? PDU_NT_PITCH : PDU_NT_LINE);
     if (id < 0) {
+        if (r < PDU_NT_ROWS) {
+            if (pdu_nt_rsig[r] == 1)
+                return;
+            pdu_nt_rsig[r] = 1;         /* 1 = blank */
+        }
         if (pdu_nt_cardst)
             pdu_fill(o->x1, y1, o->x2, y1 + PDU_NT_CARD - 1, pdu_cbar);
         else
@@ -155,8 +192,9 @@ static void ovl_nt_row(int r, int id, int sel)
     }
     if (kind < 1 || kind > 9)
         kind = 0;
-    if (t[0] == 0)
-        os88_strcpy(t, pdu_nt_dflt[kind], 18);
+    /* a record with no text (a mark, ink, a shape) has a blank second line:
+     * its title already says what it is, and a table of stand-in phrases
+     * was 93 resident bytes */
     if (word[0] == 0 && done)
         word = "Resolved";
     paper = sel ? pdu_cact : OS88_WHITE;
@@ -166,6 +204,14 @@ static void ovl_nt_row(int r, int id, int sel)
     pdu_cat(pdu_nt_w, pdu_nt_cardst ? " - Page " : " p", 48);
     os88_utoa(page + 1, pdu_num);
     pdu_cat(pdu_nt_w, pdu_num, 48);
+    btn = kind == PDA_NOTE && !rep && pdu_npall != 2 ? 2 + done : 0;
+    if (r < PDU_NT_ROWS) {              /* the same picture: no call */
+        n = ovl_nt_sig(ovl_nt_sig(ovl_nt_sig(sel + done * 2 + btn * 4,
+                                             pdu_nt_w), t), word) | 2;
+        if (pdu_nt_rsig[r] == (unsigned)n)
+            return;
+        pdu_nt_rsig[r] = n;
+    }
 
     if (!pdu_nt_cardst) {               /* COMPACT: one line */
         pdu_cat(pdu_nt_w, done ? " ok: " : ": ", 48);
@@ -195,7 +241,7 @@ static void ovl_nt_row(int r, int id, int sel)
     pdu_nt_cr.x2 = x1 + 144;
     pdu_nt_cr.y1 = y1 + 23;
     pdu_nt_cr.y2 = y1 + 34;
-    if (kind == PDA_NOTE && !rep && pdu_npall != 2)
+    if (btn)
         ovl_nt_box(&pdu_nt_cr, paper, ink, done ? "Reopen" : "Resolve");
     else
         pdu_fill(pdu_nt_cr.x1, pdu_nt_cr.y1, pdu_nt_cr.x2, pdu_nt_cr.y2, paper);
@@ -207,12 +253,33 @@ static void ovl_nt_rows(int first, int last)
     int r, id;
     if (last >= pdu_nt_vis)
         last = pdu_nt_vis - 1;
-    if (pdu_nt_cnt == 0) {
-        if (first == 0)
-            os88_font_run(pdu_nt_tx + 2, pdu_nt_y0 + 6,
-                          pdu_npall == 2 ? "No changes yet" :
-                          pdu_npall ? "No notes or edits" : "None on this page",
-                          OS88_BLACK, pdu_nt_cardst ? pdu_cbar : OS88_WHITE);
+    if (pdu_nt_cnt == 0) {              /* blank rows 1.., then row 0 says so */
+        for (r = first > 0 ? first : 1; r <= last; r++)
+            ovl_nt_row(r, -1, 0);
+        if (first > 0 || pdu_nt_rsig[0] == 4 + 8 * (unsigned)pdu_npall)
+            return;
+        pdu_nt_rsig[0] = 4 + 8 * pdu_npall;     /* bit 1 clear: no row's sig */
+        ovl_nt_pad(pdu_npall == 2 ? "No changes yet" :
+                   pdu_npall ? "No notes or edits" : "None on this page",
+                   pdu_nt_cols);
+        if (!pdu_nt_cardst) {           /* a line is its own row */
+            os88_font_run(pdu_nt_tx, pdu_nt_y0, pdu_line, OS88_BLACK,
+                          OS88_WHITE);
+            return;
+        }
+        id = pdu_cbar;
+        r = PDU_NT_CARD;
+        pdu_fill(pdu_nt_o.x1, pdu_nt_y0, pdu_nt_o.x2, pdu_nt_y0 + 5, id);
+        if (pdu_nt_tx > pdu_nt_o.x1)
+            pdu_fill(pdu_nt_o.x1, pdu_nt_y0 + 6, pdu_nt_tx - 1,
+                     pdu_nt_y0 + 13, id);
+        if (pdu_nt_tx + pdu_nt_cols * PDU_CW <= pdu_nt_o.x2)
+            pdu_fill(pdu_nt_tx + pdu_nt_cols * PDU_CW, pdu_nt_y0 + 6,
+                     pdu_nt_o.x2, pdu_nt_y0 + 13, id);
+        os88_font_run(pdu_nt_tx, pdu_nt_y0 + 6, pdu_line, OS88_BLACK, id);
+        if (r > 14)
+            pdu_fill(pdu_nt_o.x1, pdu_nt_y0 + 14, pdu_nt_o.x2,
+                     pdu_nt_y0 + r - 1, id);
         return;
     }
     ovl_nt_seek(pdu_nt_top + first);
@@ -230,6 +297,9 @@ static void ovl_nt_tpbtn(void)
     o = &pdu_nt_o;
     on = pdu_nt_sel >= 0 && pdu_nt_sel < PDU_NT_SBASE
          && pdu_ed_get(pdu_nt_sel, &pdu_nt_e) == 0 && pdu_nt_e.kind == PDA_TEXT;
+    if (on == pdu_nt_tpon)
+        return;                         /* it already says that */
+    pdu_nt_tpon = on;
     pdu_nt_cr.x1 = o->x1 + 2;
     pdu_nt_cr.x2 = o->x2 - 2;
     pdu_nt_cr.y1 = o->y2 - 15;
@@ -245,6 +315,7 @@ static void ovl_nt_tpbtn(void)
 static void ovl_nt_listpaint(void)
 {
     ovl_nt_sync();
+    pdu_nt_seen = (int)pdu_ed_gen();    /* the store as it is now shown */
     ovl_nt_geom(pdu_nt_cardst);
     ovl_nt_rows(0, pdu_nt_vis - 1);
     ovl_nt_strip();
@@ -256,7 +327,7 @@ static int ovl_nt_body(void)
     ovl_nt_plist(&pdu_nt_o);
     if (pdu_nt_insp)
         return ovl_nt_ipaint(&pdu_nt_o, 16);
-    pdu_nt_srcload();
+    pdu_nt_srcwant();
     pdu_nt_cardst = 1;
     ovl_nt_listpaint();
     ovl_nt_tpbtn();
@@ -285,8 +356,9 @@ static void ovl_nt_reveal(void)
 
 static void ovl_nt_page(void)
 {
-    if (pdu_npall == 0) {
-        pdu_nt_top = 0;
+    if (pdu_npall != 2) {               /* the source rows are the page's */
+        if (pdu_npall == 0)
+            pdu_nt_top = 0;
         pdu_nt_cnt = -1;
         ovl_nt_relist();
     }
@@ -314,11 +386,16 @@ static void ovl_nt_srcload(void)
     int k, n, kd, j;
     struct pdxb_annot *a;
 
-    a = (struct pdxb_annot *)pdu_nt_buf;        /* the field is idle now */
+    /* the head of each answer into pdu_line (72 bytes; nothing else is using
+     * it between paints) and the first 17 characters straight into the cache,
+     * never pdu_tbuf: that is edit's open text box as well as ours (D19) */
+    a = (struct pdxb_annot *)pdu_line;
     pdu_nt_ns = 0;
     pdu_nt_nsr = 0;
     pdu_nt_spage = pdu_page + 1;
     pdu_nt_cnt = -1;
+    if (pdu_nt_sel >= PDU_NT_SBASE)
+        pdu_nt_sel = -1;                /* a slot of another page's cache */
     n = pdu_pinfo.nannots;
     if (n > PDU_NT_SCAN)
         n = PDU_NT_SCAN;
@@ -326,7 +403,7 @@ static void ovl_nt_srcload(void)
         pdu_mcall(PDU_M_ENG, PDV_ENG_ANNOTS, PDU_NT_PGID(pdu_page), k, 0);
         if (pdu_mcf)
             continue;
-        pd_fcopy_in(pdu_xb, 0, a, sizeof(struct pdxb_annot));
+        pd_fcopy_in(pdu_xb, 0, a, PDU_NT_AHEAD);
         if (a->irt_num) {
             if (pdu_nt_nsr < 6) {
                 pdu_nt_srk[pdu_nt_nsr] = a->irt_num;
@@ -342,13 +419,13 @@ static void ovl_nt_srcload(void)
         pdu_nt_sk[j] = kd;
         pdu_nt_sh[j] = 0;
         os88_memcpy(&pdu_nt_sr[j], &a->rect, sizeof(struct pd_rect));
-        a->contents[17] = 0;
-        os88_strcpy(pdu_nt_stx[j], a->contents, 18);
+        pd_fcopy_in(pdu_xb, PDU_NT_AHEAD, pdu_nt_stx[j], 17);
+        pdu_nt_stx[j][17] = 0;
     }
 }
 
-/* the store (or a selection) changed: edit and pages call this after every
- * mutation, undo and redo included. Repaints the list when it is on screen. */
+/* the store (or a selection) changed - pdu_ed_gen() moved, or one of our own
+ * commands ran. Repaints the rows that changed, when the list is on screen. */
 static void ovl_nt_dirty(void)
 {
     int s;
@@ -362,27 +439,27 @@ static void ovl_nt_dirty(void)
     if (pdu_doc != D_OPEN)
         return;
     if (pdu_pop == P_NOTES)
-        ovl_nt_ppaint();
+        ovl_nt_plistp();
     else if (pdu_pop == P_NONE)
         ovl_nt_relist();
 }
 
-/* the wake handler, idle: a list repaint the popover owed, a source load */
+/* the wake handler, idle: this page's source cache when it is owed, then ONE
+ * repaint of the rows that changed - for the load, a popover that closed or
+ * the store's generation */
 static void ovl_nt_idle(void)
 {
-    if (pdu_nt_post || (int)pdu_ed_gen() != pdu_nt_seen) {
+    unsigned was;
+    was = pdu_nt_spage;
+    if (pdu_nt_late)
+        pdu_nt_srcload();
+    if (pdu_nt_post || (int)pdu_ed_gen() != pdu_nt_seen
+        || pdu_nt_spage != was) {
         pdu_nt_post = 0;
         os88_gfx_lock();
         ovl_nt_dirty();
         os88_gfx_unlock();
     }
-    pdu_nt_srcload();
-    if (pdu_nt_late || pdu_nt_spage != pdu_page + 1)
-        return;
-    pdu_nt_cnt = -1;
-    os88_gfx_lock();
-    ovl_nt_relist();
-    os88_gfx_unlock();
 }
 
 /* --- Resolve / Reopen (13.4): a reply record ----------------------------------- */
@@ -426,9 +503,8 @@ static void ovl_nt_resolve(int id)
 /* select item id and jump to it: the page, the record, the view */
 static void ovl_nt_pick(int id)
 {
-    int old, page, k;
+    int page, k;
 
-    old = pdu_nt_sel;
     pdu_nt_sel = id;
     if (id < PDU_NT_SBASE) {
         if (pdu_ed_get(id, &pdu_nt_e) != 0)
@@ -452,20 +528,12 @@ static void ovl_nt_pick(int id)
         }
     } else
         ovl_nt_reveal();
-    /* only the two rows it touched, unless the list had to move */
+    /* the list follows the item; the rows' pictures make this the two rows
+     * the selection touched, or the list when it had to move */
     k = ovl_nt_find(id);
-    if (k >= 0 && (k < pdu_nt_top || k >= pdu_nt_top + pdu_nt_vis)) {
+    if (k >= 0 && (k < pdu_nt_top || k >= pdu_nt_top + pdu_nt_vis))
         pdu_nt_top = k < pdu_nt_top ? k : k - pdu_nt_vis + 1;
-        ovl_nt_relist();
-        return;
-    }
-    if (PDU_NT_PANEL() && pdu_pop == P_NONE) {
-        if (old >= 0 && (k = ovl_nt_find(old)) >= pdu_nt_top)
-            ovl_nt_rows(k - pdu_nt_top, k - pdu_nt_top);
-        k = ovl_nt_find(id);
-        ovl_nt_rows(k - pdu_nt_top, k - pdu_nt_top);
-        ovl_nt_tpbtn();
-    }
+    ovl_nt_relist();
 }
 
 /* one click on row r of the list */
@@ -518,7 +586,7 @@ static int ovl_nt_stripclick(int x, int y)
     if (k != pdu_nt_top) {
         pdu_nt_top = k;
         if (pdu_pop == P_NOTES)
-            ovl_nt_ppaint();
+            ovl_nt_plistp();
         else
             ovl_nt_relist();
     }
@@ -551,7 +619,7 @@ static int ovl_nt_click(int x, int y)
 /* --- the COMPACT popover: the list, one line each ------------------------------ */
 static int ovl_nt_ppaint(void)
 {
-    struct os88_rect *p, *o;
+    struct os88_rect *p;
     int y;
 
     p = &pdu_poprect;
@@ -565,15 +633,24 @@ static int ovl_nt_ppaint(void)
     os88_font_run(p->x1 + 8, y + 2, "Notes & edits", OS88_BLACK, OS88_WHITE);
     os88_set_color(OS88_BLACK);
     os88_gfx_hline(p->x1 + 2, p->x2 - 2, y + PDU_POP_ROW - 1);
-    pdu_nt_srcload();
+    pdu_nt_rok = 0;                     /* just filled: nothing on show */
+    ovl_nt_plistp();
+    return 1;
+}
+
+/* the popover's list again - rows, strip - over what it last showed */
+static void ovl_nt_plistp(void)
+{
+    struct os88_rect *p, *o;
+    p = &pdu_poprect;
+    pdu_nt_srcwant();
     o = &pdu_nt_o;
     o->x1 = p->x1 + 8;
     o->x2 = p->x2 - 8;
-    o->y1 = y + PDU_POP_ROW + 2;
+    o->y1 = p->y1 + 4 + PDU_POP_ROW + 2;
     o->y2 = p->y2 - 4;
     pdu_nt_cardst = 0;
     ovl_nt_listpaint();
-    return 1;
 }
 
 /* a click in a popover: 1 when it was ours */
@@ -629,11 +706,13 @@ static void ovl_nt_pbtn(int k, struct os88_rect *r)
 }
 
 /* the counter in the title and the last four lines of the text, one font_run
- * a line, so typing redraws what it touched and nothing is erased first */
-static void ovl_nt_ptext(void)
+ * a line, so nothing is erased first. all = 0 (a key): only the line or two
+ * the key touched (the character and the cursor), unless the text scrolled -
+ * a keystroke is two font_runs on an XT, not five */
+static void ovl_nt_ptext(int all)
 {
     struct os88_rect *p;
-    int L, first, k, i, pos;
+    int L, first, k, i, pos, lo, hi;
     char *m;
 
     p = &pdu_poprect;
@@ -645,7 +724,16 @@ static void ovl_nt_ptext(void)
                   OS88_WHITE);
     L = (pdu_nt_blen + 32) / 32;
     first = L > 4 ? L - 4 : 0;
+    lo = (pdu_nt_blen > 0 ? pdu_nt_blen - 1 : 0) / 32 - first;
+    hi = (pdu_nt_blen + 1) / 32 - first;
+    if (all || first != pdu_nt_pfirst) {
+        lo = 0;
+        hi = 3;
+    }
+    pdu_nt_pfirst = first;
     for (k = 0; k < 4; k++) {
+        if (k < lo || k > hi)
+            continue;
         pos = (first + k) * 32;
         for (i = 0; i < 32; i++)
             pdu_line[i] = pos + i < pdu_nt_blen ? pdu_nt_buf[pos + i]
@@ -682,7 +770,7 @@ static int ovl_nt_pnote(void)
                   OS88_BLACK, OS88_WHITE);
     os88_set_color(OS88_BLACK);
     os88_gfx_hline(p->x1 + 2, p->x2 - 2, p->y1 + 15);
-    ovl_nt_ptext();
+    ovl_nt_ptext(1);
     for (k = 0; k < 3; k++) {
         ovl_nt_pbtn(k, &pdu_nt_cr);
         ovl_nt_box(&pdu_nt_cr, OS88_WHITE, OS88_BLACK,
@@ -754,7 +842,7 @@ static int ovl_nt_commit(void)
     } else
         return 0;
     if (r < 0) {
-        pdu_tell("The note was not kept: the edit store is full.");
+        pdu_tell("The edit store is full: save, then continue.");  /* pooled */
         return -1;
     }
     pdu_nt_ptxt = 0;
@@ -812,15 +900,15 @@ static int ovl_nt_key(int ascii, int scan)
         else if (ascii == 8 && pdu_nt_blen > 0) {
             pdu_nt_buf[--pdu_nt_blen] = 0;
             pdu_nt_ptxt = 1;
-            ovl_nt_ptext();
+            ovl_nt_ptext(0);
         } else if (ascii >= 32 && ascii < 127) {
             if (pdu_nt_blen >= PDU_NT_MAXTXT)
-                pdu_tell("A note holds 1,024 characters; what is typed is kept.");
+                pdu_tell("A note holds 1,024 characters.");
             else {
                 pdu_nt_buf[pdu_nt_blen++] = ascii;
                 pdu_nt_buf[pdu_nt_blen] = 0;
                 pdu_nt_ptxt = 1;
-                ovl_nt_ptext();
+                ovl_nt_ptext(0);
             }
         }
         return 1;
@@ -831,7 +919,7 @@ static int ovl_nt_key(int ascii, int scan)
         pdu_nt_top = pdu_nt_top + (scan == 0x48 ? -1 : 1);
         if (pdu_nt_top < 0)
             pdu_nt_top = 0;
-        ovl_nt_ppaint();
+        ovl_nt_plistp();                /* geom clamps the bottom */
         return 1;
     }
     return 0;

@@ -28,6 +28,10 @@
 #define PDU_NT_PITCH 38                 /* ... and its pitch */
 #define PDU_NT_LINE  12                 /* a COMPACT row */
 #define PDU_NT_MAXTXT 1024              /* 13.1: a record's text */
+#define PDU_NT_ROWS  12                 /* rows whose last picture is kept */
+#define PDU_NT_AHEAD 62                 /* pdxb_annot's bytes before contents */
+typedef char pdu_nt_ahead_ok[sizeof(struct pdxb_annot) == PDU_NT_AHEAD + 160
+                            ? 1 : -1];  /* contents is the last 160 bytes */
 
 #define PDU_NT_PANEL() (pdu_L.notes.x1 <= pdu_L.notes.x2)
 #define PDU_NT_ISREPLY(e) ((e)->kind == PDA_NOTE \
@@ -73,11 +77,20 @@ static struct os88_rect pdu_nt_o;       /* the list's rect (panel or popover) */
 static int pdu_nt_cardst;               /* 1 = cards, 0 = one line each */
 static struct os88_rect pdu_nt_cr;      /* a control's rect, scratch */
 static int pdu_nt_vis, pdu_nt_y0, pdu_nt_ny, pdu_nt_tx, pdu_nt_cols;
+/* what each row, the strip and the Text properties button last SHOWED, so a
+ * relist paints only what changed (20.9.2). pdu_nt_rok = 0 forgets it all:
+ * the panel or the popover was filled under the list. */
+static unsigned pdu_nt_rsig[PDU_NT_ROWS];
+static unsigned pdu_nt_ssig;
+static int pdu_nt_rok;
+static int pdu_nt_tpon = -1;
+static int pdu_nt_gkey;                 /* the geometry the sigs are of */
 
 /* ---- the note popover ----------------------------------------------------------- */
 #define pdu_nt_buf pdu_tbuf             /* D19: edit's one shared near text buffer */
 static int pdu_nt_seen;                 /* pdu_ed_gen() the list last showed */
 static int pdu_nt_blen;
+static int pdu_nt_pfirst;               /* the text's first line on show */
 static int pdu_nt_pid = -1;             /* item id; -1 = a note not yet made */
 static int pdu_nt_pm;                   /* 0 the note editor, 1 the inspector */
 static int pdu_nt_ptxt;                 /* the typed text differs from the store */
@@ -215,11 +228,11 @@ static int ovl_nt_find(int id)
 static int ovl_nt_kind(const char *s)
 {
     switch (s[0]) {
-    case 'T': return PDA_NOTE;                  /* Text */
+    case 'T': return s[1] == 'e' ? PDA_NOTE : 0;      /* Text, not TrapNet */
     case 'H': case 'U': return PDA_HIGHLIGHT;   /* Highlight, Underline */
-    case 'F': return PDA_TEXT;                  /* FreeText */
+    case 'F': return s[1] == 'r' ? PDA_TEXT : 0;      /* FreeText, not FileAttachment */
     case 'I': return PDA_INK;
-    case 'C': return PDA_ELLIPSE;               /* Circle */
+    case 'C': return s[1] == 'i' ? PDA_ELLIPSE : 0;   /* Circle, not Caret */
     case 'L': return s[3] == 'e' ? PDA_LINE : 0;      /* Line, not Link */
     case 'S':
         if (s[1] == 'q')                        /* Square, Squiggly */
@@ -266,6 +279,8 @@ static void pdu_notes_paint(void)
         if (pdu_L.ctl[i].id == C_NP_CLOSE || pdu_L.ctl[i].id == C_NP_FILTER)
             pdu_ctl_paint(i);
     pdu_cground = -1;
+    pdu_nt_rok = 0;                     /* the list's ground was just filled */
+    pdu_nt_tpon = -1;
     if (pdu_doc != D_OPEN)
         os88_font_run(n->x1 + 8, n->y1 + 2 * PDU_BAR_F + 10, "No document",
                       OS88_BLACK, pdu_cbar);
@@ -273,11 +288,12 @@ static void pdu_notes_paint(void)
         ovl_nt_body();
 }
 
-/* a page change: the list follows the page only under This page; a reveal
- * the jump was waiting for runs here too */
+/* a page change: This page and All pages both list the SHOWN page's source
+ * annotations, so both follow it (only the rows that changed are painted);
+ * a reveal the jump was waiting for runs here too */
 static void pdu_notes_page(void)
 {
-    if (PDU_NT_PANEL() && pdu_doc == D_OPEN && (pdu_npall == 0 || pdu_nt_rvl))
+    if (PDU_NT_PANEL() && pdu_doc == D_OPEN && (pdu_npall != 2 || pdu_nt_rvl))
         ovl_nt_page();
 }
 
@@ -285,16 +301,34 @@ static void pdu_notes_page(void)
  * and no job is using the engine (an ANNOTS call moves its object state) */
 static void pdu_nt_srcload(void)
 {
-    if (pdu_doc != D_OPEN || pdu_nt_spage == pdu_page + 1)
-        return;
-    if (!PDU_NT_PANEL() && pdu_pop != P_NOTES)
+    if (pdu_doc != D_OPEN || pdu_nt_spage == pdu_page + 1
+        || (!PDU_NT_PANEL() && pdu_pop != P_NOTES)) {
+        pdu_nt_late = 0;                /* nothing owed: up to date, or */
         return;                         /* loaded when it is shown */
+    }
     if (pdu_job != J_NONE) {
         pdu_nt_late = 1;
         return;
     }
     pdu_nt_late = 0;
     ovl_nt_srcload();
+}
+
+/* the paint paths' form: never an engine call under a paint (D21: a module
+ * verb at the bottom of the paint chain is the deepest stack PageDesk has).
+ * A cache of another page is emptied - the list never shows it - and the
+ * wake loads this page's and repaints the rows that changed. */
+static void pdu_nt_srcwant(void)
+{
+    if (pdu_doc != D_OPEN || pdu_nt_spage == pdu_page + 1)
+        return;
+    pdu_nt_ns = 0;
+    pdu_nt_nsr = 0;
+    pdu_nt_cnt = -1;
+    if (pdu_nt_sel >= PDU_NT_SBASE)
+        pdu_nt_sel = -1;
+    pdu_nt_late = 1;
+    pdu_kick();
 }
 
 static int pdu_nt_owed(void)
@@ -321,6 +355,8 @@ static void pdu_nt_reset(void)
     pdu_nt_cnt = -1;
     pdu_nt_insp = 0;
     pdu_nt_rvl = 0;
+    pdu_nt_late = 0;
+    pdu_nt_post = 0;
 }
 
 /* the filter button (C_NP_FILTER): This page, All pages, Changes */
@@ -356,7 +392,8 @@ static int pdu_nt_key(int ascii, int scan)
 {
     if (pdu_nt_insp && !PDU_NT_PANEL())
         pdu_nt_insp = 0;                /* the panel was put away */
-    if (pdu_pop != P_NOTES && pdu_pop != P_NOTE && !pdu_nt_insp)
+    if (pdu_pop != P_NOTES && pdu_pop != P_NOTE
+        && (!pdu_nt_insp || pdu_fedit))  /* the page field keeps its keys */
         return 0;
     return ovl_nt_key(ascii, scan);
 }
@@ -364,6 +401,23 @@ static int pdu_nt_key(int ascii, int scan)
 static void pdu_nt_ppaint(void)
 {
     ovl_nt_ppaint();
+}
+
+/* edit's three calls (D19, 20.9.5): the Note tool's pending note, and a
+ * double-click on a note or a text box */
+void pdu_nt_new(unsigned page_id, const struct pd_rect *r)
+{
+    ovl_nt_new(page_id, r);
+}
+
+void pdu_nt_open(int i)
+{
+    ovl_nt_open(i);
+}
+
+void pdu_nt_inspect(int i)
+{
+    ovl_nt_inspect(i);
 }
 
 static void pdu_nt_pclose(void)
