@@ -45,61 +45,62 @@ static pdw sc_isnum(pdw a, pdw b)       /* all digits, non-empty             */
     while (a < b) { if (g_pg[a] < '0' || g_pg[a] > '9') return 0; a++; }
     return 1;
 }
+static pdb sc_stk[SC_DEPTH + 2];        /* open containers: 2 dict, 1 array  */
 static pdw sc_val(pdw p, pdw depth)     /* end of the value starting at p    */
 {
-    pdw q, r, nest;
-    if (p >= sc_n || depth > SC_DEPTH) return SC_BAD;
-    if (g_pg[p] == '<' && p + 1 < sc_n && g_pg[p + 1] == '<') {
-        p += 2;
-        for (;;) {
+    pdw q, r, nest, n = 0;
+    for (;;) {                          /* iterative (D21): no recursion      */
+        if (n) {
             p = sc_skip(p);
             if (p >= sc_n) return SC_BAD;
-            if (g_pg[p] == '>') return (p + 1 < sc_n && g_pg[p + 1] == '>') ? (pdw)(p + 2) : SC_BAD;
-            if (g_pg[p] != '/') return SC_BAD;
-            p = sc_tok((pdw)(p + 1));
-            p = sc_skip(p);
-            p = sc_val(p, (pdw)(depth + 1));
-            if (p == SC_BAD) return SC_BAD;
+            if (sc_stk[n - 1] == 2) {
+                if (g_pg[p] == '>') {
+                    if (!(p + 1 < sc_n && g_pg[p + 1] == '>')) return SC_BAD;
+                    p += 2; n--;
+                    if (!n) return p;
+                    continue;
+                }
+                if (g_pg[p] != '/') return SC_BAD;
+                p = sc_skip(sc_tok((pdw)(p + 1)));
+            } else if (g_pg[p] == ']') {
+                p++; n--;
+                if (!n) return p;
+                continue;
+            }
         }
-    }
-    if (g_pg[p] == '<') {
-        while (p < sc_n && g_pg[p] != '>') p++;
-        return p < sc_n ? (pdw)(p + 1) : SC_BAD;
-    }
-    if (g_pg[p] == '[') {
-        p++;
-        for (;;) {
-            p = sc_skip(p);
+        if (p >= sc_n || (pdw)(depth + n) > SC_DEPTH) return SC_BAD;
+        if (g_pg[p] == '<' && p + 1 < sc_n && g_pg[p + 1] == '<') { p += 2; sc_stk[n++] = 2; continue; }
+        if (g_pg[p] == '[') { p++; sc_stk[n++] = 1; continue; }
+        if (g_pg[p] == '<') {
+            while (p < sc_n && g_pg[p] != '>') p++;
             if (p >= sc_n) return SC_BAD;
-            if (g_pg[p] == ']') return (pdw)(p + 1);
-            p = sc_val(p, (pdw)(depth + 1));
-            if (p == SC_BAD) return SC_BAD;
-        }
-    }
-    if (g_pg[p] == '(') {
-        nest = 1; p++;
-        while (p < sc_n) {
-            if (g_pg[p] == '\\') p++;
-            else if (g_pg[p] == '(') nest++;
-            else if (g_pg[p] == ')') { nest--; if (!nest) return (pdw)(p + 1); }
             p++;
+        } else if (g_pg[p] == '(') {
+            nest = 1; p++;
+            while (p < sc_n && nest) {
+                if (g_pg[p] == '\\') p++;
+                else if (g_pg[p] == '(') nest++;
+                else if (g_pg[p] == ')') nest--;
+                p++;
+            }
+            if (nest) return SC_BAD;
+        } else if (g_pg[p] == '/') p = sc_tok((pdw)(p + 1));
+        else if (sc_delim((pdb)g_pg[p])) return SC_BAD;
+        else {
+            q = sc_tok(p);
+            if (q == p) return SC_BAD;
+            if (sc_isnum(p, q)) {                   /* maybe "n g R"             */
+                r = sc_skip(q);
+                if (sc_isnum(r, sc_tok(r))) {
+                    r = sc_skip(sc_tok(r));
+                    if (r < sc_n && g_pg[r] == 'R' && (r + 1 >= sc_n || sc_ws((pdb)g_pg[r + 1]) || sc_delim((pdb)g_pg[r + 1])))
+                        q = (pdw)(r + 1);
+                }
+            }
+            p = q;
         }
-        return SC_BAD;
+        if (!n) return p;
     }
-    if (g_pg[p] == '/') return sc_tok((pdw)(p + 1));
-    if (sc_delim((pdb)g_pg[p])) return SC_BAD;
-    q = sc_tok(p);
-    if (q == p) return SC_BAD;
-    if (sc_isnum(p, q)) {                       /* maybe "n g R"             */
-        r = sc_skip(q);
-        if (sc_isnum(r, sc_tok(r))) {
-            r = sc_tok(r);
-            r = sc_skip(r);
-            if (r < sc_n && g_pg[r] == 'R' && (r + 1 >= sc_n || sc_ws((pdb)g_pg[r + 1]) || sc_delim((pdb)g_pg[r + 1])))
-                return (pdw)(r + 1);
-        }
-    }
-    return q;
 }
 /* the object number and generation of an "n g R" at [a,b), else 0 */
 static pdw sc_ref(pdw a, pdw b, pdw *gen)
