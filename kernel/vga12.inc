@@ -1068,14 +1068,15 @@ gfx_pixel:
 ; gfx_fill produces identical pixels for one row.)
 ; -----------------------------------------------------------------------------
 gfx_hline:
-    push bx
     push cx
     mov cx, bx                  ; rect (x1,y)-(x2,y)
     mov bx, dx
     call gfx_fill
-    pop cx
-    pop bx
-    ret
+    mov bx, cx                  ; gfx_fill keeps every register, so CX comes
+    pop cx                      ; back as x2 - the caller's BX - and the push
+    ret                         ; and pop of BX are a `mov` (same 12 bytes,
+                                ; ~24 clocks off every hline: kernel hot-paths
+                                ; pass 1, gfxcall-2)
 
 
 
@@ -4058,11 +4059,41 @@ gfx_xor_rect_d:
 gfx_frame:
     push bp                     ; the SAME four strips gfx_xor_rect draws, and
     mov bp, gfx_fill            ; the same pixels this drew with two hlines and
-.go:                            ; two vlines: the strips' top and bottom are
-    call gfx_xor_strips         ; full width, so they cover the corners the
-    pop bp                      ; verticals used to draw twice. Four calls
-    ret                         ; either way, and gfx_fill is one wrapper
-                                ; frame shallower than gfx_hline/gfx_vline
+                                ; two vlines: the strips' top and bottom are
+                                ; full width, so they cover the corners the
+                                ; verticals used to draw twice
+%ifndef GFXAUDIT
+    ; --- GFXCLIP's QUESTIONS ASKED ONCE A FRAME, not once a strip (kernel
+    ; hot-paths pass 1, gfxcall-3). The unclipped head of gfx_fill is CLIPQ,
+    ; the cursor hide and GFXDISP's display count, ~245 clocks on the target,
+    ; and the four strips asked all three four times over a state none of
+    ; them can change: a strip writes no region, no hole and no display, and
+    ; a spent hide stays spent. So an unclipped frame on one display asks
+    ; here and hands the strips the RAW body below GFXDISP - exactly where
+    ; gfx_fill's own unclipped path lands. A region (or the open dock's
+    ; hole, which CLIPQ arms as one) or a second display keeps the public
+    ; entry per strip, which is the old path to the instruction: the clip
+    ; is per rect and a strip can straddle a seam, so neither can be asked
+    ; for the outline as a whole. GFXAUDIT keeps the old path too, so its
+    ; counts stay per primitive.
+    CLIPQ
+    jne .go
+%ifdef KERN_BIG
+    cmp byte [vid_ndisp], 1
+    ja .go
+%endif
+    CURUNLAZY
+    mov bp, gfx_fill_raw
+%endif
+.go:
+    call gfx_xor_strips
+    pop bp
+    ret
+%ifdef KERN_BIG
+%ifndef GFXAUDIT
+    nop                         ; PARITY, never executed: the head above is
+%endif                          ; odd on kern_big, and every hot routine after
+%endif                          ; it keeps its measured parity
 
 gfx_xor_rect_clip:              ; the clipped head: each strip meets GFXCLIP
     push bp
