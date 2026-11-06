@@ -1327,3 +1327,171 @@ SKIPs until `pdeng.c` is on the branch; verify-wrt ran it green against
 ### 20.6 The package and its interface (`shell`)
 
 ### 20.7 Arithmetic and the assembly contract (`math`)
+
+`apps/pagedesk/pdmath.inc` is the 8086 body of every function in `pdmath.h`;
+`pdmath.c` is its host reference and `tests/pdmath/pdmath_diff.py` holds the
+two to each other bit for bit. `apps/pagedesk/pdabi.inc` is GENERATED from
+`pdabi.h` by `tools/os88pdabi.py --write` and `--check` (run by every `make`)
+fails when they disagree.
+
+#### 20.7.1 Calling convention
+
+SmallerC cdecl (SPEC.md 73.3). Arguments are pushed right to left and the
+caller removes them; the result is in AX; `void` functions leave AX undefined.
+A function's label is its C name with a leading underscore (`_pdm_fx_mul`,
+`_pd_fcopy_in`). BP, DS, ES, SS:SP and DF come back as they went in; AX BX CX
+DX SI DI are the caller's to lose. Every struct argument is a NEAR pointer into
+DS; a module's door has loaded DS = CS (3.1), so `pdmath.inc` reads its own
+`.bss` flag and its CRC table through CS/DS with no further setup. A result
+pointer may equal an operand pointer (`mat_mul`, `mat_apply` and the u32/fx
+ops build the answer first). Two RESULT pointers of one call - `mat_apply`'s `x`
+and `y`, the view's `px`/`py`, `x`/`y` and `w`/`h` - must be distinct: the
+assembly stores `view_fwd`'s and `mat_apply`'s in the opposite order from
+`pdmath.c`, so an aliased pair keeps a different one of the two. The far movers are the only code that loads DS
+or ES; they restore both and leave DF clear. Nothing touches SS.
+
+`pdmath.inc` is `%include`d by each assembly in its `section .text` after
+`cpu 8086`; it needs `section .bss` to exist (the shim's bss is zeroed on
+first entry, 3.1). The sticky overflow word `pdm_ovfw` is in THAT assembly's
+bss: every segment keeps its own flag (a PDREND overflow is read through
+PDREND's own `pdm_ovf`, or reported to the primary in `pdxb_rstatus`). The
+include is guarded, so a second `%include` in one assembly is harmless; every
+internal label is `pdmi_*`, the flag is `pdm_ovfw`, every constant is
+`PDMI_*`, and the C-visible names are exactly `pdmath.h`'s. A segment that
+needs only part of it defines before the include any of `PDM_SKIP_U32`,
+`PDM_SKIP_PARSE` (fx_parse, fx_todec), `PDM_SKIP_MAT`, `PDM_SKIP_VIEW`,
+`PDM_SKIP_FAR` and `PDM_SKIP_CRC`. Measured by nasm (`cpu 8086`, `-w+error`):
+
+| configuration | bytes of `.text` |
+|---|---|
+| everything | 3,633 |
+| core only (all six skipped: overflow flag, fx add/sub/mul/div/neg/cmp/int/floor/round/to_pt16/pt16_to_fx, fx_div's 48/32 divider) | 848 |
+| the groups, by what each adds to the core | U32 403, PARSE 515, MAT 525, VIEW 806, FAR 371, CRC 165 (the 21-byte span check both use is in the core) |
+
+Largest stack use of one call (return address included): `mat_mul` 50 bytes,
+`mat_apply` 30, `fx_mul`/`fx_div`/`view_*`/`fx_parse` 18-22, the rest 4-6.
+`tools/stkbalance.py` is clean on the file (no callee pops arguments; frames
+are torn down with `add sp, N`; the two digit routines carry
+`STKBALANCE-LOOP`).
+
+#### 20.7.2 Semantics settled here (beyond 4.2 and `pdmath.c`'s header)
+
+* **Overflow.** The flag is a word, 0 or 1, cleared only by `pdm_ovf_clear`.
+  u32 add/sub/add16 saturate to 0xFFFFFFFF / 0 and set it; `u32_shl` sets it
+  when any bit is shifted out (saturating to 0xFFFFFFFF; `0 << n` is 0, no
+  flag); `u32_shr` with n >= 32 is 0; `u32_divmod16` by 0 sets it, stores
+  0xFFFFFFFF and returns 0. fx results saturate to +-0x7FFFFFFF (the pattern
+  0x80000000 is accepted as input and means -2^31; `fx_neg` of it, `fx_int` of
+  -32768 and every sum/difference/product/quotient out of range set the flag).
+  `fx_div` by 0 sets it and returns +0x7FFFFFFF, or -0x7FFFFFFF when the
+  dividend is negative. `pdm_fx_parse`'s `PDE_RANGE` saturates and does NOT set
+  the flag (the return code is its report).
+* **Rounding.** `fx_mul`/`fx_div` truncate toward zero (magnitude, then sign).
+  `fx_floor` is the high word. `fx_round` and `fx_to_pt16` round half away from
+  zero; `fx_round` of a value >= 32767.5 saturates to 32767 and sets the flag
+  (the low end cannot overflow: -32768 fits).
+  `fx_to_pt16` saturates to +-32767 and sets the flag. `fx_parse` rounds half up
+  in magnitude: at most 8 fraction digits count, the integer part saturates at
+  40000, no spaces or exponents are allowed, a lone sign or point is
+  `PDE_SYNTAX`, and a syntax error stores 0. `fx_todec` rounds to 4 fraction
+  digits, drops trailing zeros and a bare point, prints a negative that rounds
+  to zero as "0", and writes exactly the characters and the NUL (at most 12
+  bytes); the u32 form writes at most 10 digits + NUL.
+* **The view transform.** Any `rot` other than 90, 180 or 270 behaves as 0.
+  Valid for every value its types hold: coordinates int16 (so each of u, v is
+  at most 17 bits), zoom and `asp_num` 0..65535, `asp_den` 1..65535. The
+  scaled offset is computed exactly (48-bit numerator) and floored; `inv`
+  takes the ceiling, so a pixel maps to the smallest pt16 that lands on it.
+  Anything with a magnitude of 65536 or more is clamped before the origin or box
+  edge is added, which changes no result (it lands outside int16 either way);
+  the final clamp is to +-32767 and sets the flag. `pdm_view_inv` is an exact
+  inverse of `pdm_view_fwd` for every pixel a view of at most one pixel per
+  pt16 unit can reach (`zoom <= 1600` and `zoom * asp_num <= 1600 * asp_den`),
+  provided nothing clamps; a coarser view cannot reach every pixel, so no
+  inverse exists (the differential test checks this property on the assembly).
+  Degenerate views are DEFINED on the target and undefined on the host (a
+  division by zero): `asp_den = 0` in `fwd`/`size` and `zoom = 0` or
+  `asp_num = 0` in `inv` set the flag and give 0 for the affected coordinate.
+* **Far memory.** A span is refused (the function returns 0 and touches
+  nothing) when `n > 0xFFF0` or `off + n > 0x10000`; `off + n == 0x10000` is
+  legal. A successful call returns `n`, so `n = 0` is indistinguishable from a
+  refusal: do not branch on the result of a zero-length call. `pd_fcopy` is a
+  `memmove` in LINEAR address space (`seg*16 + off`): overlapping or aliased
+  source and destination, from different segment:offset pairs, copy correctly.
+  `pd_fpeekw`/`pd_fpokew` at offset 0xFFFF are outside the contract (a word
+  access across the segment end). `pdm_crc16_far` answers its `crc` argument
+  unchanged for a refused span.
+* **CRC.** CRC-16/CCITT, polynomial 0x1021, MSB first, initial value the
+  caller's; a 16-entry nibble table in `.text` (32 bytes).
+
+#### 20.7.3 Cost on an 8088 (ESTIMATED)
+
+`tests/pdmath/pdcycles.py` runs each routine in the x86 engine and costs every
+executed instruction as `max(4.34 x bytes, clocks)` (PERFORMANCE.md Part 2's
+fetch floor), with MUL r16 at 125 and DIV r16 at 155 clocks and +9 for an
+effective address. It is an instruction-count estimate, not a measurement on a
+5150; at 4.77 MHz one clock is 0.2096 us. The call and its return are included.
+
+| routine | instructions | clocks | microseconds |
+|---|---|---|---|
+| `fx_add` | 19 | 321 | 67 |
+| `fx_mul` | 63 | 1,374 | 288 |
+| `fx_div`, divisor below 1.0 (three DIVs) | 65 | 1,361 | 285 |
+| `fx_div`, an integral divisor of 1.0 or more (two DIVs) | 46 | 892 | 187 |
+| `fx_div`, any other divisor of 1.0 or more (32 shift-subtract steps in registers) | 395 | 4,727 | 991 |
+| `view_fwd` (any aspect) | 166 | 3,884 | 814 |
+| `view_inv` | 185 | 4,155 | 871 |
+| `view_size` | 169 | 3,894 | 816 |
+| `mat_mul` | 823 | 17,371 | 3,641 |
+| `mat_apply` | 273 | 5,849 | 1,226 |
+| `fx_parse("-123.456")` | 450 | 6,234 | 1,307 |
+| `fx_todec(1.5)` | 87 | 2,054 | 430 |
+| `crc16`, 64 bytes | 1,098 | 16,669 | 3,494 (~55 us a byte) |
+
+`view_fwd` costs the same at every aspect: the y scale divides by `1600`, then
+by `asp_den`, as two three-DIV chains (floor of a floor is the floor of the
+product), so no aspect reaches the shift-subtract divider; only `fx_div` by a
+NON-integral divisor of 1.0 or more does (an integral one, low word 0, is
+`|x| / hi` in two DIVs: `fx_int(1000)` costs 187 us, not 991, so a constant
+divisor should be integral - or, in a per-glyph loop, a multiplication by its
+reciprocal computed once).
+
+A second model (the verifier's: the Intel manual's clocks with the 8088's +4
+per word memory transfer on every form, Jcc/LOOP priced taken or not taken,
+shift-by-CL at its actual count) agrees with the table within 6% on every row
+except the 32-step divider, which it puts at 855 us (the table's model prices
+every conditional jump as taken). A hit test or highlight loop over N glyphs is N x 0.8 ms
+per corner pair: the renderer should transform a page rect's two corners once
+and step in device space, not call `view_fwd` per pixel.
+
+#### 20.7.4 What holds it to its reference
+
+`make pdmathtest` (or `python3 tests/pdmath/pdmath_diff.py [-n CASES]`):
+assembles `tests/pdmath/pdmharness.asm` (the shipping include plus an entry
+table) under `cpu 8086 -w+error`, runs it in Unicorn's real-mode x86 with SS
+different from DS and sentinels in BP/ES, and runs `pdmath.c` natively through
+ctypes on the same inputs: edge-value pools plus a seeded stream per function,
+2,500 cases each by default, after a FIXED edge pass of about 26,000 cases run
+every time (every pair of 24 boundary 16.16 values through add/sub/mul/div/cmp,
+rounding and pt16 ties, the parser's edge strings - lone sign or point, 9+
+fraction digits including ones where an ignored 9th digit would change the
+rounding, leading zeros, the 32767.99999 and -32768 boundaries, junk - u32
+shifts by 0/16/31/32/33/FFFFh, divmod by 0, PageDesk's five aspects (5.4) at
+every rotation, zoom 25..400 edges and past 400, spans ending exactly at the
+segment's end, and 64 KB moves overlapping in both directions within and across
+segments), including the saturation edges of `fx_mul` and
+`fx_div`, the clamp edges of the view, string fuzzing for `fx_parse`, and
+far spans at, across and 64 KB past the segment end. It compares the return
+value, every byte of argument memory (guard bytes included), the overflow flag,
+the far arena, and the convention (BP/DS/ES/SS/SP/DF). Seven negative controls
+prove those checks can fail, an include-twice / every-`PDM_SKIP_*` assembly
+matrix runs, the `fwd(inv(p)) == p` property is checked on the assembly, 5.3's
+own claim is checked on it literally (every pixel of a 200-pixel row and column
+through the page's top-left, every R, every 5.4 aspect, zoom 25/33/100/400, two
+nonzero-origin cropped boxes: 64,000 pixels), and `pdm_crc16` on both sides is
+held to the published check values of "123456789" (CCITT-FALSE 29B1h, XMODEM
+31C3h).
+Mutating the include (a changed rounding constant, a dropped carry, a wrong
+comparison) fails the run. It needs the `unicorn` Python package and exits 77
+(skip) without it.
+

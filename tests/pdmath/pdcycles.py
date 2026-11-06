@@ -46,14 +46,17 @@ def cost(b, size):
 def run(H, name, args, setup=None):
     emu = H.emu; uc = emu.uc
     if setup: setup(emu)
-    tot = [0.0, 0]
+    tot = [0.0, 0, 0xFFF0]
+    from unicorn.x86_const import UC_X86_REG_SP
     def hook(u, addr, size, ud):
         b = bytes(u.mem_read(addr, min(size, 4)))
         tot[0] += cost(b, size); tot[1] += 1
+        sp = u.reg_read(UC_X86_REG_SP)
+        if sp < tot[2]: tot[2] = sp
     h = uc.hook_add(UC_HOOK_CODE, hook)
     emu.call(name, args)
     uc.hook_del(h)
-    return tot
+    return tot[0], tot[1], tot[2]
 
 def main():
     asm, so = D.build()
@@ -68,7 +71,8 @@ def main():
         cases.append((label, name, args, puts))
     case("fx_mul (1.5 * 2.5)", "pdm_fx_mul", A3, (4, pk(0x00018000, 0x00028000)))
     case("fx_div, divisor < 1.0 (3 DIVs)", "pdm_fx_div", A3, (4, pk(0x00018000, 0x00000003)))
-    case("fx_div, divisor >= 1.0 (48 steps)", "pdm_fx_div", A3, (4, pk(0x00018000, 0x00028000)))
+    case("fx_div, integral divisor (1000.0, 2 DIVs)", "pdm_fx_div", A3, (4, pk(0x00018000, 0x03E80000)))
+    case("fx_div, divisor >= 1.0 (32 steps)", "pdm_fx_div", A3, (4, pk(0x00018000, 0x00028000)))
     case("fx_add", "pdm_fx_add", A3, (4, pk(0x00018000, 0x00028000)))
     mats = (24, pk(0x10000, 0, 0, 0x10000, 0x40000, 0x50000) + pk(0x20000, 0x8000, 0x8000, 0x20000, 0x10000, 0x10000))
     case("mat_mul", "pdm_mat_mul", [D.SCR, D.SCR + 24, D.SCR + 48], mats)
@@ -85,10 +89,11 @@ def main():
     case('fx_parse("-123.456")', "pdm_fx_parse", [D.SCR + 32, D.SCR, 8], (0, b"-123.456"))
     case("fx_todec(1.5)", "pdm_fx_todec", [D.SCR, D.SCR + 64], (64, pk(0x00018000)))
     case("crc16, 64 bytes", "pdm_crc16", [0xFFFF, D.SCR + 64, 64], (64, bytes(range(64))))
-    print("%-42s %8s %9s %9s" % ("routine (incl. the call's own return)", "instr", "clocks", "us @4.77"))
+    print("%-42s %8s %9s %9s %7s" % ("routine (incl. the call's own return)", "instr", "clocks", "us @4.77", "stack B"))
     for label, name, args, puts in cases:
-        clk, n = run(H, name, args, lambda e, puts=puts: [e.mem_w(base + D.SCR + o, d) for o, d in puts])
-        print("%-42s %8d %9.0f %9.0f" % (label, n, clk, clk * CLK))
+        clk, n, sp = run(H, name, args, lambda e, puts=puts: [e.mem_w(base + D.SCR + o, d) for o, d in puts])
+        # bytes below the first argument, return address included
+        print("%-42s %8d %9.0f %9.0f %7d" % (label, n, clk, clk * CLK, 0xFFF0 - 2 * len(args) - sp))
 
 if __name__ == "__main__":
     main()
