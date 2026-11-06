@@ -484,6 +484,22 @@ _c64x_copy:
     pop bp
     ret
 
+; unsigned c64f_claimcode(void) - the fast core's 64KB code claim, 0 = refused.
+; CONVENTIONAL on every kernel (MEMP_CONV, SPEC.md 50.3.7): on kern_mega that
+; makes it an allocator pair whose code half OSAPI_MEM_CODESEL answers. C64 is
+; OS88_HIGHMEM, so the KB door put its 64KB above 1MB there as a lone DATA
+; selector, CODESEL refused it, and the fast core and both translated ROMs
+; never ran on kern_mega (APPLE2's a2f_claimcode, the same fix).
+_c64f_claimcode:
+    mov ax, 0x1000                  ; 64KB in paragraphs
+    mov cx, MEMP_CONV
+    mov bl, MEMP_CLAIM
+    call OSAPI_MEM_P
+    sbb ax, ax                      ; CF -> -1 / 0...
+    not ax
+    and ax, dx                      ; ...-> 0 = refused, or the claim
+    ret
+
 ; unsigned c64f_codesel(unsigned seg) - OSAPI_MEM_CODESEL's answer, 0 = none
 _c64f_codesel:
     push bp

@@ -689,7 +689,11 @@ fallback when the part cannot be had.
 eager, and a lazy row may not precede an eager one (SPEC.md 20.12.4). The
 build puts it there through `CC_PACKAGE`'s sixth argument and the shim says
 so with `CC_PARTS_AFTER_OVL` (apps/cc/Makefile.inc, crt0.asm).
-`ovl_fast_init` runs in `os88_main`: the 64KB code claim, the part copied in
+`ovl_fast_init` runs in `os88_main`: the 64KB code claim (`c64f_claimcode`,
+`OSAPI_MEM_P` with `MEMP_CONV` - conventional on every kernel, because C64 is
+`OS88_HIGHMEM` and on kern_mega a KB-door claim lands above 1MB as a lone
+data selector `OSAPI_MEM_CODESEL` refuses, which left the fast core and both
+translated ROMs off there), the part copied in
 (`c64f_core`), the part dropped, and the far call through
 `OSAPI_MEM_CODESEL`'s answer (`c64_fseg`; `c64_fcode` is the claim, followed
 by `os88_onmove`). **It runs in the RAM claim the accurate core already has**:

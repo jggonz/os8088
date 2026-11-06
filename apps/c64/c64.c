@@ -154,6 +154,7 @@ static void ovl_jit_init(void);
 static void ovl_jit_toggle(void);
 void c64f_core(unsigned dstseg, unsigned partseg);
 unsigned c64f_codesel(unsigned seg);
+unsigned c64f_claimcode(void);           /* (conventional: 4.7) */
 int  c64_run(unsigned cycles);          /* -> C64_RUN_*, and c64_m.cnt is what
                                          * was NOT spent, so the caller's
                                          * `ran = asked - cnt` is exact */
@@ -2076,7 +2077,8 @@ static void ovl_fast_init(void)
 
     if (os88_part_fetch(C64_FAST_PART) != 0)
         return;
-    code = os88_mem_claim(64);
+    code = c64f_claimcode();                /* CONVENTIONAL, so kern_mega can
+                                             * give it a code selector */
     if (code == 0) {
         os88_part_drop(C64_FAST_PART);
         return;
