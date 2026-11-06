@@ -2497,3 +2497,149 @@ one interface (DECISIONS D15). `edit` owns `apps/pagedesk/pduedit.c` and
 Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
+
+### 20.12 Annotations on screen (`annotr`, wave 2)
+
+PDREND draws what the user has marked up, in the same pass and the same bands as the page:
+the source file's annotation appearances (`/AP /N`, PDRF_ANNOTS), the edit store's records
+(PDRF_EDITS, 13.1.1), dash patterns and inline images. The code is `apps/pagedesk/pdra.c`
+(`#include`d by `pdrend.c` after `pdrv.c`) and edits to `pdri.c` (the stream machine), `pdrg.c`
+(dashes), `pdrd.c` and `pdrv.c` (inline-image records). It SUPERSEDES three statements of 20.3:
+20.3.3's "inline images are consumed and not drawn" and 20.3.8's lists of what is not drawn
+(dash patterns, inline images) - both are drawn now, with the limits below. The primary draws no
+annotation pixels itself (D15): it sets `pdxb_render.rflags` and, for edits, `edits_seg`,
+`edits_count` (and `hide`, `mono_mark`) in the BEGIN call.
+
+#### 20.12.1 The phases of one pass
+
+A pass (20.3.2) interprets the page's content once for the rows of its band group. With the
+flags set it is five phases, in display-list order, so the later paints over the earlier:
+
+| # | phase | why there |
+|---|---|---|
+| 1 | the edit store's **highlights** | a band is blitted OPAQUE and there is no Multiply, so a highlight drawn after the text would hide it: the fill goes FIRST and the page's text, drawn over it, is the multiply that the file would have |
+| 2 | the **source's highlight** annotations (`/Subtype /Highlight` with an `/AP`) | the same reason; a real file's highlight appearance carries `/BM /Multiply`, and the `gs` operator is ignored, so what is left is an opaque fill drawn under the page |
+| 3 | the page's own content | |
+| 4 | every OTHER source annotation with an appearance | |
+| 5 | the other edit records, in store order | |
+
+Only `PDRF_ANNOTS` runs phases 2 and 4; only `PDRF_EDITS` runs 1 and 5; a thumbnail and the text
+map run neither (their `rflags` is 0 inside PDREND). Every phase is IN BAND: its records are in
+the list of the pass, culled by the group's rows like everything else, and the DL-overflow rescan
+(10.2, D4) repeats all five phases from the start for each narrower group - `pdr_annot.py` draws
+ANNOTS256 and MARKUP with an 11 KiB list in 19 and 24 passes and compares the images byte for
+byte with the 29 KiB list's. The state machine is `g_aph` (`frame_end` calls `annot_next` when
+the page's contents, or an annotation's form, end with nothing open): the page's stream is
+OPENED once at the start (so a page with no readable content still answers the engine's error)
+and closed again when phase 2 runs first. A page with no `/Contents` still shows its annotations.
+The clip pool of the pass is kept across phases (a state is reset with `gs_reset`, not
+`gs_init`), so an earlier polygon clip is never rewritten under the list that names it.
+
+#### 20.12.2 Source annotations
+
+`ANNOTS(page, index)` (20.2.6) is walked in order; PDREND reads the answer straight out of the
+exchange block (`objnum` +0, `gen` +2, `subtype` +4, `rect` +20, `flags` +52, `has_ap` +54 -
+held to the struct by `static_assert`s in the host build) and calls nothing else on the
+annotation until it has them. An annotation is SKIPPED when it is a hole (`objnum` 0), has no
+`/AP /N`, has `/F` bit 2 (Hidden) or 6 (NoView, value 32), is not of this phase's kind (the
+subtype is `Highlight` or it is not), or when `PDRF_EDITS` is set and a record of the store names
+it in `src_num`/`src_gen` (a deletion, a move or a replacement: the record draws it, or nothing
+does). `/N` is a form XObject by reference (an object with a `/BBox`), or a state dictionary
+(a dictionary by reference) of which `/AS` names the entry; anything else draws nothing. The
+form is drawn as a Form XObject (the same `do_form`: its `/Matrix`, a clip to its `/BBox`, its
+`/Resources`, forms nested to the limit of 20.3.8) after the **PDF 1.7 12.5.5** placement: the
+form's `/BBox` through its `/Matrix` is a rectangle (two opposite corners give it - exact for
+every matrix that keeps the axes, which includes quarter turns; a skew is taken by its corners'
+extent), and the matrix A that maps that rectangle onto the annotation's `/Rect` (a scale and a
+translation) is applied BEFORE the form's own `/Matrix`. A degenerate box, rectangle or an
+unreadable `/BBox` draws nothing and is not Incomplete. `Widget` is drawn like any other: a
+field's appearance is a form. No annotation without an appearance gets a made-up icon.
+
+#### 20.12.3 The edit store's marks (13.3, 17.4)
+
+A record is drawn when `page` equals the render's `page`, `PDEF_DELETED` is clear, its kind is
+1..9, it is not the record `hide` while `PDRF_NOEDITID` is set, and it is not a review reply (a
+`PDA_NOTE` with `irt` set has no appearance: 13.4). The store is READ ONLY here (`pdr_test`
+compares all 64 KiB of it after every render). Colours are the `PDC_*` palette indices; on 1bpp
+every stroke and every text is BLACK (10.5) and fills are white. Widths are points: `style` for a
+frame or a line (0 = 1), `size` x 2 for ink (0 = 2 pt). Everything is built from the page's own
+path, stroke, fill, dash and text machinery, so a mark clips, turns and scales with the page.
+
+| kind | on VGA/EGA | on Hercules and CGA |
+|---|---|---|
+| Note | PDWRT's speech bubble (`pdwap.c ap_note`) in the record's rect, scaled from its 20 x 18 pt design: filled in the colour, a 0.8 pt black outline and three text lines | the same, filled white |
+| Highlight | each quad filled in a LIGHT form of the colour (black, light grey and white become yellow; 0..7 take bit 3), drawn FIRST (20.12.1) | by `pdxb_render.mono_mark`: **0** (default) an underline along each quad's lower edge AND a dotted frame (1 pt on, 2 pt off), **1** the underline only, **2** the dotted frame only, **3** a light hatch (a dither of grey 7, drawn first); never a solid fill (17.4) |
+| Area mark | a stroked frame inset by half its width, dashed 3 pt on / 3 pt off when `align` bit 0 | the same, black |
+| Rect | a solid frame as above | |
+| Ellipse | four Beziers, kappa 0.5523, in the same inset | |
+| Text box | the writer's layout (PDWRT 20.5.6): 2 pt of padding, the first baseline 0.8 size below the top, leading 1.2 size, `/Q` from `align`, lines broken at the last space that fits else inside the word, `\n`, `\r`, `\r\n` paragraphs, no line below the frame, at most 1,024 bytes; the PDRES face of the family (`style >> 4`: 0 sans, 1 serif, 2 mono) and `style & 3` (bold, italic), at `size` points (0 = 12). Widths are kept exactly (whole thousandths of an em) so the breaks are PDWRT's | black |
+| Ink, Sign | each pen-up separated stroke as one polyline, round caps and joins; a one-point stroke is a dot; at most 4,096 points | black |
+| Line, Arrow | a butt-capped shaft and, for each of `align` bit 0 (start) and bit 1 (end), an open head of two barbs 25 degrees off the line, 8 pt plus two widths long | black |
+
+`mono_mark` is the shell's preference (17.4); the value 0 is what a zero-initialised block asks
+for. The hatch and the frames are drawn IN BAND like the rest. A highlight of more than 64 quads
+draws the first 64 (the record's `pts_n` is trusted for no more than 4,096 points and 1,024 text
+bytes whatever it says: a hostile store cannot make PDREND read past a 64 KiB segment or loop
+unbounded - `pdr_fuzz.py` draws a store of 60,000 points and wrapped offsets under ASan).
+
+#### 20.12.4 Dash patterns
+
+`[a b c d] phase d` is kept in the graphics state (so `q`/`Q` restore it): up to four lengths
+and a phase, each in quarter points 0..255 (a longer array keeps four and sets
+`PDF_INC_LIMIT` "dash array"; `[] 0 d` and `0 d` are solid). A path is walked in device qpx,
+cut where the pattern changes, and every "on" piece is stroked as an open polyline of its
+own, so each carries the line's caps (a zero-length dash with round caps is a dot; with butt
+caps it is nothing). An odd count cycles with on and off swapped, as PDF says; the phase is
+consumed from the pattern's start; a closed subpath dashes round its closing segment; curves are
+dashed after flattening. A pattern whose lengths sum to under 1.5 device pixels draws solid (it
+cannot be told from it, and the piece count would be the cost), and one subpath cuts at most 3,000
+pieces. The saved graphics states grew to 84 bytes (`WS_FN` 1,344).
+
+#### 20.12.5 Inline images
+
+`BI ... ID ... EI` is read EXACTLY (PDENG cannot un-read, 20.2.5): the dictionary's `W`, `H`,
+`BPC` (1, 2, 4, 8), a device `CS` (`/G`, `/RGB`) or `/IM true`, `/D` (only its first number: 1 or
+more inverts), unfiltered. Such an image whose raw row fits the 1,024-byte row buffer and whose
+stored form fits 6,144 bytes is CAPTURED: PDREND copies it into its own display-list record
+(flag 16 of `DLR_IMAGE`, the rows follow the 20-byte body) - a stencil or 1-bit gray as 1 bit, all
+else as 8-bit gray (RGB by its luminance) - and the rasteriser draws it with the XObject images'
+row composer: 1-bit dithered to the adapter (10.5), gray through the 4 levels on VGA, a stencil
+in the fill colour, mirrored left to right. It is read in slices of at most 4 KiB, so a large
+image spans several, and a stream that ends early leaves the rest of the rows blank. An image
+the page does not show (outside the group's rows, or clipped away) is read and skipped. NOT drawn,
+consumed by the same exact count, and `PDF_INC_IMAGE` "inline image": CMYK, a filter (`/F`, then
+scanned for white space, `E`, `I` one byte at a time), an unnamed or named colour space, a width
+over 4,096, a stored size over 6 KiB, a row over 1,024 bytes, images turned a quarter or flipped
+(as XObjects, 20.3.8). A record that does not fit the list sets the list-full path (10.2).
+
+#### 20.12.6 Size, memory, cost
+
+| item | bytes |
+|---|---|
+| `PDREND.MOD` image + bss | 52,210 + 6,518 = **58,728** (50,584 before this wave; D20: target 58 KiB, hard cap 60) |
+| new code (image, +8,230): the annotation phases and 12.5.5 about 1,100, the edit marks about 2,700, dashes about 500, inline images about 850, the image split and the other edits to the interpreter the rest | |
+| bss (-86 net) | the glyph-run buffer is ONE (the walker and the interpreter never overlap: a group is interpreted before its bands are drawn; -320), the annotation is read out of the exchange block instead of copied (-238 avoided), the dash buffers and fields and the edit record (+470) |
+| claims | none new. Inline images and records live in the display list (the 29 KiB `dl_kb`), the workspace table grew 64 bytes inside its 6,912 |
+
+Cost is in list records: a mark is one `DLR_FILL` per shape plus glyph runs for a text box; a
+note is two, a highlight one a quad. On the 8088 the new work at BEGIN is a few hundred bytes of
+far copies per annotation and one `ANNOTS` plus up to four `DICT_GET` calls (cached by PDENG), once
+per pass, twice for a source annotation file (highlights, then the rest). It is NOT measured on
+an emulated XT; the figures to take are the passes of an annotated page.
+
+#### 20.12.7 Checks
+
+`make pdrend-annot` (`hosttest/pdr_annot.py`, 81 checks): a generated page of appearance cases
+(a plain form, a stretched `/Matrix`, a quarter turn, a negative-origin `/BBox`, Hidden, NoView,
+`/F 0`, a state dictionary with `/AS`, no `/AP`, a highlight over text, a page with no
+`/Contents`, `/Rotate 90`) and ANNOTS256 against **mutool**; the edit store of every kind built
+by `hosttest/pdr_mkstore.c`, saved by the REAL PDWRT over the real PDENG, and PDREND of the
+ORIGINAL with that store compared with mutool's render of the saved file (0.0% of 8x8 cells
+differ on MARKUP.PDF at VGA), then every kind probed at its pixels on VGA, on Hercules and CGA and
+in each `mono_mark` style, `PDRF_NOEDITID`, flag combinations, a 0-record store, an 11 KiB list, a
+turned page, a replaced and a deleted source annotation (nothing else on the page changes); dash
+run lengths, phase, odd counts, caps, `Q`; inline images of every depth, space and mask, exact
+lengths, refusals, a 5,000-byte image across slices, against mutool. `make pdrend-fuzz` adds
+hostile appearances (zero, singular, huge and short `/BBox` and `/Matrix`, a form that includes
+itself, a lying `/Length`, `/AP` cycles, 300 heavy annotations), arrays of holes, extreme dashes
+and every inline-image size, and runs every case again with both flags and a hostile store.
