@@ -100,12 +100,12 @@ static unsigned char guard_before[1], dummy;
 static void paint(void)
 {
     memset(pd_host_mem + (unsigned long)SEG_FLATE * 16 - GUARD, 0xA5, GUARD);
-    memset(pd_host_mem + (unsigned long)SEG_FLATE * 16 + 2 * 43008UL, 0xA5, GUARD);
+    memset(pd_host_mem + (unsigned long)SEG_FLATE * 16 + 2 * 44032UL, 0xA5, GUARD);
 }
 static void check_guard(const char *what, unsigned long it)
 {
     unsigned char *a = pd_host_mem + (unsigned long)SEG_FLATE * 16 - GUARD;
-    unsigned char *b = pd_host_mem + (unsigned long)SEG_FLATE * 16 + 2 * 43008UL;
+    unsigned char *b = pd_host_mem + (unsigned long)SEG_FLATE * 16 + 2 * 44032UL;
     unsigned long i;
     for (i = 0; i < GUARD; i++) if (a[i] != 0xA5 || b[i] != 0xA5) { fprintf(stderr, "FUZZ: %s %lu wrote outside the claim at +%lu\n", what, it, i); exit(4); }
     (void)guard_before; (void)dummy;
@@ -148,7 +148,7 @@ int main(int argc, char **argv)
                 }
             }
             pdh_set(buf, size);
-            flate_kb = (rnd() % 4 == 0) ? 42 : (rnd() % 8 == 0) ? 0 : 84;
+            flate_kb = (rnd() % 4 == 0) ? 43 : (rnd() % 8 == 0) ? 0 : 86;
             paint();
             if (do_init() || do_open()) { fprintf(stderr, "FUZZ: %s: cannot open (the PDF, not the stream)\n", argv[i]); return 2; }
             total = 0;

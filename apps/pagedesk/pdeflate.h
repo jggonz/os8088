@@ -20,14 +20,21 @@
 #define PDXI_FLATE      0x0001  /* pdxb_init.flags: the two words AFTER the struct hold flate_seg, flate_kb */
 
 #define PDE_NFL         2       /* slots: the page's stream and one form inside it */
-#define PDE_FLSLOT_KB   42      /* 32 KiB history + two 4 KiB predictor rows + 2 KiB saved state */
-#define PDE_FLSLOT_PARA 2688    /* ...in paragraphs                               */
+#define PDE_FLSLOT_KB   43      /* 32 KiB history + two 4 KiB predictor rows + 3 KiB of tables and saved state */
+#define PDE_FLSLOT_PARA 2752    /* ...in paragraphs                               */
 #define PDE_FLWIN       32768u
 #define PDE_FLROWA      32768u  /* the predictor's rows, in the slot              */
 #define PDE_FLROWB      36864u
-#define PDE_FLSAVE      40960u  /* the saved decoder state                        */
+#define PDE_FLTAB       40960u  /* the Huffman tables, in the slot (they never move):      */
+#define FT_LCNT         0       /*   codes of each length, literal/length (16 words)       */
+#define FT_DCNT         32      /*   ...distance (16 words)                                */
+#define FT_LSYM         64      /*   symbols by code order, literal/length (288 words)     */
+#define FT_DSYM         640     /*   ...distance (32 words)                                */
+#define FT_LUT          704     /*   the next 8 bits of a lit/len code: sym | len << 9 (256 words) */
+#define FT_DLUT         1216    /*   ...and of a distance code (256 words)                  */
+#define PDE_FLSAVE      42688u  /* the saved decoder state, after the tables (<= 3 KiB all told) */
 #define PDE_FLOB        256     /* decoded bytes held between deliveries           */
-#define PDE_PRC         128     /* a predictor chunk                               */
+#define PDE_PRC         64      /* a predictor chunk                               */
 
 /* the state machine */
 #define FS_HDR          0       /* the zlib header                                 */
@@ -41,6 +48,7 @@
 struct flst {
     pdw seg;                /* the slot's segment: window at 0, rows at 32768     */
     pdw stage;              /* the chain index of the Flate stage                 */
+    pdw zero_from;          /* (the first word a fresh decoder zeroes: always 0)  */
     pdw state, final, tab;  /* tab: 0 none built, 1 fixed, 2 dynamic              */
     pdw errc;               /* a failure, reported once when the output is drained */
     pdw bb, bn;             /* the bit buffer: bn bits, LSB first                 */
@@ -48,17 +56,16 @@ struct flst {
     pdw mleft, mdist;       /* a match not yet fully copied                       */
     pdw wpos, whave;        /* window write position; bytes the window holds     */
     pdw on, oi;             /* ob: decoded bytes / the next one to deliver        */
-    pdw pred, prow, bpp, bpc;   /* the predictor: 0 none / 1 PNG / 2 TIFF; a row's bytes; ... */
-    pdw ptag, ppos, pcur;
     pdw pi, pe;             /* pout[pi..pe) is the unread decoded output          */
-    pdw lcnt[16], dcnt[16];
-    pdw lsym[288], dsym[32];
-    pdw lut[256];           /* the next 8 bits of a literal/length code: sym | len << 9 */
+    pdw ptag, ppos, pcur;
+    pdw zero_to;            /* (the end of what a fresh decoder zeroes)           */
+    pdw pred, prow, bpp, bpc;   /* the predictor: 0 none / 1 PNG / 2 TIFF; a row's bytes; ... */
     pdb ob[PDE_FLOB];
     pdb pout[PDE_PRC + 8];
 };
 
 static int fl_get(struct sctx *c);          /* one byte of the Flate stage of c, or -1 */
+static pdw fl_take(struct sctx *c, pdb *dst, pdw max);   /* the bulk of what is ready */
 static pdw fl_parms(pdw num);               /* /DecodeParms of the stream              */
 static pdw fl_attach(struct sctx *c);
 static void fl_drop(struct sctx *c);

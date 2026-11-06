@@ -109,6 +109,7 @@ static pdw st_decode(struct sctx *c)
         b = sget(c, (int)c->nflt - 1);
         if (b < 0) break;
         c->ib[n++] = (pdb)b;
+        if (c->flt[c->nflt - 1] == PDF_K_FLATE) n = (pdw)(n + fl_take(c, c->ib + n, (pdw)(PDE_IB - n)));
     }
     if (n && st_account(c, n)) return 0;
     return n;
@@ -409,6 +410,7 @@ static pdw v_strm_read(pdw dseg, pdw doff, pdw dmax)
                 b = sget(c, (int)c->nflt - 1);
                 if (b < 0) break;
                 tmpb[k++] = (pdb)b;
+                if (c->flt[c->nflt - 1] == PDF_K_FLATE) k = (pdw)(k + fl_take(c, tmpb + k, (pdw)(want - k)));
             }
             if (k) {
                 if (st_account(c, k)) return lx_err;

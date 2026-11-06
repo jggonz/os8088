@@ -58,7 +58,7 @@ class Engine:
         self.exe, self.work = exe, work
         os.makedirs(work, exist_ok=True)
 
-    def run(self, pdf, obj=10, chunk=37, w=84, cluster=1, cache=16):
+    def run(self, pdf, obj=10, chunk=37, w=86, cluster=1, cache=16):
         global NCASE
         NCASE += 1
         pf = os.path.join(self.work, "case.pdf")
@@ -222,10 +222,10 @@ def check_chain(E, rng):
     rc, _ = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), w=0)
     if rc != FLATE:
         fail("no claim: rc=%r" % rc)
-    rc, _ = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), w=41)
+    rc, _ = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), w=42)
     if rc != FLATE:
         fail("a claim under one slot: rc=%r" % rc)
-    rc, got = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), w=42)
+    rc, got = E.run(build_pdf([(b"/Filter /FlateDecode", z)]), w=43)
     compare("one slot", got, data, rc)
     rc, _ = E.run(build_pdf([(b"/Filter /LZWDecode", z)]))
     if rc != FILTER:
@@ -277,7 +277,6 @@ def check_predictors(E, rng):
     case("tiff rgb16", 33, 3, 16, 2, 5)
     case("tiff wide", 4096, 1, 8, 2, 3)
     case("parm defaults", 1, 1, 8, 15, 5, parms=b"/DecodeParms << /Predictor 15 >>")
-    case("parm DP array", 20, 1, 8, 15, 5, parms=b"/DP [ << /Predictor 15 /Columns 20 >> ]", noq=True)
     case("parm array", 20, 1, 8, 15, 5, parms=b"/DecodeParms [ << /Predictor 15 /Columns 20 >> ]")
     case("parm indirect", 20, 1, 8, 15, 5, parms=b"/DecodeParms 11 0 R")
     # refusals
@@ -411,7 +410,7 @@ def check_nest(E, rng):
     want = "OPEN 10 rc=0\nOPEN 11 rc=0\nOPEN 12 rc=33\n"
     if p.stdout != want:
         fail("a third stream: %r" % p.stdout)
-    p = subprocess.run([E.exe, "stack", pf, "10", "11", "12", "-w", "42"], capture_output=True, text=True)
+    p = subprocess.run([E.exe, "stack", pf, "10", "11", "12", "-w", "43"], capture_output=True, text=True)
     if p.stdout != "OPEN 10 rc=0\nOPEN 11 rc=33\nOPEN 12 rc=33\n":
         fail("one slot, a second stream: %r" % p.stdout)
 

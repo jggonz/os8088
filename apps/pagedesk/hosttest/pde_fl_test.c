@@ -30,7 +30,7 @@ extern unsigned long pdh_reads, pdh_bytes;
 #define SEG_FLATE 0x7000
 
 static int cf;
-static unsigned cache_kb = 16, flate_kb = 84;
+static unsigned cache_kb = 16, flate_kb = 86;
 static unsigned call(unsigned verb, unsigned bx, unsigned cx, unsigned dx)
 {
     unsigned r = pde_verb(verb, bx, cx, dx);
