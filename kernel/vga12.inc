@@ -4267,16 +4267,44 @@ vga_save_vram_v:         ; machine with neither card never falls here
     mov dx, [gfx_rrows]
     mov bp, [gfx_rspan]
     inc bp                      ; bp = bytes per row
+    mov ax, ROW_BYTES           ; AX = the VRAM step past them, ONCE a plane:
+    sub ax, bp                  ; it was an add and a sub every row
     push ds
-    VSEG ax, VGA_SEG
-    mov ds, ax                  ; movsb source = VRAM
-.row:
-    mov cx, bp
-    rep movsb                   ; buffer DI advances contiguously
-    add si, ROW_BYTES
-    sub si, bp
+    VSEG cx, VGA_SEG
+    mov ds, cx                  ; movs source = VRAM
+    ; --- WORDS, and three loops chosen once a plane (kernel hot-paths pass 1,
+    ; SPEC.md 5.8.1). `rep movsw` is 25 clocks a word on an 8088 against
+    ; `rep movsb`'s 17 a byte, and a read in read mode 0 loads the latches
+    ; and answers the Read Map's plane whatever its width. Splitting the odd
+    ; byte off by LOOP rather than by a per-row `jnc` is what makes the word
+    ; form win at every width; the one-word loop is the POINTER's cell (two
+    ; bytes, 7 positions in 8), where `movsw` alone replaces the count load
+    ; and the rep. The buffer DI advances contiguously as it always did
+    shr bp, 1                   ; BP = words a row, CF = an odd byte as well
+    jc .odd
+    cmp bp, 1
+    jne .even
+.w1:
+    movsw
+    add si, ax
     dec dx
-    jnz .row
+    jnz .w1
+    jmp short .pend
+.even:
+    mov cx, bp
+    rep movsw
+    add si, ax
+    dec dx
+    jnz .even
+    jmp short .pend
+.odd:
+    mov cx, bp
+    rep movsw                   ; (no words at all for a one-byte row: the
+    movsb                       ; rep then runs no iteration)
+    add si, ax
+    dec dx
+    jnz .odd
+.pend:
     pop ds
     inc bh
     cmp bh, bl                  ; ...as many planes as the caller armed
@@ -4526,26 +4554,54 @@ vga_restore_vram_v:      ; machine with neither card never falls here
     mov ah, bl
     mov al, 2                   ; SEQ2: Map Mask = this plane only
     out dx, ax
-    mov di, [gfx_roff]
+    push bx                     ; the plane bit rides the stack for the rows:
+    mov di, [gfx_roff]          ; every register is spent in them
     mov dx, [gfx_rrows]
-    mov bp, [gfx_rspan]
-    inc bp                      ; bp = bytes per row
-    push ds
+    mov bx, [gfx_rspan]
+    inc bx                      ; BX = bytes per row
+    mov ax, ROW_BYTES           ; AX = the VRAM step past them, and BP the
+    sub ax, bx                  ; BUFFER's - 0 but for a sub-rect (SPEC.md
+    mov bp, [gfx_sub_rs]        ; 5.8) - both ONCE a plane, read while DS is
+    push ds                     ; still KERNEL_SEG: they were an add, a sub
+    push es                     ; and a CS-overridden memory add every row
     push es
-    push es
-    pop ds                      ; movsb source = caller's buffer
-    VSEG ax, VGA_SEG
-    mov es, ax                  ; movsb dest = VRAM
-.row:
-    mov cx, bp
-    rep movsb
-    add si, [cs:gfx_sub_rs]     ; CS: IS MANDATORY - DS is the BUFFER in here
-    add di, ROW_BYTES
-    sub di, bp
+    pop ds                      ; movs source = caller's buffer
+    VSEG cx, VGA_SEG
+    mov es, cx                  ; movs dest = VRAM
+    ; --- WORDS, three loops chosen once a plane: vga_save_vram's shape and
+    ; reason exactly (SPEC.md 5.8.1). With Set/Reset off and the Bit Mask FF
+    ; a word write lands both CPU bytes verbatim through the Map Mask
+    shr bx, 1                   ; BX = words a row, CF = an odd byte as well
+    jc .odd
+    cmp bx, 1
+    jne .even
+.w1:
+    movsw
+    add si, bp
+    add di, ax
     dec dx
-    jnz .row
+    jnz .w1
+    jmp short .pend
+.even:
+    mov cx, bx
+    rep movsw
+    add si, bp
+    add di, ax
+    dec dx
+    jnz .even
+    jmp short .pend
+.odd:
+    mov cx, bx
+    rep movsw
+    movsb
+    add si, bp
+    add di, ax
+    dec dx
+    jnz .odd
+.pend:
     pop es
     pop ds
+    pop bx
     add si, [gfx_sub_ps]        ; ...and past the rows this rect does not cover
                                 ; (DS is KERNEL_SEG again by here)
     shl bl, 1                   ; next plane bit
