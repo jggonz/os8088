@@ -144,6 +144,7 @@ EH_JOIN     equ 2
 EH_AGAIN    equ 3
 EH_AGAINJ   equ 4               ; (after a once-clip: JOIN the title, the
                                 ; play again with no fade - 126.3.1)
+VH_FLEN     equ 52              ; dword: the file's length
 VH_ETHEN    equ 346             ; victory, defeat: what follows an end clip
 VH_COVER    equ 88              ; dword offset, dword length: the TITLE
                                 ; PICTURE (format 8; 0 none) - 'CV', the
@@ -357,6 +358,9 @@ vb_entry:
     call vb_docnames                ; name, DX its folder, BL its volume
 .nodoc:
     call vb_coverload               ; THE TITLE PICTURE, when the battle has
+    pushf
+    call vb_t4set                   ; (the fourth line: which file)
+    popf
     jc .nocv                        ; one: the window made its size - the
     mov ax, [vb_cvw]                ; picture and its line, and the frame
     cmp ax, 320                     ; (2 across, the title bar and 1 down,
@@ -1143,6 +1147,10 @@ vb_paint:
 .line:
     mov bx, bp
     mov si, [vb_lines+bx]
+    cmp bx, 6                       ; (the fourth: the file this window
+    jne .l4                         ; plays, or wants - vb_t4set)
+    mov si, [vb_t4p]
+.l4:
     or si, si
     jnz .have
     mov si, [vb_status]
@@ -1307,14 +1315,17 @@ vb_play:
 .say:
     call vb_between
 .say2:
+    call vb_errname                 ; (the file's own name in it)
     mov ax, [vb_err]
     mov [vb_status], ax
     call vb_coverload               ; (back: the picture again)
     jmp short .paint
 .back:
+    call vb_errname
     mov ax, [vb_err]                ; the play's own word, or ready
     or ax, ax
     jnz .s2
+    call vb_t4set                   ; (played: the file it played)
     mov ax, vb_s_again
 .s2:
     mov [vb_status], ax
@@ -1464,6 +1475,8 @@ vb_dread:
 .short:
     cmp word [vb_rcap], 0
     je .ok
+    mov ax, [vb_namep]              ; (THERE, and shorter than asked: what
+    mov [vb_rshort], ax             ; vb_load says of a header cut short)
 .bad:
     stc
     jmp short .out
@@ -1645,6 +1658,7 @@ vb_load:
     call vb_embfind
     jnc .meta0
 .nd0:
+    mov word [vb_rshort], 0         ; (a file shorter than a header: vb_dread)
     mov ax, [vb_np0]
     mov [vb_namep], ax
     mov bx, [vb_win]
@@ -1674,6 +1688,11 @@ vb_load:
     jnc .meta0
 .nof:
     mov word [vb_err], vb_s_nofile
+    mov ax, [vb_rshort]             ; ...unless one of them WAS there and
+    or ax, ax                       ; ended before its header did
+    jz .fail1
+    mov [vb_namep], ax
+    mov word [vb_err], vb_s_notvbt
     jmp .fail1
 .head:
     push ds                         ; the first region, into our bss: its
@@ -1735,7 +1754,10 @@ vb_load:
     or ax, [vb_meta+VH_MLEN+2]
     jz .fail1
     cmp word [vb_meta+VH_SPF], 0
-    jne .sized
+    je .fail1
+    mov word [vb_err], vb_s_damaged
+    call vb_vcheck                  ; (every clip it names, inside it)
+    jnc .sized
 .fail1:
     jmp .fail
 .sized:
@@ -1834,6 +1856,135 @@ vb_load:
     ret
 .fail:
     stc
+    ret
+
+; vb_vcheck - CF=1 the bundle is DAMAGED: a clip's stream past the file's
+; end (header 52), more than 16 anchors or entries longer than the stream,
+; or a clip named - an opening, the title and its way out, an end loop, the
+; victory and defeat clips, a pool's - that the clip table has not got, or
+; a pool past 7 or named by an action past the pools. Each was a play that
+; waited for ever on a head that never came (126.2: every byte is hostile)
+vb_vcheck:
+    mov cx, [vb_meta+VH_NCLIPS]     ; (1..64: vb_load's)
+    mov si, vb_meta+VB_CTAB
+.c:
+    mov ax, [si+VC_OFF]
+    mov dx, [si+VC_OFF+2]
+    add ax, [si+VC_LEN]
+    adc dx, [si+VC_LEN+2]
+    jc .bad
+    cmp dx, [vb_meta+VH_FLEN+2]
+    jb .c1
+    ja .bad
+    cmp ax, [vb_meta+VH_FLEN]
+    ja .bad
+.c1:
+    cmp word [si+VC_NANCH], 16
+    ja .bad
+    mov ax, [si+VC_ESZ]             ; its entries' bytes: inside its stream
+    xor dx, dx
+    mov bx, 16
+    mul bx
+    cmp dx, [si+VC_LEN+2]
+    jb .c2
+    ja .bad
+    cmp ax, [si+VC_LEN]
+    ja .bad
+.c2:
+    add si, 48
+    loop .c
+    mov cx, [vb_meta+VH_NOPEN]      ; the clips the header names
+    mov si, vb_meta+VH_OPENS
+.o:
+    jcxz .h
+    lodsb
+    call .clip0
+    jc .bad
+    loop .o
+.h:
+    mov al, [vb_meta+VH_TITLE]
+    call .clip
+    jc .bad
+    mov al, [vb_meta+VH_LEAVE]
+    call .clip
+    jc .bad
+    mov al, [vb_meta+VH_ENDS+1]
+    call .clip
+    jc .bad
+    mov al, [vb_meta+VH_ENDS+3]
+    call .clip
+    jc .bad
+    mov al, [RL+RH_VICT]            ; ...and the rules
+    call .clip
+    jc .bad
+    mov al, [RL+RH_DEFT]
+    call .clip
+    jc .bad
+    mov bl, [RL+RH_NPOOL]           ; the pools: 0 to 7 clips, each one
+    xor bh, bh                      ; the table has
+    mov si, [RL+RH_OPOOL]
+    add si, RL
+.p:
+    or bx, bx
+    jz .a
+    mov cl, [si]
+    xor ch, ch
+    cmp cl, 7
+    ja .bad
+    push si
+.p1:
+    jcxz .p2
+    inc si
+    mov al, [si]
+    call .clip0
+    jc .pb
+    loop .p1
+.p2:
+    pop si
+    add si, 8
+    dec bx
+    jmp short .p
+.pb:
+    pop si
+    jmp short .bad
+.a:
+    mov bl, [RL+RH_NACT]            ; every action's pools: one there is,
+    xor bh, bh                      ; or none
+    mov si, [RL+RH_OACT]
+    add si, RL+AC_POOLS
+.a1:
+    or bx, bx
+    jz .ok
+    mov cx, 5 + 4 * 5
+    push si
+.a2:
+    lodsb
+    cmp al, NONE
+    je .a3
+    cmp al, [RL+RH_NPOOL]
+    jae .pb
+.a3:
+    loop .a2
+    pop si
+    add si, AC_SZ
+    dec bx
+    jmp short .a1
+.ok:
+    clc
+    ret
+.bad:
+    stc
+    ret
+.clip:                              ; AL a clip, or FFh none: CF=1 neither
+    cmp al, 0xFF
+    je .yes
+.clip0:                             ; AL a clip the table has
+    xor ah, ah
+    cmp ax, [vb_meta+VH_NCLIPS]
+    cmc
+    ret
+.yes:
+    clc
     ret
 
 ; vb_derive - the resident claim's six parts, segments on from its base
@@ -4675,6 +4826,64 @@ vb_reader:
 %include "vbattle/vbhold.inc"
 %include "vbattle/vbinp.inc"
 
+; vb_errname - [vb_err], when it is a refusal about a FILE (vb_errtab),
+; written out with that file's name - the one sought or opened, not the
+; demo's - into vb_errbuf, which [vb_err] then names
+vb_errname:
+    mov ax, [vb_err]
+    mov si, vb_errtab
+.f:
+    cmp word [si], 0
+    je .out
+    cmp ax, [si]
+    je .hit
+    add si, 6
+    jmp short .f
+.hit:
+    mov di, vb_errbuf
+    push si
+    mov si, [si+2]                  ; the words before it
+    call vb_strcpy
+    pop si
+    push si
+    mov bx, [si+4]                  ; the name, at most 12 letters
+    mov si, [bx]
+    mov cx, 12
+    call vb_strncpy
+    pop si
+    mov si, [si]                    ; and after it
+    call vb_strcpy
+    mov word [vb_err], vb_errbuf
+.out:
+    ret
+
+; vb_t4set - the window's fourth line: the file it plays - the document,
+; the battle embedded in us, or after a play the one it read - else that
+; it needs BATTLE.VBT
+vb_t4set:
+    mov word [vb_t4p], vb_s_t4
+    mov si, [vb_namep]
+    cmp byte [vb_loaded], 0         ; (played: the one it read)
+    jne .n
+    mov si, vb_docname
+    cmp byte [vb_doc], 0
+    jne .n
+    mov si, vb_selfname
+    mov ax, [vb_embat]
+    or ax, [vb_embat+2]
+    jz .out
+.n:
+    push si
+    mov si, vb_s_plays
+    mov di, vb_t4buf
+    call vb_strcpy
+    pop si
+    mov cx, 12
+    call vb_strncpy
+    mov word [vb_t4p], vb_t4buf
+.out:
+    ret
+
 ; vb_strncpy - at most CX bytes of DS:SI to DS:DI, trailing blanks dropped
 vb_strncpy:
     push ds
@@ -4742,7 +4951,7 @@ vb_actab:     db 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 0
 vb_name:      db 'BATTLE.VBT', 0
 vb_namev:     db 'BATTLEV.VBT', 0     ; the VGA rendition's (format 7)
 vb_nameh:     db 'BATTLEH.VBT', 0     ; ...and Hercules'
-vb_s_noherc:  db ' Needs BATTLEH.VBT on a Hercules', 0
+vb_s_noherc:  db ' on a Hercules', 0      ; (vb_errname: ' Needs ' and [vb_nph])
 vb_lines:     dw vb_s_t1, vb_s_t2, 0, vb_s_t4
 vb_s_t1:      db ' VIDEO BATTLE', 0
 vb_s_t2:      db ' Enter or click: play (Esc leaves)', 0
@@ -4751,9 +4960,19 @@ vb_s_ready:   db ' Ready', 0
 vb_s_load:    db ' Loading...', 0
 vb_s_room:    db ' Making room...', 0
 vb_s_again:   db ' Enter or click to play again', 0
-vb_s_nofile:  db ' BATTLE.VBT not found', 0
-vb_s_notvbt:  db ' BATTLE.VBT is not a VBT1 file', 0
-vb_s_oldvbt:  db ' BATTLE.VBT is an older build: rebuild it', 0
+vb_s_nofile:  db ' not found', 0      ; (these four after the file's own
+vb_s_notvbt:  db ' is not a VBT1 file', 0   ; name: vb_errname)
+vb_s_oldvbt:  db ' is an older build: rebuild it', 0
+vb_s_needs:   db ' Needs ', 0
+vb_s_plays:   db ' Plays ', 0
+vb_errtab:    dw vb_s_nofile, vb_s_sp, vb_namep
+              dw vb_s_notvbt, vb_s_sp, vb_namep
+              dw vb_s_oldvbt, vb_s_sp, vb_namep
+              dw vb_s_badread, vb_s_sp, vb_namep
+              dw vb_s_damaged, vb_s_sp, vb_namep
+              dw vb_s_noherc, vb_s_needs, vb_nph
+              dw 0
+vb_s_sp:      db ' ', 0
 vb_s_nomem:   db ' Not enough memory', 0
 vb_s_nreal:   db ' Needs real mode: ', 0  ; (kern_mega: vb_nrsay)
 vb_nrtab:     dw vb_s_nrq, vb_s_nr1, vb_s_nrq, vb_s_nrq, vb_s_nrq, vb_s_nr5
@@ -4772,7 +4991,8 @@ vb_s_nrq:     db '?', 0
 ; page frame (VBATTLE-MEGA-PLAN W3)
 %include "os88real.inc"
 OS88REAL_LIST vb_rlst, vb_vres, vb_ring, vb_rg0 + RG_SEG, vb_rg1 + RG_SEG, vb_hbnc, vb_efseg
-vb_s_badread: db ' BATTLE.VBT: a read failed', 0
+vb_s_badread: db ': a read failed', 0
+vb_s_damaged: db ' is damaged', 0
 vb_s_norate:  db ' Needs the full kernel (FSXF_RATE)', 0
 vb_s_nocga:   db ' Needs CGA, EGA or VGA', 0
 vb_s_appears: db ' appears!', 0
@@ -4891,6 +5111,10 @@ VB_VAR vb_embat, 4                  ; where it starts in the file, 0 none
 VB_VAR vb_docvol, 1
 VB_VAR vb_docdir, 2
 VB_VAR vb_docname, 14
+VB_VAR vb_errbuf, 48                 ; a refusal with its file's name
+VB_VAR vb_t4buf, 20                  ; the window's fourth line
+VB_VAR vb_t4p, 2
+VB_VAR vb_rshort, 2                  ; a file that ended before its header
 VB_VAR vb_dname, 14
 VB_VAR vb_dnamev, 14
 VB_VAR vb_dnameh, 14

@@ -242143,6 +242143,17 @@ party's count can never be paid; and a band picture, a line of text or the
 plain look's rules that would leave the band's rows are not drawn, so no
 place the bundle names writes past the band's buffers. The title picture's
 variant must fit its region and a desktop (720 x 350), or there is none.
+A bundle that names a clip its table has not got (an opening, the title
+and its way out, an end loop, the victory and defeat clips, a pool's), a
+clip whose stream runs past the file's length (header 52) or whose entries
+outrun it, more than 16 anchors, a pool of more than 7 clips, or an action
+naming a pool past the pools is refused as *NAME.VBT is damaged*
+(`vb_vcheck`): each was a play that waited for ever on a head no read
+could bring. Every refusal names the file it was about - the document,
+its rendition beside it, or the game's own `.O88` (`vb_errname`) - and a
+file shorter than a header *is not a VBT1 file*, not *not found*; the
+text window's fourth line is the file it plays (*Plays MYFIGHT.VBT*), or
+*Needs BATTLE.VBT beside it* when it has none (`vb_t4set`).
 A 64-byte header gives the counts and each table's offset from the block's
 start, the enemy, and the seed:
 
