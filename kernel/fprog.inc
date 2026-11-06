@@ -1177,27 +1177,6 @@ osapi_fs_op:
 %endif
 fpg_finish:
     pushf
-    ; --- THE UNARMED UNLOCK, ANSWERED BEFORE THE FRAME (kernel hot-paths pass
-    ; 1, gfxcall-4). gfx_unlock calls this on EVERY drawing burst in the
-    ; machine, and nearly all of them saw no file work: no widget up, none
-    ; warming ([fpg_on] and [fpg_warm] both 0 - the one word the tear below
-    ; exchanges) and no package's operation parked. For that state the frame
-    ; below - the bar flag raised, five pushes, the exchange of a zero word
-    ; with zero, the pops, the bar flag lowered - changes nothing but
-    ; [cur_barok], which it leaves 0, and that is what fpg_step.out does
-    ; here: ~480 clocks measured on MartyPC's 5150, now ~140. Any other
-    ; state takes the frame exactly as before.
-%ifdef FPG_PARK
-    cmp byte [fpg_pown], FPG_NOWN
-    jne .slow
-%endif
-    cmp word [fpg_on], 0
-    jne .slow
-    jmp fpg_step.out            ; CURBAR_OFF, popf, ret
-    nop                         ; PARITY, never executed: the test above is
-                                ; odd, and ui_task after it keeps its measured
-                                ; parity on both kernels
-.slow:
     FPG_BARON                   ; SPEC.md 7.4.3, as at fpg_begin
     push ax
     push bx
