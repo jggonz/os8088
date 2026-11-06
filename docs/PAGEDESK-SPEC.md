@@ -770,6 +770,83 @@ plan's agent table and nowhere else.
 
 ### 20.1 Fixtures and independent checks (`fix`)
 
+**20.1.1 Regenerating.** Everything here is produced by
+`tools/os88pdfgen.py` (Python 3 standard library only, deterministic: no clock,
+no randomness, a fixed `/ID`, and even the one FlateDecode stream is written by
+the generator's own fixed-Huffman deflater, so the bytes do not depend on the
+host's zlib).
+
+| command | writes |
+|---|---|
+| `python3 tools/os88pdfgen.py apps/pagedesk/samples` | the eight shipping samples and `MANIFEST.TXT` (committed; 64,039 bytes in all) |
+| `python3 tools/os88pdfgen.py build/pdfix` | the same, for the build tree (18.1) |
+| `python3 tools/os88pdfgen.py --stress build/pdfstress` | ten stress files and `STRESS.TXT` (never committed, never shipped) |
+| `python3 tools/os88pdfgen.py --negative build/pdfneg` | 51 deliberately invalid files and `README.TXT` (only the README is committed, as `tests/pdfneg/README.TXT`) |
+
+`tests/unit/t_pdfix.py` regenerates the samples and requires byte equality with
+the committed copies, the manifest to match each file's size and SHA-256, the
+negative README to be what the generator writes, and `qpdf --check` to accept
+every sample.
+
+**20.1.2 The samples (18.1).** Every sample except `FLATE.PDF` is asserted, by
+the generator about its own bytes, to stay inside the 1.3 profile: classic
+xref, base-14 Type1 fonts with `/Widths`, no filter beyond ASCIIHex and
+RunLength, 1- and 8-bit DeviceGray images, no object or xref streams, no
+encryption; every `/BaseFont` is checked against the base-14 list and every
+xref offset against its `N 0 obj`. Each file states its own version (`%PDF-1.3`;
+`FLATE.PDF` is 1.2, `ACROFORM.PDF` 1.4).
+
+| file | pages | what | XT capability |
+|---|---|---|---|
+| `HELLO.PDF` | 1 | text, a frame, a triangle | supported |
+| `XTGUIDE.PDF` | 12 | page 3 is the mockups' "03 Connecting your XT" (two IBM XT drawings as vector paths, "Null-modem serial cable" arrow, "Before you connect" steps, "Recommended settings" table, footer `GETTING STARTED  3`); cover, contents, pinout, maintenance, diagrams, troubleshooting and more; `/Outlines` with 6 sections and 5 children; `/Link` annotations (`/Dest` and `/A /GoTo`) on the contents page and page 4; `same baud rate` occurs once, on page 3 | supported |
+| `MARKUP.PDF` | 2 | drawn fields, checkboxes, plan and shape areas, no AcroForm | supported |
+| `PAGES.PDF` | 8 | portrait, landscape, CropBox, `/Rotate` 90/180/270, A4, nonzero-origin MediaBox | supported |
+| `MONOIMG.PDF` | 1 | 1-bit raw image, its `/Decode [1 0]` twin, 8-bit ASCIIHex gradient, RunLength `/ImageMask` | supported |
+| `LATIN.PDF` | 1 | literal-string escapes, hex strings, WinAnsi, MacRoman, Standard (no `/Encoding`), `/Differences`, `TJ Tc Tw Tz Ts Tr TL T* ' "` | supported |
+| `FLATE.PDF` | 1 | content compressed with FlateDecode | refused `PDE_FLATE` (Enhanced PD-25 draws it) |
+| `ACROFORM.PDF` | 1 | AcroForm: two text fields under one parent, two checkboxes, `/AP` on all, `/NeedAppearances false` | display supported; editing is Enhanced (PD-26) and must be refused, never silently applied |
+
+`MANIFEST.TXT` lists per file the page count, byte size, SHA-256, version,
+fonts, filters, expected capability, and `task <name> <json>` lines: the named
+editing exercises as machine-readable operations (`op` of `find`, `highlight`,
+`note`, `text`, `line`, `ink`, `move-page`, `rotate`, `duplicate`,
+`insert-blank`, `delete`, `extract`, `insert-from`, `save-as`, ...).
+
+**20.1.3 Stress (18.2).** `STRESS64.PDF` (64 pages under an 8x8 nested tree),
+`BIGFILE.PDF` (721,926 bytes), `LONGSTRM.PDF` (one 85 KB content stream),
+`SPARSE.PDF` (10,000 filler objects at ids 1000+7i, content at 69999),
+`INDIRLEN.PDF` (`/Length N 0 R`, the length object after the stream),
+`CONTARR.PDF` (`/Contents` as three streams, `q` and `Q` in different ones),
+`INHERIT.PDF` (resources, boxes and `/Rotate` through three `/Pages` levels),
+`ROTCROP.PDF` (90/180/270, nonzero-origin MediaBox and CropBox),
+`REVCHAIN.PDF` (three revisions; revisions 2 and 3 redefine a content stream
+and an annotation, revision 3 adds a page and redefines `/Pages`: the final
+state is 3 pages, page 1 reading `REVISION 3`, one Text note `note from
+revision 3`), `ANNOTS256.PDF` (256 annotations, 7 subtypes, each with `/AP`).
+
+**20.1.4 Negative corpus (18.3).** `tests/pdfneg/README.TXT` is the table: file,
+layer (`open` or `render`), expected `PDE_*`, reason. The files are named for
+their defect. The expectations are the fixture author's reading of 1.3 and 3.6
+and give way to the engine's 20.2 where they differ. A case is not finished
+when the code is right: the source file must be byte-identical afterwards, no
+claim left open, and the next valid file must open. Independent readers
+repair some of these (`qpdf --check` accepts `trunc_xref.pdf` after
+reconstruction): that is the point of them, PageDesk refuses.
+
+**20.1.5 The checker (18.4).** `tools/os88pdfcheck.py`, over `qpdf`, `mutool`
+and `pdftoppm`, sharing no code with PageDesk or the generator. A missing tool
+prints `SKIP` and exits 3: it never passes. Exit codes: 0 pass, 1 fail, 2
+usage, 3 SKIP.
+
+| subcommand | does |
+|---|---|
+| `validate FILE...` | `qpdf --check`; PASS only when clean (`--warn-ok` tolerates warnings) |
+| `render FILE PAGE OUT [--dpi N] [--gray]` | `mutool draw`, else `pdftoppm`; OUT's extension picks PNG, PGM or PBM |
+| `annots FILE PAGE` | JSON list for the page: `subtype`, `rect`, `quadpoints`, `contents`, `nm`, `irt`, `state`, `statemodel`, `flags`, `author`, `has_ap`, `inklist`, `line` (from `qpdf --json=2`, so the latest revision wins) |
+| `compare A.pgm B.pgm [--tol N] [--frac F]` | PASS when at most F of the pixels differ by more than N (defaults 16 and 0.01); a size mismatch fails |
+| `text FILE [PAGE]` | `mutool draw -F txt`, to confirm text is findable |
+
 ### 20.2 The engine (`eng`)
 
 ### 20.3 The renderer (`rend`)
