@@ -95,10 +95,6 @@ LOCAL_EXEMPT = {
           "gate rather than a program; the packages built WITH it are "
           "cword/, paccman/, runcpm/, c64/, apple2/, weave/ and loom/, and "
           "every one of those is checked below",
-    "pagedesk": "PageDesk (SPEC.md 127) while it is being built on "
-                "feat/pagedesk: no package is produced yet, and PD-24 "
-                "(docs/plans/PAGEDESK-PLAN.md) removes this row when "
-                "PAGEDESK.O88 joins the everything set and the live media",
 }
 
 

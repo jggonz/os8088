@@ -1677,6 +1677,212 @@ SKIPs until `pdeng.c` is on the branch; verify-wrt ran it green against
 
 ### 20.6 The package and its interface (`shell`)
 
+The primary is `apps/pagedesk/pagedesk.asm` (the shim: header, parts table,
+`os88ui.inc`, the seam `pdui.inc`, `weave/wfetch.inc`, `pdmath.inc`) and one C
+translation unit, `pagedesk.c`, which `#include`s `pdulay.c` (layout, pure),
+`pduerr.c` (a sentence per `PDE_*`), `pdumod.c` (modules and claims),
+`pdudraw.c`, `pduview.c`, `pdujob.c` (the scheduler), `pducmd.c` (menus,
+keys, clicks, popovers) and `pdovl.c` (the overlay's tenants: the help and
+info cards). `pdulay.c` also compiles on the host:
+`apps/pagedesk/hosttest/pdu_lay.c` sweeps every content box from 320x100 to
+720x460 in every mode, and the five displays by name (20.6.4).
+
+#### 20.6.1 Parts table
+
+| row | name | kind, flags | what it is |
+|---|---|---|---|
+| 0 | `PDENG` | `OP_SEG`, `OP_COMP` | the module image followed by its bss as zeros (the Makefile's `pd*.part` rule), so the carve covers the bss; plain `OP_COMP`, because `OP_ZFILL` refuses a part whose only zeros are its tail |
+| 1 | `PDREND` | `OP_SEG`, `OP_COMP` | the same |
+| 2 | `PDWRT` | `OP_SEG`, `OP_LAZY` `OP_COMP` | fetched by `w_partfetch` (from the launch folder) at the first save, dropped with `os88_part_drop` after it |
+| 3 | `PDRES` [0, 65,024) | `OP_ASSET`, `OP_LAZY` `OP_SELF` | never fetched by the standard: the primary reads the INDEX by file offset (20.6.2) |
+| 4 | `PDRES` [65,024, end) | `OP_ASSET`, `OP_LAZY` `OP_SELF` | `PDRES.BIN` is 77,828 bytes and a part's ceiling is 65,024 (`os88pkg.py`, SPEC.md 20.12.11), so it rides as two rows cut at a multiple of 16: `os88pkg` lays parts on paragraphs in row order, so row 4's bytes follow row 3's in the file and every D3 offset is still `part_off` + offset. `pdu_bank_load` refuses the bank unless `off(4) == off(3) + len(3)/16` |
+| 5 | the overlay | `CC_OVL_ROW` (lazy, `OP_COMP`) | `pdovl.c`'s `ovl_*`, last (SPEC.md 73.14.2) |
+
+`pagedesk.asm` holds `pdu.h`'s `PDU_PART_*` to these rows with `%if`.
+`PD_ENG_MOD`/`PD_REND_MOD`/`PD_WRT_MOD` (Makefile) name the module images and
+default to the stand-ins in `apps/pagedesk/stubs/` (`pdstub.asm`, one source
+three images) until the lead flips them; `PD_MATH_STUB=1` builds against the
+math stand-in.
+
+#### 20.6.2 Load, claims and teardown
+
+**MEM_OWNER_MAX.** kern_big allows **8 claims per owner** (`kernel/memory.inc`,
+12 on kern_mega), and the carve, the exchange block and every lazy part are
+claims of the instance. 16.2's rows one claim each would be 13 at a save's
+peak, and the first build failed its first open on exactly that. So the
+document set is **two claims cut with `os88_seg_sub`**, every cut on a KiB
+(each sub-segment 512-aligned for a transfer; on kern_mega each is a selector):
+
+| claim | sub-segments, in order | size |
+|---|---|---|
+| A | block cache 16, object arena 8, xref + page tables 11, glyph cache 12 | 47 KiB |
+| B | display list 22 + PDREND's gstate/font-cache workspace 7 (D13: `dl_kb` = 29), band (`((w+1)/2)*16` bytes at 4bpp, `((w+7)/8)*16` at 1bpp, to a whole KiB) | 30-34 KiB |
+
+and the claims at the peak are: the carve (primary + `PDENG` + `PDREND`), the
+exchange block, the `PDRES` INDEX, A, B, the overlay, `PDWRT`, the writer's
+buffers - **8**. Wave 2's edit store, thumbnails and search scratch (16.2) must
+be carved into A or B (or a third claim that replaces one of these), never added
+beside them.
+
+**Launch** (`pdu_mod_launch`): check each eager module's header against its
+row (magic, `PDM_ABI`, image + bss == the row's length) and bind its far vector
+(`pdu_mbind`, `OS88_CODESEL`); claim the 1 KiB XB; INIT `PDENG` and `PDREND`
+with `pdxb_init` carrying the XB, the vectors, adapter and bpp and **no**
+document claims (D2). A refused header toasts `<MODULE> is the wrong version.`
+and the launch is refused; nothing is left claimed.
+
+**Open** (first slice of `J_OPEN`): read the `PDRES` INDEX once per instance
+(D3): the part's file offset comes from row 3 (paragraphs), the read is
+`OSAPI_FILE_READ_AT` from the launch folder, cluster-aligned (the claim covers
+the clusters the INDEX spans and the bank is a `seg_sub` at the part's first
+paragraph), the directory must say `PDRS` version 1 and kind 7's length - read,
+never assumed (D10) - must lie inside the 8 KiB read. A bank that does not load
+is not fatal; Help > Document info says `Fonts: none (system face)`. Then claim
+A and B, re-INIT `PDENG` and `PDREND` with them (D2), hand `PDREND` the
+`pdxb_fontbank` (package name, launch place, `part_off`, INDEX segment and
+length) with `PDV_REND_FONTBANK`, and step `PDV_ENG_OPEN`. A refused claim
+fails the open with `Not enough memory: PageDesk needs N KB.` (N = A + B) and
+frees whatever it had taken.
+
+**Close** (`pdu_doc_release`): `PDV_REND_ABORT`, `PDV_ENG_CLOSE`, free A and B;
+the INDEX stays for the next open. **Save**: fetch `PDWRT`, check and bind it,
+claim the writer's buffers (12 KiB, D9), INIT it, step `PDV_WRT_SAVE`; on any
+outcome free the buffers, unbind and `os88_part_drop` the module.
+**Quit** (`os88_onclose` and every refused launch): close, then free the INDEX
+and the XB and unbind every vector. A freed segment never stays in
+`pdxb_init`: the document fields are zeroed with A and B (on a failed open
+too) and `wbuf_seg`/`wbuf_kb` with the writer, so a later INIT (D2) hands a
+module 0, never a claim that has been given back.
+
+**The document's folder.** `pdxb_open.name` and `pdxb_save.source` are 8.3
+names resolved in the instance's CURRENT folder, and a Standard File dialog
+moves that folder (SPEC.md 19.2.1). The open banks its folder
+(`pdu_docplace`); every wake and every Find stand back in it first
+(`os88_file_goto_q_mark`: a word, no I/O, inside one volume). Save As writes
+beside the document only (20.5.12 item 2): a dialog answered in another
+folder is refused, `Save As writes beside the document in this build.`, and
+the instance is stood back beside the document. `pdxb_save` carries
+`source` = the open document's name and `date` = `D:YYYYMMDDHHmmSS` from
+`OSAPI_CLK_GET`, or "" when no hardware RTC was found (a PIT clock since
+boot may never have been set); `author` is "".
+
+Measured on QEMU (640 KB, kern_big, stub modules, the real `PDRES`), free heap
+with a document open, from Help > Document info: **446-447 KB on VGA, 451 KB on
+CGA, 450 KB on Hercules** (the band is 5 KiB at 4bpp and 2 KiB at 1bpp). On the
+stub-`PDRES` build the figure read the same after open, close, reopen, a Save
+As, quit and relaunch (458, 458, 459 KB), and on the final build a close
+through the close box (`os88_onclose`) and relaunch read 447 KB both times: no
+claim is leaked on any of those paths. The verifier's pass (22 KiB display
+list, before D13 grew it to 29) read 427 KB on VGA with the Task Manager and
+two Disk windows up, the same after close + Sample guide and after both Save
+As refusals, and the Task Manager's HEAP read 21/580K before PageDesk's
+launch and again after its close box; CGA read 448 KB before and after a
+close and reopen, Hercules 448 KB.
+
+#### 20.6.3 The job scheduler (15.1-15.3)
+
+One job at a time, `pdu_job`: `J_NONE`, `J_OPEN`, `J_RENDER`, `J_SAVE`. The
+document is `D_EMPTY`, `D_OPENING`, `D_OPEN` or `D_FAILED` (the empty card then
+says `Could not open <name>` and the `PDE_*` sentence).
+
+- `os88_onwake` does, in order: a pending cancel; the launch document
+  (`OSAPI_ARG_FILE`, reached with `os88_file_goto_q_mark`); **one** slice of the
+  running job; a pending page change (`PDV_ENG_PAGEINFO`, then the canvas); a
+  pending full relayout and repaint; then, if no job runs and a render is owed and
+  no popover or card is up, `PDV_REND_BEGIN`. It re-posts `os88_wm_wake` while a
+  job, a page change or the launch document is outstanding.
+- A slice is one verb call. `PDE_BUSY` means "call again next wake"; anything else
+  ends the job.
+- **Render is owed, not run**: damage inside the canvas is unioned into one
+  owed rect (`pdu_render_want`) and rendered after the damage handler returns,
+  in bands, under `PDREND`'s own lock (3.1, 10.2). A popover opening aborts the
+  render (`PDV_REND_ABORT`) and the canvas under it is re-owed when it closes.
+- **Esc** cancels the running job at the next slice boundary. A cancelled open
+  closes and frees; a cancelled render leaves the page as drawn and says
+  `Drawing cancelled - the page is incomplete.`
+- **Progress**: after 18 ticks a job writes `Opening <name> - Esc cancels`
+  (or `Drawing page`, `Saving <name>`) to the status line, once a second. A
+  save opens `OSAPI_FS_OP` with the total `PDWRT` reports and closes it with 0.
+- **Incomplete rendering** is said once a page (`PDV_REND_STATUS`'s first
+  reason): a repair of a damaged strip draws the same page again and must not
+  overwrite what the user just did - a Save As's outcome was lost exactly that
+  way in the first build.
+
+#### 20.6.4 Layouts and metrics
+
+The layout is a pure function of the content box (`pdu_layout`), recomputed on
+every `OSAPI_WM_ONRESIZE` and display change. Metrics (`pdu.h`): bar rows 16
+(FULL/MID) and 12 (COMPACT); status line 12 / 10; Pages sidebar 136, Notes
+panel 160; scroll bar 16; desk margin 8; the canvas's left edge and right
+edge + 1 are on the 8-pixel grid (the `gfx_scroll` contract); a panel folds
+away (Notes first) when the canvas would be narrower than 160. The status
+line stops 16 short of the content's right edge, where the grow box is.
+
+**`PDU_FULL_H` is 260, not 17.1's 300.** A full-desktop window's content box
+is the screen's width by its height less 64 (menu bar, title bar, dock), so on
+Hercules (720x348 or 720x350) and EGA (640x350) it is 284-286 rows; at 300
+those machines would get MID, whose panels open as overlays, while the mockups
+show Hercules with both panels beside the page. 260 still sends CGA (136 rows)
+to COMPACT and leaves MID for a small window. The lead may move 17.1's figure
+to match.
+
+| display | content box | layout | canvas | panels | source |
+|---|---|---|---|---|---|
+| VGA 640x480 | 640x416 | FULL | 328x372 | Pages + Notes | MEASURED (QEMU, Document info) |
+| EGA 640x350 | 640x286 | FULL | 328x242 | Pages + Notes | the rule; host test |
+| Hercules 720x348 | 720x284 | FULL | 408x240 | Pages + Notes | MEASURED (QEMU `VIDEO=herc`, Document info) |
+| Hercules 720x350 | 720x286 | FULL | 408x242 | Pages + Notes | the rule; host test |
+| CGA 640x200 | 640x136 | COMPACT | 624x114 | popovers | MEASURED (QEMU `VIDEO=cga`, Document info) |
+
+`tests/unit/t_pdlay.py` (fast row `pdlay`) compiles `pdulay.c` on the host and
+sweeps every content box 320x100..720x460 in every mode plus these five rows.
+
+COMPACT has one combined bar: the page field with Prev/Next, zoom, the four
+mode tabs, the mode's tools (as many as fit) and the Pg and Notes popover
+buttons; Open, Save As, Find, Undo/Redo and the panels are in the menus and
+the popovers (Pages: a grid; Notes; Zoom list; More). Monochrome marks the
+active control by inversion and focus by a double frame; colour by cyan.
+Every shown panel has its own put-away control (Pages: `<` at the foot,
+Notes: `x`) - `t_pdlay` checks it at every box.
+
+**What a redraw costs.** Each laid-out control keeps the state and label it
+last showed (keyed on id and position): unchanged is no call; a new label is
+the slivers beside it and one `font_run`; a new state the four slabs round
+the label, the frame and the label; on a ground its painter just filled,
+frame and label. No pixel is written twice (the first build filled each
+control and ran the label over the fill, so the page field blanked on every
+PgDn). A page change moves the sidebar's heavy frame between two cells - or
+pages the list by screenfuls when the page is off it - and redraws only the
+Notes panel's per-page line, padded to the list's width.
+
+#### 20.6.5 Menus and keys
+
+Menus (`os88_menuset`, five at most - the application menu carries About):
+File (Open... ^O, Open sample guide, New ^N, Save As... ^S, Close document),
+Edit (Undo ^Z, Redo ^Y, Delete Del, Find... ^F, Find next F3, Find previous
+Shift+F3), View (Zoom in +, Zoom out -, Actual size, Fit width, Fit page,
+Hide/Show Pages panel, Hide/Show Notes panel, Preferences), Document (Read F5,
+Annotate F6, Edit F7, Pages F8, the active one starred; Previous/Next/First/Last
+page PgUp/PgDn/Home/End; Go to page... ^G), Help (Keyboard..., The XT PDF
+profile..., Document info...). No Print (1.1). A disabled item is greyed by
+fact (no document, nothing to undo, a wave-2 tool), and the control it mirrors
+says why on the status line when pressed. Keys beyond 17.5: Tab/Shift+Tab move
+focus through the bars, Enter/Space press the focused control, 1-6 pick the
+mode's tools, the arrows scroll (and pan when zoomed past the canvas), Esc
+cancels a job, then closes a popover, then leaves a field, then drops focus,
+then returns to Select. Help > Document info shows the file, pages, version and
+revisions, access, whether the page is fully drawn, the font INDEX, the layout
+and content box, and the free heap.
+
+#### 20.6.6 The disk
+
+`make pagedeskdisk` writes `build/pagedesk{,120,720,360}.img`: `PAGEDESK.O88`,
+`README.TXT`, `PDFONTS.TXT`, `PDFONTX.RES` (not at 360KB, D5) and the samples
+(`apps/pagedesk/samples/*.PDF`, unpacked) at the root, `SYSTEM/APPDATA/`, each
+verified with `os88disk.py --verify`. The everything set and the live media
+carry the same files in `PAGEDESK\` (`tests/unit/t_livefull.py` has no
+exemption for it). At 360KB the disk is 184 of 354 clusters.
+
 ### 20.7 Arithmetic and the assembly contract (`math`)
 
 `apps/pagedesk/pdmath.inc` is the 8086 body of every function in `pdmath.h`;

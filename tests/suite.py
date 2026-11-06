@@ -1517,6 +1517,15 @@ FAST = [
         "PD_MAXSUBSEC, a 3-revision chain where the newest wins, 256 "
         "annotations - 0.45 s of image generation kept out of the fast tier",
         needs=()),
+    Row("pdlay", "fast", py("tests/unit/t_pdlay.py"), 0.5,
+        "PAGEDESK-SPEC 17.1 / 20.6.4: apps/pagedesk/pdulay.c - the layout "
+        "the package compiles - built on the host and swept over every "
+        "content box 320x100..720x460 in every mode and the five displays by "
+        "name (VGA, EGA, Hercules 348 and 350, CGA): regions and controls "
+        "inside the box and their own bar, no overlap, the canvas on the "
+        "8-pixel grid, the kind from the thresholds, every mode's tools on "
+        "the glass. ~15M checks in ~0.4 s",
+        needs=("cc",)),
     Row("livefull", "fast", py("tests/unit/t_livefull.py"), 0.2,
         "SPEC.md 80.6: the live USB/CD is the ONE image whose premise is "
         "completeness, and until this row nothing in the tree had ever read "
