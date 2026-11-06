@@ -63,7 +63,7 @@ HOT = {
         # measured them (docs/plans/khp1/vga.md). The rung starts on a
         # paragraph, so only `.vga` bytes above them can move these
         "vga_solid_rect_v": 0, "gfx_fill_gray_raw_v": 1,
-        "vga_save_vram_v": 1, "vga_restore_vram_v": 1,
+        "vga_save_vram_v": 0, "vga_restore_vram_v": 1,
         "vga_blit_span": 0, "gfx_blitp_v": 0,
     },
     "small": {

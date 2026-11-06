@@ -3697,6 +3697,11 @@ gfx_fill_gray_raw:                              ; only renderer gfx_fill_gray ha
 %ifdef COLD_SLIDE
     jmp gfx_fill_gray_raw_v ; the body is the VGA rung's (MOVABLE-COLD-PLAN
 section .vga                    ; 2): VIDEXTM above is its door, and on a
+    nop                         ; PARITY, never executed (kernel hot-paths
+                                ; pass 1, kernel-hotpaths-lean): vga-4's +3 in
+                                ; vga_solid_rect_v above, without the fill
+                                ; rewrites that balanced it, put this body and
+                                ; the save/restore pair at an odd shift
 gfx_fill_gray_raw_v:     ; machine with neither card never falls here
 %endif
     push ax
