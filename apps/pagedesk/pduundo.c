@@ -436,7 +436,7 @@ void pdu_saved(void)
 /* ---- the words -------------------------------------------------------------- */
 /* Edit > Undo / Redo: do it and say so (the label table is not kept: the
  * history is bytes the XT cannot spare, and "Undone." is true of every step) */
-static void pdu_undo_cmd(int redo)
+void pdu_undo_cmd(int redo)
 {
     if (redo ? pdu_redo() : pdu_undo())
         return;
@@ -446,6 +446,7 @@ static void pdu_undo_cmd(int redo)
 /* the outermost end: hand the screen what changed, refresh what shows state */
 static void ovl_pdu_ed_flush(void)
 {
+    pdu_ed_genv++;
     pdu_changes = ovl_pdu_ed_live();
     if (pdu_ed_drv) {
         pdu_ed_drv = 0;

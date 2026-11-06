@@ -130,9 +130,8 @@ static void ovl_ed_scr(const struct pd_rect *r, int pad, struct os88_rect *o)
 {
     int k;
     o->x1 = 32000; o->y1 = 32000; o->x2 = -32000; o->y2 = -32000;
-    for (k = 0; k < 4; k++) {
-        pdm_view_fwd(&ed_px, &ed_py, &pdu_view,
-                     (k & 1) ? r->x1 : r->x0, (k & 2) ? r->y1 : r->y0);
+    for (k = 0; k < 2; k++) {        /* opposite corners stay opposite under any R */
+        pdm_view_fwd(&ed_px, &ed_py, &pdu_view, k ? r->x1 : r->x0, k ? r->y1 : r->y0);
         if (ed_px < o->x1) o->x1 = ed_px;
         if (ed_px > o->x2) o->x2 = ed_px;
         if (ed_py < o->y1) o->y1 = ed_py;
@@ -476,6 +475,11 @@ static int ovl_pdu_ed_live(void)
 
 /* nav (20.10) owns the selection; until it lands there is none. nav defines
  * PDU_NAV beside its include and these two are gone. */
+#ifndef PDU_NOTES
+void pdu_nt_new(unsigned page_id, const struct pd_rect *r) { pdu_tell("Notes are not in this build."); }
+void pdu_nt_open(int i) { }
+void pdu_nt_inspect(int i) { }
+#endif
 #ifndef PDU_NAV
 int pdu_sel_quads(pd_pt *dst, unsigned cap) { return 0; }
 int pdu_sel_text(char *dst, unsigned cap) { return 0; }
@@ -497,11 +501,14 @@ int pdu_sel_text(char *dst, unsigned cap) { return 0; }
  *     still the page the XOR was drawn on, and the render's END puts it back.
  *     A scroll and a page change take it off before they move anything.
  * ==========================================================================*/
+char pdu_tbuf[1025];
+static pdw pdu_ed_genv;
+unsigned pdu_ed_gen(void) { return pdu_ed_genv; }
 static int pdu_ed_sel = -1;             /* the selected record, -1 none */
-static int pdu_sgn_n;                   /* signature points held (pdutool.c) */
 static int pdu_tx = -1;                 /* the record being typed into */
 static int pdu_tx_new;                  /* ...born in this session */
 static int ed_xon, ed_xn;
+static int ed_xrem = 1;                 /* remember the strips (the selection's) */
 static int ed_xl[8][4];
 
 void pdu_ed_sel_fix(void)
@@ -523,13 +530,15 @@ static void ovl_ed_xf(int x1, int y1, int x2, int y2)
     if (y1 < c->y1) y1 = c->y1;
     if (x2 > c->x2) x2 = c->x2;
     if (y2 > c->y2) y2 = c->y2;
-    if (x1 > x2 || y1 > y2 || ed_xn >= 8)
+    if (x1 > x2 || y1 > y2 || (ed_xrem && ed_xn >= 8))
         return;
-    ed_xl[ed_xn][0] = x1;
-    ed_xl[ed_xn][1] = y1;
-    ed_xl[ed_xn][2] = x2;
-    ed_xl[ed_xn][3] = y2;
-    ed_xn++;
+    if (ed_xrem) {
+        ed_xl[ed_xn][0] = x1;
+        ed_xl[ed_xn][1] = y1;
+        ed_xl[ed_xn][2] = x2;
+        ed_xl[ed_xn][3] = y2;
+        ed_xn++;
+    }
     os88_gfx_xor_fill(x1, y1, x2, y2);
 }
 
@@ -573,6 +582,7 @@ void pdu_ed_xon_l(void)
     if (ed_xon || pdu_pop != P_NONE || pdu_about || !ovl_ed_selrect(&ed_sr))
         return;
     ed_xn = 0;
+    ed_xrem = 1;
     ovl_ed_frame(&ed_sr, ed_v.kind == PDA_TEXT || ed_v.kind == PDA_RECT
                      || ed_v.kind == PDA_ELLIPSE || ed_v.kind == PDA_AREA);
     ed_xon = 1;
@@ -649,6 +659,7 @@ void pdu_ed_select(int i)
         return;
     pdu_ed_xoff_l();
     pdu_ed_sel = i;
+    pdu_ed_genv++;
     pdu_ed_show();
 }
 
@@ -659,17 +670,6 @@ void pdu_ed_gone(void)
     ed_xon = 0;
     pdu_ed_sel = -1;
     pdu_tx = -1;
-    pdu_sgn_n = 0;
-}
-
-/* Esc with a signature half drawn: its strokes are on the glass, XOR */
-void pdu_sgn_cancel(void)
-{
-    if (!pdu_sgn_n)
-        return;
-    pdu_sgn_n = 0;
-    pdu_render_want(&pdu_L.canvas);
-    pdu_tell("Cancelled.");
 }
 
 /* ---- typing ---------------------------------------------------------------- */

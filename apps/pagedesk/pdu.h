@@ -185,14 +185,12 @@ struct pdu_lay {
 #define pdu_tx_key ovl_tx_key
 #define pdu_tx_begin ovl_tx_begin
 #define pdu_tx_end ovl_tx_end
-#define pdu_sgn_cancel ovl_sgn_cancel
 #define pdu_undo_begin ovl_undo_begin
 #define pdu_undo_end ovl_undo_end
 #define pdu_undo ovl_undo
 #define pdu_redo ovl_redo
 #define pdu_undo_pageop ovl_undo_pageop
 #define pdu_undo_drop ovl_undo_drop
-#define pdu_undo_cmd ovl_undo_cmd
 #define pdu_ed_xon_w ovl_ed_xon_w
 #define pdu_ed_canvas2 ovl_ed_canvas2
 
@@ -240,8 +238,26 @@ int      pdu_ed_move(int i, int dx, int dy);
 int      pdu_tx_key(int ascii);
 void     pdu_tx_begin(int i, int isnew);
 void     pdu_tx_end(void);
-void     pdu_sgn_cancel(void);
 void     pdu_pg_apply(const void *delta, unsigned len, int undo);
+#define pdu_undo_cmd ovl_undo_cmd
+#define pdu_tool_click ovl_tool_click
+#define pdu_tool_hilite ovl_tool_hilite
+#define pdu_tool_delete ovl_tool_delete
+#define pdu_tool_enter ovl_tool_enter
+#define pdu_tool_hint ovl_tool_hint
+#define pdu_undo_cmd ovl_undo_cmd
+int      pdu_tool_click(int x, int y);
+int      pdu_tool_hilite(void);         /* nav calls it when a Highlight selection ends */
+int      pdu_tool_delete(void);
+int      pdu_tool_enter(void);
+void     pdu_tool_hint(int id);
+void     pdu_undo_cmd(int redo);
+unsigned pdu_ed_gen(void);              /* bumped by every mutation, undo, redo, selection change */
+extern char pdu_tbuf[1025];             /* ONE near text buffer, shared with notes (D19) */
+/* notes (20.9) implements these; edit stubs them until PDU_NOTES is defined */
+void     pdu_nt_new(unsigned page_id, const struct pd_rect *r);
+void     pdu_nt_open(int i);
+void     pdu_nt_inspect(int i);
 /* ---- end edit ---- */
 
 #endif /* PDU_H */

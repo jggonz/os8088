@@ -9,12 +9,6 @@
  * ==========================================================================*/
 
 static void pdu_pop_close(void);
-static int ovl_tool_click(int x, int y);      /* edit: pdutool.c */
-static int ovl_tool_hilite(void);
-static int ovl_tool_delete(void);
-static int ovl_tool_enter(void);
-static void ovl_tool_hint(int id);
-static void pdu_undo_cmd(int redo);
 static void pdu_about_off(void);
 static void ovl_card(int which, struct os88_rect *r, int mono);
 static int ovl_card_size(int which);
@@ -460,7 +454,6 @@ static void pdu_close_doc(void)
 static void pdu_set_mode(int m)
 {
     pdu_tx_end();                       /* edit */
-    pdu_sgn_cancel();
     if (pdu_doc != D_OPEN) {
         pdu_tell(pdu_why(C_M_READ));
         return;
@@ -482,13 +475,12 @@ static void pdu_set_tool(int id)
     old = pdu_tool;
     pdu_tx_end();                       /* edit */
     if (id != old)
-        pdu_sgn_cancel();
-    pdu_tool = id;
+        pdu_tool = id;
     pdu_ctl_repaint(old);
     pdu_ctl_repaint(id);
     os88_wm_cursor(pdu_win, id == C_T_SELECT ? OS88_CUR_ARROW
                                              : OS88_CUR_CROSS);
-    ovl_tool_hint(id);                  /* edit */
+    pdu_tool_hint(id);                  /* edit */
 }
 
 /* the find job: PDV_ENG_SEARCH from the current page on, resumable */
@@ -551,7 +543,7 @@ static void pdu_cmd(int id)
         pdu_undo_cmd(1);
         return;
     case C_E_DELETE:                    /* edit */
-        ovl_tool_delete();
+        pdu_tool_delete();
         return;
     case C_OPEN: case C_EV_OPEN:
         pdu_open_dlg();
@@ -619,7 +611,7 @@ static void pdu_cmd(int id)
     if (id >= C_T_SELECT && id <= C_T_SIGN) {
         pdu_set_tool(id);
         if (id == C_T_HILITE)           /* edit: a selection already made */
-            ovl_tool_hilite();
+            pdu_tool_hilite();
     }
 }
 
@@ -845,8 +837,6 @@ void os88_onkey(int ascii, int scan, void *win)
             pdu_field_key(27);
         else if (pdu_tx >= 0)           /* edit: finish the typing */
             pdu_tx_end();
-        else if (pdu_sgn_n)             /* edit */
-            pdu_sgn_cancel();
         else if (pdu_ed_selected() >= 0) /* edit: deselect */
             pdu_ed_select(-1);
         else if (pdu_focus != C_NONE) {
@@ -889,7 +879,7 @@ void os88_onkey(int ascii, int scan, void *win)
     case '+': case '=': pdu_cmd(C_ZIN); return;
     case '-': case 0x1F: pdu_cmd(C_ZOUT); return;        /* - and ^- */
     case 13: case ' ':
-        if (ascii == 13 && ovl_tool_enter())    /* edit */
+        if (ascii == 13 && pdu_tool_enter())    /* edit */
             return;
         if (pdu_focus != C_NONE && pdu_find(&pdu_L, pdu_focus) >= 0)
             pdu_cmd(pdu_focus);
@@ -1046,7 +1036,7 @@ void os88_onclick(int x, int y, void *win)
         return;
     }
     if (pdu_inr(&pdu_L.canvas, x, y) && pdu_doc == D_OPEN) {
-        if (ovl_tool_click(x, y))       /* edit: the annotation tools */
+        if (pdu_tool_click(x, y))       /* edit: the annotation tools */
             return;
         if (pdu_mode == PDU_MODE_PAGES)
             pdu_tell("Page operations are not in this build yet.");

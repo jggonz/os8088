@@ -42,7 +42,6 @@ static struct os88_rect ot_o;           /* the outline a move carries */
 static int ot_moved;
 static pd_px ot_px, ot_py;
 static pd_pt ot_pts[OT_NPTS * 2];       /* ink / signature / highlight quads */
-static unsigned pdu_sgn_pg;
 static int ot_last;                     /* the last record clicked */
 static unsigned ot_tick;
 
@@ -56,27 +55,17 @@ static const char ot_lab[10] = { 0, UL_NOTE, UL_HILITE, UL_MARK, UL_TEXT,
 
 static int ot_abs(int v) { return v < 0 ? -v : v; }
 
-/* ---- XOR drawing, cut to the canvas --------------------------------------- */
+/* ---- XOR drawing, cut to the canvas (the selection's code, not remembered) */
 static void ovl_xrun(int x1, int y1, int x2, int y2)
 {
-    struct os88_rect *c;
-    c = &pdu_L.canvas;
-    if (x1 < c->x1) x1 = c->x1;
-    if (y1 < c->y1) y1 = c->y1;
-    if (x2 > c->x2) x2 = c->x2;
-    if (y2 > c->y2) y2 = c->y2;
-    if (x1 <= x2 && y1 <= y2)
-        os88_gfx_xor_fill(x1, y1, x2, y2);
+    ed_xrem = 0;
+    ovl_ed_xf(x1, y1, x2, y2);
 }
 
 static void ovl_xframe(struct os88_rect *r)
 {
-    ovl_xrun(r->x1, r->y1, r->x2, r->y1);
-    if (r->y2 > r->y1) {
-        ovl_xrun(r->x1, r->y2, r->x2, r->y2);
-        ovl_xrun(r->x1, r->y1 + 1, r->x1, r->y2 - 1);
-        ovl_xrun(r->x2, r->y1 + 1, r->x2, r->y2 - 1);
-    }
+    ed_xrem = 0;
+    ovl_ed_frame(r, 0);
 }
 
 /* a line as runs along its major axis: calls = the minor extent + 1, so an
@@ -132,9 +121,9 @@ static void ovl_prect(const struct os88_rect *s, struct pd_rect *p)
     pd_pt x, y;
     p->x0 = p->y0 = 32767;
     p->x1 = p->y1 = -32767;
-    for (k = 0; k < 4; k++) {
-        pdm_view_inv(&ot_px, &ot_py, &pdu_view, (k & 1) ? s->x2 + 1 : s->x1,
-                     (k & 2) ? s->y2 + 1 : s->y1);
+    for (k = 0; k < 2; k++) {           /* opposite corners stay opposite */
+        pdm_view_inv(&ot_px, &ot_py, &pdu_view, k ? s->x2 + 1 : s->x1,
+                     k ? s->y2 + 1 : s->y1);
         x = ot_px;
         y = ot_py;
         if (x < p->x0) p->x0 = x;
@@ -167,28 +156,6 @@ static void ovl_clamp(void)
     if (ot_cy > c->y2) ot_cy = c->y2;
 }
 
-/* the deviation of (px, py) from the segment a-b, measured along the
- * segment's minor axis (within a factor of root 2 of the true distance, and
- * 16-bit safe: pdu_muldiv carries the 32-bit product) */
-static int ovl_dev(int ax, int ay, int bx, int by, int px, int py)
-{
-    int dx, dy, t, s, m;
-    dx = bx - ax;
-    dy = by - ay;
-    if (ot_abs(dx) >= ot_abs(dy)) {
-        if (dx == 0)
-            return 0;
-        t = px - ax;
-        s = ((dx < 0) != (dy < 0)) != (t < 0);
-        m = pdu_muldiv(ot_abs(t), ot_abs(dy), ot_abs(dx));
-        return ot_abs(py - (ay + (s ? -m : m)));
-    }
-    t = py - ay;
-    s = ((dy < 0) != (dx < 0)) != (t < 0);
-    m = pdu_muldiv(ot_abs(t), ot_abs(dx), ot_abs(dy));
-    return ot_abs(px - (ax + (s ? -m : m)));
-}
-
 /* one stroke is captured in SCREEN pixels at ot_pts[ot_from..], thinned as it
  * goes (a point only when the pointer is 3 pixels from the last kept), drawn
  * as it grows, and made page space by ovl_ink_done */
@@ -213,30 +180,16 @@ static void ovl_ink_add(int x, int y)
     ot_k++;
 }
 
-/* the stroke is thinned to within a pixel, then becomes page space */
+/* the stroke becomes page space (it was thinned as it was drawn) */
 static void ovl_ink_done(void)
 {
-    int a, k, w, i;
-    a = ot_from;
-    w = a;
-    for (k = 0; k < ot_k; k++) {
-        i = (a + k) << 1;
-        if (k > 0 && k < ot_k - 1
-            && ovl_dev(ot_pts[(w - 1) << 1], ot_pts[((w - 1) << 1) + 1],
-                       ot_pts[(a + k + 1) << 1], ot_pts[((a + k + 1) << 1) + 1],
-                       ot_pts[i], ot_pts[i + 1]) <= 1)
-            continue;
-        ot_pts[w << 1] = ot_pts[i];
-        ot_pts[(w << 1) + 1] = ot_pts[i + 1];
-        w++;
-    }
-    for (k = a; k < w; k++) {
+    int k;
+    for (k = ot_from; k < ot_from + ot_k; k++) {
         pdm_view_inv(&ot_px, &ot_py, &pdu_view, ot_pts[k << 1],
                      ot_pts[(k << 1) + 1]);
         ot_pts[k << 1] = ot_px;
         ot_pts[(k << 1) + 1] = ot_py;
     }
-    ot_k = w - a;
 }
 
 /* the band for the pointer where it is */
@@ -360,24 +313,6 @@ static void ovl_box_at(int sx, int sy, int wpt, int hpt)
 }
 
 /* ---- hit testing (screen space, topmost first) -------------------------------- */
-/* the segment a-b within OT_TOL of (px, py)? */
-static int ovl_near(int ax, int ay, int bx, int by, int px, int py)
-{
-    int lo, hi;
-    if (ot_abs(bx - ax) >= ot_abs(by - ay)) {
-        lo = ax < bx ? ax : bx;
-        hi = ax < bx ? bx : ax;
-        if (px < lo - OT_TOL || px > hi + OT_TOL)
-            return 0;
-    } else {
-        lo = ay < by ? ay : by;
-        hi = ay < by ? by : ay;
-        if (py < lo - OT_TOL || py > hi + OT_TOL)
-            return 0;
-    }
-    return ovl_dev(ax, ay, bx, by, px, py) <= OT_TOL;
-}
-
 static int ovl_in(const struct os88_rect *r, int x, int y, int pad)
 {
     return x >= r->x1 - pad && x <= r->x2 + pad && y >= r->y1 - pad
@@ -387,9 +322,7 @@ static int ovl_in(const struct os88_rect *r, int x, int y, int pad)
 /* does record ed_w contain the pixel? */
 static int ovl_test(int px, int py)
 {
-    unsigned k, n, off;
-    int ax, ay, bx, by, have, kind;
-    pd_pt vx, vy;
+    int kind;
 
     kind = ed_w.kind;
     ovl_ed_scr(&ed_w.rect, 0, &ot_r);
@@ -403,31 +336,7 @@ static int ovl_test(int px, int py)
         return !(px > ot_r.x1 + OT_TOL && px < ot_r.x2 - OT_TOL
                  && py > ot_r.y1 + OT_TOL && py < ot_r.y2 - OT_TOL);
     }
-    /* Ink, Sign, Line: the strokes, segment by segment */
-    if (!ovl_in(&ot_r, px, py, OT_TOL + 2))
-        return 0;
-    n = ed_w.pts_n;
-    off = ed_w.pts_off;
-    have = 0;
-    ax = ay = 0;
-    for (k = 0; k < n; k++, off += 4) {
-        vx = (pd_pt)pd_fpeekw(ed_seg(), off);
-        if (vx == ED_PENUP) {
-            have = 0;
-            continue;
-        }
-        vy = (pd_pt)pd_fpeekw(ed_seg(), off + 2);
-        ovl_p2s(vx, vy);
-        bx = ot_qx;
-        by = ot_qy;
-        if (have ? ovl_near(ax, ay, bx, by, px, py)
-                 : (ot_abs(bx - px) <= OT_TOL && ot_abs(by - py) <= OT_TOL))
-            return 1;
-        ax = bx;
-        ay = by;
-        have = 1;
-    }
-    return 0;
+    return ovl_in(&ot_r, px, py, OT_TOL);   /* Ink, Sign, Line: the box */
 }
 
 static int ovl_hit(int px, int py)
@@ -560,7 +469,10 @@ static int ovl_select_click(int x, int y)
     ot_sx = x;
     ot_sy = y;
     if (dbl) {
-        pdu_tx_begin(i, 0);
+        if (ovl_texty(i) && ed_v.kind == PDA_NOTE)
+            pdu_nt_open(i);
+        else
+            pdu_tx_begin(i, 0);
         return 1;
     }
     ovl_move();
@@ -573,18 +485,13 @@ static int ovl_select_click(int x, int y)
 /* Note: an icon box centred on the click, then typing */
 static void ovl_note(int x, int y)
 {
-    int i;
     pdm_view_inv(&ot_px, &ot_py, &pdu_view, x, y);
     ot_pr.x0 = ot_px - 160;             /* 20 x 18 pt (13.3) */
     ot_pr.x1 = ot_px + 160;
     ot_pr.y0 = ot_py - 144;
     ot_pr.y1 = ot_py + 144;
     ovl_fit();
-    i = ovl_make(PDA_NOTE, (const pd_pt *)0, 0);
-    if (i < 0)
-        return;
-    pdu_ed_select(i);
-    pdu_tx_begin(i, 1);
+    pdu_nt_new(pdu_ed_pg(), &ot_pr);    /* notes' popover makes the record */
 }
 
 /* Text: drag a frame, or click for the default one; then typing */
@@ -643,20 +550,13 @@ static void ovl_line(int x, int y)
     ovl_make(PDA_LINE, ot_pts, 2);
 }
 
-/* Ink places each stroke as it is drawn; Sign collects strokes until Enter */
+/* Ink and Sign: one stroke, placed when the button comes up. A signature is
+ * one stroke here (a multi-stroke capture is not built) and says what it is. */
 static void ovl_ink(int kind, int x, int y)
 {
-    int from;
-    from = 0;
-    if (kind == PDA_SIGN) {
-        if (pdu_sgn_n && pdu_sgn_pg != pdu_ed_pg())
-            pdu_sgn_n = 0;
-        from = pdu_sgn_n;
-        pdu_sgn_pg = pdu_ed_pg();
-    }
     ot_sx = x;
     ot_sy = y;
-    ot_from = from;
+    ot_from = 0;
     ot_k = 0;
     ovl_loop(OT_INK);
     if (ot_k < 2) {
@@ -664,31 +564,12 @@ static void ovl_ink(int kind, int x, int y)
         return;
     }
     ovl_ink_done();
-    if (ot_from + ot_k >= OT_NPTS - 2)
+    if (ot_k >= OT_NPTS - 2)
         pdu_tell("Stroke limit reached; the stroke is kept.");
-    if (kind == PDA_SIGN) {
-        pdu_sgn_n = from + ot_k;
-        ot_pts[pdu_sgn_n << 1] = ED_PENUP;
-        ot_pts[(pdu_sgn_n << 1) + 1] = 0;
-        pdu_sgn_n++;
-        pdu_tell("Drawn signature: Enter places, Esc cancels.");
-        return;
-    }
+    else if (kind == PDA_SIGN)
+        pdu_tell("Drawn signature - not a certificate.");
     ovl_ed_bbox(&ot_pr, ot_pts, ot_k);
-    ovl_make(PDA_INK, ot_pts, ot_k);
-}
-
-/* Enter places a signature collected so far */
-static int ovl_sign_place(void)
-{
-    int n;
-    n = pdu_sgn_n - 1;                  /* the last pen-up is not a separator */
-    pdu_sgn_n = 0;
-    if (n < 2)
-        return 0;
-    ovl_ed_bbox(&ot_pr, ot_pts, n);
-    ovl_make(PDA_SIGN, ot_pts, n);
-    return 1;
+    ovl_make(kind, ot_pts, ot_k);
 }
 
 /* Highlight: the current text selection becomes quads */
@@ -708,7 +589,7 @@ static int ovl_hilite(void)
  * THE ENTRY POINTS (the primary calls these; each is one far call)
  * ==========================================================================*/
 /* a click on the canvas. 1 = the tool took it. */
-static int ovl_tool_click(int x, int y)
+int ovl_tool_click(int x, int y)
 {
     int t;
 
@@ -765,13 +646,13 @@ static int ovl_tool_click(int x, int y)
 }
 
 /* Highlight pressed (or nav's selection gesture ended with it armed) */
-static int ovl_tool_hilite(void)
+int ovl_tool_hilite(void)
 {
     return ovl_hilite();
 }
 
 /* Delete / the Delete button: 1 = something went */
-static int ovl_tool_delete(void)
+int ovl_tool_delete(void)
 {
     int i;
     i = pdu_ed_sel;
@@ -786,13 +667,9 @@ static int ovl_tool_delete(void)
     return 1;
 }
 
-/* Enter: place a signature, or open the selected note or text for typing */
-static int ovl_tool_enter(void)
+/* Enter: open the selected note or text for typing */
+int ovl_tool_enter(void)
 {
-    if (pdu_sgn_n) {
-        ovl_sign_place();
-        return 1;
-    }
     if (pdu_ed_sel >= 0 && pdu_tx < 0 && ovl_texty(pdu_ed_sel)) {
         pdu_tx_begin(pdu_ed_sel, 0);
         return 1;
@@ -801,7 +678,7 @@ static int ovl_tool_enter(void)
 }
 
 /* a line on the status line for the tool just chosen */
-static void ovl_tool_hint(int id)
+void ovl_tool_hint(int id)
 {
     const char *s;
     s = 0;
