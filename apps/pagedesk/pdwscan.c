@@ -15,7 +15,7 @@
 #define SC_BAD   0xFFFFu
 #define SC_DEPTH 16
 
-static char g_pg[PDW_PGBUF + 8];        /* the object being patched          */
+static char g_pg[PDW_PGBUF + 616];        /* the object being patched          */
 static pdw  sc_n;                       /* its length                        */
 static pdw  sc_kpos, sc_vs, sc_ve, sc_close;   /* dict_find's answers         */
 

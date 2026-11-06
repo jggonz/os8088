@@ -17,6 +17,7 @@
 #ifdef PD_HOST
 #include <stdio.h>
 #include <string.h>
+#include <unistd.h>
 extern unsigned char pd_host_mem[];
 pdw   pdw_host_clu = 512;
 long  pdw_host_budget = -1;     /* bytes the disk still takes; -1 = no limit */
@@ -24,6 +25,9 @@ pdw   pdw_host_wprot;           /* 1 = every create answers PDE_WPROT       */
 pdw   pdw_host_viol;            /* appends after a short chunk              */
 pdw   pdw_host_calls;           /* creates + appends + closes               */
 pdw   pdw_host_reads;           /* source reads that returned data          */
+char  pdw_host_srcdir[128], pdw_host_tgtdir[128];   /* D14: the two folders (absolute)   */
+pdw   pdw_host_swaps;           /* folder switches made                       */
+static pdw h_cross;
 pdw   pdw_host_tamper;          /* 1 = damage the tail as the file closes (the self-check must see it) */
 static FILE *h_out, *h_src;
 static pdw   h_short;
@@ -77,10 +81,18 @@ pdw pdw_io_rename(const char *from, const char *to)
     if (t) { fclose(t); return PDE_EXISTS; }
     return rename(from, to) ? PDE_IO : PDE_OK;
 }
+void pdw_cross(pdw clus, pdw vol) { (void)clus; h_cross = vol != 0; }
+void pdw_in_src(void) { if (h_cross && pdw_host_srcdir[0]) { if (chdir(pdw_host_srcdir)) pdw_host_swaps += 1000; pdw_host_swaps++; } }
+void pdw_in_tgt(void) { if (h_cross && pdw_host_tgtdir[0]) { if (chdir(pdw_host_tgtdir)) pdw_host_swaps += 1000; pdw_host_swaps++; } }
+static char h_srcname[14];
 pdw pdw_src_open(const char *name)
 {
     if (h_src) fclose(h_src);
+    h_src = 0;
+    strncpy(h_srcname, name, 13); h_srcname[13] = 0;
+    pdw_in_src();                               /* the open is by name in the SOURCE folder */
     h_src = fopen(name, "rb");
+    pdw_in_tgt();
     return h_src ? PDE_OK : PDE_NOTFOUND;
 }
 pdw pdw_src_read(pdw seg, pdw off, pdw cap, pdw *got)
@@ -121,6 +133,15 @@ static pdw pdw_map(int e)
     }
 }
 pdw pdw_ferr(void) { return pdw_map(os88_ferr()); }
+static struct os88_place g_tpl;         /* the TARGET's folder (D14)                 */
+static pdw      g_cross, g_scl, g_svol;
+void pdw_cross(pdw clus, pdw vol)       /* 20.11.3: src_vol is the volume + 1, 0 = one folder */
+{
+    g_cross = 0;
+    if (vol) { os88_file_here(&g_tpl); g_scl = clus; g_svol = (pdw)(vol - 1); g_cross = 1; }
+}
+void pdw_in_src(void) { if (g_cross) os88_file_goto_q_mark(g_scl, (int)g_svol); }
+void pdw_in_tgt(void) { if (g_cross) os88_file_goto_q_mark(g_tpl.clus, g_tpl.vol); }
 pdw pdw_io_clu(void)                    /* 0 = unknown; 0xFFFF = past 16 KiB */
 {
     int s = os88_disk_cluster_sectors();
@@ -164,9 +185,12 @@ pdw pdw_src_open(const char *name)
 }
 pdw pdw_src_read(pdw seg, pdw off, pdw cap, pdw *got)
 {
+    pdw r = PDE_OK;
+    pdw_in_src();
     *got = os88_file_read_seq(g_srcname, seg, off, cap, g_cur);
-    if (*got == 0 && os88_ferr()) return pdw_ferr();
-    return PDE_OK;
+    if (*got == 0 && os88_ferr()) r = pdw_ferr();
+    pdw_in_tgt();
+    return r;
 }
 pdw pdw_src_back(const char *name, const struct pd_u32 *at, pdw seg, pdw off, pdw cap, pdw *got)
 {

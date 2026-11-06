@@ -11,10 +11,13 @@
 #define SV_UNITS 4
 
 enum { PH_IDLE, PH_COPY, PH_PAGES, PH_CAT, PH_ANNOTS, PH_HEAD, PH_NPAGES, PH_XREF, PH_TRAILER,
-       PH_CLOSE, PH_VERIFY, PH_RENAME, PH_DONE };
+       PH_CLOSE, PH_VERIFY, PH_RENAME, PH_DONE,
+       PH_PGOPS, PH_TREE, PH_XROOT, PH_XDISC, PH_XHEAD, PH_XCOPY, PH_XBLANK, PH_VFY };
 
 static pdw sv_active, sv_fresh, sv_phase, sv_i, sv_xi, sv_cnt, sv_base, sv_next, sv_v14, sv_v15;
 static pdw sv_catver, sv_xbad, sv_copyw, sv_sub, sv_coff, sv_flushed;
+static pdw sv_ext, sv_nochange, sv_vf, sv_wsize, sv_kind;     /* extract; a byte copy; the PDENG check; the /Size written */
+static struct pd_u32 sv_srcsize;
 static struct pdxb_save g_sv;
 static struct pdxb_trailer g_tr;
 static struct pdxb_pageinfo g_pi;
@@ -28,6 +31,33 @@ static pdw sv_idw[8];
 static pdw sv_npages;
 static pdw sv_pgseg;
 
+/* the page map's state (pdwpg.c, 20.11.2) */
+static pdw pm_on, pm_n, pm_i, pm_flat, pm_root, pm_rootgen;
+static pdw pm_num[PDM_MAXMAP];          /* a page's object number (0 = not yet / none) */
+static pdb pm_in[128], pm_done[128], pm_ed[128];     /* per source page (< 1024)     */
+static void bm_set(pdb *b, pdw i) { b[i >> 3] = (pdb)(b[i >> 3] | (1 << (i & 7))); }
+static pdw  bm_get(pdb *b, pdw i) { return (pdw)((b[i >> 3] >> (i & 7)) & 1); }
+
+/* the graph copy's state (pdwgc.c, 20.11.4) */
+#define GC_BM    8192u
+#define GC_BYTES 17408u                 /* seen + scan + the prefix table    */
+#define GC_DONE  0x0FFF
+static pdw gc_seen, gc_scan, gc_pref;   /* far offsets in the writer buffer  */
+static pdw gc_w, gc_dirty, gc_cnt, gc_over, gc_total, gc_n, gc_sub, gc_k, gc_cur, gc_blk, gc_nb;
+static struct pd_u32 gc_pos, gc_zero;
+
+/* pdwpg.c / pdwgc.c, included after this file */
+static void gc_mark(pdw n);
+static void pm_blank_obj(pdw num, pdw parent, pdw rot);
+static pdw  gc_blank0(void);
+static pdw pg_rev(pdw page, pdw rot, pdw edited);
+static pdw pm_prep(void);
+static pdw pm_step(void);
+static pdw pm_tree(void);
+static pdw gc_disc(void);
+static void gc_head(void);
+static pdw gc_copy(void);
+
 /* near copies of the fields every scan wants (a record in the far store is
    48 bytes; a scan over 256 of them should not re-read each one) */
 static pdw g_epg[PD_MAXEDITS], g_eid[PD_MAXEDITS], g_ekf[PD_MAXEDITS];
@@ -37,16 +67,25 @@ static pdw g_esn[PD_MAXEDITS], g_esg[PD_MAXEDITS], g_onum[PD_MAXEDITS], g_oapn[P
 #define EF(i) ((pdw)(g_ekf[i] >> 8))
 
 /* ---- PDENG calls ---------------------------------------------------------- */
+/* every call that reads the SOURCE stands in the source's folder (D14) */
+static pdw eng_call(pdw verb, pdw bx, pdw cx, pdw dx)
+{
+    pdw r;
+    pdw_in_src();
+    r = pdw_engcall(verb, bx, cx, dx);
+    pdw_in_tgt();
+    return r;
+}
 static pdw eng_trailer(void)
 {
-    pdw r = pdw_engcall(PDV_ENG_TRAILER, 0, 0, 0);
+    pdw r = eng_call(PDV_ENG_TRAILER, 0, 0, 0);
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_tr, sizeof g_tr);
     return PDE_OK;
 }
 static pdw eng_fingerprint(void)
 {
-    pdw r = pdw_engcall(PDV_ENG_FINGERPRINT, 0, 0, 0);
+    pdw r = eng_call(PDV_ENG_FINGERPRINT, 0, 0, 0);
     if (pdw_engcf) return r ? r : PDE_IO;
     pd_fcopy_in(g_xb, 0, &g_fp, sizeof g_fp);
     return PDE_OK;
@@ -55,17 +94,17 @@ static pdw eng_pageinfo(pdw idx)
 {
     pdw r;
     if (sv_pgidx == idx) return PDE_OK;
-    r = pdw_engcall(PDV_ENG_PAGEINFO, idx, 0, 0);
+    r = eng_call(PDV_ENG_PAGEINFO, idx, 0, 0);
     if (pdw_engcf) return r ? r : PDE_RANGE;
     pd_fcopy_in(g_xb, 0, &g_pi, sizeof g_pi);
     sv_pgidx = idx;
     return PDE_OK;
 }
-/* object num gen's bytes into g_pg / sc_n; PDE_LIMIT when it does not fit */
-static pdw eng_raw(pdw num, pdw gen)
+/* up to PDW_PGBUF bytes of object num gen from byte `at` of it into g_pg / sc_n */
+static pdw eng_chunk(pdw num, pdw gen, const struct pd_u32 *at)
 {
     pdw r;
-    g_rc.objnum = num; g_rc.gen = gen; pdm_u32_set(&g_rc.done, 0, 0);
+    g_rc.objnum = num; g_rc.gen = gen; pdm_u32_set(&g_rc.done, at->hi, at->lo);
 #ifdef PD_HOST
     g_rc.dseg = PDW_HOST_SCRATCH; g_rc.doff = 0;
 #else
@@ -73,7 +112,7 @@ static pdw eng_raw(pdw num, pdw gen)
 #endif
     g_rc.dmax = PDW_PGBUF; g_rc.got = 0;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
-    r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0);
+    r = eng_call(PDV_ENG_RAW_COPY, 0, 0, 0);
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
     sc_n = g_rc.got;
@@ -81,6 +120,14 @@ static pdw eng_raw(pdw num, pdw gen)
 #ifdef PD_HOST
     pd_fcopy_in(PDW_HOST_SCRATCH, 0, g_pg, sc_n);
 #endif
+    return PDE_OK;
+}
+/* object num gen's bytes into g_pg / sc_n; PDE_LIMIT when it does not fit */
+static pdw eng_raw(pdw num, pdw gen)
+{
+    static struct pd_u32 z0;
+    pdw r;
+    r = eng_chunk(num, gen, &z0); if (r) return r;
     /* is there more? ask for the next 8 bytes into the slack past the buffer.
      * `done` is in/out (pdabi.h): PDENG has advanced it already, so set it
      * rather than add to it */
@@ -92,7 +139,7 @@ static pdw eng_raw(pdw num, pdw gen)
 #endif
     g_rc.dmax = 8; g_rc.got = 0;
     pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
-    r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0);
+    r = eng_call(PDV_ENG_RAW_COPY, 0, 0, 0);
     if (pdw_engcf) return r ? r : PDE_XREF;
     pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
     if (g_rc.got) return PDE_LIMIT;
@@ -141,6 +188,7 @@ static pdw sv_scan(void)
     for (i = 0; i < sv_cnt; i++) {
         k = EK(i); f = EF(i);
         if (f & PDEF_DELETED) continue;
+        if (pm_on && (g_epg[i] >= 1024 || !bm_get(pm_in, g_epg[i]))) continue;   /* its page is gone (13.7) */
         irt = 0;
         if (k == PDA_NOTE) {
             ed_head(i); irt = g_ed.irt;
@@ -162,19 +210,6 @@ static pdw sv_scan(void)
         if (next > 0xFFF0) return PDE_LIMIT;
     }
     sv_next = next;
-    return PDE_OK;
-}
-/* an incremental save keeps the source's page list: a page order that is not
-   the identity (a move, a delete) is 13.7's new /Pages tree, which is wave 2 */
-static pdw sv_order(void)
-{
-    pdw i;
-    if (!g_sv.pages_count) return PDE_OK;
-    if (!g_sv.pages_seg) return PDE_NOMEM;
-    for (i = 0; i < g_sv.pages_count; i++)
-        if (pd_fpeekw(g_sv.pages_seg, (pdw)(2 * i)) != i) return sv_bad(7);
-    if (eng_pageinfo(g_sv.pages_count) == PDE_OK) return sv_bad(7);     /* a page left out */
-    sv_pgidx = 0xFFFF;
     return PDE_OK;
 }
 /* the object a reply points at: the live note record with that id, else irt is
@@ -224,42 +259,6 @@ static pdw pg_array(pdw vs, pdw ve, pdw page)
     }
     pg_adds(page);
     pb_c(']');
-    return PDE_OK;
-}
-/* revise page `page` (its object is in g_pi): /Annots gains the new refs and
-   loses the deleted ones. Emits one or two revised objects. */
-static pdw pg_patch(pdw page)
-{
-    static pdw ag;
-    pdw r, ds, f, an;
-    r = eng_raw(g_pi.objnum, g_pi.gen); if (r) return r;
-    ds = sc_body(); if (ds == SC_BAD) return PDE_SYNTAX;
-    f = dict_find(ds, "Annots");
-    if (f == SC_BAD) return PDE_SYNTAX;
-    if (f && g_pg[sc_vs] == '[') {                      /* inline array       */
-        pw_obj(g_pi.objnum, g_pi.gen);
-        pb_n(g_pg + ds, (pdw)(sc_vs - ds));
-        r = pg_array(sc_vs, sc_ve, page); if (r) return r;
-        pb_n(g_pg + sc_ve, (pdw)(sc_close + 2 - sc_ve));
-        pb_s("\n"); pw_endobj();
-        return PDE_OK;
-    }
-    if (f) {                                            /* an indirect array   */
-        an = sc_ref(sc_vs, sc_ve, &ag);
-        if (!an) return PDE_SYNTAX;
-        r = eng_raw(an, ag); if (r) return r;
-        ds = sc_body(); if (ds == SC_BAD || g_pg[ds] != '[') return PDE_SYNTAX;
-        f = sc_val(ds, 1); if (f == SC_BAD) return PDE_SYNTAX;
-        pw_obj(an, ag);
-        r = pg_array(ds, f, page); if (r) return r;
-        pb_s("\n"); pw_endobj();
-        return PDE_OK;
-    }
-    pw_obj(g_pi.objnum, g_pi.gen);                      /* no /Annots yet      */
-    pb_n(g_pg + ds, (pdw)(sc_close - ds));
-    pb_s(" /Annots ["); pg_adds(page); pb_s(" ]");
-    pb_n(g_pg + sc_close, 2);
-    pb_s("\n"); pw_endobj();
     return PDE_OK;
 }
 /* a page group is the first live edit of a page that adds or deletes */
@@ -398,12 +397,12 @@ static void pb_zu(pdw v, pdw width)     /* zero-padded decimal */
 }
 static void xr_entry(pdw k)
 {
-    pdw at = (pdw)(g_outcap + k * PDW_TENT);
+    pdw at = (pdw)(g_tb + k * PDW_TENT);
     static struct pd_u32 off;
     off.lo = pd_fpeekw(g_wseg, (pdw)(at + 4)); off.hi = pd_fpeekw(g_wseg, (pdw)(at + 6));
     pb_u32(&off, 10); pb_c(' '); pb_zu(pd_fpeekw(g_wseg, (pdw)(at + 2)), 5); pb_s(" n \n");
 }
-static pdw tn_num(pdw k) { return pd_fpeekw(g_wseg, (pdw)(g_outcap + k * PDW_TENT)); }
+static pdw tn_num(pdw k) { return pd_fpeekw(g_wseg, (pdw)(g_tb + k * PDW_TENT)); }
 
 /* ---- the temp file's check (14.2 step 4, the part PDWRT can do alone) ------ */
 static char vt[200];
@@ -464,28 +463,60 @@ static pdw job_fail(pdw err)
     return err;
 }
 
-static pdw job_begin(pdw fresh)
+/* kind: 0 an incremental Save As, 1 a fresh document (NEWDOC), 2 Extract */
+static pdw job_begin(pdw kind)
 {
-    pdw r, i;
+    pdw r, i, fresh = (pdw)(kind != 0), e, k, idx, nb = 0;
     pd_fcopy_in(g_xb, 0, &g_sv, sizeof g_sv);
     if (!g_wseg) return PDE_NOMEM;
     for (i = 0; i < 14; i++) g_tmp[i] = 0;
     pw_cpy(g_tmp, PDW_TEMPNAME, pw_len(PDW_TEMPNAME));
     pw_cpy(pdw_date, g_sv.date, 23); pdw_date[23] = 0; pw_cpy(pdw_author, g_sv.author, 47); pdw_author[47] = 0;
     r = pw_setup(g_wseg, g_wkb); if (r) { g_sv.err_detail = r == PDE_NOMEM ? g_wantkb : 0; return r; }
-    sv_fresh = fresh; g_edseg = g_sv.edits_seg; sv_cnt = g_sv.edits_count;
+    pdw_cross(g_sv.src_clus, g_sv.src_vol);             /* D14: "here" is the target's folder */
+    g_sv.mode = (pdw)(g_sv.mode & 0xFF);
+    sv_kind = kind; sv_fresh = fresh; sv_ext = (pdw)(kind == 2); g_edseg = g_sv.edits_seg; sv_cnt = sv_ext ? 0 : g_sv.edits_count;
+    pm_on = 0; pm_n = 0;
     if (sv_cnt > PD_MAXEDITS) return PDE_LIMIT;
     if (sv_cnt && !g_edseg) return PDE_NOMEM;           /* D2: a claim of 0 is no claim */
-    if (!fresh && !pdw_engvec[1]) return PDE_NOMEM;     /* no PDENG to read the source  */
+    if (kind != 1 && !pdw_engvec[1]) return PDE_NOMEM;  /* no PDENG to read the source  */
     sv_xbad = 0; sv_catver = 0; sv_xi = 0; sv_i = 0; sv_xstart = 0; sv_copyw = 0; sv_sub = 0; sv_coff = 0; g_io = 0; an_sub = AS_START; sv_flushed = 0; sv_vstage = 0;
+    sv_nochange = 0; sv_vf = 0; sv_wsize = 0; pm_i = 0;
     pdm_u32_set(&sv_total, 0, 0);
+    if (kind == 2) {                                    /* Extract (13.8) */
+        sv_npages = g_sv.pages_count; sv_pgseg = g_sv.pages_seg;
+        if (sv_npages < 1 || sv_npages > PDM_MAXMAP) return PDE_RANGE;
+        if (!sv_pgseg) return PDE_NOMEM;
+        r = eng_trailer(); if (r) return r;
+        for (i = 0; i < sv_npages; i++) {
+            e = pd_fpeekw(sv_pgseg, (pdw)(2 * i)); k = PDM_KIND(e); idx = PDM_IDX(e);
+            if ((k != PDM_SRC && k != PDM_BLANK) || idx >= PD_MAXPAGES) { g_sv.err_detail = 14; return PDE_RANGE; }
+            if (k == PDM_BLANK) nb++;
+            pm_num[i] = 0;
+        }
+        pm_n = sv_npages; pm_on = 1;
+        g_tb = (pdw)(g_outcap + GC_BYTES);
+        if ((pdw)(g_wkb * 1024u) < (pdw)(g_tb + 64 * PDW_TENT)) { g_sv.err_detail = (pdw)(g_tb / 1024 + 4); return PDE_NOMEM; }
+        g_tmax = (pdw)((pdw)(g_wkb * 1024u - g_tb) / PDW_TENT);
+        gc_seen = g_outcap; gc_scan = (pdw)(g_outcap + GC_BM); gc_pref = (pdw)(g_outcap + 2 * GC_BM);
+        pd_ffill(g_wseg, g_outcap, 0, GC_BYTES);
+        gc_w = gc_dirty = gc_cnt = gc_over = gc_total = gc_sub = 0; gc_n = 0; gc_k = 4; gc_blk = 0; gc_nb = nb;
+        for (i = 0; i < 128; i++) pm_done[i] = 0;
+        pdm_u32_set(&gc_zero, 0, 0);
+        g_nm_hi = pdm_crc16(0xFFFF, pdw_date, pw_len(pdw_date));
+        g_nm_lo = pdm_crc16(g_nm_hi, &sv_npages, 2);
+        sv_base = 4; sv_phase = PH_XROOT;
+        sv_active = 1;
+        return PDE_OK;
+    }
     if (!fresh) {
         r = eng_trailer(); if (r) return r;
         r = eng_fingerprint(); if (r) return r;
         g_nm_hi = g_fp.crc_head; g_nm_lo = (pdw)(g_fp.crc_tail ^ g_fp.size.lo);
+        u32cp(&sv_srcsize, &g_fp.size);
         sv_base = g_tr.size; u32cp(&sv_prev, &g_tr.startxref);
         if (sv_base < 2 || !g_tr.root_num) return PDE_XREF;
-        r = sv_order(); if (r) return r;
+        r = pm_prep(); if (r) return r;
         r = pdw_src_open(g_sv.source); if (r) return r;
         sv_phase = PH_COPY;
     } else {
@@ -501,10 +532,18 @@ static pdw job_begin(pdw fresh)
     if (!fresh) {
         sv_catver = (pdw)(sv_v15 ? 15 : (sv_v14 ? 14 : 0));
         if (sv_catver && g_tr.version >= sv_catver) sv_catver = 0;
+        /* a Save As that changes nothing is a BYTE COPY (14.2): no new object, no
+           xref section, not even the newline */
+        sv_nochange = (pdw)!pm_on;
+        for (i = 0; i < sv_cnt; i++) {
+            if (g_onum[i] || ((EF(i) & PDEF_DELETED) && g_esn[i])) sv_nochange = 0;
+            if (pm_on && pg_relevant(i) && g_epg[i] < 1024) bm_set(pm_ed, g_epg[i]);
+        }
         /* the estimate OSAPI_FS_OP is opened with: the source up to its last
            xref, plus a kilobyte and ~600 bytes an edit */
         {   static struct pd_u32 per; u32cp(&sv_total, &g_tr.startxref);
             pdm_u32_mul16(&per, sv_cnt, 600); pdm_u32_add(&sv_total, &sv_total, &per); pdm_u32_add16(&sv_total, 1024); }
+        if (sv_nochange) { u32cp(&sv_total, &sv_srcsize); u32cp(&sv_xrefpos, &g_tr.startxref); sv_wsize = g_tr.size; }
     }
     sv_active = 1;
     return PDE_OK;
@@ -564,6 +603,71 @@ static void nd_content(pdw k)
     if (sv_coff >= g_np.clen) { pb_s("\nendstream\n"); pw_endobj(); sv_sub = 2; }
 }
 
+/* ---- 14.2 step 4: the output, read back through PDENG ------------------------------
+ * PDENG leaves the source (the primary re-opens it: PDW_OUT_REOPEN), opens
+ * PDSAVE.$$$ - in the TARGET's folder, which is where we stand - and answers
+ * its trailer and three of the objects this job wrote. */
+static struct pdxb_open g_op;
+static pdw sv_vk;
+static pdw job_vfy(void)
+{
+    pdw r, k, num, gen, n;
+    if (sv_vf == 0) {
+        g_sv.mode = (pdw)(g_sv.mode | PDW_OUT_REOPEN);
+        pdw_engcall(PDV_ENG_CLOSE, 0, 0, 0);
+        for (k = 0; k < (pdw)sizeof g_op; k++) ((char *)&g_op)[k] = 0;
+        pw_cpy(g_op.name, g_tmp, 13);
+        sv_vf = 1;
+        return PDE_OK;
+    }
+    if (sv_vf == 1) {                                   /* OPEN is resumable (D11) */
+        pd_fcopy_out(&g_op, g_xb, 0, sizeof g_op);
+        r = pdw_engcall(PDV_ENG_OPEN, 0, 0, 0);
+        if (pdw_engcf) return r ? r : PDE_SYNTAX;
+        pd_fcopy_in(g_xb, 0, &g_op, sizeof g_op);
+        if (r == PDE_BUSY) return PDE_OK;
+        if (g_op.size.lo != g_pos.lo || g_op.size.hi != g_pos.hi) return PDE_TRUNC;
+        sv_vf = 2;
+        return PDE_OK;
+    }
+    if (sv_vf == 2) {
+        r = pdw_engcall(PDV_ENG_TRAILER, 0, 0, 0);
+        if (pdw_engcf) return r ? r : PDE_XREF;
+        pd_fcopy_in(g_xb, 0, &g_tr, sizeof g_tr);
+        if (pdm_u32_cmp(&g_tr.startxref, &sv_xrefpos) != 0 || g_tr.size != sv_wsize) return PDE_XREF;
+        sv_vf = 3; sv_vk = 0;
+        return PDE_OK;
+    }
+    if (sv_vf == 3) {                                   /* the first, the middle and the last object written */
+        if (!g_tn || sv_vk >= 3) { sv_vf = 4; return PDE_OK; }
+        k = sv_vk == 0 ? 0 : (sv_vk == 1 ? (pdw)(g_tn / 2) : (pdw)(g_tn - 1));
+        num = tn_num(k); gen = pd_fpeekw(g_wseg, (pdw)(g_tb + k * PDW_TENT + 2));
+        g_rc.objnum = num; g_rc.gen = gen; pdm_u32_set(&g_rc.done, 0, 0);
+#ifdef PD_HOST
+        g_rc.dseg = PDW_HOST_SCRATCH; g_rc.doff = 0;
+#else
+        g_rc.dseg = pd_ds(); g_rc.doff = (pdw)g_sc;
+#endif
+        g_rc.dmax = 16; g_rc.got = 0;
+        pd_fcopy_out(&g_rc, g_xb, 0, sizeof g_rc);
+        r = pdw_engcall(PDV_ENG_RAW_COPY, 0, 0, 0);
+        if (pdw_engcf) return r ? r : PDE_XREF;
+        pd_fcopy_in(g_xb, 0, &g_rc, sizeof g_rc);
+#ifdef PD_HOST
+        pd_fcopy_in(PDW_HOST_SCRATCH, 0, g_sc, g_rc.got);
+#endif
+        n = pw_utoa(g_nb, num);                         /* "<num> <gen> obj" */
+        g_nb[n] = ' '; n++; n = (pdw)(n + pw_utoa(g_nb + n, gen));
+        if (g_rc.got < (pdw)(n + 4)) return PDE_XREF;
+        for (k = 0; k < n; k++) if (g_sc[k] != g_nb[k]) return PDE_XREF;
+        sv_vk++;
+        return PDE_OK;
+    }
+    pdw_engcall(PDV_ENG_CLOSE, 0, 0, 0);
+    sv_vf = 5;
+    return PDE_OK;
+}
+
 /* ---- one slice ------------------------------------------------------------ */
 static pdw job_slice(void)
 {
@@ -576,18 +680,23 @@ static pdw job_slice(void)
             if (sv_copyw) { sv_copyw = 0; pw_flush(0); break; }
             k = (pdw)((g_outcap / g_clu) * g_clu);
             r = pdw_src_read(g_wseg, 0, k, &got); if (r) return r;
-            if (got == 0) {                      /* the source is copied: new line */
-                pb_c('\n'); sv_phase = PH_PAGES; sv_i = 0;
+            if (got == 0) {                      /* the source is copied */
+                if (pdm_u32_cmp(&g_pos, &sv_srcsize) != 0) return PDE_CHANGED;   /* 14.4: it moved under us */
+                if (sv_nochange) { sv_phase = PH_CLOSE; break; }                /* a byte copy: nothing more */
+                pb_c('\n'); sv_phase = pm_on ? PH_PGOPS : PH_PAGES; sv_i = 0;
                 break;
             }
             g_io++; sv_copyw = 1;
             g_wpos = got; pdm_u32_add16(&g_pos, got);
             break;
+        case PH_PGOPS:
+            r = pm_step(); if (r) return r;
+            break;
         case PH_PAGES:
             while (sv_i < sv_cnt && !pg_first(sv_i)) sv_i++;
             if (sv_i >= sv_cnt) { sv_phase = PH_CAT; break; }
             r = eng_pageinfo(g_epg[sv_i]); if (r) return r;
-            r = pg_patch(g_epg[sv_i]); if (r) return r;
+            r = pg_rev(g_epg[sv_i], 0, 1); if (r) return r;
             sv_i++;
             break;
         case PH_CAT:
@@ -596,8 +705,12 @@ static pdw job_slice(void)
             break;
         case PH_ANNOTS:
             while (sv_i < sv_cnt && !g_onum[sv_i]) sv_i++;
-            if (sv_i >= sv_cnt) { sv_phase = PH_XREF; sv_xi = 0; break; }
+            if (sv_i >= sv_cnt) { sv_phase = pm_on ? PH_TREE : PH_XREF; sv_xi = 0; break; }
             r = an_run(); if (r) return r;
+            break;
+        case PH_TREE:
+            r = pm_tree(); if (r) return r;
+            sv_phase = PH_XREF; sv_xi = 0;
             break;
         case PH_HEAD:
             nd_head(); sv_phase = PH_NPAGES; sv_i = 0;
@@ -610,6 +723,43 @@ static pdw job_slice(void)
             } else if (sv_sub == 1) nd_content(sv_i);
             if (sv_sub == 3) { pb_s("\nendstream\n"); pw_endobj(); sv_sub = 2; }
             if (sv_sub == 2) { sv_sub = 0; sv_i++; }
+            break;
+        case PH_XROOT:                           /* Extract: the chosen pages are the roots */
+            if (sv_i >= sv_npages) { gc_dirty = 0; gc_w = 0; sv_phase = PH_XDISC; break; }
+            e = pd_fpeekw(sv_pgseg, (pdw)(2 * sv_i));
+            if (PDM_KIND(e) == PDM_SRC) {
+                r = eng_pageinfo(PDM_IDX(e)); if (r) return r;
+                if (bm_get(pm_done, PDM_IDX(e))) { g_sv.err_detail = 15; return PDE_RANGE; }   /* a page twice */
+                bm_set(pm_done, PDM_IDX(e));
+                pm_num[sv_i] = g_pi.objnum; gc_mark(g_pi.objnum);
+            }
+            sv_i++;
+            break;
+        case PH_XDISC:
+            r = gc_disc();
+            if (r == GC_DONE) {
+                if ((pdw)(3 + gc_total + gc_nb) > g_tmax) return sv_bad(16);
+                sv_phase = PH_XHEAD;
+            } else if (r) return r;
+            break;
+        case PH_XHEAD:
+            gc_head(); gc_n = 1; sv_phase = PH_XCOPY;
+            break;
+        case PH_XCOPY:
+            r = gc_copy();
+            if (r == GC_DONE) {
+                if (gc_k != (pdw)(4 + gc_total)) return PDE_SYNTAX;          /* the ranks and the copy disagree */
+                sv_phase = PH_XBLANK; sv_i = 0;
+            } else if (r) return r;
+            break;
+        case PH_XBLANK:
+            if (sv_i >= sv_npages) { sv_phase = PH_XREF; sv_xi = 0; break; }
+            e = pd_fpeekw(sv_pgseg, (pdw)(2 * sv_i));
+            if (PDM_KIND(e) == PDM_BLANK) {
+                r = eng_pageinfo(PDM_IDX(e)); if (r) return r;
+                pm_blank_obj((pdw)(gc_blank0() + gc_blk++), 2, PDM_ROT(e));
+            }
+            sv_i++;
             break;
         case PH_XREF:
             if (!sv_xstart) {                    /* "xref", the first subsection */
@@ -637,6 +787,7 @@ static pdw job_slice(void)
             {   pdw size = sv_next;
                 pb_s("trailer\n<< /Size ");
                 if (!sv_fresh && g_tr.size > size) size = g_tr.size;
+                sv_wsize = size;
                 pb_u(size);
                 if (sv_fresh) pb_s(" /Root 1 0 R /Info 3 0 R");
                 else {
@@ -663,8 +814,13 @@ static pdw job_slice(void)
             sv_phase = PH_VERIFY;
             break;
         case PH_VERIFY:
-            r = job_verify(); if (r) return r;
-            if (sv_vstage == 2) sv_phase = PH_RENAME;
+            if (sv_nochange) sv_vstage = 2;      /* a byte copy has no new tail to check */
+            else { r = job_verify(); if (r) return r; }
+            if (sv_vstage == 2) sv_phase = (!sv_fresh || sv_ext) ? PH_VFY : PH_RENAME;
+            break;
+        case PH_VFY:
+            r = job_vfy(); if (r) return r;
+            if (sv_vf == 5) sv_phase = PH_RENAME;
             break;
         case PH_RENAME:
             return PDE_OK;                      /* the caller finishes (rename) */
