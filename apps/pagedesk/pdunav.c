@@ -46,8 +46,9 @@ static void pdu_nav_noted(int n)
     if (pdu_hnav)
         return;
     d = n - (int)pdu_page;
-    if (d >= -1 && d <= 1)
+    if (d >= -1 && d <= 1 && !pdu_hjump)
         return;
+    pdu_hjump = 0;
     ovl_hpush(pdu_hb, &pdu_hbn, pdu_page);
     pdu_hfn = 0;
 }
@@ -139,6 +140,7 @@ static int ovl_lk_press(int x, int y)
                 os88_strcpy(pdu_line, "Link to page ", sizeof(pdu_line));
                 pdu_cat(pdu_line, pdu_num, sizeof(pdu_line));
                 pdu_tell(pdu_line);
+                pdu_hjump = 1;
                 pdu_goto(d - 1);
             } else {
                 pdu_lkact = pd_fpeekw(s, o + 10) + 1;
@@ -279,8 +281,8 @@ static void ovl_gend(int x, int y)
         if (pdu_gband && os88_wm_clip_set(pdu_win) == 0)
             ovl_band(pdu_gx, pdu_gy, pdu_gmx, pdu_gmy);
         pdu_gband = 0;
-        if (pdu_gmoved)
-            ovl_sel_points(pdu_gx, pdu_gy, x, y, 0);
+        if (pdu_gmoved || pdu_abs(x - pdu_gx) >= 4 || pdu_abs(y - pdu_gy) >= 4)
+            ovl_sel_points(pdu_gx, pdu_gy, x, y, 0);   /* a flick the poll missed */
         else if (pdu_gdbl)
             ovl_sel_points(x, y, x, y, 1);
     }

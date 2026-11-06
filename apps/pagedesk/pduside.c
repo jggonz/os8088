@@ -24,7 +24,6 @@ static unsigned pdu_thclk;
 static int pdu_thslot, pdu_thpage, pdu_thst;
 static struct pdxb_thumb pdu_xth;
 static int pdu_sidesel = -1;
-static int pdu_thwant;                          /* a Pages cell may lack its picture */
 
 /* the outline (overlay): entries in the THUMB claim */
 static int pdu_oln;                             /* entries, 0 = not loaded */
@@ -240,8 +239,10 @@ static void ovl_side_click(int x, int y)
         if (pdu_cell(k, &pdu_cr) && x >= pdu_cr.x1 && x <= pdu_cr.x2
             && y >= pdu_cr.y1 && y <= pdu_cr.y2 + 10) {
             pdu_sidesel = pdu_sidetop + k;
-            if (pdu_sidesel < (int)pdu_npages)
+            if (pdu_sidesel < (int)pdu_npages) {
+                pdu_hjump = 1;
                 pdu_goto(pdu_sidesel);
+            }
             return;
         }
 }

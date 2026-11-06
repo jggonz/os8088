@@ -94,9 +94,14 @@ static int pdu_nlen;
 static int pdu_sb[7];                   /* os88ui's scroll-bar block */
 static struct pdxb_open pdu_xopen;      /* (moved up from pdujob.c: nav reads it) */
 static struct pdxb_outline pdu_xout;    /* ...and so does the overlay's outline */
+static int pdu_thwant;                  /* nav: a Pages cell may lack its picture */
+static int pdu_hjump;                   /* nav: the next pdu_goto is a followed link, an
+                                         * outline entry or a hit - history even if
+                                         * the page is next door */
 static int pdu_gs;                      /* nav: a press is being tracked (the
                                          * thumb 1, a selection 2); no page
-                                         * render runs while it is up */
+                                         * render runs while a selection's band
+                                         * is on the glass */
 
 /* the job (PAGEDESK-SPEC 15) */
 static int pdu_job;                     /* J_* */

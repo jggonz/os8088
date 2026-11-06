@@ -404,6 +404,10 @@ static void ovl_cp_finish(void)
     if (pdu_cpclaim) {
         os88_mem_free(pdu_cpseg0);
         pdu_cpclaim = 0;
+    } else {
+        pdu_th_reset();                 /* the claim held pictures or outline */
+        pdu_thwant = 1;
+        pdu_kick();
     }
 }
 
@@ -565,7 +569,7 @@ static void ovl_copy(void)
         pdu_tell("Nothing is selected.");
         return;
     }
-    if (pdu_job != J_NONE) {
+    if (pdu_job != J_NONE && pdu_job != J_THUMB) {      /* a picture yields */
         pdu_tell("Wait for the current job, or press Esc.");
         return;
     }
@@ -576,15 +580,18 @@ static void ovl_copy(void)
     pdu_cpseg0 = 0;
     pdu_cpsync = 0;
     cap = (want << 1) + want + 16;
-    if (want >= 600)
+    if (cap > 4096)
         pdu_cpseg0 = os88_mem_claim_p((cap + 15) >> 4);
     if (pdu_cpseg0) {
         pdu_cpclaim = 1;
         pdu_cpseg = pdu_cpseg0;
         pdu_cpcap = cap > 32768u ? 32768u : cap;
     } else {
-        pdu_cpseg = pdu_scr();
-        pdu_cpcap = 2048;
+        /* the THUMB claim, 4 KiB: the pictures (or the Outline) it held are
+         * given up and come back lazily. NOT the SCRATCH claim - the
+         * selection's boxes live at its offset 0 */
+        pdu_cpseg = pdu_dcseg(PDU_DC_THUMB);
+        pdu_cpcap = 4096;
     }
     pdu_cpoff = 0;
     pdu_txwant = TX_COPY;

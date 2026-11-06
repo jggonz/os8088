@@ -2497,3 +2497,168 @@ one interface (DECISIONS D15). `edit` owns `apps/pagedesk/pduedit.c` and
 Every mutating call records its undo delta itself, so a caller brackets a
 command with `pdu_undo_begin`/`end` and does nothing else for undo. Calls are
 made on the UI task only, never inside a module slice.
+
+### 20.10 Navigation, selection, Find, thumbnails, outline and links (`nav`, wave 2)
+
+Files: the primary's `pdunav.c` (history, gestures, links, the idle ladder),
+`pdusel.c` (selection, Copy), `pdufind.c` (Find), `pduside.c` (the sidebar and
+its thumbnail job), `pdovlnav.c` (the Outline, in the overlay); PDENG's
+`pdesrch.c` (SEARCH) and `pdelink.c` (links). Everything the primary does
+that is not on a keystroke's path is an `ovl_*` function (2.2, 73.14): of
+nav's compiled code the resident part is the glue (the press, the release and
+the poll, the hooks the render job and the page load call, the greying
+tests), the rest rides in the overlay. Host checks: `make pdnav`
+(`hosttest/pde_srch.py` differential-tests SEARCH against a reference over
+random pages and piece sizes; `pde_link` lists the sample guide's links).
+
+#### 20.10.1 Find is a job; SEARCH is the engine's matcher
+
+`J_FIND` is a resumable job stepped by the wake handler, one `PDV_REND_TEXTMAP`
+slice a wake (a text pass, 20.3.4: 74 `pdtm_glyph` records at most) and the
+`PDV_ENG_SEARCH` calls that consume it. PDREND does not know PDENG's matcher
+and PDENG has no vector to PDREND, so the primary carries the one to the other,
+and **the exchange block is the pipe**: the text map's `dseg:doff` is the XB at
+offset `PDE_SRCH_PIECE` = 128 (`dmax` 896), so a piece is not copied twice.
+`pdxb_search` is used as pinned, with these meanings:
+
+| field | in | out |
+|---|---|---|
+| `needle` | PD Latin, read when `state` = 0 | |
+| `page` | the page the piece belongs to | |
+| `glyph` | skip records whose `run` is below it (they were matched already, or are before the point a Find-next resumes from; they still feed the blank rule, never the matcher) | the run of the hit's first glyph |
+| `state` | 0 = a NEW page stream (the matcher is reset), 1 = the next piece of the same page | 1 |
+| `found` | the NUMBER of records in the piece (<= 74) | 1 = a hit completed in this piece |
+| `glyph_end` | | the run of the hit's last glyph |
+
+A hit ends the call; the primary calls again with the SAME piece and `glyph` =
+`glyph_end + 1` until `found` = 0 (the matcher resets on a hit, so hits never
+overlap). A piece with no hit is consumed whole. The matcher is
+case-insensitive over PD Latin (ASCII and the Latin-1 letters fold), keeps the
+last 64 symbols with their runs (so a hit's FIRST glyph is known without a
+table), and takes a needle of up to 63 symbols with leading and trailing blanks
+dropped. **Blanks are made**: a justified line moves its words with TJ numbers
+and a line ends with no space at all, so a glyph a line apart (`dy` > half the
+previous em) or a fifth of an em after the previous one counts as preceded by a
+blank, and runs of blanks collapse (the primary's `pdu_gapk` is the same rule,
+and Copy writes CR LF for a line and a space for a gap by it). A hit is a page
+and two glyph runs: it becomes the SELECTION (20.10.3), which is how it is
+shown, scrolled to and copied.
+
+Enter (from the top of this page), F3 / Find next (after the selection,
+wrapping past the last page, and once more over the start page for what the
+resume skipped) and Shift+F3 (the LAST hit that starts before the selection,
+wrapping the other way: the page is scanned forward and the last candidate
+kept) all start the job from the idle ladder; Esc cancels it at a slice. A
+second after it starts the status line says which page it is on (15.3). A page
+is searched from its start every time: a page's map is never kept (9.2).
+
+#### 20.10.2 Links (`PDP_HASLINKS`)
+
+`PDV_ENG_PAGEINFO` sets `PDP_HASLINKS` when one of the page's first 64
+annotations is a `/Link`. A link is the `PDV_ENG_ANNOTS` record, with these
+meanings for `subtype` "Link": `state` = 0 (no destination in this file) or
+the destination page index + 1; `nm` = the action's `/S` name ("GoTo", "URI",
+"Launch", ...) or "Named" for a `/Dest` the engine could not resolve;
+`contents_len`/`contents` = a `/URI`'s length and first 159 characters. A
+destination is `[page ...]` (direct, as `/Dest` or as `/A /D`) or a NAME looked
+up in the catalog's `/Dests` dictionary (PDF 1.1); the name TREE of later files
+is not read. **Nothing is ever run** (1.4): a click that lands on a link goes
+to its page (and is history, 20.10.5), a `/URI` is shown on the status line
+("Link: http://... - PageDesk never opens links."), and a `/Launch`,
+`/JavaScript` or `/Named` action is named and refused. The primary fetches a
+page's links when the page loads, into the SCRATCH claim (42 links of 12 bytes:
+rect, destination, annotation index), and a press tests them with
+`pdm_view_inv` and no disk read.
+
+#### 20.10.3 Selection and Copy
+
+A selection is a page and a range of glyph runs (`lo..hi`, inclusive); its
+boxes are derived and its text is not kept. The press tests links first, else
+starts a gesture (20.10.5): a rubber band is XORed while the button is down,
+and on release ONE text pass (`J_TEXT`, mode PICK) takes the two points to their
+nearest glyphs (a line weighs four times a column, so the nearest line wins
+before the nearest letter) in content order, then QUAD computes one box a line
+(UL UR LL LR, 13.1.1's order, page space, pt16) into the SCRATCH claim (96
+quads of 16 bytes) - a double-click grows the pick to its word (WORD) first.
+Select all (Ctrl+A) is `lo` 0 .. `hi` 0xFFFF. **On the glass** a selection is XOR
+inversion over its boxes (17.4: never saved), drawn only when the page under it
+is whole. A render of a region wipes the XOR there, so the render job calls
+`pdu_sel_after(&rect)` with the rect it finished and the XOR is put back inside
+it; the selection is taken off the glass by XOR when nothing is being drawn and
+by repainting its boxes when something is. The gfx lock is NOT re-entrant: the
+XOR is drawn under the caller's lock and the wake handler takes it around the
+call.
+
+**Copy** (Ctrl+C, Edit > Copy; 12) runs a COPY pass of its own: the selected
+glyphs as Windows-1252 bytes, CR LF between lines and a space for a gap, into
+a heap claim of three bytes a glyph (the SCRATCH claim's 2 KiB when there is no
+claim to be had, and then truncated, saying so), then `OSAPI_CLIP_PUT_SEG` and
+the claim is freed. Over 32 KiB it is refused whole with the reason. This is the
+one transient claim nav makes (ASK: it is outside 16.2's table; the owner cap of
+8 holds because a copy never runs during a save - Copy refuses while a job
+runs).
+
+Interfaces for `edit`: `int pdu_sel_quads(pd_pt *dst, unsigned cap)` copies the
+CURRENT page's selection into `dst`, 8 `pd_pt` (4 points) a quad, **`cap` counted
+in `pd_pt` values**, and returns the quads (0 = none or still being computed);
+`int pdu_sel_text(char *dst, unsigned cap)` runs the COPY pass to its end on this
+call (slow on a dense page: never from a callback that holds the lock) and
+returns the characters. Esc clears the selection after the popover and the page
+field (17.5).
+
+#### 20.10.4 The Pages and Outline sidebar
+
+A Pages cell is a page's picture once `PDV_REND_THUMB` has drawn it (10.8): one
+56x72 1bpp cell per 512-byte slot of the THUMB claim (8 slots, so the panel
+shows at most 4 rows of 2 cells; `PD_THUMBS` = 12 is not reached), filled one at
+a time from the idle ladder - the current page first, then what is visible - and
+drawn by `os88_gfx_blit1_seg` (a new thunk, `apps/cc/os88thunk.asm`: the band is
+in a claim, not in the package). Until then a cell shows its number and "..."
+and a page the renderer refused shows " - " and is not retried. A job waits for
+the page: a render or a page owed aborts a running thumbnail. LRU by use.
+`int pdu_side_sel(void)` is the page last clicked in the panel, -1 for none
+(`pages`' interface); a click also goes to the page.
+
+The Outline tab reads `PDV_ENG_OUTLINE` a level at a time into the same claim
+as a flat array of 42-byte entries in display order (97 at most): the first
+level when the tab is shown, a twisty's children (up to 24) when it is clicked,
+and the collapse gives them back. A title goes to its page; an entry whose
+destination is not a page in the file says so. Switching tabs empties whichever
+the other had.
+
+#### 20.10.5 Gestures, history and the idle ladder
+
+The OS has no pointer-move callback, so a press that needs one arms the
+window's one-shot timer (`os88_wm_timer`, 1 tick) and POLLS `os88_mouse()` until
+the button is up (`os88_onmouseup` ends it too; a lost release is noticed by the
+poll). **The scroll bar's thumb** drags through `os88ui.inc`'s thumb drag
+(13.10.5; `pdu_sbgrab`/`pdu_sbtrack`/`pdu_sbdrop` in `pdui.inc`): the view
+follows every 2 ticks on a 286 or better and only at the release on an
+8086/8088, where one commit is a third of a second. While a selection's band is
+on the glass no page render runs.
+
+**History**: Back (Alt+Left, Document > Back) and Forward (Alt+Right) over the
+pages a JUMP left - a followed link, an outline entry, a Find hit, Go to, Home
+and End, a cell click; Prev/Next/PgUp/PgDn move by one and are not history. 8
+pages, a new jump forgets Forward.
+
+**The idle ladder** (`ovl_nav_work`): when no job runs, no page is owed and no
+render is wanted, nav's next piece of work starts, in the order the user waits
+for it: a text pass owed, a Find, the boxes of a selection, a selection owed to
+the glass, a link's message, the Outline's reading, a thumbnail. The wake
+handler keeps going while one is owed (`pdu_nav_owed`).
+
+Keys added: Ctrl+C Copy, Ctrl+A Select all, Shift+F3 Find previous, Alt+Left /
+Alt+Right Back / Forward. Menus: Edit > Copy, Select all (Find previous is
+live), Document > Back, Forward.
+
+#### 20.10.6 Sizes, deviations and what is open
+
+Primary image 43,928 bytes (+3,278 over wave 1's 40,650; bss +56), overlay
+12,574 (+10,315 over 2,259), PDENG image +2,396; every figure is a `make` line
+(see nav-report.md). Deviations: (1) the Copy claim above; (2) `pdxb_search`
+and `pdxb_annot` carry the protocol above instead of new fields (no ABI
+change); (3) `os88_gfx_blit1_seg`, an SDK thunk. Open: reading order is the
+content stream's, so columns and tables copy in stream order; a name-tree
+destination is "Named" and not followed; no hand cursor over a link (the OS
+has no move callback); no triple-click line selection.

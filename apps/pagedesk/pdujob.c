@@ -467,8 +467,9 @@ void os88_onwake(void *win)
     if (win != pdu_win)
         return;
     pdu_at_doc();
-    if (pdu_job == J_THUMB && (pdu_rwant || pdu_pgwant))
-        pdu_job_abort();                /* nav: a picture waits for the page */
+    if (pdu_job == J_THUMB && (pdu_rwant || pdu_pgwant || pdu_txwant || pdu_fwant
+                               || pdu_lkact))
+        pdu_job_abort();                /* nav: a picture waits for everything else */
     if (pdu_jcancel) {
         int was;
         was = pdu_job;
@@ -530,7 +531,7 @@ void os88_onwake(void *win)
     }
 
     if (pdu_job == J_NONE && pdu_rwant && pdu_doc == D_OPEN
-        && pdu_pop == P_NONE && !pdu_about && !pdu_gs)
+        && pdu_pop == P_NONE && !pdu_about && pdu_gs != 2)
         pdu_render_begin();
     else if (pdu_job == J_NONE && !pdu_pgwant && !pdu_argp && !pdu_rwant
              && pdu_nav_owed())

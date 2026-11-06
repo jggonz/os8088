@@ -77,7 +77,7 @@ static int ovl_ol_siblings(unsigned num, unsigned gen, int at, int depth, int ma
 {
     int n;
     n = 0;
-    while (n < max && num) {
+    while (n < max && (num || n == 0)) {          /* (0, 0) is the root's first */
         if (ovl_ol_fetch(num, gen))
             break;
         ovl_ol_store(at + n, depth);
@@ -185,8 +185,10 @@ static void ovl_ol_click(int x, int y)
     }
     dest = ovl_ol_w(i, 12);
     pdu_olsel = i;
-    if (dest != 0xFFFF && dest < pdu_npages)
+    if (dest != 0xFFFF && dest < pdu_npages) {
+        pdu_hjump = 1;
         pdu_goto(dest);
+    }
     else
         pdu_tell("This entry does not go to a page in this file.");
     pdu_side_paint();

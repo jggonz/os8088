@@ -84,8 +84,10 @@ static void ovl_find_hit(unsigned lo, unsigned hi)
     if (pdu_fwrap)
         pdu_cat(pdu_line, " (wrapped)", sizeof(pdu_line));
     pdu_wsay(pdu_line);
-    if (pdu_fpg != (int)pdu_page)
+    if (pdu_fpg != (int)pdu_page) {
+        pdu_hjump = 1;
         pdu_goto(pdu_fpg);              /* the quads follow the page load */
+    }
     pdu_kick();
 }
 
