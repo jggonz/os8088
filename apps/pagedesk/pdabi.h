@@ -180,8 +180,11 @@ struct pdxb_init {
     pdw wbuf_seg, wbuf_kb;  /* PDWRT: writer buffers                      */
     pdw adapter;            /* VID_* of the window's display              */
     pdw bpp;                /* 1 or 4                                     */
-    pdw flags;              /* reserved 0                                 */
+    pdw flags;              /* PDXI_*                                     */
+    pdw flate_seg, flate_kb;/* PDENG (D17): Flate slots, 42 KiB each, 1-2;
+                               valid only with PDXI_FLATE                 */
 };
+#define PDXI_FLATE  0x0001  /* flate_seg/flate_kb are valid (PD-25)       */
 
 struct pdxb_open {
     char name[14];          /* 8.3 NUL, resolved in the current folder    */
