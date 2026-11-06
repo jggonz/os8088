@@ -30,12 +30,9 @@ SKIP = 3
 
 
 def tool(name):
-    p = shutil.which(name)
-    if not p:
-        for d in ('/opt/homebrew/bin', '/usr/local/bin'):
-            if os.path.exists(os.path.join(d, name)):
-                return os.path.join(d, name)
-    return p
+    """PATH only, on purpose: a tool hidden from PATH must SKIP, so a run can
+    prove the skip path (and a fallback directory would make it unprovable)."""
+    return shutil.which(name)
 
 
 def run(cmd, timeout=60):
@@ -47,7 +44,7 @@ def run(cmd, timeout=60):
 
 
 def skip(what):
-    print('SKIP: %s is not installed; this check did NOT run and does NOT pass' % what, file=sys.stderr)
+    print('SKIP: %s not found on PATH; this check did NOT run and does NOT pass' % what, file=sys.stderr)
     return SKIP
 
 
@@ -77,15 +74,17 @@ def render(f, page, out, dpi=72, gray=False):
     ext = os.path.splitext(out)[1].lower()
     if m:
         cmd = [m, 'draw', '-r', str(dpi)]
-        if gray or ext in ('.pgm', '.pbm'):
+        if ext == '.pbm':
+            cmd += ['-c', 'mono']
+        elif gray or ext == '.pgm':
             cmd += ['-c', 'gray']
         rc, o, e = run(cmd + ['-o', out, f, str(page)])
         if rc == 0 and os.path.exists(out):
             return 0, 'mutool'
     p = tool('pdftoppm')
-    if p and ext in ('.png', '.pgm', '.ppm'):
+    if p and ext in ('.png', '.pgm', '.ppm', '.pbm'):
         base = out[:-len(ext)]
-        flag = {'.png': '-png', '.pgm': '-gray', '.ppm': ''}[ext]
+        flag = {'.png': '-png', '.pgm': '-gray', '.ppm': '', '.pbm': '-mono'}[ext]
         cmd = [p, '-r', str(dpi), '-f', str(page), '-l', str(page), '-singlefile']
         if flag:
             cmd.append(flag)
@@ -111,6 +110,22 @@ def _resolve(objs, v):
     return v
 
 
+def _is_stream(objs, v):
+    return isinstance(v, str) and ('obj:' + v) in objs and 'stream' in objs['obj:' + v]
+
+
+def _has_ap(objs, ap):
+    """True when /AP /N is a stream, or a dictionary of appearance states whose
+    every value is a stream - what a viewer can actually draw."""
+    if not isinstance(ap, dict) or '/N' not in ap:
+        return False
+    n = ap['/N']
+    if _is_stream(objs, n):
+        return True
+    n = _resolve(objs, n)
+    return isinstance(n, dict) and len(n) > 0 and all(_is_stream(objs, x) for x in n.values())
+
+
 def _plain(v):
     """qpdf's json strings: u:text (unicode) or b:hex (bytes)."""
     if isinstance(v, str):
@@ -128,6 +143,11 @@ def annots(f, page):
     rc, out, err = run([q, '--json=2', '--json-stream-data=none', f])
     if rc not in (0, 3):
         raise RuntimeError('qpdf: ' + err.decode('latin-1')[:200])
+    if rc == 3:
+        # qpdf REPAIRED something before answering (a non-array /Annots is
+        # dropped, for one): say so, the JSON describes the repaired file.
+        for ln in err.decode('latin-1').splitlines()[:4]:
+            print('WARN ' + ln, file=sys.stderr)
     d = json.loads(out)
     objs = d['qpdf'][1]
     pages = d['pages']
@@ -136,7 +156,9 @@ def annots(f, page):
     pobj = objs['obj:' + pages[page - 1]['object']]['value']
     arr = _resolve(objs, pobj.get('/Annots', []))
     res = []
-    for ref in arr or []:
+    if not isinstance(arr, list):
+        return [{'error': '/Annots is not an array', 'value': arr}]
+    for ref in arr:
         o = _resolve(objs, ref)
         if not isinstance(o, dict):
             res.append({'ref': ref, 'error': 'not a dictionary'})
@@ -148,7 +170,7 @@ def annots(f, page):
                'contents': _plain(o.get('/Contents')), 'nm': _plain(o.get('/NM')),
                'irt': o.get('/IRT'), 'state': _plain(o.get('/State')),
                'statemodel': _plain(o.get('/StateModel')), 'flags': o.get('/F'),
-               'author': _plain(o.get('/T')), 'has_ap': isinstance(ap, dict) and '/N' in ap,
+               'author': _plain(o.get('/T')), 'has_ap': _has_ap(objs, ap),
                'inklist': o.get('/InkList'), 'line': o.get('/L'), 'popup_parent': o.get('/Parent')}
         res.append({k: v for k, v in rec.items() if v is not None})
     return res

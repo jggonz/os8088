@@ -12,11 +12,15 @@ accept every valid sample. Without qpdf that half SKIPs and says so.
 
 Also checked: the negative corpus README is what the generator writes, every
 negative file is named in it, no negative file leaks into the samples folder,
-and every sample's manifest line matches its bytes (size and SHA-256).
+every sample's manifest line matches its bytes (size and SHA-256), and the
+stress set keeps PD-06's size claims (> 640 KiB, a > 64 KiB stream, 10,000
+sparse objects inside PD_MAXSUBSEC subsections, three revisions, 256
+annotations, 64 pages, rotated nonzero-origin boxes).
 """
 import hashlib
 import os
 import re
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -38,11 +42,7 @@ def rd(p):
 
 
 def qpdf():
-    for d in os.environ.get('PATH', '').split(os.pathsep) + ['/opt/homebrew/bin', '/usr/local/bin']:
-        p = os.path.join(d, 'qpdf')
-        if os.access(p, os.X_OK):
-            return p
-    return None
+    return shutil.which('qpdf')      # PATH only: hidden from PATH means SKIP
 
 
 with tempfile.TemporaryDirectory() as tmp:
@@ -96,9 +96,37 @@ with tempfile.TemporaryDirectory() as tmp:
         check(re.fullmatch(r'PDE_[A-Z]+', code) is not None, '%s has a PDE_* expectation' % name)
         check(name not in have, '%s is not in the samples folder' % name,
               'a negative file must never sit among the valid samples')
-    codes = set()
     hdr = open(os.path.join(ROOT, 'apps', 'pagedesk', 'pdabi.h')).read()
     for name, data, layer, code, why in neg:
         check(('#define %s ' % code) in hdr, '%s expects a code pdabi.h defines (%s)' % (name, code))
+
+    # stress: the size and structure claims PD-06 and PAGEDESK-SPEC 18.2 make
+    maxsub = int(re.search(r'#define PD_MAXSUBSEC\s+(\d+)', hdr).group(1))
+
+    def subsections(d):
+        n, pos = 0, 0
+        for m in re.finditer(rb'startxref\s+(\d+)', d):
+            x = int(m.group(1))
+            t = d[x:d.index(b'trailer', x)]
+            n += len(re.findall(rb'\n\d+ \d+\r?\n', t))
+        return n
+    st = {n: d for n, (p, d, w) in gen.stress_files().items()}
+    check(len(st['BIGFILE.PDF']) > 640 * 1024, 'BIGFILE.PDF is over 640 KiB (%d)' % len(st['BIGFILE.PDF']))
+    lens = [int(x) for x in re.findall(rb'/Length (\d+) >>\nstream', st['LONGSTRM.PDF'])]
+    check(max(lens) > 65536, 'LONGSTRM.PDF has one stream over 64 KiB (%d)' % max(lens))
+    sp = st['SPARSE.PDF']
+    ids = [int(x) for x in re.findall(rb'\n(\d+) 0 obj', sp)]
+    check(len(ids) >= 10000 and max(ids) > 5 * len(ids), 'SPARSE.PDF: %d objects, numbers up to %d' % (len(ids), max(ids)))
+    for n, d in st.items():
+        check(subsections(d) <= maxsub, '%s: %d xref subsections, at most PD_MAXSUBSEC %d' % (n, subsections(d), maxsub),
+              'a stress file must OPEN; more subsections than the engine keeps is a negative case')
+    check(len(re.findall(rb'startxref', st['REVCHAIN.PDF'])) == 3, 'REVCHAIN.PDF has three revisions')
+    check(len(re.findall(rb'/Type /Annot ', st['ANNOTS256.PDF'])) == 256, 'ANNOTS256.PDF has 256 annotations')
+    check(b'/Count 64 ' in st['STRESS64.PDF'], 'STRESS64.PDF has 64 pages')
+    rc = st['ROTCROP.PDF']
+    check(all(b'/Rotate %d' % r in rc for r in (90, 180, 270)) and re.search(rb'/MediaBox \[-\d', rc) is not None,
+          'ROTCROP.PDF rotates 90/180/270 and has a negative-origin MediaBox')
+    sub = dict((n, d) for n, d, *_ in neg)['xref_subsec_300.pdf']
+    check(subsections(sub) > maxsub, 'xref_subsec_300.pdf exceeds PD_MAXSUBSEC (%d)' % subsections(sub))
 
 done('t_pdfix')

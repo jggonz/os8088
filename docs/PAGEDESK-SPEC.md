@@ -778,15 +778,23 @@ host's zlib).
 
 | command | writes |
 |---|---|
-| `python3 tools/os88pdfgen.py apps/pagedesk/samples` | the eight shipping samples and `MANIFEST.TXT` (committed; 64,039 bytes in all) |
+| `python3 tools/os88pdfgen.py apps/pagedesk/samples` | the eight shipping samples and `MANIFEST.TXT` (committed; 64,364 bytes in all) |
 | `python3 tools/os88pdfgen.py build/pdfix` | the same, for the build tree (18.1) |
 | `python3 tools/os88pdfgen.py --stress build/pdfstress` | ten stress files and `STRESS.TXT` (never committed, never shipped) |
-| `python3 tools/os88pdfgen.py --negative build/pdfneg` | 51 deliberately invalid files and `README.TXT` (only the README is committed, as `tests/pdfneg/README.TXT`) |
+| `python3 tools/os88pdfgen.py --negative build/pdfneg` | 52 deliberately invalid or unsupported files and `README.TXT` (only the README is committed, as `tests/pdfneg/README.TXT`) |
 
 `tests/unit/t_pdfix.py` regenerates the samples and requires byte equality with
 the committed copies, the manifest to match each file's size and SHA-256, the
-negative README to be what the generator writes, and `qpdf --check` to accept
-every sample.
+negative README to be what the generator writes, `qpdf --check` to accept
+every sample, and the stress set to keep 20.1.3's size and structure claims
+(over 640 KiB, a stream over 64 KiB, 10,000 sparse objects, every stress file
+within `PD_MAXSUBSEC` xref subsections, three revisions, 256 annotations, 64
+pages, rotated nonzero-origin boxes).
+
+Font widths: `/Widths` are Adobe's Core 14 AFM advance widths (the files
+`tools/os88pdfont.py` pins; notice in `apps/pagedesk/fonts/AFM-NOTICE.txt`),
+every code an encoding names, not only the ones a sample draws; a code whose
+glyph the AFM lacks (MacRoman's Omega, pi and the like) is 0.
 
 **20.1.2 The samples (18.1).** Every sample except `FLATE.PDF` is asserted, by
 the generator about its own bytes, to stay inside the 1.3 profile: classic
@@ -815,7 +823,10 @@ editing exercises as machine-readable operations (`op` of `find`, `highlight`,
 
 **20.1.3 Stress (18.2).** `STRESS64.PDF` (64 pages under an 8x8 nested tree),
 `BIGFILE.PDF` (721,926 bytes), `LONGSTRM.PDF` (one 85 KB content stream),
-`SPARSE.PDF` (10,000 filler objects at ids 1000+7i, content at 69999),
+`SPARSE.PDF` (10,000 filler objects in 200 runs of 50 numbers at 1000+350k,
+the page, content and font at 80000-80002: 203 xref subsections, inside 7.3's
+`PD_MAXSUBSEC` = 256, so it must open; one subsection per object is the
+negative `xref_subsec_300.pdf`),
 `INDIRLEN.PDF` (`/Length N 0 R`, the length object after the stream),
 `CONTARR.PDF` (`/Contents` as three streams, `q` and `Q` in different ones),
 `INHERIT.PDF` (resources, boxes and `/Rotate` through three `/Pages` levels),
@@ -827,15 +838,22 @@ revision 3`), `ANNOTS256.PDF` (256 annotations, 7 subtypes, each with `/AP`).
 
 **20.1.4 Negative corpus (18.3).** `tests/pdfneg/README.TXT` is the table: file,
 layer (`open` or `render`), expected `PDE_*`, reason. The files are named for
-their defect. The expectations are the fixture author's reading of 1.3 and 3.6
+their defect, and each carries ONLY that defect: every other byte, offset,
+`/Length` and xref entry is right (the unsupported-filter cases carry real
+Flate, LZW, five-stage and JPEG data), so a reader that refuses it for any
+other reason is wrong. Layers are `open`, `stream` (`PDV_ENG_STRM_OPEN` of
+the page content), `pageinfo` (`PDV_ENG_PAGEINFO`) and `render`. The
+expectations are the fixture author's reading of 1.3 and 3.6
 and give way to the engine's 20.2 where they differ. A case is not finished
 when the code is right: the source file must be byte-identical afterwards, no
 claim left open, and the next valid file must open. Independent readers
-repair some of these (`qpdf --check` accepts `trunc_xref.pdf` after
-reconstruction): that is the point of them, PageDesk refuses.
+repair some of these (`qpdf --check` rebuilds the table of `trunc_xref.pdf`
+and `xref_wrong_offset.pdf` and answers with warnings, not an error): that is
+the point of them, PageDesk refuses.
 
 **20.1.5 The checker (18.4).** `tools/os88pdfcheck.py`, over `qpdf`, `mutool`
-and `pdftoppm`, sharing no code with PageDesk or the generator. A missing tool
+and `pdftoppm`, sharing no code with PageDesk or the generator. Tools are
+found on `PATH` only, so hiding one proves the skip path; a missing tool
 prints `SKIP` and exits 3: it never passes. Exit codes: 0 pass, 1 fail, 2
 usage, 3 SKIP.
 
@@ -843,7 +861,7 @@ usage, 3 SKIP.
 |---|---|
 | `validate FILE...` | `qpdf --check`; PASS only when clean (`--warn-ok` tolerates warnings) |
 | `render FILE PAGE OUT [--dpi N] [--gray]` | `mutool draw`, else `pdftoppm`; OUT's extension picks PNG, PGM or PBM |
-| `annots FILE PAGE` | JSON list for the page: `subtype`, `rect`, `quadpoints`, `contents`, `nm`, `irt`, `state`, `statemodel`, `flags`, `author`, `has_ap`, `inklist`, `line` (from `qpdf --json=2`, so the latest revision wins) |
+| `annots FILE PAGE` | JSON list for the page: `subtype`, `rect`, `quadpoints`, `contents`, `nm`, `irt`, `state`, `statemodel`, `flags`, `author`, `has_ap` (true only when `/AP /N` is a stream, or a state dictionary of streams), `inklist`, `line` (from `qpdf --json=2`, so the latest revision wins; when qpdf had to repair the file its warnings go to stderr as `WARN`, because the JSON then describes the repaired file) |
 | `compare A.pgm B.pgm [--tol N] [--frac F]` | PASS when at most F of the pixels differ by more than N (defaults 16 and 0.01); a size mismatch fails |
 | `text FILE [PAGE]` | `mutool draw -F txt`, to confirm text is findable |
 

@@ -17,7 +17,6 @@ import json
 import os
 import re
 import sys
-import unicodedata
 import zlib
 
 # ------------------------------------------------------------------ metrics
@@ -46,17 +45,55 @@ TIMES = ([250, 333, 408, 500, 500, 833, 778, 180, 333, 333, 500, 564, 250, 333, 
             500, 333, 389, 278, 500, 500, 722, 500, 500, 444]
          + [480, 200, 480, 541])
 assert len(HELV) == len(HELVB) == len(TIMES) == 95
-# (Helvetica, Times) widths of the non-ASCII characters this file uses.
-SPECIAL = {
-    '£': (556, 500), '€': (556, 500), '©': (737, 760), '®': (737, 760),
-    '°': (400, 400), '±': (584, 564), '×': (584, 564), '÷': (584, 564),
-    '«': (556, 500), '»': (556, 500), '¡': (333, 333), '¿': (611, 444),
-    'ß': (611, 500), '–': (556, 500), '—': (1000, 1000), '‘': (222, 333),
-    '’': (222, 333), '“': (333, 444), '”': (333, 444), '•': (350, 350),
-    '…': (1000, 1000), 'æ': (889, 667), 'Æ': (1000, 889), 'œ': (944, 722),
-    'Œ': (1000, 889), 'ø': (611, 500), 'Ø': (778, 722), '¥': (556, 500),
-    '¢': (556, 500), '§': (556, 500), 'ﬁ': (500, 556), 'ﬂ': (500, 556),
-}
+# Helvetica and Times-Roman advance widths of every glyph above ASCII that
+# WinAnsi, MacRoman or StandardEncoding can name and the AFM defines:
+# "codepoint helvetica times-roman", one entry per '/'. Like HELV/HELVB/TIMES
+# above, these numbers are extracted from Adobe's Core 14 AFM files (Apache
+# PDFBox a0e38de6, Helvetica.afm SHA-256 5654761e..., Times-Roman.afm
+# b6dbde33...; the same pinned files tools/os88pdfont.py fetches, whose notice
+# is apps/pagedesk/fonts/AFM-NOTICE.txt). Extracted numbers only, a
+# modification of those files, noted here. A glyph the AFM lacks (MacRoman's
+# Omega, pi, product, infinity, integral, approxequal) has no entry and its
+# code gets width 0, as it would be drawn as .notdef.
+HIGH_W_SRC = """
+00A1 333 333 / 00A2 556 500 / 00A3 556 500 / 00A4 556 500 / 00A5 556 500 / 00A6 260 200 / 00A7 556
+500 / 00A8 333 333 / 00A9 737 760 / 00AA 370 276 / 00AB 556 500 / 00AC 584 564 / 00AE 737 760 / 00AF
+333 333 / 00B0 400 400 / 00B1 584 564 / 00B2 333 300 / 00B3 333 300 / 00B4 333 333 / 00B5 556 500 /
+00B6 537 453 / 00B7 278 250 / 00B8 333 333 / 00B9 333 300 / 00BA 365 310 / 00BB 556 500 / 00BC 834
+750 / 00BD 834 750 / 00BE 834 750 / 00BF 611 444 / 00C0 667 722 / 00C1 667 722 / 00C2 667 722 / 00C3
+667 722 / 00C4 667 722 / 00C5 667 722 / 00C6 1000 889 / 00C7 722 667 / 00C8 667 611 / 00C9 667 611 /
+00CA 667 611 / 00CB 667 611 / 00CC 278 333 / 00CD 278 333 / 00CE 278 333 / 00CF 278 333 / 00D0 722
+722 / 00D1 722 722 / 00D2 778 722 / 00D3 778 722 / 00D4 778 722 / 00D5 778 722 / 00D6 778 722 / 00D7
+584 564 / 00D8 778 722 / 00D9 722 722 / 00DA 722 722 / 00DB 722 722 / 00DC 722 722 / 00DD 667 722 /
+00DE 667 556 / 00DF 611 500 / 00E0 556 444 / 00E1 556 444 / 00E2 556 444 / 00E3 556 444 / 00E4 556
+444 / 00E5 556 444 / 00E6 889 667 / 00E7 500 444 / 00E8 556 444 / 00E9 556 444 / 00EA 556 444 / 00EB
+556 444 / 00EC 278 278 / 00ED 278 278 / 00EE 278 278 / 00EF 278 278 / 00F0 556 500 / 00F1 556 500 /
+00F2 556 500 / 00F3 556 500 / 00F4 556 500 / 00F5 556 500 / 00F6 556 500 / 00F7 584 564 / 00F8 611
+500 / 00F9 556 500 / 00FA 556 500 / 00FB 556 500 / 00FC 556 500 / 00FD 500 500 / 00FE 556 500 / 00FF
+500 500 / 0131 278 278 / 0141 556 611 / 0142 222 278 / 0152 1000 889 / 0153 944 722 / 0160 667 556 /
+0161 500 389 / 0178 667 722 / 017D 611 611 / 017E 500 444 / 0192 556 500 / 02C6 333 333 / 02C7 333
+333 / 02D8 333 333 / 02D9 333 333 / 02DA 333 333 / 02DB 333 333 / 02DC 333 333 / 02DD 333 333 / 2013
+556 500 / 2014 1000 1000 / 2018 222 333 / 2019 222 333 / 201A 222 333 / 201C 333 444 / 201D 333 444
+/ 201E 333 444 / 2020 556 500 / 2021 556 500 / 2022 350 350 / 2026 1000 1000 / 2030 1000 1000 / 2039
+333 333 / 203A 333 333 / 2044 167 167 / 20AC 556 500 / 2122 1000 980 / 2202 476 476 / 2206 612 612 /
+2211 600 600 / 221A 453 453 / 2260 549 549 / 2264 549 549 / 2265 549 549 / 25CA 471 471 / FB01 500
+556 / FB02 500 556
+"""
+STD_HIGH_SRC = """
+161 00A1 / 162 00A2 / 163 00A3 / 164 2044 / 165 00A5 / 166 0192 / 167 00A7 / 168 00A4 / 169 0027 /
+170 201C / 171 00AB / 172 2039 / 173 203A / 174 FB01 / 175 FB02 / 177 2013 / 178 2020 / 179 2021 /
+180 00B7 / 182 00B6 / 183 2022 / 184 201A / 185 201E / 186 201D / 187 00BB / 188 2026 / 189 2030 /
+191 00BF / 193 0060 / 194 00B4 / 195 02C6 / 196 02DC / 197 00AF / 198 02D8 / 199 02D9 / 200 00A8 /
+202 02DA / 203 00B8 / 205 02DD / 206 02DB / 207 02C7 / 208 2014 / 225 00C6 / 227 00AA / 232 0141 /
+233 00D8 / 234 0152 / 235 00BA / 241 00E6 / 245 0131 / 248 0142 / 249 00F8 / 250 0153 / 251 00DF
+"""
+HIGH_W = {chr(int(e.split()[0], 16)): (int(e.split()[1]), int(e.split()[2]))
+          for e in HIGH_W_SRC.split('/')}
+# StandardEncoding above 126 (code -> codepoint), from the same AFM's C codes.
+STD_HIGH = {int(e.split()[0]): chr(int(e.split()[1], 16)) for e in STD_HIGH_SRC.split('/')}
+# Codes that both encodings define as a space or hyphen glyph although the
+# Unicode character is not "printable" (WinAnsi 0xA0/0xAD, MacRoman 0xCA).
+ALIAS = {'\u00a0': ' ', '\u00ad': '-'}
 BASE14 = ('Helvetica', 'Helvetica-Bold', 'Helvetica-Oblique', 'Helvetica-BoldOblique',
           'Times-Roman', 'Times-Bold', 'Times-Italic', 'Times-BoldItalic',
           'Courier', 'Courier-Bold', 'Courier-Oblique', 'Courier-BoldOblique')
@@ -71,15 +108,13 @@ def char_width(font, ch):
     bold = font in ('Helvetica-Bold', 'Helvetica-BoldOblique')
     if font.startswith('Times') and font != 'Times-Roman':
         raise ValueError('no width table for ' + font)
+    ch = ALIAS.get(ch, ch)
     o = ord(ch)
     if 32 <= o <= 126:
         t = TIMES if fam else (HELVB if bold else HELV)
         return t[o - 32]
-    if ch in SPECIAL and not bold:
-        return SPECIAL[ch][fam]
-    d = unicodedata.normalize('NFD', ch)
-    if len(d) > 1 and 'A' <= d[0] <= 'z' and d[0].isalpha():
-        return char_width(font, d[0])
+    if ch in HIGH_W and not bold:
+        return HIGH_W[ch][fam]
     raise ValueError('no width for %r in %s' % (ch, font))
 
 
@@ -104,7 +139,7 @@ def code_char(enc, code, diffs=None):
             return '‘'
         if 32 <= code <= 126:
             return chr(code)
-        return {174: 'ﬁ', 175: 'ﬂ', 225: 'Æ', 251: 'ß'}.get(code)
+        return STD_HIGH.get(code)
     raise ValueError(enc)
 
 
@@ -208,6 +243,23 @@ def rl_encode(data):
     return bytes(out)
 
 
+def lzw_literal(data):
+    """A valid LZWDecode stream (EarlyChange 1) that codes every byte as a
+    literal: Clear, one 9-bit code per byte, EOD. Short inputs only, so the
+    table a decoder builds never reaches the 10-bit switch at 511."""
+    assert len(data) < 250
+    bits, n, out = 0, 0, bytearray()
+    for code in [256] + list(data) + [257]:
+        bits = (bits << 9) | code
+        n += 9
+        while n >= 8:
+            n -= 8
+            out.append((bits >> n) & 0xff)
+    if n:
+        out.append((bits << (8 - n)) & 0xff)
+    return bytes(out)
+
+
 def ahx_encode(data):
     h = data.hex().upper()
     return b'\n'.join(h[i:i + 64].encode() for i in range(0, len(h), 64)) + b'>'
@@ -300,7 +352,7 @@ class Pdf:
         for code in range(first, last + 1):
             ch = code_char(enc, code, diffs)
             try:
-                ws.append(char_width(base, ch) if ch and ch.isprintable() else 0)
+                ws.append(char_width(base, ch) if ch and (ch.isprintable() or ch in ALIAS) else 0)
             except ValueError:
                 ws.append(0)            # a code this file never uses
         if enc == 'WinAnsiEncoding' or enc == 'MacRomanEncoding':
@@ -1449,27 +1501,36 @@ def stress_files():
     root, info, _, _ = simple_pages(pdf, [(data, '', ())])
     out['LONGSTRM.PDF'] = (pdf, pdf.finish(root, info), 'one page whose single content stream is %d bytes' % len(data))
 
-    # SPARSE: 10,000 sparse object numbers
+    # SPARSE: 10,000 objects with sparse numbers. PAGEDESK-SPEC 7.3 keeps only a
+    # subsection table of at most PD_MAXSUBSEC = 256 entries, so the gaps are
+    # between 200 RUNS of 50 consecutive numbers (1000 + 350k ... +49), the way
+    # a real writer's deletions leave them, and the page, its content and its
+    # font sit in a run of their own far above: 203 subsections in all. One
+    # subsection per object would be 10,004 and is the negative corpus's
+    # xref_subsec_300.pdf, not a stress file.
     pdf = Pdf('SPARSE.PDF')
-    fk = pdf.font('Helvetica')
-    fobj = pdf.fonts[('Helvetica', 'WinAnsiEncoding', (), 126)][1]
-    pdf.objs.clear()
-    pdf.fonts.clear()
     objs = {}
-    for i in range(10000):
-        objs[1000 + 7 * i] = b'<< /Filler %d >>' % i
+    i = 0
+    for k in range(200):
+        for j in range(50):
+            objs[1000 + 350 * k + j] = b'<< /Filler %d >>' % i
+            i += 1
+    assert len(objs) == 10000
     objs[2] = b'<< /Type /Catalog /Pages 3 0 R >>'
     c = C(Pdf('x'))
     c.pdf.font('Helvetica')
     c.text(72, 700, 'Helvetica', 24, 'SPARSE: 10000 filler objects, sparse numbers')
     content = c.bytes()
-    objs[69999] = b'<< /Length %d >>\nstream\n' % len(content) + content + b'\nendstream'
-    objs[3] = b'<< /Type /Pages /Kids [65432 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /F1 70002 0 R >> >> >>'
-    objs[65432] = b'<< /Type /Page /Parent 3 0 R /Contents 69999 0 R >>'
-    objs[70002] = b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 126 /Widths [%s] /Encoding /WinAnsiEncoding >>' % ' '.join(map(str, HELV)).encode()
-    pdf2 = Pdf('SPARSE.PDF')
-    pdf2.npages = 1
-    out['SPARSE.PDF'] = (pdf2, write_pdf(objs, 2, None, '1.3', 'SPARSE.PDF'), '10,000 filler objects at ids 1000+7i, content at 69999')
+    objs[3] = b'<< /Type /Pages /Kids [80000 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font << /F1 80002 0 R >> >> >>'
+    objs[80000] = b'<< /Type /Page /Parent 3 0 R /Contents 80001 0 R >>'
+    objs[80001] = b'<< /Length %d >>\nstream\n' % len(content) + content + b'\nendstream'
+    objs[80002] = b'<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /FirstChar 32 /LastChar 126 /Widths [%s] /Encoding /WinAnsiEncoding >>' % ' '.join(map(str, HELV)).encode()
+    assert len(objs) == 10005
+    pdf.npages = 1
+    data = write_pdf(objs, 2, None, '1.3', 'SPARSE.PDF')
+    nsub = len(re.findall(rb'\n\d+ \d+\n', data[data.rindex(b'\nxref\n'):]))
+    assert nsub <= 256, nsub
+    out['SPARSE.PDF'] = (pdf, data, '10,000 filler objects in 200 runs of 50 at 1000+350k, page/content/font at 80000-80002; %d xref subsections (PD_MAXSUBSEC 256)' % nsub)
 
     # INDIRLEN: indirect /Length (the length object comes AFTER the stream)
     pdf = Pdf('INDIRLEN.PDF')
@@ -1635,6 +1696,17 @@ def stress_files():
 
 
 # ------------------------------------------------------------ negative corpus
+# A real 8x8 grey baseline JPEG (164 bytes, a black-to-white gradient), made
+# once with ImageMagick (`magick -size 8x8 gradient:black-white -colorspace Gray
+# -strip -quality 75 -define jpeg:optimize-coding=true`) and kept as data so the
+# generator stays standard-library only. Only the negative corpus uses it.
+JPEG8 = bytes.fromhex(
+    'ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707070909080a0c140d0c0b0b0c1912'
+    '130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837292c30313434341f27393d38323c2e333432ffc0000b080008'
+    '000801011100ffc40014000100000000000000000000000000000001ffc4001710000301000000000000000000000000'
+    '00001764a2ffda0008010100003f001232e4ffd9')
+
+
 def mini(name='NEG', content=b'BT /F1 12 Tf 72 700 Td (negative sample) Tj ET\n', page_extra='', pages_extra='',
          res_extra='', version='1.3'):
     pdf = Pdf(name, version)
@@ -1779,6 +1851,14 @@ def negative_files():
     add('string_100k.pdf', pdf.finish(root), 'render', 'PDE_LIMIT', 'a 100,000 byte literal string in one operator')
     pdf, root, pg, pr, cs = mini(page_extra='/Junk /' + 'N' * 20000)
     add('name_20k.pdf', pdf.finish(root), 'open', 'PDE_LIMIT', 'a 20,000 byte name')
+    pdf, root, pg, pr, cs = mini()
+    for k in range(300):
+        pdf.put(100 + 2 * k, '<< /Filler %d >>' % k)
+    sub = pdf.finish(root)
+    nsub = len(re.findall(rb'\n\d+ \d+\n', sub[sub.rindex(b'\nxref\n'):]))
+    assert nsub > 256, nsub
+    add('xref_subsec_300.pdf', sub, 'open', 'PDE_LIMIT',
+        'a VALID file whose xref has %d subsections (one per object); the engine keeps at most 256 (PD_MAXSUBSEC)' % nsub)
     # filters
     pdf = Pdf('NEG')
     pdf.font('Helvetica')
@@ -1792,13 +1872,16 @@ def negative_files():
     root = pdf.add('<< /Type /Catalog /Pages %d 0 R >>' % pr)
     add('runlength_bomb.pdf', pdf.finish(root), 'render', 'PDE_LIMIT', '80,000 bytes of RunLength that expand to about 5 MB')
     pdf, root, pg, pr, cs = mini()
-    pdf.objs[cs] = b'<< /Length 4 /Filter /FlateDecode >>\nstream\nxxxx\nendstream'
+    pdf.allow_flate = True
+    pdf.stream(b'BT /F1 12 Tf 72 700 Td (Flate content, valid zlib) Tj ET\n', filters=('FlateDecode',), num=cs)
     add('flate_unsupported.pdf', pdf.finish(root), 'render', 'PDE_FLATE', 'FlateDecode content on the XT build')
     pdf, root, pg, pr, cs = mini()
-    pdf.objs[cs] = b'<< /Length 4 /Filter /LZWDecode >>\nstream\nxxxx\nendstream'
+    lzw = lzw_literal(b'BT /F1 12 Tf 72 700 Td (LZW content, valid codes) Tj ET\n')
+    pdf.objs[cs] = b'<< /Length %d /Filter /LZWDecode >>\nstream\n' % len(lzw) + lzw + b'\nendstream'
     add('lzw_unsupported.pdf', pdf.finish(root), 'render', 'PDE_FILTER', 'LZWDecode content')
     pdf, root, pg, pr, cs = mini()
-    pdf.objs[cs] = b'<< /Length 4 /Filter [/ASCIIHexDecode /RunLengthDecode /ASCIIHexDecode /RunLengthDecode /ASCIIHexDecode] >>\nstream\n41>\nendstream'
+    pdf.stream(b'BT /F1 12 Tf 72 700 Td (five stages, each valid) Tj ET\n',
+               filters=('ASCIIHexDecode', 'RunLengthDecode', 'ASCIIHexDecode', 'RunLengthDecode', 'ASCIIHexDecode'), num=cs)
     add('filter_chain_5.pdf', pdf.finish(root), 'render', 'PDE_FILTER', 'a five-stage filter pipeline (limit 4)')
     # incremental chains
     base = good
@@ -1808,8 +1891,9 @@ def negative_files():
     add('prev_past_eof.pdf', base.replace(b'trailer\n<<', b'trailer\n<< /Prev 99999999'), 'open', 'PDE_XREF', '/Prev beyond the end of the file')
     chain = base
     pdfx, rootx, _, _, _ = mini()
+    extra = max(pdfx.objs) + 1      # an object of its own; the font and page stay as they were
     for r in range(2, 11):
-        chain = append_revision(chain, {1: b'<< /Revision %d >>' % r}, rootx, max(pdfx.objs) + 1, 'NEG', r)
+        chain = append_revision(chain, {extra: b'<< /Revision %d >>' % r}, rootx, extra + 1, 'NEG', r)
     add('prev_chain_10.pdf', chain, 'open', 'PDE_LIMIT', 'ten revisions chained by /Prev (limit 8)')
     # annotations
     def annot_doc(annot, extra_objs=()):
@@ -1849,9 +1933,10 @@ def negative_files():
     pdf, root, pg, pr, cs = mini(content=b'/Sh1 sh\n')
     add('shading_sh.pdf', pdf.finish(root), 'render', 'PDE_GRAPHICS', 'the sh operator is outside the profile: Incomplete rendering')
     pdf, root, pg, pr, cs = mini()
-    im = pdf.add('<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length 4 >>\nstream\n\xff\xd8\xff\xd9\nendstream')
+    im = pdf.add(b'<< /Type /XObject /Subtype /Image /Width 8 /Height 8 /ColorSpace /DeviceGray /BitsPerComponent 8 '
+                 b'/Filter /DCTDecode /Length %d >>\nstream\n' % len(JPEG8) + JPEG8 + b'\nendstream')
     pdf.put(pr, '<< /Type /Pages /Kids [%d 0 R] /Count 1 /MediaBox [0 0 612 792] /Resources << /Font %s /XObject << /Im1 %d 0 R >> >> >>' % (pg, pdf.font_res(), im))
-    pdf.objs[cs] = b'<< /Length 22 >>\nstream\nq 50 0 0 50 72 600 cm /Im1 Do Q\nendstream'
+    pdf.stream(b'q 50 0 0 50 72 600 cm /Im1 Do Q\n', num=cs)
     add('dct_image.pdf', pdf.finish(root), 'render', 'PDE_FILTER', 'a DCTDecode (JPEG) image')
     # structure
     pdf = Pdf('NEG')
