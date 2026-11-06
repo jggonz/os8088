@@ -2359,7 +2359,7 @@ ar_s_gf:    db 'Gun Fight', 0
 ar_s_sw:    db 'Sea Wolf', 0
 ar_s_qb:    db 'Q*bert', 0
 ar_s_none:  db '(none)', 0
-ar_s_nobd:  db 'Arcade: no game is loaded - pick one from Game', 0
+ar_s_nobd:  db 'Arcade: pick a game', 0
 ar_s_pm:    db 'Pac-Man', 0
 ar_m_game:  db 'Game', 0
 ar_s_play:  db 'Play', 0
@@ -2376,8 +2376,8 @@ ar_l5:      db 'Arrows: move    Space: fire', 0
 ar_l6:      db 'Esc: back here, the game held', 0
 ar_l7:      db 0
 ar_l8:      db 'Game > Reset: power the board off', 0
-ar_s_vgaonly: db 'Arcade: Pac-Man needs a VGA', 0
-ar_s_qbvga: db 'Arcade: Q*bert needs a VGA', 0
+ar_s_vgaonly: db 'Pac-Man needs a VGA', 0
+ar_s_qbvga: db 'Q*bert needs a VGA', 0
 
 ar_ablines: dw ar_ab1, ar_ab2, ar_ab3, ar_ab4, 0
 ar_ab1:     db 'Arcade for os8088', 0
@@ -2392,8 +2392,8 @@ ar_s_romdl: db 'B:', 0  ; after the <SET>.ROM's name: at most 12
 ar_s_romis: db ': wrong set', 0  ;   and 11, the toast bar's 24 (TOAST_MAX)
 ar_s_romram: db ': no memory', 0
 ar_s_nomem: db 'Arcade: no memory', 0
-ar_s_nofsx: db 'Arcade: no full screen here', 0
-ar_s_nomode: db 'Arcade: no mode for this display', 0
+ar_s_nofsx: db 'Arcade: no full screen', 0
+ar_s_nomode: db 'Arcade: no screen mode', 0
 ar_s_miss:  db 'Arcade: no code at ????', 0
 
 %define OS88UI_ABOUT
