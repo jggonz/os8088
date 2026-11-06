@@ -727,6 +727,7 @@ static void pdu_canvas_paint(struct os88_rect *clip)
         pdu_empty_paint(c);
         return;
     }
+    pdu_ed_xoff_l();                    /* edit: off while its pixels are its own */
     pdu_page_rect(&pdu_pr);
     /* the desk: above, below, left, right of the page, each cut to c */
     pdu_desk(c->x1, c->y1, c->x2, (pdu_pr.y1 - 1 < c->y2 ? pdu_pr.y1 - 1 : c->y2));
@@ -739,6 +740,8 @@ static void pdu_canvas_paint(struct os88_rect *clip)
 #endif
         pdu_render_want(&pdu_tr);
     }
+    if (pdu_ed_selected() >= 0)         /* edit: back on, unless a render will */
+        pdu_ed_show();
 }
 
 /* --- the popover (one at a time, inside the canvas) ------------------------ */

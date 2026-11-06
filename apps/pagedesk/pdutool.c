@@ -201,12 +201,13 @@ static void ovl_ink_done(void)
  * off again before this returns. ot_moved: the pointer travelled OT_DRAG. */
 static void ovl_loop(int mode)
 {
-    int guard, have;
+    int have;
+    unsigned t0;
     ot_cx = ot_sx;
     ot_cy = ot_sy;
     ot_moved = 0;
     have = 0;
-    guard = 0;
+    t0 = os88_ticks();
     for (;;) {
         os88_mouse(&ot_m);
         if ((ot_m.btn & 1) == 0)
@@ -240,7 +241,10 @@ static void ovl_loop(int mode)
             ot_moved = 1;
         }
         os88_task_yield();
-        if (++guard > 30000)
+        /* a mouse that never lets go is a broken driver: a MINUTE bounds it.
+         * A pass count did not - 30,000 yields are 20 s on the XT and a
+         * fraction of one on a fast machine, which ended drags mid-gesture */
+        if ((unsigned)(os88_ticks() - t0) > 1092)
             break;
     }
     if (have)

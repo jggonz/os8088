@@ -11,7 +11,9 @@ undo and redo of create/set/move/delete/text/points and the typing session
 against snapshots, coalescing, the 64-command history and its announced
 truncation, the save point, source annotations, page-operation deltas, and 40
 seeded random walks of commands undone and redone in random order with every
-state compared with the one taken when it was made. ~0.5 s. SKIPs (never
+state compared with the one taken when it was made (a third of the commands
+make several calls aimed at one record, the way a caller may mix a move, a
+resize and a points change in one bracket), and pdu_ed_gen (D19). ~0.5 s. SKIPs (never
 passes) without a host C compiler.
 """
 import os

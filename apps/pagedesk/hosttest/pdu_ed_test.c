@@ -614,6 +614,42 @@ static void test_savepoint(void)
     CHECK(pdu_dirty(), "dirty without pdu_saved()");
 }
 
+/* D19: notes refreshes on pdu_ed_gen(), so every mutation, undo, redo and
+ * selection change must move it, and a read must not */
+static void test_gen(void)
+{
+    unsigned g;
+    struct pd_edit r;
+    int a;
+    fresh();
+    g = pdu_ed_gen();
+    mk(PDA_RECT, 0, 100, 100, 600, 600);
+    a = pdu_ed_new(&E, "", 0, (pd_pt *)0, 0);
+    CHECK(pdu_ed_gen() != g, "gen: new"); g = pdu_ed_gen();
+    pdu_ed_get(a, &r);
+    pdu_ed_first(0);
+    CHECK(pdu_ed_gen() == g, "gen: a read leaves it");
+    r.colour = 9;
+    pdu_ed_set(a, &r);
+    CHECK(pdu_ed_gen() != g, "gen: set"); g = pdu_ed_gen();
+    pdu_ed_move(a, 16, 16);
+    CHECK(pdu_ed_gen() != g, "gen: move"); g = pdu_ed_gen();
+    pdu_undo();
+    CHECK(pdu_ed_gen() != g, "gen: undo"); g = pdu_ed_gen();
+    pdu_redo();
+    CHECK(pdu_ed_gen() != g, "gen: redo"); g = pdu_ed_gen();
+    pdu_ed_select(a);
+    CHECK(pdu_ed_gen() != g && pdu_ed_selected() == a, "gen: select"); g = pdu_ed_gen();
+    pdu_page = 1;                           /* the page changes under it */
+    pdu_ed_canvas();
+    CHECK(pdu_ed_gen() != g && pdu_ed_selected() < 0, "gen: a page change deselects");
+    pdu_page = 0;
+    g = pdu_ed_gen();
+    pdu_ed_del(a);
+    CHECK(pdu_ed_gen() != g, "gen: delete");
+    CHECK(pdu_ed_get(a, &r) == 0 && r.id != 0, "ids are never 0");
+}
+
 static void test_src(void)
 {
     struct pd_edit r;
@@ -794,6 +830,7 @@ int main(void)
     test_typing();
     test_history();
     test_savepoint();
+    test_gen();
     test_src();
     test_pageop();
     for (s = 1; s <= 40; s++)

@@ -2523,8 +2523,11 @@ sets the three tops when a document's claims exist):
 two heaps share, are refused with `PDE_LIMIT` / `PDE_NOMEM` (`pdu_ed_err`) and
 the caller keeps what was typed. A heap is a bump allocator. A replaced text or
 point list is a new block and the old one is abandoned (no compaction); typing
-and backspace extend or trim the tail of the LAST text block in place, which is
-the only reuse. **`rect` is the tight bounding box of the points** for every
+extends the tail of the LAST text block in place, and a backspace gives that
+block's last byte back to the heap **when the current typing run wrote it** (a
+byte below the top the run began at is old text an undo restores, so it is
+only dropped from the length) - so typos cost nothing and only retyping into
+old text copies the block, which is the only reuse. **`rect` is the tight bounding box of the points** for every
 point-based kind (Highlight, Ink, Sign, Line); the renderer pads it.
 
 **Defaults** (13.3): Note 20 x 18 pt centred on the click, yellow; Highlight
@@ -2544,11 +2547,14 @@ is right: a change to a record born in the same command (undo truncates the
 store below it; redo restores the count and the record is back as it ended,
 because **truncation never erases a byte**), the second edit of a field in one
 command (the first old state is the one that matters, so a drag of fifty sets is
-one step), and a keystroke into the record the previous command typed into
+one step - and a MOVE of a record folds into that command's last move of it only
+while no rectangle or points entry of the record came after that move, since a
+move does not commute with them), and a keystroke into the record the previous command typed into
 (coalescing, 13.6). A new command discards the redo branch. The oldest command
 falls off at the 65th and the status line says so once until the next save
-(`The undo history is full`); a command that cannot fit at all clears the
-history and says `Too large to undo`.
+(`Undo history full: the oldest step is dropped.`); a command that cannot fit
+at all clears the history and says `Too large to undo: the history was
+cleared.`
 
 **Dirty** is "not at the save point". The save point is an absolute command
 number: undo back to it is clean, redo past it dirty, a new edit made from
@@ -2563,26 +2569,34 @@ carries a stub of `pdu_pg_apply` guarded by `#ifndef PDU_PAGES`; `pages`
 defines `PDU_PAGES` (pdu.h's pages block) when it lands its own. A delta over
 96 bytes clears the history (said, not hidden).
 
-**What a mutation does to the screen.** Every mutating call marks the screen
+**What a mutation does to the screen.** Every mutating call hands the screen
 rectangle of the record before and after (through `pdm_view_fwd`, padded 6 px,
-cut to the canvas); the outermost `pdu_undo_end` hands the union to
-`pdu_render_want`, refreshes Undo/Redo, the title, `pdu_changes` (the live
-count) and the menus. So a caller of 20.8 never asks for a repaint. The primary
+cut to the canvas) to `pdu_render_want`, which keeps the union - nothing renders
+before the next wake, so a command is still ONE repaint of the union of its
+marks; the outermost `pdu_undo_end` refreshes Undo/Redo, the title,
+`pdu_changes` (the live count) and the menus. So a caller of 20.8 never asks for a repaint. The primary
 draws no annotation pixel (D15).
 
-**The selection** is an XOR outline with corner handles on the shapes that
-resize (Text, Rect, Ellipse, Area mark). The strips actually drawn are
+**The selection** is an XOR outline with a 4 x 4 handle just OUTSIDE each
+corner on the shapes that resize (Text, Rect, Ellipse, Area mark) - outside, so
+no pixel is flipped twice. The strips actually drawn (8 at most) are
 remembered and taken off by replaying them; a render's BEGIN takes the outline
-off first (the page under it is still the page it was drawn on) and its END
-puts it back; scrolling, zooming and a page change take it off before they
-move anything. `Esc` deselects; `Delete` deletes the selection (one undoable
+off first, but only when one of its strips meets the render's rectangle (the
+page under it is still the page it was drawn on), and its END puts it back;
+`pdu_canvas_paint` takes it off before it paints (a closed dialog's damage) and
+puts it back itself when no render will; scrolling, zooming and a page change
+take it off before they move anything. `Esc` deselects; `Delete` deletes the selection (one undoable
 command); Enter on a selected text box opens it for typing. `pdu_ed_gen()` is bumped on every mutation, undo, redo and selection change (D19, for `notes`); `pdu_tbuf[1025]` is the one near text buffer shared with notes.
 
 **The tools** (`pdutool.c`; Annotate and Edit modes, never Read or Pages, never
 on a signed document). A gesture is modal: the OS delivers a press and a
 release but no motion (13.7), so it polls `os88_mouse()` and yields, holding
-the gfx lock until the button comes up (CWORD's menu and ruler do the same). It
-draws an XOR band and takes it off again; the record is made at the release,
+the gfx lock until the button comes up (CWORD's menu and ruler do the same),
+bounded by a MINUTE of ticks - not a pass count, which ended a drag in well
+under a second on a fast machine. It draws an XOR band and takes it off again
+(an Ink or Sign stroke is left for PDREND's opaque bands to paint over, D4, so
+a stroke is not drawn twice; a refused stroke repaints its own strip); the
+record is made at the release,
 converted ONCE from screen to page space with `pdm_view_inv` (5.1), so zoom,
 scroll and rotation never touch a stored byte.
 
@@ -2590,12 +2604,12 @@ scroll and rotation never touch a stored byte.
 |---|---|---|
 | Select | click a mark (a shape by its border, a note/text by its box, Ink/Sign/Line/Highlight by their bounding box); drag it; drag a corner handle; double-click or Enter a text box to type | moves by an exact pt16 translation, kept on the page; resize re-converts the corner |
 | Note | click | `pdu_nt_new(page, &rect)`: notes' popover (20.9) makes the Note (20x18 pt centred there) on Done with text; double-click a note calls `pdu_nt_open` |
-| Text | drag a frame, or click for 144 x 36 pt; click an existing box to edit it | Text record, then typing |
+| Text | drag a frame (any direction), or click for 144 x 36 pt; click an existing box to edit it; a click in the margin is refused (`Click on the page.`) | Text record, then typing |
 | Highlight | with a selection, press Highlight | one record, up to 12 quads (`pdu_sel_quads`, 4 points each), `rect` = their union |
 | Mark / Rect / Ellipse | drag | Area mark / Rect / Ellipse over the dragged frame (4 pt minimum) |
 | Line | drag tail to head | Line with an arrow at the end |
 | Ink | draw with the button down | one Ink record per stroke: a point only when the pointer is 3 px from the last kept one, at most 126 per stroke (said when reached) |
-| Sign | draw one stroke | one Sign record placed on release; the status line says `Drawn signature - not a certificate` (13.9). A multi-stroke capture is not built |
+| Sign | draw one stroke | one Sign record placed on release; the status line says 13.9's `Drawn signature. This is not a certificate signature.` A multi-stroke capture is not built |
 
 **Typing** (`pdu_tx_*`): while a note or text box is open the printable keys,
 Backspace and Enter (a new line, LF) go to it; every other key and every command
@@ -2612,17 +2626,24 @@ tool is Highlight, ends by calling `pdu_tool_hilite()`; until nav lands `pdu_sel
 line says `Select text first.`. (3) Line-end handles, a plain (arrow-less) Line
 gesture, text caret positioning and property editing are not here; properties
 are `notes`' inspector through `pdu_ed_set`. (4) Page ids are view indices until
-`pages` lands `pdu_pg_id` (`pdu_ed_pg()` is the one line to change).
+`pages` lands `pdu_pg_id` (`pdu_ed_pg()` is the one line to change). (5) Esc
+does not cancel a gesture while the button is down: no key event is delivered
+inside the held-button loop and `os88_key_down` would arm the kernel's key map
+for the whole session; Undo takes a finished gesture back in one step.
 
-**As measured (2026-11-05, QEMU VGA with the stand-in PDREND, `LATIN.PDF`).** Mark drag
-creates a record (title `*`, Undo lit); Select picks it with four corner
-handles; a corner drag resizes, a border drag moves, Delete removes, Ctrl+Z
-brings it back; the Text tool's frame and typed `Test` and the Area mark
-Save As into `LATIN2.PDF`, which `qpdf --check` passes and `mutool draw` shows
-as a red rectangle and blue `Test` where they were placed. Sizes: primary
-43,232 + 6,225 bss (+4.9 KiB, of which 1,025 is `pdu_tbuf`, which `notes`
-drops from its own bss); overlay 16,045 bytes against D19's +12 KiB share
-(14,547): **1.5 KiB over**.
+**As measured (2026-11-05, QEMU VGA with the stand-in PDREND, `LATIN.PDF`;
+verify-edit).** An Area mark, a Line dragged up-left, a Rect, an Ellipse, an
+Ink stroke, a Sign stroke and a Text box typed `Hi there`, two backspaces,
+`re`, Enter, `Ok`; the Rect selected, moved by its border, resized by its
+lower-right handle, undone and redone; Save As into `LATIN2.PDF`: `qpdf
+--check` passes and `mutool draw` shows all seven (/Square x2, /Line with
+`/LE [/None /OpenArrow]` at the release end, /Circle, /Ink x2 - the Sign at
+`/BS /W 1.5` with `/Subj (Drawn signature)` - and /FreeText `(Hi there\nOk)`)
+where they were placed; the title's `*` goes at the save. Note and Highlight
+wait for `notes` and `nav`. Sizes: primary 43,398 + 6,239 bss (+4,999 over the
+44,619 base, of which 1,025 is `pdu_tbuf`, which `notes` drops from its own
+bss: +3,974 net of it); overlay 14,248 bytes against D19's +12 KiB share
+(14,547).
 
 ### 20.14 Host preparation of complex PDFs (`host`, wave 2, PD-22)
 
