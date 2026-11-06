@@ -78,6 +78,15 @@ SECTION_SEG = {".text": "KERNEL_SEG", ".bss": "KERNEL_SEG",
                # .lowbss so a mono machine's heap can start under them
                # (SPEC.md 39.22)
                ".vgabuf": "VGABUF_SEG",
+               # ...and the VGA RUNG (MOVABLE-COLD-PLAN 2, SPEC.md 2.10.9):
+               # code, at a vstart that is an offset into KERNEL_SEG's own
+               # window (kernel.asm's VGA_VSTART), so calls into it stay near.
+               # Missing, every `.vga` label - vga_solid_rect_v, the span
+               # writer, the planar decoder - raised here instead of
+               # resolving (kernel hot-paths pass 1). On a machine with
+               # neither card `.cold` slides over it and these addresses
+               # name `.cold`'s bytes, which is m.sym()'s problem, not this
+               ".vga": "KERNEL_SEG",
                # kern_mega's own segment (docs/plans/completed/KERN-MEGA-SEGMENTS-PLAN.md):
                # its RUNG, which is where it is until mega_enter copies it
                # above 1MB with `.cold` and where it stays on a machine with
