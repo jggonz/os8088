@@ -17546,7 +17546,7 @@ PDCSRC := $(PDDIR)/pagedesk.c $(wildcard $(PDDIR)/pdu*.c $(PDDIR)/pdu*.h) \
           $(PDDIR)/pdovl.c $(PDDIR)/pdabi.h $(PDDIR)/pdmath.h
 PDASRC := $(PDDIR)/pagedesk.asm $(PDDIR)/pdui.inc $(PDDIR)/pduassoc.inc \
           $(BUILD)/pdart_appicon.inc $(BUILD)/pdart_docglyph.inc \
-          $(if $(filter 1,$(PD_MATH_STUB)),$(PDDIR)/stubs/pdmstub.inc,$(PDDIR)/pdmath.inc) \
+          $(PDDIR)/pdmath.inc $(PDDIR)/stubs/pdmstub.inc \
           apps/weave/wfetch.inc apps/os88ui.inc
 PDMATHSTAMP := $(BUILD)/.pdmath-$(if $(filter 1,$(PD_MATH_STUB)),stub,real)
 $(PDMATHSTAMP): | $(BUILD)

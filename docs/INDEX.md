@@ -403,6 +403,7 @@ The tree's own worked examples. When a convention is unclear, the shortest packa
 | NOTEPAD | `apps/notepad/notepad.asm` | §27 | yes |
 | PACCMAN | `apps/paccman/paccman.asm` | §91 | yes |
 | PACMAN | `apps/pacman/pacman.asm` | §89 | **retired** |
+| PAGEDESK | `apps/pagedesk/pagedesk.asm` | §127 | no |
 | PAINT | `apps/paint/paint.asm` | §42 | yes |
 | PIANO | `apps/piano/piano.asm` | §36 | yes |
 | PiXEL | `apps/pixel/pixel.asm` | §106 | yes |
