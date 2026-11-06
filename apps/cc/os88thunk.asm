@@ -2846,6 +2846,12 @@ cc_nul: db 0
 %ifdef CC_U__os88_file_append
   %assign cc__ferr 1
 %endif
+%ifdef CC_U__os88_file_read_seq
+  %assign cc__ferr 1
+%endif
+%ifdef CC_U__os88_file_write_seq
+  %assign cc__ferr 1
+%endif
 %ifdef CC_U__os88_file_delete
   %assign cc__ferr 1
 %endif
