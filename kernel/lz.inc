@@ -395,11 +395,6 @@ lz_take:
     sbb word [bp+LZ_F_REMH], 0
     ret                         ; CF is the answer, and `ret` leaves it alone
 
-%macro LZ_FRAME 0               ; BP = the frame, from anywhere in an arm's
-    mov bp, sp                  ; body - which pushes nothing it does not pop
-    inc bp                      ; before it gets here, so SP is its entry SP
-    inc bp                      ; and the frame is past the return address
-%endmacro
 
 ; -----------------------------------------------------------------------------
 ; lz_sync - settle the fast path's lazy count: REM -= DI - D0, then lz_arm
@@ -584,8 +579,8 @@ lz_match:
 ; On an 8088 a straight line like this is BUS-bound - four cycles a byte of
 ; code, and eight a word of data - so what it keeps in registers is chosen
 ; to take memory operands out of it: BP is the source CHECKPOINT (the frame
-; is two bytes above SP throughout, and LZ_FRAME finds it for the slow
-; paths), DX is the BUDGET, BL the token's match nibble, and CH is 0 at
+; is two bytes above SP throughout - the arm pushes nothing it does not pop
+; - and its `.sync` stub finds it for the slow paths), DX is the BUDGET, BL the token's match nibble, and CH is 0 at
 ; every token
 ; (a `rep movsb` ends with CX = 0, and so does lz_copy), so a length is
 ; `mov cl, ...` with no extension.
@@ -663,16 +658,14 @@ lz_lz4:
     jmp short .mlen
 .mslow:                         ; THE OLD WAY ROUND, with REM settled first
     inc ax                      ; the offset itself
-    LZ_FRAME
-    call lz_sync
+    call .sync
     call lz_match
     jc .bad
 .rearm:
     call lz_arm                 ; ...and the budget again from where DI landed
     jmp short .fast
 .lslow:
-    LZ_FRAME
-    call lz_sync
+    call .sync
     call lz_take
     jc .bad
     call lz_copy
@@ -683,13 +676,17 @@ lz_lz4:
 .bad:
     stc
     ret
+.sync:                          ; BP = the frame and lz_sync, for the four
+    mov bp, sp                  ; slow paths once: BP four bytes up, this call's
+    add bp, 4                   ; return being on top of the arm's - lz_lzb's
+    jmp lz_sync                 ; .sync shape (kernel hot-paths pass 1, size)
 .litx:
     cbw                         ; AH = 0 for lz_len.x (AL is 15)
     call lz_len.x               ; the extension bytes, as lz_len reads them
     cmp ch, 0x40
     jb .lit                     ; under 16KB: the 32KB budget above the
-    LZ_FRAME                    ; checkpoint covers it. Over: claimed whole,
-    call lz_sync                ; then copied 16KB at a time with the source
+    call .sync                  ; checkpoint covers it. Over: claimed whole,
+                                ; then copied 16KB at a time with the source
     call lz_take                ; slid between pieces, so SI never wraps
     jc .bad
     mov dx, cx                  ; (DX is the budget's: .lrearm re-derives it)
@@ -706,8 +703,7 @@ lz_lz4:
     jnz .piece
     jmp short .lrearm
 .end:
-    LZ_FRAME
-    call lz_sync                ; REM exact: lz_tail reads it, and a checkpoint
+    call .sync                  ; REM exact: lz_tail reads it, and a checkpoint
                                 ; going round keeps LIM, which D0 + REM is
     call lz_at                  ; a CHECKPOINT, or the tail (SPEC.md 20.14.5.1)
     jb .fast                    ; ...more source beyond it: go round
