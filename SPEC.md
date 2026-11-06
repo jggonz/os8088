@@ -238507,19 +238507,23 @@ bracket** (SPEC.md 53.2.3).
   The read in place (125.4.2) is checked again at each bracket's start: on
   kern_mega a token is the block's linear address only while the pool
   leaves the block where it is, and the check's 16 bytes through the twin
-  against the same 16 in place is what says so. EMS is written and not yet
-  run (no board in Bochs).
-- **Not yet** (VBATTLE-MEGA-PLAN W4-W5): the title picture is read after the bracket returns (a
+  against the same 16 in place is what says so: by a 386's loaded base
+  (Bochs) and a 286's LOADALL (86Box), and an EMS hold through the frame.
+- **The machines** (W4, 86Box's mr286 through the port): the 286's CMOS
+  shutdown reset, CGA and Hercules, a Sound Blaster 2.0, the XMS and EMS
+  holds - no engine change was needed for any (`vbtmega86`).
+- **Not yet** (VBATTLE-MEGA-PLAN W5): the title picture is read after the bracket returns (a
   real-mode bracket refuses its claim), so the window shows its text layout
-  first there; the 286's reset path and CGA/Hercules under kern_mega have
-  not been run.
+  first there.
 - **A card** (W2): SOUND.DRV goes low through the list, and the card's ring
   - conventional, from `OSAPI_MEM_CLAIM_DMA_HI` - is in the swap list; the
   stream runs through `OSAPI_SND_STREAM`'s real-mode twin. On Bochs's SB16
-  the music is heard (`vbtmega --arm card`).
+  the music is heard (`vbtmega --arm card`), and an SB 2.0 on 86Box is fed
+  on the emulated clock.
 
-**What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
-bss +69, the packed file +451; W3 +76, +1, +49. `tests/vbtmega.py` (Bochs, VGA) is the gate.
+`tests/vbtmega.py` on Bochs and, `--emu 86box`, on the mr286 (rows
+`vbtmega`, `vbtmega86`) are the gates. **What it cost** the shipped engine: W1 image 24,337 -> 24,887 (+550),
+bss +69, the packed file +451; W3 +76, +1, +49.
 
 ### 125.5 The band
 

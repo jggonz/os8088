@@ -1,6 +1,6 @@
 # VBATTLE-MEGA — Video Battle on kern_mega, in a real-mode bracket
 
-**Status: W1, W2 and W3's XMS half BUILT (2026-11-06, SPEC.md 125.4.5).** SPEC.md 125.7 said "kern_mega is not
+**Status: W1 to W4 BUILT (2026-11-06, SPEC.md 125.4.5); W5 next.** SPEC.md 125.7 said "kern_mega is not
 supported", and that was true in a worse way than it sounded: the SHIPPED
 engine, opened from an ordinary disk on a kern_mega machine, was CLOSED by a
 #GP the moment Play was pressed (measured on Bochs, below). This plan makes
@@ -111,8 +111,8 @@ kern_big and kern_small keep the load on the desktop, where the window says
       568 KB held, read in place by the loaded base, no disk read from the
       fill on, the play again's title exact, a second bracket in place again.
       A MOVED block is not provoked by the row.
-- [ ] EMS: `FSXL_DRV DRVC_EMS` and the frame in the swap list are written
-      (W3) but not run: Bochs has no EMS board - W4's, on 86Box.
+- [x] EMS: `FSXL_DRV DRVC_EMS` and the frame in the swap list (W3), run in
+      W4 on 86Box.
 
   **What W3 found.** `vb_mklist` ended on an `stosb` that relied on CF = 0
   from an `or`; W3's new `cmp byte [vb_htype], 2` before it left CF = 1 with
@@ -120,8 +120,20 @@ kern_big and kern_small keep the load on the desktop, where the window says
 
 ### W4 - the other machines
 
-- [ ] 86Box's 286 (the reset path, docs/86BOX.md), CGA and Hercules under
-      kern_mega, a Sound Blaster on the emulated clock.
+- [x] 86Box's mr286 through kern_mega's port (`vbtmega --emu 86box`, row
+      `vbtmega86`, 107 s): protected mode left by the CMOS shutdown RESET;
+      the play to victory and the play again exact on CGA and on HERCULES;
+      a Sound Blaster 2.0 fed on the emulated clock (15 s consumed, never
+      halted); the XMS hold read in place by a 286's LOADALL (131 records,
+      157 yields); an EMS hold - a Lo-tech board, which the port learned to
+      add (`_ems`, `tools/os88box86api.py`: `vm/286-mega-ems` has no CMOS
+      seed and stops in setup under the port) - read in place through the
+      frame. No disk read from either fill on. Red with the door blind to
+      `CPU_F_PM`: the package CLOSED at the first Play. **No engine change**:
+      every leg ran W1-W3's code; the one miss was the row's own Hercules
+      decode, which forgot the picture sits at byte 5.
+- [ ] Not run: VGA under kern_mega on 86Box (Bochs's VGA is W1's), the
+      owner's own Victory or 5150 hardware.
 
 ### W5 - the region and the title picture
 

@@ -2,7 +2,16 @@
 """Video Battle on KERN_MEGA, in a REAL-MODE bracket (SPEC.md 125.4.5,
 docs/plans/VBATTLE-MEGA-PLAN.md W1).
 
-    make && make mega && python3 tests/vbtmega.py [--arm play|refuse]
+    make && make mega && python3 tests/vbtmega.py [--emu bochs|86box]
+        [--arm play|refuse|card|hold|ems] [--adapter vga|cga|herc]
+
+ON BOCHS (a 386, VGA, 16 MB; the default) all arms but ems run on the CGA4
+demo in mode 4. ON 86Box (W4, --emu 86box: the owner's mr286 through
+kern_mega's port, docs/86BOX.md) the 286 leaves protected mode by the CMOS
+shutdown RESET, and the legs are play on CGA, play on HERCULES (the
+Hercules rendition, B000's 32 KB at byte 5), card (a Sound Blaster 2.0 on
+the emulated clock: the counters, no capture), hold (read in place by a
+286's LOADALL) and ems.
 
 The SHIPPED engine on kern_mega, in Bochs (a 386, VGA, 16 MB), the system
 disk kern_mega's and B: a floppy with VBATTLE.O88 and the CGA4 demo, its
@@ -41,6 +50,11 @@ inside an FSXF_REAL bracket:
           BROKEN ON PURPOSE (the door's vb_hopen left out) no hold opens and
           this goes red. A block the pool MOVED between plays fails that
           check and the hold copies instead - not provoked here.
+  ems     W4: the hold in EXPANDED memory - a Lo-tech board added to 86Box's
+          mr286 (the name's _ems) and kern_mega's system disk given a
+          SYSTEM.CFG wanting EMS.DRV: the hold opened at the door through
+          EMS.DRV, the list carrying DRVC_EMS, filled through the twin and
+          READ IN PLACE through the frame; no disk read from the fill on.
   refuse  the kernel made to fall back: at OSAPI_FSX_RUN's call the list
           gains FSXL_DRV DRVC_NET, a class the real-mode bracket does not
           carry (FSXR_DRV) - so the bracket runs in PROTECTED mode: vb_main
@@ -66,6 +80,8 @@ import time
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path[:0] = [os.path.join(ROOT, "tools"), os.path.join(ROOT, "tests")]
 os.environ["OS88_MEGA"] = "1"
+if "--emu" in sys.argv and sys.argv[sys.argv.index("--emu") + 1] == "86box":
+    os.environ["OS88_MEGA_EMU"] = "86box"       # (before os88marty loads)
 import os88build    # noqa: E402
 import os88geom as geom    # noqa: E402
 import os88marty    # noqa: E402
@@ -73,7 +89,42 @@ import os88ui       # noqa: E402
 import os88vbt as B         # noqa: E402
 import vbtproj as P         # noqa: E402
 from cycweb import pkg_syms     # noqa: E402
-from vbtloops import screens_of     # noqa: E402
+
+# THE ADAPTER: Bochs is a VGA (the CGA4 demo in mode 4); 86Box gives the
+# owner's mr286 a CGA or a Hercules (docs/86BOX.md, kern_mega rows)
+OPT = {"emu": "bochs", "adapter": "vga"}
+SCREEN = {"vga": (0xB8000, 16384), "cga": (0xB8000, 16384),
+          "herc": (0xB0000, 32768)}
+
+
+def screens_of(b, ci):
+    """Clip CI's frames as the adapter's screen, decoded by the host"""
+    n = SCREEN[OPT["adapter"]][1]
+    rs = b.stream(b.clips[ci])
+    s = bytearray(65536)
+    out = []
+    for r in rs[:-1]:
+        B.decode(s, r)
+        if OPT["adapter"] == "herc":    # (centred: at byte 5, vbtadapters's
+            out.append(bytes(5) + bytes(s[:n - 5]))     # host_full)
+        else:
+            out.append(bytes(s[:n]))
+    return out
+
+
+def faults(m, S):
+    """kern_mega's own record, the same on Bochs and 86Box: [mega_infault]
+    a FATAL fault, [mega_fkn] the packages CLOSED by one. A list, empty
+    when clean"""
+    inf = m.read(S("mega_infault"), 1)[0]
+    fkn = m.read(S("mega_fkn"), 1)[0]
+    return (["FATAL fault"] if inf else []) + \
+        (["%d package(s) CLOSED" % fkn] if fkn else [])
+
+
+def glass(m):
+    a, n = SCREEN[OPT["adapter"]]
+    return bytes(m.read(a, n))
 
 GS_MENU = 1
 DRVC_NET = 4
@@ -97,16 +148,37 @@ def run(arm, tmp, syms):
     p = P.Project.load(vbp)
     p.set(("enemy", "hp"), 1)
     p.save()
-    data = B.build_project(p)
+    herc = OPT["adapter"] == "herc"
+    data = B.build_project(p, kind="herc") if herc else B.build_project(p)
     bd = B.Bundle(data)
-    vbt = os.path.join(tmp, "BATTLE.VBT")
+    vbt = os.path.join(tmp, "BATTLEH.VBT" if herc else "BATTLE.VBT")
     open(vbt, "wb").write(data)
     disk = os.path.join(tmp, "vbt.img")
     subprocess.run([sys.executable, "tools/os88disk.py", "-o", disk,
                     "--size", "1440", os88build.at("build/vbattle.o88"),
                     vbt], check=True, capture_output=True)
-    machine = "os8088_xt_vga_sb" if arm == "card" else "os8088_xt_vga"
-    with os88ui.boot("build/os8088.img", apps=disk, machine=machine) as ui:
+    sysimg = "build/os8088.img"
+    if arm == "ems":
+        # kern_mega's system disk wanting EMS.DRV (SYSTEM.CFG bit 7), as
+        # tests/vidrmbems.py makes it, and a Lo-tech board (the name's _ems)
+        sysimg = os.path.join(tmp, "mega.img")
+        shutil.copy(os.path.join(os88build.mega_build(), "mega.img"), sysimg)
+        cfg = os.path.join(tmp, "SYSTEM.CFG")
+        open(cfg, "wb").write(b"O88CFG\0\0" + (3).to_bytes(2, "little")
+                              + b"DW" + bytes([1, 2])
+                              + (1 << 7).to_bytes(2, "little") + b"\0\0")
+        fat = [sys.executable, "tools/os88fat.py"]
+        subprocess.run(fat + ["del", sysimg, "SYSTEM.CFG"],
+                       capture_output=True)
+        subprocess.run(fat + ["add", sysimg, cfg], check=True,
+                       capture_output=True)
+    machine = {"vga": "os8088_xt_vga", "cga": "os8088_xt_cga",
+               "herc": "os8088_5150_herc"}[OPT["adapter"]]
+    if arm == "card":
+        machine += "_sb"
+    if arm == "ems":
+        machine += "_ems"
+    with os88ui.boot(sysimg, apps=disk, machine=machine) as ui:
         m = ui.m
         S = ui._S
         w = ui.path("B:/VBATTLE.O88")
@@ -127,9 +199,10 @@ def run(arm, tmp, syms):
             def c(_mm):
                 if m.read(S("fsx_rmode"), 1)[0]:
                     rmode[0] = 1
-                if m.box.fault():
+                f = faults(m, S)
+                if f:
                     raise SystemExit("vbtmega: %s while waiting for %s"
-                                     % (m.box.fault(), what))
+                                     % (f, what))
                 return cond()
             os88marty.until(m, c, what, poll=0.2, limit=900.0, guest=guest)
 
@@ -158,7 +231,7 @@ def run(arm, tmp, syms):
                   guest=60.0)
             os88marty.ui_done(m)
             txt = m.readseg(sel(), rw("vb_status"), 40).split(b"\0")[0]
-            ok(rmode[0] == 0 and not m.box.faults(),
+            ok(rmode[0] == 0 and not faults(m, S),
                "refuse: the bracket ran in PROTECTED mode ([fsx_rmode] "
                "never 1), nothing faulted")
             ok(txt.strip() == b"Needs real mode: a driver",
@@ -168,8 +241,9 @@ def run(arm, tmp, syms):
         until(lambda: rb("vb_ready") == 1, "the play")
         if arm == "card":
             return card(m, S, rb, rw, until, key, bd, tmp)
-        if arm == "hold":
-            return hold(m, S, rb, rw, until, key, bd, data, sel)
+        if arm in ("hold", "ems"):
+            return hold(m, S, rb, rw, until, key, bd, data, sel,
+                        2 if arm == "ems" else 1)
         until(lambda: rb("vb_tplay") == 1, "the title")
         ok(rmode[0] == 1, "1. the play's bracket is REAL MODE "
            "([fsx_rmode] seen 1)")
@@ -178,19 +252,19 @@ def run(arm, tmp, syms):
         def looks(n=12):
             hits, best = 0, 1 << 20
             for _ in range(n):
-                b8 = bytes(m.read(0xB8000, 16384))
+                b8 = glass(m)
                 hits += b8 in title
                 best = min([best] + [sum(x != y for x, y in zip(t, b8))
                                      for t in title])
                 until(lambda: True, "a look", guest=0.15)
             return hits, best
         h, d = looks()
-        ok(h >= 6, "1. the first title is the host's decode in B8000 "
+        ok(h >= 6, "1. the first title is the host's decode on the glass "
            "(%d of 12 looks exact, %d bytes off at best)" % (h, d))
         key("Enter")
         until(lambda: rb("vb_state") == GS_MENU, "the menu", 240)
         if os.environ.get("VBTMEGA_SHOT"):
-            b8 = bytes(m.read(0xB8000, 16384))
+            b8 = glass(m)
             nz = sum(1 for i in range(0, 5) if b8[i] == 0xFF)
             print("   at the menu: B8000[0:5] %s" % b8[:5].hex(), flush=True)
         key("Enter")                    # Attack, at the 1-HP enemy
@@ -199,7 +273,7 @@ def run(arm, tmp, syms):
             allf = [f for ci in range(len(bd.clips)) for f in
                     screens_of(bd, ci)]
             for k in range(6):
-                b8 = bytes(m.read(0xB8000, 16384))
+                b8 = glass(m)
                 print("   end loop look %d: %d bytes off the nearest frame"
                       % (k, min(sum(x != y for x, y in zip(f, b8))
                                 for f in allf)), flush=True)
@@ -215,11 +289,11 @@ def run(arm, tmp, syms):
             Image.frombytes("RGB", (fw, fh), rgb).save(
                 os.environ["VBTMEGA_SHOT"] + "-again.png")
             open(os.environ["VBTMEGA_SHOT"] + "-b8.bin", "wb").write(
-                bytes(m.read(0xB8000, 16384)))
+                glass(m))
         title = screens_of(bd, bd.title)
         hits = 0
         for _ in range(12):
-            hits += bytes(m.read(0xB8000, 16384)) in title
+            hits += glass(m) in title
             until(lambda: True, "a look", guest=0.15)
         ok(hits >= 6, "3. the play again is read in the bracket, and the "
            "title is the host's decode in B8000 (%d of 12 looks exact)"
@@ -238,7 +312,7 @@ def run(arm, tmp, syms):
            "4. a SECOND play reaches its title, real mode again")
         key("Escape")
         until(lambda: rb("vb_ready") == 0, "Esc again", 60)
-        ok(not m.box.faults(), "5. no kern_mega FAULT or CLOSED")
+        ok(not faults(m, S), "5. no kern_mega FAULT or CLOSED")
 
 
 def card(m, S, rb, rw, until, key, bd, tmp):
@@ -260,7 +334,7 @@ def card(m, S, rb, rw, until, key, bd, tmp):
               in SYMS else None)
     key("Escape")
     until(lambda: rb("vb_ready") == 0, "Esc to the desktop", 60)
-    wav = os.path.join(m.box.out, "sb.wav")
+    wav = os.path.join(m.box.out, "sb.wav") if hasattr(m, "box") else ""
     cap = open(wav, "rb").read() if os.path.exists(wav) else b""
     keep = os.environ.get("VBTMEGA_WAV")
     if keep:
@@ -272,6 +346,8 @@ def card(m, S, rb, rw, until, key, bd, tmp):
        "never found halted" % st["ring"])
     ok(st["cons"] > 5 * bd.rate, "card: the card consumed %.1f s of the "
        "stream in the bracket" % (st["cons"] / float(bd.rate)))
+    if OPT["emu"] != "bochs":
+        return                      # (86Box's capture is not this one)
     byrate = music_heard(cap, bd)
     best = max(byrate, key=byrate.get)
     ok(best == 4 and byrate[4] >= 0.55 and
@@ -282,19 +358,26 @@ def card(m, S, rb, rw, until, key, bd, tmp):
                                        sorted(byrate.items()) if k != 4)))
 
 
-def hold(m, S, rb, rw, until, key, bd, data, sel):
-    """W3: the bundle HELD in XMS (Bochs's 16 MB) - see the module note"""
+def hold(m, S, rb, rw, until, key, bd, data, sel, htype):
+    """W3/W4: the bundle HELD - XMS (htype 1) or EMS (2) - module note"""
     m.write(m.lin(sel(), SYMS["vb_xyb"]), struct.pack("<H", 256))
-    ok(rb("vb_hon") == 1 and rb("vb_htype") == 1 and rb("vb_hrn") == 1
+    ok(rb("vb_hon") == 1 and rb("vb_htype") == htype and rb("vb_hrn") == 1
        and rw("vb_hkb4") * 4096 >= len(data),
-       "hold: opened at the door - XMS, one range, the whole bundle (%d KB)"
-       % (rw("vb_hkb4") * 4))
+       "hold: opened at the door - %s, one range, the whole bundle (%d KB)"
+       % ("XMS" if htype == 1 else "EMS", rw("vb_hkb4") * 4))
     until(lambda: rb("vb_tplay") == 1, "the title")
     until(lambda: rb("vb_hfull") == 1, "the hold to fill", 300)
-    ok(rb("vb_hinp") == 1 and rb("vb_tier") >= 2,
+    if htype == 2:
+        ok(rb("vb_hinp") == 1 and rb("vb_eq") == 0x0F,
+           "hold: EMS.DRV carried low (FSXL_DRV DRVC_EMS), filled through "
+           "its twin, and READ IN PLACE through the frame (all four quarters "
+           "ours, the board %.1fx RAM's time)" % (rw("vb_er10") / 10.0))
+    else:
+        ok(rb("vb_hinp") == 1 and rb("vb_tier") >= 1,
        "hold: filled in the bracket through OSAPI_XMEM_COPY's twin, and "
-       "READ IN PLACE (tier %d: a 386's loaded base) - its 16 bytes in place "
-       "matched the twin's copy" % rb("vb_tier"))
+       "READ IN PLACE (tier %d: %s) - its 16 bytes in place matched the "
+       "twin's copy" % (rb("vb_tier"), "a 286's LOADALL" if rb("vb_tier")
+                        == 1 else "a 386's loaded base"))
     r0, i0, y0 = rw("vb_rcalls"), rw("vb_icalls"), rw("vb_iyc")
     key("Enter")
     until(lambda: rb("vb_state") == GS_MENU, "the menu", 240)
@@ -306,15 +389,16 @@ def hold(m, S, rb, rw, until, key, bd, data, sel):
     title = screens_of(bd, bd.title)
     hits = 0
     for _ in range(12):
-        hits += bytes(m.read(0xB8000, 16384)) in title
+        hits += glass(m) in title
         until(lambda: True, "a look", guest=0.15)
     nr = (rw("vb_rcalls") - r0) & 0xFFFF
     ni = (rw("vb_icalls") - i0) & 0xFFFF
     ny = (rw("vb_iyc") - y0) & 0xFFFF
-    ok(nr == 0 and ni > 0 and ny > 0,
+    ok(nr == 0 and ni > 0 and (ny > 0 or htype == 2),
        "hold: from the fill on, a battle and the play again with NO disk "
-       "read (%d), records read in place %d, the decode yielding %d times"
-       % (nr, ni, ny))
+       "read (%d), records read in place %d, the decode yielding %d times%s"
+       % (nr, ni, ny, " (EMS: the hook maps, nothing yields)"
+          if htype == 2 else ""))
     ok(hits >= 6, "hold: the play again's title is the host's decode, read "
        "in place (%d of 12 looks exact)" % hits)
     key("Escape")
@@ -327,7 +411,7 @@ def hold(m, S, rb, rw, until, key, bd, data, sel):
        "hold: a SECOND bracket checks the read in place again and keeps it")
     key("Escape")
     until(lambda: rb("vb_ready") == 0, "Esc again", 60)
-    ok(not m.box.faults(), "hold: no kern_mega FAULT or CLOSED")
+    ok(not faults(m, S), "hold: no kern_mega FAULT or CLOSED")
 
 
 def music_heard(cap, bd):
@@ -365,14 +449,27 @@ SYMS = {}
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--arm", choices=("play", "refuse", "card", "hold",
-                                      "both"),
+                                      "ems", "both"),
                     default="both")
+    ap.add_argument("--emu", choices=("bochs", "86box"), default="bochs")
+    ap.add_argument("--adapter", choices=("vga", "cga", "herc"),
+                    default=None)
     a = ap.parse_args()
+    OPT.update(emu=a.emu, adapter=a.adapter or
+               ("vga" if a.emu == "bochs" else "cga"))
     os.chdir(ROOT)
     syms, _ = pkg_syms("apps/vbattle/vbattle.asm", ("apps/",))
     SYMS.update(syms)
-    for arm in (("play", "refuse", "card", "hold") if a.arm == "both"
-                else (a.arm,)):
+    if a.arm == "both" and a.emu == "bochs":
+        legs = [(x, "vga") for x in ("play", "refuse", "card", "hold")]
+    elif a.arm == "both":               # W4: 86Box's mr286 - the reset path
+        legs = [("play", "cga"), ("play", "herc"), ("card", "cga"),
+                ("hold", "cga"), ("ems", "cga")]
+    else:
+        legs = [(a.arm, OPT["adapter"])]
+    for arm, adapter in legs:
+        OPT["adapter"] = adapter
+        print("-- %s, %s, %s" % (arm, adapter, a.emu), flush=True)
         tmp = tempfile.mkdtemp(dir=os.path.join(ROOT, "build"))
         try:
             run(arm, tmp, syms)
