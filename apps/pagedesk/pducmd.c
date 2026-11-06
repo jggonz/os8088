@@ -9,6 +9,8 @@
  * ==========================================================================*/
 
 static void pdu_pop_close(void);
+static void pdu_pop_shut(void);
+static void pdu_popdmg_add(struct os88_rect *r);
 static void pdu_about_off(void);
 static void ovl_card(int which, struct os88_rect *r, int mono);
 static int ovl_card_size(int which);
@@ -355,9 +357,13 @@ static void pdu_pop_paint(void)
 
 static void pdu_pop_open(int kind, int src)
 {
-    int w, rows;
-    if (pdu_pop != P_NONE)
-        pdu_pop_close();
+    int w, rows, sw;
+    sw = 0;
+    if (pdu_pop != P_NONE) {            /* one popover for another: the old */
+        pdu_popdmg_add(&pdu_poprect);   /* one's ground and the new one are */
+        pdu_pop_shut();                 /* ONE repaint at the wake, so no */
+        sw = 1;                         /* pixel is drawn twice and the click */
+    }                                   /* is not charged both paints (pdstk) */
     pdu_job_abort_render();
     pdu_pop = kind;
     pdu_popsrc = src;
@@ -377,10 +383,44 @@ static void pdu_pop_open(int kind, int src)
     }
     pdu_pop_place(w, rows);
     pdu_ctl_repaint(src);
-    pdu_pop_paint();
+    if (sw)                             /* a switch: ground + new, once */
+        pdu_popdmg_add(&pdu_poprect);
+    else {                              /* a fresh popover: its own pixels */
+        pdu_popown = 1;                 /* only - at the wake, whose chain is */
+        pdu_kick();                     /* a dispatcher deep and not a click's */
+    }                                   /* ten (pdstk measured 386 of 384) */
 }
 
-static void pdu_pop_close(void)
+/* a popover's own Done/Esc, from deep in a click: the close (and the repaint
+ * under it) happens at the next wake, one level below the dispatcher instead
+ * of ten - the static stack gate measured the in-place close at 388 B of the
+ * UI task's 384 (pdstk, D22). Input to the popover meanwhile is refused. */
+/* the union a popover switch owes, painted once by the wake (pdu_paint_rect:
+ * the ground, then the new popover where it meets it) */
+static void pdu_popdmg_add(struct os88_rect *r)
+{
+    if (!pdu_popdmg_on) {
+        os88_memcpy(&pdu_popdmg, r, sizeof(pdu_popdmg));
+        pdu_popdmg_on = 1;
+    } else {
+        if (r->x1 < pdu_popdmg.x1) pdu_popdmg.x1 = r->x1;
+        if (r->y1 < pdu_popdmg.y1) pdu_popdmg.y1 = r->y1;
+        if (r->x2 > pdu_popdmg.x2) pdu_popdmg.x2 = r->x2;
+        if (r->y2 > pdu_popdmg.y2) pdu_popdmg.y2 = r->y2;
+    }
+    pdu_kick();
+}
+
+static void pdu_pop_close_soon(void)
+{
+    pdu_popcls = 1;
+    pdu_kick();
+}
+
+/* the popover's STATE goes - notes told, focus home, the owed render kicked -
+ * and nothing under it is painted: pdu_pop_open's switch owes that to the
+ * wake. Split from pdu_pop_close so the static stack gate sees no paint here */
+static void pdu_pop_shut(void)
 {
     int src, old;
     if (pdu_pop == P_NONE)
@@ -389,8 +429,6 @@ static void pdu_pop_close(void)
     pdu_pop = P_NONE;
     src = pdu_popsrc;
     pdu_popsrc = C_NONE;
-    os88_memcpy(&pdu_dmg, &pdu_poprect, sizeof(pdu_dmg));
-    pdu_paint_rect(&pdu_dmg);
     /* PD-23: focus goes back home - to the control that opened it. A card
      * a MENU opened has no home (C_NONE) and leaves the focus where it was;
      * the first build cleared it there without repainting the control that
@@ -402,6 +440,15 @@ static void pdu_pop_close(void)
     if (old != pdu_focus)
         pdu_ctl_repaint(old);
     pdu_kick();                         /* the render that waited */
+}
+
+static void pdu_pop_close(void)
+{
+    if (pdu_pop == P_NONE)
+        return;
+    os88_memcpy(&pdu_dmg, &pdu_poprect, sizeof(pdu_dmg));
+    pdu_pop_shut();
+    pdu_paint_under(&pdu_dmg);          /* P_NONE already: nothing over it */
 }
 
 /* ============================================================================
@@ -761,7 +808,7 @@ static void pdu_field_key(int ascii)
 static void pdu_find_key(int ascii)
 {
     if (ascii == 13) {
-        pdu_pop_close();                /* nav: the job runs under the page */
+        pdu_pop_close_soon();           /* nav: the job runs under the page */
         pdu_find_run(0);
         return;
     }
@@ -910,6 +957,8 @@ static void pdu_pop_click(int x, int y)
 {
     struct os88_rect *p;
     int k, v;
+    if (pdu_popcls)                     /* closing at the wake: no more input */
+        return;
     if (pdu_nt_pclick(x, y))            /* notes */
         return;
     p = &pdu_poprect;

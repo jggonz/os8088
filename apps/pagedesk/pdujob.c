@@ -480,6 +480,26 @@ void os88_onwake(void *win)
     if (pdu_job == J_THUMB && (pdu_rwant || pdu_pgwant || pdu_txwant || pdu_fwant
                                || pdu_lkact))
         pdu_job_abort();                /* nav: a picture waits for everything else */
+    if (pdu_popcls) {                   /* a close a deep click asked for */
+        pdu_popcls = 0;
+        os88_gfx_lock();                /* a callback's paints run locked; */
+        pdu_pop_close();                /* the wake's must take it (pdujob.c 6) */
+        os88_gfx_unlock();
+    }
+    if (pdu_popdmg_on) {                /* a popover switch: ground + new, once */
+        pdu_popdmg_on = 0;
+        pdu_popown = 0;
+        os88_gfx_lock();
+        pdu_paint_rect(&pdu_popdmg);
+        os88_gfx_unlock();
+    } else if (pdu_popown) {            /* a new popover: its own pixels */
+        pdu_popown = 0;
+        if (pdu_pop != P_NONE) {
+            os88_gfx_lock();
+            pdu_pop_paint();
+            os88_gfx_unlock();
+        }
+    }
     if (pdu_jcancel) {
         int was;
         was = pdu_job;

@@ -450,6 +450,8 @@ static void ovl_nt_dirty(void)
 static void ovl_nt_idle(void)
 {
     unsigned was;
+    if (pdu_nt_rvl && !pdu_pgwant)      /* a reveal owed on the SHOWN page */
+        ovl_nt_reveal();
     was = pdu_nt_spage;
     if (pdu_nt_late)
         pdu_nt_srcload();
@@ -526,8 +528,10 @@ static void ovl_nt_pick(int id)
             pdu_nt_rvl = 1;
             pdu_goto(page);             /* the wake loads it; pdu_notes_page */
         }
-    } else
-        ovl_nt_reveal();
+    } else {
+        pdu_nt_rvl = 1;                 /* the wake reveals it: scrolling from */
+        pdu_kick();                     /* here repainted the canvas 414 B deep */
+    }                                   /* on the UI stack (pdstk, D22) */
     /* the list follows the item; the rows' pictures make this the two rows
      * the selection touched, or the list when it had to move */
     k = ovl_nt_find(id);

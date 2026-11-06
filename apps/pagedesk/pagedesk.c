@@ -130,6 +130,11 @@ static void pdu_menusync(void);
 static void pdu_relayout(void);
 static void pdu_paint_all(void);
 static void pdu_paint_rect(struct os88_rect *r);
+static void pdu_paint_under(struct os88_rect *r);
+static int pdu_popcls;                  /* pducmd.c: a popover close owed to the wake */
+static int pdu_popdmg_on;               /* pducmd.c: a switch's repaint is owed */
+static int pdu_popown;                  /* pducmd.c: a new popover's paint is owed */
+static struct os88_rect pdu_popdmg;
 static void pdu_render_want(struct os88_rect *r);
 static void pdu_canvas_full(void);
 static void pdu_job_abort(void);

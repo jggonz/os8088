@@ -511,7 +511,11 @@ static void pdu_canvas_paint(struct os88_rect *clip)
 static void pdu_pop_paint(void);       /* pducmd.c owns their contents */
 
 /* --- the window -------------------------------------------------------------- */
-static void pdu_paint_rect(struct os88_rect *r)
+/* everything UNDER a popover in r. pdu_pop_close calls this half alone: it
+ * has already set P_NONE, and the static stack gate (tools/os88pdstk.py)
+ * cannot know that, so a call through pdu_paint_rect charged pdu_pop_paint's
+ * whole list chain to every close - 400 B on a 384 B budget, unreachable */
+static void pdu_paint_under(struct os88_rect *r)
 {
     struct os88_rect *o;
     o = &pdu_cc;
@@ -528,11 +532,16 @@ static void pdu_paint_rect(struct os88_rect *r)
     if (pdu_isect(r, &pdu_L.status, o))
         pdu_status_full();
     pdu_canvas_paint(r);
-    if (pdu_pop != P_NONE && pdu_isect(r, &pdu_poprect, o))
-        pdu_pop_paint();
     if (pdu_about)
         os88_about_card_d(pdu_win, pdu_abtext);
     os88_wm_grow(pdu_win);
+}
+
+static void pdu_paint_rect(struct os88_rect *r)
+{
+    pdu_paint_under(r);
+    if (pdu_pop != P_NONE && pdu_isect(r, &pdu_poprect, &pdu_cc))
+        pdu_pop_paint();
 }
 
 static void pdu_paint_all(void)
