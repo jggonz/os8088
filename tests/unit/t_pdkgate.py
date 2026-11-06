@@ -50,6 +50,16 @@ def main():
             ("PDENG.MOD", "PDREND.MOD", "PDWRT.MOD",
              "pdstub/PDENG.MOD", "pdstub/PDREND.MOD", "pdstub/PDWRT.MOD")]
     seen = [m for m in mods if os.path.exists(m)]
+    # PageDesk is not in `all`, so a module under build/ can be a leftover
+    # from before the gate existed; one older than pdkgate.inc is that, and
+    # is skipped by name rather than failed (the next `make pagedesk`
+    # rebuilds it - every .MOD depends on pdkgate.inc)
+    gate = os.path.join(ROOT, "apps", "pagedesk", "pdkgate.inc")
+    gm = os.path.getmtime(gate) if os.path.exists(gate) else 0
+    for m in [m for m in seen if os.path.getmtime(m) < gm]:
+        print("SKIP %s: built before pdkgate.inc (stale; make pagedesk)"
+              % os.path.relpath(m, build))
+    seen = [m for m in seen if os.path.getmtime(m) >= gm]
     if not seen:
         print("SKIP: no PageDesk module built under " + build)
         return 0
